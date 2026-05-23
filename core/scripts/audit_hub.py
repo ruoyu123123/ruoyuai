@@ -444,6 +444,114 @@ def _apply_waivers(all_issues: list, waivers: list) -> list:
 
 # ============ 修复决策 ============
 
+def _check_character_arc_drift(project_root: Path, ch: int) -> list:
+    """v22 方案 3 · MARCUS 范式角色情感弧偏差检测（advisory）。
+
+    读项目对应风格库的 character_arcs/<主角>_emotion_arc.json，对照本章 changes.json
+    的 self_eval 情感强度，偏差 > 0.3 → advisory issue。
+    本检测器不阻塞，所有问题都是 advisory（可豁免）。
+    """
+    issues = []
+    # 1. 找项目风格库的 work 名
+    style_path = project_root / "_数据库" / "作者风格.json"
+    if not style_path.exists():
+        return issues
+    try:
+        sd = json.loads(style_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return issues
+    work = (sd.get("meta") or {}).get("work") or sd.get("work")
+    if not work:
+        return issues
+
+    # 2. 推算 character_arcs 路径
+    arc_dir = None
+    for parent in [project_root, *project_root.parents]:
+        candidate = parent / "workspace" / "styles" / work / "character_arcs"
+        if candidate.exists():
+            arc_dir = candidate
+            break
+    if arc_dir is None:
+        candidate = Path.cwd() / "workspace" / "styles" / work / "character_arcs"
+        if candidate.exists():
+            arc_dir = candidate
+    if arc_dir is None:
+        return issues
+
+    # 3. 找主角名（从人物卡.json）
+    protagonist = None
+    chars_path = project_root / "_数据库" / "人物卡.json"
+    if chars_path.exists():
+        try:
+            cd = json.loads(chars_path.read_text(encoding="utf-8"))
+            for name, info in cd.items() if isinstance(cd, dict) else []:
+                if isinstance(info, dict) and (info.get("role") == "protagonist" or info.get("is_protagonist")):
+                    protagonist = name
+                    break
+            if not protagonist and isinstance(cd, dict):
+                protagonist = next(iter(cd.keys()), None)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    if not protagonist:
+        return issues
+
+    # 4. 读主角 arc
+    import re as _re
+    safe_name = _re.sub(r"[\\/:*?\"<>|]", "_", protagonist)
+    arc_file = arc_dir / f"{safe_name}_emotion_arc.json"
+    if not arc_file.exists():
+        return issues
+    try:
+        arc_data = json.loads(arc_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return issues
+
+    chapters_with_data = arc_data.get("chapters_with_data") or []
+    actor_curve = arc_data.get("emotion_actor_curve_smoothed") or []
+    experiencer_curve = arc_data.get("emotion_experiencer_curve_smoothed") or []
+    if ch not in chapters_with_data:
+        return issues
+    idx = chapters_with_data.index(ch)
+    if idx >= len(actor_curve) or idx >= len(experiencer_curve):
+        return issues
+    expected_actor = actor_curve[idx]
+    expected_experiencer = experiencer_curve[idx]
+
+    # 5. 读本章 changes.json self_eval 估算 actual
+    ch_dir = project_root / "章节" / f"第{ch:03d}章"
+    changes_file = ch_dir / f"第{ch:03d}章_changes.json"
+    if not changes_file.exists():
+        return issues
+    try:
+        changes = json.loads(changes_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return issues
+    se = changes.get("self_eval") or {}
+    actual_intensity = se.get("emotion_intensity") or se.get("情感强度") or se.get("intensity") or 0.5
+    if not isinstance(actual_intensity, (int, float)):
+        actual_intensity = 0.5
+
+    # 6. 比对（advisory）
+    drift_actor = abs(actual_intensity - expected_actor)
+    drift_experiencer = abs(actual_intensity - expected_experiencer)
+    if drift_actor > 0.3 or drift_experiencer > 0.3:
+        issues.append({
+            "code": f"CHARACTER_ARC_DRIFT_{safe_name.upper()}",
+            "severity": "warning",
+            "gate_level": "advisory",
+            "desc": (f"主角 {protagonist} 本章情感强度 {actual_intensity:.2f} 偏离原作 arc 期望 "
+                     f"(actor={expected_actor:.2f}, experiencer={expected_experiencer:.2f}, "
+                     f"drift_actor={drift_actor:.2f})"),
+            "source": "character_arc_drift",
+            "fix_hint": (f"调整本章 {protagonist} 的情感曲线，让强度接近 "
+                         f"actor={expected_actor:.2f} / experiencer={expected_experiencer:.2f}。"
+                         f"参考 character_arcs/{safe_name}_emotion_arc.json 的 stage_transitions 和高频情绪。"),
+            "_arc_ref": str(arc_file),
+            "_chapter_index_in_arc": idx,
+        })
+    return issues
+
+
 def _is_deterministic(issue: dict) -> bool:
     """该问题是否可由 style_repair_engine 确定性修复。"""
     return issue["code"] in DETERMINISTIC_FIX_CODES
@@ -628,6 +736,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     # 全部校验器都挂了 —— 致命，无法出审核结论
     if not any(s["ok"] for s in scanner_status):
         return {"_fatal": "全部 7 个校验器执行失败", "scanner_status": scanner_status}
+
+    # v22 方案 3：角色情感弧偏差检测（advisory · 不阻塞）
+    arc_drift_issues = _check_character_arc_drift(project_root, ch)
+    if arc_drift_issues:
+        all_issues += arc_drift_issues
+        scanner_status.append({"scanner": "character_arc_drift", "exit_code": 0, "ok": True,
+                               "issues_count": len(arc_drift_issues)})
 
     # 元问题嗅探：某校验器 100% 章节都 FAIL 同一项 -> 由 learning_loop --scan-recurring 跨章判定，
     # 这里只对单章内"明显误判"打 meta_suspect 标（如 validate_style 在已分离 v18 仍报字数虚高）

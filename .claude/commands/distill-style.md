@@ -55,6 +55,20 @@ $ARGUMENTS
     "carry_over": [{"item": ""}]
   },
   "character_continuity": [{"character": "", "first_appear_in": "", "arc_progress": ""}],
+  "character_emotion_delta": [
+    {
+      "character": "<角色名>",
+      "chapter_changes": [
+        {
+          "chapter": <N>,
+          "actor_emotion": {"label": "警觉|愤怒|决断|...", "delta": <-1.0 to 1.0>},
+          "experiencer_emotion": {"label": "恐惧|迷茫|压力|...", "delta": <-1.0 to 1.0>},
+          "trigger_event": "<本章触发该角色情感变化的具体事件>",
+          "stage_progress": "<本章末该角色 arc stage，如「迷茫 → 入局」>"
+        }
+      ]
+    }
+  ],
   "running_motifs": [{"motif": "", "frequency": <int>, "across_chapters": []}],
   "voice_pack_observations": [{"character": "", "dialogue_avg_len": <int>, "signature_phrases": [], "consistency_grade": "A|B|C"}],
   "pacing_curve": "<3 章整体节奏曲线>",
@@ -593,6 +607,190 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 - 最终 analyzed_chapters = 总章节数（全量）
 - _数据库/蒸馏进度/ 目录下有每章的独立分析 JSON（颗粒度严格保留）
 - _数据库/衔接分析/ 目录下有每 3 章一个的 continuity JSON
+
+---
+
+## 阶段 1.5（v22.cluster 重构）：故事块 arc 聚合（双轨）
+
+### 为什么需要 + 颗粒度选型依据
+
+写作端早就是 ECAS **故事块模式**（`gen_writer.py --cluster N --chapter-start X --chapter-end Y`，cluster 长度 2-6 章 / 4000-20000 字），蒸馏端却卡在 3 章固定 continuity 颗粒度——**两端错位**导致蒸馏的"3 章衔接模板"对 cluster 写作没用。
+
+调研：**业界 2024-2025 SOTA 全面采用可变长度故事块**：
+
+| SOTA | 颗粒度 | 关键依据 |
+|---|---|---|
+| LumberChunker (EMNLP 2024 · arXiv 2406.17526) | LLM 检测语义边界的 variable-length chunk | 比 fixed-N **+7.37% DCG@20** |
+| MARCUS (arXiv 2510.18201, 2025) | event-centric 跨整本书 | actor/experiencer 双视角时间序列 |
+| Multi-Agent TV Arcs (arXiv 2503.04817, 2025) | arc 跨任意 episode，按情节单元自然终结 | "avoiding artificial segmentation" |
+| Three Stage Narrative (arXiv 2511.11857, 2025) | sliding window + Ward 聚类 6 弧形 | 后置分析，不切分 |
+
+**结论：双轨**——cluster 主轨（情节单元结构 + arc 形状） + 章节副轨（局部句段节奏）。固定 N 章已被 EMNLP 2024 实证落后。完整调研见 `.research_cache/inspiration_cluster_distill_2026-05-24.md`。
+
+### 双轨产出
+
+```
+workspace/styles/<书名>/
+├── cluster_index.json                           # cluster_segmenter 产出，按情节单元切分章节
+├── arc_templates/
+│   ├── cluster_arc_<cluster_id>.json            # ★ 主轨：每 cluster 一个 arc
+│   ├── arc_<NNN>.json                           # 副轨：fixed10（兼容向后/章节级节奏）
+│   └── arc_summary.json                         # 全书统计（primary_track 字段自动识别）
+└── character_arcs/
+    └── <角色>_emotion_arc.json                   # 角色情感弧（MARCUS 范式）
+```
+
+### 执行流程
+
+#### 已蒸馏书（5 本现有书）—— retroactive 切分
+
+```bash
+# Step A：按情节单元自动切 cluster（启发式：connection_type + 字数/章数硬约束）
+python core/scripts/cluster_segmenter.py --project workspace/styles/<书名>
+# 输出 cluster_index.json（5 章 / 14K 字均长 ≈ ECAS schema 推荐）
+
+# Step B：每个 cluster 聚合 arc
+python core/scripts/arc_aggregator.py --project workspace/styles/<书名> --all-clusters
+
+# Step C：聚合 character arc（MARCUS 范式）
+python core/scripts/character_arc_aggregator.py --project workspace/styles/<书名> --min-appearances 5
+
+# Step D：全书 summary
+python core/scripts/arc_aggregator.py --project workspace/styles/<书名> --mode summary
+```
+
+#### 新蒸馏书 —— 阶段 1 每完成 1 个 cluster 触发
+
+阶段 1 三章窗口蒸馏继续保留（micro/meso 数据来源），但**每完成 1 个 cluster 范围**（≥ 2 章且 ≥ 4000 字）就触发：
+
+```bash
+python core/scripts/arc_aggregator.py --project workspace/styles/<书名> --cluster <cluster_id>
+```
+
+cluster 边界来源（按优先级）：
+1. 大纲已含 ECAS cluster_brief → 直接用 cluster_id + chapter_range
+2. 无大纲 cluster → 蒸馏完成后跑 cluster_segmenter 一次性切
+
+### 🔁 2 轮 0 issue 收敛循环（SRE 风格 · v22.cluster 新增 · 来自用户 goal 2026-05-24）
+
+参考 reading-reflector 的 3 轮 clean 模式（`.claude/agents/novel-reading-reflector.md` MAX_ROUNDS=5 / 3 轮 clean pass）。蒸馏阶段 1.5 采用 **2 轮 0 issue** 终止：
+
+```python
+round_n = 0
+prev_issues = []
+while round_n < MAX_ROUNDS:    # 默认 MAX_ROUNDS = 5
+    round_n += 1
+    # 1. 跑 cluster_segmenter + arc_aggregator --all-clusters + character_arc_aggregator
+    # 2. 扫产出 issue（cluster 字数越界 / arc shape 全 Unknown / character arc missing / 等）
+    issues = scan_arc_quality(project)
+    if not issues:
+        consecutive_clean += 1
+        if consecutive_clean >= 2:
+            break   # ✅ 2 轮 0 issue pass
+    else:
+        consecutive_clean = 0
+        # 3. 修：调启发式参数、补字段映射、纠正路径
+        apply_fixes(issues)
+        prev_issues = issues
+else:
+    escalate_human()   # 超 5 轮仍有 issue → 升级人工
+```
+
+**质量检查清单**（每轮 scan_arc_quality 必查）：
+- ❌ cluster_arc emotion_curve 全部 0.25（说明 dim33/39/40 字段未命中）
+- ❌ cluster_arc matched_reagan_shape == "Unknown"
+- ❌ cluster 字数越界（< 4000 或 > 20000）
+- ❌ character_arc 全部 fallback 估算（actor/experiencer corr=1.0 或 -1.0）
+- ❌ cluster_arc 总数 ≠ cluster_index.clusters 总数
+- ❌ arc_summary primary_track ≠ "cluster"
+
+### arc 主轨 schema（cluster 模式）
+
+`workspace/styles/<书名>/arc_templates/cluster_arc_<cluster_id>.json`：
+
+### arc 副轨 schema（fixed10 模式）
+
+`workspace/styles/<书名>/arc_templates/arc_<NNN>.json`（NNN = 该 arc 末章号）—— 字段与主轨基本一致，仅多 `mode: "fixed10"` 区分。
+
+### 双轨共用字段 schema
+
+```json
+{
+  "arc_id": "arc_010",
+  "chapter_range": "ch1-10",
+  "emotion_curve_normalized": [0.3, 0.4, 0.5, 0.7, 0.6, 0.4, 0.5, 0.8, 0.9, 0.4],
+  "pacing_labels": ["慢", "中", "中", "快", "中", "慢", "中", "快", "快", "慢"],
+  "scene_summary_ratio_per_chapter": [0.8, 0.75, 0.7, 0.85, 0.75, 0.4, 0.7, 0.9, 0.9, 0.5],
+  "event_density_per_chapter": [1, 2, 1, 3, 2, 1, 2, 4, 5, 1],
+  "kicker_count_per_chapter": [2, 3, 2, 4, 3, 2, 3, 5, 6, 2],
+  "climax_chapter_index": 8,
+  "arc_structure_label": "低开-缓上-小爆-消化-再上-大高潮-收尾",
+  "matched_reagan_shape": "Rags-to-Riches",
+  "matched_reagan_shape_confidence": 0.78,
+  "foreshadowing_planted_in_arc": 12,
+  "foreshadowing_resolved_in_arc": 3,
+  "character_arc_summary_in_arc": [
+    {"character": "HeroC", "stage_from": "迷茫", "stage_to": "入局者", "key_turning_chapter": 8}
+  ],
+  "_metadata": {
+    "distill_date": "2026-05-23",
+    "skill_version": "v3.3",
+    "source_continuity_files": ["ch1_3_continuity.json", "ch4_6_continuity.json", "ch7_9_continuity.json"],
+    "aggregator_version": "v22.1"
+  }
+}
+```
+
+### 字段计算方法
+
+- `emotion_curve_normalized`：从 `continuity.pacing_curve` 解析快慢标签 → 数值映射（快=0.8 / 中=0.5 / 慢=0.3），叠加单章 `dim33 情绪节拍图` + `dim39 幽默密度` + `dim40 爽点密度` → 归一到 0-1
+- `pacing_labels`：直接从 `continuity.pacing_curve` 抽取（"中快/快/慢/平稳" → "中/快/慢/慢"）
+- `scene_summary_ratio_per_chapter`：从单章 metrics.json 的 `dim28 场景vs概述比例`
+- `event_density_per_chapter`：单章 `dim37 冲突密度` + `dim29 钩子总数` 加权
+- `kicker_count_per_chapter`：单章 `dim29 钩子总数`
+- `climax_chapter_index`：emotion_curve_normalized 的 argmax
+- `arc_structure_label`：根据 emotion_curve 形状描述（如「先升后降」「双峰」「U 型」）
+- `matched_reagan_shape`：拟合 6 形状选 TOP1 + 置信度（升/降/谷/峰/W/M）
+- `character_arc_summary_in_arc`：从 continuity.character_continuity 聚合主要角色的 stage_from/to
+
+### 执行流程
+
+```bash
+# 阶段 1 每完成 10 章后，主代理调（不阻塞阶段 1 继续）：
+python core/scripts/arc_aggregator.py \
+  --project "workspace/styles/<书名>" \
+  --arc-end-chapter <N>          # 如 N=10 → 聚合 ch1-10 → arc_010.json
+```
+
+主代理可以在阶段 1 的「每 30 章 skill 升级」节点之后**并行**调 3 次（聚合 arc_010 / arc_020 / arc_030），不影响阶段 1 推进。
+
+### 已蒸馏书的迁移路径（**关键**）
+
+已蒸馏完成的 5 个风格库（BookC / BookB / 饲养全人类 / 没钱修什么仙 / BookA）**不用重蒸单章**，只需补跑 arc_aggregator：
+
+```bash
+# 对每本已蒸馏书的每个 10 章窗口跑一次
+for end in 10 20 30 ... <总章数>; do
+  python core/scripts/arc_aggregator.py \
+    --project "workspace/styles/<书名>" \
+    --arc-end-chapter $end
+done
+
+# 最后生成全书 arc summary
+python core/scripts/arc_aggregator.py \
+  --project "workspace/styles/<书名>" \
+  --mode summary
+```
+
+### plan_tracker 加 step 2.5
+
+```bash
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --skip-output   # 阶段 1 完成
+# 阶段 1.5（arc 聚合）作为 step 2.5（**不写入 plan 模板的 required 步骤**，仅记录运行）
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --output "arc_templates/arc_010.json"  # 多次调，每次 output 不同
+```
+
+**注**：阶段 1.5 不计入 plan 模板的 required 步骤（保留向后兼容），但建议跑——不跑则方案 2 完整收益失效。
 
 ---
 

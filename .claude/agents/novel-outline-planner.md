@@ -48,6 +48,8 @@ MODE: plan-next | ecas_cluster_brief    # v23 新增 ECAS 模式
 PLANNER_CONTEXT: <_数据库/.wal/第N+1章_planner_context.md>
 CLUSTER_ID: cluster_NNN                  # v23 ECAS 模式必填
 PARENT_ME: ME_NNN                        # ECAS 模式: 本 cluster 对应的大势事件
+STYLE_LIB: <workspace/styles/<风格名>/作者风格_FINAL.json>   # v22 新增 · 项目用了蒸馏风格时必传；本 agent 据此对齐作者节奏指纹
+ARC_TEMPLATE_DIR: <workspace/styles/<风格名>/arc_templates/>  # v22 新增 · 方案 2 启用后必传；ECAS 模式据此设定 cluster 的 arc 曲线参照
 ```
 
 ## 【v23 ECAS】Cluster Brief 生成模式
@@ -97,7 +99,7 @@ estimated_chapters = clamp(estimated_chapters, 4, 14)
   "cluster_id": "cluster_002",
   "parent_me": "ME_002",
   "scope_summary": "1-2 句话总结本簇全程",
-  "expected_word_range": {"min": 9000, "max": 11000},  // 自适应 / 关键事件 13K-16K
+  "expected_word_range": {"min": 9000, "max": 11000, "unit": "CJK_chars"},  // 自适应 / 关键事件 13K-16K
   "scenes_estimated": 4,
   "anchor_props": ["..."],
   "foreshadowing_to_plant": [{"id": "FS_NNN", "type": "setup", "tier": "A"}],
@@ -110,7 +112,26 @@ estimated_chapters = clamp(estimated_chapters, 4, 14)
   "characters_focus": ["陈默", "老周"],
   "hub_locations": ["HUB_001"],
   "estimated_chapters": 4,
-  "status": "pending"
+  "status": "pending",
+  "_v22_arc_alignment": {
+    "_doc": "v22 必填（ARC_TEMPLATE_DIR 启用时）—— cluster 与作者 arc 模板的对齐",
+    "arc_template_ref": "workspace/styles/<风格名>/arc_templates/arc_<NNN>.json",
+    "arc_target_segment": "ch<start>-ch<end> of arc_<NNN>（曲线第 X-Y 点）",
+    "expected_emotion_curve_segment": [0.3, 0.4, 0.7, 0.6],
+    "expected_pacing_segment": ["慢", "中", "快", "慢"],
+    "matched_3chapter_template_chain": ["审查-通关释放-招募消化三章组"],
+    "climax_at_chapter": 8,
+    "climax_position_pct_in_cluster": 0.72,
+    "arc_template_missing": false
+  },
+  "_v22_character_arc_focus": {
+    "_doc": "v22 必填（CHARACTER_ARC_DIR 启用时 · 方案 3）—— cluster 各角色情感曲线参照",
+    "primary_character_arc_ref": "workspace/styles/<风格名>/character_arcs/<主角>_emotion_arc.json",
+    "expected_actor_emotion_delta": "+0.3（从迷茫到入局过渡段）",
+    "expected_experiencer_emotion_delta": "+0.5（恐惧累积段）",
+    "stage_transition_in_cluster": "迷茫 → 入局者（关键转折发生在 ch8）",
+    "character_arc_missing": false
+  }
 }
 ```
 
@@ -203,8 +224,36 @@ else:
 4. **Read** `_数据库/.wal/第<N>章_summary.json`（刚写完章节的情绪/张力/未释放情绪）
 5. **Read** `_数据库/人物卡.json` 看主角 offscreen.goals 和 knowledge.will_learn
 6. **v17.7：Read** `_数据库/.research_cache/outline_<topic>_<时间>.md`（如有 RESEARCH_REF）
+7. **v22 新增 · STYLE_LIB 风格库节奏指纹（必读 · 项目用了蒸馏风格时）**：Read STYLE_LIB（`作者风格_FINAL.json`），抓 6 个关键字段：
+   - `cross_chapter_diversity.opening_type_distribution_300ch`（或 `_60ch` 作 fallback）—— 章首类型分布
+   - `cross_chapter_diversity.ending_type_distribution_300ch`（或 `_60ch`）—— 章末类型分布
+   - `cross_chapter_diversity.narrative_craft.hooks_per_chapter_avg` + `hook_positions`（opening/middle/ending 比例）—— 钩子密度+位置
+   - `cross_chapter_diversity.narrative_craft.emotion_beat_trajectory`（字符串 · 作者情绪节拍模板）
+   - `cross_chapter_diversity.narrative_craft.scene_vs_summary.scene_pct_avg_300ch`（场景占比基准）
+   - `narrative_continuity_template.three_chapter_templates`（**核心** · N 个 3 章模板池，每条含 `structure` + `transition_chain`）
+   - **如 STYLE_LIB 未传或字段缺失**：警告 + 降级（输出 JSON 加 `"style_lib_missing": true`），不要中止
+   - **使用规则**：本章上下文若匹配某 three_chapter_templates 的 transition_chain → 卡片至少 1 张应延用该模板的下一章 structure（在 `style_alignment.matched_3chapter_template` 字段引用模板 `name`）
+8. **v22.cluster 新增 · ARC_TEMPLATE_DIR（双轨 · cluster 主 + fixed10 副）**：
 
-**v21 CD1 优先**：如 prompt 含 `PLANNER_CONTEXT`，**优先 Read 该 md** — 已包含下面 P1 段全部信息。读完 PLANNER_CONTEXT 后可跳过 P1 step 7-14（除非需要原始 json）。
+   **路径推断**：`STYLE_LIB_DIR = STYLE_LIB 的父目录`；`ARC_TEMPLATE_DIR = STYLE_LIB_DIR/arc_templates/`；`CLUSTER_INDEX = STYLE_LIB_DIR/cluster_index.json`。
+
+   **查询顺序**：
+   - ① **cluster 主轨**（推荐）：Read `CLUSTER_INDEX` → 找 `clusters[i].chapter_range` 包含 CURRENT_CHAPTER 的 cluster → Read `ARC_TEMPLATE_DIR/cluster_arc_<cluster_id>.json`
+   - ② **fixed10 副轨**（fallback）：`arc_end = ((CURRENT_CHAPTER - 1) // 10 + 1) * 10` → Read `ARC_TEMPLATE_DIR/arc_<arc_end:03d>.json`
+   - ③ 两轨都失败：警告降级（`"arc_template_missing": true`），不中止
+
+   **抓字段**（cluster 主轨与 fixed10 副轨字段对齐）：
+   - `emotion_curve_normalized`（cluster 长度数组 2-6 个，或 fixed10 的 10 标量）
+   - `pacing_labels`（同长度数组）
+   - `climax_chapter_number`（具体章号，不是数组索引）
+   - `arc_structure_label`（描述性形状）+ `matched_reagan_shape`（6 形状之一）
+   - 本章在 arc 中的索引：`chapter_index = CURRENT_CHAPTER - chapter_range[0]`
+   - 本章期望情感强度：`emotion_curve_normalized[chapter_index]`
+   - 本章期望节奏：`pacing_labels[chapter_index]`
+
+   **理论依据**：业界 SOTA 2024-2025（LumberChunker EMNLP 2024 / MARCUS 2025 / TV Arcs 2025）全面采用可变长度故事块颗粒度——实测比固定 N 章 +7.37% DCG@20。详见 `.research_cache/inspiration_cluster_distill_2026-05-24.md`。
+
+**v21 CD1 优先**：如 prompt 含 `PLANNER_CONTEXT`，**优先 Read 该 md** — 已包含下面 P1 段全部信息。读完 PLANNER_CONTEXT 后可跳过 P1 step 7-14（除非需要原始 json）。**v22 STYLE_LIB / ARC_TEMPLATE_DIR 不在 PLANNER_CONTEXT 浓缩范围内 · 必须单独读。**
 
 **P1 角色剧情驱动读（fallback：PLANNER_CONTEXT 缺失时手动跑）**：
 
@@ -338,6 +387,40 @@ else:
 - target=win → 至少 1 张明确的推进/收获卡
 - target=auto → 自由发挥
 
+### 【v22 新增】STYLE_LIB 风格库节奏对齐（必跑 · 若 STYLE_LIB 已传）
+
+每张卡的设计**必须显式对齐**作者节奏指纹，把蒸馏出来的「章型分布 / 衔接模板 / 情绪节拍 / 钩子密度」从孤儿数据接通到走向卡。
+
+#### 规则 1：章型分布约束（防止连续同类型章）
+- 读 `opening_type_distribution_300ch` + `ending_type_distribution_300ch`
+- 检查最近 2-3 章已用过的 opening/ending type（从 章纲摘要.json 提取）
+- 卡片设计时**至少 1 张 ≠ 最近 1 章用过的 type**——避免风格库统计上稀有的类型（< 5%）连续出现 2 次
+- 卡片 `style_alignment.expected_chapter_type` 必须填一个作者实际写过的章型（如「危机章」「日常章」「消化章」「世界构建章」），不能凭空发明
+
+#### 规则 2：3 章模板池套用（核心 · narrative_continuity_template）
+- 检查最近 1-2 章是否匹配某个 `three_chapter_templates[].structure` 的第 1/第 2 章
+- 如果匹配 → **至少 1 张卡**应延用该模板的下一章 structure（如最近章是「行动章 A→世界建构章 B」→ 至少 1 张卡推「信息密集章 C」延用同模板）
+- 卡片 `style_alignment.matched_3chapter_template` 字段必须填模板 `name`（如 `"行动-世界建构-信息密集三章组"`）+ 引用 `transition_chain` 的下一环
+
+#### 规则 3：情绪节拍 + 钩子密度对齐
+- 读 `emotion_beat_trajectory`（如 "每章5-7个节点；典型：缓冲→升→爆发→缓冲→升→章末钩子"）+ `hooks_per_chapter_avg`（如 3.2）+ `hook_positions`（如 opening:0.2 / middle:0.5 / ending:0.3）
+- 卡片 `emotional_tone` 必须能 map 到 emotion_beat_trajectory 的某段（不能写 trajectory 中不存在的曲线段，如作者从不"高潮→平静收尾" → 卡片不能这么设计）
+- 卡片 `description` 要隐含本章应有的钩子数 ≈ hooks_per_chapter_avg（默认 3 个）+ 位置分布按 hook_positions（最高密度在 middle）
+
+#### 规则 4：arc 曲线点对齐（v22.cluster · 主轨 cluster · 副轨 fixed10）
+- **优先 cluster 主轨**：从 `cluster_arc_<cluster_id>.json` 读 `emotion_curve_normalized` 数组（长度 = cluster chapter_count，2-6 之间）
+- 索引计算：`chapter_index = CURRENT_CHAPTER - cluster.chapter_range[0]` → 取 `emotion_curve_normalized[chapter_index]` = 本章期望情感强度 0-1
+- 同样取 `pacing_labels[chapter_index]` = 本章期望节奏（慢/中/快）
+- 卡片 `style_alignment.expected_emotion_intensity` 必须 = arc 期望值（± 0.15 容差）
+- 卡片 `style_alignment.expected_pacing` 必须 = arc 节奏标签
+- 若卡片设计与 arc 期望冲突（如 arc 要求慢节奏但卡设计成战斗章）→ **舍弃该卡设计** 或 在 `risk` 字段显式说明「与 arc 期望冲突」
+- cluster 内章在 arc 中的相对位置：`position_pct = chapter_index / (cluster.chapter_count - 1)`，用此对齐 cluster 内"开 / 中 / 高潮 / 收"四点
+
+#### 规则 5：场景占比锚定
+- 读 `narrative_craft.scene_vs_summary.scene_pct_avg_300ch`（如 0.715）
+- 卡片 `description` 中如显式标注本章 scene/summary 比例 → 必须在均值 ± 15% 内
+- 高潮章可上浮到 0.85，消化章可下沉到 0.40，但不能整篇 100% 场景或 100% 概述
+
 ### 所有路径通向大势
 
 检查每张卡片的 `leads_to` 是否仍推进卷级 `volume_arc`：
@@ -376,7 +459,18 @@ else:
       "emotional_tone": "困惑→恐惧→勉强接受",
       "leads_to": "替活机制首次体验，为后续铜钱获得（fs_004）埋设情感基础",
       "risk": "节奏紧，读者容易跟不上",
-      "aligns_with_volume_arc": true
+      "aligns_with_volume_arc": true,
+      "style_alignment": {
+        "_doc": "v22 必填 · 风格库节奏对齐元数据（STYLE_LIB 未传时全部字段填 null）",
+        "matched_3chapter_template": "审查-通关释放-招募消化三章组（延用 transition_chain 的 C 段：招募消化）",
+        "matched_emotion_trajectory_segment": "缓冲→升→爆发（emotion_beat_trajectory 的前 3 段）",
+        "expected_chapter_type": "危机章",
+        "expected_emotion_intensity": 0.72,
+        "expected_pacing": "快",
+        "kicker_position_pct": 0.72,
+        "hooks_target_count": 3,
+        "scene_pct_target": 0.85
+      }
     },
     {
       "label": "B",
@@ -385,7 +479,17 @@ else:
       "emotional_tone": "迷糊→察觉异常→确认",
       "leads_to": "同样通向替活大勇，但铺垫 2 节更稳",
       "risk": "可能拖慢节奏，消耗第 3 章字数",
-      "aligns_with_volume_arc": true
+      "aligns_with_volume_arc": true,
+      "style_alignment": {
+        "matched_3chapter_template": "日常-异变-灰雾会面三章组（延用 A→B 段：日常切片→触发异变）",
+        "matched_emotion_trajectory_segment": "缓冲→升（emotion_beat_trajectory 前 2 段）",
+        "expected_chapter_type": "日常章",
+        "expected_emotion_intensity": 0.45,
+        "expected_pacing": "中",
+        "kicker_position_pct": 0.80,
+        "hooks_target_count": 3,
+        "scene_pct_target": 0.70
+      }
     }
   ],
   "default_choice_hint": "推荐 A：卷级弧线此时需要加速进入'替活'感受，B 太缓会让读者脱节"
@@ -406,6 +510,16 @@ else:
 - `cards[].risk`：具体代价，不写 `"有风险"`
 - `cards[].aligns_with_volume_arc`：布尔值 `true` / `false`（false 的卡片不应生成，除非用户明说）
 - **`cards[].character_driven`：v21 必填**，所有字段必有真实值（primary_character_arc_anchor / arc_dimension_tested / arc_state_change_hint / stress_implication / aspect_compatibility_check / heart_event_triggered / fate_event_advanced / clock_advanced / throughline_advanced）
+- **`cards[].style_alignment`：v22 必填**（STYLE_LIB 已传时）—— 9 字段全须真实值：
+  - `matched_3chapter_template`：必须 = `narrative_continuity_template.three_chapter_templates[].name` 之一，写「(模板名)（延用 X 段）」
+  - `matched_emotion_trajectory_segment`：必须是 `emotion_beat_trajectory` 字符串中的连续子段（如「缓冲→升→爆发」）
+  - `expected_chapter_type`：必须是 `cross_chapter_diversity` 章型分布中实际出现的类型（不能编造）
+  - `expected_emotion_intensity`：0.0-1.0，ARC_TEMPLATE_DIR 启用时 = `arc.emotion_curve_normalized[本章索引]`（± 0.15）
+  - `expected_pacing`：`"慢" / "中" / "快"`，ARC_TEMPLATE_DIR 启用时 = `arc.pacing_labels[本章索引]`
+  - `kicker_position_pct`：默认 = `1 - hook_positions.ending`（如 hook_positions.ending=0.3 → kicker 在 0.7）
+  - `hooks_target_count`：四舍五入 = `hooks_per_chapter_avg`
+  - `scene_pct_target`：基础值 = `scene_vs_summary.scene_pct_avg_300ch`，章型微调（战斗章 +0.1 / 消化章 -0.2）
+  - **STYLE_LIB 未传时**：style_alignment 整体填 null + 输出 JSON 加 `"style_lib_missing": true` 警告
 - `default_choice_hint`：给出具体推荐标签 + 卷级理由
 
 **绝不**：
@@ -417,6 +531,10 @@ else:
 - **忽略 storyteller target_outcome**（target=setback 时全是 win 卡 = 错）
 - **忽略 pending heart_events**（关系数值已到阈值的揭密 → 至少 1 张卡触发）
 - **角色驱动元数据缺失**（character_driven 字段不全 = 走向卡无效）
+- **【v22】忽略 STYLE_LIB**：传了 STYLE_LIB 但 style_alignment 全填 null = 走向卡无效（必须真实对齐作者节奏指纹）
+- **【v22】凭空发明 expected_chapter_type**：必须从 STYLE_LIB 实际章型分布中选，不能编"修真章""玄幻章"等风格库没有的类型
+- **【v22】matched_3chapter_template 引用不存在的模板**：必须是 `three_chapter_templates[].name` 真实条目
+- **【v22】style_alignment.expected_emotion_intensity 偏离 arc 期望 > 0.15**：方案 2 启用后，违背 arc 曲线点 = 卡无效
 
 ## 硬性纪律
 

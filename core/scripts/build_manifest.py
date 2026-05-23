@@ -1379,6 +1379,125 @@ def _collect_distill_continuity(scanner) -> dict:
     }
 
 
+def _collect_arc_template(scanner, chapter: int) -> dict:
+    """v22.cluster：注入本章所属 cluster 的 arc 模板（情感曲线 / 节奏 / 高潮）。
+
+    查找优先级（双轨）：
+      1. cluster 主轨：读 cluster_index.json → 找包含本章的 cluster → 读 cluster_arc_<id>.json
+      2. fixed10 副轨：旧固定 10 章公式（向后兼容）
+      3. 全部 fallback 失败：返回 missing
+    """
+    style_path = scanner.root / "_数据库" / "作者风格.json"
+    if not style_path.exists():
+        return {"arc_template_missing": True, "reason": "no _数据库/作者风格.json"}
+    try:
+        sd = json.loads(style_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return {"arc_template_missing": True, "reason": "style json invalid"}
+
+    work = (sd.get("meta") or {}).get("work") or sd.get("work")
+    if not work:
+        return {"arc_template_missing": True, "reason": "no meta.work in style"}
+
+    # 推算风格库根目录
+    style_root = None
+    for parent in [scanner.root, *scanner.root.parents]:
+        candidate = parent / "workspace" / "styles" / work
+        if candidate.exists():
+            style_root = candidate
+            break
+        candidate2 = parent / "styles" / work
+        if candidate2.exists():
+            style_root = candidate2
+            break
+    if style_root is None:
+        candidate = Path.cwd() / "workspace" / "styles" / work
+        if candidate.exists():
+            style_root = candidate
+    if style_root is None or not style_root.exists():
+        return {"arc_template_missing": True, "reason": f"style_root not found for work={work}"}
+
+    arc_dir = style_root / "arc_templates"
+    cluster_index_file = style_root / "cluster_index.json"
+
+    # ① cluster 主轨
+    if cluster_index_file.exists() and arc_dir.exists():
+        try:
+            ci = json.loads(cluster_index_file.read_text(encoding="utf-8"))
+            for c in ci.get("clusters", []):
+                rng = c.get("chapter_range", [])
+                if len(rng) == 2 and rng[0] <= chapter <= rng[1]:
+                    cid = c["cluster_id"]
+                    arc_file = arc_dir / f"cluster_arc_{cid}.json"
+                    if arc_file.exists():
+                        return _build_arc_payload(arc_file, chapter, track="cluster")
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # ② fixed10 副轨
+    if arc_dir.exists():
+        arc_end = ((chapter - 1) // 10 + 1) * 10
+        arc_file = arc_dir / f"arc_{arc_end:03d}.json"
+        if not arc_file.exists():
+            candidates = sorted(arc_dir.glob("arc_*.json"))
+            candidates = [c for c in candidates if c.name != "arc_summary.json"]
+            for f in candidates:
+                m = re.match(r"arc_(\d+)\.json", f.name)
+                if m and int(m.group(1)) >= chapter:
+                    arc_file = f
+                    break
+        if arc_file.exists():
+            return _build_arc_payload(arc_file, chapter, track="fixed10")
+
+    return {"arc_template_missing": True,
+            "reason": f"no cluster_index/arc files for work={work}; 请先跑 cluster_segmenter.py + arc_aggregator.py --all-clusters"}
+
+
+def _build_arc_payload(arc_file: Path, chapter: int, track: str) -> dict:
+    """从 arc JSON 文件构建 manifest 注入字段。"""
+    try:
+        arc_data = json.loads(arc_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return {"arc_template_missing": True, "reason": "arc json invalid"}
+
+    arc_range = arc_data.get("chapter_range", "")
+    if isinstance(arc_range, list) and len(arc_range) == 2:
+        arc_start = arc_range[0]
+        arc_range_str = f"ch{arc_range[0]}-{arc_range[1]}"
+    else:
+        m = re.match(r"ch(\d+)-(\d+)", str(arc_range))
+        arc_start = int(m.group(1)) if m else 1
+        arc_range_str = str(arc_range)
+    chapter_index = chapter - arc_start
+
+    emotion_curve = arc_data.get("emotion_curve_normalized") or []
+    pacing_labels = arc_data.get("pacing_labels") or []
+    expected_emo = emotion_curve[chapter_index] if 0 <= chapter_index < len(emotion_curve) else None
+    expected_pacing = pacing_labels[chapter_index] if 0 <= chapter_index < len(pacing_labels) else None
+
+    return {
+        "track": track,                 # v22.cluster: 'cluster' (主) | 'fixed10' (副)
+        "arc_id": arc_data.get("arc_id"),
+        "cluster_id": arc_data.get("cluster_id"),
+        "arc_chapter_range": arc_range_str,
+        "this_chapter_index_in_arc": chapter_index,
+        "this_chapter_expected_emotion": expected_emo,
+        "this_chapter_expected_pacing": expected_pacing,
+        "arc_climax_chapter_number": arc_data.get("climax_chapter_number"),
+        "arc_structure_label": arc_data.get("arc_structure_label"),
+        "matched_reagan_shape": arc_data.get("matched_reagan_shape"),
+        "boundary_reason": arc_data.get("boundary_reason"),
+        "emotion_curve_full": emotion_curve,
+        "pacing_labels_full": pacing_labels,
+        "_doc": (
+            f"v22.cluster arc 模板（{track} 轨）：本章 ch{chapter} 在 {arc_data.get('arc_id')}（{arc_range_str}）"
+            f"的第 {chapter_index + 1} 点。writer 应让本章情绪强度 ≈ {expected_emo}（± 0.15），节奏 = {expected_pacing}。"
+            f"全 arc 形状: {arc_data.get('arc_structure_label')} ({arc_data.get('matched_reagan_shape')})；"
+            f"arc 内高潮章: ch{arc_data.get('arc_climax_chapter_number')}."
+        ),
+    }
+
+
 def _collect_distill_voice_refs(scanner) -> dict:
     """v19.5 对齐：蒸馏 character_voice_pack 作为参考模板（原作角色风格 DNA）。
     项目内新角色 voice_pack 是手工填的，缺少 dialogue_avg_chars / behavior_loop / special 等行为模板，
@@ -2018,6 +2137,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "position_effect_template": _collect_position_effect_template(s, chapter),
         "throughlines": _collect_throughlines(s, chapter),
         "distill_continuity_template": _collect_distill_continuity(s),
+        "arc_template": _collect_arc_template(s, chapter),
         "distill_voice_packs_reference": _collect_distill_voice_refs(s),
         "distill_golden_few_shot": _collect_golden_few_shot(s, chapter),
         "selective_history_retrieval": _collect_selective_history(s, chapter, top_k=3),
@@ -2084,6 +2204,9 @@ def _build_cache_layout() -> dict:
             "distill_golden_few_shot",           # 蒸馏 golden_passages
             "position_effect_template",          # R2.3 双轴判定模板（全局常量）
             "_cache_layout",                     # 本字段自身（元数据）
+        ],
+        "SEMI_STATIC_90_cacheable_v22": [
+            "arc_template",                      # v22.cluster: 本章所属 cluster 的 arc 模板（同 cluster 内 manifest 完全相同 → cache hit ratio ≈ cluster.chapters_count/总章数）
         ],
         "SEMI_STATIC_70_cacheable": [
             "active_fate_events",                # 卷内大势事件池
