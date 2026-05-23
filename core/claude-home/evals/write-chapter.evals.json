@@ -1,0 +1,61 @@
+{
+  "command": "write-chapter",
+  "version": 1,
+  "description": "/write-chapter 行为契约：根据大纲写单章 + 触发 save-state",
+  "evals": [
+    {
+      "id": "wc-1-fresh-chapter",
+      "scenario": "用户选完走向卡后写下一新章节",
+      "user_prompt": "/write-chapter 5（用户已在走向卡选了路径 B）",
+      "fixture": {
+        "project": "示例书",
+        "chapter": 5,
+        "prereqs": [
+          "_数据库/.cards/第5章_next.json 存在（走向卡）",
+          "_数据库/manifest 上一章状态已保存",
+          "workspace/styles/<风格>/SKILL.md 已加载到 writer agent"
+        ]
+      },
+      "expected_trace": [
+        "plan_tracker create write-chapter --chapter 5",
+        "Step 1 load_brief：读 manifest + 走向卡 + 风格 SKILL",
+        "Step 2 spawn_agent：spawn novel-writer agent（必须含 PLAN_ID + STEP + PROJECT + CHAPTER + MANIFEST + PUA 字段，hook 规则 5+7 校验）",
+        "Step 3 save_txt：writer 产出 第005章.txt + 第005章_changes.json",
+        "Step 4 trigger_save_state：自动唤起 save-state 流水线（见 save-state.evals.json）",
+        "Step 5 end_plan（含 cost_summary 记录 writer agent token + duration，P2-8）"
+      ],
+      "expected_artifacts": [
+        "章节/第005章/第005章.txt",
+        "章节/第005章/第005章_changes.json"
+      ],
+      "tolerance": {
+        "hard_gate_blocking": true,
+        "comments": "writer 输出 hard_gate 残留（LOCKED_FACT_CONFLICT / FORESHADOWING_NOT_PAID 等）→ pending_agent 派给 validator-repair 修复"
+      }
+    },
+    {
+      "id": "wc-2-condition-injection",
+      "scenario": "事件触发器命中：本章 events.json 有 trigger 应在 writer prompt 中注入",
+      "user_prompt": "/write-chapter 8（_数据库/events.json trigger_at_ch=8 的事件应触发）",
+      "fixture": {
+        "project": "示例书",
+        "chapter": 8,
+        "prereqs": [
+          "_数据库/events.json 含 'trigger_at_ch: 8' 的条目",
+          "build_manifest 应把触发条件注入 writer manifest"
+        ]
+      },
+      "expected_trace": [
+        "load_brief 时 build_manifest.py 读 events.json 命中触发条件",
+        "writer manifest 的 'forced_events' 段含命中事件",
+        "writer agent 必须在正文响应这些事件（validate_chapter 抽样检查）"
+      ],
+      "expected_artifacts": [
+        "章节/第008章/第008章.txt（含事件相关情节）"
+      ],
+      "tolerance": {
+        "comments": "事件未在正文响应 → validate_chapter 标 warning（advisory，可豁免如「下一章再展开」）"
+      }
+    }
+  ]
+}

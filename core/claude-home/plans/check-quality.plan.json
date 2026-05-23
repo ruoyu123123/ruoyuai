@@ -1,0 +1,31 @@
+{
+  "command": "check-quality",
+  "version": 1,
+  "description": "双层质量校验：Anti-Slop 扫描（机械层正则 + 语义层 semantic_slop_scanner）+ LLM 评估",
+  "total_steps": 3,
+  "required_steps": [1, 2, 3],
+  "optional_steps": [],
+  "steps": [
+    {
+      "n": 1,
+      "name": "anti-slop-scan",
+      "description": "Anti-Slop 双层扫描：机械层 6 类正则（禁用词/AI套话/对话标签/Show-Don't-Tell/总结结尾）+ 语义层 semantic_slop_scanner 8 检测器（隐喻后解释/金句体/否定式排比/系动词回避/虚假范围/过度限定/强行三段列举/对话标签同义词循环，全部 advisory）",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 2,
+      "name": "llm-evaluation",
+      "description": "LLM 评估：核心指标 + 禁忌检查 + 正典校验 + 风格一致性 + AI 默认输出对比 + 对抗式编辑",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 3,
+      "name": "plan-end",
+      "description": "plan 最终校验 + 输出 quality 报告",
+      "required": true,
+      "expected_outputs": []
+    }
+  ]
+}

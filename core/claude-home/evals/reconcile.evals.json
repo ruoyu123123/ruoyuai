@@ -1,0 +1,62 @@
+{
+  "command": "reconcile",
+  "version": 1,
+  "description": "/reconcile 行为契约：设定修改后审查受影响的历史章节",
+  "evals": [
+    {
+      "id": "rc-1-character-trait-change",
+      "scenario": "用户修改了某角色 voice_pack 的 catchphrase，要求扫历史章节看哪些受影响",
+      "user_prompt": "/reconcile 主角的口头禅从『差不多』改为『大概』",
+      "fixture": {
+        "project": "示例书",
+        "prereqs": [
+          "已写完 ≥10 章",
+          "_数据库/人物卡.json 已被用户改过（catchphrase 字段变更）",
+          "git status 应显示人物卡.json 有改动"
+        ]
+      },
+      "expected_trace": [
+        "plan_tracker create reconcile",
+        "Step 1 parse_change：识别修改的字段（catchphrase: 差不多 → 大概）",
+        "Step 2 scan_history：扫所有历史章节正文，找出含旧 catchphrase 的对话",
+        "Step 3 apply_fix：对每个命中段，用 Edit 替换为新 catchphrase（P2-7 守则：仅 ≥3 次出现的才视为 pattern 强制改）",
+        "Step 4 verify：重跑 voice-keeper 审查（含 P2-7 反 over-generalize 守则）",
+        "Step 5 git_commit：'fix: 调和 主角口头禅变更（影响 N 章）'"
+      ],
+      "expected_artifacts": [
+        "受影响章节的 第NNN章.txt 已被 Edit 修改",
+        "git log 应有 fix(reconcile) commit"
+      ],
+      "tolerance": {
+        "comments": "P2-7 频次门槛：单次出现的旧 catchphrase 不强制替换，仅标 advisory"
+      }
+    },
+    {
+      "id": "rc-2-world-rule-change",
+      "scenario": "用户调整了世界观规则（如修仙体系『境界划分』），要扫所有相关章节",
+      "user_prompt": "/reconcile 修改修仙境界：练气→筑基→金丹 → 改为 凡境→灵境→真境",
+      "fixture": {
+        "project": "修仙书",
+        "prereqs": [
+          "_数据库/世界观.json 的 power_system.tiers 已被改",
+          "已写完 ≥20 章，含大量境界提及"
+        ]
+      },
+      "expected_trace": [
+        "Step 1 parse_change：识别 tier 名变更映射（练气→凡境 等）",
+        "Step 2 scan_history：全章节文本扫描旧 tier 名出现",
+        "Step 3 apply_fix：Edit 替换（注意只换叙述、不换对话回忆，需 LOCKED_FACT_CONFLICT 校验）",
+        "Step 4 verify：跑 audit_hub 全章重审，hard_gate 必须 0",
+        "Step 5 git_commit"
+      ],
+      "expected_artifacts": [
+        "受影响章节均无 LOCKED_FACT_CONFLICT 残留",
+        "git log 有 fix(reconcile) commit"
+      ],
+      "tolerance": {
+        "hard_gate_blocking": true,
+        "comments": "verify 步骤如发现 hard_gate（如某章引用旧 tier 与新规则矛盾）→ plan-end 拒绝，需手动介入"
+      }
+    }
+  ]
+}

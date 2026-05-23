@@ -1,0 +1,86 @@
+{
+  "_schema": "ripple_rules_v20_1",
+  "_doc": "小势完成 → 世界状态变化的因果规则。每个 rule 含 trigger 条件 + ripples（数值变化/NPC 动作 spawn/事件 spawn）",
+
+  "ripple_rules": [
+    {
+      "id": "RR_001",
+      "trigger_type": "minor_event",
+      "trigger_match": "B_鼻子先觉|铁锈味重锤埋设",
+      "_doc": "用户选 ch2 路径 B 后触发的世界涟漪",
+      "ripples": [
+        {"target": "factions_state.南海资本.stability", "delta": -2, "reason": "顾沉首次主动接触陆衍，暴露增加风险"},
+        {"target": "active_npc_threads", "add_thread": {"npc_id": "顾沉", "action": "评估陆衍灵格觉醒进度", "_priority": 7}}
+      ]
+    },
+    {
+      "id": "RR_002",
+      "trigger_type": "minor_event",
+      "trigger_match": "B_同事午餐局|反模因实锤",
+      "ripples": [
+        {"target": "factions_state.北殷财团.stability", "delta": -1, "reason": "林晚秋人设漏洞被陆衍隐性察觉"},
+        {"target": "factions_state.南海资本.power", "delta": 2, "reason": "反模因机制成功部署"},
+        {"target": "active_npc_threads", "add_thread": {"npc_id": "陆爸", "action": "在'二叔'电话施压下情绪波动", "_priority": 8}}
+      ]
+    },
+    {
+      "id": "RR_003",
+      "trigger_type": "minor_event",
+      "trigger_match": "B_核心重锤|铁皮盒揭示",
+      "ripples": [
+        {"target": "factions_state.南海资本.power", "delta": -3, "reason": "陆衍获得传承物件，威胁性提升"},
+        {"target": "active_npc_threads", "add_thread": {"npc_id": "顾沉", "action": "派人监听陆爸座机 + 加快招安节奏", "_priority": 9}},
+        {"target": "emergent_opportunities", "spawn": {"type": "副线机缘", "description": "南海市晚报连载关于神秘公司高管失踪的调查报道", "expires_chapters": 4}}
+      ]
+    },
+    {
+      "id": "RR_004",
+      "trigger_type": "fate_event",
+      "trigger_match": "ME_003",
+      "_doc": "金手指首激活后的世界涟漪",
+      "ripples": [
+        {"target": "factions_state.南海资本.power", "delta": -5, "reason": "陆衍正式被识别为'觉醒者'"},
+        {"target": "factions_state.北殷财团.power", "delta": -3, "reason": "卧底任务升级到刺杀"},
+        {"target": "active_npc_threads", "add_thread": {"npc_id": "顾沉", "action": "亲自约见陆衍三选一招安", "_priority": 10}},
+        {"target": "active_npc_threads", "add_thread": {"npc_id": "林晚秋", "action": "向北殷请示是否启动'终止协议'", "_priority": 8}}
+      ]
+    },
+    {
+      "id": "RR_005",
+      "trigger_type": "fate_event",
+      "trigger_match": "ME_004",
+      "_doc": "假亲人事件后的世界涟漪",
+      "ripples": [
+        {"target": "factions_state.南海资本.stability", "delta": -10, "reason": "暗杀/掉包暴露 → 信任崩塌"},
+        {"target": "consequence_tracker", "add": {"event": "陆衍家人被掉包", "world_changes": ["陆衍对所有人不信任", "老周地下网络被陆衍开始信赖"]}}
+      ]
+    },
+    {
+      "id": "RR_006",
+      "trigger_type": "fate_event",
+      "trigger_match": "ME_006",
+      "_doc": "卷一末·主动宣战的世界级涟漪",
+      "ripples": [
+        {"target": "factions_state.南海资本.stability", "delta": -15, "reason": "公开对抗"},
+        {"target": "factions_state.其他五大本土财团.power", "delta": 5, "reason": "嗅到南海资本失血机会"},
+        {"target": "factions_state.跨国财团联盟.current_focus", "set": "开始关注本土战局"},
+        {"target": "active_npc_threads", "add_thread": {"npc_id": "其他五大本土财团", "action": "暗中观察 + 准备介入", "_priority": 6}}
+      ]
+    },
+    {
+      "id": "RR_AUTO_TICK",
+      "trigger_type": "auto_tick",
+      "trigger_match": "every_chapter",
+      "_doc": "每章 auto_tick 时的微小演化",
+      "ripples": [
+        {"target": "current_world_time.ch", "set_to_current_ch": true},
+        {"target": "active_npc_threads", "evaluate_completion": true, "_doc": "检查 expected_complete_ch 到了的 thread → 自动 spawn 完成事件"}
+      ]
+    }
+  ],
+
+  "_consumption_chain": {
+    "produced_by": "outline --mode fluid 时初始化（按大势推算）+ 用户后续手动添加",
+    "consumed_by": ["world_evolution_engine apply_minor_event / apply_fate_event / auto_tick"]
+  }
+}

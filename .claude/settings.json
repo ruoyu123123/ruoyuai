@@ -1,0 +1,56 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_agent_gate.py\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_translate.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_plan_check.py\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/sessionstart_recall.py\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/stop_session_memory.py\""
+          }
+        ]
+      }
+    ]
+  },
+  "_doc": "Claude Code 项目级 hooks 注册。hook 命令用 $CLAUDE_PROJECT_DIR 自适应项目根，跨平台兼容。SessionStart/Stop 是 v22.5 session_memory + plan_tracker 防御层关键 hook。可选: 用户家目录 ~/.claude/settings.json 可加 Notification/statusLine 等个性化 hook。"
+}

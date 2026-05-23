@@ -1,0 +1,63 @@
+{
+  "command": "distill-style",
+  "version": 1,
+  "description": "作者风格闭环蒸馏 v17 · 6 阶段（含阶段 0 预处理）",
+  "total_steps": 7,
+  "required_steps": [1, 2, 3, 4, 5, 6, 7],
+  "optional_steps": [],
+  "steps": [
+    {
+      "n": 1,
+      "name": "phase-0-preprocess",
+      "description": "阶段 0 预处理：读 distill-style-lessons + 章数检测 + 分批方案（300 章上限）",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 2,
+      "name": "phase-1-surface-distill",
+      "description": "阶段 1 表层蒸馏：单章 JSON + 3 章窗口衔接 + style_analyzer metrics",
+      "required": true,
+      "expected_outputs": ["蒸馏进度", "衔接分析"]
+    },
+    {
+      "n": 3,
+      "name": "phase-2-replica-test",
+      "description": "阶段 2 复刻测试：用 v0 写 3 段 (opening/battle/psychology)",
+      "required": true,
+      "expected_outputs": ["复刻测试"]
+    },
+    {
+      "n": 4,
+      "name": "phase-3-multi-dim-compare",
+      "description": "阶段 3 多维度对比：抽 2-3 章原文 + style_evaluator SFS 评分",
+      "required": true,
+      "expected_outputs": ["对比报告"]
+    },
+    {
+      "n": 5,
+      "name": "phase-4-correction-reflect",
+      "description": "阶段 4 修正反思：差距维度生成新约束 → skill v.N",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 6,
+      "name": "phase-5-replica-loop",
+      "description": "阶段 5 复刻循环：v1 → 阶段 3 → 阶段 4 → vN，直到连续 2 轮收敛",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 7,
+      "name": "phase-6-finalize",
+      "description": "阶段 6 出货：作者风格_FINAL.json + skill_FINAL.md + distillation_log.md + lessons 回写 + git commit",
+      "required": true,
+      "expected_outputs": [
+        "作者风格_FINAL.json",
+        "skill_FINAL.md",
+        "distillation_log.md"
+      ]
+    }
+  ]
+}

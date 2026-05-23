@@ -1,0 +1,60 @@
+{
+  "command": "outline",
+  "version": 1,
+  "description": "/outline 行为契约：生成大纲 + 初始化项目数据库",
+  "evals": [
+    {
+      "id": "ol-1-new-project",
+      "scenario": "用户确认灵感卡后生成新项目大纲",
+      "user_prompt": "/outline（用户已选定灵感卡『克苏鲁灯塔』）",
+      "fixture": {
+        "project": "克苏鲁灯塔",
+        "prereqs": [
+          ".research_cache/inspiration_*.md 已有调研报告（P2-9 含 Step 2.5 跟进结果）",
+          "用户选定的灵感卡内容已在主代理上下文"
+        ]
+      },
+      "expected_trace": [
+        "plan_tracker create outline",
+        "Step 1 parse_intent：识别题材 / 主角 / 卷数 / 大势",
+        "Step 2 generate_volume：生成卷级大势 + 关键节点（不细化逐章）",
+        "Step 3 init_db：写 13 个 _数据库/*.json（人物卡 / 世界观 / 章纲摘要 / 伏笔 / 事件 / etc.）",
+        "Step 4 git_init：新建项目独立 git 仓库 + 首次 commit"
+      ],
+      "expected_artifacts": [
+        "workspace/novels/克苏鲁灯塔/_数据库/卷大势.json",
+        "workspace/novels/克苏鲁灯塔/_数据库/人物卡.json",
+        "workspace/novels/克苏鲁灯塔/_数据库/世界观.json",
+        "workspace/novels/克苏鲁灯塔/_数据库/章纲摘要.json",
+        "workspace/novels/克苏鲁灯塔/_数据库/伏笔追踪.json",
+        "workspace/novels/克苏鲁灯塔/.git/"
+      ],
+      "tolerance": {
+        "comments": "成功后立即进入逐章循环（CLAUDE.md 硬规则：不细化逐章，直接写第一章）"
+      }
+    },
+    {
+      "id": "ol-2-template-driven",
+      "scenario": "用户先 /template 选定模板（如『修仙』），再 /outline 加题材配置",
+      "user_prompt": "/template 修仙 → /outline 主角是失忆的剑修",
+      "fixture": {
+        "project": "新项目",
+        "prereqs": [
+          "用户已通过 /template 命令配置好系统组合（power-system / fate-system 启用，ensemble 关闭等）"
+        ]
+      },
+      "expected_trace": [
+        "outline plan 跑前，主代理已读取模板配置",
+        "init_db 按模板组合产出对应 JSON（如修仙模板会建『势力 + 功法』而非通用『关系网』）",
+        "其余 step 同 ol-1"
+      ],
+      "expected_artifacts": [
+        "_数据库/势力.json（修仙模板专有）",
+        "_数据库/功法.json（修仙模板专有）"
+      ],
+      "tolerance": {
+        "comments": "模板未配置时退回通用 init_db"
+      }
+    }
+  ]
+}

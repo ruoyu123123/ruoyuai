@@ -1,0 +1,42 @@
+{
+  "command": "outline",
+  "version": 1,
+  "description": "章节大纲 + 13 个数据库初始化",
+  "total_steps": 4,
+  "required_steps": [1, 2, 3, 4],
+  "optional_steps": [],
+  "steps": [
+    {
+      "n": 1,
+      "name": "framework-and-brainstorm",
+      "description": "叙事框架选择（三幕 / Save the Cat / 英雄之旅 / 雪花 / 自定义） + 3 个灵感",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 2,
+      "name": "volume-outline",
+      "description": "卷级大势大纲生成（不细化逐章）",
+      "required": true,
+      "expected_outputs": ["大纲.md"]
+    },
+    {
+      "n": 3,
+      "name": "init-13-databases",
+      "description": "初始化 13 个核心 JSON（人物卡 / 世界观 / 伏笔表 / 章纲摘要 / 进度 / 场景规则 / 写作经验 / 用户偏好 / 地图 / 关系 / 事件表 / 时间线 / 道具）",
+      "required": true,
+      "expected_outputs": [
+        "_数据库/人物卡.json",
+        "_数据库/世界观.json",
+        "_数据库/进度.json"
+      ]
+    },
+    {
+      "n": 4,
+      "name": "plan-end",
+      "description": "Git 初始化 commit + plan 最终校验",
+      "required": true,
+      "expected_outputs": []
+    }
+  ]
+}

@@ -1,0 +1,157 @@
+{
+  "command": "ecas-v23-transition",
+  "version": 1,
+  "description": "v22 DCAS → v23 ECAS 全面转向工程。事件簇 (Event Cluster) 自切多章 + 4 防御 SOTA 全开 + 自适应字数。借鉴 StoryWriter (arxiv 2506.16445) + StoryBox (arxiv 2510.11618)。不考虑成本，全选最强配置。",
+  "total_steps": 16,
+  "required_steps": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+  "optional_steps": [],
+  "_decisions": {
+    "字数模式": "自适应（StoryBox 风格，model 按事件复杂度自决 5K-16K）",
+    "事件单位": "1 簇 = 1 个 ME 大势事件（对齐 18 ME）",
+    "退化防御": ["mid_checkpoint_每3000字_self_audit", "sub_summary_锚定", "critical_chapter_opus_4_7", "extended_thinking_critical"],
+    "停顿点": "每事件簇结束（覆盖每章停顿）"
+  },
+  "_references": {
+    "StoryWriter": "https://arxiv.org/abs/2506.16445",
+    "StoryBox": "https://arxiv.org/html/2510.11618v3",
+    "Context_Rot": "https://www.trychroma.com/research/context-rot",
+    "Multi_step_Collab": "https://arxiv.org/pdf/2410.02603"
+  },
+  "steps": [
+    {
+      "n": 1,
+      "name": "lock-decisions-and-design-doc",
+      "description": "锁定 4 个决策（已 _decisions 字段定）+ 写 ECAS_ARCHITECTURE.md（数据流图 + agent 拓扑 + v22 → v23 兼容矩阵 + 失败回滚策略）",
+      "required": true,
+      "expected_outputs": ["core/claude-home/ECAS_ARCHITECTURE.md"],
+      "verification": "文档含: 数据流图 / agent 拓扑 / v22 → v23 字段映射表 / 失败回滚 / 至少 4 个 use case"
+    },
+    {
+      "n": 2,
+      "name": "event-cluster-brief-schema",
+      "description": "新建 _数据库/事件簇.json schema（保留 v22 大势卡.json）— event_cluster: {cluster_id, parent_me, scope_summary, expected_word_range, scenes_estimated, anchor_props, foreshadowing_to_plant, mid_checkpoints, sub_summary_template, opus_recommended}",
+      "required": true,
+      "expected_outputs": ["core/claude-home/schemas/event_cluster_schema.json"],
+      "verification": "schema 含 ≥12 字段 + 与大势卡.json 的 cluster ↔ ME 映射规则"
+    },
+    {
+      "n": 3,
+      "name": "writer-agent-ecas-mode",
+      "description": "novel-writer.md 加 MODE=ecas 模式：1) 读 event_cluster_brief 而非 single chapter; 2) writer 内部 mid-checkpoint 每 3000 字 self-audit voice/字数/伏笔; 3) sub-summary 锚定（每场景 100 字摘要注入下段头部 LiM 缓解）; 4) 按 cluster.expected_word_range 自适应字数",
+      "required": true,
+      "expected_outputs": [".claude/agents/novel-writer.md"],
+      "verification": "novel-writer.md 含 ECAS 段 + mid-checkpoint 协议 + sub-summary 模板 + Extended Thinking 启用规则"
+    },
+    {
+      "n": 4,
+      "name": "splitter-agent-multi-chapter",
+      "description": "novel-chapter-splitter.md 升级 N 章切分（不再固定 2 章）：1) 读事件簇 8K-16K 草稿; 2) splitter score 按 N 个等距锚点 + 字数硬约束; 3) 输出 N 个 ch.txt + N-1 个 pre_opening.txt; 4) 保留 v22.6 三机制（字数硬约束 + 动态总字数 + 后置兜底）",
+      "required": true,
+      "expected_outputs": [".claude/agents/novel-chapter-splitter.md"],
+      "verification": "splitter 文档含 multi_chapter_mode 段 + N 章 score 算法 + 字数硬约束保留"
+    },
+    {
+      "n": 5,
+      "name": "build-manifest-event-cluster",
+      "description": "build_manifest.py 加 event_cluster_context 字段注入：1) 读 event_cluster_brief; 2) 注入 cluster.anchor_props / foreshadowing_to_plant / mid_checkpoints 到 manifest; 3) ecas_word_target 替代 dcas_word_target",
+      "required": true,
+      "expected_outputs": ["core/scripts/build_manifest.py"],
+      "verification": "build_manifest 输出含 event_cluster_context 字段 + 0 error mode"
+    },
+    {
+      "n": 6,
+      "name": "save-state-mid-checkpoint-hook",
+      "description": "save_state.py 加 --ecas-checkpoint <cluster_id> <chunk_n> 子命令: 1) 验证 chunk 字数; 2) 跑 voice spot-check; 3) 写 checkpoint state 到 _数据库/.ecas_checkpoints/",
+      "required": true,
+      "expected_outputs": ["core/scripts/save_state.py"],
+      "verification": "save_state.py --ecas-checkpoint 子命令存在 + 测试调用通过"
+    },
+    {
+      "n": 7,
+      "name": "narrator-cluster-stop-agent",
+      "description": "narrator agent 升级（如有）或新建 ecas-narrator agent: 1) 决策事件簇 stop point; 2) 输出『下个事件簇候选 3 张卡』替代『下章走向卡』",
+      "required": true,
+      "expected_outputs": [".claude/agents/novel-outline-planner.md"],
+      "verification": "outline-planner.md 含 cluster_card_generation 段 + 模板"
+    },
+    {
+      "n": 8,
+      "name": "outline-planner-cluster-brief",
+      "description": "outline-planner.md 升级生成 event_cluster_brief（替代或并存走向卡）: 1) 读大势卡 + 抽签事件; 2) 输出 cluster_brief: {cluster_id, scope_summary, expected_word_range, scenes_estimated, anchor_props, foreshadowing_to_plant, ME_to_advance}",
+      "required": true,
+      "expected_outputs": [".claude/agents/novel-outline-planner.md"],
+      "verification": "outline-planner.md 含 ECAS_cluster_brief 输出段"
+    },
+    {
+      "n": 9,
+      "name": "changes-schema-cluster-id",
+      "description": "changes_schema.json 加 cluster_id 字段 + cluster_position (\"head\"/\"mid\"/\"tail\"): 1) 标记每章属于哪个事件簇; 2) cross-chapter scanner 按 cluster 聚合; 3) 兼容旧 DCAS 章节（cluster_id=null）",
+      "required": true,
+      "expected_outputs": ["core/claude-home/schemas/changes_schema.json"],
+      "verification": "schema 加字段后 ch1/ch2 旧 changes 仍 valid（向后兼容）"
+    },
+    {
+      "n": 10,
+      "name": "write-event-cluster-plan-template",
+      "description": "新增 write-event-cluster.plan.json (15-18 步): 1) load_cluster_brief; 2) spawn writer ecas mode; 3) writer mid-checkpoint × 3; 4) sub-summary anchor × N; 5) save full draft; 6) spawn splitter multi-chapter; 7) write N chapters; 8) per-chapter audit + voice-keeper; 9) cluster-level cross-chapter scan; 10) save-state per chapter; 11) auto-post-reflect; 12) git commit cluster; 13) generate next cluster card",
+      "required": true,
+      "expected_outputs": ["core/claude-home/plans/write-event-cluster.plan.json"],
+      "verification": "plan template valid JSON + 步骤数 ≥ 15 + 引用脚本/agent 全存在"
+    },
+    {
+      "n": 11,
+      "name": "model-routing-critical-events",
+      "description": "user_preferences_schema.json 加: 1) ecas_enabled (bool); 2) critical_events_use_opus (list of ME_id); 3) extended_thinking_critical (bool); 4) cluster_word_range (min/max). 更新 用户偏好.json 写入项目级",
+      "required": true,
+      "expected_outputs": ["core/claude-home/schemas/user_preferences_schema.json", "workspace/novels/我在异常局当临时工/_数据库/用户偏好.json"],
+      "verification": "schema valid + 项目偏好已配置 ECAS"
+    },
+    {
+      "n": 12,
+      "name": "ecas-known-commands-and-hooks",
+      "description": "plan_tracker.py KNOWN_COMMANDS 加 'write-event-cluster' + 'ecas-v23-transition'。Pre/PostToolUse hooks 验证 ECAS agent prompt 含 CLUSTER_ID 字段 (与 PLAN_ID/STEP 并列)",
+      "required": true,
+      "expected_outputs": ["core/scripts/plan_tracker.py"],
+      "verification": "plan_tracker create write-event-cluster 不报错"
+    },
+    {
+      "n": 13,
+      "name": "dashboard-cluster-view",
+      "description": "project_dashboard.py 加事件簇维度: 1) 当前 cluster 进度; 2) cluster ↔ ch 映射; 3) cluster 内 mid-checkpoint 通过率; 4) cluster cross-chapter 一致性指标",
+      "required": true,
+      "expected_outputs": ["core/scripts/project_dashboard.py"],
+      "verification": "dashboard 输出含『事件簇』section"
+    },
+    {
+      "n": 14,
+      "name": "migration-guide-and-compatibility",
+      "description": "写 ECAS_MIGRATION.md: 1) v22 DCAS 章节如何兼容 (cluster_id=null); 2) 旧项目升级路径; 3) ECAS vs DCAS 切换条件; 4) 失败回滚到 DCAS 单章模式步骤",
+      "required": true,
+      "expected_outputs": ["core/claude-home/ECAS_MIGRATION.md"],
+      "verification": "文档含: 字段映射表 / 升级步骤 / 回滚步骤 / FAQ"
+    },
+    {
+      "n": 15,
+      "name": "ch3-ecas-pilot-implementation",
+      "description": "ch3 起首战 ECAS: 1) 生成 ME_002『老周递档案盒首次提先生』cluster_brief; 2) writer ECAS 模式写 8K-12K 字; 3) splitter 切 3-4 章; 4) 全链路 audit + voice-keeper + save-state; 5) reflector 记 ECAS 首战 lessons",
+      "required": true,
+      "expected_outputs": ["workspace/novels/我在异常局当临时工/_数据库/事件簇.json", "workspace/novels/我在异常局当临时工/章节/第003章/第003章.txt"],
+      "verification": "ch3 audit verdict in (pass/waived) + cluster_id 已填 + sub_summary 已写"
+    },
+    {
+      "n": 16,
+      "name": "v23-system-health-audit-and-memory",
+      "description": "1) 跑 system_health_audit.py 验证 ECAS 全链路无断层; 2) 写 memory feedback_ecas_v23_transition; 3) git commit ECAS v23",
+      "required": true,
+      "expected_outputs": [],
+      "verification": "system_health_audit 0 error + memory 入索引 + git log 含 v23 commit"
+    }
+  ],
+  "_quality_gates": {
+    "禁止_最小可用": true,
+    "禁止_占位符": true,
+    "ecas_first_run_must_pass": "ch3 ECAS 首战 audit 必通过",
+    "v22_backward_compat": "ch1/ch2 旧 DCAS 章节不受影响",
+    "spawn_must_real": "writer/splitter/outline-planner 必经 Agent tool"
+  }
+}

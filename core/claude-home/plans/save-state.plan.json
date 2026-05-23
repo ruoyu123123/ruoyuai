@@ -1,0 +1,174 @@
+{
+  "command": "save-state",
+  "version": 2,
+  "description": "章节状态保存 12 步流水线 v17.5（多 agent 调度 + schema 自检 + 漂移扫描 + meta-judge）",
+  "total_steps": 12,
+  "required_steps": [1, 2, 3, 4, 8, 9, 10, 11, 12],
+  "optional_steps": [5, 6, 7],
+  "steps": [
+    {
+      "n": 1,
+      "name": "wal-start+schema-validate",
+      "description": "v17.5: 开启 WAL 写前日志 + 跑 db_schema_validate.py --auto-migrate（13 JSON schema 自检）",
+      "required": true,
+      "expected_outputs": ["_数据库/.wal/第{ch:03d}章_save_state.json"],
+      "scripts": [
+        "python core/scripts/db_schema_validate.py {project_root} --auto-migrate"
+      ]
+    },
+    {
+      "n": 2,
+      "name": "parse-changes",
+      "description": "v18: 通过 chapter_io.read_changes 读 第NNN章_changes.json 的 factual/self_eval 段（旧混合 txt 自动兼容解析）",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 3,
+      "name": "apply-changes+writer-truth-check",
+      "description": "v18: 落地 _changes.json 的 factual 段到 13 JSON + 调 writer_truth_check.py 把 self_eval.applied_style 回写章纲摘要 + 撒谎检测",
+      "required": true,
+      "expected_outputs": [],
+      "scripts": [
+        "python core/scripts/writer_truth_check.py {project_root} {ch} --write-back"
+      ]
+    },
+    {
+      "n": 4,
+      "name": "validate-chapter",
+      "description": "validate_chapter.py 门禁校验",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 5,
+      "name": "novel-summarizer",
+      "description": "novel-summarizer agent · 生成 200 字摘要",
+      "required": false,
+      "expected_outputs": ["_数据库/.wal/第{ch:03d}章_summary.json"]
+    },
+    {
+      "n": 6,
+      "name": "novel-foreshadower",
+      "description": "novel-foreshadower agent · 伏笔评估（条件必选）+ v17.4 JudgeReport 存盘",
+      "required": false,
+      "expected_outputs": []
+    },
+    {
+      "n": 7,
+      "name": "novel-reflector",
+      "description": "novel-reflector agent · 写作反思",
+      "required": false,
+      "expected_outputs": []
+    },
+    {
+      "n": 8,
+      "name": "wal-merge+learning-loop+judge-reports-archive",
+      "description": "v18/v22.6: 合并 WAL summary + 调 save_state.py --auto-post-reflect 自动跑 learning_loop 三步链 (merge-reflection + ingest + scan-recurring)，自动找 _数据库/.judge_reports/ch_NNN_reflector.json 和 .audit/ch_NNN_audit.json 合并进 写作经验.json 的 success_patterns/failure_patterns/_recurrence_tracker/_waiver_tracker + 把本章所有 judge JudgeReport 存入 章纲摘要[ch].judge_reports[]",
+      "required": true,
+      "expected_outputs": [],
+      "scripts": [
+        "python core/scripts/save_state.py {project_root} --auto-post-reflect {ch}",
+        "python core/scripts/judge_reports_archive.py {project_root} {ch}"
+      ]
+    },
+    {
+      "n": 9,
+      "name": "audit-consistency+drift-scan+state-tracker+story-bible+learning-loop+meta-judge+cross-chapter-pattern",
+      "description": "v19.1: 漂移审计 + style_drift_scan + state_tracker (符号事实图 + 一致性检查) + character_index + story_bible_extractor 提取漏报 + learning_loop --scan-recurring 跨章复发问题升级 + cross_chapter_pattern_scan (catchphrase/段首主语/dialogue tag/身体反应词 6 维度跨章分布扫描，补单章静态检测盲区) + 每 10 章 meta-judge",
+      "required": true,
+      "expected_outputs": [],
+      "scripts": [
+        "python core/scripts/style_drift_scan.py {project_root} --last-n 10",
+        "python core/scripts/state_tracker.py {project_root} {ch} --write",
+        "python core/scripts/state_tracker.py {project_root} --validate {ch}",
+        "python core/scripts/character_index.py {project_root} --write",
+        "python core/scripts/story_bible_extractor.py {project_root} {ch}",
+        "python core/scripts/learning_loop.py {project_root} --scan-recurring",
+        "# v19.4: update 先，scan 后 — 让 scan 看到本章最新状态",
+        "python core/scripts/offscreen_update.py {project_root} {ch}",
+        "python core/scripts/declarative_data_update.py {project_root} {ch}",
+        "python core/scripts/character_arc_update.py {project_root} {ch}",
+        "python core/scripts/fate_engine.py {project_root} update {ch}",
+        "python core/scripts/character_lazy_spawn.py {project_root} {ch}",
+        "python core/scripts/cross_chapter_fate_drift_scan.py {project_root} --ch {ch}",
+        "# v20.1 W6: 世界演化 tick + fate_event 涟漪 + emergent_opp 检查",
+        "python core/scripts/world_evolution_apply_chapter.py {project_root} {ch}",
+        "# v21 R1.1: Clock 系统 chapter_end tick（满格 clock 退出码 1，但不打断流水线）",
+        "python core/scripts/clock_engine.py {project_root} tick {ch} || true",
+        "# v21 R1.2: Storyteller 节拍器 + Adaptation Factor 校准（urgent 退出码 1，但不打断）",
+        "python core/scripts/narrator_calibrate.py {project_root} --ch {ch} || true",
+        "# v21 R1.3: 主角 Stress 评估 + Mental Break 抽卡（高压/触发卡退出码 1/2，但不打断）",
+        "python core/scripts/stress_evaluator.py {project_root} --ch {ch} || true",
+        "# v21 R1.5: 关系档位 heart_event 评估（达到阈值标 pending_reveal，下章必触发）",
+        "python core/scripts/relationship_evaluator.py {project_root} --ch {ch} || true",
+        "# v21 R2.1: Hub 节奏分布扫描（depart/quest/return/idle 偏离 advisory）",
+        "python core/scripts/hub_rhythm_check.py {project_root} --last-n 10 || true",
+        "# v21 R3.3: 角色情绪长期画像（连续单一/分布失衡告警）",
+        "python core/scripts/cross_chapter_emotion_pattern_scan.py {project_root} --last-n 10 || true",
+        "# v22 SE: 自学习层（每章 evolve + 每 10 章 orchestrator）",
+        "python core/scripts/skill_evolver.py {project_root} evolve --ch {ch} || true",
+        "python core/scripts/skill_evolver.py {project_root} retire --ch {ch} || true",
+        "python core/scripts/skill_evolver.py {project_root} promote || true",
+        "# 每 10 章 orchestrator（主代理判断 ch % 10 == 0）",
+        "python core/scripts/evolution_orchestrator.py {project_root} --ch {ch} || true",
+        "# v21 CCR Round1-10: 11 个新跨章 scanner（叠加既有 7 个）= 18 个跨章 scanner，30+ 子检测",
+        "python core/scripts/cross_chapter_data_consumption_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_throughline_balance_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_arc_progression_scan.py {project_root} || true",
+        "python core/scripts/cross_chapter_character_dynamics_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_world_dynamics_scan.py {project_root} || true",
+        "python core/scripts/cross_chapter_judge_quality_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_timeline_item_location_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_meta_quality_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_structure_compliance_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_engagement_metrics_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_ending_diversity_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_scene_pov_diversity_scan.py {project_root} --last-n 10 || true",
+        "python core/scripts/cross_chapter_foreshadow_rhythm_scan.py {project_root} || true",
+        "python core/scripts/cross_chapter_relationship_trend_scan.py {project_root} --last-n 15 || true",
+        "python core/scripts/cross_chapter_will_learn_scan.py {project_root} || true",
+        "python core/scripts/judge_reports_archive.py {project_root} {ch}",
+        "# 跨章 scan（基于更新后的状态）",
+        "python core/scripts/cross_chapter_pattern_scan.py {project_root} --last-n 10",
+        "python core/scripts/cross_chapter_continuity_scan.py {project_root} --last-n 10",
+        "python core/scripts/cross_chapter_offscreen_scan.py {project_root} --last-n 5",
+        "python core/scripts/cross_chapter_declarative_data_scan.py {project_root} --last-n 10",
+        "python core/scripts/chapter_plan_compliance_scan.py {project_root} --ch {ch}",
+        "python core/scripts/embedding_store.py {project_root} chapter --ch {ch}",
+        "python core/scripts/cross_chapter_persona_drift_scan.py {project_root} --last-n 5",
+        "# 共识与聚合（最后跑）",
+        "python core/scripts/maybe_judge_consensus.py {project_root} {ch}",
+        "python core/scripts/audit_dashboard.py {project_root}",
+        "python core/scripts/scan_retention.py {project_root} --keep 5",
+        "# 每 10 章主代理在 step 11 spawn novel-meta-judge agent (RANGE=ch-9_to_ch)"
+      ]
+    },
+    {
+      "n": 10,
+      "name": "git-commit",
+      "description": "Git 章节快照 commit",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 11,
+      "name": "report-and-card",
+      "description": "v21 CD1: 输出报告 + 跑 character_context_pack → spawn novel-outline-planner（带角色驱动上下文）→ fate_cards_compliance_check 校验。 outline-planner spawn prompt 必含 PLANNER_CONTEXT 字段指向 .wal/第N+1章_planner_context.md",
+      "required": true,
+      "expected_outputs": ["_数据库/.wal/第{ch+1:03d}章_planner_context.md", "_数据库/.wal/第{ch+1:03d}章_fate_cards.json"],
+      "scripts": [
+        "python core/scripts/character_context_pack.py {project_root} {next_ch}",
+        "# 主代理在此处 spawn novel-outline-planner agent，prompt 必含 PROJECT/CURRENT_CHAPTER/PLANNER_CONTEXT/MODE",
+        "python core/scripts/fate_cards_compliance_check.py {project_root} --ch {next_ch} || true"
+      ]
+    },
+    {
+      "n": 12,
+      "name": "wal-end",
+      "description": "关闭 WAL + plan 最终校验",
+      "required": true,
+      "expected_outputs": []
+    }
+  ]
+}

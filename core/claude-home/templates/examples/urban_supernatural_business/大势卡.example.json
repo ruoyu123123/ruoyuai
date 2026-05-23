@@ -1,0 +1,171 @@
+{
+  "_schema": "fate_card_v20_emergent",
+  "_doc": "鬼谷八荒式涌现叙事——大事件池+条件触发+柔性时间。不预定章号，由 fate_engine 按 prerequisites 涌现",
+  "generated_at": "2026-05-16",
+  "project": "示例项目（都市超自然商业版）",
+
+  "story_destiny": {
+    "_doc": "全书终极大势——必须达到的结局，路径可变",
+    "final_image": "陆衍把神性股权回流给散户，自己不成神，与卷一凌晨写字楼形成时间环",
+    "estimated_total_chapters_range": [400, 600],
+    "premise": "普通职员陆衍因废票卷入神性股权战，最终把神性还给众生"
+  },
+
+  "major_events": [
+    {
+      "id": "ME_001",
+      "title": "陆衍代签董事会触发反模因",
+      "stage": "卷一·入局",
+      "prerequisites": [],
+      "trigger_when": "ch >= 1",
+      "expected_window_after": null,
+      "physical_evidence": "陆衍以非董事身份出现在 38 楼董事会，被七位董事「目击」",
+      "status": "completed",
+      "completed_at_ch": 2,
+      "downstream_unlocks": ["ME_002", "ME_003"]
+    },
+    {
+      "id": "ME_002",
+      "title": "导火索事件（同事消失/上司坠落）",
+      "stage": "卷一·入局",
+      "prerequisites": ["ME_001"],
+      "trigger_when": "ME_001 后 2-5 章内",
+      "expected_window_after": {"event": "ME_001", "max_chapters": 5},
+      "physical_evidence": "至少 1 个相关角色非正常消失，陆衍意识到自己被盯",
+      "status": "completed",
+      "completed_at_ch": 3,
+      "_note": "ch3 通过吴启鸣记忆擦除 + 0.001% 邮件实现"
+    },
+    {
+      "id": "ME_003",
+      "title": "金手指首激活",
+      "stage": "卷一·觉醒",
+      "prerequisites": ["ME_002"],
+      "trigger_when": "陆衍获得传承物件后 1-3 章内",
+      "expected_window_after": {"event": "ME_002", "max_chapters": 8},
+      "physical_evidence": "废票/铁皮盒物件产生异象 + 陆衍听见/看见非物理现象",
+      "status": "scheduled",
+      "scheduled_estimate_ch": "5-8",
+      "downstream_unlocks": ["ME_004", "ME_005"]
+    },
+    {
+      "id": "ME_004",
+      "title": "假亲人事件（被掉包）",
+      "stage": "卷一·破局",
+      "prerequisites": ["ME_003"],
+      "trigger_when": "灵格激活后接近 30 岁生日时",
+      "expected_window_after": {"event": "ME_003", "max_chapters": 10},
+      "physical_evidence": "陆衍发现某亲近角色被替换（身体细节出错）",
+      "status": "scheduled",
+      "scheduled_estimate_ch": "10-18"
+    },
+    {
+      "id": "ME_005",
+      "title": "顾沉三选一招安",
+      "stage": "卷一·选择",
+      "prerequisites": ["ME_003"],
+      "trigger_when": "灵格觉醒后顾沉判定可招安时",
+      "expected_window_after": {"event": "ME_003", "max_chapters": 12},
+      "physical_evidence": "顾沉与陆衍正面对话提出三选一",
+      "status": "scheduled",
+      "scheduled_estimate_ch": "12-22"
+    },
+    {
+      "id": "ME_006",
+      "title": "卷一末·主动宣战",
+      "stage": "卷一·终局",
+      "prerequisites": ["ME_004", "ME_005"],
+      "trigger_when": "陆衍掌握废票用法 + 选择拒绝招安后",
+      "expected_window_after": {"event": "ME_005", "max_chapters": 30},
+      "physical_evidence": "陆衍主动出手对抗南海资本，从被动转主动",
+      "status": "scheduled",
+      "scheduled_estimate_ch": "35-55",
+      "_volume_end": 1
+    },
+    {
+      "id": "ME_007",
+      "title": "卷二·学会股权运作=修炼",
+      "stage": "卷二·操盘",
+      "prerequisites": ["ME_006"],
+      "trigger_when": "卷一结束后",
+      "expected_window_after": {"event": "ME_006", "max_chapters": 5},
+      "physical_evidence": "陆衍完成第一次反向并购，获得第二缕灵格",
+      "status": "scheduled",
+      "_volume_start": 2
+    },
+    {
+      "id": "ME_008",
+      "title": "副线·林晚秋身份反转",
+      "stage": "卷三·副线",
+      "prerequisites": ["ME_006"],
+      "trigger_when": "陆衍组建非正式团队过程中",
+      "expected_window_after": {"event": "ME_006", "max_chapters": 60},
+      "physical_evidence": "林晚秋被陆衍发现是卧底，做出选择",
+      "status": "scheduled"
+    },
+    {
+      "id": "ME_009",
+      "title": "Midpoint·假胜利 + 全网通缉",
+      "stage": "卷五·暗礁",
+      "prerequisites": ["ME_007"],
+      "trigger_when": "陆衍连续操盘成功后暴露身份",
+      "expected_window_after": {"event": "ME_007", "max_chapters": 150},
+      "physical_evidence": "陆衍跨财团并购成功 → 七大联手通缉",
+      "status": "scheduled",
+      "_volume_end": 5
+    },
+    {
+      "id": "ME_010",
+      "title": "All Is Lost·废票被夺/父亲身亡",
+      "stage": "卷八·崩盘",
+      "prerequisites": ["ME_009"],
+      "trigger_when": "董事会大议召开",
+      "expected_window_after": {"event": "ME_009", "max_chapters": 130},
+      "physical_evidence": "陆衍失去废票灵格，至亲牺牲",
+      "status": "scheduled"
+    },
+    {
+      "id": "ME_011",
+      "title": "Dark Night·拆神真相揭露",
+      "stage": "卷八·觉醒",
+      "prerequisites": ["ME_010"],
+      "trigger_when": "陆衍触底后遇老乞丐",
+      "expected_window_after": {"event": "ME_010", "max_chapters": 20},
+      "physical_evidence": "老乞丐说出'神是从普通人提炼的'",
+      "status": "scheduled"
+    },
+    {
+      "id": "ME_012",
+      "title": "Break into Three·反向收购联合散户",
+      "stage": "卷九·反击",
+      "prerequisites": ["ME_011"],
+      "trigger_when": "陆衍觉醒后组建散户互助会",
+      "expected_window_after": {"event": "ME_011", "max_chapters": 25},
+      "physical_evidence": "陆衍带反向收购计划重新登场",
+      "status": "scheduled"
+    },
+    {
+      "id": "ME_013",
+      "title": "Final Image·神性回归众生",
+      "stage": "卷十·终局",
+      "prerequisites": ["ME_012"],
+      "trigger_when": "终极董事会大议召开",
+      "expected_window_after": {"event": "ME_012", "max_chapters": 80},
+      "physical_evidence": "神性股份回流到所有散户 + 陆衍拒绝接管 + 与卷一开场形成时间环",
+      "status": "scheduled",
+      "_book_end": true
+    }
+  ],
+
+  "fate_drift_log": [],
+
+  "_consumption_chain": {
+    "produced_by": "/outline --mode fluid",
+    "consumed_by": [
+      "build_manifest._collect_active_fate_events()",
+      "fate_engine.py evaluate/update",
+      "cross_chapter_fate_drift_scan.py"
+    ],
+    "updated_by": ["save-state step 9 fate_engine update"]
+  }
+}

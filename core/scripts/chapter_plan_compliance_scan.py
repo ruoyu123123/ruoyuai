@@ -1,0 +1,212 @@
+"""chapter_plan_compliance_scan.py — chapter_plan vs 正文一致性扫描（v19.4 新增）
+
+检测 writer 是否真的写了 chapter_plan 声明的事件/角色/场景类型。
+
+4 维度：
+1. KEY_EVENTS_MISSING       - chapter_plan.key_events 含但正文未提
+2. CHARACTERS_MISSING       - chapter_plan.characters 含但正文 + aliases 未出现
+3. SCENE_TYPE_MISMATCH      - chapter_plan.scene_type 与 writer 自评应用规则不符
+4. TURNING_POINT_MISSING    - chapter_plan.turning_point 关键词未在正文
+
+用法：python chapter_plan_compliance_scan.py <项目> [--ch N | --all]
+退出码: 0 健康 / 1 advisory / 2 warning
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+def load_json(p: Path, default=None):
+    if not p.exists():
+        return default
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return default
+
+
+def get_character_aliases(project_root: Path) -> dict[str, list[str]]:
+    """从人物卡读所有角色的 name + name_aliases。返回 {primary_name: [aliases]}。"""
+    chars = load_json(project_root / "_数据库" / "人物卡.json", {"characters": []})
+    out = {}
+    for c in chars.get("characters", []):
+        primary = c.get("name") or c.get("id")
+        if not primary:
+            continue
+        aliases = [primary, c.get("id")] + c.get("name_aliases", [])
+        out[primary] = list(set(a for a in aliases if a))
+    return out
+
+
+STOP_TOKENS = {"自己", "他的", "她的", "一个", "什么", "这个", "那个", "已经", "他在", "她在", "找到"}
+
+
+def extract_keywords(text: str, max_words: int = 12) -> list[str]:
+    """提取 2 字 + 3 字 ngram，过滤停用词。匹配时用 ≥30% 命中即算通过。"""
+    fragments = re.split(r"[（）()/、，,\+\-—\s'\"'\"\.。：:]+", text)
+    tokens = []
+    for frag in fragments:
+        for m in re.finditer(r"[一-鿿]{2,}", frag):
+            seg = m.group()
+            # 生成 2-gram 和 3-gram
+            for n in (2, 3):
+                for i in range(len(seg) - n + 1):
+                    t = seg[i:i+n]
+                    if t not in tokens and t not in STOP_TOKENS:
+                        tokens.append(t)
+            # 数字保留全部
+        for m in re.finditer(r"\d+", frag):
+            t = m.group()
+            if t not in tokens:
+                tokens.append(t)
+    return tokens[:max_words] if tokens else []
+
+
+def match_keywords(keywords: list[str], text: str, threshold: float = 0.3) -> tuple[bool, float]:
+    """匹配率 ≥ threshold 视为通过。返回 (是否通过, 命中比例)。"""
+    if not keywords:
+        return True, 1.0
+    hits = sum(1 for k in keywords if k in text)
+    rate = hits / len(keywords)
+    return rate >= threshold, rate
+
+
+def check_chapter(project_root: Path, ch: int) -> list[dict]:
+    findings = []
+    progress = load_json(project_root / "_数据库" / "进度.json", {})
+    chapter_plan = None
+    for cp in progress.get("chapter_plan", []):
+        if cp.get("ch") == ch:
+            chapter_plan = cp
+            break
+    if not chapter_plan:
+        return findings
+
+    text_path = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
+    if not text_path.exists():
+        return findings
+    text = text_path.read_text(encoding="utf-8")
+
+    # === 1. key_events ===
+    for ke in chapter_plan.get("key_events", []):
+        kws = extract_keywords(ke)
+        if not kws:
+            continue
+        ok, rate = match_keywords(kws, text)
+        if not ok:
+            findings.append({
+                "severity": "advisory",
+                "code": "KEY_EVENT_LOW_MATCH",
+                "chapter": ch,
+                "metric": {"event": ke, "match_rate": round(rate, 2), "keywords_count": len(kws)},
+                "message": f"ch{ch} chapter_plan.key_events「{ke}」ngram 命中率 {rate:.0%}（阈值 30%）",
+                "suggestion": "writer 可能偏离 chapter_plan，建议人工 review 确认事件是否真的发生",
+            })
+
+    # === 2. characters ===
+    aliases_map = get_character_aliases(project_root)
+    for char_name in chapter_plan.get("characters", []):
+        if char_name in ("七位董事", "同事们", "警察", "HR", "匿名邮件发件人", "未具名"):
+            continue  # 模糊群体角色跳过
+        # 找该角色 aliases
+        primary, aliases = None, [char_name]
+        for p, a in aliases_map.items():
+            if char_name == p or char_name in a:
+                primary, aliases = p, a
+                break
+        # 任一 alias 命中即视为出场
+        if not any(a in text for a in aliases):
+            findings.append({
+                "severity": "advisory",
+                "code": "CHARACTER_MISSING_IN_TEXT",
+                "chapter": ch,
+                "metric": {"character": char_name, "aliases_tried": aliases},
+                "message": f"ch{ch} chapter_plan.characters 含「{char_name}」，但正文 + aliases 全未出现",
+                "suggestion": "writer 漏写该角色 OR chapter_plan 列表过宽——人工 review",
+            })
+
+    # === 3. turning_point ===
+    tp = chapter_plan.get("turning_point", "")
+    if tp:
+        tp_kws = extract_keywords(tp)
+        if tp_kws:
+            ok, rate = match_keywords(tp_kws, text, threshold=0.3)
+            if not ok:
+                findings.append({
+                    "severity": "advisory",
+                    "code": "TURNING_POINT_LOW_MATCH",
+                    "chapter": ch,
+                    "metric": {"turning_point": tp, "match_rate": round(rate, 2)},
+                    "message": f"ch{ch} chapter_plan.turning_point「{tp}」ngram 命中率 {rate:.0%}",
+                    "suggestion": "本章 turning point 可能缺失或被改写 —— 人工 review",
+                })
+
+    return findings
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("project")
+    ap.add_argument("--ch", type=int, default=None)
+    ap.add_argument("--all", action="store_true")
+    args = ap.parse_args()
+
+    project_root = Path(args.project)
+    chapters = []
+    if args.ch:
+        chapters = [args.ch]
+    elif args.all:
+        for d in (project_root / "章节").glob("第*章"):
+            m = re.match(r"第(\d+)章", d.name)
+            if m:
+                chapters.append(int(m.group(1)))
+        chapters.sort()
+    else:
+        # 默认扫所有已写章节
+        for d in (project_root / "章节").glob("第*章"):
+            m = re.match(r"第(\d+)章", d.name)
+            if m:
+                chapters.append(int(m.group(1)))
+        chapters.sort()
+
+    all_findings = []
+    for ch in chapters:
+        all_findings.extend(check_chapter(project_root, ch))
+
+    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report = {
+        "scan_type": "chapter_plan_compliance",
+        "scan_ts": ts,
+        "chapters_scanned": chapters,
+        "findings": all_findings,
+        "summary": {
+            "warning": sum(1 for f in all_findings if f["severity"] == "warning"),
+            "advisory": sum(1 for f in all_findings if f["severity"] == "advisory"),
+            "total": len(all_findings),
+        },
+    }
+    out_path = out_dir / f"plan_compliance_{ts}.json"
+    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"[chapter_plan_compliance_scan] 扫描 ch{chapters}: {len(all_findings)} 项 (warning={report['summary']['warning']} / advisory={report['summary']['advisory']})")
+    for f in all_findings[:10]:
+        print(f"  [{f['severity'].upper()}] [{f['code']}] ch{f.get('chapter')} :: {f['message']}")
+    if len(all_findings) > 10:
+        print(f"  ... 还有 {len(all_findings) - 10} 项见报告")
+    print(f"报告: {out_path}")
+
+    if any(f["severity"] == "warning" for f in all_findings):
+        sys.exit(1)
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

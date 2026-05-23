@@ -1,0 +1,171 @@
+{
+  "_schema": "protagonist_stress_v21",
+  "_doc": "CK3 借鉴：违背性格 +stress；满 → mental_break 抽卡 → 永久改写 persona。把'道德/情感选择'变成有复利代价的系统。",
+  "generated_at": "2026-05-16",
+  "protagonist": "陆衍",
+  "stress_level": 0,
+  "stress_max": 10,
+  "stress_threshold_break": 8,
+  "stress_log": [
+    {
+      "ch": 4,
+      "change": 0,
+      "new_total": 0,
+      "trigger_type": "neutral",
+      "violations": [],
+      "alignments": [],
+      "_ts": "2026-05-16T12:50:05"
+    }
+  ],
+  "_log_doc": "每条 entry: {ch, change, new_total, trigger_event, trigger_type: persona_violation/persona_align/event_shock/relief, _note}",
+  "persona_violations_tracked": {
+    "_doc": "陆衍 voice_pack.persona_layers 5 层都是 stress 触发点。每违背 1 次 +stress；持续符合 -1（缓解）。",
+    "core_traits": [
+      {
+        "trait": "理性谨慎",
+        "violation_keywords": [
+          "冲动",
+          "不假思索",
+          "凭直觉",
+          "豁出去"
+        ],
+        "align_keywords": [
+          "权衡",
+          "盘算",
+          "想清楚"
+        ],
+        "stress_per_violation": 2
+      },
+      {
+        "trait": "保守内敛",
+        "violation_keywords": [
+          "大喊大叫",
+          "失态",
+          "情绪崩溃",
+          "豪言"
+        ],
+        "align_keywords": [
+          "压抑",
+          "克制",
+          "不动声色"
+        ],
+        "stress_per_violation": 2
+      },
+      {
+        "trait": "重情重义",
+        "violation_keywords": [
+          "背叛",
+          "出卖",
+          "见死不救",
+          "冷漠对待"
+        ],
+        "align_keywords": [
+          "护住",
+          "为...做",
+          "不忍"
+        ],
+        "stress_per_violation": 3
+      }
+    ]
+  },
+  "mental_break_pool": [
+    {
+      "card_id": "MB_001",
+      "label": "黑化（情绪麻木）",
+      "trigger_min_stress": 8,
+      "weight": 3,
+      "permanent_persona_changes": [
+        {
+          "layer": "core_traits",
+          "trait": "重情重义",
+          "new_value": "工具理性"
+        }
+      ],
+      "narrative_effect": "对身边角色情感反应钝化 1-3 卷；可解锁'冷酷'路线",
+      "_note": "适合反派觉醒/复仇线"
+    },
+    {
+      "card_id": "MB_002",
+      "label": "酗酒（自毁循环）",
+      "trigger_min_stress": 8,
+      "weight": 2,
+      "permanent_persona_changes": [
+        {
+          "layer": "habits",
+          "trait": "+酗酒",
+          "_persists_chapters": 30
+        }
+      ],
+      "narrative_effect": "每次大压力章节后必有酒精场景；判断力下降",
+      "_note": "适合悲剧线"
+    },
+    {
+      "card_id": "MB_003",
+      "label": "出家（精神隔离）",
+      "trigger_min_stress": 9,
+      "weight": 1,
+      "permanent_persona_changes": [
+        {
+          "layer": "core_traits",
+          "trait": "重情重义",
+          "new_value": "超然"
+        },
+        {
+          "layer": "habits",
+          "trait": "+独居",
+          "_persists_chapters": 20
+        }
+      ],
+      "narrative_effect": "拒绝亲密关系；每章默念心经；可解锁'隐士'路线",
+      "_note": "适合修心向"
+    },
+    {
+      "card_id": "MB_004",
+      "label": "封心（情感隔离）",
+      "trigger_min_stress": 8,
+      "weight": 2,
+      "permanent_persona_changes": [
+        {
+          "layer": "core_traits",
+          "trait": "保守内敛",
+          "new_value": "情感隔离"
+        }
+      ],
+      "narrative_effect": "对一个特定角色（最近受伤的关系对象）永久 -10 信任；不再主动表达",
+      "_note": "适合冷酷男主向"
+    },
+    {
+      "card_id": "MB_005",
+      "label": "嗜杀（攻击性爆发）",
+      "trigger_min_stress": 10,
+      "weight": 1,
+      "permanent_persona_changes": [
+        {
+          "layer": "core_traits",
+          "trait": "理性谨慎",
+          "new_value": "暴烈果决"
+        }
+      ],
+      "narrative_effect": "下个反派必死无疑（不再考虑收编）；后续战斗描写偏血腥",
+      "_note": "适合黑深残向"
+    }
+  ],
+  "coping_mechanisms": {
+    "_doc": "stress 高（≥6）但未满时，主角自动倾向的应对方式。注入到 manifest 让 writer 自然带入。",
+    "high_stress_behaviors": [
+      "找老周喝酒倾诉",
+      "去江边走一夜",
+      "翻看父亲留的旧照片",
+      "整理桌面/反复擦眼镜（强迫性小动作）"
+    ]
+  },
+  "_consumption_chain": {
+    "produced_by": "/distill-character 蒸馏 voice_pack 时初始化 + writer/judge 自评每章 stress 变化",
+    "consumed_by": [
+      "build_manifest._collect_protagonist_stress() 注入 manifest",
+      "writer step 0t：感知当前 stress + 高压时倾向 coping_mechanisms",
+      "save-state.step9 stress_evaluator.py：扫本章正文 → 更新 stress_log + 满阈值抽 mental_break_card",
+      "voice-keeper：检测违背 persona 时同步 stress 计数"
+    ]
+  }
+}

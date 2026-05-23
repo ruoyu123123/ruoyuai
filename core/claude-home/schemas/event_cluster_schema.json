@@ -1,0 +1,396 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Event Cluster Schema (ECAS v23)",
+  "description": "事件簇 (Event Cluster) — ECAS v23 生成单位。1 簇 = 1 个 ME 大势事件 = 8000-16000 字 = N 章 (2-5)。借鉴 StoryWriter (arxiv 2506.16445) + StoryBox (arxiv 2510.11618)。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "clusters"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "v23.0"
+    },
+    "_doc": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date"
+    },
+    "clusters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "cluster_id",
+          "parent_me",
+          "scope_summary",
+          "expected_word_range",
+          "scenes_estimated",
+          "status",
+          "mid_checkpoints",
+          "research_ref"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "pattern": "^cluster_[0-9]{3}[a-z]?$",
+            "description": "唯一编号 (如 cluster_002 / cluster_002a 复合事件)"
+          },
+          "parent_me": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "单 ME (如 ME_002)"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "复合事件多 ME (如 [ME_004, ME_005])"
+              }
+            ]
+          },
+          "scope_summary": {
+            "type": "string",
+            "minLength": 30,
+            "maxLength": 500,
+            "description": "本簇 1-2 句话总结（writer 必读首字段）"
+          },
+          "expected_word_range": {
+            "type": "object",
+            "required": [
+              "unit",
+              "max",
+              "min"
+            ],
+            "properties": {
+              "min": {
+                "type": "integer",
+                "minimum": 4000,
+                "maximum": 20000
+              },
+              "max": {
+                "type": "integer",
+                "minimum": 4000,
+                "maximum": 20000
+              },
+              "unit": {
+                "type": "string",
+                "enum": [
+                  "CJK_chars",
+                  "chars_no_whitespace",
+                  "total_chars"
+                ],
+                "default": "CJK_chars",
+                "description": "v23.2: 字数单位 - writer/researcher/outline-planner 必须一致 CJK_chars 防三义并存"
+              }
+            },
+            "description": "writer 自适应字数窗。常见 [9000, 11000] 中事件 / [13000, 16000] 关键事件 / [4500, 5500] 短事件"
+          },
+          "scenes_estimated": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 8,
+            "description": "预估场景数（splitter 切章数参考: chapters ≈ scenes/1.5）"
+          },
+          "anchor_props": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "本簇必用 anchor_props (链接 道具.json)，writer 至少用 60%"
+          },
+          "foreshadowing_to_plant": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^FS_[0-9]{3}$"
+                },
+                "type": {
+                  "enum": [
+                    "setup",
+                    "callback_strengthen",
+                    "subtle_setup",
+                    "payoff"
+                  ]
+                },
+                "tier": {
+                  "enum": [
+                    "A",
+                    "B",
+                    "C"
+                  ]
+                }
+              }
+            },
+            "description": "本簇要埋/回应/兑现的伏笔列表（cluster 级伏笔覆盖率 audit 用）"
+          },
+          "foreshadowing_to_callback": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "本簇要呼应的历史伏笔 ID"
+          },
+          "mid_checkpoints": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "writer 内 self-audit 触发点 (如 [3000, 6000, 9000])。默认每 3000 字一次。关键事件加密到每 2000 字"
+          },
+          "sub_summary_template": {
+            "type": "string",
+            "description": "writer 每场景后的 100 字摘要模板 (LiM 缓解 - 注入下段头部)"
+          },
+          "opus_recommended": {
+            "type": "boolean",
+            "description": "true = 用 Opus 4.7 (128K output, 关键事件) / false = Sonnet 4.6 (64K output)"
+          },
+          "extended_thinking": {
+            "type": "boolean",
+            "description": "true = Anthropic Extended Thinking 启用（增加推理预算）"
+          },
+          "ME_to_advance": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "本簇兑现的 ME (用于 fate_engine 推进)"
+          },
+          "throughline_focus": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "Main_OS",
+                "Impact_OS",
+                "Relationship_OS",
+                "Subjective_OS"
+              ]
+            },
+            "description": "Dramatica 4 线本簇主推哪 1-2 条"
+          },
+          "throughlines_secondary": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "次推 throughline (避免遗忘)"
+          },
+          "characters_focus": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "本簇主出场角色 (3-5 人)"
+          },
+          "hub_locations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "本簇覆盖的 hub (HUB_001/002/003)"
+          },
+          "estimated_chapters": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 6,
+            "description": "splitter 预计切几章 (chapters_target = round(words/2800))"
+          },
+          "chapter_range": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "splitter 切完后填充 [start_ch, end_ch]"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "in_progress",
+              "writer_done",
+              "splitter_done",
+              "audit_done",
+              "completed",
+              "failed"
+            ],
+            "description": "当前阶段"
+          },
+          "writer_model_used": {
+            "type": "string",
+            "description": "实际用的 model (写入后只读, 供后续分析)"
+          },
+          "draft_path": {
+            "type": "string",
+            "description": "writer 写的完整 cluster 草稿路径 (splitter 切前)"
+          },
+          "checkpoint_results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "checkpoint_n": {
+                  "type": "integer"
+                },
+                "words_at_checkpoint": {
+                  "type": "integer"
+                },
+                "voice_match": {
+                  "type": "number"
+                },
+                "passed": {
+                  "type": "boolean"
+                },
+                "rollback_triggered": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "description": "writer mid-checkpoint 实际结果 (供 reflector 分析)"
+          },
+          "spawned_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "_doc": {
+            "type": "string"
+          },
+          "research_ref": {
+            "type": "object",
+            "description": "v23 ECAS 调研引用（v17.7 调研先行规则硬约束）— cluster brief 必须含此字段，否则 schema 验证失败",
+            "required": [
+              "cache_path",
+              "anchors_used"
+            ],
+            "properties": {
+              "cache_path": {
+                "type": "string",
+                "description": ".research_cache/*.md 路径"
+              },
+              "anchors_used": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "调研 anchor 引用列表"
+              },
+              "research_topics": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "调研主题清单"
+              },
+              "research_completed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "researcher_confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "_consumption_chain": {
+      "type": "object",
+      "description": "字段消费链（与其他 schema 一样的元数据）"
+    }
+  },
+  "_examples": {
+    "_doc": "ECAS v23 典型 cluster 配置示例",
+    "ME_002_老周递档案盒": {
+      "cluster_id": "cluster_002",
+      "parent_me": "ME_002",
+      "scope_summary": "老周观察陈默后递红色档案盒（31 临时工死亡名单）+ 首次提「先生」 → 陈默看完独自调查 → 决定继续",
+      "expected_word_range": {
+        "min": 9000,
+        "max": 11000
+      },
+      "scenes_estimated": 4,
+      "anchor_props": [
+        "红色档案盒 ITM_003",
+        "老周左手缺指",
+        "南郊小李子墓 LOC_006"
+      ],
+      "foreshadowing_to_plant": [
+        {
+          "id": "FS_003",
+          "type": "setup",
+          "tier": "A"
+        },
+        {
+          "id": "FS_004",
+          "type": "setup",
+          "tier": "A"
+        },
+        {
+          "id": "FS_008",
+          "type": "subtle_setup",
+          "tier": "B"
+        }
+      ],
+      "foreshadowing_to_callback": [
+        "FS_011 ch2 → ch3 强化"
+      ],
+      "mid_checkpoints": [
+        3000,
+        6000,
+        9000
+      ],
+      "opus_recommended": false,
+      "extended_thinking": false,
+      "ME_to_advance": [
+        "ME_002"
+      ],
+      "throughline_focus": [
+        "Impact_OS"
+      ],
+      "characters_focus": [
+        "陈默",
+        "老周"
+      ],
+      "hub_locations": [
+        "HUB_001"
+      ],
+      "estimated_chapters": 4,
+      "status": "pending"
+    },
+    "ME_010_先生现身_关键": {
+      "cluster_id": "cluster_010",
+      "parent_me": "ME_010",
+      "scope_summary": "Midpoint - 「先生」首次现身 + 三选一招揽 + 陈默拒绝 + 「先生」明面反击启动",
+      "expected_word_range": {
+        "min": 13000,
+        "max": 16000
+      },
+      "scenes_estimated": 6,
+      "opus_recommended": true,
+      "extended_thinking": true,
+      "mid_checkpoints": [
+        3000,
+        5000,
+        7000,
+        9000,
+        11000,
+        13000
+      ],
+      "estimated_chapters": 5
+    }
+  }
+}

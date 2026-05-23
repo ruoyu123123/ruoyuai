@@ -1,0 +1,168 @@
+{
+  "_schema": "event_pool_v21",
+  "_doc": "Wildermyth 借鉴：事件命运抽签机制。emergent_opportunities 触发时不让 AI 编故事，从池子按情境过滤后随机抽 1，AI 只负责把抽到的事件写好。",
+  "generated_at": "2026-05-16",
+  "events": [
+    {
+      "event_id": "EV_001",
+      "label": "陌生人塞纸条",
+      "category": "warning",
+      "context_filter": {
+        "min_ch": 3,
+        "max_ch": 50,
+        "scene_types": [
+          "公共场所",
+          "街头",
+          "电梯",
+          "地铁"
+        ],
+        "required_pov": "陆衍",
+        "world_state_required": {
+          "factions_state.南海资本.power": ">= 80"
+        },
+        "weight": 3
+      },
+      "narrative_seed": "经过陌生人擦肩而过 → 口袋多了一张折叠的小纸条 → 上面写着一句警告/坐标/数字",
+      "physical_evidence": [
+        "纸条质地（粗糙/光滑）",
+        "笔迹特征",
+        "纸条上的具体内容"
+      ],
+      "_doc": "适合卷一·神秘势力首次接触"
+    },
+    {
+      "event_id": "EV_002",
+      "label": "电梯内的灯光闪烁",
+      "category": "supernatural",
+      "context_filter": {
+        "min_ch": 1,
+        "max_ch": 30,
+        "scene_types": [
+          "写字楼",
+          "电梯"
+        ],
+        "required_pov": "陆衍",
+        "weight": 2
+      },
+      "narrative_seed": "电梯到某层突然停电 1-2 秒 → 黑暗中陆衍听见/看到不该有的东西 → 灯亮如常但留下一个细节（按键多了一个不存在的楼层数字 / 镜子上有指印）",
+      "physical_evidence": [
+        "停电秒数",
+        "听到/看到的具体内容",
+        "灯亮后的诡异细节"
+      ],
+      "_doc": "适合超自然首次靠近主角"
+    },
+    {
+      "event_id": "EV_003",
+      "label": "醉汉乞讨者意有所指",
+      "category": "warning",
+      "context_filter": {
+        "min_ch": 4,
+        "max_ch": 100,
+        "scene_types": [
+          "街头",
+          "夜晚",
+          "便利店"
+        ],
+        "weight": 3
+      },
+      "narrative_seed": "一个醉汉/乞讨者拦住陆衍 → 说出明显是了解他底细的话（如'你父亲在等你'/'别签那份合同'） → 陆衍想追问时对方已转身消失",
+      "physical_evidence": [
+        "醉汉的具体外貌特征",
+        "他说的原话",
+        "他离开的方式"
+      ],
+      "_doc": "适合幕后人物隔空示警"
+    },
+    {
+      "event_id": "EV_004",
+      "label": "深夜接到无声电话",
+      "category": "atmosphere",
+      "context_filter": {
+        "min_ch": 2,
+        "scene_types": [
+          "家",
+          "夜晚"
+        ],
+        "required_pov": "陆衍",
+        "weight": 2
+      },
+      "narrative_seed": "凌晨电话响 → 接起来对方不说话只有呼吸声 → 挂断后回拨提示号码不存在",
+      "physical_evidence": [
+        "电话时间",
+        "呼吸声特征",
+        "回拨提示原话"
+      ],
+      "_doc": "经典悬疑钩子"
+    },
+    {
+      "event_id": "EV_005",
+      "label": "便利店里的旧识",
+      "category": "encounter",
+      "context_filter": {
+        "min_ch": 3,
+        "scene_types": [
+          "便利店",
+          "餐厅",
+          "街头"
+        ],
+        "required_pov": "陆衍",
+        "weight": 2
+      },
+      "narrative_seed": "陆衍买东西时遇到一个仿佛记得他名字但又不像认识的人 → 对方递给他一样东西/留下一句话 → 等陆衍想问时已无踪",
+      "physical_evidence": [
+        "留下的物件/话语",
+        "对方衣着特征"
+      ],
+      "_doc": "可作为伏笔回收 anchor"
+    },
+    {
+      "event_id": "EV_006",
+      "label": "梦中重复场景",
+      "category": "supernatural",
+      "context_filter": {
+        "scene_types": [
+          "夜晚",
+          "睡眠",
+          "家"
+        ],
+        "required_pov": "陆衍",
+        "weight": 1
+      },
+      "narrative_seed": "陆衍连续 2-3 个晚上做同一个梦 → 梦中场景细节会增加（每次多一个之前没注意的细节） → 梦境与现实开始有微小重叠",
+      "physical_evidence": [
+        "梦境核心场景",
+        "每次新增的细节",
+        "醒来后的现实印证"
+      ],
+      "_doc": "适合神秘觉醒过程"
+    }
+  ],
+  "_filter_doc": {
+    "min_ch / max_ch": "本事件适用的章号区间",
+    "scene_types": "本事件适合的场景标签 — 与 chapter_plan.scene_type 对照",
+    "required_pov": "需要的 POV 角色",
+    "world_state_required": "world_state_snapshot 数值匹配条件（dotted path + 比较运算符）",
+    "weight": "抽签权重（高=更易被抽中）"
+  },
+  "drawn_events_log": [
+    {
+      "ch": 5,
+      "event_id": "EV_001",
+      "label": "陌生人塞纸条",
+      "drawn_at": "2026-05-16T12:53:33",
+      "ctx": {
+        "scene_type": "街头",
+        "pov": "陆衍"
+      }
+    }
+  ],
+  "_log_doc": "fate_dice 抽过的事件 + 抽中章号 → 避免短期重复抽",
+  "_consumption_chain": {
+    "produced_by": "/outline 时根据题材生成基础事件池 + 用户/researcher 自由扩展",
+    "consumed_by": [
+      "fate_dice.py：按当前 manifest 上下文过滤 + 加权随机抽 1",
+      "writer：把抽中的 narrative_seed 写成本章场景"
+    ]
+  }
+}

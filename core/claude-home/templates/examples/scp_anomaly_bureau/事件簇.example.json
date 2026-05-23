@@ -1,0 +1,91 @@
+{
+  "schema_version": "v23.1",
+  "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。本文件是 ECAS v23 事件簇（cluster brief）范式——只提取 1 个完整 cluster 结构 + 全字段说明（原项目 5 cluster / 70KB，example 只留首簇做模板）。事件簇 = 一组连续章节的『写作工单』，与大势卡.json 配套：1 cluster → 1 ME → N 章。占位符见 人物卡.example.json。",
+  "generated_at": "<生成日期>",
+  "_field_doc": {
+    "cluster_id": "簇唯一编号 cluster_NNN",
+    "parent_me": "本簇推进的大势卡 ME id",
+    "scope_summary": "本簇剧情范围一句话（writer 全局视野）",
+    "expected_word_range": "本簇总字数区间——★ v23.2 起须 ≤ researcher 推荐 ±10%（防字数放大复发）",
+    "scenes_estimated": "预估场景数",
+    "anchor_props": "本簇必须落地的物件锚定清单（与伏笔表 physical_evidence 呼应）",
+    "foreshadowing_to_plant": "本簇要 plant 的伏笔（id + type: setup/subtle_setup + tier + _note）",
+    "foreshadowing_to_callback": "本簇要回收的伏笔（早期簇通常空）",
+    "mid_checkpoints": "字数中点检查位（ECAS 在这些字数处做 fail-loud 检查）",
+    "sub_summary_template": "每场景写完的小结模板（喂下游簇）",
+    "opus_recommended / extended_thinking": "是否关键事件用 opus + 扩展思考",
+    "ME_to_advance": "本簇结束应推进的 ME 列表",
+    "throughline_focus / throughlines_secondary": "Dramatica 四贯穿线主/次焦点",
+    "characters_focus": "本簇出场核心角色（须与人物卡对齐）",
+    "hub_locations": "本簇用到的枢纽场景 HUB id（见枢纽场景.json）",
+    "estimated_chapters / chapter_range": "预估章数 / 章号区间",
+    "status": "pending / in_progress / done",
+    "scene_storyboard": "★ 分镜：scene_n + title + hub + word_budget + description（writer 按此写，description 嵌伏笔 ID + persona tell）",
+    "research_ref": "★ v23.1 起严格 enforce：本簇调研 cache 路径 + anchors_used + researcher_confidence"
+  },
+  "clusters": [
+    {
+      "cluster_id": "cluster_001",
+      "parent_me": "ME_001",
+      "scope_summary": "PROTAGONIST 在出租屋醒来发现镜中是别人的脸、账户余额异常、抽屉里全是原身份笔迹 → 接到合成音派工电话被 DEUTERAGONIST 接应去异常局报到、领 T-7 临时工编号 + 胸卡 + 指纹打卡 → 首启 2 分身代价初露：脖颈双重触感与 0.3 秒白屏 → AUTHORITY_NPC 办公室初见，假身份勉强过关。",
+      "expected_word_range": {"min": 9000, "max": 12000},
+      "scenes_estimated": 5,
+      "anchor_props": [
+        "ghost 关联物件（如父亲送的褪色电子表）",
+        "账户余额异常截图",
+        "出租屋洗手间斑驳镜子",
+        "DEUTERAGONIST 左手腕银色细圆环",
+        "T-7 临时工胸卡 + 工牌绳",
+        "异常局电梯口指纹打卡机"
+      ],
+      "foreshadowing_to_plant": [
+        {"id": "FS_001", "type": "setup", "tier": "A", "_note": "原身份死因 — 镜中陌生脸 + 余额差 + 床头柜原身份笔迹（30 章兑现）"},
+        {"id": "FS_002", "type": "setup", "tier": "A", "_note": "多身体代价 — 摸脖子时双重触感 + 首启 2 分身白屏 0.3 秒（25 章兑现）"},
+        {"id": "FS_011", "type": "setup", "tier": "C", "_note": "指纹机异常 — 打卡时机器轻微发热 + 乱码一闪（80 章兑现）"},
+        {"id": "FS_005", "type": "subtle_setup", "tier": "A", "_note": "影类异常 — 出租屋墙缝渗黑色液体一笔带过不解释（20 章兑现）"},
+        {"id": "FS_006", "type": "subtle_setup", "tier": "A", "_note": "ghost 关联 — 摸 ghost 物件时一闪而过的创伤场景画面（终卷兑现）"}
+      ],
+      "foreshadowing_to_callback": [],
+      "mid_checkpoints": [3000, 6000, 9000],
+      "sub_summary_template": "[场景 N] 时间/地点 + 关键事件（核心角色动作）+ 本场景埋的伏笔 ID + 末尾情绪 tag（100 字内）",
+      "opus_recommended": false,
+      "extended_thinking": false,
+      "ME_to_advance": ["ME_001"],
+      "throughline_focus": ["Main_OS", "Impact_OS"],
+      "throughlines_secondary": ["Subjective_OS"],
+      "characters_focus": ["PROTAGONIST", "DEUTERAGONIST", "AUTHORITY_NPC", "MENTOR_NPC"],
+      "hub_locations": ["HUB_002", "HUB_003", "HUB_001"],
+      "estimated_chapters": 4,
+      "status": "pending",
+      "_doc": "首簇 - 全书起点。承担三大任务：① 顶包觉醒（镜子 + 余额 + 笔迹三件套）② 异常局体系亮相（DEUTERAGONIST / AUTHORITY_NPC / MENTOR_NPC 远景 / 指纹机异常）③ 金手指 2 分身首启（代价初露：双重触感 + 白屏 0.3 秒）。非关键事件，用 Sonnet 即可。",
+      "scene_storyboard": [
+        {"scene_n": 1, "title": "出租屋觉醒", "hub": "HUB_002", "word_budget": 2400, "description": "凌晨主角在出租屋床上睁眼。第一感是脖子有『双重触感』，下意识摸了摸。爬起来洗脸，镜中是张不认识的脸。翻床头柜抽屉全是陌生笔迹的工作记录。摸出手机刷账户——余额异常少。ghost 关联物件压在枕头底下（FS_006 subtle）。窗外是熟悉的街景但他知道自己不该在这里。墙缝里一道暗黑色渗液他没注意（FS_005 subtle）。"},
+        {"scene_n": 2, "title": "合成音派工电话 + DEUTERAGONIST 接应", "hub": "HUB_002 → HUB_003", "word_budget": 1800, "description": "上午手机响。合成音：『T-7 编号，今日报到，地址华信大厦十二楼，组长楼下便利店接你。』穿好原身份的衣服下楼。便利店门口一个穿黑风衣的女人靠在玻璃门边，左手腕一枚银色细圆环（FS_007 plant 雏形）。她递过来一杯冰美式：『下次别熬。』转身就走——DEUTERAGONIST 口癖与递东西习惯首次亮相。主角跟在后面，下颌微紧、指甲刮拇指关节（PROTAGONIST stress_tells）。"},
+        {"scene_n": 3, "title": "异常局十二楼报到 + 指纹机异常", "hub": "HUB_001", "word_budget": 2400, "description": "电梯到十二楼。DEUTERAGONIST 带他到电梯口指纹打卡机：『按一下。』主角按下去，机器轻微发热，屏幕一闪过乱码再正常（FS_011 plant）。DEUTERAGONIST 眼睛在他脸上停 0.5 秒：『你刚才在哪儿？』——ME_002 怀疑的初次种子。领他到工位，桌上 T-7 胸卡 + 工牌绳。远处档案室门口一个穿洗白格子衬衫的老头叼着烟看了他一眼（MENTOR_NPC 远景，不说话）。"},
+        {"scene_n": 4, "title": "AUTHORITY_NPC 办公室初审 + 假身份过关", "hub": "HUB_001", "word_budget": 1800, "description": "上午。AUTHORITY_NPC 办公室。深灰西装 + 体制别针 + 机械表。茶水未动。翻主角档案，缓慢稳定。问三个问题：『之前的工作？』『家里还有谁？』『为什么来异常局？』主角用原身份简历答但故意慢半拍——反而让上级觉得『谨慎不浮躁』。看表：『好好干。』摩擦了一下别针（AUTHORITY_NPC stress tell——已起一丝疑，怀疑 clock 从这里启动）。"},
+        {"scene_n": 5, "title": "首启 2 分身 + 代价初露", "hub": "HUB_002", "word_budget": 2400, "description": "下班回出租屋，关门靠门板。脖子『双重触感』又来。试着聚焦那感觉，眼前白屏 0.3 秒（FS_002 plant 标志事件），睁眼时房间里多了一个『他』，跟他一样穿着。两人对视。镜中陌生脸 + 多出来的自己——现实塌陷。分身没说话，只抬手摸了摸自己的脖子。他听见两副心跳。ghost 物件的滴答声格外清晰。章末 cliffhanger：他刷账户——余额没变，但消费记录里多了一笔他没买过的小额支出（分身已在他不知道时行动过）。"}
+      ],
+      "chapter_range": [1, 4],
+      "research_ref": {
+        "cache_path": "_数据库/.research_cache/inspiration_<topic>_<日期>.md",
+        "anchors_used": ["anchor_谨慎主角人设", "anchor_SCP_编外临时工"],
+        "research_topics": ["都市克苏鲁爆款节奏 / 多分身代价 / 神秘学开篇 / 番茄套路"],
+        "research_completed_at": "<ISO 时间戳>",
+        "researcher_confidence": 0.85,
+        "_compliance_note": "v23.1 起 research_ref 严格 enforce：每个 cluster 单独调研（hook 规则10 + schema required + plan step1 + manifest 自动注入 4 处阻断），不能复用 wizard 阶段单次调研"
+      }
+    }
+  ],
+  "_consumption_chain": {
+    "produced_by": "/outline ECAS 模式按大势卡 ME 拆簇 + novel-researcher 每簇调研后填 research_ref",
+    "consumed_by": [
+      "ECAS writer：按 scene_storyboard 逐场景写，嵌 foreshadowing_to_plant + anchor_props",
+      "mid_checkpoint：在 mid_checkpoints 字数处 fail-loud 检查（字数缺口/伏笔缺失）",
+      "save-state：更新 status + foreshadowing_to_callback 回收记录"
+    ]
+  },
+  "_design_notes": {
+    "字数 ±10% enforce": "expected_word_range 须 ≤ researcher 推荐 ±10%——历史教训『字单位三义 + researcher→planner 放大 + writer reward hacking + checkpoint 静默通过』5 层叠加曾致 22% 字数缺口",
+    "research_ref 4 处阻断": "v23.1 把 v17.7 调研先行规则迁到 4 个真正阻断点（hook/schema/plan/manifest），架构升级必须把现存硬约束迁到阻断点"
+  }
+}

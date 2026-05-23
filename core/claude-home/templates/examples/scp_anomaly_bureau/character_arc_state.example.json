@@ -1,0 +1,130 @@
+{
+  "schema_version": "2.0",
+  "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。本文件是 McKee 7 步 + Truby 22 步精华 + Save the Cat 4 元的实战填充范式——重点看 _story_world.thematic_critique（异常局=把『员工是耗材』赤裸化的隐秘批判，不是中性世界观）+ moral_argument 的 thesis vs antithesis 双立场辩论结构。占位符见 人物卡.example.json。",
+  "_field_doc": {
+    "lie / want / need / truth": "Save the Cat 原版四元",
+    "weakness_need": "McKee：主角真正缺什么（深层）",
+    "desire": "McKee：主角以为自己想要什么（表层）",
+    "opponent_and_plan": "McKee：主要对手 + 初始 plan",
+    "battle_and_self_revelation": "McKee：高潮 battle 触发 self_revelation",
+    "ghost": "Truby：主角过去的创伤/未解决事件",
+    "moral_argument": "Truby：故事在讨论的道德论点（thesis vs antithesis）"
+  },
+  "characters": {
+    "PROTAGONIST": {
+      "lie": "我只是个被裁的普通职员，运气好顶到一个高危编外岗，能赚钱熬到换工作就行；我不是什么『天选』，多身体只是巧合，不该插手序列体系那种神级别的事",
+      "want": "保住临时工岗位，月入稳定撑过经济寒冬，争取转正编制（其实是想要稳定）",
+      "need": "认清自己『多身体』本质是异常本源在他身上的回响，必须主动选择『用还是不用』这份馈赠；不选 = 被异常实体反向猎杀",
+      "truth": "异常局体系本身就是被异常实体设计的『养殖场』，特工是被驯化的肉食；多身体让他成为体系外唯一变量；真正的力量不在序列高低，在『不被某个序列定义』",
+      "weakness_need": "对失败的过度规避（裁员阴影）+ 对『被注意到』的恐惧 + 不相信自己配得上任何高于『普通职员』的位置",
+      "desire": "想拿到正式编制 + 编制对应的医保社保 + 一份能向父母交代的工作头衔（深层是『被体系认可』的渴望，恰好是反派最容易利用的弱点）",
+      "opponent_and_plan": {
+        "primary_opponent": "PRIME_ANTAGONIST — 异常局神秘上级，全书最大反派，本质是异常实体伪装的『体系设计者』",
+        "secondary_opponents": [
+          "影类实体 — 杀死『原身份』的实体，卷一卷二阶段对手",
+          "AUTHORITY_NPC — 明面派系斗争对手，派系卷主要敌人",
+          "异常局体系本身 — 系统层对手，全书贯穿"
+        ],
+        "initial_plan": "假装是原身份 → 蒙混过审 → 工作满 3 年自动转正 → 拿钱走人 → 关掉多身体能力假装从没存在过",
+        "plan_failure_at_ch": 60,
+        "_note": "plan 失败时机：ch60 上级私下询问异常 → 主角意识到藏不住"
+      },
+      "battle_and_self_revelation": {
+        "final_battle_ch": 780,
+        "battle_form": "主角主动注销临时工编号 → 用 7 个分身在 7 个序列途径同时冲击序列 0 → 与反派在异常本源接触点最终对决",
+        "self_revelation": "他不需要『被体系认可』才有价值——他是体系的反例本身，被异常本源选中不是诅咒是赦免；7 个分身不是 7 个备份是 7 种活法，活下来的从来不需要被定义"
+      },
+      "ghost": {
+        "core_ghost": "主角青年时至亲在事故中重伤，被告知『他是临时工，没工伤保险，按合同一次性了结』；从此他对『临时工/编外/不被体系认可』的身份有深层恐惧 + 对『稳定编制』的执念",
+        "ghost_resolved_at_ch": 720,
+        "_writer_hint": "每当主角面对『要不要拿编制保险』类选择时，他下意识看 ghost 身体关联位置；每章涉及『临时工身份』，ghost 在驱动他的过度谨慎"
+      },
+      "moral_argument": {
+        "central_question": "在一个把人当资源消耗品的隐秘体系里，『保住自己』是合理的还是是共谋？",
+        "thesis_position": "PROTAGONIST 立场：在体系不公的前提下，先活下去再说；活到能改变规则的位置才有发言权",
+        "antithesis_position": "PRIME_ANTAGONIST 立场：体系是为多数人安全设计的，少数人牺牲是必然代价；『保住自己』本身就是对体系的不忠",
+        "synthesis_at_ch": 760,
+        "_writer_hint": "主角与反派的每次见面都是这两种道德观的辩论；主角早期偏 thesis，中期摇摆，结尾 synthesis = 『让规则改变到不需要任何人牺牲』"
+      },
+      "stages_by_chapter": {
+        "1": "lie", "3": "lie", "10": "lie", "30": "lie_cracking",
+        "60": "want_threatened", "100": "debate", "150": "break_into_two",
+        "220": "fun_and_games", "320": "false_victory", "420": "midpoint_revelation",
+        "520": "bad_guys_close_in", "620": "all_is_lost", "680": "dark_night",
+        "720": "break_into_three", "780": "truth_realized", "800": "final_image"
+      },
+      "key_milestones": {
+        "lie_to_cracking": "ch30 第一次任务失败，发现『多身体』消耗的不是体力是命数，2 个分身死了 1 个",
+        "cracking_to_want_threatened": "ch60 上级私下问『你最近的判断越来越不像 T-7』，主角意识到『假装』藏不住",
+        "midpoint_revelation": "ch420 反派首次现身告诉他『你不是顶包，你是被预选的』——多身体不是巧合，是异常本源出生时植入",
+        "all_is_lost_to_dark_night": "ch620 主角选择『放弃 3 个分身』换取保住 DEUTERAGONIST，从此心理破碎",
+        "break_into_three_to_truth": "ch720 至亲意外死亡（被反派利用），主角放下编制执念，决定撕碎临时工身份"
+      },
+      "current_stage_at_ch": "1:lie",
+      "_last_updated_at_ch": 1
+    },
+    "DEUTERAGONIST": {
+      "lie": "我是异常局协调员，原身份的搭档；我对所有『特工死亡』必须保持职业冷漠，否则做不下去这份工",
+      "want": "查清原身份死因 + 让『冒名顶替的新人』交代清楚",
+      "need": "接受『有些异常无法用规则解释』，对主角从怀疑→搭档→信任",
+      "truth": "原身份和现主角是同一灵格的两个分身——她的搭档没死，只是换了一具身体",
+      "weakness_need": "职业冷漠掩盖下的孤独 + 对原身份的隐性感情（自己也不愿承认）",
+      "desire": "在异常局升职到协调员副组长（明面 want）",
+      "opponent_and_plan": {
+        "primary_opponent": "PROTAGONIST（卷一作为『调查对象』，卷三后转盟友）",
+        "initial_plan": "用工作流程暗中调查主角破绽 → 抓到顶替证据 → 上报"
+      },
+      "battle_and_self_revelation": {
+        "final_battle_ch": 740,
+        "battle_form": "为救主角挡下一次精神冲击，陷入半昏迷",
+        "self_revelation": "原身份和现主角是同一个人，只是被分成了两次相遇"
+      },
+      "ghost": {
+        "core_ghost": "至亲早年加入异常局牺牲，她为了『离至亲近一点』选了这份工",
+        "_writer_hint": "主角某些动作会让她想起至亲，这是她对主角逐渐放下戒备的暗线触发"
+      },
+      "moral_argument": {"_doc": "DEUTERAGONIST 持中间立场，是主角 vs 反派道德辩论的『读者代理人』"},
+      "stages_by_chapter": {"1": "lie", "50": "lie_cracking", "150": "want_threatened", "300": "debate", "500": "truth_glimpsed", "740": "truth_realized"},
+      "current_stage_at_ch": "1:lie",
+      "_last_updated_at_ch": 1
+    },
+    "PRIME_ANTAGONIST": {
+      "lie": "我是异常局的设计者，为了保护人类世界稳定，少数人牺牲是必要代价；我对所有特工一视同仁、不偏不倚",
+      "want": "让主角『自愿』选择加入体系核心，成为异常本源的最终容器（养肥再宰）",
+      "need": "面对一个意识到诡计的反例（主角拒绝），承认自己也是被更高层力量利用的工具",
+      "truth": "PRIME_ANTAGONIST 本身也是异常实体伪装，所谓『设计者』身份是被更深的本源植入的强迫记忆——他和主角其实是同一类『容器』",
+      "weakness_need": "对『秩序必须由少数人维护』的执念盲点（精英主义 + 工具理性极致）",
+      "desire": "建立永恒稳定的异常控制秩序，让自己成为『设计者』传说的具象化",
+      "opponent_and_plan": {
+        "primary_opponent": "PROTAGONIST（终极对手）",
+        "initial_plan": "暗中观察主角数年 → 中点现身招揽 → 给三选一（编制特工/继任副局/直接转正核心）→ 任一接受都进圈套"
+      },
+      "battle_and_self_revelation": {
+        "final_battle_ch": 780,
+        "battle_form": "异常本源接触点对决",
+        "self_revelation": "他也是被『设计者』神话规训的另一种『主角』，只是被规训得更彻底"
+      },
+      "ghost": {"core_ghost": "『设计者』身份是数十年前一次本源接触留下的强迫记忆——他根本不记得真名"},
+      "moral_argument": {"_doc": "antithesis position：体系秩序高于个体生命 / 少数人牺牲是必然 / 想『保住自己』是不忠"},
+      "stages_by_chapter": {"1": "lie", "420": "lie", "620": "lie_cracking", "780": "truth_realized"},
+      "current_stage_at_ch": "1:lie",
+      "_last_updated_at_ch": 1
+    }
+  },
+  "_story_world": {
+    "_doc": "★ Truby story_world：异常局体系本身是『驯化资源』的隐秘批判（本范式最有题材价值的部分）",
+    "literal": "现代某国一个隐秘部门，处理 SCP 风格非常规事件，编制特工 vs 编外临时工的劳动关系",
+    "metaphorical": "异常局 = 现代社会任何『用编制/合同/承诺把人塞进系统消耗』组织的极端版本——把『员工是耗材』赤裸化，再加超自然滤镜",
+    "thematic_critique": "当一个体系的合法性来自『保护多数人』，它有权牺牲谁？谁来定义『多数人』？被牺牲的人是同意了还是被剥夺了选择？",
+    "_writer_hint": "每次写『临时工 vs 正式编制』对比、写『异常局召唤主角上岗』、写『反派宣讲秩序』，都必须带这层批判——不是中性世界观"
+  },
+  "_consumption_chain": {
+    "produced_by": "/distill-character + outline 初始化 + writer/judge 每章更新 current_stage_at_ch",
+    "consumed_by": [
+      "build_manifest._collect_character_arc_state() 注入 manifest",
+      "writer step 0：消费 ghost / moral_argument / weakness_need vs desire",
+      "judge consensus：检查本章是否在 moral_argument 维度有推进",
+      "skill_evolver：识别 stage 推进作为 success_pattern"
+    ]
+  }
+}

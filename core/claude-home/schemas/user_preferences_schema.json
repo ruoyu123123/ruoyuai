@@ -1,0 +1,486 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ruoyuai.user_preferences.v21",
+  "title": "用户偏好.json schema（v21 完整版）",
+  "description": "v21 扩展 — 把所有『系统之前擅自决定』的字段交给用户决定。开新书时 /wizard 命令一次性问完，写入此文件。",
+  "type": "object",
+  "properties": {
+    "_meta": {
+      "type": "object",
+      "properties": {
+        "wizard_completed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "schema_version": {
+          "type": "string",
+          "default": "v21"
+        },
+        "user_id": {
+          "type": "string"
+        }
+      }
+    },
+    "project_basics": {
+      "type": "object",
+      "description": "Phase 1: 项目基础（之前系统擅自决定）",
+      "properties": {
+        "total_chapters": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 5000
+        },
+        "target_words_per_chapter": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 15000,
+          "default": 3000
+        },
+        "dcas_dual_chapter_mode": {
+          "type": "boolean",
+          "default": true,
+          "description": "DCAS 双章合一+自然截断；false=单章独立"
+        },
+        "writer_mode": {
+          "type": "string",
+          "enum": [
+            "完整模式",
+            "轻量模式"
+          ],
+          "default": "完整模式"
+        },
+        "volume_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30,
+          "default": 10
+        },
+        "volume_distribution": {
+          "type": "string",
+          "enum": [
+            "均分",
+            "前重后轻",
+            "前轻后重",
+            "金字塔",
+            "自定义"
+          ],
+          "default": "均分"
+        },
+        "volume_custom_ratios": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0.01,
+            "maximum": 1.0
+          },
+          "description": "如选自定义，给每卷比例数组（总和=1.0）"
+        }
+      },
+      "required": [
+        "total_chapters",
+        "target_words_per_chapter"
+      ]
+    },
+    "narrative_pacing": {
+      "type": "object",
+      "description": "Phase 7: 叙事节拍偏好（v21 R1.2 新加）",
+      "properties": {
+        "storyteller_profile": {
+          "type": "string",
+          "enum": [
+            "cassandra",
+            "phoebe",
+            "randy"
+          ],
+          "default": "cassandra",
+          "description": "cassandra=标准升压（传统长篇）/ phoebe=长间歇爽文 / randy=随机展开（脑洞）"
+        },
+        "expected_setback_per_n_ch": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 15,
+          "default": 4,
+          "description": "主角每 N 章吃一次大亏。爽文=8-12 / 标准=4-6 / 黑深残=2-3"
+        },
+        "happy_vs_dark_ratio": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.6,
+          "description": "win 章节占比目标（0.8=爽文 / 0.5=平衡 / 0.3=悲剧）"
+        },
+        "hub_rhythm_targets": {
+          "type": "object",
+          "description": "Hub 章节角色分布",
+          "properties": {
+            "depart": {
+              "type": "number",
+              "default": 0.2
+            },
+            "quest": {
+              "type": "number",
+              "default": 0.5
+            },
+            "return": {
+              "type": "number",
+              "default": 0.2
+            },
+            "idle": {
+              "type": "number",
+              "default": 0.1
+            }
+          }
+        }
+      }
+    },
+    "narrative_structure": {
+      "type": "object",
+      "description": "v20 涌现叙事 + v21 R2 IF/PbtA 借鉴的结构选择",
+      "properties": {
+        "outline_mode": {
+          "type": "string",
+          "enum": [
+            "strict",
+            "fluid",
+            "hybrid"
+          ],
+          "default": "fluid",
+          "description": "strict=逐章死定（短篇）/ fluid=大势池涌现（长篇网文）/ hybrid=卷一 strict 其余 fluid"
+        },
+        "major_events_count": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 50,
+          "default": 13,
+          "description": "大势卡 major_events 数量（500 章建议 13-20）"
+        },
+        "use_position_effect_judgment": {
+          "type": "boolean",
+          "default": true,
+          "description": "v21 R2.3 Blades 双轴判定，关闭=简单成败"
+        },
+        "use_throughlines": {
+          "type": "boolean",
+          "default": true,
+          "description": "v21 R2.4 Dramatica 4 线追踪，关闭=单 OS 主线"
+        },
+        "use_mckee_truby_arc": {
+          "type": "boolean",
+          "default": true,
+          "description": "v21 R3.1 weakness/need vs desire + ghost + moral_argument"
+        }
+      }
+    },
+    "character_psychology": {
+      "type": "object",
+      "description": "Phase 7: 心理/情感系统（v21 R1.3-R1.5 新加，强烈个人偏好）",
+      "properties": {
+        "stress_threshold_break": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 15,
+          "default": 8,
+          "description": "Mental Break 触发阈值。心理脆弱主角=4-6 / 标准=8 / 钢铁直男=12+"
+        },
+        "stress_max": {
+          "type": "integer",
+          "default": 10
+        },
+        "allowed_mental_break_cards": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "MB_001_黑化",
+              "MB_002_酗酒",
+              "MB_003_出家",
+              "MB_004_封心",
+              "MB_005_嗜杀"
+            ]
+          },
+          "default": [
+            "MB_001_黑化",
+            "MB_002_酗酒",
+            "MB_003_出家",
+            "MB_004_封心",
+            "MB_005_嗜杀"
+          ],
+          "description": "用户允许的 Mental Break 类型。治愈系可去 005 / 黑深残可全保留"
+        },
+        "use_active_aspects": {
+          "type": "boolean",
+          "default": true,
+          "description": "v21 R1.4 永久身体/精神烙印"
+        },
+        "use_fate_dice": {
+          "type": "boolean",
+          "default": true,
+          "description": "v21 R1.4 命运抽签（关闭=AI 自由编 emergent_opp）"
+        }
+      }
+    },
+    "interactive_mode": {
+      "type": "object",
+      "description": "Phase 3: 走向卡 / 全自动模式",
+      "properties": {
+        "use_fate_cards": {
+          "type": "boolean",
+          "default": true,
+          "description": "每章末是否生成走向卡让用户选"
+        },
+        "fate_cards_count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4,
+          "default": 3,
+          "description": "每次生成几张（默认 A/B/C 三张）"
+        },
+        "fully_auto": {
+          "type": "boolean",
+          "default": false,
+          "description": "全自动模式：跳过走向卡 + 系统按 narrator 推荐自动选"
+        }
+      }
+    },
+    "quality_control": {
+      "type": "object",
+      "description": "Phase 4-5: 校验严格度",
+      "properties": {
+        "audit_mode": {
+          "type": "string",
+          "enum": [
+            "strict",
+            "advisory",
+            "permissive"
+          ],
+          "default": "advisory",
+          "description": "strict=全 hard_gate 严卡 / advisory=顾问制（默认）/ permissive=宽容（快速出稿）"
+        },
+        "validator_repair_max_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 3
+        },
+        "judge_consensus_frequency": {
+          "type": "string",
+          "enum": [
+            "每章",
+            "关键章",
+            "每 5 章",
+            "每 10 章",
+            "关闭"
+          ],
+          "default": "每 10 章"
+        },
+        "cross_chapter_scan_intensity": {
+          "type": "string",
+          "enum": [
+            "full_18",
+            "core_10",
+            "minimal_5",
+            "off"
+          ],
+          "default": "full_18",
+          "description": "跨章 scanner 跑多少。短篇可减"
+        }
+      }
+    },
+    "anti_slop_personal": {
+      "type": "object",
+      "description": "Phase 9: 个性化反套话",
+      "properties": {
+        "user_banned_words": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "用户额外讨厌的词（追加到系统 anti-slop 词典）"
+        },
+        "user_preferred_phrases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "用户喜欢的句式/词（鼓励 writer 多用）"
+        },
+        "voice_strictness": {
+          "type": "string",
+          "enum": [
+            "lenient",
+            "standard",
+            "strict"
+          ],
+          "default": "standard"
+        }
+      }
+    },
+    "agent_model_routing": {
+      "type": "object",
+      "description": "v21 P7.1 model routing 用户层覆盖",
+      "properties": {
+        "writer_model": {
+          "type": "string",
+          "default": "claude-sonnet-4-6"
+        },
+        "writer_critical_model": {
+          "type": "string",
+          "default": "claude-opus-4-7"
+        },
+        "summarizer_model": {
+          "type": "string",
+          "default": "claude-haiku-4-5-20251001"
+        },
+        "use_extended_thinking_on_critical": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "advanced": {
+      "type": "object",
+      "description": "高级用户字段（向导跳过，default 通常 OK）",
+      "properties": {
+        "git_auto_commit": {
+          "type": "boolean",
+          "default": true
+        },
+        "manifest_compression": {
+          "type": "boolean",
+          "default": true
+        },
+        "research_first": {
+          "type": "boolean",
+          "default": true
+        },
+        "session_memory_enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "ecas_config": {
+      "type": "object",
+      "description": "v23 ECAS 配置 (Event Cluster Auto Split)",
+      "properties": {
+        "ecas_enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "true=用 ECAS 事件簇生成 / false=fallback 到 v22 DCAS 双章"
+        },
+        "cluster_word_range": {
+          "type": "object",
+          "properties": {
+            "default_min": {
+              "type": "integer",
+              "default": 8000
+            },
+            "default_max": {
+              "type": "integer",
+              "default": 12000
+            },
+            "critical_event_min": {
+              "type": "integer",
+              "default": 13000
+            },
+            "critical_event_max": {
+              "type": "integer",
+              "default": 16000
+            }
+          }
+        },
+        "critical_events_use_opus": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ME_[0-9]{3}$"
+          },
+          "default": [
+            "ME_010",
+            "ME_015",
+            "ME_017"
+          ],
+          "description": "用 Opus 4.7 (128K output + Extended Thinking) 的关键事件 ME ID 列表"
+        },
+        "extended_thinking_critical": {
+          "type": "boolean",
+          "default": true,
+          "description": "关键 ME 启用 Anthropic Extended Thinking"
+        },
+        "mid_checkpoint_interval": {
+          "type": "integer",
+          "default": 3000,
+          "description": "writer 每 N 字触发 self-audit checkpoint"
+        },
+        "max_checkpoint_failures": {
+          "type": "integer",
+          "default": 3,
+          "description": "累计失败 N 次后 fallback Opus + Extended Thinking 重写整簇"
+        },
+        "cluster_stop_frequency": {
+          "type": "string",
+          "enum": [
+            "per_cluster",
+            "per_chapter",
+            "critical_only"
+          ],
+          "default": "per_cluster",
+          "description": "走向卡停顿粒度: 每事件簇 / 每章 / 关键章只"
+        },
+        "sub_summary_enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "writer 每场景生成 100 字摘要注入下段头部 (LiM 缓解)"
+        },
+        "auto_cluster_size_estimation": {
+          "type": "boolean",
+          "default": true,
+          "description": "true=StoryBox 自适应 (model 自决字数) / false=按 cluster_word_range fixed"
+        }
+      }
+    },
+    "narrative_style": {
+      "type": "object",
+      "description": "v23+ 必问 - 叙事风格基础（wizard 前期必问，否则系统不能擅自决定）",
+      "required": [
+        "pov"
+      ],
+      "properties": {
+        "pov": {
+          "type": "string",
+          "enum": [
+            "first_person",
+            "third_person_limited",
+            "third_person_omniscient",
+            "multi_pov_third_person"
+          ],
+          "description": "POV 视角 - 第一人称我 / 第三人称限知（贴单角色） / 全知第三 / 多POV切换"
+        },
+        "pov_anchor_character": {
+          "type": "string",
+          "description": "third_person_limited 时绑定的角色（如主角名）"
+        },
+        "tense": {
+          "type": "string",
+          "enum": [
+            "past",
+            "present"
+          ],
+          "default": "past",
+          "description": "时态 - 中文网文默认过去时"
+        },
+        "narrator_voice": {
+          "type": "string",
+          "enum": [
+            "neutral",
+            "ironic",
+            "philosophical",
+            "intimate"
+          ],
+          "default": "neutral",
+          "description": "叙事者声音色调"
+        }
+      }
+    }
+  }
+}

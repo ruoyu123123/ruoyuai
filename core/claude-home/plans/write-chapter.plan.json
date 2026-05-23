@@ -1,0 +1,69 @@
+{
+  "command": "write-chapter",
+  "version": 7,
+  "description": "章节写作 v23.8 多 agent 流水线（v19 顾问制 + 故事块模式 + step 3 双轨质量分析：机械 audit_hub + 阅读 reading-reflector 连续 3 轮 0 issue 放行）",
+  "total_steps": 6,
+  "required_steps": [1, 2, 3, 4, 5, 6],
+  "optional_steps": [],
+  "steps": [
+    {
+      "n": 1,
+      "name": "build-manifest+style-directive",
+      "description": "build_manifest.py 生成注入清单 + style_injector 注入风格指令 + 检测 .pre_opening.txt + 决策 dcas_enabled / ecas_mode",
+      "required": true,
+      "expected_outputs": ["_数据库/.manifest/ch_{ch:03d}.json", "_数据库/.style_directive/ch_{ch:03d}.json"]
+    },
+    {
+      "n": 2,
+      "name": "novel-writer+chapter-splitter+title-regen",
+      "description": "v18+ECAS+v23.9: novel-writer agent 三模式（ECAS 12000-25000 字故事块 / DCAS 6500 字双章 / single 3000 字 + pre_opening 承接）→ DCAS/ECAS 模式 writer 完成后跑 chapter_splitter 切多章 + pre_opening → **v23.9 splitter 后必跑 gen_chapter_titles.py 用 gen-model 三档策略（80%2-4字 normal / 15%5-8字 mid / 5%8-14字 high 史诗钩子）重生章标题写章首**（70 章爆款调研支撑，见 memory feedback_splitter_post_chapter_title_regen）",
+      "required": true,
+      "expected_outputs": ["章节/第{ch:03d}章/第{ch:03d}章.txt", "章节/第{ch:03d}章/第{ch:03d}章_changes.json"],
+      "scripts": [
+        "# DCAS 模式：python core/scripts/chapter_splitter.py {project_root} {ch}",
+        "# ECAS 模式：spawn novel-chapter-splitter MODE=ecas_multi_chapter",
+        "# v23.9 splitter 后必跑：python core/scripts/gen_chapter_titles.py --project {project_root} --chapters <ch_start>-<ch_end> --high-chapters <绝对高潮章>"
+      ]
+    },
+    {
+      "n": 3,
+      "name": "quality-analysis-dual-track(audit-hub + reading-reflector)",
+      "description": "v23.8 双轨质量分析层。机械轨（顾问制）：narrative_scanner + plot_structure_scanner + audit_hub.py --auto-fix --waivers 收口，hard_gate 不可豁免、advisory 凭理由豁免，需 agent 项 spawn validator-repair。**强制**阅读轨：novel-reading-reflector 8 大维度（段首单调含全主语词 / voice 漂移 / POV / 信息密度 / 节奏感 / 对话工艺 / 互动质感 / 塑料感），连续 3 轮 0 issue 才放行（SRE 风格健康检查）。两轨产出汇合，机械层 0 hard_gate + 阅读层 verdict=pass 才进 step 4。ECAS 模式：reading-reflector 处理整 cluster（不是单章），输出 _数据库/.reading_reflection/cluster_<id>_round_<N>.json",
+      "required": true,
+      "expected_outputs": [
+        "_数据库/.audit/ch_{ch:03d}_audit.json",
+        "_数据库/.reading_reflection/.placeholder"
+      ],
+      "scripts": [
+        "# 机械轨",
+        "python core/scripts/narrative_scanner.py {project_root} {ch} --all",
+        "python core/scripts/plot_structure_scanner.py {project_root} {ch} --all",
+        "python core/scripts/audit_hub.py {project_root} {ch} --auto-fix --waivers '{project_root}/章节/第{ch:03d}章/第{ch:03d}章_changes.json'",
+        "# 阅读轨（强制，连续 3 轮 0 issue 才放行）",
+        "# spawn novel-reading-reflector ROUND=1 → fix → ROUND=2 → ... 直到 verdict=pass",
+        "# ECAS 模式：CHAPTERS=cluster_<id> 整体处理"
+      ]
+    },
+    {
+      "n": 4,
+      "name": "voice-keeper",
+      "description": "v18: novel-voice-keeper · 对话声纹审查（required，无条件跑，不因 audit_hub 是否派单而跳过）。若 step3 audit_hub 的 pending_agent 点名 novel-voice-keeper，主调度器把该项 fix_brief 经 FIX_BRIEF 字段传入，voice-keeper 优先处理点名问题再做常规审查",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 5,
+      "name": "researcher-fact-check",
+      "description": "v17.7：若本章涉及真实知识/历史/科学事实，spawn novel-researcher TASK_TYPE=fact_check 校验",
+      "required": false,
+      "expected_outputs": []
+    },
+    {
+      "n": 6,
+      "name": "plan-end",
+      "description": "报告给用户 + plan 最终校验",
+      "required": true,
+      "expected_outputs": []
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "schema_version": "v22.5",
+  "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。重点范式：① narrative_style 段（third_person_limited POV 贴主角 + tense + narrator_voice，wizard 必问的叙事基础三件）② calendar 段（异常历双轨纪年——对外公历对内异常历，OFFSET 换算，writer 写日期用异常历）③ ecas_config（v23 事件簇配置，critical_events 用 opus + 字数 ±10% enforce）。占位符见 人物卡.example.json。",
+  "preferences": [
+    {"id": "pref_001", "key": "wizard_completed_at", "value": "<ISO 时间戳>"},
+    {"id": "pref_002", "key": "project_name", "value": "<书名占位>"},
+    {"id": "pref_003", "key": "storyteller_profile", "value": "phoebe"},
+    {"id": "pref_004", "key": "happy_vs_dark_ratio", "value": 0.8},
+    {"id": "pref_005", "key": "expected_setback_per_n_ch", "value": 10},
+    {"id": "pref_006", "key": "total_chapters", "value": 800},
+    {"id": "pref_007", "key": "audit_mode", "value": "advisory"},
+    {"id": "pref_008", "key": "writer_model", "value": "claude-sonnet-4-6"},
+    {"id": "pref_009", "key": "writer_critical_model", "value": "claude-opus-4-7"}
+  ],
+  "_meta": {
+    "wizard_completed_at": "<ISO 时间戳>",
+    "schema_version": "v22.5",
+    "project_name": "<书名占位>"
+  },
+  "project_basics": {
+    "total_chapters": 800,
+    "target_words_per_chapter": 2800,
+    "dcas_dual_chapter_mode": true,
+    "writer_mode": "完整模式",
+    "volume_count": 12,
+    "volume_distribution": "金字塔",
+    "volume_custom_ratios": null
+  },
+  "narrative_pacing": {
+    "storyteller_profile": "phoebe",
+    "expected_setback_per_n_ch": 10,
+    "happy_vs_dark_ratio": 0.8,
+    "hub_rhythm_targets": {"depart": 0.2, "quest": 0.55, "return": 0.18, "idle": 0.07}
+  },
+  "narrative_structure": {
+    "outline_mode": "fluid",
+    "major_events_count": 18,
+    "use_position_effect_judgment": true,
+    "use_throughlines": true,
+    "use_mckee_truby_arc": true
+  },
+  "character_psychology": {
+    "stress_threshold_break": 10,
+    "stress_max": 12,
+    "allowed_mental_break_cards": ["MB_001_黑化", "MB_002_酗酒", "MB_004_封心"],
+    "use_active_aspects": true,
+    "use_fate_dice": true
+  },
+  "interactive_mode": {
+    "use_fate_cards": true,
+    "fate_cards_count": 3,
+    "fully_auto": false,
+    "_hybrid_mode": "关键章 stops (Catalyst/Midpoint/All Is Lost/Break Into Three/Finale + mental_break_triggered + urgent clock 满) 必出卡，其他章自动按 narrator 推荐",
+    "key_chapters_only": true
+  },
+  "quality_control": {
+    "audit_mode": "advisory",
+    "validator_repair_max_rounds": 3,
+    "judge_consensus_frequency": "每 10 章",
+    "cross_chapter_scan_intensity": "full_18"
+  },
+  "anti_slop_personal": {
+    "user_banned_words": [],
+    "user_preferred_phrases": [],
+    "voice_strictness": "standard"
+  },
+  "agent_model_routing": {
+    "writer_model": "claude-sonnet-4-6",
+    "writer_critical_model": "claude-opus-4-7",
+    "summarizer_model": "claude-haiku-4-5-20251001",
+    "use_extended_thinking_on_critical": true
+  },
+  "advanced": {
+    "git_auto_commit": true,
+    "manifest_compression": true,
+    "research_first": true,
+    "session_memory_enabled": true
+  },
+  "_project_specific": {
+    "genre_tags": ["都市", "克苏鲁", "神秘学", "SCP风格", "隐秘超自然"],
+    "style_library_ref": "<风格基线参考，如某神秘学长篇>",
+    "protagonist_archetype": "谨慎谋略型（HeroC复刻）",
+    "金手指": "多身体并行同步增长（能力共享体验各自独立）",
+    "title_pattern": "我在 X 局当 Y（番茄爆款套路）",
+    "core_setting": "都市现代隐秘超自然，类 SCP/MIB 风格的应急部门"
+  },
+  "ecas_config": {
+    "ecas_enabled": true,
+    "cluster_word_range": {
+      "default_min": 8000,
+      "default_max": 12000,
+      "critical_event_min": 13000,
+      "critical_event_max": 16000
+    },
+    "critical_events_use_opus": ["ME_010", "ME_015", "ME_017"],
+    "extended_thinking_critical": true,
+    "mid_checkpoint_interval": 3000,
+    "max_checkpoint_failures": 3,
+    "cluster_stop_frequency": "per_cluster",
+    "sub_summary_enabled": true,
+    "auto_cluster_size_estimation": true,
+    "_doc": "v23 ECAS 全面启用 - critical events 用 opus + extended thinking。brief.expected_word_range 须 ≤ researcher 推荐 ±10%（防字数放大复发）"
+  },
+  "narrative_style": {
+    "_doc": "★ wizard 必问的叙事基础三件（POV/tense/narrator_voice），voice_pack 中性 ≠ 系统可擅自定，必须用户决定",
+    "pov": "third_person_limited",
+    "pov_anchor_character": "PROTAGONIST",
+    "tense": "past",
+    "narrator_voice": "neutral",
+    "_note": "用户决定：第三人称限知贴主角视角（神秘学长篇风格基线）。每 5-8 章可有非主角 POV 章（敌人/同事/旁观者）"
+  },
+  "calendar": {
+    "_doc": "★ 异常历双轨纪年范式：对外用公历掩护，对内用异常历计年。writer 写正文日期用异常历，换算靠 OFFSET",
+    "dual_track": true,
+    "public_calendar": "公历（普通人世界 / 掩护身份对外用）",
+    "internal_calendar": "异常历（异常局内部纪年 / 正文叙事用）",
+    "epoch_anchor": "<某历史灾难事件秘密成立异常局那一年 = 异常历 1 年>",
+    "offset_years": "<公历年份 - 异常历年份的固定差值，如 公历2009=异常历1 则 offset=2008>",
+    "conversion_formula": "异常历年 = 公历年 - offset_years",
+    "writer_rule": "正文出现日期一律写异常历（如『异常历 17 年 5 月』），仅掩护身份对普通人对话时用公历；save-state 时间线.json 双轨都记",
+    "_example_anchor": "本项目示例：异常局某历史灾难后秘密成立那年为异常历元年，正文当前进度约异常历 17 年"
+  }
+}

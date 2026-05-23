@@ -1,0 +1,82 @@
+{
+  "_schema": "clocks_v21_explicit_progression",
+  "_doc": "鬼谷八荒+Citizen Sleeper+CK3 Schemes 借鉴：所有「逐渐变化的事」显式建模为 clock。当前是隐性的，主代理凭感觉触发；改为显式后节奏失控/伏笔忘埋一并解决。",
+  "generated_at": "2026-05-16",
+
+  "_field_doc": {
+    "clock_id": "CK_xxx 唯一编号",
+    "label": "可读标签（用户/writer 看得懂）",
+    "category": "antagonist_pressure(反派步步紧逼) | foreshadowing_due(伏笔到期) | resource_decay(资源消耗) | relationship_pivot(关系拐点) | scheme(阴谋进度) | external_threat(外部威胁) | other",
+    "ticks": "当前进度（0..max）",
+    "max": "满格阈值",
+    "tick_on": ["chapter_end / minor_event:<match> / fate_event:<id> / faction_drop:<faction>:<dim> / item_used:<id> 等触发条件"],
+    "tick_per_event": "每次触发 +N（默认 1）",
+    "trigger_on_max": "满格时触发什么（fate_event id / scheme_name / 自由文本）",
+    "visible_to_protagonist": "true=主角内心知道（焦虑感）/ false=只主代理可见（叙事悬念）",
+    "visible_to_writer": "writer prompt 是否能看到本 clock",
+    "since_ch": "首次创建章号",
+    "spawned_by": "fate_engine / foreshadowing / world_evolution / manual",
+    "status": "active | triggered | abandoned",
+    "_reason": "设计原因/写作意图"
+  },
+
+  "clocks": [
+    {
+      "clock_id": "CK_001",
+      "label": "顾沉招安耐心",
+      "category": "antagonist_pressure",
+      "ticks": 1,
+      "max": 10,
+      "tick_on": ["chapter_end"],
+      "tick_per_event": 1,
+      "trigger_on_max": "ME_004_顾沉亲临招安",
+      "visible_to_protagonist": false,
+      "visible_to_writer": true,
+      "since_ch": 4,
+      "spawned_by": "manual",
+      "status": "active",
+      "_reason": "顾沉部署反模因后耐心耗尽 → ch15 左右亲自上门"
+    },
+    {
+      "clock_id": "CK_002",
+      "label": "陆爸交付遗物决心",
+      "category": "foreshadowing_due",
+      "ticks": 4,
+      "max": 9,
+      "tick_on": ["chapter_end", "minor_event:陆爸*"],
+      "tick_per_event": 1,
+      "trigger_on_max": "fs_铁皮盒交付",
+      "visible_to_protagonist": false,
+      "visible_to_writer": true,
+      "since_ch": 4,
+      "spawned_by": "foreshadowing",
+      "status": "active",
+      "_reason": "陆爸 NT_004 expected_complete_ch=13，对应 9 章倒数"
+    },
+    {
+      "clock_id": "CK_003",
+      "label": "南海资本董事会大议",
+      "category": "scheme",
+      "ticks": 0,
+      "max": 8,
+      "tick_on": ["chapter_end", "faction_drop:南海资本:stability"],
+      "tick_per_event": 1,
+      "trigger_on_max": "ME_006_卷一末_主动宣战",
+      "visible_to_protagonist": false,
+      "visible_to_writer": true,
+      "since_ch": 5,
+      "spawned_by": "manual",
+      "status": "active",
+      "_reason": "南海资本内部决议——主角行动加速 stability 下降，加快进度"
+    }
+  ],
+
+  "_consumption_chain": {
+    "produced_by": "/outline 初始化（按大势/伏笔自动生成 base clock）+ writer/save-state 滚动 tick + 手动 spawn",
+    "consumed_by": [
+      "build_manifest._collect_active_clocks() 注入 manifest",
+      "writer step 0r：clock 感知 + 自然把'还差多少'埋进环境暗示",
+      "save-state.step9 clock_engine.py tick → 满格自动 trigger"
+    ]
+  }
+}

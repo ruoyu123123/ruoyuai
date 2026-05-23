@@ -1,0 +1,110 @@
+{
+  "schema_version": "2.0",
+  "_doc": "v21 R3.1 扩展：McKee 7 步（weakness/need/desire/opponent/plan/battle/self_revelation/new_equilibrium）+ Truby 22 步精华（ghost/moral_argument/story_world）整合到 character_arc_state。兼容 v1.0 的 lie/want/need/truth 字段。",
+  "_field_doc": {
+    "lie / want / need / truth": "Save the Cat 原版四元（兼容 v1.0）",
+    "weakness_need": "McKee：主角真正缺什么（深层）— 不一定他自己知道",
+    "desire": "McKee：主角以为自己想要什么（表层）— 与 need 经常冲突",
+    "opponent_and_plan": "McKee：主要对手是谁 + 主角的初始 plan",
+    "battle_and_self_revelation": "McKee：高潮 battle 触发 self_revelation",
+    "ghost": "Truby：主角过去的创伤/未解决事件，潜在驱动当下行为",
+    "moral_argument": "Truby：故事在讨论的道德论点（如『复仇值不值』『顺从 vs 反抗』）"
+  },
+  "characters": {
+    "陆衍": {
+      "lie": "我只是个加班狗，神仙的事跟我没关系，我没有改变任何事的能力",
+      "want": "保住工作、还房贷、让父亲安稳退休——'普通人的生活'",
+      "need": "认清自己是第七位灵格继承人，主动选择是否承担'让神性回归众生'的使命",
+      "truth": "神性本就来自普通人，所谓'天选之子'就是被资本化的虚假叙事——真正的力量在散户互助中",
+      "weakness_need": "对责任的回避 + 对父亲的疏离 + 不相信自己有改变能力",
+      "desire": "想活成大城市里一个普通的、安全的、不被注意的中产阶层",
+      "opponent_and_plan": {
+        "primary_opponent": "顾沉（南海资本招安代表）",
+        "secondary_opponents": ["林晚秋（北殷卧底）", "神性股权制本身（系统层对手）"],
+        "initial_plan": "假装没看见神性股权 → 蒙混过签字事件 → 回到正常工作",
+        "plan_failure_at_ch": 14
+      },
+      "battle_and_self_revelation": {
+        "final_battle_ch": 475,
+        "battle_form": "陆衍带散户互助会反向收购南海资本",
+        "self_revelation": "他要的从来不是'安全'，是'有人记得自己'——而被资本异化的'天命'才是最大的孤独"
+      },
+      "ghost": {
+        "core_ghost": "8 岁那年母亲早逝，父亲沉默寡言地把所有积蓄都给他读书——这种'被亏欠'的负担感塑造了他的退缩",
+        "ghost_resolved_at_ch": 485,
+        "_writer_hint": "每当陆衍要做'欠父亲一笔'类决定时（如关心父亲健康/不愿让父亲担心），ghost 在驱动"
+      },
+      "moral_argument": {
+        "central_question": "在被异化的世界里，个体的『普通生活权』是不是奢侈品？",
+        "thesis_position": "拒绝'天命叙事' → 普通生活本身就是反抗",
+        "antithesis_position": "顾沉代表的：接受现实/适配规则 → 才有真正自由",
+        "synthesis_at_ch": 475,
+        "_writer_hint": "writer 写'陆衍 vs 顾沉'对话时，本质是这两种道德观的辩论"
+      },
+      "stages_by_chapter": {
+        "1": "lie", "2": "lie", "3": "lie", "4": "lie", "5": "lie",
+        "8": "lie_cracking", "14": "want_threatened", "30": "debate",
+        "50": "break_into_two", "100": "fun_and_games", "175": "false_victory",
+        "250": "midpoint_revelation", "375": "all_is_lost", "395": "dark_night",
+        "420": "break_into_three", "485": "truth_realized", "500": "final_image"
+      },
+      "key_milestones": {
+        "lie_to_cracking": "ch8 废票首次激活，听见'是你'",
+        "cracking_to_want_threatened": "ch14 假父亲事件，原 want（普通生活）已不可得",
+        "midpoint_revelation": "ch250 顾沉透露'你是诱饵'，原 want 完全破灭",
+        "all_is_lost_to_dark_night": "ch395 老乞丐讲述拆神真相，旧 lie 彻底被击穿",
+        "break_into_three_to_truth": "ch420 带散户互助会反向收购，主动选择 need 而非 want"
+      },
+      "current_stage_at_ch": "5:lie",
+      "_last_updated_at_ch": 5
+    },
+    "顾沉": {
+      "lie": "执行任务/接近真相是我能做的最大正义，家族复仇必须冷血",
+      "want": "登上第八位董事 + 为家族复仇 + 揭穿百年前拆神真相",
+      "need": "意识到自己也是被神性股权制塑造的工具，放弃成神想法",
+      "truth": "复仇不能用工具的方式完成——救陆衍 = 救自己",
+      "weakness_need": "工具理性的极致导致对人情/自我感受的麻木",
+      "desire": "成为第八位灵格继承人 → 用神性反过来摧毁神性股权制",
+      "opponent_and_plan": {
+        "primary_opponent": "陆衍（招安/利用对象，后转盟友/竞争者）",
+        "secondary_opponents": ["北殷财团", "其他七大本土财团"],
+        "initial_plan": "招安陆衍当代理 → 用他获得董事会席位",
+        "plan_failure_at_ch": 250
+      },
+      "battle_and_self_revelation": {
+        "final_battle_ch": 475,
+        "battle_form": "顾沉在董事会大议上反水站陆衍这边",
+        "self_revelation": "他终于明白：用神性反神性 = 还在神性的逻辑里"
+      },
+      "ghost": {
+        "core_ghost": "顾家三代都被神性股权制清算——爷爷自杀 / 父亲发疯 / 顾沉本人成了系统培养的'终结者'",
+        "_writer_hint": "顾沉看到陆衍犹豫时会想到父亲发疯前的眼神"
+      },
+      "moral_argument": {
+        "_doc": "顾沉持 antithesis position（适配规则才有自由）— 全书与陆衍辩论的对手方"
+      },
+      "stages_by_chapter": {
+        "2": "lie", "7": "lie", "100": "lie",
+        "245": "lie_cracking", "300": "want_threatened", "395": "dark_night",
+        "485": "truth_realized"
+      },
+      "current_stage_at_ch": "5:lie",
+      "_last_updated_at_ch": 5
+    }
+  },
+  "_story_world": {
+    "_doc": "Truby story_world：设定本身的隐喻意义 — 整部小说的「世界观批判」",
+    "literal": "南海市是中国南方一线城市，本土七大资本 vs 跨国财团",
+    "metaphorical": "南海资本 = 把人的'天命/神性'金融化的极致系统 — 你的灵格也能被分股/转让/做空",
+    "thematic_critique": "资本的终极形式不是控制物质，而是控制『意义』本身——『你是不是天选之子』成了可以被董事会决议的事",
+    "_writer_hint": "每章涉及'神性股权制'机制时，必带出这层隐喻——不是中性世界观，是批判性世界观"
+  },
+  "_consumption_chain": {
+    "produced_by": "/distill-character + outline 时初始化 + writer/judge 每章更新 current_stage_at_ch",
+    "consumed_by": [
+      "build_manifest._collect_character_arc_state() 注入 manifest（现有）",
+      "writer step 0y：消费 ghost / moral_argument / weakness_need vs desire 写出深度",
+      "judge consensus：检查本章是否在 moral_argument 维度有推进"
+    ]
+  }
+}

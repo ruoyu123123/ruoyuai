@@ -1,0 +1,45 @@
+{
+  "command": "reconcile",
+  "version": 1,
+  "description": "一致性调和：设定修改后审查历史章节",
+  "total_steps": 5,
+  "required_steps": [1, 2, 3, 4, 5],
+  "optional_steps": [],
+  "steps": [
+    {
+      "n": 1,
+      "name": "identify-change",
+      "description": "识别变更：从用户输入提取变更类型 / 目标 / 前后值",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 2,
+      "name": "scan-affected-chapters",
+      "description": "扫描受影响章节：Grep 所有章节 txt + 章纲摘要 + 人物卡 locked_facts",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 3,
+      "name": "impact-report",
+      "description": "生成影响报告：高 / 中 / 低影响清单 + 建议操作 A/B/C/D",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 4,
+      "name": "apply-fixes",
+      "description": "执行修复（按用户选择 A/B/C）+ 更新档案",
+      "required": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 5,
+      "name": "plan-end",
+      "description": "Git commit 调和变更 + plan 最终校验",
+      "required": true,
+      "expected_outputs": []
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "_schema": "universal_skill_pool_v22",
+  "_doc": "v22 SE5: 跨项目共享 heuristics 池。skill_evolver promote 自动注入。新项目启动时 retrieve_similar_project 时检索。",
+  "_meta": {
+    "created_at": "2026-05-16",
+    "schema_version": "v22"
+  },
+  "universal_patterns": [],
+  "_field_doc": {
+    "category": "success_patterns | failure_patterns",
+    "source_project": "原项目名",
+    "promoted_at": "升级到 universal 时间",
+    "applicable_genres": "[中文都市/玄幻/科幻/...]",
+    "version / confidence / usage_count": "复用 skill_evolver 字段"
+  },
+  "_consumption_chain": {
+    "produced_by": "skill_evolver.promote()（usage>=5+confidence>=0.8 自动）",
+    "consumed_by": [
+      "新项目 /outline 启动时 retrieve 相似题材 patterns 注入初始 writer prompt",
+      "/wizard 命令推荐时引用 universal patterns 提示题材选择"
+    ]
+  }
+}

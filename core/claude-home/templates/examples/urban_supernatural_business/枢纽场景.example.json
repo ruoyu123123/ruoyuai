@@ -1,0 +1,103 @@
+{
+  "_schema": "hubs_v21_round2",
+  "_doc": "Twine/Ink/ChoiceScript IF 借鉴：每个项目定义 1-2 个枢纽场景（家/办公室/常去的地方），主角活动有出发→冒险→返回→闲置→出发的节奏循环。避免每章场景全飘在外。",
+  "generated_at": "2026-05-16",
+
+  "hubs": [
+    {
+      "hub_id": "HUB_home",
+      "label": "陆衍·城东老破小公寓",
+      "type": "home",
+      "default_state": "idle",
+      "anchor_props": [
+        "门口积灰的旧鞋柜",
+        "客厅 56 寸老电视（信号偶尔不稳）",
+        "阳台上一盆养了 4 年的虎尾兰",
+        "床头柜里的母亲遗照",
+        "冰箱上贴着的便利店收据"
+      ],
+      "anchor_routines": [
+        "进门必脱鞋",
+        "睡前喝一杯温水",
+        "周日下午擦地板"
+      ],
+      "_writer_examples": [
+        "他踢开门口的旧鞋柜，灰尘在玄关灯里慢慢飘下来。",
+        "电视信号又不稳了，画面像是被人用手指划过。"
+      ]
+    },
+    {
+      "hub_id": "HUB_office",
+      "label": "南海资本·38 楼办公室",
+      "type": "workplace",
+      "default_state": "active",
+      "anchor_props": [
+        "窗边一排打印机（其中一台总卡纸）",
+        "茶水间的速溶咖啡（陆衍喝它的同事已离职）",
+        "电梯按键面板（38 楼按键磨得最亮）",
+        "顾沉办公室的玻璃幕墙（永远拉着百叶帘）"
+      ],
+      "anchor_routines": [
+        "早 8:50 打卡 / 晚 7:00 下班（除非加班）",
+        "中午常和林晚秋吃同一家便当",
+        "每周三下午有部门例会"
+      ],
+      "_writer_examples": [
+        "电梯到 38 楼时灯闪了两下，他下意识看了眼镜中倒影。",
+        "打印机又卡纸了，林晚秋按规矩没去管。"
+      ]
+    },
+    {
+      "hub_id": "HUB_convenience_store",
+      "label": "夜归人 24h 便利店",
+      "type": "informant_haunt",
+      "default_state": "available_for_meeting",
+      "anchor_props": [
+        "门口黄色塑料椅 + 烟灰缸",
+        "店内冰柜灯（暖白偏黄）",
+        "老周值班时的牌子'我在外面'"
+      ],
+      "anchor_routines": [
+        "老周通常 23:00-04:00 在",
+        "凌晨 3 点是冷清峰",
+        "陆衍来时多半为见老周"
+      ],
+      "_writer_examples": [
+        "便利店的冰柜灯把老周的影子拉得很长。",
+        "门口塑料椅上还有他刚才抽剩半截的烟。"
+      ]
+    }
+  ],
+
+  "rhythm_targets": {
+    "_doc": "推荐的章节节奏分布（按近 10 章统计）",
+    "depart_pct_target": 0.20,
+    "quest_pct_target": 0.50,
+    "return_pct_target": 0.20,
+    "idle_pct_target": 0.10,
+    "tolerance": 0.15
+  },
+
+  "_chapter_role_doc": {
+    "depart": "从枢纽出发去冒险（场景在枢纽内+离开过程）",
+    "quest": "完全在外冒险（场景与枢纽无关）",
+    "return": "从冒险返回枢纽（场景含进枢纽过程）",
+    "idle": "在枢纽内的静态/反思/养精蓄锐章节"
+  },
+
+  "chapter_hub_log": [
+    {"ch": 1, "hub_id": "HUB_office", "role": "quest", "_note": "周五凌晨办公室签字事件（虽在 office 但是 quest 性质：高强度异常事件）"},
+    {"ch": 2, "hub_id": "HUB_home", "role": "return", "_note": "夜回家+消化"},
+    {"ch": 3, "hub_id": "HUB_office", "role": "depart", "_note": "周一回公司开始任务"},
+    {"ch": 4, "hub_id": "HUB_home", "role": "return", "_note": "周二回老家拿铁皮盒，虽外出但属返回家庭枢纽"}
+  ],
+
+  "_consumption_chain": {
+    "produced_by": "/outline 时根据题材定义 hubs + 用户后续 spawn",
+    "consumed_by": [
+      "build_manifest._collect_hubs_directive() 注入 manifest",
+      "writer step 0w：感知本章应是 depart/quest/return/idle，回 hub 时必带 anchor_props 或 anchor_routines 至少 1 个",
+      "save-state.step9 hub_rhythm_check.py：检查最近 N 章 role 分布是否偏离 rhythm_targets"
+    ]
+  }
+}

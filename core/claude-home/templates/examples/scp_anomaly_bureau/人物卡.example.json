@@ -1,0 +1,336 @@
+{
+  "schema_version": "v22.5",
+  "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。本文件是全套最有价值的范式——① 多身体同步主角 schema（能力/记忆共享但每个身体体验独立，业界少见）② voice_pack 5 层 persona 结构（core_traits / speech / body_language / catchphrase 带 scene+frequency / habits + anti_patterns）③ MENTOR_NPC 体制内话术 catchphrase（讲古即暗喻）④ knowledge.will_learn 认识论时间线 ⑤ offscreen 声明式行动。占位符：PROTAGONIST=主角 / DEUTERAGONIST=主角直属上级兼后期盟友 / MENTOR_NPC=老资格导师 / AUTHORITY_NPC=体制内复杂上级 / PRIME_ANTAGONIST=幕后大反派。",
+  "generated_at": "<生成日期>",
+  "characters": [
+    {
+      "id": "PROTAGONIST",
+      "name": "PROTAGONIST",
+      "name_aliases": ["临时工编号 T-7", "T-7", "他"],
+      "role": "protagonist",
+      "propp_function": "hero",
+      "age": 26,
+      "occupation_origin": "<前职业，如被裁的前端工程师>",
+      "occupation_now": "异常局编外临时工编号 T-7（某序列见习）",
+      "_appearance": {
+        "build": "<身高体型，建议偏瘦/不起眼>",
+        "face": "<面部特征 + 长期带轻微疲倦的眼神>",
+        "habit": "永远戴一件 ghost 关联物件（如父亲送的褪色电子表）+ 不起眼的日常穿着"
+      },
+      "ghost": {
+        "wound": "<童年/青年创伤，与主题『被体系当耗材』关联，如父亲是无工伤保险的临时工出事>",
+        "_writer_hint": "永不直接讲，用一个具象物件（电子表）+ 一个触发场景（看到同类工人）触发"
+      },
+      "_MULTI_BODY_GOLDEN_FINGER": {
+        "_doc": "★ 多身体同步金手指范式（本 example 最独特价值）",
+        "mechanism": "可创建 ≤N 个分身（建议 7），每个分身独立行动",
+        "shared": ["能力等级", "记忆同步（分身死亡时记忆传回主体）", "序列途径进度"],
+        "independent": ["每个身体的实时感官体验", "每个身体的位置", "每个身体的即时情绪"],
+        "cost": "分身死亡 → 主体『位置感丧失』数十秒 + stress 大幅上升 + 能力 CD；新分身觉醒绑定剧情节点（不是随意刷）",
+        "_writer_hard_lock": "能力共享 + 记忆同步『回传』，但体验各自独立——禁止写成『分身是提线木偶』或『主体全知道分身在干嘛』。分身行动后主体需通过记忆同步『事后知道』，制造 cliffhanger 空间"
+      },
+      "voice_pack": {
+        "persona_layers": {
+          "_doc": "★ 5 层 persona 结构：core_traits / speech / body_language / catchphrase / habits",
+          "core_traits": ["谨慎", "谋略", "内敛", "重情义不冲动"],
+          "speech": {
+            "tempo": "比平均慢半拍 - 先思考再开口",
+            "sentence_avg_length": 13,
+            "uses_metaphor": "rarely",
+            "shows_emotion_via": "动作 / 沉默 / 0.3 秒延迟，几乎不用『我感到…』"
+          },
+          "body_language": {
+            "stress_tells": ["指甲刮拇指关节", "下颌微紧", "右手摸 ghost 物件"],
+            "casual_tells": ["走路靠墙", "进门先扫一圈"]
+          },
+          "catchphrase": [
+            {"phrase": "嗯", "scene": "回应同事 / 不想多说时", "frequency": "high"},
+            {"phrase": "再说", "scene": "推迟决定 / 拖时间时", "frequency": "medium"},
+            {"phrase": "我得想想", "scene": "面对压力 / 重要选择时", "frequency": "medium"},
+            {"phrase": "看情况", "scene": "回应不确定的事时", "frequency": "low"}
+          ],
+          "habits": [
+            "每天到办公室先冲一杯廉价饮料（5 元那种）",
+            "永远把手机调静音",
+            "睡前刷一次余额（与 ghost『缺钱』关联）"
+          ]
+        },
+        "anti_patterns": [
+          "禁止『冲动行事』类描写（违背 core_traits 谨慎）",
+          "禁止大喊大叫 / 拍桌怒吼（违背内敛）",
+          "禁止直白情绪词『感到愤怒/欣喜若狂』（违背 shows_emotion_via 动作派）",
+          "禁止『不假思索』类副词（违背谋略）"
+        ]
+      },
+      "knowledge": {
+        "_doc": "★ knowledge 认识论时间线：knows_now / doesnt_know_yet（标 ME 解锁点）/ will_learn（标 ch + what）",
+        "knows_now": ["异常局编制规则", "<前职业技能>", "日常生活信息"],
+        "doesnt_know_yet": [
+          "PRIME_ANTAGONIST 势力存在（中期 ME 后）",
+          "原 T-7 死因细节（早期 ME 后）",
+          "自己被远距离观察（中点 ME 后）",
+          "ghost 与异常事件的潜在关联（终卷揭密）",
+          "历史上 N 个临时工全部死亡（早期通过 MENTOR_NPC）"
+        ],
+        "will_learn": [
+          {"ch": 1, "what": "原身份已死 + 自己穿入/顶包"},
+          {"ch": 2, "what": "异常局基本流程 + T-7 编号"},
+          {"ch": 8, "what": "历史临时工全死 + 反派名字（通过 MENTOR_NPC）"},
+          {"ch": 18, "what": "影类实体存在 + 多身体首次启动 2 分身"},
+          {"ch": 30, "what": "DEUTERAGONIST 真实序列身份"},
+          {"ch": 55, "what": "PRIME_ANTAGONIST 真实身份"}
+        ]
+      },
+      "offscreen": {
+        "_doc": "★ 声明式 offscreen actions：填了必须下游消费（注入→写作→自评→检测），否则=断层",
+        "actions": [
+          {"ch_range": [1, 60], "what": "每周一次回老家看望父母（电话）", "consequence": "维持 ghost 情感锚定"},
+          {"ch_range": [1, 100], "what": "保持原身份所有惯例（通勤卡/打卡/账户）以免被察觉", "consequence": "降低被怀疑速度"}
+        ]
+      },
+      "stress_layer_ref": "_数据库/主角压力档.json"
+    },
+    {
+      "id": "DEUTERAGONIST",
+      "name": "DEUTERAGONIST",
+      "name_aliases": ["林组", "她"],
+      "role": "deuteragonist",
+      "propp_function": "helper",
+      "age": 28,
+      "occupation_now": "异常局某序列 3 级 + 主角直属组长",
+      "_appearance": {
+        "build": "<干练型身材>",
+        "face": "<习惯不笑的冷脸特征>",
+        "habit": "永远穿深色风衣 + 一枚 ghost 关联物件（如妹妹遗物银色细圆环）"
+      },
+      "ghost": {
+        "wound": "<亲人被异常实体吞噬时自己在场但能力不够无法救>",
+        "_writer_hint": "用一个遗物物件（银圆环）+ 下意识动作（转动圆环）暗示，不直接讲"
+      },
+      "voice_pack": {
+        "persona_layers": {
+          "core_traits": ["外冷内热", "高效", "对体系怀疑但仍执行", "对主角有未明说的探究欲"],
+          "speech": {
+            "tempo": "正常但句子普遍短",
+            "sentence_avg_length": 8,
+            "uses_metaphor": "almost_never",
+            "shows_emotion_via": "递东西（咖啡/资料/雨伞）+ 转身离开"
+          },
+          "body_language": {
+            "stress_tells": ["转动 ghost 圆环", "下意识摸口袋的烟（已戒）"],
+            "casual_tells": ["读资料时手指敲桌"]
+          },
+          "catchphrase": [
+            {"phrase": "别看，转身走", "scene": "在陌生异常事件现场带新人时", "frequency": "high"},
+            {"phrase": "听我的", "scene": "判断与主角不同时", "frequency": "medium"},
+            {"phrase": "下次别熬", "scene": "递咖啡时", "frequency": "medium"}
+          ],
+          "habits": ["每天早 8 点冲意式黑咖啡", "档案室留到 19:00", "周末失踪（暗中调查原身份死因）"]
+        },
+        "anti_patterns": [
+          "禁止温柔细语 / 撒娇 / 长篇情话（违背外冷）",
+          "禁止傻白甜 / 帮倒忙（违背高效）",
+          "禁止直白告白（违背她的克制）"
+        ]
+      },
+      "knowledge": {
+        "knows_now": ["异常局完整层级", "本序列前 3 阶能力", "主角是新临时工", "C 级以下处置流程"],
+        "doesnt_know_yet": [
+          "主角不是原身份（早期 clock 满后摊牌）",
+          "主角会多身体（某救援事件触发）",
+          "PRIME_ANTAGONIST 存在（中期 ME 后）"
+        ],
+        "will_learn": [
+          {"ch": 30, "what": "主角会多身体（救援事件触发）"},
+          {"ch": 55, "what": "主角拒绝反派招揽"},
+          {"ch": 80, "what": "PRIME_ANTAGONIST 明面身份"}
+        ]
+      },
+      "offscreen": {
+        "actions": [
+          {"ch_range": [1, 40], "what": "周末私下调查原身份死因 / 翻档案", "consequence": "对应怀疑 clock 每章 +1"},
+          {"ch_range": [1, 100], "what": "每月匿名捐款给受害家属互助会", "consequence": "ghost 持续锚定"}
+        ]
+      }
+    },
+    {
+      "id": "MENTOR_NPC",
+      "name": "MENTOR_NPC",
+      "name_aliases": ["周老", "老档案"],
+      "role": "mentor",
+      "propp_function": "helper",
+      "age": 58,
+      "occupation_now": "异常局档案员（30 年）+ 历史临时工督导（已撤销）",
+      "_appearance": {
+        "build": "<偏胖，穿洗到发白的旧衣>",
+        "face": "<老花镜挂胸前细绳>",
+        "habit": "永远抽特定品牌软包烟 / 一处异常事件遗留的身体残缺（如左手少一节小指）"
+      },
+      "ghost": {
+        "wound": "<多年前带过的年轻临时工因自己判断失误惨死，只剩遗物>",
+        "_writer_hint": "身体残缺就是当时为救人留下的。讲古时禁止直白讲，用『摸残缺处』暗示"
+      },
+      "voice_pack": {
+        "persona_layers": {
+          "_doc": "★ 体制内话术范式：讲话像聊家常实则全是暗喻——uses_metaphor=constantly",
+          "core_traits": ["老练", "怀疑体系但已认命", "对新人冷淡但暗中关注", "讲话像聊家常实则全是暗喻"],
+          "speech": {
+            "tempo": "缓慢 + 中间长停顿",
+            "sentence_avg_length": 18,
+            "uses_metaphor": "constantly - 用旧年代故事代替直接劝告",
+            "shows_emotion_via": "点烟 / 沉默 / 翻档案"
+          },
+          "body_language": {
+            "stress_tells": ["摸身体残缺处", "点烟手指微抖"],
+            "casual_tells": ["讲话时眯眼"]
+          },
+          "catchphrase": [
+            {"phrase": "我跟你说啊", "scene": "讲古开场", "frequency": "high"},
+            {"phrase": "活下来再说", "scene": "对新人的最后告别", "frequency": "medium"},
+            {"phrase": "他们当年也是这么想的", "scene": "听新人豪言时", "frequency": "low"}
+          ],
+          "habits": ["每天 7:30 进档案室", "20:00 锁门但周末偷偷回来", "午饭单独吃食堂窗口最里"]
+        },
+        "anti_patterns": [
+          "禁止说教 / 长篇大论道理（违背『用故事代替劝告』）",
+          "禁止激动 / 大笑（违背认命的疲倦）",
+          "禁止主动暴露过去那桩惨剧（留到中后期 ME）"
+        ]
+      },
+      "knowledge": {
+        "knows_now": ["异常局完整档案（含 N 个历史临时工全死）", "PRIME_ANTAGONIST 名字 + 部分目击档案", "原身份死因细节（但不主动说）", "体制高层与外部的灰色交集"],
+        "doesnt_know_yet": ["主角会多身体（中期 ME 后）", "PRIME_ANTAGONIST 真实身份（终卷）"],
+        "will_learn": [
+          {"ch": 30, "what": "主角会多身体"},
+          {"ch": 65, "what": "PRIME_ANTAGONIST 主动接触主角"}
+        ]
+      },
+      "offscreen": {
+        "actions": [
+          {"ch_range": [1, 200], "what": "每月固定日去逝者墓上香", "consequence": "ghost 持续 + 偶尔被同事撞见"},
+          {"ch_range": [1, 100], "what": "悄悄收集提及反派的旧档案", "consequence": "等待合适新人传承"}
+        ]
+      }
+    },
+    {
+      "id": "AUTHORITY_NPC",
+      "name": "AUTHORITY_NPC",
+      "name_aliases": ["王局", "局长"],
+      "role": "complex_authority",
+      "propp_function": "false_hero",
+      "age": 49,
+      "occupation_now": "异常局某楼层负责人（副厅级）",
+      "_appearance": {
+        "build": "<标准身材，头发梳得一丝不苟>",
+        "face": "<少表情，笑时只动嘴角不动眼>",
+        "habit": "永远穿深灰西装 + 体制象征别针（如国徽 lapel pin）+ 一块机械表"
+      },
+      "ghost": {
+        "wound": "<年轻时差点因下属死亡被追责，从此信『保住编制就是保住国家』>",
+        "_writer_hint": "『编制神话』是表面动机，实际更复杂（与反派势力有灰色合作）——false_hero 型不可早暴露"
+      },
+      "voice_pack": {
+        "persona_layers": {
+          "core_traits": ["精明", "服从体系", "对新人观察细致", "话不多但每句有重量"],
+          "speech": {
+            "tempo": "稳定 - 不快不慢",
+            "sentence_avg_length": 11,
+            "uses_metaphor": "occasionally - 多用官方话语",
+            "shows_emotion_via": "停顿 + 翻文件 + 不接话"
+          },
+          "body_language": {
+            "stress_tells": ["摩擦体制象征别针"],
+            "casual_tells": ["看表（提醒自己时间）"]
+          },
+          "catchphrase": [
+            {"phrase": "上面有上面的考虑", "scene": "解释体系决定时", "frequency": "high"},
+            {"phrase": "你要明白", "scene": "教训下属时", "frequency": "medium"},
+            {"phrase": "好好干", "scene": "结束对话时", "frequency": "medium"}
+          ]
+        },
+        "anti_patterns": [
+          "禁止直白反派化（体系内最大反派型最容易写成 cardboard）",
+          "禁止激烈情绪（违背精明 + 体系化）",
+          "禁止过早暴露与反派势力的灰色合作（留到中后期 ME）"
+        ]
+      },
+      "knowledge": {
+        "knows_now": ["全部正式编制档案", "历史临时工死亡的官方解释（与 MENTOR_NPC 私下版不同）", "PRIME_ANTAGONIST 势力存在（但不知主角是目标）", "主角简历可疑（早期起暗中调阅）"],
+        "doesnt_know_yet": ["主角会多身体（中期通过反派得知）", "主角不是原身份（中期才确认）"],
+        "will_learn": [
+          {"ch": 22, "what": "主角确实不正常（怀疑 clock 满后）"},
+          {"ch": 55, "what": "反派对主角的兴趣"}
+        ]
+      },
+      "offscreen": {
+        "actions": [
+          {"ch_range": [5, 22], "what": "暗中调阅主角档案 + 私下核对原身份体检报告", "consequence": "怀疑 clock 每章 +1"},
+          {"ch_range": [50, 100], "what": "与『上面』的非正式会议（实为与反派势力代表）", "consequence": "中期暴露灰色合作"}
+        ]
+      }
+    },
+    {
+      "id": "PRIME_ANTAGONIST",
+      "name": "PRIME_ANTAGONIST",
+      "name_aliases": ["先生", "西装男"],
+      "role": "primary_antagonist",
+      "propp_function": "villain",
+      "age": "未知（外形 35 岁左右）",
+      "occupation_now": "神秘学序列 0 之一 + 隐世大势力领袖",
+      "_appearance": {
+        "build": "<极度对称、不真实的瘦削身形>",
+        "face": "<线条干净到不真实 + 永远无表情 + 不正常的浅色眼睛>",
+        "habit": "永远同一套深色三件套西装 + 怀表 + 不戴任何饰品"
+      },
+      "ghost": {
+        "wound": "<上一代『同类金手指持有者』——当年也走过主角的路但选了相反方向>",
+        "_writer_hint": "终卷揭密。前期不能暗示——必须看上去是纯反派"
+      },
+      "voice_pack": {
+        "persona_layers": {
+          "core_traits": ["绝对冷静", "讲他自己的道理", "把主角当镜像看待", "不发怒 - 用沉默施压"],
+          "speech": {
+            "tempo": "极慢 - 每句之间 1-2 秒留白",
+            "sentence_avg_length": 9,
+            "uses_metaphor": "philosophically",
+            "shows_emotion_via": "几乎不流露 - 偶尔『微微转头』是极限"
+          },
+          "body_language": {
+            "stress_tells": [],
+            "casual_tells": ["开怀表看时间"]
+          },
+          "catchphrase": [
+            {"phrase": "你不需要这么累", "scene": "招揽时", "frequency": "low"},
+            {"phrase": "我观察你很久了", "scene": "首次现身时", "frequency": "once"}
+          ]
+        },
+        "anti_patterns": [
+          "禁止任何情绪化（违背绝对冷静）",
+          "禁止长篇大论（违背极慢节奏）",
+          "禁止 BOSS 式狂笑 / 反派 cliché",
+          "禁止中点 ME 前正面出场"
+        ]
+      },
+      "knowledge": {
+        "knows_now": ["全部 - 全书最知情角色之一", "主角是上一代失败实验后的天然『多身体者』"],
+        "doesnt_know_yet": ["主角拒绝招揽后真能撑到终局（他低估了）"],
+        "will_learn": [{"ch": 200, "what": "主角与他的根本差异（信念）"}]
+      },
+      "offscreen": {
+        "actions": [
+          {"ch_range": [1, 60], "what": "远距离观察主角 / 安排下属影类实体试探", "consequence": "观察 clock 每章 +1"},
+          {"ch_range": [60, 150], "what": "招揽失败后全面反击 / 调动序列体系压主角", "consequence": "中后期主线压力"}
+        ]
+      }
+    }
+  ],
+  "_consumption_chain": {
+    "produced_by": "/distill-character 蒸馏角色时定义 + outline 初始化",
+    "consumed_by": [
+      "build_manifest._collect_character_card() 注入 manifest（仅本章相关角色）",
+      "writer step 0：消费 voice_pack 5 层 + knowledge.will_learn（防 FUTURE_KNOWLEDGE_LEAK）+ offscreen",
+      "voice-keeper：catchphrase scene+frequency 分布检测（防单一化锁第一个）",
+      "save-state：更新 knowledge.knows_now / offscreen consequence"
+    ]
+  }
+}

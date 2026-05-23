@@ -1,0 +1,152 @@
+{
+  "_schema": "ensemble_layer_v21",
+  "_doc": "Stardew Valley + Hades II 借鉴：每核心配角的『关系档位强制揭密 heart_events』+『日常 schedule』。让群像配角真的活着、且揭密节奏不靠 AI 凭感觉。",
+  "generated_at": "2026-05-16",
+
+  "characters": {
+    "陆爸": {
+      "heart_events": [
+        {
+          "event_id": "HE_lubobo_01",
+          "trigger_at": {"trust": 9},
+          "tier_label": "确认派",
+          "reveal": "陆爸在某个夜晚醉酒后，第一次说出'你不是我亲生的'——但醒来又否认",
+          "physical_evidence": ["醉态描写", "夜晚时间", "次日不肯承认"],
+          "consumed": false,
+          "_note": "ch 10-15 之间触发，trust 已是 9"
+        },
+        {
+          "event_id": "HE_lubobo_02",
+          "trigger_at": {"trust": 12},
+          "tier_label": "深信派",
+          "reveal": "陆爸主动给陆衍一个铁皮盒，说'你母亲让我等你长到 30 岁再给你'",
+          "physical_evidence": ["铁皮盒外观", "里面具体什么", "陆爸交付时的话"],
+          "consumed": false,
+          "_note": "对应 fs_铁皮盒交付 大事件"
+        }
+      ],
+      "schedule": {
+        "_doc": "陆爸日常时间表 — 主角主动找时按这个决定地点和状态",
+        "weekday_morning": "在自家阳台浇花（5-7 盆花，按季节不同）",
+        "weekday_afternoon": "退休赋闲，看本地报纸 / 跟邻居老张下象棋",
+        "weekday_evening": "做菜 / 看新闻联播 / 接陆衍电话",
+        "weekend": "去本地早市 / 偶尔去陆衍母亲的墓地",
+        "special_dates": {
+          "陆衍母亲忌日（5月13日）": "独自去墓地，不接电话",
+          "中秋": "等陆衍回老家"
+        }
+      },
+      "tier_unlocks": {
+        "trust_5_6": "闲聊家常",
+        "trust_7_9": "肯说陆衍小时候的事",
+        "trust_10_12": "肯说陆衍母亲的事",
+        "trust_13+": "肯说陆衍真正的身世"
+      }
+    },
+    "老周": {
+      "heart_events": [
+        {
+          "event_id": "HE_laozhou_01",
+          "trigger_at": {"affinity": 6, "trust": 7},
+          "tier_label": "信任派",
+          "reveal": "老周在午夜便利店外抽烟时，告诉陆衍'吴启鸣本来不该死'——但说完不肯展开",
+          "physical_evidence": ["午夜时间", "便利店光线", "抽烟动作"],
+          "consumed": false,
+          "_note": "ch 6-10 之间，开启吴启鸣死因调查"
+        },
+        {
+          "event_id": "HE_laozhou_02",
+          "trigger_at": {"trust": 9},
+          "tier_label": "破釜沉舟派",
+          "reveal": "老周告知自己其实是十年前神性股权制黑名单的逃亡者，吴启鸣是他师父",
+          "physical_evidence": ["证据材料", "他自己的伤疤", "改名前的真名"],
+          "consumed": false,
+          "_note": "对应 ME_005 老周身份揭穿"
+        }
+      ],
+      "schedule": {
+        "weekday_morning": "在出租屋睡觉（凌晨才回）",
+        "weekday_afternoon": "出租屋整理'吴启鸣案'文件 / 接小生意",
+        "weekday_evening": "在'夜归人便利店'兼职 / 收集情报",
+        "weekday_late_night": "在便利店外抽烟思考 / 等陆衍",
+        "special_dates": {
+          "吴启鸣忌日": "去吴启鸣坠楼地点献花"
+        }
+      },
+      "tier_unlocks": {
+        "trust_3_5": "客气配合",
+        "trust_6_8": "肯主动提供情报",
+        "trust_9_12": "肯告知自己身世"
+      }
+    },
+    "林晚秋": {
+      "heart_events": [
+        {
+          "event_id": "HE_linwanqiu_01",
+          "trigger_at": {"affinity": 6},
+          "tier_label": "破冰派",
+          "reveal": "林晚秋在加班深夜独自靠在窗边喝水时，破天荒地说出一句关于自己童年的事——但立刻找借口岔开",
+          "physical_evidence": ["加班场景", "玻璃窗倒影", "她的具体那句话"],
+          "consumed": false,
+          "_note": "ch 8-15 之间，给反转线埋情感线"
+        }
+      ],
+      "schedule": {
+        "weekday_morning": "提前 30 分钟到办公室（同事都还没来）",
+        "weekday_afternoon": "正常工作 / 频繁去茶水间",
+        "weekday_evening": "极少加班（除非任务需要）/ 通常 7 点准时离开",
+        "weekday_night": "回到她在公司附近的小公寓 / 写监视报告",
+        "special_dates": {
+          "她真正的生日（10 月 14 日）": "下班后独自去某家小酒馆点一杯特定酒"
+        }
+      },
+      "tier_unlocks": {
+        "affinity_3_5": "礼貌同事",
+        "affinity_6_8": "偶尔流露真实情绪",
+        "affinity_9+": "可能开始动摇任务"
+      }
+    },
+    "顾沉": {
+      "heart_events": [
+        {
+          "event_id": "HE_guchen_01",
+          "trigger_at": {"respect": 8},
+          "tier_label": "认可派",
+          "reveal": "顾沉在董事会前主动私下约陆衍，承认'当年我也是被这样招进来的'",
+          "physical_evidence": ["私下场所（不是 38 楼）", "顾沉态度变化", "他说的那句话"],
+          "consumed": false,
+          "_note": "ch 50+ 招安线推进时，反派人格化"
+        }
+      ],
+      "schedule": {
+        "weekday_morning": "在 38 楼办公室处理文件 / 召开晨会",
+        "weekday_afternoon": "见客户 / 出席行业活动",
+        "weekday_evening": "私人健身房 / 跟董事们晚餐",
+        "weekday_night": "通常在 38 楼套房过夜 / 偶尔回市中心私宅",
+        "special_dates": {
+          "南海资本董事会大议": "全天在 38 楼会议室"
+        }
+      },
+      "tier_unlocks": {
+        "respect_3_5": "公事公办",
+        "respect_6_7": "私下小礼物试探",
+        "respect_8+": "讲自己往事"
+      }
+    }
+  },
+
+  "_field_doc": {
+    "heart_events": "档位事件清单 — relationship_evaluator 检查 trigger_at 是否满足 → 满足且 consumed=false 强制下章触发",
+    "schedule": "NPC 日常时间表 — 主角主动找时按这个决定地点和状态",
+    "tier_unlocks": "档位语义说明 — voice-keeper 据此判断本档可不可解锁的对话深度"
+  },
+
+  "_consumption_chain": {
+    "produced_by": "/distill-character 蒸馏角色时定义 + 用户/researcher 自由扩展 heart_events",
+    "consumed_by": [
+      "build_manifest._collect_ensemble_layer() 注入 manifest（仅本章相关 NPC）",
+      "writer step 0v：感知 schedule → 主角找 NPC 时按对应时段写场景",
+      "save-state.step9 relationship_evaluator.py：检查 trigger_at 满足 → 标 next_chapter_must_reveal"
+    ]
+  }
+}

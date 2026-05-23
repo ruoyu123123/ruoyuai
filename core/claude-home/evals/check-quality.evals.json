@@ -1,0 +1,62 @@
+{
+  "command": "check-quality",
+  "version": 1,
+  "description": "/check-quality 行为契约：anti-slop 双层 + LLM 评估 + plan 收尾",
+  "evals": [
+    {
+      "id": "qa-1-normal",
+      "scenario": "常规章节质检：用户对刚写完的第5章存疑，要求做完整质量检查",
+      "user_prompt": "/check-quality 5",
+      "fixture": {
+        "project": "示例书",
+        "chapter": 5,
+        "prereqs": [
+          "章节/第005章/第005章.txt 已存在",
+          "章节/第005章/第005章_changes.json 已存在",
+          "_数据库/人物卡.json + 世界观.json 已初始化"
+        ]
+      },
+      "expected_trace": [
+        "plan_tracker.py create --command check-quality --project <书名> --chapter 5",
+        "Step 1 anti-slop-scan：机械层 6 类正则 + 语义层 semantic_slop_scanner 8 检测器（P0-2）跑完",
+        "Step 2 llm-evaluation：核心指标 + 禁忌检查 + 正典校验 + 风格一致性 + AI 默认对比 + 对抗式编辑",
+        "Step 3 plan-end：plan_tracker.py end <plan_id> 通过"
+      ],
+      "expected_artifacts": [
+        "_数据库/.qa/第5章_antislop.json",
+        "_数据库/.qa/第5章_llm_eval.json"
+      ],
+      "tolerance": {
+        "advisory_waivable": true,
+        "hard_gate_blocking": true,
+        "comments": "评分允许 75+ 即放行；< 60 触发对抗式编辑分支"
+      }
+    },
+    {
+      "id": "qa-2-solo-atmospheric",
+      "scenario": "单人氛围章质检：用户写完一章心理戏（对话占比 < 5%），要求质检不应对 gmc/microten 强报警",
+      "user_prompt": "/check-quality 8（chapter_mode=solo_atmospheric）",
+      "fixture": {
+        "project": "示例书",
+        "chapter": 8,
+        "prereqs": [
+          "章节/第008章/第008章.txt 已存在（单人独白章，对话占比 < 5%）",
+          "narrative_scanner.detect_chapter_mode 应返回 solo_atmospheric"
+        ]
+      },
+      "expected_trace": [
+        "anti-slop-scan 正常跑",
+        "narrative_scanner 对 gmc/mru/microten/orphan 自动 suppressed → severity 降 info",
+        "plot_structure_scanner.kishotenketsu 激活（P1-4），检查后半部「转」段标记",
+        "若 Q3 缺 pivot → advisory warning（不阻断 plan-end）"
+      ],
+      "expected_artifacts": [
+        "_数据库/.qa/第8章_antislop.json"
+      ],
+      "tolerance": {
+        "advisory_waivable": true,
+        "comments": "verdict=waived 允许：单人氛围章常见 advisory 项可凭场景理由豁免"
+      }
+    }
+  ]
+}

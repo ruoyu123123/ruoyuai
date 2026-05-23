@@ -1,0 +1,13 @@
+{
+  "audit_ts": "2026-05-16T19:31:11",
+  "checks": {
+    "PLAN_SCRIPT_MISSING": []
+  },
+  "summary": {
+    "scripts_total": 109,
+    "agents_total": 11,
+    "commands_total": 44,
+    "plans_total": 6,
+    "PLAN_SCRIPT_MISSING_count": 0
+  }
+}

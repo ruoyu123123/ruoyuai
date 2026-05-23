@@ -1,0 +1,989 @@
+#!/usr/bin/env python3
+"""
+plan_tracker.py — 多步命令的强制规划与执行追踪系统（Phase 1）
+
+设计目标
+--------
+让小说系统的多步命令（save-state / distill-style / write-chapter /
+check-quality / outline / reconcile）在 Agent 或命令执行时**无法跳步**：
+
+- 命令开始前必须 create 一个 plan，拿到 plan_id；
+- 每完成一步必须 step <plan_id> --n N，脚本校验 expected_outputs；
+- 命令结束时必须 end <plan_id>，检查所有 required 步骤已完成；
+- 任何中途中止必须 abort <plan_id> --reason，留下审计痕迹。
+
+与 save_state.py 内置 WAL 的关系
+-------------------------------
+- WAL 是 save-state 单命令内的细粒度断点恢复（completed_steps）；
+- plan_tracker 是**所有命令**统一的强制规划层（plan_id + verified_outputs）；
+- 二者**共存不冲突**——本工具不动 WAL 的任何字段；attestation 也只加 plan
+  JSON 的 `_attestation` 字段，不触碰 WAL（见 lessons L8.4）。
+
+防篡改 attestation（P1-1）
+-------------------------
+plan_tracker 是 plan JSON 的【唯一合法写入者】。每次合法写盘都把 plan 规范化
+内容的 SHA-256 写进 `plan["_attestation"]`；每次写前读校验，不符 → 阻断。
+任何不经 plan_tracker 的修改（Agent 直接 Edit / 旁路脚本 / prompt 注入写盘，
+典型是「伪造 step 状态骗过跳步防御」）都会被 verify_attestation 抓出。
+合法手动改 plan 后用 `reattest` 重新盖章。详见下方 attestation 段注释。
+
+CLI 子命令
+----------
+- create   --command <cmd> --project <name> [--chapter <n>] [--key <k>]
+- step     <plan_id> --n <step_num> [--output <file>] [--skip-output]
+                     [--tokens N] [--duration-ms N]   # P2-8：subagent 成本追踪
+- end      <plan_id>
+- status   <plan_id>
+- list     [--active]
+- abort    <plan_id> --reason <msg>
+- verify   <plan_id>                 # P1-1：校验防篡改 attestation
+- reattest <plan_id>                 # P1-1：合法手动改 plan 后重新盖章
+
+Python API
+----------
+- create_plan(command, project, **kwargs) -> str
+- step_complete(plan_id, n, output=None, skip_output=False) -> bool
+- end_plan(plan_id) -> dict
+- get_plan(plan_id) -> dict
+- list_plans(active_only=False) -> list[dict]
+- abort_plan(plan_id, reason) -> dict
+- verify_plan(plan_id) -> str         # "ok"/"tampered"/"unattested"/"not_found"
+- reattest_plan(plan_id) -> dict
+- verify_attestation(plan: dict) -> str  # dict 级校验
+
+存储位置
+--------
+- 模板：   <REPO_ROOT>/core/claude-home/plans/<command>.plan.json
+- 运行时：
+    * 项目相关（能解析项目根）→ <project_root>/_数据库/.plans/<plan_id>.json
+    * 蒸馏风格项目          → <style_root>/.plans/<plan_id>.json
+    * 无项目                → <REPO_ROOT>/core/claude-home/.plans/<plan_id>.json
+
+plan_id 格式
+-----------
+{project}_{key}_{command}_{YYYYMMDDTHHMMSS}
+其中 key 优先取 chapter（chN），否则取 --key 参数，否则取 'main'。
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+from copy import deepcopy
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+
+# ============ 常量 / 路径 ============
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+TEMPLATES_DIR = REPO_ROOT / "core" / "claude-home" / "plans"
+PROJECTS_DIR = REPO_ROOT / "workspace" / "novels"
+STYLES_DIR = REPO_ROOT / "workspace" / "styles"
+GLOBAL_PLANS_DIR = REPO_ROOT / "core" / "claude-home" / ".plans"
+
+STATUS_PENDING = "pending"
+STATUS_IN_PROGRESS = "in_progress"
+STATUS_COMPLETED = "completed"
+STATUS_SKIPPED = "skipped"
+STATUS_FAILED = "failed"
+STATUS_ABORTED = "aborted"
+
+KNOWN_COMMANDS = (
+    "save-state",
+    "distill-style",
+    "check-quality",
+    "write-chapter",
+    "outline",
+    "reconcile",
+    "init-real-grade",  # v22.5 新书项目真品级初始化（禁最小可用）
+    "ecas-v23-transition",  # v23 ECAS 全面转向工程（DCAS → 事件簇）
+    "write-event-cluster",  # v23 ECAS 写单个事件簇（替代 write-chapter）
+)
+
+
+# ============ JSON IO（统一 UTF-8 + ensure_ascii=False） ============
+
+def _json_dump_safe(data: Any) -> str:
+    """写盘前的自检：JSON 不可序列化直接 raise。"""
+    try:
+        return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=False)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"[plan_tracker] JSON 序列化失败：{exc}") from exc
+
+
+def _load_json(path: Path, default: Any = None) -> Any:
+    if not path.exists():
+        return default
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _save_json(path: Path, data: Any) -> None:
+    text = _json_dump_safe(data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+# ============ 防篡改 attestation（P1-1，借鉴 planning-with-files）============
+#
+# 威胁模型：plan_tracker.py 是 plan JSON 的【唯一合法写入者】。任何不经过
+# plan_tracker 的修改（Agent 直接 Edit、旁路脚本、prompt 注入写盘）——典型是
+# 「伪造 step 状态骗过跳步防御」——都应被检测到。
+#
+# 机制：每次合法写盘（create/step/end/abort）把 plan 规范化内容的 SHA-256 写进
+# plan["_attestation"]；每次写前读（step/end/abort）校验，不符 → raise
+# PlanTamperedError 阻断。只读操作（status/list/get_plan）仅 stderr 警告不阻断。
+#
+# 为什么用 inline 字段而非 sidecar 文件：
+#   - 单文件原子写，无「写完 JSON 没写 sidecar」的崩溃窗口（L8.4「中途断电」安全）
+#   - 无孤儿 sidecar 需要清理（cleanup 逻辑只认 *.json）
+#   - 真实威胁（naive 直接编辑）inline/sidecar 都能抓；高级攻击者两者都防不住
+# 规范化哈希（sort_keys + 紧凑分隔符，排除 _attestation 自身）→ 与磁盘 indent
+# 格式解耦：重新美化/换行不会误判，只有【内容】变化才触发。
+
+ATTESTATION_KEY = "_attestation"
+
+
+class PlanTamperedError(Exception):
+    """plan JSON 内容与 attestation 不符 —— 被 plan_tracker 之外的途径改过。"""
+
+
+def _canonical_plan_bytes(plan: dict) -> bytes:
+    """attestation 哈希的输入：规范化 JSON 字节流，排除 _attestation 字段自身。"""
+    payload = {k: v for k, v in plan.items() if k != ATTESTATION_KEY}
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+
+
+def _compute_attestation(plan: dict) -> str:
+    return hashlib.sha256(_canonical_plan_bytes(plan)).hexdigest()
+
+
+def _attest(plan: dict) -> dict:
+    """给 plan 盖章（原地写入 _attestation 字段）。所有合法写盘前调用。"""
+    plan[ATTESTATION_KEY] = {
+        "sha256": _compute_attestation(plan),
+        "attested_at": datetime.now().isoformat(timespec="seconds"),
+        "by": "plan_tracker",
+    }
+    return plan
+
+
+def verify_attestation(plan: dict) -> str:
+    """校验 plan dict 的 attestation。返回 "ok" / "tampered" / "unattested"。
+    unattested = 旧 plan（本功能引入前创建）—— 向后兼容，调用方不应阻断。"""
+    if not isinstance(plan, dict):
+        return "unattested"
+    att = plan.get(ATTESTATION_KEY)
+    if not isinstance(att, dict) or not att.get("sha256"):
+        return "unattested"
+    return "ok" if att["sha256"] == _compute_attestation(plan) else "tampered"
+
+
+_TAMPER_MSG = (
+    "[plan_tracker] ⚠️ 防篡改校验失败：plan 内容与 attestation 不符。\n"
+    "  含义：此 plan JSON 被 plan_tracker 之外的途径改过"
+    "（Agent 直接编辑 / 旁路脚本 / 注入写盘）。\n"
+    "  若是你手动合理修改的 → 跑 `plan_tracker.py reattest <plan_id>` 重新盖章；\n"
+    "  否则这是一次跳步/伪造尝试，已阻断。"
+)
+
+
+def _save_plan(path: Path, plan: dict) -> None:
+    """plan 专用写盘：盖 attestation 章后落盘。所有 plan 写操作必须走这里。"""
+    _attest(plan)
+    _save_json(path, plan)
+
+
+def _load_plan(path: Path, *, for_write: bool = False) -> dict:
+    """plan 专用读盘 + 防篡改校验。
+      for_write=True （step/end/abort 写前读）：tampered → raise PlanTamperedError
+      for_write=False（status/get_plan 只读） ：tampered → 仅 stderr 警告，不阻断
+      unattested（旧 plan）：两种模式都放行（向后兼容），下次写入时自动盖章。
+    """
+    plan = _load_json(path)
+    if not isinstance(plan, dict):
+        return plan
+    state = verify_attestation(plan)
+    if state == "tampered":
+        full_msg = f"{_TAMPER_MSG}\n  文件：{path}"
+        if for_write:
+            raise PlanTamperedError(full_msg)
+        print(full_msg, file=sys.stderr)
+    return plan
+
+
+# ============ 项目根解析 ============
+
+def resolve_project_root(project: str) -> Path | None:
+    """根据 --project 推断项目根：先查 projects/，再查 styles/。
+
+    返回 None 表示找不到对应项目（命令仍可继续，plan 落到 GLOBAL_PLANS_DIR）。
+    """
+    if not project:
+        return None
+    candidate_a = PROJECTS_DIR / project
+    if candidate_a.exists():
+        return candidate_a
+    candidate_b = STYLES_DIR / project
+    if candidate_b.exists():
+        return candidate_b
+    return None
+
+
+def runtime_plans_dir(project: str | None) -> Path:
+    """运行时 plan.json 的存放目录。"""
+    root = resolve_project_root(project) if project else None
+    if root is None:
+        return GLOBAL_PLANS_DIR
+    # 项目根下：小说项目用 _数据库/.plans/，风格库用 .plans/
+    if (root / "_数据库").exists():
+        return root / "_数据库" / ".plans"
+    return root / ".plans"
+
+
+# ============ 模板加载 + 占位符替换 ============
+
+def _template_path(command: str) -> Path:
+    return TEMPLATES_DIR / f"{command}.plan.json"
+
+
+def load_template(command: str) -> dict:
+    """加载命令模板。模板必须存在；不存在直接 raise。"""
+    p = _template_path(command)
+    if not p.exists():
+        raise FileNotFoundError(
+            f"[plan_tracker] 模板不存在：{p}\n"
+            f"已知模板目录：{TEMPLATES_DIR}\n"
+            f"已知命令：{KNOWN_COMMANDS}"
+        )
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"[plan_tracker] 模板 JSON 损坏：{p} — {exc}") from exc
+
+
+def _substitute(text: str, project: str, chapter: int | None, key: str | None) -> str:
+    """替换 {project} / {ch} / {ch:03d} / {key} 占位符。v17.5 加 zero-pad 支持。"""
+    if not isinstance(text, str):
+        return text
+    out = text.replace("{project}", project or "")
+    if chapter is not None:
+        out = out.replace("{ch:03d}", f"{chapter:03d}")  # 优先 zero-pad
+        out = out.replace("{ch}", str(chapter))
+    else:
+        out = out.replace("{ch:03d}", "")
+        out = out.replace("{ch}", "")
+    out = out.replace("{key}", key or "")
+    return out
+
+
+def _walk_substitute(node: Any, project: str, chapter: int | None, key: str | None) -> Any:
+    if isinstance(node, str):
+        return _substitute(node, project, chapter, key)
+    if isinstance(node, list):
+        return [_walk_substitute(x, project, chapter, key) for x in node]
+    if isinstance(node, dict):
+        return {k: _walk_substitute(v, project, chapter, key) for k, v in node.items()}
+    return node
+
+
+# ============ plan_id ============
+
+def make_plan_id(command: str, project: str, chapter: int | None, key: str | None) -> str:
+    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+    # 微秒后缀确保同秒多次创建不冲突
+    micro = datetime.now().strftime("%f")[:3]
+    if chapter is not None:
+        keypart = f"ch{chapter}"
+    elif key:
+        keypart = key
+    else:
+        keypart = "main"
+    project_part = project if project else "noproject"
+    return f"{project_part}_{keypart}_{command}_{ts}{micro}"
+
+
+# ============ Python API ============
+
+def create_plan(
+    command: str,
+    project: str,
+    chapter: int | None = None,
+    key: str | None = None,
+) -> str:
+    """创建一个 plan，返回 plan_id。"""
+    if command not in KNOWN_COMMANDS:
+        # 不强制，但给出提示——允许未来扩展新命令
+        print(f"[plan_tracker] 警告：未知命令 '{command}'，已知：{KNOWN_COMMANDS}",
+              file=sys.stderr)
+
+    # v17.5 修复：若 chapter 未指定但 key 形如 'ch001' / 'ch1' / 'ch_001'，自动解析
+    if chapter is None and key:
+        import re
+        m = re.match(r"^ch_?0*(\d+)$", key.strip(), re.IGNORECASE)
+        if m:
+            chapter = int(m.group(1))
+
+    template = load_template(command)
+    plan = _walk_substitute(deepcopy(template), project, chapter, key)
+
+    plan_id = make_plan_id(command, project, chapter, key)
+    now = datetime.now().isoformat(timespec="seconds")
+
+    plan["id"] = plan_id
+    plan["command"] = command
+    plan["project"] = project
+    plan["chapter"] = chapter
+    plan["key"] = key
+    plan["created_at"] = now
+    plan["started_at"] = now
+    plan["completed_at"] = None
+    plan["abort_reason"] = None
+
+    # 运行时字段补全
+    for step in plan.get("steps", []):
+        step.setdefault("status", STATUS_PENDING)
+        step.setdefault("verified_outputs", [])
+        step.setdefault("started_at", None)
+        step.setdefault("completed_at", None)
+        step.setdefault("error", None)
+
+    out_dir = runtime_plans_dir(project)
+    out_path = out_dir / f"{plan_id}.json"
+    _save_plan(out_path, plan)  # P1-1：创建即盖 attestation 章
+    return plan_id
+
+
+def _find_plan_path(plan_id: str) -> Path:
+    """根据 plan_id 找到运行时文件路径。
+
+    plan_id 第一段是 project，用它定位目录；找不到再扫全部备选目录。
+    """
+    project = plan_id.split("_", 1)[0] if "_" in plan_id else None
+    primary = runtime_plans_dir(project) / f"{plan_id}.json"
+    if primary.exists():
+        return primary
+    # 兜底：扫所有可能位置
+    candidates = [GLOBAL_PLANS_DIR]
+    if PROJECTS_DIR.exists():
+        for p in PROJECTS_DIR.iterdir():
+            if p.is_dir():
+                candidates.append(p / "_数据库" / ".plans")
+                candidates.append(p / ".plans")
+    if STYLES_DIR.exists():
+        for s in STYLES_DIR.iterdir():
+            if s.is_dir():
+                candidates.append(s / ".plans")
+    for c in candidates:
+        f = c / f"{plan_id}.json"
+        if f.exists():
+            return f
+    raise FileNotFoundError(f"[plan_tracker] 找不到 plan：{plan_id}")
+
+
+def get_plan(plan_id: str) -> dict:
+    # 只读：tampered 时 _load_plan 仅 stderr 警告，不阻断观测
+    return _load_plan(_find_plan_path(plan_id), for_write=False)
+
+
+def verify_plan(plan_id: str) -> str:
+    """按 plan_id 校验防篡改。返回 "ok"/"tampered"/"unattested"/"not_found"。
+    供 PreToolUse hook 调用 —— 永不抛异常（出错一律当 not_found 处理）。
+    必须用 RAW _load_json（不是 _load_plan）—— 本函数只报状态，不阻断。"""
+    try:
+        path = _find_plan_path(plan_id)
+        plan = _load_json(path)
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return "not_found"
+    if not isinstance(plan, dict):
+        return "not_found"
+    return verify_attestation(plan)
+
+
+def reattest_plan(plan_id: str) -> dict:
+    """重新盖章 —— 用于【合法】手动修改 plan 之后。返回 {plan_id, was, sha256}。
+    必须用 RAW _load_json —— reattest 的用途就是处理 tampered plan，
+    不能走会因 tampered 抛异常的 _load_plan。"""
+    path = _find_plan_path(plan_id)
+    plan = _load_json(path)
+    was = verify_attestation(plan)
+    _save_plan(path, plan)  # 重新计算 + 写入 attestation
+    return {
+        "plan_id": plan_id,
+        "was": was,
+        "sha256": plan[ATTESTATION_KEY]["sha256"][:16] + "...",
+    }
+
+
+def _find_step(plan: dict, n) -> dict:
+    """v17.10 修正：兼容 int / float / str 编号（如 '2.5' 旧模板）。"""
+    for s in plan.get("steps", []):
+        sn = s.get("n")
+        # 字符串化后比较，兼容 1 / "1" / "2.5" / 2.5
+        if str(sn) == str(n) or sn == n:
+            return s
+    raise ValueError(f"[plan_tracker] plan 中没有第 {n} 步")
+
+
+def _verify_outputs(plan: dict, step: dict, project: str | None) -> tuple[list[str], list[str]]:
+    """校验 expected_outputs 是否存在。
+
+    返回 (verified, missing)。绝对路径直接判断；相对路径以项目根为基准。
+    """
+    expected = step.get("expected_outputs", []) or []
+    verified: list[str] = []
+    missing: list[str] = []
+    project_root = resolve_project_root(project) if project else None
+
+    for raw in expected:
+        if not raw:
+            continue
+        p = Path(raw)
+        if not p.is_absolute() and project_root is not None:
+            p = project_root / raw
+        if p.exists():
+            verified.append(str(p).replace("\\", "/"))
+        else:
+            missing.append(str(p).replace("\\", "/"))
+    return verified, missing
+
+
+def step_complete(
+    plan_id: str,
+    n: int,
+    output: str | None = None,
+    skip_output: bool = False,
+    tokens: int | None = None,
+    duration_ms: int | None = None,
+) -> bool:
+    """标记第 n 步完成；如果 expected_outputs 不存在则拒绝（除非 skip_output）。
+
+    output 参数允许追加一个额外验证文件（不在模板里的）。
+    P2-8：可选 tokens / duration_ms 记录该步的 subagent 成本（cost tracking）。
+    建议主代理在 Task 完成 notification 中取 total_tokens / duration_ms 传入。
+    """
+    path = _find_plan_path(plan_id)
+    plan = _load_plan(path, for_write=True)  # P1-1：写前防篡改校验
+    step = _find_step(plan, n)
+
+    if step.get("status") == STATUS_COMPLETED:
+        # 幂等：已完成的步骤不重复执行；但允许补录 cost（如果未记录过）
+        if tokens is not None and step.get("tokens_used") is None:
+            step["tokens_used"] = int(tokens)
+        if duration_ms is not None and step.get("duration_ms") is None:
+            step["duration_ms"] = int(duration_ms)
+        if (tokens is not None or duration_ms is not None):
+            _save_plan(path, plan)  # 持久化补录的 cost
+        return True
+
+    now = datetime.now().isoformat(timespec="seconds")
+    step["started_at"] = step.get("started_at") or now
+
+    # P2-8：记录本步的 subagent 成本（可选）
+    if tokens is not None:
+        step["tokens_used"] = int(tokens)
+    if duration_ms is not None:
+        step["duration_ms"] = int(duration_ms)
+
+    # 校验 expected_outputs
+    if not skip_output:
+        verified, missing = _verify_outputs(plan, step, plan.get("project"))
+        if missing:
+            step["status"] = STATUS_FAILED
+            step["error"] = f"expected_outputs 不存在：{missing}"
+            _save_plan(path, plan)
+            raise FileNotFoundError(
+                f"[plan_tracker] 第 {n} 步 expected_outputs 缺失：{missing}\n"
+                f"如确实无需此输出，使用 --skip-output"
+            )
+        step["verified_outputs"] = verified
+
+    if output:
+        # 用户传入的额外 output 也要存在
+        op = Path(output)
+        if not op.is_absolute():
+            root = resolve_project_root(plan.get("project"))
+            if root is not None:
+                op = root / output
+        if not op.exists() and not skip_output:
+            step["status"] = STATUS_FAILED
+            step["error"] = f"--output 不存在：{op}"
+            _save_plan(path, plan)
+            raise FileNotFoundError(f"[plan_tracker] --output 不存在：{op}")
+        if op.exists():
+            verified = step.get("verified_outputs", []) or []
+            verified.append(str(op).replace("\\", "/"))
+            step["verified_outputs"] = verified
+
+    step["status"] = STATUS_COMPLETED
+    step["completed_at"] = now
+    step["error"] = None
+    _save_plan(path, plan)
+    return True
+
+
+def end_plan(plan_id: str) -> dict:
+    """完成检查。返回 {ok, missing_steps, missing_outputs}。"""
+    path = _find_plan_path(plan_id)
+    plan = _load_plan(path, for_write=True)  # P1-1：写前防篡改校验
+
+    required = set(plan.get("required_steps", []) or [])
+    optional = set(plan.get("optional_steps", []) or [])
+
+    missing_steps: list[int] = []
+    missing_outputs: list[dict] = []
+
+    for step in plan.get("steps", []):
+        n = step.get("n")
+        if n in required:
+            if step.get("status") != STATUS_COMPLETED:
+                missing_steps.append(n)
+                continue
+            verified, missing = _verify_outputs(plan, step, plan.get("project"))
+            if missing:
+                missing_outputs.append({"step": n, "missing": missing})
+
+    ok = (not missing_steps) and (not missing_outputs)
+    now = datetime.now().isoformat(timespec="seconds")
+    if ok:
+        plan["completed_at"] = now
+    plan["last_checked_at"] = now
+    _save_plan(path, plan)
+
+    # P2-8：聚合 cost（仅汇总有记录的步骤）
+    total_tokens = sum(int(s.get("tokens_used") or 0) for s in plan.get("steps", []))
+    total_duration_ms = sum(int(s.get("duration_ms") or 0) for s in plan.get("steps", []))
+    steps_with_cost = sum(1 for s in plan.get("steps", []) if s.get("tokens_used") is not None)
+
+    return {
+        "ok": ok,
+        "plan_id": plan_id,
+        "missing_steps": missing_steps,
+        "missing_outputs": missing_outputs,
+        "required_steps": sorted(required),
+        "optional_steps": sorted(optional),
+        "cost_summary": {                       # P2-8：subagent 成本汇总
+            "total_tokens": total_tokens,
+            "total_duration_ms": total_duration_ms,
+            "steps_with_cost": steps_with_cost,
+            "steps_total": len(plan.get("steps", [])),
+        },
+    }
+
+
+def abort_plan(plan_id: str, reason: str) -> dict:
+    path = _find_plan_path(plan_id)
+    plan = _load_plan(path, for_write=True)  # P1-1：写前防篡改校验
+    plan["abort_reason"] = reason
+    plan["completed_at"] = None
+    now = datetime.now().isoformat(timespec="seconds")
+    plan["aborted_at"] = now
+    for step in plan.get("steps", []):
+        if step.get("status") in (STATUS_PENDING, STATUS_IN_PROGRESS):
+            step["status"] = STATUS_ABORTED
+    _save_plan(path, plan)
+    return {"plan_id": plan_id, "aborted_at": now, "reason": reason}
+
+
+def _scan_all_plan_files() -> dict[str, Path]:
+    """扫描所有 plan.json 存放位置，返回 {plan_id_stem: file_path}。
+
+    容错：任何目录不存在都跳过，不抛异常。
+    """
+    seen: dict[str, Path] = {}
+
+    def _scan(d: Path):
+        try:
+            if not d.exists():
+                return
+            for f in d.glob("*.json"):
+                seen[f.stem] = f
+        except OSError:
+            # 目录无权限/损坏：静默跳过
+            return
+
+    _scan(GLOBAL_PLANS_DIR)
+    try:
+        if PROJECTS_DIR.exists():
+            for p in PROJECTS_DIR.iterdir():
+                if p.is_dir():
+                    _scan(p / "_数据库" / ".plans")
+                    _scan(p / ".plans")
+    except OSError:
+        pass
+    try:
+        if STYLES_DIR.exists():
+            for s in STYLES_DIR.iterdir():
+                if s.is_dir():
+                    _scan(s / ".plans")
+    except OSError:
+        pass
+    return seen
+
+
+def find_active_plans() -> list[dict]:
+    """扫描所有可能位置的 .plans 目录，返回所有活跃 plan。
+
+    返回结构：[{"path": str, "plan": dict}, ...]
+    活跃 = 未 completed_at 且未 aborted_at。
+
+    容错策略：
+    - 任何目录不存在 → 跳过
+    - 任何 JSON 损坏 → 跳过该文件
+    - 缺失关键字段 → 视为非活跃（保守）
+
+    本函数永不抛异常，最坏情况返回 []。
+    """
+    result: list[dict] = []
+    try:
+        seen = _scan_all_plan_files()
+    except Exception:
+        return result
+
+    for plan_id, f in sorted(seen.items()):
+        try:
+            d = _load_json(f)
+            if not isinstance(d, dict):
+                continue
+            is_done = bool(d.get("completed_at"))
+            is_aborted = bool(d.get("aborted_at"))
+            if is_done or is_aborted:
+                continue
+            # 防御：缺 id/steps 的 plan 直接跳过
+            if not d.get("id") or not isinstance(d.get("steps"), list):
+                continue
+            result.append({
+                "path": str(f).replace("\\", "/"),
+                "plan": d,
+                "tampered": verify_attestation(d) == "tampered",  # P1-1
+            })
+        except Exception:
+            # 损坏 JSON / IO 错误：跳过
+            continue
+    return result
+
+
+def list_plans(active_only: bool = False) -> list[dict]:
+    """列出所有 plan。active = 未 completed 也未 aborted。"""
+    seen = _scan_all_plan_files()
+
+    result: list[dict] = []
+    for plan_id, f in sorted(seen.items()):
+        try:
+            d = _load_json(f)
+        except Exception as exc:  # noqa: BLE001
+            result.append({"id": plan_id, "error": str(exc), "path": str(f)})
+            continue
+        is_done = bool(d.get("completed_at"))
+        is_aborted = bool(d.get("aborted_at"))
+        is_active = not (is_done or is_aborted)
+        if active_only and not is_active:
+            continue
+        result.append({
+            "id": d.get("id"),
+            "command": d.get("command"),
+            "project": d.get("project"),
+            "chapter": d.get("chapter"),
+            "active": is_active,
+            "completed": is_done,
+            "aborted": is_aborted,
+            "tampered": verify_attestation(d) == "tampered",  # P1-1
+            "path": str(f).replace("\\", "/"),
+        })
+    return result
+
+
+# ============ CLI ============
+
+def _cli_create(args: argparse.Namespace) -> int:
+    plan_id = create_plan(
+        command=args.command,
+        project=args.project,
+        chapter=args.chapter,
+        key=args.key,
+    )
+    print(plan_id)
+    return 0
+
+
+def _cli_step(args: argparse.Namespace) -> int:
+    try:
+        step_complete(
+            plan_id=args.plan_id,
+            n=args.n,
+            output=args.output,
+            skip_output=args.skip_output,
+            tokens=args.tokens,
+            duration_ms=args.duration_ms,
+        )
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except PlanTamperedError as exc:  # P1-1：plan 被旁路篡改，拒绝 step
+        print(str(exc), file=sys.stderr)
+        return 2
+    plan = get_plan(args.plan_id)
+    step = _find_step(plan, args.n)
+    print(f"[OK] 第 {args.n} 步 ({step.get('name')}) 已完成 "
+          f"verified={len(step.get('verified_outputs', []))}")
+    return 0
+
+
+def _cli_end(args: argparse.Namespace) -> int:
+    try:
+        res = end_plan(args.plan_id)
+    except PlanTamperedError as exc:  # P1-1：plan 被旁路篡改，拒绝 end
+        print(str(exc), file=sys.stderr)
+        return 2
+    # P2-8：cost 汇总输出（仅当至少一步记录了成本时显示）
+    cost = res.get("cost_summary", {})
+    if cost.get("steps_with_cost", 0) > 0:
+        kt = cost["total_tokens"] / 1000 if cost["total_tokens"] else 0
+        sec = cost["total_duration_ms"] / 1000 if cost["total_duration_ms"] else 0
+        print(f"  cost: {kt:.1f}K tokens, {sec:.1f}s ({cost['steps_with_cost']}/"
+              f"{cost['steps_total']} 步有成本记录)")
+    if res["ok"]:
+        print(f"[OK] plan {args.plan_id} 全部 required 步骤通过")
+        return 0
+    print(f"[FAIL] plan {args.plan_id} 未通过完成检查", file=sys.stderr)
+    if res["missing_steps"]:
+        print(f"  缺失步骤：{res['missing_steps']}", file=sys.stderr)
+    if res["missing_outputs"]:
+        for mo in res["missing_outputs"]:
+            print(f"  第 {mo['step']} 步缺输出：{mo['missing']}", file=sys.stderr)
+    return 2
+
+
+def _cli_status(args: argparse.Namespace) -> int:
+    try:
+        plan = get_plan(args.plan_id)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    total = len(plan.get("steps", []))
+    done = sum(1 for s in plan["steps"] if s.get("status") == STATUS_COMPLETED)
+    att_state = verify_attestation(plan)  # P1-1
+    att_label = {
+        "ok": "✓ 有效",
+        "tampered": "⚠️ 被篡改！内容与 attestation 不符 —— 跑 reattest 或排查注入",
+        "unattested": "— 未盖章（旧 plan，下次写入自动盖章）",
+    }.get(att_state, att_state)
+    print(f"[plan_tracker] {args.plan_id}")
+    print(f"  command : {plan.get('command')}")
+    print(f"  project : {plan.get('project')}")
+    print(f"  chapter : {plan.get('chapter')}")
+    print(f"  防篡改  : {att_label}")
+    print(f"  progress: {done}/{total}")
+    for s in plan.get("steps", []):
+        mark = {
+            STATUS_COMPLETED: "[x]",
+            STATUS_IN_PROGRESS: "[~]",
+            STATUS_FAILED: "[!]",
+            STATUS_SKIPPED: "[-]",
+            STATUS_ABORTED: "[A]",
+        }.get(s.get("status"), "[ ]")
+        req = "(必)" if s.get("required") else "(可)"
+        # P2-8：步骤行末尾追加 cost（如果有记录）
+        cost_suffix = ""
+        tok = s.get("tokens_used")
+        dur = s.get("duration_ms")
+        if tok is not None or dur is not None:
+            bits = []
+            if tok is not None:
+                bits.append(f"{tok/1000:.1f}K tok")
+            if dur is not None:
+                bits.append(f"{dur/1000:.1f}s")
+            cost_suffix = f"  [{', '.join(bits)}]"
+        print(f"  {mark} {s.get('n'):>3} {req} {s.get('name')}{cost_suffix}")
+        if s.get("error"):
+            print(f"      ERROR: {s['error']}")
+    if plan.get("abort_reason"):
+        print(f"  ABORTED: {plan['abort_reason']}")
+    return 0
+
+
+def _cli_list(args: argparse.Namespace) -> int:
+    plans = list_plans(active_only=args.active)
+    if not plans:
+        print("(no plans)")
+        return 0
+    for p in plans:
+        if "error" in p:
+            print(f"  [!] {p['id']} — {p['error']}")
+            continue
+        flag = "ACTIVE" if p["active"] else ("DONE" if p["completed"] else "ABORT")
+        tamper = "  ⚠️ TAMPERED" if p.get("tampered") else ""  # P1-1
+        print(f"  [{flag:6}] {p['id']}  cmd={p['command']}  "
+              f"project={p['project']}  chapter={p['chapter']}{tamper}")
+    return 0
+
+
+def _cli_abort(args: argparse.Namespace) -> int:
+    try:
+        res = abort_plan(args.plan_id, args.reason)
+    except PlanTamperedError as exc:  # P1-1：plan 被旁路篡改，拒绝 abort
+        print(str(exc), file=sys.stderr)
+        print("  如确需中止此被篡改的 plan：先 reattest 再 abort。", file=sys.stderr)
+        return 2
+    print(f"[ABORTED] {res['plan_id']} reason={res['reason']}")
+    return 0
+
+
+def _cli_verify(args: argparse.Namespace) -> int:
+    """P1-1：校验 plan 防篡改 attestation。"""
+    state = verify_plan(args.plan_id)
+    labels = {
+        "ok": "✓ attestation 有效，plan 未被篡改",
+        "tampered": "⚠️ 被篡改 —— plan 内容与 attestation 不符",
+        "unattested": "— 未盖章（旧 plan，本功能引入前创建）",
+        "not_found": "找不到该 plan",
+    }
+    print(f"[plan_tracker verify] {args.plan_id}: {labels.get(state, state)}")
+    # 退出码：ok/unattested=0，tampered=2，not_found=1
+    return {"ok": 0, "unattested": 0, "tampered": 2, "not_found": 1}.get(state, 1)
+
+
+def _cli_reattest(args: argparse.Namespace) -> int:
+    """P1-1：合法手动修改 plan 后重新盖章。"""
+    try:
+        res = reattest_plan(args.plan_id)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"[plan_tracker reattest] {res['plan_id']} 已重新盖章")
+    print(f"  原状态: {res['was']}  →  新 sha256: {res['sha256']}")
+    if res["was"] == "tampered":
+        print("  注意：原 plan 处于 tampered 状态，已按【当前内容】重新盖章，"
+              "请确认当前内容确实是你期望的。")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="plan_tracker",
+        description="多步命令强制规划与执行追踪（Phase 1）",
+    )
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pc = sub.add_parser("create", help="创建 plan")
+    pc.add_argument("--command", required=True, choices=list(KNOWN_COMMANDS))
+    pc.add_argument("--project", required=True)
+    pc.add_argument("--chapter", type=int, default=None)
+    pc.add_argument("--key", default=None)
+    pc.set_defaults(func=_cli_create)
+
+    ps = sub.add_parser("step", help="标记某步完成")
+    ps.add_argument("plan_id")
+    ps.add_argument("--n", type=str, required=True)  # v17.10: str 容错（支持 "2.5" 旧模板）
+    ps.add_argument("--output", default=None,
+                    help="可选：额外要校验存在的文件")
+    ps.add_argument("--skip-output", action="store_true",
+                    help="跳过 expected_outputs 校验（agent/LLM 步骤用）")
+    ps.add_argument("--tokens", type=int, default=None,
+                    help="P2-8：本步消耗 token 数（subagent 成本追踪，可选）")
+    ps.add_argument("--duration-ms", type=int, default=None,
+                    help="P2-8：本步耗时毫秒（可选）")
+    ps.set_defaults(func=_cli_step)
+
+    pe = sub.add_parser("end", help="完成检查")
+    pe.add_argument("plan_id")
+    pe.set_defaults(func=_cli_end)
+
+    pst = sub.add_parser("status", help="查看 plan 进度")
+    pst.add_argument("plan_id")
+    pst.set_defaults(func=_cli_status)
+
+    pl = sub.add_parser("list", help="列出 plans")
+    pl.add_argument("--active", action="store_true", help="只列活跃 plan")
+    pl.set_defaults(func=_cli_list)
+
+    pa = sub.add_parser("abort", help="中止 plan")
+    pa.add_argument("plan_id")
+    pa.add_argument("--reason", required=True)
+    pa.set_defaults(func=_cli_abort)
+
+    pv = sub.add_parser("verify", help="校验 plan 防篡改 attestation（P1-1）")
+    pv.add_argument("plan_id")
+    pv.set_defaults(func=_cli_verify)
+
+    pr = sub.add_parser("reattest", help="合法手动改 plan 后重新盖章（P1-1）")
+    pr.add_argument("plan_id")
+    pr.set_defaults(func=_cli_reattest)
+
+    pcl = sub.add_parser("cleanup", help="清理 DONE/ABORTED 状态的旧 plan（v17.5）")
+    pcl.add_argument("--older-than-days", type=int, default=7,
+                     help="只清理 N 天前的（默认 7）")
+    pcl.add_argument("--dry-run", action="store_true",
+                     help="只列出会被删除的，不实际删")
+    pcl.add_argument("--all", action="store_true",
+                     help="不限制天数，清所有终态 plan")
+    pcl.set_defaults(func=_cli_cleanup)
+
+    return p
+
+
+def _cli_cleanup(args: argparse.Namespace) -> int:
+    """清理 DONE/ABORTED 旧 plan。"""
+    from datetime import timedelta
+    cutoff = datetime.now() - timedelta(days=args.older_than_days)
+    candidates = [GLOBAL_PLANS_DIR]
+    # 也扫所有项目的 _数据库/.plans/
+    projects_root = REPO_ROOT / "workspace" / "novels"
+    if projects_root.exists():
+        for proj in projects_root.iterdir():
+            pd = proj / "_数据库" / ".plans"
+            if pd.exists():
+                candidates.append(pd)
+    deleted = []
+    kept = []
+    for cdir in candidates:
+        for f in cdir.glob("*.json"):
+            try:
+                plan = _load_json(f)
+                # 终态判定：有 abort_reason / 所有 step 已 completed
+                is_aborted = bool(plan.get("abort_reason"))
+                steps = plan.get("steps", [])
+                is_done = bool(steps) and all(
+                    s.get("status") == STATUS_COMPLETED for s in steps
+                )
+                if not (is_aborted or is_done):
+                    kept.append(f.name)
+                    continue
+                # 检查时间
+                if not args.all:
+                    completed_at = plan.get("completed_at") or plan.get("created_at")
+                    if completed_at:
+                        try:
+                            t = datetime.fromisoformat(completed_at)
+                            if t > cutoff:
+                                kept.append(f.name)
+                                continue
+                        except ValueError:
+                            pass
+                if args.dry_run:
+                    deleted.append(f"[DRY] {f.name}")
+                else:
+                    f.unlink()
+                    deleted.append(f.name)
+            except Exception as e:
+                print(f"  [WARN] 跳过 {f.name}: {e}", file=sys.stderr)
+    print(f"[plan_tracker cleanup] 删除 {len(deleted)} 个 plan，保留 {len(kept)} 个")
+    for d in deleted[:20]:
+        print(f"  - {d}")
+    if len(deleted) > 20:
+        print(f"  ... 还有 {len(deleted)-20} 个未显示")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

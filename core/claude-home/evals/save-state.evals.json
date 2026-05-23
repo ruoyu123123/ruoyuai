@@ -1,0 +1,67 @@
+{
+  "command": "save-state",
+  "version": 1,
+  "description": "/save-state 行为契约：12 步流水线 + WAL 断点恢复 + plan attestation",
+  "evals": [
+    {
+      "id": "ss-1-normal",
+      "scenario": "常规章节保存：用户写完第3章，主代理执行 save-state 全流水线",
+      "user_prompt": "/save-state（在 write-chapter 末尾自动触发）",
+      "fixture": {
+        "project": "示例书",
+        "chapter": 3,
+        "prereqs": [
+          "章节/第003章/第003章.txt 已存在（writer agent 刚产出）",
+          "章节/第003章/第003章_changes.json 已含 factual + self_eval",
+          "_数据库/manifest 与人物卡.json 等基础 DB 已就绪"
+        ]
+      },
+      "expected_trace": [
+        "plan_tracker create save-state（含 P1-1 attestation 自动盖章）",
+        "Step 1 wal-start + schema-validate（_数据库/.wal/第003章_save_state.json 创建）",
+        "Step 2-7 changes 解析 / writer-truth-check / validate-chapter / 等 6 步骤推进",
+        "Step 8 audit_hub.py（7 个校验器统一调度，含 P0-2 semantic_slop_scanner + P1-4 kishotenketsu）",
+        "Step 9 learning_loop.py --ingest（P2-5 时间维度衰减 + 复发追踪）",
+        "Step 10 reflection / lessons 沉淀",
+        "Step 11 git commit（chapter 节点自动 commit）",
+        "Step 12 end_plan（plan_tracker.end 通过）"
+      ],
+      "expected_artifacts": [
+        "_数据库/.wal/第003章_save_state.json",
+        "_数据库/.wal/第003章_summary.json",
+        "_数据库/章纲摘要.json（含 ch3 摘要）",
+        "_数据库/写作经验.json（含 confidence/updated_at，P2-5）",
+        "_数据库/.audit/ch_003_audit.json（含 advisory + 可能的 waived 段）"
+      ],
+      "tolerance": {
+        "hard_gate_blocking": true,
+        "comments": "hard_gate 残留 → plan-end 必失败；advisory 反复豁免 → learning_loop 产 tool_calibration_suggestion 不阻断"
+      }
+    },
+    {
+      "id": "ss-2-resume-from-wal",
+      "scenario": "WAL 断点续跑：上次 save-state 跑到 Step 7 时进程中断，再次触发应从 Step 8 续",
+      "user_prompt": "/save-state（在已有 WAL 的项目重新触发）",
+      "fixture": {
+        "project": "示例书",
+        "chapter": 3,
+        "prereqs": [
+          "_数据库/.wal/第003章_save_state.json 存在，completed_steps 含 [1,2,3,4,5,6,7]",
+          "对应 plan_tracker.json 也已记录 step 1-7 completed"
+        ]
+      },
+      "expected_trace": [
+        "plan_tracker 检测到既有 active plan，attestation 校验通过（P1-1）",
+        "WAL 检测到已 completed 1-7，直接从 Step 8 续",
+        "Step 8-12 跑完",
+        "plan-end 通过（含 cost_summary，P2-8）"
+      ],
+      "expected_artifacts": [
+        "_数据库/.wal/第003章_save_state.json（completed_steps 含 1-12）"
+      ],
+      "tolerance": {
+        "comments": "L8.4 共存约束：WAL completed_steps 与 plan_tracker steps 二者不互通字段，但都达到全完成态"
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+# 跨平台行尾一致 — Windows 克隆后 Python 脚本不会因 CRLF/LF 撞坏
+* text=auto eol=lf
+
+# Windows 专属保持 CRLF
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+
+# 二进制文件不转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.7z   binary
+*.tar  binary
+*.gz   binary
+*.rar  binary
+
+# JSON / YAML / Markdown / Python 强制 LF
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.py   text eol=lf
+*.sh   text eol=lf
