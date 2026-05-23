@@ -6,6 +6,10 @@ description: 章节完成后保存写作状态（v2 · 多 agent 流水线调度
 
 $ARGUMENTS
 
+> **v22.gov 三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
+> 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
+> hook 自动检 research_cache + 反思文件。关键脚本输出建议过 `ai_wrapper.py` 二次复核。
+
 ## 【v19.2 新增】启动前 WAL 恢复检查（必跑）
 
 step 1 之前，主代理必须先跑：

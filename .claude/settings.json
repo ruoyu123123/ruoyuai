@@ -9,6 +9,15 @@
             "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_agent_gate.py\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_step_research.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -27,6 +36,15 @@
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_plan_check.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_step_reflection.py\""
           }
         ]
       }
@@ -52,5 +70,5 @@
       }
     ]
   },
-  "_doc": "Claude Code 项目级 hooks 注册。hook 命令用 $CLAUDE_PROJECT_DIR 自适应项目根，跨平台兼容。SessionStart/Stop 是 v22.5 session_memory + plan_tracker 防御层关键 hook。可选: 用户家目录 ~/.claude/settings.json 可加 Notification/statusLine 等个性化 hook。"
+  "_doc": "Claude Code 项目级 hooks 注册。v22.gov 新增：PreToolUse:Bash → pretooluse_step_research（强制 plan-step 前查 research_cache）+ PostToolUse:Bash → posttooluse_step_reflection（步骤后强制反思）。原有：PreToolUse:Agent gate / Write|Edit plan_check / SessionStart recall / Stop session_memory。hook 命令用 $CLAUDE_PROJECT_DIR 自适应项目根。所有新 hook 防御性 exit 0（异常放行，不破坏主流程）。"
 }

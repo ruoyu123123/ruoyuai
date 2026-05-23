@@ -7,6 +7,11 @@ allowed-tools: [WebFetch, WebSearch, Bash, Read, Write, Edit, Grep, Glob]
 
 $ARGUMENTS
 
+> **v22.gov 三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
+> 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
+> hook 自动检 research_cache 存在 + 反思文件，缺失提示补救（不破坏主流程）。
+> 关键脚本输出建议过 `ai_wrapper.py` 二次复核（避免规则误判）。
+
 ---
 
 # ⚠️ v17 重大升级：三章窗口蒸馏 + 衔接分析

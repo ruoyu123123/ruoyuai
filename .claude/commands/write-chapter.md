@@ -6,6 +6,10 @@ description: 根据大纲写作小说章节（v3 · 多 agent 流水线）
 
 $ARGUMENTS
 
+> **v22.gov 三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
+> 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
+> hook 自动检 research_cache + 反思文件。关键脚本输出建议过 `ai_wrapper.py` 二次复核。
+
 ---
 
 # 🛡️ Plan 强制规划（v17.2 新增）
