@@ -154,6 +154,94 @@ def detect_rhythm_pattern(curve: list[float]) -> str:
     return "混合型（无明显规律）"
 
 
+def collect_character_deltas_from_chapter_json(
+    chapter_dir: Path,
+    known_characters: set[str],
+    by_character: dict[str, list[dict]],
+) -> None:
+    """v22.4dim N4：从单章 JSON 的 dim4/dim7/dim8/dim12/golden_passages 文本中
+    扫描已知角色名是否出现 → 给现有 by_character 加新的 chapter 数据点（强度按章 dim33 估）。
+
+    增强 fallback 准确度（不只依赖 character_continuity 一个字段）。
+    """
+    if not chapter_dir.exists() or not known_characters:
+        return
+
+    # 把已知角色名按长度降序（避免「HeroC」误匹配「HeroC.CharC5」时只匹中短）
+    sorted_chars = sorted(known_characters, key=lambda n: -len(n))
+
+    for f in sorted(chapter_dir.glob("第*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        ch = d.get("chapter")
+        if not isinstance(ch, int):
+            continue
+
+        # 拼接所有可能含角色名的 dim 文本
+        text_blob = ""
+        for top_key in ("B1_qualitative", "B3_techniques", "C_golden_passages"):
+            sub = d.get(top_key, {}) or {}
+            if isinstance(sub, dict):
+                for v in sub.values():
+                    if isinstance(v, str):
+                        text_blob += " " + v
+                    elif isinstance(v, list):
+                        for item in v:
+                            text_blob += " " + (json.dumps(item, ensure_ascii=False) if isinstance(item, dict) else str(item))
+                    elif isinstance(v, dict):
+                        text_blob += " " + json.dumps(v, ensure_ascii=False)
+        if not text_blob:
+            continue
+
+        # 本章张力 = dim33 emotion_beats 最高 direction 强度
+        chapter_intensity = 0.4
+        beats = (d.get("B4_narrative_craft", {}) or {}).get("dim33_emotion_beats")
+        if isinstance(beats, list) and beats:
+            intensities = []
+            for b in beats:
+                if isinstance(b, dict):
+                    direction = str(b.get("direction", ""))
+                    if "爆" in direction or "高潮" in direction:
+                        intensities.append(0.9)
+                    elif "升" in direction:
+                        intensities.append(0.6)
+                    elif "缓" in direction or "停" in direction:
+                        intensities.append(0.3)
+                    elif "落差" in direction or "降" in direction:
+                        intensities.append(0.4)
+            if intensities:
+                chapter_intensity = max(intensities)
+
+        # 扫每个已知角色是否出现
+        appeared = set()
+        for name in sorted_chars:
+            if name and name in text_blob:
+                # 找到该角色的 canonical（避免子字符串匹配的别名）
+                short = re.split(r"[·.•_\-—\s]", name)[0]
+                appeared.add(short or name)
+
+        # 给每个出现的角色加章节数据点（避免覆盖已有的 continuity 数据）
+        for name in appeared:
+            existing = [e for e in by_character.get(name, []) if e["chapter"] == ch]
+            if existing:
+                # 已有 continuity 数据，跳过（continuity 优先级高）
+                continue
+            # actor / experiencer 用本章 dim33 张力 + 章号微抖动
+            actor_v = min(1.0, chapter_intensity + ((ch * 7) % 13) / 100 - 0.06)
+            experiencer_v = min(1.0, chapter_intensity * 0.9 + ((ch * 11) % 17) / 100 - 0.08)
+            by_character.setdefault(name, []).append({
+                "chapter": ch,
+                "actor_value": round(max(0.05, actor_v), 3),
+                "actor_label": "（章 dim 估算）",
+                "experiencer_value": round(max(0.05, experiencer_v), 3),
+                "experiencer_label": "（章 dim 估算）",
+                "trigger_event": f"出现于 ch{ch}",
+                "stage_progress": "",
+            })
+
+
 def collect_character_deltas(continuity_dir: Path) -> dict[str, list[dict]]:
     """扫所有 continuity JSON，按角色名聚合 chapter_changes。"""
     by_character: dict[str, list[dict]] = {}
@@ -195,29 +283,43 @@ def collect_character_deltas(continuity_dir: Path) -> dict[str, list[dict]]:
         # fallback：用 character_continuity.arc_progress 估算（兼容旧 continuity JSON）
         if not cdeltas:
             cc_list = data.get("character_continuity", []) or []
-            range_str = data.get("chapter_range", "")
-            m = re.match(r"ch(\d+)-(\d+)", range_str)
+            # 兼容多 schema：chapter_range / window
+            range_str = data.get("chapter_range") or data.get("window") or ""
+            if not isinstance(range_str, str):
+                continue
+            m = re.match(r"ch?(\d+)[-_]ch?(\d+)", range_str)
             if not m:
                 continue
             arc_start, arc_end = int(m.group(1)), int(m.group(2))
             for cc in cc_list:
-                name = cc.get("character")
+                # 兼容 cc 是 dict / str
+                if isinstance(cc, dict):
+                    name = cc.get("character")
+                    arc_p = cc.get("arc_progress", "")
+                elif isinstance(cc, str):
+                    name = cc
+                    arc_p = ""
+                else:
+                    continue
                 if not name:
                     continue
+                # 保证 arc_p 是 str
+                if not isinstance(arc_p, str):
+                    arc_p = str(arc_p) if arc_p else ""
                 # v22.cluster 改进：actor/experiencer 各自按 chapter 抖动估算，避免恒定相关
                 for ch in range(arc_start, arc_end + 1):
                     existing = [e for e in by_character.get(name, []) if e["chapter"] == ch]
                     if existing:
                         continue
-                    actor_v, experiencer_v = estimate_from_arc_progress(cc.get("arc_progress", ""), chapter=ch)
+                    actor_v, experiencer_v = estimate_from_arc_progress(arc_p, chapter=ch)
                     by_character.setdefault(name, []).append({
                         "chapter": ch,
                         "actor_value": actor_v,
                         "actor_label": "（fallback估算）",
                         "experiencer_value": experiencer_v,
                         "experiencer_label": "（fallback估算）",
-                        "trigger_event": cc.get("arc_progress", "")[:60],
-                        "stage_progress": cc.get("arc_progress", "")[:60],
+                        "trigger_event": arc_p[:60],
+                        "stage_progress": arc_p[:60],
                     })
 
     # 按 chapter 排序去重
@@ -236,7 +338,64 @@ def collect_character_deltas(continuity_dir: Path) -> dict[str, list[dict]]:
     return by_character
 
 
-def build_character_arc(name: str, entries: list[dict]) -> dict:
+def compute_stanford_6component(name: str, entries: list[dict], total_book_chapters: int) -> dict:
+    """v22.4dim Round2 应用：Stanford 6-component 角色重要度模型（Brahman et al.）
+
+    业界依据：Round 2 调研 inspiration_4dim_sync_round2_2026-05-24.md 子任务 D 发现：
+    Stanford 论文用 N/C/I/A/DC/DN 6 维度量化角色重要度，比单一"出场章数"更准。
+
+    映射到我们已有数据：
+    - N (Naming)         = 该角色被 mention 的章数 / 全书章数
+    - C (Communication)  = 该角色有对话的章数比例（用 stage_progress 含对话信号近似）
+    - I (Interiority)    = 该角色心理活动章节比例（从 dim33 emotion_beats 信号近似 = experiencer_value 均值）
+    - A (Agency)         = 该角色主动行动比例（actor_value 均值）
+    - DC (Direct Char.)  = 该角色被「直接描写性格」的章节占比（从 stage_progress 长度信号近似）
+    - DN (Description by Narrator) = 叙述者描写该角色比例（出场密度 × 占比）
+
+    返回 6 维分数 0-1 + 综合重要度 0-1。
+    """
+    n_chapters = len(entries)
+    if n_chapters == 0 or total_book_chapters == 0:
+        return {}
+
+    N = round(n_chapters / total_book_chapters, 3)
+    # C: 含对话信号的章比例（trigger_event/stage_progress 含「说/答/问/对话/告诉」）
+    dialog_keywords = ("说", "答", "问", "告诉", "对话", "宣告", "回答", "提问")
+    C = round(sum(1 for e in entries
+                  if any(k in e.get("trigger_event", "") + e.get("stage_progress", "") for k in dialog_keywords))
+              / n_chapters, 3)
+    # I: experiencer 均值
+    I = round(sum(e.get("experiencer_value", 0.3) for e in entries) / n_chapters, 3)
+    # A: actor 均值
+    A = round(sum(e.get("actor_value", 0.3) for e in entries) / n_chapters, 3)
+    # DC: stage_progress 长度信号
+    DC = round(min(1.0, sum(len(e.get("stage_progress", "")) for e in entries) / (n_chapters * 30)), 3)
+    # DN: 出场密度 × N（连续章 / 总章）
+    if n_chapters >= 2:
+        chs = sorted(e["chapter"] for e in entries)
+        density = n_chapters / (chs[-1] - chs[0] + 1)
+        DN = round(N * density, 3)
+    else:
+        DN = N
+
+    importance = round((N + C + I + A + DC + DN) / 6, 3)
+
+    return {
+        "stanford_6_component": {
+            "N_naming": N,
+            "C_communication": C,
+            "I_interiority": I,
+            "A_agency": A,
+            "DC_direct_char": DC,
+            "DN_description_by_narrator": DN,
+            "overall_importance": importance,
+            "_doc": "v22.4dim Stanford 6-component 角色重要度（Brahman et al.）· importance > 0.5 = 主角级 / 0.3-0.5 配角 / < 0.3 路人",
+            "tier": "protagonist" if importance > 0.5 else ("supporting" if importance > 0.3 else "minor"),
+        }
+    }
+
+
+def build_character_arc(name: str, entries: list[dict], total_book_chapters: int = 0) -> dict:
     if not entries:
         return {"character": name, "error": "no data"}
 
@@ -274,7 +433,7 @@ def build_character_arc(name: str, entries: list[dict]) -> dict:
     actor_label_freq = sorted(set(actor_labels), key=actor_labels.count, reverse=True)[:5]
     exp_label_freq = sorted(set(exp_labels), key=exp_labels.count, reverse=True)[:5]
 
-    return {
+    arc_dict = {
         "character": name,
         "total_chapters_appeared": len(entries),
         "chapter_range": f"ch{chapters[0]}-{chapters[-1]}",
@@ -293,11 +452,16 @@ def build_character_arc(name: str, entries: list[dict]) -> dict:
         "emotion_rhythm_pattern_experiencer": pattern_experiencer,
         "_metadata": {
             "distill_date": datetime.utcnow().strftime("%Y-%m-%d"),
-            "aggregator_version": "v22.1",
+            "aggregator_version": "v22.4dim.1",
             "marcus_paradigm": True,
+            "stanford_6component": True,
             "savitzky_golay_substitute": "simple_3_window_mean",
         },
     }
+    # v22.4dim Round 2 应用：Stanford 6-component 角色重要度
+    if total_book_chapters > 0:
+        arc_dict.update(compute_stanford_6component(name, entries, total_book_chapters))
+    return arc_dict
 
 
 def main():
@@ -321,7 +485,21 @@ def main():
         print(f"[warn] no character data found in {continuity_dir}", file=sys.stderr)
         sys.exit(1)
 
+    # v22.4dim N4 增强：从单章 JSON 的 dim4/dim8/dim12/golden 文本扫角色名
+    chapter_dir = project / "蒸馏进度"
+    known_chars = set(by_character.keys())
+    before_total = sum(len(v) for v in by_character.values())
+    collect_character_deltas_from_chapter_json(chapter_dir, known_chars, by_character)
+    after_total = sum(len(v) for v in by_character.values())
+    print(f"[info] N4 增强：从单章 JSON 加了 {after_total - before_total} 个数据点（{before_total} → {after_total}）")
+
     targets = [args.character] if args.character else list(by_character.keys())
+
+    # 估算全书总章数（用于 Stanford 6-component 标准化）
+    total_chs = 0
+    for entries in by_character.values():
+        for e in entries:
+            total_chs = max(total_chs, e.get("chapter", 0))
 
     written = []
     for name in targets:
@@ -329,7 +507,7 @@ def main():
         if len(entries) < args.min_appearances:
             print(f"[skip] {name}: 仅 {len(entries)} 章出场 < min_appearances={args.min_appearances}")
             continue
-        arc = build_character_arc(name, entries)
+        arc = build_character_arc(name, entries, total_book_chapters=total_chs)
         safe_name = re.sub(r"[\\/:*?\"<>|]", "_", name)
         out_file = out_dir / f"{safe_name}_emotion_arc.json"
         out_file.write_text(json.dumps(arc, ensure_ascii=False, indent=2), encoding="utf-8")

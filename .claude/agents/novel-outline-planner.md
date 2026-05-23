@@ -233,6 +233,20 @@ else:
    - `narrative_continuity_template.three_chapter_templates`（**核心** · N 个 3 章模板池，每条含 `structure` + `transition_chain`）
    - **如 STYLE_LIB 未传或字段缺失**：警告 + 降级（输出 JSON 加 `"style_lib_missing": true`），不要中止
    - **使用规则**：本章上下文若匹配某 three_chapter_templates 的 transition_chain → 卡片至少 1 张应延用该模板的下一章 structure（在 `style_alignment.matched_3chapter_template` 字段引用模板 `name`）
+9. **v22.4dim 新增 · TITLE_STYLE + NAMING_CONVENTION（仿写真实度 4 维同步）**：
+   - Read `STYLE_LIB_DIR/title_style.json` 抓字段：`length_stats.mean`（作者平均标题字数）、`tier_distribution_pct`（normal/mid/high 比例）、`structure_distribution_pct`（名词型/动作型/数字型等）、`high_freq_chars`（高频字 TOP20）、`golden_samples_per_tier`（黄金示例）
+   - Read `STYLE_LIB_DIR/naming_convention.json` 抓字段：`primary_culture`、`average_length_by_culture`、`chinese_surname_top10`、`high_freq_syllables_top20`、`golden_samples_by_culture`
+   - **使用规则 A（标题指导）**：cards 涉及"本章可能的章节标题方向"时，length 必须接近作者均值（± 2 字）、structure 必须在 distribution TOP3 中
+   - **使用规则 B（角色起名）**：cards 若引入新角色 → 新角色名必须 fit primary_culture + 平均长度 + 高频音节
+   - **如缺数据**（如该书蒸馏 schema 不含 title 字段）：警告 + 降级（输出 JSON 加 `"title_style_missing": true` / `"naming_convention_missing": true`）
+   - Round 1 调研依据：章节标题量化指纹是业界空白（我们做即 SOTA）；中文起名"大姓+字库+复姓"已是网文共识
+
+10. **v22.4dim 新增 · CHARACTER_ARC_DIR + Stanford 6-component**：
+    - Read `STYLE_LIB_DIR/character_arcs/<主要角色>_emotion_arc.json` 抓字段：`stanford_6_component`（N/C/I/A/DC/DN 6 维 + tier:protagonist/supporting/minor + overall_importance）、`emotion_rhythm_pattern_actor/experiencer`
+    - **使用规则**：cards 涉及主角行动 → 卡的 `style_alignment.expected_emotion_intensity` 必须与对应角色的 `emotion_actor_curve_smoothed[本章索引]` 一致（± 0.15）
+    - cards 强调"主角主动 vs 被动" → 参考 stanford_6_component.A_agency（高 A = 主角主动） vs I_interiority（高 I = 主角承受/内省）
+    - 业界依据（Round 2）：Stanford Brahman et al. 6-component 模型把角色重要度量化为 6 维度，importance > 0.5 = 主角级；本工程已实现
+
 8. **v22.cluster 新增 · ARC_TEMPLATE_DIR（双轨 · cluster 主 + fixed10 副）**：
 
    **路径推断**：`STYLE_LIB_DIR = STYLE_LIB 的父目录`；`ARC_TEMPLATE_DIR = STYLE_LIB_DIR/arc_templates/`；`CLUSTER_INDEX = STYLE_LIB_DIR/cluster_index.json`。

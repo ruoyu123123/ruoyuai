@@ -142,6 +142,9 @@ def collect_transitions(project: Path) -> list[dict]:
         except (json.JSONDecodeError, OSError):
             continue
         for t in d.get("transitions", []) or []:
+            # 兼容 t 是 dict 或 str（某些蒸馏 schema 简化）
+            if not isinstance(t, dict):
+                continue
             from_ch = t.get("from")
             to_ch = t.get("to")
             if not isinstance(from_ch, int) or not isinstance(to_ch, int):
@@ -167,6 +170,48 @@ def collect_transitions(project: Path) -> list[dict]:
         seen.add(key)
         uniq.append(t)
     return uniq
+
+
+def _infer_genre_from_naming(project: Path, work: str) -> str:
+    """v22.4dim Round 3：从 naming_convention.json + 书名特征推断题材。
+
+    业界依据（Round 3 调研）：阅文妙笔大模型按题材切 prompt 模板；
+    不同题材在「章节命名 / 角色起名 / 节奏 / 情感弧」4 维上差异显著。
+
+    返回：xuanhuan / xianxia / urban_supernatural / scifi_meta / horror_game /
+    historical / romance / unknown
+    """
+    # 优先用蒸馏的 naming_convention 推
+    nc_file = project / "naming_convention.json"
+    if nc_file.exists():
+        try:
+            nc = json.loads(nc_file.read_text(encoding="utf-8"))
+            primary = nc.get("primary_culture", "")
+            wn_idx = (nc.get("web_novel_indicators_round1d_applied", {}) or {}).get("web_novel_index", 0)
+            if primary == "western_translit" and wn_idx < 0.1:
+                return "western_isekai"   # 西式异世界（如BookC）
+            if primary == "fantasy" or wn_idx > 0.5:
+                return "xuanhuan"          # 玄幻
+            if primary == "scifi":
+                return "scifi_meta"        # 科幻/元宇宙
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # fallback：从书名关键字推
+    name_keywords = {
+        "xianxia": ["仙", "修真", "渡劫", "金丹", "元婴"],
+        "xuanhuan": ["神", "魔", "鸿蒙", "天道", "斗罗", "封神"],
+        "urban_supernatural": ["都市", "学院", "校园", "精神病", "斩神"],
+        "horror_game": ["惊悚", "副本", "游戏", "无限", "诡秘"],
+        "scifi_meta": ["地球", "饲养", "全人类", "黑暗森林"],
+        "historical": ["大唐", "穿越古代", "宋朝", "明朝"],
+        "romance": ["总裁", "甜宠", "豪门"],
+    }
+    for genre, kws in name_keywords.items():
+        for kw in kws:
+            if kw in work:
+                return genre
+    return "unknown"
 
 
 def detect_total_chapters(project: Path) -> int:
@@ -333,9 +378,13 @@ def main():
     avg_chapters = sum(c["chapters_count"] for c in clusters) / len(clusters) if clusters else 0
     avg_words = sum(c["estimated_words"] for c in clusters) / len(clusters) if clusters else 0
 
+    # v22.4dim Round 3 应用：题材 override 字段（阅文妙笔产业级验证 · 不同题材应有不同 cluster 节奏）
+    genre = _infer_genre_from_naming(project, work)
+
     out = {
-        "schema_version": "v22.cluster.1",
+        "schema_version": "v22.cluster.2",
         "work": work,
+        "genre": genre,
         "total_chapters": total,
         "total_clusters": len(clusters),
         "average_chapters_per_cluster": round(avg_chapters, 2),

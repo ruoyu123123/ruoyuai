@@ -89,8 +89,30 @@ def classify_tier(ch: int, changes: dict, high_set: set[int]) -> str:
     return 'normal'
 
 
+def _load_title_style(project: Path) -> dict | None:
+    """v22.4dim N5：从风格库读 title_style.json，做 per-book 校准。"""
+    style_path = project / "_数据库" / "作者风格.json"
+    if not style_path.exists():
+        return None
+    try:
+        sd = json.loads(style_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    work = (sd.get("meta") or {}).get("work") or sd.get("work")
+    if not work:
+        return None
+    for parent in [project, *project.parents]:
+        f = parent / "workspace" / "styles" / work / "title_style.json"
+        if f.exists():
+            try:
+                return json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    return None
+
+
 def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
-                   tier: str, history_titles: list[str]) -> str:
+                   tier: str, history_titles: list[str], title_style: dict | None = None) -> str:
     from openai import OpenAI
     body_sample = body[:2000] + ('\n...\n' + body[-500:] if len(body) > 2500 else '')
     history_str = '、'.join(f"「{t}」" for t in history_titles[-20:]) if history_titles else '（无）'
@@ -101,13 +123,34 @@ def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
         'high': "8-14 字句子/对话钩子（绝对高潮章用，可以是动作描述/对话片段/反差，对标《斩神》「你可以叫我……林医生」）",
     }[tier]
 
+    # v22.4dim N5：per-book 校准段（如果有风格库 title_style.json）
+    perbook_calibration = ""
+    if title_style and not title_style.get("error"):
+        td = title_style.get("tier_distribution_pct", {})
+        struct = title_style.get("structure_distribution_pct", {})
+        samples = title_style.get("golden_samples_per_tier", {})
+        high_chars = title_style.get("high_freq_chars", [])
+        if td:
+            perbook_calibration = f"""
+
+# ⭐ per-book 风格校准（覆盖默认 80/15/5，优先匹配原作者实际分布）
+
+原作者实际 tier 分布：normal={td.get('normal', 0):.0%} / mid={td.get('mid', 0):.0%} / high={td.get('high', 0):.0%}
+主结构偏好：{', '.join(f'{k} {v:.0%}' for k, v in sorted(struct.items(), key=lambda x: -x[1])[:3])}
+高频字 TOP10：{', '.join(c for c, _ in high_chars[:10])}
+
+原作者真实 {tier} 档样本：{', '.join(f"「{t}」" for t in samples.get(tier, [])[:5]) or '（无）'}
+
+⚠️ 优先匹配上面的 per-book 数据，不要盲套默认 80/15/5。"""
+
     system = f"""你是网文章节命名工程师。基于 2026 中文网文 TOP 榜爆款 70 章调研得出的混合策略。
 
 # 网文章标题策略（强制三档）
 
-主体分布：80% 2-4 字 / 15% 5-8 字 / 5% 8-14 字
+默认主体分布：80% 2-4 字 / 15% 5-8 字 / 5% 8-14 字（仅作 fallback，per-book 数据优先）
 
 # 本章档位：**{tier}**（{tier_brief}）
+{perbook_calibration}
 
 # 通用硬规则
 
@@ -221,6 +264,16 @@ def main():
     progress = json.loads(progress_path.read_text(encoding='utf-8'))
     hint_map = {p['ch']: p.get('title', '') for p in progress.get('chapter_plan', [])}
 
+    # v22.4dim N5：加载 per-book title_style 校准
+    title_style = _load_title_style(project)
+    if title_style:
+        td = title_style.get("tier_distribution_pct", {})
+        print(f"[gen_chapter_titles v2.4] per-book title_style 已加载："
+              f"normal={td.get('normal', 0):.0%} / mid={td.get('mid', 0):.0%} / high={td.get('high', 0):.0%}",
+              file=sys.stderr)
+    else:
+        print(f"[gen_chapter_titles v2.4] 无 per-book title_style，走默认 80/15/5", file=sys.stderr)
+
     new_titles = {}
     history_titles: list[str] = []
     tier_counts = {'normal': 0, 'mid': 0, 'high': 0}
@@ -240,7 +293,7 @@ def main():
             print(f"  ch{ch} [{tier}] (hint='{hint}'): [dry-run]")
             continue
 
-        title = gen_one_title(loader, ch, body_stripped, hint, tier, history_titles)
+        title = gen_one_title(loader, ch, body_stripped, hint, tier, history_titles, title_style=title_style)
         new_titles[ch] = title
         history_titles.append(title)
         new_body = f"第{ch:03d}章 {title}\n\n{body_stripped}"

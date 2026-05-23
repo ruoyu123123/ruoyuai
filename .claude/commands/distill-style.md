@@ -642,21 +642,32 @@ workspace/styles/<书名>/
 
 ### 执行流程
 
-#### 已蒸馏书（5 本现有书）—— retroactive 切分
+#### 已蒸馏书（5 本现有书）—— retroactive 切分 + v22.4dim 4 维同步
 
 ```bash
 # Step A：按情节单元自动切 cluster（启发式：connection_type + 字数/章数硬约束）
 python core/scripts/cluster_segmenter.py --project workspace/styles/<书名>
 # 输出 cluster_index.json（5 章 / 14K 字均长 ≈ ECAS schema 推荐）
 
-# Step B：每个 cluster 聚合 arc
+# Step B：每个 cluster 聚合 arc（含 Sudowrite 1-11 dial + mid_checkpoint 张力）
 python core/scripts/arc_aggregator.py --project workspace/styles/<书名> --all-clusters
 
-# Step C：聚合 character arc（MARCUS 范式）
+# Step C：聚合 character arc（MARCUS 范式 + Stanford 6-component 重要度）
 python core/scripts/character_arc_aggregator.py --project workspace/styles/<书名> --min-appearances 5
 
 # Step D：全书 summary
 python core/scripts/arc_aggregator.py --project workspace/styles/<书名> --mode summary
+
+# === v22.4dim Round 1+2 新增：仿写真实度 4 维同步 ===
+
+# Step E：章节标题命名风格指纹（业界空白领域 · 我们做即 SOTA）
+python core/scripts/title_style_distiller.py --project workspace/styles/<书名>
+# 输出 title_style.json：长度/tier/结构/高频字/per-tier 黄金示例
+# gen_chapter_titles 会自动读此文件做 per-book 校准（覆盖默认 80/15/5）
+
+# Step F：角色命名规范指纹（含网文化指数 · Round 1 D 调研）
+python core/scripts/naming_convention_distiller.py --project workspace/styles/<书名>
+# 输出 naming_convention.json：主文化/音节频次/网文大姓+字库匹配度
 ```
 
 #### 新蒸馏书 —— 阶段 1 每完成 1 个 cluster 触发

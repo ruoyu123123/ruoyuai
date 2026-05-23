@@ -314,7 +314,87 @@ def aggregate_cluster(project: Path, cluster_id: str) -> dict:
     data["mode"] = "cluster"
     # 替换 arc_id 为 cluster 命名
     data["arc_id"] = f"cluster_arc_{cluster_id}"
+
+    # v22.4dim N3：mid_checkpoint 期望张力（writer 每 3000 字 checkpoint 时对照）
+    data["mid_checkpoint_target_tensions"] = compute_mid_checkpoint_tensions(
+        emotion_curve=data["emotion_curve_normalized"],
+        chapter_words=load_chapter_wordcounts_for_range(project, arc_start, arc_end),
+        cluster_total_words=target["estimated_words"],
+        checkpoint_interval=3000,
+    )
     return data
+
+
+def load_chapter_wordcounts_for_range(project: Path, arc_start: int, arc_end: int) -> list[int]:
+    """快速从 蒸馏进度 单章 JSON 读字数（按 ch 顺序）。"""
+    out = []
+    chapter_dir = project / "蒸馏进度"
+    for ch in range(arc_start, arc_end + 1):
+        wc = 3000  # 默认兜底
+        for pat in (f"第{ch}章.json", f"ch{ch}.json"):
+            f = chapter_dir / pat
+            if not f.exists():
+                continue
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                cand = d.get("word_count") or _walk_nested(d, "total_chars") or _walk_nested(d, "cjk_chars")
+                if isinstance(cand, (int, float)) and cand > 0:
+                    wc = int(cand)
+                    break
+            except (json.JSONDecodeError, OSError):
+                continue
+        out.append(wc)
+    return out
+
+
+def compute_mid_checkpoint_tensions(
+    emotion_curve: list[float],
+    chapter_words: list[int],
+    cluster_total_words: int,
+    checkpoint_interval: int = 3000,
+) -> list[dict]:
+    """v22.4dim N3：cluster 字数轴上每 checkpoint_interval 字一个张力期望点。
+
+    使用：writer 在每个 mid_checkpoint 处 self-audit 时对照本字数点的期望张力。
+    业界依据：ECAS schema 已含 mid_checkpoints 字段（默认每 3000 字一个），本字段
+    给每个 checkpoint 配上期望张力，让 writer 知道"写到 6000 字时情绪应该有多激烈"。
+    """
+    if not emotion_curve or not chapter_words or cluster_total_words <= 0:
+        return []
+
+    # 累积字数：cumulative[i] = 前 i+1 章总字数
+    cumulative = []
+    s = 0
+    for w in chapter_words:
+        s += w
+        cumulative.append(s)
+
+    actual_total = cumulative[-1] if cumulative else cluster_total_words
+    checkpoints = []
+    pos = checkpoint_interval
+    while pos < actual_total:
+        # 找 pos 所在章
+        ch_idx = next((i for i, c in enumerate(cumulative) if c >= pos), len(cumulative) - 1)
+        # 在该章内的位置百分比
+        ch_start_words = cumulative[ch_idx - 1] if ch_idx > 0 else 0
+        ch_len = chapter_words[ch_idx] if ch_idx < len(chapter_words) else 1
+        in_chapter_pct = (pos - ch_start_words) / max(ch_len, 1)
+        # 取当前章张力（如果不是第一章，与上一章插值过渡）
+        cur_tension = emotion_curve[ch_idx] if ch_idx < len(emotion_curve) else emotion_curve[-1]
+        if ch_idx > 0 and in_chapter_pct < 0.3:
+            # 接近章首：用上一章末与本章首插值（平滑过渡）
+            prev_tension = emotion_curve[ch_idx - 1]
+            t = prev_tension * (0.3 - in_chapter_pct) / 0.3 + cur_tension * in_chapter_pct / 0.3
+            cur_tension = round(t, 3)
+        checkpoints.append({
+            "at_word": pos,
+            "in_chapter_relative": ch_idx + 1,    # 本 cluster 第几章（1-based）
+            "in_chapter_pct": round(in_chapter_pct, 2),
+            "expected_tension": round(cur_tension, 3),
+        })
+        pos += checkpoint_interval
+
+    return checkpoints
 
 
 def aggregate_arc(project: Path, arc_end: int, arc_size: int = 10) -> dict:
@@ -359,8 +439,20 @@ def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_si
             if data:
                 continuity_jsons.append(data)
 
-    # 拼接 pacing_curve
-    pacing_combined = " ".join(c.get("pacing_curve", "") for c in continuity_jsons)
+    # 拼接 pacing_curve（兼容多 schema：旧 v17 用 pacing_curve / 新版用 window_arc）
+    def _safe_pacing_str(c):
+        # 优先 pacing_curve；兼容 window_arc / voice_arc 字段
+        for key in ("pacing_curve", "window_arc", "voice_arc"):
+            v = c.get(key)
+            if isinstance(v, str):
+                return v
+            if isinstance(v, dict):
+                # 把 dict 转成 str（便于关键词扫描）
+                return json.dumps(v, ensure_ascii=False)
+            if isinstance(v, list):
+                return " ".join(str(x) for x in v)
+        return ""
+    pacing_combined = " ".join(_safe_pacing_str(c) for c in continuity_jsons)
     pacing_values = parse_pacing_curve_to_values(pacing_combined, arc_size)
     pacing_labels = parse_pacing_curve_to_labels(pacing_combined, arc_size)
 
@@ -403,32 +495,43 @@ def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_si
     # 6 形状拟合
     shape_name, shape_conf = match_reagan_shape(emotion_curve)
 
-    # 角色弧聚合（从 continuity.character_continuity）
+    # 角色弧聚合（从 continuity.character_continuity，兼容 dict / str）
     character_arc = []
     char_seen: dict[str, dict] = {}
     for c in continuity_jsons:
         for cc in c.get("character_continuity", []) or []:
-            name = cc.get("character", "")
+            if isinstance(cc, dict):
+                name = cc.get("character", "")
+                arc_progress = cc.get("arc_progress", "")
+            elif isinstance(cc, str):
+                name = cc
+                arc_progress = ""
+            else:
+                continue
             if not name:
                 continue
             if name not in char_seen:
                 char_seen[name] = {
                     "character": name,
-                    "stage_from": cc.get("arc_progress", "")[:30],
-                    "stage_to": cc.get("arc_progress", "")[:30],
+                    "stage_from": arc_progress[:30],
+                    "stage_to": arc_progress[:30],
                     "key_turning_chapter": arc_start,
                 }
-            char_seen[name]["stage_to"] = cc.get("arc_progress", "")[:30]
+            char_seen[name]["stage_to"] = arc_progress[:30]
     character_arc = list(char_seen.values())[:5]
 
     # 伏笔聚合
     fs_planted = sum(len(c.get("foreshadowing", {}).get("planted", []) or []) for c in continuity_jsons)
     fs_resolved = sum(len(c.get("foreshadowing", {}).get("resolved", []) or []) for c in continuity_jsons)
 
+    # v22.4dim Round 2 应用：Sudowrite tension dial 1-11
+    sudowrite_dial = [round(1 + 10 * v) for v in emotion_curve[:arc_size]]
+
     return {
         "arc_id": f"arc_{arc_id_num}",
         "chapter_range": f"ch{arc_start}-{arc_end}",
         "emotion_curve_normalized": emotion_curve[:arc_size],
+        "sudowrite_tension_dial_1_11": sudowrite_dial,    # v22.4dim Round 2: 直观档位（business standard）
         "pacing_labels": pacing_labels[:arc_size],
         "scene_summary_ratio_per_chapter": scene_summary_ratio[:arc_size],
         "event_density_per_chapter": event_density[:arc_size],
@@ -445,7 +548,7 @@ def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_si
             "distill_date": datetime.utcnow().strftime("%Y-%m-%d"),
             "source_continuity_files": [f.name for f in continuity_files],
             "source_chapter_jsons_count": len(chapter_jsons),
-            "aggregator_version": "v22.1",
+            "aggregator_version": "v22.4dim.1",
         },
     }
 

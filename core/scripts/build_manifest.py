@@ -1379,6 +1379,129 @@ def _collect_distill_continuity(scanner) -> dict:
     }
 
 
+def _collect_title_style(scanner) -> dict:
+    """v22.4dim N5：从风格库读 title_style.json，注入章节标题命名指纹。"""
+    style_path = scanner.root / "_数据库" / "作者风格.json"
+    if not style_path.exists():
+        return {"title_style_missing": True}
+    try:
+        sd = json.loads(style_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return {"title_style_missing": True}
+    work = (sd.get("meta") or {}).get("work") or sd.get("work")
+    if not work:
+        return {"title_style_missing": True}
+
+    # 推算 title_style.json 路径
+    for parent in [scanner.root, *scanner.root.parents]:
+        ts_file = parent / "workspace" / "styles" / work / "title_style.json"
+        if ts_file.exists():
+            try:
+                return json.loads(ts_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, ValueError):
+                pass
+    ts_file = Path.cwd() / "workspace" / "styles" / work / "title_style.json"
+    if ts_file.exists():
+        try:
+            return json.loads(ts_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {"title_style_missing": True, "reason": f"no title_style.json for work={work}"}
+
+
+def _collect_main_character_arcs(scanner, top_k: int = 3) -> dict:
+    """v22.4dim Round 2 应用：注入风格库主要角色 arc（importance TOP K · Stanford 6 维）。
+
+    writer 写新作时如果用了某蒸馏风格，可以参考"原作主角是什么 Stanford 6 维 profile"
+    给本作主角设计同样画像（如：高 A 主动型 vs 高 I 内省型）。
+    """
+    style_path = scanner.root / "_数据库" / "作者风格.json"
+    if not style_path.exists():
+        return {"main_character_arcs_missing": True}
+    try:
+        sd = json.loads(style_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return {"main_character_arcs_missing": True}
+    work = (sd.get("meta") or {}).get("work") or sd.get("work")
+    if not work:
+        return {"main_character_arcs_missing": True}
+
+    arc_dir = None
+    for parent in [scanner.root, *scanner.root.parents]:
+        candidate = parent / "workspace" / "styles" / work / "character_arcs"
+        if candidate.exists():
+            arc_dir = candidate
+            break
+    if arc_dir is None:
+        candidate = Path.cwd() / "workspace" / "styles" / work / "character_arcs"
+        if candidate.exists():
+            arc_dir = candidate
+    if arc_dir is None or not arc_dir.exists():
+        return {"main_character_arcs_missing": True, "reason": f"no character_arcs for {work}"}
+
+    # 读所有角色 arc，按 importance 排序取 TOP K
+    arcs = []
+    for f in arc_dir.glob("*_emotion_arc.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            s6 = d.get("stanford_6_component", {})
+            imp = s6.get("overall_importance", 0)
+            arcs.append({
+                "character": d.get("character"),
+                "tier": s6.get("tier", "unknown"),
+                "overall_importance": imp,
+                "stanford_6": {
+                    "N": s6.get("N_naming"), "C": s6.get("C_communication"),
+                    "I": s6.get("I_interiority"), "A": s6.get("A_agency"),
+                    "DC": s6.get("DC_direct_char"), "DN": s6.get("DN_description_by_narrator"),
+                },
+                "avg_actor_intensity": d.get("average_actor_intensity"),
+                "avg_experiencer_intensity": d.get("average_experiencer_intensity"),
+                "emotion_rhythm_actor": d.get("emotion_rhythm_pattern_actor"),
+                "actor_top_emotions": d.get("actor_top_emotions", [])[:3],
+                "experiencer_top_emotions": d.get("experiencer_top_emotions", [])[:3],
+                "stage_transitions_count": len(d.get("stage_transitions", [])),
+            })
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    arcs.sort(key=lambda x: -(x["overall_importance"] or 0))
+    return {
+        "_doc": "v22.4dim 蒸馏库主要角色 arc TOP K（按 Stanford 6 维 importance 排序）· 仿写时参考原作主角画像",
+        "top_k": top_k,
+        "main_characters": arcs[:top_k],
+    }
+
+
+def _collect_naming_convention(scanner) -> dict:
+    """v22.4dim N5：从风格库读 naming_convention.json，注入角色命名指纹。"""
+    style_path = scanner.root / "_数据库" / "作者风格.json"
+    if not style_path.exists():
+        return {"naming_convention_missing": True}
+    try:
+        sd = json.loads(style_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return {"naming_convention_missing": True}
+    work = (sd.get("meta") or {}).get("work") or sd.get("work")
+    if not work:
+        return {"naming_convention_missing": True}
+
+    for parent in [scanner.root, *scanner.root.parents]:
+        nc_file = parent / "workspace" / "styles" / work / "naming_convention.json"
+        if nc_file.exists():
+            try:
+                return json.loads(nc_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, ValueError):
+                pass
+    nc_file = Path.cwd() / "workspace" / "styles" / work / "naming_convention.json"
+    if nc_file.exists():
+        try:
+            return json.loads(nc_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {"naming_convention_missing": True, "reason": f"no naming_convention.json for work={work}"}
+
+
 def _collect_arc_template(scanner, chapter: int) -> dict:
     """v22.cluster：注入本章所属 cluster 的 arc 模板（情感曲线 / 节奏 / 高潮）。
 
@@ -2138,6 +2261,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "throughlines": _collect_throughlines(s, chapter),
         "distill_continuity_template": _collect_distill_continuity(s),
         "arc_template": _collect_arc_template(s, chapter),
+        "title_style": _collect_title_style(s),                # v22.4dim N5: 章节标题命名指纹
+        "naming_convention": _collect_naming_convention(s),     # v22.4dim N5: 角色命名规范
+        "main_character_arcs": _collect_main_character_arcs(s, top_k=3),  # v22.4dim Round2: 原作主角 Stanford 6 维参考
         "distill_voice_packs_reference": _collect_distill_voice_refs(s),
         "distill_golden_few_shot": _collect_golden_few_shot(s, chapter),
         "selective_history_retrieval": _collect_selective_history(s, chapter, top_k=3),
@@ -2202,6 +2328,9 @@ def _build_cache_layout() -> dict:
             "distill_continuity_template",       # 蒸馏散文衔接模板
             "distill_voice_packs_reference",     # 原作角色风格 DNA
             "distill_golden_few_shot",           # 蒸馏 golden_passages
+            "title_style",                       # v22.4dim N5: 章节标题命名指纹（全书不变）
+            "naming_convention",                 # v22.4dim N5: 角色命名规范（全书不变）
+            "main_character_arcs",               # v22.4dim Round 2: 原作主角 Stanford 6 维参考（全书不变）
             "position_effect_template",          # R2.3 双轴判定模板（全局常量）
             "_cache_layout",                     # 本字段自身（元数据）
         ],
