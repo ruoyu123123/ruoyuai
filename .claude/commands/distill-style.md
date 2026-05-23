@@ -55,6 +55,18 @@ $ARGUMENTS
     "carry_over": [{"item": ""}]
   },
   "character_continuity": [{"character": "", "first_appear_in": "", "arc_progress": ""}],
+  "G_dimension_proposals": [
+    {
+      "_doc": "v22.evolve 自学习升级字段：agent 觉得现有 35+ 维度没覆盖但本章观察到的现象，结构化提议。dimension_evolver.py 会聚合跨章提议 → 通过双门槛升级到 auto_evolved_dimensions.json",
+      "proposed_dim_name": "<提议的 dim 名，如 dim50_metaphor_compression_ratio>",
+      "observation": "<本章观察的具体现象 < 100 字>",
+      "current_dims_missing": "<现有哪些维度本应覆盖但没覆盖到 / 与已有 dim 的区别>",
+      "value_assessment": "high|mid|low",
+      "estimated_appearance_rate": "<估计每章/每 N 章出现 / 仅特定章型>",
+      "suggested_extraction_method": "<怎么自动检测，如正则/字数/比例/标签>",
+      "category_proposal": "B7_self_discovered"
+    }
+  ],
   "character_emotion_delta": [
     {
       "character": "<角色名>",
@@ -265,7 +277,19 @@ Hook 已强制要求所有蒸馏 Agent 子代理 prompt 必须含 `PLAN_ID` 字�
 
 ## 阶段 0：读经验库（v17 新增 · 必读 · 自学习入口）
 
-**开工前必须读取**全局蒸馏经验库，避免重蹈历史问题：
+**开工前必须读取**全局蒸馏经验库 **+ v22.evolve 自学习升级的维度池**：
+
+### v22.evolve 维度池注入（必读）
+
+```bash
+# 读取自学习升级的维度（agent 蒸馏单章时必须把这些维度也分析）
+cat core/claude-home/auto_evolved_dimensions.json 2>/dev/null
+# 字段 dimensions[] 中 status=active 的维度 → 注入本次蒸馏 prompt 的 B7 段
+```
+
+**子代理收到 brief 时**，brief 末尾会有「v22.evolve B7 自学习追加维度池」段，列出已升级的 N 个维度（如 cand_001 / cand_002 ...）+ 触发指南。子代理在 B7 段必须像分析 B1-B6 一样分析这些维度。
+
+### lessons MD 经验库
 
 - 路径：`<REPO_ROOT>/core/claude-home/lessons/distill-style-lessons.md`
 - 用途：跨项目通用教训库（调度层 / Agent 执行 / 数据质量 / 方法论 / 评估工具）
@@ -590,6 +614,40 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 - conflict_rhythm：作者冲突节奏 vs AI默认（AI倾向匀速推进）
 
 每项标注：作者的做法 + 与AI的差异程度（大/中/小/无差异）
+
+═══ G. 维度自学习提议（v22.evolve 新增 · 可选但鼓励）═══
+
+如果本章观察到现有 35+ 维度（B1-B6）**未覆盖**但**值得长期跟踪**的现象，请填写本段：
+
+**G1 dimension_proposals 字段（结构化）**：
+
+```json
+"G_dimension_proposals": [
+  {
+    "proposed_dim_name": "<dim 名，如 dim50_metaphor_compression_ratio>",
+    "observation": "<本章具体现象 < 100 字>",
+    "current_dims_missing": "<现有 dim X 部分覆盖但缺 Y，或完全未覆盖>",
+    "value_assessment": "high|mid|low",
+    "_doc_value": "high=明确值得新增、mid=值得补充但非紧急、low=仅作记录",
+    "estimated_appearance_rate": "<每章 / 每 N 章 / 仅 X 章型>",
+    "suggested_extraction_method": "<怎么自动检测，如正则/字数比例/章型标签>",
+    "category_proposal": "B7_self_discovered"
+  }
+]
+```
+
+**触发指南**：
+- 看到「现有 dim 应覆盖但精度不够」时填 mid（如 dim14 节奏控制覆盖但没拆「微观节奏」）
+- 看到「全新现象，35 dim 都没覆盖」时填 high（如「物理代价化超能力三件套」）
+- 看到「孤例无价值」时直接不填（不要把无意义观察硬塞 G 段）
+
+**为什么需要**：F 段是自由文本难聚合，G 段是结构化 → `dimension_evolver.py` 跨章聚合 → 满足
+「≥ N 章 + value 主要为 high/mid」 → 自动升级到 `auto_evolved_dimensions.json` → 下次蒸馏 prompt 自动注入。
+
+业界依据（Round 1 调研 · `.research_cache/inspiration_self_evolving_distill_2026-05-24.md`）：
+LLM-based interpretable feature generation (arxiv 2409.07132) workflow B 半自动模式；
+Voyager skill library 渐进 skill 添加范式；
+EvolveR (arxiv 2510.16079) offline self-distillation 闭环。
 
 ═══ F. 对比标注 ═══
 
@@ -1871,6 +1929,112 @@ Agent({
 - 每次蒸馏后把新发现沉淀给后续项目
 
 这是 `/distill-style` 命令的"自学习"能力。
+
+---
+
+## 阶段 6.7（v22.evolve 新增）：维度自演化（dimension_evolver）
+
+### 为什么
+
+阶段 6.5「lessons 沉淀」只把教训写到 MD 文档（人工读取），不能让**下次蒸馏的 prompt 自动加新维度**。
+
+蒸馏 agent 在 F 段（已有）+ G 段（v22.evolve 新加）**早就在主动提议新维度**，但没有跨章统筹机制：
+- 实测BookC前 50 章中 **32 章（64%）F 段含「建议新增…」「建议建立…」「建议区分…」**
+- 这些提议自生自灭，没被吸收
+
+阶段 6.7 是**自我升级闭环**——蒸馏完成后扫所有提议 → 聚合统筹 → 通过双门槛 → 升级 `auto_evolved_dimensions.json` → 下次蒸馏 prompt 自动加新维度（B7 段）。
+
+### 业界依据（Round 1 调研 · 34 来源）
+
+详见 `.research_cache/inspiration_self_evolving_distill_2026-05-24.md`：
+
+- **LLM-based feature generation (arxiv 2409.07132)** — 两种 workflow（A 全自动 / B 半自动），对应我们 F→G→evolver 路线
+- **Voyager skill library (arxiv 2305.16291)** — 渐进 skill 添加 + 跨样本验证范式
+- **EvolveR (arxiv 2510.16079)** — Offline Self-Distillation + Online Interaction 闭环
+- **GEPA (ICLR 2026)** — Pareto frontier 多候选并存（保留多 schema 版本不单线进化）
+- **constraint self-bypass 警告** — agent 知道 prompt 规则会绕，**必须架构层防御**
+
+业界共识范式：**bottom-up discovery（自由提议）+ top-down stabilization（严控升级）双阶段**。
+
+### 触发时机
+
+阶段 6 出货完成后自动触发，与阶段 6.5 并行（**不阻塞**主流程）：
+
+```bash
+# Step A：单项目扫描（出本书候选维度）
+python core/scripts/dimension_evolver.py --project "<workspace/styles/<书名>>" --scan
+# → 输出 .dimension_evolution/candidates_<ts>.json
+
+# Step B：跨项目扫描（出 universal 候选）
+python core/scripts/dimension_evolver.py --all-projects --scan
+# → 输出 core/claude-home/universal_candidates_<ts>.json
+```
+
+### 候选 → promote 流程
+
+**1) 自动模式（推荐 universal 候选，跨 ≥ 2 项目验证）**：
+
+```bash
+python core/scripts/dimension_evolver.py --all-projects --promote-universal
+# 一次最多升 3 维度（防 schema 膨胀），写入 auto_evolved_dimensions.json
+```
+
+**2) 半自动模式（单项目候选，需主代理审）**：
+
+主代理读 candidates JSON → 选定 `cand_NNN` → 调：
+```bash
+python core/scripts/dimension_evolver.py --project "<path>" --promote cand_001
+```
+
+### 防失控（v22.evolve.1 防 SE7 风险）
+
+借鉴 Round 1 调研：constraint self-bypass + Voyager + Schema Registry backward compatibility：
+
+| 防御层 | 机制 |
+|---|---|
+| 一次上限 | `DEFAULT_MAX_PROMOTE_PER_RUN = 3`（单次最多 3 维度入池） |
+| 跨样本验证 | universal 升级需 **≥ 2 个项目** 都验证（防单书噪声） |
+| 双门槛 | candidate 出炉需 **≥ 2 章** 提议 + **≥ 20% valid** ratio |
+| 版本化 | `auto_evolved_dimensions.json.dimensions[].version` 字段 |
+| 重名拒绝 | 已注册的 dim_name 拒绝重复升 |
+| Git 历史 | 注册表每次更新自动 commit（与现有架构对齐） |
+| 旁路防御 | 升级写入 JSON 文件（不直接改 prompt）+ prompt 读取时是「池」（agent 不能改池只能用） |
+| Regression test（未来） | 升级后用已蒸馏样本回归验证（参考 Confluent Schema Registry backward compatibility） |
+
+### 自我升级闭环（与阶段 0 闭合）
+
+阶段 0「读经验库」+ 阶段 6.5「lessons 沉淀」+ **阶段 6.7「维度池升级」** = **三段式自学习闭环**：
+
+```
+[蒸馏 N] agent 在 F/G 段提议 N 个新维度
+   ↓ 阶段 6.7
+dimension_evolver 聚合 → 通过双门槛 → auto_evolved_dimensions.json 加 K 个
+   ↓ 阶段 0 (下次)
+[蒸馏 N+1] prompt 自动注入 auto_evolved_dimensions（B7 段） → agent 蒸馏新维度
+   ↓ 阶段 6.7 (下次)
+继续提议 → 继续升级 → schema 自我进化
+```
+
+### 主代理执行
+
+阶段 6 完成（plan-step 7）后：
+1. spawn lessons-extractor agent（阶段 6.5，已有）
+2. 调 `dimension_evolver.py --project <path> --scan`（阶段 6.7）
+3. 若产出 candidates ≥ 1：主代理 Read candidates JSON，按 high_value 排序展示给用户
+4. 用户/主代理选择 cand_id → 调 `--promote <cand_id>`
+5. 终端报告：「✅ 维度自演化：扫到 N 候选，升级 M 入注册表」
+
+### 与既有 SE1-SE5 的关系
+
+| 已有 SE | 维度自演化的区别 |
+|---|---|
+| SE1 skill_evolver | 写**作经验**侧（写完章节后从 judge 提取 pattern）·  本机制是**蒸馏**侧（蒸馏完后从 agent F/G 段提取维度） |
+| SE2 ERL Heuristics | manifest 检索注入 · 本机制升级 distill prompt schema 本身 |
+| SE3 meta-prompt-optimizer | 改 writer/outline-planner prompt · 本机制升级 distill prompt 字段池 |
+| SE4 三角共演化 | Proposer/Solver/Judge · 本机制 distill agent → evolver → promote |
+| SE5 universal_skill_pool | 跨项目 pattern 池 · 本机制 universal_distill_dimensions 跨项目维度池 |
+
+四者**互补不冲突**——SE1-SE5 优化「写得更好」，本机制优化「蒸馏得更准」。
 
 ---
 
