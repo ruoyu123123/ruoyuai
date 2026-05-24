@@ -1667,10 +1667,11 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 \
 每段生成后**立即**调 `ai_wrapper.py` 让 gen-model 二次复核「这段仿写是否符合作者风格」（与人工 SFS 评分形成 hybrid pipeline · 业界共识 rules + LLM judge = 78.5% vs LLM-only 66.2%）：
 
 ```bash
-# 对每个 test 文件（v22.gov.align P0 修 Gap 5：加 --profile-lock 强制 profile 一致 · 防 train-test skew）
+# 【v22.gov.align P0 修 Gap A2】input 路径必须 = gen_writer 真实产出（章节/cluster_NNN_draft/cluster_NNN_draft.txt）
 for i in 1 2 3 4 5; do
+  CID=$(printf '%03d' $i)
   python core/scripts/ai_wrapper.py \
-    --input "$TEST_ROOT/test${i}_*.txt" \
+    --input "$TEST_ROOT/章节/cluster_${CID}_draft/cluster_${CID}_draft.txt" \
     --task "复刻测试：判断本段是否符合作者风格。检查 1) 句长/段长是否符合 skill 量化基线 2) 章首/章末类型是否在作者偏好分布 3) 对话占比/拟声密度/禁用词命中 4) 是否有 AI 套话/塑料感。给出 agreement (agree/disagree/partial) + 具体修正建议。" \
     --context-file "workspace/styles/<书名>/skill_FINAL.md" \
     --profile-lock "$TEST_ROOT/_gen_model_profile_locked.json"
@@ -1720,18 +1721,39 @@ mkdir -p "$TEST_ROOT/_数据库" "$TEST_ROOT/章节"
 # 1. 复制 skill（gen_writer 的核心 input）
 cp "workspace/styles/<书名>/作者风格_FINAL.json" "$TEST_ROOT/_数据库/作者风格.json"
 
-# 2. v22.gov 强制：锁定当前 gen-model profile（防多轮循环时换 profile 误判）
-python core/scripts/gen_model.py show > "$TEST_ROOT/_gen_model_profile_locked.json"
+# 2. v22.gov.align P0 修 Gap A3：锁定 gen-model profile（用 Python 直接序列化 JSON · gen_model show 是文本不是 JSON）
+python -c "
+import json, sys, pathlib
+sys.path.insert(0, 'core/scripts')
+from gen_model_loader import GenModelLoader, GenModelConfigError
+from datetime import datetime
+try:
+    loader = GenModelLoader()
+    p = loader.get_active_profile()
+    lock = {
+        'profile_name': p.name,
+        'model': p.model,
+        'base_url': p.base_url,
+        'temperature': p.temperature,
+        'locked_at': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        '_doc': 'v22.gov.align profile lock · ai_wrapper 必须验证 active == locked',
+    }
+    pathlib.Path('$TEST_ROOT/_gen_model_profile_locked.json').write_text(json.dumps(lock, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(f'[OK] profile locked: {p.name}')
+except GenModelConfigError as e:
+    pathlib.Path('$TEST_ROOT/_gen_model_profile_locked.json').write_text(json.dumps({'_no_active_profile': True, 'error': str(e)}, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(f'[WARN] no active profile（lock 文件含 _no_active_profile=true，ai_wrapper 见此跳过校验）')
+"
 
 # 3. 【v22.gov.align P0 修 Gap 1】fixture project 加 4 个核心 JSON（防 build_manifest 28 字段 fallback）
 #    业界依据：Arize Acme SDK 完整 fictional fixture · 必须含所有 collector 期望的字段
 python -c "
 import json, pathlib
-# 3a. 人物卡.json — 从风格库 character_arcs/ 反向生成（用原作 TOP 3 importance 角色作仿写参照）
-import os
+# 3a. 人物卡.json — v22.gov.align P0 修 Gap A4：schema 必须是 {'characters': [{id, name, role}, ...]} 列表
+#     不是之前的 {name: {...}} dict！build_manifest 期望列表 schema
 style_root = 'workspace/styles/<书名>'
 ca_dir = pathlib.Path(style_root) / 'character_arcs'
-chars = {}
+characters_list = []
 if ca_dir.exists():
     arcs = []
     for f in ca_dir.glob('*_emotion_arc.json'):
@@ -1741,23 +1763,24 @@ if ca_dir.exists():
             arcs.append((d, s6.get('overall_importance', 0)))
         except: pass
     arcs.sort(key=lambda x: -x[1])
-    for d, imp in arcs[:3]:
-        name = d.get('character', 'unknown')
-        chars[name] = {
-            'role': 'protagonist' if d.get('stanford_6_component', {}).get('tier') == 'protagonist' else 'supporting',
+    for idx, (d, imp) in enumerate(arcs[:3], 1):
+        name = d.get('character', f'char_{idx}')
+        characters_list.append({
+            'id': f'CHAR_{idx:03d}',
+            'name': name,
+            'role': '主角' if d.get('stanford_6_component', {}).get('tier') == 'protagonist' else '配角',
             'importance': imp,
             'avg_actor_intensity': d.get('average_actor_intensity'),
             'avg_experiencer_intensity': d.get('average_experiencer_intensity'),
-            'voice_pack': {'placeholder': '从原作 voice_pack 继承（蒸馏后填）'},
-            '_doc': 'v22.gov.align fixture · 复刻测试用 · 仿写参照原作 TOP 3 角色画像',
-        }
-# 如果 character_arcs 为空：建 2 个 placeholder 角色避免完全 fallback
-if not chars:
-    chars = {
-        '测试主角': {'role': 'protagonist', 'voice_pack': {'placeholder': '通用主角'}, '_doc': 'fallback'},
-        '测试配角': {'role': 'supporting', 'voice_pack': {'placeholder': '通用配角'}, '_doc': 'fallback'},
-    }
-pathlib.Path('$TEST_ROOT/_数据库/人物卡.json').write_text(json.dumps(chars, ensure_ascii=False, indent=2), encoding='utf-8')
+            'voice_pack': {'dialogue_avg_chars': 15, 'placeholder': '从原作 voice_pack 继承'},
+            '_doc': 'v22.gov.align fixture',
+        })
+if not characters_list:
+    characters_list = [
+        {'id': 'CHAR_001', 'name': '测试主角', 'role': '主角', 'voice_pack': {'dialogue_avg_chars': 15, 'placeholder': '通用主角'}, '_doc': 'fallback'},
+        {'id': 'CHAR_002', 'name': '测试配角', 'role': '配角', 'voice_pack': {'dialogue_avg_chars': 12, 'placeholder': '通用配角'}, '_doc': 'fallback'},
+    ]
+pathlib.Path('$TEST_ROOT/_数据库/人物卡.json').write_text(json.dumps({'characters': characters_list}, ensure_ascii=False, indent=2), encoding='utf-8')
 
 # 3b. 世界观.json — 从蒸馏库 meta 继承 + 占位
 import json as _j
@@ -1795,8 +1818,24 @@ scene_rules = {
 }
 pathlib.Path('$TEST_ROOT/_数据库/场景规则.json').write_text(json.dumps(scene_rules, ensure_ascii=False, indent=2), encoding='utf-8')
 
-print('[Step A 3] fixture project 准备完毕：作者风格 + 人物卡 + 世界观 + 用户偏好 + 场景规则 + (后续) 事件簇/进度')
+# 3e-3h. 【v22.gov.align P1 修 Gap A5】加 4 个剩余核心 JSON 空 schema 占位
+#       不准备会被 build_manifest 28 collector 当中余下的 fallback，缺写作上下文
+pathlib.Path('$TEST_ROOT/_数据库/伏笔表.json').write_text(json.dumps({'foreshadows': [], 'active_pledges': [], 'hidden_secrets': []}, ensure_ascii=False, indent=2), encoding='utf-8')
+pathlib.Path('$TEST_ROOT/_数据库/章纲摘要.json').write_text(json.dumps({'chapters': []}, ensure_ascii=False, indent=2), encoding='utf-8')
+pathlib.Path('$TEST_ROOT/_数据库/写作经验.json').write_text(json.dumps({'success_patterns': [], 'failure_patterns': [], 'preferences': []}, ensure_ascii=False, indent=2), encoding='utf-8')
+pathlib.Path('$TEST_ROOT/_数据库/关系.json').write_text(json.dumps({'relationships': []}, ensure_ascii=False, indent=2), encoding='utf-8')
+
+print('[Step A 3] fixture project 准备完毕：作者风格 + 人物卡(列表) + 世界观 + 用户偏好 + 场景规则 + 伏笔表 + 章纲摘要 + 写作经验 + 关系 + (后续) 事件簇/进度')
 "
+
+# 3i. 【v22.gov.align P0 修 Gap A6】Step A 末尾跑 style_injector 预生成 .style_directive/ch_001.json
+#     防 build_manifest 读不到 style_directive 字段
+mkdir -p "$TEST_ROOT/_数据库/.style_directive"
+for ch in 1 2 3 4 5; do
+  python core/scripts/style_injector.py "$TEST_ROOT" "$ch" 2>/dev/null || \
+    echo "{}" > "$TEST_ROOT/_数据库/.style_directive/ch_$(printf '%03d' $ch).json"
+done
+echo "[Step A 4] style_directive 预生成（ch_001 - ch_005）"
 
 # 4. 建 5 个 test 对应的 cluster 占位（v22.gov 修：cluster_id 必须 int · gen_writer --cluster 期望 int）
 python -c "
@@ -1893,51 +1932,78 @@ python core/scripts/gen_chapter_titles.py \
   --chapters 1-5
 # 产出: $TEST_ROOT/章节/第NNN章/第NNN章.txt（5 章独立 · 含网文化标题）
 
-# === C2 (Gap 2 · audit_hub 7 scanner) · 5 段都跑 ===
+# === C2 (Gap 2 · audit_hub 7 scanner) · 5 段都跑 · v22.gov.align P0 修 Gap A1 ===
+# audit_hub 接口: <project> <ch:int>（章节号不是 cluster_id！）
+# test1-4 是 single 模式 cluster_draft 即正文 → 复制到 第NNN章.txt 让 audit_hub 识别
+# test5 splitter 切完已有 第001-005章.txt → 直接跑
 for cid in 1 2 3 4 5; do
-  # 找该 cluster 对应的章节文件（splitter 后或 single 模式）
-  # single 模式：cluster_NNN_draft.txt 即正文；ECAS 模式：第NNN章.txt
+  CID=$(printf '%03d' $cid)
+  DRAFT="$TEST_ROOT/章节/cluster_${CID}_draft/cluster_${CID}_draft.txt"
+  # 把 cluster_draft 复制成 audit_hub 期望的章节路径（test5 splitter 已建好则跳）
+  CHAPTER_DIR="$TEST_ROOT/章节/第${CID}章"
+  if [ -f "$DRAFT" ] && [ ! -f "$CHAPTER_DIR/第${CID}章.txt" ]; then
+    mkdir -p "$CHAPTER_DIR"
+    cp "$DRAFT" "$CHAPTER_DIR/第${CID}章.txt"
+    # 同步建空 changes.json（audit_hub 期望两文件齐全）
+    echo '{"factual": {}, "self_eval": {}}' > "$CHAPTER_DIR/第${CID}章_changes.json"
+  fi
   python core/scripts/audit_hub.py "$TEST_ROOT" "$cid" \
-    --waivers "$TEST_ROOT/_数据库/.审计豁免.json" 2>/dev/null || \
-    echo "[align] audit_hub cluster $cid 跑完（issue list 写到 _数据库/.judge_reports/）"
+    --waivers "$TEST_ROOT/_数据库/.审计豁免.json" 2>&1 | tail -5 || \
+    echo "[align] audit_hub ch $cid 跑完"
 done
 # 输出: $TEST_ROOT/_数据库/.judge_reports/ch_NNN_audit-hub.json
 # 含 7 scanner（validate_chapter/style/narrative/plot/hook/golden/semantic）+ character_arc_drift
 
 # === C3 (Gap 3 · voice-keeper) · test2_dialogue 必跑（含丰富对话） ===
-# 主代理 spawn novel-voice-checker（独立 agent · 含 PLAN_ID/STEP 契约）
-# Agent({
-#   description: "蒸馏测试 voice 审 cluster 2",
-#   prompt: "
-#     PLAN_ID: $PLAN_ID
-#     STEP: 3
-#     PROJECT: $TEST_ROOT
-#     CLUSTER_ID: 2
-#     MANIFEST: $TEST_ROOT/_数据库/.manifest/cluster_2.json
-#     任务：审 test2_dialogue 段的角色对话声纹是否符合 _数据库/人物卡.json 的 voice_pack
-#   "
-# })
-# 检测到 OOC 对话 → spawn gen_fixer.py --mode voice-fix 修复
+# 【v22.gov.align P2 修 Gap A7】主代理必须执行（非注释）以下 Agent spawn — 不可跳过
+```
 
+**【主代理必跑 C3】** spawn `novel-voice-checker` agent，prompt 严格按下方契约（**PLAN_ID/STEP/PROJECT/CHAPTER/MANIFEST 五行不可缺**）：
+
+```
+PLAN_ID: <plan_id>
+STEP: 3
+PROJECT: <TEST_ROOT>
+CHAPTER: 2
+MANIFEST: <TEST_ROOT>/_数据库/.manifest/ch_002.json
+任务：审 cluster_002_draft（test2_dialogue 段）所有角色对话声纹是否符合 _数据库/人物卡.json 的 voice_pack。
+检测到 OOC 对话 → 输出 voice fix brief JSON。
+PROFILE_LOCK: <TEST_ROOT>/_gen_model_profile_locked.json
+```
+
+agent 输出 voice fix brief → 主代理调 `gen_fixer.py --mode voice-fix --brief <brief.json>` 修复。
+
+```bash
 # === C4 (Gap 6 · reading-reflector 8 维) · test5 cluster 必跑 ===
-# 主代理 spawn novel-reading-reflector（必跑 ≥ 3 轮 0 issue 才 pass · 与 write-chapter step 3 阅读轨对齐）
-# Agent({
-#   description: "蒸馏测试 reading-reflector test5",
-#   prompt: "
-#     PROJECT: $TEST_ROOT
-#     CHAPTERS: cluster_005   # splitter 切完的章号列表
-#     ROUND: 1
-#     MAX_ROUNDS: 5
-#     PROFILE_LOCK: $TEST_ROOT/_gen_model_profile_locked.json   # v22.gov.align P0 防 train-test skew
-#     任务：8 大维度审 cluster_005（段首单调/句式重复/voice 漂移/POV/信息密度/节奏感/对话工艺/塑料感）
-#   "
-# })
-# 不通过 → 升 ROUND 2/3 ... 连续 3 轮 0 issue 才进阶段 3
+# 【v22.gov.align P2 修 Gap A7】主代理必须执行（非注释）以下 Agent spawn — 不可跳过
+```
 
-# === C5 (Gap 5 · profile lock 在 ai_wrapper 强制) · 所有 ai_wrapper 调用都传 --profile-lock ===
+**【主代理必跑 C4】** spawn `novel-reading-reflector` agent（必须循环到连续 3 轮 0 issue 才 pass）：
+
+```
+PROJECT: <TEST_ROOT>
+CHAPTERS: 1,2,3,4,5
+ROUND: 1
+MAX_ROUNDS: 5
+PROFILE_LOCK: <TEST_ROOT>/_gen_model_profile_locked.json
+任务：8 大维度审 test5 cluster 切完的 5 章（段首单调/句式重复/voice 漂移/POV 一致性/信息密度/节奏感/对话工艺/塑料感）。
+连续 3 轮 0 issue 才 verdict=pass。
+```
+
+```bash
+# === C5 (Gap 5 · profile lock 在 ai_wrapper 强制 · 已在阶段 2 ai_wrapper 调用全部实现) ===
 # 阶段 2 所有 ai_wrapper 调用必须加：
 #   --profile-lock "$TEST_ROOT/_gen_model_profile_locked.json"
-# 之前 ai_wrapper 调用块全部需更新（见下方 5 段复核循环）
+# Step C2 audit_hub 完成后，主代理同时调 ai_wrapper 复核 audit_hub 输出（防 audit_hub 误判）
+for cid in 1 2 3 4 5; do
+  CID=$(printf '%03d' $cid)
+  AUDIT="$TEST_ROOT/_数据库/.judge_reports/ch_${CID}_audit-hub.json"
+  [ -f "$AUDIT" ] && python core/scripts/ai_wrapper.py \
+    --input "$AUDIT" \
+    --task "复核 audit_hub 输出。判断 hard_gate/advisory issues 是否真实问题还是 false positive。" \
+    --context-file "$TEST_ROOT/章节/第${CID}章/第${CID}章.txt" \
+    --profile-lock "$TEST_ROOT/_gen_model_profile_locked.json"
+done
 ```
 
 **Step C 对齐验收**：
