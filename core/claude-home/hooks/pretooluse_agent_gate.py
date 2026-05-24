@@ -268,6 +268,45 @@ def main():
             print(f"   prompt 前 300: {prompt[:300]}", file=sys.stderr)
             sys.exit(2)
 
+    # ============ 规则 11（v22.cluster.3）：蒸馏复刻必须走 gen-model，禁用 sub-agent ============
+    # 蒸馏 phase-2 / phase-5 的复刻测试是为了验证「skill 能不能让目标 LLM 模仿出风格」。
+    # 正式写作走 gen-model（OpenAI 兼容协议外部模型），所以蒸馏闭环必须同栈。
+    # 若用 Claude sub-agent 复刻 → skill 在 Claude 上能跑出来不代表在 gen-model 上能跑出来
+    # → v0→v1 升级针对错的模型 → 无效迭代。
+    #
+    # 拦截特征（任一命中即拦）：
+    #   1) description 含 "复刻" + 同时 prompt 含 "skill_v" 或 "复刻测试/v"
+    #   2) description 形如 "v{N} 复刻" / "复刻测试" / "phase-2 复刻" / "phase-5 复刻"
+    #   3) output path 落在 workspace/styles/*/复刻测试/v*_round*/test_*_replica.txt
+    #
+    # 豁免：prompt 含 "DISTILL_REPLICATE_BYPASS=1"（明确旁路标记，仅紧急救火用）
+    is_replicate_task = False
+    desc_l = desc.lower()
+    if ("复刻测试" in desc) or ("v0 复刻" in desc) or ("v1 复刻" in desc) or \
+       ("v2 复刻" in desc) or ("phase-2 复刻" in desc) or ("phase-5 复刻" in desc) or \
+       ("replica" in desc_l and "test" in desc_l):
+        is_replicate_task = True
+    elif "复刻" in desc and ("skill_v" in prompt or "复刻测试/v" in prompt or
+                           "test_opening_replica" in prompt or
+                           "test_battle_replica" in prompt or
+                           "test_psychology_replica" in prompt):
+        is_replicate_task = True
+
+    bypass = "DISTILL_REPLICATE_BYPASS=1" in prompt
+
+    if is_replicate_task and not bypass:
+        print("❌ [Hook v22.cluster.3] 蒸馏复刻测试禁用 Agent 工具", file=sys.stderr)
+        print("   蒸馏 phase-2 / phase-5 复刻必须走 gen-model（外部 OpenAI 兼容模型）", file=sys.stderr)
+        print("   正确用法：", file=sys.stderr)
+        print("   python core/scripts/distill_replicate.py \\", file=sys.stderr)
+        print("     --style-skill workspace/styles/<书名>/skill_v<N>.md \\", file=sys.stderr)
+        print("     --type opening|battle|psychology|dialogue|description|transition \\", file=sys.stderr)
+        print("     --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/test_<type>_replica.txt \\", file=sys.stderr)
+        print("     [--ref-chapter <参考章>] [--target-words 1200]", file=sys.stderr)
+        print("   理由：蒸馏闭环必须用最终写作要用的 gen-model 测，否则升级针对错的模型 = 无效迭代", file=sys.stderr)
+        print("   紧急旁路：prompt 加 'DISTILL_REPLICATE_BYPASS=1'（仅救火用，会留 lesson 记录）", file=sys.stderr)
+        sys.exit(2)
+
     # ============ 规则 9（P2-10）：内容级注入模式检测（warn-only） ============
     # 扫描 prompt 中常见 prompt injection 模板。命中 ≥2 个不同 pattern → 警告。
     # 仅 stderr 警告不 exit 2 —— 避免误伤合法包含此类字符串的角色对话/研究内容

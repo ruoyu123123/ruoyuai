@@ -1187,3 +1187,51 @@ writer 写完一章后，**三个 scanner 串行扫描** → judge agent 读三�
 ---
 
 **最后更新**：2026-05-14（v17.11 端到端验证产出 / 新增 §17 5 条 L17.x 教训 + chapter_splitter 改脚本 + narrative_scanner 单人章豁免 + plan_tracker --n 容错 + write-chapter plan v5 整数重编号 · 累计经验库 L1-L17 共 86+ 条目）
+
+---
+
+## §18 v22.cluster.3 完整闭环实证（2026-05-25 · 惊悚乐园 250 章蒸馏）
+
+### L18.1 ⛔ 复刻必须走 gen-model（已写入 hooks 规则 11）
+
+- **现象**：phase-2 第一轮用 Claude sub-agent (Opus 4.7) 复刻 opening/battle/psychology，agent 自评全部 PASS（字数 / 禁词 / 段长达标）
+- **真相**：切回 gen-model（deepseek_v4_pro，正式写作要用的栈）后，特征显著漂移（叙述者跳出频率 / 系统【】嵌入密度 / ACG 引用率 都低 30-50%）
+- **根因**：Claude 对自然语言风格规则的理解 ≠ deepseek/qwen/gemini。用 Claude 测的 v0→v1 升级 = 针对错的模型迭代 = 无效迭代
+- **修复**：
+  - 写 `core/scripts/distill_replicate.py`（gen-model 唯一合法入口）
+  - hooks 加规则 11（描述含「复刻测试 / v{N} 复刻」→ exit 2 拦截 Agent spawn）
+  - CLAUDE.md 加「蒸馏复刻强制 gen-model」全局规则
+- **预防**：蒸馏闭环必须用最终写作要用的同一个 LLM 栈
+
+### L18.2 ⛔ SFS 迭代非单调收敛 = 选峰值版本，不要硬推
+
+- **数据**：v0 (65.72) → v1 (68.38, +2.66) → v2 (64.68, -3.70)
+- **现象**：v2 的修正过激，触发"按下葫芦浮起瓢"
+  - ✅ 改善：句长 std（psychology 0→21.4）、引号独白（46.7→94.8）
+  - ❌ 退步：单句成段率（opening 85.9→59.6）、对话占比、拟声段（100→0）
+- **决策规则**：连续 2 轮 SFS 整体下降 → 停止迭代，选峰值版本为 FINAL（不是最新版）
+- **预防**：phase-5 每轮都跑 SFS 对比上一轮，整体退步立即触发收敛检测，不要为"再试一次"赌博
+- **预防**：v1→v2 修正方向是"加新约束 + negative example"——容易引发回归。改进建议是「保留所有 v1 约束，只**新增**针对低分维度的硬指令，不动其他维度的现有约束」
+
+### L18.3 💡 agent 必须查实际数据，不能盲信用户简报
+
+- **现象**：phase-4 agent 收到指令「极短段占比为零，要加下限」。agent 实际 Read eval JSON 发现：v0 极短段占比 13-22%，**远超原文 ref 的 5%**，score=0 是因为「过多」而非「过少」
+- **agent 决策**：按实测数据反向修正约束（封顶 5% 而非下限）
+- **教训**：用户口述的"低分维度"和 score=0 的实际原因可能完全相反。LLM agent 必须 Read 原始数据自己判断，不能盲信主代理的简报
+- **预防**：phase-4/phase-5 修正反思的 agent prompt 必须强调「先 Read 原始 eval JSON 确认数据方向，再做修正」
+
+### L18.4 ⛔ deepseek_v4_pro 在 distill 闭环的天花板 ≈ SFS 70 分
+
+- **数据**：3 轮迭代 + 6 个低分维度针对性优化，psychology 峰值 71.10 / opening 峰值 67.14 / battle 峰值 66.90
+- **原因**：deepseek 对细颗粒规则指令（"段内长短对比 3 处以上" / "至少 3 个拟声段"）的遵循度低
+- **预防**：
+  - 蒸馏闭环 round 数硬上限 = 3 轮，不要追求 SFS > 80
+  - SFS 70 = 可用基线，注入 gen_writer 后由 writer agent 自检循环补偏差
+  - 切其他 gen-model（qwen / claude-via-gen / gpt-via-gen）可能解锁更高分（待验证）
+
+### L18.5 💡 蒸馏 phase-6 出货决策：v1 = FINAL 不是 v2
+
+- **决策依据**：v1 SFS 68.38 > v2 SFS 64.68（明显退步）
+- **FINAL 文件**：skill_FINAL.md = skill_v1.md + frontmatter（不重写）
+- **distillation_log**：完整保留 v0→v1→v2 三轮历史 + 最终选 v1 的决策说明
+- **预防**：FINAL 永远是「迭代过程中的峰值版本」，不是「最后一版」。让用户和 reader 能从 log 看清楚为什么不是最新版

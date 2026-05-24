@@ -622,17 +622,26 @@ def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
             "count": ref_profile.get("paragraph_count", 100),
         }
 
+    # 工具：把 baseline 中 {"mean": x, "std": y} 形态压平为 float（取 mean）
+    def _flatten_mean(v):
+        if isinstance(v, dict):
+            return v.get("mean", v.get("value", 0.0))
+        return v
+
     punc = q.get("punctuation_density_per_1000", {})
     if punc:
         rp = ref_profile.get("punctuation_density_per_1000", {})
-        for k in ["comma_period_ratio", "ellipsis", "exclamation", "question", "dash"]:
+        for k in ["comma", "period", "comma_period_ratio", "ellipsis",
+                  "exclamation", "question", "dash"]:
             if k in punc:
-                rp[k] = punc[k]
+                rp[k] = _flatten_mean(punc[k])
         ref_profile["punctuation_density_per_1000"] = rp
 
     fw = q.get("function_word_fingerprint_per_1000", {})
     if fw:
-        ref_profile["function_word_fingerprint_per_1000"] = fw
+        ref_profile["function_word_fingerprint_per_1000"] = {
+            k: _flatten_mean(v) for k, v in fw.items()
+        }
 
     # 从 style_profile 中提取额外约束
     sp = baseline.get("style_profile", {})

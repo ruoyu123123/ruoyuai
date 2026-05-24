@@ -307,6 +307,46 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ---
 
+## 🔬 蒸馏复刻强制 gen-model（v22.cluster.3 引入）
+
+`/distill-style` 的 **phase-2（复刻测试）** 和 **phase-5（复刻循环）** 的复刻段产出**必须**走 gen-model（OpenAI 兼容协议外部模型），**禁用 Claude sub-agent**。
+
+### 为什么
+
+蒸馏闭环复刻是为了验证「skill 能不能让目标 LLM 模仿出风格」。正式写作走 gen-model（`deepseek_v4_pro` / `pie_xian` / 等），所以蒸馏闭环必须**同栈**：
+
+- Claude sub-agent 复刻通过 ≠ gen-model 复刻通过（不同模型对 skill 的理解可能完全不同）
+- 用 Claude 测的 skill v0→v1 升级 = 针对错的模型迭代 = 无效迭代
+- 等 phase-6 出货后 `skill_FINAL.md` 注入 `gen_writer.py` 给正式写作用，蒸馏阶段也得用它
+
+### 正确流程
+
+```bash
+python core/scripts/distill_replicate.py \
+  --style-skill workspace/styles/<书名>/skill_v<N>.md \
+  --type opening|battle|psychology|dialogue|description|transition \
+  --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/test_<type>_replica.txt \
+  [--ref-chapter <参考章节路径>] \
+  [--target-words 1200] \
+  [--profile <覆盖 active profile>]
+```
+
+脚本会自动调 `.env` 里 `GEN_MODEL_ACTIVE` 指向的 profile，失败按 fallback 链尝试，产出 `.txt` 正文 + `.meta.json` sidecar（含 profile/model/字数/耗时）。
+
+### 三层防御
+
+| 层 | 实现 | 作用 |
+|---|---|---|
+| L1 契约层 | `distill-style.md` phase-2/phase-5 节明确：复刻必须 `python core/scripts/distill_replicate.py`，禁止 spawn Agent 做复刻 | 命令文档红线 |
+| L2 工具层 | `core/scripts/distill_replicate.py` 是唯一合法入口，内部用 `gen_model_loader` 走 OpenAI 兼容客户端 | 把规则做成默认路径 |
+| L3 校验层 | `pretooluse_agent_gate.py` **规则 11**：检测 description 含「复刻测试 / v{N} 复刻 / phase-2 复刻」或 prompt 含 `test_*_replica` 路径 → exit 2 拦在 Agent spawn 前；提示用 `distill_replicate.py` | 拦截误用 |
+
+紧急旁路：prompt 加 `DISTILL_REPLICATE_BYPASS=1`（仅救火用，会触发 lesson 记录）。
+
+详见 `core/claude-home/lessons/v24-distill-replicate-genmodel.md`。
+
+---
+
 ## 反AI腔调守卫（常驻）
 
 1. **严禁AI套话**：不用「与此同时」「值得一提的是」「不仅如此」「然而」「事实上」
