@@ -2,12 +2,12 @@
 description: 头脑风暴，输入关键词生成5个故事导语
 ---
 
-## 🆕 v2 改造（2026-05-19 · Gen-Model 抽象层）
+## Gen-Model 抽象层（灵感卡走 gen_creative.py）
 
 **关键变化**：灵感卡/导语的**创意笔触正文段不再由 Claude 主代理直接生成**——改为调 `gen_creative.py --mode brainstorm` 让当前 active gen-model profile（用户选择的模型）生成。
 
 **主代理新工作流**：
-1. **调研先行**（v17.7 硬规则）：spawn `novel-researcher` agent，TASK_TYPE=inspiration → 写入 `.research_cache/inspiration_<topic>_<时间>.md`
+1. **调研先行**：spawn `novel-researcher` agent，TASK_TYPE=inspiration → 写入 `.research_cache/inspiration_<topic>_<时间>.md`
 2. **风格基线准备**：识别用户选用的风格库 `workspace/styles/<风格名>/skill_FINAL.md`（如有）
 3. **调 gen_creative.py 生成灵感卡**：
    ```bash

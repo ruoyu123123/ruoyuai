@@ -6,13 +6,13 @@ description: 一致性调和——设定修改后审查受影响的历史章节
 
 $ARGUMENTS
 
-> **v22.gov 三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
+> **三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
 > 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
 > hook 自动检 research_cache + 反思文件。关键脚本输出建议过 `ai_wrapper.py` 二次复核。
 
 ---
 
-# 🛡️ Plan 强制规划（v17.2 新增）
+# 🛡️ Plan 强制规划
 
 调和流程 5 步全部挂在 plan 上——start 前必须 `plan-create` 拿 PLAN_ID，每步完成 `plan-step --n N`，末尾 `plan-end`。Hook 已强制本命令的 PLAN_ID。
 
@@ -270,7 +270,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 ---
 
-## 📋 完成检查清单（v17.2 新增）
+## 📋 完成检查清单
 
 向用户报告"调和完成"前必须自验：
 

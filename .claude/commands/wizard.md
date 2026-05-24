@@ -1,5 +1,5 @@
 ---
-description: 项目偏好向导 — 把"系统擅自决定"全部交给用户决定（v21 UX1 新增）
+description: 项目偏好向导 — 把"系统擅自决定"全部交给用户决定
 ---
 
 # 📋 项目偏好向导
@@ -29,9 +29,9 @@ $ARGUMENTS
 2. Read 现有 `_数据库/用户偏好.json`（如有）作为基线
 3. 询问用户的总体定位（用 AskUserQuestion）
 
-### 组 1：项目基础（必问 · v23.12 简化版）
+### 组 1：项目基础（必问）
 
-> 📝 **v23.12 已废除 v23.11 章数密度公式**。本组只问节奏档作软提示，**不再问目标章数 / 卷数 / event 数 / filler ratio**。
+> 📝 本组只问节奏档作软提示，**不问目标章数 / 卷数 / event 数 / filler ratio**。
 > 理由：故事块（cluster）+ 涟漪效应让单卷章数无法预先锁定；章数由 ME 触发自然涌现。
 
 - **`rhythm_profile` 节奏档位**（默认「混合」 · 仅作软提示）：
@@ -44,7 +44,7 @@ $ARGUMENTS
 - **DCAS 双章模式**：默认 true（推荐）
 - **写作模式**：完整/轻量
 
-**禁问**：~~`target_chapter_count`~~ / ~~`volume_count`~~ / ~~`events_per_volume`~~ / ~~`filler_ratio`~~ —— v23.12 删除。**禁跑**：~~`T × (1-F) / (V × E)` 公式~~。
+**禁问**：`target_chapter_count` / `volume_count` / `events_per_volume` / `filler_ratio`。**禁跑**：`T × (1-F) / (V × E)` 公式。
 
 ### 组 2：叙事节拍（关键个人偏好）
 - **storyteller_profile**：

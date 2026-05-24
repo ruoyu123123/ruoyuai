@@ -2,7 +2,7 @@
 description: 深度蒸馏角色，从已写章节中提取完整 Voice DNA
 ---
 
-## 🆕 v2 改造（2026-05-19 · Gen-Model 抽象层）
+## Gen-Model 抽象层（语音样本走 gen_creative.py）
 
 **关键变化**：角色蒸馏分两段：
 - **分析段**（提取角色实战对话 / 统计 rhythm / 识别 catchphrase 频率 / 分类 banned_phrases）→ **Claude 主代理 / sub-agent**（这是分析判断，不是生成）
@@ -12,7 +12,7 @@ description: 深度蒸馏角色，从已写章节中提取完整 Voice DNA
 1. 主代理读已写章节 → 提取该角色全部对话 → grep + 统计实战数据（基础字段 sentence_avg / banned_phrases / rhythm 直接从数据算）
 2. 对 `style_samples` / `anti_samples` 这种「**含创意笔触的样本**」字段：
    - 主代理准备 brief（角色 id / 历史真实对话片段 5-10 条 / voice_pack 基础字段）
-   - 调 `gen_creative.py --mode voice_sample`（**v2 placeholder**，待 Phase 5 v2 实现）
+   - 调 `gen_creative.py --mode voice_sample`（placeholder，待实现）
    - 临时兜底：用 `gen_fixer.py --mode polish` 加 `--instructions "为角色 X 生成 3 条 style_samples，参考真实对话：..."`
 3. 主代理把 gen-model 输出合并回 `_数据库/人物卡.json` 的 voice_pack 段
 

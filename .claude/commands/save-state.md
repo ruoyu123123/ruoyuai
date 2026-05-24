@@ -6,11 +6,11 @@ description: 章节完成后保存写作状态（v2 · 多 agent 流水线调度
 
 $ARGUMENTS
 
-> **v22.gov 三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
+> **三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
 > 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
 > hook 自动检 research_cache + 反思文件。关键脚本输出建议过 `ai_wrapper.py` 二次复核。
 
-## 【v19.2 新增】启动前 WAL 恢复检查（必跑）
+## 启动前 WAL 恢复检查（必跑）
 
 step 1 之前，主代理必须先跑：
 
@@ -28,7 +28,7 @@ python core/scripts/wal_recovery.py "<项目路径或项目名>"
 
 ---
 
-## 🛡️ Plan 强制规划（v17.2 新增 · Phase 3.1）
+## 🛡️ Plan 强制规划
 
 **每次调用 `/save-state <ch>` 必须先生成 plan 实例，否则后续 Agent 调用会被 pretooluse hook 拦截 (exit 2)。**
 
@@ -476,7 +476,7 @@ PLAN_ID: $PLAN_ID
 STEP: 11
 ```
 
-### 【v19.2 新增】Meta-Judge 触发（每 10 章）
+### Meta-Judge 触发（每 10 章）
 
 **条件**：`N % 10 == 0` 时（ch10/ch20/ch30/...），在 outline-planner 之后**额外**启动 novel-meta-judge：
 
@@ -496,11 +496,11 @@ Meta-judge 会扫描 章纲摘要.json[N-9..N].judge_reports[]，输出：
 
 报告存到 `_数据库/.meta_judge/meta_judge_ch{N-9}_to_ch{N}.json`，**不阻塞 plan**——只是元质量信号。
 
-**前提**：judge_reports_archive.py 已在 step 9 跑过（v19.2 起自动），章纲摘要 judge_reports 字段有数据。
+**前提**：judge_reports_archive.py 已在 step 9 跑过（自动），章纲摘要 judge_reports 字段有数据。
 
 展示 2-3 张走向卡片给用户，等待选择。
 
-### 【v19.4 新增】audit_dashboard 摘要
+### audit_dashboard 摘要
 
 走向卡片之前，先输出一段 audit_dashboard 摘要给用户：
 
@@ -585,7 +585,7 @@ cat .claude/backup/save-state.v1.md
 
 ---
 
-## 📋 完成检查清单（v17.2 · Phase 3.1）
+## 📋 完成检查清单
 
 执行结束前确认（任何一项 NO → 流水线未交付）：
 

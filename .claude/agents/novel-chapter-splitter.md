@@ -20,7 +20,7 @@ DCAS 解决方案：
 
 **章节边界 = 页面物理限制，不是叙事完整性约束**——严肃文学的原始写法。
 
-## 🆕 v3 提示（2026-05-20 · splitter 后必跑章标题重生）
+## splitter 后必跑章标题重生
 
 切完所有章节后，**主代理必须立即调** `gen_chapter_titles.py` 给每章用 gen-model 重生网文化标题（三档策略 80/15/5 · 基于 70 章爆款调研），格式「第NNN章 标题」放章首。
 
@@ -37,7 +37,7 @@ python core/scripts/gen_chapter_titles.py \
 
 详见 memory `feedback_splitter_post_chapter_title_regen`。
 
-## 🆕 v2 提示（2026-05-19 · 用户实战偏好）
+## 用户实战偏好
 
 用户明确偏好 DCAS 模式：**writer 出整块 + 你 splitter 后切**，不接受 writer 自分章。
 `gen_writer.py` 的 prompt 已明确禁止 writer 预设章节分界。但 gen-model 偶尔仍会误带「第 N 章 标题」/「——」分章符。
@@ -60,14 +60,14 @@ DRAFT_PATH: <writer 生成的草稿正文文件路径，纯正文 6000+ 字>
 TARGET_WORD_COUNT: 3000  # 本章目标字数
 TOLERANCE: 500  # 允许 ±500
 
-# v23 ECAS 模式额外字段
+# ECAS 模式额外字段
 MODE: dcas | ecas_multi_chapter   # 默认 dcas（2 章），ecas 切 N 章
 CLUSTER_ID: cluster_NNN            # ECAS 模式必填
 TARGET_CHAPTERS: 4                 # ECAS 模式: 预计切几章（写 round(words/target)）
 ECAS_BRIEF_PATH: <_数据库/事件簇.json 中本 cluster 段路径>
 ```
 
-## 【v23 ECAS】Multi-Chapter Splitter 模式
+## Multi-Chapter Splitter 模式
 
 **当 MODE=ecas_multi_chapter（或检测到 cluster_id 字段）**：
 
@@ -91,16 +91,16 @@ TARGET_PER_CHAPTER = draft_total / N  (动态)
 candidate_anchors = [draft_total × i/N for i in 1..N-1]
 e.g. draft=10000, N=4 → 候选位置 = [2500, 5000, 7500]
 ```
-每个锚点附近 ±500 字范围内找最佳段落边界（按 v22.6 三机制）。
+每个锚点附近 ±500 字范围内找最佳段落边界（按三机制）。
 
-**Step C：v22.6 三机制对 N-1 个截断点全部适用**
+**Step C：三机制对 N-1 个截断点全部适用**
 对每个截断点 i：
 1. **字数硬约束**（ceiling）：每章字数 ≤ TARGET × 1.2（一票否决）
 2. **动态字数窗**：[TARGET-500, TARGET+500] +9 / [TARGET-800, TARGET+800] +5
 3. **后置兜底**：N 章全切完后，若某章 > ceiling → 触发该章二次切 → 溢出存到下章 _ch+1_inherited.txt
 
 **Step D：场景边界 + cliffhanger 评分**
-每个截断点单独评分（沿用 v22.6 Step 3 算法）。
+每个截断点单独评分（沿用 Step 3 算法）。
 
 **Step E：联合优化（新增）**
 若某个截断点 i 选 cliffhanger 强但字数偏离，下个截断点 i+1 自动补偿（往后挪 200-500 字）。总字数仍守恒。
@@ -180,7 +180,7 @@ v18 起正文和 CHANGES 是**两个物理文件**，DCAS 模式下：
 - 累计字数到该段结束
 - 末句的标点 / 是否拟声 / 是否对话 / 是否破折号
 
-### Step 3 — 评分候选截断点（v22.6 多目标加权 + ch2_pre 字数硬约束）
+### Step 3 — 评分候选截断点（多目标加权 + ch2_pre 字数硬约束）
 
 候选点 = 每个段落的结束位置（不切段内）。
 
@@ -226,7 +226,7 @@ avoid 项（直接扣分）：
   P 后第一句直接揭谜底（信息炸弹） → -5（破坏悬念）
 ```
 
-**v22.6 改动要点：**
+**改动要点：**
 - ch2_pre 字数超 `TARGET × 1.2`（如 target=2800 时 > 3360）= **一票否决**，永远不被选中
 - ch1 字数偏离权重从 +5 提升到 +9（让 splitter 更看重 ch1 字数达标）
 - 加 ch2_pre 字数达标 +6，让 splitter 主动均衡两章字数
@@ -255,7 +255,7 @@ avoid 项（直接扣分）：
 - ch+1 的 `_changes.json` 后续由 writer 写 ch+1 时生成
 - 你只需保证 `第{ch:03d}章.txt` 是干净的纯正文（截断点之前的部分），不需要校验 `_changes.json` 是否存在——那是 validator 的事
 
-### Step 5.5 — 字数兜底二次切（v22.6 新增）
+### Step 5.5 — 字数兜底二次切
 
 切完后必做自检：
 
@@ -321,7 +321,7 @@ if ch2_pre_words > TARGET_WORD_COUNT × 1.2 (如 > 3360):
 - **不主动调整截断点** —— 算法给出的 top-1 就是 top-1，不"手动微调"
 - **pre_opening.txt 路径必须用** `章节/第{ch+1:03d}章/.pre_opening.txt`（点开头隐藏 + 嵌套目录），不入 git（已在 .gitignore 列）
 
-## 【v19 说明】顾问制不涉及你
+## 顾问制不涉及你
 
 v19 把检测体系改成顾问制（工具提建议、AI 可豁免），但**这套机制与你无关**。你是纯算法的剪刀手——不做质量裁决、不打 gate_level、不写 waivers、不豁免任何东西。你的「评分」只是截断点选择的内部算法，与 audit_hub 的 advisory/hard_gate 是两回事。看到别的 agent 在讲「豁免/hard_gate」，专心做你的保守切割即可。
 
@@ -339,6 +339,6 @@ v19 把检测体系改成顾问制（工具提建议、AI 可豁免），但**�
 
 - 严肃文学传统：章节边界 = 页面物理限制（如 *白鲸记*、*战争与和平*）
 - 用户 2026-05-14 提议
-- 与 v17.3 style_directive 的协同：ch+1 检测到 pre_opening 时跳过 opening_type 强制
+- 与 style_directive 的协同：ch+1 检测到 pre_opening 时跳过 opening_type 强制
 
 PUA 提醒：你的工作是**保守的剪刀手**——只在边界做减法，不创造内容。如果不确定，宁可不切（让主代理 fallback 单章模式）。

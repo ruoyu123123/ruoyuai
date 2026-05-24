@@ -7,65 +7,32 @@ allowed-tools: [WebFetch, WebSearch, Bash, Read, Write, Edit, Grep, Glob]
 
 $ARGUMENTS
 
-> **v22.gov 三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
+> **三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
 > 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
 > hook 自动检 research_cache 存在 + 反思文件，缺失提示补救（不破坏主流程）。
 > 关键脚本输出建议过 `ai_wrapper.py` 二次复核（避免规则误判）。
 
 ---
 
-# 🚨🚨🚨 v22.cluster 主轨规则警示（2026-05-24 翻车后强制 · Step 1 必读）🚨🚨🚨
+# 🚨 Step 1 必做项（cluster 颗粒度规则）
 
-**本命令的颗粒度规则已从「v17 三章固定窗口」升级为「v22.cluster 故事块自适应」**。下方所有写"三章窗口 / 3 章 agent / 每 3 章 / batch_start step 3"的段落均**[DEPRECATED v22.cluster]**，仅作历史保留——新蒸馏必须按 cluster 颗粒度。
-
-## Step 1 必做项（不做就是 2026-05-24 翻车重演）
+颗粒度规则：**故事块自适应（3-6 章 / 4000-20000 字）**，由 `cluster_segmenter.py` 切分。不要按章号取模 / 固定 N 章窗口。
 
 1. **第一动作**：Read `workspace/styles/<书名>/cluster_index.json`
-   - **场景 A**（重蒸已蒸馏书）：存在 → 直接复用 `clusters[]`（含 strong 边界，v22.cluster.2 等级）
+   - **场景 A**（重蒸已蒸馏书）：存在 → 直接复用 `clusters[]`（含 strong 边界）
    - **场景 B**（新蒸馏 / 全清重做）：不存在 → 跑 `python core/scripts/cluster_segmenter.py --project workspace/styles/<书名>`
    - ⚠️ 场景 B 首轮 cluster_index 的 `boundary_reason_distribution` 必然 `strong=0` 全是 `max_chapters`——**这是设计，不是 bug**（segmenter 是 retroactive 工具，依赖 continuity 数据识别 strong）
-2. **Agent 调度循环**：`FOR cluster in cluster_index.clusters` —— **不要**写 `FOR batch_start = 1 to N step 3`
+2. **Agent 调度循环**：`FOR cluster in cluster_index.clusters`
 3. **单 cluster agent** 任务：读 `cluster.chapters_count` 章原文（3-6 章）→ 产单章 JSON × N + cluster 衔接 JSON × 1
 4. **Agent prompt 必带契约字段**：`PLAN_ID` + `STEP` + `CLUSTER_ID` + `CHAPTER_RANGE`
-5. **场景 B 必做的 retro-refine**：表层蒸馏全部完成后**重跑** segmenter → cluster_index 升级到含 strong 边界的 v22.cluster.2 等级 → 再跑 arc_aggregator
+5. **场景 B 必做的 retro-refine**：表层蒸馏全部完成后**重跑** segmenter → cluster_index 升级到含 strong 边界 → 再跑 arc_aggregator
 6. **后置聚合**：`python core/scripts/arc_aggregator.py --project ... --all-clusters` 产 cluster_arc（主轨）+ 副轨 fixed10
 
-## 速查
-
-| 项 | v17 老规则（弃） | v22.cluster 新规则 |
-|---|---|---|
-| 颗粒度 | 固定 3 章 | **自适应 3-6 章 / 4000-20000 字** |
-| 切分 | 章号取模 step 3 | **`cluster_segmenter.py`** |
-| Agent 数（200 章估）| ~67 | **~37**（节省 45%） |
-| 衔接 JSON | `衔接分析/ch{N}_{N+2}_continuity.json` | `衔接分析/cluster_<id>_continuity.json` |
-| arc 聚合 | ❌ | `arc_aggregator.py` 主轨 cluster + 副轨 fixed10 |
-
-完整迁移指南：`core/claude-home/lessons/v22-cluster-migration.md`
-业界依据：LumberChunker (EMNLP 2024) +7.37% DCG@20 / MARCUS 2025 事件中心 / Multi-Agent TV Arcs 自然终结
+业界依据：LumberChunker (EMNLP 2024) +7.37% DCG@20 / MARCUS 事件中心 / Multi-Agent TV Arcs 自然终结
 
 ---
 
-# ⚠️ v17 重大升级（历史 · [DEPRECATED v22.cluster]）：三章窗口蒸馏 + 衔接分析
-
-> 本节是 v17 → v22.cluster 之前的历史规则，保留作上下文。**新蒸馏不走这里**，走上方 v22.cluster 主轨规则 + 下方"阶段 1.5"段落。
-
-## v17 解决的问题
-
-**v16 痛点**：1 章 1 子代理虽然颗粒度细，但单 agent 看不到上下章衔接，dim26-27（与上章衔接类型 / 衔接手法）只能凭印象盲填。聚合 agent 虽能补一部分跨章特征，但**章际衔接的真实手法被打散**，复刻阶段 AI 写连续章节时容易"断章感"。
-
-## v17 核心改动
-
-| 维度 | v16 | v17 |
-|---|---|---|
-| 单 agent 处理章数 | 1 章 | **3 章（连续）** |
-| 输出 JSON | 1 个单章 JSON | **3 个单章 JSON（颗粒度严格保留）+ 1 个 continuity JSON** |
-| 章际衔接质量 | 盲填 | **真实上下文填写（前→中→后）** |
-| 聚合频率 | 每 10 章 | **每 30 章（10 个 3 章 agent）** |
-| 调用次数（200 章） | 200 次 | **~67 次** |
-| 失败重做代价 | 1 章 | 3 章 |
-| 衔接模板提取 | ❌ | ✅ narrative_continuity_template |
-
-## v17 衔接分析 JSON Schema（continuity）
+## 衔接分析 JSON Schema（continuity）
 
 每个 3 章 agent 必须输出到 `_数据库/衔接分析/ch{N}_{N+2}_continuity.json`：
 
@@ -95,7 +62,7 @@ $ARGUMENTS
   "character_continuity": [{"character": "", "first_appear_in": "", "arc_progress": ""}],
   "G_dimension_proposals": [
     {
-      "_doc": "v22.evolve 自学习升级字段：agent 觉得现有 35+ 维度没覆盖但本章观察到的现象，结构化提议。dimension_evolver.py 会聚合跨章提议 → 通过双门槛升级到 auto_evolved_dimensions.json",
+      "_doc": "自学习升级字段：agent 觉得现有 35+ 维度没覆盖但本章观察到的现象，结构化提议。dimension_evolver.py 会聚合跨章提议 → 通过双门槛升级到 auto_evolved_dimensions.json",
       "proposed_dim_name": "<提议的 dim 名，如 dim50_metaphor_compression_ratio>",
       "observation": "<本章观察的具体现象 < 100 字>",
       "current_dims_missing": "<现有哪些维度本应覆盖但没覆盖到 / 与已有 dim 的区别>",
@@ -126,7 +93,7 @@ $ARGUMENTS
 }
 ```
 
-## v17 聚合时新增"衔接模板节"
+## 聚合时新增"衔接模板节"
 
 每 30 章聚合时（10 个 continuity JSON），主代理必须额外做：
 - 衔接类型分布统计（直接承接/信息炸弹回响/时间跳跃/... 各占多少）
@@ -136,9 +103,9 @@ $ARGUMENTS
 
 ---
 
-# ⚠️ v15 重大升级：程序化量化 + 闭环蒸馏
+# 程序化量化 + 闭环蒸馏
 
-## 程序化工具（v15 新增 · 必须使用）
+## 程序化工具（必须使用）
 
 **以下 Python 脚本是蒸馏流程的核心基础设施，禁止跳过：**
 
@@ -203,7 +170,7 @@ python core/scripts/validate_style.py "风格库/复刻测试/v0/test1_opening.t
 
 **单次蒸馏 ≤ 阶段 1 = 错误的蒸馏。完整蒸馏必须跑完阶段 6。**
 
-**⚠️ v17.2 plan 强制规划下的硬约束**：
+**⚠️ plan 强制规划下的硬约束**：
 - 阶段 1 完成后**强制执行 `plan_tracker.py step --n 2`**，但 `plan_tracker.py end` **必须阶段 7 全部完成才允许**（否则 exit 2）。
 - 跳过任何 required 步骤直接调 `plan-end` → 脚本拦截 → 禁止声称"蒸馏完成"。
 - 这是从命令调度层兜底，防止 Agent 跑完阶段 1 表层蒸馏就交差。
@@ -227,7 +194,7 @@ python core/scripts/validate_style.py "风格库/复刻测试/v0/test1_opening.t
 
 ---
 
-## 🛡️ Plan 强制规划（v17.2 新增 · 防跳阶段）
+## 🛡️ Plan 强制规划（防跳阶段）
 
 **核心问题**：`/distill-style` 是 **6 阶段闭环**——阶段 1 只是"表层蒸馏"，跳过阶段 2-6 = 蒸馏失败。历史上多次出现"跑完阶段 1 就声称完成"的事故（典型如《BookC》蒸馏只产出 skill v0 就 commit）。Plan 强制规划层从命令调度层兜底，防止跳阶段交付。
 
@@ -249,8 +216,8 @@ echo "PLAN_ID=$PLAN_ID"
 
 | 阶段编号 | 对应文档章节 | plan step n | expected_outputs |
 |---|---|---|---|
-| 阶段 0 | 读经验库 / 预处理（**必读 cluster_index.json** · v22.cluster）| `--n 1` | 无（用 `--skip-output`） |
-| 阶段 1 | 表层蒸馏（**v22.cluster 主轨**：cluster agent + cluster 衔接 + arc 聚合 + skill v0）| `--n 2` | `workspace/styles/<书名>/作者风格.json` |
+| 阶段 0 | 读经验库 / 预处理（**必读 cluster_index.json**）| `--n 1` | 无（用 `--skip-output`） |
+| 阶段 1 | 表层蒸馏（cluster agent + cluster 衔接 + arc 聚合 + skill v0）| `--n 2` | `workspace/styles/<书名>/作者风格.json` |
 | 阶段 2 | 复刻测试 v0/v1/v2... | `--n 3` | 复刻测试目录下的 `test*.txt` |
 | 阶段 3 | 多维度对比扫描 + SFS 评分 | `--n 4` | `对比报告/distillation_compare_v{N}.json` |
 | 阶段 4 | 修正反思 → skill v{N+1} | `--n 5` | 无（用 `--skip-output`，skill 升级是 Edit/Write） |
@@ -278,16 +245,16 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 ### 与 PreToolUse Hook 的协作
 
-Hook 已强制要求所有蒸馏 Agent 子代理 prompt 必须含 `PLAN_ID` 字段。本命令内所有蒸馏 Agent 调用模板（**v22.cluster 主轨的 cluster agent** + 历史保留的 v17 三章窗口模板）**必须**注入：
+Hook 已强制要求所有蒸馏 Agent 子代理 prompt 必须含 `PLAN_ID` 字段。所有蒸馏 Agent 调用模板**必须**注入：
 - `PLAN_ID: $PLAN_ID`
 - `STEP: <当前阶段号>`
-- v22.cluster 主轨额外加：`CLUSTER_ID: <auto_xxx>` + `CHAPTER_RANGE: <ch_a-ch_b>`
+- cluster 调度额外加：`CLUSTER_ID: <auto_xxx>` + `CHAPTER_RANGE: <ch_a-ch_b>`
 
 缺字段 → hook L3 直接 exit 2 拦截。
 
 ---
 
-## ⛔ 单次批次硬上限：300 章（v17.1 新增 · 必须遵守）
+## ⛔ 单次批次硬上限：300 章（必须遵守）
 
 **铁律**：单次 `/distill-style` 命令最多处理 **300 章**（推荐 200-250 章）。
 
@@ -318,11 +285,11 @@ Hook 已强制要求所有蒸馏 Agent 子代理 prompt 必须含 `PLAN_ID` 字�
 
 ---
 
-## 阶段 0：读经验库（v17 新增 · 必读 · 自学习入口）
+## 阶段 0：读经验库（必读 · 自学习入口）
 
-**开工前必须读取**全局蒸馏经验库 **+ v22.evolve 自学习升级的维度池**：
+**开工前必须读取**全局蒸馏经验库 **+ 自学习升级的维度池**：
 
-### v22.evolve 维度池注入（必读）
+### 维度池注入（必读）
 
 ```bash
 # 读取自学习升级的维度（agent 蒸馏单章时必须把这些维度也分析）
@@ -330,7 +297,7 @@ cat core/claude-home/auto_evolved_dimensions.json 2>/dev/null
 # 字段 dimensions[] 中 status=active 的维度 → 注入本次蒸馏 prompt 的 B7 段
 ```
 
-**子代理收到 brief 时**，brief 末尾会有「v22.evolve B7 自学习追加维度池」段，列出已升级的 N 个维度（如 cand_001 / cand_002 ...）+ 触发指南。子代理在 B7 段必须像分析 B1-B6 一样分析这些维度。
+**子代理收到 brief 时**，brief 末尾会有「B7 自学习追加维度池」段，列出已升级的 N 个维度（如 cand_001 / cand_002 ...）+ 触发指南。子代理在 B7 段必须像分析 B1-B6 一样分析这些维度。
 
 ### lessons MD 经验库
 
@@ -361,10 +328,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 ## 阶段 1（原"第一步"）：表层蒸馏
 
-> ⚠️ **v22.cluster 主轨**：本阶段的标准实现已升级为「cluster 故事块自适应蒸馏」，详见下方"v22.cluster 主轨流程"小节。
-> 再下方的 "v17 三章窗口" 内容 **[DEPRECATED v22.cluster]**，保留作历史参考，新蒸馏不走那里。
-
-### v22.cluster 主轨流程（新蒸馏走这条）
+### 主轨流程（cluster 故事块自适应蒸馏）
 
 ```
 1. Read workspace/styles/<书名>/cluster_index.json
@@ -391,136 +355,11 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 5. 全部 cluster 完成 → skill v0 聚合
 ```
 
-### v17 三章窗口流程 `[DEPRECATED v22.cluster]`（仅历史参考，新蒸馏不要走这里）
-
-## 第一步：全书三章窗口蒸馏（每章必蒸馏，不采样）`[DEPRECATED v22.cluster]`
-
-### 核心原则（v17 升级 · [DEPRECATED v22.cluster]）
-
-**⚠️⚠️⚠️ 不可违反的硬性规则 ⚠️⚠️⚠️**
-
-1. **全量覆盖** — 每一章都必须蒸馏，禁止采样、跳章、偷懒
-2. **主代理不读正文** — 主代理只负责调度（传文件路径+行号），不 Read 章节内容
-3. **子代理读取+分析** — 每个子代理自己 Read 章节内容并分析
-4. **3章1子代理（v17 升级）** — 每个 Agent 子任务处理连续 3 章。理由：3 章是观察章际衔接（dim26-27）的最小完整单元；前一章→当前章→后一章让中间章的衔接分析基于真实上下文而非盲填；同时保留单章颗粒度（输出 3 个独立 JSON）
-5. **单章颗粒度严格保留** — 3 章 agent 必须独立跑 3 次 style_analyzer.py，输出 3 个独立 chN.json，禁止把 3 章数据"平均化"为单个 JSON
-6. **衔接分析强制输出** — 每个 3 章 agent 必须额外输出 1 个 continuity JSON 到 衔接分析/chN_N+2_continuity.json
-7. **迭代升级** — 每分析完 30 章（10 个 3 章 agent）就更新一次作者 skill 文件，后续子代理基于最新 skill 继续精化
-
-**禁止：**
-- ❌ 主代理 Read 章节正文（哪怕一行都不行）
-- ❌ 采样/跳章/每N章取1章
-- ❌ 1 个子代理处理超过 3 章（除最后一组余数章节）
-- ❌ 把 3 章数据合并为单个 JSON（颗粒度必须保留）
-- ❌ 跳过衔接分析 JSON 输出
-- ❌ 主代理在上下文中累积正文内容
-- ❌ 蒸馏到一半说"已经够了"
-- ❌ AI自行决定"全量太慢所以改用分层/采样策略"
-- ❌ 跳过任何章节编号（必须严格按 1,2,3,4,5...N 顺序执行）
-- ❌ 以"时间太长""效率"为由修改全量策略
-
-**⚠️ 防偷懒铁律：**
-即使全书有2000+章需要蒸馏很久，也必须逐章执行，不允许中途自作主张改为"分层策略""代表性章节""关键章节"等变体。用户明确要求全量就是全量。如果确实需要很长时间，那就花很长时间——这是用户的选择，AI无权替用户决定"够了"。
-
-**执行节奏：**
-- 每轮并行启动 5 个子代理 × 3 章 = 一批 15 章（Ch1-3, Ch4-6, Ch7-9, Ch10-12, Ch13-15）
-- 严格按章节编号顺序推进，不跳号
-- 每 30 章（10 个 3 章 agent）更新 skill 后继续下一批
-- 最后一组若不足 3 章，可特殊处理：合并到上一组（5 章特殊 agent）或单独跑 2 章 agent
-- 直到最后一章完成为止
-
-### 多源抓取（失败自动换源）
-
-当一个源抓取失败时，**不要犹豫、不要问用户、不要停下来**——立即自己去网上找能用的源：
-
-**⚠️ 硬性规则：绝对不要因为抓取失败就停下来问用户"你能提供文本吗"。你有 WebSearch 和 WebFetch 工具，自己去找！**
-
-```
-抓取流程（全自动，不问用户）：
-1. 尝试用户提供的原始链接
-2. 如失败（404/反爬/空内容）→ 立即执行 WebSearch 搜索：
-   - 搜索「书名 + TXT下载」
-   - 搜索「书名 + 全文阅读」
-   - 搜索「书名 + 第一章」
-3. 从搜索结果中找到可用的阅读页面，用 WebFetch 抓取
-4. 如第一个搜索结果不行，继续尝试下一个
-5. 备用源列表（直接尝试）：
-   - 笔趣阁系：biquge.com / biquge5200.com / xbiquge.la
-   - 69书吧：69shuba.com
-   - 顶点小说：dingdian.net
-   - 无错小说：wucuo.org
-   - 全本小说网：quanben.io
-6. 只有在尝试了至少5个不同源都失败后，才可以告诉用户需要本地文件
-```
-
-### 输入方式
-
-- **小说链接**：先尝试原始链接，失败则**自动搜索换源**（不问用户）
-- **本地文件路径**：子代理用 Read 工具读取（最可靠）
-- **粘贴内容**：直接使用
-- **只提供书名**：用 WebSearch 搜索后自动抓取
-
-### 主代理执行流程
-
-```
-主代理职责（严格遵守）：
-
-1. 预处理（仅此步骤可以 Read 文件头部来确定章节分布）：
-   - 用 Bash 的 grep 命令定位所有章节标题的行号
-     例：grep -n "^第.*章" file.txt | head -50
-   - 建立章节索引表：{章节号: {文件路径, 起始行, 结束行}}
-   - 确定总章节数 N
-
-2. 三章窗口调度（v17 升级 · 全自动循环，不停顿）`[DEPRECATED v22.cluster]`：
-   ⚠️ 新蒸馏请用 v22.cluster 主轨调度（见上方）。下面是 v17 历史调度模板：
-   FOR batch_start = 1 to N step 3:
-     batch_end = min(batch_start + 2, N)  # 最后一组若不满 3 章，并入上一批做 5 章特殊 agent
-     启动 Agent 子任务（每批并行 5 个 agent）：
-     Agent({
-       description: "蒸馏第{batch_start}-{batch_end}章风格",
-       prompt: "你是写作风格分析专家。
-         PLAN_ID: $PLAN_ID           # ⚠️ v17.2 必填：父 plan id，hook 强制校验
-         STEP: 2                      # ⚠️ v17.2 必填：当前所在阶段（阶段 1 → step 2）
-         任务：连续蒸馏 Ch{batch_start}-{batch_end} 三章。
-         请独立 Read 三章正文（3 组 offset/limit），独立跑 3 次 style_analyzer.py。
-         输出 4 个文件：
-         - 蒸馏进度/ch{N}.json, ch{N+1}.json, ch{N+2}.json（单章独立，颗粒度保留）
-         - 衔接分析/ch{N}_{N+2}_continuity.json（章际衔接分析）
-         [当前作者skill摘要（如有）]
-         [3章 brief 模板路径]"
-     })
-     收到子任务返回的 4 个 JSON
-     将单章 JSON 写入 _数据库/蒸馏进度/第{chapter}章.json
-     将衔接 JSON 写入 _数据库/衔接分析/ch{N}_{N+2}_continuity.json
-
-   每 30 章（10 个 3 章 agent）更新一次：
-     汇总最近 30 章结果 → 更新 _数据库/作者风格.json
-     **v16 跨章聚合** → 从已分析的所有章节的 B2 维度数据执行 2.8 跨章多样性分析：
-       - 统计开头/结尾类型序列，计算连续重复率
-       - 统计拟声词每章频次分布（均值、零值率）
-       - 统计环境锚点跨章出现频率，标记高危重复元素
-       - 统计场景过渡方式分布
-       - 生成 cross_chapter_diversity 字段写入 作者风格.json
-     **v17 衔接聚合** → 从已分析的所有 continuity JSON 中聚合：
-       - 衔接类型分布（直接承接/信息炸弹→静默回响/...）
-       - 高频伏笔模式（最常埋什么、最常多少章后回收）
-       - 角色弧光节奏（多少章引入 / 多少章变化）
-       - 跨章符号/意象热点
-       - 生成 narrative_continuity_template 字段写入 作者风格.json
-     更新 风格库/[小说名]_skill.md（迭代升级，**包含跨章多样性约束节 + 章际衔接模板节**）
-     终端输出：「✅ 已蒸馏 {batch_end}/{N} 章，skill已迭代更新（含跨章 + 衔接聚合）」
-
-3. 全书完成后：
-   汇总所有章节结果 → 生成最终版 作者风格.json + Skill文件
-   记录风格演变轨迹
-   终端输出：「✅ 全书{N}章蒸馏完成」
-```
-
 ### 子代理的职责
 
 每个子代理独立完成以下工作：
 1. 用 Read 工具读取指定行范围的章节内容
-2. **先用 Bash 跑 `python core/scripts/style_analyzer.py` 获取精确量化数据**（v15 新增）
+2. **先用 Bash 跑 `python core/scripts/style_analyzer.py` 获取精确量化数据**
 3. 基于精确数据 + LLM 定性分析，完成 15 维度风格分析
 4. 对比当前作者skill（如已有），标注"新发现"或"与基线一致"
 5. 返回结构化 JSON 结果给主代理（量化数据来自脚本，定性分析来自 LLM）
@@ -591,7 +430,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 14. 节奏控制（快慢段落比例和切换）
 15. 独特标识（区别于其他作者的最显著特征）
 
-═══ B2. 跨章对比维度（v16 新增 · 用于后续跨章聚合）═══
+═══ B2. 跨章对比维度 ═══
 
 16. 开头类型标签（从以下选一：场景型/静场定格/动作切入/冷事实三连击/纯对话开场/时间地点两字段/拟声定格/钩子回音式/人物内心吐槽/心理铺陈/动作承接/其他）
 17. 开头焦点元素（本章开头用了什么具体物件/感官做焦点？如"灯光""雨声""咖啡味"，列1-2个关键词）
@@ -600,7 +439,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 20. 环境锚点清单（列出本章用作氛围的具体感官元素，格式：[{元素:"灯管闪烁", 感官:"视觉", 出现次数:3}]，捕获重复使用的元素）
 21. 角色对话长度（本章每个说话角色的平均单句字数和最长单句字数，用于 voice_pack 合规检查）
 
-═══ B3. 描写技法维度（v16 新增 · 用于后续技法聚合）═══
+═══ B3. 描写技法维度 ═══
 
 22. 人物引入技法（本章有新角色出场时，从以下选一或多：路人群像视角观察/动作先行/装备侧写/对话展现/对比反差/背景信息通过他人对话传递/其他。描述具体手法）
 23. 环境描写技法（本章用了什么环境描写手法：两字锚点定场/感官主导单点深入/对话间接展现环境/最小化具象1-2句收笔/氛围暗示不明说/其他。列出每处环境描写的位置和手法）
@@ -609,7 +448,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 26. 与上章衔接类型（从以下选一：直接承接同一时空/信息炸弹→静默回响/时间跳跃/空间跳转/情绪落差/悬念承接新视角/其他）
 27. 与上章衔接手法（具体描述：如"上章末尾尖叫声→本章开头角色听到叫声回应"或"上章末信息炸弹'炽天使'→本章开头'房间陷入了短暂安静'用静默消化冲击"）
 
-═══ B4. 叙事工艺维度（v16 新增 · 从大神写作经验中提炼）═══
+═══ B4. 叙事工艺维度 ═══
 
 28. 场景vs概述比例（本章中，多少比例是"实时场景"——有对话/动作/实时展开，多少是"概述"——叙述者压缩时间跳过事件？估算百分比。AI 典型问题：100%场景0%概述，而好作者通常 70%场景/30%概述）
 29. 钩子清单（本章中设置了几个"钩子"——让读者想继续看下去的悬念点？列出每个钩子的位置和类型：信息悬念/角色秘密/危机预告/伏笔抛出/反转预告。统计钩子总数和位置分布：开头/中段/结尾各几个）
@@ -620,7 +459,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 34. 叙事距离变化（本章中，叙述者和角色的"心理距离"是否变化？哪些段落是"贴近"角色意识的——能感受到角色的思维/感官？哪些段落是"拉远"的——叙述者在客观描述？距离变化的节奏是什么？）
 35. 期待感构建（本章用了什么手法让读者"想继续看"？从以下选：信息差——读者知道危险角色不知道 / 许诺——暗示后面会有好看的 / 谜题——抛出问题不给答案 / 人物困境——角色陷入两难 / 升级期待——读者期待角色变强。列出每种手法的具体位置）
 
-═══ B5. 作者区分度维度（v16 新增 · 从文体学+拆书法+竞品分析中提炼 · 去重后精选）═══
+═══ B5. 作者区分度维度 ═══
 
 **筛选标准：以下维度经过与 B1-B4 全部35个维度去重，确认无冗余覆盖，且每个维度都有高作者区分度（不同作者在这个维度上差异显著）。**
 
@@ -636,7 +475,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 - dim11"悬念手法" 与 dim29"钩子清单"：dim29是dim11的细化版，分析时以dim29为准
 - dim35"期待感构建" 与 dim32"信息差管理"：有交叉但方向不同——dim32关注信息不对称，dim35关注读者心理预期。两个都要分析但注意不重复
 
-═══ B6. 叙事指纹维度（v16 终版 · agent团队+竞品分析+拆书法去重后精选）═══
+═══ B6. 叙事指纹维度 ═══
 
 **这是经过4路并行搜索 → 与B1-B5全部41维度去重 → 区分度+通用性双重过滤后的最终补充。**
 
@@ -691,7 +530,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 每项标注：作者的做法 + 与AI的差异程度（大/中/小/无差异）
 
-═══ G. 维度自学习提议（v22.evolve 新增 · 可选但鼓励）═══
+═══ G. 维度自学习提议（可选但鼓励）═══
 
 如果本章观察到现有 35+ 维度（B1-B6）**未覆盖**但**值得长期跟踪**的现象，请填写本段：
 
@@ -735,7 +574,7 @@ EvolveR (arxiv 2510.16079) offline self-distillation 闭环。
 
 ### 验证标准
 
-**v22.cluster 主轨标准（新蒸馏走这条）**：
+**主轨标准**：
 - Agent 调用次数 = `len(cluster_index.clusters)`（典型 200 章 → 30-40 cluster）
 - 主代理上下文中不能出现章节正文
 - 每完成 ~10 cluster 看到一次 skill 文件更新 + arc_aggregator 增量聚合
@@ -744,14 +583,8 @@ EvolveR (arxiv 2510.16079) offline self-distillation 闭环。
 - `衔接分析/` 目录下有每 cluster 一个的 continuity JSON
 - `arc_templates/` 目录下有每 cluster 一个的 `cluster_arc_<id>.json` + 副轨 `arc_<NNN>.json` × ⌈N/10⌉
 
-**v17 老标准 `[DEPRECATED v22.cluster]`**（历史参考）：
-- 蒸馏过程中 Agent 调用次数 ≈ ⌈总章节数 / 3⌉（每 3 章 1 次）
-- 每 30 章必须看到一次 skill 文件更新
-- `衔接分析/` 目录下有每 3 章一个的 continuity JSON
 
----
-
-## 阶段 1.5（v22.cluster 重构）：故事块 arc 聚合（双轨）
+## 阶段 1.5：故事块 arc 聚合（双轨）
 
 ### 为什么需要 + 颗粒度选型依据
 
@@ -783,7 +616,7 @@ workspace/styles/<书名>/
 
 ### 执行流程
 
-#### 已蒸馏书（5 本现有书）—— retroactive 切分 + v22.4dim 4 维同步
+#### 已蒸馏书（5 本现有书）—— retroactive 切分 + 4 维同步
 
 ```bash
 # Step A：按情节单元自动切 cluster（启发式：connection_type + 字数/章数硬约束）
@@ -799,7 +632,7 @@ python core/scripts/character_arc_aggregator.py --project workspace/styles/<书�
 # Step D：全书 summary
 python core/scripts/arc_aggregator.py --project workspace/styles/<书名> --mode summary
 
-# === v22.4dim Round 1+2 新增：仿写真实度 4 维同步 ===
+# === 仿写真实度 4 维同步 ===
 
 # Step E：章节标题命名风格指纹（业界空白领域 · 我们做即 SOTA）
 python core/scripts/title_style_distiller.py --project workspace/styles/<书名>
@@ -813,7 +646,7 @@ python core/scripts/naming_convention_distiller.py --project workspace/styles/<�
 
 #### 新蒸馏书 —— 阶段 1 每完成 1 个 cluster 触发
 
-**注（v22.cluster 主轨已默认）**：v17 三章窗口已 `[DEPRECATED v22.cluster]`（见阶段 1 顶部 v22.cluster 主轨流程）。新蒸馏直接按 cluster 调度，每完成 1 个 cluster 触发：
+**新蒸馏直接按 cluster 调度，每完成 1 个 cluster 触发**：
 
 ```bash
 python core/scripts/arc_aggregator.py --project workspace/styles/<书名> --cluster <cluster_id>
@@ -823,7 +656,7 @@ cluster 边界来源（按优先级）：
 1. 大纲已含 ECAS cluster_brief → 直接用 cluster_id + chapter_range
 2. 无大纲 cluster → 蒸馏完成后跑 cluster_segmenter 一次性切
 
-### 🔁 2 轮 0 issue 收敛循环（SRE 风格 · v22.cluster 新增 · 来自用户 goal 2026-05-24）
+### 🔁 2 轮 0 issue 收敛循环（SRE 风格）
 
 参考 reading-reflector 的 3 轮 clean 模式（`.claude/agents/novel-reading-reflector.md` MAX_ROUNDS=5 / 3 轮 clean pass）。蒸馏阶段 1.5 采用 **2 轮 0 issue** 终止：
 
@@ -994,7 +827,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --output "arc_template
 - 角色成长节奏
 - 配角塑造深度
 
-### 2.8 跨章多样性分析（v16 新增 · 反同质化核心）
+### 2.8 跨章多样性分析（反同质化核心）
 
 **这是蒸馏最容易遗漏的维度。** 逐章分析只看单章特征，跨章分析看的是连续章节之间的变化模式。
 
@@ -1027,7 +860,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --output "arc_template
 - 对比每个角色的实际对话长度与其 voice_pack 定义
 - 标记不合规的角色（如定义"三字以内"但实际平均15字）
 
-#### 2.8.6 描写技法分布（v16 新增 · 从 B3 维度聚合）
+#### 2.8.6 描写技法分布（从 B3 维度聚合）
 
 从所有章节的 B3 维度数据中汇总：
 
@@ -1051,7 +884,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --output "arc_template
 - 识别作者的心理描写核心策略
 - **输出**：技法分布 + 核心策略 + 禁忌（如"从不写'他感到愤怒'"）
 
-#### 2.8.7 章际衔接模式分析（v16 新增 · 从 B3 dim26-27 聚合）
+#### 2.8.7 章际衔接模式分析（从 B3 dim26-27 聚合）
 
 从所有章节的衔接类型数据中提取：
 
@@ -1072,7 +905,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --output "arc_template
 - 连续N章用同一衔接类型的最大值是多少？
 - **输出**：衔接类型分布 + 场景关联规则 + 连续使用上限
 
-#### 2.8.8 叙事工艺模式聚合（v16 新增 · 从 B4 维度聚合）
+#### 2.8.8 叙事工艺模式聚合（从 B4 维度聚合）
 
 **场景vs概述比例分布：**
 - 统计所有章节的场景/概述比例，计算全书平均值
@@ -1103,7 +936,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --output "arc_template
 - 如果是动态型，统计贴近/拉远的切换频率和触发条件
 - **输出**：距离模式 + 切换频率
 
-#### 2.8.9 作者区分度特征聚合（v16 新增 · 从 B5 维度聚合）
+#### 2.8.9 作者区分度特征聚合（从 B5 维度聚合）
 
 **词汇丰富度基线（程序化 · style_analyzer.py 自动计算）：**
 - 全书 TTR 均值和标准差
@@ -1149,12 +982,12 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --output "arc_template
 | golden_opening | 5-8段 | 写章节开头时参考（**每种开头类型至少1段**） |
 | golden_ending | 5-8段 | 写章节结尾时参考（**每种结尾类型至少1段**） |
 | golden_transition | 5-8段 | 写场景转换时参考 |
-| golden_character_intro | 3-5段 | 写新角色出场时参考（v16新增） |
-| golden_connection | 3-5段 | 写章际衔接时参考（v16新增 · 每种衔接类型至少1段） |
-| golden_battle_cooldown | 2-3段 | 战后冷却间隔参考（v16新增） |
+| golden_character_intro | 3-5段 | 写新角色出场时参考 |
+| golden_connection | 3-5段 | 写章际衔接时参考（每种衔接类型至少1段） |
+| golden_battle_cooldown | 2-3段 | 战后冷却间隔参考 |
 
 每类从全书中选出最能代表作者风格的段落，标注来源章节号。
-**v16 要求**：golden_opening 和 golden_connection 必须覆盖多种类型，不能全是同一种开头/衔接。
+**要求**：golden_opening 和 golden_connection 必须覆盖多种类型，不能全是同一种开头/衔接。
 
 ### 2.9 反模式库（该作者绝对不做的事）
 
@@ -1323,7 +1156,7 @@ Write `_数据库/作者风格.json`
 - Write `风格库/[小说名].json` — 与 `_数据库/作者风格.json` 内容相同
 - 风格库路径为项目根目录下的 `风格库/`，所有项目共享
 
-**⚠️ Skill 文件存放位置（v16 明确）：**
+**⚠️ Skill 文件存放位置：**
 - 全局风格库：`风格库/[小说名]_skill.md`
 - 项目内副本：`_数据库/作者风格_skill.md`（写作时 novel-writer 从此路径读取）
 - 两份内容相同，项目内副本在 `/write` 初始化时从风格库复制
@@ -1387,7 +1220,7 @@ analyzed: [分析字数]字 / [章节数]章
 - 悬念方式：[描述]
 - 情绪模式：[描述]
 
-## 跨章多样性约束（v16 新增 · 从跨章聚合数据自动生成）
+## 跨章多样性约束（从跨章聚合数据自动生成）
 
 **⚠️ 此节必须包含——缺失此节的 skill 会导致 AI 生成的连续章节严重同质化。**
 
@@ -1417,7 +1250,7 @@ analyzed: [分析字数]字 / [章节数]章
 - 各角色实测平均单句字数：[从聚合数据填入]
 - **voice_pack 执行规则**：角色对话长度必须严格匹配定义；同一吐槽/梗全书只用1次
 
-## 描写技法约束（v16 新增 · 从 B3 维度聚合数据生成）
+## 描写技法约束（从 B3 维度聚合数据生成）
 
 **⚠️ 此节必须包含——缺失此节的 skill 会导致 AI 用默认的"叙述者全知描写"替代作者的个性化技法。**
 
@@ -1445,7 +1278,7 @@ analyzed: [分析字数]字 / [章节数]章
 - 吐槽路线：[如 "内心独白走'代入他人视角吐槽自己'路线，不走主角直陈感受"]
 - 禁忌：[如 "从不写'一种名为XX的情绪涌上心头'；从不用三句排比描写情绪"]
 
-## 章际衔接约束（v16 新增 · 从 B3 dim26-27 聚合数据生成）
+## 章际衔接约束（从 B3 dim26-27 聚合数据生成）
 
 **⚠️ 此节控制章与章之间的过渡方式——缺失会导致每章都像独立短篇，缺乏连续阅读的流畅感。**
 
@@ -1466,7 +1299,7 @@ analyzed: [分析字数]字 / [章节数]章
 - [如 "时间跳跃只允许在日常→日常的章节之间使用"]
 - [如 "空间跳转时用独立短句锚点（'XX市，某地。'）定场"]
 
-## 叙事工艺约束（v16 新增 · 从 B4 维度聚合数据生成）
+## 叙事工艺约束（从 B4 维度聚合数据生成）
 
 **⚠️ 此节覆盖AI最容易犯错的叙事层面——不是"写什么"而是"怎么讲"。**
 
@@ -1647,29 +1480,29 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 \
 
 **目的**：用阶段 1 产出的 skill v0 复刻 3 个测试段，与原文同类型段落对比，暴露 skill 表层规则在实际写作中的失效点。
 
-### 测试场景设计（v22.gov 升 5 段；原 4 段保留 + 加 cluster 级 test5）
+### 测试场景设计（5 段；含 cluster 级 test5）
 
 1. **复刻一个章节开头**（1500-2500 字）—— 测试开章类型多样性、首句钩子、群众视角、异象抛出
 2. **复刻一个对白场景**（2000-3000 字）—— 测试对话占比、角色声纹差异、对话标签、外显反差喜剧
 3. **复刻一个章末场景**（1000-1500 字）—— 测试章末类型、单段硬收、信息炸弹、钩子节流
-4. **复刻3个连续章节开头**（每段300-500字）—— **v16 新增 · 跨章多样性核心验证**
+4. **复刻3个连续章节开头**（每段300-500字）—— **跨章多样性核心验证**
    - 在 prompt 中明确告知第1个开头是"ch5"，第2个是"ch6"，第3个是"ch7"
    - 3 个开头必须使用完全不同的开头类型和焦点元素
    - 如果 3 个开头出现相同类型或相同焦点元素（如都用灯光/走廊/窗户），**skill 的跨章约束不合格，必须修正**
    - 同时检查拟声词用量：3 个开头的拟声词总数应与原作同等长度的拟声词分布一致
-5. **复刻一个完整故事块 cluster**（14000-16000 字，4-6 章）—— **v22.gov 新增 · cluster 级仿写核心验证**
+5. **复刻一个完整故事块 cluster**（14000-16000 字，4-6 章）—— **cluster 级仿写核心验证**
    - 参照原作某个具体 cluster（从 `cluster_index.json` 任选 1 个 chapter_range 5 章左右的）
    - 用 `gen_writer.py --cluster` 模式生成完整 cluster_draft → splitter 切章
    - **测核心维度**：cluster arc 形状（应符合原作 Reagan 6 形状）/ Sudowrite tension dial 1-11 曲线对齐 / mid_checkpoint 张力一致 / Stanford 6 主角画像匹配 / 章际衔接套用 `narrative_continuity_template`
    - 这段是**最难复刻的部分**——单段精彩易，整 cluster 节奏对齐难
    - 业界依据（Round 1 调研）：LumberChunker (EMNLP 2024) 实测 variable-length cluster 比单段更能暴露风格漂移
 
-### 【v22.gov 新增】每段复刻样本自动 AI 复核
+### 每段复刻样本自动 AI 复核
 
 每段生成后**立即**调 `ai_wrapper.py` 让 gen-model 二次复核「这段仿写是否符合作者风格」（与人工 SFS 评分形成 hybrid pipeline · 业界共识 rules + LLM judge = 78.5% vs LLM-only 66.2%）：
 
 ```bash
-# 【v22.gov.align P0 修 Gap A2】input 路径必须 = gen_writer 真实产出（章节/cluster_NNN_draft/cluster_NNN_draft.txt）
+# input 路径必须 = gen_writer 真实产出（章节/cluster_NNN_draft/cluster_NNN_draft.txt）
 for i in 1 2 3 4 5; do
   CID=$(printf '%03d' $i)
   python core/scripts/ai_wrapper.py \
@@ -1692,7 +1525,7 @@ python core/scripts/ai_wrapper.py \
 - `agreement=partial` → 局部修正后进入阶段 3
 - `agreement=agree` → 直接进入阶段 3 量化对比
 
-### 【v22.gov 工具模型对齐】test1-5 全部走 gen_writer.py 统一 pipeline
+### test1-5 全部走 gen_writer.py 统一 pipeline
 
 **业界依据**（`.research_cache/inspiration_tool_model_alignment_2026-05-24.md` · Round 1 调研 17 来源）：
 
@@ -1723,7 +1556,7 @@ mkdir -p "$TEST_ROOT/_数据库" "$TEST_ROOT/章节"
 # 1. 复制 skill（gen_writer 的核心 input）
 cp "workspace/styles/<书名>/作者风格_FINAL.json" "$TEST_ROOT/_数据库/作者风格.json"
 
-# 2. v22.gov.align P0 修 Gap A3：锁定 gen-model profile（用 Python 直接序列化 JSON · gen_model show 是文本不是 JSON）
+# 2. 锁定 gen-model profile（用 Python 直接序列化 JSON · gen_model show 是文本不是 JSON）
 python -c "
 import json, sys, pathlib
 sys.path.insert(0, 'core/scripts')
@@ -1738,7 +1571,7 @@ try:
         'base_url': p.base_url,
         'temperature': p.temperature,
         'locked_at': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-        '_doc': 'v22.gov.align profile lock · ai_wrapper 必须验证 active == locked',
+        '_doc': 'profile lock · ai_wrapper 必须验证 active == locked',
     }
     pathlib.Path('$TEST_ROOT/_gen_model_profile_locked.json').write_text(json.dumps(lock, ensure_ascii=False, indent=2), encoding='utf-8')
     print(f'[OK] profile locked: {p.name}')
@@ -1747,11 +1580,11 @@ except GenModelConfigError as e:
     print(f'[WARN] no active profile（lock 文件含 _no_active_profile=true，ai_wrapper 见此跳过校验）')
 "
 
-# 3. 【v22.gov.align P0 修 Gap 1】fixture project 加 4 个核心 JSON（防 build_manifest 28 字段 fallback）
+# 3. fixture project 加 4 个核心 JSON（防 build_manifest 28 字段 fallback）
 #    业界依据：Arize Acme SDK 完整 fictional fixture · 必须含所有 collector 期望的字段
 python -c "
 import json, pathlib
-# 3a. 人物卡.json — v22.gov.align P0 修 Gap A4：schema 必须是 {'characters': [{id, name, role}, ...]} 列表
+# 3a. 人物卡.json — schema 必须是 {'characters': [{id, name, role}, ...]} 列表
 #     不是之前的 {name: {...}} dict！build_manifest 期望列表 schema
 style_root = 'workspace/styles/<书名>'
 ca_dir = pathlib.Path(style_root) / 'character_arcs'
@@ -1775,7 +1608,7 @@ if ca_dir.exists():
             'avg_actor_intensity': d.get('average_actor_intensity'),
             'avg_experiencer_intensity': d.get('average_experiencer_intensity'),
             'voice_pack': {'dialogue_avg_chars': 15, 'placeholder': '从原作 voice_pack 继承'},
-            '_doc': 'v22.gov.align fixture',
+            '_doc': 'fixture',
         })
 if not characters_list:
     characters_list = [
@@ -1790,7 +1623,7 @@ style_meta = _j.loads(open(f'{style_root}/作者风格_FINAL.json', encoding='ut
 world = {
     'work_genre': style_meta.get('work', '未知') + ' · 复刻测试',
     'setting_keywords': ['沿用原作设定 · 复刻测试不引入新设定'],
-    '_doc': 'v22.gov.align fixture · 复刻测试 · 不引入新世界观（避免污染评估）',
+    '_doc': 'fixture · 复刻测试 · 不引入新世界观（避免污染评估）',
 }
 pathlib.Path('$TEST_ROOT/_数据库/世界观.json').write_text(json.dumps(world, ensure_ascii=False, indent=2), encoding='utf-8')
 
@@ -1804,7 +1637,7 @@ prefs = {
     'interactive_mode': {'fate_cards_count': 2, 'fully_auto': True},
     'ecas_config': {'critical_events_use_opus': []},
     'audit_mode': 'standard',
-    '_doc': 'v22.gov.align fixture · 复刻测试 default preferences',
+    '_doc': 'fixture · 复刻测试 default preferences',
 }
 pathlib.Path('$TEST_ROOT/_数据库/用户偏好.json').write_text(json.dumps(prefs, ensure_ascii=False, indent=2), encoding='utf-8')
 
@@ -1816,11 +1649,11 @@ scene_rules = {
         {'type': 'ending', 'rules': '章末类型五选一：信息炸弹/拟声/独立短句/动作留白/章题回扣'},
         {'type': 'cluster', 'rules': 'arc 形状对齐原作 / mid_checkpoint 张力一致 / 章际衔接落 template'},
     ],
-    '_doc': 'v22.gov.align fixture · 通用场景规则',
+    '_doc': 'fixture · 通用场景规则',
 }
 pathlib.Path('$TEST_ROOT/_数据库/场景规则.json').write_text(json.dumps(scene_rules, ensure_ascii=False, indent=2), encoding='utf-8')
 
-# 3e-3h. 【v22.gov.align P1 修 Gap A5】加 4 个剩余核心 JSON 空 schema 占位
+# 3e-3h. 加 4 个剩余核心 JSON 空 schema 占位
 #       不准备会被 build_manifest 28 collector 当中余下的 fallback，缺写作上下文
 pathlib.Path('$TEST_ROOT/_数据库/伏笔表.json').write_text(json.dumps({'foreshadows': [], 'active_pledges': [], 'hidden_secrets': []}, ensure_ascii=False, indent=2), encoding='utf-8')
 pathlib.Path('$TEST_ROOT/_数据库/章纲摘要.json').write_text(json.dumps({'chapters': []}, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -1830,7 +1663,7 @@ pathlib.Path('$TEST_ROOT/_数据库/关系.json').write_text(json.dumps({'relati
 print('[Step A 3] fixture project 准备完毕：作者风格 + 人物卡(列表) + 世界观 + 用户偏好 + 场景规则 + 伏笔表 + 章纲摘要 + 写作经验 + 关系 + (后续) 事件簇/进度')
 "
 
-# 3i. 【v22.gov.align P0 修 Gap A6】Step A 末尾跑 style_injector 预生成 .style_directive/ch_001.json
+# 3i. Step A 末尾跑 style_injector 预生成 .style_directive/ch_001.json
 #     防 build_manifest 读不到 style_directive 字段
 mkdir -p "$TEST_ROOT/_数据库/.style_directive"
 for ch in 1 2 3 4 5; do
@@ -1839,7 +1672,7 @@ for ch in 1 2 3 4 5; do
 done
 echo "[Step A 4] style_directive 预生成（ch_001 - ch_005）"
 
-# 4. 建 5 个 test 对应的 cluster 占位（v22.gov 修：cluster_id 必须 int · gen_writer --cluster 期望 int）
+# 4. 建 5 个 test 对应的 cluster 占位（cluster_id 必须 int · gen_writer --cluster 期望 int）
 python -c "
 import json, pathlib
 clusters = [
@@ -1912,7 +1745,7 @@ python core/scripts/gen_writer.py \
 - ✅ 测试目录的 _数据库/作者风格.json 直接复用 skill_FINAL（不偷换 prompt）
 - ❌ **禁止**：spawn 临时 prompt agent / 手写 prompt 跳过 gen_writer / 不锁 profile
 
-### Step C: 【v22.gov.align P1+P2 修 Gap 2/3/4/6】后置完整流水线（与 write-chapter 对齐）
+### Step C: 后置完整流水线（与 write-chapter 对齐）
 
 write-chapter 正式流水线 step 3-4 含**双轨质量分析 + voice-keeper**，蒸馏测试缺这些 → 评分失真。Step C 补齐对齐：
 
@@ -1934,7 +1767,7 @@ python core/scripts/gen_chapter_titles.py \
   --chapters 1-5
 # 产出: $TEST_ROOT/章节/第NNN章/第NNN章.txt（5 章独立 · 含网文化标题）
 
-# === C2 (Gap 2 · audit_hub 7 scanner) · 5 段都跑 · v22.gov.align P0 修 Gap A1 ===
+# === C2 (audit_hub 7 scanner) · 5 段都跑 ===
 # audit_hub 接口: <project> <ch:int>（章节号不是 cluster_id！）
 # test1-4 是 single 模式 cluster_draft 即正文 → 复制到 第NNN章.txt 让 audit_hub 识别
 # test5 splitter 切完已有 第001-005章.txt → 直接跑
@@ -1957,7 +1790,7 @@ done
 # 含 7 scanner（validate_chapter/style/narrative/plot/hook/golden/semantic）+ character_arc_drift
 
 # === C3 (Gap 3 · voice-keeper) · test2_dialogue 必跑（含丰富对话） ===
-# 【v22.gov.align P2 修 Gap A7】主代理必须执行（非注释）以下 Agent spawn — 不可跳过
+# 主代理必须执行（非注释）以下 Agent spawn — 不可跳过
 ```
 
 **【主代理必跑 C3】** spawn `novel-voice-checker` agent，prompt 严格按下方契约（**PLAN_ID/STEP/PROJECT/CHAPTER/MANIFEST 五行不可缺**）：
@@ -1977,7 +1810,7 @@ agent 输出 voice fix brief → 主代理调 `gen_fixer.py --mode voice-fix --b
 
 ```bash
 # === C4 (Gap 6 · reading-reflector 8 维) · test5 cluster 必跑 ===
-# 【v22.gov.align P2 修 Gap A7】主代理必须执行（非注释）以下 Agent spawn — 不可跳过
+# 主代理必须执行（非注释）以下 Agent spawn — 不可跳过
 ```
 
 **【主代理必跑 C4】** spawn `novel-reading-reflector` agent（必须循环到连续 3 轮 0 issue 才 pass）：
@@ -2015,7 +1848,7 @@ done
 - ✅ Gap 6 reading-reflector 8 维 ≥ 3 轮 0 issue（与 production 阅读轨对齐）
 - ✅ Gap 5 ai_wrapper --profile-lock 强制（违反 → exit · 不 fallback）
 
-### 【v22.gov 新增】test5 cluster 复刻 — 在 Step A/B 之上补 ref 参照 + 评估
+### test5 cluster 复刻 — 在 Step A/B 之上补 ref 参照 + 评估
 
 **注意**：test5 的 gen_writer 调用已在 Step B 完成（`--cluster 5`），本节只补充 test5 特有的「参照 cluster 选取 + ref 文本拼接 + cluster 级评估」。
 
@@ -2145,21 +1978,21 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3 \
 26. 大场面密度（每章是否有 1 个画面级反差或冲突）
 27. 信息密度变化（紧/松交替）
 
-═══ E. 跨章多样性维度（v16 新增 · 用复刻测试第4段验证）═══
+═══ E. 跨章多样性维度（用复刻测试第4段验证）═══
 28. 连续3开头类型重复率（test4 的 3 个开头是否类型各不相同）
 29. 连续3开头焦点元素重复率（是否用了相同的环境元素如灯/走廊/窗）
 30. 拟声词密度合理性（3 个开头的拟声词总量 vs 原作同长度文本的拟声词量）
 31. 感官主力轮换（3 个开头是否各用不同感官做氛围主力）
 32. 过渡方式多样性（test1-3 中使用的过渡方式种类数，≥3 种为 PASS）
 
-═══ F. 描写技法维度（v16 新增 · 对比复刻样本 vs 原文的技法差异）═══
+═══ F. 描写技法维度（对比复刻样本 vs 原文的技法差异）═══
 33. 人物引入方式（复刻中新角色是否用了作者偏好的引入技法——路人视角/动作先行/装备侧写——还是 AI 默认的"叙述者全知介绍"）
 34. 环境描写密度和技法（复刻的环境描写是否与原作同密度？是否用了两字锚点/感官单点深入？还是 AI 默认的"三句排比铺陈"）
 35. 战斗描写节拍（如有战斗：是否遵循原作的三拍公式？是否有镜头切换和冷却间隔？还是 AI 默认的"动作+形容词堆砌"）
 36. 心理描写方式（复刻的心理描写是否用了身体外显/吐槽式内心独白？还是 AI 默认的"他感到一阵XX涌上心头"）
 37. 章际衔接手法（test4 的3个连续开头之间是否体现了与原作一致的衔接类型——直接承接/静默回响/空间跳转等——还是每章都像独立短篇没有承接关系）
 
-═══ G. 叙事工艺维度（v16 新增 · AI最易暴露的高层维度）═══
+═══ G. 叙事工艺维度（AI最易暴露的高层维度）═══
 38. 场景vs概述比例（复刻样本中概述段占比——AI通常为0%，原作通常20-30%）
 39. 钩子密度（复刻样本每千字有几个钩子？位置是否分散在开头/中段/结尾？还是AI默认全堆章末）
 40. 留白质量（复刻样本是否有对话潜台词——角色话语的字面意思和真实意图不同？还是AI式的"把意思全说透"）
@@ -2168,7 +2001,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3 \
 43. 情绪曲线（复刻样本的情绪走向是否有明确高低起伏？高潮位置是否与原作模式一致？还是AI式的"匀速推进"）
 44. 叙事距离（复刻样本的叙述者距离是否随场景动态调节？还是AI式的"全程恒定第三人称"）
 
-═══ H. cluster 级评估维度（v22.gov 新增 · 仅 test5 适用 · 独立 H1-H8 编号避免与 B6 dim45-48 冲突 · 最严苛终止条件）═══
+═══ H. cluster 级评估维度（仅 test5 适用 · 独立 H1-H8 编号 · 最严苛终止条件）═══
 H1. **Reagan 6 形状匹配**：复刻 cluster 拟合的 Reagan shape 是否与原参照 cluster 一致（不一致 → cluster arc 形状漂移，必须修）
 H2. **emotion_curve cosine 相似度**：复刻 cluster 的 emotion_curve_normalized 与原 cluster 的余弦相似度，**目标 ≥ 0.7**
 H3. **Sudowrite tension dial 对齐度**：复刻 cluster 的 1-11 dial 序列与原序列的 L1 距离均值，**目标 ≤ 1.5**
@@ -2192,23 +2025,23 @@ H9. **前/中/后段独立打分**（Round 1 调研关键警告 · 防 generic p
 Agent({
   description: "蒸馏对比扫描 v{N}",
   prompt: "
-    PLAN_ID: $PLAN_ID           # ⚠️ v17.2 必填：父 plan id
-    STEP: 4                      # ⚠️ v17.2 必填：当前阶段 3 → step 4
+    PLAN_ID: $PLAN_ID           # 必填：父 plan id
+    STEP: 4                      # 必填：当前阶段 3 → step 4
     DISTILL_COMPARE: v{N}
     REFERENCE_CHAPTERS: [3 章原文路径+行号]
     REPLICA_FILES: 风格库/复刻测试/v{N}/test*.txt
     SKILL: 风格库/[小说名]_skill.md
     
     任务：
-    1. 【v22.gov 工具模型对齐】先读 _gen_model_profile_locked.json 确认所有 5 段都用同一 gen-model profile 生成；profile 不同 → 评估失真，强制 abort 重跑该 round
-    2. 【v15 程序化】先跑 style_evaluator.py 获取精确量化对比：
+    1. 先读 _gen_model_profile_locked.json 确认所有 5 段都用同一 gen-model profile 生成；profile 不同 → 评估失真，强制 abort 重跑该 round
+    2. 先跑 style_evaluator.py 获取精确量化对比：
        python core/scripts/style_evaluator.py --ref [原文章节] --gen [复刻文件] --output 风格库/对比报告/eval_v{N}.json
        这会自动计算 A 类全部量化维度（句长JSD/段落分布/对话占比/标点密度/功能词指纹等）并输出 SFS 评分
     3. 基于 eval_v{N}.json 的精确数据 + Read 抽样判断 B/C/D 类定性维度
     4. 输出 distillation_compare_v{N}.json（合并程序化数据+LLM定性判断 + 工具模型对齐元数据）：
        {
          'version': N,
-         'gen_model_profile_locked': {    # v22.gov 新增 · 工具模型对齐
+         'gen_model_profile_locked': {    # 工具模型对齐
            'profile_name': '<active profile>',
            'model': '<model id>',
            'base_url': '<provider>',
@@ -2226,7 +2059,7 @@ Agent({
          'converged': bool  # 连续 2 轮 flagged_count ≤ 2 时为 true
        }
     
-    **v22.gov profile 锁定铁律**：
+    **profile 锁定铁律**：
     - 同一 v{N} 内所有 round Y 必须用同一 profile（gen_writer.py 调用前主代理验证）
     - 跨 v{N} 升级 skill 时若换 profile → 必须在 distillation_log.md 显式标注「换 profile 重蒸 v{N}_round1」
     - 防止「换 profile 错把 skill 升级 / 实际是 profile 差异」
@@ -2432,13 +2265,13 @@ Agent({
 
 ---
 
-## 阶段 6.7（v22.evolve 新增）：维度自演化（dimension_evolver）
+## 阶段 6.7：维度自演化（dimension_evolver）
 
 ### 为什么
 
 阶段 6.5「lessons 沉淀」只把教训写到 MD 文档（人工读取），不能让**下次蒸馏的 prompt 自动加新维度**。
 
-蒸馏 agent 在 F 段（已有）+ G 段（v22.evolve 新加）**早就在主动提议新维度**，但没有跨章统筹机制：
+蒸馏 agent 在 F 段（已有）+ G 段**早就在主动提议新维度**，但没有跨章统筹机制：
 - 实测BookC前 50 章中 **32 章（64%）F 段含「建议新增…」「建议建立…」「建议区分…」**
 - 这些提议自生自灭，没被吸收
 
@@ -2486,7 +2319,7 @@ python core/scripts/dimension_evolver.py --all-projects --promote-universal
 python core/scripts/dimension_evolver.py --project "<path>" --promote cand_001
 ```
 
-### 防失控（v22.evolve.1 防 SE7 风险）
+### 防失控（防 SE7 风险）
 
 借鉴 Round 1 调研：constraint self-bypass + Voyager + Schema Registry backward compatibility：
 
@@ -2561,7 +2394,7 @@ fi
 
 ---
 
-## 阶段 8：Plan 闭环验证（v17.2 新增 · 强制兜底）
+## 阶段 8：Plan 闭环验证（强制兜底）
 
 阶段 6 出货 + 阶段 7 Git commit 落地后，必须执行最后两步：
 
@@ -2594,7 +2427,7 @@ fi
 
 ---
 
-## 📋 完成检查清单（Plan 强制版 · v17.2）
+## 📋 完成检查清单（Plan 强制版）
 
 阶段 6 出货前必须逐项确认（缺一不可）：
 

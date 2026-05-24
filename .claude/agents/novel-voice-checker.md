@@ -117,7 +117,7 @@ FIX_BRIEF: <可选 · audit_hub 派单时附带的修复指引原文>
 }
 ```
 
-## v19.3 必跑：JudgeReport 写盘
+## 必跑：JudgeReport 写盘
 
 完成审查**返回主代理之前**，brief JSON 已经写到 `_数据库/.checker_briefs/ch_<NNN>_voice.json`。**同时**额外 Write 一份 JudgeReport 到：
 

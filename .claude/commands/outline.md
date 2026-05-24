@@ -2,24 +2,24 @@
 description: 生成章节大纲
 ---
 
-> **v22.gov 三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
+> **三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
 > 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
 > hook 自动检 research_cache + 反思文件。关键脚本输出建议过 `ai_wrapper.py` 二次复核。
 
-## 🆕 v2 改造（2026-05-19 · Gen-Model 抽象层）
+## Gen-Model 抽象层
 
 **关键变化**：大纲中**含创意笔触的字段**（卷 arc 描述 / 大事件 description / hook / cliffhanger 等）应走 gen-model；**结构性字段**（卷骨架 / 章节范围 / 事件 ID / prerequisites 关系 / 角色 ID）仍由 Claude 主代理列。
 
 **新工作流（Step 2 卷级大纲生成）**：
 1. 主代理（Claude）按原流程列**结构性骨架**（卷数 / 卷标题 / 章节范围 / key_milestones 事件 ID 列表 / 角色 anchor）
 2. 含创意笔触的字段（如 `volume_arc` 段落描述、`major_events[].description` 等）由主代理准备**结构 brief JSON**
-3. 调 `gen_creative.py --mode volume_arc`（v2 placeholder，待 Phase 5 完整实现；当前可暂用主代理直出 + 后续 fixer 润色作为兜底）
+3. 调 `gen_creative.py --mode volume_arc`（placeholder，未完整实现；当前可暂用主代理直出 + 后续 fixer 润色作为兜底）
 4. 主代理把 gen-model 输出合并回大纲结构，写入 `_数据库/进度.json` 的 volumes 段 + `大纲.md` 的卷描述段
 
 **当前实施状态**：
 - `gen_creative.py --mode volume_arc` 是 v2 placeholder（NotImplementedError）
 - 临时方案：主代理用 brainstorm mode 间接达成（把卷骨架作为 topic 输入）
-- 完整实现待 Phase 5 v2 迭代
+- 完整实现待后续迭代
 
 **保持 Claude 处理的部分**：
 - 卷骨架结构（卷数 / 章节范围 / event prerequisites 关系）
@@ -36,7 +36,7 @@ $ARGUMENTS
 
 ---
 
-## 🛡️ Plan 强制规划（v17.2 新增）
+## 🛡️ Plan 强制规划
 
 大纲流程 4 步全部挂在 plan 上——start 前必须 `plan-create` 拿 PLAN_ID，每步完成 `plan-step --n N`，末尾 `plan-end`。Hook 已强制本命令的 PLAN_ID。
 
@@ -115,9 +115,9 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 ---
 
-## 🆕 第 1.5 步：节奏档软提示（v23.12 · 简化版）
+## 第 1.5 步：节奏档软提示
 
-**v23.12 已废除 v23.11 章数密度硬公式**（2026-05-24 用户决策）。理由：故事块 + 涟漪效应让单卷章数无法预先锁定。本步**仅询问节奏档**作为软提示，**不算章数、不算 event 密度、不锁 chapter_range**。
+本步**仅询问节奏档**作为软提示，**不算章数、不算 event 密度、不锁 chapter_range**。理由：故事块 + 涟漪效应让单卷章数无法预先锁定。
 
 ### 输入读取
 
@@ -146,7 +146,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 }
 ```
 
-**禁止再写** `target_chapter_count` / `volume_count` / `events_per_volume` / `avg_chapters_per_event` / `filler_ratio` —— v23.12 已删除这些字段，下游脚本按 rhythm_profile 单一参数估算弹性区间。
+**禁止再写** `target_chapter_count` / `volume_count` / `events_per_volume` / `avg_chapters_per_event` / `filler_ratio` —— 下游脚本按 rhythm_profile 单一参数估算弹性区间。
 
 ### plan-step 1.5
 
@@ -158,7 +158,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 ## 第 2 步：卷级大势大纲生成
 
-**v23.12 规则**：本步**只描述大势**，不规划每卷章数。
+本步**只描述大势**，不规划每卷章数。
 
 | ✅ 写 | ❌ 不写 |
 |---|---|
@@ -226,7 +226,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
         "anti_samples": [
           "反面示例1（这个角色绝对不会这样说话）"
         ],
-        "_persona_5layer_optional": "以下 5 层是 distill-character 深度蒸馏的可选字段（v19.5 对齐 distill-character 命令的 Voice DNA 5 层 Persona schema）",
+        "_persona_5layer_optional": "以下 5 层是 distill-character 深度蒸馏的可选字段（对齐 distill-character 命令的 Voice DNA 5 层 Persona schema）",
         "layer_0_hard_rules": {
           "never_say": [],
           "never_do": [],
@@ -334,7 +334,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
        "description": "主角腰间的玉佩",
        "tier": 1, "due_by": 15, "resolved": false,
        "trigger_condition": {
-         "_doc": "G6 v19.6 新增：因果谓词形式化（CFPG arxiv 2601.07033）",
+         "_doc": "因果谓词形式化（CFPG arxiv 2601.07033）",
          "location": "any | <地点ID>",
          "character": "<触发该 payoff 必须在场的角色>",
          "event_type": "object_use | dialogue_reveal | physical_change | other",
@@ -363,7 +363,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
      ```
      - status: hidden/leaked/revealed
      - known_by 更新时自动检查是否有人意外知晓
-     - **epistemic_class（G7 v19.6 新增）四级密级**：`公开` / `隐藏` / `延迟` / `永不明确`
+     - **epistemic_class 四级密级**：`公开` / `隐藏` / `延迟` / `永不明确`
        - 公开：所有 POV 角色都能感知（如背景设定）
        - 隐藏：仅 known_by 列表内角色能感知（默认）
        - 延迟：知道但 N 章内不能透露（writer 必须等到 reveal_at_ch）
@@ -615,7 +615,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 ---
 
-# 📋 完成检查清单（v17.2 新增）
+# 📋 完成检查清单
 
 向用户报告"大纲完成"前必须自验：
 

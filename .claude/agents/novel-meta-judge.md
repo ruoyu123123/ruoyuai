@@ -27,7 +27,7 @@ MODE: routine | adhoc
 - `chapters[i].validator_grade`
 - `chapters[i].voice_keeper_grade`
 - `chapters[i].foreshadower_grade`（如有）
-- `chapters[i].judge_reports[]`（v17.4 新字段：完整 JudgeReport 数组）
+- `chapters[i].judge_reports[]`（完整 JudgeReport 数组）
 
 如果某章没有完整 JudgeReport（早期章节），降级为只用 grade 字段。
 

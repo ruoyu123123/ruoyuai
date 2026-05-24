@@ -1,5 +1,5 @@
 ---
-description: 项目进度仪表盘（v21 UX7 新增）
+description: 项目进度仪表盘
 ---
 
 # 📊 项目进度仪表盘

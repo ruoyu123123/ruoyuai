@@ -170,7 +170,7 @@ Age      : 12 min
 
 | 场景 | 行为 |
 |------|------|
-| `plan_tracker.py` 不存在 | 报错并提示 Phase 1 基建未部署 |
+| `plan_tracker.py` 不存在 | 报错并提示基建未部署 |
 | plan_id 找不到 | 提示用户先 `/plan-status` 列表确认 ID |
 | plan_id 多于一个前缀匹配 | 列出候选要求用户给完整 id |
 | 全局/项目目录都无 plan | 输出 `(no plans)` 友好提示，不报错 |

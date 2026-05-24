@@ -74,7 +74,7 @@ MODE: reflect
 ## 文件载体（v18 正文/数据分离）
 
 - 正文：`章节/第NNN章/第NNN章.txt` —— **纯正文**，提取写作技巧主要看这个
-- 数据：`章节/第NNN章/第NNN章_changes.json` —— `{"factual": {...}, "self_eval": {...}}`。反思可读 `factual` 段（本章实际发生的变更，辅助判断技巧效果）；`self_eval` 段按 v17.4 分权纪律**默认不读**
+- 数据：`章节/第NNN章/第NNN章_changes.json` —— `{"factual": {...}, "self_eval": {...}}`。反思可读 `factual` 段（本章实际发生的变更，辅助判断技巧效果）；`self_eval` 段按分权纪律**默认不读**
 
 ## 执行流程
 
@@ -85,7 +85,7 @@ MODE: reflect
    - 如果本章没有值得记录的技巧，允许输出空列表
 5. **Write** 到 `_数据库/.wal/第<N>章_reflection.json`
 
-## 🆕 跨章自查（v19.1 强化 · 必跑）
+## 跨章自查（必跑）
 
 **为什么加这一节**：历史教训——reflector 每章独立运行，只看"本章哪些成功"，**看不见**"我又在重复前章的模式"。结果连续 4 章 catchphrase 单一化 / 段首主语机械重复 / dialogue tag 套路化全都漏掉，要靠用户肉眼 catch。
 

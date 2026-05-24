@@ -6,13 +6,13 @@ description: 根据大纲写作小说章节（v3 · 多 agent 流水线）
 
 $ARGUMENTS
 
-> **v22.gov 三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
+> **三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
 > 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
 > hook 自动检 research_cache + 反思文件。关键脚本输出建议过 `ai_wrapper.py` 二次复核。
 
 ---
 
-# 🛡️ Plan 强制规划（v17.2 新增）
+# 🛡️ Plan 强制规划
 
 **所有 5 步必须挂在 plan 上**——start 前必须 `plan-create` 拿 PLAN_ID，每步完成 `plan-step --n N`，末尾 `plan-end`。Hook 已强制本命令的 PLAN_ID。
 
@@ -36,16 +36,16 @@ STEP: <当前步骤号>
 
 ---
 
-# 流水线架构（v23.8 强制双轨质量分析）
+# 流水线架构（强制双轨质量分析）
 
 ```
-0.   world_evolution_apply_card.py   （v20.1 W7：用户选定走向卡 → 触发世界涟漪 → 世界先动一格）
+0.   world_evolution_apply_card.py   （用户选定走向卡 → 触发世界涟漪 → 世界先动一格）
      ↓
 1.   build_manifest.py      （生成注入清单 · 含 world_state_snapshot 已反映 step 0 的世界变化）
      ↓
 2.   novel-writer (+ ECAS splitter / DCAS splitter)   （写初稿，三模式：ECAS 故事块 / DCAS 双章 / single）
      ↓
-3.   ★ 质量分析双轨层（v23.8 升级 · 两轨必须全过才能进 step 4）
+3.   ★ 质量分析双轨层（两轨必须全过才能进 step 4）
      │
      ├─ 机械轨：scanner → validator-repair → audit_hub.py --auto-fix --waivers
      │         （顾问制 advisory 可豁免，hard_gate 不可豁免）
@@ -62,7 +62,7 @@ STEP: <当前步骤号>
 5.   报告给用户
 ```
 
-## 🆕 v23.8 reading-reflector 强制说明
+## reading-reflector 强制说明
 
 - **位置**：step 3 阶段（故事块/章节生成后 + 与 audit_hub 并行属于"质量分析层"）
 - **required**：true，不可跳过、不可豁免
@@ -74,7 +74,7 @@ STEP: <当前步骤号>
 - **Agent 路径**：`.claude/agents/novel-reading-reflector.md`
 - **输出位置**：`<PROJECT>/_数据库/.reading_reflection/cluster_<id>_round_<N>.json`（ECAS）或 `ch_<NNN>_round_<N>.json`（single/DCAS）
 
-## 🌍 Step 0：走向卡 → 世界涟漪（v20.1 W7 必跑 · fluid 模式）
+## 🌍 Step 0：走向卡 → 世界涟漪（fluid 模式必跑）
 
 用户在上一章 save-state 末尾选完走向卡（A/B/C）后，主代理在调 build_manifest **之前**必须先跑：
 
@@ -385,7 +385,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 ---
 
-# 📋 完成检查清单（v17.2 新增）
+# 📋 完成检查清单
 
 调度器在向用户报告"完成"前，必须自验：
 

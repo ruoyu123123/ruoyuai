@@ -29,7 +29,7 @@ STYLE_REPORT: [仅 style-check 模式：validate_style.py 的 stdout 输出]
 | 文件 | 路径 | 你怎么用 |
 |------|------|---------|
 | 正文 | `章节/第NNN章/第NNN章.txt` | Read 全文，定位违规段落（line_start/line_end） |
-| 数据 | `章节/第NNN章/第NNN章_changes.json` | 读 `self_eval` 做撒谎复核（v17.4 纪律：先独立判断再读） |
+| 数据 | `章节/第NNN章/第NNN章_changes.json` | 读 `self_eval` 做撒谎复核（先独立判断再读） |
 
 **不再 Edit 任何文件**（除了 Write brief JSON 到 `_数据库/.checker_briefs/ch_NNN_validator.json`）。
 

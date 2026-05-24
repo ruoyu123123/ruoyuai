@@ -1,5 +1,5 @@
 ---
-description: 系统学习状态全景（v22.5 L9）
+description: 系统学习状态全景
 ---
 
 # 🧠 学习状态全景

@@ -72,19 +72,19 @@
 
 ---
 
-## 🛡️ Plan 强制规划（v17.2 引入）
+## 🛡️ Plan 强制规划
 
-为了根治「跳阶段是默认行为」这一历史顽疾，6 个多步命令（save-state / distill-style / check-quality / write-chapter / outline / reconcile）必须经过 **plan_tracker** 强制规划层。**没有 plan_id 就不能开工，没有 step 验证就不能宣称完成。**
+6 个多步命令（save-state / distill-style / check-quality / write-chapter / outline / reconcile）必须经过 **plan_tracker** 强制规划层。**没有 plan_id 就不能开工，没有 step 验证就不能宣称完成。**
 
 ### 三层防御机制
 
 | 层 | 实现 | 作用 |
 |----|------|------|
 | **L1 契约层** | 6 个命令文档头部写明 `必须 create plan / 每步 step / 末尾 end`；模板存放 `core/claude-home/plans/<command>.plan.json` | 把"规划"从口头约束变成纸面契约 |
-| **L2 追踪层** | `core/scripts/plan_tracker.py` 持久化运行时 plan（含 plan_id / steps / verified_outputs / status / timestamps）；**每次写盘盖 `_attestation` SHA-256 章**，写前读校验（P1-1 防篡改） | 把执行状态做成数据，能查、能审计、能续跑；旁路篡改（伪造 step 状态）当场暴露 |
-| **L3 校验层** | PreToolUse hook 检测「写作/蒸馏类 Agent prompt 缺 PLAN_ID 字段」→ exit 2 拦截；**规则 8（P1-1）：prompt 含 PLAN_ID 时校验该 plan 未被篡改，tampered → exit 2 拦在 Agent spawn 前**；PostToolUse hook 仅做信息上报，**永不拦截**（exit 0） | 在工具调用瞬间堵住"忘传 plan_id"漏洞 + 拦截"伪造 plan 状态绕过跳步" |
+| **L2 追踪层** | `core/scripts/plan_tracker.py` 持久化运行时 plan（含 plan_id / steps / verified_outputs / status / timestamps）；**每次写盘盖 `_attestation` SHA-256 章**，写前读校验防篡改 | 把执行状态做成数据，能查、能审计、能续跑；旁路篡改（伪造 step 状态）当场暴露 |
+| **L3 校验层** | PreToolUse hook 检测「写作/蒸馏类 Agent prompt 缺 PLAN_ID 字段」→ exit 2 拦截；**prompt 含 PLAN_ID 时校验该 plan 未被篡改，tampered → exit 2 拦在 Agent spawn 前**；PostToolUse hook 仅做信息上报，**永不拦截**（exit 0） | 在工具调用瞬间堵住"忘传 plan_id"漏洞 + 拦截"伪造 plan 状态绕过跳步" |
 
-**P1-1 防篡改 attestation**：plan_tracker 是 plan JSON 的唯一合法写入者，每次合法写盘把 plan 规范化内容的 SHA-256 写进 `_attestation` 字段。`step`/`end`/`abort` 写前读校验，不符 → `PlanTamperedError` 阻断（exit 2）；只读的 `status`/`list` 仅警告不阻断。合法手动改 plan 后用 `plan_tracker.py reattest <plan_id>` 重新盖章。旧 plan（无 `_attestation`）向后兼容放行，下次写入自动盖章。
+**防篡改 attestation**：plan_tracker 是 plan JSON 的唯一合法写入者，每次合法写盘把 plan 规范化内容的 SHA-256 写进 `_attestation` 字段。`step`/`end`/`abort` 写前读校验，不符 → `PlanTamperedError` 阻断（exit 2）；只读的 `status`/`list` 仅警告不阻断。合法手动改 plan 后用 `plan_tracker.py reattest <plan_id>` 重新盖章。
 
 ### 覆盖命令表
 
@@ -164,15 +164,15 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ---
 
-## /write 核心流程（骨架 · v17.7 加调研先行）
+## /write 核心流程
 
 1. **选择/蒸馏风格** → 执行 /distill-style 或从风格库加载
-2. **【v17.7 强制】调研先行** → spawn `novel-researcher` agent，TASK_TYPE=inspiration，SCOPE=[hot_topic, competition, setting_reference]。生成 `.research_cache/inspiration_<topic>_<时间>.md`
+2. **强制调研先行** → spawn `novel-researcher` agent，TASK_TYPE=inspiration，SCOPE=[hot_topic, competition, setting_reference]。生成 `.research_cache/inspiration_<topic>_<时间>.md`
 3. **AI生成3个灵感**（基于调研结果）→ 主代理必须 Read 调研报告，把 synthesis 中真实热点 + 同题材爆款元素 + 设定参考融合进灵感卡。每张灵感卡需引用 ≥1 个调研 source
 4. **生成大纲** → 执行 /outline（卷级大势，不细化逐章，初始化13个JSON）
 5. **直接开写** → 大纲确认后立即写第一章（不问"要不要细化"）
 6. **逐章循环**：
-   - 【v17.7 强制】走向卡前调研：spawn `novel-researcher`, TASK_TYPE=outline，SCOPE 视章节内容选（如战斗章选 knowledge，情感章选 competition）
+   - **强制**走向卡前调研：spawn `novel-researcher`, TASK_TYPE=outline，SCOPE 视章节内容选（如战斗章选 knowledge，情感章选 competition）
    - 执行 /write-chapter（Agent子任务，写完释放上下文）
    - 执行 /save-state（11步流水线：蒸馏+锁定+反思+卡片）
    - 展示剧情走向卡片（每张卡需 RESEARCH_REF 字段引用调研 cache）→ 等待用户选择
@@ -187,13 +187,13 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 - 用户选择后直接写下一章
 - 用户说「全自动」则跳过所有卡片
 - 大纲完成后直接开写（不问"要不要细化"）
-- **v17.7 调研先行规则**：灵感卡生成前 + 走向卡生成前**必须**先 spawn novel-researcher。例外：用户明说"跳过调研"或"自由模式"
+- **调研先行规则**：灵感卡生成前 + 走向卡生成前**必须**先 spawn novel-researcher。例外：用户明说"跳过调研"或"自由模式"
 
 ---
 
-## 🧭 检测体系顾问制（v19 引入）
+## 🧭 检测体系顾问制
 
-v19 把检测体系从「门禁/法官」改成「顾问」：检测工具（validate_style / narrative_scanner / plot_structure_scanner / pacing / emotion / hook_strength / golden_three / validate_chapter）输出的是**「待裁决项」，不是判决**。
+检测工具（validate_style / narrative_scanner / plot_structure_scanner / pacing / emotion / hook_strength / golden_three / validate_chapter）是「顾问」非「门禁/法官」，输出的是**「待裁决项」，不是判决**。
 
 ### 两类 issue
 
@@ -206,7 +206,7 @@ v19 把检测体系从「门禁/法官」改成「顾问」：检测工具（val
 
 ### hard_gate 不可豁免清单（12 code · 权威定义见 STRUCTURE.md 第十一节）
 
-`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `PROPAGATION_DEBT_CREATED` / `STYLE_单段超长`（v23.12：单段 > 120 CJK 字 + 每章 ≤1 例外；项目级可在 `_数据库/style_scanner_overrides.json` 调高阈值）
+`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `PROPAGATION_DEBT_CREATED` / `STYLE_单段超长`（单段 > 120 CJK 字 + 每章 ≤1 例外；项目级可在 `_数据库/style_scanner_overrides.json` 调高阈值）
 
 ### 豁免协议
 
@@ -280,31 +280,28 @@ v19 把检测体系从「门禁/法官」改成「顾问」：检测工具（val
 
 ---
 
-## 📐 大纲章数解锁（v23.12 · 替换 v23.11）
+## 📐 大纲章数规则：fluid 涌现叙事
 
-**v23.11 强制章数密度公式已废除**（2026-05-24 用户决策）。原因：故事块（cluster）+ 涟漪效应（fate_engine ripple）会让单卷章数**无法预先确定**——目标 500 章 / 600 章只是用户心理预期，实际章数由 ME 触发节奏 + 用户涟漪选择**自然涌现**。
+故事块（cluster）+ 涟漪效应（fate_engine）让单卷章数**无法预先确定**——总章数由 ME 触发节奏 + 用户涟漪选择**自然涌现**。
 
-### 现行规则（保留 / 删除）
+### 写 / 不写
 
-| 状态 | 项 |
+| ✅ 写 | ❌ 不写 |
 |---|---|
-| ✅ **保留** | `rhythm_profile`（节奏档：紧凑/标准/厚重/混合）作软提示 |
-| ✅ **保留** | `volumes[]` 的 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` 描述**大势** |
-| ✅ **保留** | 大势卡 `major_events[]` 的 `expected_window_after` 宽窗（如 max_chapters: 15-100）涌现触发 |
-| ❌ **删除** | `target_chapter_count` / `volume_count` / `events_per_volume` / `avg_chapters_per_event` / `filler_ratio` 必问/必算/必写 |
-| ❌ **删除** | `volumes[].chapter_range`（[1,10] 死锁区间） |
-| ❌ **删除** | v23.11 公式 `T × (1-F) / (V × E)` |
+| `rhythm_profile`（节奏档：紧凑/标准/厚重/混合）作软提示 | `target_chapter_count` / `volume_count` / `events_per_volume` / `avg_chapters_per_event` / `filler_ratio` |
+| `volumes[]` 的 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` | `volumes[].chapter_range`（死锁区间） |
+| 大势卡 `major_events[]` 的 `expected_window_after` 宽窗（如 `max_chapters: 15-100`）涌现触发 | `T × (1-F) / (V × E)` 章数公式 |
 
-### 设计哲学：fluid 涌现叙事
+### 设计哲学
 
 > **大势 = 不变**（卷主题 / 关键 milestones / final image）
 > **章数 = 浮动**（由 ME 触发节奏 + 用户涟漪选择自然产生）
 
-参考 fluid 模式（v20 引入）+ `templates/examples/scp_anomaly_bureau/大势卡.example.json` 的 ME × `expected_window_after` 范式。
+参考 fluid 模式 + `templates/examples/scp_anomaly_bureau/大势卡.example.json` 的 ME × `expected_window_after` 范式。
 
-### 风险接受声明
+### 如果"想写更多但大势用完"
 
-v23.11 原本为了防「ch80 翻车」（目标 500 章但大纲只支撑 120 章）。**v23.12 接受这个 risk** —— 用户已确认 fluid 涌现模式下章数不可预先锁定。如果遇到「想写更多但大势用完」 → 在 save-state 阶段**动态加新 ME**，不再事前锁。
+在 save-state 阶段**动态加新 ME**，不事前锁。
 
 详见 lesson `core/claude-home/lessons/v23-outline-no-chapter-count.md`。
 
@@ -318,7 +315,7 @@ v23.11 原本为了防「ch80 翻车」（目标 500 章但大纲只支撑 120 �
 4. **细节有质感**：具体名词、五感、可触摸的物件
 5. **对话不干净**：真人说话有停顿、口癖、打岔、半截话
 6. **禁用词**：顿时、紧锁、显然、似乎、此刻、淡淡、心中一凛、眼中闪过一丝、微微挑眉、仿佛、嘴角勾起一抹、深吸一口气、缓缓地说、沉吟片刻、不容置疑、波涛汹涌
-7. **段长硬约束**（v23.12 写入 · 基于 2026-05-21 网文调研 12 来源）：
+7. **段长硬约束**：
    - **平均段长 15-30 字**（吐槽爽文档默认；其他档见 STRUCTURE 第十一节）
    - **单段 > 80 字 warn**（找停顿切）
    - **单段 > 120 字 hard_gate**（每章 ≤1 例外）—— 移动阅读硬上限
