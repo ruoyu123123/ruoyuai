@@ -28,6 +28,7 @@ _reference/
 **/对比报告/
 **/复刻测试/
 **/衔接分析/
+**/参考书籍/
 
 # 仓库根目录散落的参考小说原文（防止用户把 source .txt 误推上来）
 /*.txt
@@ -46,6 +47,9 @@ _reference/
 # plan_tracker / session_memory 运行时数据
 core/claude-home/.plans/
 core/claude-home/.sessions/
+
+# GEPA Pareto 前沿运行时快照（v23 Layer 4）
+core/claude-home/.gepa/
 
 # ============================================================
 # 临时文件 / 调试

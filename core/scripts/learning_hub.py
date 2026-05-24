@@ -38,12 +38,17 @@ LEARNERS_FULL = [
     ("skill_evolver.py", ["{project}", "retire", "--ch", "{cur_ch}"], "SE1 retire"),
     ("skill_evolver.py", ["{project}", "promote"], "SE1 promote → universal_skill_pool"),
     ("evolution_orchestrator.py", ["{project}", "--ch", "{cur_ch}"], "SE4 三角共演化"),
+    ("stuck_loop_guard.py", ["{project}"], "v23 Layer 0 卡死信号扫描"),
+    ("adversarial_blindspot_scan.py", ["{project}"], "v23 Layer 1 集体盲点曝光"),
+    ("counterfactual_judge_diff.py", ["{project}"], "v23 Layer 2+3 self-protection 曝光"),
+    ("gepa_prompt_optimizer.py", ["--project", "{project}"], "v23 Layer 4 GEPA Pareto 前沿"),
 ]
 
 LEARNERS_QUICK = [
     ("user_experience_learner.py", ["{project}"], "L1+L6 用户行为+痛点"),
     ("error_pattern_analyzer.py", ["{project}"], "L2 错误聚类"),
     ("dead_feature_detector.py", ["{project}"], "L3+L4 死功能"),
+    ("stuck_loop_guard.py", ["{project}"], "v23 Layer 0 卡死信号扫描"),
 ]
 
 

@@ -22,11 +22,27 @@
 ### 特性亮点
 
 - **44 个原创 slash command**（`/write`、`/distill-style`、`/save-state`、`/reconcile` …）
-- **13 个原创 agent**（writer、splitter、reflector、voice-checker、validator-checker …）
-- **122 个 Python 系统脚本**（audit_hub、cross_chapter_*_scan、gen_writer 等）
+- **15 个原创 agent**（writer、splitter、reflector、voice-checker、validator-checker、adversarial-reader、counterfactual-judge …）
+- **126 个 Python 系统脚本**（audit_hub、cross_chapter_*_scan、gen_writer、stuck_loop_guard 等）
+- **v23 异质监督 5 层架构**：破 LLM Self-Correction Blind Spot（业界数据 64.5%），见下文
 - **Plan 强制规划层**：6 个多步命令必走 plan_tracker，杜绝跳步
 - **检测体系顾问制**：advisory 可豁免 / hard_gate 不可豁免，含 11 类客观错误
 - **没调查没发言权** 元规则：所有决策前必先调研（联网/实地/问用户三选一）
+
+### v23 异质监督 5 层架构
+
+业界数据：LLM 平均 **64.5% 盲点率**（Self-Correction Bench, arxiv 2507.02778）—— 能改别人的错改不了自己的错。所有「writer / judge / reflector 共享同一套 manifest 视角」的系统都会**集体盲**。
+
+v23 用 4 个独立攻击角度补盲：
+
+| 层 | 文件 | 攻击角度 | 业界依据 |
+|---|---|---|---|
+| **L0 卡死守卫** | `core/scripts/stuck_loop_guard.py` | **纯规则**不调 LLM，不会被同源 prompt 污染 | Antigravity loop break / Wink (arxiv 2602.17037) |
+| **L1 敌对读者** | `.claude/agents/novel-adversarial-reader.md` + `core/scripts/adversarial_blindspot_scan.py` | **屏蔽**所有内部 context，纯网文老读者视角挑刺 | VIGIL (arxiv 2512.07094) sibling supervisor |
+| **L2+3 反事实盲审** | `.claude/agents/novel-counterfactual-judge.md` + `core/scripts/counterfactual_judge_diff.py` | **伪装匿名稿**，破 self-protection 13-22% 偏见 | Counterfactual Debating (arxiv 2406.11514) · SPC (arxiv 2504.19162) |
+| **L4 Pareto 演化** | `core/scripts/gepa_prompt_optimizer.py` | **保留候选多样性**不让单一最优覆盖 | GEPA (ICLR 2026 Oral, arxiv 2507.19457) |
+
+详见 `core/claude-home/lessons/v23-blindspot-layer0-1.md`。
 
 ### 系统要求
 
@@ -185,11 +201,12 @@ MIT License — 见 [LICENSE](LICENSE)
 ### Highlights
 
 - **44 original slash commands**
-- **13 original sub-agents**
-- **122 Python system scripts**
+- **15 original sub-agents**
+- **126 Python system scripts**
 - **Mandatory planning layer** with SHA-256 anti-tampering attestation
 - **Advisory/Hard-Gate detection** — advisory waivable with reason, hard-gate enforced
 - **"No investigation, no voice"** meta-rule — all decisions require evidence
+- **v23 Heterogeneous Oversight (4-layer)** — counters the 64.5% LLM Self-Correction Blind Spot (arxiv 2507.02778) via independent siblings that don't share the writer's context: rule-based loop guard (L0), context-blind adversarial reader (L1), blind-review counterfactual judge (L2+3), GEPA Pareto candidate pool (L4, ICLR 2026 Oral)
 
 ### Requirements
 
