@@ -5,10 +5,38 @@
 ## 元数据
 
 - **起始版本**：v17（三章窗口 + 衔接分析 + 闭环复刻）
+- **当前主轨**：**v22.cluster · 故事块自适应蒸馏**（2026-05-19 重构 · LumberChunker EMNLP 2024 + MARCUS 2025 + Multi-Agent TV Arcs 2025）
 - **首次写入**：2026-05-13
 - **追加规则**：每条教训必须有「现象 → 影响 → 修复 → 预防」四要素
 - **去重规则**：lessons-extractor 必须先读现有库，相同根因不重复追加（可补充细节）
 - **优先级**：⛔ 红线 / ⚠️ 重要 / 💡 提示
+
+---
+
+## 🚨 v22.cluster 迁移警示（2026-05-24 翻车后强制加入 · 主代理 Step 1 必读）
+
+**老规则（v17 三章固定窗口）已弃用**——所有标 `[DEPRECATED v22.cluster]` 的 lesson 仅作历史保留，**新蒸馏一律按 cluster 故事块颗粒度**。
+
+| 项 | v17 老规则（弃） | v22.cluster 新规则 |
+|---|---|---|
+| 颗粒度 | 固定 3 章/窗口 | **cluster 自适应 3-6 章 / 4000-20000 字** |
+| 切分器 | 章号取模 | **`cluster_segmenter.py`**（语义边界 + max_chapters 硬上限） |
+| Agent 数（200 章估）| 67 | **~37**（节省 ~45% 调用） |
+| 衔接 JSON 路径 | `衔接分析/ch{N}_{N+2}_continuity.json` | `衔接分析/cluster_<id>_continuity.json` |
+| arc 聚合 | ❌（v17 无）| `arc_aggregator.py` 主轨 cluster + 副轨 fixed10 |
+| 业界依据 | 经验法则 | LumberChunker (EMNLP 2024) +7.37% DCG@20 / MARCUS 事件中心 / Multi-Agent TV Arcs 自然终结 |
+
+**主代理 Step 1 必做项**：
+1. 读 `workspace/styles/<书名>/cluster_index.json`——
+   - **场景 A 复用**：存在 → 直接复用（含 strong 边界，v22.cluster.2 等级）
+   - **场景 B 裸切**：不存在 → 跑 `cluster_segmenter.py`（首轮 strong=0 是设计，不是 bug）
+2. Agent 调度循环改为 `FOR cluster in cluster_index.clusters`，**不要**再写 `FOR batch_start = 1 to N step 3`
+3. **场景 B 额外**：表层蒸馏完成后必须重跑 segmenter 做 retro-refine 才能得到含 strong 边界的最终 cluster_index
+4. 详细迁移指南见 [v22-cluster-migration.md](v22-cluster-migration.md)（v1.1 含两种场景 caveat）
+
+**翻车实例 1（2026-05-24 · BookA v5 重蒸）**：主代理 Step 1 没读 cluster_index.json，盲套 v4.3 历史的 66 三章窗口规则；用户指出"系统已改 cluster"才矫正。根因 = lessons 元数据起始版本声明仍写 v17 + L2.6/L4.5/L4.6 全是 3 章窗口语境 + 零 cluster 提及 → 主代理"按 lessons 老规则做事"。
+
+**翻车实例 2（2026-05-24 · BookA v6 全清重做）**：用户全清后主代理重跑 segmenter，得到 34 cluster · strong=0，误判为"降级 cluster_index 质量缺陷"停下来报警。实际上是场景 B 自然首轮态——v22-cluster-migration.md v1.0 没区分"新蒸馏裸切 vs 重蒸复用"两种场景，导致主代理把首轮裸切当作降级。修复：v1.1 加 §0 关键 caveat + §3.4 retro-refine SOP。
 
 ---
 
@@ -136,11 +164,35 @@
   - 每完成一批先跑阶段 2-6 闭环验证再启动下一批，避免"蒸馏半天验证发现不符合要求"
 - **关联**：L2.2 过度优化反模式 / L4.6 蒸馏轮次预算 / L1.4 配额规划
 
-### L2.6 ⚠️ 末组合并规则（窗口尾部不平衡时）
-- **现象**：N 章蒸馏按 3 章/窗口切分，遇 N % 3 ≠ 0 时末窗口剩 1-2 章无法独立成窗
+### L2.6 ⚠️ 末组合并规则（窗口尾部不平衡时）`[DEPRECATED v22.cluster]`
+- **状态**：v22.cluster 改 cluster_segmenter 切分后，末窗口由 segmenter 启发式自动处理（max_chapters/end_of_book 边界），不再需要"末 1-2 章手动并入前窗口"。本条保留作 v17 历史记录。
+- **现象（v17 时代）**：N 章蒸馏按 3 章/窗口切分，遇 N % 3 ≠ 0 时末窗口剩 1-2 章无法独立成窗
 - **影响**：末窗口章际衔接分析样本不足；强行单章窗口违反"≥3 章窗口"原则
 - **修复**：末组允许合并为 4-5 章窗口（如 ch196-200 五章合并），单次 agent 处理。prompt 显式标注「末组合并规则」并允许 ≤5 章窗口
 - **预防**：调度模板内置末窗口检测：`if remainder in [1,2]: merge into previous window`。意外的好处——五章合并往往产出章首/章末多样性教科书样本
+- **v22.cluster 替代**：见下方 L2.8 「cluster 故事块自适应切分」
+
+### L2.8 ⛔ Cluster 故事块自适应切分（v22.cluster 主轨规则 · [MANUAL · 2026-05-24]）
+- **现象**：v17 的 "3 章固定窗口" 与 写作端 ECAS cluster 模式（gen_writer.py --cluster N，长度 2-6 章 / 4000-20000 字）颗粒度错位 → 蒸馏出的"3 章衔接模板"对 cluster 写作没用。2026-05-24 BookA重蒸 Step 1 主代理盲套 v4.3 历史的 66 三章窗口，被用户指出系统已改 cluster
+- **影响**：
+  - 蒸馏 / 写作两端颗粒度错位 → 蒸馏指纹 30%+ 不被写作端使用
+  - 主代理读 lessons 时被 v17 老规则误导，重复翻车
+- **修复（强制）**：
+  1. 主代理 Step 1 第一动作 = Read `workspace/styles/<书名>/cluster_index.json`
+  2. **场景 A**（已蒸馏书重蒸）：cluster_index 存在 → 直接复用（含 strong 边界）
+  3. **场景 B**（新蒸馏 / 全清后重做）：cluster_index 不存在 → 跑 `cluster_segmenter.py` 产首轮裸切索引（strong=0 是设计，必经阶段）
+  4. Agent 调度循环 = `FOR cluster in cluster_index.clusters`，**不**用章数取模
+  5. 单 cluster agent 任务：读 N 章原文 → 产单章 JSON × N + cluster 衔接 JSON × 1
+  6. **场景 B 必做的 retro-refine**：表层蒸馏完成后再跑一次 `cluster_segmenter.py`，此时 segmenter 能读 continuity 数据自动识别 strong 边界，输出 cluster_index 升级到 v22.cluster.2 等级
+  7. 后置聚合：`python core/scripts/arc_aggregator.py --project ... --all-clusters` 自动产 cluster_arc + 副轨 fixed10
+- **预防**：
+  - lessons 元数据明确标注「当前主轨：v22.cluster」（已修，2026-05-24）
+  - 任何蒸馏方向决策前**必须** Grep `cluster_index|v22\.cluster` 验证当前规则版本
+  - 不要把"首轮裸切 strong=0"误判为"降级"或"质量缺陷"——这是场景 B 自然态
+  - L8.2 plan_tracker contract 字段新增 `CLUSTER_ID` + `CHAPTER_RANGE`
+- **业界依据**：LumberChunker (arXiv 2406.17526, EMNLP 2024) variable-length 比 fixed-N +7.37% DCG@20；MARCUS (arXiv 2510.18201, 2025) event-centric；Multi-Agent TV Arcs (arXiv 2503.04817, 2025) 自然终结
+- **翻车实例 v1.1（2026-05-24 v6 全清重做）**：主代理裸切出 34 cluster · strong=0 后误判为"降级"停下来报警；实际是场景 B 必经阶段。修复后写入 v22-cluster-migration.md v1.1 §0 + §3.4
+- **关联**：L4.5（颗粒度选择历史）/ L4.6（轮次预算）/ L9.4（蒸馏维度审计）
 
 ---
 
@@ -228,16 +280,20 @@
 - **修复**：v0.5.2 改 CC-37 为章型相关双侧区间（如喜剧章 [5%, 13%]）
 - **预防**：所有 CC 约束默认双侧区间，单边约束需明确标注「下限不限」或「上限不限」
 
-### L4.5 ⛔ 「1 章/agent」颗粒度问题
+### L4.5 ⛔ 「1 章/agent」颗粒度问题 `[SUPERSEDED v22.cluster]`
+- **状态**：v17 升级（3 章/agent）解决了 1 章颗粒度盲填问题，但本身已被 v22.cluster 故事块自适应颗粒度（3-6 章）取代。本条保留作历史
 - **现象**：单 agent 只看 1 章，dim26-27 章际衔接只能凭印象盲填
 - **影响**：v17 升级前 Ch1-25 衔接分析质量不足
 - **修复**：v17 改为 3 章/agent + 独立 continuity JSON，agent 真读上下文
 - **预防**：任何"需要上下文"的分析维度，必须设计 ≥3 章窗口的 agent
+- **v22.cluster 升级**：颗粒度由 cluster_segmenter 按情节单元自适应给出（3-6 章）；最小 cluster ≥ 3 章 ≥ 4000 字，沿用"≥3 章窗口"原则。详见 L2.8
 
-### L4.6 ⚠️ 蒸馏轮次预算
+### L4.6 ⚠️ 蒸馏轮次预算 `[SUPERSEDED v22.cluster]`
+- **状态**：v17 的"3 章/agent = 67 调用"已被 cluster 颗粒度取代（37 cluster ≈ 37 调用，约 -45%）。本条保留作历史
 - **现象**：200 章按 1 章/agent = 200 调用，3 章/agent = 67 调用
 - **修复**：v17 选 3 章/agent 是颗粒度 / 章际衔接 / 调用次数 / 失败重做代价的甜点
 - **预防**：未来章节数 N 时，每 agent 处理章数 ≈ √(N/100) × 3 作为起点
+- **v22.cluster 升级**：调用次数 ≈ cluster_index.clusters 总数（不再按章数估算）；典型 200 章 → 30-40 cluster；500 章 → 80-100 cluster。预防字段改为：「Agent 数 = len(cluster_index.clusters)，由 cluster_segmenter 启发式产出」
 
 ### L4.7 💡 闭环测试 vs 实质收敛
 - **现象**：v17 严格收敛标准「连续 2 轮 ≤2 维度变化」，但某些维度变化是工具盲点不是 skill 缺陷

@@ -57,22 +57,30 @@ def safe_load_gen_model_loader():
 
 def build_review_prompt(original_data: dict, task: str, context: str = "", input_type: str = "json") -> tuple[str, str]:
     """构造 LLM 二次复核 prompt。v22.gov.align.fix: input_type=text 时不包 JSON 块。"""
-    system = """你是一位「脚本输出复核员」。
+    system = """你是一位「输出复核员」。
 
-你的工作：拿到一个**确定性脚本（rule-based / 启发式）**的输出 JSON，判断这个输出
-**是否合理**。脚本可能：
-- 用错关键词匹配（如把音译名误判成中文名）
-- 用错阈值（如切分块太严或太松）
-- 漏掉特例（如长尾章节、特殊场景）
-- 字段映射错（如把 dict 当 string 处理）
+你的工作：拿到一个**待复核内容**（可能是脚本 JSON 输出 / 章节正文 txt / 评估报告等），
+根据 task 描述判断这个内容**是否合理 / 是否符合期望**。
 
-你的输出 JSON：
+复核场景示例：
+- 脚本输出 JSON：判断字段值合理性（如把音译名误判成中文名 / 阈值切太严太松）
+- 章节正文 txt：判断是否符合作者风格 / 有无 AI 套话 / 句段是否合规
+- 评估报告 JSON：判断 issue 列表是真问题还是 false positive
+
+**根据 task 描述的具体复核目标**给出判断，不要拘泥于"input 必须是 JSON"。
+
+**⚠️ 输出格式硬约束**：
+
+只输出**单一 JSON 对象**，**不要**输出任何推理过程 / thinking trace / 自然语言开场白。
+**第一个字符必须是 `{`**，**最后一个字符必须是 `}`**。
+
+JSON schema：
 ```json
 {
   "agreement": "agree | disagree | partial",
   "confidence": 0-1,
   "override_recommendation": {"...": "..."} | null,
-  "reasoning": "< 300 字推理：哪里合理 / 哪里不合理 / 为什么"
+  "reasoning": "推理：哪里合理 / 哪里不合理 / 为什么"
 }
 ```
 
@@ -81,7 +89,10 @@ def build_review_prompt(original_data: dict, task: str, context: str = "", input
 - disagree = 输出明显错误，必须改（含 override_recommendation 具体值）
 - partial = 部分合理，建议补充某些字段
 - 严格基于 JSON 内容判断，不要凭空推测
-- 不确定时 confidence 标低（< 0.5）让主代理审"""
+- 不确定时 confidence 标低（< 0.5）让主代理审
+
+**再次强调**：你的回复必须**只**是上述 JSON。如果你有思维链，写到 reasoning 字段里，
+不要写在 JSON 外面。reasoning model 也必须把思考过程包装进 reasoning 字段。"""
 
     # v22.gov.align.notrunc 全局规则：不节省 token · 完整传 input/context
     # 详见 memory feedback-no-token-saving
@@ -140,22 +151,35 @@ def call_gen_model(system: str, user: str, profile_lock_path: str | None = None)
 
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
-        resp = client.chat.completions.create(
-            model=profile.model,
-            messages=[
+        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url, timeout=180.0)
+        # v22.gov.align.fix: 用 response_format 强制 JSON（OpenAI 兼容 · reasoning model 友好）
+        kwargs = {
+            "model": profile.model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=2000,
-            temperature=0.3,    # 复核任务低 temp 求稳
-        )
+            "max_tokens": 8000,         # reasoning model 可能 reasoning 段占很多 token
+            "temperature": 0.3,
+        }
+        try:
+            kwargs["response_format"] = {"type": "json_object"}
+            resp = client.chat.completions.create(**kwargs)
+        except Exception as fmt_err:
+            # 部分 provider 不支持 response_format → 退回不强制
+            print(f"[ai_wrapper] response_format=json_object 不支持，退回普通模式: {fmt_err}", file=sys.stderr)
+            kwargs.pop("response_format", None)
+            resp = client.chat.completions.create(**kwargs)
         raw = resp.choices[0].message.content.strip()
-        # 尝试解析 JSON
+        # 尝试解析 JSON · 加 fallback: 找最后一个 {} 块（reasoning model 可能前面有 thinking）
         import re
         m = re.search(r"\{[\s\S]*\}", raw)
         if m:
-            return json.loads(m.group(0))
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                # JSON 嵌套破损 → 找最外层 {} 配对
+                pass
         return {"raw_text": raw, "_parse_failed": True}
     except Exception as e:
         print(f"[ai_wrapper] API call failed: {e}", file=sys.stderr)

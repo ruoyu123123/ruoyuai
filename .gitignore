@@ -51,6 +51,12 @@ core/claude-home/.sessions/
 # GEPA Pareto 前沿运行时快照（v23 Layer 4）
 core/claude-home/.gepa/
 
+# ai_wrapper 二次复核产物（运行时透传样本）
+*.ai_review.json
+
+# dimension_evolver 跨项目扫描产物（运行时）
+core/claude-home/universal_candidates_*.json
+
 # ============================================================
 # 临时文件 / 调试
 # ============================================================

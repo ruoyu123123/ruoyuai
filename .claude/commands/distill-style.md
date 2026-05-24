@@ -21,12 +21,14 @@ $ARGUMENTS
 ## Step 1 必做项（不做就是 2026-05-24 翻车重演）
 
 1. **第一动作**：Read `workspace/styles/<书名>/cluster_index.json`
-   - 存在 → 直接复用 `clusters[]`（含 `cluster_id` + `chapter_range`）作为 agent 调度单元
-   - 不存在 → 先跑 `python core/scripts/cluster_segmenter.py --project workspace/styles/<书名>`
+   - **场景 A**（重蒸已蒸馏书）：存在 → 直接复用 `clusters[]`（含 strong 边界，v22.cluster.2 等级）
+   - **场景 B**（新蒸馏 / 全清重做）：不存在 → 跑 `python core/scripts/cluster_segmenter.py --project workspace/styles/<书名>`
+   - ⚠️ 场景 B 首轮 cluster_index 的 `boundary_reason_distribution` 必然 `strong=0` 全是 `max_chapters`——**这是设计，不是 bug**（segmenter 是 retroactive 工具，依赖 continuity 数据识别 strong）
 2. **Agent 调度循环**：`FOR cluster in cluster_index.clusters` —— **不要**写 `FOR batch_start = 1 to N step 3`
 3. **单 cluster agent** 任务：读 `cluster.chapters_count` 章原文（3-6 章）→ 产单章 JSON × N + cluster 衔接 JSON × 1
 4. **Agent prompt 必带契约字段**：`PLAN_ID` + `STEP` + `CLUSTER_ID` + `CHAPTER_RANGE`
-5. **后置聚合**：`python core/scripts/arc_aggregator.py --project ... --all-clusters` 产 cluster_arc（主轨）+ 副轨 fixed10
+5. **场景 B 必做的 retro-refine**：表层蒸馏全部完成后**重跑** segmenter → cluster_index 升级到含 strong 边界的 v22.cluster.2 等级 → 再跑 arc_aggregator
+6. **后置聚合**：`python core/scripts/arc_aggregator.py --project ... --all-clusters` 产 cluster_arc（主轨）+ 副轨 fixed10
 
 ## 速查
 
