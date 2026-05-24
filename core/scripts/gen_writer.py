@@ -129,6 +129,53 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int, ch_end: int
     # 用户偏好
     pref = read_text(db / '用户偏好.json', 5000)
 
+    # v22.gov.align.fix Gap T2-X: 读 事件簇.json 找当前 cluster 的 brief 注入 prompt
+    # 之前 build_prompt 完全没读 事件簇.json，导致 cluster.scope_summary 硬约束未注入 → LLM 自由发挥跑偏 task
+    cluster_brief = {}
+    cluster_brief_text = ""
+    cluster_hard_constraints_text = ""
+    try:
+        ec_path = db / '事件簇.json'
+        if ec_path.exists():
+            ec = json.loads(ec_path.read_text(encoding='utf-8'))
+            for c in ec.get('clusters', []):
+                if c.get('cluster_id') == cluster_id:
+                    cluster_brief = c
+                    break
+            if cluster_brief:
+                cluster_brief_text = json.dumps(cluster_brief, ensure_ascii=False, indent=2)
+                # 从 scope_summary 提取硬约束（≥/≤/百分比/角色数等）
+                scope = cluster_brief.get('scope_summary', '')
+                ewr = cluster_brief.get('expected_word_range', {})
+                constraints = []
+                if scope:
+                    # 简单提硬约束关键词：「≥ N」「≤ N」「占比」「至少」「不少于」「角色」
+                    import re as _re
+                    for m in _re.finditer(r'(?:至少|不少于|≥)\s*(\d+)\s*([个名位章字]?)', scope):
+                        n = m.group(1); unit = m.group(2) or '项'
+                        constraints.append(f"- 至少 {n} {unit}（出自 scope_summary）")
+                    for m in _re.finditer(r'(?:不超过|至多|≤)\s*(\d+)\s*([个名位章字]?)', scope):
+                        n = m.group(1); unit = m.group(2) or '项'
+                        constraints.append(f"- 至多 {n} {unit}（出自 scope_summary）")
+                    for m in _re.finditer(r'(?:占比|比例)\s*[≥>]\s*(\d+)\s*%?', scope):
+                        constraints.append(f"- 比例 ≥ {m.group(1)}%（出自 scope_summary）")
+                    for m in _re.finditer(r'(?:占比|比例)\s*[≤<]\s*(\d+)\s*%?', scope):
+                        constraints.append(f"- 比例 ≤ {m.group(1)}%（出自 scope_summary）")
+                if ewr and ewr.get('min') and ewr.get('max'):
+                    constraints.append(f"- 字数硬约束：{ewr['min']}-{ewr['max']} {ewr.get('unit', 'CJK_chars')}（cluster.expected_word_range · 必遵守，写完自查不达标即重写）")
+                # 额外读 cluster_brief 的 hard_constraints 字段（v22.gov.align.fix 新 schema）
+                for hc in cluster_brief.get('hard_constraints', []) or []:
+                    if isinstance(hc, dict):
+                        metric = hc.get('metric', '?')
+                        if 'min' in hc:
+                            constraints.append(f"- {metric} ≥ {hc['min']}（cluster.hard_constraints · 必遵守）")
+                        if 'max' in hc:
+                            constraints.append(f"- {metric} ≤ {hc['max']}（cluster.hard_constraints · 必遵守）")
+                if constraints:
+                    cluster_hard_constraints_text = "\n".join(constraints)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[gen_writer] 事件簇.json 读取失败（不阻塞）: {e}", file=sys.stderr)
+
     # 前一章末尾（用于衔接，如果 ch_start > 1）
     prev_ch_section = ""
     if ch_start > 1:
@@ -178,6 +225,11 @@ voice_pack sentence_avg=5字 **只用于对话和章末笔注**，叙述段必�
 ## 7. 禁用 AI 套话
 与此同时 / 值得一提的是 / 不仅如此 / 然而 / 事实上 / 顿时 / 紧锁 / 显然 / 淡淡 / 此刻 / 仿佛 / 缓缓地说 / 沉吟片刻 / 心中一凛 / 微微挑眉 / 嘴角勾起一抹
 
+## 8. 【v22.gov.align.fix】CLUSTER 硬约束零容忍
+user prompt 顶部「CLUSTER 硬约束」段（如有）的硬指标（角色数 / 占比 / 字数范围）**违反即硬违规**，必须重写。
+特别是 `scope_summary` 描述的场景类型（如"对白场景"必有 ≥3 角色 + ≥60% 对话占比）= **硬契约**不是建议。
+**测试发现**（test2 对白场景两 model 都跑成调查叙事场景）：scope_summary 不强调 = LLM 自由发挥跑偏。本条铁律消除该 gap。
+
 # 元 anti-slop 防御（已知重犯模式）
 
 - **poetry-mode 短句三连**：禁用「第一遍 / 第二遍 / 第三遍」「那一瞬 / 那一瞬 / 他记着那一瞬」类 3+ 段独立短段含同短语
@@ -203,6 +255,27 @@ voice_pack sentence_avg=5字 **只用于对话和章末笔注**，叙述段必�
 完成正文后再输出 JSON 格式的 CHANGES 部分（用 ```json ... ``` 包裹）。
 """
 
+    # v22.gov.align.fix Gap T2-X: cluster 硬约束段（顶部显著位）
+    cluster_constraints_section = ""
+    if cluster_brief_text:
+        cluster_constraints_section = f"""## ⚠️ CLUSTER 硬约束（最高优先级 · 违反即重写）
+
+cluster_brief 完整内容：
+```json
+{cluster_brief_text}
+```
+
+### 🎯 必遵守硬指标清单（从 cluster.scope_summary + expected_word_range + hard_constraints 提取）
+
+{cluster_hard_constraints_text if cluster_hard_constraints_text else '（本 cluster 无硬约束 · 按一般指南）'}
+
+**写完正文必自查**：上述硬指标**任一**不达标 → 视为重大失败，自查 JSON 中明确标 `cluster_constraints_violated: true`。
+**scope_summary 不是参考，是契约**：cluster.scope_summary 描述的场景类型（如"对白场景"）、角色数（如"≥3 角色"）、占比（如"对话占比 ≥60%"）等是**硬契约**，不是建议。
+
+---
+
+"""
+
     user = f"""# 写作任务
 
 为本项目 cluster_{cluster_id:03d} 写**一整块连续叙事**（预计后续 splitter 切成 ch{ch_start}-ch{ch_end} 共 {ch_end - ch_start + 1} 章，但**你不要预先分章**）。
@@ -211,7 +284,7 @@ voice_pack sentence_avg=5字 **只用于对话和章末笔注**，叙述段必�
 
 ⚠️ **重要提醒**：你输出的是**一整块叙事**，不是分好章的成品。**严禁**写「第 N 章 标题」/「——」分章符。把整个故事块当一篇长散文写，场景之间自然过渡。
 
-## chapter_plan（必落 anchors）
+{cluster_constraints_section}## chapter_plan（必落 anchors）
 
 ```json
 {plan_text}
