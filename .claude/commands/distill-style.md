@@ -22,8 +22,27 @@ $ARGUMENTS
    - **场景 A**（重蒸已蒸馏书）：存在 → 直接复用 `clusters[]`（含 strong 边界）
    - **场景 B**（新蒸馏 / 全清重做）：不存在 → 跑 `python core/scripts/cluster_segmenter.py --project workspace/styles/<书名>`
    - ⚠️ 场景 B 首轮 cluster_index 的 `boundary_reason_distribution` 必然 `strong=0` 全是 `max_chapters`——**这是设计，不是 bug**（segmenter 是 retroactive 工具，依赖 continuity 数据识别 strong）
-2. **Agent 调度循环**：`FOR cluster in cluster_index.clusters`
-3. **单 cluster agent** 任务：读 `cluster.chapters_count` 章原文（3-6 章）→ 产单章 JSON × N + cluster 衔接 JSON × 1
+2. **Agent 调度循环（A' 半 cluster 模式 · 2026-05-24 实证）**：
+   每个 cluster 拆为 **3 个 sub-agent**（防 stream idle / session limit 超时）：
+   ```
+   FOR cluster in cluster_index.clusters:
+     half = cluster.chapters_count // 2  # 通常 3
+     # Agent 1: 前半单章 JSON（ch_a ~ ch_a+half-1）
+     # Agent 2: 后半单章 JSON（ch_a+half ~ ch_b）
+     # Agent 3: 整 cluster 衔接 JSON（基于已落盘的单章 JSON + 原文）
+   ```
+   - **单 agent 目标耗时 ≤10 min**（实测 3-8 min）
+   - **并行数 ≤3**（防配额打满）
+   - 每完成 1 章立即 Write（防超时丢失）
+   - 衔接 agent 在前两个 agent 完成后启动（依赖单章 JSON）
+   - **失败重试代价 = 1/3 cluster**（而非整 cluster）
+   
+   **为什么不用单 cluster 1 agent**（历史教训 2026-05-24）：
+   - Claude Code sub-agent stream idle timeout 5 min + wall-clock ~25 min 硬阈值
+   - 6 章 agent 实测 100% 失败率（6/6 全 502 EOF）
+   - 3 章 agent 实测 100% 成功率（8/8 全通过，3-8 min）
+   
+3. **单 cluster agent** 任务：读 ≤3 章原文 → 产单章 JSON × 3（前半/后半各一波）；衔接 agent 读全 cluster 单章 JSON → 产 cluster 衔接 JSON × 1
 4. **Agent prompt 必带契约字段**：`PLAN_ID` + `STEP` + `CLUSTER_ID` + `CHAPTER_RANGE`
 5. **场景 B 必做的 retro-refine**：表层蒸馏全部完成后**重跑** segmenter → cluster_index 升级到含 strong 边界 → 再跑 arc_aggregator
 6. **后置聚合**：`python core/scripts/arc_aggregator.py --project ... --all-clusters` 产 cluster_arc（主轨）+ 副轨 fixed10
