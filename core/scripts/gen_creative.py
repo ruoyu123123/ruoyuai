@@ -148,13 +148,13 @@ def build_brainstorm_prompt(topic: str, count: int, research: str,
 
 {topic}
 
-# 风格基线（从风格库 skill.md 读，决定 voice/调子）
+# 风格基线（从风格库 skill.md 读，决定 voice/调子 · v22.gov.align.notrunc 全量传）
 
-{style_ref[:6000] if style_ref else '（未提供风格基线，按通用文学叙事处理）'}
+{style_ref if style_ref else '（未提供风格基线，按通用文学叙事处理）'}
 
-# 调研缓存（必读 synthesis 段；source URLs 用于 card.source_refs）
+# 调研缓存（必读 synthesis 段；source URLs 用于 card.source_refs · v22.gov.align.notrunc 全量传）
 
-{research[:12000] if research else '（未提供调研，警告：模型记忆 ≠ 实时热点；尽量保守生成）'}
+{research if research else '（未提供调研，警告：模型记忆 ≠ 实时热点；尽量保守生成）'}
 
 # 任务
 

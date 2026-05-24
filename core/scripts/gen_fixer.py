@@ -130,7 +130,8 @@ COMMON_HARD_RULES = """# 修复硬约束（所有 mode 共享，禁止违反）
 # ============ 修复 prompt 组装 ============
 def build_comprehensive_prompt(files: list, report_data: dict, files_content: dict) -> tuple:
     """综合修：读 reflector 报告里的 issue，对所选章节做精准修复"""
-    issues_text = json.dumps(report_data, ensure_ascii=False, indent=2)[:12000]
+    # v22.gov.align.notrunc 全局规则：不节省 token · 全量传 issues_text 给 LLM
+    issues_text = json.dumps(report_data, ensure_ascii=False, indent=2)
 
     files_section = []
     for fp in files:

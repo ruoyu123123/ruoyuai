@@ -114,7 +114,8 @@ def _load_title_style(project: Path) -> dict | None:
 def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
                    tier: str, history_titles: list[str], title_style: dict | None = None) -> str:
     from openai import OpenAI
-    body_sample = body[:2000] + ('\n...\n' + body[-500:] if len(body) > 2500 else '')
+    # v22.gov.align.notrunc 全局规则：不节省 token · 全量传 body 给 LLM
+    body_sample = body
     history_str = '、'.join(f"「{t}」" for t in history_titles[-20:]) if history_titles else '（无）'
 
     tier_brief = {

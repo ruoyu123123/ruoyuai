@@ -55,8 +55,8 @@ def safe_load_gen_model_loader():
         return None, None
 
 
-def build_review_prompt(original_data: dict, task: str, context: str = "") -> tuple[str, str]:
-    """构造 LLM 二次复核 prompt。"""
+def build_review_prompt(original_data: dict, task: str, context: str = "", input_type: str = "json") -> tuple[str, str]:
+    """构造 LLM 二次复核 prompt。v22.gov.align.fix: input_type=text 时不包 JSON 块。"""
     system = """你是一位「脚本输出复核员」。
 
 你的工作：拿到一个**确定性脚本（rule-based / 启发式）**的输出 JSON，判断这个输出
@@ -83,10 +83,19 @@ def build_review_prompt(original_data: dict, task: str, context: str = "") -> tu
 - 严格基于 JSON 内容判断，不要凭空推测
 - 不确定时 confidence 标低（< 0.5）让主代理审"""
 
+    # v22.gov.align.notrunc 全局规则：不节省 token · 完整传 input/context
+    # 详见 memory feedback-no-token-saving
     user_parts = [f"# 任务描述\n{task}\n"]
     if context:
-        user_parts.append(f"# 上下文\n{context[:2000]}\n")
-    user_parts.append(f"# 原脚本输出 JSON\n```json\n{json.dumps(original_data, ensure_ascii=False, indent=2)[:8000]}\n```")
+        user_parts.append(f"# 上下文\n{context}\n")
+    if input_type == "text":
+        # 文本输入（如章节正文 txt）— 不包 JSON 块
+        content = original_data.get("content", "") if isinstance(original_data, dict) else str(original_data)
+        user_parts.append(f"# 待复核文本（来自 {original_data.get('_file_path', '?')}）\n{content}")
+    else:
+        # JSON 输入（如脚本输出报告）
+        raw_json = json.dumps(original_data, ensure_ascii=False, indent=2)
+        user_parts.append(f"# 原脚本输出 JSON\n```json\n{raw_json}\n```")
     user_parts.append("\n请按规定的 JSON 格式输出复核结论。")
     return system, "\n".join(user_parts)
 
@@ -155,15 +164,22 @@ def call_gen_model(system: str, user: str, profile_lock_path: str | None = None)
 
 def review_output(original_path: Path, task: str, context: str = "",
                   profile_lock_path: str | None = None) -> dict:
-    """复核单个脚本输出 JSON。"""
+    """复核单个脚本输出（支持 JSON 或纯文本如 txt 正文）。
+
+    v22.gov.align.fix: txt input 也要支持（gen_writer 产出 cluster_NNN_draft.txt 不是 JSON）
+    """
     if not original_path.exists():
         return {"error": f"file not found: {original_path}"}
+    raw = original_path.read_text(encoding="utf-8")
+    # 尝试 JSON 解析（脚本输出常见）；失败 → 当纯文本处理（章节正文常见）
     try:
-        original = json.loads(original_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        return {"error": f"invalid JSON: {e}"}
+        original = json.loads(raw)
+        input_type = "json"
+    except (json.JSONDecodeError, ValueError):
+        original = {"_input_type": "text", "_file_path": str(original_path), "content": raw}
+        input_type = "text"
 
-    system, user = build_review_prompt(original, task, context)
+    system, user = build_review_prompt(original, task, context, input_type=input_type)
     ai_result = call_gen_model(system, user, profile_lock_path=profile_lock_path)
     # v22.gov.align: profile lock 违规直接返回错误
     if isinstance(ai_result, dict) and ai_result.get("_profile_lock_violation"):
