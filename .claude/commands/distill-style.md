@@ -1667,19 +1667,21 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 \
 每段生成后**立即**调 `ai_wrapper.py` 让 gen-model 二次复核「这段仿写是否符合作者风格」（与人工 SFS 评分形成 hybrid pipeline · 业界共识 rules + LLM judge = 78.5% vs LLM-only 66.2%）：
 
 ```bash
-# 对每个 test 文件
+# 对每个 test 文件（v22.gov.align P0 修 Gap 5：加 --profile-lock 强制 profile 一致 · 防 train-test skew）
 for i in 1 2 3 4 5; do
   python core/scripts/ai_wrapper.py \
-    --input "workspace/styles/<书名>/复刻测试/v{N}_round{Y}/test${i}_*.txt" \
+    --input "$TEST_ROOT/test${i}_*.txt" \
     --task "复刻测试：判断本段是否符合作者风格。检查 1) 句长/段长是否符合 skill 量化基线 2) 章首/章末类型是否在作者偏好分布 3) 对话占比/拟声密度/禁用词命中 4) 是否有 AI 套话/塑料感。给出 agreement (agree/disagree/partial) + 具体修正建议。" \
-    --context-file "workspace/styles/<书名>/skill_FINAL.md"
+    --context-file "workspace/styles/<书名>/skill_FINAL.md" \
+    --profile-lock "$TEST_ROOT/_gen_model_profile_locked.json"
 done
 
-# test5（cluster 级）额外加 cluster arc 对照
+# test5（cluster 级）额外加 cluster arc 对照（同样 --profile-lock）
 python core/scripts/ai_wrapper.py \
-  --input "workspace/styles/<书名>/复刻测试/v{N}_round{Y}/test5_cluster/cluster_arc_replica.json" \
+  --input "$TEST_ROOT/cluster_arc_replica.json" \
   --task "cluster 级仿写：对照原作 cluster_arc，判断复刻 cluster 的 Reagan shape / Sudowrite dial / 主角 Stanford 6 维曲线是否对齐。" \
-  --context-file "workspace/styles/<书名>/arc_templates/cluster_arc_<参照 id>.json"
+  --context-file "workspace/styles/<书名>/arc_templates/cluster_arc_<参照 id>.json" \
+  --profile-lock "$TEST_ROOT/_gen_model_profile_locked.json"
 ```
 
 主代理收到 `.ai_review.json` 后：
@@ -1721,7 +1723,82 @@ cp "workspace/styles/<书名>/作者风格_FINAL.json" "$TEST_ROOT/_数据库/�
 # 2. v22.gov 强制：锁定当前 gen-model profile（防多轮循环时换 profile 误判）
 python core/scripts/gen_model.py show > "$TEST_ROOT/_gen_model_profile_locked.json"
 
-# 3. 建 5 个 test 对应的 cluster 占位（v22.gov 修：cluster_id 必须 int · gen_writer --cluster 期望 int）
+# 3. 【v22.gov.align P0 修 Gap 1】fixture project 加 4 个核心 JSON（防 build_manifest 28 字段 fallback）
+#    业界依据：Arize Acme SDK 完整 fictional fixture · 必须含所有 collector 期望的字段
+python -c "
+import json, pathlib
+# 3a. 人物卡.json — 从风格库 character_arcs/ 反向生成（用原作 TOP 3 importance 角色作仿写参照）
+import os
+style_root = 'workspace/styles/<书名>'
+ca_dir = pathlib.Path(style_root) / 'character_arcs'
+chars = {}
+if ca_dir.exists():
+    arcs = []
+    for f in ca_dir.glob('*_emotion_arc.json'):
+        try:
+            d = json.loads(f.read_text(encoding='utf-8'))
+            s6 = d.get('stanford_6_component', {})
+            arcs.append((d, s6.get('overall_importance', 0)))
+        except: pass
+    arcs.sort(key=lambda x: -x[1])
+    for d, imp in arcs[:3]:
+        name = d.get('character', 'unknown')
+        chars[name] = {
+            'role': 'protagonist' if d.get('stanford_6_component', {}).get('tier') == 'protagonist' else 'supporting',
+            'importance': imp,
+            'avg_actor_intensity': d.get('average_actor_intensity'),
+            'avg_experiencer_intensity': d.get('average_experiencer_intensity'),
+            'voice_pack': {'placeholder': '从原作 voice_pack 继承（蒸馏后填）'},
+            '_doc': 'v22.gov.align fixture · 复刻测试用 · 仿写参照原作 TOP 3 角色画像',
+        }
+# 如果 character_arcs 为空：建 2 个 placeholder 角色避免完全 fallback
+if not chars:
+    chars = {
+        '测试主角': {'role': 'protagonist', 'voice_pack': {'placeholder': '通用主角'}, '_doc': 'fallback'},
+        '测试配角': {'role': 'supporting', 'voice_pack': {'placeholder': '通用配角'}, '_doc': 'fallback'},
+    }
+pathlib.Path('$TEST_ROOT/_数据库/人物卡.json').write_text(json.dumps(chars, ensure_ascii=False, indent=2), encoding='utf-8')
+
+# 3b. 世界观.json — 从蒸馏库 meta 继承 + 占位
+import json as _j
+style_meta = _j.loads(open(f'{style_root}/作者风格_FINAL.json', encoding='utf-8').read()).get('meta', {})
+world = {
+    'work_genre': style_meta.get('work', '未知') + ' · 复刻测试',
+    'setting_keywords': ['沿用原作设定 · 复刻测试不引入新设定'],
+    '_doc': 'v22.gov.align fixture · 复刻测试 · 不引入新世界观（避免污染评估）',
+}
+pathlib.Path('$TEST_ROOT/_数据库/世界观.json').write_text(json.dumps(world, ensure_ascii=False, indent=2), encoding='utf-8')
+
+# 3c. 用户偏好.json — 从原作风格反推 storyteller_profile（防 narrative_pacing 走默认）
+prefs = {
+    'narrative_pacing': {
+        'storyteller_profile': 'cassandra',   # 默认均衡型，避免 randy 激进/phoebe 偏 win 偏倚
+        'happy_vs_dark_ratio': 0.5,
+        '_doc': '复刻测试默认均衡 profile；正式项目按用户实际偏好设',
+    },
+    'interactive_mode': {'fate_cards_count': 2, 'fully_auto': True},
+    'ecas_config': {'critical_events_use_opus': []},
+    'audit_mode': 'standard',
+    '_doc': 'v22.gov.align fixture · 复刻测试 default preferences',
+}
+pathlib.Path('$TEST_ROOT/_数据库/用户偏好.json').write_text(json.dumps(prefs, ensure_ascii=False, indent=2), encoding='utf-8')
+
+# 3d. 场景规则.json — 通用场景类型规则
+scene_rules = {
+    'scenes': [
+        {'type': 'opening', 'rules': '章首钩子 / 感官开场 / 避免环境长铺垫'},
+        {'type': 'dialogue', 'rules': '对话占比 ≥ 60% / 动作标签优先 / 禁情绪标签'},
+        {'type': 'ending', 'rules': '章末类型五选一：信息炸弹/拟声/独立短句/动作留白/章题回扣'},
+        {'type': 'cluster', 'rules': 'arc 形状对齐原作 / mid_checkpoint 张力一致 / 章际衔接落 template'},
+    ],
+    '_doc': 'v22.gov.align fixture · 通用场景规则',
+}
+pathlib.Path('$TEST_ROOT/_数据库/场景规则.json').write_text(json.dumps(scene_rules, ensure_ascii=False, indent=2), encoding='utf-8')
+
+print('[Step A 3] fixture project 准备完毕：作者风格 + 人物卡 + 世界观 + 用户偏好 + 场景规则 + (后续) 事件簇/进度')
+"
+
+# 4. 建 5 个 test 对应的 cluster 占位（v22.gov 修：cluster_id 必须 int · gen_writer --cluster 期望 int）
 python -c "
 import json, pathlib
 clusters = [
@@ -1793,6 +1870,82 @@ python core/scripts/gen_writer.py \
 - ✅ profile 锁定到 `_gen_model_profile_locked.json`（每轮 round 必须用同 profile）
 - ✅ 测试目录的 _数据库/作者风格.json 直接复用 skill_FINAL（不偷换 prompt）
 - ❌ **禁止**：spawn 临时 prompt agent / 手写 prompt 跳过 gen_writer / 不锁 profile
+
+### Step C: 【v22.gov.align P1+P2 修 Gap 2/3/4/6】后置完整流水线（与 write-chapter 对齐）
+
+write-chapter 正式流水线 step 3-4 含**双轨质量分析 + voice-keeper**，蒸馏测试缺这些 → 评分失真。Step C 补齐对齐：
+
+```bash
+# === C1 (Gap 4 · test5 splitter) · ECAS pipeline 必跑 ===
+# test5 多章 cluster_draft 切章（test1-4 单章不需要 · chapter_splitter.py 脚本只支持 DCAS 双章 · 多章必 spawn agent）
+# Agent({
+#   description: "蒸馏测试 splitter test5",
+#   subagent_type: "novel-chapter-splitter",
+#   prompt: "
+#     PROJECT: $TEST_ROOT
+#     DRAFT: $TEST_ROOT/章节/cluster_005_draft/cluster_005_draft.txt
+#     CLUSTER_RANGE: 1-5
+#   "
+# })
+# splitter 切完所有章节后 → 主代理必须调 gen_chapter_titles.py
+python core/scripts/gen_chapter_titles.py \
+  --project "$TEST_ROOT" \
+  --chapters 1-5
+# 产出: $TEST_ROOT/章节/第NNN章/第NNN章.txt（5 章独立 · 含网文化标题）
+
+# === C2 (Gap 2 · audit_hub 7 scanner) · 5 段都跑 ===
+for cid in 1 2 3 4 5; do
+  # 找该 cluster 对应的章节文件（splitter 后或 single 模式）
+  # single 模式：cluster_NNN_draft.txt 即正文；ECAS 模式：第NNN章.txt
+  python core/scripts/audit_hub.py "$TEST_ROOT" "$cid" \
+    --waivers "$TEST_ROOT/_数据库/.审计豁免.json" 2>/dev/null || \
+    echo "[align] audit_hub cluster $cid 跑完（issue list 写到 _数据库/.judge_reports/）"
+done
+# 输出: $TEST_ROOT/_数据库/.judge_reports/ch_NNN_audit-hub.json
+# 含 7 scanner（validate_chapter/style/narrative/plot/hook/golden/semantic）+ character_arc_drift
+
+# === C3 (Gap 3 · voice-keeper) · test2_dialogue 必跑（含丰富对话） ===
+# 主代理 spawn novel-voice-checker（独立 agent · 含 PLAN_ID/STEP 契约）
+# Agent({
+#   description: "蒸馏测试 voice 审 cluster 2",
+#   prompt: "
+#     PLAN_ID: $PLAN_ID
+#     STEP: 3
+#     PROJECT: $TEST_ROOT
+#     CLUSTER_ID: 2
+#     MANIFEST: $TEST_ROOT/_数据库/.manifest/cluster_2.json
+#     任务：审 test2_dialogue 段的角色对话声纹是否符合 _数据库/人物卡.json 的 voice_pack
+#   "
+# })
+# 检测到 OOC 对话 → spawn gen_fixer.py --mode voice-fix 修复
+
+# === C4 (Gap 6 · reading-reflector 8 维) · test5 cluster 必跑 ===
+# 主代理 spawn novel-reading-reflector（必跑 ≥ 3 轮 0 issue 才 pass · 与 write-chapter step 3 阅读轨对齐）
+# Agent({
+#   description: "蒸馏测试 reading-reflector test5",
+#   prompt: "
+#     PROJECT: $TEST_ROOT
+#     CHAPTERS: cluster_005   # splitter 切完的章号列表
+#     ROUND: 1
+#     MAX_ROUNDS: 5
+#     PROFILE_LOCK: $TEST_ROOT/_gen_model_profile_locked.json   # v22.gov.align P0 防 train-test skew
+#     任务：8 大维度审 cluster_005（段首单调/句式重复/voice 漂移/POV/信息密度/节奏感/对话工艺/塑料感）
+#   "
+# })
+# 不通过 → 升 ROUND 2/3 ... 连续 3 轮 0 issue 才进阶段 3
+
+# === C5 (Gap 5 · profile lock 在 ai_wrapper 强制) · 所有 ai_wrapper 调用都传 --profile-lock ===
+# 阶段 2 所有 ai_wrapper 调用必须加：
+#   --profile-lock "$TEST_ROOT/_gen_model_profile_locked.json"
+# 之前 ai_wrapper 调用块全部需更新（见下方 5 段复核循环）
+```
+
+**Step C 对齐验收**：
+- ✅ Gap 2 audit_hub 7 scanner 跑（与 production step 3 机械轨对齐）
+- ✅ Gap 3 voice-keeper 在 test2 强制（与 production step 4 对齐）
+- ✅ Gap 4 test5 splitter 跑（与 ECAS pipeline 对齐）
+- ✅ Gap 6 reading-reflector 8 维 ≥ 3 轮 0 issue（与 production 阅读轨对齐）
+- ✅ Gap 5 ai_wrapper --profile-lock 强制（违反 → exit · 不 fallback）
 
 ### 【v22.gov 新增】test5 cluster 复刻 — 在 Step A/B 之上补 ref 参照 + 评估
 

@@ -91,8 +91,12 @@ def build_review_prompt(original_data: dict, task: str, context: str = "") -> tu
     return system, "\n".join(user_parts)
 
 
-def call_gen_model(system: str, user: str) -> dict | None:
-    """调 gen-model 做 AI 复核。fallback 安全：失败返回 None。"""
+def call_gen_model(system: str, user: str, profile_lock_path: str | None = None) -> dict | None:
+    """调 gen-model 做 AI 复核。fallback 安全：失败返回 None。
+
+    v22.gov.align: 若 profile_lock_path 指向存在的 JSON（含 profile_name），
+    校验当前 active profile = lock 中 profile，否则拒绝执行（防 train-test skew）。
+    """
     GenModelLoader, GenModelConfigError = safe_load_gen_model_loader()
     if not GenModelLoader:
         return None
@@ -103,6 +107,27 @@ def call_gen_model(system: str, user: str) -> dict | None:
     except Exception as e:
         print(f"[ai_wrapper] gen-model profile load failed: {e}", file=sys.stderr)
         return None
+
+    # v22.gov.align: profile_lock 强制校验
+    if profile_lock_path:
+        lock_file = Path(profile_lock_path)
+        if lock_file.exists():
+            try:
+                lock = json.loads(lock_file.read_text(encoding="utf-8"))
+                # 兼容 gen_model.py show 输出格式（profile_name 或 active 或顶层 name）
+                lock_name = lock.get("profile_name") or lock.get("active") or lock.get("name")
+                if lock_name and lock_name != profile.name:
+                    msg = (
+                        f"❌ [ai_wrapper profile_lock] 当前 active profile='{profile.name}' "
+                        f"≠ lock 中 '{lock_name}'（path={profile_lock_path}）。"
+                        f"\n请先 `python core/scripts/gen_model.py switch {lock_name}` 切回锁定的 profile，"
+                        f"或主代理审阅后用 `python core/scripts/gen_model.py switch <name>` 显式换 + 升 round。"
+                        f"\n业界依据：freeze the harness (Arize) · prompt 微差致 76 准确率点波动 (arxiv 2509.01790)。"
+                    )
+                    print(msg, file=sys.stderr)
+                    return {"_profile_lock_violation": True, "lock_name": lock_name, "active_name": profile.name}
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"[ai_wrapper] profile_lock 读取失败（继续 active profile）: {e}", file=sys.stderr)
 
     try:
         from openai import OpenAI
@@ -128,7 +153,8 @@ def call_gen_model(system: str, user: str) -> dict | None:
         return None
 
 
-def review_output(original_path: Path, task: str, context: str = "") -> dict:
+def review_output(original_path: Path, task: str, context: str = "",
+                  profile_lock_path: str | None = None) -> dict:
     """复核单个脚本输出 JSON。"""
     if not original_path.exists():
         return {"error": f"file not found: {original_path}"}
@@ -138,7 +164,15 @@ def review_output(original_path: Path, task: str, context: str = "") -> dict:
         return {"error": f"invalid JSON: {e}"}
 
     system, user = build_review_prompt(original, task, context)
-    ai_result = call_gen_model(system, user)
+    ai_result = call_gen_model(system, user, profile_lock_path=profile_lock_path)
+    # v22.gov.align: profile lock 违规直接返回错误
+    if isinstance(ai_result, dict) and ai_result.get("_profile_lock_violation"):
+        return {
+            "error": "profile_lock_violation",
+            "active_profile": ai_result.get("active_name"),
+            "locked_profile": ai_result.get("lock_name"),
+            "fix": "运行 `python core/scripts/gen_model.py switch <locked_name>` 后重试",
+        }
 
     review = {
         "original_path": str(original_path),
@@ -190,6 +224,7 @@ def main():
     parser.add_argument("--context-file", help="从文件读上下文（可选）")
     parser.add_argument("--task", required=True, help="任务描述（告诉 AI 这个脚本在做什么）")
     parser.add_argument("--out", help="输出复核 JSON 路径（默认 <input>.ai_review.json）")
+    parser.add_argument("--profile-lock", help="v22.gov.align profile 锁定文件路径（如 <TEST_ROOT>/_gen_model_profile_locked.json）。当前 active != lock 时拒绝执行")
     args = parser.parse_args()
 
     input_path = Path(args.input or args.review_file or "").resolve()
@@ -204,7 +239,7 @@ def main():
         except Exception:
             pass
 
-    review = review_output(input_path, args.task, context)
+    review = review_output(input_path, args.task, context, profile_lock_path=args.profile_lock)
     out_path = Path(args.out) if args.out else input_path.with_suffix(input_path.suffix + ".ai_review.json")
     out_path.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[OK] {out_path}")
