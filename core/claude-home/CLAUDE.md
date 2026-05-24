@@ -280,51 +280,33 @@ v19 把检测体系从「门禁/法官」改成「顾问」：检测工具（val
 
 ---
 
-## 📐 大纲章节密度硬规则（v23.11 引入）
+## 📐 大纲章数解锁（v23.12 · 替换 v23.11）
 
-`/outline` 第 1.5 步**必须**先按「目标章数」反推 event 池密度，再生成大势卡。**缺密度设计 = 大纲无效**。
+**v23.11 强制章数密度公式已废除**（2026-05-24 用户决策）。原因：故事块（cluster）+ 涟漪效应（fate_engine ripple）会让单卷章数**无法预先确定**——目标 500 章 / 600 章只是用户心理预期，实际章数由 ME 触发节奏 + 用户涟漪选择**自然涌现**。
 
-### 公式
+### 现行规则（保留 / 删除）
 
-```
-T = target_chapter_count    (默认 500)
-V = volume_count            (默认 6)
-F = filler_ratio            (默认 0.2 = 20% 日常)
-E = events_per_volume       (按节奏档位查表)
-A = avg_chapters_per_event  (按节奏档位查表)
+| 状态 | 项 |
+|---|---|
+| ✅ **保留** | `rhythm_profile`（节奏档：紧凑/标准/厚重/混合）作软提示 |
+| ✅ **保留** | `volumes[]` 的 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` 描述**大势** |
+| ✅ **保留** | 大势卡 `major_events[]` 的 `expected_window_after` 宽窗（如 max_chapters: 15-100）涌现触发 |
+| ❌ **删除** | `target_chapter_count` / `volume_count` / `events_per_volume` / `avg_chapters_per_event` / `filler_ratio` 必问/必算/必写 |
+| ❌ **删除** | `volumes[].chapter_range`（[1,10] 死锁区间） |
+| ❌ **删除** | v23.11 公式 `T × (1-F) / (V × E)` |
 
-约束：M = T × (1-F) / (V × E) 算出的 A 必须 ∈ [4, 12]
-```
+### 设计哲学：fluid 涌现叙事
 
-### 节奏档位
+> **大势 = 不变**（卷主题 / 关键 milestones / final image）
+> **章数 = 浮动**（由 ME 触发节奏 + 用户涟漪选择自然产生）
 
-| 档位 | event/卷 | 章/event | 适合 |
-|---|---|---|---|
-| 紧凑 | 16-20 | 4-5 | 短中篇 |
-| 标准 | 10-12 | 6-8 | 主流网文 |
-| 厚重 | 6-8 | 10-14 | 史诗 |
-| **混合** | **8-10** | **4-12** | **大部分长篇（默认）**|
+参考 fluid 模式（v20 引入）+ `templates/examples/scp_anomaly_bureau/大势卡.example.json` 的 ME × `expected_window_after` 范式。
 
-### 强制写入大势卡 `_metadata`
+### 风险接受声明
 
-```json
-{"_metadata": {
-  "target_chapter_count": 500, "volume_count": 6, "rhythm_profile": "混合",
-  "events_per_volume": 10, "avg_chapters_per_event": 7, "filler_ratio": 0.2
-}}
-```
+v23.11 原本为了防「ch80 翻车」（目标 500 章但大纲只支撑 120 章）。**v23.12 接受这个 risk** —— 用户已确认 fluid 涌现模式下章数不可预先锁定。如果遇到「想写更多但大势用完」 → 在 save-state 阶段**动态加新 ME**，不再事前锁。
 
-### 三层防御
-
-| 层 | 实现 | 作用 |
-|---|---|---|
-| L1 | `/wizard` 组 1 把 target/rhythm/filler 标 required + 自动校验公式 | 入口堵 |
-| L2 | `/outline` 第 1.5 步必跑 + 写大势卡 `_metadata` | 大纲生成前堵 |
-| L3 | `outline-planner` agent 缺 `_metadata` → 拒绝生成 cluster_brief | 写章前堵 |
-
-### 翻车实例
-
-历史翻车案例：目标 500 章但大纲只 30 event × 4 章 = 实际 120 章封顶，写到 ch80 才发现。详见 memory `feedback_outline_chapter_density_design`。
+详见 lesson `core/claude-home/lessons/v23-outline-no-chapter-count.md`。
 
 ---
 

@@ -63,34 +63,41 @@ ARC_TEMPLATE_DIR: <workspace/styles/<风格名>/arc_templates/>  # v22 新增 ·
 2. 读 `_数据库/事件池.json` 找匹配 context_filter 的抽签事件
 3. 读 `_数据库/用户偏好.json.ecas_config` 决定字数模式 / opus_recommended
 
-### 🆕 v23.11 密度纪律（章数硬约束）
+### 🆕 v23.12 节奏档软提示（替换 v23.11 硬约束）
 
-**强制读 `大势卡.json._metadata`**，按以下字段反推 cluster 章数：
-- `target_chapter_count` / `volume_count` / `events_per_volume` / `avg_chapters_per_event` / `filler_ratio` / `rhythm_profile`
+**v23.12 已废除 v23.11 章数硬反推**（2026-05-24 用户决策）。理由：故事块 + 涟漪效应让 cluster 章数无法预先锁定，应由 ME 重要度 + writer 实际涌现自然决定。
 
-**cluster `estimated_chapters` 决策树（覆盖原 4 章默认）**：
+**强制读 `大势卡.json._metadata.rhythm_profile`**（**仅这一个字段**）。
+
+**cluster `estimated_chapters` 决策树（按节奏档 × ME 重要度 弹性估算）**：
 
 ```python
-# 1. 拿 _metadata.avg_chapters_per_event 作为基准 A
-A = metadata.avg_chapters_per_event  # 默认 7
+# 1. 拿 rhythm_profile 作为基准 base（仅作软提示，writer/splitter 可超）
+BASE_BY_RHYTHM = {
+    "紧凑": 4,   # event 间章数少
+    "标准": 7,   # 主流网文
+    "厚重": 12,  # 史诗节奏
+    "混合": 7,   # 默认，重 event 拉、轻 event 缩
+}
+base = BASE_BY_RHYTHM.get(metadata.rhythm_profile, 7)
 
-# 2. 根据本 cluster 对应 ME 的权重微调
+# 2. 按 ME priority 弹性调（混合档调幅最大）
 if ME.priority == 5 (神战/卷高潮/沙盒锁/启示级):
-    estimated_chapters = round(A × 1.4)  # 重 event 拉长
+    estimated_chapters = round(base × 1.6)  # 重 event 拉长
 elif ME.priority == 4 (转折/重要事件):
-    estimated_chapters = round(A × 1.1)
+    estimated_chapters = round(base × 1.2)
 elif ME.priority <= 2 (日常/支线/小转折):
-    estimated_chapters = round(A × 0.6)   # 轻 event 压缩
+    estimated_chapters = round(base × 0.5)   # 轻 event 压缩
 else:
-    estimated_chapters = A
+    estimated_chapters = base
 
-# 3. 钳制在 4-14 之间
-estimated_chapters = clamp(estimated_chapters, 4, 14)
+# 3. 软钳制（不报错，仅提示）—— writer 实际写超也允许，涟漪可膨胀
+estimated_chapters = clamp(estimated_chapters, 2, 20)
 ```
 
-**缺 `_metadata` → 拒绝生成 brief**，向主代理返回错误：`{"error": "outline_metadata_missing", "fix_hint": "请先跑 /outline 第 1.5 步密度计算"}`。
+**缺 `_metadata.rhythm_profile` → 默认按「混合」走，不再拒绝生成 brief**。
 
-**违背 = brief 无效**。历史教训：某项目 cluster_011-020 都用了默认 4 章/event，导致 6 卷只支撑 120 章（差目标 500 章 380 章）。修复：必须按 `_metadata` 反推。
+**estimated_chapters 是 hint 不是 hard cap**：writer 实际产出超出该值时不报错，由 fate_engine 涟漪 + ME 触发动态决定真正章数。
 
 ### 输出 cluster_brief（按 event_cluster_schema.json）
 必带字段：

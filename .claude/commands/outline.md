@@ -115,75 +115,58 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 ---
 
-## 🆕 第 1.5 步：章节密度计算（v23.11 硬规则）
+## 🆕 第 1.5 步：节奏档软提示（v23.12 · 简化版）
 
-**作用**：把「目标章数」反推成「event 池密度」，避免「目标 500 章 / 大纲只支撑 120 章」式翻车（历史 ch80 翻车实例，见 lesson `feedback_outline_chapter_density_design`）。
+**v23.12 已废除 v23.11 章数密度硬公式**（2026-05-24 用户决策）。理由：故事块 + 涟漪效应让单卷章数无法预先锁定。本步**仅询问节奏档**作为软提示，**不算章数、不算 event 密度、不锁 chapter_range**。
 
-### 输入读取（优先级递降）
+### 输入读取
 
-1. Read `_数据库/用户偏好.json`，找 `workflow_preferences[*].key=target_chapter_count` / `rhythm_profile` / `filler_ratio`
-2. 缺失 → **必须** AskUserQuestion 询问（不能拍脑袋默认 500）
-3. 已读到 → 显示给用户确认（用户可改）
+1. Read `_数据库/用户偏好.json`，找 `workflow_preferences[*].key=rhythm_profile`
+2. 缺失 → AskUserQuestion **仅问一个字段**：节奏档（紧凑/标准/厚重/混合）
+3. 已读到 → 直接用，不再追问
 
-### 必问字段（缺一不可）
+### 节奏档作软提示（仅 hint，不算公式）
 
-| 字段 | 默认 | 范围 | 含义 |
-|---|---|---|---|
-| `target_chapter_count` | 500 | 30-2000 | 目标总章节数 |
-| `volume_count` | 6 | 1-10 | 卷数 |
-| `rhythm_profile` | 混合 | 紧凑/标准/厚重/混合 | 节奏档位 |
-| `filler_ratio` | 0.2 | 0.1-0.3 | 日常/支线占比 |
+| 档位 | 描述 | 适合 |
+|---|---|---|
+| **紧凑** | 高密度 event、转折频繁 | 短篇/中篇 |
+| **标准** | 主流商业网文节奏 | 中长篇 |
+| **厚重** | 慢热铺垫、event 间章数多 | 史诗/严肃文学 |
+| **混合**（推荐） | 重 event 拉长 + 轻 event 紧凑 | 大部分长篇 |
 
-### 节奏档位对应密度（公式见 memory 详）
-
-| 档位 | event/卷 | 章/event | 适合 |
-|---|---|---|---|
-| **紧凑** | 16-20 | 4-5 | 短篇/中篇 |
-| **标准** | 10-12 | 6-8 | 主流商业网文 |
-| **厚重** | 6-8 | 10-14 | 史诗/严肃文学 |
-| **混合** | 8-10 | 4-12（重轻分级）| 大部分长篇（**推荐**）|
-
-### 计算公式
-
-```
-主线章数 M = T × (1 - F)
-event 总数 N = V × E
-每 event 平均章数 A = M / N
-
-约束：A 应在 4-12 之间
-不满足 → 调整 E 或 F 或 V，告诉用户冲突点，让用户重新选
-```
-
-### 写入大势卡.json 的 `_metadata`
+### 写入大势卡.json 的 `_metadata`（仅 1 个字段）
 
 ```json
 {
   "_metadata": {
-    "target_chapter_count": 500,
-    "volume_count": 6,
     "rhythm_profile": "混合",
-    "events_per_volume": 10,
-    "avg_chapters_per_event": 7,
-    "filler_ratio": 0.2,
     "designed_at": "ISO 日期",
-    "version": "v23.11"
+    "version": "v23.12"
   }
 }
 ```
 
-**这段必须写**——下游 outline-planner / fate_engine 按此反推 cluster 章数。缺失 → outline-planner 拒绝生成 cluster_brief。
+**禁止再写** `target_chapter_count` / `volume_count` / `events_per_volume` / `avg_chapters_per_event` / `filler_ratio` —— v23.12 已删除这些字段，下游脚本按 rhythm_profile 单一参数估算弹性区间。
 
 ### plan-step 1.5
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output  # 复用 step 1 编号或追加 step 1.5
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 ```
 
 ---
 
 ## 第 2 步：卷级大势大纲生成
 
-**注意（v23.11）**：第 2 步生成大势卡时**必须按 step 1.5 计算出的 events_per_volume**埋 event，不能自由发挥。每卷 event 数偏离 ±1 还可接受；偏离 ±3 以上 → 写大纲前必须告诉用户并征求同意。
+**v23.12 规则**：本步**只描述大势**，不规划每卷章数。
+
+| ✅ 写 | ❌ 不写 |
+|---|---|
+| 每卷 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` | `volumes[].chapter_range: [1, 10]` 死锁区间 |
+| major_events 池含 `expected_window_after` 宽窗（如 `max_chapters: 15-100`） | 「本卷预计 N 章」类预测 |
+| 每卷大势主题 + 起承转合 | events_per_volume 反推章数 |
+
+章数由 ME 触发 + 用户涟漪选择**自然涌现**，writer/save-state 累积。
 
 请提供：
 1. 各章节的核心事件和情节点
@@ -397,7 +380,6 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
     {
       "vol": 1,
       "title": "第一卷：破局",
-      "chapter_range": [1, 10],
       "core_conflict": "本卷核心冲突",
       "volume_arc": "本卷人物弧线（起→承→转）",
       "key_milestones": ["里程碑事件1", "里程碑事件2"],
@@ -406,7 +388,6 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
     {
       "vol": 2,
       "title": "第二卷：觉醒",
-      "chapter_range": [11, 25],
       "core_conflict": "本卷核心冲突",
       "volume_arc": "本卷人物弧线",
       "key_milestones": ["里程碑事件"],
