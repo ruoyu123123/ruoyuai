@@ -14,7 +14,38 @@ $ARGUMENTS
 
 ---
 
-# ⚠️ v17 重大升级：三章窗口蒸馏 + 衔接分析
+# 🚨🚨🚨 v22.cluster 主轨规则警示（2026-05-24 翻车后强制 · Step 1 必读）🚨🚨🚨
+
+**本命令的颗粒度规则已从「v17 三章固定窗口」升级为「v22.cluster 故事块自适应」**。下方所有写"三章窗口 / 3 章 agent / 每 3 章 / batch_start step 3"的段落均**[DEPRECATED v22.cluster]**，仅作历史保留——新蒸馏必须按 cluster 颗粒度。
+
+## Step 1 必做项（不做就是 2026-05-24 翻车重演）
+
+1. **第一动作**：Read `workspace/styles/<书名>/cluster_index.json`
+   - 存在 → 直接复用 `clusters[]`（含 `cluster_id` + `chapter_range`）作为 agent 调度单元
+   - 不存在 → 先跑 `python core/scripts/cluster_segmenter.py --project workspace/styles/<书名>`
+2. **Agent 调度循环**：`FOR cluster in cluster_index.clusters` —— **不要**写 `FOR batch_start = 1 to N step 3`
+3. **单 cluster agent** 任务：读 `cluster.chapters_count` 章原文（3-6 章）→ 产单章 JSON × N + cluster 衔接 JSON × 1
+4. **Agent prompt 必带契约字段**：`PLAN_ID` + `STEP` + `CLUSTER_ID` + `CHAPTER_RANGE`
+5. **后置聚合**：`python core/scripts/arc_aggregator.py --project ... --all-clusters` 产 cluster_arc（主轨）+ 副轨 fixed10
+
+## 速查
+
+| 项 | v17 老规则（弃） | v22.cluster 新规则 |
+|---|---|---|
+| 颗粒度 | 固定 3 章 | **自适应 3-6 章 / 4000-20000 字** |
+| 切分 | 章号取模 step 3 | **`cluster_segmenter.py`** |
+| Agent 数（200 章估）| ~67 | **~37**（节省 45%） |
+| 衔接 JSON | `衔接分析/ch{N}_{N+2}_continuity.json` | `衔接分析/cluster_<id>_continuity.json` |
+| arc 聚合 | ❌ | `arc_aggregator.py` 主轨 cluster + 副轨 fixed10 |
+
+完整迁移指南：`core/claude-home/lessons/v22-cluster-migration.md`
+业界依据：LumberChunker (EMNLP 2024) +7.37% DCG@20 / MARCUS 2025 事件中心 / Multi-Agent TV Arcs 自然终结
+
+---
+
+# ⚠️ v17 重大升级（历史 · [DEPRECATED v22.cluster]）：三章窗口蒸馏 + 衔接分析
+
+> 本节是 v17 → v22.cluster 之前的历史规则，保留作上下文。**新蒸馏不走这里**，走上方 v22.cluster 主轨规则 + 下方"阶段 1.5"段落。
 
 ## v17 解决的问题
 
@@ -216,8 +247,8 @@ echo "PLAN_ID=$PLAN_ID"
 
 | 阶段编号 | 对应文档章节 | plan step n | expected_outputs |
 |---|---|---|---|
-| 阶段 0 | 读经验库 / 预处理 | `--n 1` | 无（用 `--skip-output`） |
-| 阶段 1 | 表层蒸馏（含三章窗口/聚合/skill v0） | `--n 2` | `workspace/styles/<书名>/作者风格.json` |
+| 阶段 0 | 读经验库 / 预处理（**必读 cluster_index.json** · v22.cluster）| `--n 1` | 无（用 `--skip-output`） |
+| 阶段 1 | 表层蒸馏（**v22.cluster 主轨**：cluster agent + cluster 衔接 + arc 聚合 + skill v0）| `--n 2` | `workspace/styles/<书名>/作者风格.json` |
 | 阶段 2 | 复刻测试 v0/v1/v2... | `--n 3` | 复刻测试目录下的 `test*.txt` |
 | 阶段 3 | 多维度对比扫描 + SFS 评分 | `--n 4` | `对比报告/distillation_compare_v{N}.json` |
 | 阶段 4 | 修正反思 → skill v{N+1} | `--n 5` | 无（用 `--skip-output`，skill 升级是 Edit/Write） |
@@ -245,7 +276,12 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 ### 与 PreToolUse Hook 的协作
 
-Hook 已强制要求所有蒸馏 Agent 子代理 prompt 必须含 `PLAN_ID` 字段。本命令内所有 v17 三章窗口 Agent 调用模板**必须**注入 `PLAN_ID: $PLAN_ID` 和 `STEP: <当前阶段号>`，否则会被 hook 拦截。
+Hook 已强制要求所有蒸馏 Agent 子代理 prompt 必须含 `PLAN_ID` 字段。本命令内所有蒸馏 Agent 调用模板（**v22.cluster 主轨的 cluster agent** + 历史保留的 v17 三章窗口模板）**必须**注入：
+- `PLAN_ID: $PLAN_ID`
+- `STEP: <当前阶段号>`
+- v22.cluster 主轨额外加：`CLUSTER_ID: <auto_xxx>` + `CHAPTER_RANGE: <ch_a-ch_b>`
+
+缺字段 → hook L3 直接 exit 2 拦截。
 
 ---
 
@@ -323,9 +359,41 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 ## 阶段 1（原"第一步"）：表层蒸馏
 
-## 第一步：全书三章窗口蒸馏（每章必蒸馏，不采样）
+> ⚠️ **v22.cluster 主轨**：本阶段的标准实现已升级为「cluster 故事块自适应蒸馏」，详见下方"v22.cluster 主轨流程"小节。
+> 再下方的 "v17 三章窗口" 内容 **[DEPRECATED v22.cluster]**，保留作历史参考，新蒸馏不走那里。
 
-### 核心原则（v17 升级）
+### v22.cluster 主轨流程（新蒸馏走这条）
+
+```
+1. Read workspace/styles/<书名>/cluster_index.json
+   - 不存在 → python core/scripts/cluster_segmenter.py --project workspace/styles/<书名>
+2. FOR cluster in cluster_index.clusters:
+   spawn Agent({
+     description: "蒸馏 cluster_<id> (ch_a-ch_b)",
+     prompt: f"""你是写作风格分析专家。
+       PLAN_ID: $PLAN_ID
+       STEP: 2
+       CLUSTER_ID: {cluster.cluster_id}
+       CHAPTER_RANGE: ch{a}-ch{b}
+       任务：连续蒸馏该 cluster 的 N 章（N = cluster.chapters_count，3-6 章）。
+       独立 Read N 章正文，独立跑 N 次 style_analyzer.py。
+       输出：
+       - 蒸馏进度/ch{a}.json ... ch{b}.json（单章独立 N 个）
+       - 衔接分析/cluster_{cluster.cluster_id}_continuity.json（cluster 内章际衔接）
+       cluster 边界原因（来自 cluster_index）：{cluster.boundary_reason}
+       [当前作者 skill 摘要（如有）]
+     """
+   })
+3. 并行配额 ≤20 agent / 波（L1.4），分波启动
+4. 每完成约 10 cluster → 调 arc_aggregator.py --all-clusters 增量聚合 arc
+5. 全部 cluster 完成 → skill v0 聚合
+```
+
+### v17 三章窗口流程 `[DEPRECATED v22.cluster]`（仅历史参考，新蒸馏不要走这里）
+
+## 第一步：全书三章窗口蒸馏（每章必蒸馏，不采样）`[DEPRECATED v22.cluster]`
+
+### 核心原则（v17 升级 · [DEPRECATED v22.cluster]）
 
 **⚠️⚠️⚠️ 不可违反的硬性规则 ⚠️⚠️⚠️**
 
@@ -401,7 +469,8 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
    - 建立章节索引表：{章节号: {文件路径, 起始行, 结束行}}
    - 确定总章节数 N
 
-2. 三章窗口调度（v17 升级 · 全自动循环，不停顿）：
+2. 三章窗口调度（v17 升级 · 全自动循环，不停顿）`[DEPRECATED v22.cluster]`：
+   ⚠️ 新蒸馏请用 v22.cluster 主轨调度（见上方）。下面是 v17 历史调度模板：
    FOR batch_start = 1 to N step 3:
      batch_end = min(batch_start + 2, N)  # 最后一组若不满 3 章，并入上一批做 5 章特殊 agent
      启动 Agent 子任务（每批并行 5 个 agent）：
@@ -664,12 +733,19 @@ EvolveR (arxiv 2510.16079) offline self-distillation 闭环。
 
 ### 验证标准
 
-- 蒸馏过程中 Agent 调用次数 ≈ ⌈总章节数 / 3⌉（每 3 章 1 次）
+**v22.cluster 主轨标准（新蒸馏走这条）**：
+- Agent 调用次数 = `len(cluster_index.clusters)`（典型 200 章 → 30-40 cluster）
 - 主代理上下文中不能出现章节正文
-- 每 30 章必须看到一次 skill 文件更新
+- 每完成 ~10 cluster 看到一次 skill 文件更新 + arc_aggregator 增量聚合
 - 最终 analyzed_chapters = 总章节数（全量）
-- _数据库/蒸馏进度/ 目录下有每章的独立分析 JSON（颗粒度严格保留）
-- _数据库/衔接分析/ 目录下有每 3 章一个的 continuity JSON
+- `蒸馏进度/` 目录下有每章的独立分析 JSON（颗粒度严格保留）
+- `衔接分析/` 目录下有每 cluster 一个的 continuity JSON
+- `arc_templates/` 目录下有每 cluster 一个的 `cluster_arc_<id>.json` + 副轨 `arc_<NNN>.json` × ⌈N/10⌉
+
+**v17 老标准 `[DEPRECATED v22.cluster]`**（历史参考）：
+- 蒸馏过程中 Agent 调用次数 ≈ ⌈总章节数 / 3⌉（每 3 章 1 次）
+- 每 30 章必须看到一次 skill 文件更新
+- `衔接分析/` 目录下有每 3 章一个的 continuity JSON
 
 ---
 
@@ -735,7 +811,7 @@ python core/scripts/naming_convention_distiller.py --project workspace/styles/<�
 
 #### 新蒸馏书 —— 阶段 1 每完成 1 个 cluster 触发
 
-阶段 1 三章窗口蒸馏继续保留（micro/meso 数据来源），但**每完成 1 个 cluster 范围**（≥ 2 章且 ≥ 4000 字）就触发：
+**注（v22.cluster 主轨已默认）**：v17 三章窗口已 `[DEPRECATED v22.cluster]`（见阶段 1 顶部 v22.cluster 主轨流程）。新蒸馏直接按 cluster 调度，每完成 1 个 cluster 触发：
 
 ```bash
 python core/scripts/arc_aggregator.py --project workspace/styles/<书名> --cluster <cluster_id>
@@ -1569,7 +1645,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 \
 
 **目的**：用阶段 1 产出的 skill v0 复刻 3 个测试段，与原文同类型段落对比，暴露 skill 表层规则在实际写作中的失效点。
 
-### 测试场景设计（4 段必跑，v16 从3段升为4段）
+### 测试场景设计（v22.gov 升 5 段；原 4 段保留 + 加 cluster 级 test5）
 
 1. **复刻一个章节开头**（1500-2500 字）—— 测试开章类型多样性、首句钩子、群众视角、异象抛出
 2. **复刻一个对白场景**（2000-3000 字）—— 测试对话占比、角色声纹差异、对话标签、外显反差喜剧
@@ -1579,6 +1655,37 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 \
    - 3 个开头必须使用完全不同的开头类型和焦点元素
    - 如果 3 个开头出现相同类型或相同焦点元素（如都用灯光/走廊/窗户），**skill 的跨章约束不合格，必须修正**
    - 同时检查拟声词用量：3 个开头的拟声词总数应与原作同等长度的拟声词分布一致
+5. **复刻一个完整故事块 cluster**（14000-16000 字，4-6 章）—— **v22.gov 新增 · cluster 级仿写核心验证**
+   - 参照原作某个具体 cluster（从 `cluster_index.json` 任选 1 个 chapter_range 5 章左右的）
+   - 用 `gen_writer.py --cluster` 模式生成完整 cluster_draft → splitter 切章
+   - **测核心维度**：cluster arc 形状（应符合原作 Reagan 6 形状）/ Sudowrite tension dial 1-11 曲线对齐 / mid_checkpoint 张力一致 / Stanford 6 主角画像匹配 / 章际衔接套用 `narrative_continuity_template`
+   - 这段是**最难复刻的部分**——单段精彩易，整 cluster 节奏对齐难
+   - 业界依据（Round 1 调研）：LumberChunker (EMNLP 2024) 实测 variable-length cluster 比单段更能暴露风格漂移
+
+### 【v22.gov 新增】每段复刻样本自动 AI 复核
+
+每段生成后**立即**调 `ai_wrapper.py` 让 gen-model 二次复核「这段仿写是否符合作者风格」（与人工 SFS 评分形成 hybrid pipeline · 业界共识 rules + LLM judge = 78.5% vs LLM-only 66.2%）：
+
+```bash
+# 对每个 test 文件
+for i in 1 2 3 4 5; do
+  python core/scripts/ai_wrapper.py \
+    --input "workspace/styles/<书名>/复刻测试/v{N}_round{Y}/test${i}_*.txt" \
+    --task "复刻测试：判断本段是否符合作者风格。检查 1) 句长/段长是否符合 skill 量化基线 2) 章首/章末类型是否在作者偏好分布 3) 对话占比/拟声密度/禁用词命中 4) 是否有 AI 套话/塑料感。给出 agreement (agree/disagree/partial) + 具体修正建议。" \
+    --context-file "workspace/styles/<书名>/skill_FINAL.md"
+done
+
+# test5（cluster 级）额外加 cluster arc 对照
+python core/scripts/ai_wrapper.py \
+  --input "workspace/styles/<书名>/复刻测试/v{N}_round{Y}/test5_cluster/cluster_arc_replica.json" \
+  --task "cluster 级仿写：对照原作 cluster_arc，判断复刻 cluster 的 Reagan shape / Sudowrite dial / 主角 Stanford 6 维曲线是否对齐。" \
+  --context-file "workspace/styles/<书名>/arc_templates/cluster_arc_<参照 id>.json"
+```
+
+主代理收到 `.ai_review.json` 后：
+- `agreement=disagree` 且 `confidence > 0.7` → **必须重写本段**（升 round Y+1）
+- `agreement=partial` → 局部修正后进入阶段 3
+- `agreement=agree` → 直接进入阶段 3 量化对比
 
 ### 执行方式
 
@@ -1610,11 +1717,95 @@ Agent({
     - 风格库/复刻测试/v{N}/test1_opening.txt
     - 风格库/复刻测试/v{N}/test2_dialogue.txt
     - 风格库/复刻测试/v{N}/test3_ending.txt
+    - 风格库/复刻测试/v{N}/test4_three_openings.txt  # v16 加
     
     严格按 skill v{N} 的所有约束执行。
   "
 })
 ```
+
+### 【v22.gov 新增】test5 cluster 复刻执行
+
+```bash
+# Step 1: 选参照 cluster（从 cluster_index.json 任选一个 5 章左右的）
+CLUSTER_ID=$(python -c "
+import json, pathlib, random
+ci = json.load(open('workspace/styles/<书名>/cluster_index.json', encoding='utf-8'))
+mid_clusters = [c for c in ci['clusters'] if 4 <= c['chapters_count'] <= 6 and 12000 <= c['estimated_words'] <= 16000]
+if mid_clusters:
+    print(random.choice(mid_clusters)['cluster_id'])
+")
+
+# Step 2: 读参照 cluster_arc + 大势 brief
+REF_ARC="workspace/styles/<书名>/arc_templates/cluster_arc_${CLUSTER_ID}.json"
+
+# Step 3: 准备临时测试项目目录（gen_writer 需要 _数据库/作者风格.json）
+TEST_DIR="workspace/styles/<书名>/复刻测试/v{N}_round{Y}/test5_cluster"
+mkdir -p "$TEST_DIR/_数据库" "$TEST_DIR/章节"
+cp "workspace/styles/<书名>/作者风格_FINAL.json" "$TEST_DIR/_数据库/作者风格.json"
+# 最小化 chapter_plan（gen_writer 需要 ECAS 模式的 cluster_brief）
+python -c "
+import json, pathlib
+ref = json.load(open('$REF_ARC', encoding='utf-8'))
+plan = {
+    'chapter_plan': [],
+    'event_clusters': {'clusters': [{
+        'cluster_id': 'cluster_001',
+        'chapter_range': [1, ref['chapters_count']],
+        'scope_summary': '复刻测试 cluster · 参照 ' + ref['cluster_id'],
+        'expected_word_range': {'min': 13000, 'max': 16000, 'unit': 'CJK_chars'},
+        'estimated_chapters': ref['chapters_count'],
+        'status': 'pending',
+    }]}
+}
+pathlib.Path('$TEST_DIR/_数据库/进度.json').write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding='utf-8')
+pathlib.Path('$TEST_DIR/_数据库/事件簇.json').write_text(json.dumps(plan['event_clusters'], ensure_ascii=False, indent=2), encoding='utf-8')
+"
+
+# Step 4: 调 gen_writer cluster 模式写整段 cluster_draft
+python core/scripts/gen_writer.py \
+  --project "$TEST_DIR" \
+  --cluster 1 \
+  --chapter-start 1 --chapter-end 5 \
+  --target-cjk 13000-16000
+# 产出: $TEST_DIR/章节/cluster_001_draft/cluster_001_draft.txt
+
+# Step 5: 直接对 cluster_draft 整体跑 style_evaluator vs 原参照 cluster 的章节文本
+REF_TEXT_CONCAT="$TEST_DIR/_ref_concat.txt"
+python -c "
+import json, pathlib
+ref = json.load(open('$REF_ARC', encoding='utf-8'))
+range_str = ref['chapter_range']  # 形如 'ch3-7'
+import re
+m = re.match(r'ch(\d+)-(\d+)', range_str)
+start, end = int(m.group(1)), int(m.group(2))
+# 拼接原参照 cluster 的章节文本
+texts = []
+for ch in range(start, end + 1):
+    for pat in [f'第{ch}章.txt', f'ch{ch}.txt']:
+        f = pathlib.Path(f'workspace/styles/<书名>/原文/{pat}')  # 用户原作存放位置
+        if f.exists():
+            texts.append(f.read_text(encoding='utf-8'))
+            break
+pathlib.Path('$REF_TEXT_CONCAT').write_text('\n\n'.join(texts), encoding='utf-8')
+"
+python core/scripts/style_evaluator.py \
+  --ref "$REF_TEXT_CONCAT" \
+  --gen "$TEST_DIR/章节/cluster_001_draft/cluster_001_draft.txt" \
+  --output "$TEST_DIR/eval_cluster.json"
+
+# Step 6: 跑 ai_wrapper 复核 cluster 整体（高层叙事 / arc 形状 / 节奏对齐）
+python core/scripts/ai_wrapper.py \
+  --input "$TEST_DIR/eval_cluster.json" \
+  --task "cluster 级仿写对照评估。检查复刻 cluster (14000 字) vs 原参照 cluster 在 arc 形状/张力曲线/章际衔接/主角行动节奏的对齐度。" \
+  --context-file "$REF_ARC"
+# 产出: $TEST_DIR/eval_cluster.json.ai_review.json
+```
+
+**test5 验收门槛**：
+- `reagan_shape_match=true` 或 emotion_curve cosine_sim > 0.7 → PASS
+- 否则 → cluster 节奏未对齐，必须升 skill 加 cluster 级约束
+- 这是阶段 5 复刻循环的最严苛终止条件——cluster 不像 = 整本仿写不像
 
 ### 阶段 2 完成标记（plan-step 3）
 
@@ -1700,7 +1891,22 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3 \
 42. 信息差运用（复刻样本是否营造了读者-角色信息差？还是一次性倒完所有信息）
 43. 情绪曲线（复刻样本的情绪走向是否有明确高低起伏？高潮位置是否与原作模式一致？还是AI式的"匀速推进"）
 44. 叙事距离（复刻样本的叙述者距离是否随场景动态调节？还是AI式的"全程恒定第三人称"）
+
+═══ H. cluster 级评估维度（v22.gov 新增 · 仅 test5 适用 · 独立 H1-H8 编号避免与 B6 dim45-48 冲突 · 最严苛终止条件）═══
+H1. **Reagan 6 形状匹配**：复刻 cluster 拟合的 Reagan shape 是否与原参照 cluster 一致（不一致 → cluster arc 形状漂移，必须修）
+H2. **emotion_curve cosine 相似度**：复刻 cluster 的 emotion_curve_normalized 与原 cluster 的余弦相似度，**目标 ≥ 0.7**
+H3. **Sudowrite tension dial 对齐度**：复刻 cluster 的 1-11 dial 序列与原序列的 L1 距离均值，**目标 ≤ 1.5**
+H4. **mid_checkpoint 张力对齐**：每 3000 字 checkpoint 的期望张力 vs 实际，偏差 > 0.2 标 FAIL
+H5. **章际衔接套用度**：复刻 cluster 内章间衔接是否落到 `narrative_continuity_template.three_chapter_templates` 中至少 1 个模板（不落 = 章际衔接是 AI 默认而非作者风格）
+H6. **主角 Stanford 6 维匹配**：复刻 cluster 中主角的 A_agency / I_interiority 等 6 维 vs 原作主角 arc，偏差 > 0.15 任一维度 → FAIL
+H7. **climax 位置匹配**：复刻 cluster 的 climax_chapter_index 应在原 cluster ± 1 章范围内
+H8. **cluster 字数对齐**：复刻 cluster 字数应在原 cluster ± 15% 内
+H9. **前/中/后段独立打分**（Round 1 调研关键警告 · 防 generic prose 漂移）：把复刻 cluster 切成前 1/3、中 1/3、后 1/3 三段，每段独立跑 ai_wrapper 评分。**任一段 disagreement → 该段标 drift_detected**。业界共识：consistency 比 imitation 更难，LLM 几百字后会漂回 generic prose，必须切段监控。来源：EQ-Bench Longform 14 维 + WebNovelBench 8 维 + LongWriter 6 维（详见 `.research_cache/inspiration_cluster_imitation_eval_2026-05-24.md`）。
 ```
+
+**H 类自动化计算**：直接用 `arc_aggregator.py --cluster auto_001` 对复刻样本跑一次，与原参照 cluster_arc JSON 对比即可（阶段 2 test5 末尾的 cluster_arc_replica.json 已含部分对比，阶段 3 把这些指标转成 standard distillation_compare 字段）。
+
+**业界依据（Round 1 调研）**：MARCUS 2025 (arXiv 2510.18201) 把角色 arc 做成事件中心时间序列；LumberChunker EMNLP 2024 实测 cluster 级评估比段级 +7.37% 检索增益；Reagan 2016 (EPJ DS) 6 形状已成 narrative analytics 标准。
 
 ### 输出对比报告
 
