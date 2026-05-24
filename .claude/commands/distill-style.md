@@ -1687,91 +1687,146 @@ python core/scripts/ai_wrapper.py \
 - `agreement=partial` → 局部修正后进入阶段 3
 - `agreement=agree` → 直接进入阶段 3 量化对比
 
-### 执行方式
+### 【v22.gov 工具模型对齐】test1-5 全部走 gen_writer.py 统一 pipeline
 
-```
-启动 1 个 novel-writer 子代理（或临时蒸馏-复刻代理）：
+**业界依据**（`.research_cache/inspiration_tool_model_alignment_2026-05-24.md` · Round 1 调研 17 来源）：
 
-Agent({
-  description: "蒸馏复刻测试 v{N}",
-  prompt: "
-    PLAN_ID: $PLAN_ID           # ⚠️ v17.2 必填：父 plan id
-    STEP: 3                      # ⚠️ v17.2 必填：当前阶段 2 → step 3
-    DISTILL_TEST: v{N}
-    SOURCE: 风格库/[小说名].json (skill v{N})
-    SKILL_FILE: 风格库/[小说名]_skill.md
-    
-    任务：基于当前 skill v{N}，复刻 3 个测试段：
-    
-    1. 章节开头（1500-2500 字）
-       场景：你自由命题，但必须与参考作品同题材
-       要求：用当前 skill 的所有约束写
-    
-    2. 对白场景（2000-3000 字）
-       要求：至少 3 个角色，对话占比 ≥60%
-    
-    3. 章末场景（1000-1500 字）
-       要求：明确章末类型（信息炸弹/拟声/独立短句/动作留白/章题回扣 五选一）
-    
-    输出：
-    - 风格库/复刻测试/v{N}/test1_opening.txt
-    - 风格库/复刻测试/v{N}/test2_dialogue.txt
-    - 风格库/复刻测试/v{N}/test3_ending.txt
-    - 风格库/复刻测试/v{N}/test4_three_openings.txt  # v16 加
-    
-    严格按 skill v{N} 的所有约束执行。
-  "
-})
-```
+> **核心原则**：「**freeze the harness, swap only the model**」（Arize · 业界共识）
 
-### 【v22.gov 新增】test5 cluster 复刻执行
+「蒸馏仿写测试 ≠ 正式写作」是典型 **training-serving skew**（Evidently AI 教科书定义），LLM 时代被 **prompt sensitivity** 放大——arxiv 2509.01790 实证 **prompt 微差可致 76 准确率点波动**。修法只能是基础设施层（共享 fixture + 统一 harness），不是 prompt 层。
+
+**必须冻结的 5 件套**（缺一即翻车）：
+
+| # | 冻结项 | 我们的实现 |
+|---|---|---|
+| 1 | **prompt template** | 5 段全走 `gen_writer.py` 的内部 prompt（含 7 项硬铁律 + 元 anti-slop） |
+| 2 | **tool pipeline** | 同一调用链 build_manifest → gen_writer → splitter |
+| 3 | **fixture project** | Step A 公共准备 · `_数据库/作者风格.json` + `事件簇.json` + `进度.json` 最小化 fixture |
+| 4 | **scoring & judge** | `style_evaluator.py` + `ai_wrapper.py` 同一 judge profile |
+| 5 | **model profile** | Step A 锁到 `_gen_model_profile_locked.json` · 所有 round 强制用同 profile |
+
+参考实现：Arize Acme SDK fictional fixture repo + EleutherAI lm-evaluation-harness。
+
+**对齐做法**：5 段全部走 `gen_writer.py --cluster` 同套架构（与小说写作流水线相同），只用 `--target-cjk` 区分字数。
+
+### Step A: 公共准备 — 最小化测试项目（5 段共用）
 
 ```bash
-# Step 1: 选参照 cluster（从 cluster_index.json 任选一个 5 章左右的）
+TEST_ROOT="workspace/styles/<书名>/复刻测试/v{N}_round{Y}"
+mkdir -p "$TEST_ROOT/_数据库" "$TEST_ROOT/章节"
+
+# 1. 复制 skill（gen_writer 的核心 input）
+cp "workspace/styles/<书名>/作者风格_FINAL.json" "$TEST_ROOT/_数据库/作者风格.json"
+
+# 2. v22.gov 强制：锁定当前 gen-model profile（防多轮循环时换 profile 误判）
+python core/scripts/gen_model.py show > "$TEST_ROOT/_gen_model_profile_locked.json"
+
+# 3. 建 5 个 test 对应的 cluster 占位（v22.gov 修：cluster_id 必须 int · gen_writer --cluster 期望 int）
+python -c "
+import json, pathlib
+clusters = [
+    {'cluster_id': 1, 'cluster_name': 'test1_opening',        'estimated_chapters': 1, 'expected_word_range': {'min': 1500, 'max': 2500, 'unit': 'CJK_chars'}, 'scope_summary': '复刻测试 1: 章节开头'},
+    {'cluster_id': 2, 'cluster_name': 'test2_dialogue',       'estimated_chapters': 1, 'expected_word_range': {'min': 2000, 'max': 3000, 'unit': 'CJK_chars'}, 'scope_summary': '复刻测试 2: 对白场景'},
+    {'cluster_id': 3, 'cluster_name': 'test3_ending',         'estimated_chapters': 1, 'expected_word_range': {'min': 1000, 'max': 1500, 'unit': 'CJK_chars'}, 'scope_summary': '复刻测试 3: 章末场景'},
+    {'cluster_id': 4, 'cluster_name': 'test4_three_openings', 'estimated_chapters': 3, 'expected_word_range': {'min': 900,  'max': 1500, 'unit': 'CJK_chars'}, 'scope_summary': '复刻测试 4: 连续 3 章首（每段 300-500 字）'},
+    {'cluster_id': 5, 'cluster_name': 'test5_full_cluster',   'estimated_chapters': 5, 'expected_word_range': {'min': 13000, 'max': 16000, 'unit': 'CJK_chars'}, 'scope_summary': '复刻测试 5: 完整 cluster · 参照 <REF_CLUSTER_ID>'},
+]
+for c in clusters:
+    c['status'] = 'pending'
+    c['mid_checkpoints'] = [int(c['expected_word_range']['max'] / 3), int(c['expected_word_range']['max'] * 2 / 3)]
+import pathlib
+pathlib.Path('$TEST_ROOT/_数据库/事件簇.json').write_text(json.dumps({'schema_version': 'v23.0', 'clusters': clusters}, ensure_ascii=False, indent=2), encoding='utf-8')
+pathlib.Path('$TEST_ROOT/_数据库/进度.json').write_text(json.dumps({'chapter_plan': []}, ensure_ascii=False, indent=2), encoding='utf-8')
+"
+```
+
+### Step B: 5 段 gen_writer.py 调用（与小说写作同一 pipeline）
+
+```bash
+# test1 章节开头（single 模式，cluster=1）
+python core/scripts/gen_writer.py \
+  --project "$TEST_ROOT" \
+  --cluster 1 \
+  --chapter-start 1 --chapter-end 1 \
+  --target-cjk 1500-2500
+
+# test2 对白场景（cluster=2）
+python core/scripts/gen_writer.py \
+  --project "$TEST_ROOT" \
+  --cluster 2 \
+  --chapter-start 1 --chapter-end 1 \
+  --target-cjk 2000-3000
+
+# test3 章末场景（cluster=3）
+python core/scripts/gen_writer.py \
+  --project "$TEST_ROOT" \
+  --cluster 3 \
+  --chapter-start 1 --chapter-end 1 \
+  --target-cjk 1000-1500
+
+# test4 3 连续章首（cluster=4 · ECAS-lite，多章窗口但每章字数小）
+python core/scripts/gen_writer.py \
+  --project "$TEST_ROOT" \
+  --cluster 4 \
+  --chapter-start 5 --chapter-end 7 \
+  --target-cjk 900-1500
+# 主代理需在 prompt 中明确告知"只写 3 个开头各 300-500 字"（通过 cluster.scope_summary 注入）
+
+# test5 完整 cluster（cluster=5 · ECAS 模式 · 参照 cluster_index 中某个 cluster）
+# 注意：test5 需要先跑下方「test5 cluster 复刻执行节」的 Step 1-2 选好参照 cluster_id
+# 才能跑这个 gen_writer 调用
+python core/scripts/gen_writer.py \
+  --project "$TEST_ROOT" \
+  --cluster 5 \
+  --chapter-start 1 --chapter-end 5 \
+  --target-cjk 13000-16000
+
+# 产出: $TEST_ROOT/章节/cluster_001_draft/cluster_001_draft.txt
+#       $TEST_ROOT/章节/cluster_002_draft/cluster_002_draft.txt
+#       $TEST_ROOT/章节/cluster_003_draft/cluster_003_draft.txt
+#       $TEST_ROOT/章节/cluster_004_draft/cluster_004_draft.txt
+#       $TEST_ROOT/章节/cluster_005_draft/cluster_005_draft.txt
+```
+
+**对齐验收要点**：
+- ✅ 5 段都走 `gen_writer.py`，复用同一 manifest 注入 / 同一 7 项硬铁律 / 同一 gen-model profile
+- ✅ profile 锁定到 `_gen_model_profile_locked.json`（每轮 round 必须用同 profile）
+- ✅ 测试目录的 _数据库/作者风格.json 直接复用 skill_FINAL（不偷换 prompt）
+- ❌ **禁止**：spawn 临时 prompt agent / 手写 prompt 跳过 gen_writer / 不锁 profile
+
+### 【v22.gov 新增】test5 cluster 复刻 — 在 Step A/B 之上补 ref 参照 + 评估
+
+**注意**：test5 的 gen_writer 调用已在 Step B 完成（`--cluster 5`），本节只补充 test5 特有的「参照 cluster 选取 + ref 文本拼接 + cluster 级评估」。
+
+```bash
+# Step 1: 从 cluster_index.json 选参照 cluster（5 章左右），并把它的 cluster_id 写回 Step A 的 test5 cluster.scope_summary 的 <REF_CLUSTER_ID> 占位
 CLUSTER_ID=$(python -c "
-import json, pathlib, random
+import json, random
 ci = json.load(open('workspace/styles/<书名>/cluster_index.json', encoding='utf-8'))
 mid_clusters = [c for c in ci['clusters'] if 4 <= c['chapters_count'] <= 6 and 12000 <= c['estimated_words'] <= 16000]
 if mid_clusters:
     print(random.choice(mid_clusters)['cluster_id'])
 ")
-
-# Step 2: 读参照 cluster_arc + 大势 brief
 REF_ARC="workspace/styles/<书名>/arc_templates/cluster_arc_${CLUSTER_ID}.json"
 
-# Step 3: 准备临时测试项目目录（gen_writer 需要 _数据库/作者风格.json）
-TEST_DIR="workspace/styles/<书名>/复刻测试/v{N}_round{Y}/test5_cluster"
-mkdir -p "$TEST_DIR/_数据库" "$TEST_DIR/章节"
-cp "workspace/styles/<书名>/作者风格_FINAL.json" "$TEST_DIR/_数据库/作者风格.json"
-# 最小化 chapter_plan（gen_writer 需要 ECAS 模式的 cluster_brief）
+# Step 2: 把 REF_CLUSTER_ID 更新进 Step A 已建好的 _数据库/事件簇.json 的 test5 cluster.scope_summary
 python -c "
 import json, pathlib
-ref = json.load(open('$REF_ARC', encoding='utf-8'))
-plan = {
-    'chapter_plan': [],
-    'event_clusters': {'clusters': [{
-        'cluster_id': 'cluster_001',
-        'chapter_range': [1, ref['chapters_count']],
-        'scope_summary': '复刻测试 cluster · 参照 ' + ref['cluster_id'],
-        'expected_word_range': {'min': 13000, 'max': 16000, 'unit': 'CJK_chars'},
-        'estimated_chapters': ref['chapters_count'],
-        'status': 'pending',
-    }]}
-}
-pathlib.Path('$TEST_DIR/_数据库/进度.json').write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding='utf-8')
-pathlib.Path('$TEST_DIR/_数据库/事件簇.json').write_text(json.dumps(plan['event_clusters'], ensure_ascii=False, indent=2), encoding='utf-8')
+ci_path = pathlib.Path('$TEST_ROOT/_数据库/事件簇.json')
+ci = json.loads(ci_path.read_text(encoding='utf-8'))
+for c in ci['clusters']:
+    if c['cluster_id'] == 5:
+        c['scope_summary'] = '复刻测试 5: 完整 cluster · 参照 $CLUSTER_ID'
+        c['_ref_cluster'] = '$CLUSTER_ID'
+        break
+ci_path.write_text(json.dumps(ci, ensure_ascii=False, indent=2), encoding='utf-8')
 "
 
-# Step 4: 调 gen_writer cluster 模式写整段 cluster_draft
-python core/scripts/gen_writer.py \
-  --project "$TEST_DIR" \
-  --cluster 1 \
-  --chapter-start 1 --chapter-end 5 \
-  --target-cjk 13000-16000
-# 产出: $TEST_DIR/章节/cluster_001_draft/cluster_001_draft.txt
+# Step 3: gen_writer 调用 → 已在 Step B 完成（python gen_writer.py --cluster 5 ...）
 
-# Step 5: 直接对 cluster_draft 整体跑 style_evaluator vs 原参照 cluster 的章节文本
-REF_TEXT_CONCAT="$TEST_DIR/_ref_concat.txt"
+# Step 4: 拼原参照 cluster 的章节文本（Step B 之后跑）
+REF_TEXT_CONCAT="$TEST_ROOT/_ref_concat.txt"
+TEST_DIR="$TEST_ROOT"  # 兼容下方变量名
 python -c "
 import json, pathlib
 ref = json.load(open('$REF_ARC', encoding='utf-8'))
@@ -1791,7 +1846,7 @@ pathlib.Path('$REF_TEXT_CONCAT').write_text('\n\n'.join(texts), encoding='utf-8'
 "
 python core/scripts/style_evaluator.py \
   --ref "$REF_TEXT_CONCAT" \
-  --gen "$TEST_DIR/章节/cluster_001_draft/cluster_001_draft.txt" \
+  --gen "$TEST_DIR/章节/cluster_005_draft/cluster_005_draft.txt" \
   --output "$TEST_DIR/eval_cluster.json"
 
 # Step 6: 跑 ai_wrapper 复核 cluster 整体（高层叙事 / arc 形状 / 节奏对齐）
@@ -1924,13 +1979,21 @@ Agent({
     SKILL: 风格库/[小说名]_skill.md
     
     任务：
-    1. 【v15 程序化】先跑 style_evaluator.py 获取精确量化对比：
+    1. 【v22.gov 工具模型对齐】先读 _gen_model_profile_locked.json 确认所有 5 段都用同一 gen-model profile 生成；profile 不同 → 评估失真，强制 abort 重跑该 round
+    2. 【v15 程序化】先跑 style_evaluator.py 获取精确量化对比：
        python core/scripts/style_evaluator.py --ref [原文章节] --gen [复刻文件] --output 风格库/对比报告/eval_v{N}.json
        这会自动计算 A 类全部量化维度（句长JSD/段落分布/对话占比/标点密度/功能词指纹等）并输出 SFS 评分
-    2. 基于 eval_v{N}.json 的精确数据 + Read 抽样判断 B/C/D 类定性维度
-    3. 输出 distillation_compare_v{N}.json（合并程序化数据+LLM定性判断）：
+    3. 基于 eval_v{N}.json 的精确数据 + Read 抽样判断 B/C/D 类定性维度
+    4. 输出 distillation_compare_v{N}.json（合并程序化数据+LLM定性判断 + 工具模型对齐元数据）：
        {
          'version': N,
+         'gen_model_profile_locked': {    # v22.gov 新增 · 工具模型对齐
+           'profile_name': '<active profile>',
+           'model': '<model id>',
+           'base_url': '<provider>',
+           'temperature': <num>,
+           'locked_at': '<ISO>'
+         },
          'dimensions': [
            {'id': 1, 'name': '中文字符', 'reference_mean': X, 'replica_mean': Y, 'gap_pct': Z, 'flagged': bool},
            ...
@@ -1941,6 +2004,11 @@ Agent({
          ],
          'converged': bool  # 连续 2 轮 flagged_count ≤ 2 时为 true
        }
+    
+    **v22.gov profile 锁定铁律**：
+    - 同一 v{N} 内所有 round Y 必须用同一 profile（gen_writer.py 调用前主代理验证）
+    - 跨 v{N} 升级 skill 时若换 profile → 必须在 distillation_log.md 显式标注「换 profile 重蒸 v{N}_round1」
+    - 防止「换 profile 错把 skill 升级 / 实际是 profile 差异」
     
     flag 阈值（gap_pct ≥ 20% 标红，gap_pct ≥ 50% 列为 critical）
   "
