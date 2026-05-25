@@ -1,7 +1,7 @@
 {
-  "command": "ecas-v23-transition",
+  "command": "ecas--transition",
   "version": 1,
-  "description": "v22 DCAS → v23 ECAS 全面转向工程。事件簇 (Event Cluster) 自切多章 + 4 防御 SOTA 全开 + 自适应字数。借鉴 StoryWriter (arxiv 2506.16445) + StoryBox (arxiv 2510.11618)。不考虑成本，全选最强配置。",
+  "description": "DCAS → ECAS 全面转向工程。事件簇 (Event Cluster) 自切多章 + 4 防御 SOTA 全开 + 自适应字数。借鉴 StoryWriter (arxiv 2506.16445) + StoryBox (arxiv 2510.11618)。不考虑成本，全选最强配置。",
   "total_steps": 16,
   "required_steps": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
   "optional_steps": [],
@@ -21,15 +21,15 @@
     {
       "n": 1,
       "name": "lock-decisions-and-design-doc",
-      "description": "锁定 4 个决策（已 _decisions 字段定）+ 写 ECAS_ARCHITECTURE.md（数据流图 + agent 拓扑 + v22 → v23 兼容矩阵 + 失败回滚策略）",
+      "description": "锁定 4 个决策（已 _decisions 字段定）+ 写 ECAS_ARCHITECTURE.md（数据流图 + agent 拓扑 + → 兼容矩阵 + 失败回滚策略）",
       "required": true,
       "expected_outputs": ["core/claude-home/ECAS_ARCHITECTURE.md"],
-      "verification": "文档含: 数据流图 / agent 拓扑 / v22 → v23 字段映射表 / 失败回滚 / 至少 4 个 use case"
+      "verification": "文档含: 数据流图 / agent 拓扑 / → 字段映射表 / 失败回滚 / 至少 4 个 use case"
     },
     {
       "n": 2,
       "name": "event-cluster-brief-schema",
-      "description": "新建 _数据库/事件簇.json schema（保留 v22 大势卡.json）— event_cluster: {cluster_id, parent_me, scope_summary, expected_word_range, scenes_estimated, anchor_props, foreshadowing_to_plant, mid_checkpoints, sub_summary_template, opus_recommended}",
+      "description": "新建 _数据库/事件簇.json schema（保留 大势卡.json）— event_cluster: {cluster_id, parent_me, scope_summary, expected_word_range, scenes_estimated, anchor_props, foreshadowing_to_plant, mid_checkpoints, sub_summary_template, opus_recommended}",
       "required": true,
       "expected_outputs": ["core/claude-home/schemas/event_cluster_schema.json"],
       "verification": "schema 含 ≥12 字段 + 与大势卡.json 的 cluster ↔ ME 映射规则"
@@ -45,7 +45,7 @@
     {
       "n": 4,
       "name": "splitter-agent-multi-chapter",
-      "description": "novel-chapter-splitter.md 升级 N 章切分（不再固定 2 章）：1) 读事件簇 8K-16K 草稿; 2) splitter score 按 N 个等距锚点 + 字数硬约束; 3) 输出 N 个 ch.txt + N-1 个 pre_opening.txt; 4) 保留 v22.6 三机制（字数硬约束 + 动态总字数 + 后置兜底）",
+      "description": "novel-chapter-splitter.md 升级 N 章切分（不再固定 2 章）：1) 读事件簇 8K-16K 草稿; 2) splitter score 按 N 个等距锚点 + 字数硬约束; 3) 输出 N 个 ch.txt + N-1 个 pre_opening.txt; 4) 保留 .6 三机制（字数硬约束 + 动态总字数 + 后置兜底）",
       "required": true,
       "expected_outputs": [".claude/agents/novel-chapter-splitter.md"],
       "verification": "splitter 文档含 multi_chapter_mode 段 + N 章 score 算法 + 字数硬约束保留"
@@ -109,7 +109,7 @@
     {
       "n": 12,
       "name": "ecas-known-commands-and-hooks",
-      "description": "plan_tracker.py KNOWN_COMMANDS 加 'write-event-cluster' + 'ecas-v23-transition'。Pre/PostToolUse hooks 验证 ECAS agent prompt 含 CLUSTER_ID 字段 (与 PLAN_ID/STEP 并列)",
+      "description": "plan_tracker.py KNOWN_COMMANDS 加 'write-event-cluster' + 'ecas--transition'。Pre/PostToolUse hooks 验证 ECAS agent prompt 含 CLUSTER_ID 字段 (与 PLAN_ID/STEP 并列)",
       "required": true,
       "expected_outputs": ["core/scripts/plan_tracker.py"],
       "verification": "plan_tracker create write-event-cluster 不报错"
@@ -125,7 +125,7 @@
     {
       "n": 14,
       "name": "migration-guide-and-compatibility",
-      "description": "写 ECAS_MIGRATION.md: 1) v22 DCAS 章节如何兼容 (cluster_id=null); 2) 旧项目升级路径; 3) ECAS vs DCAS 切换条件; 4) 失败回滚到 DCAS 单章模式步骤",
+      "description": "写 ECAS_MIGRATION.md: 1) DCAS 章节如何兼容 (cluster_id=null); 2) 旧项目升级路径; 3) ECAS vs DCAS 切换条件; 4) 失败回滚到 DCAS 单章模式步骤",
       "required": true,
       "expected_outputs": ["core/claude-home/ECAS_MIGRATION.md"],
       "verification": "文档含: 字段映射表 / 升级步骤 / 回滚步骤 / FAQ"
@@ -140,11 +140,11 @@
     },
     {
       "n": 16,
-      "name": "v23-system-health-audit-and-memory",
-      "description": "1) 跑 system_health_audit.py 验证 ECAS 全链路无断层; 2) 写 memory feedback_ecas_v23_transition; 3) git commit ECAS v23",
+      "name": "-system-health-audit-and-memory",
+      "description": "1) 跑 system_health_audit.py 验证 ECAS 全链路无断层; 2) 写 memory feedback_ecas_v23_transition; 3) git commit ECAS ",
       "required": true,
       "expected_outputs": [],
-      "verification": "system_health_audit 0 error + memory 入索引 + git log 含 v23 commit"
+      "verification": "system_health_audit 0 error + memory 入索引 + git log 含 commit"
     }
   ],
   "_quality_gates": {

@@ -99,5 +99,3 @@ python <REPO_ROOT>/core/scripts/style_analyzer.py "_tmp/ch{N+2}.txt" --output "�
 4. ✅ 黄金段落原文逐字摘录，不改写
 5. ✅ 完成后向调度方报告："✅ Ch{N}-{N+2} 蒸馏完成 → 3 单章JSON + 1 衔接JSON"，附 ≤80 字关键发现
 
-## PUA 纪律
-开工前用 Skill 工具加载 pua skill。失败 2 次以上向 Leader 用 [PUA-REPORT] 格式汇报。

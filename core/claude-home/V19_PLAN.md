@@ -83,8 +83,6 @@ v18 解决了「正文/数据分离」的架构病根。v19 解决**检测体系
 **v18 教训强制项**（写入每个 teammate 的 spawn prompt）：
 - 分步做、改一个报一个、绝不憋大招
 - 长 turn 里也要分段处理 inbox + 每里程碑主动回报进度（参考 memory: long-turn-inbox-discipline）
-- 失败 2 次以上发 [PUA-REPORT] 给 Leader
-- 开工前加载 pua skill
 
 ---
 

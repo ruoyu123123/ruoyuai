@@ -66,15 +66,50 @@ def get_intensity(project_root: Path) -> str:
         return "full_18"
 
 
+def get_cluster_last_ch(project_root: Path, cluster_key: str) -> int | None:
+    """从 事件簇.json 找 cluster 的最后一章号。"""
+    shijianji_path = project_root / "_数据库" / "事件簇.json"
+    if not shijianji_path.exists():
+        return None
+    try:
+        data = json.loads(shijianji_path.read_text(encoding="utf-8"))
+        for c in data.get("clusters", []):
+            cid = c.get("cluster_id", "")
+            if cid == cluster_key or cid.replace("cluster_", "") == cluster_key.replace("cluster_", ""):
+                cr = c.get("chapter_range")
+                if isinstance(cr, list) and len(cr) == 2:
+                    return cr[1]
+                elif isinstance(cr, str) and "-" in cr:
+                    return int(cr.split("-")[1])
+    except Exception:
+        pass
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
-    ap.add_argument("--ch", type=int, required=True)
+    ap.add_argument("--ch", type=int, help="单章模式（与 --cluster 二选一）")
+    ap.add_argument("--cluster", help="cluster 模式：扫该 cluster 末章上下文")
     ap.add_argument("--last-n", type=int, default=10)
+    ap.add_argument("--tier", choices=["core_5", "core_10", "full_18", "off"], help="覆盖 user_preferences intensity")
     args = ap.parse_args()
 
     project_root = Path(args.project).resolve()
-    intensity = get_intensity(project_root)
+
+    # cluster mode：用 cluster 末章作为 --ch
+    if args.cluster:
+        ch = get_cluster_last_ch(project_root, args.cluster)
+        if ch is None:
+            print(f"[FATAL] cluster {args.cluster} 未找到 chapter_range", file=sys.stderr)
+            sys.exit(2)
+        args.ch = ch
+        print(f"[cluster {args.cluster}] 用末章 ch{ch} 作为扫描锚点")
+    elif args.ch is None:
+        print(f"[FATAL] 必须指定 --ch 或 --cluster", file=sys.stderr)
+        sys.exit(2)
+
+    intensity = args.tier if args.tier else get_intensity(project_root)
     print(f"[run_cross_chapter_scans] ch{args.ch} intensity={intensity}")
 
     if intensity == "off":

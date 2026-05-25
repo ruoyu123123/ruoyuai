@@ -66,7 +66,7 @@ OWASP ASI08（Cascading Failure in Agentic AI）2026 新增——agent 不验证
 novel-writer:
   - 第NNN章.txt → 被 validator-repair / voice-keeper 消费
     cascade_risk: HIGH（validator 不重读全文，只信 changes）
-  - _changes.json.factual.locked_facts → 被 save-state 应用到 13 JSON
+  - _changes.json.factual.locked_facts → 被 save-state 应用到 34 子系统 JSON
     cascade_risk: HIGH（save-state 不验证 locked_facts 合理性，直接 merge）
   - _changes.json.self_eval.waivers → 被 audit_hub 接受为放行
     cascade_risk: MEDIUM（audit_hub 检查 hard_gate 不可豁免，但 advisory 全收）

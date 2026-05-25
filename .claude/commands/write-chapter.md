@@ -95,9 +95,9 @@ python core/scripts/world_evolution_apply_card.py "<project_root>" <ch> <label>
 
 每个 agent 只做一件事，职责互斥。你的工作是**编排**，不是执行。
 
-> **v18 流水线调整**：原「第 3.5 步手动调 `validate_style.py`」已**删除**——`audit_hub.py`（第 3.8 步）内部子进程已统一跑 `validate_chapter` + `validate_style --strict` + `narrative_scanner` + `plot_structure_scanner`，手动单调是冗余。「audit_hub 替代手动零散调脚本」——但**不替代 plan 步骤**：第 3 步 scanner→validator-repair（修前输入）与第 4 步 voice-keeper（无条件跑）保持 required 不变。
+> **流水线调整**：原「第 3.5 步手动调 `validate_style.py`」已**删除**——`audit_hub.py`（第 3.8 步）内部子进程已统一跑 `validate_chapter` + `validate_style --strict` + `narrative_scanner` + `plot_structure_scanner`，手动单调是冗余。「audit_hub 替代手动零散调脚本」——但**不替代 plan 步骤**：第 3 步 scanner→validator-repair（修前输入）与第 4 步 voice-keeper（无条件跑）保持 required 不变。
 
-## v18 正文/数据分离（贯穿整条流水线）
+## 正文/数据分离（贯穿整条流水线）
 
 章节落地为**两个物理文件**，不再是混合 txt：
 
@@ -106,13 +106,13 @@ python core/scripts/world_evolution_apply_card.py "<project_root>" <ch> <label>
 
 writer 直接 Write 这两个文件；validator-repair 修正文改 txt、修 CHANGES 改 `_changes.json` 的 `factual` 段；voice-keeper 只读正文 txt。所有读写章节的脚本走 `core/scripts/chapter_io.py` 统一模块，调度器自己不 split。
 
-## v19 顾问制（贯穿质检环节）
+## 顾问制（贯穿质检环节）
 
-v19 把检测体系从「门禁/法官」改成「顾问」：
+把检测体系从「门禁/法官」改成「顾问」：
 
 - **检测工具输出的是「待裁决项」，不是判决。** audit_hub 给的每条 issue 带 `gate_level` 字段——`hard_gate`（客观错误，不可豁免）或 `advisory`（风格/工艺建议，可凭充分理由豁免）。
 - **AI（writer / validator / voice-keeper / foreshadower）对 advisory 项有充分理由可豁免。** writer 的豁免写进 `_changes.json` 的 `self_eval.waivers`；judge agent 的豁免写进 JudgeReport 的 `waivers` 段。豁免必带具体理由（< 100 字、具体到本章场景），理由不充分 = 豁免无效。
-- **hard_gate 不可豁免**——E 层一致性（设定冲突/知识泄露/伏笔断裂/秘密未揭/未声明实体）+ 文件契约破损，这些是客观错误不是风格选择。完整清单见 `core/claude-home/STRUCTURE.md` 第十一节「v19 检测体系顾问制 + hard_gate 不可豁免清单」。
+- **hard_gate 不可豁免**——E 层一致性（设定冲突/知识泄露/伏笔断裂/秘密未揭/未声明实体）+ 文件契约破损，这些是客观错误不是风格选择。完整清单见 `core/claude-home/STRUCTURE.md` 第十一节「检测体系顾问制 + hard_gate 不可豁免清单」。
 - **audit_hub 第 3.8 步接 `--waivers`**——收集 writer/judge 的豁免，advisory 项有合理豁免则转 `waived` 不计入 needs_agent；hard_gate 项即便传了豁免也强制忽略。
 - **learning_loop 反向校准**——同一 advisory code 被反复合理豁免，learning_loop 产出「工具校准建议」调阈值，而不是反复骚扰 AI。
 
@@ -164,7 +164,7 @@ MANIFEST: <项目路径>/_数据库/.manifest/ch_<NNN>.json
 
 **不要**在 prompt 里塞额外说明——Writer 的系统提示已经包含所有规则。
 
-Writer 返回确认后，检查**两个文件**是否都生成（v18 正文/数据分离）：
+Writer 返回确认后，检查**两个文件**是否都生成：
 
 - `<项目路径>/章节/第<NNN>章/第<NNN>章.txt`（纯正文）
 - `<项目路径>/章节/第<NNN>章/第<NNN>章_changes.json`（`{factual, self_eval}`）
@@ -233,7 +233,7 @@ MAX_ROUNDS: 1
 
 > 本步是**条件步**（无风格文件时跳过）——`plan-step 3` 的打勾**不在这里**，挪到第 3.8 步末尾（audit_hub 无条件跑，是 step-3 逻辑块的最后动作）。
 
-> **v18 删除说明**：原「第 3.5 步：风格合规校验」已删除——手动调 `validate_style.py` + 据其 FAIL 启动 validator-repair `style-repair` 模式这一套，已被第 3.8 步 `audit_hub.py` 完全覆盖（audit_hub 内部跑 `validate_style --strict`，确定性问题自动修，对话占比严重不足等需判断问题进 `pending_agent` 派单）。validator-repair 的 `style-repair` 模式本身保留——第 3.25 步 Two-Pass 仍在用。
+> **删除说明**：原「第 3.5 步：风格合规校验」已删除——手动调 `validate_style.py` + 据其 FAIL 启动 validator-repair `style-repair` 模式这一套，已被第 3.8 步 `audit_hub.py` 完全覆盖（audit_hub 内部跑 `validate_style --strict`，确定性问题自动修，对话占比严重不足等需判断问题进 `pending_agent` 派单）。validator-repair 的 `style-repair` 模式本身保留——第 3.25 步 Two-Pass 仍在用。
 
 ---
 
@@ -257,13 +257,13 @@ python core/scripts/emotion_arc_analyzer.py "<项目路径>/章节/第<NNN>章/�
 
 ---
 
-# 第 3.8 步：audit_hub 统一质检（v18 新增 · 质检管家）
+# 第 3.8 步：audit_hub 统一质检
 
-**设计理念**：v18 之前，调度器要手动逐个调 scanner / validator，口径分散、修复策略不统一。`audit_hub.py` 是**质检管家**——一个子进程统一跑 4 个校验**脚本**（`validate_chapter.py` / `validate_style.py --strict` / `narrative_scanner.py --all` / `plot_structure_scanner.py --all`），汇总问题按 致命/错误/警告 × 维度分类。确定性问题（标点/段落/拟声格式/禁用词）`--auto-fix` 时调 `style_repair_engine.py` 原地修；需 agent 判断的（致命冲突/大段重写/对话密度严重不足/POV 越界）归入 `pending_agent` 清单交还调度器。
+**设计理念**：之前，调度器要手动逐个调 scanner / validator，口径分散、修复策略不统一。`audit_hub.py` 是**质检管家**——一个子进程统一跑 4 个校验**脚本**（`validate_chapter.py` / `validate_style.py --strict` / `narrative_scanner.py --all` / `plot_structure_scanner.py --all`），汇总问题按 致命/错误/警告 × 维度分类。确定性问题（标点/段落/拟声格式/禁用词）`--auto-fix` 时调 `style_repair_engine.py` 原地修；需 agent 判断的（致命冲突/大段重写/对话密度严重不足/POV 越界）归入 `pending_agent` 清单交还调度器。
 
 > audit_hub **只调脚本，不调 agent**——`novel-voice-keeper` 等 agent 由它写进 `pending_agent` 清单「建议派」，实际 spawn 由主调度器做。
 
-风格校验 + 节奏/情绪分析跑完后，运行（v19：加 `--waivers` 接收豁免清单）：
+风格校验 + 节奏/情绪分析跑完后，运行：
 
 ```bash
 python core/scripts/audit_hub.py "<项目路径>" <N> --auto-fix \
@@ -272,7 +272,7 @@ python core/scripts/audit_hub.py "<项目路径>" <N> --auto-fix \
 
 `--json` 可选：把报告 JSON 打到 stdout（默认只打人类可读摘要）。
 
-**v19 `--waivers` 说明**：`--waivers` 指向一个 JSON 文件，audit_hub 从中读豁免清单。
+**`--waivers` 说明**：`--waivers` 指向一个 JSON 文件，audit_hub 从中读豁免清单。
 - **默认指向本章 `_changes.json`**——audit_hub 自动读其 `self_eval.waivers` 段（writer 写的豁免）。这是最常见情况，writer 的豁免无需额外落文件。
 - 若第 3 步 validator-repair / 派单的 judge agent 在 JudgeReport 里返回了 `waivers` 段，主调度器需把这些 judge 豁免**合并**写进本章 `_changes.json` 的 `self_eval.waivers`（与 writer 豁免并列），再跑 audit_hub——这样一个 `--waivers` 入口收齐 writer + judge 的全部豁免。
 - audit_hub 对 `advisory` 项命中豁免 → 转 `waived`（记 `waive_reason`）；对 `hard_gate` 项即便命中豁免也**强制忽略豁免**，仍按问题处理。
@@ -287,9 +287,9 @@ python core/scripts/audit_hub.py "<项目路径>" <N> --auto-fix \
 | 2 | 有问题**需派 agent**（verdict=needs_agent） | 读报告 `pending_agent` 清单，按 `suggested_agent` 字段 spawn 对应 judge agent 修复，每项带 `fix_brief` | 
 | 3 | **致命错误**（章节不存在 / 校验器全挂） | 停止流水线，向用户报告 |
 
-**v19 顾问制对 exit 2 的影响**：`pending_agent` 清单里只会有 **hard_gate 项** + **未被豁免（或豁免理由不充分）的 advisory 项**。被合理豁免的 advisory 项不进 `pending_agent`——这正是顾问制的核心：AI 有充分理由就不必被工具反复骚扰。所以 exit 2 时派单量应比 v18 更少、更聚焦真问题。
+**顾问制对 exit 2 的影响**：`pending_agent` 清单里只会有 **hard_gate 项** + **未被豁免（或豁免理由不充分）的 advisory 项**。被合理豁免的 advisory 项不进 `pending_agent`——这正是顾问制的核心：AI 有充分理由就不必被工具反复骚扰。所以 exit 2 时派单量应比 更少、更聚焦真问题。
 
-**产出**：`<项目路径>/_数据库/.audit/ch_<NNN>_audit.json`，报告 JSON 完整结构（v19 schema 升 1.1：加 `waived` verdict + 独立 `waived_issues` 段 + issue 带 `gate_level`/`waived`/`waive_reason`）：
+**产出**：`<项目路径>/_数据库/.audit/ch_<NNN>_audit.json`，报告 JSON 完整结构：
 ```
 {schema_version, chapter, ts,
  verdict: pass | auto_fixed | needs_agent | fixable_pending | waived,
@@ -301,7 +301,7 @@ python core/scripts/audit_hub.py "<项目路径>" <N> --auto-fix \
  scanner_status: [{scanner, exit_code, ok}]}
 ```
 
-**v19 verdict `waived` 说明**：当本章剩余未处理 issue 全部是 advisory 且都被合理豁免（hard_gate 项全部已修），verdict = `waived`，等同放行（进第 4 步）。`issues[]` 是全部原始问题，每条带 `gate_level`（hard_gate/advisory）+ `waived` + `waive_reason`；被合理豁免的 advisory 项另收进独立的 `waived_issues` 段，`summary.waived` 是其计数。hard_gate 项即便传入豁免，audit_hub 也强制 `waived: false`，不会进 `waived_issues`。
+**verdict `waived` 说明**：当本章剩余未处理 issue 全部是 advisory 且都被合理豁免（hard_gate 项全部已修），verdict = `waived`，等同放行（进第 4 步）。`issues[]` 是全部原始问题，每条带 `gate_level`（hard_gate/advisory）+ `waived` + `waive_reason`；被合理豁免的 advisory 项另收进独立的 `waived_issues` 段，`summary.waived` 是其计数。hard_gate 项即便传入豁免，audit_hub 也强制 `waived: false`，不会进 `waived_issues`。
 
 **exit 2 时的派单流程**：对 `pending_agent[]` 中每一项 `{dimension, severity, code, desc, suggested_agent, fix_brief}`，用 Agent 工具启动 `suggested_agent` 指定的 judge agent，prompt 带标准契约字段（PROJECT / CHAPTER / MODE）+ `PLAN_ID: $PLAN_ID / STEP: 3`，把 `fix_brief` 作为修复指引。修完重跑一次 `audit_hub.py` 确认 verdict 转为 pass/auto_fixed。
 
@@ -332,7 +332,7 @@ CHAPTER: <N>
 MODE: voice-audit
 ```
 
-**v18 衔接 audit_hub 派单**：如果第 3.8 步 audit_hub 的 `pending_agent` 清单里**点名了 `novel-voice-keeper`**（如 POV 越界、对话声纹问题），在上面 prompt 末尾追加一行把该项的 `fix_brief` 带上：
+**衔接 audit_hub 派单**：如果第 3.8 步 audit_hub 的 `pending_agent` 清单里**点名了 `novel-voice-keeper`**（如 POV 越界、对话声纹问题），在上面 prompt 末尾追加一行把该项的 `fix_brief` 带上：
 
 ```
 FIX_BRIEF: <audit_hub pending_agent 中 suggested_agent=novel-voice-keeper 那项的 fix_brief 原文>

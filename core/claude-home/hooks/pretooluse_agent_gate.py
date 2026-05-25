@@ -198,20 +198,6 @@ def main():
             print(f"   prompt 前 200: {prompt[:200]}", file=sys.stderr)
             sys.exit(2)
 
-    # ============ 规则 7（v17.5 P2.3）：PUA skill 强制加载 ============
-    # 所有写作类 Agent prompt 必须含 "pua skill" 或 "PUA-SKILL" 触发字样
-    # 这是 CLAUDE.md 的 Agent Team PUA 配置约定的硬约束
-    if is_novel_agent:
-        has_pua_trigger = any(t in prompt for t in [
-            "加载 pua skill", "加载pua", "load pua",
-            "PUA-SKILL 已加载", "pua skill", "PUA skill",
-        ])
-        if not has_pua_trigger:
-            print(f"❌ [Hook] 写作 Agent prompt 缺 PUA skill 加载指令", file=sys.stderr)
-            print(f"   prompt 中应含 '开工前先加载 pua skill' 或 'PUA-SKILL 已加载'", file=sys.stderr)
-            print(f"   这是 CLAUDE.md Agent Team PUA 配置的硬约束", file=sys.stderr)
-            sys.exit(2)
-
     # ============ 规则 8（P1-1）：PLAN_ID 引用的 plan 防篡改校验 ============
     # prompt 含 PLAN_ID 时，校验该 plan 的 attestation——若 plan JSON 被旁路篡改
     # （Agent 直接编辑 / 注入写盘，典型是伪造 step 状态绕过跳步防御），在 Agent

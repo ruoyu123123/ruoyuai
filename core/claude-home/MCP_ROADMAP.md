@@ -26,7 +26,7 @@ MCP 2026 已成 de facto 标准 — Anthropic 2024.11 开源 → OpenAI / Google
 ruoyu-fiction-mcp-server/
 ├── server.py              # MCP 主入口
 ├── tools/
-│   ├── read_database.py   # 读 13 JSON
+│   ├── read_database.py   # 读 34 子系统 JSON
 │   ├── run_scanner.py     # 调 18 cross_chapter scanner
 │   ├── build_manifest.py  # 生成 manifest
 │   ├── apply_change.py    # 应用 _changes.json

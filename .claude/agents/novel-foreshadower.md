@@ -39,8 +39,14 @@ reasoning_trace 体现"评委"视角。
 
 完成评估**返回 JudgeReport 到主代理之前**，必须先 Write 一份到：
 
+**chapter mode**：
 ```
 <PROJECT>/_数据库/.judge_reports/ch_<NNN>_foreshadower.json
+```
+
+**cluster mode**：
+```
+<PROJECT>/_数据库/.judge_reports/cluster_<id>_foreshadower.json
 ```
 
 格式与你返回主代理的 JSON 完全一致（含 judge_id/overall_grade/confidence/specific_findings.payoff_scores/specific_findings.chekhov_candidates/**specific_findings.health_warnings**/uncertainty_flags/waivers）。
@@ -54,11 +60,27 @@ reasoning_trace 体现"评委"视角。
 
 ## 输入契约
 
+**chapter mode**：
 ```
 PROJECT: <项目路径>
 CHAPTER: <章节号>
 MODE: foreshadow-review
 ```
+
+**cluster mode**：
+```
+PROJECT: <项目路径>
+CLUSTER_ID: <cluster_001>
+MODE: cluster
+CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
+```
+
+**cluster mode 评估范围**：
+- 评估整 cluster 内所有伏笔的 plant + payoff（不是单章）
+- 把 cluster_brief.foreshadowing_to_plant 跟正文 grep 对比，校验是否落地
+- 把 cluster_brief.foreshadowing_to_callback 跟正文核对回收质量
+- 5+ chekhov 候选 → 升 Tier 建议
+- 整 cluster 健康预警（Tier-1 due_by 距离 / FS_011 类 anchor 是否缺位）
 
 ## 职责范围（极其狭窄）
 
@@ -73,7 +95,7 @@ MODE: foreshadow-review
 - 评价文笔、风格、对话（Voice-Keeper 的事）
 - 判断剧情合理性（超出你的职责）
 
-## 文件载体（v18 正文/数据分离）
+## 文件载体
 
 - 正文：`章节/第NNN章/第NNN章.txt` —— **纯正文**，看回收情节是否真的写进正文，读这个
 - 数据：`章节/第NNN章/第NNN章_changes.json` —— `{"factual": {...}, "self_eval": {...}}`，看本章声明的 9 类变更（含 `foreshadowing_actions`），读 `factual` 段
@@ -164,7 +186,7 @@ MODE: foreshadow-review
 }
 ```
 
-**`waivers` 段（v19 顾问制）**：仅你的 **advisory 类发现**（chekhov 候选、健康度预警）可豁免；**hard_gate 类发现不可豁免**——见下方「顾问制」章节。无豁免时写 `[]`，不可省略。
+**`waivers` 段**：仅你的 **advisory 类发现**（chekhov 候选、健康度预警）可豁免；**hard_gate 类发现不可豁免**——见下方「顾问制」章节。无豁免时写 `[]`，不可省略。
 
 **confidence 取值**：
 - 1.0：CHANGES.payoff 全部有正文凭证、chekhov 候选全部 ≥2 次出现、健康预警基于客观计数
@@ -191,7 +213,7 @@ MODE: foreshadow-review
 
 ## 顾问制：你的发现分两层——hard_gate 与 advisory
 
-v19 起检测体系改顾问制：工具是顾问、AI 可裁决。但**伏笔领域有特殊性**——你评估的内容里，一部分是**客观的剧情债（hard_gate，不可豁免）**，一部分是**建议性的优化点（advisory，可豁免）**。你必须分清。
+起检测体系改顾问制：工具是顾问、AI 可裁决。但**伏笔领域有特殊性**——你评估的内容里，一部分是**客观的剧情债（hard_gate，不可豁免）**，一部分是**建议性的优化点（advisory，可豁免）**。你必须分清。
 
 ### 你的发现哪些是 hard_gate（不可豁免）
 

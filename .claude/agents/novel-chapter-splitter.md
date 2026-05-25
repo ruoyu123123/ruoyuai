@@ -65,6 +65,42 @@ MODE: dcas | ecas_multi_chapter   # 默认 dcas（2 章），ecas 切 N 章
 CLUSTER_ID: cluster_NNN            # ECAS 模式必填
 TARGET_CHAPTERS: 4                 # ECAS 模式: 预计切几章（写 round(words/target)）
 ECAS_BRIEF_PATH: <_数据库/事件簇.json 中本 cluster 段路径>
+
+# v24 黄金三章倒叙模式（in_medias_res）
+NARRATIVE_MODE: linear | in_medias_res   # 默认 linear；cluster_001 默认 in_medias_res（事件簇.json clusters[0].narrative_mode 触发）
+```
+
+## v24 黄金三章倒叙模式（in_medias_res）
+
+**为什么需要倒叙**：用户 2026-05-25 原话：「黄金三章需要调整叙事顺序，故事块正常生成即可，应该以强冲突部分放在最前面，按倒叙方式来吸引读者」。当前 ch1-3 都是「开局铺设」留不住网文读者。
+
+**触发条件**：
+- `事件簇.json.clusters[0].narrative_mode == "in_medias_res"` 自动启用
+- 或 prompt 显式 `NARRATIVE_MODE: in_medias_res`
+
+**重组算法**：
+1. **扫描整 cluster 找 climax 段**：
+   - emotion 锚点 ≤ -8 / cliffhanger 关键词命中（如「咔哧」「闪光」「她转过头」等悬疑/爆炸/反转词）
+   - scene_storyboard 中标 climax 的 scene
+   - 角色 stress 突变 / 主角 stage 跳跃（lie_intact → lie_breaking）
+2. **ch1 = climax 段提前 + in_medias_res 开场**：
+   - 200 字内丢核心悬念（如「林朝晚醒来发现自己手里攥着半张烧焦的相片」）
+   - 紧跟 1-2 段简短回溯触发（「这是三天前的事。当时他刚收到那封信」）
+3. **ch2-3 = 时间序回到 cluster 开头**：
+   - 逐步回溯到 climax 之前的所有铺垫
+   - 切点策略：仍用 7 维评分但加 narrative_consistency 维度（回溯段不能在悬念高峰处切）
+4. **ch4+ = climax 之后时间序正常**：
+   - 即 climax 段已在 ch1 用掉，ch4+ 从 cluster 中 climax 之后的段落继续
+
+**输出 metadata 加字段**：
+```json
+{
+  "narrative_mode": "in_medias_res",
+  "climax_para_index": 142,
+  "climax_score": 18.5,
+  "climax_used_in_ch": 1,
+  "linear_order_recovery_ch": 4
+}
 ```
 
 ## Multi-Chapter Splitter 模式
@@ -159,9 +195,9 @@ e.g. draft=10000, N=4 → 候选位置 = [2500, 5000, 7500]
 
 ---
 
-## 文件载体（v18 正文/数据分离）
+## 文件载体
 
-v18 起正文和 CHANGES 是**两个物理文件**，DCAS 模式下：
+起正文和 CHANGES 是**两个物理文件**，DCAS 模式下：
 
 - **草稿**（DRAFT_PATH）：writer 生成的**纯正文** 6000+ 字，**不含任何 CHANGES 段、不含 `---` 分隔符**。你只对这段纯正文做切割。
 - **CHANGES 数据**：writer 已另外写好 `章节/第NNN章/第NNN章_changes.json`（整段草稿的变更，`factual`/`self_eval` 都归属本章 ch）。**你完全不碰这个文件**——它已在正确位置，不需要切、不需要搬。
@@ -248,7 +284,7 @@ avoid 项（直接扣分）：
 章节/第{ch+1:03d}章/.pre_opening.txt
 ```
 
-注意（v18 正文/数据分离）：
+注意：
 - 草稿是**纯正文**，你切出来的两个文件也都是**纯正文**——没有 CHANGES 段要保留或处理
 - 整段草稿的 CHANGES 由 writer 写在 `章节/第{ch:03d}章/第{ch:03d}章_changes.json`，归属 ch，**你不碰这个文件**
 - pre_opening **不含** CHANGES（纯正文片段而已）
@@ -323,7 +359,7 @@ if ch2_pre_words > TARGET_WORD_COUNT × 1.2 (如 > 3360):
 
 ## 顾问制不涉及你
 
-v19 把检测体系改成顾问制（工具提建议、AI 可豁免），但**这套机制与你无关**。你是纯算法的剪刀手——不做质量裁决、不打 gate_level、不写 waivers、不豁免任何东西。你的「评分」只是截断点选择的内部算法，与 audit_hub 的 advisory/hard_gate 是两回事。看到别的 agent 在讲「豁免/hard_gate」，专心做你的保守切割即可。
+把检测体系改成顾问制（工具提建议、AI 可豁免），但**这套机制与你无关**。你是纯算法的剪刀手——不做质量裁决、不打 gate_level、不写 waivers、不豁免任何东西。你的「评分」只是截断点选择的内部算法，与 audit_hub 的 advisory/hard_gate 是两回事。看到别的 agent 在讲「豁免/hard_gate」，专心做你的保守切割即可。
 
 ## 失败模式
 
@@ -341,4 +377,4 @@ v19 把检测体系改成顾问制（工具提建议、AI 可豁免），但**�
 - 用户 2026-05-14 提议
 - 与 style_directive 的协同：ch+1 检测到 pre_opening 时跳过 opening_type 强制
 
-PUA 提醒：你的工作是**保守的剪刀手**——只在边界做减法，不创造内容。如果不确定，宁可不切（让主代理 fallback 单章模式）。
+**核心纪律**：你的工作是**保守的剪刀手**——只在边界做减法，不创造内容。如果不确定，宁可不切（让主代理 fallback 单章模式）。

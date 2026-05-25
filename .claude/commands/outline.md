@@ -24,7 +24,7 @@ description: 生成章节大纲
 **保持 Claude 处理的部分**：
 - 卷骨架结构（卷数 / 章节范围 / event prerequisites 关系）
 - chapter_plan 的 anchors / try_fail / info_gain / threads_advance 等结构字段
-- 13 个 JSON 数据库初始化（plan_tracker step 3）
+- 34 个核心子系统 JSON 初始化（plan_tracker step 3）
 
 **当前 active gen-model**：`python core/scripts/gen_model.py show`。
 
@@ -573,9 +573,9 @@ fi
 - ⚠️ 不做 push/pull/force/reset --hard 等破坏性操作
 - ⚠️ 提交失败（如 hook 失败）时在日志记录，但不中断流水线
 
-终端输出：「✅ 数据库已初始化（13 个文件），Git 仓库已建立」
+终端输出：「✅ 数据库已初始化（34 个核心子系统 JSON），Git 仓库已建立」
 
-**plan-step 3**（13 JSON 数据库 + Git 初始化为一步；模板已配 3 个核心 JSON 校验）：
+**plan-step 3**（34 子系统 JSON + Git 初始化为一步；模板已配 3 个核心 JSON 校验，缺任意一个 hook `pretooluse_subsystems_gate` 拦截）：
 
 ```bash
 python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3

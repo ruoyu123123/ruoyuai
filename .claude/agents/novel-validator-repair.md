@@ -46,4 +46,4 @@ tools: Read
 
 ## 历史文档
 
-完整的 v19 顾问制规则 / 16 维评分纲领 / hard_gate 清单等内容已迁到 `novel-validator-checker.md`。需要查阅请去新 agent 文档。
+完整的 顾问制规则 / 16 维评分纲领 / hard_gate 清单等内容已迁到 `novel-validator-checker.md`。需要查阅请去新 agent 文档。

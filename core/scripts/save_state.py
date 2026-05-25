@@ -628,9 +628,86 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> None:
 
 # ============ CLI ============
 
+def _get_cluster_chapter_range(project_root, cluster_key):
+    """从 事件簇.json 拿 cluster 的 chapter_range，展开 [ch1,...,chN]"""
+    import json as _j
+    p = project_root / "_数据库" / "事件簇.json"
+    if not p.exists():
+        return []
+    try:
+        data = _j.loads(p.read_text(encoding="utf-8"))
+        for c in data.get("clusters", []):
+            cid = c.get("cluster_id", "")
+            if cid == cluster_key or cid.replace("cluster_", "") == cluster_key.replace("cluster_", ""):
+                cr = c.get("chapter_range")
+                if isinstance(cr, list) and len(cr) == 2:
+                    return list(range(cr[0], cr[1] + 1))
+    except Exception:
+        pass
+    return []
+
+
+def cmd_apply_cluster_changes(root, cluster_key):
+    """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes"""
+    chapters = _get_cluster_chapter_range(root, cluster_key)
+    if not chapters:
+        print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
+        return 2
+    print(f"[cluster {cluster_key}] 展开 {len(chapters)} 章 → 逐章 apply-changes")
+    for ch in chapters:
+        print(f"  → ch{ch}")
+        cmd_parse(root, ch)
+        apply_changes(root, ch)
+    print(f"[OK] cluster {cluster_key} apply-changes 完成 {len(chapters)} 章")
+
+
+def cmd_git_commit_cluster(root, cluster_key):
+    """v24 cluster 级 git commit：1 个 cluster 1 个 commit"""
+    chapters = _get_cluster_chapter_range(root, cluster_key)
+    if not chapters:
+        print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
+        return 2
+    # 复用 cmd_git_commit 但 commit msg 改 cluster 级
+    import subprocess as _sp
+    try:
+        _sp.run(["git", "-C", str(root), "add", "."], check=True, capture_output=True)
+        msg = f"feat(cluster-{cluster_key}): {len(chapters)} 章 (ch{chapters[0]}-{chapters[-1]})"
+        r = _sp.run(["git", "-C", str(root), "commit", "-m", msg],
+                    capture_output=True, text=True)
+        if r.returncode == 0:
+            sha = r.stdout.split()[1].strip("]")[:7] if r.stdout else "?"
+            print(f"[GIT] cluster_{cluster_key} 快照 {sha}: {msg}")
+        else:
+            print(f"[GIT] {r.stderr[:200] or r.stdout[:200]}", file=sys.stderr)
+    except Exception as e:
+        print(f"[GIT] {e}", file=sys.stderr)
+
+
+def cmd_auto_post_reflect_cluster(root, cluster_key):
+    """v24 cluster 级 auto-post-reflect：展开 chapter_range，for each ch 调 auto-post-reflect"""
+    chapters = _get_cluster_chapter_range(root, cluster_key)
+    if not chapters:
+        print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
+        return 2
+    for ch in chapters:
+        cmd_auto_post_reflect(root, ch)
+
+
+def cmd_report_cluster(root, cluster_key):
+    """v24 cluster 级 report"""
+    chapters = _get_cluster_chapter_range(root, cluster_key)
+    if not chapters:
+        print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
+        return 2
+    print(f"[cluster {cluster_key}] 章节范围 ch{chapters[0]}-{chapters[-1]} ({len(chapters)} 章)")
+    for ch in chapters:
+        cmd_report(root, ch)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project", help="项目路径")
+    # chapter-level subcommands
     ap.add_argument("--wal-start", type=int, metavar="CH")
     ap.add_argument("--wal-step", nargs=2, type=int, metavar=("CH", "STEP"))
     ap.add_argument("--wal-end", type=int, metavar="CH")
@@ -639,9 +716,18 @@ def main():
     ap.add_argument("--git-commit", type=int, metavar="CH")
     ap.add_argument("--report", type=int, metavar="CH")
     ap.add_argument("--auto-post-reflect", type=int, metavar="CH",
-                    help="v22.6: 一键跑 learning_loop 三步链 (merge-reflection + ingest + scan-recurring)")
+                    help="一键跑 learning_loop 三步链 (merge-reflection + ingest + scan-recurring)")
     ap.add_argument("--ecas-checkpoint", type=str, metavar="CLUSTER_ID",
-                    help="v23 ECAS: 验证 cluster_draft 完整性 + checkpoint_data")
+                    help="验证 cluster_draft 完整性 + checkpoint_data")
+    # v24 cluster-level subcommands
+    ap.add_argument("--apply-cluster-changes", type=str, metavar="CLUSTER_KEY",
+                    help="v24: 一次性应用整 cluster 的 changes（内部展开 ch_range for each ch apply）")
+    ap.add_argument("--git-commit-cluster", type=str, metavar="CLUSTER_KEY",
+                    help="v24: 1 cluster 1 commit · msg = feat(cluster-NNN): N 章 (chX-chY)")
+    ap.add_argument("--auto-post-reflect-cluster", type=str, metavar="CLUSTER_KEY",
+                    help="v24: cluster 级 learning_loop")
+    ap.add_argument("--report-cluster", type=str, metavar="CLUSTER_KEY",
+                    help="v24: cluster 级报告")
     args = ap.parse_args()
 
     root = Path(args.project).resolve()
@@ -658,6 +744,10 @@ def main():
     elif args.report: cmd_report(root, args.report)
     elif args.auto_post_reflect: cmd_auto_post_reflect(root, args.auto_post_reflect)
     elif args.ecas_checkpoint: cmd_ecas_checkpoint(root, args.ecas_checkpoint)
+    elif args.apply_cluster_changes: cmd_apply_cluster_changes(root, args.apply_cluster_changes)
+    elif args.git_commit_cluster: cmd_git_commit_cluster(root, args.git_commit_cluster)
+    elif args.auto_post_reflect_cluster: cmd_auto_post_reflect_cluster(root, args.auto_post_reflect_cluster)
+    elif args.report_cluster: cmd_report_cluster(root, args.report_cluster)
     else:
         ap.print_help()
         sys.exit(1)

@@ -24,7 +24,7 @@ MAX_ROUNDS: 3
 STYLE_REPORT: [仅 style-check 模式：validate_style.py 的 stdout 输出]
 ```
 
-## 文件载体（v18 正文/数据分离）
+## 文件载体
 
 | 文件 | 路径 | 你怎么用 |
 |------|------|---------|
@@ -124,7 +124,7 @@ python core/scripts/validate_style.py "<项目路径>/章节/第<N>章/第<N>章
 }
 ```
 
-## 顾问制（v19）
+## 顾问制
 
 每条 violation 必带 `gate_level`：
 

@@ -23,7 +23,7 @@ workspace/novels/{书名}/
 │   ├── 第001章.txt         # 章节正文
 │   ├── 第001章_changes.json  # writer 产出的 self_eval / waivers
 │   └── ...
-├── _数据库/                 # 13 个 JSON 数据库
+├── _数据库/                 # 34 个核心子系统 JSON
 │   ├── 进度.json            # 卷级大纲 + 章级规划 + 传播债务
 │   ├── 人物卡.json          # 5 层 Voice DNA + 声音包
 │   ├── 世界观.json

@@ -267,14 +267,21 @@ def load_template(command: str) -> dict:
 
 
 def _substitute(text: str, project: str, chapter: int | None, key: str | None) -> str:
-    """替换 {project} / {ch} / {ch:03d} / {key} 占位符。v17.5 加 zero-pad 支持。"""
+    """替换 {project} / {ch} / {ch:03d} / {ch+N:03d} / {ch-N:03d} / {key} 占位符。v23 加算术支持。"""
+    import re
     if not isinstance(text, str):
         return text
     out = text.replace("{project}", project or "")
     if chapter is not None:
-        out = out.replace("{ch:03d}", f"{chapter:03d}")  # 优先 zero-pad
+        def _arith(m):
+            op = m.group(1); n = int(m.group(2)); fmt = m.group(3)
+            target = chapter + n if op == '+' else chapter - n
+            return f"{target:03d}" if fmt else str(target)
+        out = re.sub(r"\{ch([+\-])(\d+)(:03d)?\}", _arith, out)
+        out = out.replace("{ch:03d}", f"{chapter:03d}")
         out = out.replace("{ch}", str(chapter))
     else:
+        out = re.sub(r"\{ch[+\-]\d+(:03d)?\}", "", out)
         out = out.replace("{ch:03d}", "")
         out = out.replace("{ch}", "")
     out = out.replace("{key}", key or "")
@@ -429,6 +436,67 @@ def _find_step(plan: dict, n) -> dict:
     raise ValueError(f"[plan_tracker] plan 中没有第 {n} 步")
 
 
+def _verify_agent_report(project: str, agent_name: str, chapter: int | None, cluster_id: str | None) -> bool:
+    """v24 anti-skip: 校验 must_spawn_agent 字段对应的 JudgeReport 文件真实存在。
+
+    按 agent_name 推算 JudgeReport 路径规范：
+    - novel-summarizer → _数据库/.wal/第NNN章_summary.json 或 cluster_<id>_summary.json
+    - novel-foreshadower → _数据库/.judge_reports/ch_NNN_foreshadower.json 或 cluster_<id>_foreshadower.json
+    - novel-reflector → 同上 reflector
+    - novel-reading-reflector → _数据库/.reading_reflection/ch_NNN_round_*.json 或 cluster_<id>_round_*.json
+    - novel-voice-checker → _数据库/.judge_reports/ch_NNN_voice-checker.json
+    - novel-outline-planner → _数据库/.wal/第NNN章_planner_context.md 或 _数据库/.wal/cluster_<id>_emergence.json
+    """
+    project_root = resolve_project_root(project) if project else None
+    if not project_root:
+        return True  # 项目找不到 → 防御性放行
+
+    db = project_root / "_数据库"
+
+    # 路径规范映射
+    candidates = []
+    if chapter is not None:
+        ch_str = f"{chapter:03d}"
+        n_str = str(chapter)
+        if agent_name == "novel-summarizer":
+            candidates += [db / ".wal" / f"第{ch_str}章_summary.json", db / ".wal" / f"第{n_str}章_summary.json"]
+        elif agent_name == "novel-foreshadower":
+            candidates += [db / ".judge_reports" / f"ch_{ch_str}_foreshadower.json"]
+        elif agent_name == "novel-reflector":
+            candidates += [db / ".wal" / f"第{ch_str}章_reflection.json", db / ".wal" / f"第{n_str}章_reflection.json"]
+        elif agent_name == "novel-reading-reflector":
+            # round_N 任意一个存在即可
+            rr_dir = db / ".reading_reflection"
+            if rr_dir.exists():
+                if list(rr_dir.glob(f"ch_{ch_str}_round_*.json")) or list(rr_dir.glob(f"ch{ch_str}_round_*.json")):
+                    return True
+        elif agent_name == "novel-voice-checker":
+            candidates += [db / ".judge_reports" / f"ch_{ch_str}_voice-checker.json"]
+        elif agent_name == "novel-outline-planner":
+            candidates += [db / ".wal" / f"第{ch_str}章_planner_context.md"]
+
+    if cluster_id:
+        # cluster 级 agent JudgeReport
+        cid = cluster_id.replace("cluster_", "") if cluster_id.startswith("cluster_") else cluster_id
+        for cstr in [cluster_id, f"cluster_{cid}"]:
+            if agent_name == "novel-summarizer":
+                candidates += [db / ".wal" / f"{cstr}_summary.json"]
+            elif agent_name == "novel-foreshadower":
+                candidates += [db / ".judge_reports" / f"{cstr}_foreshadower.json"]
+            elif agent_name == "novel-reflector":
+                candidates += [db / ".wal" / f"{cstr}_reflection.json"]
+            elif agent_name == "novel-reading-reflector":
+                rr_dir = db / ".reading_reflection"
+                if rr_dir.exists() and list(rr_dir.glob(f"{cstr}_round_*.json")):
+                    return True
+            elif agent_name == "novel-voice-checker":
+                candidates += [db / ".judge_reports" / f"{cstr}_voice-checker.json"]
+            elif agent_name == "novel-outline-planner":
+                candidates += [db / ".wal" / f"{cstr}_emergence.json"]
+
+    return any(c.exists() for c in candidates)
+
+
 def _verify_outputs(plan: dict, step: dict, project: str | None) -> tuple[list[str], list[str]]:
     """校验 expected_outputs 是否存在。
 
@@ -536,18 +604,36 @@ def end_plan(plan_id: str) -> dict:
 
     missing_steps: list[int] = []
     missing_outputs: list[dict] = []
+    missing_agent_reports: list[dict] = []  # v24 anti-skip：must_spawn_agent 校验
 
     for step in plan.get("steps", []):
         n = step.get("n")
-        if n in required:
-            if step.get("status") != STATUS_COMPLETED:
-                missing_steps.append(n)
-                continue
+        # v24: required + completed optional 都要校验 expected_outputs + must_spawn_agent
+        check_this = (n in required) or (n in optional and step.get("status") == STATUS_COMPLETED)
+        if n in required and step.get("status") != STATUS_COMPLETED:
+            missing_steps.append(n)
+            continue
+        if check_this:
             verified, missing = _verify_outputs(plan, step, plan.get("project"))
             if missing:
                 missing_outputs.append({"step": n, "missing": missing})
+            # v24 新增：must_spawn_agent 字段校验 JudgeReport 真存在
+            must_agents = step.get("must_spawn_agent")
+            if must_agents:
+                if isinstance(must_agents, str):
+                    must_agents = [must_agents]
+                ch = plan.get("chapter")
+                proj = plan.get("project", "")
+                cluster_id = plan.get("key", "") if "cluster_" in str(plan.get("key", "")) else None
+                for agent_name in must_agents:
+                    found = _verify_agent_report(proj, agent_name, ch, cluster_id)
+                    if not found:
+                        missing_agent_reports.append({
+                            "step": n, "agent": agent_name,
+                            "hint": "v24 anti-skip: 该 step 必须 spawn 此 agent 并产 JudgeReport"
+                        })
 
-    ok = (not missing_steps) and (not missing_outputs)
+    ok = (not missing_steps) and (not missing_outputs) and (not missing_agent_reports)
     now = datetime.now().isoformat(timespec="seconds")
     if ok:
         plan["completed_at"] = now
@@ -564,6 +650,7 @@ def end_plan(plan_id: str) -> dict:
         "plan_id": plan_id,
         "missing_steps": missing_steps,
         "missing_outputs": missing_outputs,
+        "missing_agent_reports": missing_agent_reports,  # v24 anti-skip
         "required_steps": sorted(required),
         "optional_steps": sorted(optional),
         "cost_summary": {                       # P2-8：subagent 成本汇总
@@ -755,6 +842,9 @@ def _cli_end(args: argparse.Namespace) -> int:
     if res["missing_outputs"]:
         for mo in res["missing_outputs"]:
             print(f"  第 {mo['step']} 步缺输出：{mo['missing']}", file=sys.stderr)
+    if res.get("missing_agent_reports"):
+        for ar in res["missing_agent_reports"]:
+            print(f"  第 {ar['step']} 步缺 Agent JudgeReport：{ar['agent']} ({ar.get('hint', '')})", file=sys.stderr)
     return 2
 
 

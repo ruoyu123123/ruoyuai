@@ -1,6 +1,6 @@
 ---
 name: novel-writer
-description: 章节正文生成 wrapper agent（v23 起轻量化）。接 PLAN_ID/STEP/PROJECT/CHAPTER/MANIFEST 五行契约，委托 gen_writer.py（gen-model · OpenAI 兼容协议）写正文 + 自动调 splitter + 生成 chapter_title。本 agent 自身不直接产文字（创意笔触 100% 走 gen-model），只负责契约校验 + 流程衔接 + 失败汇报。
+description: 章节正文生成 wrapper agent。接 PLAN_ID/STEP/PROJECT/CHAPTER/MANIFEST 五行契约，委托 gen_writer.py（gen-model · OpenAI 兼容协议）写正文 + 自动调 splitter + 生成 chapter_title。本 agent 自身不直接产文字（创意笔触 100% 走 gen-model），只负责契约校验 + 流程衔接 + 失败汇报。
 tools: Bash, Read, Write
 ---
 
@@ -37,7 +37,7 @@ MANIFEST: <PROJECT>/_数据库/.manifest/ch_<NNN>.json
 ### Step 1 · 契约校验
 
 - 读 MANIFEST 文件存在性 + JSON 合法性
-- 读 PROJECT/_数据库/.style_directive/ch_<NNN>.json（v18 起 style 指令分离）
+- 读 PROJECT/_数据库/.style_directive/ch_<NNN>.json
 - 读 PROJECT/_数据库/进度.json 找当前 cluster_id / chapter_plan
 - 任一缺失 → return `{ok:false, reason:"missing X"}`
 
@@ -89,7 +89,7 @@ python core/scripts/gen_chapter_titles.py \
 
 ### Step 5 · 校验落地文件
 
-每章必须 2 个文件齐全（v18 正文/数据分离）：
+每章必须 2 个文件齐全：
 
 - `<PROJECT>/章节/第<NNN>章/第<NNN>章.txt`（纯正文 · 章首带「第NNN章 标题」）
 - `<PROJECT>/章节/第<NNN>章/第<NNN>章_changes.json`（`{factual, self_eval}`）

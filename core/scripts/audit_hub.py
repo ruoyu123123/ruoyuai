@@ -979,26 +979,100 @@ def _parse_waivers_arg(args: list) -> str:
     return ""
 
 
+def _parse_cluster_arg(args):
+    """v24: 解析 --mode cluster --cluster-id <key> 参数。返回 cluster_key 或 None"""
+    if "--mode" not in args:
+        return None
+    try:
+        mode_idx = args.index("--mode")
+        if args[mode_idx + 1] != "cluster":
+            return None
+        cid_idx = args.index("--cluster-id")
+        return args[cid_idx + 1].replace("cluster_", "")
+    except (ValueError, IndexError):
+        return None
+
+
+def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers: list) -> dict:
+    """v24: cluster 级 audit — 把 cluster_draft.txt 当一个超长章跑现有 scanner 集合，
+    报告聚合所有 scene 的 issue。"""
+    cluster_draft_path = project_root / "章节" / f"cluster_{cluster_key}_draft" / f"cluster_{cluster_key}_draft.txt"
+    cluster_changes_path = project_root / "章节" / f"cluster_{cluster_key}_draft" / f"cluster_{cluster_key}_changes.json"
+    if not cluster_draft_path.exists():
+        return {"_fatal": f"cluster_draft 不存在: {cluster_draft_path}"}
+    # 复用现有 audit_chapter 逻辑，但传 cluster_key 当 chapter 编号占位（虚 ch=9999 + cluster_key）
+    # 简化策略 v1：跑现有 chapter 级 audit 但 body_file 指向 cluster_draft
+    # 这里需要 chapter_io.find_body_file 能找到 cluster_draft —— v1 用复制章节方式兜底
+    import shutil
+    fake_ch = 9000  # cluster 虚拟章号
+    fake_ch_dir = project_root / "章节" / f"第{fake_ch:04d}章"
+    fake_ch_dir.mkdir(parents=True, exist_ok=True)
+    fake_body = fake_ch_dir / f"第{fake_ch:04d}章.txt"
+    fake_changes = fake_ch_dir / f"第{fake_ch:04d}章_changes.json"
+    shutil.copy(cluster_draft_path, fake_body)
+    if cluster_changes_path.exists():
+        shutil.copy(cluster_changes_path, fake_changes)
+    try:
+        report = audit_chapter(project_root, fake_ch, auto_fix, waivers)
+        report["_cluster_mode"] = True
+        report["_cluster_key"] = cluster_key
+        report["_cluster_draft_path"] = str(cluster_draft_path)
+        return report
+    finally:
+        # 清理虚拟章节
+        try:
+            shutil.rmtree(fake_ch_dir)
+        except Exception:
+            pass
+
+
 def main():
     args = sys.argv[1:]
     if len(args) < 2:
-        print("用法: python audit_hub.py <项目路径> <章节号> "
-              "[--auto-fix] [--json] [--waivers <json路径>]",
+        print("用法: python audit_hub.py <项目路径> <章节号> [--auto-fix] [--json] [--waivers <json路径>]"
+              " | python audit_hub.py <项目路径> --mode cluster --cluster-id <key> [--auto-fix] [--waivers ...]",
               file=sys.stderr)
         sys.exit(3)
     project_root = Path(args[0]).resolve()
     if not project_root.is_dir():
         print(f"[FATAL] 项目路径不存在: {project_root}", file=sys.stderr)
         sys.exit(3)
+    auto_fix = "--auto-fix" in args
+    want_json = "--json" in args
+    waivers = _load_waivers(_parse_waivers_arg(args))
+
+    # v24 cluster mode 入口
+    cluster_key = _parse_cluster_arg(args)
+    if cluster_key:
+        report = audit_cluster(project_root, cluster_key, auto_fix, waivers)
+        if "_fatal" in report:
+            print(f"[FATAL] {report['_fatal']}", file=sys.stderr)
+            sys.exit(3)
+        # 写到 cluster 级报告路径
+        report_dir = project_root / "_数据库" / ".audit"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / f"cluster_{cluster_key}_audit.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        _feed_learning_loop(project_root, report_path, quiet=want_json)
+        if want_json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(f"== cluster_{cluster_key} 质检报告 ==")
+            print(f"  verdict: {report.get('verdict', '?')}")
+            print(f"  issues:  {len(report.get('issues', []))}")
+            print(f"  报告: {report_path}")
+        if report.get("verdict") == "needs_agent":
+            sys.exit(2)
+        if report.get("verdict") in ("auto_fixed", "fixable_pending"):
+            sys.exit(1)
+        sys.exit(0)
+
+    # chapter mode (v23 兼容)
     try:
         ch = int(args[1])
     except ValueError:
         print(f"[FATAL] 章节号必须是整数: {args[1]}", file=sys.stderr)
         sys.exit(3)
-    auto_fix = "--auto-fix" in args
-    want_json = "--json" in args
-    # v19：--waivers 指向 _changes.json 或独立 waivers.json，读 self_eval.waivers
-    waivers = _load_waivers(_parse_waivers_arg(args))
 
     report = audit_chapter(project_root, ch, auto_fix, waivers)
     if "_fatal" in report:

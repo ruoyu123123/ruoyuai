@@ -84,6 +84,8 @@ class DatabaseScanner:
         "枢纽场景", "角色行动表", "行动判定模板", "四线脉络",
         # G13 WebNovelBench 8 维评分映射（参考用，不注入 writer）
         "webnovel_bench_mapping",
+        # v23 ECAS 故事块（cluster brief 由 build_manifest._collect_event_cluster_context 注入 manifest）
+        "事件簇",
     }
 
     def __init__(self, project_root: Path, chapter: int):
@@ -892,9 +894,12 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
             if status in ("pending", "in_progress", "writer_done", "splitter_done"):
                 # pending cluster (未指定 chapter_range) 也算（writer 启动时本章 = first ch）
                 if not cr or (len(cr) == 2 and cr[0] <= chapter <= cr[1]):
+                    cluster_id_val = c.get("cluster_id") or ""
+                    is_first_cluster = cluster_id_val.endswith("_001") or cluster_id_val == "cluster_001"
+                    narrative_mode = c.get("narrative_mode") or ("in_medias_res" if is_first_cluster else "linear")
                     return {
                         "mode": "on",
-                        "cluster_id": c.get("cluster_id"),
+                        "cluster_id": cluster_id_val,
                         "parent_me": c.get("parent_me"),
                         "scope_summary": c.get("scope_summary"),
                         "expected_word_range": c.get("expected_word_range"),
@@ -912,6 +917,9 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "hub_locations": c.get("hub_locations") or [],
                         "estimated_chapters": c.get("estimated_chapters", 4),
                         "cluster_position_hint": _infer_cluster_position(chapter, cr) if cr else "head",
+                        "narrative_mode": narrative_mode,
+                        "climax_hint_scene_index": c.get("climax_hint_scene_index"),
+                        "_narrative_mode_doc": "in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；linear = 时间序",
                         "_writer_hint": "MODE=ecas: 用此 brief 生成 8K-16K 字 cluster_draft，每 3000 字 self-audit，每场景生成 100 字 sub-summary"
                     }
         return {"mode": "off", "_note": f"无匹配 cluster (本章 {chapter} 不在任何 active cluster 范围)"}

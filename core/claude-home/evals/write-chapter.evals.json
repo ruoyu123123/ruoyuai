@@ -19,7 +19,7 @@
       "expected_trace": [
         "plan_tracker create write-chapter --chapter 5",
         "Step 1 load_brief：读 manifest + 走向卡 + 风格 SKILL",
-        "Step 2 spawn_agent：spawn novel-writer agent（必须含 PLAN_ID + STEP + PROJECT + CHAPTER + MANIFEST + PUA 字段，hook 规则 5+7 校验）",
+        "Step 2 spawn_agent：spawn novel-writer agent（必须含 PLAN_ID + STEP + PROJECT + CHAPTER + MANIFEST，hook 规则 5 校验）",
         "Step 3 save_txt：writer 产出 第005章.txt + 第005章_changes.json",
         "Step 4 trigger_save_state：自动唤起 save-state 流水线（见 save-state.evals.json）",
         "Step 5 end_plan（含 cost_summary 记录 writer agent token + duration，P2-8）"

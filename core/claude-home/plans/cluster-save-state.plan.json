@@ -1,0 +1,145 @@
+{
+  "command": "cluster-save-state",
+  "version": 1,
+  "description": "cluster 级状态保存 12 步流水线 · 替代 chapter-level save-state · 1 个 cluster = 1 次完整流水线（数据库一次性应用 cluster_changes）",
+  "total_steps": 12,
+  "required_steps": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  "optional_steps": [],
+  "_doc_v24": "状态同步单位 cluster 级。章节只是输出层，cluster 才是数据库更新单位。所有 agent (summarizer/foreshadower/reflector/reading-reflector/voice-checker/outline-planner) 走 cluster mode。git commit per cluster (不再 per chapter)",
+  "steps": [
+    {
+      "n": 1,
+      "name": "wal-start+schema-validate",
+      "description": "开启 cluster 级 WAL + db_schema_validate.py --auto-migrate（34 JSON schema 自检）",
+      "required": true,
+      "skip_output_allowed": false,
+      "expected_outputs": ["_数据库/.wal/cluster_{key}_save_state.json"],
+      "scripts": [
+        "python core/scripts/db_schema_validate.py {project_root} --auto-migrate"
+      ]
+    },
+    {
+      "n": 2,
+      "name": "parse-cluster-changes",
+      "description": "读 章节/cluster_{key}_draft/cluster_changes.json 的 factual/self_eval 段（cluster 级单文件，不读 per-chapter _changes）",
+      "required": true,
+      "skip_output_allowed": false,
+      "expected_outputs": ["_数据库/.wal/cluster_{key}_parsed.json"]
+    },
+    {
+      "n": 3,
+      "name": "apply-cluster-changes+writer-truth-check",
+      "description": "一次性应用 cluster_changes.json 的 factual 段到 13 JSON（人物卡/伏笔表/世界状态/时间线/道具/章纲摘要等）+ 调 writer_truth_check.py 检测撒谎",
+      "required": true,
+      "skip_output_allowed": true,
+      "expected_outputs": [],
+      "scripts": [
+        "python core/scripts/save_state.py {project_root} --apply-cluster-changes {key}"
+      ]
+    },
+    {
+      "n": 4,
+      "name": "validate-cluster",
+      "description": "validate_chapter.py 对整 cluster 跑（所有切出来的章 + cluster 级 hard_gate 校验）",
+      "required": true,
+      "skip_output_allowed": true,
+      "expected_outputs": []
+    },
+    {
+      "n": 5,
+      "name": "novel-summarizer-cluster",
+      "description": "spawn novel-summarizer MODE=cluster · 生成 cluster 级摘要（不是单章摘要 · 单章摘要由 splitter 切完后从 cluster 摘要派生）",
+      "required": true,
+      "must_spawn_agent": "novel-summarizer",
+      "skip_output_allowed": false,
+      "expected_outputs": ["_数据库/.wal/cluster_{key}_summary.json"]
+    },
+    {
+      "n": 6,
+      "name": "novel-foreshadower-cluster",
+      "description": "spawn novel-foreshadower MODE=cluster · 评估整 cluster 伏笔 plant + 回收 + 健康度",
+      "required": true,
+      "must_spawn_agent": "novel-foreshadower",
+      "skip_output_allowed": true,
+      "expected_outputs": [],
+      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_foreshadower.json"
+    },
+    {
+      "n": 7,
+      "name": "novel-reflector-cluster",
+      "description": "spawn novel-reflector MODE=cluster · 提取整 cluster 写作经验（success/failure 模式）",
+      "required": true,
+      "must_spawn_agent": "novel-reflector",
+      "skip_output_allowed": true,
+      "expected_outputs": [],
+      "_doc_v24": "JudgeReport 路径 _数据库/.wal/cluster_{key}_reflection.json"
+    },
+    {
+      "n": 8,
+      "name": "wal-merge+learning-loop+judge-reports-archive",
+      "description": "合并 cluster 级 WAL + learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ 把本 cluster 所有 JudgeReport 存入 章纲摘要[ch_range].judge_reports[]",
+      "required": true,
+      "skip_output_allowed": true,
+      "expected_outputs": [],
+      "scripts": [
+        "python core/scripts/save_state.py {project_root} --auto-post-reflect-cluster {key}",
+        "python core/scripts/judge_reports_archive.py {project_root} --cluster {key} || true"
+      ]
+    },
+    {
+      "n": 9,
+      "name": "cluster-scan+state+drift+evolution",
+      "description": "cluster 级跨章扫描 + 数据库更新 + evaluator + 演化（用 3 个 wrapper 收口，避免堆叠几十行单独调用）",
+      "required": true,
+      "skip_output_allowed": true,
+      "expected_outputs": [],
+      "scripts": [
+        "python core/scripts/save_state_updates.py {project_root} --cluster {key} --all",
+        "python core/scripts/save_state_evaluators.py {project_root} --cluster {key} --all",
+        "python core/scripts/run_cross_chapter_scans.py {project_root} --cluster {key} --tier full_18",
+        "python core/scripts/style_drift_scan.py {project_root} --last-n 10",
+        "python core/scripts/character_index.py {project_root} --write",
+        "python core/scripts/learning_loop.py {project_root} --scan-recurring",
+        "python core/scripts/world_evolution_apply_chapter.py {project_root} --cluster {key}",
+        "python core/scripts/skill_evolver.py {project_root} evolve --cluster {key} || true",
+        "python core/scripts/skill_evolver.py {project_root} promote || true",
+        "python core/scripts/evolution_orchestrator.py {project_root} --cluster {key} || true",
+        "python core/scripts/maybe_judge_consensus.py {project_root} --cluster {key}",
+        "python core/scripts/audit_dashboard.py {project_root}",
+        "python core/scripts/scan_retention.py {project_root} --keep 5"
+      ]
+    },
+    {
+      "n": 10,
+      "name": "git-commit-cluster",
+      "description": "1 cluster 1 commit · commit msg: feat(cluster-NNN): N 章 (chX-chY)",
+      "required": true,
+      "skip_output_allowed": true,
+      "expected_outputs": [],
+      "scripts": [
+        "python core/scripts/save_state.py {project_root} --git-commit-cluster {key}"
+      ]
+    },
+    {
+      "n": 11,
+      "name": "cluster-emergence+report-and-card",
+      "description": "改 E: 跑 cluster_emergence_engine.py emerge --after-cluster {key} → 生成下一 cluster 2-3 个 candidate brief → spawn novel-outline-planner MODE=cluster_emergence 详化 candidates → 输出报告 + 等用户选 1 个 candidate",
+      "required": true,
+      "must_spawn_agent": "novel-outline-planner",
+      "skip_output_allowed": false,
+      "expected_outputs": ["_数据库/.wal/cluster_{next_key}_emergence.json"],
+      "scripts": [
+        "python core/scripts/cluster_emergence_engine.py {project_root} emerge --after-cluster {key}",
+        "# 主代理 spawn novel-outline-planner MODE=cluster_emergence (input EMERGENCE_CONTEXT_PATH)"
+      ]
+    },
+    {
+      "n": 12,
+      "name": "wal-end",
+      "description": "关闭 cluster WAL + plan 最终校验",
+      "required": true,
+      "skip_output_allowed": true,
+      "expected_outputs": []
+    }
+  ]
+}

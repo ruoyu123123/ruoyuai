@@ -175,7 +175,7 @@ cat .claude/settings.json
 
 ### Q4：报「写产出到 `.claude/`」错误？
 
-本项目 v6.2.4 起，用户产出（蒸馏数据 / 小说）统一走 `workspace/`：
+用户产出（蒸馏数据 / 小说）统一走 `workspace/`：
 - 风格库：`workspace/styles/{书名}/`
 - 小说项目：`workspace/novels/{书名}/`
 

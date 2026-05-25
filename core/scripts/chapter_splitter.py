@@ -166,11 +166,22 @@ def main():
     target = 3000
     tolerance = 500
     dry_run = "--dry-run" in args
+    # v24 黄金三章倒叙模式参数
+    narrative_mode = "linear"
     for i, a in enumerate(args):
         if a == "--target" and i + 1 < len(args):
             target = int(args[i + 1])
         if a == "--tolerance" and i + 1 < len(args):
             tolerance = int(args[i + 1])
+        if a == "--narrative-mode" and i + 1 < len(args):
+            narrative_mode = args[i + 1]  # linear | in_medias_res
+
+    # v24 黄金三章倒叙模式说明（实际重组在 novel-chapter-splitter agent ECAS 模式实现，
+    # 本 DCAS 脚本仅暴露参数接口，DCAS 双章模式不做倒叙重组）
+    if narrative_mode == "in_medias_res":
+        print(f"[INFO] narrative_mode=in_medias_res 已识别 ·"
+              f" DCAS 双章模式不实现倒叙重组，建议改用 ECAS 模式 + novel-chapter-splitter agent",
+              file=sys.stderr)
 
     # 找草稿正文文件（v18：cio 兼容 4 布局 + 旧平铺）
     draft_path = cio.find_body_file(project_root, ch)

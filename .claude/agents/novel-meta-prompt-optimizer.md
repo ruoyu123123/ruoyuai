@@ -1,6 +1,6 @@
 ---
 name: novel-meta-prompt-optimizer
-description: Meta-prompt 优化专精 agent（v22 SE3）— OpenAI Self-Evolving Cookbook 风格。每 N 章扫 judge_reports + 失败 patterns，输出 writer/outline-planner prompt 改进建议。不直接改 prompt，只给可执行建议供用户审阅。
+description: Meta-prompt 优化专精 agent— OpenAI Self-Evolving Cookbook 风格。每 N 章扫 judge_reports + 失败 patterns，输出 writer/outline-planner prompt 改进建议。不直接改 prompt，只给可执行建议供用户审阅。
 tools: Read, Write, Glob, Grep
 ---
 

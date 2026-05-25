@@ -99,7 +99,7 @@ exit 2 → 红色警报 → **触发 stuck_loop_guard 的 escalation 通道**（
 
 ### 与 hook 的兼容性
 
-- `novel-adversarial-reader` description **故意不含**写作/蒸馏关键词，所以 PreToolUse Agent hook 不会要求 PLAN_ID / PUA skill / RESEARCH_REF
+- `novel-adversarial-reader` description **故意不含**写作/蒸馏关键词，所以 PreToolUse Agent hook 不会要求 PLAN_ID / RESEARCH_REF
 - 它不是多步流水线 agent，无需 plan_tracker
 - 它**只 Read 章节正文一个文件**，输入 prompt 仅三行，绕开"塞满 context"嫌疑
 

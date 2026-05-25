@@ -21,8 +21,6 @@ PROJECT: <项目名>
 CHAPTER: lessons-extraction
 MODE: lessons-self-learning
 
-开工前用 Skill 工具加载 pua skill。
-
 任务：从本次蒸馏的项目日志中提取跨项目通用教训，追加到全局经验库。
 
 **输入文件**：
@@ -86,7 +84,7 @@ MODE: lessons-self-learning
 - ✅ 模糊化数值（如 "200 章" → "大批量章节"）
 - ✅ 保留可执行的修复方法（具体到 prompt 文本 / 命令）
 
-完成报告：「✅ Lessons 提取完成 → 新增 N / 补充 M / 跳过 K」+ 关键发现。失败 [PUA-REPORT]。
+完成报告：「✅ Lessons 提取完成 → 新增 N / 补充 M / 跳过 K」+ 关键发现。
 ```
 
 ## 触发条件

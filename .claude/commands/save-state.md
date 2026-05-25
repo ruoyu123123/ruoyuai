@@ -91,9 +91,9 @@ STEP: <对应步骤号>
 ```
 save_state.py --wal-start        （WAL 开启）
      ↓
-save_state.py --parse            （v18：读 第NNN章_changes.json 的 factual 段；旧稿走分隔符兜底）
+save_state.py --parse            
      ↓ 失败则用 AI agent 兜底
-save_state.py --apply-changes    （落地 CHANGES 到 13 个 JSON · 机械）
+save_state.py --apply-changes    （落地 CHANGES 到 34 子系统 JSON · 机械）
      ↓
 validate_chapter.py              （一致性校验 · hard_gate 复核）
      ↓
@@ -125,9 +125,9 @@ novel-outline-planner agent      （下一章走向卡片）
 - 模板中所有 `<...>` 占位符必须替换为真实值
 - Hook 会拦截不合规调用
 
-## v19 顾问制（save-state 环节的衔接）
+## 顾问制（save-state 环节的衔接）
 
-v19 把检测体系改成「顾问制」：检测工具输出「待裁决项」而非判决，AI 对 `advisory` 项有充分理由可豁免，`hard_gate` 项（E 层一致性 + 文件契约破损）不可豁免。完整说明见 `core/claude-home/STRUCTURE.md` 第十一节「v19 检测体系顾问制 + hard_gate 不可豁免清单」。
+把检测体系改成「顾问制」：检测工具输出「待裁决项」而非判决，AI 对 `advisory` 项有充分理由可豁免，`hard_gate` 项（E 层一致性 + 文件契约破损）不可豁免。完整说明见 `core/claude-home/STRUCTURE.md` 第十一节「检测体系顾问制 + hard_gate 不可豁免清单」。
 
 save-state 是写后流水线，顾问制对它的衔接有两处：
 
@@ -153,22 +153,22 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 \
 
 ---
 
-# 第 2 步：解析 CHANGES（v18 正文/数据分离）
+# 第 2 步：解析 CHANGES
 
 ```bash
 python core/scripts/save_state.py "<项目路径>" --parse <N>
 ```
 
-**v18 变更**：章节正文和 CHANGES 已是两个物理文件——CHANGES 由 `novel-writer` 直接写成结构化 `章节/第<NNN>章/第<NNN>章_changes.json`（顶层 `{factual, self_eval}`）。`--parse` 通过 `core/scripts/chapter_io.py` 的 `read_changes()` 读取，**策略 1/2 退化为旧稿兼容路径**：
+**变更**：章节正文和 CHANGES 已是两个物理文件——CHANGES 由 `novel-writer` 直接写成结构化 `章节/第<NNN>章/第<NNN>章_changes.json`（顶层 `{factual, self_eval}`）。`--parse` 通过 `core/scripts/chapter_io.py` 的 `read_changes()` 读取，**策略 1/2 退化为旧稿兼容路径**：
 
-- **v18 主路径**：`_changes.json` 存在 → `read_changes()` 直接读 `factual` 段（已是合法 JSON，无需修复）。9 类字段名由 writer 契约保证一致。
+- **主路径**：`_changes.json` 存在 → `read_changes()` 直接读 `factual` 段（已是合法 JSON，无需修复）。9 类字段名由 writer 契约保证一致。
 - **策略 1（旧稿严格解析）**：`_changes.json` 不存在但章节 txt 是旧的混合格式 → `read_changes()` 从 txt 的 `---CHANGES_FACTUAL---` / `---CHANGES---` 到 `---END---` 之间解析 JSON。
 - **策略 2（旧稿宽松修复）**：旧混合 txt 解析失败时尝试修复尾逗号 `,}`、单引号、字段名模糊匹配。
 
-> 建议：旧项目先跑 `python core/scripts/chapter_io.py migrate "<项目路径>" <N>` 把旧混合 txt 一次性拆成 txt + `_changes.json`，之后 `--parse` 走 v18 主路径。
+> 建议：旧项目先跑 `python core/scripts/chapter_io.py migrate "<项目路径>" <N>` 把旧混合 txt 一次性拆成 txt + `_changes.json`，之后 `--parse` 走 主路径。
 
 exit 结果：
-- exit 0（v18 主路径 / 旧稿策略 1 或 2 成功）→ 继续
+- exit 0→ 继续
 - exit 1（`_changes.json` 缺失且旧稿策略 1-2 都失败）→ **启动 Agent 兜底**：
   ```
   用 general-purpose agent，prompt:
@@ -209,13 +209,13 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3
 
 ---
 
-# 第 4 步：一致性校验（v19：hard_gate 复核）
+# 第 4 步：一致性校验
 
 ```bash
 python core/scripts/validate_chapter.py "<项目路径>" <N>
 ```
 
-`validate_chapter` 产出的问题以 **hard_gate 项为主**（E 层一致性 + 文件契约：`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` 等，完整清单见 STRUCTURE.md 第十一节）。这些是**客观错误，不可豁免**——v19 顾问制对它们不适用。
+`validate_chapter` 产出的问题以 **hard_gate 项为主**（E 层一致性 + 文件契约：`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` 等，完整清单见 STRUCTURE.md 第十一节）。这些是**客观错误，不可豁免**——顾问制对它们不适用。
 
 - exit 0 → 继续
 - exit 1/2 → 命中 hard_gate 类错误，说明 write-chapter 阶段没修干净（不该在 save-state 时才发现），停止并报告。**不要在这里靠豁免放行**——hard_gate 不可豁免。
@@ -262,7 +262,7 @@ import chapter_io
 root = Path('<项目路径>')
 ch = <N>
 
-# 读取章节正文（v18：走 chapter_io 统一读取，自动剥离旧混合 txt 的 CHANGES 段）
+# 读取章节正文
 try:
     body = chapter_io.read_body(str(root), ch)
 except FileNotFoundError:
@@ -426,7 +426,7 @@ python core/scripts/style_drift_tracker.py "<项目路径>" --window 5
 # exit 1 → WARN（漂移但在容忍范围内，记录到报告）
 # exit 2 → 严重漂移，建议用 /distill-style --micro-refine 重新校准
 
-# v18 新增：跨章复发问题扫描（learning_loop 自学习闭环）
+# 新增：跨章复发问题扫描（learning_loop 自学习闭环）
 python core/scripts/learning_loop.py "<项目路径>" --scan-recurring
 # 扫最近若干章的 audit 报告，把反复出现的同类问题升级为高 confidence failure_pattern
 # exit 0 → 正常 / exit 1 → 检测到复发问题已升级约束（不阻塞，记入报告）

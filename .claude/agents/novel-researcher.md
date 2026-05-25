@@ -192,4 +192,4 @@ Step 1 的 3-7 个广查询是「广度」；本步是「深度」——基于 S
 - Story Bible 最佳实践：知识储备应来自真实历史/设定，不靠模型瞎编
 - arxiv 2503.23512 SCORE 框架对应组件：knowledge retrieval（外部数据源融合）
 
-PUA 提醒：你不是 Wikipedia——不要把维基百科搬过来。**只挑对当前 TASK 直接有用的 5-10 条 findings**。多了不如少而精。
+**核心纪律**：你不是 Wikipedia——不要把维基百科搬过来。**只挑对当前 TASK 直接有用的 5-10 条 findings**。多了不如少而精。

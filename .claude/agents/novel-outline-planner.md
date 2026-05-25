@@ -89,6 +89,9 @@ estimated_chapters = clamp(estimated_chapters, 2, 20)
   "hub_locations": ["HUB_001"],
   "estimated_chapters": 4,
   "status": "pending",
+  "narrative_mode": "in_medias_res",
+  "climax_hint_scene_index": 2,
+  "_narrative_mode_rule": "首个 cluster（cluster_001）默认 'in_medias_res'（黄金三章倒叙 · 强冲突放最前）；后续 cluster 默认 'linear'。climax_hint_scene_index 指向 scene_storyboard 中冲突最强的场景索引（0-based），splitter 据此重组",
   "_v22_arc_alignment": {
     "_doc": "ARC_TEMPLATE_DIR 启用时必填 —— cluster 与作者 arc 模板的对齐",
     "arc_template_ref": "workspace/styles/<风格名>/arc_templates/arc_<NNN>.json",
@@ -110,6 +113,19 @@ estimated_chapters = clamp(estimated_chapters, 2, 20)
   }
 }
 ```
+
+### Narrative Mode 默认规则（黄金三章倒叙）
+
+用户要求「黄金三章需要调整叙事顺序，故事块正常生成即可，应该以强冲突部分放在最前面，按倒叙方式来吸引读者」 → 首个 cluster **默认** 走 in_medias_res：
+
+| cluster | 默认 narrative_mode | climax_hint_scene_index |
+|---|---|---|
+| `cluster_001`（首簇 · 黄金三章所在） | **`"in_medias_res"`** | 指向 scene_storyboard 中冲突最强的场景索引（0-based） |
+| `cluster_002+`（后续） | `"linear"` | `null` |
+
+**禁止跳字段**：cluster brief 必带 `narrative_mode` + `climax_hint_scene_index` 两字段。前者写错 / 缺失 = brief 无效。
+
+**例外**：用户明示「线性叙事 / 严肃文学风格 / 倒叙不适合本书题材」 → cluster_001 可显式改 `"linear"`。
 
 ### Cluster 字数预算硬约束 - 防 brief 字数放大
 
@@ -158,7 +174,7 @@ else:
 
 ---
 
-**v21 CD1 — PLANNER_CONTEXT**：主代理在 spawn 本 agent 前必先调 `character_context_pack.py {project} {next_ch}` 生成上下文。该 md 已浓缩 9 项角色剧情数据（弧光/stress/aspects/heart_events/fate_events/clocks/storyteller/throughlines/propp）。
+**CD1 — PLANNER_CONTEXT**：主代理在 spawn 本 agent 前必先调 `character_context_pack.py {project} {next_ch}` 生成上下文。该 md 已浓缩 9 项角色剧情数据（弧光/stress/aspects/heart_events/fate_events/clocks/storyteller/throughlines/propp）。
 
 如缺该字段：
 - 警告但不中止 — 降级回老 P1 流程（自己 Read 12 个文件）
@@ -184,7 +200,7 @@ else:
 
 ### 正常流程
 
-**P-1 用户偏好（v21 UX4 必跑·最高优先级）**：
+**P-1 用户偏好**：
 
 0. **Read** `_数据库/用户偏好.json` 取 `narrative_pacing` / `interactive_mode` / `quality_control`
    - `narrative_pacing.storyteller_profile` 决定 cards 倾向（cassandra→均衡 / phoebe→偏 win / randy→可激进）
@@ -243,7 +259,7 @@ else:
 
    **理论依据**：业界 SOTA 2024-2025（LumberChunker EMNLP 2024 / MARCUS 2025 / TV Arcs 2025）全面采用可变长度故事块颗粒度——实测比固定 N 章 +7.37% DCG@20。详见 `.research_cache/inspiration_cluster_distill_2026-05-24.md`。
 
-**v21 CD1 优先**：如 prompt 含 `PLANNER_CONTEXT`，**优先 Read 该 md** — 已包含下面 P1 段全部信息。读完 PLANNER_CONTEXT 后可跳过 P1 step 7-14（除非需要原始 json）。**v22 STYLE_LIB / ARC_TEMPLATE_DIR 不在 PLANNER_CONTEXT 浓缩范围内 · 必须单独读。**
+**CD1 优先**：如 prompt 含 `PLANNER_CONTEXT`，**优先 Read 该 md** — 已包含下面 P1 段全部信息。读完 PLANNER_CONTEXT 后可跳过 P1 step 7-14（除非需要原始 json）。**STYLE_LIB / ARC_TEMPLATE_DIR 不在 PLANNER_CONTEXT 浓缩范围内 · 必须单独读。**
 
 **P1 角色剧情驱动读（fallback：PLANNER_CONTEXT 缺失时手动跑）**：
 
@@ -357,7 +373,7 @@ else:
 
 **禁止**：凭空创造新设定、新人物、新地点（除非大纲已经规划）
 
-### 角色剧情驱动卡片设计（v21 核心）
+### 角色剧情驱动卡片设计
 
 **N 张卡的角色驱动覆盖矩阵**：
 

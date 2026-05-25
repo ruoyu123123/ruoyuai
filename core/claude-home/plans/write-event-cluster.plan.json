@@ -1,7 +1,7 @@
 {
   "command": "write-event-cluster",
   "version": 1,
-  "description": "v23 ECAS 写单个事件簇完整流水线 (替代 write-chapter)。1 个 cluster = 1 个 ME 大势事件 = 8K-16K 字 → splitter 切 N 章 → 每章独立 audit + voice-keeper → cluster 级 cross-chapter scan + save-state per chapter.",
+  "description": "ECAS 写单个事件簇完整流水线 (替代 write-chapter)。1 个 cluster = 1 个 ME 大势事件 = 8K-16K 字 → splitter 切 N 章 → 每章独立 audit + voice-keeper → cluster 级 cross-chapter scan + save-state per chapter.",
   "total_steps": 16,
   "required_steps": [
     1,
@@ -22,12 +22,12 @@
     16
   ],
   "optional_steps": [],
-  "_decisions_inherited": "见 ecas-v23-transition.plan.json._decisions",
+  "_decisions_inherited": "见 ecas--transition.plan.json._decisions",
   "steps": [
     {
       "n": 1,
       "name": "research-first",
-      "description": "v17.7 调研先行 + v23 ECAS 硬约束: spawn novel-researcher 调研本 cluster 主题 (TASK_TYPE=outline + SCOPE 按 cluster parent_me 类型选)。输出 .research_cache/cluster_<id>_<topic>_<时间>.md，所有 anchor 必须 ≥1 source URL。后续 step 2 outline-planner / step 3 writer 必须 RESEARCH_REF 字段引用此 cache。",
+      "description": ".7 调研先行 + ECAS 硬约束: spawn novel-researcher 调研本 cluster 主题 (TASK_TYPE=outline + SCOPE 按 cluster parent_me 类型选)。输出 .research_cache/cluster_<id>_<topic>_<时间>.md，所有 anchor 必须 ≥1 source URL。后续 step 2 outline-planner / step 3 writer 必须 RESEARCH_REF 字段引用此 cache。",
       "required": true,
       "expected_outputs": [
         "_数据库/.research_cache/cluster_<id>_*.md"
@@ -92,7 +92,7 @@
     {
       "n": 6,
       "name": "spawn-splitter-multi-chapter",
-      "description": "spawn novel-chapter-splitter MODE=ecas_multi_chapter + cluster_id + TARGET_CHAPTERS=cluster.estimated_chapters。按 v22.6 三机制 + N 章联合优化",
+      "description": "spawn novel-chapter-splitter MODE=ecas_multi_chapter + cluster_id + TARGET_CHAPTERS=cluster.estimated_chapters。按 .6 三机制 + N 章联合优化",
       "required": true,
       "expected_outputs": [
         "章节/第NNN章/第NNN章.txt (N 个)"

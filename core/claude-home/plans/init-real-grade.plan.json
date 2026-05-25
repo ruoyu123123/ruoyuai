@@ -1,7 +1,7 @@
 {
   "command": "init-real-grade",
   "version": 1,
-  "description": "新书项目真品级初始化流水线（禁用最小可用）。覆盖：9 v22 schema + 13 标准 JSON + 调研 + ch1 完整 spawn 链 + audit 全过 + save-state 全跑。每步必有验证产物，audit 不通过=未完成。",
+  "description": "新书项目真品级初始化流水线（禁用最小可用）。覆盖：9 schema + 13 标准 JSON + 调研 + ch1 完整 spawn 链 + audit 全过 + save-state 全跑。每步必有验证产物，audit 不通过=未完成。",
   "total_steps": 11,
   "required_steps": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
   "optional_steps": [],
@@ -17,8 +17,8 @@
     },
     {
       "n": 2,
-      "name": "v22-schemas-real-grade",
-      "description": "9 个 v22 schema 全填真品级（按 起点设定.md + CLAUDE.md 重写）：character_arc_McKee_Truby / 大势卡 / 主角压力档 / 时钟表 / 涟漪规则 / 群像档 / 枢纽场景 / 事件池 / 角色行动表",
+      "name": "-schemas-real-grade",
+      "description": "9 个 schema 全填真品级（按 起点设定.md + CLAUDE.md 重写）：character_arc_McKee_Truby / 大势卡 / 主角压力档 / 时钟表 / 涟漪规则 / 群像档 / 枢纽场景 / 事件池 / 角色行动表",
       "required": true,
       "expected_outputs": [
         "_数据库/character_arc_state.json",
@@ -80,7 +80,7 @@
     {
       "n": 4,
       "name": "research-first",
-      "description": "调研先行（v17.7 强制）：spawn novel-researcher 调研'都市克苏鲁同题材热门 / 异常局类爆款节奏 / 多身体类金手指设定借鉴 / 诡秘开篇借鉴'",
+      "description": "调研先行：spawn novel-researcher 调研'都市克苏鲁同题材热门 / 异常局类爆款节奏 / 多身体类金手指设定借鉴 / 诡秘开篇借鉴'",
       "required": true,
       "expected_outputs": ["_数据库/.research_cache/inspiration_<topic>_<时间>.md"],
       "verification": "调研报告含 ≥4 sources + Synthesis 段含 Top-N 借鉴点",

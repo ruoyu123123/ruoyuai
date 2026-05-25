@@ -1,0 +1,94 @@
+{
+  "command": "cluster-write",
+  "version": 1,
+  "description": "cluster 级写作流水线 7 步 · 替代 write-chapter · 所有改进分析在 cluster 级完成，splitter 在最后一步（章节只是输出）",
+  "total_steps": 7,
+  "required_steps": [1, 2, 3, 4, 5, 6, 7],
+  "optional_steps": [],
+  "_doc_v24": "流水线倒置：cluster_draft → cluster 级所有改进 → 全 clean 后才 splitter → gen_chapter_titles → per-chapter changes 拆分。审查 agent 全 cluster mode。1 个 cluster = 1 次 cluster-write plan",
+  "steps": [
+    {
+      "n": 1,
+      "name": "build-manifest+style-directive",
+      "description": "build_manifest.py 生成 cluster 起首章 manifest（注入 cluster brief + 全 25+ 子系统状态）+ style_injector 注入风格指令",
+      "required": true,
+      "skip_output_allowed": false,
+      "expected_outputs": [
+        "_数据库/.manifest/ch_{ch:03d}.json",
+        "_数据库/.style_directive/ch_{ch:03d}.json"
+      ]
+    },
+    {
+      "n": 2,
+      "name": "novel-writer-ecas-only",
+      "description": "spawn novel-writer MODE=ecas · writer 只产 cluster_draft.txt + cluster_changes.json · **禁止调 splitter**（splitter 推迟到 step 6）",
+      "required": true,
+      "must_spawn_agent": "novel-writer",
+      "skip_output_allowed": false,
+      "expected_outputs": [
+        "章节/cluster_{key}_draft/cluster_{key}_draft.txt",
+        "章节/cluster_{key}_draft/cluster_{key}_changes.json"
+      ]
+    },
+    {
+      "n": 3,
+      "name": "cluster-quality-dual-track",
+      "description": "cluster 级双轨质检 · 机械轨：audit_hub.py --mode cluster --cluster-id {key}（对整 cluster_draft.txt 跑，含跨 scene 的伏笔/anchor/voice 完整性校验）· 阅读轨：spawn novel-reading-reflector MODE=ecas ROUND=1 → fix → ROUND=2 → ... 连续 3 轮 0 issue 才放行（SRE 风格健康检查）",
+      "required": true,
+      "must_spawn_agent": "novel-reading-reflector",
+      "skip_output_allowed": false,
+      "expected_outputs": [
+        "_数据库/.audit/cluster_{key}_audit.json",
+        "_数据库/.reading_reflection/.placeholder"
+      ],
+      "scripts": [
+        "python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id {key} --auto-fix --waivers '{project_root}/章节/cluster_{key}_draft/cluster_{key}_changes.json'"
+      ]
+    },
+    {
+      "n": 4,
+      "name": "cluster-voice-keeper",
+      "description": "spawn novel-voice-checker MODE=cluster · 整 cluster 对话声纹审查（所有角色 voice_pack 校验 + 跨场景 voice 漂移检测）",
+      "required": true,
+      "must_spawn_agent": "novel-voice-checker",
+      "skip_output_allowed": true,
+      "expected_outputs": [],
+      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_voice-checker.json"
+    },
+    {
+      "n": 5,
+      "name": "cluster-foreshadower+reflector+summarizer",
+      "description": "cluster 级三 agent 串行：foreshadower（整 cluster 伏笔评估）+ reflector（整 cluster 经验提取）+ summarizer（cluster 级摘要）",
+      "required": true,
+      "must_spawn_agent": ["novel-foreshadower", "novel-reflector", "novel-summarizer"],
+      "skip_output_allowed": true,
+      "expected_outputs": [
+        "_数据库/.wal/cluster_{key}_summary.json"
+      ]
+    },
+    {
+      "n": 6,
+      "name": "splitter+chapter-titles+per-chapter-changes",
+      "description": "最后一步切章 · spawn novel-chapter-splitter MODE=ecas_multi_chapter（cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ gen_chapter_titles.py --chapters <range>（normal/mid/high 三档）→ split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json（按 splitter decisions WAL 切点拆分 factual/self_eval）",
+      "required": true,
+      "must_spawn_agent": "novel-chapter-splitter",
+      "skip_output_allowed": false,
+      "expected_outputs": [
+        "_数据库/.wal/splitter_cluster_{key}_decisions.json"
+      ],
+      "scripts": [
+        "# spawn novel-chapter-splitter MODE=ecas_multi_chapter CLUSTER_ID={key}",
+        "python core/scripts/gen_chapter_titles.py --project {project_root} --chapters <range_from_splitter_wal>",
+        "python core/scripts/split_cluster_changes.py {project_root} --cluster {key}"
+      ]
+    },
+    {
+      "n": 7,
+      "name": "plan-end",
+      "description": "报告 cluster_write 完成 + plan 最终校验 + 准备进入 cluster-save-state",
+      "required": true,
+      "skip_output_allowed": true,
+      "expected_outputs": []
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "command": "distill-style",
   "version": 2,
-  "description": "作者风格闭环蒸馏 v22.cluster · 6 阶段（含阶段 0 预处理 + cluster 主轨 + 副轨 fixed10）",
+  "description": "作者风格闭环蒸馏 .cluster · 6 阶段（含阶段 0 预处理 + cluster 主轨 + 副轨 fixed10）",
   "total_steps": 7,
   "required_steps": [1, 2, 3, 4, 5, 6, 7],
   "optional_steps": [],
@@ -9,14 +9,14 @@
     {
       "n": 1,
       "name": "phase-0-preprocess",
-      "description": "阶段 0 预处理：读 distill-style-lessons + 必读 cluster_index.json (v22.cluster) + 章数检测 + 分批方案（300 章上限）。若 cluster_index 不存在 → 跑 cluster_segmenter.py",
+      "description": "阶段 0 预处理：读 distill-style-lessons + 必读 cluster_index.json (.cluster) + 章数检测 + 分批方案（300 章上限）。若 cluster_index 不存在 → 跑 cluster_segmenter.py",
       "required": true,
       "expected_outputs": []
     },
     {
       "n": 2,
       "name": "phase-1-surface-distill",
-      "description": "阶段 1 表层蒸馏 (v22.cluster 主轨)：FOR cluster in cluster_index.clusters → 单章 JSON × N + cluster 衔接 JSON × 1 + style_analyzer metrics + arc_aggregator 增量聚合",
+      "description": "阶段 1 表层蒸馏 (.cluster 主轨)：FOR cluster in cluster_index.clusters → 单章 JSON × N + cluster 衔接 JSON × 1 + style_analyzer metrics + arc_aggregator 增量聚合",
       "required": true,
       "expected_outputs": ["蒸馏进度", "衔接分析"]
     },

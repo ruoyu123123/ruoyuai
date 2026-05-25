@@ -8,12 +8,12 @@ description: Anti-Slop 机械扫描规则库（正则级别AI腔调检测）
 
 ---
 
-## 🔗 与语义层的分工（v19 · 必读）
+## 🔗 与语义层的分工
 
 Anti-Slop 是**机械层**——正则抓「词」和「字频」，零 LLM 成本，快、准、噪音低。
 但句级 / 段级的「语义型 AI 腔」（要理解结构才能判的），正则抓不到。
 
-v19 起，由独立扫描器 **`core/scripts/semantic_slop_scanner.py`（语义层）** 补这块：
+起，由独立扫描器 **`core/scripts/semantic_slop_scanner.py`（语义层）** 补这块：
 
 | 层 | 抓什么 | 实现 | 举例 |
 |----|--------|------|------|
@@ -25,7 +25,7 @@ v19 起，由独立扫描器 **`core/scripts/semantic_slop_scanner.py`（语义�
 - 本文件第十类「意味着/象征着 单章≥5次」= 纯词频；语义层 `metaphor_explain` = 「比喻紧跟解释」的句级结构（不同角度）。
 - 本文件第三类「说道≥5次」= 单一词重复；语义层 `tag_synonym_cycle` = 标签变体≥6种的同义词循环（正反两面）。
 
-**关键差异**：本文件的判定是「扣分」式硬规则；语义层输出全部 `gate_level=advisory`（v19 顾问制），写作 agent 有充分理由可豁免。语义层已由 `audit_hub.py` 作为第 7 个校验器统一调度。
+**关键差异**：本文件的判定是「扣分」式硬规则；语义层输出全部 `gate_level=advisory`，写作 agent 有充分理由可豁免。语义层已由 `audit_hub.py` 作为第 7 个校验器统一调度。
 
 ---
 
