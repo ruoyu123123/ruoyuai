@@ -122,6 +122,29 @@ class DatabaseScanner:
         for p in plans:
             if p.get("ch") == self.ch or p.get("chapter") == self.ch:
                 return p
+        # v26 fluid 化 fallback: chapter_plan[N] 缺失时，从 事件簇.json.clusters[N] 取雏形
+        # 哲学：cluster mode 下章数由 splitter step 6 决定 · chapter_plan 不应被预先锁
+        shijianji = self.load("事件簇", {})
+        for cluster in shijianji.get("clusters", []):
+            cr = cluster.get("chapter_range") or []
+            if isinstance(cr, list) and len(cr) == 2 and cr[0] <= self.ch <= cr[1]:
+                storyboard = cluster.get("scene_storyboard") or []
+                if storyboard:
+                    first_scene = storyboard[0] if storyboard else {}
+                    return {
+                        "ch": self.ch,
+                        "vol": cluster.get("vol"),
+                        "cluster": cluster.get("cluster_id"),
+                        "title": (cluster.get("title", "") + " · 起首待 splitter 切定") if self.ch == cr[0] else cluster.get("title", ""),
+                        "characters": first_scene.get("characters", []) or [
+                            c for s in storyboard for c in (s.get("characters") or [])
+                        ][:8],
+                        "key_events": [s.get("title", "") for s in storyboard[:3]],
+                        "scene_type": [first_scene.get("type", "悬疑")],
+                        "goal": cluster.get("scope_summary", "")[:200],
+                        "_fluid_fallback_from_event_cluster": True,
+                        "_v26_note": "本 chapter_plan 由 build_manifest 从 事件簇.json fluid fallback 产生 · 真实切章由 step 6 splitter 决定",
+                    }
         return None
 
     def volume_info(self) -> dict | None:
