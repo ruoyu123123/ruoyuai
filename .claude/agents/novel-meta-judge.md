@@ -124,7 +124,7 @@ MODE: routine | adhoc
 
 ## 触发时机
 
-- 每 10 章 save-state 流程的 step 9 (audit-consistency) 自动调用
+- 每 2 个 cluster cluster-save-state 流程的 step 9 自动调用（约每 10 章）
 - 用户手动 `/meta-judge --range 1-10` 调用
 - 单 judge 连续 5 章全 A 或全 D 时立即触发（异常 spike）
 

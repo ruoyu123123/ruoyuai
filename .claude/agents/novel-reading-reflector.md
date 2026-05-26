@@ -198,17 +198,10 @@ verdict = "pass"，放行进入 save-state
 - 不模糊（禁用「整体偏弱」「可以更好」类描述）
 - 误报 < 5%（按 lessons「subagent 报告必须数据复核」原则，所有定性结论应附量化锚点）
 
-## 与现有流水线集成
+## 与现有流水线集成（v26 · cluster-only）
 
-在 `core/claude-home/plans/write-chapter.plan.json` 应增加 step 4.5：
-```json
-{
-  "n": 4.5,
-  "name": "reading-reflector",
-  "description": "8 维读者视角检测，连续 3 轮 0 issue 放行",
-  "required": true,
-  "expected_outputs": ["_数据库/.reading_reflection/cluster_{id}_round_*.json"]
-}
-```
+已集成进 `core/claude-home/plans/cluster-write.plan.json` step 3（cluster-quality-dual-track）：
+- 机械轨：audit_hub.py --mode cluster
+- 阅读轨（本 agent）：MODE=ecas · 整 cluster 跑 · 连续 3 轮 0 issue 放行
 
-（系统升级待办，第一版主代理手动调度即可）
+🔴 v26: 不再支持 chapter mode / write-chapter.plan.json（已删除）。

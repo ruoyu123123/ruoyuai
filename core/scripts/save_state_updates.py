@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""save_state_updates.py — save-state step 9 章节级数据库更新统一入口（合并 5 个 update 脚本）
+"""save_state_updates.py — cluster-save-state step 9 章节级数据库更新统一入口（合并 5 个 update 脚本 · v26 cluster-only）
 
 合并源：
 - offscreen_update.py（offscreen_actions_executed 字段处理）
@@ -8,10 +8,10 @@
 - character_lazy_spawn.py（章节中出现的新角色自动入档）
 - fate_engine.py update <ch>（fate event 应用）
 
-调用方式：
-- chapter mode: python save_state_updates.py <project> --ch N [--all | --only offscreen,declarative,...]
-- cluster mode: python save_state_updates.py <project> --cluster <key> [--all]
+调用方式（v26 唯一入口）：
+- python save_state_updates.py <project> --cluster <key> [--all | --only offscreen,declarative,...]
   （自动展开 cluster 的 chapter_range，for each ch 调子模块）
+  🔴 v26: chapter mode --ch 已废弃移除
 
 退出码：0 成功 / 1 部分失败 / 2 fatal
 """
@@ -90,10 +90,10 @@ def run_updates_for_chapter(project: str, chapter: int, only: set[str] | None) -
 
 
 def main():
-    parser = argparse.ArgumentParser(description="save-state step 9 章节级数据库更新（5 in 1）")
+    # 🔴 v26: chapter mode --ch 已废弃移除，仅留 --cluster <key>。
+    parser = argparse.ArgumentParser(description="cluster-save-state step 9 章节级数据库更新（5 in 1 · v26 cluster-only）")
     parser.add_argument("project")
-    parser.add_argument("--ch", type=int, help="单章模式")
-    parser.add_argument("--cluster", help="cluster 模式（如 cluster_001 或 001）")
+    parser.add_argument("--cluster", required=True, help="v26: 必填 cluster_key（chapter mode --ch 已删）")
     parser.add_argument("--only", help="只跑特定模块，逗号分隔（offscreen,declarative,...）")
     parser.add_argument("--all", action="store_true", help="跑全部 5 个模块（默认）")
     args = parser.parse_args()
@@ -105,18 +105,11 @@ def main():
 
     only_set = set(args.only.split(",")) if args.only else None
 
-    chapters = []
-    if args.cluster:
-        chapters = get_cluster_chapter_range(project_root, args.cluster)
-        if not chapters:
-            print(f"[FATAL] cluster {args.cluster} 未找到 chapter_range", file=sys.stderr)
-            return 2
-        print(f"[cluster {args.cluster}] 展开 {len(chapters)} 章: {chapters}")
-    elif args.ch:
-        chapters = [args.ch]
-    else:
-        print(f"[FATAL] 必须指定 --ch 或 --cluster", file=sys.stderr)
+    chapters = get_cluster_chapter_range(project_root, args.cluster)
+    if not chapters:
+        print(f"[FATAL] cluster {args.cluster} 未找到 chapter_range", file=sys.stderr)
         return 2
+    print(f"[cluster {args.cluster}] 展开 {len(chapters)} 章: {chapters}")
 
     all_results = {}
     fail_count = 0

@@ -48,16 +48,19 @@ NOVEL_NAME_KEYWORDS = [
 ]
 
 # 多步流水线 Agent 关键词（命中即认为是多步命令）
+# 🔴 v26: chapter mode (write-chapter / save-state) 已废弃，移除关键词；改 cluster mode
 MULTISTEP_KEYWORDS_DESC = [
-    "save-state", "distill-style", "distill style",
-    "write-chapter", "write chapter",
+    "cluster-save-state", "cluster save state",
+    "cluster-write", "cluster write",
+    "distill-style", "distill style",
     "outline", "reconcile",
     "check-quality", "check quality",
 ]
 MULTISTEP_KEYWORDS_PROMPT = [
-    "save_state", "distill style",
-    "全 6 阶段", "三章窗口",
-    "11 步流水线", "12 步流水线",
+    "cluster_save_state", "cluster_write",
+    "distill style",
+    "全 7 阶段", "三章窗口",
+    "12 步流水线", "7 步流水线",
 ]
 
 # P2-10 规则 9：常见 prompt injection 模板（英中双语）

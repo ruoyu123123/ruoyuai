@@ -149,7 +149,7 @@ python core/scripts/validate_style.py "<项目路径>/章节/第<N>章/第<N>章
 - **不 Edit 任何文件**（除 Write brief JSON）
 - **不重写整章** —— 你的输出是 brief，不是修复后正文
 - **validate-check 模式不动风格，style-check 模式不动剧情**
-- **不触发 save-state / build_manifest**
+- **不触发 cluster-save-state / build_manifest**
 - **每条 violation 独立**，不合并
 
 ## 返回主代理（JSON 块）

@@ -53,28 +53,30 @@
 
 6 个多步命令必须经过 `plan_tracker` 强制规划层 — **没有 plan_id 不能开工，没有 step 验证不能宣称完成**。
 
+> **🔴 v26 简化**：chapter mode (`/save-state` / `/write-chapter`) 已废弃移除，原 8 命令 plan 矩阵收敛为 6。所有写作 + 状态保存统一走 cluster mode。
+
 ### 三层防御
 
 | 层 | 实现 | 作用 |
 |----|------|------|
-| **L1 契约** | 8 个命令文档 + `core/claude-home/plans/<command>.plan.json` 模板 | 规划落字 |
+| **L1 契约** | 6 个命令文档 + `core/claude-home/plans/<command>.plan.json` 模板 | 规划落字 |
 | **L2 追踪** | `plan_tracker.py` 持久化 plan；`step`/`end`/`abort` 写前读 SHA-256 attestation 校验（不符 → `PlanTamperedError` exit 2）；只读的 `status`/`list` 仅警告不阻断 | 状态可审计 + 防伪造 |
 | **L3 校验** | **PreToolUse hook**（拦截层）：缺 PLAN_ID/STEP → exit 2 拦；plan tampered → exit 2 拦在 Agent spawn 前。**PostToolUse hook**（观察层）：扫描 Bash 输出 `plan_id=` / `[OK] 第 N 步` 痕迹做日志上报，**严禁 exit 非 0**（防止打断主流水线） | 调用瞬间堵漏 |
 
 合法手动改 plan 后用 `plan_tracker.py reattest <plan_id>` 重新盖章。
 
-### 覆盖命令
+### 覆盖命令（v26 · 6 个）
 
 | 命令 | 步数 | 模板 |
 |------|------|------|
-| `/save-state` | 12 | `save-state.plan.json` |
-| `/cluster-save-state` | 12 | `cluster-save-state.plan.json` |
-| `/write-chapter` | 6 | `write-chapter.plan.json` |
 | `/cluster-write` | 7 | `cluster-write.plan.json` |
+| `/cluster-save-state` | 12 | `cluster-save-state.plan.json` |
 | `/distill-style` | 7 | `distill-style.plan.json` |
 | `/outline` | 4 | `outline.plan.json` |
 | `/check-quality` | 3 | `check-quality.plan.json` |
 | `/reconcile` | 5 | `reconcile.plan.json` |
+
+**🔴 v26 已删除**：`/save-state` `/write-chapter` 整套 chapter mode（命令文件 + plan 模板 + 内部 CLI 入口 + hook 关键词全部清除）。
 
 ### 用户命令
 
@@ -97,8 +99,8 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ### 与 WAL 的关系
 
-- **WAL**：`save-state` / `cluster-save-state` **单命令内**的细粒度断点恢复（`completed_steps` 字段）— 单命令、细颗粒、断点续跑
-- **Plan**：所有 8 个命令统一的**强制规划层** — 跨命令、粗颗粒、可审计
+- **WAL**：`cluster-save-state` **单命令内**的细粒度断点恢复（`completed_steps` 字段）— 单命令、细颗粒、断点续跑
+- **Plan**：所有 6 个命令统一的**强制规划层** — 跨命令、粗颗粒、可审计
 - **二者共存不冲突**：plan_tracker 不动 WAL 任何字段，WAL 不动 plan_tracker 状态。详见 lessons §八 L8.4
 
 ---
@@ -109,10 +111,10 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 |------|------|------|
 | **核心** | `/write` | 写小说完整流程 |
 | | `/script` | 写短剧剧本 |
-| | `/write-chapter` | 写单章（chapter mode）|
-| | `/cluster-write` | 写故事块（cluster mode · 推荐）|
-| | `/save-state` | 章节状态保存 |
-| | `/cluster-save-state` | 故事块状态保存（cluster mode）|
+| | **`/cluster-write`** | **写故事块（cluster mode · 🔴 默认 · v24 倒置流水线 · 1 cluster = 1 plan · 整块迭代→最后才切章）** |
+| | `/write-chapter` | 写单章（chapter mode · ⚠️ 旧 · 仅 .allow_single_mode.flag 旁路降级用）|
+| | **`/cluster-save-state`** | **故事块状态保存（cluster mode · 默认）** |
+| | `/save-state` | 章节状态保存（旧 · 配合 write-chapter 用）|
 | | `/outline` | 生成大纲+初始化数据库 |
 | | `/continue` | 续写/断点恢复 |
 | **蒸馏** | `/distill-style` | 蒸馏作者风格 |
@@ -143,20 +145,22 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 3. **AI 生成 3 个灵感**（基于调研） → 每张灵感卡引用 ≥1 调研 source
 4. **生成大纲** → `/outline`（卷级大势 + 34 子系统初始化 · 只详化 cluster_001）
 5. **直接开写** → 大纲确认后立即写第一章
-6. **逐章循环**：
+6. **逐故事块循环**（cluster mode 默认）：
    - 走向卡前调研：spawn `novel-researcher` TASK_TYPE=outline
-   - 执行 `/cluster-write`（推荐）或 `/write-chapter`
-   - 执行 `/cluster-save-state`（推荐）或 `/save-state`
+   - **执行 `/cluster-write CLUSTER_ID=<key>`**（默认 · v24 倒置流水线 · 1 cluster 1 plan · 整块迭代→最后才切章）
+   - **执行 `/cluster-save-state CLUSTER_ID=<key>`**（默认 · cluster 级状态保存 + 涌现下一 cluster brief）
    - 展示剧情走向卡片 → 等用户选择
 7. **完成** → 拼接全文.txt
 
 **硬性规则**：
-- ⚠️ 每章必须通过 Agent 工具启动子任务来写——禁止主会话直接生成正文！
-- 每章 Write 工具存为 txt 文件，不贴终端
-- 写完一章后立即执行 save-state（不问「要继续吗」）
-- save-state 完成后展示走向卡（唯一停顿点）
+- ⚠️ 每 cluster 必须通过 `/cluster-write` 调度器走完 7 步——禁止主会话直接生成正文
+- ⚠️ `/cluster-write` 内 writer 产出 `cluster_<key>_draft.txt` 后 splitter **必须推迟到 step 6**（v24 核心纪律 · 禁止立即切章）
+- cluster 写完后立即执行 `/cluster-save-state`（不问「要继续吗」）
+- cluster-save-state 完成后展示走向卡（唯一停顿点）
 - 用户「全自动」→ 跳过所有卡片
 - **调研先行**：灵感卡前 + 走向卡前必须先 spawn novel-researcher（除非用户明说「跳过调研」）
+
+**降级写单章**：仅当 `_数据库/.allow_single_mode.flag` 存在时允许走 `/write-chapter`（旧单章流水线 · v25 已废弃 · 仅兼容期保留）。新书默认强制 cluster mode。
 
 ---
 

@@ -4,8 +4,10 @@ plan_tracker.py — 多步命令的强制规划与执行追踪系统（Phase 1�
 
 设计目标
 --------
-让小说系统的多步命令（save-state / distill-style / write-chapter /
+让小说系统的多步命令（cluster-save-state / cluster-write / distill-style /
 check-quality / outline / reconcile）在 Agent 或命令执行时**无法跳步**：
+
+🔴 v26: chapter mode (save-state / write-chapter) 已彻底废弃移除，仅留 cluster mode。
 
 - 命令开始前必须 create 一个 plan，拿到 plan_id；
 - 每完成一步必须 step <plan_id> --n N，脚本校验 expected_outputs；
@@ -14,7 +16,7 @@ check-quality / outline / reconcile）在 Agent 或命令执行时**无法跳步
 
 与 save_state.py 内置 WAL 的关系
 -------------------------------
-- WAL 是 save-state 单命令内的细粒度断点恢复（completed_steps）；
+- WAL 是 cluster-save-state 单命令内的细粒度断点恢复（completed_steps）；
 - plan_tracker 是**所有命令**统一的强制规划层（plan_id + verified_outputs）；
 - 二者**共存不冲突**——本工具不动 WAL 的任何字段；attestation 也只加 plan
   JSON 的 `_attestation` 字段，不触碰 WAL（见 lessons L8.4）。
@@ -93,17 +95,15 @@ STATUS_FAILED = "failed"
 STATUS_ABORTED = "aborted"
 
 KNOWN_COMMANDS = (
-    "save-state",
     "distill-style",
     "check-quality",
-    "write-chapter",
     "outline",
     "reconcile",
     "init-real-grade",  # v22.5 新书项目真品级初始化（禁最小可用）
     "ecas-v23-transition",  # v23 ECAS 全面转向工程（DCAS → 事件簇）
-    "write-event-cluster",  # v23 ECAS 写单个事件簇（替代 write-chapter）
-    "cluster-write",  # v24 cluster 级写作流水线 7 步（推荐 · 替代 write-event-cluster）
-    "cluster-save-state",  # v24 cluster 级 save-state（推荐 · 替代 save-state）
+    "cluster-write",  # v24 cluster 级写作流水线 7 步（唯一推荐 · v26 替代废弃的 write-chapter/write-event-cluster）
+    "cluster-save-state",  # v24 cluster 级 save-state（唯一推荐 · v26 替代废弃的 save-state）
+    # 🔴 v26 已删除: save-state / write-chapter / write-event-cluster
 )
 
 
@@ -647,7 +647,17 @@ def end_plan(plan_id: str) -> dict:
                     must_agents = [must_agents]
                 ch = plan.get("chapter")
                 proj = plan.get("project", "")
-                cluster_id = plan.get("key", "") if "cluster_" in str(plan.get("key", "")) else None
+                # v26 fix: cluster-write / cluster-save-state 命令的 key 即为 cluster_id
+                # 旧逻辑要求 key 含 "cluster_" 前缀才识别 → 创建时传 --key 001（无前缀）会失配
+                # 现兼容两种形式: "cluster_001" or "001"
+                _cmd = plan.get("command", "")
+                _key = plan.get("key", "")
+                if "cluster_" in str(_key):
+                    cluster_id = _key
+                elif _cmd in ("cluster-write", "cluster-save-state") and _key:
+                    cluster_id = f"cluster_{_key}" if not _key.startswith("cluster_") else _key
+                else:
+                    cluster_id = None
                 for agent_name in must_agents:
                     found = _verify_agent_report(proj, agent_name, ch, cluster_id)
                     if not found:

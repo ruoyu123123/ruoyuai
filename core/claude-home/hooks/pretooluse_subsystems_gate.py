@@ -16,7 +16,7 @@ knowledge_graph / subplot / beat_map / 四线脉络 / webnovel_bench —— 全�
 
 【约束】
 - exit 0 = 放行 / exit 2 = 拒绝
-- 只在 outline plan 关联命令拦（write-chapter / save-state 不拦——那些时点 manifest 已经判过）
+- 只在 outline plan 关联命令拦（cluster-write / cluster-save-state 不拦——那些时点 manifest 已经判过）
 - plan 找不到 / 解析失败 → 放行（防御性）
 - 用户显式说"轻量模式" → 通过 `_数据库/.subsystems_bypass.json` 单文件存在即放行
 """
@@ -93,7 +93,7 @@ def main():
         sys.exit(0)
 
     # 只对 end / step --n 3 (init-13-databases) / step --n 4 (plan-end) 拦
-    # save-state / write-chapter / reconcile 等其他命令 plan 完全放行
+    # cluster-save-state / cluster-write / reconcile 等其他命令 plan 完全放行
     if op == "step":
         n_match = re.search(r"--n\s+(\d+)", command)
         if not n_match:

@@ -705,21 +705,18 @@ def cmd_report_cluster(root, cluster_key):
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    # 🔴 v26: chapter-level CLI 已彻底废弃移除（--wal-start/-step/-end/--parse/--apply-changes/
+    # --git-commit/--report/--auto-post-reflect 全部下线）。chapter 级函数本体（cmd_wal_*/cmd_parse/
+    # apply_changes/cmd_git_commit/cmd_report/cmd_auto_post_reflect）仍保留——是被 cluster 函数
+    # 内部按章迭代复用的底层组件，不是公共 CLI。外部一律走 --apply-cluster-changes /
+    # --git-commit-cluster / --auto-post-reflect-cluster / --report-cluster / --ecas-checkpoint。
+    ap = argparse.ArgumentParser(
+        description="save_state.py · v26 cluster-only CLI"
+    )
     ap.add_argument("project", help="项目路径")
-    # chapter-level subcommands
-    ap.add_argument("--wal-start", type=int, metavar="CH")
-    ap.add_argument("--wal-step", nargs=2, type=int, metavar=("CH", "STEP"))
-    ap.add_argument("--wal-end", type=int, metavar="CH")
-    ap.add_argument("--parse", type=int, metavar="CH")
-    ap.add_argument("--apply-changes", type=int, metavar="CH")
-    ap.add_argument("--git-commit", type=int, metavar="CH")
-    ap.add_argument("--report", type=int, metavar="CH")
-    ap.add_argument("--auto-post-reflect", type=int, metavar="CH",
-                    help="一键跑 learning_loop 三步链 (merge-reflection + ingest + scan-recurring)")
+    # v24 cluster-level subcommands（唯一 CLI 入口）
     ap.add_argument("--ecas-checkpoint", type=str, metavar="CLUSTER_ID",
                     help="验证 cluster_draft 完整性 + checkpoint_data")
-    # v24 cluster-level subcommands
     ap.add_argument("--apply-cluster-changes", type=str, metavar="CLUSTER_KEY",
                     help="v24: 一次性应用整 cluster 的 changes（内部展开 ch_range for each ch apply）")
     ap.add_argument("--git-commit-cluster", type=str, metavar="CLUSTER_KEY",
@@ -735,15 +732,7 @@ def main():
         print(f"项目路径不存在: {root}", file=sys.stderr)
         sys.exit(2)
 
-    if args.wal_start: cmd_wal_start(root, args.wal_start)
-    elif args.wal_step: cmd_wal_step(root, args.wal_step[0], args.wal_step[1])
-    elif args.wal_end: cmd_wal_end(root, args.wal_end)
-    elif args.parse: cmd_parse(root, args.parse)
-    elif args.apply_changes: apply_changes(root, args.apply_changes)
-    elif args.git_commit: cmd_git_commit(root, args.git_commit)
-    elif args.report: cmd_report(root, args.report)
-    elif args.auto_post_reflect: cmd_auto_post_reflect(root, args.auto_post_reflect)
-    elif args.ecas_checkpoint: cmd_ecas_checkpoint(root, args.ecas_checkpoint)
+    if args.ecas_checkpoint: cmd_ecas_checkpoint(root, args.ecas_checkpoint)
     elif args.apply_cluster_changes: cmd_apply_cluster_changes(root, args.apply_cluster_changes)
     elif args.git_commit_cluster: cmd_git_commit_cluster(root, args.git_commit_cluster)
     elif args.auto_post_reflect_cluster: cmd_auto_post_reflect_cluster(root, args.auto_post_reflect_cluster)

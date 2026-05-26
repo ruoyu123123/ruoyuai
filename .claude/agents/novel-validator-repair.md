@@ -36,7 +36,7 @@ tools: Read
      --mode validator-repair \\
      --brief <brief_path>
    ```
-4. gen_fixer 输出 fixer_report，主代理读取后续接 audit_hub / save-state
+4. gen_fixer 输出 fixer_report，主代理读取后续接 audit_hub / cluster-save-state
 
 ## 移除计划
 

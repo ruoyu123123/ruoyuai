@@ -8,7 +8,7 @@ tools: Read, Write, Glob, Grep
 
 ## 何时调用
 
-- 每 20 章自动跑（由 save-state 触发）
+- 每 4 个 cluster 自动跑（由 cluster-save-state 触发 · 约 20 章）
 - 用户问「最近写得怎样」「为啥总犯同样错」
 - judge_consensus 评分连续下降时
 - waiver_persistent_code 连续 ≥ 3 章

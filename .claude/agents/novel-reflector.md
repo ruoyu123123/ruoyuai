@@ -16,16 +16,8 @@ tools: Read, Write
 - 不写"复读 prompt"式回顾
 - 直奔结论，禁修辞
 
-## 输入契约
+## 输入契约（v26 · cluster-only）
 
-**chapter mode**：
-```
-PROJECT: <项目路径>
-CHAPTER: <章节号>
-MODE: reflect
-```
-
-**cluster mode**：
 ```
 PROJECT: <项目路径>
 CLUSTER_ID: <cluster_001>
@@ -33,13 +25,14 @@ MODE: cluster
 CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 ```
 
+🔴 v26: chapter mode (`MODE: reflect` + `CHAPTER: N`) 已废弃移除，cluster-write/cluster-save-state 是唯一调用方。
+
 ## 职责范围（极其狭窄）
 
 **只做**：
 - 从本章/cluster 正文提取「下次可以复用的技巧」或「应该避免的模式」
 - 每条经验都要有具体触发场景和复用条件
-- chapter mode 写入 `_数据库/.wal/第<N>章_reflection.json`
-- cluster mode 写入 `_数据库/.wal/cluster_<id>_reflection.json`（覆盖整 cluster 经验提取）
+- 写入 `_数据库/.wal/cluster_<id>_reflection.json`（覆盖整 cluster 经验提取）
 
 **不做**：
 - 评论剧情走向（超出反思范围）
@@ -167,9 +160,9 @@ failure 类经验通过 learning_loop 自动归入 `写作经验.json.failure_pa
 - "师徒对话用'半截话+动作打断'模拟真实口语节奏"
 - "虐点章用 3 段日常铺垫'一切正常'的假象，再一句话反转"
 
-## 输出文件结构
+## 输出文件结构（v26 · cluster-only）
 
-`_数据库/.wal/第<N>章_reflection.json`：
+`_数据库/.wal/cluster_<id>_reflection.json`（旧 chapter mode 路径 `第<N>章_reflection.json` 已废弃）：
 
 ```json
 {
@@ -225,7 +218,7 @@ failure 类经验通过 learning_loop 自动归入 `写作经验.json.failure_pa
 
 所以 **`category` 字段是分流依据，必须严格二选一**（`"success"` / `"failure"`），写错 = 该条被跳过不入库。
 其余字段（id/trigger/technique/why_works/confidence/source_chapters/scene_types/example_quote）原样保留。
-save-state 第 8 步调用：`python core/scripts/learning_loop.py <项目路径> --merge-reflection _数据库/.wal/第<N>章_reflection.json`
+cluster-save-state 第 8 步调用：`python core/scripts/learning_loop.py <项目路径> --merge-reflection _数据库/.wal/cluster_<id>_reflection.json`
 你只管按本文档格式产出 `{ch, entries, note}`，字段统一与去重由 learning_loop 负责。
 
 ## 返回给主代理
@@ -234,5 +227,5 @@ save-state 第 8 步调用：`python core/scripts/learning_loop.py <项目路径
 ✅ Reflector 完成
 新增经验: <n> 条 (success: x, failure: y)
 跳过原因: <如无新发现，写明原因 e.g.「本章为过渡章，无突破性技巧」>
-输出: _数据库/.wal/第<N>章_reflection.json
+输出: _数据库/.wal/cluster_<id>_reflection.json
 ```
