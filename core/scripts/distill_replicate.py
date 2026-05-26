@@ -1,30 +1,44 @@
 #!/usr/bin/env python3
 """
-distill_replicate.py — 蒸馏 phase-2/phase-5 复刻测试专用工具
+distill_replicate.py — 蒸馏 phase-2/phase-5 复刻测试（v2: chapter + cluster 两档）
 
 强制走 gen-model（OpenAI 兼容协议外部模型），不走 Claude Code sub-agent。
-这是 distill-style v22.cluster.3 起的硬约束 —— 蒸馏闭环复刻必须用最终写作
-要用的 gen-model 来测，否则 skill 在 Claude 上能跑出来不代表在 gen-model 上能跑出来。
+v22.cluster.3 起的硬约束 —— 蒸馏闭环复刻必须用最终写作要用的 gen-model 来测。
 
-业界依据：
-- distill-style.md phase-2/phase-5：复刻测试是为了验证「skill 能不能让目标 LLM 模仿」
-- gen_writer.py 正式写作走 gen-model（deepseek_v4_pro / pie_xian / 等），所以蒸馏闭环
-  必须用同栈，否则 v0→v1 升级针对错的模型，等于无效迭代
+v2 改动（2026-05-26 故事块蒸馏 v2 章程 · memory feedback_cluster_distill_v2_charter）：
+- ❌ 删除 --type opening/battle/psychology/dialogue/description/transition 单段 1200 字 drill 模式
+  原因：写作端早就是 ECAS cluster 整块叙事，drill 单段验证 = 闭环不闭
+  跟 build_manifest.py:2298 旧 writer_mode="single" 是同一类系统不对齐
+- ✅ --mode chapter（单章 3000-5000 字）：v1→v2 中检用
+- ✅ --mode cluster（故事块 4000-20000 字）：v2+ 终验用
+- ✅ cluster 模式拆 sub-call 防 timeout（沿用 cluster_segmenter A' 半 cluster 教训：6 章 100% 502 / 3 章 100% 成功）
+- 🚨 紧急旁路：--legacy-segment-only --type X（一次性回滚 · 留 lesson）
 
 用法：
 
+  # chapter 模式（单章中检）
   python core/scripts/distill_replicate.py \\
-    --style-skill workspace/styles/惊悚乐园/skill_v0.md \\
-    --type opening \\
-    --output workspace/styles/惊悚乐园/复刻测试/v0_round1/test_opening_replica.txt \\
-    [--ref-chapter workspace/styles/惊悚乐园/原文/第001章.txt] \\
-    [--target-words 1200]
+    --style-skill workspace/styles/<书名>/skill_v<N>.md \\
+    --mode chapter \\
+    --chapter-ref workspace/styles/<书名>/原文/第001章.txt \\
+    --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/chapter_replica.txt \\
+    [--target-words 4000]
 
-  --type 取值：opening / battle / psychology / dialogue / description / transition
+  # cluster 模式（故事块终验）
+  python core/scripts/distill_replicate.py \\
+    --style-skill workspace/styles/<书名>/skill_v<N>.md \\
+    --mode cluster \\
+    --cluster-ref cluster_001 \\
+    --project workspace/styles/<书名> \\
+    --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/cluster_001_replica.txt
+
+  # 紧急旁路（仅救火 · 留 lesson）
+  python core/scripts/distill_replicate.py \\
+    --style-skill ... --legacy-segment-only --type opening --output ...
 
 输出：
-- 复刻文本（纯 txt，UTF-8，无 markdown 标记）
-- stderr 打印 metadata（实际调用的 profile、字数、耗时）
+- 复刻文本（纯 txt UTF-8 无 markdown 标记）
+- meta.json sidecar（调用 profile / sub-calls 数 / 字数 / 耗时）
 
 配置：参见 .env GEN__<name>__* + GEN_MODEL_ACTIVE
 """
@@ -66,7 +80,7 @@ def resolve_max_tokens(profile: Profile, default: int = 4000) -> int:
     return default
 
 
-def read_text(p: Path | None, limit: int = None) -> str:
+def read_text(p: Path | None, limit: int | None = None) -> str:
     if p is None or not p.exists():
         return ""
     t = p.read_text(encoding='utf-8')
@@ -75,63 +89,35 @@ def read_text(p: Path | None, limit: int = None) -> str:
     return t
 
 
-# ============ 复刻 type → 创作设定 ============
-TYPE_SCENARIOS = {
-    "opening": {
-        "label": "开篇",
-        "instruction": """场景：玩家登陆一个新的恐怖游戏剧本（不能是惊悚乐园）。主角是自创角色（不能复刻原文中已有的角色名）。
+def cjk_count(text: str) -> int:
+    return sum(1 for ch in text if '一' <= ch <= '鿿')
 
-写「开篇章」前 1-3 段，约 1000-1200 字。
-包含：登陆瞬间的感官 → 主角 POV 自语点评 → 环境快速扫描 → 章末小钩子。""",
-    },
-    "battle": {
-        "label": "战斗",
-        "instruction": """场景：双人小队遭遇一只规则诡异的怪物（你自己设计）。自创主角（不能用原文角色名）。
 
-写战斗段约 1000-1200 字。
-包含：怪物登场 → 主角试探 → 战术分析（带吐槽）→ 反转 / 绝杀 → 战后冷却。
-节奏：三拍公式（拟声→长句→短句定性）或镜头切换（仰视→全景→特写）。战后冷却用日常动作降温。""",
-    },
-    "psychology": {
-        "label": "心理 / 推理",
-        "instruction": """场景：主角独处一室，桌上有 3 件物品 + 1 张纸条 + 1 具尸体，主角通过推理破解谜题。自创主角。
+def clean_output(text: str) -> str:
+    """清理 LLM 输出：去掉 markdown 包裹、前后引言、多余空行"""
+    text = re.sub(r"^```[a-z]*\n", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\n```\s*$", "", text)
+    text = re.sub(r"^(以下是|这是|这里是|下面是)[^\n]{0,40}[:：]\s*\n", "", text)
+    return text.strip()
 
-写心理 / 推理段约 1000-1200 字。
-包含：观察物品 → 假设 1（自语吐槽）→ 假设 2（推翻）→ 假设 3（拼图）→ 灵光一刻 → 行动。
-心理描写至少用 2 种：身体外显 / 排比吐槽式宣泄 / 第三人称冷评 / 行为暗示 / 他人视角吐槽。
-推理可以用自语对话化（推理时把话说出口给自己听）—— 作者的高频技法。""",
-    },
-    "dialogue": {
-        "label": "对话",
-        "instruction": """场景：主角与一个 NPC 进行心理博弈式对话（信息攻防）。自创主角和 NPC。
 
-写对话段约 1000-1200 字。对话密度 ≥ 40%。每句对话独立成段。
-NPC 有自己的语气和动机，主角用真话说假话或假话说真话。""",
-    },
-    "description": {
-        "label": "环境描写",
-        "instruction": """场景：主角进入一个全新的恐怖空间（鬼屋 / 地下室 / 废墟 任选）。自创主角。
-
-写环境探索段约 1000-1200 字。
-环境描写技法：两字锚点定场 / 感官主导单点深入 / 对话间接展现 / 最小化具象 1-2 句收笔 / 氛围暗示不明说 —— 至少用 2 种结合。
-不要堆砌形容词，用具体物件和五感。""",
-    },
-    "transition": {
-        "label": "场景转换",
-        "instruction": """场景：主角刚结束一场战斗，需要从战场过渡到下一个剧情节点。自创主角。
-
-写场景转换段约 1000-1200 字。包含：战斗余韵 → 过渡（时间跳跃 / 空间跳转 / 情绪落差 / 拟声硬切 任选）→ 新场景开启。""",
-    },
+# ============ legacy drill 模式（仅 --legacy-segment-only 救火用） ============
+LEGACY_TYPE_SCENARIOS = {
+    "opening": {"label": "开篇", "instruction": "写「开篇章」前 1-3 段，约 1000-1200 字。自创角色，登陆瞬间感官 → POV 自语 → 环境扫描 → 章末小钩子。"},
+    "battle": {"label": "战斗", "instruction": "写战斗段约 1000-1200 字。怪物登场 → 试探 → 战术 → 反转 → 冷却。"},
+    "psychology": {"label": "心理/推理", "instruction": "写心理/推理段约 1000-1200 字。观察 → 假设 → 推翻 → 拼图 → 灵光。"},
+    "dialogue": {"label": "对话", "instruction": "写对话段约 1000-1200 字。对话密度 ≥ 40%，每句独立成段。"},
+    "description": {"label": "环境描写", "instruction": "写环境探索段约 1000-1200 字。两字锚点 / 感官单点 / 间接展现 ≥ 2 种。"},
+    "transition": {"label": "场景转换", "instruction": "写场景转换段约 1000-1200 字。余韵 → 过渡 → 新场景。"},
 }
 
 
-def build_replicate_prompt(style_skill_md: str, ref_chapter: str, scenario: dict,
-                           target_words: int) -> tuple[str, str]:
-    """组装复刻 prompt（system + user）"""
-    system = """你是一位极擅长复刻特定作者风格的写作引擎。
+# ============ Prompt 模板 ============
+
+REPLICATE_SYSTEM_PROMPT = """你是一位极擅长复刻特定作者风格的写作引擎。
 
 主代理（Claude）已蒸馏了源作者的完整 skill（含 48 维度量化基线 / 反模式 / 黄金段落 / 衔接套路）。
-你的任务：严格按 skill 复刻一段约目标字数的文本，用于 SFS（Style Fingerprint Similarity）评分对照。
+你的任务：严格按 skill 复刻指定颗粒度的文本，用于 SFS（Style Fingerprint Similarity）评分对照。
 
 # 复刻硬约束
 
@@ -150,42 +136,106 @@ def build_replicate_prompt(style_skill_md: str, ref_chapter: str, scenario: dict
 - 字数严格按要求（±10% 容忍）
 """
 
-    user_parts = []
-    user_parts.append("# 源作者风格 skill（必须严格遵循）\n\n" + style_skill_md)
-    if ref_chapter:
-        user_parts.append("# 参考章节（仅作语感参考 · 不照抄情节 / 角色 / 设定）\n\n" + ref_chapter[:3000])
-    user_parts.append(
+
+def build_chapter_prompt(style_skill_md: str, ref_chapter_text: str, target_words: int) -> str:
+    """chapter 模式 prompt（user 段）"""
+    parts = ["# 源作者风格 skill（必须严格遵循）\n\n" + style_skill_md]
+    if ref_chapter_text:
+        parts.append("# 参考章节（仅作语感参考 · 不照抄情节 / 角色 / 设定）\n\n" + ref_chapter_text[:5000])
+    parts.append(
+        f"# 复刻任务\n\n"
+        f"**颗粒度**：单章\n\n"
+        f"**目标字数**：约 {target_words} CJK 字（±10%）\n\n"
+        f"**结构要求**：章首钩子 → 中段推进（含场景/对话/动作/心理）→ 章末钩子\n\n"
+        f"自创角色与场景，但要呈现一个完整独立的章节叙事。"
+    )
+    parts.append("# 输出\n\n直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。")
+    return "\n\n".join(parts)
+
+
+def build_cluster_subcall_prompt(
+    style_skill_md: str,
+    ref_text: str,
+    cluster_meta: dict,
+    subcall_index: int,
+    subcall_total: int,
+    prev_tail: str,
+    chapters_in_this_call: int,
+    target_words: int,
+) -> str:
+    """cluster 模式的 sub-call prompt（每段都要看见 skill + 上一段尾部 anchor）"""
+    parts = ["# 源作者风格 skill（必须严格遵循）\n\n" + style_skill_md]
+    if ref_text:
+        parts.append("# 参考原文（仅作语感参考 · 不照抄情节/角色/设定）\n\n" + ref_text[:4000])
+    parts.append(
+        f"# 故事块复刻任务（第 {subcall_index}/{subcall_total} 段）\n\n"
+        f"**颗粒度**：故事块（cluster），整块连续叙事\n"
+        f"**cluster 元信息**：{cluster_meta.get('cluster_id', 'unknown')} · "
+        f"原 cluster 总章数 {cluster_meta.get('chapters_count', '?')} · "
+        f"边界原因 {cluster_meta.get('boundary_reason', '?')}\n"
+        f"**本段任务**：写 {chapters_in_this_call} 章份内容（约 {target_words} CJK 字 ±10%）\n"
+    )
+    if subcall_index > 1 and prev_tail:
+        parts.append(
+            f"# 上一段尾部（必须自然承接，不复述）\n\n{prev_tail[-800:]}"
+        )
+    if subcall_index == 1:
+        parts.append("**段位置**：cluster 开头 · 自创角色与初始矛盾 · 含 1-2 个早期钩子")
+    elif subcall_index == subcall_total:
+        parts.append("**段位置**：cluster 收尾 · 推进到本块情节解决/转折 · 章末留 cliffhanger 或情绪余韵")
+    else:
+        parts.append("**段位置**：cluster 中段 · 推进矛盾 · 至少 1 次场景切换 · 至少 1 个新钩子")
+
+    parts.append(
+        "# 衔接要求\n\n"
+        "- 整个 cluster N 段拼起来必须是**连贯**叙事（同角色、同场景线、同时间线）\n"
+        "- 不分章节标题（splitter 端会处理）\n"
+        "- 段内可有自然空行做场景过渡，但不要插入「***」分隔符"
+    )
+    parts.append("# 输出\n\n直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。")
+    return "\n\n".join(parts)
+
+
+def build_legacy_segment_prompt(style_skill_md: str, ref_chapter_text: str,
+                                scenario: dict, target_words: int) -> str:
+    """legacy drill 模式 prompt（仅 --legacy-segment-only 救火走）"""
+    parts = ["# 源作者风格 skill（必须严格遵循）\n\n" + style_skill_md]
+    if ref_chapter_text:
+        parts.append("# 参考章节（仅作语感参考 · 不照抄情节 / 角色 / 设定）\n\n" + ref_chapter_text[:3000])
+    parts.append(
         f"# 复刻任务\n\n"
         f"**类型**：{scenario['label']}\n\n"
         f"**设定**：{scenario['instruction']}\n\n"
         f"**目标字数**：约 {target_words} CJK 字（±10%）"
     )
-    user_parts.append(
-        "# 输出\n\n"
-        "直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。"
-    )
-    return system, "\n\n".join(user_parts)
+    parts.append("# 输出\n\n直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。")
+    return "\n\n".join(parts)
 
+
+# ============ gen-model 调用 ============
 
 def call_gen_model(loader: GenModelLoader, system: str, user: str,
-                   default_max_tokens: int = 4000) -> tuple[str, Profile, float]:
-    """调当前 active profile；失败时按 fallback 链尝试。返回 (text, profile, elapsed_seconds)"""
+                   default_max_tokens: int = 4000,
+                   tag: str = "") -> tuple[str, Profile, float]:
+    """调当前 active profile；失败按 fallback 链尝试。返回 (text, profile, elapsed_seconds)"""
     from openai import OpenAI
 
     candidates = loader.get_callable_profiles()
     failures: list[tuple[str, str]] = []
 
+    prefix = f"[{tag}] " if tag else ""
+
     for i, profile in enumerate(candidates):
         max_tokens = resolve_max_tokens(profile, default=default_max_tokens)
         if i == 0:
-            print(f"[distill_replicate] 调用 active: {profile.name} ({profile.model})",
+            print(f"{prefix}[distill_replicate] 调用 active: {profile.name} ({profile.model})",
                   file=sys.stderr)
-            print(f"[distill_replicate] max_tokens={max_tokens}, temperature={profile.temperature}",
+            print(f"{prefix}[distill_replicate] max_tokens={max_tokens}, temperature={profile.temperature}",
                   file=sys.stderr)
         else:
-            print(f"\n[FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
+            print(f"\n{prefix}[FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
 
-        print(f"[distill_replicate] prompt: system={len(system)} chars, user={len(user)} chars",
+        print(f"{prefix}[distill_replicate] prompt: system={len(system)} chars, user={len(user)} chars",
               file=sys.stderr)
 
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
@@ -213,49 +263,118 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                     sys.stderr.flush()
         except Exception as e:
             reason = str(e)[:200]
-            print(f"\n[FALLBACK] {profile.name} 失败: {reason}", file=sys.stderr)
+            print(f"\n{prefix}[FALLBACK] {profile.name} 失败: {reason}", file=sys.stderr)
             failures.append((profile.name, reason))
             continue
 
         elapsed = time.time() - t0
-        print(f"\n[distill_replicate] 接收完毕 ({len(full_text)} chars, {elapsed:.1f}s) via {profile.name}",
+        print(f"\n{prefix}[distill_replicate] 接收完毕 ({len(full_text)} chars, {elapsed:.1f}s) via {profile.name}",
               file=sys.stderr)
         return full_text, profile, elapsed
 
     raise GenModelExhaustedError(failures)
 
 
-def clean_output(text: str) -> str:
-    """清理 LLM 输出：去掉 markdown 包裹、前后引言、多余空行"""
-    # 去掉 ``` 代码块标记
-    text = re.sub(r"^```[a-z]*\n", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\n```\s*$", "", text)
-    # 去掉常见 LLM 引言（"以下是"/"这是" 开头的一行）
-    text = re.sub(r"^(以下是|这是|这里是|下面是)[^\n]{0,40}[:：]\s*\n", "", text)
-    return text.strip()
+# ============ cluster 模式辅助 ============
+
+def load_cluster_meta(project_root: Path, cluster_id: str) -> dict:
+    """从 cluster_index.json 读指定 cluster 元信息"""
+    idx_path = project_root / "cluster_index.json"
+    if not idx_path.exists():
+        raise FileNotFoundError(f"cluster_index.json 不存在: {idx_path} · 请先跑 cluster_segmenter.py")
+    idx = json.loads(idx_path.read_text(encoding="utf-8"))
+    for c in idx.get("clusters", []):
+        if c.get("cluster_id") == cluster_id:
+            return c
+    raise ValueError(f"cluster_id={cluster_id} 在 cluster_index 中找不到")
 
 
-def cjk_count(text: str) -> int:
-    return sum(1 for ch in text if '一' <= ch <= '鿿')
+def gather_cluster_ref_text(project_root: Path, cluster_meta: dict, max_chars: int = 4000) -> str:
+    """拼参考原文：cluster 内每章取首段（限总长 4000 字）"""
+    ch_start = cluster_meta.get("chapter_start") or cluster_meta.get("ch_start")
+    ch_end = cluster_meta.get("chapter_end") or cluster_meta.get("ch_end")
+    if ch_start is None or ch_end is None:
+        return ""
+    pieces = []
+    total = 0
+    for ch in range(int(ch_start), int(ch_end) + 1):
+        # 兼容 原文/第NNN章.txt 和 章节/第NNN章/第NNN章.txt 两种布局
+        candidates = [
+            project_root / "原文" / f"第{ch:03d}章.txt",
+            project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt",
+        ]
+        for cand in candidates:
+            if cand.exists():
+                t = cand.read_text(encoding="utf-8")
+                excerpt = t[:600]
+                pieces.append(f"## ch{ch} 首段\n{excerpt}")
+                total += len(excerpt)
+                break
+        if total >= max_chars:
+            break
+    return "\n\n".join(pieces)[:max_chars]
 
+
+def plan_cluster_subcalls(chapters_count: int, max_chapters_per_call: int = 3) -> list[int]:
+    """把 cluster 拆成 sub-call 列表，每个 sub-call 写 N 章。
+    沿用 cluster_segmenter A' 半 cluster 教训：每 call ≤ 3 章 / ≤ 5000 字 / wall-clock ≤ 10 min。
+    返回每个 sub-call 写多少章的列表（和为 chapters_count）。
+    """
+    if chapters_count <= max_chapters_per_call:
+        return [chapters_count]  # 单 call
+    n_calls = (chapters_count + max_chapters_per_call - 1) // max_chapters_per_call
+    base = chapters_count // n_calls
+    rem = chapters_count % n_calls
+    plan = [base + (1 if i < rem else 0) for i in range(n_calls)]
+    return plan
+
+
+def estimate_words_per_chapter(cluster_meta: dict) -> int:
+    """估算每章字数（cluster 总字数 / 章数），默认 3500"""
+    total_words = cluster_meta.get("total_words") or cluster_meta.get("word_count") or 0
+    n = cluster_meta.get("chapters_count") or 0
+    if total_words and n:
+        return max(2500, min(5000, total_words // n))
+    return 3500
+
+
+# ============ main ============
 
 def main():
     check_deps()
     parser = argparse.ArgumentParser(
-        description="蒸馏 phase-2/phase-5 复刻（强制 gen-model）",
+        description="蒸馏 phase-2/phase-5 复刻测试（v2: chapter + cluster 两档 · 强制 gen-model）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--style-skill", required=True,
                         help="作者风格 skill .md 路径（v0/v1/v2/...）")
-    parser.add_argument("--type", required=True,
-                        choices=list(TYPE_SCENARIOS.keys()),
-                        help="复刻类型")
+    parser.add_argument("--mode", choices=["chapter", "cluster"], default="cluster",
+                        help="复刻颗粒度（默认 cluster · v2 章程主推）")
     parser.add_argument("--output", required=True,
                         help="输出 txt 路径")
-    parser.add_argument("--ref-chapter",
-                        help="参考章节 txt 路径（可选，作语感参考）")
-    parser.add_argument("--target-words", type=int, default=1200,
-                        help="目标 CJK 字数（默认 1200）")
+
+    # chapter 模式参数
+    parser.add_argument("--chapter-ref",
+                        help="[chapter 模式] 参考章节 txt 路径")
+    parser.add_argument("--target-words", type=int,
+                        help="[chapter 模式] 目标 CJK 字数（默认 4000）· cluster 模式自动估算")
+
+    # cluster 模式参数
+    parser.add_argument("--cluster-ref",
+                        help="[cluster 模式] cluster_id（如 cluster_001 / auto_003）")
+    parser.add_argument("--project",
+                        help="[cluster 模式] 项目路径（含 cluster_index.json）")
+    parser.add_argument("--max-chapters-per-call", type=int, default=3,
+                        help="[cluster 模式] 每 sub-call 最多写多少章（防 timeout · 默认 3）")
+
+    # legacy 旁路
+    parser.add_argument("--legacy-segment-only", action="store_true",
+                        help="🚨 紧急救火旁路：走旧 drill 单段模式（留 lesson · 章程废弃）")
+    parser.add_argument("--type",
+                        choices=list(LEGACY_TYPE_SCENARIOS.keys()),
+                        help="[legacy-segment-only] 旧 6-type 单段（仅救火）")
+
+    # 通用
     parser.add_argument("--profile",
                         help="覆盖 active profile（默认用 .env GEN_MODEL_ACTIVE）")
     args = parser.parse_args()
@@ -266,15 +385,9 @@ def main():
         sys.exit(2)
 
     style_skill_md = read_text(style_skill, limit=40000)
-    ref_chapter_text = read_text(Path(args.ref_chapter)) if args.ref_chapter else ""
-
-    scenario = TYPE_SCENARIOS[args.type]
-    system, user = build_replicate_prompt(style_skill_md, ref_chapter_text, scenario,
-                                          args.target_words)
 
     loader = GenModelLoader()
     if args.profile:
-        # 临时覆盖 active
         loader._active_name_override = args.profile  # noqa
     try:
         active = loader.get_active_profile()
@@ -284,44 +397,177 @@ def main():
         print(f"[ERROR] gen-model 配置错误: {e}", file=sys.stderr)
         sys.exit(2)
 
-    try:
-        reply, used_profile, elapsed = call_gen_model(loader, system, user,
-                                                     default_max_tokens=4000)
-    except GenModelExhaustedError as e:
-        print(f"\n[ERROR] 全部 profile 失败:\n{e}", file=sys.stderr)
-        sys.exit(3)
-
-    clean = clean_output(reply)
-    chars = cjk_count(clean)
-
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(clean, encoding='utf-8')
 
-    # 写 metadata sidecar
+    # ========== 分支 1: legacy 救火 ==========
+    if args.legacy_segment_only:
+        if not args.type:
+            print("[ERROR] --legacy-segment-only 需要同时传 --type", file=sys.stderr)
+            sys.exit(2)
+        print("⚠️ [LEGACY] 走旧 drill 单段模式（v2 章程已废弃 · 仅救火 · 请记 lesson）",
+              file=sys.stderr)
+        scenario = LEGACY_TYPE_SCENARIOS[args.type]
+        ref_text = read_text(Path(args.chapter_ref)) if args.chapter_ref else ""
+        user = build_legacy_segment_prompt(style_skill_md, ref_text, scenario,
+                                           args.target_words or 1200)
+        try:
+            reply, used_profile, elapsed = call_gen_model(
+                loader, REPLICATE_SYSTEM_PROMPT, user, default_max_tokens=4000, tag="LEGACY"
+            )
+        except GenModelExhaustedError as e:
+            print(f"\n[ERROR] 全部 profile 失败:\n{e}", file=sys.stderr)
+            sys.exit(3)
+        clean = clean_output(reply)
+        output_path.write_text(clean, encoding='utf-8')
+        meta = {
+            "mode": "legacy_segment", "type": args.type, "label": scenario["label"],
+            "style_skill": str(style_skill), "ref_chapter": args.chapter_ref,
+            "target_words": args.target_words or 1200,
+            "actual_cjk_chars": cjk_count(clean),
+            "profile_used": used_profile.name, "model_used": used_profile.model,
+            "elapsed_seconds": round(elapsed, 1),
+            "warning": "legacy drill mode · v2 章程已废弃 · 仅救火",
+        }
+        output_path.with_suffix(".meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
+        print(f"\n[OK · LEGACY] {output_path} · {cjk_count(clean)} CJK · {elapsed:.1f}s",
+              file=sys.stderr)
+        return
+
+    # ========== 分支 2: chapter 模式 ==========
+    if args.mode == "chapter":
+        if not args.chapter_ref:
+            print("[ERROR] --mode chapter 需要 --chapter-ref", file=sys.stderr)
+            sys.exit(2)
+        ref_text = read_text(Path(args.chapter_ref))
+        target_words = args.target_words or 4000
+        user = build_chapter_prompt(style_skill_md, ref_text, target_words)
+        try:
+            reply, used_profile, elapsed = call_gen_model(
+                loader, REPLICATE_SYSTEM_PROMPT, user,
+                default_max_tokens=max(4000, int(target_words * 1.5)), tag="chapter"
+            )
+        except GenModelExhaustedError as e:
+            print(f"\n[ERROR] 全部 profile 失败:\n{e}", file=sys.stderr)
+            sys.exit(3)
+        clean = clean_output(reply)
+        output_path.write_text(clean, encoding='utf-8')
+        meta = {
+            "mode": "chapter", "style_skill": str(style_skill),
+            "chapter_ref": args.chapter_ref, "target_words": target_words,
+            "actual_cjk_chars": cjk_count(clean),
+            "profile_used": used_profile.name, "model_used": used_profile.model,
+            "elapsed_seconds": round(elapsed, 1),
+            "produced_by": "distill_replicate.py v2 · chapter mode",
+        }
+        output_path.with_suffix(".meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
+        print(f"\n[OK · chapter] {output_path} · {cjk_count(clean)} CJK · {elapsed:.1f}s",
+              file=sys.stderr)
+        return
+
+    # ========== 分支 3: cluster 模式（主推） ==========
+    if not args.cluster_ref or not args.project:
+        print("[ERROR] --mode cluster 需要 --cluster-ref + --project", file=sys.stderr)
+        sys.exit(2)
+
+    project_root = Path(args.project)
+    try:
+        cluster_meta = load_cluster_meta(project_root, args.cluster_ref)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"[ERROR] cluster 元信息加载失败: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    chapters_count = int(cluster_meta.get("chapters_count") or 0)
+    if chapters_count <= 0:
+        print(f"[ERROR] cluster {args.cluster_ref} 章数无效: {chapters_count}", file=sys.stderr)
+        sys.exit(2)
+
+    words_per_chapter = estimate_words_per_chapter(cluster_meta)
+    subcall_plan = plan_cluster_subcalls(chapters_count, args.max_chapters_per_call)
+    ref_text = gather_cluster_ref_text(project_root, cluster_meta)
+
+    print(f"[cluster] {args.cluster_ref} · {chapters_count} 章 · {words_per_chapter} 字/章 估算",
+          file=sys.stderr)
+    print(f"[cluster] sub-call 计划: {subcall_plan}（共 {len(subcall_plan)} 段）",
+          file=sys.stderr)
+
+    full_text_parts = []
+    subcall_metas = []
+    total_elapsed = 0.0
+    prev_tail = ""
+
+    for i, chapters_in_call in enumerate(subcall_plan, start=1):
+        target_words_this = chapters_in_call * words_per_chapter
+        user = build_cluster_subcall_prompt(
+            style_skill_md, ref_text, cluster_meta,
+            subcall_index=i, subcall_total=len(subcall_plan),
+            prev_tail=prev_tail,
+            chapters_in_this_call=chapters_in_call,
+            target_words=target_words_this,
+        )
+        # 单 call max_tokens 估算：CJK 字按 1.5 tokens/字算（含标点），加 buffer
+        max_tokens_this = min(8000, max(4000, int(target_words_this * 2.0)))
+        try:
+            reply, used_profile, elapsed = call_gen_model(
+                loader, REPLICATE_SYSTEM_PROMPT, user,
+                default_max_tokens=max_tokens_this,
+                tag=f"cluster {i}/{len(subcall_plan)}"
+            )
+        except GenModelExhaustedError as e:
+            print(f"\n[ERROR] sub-call {i} 全部 profile 失败:\n{e}", file=sys.stderr)
+            # 已成功的段落写到 .partial.txt 防丢
+            if full_text_parts:
+                partial = "\n\n".join(full_text_parts)
+                output_path.with_suffix(".partial.txt").write_text(partial, encoding='utf-8')
+                print(f"[recovery] 已写 .partial.txt 保留前 {i-1} 段产出", file=sys.stderr)
+            sys.exit(3)
+
+        clean_piece = clean_output(reply)
+        full_text_parts.append(clean_piece)
+        prev_tail = clean_piece
+        total_elapsed += elapsed
+        subcall_metas.append({
+            "subcall_index": i,
+            "chapters_in_call": chapters_in_call,
+            "target_words": target_words_this,
+            "actual_cjk_chars": cjk_count(clean_piece),
+            "profile_used": used_profile.name,
+            "elapsed_seconds": round(elapsed, 1),
+        })
+
+    full_text = "\n\n".join(full_text_parts)
+    output_path.write_text(full_text, encoding='utf-8')
+
     meta = {
-        "type": args.type,
-        "label": scenario["label"],
+        "mode": "cluster",
+        "cluster_id": args.cluster_ref,
+        "cluster_meta": {
+            "chapters_count": chapters_count,
+            "chapter_start": cluster_meta.get("chapter_start") or cluster_meta.get("ch_start"),
+            "chapter_end": cluster_meta.get("chapter_end") or cluster_meta.get("ch_end"),
+            "boundary_reason": cluster_meta.get("boundary_reason"),
+            "total_words_original": cluster_meta.get("total_words") or cluster_meta.get("word_count"),
+        },
         "style_skill": str(style_skill),
-        "ref_chapter": args.ref_chapter,
-        "target_words": args.target_words,
-        "actual_cjk_chars": chars,
-        "profile_used": used_profile.name,
-        "model_used": used_profile.model,
-        "temperature": used_profile.temperature,
-        "elapsed_seconds": round(elapsed, 1),
-        "output_path": str(output_path),
-        "produced_by": "distill_replicate.py (gen-model, not Claude sub-agent)",
+        "project": str(project_root),
+        "subcall_plan": subcall_plan,
+        "subcalls": subcall_metas,
+        "total_target_words": chapters_count * words_per_chapter,
+        "total_actual_cjk_chars": cjk_count(full_text),
+        "total_elapsed_seconds": round(total_elapsed, 1),
+        "produced_by": "distill_replicate.py v2 · cluster mode · A' 半 cluster timeout 防御",
     }
-    meta_path = output_path.with_suffix(".meta.json")
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
+    output_path.with_suffix(".meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    print(f"\n[OK] 复刻完成", file=sys.stderr)
+    print(f"\n[OK · cluster] {args.cluster_ref}", file=sys.stderr)
     print(f"     输出: {output_path}", file=sys.stderr)
-    print(f"     metadata: {meta_path}", file=sys.stderr)
-    print(f"     CJK 字数: {chars} (target ≈ {args.target_words})", file=sys.stderr)
-    print(f"     profile: {used_profile.name} / {used_profile.model}", file=sys.stderr)
-    print(f"     耗时: {elapsed:.1f}s", file=sys.stderr)
+    print(f"     sub-calls: {len(subcall_plan)} 段", file=sys.stderr)
+    print(f"     总字数: {cjk_count(full_text)} CJK (target ≈ {chapters_count * words_per_chapter})",
+          file=sys.stderr)
+    print(f"     总耗时: {total_elapsed:.1f}s", file=sys.stderr)
 
 
 if __name__ == "__main__":

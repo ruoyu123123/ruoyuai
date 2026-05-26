@@ -168,31 +168,39 @@ python core/scripts/validate_style.py "风格库/复刻测试/v0/test1_opening.t
 
 ---
 
-# 闭环蒸馏总览
+# 闭环蒸馏总览（v2 章程 · 8 阶段）
+
+> **v2 章程**（2026-05-26 拍板 · memory `feedback_cluster_distill_v2_charter`）：
+> - 复刻闭环对齐 cluster 主轨 —— **废除 drill 单段 1200 字 6-type 模式**（opening/battle/psychology/dialogue/description/transition）
+> - 复刻只剩**两档**：chapter（3000-5000 字 v1→v2 中检）+ cluster（4000-20000 字 v2+ 终验）
+> - **Article 6 严闭环**：出货前必须做写作端回灌验证（用 skill_FINAL 灌 gen_writer.py 写同 cluster → arc/SFS 对比），不通过 = 不出货
 
 ```
-[阶段 1] 表层蒸馏（原 v10 流程）
-   ↓ 输出：skill v0
-[阶段 2] 复刻测试（新增）—— 用 v0 写 3 个测试段
-   ↓ 输出：复刻样本
-[阶段 3] 多维度对比（新增）—— 抽 2-3 章原文做 20+ 维度扫描
+[阶段 1] 表层蒸馏（cluster 主轨 · 不变）
+   ↓ 输出：skill v0 + cluster 单章 JSON + 衔接分析
+[阶段 2] chapter 复刻中检（v2 改 · 替代 drill 单段）—— 用 distill_replicate.py --mode chapter 复刻 1-2 个参考章
+   ↓ 输出：chapter 复刻样本（3000-5000 字）
+[阶段 3] 多维度对比扫描 —— 抽 2-3 章原文 + style_evaluator SFS 评分
    ↓ 输出：差距报告
-[阶段 4] 修正反思（新增）—— 差距 ≥X% 的维度生成新约束
+[阶段 4] 修正反思 —— 差距维度生成新约束 → skill v1
    ↓ 输出：skill v1 + lessons_learned
-[阶段 5] 复刻循环（新增）—— 用 v1 再测 → 阶段3 → 阶段4 → v2 …… 
-   ↓ 终止条件：连续 2 轮无新差距（≤2 个维度变化）
-[阶段 6] 出货 ——
-   - skill 终版
-   - lessons_learned 终版
-   - distillation_log.md（迭代历史）
+[阶段 5] cluster 终验复刻（v2 新增 · 主推）—— 用 distill_replicate.py --mode cluster 复刻 1-2 个完整故事块
+   ↓ 输出：cluster 复刻样本（4000-20000 字 · sub-call 拆分防 timeout）
+   ↓ 终止条件：连续 2 轮无新差距 + cluster SFS ≥ 80
+[阶段 6] 出货 —— _FINAL 四件套 + git commit
+   ↓ 输出：作者风格_FINAL.json + skill_FINAL.md + distillation_log.md
+[阶段 7] 写作端回灌严闭环（v2 新增 · 严 · Article 6）—— skill_FINAL 灌 gen_writer.py 写同 cluster → arc/SFS 对比
+   ↓ 不通过 → distill_finalize_verify.py exit 2 → plan end 拦截
+   ↓ 输出：writer_feedback_verify.json
 ```
 
-**单次蒸馏 ≤ 阶段 1 = 错误的蒸馏。完整蒸馏必须跑完阶段 6。**
+**单次蒸馏 ≤ 阶段 1 = 错误的蒸馏。完整蒸馏必须跑完阶段 7。**
 
 **⚠️ plan 强制规划下的硬约束**：
-- 阶段 1 完成后**强制执行 `plan_tracker.py step --n 2`**，但 `plan_tracker.py end` **必须阶段 7 全部完成才允许**（否则 exit 2）。
+- 阶段 1 完成后**强制执行 `plan_tracker.py step --n 2`**，但 `plan_tracker.py end` **必须阶段 8 (= step 8) 全部完成才允许**（否则 exit 2）。
 - 跳过任何 required 步骤直接调 `plan-end` → 脚本拦截 → 禁止声称"蒸馏完成"。
-- 这是从命令调度层兜底，防止 Agent 跑完阶段 1 表层蒸馏就交差。
+- **新增阶段 7 写作端回灌**是 v2 章程 Article 6 的严闭环 —— 即使阶段 6 _FINAL 文件齐全，回灌测试不通过 `distill_finalize_verify.py` 也会让 plan end 拦在出货前。
+- 这是从命令调度层兜底，防止 Agent 跑完阶段 1 表层蒸馏就交差，也防止 skill 在 Claude 上"看着像"但 gen-model 写不出。
 
 ---
 
@@ -231,34 +239,37 @@ echo "PLAN_ID=$PLAN_ID"
 - `--key` 示例：`v3_round1` / `v3.1_round2`（用于区分同一本书多次蒸馏）
 - 输出的 `PLAN_ID` 必须保存到环境变量供后续阶段使用
 
-### plan-step 阶段映射（铁律）
+### plan-step 阶段映射（铁律 · v2 章程 8 step）
 
 | 阶段编号 | 对应文档章节 | plan step n | expected_outputs |
 |---|---|---|---|
 | 阶段 0 | 读经验库 / 预处理（**必读 cluster_index.json**）| `--n 1` | 无（用 `--skip-output`） |
 | 阶段 1 | 表层蒸馏（cluster agent + cluster 衔接 + arc 聚合 + skill v0）| `--n 2` | `workspace/styles/<书名>/作者风格.json` |
-| 阶段 2 | 复刻测试 v0/v1/v2... | `--n 3` | 复刻测试目录下的 `test*.txt` |
-| 阶段 3 | 多维度对比扫描 + SFS 评分 | `--n 4` | `对比报告/distillation_compare_v{N}.json` |
+| 阶段 2 | chapter 复刻中检（`distill_replicate.py --mode chapter`）| `--n 3` | `复刻测试/.../chapter_replica.txt` |
+| 阶段 3 | 多维度对比扫描 + SFS 评分（chapter SFS / cluster mode 6 维）| `--n 4` | `对比报告/distillation_compare_v{N}.json` |
 | 阶段 4 | 修正反思 → skill v{N+1} | `--n 5` | 无（用 `--skip-output`，skill 升级是 Edit/Write） |
-| 阶段 5 | 复刻循环到收敛 | `--n 6` | 无（用 `--skip-output`，循环过程） |
+| 阶段 5 | cluster 终验复刻（`distill_replicate.py --mode cluster`）| `--n 6` | `复刻测试/.../cluster_<id>_replica.txt` |
 | 阶段 6 | 出货（_FINAL 四件套 + git commit） | `--n 7` | `作者风格_FINAL.json` + `skill_FINAL.md` + `distillation_log.md` |
+| 阶段 7 | 写作端回灌严闭环（`distill_finalize_verify.py`）| `--n 8` | `对比报告/writer_feedback_verify.json` |
 
 每阶段尾必须执行：
 ```bash
 python core/scripts/plan_tracker.py step "$PLAN_ID" --n <阶段号> [--output <文件>|--skip-output]
 ```
 
-### plan-end 兜底检查（出货前最后一道闸）
+### plan-end 兜底检查（出货前最后一道闸 · v2 阶段 7 是真闸）
 
-阶段 6 出货完成后**必须**：
+阶段 7 写作端回灌验证完成后**必须**：
 ```bash
 python core/scripts/plan_tracker.py end "$PLAN_ID"
-# exit 0  → 所有 required 步骤通过，允许声称"蒸馏完成"
-# exit 2  → 有 required 步骤未跑，禁止声称完成，必须回头补
+# exit 0  → 所有 8 required 步骤通过 + 阶段 7 回灌验证通过，允许声称"蒸馏完成"
+# exit 2  → 任一 required 步骤未跑 / 阶段 7 验证失败，禁止声称完成
 ```
 
-**特别强调（红线）**：
-- ❌ **阶段 1 完成 ≠ 命令完成**。阶段 2-6（复刻测试 → 对比 → 修正 → 循环 → 出货）每个都必须 step。
+**特别强调（红线 · v2 章程）**：
+- ❌ **阶段 1 完成 ≠ 命令完成**。阶段 2-7（chapter 复刻 → 对比 → 修正 → cluster 复刻 → 出货 → 写作端回灌）每个都必须 step。
+- ❌ **阶段 6 _FINAL 文件齐全 ≠ 出货完成**。阶段 7 `distill_finalize_verify.py` 必须 exit 0 才算真出货（v2 Article 6 严闭环）。
+- ❌ drill 单段模式（旧 --type opening|battle|...）**已废弃**，仅 `--legacy-segment-only` 紧急救火可用（留 lesson）。
 - ❌ 跳过任何 required 步骤直接调 `plan-end` → 脚本返回 exit 2，**禁止声称蒸馏完成**。
 - ❌ `lessons L2.7`：300 章上限触发分批时，必须先 `plan_tracker.py abort` 旧 plan，再为新批次 create 新 plan，禁止跨批次复用 plan_id。
 
