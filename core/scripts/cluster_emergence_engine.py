@@ -147,11 +147,17 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         return {"ok": False, "error": "无符合启发式条件的 candidate ME"}
 
     # 生成 cluster brief 候选
+    # v26 修复: --after-cluster 可传 "cluster_002" 或纯数字 "002" / 2 · 之前 if "_" in id 漏识别裸数字
     after_num = 0
-    if after_cluster_id and "_" in after_cluster_id:
-        try:
-            after_num = int(after_cluster_id.split("_")[-1])
-        except Exception:
+    if after_cluster_id:
+        import re as _re
+        m = _re.search(r"(\d+)", str(after_cluster_id))
+        if m:
+            try:
+                after_num = int(m.group(1))
+            except Exception:
+                after_num = len([c for c in shijianji.get("clusters", []) if c.get("status") != "candidate"])
+        else:
             after_num = len([c for c in shijianji.get("clusters", []) if c.get("status") != "candidate"])
 
     next_num = after_num + 1

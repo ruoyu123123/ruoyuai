@@ -44,18 +44,49 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
     splitter_decisions = load_json(splitter_decisions_path)
 
     # 取 chapter_range
-    chapter_range = splitter_decisions.get("chapter_range") or splitter_decisions.get("cluster_range")
-    if isinstance(chapter_range, str) and "-" in chapter_range:
+    # v26 修复: splitter 实际输出字段名兼容（ch_range / chapter_range / cluster_range / chapters_split）
+    chapter_range = (
+        splitter_decisions.get("chapter_range")
+        or splitter_decisions.get("cluster_range")
+        or splitter_decisions.get("ch_range")
+    )
+    chapters_split = splitter_decisions.get("chapters_split")
+
+    if isinstance(chapters_split, list) and chapters_split:
+        # splitter 直接给的章节号列表（最可靠）
+        chapters = [int(x) for x in chapters_split]
+    elif isinstance(chapter_range, str) and "-" in chapter_range:
         start, end = chapter_range.split("-")
         chapters = list(range(int(start), int(end) + 1))
-    elif isinstance(chapter_range, list):
-        chapters = list(range(chapter_range[0], chapter_range[1] + 1))
+    elif isinstance(chapter_range, list) and len(chapter_range) == 2:
+        chapters = list(range(int(chapter_range[0]), int(chapter_range[1]) + 1))
     else:
-        # 从 split_points + total_chapters 推算
-        target_chapters = splitter_decisions.get("target_chapters", 4)
-        # 假定 cluster_key 形如 "001" 或包含数字
-        ch_start = splitter_decisions.get("ch_start", 1)
-        chapters = list(range(ch_start, ch_start + target_chapters))
+        # v26 fallback: 从 事件簇.json.clusters[N].chapter_range 取（最权威源）
+        shi_path = project_root / "_数据库" / "事件簇.json"
+        if shi_path.exists():
+            try:
+                import json as _json
+                shi = _json.loads(shi_path.read_text(encoding="utf-8"))
+                for c in shi.get("clusters", []):
+                    cid = c.get("cluster_id", "").replace("cluster_", "")
+                    if cid == cluster_key.replace("cluster_", ""):
+                        cr = c.get("chapter_range") or []
+                        if isinstance(cr, list) and len(cr) == 2:
+                            chapters = list(range(cr[0], cr[1] + 1))
+                            break
+                else:
+                    chapters = []
+            except Exception:
+                chapters = []
+        else:
+            chapters = []
+        if not chapters:
+            # 最后兜底（cluster_001 特殊 · 但拒绝盲写 ch1-4 给非 cluster_001）
+            target_chapters = splitter_decisions.get("target_chapters", 4)
+            ch_start = splitter_decisions.get("ch_start")
+            if ch_start is None:
+                return {"ok": False, "error": f"无法确定 cluster_{cluster_key} chapter_range · splitter_decisions 缺 ch_range/chapters_split · 事件簇.json fallback 失败"}
+            chapters = list(range(int(ch_start), int(ch_start) + int(target_chapters)))
 
     written = []
     for n in chapters:
