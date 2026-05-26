@@ -102,6 +102,8 @@ KNOWN_COMMANDS = (
     "init-real-grade",  # v22.5 新书项目真品级初始化（禁最小可用）
     "ecas-v23-transition",  # v23 ECAS 全面转向工程（DCAS → 事件簇）
     "write-event-cluster",  # v23 ECAS 写单个事件簇（替代 write-chapter）
+    "cluster-write",  # v24 cluster 级写作流水线 7 步（推荐 · 替代 write-event-cluster）
+    "cluster-save-state",  # v24 cluster 级 save-state（推荐 · 替代 save-state）
 )
 
 
@@ -474,6 +476,18 @@ def _verify_agent_report(project: str, agent_name: str, chapter: int | None, clu
             candidates += [db / ".judge_reports" / f"ch_{ch_str}_voice-checker.json"]
         elif agent_name == "novel-outline-planner":
             candidates += [db / ".wal" / f"第{ch_str}章_planner_context.md"]
+        elif agent_name == "novel-writer":
+            # writer 不产 JudgeReport 但产章节正文文件 — 用正文文件存在判定 spawn 真实
+            candidates += [
+                project_root / "章节" / f"第{ch_str}章" / f"第{ch_str}章.txt",
+                project_root / "章节" / f"cluster_{ch_str}_draft" / f"cluster_{ch_str}_draft.txt",
+            ]
+        elif agent_name == "novel-chapter-splitter":
+            # splitter 产 splitter_cluster_<key>_decisions.json WAL
+            candidates += [
+                db / ".judge_reports" / f"ch_{ch_str}_chapter-splitter.json",
+                db / ".wal" / f"splitter_ch_{ch_str}_decisions.json",
+            ]
 
     if cluster_id:
         # cluster 级 agent JudgeReport
@@ -493,6 +507,15 @@ def _verify_agent_report(project: str, agent_name: str, chapter: int | None, clu
                 candidates += [db / ".judge_reports" / f"{cstr}_voice-checker.json"]
             elif agent_name == "novel-outline-planner":
                 candidates += [db / ".wal" / f"{cstr}_emergence.json"]
+            elif agent_name == "novel-writer":
+                candidates += [
+                    project_root / "章节" / f"{cstr}_draft" / f"{cstr}_draft.txt",
+                ]
+            elif agent_name == "novel-chapter-splitter":
+                candidates += [
+                    db / ".wal" / f"splitter_{cstr}_decisions.json",
+                    db / ".judge_reports" / f"{cstr}_chapter-splitter.json",
+                ]
 
     return any(c.exists() for c in candidates)
 

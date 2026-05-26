@@ -21,6 +21,15 @@ P2-10 升级
   injection 模板（"ignore previous instructions" / "忽略之前指令" 等），命中
   ≥2 个不同 pattern 时 stderr 警告。仅警告不拦截，避免误伤合法包含此类字符串
   的角色对话/研究内容；agent 看到警告自行判断是否真注入。
+
+v25 升级
+--------
+- 规则 12：novel-writer single 模式废弃门禁 —— spawn novel-writer 时，从 prompt
+  解析 PROJECT + CHAPTER → 读 _数据库/进度.json，若 CHAPTER 所属 cluster_id 在
+  chapter_plan 中仅 1 条记录 → exit 2 拦在 spawn 前。旁路 flag：
+  <PROJECT>/_数据库/.allow_single_mode.flag。与 novel-writer.md Step 1 v25+ 守护
+  形成双层防御（hook spawn 前拦 + writer 内部 fail-fast 兜底）。
+  来源：用户原话「我要清理掉单章生成的模式」（2026-05-26）
 """
 import json
 import os
@@ -292,6 +301,79 @@ def main():
         print("   理由：蒸馏闭环必须用最终写作要用的 gen-model 测，否则升级针对错的模型 = 无效迭代", file=sys.stderr)
         print("   紧急旁路：prompt 加 'DISTILL_REPLICATE_BYPASS=1'（仅救火用，会留 lesson 记录）", file=sys.stderr)
         sys.exit(2)
+
+    # ============ 规则 12（v25）：novel-writer single 模式废弃门禁 ============
+    # 实证：单章直写绕过 cluster 级伏笔/voice/anchor 完整性校验 → cluster 内部叙事断层
+    # 来源：用户原话「我要清理掉单章生成的模式，让单章生成没有生存空间」（2026-05-26）
+    # 与 novel-writer.md Step 1 v25+ 守护规则形成双层防御：
+    #   - 本 hook：spawn 前拦下（节约一次 agent 启动 + gen_writer 调用）
+    #   - writer Step 1：spawn 后兜底（直接调 gen_writer.py 绕过 wrapper 时仍能挡）
+    # 拦截特征（全部满足）：
+    #   1) spawn novel-writer（subagent_type 精确匹配 或 desc 含 "novel-writer"）
+    #   2) prompt 含 PLAN_ID（正经流水线，临时调试 spawn 放行）
+    #   3) 解析出 PROJECT + CHAPTER，进度.json 存在
+    #   4) CHAPTER 对应 chapter_plan 条目有 cluster_id（ECAS 模式）
+    #   5) chapter_plan 中同 cluster_id 条目数 == 1
+    #   6) 项目根 _数据库/.allow_single_mode.flag 不存在
+    # 任一不满足或 hook 自身故障 → 放行（writer 自身 fail-fast 二道防线兜底）
+    subagent_type_str = tool_input.get("subagent_type", "") or ""
+    is_writer_spawn = (
+        subagent_type_str == "novel-writer" or
+        "novel-writer" in desc
+    )
+    if is_writer_spawn and has_plan_id:
+        try:
+            m_proj = re.search(r"^\s*PROJECT:\s*(.+?)\s*$", prompt, re.MULTILINE)
+            m_chap = re.search(r"^\s*CHAPTER:\s*(\d+)", prompt, re.MULTILINE)
+            if m_proj and m_chap:
+                project_path = m_proj.group(1).strip()
+                # 去除路径外层引号
+                if len(project_path) >= 2 and project_path[0] in ('"', "'") and project_path[-1] == project_path[0]:
+                    project_path = project_path[1:-1]
+                ch_target = int(m_chap.group(1))
+
+                from pathlib import Path
+                proj_root = Path(project_path)
+                if not proj_root.is_absolute():
+                    proj_root = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())) / project_path
+                db = proj_root / "_数据库"
+                prog_path = db / "进度.json"
+                flag_path = db / ".allow_single_mode.flag"
+
+                if prog_path.exists() and not flag_path.exists():
+                    progress = json.loads(prog_path.read_text(encoding="utf-8"))
+                    chapter_plan = progress.get("chapter_plan", []) or []
+                    target_entry = next((c for c in chapter_plan if c.get("ch") == ch_target), None)
+                    if target_entry:
+                        # 兼容字段名：cluster_id（ECAS 标准）/ cluster（novel-writer.md 简写）
+                        cluster_id = target_entry.get("cluster_id") or target_entry.get("cluster")
+                        if cluster_id:  # cluster_id=None = v22 旧 DCAS 兼容章节，跳过检查
+                            same_cluster = [
+                                c for c in chapter_plan
+                                if (c.get("cluster_id") or c.get("cluster")) == cluster_id
+                            ]
+                            if len(same_cluster) == 1:
+                                print(f"❌ [Hook v25] novel-writer spawn 拦截：single 模式已废弃",
+                                      file=sys.stderr)
+                                print(f"   项目：{project_path}", file=sys.stderr)
+                                print(f"   章号：{ch_target}（属于 {cluster_id}）", file=sys.stderr)
+                                print(f"   原因：chapter_plan 中 cluster_id={cluster_id} 仅 1 条记录",
+                                      file=sys.stderr)
+                                print(f"   实证：单章直写绕过 cluster 级伏笔/voice/anchor 校验 → 叙事断层",
+                                      file=sys.stderr)
+                                print(f"   修复：先 spawn novel-outline-planner 补齐 cluster_{cluster_id} 的 ch+1..ch+N 占位条目，再重试 writer",
+                                      file=sys.stderr)
+                                print(f"   旁路（仅紧急救火）：创建 '{flag_path}' 后降级为 DCAS（最少 2 章），会留 lesson 记录",
+                                      file=sys.stderr)
+                                print(f"   依据：用户原话「我要清理掉单章生成的模式」(2026-05-26) + novel-writer.md Step 1 v25+ 守护",
+                                      file=sys.stderr)
+                                sys.exit(2)
+        except SystemExit:
+            raise  # exit 2 不能被吞
+        except Exception:
+            # hook 自身故障 → 放行（writer Step 1 fail-fast 兜底）
+            # 防御性设计：hook 绝不因自身 bug 阻断主流程
+            pass
 
     # ============ 规则 9（P2-10）：内容级注入模式检测（warn-only） ============
     # 扫描 prompt 中常见 prompt injection 模板。命中 ≥2 个不同 pattern → 警告。
