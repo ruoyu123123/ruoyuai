@@ -2295,7 +2295,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "dcas_word_target": 6500 if dcas_enabled else (3000 - pre_opening_word_count if has_pre_opening else 3000),
         "has_pre_opening": has_pre_opening,
         "pre_opening_word_count": pre_opening_word_count,
-        "writer_mode": "dcas" if dcas_enabled else "single",
+        "writer_mode": "ecas",  # v25 ECAS 唯一默认 · single 已废弃 (writer/hook/plan 三层防御) · DCAS 走 .allow_single_mode.flag 兼容旁路
         "rag_relevant_chapters": rag_hits,
         "memory_search_results": memory_hits,
         "database_coverage": s.coverage_report(),

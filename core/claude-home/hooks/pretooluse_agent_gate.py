@@ -251,7 +251,8 @@ def main():
             ".research_cache/" in prompt
         )
         # splitter 不需要调研（纯算法切分），豁免
-        is_splitter = "novel-chapter-splitter" in desc or "splitter" in (subagent_type or "").lower()
+        _sat = tool_input.get("subagent_type", "") or ""
+        is_splitter = "novel-chapter-splitter" in desc or "splitter" in _sat.lower()
         # ecas-checkpoint 等纯验证类豁免
         is_checkpoint_validator = "ecas-checkpoint" in desc.lower() or "checkpoint" in desc.lower()
         if not (has_research_ref or is_splitter or is_checkpoint_validator):

@@ -16,7 +16,7 @@
     {
       "n": 2,
       "name": "novel-writer+chapter-splitter+title-regen",
-      "description": "novel-writer agent 三模式（ECAS 12000-25000 字故事块 / DCAS 6500 字双章 / single 3000 字 + pre_opening 承接）→ DCAS/ECAS 模式 writer 完成后跑 chapter_splitter 切多章 + pre_opening → splitter 后必跑 gen_chapter_titles.py 用 gen-model 三档策略（80%2-4字 normal / 15%5-8字 mid / 5%8-14字 high 史诗钩子）重生章标题写章首（70 章爆款调研支撑，见 memory feedback_splitter_post_chapter_title_regen）",
+      "description": "novel-writer agent 两模式（ECAS 12000-25000 字故事块 默认 · 唯一推荐 / DCAS 6500 字双章 仅 .allow_single_mode.flag 旁路时降级用）→ writer 完成后跑 chapter_splitter 切多章 + pre_opening → splitter 后必跑 gen_chapter_titles.py 用 gen-model 三档策略（80%2-4字 normal / 15%5-8字 mid / 5%8-14字 high 史诗钩子）重生章标题写章首（70 章爆款调研支撑，见 memory feedback_splitter_post_chapter_title_regen）· v25：single 模式已废弃，writer/hook/plan 三层拦截（详见 novel-writer.md '🚫 single 模式已废弃' 段）",
       "required": true,
       "expected_outputs": ["章节/第{ch:03d}章/第{ch:03d}章.txt", "章节/第{ch:03d}章/第{ch:03d}章_changes.json"],
       "scripts": [
