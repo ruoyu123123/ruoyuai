@@ -995,7 +995,12 @@ def _parse_cluster_arg(args):
 
 def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers: list) -> dict:
     """v24: cluster 级 audit — 把 cluster_draft.txt 当一个超长章跑现有 scanner 集合，
-    报告聚合所有 scene 的 issue。"""
+    报告聚合所有 scene 的 issue。
+
+    v26 修复（feedback_audit_hub_cluster_mode_virtual_manifest_auto_prepare）：
+    旧版主代理需要手动 cp ch_<起首章>.json → ch_9000.json 让 validate_chapter
+    找到 manifest。现自动复制 cluster 起首章 manifest 给虚拟 ch_9000。
+    """
     cluster_draft_path = project_root / "章节" / f"cluster_{cluster_key}_draft" / f"cluster_{cluster_key}_draft.txt"
     cluster_changes_path = project_root / "章节" / f"cluster_{cluster_key}_draft" / f"cluster_{cluster_key}_changes.json"
     if not cluster_draft_path.exists():
@@ -1012,6 +1017,50 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
     shutil.copy(cluster_draft_path, fake_body)
     if cluster_changes_path.exists():
         shutil.copy(cluster_changes_path, fake_changes)
+
+    # v26: 自动准备虚拟 manifest (validate_chapter 校验需要 ch_9000.json 存在)
+    manifest_dir = project_root / "_数据库" / ".manifest"
+    fake_manifest = manifest_dir / f"ch_{fake_ch}.json"
+    fake_manifest_compressed = manifest_dir / f"ch_{fake_ch}_compressed.json"
+    created_fake_manifest = False
+    try:
+        if manifest_dir.exists() and not fake_manifest.exists():
+            # 找 cluster 起首章 manifest 作为模板
+            import json as _json
+            start_ch = None
+            shi_path = project_root / "_数据库" / "事件簇.json"
+            if shi_path.exists():
+                try:
+                    shi = _json.loads(shi_path.read_text(encoding="utf-8"))
+                    for c in shi.get("clusters", []):
+                        cid = c.get("cluster_id", "").replace("cluster_", "")
+                        if cid == cluster_key or c.get("cluster_id") == f"cluster_{cluster_key}":
+                            cr = c.get("chapter_range") or []
+                            if isinstance(cr, list) and len(cr) >= 1:
+                                start_ch = cr[0]
+                                break
+                except Exception:
+                    pass
+            # 找候选 manifest 复制
+            source_manifest = None
+            if start_ch is not None:
+                source_manifest = manifest_dir / f"ch_{start_ch:03d}.json"
+            if not source_manifest or not source_manifest.exists():
+                # fallback: 用任意已存在的 manifest
+                existing = sorted(manifest_dir.glob("ch_[0-9]*.json"))
+                existing = [p for p in existing if "_compressed" not in p.name and "_9000" not in p.name]
+                if existing:
+                    source_manifest = existing[0]
+            if source_manifest and source_manifest.exists():
+                shutil.copy(source_manifest, fake_manifest)
+                src_compressed = source_manifest.parent / source_manifest.name.replace(".json", "_compressed.json")
+                if src_compressed.exists():
+                    shutil.copy(src_compressed, fake_manifest_compressed)
+                created_fake_manifest = True
+    except Exception as _e:
+        # manifest 准备失败不阻断 · validate_chapter 会自己报 MANIFEST_MISSING
+        pass
+
     try:
         report = audit_chapter(project_root, fake_ch, auto_fix, waivers)
         report["_cluster_mode"] = True
@@ -1019,11 +1068,17 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
         report["_cluster_draft_path"] = str(cluster_draft_path)
         return report
     finally:
-        # 清理虚拟章节
+        # 清理虚拟章节 + 虚拟 manifest
         try:
             shutil.rmtree(fake_ch_dir)
         except Exception:
             pass
+        if created_fake_manifest:
+            try:
+                fake_manifest.unlink(missing_ok=True)
+                fake_manifest_compressed.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def main():

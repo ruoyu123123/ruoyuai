@@ -29,10 +29,34 @@ def load_json(p: Path, default=None):
         return default
 
 
+def _get_me_id(me: dict) -> str:
+    """v26 字段兼容: ME 可能用 'id' 或 'me_id' 字段。"""
+    return me.get("id") or me.get("me_id") or ""
+
+
 def find_remaining_mes(dashishi: dict, completed_mes: set) -> list:
-    """从大势卡 ME 池中找剩余未完成的 ME。"""
-    pool = dashishi.get("major_events_pool", []) or []
-    return [me for me in pool if me.get("id") not in completed_mes]
+    """从大势卡 ME 池中找剩余未完成的 ME。
+
+    v26 修复:
+    1. 字段名兼容 - 同时读 'major_events_pool' 和 'major_events'
+    2. ME id 字段兼容 - 同时读 'id' 和 'me_id'
+    3. ME status 识别 - status='completed' 的 ME 自动算 completed
+    """
+    pool = dashishi.get("major_events_pool") or dashishi.get("major_events") or []
+    remaining = []
+    for me in pool:
+        me_id = _get_me_id(me)
+        # v26: 跳过已 completed 的 ME（按 status 字段判定 · 不只是 completed_mes 集合）
+        if me.get("status") == "completed":
+            continue
+        # 跳过已在 completed_mes (来自 事件簇.clusters[].ME_to_advance) 的 ME
+        if me_id in completed_mes:
+            continue
+        # 规范化 me dict: 确保 id 字段存在（向下游 me_to_cluster_brief 传递）
+        if "id" not in me and "me_id" in me:
+            me = {**me, "id": me["me_id"]}
+        remaining.append(me)
+    return remaining
 
 
 def select_candidate_mes(remaining_mes: list, world_state: dict, character_arc: dict, last_consequence: list) -> list:
@@ -53,17 +77,28 @@ def select_candidate_mes(remaining_mes: list, world_state: dict, character_arc: 
 
 
 def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) -> dict:
-    """把 ME 转成 cluster brief 候选 (scene_storyboard 仅雏形)。"""
+    """把 ME 转成 cluster brief 候选 (scene_storyboard 仅雏形)。
+
+    v26: title fallback - 大势卡 ME 可能只有 description 没 title · 自动取 description 头 30 字。
+    """
+    me_id = _get_me_id(me)
+    title = me.get("title") or ""
+    if not title:
+        # fallback: description 前 30 字 (截断在标点处) 作为 title
+        desc = me.get("description", "")
+        title = desc[:30].rstrip("，。！？、")
+        if len(desc) > 30:
+            title += "…"
     return {
         "cluster_id": cluster_id,
-        "parent_me": me.get("id"),
-        "scope_summary": f"[CANDIDATE {ord}] 围绕 ME「{me.get('title', '')}」展开。{me.get('description', '')}",
+        "parent_me": me_id,
+        "scope_summary": f"[CANDIDATE {ord}] 围绕 ME「{title}」展开。{me.get('description', '')}",
         "expected_word_range": {"min": 16000, "max": 22000},
         "scenes_estimated": 4,
         "estimated_chapters": 4,
         "chapter_range": None,  # 等用户选定后由 outline-planner 计算
         "status": "candidate",
-        "ME_to_advance": [me.get("id")],
+        "ME_to_advance": [me_id],
         "_doc": f"v24 fluid 涌现 · 等待用户从 {ord} 个 candidate 中选 1 个 → status 改 in_progress",
         "scene_storyboard": [],  # 雏形 · 用户选定后再让 outline-planner 详化
         "anchor_props": [],

@@ -269,7 +269,12 @@ def load_template(command: str) -> dict:
 
 
 def _substitute(text: str, project: str, chapter: int | None, key: str | None) -> str:
-    """替换 {project} / {ch} / {ch:03d} / {ch+N:03d} / {ch-N:03d} / {key} 占位符。v23 加算术支持。"""
+    """替换 {project} / {ch} / {ch:03d} / {ch+N:03d} / {ch-N:03d} / {key} / {next_key} 占位符。
+
+    v23 加算术支持。v26 加 {next_key} 替换（cluster 流水线 step 11 emergence 用）：
+    - 若 key = "001" / "cluster_001" → next_key = "002" / "cluster_002"
+    - 若 key 不含数字段 → next_key = key + "_next"（保守 fallback）
+    """
     import re
     if not isinstance(text, str):
         return text
@@ -286,6 +291,23 @@ def _substitute(text: str, project: str, chapter: int | None, key: str | None) -
         out = re.sub(r"\{ch[+\-]\d+(:03d)?\}", "", out)
         out = out.replace("{ch:03d}", "")
         out = out.replace("{ch}", "")
+
+    # v26: {next_key} 替换 (NNN → NNN+1 · 输出纯数字段 · 适配 cluster_{next_key}_xxx 模板)
+    # 设计契约: plan template 写 `cluster_{next_key}_xxx` 时 key="001" → next_key="002"
+    #          key="cluster_001" 也按内部数字段递增 + 剥前缀 → next_key="002"
+    if "{next_key}" in out:
+        next_key = ""
+        if key:
+            m = re.search(r"(\d+)", key)
+            if m:
+                num_str = m.group(1)
+                next_num = int(num_str) + 1
+                # 保持原零填充宽度 · 但不带前缀
+                next_key = f"{next_num:0{len(num_str)}d}"
+            else:
+                next_key = key + "_next"
+        out = out.replace("{next_key}", next_key)
+
     out = out.replace("{key}", key or "")
     return out
 

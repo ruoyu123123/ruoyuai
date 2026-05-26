@@ -158,17 +158,111 @@ def build_truth_check_report(ch_summary_entry: dict, ch: int) -> dict | None:
     }
 
 
+def _resolve_chapter_range(project_root: Path, cluster_key: str) -> list[int]:
+    """v26: 从 事件簇.json.clusters[N].chapter_range 取章节范围。"""
+    import json as _json
+    shi_path = project_root / "_数据库" / "事件簇.json"
+    if not shi_path.exists():
+        return []
+    try:
+        shi = _json.loads(shi_path.read_text(encoding="utf-8"))
+        for c in shi.get("clusters", []):
+            cid = c.get("cluster_id", "").replace("cluster_", "")
+            target = cluster_key.replace("cluster_", "")
+            if cid == target:
+                cr = c.get("chapter_range") or []
+                if isinstance(cr, list) and len(cr) == 2:
+                    return list(range(cr[0], cr[1] + 1))
+    except Exception:
+        pass
+    return []
+
+
+def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool) -> dict:
+    """对单章跑归档。返回 {ch, written_count, judges}."""
+    db = project_root / "_数据库"
+
+    # 收集源数据
+    audit = load_json(db / ".audit" / f"ch_{ch:03d}_audit.json", {})
+    reflection = load_json(db / ".wal" / f"第{ch:03d}章_reflection.json", {})
+    summary = load_json(db / ".wal" / f"第{ch:03d}章_summary.json", {})
+    changes = load_json(project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json", {})
+    ch_summary_full = load_json(db / "章纲摘要.json", {"chapters": []})
+    ch_entry = next((c for c in ch_summary_full.get("chapters", []) if c.get("ch") == ch), {})
+
+    judges = {
+        "audit-hub": build_validator_report_from_audit(audit, ch),
+        "writer-self-eval": build_writer_self_eval_report(changes, ch),
+        "summarizer": build_summarizer_report(summary, ch),
+        "reflector": build_reflector_report(reflection, ch),
+        "writer-truth-check": build_truth_check_report(ch_entry, ch),
+    }
+    valid_judges = {k: v for k, v in judges.items() if v is not None}
+    print(f"[judge_reports_archive] ch{ch}: 汇集 {len(valid_judges)} 个 judge 信号")
+
+    archive_dir = db / ".judge_reports"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for judge_id, report in valid_judges.items():
+        archive_path = archive_dir / f"ch_{ch:03d}_{judge_id}.json"
+        if dry_run:
+            print(f"  [DRY] would write: {archive_path}")
+        else:
+            save_json(archive_path, report)
+            written.append(judge_id)
+        grade = report.get("overall_grade", "?")
+        conf = report.get("confidence", "?")
+        print(f"  [{judge_id}] grade={grade} confidence={conf}")
+
+    # 累积摘要到 章纲摘要[ch].judge_reports[]
+    if not dry_run and ch_entry:
+        summaries = []
+        for jid, r in valid_judges.items():
+            summaries.append({
+                "judge_id": jid,
+                "grade": r.get("overall_grade"),
+                "confidence": r.get("confidence"),
+                "ts": datetime.now().isoformat(timespec="seconds"),
+            })
+        ch_entry["judge_reports"] = summaries
+        save_json(db / "章纲摘要.json", ch_summary_full)
+        print(f"  [OK] 章纲摘要 ch{ch}.judge_reports 已更新（{len(summaries)} 条摘要）")
+
+    return {"ch": ch, "written": len(written), "judges": list(valid_judges.keys())}
+
+
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="judge_reports_archive · v26 双模式 (chapter or cluster)")
     ap.add_argument("project")
-    ap.add_argument("chapter", type=int)
+    # v26: chapter 改 optional · 加 --cluster 互斥模式
+    ap.add_argument("chapter", type=int, nargs="?", default=None,
+                    help="单章号 (chapter mode) · 与 --cluster 互斥")
+    ap.add_argument("--cluster", type=str, default=None,
+                    help="cluster key (e.g. '001' 或 'cluster_001') · 自动展开本 cluster 全部章节归档")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     project_root = Path(args.project)
+
+    # v26: cluster mode 优先
+    if args.cluster:
+        chapters = _resolve_chapter_range(project_root, args.cluster)
+        if not chapters:
+            print(f"[FATAL] cluster {args.cluster} 未在 事件簇.json 找到 chapter_range", file=sys.stderr)
+            return 2
+        print(f"[judge_reports_archive · cluster mode] cluster_{args.cluster.replace('cluster_', '')} 展开 {len(chapters)} 章: {chapters}")
+        for ch in chapters:
+            _archive_one_chapter(project_root, ch, args.dry_run)
+        print(f"\n[OK] cluster {args.cluster} judge_reports 归档完成 {len(chapters)} 章")
+        return 0
+
+    if args.chapter is None:
+        print("[FATAL] 必须指定 chapter 章号 或 --cluster <key>", file=sys.stderr)
+        return 2
+
+    # chapter mode (向后兼容)
     ch = args.chapter
     db = project_root / "_数据库"
-
     # 收集源数据
     audit = load_json(db / ".audit" / f"ch_{ch:03d}_audit.json", {})
     reflection = load_json(db / ".wal" / f"第{ch:03d}章_reflection.json", {})
