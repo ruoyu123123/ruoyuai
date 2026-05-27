@@ -139,12 +139,22 @@ $ARGUMENTS
 # 阶段1：子代理分析单章后跑精确统计
 python core/scripts/style_analyzer.py "原文/第1章.txt" --output "_数据库/蒸馏进度/ch01_metrics.json"
 
-# 阶段3：对比原文和复刻样本
-python core/scripts/style_evaluator.py --ref "原文/第19章.txt" --gen "风格库/复刻测试/v0/test1_opening.txt" --output "风格库/对比报告/eval_v0.json"
+# 阶段3：对比原文和复刻样本（🔴 v23.13 起默认走多基线 · 防单 ref 失真）
+python core/scripts/style_evaluator.py \
+  --gen "workspace/styles/<书名>/复刻测试/v0/test1_opening.txt" \
+  --multi-ref-from-dir "workspace/styles/<书名>/原文" \
+  --multi-ref-count 5 \
+  --output "workspace/styles/<书名>/对比报告/eval_v0.json"
 
 # 阶段2：复刻后校验
 python core/scripts/validate_style.py "风格库/复刻测试/v0/test1_opening.txt" --strict
 ```
+
+**⚠️ phase-3 评分硬约束**（v23.13 · 2026-05-27 加 · lessons L19.1）：
+- **数据 ≥ 60 章时**：必须用 `--multi-ref-from-dir` 多基线模式（单 ref 评分对高方差作者必失真）
+- **数据 < 30 章早期**：可用 `--ref <single>` 单基线（数据不足以构建有意义区间）
+- **特意验证某章型**：单 ref 模式 OK（如要测"开头章"复刻效果，单 ref 用 ch001）
+- **违反后果**：v0/v1 真分 84/83 被误评为 67/69，浪费 phase-4 修正反思（蛊真人 2026-05-27 翻车案）
 
 **LLM 自报 vs 程序化统计的分工**：
 - 句长/段落/标点/功能词/对话占比/禁用词 → **必须用 Python 脚本**（LLM 误差 30-50%）

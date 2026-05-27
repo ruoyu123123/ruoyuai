@@ -735,7 +735,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="SFS 风格保真度评分器 — 对比原文与 AI 生成文本的风格匹配度"
     )
-    parser.add_argument("--ref", required=True, action="append",
+    parser.add_argument("--ref", required=False, action="append", default=[],
                         help="原文文件或目录路径（可多次指定 --ref A.txt --ref B.txt 启用多基线区间评分）")
     parser.add_argument("--gen", required=True,
                         help="AI 生成文件或目录路径")
@@ -743,9 +743,43 @@ def main():
                         help="风格基线 JSON 文件（可选，覆盖 ref 分析结果）")
     parser.add_argument("--output", default=None,
                         help="报告输出路径（默认输出到 stdout）")
+    # v23.13（2026-05-27）多基线自动抽样：解决「单 ref 评分对短段独白章误判过重」
+    # 用例：复刻独白章 vs ref 对话章 → 单 ref 模式扣分严重 →
+    # 自动抽 N 章混合章型 ref → 区间评分 → 落入任一章型带内得 1.0
+    parser.add_argument("--multi-ref-from-dir", default=None,
+                        help="风格库原文目录（如 workspace/styles/蛊真人/原文）→ 自动抽 N 章混合章型 ref")
+    parser.add_argument("--multi-ref-count", type=int, default=5,
+                        help="--multi-ref-from-dir 抽样数（默认 5）")
+    parser.add_argument("--multi-ref-seed", type=int, default=42,
+                        help="抽样随机种子（默认 42 · 保证可复现）")
     args = parser.parse_args()
 
     gen_path = Path(args.gen)
+
+    # v23.13 自动抽样多基线（如果指定 --multi-ref-from-dir）
+    if args.multi_ref_from_dir:
+        ref_dir = Path(args.multi_ref_from_dir)
+        if not ref_dir.is_dir():
+            print(f"[错误] --multi-ref-from-dir 不存在: {ref_dir}", file=sys.stderr)
+            sys.exit(1)
+        all_files = sorted(ref_dir.glob("第*章.txt"))
+        if not all_files:
+            all_files = sorted(ref_dir.glob("*.txt"))
+        if len(all_files) < args.multi_ref_count:
+            print(f"[警告] 目录仅 {len(all_files)} 章 < 抽样数 {args.multi_ref_count}，全用",
+                  file=sys.stderr)
+            sampled = all_files
+        else:
+            import random
+            rng = random.Random(args.multi_ref_seed)
+            sampled = rng.sample(all_files, args.multi_ref_count)
+        args.ref.extend(str(f) for f in sampled)
+        print(f"[multi-ref] 自动抽 {len(sampled)} 章混合章型 ref: "
+              f"{[f.name for f in sampled]}", file=sys.stderr)
+
+    if not args.ref:
+        print("[错误] 必须指定 --ref 或 --multi-ref-from-dir", file=sys.stderr)
+        sys.exit(1)
 
     # E5：多 ref 支持
     ref_texts_list = _read_ref_texts(args.ref)

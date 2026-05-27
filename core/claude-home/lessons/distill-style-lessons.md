@@ -1231,3 +1231,62 @@ writer 写完一章后，**三个 scanner 串行扫描** → judge agent 读三�
 - **FINAL 文件**：skill_FINAL.md = skill_v1.md + frontmatter（不重写）
 - **distillation_log**：完整保留 v0→v1→v2 三轮历史 + 最终选 v1 的决策说明
 - **预防**：FINAL 永远是「迭代过程中的峰值版本」，不是「最后一版」。让用户和 reader 能从 log 看清楚为什么不是最新版
+
+---
+
+## 19. style_evaluator 测量层（2026-05-27 新增 · 蛊真人蒸馏发现）
+
+### L19.1 ⛔ 单 ref 评分严重失真 · 必须用多基线 [MANUAL · 2026-05-27]
+
+- **现象**：蛊真人 v0→v4 蒸馏闭环跑 5 个 chapter 复刻，单 ref（仅传 ch001）评分 v0=67.98 → v4=54.62 一路退步；用户观察主观质量却**反向上升**（v3/v4 试写新章命中章型识别 + 引号独白 + 章题回响）
+- **根因**：`style_evaluator.py` 单 ref 模式 = 强制对齐**单一章型**指标。蛊真人不同章型方差极大（对话章 50% / 战斗章 5% / 独白章 9-15%），用 ch001（对话章）当唯一目标 → 复刻是独白章/铺垫章被骂"对话占比偏低 -14%"
+- **影响**：误导 phase-4 修正反思，让主代理以为 skill 在退步实际上是测量错位 → 浪费迭代
+- **修复（v23.13 · 2026-05-27 代码层）**：
+  - `style_evaluator.py` 加 `--multi-ref-from-dir <原文目录> --multi-ref-count N --multi-ref-seed S` 参数
+  - 自动抽 N 章（默认 5）混合章型构建 multi-baseline 区间 profile
+  - 利用已有的 `_interval_pct_match`（值落入 min/max 区间得满分 1.0）+ `_interval_jsd_score`（取与所有 ref 中最佳匹配 JSD）
+- **实测效果**（蛊真人 v0-v4 全部跑修复后评分）：
+
+  | 版本 | 单 ref SFS（失真）| 多基线 SFS（修复）| Δ |
+  |---|---|---|---|
+  | v0 | 67.98 | **84.98** | +17.00 |
+  | v1 | 69.83 | **83.60** | +13.77 |
+  | v2 | 60.69 | **78.12** | +17.43 |
+  | v3 | 55.56 | 69.17 | +13.61 |
+  | v4 | 54.62 | **70.54** | +15.92 |
+
+  全版本 **+13-17 分**，最高维度差异：「对话占比偏差」+67.9 / 「引号化独白比」+100.0 / 「单句成段率匹配」+19.4
+
+- **预防**：
+  1. **phase-3 多维度对比扫描时必须用 multi-ref**：调用模板 `python core/scripts/style_evaluator.py --gen <replica> --multi-ref-from-dir <project>/原文 --multi-ref-count 5`
+  2. 单 ref 模式仅在「特意验证某章型复刻」时用（如要测"开头章"复刻效果，单 ref 用 ch001）
+  3. 蒸馏后期（≥60 章数据）默认 multi-ref · 早期 < 30 章可单 ref（数据不足）
+  4. distill-style 命令文档 phase-3 section 已更新（2026-05-27）
+- **关联**：
+  - `style_evaluator.py:_interval_pct_match`（已有但未默认启用的多基线逻辑）
+  - `style_evaluator.py:_build_interval_profile`（多 profile 构建区间）
+  - 用户原话：「SFS 是机械量化（句长/段长/标点/词频），对蛊真人的「短段独行 + 引号独白 + 主题章型」惩罚过重」
+- **业界依据**：style transfer 评估文献共识 — 风格化文本评分需用同作者多样本基线（参考 EQ-Bench Longform 8-章基线 / WebNovelBench 16 维多章对照），单样本评分对高方差作者必失真
+
+### L19.2 ⚠️ SFS 评分 vs 主观质量背离时的优先级判断
+
+- **现象**：v3/v4 SFS 量化退步但主观质量上升（v4 试写「方源 100 章后」完美命中章型识别 + 引号独白连发 + 章题回响）
+- **常见解释**：
+  - 单 ref 失真（L19.1 已修）
+  - skill 加 few-shot 强约束后 gen-model 偏离"标准爽文均值"（更像目标作者但偏离评分预设）
+- **修复策略**（按优先级）：
+  1. 先跑 L19.1 多基线评分 — 排除测量失真
+  2. 看 `style_alerts` 具体维度 — 是 hard_gate 维度（如禁用词命中）还是 advisory（如对话占比）
+  3. 跑实战试写（用 try_write.py 模板）验证 gen-model 真实表现 — 主观可信度 > 单一量化指标
+- **预防**：phase-4 修正反思 prompt 加「**先用 multi-ref 评分排除失真，再做 skill 修改**」前置步骤
+
+### L19.3 💡 validate_style 写作端的自动校准（解释为何 SFS 失真不影响正式写作）
+
+- **写作流水线（`/cluster-write` → `gen_writer` → `audit_hub`）不调 `style_evaluator.py`**（蒸馏独有）
+- 写作时调的是 `validate_style.py`，它在 `_apply_style_overrides(t, sd)` 自动从 `作者风格.json.quantitative` 校准阈值：
+  - `dialogue_ratio` → mean ± 0.15（v4 蛊真人 26.27% → 阈值 11.27-41.27%）
+  - `chapter_words` → mean ± 500（v4 → 2144-3144）
+  - `para_mean_len` → sentence mean × 0.7~1.3
+- **hard_gate 只有 `STYLE_单段超长`**（单段 > 120 CJK 字 + 例外 ≤ 1）— 短段独行风格永远不触发
+- 其余 14 项 validate_style 检测全部 advisory（writer agent 可豁免）
+- **结论**：蒸馏 SFS 退步 ≠ 写作会被骂。蒸馏评分错位是测量层 bug（L19.1 已修），不影响实际写作体验
