@@ -53,11 +53,13 @@
 
 6 个多步命令必须经过 `plan_tracker` 强制规划层 — **没有 plan_id 不能开工，没有 step 验证不能宣称完成**。
 
+> **🔴 v26 简化**：chapter mode (`/save-state` / `/write-chapter`) 已废弃移除，原 8 命令 plan 矩阵收敛为 6。所有写作 + 状态保存统一走 cluster mode。
+
 ### 三层防御
 
 | 层 | 实现 | 作用 |
 |----|------|------|
-| **L1 契约** | 6 个命令文档 + `core/claude-home/plans/<command>.plan.json` 模板（🔴 v26 chapter mode 已废弃移除） | 规划落字 |
+| **L1 契约** | 6 个命令文档 + `core/claude-home/plans/<command>.plan.json` 模板 | 规划落字 |
 | **L2 追踪** | `plan_tracker.py` 持久化 plan；`step`/`end`/`abort` 写前读 SHA-256 attestation 校验（不符 → `PlanTamperedError` exit 2）；只读的 `status`/`list` 仅警告不阻断 | 状态可审计 + 防伪造 |
 | **L3 校验** | **PreToolUse hook**（拦截层）：缺 PLAN_ID/STEP → exit 2 拦；plan tampered → exit 2 拦在 Agent spawn 前。**PostToolUse hook**（观察层）：扫描 Bash 输出 `plan_id=` / `[OK] 第 N 步` 痕迹做日志上报，**严禁 exit 非 0**（防止打断主流水线） | 调用瞬间堵漏 |
 
@@ -74,7 +76,7 @@
 | `/check-quality` | 3 | `check-quality.plan.json` |
 | `/reconcile` | 5 | `reconcile.plan.json` |
 
-**🔴 v26 已删除**：`/save-state` `/write-chapter` chapter mode 整套（命令 + plan 模板 + 内部 CLI 入口 + hook 关键词全部清除）。
+**🔴 v26 已删除**：`/save-state` `/write-chapter` 整套 chapter mode（命令文件 + plan 模板 + 内部 CLI 入口 + hook 关键词全部清除）。
 
 ### 用户命令
 
@@ -109,9 +111,9 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 |------|------|------|
 | **核心** | `/write` | 写小说完整流程 |
 | | `/script` | 写短剧剧本 |
-| | **`/cluster-write`** | **写故事块（cluster mode · 🔴 v26 唯一推荐 · v24 倒置流水线 7 步 · 1 cluster 1 plan）** |
-| | **`/cluster-save-state`** | **故事块状态保存（cluster mode · 🔴 v26 唯一推荐 · 12 步）** |
-| | `/outline` | 生成大纲+初始化数据库 |
+| | **`/cluster-write`** | **写故事块（v26 cluster mode · 🔴 唯一形态 · v24 倒置流水线 7 步 · v27 freestyle 默认）** |
+| | **`/cluster-save-state`** | **故事块状态保存（v26 cluster mode · 12 步）** |
+| | `/outline` | 生成大纲+初始化数据库（含 step 1.7 AskUser 每卷 cluster 数） |
 | | `/continue` | 续写/断点恢复 |
 | **蒸馏** | `/distill-style` | 蒸馏作者风格 |
 | | `/distill-character` | 深度角色蒸馏 |
@@ -139,24 +141,24 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 1. **选择/蒸馏风格** → `/distill-style` 或从风格库加载
 2. **强制调研先行** → spawn `novel-researcher` TASK_TYPE=inspiration
 3. **AI 生成 3 个灵感**（基于调研） → 每张灵感卡引用 ≥1 调研 source
-4. **生成大纲** → `/outline`（卷级大势 + 34 子系统初始化 · 只详化 cluster_001）
-5. **直接开写** → 大纲确认后立即写第一 cluster
-6. **逐故事块循环**（v26 唯一形态）：
+4. **生成大纲** → `/outline`（卷级大势 + AskUser 每卷 cluster 数 + 34 子系统初始化 · 只详化 cluster_001）
+5. **直接开写** → 大纲确认后立即写第一个 cluster
+6. **逐故事块循环**（v26 cluster mode 唯一形态）：
    - 走向卡前调研：spawn `novel-researcher` TASK_TYPE=outline
-   - **执行 `/cluster-write CLUSTER_ID=<key>`**（v24 倒置流水线 · 1 cluster 1 plan · 整块迭代→最后才切章）
+   - **执行 `/cluster-write CLUSTER_ID=<key>`**（v24 倒置流水线 7 步 · v27 freestyle 默认）
    - **执行 `/cluster-save-state CLUSTER_ID=<key>`**（cluster 级状态保存 + 涌现下一 cluster brief）
    - 展示剧情走向卡片 → 等用户选择
 7. **完成** → 拼接全文.txt
 
 **硬性规则**：
 - ⚠️ 每 cluster 必须通过 `/cluster-write` 调度器走完 7 步——禁止主会话直接生成正文
-- ⚠️ `/cluster-write` 内 writer 产 `cluster_<key>_draft.txt` 后 splitter **必须推迟到 step 6**（v24 核心纪律 · 禁止立即切章）
+- ⚠️ `/cluster-write` 内 writer 产出 `cluster_<key>_draft.txt` 后 splitter **必须推迟到 step 6**（v24 核心纪律 · 禁止立即切章）
 - cluster 写完后立即执行 `/cluster-save-state`（不问「要继续吗」）
 - cluster-save-state 完成后展示走向卡（唯一停顿点）
 - 用户「全自动」→ 跳过所有卡片
 - **调研先行**：灵感卡前 + 走向卡前必须先 spawn novel-researcher（除非用户明说「跳过调研」）
 
-**🔴 v26 chapter mode 彻底废弃**：`/write-chapter` / `/save-state` 命令/plan/CLI 入口全删除。无降级、无旁路、无 `.allow_single_mode.flag`。
+**🔴 v26 chapter mode 彻底废弃**：`/write-chapter` / `/save-state` 命令/plan/CLI/hook 关键词全删除。无降级、无旁路、无 `.allow_single_mode.flag`。新书强制走 cluster mode。
 
 ---
 
@@ -300,19 +302,52 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ---
 
-## 📐 大纲章数 fluid
+## 📐 大纲章数 fluid（v27 升级）
 
-故事块（cluster）+ 涟漪效应让单卷章数**无法预先确定** — 总章数由 ME 触发节奏 + 用户涟漪选择**自然涌现**。
+故事块（cluster）+ 涟漪效应让单卷章数**无法预先确定** — 总章数由 ME 触发节奏 + 用户涟漪选择 + writer 自由发挥 + splitter 按字数切**自然涌现**。
 
 | ✅ 写 | ❌ 不写 |
 |---|---|
 | `rhythm_profile`（紧凑/标准/厚重/混合）软提示 | `target_chapter_count` / `volume_count` 死锁 |
 | `volumes[]` 的 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` | `volumes[].chapter_range` 死锁区间 |
 | 大势卡 ME `expected_window_after` 宽窗触发 | `T × (1-F) / (V × E)` 章数公式 |
+| **🆕 v27：用户答的「每卷 cluster 数」**（outline step 1.7 AskUser）→ ME 池数量 | **🆕 v27：cluster brief 的 `estimated_chapters` / `chapter_range`**（splitter 切完自动填） |
 
 **设计哲学**：大势 = 不变（卷主题/milestones/final image），章数 = 浮动。
 
 「想写更多但大势用完」→ save-state 阶段**动态加新 ME**。
+
+---
+
+## 🔴 v27 三件套：writer 自由 + splitter 字数切 + 跨 cluster 补料
+
+用户原话：「故事块能切多少章我发现你一开始已经间接限制死了，这是不对的，应该让ai自由发挥，只要不脱离既有事实和大势，然后根据生成内容的字数，按照固定范围字数进行切割（一定程度上要参考最佳切割点），最后一章切出来字数不够就拿下一个故事块生成后的内容来补一些，这个补也是要放在切割的过程中」。
+
+### 1. writer freestyle（默认）
+
+`gen_writer.py` v27 起 `--chapter-end` / `--target-cjk` 默认缺省 → writer prompt **不暴露目标章数 + 字数**：
+- writer 按 `cluster.scope_summary` + `scene_storyboard` 自由发挥
+- 字数自然涌现（健康区间 12000-25000 CJK）
+- changes.json 标 `writer_mode: "freestyle_v27"` + `chapter_count_decided_by_splitter: true`
+
+兼容 v26 锁字数：显式传 `--chapter-end N --target-cjk X-Y` 走旧 prompt。
+
+### 2. splitter 按字数硬范围切（取代 TARGET_CHAPTERS）
+
+`novel-chapter-splitter` 加 `MODE: ecas_freestyle` 模式：
+- 不传 `TARGET_CHAPTERS` · 按字数算 N = round(draft / 3500) 钳到 [ceil(draft/4500), floor(draft/3000)]
+- 每章硬范围 3000-4500 CJK · `rhythm_profile` 微调区间（紧凑 3000-4000 / 厚重 3500-5000）
+- 沿用最佳切点评分算法（场景边界 / cliffhanger / 接续自然度）
+
+### 3. 跨 cluster 字数补料（pending_tail 机制）
+
+末章 < 3000 CJK 时 splitter **不强切**：
+- 末段退回 `章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt`
+- 该 cluster 只切 N-1 章 · 写 splitter_wal `pending_tail.exists=true`
+- 下个 cluster 写完后 cluster-write step 6 调度器检测 → 传 `PREVIOUS_PENDING_TAIL_PATH` 给 splitter
+- splitter 把 pending_tail prepend 到下个 cluster 草稿头部 + 联合切
+
+详见 memory `feedback_v27_writer_freestyle_splitter_word_cut`。
 
 ---
 

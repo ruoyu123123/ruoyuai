@@ -154,7 +154,7 @@ SUBJ = [r'^他[一-鿿]', r'^她[一-鿿]', r'^燧[一-鿿]', r'^燃[一-鿿]', 
         - 有 issue：清零，回轮 1
 轮 4-6 同上直到连续 3 轮 0 issue
 ↓
-verdict = "pass"，放行进入 save-state
+verdict = "pass"，放行进入 cluster-save-state
 ```
 
 **累计超过 MAX_ROUNDS（默认 5）仍未 pass** → `next_action = escalate_human`，停下来等用户决定。

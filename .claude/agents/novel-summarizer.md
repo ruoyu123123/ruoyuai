@@ -17,16 +17,8 @@ tools: Read, Write
 - 禁修辞、禁"复读章节内容"
 - 直接输出 JSON，无前后空话
 
-## 输入契约
+## 输入契约（v26 cluster mode · 唯一形态）
 
-**chapter mode**：
-```
-PROJECT: <项目路径>
-CHAPTER: <章节号>
-MODE: summarize
-```
-
-**cluster mode**：
 ```
 PROJECT: <项目路径>
 CLUSTER_ID: <cluster_001>
@@ -34,27 +26,16 @@ MODE: cluster
 CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt 路径>
 ```
 
+> 🔴 v26 起 chapter mode 已彻底废弃。所有摘要单位是 cluster · per-chapter 摘要由 splitter 切完后从 cluster 摘要派生。
+
 ## 文件载体
 
-**chapter mode**：
-- 正文：`章节/第NNN章/第NNN章.txt` —— 纯正文，直接读全文
-- 数据：`章节/第NNN章/第NNN章_changes.json` —— **不读**
-
-**cluster mode**：
 - 正文：`章节/cluster_NNN_draft/cluster_NNN_draft.txt` —— 整 cluster 草稿（splitter 切章前）
 - 数据：`章节/cluster_NNN_draft/cluster_changes.json` —— **不读**
 - 输出：`_数据库/.wal/cluster_NNN_summary.json`（cluster 级摘要，splitter 切完后由调度器派生 per-chapter 摘要）
 
 ## 执行流程
 
-**chapter mode**：
-1. **Read** 章节正文 `章节/第NNN章/第NNN章.txt`
-2. **Read** `_数据库/章纲摘要.json`（了解前章摘要风格）
-3. **Read** `_数据库/.manifest/ch_<NNN>.json`（查本章 scene_type / emotion 指令）
-4. 生成摘要
-5. **Write** 到 `_数据库/.wal/第NNN章_summary.json`
-
-**cluster mode**：
 1. **Read** cluster_draft.txt（整块草稿）
 2. **Read** `_数据库/事件簇.json` 找当前 cluster brief（scope_summary + scene_storyboard + emotion 锚点）
 3. **Read** `_数据库/章纲摘要.json` 了解前 cluster 摘要风格

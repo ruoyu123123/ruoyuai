@@ -111,11 +111,9 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 |------|------|------|
 | **核心** | `/write` | 写小说完整流程 |
 | | `/script` | 写短剧剧本 |
-| | **`/cluster-write`** | **写故事块（cluster mode · 🔴 默认 · v24 倒置流水线 · 1 cluster = 1 plan · 整块迭代→最后才切章）** |
-| | `/write-chapter` | 写单章（chapter mode · ⚠️ 旧 · 仅 .allow_single_mode.flag 旁路降级用）|
-| | **`/cluster-save-state`** | **故事块状态保存（cluster mode · 默认）** |
-| | `/save-state` | 章节状态保存（旧 · 配合 write-chapter 用）|
-| | `/outline` | 生成大纲+初始化数据库 |
+| | **`/cluster-write`** | **写故事块（v26 cluster mode · 🔴 唯一形态 · v24 倒置流水线 7 步 · v27 freestyle 默认）** |
+| | **`/cluster-save-state`** | **故事块状态保存（v26 cluster mode · 12 步）** |
+| | `/outline` | 生成大纲+初始化数据库（含 step 1.7 AskUser 每卷 cluster 数） |
 | | `/continue` | 续写/断点恢复 |
 | **蒸馏** | `/distill-style` | 蒸馏作者风格 |
 | | `/distill-character` | 深度角色蒸馏 |
@@ -143,12 +141,12 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 1. **选择/蒸馏风格** → `/distill-style` 或从风格库加载
 2. **强制调研先行** → spawn `novel-researcher` TASK_TYPE=inspiration
 3. **AI 生成 3 个灵感**（基于调研） → 每张灵感卡引用 ≥1 调研 source
-4. **生成大纲** → `/outline`（卷级大势 + 34 子系统初始化 · 只详化 cluster_001）
-5. **直接开写** → 大纲确认后立即写第一章
-6. **逐故事块循环**（cluster mode 默认）：
+4. **生成大纲** → `/outline`（卷级大势 + AskUser 每卷 cluster 数 + 34 子系统初始化 · 只详化 cluster_001）
+5. **直接开写** → 大纲确认后立即写第一个 cluster
+6. **逐故事块循环**（v26 cluster mode 唯一形态）：
    - 走向卡前调研：spawn `novel-researcher` TASK_TYPE=outline
-   - **执行 `/cluster-write CLUSTER_ID=<key>`**（默认 · v24 倒置流水线 · 1 cluster 1 plan · 整块迭代→最后才切章）
-   - **执行 `/cluster-save-state CLUSTER_ID=<key>`**（默认 · cluster 级状态保存 + 涌现下一 cluster brief）
+   - **执行 `/cluster-write CLUSTER_ID=<key>`**（v24 倒置流水线 7 步 · v27 freestyle 默认）
+   - **执行 `/cluster-save-state CLUSTER_ID=<key>`**（cluster 级状态保存 + 涌现下一 cluster brief）
    - 展示剧情走向卡片 → 等用户选择
 7. **完成** → 拼接全文.txt
 
@@ -160,7 +158,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 - 用户「全自动」→ 跳过所有卡片
 - **调研先行**：灵感卡前 + 走向卡前必须先 spawn novel-researcher（除非用户明说「跳过调研」）
 
-**降级写单章**：仅当 `_数据库/.allow_single_mode.flag` 存在时允许走 `/write-chapter`（旧单章流水线 · v25 已废弃 · 仅兼容期保留）。新书默认强制 cluster mode。
+**🔴 v26 chapter mode 彻底废弃**：`/write-chapter` / `/save-state` 命令/plan/CLI/hook 关键词全删除。无降级、无旁路、无 `.allow_single_mode.flag`。新书强制走 cluster mode。
 
 ---
 
