@@ -156,6 +156,60 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 ---
 
+## 🆕 第 1.7 步：卷级 cluster 数 + writer freestyle 模式（v27）
+
+用户原话：「每卷的故事块数量应该问询用户，然后故事块能切多少章我发现你一开始已经间接限制死了，这是不对的，应该让ai自由发挥」。
+
+本步**必跑** — 决定每卷有多少 cluster（=多少 ME 大势事件）+ writer 是否走 freestyle（默认 true）。
+
+### 1.7.1 询问每卷 cluster 数
+
+**AskUserQuestion 1**：「《<书名>》第 1 卷你想要几个故事块（cluster）？」
+- **选项**（推荐区间 4-12）：
+  - `4-5（紧凑短篇向）` — 卷长约 50-100K 字
+  - `6-8（标准长度，推荐）` — 卷长约 80-200K 字
+  - `9-12（厚重长篇向）` — 卷长约 150-300K 字
+  - `Other` — 用户自填数字
+- 如果用户回答 N，写入 `_数据库/用户偏号.json.workflow_preferences[]`：
+  ```json
+  {"key": "cluster_count_per_volume", "value": N, "set_at": "ISO", "user_decided": true}
+  ```
+
+**多卷书**：若大纲含 2+ 卷，依次问每卷 cluster 数；用户可一次性给所有卷数字。
+
+### 1.7.2 writer freestyle 模式确认
+
+**默认开启**（推荐）：writer 不知道目标章数 + 字数 · 按 cluster.scope_summary 自由发挥 · splitter 后期按字数切。
+
+可选问询（用户首次新书时确认 1 次，之后存入用户偏好不再问）：
+
+**AskUserQuestion 2**：「writer 写作模式 · 推荐 v27 freestyle」
+- `freestyle（v27 默认 · 推荐）` — writer 自由发挥 · splitter 按字数 3000-4500/章切 · 末章不够字数从下个 cluster 补料
+- `locked（v26 兼容 · 旧）` — writer 按预定章数 + 字数硬约束写
+
+写入 `_数据库/用户偏号.json.workflow_preferences[]`：
+```json
+{"key": "writer_mode", "value": "freestyle", "set_at": "ISO", "user_decided": true}
+```
+
+### 1.7.3 反推 ME 数 + 写入大势卡
+
+**1 个 cluster ≈ 1 个 ME**（大势事件）。卷 1 用户答 N → 大势卡 V1 必须含 N+1 个 ME（含 1 个开局 ME + N-1 个推进 ME + 1 个收束 ME 弹性）。
+
+写入 `_数据库/大势卡.json` 的 `volumes[].major_events_pool` 数组：每卷数量 = 用户答的 cluster 数 ± 1 弹性。
+
+**禁止**：
+- ❌ 在 cluster brief 写 `chapter_count_estimate` / `chapter_range` / `expected_word_range` 这 3 个字段（v27 已 deprecate · 由 splitter 切完后填）
+- ❌ 在大势卡 ME 池里写「expected_chapters」字段（章数由 writer + splitter 涌现）
+
+### plan-step 1.7
+
+```bash
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
+```
+
+---
+
 ## 第 2 步：卷级大势大纲生成
 
 本步**只描述大势**，不规划每卷章数。

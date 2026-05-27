@@ -55,19 +55,139 @@ python core/scripts/gen_chapter_titles.py \
 
 ```
 PROJECT: <项目路径>
-CURRENT_CHAPTER: <本章号 N>
+CURRENT_CHAPTER: <本章号 N>（仅 dcas / locked 模式必填）
 DRAFT_PATH: <writer 生成的草稿正文文件路径，纯正文 6000+ 字>
+
+# DCAS 模式专用
 TARGET_WORD_COUNT: 3000  # 本章目标字数
 TOLERANCE: 500  # 允许 ±500
 
-# ECAS 模式额外字段
-MODE: dcas | ecas_multi_chapter   # 默认 dcas（2 章），ecas 切 N 章
+# v27 ecas_freestyle 模式（推荐 · 默认）
+MODE: dcas | ecas_multi_chapter | ecas_freestyle
 CLUSTER_ID: cluster_NNN            # ECAS 模式必填
-TARGET_CHAPTERS: 4                 # ECAS 模式: 预计切几章（写 round(words/target)）
 ECAS_BRIEF_PATH: <_数据库/事件簇.json 中本 cluster 段路径>
+TARGET_CHAPTERS: 4                 # ecas_multi_chapter 必填 / ecas_freestyle 不填（由 splitter 按字数自动算）
+CLUSTER_START_CH: 21               # ecas_freestyle 必填 · 本 cluster 起始章号
+
+# v27 跨 cluster 字数补料（ecas_freestyle 可选）
+PREVIOUS_PENDING_TAIL_PATH: <上 cluster 未切完的 pending_tail.txt 路径 · 有则 prepend 到本 cluster 草稿头部>
 
 # v24 黄金三章倒叙模式（in_medias_res）
-NARRATIVE_MODE: linear | in_medias_res   # 默认 linear；cluster_001 默认 in_medias_res（事件簇.json clusters[0].narrative_mode 触发）
+NARRATIVE_MODE: linear | in_medias_res   # 默认 linear；cluster_001 默认 in_medias_res
+```
+
+## 🔴 v27 ecas_freestyle 模式（推荐 · 取代 ecas_multi_chapter）
+
+**触发**：`MODE == "ecas_freestyle"`（cluster brief `_writer_mode: "freestyle"` 时由 cluster-write step 6 主代理选 freestyle）。
+
+**核心差异**（vs ecas_multi_chapter）：
+
+| 维度 | ecas_multi_chapter（v23-v26） | **ecas_freestyle（v27）** |
+|---|---|---|
+| 章数来源 | 主代理传 TARGET_CHAPTERS | splitter **按字数硬范围自动算** |
+| 字数硬范围 | 弹性 TARGET ± 800 | **每章 3000-4500 CJK 固定范围**（钳到 [N_min, N_max]） |
+| 末章字数不足处理 | 强行兜底 / 报错 | **pending_tail 机制** · 留给下 cluster 补料 |
+| writer 是否预知章数 | 知道（TARGET_CHAPTERS 注入） | **不知道**（writer 自由发挥） |
+
+### Step A_v27（章数自动算）
+
+```python
+# 整 cluster 草稿总字数（含 pending_tail prepend 后）
+draft_cjk = len(re.findall(r'[一-鿿]', draft))
+
+# 章数硬范围 · 每章 3000-4500 CJK
+N_min = math.ceil(draft_cjk / 4500)   # 最少几章（每章不超 4500）
+N_max = math.floor(draft_cjk / 3000)  # 最多几章（每章不少 3000）
+
+# 推荐 N · 每章约 3500 字
+N_recommend = round(draft_cjk / 3500)
+
+# 钳到 [N_min, N_max]
+N = max(N_min, min(N_max, N_recommend))
+
+# 极端短篇（< 3000 CJK）→ N = 1（pending_tail 不切，等下 cluster 补）
+if draft_cjk < 3000:
+    N = 0  # 不切 · 整段写 pending_tail
+```
+
+**例**：
+- draft_cjk=12000 → N_min=3 / N_max=4 / N_recommend=3 → N=3 (4000/章)
+- draft_cjk=18000 → N_min=4 / N_max=6 / N_recommend=5 → N=5 (3600/章)
+- draft_cjk=25000 → N_min=6 / N_max=8 / N_recommend=7 → N=7 (3570/章)
+- draft_cjk=2800 → N=0 · 全段写 pending_tail.txt（等下 cluster 拼）
+
+### Step B_v27（等距锚点 + 最佳切点评分 不变）
+
+按 N 算等距锚点 · ±500 字范围内找最佳段落边界（沿用 Step 3 评分算法）。
+
+### Step F_v27（末章字数补料 · 新增 · v27 核心）
+
+切完 N 章后检查末章字数：
+
+```python
+last_ch_cjk = chapter_cjk[-1]
+
+if last_ch_cjk < 3000:
+    # 末章不达下限 · 末章不切 · 整段写 pending_tail.txt
+    # 实际切的章 = N-1（末章退回 pending_tail）
+    final_chapters = N - 1
+    pending_tail_text = chapters[-1]  # 末章正文回写
+    pending_tail_path = project_root / '章节' / f'{cluster_id}_draft' / f'{cluster_id}_pending_tail.txt'
+    pending_tail_path.write_text(pending_tail_text, encoding='utf-8')
+elif last_ch_cjk > 4500:
+    # 末章超上限 · 二次切（不算补料 · 算正常溢出）
+    ...
+else:
+    # 末章字数健康
+    final_chapters = N
+    pending_tail_path = None
+```
+
+**下 cluster splitter 跑时**：
+- 主代理调度器（cluster-write step 6）检测 `<上 cluster>_pending_tail.txt` 存在 → 传 `PREVIOUS_PENDING_TAIL_PATH` 参数
+- splitter Step 1 改 Read draft：`draft = previous_pending_tail + draft_text`（pending prepend）
+- 切完后写「补料 metadata」记录哪几章是从上 cluster 来的字数
+
+### Step G_v27（输出 metadata 新字段）
+
+```json
+{
+  "mode": "ecas_freestyle",
+  "cluster_id": "cluster_006",
+  "draft_cjk_total": 18420,
+  "draft_cjk_including_prepend": 18420,
+  "previous_pending_tail_consumed_cjk": 0,
+  "chapters_split": 5,
+  "per_chapter_cjk": [3700, 3850, 3600, 3680, 3590],
+  "chapter_range": [26, 30],
+  "pending_tail": {
+    "exists": false,
+    "cjk": 0,
+    "path": null
+  },
+  "_freestyle_decision_log": {
+    "N_min": 4,
+    "N_max": 6,
+    "N_recommend": 5,
+    "N_final": 5,
+    "reason": "每章 3.7K · 末章 3.59K 健康"
+  }
+}
+```
+
+**末章 pending 示例**：
+```json
+{
+  "chapters_split": 4,
+  "per_chapter_cjk": [3800, 3600, 3700, 3520],
+  "chapter_range": [26, 29],
+  "pending_tail": {
+    "exists": true,
+    "cjk": 2800,
+    "path": "章节/cluster_006_draft/cluster_006_pending_tail.txt",
+    "_doc": "末段 2800 CJK 不足 3000 · 退回 pending_tail · 下 cluster 拼接后切"
+  }
+}
 ```
 
 ## v24 黄金三章倒叙模式（in_medias_res）

@@ -32,62 +32,52 @@ ARC_TEMPLATE_DIR: <workspace/styles/<风格名>/arc_templates/>  # 启用时必�
 2. 读 `_数据库/事件池.json` 找匹配 context_filter 的抽签事件
 3. 读 `_数据库/用户偏好.json.ecas_config` 决定字数模式 / opus_recommended
 
-### 节奏档软提示
+### 🔴 v27 节奏档变更：rhythm_profile 仅 advisory · 不生 estimated_chapters
 
-故事块 + 涟漪效应让 cluster 章数无法预先锁定，由 ME 重要度 + writer 实际涌现自然决定。
+**v27 前**（v26）：rhythm_profile + ME priority → 算 `estimated_chapters` → writer 按章数写。
+**v27 后**：writer 不知道目标章数 · splitter 按字数 3000-4500/章自然切 · `estimated_chapters` 字段在 cluster brief 里**不再生成**。
 
-**强制读 `大势卡.json._metadata.rhythm_profile`**（**仅这一个字段**）。
+`rhythm_profile` 现在仅作 advisory 软提示用于：
+- splitter 字数切区间微调（紧凑 → 3000-4000/章 · 厚重 → 3500-5000/章）
+- 不再决定 writer 章数
 
-**cluster `estimated_chapters` 决策树（按节奏档 × ME 重要度 弹性估算）**：
+**缺 `_metadata.rhythm_profile` → 默认按「混合」走**。
 
-```python
-# 1. 拿 rhythm_profile 作为基准 base（仅作软提示，writer/splitter 可超）
-BASE_BY_RHYTHM = {
-    "紧凑": 4,   # event 间章数少
-    "标准": 7,   # 主流网文
-    "厚重": 12,  # 史诗节奏
-    "混合": 7,   # 默认，重 event 拉、轻 event 缩
-}
-base = BASE_BY_RHYTHM.get(metadata.rhythm_profile, 7)
+### 输出 cluster_brief（按 event_cluster_schema.json · v27 freestyle 默认）
 
-# 2. 按 ME priority 弹性调（混合档调幅最大）
-if ME.priority == 5 (神战/卷高潮/沙盒锁/启示级):
-    estimated_chapters = round(base × 1.6)  # 重 event 拉长
-elif ME.priority == 4 (转折/重要事件):
-    estimated_chapters = round(base × 1.2)
-elif ME.priority <= 2 (日常/支线/小转折):
-    estimated_chapters = round(base × 0.5)   # 轻 event 压缩
-else:
-    estimated_chapters = base
+**🔴 v27 字段语义变更**（用户原话：「让 AI 自由发挥，只要不脱离既有事实和大势」）：
 
-# 3. 软钳制（不报错，仅提示）—— writer 实际写超也允许，涟漪可膨胀
-estimated_chapters = clamp(estimated_chapters, 2, 20)
-```
+| 字段 | v26 | v27 | 影响 |
+|---|---|---|---|
+| `expected_word_range` | required + 注入 writer prompt 硬约束 | **optional** + 仅 advisory hint · 不注入 prompt | writer 不再按字数硬约束写 |
+| `estimated_chapters` | required + writer 知道目标章数 | **deprecated · 不再生成** · splitter 切完后自动填 | writer 不知章数 |
+| `chapter_range` | outline 填 / writer 切完填 | **deprecated · outline 阶段不允许填** · splitter 切完后自动填 | splitter 字数切自然涌现 |
+| `_writer_mode` | 不存在 | **新增 · 默认 "freestyle"** | 标记本 cluster 走 v27 freestyle |
 
-**缺 `_metadata.rhythm_profile` → 默认按「混合」走，不再拒绝生成 brief**。
-
-**estimated_chapters 是 hint 不是 hard cap**：writer 实际产出超出该值时不报错，由 fate_engine 涟漪 + ME 触发动态决定真正章数。
-
-### 输出 cluster_brief（按 event_cluster_schema.json）
-必带字段：
+必带字段（v27）：
 ```json
 {
   "cluster_id": "cluster_002",
   "parent_me": "ME_002",
-  "scope_summary": "1-2 句话总结本簇全程",
-  "expected_word_range": {"min": 9000, "max": 11000, "unit": "CJK_chars"},  // 自适应 / 关键事件 13K-16K
+  "scope_summary": "1-2 句话总结本簇全程（writer 必读首字段）",
+  "scene_storyboard": [
+    {"scene": "开场 · ...", "key_beats": ["...", "..."], "characters": ["..."]},
+    {"scene": "推进 · ...", "key_beats": ["..."]},
+    {"scene": "高潮 · ...", "key_beats": ["..."], "climax_marker": true},
+    {"scene": "收束 · ...", "key_beats": ["..."]}
+  ],
+  "_writer_mode": "freestyle",
   "scenes_estimated": 4,
   "anchor_props": ["..."],
   "foreshadowing_to_plant": [{"id": "FS_NNN", "type": "setup", "tier": "A"}],
   "foreshadowing_to_callback": [],
-  "mid_checkpoints": [3000, 6000, 9000],  // 每 3000 字一个
-  "opus_recommended": false,  // 关键事件 (ME_010/015/017) = true
-  "extended_thinking": false, // opus_recommended=true 时必 true
+  "mid_checkpoints": [3000, 6000, 9000],
+  "opus_recommended": false,
+  "extended_thinking": false,
   "ME_to_advance": ["ME_002"],
   "throughline_focus": ["Impact_OS"],
   "characters_focus": ["陈默", "老周"],
   "hub_locations": ["HUB_001"],
-  "estimated_chapters": 4,
   "status": "pending",
   "narrative_mode": "in_medias_res",
   "climax_hint_scene_index": 2,
@@ -127,34 +117,30 @@ estimated_chapters = clamp(estimated_chapters, 2, 20)
 
 **例外**：用户明示「线性叙事 / 严肃文学风格 / 倒叙不适合本书题材」 → cluster_001 可显式改 `"linear"`。
 
-### Cluster 字数预算硬约束 - 防 brief 字数放大
+### 🔴 v27 Cluster 字数预算改为 advisory（不再硬约束）
 
-**brief.expected_word_range 必须 = researcher 建议 ± 10%**：
-- 读 RESEARCH_REF 中 researcher 「字数建议」（如 5500-6500 字）
-- brief.expected_word_range.min ≥ researcher.min × 0.9
-- brief.expected_word_range.max ≤ researcher.max × 1.1
-- **必填 unit = "CJK_chars"**（schema required）
+**v27 字数变更**：`expected_word_range` 改为 **optional advisory hint**：
+- 仍可填（供 splitter 字数补料决策参考），但 **writer prompt 不再注入** `expected_word_range` 硬约束
+- writer 按 scope_summary + scene_storyboard 自由发挥 · 字数自然涌现（一般 12000-25000 CJK）
+- splitter 按字数 3000-4500/章固定范围切 + 末章不足从下个 cluster 补料
 
-**违背 = brief 无效**。教训：cluster_005 outline-planner 把 researcher 5500-6500 放大到 7000-9000（+27%），导致 writer 写 5433 看似不达标实际是 outline-planner 算错预算。
-
-### Cluster 大小决策树（在 researcher 建议 ± 10% 内）
-```
+**仍保留的决策**（仅决定 opus/extended_thinking / mid_checkpoints，非字数）：
+```python
 if parent_me in user_pref.ecas_config.critical_events_use_opus:
     # 关键事件
-    expected_word_range = {13000, 16000}  # 仅当 researcher 也建议这量级
-    mid_checkpoints = every 2000 (more granular)
+    mid_checkpoints = [3000, 5000, 7000, 9000, 11000, 13000]  # 每 2000 一个
     opus_recommended = true
     extended_thinking = true
-elif 复合事件 (parent_me 是 array):
-    # 多 ME 复合
-    expected_word_range = {12000, 16000}
-    estimated_chapters = 5-6
 else:
     # 标准 ME
-    expected_word_range = {8000, 12000}
-    mid_checkpoints = every 3000
+    mid_checkpoints = [3000, 6000, 9000]  # 每 3000 一个
     opus_recommended = false
+
+# expected_word_range 可选填 advisory hint（不影响 writer · 仅供 splitter 决策）
+# advisory_word_range = {min: researcher建议 × 0.9, max: researcher建议 × 1.1}
 ```
+
+**v26 教训保留**：advisory hint 写时应贴近 researcher 建议 · 不放大。
 
 ### Cluster Stop（用户偏好 cluster_stop_frequency）
 - `per_cluster`（默认）：cluster 完成后让用户选下个 cluster

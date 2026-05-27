@@ -304,19 +304,52 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ---
 
-## 📐 大纲章数 fluid
+## 📐 大纲章数 fluid（v27 升级）
 
-故事块（cluster）+ 涟漪效应让单卷章数**无法预先确定** — 总章数由 ME 触发节奏 + 用户涟漪选择**自然涌现**。
+故事块（cluster）+ 涟漪效应让单卷章数**无法预先确定** — 总章数由 ME 触发节奏 + 用户涟漪选择 + writer 自由发挥 + splitter 按字数切**自然涌现**。
 
 | ✅ 写 | ❌ 不写 |
 |---|---|
 | `rhythm_profile`（紧凑/标准/厚重/混合）软提示 | `target_chapter_count` / `volume_count` 死锁 |
 | `volumes[]` 的 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` | `volumes[].chapter_range` 死锁区间 |
 | 大势卡 ME `expected_window_after` 宽窗触发 | `T × (1-F) / (V × E)` 章数公式 |
+| **🆕 v27：用户答的「每卷 cluster 数」**（outline step 1.7 AskUser）→ ME 池数量 | **🆕 v27：cluster brief 的 `estimated_chapters` / `chapter_range`**（splitter 切完自动填） |
 
 **设计哲学**：大势 = 不变（卷主题/milestones/final image），章数 = 浮动。
 
 「想写更多但大势用完」→ save-state 阶段**动态加新 ME**。
+
+---
+
+## 🔴 v27 三件套：writer 自由 + splitter 字数切 + 跨 cluster 补料
+
+用户原话：「故事块能切多少章我发现你一开始已经间接限制死了，这是不对的，应该让ai自由发挥，只要不脱离既有事实和大势，然后根据生成内容的字数，按照固定范围字数进行切割（一定程度上要参考最佳切割点），最后一章切出来字数不够就拿下一个故事块生成后的内容来补一些，这个补也是要放在切割的过程中」。
+
+### 1. writer freestyle（默认）
+
+`gen_writer.py` v27 起 `--chapter-end` / `--target-cjk` 默认缺省 → writer prompt **不暴露目标章数 + 字数**：
+- writer 按 `cluster.scope_summary` + `scene_storyboard` 自由发挥
+- 字数自然涌现（健康区间 12000-25000 CJK）
+- changes.json 标 `writer_mode: "freestyle_v27"` + `chapter_count_decided_by_splitter: true`
+
+兼容 v26 锁字数：显式传 `--chapter-end N --target-cjk X-Y` 走旧 prompt。
+
+### 2. splitter 按字数硬范围切（取代 TARGET_CHAPTERS）
+
+`novel-chapter-splitter` 加 `MODE: ecas_freestyle` 模式：
+- 不传 `TARGET_CHAPTERS` · 按字数算 N = round(draft / 3500) 钳到 [ceil(draft/4500), floor(draft/3000)]
+- 每章硬范围 3000-4500 CJK · `rhythm_profile` 微调区间（紧凑 3000-4000 / 厚重 3500-5000）
+- 沿用最佳切点评分算法（场景边界 / cliffhanger / 接续自然度）
+
+### 3. 跨 cluster 字数补料（pending_tail 机制）
+
+末章 < 3000 CJK 时 splitter **不强切**：
+- 末段退回 `章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt`
+- 该 cluster 只切 N-1 章 · 写 splitter_wal `pending_tail.exists=true`
+- 下个 cluster 写完后 cluster-write step 6 调度器检测 → 传 `PREVIOUS_PENDING_TAIL_PATH` 给 splitter
+- splitter 把 pending_tail prepend 到下个 cluster 草稿头部 + 联合切
+
+详见 memory `feedback_v27_writer_freestyle_splitter_word_cut`。
 
 ---
 

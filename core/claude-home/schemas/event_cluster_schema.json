@@ -26,12 +26,12 @@
           "cluster_id",
           "parent_me",
           "scope_summary",
-          "expected_word_range",
           "scenes_estimated",
           "status",
           "mid_checkpoints",
           "research_ref"
         ],
+        "_v27_required_change": "v27: expected_word_range 从 required 移除（freestyle 模式下 writer 不用字数硬约束）· schema 验证向后兼容旧 brief",
         "properties": {
           "cluster_id": {
             "type": "string",
@@ -59,8 +59,15 @@
             "maxLength": 500,
             "description": "本簇 1-2 句话总结（writer 必读首字段）"
           },
+          "_writer_mode": {
+            "type": "string",
+            "enum": ["freestyle", "locked"],
+            "default": "freestyle",
+            "description": "v27: writer 写作模式。freestyle（默认）= writer 不知章数/字数 · splitter 按字数切；locked（v26 兼容）= writer 按 expected_word_range + chapter_range 硬约束写"
+          },
           "expected_word_range": {
             "type": "object",
+            "_v27_status": "optional · advisory hint only · freestyle 模式下不注入 writer prompt",
             "required": [
               "unit",
               "max",
@@ -200,8 +207,9 @@
           "estimated_chapters": {
             "type": "integer",
             "minimum": 2,
-            "maximum": 6,
-            "description": "splitter 预计切几章 (chapters_target = round(words/2800))"
+            "maximum": 12,
+            "_v27_status": "deprecated · outline 阶段不生成 · splitter 切完后自动回填实际章数",
+            "description": "[v27 deprecated · outline 不写] splitter 预计切几章 (chapters_target = round(words / 3500))"
           },
           "chapter_range": {
             "type": "array",
@@ -210,7 +218,8 @@
             },
             "minItems": 2,
             "maxItems": 2,
-            "description": "splitter 切完后填充 [start_ch, end_ch]"
+            "_v27_status": "v27: outline 阶段禁止写 · 由 splitter 切完后自动填",
+            "description": "splitter 切完后填充 [start_ch, end_ch]（v27: outline 不允许写）"
           },
           "status": {
             "enum": [

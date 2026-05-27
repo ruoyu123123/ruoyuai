@@ -293,7 +293,61 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 5
 
 # 第 6 步：★最后才切章（splitter → titles → per-chapter changes）
 
+## 🆕 v27 freestyle 模式（推荐 · 默认）
+
+v27 splitter 不要 TARGET_CHAPTERS · 按字数硬范围 3000-4500/章 自动算 N · 末章 < 3000 字时退回 pending_tail.txt 等下 cluster 拼。
+
+**检测 cluster brief 的 `_writer_mode`** 决定走 freestyle 还是 multi_chapter：
+
+```bash
+WRITER_MODE=$(python -c "
+import json
+ec = json.load(open('<项目路径>/_数据库/事件簇.json', encoding='utf-8'))
+for c in ec.get('clusters', []):
+    cid = str(c.get('cluster_id', ''))
+    if '<key>' in cid:
+        print(c.get('_writer_mode', 'freestyle'))  # v27 默认 freestyle
+        break
+" 2>/dev/null)
+WRITER_MODE=${WRITER_MODE:-freestyle}
+
+# 检测上 cluster pending_tail（v27 跨 cluster 字数补料）
+PREV_KEY=<上 cluster key · 如 "005" 当本 cluster=006>
+PREV_PENDING_TAIL="<项目路径>/章节/cluster_${PREV_KEY}_draft/cluster_${PREV_KEY}_pending_tail.txt"
+if [ -f "$PREV_PENDING_TAIL" ]; then
+  echo "[v27 backfill] 检测到上 cluster pending_tail: $PREV_PENDING_TAIL"
+  PENDING_ARG="PREVIOUS_PENDING_TAIL_PATH: $PREV_PENDING_TAIL"
+else
+  PENDING_ARG=""
+fi
+```
+
 ## 6.1 spawn novel-chapter-splitter
+
+### v27 freestyle 模式（_writer_mode == "freestyle"）
+
+```
+Agent 启动 novel-chapter-splitter:
+PLAN_ID: $PLAN_ID
+STEP: 6
+PROJECT: <项目路径>
+DRAFT_PATH: <项目路径>/章节/cluster_<key>_draft/cluster_<key>_draft.txt
+MODE: ecas_freestyle
+CLUSTER_ID: cluster_<key>
+CLUSTER_START_CH: <START_CH>
+ECAS_BRIEF_PATH: <项目路径>/_数据库/事件簇.json
+NARRATIVE_MODE: <linear|in_medias_res>
+CLIMAX_HINT_SCENE_INDEX: <从 事件簇.json 取>
+$PENDING_ARG   # 上 cluster pending_tail 路径（如有）
+```
+
+splitter v27 行为：
+- 不要 TARGET_CHAPTERS · 按字数自动算 N（3000-4500/章硬范围）
+- 末章 < 3000 → 写 `cluster_<key>_pending_tail.txt`（不切章 · 下个 cluster 时 prepend）
+- 末章 ≥ 3000 → 正常 N 章切完
+- 输出 splitter_wal 含 `pending_tail.exists` + `pending_tail.cjk` + `chapter_range` 字段
+
+### v26 兼容模式（_writer_mode == "locked"）
 
 ```
 Agent 启动 novel-chapter-splitter:
@@ -302,14 +356,17 @@ STEP: 6
 PROJECT: <项目路径>
 DRAFT: <项目路径>/章节/cluster_<key>_draft/cluster_<key>_draft.txt
 CLUSTER_RANGE: <START_CH>-<END_CH>
-NARRATIVE_MODE: <linear|in_medias_res>   # cluster_001 默认 in_medias_res · 其余默认 linear
+MODE: ecas_multi_chapter
+TARGET_CHAPTERS: <事件簇.json.clusters[N].estimated_chapters>
+NARRATIVE_MODE: <linear|in_medias_res>
 CLIMAX_HINT_SCENE_INDEX: <从 事件簇.json 取>
 ```
 
-splitter 按 chapter_count_estimate + 切点评分算法切 N 章，产出：
-- `章节/第<NNN>章/第<NNN>章.txt` × N（纯正文）
+产出：
+- `章节/第<NNN>章/第<NNN>章.txt` × N（纯正文 · 实际 N 由 freestyle 算 / locked 由 TARGET_CHAPTERS）
 - `章节/第<NNN>章/第<NNN>章_changes.json` × N（占位 · 待 6.3 平铺）
-- `_数据库/.wal/splitter_cluster_<key>_decisions.json`（切点 WAL · 记录每章范围）
+- `_数据库/.wal/splitter_cluster_<key>_decisions.json`（切点 WAL · 记录每章范围 + pending_tail meta）
+- **v27 freestyle 额外**：`章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt`（如末章不够）
 
 ## 6.2 gen_chapter_titles（normal/mid/high 三档）
 
@@ -359,13 +416,16 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 6
   5. Foreshadower: 埋 <i> 兑 <j>
      Reflector: 沉淀 <成功 X / 失败 Y> 经验
      Summarizer: cluster 摘要 <字数>
-  6. 切章:
+  6. 切章 (mode=<freestyle|locked>):
        - splitter: 切 <N> 章 (ch<S>-ch<E>) | narrative_mode=<...>
+       - 上 cluster pending_tail prepend: <Y/N · 字数 X>
+       - 本 cluster pending_tail held: <Y/N · 字数 X · 等下 cluster 拼>
        - titles: <ch1 标题 / ch2 标题 / ... / chN 标题>
        - per-chapter changes: 平铺完成
 
 ══ 下一步 ══
   → /cluster-save-state 保存状态 + 涌现下个 cluster
+  → 如有 pending_tail held：写完下个 cluster 后会自动拼接补料
 ```
 
 ```bash

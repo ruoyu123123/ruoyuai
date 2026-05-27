@@ -2,14 +2,21 @@
 """
 gen_writer.py — Gen-Model 正文生成器（OpenAI 兼容协议 /v1/chat/completions）
 
-用法：
+v27 freestyle 模式（默认）：
+  python gen_writer.py \
+    --project "workspace/novels/<book>" \
+    --cluster 6
+  → writer 不知道目标章数 · 按 cluster.scope_summary + scene_storyboard 自由发挥
+  → 字数自然涌现（splitter 后期按 3000-4500/章 切，章数由内容决定）
+
+v26 兼容模式（显式锁字数 · 仅用于回归测试）：
   python gen_writer.py \
     --project "workspace/novels/<book>" \
     --cluster 3 \
     --chapter-start 11 --chapter-end 15 \
     --target-cjk 13000-22000
 
-读取 manifest + 风格 skill + 调研 cache + chapter_plan + 7 项硬约束，
+读取 manifest + 风格 skill + 调研 cache + cluster_brief + 7 项硬约束，
 组装 prompt，调当前 active 的 gen-model profile（OpenAI 兼容），
 失败时按 fallback 链尝试下一个 profile，
 写出 cluster draft + changes.json + 自动跑 scanner 校验。
@@ -84,6 +91,46 @@ def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
     return 16000, 'default_fallback_16k_NO_PROBE_YET'
 
 
+# ============ v27 freestyle helpers ============
+def _infer_cluster_start_ch(project_root: Path, cluster_id: int) -> int:
+    """v27 freestyle：从事件簇.json + 已写章节推导 cluster 起始章号
+
+    优先级：
+    1. 事件簇.json.clusters[N].chapter_range[0]（v26 schema · 向后兼容）
+    2. 事件簇.json.clusters[N].ch_start（v27 新 schema）
+    3. 上一 cluster 末章 + 1（从 章节/ 目录扫）
+    4. cluster_001 = 1 兜底
+    """
+    db = project_root / '_数据库'
+    ec_path = db / '事件簇.json'
+    if ec_path.exists():
+        try:
+            ec = json.loads(ec_path.read_text(encoding='utf-8'))
+            for c in ec.get('clusters', []):
+                cid_raw = c.get('cluster_id', '')
+                m = re.search(r'(\d+)', str(cid_raw))
+                if m and int(m.group(1)) == cluster_id:
+                    if c.get('ch_start'):
+                        return int(c['ch_start'])
+                    cr = c.get('chapter_range') or []
+                    if cr and len(cr) >= 1:
+                        return int(cr[0])
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    # 兜底：扫 章节/第NNN章/ 找最大章号 + 1
+    chapters_dir = project_root / '章节'
+    max_ch = 0
+    if chapters_dir.exists():
+        for p in chapters_dir.iterdir():
+            m = re.match(r'第(\d+)章', p.name)
+            if m:
+                max_ch = max(max_ch, int(m.group(1)))
+    if cluster_id == 1:
+        return 1
+    return max_ch + 1 if max_ch > 0 else 1
+
+
 # ============ Prompt 组装 ============
 def read_text(p: Path, limit_chars: int = None) -> str:
     if not p.exists():
@@ -94,9 +141,17 @@ def read_text(p: Path, limit_chars: int = None) -> str:
     return t
 
 
-def build_prompt(project_root: Path, cluster_id: int, ch_start: int, ch_end: int, target_cjk: str) -> tuple:
-    """组装 system + user prompt"""
+def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
+                 ch_end: int = None, target_cjk: str = None) -> tuple:
+    """组装 system + user prompt
+
+    v27 freestyle：ch_end/target_cjk 可缺省。
+    - ch_end 缺 → user prompt 不暴露目标章数（writer 不知道目标章数）
+    - target_cjk 缺 → 不注入「目标字数」段（让 AI 按 scope_summary 自由产出 · 自然涌现）
+    - 单章 2500-5000 CJK 字数硬约束（铁律 #4）保留（splitter 切分时用，writer 写时不用预设章数）
+    """
     db = project_root / '_数据库'
+    freestyle = (ch_end is None)
 
     # 读取核心资料
     manifest_path = db / '.manifest' / f'ch_{ch_start:03d}.json'
@@ -117,11 +172,16 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int, ch_end: int
         if caches:
             cache_text = read_text(caches[0], 15000)
 
-    # chapter_plan ch_start..ch_end
+    # chapter_plan：v26 兼容 = ch_start..ch_end · v27 freestyle = 不取（直接走 cluster_brief.scene_storyboard）
     progress = json.loads((db / '进度.json').read_text(encoding='utf-8'))
     plans = progress.get('chapter_plan', [])
-    relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_end]
-    plan_text = json.dumps(relevant_plans, ensure_ascii=False, indent=2)
+    if freestyle:
+        # v27：不限定章范围 · 取 ch_start 起所有 ≤ ch_start+30 的 plan 作为软提示
+        # 章数由 cluster.scope_summary + writer 自由发挥决定
+        relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_start + 30]
+    else:
+        relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_end]
+    plan_text = json.dumps(relevant_plans, ensure_ascii=False, indent=2) if relevant_plans else "[]（v27 freestyle · 完全按 cluster_brief.scene_storyboard 自由发挥）"
 
     # 人物卡
     char_card = read_text(db / '人物卡.json', 20000)
@@ -161,7 +221,9 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int, ch_end: int
                         constraints.append(f"- 比例 ≥ {m.group(1)}%（出自 scope_summary）")
                     for m in _re.finditer(r'(?:占比|比例)\s*[≤<]\s*(\d+)\s*%?', scope):
                         constraints.append(f"- 比例 ≤ {m.group(1)}%（出自 scope_summary）")
-                if ewr and ewr.get('min') and ewr.get('max'):
+                # v27：freestyle 时跳过 cluster.expected_word_range（让 AI 自由发挥）
+                # v26 兼容：显式传 ch_end + cluster.expected_word_range 存在时仍注入字数硬约束
+                if (not freestyle) and ewr and ewr.get('min') and ewr.get('max'):
                     constraints.append(f"- 字数硬约束：{ewr['min']}-{ewr['max']} {ewr.get('unit', 'CJK_chars')}（cluster.expected_word_range · 必遵守，写完自查不达标即重写）")
                 # 额外读 cluster_brief 的 hard_constraints 字段（v22.gov.align.fix 新 schema）
                 for hc in cluster_brief.get('hard_constraints', []) or []:
@@ -276,14 +338,31 @@ cluster_brief 完整内容：
 
 """
 
-    user = f"""# 写作任务
+    # v27 freestyle vs v26 兼容：章数 + 目标字数描述
+    if freestyle:
+        task_intro = f"""# 写作任务
+
+为本项目 cluster_{cluster_id:03d} 写**一整块连续叙事**。
+
+**🎯 v27 自由发挥模式**：
+- 你**不知道**目标章数（章数由 splitter 后期按 3000-4500 CJK/章 自然切，章数由你写的内容多少决定）
+- 你**不知道**目标总字数（按 cluster.scope_summary + scene_storyboard 写够即可，不必凑字数）
+- **专注做对的事**：写完 cluster_brief.scope_summary 描述的所有场景 + 兑现 foreshadowing_to_plant
+- 自然结尾即止 — 写完 cluster 主线就停（一般 12000-25000 CJK 是健康范围，不强求）
+
+⚠️ **重要提醒**：你输出的是**一整块叙事**，不是分好章的成品。**严禁**写「第 N 章 标题」/「——」分章符。把整个故事块当一篇长散文写，场景之间自然过渡。
+"""
+    else:
+        task_intro = f"""# 写作任务
 
 为本项目 cluster_{cluster_id:03d} 写**一整块连续叙事**（预计后续 splitter 切成 ch{ch_start}-ch{ch_end} 共 {ch_end - ch_start + 1} 章，但**你不要预先分章**）。
 
 **目标字数**: {target_cjk} CJK（整块总字数；splitter 后每章自然落在 2500-5000）
 
 ⚠️ **重要提醒**：你输出的是**一整块叙事**，不是分好章的成品。**严禁**写「第 N 章 标题」/「——」分章符。把整个故事块当一篇长散文写，场景之间自然过渡。
+"""
 
+    user = f"""{task_intro}
 {cluster_constraints_section}## chapter_plan（必落 anchors）
 
 ```json
@@ -318,7 +397,7 @@ cluster_brief 完整内容：
 
 # 现在请写正文
 
-按 7 项硬铁律 + 元 anti-slop 防御，写 {ch_end - ch_start + 1} 章完整故事块。
+{"按 7 项硬铁律 + 元 anti-slop 防御 · 完整覆盖 cluster_brief 的所有 scene_storyboard 自由发挥（章数由 splitter 后期切，你不必管）。" if freestyle else f"按 7 项硬铁律 + 元 anti-slop 防御，写 {ch_end - ch_start + 1} 章完整故事块。"}
 
 **自查项**（写完后请在 CHANGES JSON 里自报）：
 - word_count_cjk
@@ -430,7 +509,10 @@ def split_text_and_changes(reply: str) -> tuple:
 
 def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
                 ch_start: int, ch_end: int, used_profile: Profile):
-    """写 draft + changes.json"""
+    """写 draft + changes.json
+
+    v27 freestyle：ch_end=None 时 ch_range 写 'TBD_by_splitter'（splitter 后期填）。
+    """
     draft_dir = project_root / '章节' / f'cluster_{cluster_id:03d}_draft'
     draft_dir.mkdir(parents=True, exist_ok=True)
     draft_path = draft_dir / f'cluster_{cluster_id:03d}_draft.txt'
@@ -440,15 +522,20 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
 
     # 补全 changes 元数据
     cjk = len(re.findall(r'[一-鿿]', body))
+    freestyle = (ch_end is None)
+    ch_range_str = f'{ch_start}-TBD_by_splitter' if freestyle else f'{ch_start}-{ch_end}'
     changes.setdefault('ecas_metadata', {})
     changes['ecas_metadata'].update({
         'cluster_id': f'cluster_{cluster_id:03d}',
-        'ch_range': f'{ch_start}-{ch_end}',
+        'ch_start': ch_start,
+        'ch_range': ch_range_str,
+        'chapter_count_decided_by_splitter': freestyle,
         'generated_by': 'gen_writer.py',
         'generated_by_profile': used_profile.name,
         'generated_by_model': used_profile.model,
         'generated_at': datetime.now().isoformat(),
         'cjk_actual': cjk,
+        'writer_mode': 'freestyle_v27' if freestyle else 'locked_v26',
     })
     changes['schema_version'] = '1.0'
     changes_path.write_text(json.dumps(changes, ensure_ascii=False, indent=2),
@@ -490,9 +577,12 @@ def main():
     parser = argparse.ArgumentParser(description='Gen-Model 正文生成器（OpenAI 兼容协议）')
     parser.add_argument('--project', required=True, help='项目根路径')
     parser.add_argument('--cluster', type=int, required=True, help='cluster id（整数）')
-    parser.add_argument('--chapter-start', type=int, required=True)
-    parser.add_argument('--chapter-end', type=int, required=True)
-    parser.add_argument('--target-cjk', default='13000-22000', help='目标字数范围')
+    parser.add_argument('--chapter-start', type=int, default=None,
+                        help='[v27 optional] cluster 起始章号 · 缺省时从事件簇.json 推导（cluster_001=1 / 后续=上 cluster 末章+1）')
+    parser.add_argument('--chapter-end', type=int, default=None,
+                        help='[v27 deprecated optional] cluster 结束章号 · 缺省 = freestyle 模式（writer 不知章数 · splitter 按字数切）')
+    parser.add_argument('--target-cjk', default=None,
+                        help='[v27 optional] 整 cluster 目标字数 · 缺省 = freestyle（按 scope_summary 自然涌现）')
     parser.add_argument('--dry-run', action='store_true', help='只输出 prompt，不调 API')
     args = parser.parse_args()
 
@@ -501,9 +591,24 @@ def main():
         print(f"[ERROR] 项目路径不存在: {project_root}", file=sys.stderr)
         sys.exit(2)
 
+    # v27：ch_start 缺省 → 从事件簇.json + 已写章节推导
+    ch_start = args.chapter_start
+    if ch_start is None:
+        ch_start = _infer_cluster_start_ch(project_root, args.cluster)
+        print(f"[gen_writer] [v27 freestyle] 推导 ch_start={ch_start} (cluster_{args.cluster:03d})",
+              file=sys.stderr)
+
+    # 模式判断 + 提示
+    if args.chapter_end is None:
+        print(f"[gen_writer] [v27 freestyle 模式] writer 不知目标章数 · splitter 按字数切 · 章数自然涌现",
+              file=sys.stderr)
+    else:
+        print(f"[gen_writer] [v26 兼容模式] ch_start={ch_start} ch_end={args.chapter_end} target_cjk={args.target_cjk}",
+              file=sys.stderr)
+
     # dry-run 模式不需要 active profile
     if args.dry_run:
-        system, user = build_prompt(project_root, args.cluster, args.chapter_start,
+        system, user = build_prompt(project_root, args.cluster, ch_start,
                                     args.chapter_end, args.target_cjk)
         print("=== SYSTEM PROMPT ===")
         print(system)
@@ -537,7 +642,7 @@ def main():
     if chain:
         print(f"[gen_writer] fallback chain = {','.join(chain)}", file=sys.stderr)
 
-    system, user = build_prompt(project_root, args.cluster, args.chapter_start,
+    system, user = build_prompt(project_root, args.cluster, ch_start,
                                 args.chapter_end, args.target_cjk)
 
     try:
@@ -548,7 +653,7 @@ def main():
 
     body, changes = split_text_and_changes(reply)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
-                                  args.chapter_start, args.chapter_end, used_profile)
+                                  ch_start, args.chapter_end, used_profile)
 
     print(f"\n[gen_writer] 跑 scanner...", file=sys.stderr)
     scan_results = run_scanners(draft_path)
@@ -556,15 +661,31 @@ def main():
     for sc, res in scan_results.items():
         print(f"  {sc}: {res}", file=sys.stderr)
 
-    # 字数检查
-    target_min, target_max = map(int, args.target_cjk.split('-'))
-    if cjk < target_min:
-        print(f"\n[WARN] 字数 {cjk} < 目标下限 {target_min}", file=sys.stderr)
-    elif cjk > target_max:
-        print(f"\n[WARN] 字数 {cjk} > 目标上限 {target_max}", file=sys.stderr)
+    # 字数检查（v27 freestyle 无硬下限 · v26 兼容才校验目标）
+    if args.target_cjk:
+        try:
+            target_min, target_max = map(int, args.target_cjk.split('-'))
+            if cjk < target_min:
+                print(f"\n[WARN] 字数 {cjk} < 目标下限 {target_min}", file=sys.stderr)
+            elif cjk > target_max:
+                print(f"\n[WARN] 字数 {cjk} > 目标上限 {target_max}", file=sys.stderr)
+            else:
+                print(f"\n[OK] 字数 {cjk} 在目标范围 [{target_min}, {target_max}]",
+                      file=sys.stderr)
+        except (ValueError, AttributeError):
+            print(f"\n[gen_writer] target_cjk 解析失败，跳过字数校验: {args.target_cjk}",
+                  file=sys.stderr)
     else:
-        print(f"\n[OK] 字数 {cjk} 在目标范围 [{target_min}, {target_max}]",
-              file=sys.stderr)
+        # v27 freestyle：软提示（splitter 健康区间）
+        if cjk < 8000:
+            print(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏短 · 切 3 章可能不够（splitter 可能从下个 cluster 补料）",
+                  file=sys.stderr)
+        elif cjk > 30000:
+            print(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏长 · splitter 会切成 7+ 章",
+                  file=sys.stderr)
+        else:
+            print(f"\n[v27 freestyle] [OK] cjk={cjk} 健康区间 8000-30000",
+                  file=sys.stderr)
 
 
 if __name__ == '__main__':
