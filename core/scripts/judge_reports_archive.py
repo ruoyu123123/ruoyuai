@@ -9,7 +9,7 @@
 
 存盘位置：
 - `_数据库/.judge_reports/ch_{ch:03d}_{judge_id}.json`（独立文件，便于 grep / consensus）
-- 同时 append 摘要到 `章纲摘要.json[ch].judge_reports[]`（轻量索引）
+- 同时 append 摘要到 `故事块摘要.json[ch].judge_reports[]`（轻量索引）
 
 为 meta-judge / judge_consensus 建数据基础。
 
@@ -187,7 +187,7 @@ def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool) -> dict:
     reflection = load_json(db / ".wal" / f"第{ch:03d}章_reflection.json", {})
     summary = load_json(db / ".wal" / f"第{ch:03d}章_summary.json", {})
     changes = load_json(project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json", {})
-    ch_summary_full = load_json(db / "章纲摘要.json", {"chapters": []})
+    ch_summary_full = load_json(db / "故事块摘要.json", {"chapters": []})
     ch_entry = next((c for c in ch_summary_full.get("chapters", []) if c.get("ch") == ch), {})
 
     judges = {
@@ -214,7 +214,7 @@ def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool) -> dict:
         conf = report.get("confidence", "?")
         print(f"  [{judge_id}] grade={grade} confidence={conf}")
 
-    # 累积摘要到 章纲摘要[ch].judge_reports[]
+    # 累积摘要到 故事块摘要[ch].judge_reports[]
     if not dry_run and ch_entry:
         summaries = []
         for jid, r in valid_judges.items():
@@ -225,8 +225,8 @@ def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool) -> dict:
                 "ts": datetime.now().isoformat(timespec="seconds"),
             })
         ch_entry["judge_reports"] = summaries
-        save_json(db / "章纲摘要.json", ch_summary_full)
-        print(f"  [OK] 章纲摘要 ch{ch}.judge_reports 已更新（{len(summaries)} 条摘要）")
+        save_json(db / "故事块摘要.json", ch_summary_full)
+        print(f"  [OK] 故事块摘要 ch{ch}.judge_reports 已更新（{len(summaries)} 条摘要）")
 
     return {"ch": ch, "written": len(written), "judges": list(valid_judges.keys())}
 
@@ -268,7 +268,7 @@ def main():
     reflection = load_json(db / ".wal" / f"第{ch:03d}章_reflection.json", {})
     summary = load_json(db / ".wal" / f"第{ch:03d}章_summary.json", {})
     changes = load_json(project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json", {})
-    ch_summary_full = load_json(db / "章纲摘要.json", {"chapters": []})
+    ch_summary_full = load_json(db / "故事块摘要.json", {"chapters": []})
     ch_entry = next((c for c in ch_summary_full.get("chapters", []) if c.get("ch") == ch), {})
 
     # 组装 JudgeReports
@@ -300,7 +300,7 @@ def main():
         conf = report.get("confidence", "?")
         print(f"  [{judge_id}] grade={grade} confidence={conf}")
 
-    # 累积摘要到 章纲摘要[ch].judge_reports[]
+    # 累积摘要到 故事块摘要[ch].judge_reports[]
     if not args.dry_run and ch_entry:
         summaries = []
         for jid, r in valid_judges.items():
@@ -311,8 +311,8 @@ def main():
                 "ts": datetime.now().isoformat(timespec="seconds"),
             })
         ch_entry["judge_reports"] = summaries
-        save_json(db / "章纲摘要.json", ch_summary_full)
-        print(f"  [OK] 章纲摘要 ch{ch}.judge_reports 已更新（{len(summaries)} 条摘要）")
+        save_json(db / "故事块摘要.json", ch_summary_full)
+        print(f"  [OK] 故事块摘要 ch{ch}.judge_reports 已更新（{len(summaries)} 条摘要）")
 
     print(f"\n报告目录: {archive_dir}")
     if not valid_judges:

@@ -1,4 +1,4 @@
-"""cross_chapter_relationship_trend_scan.py — 关系 4 维数值跨章变化趋势（CCR21）
+"""cross_cluster_relationship_trend_aggregate.py — 关系 4 维数值跨章变化趋势（CCR21）
 
 收集每章 _changes.factual.relationships[] 中 from→to 的 4 维变化（affinity/trust/fear/respect），
 重建跨章变化时序，检测：
@@ -21,6 +21,16 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 def load_json(p: Path, default=None):
     if not p.exists():

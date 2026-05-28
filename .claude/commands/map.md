@@ -40,8 +40,8 @@ $ARGUMENTS
     }
   ],
   "character_positions": {
-    "主角": {"location": "青云宗·藏经阁", "since_ch": 5},
-    "王经理": {"location": "青云镇·客栈", "since_ch": 4}
+    "主角": {"location": "青云宗·藏经阁", "since_cluster": 5},
+    "王经理": {"location": "青云镇·客栈", "since_cluster": 4}
   },
   "travel_log": [
     {"ch": 3, "character": "主角", "from": "青云镇", "to": "青云宗", "method": "步行"}

@@ -20,7 +20,7 @@ LLM 知道是自己的作品时，会有 **self-protection 偏见**（arxiv 2406
 
 主代理喂给你的所有材料**只有「章节正文」和「章节简介」**，并且明确告知你：
 - 这是一份**匿名投稿**
-- 你**不知道**作者用了什么 chapter_plan / manifest / 风格库 / 写作经验
+- 你**不知道**作者用了什么 cluster_blueprint / manifest / 风格库 / 写作经验
 - 你**不需要**理解作者的创作意图，只需要评成品
 
 ### 帽子 2 · 严厉外审编辑（Layer 3）
@@ -38,7 +38,7 @@ LLM 知道是自己的作品时，会有 **self-protection 偏见**（arxiv 2406
 PROJECT: <项目路径，仅用于定位章节正文 .txt 和写输出报告>
 CHAPTER: <章节号 N>
 MODE: counterfactual_judge
-SYNOPSIS: <≤200 字的章节简介，由主代理从 chapter_plan 抽取后剥离技术信号>
+SYNOPSIS: <≤200 字的章节简介，由主代理从 cluster_blueprint 抽取后剥离技术信号>
 ```
 
 **注意 SYNOPSIS 的脱敏**：主代理传给你的简介必须**抹掉**以下技术信号：
@@ -58,7 +58,7 @@ SYNOPSIS: <≤200 字的章节简介，由主代理从 chapter_plan 抽取后剥
 | `_数据库/.audit/` | 同 judge ensemble 同步 = 失去异质价值 |
 | `_数据库/.judge_reports/` | 看了会被前 judge 评分锚定 |
 | `_数据库/写作经验.json` | 让你"知道作者的套路"= self-protection 复活 |
-| `_数据库/chapter_plan_*.json` | 你不该知道作者计划 |
+| `_数据库/cluster_blueprint_*.json` | 你不该知道作者计划 |
 | `_数据库/.reading_reflection/` | 看了就会跟 reading-reflector 同质化 |
 | `workspace/styles/*` | 风格库是创作工具，不该影响盲审 |
 | `事件簇.json` / `世界设定.json` 等任何设定 JSON | 外审编辑读的是稿子，不是设定集 |
@@ -136,7 +136,7 @@ SYNOPSIS: <≤200 字的章节简介，由主代理从 chapter_plan 抽取后剥
 ## 你**绝对不**做的事
 
 - ❌ 不读任何禁读清单文件
-- ❌ 不读 SYNOPSIS 以外的章节简介（事件簇 / chapter_plan 都禁）
+- ❌ 不读 SYNOPSIS 以外的章节简介（事件簇 / cluster_blueprint 都禁）
 - ❌ 不参考其他 judge 评分（你是异质票，独立给）
 - ❌ 不给"建议改成 XX"（你是评审，不是编辑）
 - ❌ 不用术语（"voice 漂移 / POV 突变"换成"前后语气不一致 / 视角突然乱"）

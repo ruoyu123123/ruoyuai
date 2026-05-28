@@ -1,4 +1,4 @@
-"""cross_chapter_persona_drift_scan.py — Persona Drift 跨章扫描（v19.6 G8 新增）
+"""cross_cluster_persona_drift_aggregate.py — Persona Drift 跨章扫描（v19.6 G8 新增）
 
 复用 embedding_store 的 character baseline + per-chapter cosine 距离，识别角色 voice 漂移。
 
@@ -10,7 +10,7 @@
 - 对每章最近 N 章扫所有有 baseline 的角色
 - drift > 0.3 = 显著漂移告警
 
-用法：python cross_chapter_persona_drift_scan.py <project> [--last-n 5]
+用法：python cross_cluster_persona_drift_aggregate.py <project> [--last-n 5]
 退出码: 0 健康 / 1 advisory / 2 warning
 """
 
@@ -22,6 +22,16 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 sys.path.insert(0, str(Path(__file__).parent))
 import embedding_store  # type: ignore

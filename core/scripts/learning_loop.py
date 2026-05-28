@@ -16,7 +16,7 @@ v17 的"经验沉淀"链路三方字段名不一致、且 save-state 第 8 步�
 
 【v19 顾问制 — 豁免统计（块 2.5）】
 检测工具是「顾问」不是「法官」。当 AI 反复对同一 advisory code 在同类章节
-（按 chapter_plan.scene_type 归类）给出豁免，说明问题不在「正文」而在「工具阈值
+（按 cluster_blueprint.scene_type 归类）给出豁免，说明问题不在「正文」而在「工具阈值
 /场景适配不到位」—— 此时该校准工具，而不是反复骚扰 AI 豁免。
   - --ingest 时读 audit 报告的 waived_issues（gate-core 2.2 产出），按 code 累计；
   - 同一 code 被豁免 >= WAIVER_CALIBRATION_THRESHOLD 次 -> 产出 tool_calibration_suggestion；
@@ -262,7 +262,7 @@ def _issue_key(issue: dict) -> str:
 # ---- v19 豁免统计（块 2.5）----
 
 def _chapter_scene_types(project_root: Path, ch: int) -> list:
-    """读 进度.json 的 chapter_plan，取本章 scene_type 列表（章节类型信号）。
+    """读 进度.json 的 cluster_blueprint，取本章 scene_type 列表（章节类型信号）。
     找不到返回 []。scene_type 形如 ["日常", "心理外化", "悬疑"]。"""
     prog_path = _db_dir(project_root) / "进度.json"
     if not prog_path.is_file():
@@ -271,10 +271,12 @@ def _chapter_scene_types(project_root: Path, ch: int) -> list:
         prog = json.loads(prog_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return []
-    for p in prog.get("chapter_plan", []):
-        if p.get("ch") == ch:
-            st = p.get("scene_type", [])
-            return st if isinstance(st, list) else [st] if st else []
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+        for p in cdata.get("scene_storyboard", []):
+            if p.get("ch") == ch:
+                st = p.get("scene_type", [])
+                return st if isinstance(st, list) else [st] if st else []
     return []
 
 
@@ -439,6 +441,10 @@ def ingest_audit(project_root: Path, audit_path: Path) -> dict:
     tracker = exp["_recurrence_tracker"]
     ch = audit.get("chapter", 0)
 
+    # v2 cluster 化（2026-05-28）：识别 audit 是否来自 cluster 视野扫描
+    _is_cluster_mode = audit.get("_cluster_mode") is True
+    _cluster_key = audit.get("_cluster_key", "")
+
     # audit 报告里只有"未被自动修掉的真问题"才该进入学习（auto_fixed 的不算复发负债）
     issues = audit.get("issues", []) + audit.get("pending_agent", [])
     seen_keys = set()
@@ -453,18 +459,26 @@ def ingest_audit(project_root: Path, audit_path: Path) -> dict:
         if issue.get("waived") is True:
             continue
         key = _issue_key(issue)
+        # v2 cluster 化：cluster 视野 issue 用独立 key 前缀，避免 chapter 视野跟 cluster 视野混算复发
+        if _is_cluster_mode:
+            key = f"cluster::{key}"
         if key in seen_keys:
             continue  # 同章同类只计一次
         seen_keys.add(key)
         rec = tracker.setdefault(key, {"count": 0, "chapters": [],
                                        "first_seen": ch, "last_seen": ch,
                                        "dimension": issue.get("dimension", "unknown"),
-                                       "sample_desc": issue.get("desc", "")})
+                                       "sample_desc": issue.get("desc", ""),
+                                       "_view_mode": "cluster" if _is_cluster_mode else "chapter",
+                                       "_cluster_keys": [_cluster_key] if _is_cluster_mode else []})
         if ch not in rec["chapters"]:
             rec["count"] += 1
             rec["chapters"].append(ch)
             rec["chapters"].sort()
         rec["last_seen"] = ch
+        # v2 cluster 视野：累计 cluster_key 列表（便于追溯）
+        if _is_cluster_mode and _cluster_key and _cluster_key not in rec.get("_cluster_keys", []):
+            rec.setdefault("_cluster_keys", []).append(_cluster_key)
 
     escalated = _escalate_recurring(exp, only_keys=seen_keys)
 

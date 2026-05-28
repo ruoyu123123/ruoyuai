@@ -104,9 +104,10 @@ def main():
                     "decision_patterns": [],
                     "arc": "（待蒸馏）",
                     "status": "活跃",
-                    "first_appear_ch": ch,
+                    # v2 cluster 化（2026-05-28）：纯 cluster 模式
+                    "first_appear_cluster": f"cluster_{ch:03d}",
                     "_lazy_spawned": True,
-                    "_distill_recommended_ch": ch + 5,
+                    "_distill_recommended_cluster": f"cluster_{ch+5:03d}",
                 })
         else:
             pool["extras"].append({"id": name, "ch": ch, "role": role})

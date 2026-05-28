@@ -216,11 +216,16 @@ def main():
             wr = c.get("expected_word_range") or {}
             opus = "Opus" if c.get("opus_recommended") else "Sonnet"
             print(f"║   [{status:11s}] {cid} ({pm}) {cr_str} {opus} {wr.get('min','?')}-{wr.get('max','?')}字".ljust(72) + "║")
-        # cluster ↔ ch 映射 (从 进度.chapter_plan)
-        if (progress.get("chapter_plan") or []):
+        # cluster ↔ ch 映射 (从 进度.cluster_blueprint)
+        
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 派生 plan list
+        _plan_list = []
+        for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+            _plan_list.extend(cdata.get("scene_storyboard", []))
+        if _plan_list:
             print(f"║   cluster ↔ ch 映射:".ljust(72) + "║")
             cluster_chs = {}
-            for cp in progress.get("chapter_plan", []):
+            for cp in _plan_list:
                 cid = cp.get("cluster_id") or "(DCAS/旧)"
                 cluster_chs.setdefault(cid, []).append((cp.get("ch"), cp.get("cluster_position", "?")))
             for cid, chs in list(cluster_chs.items())[:4]:

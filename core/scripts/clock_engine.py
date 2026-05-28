@@ -170,7 +170,7 @@ def spawn(project_root: Path, ch: int, clock_def: dict) -> dict:
         "trigger_on_max": clock_def.get("trigger_on_max", ""),
         "visible_to_protagonist": clock_def.get("visible_to_protagonist", False),
         "visible_to_writer": clock_def.get("visible_to_writer", True),
-        "since_ch": ch,
+        "since_cluster": f"cluster_{ch:03d}",  # v2 cluster 化（2026-05-28）：纯 cluster 单位
         "spawned_by": clock_def.get("spawned_by", "manual"),
         "status": "active",
         "_reason": clock_def.get("_reason", ""),

@@ -29,7 +29,7 @@
       "expected_artifacts": [
         "_数据库/.wal/第003章_save_state.json",
         "_数据库/.wal/第003章_summary.json",
-        "_数据库/章纲摘要.json（含 ch3 摘要）",
+        "_数据库/故事块摘要.json（含 ch3 摘要）",
         "_数据库/写作经验.json（含 confidence/updated_at，P2-5）",
         "_数据库/.audit/ch_003_audit.json（含 advisory + 可能的 waived 段）"
       ],

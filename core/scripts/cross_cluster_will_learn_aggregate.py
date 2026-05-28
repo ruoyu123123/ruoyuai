@@ -1,4 +1,4 @@
-"""cross_chapter_will_learn_scan.py — 角色 will_learn 跨章兑现扫（CCR22）
+"""cross_cluster_will_learn_aggregate.py — 角色 will_learn 跨章兑现扫（CCR22）
 
 读 _数据库/人物卡.json[<角色>].knowledge.will_learn[]，每条有 due_by。
 对照已写章节，检测：
@@ -18,6 +18,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 def load_json(p: Path, default=None):
     if not p.exists():

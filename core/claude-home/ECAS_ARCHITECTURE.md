@@ -35,7 +35,7 @@
                   ├──> outline-planner ──> [event_cluster_brief]
 [事件池 抽签]  ──┤                            │
                   │                            ▼
-[chapter_plan]  ──┘                       brief 含:
+[cluster_blueprint]  ──┘                       brief 含:
                                           - cluster_id (ME_002)
                                           - parent_me
                                           - scope_summary
@@ -114,8 +114,8 @@
 | `manifest.dcas_word_target` | `manifest.ecas_word_range` (min/max) | v23 同时输出 dcas_word_target=range.min 向后兼容 |
 | `章节/第N章/第N章.txt` | 保持不变（每章仍独立 txt） | 100% 兼容 |
 | `章节/第N章/第N章_changes.json` | 加 `cluster_id` + `cluster_position` 字段 | v22 章 cluster_id=null（合法） |
-| `章纲摘要.chapters[ch]` | 同结构 + 加 `cluster_id` 字段 | 向后兼容 |
-| `进度.chapter_plan[ch]` | 同 + 加 `cluster_id` + `cluster_position` | 向后兼容 |
+| `故事块摘要.chapters[ch]` | 同结构 + 加 `cluster_id` 字段 | 向后兼容 |
+| `进度.cluster_blueprint[ch]` | 同 + 加 `cluster_id` + `cluster_position` | 向后兼容 |
 | `_数据库/大势卡.json` (18 ME) | **不变** — 仍是事件 spawn 源 | 100% 复用 |
 | `_数据库/事件池.json` | **不变** | 100% 复用 |
 | 新增 `_数据库/事件簇.json` | cluster 池 + 元数据 | 由 outline-planner 维护 |

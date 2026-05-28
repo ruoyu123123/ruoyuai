@@ -1,40 +1,24 @@
 #!/usr/bin/env python3
 """
-distill_replicate.py — 蒸馏 phase-2/phase-5 复刻测试（v2: chapter + cluster 两档）
+distill_replicate.py — 蒸馏 phase-4 cluster 终验复刻（v3: cluster 单轨 · 2026-05-28）
 
 强制走 gen-model（OpenAI 兼容协议外部模型），不走 Claude Code sub-agent。
 v22.cluster.3 起的硬约束 —— 蒸馏闭环复刻必须用最终写作要用的 gen-model 来测。
 
-v2 改动（2026-05-26 故事块蒸馏 v2 章程 · memory feedback_cluster_distill_v2_charter）：
-- ❌ 删除 --type opening/battle/psychology/dialogue/description/transition 单段 1200 字 drill 模式
-  原因：写作端早就是 ECAS cluster 整块叙事，drill 单段验证 = 闭环不闭
-  跟 build_manifest.py:2298 旧 writer_mode="single" 是同一类系统不对齐
-- ✅ --mode chapter（单章 3000-5000 字）：v1→v2 中检用
-- ✅ --mode cluster（故事块 4000-20000 字）：v2+ 终验用
-- ✅ cluster 模式拆 sub-call 防 timeout（沿用 cluster_segmenter A' 半 cluster 教训：6 章 100% 502 / 3 章 100% 成功）
-- 🚨 紧急旁路：--legacy-segment-only --type X（一次性回滚 · 留 lesson）
+v3 改动（2026-05-28 全系统 cluster 化方案 · memory feedback_full_system_cluster_centric）：
+- ❌ 删除 chapter 模式（v3 cluster 单轨化 · chapter 中检违背 cluster 单轨原则）
+- ❌ 删除单段 drill 模式（早已废弃）
+- ✅ --mode cluster（故事块 4000-20000 字）：唯一终验路径
+- ✅ cluster 模式拆 sub-call 防 timeout（沿用 cluster_segmenter A' 半 cluster 教训）
 
 用法：
 
-  # chapter 模式（单章中检）
-  python core/scripts/distill_replicate.py \\
-    --style-skill workspace/styles/<书名>/skill_v<N>.md \\
-    --mode chapter \\
-    --chapter-ref workspace/styles/<书名>/原文/第001章.txt \\
-    --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/chapter_replica.txt \\
-    [--target-words 4000]
-
-  # cluster 模式（故事块终验）
   python core/scripts/distill_replicate.py \\
     --style-skill workspace/styles/<书名>/skill_v<N>.md \\
     --mode cluster \\
     --cluster-ref cluster_001 \\
     --project workspace/styles/<书名> \\
     --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/cluster_001_replica.txt
-
-  # 紧急旁路（仅救火 · 留 lesson）
-  python core/scripts/distill_replicate.py \\
-    --style-skill ... --legacy-segment-only --type opening --output ...
 
 输出：
 - 复刻文本（纯 txt UTF-8 无 markdown 标记）
@@ -101,17 +85,6 @@ def clean_output(text: str) -> str:
     return text.strip()
 
 
-# ============ legacy drill 模式（仅 --legacy-segment-only 救火用） ============
-LEGACY_TYPE_SCENARIOS = {
-    "opening": {"label": "开篇", "instruction": "写「开篇章」前 1-3 段，约 1000-1200 字。自创角色，登陆瞬间感官 → POV 自语 → 环境扫描 → 章末小钩子。"},
-    "battle": {"label": "战斗", "instruction": "写战斗段约 1000-1200 字。怪物登场 → 试探 → 战术 → 反转 → 冷却。"},
-    "psychology": {"label": "心理/推理", "instruction": "写心理/推理段约 1000-1200 字。观察 → 假设 → 推翻 → 拼图 → 灵光。"},
-    "dialogue": {"label": "对话", "instruction": "写对话段约 1000-1200 字。对话密度 ≥ 40%，每句独立成段。"},
-    "description": {"label": "环境描写", "instruction": "写环境探索段约 1000-1200 字。两字锚点 / 感官单点 / 间接展现 ≥ 2 种。"},
-    "transition": {"label": "场景转换", "instruction": "写场景转换段约 1000-1200 字。余韵 → 过渡 → 新场景。"},
-}
-
-
 # ============ Prompt 模板 ============
 
 REPLICATE_SYSTEM_PROMPT = """你是一位极擅长复刻特定作者风格的写作引擎。
@@ -135,22 +108,6 @@ REPLICATE_SYSTEM_PROMPT = """你是一位极擅长复刻特定作者风格的写
 - 必须有明确的开头 → 中段 → 收笔三拍
 - 字数严格按要求（±10% 容忍）
 """
-
-
-def build_chapter_prompt(style_skill_md: str, ref_chapter_text: str, target_words: int) -> str:
-    """chapter 模式 prompt（user 段）"""
-    parts = ["# 源作者风格 skill（必须严格遵循）\n\n" + style_skill_md]
-    if ref_chapter_text:
-        parts.append("# 参考章节（仅作语感参考 · 不照抄情节 / 角色 / 设定）\n\n" + ref_chapter_text[:5000])
-    parts.append(
-        f"# 复刻任务\n\n"
-        f"**颗粒度**：单章\n\n"
-        f"**目标字数**：约 {target_words} CJK 字（±10%）\n\n"
-        f"**结构要求**：章首钩子 → 中段推进（含场景/对话/动作/心理）→ 章末钩子\n\n"
-        f"自创角色与场景，但要呈现一个完整独立的章节叙事。"
-    )
-    parts.append("# 输出\n\n直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。")
-    return "\n\n".join(parts)
 
 
 def build_cluster_subcall_prompt(
@@ -191,22 +148,6 @@ def build_cluster_subcall_prompt(
         "- 整个 cluster N 段拼起来必须是**连贯**叙事（同角色、同场景线、同时间线）\n"
         "- 不分章节标题（splitter 端会处理）\n"
         "- 段内可有自然空行做场景过渡，但不要插入「***」分隔符"
-    )
-    parts.append("# 输出\n\n直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。")
-    return "\n\n".join(parts)
-
-
-def build_legacy_segment_prompt(style_skill_md: str, ref_chapter_text: str,
-                                scenario: dict, target_words: int) -> str:
-    """legacy drill 模式 prompt（仅 --legacy-segment-only 救火走）"""
-    parts = ["# 源作者风格 skill（必须严格遵循）\n\n" + style_skill_md]
-    if ref_chapter_text:
-        parts.append("# 参考章节（仅作语感参考 · 不照抄情节 / 角色 / 设定）\n\n" + ref_chapter_text[:3000])
-    parts.append(
-        f"# 复刻任务\n\n"
-        f"**类型**：{scenario['label']}\n\n"
-        f"**设定**：{scenario['instruction']}\n\n"
-        f"**目标字数**：约 {target_words} CJK 字（±10%）"
     )
     parts.append("# 输出\n\n直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。")
     return "\n\n".join(parts)
@@ -343,13 +284,13 @@ def estimate_words_per_chapter(cluster_meta: dict) -> int:
 def main():
     check_deps()
     parser = argparse.ArgumentParser(
-        description="蒸馏 phase-2/phase-5 复刻测试（v2: chapter + cluster 两档 · 强制 gen-model）",
+        description="蒸馏 phase-4 cluster 终验复刻（v3 cluster 单轨化 · 2026-05-28 · chapter 模式 deprecated · 强制 gen-model）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--style-skill", required=True,
                         help="作者风格 skill .md 路径（v0/v1/v2/...）")
-    parser.add_argument("--mode", choices=["chapter", "cluster"], default="cluster",
-                        help="复刻颗粒度（默认 cluster · v2 章程主推）")
+    parser.add_argument("--mode", choices=["cluster"], default="cluster",
+                        help="复刻颗粒度（v3 cluster 化方案 2026-05-28 · chapter 模式已删除 · 唯 cluster）")
     parser.add_argument("--output", required=True,
                         help="输出 txt 路径")
 
@@ -366,13 +307,6 @@ def main():
                         help="[cluster 模式] 项目路径（含 cluster_index.json）")
     parser.add_argument("--max-chapters-per-call", type=int, default=3,
                         help="[cluster 模式] 每 sub-call 最多写多少章（防 timeout · 默认 3）")
-
-    # legacy 旁路
-    parser.add_argument("--legacy-segment-only", action="store_true",
-                        help="🚨 紧急救火旁路：走旧 drill 单段模式（留 lesson · 章程废弃）")
-    parser.add_argument("--type",
-                        choices=list(LEGACY_TYPE_SCENARIOS.keys()),
-                        help="[legacy-segment-only] 旧 6-type 单段（仅救火）")
 
     # 通用
     parser.add_argument("--profile",
@@ -400,72 +334,12 @@ def main():
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ========== 分支 1: legacy 救火 ==========
-    if args.legacy_segment_only:
-        if not args.type:
-            print("[ERROR] --legacy-segment-only 需要同时传 --type", file=sys.stderr)
-            sys.exit(2)
-        print("⚠️ [LEGACY] 走旧 drill 单段模式（v2 章程已废弃 · 仅救火 · 请记 lesson）",
-              file=sys.stderr)
-        scenario = LEGACY_TYPE_SCENARIOS[args.type]
-        ref_text = read_text(Path(args.chapter_ref)) if args.chapter_ref else ""
-        user = build_legacy_segment_prompt(style_skill_md, ref_text, scenario,
-                                           args.target_words or 1200)
-        try:
-            reply, used_profile, elapsed = call_gen_model(
-                loader, REPLICATE_SYSTEM_PROMPT, user, default_max_tokens=4000, tag="LEGACY"
-            )
-        except GenModelExhaustedError as e:
-            print(f"\n[ERROR] 全部 profile 失败:\n{e}", file=sys.stderr)
-            sys.exit(3)
-        clean = clean_output(reply)
-        output_path.write_text(clean, encoding='utf-8')
-        meta = {
-            "mode": "legacy_segment", "type": args.type, "label": scenario["label"],
-            "style_skill": str(style_skill), "ref_chapter": args.chapter_ref,
-            "target_words": args.target_words or 1200,
-            "actual_cjk_chars": cjk_count(clean),
-            "profile_used": used_profile.name, "model_used": used_profile.model,
-            "elapsed_seconds": round(elapsed, 1),
-            "warning": "legacy drill mode · v2 章程已废弃 · 仅救火",
-        }
-        output_path.with_suffix(".meta.json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
-        print(f"\n[OK · LEGACY] {output_path} · {cjk_count(clean)} CJK · {elapsed:.1f}s",
-              file=sys.stderr)
-        return
-
-    # ========== 分支 2: chapter 模式 ==========
+    # ========== chapter 模式已彻底删除（v3 cluster 化方案 2026-05-28）==========
     if args.mode == "chapter":
-        if not args.chapter_ref:
-            print("[ERROR] --mode chapter 需要 --chapter-ref", file=sys.stderr)
-            sys.exit(2)
-        ref_text = read_text(Path(args.chapter_ref))
-        target_words = args.target_words or 4000
-        user = build_chapter_prompt(style_skill_md, ref_text, target_words)
-        try:
-            reply, used_profile, elapsed = call_gen_model(
-                loader, REPLICATE_SYSTEM_PROMPT, user,
-                default_max_tokens=max(4000, int(target_words * 1.5)), tag="chapter"
-            )
-        except GenModelExhaustedError as e:
-            print(f"\n[ERROR] 全部 profile 失败:\n{e}", file=sys.stderr)
-            sys.exit(3)
-        clean = clean_output(reply)
-        output_path.write_text(clean, encoding='utf-8')
-        meta = {
-            "mode": "chapter", "style_skill": str(style_skill),
-            "chapter_ref": args.chapter_ref, "target_words": target_words,
-            "actual_cjk_chars": cjk_count(clean),
-            "profile_used": used_profile.name, "model_used": used_profile.model,
-            "elapsed_seconds": round(elapsed, 1),
-            "produced_by": "distill_replicate.py v2 · chapter mode",
-        }
-        output_path.with_suffix(".meta.json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
-        print(f"\n[OK · chapter] {output_path} · {cjk_count(clean)} CJK · {elapsed:.1f}s",
-              file=sys.stderr)
-        return
+        print("[FATAL] --mode chapter 已删除（v3 cluster 化方案 2026-05-28）", file=sys.stderr)
+        print("   原因：整个系统为故事块服务 · chapter 视野违背 cluster 单轨原则", file=sys.stderr)
+        print("   替代：用 --mode cluster --cluster-ref cluster_XXX --project <path>", file=sys.stderr)
+        sys.exit(2)
 
     # ========== 分支 3: cluster 模式（主推） ==========
     if not args.cluster_ref or not args.project:

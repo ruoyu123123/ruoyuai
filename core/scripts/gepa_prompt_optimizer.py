@@ -141,7 +141,7 @@ def get_chapter_scenes_and_scores(project_root: Path, chs: list[int]) -> dict:
         m_path = manifest_dir / f"ch_{ch:03d}.json"
         if m_path.exists():
             mf = load_json(m_path, {})
-            cp = mf.get("chapter_plan_subset") or {}
+            cp = mf.get("cluster_blueprint_subset") or {}
             scene_type = cp.get("scene_type")
         for name in (f"ch_{ch:03d}_consensus.json", f"ch_{ch:03d}_audit-hub.json"):
             jp = judge_dir / name

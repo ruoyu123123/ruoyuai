@@ -39,7 +39,7 @@
 ### Scripts（109 个）
 **核心引擎**：build_manifest / fate_engine / world_evolution_engine / clock_engine / narrator_calibrate / stress_evaluator / fate_dice / relationship_evaluator / world_evolution_apply_chapter / world_evolution_apply_card
 
-**Audit 流水线**：audit_hub / validate_chapter / validate_style / narrative_scanner / plot_structure_scanner / hook_strength_scanner / golden_three_scanner / semantic_slop_scanner / chapter_plan_compliance_scan
+**Audit 流水线**：audit_hub / validate_chapter / validate_style / narrative_scanner / plot_structure_scanner / hook_strength_scanner / golden_three_scanner / semantic_slop_scanner / cluster_blueprint_compliance_scan
 
 **Cross-Chapter Scanners（22 个）**：
 - 既有 7：continuity / offscreen / declarative_data / pattern / persona_drift / fate_drift / emotion_pattern

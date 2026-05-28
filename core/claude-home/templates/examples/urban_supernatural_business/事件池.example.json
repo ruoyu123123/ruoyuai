@@ -140,7 +140,7 @@
   ],
   "_filter_doc": {
     "min_ch / max_ch": "本事件适用的章号区间",
-    "scene_types": "本事件适合的场景标签 — 与 chapter_plan.scene_type 对照",
+    "scene_types": "本事件适合的场景标签 — 与 cluster_blueprint.scene_type 对照",
     "required_pov": "需要的 POV 角色",
     "world_state_required": "world_state_snapshot 数值匹配条件（dotted path + 比较运算符）",
     "weight": "抽签权重（高=更易被抽中）"

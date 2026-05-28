@@ -25,7 +25,7 @@ STC_KEY_CHAPTERS = {5, 14, 50, 100, 175, 250, 300, 375, 395, 420, 475, 500}
 
 def is_key_chapter(project_root: Path, ch: int) -> tuple[bool, list[str]]:
     reasons = []
-    progress = load_json(project_root / "_数据库" / "进度.json", {"chapter_plan": [], "volumes": []})
+    progress = load_json(project_root / "_数据库" / "进度.json", {})
 
     if ch in STC_KEY_CHAPTERS:
         reasons.append(f"STC 节点 ch{ch}")
@@ -38,7 +38,11 @@ def is_key_chapter(project_root: Path, ch: int) -> tuple[bool, list[str]]:
             elif ch == ch_range[1]:
                 reasons.append(f"卷末 vol{v.get('vol')}")
 
-    for cp in progress.get("chapter_plan", []):
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    all_scenes = []
+    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        all_scenes.extend(cdata.get("scene_storyboard", []))
+    for cp in all_scenes:
         if cp.get("ch") != ch:
             continue
         tp = cp.get("turning_point", "") or ""

@@ -1,4 +1,4 @@
-"""cross_chapter_timeline_item_location_scan.py — 时间/物件/地点跨章一致性（CCR14）
+"""cross_cluster_timeline_item_location_aggregate.py — 时间/物件/地点跨章一致性（CCR14）
 
 3 类跨章追踪：
 
@@ -15,7 +15,7 @@ B. ITEM_HOLDER_CHAIN
    - ITEM_DUPLICATE_HOLDER：同一物件同时被两个角色持有
 
 C. LOCATION_VISIT_DISTRIBUTION
-   扫每章正文中的地点关键词（从 地图.json + 章纲摘要.scene_type）
+   扫每章正文中的地点关键词（从 地图.json + 故事块摘要.scene_type）
    - LOCATION_OVERFREQ：单地点 ≥ 60% 章节出现 = 场景单调
    - LOCATION_NEVER_VISITED：地图.json 列出的地点 0 次访问 = 死场景
    - LOCATION_RHYTHM_BROKEN：N 章连续在同一地点（非 hub）
@@ -33,6 +33,16 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -67,14 +77,18 @@ def scan_timeline(project_root: Path, chapters: list[int]) -> list[dict]:
     if not timeline_path.exists():
         return []
     timeline = load_json(timeline_path, {})
-    # 收集每章 time anchor
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
     per_ch_time = []
+    progress = load_json(project_root / "_数据库" / "进度.json", {})
+    plan_dict = {}
+    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        for sb in cdata.get("scene_storyboard", []):
+            ch_key = sb.get("ch")
+            if ch_key:
+                plan_dict[str(ch_key)] = sb
     for ch in chapters:
-        # 取 章纲摘要 中本章 time
-        summary_path = project_root / "_数据库" / "章纲摘要.json"
-        summary = load_json(summary_path, {})
-        ch_data = (summary.get("chapter_plan") or {}).get(str(ch)) or (summary.get("chapter_plan") or {}).get(ch) or {}
-        time_str = ch_data.get("time") or ch_data.get("time_anchor") or ""
+        ch_data = plan_dict.get(str(ch)) or plan_dict.get(ch) or {}
+        time_str = ch_data.get("time") or ch_data.get("time_anchor") or ch_data.get("time_hint") or ""
         if time_str:
             per_ch_time.append((ch, time_str))
 

@@ -3,7 +3,7 @@
 核心理念：
 - 大势卡定大事件，**不定章号**
 - 每章触发哪个事件，由 fate_engine 根据 prerequisites + window 涌现决定
-- writer 不受 chapter_plan 死约束，按 active_fate_events 推进
+- writer 不受 cluster_blueprint 死约束，按 active_fate_events 推进
 
 四个操作：
 1. evaluate <ch>   - 评估本章应该推进哪些 events（返回 active 列表）

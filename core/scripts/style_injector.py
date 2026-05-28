@@ -46,7 +46,7 @@ def parse_rule_window(rule_text: str, default_n: int = 3) -> int:
 
 
 def get_applied_type_history(summaries: list, key: str) -> list[Optional[str]]:
-    """从 章纲摘要 chapters 列表抽取历史 applied_*_type。
+    """从 故事块摘要 chapters 列表抽取历史 applied_*_type。
     summaries 是 list of dict（已经 transform 过 dict→list 的格式）。
     """
     out = []
@@ -121,13 +121,16 @@ def build_directive(project_root: Path, chapter: int) -> dict:
 
     db = project_root / "_数据库"
     style = load_json(db / "作者风格.json", {})
-    summaries = load_json(db / "章纲摘要.json", {}).get("chapters", [])
+    summaries = load_json(db / "故事块摘要.json", {}).get("chapters", [])
     if isinstance(summaries, dict):
         # 兼容 dict 格式
         summaries = [
             {**v, "ch": int(k)} for k, v in sorted(summaries.items(), key=lambda x: int(x[0]))
         ]
-    chapter_plans = load_json(db / "进度.json", {}).get("chapter_plan", [])
+    _progress = load_json(db / "进度.json", {})
+    cluster_blueprints = []
+    for cid, cdata in (_progress.get("cluster_blueprint", {}) or {}).items():
+        cluster_blueprints.extend(cdata.get("scene_storyboard", []))
 
     # 1) 取 cross_chapter_diversity
     diversity = style.get("cross_chapter_diversity", {})
@@ -161,7 +164,7 @@ def build_directive(project_root: Path, chapter: int) -> dict:
     recent_ending = [
         s.get("applied_style", {}).get("ending_type") for s in recent_summaries
     ]
-    # 同时把 章纲摘要 里历史的 tone/hooks 当弱信号也参考
+    # 同时把 故事块摘要 里历史的 tone/hooks 当弱信号也参考
     recent_opening_clean = [x for x in recent_opening if x]
     recent_ending_clean = [x for x in recent_ending if x]
 
@@ -225,8 +228,8 @@ def build_directive(project_root: Path, chapter: int) -> dict:
         )
     )
 
-    # 11) 本章 chapter_plan 摘要
-    this_plan = next((p for p in chapter_plans if p.get("ch") == chapter), {})
+    # 11) 本章 cluster_blueprint 摘要
+    this_plan = next((p for p in cluster_blueprints if p.get("ch") == chapter), {})
 
     # 12) 拼装 directive
     directive = {

@@ -4,6 +4,9 @@ PreToolUse Hook: 校验 Agent 工具调用的 prompt 合规性
 只拦截 Agent 工具，其他工具直接放行
 exit 0 = 放行, exit 2 = 拒绝
 
+v2 cluster 化（2026-05-28）：ECAS agent 强制 RESEARCH_REF 规则不变·
+本 hook 不区分 cluster vs chapter mode，由 audit_hub 子进程 env CLUSTER_MODE=1 传递。
+
 Phase 2 升级
 -----------
 - 规则 5：多步流水线 Agent 必须含 PLAN_ID/STEP 字段
@@ -26,7 +29,7 @@ v25 升级
 --------
 - 规则 12：novel-writer single 模式废弃门禁 —— spawn novel-writer 时，从 prompt
   解析 PROJECT + CHAPTER → 读 _数据库/进度.json，若 CHAPTER 所属 cluster_id 在
-  chapter_plan 中仅 1 条记录 → exit 2 拦在 spawn 前。旁路 flag：
+  cluster_blueprint 中仅 1 条记录 → exit 2 拦在 spawn 前。旁路 flag：
   <PROJECT>/_数据库/.allow_single_mode.flag。与 novel-writer.md Step 1 v25+ 守护
   形成双层防御（hook spawn 前拦 + writer 内部 fail-fast 兜底）。
   来源：用户原话「我要清理掉单章生成的模式」（2026-05-26）
@@ -258,7 +261,16 @@ def main():
         is_splitter = "novel-chapter-splitter" in desc or "splitter" in _sat.lower()
         # ecas-checkpoint 等纯验证类豁免
         is_checkpoint_validator = "ecas-checkpoint" in desc.lower() or "checkpoint" in desc.lower()
-        if not (has_research_ref or is_splitter or is_checkpoint_validator):
+        # 蒸馏分析类 agent 豁免 — 它们只分析已有作品风格，不生成情节，不需要调研
+        # 触发场景：/distill-style 阶段 1 单章/cluster 衔接蒸馏 sub-agent
+        # 区分：蒸馏复刻（生成）已被规则 11 单独拦截；这里豁免的是「分析」类
+        is_distill_agent = (
+            "蒸馏" in desc
+            or "distill-style" in desc.lower()
+            or "distill style" in desc.lower()
+            or ("PLAN_ID:" in prompt and "distill-style" in prompt)
+        )
+        if not (has_research_ref or is_splitter or is_checkpoint_validator or is_distill_agent):
             print(f"❌ [Hook v23] ECAS agent spawn 缺 RESEARCH_REF 字段", file=sys.stderr)
             print(f"   ECAS 模式（writer/outline-planner ecas_cluster_brief）必须先 spawn novel-researcher 生成 .research_cache/*.md", file=sys.stderr)
             print(f"   然后在本 spawn prompt 加 'RESEARCH_REF: <path>' 字段", file=sys.stderr)
@@ -316,8 +328,8 @@ def main():
     #   1) spawn novel-writer（subagent_type 精确匹配 或 desc 含 "novel-writer"）
     #   2) prompt 含 PLAN_ID（正经流水线，临时调试 spawn 放行）
     #   3) 解析出 PROJECT + CHAPTER，进度.json 存在
-    #   4) CHAPTER 对应 chapter_plan 条目有 cluster_id（ECAS 模式）
-    #   5) chapter_plan 中同 cluster_id 条目数 == 1
+    #   4) CHAPTER 对应 cluster_blueprint 条目有 cluster_id（ECAS 模式）
+    #   5) cluster_blueprint 中同 cluster_id 条目数 == 1
     #   6) 项目根 _数据库/.allow_single_mode.flag 不存在
     # 任一不满足或 hook 自身故障 → 放行（writer 自身 fail-fast 二道防线兜底）
     subagent_type_str = tool_input.get("subagent_type", "") or ""
@@ -346,14 +358,20 @@ def main():
 
                 if prog_path.exists() and not flag_path.exists():
                     progress = json.loads(prog_path.read_text(encoding="utf-8"))
-                    chapter_plan = progress.get("chapter_plan", []) or []
-                    target_entry = next((c for c in chapter_plan if c.get("ch") == ch_target), None)
+                    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+                    scene_list = []
+                    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+                        for sb in cdata.get("scene_storyboard", []):
+                            sb_copy = dict(sb)
+                            sb_copy.setdefault("cluster", cid)
+                            scene_list.append(sb_copy)
+                    target_entry = next((c for c in scene_list if c.get("ch") == ch_target), None)
                     if target_entry:
                         # 兼容字段名：cluster_id（ECAS 标准）/ cluster（novel-writer.md 简写）
                         cluster_id = target_entry.get("cluster_id") or target_entry.get("cluster")
-                        if cluster_id:  # cluster_id=None = v22 旧 DCAS 兼容章节，跳过检查
+                        if cluster_id:  # cluster_id=None = 跳过检查
                             same_cluster = [
-                                c for c in chapter_plan
+                                c for c in scene_list
                                 if (c.get("cluster_id") or c.get("cluster")) == cluster_id
                             ]
                             if len(same_cluster) == 1:
@@ -361,7 +379,7 @@ def main():
                                       file=sys.stderr)
                                 print(f"   项目：{project_path}", file=sys.stderr)
                                 print(f"   章号：{ch_target}（属于 {cluster_id}）", file=sys.stderr)
-                                print(f"   原因：chapter_plan 中 cluster_id={cluster_id} 仅 1 条记录",
+                                print(f"   原因：cluster_blueprint 中 cluster_id={cluster_id} 仅 1 条记录",
                                       file=sys.stderr)
                                 print(f"   实证：单章直写绕过 cluster 级伏笔/voice/anchor 校验 → 叙事断层",
                                       file=sys.stderr)

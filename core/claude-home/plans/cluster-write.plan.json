@@ -1,7 +1,8 @@
 {
   "command": "cluster-write",
-  "version": 1,
-  "description": "cluster 级写作流水线 7 步 · 替代 write-chapter · 所有改进分析在 cluster 级完成，splitter 在最后一步（章节只是输出）",
+  "version": 2,
+  "description": "cluster 级写作流水线 7 步 · v2 cluster 化方案（2026-05-28）：cluster 单层 + scanner 全员升维 + 切章是纯格式输出 0 质检",
+  "_v2_principle": "整个系统为故事块服务 · 章节是输出格式 · scanner 全部 cluster 视野 · 切章后不再有任何质检",
   "total_steps": 7,
   "required_steps": [1, 2, 3, 4, 5, 6, 7],
   "optional_steps": [],
@@ -32,8 +33,8 @@
     },
     {
       "n": 3,
-      "name": "cluster-quality-dual-track",
-      "description": "cluster 级双轨质检 · 机械轨：audit_hub.py --mode cluster --cluster-id {key}（对整 cluster_draft.txt 跑，含跨 scene 的伏笔/anchor/voice 完整性校验）· 阅读轨：spawn novel-reading-reflector MODE=ecas ROUND=1 → fix → ROUND=2 → ... 连续 3 轮 0 issue 才放行（SRE 风格健康检查）",
+      "name": "cluster-quality-full-stack",
+      "description": "v2 cluster 全面质检（2026-05-28）· 13 个 cluster 视野 scanner 并行跑：9 个升维 scanner（validate_chapter/validate_style/narrative/plot_structure/hook_strength_拟切点节奏/golden_three_仅cluster_001/semantic_slop/short_sentence/repeat_noun_density）+ 4 个新 cluster-only scanner（cross_scene_voice_drift/foreshadowing_handoff/locked_fact_cross_scene/pov_consistency）· 机械轨：audit_hub.py --mode cluster --cluster-id {key} · 阅读轨：spawn novel-reading-reflector MODE=ecas ROUND=1 → fix → ROUND=2 → ... 连续 3 轮 0 issue 才放行",
       "required": true,
       "must_spawn_agent": "novel-reading-reflector",
       "skip_output_allowed": false,
@@ -68,8 +69,8 @@
     },
     {
       "n": 6,
-      "name": "splitter+chapter-titles+per-chapter-changes",
-      "description": "最后一步切章 · spawn novel-chapter-splitter MODE=ecas_multi_chapter（cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ gen_chapter_titles.py --chapters <range>（normal/mid/high 三档）→ split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json（按 splitter decisions WAL 切点拆分 factual/self_eval）",
+      "name": "splitter+chapter-titles+per-chapter-changes-zero-audit",
+      "description": "v2 cluster 化方案 · 纯格式输出步骤 · 0 质检（章节是输出格式，不是检测单位）· spawn novel-chapter-splitter MODE=ecas_freestyle/ecas_multi_chapter（cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ gen_chapter_titles.py --chapters <range>（normal/mid/high 三档）→ split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json · ★ 切章后 0 audit/0 scanner/0 质检 · 直接进 step 7 plan-end",
       "required": true,
       "must_spawn_agent": "novel-chapter-splitter",
       "skip_output_allowed": false,

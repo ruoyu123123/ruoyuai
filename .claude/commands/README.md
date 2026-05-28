@@ -82,7 +82,7 @@ v26 起写作单位从「章节」升级为「故事块（cluster）」，v27 �
 | 类别 | 文件 |
 |------|------|
 | 人物世界（5） | 人物卡.json · 世界观.json · 世界状态.json · 涟漪规则.json · 角色池.json |
-| 叙事（7） | 进度.json · 事件簇.json · 大势卡.json · 章纲摘要.json · 伏笔表.json · 事件表.json · 时间线.json |
+| 叙事（7） | 进度.json · 事件簇.json · 大势卡.json · 故事块摘要.json · 伏笔表.json · 事件表.json · 时间线.json |
 | 风格质控（4） | 作者风格.json · 场景规则.json · 写作经验.json · 用户偏好.json |
 | 世界演化（2） | 地图.json · 关系.json · 道具.json |
 

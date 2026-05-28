@@ -174,7 +174,7 @@ def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
 
     user = f"""# 章节 ch{ch} (档位: **{tier}**)
 
-## chapter_plan 提示（hint，可参考可忽略）
+## cluster_blueprint 提示（hint，可参考可忽略）
 {hint}
 
 ## 已生成的历史章标题（**严禁重复**任何一个）
@@ -263,7 +263,12 @@ def main():
 
     progress_path = project / '_数据库' / '进度.json'
     progress = json.loads(progress_path.read_text(encoding='utf-8'))
-    hint_map = {p['ch']: p.get('title', '') for p in progress.get('chapter_plan', [])}
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    hint_map = {}
+    for cid, cdata in (progress.get('cluster_blueprint', {}) or {}).items():
+        for p in cdata.get('scene_storyboard', []):
+            if 'ch' in p:
+                hint_map[p['ch']] = p.get('title', '')
 
     # v22.4dim N5：加载 per-book title_style 校准
     title_style = _load_title_style(project)
@@ -303,10 +308,12 @@ def main():
         print(f"  {marker} ch{ch} [{tier}]: 「{title}」 (hint:「{hint}」)")
 
     if not args.dry_run and new_titles:
-        for cp in progress.get('chapter_plan', []):
-            if cp['ch'] in new_titles:
-                cp['_old_title'] = cp.get('title', '')
-                cp['title'] = new_titles[cp['ch']]
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只写 cluster_blueprint
+        for cid, cdata in (progress.get('cluster_blueprint', {}) or {}).items():
+            for cp in cdata.get('scene_storyboard', []):
+                if cp.get('ch') in new_titles:
+                    cp['_old_title'] = cp.get('title', '')
+                    cp['title'] = new_titles[cp['ch']]
         progress_path.write_text(json.dumps(progress, ensure_ascii=False, indent=2),
                                   encoding='utf-8')
         total = sum(tier_counts.values())

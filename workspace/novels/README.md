@@ -28,7 +28,7 @@ workspace/novels/{书名}/
 │   ├── 人物卡.json          # 5 层 Voice DNA + 声音包
 │   ├── 世界观.json
 │   ├── 伏笔表.json
-│   ├── 章纲摘要.json
+│   ├── 故事块摘要.json
 │   ├── 地图.json
 │   ├── 关系.json
 │   ├── 时间线.json

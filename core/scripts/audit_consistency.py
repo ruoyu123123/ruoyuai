@@ -10,7 +10,7 @@ audit_consistency.py — 章后反向一致性审计（第 4 层防御）
   1. FORESHADOWING_OVERDUE_PILE — 到期但未回收的伏笔堆积
   2. LOCKED_FACTS_DRIFT — 外貌/物件描写逐章偏离
   3. RELATIONSHIP_INTERACTION_GAP — 关系数值与实际互动方向相反
-  4. SUMMARY_DB_DESYNC — 章纲摘要提到的变更未落进对应 JSON
+  4. SUMMARY_DB_DESYNC — 故事块摘要提到的变更未落进对应 JSON
   5. PROPAGATION_DEBT_BACKLOG — 传播债务堆积
   6. BANNED_WORD_TREND — 禁用词系统性出现（单章不到阈值）
 
@@ -214,11 +214,11 @@ def audit_relationship_interaction(snap: ChapterSnapshot, db: Path) -> list[dict
 
 
 def audit_summary_db_desync(snap: ChapterSnapshot, db: Path) -> list[dict]:
-    """章纲摘要提到的变更未落进对应 JSON。
+    """故事块摘要提到的变更未落进对应 JSON。
     简化实现：扫描 window 章摘要中的「去/到/进入」+地点名，看地图.json 是否记录了对应角色位置。
     """
     errs = []
-    summaries = load_json(db / "章纲摘要.json", {}).get("chapters", [])
+    summaries = load_json(db / "故事块摘要.json", {}).get("chapters", [])
     relevant = [s for s in summaries if s.get("ch", s.get("chapter", 0)) in snap.chapters]
     locations = load_json(db / "地图.json", {}).get("locations", [])
     loc_names = {l.get("name") for l in locations if l.get("name")}

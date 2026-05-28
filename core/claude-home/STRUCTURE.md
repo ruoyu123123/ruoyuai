@@ -110,7 +110,7 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 │   ├── 人物卡.json                            # 角色信息 + 声纹包
 │   ├── 世界观.json                            # 设定关键词
 │   ├── 伏笔表.json                            # 契诃夫之枪引擎
-│   ├── 章纲摘要.json                          # 各章摘要 + 情绪值
+│   ├── 故事块摘要.json                          # 各章摘要 + 情绪值
 │   ├── 进度.json                              # 卷/章规划 + 当前进度
 │   ├── 场景规则.json                          # 场景类型写作规则
 │   ├── 写作经验.json                          # Learning Loop
@@ -334,7 +334,7 @@ mv "风格库/{书名}_skill.md" "workspace/styles/{书名}/skill_FINAL.md"
 **为什么不入 git**：
 - 调研结果是临时知识源 + URL 引用，本身不是项目内容
 - URL 可能含失效链接 / 网络小说被删，git 历史保留无意义
-- 真正有价值的"调研结论"已经被 writer / outline-planner 融合进章节正文 + chapter_plan，可追溯
+- 真正有价值的"调研结论"已经被 writer / outline-planner 融合进章节正文 + cluster_blueprint，可追溯
 
 ---
 
@@ -367,10 +367,9 @@ v17 及之前，章节 txt = 正文 + `---CHANGES_FACTUAL---` JSON + `---CHANGES
 **强约束（开发者必读）**：
 - 所有读写章节正文 / CHANGES 的脚本和 agent，**必须**走 `core/scripts/chapter_io.py` 统一模块——禁止各自写 `split("---CHANGES")`。
   - 读正文：`read_body(project_root, ch)` → 纯正文 str（遇旧混合 txt 自动剥离）
-  - 读数据：`read_changes(project_root, ch)` → `{"factual": {...}, "self_eval": {...}}`（优先读 `_changes.json`，无则从旧混合 txt 解析，迁移期兼容）
+  - 读数据：`read_changes(project_root, ch)` → `{"factual": {...}, "self_eval": {...}}`（只读 `_changes.json`，v2 后旧混合稿解析已删）
   - 写正文：`write_body(project_root, ch, text)` / 写数据：`write_changes(project_root, ch, changes)`
   - 路径：`body_path()` / `changes_path()`；字数：`count_words()`（全系统统一口径）
-- 旧混合 txt 迁移：`python core/scripts/chapter_io.py migrate <项目路径> <章节号>`（或 `migrate_legacy_chapter()`），把混合 txt 拆成 txt + `_changes.json`。
 - judge agent（validator-repair / voice-keeper / foreshadower 等）只拿正文 txt；看 9 类变更读 `_changes.json` 的 `factual` 段；`self_eval` 段按 v17.4 分权纪律默认不读。
 
 ---

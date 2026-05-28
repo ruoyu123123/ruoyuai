@@ -1,9 +1,9 @@
-"""cross_chapter_fate_drift_scan.py — 大势漂移扫描（v20 F8 新增）
+"""cross_cluster_fate_drift_aggregate.py — 大势漂移扫描（v20 F8 新增）
 
 复用 fate_engine.drift 检测「prereq 完成 + 超 expected_window_after 仍未触发」事件。
 输出报告 + 强烈告警「下章必须推进」。
 
-用法：python cross_chapter_fate_drift_scan.py <project> [--ch N | --auto]
+用法：python cross_cluster_fate_drift_aggregate.py <project> [--ch N | --auto]
 退出码: 0 健康 / 1 advisory / 2 warning 超期严重
 """
 
@@ -15,6 +15,16 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fate_engine  # type: ignore

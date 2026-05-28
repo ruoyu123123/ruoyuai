@@ -16,7 +16,7 @@
 
 ### Phase 1（轻量 · 立即可做）
 对**关键章节**（满足以下任一条件）启动双 writer 并行：
-- `chapter_plan[ch].beat` 含 `Catalyst / Midpoint / All Is Lost / Break Into Three / Finale`
+- `cluster_blueprint[ch].beat` 含 `Catalyst / Midpoint / All Is Lost / Break Into Three / Finale`
 - `mental_break_triggered == true`
 - `pending_heart_event_reveals` 含 reveal
 - `urgent_clocks` 触发

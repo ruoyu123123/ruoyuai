@@ -1,4 +1,4 @@
-"""cross_chapter_arc_progression_scan.py — 弧光阶段推进合理性（CCR4）
+"""cross_cluster_arc_progression_aggregate.py — 弧光阶段推进合理性（CCR4）
 
 读 character_arc_state.json 中 stages_by_chapter，检测：
 - STAGE_JUMP：跨度过大（如 lie 直接到 truth_realized 跳过中间）
@@ -21,6 +21,16 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 # 弧光阶段顺序（数字越大越晚）
 ARC_STAGE_ORDER = {

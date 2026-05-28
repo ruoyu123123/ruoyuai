@@ -1,9 +1,14 @@
 {
   "command": "outline",
-  "version": 2,
+  "version": 3,
   "description": "大纲 + 34 个核心子系统 JSON 全建（hook pretooluse_subsystems_gate 强制门禁）",
   "total_steps": 4,
-  "required_steps": [1, 2, 3, 4],
+  "required_steps": [
+    1,
+    2,
+    3,
+    4
+  ],
   "optional_steps": [],
   "steps": [
     {
@@ -18,12 +23,14 @@
       "name": "volume-outline",
       "description": "卷级大势大纲生成（不细化逐章）",
       "required": true,
-      "expected_outputs": ["大纲.md"]
+      "expected_outputs": [
+        "大纲.md"
+      ]
     },
     {
       "n": 3,
       "name": "init-34-subsystems",
-      "description": "初始化 34 个核心子系统 JSON · 9 大类 · 不允许部分启用（hook 强制全建）· 高级 16 个允许最小骨架占位但文件必须存在 · 事件簇.json 只详化 clusters[0] (cluster_001)，cluster_002+ 仅占位 status:'未涌现'，等 cluster_emergence_engine 动态产生 · clusters[0].narrative_mode 默认 'in_medias_res'（黄金三章倒叙 · 强冲突放最前 · 用户明示线性叙事除外），后续 cluster 默认 'linear' · 🔴 v25 ECAS 默认强制：进度.json.chapter_plan 必须包含 cluster_001 的 ch1-ch_N 全部占位条目（N=cluster_001.chapter_count_estimate，默认 4），全部条目 cluster 字段 == 'cluster_001'；不允许仅 ch1 单条 → 否则 writer 拒绝 spawn 走 single fallback（已废弃）· 用户偏好.json 必须含 ecas_config.ecas_enabled=true（默认 true）",
+      "description": "初始化 34 个核心子系统 JSON · 9 大类 · 不允许部分启用（hook 强制全建）· 高级 16 个允许最小骨架占位但文件必须存在 · 事件簇.json 只详化 clusters[0] (cluster_001)，cluster_002+ 仅占位 status:'未涌现'，等 cluster_emergence_engine 动态产生 · clusters[0].narrative_mode 默认 'in_medias_res'（黄金三章倒叙 · 强冲突放最前 · 用户明示线性叙事除外），后续 cluster 默认 'linear' · 🔴 v2 cluster 化（2026-05-28）：进度.json.cluster_blueprint.cluster_001.scene_storyboard 必须含 N 条 scene_index=0..N-1 占位条目（N=cluster_001.scene_count_estimate，默认 4）· 不允许仅 1 条 scene → 否则 writer 拒绝 spawn 走 single fallback（已废弃）· 用户偏好.json 必须含 ecas_config.ecas_enabled=true 和 ecas_config.v2_cluster_enabled=true（默认 true）",
       "required": true,
       "expected_outputs": [
         "_数据库/人物卡.json",
@@ -32,7 +39,7 @@
         "_数据库/地图.json",
         "_数据库/道具.json",
         "_数据库/进度.json",
-        "_数据库/章纲摘要.json",
+        "_数据库/故事块摘要.json",
         "_数据库/大势卡.json",
         "_数据库/事件簇.json",
         "_数据库/事件表.json",
@@ -69,5 +76,7 @@
       "required": true,
       "expected_outputs": []
     }
-  ]
+  ],
+  "_v2_principle": "整个系统为故事块服务 · outline 产 cluster_blueprint · v2 cluster 化方案 2026-05-28",
+  "_v2_note": "34 子系统 init 时优先用 cluster_id + scene_index schema · 故事块摘要 → 故事块摘要"
 }

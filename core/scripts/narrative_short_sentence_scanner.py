@@ -22,6 +22,11 @@ import re
 import sys
 from pathlib import Path
 
+# v2 cluster 化（2026-05-28）：CLUSTER_MODE env 感知 · scanner 内部可按 mode 切阈值
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
+
+
 
 def is_dialogue_para(para: str) -> bool:
     """对话段：「」引号包裹内容占段 ≥50%"""

@@ -1,4 +1,4 @@
-"""cross_chapter_offscreen_scan.py — 幕后行动落地检查（v19.2 新增）
+"""cross_cluster_offscreen_aggregate.py — 幕后行动落地检查（v19.2 新增）
 
 补 cross_chapter_pattern + continuity 的另一类盲区：**幕后人物行动是否真的发生**。
 
@@ -15,7 +15,7 @@
 - writer 报了 completed_fully=true 但正文 grep 不到 character aliases → warning（撒谎）
 
 用法：
-    python cross_chapter_offscreen_scan.py <项目路径> [--last-n 5]
+    python cross_cluster_offscreen_aggregate.py <项目路径> [--last-n 5]
 
 退出码: 0 健康 / 1 advisory / 2 warning
 """
@@ -29,6 +29,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -186,7 +196,7 @@ def main():
     out_path = out_dir / f"offscreen_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"[cross_chapter_offscreen_scan] 扫描章节={[ch for ch, _ in chapter_dirs]}")
+    print(f"[cross_cluster_offscreen_aggregate] 扫描章节={[ch for ch, _ in chapter_dirs]}")
     for ch, d in per_chapter.items():
         print(f"  ch{ch}: 期望 {d['expected_count']} action / 实际执行 {d['executed_count']} / 涉及角色: {d['expected_chars']}")
     print()

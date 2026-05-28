@@ -74,8 +74,9 @@ def ingest_case(project_root: Path, ch: int, case_type: str, gold_root: Path) ->
         "score": score,
         "ingested_at": datetime.now().isoformat(timespec="seconds"),
         "input_context": {
-            "chapter_plan": manifest.get("chapter_plan_subset", {}),
-            "scene_type": manifest.get("chapter_plan_subset", {}).get("scene_type"),
+            # v2 cluster 化（2026-05-28）：纯 cluster 模式
+            "cluster_scene": manifest.get("cluster_blueprint_subset", {}),
+            "scene_type": manifest.get("cluster_blueprint_subset", {}).get("scene_type"),
             "active_chars": manifest.get("active_characters", []),
             "active_fate_events": manifest.get("active_fate_events", {}),
             "active_clocks": manifest.get("active_clocks", {}),

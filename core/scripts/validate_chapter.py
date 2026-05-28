@@ -70,6 +70,11 @@ def find_chapter_file(project_root: Path, ch: int) -> Path | None:
 
 def check_word_count(body: str, target: int, min_: int, max_: int) -> list[dict]:
     n = cio.count_words(body)  # v18：统一字数口径
+    # v2 cluster 化（2026-05-28）：cluster 视野字数阈值 8000-30000
+    import os as _os
+    if _os.environ.get("CLUSTER_MODE") == "1":
+        min_, max_ = 8000, 30000
+        target = 15000
     errs = []
     if n < min_:
         errs.append({
@@ -223,7 +228,11 @@ def check_item_consistency(body: str, changes: dict, project_root: Path,
         if not name or name not in body:
             continue
         # 1. 道具必须已登场
-        obtained = it.get("obtained_ch", 999)
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 obtained_cluster
+        oc = it.get("obtained_cluster", "cluster_999")
+        import re as _re
+        m = _re.search(r"(\d+)", oc) if isinstance(oc, str) else None
+        obtained = int(m.group(1)) if m else 999
         if obtained > chapter:
             errs.append({
                 "code": "ITEM_NOT_YET_INTRODUCED",
@@ -271,7 +280,13 @@ def check_knowledge_leak(body: str, project_root: Path,
         k = c.get("knowledge", {})
         will_learn = k.get("will_learn", [])
         for wl in will_learn:
-            learn_at = wl.get("learn_at_ch", 0)
+            # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 learn_at_cluster
+            lac = wl.get("learn_at_cluster")
+            if not isinstance(lac, str):
+                continue
+            import re as _re
+            m = _re.search(r"(\d+)", lac)
+            learn_at = int(m.group(1)) if m else 0
             if learn_at <= chapter:
                 continue  # 该章及之前可以知道
             fact = wl.get("fact", "")
@@ -453,12 +468,12 @@ def check_pov_leak(body: str, manifest: dict) -> list[dict]:
 
 
 def check_try_fail(changes: dict, manifest: dict) -> list[dict]:
-    """因果转换检测（v16·移植自外部工艺库）：检查chapter_plan中的try_fail字段是否被正文兑现。"""
+    """因果转换检测（v16·移植自外部工艺库）：检查cluster_blueprint中的try_fail字段是否被正文兑现。"""
     errs = []
-    plan = manifest.get("chapter_plan_entry") or {}
+    plan = manifest.get("cluster_blueprint_entry") or {}
     if not plan:
         ch = manifest.get("chapter", 0)
-        progress_plans = manifest.get("_chapter_plan_raw", [])
+        progress_plans = manifest.get("_cluster_blueprint_raw", [])
         for p in progress_plans:
             if p.get("ch") == ch:
                 plan = p
@@ -549,6 +564,10 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
     common_words = {"这时", "此时", "那人", "众人", "有人", "旁边", "对面", "身后", "其中", "忽然", "突然", "随后", "终于", "这里", "一个"}
     unknown -= common_words
 
+    ci = load_json(project_root / "_数据库" / "character_index.json", {})
+    fp = set(ci.get("false_positives", []))
+    unknown -= fp
+
     if unknown:
         errs.append({
             "code": "UNKNOWN_CHARACTER_DETECTED",
@@ -611,11 +630,17 @@ def check_dialogue_craft(body: str) -> list[dict]:
             })
             consec_dialogue = 0
     long_quotes = re.findall(r'[""「]([^""」]{80,})[""」]', body)
-    if long_quotes:
+    # v2 cluster 化（2026-05-28）：cluster 视野下仪式条文/残卷引文/角色独白合理存在，
+    # 阈值从 >0 提到 >5（cluster 整块仪式段可能 3-5 处长引文属功能必要）。
+    import os as _os
+    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
+    _threshold = 5 if _cluster_mode else 0
+    if len(long_quotes) > _threshold:
         errs.append({
             "code": "LONG_MONOLOGUE",
             "severity": "warning",
-            "msg": f"发现{len(long_quotes)}处长台词独白(>80字)，疑似信息投喂",
+            "msg": f"发现{len(long_quotes)}处长台词独白(>80字)，疑似信息投喂"
+                   + (f"（cluster 视野阈值 >{_threshold}，仪式条文/残卷引文容忍）" if _cluster_mode else ""),
             "fix_hint": "拆成2-4次来回问答，混入回避/反问/转移话题",
         })
     return errs

@@ -71,7 +71,7 @@ class MemoryLayer:
 
     def _load_summary_memory(self) -> list[dict]:
         """层2：全书摘要"""
-        data = load_json(self.db / "章纲摘要.json", {"chapters": []})
+        data = load_json(self.db / "故事块摘要.json", {"chapters": []})
         results = []
         for s in data.get("chapters", []):
             ch = s.get("ch", s.get("chapter", 0))

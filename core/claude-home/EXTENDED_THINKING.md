@@ -38,7 +38,7 @@ response = client.messages.create(
 ## 关键章节判定（已与 MODEL_ROUTING.md 复用）
 
 满足任一 → 启用 Extended Thinking：
-- chapter_plan.beat 含 `Catalyst / Midpoint / All Is Lost / Break Into Three / Finale`
+- cluster_blueprint.beat 含 `Catalyst / Midpoint / All Is Lost / Break Into Three / Finale`
 - mental_break_triggered
 - pending_heart_event_reveals 含 reveal
 - volume_first_chapter / volume_last_chapter

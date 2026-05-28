@@ -58,7 +58,7 @@ def evaluate(project_root: Path, ch: int) -> dict:
     rels_data = load_json(rels_path, {"relationships": []})
     rels = rels_data.get("relationships", [])
 
-    protagonist = "陆衍"  # TODO: 从 chapter_plan 取
+    protagonist = "陆衍"  # TODO: 从 cluster_blueprint 取
     pending_reveals = []
     for npc, npc_data in (ensemble.get("characters") or {}).items():
         rel = get_relationship_to(rels, protagonist, npc)

@@ -3,7 +3,13 @@
   "version": 1,
   "description": "一致性调和：设定修改后审查历史章节",
   "total_steps": 5,
-  "required_steps": [1, 2, 3, 4, 5],
+  "required_steps": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
   "optional_steps": [],
   "steps": [
     {
@@ -16,7 +22,7 @@
     {
       "n": 2,
       "name": "scan-affected-chapters",
-      "description": "扫描受影响章节：Grep 所有章节 txt + 章纲摘要 + 人物卡 locked_facts",
+      "description": "扫描受影响章节：Grep 所有章节 txt + 故事块摘要 + 人物卡 locked_facts",
       "required": true,
       "expected_outputs": []
     },
@@ -41,5 +47,6 @@
       "required": true,
       "expected_outputs": []
     }
-  ]
+  ],
+  "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式"
 }

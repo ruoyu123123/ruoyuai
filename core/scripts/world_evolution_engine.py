@@ -137,12 +137,13 @@ def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list) -> bool
             if m:
                 nums.append(int(m.group(1)))
         next_num = (max(nums) + 1) if nums else 1
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式
         new_thread = {
             "thread_id": f"NT_{next_num:03d}",
             "npc_id": td.get("npc_id", "?"),
             "current_action": td.get("action", ""),
-            "since_ch": ch,
-            "expected_complete_ch": td.get("expected_complete_ch"),
+            "since_cluster": f"cluster_{ch:03d}",
+            "expected_complete_cluster": td.get("expected_complete_cluster"),
             "visible_to_protagonist": td.get("visible_to_protagonist", False),
             "outcome_if_complete": td.get("outcome_if_complete", ""),
             "_priority": td.get("_priority", 5),
@@ -404,8 +405,8 @@ def dashboard(project_root: Path) -> dict:
             "id": t.get("thread_id"),
             "npc": t.get("npc_id"),
             "action": (t.get("current_action") or "")[:40],
-            "since_ch": t.get("since_ch"),
-            "expected_complete_ch": t.get("expected_complete_ch"),
+            "since_cluster": t.get("since_cluster"),
+            "expected_complete_cluster": t.get("expected_complete_cluster"),
             "priority": t.get("_priority"),
         }
         for t in sorted(threads, key=lambda x: -(x.get("_priority", 0)))[:10]

@@ -1,9 +1,18 @@
 {
   "command": "distill-style",
-  "version": 3,
-  "description": "作者风格闭环蒸馏 v2（cluster 主轨）· 8 阶段（含 chapter 中检 + cluster 终验 + 写作端回灌严闭环）· memory feedback_cluster_distill_v2_charter",
-  "total_steps": 8,
-  "required_steps": [1, 2, 3, 4, 5, 6, 7, 8],
+  "version": 4,
+  "description": "作者风格闭环蒸馏 v3（cluster 单轨化 · 2026-05-28）· 7 phase · 全系统 cluster 化方案（废弃 chapter 中检 · 单一 cluster 终验复刻为主）",
+  "_v3_changes": "v3 删除 phase-2 chapter-replica（chapter 中检）· phase 数 8→7 · 全程 cluster 视野 · 对齐用户原话「整个系统为故事块服务」",
+  "total_steps": 7,
+  "required_steps": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
   "optional_steps": [],
   "steps": [
     {
@@ -16,42 +25,42 @@
     {
       "n": 2,
       "name": "phase-1-surface-distill-cluster",
-      "description": "阶段 1 表层蒸馏（cluster 主轨 · v2 章程不变）：FOR cluster in cluster_index.clusters → 单章 JSON × N + cluster 衔接 JSON × 1 + style_analyzer metrics + arc_aggregator 增量聚合",
+      "description": "阶段 1 表层蒸馏（cluster 主轨）：FOR cluster in cluster_index.clusters → 单章 JSON × N + cluster 衔接 JSON × 1 + style_analyzer metrics + arc_aggregator 增量聚合",
       "required": true,
-      "expected_outputs": ["蒸馏进度", "衔接分析"]
+      "expected_outputs": [
+        "蒸馏进度",
+        "衔接分析"
+      ]
     },
     {
       "n": 3,
-      "name": "phase-2-chapter-replica",
-      "description": "阶段 2 chapter 复刻中检（v2 章程改 · drill 单段 1200 字 6 type 模式已废弃）：用 distill_replicate.py --mode chapter 复刻 1-2 个参考章（3000-5000 字），用于 v0→v1→v2 快速迭代探伤。必须走 gen-model（强制 hook 规则 11）",
+      "name": "phase-2-multi-dim-compare-cluster-only",
+      "description": "阶段 2 多维度对比（v3 cluster 单轨化 · 不再走 chapter SFS）：抽 1-2 个原文 cluster + style_evaluator.py --mode cluster --multi-ref-from-dir SFS 评分（6 维：arc 形状 / emotion_curve / 衔接模板 / 钩子分布 / 场景概述比 / voice 合规）",
       "required": true,
-      "expected_outputs": ["复刻测试"]
+      "expected_outputs": [
+        "对比报告"
+      ]
     },
     {
       "n": 4,
-      "name": "phase-3-multi-dim-compare",
-      "description": "阶段 3 多维度对比：抽 2-3 章原文 + style_evaluator.py SFS 评分。chapter 模式走默认 SFS；cluster 模式（step 6 后）走 --mode cluster 加 6 维（arc 形状/emotion_curve/衔接模板/钩子分布/场景概述比/voice 合规）",
-      "required": true,
-      "expected_outputs": ["对比报告"]
-    },
-    {
-      "n": 5,
-      "name": "phase-4-correction-reflect",
-      "description": "阶段 4 修正反思：差距维度生成新约束 → skill v.N。chapter 复刻差距 > 阈值 → skill 升级；cluster 复刻差距 > 阈值 → 重做 step 6",
+      "name": "phase-3-correction-reflect",
+      "description": "阶段 3 修正反思：差距维度生成新约束 → skill v.N。cluster 复刻差距 > 阈值 → 重做 phase-4 cluster-replica（不再有 chapter skill 升级路径）",
       "required": true,
       "expected_outputs": []
     },
     {
-      "n": 6,
-      "name": "phase-5-cluster-replica",
-      "description": "阶段 5 cluster 终验复刻（v2 章程新增 · 主推）：chapter 中检通过后启动 distill_replicate.py --mode cluster 复刻 1-2 个完整故事块（4000-20000 字）。沿用 A' 半 cluster 防 timeout 教训：每 sub-call ≤ 3 章 / ≤ 5000 字 / ≤ 10 min wall-clock。失败重试代价 = 1/N cluster",
+      "n": 5,
+      "name": "phase-4-cluster-replica",
+      "description": "阶段 4 cluster 终验复刻（v3 唯一复刻验证 · 主推）：启动 distill_replicate.py --mode cluster 复刻 1-2 个完整故事块（4000-20000 字）。沿用 A' 半 cluster 防 timeout 教训：每 sub-call ≤ 3 章 / ≤ 5000 字 / ≤ 10 min wall-clock。失败重试代价 = 1/N cluster",
       "required": true,
-      "expected_outputs": ["复刻测试"]
+      "expected_outputs": [
+        "复刻测试"
+      ]
     },
     {
-      "n": 7,
-      "name": "phase-6-finalize",
-      "description": "阶段 6 出货：作者风格_FINAL.json + skill_FINAL.md + distillation_log.md + lessons 回写 + git commit",
+      "n": 6,
+      "name": "phase-5-finalize",
+      "description": "阶段 5 出货：作者风格_FINAL.json + skill_FINAL.md + distillation_log.md + lessons 回写 + git commit",
       "required": true,
       "expected_outputs": [
         "作者风格_FINAL.json",
@@ -60,11 +69,14 @@
       ]
     },
     {
-      "n": 8,
-      "name": "phase-7-writer-feedback-verify",
-      "description": "阶段 7 写作端回灌严闭环（v2 章程 Article 6 · 不通过不出货）：用 skill_FINAL.md 灌 gen_writer.py 写同 cluster → 重跑 cluster_arc_aggregator → 与原 cluster_arc 比 reagan_shape 等价类偏差 ≤ 1 + SFS 差 ≤ 5。不通过 → distill_finalize_verify.py exit 2 → plan end 拦截。这是确保「skill 能让目标 gen-model 真正写出来」的最后一道闸",
+      "n": 7,
+      "name": "phase-6-writer-feedback-verify",
+      "description": "阶段 6 写作端回灌严闭环（v3 Article 6 · 不通过不出货）：用 skill_FINAL.md 灌 gen_writer.py 写同 cluster → 重跑 cluster_arc_aggregator → 与原 cluster_arc 比 reagan_shape 等价类偏差 ≤ 1 + SFS 差 ≤ 5。不通过 → distill_finalize_verify.py exit 2 → plan end 拦截。这是确保「skill 能让目标 gen-model 真正写出来」的最后一道闸",
       "required": true,
-      "expected_outputs": ["对比报告"]
+      "expected_outputs": [
+        "对比报告"
+      ]
     }
-  ]
+  ],
+  "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式"
 }

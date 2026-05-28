@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """PreToolUse Hook: 新书项目全系统强制开启门禁（v23.13 用户硬规则 2026-05-25）
 
+v2 cluster 化（2026-05-28）：本 hook 校验的 34 个 JSON 文件包含 v2 schema 字段
+（cluster_blueprint / 故事块摘要 等），逻辑不变·仅文件存在性校验，schema 不挑剔。
+hook 不感知 cluster vs chapter——它只看「文件是否存在」。
+
 触发条件：Bash 工具调用，命令含 `plan_tracker.py` 且关联 outline plan（命令名=outline 或 plan_id 含 outline）
 
 逻辑：
@@ -33,8 +37,9 @@ REQUIRED_DB_FILES = {
     "基础-人物世界": [
         "人物卡.json", "世界观.json", "关系.json", "地图.json", "道具.json",
     ],
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 校验 故事块摘要.json
     "基础-叙事": [
-        "进度.json", "章纲摘要.json", "大势卡.json", "事件簇.json", "事件表.json", "时间线.json", "伏笔表.json",
+        "进度.json", "故事块摘要.json", "大势卡.json", "事件簇.json", "事件表.json", "时间线.json", "伏笔表.json",
     ],
     "基础-风格质控": [
         "作者风格.json", "场景规则.json", "写作经验.json", "用户偏好.json",
@@ -140,7 +145,7 @@ def main():
     if bypass.exists():
         sys.exit(0)
 
-    # 检查必建文件
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 校验 故事块摘要.json
     missing = [f for f in ALL_REQUIRED if not (db_dir / f).exists()]
     if not missing:
         sys.exit(0)  # 全齐放行

@@ -32,7 +32,7 @@ WEBNOVEL_8DIM = {
         "_doc": "节奏 - 微张力 / 段落退化 / 章节内部速度变化",
     },
     "Plot Structure": {
-        "source_scanners": ["plot_structure_scanner", "chapter_plan_compliance"],
+        "source_scanners": ["plot_structure_scanner", "cluster_blueprint_compliance"],
         "validator_16_dim": ["compelling_plot", "coherent", "tension_buildup"],
         "_doc": "情节结构 - STC 节拍 / try-fail / midpoint / 角色弧光",
     },

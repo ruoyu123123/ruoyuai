@@ -14,7 +14,7 @@
     "trigger_on_max": "满格时触发什么（fate_event id / scheme_name / 自由文本）",
     "visible_to_protagonist": "true=主角内心知道（焦虑感）/ false=只主代理可见（叙事悬念）",
     "visible_to_writer": "writer prompt 是否能看到本 clock",
-    "since_ch": "首次创建章号",
+    "since_cluster": "首次创建章号",
     "spawned_by": "fate_engine / foreshadowing / world_evolution / manual",
     "status": "active | triggered | abandoned",
     "_reason": "设计原因/写作意图"
@@ -32,7 +32,7 @@
       "trigger_on_max": "ME_004_顾沉亲临招安",
       "visible_to_protagonist": false,
       "visible_to_writer": true,
-      "since_ch": 4,
+      "since_cluster": 4,
       "spawned_by": "manual",
       "status": "active",
       "_reason": "顾沉部署反模因后耐心耗尽 → ch15 左右亲自上门"
@@ -48,7 +48,7 @@
       "trigger_on_max": "fs_铁皮盒交付",
       "visible_to_protagonist": false,
       "visible_to_writer": true,
-      "since_ch": 4,
+      "since_cluster": 4,
       "spawned_by": "foreshadowing",
       "status": "active",
       "_reason": "陆爸 NT_004 expected_complete_ch=13，对应 9 章倒数"
@@ -64,7 +64,7 @@
       "trigger_on_max": "ME_006_卷一末_主动宣战",
       "visible_to_protagonist": false,
       "visible_to_writer": true,
-      "since_ch": 5,
+      "since_cluster": 5,
       "spawned_by": "manual",
       "status": "active",
       "_reason": "南海资本内部决议——主角行动加速 stability 下降，加快进度"

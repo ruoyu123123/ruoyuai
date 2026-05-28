@@ -18,6 +18,11 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+# v2 cluster 化（2026-05-28）：CLUSTER_MODE env 感知 · scanner 内部可按 mode 切阈值
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
+
+
 # 已知高频「那/这 + 量词? + 名词」模板组合白名单
 # 这些是 AI 写作典型的指示性名词，重复出现 = 模板节奏信号
 KNOWN_DEMONSTRATIVE_NOUNS = [

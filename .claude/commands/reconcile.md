@@ -71,7 +71,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 ## 第二步：扫描受影响章节
 
-1. Read `_数据库/章纲摘要.json`，获取所有章节列表
+1. Read `_数据库/故事块摘要.json`，获取所有章节列表
 2. Read `_数据库/人物卡.json`，获取变更涉及角色的 locked_facts 历史
 3. Grep 所有章节 txt 文件（搜索变更前值的关键词）
 4. 收集匹配结果：
@@ -171,7 +171,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3 --skip-output
 不修改正文，只更新档案：
 - 人物卡 locked_facts 追加新事实
 - 旧事实标注为 "outdated_from_ch": N
-- 在章纲摘要中记录"本次调和未修改正文，历史章节存在旧描述"
+- 在故事块摘要中记录"本次调和未修改正文，历史章节存在旧描述"
 
 **plan-step 4**（修复执行后；正文/档案变更难以预先列举为文件清单，使用 --skip-output 但配合后置自检）：
 

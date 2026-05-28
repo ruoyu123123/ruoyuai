@@ -53,7 +53,7 @@ spawn(name="novel-writer", model=spawn_model, ...)
 ## 关键章节判定（用 Opus 4.7）
 
 满足以下任一即用 Opus（成本 ↑3-5x，但质量提升明显）：
-- chapter_plan.beat 含 `Catalyst / Midpoint / All Is Lost / Break Into Three / Finale`
+- cluster_blueprint.beat 含 `Catalyst / Midpoint / All Is Lost / Break Into Three / Finale`
 - mental_break_triggered
 - pending_heart_event_reveals 含 reveal
 - volume_first_chapter（卷首章）

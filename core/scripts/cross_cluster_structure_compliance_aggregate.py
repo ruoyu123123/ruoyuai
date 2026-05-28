@@ -1,4 +1,4 @@
-"""cross_chapter_structure_compliance_scan.py — beat_map 推进 + 走向卡落地（CCR16）
+"""cross_cluster_structure_compliance_aggregate.py — beat_map 推进 + 走向卡落地（CCR16）
 
 2 类结构层跨章合规检测：
 
@@ -10,10 +10,10 @@ A. BEAT_MAP_PROGRESSION
    - BEAT_GAP_TOO_LONG：连续 N 章无任何 beat 推进
 
 B. USER_CHOICE_LANDED
-   读 .wal/第N章_fate_cards.json + 进度.json.chapter_plan[N].user_choice
-   - 用户选定的卡（A/B/C）是否真在 chapter_plan 留下记录
-   - chapter_plan[N].turning_point 是否与所选卡 leads_to 一致
-   - 如 chapter_plan 完全没记录 user_choice → CHOICE_NOT_LANDED
+   读 .wal/第N章_fate_cards.json + 进度.json.cluster_blueprint[..].scene_storyboard[ch=N].user_choice
+   - 用户选定的卡（A/B/C）是否真在 cluster_blueprint 留下记录
+   - cluster_blueprint[..].scene_storyboard[ch=N].turning_point 是否与所选卡 leads_to 一致
+   - 如 cluster_blueprint 完全没记录 user_choice → CHOICE_NOT_LANDED
 
 退出码: 0 健康 / 1 advisory / 2 warning
 """
@@ -27,6 +27,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -149,7 +159,13 @@ def scan_user_choice_landed(project_root: Path, chapters: list[int]) -> list[dic
     if not progress_path.exists():
         return []
     progress = load_json(progress_path, {})
-    chapter_plan = progress.get("chapter_plan", {}) or {}
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    ch_to_scene = {}
+    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        for sb in cdata.get("scene_storyboard", []):
+            ch_key = sb.get("ch")
+            if ch_key:
+                ch_to_scene[str(ch_key)] = sb
     wal_dir = project_root / "_数据库" / ".wal"
     if not wal_dir.exists():
         return []
@@ -160,7 +176,7 @@ def scan_user_choice_landed(project_root: Path, chapters: list[int]) -> list[dic
             continue
         cards = load_json(cards_path, {})
         # plan 中是否有 user_choice
-        plan_entry = chapter_plan.get(str(ch)) or chapter_plan.get(ch) or {}
+        plan_entry = ch_to_scene.get(str(ch)) or ch_to_scene.get(ch) or {}
         if not isinstance(plan_entry, dict):
             continue
         user_choice = plan_entry.get("user_choice")
@@ -175,7 +191,7 @@ def scan_user_choice_landed(project_root: Path, chapters: list[int]) -> list[dic
                 "code": "USER_CHOICE_NOT_LANDED",
                 "ch": ch,
                 "card_labels_available": labels,
-                "suggestion": f"ch{ch} 有 fate_cards（{labels}）但 chapter_plan[{ch}].user_choice 未记录 → 调度器漏写",
+                "suggestion": f"ch{ch} 有 fate_cards（{labels}）但 cluster_blueprint[ch={ch}].user_choice 未记录 → 调度器漏写",
             })
             continue
         # CHOICE_LEADS_TO_MISMATCH：user_choice 选中卡的 leads_to 是否在 plan.turning_point 体现

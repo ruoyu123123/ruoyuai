@@ -196,8 +196,8 @@ else:
    - 用户偏好与剧情冲突 → 在卡片 risk 字段说明「与用户偏好 X 冲突的代价」
 
 **P0 基础读（必跑）**：
-1. **Read** `_数据库/进度.json` 的 `chapter_plan[下一章]` 和所在卷的 `volume_arc` / `ending_state`
-2. **Read** `_数据库/章纲摘要.json` 最近 2 条，了解当前剧情势能
+1. **Read** `_数据库/进度.json` 的 `cluster_blueprint[下一章]` 和所在卷的 `volume_arc` / `ending_state`
+2. **Read** `_数据库/故事块摘要.json` 最近 2 条，了解当前剧情势能
 3. **Read** `_数据库/伏笔表.json` 查未来 5 章的到期伏笔 + active pledges + hidden secrets
 4. **Read** `_数据库/.wal/第<N>章_summary.json`（刚写完章节的情绪/张力/未释放情绪）
 5. **Read** `_数据库/人物卡.json` 看主角 offscreen.goals 和 knowledge.will_learn
@@ -385,7 +385,7 @@ else:
 
 #### 规则 1：章型分布约束（防止连续同类型章）
 - 读 `opening_type_distribution_300ch` + `ending_type_distribution_300ch`
-- 检查最近 2-3 章已用过的 opening/ending type（从 章纲摘要.json 提取）
+- 检查最近 2-3 章已用过的 opening/ending type（从 故事块摘要.json 提取）
 - 卡片设计时**至少 1 张 ≠ 最近 1 章用过的 type**——避免风格库统计上稀有的类型（< 5%）连续出现 2 次
 - 卡片 `style_alignment.expected_chapter_type` 必须填一个作者实际写过的章型（如「危机章」「日常章」「消化章」「世界构建章」），不能凭空发明
 
@@ -530,7 +530,7 @@ else:
 
 ## 硬性纪律
 
-- **不改 进度.json.chapter_plan** — 用户选择后由调度器合并
+- **不改 进度.json.cluster_blueprint** — 用户选择后由调度器合并
 - **不写下一章正文** — 那是 Writer 的工作（下一轮）
 - **不修改任何 _数据库/ 下 JSON** — 只 Write 到 .wal/ 临时文件
 - **不生成偏离大势的卡片** — 硬性纪律
@@ -555,5 +555,5 @@ else:
 默认推荐: <A/B/C>（如用户说"自动"）
 
 输出: _数据库/.wal/第<N+1>章_fate_cards.json
-→ 请用户选择后，由调度器写入 进度.json.chapter_plan[<N+1>].user_choice
+→ 请用户选择后，由调度器写入 进度.json.cluster_blueprint[<N+1>].user_choice
 ```

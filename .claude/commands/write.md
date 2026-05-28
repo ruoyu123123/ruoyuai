@@ -359,9 +359,9 @@ cluster-write / cluster-save-state 内部有一套质检工具（查禁用词、
 保存前自检 5 道门禁（CHANGES 指 _changes.json 的 factual 段）：
 1. 引用校验：factual 中的所有角色/地点/势力/物品 ID 必须在档案中或在 new_entities 中声明
 2. 未知实体：单类 new_entities > 5 个需警告，> 10 个强制重写
-3. 蓝图出场：chapter_plan 指定的角色必须出场，未出场的在 skipped_characters 中说明理由；视角角色出现 <2 次 → 警告
+3. 蓝图出场：cluster_blueprint 指定的角色必须出场，未出场的在 skipped_characters 中说明理由；视角角色出现 <2 次 → 警告
 4. 描写一致性：角色外貌/地点环境/物品描述必须与档案一致，冲突必须修正
-5. 维度漂移：chapter_plan 标注的变更维度必须在 factual 中有对应条目
+5. 维度漂移：cluster_blueprint 标注的变更维度必须在 factual 中有对应条目
 
 5道门禁都通过后，用 Write 工具保存两个文件。
 ```

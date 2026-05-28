@@ -224,13 +224,20 @@ RANGE_PAIR = re.compile(r"从[^，。！？、\n]{1,14}到[^，。！？、\n]{1
 
 def scan_fake_range(sentences: list[str]) -> dict:
     """一句话里塞 ≥2 个「从X到Y」强行铺跨度 = AI 的虚假范围腔。
-    单个「从…到…」是正常表达，不报。"""
+    单个「从…到…」是正常表达，不报。
+
+    v2 cluster 化（2026-05-28）：cluster 视野下 voice 归因，
+    阈值从 ≥1 命中即报 → ≥3 命中才报（容忍 voice 必要使用）。
+    """
+    import os as _os
+    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
     hits = []
     for i, s in enumerate(sentences):
         ranges = RANGE_PAIR.findall(s)
         if len(ranges) >= 2:
             hits.append({"sentence_idx": i, "preview": _preview(s, 60),
                          "range_count": len(ranges)})
+    _report_threshold = 3 if _cluster_mode else 1
     return {
         "sentences_scanned": len(sentences),
         "hits_count": len(hits),
@@ -240,7 +247,7 @@ def scan_fake_range(sentences: list[str]) -> dict:
         "fix_hint": "「从晨光到暮色，从山巅到海底」式连环跨度——"
                     "挑一个真正相关的，删掉其余。",
         "warning": (f"⚠️ {len(hits)} 句出现连环「从…到…」（虚假范围）"
-                    if hits else None),
+                    if len(hits) >= _report_threshold else None),
     }
 
 

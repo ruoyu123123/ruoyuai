@@ -23,7 +23,7 @@ MODE: routine | adhoc
 
 ## 数据源
 
-`_数据库/章纲摘要.json` 中每章已记录的 judge 报告：
+`_数据库/故事块摘要.json` 中每章已记录的 judge 报告：
 - `chapters[i].validator_grade`
 - `chapters[i].voice_keeper_grade`
 - `chapters[i].foreshadower_grade`（如有）
@@ -34,7 +34,7 @@ MODE: routine | adhoc
 ## 执行流程
 
 ### Step 1 — Read 数据
-- Read `_数据库/章纲摘要.json` → 抽出指定章节范围内所有 judge 的 grade + confidence + reasoning_trace 摘要
+- Read `_数据库/故事块摘要.json` → 抽出指定章节范围内所有 judge 的 grade + confidence + reasoning_trace 摘要
 
 ### Step 2 — 计算单 judge 指标
 

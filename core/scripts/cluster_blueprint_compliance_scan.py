@@ -1,14 +1,14 @@
-"""chapter_plan_compliance_scan.py — chapter_plan vs 正文一致性扫描（v19.4 新增）
+"""cluster_blueprint_compliance_scan.py — cluster_blueprint vs 正文一致性扫描（v19.4 新增）
 
-检测 writer 是否真的写了 chapter_plan 声明的事件/角色/场景类型。
+检测 writer 是否真的写了 cluster_blueprint 声明的事件/角色/场景类型。
 
 4 维度：
-1. KEY_EVENTS_MISSING       - chapter_plan.key_events 含但正文未提
-2. CHARACTERS_MISSING       - chapter_plan.characters 含但正文 + aliases 未出现
-3. SCENE_TYPE_MISMATCH      - chapter_plan.scene_type 与 writer 自评应用规则不符
-4. TURNING_POINT_MISSING    - chapter_plan.turning_point 关键词未在正文
+1. KEY_EVENTS_MISSING       - cluster_blueprint.key_events 含但正文未提
+2. CHARACTERS_MISSING       - cluster_blueprint.characters 含但正文 + aliases 未出现
+3. SCENE_TYPE_MISMATCH      - cluster_blueprint.scene_type 与 writer 自评应用规则不符
+4. TURNING_POINT_MISSING    - cluster_blueprint.turning_point 关键词未在正文
 
-用法：python chapter_plan_compliance_scan.py <项目> [--ch N | --all]
+用法：python cluster_blueprint_compliance_scan.py <项目> [--ch N | --all]
 退出码: 0 健康 / 1 advisory / 2 warning
 """
 
@@ -80,12 +80,16 @@ def match_keywords(keywords: list[str], text: str, threshold: float = 0.3) -> tu
 def check_chapter(project_root: Path, ch: int) -> list[dict]:
     findings = []
     progress = load_json(project_root / "_数据库" / "进度.json", {})
-    chapter_plan = None
-    for cp in progress.get("chapter_plan", []):
-        if cp.get("ch") == ch:
-            chapter_plan = cp
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    cluster_blueprint = None
+    for cluster_id, cluster_data in (progress.get("cluster_blueprint") or {}).items():
+        for cp in cluster_data.get("scene_storyboard", []):
+            if cp.get("ch") == ch:
+                cluster_blueprint = cp
+                break
+        if cluster_blueprint:
             break
-    if not chapter_plan:
+    if not cluster_blueprint:
         return findings
 
     text_path = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
@@ -94,7 +98,7 @@ def check_chapter(project_root: Path, ch: int) -> list[dict]:
     text = text_path.read_text(encoding="utf-8")
 
     # === 1. key_events ===
-    for ke in chapter_plan.get("key_events", []):
+    for ke in cluster_blueprint.get("key_events", []):
         kws = extract_keywords(ke)
         if not kws:
             continue
@@ -105,13 +109,13 @@ def check_chapter(project_root: Path, ch: int) -> list[dict]:
                 "code": "KEY_EVENT_LOW_MATCH",
                 "chapter": ch,
                 "metric": {"event": ke, "match_rate": round(rate, 2), "keywords_count": len(kws)},
-                "message": f"ch{ch} chapter_plan.key_events「{ke}」ngram 命中率 {rate:.0%}（阈值 30%）",
-                "suggestion": "writer 可能偏离 chapter_plan，建议人工 review 确认事件是否真的发生",
+                "message": f"ch{ch} cluster_blueprint.key_events「{ke}」ngram 命中率 {rate:.0%}（阈值 30%）",
+                "suggestion": "writer 可能偏离 cluster_blueprint，建议人工 review 确认事件是否真的发生",
             })
 
     # === 2. characters ===
     aliases_map = get_character_aliases(project_root)
-    for char_name in chapter_plan.get("characters", []):
+    for char_name in cluster_blueprint.get("characters", []):
         if char_name in ("七位董事", "同事们", "警察", "HR", "匿名邮件发件人", "未具名"):
             continue  # 模糊群体角色跳过
         # 找该角色 aliases
@@ -127,12 +131,12 @@ def check_chapter(project_root: Path, ch: int) -> list[dict]:
                 "code": "CHARACTER_MISSING_IN_TEXT",
                 "chapter": ch,
                 "metric": {"character": char_name, "aliases_tried": aliases},
-                "message": f"ch{ch} chapter_plan.characters 含「{char_name}」，但正文 + aliases 全未出现",
-                "suggestion": "writer 漏写该角色 OR chapter_plan 列表过宽——人工 review",
+                "message": f"ch{ch} cluster_blueprint.characters 含「{char_name}」，但正文 + aliases 全未出现",
+                "suggestion": "writer 漏写该角色 OR cluster_blueprint 列表过宽——人工 review",
             })
 
     # === 3. turning_point ===
-    tp = chapter_plan.get("turning_point", "")
+    tp = cluster_blueprint.get("turning_point", "")
     if tp:
         tp_kws = extract_keywords(tp)
         if tp_kws:
@@ -143,7 +147,7 @@ def check_chapter(project_root: Path, ch: int) -> list[dict]:
                     "code": "TURNING_POINT_LOW_MATCH",
                     "chapter": ch,
                     "metric": {"turning_point": tp, "match_rate": round(rate, 2)},
-                    "message": f"ch{ch} chapter_plan.turning_point「{tp}」ngram 命中率 {rate:.0%}",
+                    "message": f"ch{ch} cluster_blueprint.turning_point「{tp}」ngram 命中率 {rate:.0%}",
                     "suggestion": "本章 turning point 可能缺失或被改写 —— 人工 review",
                 })
 
@@ -183,7 +187,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     report = {
-        "scan_type": "chapter_plan_compliance",
+        "scan_type": "cluster_blueprint_compliance",
         "scan_ts": ts,
         "chapters_scanned": chapters,
         "findings": all_findings,
@@ -196,7 +200,7 @@ def main():
     out_path = out_dir / f"plan_compliance_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"[chapter_plan_compliance_scan] 扫描 ch{chapters}: {len(all_findings)} 项 (warning={report['summary']['warning']} / advisory={report['summary']['advisory']})")
+    print(f"[cluster_blueprint_compliance_scan] 扫描 ch{chapters}: {len(all_findings)} 项 (warning={report['summary']['warning']} / advisory={report['summary']['advisory']})")
     for f in all_findings[:10]:
         print(f"  [{f['severity'].upper()}] [{f['code']}] ch{f.get('chapter')} :: {f['message']}")
     if len(all_findings) > 10:

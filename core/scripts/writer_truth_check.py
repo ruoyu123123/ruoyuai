@@ -1,11 +1,11 @@
-"""writer_truth_check.py — Writer 自评真实性检测 + 回写章纲摘要（v17.5 / B2.1+B2.3+B0.3）
+"""writer_truth_check.py — Writer 自评真实性检测 + 回写故事块摘要（v17.5 / B2.1+B2.3+B0.3）
 
 功能：
 1. 读章节 txt 末尾的 ---CHANGES_SELF_EVAL--- 段，提取 writer 申报的 applied_style
 2. 独立从正文识别 opening_type / ending_line / anchors 等
 3. 对比申报 vs 独立提取 → 生成 truth_report
-4. 把 applied_style 回写到 章纲摘要[ch].applied_style（B2.1）
-5. 把 truth_report 写入 章纲摘要[ch].truth_check
+4. 把 applied_style 回写到 故事块摘要[ch].applied_style（B2.1）
+5. 把 truth_report 写入 故事块摘要[ch].truth_check
 
 用法：
     python writer_truth_check.py <项目路径> <章节号> [--write-back]
@@ -192,11 +192,11 @@ def truth_check_chapter(project_root: Path, ch: int) -> dict:
 
 
 def write_back(project_root: Path, report: dict):
-    """B2.1 回写 applied_style + truth_check 到章纲摘要。
+    """B2.1 回写 applied_style + truth_check 到故事块摘要。
     v17.5 C4：加 last_modified_by + last_modified_at + version 防并发竞态。
     """
     from datetime import datetime as _dt
-    summary_path = project_root / "_数据库" / "章纲摘要.json"
+    summary_path = project_root / "_数据库" / "故事块摘要.json"
     data = load_json(summary_path, {"schema_version": "1.0", "chapters": []})
     chapters = data.get("chapters", [])
     if isinstance(chapters, dict):
@@ -238,7 +238,7 @@ def main():
     write = "--write-back" in args
     if "--all-history" in args:
         # 扫描所有已写章节
-        summary = load_json(project_root / "_数据库" / "章纲摘要.json", {})
+        summary = load_json(project_root / "_数据库" / "故事块摘要.json", {})
         chapters = summary.get("chapters", [])
         if isinstance(chapters, dict):
             chs = [int(k) for k in chapters.keys()]

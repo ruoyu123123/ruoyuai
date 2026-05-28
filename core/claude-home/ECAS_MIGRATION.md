@@ -14,7 +14,7 @@
 | ch3 起新章节 | ECAS cluster | 新 changes.json 带 ecas_metadata |
 | 大势卡 18 ME | 复用 | ECAS cluster.parent_me 直接引用 |
 | 事件池 抽签事件 | 复用 | outline-planner 仍读 |
-| 章纲摘要 | 加 cluster_id 字段 | 旧条目 cluster_id=null |
+| 故事块摘要 | 加 cluster_id 字段 | 旧条目 cluster_id=null |
 | 用户偏好 | 加 ecas_config 段 | 旧字段不动 |
 
 ## 2. 升级步骤（v22 项目接入 ECAS）
@@ -131,7 +131,7 @@ spawn novel-outline-planner MODE=ecas_cluster_brief 自动写入 事件簇.json�
 }
 ```
 
-### 章纲摘要兼容
+### 故事块摘要兼容
 ```json
 // v22
 {"ch": 1, "title": "...", "scenes": [...]}

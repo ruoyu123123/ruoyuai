@@ -1,9 +1,22 @@
 {
   "command": "cluster-save-state",
-  "version": 1,
+  "version": 2,
   "description": "cluster 级状态保存 12 步流水线 · 替代 chapter-level save-state · 1 个 cluster = 1 次完整流水线（数据库一次性应用 cluster_changes）",
   "total_steps": 12,
-  "required_steps": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  "required_steps": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
   "optional_steps": [],
   "_doc_v24": "状态同步单位 cluster 级。章节只是输出层，cluster 才是数据库更新单位。所有 agent (summarizer/foreshadower/reflector/reading-reflector/voice-checker/outline-planner) 走 cluster mode。git commit per cluster (不再 per chapter)",
   "steps": [
@@ -13,7 +26,9 @@
       "description": "开启 cluster 级 WAL + db_schema_validate.py --auto-migrate（34 JSON schema 自检）",
       "required": true,
       "skip_output_allowed": false,
-      "expected_outputs": ["_数据库/.wal/cluster_{key}_save_state.json"],
+      "expected_outputs": [
+        "_数据库/.wal/cluster_{key}_save_state.json"
+      ],
       "scripts": [
         "python core/scripts/db_schema_validate.py {project_root} --auto-migrate"
       ]
@@ -24,12 +39,14 @@
       "description": "读 章节/cluster_{key}_draft/cluster_changes.json 的 factual/self_eval 段（cluster 级单文件，不读 per-chapter _changes）",
       "required": true,
       "skip_output_allowed": false,
-      "expected_outputs": ["_数据库/.wal/cluster_{key}_parsed.json"]
+      "expected_outputs": [
+        "_数据库/.wal/cluster_{key}_parsed.json"
+      ]
     },
     {
       "n": 3,
       "name": "apply-cluster-changes+writer-truth-check",
-      "description": "一次性应用 cluster_changes.json 的 factual 段到 13 JSON（人物卡/伏笔表/世界状态/时间线/道具/章纲摘要等）+ 调 writer_truth_check.py 检测撒谎",
+      "description": "一次性应用 cluster_changes.json 的 factual 段到 13 JSON（人物卡/伏笔表/世界状态/时间线/道具/故事块摘要等）+ 调 writer_truth_check.py 检测撒谎",
       "required": true,
       "skip_output_allowed": true,
       "expected_outputs": [],
@@ -52,7 +69,9 @@
       "required": true,
       "must_spawn_agent": "novel-summarizer",
       "skip_output_allowed": false,
-      "expected_outputs": ["_数据库/.wal/cluster_{key}_summary.json"]
+      "expected_outputs": [
+        "_数据库/.wal/cluster_{key}_summary.json"
+      ]
     },
     {
       "n": 6,
@@ -77,7 +96,7 @@
     {
       "n": 8,
       "name": "wal-merge+learning-loop+judge-reports-archive",
-      "description": "合并 cluster 级 WAL + learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ 把本 cluster 所有 JudgeReport 存入 章纲摘要[ch_range].judge_reports[]",
+      "description": "合并 cluster 级 WAL + learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ 把本 cluster 所有 JudgeReport 存入 故事块摘要[cluster_id].judge_reports[]",
       "required": true,
       "skip_output_allowed": true,
       "expected_outputs": [],
@@ -96,7 +115,7 @@
       "scripts": [
         "python core/scripts/save_state_updates.py {project_root} --cluster {key} --all",
         "python core/scripts/save_state_evaluators.py {project_root} --cluster {key} --all",
-        "python core/scripts/run_cross_chapter_scans.py {project_root} --cluster {key} --tier full_18",
+        "python core/scripts/run_cross_cluster_aggregates.py {project_root} --cluster {key} --tier full_18",
         "python core/scripts/style_drift_scan.py {project_root} --last-n 10",
         "python core/scripts/character_index.py {project_root} --write",
         "python core/scripts/learning_loop.py {project_root} --scan-recurring",
@@ -127,7 +146,9 @@
       "required": true,
       "must_spawn_agent": "novel-outline-planner",
       "skip_output_allowed": false,
-      "expected_outputs": ["_数据库/.wal/cluster_{next_key}_emergence.json"],
+      "expected_outputs": [
+        "_数据库/.wal/cluster_{next_key}_emergence.json"
+      ],
       "scripts": [
         "python core/scripts/cluster_emergence_engine.py {project_root} emerge --after-cluster {key}",
         "# 主代理 spawn novel-outline-planner MODE=cluster_emergence (input EMERGENCE_CONTEXT_PATH)"
@@ -141,5 +162,10 @@
       "skip_output_allowed": true,
       "expected_outputs": []
     }
+  ],
+  "_v2_principle": "整个系统为故事块服务 · 章节是输出格式 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · cross_cluster 聚合用 run_cross_cluster_aggregates.py",
+  "_v2_changes_in_steps": [
+    "step 4 validate-cluster: 走 audit_hub --mode cluster（升维后）",
+    "step 9 cluster-scan: 走 cross_cluster_aggregator（22 个 scanner 加 CLUSTER_MODE）"
   ]
 }

@@ -12,7 +12,7 @@ save_state.py — 状态保存流水线的确定性部分
   --report <ch>          输出第10步报告
 
 所有子命令都幂等（重复执行不产生副作用或破坏数据）。
-确定性逻辑集中在此，AI 只负责：章纲摘要/写作反思/走向卡片。
+确定性逻辑集中在此，AI 只负责：故事块摘要/写作反思/走向卡片。
 """
 from __future__ import annotations
 import argparse
@@ -117,7 +117,7 @@ def parse_changes(root: Path, ch: int) -> tuple[dict | None, str]:
     for k, v in self_eval.items():
         result.setdefault(k, v)
     cp = cio.changes_path(root, ch)
-    strategy = "v18_changes_json" if cp.is_file() else "v18_legacy_compat"
+    strategy = "v18_changes_json" if cp.is_file() else "missing"
     return result, strategy
 
 
@@ -222,10 +222,11 @@ def apply_changes(root: Path, ch: int):
         fid = act.get("id")
         if cat == "promise":
             if typ == "setup":
+                # v2 cluster 化（2026-05-28）：纯 cluster 模式
                 fs["promises"].append({
-                    "id": fid, "setup_ch": ch, "tier": act.get("tier", 3),
+                    "id": fid, "setup_cluster": f"cluster_{ch:03d}", "tier": act.get("tier", 3),
                     "description": act.get("description", ""),
-                    "due_by": act.get("due_by", ch + 20),
+                    "due_by_cluster": act.get("due_by_cluster") or f"cluster_{ch + 20:03d}",
                     "resolved": False,
                 })
                 summary["applied"].append(f"伏笔 setup: {fid}")
@@ -265,11 +266,12 @@ def apply_changes(root: Path, ch: int):
                         break
         elif cat == "secret":
             if typ == "establish":
+                # v2 cluster 化（2026-05-28）：纯 cluster 模式
                 fs["secrets"].append({
                     "id": fid,
                     "secret": act.get("description", ""),
-                    "established_ch": ch,
-                    "reveal_at_ch": act.get("reveal_at_ch", ch + 50),
+                    "established_cluster": f"cluster_{ch:03d}",
+                    "reveal_at_cluster": act.get("reveal_at_cluster") or f"cluster_{ch + 50:03d}",
                     "known_by": act.get("known_by", []),
                     "status": "hidden",
                 })
@@ -304,12 +306,13 @@ def apply_changes(root: Path, ch: int):
     for ne in (changes.get("new_entities", {}) or {}).get("characters", []):
         ne_name = ne.get("name", "")
         if ne_name and ne_name not in char_map:
+            # v2 cluster 化（2026-05-28）：纯 cluster 模式
             cards["characters"].append({
                 "id": ne_name.lower().replace(" ", "_"),
                 "name": ne_name,
                 "role": ne.get("role", "配角"),
-                "first_appear_ch": ch,
-                "growth_arc": [{"ch": ch, "state": "初次登场", "key_change": "出场", "trigger": ""}],
+                "first_appear_cluster": f"cluster_{ch:03d}",
+                "growth_arc": [{"cluster": f"cluster_{ch:03d}", "state": "初次登场", "key_change": "出场", "trigger": ""}],
             })
             summary["applied"].append(f"新角色: {ne_name}")
     save_json(db / "人物卡.json", cards)
@@ -397,7 +400,10 @@ def cmd_git_commit(root: Path, ch: int):
     title = title_match.group(1) if title_match else ""
     if not title:
         prog = load_json(root / "_数据库" / "进度.json", {})
-        for cp in prog.get("chapter_plan", []):
+        _all_scenes_save_state = []
+    for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+        _all_scenes_save_state.extend(cdata.get("scene_storyboard", []))
+    for cp in _all_scenes_save_state:
             if cp.get("ch") == ch:
                 title = cp.get("title", "")
                 break

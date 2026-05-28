@@ -25,7 +25,7 @@
 def retrieve(query, top_k=5):
     # 1. embedding 召回 top-20
     emb_candidates = embedding_store.search(query, k=20)
-    # 2. BM25 关键词召回 top-20（基于章纲摘要）
+    # 2. BM25 关键词召回 top-20（基于故事块摘要）
     bm25_candidates = bm25_search(query, k=20)
     # 3. 合并去重 → top-30
     candidates = dedupe(emb_candidates + bm25_candidates)
@@ -42,12 +42,12 @@ def retrieve(query, top_k=5):
 
 - 接入 `bge-large-zh-v1.5`（智源中文 embedding）—— 真实语义
 - 替换 hash 384-dim 为 1024-dim
-- 加 fine-tune：用本项目 章纲摘要 自训 query-passage pair
+- 加 fine-tune：用本项目 故事块摘要 自训 query-passage pair
 - 投资约 1-2 天，retrieval 精度跳升
 
 ### Phase 3（终极·domain-specific）
 
-- 收集多本小说的 章纲摘要 + 读者评论 → 训自己的 retrieval 模型
+- 收集多本小说的 故事块摘要 + 读者评论 → 训自己的 retrieval 模型
 - 中文叙事专用 embedding
 
 ## 实施 checklist

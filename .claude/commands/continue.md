@@ -41,11 +41,11 @@ $ARGUMENTS
   → 写作中断，需要重新写第N章
   → 从第一步开始：执行 /write-chapter
 
-情况B：第N章.txt 存在，但 章纲摘要.json 中无第N章记录
+情况B：第N章.txt 存在，但 故事块摘要.json 中无第N章记录
   → save-state 中断（章节写完但状态未保存）
   → 从 save-state 开始：执行 /save-state
 
-情况C：第N章.txt 存在，章纲摘要.json 有第N章记录，current = N+1
+情况C：第N章.txt 存在，故事块摘要.json 有第N章记录，current = N+1
   → 上一章完整完成，需要写下一章
   → 直接写第 N+1 章
 
@@ -59,7 +59,7 @@ $ARGUMENTS
 
 ### 情况A — 重写章节
 
-1. Read 进度.json 的 chapter_plan[current]，获取本章规划
+1. Read 进度.json 的 cluster_blueprint[current]，获取本章规划
 2. 执行 /write-chapter 流程（通过 Agent 子任务）
 3. 写完后继续 save-state → 小势卡片 → 下一章
 

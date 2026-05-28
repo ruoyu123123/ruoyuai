@@ -101,7 +101,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
 
 # 第 3 步：apply-cluster-changes + writer-truth-check
 
-一次性应用 cluster_changes.json 的 factual 段到 13 JSON（人物卡/伏笔表/世界状态/时间线/道具/章纲摘要等）+ 检测 writer 撒谎：
+一次性应用 cluster_changes.json 的 factual 段到 13 JSON（人物卡/伏笔表/世界状态/时间线/道具/故事块摘要等）+ 检测 writer 撒谎：
 
 ```bash
 python core/scripts/save_state.py "<项目路径>" --apply-cluster-changes <key>
@@ -217,7 +217,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 7 --skip-output
 # learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ WAL 合并
 python core/scripts/save_state.py "<项目路径>" --auto-post-reflect-cluster <key>
 
-# 把本 cluster 所有 JudgeReport 存入 章纲摘要[ch_range].judge_reports[]
+# 把本 cluster 所有 JudgeReport 存入 故事块摘要[ch_range].judge_reports[]
 python core/scripts/judge_reports_archive.py "<项目路径>" --cluster <key> || true
 ```
 

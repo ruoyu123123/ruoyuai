@@ -1,6 +1,8 @@
 ---
-description: 检查小说质量
+description: 检查小说质量 · v2 cluster 视野（2026-05-28）
 ---
+
+> **v2 cluster 化方案（2026-05-28）**：质检默认 cluster 视野（CLUSTER_MODE=1）· 14 scanner 注册 scanner_registry.json · cluster_001 advisory 15→3 真问题 · 详见 memory `feedback_full_system_cluster_centric`。
 
 请对以下小说内容进行质量检查：
 

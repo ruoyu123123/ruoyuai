@@ -1696,11 +1696,11 @@ pathlib.Path('$TEST_ROOT/_数据库/场景规则.json').write_text(json.dumps(sc
 # 3e-3h. 加 4 个剩余核心 JSON 空 schema 占位
 #       不准备会被 build_manifest 28 collector 当中余下的 fallback，缺写作上下文
 pathlib.Path('$TEST_ROOT/_数据库/伏笔表.json').write_text(json.dumps({'foreshadows': [], 'active_pledges': [], 'hidden_secrets': []}, ensure_ascii=False, indent=2), encoding='utf-8')
-pathlib.Path('$TEST_ROOT/_数据库/章纲摘要.json').write_text(json.dumps({'chapters': []}, ensure_ascii=False, indent=2), encoding='utf-8')
+pathlib.Path('$TEST_ROOT/_数据库/故事块摘要.json').write_text(json.dumps({'chapters': []}, ensure_ascii=False, indent=2), encoding='utf-8')
 pathlib.Path('$TEST_ROOT/_数据库/写作经验.json').write_text(json.dumps({'success_patterns': [], 'failure_patterns': [], 'preferences': []}, ensure_ascii=False, indent=2), encoding='utf-8')
 pathlib.Path('$TEST_ROOT/_数据库/关系.json').write_text(json.dumps({'relationships': []}, ensure_ascii=False, indent=2), encoding='utf-8')
 
-print('[Step A 3] fixture project 准备完毕：作者风格 + 人物卡(列表) + 世界观 + 用户偏好 + 场景规则 + 伏笔表 + 章纲摘要 + 写作经验 + 关系 + (后续) 事件簇/进度')
+print('[Step A 3] fixture project 准备完毕：作者风格 + 人物卡(列表) + 世界观 + 用户偏好 + 场景规则 + 伏笔表 + 故事块摘要 + 写作经验 + 关系 + (后续) 事件簇/进度')
 "
 
 # 3i. Step A 末尾跑 style_injector 预生成 .style_directive/ch_001.json
@@ -1727,7 +1727,7 @@ for c in clusters:
     c['mid_checkpoints'] = [int(c['expected_word_range']['max'] / 3), int(c['expected_word_range']['max'] * 2 / 3)]
 import pathlib
 pathlib.Path('$TEST_ROOT/_数据库/事件簇.json').write_text(json.dumps({'schema_version': 'v23.0', 'clusters': clusters}, ensure_ascii=False, indent=2), encoding='utf-8')
-pathlib.Path('$TEST_ROOT/_数据库/进度.json').write_text(json.dumps({'chapter_plan': []}, ensure_ascii=False, indent=2), encoding='utf-8')
+pathlib.Path('$TEST_ROOT/_数据库/进度.json').write_text(json.dumps({'cluster_blueprint': []}, ensure_ascii=False, indent=2), encoding='utf-8')
 "
 ```
 

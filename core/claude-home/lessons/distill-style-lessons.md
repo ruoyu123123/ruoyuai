@@ -598,7 +598,7 @@
   - 蒸馏端 35 维度精细分析的价值 ≈ 写作时被忽略 80%
   - 两本书（BookC蒸馏的写作 + BookB蒸馏的写作）都出现同症状——证明是系统级 bug 而非单章失误
 - **修复**：v17.3 引入 `core/scripts/style_injector.py` 作为蒸馏↔写作的中间层 ——
-  - 输入：作者风格_FINAL.json + 章纲摘要（历史 applied_style）+ 章节号
+  - 输入：作者风格_FINAL.json + 故事块摘要（历史 applied_style）+ 章节号
   - 输出：`_数据库/.style_directive/ch_NNN.json` 含 opening_type/ending_type/transitions/anchor_strategy/narrative_targets 等强制指令
   - 轮拿算法：基于 `opening_type_distribution_300ch` 权重 + 前 N-1 章 avoid 列表，确保不违反 `opening_rule`
   - 注入路径：build_manifest 调用 style_injector，把 directive 嵌入 manifest 同时落地到 `.style_directive/ch_N.json`
@@ -624,13 +624,13 @@
 - **关联**：L9.1（style_injector 注入）
 
 ### L9.3 💡 style_directive 的轮拿不能是"绝对禁止"，要"权重避免"
-- **现象**：初版 style_injector 实现了 "avoid 列表里出现过的 type 一律不选"。结果：当前章 chapter_plan.scene_type 强烈倾向某 type，但该 type 恰好在 avoid 里 → 算法被迫选低权重 type（如 1.8% 的"人物内心吐槽"），可能与本章实际剧情冲突
+- **现象**：初版 style_injector 实现了 "avoid 列表里出现过的 type 一律不选"。结果：当前章 cluster_blueprint.scene_type 强烈倾向某 type，但该 type 恰好在 avoid 里 → 算法被迫选低权重 type（如 1.8% 的"人物内心吐槽"），可能与本章实际剧情冲突
 - **影响**：
   - 风格反重复 vs 剧情类型匹配 之间张力管理失衡
   - 强制选超低频 type 反而显得突兀
 - **修复**：（当前为权重抽样 + avoid hard exclude，未来可改为）——
   - avoid 内 type 权重 ×0.1 而非完全排除，让算法在多样性和场景适配间软平衡
-  - 加入 chapter_plan.scene_type 倾向加权（如战斗章 +"动作承接"权重，内省章 +"心理铺陈"权重）
+  - 加入 cluster_blueprint.scene_type 倾向加权（如战斗章 +"动作承接"权重，内省章 +"心理铺陈"权重）
 - **预防**：style_injector 输出 directive 时必须含 `opening_pick_reason` 字段（如 `weighted_pick(0.018/0.640)`），便于后期审计是否过度偏离高频 type
 
 ### L9.4 ⚠️ 蒸馏 35 维度审计——写作时未使用 = 浪费
@@ -705,7 +705,7 @@
 ### L10.4 ⛔ Judge 之间也要分权——不互相读对方报告
 - **现象**：如果 voice-keeper 能读 validator-repair 的结论，它会被影响（"validator 给 A 了，我也给 A 吧"——羊群效应）
 - **影响**：N 个 judge 退化为 1 个判决 + N-1 个 echo
-- **修复**：v17.4 各 judge agent prompt 明确「不读章纲摘要中其他 judge 的评分」「同章节多 judge 并行启动而非串行」
+- **修复**：v17.4 各 judge agent prompt 明确「不读故事块摘要中其他 judge 的评分」「同章节多 judge 并行启动而非串行」
 - **预防**：
   - judge 之间通信由主代理仲裁，judge 直接交流被禁止
   - judge 启动顺序随机化（不让 actor 通过"先调用 validator-A 还是 -B"暗号引导后续 judge）
@@ -733,7 +733,7 @@
 | Coordinator 不递归 | 主代理仲裁，judge 不能 spawn judge |
 | Specialist 浓缩输出 | judge JudgeReport schema 限制了输出长度和结构 |
 | OTEL 审计 | meta-judge + plan_tracker 提供 per-agent 历史追踪 |
-| 共享文件状态 | `_数据库/章纲摘要.json` + judge_reports[] 追加式存储 |
+| 共享文件状态 | `_数据库/故事块摘要.json` + judge_reports[] 追加式存储 |
 | 紧急停止 | plan_tracker abort + user `/goal stop` |
 
 | Agent-as-Judge 概念 | 我们的实现 |
@@ -759,8 +759,8 @@
 ### L11.1 ⛔ Memory Drift = 业界 #1 杀手（65% 失败归因）
 - **业界数据**：kore.ai 2025 统计 65% 企业 AI 失败 = context drift / memory loss during multi-step reasoning，**不是** raw context exhaustion。
 - **现象**：ch1 details 到 ch8 被稀释（详情不被关注），角色描写漂移、伏笔被弃、tone shift。
-- **我们之前的应对**（v17.5 P1.4）：章纲摘要分级注入（最近 5 章 + 卷首 + 关键事件章）—— 仅缓解，未根治。
-- **v17.5 C1 升级**：build_manifest 真正调用 `rag_retriever.py`（已存在但未用）—— 把基于 chapter_plan 的 TF-IDF 检索结果作为 **P0 must_read** 注入。例：ch100 时自动找到 ch37 埋的"伊森笔迹"伏笔，无须 writer 自己回忆。
+- **我们之前的应对**（v17.5 P1.4）：故事块摘要分级注入（最近 5 章 + 卷首 + 关键事件章）—— 仅缓解，未根治。
+- **v17.5 C1 升级**：build_manifest 真正调用 `rag_retriever.py`（已存在但未用）—— 把基于 cluster_blueprint 的 TF-IDF 检索结果作为 **P0 must_read** 注入。例：ch100 时自动找到 ch37 埋的"伊森笔迹"伏笔，无须 writer 自己回忆。
 - **预防**：所有长篇项目（>20 章）的 manifest 必须含 RAG hits，且优先级 ≥ P0。
 
 ### L11.2 ⛔ 角色 facts 必须显式锁定（locked_facts 字段）
@@ -774,8 +774,8 @@
 
 ### L11.3 ⚠️ 状态同步必须用 version 字段
 - **业界数据**：Maxim Failure Pattern #1 — State Synchronization Failures（多 agent 并发改共享状态 → 竞态 / 重复工作）。
-- **我们之前**：4 个 optional agents（summarizer/foreshadower/reflector/outline-planner）并行 spawn，可能同时改 章纲摘要[ch]。
-- **v17.5 C4 升级**：每次写 章纲摘要 时打上 `_version` (单调递增) + `_last_modified_by` + `_last_modified_at`。
+- **我们之前**：4 个 optional agents（summarizer/foreshadower/reflector/outline-planner）并行 spawn，可能同时改 故事块摘要[ch]。
+- **v17.5 C4 升级**：每次写 故事块摘要 时打上 `_version` (单调递增) + `_last_modified_by` + `_last_modified_at`。
 - **未来扩展**：写入前比对 _version，不一致 → 重读+合并 + 重写（乐观并发控制 / OCC）。
 - **预防**：任何会被 2+ agent 同时改写的 JSON 节点都要有 version 字段。
 
@@ -872,7 +872,7 @@
 | SCORE 组件 / 业界标准 | 我们的实现 | 状态 |
 |---|---|---|
 | Dynamic State Tracking | state_tracker.py 符号事实图 | ✓ D1 |
-| Context-Aware Summarization | 章纲摘要分级（最近+卷首+关键） | ✓ P1.4 |
+| Context-Aware Summarization | 故事块摘要分级（最近+卷首+关键） | ✓ P1.4 |
 | Hybrid Retrieval | rag_retriever --mode hybrid | ✓ D2（embedding 待 API） |
 | Character Last-Appeared | character_index.json | ✓ D5 |
 | Auto NER + Story Bible | story_bible_extractor.py | ✓ D6 |
@@ -914,7 +914,7 @@
 - **为什么不入 git**：
   - 调研结果是临时知识源 + URL 引用，本身不是项目内容
   - URL 可能失效（网络小说被删 / 网站下线），git 历史保留无意义
-  - 真正有价值的"调研结论"已经被 writer / outline-planner 融合进章节正文 + chapter_plan，可追溯
+  - 真正有价值的"调研结论"已经被 writer / outline-planner 融合进章节正文 + cluster_blueprint，可追溯
 - **预防**：所有"外部数据缓存"目录（.research_cache / .embedding_cache / ...）都应在 .gitignore，不污染 git 历史
 
 ### L13.4 💡 缓存复用：24 小时内同主题不重复搜
@@ -1010,7 +1010,7 @@
 - **GMC 四要素**：Goal（角色想要什么）+ Motivation（为什么）+ Conflict（什么阻拦）+ Disaster（失败或部分成功）
 - **现象**：AI 容易写"克莱在塔顶值班"这种纯氛围场景——读者觉得"啥也没发生"
 - **修复**：v17.9 `narrative_scanner.py --check gmc` 按场景扫描 4 要素，缺 ≥2 个标记为 "summary 而非 story"
-- **预防**：氛围章/内省章可允许某些场景 GMC 弱化，但应在 chapter_plan.scene_type 显式标记 "internal" / "atmospheric"，否则 scanner 默认按 GMC 检查
+- **预防**：氛围章/内省章可允许某些场景 GMC 弱化，但应在 cluster_blueprint.scene_type 显式标记 "internal" / "atmospheric"，否则 scanner 默认按 GMC 检查
 
 ### L15.2 ⚠️ MRU 段落动机-反应顺序是 AI 最常见破绽
 - **业界标准**：Swain Motivation-Reaction Unit。先写**动机**（外部刺激）→ 再写**反应**（顺序：感觉→本能动作→理性→对话）
@@ -1161,7 +1161,7 @@ writer 写完一章后，**三个 scanner 串行扫描** → judge agent 读三�
   - **2 个安静正确**：repetition / subplot（无误报无漏报）
   - **6 个刷噪音**：gmc（14/16 误报，把"——"分隔小节当独立 scene）/ mru（把恐怖文体"先反应后解释"倒装当错误）/ orphan（把中文分词碎片当物件）/ microten（把慢推恐怖节奏停顿当低张力）/ validate_chapter.UNKNOWN_CHARACTER（分词切出假人名）/ validate_chapter.LONG_MONOLOGUE（把内心独白当台词）
 - **根因**：检测器规则库按"常规多人剧情章"设计，对"单人/低对话氛围章"全面失灵
-- **修复**：v17.11 narrative_scanner 加 `_detect_chapter_mode()` —— chapter_plan.characters ≤1 人 OR 对话占比 <5% → `solo_atmospheric`，对 gmc/mru/microten/orphan 降级为 info（不触发 exit 1）
+- **修复**：v17.11 narrative_scanner 加 `_detect_chapter_mode()` —— cluster_blueprint.characters ≤1 人 OR 对话占比 <5% → `solo_atmospheric`，对 gmc/mru/microten/orphan 降级为 info（不触发 exit 1）
 - **待办（v17.12）**：validate_chapter 的 UNKNOWN_CHARACTER / LONG_MONOLOGUE 同样需要 scene_type 豁免（涉及分词逻辑，改动较大，标记 known issue）
 - **预防**：任何"规则型检测器"上线前必须问"它在 X 章型下会不会失灵"。检测器不是越多越好——**带噪音的检测器会稀释真信号**
 

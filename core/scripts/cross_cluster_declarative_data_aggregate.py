@@ -1,4 +1,4 @@
-"""cross_chapter_declarative_data_scan.py — 声明式数据消费扫描（v19.2 新增）
+"""cross_cluster_declarative_data_aggregate.py — 声明式数据消费扫描（v19.2 新增）
 
 检测 6 类声明式字段是否被消费 / 是否数值停滞 / 是否到期未触发：
 1. RELATIONSHIPS_STAGNANT     - 关系数值连续 >5 章无变化
@@ -8,7 +8,7 @@
 5. SECRET_OVERDUE              - secret.reveal_at_ch <= 当章但 status 还是 hidden
 6. WILL_LEARN_NOT_TRIGGERED    - will_learn.learn_at_ch <= 当章但 knows 没新增
 
-用法：python cross_chapter_declarative_data_scan.py <项目路径> [--last-n 10]
+用法：python cross_cluster_declarative_data_aggregate.py <项目路径> [--last-n 10]
 退出码：0 健康 / 1 advisory / 2 warning
 """
 
@@ -21,6 +21,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -142,27 +152,39 @@ def main():
     # ===== 5. SECRET_OVERDUE =====
     fs_data = load_json(db / "伏笔表.json", {})
     secrets = fs_data.get("secrets", [])
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 读 reveal_at_cluster
+    import re as _re
     overdue_secrets = []
     for s in secrets:
-        reveal_ch = s.get("reveal_at_ch")
+        rc = s.get("reveal_at_cluster")
+        reveal_ch = None
+        if isinstance(rc, str):
+            _m = _re.search(r"(\d+)", rc)
+            reveal_ch = int(_m.group(1)) if _m else None
         if reveal_ch and reveal_ch <= last_ch and s.get("status") == "hidden":
-            overdue_secrets.append({"id": s.get("id"), "reveal_at_ch": reveal_ch, "secret": s.get("secret", "")[:40]})
+            overdue_secrets.append({"id": s.get("id"), "reveal_at_cluster": rc, "secret": s.get("secret", "")[:40]})
     if overdue_secrets:
         findings.append({
             "severity": "warning",
             "code": "SECRET_OVERDUE",
             "metric": {"count": len(overdue_secrets), "samples": overdue_secrets[:3]},
-            "message": f"{len(overdue_secrets)} 条 secret 已到期 reveal_at_ch 但 status 仍 hidden",
-            "suggestion": "writer 在到期章节写 secret_status_changes，将 status 改为 leaked/revealed",
+            "message": f"{len(overdue_secrets)} 条 secret 已到期 reveal_at_cluster 但 status 仍 hidden",
+            "suggestion": "writer 在到期 cluster 写 secret_status_changes，将 status 改为 leaked/revealed",
         })
 
     # ===== 6. WILL_LEARN_NOT_TRIGGERED =====
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 读 learn_at_cluster
     cards = load_json(db / "人物卡.json", {})
     overdue_wl = []
     for c in cards.get("characters", []):
         for wl in c.get("knowledge", {}).get("will_learn", []):
-            if wl.get("learn_at_ch") and wl["learn_at_ch"] <= last_ch:
-                overdue_wl.append({"character": c.get("name") or c.get("id"), "fact": wl.get("fact", "")[:40], "learn_at_ch": wl["learn_at_ch"]})
+            lac = wl.get("learn_at_cluster")
+            learn_ch = None
+            if isinstance(lac, str):
+                _m = _re.search(r"(\d+)", lac)
+                learn_ch = int(_m.group(1)) if _m else None
+            if learn_ch and learn_ch <= last_ch:
+                overdue_wl.append({"character": c.get("name") or c.get("id"), "fact": wl.get("fact", "")[:40], "learn_at_cluster": lac})
     if overdue_wl:
         findings.append({
             "severity": "advisory",

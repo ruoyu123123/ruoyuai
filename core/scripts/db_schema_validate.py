@@ -1,10 +1,10 @@
 """db_schema_validate.py — 13 个核心 JSON schema 校验 + 自动 migrate（v17.5 / P1.1）
 
-修复"数据库 schema 漂移"问题——本次会话被迫手动 migrate 4 个：
+修复"数据库 schema 漂移"问题——常见 migrate：
 - 人物卡 dict→list
-- 章纲摘要 dict→list
-- 伏笔 PR012.due_by null→999
-- 进度.chapter_plan 字段补全
+- 故事块摘要 dict→list
+- 伏笔 PR012.due_by_cluster null→默认
+- 进度.cluster_blueprint 字段补全
 
 每次 save-state 前跑一次。schema 不符合 → 自动 migrate（备份后改）或报错。
 
@@ -44,22 +44,20 @@ SCHEMA_RULES = {
         "required_top_keys": ["schema_version", "promises"],
         "collection_key": "promises",
         "collection_type": list,
-        "item_required_fields": ["id", "title", "plant_ch", "due_by", "tier"],
-        "field_constraints": {
-            "due_by": ("int_or_999", "due_by 不允许 null/None，未到期请填 999"),
-        },
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式
+        "item_required_fields": ["id", "description", "setup_cluster", "tier"],
     },
-    "章纲摘要": {
-        "required_top_keys": ["schema_version", "chapters"],
-        "collection_key": "chapters",
-        "collection_type": list,  # 必须是 list，曾出现 dict 错误
-        "item_required_fields": ["ch", "title"],
+    "故事块摘要": {
+        "required_top_keys": ["schema_version", "clusters"],
+        "collection_key": "clusters",
+        "collection_type": list,
+        "item_required_fields": ["cluster_id", "title"],
     },
     "进度": {
-        "required_top_keys": ["schema_version", "book_title", "current_chapter", "total_chapters_planned"],
-        "collection_key": "chapter_plan",
-        "collection_type": list,
-        "item_required_fields": ["ch", "title", "characters"],
+        "required_top_keys": ["schema_version", "book_title", "current_cluster"],
+        "collection_key": "cluster_blueprint",
+        "collection_type": dict,
+        "item_required_fields": [],  # cluster_blueprint 是 dict（cluster_id → cluster_data）
     },
     "场景规则": {
         "required_top_keys": ["schema_version"],
@@ -71,7 +69,8 @@ SCHEMA_RULES = {
         "required_top_keys": ["schema_version", "entries"],
         "collection_key": "entries",
         "collection_type": list,
-        "item_required_fields": ["id", "ch", "lesson"],
+        # v2 cluster 化（2026-05-28）：observed_in 用 cluster_id list
+        "item_required_fields": ["id", "observed_in", "lesson"],
     },
     "用户偏好": {
         "required_top_keys": ["schema_version", "preferences"],
@@ -101,7 +100,8 @@ SCHEMA_RULES = {
         "required_top_keys": ["schema_version"],
         "collection_key": "world_clock_events",
         "collection_type": list,
-        "item_required_fields": ["ch", "event"],
+        # v2 cluster 化（2026-05-28）：world clock event 用 day/cluster 颗粒
+        "item_required_fields": ["event"],
     },
     "道具": {
         "required_top_keys": ["schema_version", "items"],

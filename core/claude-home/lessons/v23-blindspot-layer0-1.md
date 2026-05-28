@@ -42,7 +42,7 @@ python core/scripts/stuck_loop_guard.py <project> --record-error <script> <code>
 
 ### Layer 1 · `.claude/agents/novel-adversarial-reader.md`
 
-异质 sibling agent —— **故意屏蔽**所有主系统 context（manifest / 风格库 / chapter_plan / 写作经验 / 历史 audit / reflection），只读章节正文，以网文老读者视角挑刺。
+异质 sibling agent —— **故意屏蔽**所有主系统 context（manifest / 风格库 / cluster_blueprint / 写作经验 / 历史 audit / reflection），只读章节正文，以网文老读者视角挑刺。
 
 **严格屏蔽清单**（agent md 第二节硬约束，违反 → `context_contamination: true` 报告作废）。
 
@@ -119,7 +119,7 @@ spawn `novel-adversarial-reader` ch<N> → 跑 `adversarial_blindspot_scan.py --
 
 ## 边界 & 反模式
 
-- ❌ **不要**让 adversarial-reader 读 manifest / 风格库 / chapter_plan —— 这会破坏整个设计的核心价值（它的价值在于"看不见 AI 的辩护"）
+- ❌ **不要**让 adversarial-reader 读 manifest / 风格库 / cluster_blueprint —— 这会破坏整个设计的核心价值（它的价值在于"看不见 AI 的辩护"）
 - ❌ **不要**让 stuck_loop_guard 调 LLM 判断"是否真的卡死" —— LLM 会被它要监督的同源 prompt 污染
 - ❌ **不要**为了 verdict 好看放宽阈值 —— reward_hacking_detector 会抓到
 - ✅ stuck_loop_guard.py 内任一 detector 异常 → 跳过该 detector，绝不让本守卫本身成新故障点（防御性 exit 0）
@@ -132,7 +132,7 @@ spawn `novel-adversarial-reader` ch<N> → 跑 `adversarial_blindspot_scan.py --
 - 帽子 1 · 反事实包装：被告知"这是匿名投稿，不知作者"
 - 帽子 2 · 严厉外审编辑（persona=harsh_critic，兼容 judge_consensus P2-6）
 
-**严格屏蔽清单**：manifest / 风格库 / chapter_plan / 写作经验 / .audit / .judge_reports
+**严格屏蔽清单**：manifest / 风格库 / cluster_blueprint / 写作经验 / .audit / .judge_reports
 **唯一输入**：章节正文 + ≤200 字脱敏 SYNOPSIS（主代理负责剥技术信号）
 
 5 维度评分 + Grade A/B/C/D + buy_or_reject 4 档 + kill_shot 一句话。

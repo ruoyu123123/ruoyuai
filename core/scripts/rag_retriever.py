@@ -102,7 +102,7 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3) -> list[dict]:
     if not chapters:
         return []
 
-    summaries_path = project_root / '_数据库' / '章纲摘要.json'
+    summaries_path = project_root / '_数据库' / '故事块摘要.json'
     summaries = {}
     if summaries_path.exists():
         data = json.loads(summaries_path.read_text(encoding='utf-8'))
@@ -114,7 +114,10 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3) -> list[dict]:
     current_plan = ''
     if plan_path.exists():
         progress = json.loads(plan_path.read_text(encoding='utf-8'))
-        for p in progress.get('chapter_plan', []):
+        _all_scenes = []
+        for cid, cdata in (progress.get('cluster_blueprint', {}) or {}).items():
+            _all_scenes.extend(cdata.get('scene_storyboard', []))
+        for p in _all_scenes:
             if p.get('ch') == current_ch:
                 current_plan = json.dumps(p, ensure_ascii=False)
                 break

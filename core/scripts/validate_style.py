@@ -72,6 +72,31 @@ STRICT_THRESHOLDS = {
     "long_para_per_chapter": {"max": 2},     # 严格：长段每章 ≤ 2
 }
 
+# ============================================================
+# v2 cluster 化阈值（2026-05-28）：scanner 升维 cluster 视野的 11 处阈值比例化
+# 当 env CLUSTER_MODE=1 时启用。比例化原则：
+#   · 字数阈值放大到 cluster 范围（10k-25k）
+#   · 比例阈值放宽（voice 混合 / 仪式独白稀释）
+#   · 长段计数改用比例（按 cluster 段数 × ratio）
+# ============================================================
+CLUSTER_THRESHOLDS = {
+    "dialogue_ratio":        {"min": 0.15, "max": 0.70},  # 仪式/独白稀释 · 下限 40%→15%
+    "para_mean_len":         {"min": 14,   "max": 35},    # cluster 段长容忍 · 上限 30→35
+    "ultra_short_ratio":     {"max": 0.40},
+    "single_sent_ratio":     {"max": 0.85},
+    "onomatopoeia_count":    {"min": 0, "max": 999},      # cluster 视野不强求
+    "ultra_long_sent_count": {"min": 0},
+    "banned_words":          {"max": 0},                  # 不放宽
+    "ai_tags":               {"max": 0},                  # 不放宽
+    "quota_per_word":        {"max": 5},
+    "bracket_settings":      {"min": 0},                  # 蛊真人 voice 不用方括号
+    "comma_period_ratio":    {"min": 0.6, "max": 5.0},    # voice 混合 · 放宽
+    "chapter_words":         {"min": 8000, "max": 30000}, # cluster 健康区间
+    "para_max_chars":        {"warn": 80, "hard_gate": 120, "exception_per_chapter": 1},
+    "single_line_ratio":     {"min": 0.30},               # cluster 多段可容忍
+    "long_para_per_chapter": {"max_ratio": 0.02},         # 比例化: ≤2% 段超 80 字（替代绝对数）
+}
+
 # ── 工具函数 ──────────────────────────────────────────────────
 
 def _find_lines(text: str, pattern: str) -> list[int]:
@@ -307,18 +332,32 @@ def _chk_single_line_ratio(text: str, p: dict, t: dict) -> CheckResult:
 
 
 def _chk_long_para_count(text: str, p: dict, t: dict) -> CheckResult:
-    """长段计数：80-120 字段每章 ≤ target（默认 3，strict 2）。"""
+    """长段计数：80-120 字段每章 ≤ target。
+    v2 cluster 化（2026-05-28）：cluster 视野改比例（max_ratio = 0.02 段超 80 字），
+    绝对数仅 chapter 视野用。"""
     cfg = t.get("long_para_per_chapter", {"max": 3})
     pm = t.get("para_max_chars", {"warn": 80, "hard_gate": 120})
     warn_th, hard_th = pm["warn"], pm["hard_gate"]
-    max_count = cfg["max"]
     lens = _para_cjk_lens(text)
     long_count = sum(1 for n in lens if warn_th < n <= hard_th)
-    vs = f"{long_count} 段 {warn_th}-{hard_th} 字"
-    ts = f"目标 ≤{max_count} 段"
+    total_paras = len(lens) or 1
+
+    # v2 cluster 化：max_ratio 优先（cluster 视野）/ max 绝对数（chapter 视野）
+    if "max_ratio" in cfg:
+        max_ratio = cfg["max_ratio"]
+        max_count = int(total_paras * max_ratio)
+        vs = f"{long_count}/{total_paras} 段 {warn_th}-{hard_th} 字（{long_count/total_paras*100:.1f}%）"
+        ts = f"目标 ≤{max_ratio*100:.0f}%（约 {max_count} 段）"
+        warn_slack = int(total_paras * max_ratio * 1.5)  # 1.5x ratio 为 WARN
+    else:
+        max_count = cfg.get("max", 3)
+        vs = f"{long_count} 段 {warn_th}-{hard_th} 字"
+        ts = f"目标 ≤{max_count} 段"
+        warn_slack = max_count + 2
+
     if long_count <= max_count:
         return CheckResult("长段计数", "PASS", vs, ts)
-    if long_count <= max_count + 2:
+    if long_count <= warn_slack:
         return CheckResult("长段计数", "WARN", vs, ts)
     return CheckResult("长段计数", "FAIL", vs, ts)
 
@@ -405,7 +444,15 @@ def main() -> None:
     if not text.strip():
         print("[FATAL] 文件内容为空", file=sys.stderr); sys.exit(2)
 
-    thresholds = {k: dict(v) for k, v in (STRICT_THRESHOLDS if strict else DEFAULT_THRESHOLDS).items()}
+    # v2 cluster 化（2026-05-28）：CLUSTER_MODE env=1 时用 CLUSTER_THRESHOLDS（比例化）
+    import os as _os
+    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
+    if _cluster_mode:
+        _base = CLUSTER_THRESHOLDS
+        print("[validate_style] CLUSTER_MODE=1 · 用 cluster 视野阈值", file=sys.stderr)
+    else:
+        _base = STRICT_THRESHOLDS if strict else DEFAULT_THRESHOLDS
+    thresholds = {k: dict(v) for k, v in _base.items()}
 
     if style_path is not None:
         if not style_path.exists():

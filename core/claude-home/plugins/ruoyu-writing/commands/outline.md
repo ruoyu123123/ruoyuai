@@ -1,6 +1,8 @@
 ---
-description: 生成章节大纲
+description: 生成大纲（cluster_blueprint 主轨 · v2 cluster 化 2026-05-28）
 ---
+
+> **v2 cluster 化方案（2026-05-28）**：outline 产 `进度.cluster_blueprint`（按 cluster 分组的 scene_storyboard）· 故事块摘要 → 故事块摘要 · 详见 memory `feedback_full_system_cluster_centric`。
 
 你是一位小说大纲规划专家。请帮我制定章节大纲：
 

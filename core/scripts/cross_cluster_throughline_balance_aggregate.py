@@ -1,4 +1,4 @@
-"""cross_chapter_throughline_balance_scan.py — 4 线均衡度扫（CCR3）
+"""cross_cluster_throughline_balance_aggregate.py — 4 线均衡度扫（CCR3）
 
 读 _changes.json.factual.throughline_progress 历史，检测：
 - 某线连续 ≥ 4 章 no_progress（线沉睡告警）
@@ -21,6 +21,16 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 THROUGHLINES = ["OS", "MC", "IC", "RS"]
 

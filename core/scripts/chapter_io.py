@@ -40,10 +40,9 @@ v18 起：正文 → 第NNN章.txt（纯正文），CHANGES → 第NNN章_change
 
 【公共 API】
   路径:   find_chapter_dir / body_path / changes_path / find_body_file
-  读:     read_body / read_changes / parse_legacy_changes
+  读:     read_body / read_changes
   写:     write_body / write_changes
   字数:   count_words（统一口径：非空白字符数）/ count_cjk（纯汉字）
-  迁移:   migrate_legacy_chapter
 """
 
 import json
@@ -116,48 +115,16 @@ def read_body(project_root, ch: int) -> str:
     return _strip_changes(f.read_text(encoding="utf-8"))
 
 
-def parse_legacy_changes(raw_text: str) -> dict:
-    """从旧混合 txt 文本中解析出 {"factual": {...}, "self_eval": {...}}。"""
-    out = {"factual": {}, "self_eval": {}}
-    for sep in CHANGES_SEPARATORS:
-        if sep in raw_text:
-            seg = raw_text.split(sep, 1)[1]
-            for end in END_MARKERS:
-                if end in seg:
-                    seg = seg.split(end, 1)[0]
-                    break
-            seg = seg.split(SELF_EVAL_SEP, 1)[0]
-            try:
-                out["factual"] = json.loads(seg.strip())
-            except json.JSONDecodeError:
-                pass
-            break
-    if SELF_EVAL_SEP in raw_text:
-        seg = raw_text.split(SELF_EVAL_SEP, 1)[1]
-        for end in END_MARKERS:
-            if end in seg:
-                seg = seg.split(end, 1)[0]
-                break
-        try:
-            out["self_eval"] = json.loads(seg.strip())
-        except json.JSONDecodeError:
-            pass
-    return out
-
-
 def read_changes(project_root, ch: int) -> dict:
     """读 CHANGES 数据，返回 {"factual": {...}, "self_eval": {...}}。
-    优先读 _changes.json；不存在则从旧混合 txt 解析（迁移期兼容）。"""
+    v2 cluster 化（2026-05-28）：只读分离的 _changes.json（旧混合 txt 解析已删）。"""
     cp = changes_path(project_root, ch)
     if cp.is_file():
         data = json.loads(cp.read_text(encoding="utf-8"))
         data.setdefault("factual", {})
         data.setdefault("self_eval", {})
         return data
-    f = find_body_file(project_root, ch)
-    if not f:
-        return {"factual": {}, "self_eval": {}}
-    return parse_legacy_changes(f.read_text(encoding="utf-8"))
+    return {"factual": {}, "self_eval": {}}
 
 
 # ============ 写 ============
@@ -196,31 +163,11 @@ def count_cjk(text: str) -> int:
     return len(re.findall(r"[一-鿿㐀-䶿]", text))
 
 
-# ============ 迁移 ============
-
-def migrate_legacy_chapter(project_root, ch: int) -> bool:
-    """把旧的『正文+CHANGES混合』txt 拆成 txt（纯正文）+ _changes.json。
-    返回 True=已迁移，False=无需迁移（已分离 / 文件不存在）。"""
-    f = find_body_file(project_root, ch)
-    if not f:
-        return False
-    raw = f.read_text(encoding="utf-8")
-    if not any(sep in raw for sep in CHANGES_SEPARATORS):
-        return False
-    body = _strip_changes(raw)
-    changes = parse_legacy_changes(raw)
-    write_body(project_root, ch, body)
-    write_changes(project_root, ch, changes)
-    return True
-
+# ============ 工具 ============
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) >= 4 and sys.argv[1] == "migrate":
-        proj, ch = sys.argv[2], int(sys.argv[3])
-        ok = migrate_legacy_chapter(proj, ch)
-        print(f"[migrate] 第{ch}章: {'已拆分为 txt + _changes.json' if ok else '无需迁移'}")
-    elif len(sys.argv) >= 4 and sys.argv[1] == "wordcount":
+    if len(sys.argv) >= 4 and sys.argv[1] == "wordcount":
         proj, ch = sys.argv[2], int(sys.argv[3])
         body = read_body(proj, ch)
         print(f"第{ch}章 正文字数(count_words)={count_words(body)} 纯汉字(count_cjk)={count_cjk(body)}")

@@ -3,7 +3,11 @@
   "version": 1,
   "description": "双层质量校验：Anti-Slop 扫描（机械层正则 + 语义层 semantic_slop_scanner）+ LLM 评估",
   "total_steps": 3,
-  "required_steps": [1, 2, 3],
+  "required_steps": [
+    1,
+    2,
+    3
+  ],
   "optional_steps": [],
   "steps": [
     {
@@ -27,5 +31,6 @@
       "required": true,
       "expected_outputs": []
     }
-  ]
+  ],
+  "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式"
 }

@@ -215,6 +215,33 @@ def detect_transition_chapter(body: str, paragraphs):
 
 # ============ 主入口 ============
 
+def scan_cluster_hook_pacing(paragraphs, n_pseudo_cuts=4):
+    """v2 cluster 视野（2026-05-28）：检测 cluster 内 N-1 个拟切点钩子节奏。
+    splitter 按字数 3500/章硬切 cluster (11k-25k)，故 cluster 内有 N-1 个候选切点。
+    每个切点前 3 段算钩子强度。返回均值 + 最弱点。"""
+    if len(paragraphs) < 5:
+        return {"pseudo_cuts": 0, "scores": [], "mean_score": 0, "min_score": 0}
+    # 按段数等距取 N 个拟切点（避免依赖具体字数，因为段长不均）
+    cuts = []
+    for i in range(1, n_pseudo_cuts + 1):
+        idx = int(len(paragraphs) * i / (n_pseudo_cuts + 1))
+        if idx >= 2:
+            cuts.append(idx)
+    scores = []
+    for cut_idx in cuts:
+        # 切点前 3 段视作"章末"
+        window = paragraphs[max(0, cut_idx-3):cut_idx]
+        s = score_ending_hook(window)
+        scores.append(s.get("score", 0))
+    mean = sum(scores) / len(scores) if scores else 0
+    return {
+        "pseudo_cuts": len(cuts),
+        "scores": scores,
+        "mean_score": round(mean, 1),
+        "min_score": min(scores) if scores else 0,
+    }
+
+
 def scan(project_root: Path, ch: int):
     body = load_chapter_body(project_root, ch)
     if body is None:
@@ -222,21 +249,36 @@ def scan(project_root: Path, ch: int):
     paragraphs = split_paragraphs(body)
     wc = cio.count_words(body)
 
+    # v2 cluster 化：CLUSTER_MODE 下跑拟切点节奏（不跑单章末段）
+    import os as _os
+    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
+
     ending = score_ending_hook(paragraphs)
     positions = scan_hook_positions(paragraphs)
     is_transition, transition_reason = detect_transition_chapter(body, paragraphs)
 
-    # 达标线：章末钩子分 ≥ 4（业界共识：每章须留可量化的钩子）
+    # 达标线
     PASS_THRESHOLD = 4
     weak = ending["score"] < PASS_THRESHOLD
+
+    # v2 cluster 模式：用拟切点均值替换章末单点评估
+    cluster_pacing = None
+    if _cluster_mode:
+        cluster_pacing = scan_cluster_hook_pacing(paragraphs, n_pseudo_cuts=4)
+        # cluster 视野改判：均值 ≥ PASS_THRESHOLD 即放行（不看 cluster 末段）
+        weak = cluster_pacing["mean_score"] < PASS_THRESHOLD
 
     warning = None
     severity = "warning"
     suppressed_reason = None
     if weak:
-        warning = (f"⚠️ 章末钩子强度 {ending['score']}/10 偏弱"
-                   f"（达标线 {PASS_THRESHOLD}）"
-                   f"——命中钩子类型 {ending['hook_types'] or '无'}")
+        if _cluster_mode and cluster_pacing:
+            warning = (f"⚠️ cluster 拟切点钩子均值 {cluster_pacing['mean_score']}/10 偏弱"
+                       f"（达标线 {PASS_THRESHOLD} · {cluster_pacing['pseudo_cuts']} 个候选切点）")
+        else:
+            warning = (f"⚠️ 章末钩子强度 {ending['score']}/10 偏弱"
+                       f"（达标线 {PASS_THRESHOLD}）"
+                       f"——命中钩子类型 {ending['hook_types'] or '无'}")
         if is_transition:
             severity = "info"
             suppressed_reason = f"过渡章豁免 → info：{transition_reason}"
@@ -245,6 +287,7 @@ def scan(project_root: Path, ch: int):
         "schema_version": "1.0",
         "scanner": "hook_strength_scanner",
         "chapter": ch,
+        "cluster_mode": _cluster_mode,
         "word_count": wc,
         "paragraphs_count": len(paragraphs),
         "is_transition_chapter": is_transition,
@@ -253,6 +296,7 @@ def scan(project_root: Path, ch: int):
         "gate_level": "advisory",
         "ending_hook": ending,
         "hook_positions": positions,
+        "cluster_pacing": cluster_pacing,  # v2 cluster 视野拟切点节奏
         "pass_threshold": PASS_THRESHOLD,
         "severity": severity,
         "warning": warning,

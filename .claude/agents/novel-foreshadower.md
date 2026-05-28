@@ -9,7 +9,7 @@ tools: Read, Write
 伏笔 promises[*] 含 `trigger_condition` 字段。判定 payoff 时优先：
 
 1. **形式化匹配** 优先：检查 `trigger_condition.physical_evidence` 字符串是否在本章正文出现（不模糊匹配）
-2. **角色 + 地点匹配**：trigger_condition.character 必须在 chapter_plan.characters 中；location 必须在 chapter_plan.scene_location 或正文中
+2. **角色 + 地点匹配**：trigger_condition.character 必须在 cluster_blueprint.characters 中；location 必须在 cluster_blueprint.scene_location 或正文中
 3. **event_type 匹配**：例如 `object_use` 要求正文有该物件被使用的动作动词
 
 只有所有形式化条件全满足才算"形式化兑现"——否则即使语义上像，也判 advisory 不判 payoff。

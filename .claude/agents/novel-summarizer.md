@@ -38,7 +38,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt 路径>
 
 1. **Read** cluster_draft.txt（整块草稿）
 2. **Read** `_数据库/事件簇.json` 找当前 cluster brief（scope_summary + scene_storyboard + emotion 锚点）
-3. **Read** `_数据库/章纲摘要.json` 了解前 cluster 摘要风格
+3. **Read** `_数据库/故事块摘要.json` 了解前 cluster 摘要风格
 4. 生成 **cluster 级摘要**（300-400 字 · 覆盖整 cluster 主要情节 + 关键转折）+ 关键细节 5-8 条 + 整 cluster 情绪曲线 + 每个 scene 的子摘要（100 字内 × N scene）
 5. **Write** 到 `_数据库/.wal/cluster_NNN_summary.json`
 
@@ -127,7 +127,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt 路径>
 
 ## 硬性纪律
 
-- **不 Write 到 _数据库/章纲摘要.json** — 让调度器合并
+- **不 Write 到 _数据库/故事块摘要.json** — 让调度器合并
 - **不读 / 不改 `_changes.json`** — 你只看正文 txt
 - **不评论文笔** — 那是 Voice-Keeper 的事
 - **不建议修改** — 你只描述现状

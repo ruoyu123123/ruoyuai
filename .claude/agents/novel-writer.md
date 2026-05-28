@@ -38,11 +38,11 @@ MANIFEST: <PROJECT>/_数据库/.manifest/ch_<NNN>.json
 
 - 读 MANIFEST 文件存在性 + JSON 合法性
 - 读 PROJECT/_数据库/.style_directive/ch_<NNN>.json
-- 读 PROJECT/_数据库/进度.json 找当前 cluster_id / chapter_plan
+- 读 PROJECT/_数据库/进度.json 找当前 cluster_id / cluster_blueprint
 - 任一缺失 → return `{ok:false, reason:"missing X"}`
 - **single 模式守护**（v25+）：
-  1. 找 chapter_plan 中 `cluster == 当前 cluster_id` 的全部条目，记为 `cluster_chapters[]`
-  2. 若 `len(cluster_chapters) == 1` 且 `<PROJECT>/_数据库/.allow_single_mode.flag` 不存在 → **fail-fast** return `{ok:false, reason:"single mode deprecated; cluster_<id> only has 1 chapter in chapter_plan; main agent must spawn novel-outline-planner to add ch+1..ch+N placeholders before retrying writer", suggested_fix:"see novel-writer.md '🚫 single 模式已废弃' 段"}`
+  1. 找 cluster_blueprint 中 `cluster == 当前 cluster_id` 的全部条目，记为 `cluster_chapters[]`
+  2. 若 `len(cluster_chapters) == 1` 且 `<PROJECT>/_数据库/.allow_single_mode.flag` 不存在 → **fail-fast** return `{ok:false, reason:"single mode deprecated; cluster_<id> only has 1 chapter in cluster_blueprint; main agent must spawn novel-outline-planner to add ch+1..ch+N placeholders before retrying writer", suggested_fix:"see novel-writer.md '🚫 single 模式已废弃' 段"}`
   3. 若 `len(cluster_chapters) >= 2` → 设 `chapter_start = min(ch)`，`chapter_end = max(ch)`，进入 ECAS 模式
   4. 若 flag 存在 → 强制走 DCAS（最少 2 章，target-cjk 6000-8000），同时在 return 体加 `warning:"single-mode bypass via .allow_single_mode.flag"`
 
@@ -52,12 +52,12 @@ MANIFEST: <PROJECT>/_数据库/.manifest/ch_<NNN>.json
 
 | 模式（语义） | 触发条件 | gen_writer 参数 |
 |---|---|---|
-| **ECAS**（默认 · 故事块） | chapter_plan 含多章 cluster（推荐 · 唯一默认） | `--cluster <id> --chapter-start <X> --chapter-end <Y> --target-cjk 13000-22000` |
-| **DCAS**（双章合一 · 兼容） | chapter_plan 标记 dcas 双章 | `--cluster <id> --chapter-start <X> --chapter-end <X+1> --target-cjk 6000-8000` |
+| **ECAS**（默认 · 故事块） | cluster_blueprint 含多章 cluster（推荐 · 唯一默认） | `--cluster <id> --chapter-start <X> --chapter-end <Y> --target-cjk 13000-22000` |
+| **DCAS**（双章合一 · 兼容） | cluster_blueprint 标记 dcas 双章 | `--cluster <id> --chapter-start <X> --chapter-end <X+1> --target-cjk 6000-8000` |
 
 > 🚫 **single 模式已废弃**（v25+）：单章直写曾作为兜底存在，但实证表明会绕过 cluster 级伏笔/voice/anchor 完整性校验，导致 cluster 内部叙事断层。
 > **当前规则**：
-> - 检测到 chapter_plan 当前 cluster 只有 1 条记录 → **fail-fast** return `{ok:false, reason:"single mode deprecated, cluster_<id> needs ch1-N placeholders (see outline plan-step 3)"}`
+> - 检测到 cluster_blueprint 当前 cluster 只有 1 条记录 → **fail-fast** return `{ok:false, reason:"single mode deprecated, cluster_<id> needs ch1-N placeholders (see outline plan-step 3)"}`
 > - 强制主代理补齐 cluster_001（或当前 cluster）的所有章节占位再 spawn writer
 > - 旁路（仅紧急场景）：项目根 `_数据库/.allow_single_mode.flag` 存在时降级为 DCAS（最少 2 章），仍不允许真正的 single chapter
 > - 来源：用户原话「我要清理掉单章生成的模式，让单章生成没有生存空间」（2026-05-26）
@@ -70,7 +70,7 @@ python core/scripts/gen_writer.py \
   --target-cjk <range>
 ```
 
-gen_writer 内部：读 manifest + style skill + 调研 cache + chapter_plan + 7 项硬铁律 → 组装 prompt → 调当前 active gen-model profile（OpenAI 兼容 `/v1/chat/completions`，stream 模式）→ 失败按 `GEN_MODEL_FALLBACK_CHAIN` 切换 → 写出 `章节/cluster_<id>_draft/cluster_<id>_draft.txt` + `cluster_<id>_changes.json`（**整块草稿**，splitter 后切成单章）。
+gen_writer 内部：读 manifest + style skill + 调研 cache + cluster_blueprint + 7 项硬铁律 → 组装 prompt → 调当前 active gen-model profile（OpenAI 兼容 `/v1/chat/completions`，stream 模式）→ 失败按 `GEN_MODEL_FALLBACK_CHAIN` 切换 → 写出 `章节/cluster_<id>_draft/cluster_<id>_draft.txt` + `cluster_<id>_changes.json`（**整块草稿**，splitter 后切成单章）。
 
 ### Step 3 · 调 chapter-splitter（按需）
 
@@ -148,7 +148,7 @@ python core/scripts/gen_chapter_titles.py \
 ```
 主代理
  │
- ├── spawn novel-outline-planner   （拟 chapter_plan + 走向卡）
+ ├── spawn novel-outline-planner   （拟 cluster_blueprint + 走向卡）
  │      ↓ 写到 _数据库/进度.json
  ├── 调 build_manifest.py           （生成 manifest + style_directive）
  │      ↓

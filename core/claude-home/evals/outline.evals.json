@@ -18,14 +18,14 @@
         "plan_tracker create outline",
         "Step 1 parse_intent：识别题材 / 主角 / 卷数 / 大势",
         "Step 2 generate_volume：生成卷级大势 + 关键节点（不细化逐章）",
-        "Step 3 init_db：写 13 个 _数据库/*.json（人物卡 / 世界观 / 章纲摘要 / 伏笔 / 事件 / etc.）",
+        "Step 3 init_db：写 13 个 _数据库/*.json（人物卡 / 世界观 / 故事块摘要 / 伏笔 / 事件 / etc.）",
         "Step 4 git_init：新建项目独立 git 仓库 + 首次 commit"
       ],
       "expected_artifacts": [
         "workspace/novels/克苏鲁灯塔/_数据库/卷大势.json",
         "workspace/novels/克苏鲁灯塔/_数据库/人物卡.json",
         "workspace/novels/克苏鲁灯塔/_数据库/世界观.json",
-        "workspace/novels/克苏鲁灯塔/_数据库/章纲摘要.json",
+        "workspace/novels/克苏鲁灯塔/_数据库/故事块摘要.json",
         "workspace/novels/克苏鲁灯塔/_数据库/伏笔追踪.json",
         "workspace/novels/克苏鲁灯塔/.git/"
       ],

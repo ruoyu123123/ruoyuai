@@ -1,4 +1,4 @@
-"""cross_chapter_data_consumption_scan.py — v21 数据声明 vs 实际写入对账（CCR1+2+6+11）
+"""cross_cluster_data_consumption_aggregate.py — v21 数据声明 vs 实际写入对账（CCR1+2+6+11）
 
 合并 4 类同型问题（"声明了什么 vs 实际写出来什么"）：
 
@@ -31,6 +31,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -109,9 +119,9 @@ def scan_aspect_continuity(project_root: Path, chapters: list[int]) -> list[dict
                             "character": char_name,
                             "aspect_id": aid,
                             "label": label,
-                            "since_ch": ch - 2,
-                            "current_ch": ch,
-                            "last_addressed_ch": last_addressed,
+                            "since_chapter_physical": ch - 2,
+                            "current_chapter_physical": ch,
+                            "last_addressed_chapter_physical": last_addressed,
                             "suggestion": f"{char_name} aspect「{label}」连续 ≥3 章无呼应，应在动作/触景细节带入",
                         })
                         no_address_streak = 0  # 报后重置避免刷屏

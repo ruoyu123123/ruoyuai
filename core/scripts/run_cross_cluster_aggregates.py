@@ -1,4 +1,4 @@
-"""run_cross_chapter_scans.py — 按 user_preferences.cross_chapter_scan_intensity 选择性跑 scanner（v21 UX6）
+"""run_cross_cluster_aggregates.py — 按 user_preferences.cross_chapter_scan_intensity 选择性跑 scanner（v21 UX6）
 
 代替 save-state plan 中 18 行的 scanner 调用，统一通过本 wrapper：
 - full_18：全部 18 个跨章 scanner（默认）
@@ -6,7 +6,7 @@
 - minimal_5：仅 5 个最关键（continuity/pattern/fate_drift/persona_drift/data_consumption）
 - off：全不跑（紧急快速出稿）
 
-用法：python run_cross_chapter_scans.py <project> --ch <ch>
+用法：python run_cross_cluster_aggregates.py <project> --ch <ch>
 """
 
 from __future__ import annotations
@@ -20,38 +20,38 @@ from pathlib import Path
 # 18 个 scanner 分级（按用户感知重要度）
 SCAN_TIERS = {
     "core_5": [
-        "cross_chapter_continuity_scan",
-        "cross_chapter_pattern_scan",
-        "cross_chapter_fate_drift_scan",
-        "cross_chapter_persona_drift_scan",
-        "cross_chapter_data_consumption_scan",
+        "cross_cluster_continuity_aggregate",
+        "cross_cluster_pattern_aggregate",
+        "cross_cluster_fate_drift_aggregate",
+        "cross_cluster_persona_drift_aggregate",
+        "cross_cluster_data_consumption_aggregate",
     ],
     "core_10_extra": [
-        "cross_chapter_offscreen_scan",
-        "cross_chapter_declarative_data_scan",
-        "cross_chapter_arc_progression_scan",
-        "cross_chapter_throughline_balance_scan",
-        "cross_chapter_foreshadow_rhythm_scan",
+        "cross_cluster_offscreen_aggregate",
+        "cross_cluster_declarative_data_aggregate",
+        "cross_cluster_arc_progression_aggregate",
+        "cross_cluster_throughline_balance_aggregate",
+        "cross_cluster_foreshadow_rhythm_aggregate",
     ],
     "full_18_extra": [
-        "cross_chapter_emotion_pattern_scan",
-        "cross_chapter_character_dynamics_scan",
-        "cross_chapter_world_dynamics_scan",
-        "cross_chapter_judge_quality_scan",
-        "cross_chapter_timeline_item_location_scan",
-        "cross_chapter_meta_quality_scan",
-        "cross_chapter_structure_compliance_scan",
-        "cross_chapter_engagement_metrics_scan",
-        "cross_chapter_ending_diversity_scan",
-        "cross_chapter_scene_pov_diversity_scan",
-        "cross_chapter_relationship_trend_scan",
-        "cross_chapter_will_learn_scan",
+        "cross_cluster_emotion_pattern_aggregate",
+        "cross_cluster_character_dynamics_aggregate",
+        "cross_cluster_world_dynamics_aggregate",
+        "cross_cluster_judge_quality_aggregate",
+        "cross_cluster_timeline_item_location_aggregate",
+        "cross_cluster_meta_quality_aggregate",
+        "cross_cluster_structure_compliance_aggregate",
+        "cross_cluster_engagement_metrics_aggregate",
+        "cross_cluster_ending_diversity_aggregate",
+        "cross_cluster_scene_pov_diversity_aggregate",
+        "cross_cluster_relationship_trend_aggregate",
+        "cross_cluster_will_learn_aggregate",
     ],
 }
 
 # 哪些 scanner 接 --ch 参数（其他用 --last-n 或全自动）
 SCANNERS_WITH_CH = {
-    "cross_chapter_fate_drift_scan",
+    "cross_cluster_fate_drift_aggregate",
 }
 
 
@@ -110,7 +110,7 @@ def main():
         sys.exit(2)
 
     intensity = args.tier if args.tier else get_intensity(project_root)
-    print(f"[run_cross_chapter_scans] ch{args.ch} intensity={intensity}")
+    print(f"[run_cross_cluster_aggregates] ch{args.ch} intensity={intensity}")
 
     if intensity == "off":
         print("[SKIP] user_preferences.cross_chapter_scan_intensity=off")
@@ -133,14 +133,19 @@ def main():
         # 构造 cmd
         if sc in SCANNERS_WITH_CH:
             cmd = [sys.executable, str(sc_path), str(project_root), "--ch", str(args.ch)]
-        elif sc in ("cross_chapter_arc_progression_scan", "cross_chapter_world_dynamics_scan",
-                    "cross_chapter_foreshadow_rhythm_scan", "cross_chapter_will_learn_scan",
-                    "cross_chapter_structure_compliance_scan"):
+        elif sc in ("cross_cluster_arc_progression_aggregate", "cross_cluster_world_dynamics_aggregate",
+                    "cross_cluster_foreshadow_rhythm_aggregate", "cross_cluster_will_learn_aggregate",
+                    "cross_cluster_structure_compliance_aggregate"):
             cmd = [sys.executable, str(sc_path), str(project_root)]
         else:
             cmd = [sys.executable, str(sc_path), str(project_root), "--last-n", str(args.last_n)]
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8")
+            # v2 cluster 化（2026-05-28）：cluster 模式给子进程透传 CLUSTER_MODE=1 env
+            import os as _os
+            _env = None
+            if args.cluster:
+                _env = {**_os.environ, "CLUSTER_MODE": "1", "CLUSTER_ID": args.cluster}
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", env=_env)
             summary["ran"] += 1
             if r.returncode >= 2:
                 summary["errors"].append({"scanner": sc, "exit": r.returncode})

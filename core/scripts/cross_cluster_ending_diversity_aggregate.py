@@ -1,4 +1,4 @@
-"""cross_chapter_ending_diversity_scan.py — ending_type 多样性跨章扫（CCR18）
+"""cross_cluster_ending_diversity_aggregate.py — ending_type 多样性跨章扫（CCR18）
 
 读 _changes.self_eval.applied_style.ending_type（writer 自评章节收束类型），
 检测跨章 ending_type 分布是否单一化。
@@ -23,6 +23,16 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 def load_json(p: Path, default=None):
     if not p.exists():

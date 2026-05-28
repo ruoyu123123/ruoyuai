@@ -77,12 +77,17 @@ def build_state_at_chapter(project_root: Path, target_ch: int) -> dict:
             "locked_facts": c.get("locked_facts", {}),
         }
     # 加载道具初始状态
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 obtained_cluster
     items = load_json(project_root / "_数据库" / "道具.json", {}).get("items", [])
+    import re as _re
     for it in items:
-        if it.get("obtained_ch", 999) <= target_ch:
+        oc = it.get("obtained_cluster", "cluster_999")
+        _m = _re.search(r"(\d+)", oc) if isinstance(oc, str) else None
+        obtained = int(_m.group(1)) if _m else 999
+        if obtained <= target_ch:
             state["items"][it.get("name", "")] = {
                 "holder": it.get("holder", "unknown"),
-                "obtained_at_ch": it.get("obtained_ch"),
+                "obtained_at_cluster": it.get("obtained_cluster"),
                 "type": it.get("type"),
                 "chekhov": it.get("chekhov", False),
             }

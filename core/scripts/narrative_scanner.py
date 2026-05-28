@@ -35,6 +35,11 @@ from collections import Counter
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
 
+# v2 cluster 化（2026-05-28）：CLUSTER_MODE env 感知 · scanner 内部可按 mode 切阈值
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
+
+
 
 # ============ 辅助 ============
 
@@ -582,18 +587,21 @@ def main():
 def detect_chapter_mode(project_root, ch, body, paragraphs) -> str:
     """v17.11：判断章节模式。solo_atmospheric = 单人/低对话氛围章。
 
-    判定：chapter_plan.characters ≤ 1 人 OR 对话占比 < 5%
+    判定：cluster_blueprint.characters ≤ 1 人 OR 对话占比 < 5%
 
     【单一来源约定】（P1-4 起）：本函数是「章节模式」判定的**唯一权威**。
     其他 scanner（如 plot_structure_scanner 的 Kishōtenketsu）必须从此处导入，
     严禁各自复制实现 —— 避免参差。"""
-    # 1) chapter_plan 角色数
+    # 1) cluster_blueprint 角色数
     prog = load_json(project_root / "_数据库" / "进度.json", {}) if 'load_json' in dir() else None
     char_count = None
     try:
         import json as _json
         prog = _json.loads((project_root / "_数据库" / "进度.json").read_text(encoding="utf-8"))
-        for p in prog.get("chapter_plan", []):
+        _all_scenes = []
+        for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+            _all_scenes.extend(cdata.get("scene_storyboard", []))
+        for p in _all_scenes:
             if p.get("ch") == ch:
                 char_count = len(p.get("characters", []))
                 break

@@ -1,0 +1,134 @@
+{
+  "_schema_version": 1,
+  "_doc": "scanner_registry · v2 cluster-centric · 2026-05-28",
+  "_principle": "整个系统为 cluster 服务 · 章节是输出格式 · scanner 全部 cluster 视野",
+  "_layers": {
+    "cluster": "默认主轴 · 在 cluster 草稿层跑（10k-25k CJK · 多场景）",
+    "cross-cluster": "正交独立 · 卷级 / 全书级聚合扫描 · 由 cluster-save-state step 9 触发"
+  },
+
+  "scanners": {
+    "validate_chapter": {
+      "layer": "cluster",
+      "script": "validate_chapter.py",
+      "doc": "cluster 整块硬约束（锁定事实/POV/伏笔/CHANGES）",
+      "issues_emitted": ["CHANGES_MISSING", "UNKNOWN_CHARACTER_DETECTED", "LOCKED_FACT_CONFLICT", "FORESHADOWING_NOT_PAID", "POV_VIOLATION"]
+    },
+    "validate_style": {
+      "layer": "cluster",
+      "script": "validate_style.py",
+      "doc": "v2 升维: 11 处单章阈值改 cluster 比例化",
+      "issues_emitted": [
+        "STYLE_单段超长", "STYLE_长段计数", "STYLE_段落均长",
+        "STYLE_章节字数", "STYLE_对话占比", "STYLE_逗句比",
+        "STYLE_单句成段率", "STYLE_方括号设定", "STYLE_禁用词",
+        "STYLE_AI腔", "STYLE_句末符多句段"
+      ]
+    },
+    "narrative_scanner": {
+      "layer": "cluster",
+      "script": "narrative_scanner.py",
+      "doc": "v2 升维: 段首单调 / repeat phrase / info_dump 跨场景",
+      "issues_emitted": ["NARRATIVE_*", "LONG_MONOLOGUE", "P2_14_info_dump", "P2_16_perspective_shift"]
+    },
+    "plot_structure_scanner": {
+      "layer": "cluster",
+      "script": "plot_structure_scanner.py",
+      "doc": "v2 升维: cluster 内 beat 序列 + arc_phase + subplot 自适应",
+      "first_cluster_tolerance": true,
+      "issues_emitted": ["PLOT_beat", "PLOT_arc", "PLOT_subplot", "PLOT_knowledge", "PLOT_kishotenketsu"]
+    },
+    "hook_strength_scanner": {
+      "layer": "cluster",
+      "script": "hook_strength_scanner.py",
+      "doc": "v2 改造: cluster 内拟切点节奏 + 强度均值（不再单章末段）",
+      "issues_emitted": ["READER_EXP_HOOK_STRENGTH"]
+    },
+    "golden_three_scanner": {
+      "layer": "cluster",
+      "script": "golden_three_scanner.py",
+      "doc": "v2 改造: cluster_001 开场强度（全书唯一一次激活 · cluster 草稿前 1500 CJK）",
+      "only_for_cluster": "cluster_001",
+      "issues_emitted": ["GOLDEN_THREE_*"]
+    },
+    "semantic_slop_scanner": {
+      "layer": "cluster",
+      "script": "semantic_slop_scanner.py",
+      "doc": "cluster 视野跨场景 AI 腔检测",
+      "issues_emitted": ["SEMANTIC_*"]
+    },
+    "narrative_short_sentence_scanner": {
+      "layer": "cluster",
+      "script": "narrative_short_sentence_scanner.py",
+      "doc": "v2 比例化: cluster 视野按比例（不按单章绝对数）",
+      "issues_emitted": ["NARRATIVE_SHORT_SENTENCE_OVERUSE"]
+    },
+    "repeat_noun_density_scanner": {
+      "layer": "cluster",
+      "script": "repeat_noun_density_scanner.py",
+      "doc": "cluster 视野重复名词密度",
+      "issues_emitted": ["REPEAT_NOUN_DENSITY"]
+    },
+
+    "cross_scene_voice_drift": {
+      "layer": "cluster",
+      "script": "cross_scene_voice_drift_scanner.py",
+      "doc": "[Phase 3 新增] 同角色跨场景 voice 漂移",
+      "_new": true,
+      "issues_emitted": ["VOICE_DRIFT_CROSS_SCENE"]
+    },
+    "foreshadowing_handoff": {
+      "layer": "cluster",
+      "script": "foreshadowing_handoff_scanner.py",
+      "doc": "[Phase 3 新增] cluster 内伏笔埋设 + 回收配对",
+      "_new": true,
+      "issues_emitted": ["FORESHADOWING_HANDOFF_*"]
+    },
+    "locked_fact_cross_scene": {
+      "layer": "cluster",
+      "script": "locked_fact_cross_scene_scanner.py",
+      "doc": "[Phase 3 新增] 锁定事实跨场景引用一致性",
+      "_new": true,
+      "issues_emitted": ["LOCKED_FACT_CROSS_SCENE_CONFLICT"]
+    },
+    "pov_consistency": {
+      "layer": "cluster",
+      "script": "pov_consistency_scanner.py",
+      "doc": "[Phase 3 新增] POV 跨场景切换合法性",
+      "_new": true,
+      "issues_emitted": ["POV_CROSS_SCENE_VIOLATION"]
+    },
+
+    "volume_arc_drift": {
+      "layer": "cross-cluster",
+      "script": "volume_arc_drift_scanner.py",
+      "doc": "[Phase 3 新增 cross-cluster] 卷级 ME 触发节奏 + 大势漂移",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["VOLUME_ARC_DRIFT"]
+    }
+  },
+
+  "hard_gate_codes": [
+    "LOCKED_FACT_CONFLICT",
+    "FUTURE_KNOWLEDGE_LEAK",
+    "FORESHADOWING_NOT_PAID",
+    "SECRET_NOT_REVEALED",
+    "UNKNOWN_CHARACTER_DETECTED",
+    "CHANGES_MISSING",
+    "MANIFEST_MISSING",
+    "FILE_NOT_FOUND",
+    "ITEM_HOLDER_ABSENT",
+    "ITEM_NOT_YET_INTRODUCED",
+    "PROPAGATION_DEBT_CREATED",
+    "STYLE_单段超长"
+  ],
+
+  "cluster_001_tolerance": {
+    "_doc": "cluster_001 是首块 · Opening Image · 副线未开 · arc 才起步 · 这些指标在 cluster_001 自动宽容",
+    "PLOT_subplot": "全宽容（首块副线未启动属设计）",
+    "PLOT_arc": "宽容到 cluster_005 前（Lie/Want/Need/Truth 四段在前 5 cluster 内陆续建立）",
+    "PLOT_beat": "首 beat 唯 Opening Image · Final Image 在卷尾",
+    "PLOT_knowledge": "asymmetry 容忍（secrets epistemic_class 多为延迟揭露）"
+  }
+}

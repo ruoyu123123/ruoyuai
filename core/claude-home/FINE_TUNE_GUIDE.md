@@ -84,7 +84,7 @@ dpo_trainer = DPOTrainer(
 |---|---|---|
 | 章节正文 | `章节/第NNN章/第NNN章.txt` | SFT 完成示例 |
 | validator-repair 修复痕迹 | `章节/第NNN章/第NNN章.repair.json` | DPO 偏好对 |
-| 章纲摘要 judge_reports | `_数据库/章纲摘要.json` | grade 标签 |
+| 故事块摘要 judge_reports | `_数据库/故事块摘要.json` | grade 标签 |
 | 风格蒸馏 | `_数据库/作者风格.json` | system prompt + golden_passages |
 | 用户选稿历史 | git log + 用户走向卡选择 | RLHF / DPO 弱信号 |
 

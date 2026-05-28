@@ -1,4 +1,4 @@
-"""cross_chapter_pattern_scan.py — 跨章模式扫描（v19 新增）
+"""cross_cluster_pattern_aggregate.py — 跨章模式扫描（v19 新增）
 
 补 style_drift_scan 的盲区：分布均衡类问题。
 
@@ -21,7 +21,7 @@
 - 集中度: top1 段首词 > 35% 即告警
 
 用法：
-    python cross_chapter_pattern_scan.py <项目路径> [--protagonist 陆衍] [--last-n 10]
+    python cross_cluster_pattern_aggregate.py <项目路径> [--protagonist 陆衍] [--last-n 10]
 
 退出码:
     0 = 健康
@@ -40,6 +40,16 @@ from datetime import datetime
 from pathlib import Path
 from statistics import mean, pstdev
 
+
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 # ===== 通用工具 =====
 
@@ -893,7 +903,7 @@ def main():
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 终端打印
-    print(f"[cross_chapter_pattern_scan] 主角={protagonist} 扫描章节={[ch for ch, _ in chapters]}")
+    print(f"[cross_cluster_pattern_aggregate] 主角={protagonist} 扫描章节={[ch for ch, _ in chapters]}")
     print(f"  catchphrase 跨章合计: {dict(catchphrase_totals)}")
     print(f"  段首{protagonist} 各章: {[d['para_protagonist_start'] for d in per_chapter.values()]}")
     print(f"  dialogue tag 各章: {[d['dialogue_tag'] for d in per_chapter.values()]}")

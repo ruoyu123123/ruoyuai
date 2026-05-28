@@ -164,12 +164,27 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ## 🧭 检测体系顾问制
 
-检测工具（`validate_style` / `narrative_scanner` / `plot_structure_scanner` / `pacing` / `emotion` / `hook_strength` / `golden_three` / `validate_chapter` 等）是**顾问**非门禁/法官，输出**「待裁决项」不是判决**。每条 issue 带 `gate_level`：
+> **v2 cluster 单层架构（2026-05-28）**：scanner 全部升维到 cluster 视野 · chapter 不是检测单位 · 切章是纯格式输出 0 质检 · waiver 截断阈值从 100 提到 300。详见 `workspace/_temp_research/system_redesign_detection_layer.md`。
+
+检测工具（`validate_style` / `narrative_scanner` / `plot_structure_scanner` / `hook_strength`（拟切点节奏）/ `golden_three`（仅 cluster_001 开场）/ `validate_chapter` / `semantic_slop` / `narrative_short_sentence` / `repeat_noun_density` + 4 个新 cluster-only scanner: `cross_scene_voice_drift` / `foreshadowing_handoff` / `locked_fact_cross_scene` / `pov_consistency`）是**顾问**非门禁/法官，输出**「待裁决项」不是判决**。每条 issue 带 `gate_level`：
 
 | gate_level | 含义 | 处理 |
 |---|---|---|
-| `advisory` | 风格/工艺/读者体验类 | 写作 agent 有理由可豁免（理由 < 100 字、具体到本章场景）|
+| `advisory` | 风格/工艺/读者体验类 | 写作 agent 有理由可豁免（理由 < 300 字、具体到本 cluster 场景）|
 | `hard_gate` | 一致性 + 文件契约破损 | **不可豁免** |
+
+### 检测层架构（v2 cluster 单层）
+
+```
+┌─ cluster 草稿层（10k-25k CJK）★ 唯一检测层
+│   · 13 个 cluster 视野 scanner 并行跑（CLUSTER_MODE=1 env）
+│   · 跨场景一致性 / cluster 视野指标
+│   · 修复都在 cluster 草稿上做
+└─ splitter 切章 → chapter 物理文件 → ❌ 不再被任何 scanner 看
+   ↓
+   cross-cluster 层（故事块摘要.json · 由 cluster-save-state step 9 触发）
+   · volume_arc_drift 等 cross-cluster aggregator
+```
 
 ### hard_gate 不可豁免清单（12 code · 权威定义见 STRUCTURE.md 第十一节）
 

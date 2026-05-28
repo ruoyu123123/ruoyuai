@@ -50,7 +50,12 @@ def save_json(p: Path, data: dict):
 def collect_card_choices(project_root: Path) -> dict:
     """收集走向卡用户选择历史"""
     progress = load_json(project_root / "_数据库" / "进度.json", {})
-    plan = progress.get("chapter_plan", {}) or {}
+    plan = {}
+    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        for sb in cdata.get("scene_storyboard", []):
+            ch = sb.get("ch")
+            if ch:
+                plan[str(ch)] = sb
     choices = Counter()
     for ch_key, ch_data in plan.items() if isinstance(plan, dict) else []:
         if isinstance(ch_data, dict):

@@ -232,7 +232,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --output "_数据库/.
 
 1. **加载风格基线**：
    - Read `_数据库/人物卡.json`，提取各角色的 `voice_pack.style_samples`
-   - Read `_数据库/章纲摘要.json`，获取前3章的 `mood` 字段作为风格参考
+   - Read `_数据库/故事块摘要.json`，获取前3章的 `mood` 字段作为风格参考
 
 2. **逐项比对**：
    - **角色对话风格**：检查每个角色的对话是否符合其 style_samples 的模式

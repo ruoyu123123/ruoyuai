@@ -1,12 +1,12 @@
-"""cross_chapter_scene_pov_diversity_scan.py — scene_type + POV 多样性跨章扫（CCR19）
+"""cross_cluster_scene_pov_diversity_aggregate.py — scene_type + POV 多样性跨章扫（CCR19）
 
 A. SCENE_TYPE_DIVERSITY
-   读 _数据库/章纲摘要.json[ch].scene_type
+   读 _数据库/故事块摘要.json[ch].scene_type
    - SCENE_TYPE_RUN：连续 ≥ 4 章同 scene_type（如全办公室对话）
    - SCENE_TYPE_LOW_DIVERSITY：近 N 章 ≤ 2 种 scene_type
 
 B. POV_ROTATION
-   读 章纲摘要.json[ch].characters 取首角色 = 本章主 POV
+   读 故事块摘要.json[ch].characters 取首角色 = 本章主 POV
    - POV_LOCKED：≥ 8 章连续同一 POV（缺角色切换）
    - POV_OVERCONCENTRATED：近 N 章主 POV 分布 >85% 是同一角色
 
@@ -24,6 +24,16 @@ from datetime import datetime
 from pathlib import Path
 
 
+
+# ============================================================
+# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
+# 本 scanner 标记为「待升维 cross_cluster_aggregate」
+# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
+# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
+# ============================================================
+import os as _os
+IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -40,14 +50,16 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    summary_path = project_root / "_数据库" / "章纲摘要.json"
-    if not summary_path.exists():
-        print("[SKIP] 章纲摘要.json 不存在")
-        sys.exit(0)
-    summary = load_json(summary_path, {})
-    plan = summary.get("chapter_plan", {}) or {}
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    progress = load_json(project_root / "_数据库" / "进度.json", {})
+    plan = {}
+    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        for sb in cdata.get("scene_storyboard", []):
+            ch = sb.get("ch")
+            if ch:
+                plan[str(ch)] = sb
     if not plan:
-        print("[SKIP] chapter_plan 为空")
+        print("[SKIP] cluster_blueprint 为空")
         sys.exit(0)
 
     # 已写章节

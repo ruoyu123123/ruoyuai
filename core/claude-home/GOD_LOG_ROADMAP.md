@@ -72,7 +72,7 @@ novel-writer:
     cascade_risk: MEDIUM（audit_hub 检查 hard_gate 不可豁免，但 advisory 全收）
 
 novel-summarizer:
-  - 章纲摘要 → 被 outline-planner / RAG 消费
+  - 故事块摘要 → 被 outline-planner / RAG 消费
     cascade_risk: HIGH（无人验证摘要 vs 正文是否一致 → 已被 CCR15 cover）
 ```
 

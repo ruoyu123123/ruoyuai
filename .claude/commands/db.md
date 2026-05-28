@@ -16,7 +16,7 @@ $ARGUMENTS
 - `/db 状态` — 显示所有数据库文件的概览（文件大小、条目数、最后更新时间）
 - `/db 角色` — 列出所有角色及其当前状态
 - `/db 伏笔` — 列出所有伏笔及其回收状态
-- `/db 进度` — 显示写作进度和 chapter_plan
+- `/db 进度` — 显示写作进度和 cluster_blueprint
 - `/db 经验` — 显示写作经验库内容
 - `/db 风格` — 显示当前使用的作者风格摘要
 - `/db 地图` — 显示世界地图概览
@@ -45,8 +45,8 @@ $ARGUMENTS
 | 人物卡.json | 角色档案 | voice_pack, locked_facts, knowledge, growth_arc |
 | 世界观.json | 设定+关键词触发 | entries, keywords, priority |
 | 伏笔表.json | 伏笔追踪 | planted_ch, due_by, resolved |
-| 章纲摘要.json | 章节摘要 | summary, emotion_value, anchors |
-| 进度.json | 写作进度 | chapter_plan, completed, current |
+| 故事块摘要.json | 章节摘要 | summary, emotion_value, anchors |
+| 进度.json | 写作进度 | cluster_blueprint, completed, current |
 | 场景规则.json | 场景写作规则 | scene_types |
 | 写作经验.json | Learning Loop | success_patterns, failure_patterns |
 | 用户偏好.json | 用户口味 | style/content/workflow preferences |

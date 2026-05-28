@@ -23,7 +23,7 @@ description: 生成章节大纲
 
 **保持 Claude 处理的部分**：
 - 卷骨架结构（卷数 / 章节范围 / event prerequisites 关系）
-- chapter_plan 的 anchors / try_fail / info_gain / threads_advance 等结构字段
+- cluster_blueprint 的 anchors / try_fail / info_gain / threads_advance 等结构字段
 - 34 个核心子系统 JSON 初始化（plan_tracker step 3）
 
 **当前 active gen-model**：`python core/scripts/gen_model.py show`。
@@ -103,7 +103,7 @@ STEP: <当前步骤号>
 | 3 | 角色摘要 | 每个主角的：名字/目标/动机/冲突/顿悟/一段话概要 |
 | 4 | 一页大纲 | 每段话扩展为一段，约1页 |
 | 5 | 四页大纲 | 每段扩展为一页，约4页 |
-| 6 | 逐章展开 | 每章一行概要→完整chapter_plan |
+| 6 | 逐章展开 | 每章一行概要→完整cluster_blueprint |
 
 **用户选"雪花法"时，引导用户从第1步开始逐步扩展，不一次性生成完整大纲。**
 
@@ -321,12 +321,12 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
         "knows": ["该角色知道的信息列表"],
         "doesnt_know": ["该角色不知道的关键信息"],
         "will_learn": [
-          {"fact": "将会知道的信息", "learn_at_ch": 7, "how": "被主角告知"}
+          {"fact": "将会知道的信息", "learn_at_cluster": 7, "how": "被主角告知"}
         ],
         "_knowledge_state_v19_6": "G7 三层视角隔离 + 认识论控制（可选字段，writer 按 POV 角色过滤上下文）",
         "knowledge_state": [
-          {"fact_id": "fact_001", "level": "亲见", "since_ch": 1, "_doc": "level 四态：亲见/听说/猜测/不知道"},
-          {"fact_id": "sc_001", "level": "不知道", "since_ch": null}
+          {"fact_id": "fact_001", "level": "亲见", "since_cluster": 1, "_doc": "level 四态：亲见/听说/猜测/不知道"},
+          {"fact_id": "sc_001", "level": "不知道", "since_cluster": null}
         ]
       },
       "offscreen": {
@@ -340,7 +340,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
       "decision_patterns": [],
       "arc": "",
       "status": "活跃",
-      "first_appear_ch": 1
+      "first_appear_cluster": 1
     }
   ]
 }
@@ -384,7 +384,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
    - **promises**（传统伏笔）：埋设/回收机制，含 Tier 分级
      ```json
      {
-       "id": "fs_001", "setup_ch": 3,
+       "id": "fs_001", "setup_cluster": 3,
        "description": "主角腰间的玉佩",
        "tier": 1, "due_by": 15, "resolved": false,
        "trigger_condition": {
@@ -413,16 +413,16 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
      - 后续章节中该角色的行为需要校验是否违背
    - **secrets**（秘密揭露追踪）：不能提前泄露的剧情秘密
      ```json
-     {"id": "sc_001", "secret": "主角是穿越者", "established_ch": 1, "reveal_at_ch": 20, "known_by": ["主角"], "status": "hidden", "epistemic_class": "永不明确"}
+     {"id": "sc_001", "secret": "主角是穿越者", "established_cluster": 1, "reveal_at_cluster": 20, "known_by": ["主角"], "status": "hidden", "epistemic_class": "永不明确"}
      ```
      - status: hidden/leaked/revealed
      - known_by 更新时自动检查是否有人意外知晓
      - **epistemic_class 四级密级**：`公开` / `隐藏` / `延迟` / `永不明确`
        - 公开：所有 POV 角色都能感知（如背景设定）
        - 隐藏：仅 known_by 列表内角色能感知（默认）
-       - 延迟：知道但 N 章内不能透露（writer 必须等到 reveal_at_ch）
+       - 延迟：知道但 N 章内不能透露（writer 必须等到 reveal_at_cluster）
        - 永不明确：作者从不直接揭示，靠读者自己拼图
-5. Write `_数据库/章纲摘要.json` — 初始化 `{"chapters": []}`
+5. Write `_数据库/故事块摘要.json` — 初始化 `{"chapters": []}`
 6. Write `_数据库/进度.json` — 初始化进度，结构如下：
 ```json
 {
@@ -448,7 +448,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
       "ending_state": "本卷末尾状态"
     }
   ],
-  "chapter_plan": [
+  "cluster_blueprint": [
     {"ch": 1, "vol": 1, "title": "章节标题", "characters": ["角色A", "角色B"], "key_events": ["事件1", "事件2"], "scene_type": ["日常", "悬疑"], "emotion": {"value": 6, "trend": "↘↗", "anchors": {"hook": "开头钩子描述", "conflict": "中段冲突描述", "climax": "高潮/反转描述", "cliffhanger": "章末悬念描述"}}, "goal": "本章核心目标", "turning_point": "关键转折", "threads_advance": ["线索ID"], "try_fail": "尝试X→失败Y→适应Z", "info_gain": "向读者释放的新信息", "payoff": "兑现的伏笔(可选)", "time_hint": "故事时间"},
     {"ch": 2, "vol": 1, "title": "章节标题", "characters": ["角色A", "角色C"], "key_events": ["事件3", "事件4"], "scene_type": ["战斗", "转折"], "emotion": {"value": -3, "trend": "↘", "anchors": {"hook": "开头钩子描述", "conflict": "中段冲突描述", "climax": "高潮/反转描述", "cliffhanger": "章末悬念描述"}}, "goal": "本章核心目标", "turning_point": "关键转折", "threads_advance": ["线索ID"], "try_fail": "尝试-失败-适应", "info_gain": "新信息释放", "payoff": null, "time_hint": "故事时间"}
   ],
@@ -460,10 +460,10 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
    - `volumes`：分卷层（仅在预估 >= 20 章时生成，短篇直接跳过 volumes 字段）
    - `volume_arc`：每卷的人物成长弧线（起承转），写作时注入到章节prompt，确保章节服务于卷级目标
    - `key_milestones`：卷级关键事件，用于长距召回
-   - `chapter_plan` 从大纲中提取，每章记录出场角色、关键事件和场景类型
+   - `cluster_blueprint` 从大纲中提取，每章记录出场角色、关键事件和场景类型
    - 每章关联到所属卷（`vol` 字段），用于卷级一致性检查
    - `scene_type` 标注本章主要场景类型（可多选），用于场景规则注入
-   - 后续 write-chapter 根据 `chapter_plan[ch].characters` 按需加载人物卡
+   - 后续 write-chapter 根据 `cluster_blueprint[ch].characters` 按需加载人物卡
 7. Write `_数据库/场景规则.json` — 初始化场景类型对应的写作规则
 ```json
 {
@@ -643,11 +643,11 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3
 
 # 大纲完成后的 Git 提交
 
-当大纲生成完成（进度.json 的 volumes 和 chapter_plan 已写入）后，立即提交：
+当大纲生成完成（进度.json 的 volumes 和 cluster_blueprint 已写入）后，立即提交：
 
 ```bash
 if command -v git >/dev/null 2>&1 && [ -d "小说_书名/.git" ]; then
-  git -C "小说_书名" add _数据库/进度.json _数据库/章纲摘要.json _数据库/伏笔表.json _数据库/人物卡.json _数据库/世界观.json _数据库/地图.json _数据库/关系.json _数据库/事件表.json _数据库/时间线.json _数据库/道具.json _数据库/场景规则.json _数据库/写作经验.json _数据库/用户偏好.json
+  git -C "小说_书名" add _数据库/进度.json _数据库/故事块摘要.json _数据库/伏笔表.json _数据库/人物卡.json _数据库/世界观.json _数据库/地图.json _数据库/关系.json _数据库/事件表.json _数据库/时间线.json _数据库/道具.json _数据库/场景规则.json _数据库/写作经验.json _数据库/用户偏好.json
   # 如有作者风格文件，也一起纳入
   [ -f "小说_书名/_数据库/作者风格.json" ] && git -C "小说_书名" add _数据库/作者风格.json
   git -C "小说_书名" commit -m "feat: 生成大纲（N 章 / X 卷）" 2>&1 | tail -1
@@ -685,9 +685,9 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 # 🌊 模式选择（v20 涌现叙事 新增）
 
-`/outline` 接受 `--mode` 参数控制 chapter_plan 的预定程度：
+`/outline` 接受 `--mode` 参数控制 cluster_blueprint 的预定程度：
 
-| mode | chapter_plan 粒度 | 适合 |
+| mode | cluster_blueprint 粒度 | 适合 |
 |---|---|---|
 | `strict`（默认 · v19）| 全 N 章逐章 title/turning_point/key_events | 短篇/已完整构思/不会跑偏的故事 |
 | **`fluid`（v20 新增）** | 仅卷级大势 + 大事件池 | 长篇/会被剧情涌现影响/需抗偏离 |
@@ -697,7 +697,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 启用 `--mode fluid` 时：
 
-1. **不生成** 逐章 chapter_plan（chapter_plan = []）
+1. **不生成** 逐章 cluster_blueprint（cluster_blueprint = []）
 2. **生成 `_数据库/大势卡.json`**——大事件池（major_events[]）
    - 每个大事件含 `prerequisites` + `expected_window_after` + `physical_evidence`
    - 不指定章号，由 fate_engine.py 按条件涌现触发

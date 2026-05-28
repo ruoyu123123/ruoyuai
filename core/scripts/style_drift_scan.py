@@ -110,7 +110,7 @@ def check_strategy_violations(freq: dict, anchor_strategy: list[dict]) -> list[d
 
 
 def scan_opening_types_distribution(chapters: list[tuple[int, Path]], summaries: list[dict]) -> dict:
-    """对照章纲摘要里的 applied_style.opening_type，看实际分布 vs 蒸馏分布。"""
+    """对照故事块摘要里的 applied_style.opening_type，看实际分布 vs 蒸馏分布。"""
     ch_to_opening = {}
     for s in summaries:
         ch = s.get("ch")
@@ -142,7 +142,7 @@ def main():
     anchor_strategy = (
         style.get("cross_chapter_diversity", {}).get("env_anchor_high_risk_elements", [])
     )
-    summaries = load_json(db / "章纲摘要.json", {}).get("chapters", [])
+    summaries = load_json(db / "故事块摘要.json", {}).get("chapters", [])
 
     chapters = find_chapter_files(project_root)
     if not chapters:

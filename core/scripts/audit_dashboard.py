@@ -4,7 +4,7 @@
 - _数据库/.audit/ch_NNN_audit.json           ← audit_hub 单章
 - _数据库/.cross_chapter_scan/*.json         ← 4 个跨章扫描器
 - _数据库/.judge_reports/ch_NNN_*.json       ← 5 类 judge 报告
-- _数据库/章纲摘要.json[ch].truth_check     ← writer 撒谎检测
+- _数据库/故事块摘要.json[ch].truth_check     ← writer 撒谎检测
 - _数据库/写作经验.json._recurrence_tracker ← learning_loop 复发追踪
 
 输出：

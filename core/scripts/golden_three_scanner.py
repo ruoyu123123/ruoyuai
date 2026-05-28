@@ -271,8 +271,30 @@ GOLDEN_CHECKS = ["first_sentence_conflict", "protagonist_onstage",
 
 
 def scan(project_root: Path, ch: int):
-    # 仅 ch1-3 激活
-    if ch > 3 or ch < 1:
+    # v2 cluster 化（2026-05-28）：
+    # · chapter 视野：仅 ch1-3 激活（旧行为）
+    # · cluster 视野：仅 cluster_001 草稿激活（虚拟 ch=9000 + cluster_id=001 触发）
+    import os as _os
+    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
+
+    if _cluster_mode:
+        # cluster 视野：检测 cluster 草稿前 1500 CJK 强冲突开场
+        # 仅 cluster_001 激活（其他 cluster 走 linear narrative_mode 不评开场）
+        # 通过 cluster_id env 区分（暂用 ch==9000 + 自动激活）
+        if ch != 9000:
+            # 非 cluster 模式虚拟章号 → 跳过
+            return {
+                "schema_version": "1.0",
+                "scanner": "golden_three_scanner",
+                "chapter": ch,
+                "cluster_mode": True,
+                "status": "n/a",
+                "gate_level": "advisory",
+                "note": "cluster 模式仅检测 cluster_001 草稿（虚拟 ch=9000）",
+                "warning": None,
+            }
+        # cluster_001 草稿激活：检测前 1500 CJK 区段
+    elif ch > 3 or ch < 1:
         return {
             "schema_version": "1.0",
             "scanner": "golden_three_scanner",

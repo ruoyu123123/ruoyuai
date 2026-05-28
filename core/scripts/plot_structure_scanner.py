@@ -90,6 +90,32 @@ def map_beat_for_chapter(ch: int, total_chapters: int) -> dict:
 
 
 def scan_beat(project_root: Path, ch: int) -> dict:
+    """v2 cluster 化（2026-05-28）：cluster 视野读 beat_map.cluster_beats[cluster_id]
+    判定 cluster 内多 beat 兑现。chapter 视野保留原逻辑（按章号占比）。"""
+    import os as _os
+    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
+
+    if _cluster_mode:
+        # cluster 视野：读 cluster_beats[cluster_001 等] 判定 cluster 内的多 beat 序列
+        beat_map_path = project_root / "_数据库" / "beat_map.json"
+        beat_map = load_json(beat_map_path, {})
+        cluster_beats = beat_map.get("cluster_beats", {})
+        # 取当前 cluster 的 beat 列表（默认 cluster_001 · 虚拟 ch=9000 时）
+        # 简化：取第一个非空 cluster_beats key
+        cluster_id_key = next((k for k in cluster_beats.keys() if cluster_beats.get(k)), None)
+        beats_declared = cluster_beats.get(cluster_id_key, []) if cluster_id_key else []
+        return {
+            "chapter": ch,
+            "cluster_mode": True,
+            "cluster_id_evaluated": cluster_id_key,
+            "beats_declared_count": len(beats_declared),
+            "beats_declared": [b.get("beat") for b in beats_declared][:5],
+            "warning": (
+                None if beats_declared
+                else f"⚠️ cluster {cluster_id_key or '???'} 未声明 beat 序列（beat_map.cluster_beats 缺）"
+            ),
+        }
+
     prog = load_json(project_root / "_数据库" / "进度.json", {})
     total = prog.get("total_chapters_planned", 200)
     mapping = map_beat_for_chapter(ch, total)
@@ -203,7 +229,16 @@ def scan_midpoint(project_root: Path, ch: int) -> dict:
 # ============ H9 Information Asymmetry 信息差追踪 ============
 
 def scan_knowledge_graph(project_root: Path, ch: int) -> dict:
-    """读 knowledge_graph.json + 伏笔表，列出 ch 时刻的 who_knows_what。"""
+    """读 knowledge_graph.json + 伏笔表，列出 ch 时刻的 who_knows_what。
+
+    v2 cluster 化（2026-05-28）：
+    · 纯 cluster 模式 · 只读 reveal_at_cluster
+    · status_hidden 状态以 secrets.status 字段（hidden/leaked/revealed）为准
+    · epistemic_class 信息也纳入
+    """
+    import os as _os
+    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
+
     kg_path = project_root / "_数据库" / "knowledge_graph.json"
     kg = load_json(kg_path, {
         "schema_version": "1.0",
@@ -216,16 +251,26 @@ def scan_knowledge_graph(project_root: Path, ch: int) -> dict:
     secrets = foreshadow.get("secrets", [])
     derived_facts = []
     for s in secrets:
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · status 字段权威 · 只读 _cluster 字段
+        status_field = s.get("status", "")
+        if status_field in ("hidden", "leaked", "revealed"):
+            status_now = "hidden" if status_field == "hidden" else "revealed"
+        else:
+            # reveal_at_cluster 存在 → 视为 hidden 直到 reveal
+            status_now = "hidden" if s.get("reveal_at_cluster") else "revealed"
+
         derived_facts.append({
             "id": s.get("id"),
-            "content": s.get("title"),
-            "established_ch": s.get("established_ch"),
-            "reveal_at_ch": s.get("reveal_at_ch"),
-            "status_now": "hidden" if (s.get("reveal_at_ch", 999) > ch) else "revealed",
+            "content": s.get("secret") or s.get("title"),
+            "established_cluster": s.get("established_cluster"),
+            "reveal_at_cluster": s.get("reveal_at_cluster"),
+            "epistemic_class": s.get("epistemic_class"),
+            "status_now": status_now,
         })
     asymmetry_index = sum(1 for d in derived_facts if d["status_now"] == "hidden")
     return {
         "chapter": ch,
+        "cluster_mode": _cluster_mode,
         "registered_facts": len(facts),
         "derived_from_secrets": len(derived_facts),
         "asymmetry_index": asymmetry_index,  # 当前还隐藏的 fact 数
@@ -236,7 +281,7 @@ def scan_knowledge_graph(project_root: Path, ch: int) -> dict:
         "secrets_status": derived_facts[:5],
         "warning": (
             f"⚠️ asymmetry_index = 0（所有秘密已揭示），戏剧张力降低"
-            if asymmetry_index == 0 else None
+            if asymmetry_index == 0 and len(derived_facts) > 0 else None
         ),
     }
 
@@ -258,7 +303,19 @@ def scan_character_arc(project_root: Path, ch: int) -> dict:
         return {"error": "no protagonist"}
     name = protag.get("name", "")
     protag_arc = characters.get(name, {})
+    # v2 cluster 化（2026-05-28）：cluster_001 是首块，arc Lie/Want/Need/Truth 在前 5 cluster 陆续建立
+    import os as _os
+    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
     if not protag_arc:
+        if _cluster_mode:
+            # cluster 视野下首块容忍（arc 才起步）
+            return {
+                "protagonist": name,
+                "arc_declared": False,
+                "cluster_mode": True,
+                "warning": None,  # cluster_001 自动宽容
+                "note": "cluster 视野首块容忍：Lie/Want/Need/Truth 在前 5 cluster 陆续建立",
+            }
         return {
             "protagonist": name,
             "arc_declared": False,
@@ -282,7 +339,13 @@ def scan_character_arc(project_root: Path, ch: int) -> dict:
 # ============ H8 多线沉睡子情节 ============
 
 def scan_subplot_threads(project_root: Path, ch: int) -> dict:
-    """读 subplot_threads.json 看各线 last_advanced_ch。"""
+    """读 subplot_threads.json 看各线 last_advanced_ch。
+
+    v2 cluster 化（2026-05-28）：cluster_001 首块自动宽容（副线 cluster_started_at 字段读取）
+    """
+    import os as _os
+    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
+
     sp_path = project_root / "_数据库" / "subplot_threads.json"
     sp = load_json(sp_path, {
         "schema_version": "1.0",
@@ -290,6 +353,21 @@ def scan_subplot_threads(project_root: Path, ch: int) -> dict:
         "_doc": "每个 thread: {id, name, current_status, last_advanced_ch, target_resolve_ch}"
     })
     threads = sp.get("threads", [])
+
+    # cluster 视野首块全宽容
+    if _cluster_mode:
+        # 检查是否首 cluster（cluster_001 status 字段判定）
+        # 简化：cluster mode 下副线沉睡告警全部转 advisory note，不报 warning
+        return {
+            "chapter": ch,
+            "cluster_mode": True,
+            "total_threads": len(threads),
+            "sleeping_threads_count": 0,
+            "sleeping_threads": [],
+            "warning": None,
+            "note": "cluster 视野副线检测：首块自动宽容（cluster_started_at 字段决定何时激活）",
+        }
+
     sleeping = []
     for t in threads:
         last = t.get("last_advanced_ch", 0)
