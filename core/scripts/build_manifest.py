@@ -63,7 +63,8 @@ class DatabaseScanner:
     # 当前版本已知会扫描的数据库文件（不在此列表的文件会进 unscanned 告警）
     KNOWN_DBS = {
         "进度", "人物卡", "伏笔表", "世界观", "事件表",
-        "作者风格", "章纲摘要", "写作经验", "用户偏好",
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只用 故事块摘要
+        "作者风格", "故事块摘要", "写作经验", "用户偏好",
         "关系", "道具", "时间线", "场景规则", "地图",
         # v17.6+ scanner 专用数据库（不注入 writer，但已知文件）
         "character_index", "beat_map", "character_arc_state",
@@ -116,14 +117,17 @@ class DatabaseScanner:
 
     # --- 基本信息 ---
 
-    def chapter_plan(self) -> dict | None:
+    def current_scene(self) -> dict | None:
         prog = self.load("进度", {})
-        plans = prog.get("chapter_plan", [])
-        for p in plans:
-            if p.get("ch") == self.ch or p.get("chapter") == self.ch:
-                return p
-        # v26 fluid 化 fallback: chapter_plan[N] 缺失时，从 事件簇.json.clusters[N] 取雏形
-        # 哲学：cluster mode 下章数由 splitter step 6 决定 · chapter_plan 不应被预先锁
+
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+        cluster_blueprint = prog.get("cluster_blueprint", {})
+        for cluster_id, cluster_data in cluster_blueprint.items():
+            for p in cluster_data.get("scene_storyboard", []):
+                if p.get("ch") == self.ch:
+                    return p
+        # cluster_blueprint 缺失时，从 事件簇.json.clusters[N] 取雏形
+        # 哲学：cluster mode 下章数由 splitter step 6 决定 · cluster_blueprint 不应被预先锁
         shijianji = self.load("事件簇", {})
         for cluster in shijianji.get("clusters", []):
             cr = cluster.get("chapter_range") or []
@@ -143,7 +147,7 @@ class DatabaseScanner:
                         "scene_type": [first_scene.get("type", "悬疑")],
                         "goal": cluster.get("scope_summary", "")[:200],
                         "_fluid_fallback_from_event_cluster": True,
-                        "_v26_note": "本 chapter_plan 由 build_manifest 从 事件簇.json fluid fallback 产生 · 真实切章由 step 6 splitter 决定",
+                        "_v26_note": "本 cluster_blueprint 由 build_manifest 从 事件簇.json fluid fallback 产生 · 真实切章由 step 6 splitter 决定",
                     }
         return None
 
@@ -156,7 +160,7 @@ class DatabaseScanner:
         return None
 
     def active_characters(self) -> list[str]:
-        plan = self.chapter_plan()
+        plan = self.current_scene()
         if plan:
             names = plan.get("characters") or plan.get("active_characters") or []
             if names:
@@ -199,15 +203,42 @@ class DatabaseScanner:
         for s in data.get("secrets", []):
             if s.get("status") == "hidden":
                 result["hidden_secrets"].append(s)
-                if s.get("reveal_at_ch") == self.ch:
-                    result["reveal_this_ch"].append(s)
+                # v2 cluster 化修正（2026-05-28 · cluster_002 ch5 翻车 bug fix）：
+                # reveal_at_cluster="cluster_005" 是 cluster ID 不是 chapter 号，
+                # 必须比对当前 章 所属 cluster ID（通过 cluster_blueprint 反查），
+                # 不能直接 int 数字（之前 bug：cluster_005 → 抽数字 5 → 与 ch=5 撞）
+                rc = s.get("reveal_at_cluster")
+                if isinstance(rc, str):
+                    cur_cluster_id = self._current_cluster_id()
+                    if cur_cluster_id and rc == cur_cluster_id:
+                        result["reveal_this_ch"].append(s)
         return result
+
+    def _current_cluster_id(self) -> str | None:
+        """v2 cluster 化辅助：通过 cluster_blueprint 反查当前 ch 所属 cluster_id。"""
+        prog = self.load("进度", {})
+        # 优先从 cluster_blueprint 反查
+        for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+            cr = cdata.get("chapter_range") or []
+            if isinstance(cr, list) and len(cr) == 2 and cr[0] <= self.ch <= cr[1]:
+                return cid
+            # fallback 到 scene_storyboard.ch
+            for sb in cdata.get("scene_storyboard", []) or []:
+                if sb.get("ch") == self.ch:
+                    return cid
+        # fallback: 事件簇.json chapter_range
+        ec = self.load("事件簇", {})
+        for c in ec.get("clusters", []):
+            cr = c.get("chapter_range") or []
+            if isinstance(cr, list) and len(cr) == 2 and cr[0] <= self.ch <= cr[1]:
+                return c.get("cluster_id")
+        return None
 
     def world_keyword_hits(self) -> list[dict]:
         """世界观按关键词匹配（本章大纲命中哪些条目）。"""
         world = self.load("世界观", {})
         entries = world.get("entries", [])
-        plan = self.chapter_plan() or {}
+        plan = self.current_scene() or {}
         haystack = " ".join(str(v) for v in plan.values() if isinstance(v, (str, list)))
         hits = []
         for e in entries:
@@ -220,7 +251,7 @@ class DatabaseScanner:
 
     def triggerable_events(self) -> list[dict]:
         events = self.load("事件表", {}).get("pending_events", [])
-        plan = self.chapter_plan() or {}
+        plan = self.current_scene() or {}
         ctx = " ".join(str(v) for v in plan.values() if isinstance(v, (str, list)))
         return [e for e in events if e.get("trigger_condition", "") and
                 any(k in ctx for k in e.get("trigger_keywords", []))]
@@ -236,7 +267,7 @@ class DatabaseScanner:
         """返回本章 scene_type 相关、confidence>=0.5 的经验条目。
         兼容两种结构：旧 entries / outline 模板的 success_patterns+failure_patterns。"""
         exp = self.load("写作经验", {})
-        plan = self.chapter_plan() or {}
+        plan = self.current_scene() or {}
         scene_types = set(plan.get("scene_type", []) if isinstance(plan.get("scene_type"), list)
                           else [plan.get("scene_type")])
         scene_types.discard(None)
@@ -318,7 +349,11 @@ class DatabaseScanner:
         hits = []
         for it in data.get("items", []):
             holder = it.get("holder", "")
-            obtained = it.get("obtained_ch", 999)
+            # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 obtained_cluster
+            obtained_cluster = it.get("obtained_cluster", "cluster_999")
+            import re as _re
+            _m = _re.search(r"(\d+)", obtained_cluster) if isinstance(obtained_cluster, str) else None
+            obtained = int(_m.group(1)) if _m else 999
             if obtained > self.ch:
                 continue
             # 持有者匹配出场角色 → 必须注入
@@ -346,7 +381,7 @@ class DatabaseScanner:
 
     def scene_rule_for_chapter(self) -> dict | None:
         """基于本章 scene_type 抽取对应写作规则（合并多类型）。"""
-        plan = self.chapter_plan() or {}
+        plan = self.current_scene() or {}
         scene_types = plan.get("scene_type")
         if not scene_types:
             return None
@@ -432,7 +467,7 @@ class DatabaseScanner:
             ml = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(ml)
             mem = ml.MemoryLayer(self.root, self.ch)
-            plan = self.chapter_plan() or {}
+            plan = self.current_scene() or {}
             q = query or json.dumps(plan, ensure_ascii=False)[:200]
             return mem.search(q, top_k) if q else []
         except Exception:
@@ -480,14 +515,14 @@ class DatabaseScanner:
         if not (self.db / "进度.json").exists():
             fatal.append("进度.json 不存在，执行 /outline 初始化")
             return {"fatal": fatal, "warning": warning, "passed": False}
-        if not self.chapter_plan():
-            fatal.append(f"chapter_plan[{self.ch}] 不存在，大纲未覆盖本章")
+        if not self.current_scene():
+            fatal.append(f"cluster_blueprint 内 ch={self.ch} 不存在，大纲未覆盖本章")
         if not (self.db / "人物卡.json").exists():
             fatal.append("人物卡.json 不存在")
         if self.ch > 1 and self.previous_chapter_file() is None:
             fatal.append(f"上一章（第{self.ch-1}章）txt 文件未找到")
 
-        plan = self.chapter_plan() or {}
+        plan = self.current_scene() or {}
         if not plan.get("characters"):
             warning.append("本章 characters 字段为空，将 fallback 到全量人物卡")
         if not plan.get("key_events") and not plan.get("summary"):
@@ -506,11 +541,11 @@ class DatabaseScanner:
 
 def _collect_active_fate_events(scanner, chapter: int) -> dict:
     """v20 F5: 调 fate_engine evaluate 取本章应推进的大势事件。
-    优先级 > chapter_plan（涌现式模式下 chapter_plan 可能为空）。
+    优先级 > cluster_blueprint（涌现式模式下 cluster_blueprint 可能为空）。
     """
     fate_path = scanner.root / "_数据库" / "大势卡.json"
     if not fate_path.exists():
-        return {"mode": "strict", "active": [], "_note": "无大势卡，走传统 chapter_plan 模式"}
+        return {"mode": "strict", "active": [], "_note": "无大势卡，走传统 cluster_blueprint 模式"}
     try:
         sys.path.insert(0, str(Path(__file__).parent))
         import fate_engine
@@ -546,7 +581,15 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
     # 本章 context
     import re as _re
     progress = scanner.load("进度", {})
-    ch_plan = next((c for c in progress.get("chapter_plan", []) if c.get("ch") == chapter), {}) if progress else {}
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    ch_plan = {}
+    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        for sb in cdata.get("scene_storyboard", []):
+            if sb.get("ch") == chapter:
+                ch_plan = sb
+                break
+        if ch_plan:
+            break
     scene_types = ch_plan.get("scene_type", [])
     if not isinstance(scene_types, list):
         scene_types = [scene_types]
@@ -794,13 +837,26 @@ def _collect_ensemble_layer(scanner, chapter: int) -> dict:
             except Exception:
                 pass
 
-        # NPC schedule 提示（仅本章 chapter_plan.characters 涉及的 NPC）
-        plan = scanner.load("章纲摘要", {}).get("chapter_plan", {}) if hasattr(scanner, "load") else {}
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 从 故事块摘要 + cluster_blueprint 读 chars
         chapter_chars = []
-        if isinstance(plan, dict):
-            ch_data = plan.get(str(chapter)) or plan.get(chapter) or {}
-            if isinstance(ch_data, dict):
-                chapter_chars = ch_data.get("characters", [])
+        # 优先读 故事块摘要.clusters[*].chapters[ch].characters
+        summary = scanner.load("故事块摘要", {}) if hasattr(scanner, "load") else {}
+        for cluster_entry in summary.get("clusters", []) if isinstance(summary, dict) else []:
+            chs = cluster_entry.get("chapters", {}) if isinstance(cluster_entry, dict) else {}
+            ch_data = chs.get(str(chapter)) if isinstance(chs, dict) else {}
+            if isinstance(ch_data, dict) and ch_data.get("characters"):
+                chapter_chars = ch_data["characters"]
+                break
+        # fallback 到 cluster_blueprint
+        if not chapter_chars:
+            progress = scanner.load("进度", {}) if hasattr(scanner, "load") else {}
+            for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+                for sb in cdata.get("scene_storyboard", []):
+                    if sb.get("ch") == chapter:
+                        chapter_chars = sb.get("characters", [])
+                        break
+                if chapter_chars:
+                    break
         npc_schedule_hints = {}
         for npc in chapter_chars:
             if npc in (ensemble.get("characters") or {}):
@@ -1029,7 +1085,7 @@ def _collect_storyteller_directive(scanner, chapter: int) -> dict:
                 "intensity_target": rec.get("next_chapter_intensity_target", "auto"),
                 "reason": rec.get("_reason", ""),
             },
-            "_note": "writer step 0s 必读：target_outcome=setback 时本章必至少有 1 个真实挫败（资源损失/关系破裂/认知打击）；=win 时本章应有明确推进/收获；=auto 时按 chapter_plan 自由发挥",
+            "_note": "writer step 0s 必读：target_outcome=setback 时本章必至少有 1 个真实挫败（资源损失/关系破裂/认知打击）；=win 时本章应有明确推进/收获；=auto 时按 cluster_blueprint 自由发挥",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
@@ -1100,8 +1156,8 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
                 "thread_id": t.get("thread_id"),
                 "npc": t.get("npc_id"),
                 "action": (t.get("current_action") or "")[:60],
-                "since_ch": t.get("since_ch"),
-                "expected_complete_ch": t.get("expected_complete_ch"),
+                "since_cluster": t.get("since_cluster"),
+                "expected_complete_cluster": t.get("expected_complete_cluster"),
                 "visible_to_protagonist": t.get("visible_to_protagonist", False),
                 "outcome_if_complete": (t.get("outcome_if_complete") or "")[:50],
                 "_priority": t.get("_priority"),
@@ -1223,7 +1279,7 @@ def _collect_reader_preferences(scanner) -> dict:
 
 
 def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
-    """v19.6 G5: 用 chapter_plan.turning_point + threads_advance 作 query，
+    """v19.6 G5: 用 cluster_blueprint.turning_point + threads_advance 作 query，
     从 .embeddings/chapter_*.json 做语义检索取 top_k 历史 chunk 给 writer。
 
     比固定 recent 5 章摘要更智能——本章是觉醒章，应该回忆爷爷纸条章节而不是吃饭章。
@@ -1231,10 +1287,14 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
     if chapter <= 1:
         return {"retrieved": [], "reason": "首章无历史"}
 
-    # 构造 query
-    progress = scanner.load("进度", {"chapter_plan": []})
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    progress = scanner.load("进度", {})
     query_parts = []
-    for cp in progress.get("chapter_plan", []):
+    all_scenes = []
+    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        for sb in cdata.get("scene_storyboard", []):
+            all_scenes.append(sb)
+    for cp in all_scenes:
         if cp.get("ch") == chapter:
             query_parts.append(cp.get("turning_point", ""))
             query_parts.append(cp.get("goal", ""))
@@ -1244,7 +1304,7 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
             break
     query = " ".join(str(q) for q in query_parts if q)
     if not query:
-        return {"retrieved": [], "reason": "本章 chapter_plan 无 query 信号"}
+        return {"retrieved": [], "reason": "本章 cluster_blueprint 无 query 信号"}
 
     # 加载 embedding 模块
     try:
@@ -1308,17 +1368,18 @@ def _collect_golden_few_shot(scanner, chapter: int, per_type: int = 3) -> dict:
     if not isinstance(gp, dict):
         return {}
 
-    # 读本章 scene_type
-    progress = scanner.load("进度", {"chapter_plan": []})
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    progress = scanner.load("进度", {})
     scene_types = set()
-    for cp in progress.get("chapter_plan", []):
-        if cp.get("ch") == chapter:
-            st = cp.get("scene_type", [])
-            if isinstance(st, list):
-                scene_types.update(st)
-            elif st:
-                scene_types.add(st)
-            break
+    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        for cp in cdata.get("scene_storyboard", []):
+            if cp.get("ch") == chapter:
+                st = cp.get("scene_type", [])
+                if isinstance(st, list):
+                    scene_types.update(st)
+                elif st:
+                    scene_types.add(st)
+                break
 
     # scene_type → golden_passages 类型映射
     scene_to_passages = {
@@ -1774,7 +1835,14 @@ def _collect_will_learn_due(scanner, chapter: int) -> list[dict]:
     out = []
     for c in data.get("characters", []):
         for wl in c.get("knowledge", {}).get("will_learn", []):
-            if wl.get("learn_at_ch") == chapter:
+            # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 learn_at_cluster
+            lac = wl.get("learn_at_cluster")
+            if not isinstance(lac, str):
+                continue
+            import re as _re
+            _m = _re.search(r"(\d+)", lac)
+            learn_at = int(_m.group(1)) if _m else None
+            if learn_at == chapter:
                 out.append({
                     "character": c.get("name") or c.get("id"),
                     "fact": wl.get("fact", ""),
@@ -1794,12 +1862,19 @@ def _collect_secrets_to_reveal(scanner, chapter: int) -> list[dict]:
         return []
     out = []
     for s in data.get("secrets", []):
-        if s.get("reveal_at_ch") == chapter or s.get("status") == "leaked":
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 reveal_at_cluster
+        rc = s.get("reveal_at_cluster")
+        reveal_ch = None
+        if isinstance(rc, str):
+            import re as _re
+            m = _re.search(r"(\d+)", rc)
+            reveal_ch = int(m.group(1)) if m else None
+        if reveal_ch == chapter or s.get("status") == "leaked":
             out.append({
                 "id": s.get("id"),
                 "secret": s.get("secret", "")[:60],
                 "status": s.get("status", "hidden"),
-                "reveal_at_ch": s.get("reveal_at_ch"),
+                "reveal_at_cluster": s.get("reveal_at_cluster"),
                 "known_by": s.get("known_by", []),
             })
     return out
@@ -1862,7 +1937,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         }
 
     volume = s.volume_info()
-    chapter_plan = s.chapter_plan() or {}
+    current_scene_data = s.current_scene() or {}
     due = s.due_foreshadowing()
     world_hits = s.world_keyword_hits()
     events = s.triggerable_events()
@@ -1883,7 +1958,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     must_read.append({
         "path": "_数据库/进度.json",
         "priority": "P0",
-        "focus": f"chapter_plan[{chapter}] + 本卷 volume_arc",
+        "focus": f"cluster_blueprint[ch={chapter}] + 本卷 volume_arc",
         "reason": "本章蓝图与卷级定位",
     })
     must_read.append({
@@ -1963,7 +2038,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             "reason": "风格蒸馏结果，定量+硬性规则",
         })
     if s.has_golden_passages():
-        scene_types = chapter_plan.get("scene_type", [])
+        scene_types = current_scene_data.get("scene_type", [])
         if not isinstance(scene_types, list):
             scene_types = [scene_types]
         must_read.append({
@@ -1976,7 +2051,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     # v17.5 B3.1: skill 分级读取（避免 1455 行 skill_FINAL.md 全量灌入）
     skill_md = project_root / "_数据库" / "作者风格_skill.md"
     if skill_md.exists():
-        scene_types = chapter_plan.get("scene_type", []) or []
+        scene_types = current_scene_data.get("scene_type", []) or []
         if not isinstance(scene_types, list):
             scene_types = [scene_types]
         # 基于 scene_type 推荐重点章节
@@ -2042,8 +2117,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             "reason": "用户口味是硬约束（风格基线 + 节奏偏好）",
         })
 
-    # 章纲摘要：v17.5 P1.4 分级注入 — 最近 5 章 + 卷起始章 + 关键事件章
-    summaries = s.load("章纲摘要", {}).get("chapters", [])
+    # 故事块摘要：v17.5 P1.4 分级注入 — 最近 5 章 + 卷起始章 + 关键事件章
+    summaries = s.load("故事块摘要", {}).get("chapters", [])
     if summaries:
         # 1) 最近 5 章
         recent = [x for x in summaries if x.get("ch", x.get("chapter", 0)) < chapter][-5:]
@@ -2068,7 +2143,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             focus_chs.append(f"关键事件 {[k.get('ch') for k in key_event_chs]}")
         if recent or volume_starts or key_event_chs:
             must_read.append({
-                "path": "_数据库/章纲摘要.json",
+                "path": "_数据库/故事块摘要.json",
                 "priority": "P1",
                 "focus": f"最近 5 章 + 卷首 + 关键事件章：{focus_chs}",
                 "reason": (
@@ -2081,7 +2156,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     if rag_hits:
         rag_chs = [h.get("chapter") for h in rag_hits]
         must_read.append({
-            "path": "_数据库/章纲摘要.json (RAG 检索)",
+            "path": "_数据库/故事块摘要.json (RAG 检索)",
             "priority": "P0",
             "focus": (
                 f"基于本章 plan TF-IDF 检索最相关 {len(rag_hits)} 章：{rag_chs}。"
@@ -2349,7 +2424,7 @@ def _build_cache_layout() -> dict:
 
     STATIC（cacheable 99%）：跨章几乎不变的静态参考（蒸馏/常量模板/Propp）
     SEMI_STATIC（cacheable 70-80%）：本卷内变化的（character_arc/世界状态/事件池/角色池）
-    DYNAMIC（cacheable 30%）：每章必变的（chapter_plan/上章 changes/prev_judge_findings）
+    DYNAMIC（cacheable 30%）：每章必变的（cluster_blueprint/上章 changes/prev_judge_findings）
 
     agent prompt 设计：按 STATIC → SEMI_STATIC → DYNAMIC 顺序排放，Anthropic API 自动 detect prefix → 命中率最高。
     """
