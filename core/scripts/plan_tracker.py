@@ -512,8 +512,16 @@ def _verify_agent_report(project: str, agent_name: str, chapter: int | None, clu
 
     if cluster_id:
         # cluster 级 agent JudgeReport
+        # v27 修复（全局原则：以故事块为单位）：扩 cstr 变体涵盖实战见过的 4 种命名：
+        #   - cluster_002          （cluster_id 原值）
+        #   - cluster_002          （加 cluster_ 前缀；若已带则同 cluster_id）
+        #   - ch_cluster_002       （voice-checker 实战命名 · 加 ch_ 前缀）
+        #   - ch_002               （chapter 序号别名 · plan 含 chapter 时实战 cp 来的）
         cid = cluster_id.replace("cluster_", "") if cluster_id.startswith("cluster_") else cluster_id
-        for cstr in [cluster_id, f"cluster_{cid}"]:
+        cstr_variants = [cluster_id, f"cluster_{cid}", f"ch_cluster_{cid}"]
+        if chapter is not None:
+            cstr_variants.append(f"ch_{chapter:03d}")
+        for cstr in cstr_variants:
             if agent_name == "novel-summarizer":
                 candidates += [db / ".wal" / f"{cstr}_summary.json"]
             elif agent_name == "novel-foreshadower":
@@ -527,7 +535,10 @@ def _verify_agent_report(project: str, agent_name: str, chapter: int | None, clu
             elif agent_name == "novel-voice-checker":
                 candidates += [db / ".judge_reports" / f"{cstr}_voice-checker.json"]
             elif agent_name == "novel-outline-planner":
-                candidates += [db / ".wal" / f"{cstr}_emergence.json"]
+                candidates += [
+                    db / ".wal" / f"{cstr}_emergence.json",
+                    db / ".wal" / f"第{chapter:03d}章_planner_context.md" if chapter is not None else db / ".wal" / "no_chapter_ctx",
+                ]
             elif agent_name == "novel-writer":
                 candidates += [
                     project_root / "章节" / f"{cstr}_draft" / f"{cstr}_draft.txt",

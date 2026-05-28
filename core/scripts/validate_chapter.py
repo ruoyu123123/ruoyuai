@@ -554,14 +554,48 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
     cn_name_pattern = re.compile(r'[""「]([^""」]+)[""」]\s*[一-鿿]{2,4}(?:说|道|问|答|笑|叹|喊|骂|嘀咕)')
     speaker_pattern = re.compile(r'([一-鿿]{2,4})(?:说道?|道|问道?|答道?|笑道?|骂道?|喊道?|嘀咕|开口)')
 
+    # v27 NER 收敛（feedback: UNKNOWN_CHARACTER 每 cluster 几十误报·fp 已积 250+）
+    # 扩首字黑名单：代词 / 否定词 / 时态副词 / 程度副词 / 量词起首（不可能是中文人名首字）
+    BAD_FIRST_CHARS = set("的了在是这那和与你我他她它们之就只也都还又再已便"
+                          "不没否非无别莫勿"
+                          "上下里外前后旁中"
+                          "才刚很太极颇较挺真"
+                          "有要会能可应该需想")
+    # 整词黑名单（NER 误识别的常见动词短语 / 副词搭配 · 通用 · 非项目级 false_positives）
+    VERB_PHRASE_BLACKLIST = {
+        # X+知 / X+到 / X+见 类（误把动词宾语当人名）
+        "知道", "不知", "我知", "你知", "他知", "她知", "都知", "也知", "已知", "得知",
+        "看见", "看到", "听见", "听到", "想到", "见到", "感到", "察觉",
+        # X+说 / X+问 / X+答 类（动词残段）
+        "没说", "再说", "又说", "也说", "却说", "竟说",
+        "没问", "再问", "又问", "也问", "追问",
+        "没答", "没看", "没听", "没想", "没动",
+        # 状语短语
+        "为什", "什么", "怎么", "为何", "如何", "那么", "这么",
+        # 否定结构（误检的 X 都是连接词）
+        "并没", "也没", "还没", "都没", "却没",
+        # 时态短语
+        "已经", "曾经", "正在", "刚才", "刚刚", "马上", "立刻",
+    }
+
     found_speakers = set()
     for m in speaker_pattern.finditer(body):
         name = m.group(1)
-        if len(name) >= 2 and name[0] not in "的了在是这那和与":
-            found_speakers.add(name)
+        if len(name) < 2:
+            continue
+        if name[0] in BAD_FIRST_CHARS:
+            continue
+        if name in VERB_PHRASE_BLACKLIST:
+            continue
+        # 含「不/没/又/也/已/再/还/才/刚」第二字时疑似动词短语
+        if len(name) >= 2 and name[1] in "不没又也已再还才刚":
+            continue
+        found_speakers.add(name)
 
     unknown = found_speakers - known_names
-    common_words = {"这时", "此时", "那人", "众人", "有人", "旁边", "对面", "身后", "其中", "忽然", "突然", "随后", "终于", "这里", "一个"}
+    common_words = {"这时", "此时", "那人", "众人", "有人", "旁边", "对面", "身后", "其中",
+                    "忽然", "突然", "随后", "终于", "这里", "一个", "几个", "三人",
+                    "对方", "众生", "众僧", "众弟子"}
     unknown -= common_words
 
     ci = load_json(project_root / "_数据库" / "character_index.json", {})

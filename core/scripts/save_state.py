@@ -398,12 +398,14 @@ def cmd_git_commit(root: Path, ch: int):
     words = cio.count_words(body)
     title_match = re.search(r"第\d+章[_·]?(.+?)\.txt", f.name)
     title = title_match.group(1) if title_match else ""
+    # v27 修复：缩进/作用域 bug —— 原代码 prog/scenes 只在 if 块里定义，下面 for 循环
+    # 在 if 块外引用导致 title 非空分支会 NameError。重构为 if 块内闭环。
     if not title:
         prog = load_json(root / "_数据库" / "进度.json", {})
         _all_scenes_save_state = []
-    for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
-        _all_scenes_save_state.extend(cdata.get("scene_storyboard", []))
-    for cp in _all_scenes_save_state:
+        for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+            _all_scenes_save_state.extend(cdata.get("scene_storyboard", []))
+        for cp in _all_scenes_save_state:
             if cp.get("ch") == ch:
                 title = cp.get("title", "")
                 break
@@ -414,13 +416,16 @@ def cmd_git_commit(root: Path, ch: int):
         cp_file = cio.changes_path(root, ch)
         if cp_file.is_file():
             add_paths.insert(1, str(cp_file.relative_to(root)))
-        subprocess.run(["git", "add", *add_paths], cwd=root, check=True)
+        # v27 修复：git 操作加 timeout=30 防 session 阻塞（feedback: 大仓库 git add 可能卡几分钟）
+        subprocess.run(["git", "add", *add_paths], cwd=root, check=True, timeout=30)
         msg = f"feat(ch-{ch}): {title} ({words}字)"
         subprocess.run(["git", "commit", "-m", msg], cwd=root, check=True,
-                       capture_output=True)
+                       capture_output=True, timeout=30)
         result = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                                cwd=root, capture_output=True, text=True, check=True)
+                                cwd=root, capture_output=True, text=True, check=True, timeout=10)
         print(f"[GIT] 快照 {result.stdout.strip()}: {msg}")
+    except subprocess.TimeoutExpired:
+        print(f"[GIT] commit 超时 (>30s)·跳过本次快照·不阻断流水线", file=sys.stderr)
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", errors="ignore")[:200]
         print(f"[GIT] commit 失败: {err}", file=sys.stderr)
@@ -674,17 +679,20 @@ def cmd_git_commit_cluster(root, cluster_key):
         print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
         return 2
     # 复用 cmd_git_commit 但 commit msg 改 cluster 级
+    # v27 修复：cluster 级 git 也加 timeout 防 session 阻塞
     import subprocess as _sp
     try:
-        _sp.run(["git", "-C", str(root), "add", "."], check=True, capture_output=True)
+        _sp.run(["git", "-C", str(root), "add", "."], check=True, capture_output=True, timeout=30)
         msg = f"feat(cluster-{cluster_key}): {len(chapters)} 章 (ch{chapters[0]}-{chapters[-1]})"
         r = _sp.run(["git", "-C", str(root), "commit", "-m", msg],
-                    capture_output=True, text=True)
+                    capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
             sha = r.stdout.split()[1].strip("]")[:7] if r.stdout else "?"
             print(f"[GIT] cluster_{cluster_key} 快照 {sha}: {msg}")
         else:
             print(f"[GIT] {r.stderr[:200] or r.stdout[:200]}", file=sys.stderr)
+    except _sp.TimeoutExpired:
+        print(f"[GIT] cluster_{cluster_key} commit 超时 (>30s)·跳过本次快照·不阻断流水线", file=sys.stderr)
     except Exception as e:
         print(f"[GIT] {e}", file=sys.stderr)
 

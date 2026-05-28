@@ -68,6 +68,7 @@ from gen_model_loader import (  # noqa: E402
     GenModelExhaustedError,
     Profile,
 )
+import chapter_io as cio  # noqa: E402 · CJK 计数权威口径（统一覆盖扩展 CJK）
 
 
 # ============ 依赖检查 ============
@@ -231,7 +232,7 @@ def build_word_count_prompt(files: list, files_content: dict, target_min: int, t
     file_stats = []
     for fp in files:
         content = files_content[fp]
-        cjk = len(re.findall(r'[一-鿿]', content))
+        cjk = cio.count_cjk(content)  # v27 修复：统一 CJK 口径（覆盖扩展 CJK）
         files_section.append(f"## {fp} (当前 {cjk} CJK)\n\n```\n{content}\n```")
         file_stats.append(f"- {fp}: {cjk} CJK, 缺 {target_min - cjk if cjk < target_min else 0} 字")
     files_blob = '\n\n'.join(files_section)
@@ -496,7 +497,7 @@ def parse_and_apply(reply: str, project_root: Path) -> tuple:
         if not target.is_absolute():
             target = project_root / rel_path
         target.write_text(content, encoding='utf-8')
-        cjk = len(re.findall(r'[一-鿿]', content))
+        cjk = cio.count_cjk(content)  # v27 修复：统一 CJK 口径
         files_written.append({'path': str(target), 'cjk': cjk})
         print(f"  [写出] {target} ({cjk} CJK)", file=sys.stderr)
 
@@ -523,13 +524,17 @@ def run_scanners(file_paths: list) -> dict:
             if not sc_path.exists():
                 results[fp][sc] = {'verdict': 'SKIP'}
                 continue
-            r = subprocess.run(['python', str(sc_path), fp],
+            # v27 修复：'python' → sys.executable（防多版本解释器调错）
+            r = subprocess.run([sys.executable, str(sc_path), fp],
                                capture_output=True, text=True, encoding='utf-8')
             try:
                 d = json.loads(r.stdout)
                 results[fp][sc] = {'verdict': d.get('verdict'),
                                    'violations_count': d.get('violations_count')}
-            except Exception:
+            except Exception as e:
+                # v27 修复：静默 except 加日志（debug 友好）
+                print(f"  [gen_fixer] scanner {sc} 输出解析失败 ({e})·exit={r.returncode}",
+                      file=sys.stderr)
                 results[fp][sc] = {'verdict': 'ERROR', 'stdout': r.stdout[:200]}
     return results
 
@@ -662,7 +667,8 @@ def main():
     files_written, summary = parse_and_apply(reply, project_root)
     if not files_written:
         print("[WARN] 未从返回中解析出 ===FILE: ... === 块", file=sys.stderr)
-        debug_path = project_root / '章节' / f'_quality/fixer_raw_output_{datetime.now().strftime("%H%M%S")}.txt'
+        # v27 修复：时间戳加 pid 防并发冲突（feedback: 秒级时间戳不够细）
+        debug_path = project_root / '章节' / f'_quality/fixer_raw_output_{datetime.now().strftime("%H%M%S")}_{os.getpid()}.txt'
         debug_path.parent.mkdir(parents=True, exist_ok=True)
         debug_path.write_text(reply, encoding='utf-8')
         print(f"  原始输出已存: {debug_path}", file=sys.stderr)

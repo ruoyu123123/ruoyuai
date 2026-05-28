@@ -42,6 +42,7 @@ from gen_model_loader import (  # noqa: E402
     GenModelExhaustedError,
     Profile,
 )
+import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化权威口径
 
 
 # ============ 依赖检查 ============
@@ -563,11 +564,17 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
     draft_path.write_text(body, encoding='utf-8')
 
     # 补全 changes 元数据
-    cjk = len(re.findall(r'[一-鿿]', body))
+    cjk = cio.count_cjk(body)  # v27 修复：统一 CJK 口径走 chapter_io（覆盖扩展 CJK）
     freestyle = (ch_end is None)
     ch_range_str = f'{ch_start}-TBD_by_splitter' if freestyle else f'{ch_start}-{ch_end}'
-    changes.setdefault('ecas_metadata', {})
-    changes['ecas_metadata'].update({
+
+    # v27 P0 修复（schema 统一）：先把 LLM 输出的 changes 经 normalize_changes 归一·
+    # 兼容三种布局（顶层 factual / 顶层 CHANGES / 顶层裸字段）·全部转 {factual, self_eval}·
+    # 杜绝下游 audit_hub CHANGES_MISSING 误报 + waivers 读不到。
+    changes = cio.normalize_changes(changes)
+    se = changes['self_eval']
+    se.setdefault('ecas_metadata', {})
+    se['ecas_metadata'].update({
         'cluster_id': f'cluster_{cluster_id:03d}',
         'ch_start': ch_start,
         'ch_range': ch_range_str,
@@ -579,7 +586,9 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         'cjk_actual': cjk,
         'writer_mode': 'freestyle_v27' if freestyle else 'locked_v26',
     })
-    changes['schema_version'] = '1.0'
+    se.setdefault('waivers', [])
+    se.setdefault('uncertainty_flags', [])
+    changes.setdefault('schema_version', 'v2.cluster')
     changes_path.write_text(json.dumps(changes, ensure_ascii=False, indent=2),
                             encoding='utf-8')
 
@@ -602,13 +611,16 @@ def run_scanners(draft_path: Path) -> dict:
             results[sc] = {'verdict': 'SKIP', 'reason': 'scanner not found'}
             continue
         r = subprocess.run(
-            ['python', str(sc_path), str(draft_path)],
+            [sys.executable, str(sc_path), str(draft_path)],
             capture_output=True, text=True, encoding='utf-8'
         )
         try:
             d = json.loads(r.stdout)
             results[sc] = {'verdict': d.get('verdict'), 'violations_count': d.get('violations_count')}
-        except Exception:
+        except Exception as e:
+            # v27 修复：静默 except 加日志（之前完全静默吞错·debug 困难）
+            print(f"  [run_scanners] {sc} 输出 JSON 解析失败 ({e})·exit={r.returncode}·stderr_preview={(r.stderr or '')[:150]}",
+                  file=sys.stderr)
             results[sc] = {'verdict': 'ERROR', 'stdout_preview': r.stdout[:300]}
     return results
 

@@ -119,12 +119,31 @@ def main():
     tool_input = data.get("tool_input", {})
     prompt = tool_input.get("prompt", "")
     desc = tool_input.get("description", "")
+    subagent_type = tool_input.get("subagent_type", "") or ""
 
     if not prompt:
         sys.exit(0)
 
-    # 判断是否为写作相关 Agent（词组匹配，避免单字误判）
-    is_novel_agent = any(kw in desc for kw in NOVEL_NAME_KEYWORDS)
+    # v27 修复（feedback: claude agent prompt 含 "writer"/"修" 字眼被误判为 novel-writer）：
+    # 严判 — 仅当 subagent_type 是 novel-* 系列才视为写作 agent。
+    # subagent_type=claude / general-purpose / Explore 等通用 agent 即便 prompt/desc 含
+    # "writer"/"修第" 等字眼也放行（这些是任务描述不是 agent 类型）。
+    # 兜底：subagent_type 缺失（罕见）时退回旧 desc 关键词判断。
+    NOVEL_SUBAGENT_TYPES = {
+        "novel-writer", "novel-validator-checker", "novel-validator-repair",
+        "novel-voice-checker", "novel-voice-keeper",
+        "novel-foreshadower", "novel-reflector", "novel-summarizer",
+        "novel-outline-planner", "novel-chapter-splitter",
+        "novel-reading-reflector", "novel-adversarial-reader",
+        "novel-counterfactual-judge", "novel-meta-judge",
+        "novel-meta-prompt-optimizer", "novel-researcher",
+    }
+    if subagent_type:
+        # subagent_type 明确给了 — 按 type 精确判断
+        is_novel_agent = subagent_type in NOVEL_SUBAGENT_TYPES
+    else:
+        # subagent_type 缺失 — 兜底走旧 desc 关键词
+        is_novel_agent = any(kw in desc for kw in NOVEL_NAME_KEYWORDS)
 
     # 规则 6（豁免）：含 PLAN_ID 视为契约完整
     has_plan_id = "PLAN_ID:" in prompt
@@ -137,8 +156,22 @@ def main():
         has_manifest = "MANIFEST:" in prompt
         has_mode = "MODE:" in prompt
 
+        # v27 修复：写作 agent 子类判别 — 优先 subagent_type 精确匹配，desc 关键词兜底
+        _AUX_TYPES = {"novel-validator-checker", "novel-validator-repair",
+                      "novel-voice-checker", "novel-voice-keeper",
+                      "novel-foreshadower", "novel-summarizer",
+                      "novel-reflector", "novel-outline-planner",
+                      "novel-reading-reflector"}
+        if subagent_type:
+            is_writer = (subagent_type == "novel-writer")
+            is_aux = (subagent_type in _AUX_TYPES)
+        else:
+            is_writer = ("writer" in desc.lower() or "写第" in desc)
+            is_aux = any(kw in desc.lower() for kw in
+                         ["validator", "voice", "修第", "审第", "摘要", "伏笔", "经验", "规划"])
+
         # writer 需要 PROJECT + CHAPTER + MANIFEST
-        if "writer" in desc.lower() or "写第" in desc:
+        if is_writer:
             if not (has_project and has_chapter and has_manifest):
                 missing = []
                 if not has_project: missing.append("PROJECT")
@@ -149,7 +182,7 @@ def main():
                 print(f"   prompt 前 200 字: {prompt[:200]}", file=sys.stderr)
                 sys.exit(2)
         # validator/voice/summarizer/etc 需要 PROJECT + CHAPTER + MODE
-        elif any(kw in desc.lower() for kw in ["validator", "voice", "修第", "审第", "摘要", "伏笔", "经验", "规划"]):
+        elif is_aux:
             if not (has_project and has_chapter and has_mode):
                 missing = []
                 if not has_project: missing.append("PROJECT")

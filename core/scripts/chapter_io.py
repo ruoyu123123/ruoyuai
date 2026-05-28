@@ -115,15 +115,46 @@ def read_body(project_root, ch: int) -> str:
     return _strip_changes(f.read_text(encoding="utf-8"))
 
 
-def read_changes(project_root, ch: int) -> dict:
-    """读 CHANGES 数据，返回 {"factual": {...}, "self_eval": {...}}。
-    v2 cluster 化（2026-05-28）：只读分离的 _changes.json（旧混合 txt 解析已删）。"""
-    cp = changes_path(project_root, ch)
-    if cp.is_file():
-        data = json.loads(cp.read_text(encoding="utf-8"))
+def normalize_changes(data: dict) -> dict:
+    """统一 _changes.json schema —— v27 修复（feedback: schema 不统一是 P0 高频痛点）。
+
+    根因：gen_writer 走 gen-model（OpenAI 兼容协议），LLM 输出 changes 的顶层 key
+    不稳定，实战见过三种布局，每个 cluster 主代理都要手动转 schema：
+      A) 标准:           {"factual": {...}, "self_eval": {...}}
+      B) writer CHANGES: {"CHANGES": {...}, "ecas_metadata": {...}, "schema_version": ...}
+      C) 裸 factual:     {"word_count_cjk": ..., "foreshadowing_planted": [...], ...}
+    本函数把 B/C 归一到 A。读取端（read_changes）兜底 + 写入端（gen_writer）都调本函数，
+    两端规范化，杜绝下游 CHANGES_MISSING 误报 + waivers 读不到。"""
+    if not isinstance(data, dict):
+        return {"factual": {}, "self_eval": {}}
+    # 布局 A：已规范（含 factual 或 self_eval 任一键即视为标准布局）
+    if "factual" in data or "self_eval" in data:
         data.setdefault("factual", {})
         data.setdefault("self_eval", {})
         return data
+    # 弹出元字段
+    meta = data.pop("ecas_metadata", {}) if isinstance(data.get("ecas_metadata"), dict) else {}
+    sv = data.pop("schema_version", "v2.cluster")
+    # 布局 B：CHANGES 顶层 / 布局 C：裸 factual 字段在顶层
+    if isinstance(data.get("CHANGES"), dict):
+        factual = data["CHANGES"]
+    else:
+        factual = {k: v for k, v in data.items() if k != "CHANGES"}
+    return {
+        "schema_version": sv,
+        "factual": factual,
+        "self_eval": {"ecas_metadata": meta, "waivers": [], "uncertainty_flags": []},
+    }
+
+
+def read_changes(project_root, ch: int) -> dict:
+    """读 CHANGES 数据，返回 {"factual": {...}, "self_eval": {...}}。
+    v2 cluster 化（2026-05-28）：只读分离的 _changes.json（旧混合 txt 解析已删）。
+    v27（2026-05-29）：经 normalize_changes 统一 schema（兼容 writer 三种输出布局）。"""
+    cp = changes_path(project_root, ch)
+    if cp.is_file():
+        data = json.loads(cp.read_text(encoding="utf-8"))
+        return normalize_changes(data)
     return {"factual": {}, "self_eval": {}}
 
 
