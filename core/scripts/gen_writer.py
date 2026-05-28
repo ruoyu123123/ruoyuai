@@ -132,6 +132,42 @@ def _infer_cluster_start_ch(project_root: Path, cluster_id: int) -> int:
 
 
 # ============ Prompt 组装 ============
+def _collect_feedback_rules() -> str:
+    """L3 防御：自动扫 ~/.claude/projects/.../memory/feedback_*.md，
+    抽取 type=feedback 的全局规则段，注入 writer system prompt。
+
+    设计目标：让 writer 在每段生成时都看到全局禁令（不依赖主代理记得）。
+    抽取策略：取 lesson 文件的「## 规则」段（如有），否则取文件头部 1500 字。
+    """
+    try:
+        memory_dir = Path.home() / ".claude" / "projects" / "D--Desktop-ruoyuai" / "memory"
+        if not memory_dir.exists():
+            return ""
+        rules_chunks = []
+        for f in sorted(memory_dir.glob("feedback_*.md")):
+            try:
+                text = f.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            # frontmatter 检查 type=feedback
+            if "type: feedback" not in text:
+                continue
+            # 抽 "## 规则" 段或文件正文头部
+            m = re.search(r"##\s*规则[\s\S]*?(?=\n##\s|\Z)", text)
+            chunk = m.group(0) if m else text[text.find("---\n", 5) + 4:]
+            chunk = chunk.strip()[:2500]
+            if not chunk:
+                continue
+            rules_chunks.append(f"### 来自 {f.stem}\n\n{chunk}")
+        if not rules_chunks:
+            return ""
+        header = "# 🔴 全局 feedback 规则（自动注入 · 来自 memory/feedback_*.md）\n\n"
+        header += "以下是历史用户反馈沉淀的全局禁令，写作时**逐条遵守**。违反 = 出货后被打回 + lesson 复发。\n\n"
+        return header + "\n\n---\n\n".join(rules_chunks)
+    except Exception:
+        return ""
+
+
 def read_text(p: Path, limit_chars: int = None) -> str:
     if not p.exists():
         return f"[WARN] 文件不存在: {p}"
@@ -172,12 +208,13 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
         if caches:
             cache_text = read_text(caches[0], 15000)
 
-    # chapter_plan：v26 兼容 = ch_start..ch_end · v27 freestyle = 不取（直接走 cluster_brief.scene_storyboard）
+    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
     progress = json.loads((db / '进度.json').read_text(encoding='utf-8'))
-    plans = progress.get('chapter_plan', [])
+    cluster_blueprint = progress.get('cluster_blueprint', {})
+    plans = []
+    if cluster_id and cluster_id in cluster_blueprint:
+        plans = cluster_blueprint[cluster_id].get('scene_storyboard', [])
     if freestyle:
-        # v27：不限定章范围 · 取 ch_start 起所有 ≤ ch_start+30 的 plan 作为软提示
-        # 章数由 cluster.scope_summary + writer 自由发挥决定
         relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_start + 30]
     else:
         relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_end]
@@ -246,15 +283,20 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
             prev_text = prev_p.read_text(encoding='utf-8')
             prev_ch_section = "## 前一章末尾（衔接用）\n\n" + prev_text[-1500:]
 
+    # L3 防御（feedback_no_screenplay_stage_directions_in_novels 等）：
+    # 自动扫 memory/feedback_*.md，把 type=feedback 的全局规则注入 writer prompt 头部
+    feedback_rules_text = _collect_feedback_rules()
+
     # 注：以下默认风格基线仅为示例（参考《饲养全人类》冷峻俯瞰群像风），
     # 实际项目请通过 /distill-style 蒸馏并由 manifest 注入对应 skill.md 覆盖。
-    system = """你是长篇小说的写作引擎。默认按「冷峻俯瞰 / 群像 / 沙盒涌现」风格写作（可被项目 skill 覆盖）。
+    system = (feedback_rules_text + "\n\n") if feedback_rules_text else ""
+    system += """你是长篇小说的写作引擎。默认按「冷峻俯瞰 / 群像 / 沙盒涌现」风格写作（可被项目 skill 覆盖）。
 你的任务是写一个故事块（cluster）的完整正文，覆盖多章。
 
 # 风格基线（默认 · 示例 · 可被项目 skill 覆盖）
 - 冷峻俯瞰 / 群像 / 动作 > 情绪词
 - 第三人称跟随时代主角过去时
-- 章末可有第一人称运营方笔注（仅当 chapter_plan 标记 narrator_annotation 时）
+- 章末可有第一人称运营方笔注（仅当 cluster_blueprint 标记 narrator_annotation 时）
 
 # 7 项硬铁律（违反任一 = 硬违规）
 
@@ -363,7 +405,7 @@ cluster_brief 完整内容：
 """
 
     user = f"""{task_intro}
-{cluster_constraints_section}## chapter_plan（必落 anchors）
+{cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}

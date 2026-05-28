@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""chapter_end_anchor_scan.py — L2 章末 cliffhanger 锚定扫描
+
+防御目标（cluster_001 ch4 三次翻车 sediment）:
+1. 章末是钩子（cliffhanger），不是收束（closure）
+2. 章末 cliffhanger 必须锚到「已存在的下一段剧情」——禁止纯氛围装神弄鬼
+3. 章末禁用任何过渡标记（剧本体 / 文学过渡分隔符 / 听觉视觉淡出 / 收束句）
+
+权威清单：memory/feedback_no_screenplay_stage_directions_in_novels.md
+
+检测逻辑:
+- 取章末 5 段
+- A. banned_patterns 扫（剧本体 + 章末过渡）→ hard_gate
+- B. 锚定扫：章末 5 段提取实词关键词，在以下数据库 grep：
+    · _数据库/事件簇.json 的 cluster_blueprint / clusters[i] scope_summary / foreshadowing_to_plant
+    · _数据库/伏笔表.json 的 promises / secrets descriptions
+    · _数据库/进度.json 的 cluster_blueprint 各 cluster
+  0 命中 → advisory 「章末未锚定任何已存在剧情」
+- C. POV scan：章末段是否切换到全知镜头（无具体人物 + 全是物件描述）→ advisory
+
+退出码:
+  0 = 全章末通过
+  1 = 部分 advisory（可豁免）
+  2 = 命中 hard_gate banned_patterns（必修）
+
+用法:
+  python chapter_end_anchor_scan.py <项目路径> --chapters 1-4 [--strict]
+"""
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+# ============ banned patterns（与 pretooluse_chapter_edit_gate.py 同源）============
+
+SCREENPLAY_PATTERNS = [
+    (r"（镜头[^）]{0,15}）", "剧本体镜头指令"),
+    (r"（切镜[^）]{0,10}）", "剧本体切镜"),
+    (r"（旁白[^）]{0,15}）", "剧本体旁白"),
+    (r"（画外音[^）]{0,15}）", "剧本体画外音"),
+    (r"（音效[^）]{0,15}）", "剧本体音效"),
+    (r"（[^）]{0,15}的视角[^）]{0,5}）", "剧本体 POV 指令"),
+    (r"（[^）]{0,10}离开[^）]{0,10}视角[^）]{0,5}）", "剧本体 POV 切换"),
+]
+
+CHAPTER_END_PATTERNS = [
+    (r"^\s*\*{1,3}\s*$", "章末单独 * 分隔符"),
+    (r"^\s*[·]{3,}\s*$", "章末单独 ··· 分隔符"),
+    (r"^\s*—{3,}\s*$", "章末单独 ——— 分隔符"),
+    (r"一切安静下来", "章末收束句"),
+    (r"声.{0,3}越来越远", "章末听觉淡出"),
+    (r"灯.{0,5}熄了", "章末视觉淡出"),
+    (r"画面.{0,3}渐暗", "章末视觉渐暗"),
+    (r"然后.{0,3}安静", "章末收束式短语"),
+]
+
+# ============ 章末提取 ============
+
+def get_chapter_tail_paragraphs(chapter_text: str, n: int = 5) -> list[str]:
+    """取章末最后 n 个非空段。"""
+    paras = [p.strip() for p in chapter_text.split("\n\n") if p.strip()]
+    return paras[-n:] if len(paras) >= n else paras
+
+
+def extract_keywords(text: str) -> set[str]:
+    """从段落抽实词关键词（去停用词 + 单字）。
+    简化实现：抽 2-4 字中文连续词 + 已知人名地名物件。
+    """
+    # 找 2-4 字连续中文（不含标点）
+    candidates = set(re.findall(r"[一-鿿]{2,4}", text))
+    # 去常见停用词 / 代词
+    stop = {
+        "他", "她", "它", "们", "这个", "那个", "什么", "怎么", "为什么", "因为", "所以",
+        "然后", "时候", "时间", "地方", "东西", "一个", "一种", "一些", "一直", "一边",
+        "看着", "听着", "说着", "走着", "想着", "坐着", "站着", "拿着",
+        "知道", "不知道", "觉得", "似乎", "好像", "应该", "可能", "也许",
+        "今天", "明天", "昨天", "上午", "下午", "晚上", "夜里", "早上", "中午",
+    }
+    return {w for w in candidates if w not in stop and len(w) >= 2}
+
+
+def collect_anchors(db_dir: Path) -> set[str]:
+    """收集所有「已存在剧情」的 anchor 关键词。
+    来源：事件簇.json / 伏笔表.json / 进度.json.cluster_blueprint
+    """
+    anchors = set()
+
+    def add_from_text(text: str):
+        anchors.update(extract_keywords(text))
+
+    # 事件簇
+    ec_path = db_dir / "事件簇.json"
+    if ec_path.exists():
+        try:
+            ec = json.loads(ec_path.read_text(encoding="utf-8"))
+            for c in ec.get("clusters", []):
+                for fld in ("title", "scope_summary", "_emergence_seed"):
+                    v = c.get(fld)
+                    if isinstance(v, str):
+                        add_from_text(v)
+                for sb in c.get("scene_storyboard", []) or []:
+                    add_from_text(sb.get("summary", ""))
+                for fs in c.get("foreshadowing_to_plant", []) or []:
+                    add_from_text(fs.get("description", ""))
+                add_from_text(", ".join(c.get("characters_in_cluster", []) or []))
+        except Exception:
+            pass
+
+    # 伏笔表
+    fb_path = db_dir / "伏笔表.json"
+    if fb_path.exists():
+        try:
+            fb = json.loads(fb_path.read_text(encoding="utf-8"))
+            for p in fb.get("promises", []):
+                add_from_text(p.get("description", ""))
+                tc = p.get("trigger_condition", {})
+                if isinstance(tc, dict):
+                    add_from_text(tc.get("physical_evidence", ""))
+            for s in fb.get("secrets", []):
+                add_from_text(s.get("secret", ""))
+        except Exception:
+            pass
+
+    # 进度.cluster_blueprint
+    pr_path = db_dir / "进度.json"
+    if pr_path.exists():
+        try:
+            pr = json.loads(pr_path.read_text(encoding="utf-8"))
+            for cid, c in (pr.get("cluster_blueprint", {}) or {}).items():
+                for fld in ("title", "scope_summary"):
+                    v = c.get(fld)
+                    if isinstance(v, str):
+                        add_from_text(v)
+        except Exception:
+            pass
+
+    # 人物卡
+    cc_path = db_dir / "人物卡.json"
+    if cc_path.exists():
+        try:
+            cc = json.loads(cc_path.read_text(encoding="utf-8"))
+            for c in cc.get("characters", []):
+                anchors.add(c.get("name", ""))
+                for alias in c.get("aliases", []) or []:
+                    anchors.add(alias)
+        except Exception:
+            pass
+
+    # 道具 + 地图
+    for fname in ("道具.json", "地图.json"):
+        fp = db_dir / fname
+        if fp.exists():
+            try:
+                d = json.loads(fp.read_text(encoding="utf-8"))
+                for itm in d.get("items", []) or []:
+                    add_from_text(itm.get("name", ""))
+                locs = d.get("locations", {})
+                if isinstance(locs, dict):
+                    for loc in locs.values():
+                        if isinstance(loc, dict):
+                            anchors.add(loc.get("name", ""))
+                elif isinstance(locs, list):
+                    for loc in locs:
+                        if isinstance(loc, dict):
+                            anchors.add(loc.get("name", ""))
+            except Exception:
+                pass
+
+    return {a for a in anchors if a and len(a) >= 2}
+
+
+# ============ 检测主逻辑 ============
+
+def scan_chapter_end(chapter_path: Path, anchors: set[str]) -> dict:
+    """扫一章末段，返回 issues。"""
+    text = chapter_path.read_text(encoding="utf-8")
+    tail_paras = get_chapter_tail_paragraphs(text, n=5)
+    tail_text = "\n\n".join(tail_paras)
+
+    issues = []
+
+    # A. banned_patterns
+    for pat, reason in SCREENPLAY_PATTERNS:
+        for m in re.finditer(pat, tail_text, re.IGNORECASE | re.MULTILINE):
+            issues.append({
+                "code": "CHAPTER_END_FORBIDDEN_SCREENPLAY",
+                "gate_level": "hard_gate",
+                "severity": "fatal",
+                "matched": m.group(0)[:60],
+                "reason": reason,
+                "fix_hint": "删除剧本体过渡 · POV 不切换让角色全程在场",
+            })
+    for pat, reason in CHAPTER_END_PATTERNS:
+        for m in re.finditer(pat, tail_text, re.MULTILINE):
+            issues.append({
+                "code": "CHAPTER_END_FORBIDDEN_TRANSITION",
+                "gate_level": "hard_gate",
+                "severity": "fatal",
+                "matched": m.group(0)[:60],
+                "reason": reason,
+                "fix_hint": "删除收束式过渡 · 章末是钩子不是收束 · 末句 = 心理悬念峰值",
+            })
+
+    # B. 锚定 scan
+    tail_keywords = extract_keywords(tail_text)
+    hit_anchors = tail_keywords & anchors
+    anchor_ratio = len(hit_anchors) / max(len(tail_keywords), 1)
+
+    if not hit_anchors:
+        issues.append({
+            "code": "CHAPTER_END_NO_ANCHOR",
+            "gate_level": "advisory",
+            "severity": "warning",
+            "matched": ", ".join(list(tail_keywords)[:5]),
+            "reason": "章末 5 段 0 关键词命中 cluster_blueprint / 伏笔表 / 事件簇 brief — 可能装神弄鬼无锚 cliffhanger",
+            "fix_hint": "重写章末，锚定到下一 cluster brief 的具体伏笔 / 角色 / 物件 / 事件",
+        })
+    elif anchor_ratio < 0.15:
+        issues.append({
+            "code": "CHAPTER_END_WEAK_ANCHOR",
+            "gate_level": "advisory",
+            "severity": "warning",
+            "matched": f"hit={len(hit_anchors)}/{len(tail_keywords)} keywords ({anchor_ratio:.1%})",
+            "reason": "章末锚定率偏低 (< 15%) — cliffhanger 与已存在剧情关联弱",
+            "fix_hint": "增加章末与下一 cluster 伏笔/角色/物件的具体绑定",
+        })
+
+    return {
+        "chapter_path": str(chapter_path),
+        "tail_text_preview": tail_text[:200] + ("..." if len(tail_text) > 200 else ""),
+        "tail_keywords_count": len(tail_keywords),
+        "hit_anchors": list(hit_anchors)[:10],
+        "anchor_ratio": round(anchor_ratio, 3),
+        "issues": issues,
+    }
+
+
+# ============ CLI ============
+
+def parse_chapter_range(s: str) -> list[int]:
+    if "-" in s:
+        a, b = s.split("-", 1)
+        return list(range(int(a), int(b) + 1))
+    return [int(s)]
+
+
+def main():
+    ap = argparse.ArgumentParser(description="L2 章末 cliffhanger 锚定扫描")
+    ap.add_argument("project", help="项目路径")
+    ap.add_argument("--chapters", required=True, help="章节范围（如 1-4 或 5）")
+    ap.add_argument("--strict", action="store_true", help="严格模式：advisory 也 exit 1")
+    ap.add_argument("--json", action="store_true", help="输出 JSON")
+    args = ap.parse_args()
+
+    project = Path(args.project).resolve()
+    if not project.exists():
+        print(f"[FATAL] 项目路径不存在: {project}", file=sys.stderr)
+        sys.exit(2)
+
+    db = project / "_数据库"
+    if not db.exists():
+        print(f"[FATAL] 找不到 _数据库 目录: {db}", file=sys.stderr)
+        sys.exit(2)
+
+    anchors = collect_anchors(db)
+    if not anchors:
+        print(f"[WARN] 没采集到 anchors（_数据库 可能为空）", file=sys.stderr)
+
+    results = []
+    total_hard = 0
+    total_advisory = 0
+
+    for ch in parse_chapter_range(args.chapters):
+        ch_path = project / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
+        if not ch_path.exists():
+            print(f"[SKIP] 第{ch:03d}章 正文未找到", file=sys.stderr)
+            continue
+        r = scan_chapter_end(ch_path, anchors)
+        results.append(r)
+        for iss in r["issues"]:
+            if iss["gate_level"] == "hard_gate":
+                total_hard += 1
+            elif iss["gate_level"] == "advisory":
+                total_advisory += 1
+
+    if args.json:
+        print(json.dumps({"results": results, "anchors_count": len(anchors)},
+                         ensure_ascii=False, indent=2))
+    else:
+        print(f"[chapter_end_anchor_scan] anchors_pool={len(anchors)} · chapters_scanned={len(results)}")
+        print(f"  hard_gate: {total_hard} · advisory: {total_advisory}")
+        for r in results:
+            ch_name = Path(r["chapter_path"]).parent.name
+            if r["issues"]:
+                print(f"\n  📄 {ch_name}:")
+                print(f"     anchor_ratio={r['anchor_ratio']} hit={r['hit_anchors'][:5]}")
+                for iss in r["issues"]:
+                    flag = "🔴" if iss["gate_level"] == "hard_gate" else "🟡"
+                    print(f"     {flag} [{iss['code']}] {iss['reason'][:80]}")
+                    if iss.get("matched"):
+                        print(f"        matched: {iss['matched']}")
+            else:
+                print(f"  ✅ {ch_name}: anchor_ratio={r['anchor_ratio']}")
+
+    if total_hard > 0:
+        sys.exit(2)
+    if total_advisory > 0 and args.strict:
+        sys.exit(1)
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

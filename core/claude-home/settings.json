@@ -9,6 +9,15 @@
             "command": "python core/claude-home/hooks/pretooluse_agent_gate.py"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python core/claude-home/hooks/pretooluse_chapter_edit_gate.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [

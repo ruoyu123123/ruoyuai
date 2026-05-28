@@ -399,6 +399,28 @@ python core/scripts/split_cluster_changes.py "<项目路径>" --cluster <key>
 python core/scripts/plan_tracker.py step "$PLAN_ID" --n 6
 ```
 
+## 6.4 🆕 章末 cliffhanger anchor 强制 scan（L4 防御）
+
+**为什么必跑**：cluster_001 ch4 翻车 3 次 sediment 出来的强制点。章末 cliffhanger 必须锚到**已存在**的 cluster_blueprint / 伏笔表 / 事件簇 brief，禁止：
+- 任何剧本体过渡（hook L1 已拦，这步是兜底）
+- 任何文学过渡分隔符 / 听觉视觉淡出 / 收束句
+- 装神弄鬼无锚 cliffhanger（如「影子里有不是他的」「凉风从背后吹来」纯氛围镜头）
+
+```bash
+python core/scripts/chapter_end_anchor_scan.py "<项目路径>" \
+  --chapters $START_CH-$END_CH \
+  --strict 2>&1 | tail -20
+```
+
+退出码：
+- 0 = 全章末锚定通过
+- 1 = 部分章末 advisory（writer 可豁免 · 但必须写理由到 changes.json）
+- 2 = 命中 banned_patterns（hard_gate · 必修）
+
+**hard_gate 处理**：spawn `novel-validator-checker` 出 brief → `gen_fixer.py --mode chapter-end-rewrite --brief <path>` 重写命中章末。修复后重跑 scan。
+
+权威 lesson：`memory/feedback_no_screenplay_stage_directions_in_novels.md`
+
 ---
 
 # 第 7 步：报告 + plan-end

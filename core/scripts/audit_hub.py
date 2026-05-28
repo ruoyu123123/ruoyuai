@@ -54,6 +54,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -168,6 +169,10 @@ HARD_GATE_CODES = {
     # v23.12（2026-05-21）：单段 > 120 CJK 字（超例外 1 段）= 移动阅读硬上限
     # AI 不可豁免；项目级可在 _数据库/style_scanner_overrides.json 调高阈值
     "STYLE_单段超长",
+    # L2 防御（2026-05-28 · cluster_001 ch4 三次翻车 sediment）：
+    # 章末出现剧本体过渡 / 文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏
+    "CHAPTER_END_FORBIDDEN_SCREENPLAY",
+    "CHAPTER_END_FORBIDDEN_TRANSITION",
 }
 
 
@@ -191,16 +196,35 @@ def _dimension_for_code(code: str) -> str:
     return "剧情"
 
 
-def _run(cmd: list) -> tuple:
-    """跑子进程，返回 (exit_code, stdout, stderr)。子进程隔离 —— 任一校验器挂了不连累其他。"""
+def _run(cmd: list, env_extra: dict = None) -> tuple:
+    """跑子进程，返回 (exit_code, stdout, stderr)。子进程隔离 —— 任一校验器挂了不连累其他。
+
+    env_extra: v2 cluster 化支持。传 {"CLUSTER_MODE": "1"} 让子进程 scanner 感知 cluster 视野。
+    """
     try:
+        env = None
+        if env_extra:
+            import os as _os
+            env = {**_os.environ, **env_extra}
         p = subprocess.run(cmd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=180)
+                           encoding="utf-8", errors="replace", timeout=180, env=env)
         return p.returncode, p.stdout or "", p.stderr or ""
     except subprocess.TimeoutExpired:
         return 99, "", "[TIMEOUT] 校验器超时 180s"
     except Exception as e:
         return 98, "", f"[EXEC-ERROR] {e}"
+
+
+def load_scanner_registry() -> dict:
+    """v2 cluster 化：读 scanner_registry.json 决定跑哪些 scanner。
+    缺失则 fallback 到硬编码 7 scanner（向后兼容）。"""
+    reg_path = _SCRIPT_DIR / "scanner_registry.json"
+    if not reg_path.exists():
+        return {}
+    try:
+        return json.loads(reg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 # ============ 各校验器结果归一化 ============
@@ -251,6 +275,37 @@ def _parse_validate_style(stdout: str) -> list:
                 "code": code, "desc": detail,
                 "source": "validate_style", "fix_hint": "",
                 "waived": False, "waive_reason": "",
+            })
+    return issues
+
+
+def _parse_chapter_end_anchor(stdout: str, exit_code: int) -> list:
+    """chapter_end_anchor_scan.py --json 输出解析。"""
+    issues = []
+    try:
+        start = stdout.find("{")
+        end = stdout.rfind("}")
+        if start < 0 or end < 0:
+            return issues
+        report = json.loads(stdout[start:end + 1])
+    except json.JSONDecodeError:
+        return issues
+    for r in report.get("results", []):
+        ch_path = r.get("chapter_path", "")
+        m = re.search(r"第(\d+)章", ch_path)
+        ch_label = f"ch{m.group(1)}" if m else "?"
+        for iss in r.get("issues", []):
+            issues.append({
+                "dimension": "章末工艺",
+                "severity": iss.get("severity", "warning"),
+                "gate_level": iss.get("gate_level", "advisory"),
+                "code": iss.get("code", "CHAPTER_END_UNKNOWN"),
+                "desc": f"[{ch_label}] {iss.get('reason', '')}"
+                        + (f" · matched={iss.get('matched','')[:50]}" if iss.get('matched') else ""),
+                "source": "chapter_end_anchor_scan",
+                "fix_hint": iss.get("fix_hint", ""),
+                "waived": False,
+                "waive_reason": "",
             })
     return issues
 
@@ -411,9 +466,12 @@ def _load_waivers(waivers_path: str) -> list:
             print(f"  [waivers] {code} 无理由，豁免无效（豁免必带具体理由）",
                   file=sys.stderr)
             continue
-        if len(reason) >= 100:
-            print(f"  [waivers] {code} 理由超 100 字，已截断", file=sys.stderr)
-            reason = reason[:100]
+        # v2 cluster 化方案 Phase A hot-fix（2026-05-28）：
+        # 阈值 100→300。cluster mode 涉及多场景多角色多伏笔，理由 150-280 字常见。
+        # stderr 缩短打印（前 80 字+省略），完整理由仍写入 audit 报告 JSON。
+        if len(reason) >= 300:
+            print(f"  [waivers] {code} 理由超 300 字，已截断: {reason[:80]}…", file=sys.stderr)
+            reason = reason[:300]
         out.append({"code": code, "reason": reason})
     return out
 
@@ -659,8 +717,13 @@ def _apply_audit_mode_filter(issues: list, mode: str) -> list:
 
 
 def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
-                  waivers: list = None) -> dict:
-    """审一章。waivers: [{code, reason}] —— v19 AI 豁免清单，对 advisory 项生效。"""
+                  waivers: list = None, cluster_mode: bool = False,
+                  cluster_key: str = None) -> dict:
+    """审一章。waivers: [{code, reason}] —— v19 AI 豁免清单，对 advisory 项生效。
+
+    cluster_mode: v2 cluster 化支持。True 时给 scanner 子进程传 CLUSTER_MODE=1 env。
+    cluster_key: v2 cluster 化（如 "001"）· 用于激活 4 个 cluster-only scanner。
+    """
     waivers = waivers or []
     body_file = cio.find_body_file(project_root, ch)
     if not body_file:
@@ -668,9 +731,11 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     # v21 UX5: 读用户 audit_mode
     audit_mode = _get_user_audit_mode(project_root)
 
-    # P2-15：7 个 scanner 并行执行（借鉴 Programmatic Tool Calling 思路）。
-    # 原串行 ≈ 7×3s=21s；并行 ≈ 3-5s。子进程隔离已保证「任一挂了不连累其他」，
-    # 并行也保持这个属性。任务列表顺序 = scanner_status 落库顺序，保证审计可读性。
+    # v2 cluster 化：scanner 子进程 env 透传
+    _env_extra = {"CLUSTER_MODE": "1"} if cluster_mode else None
+
+    # P2-15：13 个 scanner 并行执行（v2 cluster 化方案 · 2026-05-28）
+    # 9 升维 + 4 新 cluster-only 全部集成进 audit_hub
     scanner_status = []
     all_issues = []
 
@@ -681,9 +746,17 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     hs = _SCRIPT_DIR / "hook_strength_scanner.py"
     gt = _SCRIPT_DIR / "golden_three_scanner.py"
     ss = _SCRIPT_DIR / "semantic_slop_scanner.py"
+    nsss = _SCRIPT_DIR / "narrative_short_sentence_scanner.py"
+    rnds = _SCRIPT_DIR / "repeat_noun_density_scanner.py"
+    # 4 新 cluster-only scanner（v2 cluster 化方案）
+    csvd = _SCRIPT_DIR / "cross_scene_voice_drift_scanner.py"
+    fhs = _SCRIPT_DIR / "foreshadowing_handoff_scanner.py"
+    lfcs = _SCRIPT_DIR / "locked_fact_cross_scene_scanner.py"
+    povs = _SCRIPT_DIR / "pov_consistency_scanner.py"
+    # L2 防御：章末 cliffhanger 锚定扫描（cluster_001 ch4 三次翻车 sediment）
+    ceas = _SCRIPT_DIR / "chapter_end_anchor_scan.py"
 
     # 每个任务：(name, cmd, ok_set, parse_fn)
-    # parse_fn 统一接收 (stdout, exit_code) 返回 issues list
     tasks = [
         ("validate_chapter",
          [sys.executable, str(vc), str(project_root), str(ch), "--json"],
@@ -713,11 +786,61 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
          [sys.executable, str(ss), str(project_root), str(ch), "--all"],
          {0, 1, 2},
          lambda out, code: _parse_scanner_json(out, "semantic", SEMANTIC_DIM)),
+        ("narrative_short_sentence_scanner",
+         [sys.executable, str(nsss), str(body_file)],
+         {0, 1},
+         lambda out, code: []),
+        ("repeat_noun_density_scanner",
+         [sys.executable, str(rnds), str(body_file)],
+         {0, 1},
+         lambda out, code: []),
     ]
+
+    # v2 cluster 化：cluster mode 下加 4 个 cluster-only scanner（需要 cluster_draft 路径）
+    if cluster_mode and cluster_key:
+        cluster_draft = project_root / "章节" / f"cluster_{cluster_key}_draft" / f"cluster_{cluster_key}_draft.txt"
+        cluster_id_full = f"cluster_{cluster_key}"
+        if cluster_draft.exists():
+            tasks.extend([
+                ("cross_scene_voice_drift",
+                 [sys.executable, str(csvd), str(project_root), str(cluster_draft)],
+                 {0, 1},
+                 lambda out, code: []),
+                ("foreshadowing_handoff",
+                 [sys.executable, str(fhs), str(project_root), cluster_id_full],
+                 {0, 1},
+                 lambda out, code: []),
+                ("locked_fact_cross_scene",
+                 [sys.executable, str(lfcs), str(project_root), str(cluster_draft)],
+                 {0, 1},
+                 lambda out, code: []),
+                ("pov_consistency",
+                 [sys.executable, str(povs), str(project_root), str(cluster_draft)],
+                 {0, 1},
+                 lambda out, code: []),
+            ])
+        # L2 防御：章末锚定扫描 · 仅在切章后 (有 第NNN章 文件) 才跑
+        # 检测是否已切章
+        chapter_dirs = sorted((project_root / "章节").glob("第[0-9]*章"))
+        if chapter_dirs:
+            ch_nums = []
+            for d in chapter_dirs:
+                m = re.search(r"第(\d+)章", d.name)
+                if m and int(m.group(1)) < 9000:  # 排除虚拟 ch_9000
+                    ch_nums.append(int(m.group(1)))
+            if ch_nums:
+                ch_range = f"{min(ch_nums)}-{max(ch_nums)}"
+                tasks.append((
+                    "chapter_end_anchor_scan",
+                    [sys.executable, str(ceas), str(project_root), "--chapters", ch_range, "--json"],
+                    {0, 1, 2},
+                    lambda out, code: _parse_chapter_end_anchor(out, code),
+                ))
 
     def _exec_one(task):
         name, cmd, ok_set, parse_fn = task
-        code, out, err = _run(cmd)
+        # v2 cluster 化：cluster 调用上下文给 scanner 传 CLUSTER_MODE=1 env
+        code, out, err = _run(cmd, env_extra=_env_extra)
         try:
             issues = parse_fn(out, code)
         except Exception as e:
@@ -752,19 +875,22 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     # 同一 code 在同场景被反复豁免 ≥4 次后，audit_hub 启动时自动加豁免（无需 writer 重新写理由）。
     calibration_suggestions = _load_calibration_suggestions(project_root)
     if calibration_suggestions:
-        # 从 进度.json 的 chapter_plan 读本章 scene_types
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
         scene_types_set = set()
         progress_path = project_root / "_数据库" / "进度.json"
         if progress_path.exists():
             try:
                 prog_data = json.loads(progress_path.read_text(encoding="utf-8"))
-                for c in prog_data.get("chapter_plan", []):
-                    if c.get("ch") == ch:
-                        st = c.get("scene_type", [])
-                        if isinstance(st, list):
-                            scene_types_set.update(st)
-                        elif st:
-                            scene_types_set.add(st)
+                for cid, cdata in (prog_data.get("cluster_blueprint", {}) or {}).items():
+                    for c in cdata.get("scene_storyboard", []):
+                        if c.get("ch") == ch:
+                            st = c.get("scene_type", [])
+                            if isinstance(st, list):
+                                scene_types_set.update(st)
+                            elif st:
+                                scene_types_set.add(st)
+                            break
+                    if scene_types_set:
                         break
             except (json.JSONDecodeError, ValueError):
                 pass
@@ -1062,10 +1188,14 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
         pass
 
     try:
-        report = audit_chapter(project_root, fake_ch, auto_fix, waivers)
+        # v2 cluster 化：cluster_mode=True · 传 cluster_key 激活 4 个 cluster-only scanner
+        report = audit_chapter(project_root, fake_ch, auto_fix, waivers, cluster_mode=True, cluster_key=cluster_key)
         report["_cluster_mode"] = True
         report["_cluster_key"] = cluster_key
         report["_cluster_draft_path"] = str(cluster_draft_path)
+
+        # v2 cluster 化方案（2026-05-28）：Phase A hot-fix 黑名单已删除·
+        # scanner 已全员升维到 cluster 视野，无须黑名单兜底。
         return report
     finally:
         # 清理虚拟章节 + 虚拟 manifest
