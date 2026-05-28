@@ -15,7 +15,7 @@
 - 🎨 **蒸馏作者风格** — 把你喜欢的作者的写作 DNA 提取成 35 维度档案，照着那种感觉写
 - 📐 **规划大纲** — 卷级大势 + 事件池 + 涟漪传播，剧情自然涌现而非僵化
 - ✍️ **故事块写作** — v26 cluster mode 流水线：planner → writer (整块) → 质检 (cluster 级) → splitter (按字数切)
-- 🛡️ **质量保障** — 30+ 种跨章 scanner（AI 腔调、人设漂移、伏笔回收、字数、节奏…）
+- 🛡️ **质量保障** — 30+ 个 cluster-level scanner（AI 腔调、人设漂移、伏笔回收、字数、节奏、章末锚定…）
 - 💾 **断点续写** — WAL 日志 + Git 自动快照，崩溃可恢复，写错可回滚
 - 🎯 **天道大势** — 大势已定 / 小势可改，用户每故事块只在 2-3 张走向卡里选
 
@@ -29,6 +29,7 @@
 - **检测体系顾问制**：advisory 可豁免 / hard_gate 不可豁免，含 12 类客观错误
 - **没调查没发言权** 元规则：所有决策前必先调研（联网/实地/问用户三选一）
 - **🆕 v27 writer freestyle**：writer 不知章数 + 字数自由发挥 / splitter 按 3000-4500/章字数硬范围切 / 末章不够字数从下个故事块补料
+- **🆕 章末工艺 4 层防御**（L1-L4 · cluster_001 ch4 三次翻车 sediment）：剧本体「（镜头XX）」+ 文学过渡「* 分隔/听觉淡出/收束句」+ 装神弄鬼无锚 cliffhanger 全拦截。详见下文
 
 ### v23 异质监督 5 层架构
 
@@ -44,6 +45,19 @@ v23 用 4 个独立攻击角度补盲：
 | **L4 Pareto 演化** | `core/scripts/gepa_prompt_optimizer.py` | **保留候选多样性**不让单一最优覆盖 | GEPA (ICLR 2026 Oral, arxiv 2507.19457) |
 
 详见 `core/claude-home/lessons/v23-blindspot-layer0-1.md`。
+
+### 章末工艺 4 层防御（L1-L4）
+
+连续小说的章末是**钩子**不是**收束**。剧本体「（镜头拉远）」+ 文学过渡「* 分隔/听觉淡出/一切安静下来」+ 装神弄鬼无锚 cliffhanger 都会破坏读者的「下一章渴望」。这条规则用户三次反馈才沉淀清楚（剧本体→文学过渡→装神弄鬼），任何「lesson 文档」都不如系统主动拦截。4 层防御：
+
+| 层 | 实现 | 防御点 |
+|---|---|---|
+| **L1 PreToolUse Hook** | `core/claude-home/hooks/pretooluse_chapter_edit_gate.py` | 拦主代理 / sub-agent Write/Edit 章节正文含剧本体或章末过渡 → exit 2 |
+| **L2 audit_hub scanner** | `core/scripts/chapter_end_anchor_scan.py` | 章末 5 段实词关键词 grep 事件簇/伏笔表/进度/人物卡/道具 · 0 命中 advisory · 命中 banned_patterns hard_gate |
+| **L3 writer prompt 自动注入** | `core/scripts/gen_writer.py::_collect_feedback_rules()` | 启动扫 memory/feedback_*.md 抽规则段拼到 writer system prompt 头 · 实测注入 26K chars |
+| **L4 cluster-write step 6.4** | `.claude/commands/cluster-write.md` | splitter+titles+changes 后强制跑 anchor scan · hard_gate 触发 → validator-checker → gen_fixer 重写 |
+
+权威 lesson：`core/claude-home/lessons/feedback_no_screenplay_stage_directions_in_novels.md`
 
 ### 系统要求
 
@@ -161,7 +175,9 @@ ruoyuai/
     └── scripts/               # 120+ 个 Python 系统脚本
         ├── audit_hub.py
         ├── validate_style.py
-        ├── cross_chapter_*_scan.py    # 30+ 跨章 scanner
+        ├── cross_cluster_*_aggregate.py  # 22 跨故事块聚合器（v2 cluster 化前为 cross_chapter_*_scan）
+        ├── cross_scene_voice_drift / foreshadowing_handoff / locked_fact_cross_scene / pov_consistency  # 4 新 cluster-only scanner
+        ├── chapter_end_anchor_scan.py     # L2 章末锚定扫描
         ├── gen_writer.py / gen_fixer.py / gen_creative.py
         ├── plan_tracker.py
         └── ...
@@ -176,6 +192,7 @@ ruoyuai/
 - **检测顾问制**：scanner 不当法官只当顾问，writer 有充分理由可豁免 advisory，hard_gate 客观错误不可豁免
 - **天道大势 + fluid 涌现**：大势已定（卷级 ME）+ 小势可改（cluster 级走向卡 2-3 选 1）+ 涟漪传播（用户选择→世界先动一格→writer 感知）+ cluster brief 涌现（cluster_002+ 在每个 cluster 完成时动态生成）
 - **没调查没发言权**：所有方向性决策前必先调研（联网/实地/问用户三选一），高于所有其他规则
+- **连续小说章末工艺**：章末是钩子不是收束 · POV 不切换是默认 · cliffhanger 由角色感知传达（看见/听见/意识到+不反应）· 禁止任何「镜头/分隔符/淡出/收束句」破坏跨章渴望
 
 ### 不要做的事
 
@@ -210,6 +227,7 @@ MIT License — 见 [LICENSE](LICENSE)
 - **15 original sub-agents**
 - **120+ Python system scripts**
 - **🆕 v27 writer freestyle**: writer doesn't know chapter count / word target; splitter cuts at 3000-4500 CJK/chapter hard range; tail-end backfill from next cluster (pending_tail mechanism)
+- **🆕 4-layer chapter-end guard** (L1-L4 · sediment from cluster_001 ch4 triple regression): blocks screenplay-style stage directions「(camera pulls back)」, literary closure markers「* divider / sound fade / 'everything fell silent'」, and unanchored mystical cliffhangers. L1 hook + L2 anchor scanner + L3 writer prompt auto-inject + L4 mandatory pipeline step
 - **Mandatory planning layer** with SHA-256 anti-tampering attestation
 - **Advisory/Hard-Gate detection** — advisory waivable with reason, hard-gate enforced
 - **"No investigation, no voice"** meta-rule — all decisions require evidence
