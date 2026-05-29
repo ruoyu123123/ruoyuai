@@ -466,7 +466,8 @@ cluster_brief 完整内容：
 - meta_vocab_disclaimer_count（≤ 2）
 - negation_action_count（≤ 25）
 - story_block_ch_range
-- facts_locked / foreshadowing_planted / foreshadowing_paid
+- facts_locked
+- foreshadowing_planted / foreshadowing_paid（**每条务必带 id 字段，引用 cluster_brief.foreshadowing_to_plant 或 manifest 待回收伏笔的真实 fs_id——save_state 据 id 更新伏笔表 resolved 状态；无对应 fs_id 的新伏笔可只给 desc**）
 
 现在开始写。"""
 

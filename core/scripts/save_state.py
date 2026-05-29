@@ -202,7 +202,29 @@ def apply_changes(root: Path, ch: int) -> int:
     # --- 伏笔表（第4步）---
     fs = load_json(db / "伏笔表.json", {"promises": [], "deadlines": [],
                                         "pledges": [], "secrets": []})
-    for act in changes.get("foreshadowing_actions", []):
+    # 2026-05-30 北极星复审 A-1：writer（gen_writer prompt 自查项）实产 foreshadowing_planted/paid，
+    # 但本函数原只读 foreshadowing_actions（结构化）→ 伏笔表 resolved/status 从不更新（数据流断裂）。
+    # 桥接：无 foreshadowing_actions 时从 planted/paid 构造；元素须为带 id 的 dict 才能精确更新伏笔表，
+    # 纯描述串无 id → 记 warning（可见而非静默断裂）。
+    _fs_actions = list(changes.get("foreshadowing_actions") or [])
+    if not _fs_actions:
+        for _p in changes.get("foreshadowing_planted", []) or []:
+            if isinstance(_p, dict) and _p.get("id"):
+                _fs_actions.append({"category": _p.get("category", "promise"), "type": "setup",
+                                    "id": _p["id"], "tier": _p.get("tier", 3),
+                                    "description": _p.get("desc") or _p.get("description", ""),
+                                    "due_by_cluster": _p.get("due_by_cluster")})
+        for _p in changes.get("foreshadowing_paid", []) or []:
+            if isinstance(_p, dict) and _p.get("id"):
+                _fs_actions.append({"category": _p.get("category", "promise"), "type": "payoff",
+                                    "id": _p["id"],
+                                    "description": _p.get("desc") or _p.get("description", "")})
+        _raw = (changes.get("foreshadowing_planted") or []) + (changes.get("foreshadowing_paid") or [])
+        if _raw and not _fs_actions:
+            summary["warnings"].append(
+                f"foreshadowing_planted/paid 共 {len(_raw)} 条为无 id 描述串 → 无法更新伏笔表 resolved/status；"
+                "需 writer 报带 fs_id 的项（gen_writer prompt 已要求引用 cluster_brief fs_id）")
+    for act in _fs_actions:
         cat = act.get("category")
         typ = act.get("type")
         fid = act.get("id")
