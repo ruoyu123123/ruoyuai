@@ -125,7 +125,7 @@ FIX_BRIEF: <可选 · audit_hub 派单时附带的修复指引原文>
 <PROJECT>/_数据库/.judge_reports/ch_<NNN>_voice-checker.json
 ```
 
-格式 == brief 中的 `judge_report` 段。供跨章一致性扫描 + meta-judge 自审用。
+格式 == brief 中的 `judge_report` 段。供跨章一致性扫描用。
 
 ## 硬性纪律
 

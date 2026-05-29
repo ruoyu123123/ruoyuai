@@ -26,7 +26,7 @@ PLAN_ID=$(python core/scripts/plan_tracker.py create \
 echo "PLAN_ID=$PLAN_ID"
 ```
 
-所有检查 sub-agent（`novel-validator-checker`，v2 拆分后由它出 repair brief，主代理据 brief 调 `gen_fixer.py --mode validator-repair`；novel-validator-repair 已 DEPRECATED）调用 prompt 顶部必须加：
+所有检查 sub-agent（`novel-validator-checker`，v2 拆分后由它出 repair brief，主代理据 brief 调 `gen_fixer.py --mode validator-repair`；旧 novel-validator-repair agent 已删除）调用 prompt 顶部必须加：
 
 ```
 PLAN_ID: $PLAN_ID

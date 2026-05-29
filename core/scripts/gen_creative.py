@@ -7,11 +7,11 @@ Claude 主代理负责准备 brief（题材/调研缓存/角色骨架），调�
 
 五种 mode（v1 实现 2 个，其他 3 个 placeholder）：
 
-  --mode brainstorm    生成 N 张灵感卡（开书用，配合 /brainstorm /write 命令）       [v1 ✓]
+  --mode brainstorm    生成 N 张灵感卡（开书用，配合 /write 命令）                    [v1 ✓]
   --mode outline_card  生成下一章 N 张走向卡（每 save-state 后展示）                 [v1 ✓]
   --mode voice_sample  生成角色 voice_pack.style_samples（配合 /distill-character）  [v2 TODO]
   --mode volume_arc    生成卷的 arc / 大事件创意描述（配合 /outline）                 [v2 TODO]
-  --mode world_entry   生成世界观条目 content（配合 /worldbuild）                     [v2 TODO]
+  --mode world_entry   生成世界观条目 content（世界观子系统，经 /db 或 cluster-save-state） [v2 TODO]
 
 用法示例：
 

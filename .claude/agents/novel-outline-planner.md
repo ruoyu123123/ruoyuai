@@ -160,11 +160,9 @@ else:
 
 ---
 
-**CD1 — PLANNER_CONTEXT**：主代理在 spawn 本 agent 前必先调 `character_context_pack.py {project} {next_ch}` 生成上下文。该 md 已浓缩 9 项角色剧情数据（弧光/stress/aspects/heart_events/fate_events/clocks/storyteller/throughlines/propp）。
+**CD1 — 角色剧情上下文**：本 agent 自行从 `_数据库/` 下对应 JSON 直接 Read 角色剧情数据（9 项：弧光/stress/aspects/heart_events/fate_events/clocks/storyteller/throughlines/propp）。
 
-如缺该字段：
-- 警告但不中止 — 降级回老 P1 流程（自己 Read 12 个文件）
-- 输出 JSON 加 `"planner_context_missing": true`
+> 注：旧的 `character_context_pack.py` 预打包脚本已于 2026-05 精简删除，统一走 agent 自读流程——多读几个 JSON 即可，无需预打包。
 
 ## 核心原则：大势已定，小势可改
 

@@ -285,12 +285,12 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --output "_数据库/.
      a. 结构性问题 → 重写问题段落
      b. 表达性问题 → 逐段润色
      c. 一致性问题 → Read `_数据库/人物卡.json` 和 `_数据库/世界观.json` 对照修正
-     d. 修正完成后执行 /save-state 更新状态
+     d. 修正完成后执行 /cluster-save-state 更新状态
 
 3. **修正模式**：
    - 快速模式（75-79分）：仅修正最严重的2-3处
    - 深度模式（60-74分）：修正所有标记问题
-   - 重写模式（<60分）：建议重新执行 /write-chapter
+   - 重写模式（<60分）：建议重新执行 /cluster-write
 
 ---
 

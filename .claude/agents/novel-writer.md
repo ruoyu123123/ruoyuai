@@ -126,7 +126,7 @@ gen_writer 内部：读 manifest + style skill + 调研 cache + cluster_brief（
  ├── 调 build_manifest.py           （生成 manifest + style_directive）
  │      ↓
  ├── spawn novel-writer（本 agent） ★
- │      ↓ 内部调 gen_writer.py → splitter → chapter_titles
+ │      ↓ 内部仅调 gen_writer.py 产整块草稿（splitter / chapter_titles 推迟到 cluster-write 调度器 step 6）
  ├── 调 audit_hub.py                （30+ scanner 跨章质量检测）
  ├── spawn novel-validator-checker  （advisory/hard_gate 分类）
  ├── spawn novel-voice-checker      （对话声纹）

@@ -26,6 +26,15 @@
             "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_plan_step_anti_skip.py\""
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_chapter_edit_gate.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [

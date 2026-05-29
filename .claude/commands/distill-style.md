@@ -207,7 +207,7 @@ python core/scripts/validate_style.py "风格库/复刻测试/v0/test1_opening.t
 **单次蒸馏 ≤ 阶段 1 = 错误的蒸馏。完整蒸馏必须跑完阶段 7。**
 
 **⚠️ plan 强制规划下的硬约束**：
-- 阶段 1 完成后**强制执行 `plan_tracker.py step --n 2`**，但 `plan_tracker.py end` **必须阶段 8 (= step 8) 全部完成才允许**（否则 exit 2）。
+- 阶段 1 完成后**强制执行 `plan_tracker.py step --n 2`**，但 `plan_tracker.py end` **必须 7 步（plan step 1..7）全部完成才允许**（否则 exit 2）；其中 **step 7 含写作端回灌严闭环**——出货前先过 `distill_finalize_verify.py --strict`，回灌 exit 0 才落 step 7。
 - 跳过任何 required 步骤直接调 `plan-end` → 脚本拦截 → 禁止声称"蒸馏完成"。
 - **新增阶段 7 写作端回灌**是 v2 章程 Article 6 的严闭环 —— 即使阶段 6 _FINAL 文件齐全，回灌测试不通过 `distill_finalize_verify.py` 也会让 plan end 拦在出货前。
 - 这是从命令调度层兜底，防止 Agent 跑完阶段 1 表层蒸馏就交差，也防止 skill 在 Claude 上"看着像"但 gen-model 写不出。
@@ -259,8 +259,8 @@ echo "PLAN_ID=$PLAN_ID"
 | 阶段 3 | 多维度对比扫描 + SFS 评分（chapter SFS / cluster mode 6 维）| `--n 4` | `对比报告/distillation_compare_v{N}.json` |
 | 阶段 4 | 修正反思 → skill v{N+1} | `--n 5` | 无（用 `--skip-output`，skill 升级是 Edit/Write） |
 | 阶段 5 | cluster 终验复刻（`distill_replicate.py --mode cluster`）| `--n 6` | `复刻测试/.../cluster_<id>_replica.txt` |
-| 阶段 6 | 出货（_FINAL 四件套 + git commit） | `--n 7` | `作者风格_FINAL.json` + `skill_FINAL.md` + `distillation_log.md` |
-| 阶段 7 | 写作端回灌严闭环（`distill_finalize_verify.py`）| `--n 8` | `对比报告/writer_feedback_verify.json` |
+| 阶段 6 | 出货（_FINAL 四件套 + git commit）·**出货前必先过阶段 7 回灌门槛** | `--n 7` | `作者风格_FINAL.json` + `skill_FINAL.md` + `distillation_log.md` |
+| 阶段 7 | 写作端回灌严闭环（`distill_finalize_verify.py --strict`）·**并入 step 7 出货门槛，不单独占 plan step**（plan 仅 7 步） | 含于 `--n 7`（回灌 exit 0 才落 step 7） | `对比报告/writer_feedback_verify.json` |
 
 每阶段尾必须执行：
 ```bash
@@ -272,7 +272,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n <阶段号> [--output <�
 阶段 7 写作端回灌验证完成后**必须**：
 ```bash
 python core/scripts/plan_tracker.py end "$PLAN_ID"
-# exit 0  → 所有 8 required 步骤通过 + 阶段 7 回灌验证通过，允许声称"蒸馏完成"
+# exit 0  → 所有 7 required 步骤通过（step 7 含阶段 7 回灌验证），允许声称"蒸馏完成"
 # exit 2  → 任一 required 步骤未跑 / 阶段 7 验证失败，禁止声称完成
 ```
 
@@ -2436,14 +2436,26 @@ fi
 
 ## 阶段 8：Plan 闭环验证（强制兜底）
 
-阶段 6 出货 + 阶段 7 Git commit 落地后，必须执行最后两步：
+阶段 6 出货 + 阶段 7 Git commit 落地后，必须执行最后三步（回灌门槛 → step 7 标记 → plan-end）：
 
-### 阶段 6 完成标记（plan-step 7）
+### ① 写作端回灌严闭环（Article 6 · 不通过不出货）
+
+```bash
+python core/scripts/distill_finalize_verify.py \
+  --project "workspace/styles/<书名>" \
+  --skill "workspace/styles/<书名>/skill_FINAL.md" \
+  --cluster-id cluster_001 \
+  --output "workspace/styles/<书名>/对比报告/writer_feedback_verify.json" \
+  --strict
+# exit 2（verdict != PASS）→ 禁止落 step 7，回头修 skill 重新蒸馏；exit 0 才继续
+```
+
+### ② 阶段 6 出货完成标记（plan-step 7 · 回灌 exit 0 后才落）
 
 ```bash
 python core/scripts/plan_tracker.py step "$PLAN_ID" --n 7 \
   --output "workspace/styles/<书名>/作者风格_FINAL.json"
-# 也可追加校验 skill_FINAL.md / distillation_log.md
+# 也可追加校验 skill_FINAL.md / distillation_log.md / writer_feedback_verify.json
 ```
 
 ### plan-end 终极闸门

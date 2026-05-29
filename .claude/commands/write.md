@@ -10,8 +10,8 @@ description: 当用户从零开始想写一部小说，且需要主代理引导�
 |---|---|---|
 | AI 生成 3 个灵感卡 | 主代理在对话里写卡片正文 | `python core/scripts/gen_creative.py --mode brainstorm --topic <题材> --count 3 --research <调研缓存>` |
 | 写章节正文 | spawn novel-writer agent | `python core/scripts/gen_writer.py --project <path> --cluster N --chapter-start X --chapter-end Y --target-cjk 13000-20000` |
-| 修违规段落 | spawn novel-validator-repair | `spawn novel-validator-checker` 拿 brief → `gen_fixer.py --mode validator-repair --brief <path>` |
-| 修对话 voice | spawn novel-voice-keeper | `spawn novel-voice-checker` 拿 brief → `gen_fixer.py --mode voice-fix --brief <path>` |
+| 修违规段落 | spawn novel-validator-repair〔已删〕 | `spawn novel-validator-checker` 拿 brief → `gen_fixer.py --mode validator-repair --brief <path>` |
+| 修对话 voice | spawn novel-voice-keeper〔已删〕 | `spawn novel-voice-checker` 拿 brief → `gen_fixer.py --mode voice-fix --brief <path>` |
 | 微调（亲读后） | spawn novel-writer 修复 | `gen_fixer.py --mode polish --instructions "<自由文本>"` |
 | 字数扩写 | spawn novel-writer 扩写 | `gen_fixer.py --mode word-count --target-min 2500` |
 

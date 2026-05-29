@@ -170,7 +170,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
   - `6-8（标准长度，推荐）` — 卷长约 80-200K 字
   - `9-12（厚重长篇向）` — 卷长约 150-300K 字
   - `Other` — 用户自填数字
-- 如果用户回答 N，写入 `_数据库/用户偏号.json.workflow_preferences[]`：
+- 如果用户回答 N，写入 `_数据库/用户偏好.json.workflow_preferences[]`：
   ```json
   {"key": "cluster_count_per_volume", "value": N, "set_at": "ISO", "user_decided": true}
   ```
@@ -187,7 +187,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 - `freestyle（v27 默认 · 推荐）` — writer 自由发挥 · splitter 按字数 3000-4500/章切 · 末章不够字数从下个 cluster 补料
 - `locked（v26 兼容 · 旧）` — writer 按预定章数 + 字数硬约束写
 
-写入 `_数据库/用户偏号.json.workflow_preferences[]`：
+写入 `_数据库/用户偏好.json.workflow_preferences[]`：
 ```json
 {"key": "writer_mode", "value": "freestyle", "set_at": "ISO", "user_decided": true}
 ```

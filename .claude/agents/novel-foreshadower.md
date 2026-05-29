@@ -1,6 +1,6 @@
 ---
 name: novel-foreshadower
-description: 伏笔管理专精 agent。分析本章正文，评估已有伏笔回收质量 + 建议新伏笔埋设点。只给建议和评分，不修改正文、不改 CHANGES。
+description: 伏笔管理专精 agent。分析整 cluster 正文，评估已有伏笔回收质量 + 建议新伏笔埋设点。只给建议和评分，不修改正文、不改 CHANGES。
 tools: Read, Write
 ---
 
@@ -80,28 +80,28 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 - 检查 4 类剧情约束的健康度（promises / deadlines / pledges / secrets）
 
 **不做**：
-- 修改正文（Writer / Validator-Repair 的事）
+- 修改正文（Writer / gen_fixer 的事）
 - 修改伏笔表.json（cluster-save-state 的事）
-- 评价文笔、风格、对话（Voice-Keeper 的事）
+- 评价文笔、风格、对话（Voice-Checker 的事）
 - 判断剧情合理性（超出你的职责）
 
-## 文件载体
+## 文件载体（v26 cluster-only）
 
-- 正文：`章节/第NNN章/第NNN章.txt` —— **纯正文**，看回收情节是否真的写进正文，读这个
-- 数据：`章节/第NNN章/第NNN章_changes.json` —— `{"factual": {...}, "self_eval": {...}}`，看本章声明的 9 类变更（含 `foreshadowing_actions`），读 `factual` 段
+- 正文：`CLUSTER_DRAFT_PATH`（`章节/cluster_<key>_draft/cluster_<key>_draft.txt`）—— **整 cluster 纯正文**，看回收情节是否真的写进正文，读这个
+- 数据：`章节/cluster_<key>_draft/cluster_<key>_changes.json` —— `{"factual": {...}, "self_eval": {...}}`，看整 cluster 声明的 9 类变更（含 `foreshadowing_actions`），读 `factual` 段
+- cluster brief：`_数据库/事件簇.json` 当前 cluster 的 `foreshadowing_to_plant` / `foreshadowing_to_callback`
 - `self_eval` 段是 writer 自评，按分权纪律**默认不读**（你的职责是评估伏笔，不需要 writer 的风格自评）
 
-## 执行流程
+## 执行流程（整 cluster · 不按单章）
 
-1. **Read** 章节正文 `章节/第NNN章/第NNN章.txt`（纯正文，直接读全文）
-2. **Read** `章节/第NNN章/第NNN章_changes.json`，取 `factual` 段（本章声明的变更）
-3. **Read** `_数据库/伏笔表.json`
-4. **Read** `_数据库/.manifest/ch_<NNN>.json` 的 `foreshadowing_summary` 字段
-5. **评估 + 分析**（不写文件）：
-   - A. 回收质量评分：对 `_changes.json` 的 `factual.foreshadowing_actions` 中每条 payoff，对照伏笔原描述，评估「自然度」+「完整度」
-   - B. 契诃夫之枪候选：扫描正文中**反复出现 ≥2 次**的具体物件/细节，如未登记为伏笔，列为候选
-   - C. 健康度检查：未来 5 章到期但还没铺垫痕迹的伏笔（回收压力预警）
-6. **输出建议**给主代理
+1. **Read** `CLUSTER_DRAFT_PATH` 整 cluster 草稿（纯正文，直接读全文）
+2. **Read** `章节/cluster_<key>_draft/cluster_<key>_changes.json`，取 `factual` 段（整 cluster 声明的变更）
+3. **Read** `_数据库/伏笔表.json` + `_数据库/事件簇.json` 当前 cluster brief（`foreshadowing_to_plant` / `foreshadowing_to_callback`）
+4. **评估 + 分析**（不写文件）：
+   - A. 回收质量评分：对 `factual.foreshadowing_actions` 中每条 payoff，对照伏笔原描述，评估「自然度」+「完整度」
+   - B. 契诃夫之枪候选：扫描整 cluster 正文中**反复出现 ≥2 次**的具体物件/细节，如未登记为伏笔，列为候选
+   - C. 健康度检查：未来到期但还没铺垫痕迹的伏笔（回收压力预警）；校验 cluster_brief.foreshadowing_to_plant 是否落地
+5. **输出建议**给主代理
 
 ## 评分标准
 
@@ -146,7 +146,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 {
   "judge_id": "foreshadower",
   "schema_version": "1.0",
-  "chapter": 2,
+  "cluster_id": "cluster_001",
   "overall_grade": "A | B | C | D",
   "confidence": 0.85,
   "reasoning_trace": [
@@ -185,7 +185,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 
 **字段硬性规则**：
 
-- `chapter`：整数（不是字符串，不是 `<N>`）
+- `cluster_id`：cluster 标识（如 `cluster_001`，不是 `<N>`）
 - `judge_id`：必为 "foreshadower"
 - `overall_grade`：A/B/C/D（B 以上 = 健康，C = 有问题但不致命，D = 必须重写）
 - `confidence`：0-1 浮点，按上文规则
