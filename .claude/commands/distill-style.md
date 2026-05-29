@@ -188,8 +188,8 @@ python core/scripts/validate_style.py "风格库/复刻测试/v0/test1_opening.t
 ```
 [阶段 1] 表层蒸馏（cluster 主轨 · 不变）
    ↓ 输出：skill v0 + cluster 单章 JSON + 衔接分析
-[阶段 2] chapter 复刻中检（v2 改 · 替代 drill 单段）—— 用 distill_replicate.py --mode chapter 复刻 1-2 个参考章
-   ↓ 输出：chapter 复刻样本（3000-5000 字）
+[阶段 2] 复刻中检（v3 cluster 单轨 · chapter 模式已删）—— 用 distill_replicate.py --mode cluster 抽样复刻中检
+   ↓ 输出：cluster 抽样复刻样本（中检 · 阶段 5 做完整终验）
 [阶段 3] 多维度对比扫描 —— 抽 2-3 章原文 + style_evaluator SFS 评分
    ↓ 输出：差距报告
 [阶段 4] 修正反思 —— 差距维度生成新约束 → skill v1
@@ -255,7 +255,7 @@ echo "PLAN_ID=$PLAN_ID"
 |---|---|---|---|
 | 阶段 0 | 读经验库 / 预处理（**必读 cluster_index.json**）| `--n 1` | 无（用 `--skip-output`） |
 | 阶段 1 | 表层蒸馏（cluster agent + cluster 衔接 + arc 聚合 + skill v0）| `--n 2` | `workspace/styles/<书名>/作者风格.json` |
-| 阶段 2 | chapter 复刻中检（`distill_replicate.py --mode chapter`）| `--n 3` | `复刻测试/.../chapter_replica.txt` |
+| 阶段 2 | 复刻中检（`distill_replicate.py --mode cluster` · chapter 模式已删）| `--n 3` | `复刻测试/.../cluster_<id>_replica.txt` |
 | 阶段 3 | 多维度对比扫描 + SFS 评分（chapter SFS / cluster mode 6 维）| `--n 4` | `对比报告/distillation_compare_v{N}.json` |
 | 阶段 4 | 修正反思 → skill v{N+1} | `--n 5` | 无（用 `--skip-output`，skill 升级是 Edit/Write） |
 | 阶段 5 | cluster 终验复刻（`distill_replicate.py --mode cluster`）| `--n 6` | `复刻测试/.../cluster_<id>_replica.txt` |

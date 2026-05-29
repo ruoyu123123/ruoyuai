@@ -390,8 +390,8 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 ```bash
 python core/scripts/distill_replicate.py \
   --style-skill workspace/styles/<书名>/skill_v<N>.md \
-  --type opening|battle|psychology|dialogue|description|transition \
-  --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/test_<type>_replica.txt
+  --mode cluster --cluster-ref cluster_001 --project workspace/novels/<书名> \
+  --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/cluster_001_replica.txt
 ```
 
 **三层防御**：L1 命令文档 / L2 唯一合法入口 `distill_replicate.py` / L3 hook 拦截 spawn Agent 做复刻。
