@@ -51,16 +51,24 @@ SCREENPLAY_PATTERNS = [
     (r"（[^）]{0,10}离开[^）]{0,10}视角[^）]{0,5}）", "剧本体 POV 切换"),
 ]
 
-CHAPTER_END_PATTERNS = [
+# 2026-05-29 北极星 P4 [H1-dont]：拆两类（守原则5「不干涉模型判断」）——
+# ① 物理分隔符（剧本/排版污染，任何风格都不该有）→ hard_gate 保留；
+# ② 语义收束句（一切安静下来/灯熄了/画面渐暗…）是【读者体验偏好】，不该升格为不可豁免
+#    hard_gate（且正则会误杀场景中段正常句）→ 降 advisory（写作 agent 有理由可豁免）。
+CHAPTER_END_SEPARATOR_PATTERNS = [
     (r"^\s*\*{1,3}\s*$", "章末单独 * 分隔符"),
     (r"^\s*[·]{3,}\s*$", "章末单独 ··· 分隔符"),
     (r"^\s*—{3,}\s*$", "章末单独 ——— 分隔符"),
+]
+CHAPTER_END_CLOSURE_PATTERNS = [
     (r"一切安静下来", "章末收束句"),
     (r"声.{0,3}越来越远", "章末听觉淡出"),
     (r"灯.{0,5}熄了", "章末视觉淡出"),
     (r"画面.{0,3}渐暗", "章末视觉渐暗"),
     (r"然后.{0,3}安静", "章末收束式短语"),
 ]
+# 向后兼容别名（旧引用方仍可用全集）
+CHAPTER_END_PATTERNS = CHAPTER_END_SEPARATOR_PATTERNS + CHAPTER_END_CLOSURE_PATTERNS
 
 # ============ 章末提取 ============
 
@@ -207,7 +215,8 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str]) -> dict:
                 "reason": reason,
                 "fix_hint": "删除剧本体过渡 · POV 不切换让角色全程在场",
             })
-    for pat, reason in CHAPTER_END_PATTERNS:
+    # 物理分隔符 → hard_gate（格式污染不可豁免）
+    for pat, reason in CHAPTER_END_SEPARATOR_PATTERNS:
         for m in re.finditer(pat, tail_text, re.MULTILINE):
             issues.append({
                 "code": "CHAPTER_END_FORBIDDEN_TRANSITION",
@@ -215,7 +224,18 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str]) -> dict:
                 "severity": "fatal",
                 "matched": m.group(0)[:60],
                 "reason": reason,
-                "fix_hint": "删除收束式过渡 · 章末是钩子不是收束 · 末句 = 心理悬念峰值",
+                "fix_hint": "删除章末物理分隔符 · 章节是格式输出不该出现排版分隔",
+            })
+    # 语义收束句 → advisory（读者体验偏好 · 写作 agent 有理由可豁免 · 不再 hard_gate 误升格）
+    for pat, reason in CHAPTER_END_CLOSURE_PATTERNS:
+        for m in re.finditer(pat, tail_text, re.MULTILINE):
+            issues.append({
+                "code": "CHAPTER_END_CLOSURE_ADVISORY",
+                "gate_level": "advisory",
+                "severity": "warning",
+                "matched": m.group(0)[:60],
+                "reason": reason,
+                "fix_hint": "章末倾向钩子而非收束（建议非强制）· 末句留悬念更佳 · 若本场景确需收束可豁免",
             })
 
     # B. 锚定 scan
