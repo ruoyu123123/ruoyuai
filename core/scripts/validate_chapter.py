@@ -560,7 +560,7 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
         for alias in c.get("aliases", []):
             known_names.add(alias)
 
-    cn_name_pattern = re.compile(r'[""「]([^""」]+)[""」]\s*[一-鿿]{2,4}(?:说|道|问|答|笑|叹|喊|骂|嘀咕)')
+    cn_name_pattern = re.compile(r'["“「]([^"”」]+)["”」]\s*[一-鿿]{2,4}(?:说|道|问|答|笑|叹|喊|骂|嘀咕)')  # 2026-05-30 补弯引号
     speaker_pattern = re.compile(r'([一-鿿]{2,4})(?:说道?|道|问道?|答道?|笑道?|骂道?|喊道?|嘀咕|开口)')
 
     # v27 NER 收敛（feedback: UNKNOWN_CHARACTER 每 cluster 几十误报·fp 已积 250+）
