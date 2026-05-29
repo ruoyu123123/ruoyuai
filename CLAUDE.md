@@ -118,7 +118,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ## 命令路由
 
-> **🔴 2026-05-29 精简**：系统收敛为「只保证故事块流程」——命令 44→15。删了短剧 /script、
+> **🔴 2026-05-29 精简**：系统收敛为「只保证故事块流程」——命令文件 44→15（13 命令 + 2 索引文档）。删了短剧 /script、
 > 孤儿命令（review-book/plot/worldbuild/character/scene/dialogue/edit/scan/dashboard/status/
 > learning-status/research）、自进化层（/learning-status + 16 脚本 + 4 agent）；world/叙事/深度
 > 独立命令（map/events/timeline/relationships/power-system/narrator/fate-system/ensemble/legacy/

@@ -36,7 +36,7 @@
 
 ### 特性亮点
 
-- **15 个原创 slash command**（`/write`、`/outline`、`/cluster-write`、`/cluster-save-state`、`/distill-style`、`/reconcile` …）
+- **13 个原创 slash command**（`/write`、`/outline`、`/cluster-write`、`/cluster-save-state`、`/distill-style`、`/reconcile` …）+ 2 索引文档
 - **10 个原创 agent**（writer、chapter-splitter、reading-reflector、voice-checker、validator-checker、outline-planner、foreshadower、summarizer、reflector、researcher）
 - **100+ 个 Python 系统脚本**（audit_hub、cross_cluster_*_aggregate、gen_writer、cluster_lookup、build_manifest 等）
 - **Plan 强制规划层**：6 个多步命令必走 plan_tracker，杜绝跳步
@@ -140,7 +140,7 @@ claude --dangerously-skip-permissions
 | `/cluster-save-state` | 故事块状态保存（12 步流水线 + 涌现下个 cluster brief） |
 | `/db` | 数据库管理（世界/叙事/深度子系统手动微调入口） |
 
-完整 15 个命令见 `.claude/commands/` 或 `使用说明.md`。机械扫描 AI 腔调已并入 `/check-quality`（audit_hub 顾问制）。
+完整 13 个命令见 `.claude/commands/` 或 `使用说明.md`。机械扫描 AI 腔调已并入 `/check-quality`（audit_hub 顾问制）。
 
 > 🔴 **v26 起 chapter mode（`/write-chapter` / `/save-state` 单章命令）已彻底废弃**，统一走 cluster mode（故事块整体迭代→最后才切章）。
 
@@ -157,7 +157,7 @@ ruoyuai/
 │   └── styles/                # 风格库（跨项目共享）
 ├── .claude/
 │   ├── agents/                # 10 个 novel-* sub-agent
-│   ├── commands/              # 15 个 slash command（v26 chapter mode + 2026-05 精简）
+│   ├── commands/              # 13 个 slash command + 2 索引文档（v26 chapter mode + 2026-05 精简）
 │   └── templates/             # agent 调用模板
 └── core/
     ├── claude-home/
@@ -221,7 +221,7 @@ MIT License — 见 [LICENSE](LICENSE)
 
 ### Highlights
 
-- **15 original slash commands** (chapter-mode `/write-chapter` / `/save-state` removed in v26; pruned to the cluster pipeline in 2026-05)
+- **13 original slash commands** (+2 index docs; chapter-mode `/write-chapter` / `/save-state` removed in v26; pruned to the cluster pipeline in 2026-05)
 - **10 original sub-agents**
 - **100+ Python system scripts**
 - **🆕 v27 writer freestyle**: writer doesn't know chapter count / word target; splitter cuts at 3000-4500 CJK/chapter hard range; tail-end backfill from next cluster (pending_tail mechanism)

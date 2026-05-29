@@ -6,10 +6,10 @@ description: 若渝AI 命令系统总览（文档非命令）
 
 ## 系统概览
 
-若渝AI 是一个以**故事块（cluster）为单位**的 AI 小说写作系统，包含 15 个命令、34 个核心子系统 JSON。
+若渝AI 是一个以**故事块（cluster）为单位**的 AI 小说写作系统，包含 13 个命令（+2 索引文档）、34 个核心子系统 JSON。
 v26 起写作单位从「章节」升级为「故事块（cluster）」，v27 起 writer 自由发挥 + splitter 按字数切。
 
-> 🔴 **2026-05-29 精简（只保证故事块流程）**：命令 44→15。短剧 /script、孤儿命令、自进化层全删；
+> 🔴 **2026-05-29 精简（只保证故事块流程）**：命令文件 44→15（13 命令 + 2 索引文档）。短剧 /script、孤儿命令、自进化层全删；
 > world/叙事/深度独立命令（map/events/timeline/relationships/power-system/narrator/fate-system/
 > ensemble/legacy/persona-depth/reaction-engine/foreshadowing/anti-slop/brainstorm/template/
 > review-book）**折叠进 cluster-save-state（自动维护对应子系统 JSON）+ outline（初始化）**——

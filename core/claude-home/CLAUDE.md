@@ -118,7 +118,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ## 命令路由
 
-> **🔴 2026-05-29 精简（只保证故事块流程）**：命令 44→15。删了短剧 /script + 孤儿命令 +
+> **🔴 2026-05-29 精简（只保证故事块流程）**：命令文件 44→15（13 命令 + 2 索引文档）。删了短剧 /script + 孤儿命令 +
 > 自进化层；world/叙事/深度独立命令（map/events/timeline/relationships/power-system/narrator/
 > fate-system/ensemble/legacy/persona-depth/reaction-engine/foreshadowing/anti-slop/brainstorm/
 > wizard/template）**折叠进 cluster-save-state（自动维护对应子系统 JSON）+ outline（初始化）**——
