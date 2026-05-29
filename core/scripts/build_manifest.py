@@ -2383,9 +2383,11 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     for p in prefs_list:
         if p.get("key") == "dcas_threshold":
             dcas_threshold = p.get("value", 4)
-    dcas_enabled = chapter >= dcas_threshold and not has_pre_opening
-    # 如果本章本身有 pre_opening（说明是被前章切出来的），不启用 DCAS（不能"再切一次")
-    # 只有"原章"启用 DCAS 生成 6000 字后切割
+    # 2026-05-29 北极星修复 [F5]：DCAS 双章模式 v26 已废弃，v27 是 freestyle（writer 不知章数/字数，
+    # splitter 按字数切）。dcas_enabled 恒 False —— 不再给 freestyle writer 注入「单章字数目标」类
+    # DCAS 章级字段（与 gen_writer system prompt「writer 不知目标章数」铁律一致）。
+    dcas_enabled = False
+    _ = dcas_threshold  # 保留读取（兼容旧 prefs），但不再据此启用 DCAS
 
     # v17.3: style_directive 注入（蒸馏→写作落地强制契约）
     style_directive = None
@@ -2482,10 +2484,11 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "recent_openings": recent_openings,
         "style_directive": style_directive,
         "dcas_enabled": dcas_enabled,
-        "dcas_word_target": 6500 if dcas_enabled else (3000 - pre_opening_word_count if has_pre_opening else 3000),
+        # F5：freestyle 不暴露每章字数目标（None），避免 writer 据此自切章；字数由 splitter 按范围切。
+        "dcas_word_target": None,
         "has_pre_opening": has_pre_opening,
         "pre_opening_word_count": pre_opening_word_count,
-        "writer_mode": "ecas",  # v25 ECAS 唯一默认 · single 已废弃 (writer/hook/plan 三层防御) · DCAS 走 .allow_single_mode.flag 兼容旁路
+        "writer_mode": "freestyle_v27",  # v27 北极星：freestyle 默认（与 gen_writer changes 的 writer_mode 一致）
         "rag_relevant_chapters": rag_hits,
         "memory_search_results": memory_hits,
         "database_coverage": s.coverage_report(),
