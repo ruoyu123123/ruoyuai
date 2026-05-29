@@ -1033,6 +1033,44 @@ _EVENT_CLUSTER_ACTIVE_STATUSES = (
 )
 
 
+def _build_volume_convergence_anchor(scanner, cluster: dict) -> dict | None:
+    """2026-05-29 北极星 P2 [M1-trend]：本卷「大势已定」的固定终点锚。
+
+    「大势已定·每卷再怎么折腾最后方向一致」靠的是：让模型【始终看到本卷要收束到哪】，
+    自己导航过去（软牵引/顾问，非硬契约——守原则5「不干涉模型判断」）。
+    从 大势卡.json（有 final_image）+ 进度.json（key_milestones/ending_state）取本卷终点字段。
+    """
+    vol = cluster.get("vol")
+    if vol is None:
+        pm = cluster.get("parent_me") or ""
+        m = re.search(r"V?(\d+)", str(pm))
+        if m:
+            vol = int(m.group(1))
+    anchor = {}
+    # 大势卡 volumes（final_image 权威）
+    ds = scanner.load("大势卡", {}) or {}
+    for v in (ds.get("volumes") or []):
+        if v.get("vol") == vol:
+            for k in ("ending_state", "key_milestones", "final_image", "volume_arc"):
+                if v.get(k):
+                    anchor[k] = v[k]
+            break
+    # 进度.json volumes 兜底
+    if not anchor:
+        prog = scanner.load("进度", {}) or {}
+        for v in (prog.get("volumes") or []):
+            if v.get("vol") == vol:
+                for k in ("ending_state", "key_milestones", "volume_arc"):
+                    if v.get(k):
+                        anchor[k] = v[k]
+                break
+    if not anchor:
+        return None
+    anchor["_doc"] = ("大势已定：本卷无论小势（走向卡选择/涟漪）怎么折腾，最后都要收束到这里。"
+                      "把它当方向锚——不限定你怎么写，但别让本块剧情偏离这个终点。")
+    return anchor
+
+
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
     writer 在 MODE=ecas 时必读此字段。
@@ -1084,6 +1122,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "cluster_position_hint": _infer_cluster_position(chapter, cr) if cr else "head",
                         "narrative_mode": narrative_mode,
                         "climax_hint_scene_index": c.get("climax_hint_scene_index"),
+                        "volume_convergence_anchor": _build_volume_convergence_anchor(scanner, c),
                         "_narrative_mode_doc": "in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；linear = 时间序",
                         "_writer_hint": "MODE=ecas: 用此 brief 生成 8K-16K 字 cluster_draft，每 3000 字 self-audit，每场景生成 100 字 sub-summary"
                     }

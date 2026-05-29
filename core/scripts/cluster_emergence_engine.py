@@ -227,6 +227,7 @@ def _score_one_me(
     stages: list,
     consequence_kw: set,
     extreme_factions: list,
+    milestone_kw: set = None,
 ) -> tuple:
     """给单个 ME 打分。返回 (score, reasons)。"""
     score = 0
@@ -287,6 +288,15 @@ def _score_one_me(
             reasons.append(f"涉及极值势力「{hit}」（power/stress 处于临界 → 张力点）")
             break  # 单 ME 只加一次 faction 分，避免叠爆
 
+    # 6. 大势收敛（2026-05-29 北极星 P2 [H2-trend]）：ME 推进本卷「未达成 key_milestone」→ 朝卷终点收敛。
+    #    与涟漪/arc 同量级（≤35），**只影响 top-3 候选排序展示，绝不自动锁定**（守原则2+5：
+    #    最终仍由用户走向卡选，不让收敛硬性盖过涟漪涌现）。
+    if milestone_kw and me_kw:
+        m_overlap = me_kw & milestone_kw
+        if m_overlap:
+            score += min(35, 12 * len(m_overlap))
+            reasons.append(f"大势收敛：推进未达成卷里程碑（重叠：{','.join(list(m_overlap)[:4])}）")
+
     return score, reasons
 
 
@@ -296,6 +306,7 @@ def select_candidate_mes(
     character_arc: dict,
     last_consequence: list,
     completed_me_ids: set = None,
+    milestone_kw: set = None,
 ) -> list:
     """启发式：从剩余 ME 中给每个打分排序，取 top 3 个 candidate。
 
@@ -324,7 +335,7 @@ def select_candidate_mes(
         if not isinstance(me, dict):
             continue
         score, reasons = _score_one_me(
-            me, cur_vol, completed_me_ids, stages, consequence_kw, extreme_factions
+            me, cur_vol, completed_me_ids, stages, consequence_kw, extreme_factions, milestone_kw
         )
         scored.append((score, idx, me, reasons))
 
@@ -436,8 +447,21 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     if isinstance(narr_cons, list) and narr_cons:
         last_consequence = list(last_consequence) + narr_cons[-8:]
 
-    # 选 candidate ME（传 completed_mes 供 parent_me 链打分）
-    candidate_mes = select_candidate_mes(remaining, world_state, character_arc, last_consequence, completed_me_ids=completed_mes)
+    # 2026-05-29 北极星 P2 [H2-trend]：取当前推进卷的「未达成 key_milestones」关键词 → 收敛打分维度。
+    # 大势已定：让涌现的候选 ME 朝本卷固定终点收敛（advisory 排序，不锁定，仍由用户选）。
+    milestone_kw = set()
+    cur_vol = _current_advancing_vol(world_state, character_arc)
+    if cur_vol:
+        for v in (dashishi.get("volumes") or []):
+            if v.get("vol") == cur_vol:
+                kms = v.get("key_milestones") or []
+                kms_text = " ".join(str(k) for k in kms) if isinstance(kms, list) else str(kms)
+                milestone_kw = _keyword_set(kms_text + " " + str(v.get("ending_state", "")))
+                break
+
+    # 选 candidate ME（传 completed_mes 供 parent_me 链打分 + milestone_kw 供收敛打分）
+    candidate_mes = select_candidate_mes(remaining, world_state, character_arc, last_consequence,
+                                         completed_me_ids=completed_mes, milestone_kw=milestone_kw)
     if not candidate_mes:
         return {"ok": False, "error": "无符合启发式条件的 candidate ME"}
 
