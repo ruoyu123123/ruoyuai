@@ -429,6 +429,12 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         last_consequence = list(world_state["consequence_tracker"].values())[-5:]
     elif isinstance(world_state.get("consequence_tracker"), list):
         last_consequence = world_state["consequence_tracker"][-5:]
+    # 2026-05-29 北极星 P1：并入涟漪叙事后果（混合式·叙事 ripple），让「下一 cluster 涌现」
+    # 真正由【涟漪因果】驱动（_consequence_texts 认 dict 的 "text" 字段做关键词共鸣打分），
+    # 而非仅 consequence_tracker。这是「涟漪为核心 + 因果触发事件」落到 emergence 的关键。
+    narr_cons = world_state.get("narrative_consequences")
+    if isinstance(narr_cons, list) and narr_cons:
+        last_consequence = list(last_consequence) + narr_cons[-8:]
 
     # 选 candidate ME（传 completed_mes 供 parent_me 链打分）
     candidate_mes = select_candidate_mes(remaining, world_state, character_arc, last_consequence, completed_me_ids=completed_mes)

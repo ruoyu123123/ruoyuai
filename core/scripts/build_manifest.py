@@ -1283,6 +1283,14 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
                 "world_changes": (entry.get("world_changes") or [])[:2],
             })
 
+        # 2026-05-29 北极星 P1：注入涟漪叙事后果（混合式·叙事 ripple 收集的因果）给 writer。
+        # 这是「涟漪规则为核心·通过因果触发事件」落到写作的关键——writer 读到「已触发的因果链」
+        # 后自行解读该呼应/推进什么（模型判断，非引擎硬塞）。不截断（feedback_no_token_saving）。
+        narr_cons = [
+            {"ch": nc.get("ch"), "text": nc.get("text", ""), "reason": nc.get("reason", "")}
+            for nc in (world.get("narrative_consequences") or []) if isinstance(nc, dict) and nc.get("text")
+        ]
+
         return {
             "mode": "fluid",
             "current_world_time": world.get("current_world_time"),
@@ -1292,7 +1300,9 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
             "emergent_opportunities_available": opps_available,
             "recent_ticks": recent_ticks,
             "recent_consequences": recent_cons,
-            "_note": "writer step 0q 必读：世界自转中，幕后角色一直在动；本章如能呼应至少 1 个 thread/opportunity 加分",
+            "ripple_narrative_consequences": narr_cons,
+            "_note": "writer step 0q 必读：世界自转中，幕后角色一直在动；涟漪已触发的因果链见 "
+                     "ripple_narrative_consequences——你来解读它该如何在本块剧情里发酵；呼应 ≥1 个 thread/opportunity/因果加分",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
