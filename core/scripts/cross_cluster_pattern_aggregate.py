@@ -375,7 +375,7 @@ def scan_dialogue_stream_flat(text: str) -> int:
     cur = 0
     for p in paras:
         # 判定该段是否「纯对话/说话标签」：含引号 + 含「X说/X想/X道」+ 长度 < 80
-        has_quote = '"' in p or '"' in p or '"' in p
+        has_quote = '"' in p or '“' in p or '”' in p or '「' in p  # 2026-05-30 补弯引号 U+201C/U+201D
         has_say = bool(re.search(r"[他她][说想道]|[陆顾林吴老程沈周][一-鿿]?[说道]", p))
         short = len(p) < 80
         if has_quote and (has_say or short):

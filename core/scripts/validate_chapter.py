@@ -236,15 +236,16 @@ def check_item_consistency(body: str, changes: dict, project_root: Path,
             continue
         # 1. 道具必须已登场
         # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 obtained_cluster
+        # 2026-05-30 北极星复审：obtained_cluster 是 cluster ID 不是章号——反查起始章，登场 cluster 起始章
+        # > 本章才算「道具尚未引入」（禁抽数字当章号，对齐 check_knowledge_leak 的 cluster_id_to_range）。
         oc = it.get("obtained_cluster", "cluster_999")
-        import re as _re
-        m = _re.search(r"(\d+)", oc) if isinstance(oc, str) else None
-        obtained = int(m.group(1)) if m else 999
-        if obtained > chapter:
+        _orng = cluster_lookup.cluster_id_to_range(project_root, oc) if isinstance(oc, str) else None
+        obtained_lo = int(_orng[0]) if _orng and len(_orng) == 2 else None
+        if obtained_lo is not None and obtained_lo > chapter:
             errs.append({
                 "code": "ITEM_NOT_YET_INTRODUCED",
                 "severity": "error",
-                "msg": f"道具「{name}」首次登场在第 {obtained} 章，但第 {chapter} 章正文已提及",
+                "msg": f"道具「{name}」首次登场在 {oc}（起始第 {obtained_lo} 章），但第 {chapter} 章正文已提及",
                 "fix_hint": f"删除对「{name}」的提及，或在大纲中提前该道具的 obtained_ch",
             })
             continue

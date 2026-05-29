@@ -340,7 +340,7 @@ def _chk_single_line_ratio(text: str, p: dict, t: dict) -> CheckResult:
         end_count = sum(p_.count(c) for c in "。！？")
         cjk_len = len(_CJK_RE.findall(p_))
         # 对话段 (含「」或""引号且短) 也算「独行」
-        is_dialog_short = ('"' in p_ or '"' in p_ or '「' in p_) and cjk_len <= 50
+        is_dialog_short = ('"' in p_ or '“' in p_ or '”' in p_ or '「' in p_) and cjk_len <= 50  # 2026-05-30 补弯引号
         if end_count <= 1 and (cjk_len <= 30 or is_dialog_short):
             single += 1
     ratio = single / len(paras)

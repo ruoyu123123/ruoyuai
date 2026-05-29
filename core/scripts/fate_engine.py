@@ -47,12 +47,19 @@ def save_json(p: Path, data: dict):
     atomic_json.atomic_write_json(p, data)
 
 
+def _events(fate: dict) -> list:
+    """取 major_events 并滤掉非 dict 元素（2026-05-30 北极星复审：大势卡 ME 池可能混入字符串/None 占位，
+    否则 e.get()/e['id'] 抛 AttributeError，且崩在 build_manifest:620 的 try 里被静默吞成 mode:error，
+    丢失全部大势 fate 牵引——北极星「大势已定」软牵引静默失效）。"""
+    return [e for e in (fate.get("major_events") or []) if isinstance(e, dict)]
+
+
 def is_event_unlockable(event: dict, fate: dict) -> bool:
     """事件 prerequisites 是否全部 completed → 可以激活。"""
     prereqs = event.get("prerequisites", [])
     if not prereqs:
         return True
-    completed_ids = {e["id"] for e in fate.get("major_events", []) if e.get("status") == "completed"}
+    completed_ids = {e["id"] for e in _events(fate) if e.get("status") == "completed"}
     return all(pid in completed_ids for pid in prereqs)
 
 
@@ -63,7 +70,7 @@ def evaluate(project_root: Path, ch: int) -> dict:
     if fate is None:
         return {"error": "大势卡.json 不存在"}
 
-    events = fate.get("major_events", [])
+    events = _events(fate)
     active = []
     overdue = []
     for e in events:
@@ -128,7 +135,7 @@ def update(project_root: Path, ch: int) -> dict:
         eid = trig.get("event_id")
         if not eid:
             continue
-        for e in fate.get("major_events", []):
+        for e in _events(fate):
             if e.get("id") == eid and e.get("status") != "completed":
                 e["status"] = "completed"
                 e["completed_at_ch"] = ch
@@ -147,7 +154,7 @@ def drift(project_root: Path, ch: int) -> dict:
     if fate is None:
         return {"error": "大势卡.json 不存在"}
     overdue = []
-    for e in fate.get("major_events", []):
+    for e in _events(fate):
         if e.get("status") != "scheduled":
             continue
         window = e.get("expected_window_after")
@@ -156,7 +163,7 @@ def drift(project_root: Path, ch: int) -> dict:
         prereq_event_id = window.get("event")
         max_ch = window.get("max_chapters", 999)
         prereq_ch = None
-        for pe in fate.get("major_events", []):
+        for pe in _events(fate):
             if pe.get("id") == prereq_event_id and pe.get("status") == "completed":
                 prereq_ch = pe.get("completed_at_ch")
                 break
@@ -181,7 +188,7 @@ def dashboard(project_root: Path) -> dict:
     """大势全景。"""
     fate_path = project_root / "_数据库" / "大势卡.json"
     fate = load_json(fate_path, {"major_events": []})
-    events = fate.get("major_events", [])
+    events = _events(fate)
     by_status = {}
     by_stage = {}
     for e in events:
