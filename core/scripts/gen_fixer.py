@@ -195,7 +195,7 @@ def build_comprehensive_prompt(files: list, report_data: dict, files_content: di
 - 不重写章节情节
 - 不动 reflector 标记的强项段
 - 不破坏角色 voice_pack
-- 不引入新 anti-slop（违反 14 条硬约束任一 = 修复失败）
+- 不引入新 anti-slop（违反上述「一、常驻硬约束」任一 = 修复失败；风格工艺基线遵作者档优先）
 
 现在请输出修复后的章节内容（用 `===FILE: ... ===` 包裹）+ JSON 总结。"""
     return system, user

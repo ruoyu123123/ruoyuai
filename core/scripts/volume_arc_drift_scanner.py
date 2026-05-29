@@ -92,14 +92,27 @@ def scan(project_root: Path) -> dict:
     if not isinstance(milestones, list) or not milestones:
         return {"scanner": "volume_arc_drift", "issues": [], "_note": f"vol{cur_vol} 无 key_milestones，跳过"}
 
-    # 本卷已写 cluster + 实际写了什么（cluster scope + 账本摘要）
+    # 本卷已写 cluster（用于「实际写了什么」内容覆盖）
     vol_clusters = [c for c in shijianji.get("clusters", [])
                     if isinstance(c, dict) and (c.get("vol") == cur_vol)]
-    total_planned = len(vol_clusters) or 1
     written = [c for c in vol_clusters
                if (isinstance(c.get("chapter_range"), list) and len(c.get("chapter_range")) == 2)
                or c.get("status") in ("done", "已完成")]
-    progress = len(written) / total_planned if total_planned else 0.0
+    # 2026-05-29 复审 W1：progress 用【卷 ME 完成度】而非 cluster 计数——fluid 下 事件簇.json 通常
+    # 只含已涌现 cluster（total≈written→progress 恒≈1.0 卷首即假阳性）。ME 池是固定参照系。
+    def _me_vol(m):
+        v = m.get("vol")
+        if isinstance(v, int):
+            return v
+        mm = re.search(r"(\d+)", str(v or m.get("me_id") or m.get("id") or ""))
+        return int(mm.group(1)) if mm else None
+    me_pool = dashishi.get("major_events") or dashishi.get("major_events_pool") or []
+    vol_mes = [m for m in me_pool if isinstance(m, dict) and _me_vol(m) == cur_vol]
+    done_mes = [m for m in vol_mes if m.get("status") == "completed" or m.get("completed_at_ch")]
+    total_me = len(vol_mes) or 1
+    progress = len(done_mes) / total_me if vol_mes else 0.0
+    if not vol_mes:  # 无 ME 池数据 → 退回 cluster 计数（带标记，避免静默假阳性）
+        progress = (len(written) / (len(vol_clusters) or 1)) if vol_clusters else 0.0
 
     # 实际写内容关键词（cluster scope + 账本各 cluster summary 并集）
     written_text = " ".join(str(c.get("scope_summary", "")) for c in written)

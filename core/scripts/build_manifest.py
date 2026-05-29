@@ -16,6 +16,9 @@ build_manifest.py — 章节注入清单生成器
 """
 from __future__ import annotations
 import json
+import re  # 2026-05-29 北极星复审 R1：模块级 re（_build_volume_convergence_anchor:1046 +
+            # 旧 1801/1824 裸用 re. 但无模块 import → fluid 涌现 cluster_002+ 走 vol 反查分支 NameError
+            # → 被 try 吞成 event_cluster mode:error → writer 丢 cluster context。补此根治）
 import sys
 from pathlib import Path
 from datetime import datetime

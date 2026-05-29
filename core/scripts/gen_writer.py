@@ -186,17 +186,20 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     v27 freestyle：ch_end/target_cjk 可缺省。
     - ch_end 缺 → user prompt 不暴露目标章数（writer 不知道目标章数）
     - target_cjk 缺 → 不注入「目标字数」段（让 AI 按 scope_summary 自由产出 · 自然涌现）
-    - 单章 2500-5000 CJK 字数硬约束（铁律 #4）保留（splitter 切分时用，writer 写时不用预设章数）
+    - 每章字数硬范围（3000-4500）由 splitter 按字数切时执行；writer 不预设章数/每章字数（v27 freestyle · 原 system prompt 铁律 #4 已删）
     """
     db = project_root / '_数据库'
     freestyle = (ch_end is None)
 
     # 读取核心资料
+    # 2026-05-29 北极星复审 L2：去 load-time 截断（原 30000/25000 仍砍大文件，与
+    # feedback_no_token_saving「全量传 LLM」+ 作者档第一权威冲突；诡异接待处 skill 34575 字被砍 9k+）。
+    # 全量读——作者风格 skill 是写作第一权威，不得在 load 时截断。
     manifest_path = db / '.manifest' / f'ch_{ch_start:03d}.json'
-    manifest = read_text(manifest_path, 30000)
+    manifest = read_text(manifest_path)
 
-    # 风格 skill
-    style_skill = read_text(db / '作者风格_skill.md', 25000)
+    # 风格 skill（全量，不截断）
+    style_skill = read_text(db / '作者风格_skill.md')
 
     # 调研 cache（找最新的）
     cache_dir = db / '.research_cache'
@@ -321,6 +324,7 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
 
 ## H3. AI 结构套话零容忍（结构性机器腔 · 与作者签名词无关）
 禁用：与此同时 / 值得一提的是 / 不仅如此 / 事实上。这 4 个是结构性 AI 腔，任何作者都不会用，skill 不能放行。
+另：「然而」高频转折 = 机器腔（偶用可，避免每段用「然而」起转折——与 CLAUDE.md 反 AI 腔基线一致）。
 （注：顿时/淡淡/仿佛/似乎/缓缓地说 等是「工艺/签名词」，归第二层——若作者风格档把它们列为签名笔法则允许。）
 
 ## H4. cluster 契约（user prompt 顶部「CLUSTER 硬约束」段如有）

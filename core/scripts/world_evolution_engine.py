@@ -99,11 +99,15 @@ def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list, project
     # ---- narrative（混合式 · 2026-05-29 北极星 P1）：叙事/主观因果，无 target，最先处理 ----
     # 散文型涟漪后果（心理/关系/叙事）引擎不机械算数值（守原则5「不干涉模型判断」+「不预设因果」），
     # 只收集进 narrative_consequences，由 build_manifest 注入 writer / cluster_emergence，让模型自行解读。
-    if "narrative" in ripple:
+    # 2026-05-29 复审 W3：① 加 not target 守卫——混合 ripple({narrative,target,delta})落到下方结构化
+    #   处理算 delta，不被 narrative 提前 return 静默丢数值；② (ch,text) 去重——防断点重跑/重复走向词
+    #   使 narrative_consequences 单调膨胀（注入端不截断，靠此处去重保持唯一因果）。
+    if "narrative" in ripple and not target:
         nc = world.setdefault("narrative_consequences", [])
-        nc.append({"ch": ch, "text": ripple.get("narrative", ""), "reason": reason, "_kind": "narrative"})
-        applied_log.append({"target": "narrative_consequences", "op": "narrative",
-                            "text": (ripple.get("narrative") or "")[:60]})
+        _txt = ripple.get("narrative", "")
+        if not any(isinstance(e, dict) and e.get("ch") == ch and e.get("text") == _txt for e in nc):
+            nc.append({"ch": ch, "text": _txt, "reason": reason, "_kind": "narrative"})
+            applied_log.append({"target": "narrative_consequences", "op": "narrative", "text": _txt[:60]})
         return True
 
     if not target:

@@ -294,7 +294,8 @@ def _score_one_me(
     if milestone_kw and me_kw:
         m_overlap = me_kw & milestone_kw
         if m_overlap:
-            score += min(35, 12 * len(m_overlap))
+            # 2026-05-29 复审 W2：per-overlap 12→8 与涟漪(8/重叠)同量级，使「不盖过涟漪」名副其实
+            score += min(35, 8 * len(m_overlap))
             reasons.append(f"大势收敛：推进未达成卷里程碑（重叠：{','.join(list(m_overlap)[:4])}）")
 
     return score, reasons
