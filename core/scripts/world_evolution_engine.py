@@ -124,6 +124,11 @@ def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list, project
             applied_log.append({"target": target, "op": "delta", "result": "skip_not_numeric"})
             return False
         delta = ripple["delta"]
+        if not isinstance(delta, (int, float)) or isinstance(delta, bool):
+            # 2026-05-30 北极星复审：涟漪规则若手写/LLM 生成 delta 为 "+5" 字符串 → old+delta TypeError。
+            # 守卫（与 old 同级）：非数值 delta 跳过不崩（世界数值是大势核心，崩会丢牵引）。
+            applied_log.append({"target": target, "op": "delta", "result": "skip_delta_not_numeric"})
+            return False
         new = max(0, min(100, old + delta))  # 数值钳制 0-100
         parent[key] = new
         applied_log.append({"target": target, "op": "delta", "old": old, "new": new, "delta": delta, "reason": reason})
