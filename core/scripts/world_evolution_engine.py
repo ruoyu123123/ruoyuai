@@ -177,9 +177,21 @@ def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list, project
     if ripple.get("evaluate_completion"):
         threads = world.get("active_npc_threads", [])
         completed_log = world.setdefault("world_ticks_log", [])
-        # 当前章号 → 当前 cluster 序号（反查失败按章号近似为序号）
+        # 2026-05-29 复审修复 [L13]（SC-5）：当前章号 → 当前 cluster 序号。
+        # 反查失败时**跳过本次完成评估**，不再用章号顶替 cluster 序号
+        #（章号 ≠ cluster 序号：第 7 章可能属 cluster_002，用 7 当 cluster 序号会
+        #  把所有 expected_complete_cluster ≤ 7 的 thread 全部误判到期完成 → 正典污染）。
         cur_cid = cluster_lookup.ch_to_cluster_id(project_root, ch) if project_root is not None else None
-        cur_cluster_num = cluster_lookup.cluster_num(cur_cid) if cur_cid else ch
+        cur_cluster_num = cluster_lookup.cluster_num(cur_cid) if cur_cid else None
+        if cur_cluster_num is None:
+            applied_log.append({
+                "target": "active_npc_threads",
+                "op": "evaluate_completion",
+                "result": "skip_cluster_lookup_failed",
+                "ch": ch,
+                "note": "ch→cluster 反查失败（chapter_range 未回填）→ 跳过到期评估，不用章号顶替",
+            })
+            return True
         completed_threads = []
         remaining = []
         for t in threads:
@@ -347,13 +359,45 @@ def apply_minor_event(project_root: Path, ch: int, event_value: str) -> dict:
 
 
 def apply_fate_event(project_root: Path, ch: int, event_id: str) -> dict:
-    """fate_engine update 完成后 → 触发 fate_event 类型涟漪。"""
+    """fate_engine update 完成后 → 触发 fate_event 类型涟漪。
+
+    2026-05-29 复审修复 [H14]：world_evolution_apply_chapter --cluster 逐章重放同一份
+    fate_events_triggered（split_cluster_changes 把整 cluster 的 factual 平铺进每章
+    _changes.json，每章都含同一批 fate_events_triggered），导致同一 ME 事件的涟漪
+    （faction delta / spawn thread / consequence）被应用 N 倍（实测 6 倍）。
+    修：用 world.applied_fate_events 记录已应用的 event_id（按事件粒度幂等去重）。
+    同一 event_id 第二次进来直接跳过涟漪应用，只记一条 skipped 日志。
+    （注：fate 涟漪是「事件级一次性世界影响」，不是「每章累加」，故按 event_id 去重
+    语义正确；首次应用记录触发章 ch，供审计。）
+    """
     world = load_world(project_root)
     rules = load_rules(project_root)
     if world is None or rules is None:
         return {"error": "世界状态.json/涟漪规则.json 不存在"}
 
+    # 幂等去重：已应用过的 fate event 不再重放涟漪
+    applied_ledger = world.setdefault("applied_fate_events", {})
+    if event_id in applied_ledger:
+        # 已在 first_applied_at_ch 应用过 → 跳过，避免 delta/thread/consequence 被乘倍
+        save_world(project_root, world)  # 仅持久化（applied_fate_events 已存在，无副作用）
+        return {
+            "ch": ch,
+            "action": "apply_fate_event",
+            "event_id": event_id,
+            "matched_rules": [],
+            "applied_log": [],
+            "skipped_idempotent": True,
+            "first_applied_at_ch": applied_ledger[event_id].get("ch"),
+        }
+
     result = _apply_rules(world, rules, "fate_event", event_id, ch, project_root)
+
+    # 记录已应用（幂等键），供下次重放跳过
+    applied_ledger[event_id] = {
+        "ch": ch,
+        "matched_rules": result["matched_rules"],
+        "ts": datetime.now().isoformat(timespec="seconds"),
+    }
 
     log = world.setdefault("world_ticks_log", [])
     log.append({

@@ -60,6 +60,11 @@ try:
 except ImportError:
     cio = None  # 缺失则 _changes.json 豁免源降级为不可用，audit 报告源仍工作
 
+try:
+    import cluster_lookup  # 2026-05-29 复审复修 SC-1：blueprint list 归一守卫
+except Exception:
+    cluster_lookup = None  # 缺模块退回原 dict 守卫
+
 # 复发阈值：同一 dimension::code 累计出现 N 次 -> 升级为高 confidence failure_pattern
 RECUR_THRESHOLD = 3
 # P2-5：时间维度的 confidence 衰减 + 过期清理
@@ -272,7 +277,16 @@ def _chapter_scene_types(project_root: Path, ch: int) -> list:
     except (json.JSONDecodeError, OSError):
         return []
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-    for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+    # 2026-05-29 复审复修 SC-1：blueprint 可能是 list（城南实测），先归一成 dict 再迭代。
+    if cluster_lookup is not None:
+        _bp = cluster_lookup.normalize_blueprint(prog)
+    else:
+        _bp = prog.get("cluster_blueprint") or {}
+        if not isinstance(_bp, dict):
+            _bp = {}
+    for cid, cdata in _bp.items():
+        if not isinstance(cdata, dict):
+            continue
         for p in cdata.get("scene_storyboard", []):
             if p.get("ch") == ch:
                 st = p.get("scene_type", [])

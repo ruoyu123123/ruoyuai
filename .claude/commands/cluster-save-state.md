@@ -85,11 +85,11 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1
 
 # 第 2 步：parse cluster_changes
 
-读 `章节/cluster_<key>_draft/cluster_changes.json` 的 `factual` / `self_eval` 段（cluster 级单文件，不读 per-chapter changes）。
+读 `章节/cluster_<key>_draft/cluster_changes.json` 的 `factual` / `self_eval` 段（writer 整块产出的 cluster 级单文件草稿元数据）。
 
-产出：`_数据库/.wal/cluster_<key>_parsed.json`（含 9 类 factual 变更 · 字段统一规范化）
-
-> 由 `save_state.py` 内部 cluster 函数自动处理，无独立 CLI 命令。第 3 步会一并完成。
+> **2026-05-29 复审修复[L18]**：实现真相 —— `save_state.cmd_apply_cluster_changes` 会**展开本 cluster 的 chapter_range，逐章调 `cmd_parse`**，每章落地 `_数据库/.wal/第<N>章_parsed.json`（per-chapter，非单文件）+ 一份 cluster 级 `_数据库/.wal/<key>_apply_cluster.json` 汇总。**不存在** `cluster_<key>_parsed.json` 这个文件（旧文档幻影命名，已删）。
+>
+> 解析无独立 CLI 命令——第 3 步 `--apply-cluster-changes` 内部一并完成（apply 前必先 parse）。本步只做 plan 记账。
 
 **plan-step 2**：
 
@@ -327,7 +327,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - [ ] `plan_tracker.py status $PLAN_ID` 显示 12 个 required 步骤全部 `[x] completed`
 - [ ] `plan_tracker.py end $PLAN_ID` 返回 exit 0
 - [ ] `_数据库/.wal/cluster_<key>_save_state.json` 存在
-- [ ] `_数据库/.wal/cluster_<key>_parsed.json` 存在
+- [ ] `_数据库/.wal/<key>_apply_cluster.json` 存在（step3 apply-cluster-changes 汇总 · 含 writer_truth_check）+ 本 cluster 各章 `第<N>章_parsed.json` 已落地（per-chapter）
 - [ ] `_数据库/.wal/cluster_<key>_summary.json` 存在（summarizer 产出）
 - [ ] `_数据库/.judge_reports/cluster_<key>_foreshadower.json` 存在
 - [ ] Git commit `feat(cluster-NNN): N 章 (chX-chY)` 已落地

@@ -448,22 +448,33 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
       "ending_state": "本卷末尾状态"
     }
   ],
-  "cluster_blueprint": [
-    {"ch": 1, "vol": 1, "title": "章节标题", "characters": ["角色A", "角色B"], "key_events": ["事件1", "事件2"], "scene_type": ["日常", "悬疑"], "emotion": {"value": 6, "trend": "↘↗", "anchors": {"hook": "开头钩子描述", "conflict": "中段冲突描述", "climax": "高潮/反转描述", "cliffhanger": "章末悬念描述"}}, "goal": "本章核心目标", "turning_point": "关键转折", "threads_advance": ["线索ID"], "try_fail": "尝试X→失败Y→适应Z", "info_gain": "向读者释放的新信息", "payoff": "兑现的伏笔(可选)", "time_hint": "故事时间"},
-    {"ch": 2, "vol": 1, "title": "章节标题", "characters": ["角色A", "角色C"], "key_events": ["事件3", "事件4"], "scene_type": ["战斗", "转折"], "emotion": {"value": -3, "trend": "↘", "anchors": {"hook": "开头钩子描述", "conflict": "中段冲突描述", "climax": "高潮/反转描述", "cliffhanger": "章末悬念描述"}}, "goal": "本章核心目标", "turning_point": "关键转折", "threads_advance": ["线索ID"], "try_fail": "尝试-失败-适应", "info_gain": "新信息释放", "payoff": null, "time_hint": "故事时间"}
-  ],
+  "cluster_blueprint": {
+    "cluster_001": {
+      "vol": 1,
+      "narrative_mode": "in_medias_res",
+      "scope_summary": "本故事块核心矛盾 + 起承转合一句话",
+      "foreshadowing_to_plant": ["fs_001"],
+      "scene_storyboard": [
+        {"ch": 1, "title": "场景标题", "characters": ["角色A", "角色B"], "key_events": ["事件1", "事件2"], "scene_type": ["日常", "悬疑"], "emotion": {"value": 6, "trend": "↘↗", "anchors": {"hook": "开头钩子描述", "conflict": "中段冲突描述", "climax": "高潮/反转描述", "cliffhanger": "章末悬念描述"}}, "goal": "本场景核心目标", "turning_point": "关键转折", "threads_advance": ["线索ID"], "try_fail": "尝试X→失败Y→适应Z", "info_gain": "向读者释放的新信息", "payoff": "兑现的伏笔(可选)", "time_hint": "故事时间"},
+        {"ch": 2, "title": "场景标题", "characters": ["角色A", "角色C"], "key_events": ["事件3", "事件4"], "scene_type": ["战斗", "转折"], "emotion": {"value": -3, "trend": "↘", "anchors": {"hook": "开头钩子描述", "conflict": "中段冲突描述", "climax": "高潮/反转描述", "cliffhanger": "章末悬念描述"}}, "goal": "本场景核心目标", "turning_point": "关键转折", "threads_advance": ["线索ID"], "try_fail": "尝试-失败-适应", "info_gain": "新信息释放", "payoff": null, "time_hint": "故事时间"}
+      ]
+    }
+  },
   "propagation_debt": [],
   "started_at": "ISO日期",
   "last_updated": "ISO日期"
 }
 ```
+   - 🔴 **2026-05-29 复审修复[H5]**：`cluster_blueprint` **必须是 dict**（`cluster_id` → cluster 数据），**禁止初始化为 list**。SC-1 规范形态 + `cluster_lookup._iter_blueprint_ranges` 用 `.items()` 遍历 `cluster_blueprint` 取每个 cluster 的 `chapter_range` / `scene_storyboard[].ch`；写成 list 会让反查整体瘫痪（城南项目实测 list(25) 即此 bug）。
+   - 🔴 **fluid 涌现纪律**：outline 阶段**只详化 `cluster_001`**（含完整 `scene_storyboard` + `scope_summary` + `foreshadowing_to_plant`）。`cluster_002+` 不预设——由 cluster-save-state step 11 涌现。
+   - 🔴 **v27 freestyle 不写 `chapter_range`**：cluster 的 `chapter_range` 由 splitter 切完后回填（事件簇.json 为权威源），outline 阶段不预设。`scene_storyboard[].ch` 是 writer 蓝图序号（场景顺序），非物理章号。
+   - `narrative_mode`：仅首个 cluster 默认 `"in_medias_res"`（黄金三章倒叙），后续 cluster 默认 `"linear"`。
    - `volumes`：分卷层（仅在预估 >= 20 章时生成，短篇直接跳过 volumes 字段）
    - `volume_arc`：每卷的人物成长弧线（起承转），写作时注入到章节prompt，确保章节服务于卷级目标
    - `key_milestones`：卷级关键事件，用于长距召回
-   - `cluster_blueprint` 从大纲中提取，每章记录出场角色、关键事件和场景类型
-   - 每章关联到所属卷（`vol` 字段），用于卷级一致性检查
-   - `scene_type` 标注本章主要场景类型（可多选），用于场景规则注入
-   - 后续 cluster-write（build_manifest）根据 `cluster_blueprint[ch].characters` 按需加载人物卡
+   - 每个 cluster 关联到所属卷（`vol` 字段），用于卷级一致性检查
+   - `scene_type` 标注本场景主要类型（可多选），用于场景规则注入
+   - 后续 cluster-write（build_manifest）根据 `cluster_blueprint[cluster_id].scene_storyboard[].characters` 按需加载人物卡
 7. Write `_数据库/场景规则.json` — 初始化场景类型对应的写作规则
 ```json
 {
@@ -697,7 +708,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 启用 `--mode fluid` 时：
 
-1. **不生成** 逐章 cluster_blueprint（cluster_blueprint = []）
+1. **不生成** 逐章 cluster_blueprint（`cluster_blueprint = {}` — 🔴 复审修复[H5]：空 dict 而非空 list，与 SC-1 规范形态一致）
 2. **生成 `_数据库/大势卡.json`**——大事件池（major_events[]）
    - 每个大事件含 `prerequisites` + `expected_window_after` + `physical_evidence`
    - 不指定章号，由 fate_engine.py 按条件涌现触发

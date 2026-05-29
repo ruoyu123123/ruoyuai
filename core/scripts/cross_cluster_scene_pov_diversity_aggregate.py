@@ -80,7 +80,10 @@ def main():
         # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
         progress = load_json(project_root / "_数据库" / "进度.json", {})
         plan = {}
-        for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        # 2026-05-29 复审修复（SC-1/C2）：cluster_blueprint 可能是 list（城南实测），
+        # 裸 .items() 会 AttributeError 崩。统一经 cluster_lookup.normalize_blueprint 归一成 dict。
+        import cluster_lookup as _cl  # noqa: E402
+        for cid, cdata in _cl.normalize_blueprint(progress).items():
             for sb in cdata.get("scene_storyboard", []):
                 ch = sb.get("ch")
                 if ch:
@@ -110,8 +113,14 @@ def main():
 
     findings = []
 
-    valid_scenes = [(c, s) for c, s, _ in per_ch if s]
-    valid_povs = [(c, p) for c, _, p in per_ch if p]
+    # 2026-05-29 复审修复：scene_type 可能是 list（城南 storyboard schema 用 ['悬疑','转折']）
+    # → Counter/比较时 unhashable 崩。统一取主类型（首元素）归一成字符串，两条路径都覆盖。
+    def _st1(s):
+        if isinstance(s, list):
+            return s[0] if s else ""
+        return s
+    valid_scenes = [(c, _st1(s)) for c, s, _ in per_ch if s]
+    valid_povs = [(c, (p[0] if isinstance(p, list) and p else p)) for c, _, p in per_ch if p]
 
     # A. SCENE_TYPE
     if len(valid_scenes) >= 3:

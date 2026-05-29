@@ -1,6 +1,6 @@
-"""learning_hub.py — 统一学习调度中枢（v22.5 L9）
+"""learning_hub.py — 统一学习调度中枢（v22.5 L9 · 2026-05-29 复审 L11 扩列）
 
-统一调度全部 8 学习器（涵盖叙事/UX/错误/性能/工具/安全/协作 全维度）：
+统一调度全部学习器（涵盖叙事/UX/错误/性能/工具/安全/协作 全维度）：
 
 L1+L6: user_experience_learner   - 用户行为 + 痛点
 L2:    error_pattern_analyzer    - 错误聚类
@@ -10,6 +10,12 @@ L8:    high_score_pattern_extractor - 高分章节共性学习
 + 既有 v22 SE:
 SE1:   skill_evolver evolve/promote/retire
 SE4:   evolution_orchestrator 三角共演化
+
++ v23 自演化安全/盲点曝光层（2026-05-29 复审 L11 — 以下均已 cluster 化且内部自动检测
+  cluster/chapter 模式，账本不足时优雅回退逐章；reward_hacking_detector / evolution_canary
+  之前 cluster 入口悬空无调用方，本次纳入 full 调度）：
+  stuck_loop_guard / adversarial_blindspot_scan / counterfactual_judge_diff /
+  reward_hacking_detector / evolution_canary / gepa_prompt_optimizer
 
 聚合输出：_数据库/.learning/hub_summary_<ts>.json（统一进度报告）
 
@@ -53,7 +59,15 @@ LEARNERS_FULL = [
     ("evolution_orchestrator.py", ["{project}", "--cluster", "{cur_cluster}"], "SE4 三角共演化"),
     ("stuck_loop_guard.py", ["{project}"], "v23 Layer 0 卡死信号扫描"),
     ("adversarial_blindspot_scan.py", ["{project}"], "v23 Layer 1 集体盲点曝光"),
-    ("counterfactual_judge_diff.py", ["{project}"], "v23 Layer 2+3 self-protection 曝光"),
+    # 2026-05-29 复审修复（L11）：counterfactual_judge_diff / reward_hacking_detector /
+    # evolution_canary 均已 cluster 化（内部用 cluster_summary_reader.get_clusters 自动判
+    # cluster/chapter 模式，账本不足时优雅回退逐章），但 reward_hacking_detector /
+    # evolution_canary 之前没有任何调用方（cluster 入口悬空）。这里纳入 learning_hub full
+    # 调度。三者都只收 project 位置参数 + 自动检测模式，故不需要 --cluster；exit 码遵循
+    # SC-2（2=warning/2=致命 / 1=advisory / 0=ok），run_learners 仅记录不打断流水线。
+    ("counterfactual_judge_diff.py", ["{project}"], "v23 Layer 2+3 self-protection 曝光（自动 cluster）"),
+    ("reward_hacking_detector.py", ["{project}"], "v23 自演化安全 · reward hacking 检测（自动 cluster）"),
+    ("evolution_canary.py", ["{project}"], "v23 自演化金丝雀 · 演化回归监测（自动 cluster）"),
     ("gepa_prompt_optimizer.py", ["--project", "{project}"], "v23 Layer 4 GEPA Pareto 前沿"),
 ]
 

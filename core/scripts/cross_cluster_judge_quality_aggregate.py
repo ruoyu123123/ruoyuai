@@ -262,8 +262,18 @@ def _ledger_judge_records(project_root: Path, last_n_clusters: int):
     return csr.get_chapter_records(project_root, last_n_clusters=last_n_clusters)
 
 
+# 2026-05-29 复审修复 [M10-c]：账本 judge_score 来自 builder grade_map {A:4,B:3,C:2,D:1}
+# 取 mean → 标度是 1-4（grade 标度），不是磁盘版 scan_judge_scores 消费的 0-10 分数。
+# 旧版把 0-10 的阈值（PLATEAU<0.3 / VOLATILITY>1.5）直接套到 1-4 标度上：
+#   · PLATEAU<0.3：1-4 标度上评分极易落在 0.3 窗内 → 恒报；
+#   · VOLATILITY>1.5：1-4 标度（5 点最大 std≈1.5）几乎不可达 → 永不触发。
+# 按标度比例（3/10≈0.3）缩放阈值，使其在 grade 标度上语义对齐 0-10 版。
+_GRADE_PLATEAU_DELTA = 0.1   # 0.3(0-10) × 0.3 ≈ 0.1（grade 标度近乎无区分度）
+_GRADE_VOLATILITY_STD = 0.45  # 1.5(0-10) × 0.3 ≈ 0.45（grade 标度上的高波动）
+
+
 def scan_judge_scores_ledger(recs) -> list[dict]:
-    """与 scan_judge_scores 同构，score 序列来自账本 judge_score。"""
+    """与 scan_judge_scores 同构，score 序列来自账本 judge_score（grade 标度 1-4）。"""
     findings = []
     scores = []  # [(ch, score)]
     for ch, rec in recs:
@@ -274,7 +284,7 @@ def scan_judge_scores_ledger(recs) -> list[dict]:
     if len(scores) < 3:
         return []
 
-    # SCORE_DECLINE
+    # SCORE_DECLINE（趋势比较，与标度无关 → 逻辑保持不变）
     decline_streak = 0
     for i in range(1, len(scores)):
         if scores[i][1] < scores[i - 1][1]:
@@ -291,33 +301,33 @@ def scan_judge_scores_ledger(recs) -> list[dict]:
         else:
             decline_streak = 0
 
-    # SCORE_PLATEAU
+    # SCORE_PLATEAU（2026-05-29 复审修复 [M10-c]：阈值缩放到 grade 标度）
     if len(scores) >= 5:
         recent5 = scores[-5:]
         smin = min(s for _, s in recent5)
         smax = max(s for _, s in recent5)
-        if smax - smin < 0.3:
+        if smax - smin < _GRADE_PLATEAU_DELTA:
             findings.append({
                 "severity": "advisory",
                 "code": "JUDGE_SCORE_PLATEAU",
                 "range": [smin, smax],
                 "trail_chs": [c for c, _ in recent5],
-                "suggestion": f"近 5 章 judge 评分波动 < 0.3（{smin:.1f}-{smax:.1f}）→ judge 失去区分度",
+                "suggestion": f"近 5 章 judge 评分波动 < {_GRADE_PLATEAU_DELTA}（{smin:.1f}-{smax:.1f}，grade 标度）→ judge 失去区分度",
             })
 
-    # SCORE_VOLATILITY
+    # SCORE_VOLATILITY（2026-05-29 复审修复 [M10-c]：阈值缩放到 grade 标度）
     if len(scores) >= 5:
         recent5 = [s for _, s in scores[-5:]]
         mean = sum(recent5) / len(recent5)
         var = sum((s - mean) ** 2 for s in recent5) / len(recent5)
         std = var ** 0.5
-        if std > 1.5:
+        if std > _GRADE_VOLATILITY_STD:
             findings.append({
                 "severity": "advisory",
                 "code": "JUDGE_SCORE_VOLATILITY",
                 "std": round(std, 2),
                 "mean": round(mean, 2),
-                "suggestion": f"近 5 章 judge 评分标准差 {std:.2f}（>1.5）→ judge 不稳定，建议 meta-judge 校准",
+                "suggestion": f"近 5 章 judge 评分标准差 {std:.2f}（>{_GRADE_VOLATILITY_STD}，grade 标度）→ judge 不稳定，建议 meta-judge 校准",
             })
     return findings
 

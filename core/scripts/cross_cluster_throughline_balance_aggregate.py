@@ -37,6 +37,36 @@ import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
 
 THROUGHLINES = ["OS", "MC", "IC", "RS"]
 
+# 2026-05-29 复审修复 [M11]：no_progress 哨兵词表。
+# 原代码只判 v != "no_progress" and v != ""，但 writer/账本里「无推进」有多种写法
+# （none / 无 / 未推进 / N/A / - / false 字符串等），这些都被 bool(v) 当成命中
+# → THROUGHLINE_DORMANT 漏报（线明明沉睡却算作推进）。统一归一后判定。
+_NO_PROGRESS_SENTINELS = {
+    "", "no_progress", "no", "none", "null", "nil", "n/a", "na", "-", "—",
+    "false", "0", "skip", "skipped",
+    "无", "未推进", "无推进", "没有推进", "未涉及", "无进展", "未进展", "无变化", "未触及",
+}
+
+
+def _has_progress(v) -> bool:
+    """判断某 throughline 本章是否真有推进。
+
+    布尔 True / 非哨兵的非空字符串 / 非空 dict/list → 推进；
+    布尔 False / None / 哨兵词（去空白小写归一后命中）→ 无推进。
+    """
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return v.strip().lower() not in _NO_PROGRESS_SENTINELS
+    if isinstance(v, (list, dict)):
+        return bool(v)
+    # 数值：0 视为无推进，其余有推进
+    if isinstance(v, (int, float)):
+        return v != 0
+    return bool(v)
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -69,7 +99,7 @@ def main():
             progress_map = {}
             for t in THROUGHLINES:
                 v = tp.get(t, "no_progress")
-                progress_map[t] = bool(v) and v != "no_progress" and v != ""
+                progress_map[t] = _has_progress(v)  # 2026-05-29 复审修复 [M11]
             per_chapter.append((ch, progress_map))
         if not per_chapter:
             print("[SKIP] cluster 账本无 throughline_progress 记录")
@@ -90,7 +120,7 @@ def main():
             progress_map = {}
             for t in THROUGHLINES:
                 v = tp.get(t, "no_progress")
-                progress_map[t] = bool(v) and v != "no_progress" and v != ""
+                progress_map[t] = _has_progress(v)  # 2026-05-29 复审修复 [M11]
             per_chapter.append((ch, progress_map))
 
     if not per_chapter:

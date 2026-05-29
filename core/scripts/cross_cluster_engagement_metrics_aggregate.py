@@ -182,6 +182,10 @@ def scan_lazy_spawn(project_root: Path, chapters: list[int]) -> list[dict]:
     findings = []
     max_ch = max(chapters) if chapters else 0
     for c in pool.get("emerged_characters", []) or []:
+        # 2026-05-29 复审修复 [L17]：emerged_characters 可能混入字符串项（如仅角色名），
+        # 直接 c.get() 会 AttributeError 崩溃 → 加 isinstance 守卫跳过非 dict 项。
+        if not isinstance(c, dict):
+            continue
         spawned = c.get("spawned_at_ch") or 0
         promoted = c.get("promoted_to_emerged_at_ch")
         cid = c.get("id")

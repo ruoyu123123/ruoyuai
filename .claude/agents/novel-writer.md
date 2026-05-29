@@ -40,89 +40,62 @@ MANIFEST: <PROJECT>/_数据库/.manifest/ch_<NNN>.json
 - 读 PROJECT/_数据库/.style_directive/ch_<NNN>.json
 - 读 PROJECT/_数据库/进度.json 找当前 cluster_id / cluster_blueprint
 - 任一缺失 → return `{ok:false, reason:"missing X"}`
-- **single 模式守护**（v25+）：
-  1. 找 cluster_blueprint 中 `cluster == 当前 cluster_id` 的全部条目，记为 `cluster_chapters[]`
-  2. 若 `len(cluster_chapters) == 1` 且 `<PROJECT>/_数据库/.allow_single_mode.flag` 不存在 → **fail-fast** return `{ok:false, reason:"single mode deprecated; cluster_<id> only has 1 chapter in cluster_blueprint; main agent must spawn novel-outline-planner to add ch+1..ch+N placeholders before retrying writer", suggested_fix:"see novel-writer.md '🚫 single 模式已废弃' 段"}`
-  3. 若 `len(cluster_chapters) >= 2` → 设 `chapter_start = min(ch)`，`chapter_end = max(ch)`，进入 ECAS 模式
-  4. 若 flag 存在 → 强制走 DCAS（最少 2 章，target-cjk 6000-8000），同时在 return 体加 `warning:"single-mode bypass via .allow_single_mode.flag"`
+- **起始章号推导**（v27 freestyle · SC-3）：
+  1. 不再反查目标 cluster 自身的 chapter_range（freestyle 下尚未回填）。
+  2. `chapter_start` = 「上一个已落章 cluster 末章 + 1」；`cluster_001` 特判 = 1。来源：事件簇.json 里已落章 cluster（status 已完成/done/进行中且 chapter_range 有值）取最大末章，或扫 `章节/第NNN章` 目录取最大章号 + 1。
+  3. gen_writer.py **自带 v27 freestyle 起始章推导**（缺省 `--chapter-start` 时自动按上述规则算），本 agent 可直接不传 `--chapter-start` 让脚本推。
+  4. **不传 `--chapter-end`** → writer 不知目标章数（freestyle），章数由 splitter step 6 按字数切自然涌现。
 
 ### Step 2 · 调用 gen_writer.py（实际写正文的地方）
 
-`gen_writer.py` 接受统一参数（**只有 `--cluster` 这一种调用模式**），模式区别通过 `--target-cjk` 字数区间体现：
+`gen_writer.py` 只有 `--cluster` 这一种调用模式。**v27 默认 freestyle**：不传 `--chapter-end` / `--target-cjk`，writer 按 `cluster.scope_summary` + `scene_storyboard` 自由发挥，字数自然涌现（健康区间 12000-25000 CJK），章数由后期 splitter 按字数切决定。
+
+```bash
+# v27 freestyle（默认 · 推荐）—— 不传 --chapter-end / --target-cjk
+python core/scripts/gen_writer.py \
+  --project "<PROJECT>" \
+  --cluster <id>
+```
+
+> 🚫 **single 模式已废弃**（v25+）+ **`.allow_single_mode.flag` 已彻底删除**（v26）：单章直写曾作为兜底存在，但实证表明会绕过 cluster 级伏笔/voice/anchor 完整性校验。v26 起 chapter mode 全删、无 flag 旁路、无降级路径。freestyle 下章数由 splitter 涌现，**不存在「cluster 只有 1 章」的预设概念**（splitter 后期才决定切几章）。
+> - 来源：用户原话「我要清理掉单章生成的模式，让单章生成没有生存空间」（2026-05-26）+ v27「让 ai 自由发挥」。
 
 | 模式（语义） | 触发条件 | gen_writer 参数 |
 |---|---|---|
-| **ECAS**（默认 · 故事块） | cluster_blueprint 含多章 cluster（推荐 · 唯一默认） | `--cluster <id> --chapter-start <X> --chapter-end <Y> --target-cjk 13000-22000` |
-| **DCAS**（双章合一 · 兼容） | cluster_blueprint 标记 dcas 双章 | `--cluster <id> --chapter-start <X> --chapter-end <X+1> --target-cjk 6000-8000` |
+| **freestyle**（v27 默认 · 推荐） | 默认所有 cluster | `--cluster <id>`（不传章数/字数 · 起始章自动推导） |
+| **locked**（v26 兼容 · 旧） | 用户显式要求锁字数 | `--cluster <id> --chapter-start <X> --chapter-end <Y> --target-cjk 13000-22000` |
 
-> 🚫 **single 模式已废弃**（v25+）：单章直写曾作为兜底存在，但实证表明会绕过 cluster 级伏笔/voice/anchor 完整性校验，导致 cluster 内部叙事断层。
-> **当前规则**：
-> - 检测到 cluster_blueprint 当前 cluster 只有 1 条记录 → **fail-fast** return `{ok:false, reason:"single mode deprecated, cluster_<id> needs ch1-N placeholders (see outline plan-step 3)"}`
-> - 强制主代理补齐 cluster_001（或当前 cluster）的所有章节占位再 spawn writer
-> - 旁路（仅紧急场景）：项目根 `_数据库/.allow_single_mode.flag` 存在时降级为 DCAS（最少 2 章），仍不允许真正的 single chapter
-> - 来源：用户原话「我要清理掉单章生成的模式，让单章生成没有生存空间」（2026-05-26）
+gen_writer 内部：读 manifest + style skill + 调研 cache + cluster_brief（scope_summary/scene_storyboard）+ 7 项硬铁律 → 组装 prompt → 调当前 active gen-model profile（OpenAI 兼容 `/v1/chat/completions`，stream 模式）→ 失败按 `GEN_MODEL_FALLBACK_CHAIN` 切换 → 写出 `章节/cluster_<id>_draft/cluster_<id>_draft.txt` + `cluster_<id>_changes.json`（**整块草稿** · 标 `writer_mode:"freestyle_v27"` + `chapter_count_decided_by_splitter:true`）。
 
-```bash
-python core/scripts/gen_writer.py \
-  --project "<PROJECT>" \
-  --cluster <id> \
-  --chapter-start <X> --chapter-end <Y> \
-  --target-cjk <range>
-```
+> 🔴 **本 agent step 2 到此为止 —— 不调 splitter**（v24 核心纪律）：writer 只产整块草稿。切章（splitter）**推迟到 `/cluster-write` 调度器的 step 6** 统一执行（先对整块草稿跑 13 个 cluster 视野 scanner + 修复，修完才切）。本 agent 立即切章 = 违反 v24 倒置流水线。
 
-gen_writer 内部：读 manifest + style skill + 调研 cache + cluster_blueprint + 7 项硬铁律 → 组装 prompt → 调当前 active gen-model profile（OpenAI 兼容 `/v1/chat/completions`，stream 模式）→ 失败按 `GEN_MODEL_FALLBACK_CHAIN` 切换 → 写出 `章节/cluster_<id>_draft/cluster_<id>_draft.txt` + `cluster_<id>_changes.json`（**整块草稿**，splitter 后切成单章）。
+### Step 3 · 校验落地草稿文件
 
-### Step 3 · 调 chapter-splitter（按需）
+整块草稿必须 2 个文件齐全：
 
-仅 ECAS / DCAS 模式：
-
-```
-spawn novel-chapter-splitter
-  prompt:
-  PROJECT: <项目路径>
-  DRAFT: <PROJECT>/章节/cluster_<id>_draft/cluster_<id>_draft.txt
-  CLUSTER_RANGE: <X>-<Y>
-```
-
-splitter 选自然截断点切章，写出 `章节/第<NNN>章/第<NNN>章.txt`。
-
-### Step 4 · 调 chapter_titles 重生标题
-
-切完所有章节后：
-
-```bash
-python core/scripts/gen_chapter_titles.py \
-  --project "<PROJECT>" \
-  --chapters <X>-<Y>
-```
-
-三档策略（80/15/5）：cluster 末章 = mid 档 / 高潮章（用户标）= high 档 / 其他 = normal 档。
-
-### Step 5 · 校验落地文件
-
-每章必须 2 个文件齐全：
-
-- `<PROJECT>/章节/第<NNN>章/第<NNN>章.txt`（纯正文 · 章首带「第NNN章 标题」）
-- `<PROJECT>/章节/第<NNN>章/第<NNN>章_changes.json`（`{factual, self_eval}`）
+- `<PROJECT>/章节/cluster_<id>_draft/cluster_<id>_draft.txt`（整块正文 · 未切章）
+- `<PROJECT>/章节/cluster_<id>_draft/cluster_<id>_changes.json`（`{factual, self_eval}` · cluster 级）
 
 任一缺失 → return `{ok:false, reason:"output missing X"}`。
 
-### Step 6 · 报告主代理
+> chapter_titles 重生 + per-chapter 落地文件校验由 splitter 阶段（cluster-write step 6+）负责，不属本 agent 职责。
+
+### Step 4 · 报告主代理
 
 返回 JSON：
 
 ```json
 {
   "ok": true,
-  "mode": "ecas|dcas",
-  "chapters_written": [N, N+1, ...],
-  "files": {
-    "第NNN章": ["第NNN章.txt", "第NNN章_changes.json"]
-  },
+  "mode": "freestyle|locked",
+  "draft_file": "章节/cluster_<id>_draft/cluster_<id>_draft.txt",
+  "changes_file": "章节/cluster_<id>_draft/cluster_<id>_changes.json",
+  "cjk_count": <int>,
+  "chapter_count_decided_by_splitter": true,
   "gen_model_profile": "<active profile name>",
   "fallback_used": false,
   "duration_seconds": <int>,
-  "next_action": "spawn audit_hub.py for quality scan"
+  "next_action": "cluster-write 调度器跑 cluster 视野 scanner + 修复 → step 6 splitter 切章"
 }
 ```
 

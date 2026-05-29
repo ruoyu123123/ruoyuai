@@ -29,6 +29,13 @@ import re
 from pathlib import Path
 from typing import Optional
 
+# 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测），裸 .items() 会崩。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cluster_lookup  # blueprint list 归一守卫
+except Exception:
+    cluster_lookup = None
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -129,7 +136,16 @@ def build_directive(project_root: Path, chapter: int) -> dict:
         ]
     _progress = load_json(db / "进度.json", {})
     cluster_blueprints = []
-    for cid, cdata in (_progress.get("cluster_blueprint", {}) or {}).items():
+    # 2026-05-29 复审复修 SC-1：blueprint 可能是 list（城南实测），先归一成 dict 再迭代。
+    if cluster_lookup is not None:
+        _bp = cluster_lookup.normalize_blueprint(_progress)
+    else:
+        _bp = _progress.get("cluster_blueprint") or {}
+        if not isinstance(_bp, dict):
+            _bp = {}
+    for cid, cdata in _bp.items():
+        if not isinstance(cdata, dict):
+            continue
         cluster_blueprints.extend(cdata.get("scene_storyboard", []))
 
     # 1) 取 cross_chapter_diversity

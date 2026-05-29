@@ -218,7 +218,9 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     # → 两边归一化为 'cluster_NNN' 后匹配（修复类型不匹配导致 storyboard 注入失效）
     _norm_cid = cluster_lookup.normalize_cluster_id(cluster_id)
     if _norm_cid:
-        for _bp_key, _bp_val in cluster_blueprint.items():
+        # 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测 list(25)），
+        # 裸 .items() 会 AttributeError 崩 writer 路径。先 normalize_blueprint 归一成 dict 再迭代。
+        for _bp_key, _bp_val in cluster_lookup.normalize_blueprint(cluster_blueprint).items():
             if cluster_lookup.normalize_cluster_id(_bp_key) == _norm_cid:
                 plans = _bp_val.get('scene_storyboard', [])
                 break

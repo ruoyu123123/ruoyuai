@@ -69,7 +69,15 @@ def scan(project_root: Path, cluster_id: str) -> dict:
         if keyword and keyword in text:
             planted_check.append({"id": fs_id, "found": True, "keyword": keyword})
         elif fs_desc:
-            not_planted.append({"id": fs_id, "desc": fs_desc[:80], "keyword_searched": keyword})
+            # 2026-05-29 复审修复 [M13]：构造 not_planted 时拷入 tier 键。
+            # 否则下方 gate_level 判定 `f.get("tier", 99) == 1` 永远拿不到 tier，
+            # tier-1（必埋）漏埋被误降为 advisory（应为 hard_gate）。
+            not_planted.append({
+                "id": fs_id,
+                "desc": fs_desc[:80],
+                "keyword_searched": keyword,
+                "tier": fs.get("tier", 99),
+            })
 
     # 检测 2: 伏笔表 promises setup_cluster = 本 cluster 的伏笔
     promises = foreshadow.get("promises", [])
@@ -92,7 +100,9 @@ def scan(project_root: Path, cluster_id: str) -> dict:
     if not_planted:
         issues.append({
             "code": "FORESHADOWING_NOT_PLANTED",
-            "gate_level": "hard_gate" if any(f.get("tier", 99) == 1 for f in not_planted) else "advisory",
+            # 2026-05-29 复审复修 [M13]：tier 存在 int(1) 与 string("A") 双约定（event_cluster_schema
+            # 定义为 "A"/"B"/"C"，运行时部分项目写 1/2/3）。两种都认 tier-1/A 为必埋 → hard_gate。
+            "gate_level": "hard_gate" if any(f.get("tier", 99) in (1, "1", "A") for f in not_planted) else "advisory",
             "severity": "error" if len(not_planted) >= 2 else "warning",
             "count": len(not_planted),
             "items": not_planted[:5],

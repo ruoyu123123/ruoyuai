@@ -32,6 +32,13 @@ import re
 import sys
 from pathlib import Path
 
+# 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测），裸 .items() 会崩。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cluster_lookup  # 章号→cluster_id + blueprint list 归一守卫
+except Exception:  # 防御：缺模块退回原 dict 守卫
+    cluster_lookup = None
+
 # ============ banned patterns（与 pretooluse_chapter_edit_gate.py 同源）============
 
 SCREENPLAY_PATTERNS = [
@@ -127,7 +134,16 @@ def collect_anchors(db_dir: Path) -> set[str]:
     if pr_path.exists():
         try:
             pr = json.loads(pr_path.read_text(encoding="utf-8"))
-            for cid, c in (pr.get("cluster_blueprint", {}) or {}).items():
+            # 2026-05-29 复审复修 SC-1：blueprint 可能是 list，先归一成 dict 再迭代。
+            if cluster_lookup is not None:
+                _bp = cluster_lookup.normalize_blueprint(pr)
+            else:
+                _bp = pr.get("cluster_blueprint") or {}
+                if not isinstance(_bp, dict):
+                    _bp = {}
+            for cid, c in _bp.items():
+                if not isinstance(c, dict):
+                    continue
                 for fld in ("title", "scope_summary"):
                     v = c.get(fld)
                     if isinstance(v, str):

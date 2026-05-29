@@ -66,6 +66,8 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import chapter_io as cio  # noqa: E402
+# 2026-05-29 复审修复 [M12]：cluster 视野下 chapter_end_anchor 限本 cluster 章范围
+import cluster_lookup  # noqa: E402
 
 # ---- 维度归类：把各校验器的 code 映射到 6 大维度 ----
 # 剧情 / 风格 / 结构 / 伏笔 / 对话 / 节奏
@@ -988,6 +990,17 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                 m = re.search(r"第(\d+)章", d.name)
                 if m and int(m.group(1)) < 9000:  # 排除虚拟 ch_9000
                     ch_nums.append(int(m.group(1)))
+            # 2026-05-29 复审修复 [M12]：cluster 模式下 chapter_end_anchor 只扫本 cluster
+            # 的 chapter_range，不再用 min~max 全工程章号（之前把别的 cluster 的章也扫进来 →
+            # 报告污染：把历史 cluster 的章末问题算到当前 cluster 头上）。
+            # 取不到本 cluster range（fluid v27 未回填）时回退全工程区间（保持原行为，零回归）。
+            cl_rng = cluster_lookup.cluster_id_to_range(project_root, cluster_key)
+            if cl_rng and len(cl_rng) == 2:
+                lo = max(cl_rng[0], 1)
+                hi = cl_rng[1]
+                ch_nums = [c for c in ch_nums if lo <= c <= hi]
+                if not ch_nums:
+                    ch_nums = list(range(lo, hi + 1))
             if ch_nums:
                 ch_range = f"{min(ch_nums)}-{max(ch_nums)}"
                 tasks.append((
@@ -1041,7 +1054,9 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
         if progress_path.exists():
             try:
                 prog_data = json.loads(progress_path.read_text(encoding="utf-8"))
-                for cid, cdata in (prog_data.get("cluster_blueprint", {}) or {}).items():
+                # 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测 list(25)），
+                # 裸 .items() 会 AttributeError 崩。先 normalize_blueprint 归一成 dict 再迭代。
+                for cid, cdata in cluster_lookup.normalize_blueprint(prog_data).items():
                     for c in cdata.get("scene_storyboard", []):
                         if c.get("ch") == ch:
                             st = c.get("scene_type", [])
@@ -1279,6 +1294,38 @@ def _parse_cluster_arg(args):
         return None
 
 
+def _cleanup_virtual_chapters(project_root: Path) -> None:
+    """2026-05-29 复审修复 [M14]：清理虚拟章号 (>=9000) 残留。
+
+    cluster 级 audit 用虚拟 ch=9000 占位复制 cluster_draft 成临时章目录 + 临时 manifest，
+    跑完在 finally rmtree。但进程被 kill / 异常退出会留残留，之后被各处 glob(第*章)
+    误捡（phantom 章）。本函数统一清「章节/第>=9000章」目录 + 「.manifest/ch_>=9000*.json」，
+    供 audit_cluster 入口（建前先清）与 finally（兜底再清）复用。失败不抛（best-effort）。
+    """
+    import shutil as _shutil
+    chap_dir = project_root / "章节"
+    if chap_dir.exists():
+        for d in chap_dir.glob("第[0-9]*章"):
+            m = re.search(r"第(\d+)章", d.name)
+            if m and int(m.group(1)) >= 9000:
+                try:
+                    if d.is_dir():
+                        _shutil.rmtree(d)
+                    else:
+                        d.unlink(missing_ok=True)
+                except Exception:
+                    pass
+    manifest_dir = project_root / "_数据库" / ".manifest"
+    if manifest_dir.exists():
+        for p in manifest_dir.glob("ch_[0-9]*.json"):
+            m = re.search(r"ch_(\d+)", p.name)
+            if m and int(m.group(1)) >= 9000:
+                try:
+                    p.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+
 def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers: list) -> dict:
     """v24: cluster 级 audit — 把 cluster_draft.txt 当一个超长章跑现有 scanner 集合，
     报告聚合所有 scene 的 issue。
@@ -1297,6 +1344,11 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
     import shutil
     fake_ch = 9000  # cluster 虚拟章号
     fake_ch_dir = project_root / "章节" / f"第{fake_ch:04d}章"
+    # 2026-05-29 复审修复 [M14]：入口先清上次崩溃残留的虚拟章 + 虚拟 manifest。
+    # 旧版只靠 finally rmtree 清理，进程被 kill / 异常退出时虚拟 ch>=9000 会残留磁盘，
+    # 之后被各处 glob(第*章) 误捡（phantom 章污染 splitter / scanner / 拼接全文）。
+    # 入口统一清「章节/第>=9000章」目录 + 「.manifest/ch_>=9000*.json」，确保干净起点。
+    _cleanup_virtual_chapters(project_root)
     fake_ch_dir.mkdir(parents=True, exist_ok=True)
     fake_body = fake_ch_dir / f"第{fake_ch:04d}章.txt"
     fake_changes = fake_ch_dir / f"第{fake_ch:04d}章_changes.json"
@@ -1369,6 +1421,9 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
                 fake_manifest_compressed.unlink(missing_ok=True)
             except Exception:
                 pass
+        # 2026-05-29 复审修复 [M14]：兜底统一清虚拟章号 >=9000 残留（含本次 + 历史残留），
+        # 与入口的建前清理对称，双保险防 phantom 章。
+        _cleanup_virtual_chapters(project_root)
 
 
 def main():

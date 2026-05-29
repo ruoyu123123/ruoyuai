@@ -14,9 +14,9 @@
       "description": "build_manifest.py 生成 cluster 起首章 manifest（注入 cluster brief + 全 25+ 子系统状态）+ style_injector 注入风格指令",
       "required": true,
       "skip_output_allowed": false,
+      "_doc_h7_fix": "2026-05-29 复审修复（H7）：plan_tracker create 只传 --key（纯数字）不传 --chapter → {ch:03d} 被替换成空 → 旧 expected_outputs 变成不存在的 ch_.json 路径 → step1 死锁。改目录级检查：.manifest 目录必由 build_manifest save_json mkdir 落地（起首章号 START_CH 在 create 时尚未 resolve，故不能用 {ch:03d}）。.style_directive 仅在项目有 style_profile 时才写（条件产物），从 hard expected_output 移除避免误 FAIL。",
       "expected_outputs": [
-        "_数据库/.manifest/ch_{ch:03d}.json",
-        "_数据库/.style_directive/ch_{ch:03d}.json"
+        "_数据库/.manifest"
       ]
     },
     {

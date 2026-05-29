@@ -33,6 +33,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from gen_model_loader import GenModelLoader, GenModelConfigError
+try:
+    import cluster_lookup  # 2026-05-29 复审修复：SC-1 blueprint list 归一守卫
+except Exception:  # 防御：缺模块退回原 dict 守卫
+    cluster_lookup = None
 
 
 def parse_chapters(s: str) -> list[int]:
@@ -264,10 +268,20 @@ def main():
     progress_path = project / '_数据库' / '进度.json'
     progress = json.loads(progress_path.read_text(encoding='utf-8'))
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    # 2026-05-29 复审修复：SC-1 — cluster_blueprint 可能是 list（城南实测），裸 .items()
+    # 会 AttributeError 崩。读 hint 用 normalize_blueprint 归一成 dict 再迭代。
+    if cluster_lookup is not None:
+        _bp = cluster_lookup.normalize_blueprint(progress)
+    else:
+        _bp = progress.get('cluster_blueprint', {})
+        if not isinstance(_bp, dict):
+            _bp = {}
     hint_map = {}
-    for cid, cdata in (progress.get('cluster_blueprint', {}) or {}).items():
-        for p in cdata.get('scene_storyboard', []):
-            if 'ch' in p:
+    for cid, cdata in _bp.items():
+        if not isinstance(cdata, dict):
+            continue
+        for p in cdata.get('scene_storyboard', []) or []:
+            if isinstance(p, dict) and 'ch' in p:
                 hint_map[p['ch']] = p.get('title', '')
 
     # v22.4dim N5：加载 per-book title_style 校准
@@ -309,11 +323,26 @@ def main():
 
     if not args.dry_run and new_titles:
         # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只写 cluster_blueprint
-        for cid, cdata in (progress.get('cluster_blueprint', {}) or {}).items():
-            for cp in cdata.get('scene_storyboard', []):
-                if cp.get('ch') in new_titles:
-                    cp['_old_title'] = cp.get('title', '')
-                    cp['title'] = new_titles[cp['ch']]
+        # 2026-05-29 复审修复：SC-1 — 写回必须 in-place 改持久化对象（normalize_blueprint
+        # 会新建 dict，改它不落盘）。故直接按 cluster_blueprint 真实形态原地改：
+        #   dict → 遍历各 cluster 的 scene_storyboard
+        #   list（城南遗留逐章 scene 记录）→ 直接遍历列表项
+        _raw_bp = progress.get('cluster_blueprint')
+
+        def _apply_title(cp):
+            if isinstance(cp, dict) and cp.get('ch') in new_titles:
+                cp['_old_title'] = cp.get('title', '')
+                cp['title'] = new_titles[cp['ch']]
+
+        if isinstance(_raw_bp, dict):
+            for cid, cdata in _raw_bp.items():
+                if not isinstance(cdata, dict):
+                    continue
+                for cp in cdata.get('scene_storyboard', []) or []:
+                    _apply_title(cp)
+        elif isinstance(_raw_bp, list):
+            for cp in _raw_bp:
+                _apply_title(cp)
         progress_path.write_text(json.dumps(progress, ensure_ascii=False, indent=2),
                                   encoding='utf-8')
         total = sum(tier_counts.values())

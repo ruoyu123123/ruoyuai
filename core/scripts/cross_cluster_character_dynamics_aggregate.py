@@ -57,6 +57,30 @@ def load_json(p: Path, default=None):
         return default
 
 
+def _rec_self_eval_field(rec: dict, field: str):
+    """2026-05-29 复审修复 [M8]：moves_used / position_effect_evals / ending_type / applied_style
+    的权威来源是 changes.self_eval（SC-4）。账本 ChapterRecord 多为扁平字段，但 builder 若把
+    self_eval 整段嵌进 rec（或派生扁平失败）就会让原来的 rec.get("moves_used") 变死代码取空。
+    这里：先取扁平 key，缺则回退 rec["self_eval"][field]，再缺回退 None。零回归（扁平命中即返回）。
+    """
+    if not isinstance(rec, dict):
+        return None
+    v = rec.get(field)
+    if v not in (None, [], {}, ""):
+        return v
+    se = rec.get("self_eval")
+    if isinstance(se, dict):
+        sv = se.get(field)
+        if sv not in (None, [], {}, ""):
+            return sv
+    return v
+
+
+def _rec_has_self_eval_field(rec: dict, field: str) -> bool:
+    val = _rec_self_eval_field(rec, field)
+    return val not in (None, [], {}, "")
+
+
 def get_chapters(project_root: Path, last_n: int) -> list[int]:
     chs = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
                  for d in (project_root / "章节").glob("第*章")
@@ -414,7 +438,8 @@ def scan_moves_usage_ledger(project_root: Path, recs) -> list[dict]:
     chapters = []
     for ch, rec in recs:
         chapters.append(ch)
-        per_chapter_moves[ch] = rec.get("moves_used", []) or []
+        # 2026-05-29 复审修复 [M8]：moves_used 权威来源 self_eval（SC-4），扁平缺失则回退。
+        per_chapter_moves[ch] = _rec_self_eval_field(rec, "moves_used") or []
         per_chapter_appear[ch] = rec.get("char_mention_counts", {}) or {}
 
     findings = []
@@ -481,7 +506,8 @@ def scan_position_effect_ledger(recs) -> list[dict]:
     effects = Counter()
     total_evals = 0
     for _ch, rec in recs:
-        evals = rec.get("position_effect_evals", []) or []
+        # 2026-05-29 复审修复 [M8]：position_effect_evals 权威来源 self_eval（SC-4）。
+        evals = _rec_self_eval_field(rec, "position_effect_evals") or []
         for e in evals:
             if not isinstance(e, dict):
                 continue
@@ -536,10 +562,20 @@ def main():
 
     project_root = Path(args.project)
 
+    # 2026-05-29 复审修复 [M8]：moves_used / position_effect_evals 可能嵌在账本 ChapterRecord
+    # 的 self_eval 段（SC-4 权威来源），ledger_has_field 只看顶层 key 会漏 → 补一次 self_eval 探测。
+    def _ledger_has_self_eval_field(field: str) -> bool:
+        if csr.ledger_has_field(project_root, field):
+            return True
+        for _ch, _rec in csr.get_chapter_records(project_root):
+            if _rec_has_self_eval_field(_rec, field):
+                return True
+        return False
+
     use_ledger = IS_CLUSTER_MODE and (
         csr.ledger_has_field(project_root, "stress_total")
-        or csr.ledger_has_field(project_root, "moves_used")
-        or csr.ledger_has_field(project_root, "position_effect_evals")
+        or _ledger_has_self_eval_field("moves_used")
+        or _ledger_has_self_eval_field("position_effect_evals")
     )
     if use_ledger:
         recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)

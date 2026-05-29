@@ -5,8 +5,41 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
+
+
+# 2026-05-29 复审修复（盲区②-lock）：跨平台原子锁创建标志。
+# O_CREAT|O_EXCL 在 POSIX/Windows 都是原子「不存在才创建」语义；Windows 下追加 O_BINARY 防 CRLF
+# 转换破坏 pid/ts 元信息（虽是 ASCII 但显式 binary 更稳）。中文路径在 Windows(UTF-16 NTFS) 与
+# 现代 Linux(UTF-8) 上 os.open(str(path)) 均可靠，无需额外编码处理。
+_LOCK_OPEN_FLAGS = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+_LOCK_EXPIRE_SEC = 300.0
+
+
+def _try_acquire_lock(lockfile: Path):
+    """尝试原子创建锁文件并写入持有者元信息。
+
+    成功返回 fd（已写入 pid/ts，调用方负责最终 close）。
+    锁已存在抛 FileExistsError。其它异常路径保证不泄漏 fd（写元信息失败时立即 close + unlink，
+    把锁还原成「未被占用」让真正的持有逻辑重试，绝不留下一个谁都关不掉的僵尸锁）。
+    """
+    fd = os.open(str(lockfile), _LOCK_OPEN_FLAGS)
+    try:
+        os.write(fd, f"pid={os.getpid()} ts={time.time()}".encode("ascii"))
+    except OSError:
+        # 写元信息失败：关 fd 并删掉这个半成品锁，避免泄漏 fd + 残留无主锁。
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(str(lockfile))
+        except OSError:
+            pass
+        raise
+    return fd
 
 
 @contextmanager
@@ -17,50 +50,68 @@ def with_file_lock(target: Path, timeout: float = 10.0, poll: float = 0.1):
     fd = None
     while True:
         try:
-            fd = os.open(str(lockfile), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, f"pid={os.getpid()} ts={time.time()}".encode())
+            fd = _try_acquire_lock(lockfile)
             break
         except FileExistsError:
             if time.time() - start > timeout:
-                # 2026-05-29 修：过期锁抢占 TOCTOU 修复。
+                # 2026-05-29 修：过期锁抢占 TOCTOU 修复（盲区②-lock 加固）。
                 # 旧实现 unlink + continue → 两进程可能同时通过 stat 检查后各自 unlink + 创建，双方都拿到锁。
-                # 新实现：unlink 过期锁后立即用 O_CREAT|O_EXCL 原子抢占，成功才算拿到锁；
-                # 失败（FileExistsError）说明别人已抢先，放弃抢占抛超时，绝不双方都成功。
+                # 新实现用「原子重命名抢占」而非裸 unlink+continue：
+                #   1) 先把过期锁原子 rename 成本进程私有的 .stale.<pid>.<uuid> 名字；
+                #      os.replace 是原子的——只有一个进程能把那个特定 inode 抢走，其余 rename 会失败/改到别处。
+                #   2) 抢到（rename 成功）的进程删掉私有 stale 文件，再 O_CREAT|O_EXCL 创建新锁；
+                #      仍可能被另一个刚正常释放又重抢的进程插队，故创建失败一律判超时，绝不双方都成功。
                 try:
                     mtime = lockfile.stat().st_mtime
                 except OSError:
                     # stat 失败：锁可能刚被别人释放，重新走循环尝试正常获取
                     time.sleep(poll)
                     continue
-                if time.time() - mtime > 300:
-                    # 删除该过期锁（若已被别人删则忽略），随后原子抢占
+                if time.time() - mtime > _LOCK_EXPIRE_SEC:
+                    stale = lockfile.parent / f"{lockfile.name}.stale.{os.getpid()}.{uuid.uuid4().hex}"
                     try:
-                        os.unlink(str(lockfile))
+                        # 原子抢占过期锁：把它改名到本进程私有路径。成功 = 本进程独占了那个旧锁文件。
+                        os.replace(str(lockfile), str(stale))
+                    except OSError:
+                        # 别人抢先 rename/删除了过期锁 → 本进程认输，直接超时（不死磨）。
+                        raise TimeoutError(
+                            f"获取 file lock 超时 ({timeout}s)，过期锁被他人抢占: {lockfile}"
+                        )
+                    # 已独占旧锁文件，删掉私有 stale，再原子创建新锁。
+                    try:
+                        os.unlink(str(stale))
                     except OSError:
                         pass
                     try:
-                        fd = os.open(str(lockfile), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                        os.write(fd, f"pid={os.getpid()} ts={time.time()}".encode())
+                        fd = _try_acquire_lock(lockfile)
                         break  # 抢占成功
                     except FileExistsError:
-                        # 别人已经抢先创建 → 本进程认输，不再 continue 死磨，直接超时
-                        raise TimeoutError(f"获取 file lock 超时 ({timeout}s)，过期锁被他人抢占: {lockfile}")
+                        raise TimeoutError(
+                            f"获取 file lock 超时 ({timeout}s)，抢占后新锁已被他人创建: {lockfile}"
+                        )
                 raise TimeoutError(f"获取 file lock 超时 ({timeout}s): {lockfile}")
             time.sleep(poll)
     try:
         yield
     finally:
+        # 异常路径同样必须释放：close fd（吞 OSError）+ 删锁文件（missing_ok 容忍已被抢占进程删走）。
         if fd is not None:
             try:
                 os.close(fd)
             except OSError:
                 pass
-        lockfile.unlink(missing_ok=True)
+        try:
+            lockfile.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def atomic_write_json(target: Path, data: dict, indent: int = 2, ensure_ascii: bool = False):
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
+    # 2026-05-29 复审修复（盲区②）：tmp 名固定 → 两进程并发写同一 target 时 tmp 文件交错损坏。
+    # 改：tmp 名嵌入 os.getpid() + uuid4 hex，进程间/进程内全局唯一，互不踩踏。
+    # 不用 with_suffix（会丢掉原后缀，且 .json.tmp 链式后缀语义不直观），直接拼父目录 + 唯一名。
+    tmp = target.parent / f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     try:
         # 2026-05-29 修：os.replace 前先 flush + fsync 落盘，否则崩溃时目标文件可能 0 字节。
         payload = json.dumps(data, ensure_ascii=ensure_ascii, indent=indent)
@@ -68,13 +119,27 @@ def atomic_write_json(target: Path, data: dict, indent: int = 2, ensure_ascii: b
             f.write(payload)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(str(tmp), str(target))
-    finally:
-        if tmp.exists():
+        # 2026-05-29 复审修复（盲区②）：Windows 下若 target 句柄被别的进程短暂持有（杀软/索引器/
+        # 另一写者刚 replace 完仍在收尾），os.replace 抛 PermissionError。POSIX 的 rename 是原子的、
+        # 一般不抛此错，但 Windows 必须重试。短退避重试若干次，仍失败才向上抛。
+        last_err = None
+        for attempt in range(10):
             try:
+                os.replace(str(tmp), str(target))
+                last_err = None
+                break
+            except PermissionError as e:  # Windows: 目标/源被占用
+                last_err = e
+                time.sleep(0.05 * (attempt + 1))
+        if last_err is not None:
+            raise last_err
+    finally:
+        # 唯一 tmp 名 → 只清理本次自己的 tmp，绝不误删其他并发写者的 tmp。
+        try:
+            if tmp.exists():
                 tmp.unlink()
-            except OSError:
-                pass
+        except OSError:
+            pass
 
 
 def safe_update_json(target: Path, update_fn, default: dict = None, timeout: float = 10.0):

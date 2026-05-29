@@ -36,15 +36,18 @@ def _deep_merge(base: dict, patch: dict) -> dict:
     return base
 
 
-def upsert_cluster(project_root, cluster_id: str, patch: dict) -> dict:
-    """把 patch 深合并进账本里 cluster_id 对应的记录（不存在则新建），原子落盘。
+def _apply_upsert(summary: dict, target_norm: str, patch: dict) -> dict:
+    """纯内存合并：把 patch 深合并进 summary.clusters 里 target_norm 对应记录（不存在则建）。
 
-    cluster_id 归一化比对（int 6 / "6" / "cluster_006" 视为同一 cluster）。
-    返回合并后的整份账本 dict。
+    2026-05-29 复审修复（M1）：抽成纯函数，由 safe_update_json 在 with_file_lock 内调用，
+    保证「读-改-写」整体在锁内完成，跨进程不丢更新。
     """
-    summary = load_summary(project_root)
+    if not isinstance(summary, dict):
+        summary = {"schema_version": "v2.cluster", "clusters": []}
     clusters = summary.setdefault("clusters", [])
-    target_norm = cluster_lookup.normalize_cluster_id(cluster_id) or str(cluster_id)
+    if not isinstance(clusters, list):
+        clusters = []
+        summary["clusters"] = clusters
 
     rec = None
     for c in clusters:
@@ -60,10 +63,35 @@ def upsert_cluster(project_root, cluster_id: str, patch: dict) -> dict:
     _deep_merge(rec, patch)
     # cluster_id 始终保持归一化形态
     rec["cluster_id"] = target_norm
-
     summary.setdefault("schema_version", "v2.cluster")
-    atomic_json.atomic_write_json(_db_dir(project_root) / SUMMARY_FILENAME, summary)
     return summary
+
+
+def upsert_cluster(project_root, cluster_id: str, patch: dict) -> dict:
+    """把 patch 深合并进账本里 cluster_id 对应的记录（不存在则新建），原子落盘。
+
+    cluster_id 归一化比对（int 6 / "6" / "cluster_006" 视为同一 cluster）。
+    返回合并后的整份账本 dict。
+
+    2026-05-29 复审修复（M1）：旧实现 load_summary → 内存合并 → atomic_write_json 三步无锁，
+    两个写入方（builder / judge 化）并发时各自读到旧账本、各自写回 → 后写覆盖先写，丢更新。
+    新实现用 atomic_json.safe_update_json 把整个「读-改-写」包进 with_file_lock：
+    锁内 load 当前最新账本，合并本次 patch，原子写回。第二个写者必然读到第一个写者的结果，零丢失。
+    """
+    target_norm = cluster_lookup.normalize_cluster_id(cluster_id) or str(cluster_id)
+    target_path = _db_dir(project_root) / SUMMARY_FILENAME
+
+    # safe_update_json 在锁内把 target 反序列化成 current 传入 update_fn；账本损坏/缺失时给空骨架默认。
+    # 我们仍要复用 load_summary 的「dict 校验」语义，故 update_fn 内对 current 做一次 dict 兜底。
+    return atomic_json.safe_update_json(
+        target_path,
+        lambda current: _apply_upsert(
+            current if isinstance(current, dict) else {"schema_version": "v2.cluster", "clusters": []},
+            target_norm,
+            patch,
+        ),
+        default={"schema_version": "v2.cluster", "clusters": []},
+    )
 
 
 def patch_chapter(project_root, cluster_id: str, ch: int, chapter_patch: dict) -> dict:

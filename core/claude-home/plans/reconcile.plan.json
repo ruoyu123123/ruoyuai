@@ -48,5 +48,6 @@
       "expected_outputs": []
     }
   ],
-  "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式"
+  "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式",
+  "_v2_reconcile_note_20260529": "2026-05-29 复审盲区③核查结论：reconcile 无 ch_to_cluster_id 依赖（无独立 reconcile.py，纯 agent 编排：Grep 物理章节 txt + 读 故事块摘要.json + locked_facts，逐章 spawn novel-validator-repair 修正文）。不做任何「章号→cluster 归属」推断，故 SC-5 边界重叠 / cluster 不可达 场景对本命令的正典处理无风险，无需改 plan 逻辑。step2 扫描单位是物理章 txt（正典修复发生在章文件层），与 cluster 化主轨不冲突。"
 }

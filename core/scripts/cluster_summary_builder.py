@@ -41,6 +41,15 @@ try:
     from cross_cluster_emotion_pattern_aggregate import detect_emotions_for_char as _detect_emotions
 except Exception:  # pragma: no cover
     _detect_emotions = None
+# 2026-05-29 复审修复：补字段所需的工艺函数（失败则对应字段降级，不崩）
+try:
+    import cross_cluster_structure_compliance_aggregate as _struct  # noqa: E402  beat 关键词
+except Exception:  # pragma: no cover
+    _struct = None
+try:
+    from cross_cluster_continuity_aggregate import extract_keywords as _cliff_keywords  # noqa: E402
+except Exception:  # pragma: no cover
+    _cliff_keywords = None
 
 
 # ============================================================
@@ -86,6 +95,25 @@ def _first(d: dict, *keys, default=None):
         if k in d and d[k] not in (None, "", [], {}):
             return d[k]
     return default
+
+
+def _ids_of(items, *id_keys) -> list:
+    """把混合列表（str / {aspect_id:..} / {clock_id:..} / {id:..}）展平成 id 字符串列表。
+
+    2026-05-29 复审修复 [M7]：aggregator 账本分支按 `aid in addressed_ids` 比对裸 id 字符串，
+    故 builder 须把 changes 里 dict 形态 [{aspect_id:..}] 展平成 ["aspect_id_value", ...]。
+    """
+    out = []
+    for v in (items or []):
+        if isinstance(v, str):
+            if v:
+                out.append(v)
+        elif isinstance(v, dict):
+            for k in id_keys:
+                if v.get(k):
+                    out.append(v[k])
+                    break
+    return out
 
 
 # ============================================================
@@ -136,7 +164,9 @@ def _load_judge_reports(db: Path, ch: int) -> list[dict]:
 def _load_blueprint_scene(db: Path, cluster_id: str, ch: int) -> dict:
     """从 进度.cluster_blueprint[cid].scene_storyboard 找匹配 ch 的 scene 卡。"""
     prog = _load_json(db / "进度.json", {}) or {}
-    cb = prog.get("cluster_blueprint", {}) or {}
+    # 2026-05-29 复审复修 [P0/SC-1]：cluster_blueprint 可能是 list（城南实测）→ 裸 .items() 崩。
+    # 统一经 cluster_lookup.normalize_blueprint 归一成 dict（B2 遗漏的第三处 .items()）。
+    cb = cluster_lookup.normalize_blueprint(prog)
     norm = cluster_lookup.normalize_cluster_id(cluster_id)
     for cid, cdata in cb.items():
         if cluster_lookup.normalize_cluster_id(cid) != norm:
@@ -168,6 +198,114 @@ def _character_names(db: Path) -> list[str]:
             n = c.get("name") or c.get("id")
             if n:
                 out.append(str(n))
+    return out
+
+
+# ============================================================
+# 2026-05-29 复审修复：canonical 子系统派生（stress / coping / arc / aspect）
+# 这些字段在 changes.json 恒缺 → 必须从权威子系统 JSON + 正文派生，与各 aggregator
+# 磁盘版同源（零回归）。
+# ============================================================
+
+def _build_stress_index(db: Path) -> tuple[dict, dict, dict]:
+    """[L3] 从 主角压力档.json.stress_log 建三索引（与 scan_stress_trend 同源）：
+      stress_by_ch: {ch: new_total}（跳过 mental_break_triggered 条目，同 ch 取最新）
+      break_by_ch:  {ch: card_id}（mental_break_triggered 条目）
+      trigger_by_ch:{ch: trigger 描述字符串}
+    无 stress_log（或空）→ 三空 dict（与磁盘版 return [] 行为对齐：什么也不产）。
+    """
+    stress = _load_json(db / "主角压力档.json", {}) or {}
+    log = stress.get("stress_log", []) or []
+    stress_by_ch, break_by_ch, trigger_by_ch = {}, {}, {}
+    for e in log:
+        if not isinstance(e, dict):
+            continue
+        ch = e.get("ch")
+        if not isinstance(ch, int):
+            continue
+        if e.get("trigger_type") == "mental_break_triggered":
+            card = e.get("card_id") or e.get("card")
+            if card:
+                break_by_ch[ch] = card
+        else:
+            nt = e.get("new_total")
+            if isinstance(nt, (int, float)):
+                stress_by_ch[ch] = nt
+        trig = e.get("trigger") or e.get("stress_trigger") or e.get("reason")
+        if trig:
+            trigger_by_ch[ch] = trig
+    return stress_by_ch, break_by_ch, trigger_by_ch
+
+
+def _coping_keywords(db: Path) -> list[str]:
+    """[L4] 从 主角压力档.json.coping_mechanisms.high_stress_behaviors 抽 2-4 字关键词
+    （与 scan_stress_trend COPING_NEVER_TRIGGERED 的 coping_kws 同源）。"""
+    stress = _load_json(db / "主角压力档.json", {}) or {}
+    cm = stress.get("coping_mechanisms", {})
+    behaviors = cm.get("high_stress_behaviors", []) if isinstance(cm, dict) else []
+    kws = []
+    for c in (behaviors or []):
+        if isinstance(c, str):
+            kws.extend(re.findall(r"[一-鿿]{2,4}", c)[:2])
+    return [k for k in kws if len(k) >= 2]
+
+
+def _arc_stage_by_cluster(db: Path, norm_cid: str) -> dict:
+    """[L4] 从 character_arc_state.json 取本 cluster 各角色的 arc 阶段 {char: stage_id}。
+
+    cluster-native：每个 stage 含 active_cluster 列表，命中本 cluster → 该角色当前阶段。
+    兼容两种 schema：v2 `arcs.{char}.stages[].active_cluster`；
+    旧 `characters.{char}.stages_by_chapter`（此处用 current_stage 兜底）。
+    """
+    data = _load_json(db / "character_arc_state.json", {}) or {}
+    out = {}
+    arcs = data.get("arcs")
+    if isinstance(arcs, dict):
+        for char, cdata in arcs.items():
+            if not isinstance(cdata, dict):
+                continue
+            chosen = None
+            for st in cdata.get("stages", []) or []:
+                if not isinstance(st, dict):
+                    continue
+                acs = st.get("active_cluster") or []
+                if any(cluster_lookup.normalize_cluster_id(a) == norm_cid for a in acs):
+                    chosen = st.get("id") or st.get("name")
+                    break
+            if chosen is None:
+                chosen = cdata.get("current_stage")
+            if chosen:
+                out[str(char)] = chosen
+    return out
+
+
+def _aspect_keyword_sets(db: Path) -> list[tuple[str, list]]:
+    """[L4] 从 角色烙印.json.characters[].active_aspects 抽 (aspect_id, keywords)。
+
+    keywords 抽法与 data_consumption.scan_aspect_continuity 文本命中分支同源：
+    前 3 条 narrative_constraints 各取 3 个 2-4 字词 + 前 3 条 emotional_triggers 各取 2 个。
+    """
+    data = _load_json(db / "角色烙印.json", {}) or {}
+    out = []
+    for _char, cdata in (data.get("characters") or {}).items():
+        if not isinstance(cdata, dict):
+            continue
+        for aspect in cdata.get("active_aspects") or []:
+            if not isinstance(aspect, dict):
+                continue
+            aid = aspect.get("aspect_id")
+            if not aid:
+                continue
+            kws = []
+            for c_str in (aspect.get("narrative_constraints") or [])[:3]:
+                if isinstance(c_str, str):
+                    kws.extend(re.findall(r"[一-鿿]{2,4}", c_str)[:3])
+            for t_str in (aspect.get("emotional_triggers") or [])[:3]:
+                if isinstance(t_str, str):
+                    kws.extend(re.findall(r"[一-鿿]{2,4}", t_str)[:2])
+            kws = [k for k in kws if len(k) >= 2]
+            if kws:
+                out.append((aid, kws))
     return out
 
 
@@ -233,6 +371,23 @@ def _build_pattern_metrics(text: str, protagonist: str, catchphrases, cliche_dic
     if _pat is None or not text:
         return {}
     m = {}
+    # 2026-05-29 复审修复 [C3]：补 catchphrase / cliche_hits / wc 三键。
+    # cross_cluster_pattern_aggregate 在 cluster 模式直接把本 dict 当 per_chapter[ch]，
+    # 其 Finding 1 裸读 d["catchphrase"].items()、Finding 13 裸读 d["cliche_hits"]、
+    # 磁盘版 wc=len(text)，三键缺失 → aggregator KeyError → Traceback（SC-2 真崩溃）。
+    # wc 语义对齐磁盘版 = 全字符数 len(text)（非纯 CJK 数）。
+    try:
+        m["wc"] = len(text)
+    except Exception:
+        pass
+    try:
+        m["catchphrase"] = _pat.scan_catchphrase(text, catchphrases or [])
+    except Exception:
+        m["catchphrase"] = {}
+    try:
+        m["cliche_hits"] = _pat.scan_cliche_ai_cn(text, cliche_dict)
+    except Exception:
+        m["cliche_hits"] = {}
     try:
         m["para_protagonist_start"] = _pat.scan_paragraph_starts_with_protagonist(text, protagonist)
     except Exception:
@@ -354,10 +509,16 @@ def _build_changes_derived(factual: dict, self_eval: dict) -> dict:
     if isinstance(beats, list):
         rec["beats_addressed"] = beats
 
-    et = _first(factual, "ending_type", "chapter_ending_type")
+    # 2026-05-29 复审修复 [M9]：ending_type/ending_line 权威来源 = self_eval.applied_style
+    #（continuity aggregator 磁盘版读 self_eval.applied_style.ending_type/ending_line，
+    # 见 cross_cluster_continuity_aggregate.scan_cliffhanger_resonance）。factual 仅兜底。
+    applied = self_eval.get("applied_style", {}) if isinstance(self_eval, dict) else {}
+    if not isinstance(applied, dict):
+        applied = {}
+    et = _first(applied, "ending_type") or _first(factual, "ending_type", "chapter_ending_type")
     if et:
         rec["ending_type"] = et
-    el = _first(factual, "ending_line", "last_line")
+    el = _first(applied, "ending_line", "last_line") or _first(factual, "ending_line", "last_line")
     if el:
         rec["ending_line"] = el
 
@@ -372,26 +533,37 @@ def _build_changes_derived(factual: dict, self_eval: dict) -> dict:
     if isinstance(pn, list):
         rec["plot_nodes"] = pn
 
+    # 2026-05-29 复审修复 [M7]：aspects_addressed/clocks_addressed 在账本里应是「id 字符串列表」
+    #（data_consumption aggregator 账本分支裸做 `aid in addressed_ids` / `cid in clocks_addressed`），
+    # 但 changes.factual 里常是 dict 列表 [{aspect_id:..},..]。这里统一展平成 id 字符串列表。
     aspects = _first(factual, "aspects_addressed", "active_aspects")
     if isinstance(aspects, list):
-        rec["aspects_addressed"] = aspects
+        rec["aspects_addressed"] = _ids_of(aspects, "aspect_id", "id")
 
     clocks = _first(factual, "clocks_addressed", "clocks")
     if isinstance(clocks, list):
-        rec["clocks_addressed"] = clocks
+        rec["clocks_addressed"] = _ids_of(clocks, "clock_id", "id")
 
     dice = _first(factual, "fate_dice_consumed", "fate_dice", "dice_consumed")
     if isinstance(dice, list):
         rec["fate_dice_consumed"] = dice
 
-    moves = _first(factual, "moves_used", "character_moves")
+    # 2026-05-29 复审修复 [M8]：moves_used/position_effect_evals 权威来源 = self_eval
+    #（character_dynamics aggregator 磁盘版读 self_eval.moves_used / self_eval.position_effect_evals，
+    # 见 scan_moves_usage / scan_position_effect）。factual 仅兜底。
+    moves = _first(self_eval, "moves_used", "character_moves") or _first(factual, "moves_used", "character_moves")
     if isinstance(moves, list):
         rec["moves_used"] = moves
 
-    pee = _first(factual, "position_effect_evals", "position_effects")
+    pee = (_first(self_eval, "position_effect_evals", "position_effects")
+           or _first(factual, "position_effect_evals", "position_effects"))
     if isinstance(pee, list):
         rec["position_effect_evals"] = pee
 
+    # 2026-05-29 复审修复 [L3]：stress_total/stress_trigger/mental_break_card 的权威来源
+    # 是 主角压力档.json.stress_log（changes.factual 恒缺，见 character_dynamics 磁盘版
+    # scan_stress_trend 只读 stress_log）。此处 factual 读法保留为兜底；真实派生在
+    # _build_chapter_record 里用 ctx["stress_by_ch"] 注入。
     stress = _first(factual, "stress_total", "protagonist_stress_total")
     if isinstance(stress, (int, float)):
         rec["stress_total"] = stress
@@ -568,6 +740,46 @@ def _build_chapter_record(project_root, db, cluster_id, ch, ctx) -> dict:
                 rec["has_pre_opening"] = True
                 break
 
+    # ---- [L3] stress 派生（权威源 主角压力档.json.stress_log，非 factual）----
+    st = ctx["stress_by_ch"].get(ch)
+    if isinstance(st, (int, float)):
+        rec["stress_total"] = st
+    bcard = ctx["break_by_ch"].get(ch)
+    if bcard and "mental_break_card" not in rec:
+        rec["mental_break_card"] = bcard
+    strig = ctx["trigger_by_ch"].get(ch)
+    if strig and "stress_trigger" not in rec:
+        rec["stress_trigger"] = strig
+
+    # ---- [L4] coping_hit（高 stress 章正文是否带 coping 行为关键词）----
+    # 与 character_dynamics 磁盘版 COPING_NEVER_TRIGGERED 同源；coping_kws 来自压力档。
+    if body and ctx["coping_keywords"]:
+        rec["coping_hit"] = any(kw in body for kw in ctx["coping_keywords"])
+
+    # ---- [L4] arc_stage（本 cluster 各角色 arc 阶段 · character_arc_state.json）----
+    if ctx["arc_stage"]:
+        rec["arc_stage"] = dict(ctx["arc_stage"])
+
+    # ---- [L4] aspect_text_hit（正文命中 aspect 约束/触发关键词的 aspect_id 列表）----
+    if body and ctx["aspect_kw_sets"]:
+        hits = [aid for aid, kws in ctx["aspect_kw_sets"] if any(k in body for k in kws)]
+        if hits:
+            rec["aspect_text_hit"] = hits
+
+    # ---- [M10] beat_signal_hit（真产出：声明 beat 时扫正文/changes 是否命中信号）----
+    # 与 structure_compliance 磁盘版 scan_beat_progression 同源（explicit_hit 或正文关键词命中）。
+    # 仅在声明了 beat 时产出 bool（否则保持缺省，aggregator 跳过该章）。
+    beat_str = rec.get("beat")
+    if beat_str and _struct is not None:
+        try:
+            kws = _struct.beat_keywords_for(str(beat_str))
+            ba = rec.get("beats_addressed") or []
+            explicit_hit = any(str(beat_str).lower() in str(b).lower() for b in ba)
+            kw_hit = bool(body) and any(k in body for k in kws)
+            rec["beat_signal_hit"] = bool(explicit_hit or kw_hit)
+        except Exception:
+            pass
+
     return rec, factual, self_eval
 
 
@@ -597,12 +809,37 @@ def build_cluster_summary(project_root, cluster_id) -> dict:
             cliche_dict = _pat._load_cliche_dict(project_root)
         except Exception:
             pass
+    # 2026-05-29 复审修复 [B2 P0]：接线 4 个 canonical 子系统派生 helper（原定义了但从未调用
+    # → ctx 缺 6 键 → _build_chapter_record 第一章即 KeyError('stress_by_ch') 崩、整条账本管线挂）。
+    # 全防御性：任一子系统 JSON 缺失/损坏 → 退化空容器，builder 不崩（与各 aggregator 磁盘版同源）。
+    try:
+        _stress_by_ch, _break_by_ch, _trigger_by_ch = _build_stress_index(db)
+    except Exception:
+        _stress_by_ch, _break_by_ch, _trigger_by_ch = {}, {}, {}
+    try:
+        _coping_kw = _coping_keywords(db)
+    except Exception:
+        _coping_kw = []
+    try:
+        _arc_stage = _arc_stage_by_cluster(db, norm_cid)
+    except Exception:
+        _arc_stage = {}
+    try:
+        _aspect_kw = _aspect_keyword_sets(db)
+    except Exception:
+        _aspect_kw = []
     ctx = {
         "protagonist": protagonist,
         "catchphrases": catchphrases,
         "cliche_dict": cliche_dict,
         "char_names": _character_names(db),
         "locations": _location_names(db),
+        "stress_by_ch": _stress_by_ch,
+        "break_by_ch": _break_by_ch,
+        "trigger_by_ch": _trigger_by_ch,
+        "coping_keywords": _coping_kw,
+        "arc_stage": _arc_stage,
+        "aspect_kw_sets": _aspect_kw,
     }
 
     chapters: dict[str, dict] = {}
@@ -665,7 +902,9 @@ def build_cluster_summary(project_root, cluster_id) -> dict:
             break
     if not title:
         prog = _load_json(db / "进度.json", {}) or {}
-        for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+        # 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测），
+        # 裸 .items() 会 AttributeError 崩。先 normalize_blueprint 归一成 dict 再迭代。
+        for cid, cdata in cluster_lookup.normalize_blueprint(prog).items():
             if cluster_lookup.normalize_cluster_id(cid) == norm_cid and isinstance(cdata, dict):
                 title = cdata.get("title") or ""
                 break

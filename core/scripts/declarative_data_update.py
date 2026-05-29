@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime
@@ -29,6 +30,24 @@ from pathlib import Path
 # 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
+
+
+# 2026-05-29 复审修复 [H4]：声明式增量幂等账本。
+# relationship_changes / faction_standing_changes / travel_log_added 等是「+= delta / append」
+# 类增量，重复 apply 会乘倍/重复。split_cluster_changes 把整 cluster 的 factual 平铺进每章，
+# 上层 save_state_updates 已改为「只在 cluster 首章跑一次」，但为防 WAL 断点续跑等场景再次
+# 重放，这里再加一层幂等：以 (ch, 增量 payload 的 sha256) 为键记账，相同 payload 第二次进来
+# 直接跳过实际写入。账本落 _数据库/.declarative_applied.json。
+_APPLIED_LEDGER_NAME = ".declarative_applied.json"
+
+
+def _payload_fingerprint(rc, fc, et, tl, sc, kg) -> str:
+    """对本次声明式增量 payload 做稳定指纹（字段顺序固定 + sort_keys）。"""
+    blob = json.dumps(
+        {"rc": rc, "fc": fc, "et": et, "tl": tl, "sc": sc, "kg": kg},
+        ensure_ascii=False, sort_keys=True,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def load_json(p: Path, default=None):
@@ -204,9 +223,29 @@ def main():
     all_logs = []
     all_logs.append(f"[declarative_data_update] ch{ch}")
 
-    # 1. relationships
+    # 先抽出 6 类增量字段（供幂等指纹 + 后续 apply）
     rc = factual.get("relationship_changes", [])
     fc = factual.get("faction_standing_changes", [])
+    et = factual.get("event_triggers", [])
+    tl = factual.get("travel_log_added", [])
+    sc = factual.get("secret_status_changes", [])
+    kg = factual.get("knowledge_gained", [])
+
+    if not any([rc, fc, et, tl, sc, kg]):
+        print(f"[OK] ch{ch} 6 类声明式字段都为空，无更新")
+        sys.exit(0)
+
+    # 2026-05-29 复审修复 [H4]：幂等去重——相同 (ch, payload) 已 apply 过则跳过，
+    # 防 cluster 逐章重放 / WAL 续跑把增量乘倍。dry-run 不记账。
+    fp = _payload_fingerprint(rc, fc, et, tl, sc, kg)
+    ledger_path = project_root / "_数据库" / _APPLIED_LEDGER_NAME
+    ledger = load_json(ledger_path, {}) or {}
+    ledger_key = f"ch{ch}"
+    if not args.dry_run and ledger.get(ledger_key, {}).get("fingerprint") == fp:
+        print(f"[OK] ch{ch} 声明式增量已应用过（幂等跳过 · fp={fp[:12]}）")
+        sys.exit(0)
+
+    # 1. relationships
     if rc or fc:
         rel_path = project_root / "_数据库" / "关系.json"
         rel_data = load_json(rel_path, {"relationships": [], "faction_standings": {}})
@@ -217,8 +256,7 @@ def main():
         if not args.dry_run:
             save_json(rel_path, rel_data)
 
-    # 2. events
-    et = factual.get("event_triggers", [])
+    # 2. events（et/tl/sc/kg 已在函数顶部抽出 · 2026-05-29 复审修复 [H4]）
     if et:
         ev_path = project_root / "_数据库" / "事件表.json"
         ev_data = load_json(ev_path, {"pending_events": [], "triggered_events": [], "recurring_events": []})
@@ -228,7 +266,6 @@ def main():
             save_json(ev_path, ev_data)
 
     # 3. travel_log
-    tl = factual.get("travel_log_added", [])
     if tl:
         map_path = project_root / "_数据库" / "地图.json"
         map_data = load_json(map_path, {"travel_log": []})
@@ -238,7 +275,6 @@ def main():
             save_json(map_path, map_data)
 
     # 4. secrets
-    sc = factual.get("secret_status_changes", [])
     if sc:
         fs_path = project_root / "_数据库" / "伏笔表.json"
         fs_data = load_json(fs_path, {"secrets": []})
@@ -248,7 +284,6 @@ def main():
             save_json(fs_path, fs_data)
 
     # 5. knowledge
-    kg = factual.get("knowledge_gained", [])
     if kg:
         cards_path = project_root / "_数据库" / "人物卡.json"
         cards_data = load_json(cards_path, {"characters": []})
@@ -257,14 +292,20 @@ def main():
         if not args.dry_run:
             save_json(cards_path, cards_data)
 
-    if not any([rc, fc, et, tl, sc, kg]):
-        print(f"[OK] ch{ch} 6 类声明式字段都为空，无更新")
-        sys.exit(0)
-
+    # 全空已在函数顶部提前返回，此处必有实际增量。
     for log in all_logs:
         print(log)
     if args.dry_run:
         print("\n[DRY-RUN] 未实际写入")
+        sys.exit(0)
+
+    # 2026-05-29 复审修复 [H4]：apply 成功后记账（幂等键 = 本章增量 payload 指纹），
+    # 下次相同 payload 进来直接跳过，防乘倍。
+    ledger[ledger_key] = {
+        "fingerprint": fp,
+        "applied_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    atomic_json.atomic_write_json(ledger_path, ledger)
     sys.exit(0)
 
 

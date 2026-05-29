@@ -54,6 +54,45 @@ def load_json(p: Path, default=None):
         return default
 
 
+# 2026-05-29 复审修复（L10）：judge 报告实际用字母评级 overall_grade（无数值 score），
+# analyze_solver 旧读法 data.get("score") 恒 None → 质量下滑信号永不触发。
+# 加 grade→score 兜底（5.0 制 · 与 evolution_canary / gepa_prompt_optimizer 同制，
+# 便于跨脚本阈值一致）。
+GRADE_TO_SCORE = {
+    "A": 5.0, "A-": 4.5, "B+": 4.0, "B": 3.5, "B-": 3.0,
+    "C+": 2.5, "C": 2.0, "C-": 1.5, "D": 1.0, "F": 0.0,
+}
+
+
+def _grade_to_score(grade):
+    """字母评级 → 5.0 制分数。非法/缺失返回 None。"""
+    if isinstance(grade, str):
+        return GRADE_TO_SCORE.get(grade.strip().upper())
+    return None
+
+
+def _expand_cluster_chapters(cluster: dict) -> list[int]:
+    """2026-05-29 复审修复（L9）：把一个 cluster 展开成它包含的章号列表。
+
+    优先用 chapter_range [lo, hi] 全展开（splitter 切定后的权威范围）；range 缺/非法时
+    回退 chapters{} 的 key（builder 已写章记录）。两者都无 → 空列表。
+    SC-3：不反查目标 cluster 自身尚未回填的 range —— 这里只读已落账 cluster 自带的 range，
+    不做跨 cluster 推算，故安全。
+    """
+    chs: list[int] = []
+    cr = cluster.get("chapter_range")
+    if isinstance(cr, list) and len(cr) == 2 \
+            and isinstance(cr[0], int) and isinstance(cr[1], int) and cr[0] <= cr[1]:
+        chs = list(range(cr[0], cr[1] + 1))
+    if not chs:
+        for k in (cluster.get("chapters") or {}).keys():
+            try:
+                chs.append(int(k))
+            except (ValueError, TypeError):
+                pass
+    return sorted(set(chs))
+
+
 def save_json(p: Path, data: dict):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -104,6 +143,9 @@ def analyze_solver(project_root: Path, recent_chs: list[int]) -> dict:
             score = (data.get("score") or data.get("overall_score") or
                      (data.get("aggregated") or {}).get("score") or
                      (data.get("scores") or {}).get("overall"))
+            # L10：无数值 score 时回退字母评级 overall_grade/grade → 5.0 制分数。
+            if not isinstance(score, (int, float)):
+                score = _grade_to_score(data.get("overall_grade") or data.get("grade"))
             if isinstance(score, (int, float)):
                 judge_scores.append((ch, float(score)))
             for issue in data.get("issues", []) or []:
@@ -166,15 +208,13 @@ def analyze_judge_cluster(project_root: Path, recent_clusters: list[dict]) -> di
               if isinstance(c.get("judge_grade"), str) and c.get("judge_grade") in grade_rank]
     if not graded:
         # 回退：把最近 cluster 的章拍平走逐章 waiver 分析
+        # 2026-05-29 复审修复（L9）：优先 chapter_range 展开（_expand_cluster_chapters），
+        # 不再只认 chapters{} key。
         chs = []
         for c in recent_clusters:
-            for ch_key in (c.get("chapters") or {}).keys():
-                try:
-                    chs.append(int(ch_key))
-                except (ValueError, TypeError):
-                    pass
+            chs.extend(_expand_cluster_chapters(c))
         if chs:
-            return analyze_judge(project_root, sorted(chs))
+            return analyze_judge(project_root, sorted(set(chs)))
         return {"signal": "no_data", "findings": [], "cluster_grades": []}
 
     low = [(cid, g) for cid, g in graded if grade_rank[g] <= 2]
@@ -246,9 +286,10 @@ def _run_cluster(project_root: Path, cluster_key: str, cluster_cycle: int) -> in
         return 0
 
     # 把最近 cluster 的章拍平给逐章分析器复用
+    # 2026-05-29 复审修复（L9）：优先用 chapter_range 全展开（_expand_cluster_chapters），
+    # 旧实现只认 chapters{} key → splitter 已回填 range 但 builder 章记录稀疏时漏章。
     recent_chs = sorted({
-        int(k) for c in recent_clusters for k in (c.get("chapters") or {}).keys()
-        if str(k).isdigit()
+        ch for c in recent_clusters for ch in _expand_cluster_chapters(c)
     })
 
     proposer_r = analyze_proposer(project_root, recent_chs)

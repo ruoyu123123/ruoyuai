@@ -87,8 +87,19 @@ def apply_one_chapter(project_root: Path, ch: int) -> tuple[dict, bool]:
         if not eid:
             continue
         r = wee.apply_fate_event(project_root, ch, eid)
-        fate_results.append({"event_id": eid, "matched_rules": r.get("matched_rules", []), "applied_count": len(r.get("applied_log", []))})
-        print(f"[apply_fate_event] {eid}: matched={r.get('matched_rules')} applied={len(r.get('applied_log', []))}")
+        # 2026-05-29 复审修复 [H14]：记录 skipped_idempotent（同一 ME 在 --cluster 逐章
+        # 重放时第二次进来被 world_evolution_engine 幂等跳过），下方 half_apply 判定要排除，
+        # 否则跳过返回的 matched_rules=[] 会被误判为「没匹配涟漪规则」→ 假 WARN/exit 1。
+        fate_results.append({
+            "event_id": eid,
+            "matched_rules": r.get("matched_rules", []),
+            "applied_count": len(r.get("applied_log", [])),
+            "skipped_idempotent": r.get("skipped_idempotent", False),
+        })
+        if r.get("skipped_idempotent"):
+            print(f"[apply_fate_event] {eid}: 幂等跳过（首次应用于 ch{r.get('first_applied_at_ch')}）")
+        else:
+            print(f"[apply_fate_event] {eid}: matched={r.get('matched_rules')} applied={len(r.get('applied_log', []))}")
     summary["ops"].append({"op": "apply_fate_events", "count": len(fate_results), "results": fate_results})
 
     # 3. 消费 emergent_opportunities
@@ -112,7 +123,12 @@ def apply_one_chapter(project_root: Path, ch: int) -> tuple[dict, bool]:
     out_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[OK] 世界演化日志: {out_path}")
 
-    half_apply = any(not r["matched_rules"] for r in fate_results)
+    # 2026-05-29 复审修复 [H14]：half_apply 只看「真正应用过」的 fate event（排除幂等跳过的），
+    # 避免 --cluster 逐章重放被幂等跳过的 ME 误报「没匹配涟漪规则」。
+    half_apply = any(
+        (not r["matched_rules"]) and (not r.get("skipped_idempotent"))
+        for r in fate_results
+    )
     return summary, half_apply
 
 

@@ -38,6 +38,37 @@ except ImportError:
 
 # ============ IO helpers ============
 
+def _bp_items(prog):
+    """2026-05-29 复审修复（SC-1）：cluster_blueprint 规范形态=dict（cluster_id->data）。
+    城南项目实测是 list(25)（scene_storyboard 列表，各项无 cluster_id）→ 裸 .items() 直接崩。
+    统一经 cluster_lookup.normalize_blueprint 归一为 dict 再 .items()；若该函数尚未落地
+    （并行批次顺序问题），就地 isinstance 守卫兜底（list/非 dict → 返回空 dict 不崩）。
+    """
+    if not isinstance(prog, dict):
+        return {}
+    bp = prog.get("cluster_blueprint")
+    try:
+        norm = cluster_lookup.normalize_blueprint(prog)
+        if isinstance(norm, dict):
+            return norm
+    except AttributeError:
+        pass  # normalize_blueprint 尚未由 SC-1 owner 落地 → 走下方就地守卫
+    except Exception:
+        pass
+    if isinstance(bp, dict):
+        return bp
+    if isinstance(bp, list):
+        # list 项若带 cluster_id 则归一；城南这种各项无 cluster_id 的 → {}（不崩，退回 事件簇 fallback）
+        out = {}
+        for item in bp:
+            if isinstance(item, dict):
+                cid = item.get("cluster_id")
+                if cid:
+                    out[cid] = item
+        return out
+    return {}
+
+
 def load_json(path: Path, default=None):
     if not path.exists():
         return default
@@ -122,8 +153,10 @@ class DatabaseScanner:
         prog = self.load("进度", {})
 
         # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-        cluster_blueprint = prog.get("cluster_blueprint", {})
-        for cluster_id, cluster_data in cluster_blueprint.items():
+        # 2026-05-29 复审修复（SC-1）：经 _bp_items 归一（list 项目不崩）。
+        for cluster_id, cluster_data in _bp_items(prog).items():
+            if not isinstance(cluster_data, dict):
+                continue
             for p in cluster_data.get("scene_storyboard", []):
                 if p.get("ch") == self.ch:
                     return p
@@ -185,8 +218,25 @@ class DatabaseScanner:
         for p in data.get("promises", []):
             if p.get("resolved"):
                 continue
-            due_by = p.get("due_by", 999)
-            if due_by <= self.ch:
+            # 2026-05-29 复审复修 [M4]：到期判定消费三种来源（根治「永久 pending 永不到期」）：
+            #  ① 旧 schema due_by（章号）；② due_by_cluster（归一 cluster → 起始章）；
+            #  ③ pending：setup_cluster 起始章 + due_by_ch_offset。
+            _due = False
+            _due_by = p.get("due_by")
+            if isinstance(_due_by, int) and not isinstance(_due_by, bool) and _due_by <= self.ch:
+                _due = True
+            else:
+                _dbc = p.get("due_by_cluster")
+                if isinstance(_dbc, str) and _dbc:
+                    _rng = cluster_lookup.cluster_id_to_range(self.db, _dbc)
+                    if _rng and self.ch >= int(_rng[0]):
+                        _due = True
+                elif p.get("due_by_pending_resolution"):
+                    _setc = p.get("setup_cluster")
+                    _rng = cluster_lookup.cluster_id_to_range(self.db, _setc) if _setc else None
+                    if _rng and self.ch >= int(_rng[0]) + int(p.get("due_by_ch_offset", 20)):
+                        _due = True
+            if _due:
                 tier = p.get("tier", 3)
                 if tier == 1:
                     result["promises_tier1_due"].append(p)
@@ -209,17 +259,27 @@ class DatabaseScanner:
                 # 必须比对当前 章 所属 cluster ID（通过 cluster_blueprint 反查），
                 # 不能直接 int 数字（之前 bug：cluster_005 → 抽数字 5 → 与 ch=5 撞）
                 rc = s.get("reveal_at_cluster")
-                if isinstance(rc, str):
+                if isinstance(rc, str) and rc:
                     cur_cluster_id = self._current_cluster_id()
                     if cur_cluster_id and rc == cur_cluster_id:
+                        result["reveal_this_ch"].append(s)
+                elif s.get("reveal_at_pending_resolution"):
+                    # 2026-05-29 复审复修 [M4]：未指定 reveal cluster → 读时解析
+                    # established cluster 起始章 + reveal_at_ch_offset = 目标章；
+                    # 当前章达到即揭晓（消费 save_state 写入的 pending 标记，根治「永不揭晓」）。
+                    _est = s.get("established_cluster")
+                    _rng = cluster_lookup.cluster_id_to_range(self.db, _est) if _est else None
+                    if _rng and self.ch >= int(_rng[0]) + int(s.get("reveal_at_ch_offset", 50)):
                         result["reveal_this_ch"].append(s)
         return result
 
     def _current_cluster_id(self) -> str | None:
         """v2 cluster 化辅助：通过 cluster_blueprint 反查当前 ch 所属 cluster_id。"""
         prog = self.load("进度", {})
-        # 优先从 cluster_blueprint 反查
-        for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+        # 优先从 cluster_blueprint 反查（2026-05-29 复审修复 SC-1：经 _bp_items 归一）
+        for cid, cdata in _bp_items(prog).items():
+            if not isinstance(cdata, dict):
+                continue
             cr = cdata.get("chapter_range") or []
             if isinstance(cr, list) and len(cr) == 2 and cr[0] <= self.ch <= cr[1]:
                 return cid
@@ -587,8 +647,11 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
     import re as _re
     progress = scanner.load("进度", {})
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    # 2026-05-29 复审修复（SC-1）：经 _bp_items 归一（list 项目不崩）。
     ch_plan = {}
-    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+    for cid, cdata in _bp_items(progress).items():
+        if not isinstance(cdata, dict):
+            continue
         for sb in cdata.get("scene_storyboard", []):
             if sb.get("ch") == chapter:
                 ch_plan = sb
@@ -852,10 +915,12 @@ def _collect_ensemble_layer(scanner, chapter: int) -> dict:
             if isinstance(ch_data, dict) and ch_data.get("characters"):
                 chapter_chars = ch_data["characters"]
                 break
-        # fallback 到 cluster_blueprint
+        # fallback 到 cluster_blueprint（2026-05-29 复审修复 SC-1：经 _bp_items 归一）
         if not chapter_chars:
             progress = scanner.load("进度", {}) if hasattr(scanner, "load") else {}
-            for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+            for cid, cdata in _bp_items(progress).items():
+                if not isinstance(cdata, dict):
+                    continue
                 for sb in cdata.get("scene_storyboard", []):
                     if sb.get("ch") == chapter:
                         chapter_chars = sb.get("characters", [])
@@ -955,11 +1020,24 @@ def _collect_research_cache_ref(scanner, chapter: int) -> dict:
     }
 
 
+# 2026-05-29 复审修复（M16 · SC-6）：事件簇 cluster.status 中英文混用
+# （进行中/已规划/未涌现/已完成 + done/in_progress/pending）。旧 filter 只认英文
+# → 城南这种全中文 status 命中率 0 → event_cluster_context 永远 mode=off（注入丢失）。
+# 这里把「该注入 context」的 status 中英文都收齐（active + 已落章语义）。
+# 2026-05-29 复审复修（M16 二次修）：只收「真 active / 已落章」态，
+# 排除 candidate 占位态（已规划/未涌现 + pending）——否则全占位项目（纵尸司）会命中占位块
+# → 注入空 cluster_id 的伪 active cluster，且与 cluster_emergence_engine 的 candidate 排除集自相矛盾。
+_EVENT_CLUSTER_ACTIVE_STATUSES = (
+    "in_progress", "writer_done", "splitter_done", "done",
+    "进行中", "已完成",
+)
+
+
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
     writer 在 MODE=ecas 时必读此字段。
     决策树:
-    1. 读 _数据库/事件簇.json 找 status in (pending, in_progress) 且 chapter_range 包含 chapter 的 cluster
+    1. 读 _数据库/事件簇.json 找 status in (active 词表 · 中英文都认) 且 chapter_range 包含 chapter 的 cluster
     2. 找不到 → mode=off (本章是 DCAS/single 模式)
     3. 找到 → 提取 brief 全字段
     """
@@ -973,9 +1051,12 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
             return {"mode": "off", "_note": "事件簇.json 为空，本章按 DCAS/single 模式"}
         # 找匹配 chapter 的 cluster
         for c in clusters:
+            if not isinstance(c, dict):
+                continue
             cr = c.get("chapter_range") or []
             status = c.get("status")
-            if status in ("pending", "in_progress", "writer_done", "splitter_done"):
+            # 2026-05-29 复审修复（M16 · SC-6）：中英文 status 都认。
+            if status in _EVENT_CLUSTER_ACTIVE_STATUSES:
                 # pending cluster (未指定 chapter_range) 也算（writer 启动时本章 = first ch）
                 if not cr or (len(cr) == 2 and cr[0] <= chapter <= cr[1]):
                     cluster_id_val = c.get("cluster_id") or ""
@@ -1296,7 +1377,10 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
     progress = scanner.load("进度", {})
     query_parts = []
     all_scenes = []
-    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+    # 2026-05-29 复审修复（SC-1）：经 _bp_items 归一（list 项目不崩）。
+    for cid, cdata in _bp_items(progress).items():
+        if not isinstance(cdata, dict):
+            continue
         for sb in cdata.get("scene_storyboard", []):
             all_scenes.append(sb)
     for cp in all_scenes:
@@ -1374,9 +1458,12 @@ def _collect_golden_few_shot(scanner, chapter: int, per_type: int = 3) -> dict:
         return {}
 
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    # 2026-05-29 复审修复（SC-1）：经 _bp_items 归一（list 项目不崩）。
     progress = scanner.load("进度", {})
     scene_types = set()
-    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+    for cid, cdata in _bp_items(progress).items():
+        if not isinstance(cdata, dict):
+            continue
         for cp in cdata.get("scene_storyboard", []):
             if cp.get("ch") == chapter:
                 st = cp.get("scene_type", [])
@@ -2515,15 +2602,62 @@ def _build_critical_summary(chapter: int, foreshadow_summary: dict,
     }
 
 
+def _infer_start_chapter(project_root: Path) -> int:
+    """2026-05-29 复审修复（C1-b · SC-3）：章节号参数缺失/非数字时推断起首章。
+    优先：事件簇.json 已落章 cluster 末章 + 1；兜底：章节/第NNN章 目录最大章号 + 1；都没有 → 1。
+    """
+    import re as _re
+    db = project_root / "_数据库"
+    # 1) 事件簇.json 已落章 cluster 末章 + 1
+    landed_statuses = ("done", "已完成", "in_progress", "进行中",
+                       "writer_done", "splitter_done", "writer_v2_rewriting", "done_writer_drafted")
+    best_last = 0
+    ec = load_json(db / "事件簇.json", {}) or {}
+    if isinstance(ec, dict):
+        for c in ec.get("clusters", []) or []:
+            if not isinstance(c, dict):
+                continue
+            cr = c.get("chapter_range") or []
+            if isinstance(cr, list) and len(cr) == 2 and isinstance(cr[1], int):
+                if c.get("status") in landed_statuses or c.get("status") not in (
+                        "candidate", "未涌现", "pending", "已规划", None):
+                    best_last = max(best_last, cr[1])
+    if best_last > 0:
+        return best_last + 1
+    # 2) 扫 章节/第NNN章 目录最大章号 + 1
+    chap_dir = project_root / "章节"
+    if chap_dir.exists():
+        mx = 0
+        for p in chap_dir.iterdir():
+            if p.is_dir():
+                m = _re.search(r"第\s*(\d+)\s*章", p.name)
+                if m:
+                    try:
+                        mx = max(mx, int(m.group(1)))
+                    except Exception:
+                        continue
+        if mx > 0:
+            return mx + 1
+    return 1
+
+
 def main():
     if len(sys.argv) < 3:
         print("用法: python build_manifest.py <项目路径> <章节号>", file=sys.stderr)
         sys.exit(1)
     project_root = Path(sys.argv[1]).resolve()
-    chapter = int(sys.argv[2])
     if not project_root.exists():
         print(f"项目路径不存在: {project_root}", file=sys.stderr)
         sys.exit(1)
+    # 2026-05-29 复审修复（C1-b · SC-2）：start-ch 取空时上游会把空串传进来 → int("") ValueError
+    # （Traceback exit>=3，被编排器判崩溃）。守卫：空/非数字 → 回退 _infer_start_chapter（扫已落
+    # cluster 末章+1 / 章节目录最大章号+1，都没有 → 1），不崩。
+    raw_ch = sys.argv[2].strip() if isinstance(sys.argv[2], str) else sys.argv[2]
+    try:
+        chapter = int(raw_ch)
+    except (ValueError, TypeError):
+        chapter = _infer_start_chapter(project_root)
+        print(f"[WARN] 章节号参数无效（{raw_ch!r}）→ 回退推断起首章 = {chapter}", file=sys.stderr)
 
     manifest = build_manifest(project_root, chapter)
     out_path = project_root / "_数据库" / ".manifest" / f"ch_{chapter:03d}.json"

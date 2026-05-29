@@ -22,6 +22,13 @@ import re
 import sys
 from pathlib import Path
 
+# 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测），裸 .items() 会崩。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cluster_lookup  # blueprint list 归一守卫
+except Exception:
+    cluster_lookup = None
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -219,8 +226,17 @@ def main():
         # cluster ↔ ch 映射 (从 进度.cluster_blueprint)
         
         # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 派生 plan list
+        # 2026-05-29 复审复修 SC-1：blueprint 可能是 list（城南实测），先归一成 dict 再迭代。
         _plan_list = []
-        for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+        if cluster_lookup is not None:
+            _bp = cluster_lookup.normalize_blueprint(progress)
+        else:
+            _bp = progress.get("cluster_blueprint") or {}
+            if not isinstance(_bp, dict):
+                _bp = {}
+        for cid, cdata in _bp.items():
+            if not isinstance(cdata, dict):
+                continue
             _plan_list.extend(cdata.get("scene_storyboard", []))
         if _plan_list:
             print(f"║   cluster ↔ ch 映射:".ljust(72) + "║")

@@ -188,7 +188,10 @@ def main():
             print(f"     建议: {f['suggestion']}")
         print()
         print(f"报告: {out_path}")
+        # 2026-05-29 复审修复 [L6/SC-2]：warning 级发现统一 exit 2、advisory 统一 exit 1（旧版 warning 误用 exit 1）。
         if any(f["severity"] == "warning" for f in findings):
+            sys.exit(2)
+        if any(f["severity"] == "advisory" for f in findings):
             sys.exit(1)
         sys.exit(0)
 
@@ -320,7 +323,10 @@ def main():
     print()
     print(f"报告: {out_path}")
 
+    # 2026-05-29 复审修复 [L6/SC-2]：warning 级发现统一 exit 2、advisory 统一 exit 1（旧版 warning 误用 exit 1）。
     if any(f["severity"] == "warning" for f in findings):
+        sys.exit(2)
+    if any(f["severity"] == "advisory" for f in findings):
         sys.exit(1)
     sys.exit(0)
 

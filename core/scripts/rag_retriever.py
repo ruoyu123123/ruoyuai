@@ -21,6 +21,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
+try:
+    import cluster_lookup  # 2026-05-29 复审修复：SC-1 blueprint list 归一守卫
+except Exception:  # 防御：缺模块时不影响主检索路径
+    cluster_lookup = None
 
 
 def _chinese_tokens(text: str) -> list[str]:
@@ -114,9 +118,20 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3) -> list[dict]:
     current_plan = ''
     if plan_path.exists():
         progress = json.loads(plan_path.read_text(encoding='utf-8'))
+        # 2026-05-29 复审修复：SC-1 — cluster_blueprint 规范形态=dict；城南项目实测为
+        # list(25)（每项是逐章 scene 记录），裸 .items() 会 AttributeError 崩在 writer
+        # 写作前检索路径。先 normalize_blueprint 归一成 dict 再迭代。
+        if cluster_lookup is not None:
+            _bp = cluster_lookup.normalize_blueprint(progress)
+        else:
+            _bp = progress.get('cluster_blueprint', {})
+            if not isinstance(_bp, dict):
+                _bp = {}
         _all_scenes = []
-        for cid, cdata in (progress.get('cluster_blueprint', {}) or {}).items():
-            _all_scenes.extend(cdata.get('scene_storyboard', []))
+        for cid, cdata in _bp.items():
+            if not isinstance(cdata, dict):
+                continue
+            _all_scenes.extend(cdata.get('scene_storyboard', []) or [])
         for p in _all_scenes:
             if p.get('ch') == current_ch:
                 current_plan = json.dumps(p, ensure_ascii=False)

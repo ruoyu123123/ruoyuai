@@ -17,6 +17,10 @@ try:
     import cluster_summary_reader as _csr  # noqa: E402
 except Exception:  # pragma: no cover - 防御性
     _csr = None
+try:
+    import cluster_lookup  # noqa: E402  2026-05-29 复审修复：SC-1 blueprint list 归一守卫
+except Exception:  # pragma: no cover - 防御性
+    cluster_lookup = None
 
 
 def load_json(p: Path, default=None):
@@ -30,10 +34,12 @@ def load_json(p: Path, default=None):
 
 KEY_TURNING_POINT_KW = ["高潮", "反转", "触发", "觉醒", "崩溃", "牺牲", "宣战", "复仇", "终局"]
 KEY_ENDING_TYPES = {"信息炸弹", "POV切换收尾", "悬念断章"}
-# 2026-05-29 TODO：以下硬编码关键章号在 v27 cluster+freestyle fluid 章数下已失准
-# （总章数由 ME 触发节奏 + 涟漪选择 + splitter 按字数切自然涌现，无法预先确定）。
-# 建议改为按 cluster 边界触发（cluster 起始/收尾章），而非固定章号集合。暂保留不强行重构。
-STC_KEY_CHAPTERS = {5, 14, 50, 100, 175, 250, 300, 375, 395, 420, 475, 500}
+# 2026-05-29 复审修复 [L14]：以下硬编码关键章号在 v27 cluster+freestyle fluid 章数下
+# 已彻底失准（总章数由 ME 触发节奏 + 涟漪选择 + splitter 按字数切自然涌现，无法预先确定）。
+# 生产路径全部走 `--cluster`（run_cluster → _cluster_trigger_chapters，按 cluster 末章/climax
+# 触发），永不触及此集合。仅在「无 CLUSTER_MODE 的 chapter 兼容位置参」分支被 is_key_chapter
+# 读取，属向后兼容死路。保留空壳兼容引用而不再维护具体章号——避免对老项目误判关键章。
+STC_KEY_CHAPTERS: set[int] = set()  # 生产已弃用（cluster 边界触发取代）；置空避免失准误判
 
 
 def _is_cluster_mode(project_root: Path) -> bool:
@@ -68,7 +74,14 @@ def _cluster_trigger_chapters(project_root: Path) -> dict[int, list[str]]:
     """
     triggers: dict[int, list[str]] = {}
     progress = load_json(project_root / "_数据库" / "进度.json", {}) or {}
-    blueprint = progress.get("cluster_blueprint", {}) or {}
+    # 2026-05-29 复审修复：SC-1 — cluster_blueprint 可能是 list（城南实测 25 条逐章
+    # scene 记录），裸 .items() 会 AttributeError 崩。normalize_blueprint 归一成 dict。
+    if cluster_lookup is not None:
+        blueprint = cluster_lookup.normalize_blueprint(progress)
+    else:
+        blueprint = progress.get("cluster_blueprint", {}) or {}
+        if not isinstance(blueprint, dict):
+            blueprint = {}
 
     # 1) cluster_blueprint：末章 + climax 章
     for cid, cdata in blueprint.items():
@@ -135,11 +148,20 @@ def is_key_chapter(project_root: Path, ch: int) -> tuple[bool, list[str]]:
                 reasons.append(f"卷末 vol{v.get('vol')}")
 
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    # 2026-05-29 复审修复：SC-1 — cluster_blueprint 可能是 list，normalize 归一成 dict。
+    if cluster_lookup is not None:
+        _bp = cluster_lookup.normalize_blueprint(progress)
+    else:
+        _bp = progress.get("cluster_blueprint", {}) or {}
+        if not isinstance(_bp, dict):
+            _bp = {}
     all_scenes = []
-    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
-        all_scenes.extend(cdata.get("scene_storyboard", []))
+    for cid, cdata in _bp.items():
+        if not isinstance(cdata, dict):
+            continue
+        all_scenes.extend(cdata.get("scene_storyboard", []) or [])
     for cp in all_scenes:
-        if cp.get("ch") != ch:
+        if not isinstance(cp, dict) or cp.get("ch") != ch:
             continue
         tp = cp.get("turning_point", "") or ""
         for kw in KEY_TURNING_POINT_KW:

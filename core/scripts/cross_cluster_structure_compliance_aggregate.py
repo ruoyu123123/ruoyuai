@@ -164,8 +164,24 @@ def scan_user_choice_landed(project_root: Path, chapters: list[int]) -> list[dic
         return []
     progress = load_json(progress_path, {})
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    # 2026-05-29 复审修复 [SC-1]：cluster_blueprint 规范形态=dict；城南项目实测是 list(25) 是 bug。
+    # 裸 .items() 对 list 会 AttributeError → 崩溃。list 则按各项 cluster_id 归一成 dict，非 dict 视为空。
+    bp_raw = progress.get("cluster_blueprint", {})
+    if isinstance(bp_raw, list):
+        bp = {}
+        for item in bp_raw:
+            if isinstance(item, dict):
+                cid_key = item.get("cluster_id")
+                if cid_key:
+                    bp[cid_key] = item
+    elif isinstance(bp_raw, dict):
+        bp = bp_raw
+    else:
+        bp = {}
     ch_to_scene = {}
-    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+    for cid, cdata in bp.items():
+        if not isinstance(cdata, dict):
+            continue
         for sb in cdata.get("scene_storyboard", []):
             ch_key = sb.get("ch")
             if ch_key:
@@ -242,8 +258,12 @@ def scan_beat_progression_ledger(recs: list) -> list[dict]:
         signal_hit = rec.get("beat_signal_hit")
         beats_addressed = rec.get("beats_addressed") or []
         explicit_hit = any(str(beat_str).lower() in str(b).lower() for b in beats_addressed)
-        # signal_hit 显式 False 且 changes 也未标记 → BEAT_MISSED
-        if signal_hit is False and not explicit_hit:
+        # 2026-05-29 复审修复 [M10-a]：beat_signal_hit 为 None（builder 未预算/无信号）时
+        # 旧写法 `None is False` 恒假 → BEAT_MISSED 永不触发。None 与 False 都应视为「未命中信号」。
+        # 仅 signal_hit is True 才算命中；None/False 都算未命中。
+        signal_missed = signal_hit is not True
+        # signal_hit 未命中（None/False）且 changes 也未标记 → BEAT_MISSED
+        if signal_missed and not explicit_hit:
             kws = beat_keywords_for(beat_str)
             findings.append({
                 "severity": "warning",

@@ -45,6 +45,9 @@ def find_remaining_mes(dashishi: dict, completed_mes: set) -> list:
     pool = dashishi.get("major_events_pool") or dashishi.get("major_events") or []
     remaining = []
     for me in pool:
+        # 2026-05-29 复审修复（L8）：ME 池可能混入非 dict（字符串/None），裸调 .get() 直接崩。
+        if not isinstance(me, dict):
+            continue
         me_id = _get_me_id(me)
         # v26: 跳过已 completed 的 ME（按 status 字段判定 · 不只是 completed_mes 集合）
         if me.get("status") == "completed":
@@ -317,15 +320,22 @@ def select_candidate_mes(
 
     scored = []
     for idx, me in enumerate(remaining_mes):
+        # 2026-05-29 复审修复（L8）：循环首行加 isinstance 守卫 · 非 dict ME 跳过不打分（防 _score_one_me 内裸 .get() 崩）。
+        if not isinstance(me, dict):
+            continue
         score, reasons = _score_one_me(
             me, cur_vol, completed_me_ids, stages, consequence_kw, extreme_factions
         )
         scored.append((score, idx, me, reasons))
 
-    # 保底：所有打分为 0（信号全缺）→ 退回原行为 remaining_mes[:3]
+    # 2026-05-29 复审修复（L8）：scored 全空（remaining 全是非 dict 被过滤）→ 无可涌现 ME，返回 []。
+    if not scored:
+        return []
+
+    # 保底：所有打分为 0（信号全缺）→ 退回设计顺序前 3（只取已过滤的 dict ME · 不漏非 dict）
     if all(s == 0 for s, _, _, _ in scored):
         out = []
-        for me in remaining_mes[:3]:
+        for _, _, me, _ in scored[:3]:
             me2 = dict(me) if isinstance(me, dict) else me
             if isinstance(me2, dict):
                 me2["_emergence_score"] = 0
@@ -482,6 +492,86 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     }
 
 
+# 2026-05-29 复审修复（C1-a · SC-3/SC-6）：start-ch 必须算「上一个已落章 cluster 末章+1」，
+# 不能反查目标 cluster 自身尚未回填的 chapter_range（否则空输出 exit2 → 下游 build_manifest int("") 崩）。
+# 「已落章」状态词表（SC-6 中英文都认）：done / 已完成 / in_progress / 进行中，且 chapter_range 有值。
+_LANDED_STATUSES = ("done", "已完成", "in_progress", "进行中", "writer_done",
+                    "splitter_done", "writer_v2_rewriting", "done_writer_drafted")
+
+
+def _scan_max_chapter_dir(project_root: Path) -> int:
+    """SC-3 兜底：扫 章节/第NNN章 目录取最大章号。无目录返回 0。"""
+    import re as _re
+    chap_dir = project_root / "章节"
+    if not chap_dir.exists():
+        return 0
+    mx = 0
+    for p in chap_dir.iterdir():
+        if not p.is_dir():
+            continue
+        m = _re.search(r"第\s*(\d+)\s*章", p.name)
+        if m:
+            try:
+                mx = max(mx, int(m.group(1)))
+            except Exception:
+                continue
+    return mx
+
+
+def resolve_start_ch(project_root: Path, cluster_key) -> int:
+    """SC-3：本 cluster 起首章 = 上一个已落章 cluster 末章 + 1；cluster_001 特判 = 1。
+
+    来源优先级：
+      1. 事件簇.json：取所有 num < 目标 num 且 status∈已落章词表 且 chapter_range 有值的
+         cluster，其 chapter_range[1] 的最大值 + 1。
+      2. 兜底：扫 章节/第NNN章 目录最大章号 + 1。
+      3. 都没有 → 1（首块）。
+    禁止反查目标 cluster 自身尚未回填的 range（C1-a 根因）。
+    """
+    import cluster_lookup as _cl
+    target_num = _cl.cluster_num(cluster_key)
+    if target_num is None or target_num <= 1:
+        # cluster_001 / 无法解析 → 起首章特判为 1
+        return 1
+
+    db = _db_dir_local(project_root)
+    ec = load_json(db / "事件簇.json", {}) or {}
+    best_last = 0
+    for c in ec.get("clusters", []) or []:
+        if not isinstance(c, dict):
+            continue
+        c_num = _cl.cluster_num(c.get("cluster_id"))
+        if c_num is None or c_num >= target_num:
+            continue
+        status = c.get("status")
+        cr = c.get("chapter_range") or []
+        landed_range = isinstance(cr, list) and len(cr) == 2 and isinstance(cr[1], int)
+        # SC-6：中英文 status 都算已落章；只要 chapter_range 有值也视为已落章（已完成|done|进行中且有range）
+        if (status in _LANDED_STATUSES) and landed_range:
+            best_last = max(best_last, cr[1])
+        elif landed_range and status not in ("candidate", "未涌现", "pending", "已规划"):
+            # range 有值但 status 非「未落章」语义 → 也并入（兜底，避免漏算）
+            best_last = max(best_last, cr[1])
+
+    if best_last > 0:
+        return best_last + 1
+
+    # 兜底：扫章节目录
+    mx = _scan_max_chapter_dir(project_root)
+    if mx > 0:
+        return mx + 1
+    return 1
+
+
+def _db_dir_local(project_root: Path) -> Path:
+    """本地 _数据库 定位（接受 项目根 或 直接传 _数据库 路径）。"""
+    root = Path(project_root)
+    if root.name == "_数据库":
+        return root
+    cand = root / "_数据库"
+    return cand if cand.exists() else root
+
+
 _ACTIONS = ("emerge", "last-ch", "start-ch")
 
 
@@ -522,14 +612,24 @@ def main():
         if not cluster_key:
             print(f"[ERROR] {action} 需要 --cluster <key>", file=sys.stderr)
             return 2
+
+        # 2026-05-29 复审修复（C1-a · SC-3）：start-ch 与 last-ch 语义分离。
+        # start-ch = 上一个已落章 cluster 末章 + 1（cluster_001 = 1），不反查目标自身未回填的 range。
+        # last-ch  = 取「指定 cluster」自身末章（保持原行为，供 world_evolution_apply_card 用上一 cluster 末章）。
+        if action == "start-ch":
+            start_ch = resolve_start_ch(project_root, cluster_key)
+            print(start_ch)
+            return 0
+
+        # last-ch：仍取指定 cluster 末章
         import cluster_lookup
         rng = cluster_lookup.cluster_id_to_range(project_root, cluster_key)
         if not rng or len(rng) != 2:
             print(f"[ERROR] cluster {cluster_key} 的 chapter_range 未找到（splitter 切完才回填）",
                   file=sys.stderr)
             return 2
-        # 只打印纯数字 → 供 cluster-write.md 里 LAST_CH=$(...) / START_CH=$(...) 命令替换
-        print(rng[1] if action == "last-ch" else rng[0])
+        # 只打印纯数字 → 供 cluster-write.md 里 LAST_CH=$(...) 命令替换
+        print(rng[1])
         return 0
 
     if action == "emerge":

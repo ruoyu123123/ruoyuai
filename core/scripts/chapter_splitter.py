@@ -19,7 +19,11 @@
 用法（v27 ecas_freestyle · 按字数硬范围切 + 末章 pending_tail 补料）:
     python chapter_splitter.py <项目路径> --mode ecas_freestyle \
         --cluster-id cluster_006 --cluster-start-ch 26 --draft <cluster_draft.txt> \
-        [--rhythm 标准|紧凑|厚重|混合] [--previous-pending-tail <上 cluster pending_tail.txt>] [--dry-run]
+        [--rhythm 标准|紧凑|厚重|混合] [--narrative-mode linear|in_medias_res] \
+        [--climax-hint <scene 下标>] [--previous-pending-tail <上 cluster pending_tail.txt>] [--dry-run]
+
+2026-05-29 复审修复（M5）：ecas_freestyle 增 --narrative-mode / --climax-hint。
+in_medias_res（cluster_001 黄金三章倒叙默认）时先把 climax 段提前再切。
 
 退出码: 0 成功 / 1 草稿不足 / 2 致命错误
 """
@@ -192,6 +196,93 @@ def _resolve_rhythm(profile: str):
     return RHYTHM_RANGES.get((profile or "").strip(), (3000, 4500, 3500))
 
 
+# 2026-05-29 复审修复（M5）：in_medias_res 倒叙 climax 段检测关键词
+# （CLAUDE.md「黄金三章倒叙」：cliffhanger 关键词 / 强冲突信号）。
+CLIMAX_KW = re.compile(
+    r"(尖叫|惨叫|怒吼|爆炸|轰鸣|鲜血|血泊|尸体|崩塌|断裂|坠落|嘶吼|枪声|刀光|"
+    r"死了|杀了|来不及|轰然|炸开|裂开|喷涌|刺穿|断气|窒息|绝望|崩溃|失控)"
+)
+
+
+def _find_climax_para_index(paras, climax_hint):
+    """2026-05-29 复审修复（M5）：在段落组里定位 climax 段下标（in_medias_res 重组用）。
+
+    优先级：
+      1. climax_hint（outline-planner 标的 scene_storyboard 下标）映射到段落位置 —
+         scene 数无法精确对齐段落，按 hint 占总段落比例估算锚点位置，在附近取
+         CLIMAX_KW 命中最密集的段落。
+      2. 无 hint：全局扫 CLIMAX_KW 命中数最高的段落（窗口 3 段滑动累计）。
+    找不到任何信号返回 None（调用方退化为不重组）。
+    """
+    n = len(paras)
+    if n == 0:
+        return None
+
+    def _kw_score(text):
+        return len(CLIMAX_KW.findall(text or ""))
+
+    # 滑窗（前后各 1 段）累计 climax 关键词密度
+    densities = []
+    for i in range(n):
+        s = _kw_score(paras[i]["text"])
+        if i > 0:
+            s += _kw_score(paras[i - 1]["text"])
+        if i < n - 1:
+            s += _kw_score(paras[i + 1]["text"])
+        densities.append(s)
+
+    # 1) climax_hint 锚点：把 scene 下标按比例映射到段落位置，附近 ±15% 段落窗口取最高密度
+    if isinstance(climax_hint, int) and climax_hint >= 0:
+        # hint 是 scene 下标；scene_storyboard 总场景数未知，保守按 hint/(hint+1) 估占比，
+        # 但更稳的做法：把 hint 当「越靠后越接近 climax」的相对信号，落到 [0.4, 0.9] 区间。
+        approx_frac = min(0.9, 0.4 + 0.1 * climax_hint)
+        anchor = int(n * approx_frac)
+        lo_w = max(0, anchor - max(1, int(n * 0.15)))
+        hi_w = min(n - 1, anchor + max(1, int(n * 0.15)))
+        window = range(lo_w, hi_w + 1)
+        best_i = max(window, key=lambda i: (densities[i], -abs(i - anchor)))
+        if densities[best_i] > 0:
+            return best_i
+        # hint 窗口无关键词命中 → 直接用 anchor 作为 climax 锚点（信任 outline 标注）
+        return anchor
+
+    # 2) 无 hint：全局最高密度段
+    best_i = max(range(n), key=lambda i: densities[i])
+    if densities[best_i] > 0:
+        return best_i
+    return None
+
+
+def _reorder_for_in_medias_res(paras, climax_idx):
+    """2026-05-29 复审修复（M5）：in_medias_res 倒叙重排段落组。
+
+    把 climax 段（及紧邻的强冲突前后文，取 climax 段所在的「场景块」近似）提到最前，
+    其后接 cluster 原始时间序的开头→climax 之前→climax 之后剩余。
+
+    近似实现（纯 Python 段落级，不做语义场景切分）：
+      新顺序 = [climax 段] + [0 .. climax-1 原序] + [climax+1 .. 末尾 原序]
+    即把单个 climax 段抽到最前作 in_medias_res 开场钩子，其余保持时间序，
+    回到开头逐步推进到 climax 之后。返回重排后的新 paras（重算 offset/cumulative）。
+    """
+    if climax_idx is None or not (0 <= climax_idx < len(paras)):
+        return paras
+    reordered = [paras[climax_idx]] + paras[:climax_idx] + paras[climax_idx + 1:]
+    # 重算 cumulative_word_count / char_offset_end（切点评分与字数依赖累计值）
+    rebuilt = []
+    cumulative = 0
+    offset = 0
+    for p in reordered:
+        wc = len(p["text"].replace(" ", "").replace("\n", ""))
+        cumulative += wc
+        offset += len(p["text"]) + 2  # +2 近似段间 \n\n
+        rebuilt.append({
+            "text": p["text"],
+            "char_offset_end": offset,
+            "cumulative_word_count": cumulative,
+        })
+    return rebuilt
+
+
 def compute_freestyle_chapter_count(draft_cjk: int, lo: int, hi: int, target: int) -> int:
     """按字数算 N（每章硬范围 [lo, hi]）。极端短篇返回 0（全段退 pending_tail）。"""
     if draft_cjk < lo:
@@ -229,8 +320,14 @@ def _best_anchor_split(paras, anchor_word, tolerance, lo, hi, mid_target):
 
 
 def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
-                  rhythm_profile, previous_pending_tail, dry_run):
-    """v27 ecas_freestyle 切割。返回 report dict。"""
+                  rhythm_profile, previous_pending_tail, dry_run,
+                  narrative_mode="linear", climax_hint=None):
+    """v27 ecas_freestyle 切割。返回 report dict。
+
+    2026-05-29 复审修复（M5）：新增 narrative_mode + climax_hint。
+    narrative_mode == "in_medias_res"（cluster_001 黄金三章倒叙默认）时，切章前先把
+    climax 段提前到草稿头部（in_medias_res 开场钩子），再按字数硬范围切。linear 不动。
+    """
     cluster_key = str(cluster_id).replace("cluster_", "")
     lo, hi, target = _resolve_rhythm(rhythm_profile)
     tolerance = 600  # freestyle 锚点搜索半径（比 DCAS 略宽，给最佳切点更多空间）
@@ -249,6 +346,16 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
     N = compute_freestyle_chapter_count(draft_cjk, lo, hi, target)
 
     paras = split_paragraphs_with_offset(content)
+
+    # 2.5 in_medias_res 倒叙重组（M5）：climax 段提前作开场钩子，再切。
+    in_medias_res_reordered = False
+    climax_idx_detected = None
+    if (narrative_mode or "linear").strip() == "in_medias_res" and len(paras) >= 2:
+        climax_idx_detected = _find_climax_para_index(paras, climax_hint)
+        if climax_idx_detected is not None and climax_idx_detected > 0:
+            paras = _reorder_for_in_medias_res(paras, climax_idx_detected)
+            in_medias_res_reordered = True
+
     decision_log = {
         "rhythm_profile": rhythm_profile or "标准",
         "per_chapter_range": [lo, hi],
@@ -256,6 +363,11 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
         "N_max": math.floor(draft_cjk / lo) if draft_cjk >= lo else 0,
         "N_recommend": max(1, round(draft_cjk / target)) if draft_cjk >= lo else 0,
         "N_final": N,
+        # M5：倒叙重组决策痕迹
+        "narrative_mode": (narrative_mode or "linear").strip(),
+        "climax_hint": climax_hint,
+        "climax_para_idx_detected": climax_idx_detected,
+        "in_medias_res_reordered": in_medias_res_reordered,
     }
 
     report = {
@@ -266,6 +378,8 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
         "cluster_start_ch": cluster_start_ch,
         "draft_cjk_total": draft_cjk,
         "previous_pending_tail_consumed_cjk": prepend_cjk,
+        "narrative_mode": (narrative_mode or "linear").strip(),
+        "in_medias_res_reordered": in_medias_res_reordered,
         "dry_run": dry_run,
         "_freestyle_decision_log": decision_log,
     }
@@ -530,8 +644,15 @@ def _main_freestyle(args):
             --cluster-id cluster_006 --cluster-start-ch 26 \\
             --draft <cluster_draft.txt 路径> \\
             [--rhythm 标准|紧凑|厚重|混合] \\
+            [--narrative-mode linear|in_medias_res] \\
+            [--climax-hint <scene_storyboard 下标>] \\
             [--previous-pending-tail <上 cluster pending_tail.txt>] \\
             [--dry-run]
+
+    2026-05-29 复审修复（M5）：新增 --narrative-mode / --climax-hint。
+    in_medias_res（cluster_001 黄金三章倒叙默认）时先把 climax 段提前再切。
+    build_manifest.inject_event_cluster_context 注入的 narrative_mode +
+    climax_hint_scene_index 由 novel-chapter-splitter agent 透传到这两个参数。
     """
     project_root = Path(args[0])
     cluster_id = None
@@ -539,6 +660,8 @@ def _main_freestyle(args):
     draft_path = None
     rhythm = "标准"
     prev_pending_path = None
+    narrative_mode = "linear"
+    climax_hint = None
     dry_run = "--dry-run" in args
     for i, a in enumerate(args):
         if a == "--cluster-id" and i + 1 < len(args):
@@ -549,6 +672,13 @@ def _main_freestyle(args):
             draft_path = args[i + 1]
         elif a == "--rhythm" and i + 1 < len(args):
             rhythm = args[i + 1]
+        elif a == "--narrative-mode" and i + 1 < len(args):
+            narrative_mode = args[i + 1]  # linear | in_medias_res
+        elif a == "--climax-hint" and i + 1 < len(args):
+            try:
+                climax_hint = int(args[i + 1])
+            except (ValueError, TypeError):
+                climax_hint = None
         elif a == "--previous-pending-tail" and i + 1 < len(args):
             prev_pending_path = args[i + 1]
 
@@ -571,7 +701,8 @@ def _main_freestyle(args):
             print(f"[WARN] --previous-pending-tail 指定但文件不存在: {prev_pending_path}", file=sys.stderr)
 
     report = run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
-                           rhythm, previous_pending_tail, dry_run)
+                           rhythm, previous_pending_tail, dry_run,
+                           narrative_mode=narrative_mode, climax_hint=climax_hint)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     sys.exit(0)
 

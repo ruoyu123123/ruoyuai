@@ -174,10 +174,18 @@ def main():
     if pool:
         out_lines.append("## 9. Propp 角色功能型（参考用）")
         out_lines.append("")
+        # 2026-05-29 复审修复：L17 — core/emerged_characters 项可能是字符串（id）而非
+        # dict（角色池.json 历史形态不一），对 str 调 .get 会 AttributeError。加 isinstance 守卫。
         for c in (pool.get("core_characters") or [])[:6]:
-            out_lines.append(f"- **{c.get('id')}**：{c.get('propp_function', '?')}")
+            if isinstance(c, dict):
+                out_lines.append(f"- **{c.get('id')}**：{c.get('propp_function', '?')}")
+            elif isinstance(c, str):
+                out_lines.append(f"- **{c}**：?")
         for c in (pool.get("emerged_characters") or [])[:4]:
-            out_lines.append(f"- **{c.get('id')}**：{c.get('propp_function', '?')}")
+            if isinstance(c, dict):
+                out_lines.append(f"- **{c.get('id')}**：{c.get('propp_function', '?')}")
+            elif isinstance(c, str):
+                out_lines.append(f"- **{c}**：?")
         out_lines.append("")
 
     # 10. final reminder

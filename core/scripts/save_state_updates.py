@@ -32,6 +32,20 @@ SUB_MODULES = [
     ("fate_engine_update", "fate_engine.py", ["project", "update", "chapter"]),  # 三段式 CLI
 ]
 
+# 2026-05-29 复审修复 [H4]：split_cluster_changes.py 把整 cluster 的 factual/self_eval
+# 段「平铺」到每章 _changes.json（每章内容完全相同）。declarative_data_update 读 factual
+# 里的 relationship_changes / faction_standing_changes / travel_log_added 等「增量」字段——
+# 逐章 apply N 次 → 关系/阵营 delta 被乘 N 倍、travel_log 被复制 N 条（正典污染）。
+# 修：declarative 是 cluster 级整份增量，只在「代表章」（cluster 首章）apply 一次，
+# 不逐章重放。其余模块按需逐章跑：
+#   - offscreen：self_eval.offscreen_actions_executed 也是 cluster 级整份（平铺相同），
+#     且 offscreen_update 本身幂等（done=true 不反向），但同样只跑首章避免无谓 N 次。
+#   - character_arc：按 ch 映射 stage（每章语义不同，幂等 set 不累加）→ 逐章跑。
+#   - character_lazy_spawn：新角色入档（set 去重）→ 逐章跑。
+#   - fate_engine_update：按 status!=completed 守卫幂等 → 逐章跑（真正应用在世界演化层另有幂等）。
+# 「只跑首章」的模块（读 cluster 级整份增量，逐章会乘倍）：
+CLUSTER_ONCE_MODULES = {"offscreen", "declarative"}
+
 
 def get_cluster_chapter_range(project_root: Path, cluster_key: str) -> list[int]:
     """从 事件簇.json 找 cluster 的 chapter_range，返回 [ch_start, ..., ch_end]。"""
@@ -77,10 +91,22 @@ def run_one_module(module_name: str, script_name: str, args_spec: list, project:
         return False, str(e)[:200]
 
 
-def run_updates_for_chapter(project: str, chapter: int, only: set[str] | None) -> dict:
+def run_updates_for_chapter(project: str, chapter: int, only: set[str] | None,
+                            is_representative_ch: bool = True) -> dict:
+    """对单章跑各子模块。
+
+    2026-05-29 复审修复 [H4]：is_representative_ch=False 时跳过 CLUSTER_ONCE_MODULES
+    （declarative/offscreen 这类读 cluster 级整份增量的模块），只让它们在 cluster 首章
+    跑一次，避免 relationship/faction delta 被乘 N 倍、travel_log 被复制 N 条。
+    """
     results = {}
     for name, script, args_spec in SUB_MODULES:
         if only is not None and name not in only:
+            continue
+        if not is_representative_ch and name in CLUSTER_ONCE_MODULES:
+            # 非代表章：cluster 级整份增量模块跳过（已在首章 apply 过，重放会乘倍）
+            results[name] = {"ok": True, "msg": "skipped (cluster-once, applied at representative ch)"}
+            print(f"  [ch{chapter}] · {name}: 跳过（cluster 级整份增量已在首章应用）")
             continue
         ok, msg = run_one_module(name, script, args_spec, project, chapter)
         results[name] = {"ok": ok, "msg": msg}
@@ -113,8 +139,11 @@ def main():
 
     all_results = {}
     fail_count = 0
+    # 2026-05-29 复审修复 [H4]：cluster 首章 = 代表章，cluster 级整份增量模块只在此跑一次。
+    representative_ch = chapters[0]
     for ch in chapters:
-        r = run_updates_for_chapter(str(project_root), ch, only_set)
+        r = run_updates_for_chapter(str(project_root), ch, only_set,
+                                    is_representative_ch=(ch == representative_ch))
         all_results[ch] = r
         fail_count += sum(1 for v in r.values() if not v["ok"])
 

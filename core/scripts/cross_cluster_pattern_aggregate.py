@@ -54,6 +54,36 @@ IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 sys.path.insert(0, str(Path(__file__).parent))
 import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
 
+# 2026-05-29 复审修复 [C3]：cluster 模式 per_chapter[ch] = builder 的 pattern_metrics，
+# 但 builder 逐维 try/except 写入，任一维度失败即缺键。下方 20 个 Finding 用裸下标读，
+# 缺键 → KeyError → Traceback（SC-2 真崩溃）。这里固化磁盘版同构 schema 的缺省，
+# 让 ledger 记录补齐后再消费，与磁盘模式（20 键恒全）行为一致。
+_PER_CHAPTER_DEFAULTS = {
+    "wc": 0,
+    "catchphrase": {},
+    "para_protagonist_start": 0,
+    "dialogue_tag": 0,
+    "body_reaction": 0,
+    "negation_desc": 0,
+    "para_first_word_top1_pct": 0.0,
+    "tell_count": 0,
+    "tell_per_1k": 0.0,
+    "particle_dist": {"le": 0, "guo": 0, "zhe": 0, "de": 0, "total": 0},
+    "pronoun_action": 0,
+    "punctuation": {"halfwidth_comma": 0, "three_dot": 0, "straight_quote": 0},
+    "metaphor_count": 0,
+    "metaphor_per_1k": 0.0,
+    "cliche_hits": {},
+    "name_density_per_100": 0.0,
+    "warmup_hits": [],
+    "causal_count": 0,
+    "causal_per_1k": 0.0,
+    "time_anchor_drops": 0,
+    "modifier_stack_sentences": 0,
+    "sensory_dist": {},
+    "dialogue_stream_max": 0,
+}
+
 # ===== 通用工具 =====
 
 def load_json(p: Path, default=None):
@@ -447,6 +477,14 @@ def main():
         if not per_chapter:
             print("[OK] cluster 账本无 pattern_metrics，跳过跨章扫描")
             sys.exit(0)
+        # 2026-05-29 复审修复 [C3]：builder 的 pattern_metrics 逐维 try/except 写入，
+        # 任一维度缺失就会让下方 Finding 的裸下标 d["xxx"] 抛 KeyError → Traceback
+        # （SC-2 真崩溃，编排器误判脚本挂掉）。这里按磁盘版同构 schema 补齐缺省，
+        # 与磁盘模式行为一致（磁盘版 20 键恒全），零回归。
+        for _ch in per_chapter:
+            base = dict(_PER_CHAPTER_DEFAULTS)
+            base.update({k: v for k, v in per_chapter[_ch].items() if v is not None})
+            per_chapter[_ch] = base
         # 与磁盘分支 chapters 同构：[(ch, None)]，path 在 ledger 模式不可用
         chapters = [(ch, None) for ch in sorted(per_chapter.keys())]
         # 跳过逐章 text 统计循环（per_chapter 已由账本填好）
@@ -493,17 +531,23 @@ def main():
         }
 
     # 跨章聚合
-    para_start_vals = [d["para_protagonist_start"] for d in per_chapter.values()]
-    dialogue_vals = [d["dialogue_tag"] for d in per_chapter.values()]
-    body_vals = [d["body_reaction"] for d in per_chapter.values()]
-    neg_vals = [d["negation_desc"] for d in per_chapter.values()]
+    # 2026-05-29 复审修复 [C3]：cluster 模式 per_chapter[ch] = builder 的 pattern_metrics，
+    # 其逐维 try/except 写入，任一维度失败即缺键。原裸下标 d["xxx"] → KeyError → Traceback
+    # （SC-2 视为真崩溃，编排器误判脚本挂掉）。全程改 d.get(默认) 优雅跳过。
+    para_start_vals = [d.get("para_protagonist_start", 0) for d in per_chapter.values()]
+    dialogue_vals = [d.get("dialogue_tag", 0) for d in per_chapter.values()]
+    body_vals = [d.get("body_reaction", 0) for d in per_chapter.values()]
+    neg_vals = [d.get("negation_desc", 0) for d in per_chapter.values()]
 
     findings = []
 
     # ===== Finding 1: catchphrase 单一化 =====
     catchphrase_totals = Counter()
     for d in per_chapter.values():
-        for k, v in d["catchphrase"].items():
+        cp = d.get("catchphrase") or {}
+        if not isinstance(cp, dict):
+            continue
+        for k, v in cp.items():
             catchphrase_totals[k] += v
     total_cp = sum(catchphrase_totals.values())
     if total_cp > 0 and catchphrases:
@@ -662,8 +706,8 @@ def main():
 
     # ===== Finding 8: SENTENCE_PARTICLE_MONO 句末助词单一 =====
     for ch, d in per_chapter.items():
-        dist = d["particle_dist"]
-        if dist["total"] >= 30 and dist["le"] > 0.55:
+        dist = d.get("particle_dist") or {}  # 2026-05-29 复审修复 [C3]
+        if dist.get("total", 0) >= 30 and dist.get("le", 0) > 0.55:
             findings.append({
                 "dimension": "sentence_particle",
                 "severity": "advisory",

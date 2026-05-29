@@ -30,11 +30,13 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 __all__ = [
     "normalize_cluster_id",
     "cluster_num",
+    "normalize_blueprint",
     "ch_to_cluster_id",
     "cluster_id_to_range",
 ]
@@ -92,11 +94,66 @@ def cluster_num(cluster_id) -> int | None:
     return None
 
 
+def normalize_blueprint(prog) -> dict:
+    """把 进度.json 的 cluster_blueprint 归一成规范 dict 形态（SC-1 · 2026-05-29 复审修复）。
+
+    规范形态 = dict（cluster_id -> {"scene_storyboard": [...], "chapter_range": [lo,hi]|缺省}）。
+
+    城南项目实测 cluster_blueprint 是 list(25)（每项是一条 scene/章计划，带 `cluster`
+    字段标 cluster 归属，无 `cluster_id`/`chapter_range`），裸 .items() 会 AttributeError 崩。
+    本 helper 把 list 按各项 cluster 标识（优先 cluster_id，其次 cluster）归并成 dict：
+      · 同一 cluster 的项归入该 cluster 的 scene_storyboard
+      · 由各项 ch 推出该 cluster 的 chapter_range = [min_ch, max_ch]（无 ch 则不写）
+
+    入参既接受完整 进度.json dict，也接受直接的 blueprint 值（dict/list/其它）。
+    非 dict/非 list/缺失 一律返回 {}（调用方据空 dict 走 fallback，不崩）。
+    """
+    if prog is None:
+        return {}
+    # 既可传整个 进度.json，也可直接传 blueprint 值
+    if isinstance(prog, dict) and "cluster_blueprint" in prog:
+        bp = prog.get("cluster_blueprint")
+    else:
+        bp = prog
+
+    if isinstance(bp, dict):
+        # 已是规范 dict 形态：原样返回（只保留 dict-value 项，防脏数据）
+        return {k: v for k, v in bp.items() if isinstance(v, dict)}
+
+    if isinstance(bp, list):
+        out: dict = {}
+        for item in bp:
+            if not isinstance(item, dict):
+                continue
+            # 优先 cluster_id，其次 cluster；都缺时归 cluster_001 兜底
+            raw_cid = item.get("cluster_id") or item.get("cluster")
+            cid = normalize_cluster_id(raw_cid) or "cluster_001"
+            slot = out.setdefault(cid, {"scene_storyboard": []})
+            slot.setdefault("scene_storyboard", []).append(item)
+            ch = item.get("ch")
+            if isinstance(ch, int):
+                cr = slot.get("chapter_range")
+                if isinstance(cr, list) and len(cr) == 2:
+                    cr[0] = min(cr[0], ch)
+                    cr[1] = max(cr[1], ch)
+                else:
+                    slot["chapter_range"] = [ch, ch]
+        return out
+
+    # 非 dict/非 list（None 已在上面挡掉，这里是 str/int 等脏数据）
+    return {}
+
+
 def _iter_blueprint_ranges(project_root):
-    """yield (cluster_id, [lo, hi] | None, scene_chs:set) from 进度.cluster_blueprint."""
+    """yield (cluster_id, [lo, hi] | None, scene_chs:set) from 进度.cluster_blueprint.
+
+    2026-05-29 复审修复（SC-1/C2/L16）：cluster_blueprint 可能是 list（城南实测），
+    裸 .items() 会 AttributeError 崩。先 normalize_blueprint 归一成 dict 再迭代。
+    """
     db = _db_dir(project_root)
     prog = _load_json(db / "进度.json", {}) or {}
-    for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+    bp = normalize_blueprint(prog)
+    for cid, cdata in bp.items():
         if not isinstance(cdata, dict):
             continue
         cr = cdata.get("chapter_range") or []
@@ -135,21 +192,59 @@ def ch_to_cluster_id(project_root, ch: int) -> str | None:
 
     # 1) 事件簇.json.chapter_range（v2 权威源 · 2026-05-29 · 切章后由
     #    split_cluster_changes.writeback_event_cluster_range 回填真实范围）
-    for cid, rng in _iter_event_cluster_ranges(project_root):
-        if rng and rng[0] <= ch <= rng[1]:
-            return cid
+    # 2026-05-29 复审修复（H11）：相邻 cluster range 重叠时不静默取首匹配——
+    # 收集所有命中 range，>=2 个则 stderr warn 并返回 start 较小者（标 ambiguous）。
+    ec_matches = [
+        (cid, rng)
+        for cid, rng in _iter_event_cluster_ranges(project_root)
+        if rng and rng[0] <= ch <= rng[1]
+    ]
+    picked = _pick_unambiguous(ch, ec_matches, "事件簇.json")
+    if picked is not None:
+        return picked
 
     # 2) cluster_blueprint.chapter_range（派生/缓存 · 事件簇未回填时兜底）
+    bp_matches = []
     sb_fallback = None
     for cid, rng, scene_chs in _iter_blueprint_ranges(project_root):
         if rng and rng[0] <= ch <= rng[1]:
-            return cid
-        if ch in scene_chs:
-            sb_fallback = sb_fallback or cid
+            bp_matches.append((cid, rng))
+        if ch in scene_chs and sb_fallback is None:
+            sb_fallback = cid
+    picked = _pick_unambiguous(ch, bp_matches, "进度.json.cluster_blueprint")
+    if picked is not None:
+        return picked
     if sb_fallback:
         return sb_fallback
 
     return None
+
+
+def _pick_unambiguous(ch, matches, source: str):
+    """从命中同一 ch 的 (cluster_id, range) 列表中挑选归属。
+
+    2026-05-29 复审修复（H11）：
+      · 0 命中 → None（调用方走下一兜底层）
+      · 1 命中 → 该 cluster_id
+      · >=2 命中（相邻 cluster range 重叠）→ stderr warn，返回 range start 最小者
+    """
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0][0]
+    # 多命中：按 range start 升序，取最小者；start 相同再按 cluster_num
+    ordered = sorted(
+        matches,
+        key=lambda m: (m[1][0], cluster_num(m[0]) if cluster_num(m[0]) is not None else 10**9),
+    )
+    chosen = ordered[0][0]
+    ids = ", ".join(f"{cid}{rng}" for cid, rng in ordered)
+    print(
+        f"[cluster_lookup WARN] ch={ch} 命中 {len(matches)} 个重叠 cluster range（{source}）: "
+        f"{ids} → ambiguous，取 start 最小者 {chosen}",
+        file=sys.stderr,
+    )
+    return chosen
 
 
 def cluster_id_to_range(project_root, cluster_id) -> list | None:
@@ -168,7 +263,7 @@ def cluster_id_to_range(project_root, cluster_id) -> list | None:
 
 
 if __name__ == "__main__":
-    import sys
+    # 2026-05-29 复审修复：sys 已在模块顶部 import，此处不再重复 import
     if len(sys.argv) >= 3:
         root, ch = sys.argv[1], int(sys.argv[2])
         print(f"ch {ch} -> {ch_to_cluster_id(root, ch)}")
@@ -180,4 +275,32 @@ if __name__ == "__main__":
         assert normalize_cluster_id(None) is None
         assert cluster_num("cluster_012") == 12
         assert cluster_num(6) == 6
+        # 2026-05-29 复审修复（SC-1/C2/L16）：normalize_blueprint 防 list-blueprint 崩
+        # 非 dict/None → {}
+        assert normalize_blueprint(None) == {}
+        assert normalize_blueprint("garbage") == {}
+        assert normalize_blueprint(123) == {}
+        # 已是规范 dict → 原样（剔除非 dict value）
+        d_form = {"cluster_blueprint": {"cluster_001": {"scene_storyboard": []}, "bad": 5}}
+        nb = normalize_blueprint(d_form)
+        assert set(nb.keys()) == {"cluster_001"}, nb
+        # list 形态（城南实测：每项带 cluster 字段 + ch，无 cluster_id/chapter_range）
+        list_form = {"cluster_blueprint": [
+            {"ch": 1, "cluster": "cluster_001"},
+            {"ch": 2, "cluster": "cluster_001"},
+            {"ch": 6, "cluster": "cluster_002"},
+            {"ch": 8, "cluster": "cluster_002"},
+            "junk_str",  # 脏数据应被跳过
+        ]}
+        nb2 = normalize_blueprint(list_form)
+        assert set(nb2.keys()) == {"cluster_001", "cluster_002"}, nb2
+        assert nb2["cluster_001"]["chapter_range"] == [1, 2], nb2["cluster_001"]
+        assert nb2["cluster_002"]["chapter_range"] == [6, 8], nb2["cluster_002"]
+        assert len(nb2["cluster_001"]["scene_storyboard"]) == 2
+        # 直接传 blueprint 值（非完整 进度.json）也要支持
+        assert normalize_blueprint([{"ch": 3, "cluster_id": "cluster_005"}])["cluster_005"]["chapter_range"] == [3, 3]
+        # _pick_unambiguous: 多重叠命中 → 取 start 最小者
+        assert _pick_unambiguous(7, [("cluster_002", [6, 9]), ("cluster_003", [7, 12])], "test") == "cluster_002"
+        assert _pick_unambiguous(7, [("cluster_003", [7, 12])], "test") == "cluster_003"
+        assert _pick_unambiguous(7, [], "test") is None
         print("[OK] cluster_lookup self-test passed")

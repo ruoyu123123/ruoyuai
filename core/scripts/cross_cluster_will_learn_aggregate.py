@@ -132,12 +132,23 @@ def main():
                     hint_chs = []
                     for ch in chapters[-5:]:
                         if use_ledger:
-                            # 账本关键词指纹命中（双向 substring，匹配「kw in text」语义）
+                            # 2026-05-29 复审修复 [M10-b]：
+                            # 账本 text_keyword_set 是 builder 抽的「最常见 top-4 个 2 字 2gram」指纹，
+                            # 用 2 字指纹去比对 3-5 字内容词（kw in tk / tk in kw）召回极低 →
+                            # 几乎所有章都判「无命中」→ WILL_LEARN_NEVER_HINTED 大面积误报。
+                            # 修复：①先用指纹做「3-5 字内容词整体落在某指纹里」的宽松粗筛（只取 tk in kw 方向、
+                            #        即指纹是内容词子串，剔除无意义的 kw in tk 方向）；②指纹未命中时不直接判「无铺垫」，
+                            #        回落到该章真实正文做精确 `kw in text` 校验（磁盘文件仍在），消除误报。
                             chk = ledger_kw.get(ch, set())
                             hit = any(
-                                any(kw in tk or tk in kw for tk in chk)
+                                any(tk in kw for tk in chk if len(tk) >= 2)
                                 for kw in content_kws
                             )
+                            if not hit:
+                                # 指纹是有损 top-4，未命中不可信 → 回落真实正文精确校验
+                                text = read_text(project_root, ch)
+                                if text and any(kw in text for kw in content_kws):
+                                    hit = True
                             if hit:
                                 hint_chs.append(ch)
                         else:

@@ -74,7 +74,12 @@ def check_word_count(body: str, target: int, min_: int, max_: int) -> list[dict]
     n = cio.count_words(body)  # v18：统一字数口径
     # v2 cluster 化（2026-05-28）：cluster 视野字数阈值 8000-30000
     import os as _os
-    if _os.environ.get("CLUSTER_MODE") == "1":
+    # 2026-05-29 复审修复 [H9]：cluster 视野 8000 字下限是「整块草稿」语义，
+    # 不能套到 splitter 切出来的单个分章（单章 3000-4500 CJK）。validate_cluster
+    # 逐章 validate 时设 CLUSTER_PER_CHAPTER=1，此处回退到章级字数语义（保留传入
+    # 的 min_/max_，即 进度.json.word_count_range 或默认 3000-5000），不套 8000 下限。
+    if (_os.environ.get("CLUSTER_MODE") == "1"
+            and _os.environ.get("CLUSTER_PER_CHAPTER") != "1"):
         min_, max_ = 8000, 30000
         target = 15000
     errs = []
@@ -697,13 +702,23 @@ def validate(project_root: Path, chapter: int) -> dict:
     manifest_path = project_root / "_数据库" / ".manifest" / f"ch_{chapter:03d}.json"
     manifest = load_json(manifest_path)
     if manifest is None:
-        return {
-            "passed": False,
-            "fatal_count": 1, "error_count": 0, "warning_count": 0,
-            "chapter_file": file_label,
-            "errors": [{"code": "MANIFEST_MISSING", "severity": "fatal",
-                        "msg": "manifest 未生成，先运行 build_manifest.py"}],
-        }
+        # 2026-05-29 复审修复 [H10]：cluster 视野逐章校验时，splitter 只为起首章建
+        # manifest，非起首章必然没有 → 旧逻辑直接 MANIFEST_MISSING(fatal/hard_gate) 误报。
+        # CLUSTER_PER_CHAPTER=1 时降级 manifest 依赖：用空 manifest 骨架继续跑机械扫描
+        # （字数/禁用词/POV/对白工艺等不依赖 manifest 的检查照常），manifest 依赖型检查
+        # （tier1 伏笔/secret/角色出场/道具/locked_fact/knowledge_leak）因 active_characters
+        # 等字段为空自然短路，不再硬挡。整块 manifest 依赖由 cluster 级 audit 在起首章统一覆盖。
+        import os as _os
+        if _os.environ.get("CLUSTER_PER_CHAPTER") == "1":
+            manifest = {}
+        else:
+            return {
+                "passed": False,
+                "fatal_count": 1, "error_count": 0, "warning_count": 0,
+                "chapter_file": file_label,
+                "errors": [{"code": "MANIFEST_MISSING", "severity": "fatal",
+                            "msg": "manifest 未生成，先运行 build_manifest.py"}],
+            }
 
     # v18：正文走 cio.read_body（纯正文），CHANGES 走 cio.read_changes（factual 段）
     body = cio.read_body(project_root, chapter)
@@ -825,7 +840,11 @@ def validate_cluster(project_root: Path, cluster_key: str) -> dict:
 
     chapters = list(range(rng[0], rng[1] + 1))
     prev_mode = _os.environ.get("CLUSTER_MODE")
-    _os.environ["CLUSTER_MODE"] = "1"  # cluster 视野语义（字数 8k-30k / 长引文阈值 >5）
+    prev_per_ch = _os.environ.get("CLUSTER_PER_CHAPTER")
+    _os.environ["CLUSTER_MODE"] = "1"  # cluster 视野语义（长引文阈值 >5 等保留）
+    # 2026-05-29 复审修复 [H9][H10]：逐章 validate 走「单分章字数/manifest」语义，
+    # 不套整块 8000 下限，也不对非起首章硬挡 MANIFEST_MISSING（splitter 只建起首章）。
+    _os.environ["CLUSTER_PER_CHAPTER"] = "1"
     all_errs: list[dict] = []
     ch_files: list[str] = []
     try:
@@ -842,6 +861,10 @@ def validate_cluster(project_root: Path, cluster_key: str) -> dict:
             _os.environ.pop("CLUSTER_MODE", None)
         else:
             _os.environ["CLUSTER_MODE"] = prev_mode
+        if prev_per_ch is None:
+            _os.environ.pop("CLUSTER_PER_CHAPTER", None)
+        else:
+            _os.environ["CLUSTER_PER_CHAPTER"] = prev_per_ch
 
     fatal = [e for e in all_errs if e["severity"] == "fatal"]
     errors = [e for e in all_errs if e["severity"] == "error"]

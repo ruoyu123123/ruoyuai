@@ -229,9 +229,35 @@
               "splitter_done",
               "audit_done",
               "completed",
-              "failed"
+              "failed",
+              "done",
+              "candidate",
+              "进行中",
+              "已规划",
+              "未涌现",
+              "已完成"
             ],
-            "description": "当前阶段"
+            "_v2_status_note": "2026-05-29 复审修复（M16/SC-6）：实际 事件簇.json 同时存在中文（进行中/已规划/未涌现/已完成）与英文（done/in_progress/pending）状态词。enum 扩为全集（中英文并存），消费侧用 SC-6 状态词表归一：已完成|done|进行中且有 chapter_range 视为「已落账 cluster」。",
+            "description": "当前阶段（中英文状态词全集 · 见 _v2_status_note）"
+          },
+          "narrative_mode": {
+            "type": "string",
+            "enum": [
+              "in_medias_res",
+              "linear"
+            ],
+            "default": "linear",
+            "_v2_note": "2026-05-29 复审修复（M5）：黄金三章倒叙模式。cluster_001 默认 in_medias_res（强冲突放最前），后续 cluster 默认 linear。build_manifest.inject_event_cluster_context 注入给 writer + splitter，chapter_splitter.run_freestyle in_medias_res 时先把 climax 段提前再切。",
+            "description": "叙事顺序：in_medias_res（倒叙·黄金三章）/ linear（时间序）"
+          },
+          "climax_hint_scene_index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "_v2_note": "2026-05-29 复审修复（M5）：outline-planner 标注本 cluster climax 场景在 scene_storyboard 的下标，供 splitter in_medias_res 重组定位 climax 段。缺省时 splitter 自行扫描 climax。",
+            "description": "climax 场景在 scene_storyboard 的下标（in_medias_res 倒叙重组用 · 可缺省）"
           },
           "writer_model_used": {
             "type": "string",

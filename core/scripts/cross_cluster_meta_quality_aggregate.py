@@ -137,11 +137,37 @@ def scan_length_distribution(project_root: Path, chapters: list[int],
 
 # ---------- B. SUMMARY_CONSISTENCY ----------
 
+def _flatten_v2_chapter_summary(summary_data: dict) -> dict:
+    """2026-05-29 复审修复 [L5]：v2 cluster schema 的 故事块摘要.json 不再有顶层 chapter_summary，
+    改为 clusters[].chapters[<ch>].summary。把它摊平成 {ch_str: summary_str}，与旧版 chapter_summary 同形，
+    供 scan_summary_consistency 复用下游逻辑。旧 v1 文件（有顶层 chapter_summary）不走这里 → 零回归。"""
+    flat = {}
+    clusters = summary_data.get("clusters")
+    if not isinstance(clusters, list):
+        return flat
+    for cl in clusters:
+        if not isinstance(cl, dict):
+            continue
+        chapters = cl.get("chapters")
+        if not isinstance(chapters, dict):
+            continue
+        for ch_key, crec in chapters.items():
+            if isinstance(crec, dict):
+                s = crec.get("summary")
+                if isinstance(s, str) and s:
+                    flat[str(ch_key)] = s
+    return flat
+
+
 def scan_summary_consistency(project_root: Path, chapters: list[int]) -> list[dict]:
     findings = []
     summary_path = project_root / "_数据库" / "故事块摘要.json"
     summary_data = load_json(summary_path, {})
+    # 2026-05-29 复审修复 [L5]：先读旧 v1 顶层 chapter_summary；缺失则摊平 v2 clusters[].chapters[].summary，
+    # 避免磁盘回退分支读不存在的顶层 chapter_summary 而静默空跑（dead 检测）。
     chapter_summary = summary_data.get("chapter_summary", {}) or {}
+    if not chapter_summary:
+        chapter_summary = _flatten_v2_chapter_summary(summary_data)
     if not chapter_summary:
         return []
 

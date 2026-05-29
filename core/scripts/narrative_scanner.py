@@ -34,6 +34,10 @@ from collections import Counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
+try:
+    import cluster_lookup  # noqa: E402  2026-05-29 复审复修 SC-1：blueprint list 归一守卫
+except Exception:
+    cluster_lookup = None
 
 # v2 cluster 化（2026-05-29 接入）：CLUSTER_MODE env 感知。
 # 本 scanner 的多数 check（gmc/mru/microten/repetition/pov/perspective_shift）判定单元
@@ -195,6 +199,18 @@ def scan_orphan_objects(project_root: Path, current_ch: int) -> dict:
     """扫所有 ≤ current_ch 章节的具体名词频次，找出现 1 次的。"""
     counts = Counter()
     occurrences = {}  # noun → [(ch, snippet)]
+    # 2026-05-29 复审修复 [H8]：cluster 视野用虚拟 ch=9000 当章号占位。若该值流到这里
+    # （显式 --check orphan + 虚拟章号），range(1, 9001) 会空跑 9000 次 load_chapter_body
+    # 直至超时。ch >= 9000 视为虚拟章，改扫「磁盘上真实存在的最大章号」(排除 >=9000 虚拟章)。
+    if current_ch >= 9000:
+        real_max = 0
+        for d in project_root.glob("章节/第*章"):
+            m = re.match(r"第(\d+)章", d.name)
+            if m:
+                num = int(m.group(1))
+                if num < 9000:
+                    real_max = max(real_max, num)
+        current_ch = real_max
     for ch in range(1, current_ch + 1):
         body = load_chapter_body(project_root, ch)
         if not body:
@@ -505,7 +521,11 @@ def main():
 
     # 解析 checks
     if "--all" in args:
-        checks = list(ALL_CHECKS.keys())
+        # 2026-05-29 复审修复 [H8]：orphan 是跨章 Chekhov 风险扫描，按 docstring 本是
+        # --history 专用（range(1, current_ch+1) 全工程扫）。误并入 --all 后，cluster 视野
+        # 用虚拟 ch=9000 跑 --all 会触发 range(1, 9001) 全工程扫，180s 超时 → audit_hub 收 exit 99
+        # 丢全部 narrative 结果。从 --all 集合排除 orphan（仍可显式 --check orphan / --history 跑）。
+        checks = [c for c in ALL_CHECKS.keys() if c != "orphan"]
     elif "--checks" in args:
         idx = args.index("--checks")
         checks = args[idx + 1].split(",")
@@ -619,7 +639,16 @@ def detect_chapter_mode(project_root, ch, body, paragraphs) -> str:
         import json as _json
         prog = _json.loads((project_root / "_数据库" / "进度.json").read_text(encoding="utf-8"))
         _all_scenes = []
-        for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+        # 2026-05-29 复审复修 SC-1：blueprint 可能是 list（城南实测），先归一成 dict 再迭代。
+        if cluster_lookup is not None:
+            _bp = cluster_lookup.normalize_blueprint(prog)
+        else:
+            _bp = prog.get("cluster_blueprint") or {}
+            if not isinstance(_bp, dict):
+                _bp = {}
+        for cid, cdata in _bp.items():
+            if not isinstance(cdata, dict):
+                continue
             _all_scenes.extend(cdata.get("scene_storyboard", []))
         for p in _all_scenes:
             if p.get("ch") == ch:

@@ -46,6 +46,39 @@ def load_json(p: Path, default=None):
         return default
 
 
+def _rec_ending_type(rec: dict) -> str:
+    """2026-05-29 复审修复 [M9]：ending_type 权威来源是 self_eval.applied_style.ending_type
+    （SC-4 / changes_schema.json）。账本 builder 多把它派生为扁平 rec["ending_type"]，但若派生
+    失败 / 仍嵌在 self_eval，原来的 rec.get("ending_type") 取空 → ENDING_TYPE_MISSING 误报。
+    取值优先级：扁平 ending_type → self_eval.applied_style.ending_type → applied_style.ending_type。
+    零回归（扁平命中即返回）。
+    """
+    if not isinstance(rec, dict):
+        return ""
+    et = rec.get("ending_type")
+    if isinstance(et, str) and et:
+        return et
+    se = rec.get("self_eval")
+    if isinstance(se, dict):
+        ap = se.get("applied_style")
+        if isinstance(ap, dict) and isinstance(ap.get("ending_type"), str) and ap["ending_type"]:
+            return ap["ending_type"]
+    ap2 = rec.get("applied_style")
+    if isinstance(ap2, dict) and isinstance(ap2.get("ending_type"), str) and ap2["ending_type"]:
+        return ap2["ending_type"]
+    return ""
+
+
+def _ledger_has_ending_type(project_root: Path) -> bool:
+    """ending_type 可能嵌在 self_eval.applied_style，ledger_has_field 只看顶层 → 补探测。"""
+    if csr.ledger_has_field(project_root, "ending_type"):
+        return True
+    for _ch, rec in csr.get_chapter_records(project_root):
+        if _rec_ending_type(rec):
+            return True
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -60,14 +93,15 @@ def main():
 
     # ===== 2026-05-29 cluster 化分支：账本有 ending_type → 摘要驱动 =====
     # --last-n 在 cluster 模式语义为「最后 N 个 cluster」
-    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "ending_type"):
+    if csr.is_cluster_mode() and _ledger_has_ending_type(project_root):
         recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
         recent = sorted({ch for ch, _ in recs})
         if not recent:
             print("[SKIP] cluster 账本无 ending_type 记录")
             sys.exit(0)
         for ch, rec in recs:
-            et = rec.get("ending_type", "") or ""
+            # 2026-05-29 复审修复 [M9]：从 self_eval.applied_style 兜底取 ending_type。
+            et = _rec_ending_type(rec)
             per_ch.append((ch, et))
     else:
         # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====

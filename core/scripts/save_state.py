@@ -97,18 +97,24 @@ def parse_changes(root: Path, ch: int) -> tuple[dict | None, str]:
     return result, strategy
 
 
-def cmd_parse(root: Path, ch: int):
+def cmd_parse(root: Path, ch: int) -> int:
+    """解析单章 CHANGES → .wal/第N章_parsed.json。返回状态码（0 成功 / 1 软失败 / 2 文件缺失）。
+
+    2026-05-29 复审修复 [M3]：原用 sys.exit 直接退进程，被 cluster 循环调用时单章失败
+    会整 cluster 中断。改为返回状态码，由 cmd_apply_cluster_changes 累计、单章失败不中断整 cluster。
+    """
     if not find_chapter_file(root, ch) and not cio.changes_path(root, ch).is_file():
         print(f"[ERROR] 第{ch}章 正文/CHANGES 均未找到", file=sys.stderr)
-        sys.exit(2)
+        return 2
     changes, strategy = parse_changes(root, ch)
     if changes is None:
         print(f"[PARSE] CHANGES 解析失败（无 _changes.json 且旧稿无 CHANGES 段），需要 AI agent 兜底",
               file=sys.stderr)
-        sys.exit(1)
+        return 1
     out = root / "_数据库" / ".wal" / f"第{ch}章_parsed.json"
     save_json(out, {"strategy": strategy, "changes": changes})
     print(f"[PARSE] 策略 {strategy} 成功 → {out.relative_to(root)}")
+    return 0
 
 
 # ============ 应用 CHANGES（结构化更新） ============
@@ -168,9 +174,13 @@ def _generate_patch(changes: dict, ch: int) -> list[dict]:
     return patches
 
 
-def apply_changes(root: Path, ch: int):
+def apply_changes(root: Path, ch: int) -> int:
     """将 parsed 的 CHANGES 落地到对应 JSON。
     v16: 先生成声明式Patch文件（可审计/可回放），再执行实际修改。
+
+    2026-05-29 复审修复 [M3]：原用 sys.exit(1) 直接退进程，被 cluster 循环调用时单章
+    无 parsed 会整 cluster 中断。改为返回状态码（0 成功 / 1 无 parsed 跳过），
+    由 cmd_apply_cluster_changes 累计、单章失败不中断整 cluster。
     """
     db = root / "_数据库"
     parsed_path = db / ".wal" / f"第{ch}章_parsed.json"
@@ -178,7 +188,7 @@ def apply_changes(root: Path, ch: int):
     changes = parsed.get("changes", {})
     if not changes:
         print(f"[APPLY] 无 parsed CHANGES，跳过", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     # v16: 生成并保存声明式Patch
     patches = _generate_patch(changes, ch)
@@ -199,19 +209,26 @@ def apply_changes(root: Path, ch: int):
         if cat == "promise":
             if typ == "setup":
                 # v2 cluster 化（2026-05-28）：纯 cluster 模式
-                # 2026-05-29 修 章号当cluster号：setup_cluster/due_by_cluster 由 ch 反查真实 cluster_id
+                # 2026-05-29 修 章号当cluster号：setup_cluster 由 ch 反查真实 cluster_id
                 setup_cid, setup_inferred = _resolve_cluster(root, ch)
-                # due_by：「未来 20 章后到期」语义 —— 章偏移本身没错，错在拼成 cluster_id
-                due_ch = ch + 20
-                due_cid, due_inferred = _resolve_cluster(root, due_ch)
+                # 2026-05-29 复审修复 [M4/SC-5]：due_by 不再用 ch+20 反查（未来 cluster 尚未
+                # 涌现，反查必 None → fallback 拼出 cluster_NNN 是 SC-5 明禁的「章号当 cluster 号」）。
+                # 改：优先用 writer 给的 due_by_cluster（归一化）；没给则存「章偏移语义」
+                # due_by_ch_offset，cluster_id 留 None 待后续 cluster 涌现时回填。
+                due_by_cluster = cluster_lookup.normalize_cluster_id(act.get("due_by_cluster")) \
+                    if act.get("due_by_cluster") else None
                 promise_rec = {
                     "id": fid, "setup_cluster": setup_cid, "tier": act.get("tier", 3),
                     "description": act.get("description", ""),
-                    "due_by_cluster": act.get("due_by_cluster") or due_cid,
+                    "due_by_cluster": due_by_cluster,  # None = 待 cluster 涌现后回填
                     "resolved": False,
                 }
-                # 任一为按章号推断（反查不到） → 打不可信标记
-                if setup_inferred or (not act.get("due_by_cluster") and due_inferred):
+                # writer 未指定到期 cluster → 保留章偏移语义供后续回填
+                if not due_by_cluster:
+                    promise_rec["due_by_ch_offset"] = act.get("due_by_ch_offset", 20)
+                    promise_rec["due_by_pending_resolution"] = True
+                # setup_cluster 为按章号推断（反查不到） → 打不可信标记
+                if setup_inferred:
                     promise_rec["_cluster_inferred"] = True
                 fs["promises"].append(promise_rec)
                 summary["applied"].append(f"伏笔 setup: {fid}")
@@ -252,20 +269,26 @@ def apply_changes(root: Path, ch: int):
         elif cat == "secret":
             if typ == "establish":
                 # v2 cluster 化（2026-05-28）：纯 cluster 模式
-                # 2026-05-29 修 章号当cluster号：established_cluster/reveal_at_cluster 由 ch 反查
+                # 2026-05-29 修 章号当cluster号：established_cluster 由 ch 反查
                 est_cid, est_inferred = _resolve_cluster(root, ch)
-                # reveal_at：「未来 50 章后揭晓」语义 —— 章偏移没错，错在拼成 cluster_id
-                reveal_ch = ch + 50
-                reveal_cid, reveal_inferred = _resolve_cluster(root, reveal_ch)
+                # 2026-05-29 复审修复 [M4/SC-5]：reveal_at 不再用 ch+50 反查（未来 cluster
+                # 尚未涌现，反查必 None → fallback 拼 cluster_NNN 是 SC-5 明禁的「章号当 cluster 号」）。
+                # 改：优先用 writer 给的 reveal_at_cluster（归一化）；没给则存「章偏移语义」
+                # reveal_at_ch_offset，cluster_id 留 None 待后续 cluster 涌现时回填。
+                reveal_at_cluster = cluster_lookup.normalize_cluster_id(act.get("reveal_at_cluster")) \
+                    if act.get("reveal_at_cluster") else None
                 secret_rec = {
                     "id": fid,
                     "secret": act.get("description", ""),
                     "established_cluster": est_cid,
-                    "reveal_at_cluster": act.get("reveal_at_cluster") or reveal_cid,
+                    "reveal_at_cluster": reveal_at_cluster,  # None = 待 cluster 涌现后回填
                     "known_by": act.get("known_by", []),
                     "status": "hidden",
                 }
-                if est_inferred or (not act.get("reveal_at_cluster") and reveal_inferred):
+                if not reveal_at_cluster:
+                    secret_rec["reveal_at_ch_offset"] = act.get("reveal_at_ch_offset", 50)
+                    secret_rec["reveal_at_pending_resolution"] = True
+                if est_inferred:
                     secret_rec["_cluster_inferred"] = True
                 fs["secrets"].append(secret_rec)
             elif typ == "reveal":
@@ -372,6 +395,7 @@ def apply_changes(root: Path, ch: int):
           + (f", {len(summary['warnings'])} 条警告" if summary["warnings"] else ""))
     for w in summary["warnings"]:
         print(f"  ⚠️ {w}")
+    return 0
 
 
 # ============ Git commit ============
@@ -401,7 +425,9 @@ def cmd_git_commit(root: Path, ch: int):
     if not title:
         prog = load_json(root / "_数据库" / "进度.json", {})
         _all_scenes_save_state = []
-        for cid, cdata in (prog.get("cluster_blueprint", {}) or {}).items():
+        # 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测），
+        # 裸 .items() 会 AttributeError 崩。先 normalize_blueprint 归一成 dict 再迭代。
+        for cid, cdata in cluster_lookup.normalize_blueprint(prog).items():
             _all_scenes_save_state.extend(cdata.get("scene_storyboard", []))
         for cp in _all_scenes_save_state:
             if cp.get("ch") == ch:
@@ -517,7 +543,25 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
 
 # ============ v23 ECAS checkpoint ============
 
-def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> None:
+def _read_ecas_metadata(chg: dict) -> dict:
+    """2026-05-29 复审修复 [M17]：ecas_metadata 三方位置不一致——
+    schema 声明顶层 / gen_writer 写在 self_eval.ecas_metadata（见 gen_writer.py:587）/
+    旧 reader 只读顶层 → 永远拿空 dict → checkpoint_data 永远空。
+    本 helper 统一读：优先 self_eval.ecas_metadata（writer 实际位置），兜底顶层（schema 位置），
+    两处都有则浅合并（self_eval 优先，反映 writer 真实输出）。读不到返回 {}。
+    """
+    if not isinstance(chg, dict):
+        return {}
+    top = chg.get("ecas_metadata") if isinstance(chg.get("ecas_metadata"), dict) else {}
+    se = chg.get("self_eval") if isinstance(chg.get("self_eval"), dict) else {}
+    nested = se.get("ecas_metadata") if isinstance(se.get("ecas_metadata"), dict) else {}
+    # 顶层做底、self_eval 覆盖（writer 真实写入位置优先）
+    merged = dict(top)
+    merged.update(nested)
+    return merged
+
+
+def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> int:
     """v23 ECAS: 验证 cluster_draft 完整性 (字数 / sub_summaries / mid_checkpoint_results)。
 
     输入: cluster_id (如 cluster_002)
@@ -526,6 +570,11 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> None:
     2. 读 章节/cluster_<id>_draft/cluster_<id>_changes.json.ecas_metadata.checkpoint_data
     3. 验所有 mid_checkpoint_results 字段完整 + passed
     4. 写 _数据库/.ecas_checkpoints/cluster_<id>_final.json (汇总)
+
+    2026-05-29 复审修复 [L12]：freestyle（writer_mode=freestyle_v27 / chapter_count_decided_by_splitter）
+    时字数由 writer 自由发挥、splitter 后期按字数切——硬卡 expected_word_range 与 freestyle 设计冲突，
+    故 freestyle 时 [4000,20000] 等硬范围降级为 advisory（仅 warn 不 FAIL）。
+    2026-05-29 复审修复 [H3/M20]：返回状态码（0 PASS / 1 FAIL）替代 sys.exit，供 main() 传播。
     """
     import json as _json
 
@@ -543,6 +592,20 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> None:
         "passed": True,
         "warnings": []
     }
+
+    # 2026-05-29 复审修复 [M17/L12]：先读 changes.json 一次——既供 freestyle 判定（L12），
+    # 也复用给 Check 2（避免二次读盘）。ecas_metadata 经 _read_ecas_metadata 兼容三方位置。
+    chg = None
+    ecas_meta = {}
+    if changes_path.is_file():
+        try:
+            chg = _json.loads(changes_path.read_text(encoding="utf-8"))
+            ecas_meta = _read_ecas_metadata(chg)
+        except Exception:
+            chg = None  # Check 2 会重新尝试并记录具体错误
+    is_freestyle = (ecas_meta.get("writer_mode") == "freestyle_v27"
+                    or bool(ecas_meta.get("chapter_count_decided_by_splitter")))
+    result["checks"]["writer_mode"] = ecas_meta.get("writer_mode", "unknown")
 
     # Check 1: draft 存在 + 字数
     if not draft_path.is_file():
@@ -568,8 +631,14 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> None:
                     wmin, wmax = wr.get("min", 4000), wr.get("max", 20000)
                     result["checks"]["expected_word_range"] = [wmin, wmax]
                     if words < wmin or words > wmax:
-                        result["passed"] = False  # v23.2: FAIL 不再 warn
-                        result["warnings"].append(f"FAIL: CJK 字数 {words} 超出 expected_word_range [{wmin}, {wmax}]")
+                        # 2026-05-29 复审修复 [L12]：freestyle 时字数硬卡降级为 advisory（不 FAIL）
+                        if is_freestyle:
+                            result["warnings"].append(
+                                f"ADVISORY(freestyle): CJK 字数 {words} 在 expected_word_range "
+                                f"[{wmin}, {wmax}] 之外——freestyle 由 splitter 按字数切，仅提示不卡")
+                        else:
+                            result["passed"] = False  # v23.2: 非 freestyle 仍 FAIL
+                            result["warnings"].append(f"FAIL: CJK 字数 {words} 超出 expected_word_range [{wmin}, {wmax}]")
                     else:
                         result["checks"]["word_count_in_range"] = True
                 else:
@@ -591,8 +660,10 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> None:
         result["warnings"].append(f"changes.json 不存在: {changes_path}")
     else:
         try:
-            chg = _json.loads(changes_path.read_text(encoding="utf-8"))
-            ecas_meta = chg.get("ecas_metadata") or {}
+            if chg is None:
+                chg = _json.loads(changes_path.read_text(encoding="utf-8"))
+            # 2026-05-29 复审修复 [M17]：经 _read_ecas_metadata 兼容 self_eval/顶层两种位置
+            ecas_meta = _read_ecas_metadata(chg)
             ckp_data = ecas_meta.get("checkpoint_data") or {}
             ckp_results = ckp_data.get("mid_checkpoint_results") or []
             result["checks"]["changes_exists"] = True
@@ -621,8 +692,8 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> None:
         for w in result["warnings"]:
             print(f"    - {w}")
     print(f"  summary: {final_path.relative_to(root)}")
-    if not result["passed"]:
-        sys.exit(1)
+    # 2026-05-29 复审修复 [H3/M20]：返回状态码（1 FAIL / 0 PASS）替代 sys.exit，供 main() 传播
+    return 1 if not result["passed"] else 0
 
 
 # ============ CLI ============
@@ -687,35 +758,60 @@ def cmd_apply_cluster_changes(root, cluster_key):
     """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes。
 
     2026-05-29 流程贯通（断点 5）：apply 后跑 writer_truth_check（撒谎检测）并入 summary。
+    2026-05-29 复审修复 [M3]：单章 parse/apply 失败不再 sys.exit 中断整 cluster——
+    cmd_parse/apply_changes 改返回状态码，本函数逐章累计 per_chapter_status；truth-check + 写盘
+    放 finally 保证任何单章异常后仍落地 summary。返回 0 成功 / 2 整 cluster 失败（无章）。
     """
     chapters = _get_cluster_chapter_range(root, cluster_key)
     if not chapters:
         print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
         return 2
-    print(f"[cluster {cluster_key}] 展开 {len(chapters)} 章 → 逐章 apply-changes")
-    for ch in chapters:
-        print(f"  → ch{ch}")
-        cmd_parse(root, ch)
-        apply_changes(root, ch)
-    print(f"[OK] cluster {cluster_key} apply-changes 完成 {len(chapters)} 章")
 
-    # writer 撒谎检测（apply 落地后跑 · 失败不中断 · 结果并入 summary 写盘）
-    truth = _run_writer_truth_check(root, chapters)
-    summary = {
-        "cluster_id": cluster_key,
-        "chapters": chapters,
-        "applied_at": datetime.now().isoformat(timespec="seconds"),
-        "writer_truth_check": truth,
-    }
-    out = root / "_数据库" / ".wal" / f"{cluster_key}_apply_cluster.json"
-    save_json(out, summary)
-    if truth["lies_total"] > 0:
-        print(f"[truth-check] 🔴 检测到 {truth['lies_total']} 条撒谎"
-              f"（writer 声明与正文不符）· 详见 {out.name}")
-    else:
-        print(f"[truth-check] ✅ {truth['ran']} 章无撒谎"
-              + (f" · {len(truth['errors'])} 章检测异常（已记录）" if truth["errors"] else ""))
-    return summary
+    per_chapter_status = []
+    failed_chapters = []
+    try:
+        print(f"[cluster {cluster_key}] 展开 {len(chapters)} 章 → 逐章 apply-changes")
+        for ch in chapters:
+            print(f"  → ch{ch}")
+            # 单章失败（含未捕获异常）记录后继续下一章，不中断整 cluster
+            try:
+                prc = cmd_parse(root, ch)
+                arc = apply_changes(root, ch) if prc == 0 else None
+                status = {"ch": ch, "parse_rc": prc, "apply_rc": arc}
+                if prc != 0 or (arc is not None and arc != 0):
+                    failed_chapters.append(ch)
+            except Exception as e:
+                status = {"ch": ch, "error": f"{type(e).__name__}: {str(e)[:160]}"}
+                failed_chapters.append(ch)
+                print(f"  ⚠️ ch{ch} apply 异常（已记录·不中断）: {status['error']}", file=sys.stderr)
+            per_chapter_status.append(status)
+        ok_count = len(chapters) - len(failed_chapters)
+        print(f"[OK] cluster {cluster_key} apply-changes 完成 {ok_count}/{len(chapters)} 章"
+              + (f"（{len(failed_chapters)} 章失败: {failed_chapters}）" if failed_chapters else ""))
+
+        # writer 撒谎检测（apply 落地后跑 · 失败不中断 · 结果并入 summary 写盘）
+        truth = _run_writer_truth_check(root, chapters)
+        if truth["lies_total"] > 0:
+            print(f"[truth-check] 🔴 检测到 {truth['lies_total']} 条撒谎"
+                  f"（writer 声明与正文不符）")
+        else:
+            print(f"[truth-check] ✅ {truth['ran']} 章无撒谎"
+                  + (f" · {len(truth['errors'])} 章检测异常（已记录）" if truth["errors"] else ""))
+    finally:
+        # 2026-05-29 复审修复 [M3]：truth-check + 写盘放 finally——任何异常后都落地 summary
+        summary = {
+            "cluster_id": cluster_key,
+            "chapters": chapters,
+            "applied_at": datetime.now().isoformat(timespec="seconds"),
+            "per_chapter_status": per_chapter_status,
+            "failed_chapters": failed_chapters,
+            "writer_truth_check": locals().get("truth"),
+        }
+        out = root / "_数据库" / ".wal" / f"{cluster_key}_apply_cluster.json"
+        save_json(out, summary)
+        print(f"[apply-cluster] summary → {out.name}")
+    # 全部章失败 = 严重（exit 2），否则成功（单章失败已记录·不影响 cluster 流水线推进）
+    return 2 if (failed_chapters and len(failed_chapters) == len(chapters)) else 0
 
 
 def cmd_git_commit_cluster(root, cluster_key):
@@ -741,16 +837,110 @@ def cmd_git_commit_cluster(root, cluster_key):
         print(f"[GIT] cluster_{cluster_key} commit 超时 (>30s)·跳过本次快照·不阻断流水线", file=sys.stderr)
     except Exception as e:
         print(f"[GIT] {e}", file=sys.stderr)
+    # 2026-05-29 复审修复 [H3/M20]：git 失败不中断流水线（项目规则「失败不中断，仅记录」），
+    # 故成功/记录后均返回 0（唯一 fatal 是缺 chapter_range，已 return 2）。
+    return 0
 
 
 def cmd_auto_post_reflect_cluster(root, cluster_key):
-    """v24 cluster 级 auto-post-reflect：展开 chapter_range，for each ch 调 auto-post-reflect"""
-    chapters = _get_cluster_chapter_range(root, cluster_key)
-    if not chapters:
-        print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
-        return 2
-    for ch in chapters:
-        cmd_auto_post_reflect(root, ch)
+    """v24 cluster 级 auto-post-reflect：跑 learning_loop 三步链（merge-reflection / ingest / scan-recurring）。
+
+    2026-05-29 复审修复 [H12]：旧实现逐章调 cmd_auto_post_reflect，找
+    `.judge_reports/ch_NNN_reflector.json`——但该文件无 producer（章级 reflector 已随
+    chapter mode 废弃），cluster reflector 实际写 `.wal/<cluster_key>_reflection.json`
+    （见 plan_tracker.py:594 novel-reflector cluster 分支）。链路断裂导致
+    写作经验.json success/failure_patterns 永远 0。
+
+    改为 cluster 级直连：
+      1. learning_loop --merge-reflection .wal/<cluster_key>_reflection.json
+      2. learning_loop --ingest .audit/cluster_<key>_audit.json（见 audit_hub.py:1399）
+      3. learning_loop --scan-recurring
+    退出码语义（SC-2）：返回 0 成功；reflection/audit 缺失只是软跳过（不算崩溃）。
+    """
+    db = root / "_数据库"
+    # cluster_key 可能带或不带 cluster_ 前缀，归一化用于文件名匹配
+    norm_cid = cluster_lookup.normalize_cluster_id(cluster_key) or cluster_key
+    raw = cluster_key.replace("cluster_", "") if str(cluster_key).startswith("cluster_") else cluster_key
+
+    learning_loop = Path(__file__).parent / "learning_loop.py"
+    if not learning_loop.is_file():
+        print(f"[auto-post-reflect-cluster] learning_loop.py 不存在·跳过", file=sys.stderr)
+        return 0
+
+    # cluster reflection 文件候选（plan_tracker novel-reflector 用 cstr_variants 命名）
+    refl_candidates = [
+        db / ".wal" / f"{norm_cid}_reflection.json",
+        db / ".wal" / f"cluster_{raw}_reflection.json",
+        db / ".wal" / f"{cluster_key}_reflection.json",
+        db / ".wal" / f"ch_cluster_{raw}_reflection.json",
+    ]
+    refl_path = next((p for p in refl_candidates if p.is_file()), None)
+
+    # cluster audit 文件候选（audit_hub.py:1399 写 cluster_<key>_audit.json）
+    audit_candidates = [
+        db / ".audit" / f"cluster_{raw}_audit.json",
+        db / ".audit" / f"{norm_cid}_audit.json",
+        db / ".audit" / f"{cluster_key}_audit.json",
+    ]
+    audit_path = next((p for p in audit_candidates if p.is_file()), None)
+
+    project_str = str(root)
+    steps_ran = 0
+    steps_skipped = 0
+
+    # Step 1: merge cluster reflection → 写作经验.success/failure_patterns
+    if refl_path:
+        r = subprocess.run(
+            [sys.executable, str(learning_loop), project_str, "--merge-reflection",
+             refl_path.relative_to(root).as_posix()],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            print(f"[auto-post-reflect-cluster] step 1/3 merge-reflection OK ({refl_path.name})")
+            steps_ran += 1
+        else:
+            print(f"[auto-post-reflect-cluster] step 1/3 merge-reflection FAIL: {(r.stderr or '')[:200]}",
+                  file=sys.stderr)
+            steps_skipped += 1
+    else:
+        print(f"[auto-post-reflect-cluster] step 1/3 跳过：cluster reflection 报告不存在"
+              f"（找过 {norm_cid}_reflection.json 等）")
+        steps_skipped += 1
+
+    # Step 2: ingest cluster audit → _recurrence_tracker / _waiver_tracker
+    if audit_path:
+        r = subprocess.run(
+            [sys.executable, str(learning_loop), project_str, "--ingest",
+             audit_path.relative_to(root).as_posix()],
+            capture_output=True, text=True,
+        )
+        if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
+            print(f"[auto-post-reflect-cluster] step 2/3 ingest OK ({audit_path.name}, rc={r.returncode})")
+            steps_ran += 1
+        else:
+            print(f"[auto-post-reflect-cluster] step 2/3 ingest FAIL: {(r.stderr or '')[:200]}",
+                  file=sys.stderr)
+            steps_skipped += 1
+    else:
+        print(f"[auto-post-reflect-cluster] step 2/3 跳过：cluster audit 报告不存在"
+              f"（找过 cluster_{raw}_audit.json 等）")
+        steps_skipped += 1
+
+    # Step 3: scan-recurring → 跨 cluster 复发追踪 + tool_calibration_suggestions
+    r = subprocess.run(
+        [sys.executable, str(learning_loop), project_str, "--scan-recurring"],
+        capture_output=True, text=True,
+    )
+    if r.returncode in (0, 1):
+        print(f"[auto-post-reflect-cluster] step 3/3 scan-recurring OK (rc={r.returncode})")
+        steps_ran += 1
+    else:
+        print(f"[auto-post-reflect-cluster] step 3/3 scan-recurring FAIL: {(r.stderr or '')[:200]}",
+              file=sys.stderr)
+        steps_skipped += 1
+
+    print(f"[auto-post-reflect-cluster] {cluster_key} 完成 {steps_ran}/3 步（跳过 {steps_skipped}）")
+    return 0
 
 
 # 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：cmd_report_cluster 已删除
@@ -788,10 +978,19 @@ def main():
         print(f"项目路径不存在: {root}", file=sys.stderr)
         sys.exit(2)
 
-    if args.ecas_checkpoint: cmd_ecas_checkpoint(root, args.ecas_checkpoint)
-    elif args.apply_cluster_changes: cmd_apply_cluster_changes(root, args.apply_cluster_changes)
-    elif args.git_commit_cluster: cmd_git_commit_cluster(root, args.git_commit_cluster)
-    elif args.auto_post_reflect_cluster: cmd_auto_post_reflect_cluster(root, args.auto_post_reflect_cluster)
+    # 2026-05-29 复审修复 [H3/M20]：原 dispatch 裸调用 cmd_*_cluster 丢弃返回码——
+    # cmd_apply_cluster_changes/cmd_ecas_checkpoint 返回 2(FATAL)/1(FAIL) 时进程仍 exit 0
+    # （谎报成功）。改为 rc = cmd_xxx(...); sys.exit(rc if isinstance(rc, int) else 0)，
+    # 覆盖 ecas-checkpoint / apply / git_commit / auto_post_reflect / build-summary 全分支。
+    rc = 0
+    if args.ecas_checkpoint:
+        rc = cmd_ecas_checkpoint(root, args.ecas_checkpoint)
+    elif args.apply_cluster_changes:
+        rc = cmd_apply_cluster_changes(root, args.apply_cluster_changes)
+    elif args.git_commit_cluster:
+        rc = cmd_git_commit_cluster(root, args.git_commit_cluster)
+    elif args.auto_post_reflect_cluster:
+        rc = cmd_auto_post_reflect_cluster(root, args.auto_post_reflect_cluster)
     elif args.build_cluster_summary:
         import cluster_summary_builder
         _res = cluster_summary_builder.build_cluster_summary(root, args.build_cluster_summary)
@@ -799,9 +998,11 @@ def main():
             print(f"[FAIL] build-cluster-summary {_res.get('cluster_id')} :: {_res.get('error')}", file=sys.stderr)
             sys.exit(1)
         print(f"[OK] 账本写入 {_res['cluster_id']} · 填章 {_res['chapters_filled']} · 总CJK {_res['word_count']}")
+        rc = 0
     else:
         ap.print_help()
         sys.exit(1)
+    sys.exit(rc if isinstance(rc, int) else 0)
 
 
 if __name__ == "__main__":

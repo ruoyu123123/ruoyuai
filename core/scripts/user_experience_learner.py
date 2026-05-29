@@ -58,9 +58,21 @@ def save_json(p: Path, data: dict):
 def collect_card_choices(project_root: Path) -> dict:
     """收集走向卡用户选择历史"""
     progress = load_json(project_root / "_数据库" / "进度.json", {})
+    # 2026-05-29 复审修复：SC-1 — cluster_blueprint 可能是 list（城南实测），裸 .items()
+    # 会 AttributeError 崩。先 normalize_blueprint 归一成 dict 再迭代。
+    if cluster_lookup is not None:
+        bp = cluster_lookup.normalize_blueprint(progress)
+    else:
+        bp = progress.get("cluster_blueprint", {})
+        if not isinstance(bp, dict):
+            bp = {}
     plan = {}
-    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
-        for sb in cdata.get("scene_storyboard", []):
+    for cid, cdata in bp.items():
+        if not isinstance(cdata, dict):
+            continue
+        for sb in cdata.get("scene_storyboard", []) or []:
+            if not isinstance(sb, dict):
+                continue
             ch = sb.get("ch")
             if ch:
                 plan[str(ch)] = sb

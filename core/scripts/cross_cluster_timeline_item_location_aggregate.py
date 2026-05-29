@@ -85,7 +85,10 @@ def scan_timeline(project_root: Path, chapters: list[int]) -> list[dict]:
     per_ch_time = []
     progress = load_json(project_root / "_数据库" / "进度.json", {})
     plan_dict = {}
-    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+    # 2026-05-29 复审修复（SC-1/C2）：cluster_blueprint 可能是 list（城南实测），
+    # 裸 .items() 会 AttributeError 崩。统一经 cluster_lookup.normalize_blueprint 归一成 dict。
+    import cluster_lookup as _cl  # noqa: E402
+    for cid, cdata in _cl.normalize_blueprint(progress).items():
         for sb in cdata.get("scene_storyboard", []):
             # v2 迁移兼容：旧 schema 用 "ch"，migrate_data_model_v2 改名 "_legacy_ch"，
             # 新 cluster schema 用 "scene_index" —— 三者皆兼容，否则 timeline 检测整体失效

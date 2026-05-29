@@ -54,6 +54,31 @@ def load_json(p: Path, default=None):
         return default
 
 
+def _extract_ids(seq, *id_keys) -> set:
+    """2026-05-29 复审修复 [M7]：把 aspects_addressed / clocks_addressed 之类列表归一成 id 集合。
+
+    writer 实际产出（changes_schema.json）是 list[dict{aspect_id|clock_id, ...}]；reader
+    契约 docstring 又允许 list[str]。账本 builder 逐字拷贝 factual 不做归一，故消费侧两种
+    形态都可能出现。这里：dict 取首个命中的 id_key，str 直接收，其它忽略。
+    之前 `aid in rec.get("aspects_addressed", [])` 把 list[dict] 当 list[str] 比对，永不命中
+    → ASPECT_NOT_ADDRESSED / URGENT_CLOCK_IGNORED 误报。
+    """
+    out: set = set()
+    if not isinstance(seq, (list, tuple)):
+        return out
+    for el in seq:
+        if isinstance(el, str):
+            if el:
+                out.add(el)
+        elif isinstance(el, dict):
+            for k in id_keys:
+                v = el.get(k)
+                if isinstance(v, str) and v:
+                    out.add(v)
+                    break
+    return out
+
+
 def get_chapters(project_root: Path, last_n: int = 10) -> list[int]:
     chs = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
                  for d in (project_root / "章节").glob("第*章")
@@ -101,8 +126,10 @@ def scan_aspect_continuity(project_root: Path, chapters: list[int], ledger_by_ch
                 # / aspect_text_hit（均为 aspect_id 列表）；否则回退逐章 glob + 正文匹配。
                 rec = (ledger_by_ch or {}).get(ch)
                 if rec is not None:
-                    addressed_ids = rec.get("aspects_addressed", []) or []
-                    text_hit_ids = rec.get("aspect_text_hit", []) or []
+                    # 2026-05-29 复审修复 [M7]：账本 aspects_addressed 可能是 list[dict{aspect_id}]
+                    # （writer 实际产出）或 list[str]（reader 契约）；统一归一成 id 集合再比对。
+                    addressed_ids = _extract_ids(rec.get("aspects_addressed"), "aspect_id", "id")
+                    text_hit_ids = _extract_ids(rec.get("aspect_text_hit"), "aspect_id", "id")
                     hit_in_changes = aid in addressed_ids
                     hit_in_text = (not hit_in_changes) and (aid in text_hit_ids)
                 else:
@@ -169,7 +196,9 @@ def scan_clock_addressing(project_root: Path, chapters: list[int], ledger_by_ch:
             # 否则回退逐章 glob（dict 形态）。
             rec = (ledger_by_ch or {}).get(ch)
             if rec is not None:
-                if cid in (rec.get("clocks_addressed", []) or []):
+                # 2026-05-29 复审修复 [M7]：clocks_addressed 同理可能是 list[dict{clock_id}]
+                # 或 list[str]；归一后比对，避免 URGENT_CLOCK_IGNORED 误报。
+                if cid in _extract_ids(rec.get("clocks_addressed"), "clock_id", "id"):
                     addressed_chs.append(ch)
             else:
                 changes = read_changes(project_root, ch)

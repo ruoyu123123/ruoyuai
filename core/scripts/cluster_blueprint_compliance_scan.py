@@ -31,6 +31,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cluster_lookup  # 2026-05-29 复审修复：SC-1 blueprint list 归一守卫
+except Exception:  # 防御：缺模块退回原 dict 守卫
+    cluster_lookup = None
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -91,10 +97,20 @@ def check_chapter(project_root: Path, ch: int) -> list[dict]:
     findings = []
     progress = load_json(project_root / "_数据库" / "进度.json", {})
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+    # 2026-05-29 复审修复：SC-1 — cluster_blueprint 可能是 list（城南实测），裸 .items()
+    # 会 AttributeError 崩。先 normalize_blueprint 归一成 dict 再迭代。
+    if cluster_lookup is not None:
+        bp = cluster_lookup.normalize_blueprint(progress)
+    else:
+        bp = progress.get("cluster_blueprint") or {}
+        if not isinstance(bp, dict):
+            bp = {}
     cluster_blueprint = None
-    for cluster_id, cluster_data in (progress.get("cluster_blueprint") or {}).items():
-        for cp in cluster_data.get("scene_storyboard", []):
-            if cp.get("ch") == ch:
+    for cluster_id, cluster_data in bp.items():
+        if not isinstance(cluster_data, dict):
+            continue
+        for cp in cluster_data.get("scene_storyboard", []) or []:
+            if isinstance(cp, dict) and cp.get("ch") == ch:
                 cluster_blueprint = cp
                 break
         if cluster_blueprint:
@@ -217,7 +233,11 @@ def main():
         print(f"  ... 还有 {len(all_findings) - 10} 项见报告")
     print(f"报告: {out_path}")
 
+    # 2026-05-29 复审修复：SC-2 exit code 语义对齐 — warning=2 / advisory=1 / 健康=0
+    # （原 warning 误用 exit 1，与编排器「1=advisory / 2=严重」判级冲突）。
     if any(f["severity"] == "warning" for f in all_findings):
+        sys.exit(2)
+    if all_findings:
         sys.exit(1)
     sys.exit(0)
 

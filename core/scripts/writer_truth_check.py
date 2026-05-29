@@ -193,40 +193,52 @@ def truth_check_chapter(project_root: Path, ch: int) -> dict:
 
 def write_back(project_root: Path, report: dict):
     """B2.1 回写 applied_style + truth_check 到故事块摘要。
-    v17.5 C4：加 last_modified_by + last_modified_at + version 防并发竞态。
+
+    2026-05-29 复审修复（L2）：v2 cluster 化后 故事块摘要.json = {clusters:[{chapters:{ch:rec}}]}，
+    旧实现写顶层 chapters[] list 会与 v2 clusters[] 并存冲突（污染账本数据模型）。
+    改走 cluster_summary_store.patch_chapter：用 cluster_lookup.ch_to_cluster_id 由章号反查
+    所属 cluster，把 truth_check / applied_style 合并进 clusters[].chapters[ch] 章记录，
+    原子写 + 深合并（不丢 builder 已写的其它预算字段）。
+
+    cluster 反查不到（fluid 未回填 chapter_range）→ 不强写顶层 chapters[]（禁止污染 v2 账本），
+    仅打印告警并跳过回写（truth_report 仍由 main 打印 / 退出码体现，不丢检测结论）。
     """
     from datetime import datetime as _dt
-    summary_path = project_root / "_数据库" / "故事块摘要.json"
-    data = load_json(summary_path, {"schema_version": "1.0", "chapters": []})
-    chapters = data.get("chapters", [])
-    if isinstance(chapters, dict):
-        chapters = [{**v, "ch": int(k)} for k, v in sorted(chapters.items(), key=lambda x: int(x[0]))]
-        data["chapters"] = chapters
 
     ch = report["ch"]
-    found = None
-    for c in chapters:
-        if c.get("ch") == ch:
-            found = c
-            break
-    if not found:
-        found = {"ch": ch, "title": ""}
-        chapters.append(found)
-    if report.get("writer_applied_style_raw"):
-        found["applied_style"] = report["writer_applied_style_raw"]
-    found["truth_check"] = {
-        "opening_type_match": report.get("opening_type_match"),
-        "ending_type_match": report.get("ending_type_match"),
-        "opening_line_match": report.get("opening_line_match"),
-        "ending_line_match": report.get("ending_line_match"),
-        "lie_count": report.get("lie_count"),
-        "lies_detected": report.get("lies_detected"),
+
+    # 组装本章 truth_check patch
+    chapter_patch: dict = {
+        "truth_check": {
+            "opening_type_match": report.get("opening_type_match"),
+            "ending_type_match": report.get("ending_type_match"),
+            "opening_line_match": report.get("opening_line_match"),
+            "ending_line_match": report.get("ending_line_match"),
+            "lie_count": report.get("lie_count"),
+            "lies_detected": report.get("lies_detected"),
+        },
+        "_truth_check_last_by": "writer_truth_check",
+        "_truth_check_at": _dt.now().isoformat(timespec="seconds"),
     }
-    # v17.5 C4 并发保护：version 单调递增 + last_modified_by + last_modified_at
-    found["_version"] = found.get("_version", 0) + 1
-    found["_last_modified_by"] = "writer_truth_check"
-    found["_last_modified_at"] = _dt.now().isoformat(timespec="seconds")
-    summary_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if report.get("writer_applied_style_raw"):
+        chapter_patch["applied_style"] = report["writer_applied_style_raw"]
+
+    # 章号 → cluster_id（SC-5：禁止 f"cluster_{ch:03d}" 机械拼接，用 ch_to_cluster_id 反查）
+    try:
+        import cluster_lookup as _cl
+        import cluster_summary_store as _css
+    except Exception as e:  # 模块缺失 → 不污染账本，跳过回写
+        print(f"[WARN] ch{ch} truth_check 回写跳过：cluster 工具不可用（{e}）", file=sys.stderr)
+        return
+
+    cluster_id = _cl.ch_to_cluster_id(project_root, ch)
+    if not cluster_id:
+        print(f"[WARN] ch{ch} truth_check 回写跳过：章号未落入任何 cluster 的 chapter_range"
+              f"（fluid 未回填）· 不写顶层 chapters[] 以免污染 v2 账本", file=sys.stderr)
+        return
+
+    # 原子 + 深合并落账（cluster_summary_store 内部 with_file_lock 防并发丢更新）
+    _css.patch_chapter(project_root, cluster_id, ch, chapter_patch)
 
 
 def main():
@@ -238,13 +250,28 @@ def main():
     write = "--write-back" in args
     if "--all-history" in args:
         # 扫描所有已写章节
+        # 2026-05-29 复审修复（L2）：v2 账本 = {clusters:[{chapters:{ch:rec}}]}，
+        # 顶层 chapters 已废弃。优先从 clusters[].chapters 拍平章号；旧顶层 chapters
+        # （list/dict）仍兼容回退。
         summary = load_json(project_root / "_数据库" / "故事块摘要.json", {})
-        chapters = summary.get("chapters", [])
-        if isinstance(chapters, dict):
-            chs = [int(k) for k in chapters.keys()]
-        else:
-            chs = [c.get("ch") for c in chapters if c.get("ch")]
-        target_chs = sorted(set(chs))
+        chs: list[int] = []
+        clusters = summary.get("clusters")
+        if isinstance(clusters, list):
+            for c in clusters:
+                if not isinstance(c, dict):
+                    continue
+                for k in (c.get("chapters") or {}).keys():
+                    try:
+                        chs.append(int(k))
+                    except (ValueError, TypeError):
+                        pass
+        if not chs:
+            chapters = summary.get("chapters", [])
+            if isinstance(chapters, dict):
+                chs = [int(k) for k in chapters.keys()]
+            else:
+                chs = [c.get("ch") for c in chapters if isinstance(c, dict) and c.get("ch")]
+        target_chs = sorted(set(c for c in chs if isinstance(c, int)))
     else:
         target_chs = [int(args[1])]
 

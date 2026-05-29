@@ -36,12 +36,10 @@
     {
       "n": 2,
       "name": "parse-cluster-changes",
-      "description": "读 章节/cluster_{key}_draft/cluster_changes.json 的 factual/self_eval 段（cluster 级单文件，不读 per-chapter _changes）",
+      "description": "2026-05-29 复审修复[H6]：读 章节/cluster_{key}_draft/cluster_changes.json 后逐章产出 per-chapter 第N章_parsed.json（save_state.cmd_parse 实际产物）+ cluster 级 {key}_apply_cluster.json 汇总（由 step3 --apply-cluster-changes 一并落地）。原 expected_output cluster_{key}_parsed.json 是幻影（代码从不产出此命名）→ 改 skip_output_allowed:true 不强校固定单文件名（章数 freestyle 浮动，per-chapter 文件名无法预列）。解析本身仍由 step3 强制覆盖（apply 前必 parse）",
       "required": true,
-      "skip_output_allowed": false,
-      "expected_outputs": [
-        "_数据库/.wal/cluster_{key}_parsed.json"
-      ]
+      "skip_output_allowed": true,
+      "expected_outputs": []
     },
     {
       "n": 3,
@@ -124,7 +122,7 @@
         "python core/scripts/skill_evolver.py {project_root} evolve --cluster {key} || true",
         "python core/scripts/skill_evolver.py {project_root} promote || true",
         "python core/scripts/evolution_orchestrator.py {project_root} --cluster {key} || true",
-        "python core/scripts/maybe_judge_consensus.py {project_root} --cluster {key}",
+        "python core/scripts/maybe_judge_consensus.py {project_root} --cluster {key} || true",
         "python core/scripts/audit_dashboard.py {project_root}",
         "python core/scripts/scan_retention.py {project_root} --keep 5"
       ]

@@ -12,6 +12,15 @@
 - 整 cluster 的 factual / self_eval 段平铺到每章（最简实现 v1）
 - v2 可基于切点把 factual.key_events 按章节范围分配（需要 events 标注 ch_anchor）
 
+2026-05-29 复审修复（批次 B5-split-changes · SC-5 owner）：
+- [H1] 统一识别两套 splitter WAL schema：chapters_split=int + cluster_start_ch（freestyle
+       真实产出）/ chapters_split=[列表]（历史）；fresh fluid cluster 无 range 时用
+       chapters_split(int)+cluster_start_ch 重建，避免误判 ok:False；0 切（pending_tail）正常返回。
+- [H2] 重叠检测前移到写盘前：与其它已落章 cluster 重叠的章跳过不覆盖；全重叠则中止。
+- [H11] 回填强制相邻不相交：本 lo <= 前 hi 时按 前 hi+1 修正，非法区间拒写。
+- [L1] atomic_json import 失败 fail-fast（不降级裸 write 破坏一致性）。
+- SC-2 exit：advisory=1 / 严重=2 / 纯成功=0。
+
 CLI:
     python split_cluster_changes.py <project> --cluster <key>
 """
@@ -50,11 +59,70 @@ def _norm_cid(x):
     return f"cluster_{int(digits):03d}" if digits else s
 
 
+def _is_landed_range(cr) -> bool:
+    """SC-6：判断某 cluster 的 chapter_range 是否「已落章」（有效 [int,int]）。
+
+    2026-05-29 复审修复：pending/未涌现 cluster 不会有有效 range；有效 [int,int]
+    本身即「已落章」的操作性定义，与中英文 status 词表正交（已完成|done|进行中
+    且有 range 都满足此条件）。
+    """
+    return (
+        isinstance(cr, list)
+        and len(cr) == 2
+        and isinstance(cr[0], int)
+        and isinstance(cr[1], int)
+        and not isinstance(cr[0], bool)
+        and not isinstance(cr[1], bool)
+    )
+
+
+def detect_other_cluster_overlap(project_root: Path, cluster_key: str, chapters: list) -> dict:
+    """[H2] 写盘前重叠检测（2026-05-29 复审修复）：本 cluster 拟切章号是否与
+    其它已落章 cluster（事件簇.json 中有有效 chapter_range 的）重叠。
+
+    返回 {hard_overlap: bool, owned_by_other: set[int], detail: [...]}
+    - owned_by_other：被其它 cluster 占用的章号集合（写盘时应跳过，不覆盖别 cluster 的章）
+    - hard_overlap：本 cluster 全部拟切章都被其它 cluster 占用（无章可写 → 调用方应中止）
+    """
+    out = {"hard_overlap": False, "owned_by_other": set(), "detail": []}
+    if not chapters:
+        return out
+    target = _norm_cid(cluster_key)
+    shi = load_json(project_root / "_数据库" / "事件簇.json")
+    if not isinstance(shi, dict):
+        return out
+    chset = set(int(x) for x in chapters)
+    for c in shi.get("clusters", []):
+        if not isinstance(c, dict):
+            continue
+        if _norm_cid(c.get("cluster_id")) == target:
+            continue  # 自己不算重叠
+        cr = c.get("chapter_range")
+        if not _is_landed_range(cr):  # SC-6：仅与「已落章」cluster 比对
+            continue
+        other_chs = set(range(cr[0], cr[1] + 1))
+        inter = chset & other_chs
+        if inter:
+            out["owned_by_other"].update(inter)
+            out["detail"].append(
+                f"{c.get('cluster_id')} range {cr} 占用本 cluster 拟切章 {sorted(inter)}"
+            )
+    if out["owned_by_other"] and out["owned_by_other"] >= chset:
+        out["hard_overlap"] = True
+    return out
+
+
 def writeback_event_cluster_range(project_root: Path, cluster_key: str, chapters: list) -> dict:
     """v2 权威源回填（2026-05-29）：切章后把 splitter 的真实 [min,max] 写回
     事件簇.json.clusters[N].chapter_range，使 事件簇 成为切章后 chapter_range 的唯一权威。
 
-    同时检测与其它 cluster 的边界重叠（相邻 cluster 不应共享章号），warn 但不强改其它 cluster。
+    2026-05-29 复审修复 [H11]：回填强制相邻不相交。若本 cluster.lo <= 任一前序
+    已落章 cluster.hi，按 前.hi + 1 修正本 cluster 的 lo（不写入造成重叠的值）。
+    若修正后区间非法（lo > hi）则拒写回（ok:False），不污染权威源。
+
+    2026-05-29 复审修复 [L1]：atomic_json import 失败时不再降级裸 write_text
+    （破坏写盘一致性的死分支）。改 fail-fast：拒绝回填并返回 ok:False，由调用方
+    上报（split 本体已成功，回填是 consistency-critical，宁可不写也不裸写）。
     """
     if not chapters:
         return {"ok": False, "error": "chapters 为空，跳过回填"}
@@ -67,6 +135,9 @@ def writeback_event_cluster_range(project_root: Path, cluster_key: str, chapters
     target = _norm_cid(cluster_key)
     hit = None
     warnings = []
+    # [H11] 收集所有「前序」已落章 cluster 的 hi（章号严格小于本 cluster lo 的那些
+    # 是真前序；与本 cluster 重叠的也要参与相邻不相交修正）
+    prev_his = []  # 与本 cluster 有重叠/相邻关系、且 lo <= 其 hi 的前序 cluster hi
     for c in shi.get("clusters", []):
         if not isinstance(c, dict):
             continue
@@ -75,18 +146,42 @@ def writeback_event_cluster_range(project_root: Path, cluster_key: str, chapters
             continue
         # 重叠检测（与其它已落 range 的 cluster）
         cr = c.get("chapter_range")
-        if isinstance(cr, list) and len(cr) == 2 and isinstance(cr[0], int) and isinstance(cr[1], int):
+        if _is_landed_range(cr):
             if not (hi < cr[0] or lo > cr[1]):
                 warnings.append(f"{c.get('cluster_id')} range {cr} 与本 cluster [{lo},{hi}] 重叠")
+            # [H11] 前序 cluster（其 lo 不大于本 cluster lo）若 hi >= 本 lo → 需相邻修正
+            if cr[0] <= lo and cr[1] >= lo:
+                prev_his.append(cr[1])
     if hit is None:
         return {"ok": False, "error": f"事件簇.json 未找到 {target}"}
 
+    # [H11] 相邻不相交修正：本 lo 必须 > 所有前序 hi
+    if prev_his:
+        adjusted_lo = max(prev_his) + 1
+        if adjusted_lo != lo:
+            warnings.append(
+                f"相邻不相交修正：本 cluster lo {lo} → {adjusted_lo}（前序末章 {max(prev_his)} + 1）"
+            )
+            lo = adjusted_lo
+    if lo > hi:
+        # 修正后区间非法（本 cluster 全部章号都被前序占用）→ 拒写，避免污染权威源
+        return {
+            "ok": False,
+            "error": f"相邻不相交修正后区间非法 [{lo},{hi}]（本 cluster 章号疑被前序 cluster 占用），拒绝回填",
+            "warnings": warnings,
+        }
+
+    # [L1] atomic_json 不可用时 fail-fast（不降级裸 write，避免破坏一致性）
+    if atomic_json is None:
+        return {
+            "ok": False,
+            "error": "atomic_json 模块不可用，拒绝非原子回填 事件簇.json（fail-fast 避免破坏一致性）",
+            "warnings": warnings,
+        }
+
     old = hit.get("chapter_range")
     hit["chapter_range"] = [lo, hi]
-    if atomic_json is not None:
-        atomic_json.atomic_write_json(shi_path, shi)
-    else:
-        shi_path.write_text(json.dumps(shi, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_json.atomic_write_json(shi_path, shi)
     return {"ok": True, "cluster": target, "old": old, "new": [lo, hi], "warnings": warnings}
 
 
@@ -103,53 +198,118 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
     cluster_changes = load_json(cluster_changes_path)
     splitter_decisions = load_json(splitter_decisions_path)
 
-    # 取 chapter_range
-    # v26 修复: splitter 实际输出字段名兼容（ch_range / chapter_range / cluster_range / chapters_split）
+    # 取 chapter_range —— 统一识别两套 WAL schema（2026-05-29 复审修复 [H1]）
+    #  schema A (chapter_splitter.run_freestyle 真实产出 / LLM splitter agent)：
+    #    chapters_split=int（章数）+ cluster_start_ch=int（起始章）+ chapter_range=[lo,hi]
+    #  schema B (历史/列表形态)：chapters_split=[章号列表] 或 chapter_range="lo-hi"
+    # v26 修复: splitter 实际输出字段名兼容（ch_range / chapter_range / cluster_range）
     chapter_range = (
         splitter_decisions.get("chapter_range")
         or splitter_decisions.get("cluster_range")
         or splitter_decisions.get("ch_range")
     )
     chapters_split = splitter_decisions.get("chapters_split")
+    # 起始章兼容两种字段名：消费侧历史只认 ch_start，producer 实际写 cluster_start_ch
+    start_ch_raw = splitter_decisions.get("cluster_start_ch")
+    if start_ch_raw is None:
+        start_ch_raw = splitter_decisions.get("ch_start")
+
+    chapters = []
+    if isinstance(chapters_split, bool):
+        # 防 True/False 被当 int（isinstance(True, int) 为真）
+        chapters_split = None
 
     if isinstance(chapters_split, list) and chapters_split:
-        # splitter 直接给的章节号列表（最可靠）
+        # schema B：splitter 直接给的章节号列表（最可靠）
         chapters = [int(x) for x in chapters_split]
+    elif isinstance(chapter_range, list) and len(chapter_range) == 2 \
+            and isinstance(chapter_range[0], int) and isinstance(chapter_range[1], int) \
+            and not isinstance(chapter_range[0], bool):
+        # schema A：chapter_range=[lo,hi]（freestyle 真实产出）
+        chapters = list(range(int(chapter_range[0]), int(chapter_range[1]) + 1))
     elif isinstance(chapter_range, str) and "-" in chapter_range:
         start, end = chapter_range.split("-")
         chapters = list(range(int(start), int(end) + 1))
-    elif isinstance(chapter_range, list) and len(chapter_range) == 2:
-        chapters = list(range(int(chapter_range[0]), int(chapter_range[1]) + 1))
-    else:
-        # v26 fallback: 从 事件簇.json.clusters[N].chapter_range 取（最权威源）
+    elif isinstance(chapters_split, int) and start_ch_raw is not None:
+        # [H1] schema A 但 chapter_range 缺失：用 chapters_split(int) + cluster_start_ch 重建
+        # chapters = range(start, start + n)。chapters_split==0 → 整段退 pending_tail，0 切
+        n = int(chapters_split)
+        start = int(start_ch_raw)
+        chapters = list(range(start, start + n)) if n > 0 else []
+
+    # [H1 复修] 显式 0 切（chapters_split==0，整段退 pending_tail / 本轮未切任何章）：
+    # 立即返回 ok:True 空，**前置**到 事件簇 fallback + phantom range(start,start+4) 之前——
+    # 否则 producer 总写 cluster_start_ch 使后面的 start_ch_raw 守卫失效，凭空造 4 章幽灵并污染权威源。
+    _explicit_zero_cut = (
+        isinstance(chapters_split, int) and not isinstance(chapters_split, bool)
+        and int(chapters_split) == 0
+    )
+    if _explicit_zero_cut and not chapters:
+        return {
+            "ok": True,
+            "cluster_key": cluster_key,
+            "chapter_range": [],
+            "written_count": 0,
+            "written": [],
+            "event_cluster_writeback": {"ok": False, "error": "本 cluster 0 切（pending_tail），无 range 可回填"},
+            "_note": "splitter 本轮 0 切（pending_tail 等下 cluster 拼接），跳过拆分（不造幽灵章）",
+        }
+
+    if not chapters:
+        # fallback: 从 事件簇.json.clusters[N].chapter_range 取（v2 权威源）
         shi_path = project_root / "_数据库" / "事件簇.json"
-        if shi_path.exists():
-            try:
-                import json as _json
-                shi = _json.loads(shi_path.read_text(encoding="utf-8"))
-                for c in shi.get("clusters", []):
-                    cid = c.get("cluster_id", "").replace("cluster_", "")
-                    if cid == cluster_key.replace("cluster_", ""):
-                        cr = c.get("chapter_range") or []
-                        if isinstance(cr, list) and len(cr) == 2:
-                            chapters = list(range(cr[0], cr[1] + 1))
-                            break
-                else:
-                    chapters = []
-            except Exception:
-                chapters = []
-        else:
-            chapters = []
+        shi = load_json(shi_path)
+        if isinstance(shi, dict):
+            target = _norm_cid(cluster_key)
+            for c in shi.get("clusters", []):
+                if not isinstance(c, dict):
+                    continue
+                if _norm_cid(c.get("cluster_id")) != target:  # SC-5：归一比对，不机械拼 f"cluster_{ch}"
+                    continue
+                cr = c.get("chapter_range") or []
+                if isinstance(cr, list) and len(cr) == 2 \
+                        and isinstance(cr[0], int) and isinstance(cr[1], int) \
+                        and not isinstance(cr[0], bool):
+                    chapters = list(range(cr[0], cr[1] + 1))
+                break
         if not chapters:
             # 最后兜底（cluster_001 特殊 · 但拒绝盲写 ch1-4 给非 cluster_001）
-            target_chapters = splitter_decisions.get("target_chapters", 4)
-            ch_start = splitter_decisions.get("ch_start")
-            if ch_start is None:
-                return {"ok": False, "error": f"无法确定 cluster_{cluster_key} chapter_range · splitter_decisions 缺 ch_range/chapters_split · 事件簇.json fallback 失败"}
-            chapters = list(range(int(ch_start), int(ch_start) + int(target_chapters)))
+            # 注：start_ch_raw 已兼容 cluster_start_ch / ch_start 两种字段名
+            target_chapters = splitter_decisions.get("target_chapters")
+            if start_ch_raw is None:
+                # [H1] fresh fluid cluster：chapters_split==0（全 pending_tail）或纯缺字段
+                #  → 本 cluster 本轮未切出任何章，正常返回 ok:True 空 written（不视为失败）
+                if chapters_split == 0 or splitter_decisions.get("pending_tail", {}).get("exists"):
+                    return {
+                        "ok": True,
+                        "cluster_key": cluster_key,
+                        "chapter_range": [],
+                        "written_count": 0,
+                        "written": [],
+                        "event_cluster_writeback": {"ok": False, "error": "本 cluster 0 切（pending_tail），无 range 可回填"},
+                        "_note": "splitter 本轮 0 切（pending_tail 等下 cluster 拼接），跳过拆分",
+                    }
+                return {"ok": False, "error": f"无法确定 cluster_{cluster_key} chapter_range · splitter_decisions 缺 chapter_range/chapters_split/cluster_start_ch · 事件簇.json fallback 失败"}
+            chapters = list(range(int(start_ch_raw), int(start_ch_raw) + int(target_chapters or 4)))
+
+    # [H2] 写盘前重叠检测（前移 · 不再先覆盖后 warn）
+    overlap = detect_other_cluster_overlap(project_root, cluster_key, chapters)
+    if overlap["hard_overlap"]:
+        # 本 cluster 全部拟切章都属于其它 cluster → 中止，避免覆盖别 cluster 的 _changes
+        return {
+            "ok": False,
+            "error": f"cluster_{cluster_key} 拟切章 {chapters} 全部被其它 cluster 占用，中止以防覆盖",
+            "overlap_detail": overlap["detail"],
+        }
+    owned_by_other = overlap["owned_by_other"]
+    overlap_skipped = []
 
     written = []
     for n in chapters:
+        if n in owned_by_other:
+            # 该章已属其它 cluster → 跳过，不覆盖（H2）
+            overlap_skipped.append(n)
+            continue
         ch_dir = project_root / "章节" / f"第{n:03d}章"
         ch_changes_path = ch_dir / f"第{n:03d}章_changes.json"
         if not ch_dir.exists():
@@ -169,14 +329,18 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
         written.append(str(ch_changes_path))
 
     # v2 权威源回填（2026-05-29）：把切章真实 [min,max] 写回 事件簇.json（唯一权威）
-    writeback = writeback_event_cluster_range(project_root, cluster_key, chapters)
+    # [H2] 只用本 cluster 真正拥有的章（剔除被其它 cluster 占用的），避免回填重叠值
+    own_chapters = [n for n in chapters if n not in owned_by_other]
+    writeback = writeback_event_cluster_range(project_root, cluster_key, own_chapters)
 
     return {
         "ok": True,
         "cluster_key": cluster_key,
-        "chapter_range": chapters,
+        "chapter_range": own_chapters,
         "written_count": len(written),
         "written": written,
+        "overlap_skipped": sorted(overlap_skipped),
+        "overlap_detail": overlap["detail"],
         "event_cluster_writeback": writeback,
     }
 
@@ -195,17 +359,31 @@ def main():
         print(f"[OK] cluster_{cluster_key} _changes 拆分到 {result['written_count']} 章")
         for p in result["written"]:
             print(f"     + {p}")
+        # [H2] 重叠跳过的章（advisory）
+        advisory = False
+        for w in result.get("overlap_detail", []) or []:
+            print(f"     ⚠ 重叠跳过: {w}")
+            advisory = True
+        if result.get("overlap_skipped"):
+            print(f"     ⚠ 已跳过被其它 cluster 占用的章: {result['overlap_skipped']}")
+            advisory = True
         wb = result.get("event_cluster_writeback") or {}
         if wb.get("ok"):
             print(f"     ↩ 事件簇.json 回填 chapter_range: {wb.get('old')} → {wb.get('new')}（权威源）")
             for w in wb.get("warnings", []):
                 print(f"     ⚠ 边界重叠: {w}")
+                advisory = True
         elif wb.get("error"):
             print(f"     ⚠ 事件簇 回填跳过: {wb.get('error')}")
-        return 0
+            advisory = True
+        # SC-2 exit 语义：advisory 级发现统一 exit 1；纯成功 exit 0
+        return 1 if advisory else 0
     else:
+        # SC-2 exit 语义：严重发现（无法切分 / 硬重叠中止）统一 exit 2
         print(f"[FAIL] {result.get('error')}", file=sys.stderr)
-        return 1
+        for w in result.get("overlap_detail", []) or []:
+            print(f"     ⚠ {w}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

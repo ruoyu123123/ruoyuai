@@ -110,6 +110,16 @@ def migrate_progress(project: Path, dry_run: bool):
         # 由下方 _chapter_plan_DEPRECATED_v27 标记说明已被 cluster_blueprint 取代。
         d["_chapter_plan_DEPRECATED_v27"] = "由 cluster_blueprint 取代 · 见 v2_cluster_centric.md"
         changes.append(f"chapter_plan → cluster_blueprint ({len(cluster_blueprint)} 组)")
+    # 2026-05-29 复审修复（SC-1 migrate）：既有 cluster_blueprint 若已是 list 形态
+    # （城南实测 list(25)，是 bug —— 规范形态必须是 dict cluster_id->data），用
+    # cluster_lookup.normalize_blueprint 按各项 cluster 标识归一成 dict 落盘。
+    # 放在 chapter_plan 分支之后，覆盖「无 chapter_plan 但已有 list blueprint」的项目。
+    bp_existing = d.get("cluster_blueprint")
+    if isinstance(bp_existing, list):
+        d["cluster_blueprint"] = cluster_lookup.normalize_blueprint(bp_existing)
+        changes.append(
+            f"cluster_blueprint list({len(bp_existing)}) → dict({len(d['cluster_blueprint'])} 组) [SC-1 规范化]"
+        )
     if "words_per_chapter" in d:
         d.pop("words_per_chapter")
         changes.append("words_per_chapter 删除（v27 freestyle 不锁）")
@@ -296,8 +306,13 @@ def migrate_timeline(project: Path, dry_run: bool):
     ct = d.get("current_time", {})
     if "chapter" in ct:
         ch = ct.pop("chapter")
-        ct["cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else "cluster_001"
+        # 2026-05-29 复审修复（H13）：原 f"cluster_{ch:03d}" 是「章号当 cluster 号」机械拼接
+        # （第 7 章≠cluster_007），与文件内其余 15 处不一致。改用 _ch_to_cluster() 正确反查。
+        cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+        ct["cluster"] = cid or "cluster_001"
         ct["chapter_in_cluster"] = 0
+        if inferred:
+            ct["_cluster_inferred"] = True
         changes.append("current_time.chapter → cluster + chapter_in_cluster")
     if "time_per_chapter" in d:
         d["time_per_cluster"] = d.pop("time_per_chapter")
