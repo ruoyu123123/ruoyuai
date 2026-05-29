@@ -277,26 +277,13 @@ class DatabaseScanner:
         return result
 
     def _current_cluster_id(self) -> str | None:
-        """v2 cluster 化辅助：通过 cluster_blueprint 反查当前 ch 所属 cluster_id。"""
-        prog = self.load("进度", {})
-        # 优先从 cluster_blueprint 反查（2026-05-29 复审修复 SC-1：经 _bp_items 归一）
-        for cid, cdata in _bp_items(prog).items():
-            if not isinstance(cdata, dict):
-                continue
-            cr = cdata.get("chapter_range") or []
-            if isinstance(cr, list) and len(cr) == 2 and cr[0] <= self.ch <= cr[1]:
-                return cid
-            # fallback 到 scene_storyboard.ch
-            for sb in cdata.get("scene_storyboard", []) or []:
-                if sb.get("ch") == self.ch:
-                    return cid
-        # fallback: 事件簇.json chapter_range
-        ec = self.load("事件簇", {})
-        for c in ec.get("clusters", []):
-            cr = c.get("chapter_range") or []
-            if isinstance(cr, list) and len(cr) == 2 and cr[0] <= self.ch <= cr[1]:
-                return c.get("cluster_id")
-        return None
+        """反查当前 ch 所属 cluster_id。
+        2026-05-30 北极星复审：委托 cluster_lookup.ch_to_cluster_id（唯一权威·事件簇优先 +
+        _pick_unambiguous 歧义处理），删除原 blueprint 优先的第二套实现——它与
+        _collect_will_learn_due/_collect_secrets_to_reveal 用的 cluster_lookup 在 range 冲突项目
+        （进度.blueprint 与事件簇 chapter_range 不一致）上分歧，致同一 manifest 的 SECRET_NOT_REVEALED
+        hard_gate 计数与 writer 揭秘提示自相矛盾。北极星：cluster_lookup 是章号⇄cluster 唯一权威反查。"""
+        return cluster_lookup.ch_to_cluster_id(self.db, self.ch)
 
     def world_keyword_hits(self) -> list[dict]:
         """世界观按关键词匹配（本章大纲命中哪些条目）。"""
