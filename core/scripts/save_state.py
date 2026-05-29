@@ -361,11 +361,23 @@ def apply_changes(root: Path, ch: int) -> int:
     save_json(db / "人物卡.json", cards)
 
     # --- 进度（completed+1, current+1）---
-    progress = load_json(db / "进度.json", {})
-    progress["completed"] = max(progress.get("completed", 0), ch)
-    progress["current"] = progress["completed"] + 1
-    save_json(db / "进度.json", progress)
-    summary["applied"].append(f"进度: completed={progress['completed']}")
+    # 2026-05-30 北极星复审：进度.json 损坏时 load_json 静默返回 {}，下方覆写会清空 cluster_blueprint/
+    # volumes/completed 等全部字段（进度库被静默清空）。损坏即跳过进度更新不覆写（文件不存在才合理建新）。
+    prog_path = db / "进度.json"
+    progress = None
+    if prog_path.exists():
+        try:
+            progress = json.loads(prog_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print("[ERROR] 进度.json 损坏，跳过进度更新避免清空进度库（请修复 JSON 后重试）", file=sys.stderr)
+            summary["warnings"].append("进度.json 损坏，进度未更新")
+    else:
+        progress = {}
+    if isinstance(progress, dict):
+        progress["completed"] = max(progress.get("completed", 0), ch)
+        progress["current"] = progress["completed"] + 1
+        save_json(prog_path, progress)
+        summary["applied"].append(f"进度: completed={progress['completed']}")
 
     # --- 地图（角色移动 + 新地点）---
     loc_data = load_json(db / "地图.json", {"locations": [], "character_positions": {}})
