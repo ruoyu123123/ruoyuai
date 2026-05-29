@@ -46,10 +46,8 @@ try:
     import cross_cluster_structure_compliance_aggregate as _struct  # noqa: E402  beat 关键词
 except Exception:  # pragma: no cover
     _struct = None
-try:
-    from cross_cluster_continuity_aggregate import extract_keywords as _cliff_keywords  # noqa: E402
-except Exception:  # pragma: no cover
-    _cliff_keywords = None
+# 注：cliffhanger_resonance_next 字段的 ledger 产出未实现（continuity aggregator 有磁盘兜底），
+# 原 _cliff_keywords 死导入已于 2026-05-29 复审清理删除。
 
 
 # ============================================================

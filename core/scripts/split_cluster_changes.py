@@ -135,8 +135,12 @@ def writeback_event_cluster_range(project_root: Path, cluster_key: str, chapters
     target = _norm_cid(cluster_key)
     hit = None
     warnings = []
-    # [H11] 收集所有「前序」已落章 cluster 的 hi（章号严格小于本 cluster lo 的那些
-    # 是真前序；与本 cluster 重叠的也要参与相邻不相交修正）
+    # [H11] 防御第二层（非死代码说明 · 2026-05-29 复审清理标注）：
+    # 生产路径下 split_changes 传入的是 own_chapters（已被 H2 detect_other_cluster_overlap
+    # 剔除他 cluster 占用章），故此处 prev_his 通常为空、相邻修正不触发。保留它是因为
+    # writeback_event_cluster_range 是写「权威源 事件簇.json」的 public 函数，可能被独立/未来
+    # 调用方传入未经 H2 过滤的 chapters——这是对权威源的廉价兜底防护，刻意保留。
+    prev_his = []  # 与本 cluster 有重叠/相邻关系、且 lo <= 其 hi 的前序 cluster hi
     prev_his = []  # 与本 cluster 有重叠/相邻关系、且 lo <= 其 hi 的前序 cluster hi
     for c in shi.get("clusters", []):
         if not isinstance(c, dict):
