@@ -136,10 +136,13 @@ DETERMINISTIC_FIX_CODES = {
 # （已与 validate_chapter v18 源码逐个核对，杜绝幽灵 code）
 AGENT_ROUTING = {
     "CHANGES_MISSING":          ("novel-writer", "正文缺 CHANGES，补 _changes.json"),
-    "LOCKED_FACT_CONFLICT":     ("novel-validator-repair", "正文与锁定事实冲突，重写冲突段"),
+    # 2026-05-29 北极星 P3 [F3]：路由从 DEPRECATED stub(validator-repair/voice-keeper)
+    # 改为 v2 拆分后的 checker（检查=Claude agent，主代理据 brief 调 gen_fixer 修复）。
+    # 死线 2026-07-19 删 stub 后此处不再断 hard_gate 修复链。
+    "LOCKED_FACT_CONFLICT":     ("novel-validator-checker", "正文与锁定事实冲突，重写冲突段"),
     "FORESHADOWING_NOT_PAID":   ("novel-foreshadower", "Tier1 伏笔未回收，补 payoff"),
-    "FUTURE_KNOWLEDGE_LEAK":    ("novel-validator-repair", "角色知道了不该知道的信息，重写"),
-    "POV_HEAD_HOPPING":         ("novel-voice-keeper", "POV 越界，改回限定视角"),
+    "FUTURE_KNOWLEDGE_LEAK":    ("novel-validator-checker", "角色知道了不该知道的信息，重写"),
+    "POV_HEAD_HOPPING":         ("novel-voice-checker", "POV 越界，改回限定视角"),
     "SECRET_NOT_REVEALED":      ("novel-writer", "本章该揭的 secret 没揭，补揭示情节"),
     "CHARACTER_MISSING":        ("novel-writer", "大纲出场角色正文没出现，补戏份"),
     "UNKNOWN_CHARACTER_DETECTED": ("novel-writer", "正文出现未声明的角色，补声明或删除"),
@@ -768,9 +771,9 @@ def _agent_for(issue: dict) -> tuple:
     """该问题需派哪个 agent + fix_brief。返回 (agent, brief) 或 (None, None)。"""
     if issue["code"] in AGENT_ROUTING:
         return AGENT_ROUTING[issue["code"]]
-    # 致命/错误级但没显式路由 -> 兜底派 validator-repair
+    # 致命/错误级但没显式路由 -> 兜底派 validator-checker（v2 拆分 · 2026-05-29 P3 F3 改名）
     if issue["severity"] in ("fatal", "error"):
-        return ("novel-validator-repair", issue.get("fix_hint") or issue["desc"])
+        return ("novel-validator-checker", issue.get("fix_hint") or issue["desc"])
     return (None, None)
 
 

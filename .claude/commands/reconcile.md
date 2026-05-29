@@ -26,7 +26,7 @@ PLAN_ID=$(python core/scripts/plan_tracker.py create \
 echo "PLAN_ID=$PLAN_ID"
 ```
 
-所有修复 sub-agent（`novel-validator-repair`）调用 prompt 顶部必须加：
+所有检查 sub-agent（`novel-validator-checker`，v2 拆分后由它出 repair brief，主代理据 brief 调 `gen_fixer.py --mode validator-repair`；novel-validator-repair 已 DEPRECATED）调用 prompt 顶部必须加：
 
 ```
 PLAN_ID: $PLAN_ID
@@ -131,7 +131,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3 --skip-output
 
 ### 选项A：全部自动修复
 
-1. 对每个受影响章节，启动 Agent 子任务（推荐使用 `novel-validator-repair`，prompt 顶部必须含 PLAN_ID/STEP）：
+1. 对每个受影响章节，启动 Agent 子任务（v2 拆分：spawn `novel-validator-checker` 拿 repair brief → 主代理调 `gen_fixer.py --mode validator-repair --brief <path>` 修；prompt 顶部必须含 PLAN_ID/STEP）：
    ```
    Agent({
      prompt: "PLAN_ID: $PLAN_ID

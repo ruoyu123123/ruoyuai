@@ -518,6 +518,10 @@ def main():
     if "--mode" in args and args[args.index("--mode") + 1:args.index("--mode") + 2] == ["ecas_freestyle"]:
         return _main_freestyle(args)
 
+    # ⚠️ DEPRECATED（2026-05-29 北极星 P3 [F4]）：以下 DCAS 双章切割路径已废弃。
+    # v27 cluster 主轨一律走 --mode ecas_freestyle（按字数硬范围切 + pending_tail 补料），
+    # 不再有流水线触达本位置参路径。保留仅为向后兼容旧手动调用；下方 helper（score_split_point/
+    # split_paragraphs_with_offset/strip_title）被 _main_freestyle 共用，故不删整文件。
     project_root = Path(args[0])
     ch = int(args[1])
     target = 3000
