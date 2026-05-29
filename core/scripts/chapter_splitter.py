@@ -83,8 +83,8 @@ DASH_END = re.compile(r"[—…]\s*$")
 SCENE_BREAK_START = re.compile(r"^(——|\*\s*\*|\* \* \*)")
 CONTINUE_ACTION = re.compile(r"^[^\n]{0,8}(回头|抬头|睁开|醒来|想起|站起|转身)")
 CHAR_NAMES = ["克莱", "莫顿", "艾尔莎", "伊森", "老亨利", "七夜伯爵"]
-DIALOGUE_OPEN = re.compile(r'["「]')
-DIALOGUE_CLOSE = re.compile(r'["」]')
+DIALOGUE_OPEN = re.compile(r'["“「『]')   # 2026-05-30 补弯引号 U+201C（splitter 切点不切对话中段）
+DIALOGUE_CLOSE = re.compile(r'["”」』]')  # 补弯引号 U+201D
 PSYCH_KW = re.compile(r"(他想|她想|他记得|他觉得|他不知)")
 REVEAL_KW = re.compile(r"(原来|真相是|其实是|竟然是)")
 

@@ -142,7 +142,14 @@ def main():
     anchor_strategy = (
         style.get("cross_chapter_diversity", {}).get("env_anchor_high_risk_elements", [])
     )
-    summaries = load_json(db / "故事块摘要.json", {}).get("chapters", [])
+    # 2026-05-30 北极星复审：v2 账本 clusters[].chapters{} 拍平 + 兼容旧顶层（原读恒空、开场类型分布失效）
+    _ss = load_json(db / "故事块摘要.json", {})
+    summaries = [c for c in (_ss.get("chapters") or []) if isinstance(c, dict)]
+    for _c in _ss.get("clusters", []) or []:
+        if isinstance(_c, dict):
+            for _k, _r in (_c.get("chapters") or {}).items():
+                if isinstance(_r, dict):
+                    summaries.append({**_r, "ch": int(_k) if str(_k).isdigit() else _r.get("ch", 0)})
 
     chapters = find_chapter_files(project_root)
     if not chapters:

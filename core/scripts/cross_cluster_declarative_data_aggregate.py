@@ -182,14 +182,18 @@ def main():
     secrets = fs_data.get("secrets", [])
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 读 reveal_at_cluster
     import re as _re
+    try:
+        import cluster_lookup as _cl
+    except Exception:
+        _cl = None
     overdue_secrets = []
     for s in secrets:
         rc = s.get("reveal_at_cluster")
-        reveal_ch = None
-        if isinstance(rc, str):
-            _m = _re.search(r"(\d+)", rc)
-            reveal_ch = int(_m.group(1)) if _m else None
-        if reveal_ch and reveal_ch <= last_ch and s.get("status") == "hidden":
+        # 2026-05-30 北极星复审：reveal_at_cluster 是 cluster ID 不是章号——用 cluster_id_to_range 取末章，
+        # cluster 整块写完(hi<=last_ch)才算到期（禁抽数字当章号比）。
+        _rng = _cl.cluster_id_to_range(project_root, rc) if (_cl and isinstance(rc, str)) else None
+        reveal_hi = int(_rng[1]) if _rng and len(_rng) == 2 else None
+        if reveal_hi is not None and reveal_hi <= last_ch and s.get("status") == "hidden":
             overdue_secrets.append({"id": s.get("id"), "reveal_at_cluster": rc, "secret": s.get("secret", "")[:40]})
     if overdue_secrets:
         findings.append({
@@ -209,11 +213,10 @@ def main():
             continue
         for wl in (c.get("knowledge") or {}).get("will_learn", []):
             lac = wl.get("learn_at_cluster")
-            learn_ch = None
-            if isinstance(lac, str):
-                _m = _re.search(r"(\d+)", lac)
-                learn_ch = int(_m.group(1)) if _m else None
-            if learn_ch and learn_ch <= last_ch:
+            # 2026-05-30 北极星复审：learn_at_cluster 是 cluster ID 不是章号——用 cluster_id_to_range 取末章。
+            _lrng = _cl.cluster_id_to_range(project_root, lac) if (_cl and isinstance(lac, str)) else None
+            learn_hi = int(_lrng[1]) if _lrng and len(_lrng) == 2 else None
+            if learn_hi is not None and learn_hi <= last_ch:
                 overdue_wl.append({"character": c.get("name") or c.get("id"), "fact": wl.get("fact", "")[:40], "learn_at_cluster": lac})
     if overdue_wl:
         findings.append({

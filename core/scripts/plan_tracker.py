@@ -74,6 +74,7 @@ import hmac  # 2026-05-29 修：attestation 改 HMAC 防伪造
 import json
 import os
 import secrets  # 2026-05-29 修：本地密钥 + plan_id 随机后缀
+import re  # 2026-05-30 北极星复审：_verify_agent_report emergence 校验(609)用 re.search，原模块级缺 → NameError
 import sys
 from copy import deepcopy
 from datetime import datetime

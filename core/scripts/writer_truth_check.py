@@ -47,7 +47,7 @@ OPENING_TYPE_PATTERNS = [
     # tuple: (type_name, predicate_fn)
     ("拟声定格", lambda first_lines: bool(re.match(r"^[^\n]{1,12}——", first_lines.split("\n")[0]))
                                     or bool(re.search(r"^(咯|啪|嗒|哒|轰|咚|哗|砰|咳|噗|滋|嘎|吱|咔)——", first_lines))),
-    ("纯对话开场", lambda first_lines: first_lines.lstrip().startswith(("\"", "「", "「"))),
+    ("纯对话开场", lambda first_lines: first_lines.lstrip().startswith(("\"", "“", "「"))),
     ("时间地点锚点", lambda first_lines: bool(re.match(r"^[^\n]{1,30}(?:点|时|刻|早晨|清晨|夜里|凌晨|下午|傍晚|黄昏)", first_lines))),
     ("人物内心吐槽", lambda first_lines: any(s in first_lines[:200] for s in ["他想", "他笑", "他骂", "她想", "呃……", "他妈"])),
     ("心理铺陈", lambda first_lines: any(s in first_lines[:200] for s in ["他记得", "他在想", "他做梦", "他不知"])),
@@ -86,7 +86,7 @@ def identify_opening_type(body: str) -> str:
 ENDING_TYPE_PATTERNS = [
     ("拟声硬收", lambda last_lines: bool(re.search(r"(咯|啪|嗒|哒|轰|咚|哗|砰|咳)——\s*$", last_lines.strip()))),
     ("动作留白", lambda last_lines: bool(re.search(r"(放|推|拉|按|举|抬|蹲|站|走|坐|看|闭|睁|握|垂)[^\n]{0,15}[。\.]\s*$", last_lines.strip()))),
-    ("对话悬念", lambda last_lines: last_lines.rstrip().endswith(("\"", "」", "？", "?"))),
+    ("对话悬念", lambda last_lines: last_lines.rstrip().endswith(("\"", "”", "」", "？", "?"))),
     ("独立短句", lambda last_lines: len(last_lines.strip().split("\n")[-1]) <= 12),
     ("信息悬念", lambda last_lines: any(s in last_lines[-200:] for s in ["也许", "可能", "或许", "不知道", "不确定"])),
     ("信息炸弹", lambda last_lines: any(s in last_lines[-200:] for s in ["——", "："])),

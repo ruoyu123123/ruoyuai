@@ -291,11 +291,12 @@ def check_knowledge_leak(body: str, project_root: Path,
             lac = wl.get("learn_at_cluster")
             if not isinstance(lac, str):
                 continue
-            import re as _re
-            m = _re.search(r"(\d+)", lac)
-            learn_at = int(m.group(1)) if m else 0
-            if learn_at <= chapter:
-                continue  # 该章及之前可以知道
+            # 2026-05-30 北极星复审：learn_at_cluster 是 cluster ID 不是章号——反查起始章，本章 < 起始章
+            # 才算「未来知识」（禁抽数字当章号比，参照本文件 validate_cluster 已用 cluster_id_to_range）。
+            _lrng = cluster_lookup.cluster_id_to_range(project_root, lac)
+            learn_lo = int(_lrng[0]) if _lrng and len(_lrng) == 2 else None
+            if learn_lo is None or chapter >= learn_lo:
+                continue  # 反查不到（cluster 未涌现）→ 不误报；本章已进入学习 cluster → 可合法知道
             fact = wl.get("fact", "")
             if not fact:
                 continue
@@ -319,7 +320,7 @@ def check_knowledge_leak(body: str, project_root: Path,
                     errs.append({
                         "code": "FUTURE_KNOWLEDGE_LEAK",
                         "severity": "error",
-                        "msg": f"角色「{name}」在第{chapter}章疑似知道第{learn_at}章才学到的事实:「{fact}」"
+                        "msg": f"角色「{name}」在第{chapter}章疑似提前知道 {lac}（起始第{learn_lo}章）才学到的事实:「{fact}」"
                                f"（bigram 命中 {len(hits)}/{len(fact_bigrams)}）",
                         "fix_hint": f"修改该段落避免「{name}」表露对此事的认知；或将大纲 learn_at_ch 提前",
                     })
@@ -652,7 +653,7 @@ def check_dialogue_craft(body: str) -> list[dict]:
         if not stripped:
             consec_dialogue = 0
             continue
-        has_quote = any(q in stripped for q in ['"', '"', '「', '」', '"', '"'])
+        has_quote = any(q in stripped for q in ['"', '“', '”', '「', '」'])  # 2026-05-30 补弯引号
         if has_quote:
             consec_dialogue += 1
         else:
@@ -670,7 +671,7 @@ def check_dialogue_craft(body: str) -> list[dict]:
                 "fix_hint": "每1-3句对话后插入动作节拍（按/敲/转身/偏头/停顿等）",
             })
             consec_dialogue = 0
-    long_quotes = re.findall(r'[""「]([^""」]{80,})[""」]', body)
+    long_quotes = re.findall(r'["“「]([^"”」]{80,})["”」]', body)  # 2026-05-30 补弯引号
     # v2 cluster 化（2026-05-28）：cluster 视野下仪式条文/残卷引文/角色独白合理存在，
     # 阈值从 >0 提到 >5（cluster 整块仪式段可能 3-5 处长引文属功能必要）。
     import os as _os

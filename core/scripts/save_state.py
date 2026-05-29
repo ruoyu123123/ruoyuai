@@ -847,7 +847,10 @@ def cmd_git_commit_cluster(root, cluster_key):
     import subprocess as _sp
     try:
         _sp.run(["git", "-C", str(root), "add", "."], check=True, capture_output=True, timeout=30)
-        msg = f"feat(cluster-{cluster_key}): {len(chapters)} 章 (ch{chapters[0]}-{chapters[-1]})"
+        # 2026-05-30 北极星复审：cluster_key 含 cluster_ 前缀 → 原 feat(cluster-{cluster_key}) 产
+        # feat(cluster-cluster_002) 双前缀。抽纯数字对齐规范 feat(cluster-NNN)。
+        _cnum = "".join(ch for ch in str(cluster_key) if ch.isdigit()) or str(cluster_key)
+        msg = f"feat(cluster-{_cnum}): {len(chapters)} 章 (ch{chapters[0]}-{chapters[-1]})"
         r = _sp.run(["git", "-C", str(root), "commit", "-m", msg],
                     capture_output=True, text=True, timeout=30)
         if r.returncode == 0:

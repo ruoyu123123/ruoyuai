@@ -141,7 +141,7 @@ def scan_gmc(scenes: list[list[str]]) -> dict:
 
 # ============ G2 MRU 段落动机-反应顺序 ============
 
-DIALOGUE_PATTERN = re.compile(r'["「]([^"」\n]+)["」]')
+DIALOGUE_PATTERN = re.compile(r'["“「]([^"”」\n]+)["”」]')  # 2026-05-30 补弯引号 U+201C/U+201D
 BODY_REACTION = re.compile(r"(心跳|心一沉|手抖|眼睛|呼吸|颈侧|后背|手心|喉咙|肩|腰|脚|腿)")
 THINKING_KW = re.compile(r"(他想|她想|他在想|她在想|他记得|她记得|他觉得|她觉得|他不知|她不知)")
 
@@ -382,7 +382,7 @@ def scan_info_dump(paragraphs: list[str]) -> dict:
         if not kw_hits:
             continue
         # 对话占比（引号内字 / 段总字）
-        dialogue_chars = sum(len(m) for m in re.findall(r'["「][^"」\n]{1,200}["」]', p))
+        dialogue_chars = sum(len(m) for m in re.findall(r'["“「][^"”」\n]{1,200}["”」]', p))  # 补弯引号
         dialogue_ratio = dialogue_chars / max(1, plen)
         if dialogue_ratio >= 0.10:
             continue
@@ -657,7 +657,7 @@ def detect_chapter_mode(project_root, ch, body, paragraphs) -> str:
     except Exception:
         pass
     # 2) 对话占比（引号内字数 / 总字数）
-    dialogue_chars = sum(len(m) for m in re.findall(r'["「][^"」\n]{1,200}["」]', body))
+    dialogue_chars = sum(len(m) for m in re.findall(r'["“「][^"”」\n]{1,200}["”」]', body))  # 补弯引号
     total_chars = len(body.replace(" ", "").replace("\n", ""))
     dialogue_ratio = dialogue_chars / max(1, total_chars)
 
