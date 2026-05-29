@@ -25,7 +25,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from style_analyzer import analyze_text  # noqa: E402
+from style_analyzer import analyze_text, AI_STRUCTURAL_BANNED  # noqa: E402
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
 
 # ── 阈值定义 ──────────────────────────────────────────────────
@@ -117,6 +117,9 @@ def _rng(lo: float, hi: float, u: str = "") -> str:
 
 def _apply_style_overrides(t: dict, sd: dict) -> dict:
     t = {k: dict(v) for k, v in t.items()}
+    # 2026-05-29 北极星 P4 [H2-style]：标记「本项目有作者风格档」→ _chk_banned 据此把
+    # 工艺签名禁用词降 WARN（不硬毙作者签名笔法），AI 结构套话仍 FAIL。
+    t["_has_author_profile"] = True
     q = sd.get("quantitative", {})
     # dialogue_ratio.mean -> +/- 15%
     dr = q.get("dialogue_ratio", {})
@@ -218,7 +221,20 @@ def _word_hit_check(text: str, hits: dict, name: str, target: str,
     return CheckResult(name, "FAIL", "发现 " + "; ".join(parts), target, lines)
 
 def _chk_banned(text: str, p: dict, t: dict) -> CheckResult:
-    return _word_hit_check(text, p.get("banned_word_hits", {}), "禁用词", "目标 0 个")
+    hits = p.get("banned_word_hits", {}) or {}
+    # 2026-05-29 北极星 P4 [H2-style]：有作者风格档时分级——AI 结构套话仍 FAIL，
+    # 工艺签名词降 WARN（不硬毙作者签名笔法，复刻作者优先于通用反 AI 腔；守原则5）。
+    if t.get("_has_author_profile") and hits:
+        ai_hits = {w: c for w, c in hits.items() if w in AI_STRUCTURAL_BANNED}
+        craft_hits = {w: c for w, c in hits.items() if w not in AI_STRUCTURAL_BANNED}
+        if ai_hits:  # AI 结构套话命中 → 仍 FAIL（不可放行）
+            return _word_hit_check(text, ai_hits, "禁用词(AI结构套话)", "目标 0 个")
+        if craft_hits:  # 仅工艺签名词命中 → WARN（作者可能将其作为签名笔法）
+            r = _word_hit_check(text, craft_hits, "工艺签名词(作者档下降级)", "建议 0 个 · 若作者签名笔法可豁免")
+            r.status = "WARN"
+            return r
+        return CheckResult("禁用词", "PASS", "0 个", "目标 0 个")
+    return _word_hit_check(text, hits, "禁用词", "目标 0 个")
 
 def _chk_ai_tags(text: str, p: dict, t: dict) -> CheckResult:
     return _word_hit_check(text, p.get("ai_dialogue_tag_hits", {}), "AI对话标签", "目标 0 个")
