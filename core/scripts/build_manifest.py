@@ -2037,28 +2037,30 @@ def _build_hard_constraints(
     if s.has_style_profile():
         style = s.load("作者风格", {})
         quant = style.get("quantitative", {})
-        dr = quant.get("dialogue_ratio", {})
-        if dr.get("mean"):
-            hard_constraints.append(
-                f"对话占比 ≥ {max(0.3, dr['mean'] - 0.15):.0%}"
-            )
+        # 2026-05-30 北极星复审：作者风格.json quantitative.*.mean 是 LLM 蒸馏产物，可能写成 "约20字"/
+        # "40%"/"2:1" 等字符串 → 原直接算术/格式化抛 TypeError/ValueError，而 build_manifest 是
+        # cluster-write step1 强制必跑，崩则中断整条写作流水线。_num 只接受真数值，非数值跳过该约束（不崩）。
+        def _num(v):
+            return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        dr_m = _num(quant.get("dialogue_ratio", {}).get("mean"))
+        if dr_m is not None:
+            hard_constraints.append(f"对话占比 ≥ {max(0.3, dr_m - 0.15):.0%}")
         sl = quant.get("sentence_length", {})
-        if sl.get("mean"):
-            hard_constraints.append(
-                f"句长均值目标 {sl['mean']:.0f} 字（std ≥ {max(5, sl.get('std', 8) - 3):.0f}）"
-            )
-        cw = quant.get("chapter_words", {})
-        if cw.get("mean"):
-            low = max(2000, int(cw["mean"]) - 500)
-            high = int(cw["mean"]) + 500
+        sl_m = _num(sl.get("mean"))
+        if sl_m is not None:
+            sl_std = _num(sl.get("std"))
+            sl_std = sl_std if sl_std is not None else 8
+            hard_constraints.append(f"句长均值目标 {sl_m:.0f} 字（std ≥ {max(5, sl_std - 3):.0f}）")
+        cw_m = _num(quant.get("chapter_words", {}).get("mean"))
+        if cw_m is not None:
+            low = max(2000, int(cw_m) - 500)
+            high = int(cw_m) + 500
             hard_constraints.append(f"章节字数 {low}-{high}")
         punc = quant.get("punctuation_density_per_1000", {})
         cpr_raw = punc.get("comma_period_ratio")
-        cpr = cpr_raw.get("mean") if isinstance(cpr_raw, dict) else cpr_raw
-        if cpr and cpr > 1.0:
-            hard_constraints.append(
-                f"逗句比 ≥ {max(1.0, cpr - 1.0):.1f}:1（长句用逗号连接）"
-            )
+        cpr = _num(cpr_raw.get("mean") if isinstance(cpr_raw, dict) else cpr_raw)
+        if cpr is not None and cpr > 1.0:
+            hard_constraints.append(f"逗句比 ≥ {max(1.0, cpr - 1.0):.1f}:1（长句用逗号连接）")
 
     return hard_constraints
 
