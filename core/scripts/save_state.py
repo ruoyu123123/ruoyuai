@@ -513,7 +513,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
         rel_path = reflector_json.relative_to(root).as_posix()
         r = subprocess.run(
             [sys.executable, str(learning_loop), project_str, "--merge-reflection", rel_path],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
         )
         if r.returncode == 0:
             print(f"[auto-post-reflect] step 1/3 merge-reflection OK")
@@ -532,7 +532,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
         rel_path = audit_json.relative_to(root).as_posix()
         r = subprocess.run(
             [sys.executable, str(learning_loop), project_str, "--ingest", rel_path],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
         )
         if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
             print(f"[auto-post-reflect] step 2/3 ingest OK (rc={r.returncode})")
@@ -549,7 +549,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
     # Step 3: scan-recurring → 跨章复发追踪 + tool_calibration_suggestions
     r = subprocess.run(
         [sys.executable, str(learning_loop), project_str, "--scan-recurring"],
-        capture_output=True, text=True
+        capture_output=True, text=True, timeout=180  # 2026-05-30 北极星：补 timeout 纪律
     )
     if r.returncode in (0, 1):
         print(f"[auto-post-reflect] step 3/3 scan-recurring OK (rc={r.returncode})")
@@ -918,7 +918,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
         r = subprocess.run(
             [sys.executable, str(learning_loop), project_str, "--merge-reflection",
              refl_path.relative_to(root).as_posix()],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
         )
         if r.returncode == 0:
             print(f"[auto-post-reflect-cluster] step 1/3 merge-reflection OK ({refl_path.name})")
@@ -937,7 +937,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
         r = subprocess.run(
             [sys.executable, str(learning_loop), project_str, "--ingest",
              audit_path.relative_to(root).as_posix()],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
         )
         if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
             print(f"[auto-post-reflect-cluster] step 2/3 ingest OK ({audit_path.name}, rc={r.returncode})")
@@ -954,7 +954,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
     # Step 3: scan-recurring → 跨 cluster 复发追踪 + tool_calibration_suggestions
     r = subprocess.run(
         [sys.executable, str(learning_loop), project_str, "--scan-recurring"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
     )
     if r.returncode in (0, 1):
         print(f"[auto-post-reflect-cluster] step 3/3 scan-recurring OK (rc={r.returncode})")
