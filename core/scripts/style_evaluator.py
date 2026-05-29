@@ -752,6 +752,14 @@ def main():
                         help="--multi-ref-from-dir 抽样数（默认 5）")
     parser.add_argument("--multi-ref-seed", type=int, default=42,
                         help="抽样随机种子（默认 42 · 保证可复现）")
+    # 2026-05-29 修：distill-style.plan.json phase-2 调用形如
+    # `style_evaluator.py --mode cluster --multi-ref-from-dir SFS`，但本脚本只做 SFS 评分
+    # （cluster 6 维评分实际由独立的 cluster_evaluator.py 做）。原先没有 --mode 参数 →
+    # argparse exit 2 崩溃拦死 plan。这里加一个无害的 --mode：默认 sfs 行为不变，接受 cluster
+    # 不报错（仅作语义标注），让 plan 文档照跑不崩。
+    parser.add_argument("--mode", choices=["sfs", "cluster"], default="sfs",
+                        help="评分模式标注（无害参数）：sfs=默认 SFS 评分；cluster=plan phase-2 "
+                             "cluster 视野调用兼容（行为同 sfs · cluster 6 维由 cluster_evaluator.py 负责）")
     args = parser.parse_args()
 
     gen_path = Path(args.gen)

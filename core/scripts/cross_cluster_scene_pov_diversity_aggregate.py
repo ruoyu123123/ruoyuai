@@ -34,6 +34,10 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -50,39 +54,61 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-    progress = load_json(project_root / "_数据库" / "进度.json", {})
-    plan = {}
-    for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
-        for sb in cdata.get("scene_storyboard", []):
-            ch = sb.get("ch")
-            if ch:
-                plan[str(ch)] = sb
-    if not plan:
-        print("[SKIP] cluster_blueprint 为空")
-        sys.exit(0)
 
-    # 已写章节
-    chapters_written = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                              for d in (project_root / "章节").glob("第*章")
-                              if re.match(r"第(\d+)章", d.name))
-    recent = chapters_written[-args.last_n:] if chapters_written else []
-    if not recent:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
+    per_ch = []   # [(ch, scene_type, pov)]
+    recent: list[int] = []
+
+    # ===== 2026-05-29 cluster 化分支：账本有 scene_type → 用实际落账的 scene_type/pov =====
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster 的章」；数据点来自账本而非磁盘 storyboard 计划
+    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "scene_type"):
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        for ch, rec in recs:
+            st = rec.get("scene_type", "") or ""
+            pov = rec.get("pov", "") or ""
+            if not pov:
+                # 回退：账本 pov 缺则用 characters 首角色（与磁盘 plan 同口径）
+                chars = rec.get("characters", []) or []
+                pov = chars[0] if chars else ""
+            per_ch.append((ch, st, pov))
+            recent.append(ch)
+        recent = sorted(set(recent))
+        if not per_ch:
+            print("[SKIP] cluster 账本无 scene_type 记录")
+            sys.exit(0)
+    else:
+        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
+        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+        progress = load_json(project_root / "_数据库" / "进度.json", {})
+        plan = {}
+        for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
+            for sb in cdata.get("scene_storyboard", []):
+                ch = sb.get("ch")
+                if ch:
+                    plan[str(ch)] = sb
+        if not plan:
+            print("[SKIP] cluster_blueprint 为空")
+            sys.exit(0)
+
+        # 已写章节
+        chapters_written = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                                  for d in (project_root / "章节").glob("第*章")
+                                  if re.match(r"第(\d+)章", d.name))
+        recent = chapters_written[-args.last_n:] if chapters_written else []
+        if not recent:
+            print("[SKIP] 无已写章节")
+            sys.exit(0)
+
+        # 收集每章 scene_type + 主 POV
+        for ch in recent:
+            entry = plan.get(str(ch)) or plan.get(ch) or {}
+            if not isinstance(entry, dict):
+                continue
+            st = entry.get("scene_type", "")
+            chars = entry.get("characters", []) or []
+            pov = chars[0] if chars else ""
+            per_ch.append((ch, st, pov))
 
     findings = []
-
-    # 收集每章 scene_type + 主 POV
-    per_ch = []  # [(ch, scene_type, pov)]
-    for ch in recent:
-        entry = plan.get(str(ch)) or plan.get(ch) or {}
-        if not isinstance(entry, dict):
-            continue
-        st = entry.get("scene_type", "")
-        chars = entry.get("characters", []) or []
-        pov = chars[0] if chars else ""
-        per_ch.append((ch, st, pov))
 
     valid_scenes = [(c, s) for c, s, _ in per_ch if s]
     valid_povs = [(c, p) for c, _, p in per_ch if p]

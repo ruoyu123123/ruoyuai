@@ -41,6 +41,11 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+_os_sys = __import__("sys")
+_os_sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：账本驱动 judge/waiver
+
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -244,6 +249,163 @@ def scan_prev_findings_consumption(project_root: Path, chapters: list[int]) -> l
     return findings
 
 
+# ============================================================
+# 2026-05-29 cluster 化：账本驱动分支
+# CLUSTER_MODE=1 且账本含 judge_score/waivers/prev_findings_consumed →
+# 从 ChapterRecord 取预算字段，趋势检测「连续 N 章」逻辑逐字保留，
+# 只是数据点来自账本（颗粒度可能是逐章预算值）。
+# --last-n 在 cluster 模式 = 最后 N 个 cluster。
+# 账本缺字段 → 各自回退逐章逻辑（零回归）。
+# ============================================================
+
+def _ledger_judge_records(project_root: Path, last_n_clusters: int):
+    return csr.get_chapter_records(project_root, last_n_clusters=last_n_clusters)
+
+
+def scan_judge_scores_ledger(recs) -> list[dict]:
+    """与 scan_judge_scores 同构，score 序列来自账本 judge_score。"""
+    findings = []
+    scores = []  # [(ch, score)]
+    for ch, rec in recs:
+        score = rec.get("judge_score")
+        if isinstance(score, (int, float)):
+            scores.append((ch, float(score)))
+
+    if len(scores) < 3:
+        return []
+
+    # SCORE_DECLINE
+    decline_streak = 0
+    for i in range(1, len(scores)):
+        if scores[i][1] < scores[i - 1][1]:
+            decline_streak += 1
+            if decline_streak >= 3:
+                trail = [(c, s) for c, s in scores[i - 3:i + 1]]
+                findings.append({
+                    "severity": "warning",
+                    "code": "JUDGE_SCORE_DECLINE",
+                    "trail": trail,
+                    "suggestion": f"judge 评分连续 {decline_streak + 1} 章下降 ({trail[0][1]:.1f} → {trail[-1][1]:.1f}) → 质量下滑",
+                })
+                decline_streak = 0
+        else:
+            decline_streak = 0
+
+    # SCORE_PLATEAU
+    if len(scores) >= 5:
+        recent5 = scores[-5:]
+        smin = min(s for _, s in recent5)
+        smax = max(s for _, s in recent5)
+        if smax - smin < 0.3:
+            findings.append({
+                "severity": "advisory",
+                "code": "JUDGE_SCORE_PLATEAU",
+                "range": [smin, smax],
+                "trail_chs": [c for c, _ in recent5],
+                "suggestion": f"近 5 章 judge 评分波动 < 0.3（{smin:.1f}-{smax:.1f}）→ judge 失去区分度",
+            })
+
+    # SCORE_VOLATILITY
+    if len(scores) >= 5:
+        recent5 = [s for _, s in scores[-5:]]
+        mean = sum(recent5) / len(recent5)
+        var = sum((s - mean) ** 2 for s in recent5) / len(recent5)
+        std = var ** 0.5
+        if std > 1.5:
+            findings.append({
+                "severity": "advisory",
+                "code": "JUDGE_SCORE_VOLATILITY",
+                "std": round(std, 2),
+                "mean": round(mean, 2),
+                "suggestion": f"近 5 章 judge 评分标准差 {std:.2f}（>1.5）→ judge 不稳定，建议 meta-judge 校准",
+            })
+    return findings
+
+
+def scan_waiver_accumulation_ledger(recs) -> list[dict]:
+    """与 scan_waiver_accumulation 同构，waivers 来自账本 ChapterRecord.waivers。"""
+    findings = []
+    per_ch_waiver_count = {}
+    code_per_ch = defaultdict(set)
+    for ch, rec in recs:
+        waivers = rec.get("waivers", []) or []
+        per_ch_waiver_count[ch] = len(waivers)
+        for w in waivers:
+            if isinstance(w, dict):
+                code = w.get("code")
+                if code:
+                    code_per_ch[code].add(ch)
+
+    # WAIVER_RUNAWAY
+    for ch, n in per_ch_waiver_count.items():
+        if n >= 5:
+            findings.append({
+                "severity": "warning",
+                "code": "WAIVER_RUNAWAY",
+                "ch": ch,
+                "waiver_count": n,
+                "suggestion": f"ch{ch} 单章 {n} 个 waiver → 工具校准失准 / writer 在硬抗规则",
+            })
+
+    # WAIVER_PERSISTENT_CODE
+    for code, chs in code_per_ch.items():
+        chs_list = sorted(chs)
+        if len(chs_list) < 3:
+            continue
+        max_streak = 1
+        cur_streak = 1
+        for i in range(1, len(chs_list)):
+            if chs_list[i] - chs_list[i - 1] == 1:
+                cur_streak += 1
+                max_streak = max(max_streak, cur_streak)
+            else:
+                cur_streak = 1
+        if max_streak >= 3:
+            findings.append({
+                "severity": "advisory",
+                "code": "WAIVER_PERSISTENT_CODE",
+                "waived_code": code,
+                "consecutive_chs": max_streak,
+                "all_chs": chs_list,
+                "suggestion": f"waiver code {code} 连续 ≥ 3 章被豁免 → 应永久关闭该规则或调整阈值",
+            })
+    return findings
+
+
+def scan_prev_findings_consumption_ledger(recs) -> list[dict]:
+    """与 scan_prev_findings_consumption 同构，消费信号来自账本 prev_findings_consumed(bool)。
+
+    账本已是预算好的布尔值（builder 算过 writer 是否引用上章 finding），
+    这里只做「连续 ≥ 3 章未消费」趋势检测。无 prev_findings 注入的章用 None 视为中性、不计入连续段。
+    """
+    findings = []
+    no_consume_streak = 0
+    streak_chs = []
+    for ch, rec in recs:
+        consumed = rec.get("prev_findings_consumed")
+        if consumed is None:
+            # 该章没有 prev_findings 注入信息 → 中性，断开连续段（与逐章版 continue 行为对齐）
+            no_consume_streak = 0
+            streak_chs = []
+            continue
+        if consumed is False:
+            no_consume_streak += 1
+            streak_chs.append(ch)
+            if no_consume_streak >= 3:
+                findings.append({
+                    "severity": "advisory",
+                    "code": "PREV_FINDINGS_IGNORED",
+                    "consecutive_chs": streak_chs[-3:],
+                    "suggestion": f"近 {no_consume_streak} 章 prev_judge_findings 注入但 writer 未引用任何关键词 → 反馈环空转",
+                })
+                no_consume_streak = 0
+                streak_chs = []
+        else:
+            no_consume_streak = 0
+            streak_chs = []
+    return findings
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -251,15 +413,33 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    chapters = get_chapters(project_root, args.last_n)
-    if not chapters:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
 
-    findings = []
-    findings.extend(scan_judge_scores(project_root, chapters))
-    findings.extend(scan_waiver_accumulation(project_root, chapters))
-    findings.extend(scan_prev_findings_consumption(project_root, chapters))
+    # 2026-05-29 cluster 化：账本含 judge/waiver/prev 字段 → 走账本分支
+    use_ledger = IS_CLUSTER_MODE and (
+        csr.ledger_has_field(project_root, "judge_score")
+        or csr.ledger_has_field(project_root, "waivers")
+        or csr.ledger_has_field(project_root, "prev_findings_consumed")
+    )
+    if use_ledger:
+        recs = _ledger_judge_records(project_root, args.last_n)
+        chapters = [ch for ch, _ in recs]
+        if not chapters:
+            print("[SKIP] 无账本章记录")
+            sys.exit(0)
+        findings = []
+        findings.extend(scan_judge_scores_ledger(recs))
+        findings.extend(scan_waiver_accumulation_ledger(recs))
+        findings.extend(scan_prev_findings_consumption_ledger(recs))
+    else:
+        chapters = get_chapters(project_root, args.last_n)
+        if not chapters:
+            print("[SKIP] 无已写章节")
+            sys.exit(0)
+
+        findings = []
+        findings.extend(scan_judge_scores(project_root, chapters))
+        findings.extend(scan_waiver_accumulation(project_root, chapters))
+        findings.extend(scan_prev_findings_consumption(project_root, chapters))
 
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)

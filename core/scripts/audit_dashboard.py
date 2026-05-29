@@ -51,19 +51,28 @@ def main():
     chapter_grades = {}
     chapter_summary = {}
     if audit_dir.is_dir():
-        for f in sorted(audit_dir.glob("ch_*_audit.json")):
+        # v2 cluster 化：cluster 报告 cluster_<key>_audit.json 与单章 ch_<n>_audit.json 并存，两种都收
+        audit_files = sorted(audit_dir.glob("ch_*_audit.json")) + sorted(audit_dir.glob("cluster_*_audit.json"))
+        for f in audit_files:
             m = re.match(r"ch_(\d+)_audit", f.stem)
             if m:
-                ch = int(m.group(1))
-                d = load_json(f, {})
-                s = d.get("summary", {})
-                chapter_summary[ch] = s
-                # verdict 推算 grade
-                v = d.get("verdict", "")
-                if "passed" in v.lower() or "waived" in v.lower() or "advisory" in v.lower():
-                    chapter_grades[ch] = "A/B" if s.get("error", 0) > 0 else "A"
-                else:
-                    chapter_grades[ch] = "C+"
+                ch_key = int(m.group(1))
+            else:
+                cm = re.match(r"cluster_(.+)_audit", f.stem)
+                if not cm:
+                    continue
+                ch_key = f"cluster_{cm.group(1)}"  # 字符串 key，不与章号冲突
+            d = load_json(f, {})
+            s = d.get("summary", {})
+            chapter_summary[ch_key] = s
+            # verdict 推算 grade —— audit_hub 真实取值集合（见 audit_hub.py ~1004-1014）：
+            # pass / auto_fixed / fixable_pending / waived / needs_agent（+ 历史 passed/advisory）
+            # 精确匹配，避免 "passed" in "pass" 之类的子串误判
+            v = d.get("verdict", "")
+            if v in ("pass", "auto_fixed", "fixable_pending", "waived", "passed", "advisory"):
+                chapter_grades[ch_key] = "A/B" if s.get("error", 0) > 0 else "A"
+            else:
+                chapter_grades[ch_key] = "C+"
 
     # 2. judge_reports 汇集
     jr_dir = db / ".judge_reports"
@@ -104,14 +113,15 @@ def main():
     print(f"📊 audit_dashboard · 项目 {project_root.name}")
     print("=" * 70)
 
-    print(f"\n📖 章节 grade 矩阵（共 {len(chapter_summary)} 章）")
+    print(f"\n📖 章节 grade 矩阵（共 {len(chapter_summary)} 条 · 含 cluster）")
     print(f"{'ch':>4} | {'audit-hub':<10} | {'audit-summary':<35} | {'judges (writer/foreshadower 等)'}")
-    for ch in sorted(chapter_summary.keys()):
+    # v2 cluster 化：key 混有 int（章号）和 str（cluster_<key>）→ 先 int 升序，再 str
+    for ch in sorted(chapter_summary.keys(), key=lambda k: (isinstance(k, str), k)):
         s = chapter_summary[ch]
         sum_str = f"err={s.get('error', 0)} warn={s.get('warning', 0)} waived={s.get('waived', 0)}"
         jr = judge_grades_by_ch.get(ch, {})
         jr_str = " ".join(f"{k}={v}" for k, v in jr.items() if v not in ("N/A", "?"))[:50]
-        print(f"  {ch:>2} | {chapter_grades.get(ch, '?'):<10} | {sum_str:<35} | {jr_str}")
+        print(f"  {str(ch):>6} | {chapter_grades.get(ch, '?'):<10} | {sum_str:<35} | {jr_str}")
 
     print(f"\n🔍 跨章扫描最新报告")
     for scan_type, info in cc_summary.items():

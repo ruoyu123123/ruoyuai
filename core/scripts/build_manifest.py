@@ -22,6 +22,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
+import cluster_lookup  # noqa: E402  2026-05-29 修：obtained_cluster 是 cluster_id 不是章号
 
 # style_injector：从蒸馏库提取 cross_chapter_diversity / golden_passages
 # 修复 v17.3 之前"蒸馏精细但写作粗糙"断层
@@ -350,16 +351,20 @@ class DatabaseScanner:
         for it in data.get("items", []):
             holder = it.get("holder", "")
             # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 obtained_cluster
+            # 2026-05-29 修：obtained_cluster 是 cluster_id，原代码抽出 cluster 序号直接和
+            # 章号 self.ch 比是量纲错误。改用 cluster_id_to_range 取该 cluster 起始章 lo，
+            # lo > self.ch（cluster 尚未开始）才跳过；反查不到 range 则不跳过（保守注入）。
             obtained_cluster = it.get("obtained_cluster", "cluster_999")
-            import re as _re
-            _m = _re.search(r"(\d+)", obtained_cluster) if isinstance(obtained_cluster, str) else None
-            obtained = int(_m.group(1)) if _m else 999
-            if obtained > self.ch:
+            _rng = cluster_lookup.cluster_id_to_range(self.db, obtained_cluster)
+            if _rng is not None and _rng[0] > self.ch:
                 continue
             # 持有者匹配出场角色 → 必须注入
             holder_hit = any(h in holder for h in active_ids)
             # 未回收的 chekhov 道具 → 也值得注入（契诃夫之枪）
-            chekhov_live = it.get("chekhov") and not it.get("confirmed_ch", 0) >= self.ch
+            # 2026-05-29 修：原 `not confirmed_ch >= self.ch` 把已回收（confirmed_ch < self.ch）
+            # 的道具误判为 live。正确语义：未设 confirmed_ch（0/None）或 confirmed_ch 在将来才算 live。
+            cf = it.get("confirmed_ch") or 0
+            chekhov_live = bool(it.get("chekhov")) and (cf == 0 or cf > self.ch)
             if holder_hit or chekhov_live:
                 hits.append({
                     "id": it.get("id"), "name": it.get("name"),

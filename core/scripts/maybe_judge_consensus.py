@@ -4,9 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# 2026-05-29 cluster 化：cluster 模式下关键章触发改为「每个 cluster 的末章 + climax 章」，
+# 取代失准的硬编码章号集合。reader 缺失不影响 chapter 模式（向后兼容）。
+try:
+    import cluster_summary_reader as _csr  # noqa: E402
+except Exception:  # pragma: no cover - 防御性
+    _csr = None
 
 
 def load_json(p: Path, default=None):
@@ -20,15 +30,101 @@ def load_json(p: Path, default=None):
 
 KEY_TURNING_POINT_KW = ["高潮", "反转", "触发", "觉醒", "崩溃", "牺牲", "宣战", "复仇", "终局"]
 KEY_ENDING_TYPES = {"信息炸弹", "POV切换收尾", "悬念断章"}
+# 2026-05-29 TODO：以下硬编码关键章号在 v27 cluster+freestyle fluid 章数下已失准
+# （总章数由 ME 触发节奏 + 涟漪选择 + splitter 按字数切自然涌现，无法预先确定）。
+# 建议改为按 cluster 边界触发（cluster 起始/收尾章），而非固定章号集合。暂保留不强行重构。
 STC_KEY_CHAPTERS = {5, 14, 50, 100, 175, 250, 300, 375, 395, 420, 475, 500}
+
+
+def _is_cluster_mode(project_root: Path) -> bool:
+    """2026-05-29 cluster 化：CLUSTER_MODE=1 / CLUSTER_ID env / reader 判定任一命中即 cluster 模式。"""
+    if os.environ.get("CLUSTER_MODE") == "1" or os.environ.get("CLUSTER_ID"):
+        return True
+    if _csr is not None:
+        try:
+            if _csr.is_cluster_mode():
+                return True
+        except Exception:  # pragma: no cover - 防御性
+            pass
+    return False
+
+
+def _emotion_value(scene: dict) -> int:
+    emo = scene.get("emotion", {})
+    if isinstance(emo, dict):
+        v = emo.get("value", 0)
+        return v if isinstance(v, (int, float)) else 0
+    return 0
+
+
+def _cluster_trigger_chapters(project_root: Path) -> dict[int, list[str]]:
+    """2026-05-29 cluster 化：返回 {章号: [触发原因]}，取代硬编码 STC_KEY_CHAPTERS。
+
+    每个 cluster 取两类触发点：
+      - 末章（cluster 收尾，judge consensus 最该跑的边界）
+      - climax 章（scene_storyboard 里 turning_point 含关键词 / |emotion|≥7 的最强一章）
+    数据来源：进度.cluster_blueprint（chapter_range + scene_storyboard）+ 事件簇.json.chapter_range。
+    任一数据缺失只是少几个触发点，绝不崩。
+    """
+    triggers: dict[int, list[str]] = {}
+    progress = load_json(project_root / "_数据库" / "进度.json", {}) or {}
+    blueprint = progress.get("cluster_blueprint", {}) or {}
+
+    # 1) cluster_blueprint：末章 + climax 章
+    for cid, cdata in blueprint.items():
+        if not isinstance(cdata, dict):
+            continue
+        cr = cdata.get("chapter_range") or []
+        if isinstance(cr, list) and len(cr) == 2 and isinstance(cr[1], int):
+            triggers.setdefault(cr[1], []).append(f"{cid} 末章")
+
+        # climax：扫 scene_storyboard 找最强冲突章
+        best_ch, best_strength, best_reason = None, 0, ""
+        for sb in cdata.get("scene_storyboard", []) or []:
+            if not isinstance(sb, dict):
+                continue
+            sch = sb.get("ch")
+            if not isinstance(sch, int):
+                continue
+            tp = sb.get("turning_point", "") or ""
+            hit_kw = next((kw for kw in KEY_TURNING_POINT_KW if kw in tp), None)
+            emo = abs(_emotion_value(sb))
+            strength = (100 if hit_kw else 0) + emo
+            if strength > best_strength and (hit_kw or emo >= 7):
+                best_ch = sch
+                best_strength = strength
+                best_reason = f"climax(turning_point含'{hit_kw}')" if hit_kw else f"climax(emotion={emo})"
+        if best_ch is not None:
+            triggers.setdefault(best_ch, []).append(f"{cid} {best_reason}")
+
+    # 2) 事件簇.json.chapter_range（blueprint 没切到时的兜底末章）
+    ec = load_json(project_root / "_数据库" / "事件簇.json", {}) or {}
+    for c in ec.get("clusters", []) or []:
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("cluster_id", "cluster_?")
+        cr = c.get("chapter_range") or []
+        if isinstance(cr, list) and len(cr) == 2 and isinstance(cr[1], int):
+            end = cr[1]
+            if not any("末章" in r for r in triggers.get(end, [])):
+                triggers.setdefault(end, []).append(f"{cid} 末章")
+
+    return triggers
 
 
 def is_key_chapter(project_root: Path, ch: int) -> tuple[bool, list[str]]:
     reasons = []
     progress = load_json(project_root / "_数据库" / "进度.json", {})
 
-    if ch in STC_KEY_CHAPTERS:
-        reasons.append(f"STC 节点 ch{ch}")
+    # 2026-05-29 cluster 化：cluster 模式下用 cluster 末章/climax 取代硬编码 STC 章号；
+    # 非 cluster 模式保留原硬编码集合（零回归）。
+    if _is_cluster_mode(project_root):
+        cluster_triggers = _cluster_trigger_chapters(project_root)
+        if ch in cluster_triggers:
+            reasons.extend(cluster_triggers[ch])
+    else:
+        if ch in STC_KEY_CHAPTERS:
+            reasons.append(f"STC 节点 ch{ch}")
 
     for v in progress.get("volumes", []):
         ch_range = v.get("chapter_range", [])
@@ -68,7 +164,12 @@ def trigger_consensus(project_root: Path, ch: int) -> int:
     if not judge_dir.is_dir():
         print(f"[SKIP] .judge_reports/ 不存在")
         return 0
-    reports = list(judge_dir.glob(f"ch_{ch:03d}_*.json"))
+    # 2026-05-29 修：原 glob 会匹配到自己上轮写的 ch_NNN_consensus.json，
+    # 重跑时把 consensus 当成普通 judge report 再纳入 merge（自污染）。过滤掉。
+    reports = [
+        p for p in judge_dir.glob(f"ch_{ch:03d}_*.json")
+        if not p.name.endswith("_consensus.json")
+    ]
     if len(reports) < 2:
         print(f"[SKIP] ch{ch} 仅 {len(reports)} 份 report，<2 不需 consensus")
         return 0

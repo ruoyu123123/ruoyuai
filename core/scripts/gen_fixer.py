@@ -496,6 +496,15 @@ def parse_and_apply(reply: str, project_root: Path) -> tuple:
         target = Path(rel_path)
         if not target.is_absolute():
             target = project_root / rel_path
+        # 安全：校验 target 仍在 project_root 内，防 ../../ 路径穿越逃逸项目目录
+        root_resolved = project_root.resolve()
+        target_resolved = target.resolve()
+        try:
+            target_resolved.relative_to(root_resolved)
+        except ValueError:
+            print(f"  [跳过·路径穿越] {rel_path} 解析到项目外 ({target_resolved})，忽略该块",
+                  file=sys.stderr)
+            continue
         target.write_text(content, encoding='utf-8')
         cjk = cio.count_cjk(content)  # v27 修复：统一 CJK 口径
         files_written.append({'path': str(target), 'cjk': cjk})

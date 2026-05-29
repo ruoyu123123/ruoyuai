@@ -35,6 +35,33 @@ IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 sys.path.insert(0, str(Path(__file__).parent))
 import embedding_store  # type: ignore
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
+
+def _build_findings(per_chapter: dict) -> list[dict]:
+    """对 per_chapter[ch] = [{character, drift}, ...] 跑统一的 drift 阈值判定。
+
+    2026-05-29 cluster 化：抽出原内联阈值逻辑，让磁盘分支 & 账本分支共用同一判定，
+    确保两条路径 finding 输出格式/severity/code 完全一致。
+    """
+    findings = []
+    for ch in sorted(per_chapter.keys()):
+        for entry in per_chapter[ch]:
+            char = entry.get("character")
+            drift = entry.get("drift")
+            metric = entry.get("metric", {"drift": drift, "character": char})
+            if drift is None:
+                continue
+            if drift > 0.5:
+                findings.append({
+                    "severity": "warning" if drift > 0.75 else "advisory",
+                    "code": "PERSONA_DRIFT_DETECTED",
+                    "chapter": ch,
+                    "metric": metric,
+                    "message": f"ch{ch} 角色「{char}」voice drift {drift}（与 baseline 余弦距离）",
+                    "suggestion": f"writer 可能让 {char} 行为偏离 baseline persona，validator-repair 审查是否合理",
+                })
+    return findings
 
 
 def main():
@@ -44,45 +71,70 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    emb_dir = project_root / "_数据库" / ".embeddings"
-    if not emb_dir.is_dir():
-        print(f"[SKIP] embeddings 不存在，先跑 embedding_store.py rebuild")
-        sys.exit(0)
 
-    # 找有 baseline 的角色
-    baseline_files = list(emb_dir.glob("character_*.json"))
-    characters = [f.stem.replace("character_", "") for f in baseline_files]
-    if not characters:
-        print(f"[SKIP] 无 character baseline")
-        sys.exit(0)
-
-    # 找所有已写章节
-    all_chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-    chapters = all_chapters[-args.last_n:]
-
-    findings = []
     per_chapter = {}
-    for ch in chapters:
-        per_chapter[ch] = []
-        for char in characters:
-            result = embedding_store.compute_character_drift(project_root, char, ch)
-            if "error" in result:
+    chapters: list[int] = []
+
+    # ===== 2026-05-29 cluster 化分支：账本有 persona_drift → 取预算 drift，跳过 embedding 重算 =====
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster 的章」
+    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "persona_drift"):
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        for ch, rec in recs:
+            drift_map = rec.get("persona_drift") or {}
+            if not isinstance(drift_map, dict):
                 continue
-            drift = result.get("drift")
-            if drift is None:
-                continue
-            per_chapter[ch].append({"character": char, "drift": drift})
-            if drift > 0.5:
-                findings.append({
-                    "severity": "warning" if drift > 0.75 else "advisory",
-                    "code": "PERSONA_DRIFT_DETECTED",
-                    "chapter": ch,
-                    "metric": result,
-                    "message": f"ch{ch} 角色「{char}」voice drift {drift}（与 baseline 余弦距离）",
-                    "suggestion": f"writer 可能让 {char} 行为偏离 baseline persona，validator-repair 审查是否合理",
+            per_chapter.setdefault(ch, [])
+            for char, drift in drift_map.items():
+                if not isinstance(drift, (int, float)):
+                    continue
+                per_chapter[ch].append({
+                    "character": char,
+                    "drift": drift,
+                    "metric": {"character": char, "drift": drift, "source": "ledger"},
                 })
+            chapters.append(ch)
+        chapters = sorted(set(chapters))
+        if not chapters:
+            print("[SKIP] cluster 账本无 persona_drift 记录")
+            sys.exit(0)
+        findings = _build_findings(per_chapter)
+    else:
+        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
+        emb_dir = project_root / "_数据库" / ".embeddings"
+        if not emb_dir.is_dir():
+            print(f"[SKIP] embeddings 不存在，先跑 embedding_store.py rebuild")
+            sys.exit(0)
+
+        # 找有 baseline 的角色
+        baseline_files = list(emb_dir.glob("character_*.json"))
+        characters = [f.stem.replace("character_", "") for f in baseline_files]
+        if not characters:
+            print(f"[SKIP] 无 character baseline")
+            sys.exit(0)
+
+        # 找所有已写章节
+        all_chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                              for d in (project_root / "章节").glob("第*章")
+                              if re.match(r"第(\d+)章", d.name))
+        chapters = all_chapters[-args.last_n:]
+
+        for ch in chapters:
+            per_chapter[ch] = []
+            for char in characters:
+                result = embedding_store.compute_character_drift(project_root, char, ch)
+                if "error" in result:
+                    continue
+                drift = result.get("drift")
+                if drift is None:
+                    continue
+                per_chapter[ch].append({"character": char, "drift": drift, "metric": result})
+        findings = _build_findings(per_chapter)
+
+    # 输出 per_chapter 时剥离内部辅助字段 metric（保持原磁盘分支结构 [{character, drift}]）
+    per_chapter_out = {
+        ch: [{"character": e["character"], "drift": e["drift"]} for e in entries]
+        for ch, entries in per_chapter.items()
+    }
 
     # 输出
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
@@ -92,7 +144,7 @@ def main():
         "scan_type": "persona_drift",
         "scan_ts": ts,
         "chapters_scanned": chapters,
-        "per_chapter": per_chapter,
+        "per_chapter": per_chapter_out,
         "findings": findings,
         "summary": {
             "warning": sum(1 for f in findings if f["severity"] == "warning"),

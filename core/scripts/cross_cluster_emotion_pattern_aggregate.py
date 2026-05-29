@@ -32,6 +32,9 @@ import sys
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 # 6 大情绪类型 + 关键词
 EMOTION_KEYWORDS = {
     "calm": ["平静", "镇定", "冷静", "想清楚", "权衡", "压抑", "克制"],
@@ -77,41 +80,78 @@ def main():
 
     project_root = Path(args.project)
 
-    # 章节列表
-    chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                      for d in (project_root / "章节").glob("第*章")
-                      if re.match(r"第(\d+)章", d.name))
-    if not chapters:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
-    recent = chapters[-args.last_n:]
+    char_emotion_log = defaultdict(list)  # char -> [(ch, emotion_dict)]
+    recent: list[int] = []
+    chars: list[str] = []
 
-    # 角色列表
-    if args.characters:
-        chars = [c.strip() for c in args.characters.split(",") if c.strip()]
-    else:
-        pool_path = project_root / "_数据库" / "角色池.json"
-        if pool_path.exists():
-            try:
-                pool = json.loads(pool_path.read_text(encoding="utf-8"))
-                chars = [c.get("id") for c in (pool.get("core_characters") or []) if c.get("id")]
-                chars += [c.get("id") for c in (pool.get("emerged_characters") or []) if c.get("id")]
-            except Exception:
-                chars = []
+    # ===== 2026-05-29 cluster 化分支：账本有 char_emotion_counts → 取预算逐章情绪计数 =====
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster 的章」；不再逐章扫文本
+    use_ledger = (
+        csr.is_cluster_mode()
+        and csr.ledger_has_field(project_root, "char_emotion_counts")
+    )
+    if use_ledger:
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        # 角色范围：命令行指定优先，否则取账本里出现过的全部角色
+        if args.characters:
+            chars = [c.strip() for c in args.characters.split(",") if c.strip()]
         else:
-            chars = []
+            seen = set()
+            for _ch, rec in recs:
+                for c in (rec.get("char_emotion_counts") or {}).keys():
+                    seen.add(c)
+            chars = sorted(seen)
+        if not chars:
+            print("[SKIP] 无角色可扫")
+            sys.exit(0)
+        for ch, rec in recs:
+            recent.append(ch)
+            cec = rec.get("char_emotion_counts") or {}
+            for c in chars:
+                counts = cec.get(c) or {}
+                # 只保留已知情绪类型，与 detect_emotions_for_char 同口径
+                clean = {em: int(n) for em, n in counts.items() if em in EMOTION_KEYWORDS}
+                char_emotion_log[c].append((ch, clean))
+        recent = sorted(set(recent))
+        if not recent:
+            print("[SKIP] cluster 账本无 char_emotion_counts 记录")
+            sys.exit(0)
+    else:
+        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
+        # 章节列表
+        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                          for d in (project_root / "章节").glob("第*章")
+                          if re.match(r"第(\d+)章", d.name))
+        if not chapters:
+            print("[SKIP] 无已写章节")
+            sys.exit(0)
+        recent = chapters[-args.last_n:]
 
-    if not chars:
-        print("[SKIP] 无角色可扫")
-        sys.exit(0)
+        # 角色列表
+        if args.characters:
+            chars = [c.strip() for c in args.characters.split(",") if c.strip()]
+        else:
+            pool_path = project_root / "_数据库" / "角色池.json"
+            if pool_path.exists():
+                try:
+                    pool = json.loads(pool_path.read_text(encoding="utf-8"))
+                    chars = [c.get("id") for c in (pool.get("core_characters") or []) if c.get("id")]
+                    chars += [c.get("id") for c in (pool.get("emerged_characters") or []) if c.get("id")]
+                except Exception:
+                    chars = []
+            else:
+                chars = []
 
-    # 扫描
-    char_emotion_log = defaultdict(list)  # char -> [(ch, emotion_counter)]
-    for ch in recent:
-        text = load_chapter_text(project_root, ch)
-        for c in chars:
-            counts = detect_emotions_for_char(text, c)
-            char_emotion_log[c].append((ch, dict(counts)))
+        if not chars:
+            print("[SKIP] 无角色可扫")
+            sys.exit(0)
+
+        # 扫描
+        for ch in recent:
+            text = load_chapter_text(project_root, ch)
+            for c in chars:
+                counts = detect_emotions_for_char(text, c)
+                char_emotion_log[c].append((ch, dict(counts)))
 
     # 分析模式
     findings = []

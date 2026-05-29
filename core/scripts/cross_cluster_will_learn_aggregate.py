@@ -29,6 +29,10 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -59,10 +63,31 @@ def main():
         print("[SKIP] 无角色")
         sys.exit(0)
 
-    chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                      for d in (project_root / "章节").glob("第*章")
-                      if re.match(r"第(\d+)章", d.name))
-    cur_ch = chapters[-1] if chapters else 0
+    # ===== 2026-05-29 cluster 化分支：账本有 text_keyword_set → 用账本关键词判 hint + cluster 末章锚点 =====
+    use_ledger = csr.is_cluster_mode() and csr.ledger_has_field(project_root, "text_keyword_set")
+    ledger_kw = {}  # {ch: set(text_keyword_set)}，cluster 模式用它取代逐章正文扫描
+    if use_ledger:
+        recs = csr.get_chapter_records(project_root)
+        chapters = sorted({ch for ch, _ in recs})
+        for ch, rec in recs:
+            kws = rec.get("text_keyword_set") or []
+            ledger_kw.setdefault(ch, set()).update(str(k) for k in kws)
+        # cluster 模式锚点 = 末 cluster 的 chapter_range[1]
+        last_clusters = csr.get_clusters(project_root, last_n=1)
+        cur_ch = 0
+        if last_clusters:
+            cr = last_clusters[-1].get("chapter_range")
+            if isinstance(cr, list) and len(cr) >= 2 and isinstance(cr[1], int):
+                cur_ch = cr[1]
+            elif isinstance(last_clusters[-1].get("cluster_end_ch"), int):
+                cur_ch = last_clusters[-1]["cluster_end_ch"]
+        if not cur_ch and chapters:
+            cur_ch = chapters[-1]
+    else:
+        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                          for d in (project_root / "章节").glob("第*章")
+                          if re.match(r"第(\d+)章", d.name))
+        cur_ch = chapters[-1] if chapters else 0
     if not cur_ch:
         print("[SKIP] 无已写章节")
         sys.exit(0)
@@ -106,9 +131,19 @@ def main():
                 if content_kws:
                     hint_chs = []
                     for ch in chapters[-5:]:
-                        text = read_text(project_root, ch)
-                        if any(kw in text for kw in content_kws):
-                            hint_chs.append(ch)
+                        if use_ledger:
+                            # 账本关键词指纹命中（双向 substring，匹配「kw in text」语义）
+                            chk = ledger_kw.get(ch, set())
+                            hit = any(
+                                any(kw in tk or tk in kw for tk in chk)
+                                for kw in content_kws
+                            )
+                            if hit:
+                                hint_chs.append(ch)
+                        else:
+                            text = read_text(project_root, ch)
+                            if any(kw in text for kw in content_kws):
+                                hint_chs.append(ch)
                     if not hint_chs and cur_ch <= due_by:
                         findings.append({
                             "severity": "advisory",

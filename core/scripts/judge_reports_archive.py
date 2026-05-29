@@ -22,8 +22,84 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# 2026-05-29 cluster 化：cluster 模式归档时把每章 judge_score/waivers 写进
+# chapters[ch]，并把 cluster 级综合 judge_grade 写进 cluster 顶层。统一走
+# cluster_summary_store（唯一原子写入器），不裸写 故事块摘要.json。
+# 防御性 import：账本写入器缺失不影响逐章归档主流程。
+try:
+    import cluster_summary_store as _css  # noqa: E402
+except Exception:  # pragma: no cover - 防御性
+    _css = None
+
+
+# grade ⇄ 数值映射（A 最优 → 高分；用于算 cluster 级综合 judge_grade）
+_GRADE_TO_SCORE = {"A": 95.0, "B": 82.0, "C": 68.0, "D": 50.0}
+_SCORE_TO_GRADE = [(90.0, "A"), (78.0, "B"), (60.0, "C"), (0.0, "D")]
+
+
+def _grade_to_score(grade) -> float | None:
+    """把字母 grade 转成 0-100 分；N/A / 非法返回 None（不计入综合）。"""
+    if not isinstance(grade, str):
+        return None
+    return _GRADE_TO_SCORE.get(grade.strip().upper())
+
+
+def _score_to_grade(score: float) -> str:
+    for threshold, g in _SCORE_TO_GRADE:
+        if score >= threshold:
+            return g
+    return "D"
+
+
+def _aggregate_cluster_grade(chapter_grades: list[str]) -> str | None:
+    """各章 grade 算 cluster 级综合评级：取众数，平票时取中位（偏严）。
+
+    chapter_grades 全空返回 None（无 judge 信号 → 不写 judge_grade）。
+    """
+    valid = [g for g in chapter_grades if isinstance(g, str) and g.strip().upper() in _GRADE_TO_SCORE]
+    if not valid:
+        return None
+    valid = [g.strip().upper() for g in valid]
+    counts = Counter(valid)
+    top = counts.most_common()
+    # 众数唯一 → 直接取
+    if len(top) == 1 or top[0][1] > top[1][1]:
+        return top[0][0]
+    # 平票 → 按数值算中位再映射回 grade（偏严：A/C 平票判 B）
+    scores = sorted(_GRADE_TO_SCORE[g] for g in valid)
+    mid = scores[len(scores) // 2] if len(scores) % 2 else (scores[len(scores) // 2 - 1] + scores[len(scores) // 2]) / 2
+    return _score_to_grade(mid)
+
+
+def _chapter_judge_signals(valid_judges: dict) -> tuple[float | None, str | None, list]:
+    """从本章 valid_judges 提取 (judge_score, judge_grade, waivers)。
+
+    judge_grade 优先取 audit-hub（程序化最权威），否则取任一有 grade 的 report。
+    judge_score 由该 grade 映射数值。waivers 汇总各 report 的 waivers。
+    """
+    grade = None
+    audit = valid_judges.get("audit-hub")
+    if audit and isinstance(audit.get("overall_grade"), str) and _grade_to_score(audit["overall_grade"]) is not None:
+        grade = audit["overall_grade"].strip().upper()
+    else:
+        for r in valid_judges.values():
+            g = r.get("overall_grade")
+            if isinstance(g, str) and _grade_to_score(g) is not None:
+                grade = g.strip().upper()
+                break
+    score = _grade_to_score(grade) if grade else None
+    waivers = []
+    for r in valid_judges.values():
+        w = r.get("waivers")
+        if isinstance(w, list):
+            waivers.extend(w)
+    return score, grade, waivers
 
 
 def load_json(p: Path, default=None):
@@ -178,8 +254,13 @@ def _resolve_chapter_range(project_root: Path, cluster_key: str) -> list[int]:
     return []
 
 
-def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool) -> dict:
-    """对单章跑归档。返回 {ch, written_count, judges}."""
+def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool, cluster_id: str | None = None) -> dict:
+    """对单章跑归档。返回 {ch, written, judges, grade, score, waivers}.
+
+    2026-05-29 cluster 化：传入 cluster_id（cluster 模式）时，额外把本章
+    judge_score/waivers 通过 cluster_summary_store.patch_chapter 写进
+    chapters[ch]（v2 cluster 账本契约）。chapter 模式不传 → 行为不变。
+    """
     db = project_root / "_数据库"
 
     # 收集源数据
@@ -228,7 +309,26 @@ def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool) -> dict:
         save_json(db / "故事块摘要.json", ch_summary_full)
         print(f"  [OK] 故事块摘要 ch{ch}.judge_reports 已更新（{len(summaries)} 条摘要）")
 
-    return {"ch": ch, "written": len(written), "judges": list(valid_judges.keys())}
+    # 2026-05-29 cluster 化：提取本章 judge_score/grade/waivers
+    score, grade, waivers = _chapter_judge_signals(valid_judges)
+
+    # cluster 模式：把每章 judge_score/waivers 写进 v2 cluster 账本 chapters[ch]
+    # （走 cluster_summary_store 原子写入器，不裸写 故事块摘要.json）。
+    if cluster_id and not dry_run and _css is not None and valid_judges:
+        ch_patch = {}
+        if score is not None:
+            ch_patch["judge_score"] = score
+        if waivers:
+            ch_patch["waivers"] = waivers
+        if ch_patch:
+            try:
+                _css.patch_chapter(project_root, cluster_id, ch, ch_patch)
+                print(f"  [OK] cluster 账本 chapters[{ch}] 写入 judge_score={score} waivers={len(waivers)}")
+            except Exception as e:  # pragma: no cover - 防御性
+                print(f"  [WARN] cluster 账本 chapters[{ch}] 写入失败（跳过不崩）: {e}")
+
+    return {"ch": ch, "written": len(written), "judges": list(valid_judges.keys()),
+            "grade": grade, "score": score, "waivers": waivers}
 
 
 def main():
@@ -250,9 +350,24 @@ def main():
         if not chapters:
             print(f"[FATAL] cluster {args.cluster} 未在 事件簇.json 找到 chapter_range", file=sys.stderr)
             return 2
-        print(f"[judge_reports_archive · cluster mode] cluster_{args.cluster.replace('cluster_', '')} 展开 {len(chapters)} 章: {chapters}")
-        for ch in chapters:
-            _archive_one_chapter(project_root, ch, args.dry_run)
+        cluster_id = "cluster_" + args.cluster.replace("cluster_", "")
+        print(f"[judge_reports_archive · cluster mode] {cluster_id} 展开 {len(chapters)} 章: {chapters}")
+        # 2026-05-29 cluster 化：逐章归档 + 把 judge 信号聚合写进 cluster 账本
+        results = [_archive_one_chapter(project_root, ch, args.dry_run, cluster_id=cluster_id) for ch in chapters]
+
+        # 算 cluster 级综合 judge_grade（各章 grade 众数/中位）→ upsert_cluster 写顶层
+        chapter_grades = [r.get("grade") for r in results if r.get("grade")]
+        cluster_grade = _aggregate_cluster_grade(chapter_grades)
+        if not args.dry_run and _css is not None and cluster_grade is not None:
+            try:
+                _css.upsert_cluster(project_root, cluster_id, {"judge_grade": cluster_grade})
+                print(f"[OK] cluster 账本 {cluster_id}.judge_grade = {cluster_grade}"
+                      f"（来自 {len(chapter_grades)} 章 grades: {chapter_grades}）")
+            except Exception as e:  # pragma: no cover - 防御性
+                print(f"[WARN] cluster 账本 judge_grade 写入失败（跳过不崩）: {e}")
+        elif cluster_grade is None:
+            print(f"[WARN] cluster {cluster_id} 无有效 judge grade（各章 judge 信号缺失），跳过 judge_grade 写入")
+
         print(f"\n[OK] cluster {args.cluster} judge_reports 归档完成 {len(chapters)} 章")
         return 0
 
@@ -322,4 +437,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 2026-05-29 cluster 化：cluster mode 分支用 return <code> 返回退出码（FATAL=2），
+    # 但原 __main__ 未 sys.exit 传播 → cluster 失败仍 exit 0。这里把 main() 返回码透传。
+    # chapter mode 分支内部已自行 sys.exit，返回 None → exit 0，行为不变。
+    sys.exit(main())

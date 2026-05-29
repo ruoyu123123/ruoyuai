@@ -41,6 +41,11 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+_eng_sys = __import__("sys")
+_eng_sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：账本驱动 hook/golden
+
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -193,6 +198,30 @@ def scan_lazy_spawn(project_root: Path, chapters: list[int]) -> list[dict]:
     return findings
 
 
+# ============================================================
+# 2026-05-29 cluster 化：账本驱动分支
+# CLUSTER_MODE=1 且账本含 hook_score/golden_scores → 从 ChapterRecord 取分数序列，
+# 复用既有 scan_hook_trend / scan_golden_trend（纯分数 list 入参，逻辑零改）。
+# spawn 检测继续读 角色池.json（spawn_events 是 cluster 级字段，角色池仍是权威）。
+# --last-n 在 cluster 模式 = 最后 N 个 cluster。账本缺字段 → 回退逐章 audit（零回归）。
+# ============================================================
+
+def collect_ledger_scores(recs) -> dict:
+    """从账本 ChapterRecord 取 hook_score / golden_scores → 与 collect_audit_scores 同结构。"""
+    out = {"hook": [], "golden_kindling": [], "golden_hook": [], "golden_turn": []}
+    for ch, rec in recs:
+        hs = rec.get("hook_score")
+        if isinstance(hs, (int, float)):
+            out["hook"].append((ch, float(hs)))
+        gs = rec.get("golden_scores")
+        if isinstance(gs, dict):
+            for k in ["kindling", "hook", "turn"]:
+                v = gs.get(k)
+                if isinstance(v, (int, float)):
+                    out[f"golden_{k}"].append((ch, float(v)))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -200,16 +229,33 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    chapters = get_chapters(project_root, args.last_n)
-    if not chapters:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
 
-    scores_dict = collect_audit_scores(project_root, chapters)
-    findings = []
-    findings.extend(scan_hook_trend(scores_dict.get("hook", [])))
-    findings.extend(scan_golden_trend(scores_dict))
-    findings.extend(scan_lazy_spawn(project_root, chapters))
+    use_ledger = IS_CLUSTER_MODE and (
+        csr.ledger_has_field(project_root, "hook_score")
+        or csr.ledger_has_field(project_root, "golden_scores")
+    )
+    if use_ledger:
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        chapters = [ch for ch, _ in recs]
+        if not chapters:
+            print("[SKIP] 无账本章记录")
+            sys.exit(0)
+        scores_dict = collect_ledger_scores(recs)
+        findings = []
+        findings.extend(scan_hook_trend(scores_dict.get("hook", [])))
+        findings.extend(scan_golden_trend(scores_dict))
+        findings.extend(scan_lazy_spawn(project_root, chapters))
+    else:
+        chapters = get_chapters(project_root, args.last_n)
+        if not chapters:
+            print("[SKIP] 无已写章节")
+            sys.exit(0)
+
+        scores_dict = collect_audit_scores(project_root, chapters)
+        findings = []
+        findings.extend(scan_hook_trend(scores_dict.get("hook", [])))
+        findings.extend(scan_golden_trend(scores_dict))
+        findings.extend(scan_lazy_spawn(project_root, chapters))
 
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)

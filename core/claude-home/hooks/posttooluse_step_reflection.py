@@ -52,10 +52,15 @@ def main():
     if "plan_tracker" not in command or "step" not in command:
         sys.exit(0)
 
-    m = re.search(r"plan_tracker\.py\s+step\s+[\"']?([\w\-]+)[\"']?\s+--n\s+(\d+)", command)
-    if not m:
+    # 2026-05-29 修【安全·绕过】：解耦提取 plan_id / --n（与两个 PreToolUse hook 一致）。
+    # 注意：本 hook 是 PostToolUse 观察层，全程只 exit 0，严禁引入非 0 退出。
+    if not re.search(r"plan_tracker\.py\s+step\b", command):
         sys.exit(0)
-    plan_id, n = m.group(1), int(m.group(2))
+    pid_m = re.search(r"\bstep\s+(?:-\S+\s+)*[\"']?([A-Za-z0-9_][\w\-]*)[\"']?", command)
+    n_m = re.search(r"--n\s+(\d+)", command)
+    if not pid_m or not n_m:
+        sys.exit(0)
+    plan_id, n = pid_m.group(1), int(n_m.group(1))
 
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", "."))
     # v22.gov 修：反思路径优先放在 plan project 根（小说项目/风格库），fallback 全局

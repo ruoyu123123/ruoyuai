@@ -43,6 +43,7 @@ from gen_model_loader import (  # noqa: E402
     Profile,
 )
 import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化权威口径
+import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster_006" ↔ "6"）
 
 
 # ============ 依赖检查 ============
@@ -213,8 +214,14 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     progress = json.loads((db / '进度.json').read_text(encoding='utf-8'))
     cluster_blueprint = progress.get('cluster_blueprint', {})
     plans = []
-    if cluster_id and cluster_id in cluster_blueprint:
-        plans = cluster_blueprint[cluster_id].get('scene_storyboard', [])
+    # cluster_id 是 int（如 6），blueprint key 可能是 "cluster_006"/"6"/"cluster_6"
+    # → 两边归一化为 'cluster_NNN' 后匹配（修复类型不匹配导致 storyboard 注入失效）
+    _norm_cid = cluster_lookup.normalize_cluster_id(cluster_id)
+    if _norm_cid:
+        for _bp_key, _bp_val in cluster_blueprint.items():
+            if cluster_lookup.normalize_cluster_id(_bp_key) == _norm_cid:
+                plans = _bp_val.get('scene_storyboard', [])
+                break
     if freestyle:
         relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_start + 30]
     else:
@@ -237,7 +244,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
         if ec_path.exists():
             ec = json.loads(ec_path.read_text(encoding='utf-8'))
             for c in ec.get('clusters', []):
-                if c.get('cluster_id') == cluster_id:
+                # cluster_id 是 int，事件簇 c['cluster_id'] 是字符串 → 两边归一化后比对
+                if cluster_lookup.normalize_cluster_id(c.get('cluster_id')) == cluster_lookup.normalize_cluster_id(cluster_id):
                     cluster_brief = c
                     break
             if cluster_brief:
@@ -525,10 +533,13 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
 # ============ 输出解析与保存 ============
 def split_text_and_changes(reply: str) -> tuple:
     """从返回拆出正文 + CHANGES JSON"""
-    json_match = re.search(r'```json\s*\n(.*?)\n```\s*$', reply, re.DOTALL)
-    if json_match:
-        changes_json = json_match.group(1).strip()
-        body = reply[:json_match.start()].rstrip()
+    # 去掉 $ 末尾锚定（对齐 gen_fixer 写法）：LLM 在 json 块后多输出尾随文字也能匹配。
+    # 用 finditer 取「最后一个」```json``` 块，正文 = 该块之前的内容。
+    json_matches = list(re.finditer(r'```json\s*\n(.*?)\n```', reply, re.DOTALL))
+    if json_matches:
+        last = json_matches[-1]
+        changes_json = last.group(1).strip()
+        body = reply[:last.start()].rstrip()
     else:
         body = reply.strip()
         changes_json = "{}"

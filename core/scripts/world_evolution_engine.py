@@ -41,6 +41,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 2026-05-29 修：原子写 + 章号→cluster 正确反查共享工具
+import cluster_lookup
+from atomic_json import atomic_write_json
+
 
 # ---------- IO ----------
 
@@ -54,7 +58,8 @@ def load_json(p: Path, default=None):
 
 
 def save_json(p: Path, data: dict):
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 2026-05-29 修：改用原子写（写临时文件 + os.replace），防写一半崩溃损坏世界状态
+    atomic_write_json(p, data)
 
 
 def load_world(project_root: Path) -> dict:
@@ -82,8 +87,12 @@ def _resolve_path(world: dict, dotted: str):
     return (cur, parts[-1]) if isinstance(cur, dict) else (None, None)
 
 
-def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list) -> bool:
-    """单条 ripple 落地。返回是否成功应用。"""
+def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list, project_root: Path | None = None) -> bool:
+    """单条 ripple 落地。返回是否成功应用。
+
+    2026-05-29 修：新增 project_root，供 add_thread/evaluate_completion 把章号
+    反查成正确 cluster_id（cluster_lookup），不再机械拼 cluster_{ch}。
+    """
     target = ripple.get("target")
     if not target:
         return False
@@ -138,30 +147,44 @@ def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list) -> bool
                 nums.append(int(m.group(1)))
         next_num = (max(nums) + 1) if nums else 1
         # v2 cluster 化（2026-05-28）：纯 cluster 模式
+        # 2026-05-29 修：since_cluster 由 ch 经 cluster_lookup 反查，反查失败按章号近似 + 标 inferred
+        since_cid = cluster_lookup.ch_to_cluster_id(project_root, ch) if project_root is not None else None
+        inferred = False
+        if not since_cid:
+            since_cid = cluster_lookup.normalize_cluster_id(ch)
+            inferred = True
         new_thread = {
             "thread_id": f"NT_{next_num:03d}",
             "npc_id": td.get("npc_id", "?"),
             "current_action": td.get("action", ""),
-            "since_cluster": f"cluster_{ch:03d}",
+            "since_cluster": since_cid,
             "expected_complete_cluster": td.get("expected_complete_cluster"),
             "visible_to_protagonist": td.get("visible_to_protagonist", False),
             "outcome_if_complete": td.get("outcome_if_complete", ""),
             "_priority": td.get("_priority", 5),
             "_spawned_by_ripple": True,
         }
+        if inferred:
+            new_thread["_cluster_inferred"] = True
         threads.append(new_thread)
         applied_log.append({"target": "active_npc_threads", "op": "add_thread", "thread_id": new_thread["thread_id"], "npc": new_thread["npc_id"]})
         return True
 
     # ---- evaluate_completion ----
+    # 2026-05-29 修：字段名统一为 expected_complete_cluster（add_thread 写的就是它）。
+    # 原读 expected_complete_ch 永远读不到 → thread 永不到期。
+    # tick 传入的 ch 是章号 → 先反查成当前 cluster 序号，再与 thread 的目标 cluster 序号比较。
     if ripple.get("evaluate_completion"):
         threads = world.get("active_npc_threads", [])
         completed_log = world.setdefault("world_ticks_log", [])
+        # 当前章号 → 当前 cluster 序号（反查失败按章号近似为序号）
+        cur_cid = cluster_lookup.ch_to_cluster_id(project_root, ch) if project_root is not None else None
+        cur_cluster_num = cluster_lookup.cluster_num(cur_cid) if cur_cid else ch
         completed_threads = []
         remaining = []
         for t in threads:
-            ec = t.get("expected_complete_ch")
-            if ec is not None and isinstance(ec, int) and ch >= ec:
+            ec_num = cluster_lookup.cluster_num(t.get("expected_complete_cluster"))
+            if ec_num is not None and cur_cluster_num is not None and cur_cluster_num >= ec_num:
                 completed_threads.append(t)
                 # 自动 spawn 一条 consequence
                 consequence_tracker = world.setdefault("consequence_tracker", {})
@@ -239,8 +262,11 @@ def _match_rule(rule: dict, trigger_type: str, trigger_value: str) -> bool:
     return any(c in trigger_value or trigger_value in c for c in candidates)
 
 
-def _apply_rules(world: dict, rules_json: dict, trigger_type: str, trigger_value: str, ch: int) -> dict:
-    """匹配 + 应用所有命中规则。"""
+def _apply_rules(world: dict, rules_json: dict, trigger_type: str, trigger_value: str, ch: int, project_root: Path | None = None) -> dict:
+    """匹配 + 应用所有命中规则。
+
+    2026-05-29 修：透传 project_root 给 _apply_ripple 做 ch→cluster 反查。
+    """
     rules = rules_json.get("ripple_rules", [])
     applied_log: list = []
     matched_rules = []
@@ -249,7 +275,7 @@ def _apply_rules(world: dict, rules_json: dict, trigger_type: str, trigger_value
             continue
         matched_rules.append(rule.get("id"))
         for ripple in rule.get("ripples", []):
-            _apply_ripple(world, ripple, ch, applied_log)
+            _apply_ripple(world, ripple, ch, applied_log, project_root)
     return {"matched_rules": matched_rules, "applied_log": applied_log}
 
 
@@ -269,7 +295,7 @@ def tick(project_root: Path, ch: int) -> dict:
     cwt["ch"] = ch
 
     # 2. 跑 auto_tick 规则
-    result = _apply_rules(world, rules, "auto_tick", "every_chapter", ch)
+    result = _apply_rules(world, rules, "auto_tick", "every_chapter", ch, project_root)
 
     # 3. 追加 world_ticks_log
     log = world.setdefault("world_ticks_log", [])
@@ -298,7 +324,7 @@ def apply_minor_event(project_root: Path, ch: int, event_value: str) -> dict:
     if world is None or rules is None:
         return {"error": "世界状态.json/涟漪规则.json 不存在"}
 
-    result = _apply_rules(world, rules, "minor_event", event_value, ch)
+    result = _apply_rules(world, rules, "minor_event", event_value, ch, project_root)
 
     # 写入 world_ticks_log
     log = world.setdefault("world_ticks_log", [])
@@ -327,7 +353,7 @@ def apply_fate_event(project_root: Path, ch: int, event_id: str) -> dict:
     if world is None or rules is None:
         return {"error": "世界状态.json/涟漪规则.json 不存在"}
 
-    result = _apply_rules(world, rules, "fate_event", event_id, ch)
+    result = _apply_rules(world, rules, "fate_event", event_id, ch, project_root)
 
     log = world.setdefault("world_ticks_log", [])
     log.append({

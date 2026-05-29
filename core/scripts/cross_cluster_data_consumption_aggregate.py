@@ -42,6 +42,9 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -72,7 +75,7 @@ def read_text(project_root: Path, ch: int) -> str:
 
 # ---------- A. ASPECT_CONTINUITY ----------
 
-def scan_aspect_continuity(project_root: Path, chapters: list[int]) -> list[dict]:
+def scan_aspect_continuity(project_root: Path, chapters: list[int], ledger_by_ch: dict | None = None) -> list[dict]:
     aspects_path = project_root / "_数据库" / "角色烙印.json"
     if not aspects_path.exists():
         return []
@@ -94,19 +97,28 @@ def scan_aspect_continuity(project_root: Path, chapters: list[int]) -> list[dict
             no_address_streak = 0
             last_addressed = None
             for ch in relevant_chs:
-                changes = read_changes(project_root, ch)
-                addressed = (changes.get("factual", {}) or {}).get("aspects_addressed", []) or []
-                hit_in_changes = any(a.get("aspect_id") == aid for a in addressed if isinstance(a, dict))
-                # fallback：扫正文是否含 narrative_constraints/triggers 关键短语
-                hit_in_text = False
-                if not hit_in_changes:
-                    text = read_text(project_root, ch)
-                    keywords = []
-                    for c_str in constraints[:3]:
-                        keywords.extend(re.findall(r"[一-鿿]{2,4}", c_str)[:3])
-                    for t_str in triggers[:3]:
-                        keywords.extend(re.findall(r"[一-鿿]{2,4}", t_str)[:2])
-                    hit_in_text = any(kw in text for kw in keywords if len(kw) >= 2)
+                # 2026-05-29 cluster 化：账本有本章记录 → 读预算的 aspects_addressed
+                # / aspect_text_hit（均为 aspect_id 列表）；否则回退逐章 glob + 正文匹配。
+                rec = (ledger_by_ch or {}).get(ch)
+                if rec is not None:
+                    addressed_ids = rec.get("aspects_addressed", []) or []
+                    text_hit_ids = rec.get("aspect_text_hit", []) or []
+                    hit_in_changes = aid in addressed_ids
+                    hit_in_text = (not hit_in_changes) and (aid in text_hit_ids)
+                else:
+                    changes = read_changes(project_root, ch)
+                    addressed = (changes.get("factual", {}) or {}).get("aspects_addressed", []) or []
+                    hit_in_changes = any(a.get("aspect_id") == aid for a in addressed if isinstance(a, dict))
+                    # fallback：扫正文是否含 narrative_constraints/triggers 关键短语
+                    hit_in_text = False
+                    if not hit_in_changes:
+                        text = read_text(project_root, ch)
+                        keywords = []
+                        for c_str in constraints[:3]:
+                            keywords.extend(re.findall(r"[一-鿿]{2,4}", c_str)[:3])
+                        for t_str in triggers[:3]:
+                            keywords.extend(re.findall(r"[一-鿿]{2,4}", t_str)[:2])
+                        hit_in_text = any(kw in text for kw in keywords if len(kw) >= 2)
                 if hit_in_changes or hit_in_text:
                     no_address_streak = 0
                     last_addressed = ch
@@ -130,7 +142,7 @@ def scan_aspect_continuity(project_root: Path, chapters: list[int]) -> list[dict
 
 # ---------- B. CLOCK_ADDRESSING ----------
 
-def scan_clock_addressing(project_root: Path, chapters: list[int]) -> list[dict]:
+def scan_clock_addressing(project_root: Path, chapters: list[int], ledger_by_ch: dict | None = None) -> list[dict]:
     clocks_path = project_root / "_数据库" / "时钟表.json"
     if not clocks_path.exists():
         return []
@@ -153,10 +165,17 @@ def scan_clock_addressing(project_root: Path, chapters: list[int]) -> list[dict]
         cid = clock.get("clock_id")
         addressed_chs = []
         for ch in recent:
-            changes = read_changes(project_root, ch)
-            addr_list = (changes.get("factual", {}) or {}).get("clocks_addressed", []) or []
-            if any(a.get("clock_id") == cid for a in addr_list if isinstance(a, dict)):
-                addressed_chs.append(ch)
+            # 2026-05-29 cluster 化：账本有本章 → 读预算 clocks_addressed（clock_id 列表）；
+            # 否则回退逐章 glob（dict 形态）。
+            rec = (ledger_by_ch or {}).get(ch)
+            if rec is not None:
+                if cid in (rec.get("clocks_addressed", []) or []):
+                    addressed_chs.append(ch)
+            else:
+                changes = read_changes(project_root, ch)
+                addr_list = (changes.get("factual", {}) or {}).get("clocks_addressed", []) or []
+                if any(a.get("clock_id") == cid for a in addr_list if isinstance(a, dict)):
+                    addressed_chs.append(ch)
         if not addressed_chs and len(recent) >= 2:
             findings.append({
                 "severity": "warning",
@@ -218,7 +237,7 @@ def scan_heart_event_consistency(project_root: Path, chapters: list[int]) -> lis
 
 # ---------- D. FATE_DICE_CONSUMPTION ----------
 
-def scan_fate_dice_consumption(project_root: Path, chapters: list[int]) -> list[dict]:
+def scan_fate_dice_consumption(project_root: Path, chapters: list[int], ledger_by_ch: dict | None = None) -> list[dict]:
     pool_path = project_root / "_数据库" / "事件池.json"
     if not pool_path.exists():
         return []
@@ -235,16 +254,30 @@ def scan_fate_dice_consumption(project_root: Path, chapters: list[int]) -> list[
             continue
         event_def = events_by_id.get(eid, {})
         evidence = event_def.get("physical_evidence", []) or []
-        # 检查 _changes.json.fate_dice_consumed
-        changes = read_changes(project_root, ch)
-        consumed = (changes.get("factual", {}) or {}).get("fate_dice_consumed")
-        text = read_text(project_root, ch)
-        # 文本中 evidence 命中数
-        evidence_kws = []
-        for ev in evidence:
-            evidence_kws.extend(re.findall(r"[一-鿿]{2,4}", ev)[:2])
-        evidence_hits = sum(1 for kw in evidence_kws if kw in text)
-        ratio = evidence_hits / max(1, len(evidence_kws))
+        # 2026-05-29 cluster 化：账本有本章 fate_dice_consumed（[{event_id, evidence_hit_ratio}]）
+        # → 取预算的声明 id + evidence ratio，省去 read_text 重扫；否则回退逐章 glob + 正文匹配。
+        rec = (ledger_by_ch or {}).get(ch)
+        ledger_fdc = (rec.get("fate_dice_consumed") if rec is not None else None)
+        if isinstance(ledger_fdc, list) and ledger_fdc:
+            entry = next((e for e in ledger_fdc if isinstance(e, dict) and e.get("event_id") == eid), None)
+            consumed = entry.get("event_id") if entry else None
+            if entry is not None and isinstance(entry.get("evidence_hit_ratio"), (int, float)):
+                ratio = entry["evidence_hit_ratio"]
+                evidence_kws = evidence  # 仅用于 ratio 有效性判定（非空即评估）
+            else:
+                evidence_kws = []
+                ratio = 0.0
+        else:
+            # 检查 _changes.json.fate_dice_consumed
+            changes = read_changes(project_root, ch)
+            consumed = (changes.get("factual", {}) or {}).get("fate_dice_consumed")
+            text = read_text(project_root, ch)
+            # 文本中 evidence 命中数
+            evidence_kws = []
+            for ev in evidence:
+                evidence_kws.extend(re.findall(r"[一-鿿]{2,4}", ev)[:2])
+            evidence_hits = sum(1 for kw in evidence_kws if kw in text)
+            ratio = evidence_hits / max(1, len(evidence_kws))
         if consumed != eid:
             findings.append({
                 "severity": "warning",
@@ -275,16 +308,35 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    chapters = get_chapters(project_root, args.last_n)
+
+    # ===== 2026-05-29 cluster 化分支：账本有 aspects/clocks/fate 任一字段 → 摘要驱动 =====
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster」。aspect_continuity / clock /
+    # fate_dice 三类读账本预算字段（aspects_addressed / aspect_text_hit / clocks_addressed /
+    # fate_dice_consumed）；heart_event 维度依赖正文 NPC 出场扫描，账本无对应字段 → 仍走磁盘。
+    ledger_by_ch = None
+    has_ledger_consumption = (
+        csr.is_cluster_mode()
+        and (
+            csr.ledger_has_field(project_root, "aspects_addressed")
+            or csr.ledger_has_field(project_root, "clocks_addressed")
+            or csr.ledger_has_field(project_root, "fate_dice_consumed")
+        )
+    )
+    if has_ledger_consumption:
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        ledger_by_ch = {ch: rec for ch, rec in recs}
+        chapters = sorted(ledger_by_ch.keys())
+    else:
+        chapters = get_chapters(project_root, args.last_n)
     if not chapters:
         print("[SKIP] 无已写章节")
         sys.exit(0)
 
     all_findings = []
-    all_findings.extend(scan_aspect_continuity(project_root, chapters))
-    all_findings.extend(scan_clock_addressing(project_root, chapters))
+    all_findings.extend(scan_aspect_continuity(project_root, chapters, ledger_by_ch))
+    all_findings.extend(scan_clock_addressing(project_root, chapters, ledger_by_ch))
     all_findings.extend(scan_heart_event_consistency(project_root, chapters))
-    all_findings.extend(scan_fate_dice_consumption(project_root, chapters))
+    all_findings.extend(scan_fate_dice_consumption(project_root, chapters, ledger_by_ch))
 
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)

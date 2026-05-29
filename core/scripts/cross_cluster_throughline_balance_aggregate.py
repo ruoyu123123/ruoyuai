@@ -32,6 +32,9 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 THROUGHLINES = ["OS", "MC", "IC", "RS"]
 
 
@@ -51,25 +54,44 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                      for d in (project_root / "章节").glob("第*章")
-                      if re.match(r"第(\d+)章", d.name))
-    if not chapters:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
-    recent = chapters[-args.last_n:]
 
     # 收集每章 throughline_progress
     per_chapter = []  # [(ch, {OS: bool, MC: bool, IC: bool, RS: bool})]
-    for ch in recent:
-        p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-        changes = load_json(p, {})
-        tp = (changes.get("factual", {}) or {}).get("throughline_progress", {}) or {}
-        progress_map = {}
-        for t in THROUGHLINES:
-            v = tp.get(t, "no_progress")
-            progress_map[t] = bool(v) and v != "no_progress" and v != ""
-        per_chapter.append((ch, progress_map))
+
+    # ===== 2026-05-29 cluster 化分支：账本有 throughline_progress → 摘要驱动 =====
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster」
+    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "throughline_progress"):
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        for ch, rec in recs:
+            tp = rec.get("throughline_progress", {}) or {}
+            if not isinstance(tp, dict):
+                tp = {}
+            progress_map = {}
+            for t in THROUGHLINES:
+                v = tp.get(t, "no_progress")
+                progress_map[t] = bool(v) and v != "no_progress" and v != ""
+            per_chapter.append((ch, progress_map))
+        if not per_chapter:
+            print("[SKIP] cluster 账本无 throughline_progress 记录")
+            sys.exit(0)
+    else:
+        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
+        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                          for d in (project_root / "章节").glob("第*章")
+                          if re.match(r"第(\d+)章", d.name))
+        if not chapters:
+            print("[SKIP] 无已写章节")
+            sys.exit(0)
+        recent = chapters[-args.last_n:]
+        for ch in recent:
+            p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
+            changes = load_json(p, {})
+            tp = (changes.get("factual", {}) or {}).get("throughline_progress", {}) or {}
+            progress_map = {}
+            for t in THROUGHLINES:
+                v = tp.get(t, "no_progress")
+                progress_map[t] = bool(v) and v != "no_progress" and v != ""
+            per_chapter.append((ch, progress_map))
 
     if not per_chapter:
         print("[SKIP] 无 throughline_progress 记录")

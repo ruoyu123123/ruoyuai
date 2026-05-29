@@ -87,9 +87,11 @@ def _filter_event(event: dict, ch: int, scene_type: str, pov: str, world_state: 
     cf = event.get("context_filter", {})
     if event.get("event_id") in recent_drawn:
         return False
-    if cf.get("min_ch") and ch < cf["min_ch"]:
+    # 2026-05-29 修：原 `cf.get("min_ch") and ...` 在 min_ch/max_ch==0 时被 falsy
+    # 短路跳过守卫。改为 `is not None` 判断，让 0 也能正常参与边界过滤。
+    if cf.get("min_ch") is not None and ch < cf["min_ch"]:
         return False
-    if cf.get("max_ch") and ch > cf["max_ch"]:
+    if cf.get("max_ch") is not None and ch > cf["max_ch"]:
         return False
     scenes = cf.get("scene_types", [])
     if scenes and scene_type and scene_type not in scenes:
@@ -129,6 +131,10 @@ def draw(project_root: Path, ch: int, scene_type: str = "", pov: str = "") -> di
         }
 
     weights = [e.get("context_filter", {}).get("weight", 1) for e in candidates]
+    # 2026-05-29 修：weights 全 0（或负）时 sum<=0，random.choices 抛 ValueError 崩溃。
+    # 退回均匀抽样（weights=None），保证可用性而非崩溃。
+    if sum(weights) <= 0:
+        weights = None
     chosen = random.choices(candidates, weights=weights, k=1)[0]
 
     # 写入 drawn log

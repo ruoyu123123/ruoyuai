@@ -43,6 +43,11 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+_cd_sys = __import__("sys")
+_cd_sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：账本驱动 stress/moves/position
+
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -306,6 +311,223 @@ def scan_position_effect(project_root: Path, chapters: list[int]) -> list[dict]:
     return findings
 
 
+# ============================================================
+# 2026-05-29 cluster 化：账本驱动分支
+# CLUSTER_MODE=1 且账本含 stress_total/moves_used/position_effect_evals →
+# 从 ChapterRecord 取预算字段。趋势检测「连续 N 章」逻辑逐字保留，数据点来自账本。
+# - stress: stress_total(逐章) + mental_break_card(标记 break) + coping_hit(bool)
+# - moves: moves_used(逐章) + char_mention_counts(出场判定，取代正文 grep)
+# - position: position_effect_evals(逐章；兼容 position/effect 与 evaluated_* 两种键)
+# 仍读 主角压力档.json 取 threshold/coping 定义、角色行动表.json 取 moves 定义。
+# --last-n 在 cluster 模式 = 最后 N 个 cluster。账本缺字段 → 回退逐章逻辑（零回归）。
+# ============================================================
+
+def scan_stress_trend_ledger(project_root: Path, recs) -> list[dict]:
+    """与 scan_stress_trend 同构，stress 序列来自账本 stress_total。"""
+    stress = load_json(project_root / "_数据库" / "主角压力档.json", {}) or {}
+    threshold = stress.get("stress_threshold_break", 8)
+    high_pct = threshold * 0.75
+
+    findings = []
+    by_ch = {}
+    break_chs = []  # (ch, card)
+    coping_chs = set()
+    for ch, rec in recs:
+        st = rec.get("stress_total")
+        if isinstance(st, (int, float)):
+            by_ch[ch] = st
+        card = rec.get("mental_break_card")
+        if card:
+            break_chs.append((ch, card))
+        if rec.get("coping_hit"):
+            coping_chs.add(ch)
+    sorted_ch_stress = sorted(by_ch.items())
+
+    if len(sorted_ch_stress) < 2:
+        return []
+
+    # STRESS_RUNAWAY
+    runaway_streak = 0
+    for i in range(1, len(sorted_ch_stress)):
+        if sorted_ch_stress[i][1] > sorted_ch_stress[i - 1][1]:
+            runaway_streak += 1
+            if runaway_streak >= 3:
+                findings.append({
+                    "severity": "advisory",
+                    "code": "STRESS_RUNAWAY",
+                    "consecutive_chs": [sorted_ch_stress[j][0] for j in range(i - 3, i + 1)],
+                    "stress_trail": [sorted_ch_stress[j][1] for j in range(i - 3, i + 1)],
+                    "suggestion": f"主角 stress 连续 {runaway_streak+1} 章单调上涨 → 应有 coping/relief 章节插入",
+                })
+                runaway_streak = 0
+        else:
+            runaway_streak = 0
+
+    # STRESS_PERMA_HIGH_NO_BREAK
+    high_chs = [ch for ch, s in sorted_ch_stress if s >= high_pct]
+    if len(high_chs) >= 5 and not break_chs:
+        findings.append({
+            "severity": "warning",
+            "code": "STRESS_PERMA_HIGH_NO_BREAK",
+            "high_stress_chs": high_chs,
+            "suggestion": f"主角 stress 在 {len(high_chs)} 章持续 ≥ 75% threshold 但从未触发 mental_break → 检查 stress_threshold_break 是否过高 / 触发逻辑是否漏",
+        })
+
+    # COPING_NEVER_TRIGGERED：高 stress 章中 coping_hit 全 False
+    if len(high_chs) >= 3 and not (set(high_chs) & coping_chs):
+        findings.append({
+            "severity": "advisory",
+            "code": "COPING_NEVER_TRIGGERED",
+            "high_stress_chs_unaddressed": high_chs,
+            "suggestion": f"高 stress 章节（{len(high_chs)} 章）从未在正文带入任何 coping 行为 → writer 漏消费",
+        })
+
+    # MENTAL_BREAK_EFFECTS_FORGOTTEN：break 后 ≥ 3 章无后续章 stress_trigger/card 引用
+    all_chs = [c for c, _ in sorted_ch_stress]
+    trigger_dump = {c: (r.get("stress_trigger") or "") for c, r in recs}
+    for b_ch, b_card in break_chs:
+        post_chs = [c for c in all_chs if c > b_ch][:5]
+        if len(post_chs) < 3:
+            continue
+        any_hit = any(b_card and b_card in (trigger_dump.get(c) or "") for c in post_chs)
+        if not any_hit:
+            findings.append({
+                "severity": "warning",
+                "code": "MENTAL_BREAK_FORGOTTEN",
+                "break_at_ch": b_ch,
+                "card_id": b_card,
+                "post_chs": post_chs,
+                "suggestion": f"ch{b_ch} 触发 mental_break {b_card}，但后续 {len(post_chs)} 章无任何记录引用该 card → permanent_changes 没落实",
+            })
+    return findings
+
+
+def scan_moves_usage_ledger(project_root: Path, recs) -> list[dict]:
+    """与 scan_moves_usage 同构，moves_used + 出场判定来自账本。"""
+    moves_data = load_json(project_root / "_数据库" / "角色行动表.json", {}) or {}
+    chars = moves_data.get("characters", {}) or {}
+    if not chars:
+        return []
+
+    per_chapter_moves = {}     # ch -> moves_used list
+    per_chapter_appear = {}    # ch -> char_mention_counts dict
+    chapters = []
+    for ch, rec in recs:
+        chapters.append(ch)
+        per_chapter_moves[ch] = rec.get("moves_used", []) or []
+        per_chapter_appear[ch] = rec.get("char_mention_counts", {}) or {}
+
+    findings = []
+    for char_name, char_data in chars.items():
+        moves_def = char_data.get("moves", []) or []
+        if not moves_def:
+            continue
+        per_move_total = Counter()
+        per_move_per_ch = defaultdict(lambda: defaultdict(int))
+        for ch, used_list in per_chapter_moves.items():
+            for u in used_list:
+                if u.get("character") != char_name:
+                    continue
+                mid = u.get("move_id")
+                inst = u.get("instances", 1)
+                per_move_total[mid] += inst
+                per_move_per_ch[mid][ch] = inst
+
+        # MOVE_OVERUSE
+        for m in moves_def:
+            mid = m.get("move_id")
+            freq_cap = m.get("frequency_per_chapter", 99)
+            for ch, inst in per_move_per_ch[mid].items():
+                if inst > freq_cap:
+                    findings.append({
+                        "severity": "advisory",
+                        "code": "MOVE_OVERUSE",
+                        "character": char_name,
+                        "move_id": mid,
+                        "ch": ch,
+                        "instances": inst,
+                        "limit": freq_cap,
+                        "suggestion": f"{char_name} move {mid} 在 ch{ch} 用了 {inst} 次（上限 {freq_cap}）→ 公式化",
+                    })
+
+        moves_zero = [m.get("move_id") for m in moves_def if per_move_total[m.get("move_id")] == 0]
+        # 出场判定：char_mention_counts 命中 > 0（取代正文 grep）
+        char_appeared_chs = [ch for ch in chapters if (per_chapter_appear.get(ch, {}).get(char_name, 0) or 0) > 0]
+        # CHARACTER_VOICELESS
+        if char_appeared_chs and not per_move_total and len(char_appeared_chs) >= 3:
+            findings.append({
+                "severity": "warning",
+                "code": "CHARACTER_VOICELESS",
+                "character": char_name,
+                "appearances": char_appeared_chs,
+                "moves_count": len(moves_def),
+                "suggestion": f"{char_name} 在 {len(char_appeared_chs)} 章出场但 moves_used 全 0 → writer 完全没消费 moves 系统",
+            })
+        elif moves_zero and len(moves_zero) >= max(3, len(moves_def) // 2) and len(char_appeared_chs) >= 5:
+            findings.append({
+                "severity": "advisory",
+                "code": "MOVES_UNDERUSED",
+                "character": char_name,
+                "never_used_moves": moves_zero[:5],
+                "suggestion": f"{char_name} 有 {len(moves_zero)}/{len(moves_def)} moves 在近 {len(chapters)} 章 0 次使用 → 角色行为单一化",
+            })
+    return findings
+
+
+def scan_position_effect_ledger(recs) -> list[dict]:
+    """与 scan_position_effect 同构，position_effect_evals 来自账本（兼容两种键名）。"""
+    findings = []
+    positions = Counter()
+    effects = Counter()
+    total_evals = 0
+    for _ch, rec in recs:
+        evals = rec.get("position_effect_evals", []) or []
+        for e in evals:
+            if not isinstance(e, dict):
+                continue
+            p = e.get("position") or e.get("evaluated_position")
+            ef = e.get("effect") or e.get("evaluated_effect")
+            if p:
+                positions[p] += 1
+                total_evals += 1
+            if ef:
+                effects[ef] += 1
+    if total_evals < 3:
+        return []
+    pos_dist = {p: round(positions[p] / total_evals, 2) for p in ["controlled", "risky", "desperate"]}
+    eff_dist = {e: round(effects[e] / total_evals, 2) for e in ["great", "standard", "limited"]}
+
+    if pos_dist.get("controlled", 0) > 0.85:
+        findings.append({
+            "severity": "advisory",
+            "code": "POSITION_TOO_SAFE",
+            "distribution": pos_dist,
+            "suggestion": f"position 中 {pos_dist['controlled']:.0%} 是 controlled → 主角永远稳，叙事张力低",
+        })
+    if pos_dist.get("desperate", 0) > 0.6:
+        findings.append({
+            "severity": "warning",
+            "code": "POSITION_TOO_DESPERATE",
+            "distribution": pos_dist,
+            "suggestion": f"position 中 {pos_dist['desperate']:.0%} 是 desperate → 虐过头，读者疲劳",
+        })
+    if eff_dist.get("great", 0) > 0.7:
+        findings.append({
+            "severity": "advisory",
+            "code": "EFFECT_TOO_GREAT",
+            "distribution": eff_dist,
+            "suggestion": f"effect 中 {eff_dist['great']:.0%} 是 great → 无失败感，无成长压力",
+        })
+    if eff_dist.get("limited", 0) > 0.5:
+        findings.append({
+            "severity": "advisory",
+            "code": "EFFECT_TOO_LIMITED",
+            "distribution": eff_dist,
+            "suggestion": f"effect 中 {eff_dist['limited']:.0%} 是 limited → 始终半推半就，主角不主动",
+        })
+    return findings
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -313,15 +535,32 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    chapters = get_chapters(project_root, args.last_n)
-    if not chapters:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
 
-    findings = []
-    findings.extend(scan_stress_trend(project_root, chapters))
-    findings.extend(scan_moves_usage(project_root, chapters))
-    findings.extend(scan_position_effect(project_root, chapters))
+    use_ledger = IS_CLUSTER_MODE and (
+        csr.ledger_has_field(project_root, "stress_total")
+        or csr.ledger_has_field(project_root, "moves_used")
+        or csr.ledger_has_field(project_root, "position_effect_evals")
+    )
+    if use_ledger:
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        chapters = [ch for ch, _ in recs]
+        if not chapters:
+            print("[SKIP] 无账本章记录")
+            sys.exit(0)
+        findings = []
+        findings.extend(scan_stress_trend_ledger(project_root, recs))
+        findings.extend(scan_moves_usage_ledger(project_root, recs))
+        findings.extend(scan_position_effect_ledger(recs))
+    else:
+        chapters = get_chapters(project_root, args.last_n)
+        if not chapters:
+            print("[SKIP] 无已写章节")
+            sys.exit(0)
+
+        findings = []
+        findings.extend(scan_stress_trend(project_root, chapters))
+        findings.extend(scan_moves_usage(project_root, chapters))
+        findings.extend(scan_position_effect(project_root, chapters))
 
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)

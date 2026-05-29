@@ -32,6 +32,9 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -64,10 +67,26 @@ def main():
         sys.exit(2)
 
     chapter_dirs = find_chapter_dirs(project_root)
-    if not chapter_dirs:
+
+    # ===== 2026-05-29 cluster 化分支：last_ch + faction/relationship 信号摘要驱动 =====
+    # secret/will_learn 维度此前已读 reveal_at_cluster/learn_at_cluster（保留）。
+    # 本分支补 last_ch 锚点 + FACTION/RELATIONSHIPS 维度的账本来源。
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster」（仅影响账本派生的 movement 信号）。
+    use_ledger = csr.is_cluster_mode() and csr.ledger_has_field(project_root, "relationship_changes")
+    ledger_recs = []
+    if csr.is_cluster_mode():
+        ledger_recs = csr.get_chapter_records(project_root)
+        if ledger_recs and not chapter_dirs:
+            # 账本有章但物理目录尚未落盘 —— 仍可跑 last_ch 驱动的 overdue 检测
+            pass
+
+    if chapter_dirs:
+        last_ch = chapter_dirs[-1][0]
+    elif ledger_recs:
+        last_ch = ledger_recs[-1][0]
+    else:
         print("[OK] 无已写章节")
         sys.exit(0)
-    last_ch = chapter_dirs[-1][0]
     findings = []
 
     # ===== 1. RELATIONSHIPS_STAGNANT =====
@@ -93,11 +112,20 @@ def main():
         # 看是否所有 standing 都是 init 值（手工填的整数）
         # 通过检查 _changes 历史是否触发过 faction_standing_changes
         any_changed = False
-        for ch, d in chapter_dirs:
-            changes = load_json(d / f"第{ch:03d}章_changes.json", {})
-            if changes.get("factual", {}).get("faction_standing_changes"):
-                any_changed = True
-                break
+        # 2026-05-29 cluster 化：账本有 relationship_changes/faction_snapshot 时
+        # 用账本判定 faction 是否动过；否则回退逐章 glob faction_standing_changes。
+        if use_ledger:
+            any_changed = any(
+                rec.get("relationship_changes") or rec.get("faction_snapshot")
+                or rec.get("faction_standing_changes")
+                for _ch, rec in ledger_recs
+            )
+        if not any_changed:
+            for ch, d in chapter_dirs:
+                changes = load_json(d / f"第{ch:03d}章_changes.json", {})
+                if changes.get("factual", {}).get("faction_standing_changes"):
+                    any_changed = True
+                    break
         if not any_changed:
             findings.append({
                 "severity": "advisory",

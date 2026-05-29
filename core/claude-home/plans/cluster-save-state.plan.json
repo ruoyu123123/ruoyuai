@@ -95,14 +95,15 @@
     },
     {
       "n": 8,
-      "name": "wal-merge+learning-loop+judge-reports-archive",
-      "description": "合并 cluster 级 WAL + learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ 把本 cluster 所有 JudgeReport 存入 故事块摘要[cluster_id].judge_reports[]",
+      "name": "wal-merge+learning-loop+judge-reports-archive+ledger-build",
+      "description": "合并 cluster 级 WAL + learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ 把本 cluster 所有 JudgeReport 存入 故事块摘要[cluster_id].judge_reports[] + 调 cluster_summary_builder.py（经 save_state --build-cluster-summary）把整 cluster 富摘要（每章正文/changes/manifest/audit/judge 派生字段 + cluster 级 rollup）预算写入 故事块摘要.json 账本，供 step 9 cross_cluster aggregator 复用",
       "required": true,
       "skip_output_allowed": true,
       "expected_outputs": [],
       "scripts": [
         "python core/scripts/save_state.py {project_root} --auto-post-reflect-cluster {key}",
-        "python core/scripts/judge_reports_archive.py {project_root} --cluster {key} || true"
+        "python core/scripts/judge_reports_archive.py {project_root} --cluster {key} || true",
+        "python core/scripts/save_state.py {project_root} --build-cluster-summary {key}"
       ]
     },
     {

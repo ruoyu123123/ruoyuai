@@ -391,7 +391,7 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 
 ### 11.2 hard_gate 不可豁免清单（权威）
 
-以下 12 个 code 是 hard_gate，**AI 不可豁免**。与 `core/scripts/audit_hub.py` 的 `HARD_GATE_CODES` 常量一一对应（改清单必须两边同步）：
+以下 15 个 code 是 hard_gate，**AI 不可豁免**。与 `core/scripts/audit_hub.py` 的 `HARD_GATE_CODES` 常量一一对应（改清单必须两边同步）：
 
 | 维度 | code 数量 |
 |---|---|
@@ -400,6 +400,8 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 | 道具状态 | 2（ITEM_HOLDER_ABSENT / ITEM_NOT_YET_INTRODUCED） |
 | 传播债 | 1（PROPAGATION_DEBT_CREATED） |
 | 移动阅读体验 | 1（STYLE_单段超长 · v23.12 新增） |
+| 章末工艺（v2 cluster 新增） | 2（CHAPTER_END_FORBIDDEN_SCREENPLAY / CHAPTER_END_FORBIDDEN_TRANSITION） |
+| cluster 跨场景一致性（v2 cluster 新增） | 1（LOCKED_FACT_CROSS_SCENE_CONFLICT） |
 
 
 | code | 来源 | 类别 | 为什么不可豁免 |
@@ -416,6 +418,9 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 | `ITEM_NOT_YET_INTRODUCED` | validate_chapter | 道具状态 | 道具尚未引入就被用 = 道具状态矛盾 |
 | `PROPAGATION_DEBT_CREATED` | validate_chapter | 传播债 | 跨集合数据未同步 = 传播债 |
 | `STYLE_单段超长` | validate_style | 移动阅读 | 单段 > 120 CJK 字（每章 ≤1 例外）= 移动阅读硬上限。**为什么不可豁免**：v23.12 写入，基于 2026-05-21 调研（起点官方+中国作家网+12 来源互证），移动端 > 120 字单段严重不适，是读者体验客观下限。**项目级覆盖**：蒸馏文学向项目可写 `_数据库/style_scanner_overrides.json` 调高阈值，按 [[feedback_distill_scanner_threshold_link_missing]] 流程；不允许 AI 豁免单条。详见 memory `feedback_paragraph_length_hard_constraint` |
+| `CHAPTER_END_FORBIDDEN_SCREENPLAY` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现剧本体过渡（「（镜头XX）」等舞台指示）= 连续小说工艺破坏。**为什么不可豁免**：2026-05-28 cluster_001 ch4 三次翻车 sediment，章末是钩子不是收束。详见 memory `feedback_no_screenplay_stage_directions_in_novels` |
+| `CHAPTER_END_FORBIDDEN_TRANSITION` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏。**为什么不可豁免**：同上，章末不允许任何场景过渡收束 |
+| `LOCKED_FACT_CROSS_SCENE_CONFLICT` | locked_fact_cross_scene_scanner | cluster 跨场景一致性（v2 cluster 新增） | 人物卡 `locked_facts` 中的数值/描述类事实在 cluster 不同场景引用矛盾（如同角色年龄两处不符）= cluster 内设定矛盾。**为什么不可豁免**：与 `LOCKED_FACT_CONFLICT` 同级，是客观设定冲突非风格选择。2026-05-28 v2 cluster 化新增 |
 
 **其余全部 advisory，AI 可凭充分理由豁免**：A 机械（`BANNED_WORD` / `WC_TOO_SHORT` / `WC_TOO_LONG` 等）/ B 文笔（`validate_style` 12 项：对话占比、逗句比、段落均长、极短段、拟声格式 `PSEUDO_SOUND_MISSING` 等）/ B+ 文笔语义层（`semantic_slop_scanner` 8 检测器：`SEMANTIC_metaphor_explain` 隐喻后立即解释 / `SEMANTIC_aphorism` 金句体 / `SEMANTIC_neg_parallel` 否定式排比 / `SEMANTIC_copula_avoid` 系动词回避 / `SEMANTIC_fake_range` 虚假范围 / `SEMANTIC_over_hedge` 过度限定 / `SEMANTIC_forced_triple` 强行三段列举 / `SEMANTIC_tag_synonym_cycle` 对话标签同义词循环——抓 anti-slop 机械层正则漏掉的句级 AI 腔）/ C 叙事工艺（`narrative_scanner` 8 检测器：GMC / MRU / Orphan / Micro-tension / Repetition / POV / info_dump / **perspective_shift**——后者 P2-16 新增的人称切换检测，章内 first ↔ third 跳转报警）/ D 情节结构（`plot_structure_scanner` 7 检测器：beat / tryfail / midpoint / knowledge / arc / subplot / **kishotenketsu**——后者为 P1-4 新增的起承转结四段结构，仅对 `chapter_mode=solo_atmospheric` 激活）/ F 读者体验（`hook_strength_scanner` / `golden_three_scanner` / `HOOK_SUMMARY_ENDING` 等）+ `pacing_analyzer` / `emotion_arc_analyzer` 的所有检测项。
 

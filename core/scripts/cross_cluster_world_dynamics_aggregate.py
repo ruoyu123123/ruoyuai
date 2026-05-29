@@ -42,6 +42,10 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -189,15 +193,30 @@ def scan_storyteller_alignment(project_root: Path) -> list[dict]:
         return []
     pacer = load_json(pacer_path, {})
     log = pacer.get("chapter_outcome_log", []) or []
-    if len(log) < 5:
-        return []
     findings = []
 
-    # 简化：当前节拍器只存最新 narrator_recommendation，无历史 → 检查最近 N 章 outcome 分布
-    sorted_log = sorted(log, key=lambda e: e.get("ch", 0))
-    recent = sorted_log[-10:]
-    counts = Counter(e.get("outcome") for e in recent)
-    total = len(recent)
+    # 2026-05-29 cluster 化（轻改造）：叙事节拍器.json 仍是 narrator_recommendation 权威
+    # 来源（保留）。仅 outcome 趋势那段，cluster 模式优先取账本逐章 outcome 字段做分布
+    # （账本是写作端实时落账的最新真相）；账本无 outcome → 回退节拍器 chapter_outcome_log。
+    recent_outcomes = None
+    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "outcome"):
+        recs = csr.get_chapter_records(project_root)
+        outcomes = [(ch, rec.get("outcome")) for ch, rec in recs if rec.get("outcome")]
+        if len(outcomes) >= 5:
+            outcomes.sort(key=lambda x: x[0])
+            recent_outcomes = [o for _ch, o in outcomes[-10:]]
+
+    if recent_outcomes is not None:
+        counts = Counter(recent_outcomes)
+        total = len(recent_outcomes)
+    else:
+        if len(log) < 5:
+            return []
+        # 简化：当前节拍器只存最新 narrator_recommendation，无历史 → 检查最近 N 章 outcome 分布
+        sorted_log = sorted(log, key=lambda e: e.get("ch", 0))
+        recent = sorted_log[-10:]
+        counts = Counter(e.get("outcome") for e in recent)
+        total = len(recent)
     setback_pct = counts.get("setback", 0) / total
     win_pct = counts.get("win", 0) / total
 

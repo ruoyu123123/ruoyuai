@@ -40,7 +40,9 @@ CLUSTER_EVALUATOR = CWD / "cluster_evaluator.py"
 # 情绪关键词（粗暴版 · 用 narrative_scanner 同一套思路）
 POSITIVE_EMOTIONS = ["笑", "喜", "兴奋", "释然", "得意", "畅快", "胜利", "成功", "踏实"]
 NEGATIVE_EMOTIONS = ["怒", "怕", "颤", "崩", "绝望", "痛", "悔", "恨", "悲", "冷", "寒"]
-KICKER_KEYWORDS = ["然而", "突然", "可", "却", "..."]  # cliffhanger 触发词（注意 ... 三连点）
+# 2026-05-29 修：原列表含「可」「却」高频单字 → 章末统计被普通行文噪声淹没，钩子维度失真
+# （且 --strict 会据此 exit 2 误拦 plan）。换成强 cliffhanger 信号词（转折/意外），去掉单字噪声。
+KICKER_KEYWORDS = ["然而", "突然", "竟然", "居然", "不料", "没想到", "岂料", "..."]  # cliffhanger 触发词（注意 ... 三连点）
 KICKER_PUNCT = ["？", "……", "──"]
 
 

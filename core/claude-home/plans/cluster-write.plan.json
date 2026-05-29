@@ -70,7 +70,7 @@
     {
       "n": 6,
       "name": "splitter+chapter-titles+per-chapter-changes-zero-audit",
-      "description": "v2 cluster 化方案 · 纯格式输出步骤 · 0 质检（章节是输出格式，不是检测单位）· spawn novel-chapter-splitter MODE=ecas_freestyle/ecas_multi_chapter（cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ gen_chapter_titles.py --chapters <range>（normal/mid/high 三档）→ split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json · ★ 切章后 0 audit/0 scanner/0 质检 · 直接进 step 7 plan-end",
+      "description": "v2 cluster 化方案 · 纯格式输出步骤 · 0 质检（章节是输出格式，不是检测单位）· v27 freestyle 默认：调度器先检测上 cluster 的 章节/cluster_<prev>_draft/cluster_<prev>_pending_tail.txt 是否存在，存在则透传 PREVIOUS_PENDING_TAIL_PATH（splitter prepend 到本 cluster 草稿头联合切）· spawn novel-chapter-splitter MODE=ecas_freestyle（按字数硬范围 3000-4500/章自动算 N · 末章<3000 退回 cluster_<key>_pending_tail.txt 不强切）或 ecas_multi_chapter（_writer_mode=locked 兼容 · cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ gen_chapter_titles.py --chapters <range>（normal/mid/high 三档）→ split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json · ★ 切章后 0 audit/0 scanner/0 质检 · 直接进 step 7 plan-end",
       "required": true,
       "must_spawn_agent": "novel-chapter-splitter",
       "skip_output_allowed": false,
@@ -78,7 +78,10 @@
         "_数据库/.wal/splitter_cluster_{key}_decisions.json"
       ],
       "scripts": [
-        "# spawn novel-chapter-splitter MODE=ecas_multi_chapter CLUSTER_ID={key}",
+        "# 0) v27 跨 cluster 补料检测: 上 cluster pending_tail 存在则透传 PREVIOUS_PENDING_TAIL_PATH",
+        "# PREV_PENDING_TAIL={project_root}/章节/cluster_<prev_key>_draft/cluster_<prev_key>_pending_tail.txt",
+        "# 1) spawn novel-chapter-splitter MODE=ecas_freestyle CLUSTER_ID={key} CLUSTER_START_CH=<start> [PREVIOUS_PENDING_TAIL_PATH=$PREV_PENDING_TAIL] (locked 走 ecas_multi_chapter)",
+        "# freestyle 内部入口: python core/scripts/chapter_splitter.py {project_root} --mode ecas_freestyle --cluster-id cluster_{key} --cluster-start-ch <start> --draft {project_root}/章节/cluster_{key}_draft/cluster_{key}_draft.txt [--previous-pending-tail $PREV_PENDING_TAIL]",
         "python core/scripts/gen_chapter_titles.py --project {project_root} --chapters <range_from_splitter_wal>",
         "python core/scripts/split_cluster_changes.py {project_root} --cluster {key}"
       ]

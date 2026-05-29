@@ -26,6 +26,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import atomic_json
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -37,7 +41,8 @@ def load_json(p: Path, default=None):
 
 
 def save_json(p: Path, data: dict):
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 2026-05-29 修：裸写 → 原子写（atomic_write_json 内部已 mkdir + fsync）
+    atomic_json.atomic_write_json(p, data)
 
 
 def load_clocks(project_root: Path) -> dict:

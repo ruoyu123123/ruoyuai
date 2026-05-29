@@ -30,6 +30,10 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -56,10 +60,30 @@ def main():
         sys.exit(0)
 
     # 当前已写最大章
-    chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                      for d in (project_root / "章节").glob("第*章")
-                      if re.match(r"第(\d+)章", d.name))
-    cur_ch = chapters[-1] if chapters else 0
+    # 2026-05-29 cluster 化（轻改造）：伏笔表.json 仍是权威来源（保留），cluster 模式
+    # 仅把 cur_ch 锚点改用末 cluster 的 chapter_range[1]，避免回退逐章 glob 文件夹。
+    # 另可选叠加账本 foreshadow_planted/paid 作为已落账增量（账本无则纯走伏笔表）。
+    cur_ch = 0
+    ledger_planted = set()
+    ledger_paid = set()
+    if csr.is_cluster_mode():
+        clusters = csr.get_clusters(project_root)
+        for c in clusters:
+            cr = c.get("chapter_range")
+            end = c.get("cluster_end_ch")
+            if isinstance(cr, list) and len(cr) >= 2 and isinstance(cr[1], int):
+                cur_ch = max(cur_ch, cr[1])
+            elif isinstance(end, int):
+                cur_ch = max(cur_ch, end)
+            for fid in c.get("foreshadow_planted") or []:
+                ledger_planted.add(fid)
+            for fid in c.get("foreshadow_paid") or []:
+                ledger_paid.add(fid)
+    if not cur_ch:
+        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                          for d in (project_root / "章节").glob("第*章")
+                          if re.match(r"第(\d+)章", d.name))
+        cur_ch = chapters[-1] if chapters else 0
     if not cur_ch:
         print("[SKIP] 无已写章节")
         sys.exit(0)
@@ -71,6 +95,9 @@ def main():
         fid = fs.get("id") or fs.get("name", "?")
         initiated = fs.get("initiated_at_ch") or fs.get("set_at_ch") or 0
         paid = fs.get("paid_at_ch") or fs.get("resolved_at_ch")
+        # 账本已记录该伏笔回收（增量补强，伏笔表漏标时兜底）
+        if not paid and fid in ledger_paid:
+            paid = cur_ch
         due_by = fs.get("due_by") or 0
         reinforced = fs.get("reinforced_chs") or fs.get("reinforced_at") or []
 

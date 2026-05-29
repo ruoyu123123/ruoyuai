@@ -40,6 +40,9 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -117,6 +120,25 @@ def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: 
         "ending_line_preview": ending_line[:50],
         "overlap_keywords": list(overlap),
         "reason": "前章 ending 关键词与后章首段重叠度",
+    }
+
+
+def scan_cliffhanger_resonance_ledger(prev_rec: dict, next_ch_dir: Path) -> dict:
+    """2026-05-29 cluster 化：账本预算了前章 cliffhanger_resonance_next（与下一章 head
+    的重叠分）时，直接取用，省去 ending_line 关键词重扫。DCAS pre_opening 仍 exempt。"""
+    score = prev_rec.get("cliffhanger_resonance_next")
+    ending_type = prev_rec.get("ending_type", "")
+    ending_line = prev_rec.get("ending_line", "")
+    if has_pre_opening(next_ch_dir) or ending_type in ("悬念断章",):
+        return {"score": 1.0, "reason": "DCAS pre_opening 模式或悬念断章，物理承接 OK", "exempt": True}
+    if not isinstance(score, (int, float)):
+        return {"score": -1, "reason": "账本无 cliffhanger_resonance_next"}
+    return {
+        "score": round(float(score), 2),
+        "ending_type": ending_type,
+        "ending_line_preview": ending_line[:50],
+        "overlap_keywords": [],
+        "reason": "账本预算的前章 ending 与后章首段重叠度（cluster 摘要驱动）",
     }
 
 
@@ -241,9 +263,16 @@ def read_emotion(project_root: Path, ch: int) -> int | None:
     return data.get("emotion", {}).get("value")
 
 
-def scan_emotion_gap(project_root: Path, prev_ch: int, next_ch: int) -> dict:
-    e1 = read_emotion(project_root, prev_ch)
-    e2 = read_emotion(project_root, next_ch)
+def scan_emotion_gap(project_root: Path, prev_ch: int, next_ch: int, ledger_by_ch: dict | None = None) -> dict:
+    # 2026-05-29 cluster 化：账本有 emotion_value → 用账本；否则回退读 WAL summary。
+    def _emo(ch):
+        if ledger_by_ch is not None:
+            rec = ledger_by_ch.get(ch)
+            if rec is not None and isinstance(rec.get("emotion_value"), (int, float)):
+                return rec["emotion_value"]
+        return read_emotion(project_root, ch)
+    e1 = _emo(prev_ch)
+    e2 = _emo(next_ch)
     if e1 is None or e2 is None:
         return {"detected": False, "reason": "summary 缺失"}
     diff = abs(e1 - e2)
@@ -280,6 +309,28 @@ def main():
         all_texts[ch] = read_chapter_text(d, ch) or ""
         all_changes[ch] = read_changes(d, ch) or {}
 
+    # ===== 2026-05-29 cluster 化：账本有任一 continuity 字段 → 维度 1/2/4 摘要驱动 =====
+    # cliffhanger 维度账本无 cliffhanger_resonance_next 时该维度单独回退正文逻辑；
+    # 维度 3（物件持续性）依赖正文别名匹配，账本无对应文本字段 → 始终走磁盘。
+    ledger_by_ch = None
+    if csr.is_cluster_mode() and (
+        csr.ledger_has_field(project_root, "time_advance")
+        or csr.ledger_has_field(project_root, "ending_type")
+        or csr.ledger_has_field(project_root, "emotion_value")
+        or csr.ledger_has_field(project_root, "cliffhanger_resonance_next")
+    ):
+        ledger_by_ch = {ch: rec for ch, rec in csr.get_chapter_records(project_root)}
+
+    def _changes_like(ch: int) -> dict:
+        """把账本 ChapterRecord 包成 scan_time_gap 期望的 {factual:{time_advance,plot_nodes}} 形态。"""
+        rec = (ledger_by_ch or {}).get(ch)
+        if rec is None:
+            return all_changes.get(ch, {})
+        return {"factual": {
+            "time_advance": rec.get("time_advance", {}) or {},
+            "plot_nodes": rec.get("plot_nodes", []) or [],
+        }}
+
     findings = []
     pairwise = []
 
@@ -289,7 +340,11 @@ def main():
         next_ch, next_d = chapter_dirs[i + 1]
 
         # 维度 1: cliffhanger
-        cliff = scan_cliffhanger_resonance(all_changes.get(prev_ch, {}), all_texts.get(next_ch, ""), next_d)
+        prev_ledger_rec = (ledger_by_ch or {}).get(prev_ch)
+        if prev_ledger_rec is not None and isinstance(prev_ledger_rec.get("cliffhanger_resonance_next"), (int, float)):
+            cliff = scan_cliffhanger_resonance_ledger(prev_ledger_rec, next_d)
+        else:
+            cliff = scan_cliffhanger_resonance(all_changes.get(prev_ch, {}), all_texts.get(next_ch, ""), next_d)
         if not cliff.get("exempt") and cliff.get("score", -1) >= 0 and cliff["score"] < 0.2:
             findings.append({
                 "dimension": "cliffhanger",
@@ -304,10 +359,10 @@ def main():
             })
 
         # 维度 2: 时间跳跃
-        time_gap = scan_time_gap(all_changes.get(prev_ch, {}), all_changes.get(next_ch, {}))
+        time_gap = scan_time_gap(_changes_like(prev_ch), _changes_like(next_ch))
         if time_gap.get("detected"):
             # 检查后章 plot_nodes 是否有过渡说明
-            next_plots = all_changes.get(next_ch, {}).get("factual", {}).get("plot_nodes", [])
+            next_plots = _changes_like(next_ch).get("factual", {}).get("plot_nodes", [])
             has_transition = any(
                 any(kw in str(p).lower() for kw in ["过渡", "周末", "回忆", "醒来", "睡了"])
                 for p in next_plots
@@ -326,7 +381,7 @@ def main():
                 })
 
         # 维度 4: 情绪断层
-        emo_gap = scan_emotion_gap(project_root, prev_ch, next_ch)
+        emo_gap = scan_emotion_gap(project_root, prev_ch, next_ch, ledger_by_ch)
         if emo_gap.get("detected"):
             findings.append({
                 "dimension": "emotion",

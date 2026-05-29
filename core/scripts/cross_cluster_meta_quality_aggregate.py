@@ -41,6 +41,9 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -64,14 +67,20 @@ def read_text(project_root: Path, ch: int) -> str:
 
 # ---------- A. CHAPTER_LENGTH_DISTRIBUTION ----------
 
-def scan_length_distribution(project_root: Path, chapters: list[int]) -> list[dict]:
+def scan_length_distribution(project_root: Path, chapters: list[int],
+                             lengths: list[tuple[int, int]] | None = None) -> list[dict]:
+    """lengths 不传 → 逐章读正文算 CJK（原磁盘逻辑）；传入 → 直接用（cluster 账本 cjk_count）。
+
+    2026-05-29 cluster 化：仅前置数据来源可替换，下游中位数/趋势/方差判定逻辑原样保留。
+    """
     findings = []
-    lengths = []  # [(ch, char_count)]
-    for ch in chapters:
-        text = read_text(project_root, ch)
-        # 中文字数（剔除空白和半角符号）
-        cn_chars = len(re.findall(r"[一-鿿]", text))
-        lengths.append((ch, cn_chars))
+    if lengths is None:
+        lengths = []  # [(ch, char_count)]
+        for ch in chapters:
+            text = read_text(project_root, ch)
+            # 中文字数（剔除空白和半角符号）
+            cn_chars = len(re.findall(r"[一-鿿]", text))
+            lengths.append((ch, cn_chars))
     if len(lengths) < 3:
         return []
 
@@ -169,6 +178,47 @@ def scan_summary_consistency(project_root: Path, chapters: list[int]) -> list[di
     return findings
 
 
+def scan_summary_consistency_from_ledger(chapter_records: list[tuple[int, dict]]) -> list[dict]:
+    """2026-05-29 cluster 化：账本驱动版 SUMMARY_CONSISTENCY。
+
+    用 ChapterRecord.summary（富摘要）+ text_keyword_set（正文关键词指纹）替代逐章读正文：
+    - SUMMARY_TOO_SHORT：summary < 50 CJK
+    - SUMMARY_KEYWORD_MISMATCH：摘要抽词与正文关键词指纹比对（指纹缺则跳过 keyword 检查）
+    severity/code/输出字段与磁盘版完全一致。
+    """
+    findings = []
+    for ch, rec in chapter_records:
+        summary_text = rec.get("summary") or ""
+        if not isinstance(summary_text, str) or not summary_text:
+            continue
+        text_len = len(re.findall(r"[一-鿿]", summary_text))
+        if text_len < 50:
+            findings.append({
+                "severity": "advisory",
+                "code": "SUMMARY_TOO_SHORT",
+                "ch": ch,
+                "summary_len": text_len,
+                "suggestion": f"ch{ch} 摘要仅 {text_len} 字（应 ≥ 50）→ 无效摘要",
+            })
+            continue
+        # 正文关键词指纹（builder 预抽）作为「正文」的代理；缺则不做 mismatch 检查
+        text_kw_set = set(rec.get("text_keyword_set") or [])
+        if not text_kw_set:
+            continue
+        kws = re.findall(r"[一-鿿]{3,4}", summary_text)[:10]
+        miss_kws = [kw for kw in kws if kw not in text_kw_set]
+        if len(miss_kws) >= len(kws) * 0.6 and len(kws) >= 5:
+            findings.append({
+                "severity": "warning",
+                "code": "SUMMARY_KEYWORD_MISMATCH",
+                "ch": ch,
+                "missing_kws": miss_kws[:6],
+                "miss_ratio": round(len(miss_kws) / len(kws), 2),
+                "suggestion": f"ch{ch} 摘要中 {round(len(miss_kws)/len(kws)*100)}% 关键词在正文指纹未出现 → 摘要可能在编故事",
+            })
+    return findings
+
+
 # ---------- C. LESSONS_FEEDBACK_LOOP ----------
 
 def scan_lessons_feedback(project_root: Path, chapters: list[int]) -> list[dict]:
@@ -247,15 +297,38 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    chapters = get_chapters(project_root, args.last_n)
-    if not chapters:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
 
     findings = []
-    findings.extend(scan_length_distribution(project_root, chapters))
-    findings.extend(scan_summary_consistency(project_root, chapters))
-    findings.extend(scan_lessons_feedback(project_root, chapters))
+
+    # ===== 2026-05-29 cluster 化分支：账本有 cjk_count → A/B 走账本（cjk_count + summary）=====
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster 的章」
+    use_ledger = (
+        csr.is_cluster_mode()
+        and csr.ledger_has_field(project_root, "cjk_count")
+    )
+    if use_ledger:
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        chapters = [ch for ch, _ in recs]
+        if not chapters:
+            print("[SKIP] cluster 账本无章记录")
+            sys.exit(0)
+        # A：用账本 cjk_count 构造 lengths（缺 cjk_count 的章跳过该数据点）
+        lengths = [(ch, int(rec["cjk_count"])) for ch, rec in recs
+                   if isinstance(rec.get("cjk_count"), (int, float))]
+        findings.extend(scan_length_distribution(project_root, chapters, lengths=lengths))
+        # B：用账本 summary + text_keyword_set
+        findings.extend(scan_summary_consistency_from_ledger(recs))
+        # C：lessons 反馈环仍基于磁盘正文（账本无对应字段，原样保留向后兼容）
+        findings.extend(scan_lessons_feedback(project_root, chapters))
+    else:
+        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
+        chapters = get_chapters(project_root, args.last_n)
+        if not chapters:
+            print("[SKIP] 无已写章节")
+            sys.exit(0)
+        findings.extend(scan_length_distribution(project_root, chapters))
+        findings.extend(scan_summary_consistency(project_root, chapters))
+        findings.extend(scan_lessons_feedback(project_root, chapters))
 
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)

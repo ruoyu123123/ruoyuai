@@ -28,6 +28,27 @@ IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fate_engine  # type: ignore
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：账本取末 cluster 锚点章
+
+
+def _anchor_ch_from_ledger(project_root: Path) -> int | None:
+    """2026-05-29 cluster 化：从账本取末 cluster 的 chapter_range[1] 作为漂移锚点 ch。
+
+    fate_drift 改造最轻 —— drift 逻辑全委托 fate_engine.drift，cluster 模式只是换了
+    「锚点 ch 从哪来」：逐章模式 glob 章目录取最大章号，cluster 模式取账本末 cluster 末章。
+    取不到（账本无 cluster / 末 cluster 未切章）返回 None → 调用方回退逐章 glob。
+    """
+    clusters = csr.get_clusters(project_root, last_n=1)
+    if not clusters:
+        return None
+    last = clusters[-1]
+    end = last.get("cluster_end_ch")
+    if isinstance(end, int):
+        return end
+    cr = last.get("chapter_range")
+    if isinstance(cr, list) and len(cr) == 2 and isinstance(cr[1], int):
+        return cr[1]
+    return None
 
 
 def main():
@@ -42,13 +63,18 @@ def main():
     # 决定 ch
     ch = args.ch
     if ch is None or args.auto:
-        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-        if not chapters:
-            print("[SKIP] 无已写章节")
-            sys.exit(0)
-        ch = chapters[-1]
+        # 2026-05-29 cluster 化：cluster 模式优先用账本末 cluster 末章当锚点
+        ledger_ch = _anchor_ch_from_ledger(project_root) if IS_CLUSTER_MODE else None
+        if ledger_ch is not None:
+            ch = ledger_ch
+        else:
+            chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                              for d in (project_root / "章节").glob("第*章")
+                              if re.match(r"第(\d+)章", d.name))
+            if not chapters:
+                print("[SKIP] 无已写章节")
+                sys.exit(0)
+            ch = chapters[-1]
 
     drift_result = fate_engine.drift(project_root, ch)
     overdue = drift_result.get("overdue_events", [])

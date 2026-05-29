@@ -61,7 +61,15 @@ def calc_importance(pattern: dict, current_ch: int, success_weight: float = 1.0)
 
     importance = usage_score * recency * confidence * success_weight
     # 钳制 [0, 1]
-    return min(1.0, max(0.0, importance / 5.0))  # / 5 normalize
+    score = min(1.0, max(0.0, importance / 5.0))  # / 5 normalize
+
+    # 2026-05-29 修：新 pattern usage_count==0 → log(1)=0 → importance 恒 0.0，
+    # 首次 consolidate 即被 evict（< evict_threshold 0.1）造成数据丢失。
+    # 给从未使用过的新 pattern 一个基于 confidence 的地板分，避免「没用过 = 删」。
+    # （LRU 本意是「久未访问才淘汰」，而非「没用过就删」。）
+    if usage == 0:
+        score = max(score, confidence * 0.5)
+    return score
 
 
 def consolidate(project_root: Path, current_ch: int,

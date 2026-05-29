@@ -173,6 +173,9 @@ HARD_GATE_CODES = {
     # 章末出现剧本体过渡 / 文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏
     "CHAPTER_END_FORBIDDEN_SCREENPLAY",
     "CHAPTER_END_FORBIDDEN_TRANSITION",
+    # v2 cluster 化（2026-05-28）：锁定事实跨场景引用冲突 = cluster 内设定矛盾
+    # locked_fact_cross_scene_scanner emit；不可豁免（与 LOCKED_FACT_CONFLICT 同级）
+    "LOCKED_FACT_CROSS_SCENE_CONFLICT",
 }
 
 
@@ -383,6 +386,150 @@ def _parse_flat_fscanner(stdout: str, check_key: str) -> list:
         "gate_level": _gate_level_for(code, severity),
         "code": code, "desc": str(warn),
         "source": check_key, "fix_hint": "",
+        "waived": False, "waive_reason": "",
+    })
+    return issues
+
+
+# ============ v2 cluster-only scanner 结果归一化 ============
+# 这 4 个 scanner 输出结构各异：
+#   · foreshadowing_handoff / pov_consistency → 顶层 issues[]，每条带 code/gate_level/severity/msg
+#   · locked_fact_cross_scene → 扁平顶层 code/gate_level/severity/warning（单 issue）
+#   · cross_scene_voice_drift → drift_issues[]（无 per-item code），顶层 warning/severity
+#   · narrative_short_sentence / repeat_noun_density → violations[]（无 per-item code），
+#     顶层 gate_level=advisory、verdict、severity 为 major/minor（映射 error/warning）
+# 之前这 6 个 parse_fn 全是 `lambda out,code: []`，scanner 结果（含 hard_gate）被静默丢弃。
+
+def _load_scanner_json(stdout: str) -> dict | None:
+    """从 scanner stdout 抽第一个 { 到最后一个 } 解析 JSON。失败返回 None。"""
+    try:
+        start = stdout.find("{")
+        end = stdout.rfind("}")
+        if start < 0 or end < 0:
+            return None
+        return json.loads(stdout[start:end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _norm_severity(sev: str) -> str:
+    """scanner 的 major/minor 等非标准 severity 归一化到 audit 标准（fatal/error/warning/info）。"""
+    m = {"major": "error", "minor": "warning"}
+    if sev in ("fatal", "error", "warning", "info"):
+        return sev
+    return m.get(sev, "warning")
+
+
+def _parse_issues_list_scanner(stdout: str, source: str, dimension: str,
+                               default_severity: str = "warning") -> list:
+    """通用解析：scanner 顶层 issues[]，每条带 code/gate_level/severity/msg/count/items。
+    用于 foreshadowing_handoff / pov_consistency。
+    gate_level 以 HARD_GATE_CODES 为权威（scanner 自报仅参考），但 scanner 显式标 hard_gate
+    的也尊重（如 foreshadowing tier-1 → hard_gate）。"""
+    issues = []
+    report = _load_scanner_json(stdout)
+    if not report:
+        return issues
+    for it in report.get("issues", []) or []:
+        if not isinstance(it, dict):
+            continue
+        code = it.get("code", "")
+        if not code:
+            continue
+        severity = _norm_severity(it.get("severity", default_severity))
+        # gate_level：HARD_GATE_CODES 命中 → hard_gate；否则尊重 scanner 自报（仅 hard_gate 提升）
+        gl = _gate_level_for(code, severity)
+        if gl != "hard_gate" and it.get("gate_level") == "hard_gate":
+            gl = "hard_gate"
+        desc = it.get("msg", "") or it.get("desc", "")
+        if it.get("count") is not None:
+            desc = f"{desc}（命中 {it.get('count')} 处）"
+        issues.append({
+            "dimension": dimension, "severity": severity,
+            "gate_level": gl, "code": code, "desc": str(desc),
+            "source": source, "fix_hint": "",
+            "waived": False, "waive_reason": "",
+        })
+    return issues
+
+
+def _parse_locked_fact_cross_scene(stdout: str) -> list:
+    """locked_fact_cross_scene_scanner：扁平顶层结构 —— 有冲突时 code/gate_level/severity/warning
+    全在顶层，conflicts[] 给细节。无冲突 code=null → 不产 issue。
+    LOCKED_FACT_CROSS_SCENE_CONFLICT 是 hard_gate（不可豁免）。"""
+    issues = []
+    report = _load_scanner_json(stdout)
+    if not report:
+        return issues
+    code = report.get("code")
+    if not code:
+        return issues  # 无冲突
+    severity = _norm_severity(report.get("severity", "error"))
+    desc = report.get("warning") or ""
+    conflicts = report.get("conflicts", []) or []
+    if conflicts:
+        first = conflicts[0]
+        desc = f"{desc} · {first.get('character','?')}: {first.get('fact','')[:40]} ↔ {first.get('conflict_value','')}"
+    issues.append({
+        "dimension": "剧情", "severity": severity,
+        "gate_level": _gate_level_for(code, severity),
+        "code": code, "desc": str(desc),
+        "source": "locked_fact_cross_scene_scanner", "fix_hint": "",
+        "waived": False, "waive_reason": "",
+    })
+    return issues
+
+
+def _parse_cross_scene_voice_drift(stdout: str) -> list:
+    """cross_scene_voice_drift_scanner：无 per-item code，drift_issues[] + 顶层 warning/severity。
+    有 warning 时合成单条 VOICE_DRIFT_CROSS_SCENE（advisory）。"""
+    issues = []
+    report = _load_scanner_json(stdout)
+    if not report:
+        return issues
+    warn = report.get("warning")
+    if not warn:
+        return issues
+    severity = _norm_severity(report.get("severity", "warning"))
+    code = "VOICE_DRIFT_CROSS_SCENE"
+    drift = report.get("drift_issues", []) or []
+    desc = str(warn)
+    if drift:
+        d0 = drift[0]
+        desc += f" · 例：{d0.get('character','?')} scene{d0.get('scene_idx','?')} 偏差 {d0.get('deviation_pct','?')}%"
+    issues.append({
+        "dimension": "风格", "severity": severity,
+        "gate_level": _gate_level_for(code, severity),
+        "code": code, "desc": desc,
+        "source": "cross_scene_voice_drift_scanner", "fix_hint": "",
+        "waived": False, "waive_reason": "",
+    })
+    return issues
+
+
+def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: str) -> list:
+    """narrative_short_sentence / repeat_noun_density：violations[]（无 per-item code），
+    顶层 gate_level=advisory。每条 violation 的 severity 为 major/minor（映射 error/warning）。
+    PASS（无 violation）→ 不产 issue。合成 1 条聚合 issue（severity 取最高）。"""
+    issues = []
+    report = _load_scanner_json(stdout)
+    if not report:
+        return issues
+    violations = report.get("violations", []) or []
+    if not violations:
+        return issues
+    # severity 取最高：任一 major → error，否则 warning
+    has_major = any(v.get("severity") == "major" for v in violations)
+    severity = "error" if has_major else "warning"
+    top_gl = report.get("gate_level", "advisory")
+    gl = _gate_level_for(code, severity)
+    if gl != "hard_gate" and top_gl == "hard_gate":
+        gl = "hard_gate"
+    desc = f"{report.get('scanner', source)}: {len(violations)} 处违规（verdict={report.get('verdict','?')}）"
+    issues.append({
+        "dimension": dimension, "severity": severity,
+        "gate_level": gl, "code": code, "desc": desc,
+        "source": source, "fix_hint": "",
         "waived": False, "waive_reason": "",
     })
     return issues
@@ -789,11 +936,15 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
         ("narrative_short_sentence_scanner",
          [sys.executable, str(nsss), str(body_file)],
          {0, 1},
-         lambda out, code: []),
+         lambda out, code: _parse_violations_scanner(
+             out, "narrative_short_sentence_scanner",
+             "NARRATIVE_SHORT_SENTENCE_OVERUSE", "风格")),
         ("repeat_noun_density_scanner",
          [sys.executable, str(rnds), str(body_file)],
          {0, 1},
-         lambda out, code: []),
+         lambda out, code: _parse_violations_scanner(
+             out, "repeat_noun_density_scanner",
+             "REPEAT_NOUN_DENSITY", "风格")),
     ]
 
     # v2 cluster 化：cluster mode 下加 4 个 cluster-only scanner（需要 cluster_draft 路径）
@@ -805,19 +956,21 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                 ("cross_scene_voice_drift",
                  [sys.executable, str(csvd), str(project_root), str(cluster_draft)],
                  {0, 1},
-                 lambda out, code: []),
+                 lambda out, code: _parse_cross_scene_voice_drift(out)),
                 ("foreshadowing_handoff",
                  [sys.executable, str(fhs), str(project_root), cluster_id_full],
                  {0, 1},
-                 lambda out, code: []),
+                 lambda out, code: _parse_issues_list_scanner(
+                     out, "foreshadowing_handoff_scanner", "剧情")),
                 ("locked_fact_cross_scene",
                  [sys.executable, str(lfcs), str(project_root), str(cluster_draft)],
                  {0, 1},
-                 lambda out, code: []),
+                 lambda out, code: _parse_locked_fact_cross_scene(out)),
                 ("pov_consistency",
                  [sys.executable, str(povs), str(project_root), str(cluster_draft)],
                  {0, 1},
-                 lambda out, code: []),
+                 lambda out, code: _parse_issues_list_scanner(
+                     out, "pov_consistency_scanner", "视角")),
             ])
         # L2 防御：章末锚定扫描 · 仅在切章后 (有 第NNN章 文件) 才跑
         # 检测是否已切章
@@ -858,7 +1011,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
 
     # 全部校验器都挂了 —— 致命，无法出审核结论
     if not any(s["ok"] for s in scanner_status):
-        return {"_fatal": "全部 7 个校验器执行失败", "scanner_status": scanner_status}
+        return {"_fatal": f"全部 {len(tasks)} 个校验器执行失败", "scanner_status": scanner_status}
 
     # v22 方案 3：角色情感弧偏差检测（advisory · 不阻塞）
     arc_drift_issues = _check_character_arc_drift(project_root, ch)

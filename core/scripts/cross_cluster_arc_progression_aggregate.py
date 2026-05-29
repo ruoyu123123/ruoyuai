@@ -32,6 +32,9 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 # 弧光阶段顺序（数字越大越晚）
 ARC_STAGE_ORDER = {
     "lie": 0,
@@ -68,26 +71,70 @@ def stage_order(stage: str) -> int:
     return ARC_STAGE_ORDER.get(base, -1)
 
 
+def _build_char_stages_from_ledger(project_root):
+    """2026-05-29 cluster 化：从账本逐章 arc_stage 重建
+    {char_name: {"stages_by_chapter": {ch: stage}}}，复用下游同一套阶段判定逻辑。
+
+    ledger 的 arc_stage = {char: stage_str}（per-chapter）。STAGE_NOT_UPDATED 在账本
+    模式下无 _last_updated_at_ch 元信息，故仅产出 JUMP/REGRESS/STAGNATION（与逐章模式
+    的核心阶序检测一致），不伪造 NOT_UPDATED。
+    """
+    char_stages: dict[str, dict[int, str]] = {}
+    for ch, rec in csr.get_chapter_records(project_root):
+        stage_map = rec.get("arc_stage") or {}
+        if not isinstance(stage_map, dict):
+            continue
+        for char_name, stage in stage_map.items():
+            if not stage:
+                continue
+            char_stages.setdefault(char_name, {})[ch] = stage
+    return {
+        cn: {"stages_by_chapter": {str(ch): s for ch, s in sb.items()}}
+        for cn, sb in char_stages.items()
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    arc_path = project_root / "_数据库" / "character_arc_state.json"
-    if not arc_path.exists():
-        print("[SKIP] character_arc_state.json 不存在")
-        sys.exit(0)
-    data = load_json(arc_path, {})
 
-    # 已写章节最大值
-    chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                      for d in (project_root / "章节").glob("第*章")
-                      if re.match(r"第(\d+)章", d.name))
-    max_written_ch = chapters[-1] if chapters else 0
+    # ===== 2026-05-29 cluster 化分支：账本有逐章 arc_stage → 走账本 =====
+    use_ledger = csr.is_cluster_mode() and csr.ledger_has_field(project_root, "arc_stage")
+    if use_ledger:
+        characters_iter = _build_char_stages_from_ledger(project_root)
+        # cluster 模式锚点：用 cluster 末章
+        cluster_list = csr.get_clusters(project_root)
+        max_written_ch = 0
+        for c in cluster_list:
+            cr = c.get("chapter_range")
+            end = c.get("cluster_end_ch")
+            if isinstance(cr, list) and len(cr) >= 2 and isinstance(cr[1], int):
+                max_written_ch = max(max_written_ch, cr[1])
+            elif isinstance(end, int):
+                max_written_ch = max(max_written_ch, end)
+        if not characters_iter:
+            print("[SKIP] cluster 账本无 arc_stage 记录")
+            sys.exit(0)
+    else:
+        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
+        arc_path = project_root / "_数据库" / "character_arc_state.json"
+        if not arc_path.exists():
+            print("[SKIP] character_arc_state.json 不存在")
+            sys.exit(0)
+        data = load_json(arc_path, {})
+        characters_iter = data.get("characters") or {}
+
+        # 已写章节最大值
+        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                          for d in (project_root / "章节").glob("第*章")
+                          if re.match(r"第(\d+)章", d.name))
+        max_written_ch = chapters[-1] if chapters else 0
 
     findings = []
-    for char_name, char_data in (data.get("characters") or {}).items():
+    for char_name, char_data in characters_iter.items():
         stages = char_data.get("stages_by_chapter", {}) or {}
         if not stages:
             continue
@@ -145,6 +192,10 @@ def main():
                 })
 
         # 2. STAGE_NOT_RECORDED：current_stage_at_ch 是否同步
+        # 2026-05-29 cluster 化：账本模式无 _last_updated_at_ch 元信息（per-chapter
+        # arc_stage 本就逐章同步），跳过此检测，不伪造 NOT_UPDATED。
+        if use_ledger:
+            continue
         last_recorded_ch = sorted_stages[-1][0]
         current_stage_label = char_data.get("current_stage_at_ch", "")
         last_updated = char_data.get("_last_updated_at_ch", 0)

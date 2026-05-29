@@ -44,6 +44,10 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -83,7 +87,9 @@ def scan_timeline(project_root: Path, chapters: list[int]) -> list[dict]:
     plan_dict = {}
     for cid, cdata in (progress.get("cluster_blueprint", {}) or {}).items():
         for sb in cdata.get("scene_storyboard", []):
-            ch_key = sb.get("ch")
+            # v2 迁移兼容：旧 schema 用 "ch"，migrate_data_model_v2 改名 "_legacy_ch"，
+            # 新 cluster schema 用 "scene_index" —— 三者皆兼容，否则 timeline 检测整体失效
+            ch_key = sb.get("ch") or sb.get("_legacy_ch") or sb.get("scene_index")
             if ch_key:
                 plan_dict[str(ch_key)] = sb
     for ch in chapters:
@@ -300,6 +306,217 @@ def scan_location_distribution(project_root: Path, chapters: list[int]) -> list[
     return findings
 
 
+# ---------- 2026-05-29 cluster 化：账本驱动变体 ----------
+
+def scan_timeline_ledger(recs: list) -> list[dict]:
+    """从账本逐章 time_anchor / time_transition_present 检测时间连续性。
+
+    builder 已预算 time_transition_present（本章开头是否有过渡描述），无需重读正文。
+    保留 TIME_FROZEN / TIME_GAP_UNEXPLAINED 同算法。
+    """
+    findings = []
+    per_ch_time = []
+    transition_flag = {}
+    for ch, rec in recs:
+        time_str = rec.get("time_anchor") or ""
+        if time_str:
+            per_ch_time.append((ch, time_str))
+            transition_flag[ch] = bool(rec.get("time_transition_present"))
+
+    if len(per_ch_time) < 3:
+        return []
+
+    same_streak = 0
+    streak_chs = []
+    for i in range(1, len(per_ch_time)):
+        if per_ch_time[i][1] == per_ch_time[i - 1][1]:
+            same_streak += 1
+            streak_chs.append(per_ch_time[i][0])
+            if same_streak >= 5:
+                findings.append({
+                    "severity": "advisory",
+                    "code": "TIME_FROZEN",
+                    "time": per_ch_time[i][1],
+                    "consecutive_chs": streak_chs[-5:],
+                    "suggestion": f"近 {same_streak + 1} 章 time_anchor 完全相同（{per_ch_time[i][1]}）→ 时间停滞，节奏感弱",
+                })
+                same_streak = 0
+                streak_chs = []
+        else:
+            same_streak = 0
+            streak_chs = []
+
+    DAY_KW = {"周一": 1, "周二": 2, "周三": 3, "周四": 4, "周五": 5, "周六": 6, "周日": 7}
+    for i in range(1, len(per_ch_time)):
+        t1, t2 = per_ch_time[i - 1][1], per_ch_time[i][1]
+        d1 = next((v for k, v in DAY_KW.items() if k in t1), None)
+        d2 = next((v for k, v in DAY_KW.items() if k in t2), None)
+        if d1 is not None and d2 is not None:
+            gap = (d2 - d1) % 7
+            if gap >= 3:
+                ch = per_ch_time[i][0]
+                # 账本预算的过渡标志取代正文扫描
+                if not transition_flag.get(ch, False):
+                    findings.append({
+                        "severity": "advisory",
+                        "code": "TIME_GAP_UNEXPLAINED",
+                        "from": {"ch": per_ch_time[i - 1][0], "time": t1},
+                        "to": {"ch": ch, "time": t2},
+                        "day_gap": gap,
+                        "suggestion": f"ch{per_ch_time[i-1][0]}→{ch} 时间跳 {gap} 天但开头无过渡描述",
+                    })
+    return findings
+
+
+def scan_item_chain_ledger(project_root: Path, recs: list) -> list[dict]:
+    """从账本逐章 item_changes 重建物件持有链；道具表仍读 道具.json 单例（权威清单）。"""
+    items_path = project_root / "_数据库" / "道具.json"
+    if not items_path.exists():
+        return []
+    items = load_json(items_path, {})
+    items_list = items.get("items", []) or []
+    findings = []
+
+    item_history = defaultdict(list)
+    chapters_seen = set()
+    for ch, rec in recs:
+        chapters_seen.add(ch)
+        for ic in rec.get("item_changes") or []:
+            if isinstance(ic, dict):
+                iid = ic.get("id") or ic.get("name")
+                holder = ic.get("holder") or ic.get("new_holder")
+                if iid:
+                    item_history[iid].append((ch, holder))
+
+    n_chapters = len(chapters_seen)
+    for it in items_list:
+        iid = it.get("id") or it.get("name")
+        if not iid:
+            continue
+        history = item_history.get(iid, [])
+        if not history:
+            if n_chapters >= 10:
+                findings.append({
+                    "severity": "advisory",
+                    "code": "ITEM_ABANDONED",
+                    "item_id": iid,
+                    "suggestion": f"道具 {iid} 在近 {n_chapters} 章无任何持有者变更或引用 → 死道具",
+                })
+            continue
+        per_ch = defaultdict(set)
+        for ch, h in history:
+            per_ch[ch].add(h)
+        for ch, hs in per_ch.items():
+            if len(hs) > 1:
+                findings.append({
+                    "severity": "warning",
+                    "code": "ITEM_DUPLICATE_HOLDER",
+                    "item_id": iid,
+                    "ch": ch,
+                    "holders": list(hs),
+                    "suggestion": f"道具 {iid} 在 ch{ch} 同时被多个角色持有 {hs}",
+                })
+    return findings
+
+
+def scan_location_distribution_ledger(project_root: Path, recs: list) -> list[dict]:
+    """从账本逐章 locations_mentioned 做地点分布；地图.json / 枢纽场景.json 仍读单例。"""
+    findings = []
+    map_path = project_root / "_数据库" / "地图.json"
+    if not map_path.exists():
+        return []
+    map_data = load_json(map_path, {})
+    locations = map_data.get("locations", []) or map_data.get("places", []) or []
+    if not locations:
+        return []
+    loc_names = []
+    for loc in locations:
+        if isinstance(loc, dict):
+            n = loc.get("name") or loc.get("id")
+        else:
+            n = str(loc)
+        if n:
+            loc_names.append(n)
+
+    visit_counts = Counter()
+    visit_chs = defaultdict(set)
+    per_ch_locations = {}
+    chapters = []
+    for ch, rec in recs:
+        chapters.append(ch)
+        mentioned = rec.get("locations_mentioned") or []
+        chs_locs = set()
+        for n in loc_names:
+            if any(n == m or n in str(m) for m in mentioned):
+                visit_counts[n] += 1
+                visit_chs[n].add(ch)
+                chs_locs.add(n)
+        per_ch_locations[ch] = chs_locs
+
+    if not visit_counts:
+        return findings
+
+    total_chs = len(chapters)
+
+    for n, count in visit_counts.most_common(3):
+        if count / total_chs >= 0.6:
+            findings.append({
+                "severity": "advisory",
+                "code": "LOCATION_OVERFREQ",
+                "location": n,
+                "appearance_chs": count,
+                "pct": round(count / total_chs, 2),
+                "suggestion": f"地点「{n}」近 {total_chs} 章出现在 {count} 章 ({round(count/total_chs*100)}%) → 场景单调",
+            })
+
+    never_visited = [n for n in loc_names if visit_counts[n] == 0]
+    if never_visited and len(loc_names) >= 5:
+        findings.append({
+            "severity": "advisory",
+            "code": "LOCATION_NEVER_VISITED",
+            "locations": never_visited[:8],
+            "total_unused": len(never_visited),
+            "total_locations": len(loc_names),
+            "suggestion": f"地图.json 中 {len(never_visited)}/{len(loc_names)} 个地点近 {total_chs} 章 0 次访问 → 死场景",
+        })
+
+    hubs_path = project_root / "_数据库" / "枢纽场景.json"
+    hub_labels = set()
+    if hubs_path.exists():
+        hd = load_json(hubs_path, {})
+        for h in hd.get("hubs", []) or []:
+            l = h.get("label", "")
+            if l:
+                hub_labels.add(l)
+
+    sorted_chs = sorted(per_ch_locations.keys())
+    cur_loc = None
+    streak = 0
+    for ch in sorted_chs:
+        locs = per_ch_locations[ch]
+        non_hub_locs = [l for l in locs if not any(h_lbl in l or l in h_lbl for h_lbl in hub_labels)]
+        if len(non_hub_locs) == 1:
+            l = non_hub_locs[0]
+            if l == cur_loc:
+                streak += 1
+                if streak >= 4:
+                    findings.append({
+                        "severity": "advisory",
+                        "code": "LOCATION_RHYTHM_BROKEN",
+                        "location": l,
+                        "consecutive_chs": streak + 1,
+                        "suggestion": f"非 hub 地点「{l}」连续 ≥ {streak + 1} 章 → 节奏沉滞",
+                    })
+                    streak = 0
+            else:
+                cur_loc = l
+                streak = 1
+        else:
+            cur_loc = None
+            streak = 0
+    return findings
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -307,6 +524,26 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
+
+    # ===== 2026-05-29 cluster 化分支：账本有 time_anchor/item_changes/locations_mentioned → 走账本 =====
+    use_ledger = csr.is_cluster_mode() and (
+        csr.ledger_has_field(project_root, "time_anchor")
+        or csr.ledger_has_field(project_root, "item_changes")
+        or csr.ledger_has_field(project_root, "locations_mentioned")
+    )
+    if use_ledger:
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        if not recs:
+            print("[SKIP] cluster 账本无章记录")
+            sys.exit(0)
+        chapters = sorted({ch for ch, _ in recs})
+        findings = []
+        findings.extend(scan_timeline_ledger(recs))
+        findings.extend(scan_item_chain_ledger(project_root, recs))
+        findings.extend(scan_location_distribution_ledger(project_root, recs))
+        _emit_report(project_root, chapters, findings)
+        return
+
     chapters = get_chapters(project_root, args.last_n)
     if not chapters:
         print("[SKIP] 无已写章节")
@@ -317,6 +554,11 @@ def main():
     findings.extend(scan_item_chain(project_root, chapters))
     findings.extend(scan_location_distribution(project_root, chapters))
 
+    _emit_report(project_root, chapters, findings)
+
+
+def _emit_report(project_root: Path, chapters: list, findings: list):
+    """2026-05-29 cluster 化：抽出报告写盘 + 退出码，磁盘分支与账本分支共用。"""
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -51,6 +51,9 @@ from statistics import mean, pstdev
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 # ===== 通用工具 =====
 
 def load_json(p: Path, default=None):
@@ -415,15 +418,49 @@ def main():
     protagonist = get_protagonist(project_root, args.protagonist)
     catchphrases = get_catchphrases(project_root, protagonist)
     cliche_dict = _load_cliche_dict(project_root)
-    chapters = find_chapter_files(project_root)
-    if not chapters:
-        print("[OK] 无已写章节，跳过跨章扫描")
-        sys.exit(0)
-    chapters = chapters[-args.last_n:]
 
-    # 逐章统计 20 维度（10 主防御 + 10 后备防御）
+    # ===== 2026-05-29 cluster 化分支：账本有 pattern_metrics → 取 builder 预算的 20 维 =====
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster 的章」；不再逐章 glob 重扫正文。
+    # 趋势/分布检测的数据点来自账本而非磁盘。
+    use_ledger = (
+        csr.is_cluster_mode()
+        and csr.ledger_has_field(project_root, "pattern_metrics")
+    )
     per_chapter: dict[int, dict] = {}
-    for ch, path in chapters:
+    # ledger 模式辅助数据（替代逐章 text 重扫的 Finding 10 / G11）
+    ledger_char_mentions: dict[int, dict] = {}   # ch -> {char: count}
+    ledger_idiom_hits: dict[int, dict] = {}      # ch -> {idiom: count}
+    chapter_records: list = []                   # [(ch, rec)]，cluster 模式才填
+
+    if use_ledger:
+        chapter_records = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        if not chapter_records:
+            print("[OK] cluster 账本无章记录，跳过跨章扫描")
+            sys.exit(0)
+        for ch, rec in chapter_records:
+            pm = rec.get("pattern_metrics")
+            if not isinstance(pm, dict):
+                continue
+            per_chapter[ch] = pm
+            ledger_char_mentions[ch] = rec.get("char_mention_counts") or {}
+            ledger_idiom_hits[ch] = rec.get("idiom_hits") or {}
+        if not per_chapter:
+            print("[OK] cluster 账本无 pattern_metrics，跳过跨章扫描")
+            sys.exit(0)
+        # 与磁盘分支 chapters 同构：[(ch, None)]，path 在 ledger 模式不可用
+        chapters = [(ch, None) for ch in sorted(per_chapter.keys())]
+        # 跳过逐章 text 统计循环（per_chapter 已由账本填好）
+        do_text_scan = False
+    else:
+        chapters = find_chapter_files(project_root)
+        if not chapters:
+            print("[OK] 无已写章节，跳过跨章扫描")
+            sys.exit(0)
+        chapters = chapters[-args.last_n:]
+        do_text_scan = True
+
+    # 逐章统计 20 维度（10 主防御 + 10 后备防御）—— 仅磁盘模式跑（cluster 模式 per_chapter 来自账本）
+    for ch, path in (chapters if do_text_scan else []):
         text = path.read_text(encoding="utf-8")
         tell_count, tell_rate = scan_tell_overuse(text)
         metaphor_count, metaphor_rate = scan_metaphor_overuse(text)
@@ -683,9 +720,14 @@ def main():
         for primary, aliases in char_aliases_map.items():
             counts = []
             for ch, path in chapters:
-                text = path.read_text(encoding="utf-8")
-                # 任一 alias 命中即计入，总数 = 主名出现次数（保守计）
-                total = max(text.count(a) for a in aliases)
+                if use_ledger:
+                    # 2026-05-29 cluster 化：用账本 char_mention_counts 替代逐章 text.count
+                    mentions = ledger_char_mentions.get(ch, {})
+                    total = max((mentions.get(a, 0) for a in aliases), default=0)
+                else:
+                    text = path.read_text(encoding="utf-8")
+                    # 任一 alias 命中即计入，总数 = 主名出现次数（保守计）
+                    total = max(text.count(a) for a in aliases)
                 counts.append(total)
             # 检查相邻章是否有跳跃（前章 ≥5 次 → 后章 ≤ 0.2 倍）
             for i in range(1, len(counts)):
@@ -704,7 +746,8 @@ def main():
                     })
 
     # ===== v19.6 G12 段落退化检测（章内）=====
-    for ch, path in chapters:
+    # 2026-05-29 cluster 化：需整章正文，账本无对应字段 → cluster 模式跳过本检测
+    for ch, path in ([] if use_ledger else chapters):
         text = path.read_text(encoding="utf-8")
         trend = scan_paragraph_length_trend(text)
         if trend.get("degradation"):
@@ -720,7 +763,14 @@ def main():
             })
 
     # ===== v19.6 G11 惯用语冷却期 =====
-    chapter_texts = {ch: path.read_text(encoding="utf-8") for ch, path in chapters}
+    if use_ledger:
+        # 2026-05-29 cluster 化：用账本 idiom_hits 合成「命中过的惯用语」文本，复用同一冷却期算法
+        chapter_texts = {
+            ch: "".join(idm for idm, n in (ledger_idiom_hits.get(ch, {}) or {}).items() if n)
+            for ch, _ in chapters
+        }
+    else:
+        chapter_texts = {ch: path.read_text(encoding="utf-8") for ch, path in chapters}
     cooldown_violations = scan_idiom_cooldown_violations(chapter_texts, cooldown=5)
     for v in cooldown_violations:
         findings.append({

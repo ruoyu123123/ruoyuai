@@ -32,6 +32,9 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -48,22 +51,14 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                      for d in (project_root / "章节").glob("第*章")
-                      if re.match(r"第(\d+)章", d.name))
-    recent = chapters[-args.last_n:] if chapters else []
-    if not recent:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
 
     # 收集每章 relationships 变化
     # 结构：(from, to) -> [{ch, affinity, trust, fear, respect}]
     history = defaultdict(list)
-    for ch in recent:
-        p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-        changes = load_json(p, {})
-        rels = (changes.get("factual", {}) or {}).get("relationships", []) or []
-        for r in rels:
+    recent = []
+
+    def _ingest_rels(ch, rels):
+        for r in rels or []:
             if not isinstance(r, dict):
                 continue
             f = r.get("from")
@@ -76,6 +71,31 @@ def main():
                     entry[dim] = r[dim]
             if len(entry) > 1:
                 history[(f, t)].append(entry)
+
+    # ===== 2026-05-29 cluster 化分支：账本有 relationships → 摘要驱动 =====
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster」
+    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "relationships"):
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        recent = sorted({ch for ch, _ in recs})
+        if not recent:
+            print("[SKIP] cluster 账本无 relationships 记录")
+            sys.exit(0)
+        for ch, rec in recs:
+            _ingest_rels(ch, rec.get("relationships", []))
+    else:
+        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
+        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                          for d in (project_root / "章节").glob("第*章")
+                          if re.match(r"第(\d+)章", d.name))
+        recent = chapters[-args.last_n:] if chapters else []
+        if not recent:
+            print("[SKIP] 无已写章节")
+            sys.exit(0)
+        for ch in recent:
+            p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
+            changes = load_json(p, {})
+            rels = (changes.get("factual", {}) or {}).get("relationships", []) or []
+            _ingest_rels(ch, rels)
 
     findings = []
 

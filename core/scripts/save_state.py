@@ -26,6 +26,22 @@ from pathlib import Path
 # v18：统一章节读写走 chapter_io，杜绝各脚本各自 split
 sys.path.insert(0, str(Path(__file__).parent))
 import chapter_io as cio
+# 2026-05-29 修 章号当cluster号：章号 ⇄ cluster_id 反查走单一权威工具
+import cluster_lookup
+
+
+def _resolve_cluster(root: Path, ch: int) -> tuple[str, bool]:
+    """把章号反查为真实 cluster_id。
+
+    返回 (cluster_id, inferred)：
+      - 反查命中 → (真实 cluster_id, False)
+      - 反查不到 → (normalize_cluster_id(ch) fallback, True)，调用方应给记录标
+        `_cluster_inferred = True`（表示是按章号推断、不可信）。
+    """
+    cid = cluster_lookup.ch_to_cluster_id(root, ch)
+    if cid:
+        return cid, False
+    return cluster_lookup.normalize_cluster_id(ch) or f"cluster_{ch:03d}", True
 
 
 # ============ IO ============
@@ -223,12 +239,21 @@ def apply_changes(root: Path, ch: int):
         if cat == "promise":
             if typ == "setup":
                 # v2 cluster 化（2026-05-28）：纯 cluster 模式
-                fs["promises"].append({
-                    "id": fid, "setup_cluster": f"cluster_{ch:03d}", "tier": act.get("tier", 3),
+                # 2026-05-29 修 章号当cluster号：setup_cluster/due_by_cluster 由 ch 反查真实 cluster_id
+                setup_cid, setup_inferred = _resolve_cluster(root, ch)
+                # due_by：「未来 20 章后到期」语义 —— 章偏移本身没错，错在拼成 cluster_id
+                due_ch = ch + 20
+                due_cid, due_inferred = _resolve_cluster(root, due_ch)
+                promise_rec = {
+                    "id": fid, "setup_cluster": setup_cid, "tier": act.get("tier", 3),
                     "description": act.get("description", ""),
-                    "due_by_cluster": act.get("due_by_cluster") or f"cluster_{ch + 20:03d}",
+                    "due_by_cluster": act.get("due_by_cluster") or due_cid,
                     "resolved": False,
-                })
+                }
+                # 任一为按章号推断（反查不到） → 打不可信标记
+                if setup_inferred or (not act.get("due_by_cluster") and due_inferred):
+                    promise_rec["_cluster_inferred"] = True
+                fs["promises"].append(promise_rec)
                 summary["applied"].append(f"伏笔 setup: {fid}")
             elif typ == "payoff":
                 for p in fs["promises"]:
@@ -267,14 +292,22 @@ def apply_changes(root: Path, ch: int):
         elif cat == "secret":
             if typ == "establish":
                 # v2 cluster 化（2026-05-28）：纯 cluster 模式
-                fs["secrets"].append({
+                # 2026-05-29 修 章号当cluster号：established_cluster/reveal_at_cluster 由 ch 反查
+                est_cid, est_inferred = _resolve_cluster(root, ch)
+                # reveal_at：「未来 50 章后揭晓」语义 —— 章偏移没错，错在拼成 cluster_id
+                reveal_ch = ch + 50
+                reveal_cid, reveal_inferred = _resolve_cluster(root, reveal_ch)
+                secret_rec = {
                     "id": fid,
                     "secret": act.get("description", ""),
-                    "established_cluster": f"cluster_{ch:03d}",
-                    "reveal_at_cluster": act.get("reveal_at_cluster") or f"cluster_{ch + 50:03d}",
+                    "established_cluster": est_cid,
+                    "reveal_at_cluster": act.get("reveal_at_cluster") or reveal_cid,
                     "known_by": act.get("known_by", []),
                     "status": "hidden",
-                })
+                }
+                if est_inferred or (not act.get("reveal_at_cluster") and reveal_inferred):
+                    secret_rec["_cluster_inferred"] = True
+                fs["secrets"].append(secret_rec)
             elif typ == "reveal":
                 for s in fs["secrets"]:
                     if s.get("id") == fid:
@@ -307,13 +340,18 @@ def apply_changes(root: Path, ch: int):
         ne_name = ne.get("name", "")
         if ne_name and ne_name not in char_map:
             # v2 cluster 化（2026-05-28）：纯 cluster 模式
-            cards["characters"].append({
+            # 2026-05-29 修 章号当cluster号：first_appear_cluster / growth_arc.cluster 由 ch 反查
+            appear_cid, appear_inferred = _resolve_cluster(root, ch)
+            ne_rec = {
                 "id": ne_name.lower().replace(" ", "_"),
                 "name": ne_name,
                 "role": ne.get("role", "配角"),
-                "first_appear_cluster": f"cluster_{ch:03d}",
-                "growth_arc": [{"cluster": f"cluster_{ch:03d}", "state": "初次登场", "key_change": "出场", "trigger": ""}],
-            })
+                "first_appear_cluster": appear_cid,
+                "growth_arc": [{"cluster": appear_cid, "state": "初次登场", "key_change": "出场", "trigger": ""}],
+            }
+            if appear_inferred:
+                ne_rec["_cluster_inferred"] = True
+            cards["characters"].append(ne_rec)
             summary["applied"].append(f"新角色: {ne_name}")
     save_json(db / "人物卡.json", cards)
 
@@ -739,6 +777,8 @@ def main():
                     help="v24: cluster 级 learning_loop")
     ap.add_argument("--report-cluster", type=str, metavar="CLUSTER_KEY",
                     help="v24: cluster 级报告")
+    ap.add_argument("--build-cluster-summary", type=str, metavar="CLUSTER_KEY",
+                    help="v2 账本: 把整 cluster 的富摘要预算写入 故事块摘要.json（走 cluster_summary_builder）")
     args = ap.parse_args()
 
     root = Path(args.project).resolve()
@@ -751,6 +791,13 @@ def main():
     elif args.git_commit_cluster: cmd_git_commit_cluster(root, args.git_commit_cluster)
     elif args.auto_post_reflect_cluster: cmd_auto_post_reflect_cluster(root, args.auto_post_reflect_cluster)
     elif args.report_cluster: cmd_report_cluster(root, args.report_cluster)
+    elif args.build_cluster_summary:
+        import cluster_summary_builder
+        _res = cluster_summary_builder.build_cluster_summary(root, args.build_cluster_summary)
+        if not _res.get("ok"):
+            print(f"[FAIL] build-cluster-summary {_res.get('cluster_id')} :: {_res.get('error')}", file=sys.stderr)
+            sys.exit(1)
+        print(f"[OK] 账本写入 {_res['cluster_id']} · 填章 {_res['chapters_filled']} · 总CJK {_res['word_count']}")
     else:
         ap.print_help()
         sys.exit(1)

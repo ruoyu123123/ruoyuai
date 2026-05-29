@@ -13,8 +13,13 @@
   - 截断后只重写正文 txt（cio.write_body）——CHANGES 全部归属 ch，splitter 不碰
   - pre_opening 仍写到 第(N+1)章/.pre_opening.txt
 
-用法:
+用法（DCAS 双章 · 默认）:
     python chapter_splitter.py <项目路径> <章节号> [--target 3000] [--tolerance 500] [--dry-run]
+
+用法（v27 ecas_freestyle · 按字数硬范围切 + 末章 pending_tail 补料）:
+    python chapter_splitter.py <项目路径> --mode ecas_freestyle \
+        --cluster-id cluster_006 --cluster-start-ch 26 --draft <cluster_draft.txt> \
+        [--rhythm 标准|紧凑|厚重|混合] [--previous-pending-tail <上 cluster pending_tail.txt>] [--dry-run]
 
 退出码: 0 成功 / 1 草稿不足 / 2 致命错误
 """
@@ -22,6 +27,7 @@
 import sys
 import re
 import json
+import math
 from pathlib import Path
 
 # v18：统一章节读写走 chapter_io
@@ -156,11 +162,248 @@ def score_split_point(paras, idx, target, tolerance):
     }
 
 
+# ============ v27 ecas_freestyle 模式 ============
+#
+# 与 DCAS 双章模式的差异（详见 novel-chapter-splitter.md §v27）：
+#   - 章数不由外部传 TARGET_CHAPTERS，splitter 按整 cluster 草稿字数自动算
+#     N = round(draft_cjk / 3500)，钳到 [ceil(draft_cjk/4500), floor(draft_cjk/3000)]
+#   - 每章硬范围 3000-4500 CJK（rhythm_profile 微调）
+#   - 末章 < 下限 → 不强切，末段退回 cluster_<key>_pending_tail.txt，本 cluster 只切 N-1 章
+#   - 接 --previous-pending-tail <path> 时把上 cluster 的 pending_tail prepend 到草稿头部联合切
+#   - 沿用 score_split_point 的最佳切点评分（每个等距锚点附近 ±tolerance 选最佳段落边界）
+#
+# 不破坏 DCAS：仅当 --mode ecas_freestyle 时走本分支，默认仍走原 main() 双章逻辑。
+
+# rhythm_profile → (每章下限, 每章上限, 目标)
+RHYTHM_RANGES = {
+    "紧凑": (3000, 4000, 3500),
+    "compact": (3000, 4000, 3500),
+    "标准": (3000, 4500, 3500),
+    "standard": (3000, 4500, 3500),
+    "厚重": (3500, 5000, 4200),
+    "heavy": (3500, 5000, 4200),
+    "混合": (3000, 4500, 3500),
+    "mixed": (3000, 4500, 3500),
+}
+
+
+def _resolve_rhythm(profile: str):
+    """返回 (lo, hi, target) 每章字数硬范围。未知 profile 回退标准 3000-4500。"""
+    return RHYTHM_RANGES.get((profile or "").strip(), (3000, 4500, 3500))
+
+
+def compute_freestyle_chapter_count(draft_cjk: int, lo: int, hi: int, target: int) -> int:
+    """按字数算 N（每章硬范围 [lo, hi]）。极端短篇返回 0（全段退 pending_tail）。"""
+    if draft_cjk < lo:
+        return 0  # 不切 · 整段写 pending_tail（等下 cluster 拼）
+    n_min = math.ceil(draft_cjk / hi)   # 每章不超 hi → 最少章数
+    n_max = math.floor(draft_cjk / lo)  # 每章不少 lo → 最多章数
+    if n_max < 1:
+        n_max = 1
+    if n_min < 1:
+        n_min = 1
+    if n_max < n_min:
+        n_max = n_min
+    n_recommend = max(1, round(draft_cjk / target))
+    return max(n_min, min(n_max, n_recommend))
+
+
+def _best_anchor_split(paras, anchor_word, tolerance, lo, hi, mid_target):
+    """在累计字数 ≈ anchor_word 的位置附近，按 score_split_point 找最佳段落边界。
+    返回选中的 para_idx（在该段之后切），找不到合法点返回 None。"""
+    best = None
+    for idx in range(len(paras) - 1):
+        wc = paras[idx]["cumulative_word_count"]
+        if abs(wc - anchor_word) > tolerance:
+            continue
+        r = score_split_point(paras, idx, mid_target, tolerance)
+        if r is None:
+            # 字数虽近锚点但 score_split_point 因 mid_target 判定出界 → 仍纳入（freestyle 用锚点距离兜底）
+            r = {"para_idx": idx, "char_offset": paras[idx]["char_offset_end"],
+                 "word_count_before": wc, "score": 0, "reasons": ["锚点兜底候选"]}
+        # freestyle 综合分：评分 - 偏离锚点惩罚
+        combined = r["score"] - abs(wc - anchor_word) / 100.0
+        if best is None or combined > best[0]:
+            best = (combined, r)
+    return best[1] if best else None
+
+
+def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
+                  rhythm_profile, previous_pending_tail, dry_run):
+    """v27 ecas_freestyle 切割。返回 report dict。"""
+    cluster_key = str(cluster_id).replace("cluster_", "")
+    lo, hi, target = _resolve_rhythm(rhythm_profile)
+    tolerance = 600  # freestyle 锚点搜索半径（比 DCAS 略宽，给最佳切点更多空间）
+
+    # 1. prepend 上 cluster pending_tail（跨 cluster 补料）
+    prepend_cjk = 0
+    content = draft_text
+    if previous_pending_tail:
+        prepend_text = previous_pending_tail.rstrip()
+        prepend_cjk = cio.count_cjk(prepend_text)
+        content = prepend_text + "\n\n" + content.lstrip("\n")
+
+    draft_cjk = cio.count_cjk(content)
+
+    # 2. 算 N
+    N = compute_freestyle_chapter_count(draft_cjk, lo, hi, target)
+
+    paras = split_paragraphs_with_offset(content)
+    decision_log = {
+        "rhythm_profile": rhythm_profile or "标准",
+        "per_chapter_range": [lo, hi],
+        "N_min": math.ceil(draft_cjk / hi) if draft_cjk >= lo else 0,
+        "N_max": math.floor(draft_cjk / lo) if draft_cjk >= lo else 0,
+        "N_recommend": max(1, round(draft_cjk / target)) if draft_cjk >= lo else 0,
+        "N_final": N,
+    }
+
+    report = {
+        "schema_version": "1.0",
+        "scanner": "chapter_splitter",
+        "mode": "ecas_freestyle",
+        "cluster_id": f"cluster_{cluster_key}",
+        "cluster_start_ch": cluster_start_ch,
+        "draft_cjk_total": draft_cjk,
+        "previous_pending_tail_consumed_cjk": prepend_cjk,
+        "dry_run": dry_run,
+        "_freestyle_decision_log": decision_log,
+    }
+
+    # 极端短篇 / 草稿不足一章下限 → 整段退 pending_tail，0 切
+    if N == 0:
+        report.update({
+            "chapters_split": 0,
+            "chapter_range": [],
+            "per_chapter_cjk": [],
+            "pending_tail": {
+                "exists": True,
+                "cjk": draft_cjk,
+                "path": f"章节/cluster_{cluster_key}_draft/cluster_{cluster_key}_pending_tail.txt",
+                "_doc": f"整段 {draft_cjk} CJK < 单章下限 {lo} · 不切 · 退 pending_tail 等下 cluster 拼接",
+            },
+        })
+        if not dry_run:
+            _write_pending_tail(project_root, cluster_key, content)
+            _write_splitter_wal(project_root, cluster_key, report)
+        report["files_written"] = []
+        return report
+
+    # 3. 等距锚点 + 最佳切点评分（找 N-1 个切点）
+    split_indices = []
+    used_idx = set()
+    for i in range(1, N):
+        anchor_word = draft_cjk * i / N
+        chosen = _best_anchor_split(paras, anchor_word, tolerance, lo, hi, target)
+        if chosen is None:
+            # 锚点附近无候选 → 退化：取累计字数最接近锚点的段落边界
+            chosen = _nearest_para(paras, anchor_word)
+        if chosen and chosen["para_idx"] not in used_idx:
+            split_indices.append(chosen["para_idx"])
+            used_idx.add(chosen["para_idx"])
+    split_indices.sort()
+
+    # 4. 按切点切成 chunk
+    chunks = _slice_by_indices(paras, split_indices)
+    per_chapter_cjk = [cio.count_cjk(c) for c in chunks]
+
+    # 5. 末章字数补料（Step F_v27）
+    pending_tail_text = None
+    pending_tail_path_rel = None
+    last_cjk = per_chapter_cjk[-1] if per_chapter_cjk else 0
+    if len(chunks) >= 2 and last_cjk < lo:
+        # 末章不达下限 · 末章退回 pending_tail · 实切 N-1 章
+        pending_tail_text = chunks.pop()
+        per_chapter_cjk.pop()
+        pending_tail_path_rel = f"章节/cluster_{cluster_key}_draft/cluster_{cluster_key}_pending_tail.txt"
+
+    chapters_split = len(chunks)
+    ch_start = int(cluster_start_ch)
+    ch_end = ch_start + chapters_split - 1
+
+    report.update({
+        "chapters_split": chapters_split,
+        "chapter_range": [ch_start, ch_end],
+        "per_chapter_cjk": per_chapter_cjk,
+        "split_para_indices": split_indices[:chapters_split - 1] if chapters_split >= 1 else [],
+        "pending_tail": {
+            "exists": pending_tail_text is not None,
+            "cjk": cio.count_cjk(pending_tail_text) if pending_tail_text else 0,
+            "path": pending_tail_path_rel,
+            "_doc": (f"末段 {cio.count_cjk(pending_tail_text)} CJK 不足 {lo} · 退回 pending_tail · 下 cluster 拼接后切"
+                     if pending_tail_text else None),
+        },
+    })
+
+    files_written = []
+    if not dry_run:
+        for offset, chunk in enumerate(chunks):
+            n = ch_start + offset
+            written = cio.write_body(project_root, n, chunk)
+            files_written.append(str(written.relative_to(project_root)))
+        if pending_tail_text is not None:
+            _write_pending_tail(project_root, cluster_key, pending_tail_text)
+            files_written.append(pending_tail_path_rel)
+        _write_splitter_wal(project_root, cluster_key, report)
+    report["files_written"] = files_written
+    return report
+
+
+def _nearest_para(paras, anchor_word):
+    """累计字数最接近 anchor_word 的段落边界（退化兜底）。"""
+    best = None
+    for idx in range(len(paras) - 1):
+        wc = paras[idx]["cumulative_word_count"]
+        d = abs(wc - anchor_word)
+        if best is None or d < best[0]:
+            best = (d, idx, wc)
+    if best is None:
+        return None
+    return {"para_idx": best[1], "char_offset": paras[best[1]]["char_offset_end"],
+            "word_count_before": best[2], "score": 0, "reasons": ["nearest_para 退化兜底"]}
+
+
+def _slice_by_indices(paras, split_indices):
+    """按 split_indices（在这些 para_idx 之后切）把段落组切成 chunk 文本列表。"""
+    chunks = []
+    start = 0
+    bounds = list(split_indices) + [len(paras) - 1]
+    for b in bounds:
+        seg = paras[start:b + 1]
+        if seg:
+            chunks.append("\n\n".join(p["text"] for p in seg))
+        start = b + 1
+    return [c for c in chunks if c.strip()]
+
+
+def _write_pending_tail(project_root, cluster_key, text):
+    """末段退回 章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt。"""
+    d = Path(project_root) / "章节" / f"cluster_{cluster_key}_draft"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"cluster_{cluster_key}_pending_tail.txt"
+    p.write_text(text.rstrip() + "\n", encoding="utf-8")
+    return p
+
+
+def _write_splitter_wal(project_root, cluster_key, report):
+    """写 splitter WAL（split_cluster_changes.py 消费 chapter_range / pending_tail）。"""
+    d = Path(project_root) / "_数据库" / ".wal"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"splitter_cluster_{cluster_key}_decisions.json"
+    p.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return p
+
+
 def main():
     args = sys.argv[1:]
     if len(args) < 2:
         print(__doc__)
         sys.exit(0)
+
+    # ---- v27 ecas_freestyle 分发（在 DCAS 位置参数解析之前拦截）----
+    if "--mode" in args and args[args.index("--mode") + 1:args.index("--mode") + 2] == ["ecas_freestyle"]:
+        return _main_freestyle(args)
+
     project_root = Path(args[0])
     ch = int(args[1])
     target = 3000
@@ -275,6 +518,60 @@ def main():
             str(pre_path.relative_to(project_root)),
         ]
 
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    sys.exit(0)
+
+
+def _main_freestyle(args):
+    """v27 ecas_freestyle CLI 入口。
+
+    用法:
+        python chapter_splitter.py <项目路径> --mode ecas_freestyle \\
+            --cluster-id cluster_006 --cluster-start-ch 26 \\
+            --draft <cluster_draft.txt 路径> \\
+            [--rhythm 标准|紧凑|厚重|混合] \\
+            [--previous-pending-tail <上 cluster pending_tail.txt>] \\
+            [--dry-run]
+    """
+    project_root = Path(args[0])
+    cluster_id = None
+    cluster_start_ch = None
+    draft_path = None
+    rhythm = "标准"
+    prev_pending_path = None
+    dry_run = "--dry-run" in args
+    for i, a in enumerate(args):
+        if a == "--cluster-id" and i + 1 < len(args):
+            cluster_id = args[i + 1]
+        elif a == "--cluster-start-ch" and i + 1 < len(args):
+            cluster_start_ch = int(args[i + 1])
+        elif a == "--draft" and i + 1 < len(args):
+            draft_path = args[i + 1]
+        elif a == "--rhythm" and i + 1 < len(args):
+            rhythm = args[i + 1]
+        elif a == "--previous-pending-tail" and i + 1 < len(args):
+            prev_pending_path = args[i + 1]
+
+    if cluster_id is None or cluster_start_ch is None or draft_path is None:
+        print("[FATAL] ecas_freestyle 缺参数: 需 --cluster-id / --cluster-start-ch / --draft", file=sys.stderr)
+        sys.exit(2)
+
+    dp = Path(draft_path)
+    if not dp.is_file():
+        print(f"[FATAL] 草稿文件不存在: {draft_path}", file=sys.stderr)
+        sys.exit(2)
+    draft_text = cio._strip_changes(dp.read_text(encoding="utf-8"))
+
+    previous_pending_tail = None
+    if prev_pending_path:
+        pp = Path(prev_pending_path)
+        if pp.is_file():
+            previous_pending_tail = pp.read_text(encoding="utf-8")
+        else:
+            print(f"[WARN] --previous-pending-tail 指定但文件不存在: {prev_pending_path}", file=sys.stderr)
+
+    report = run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
+                           rhythm, previous_pending_tail, dry_run)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     sys.exit(0)
 

@@ -34,6 +34,9 @@ from pathlib import Path
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+
 def load_json(p: Path, default=None):
     if not p.exists():
         return default
@@ -50,22 +53,37 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                      for d in (project_root / "章节").glob("第*章")
-                      if re.match(r"第(\d+)章", d.name))
-    recent = chapters[-args.last_n:] if chapters else []
-    if not recent:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
 
     # 收集 ending_type
     per_ch = []  # [(ch, ending_type)]
-    for ch in recent:
-        p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-        changes = load_json(p, {})
-        applied = ((changes.get("self_eval") or {}).get("applied_style") or {})
-        et = applied.get("ending_type", "")
-        per_ch.append((ch, et))
+    recent = []
+
+    # ===== 2026-05-29 cluster 化分支：账本有 ending_type → 摘要驱动 =====
+    # --last-n 在 cluster 模式语义为「最后 N 个 cluster」
+    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "ending_type"):
+        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        recent = sorted({ch for ch, _ in recs})
+        if not recent:
+            print("[SKIP] cluster 账本无 ending_type 记录")
+            sys.exit(0)
+        for ch, rec in recs:
+            et = rec.get("ending_type", "") or ""
+            per_ch.append((ch, et))
+    else:
+        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
+        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                          for d in (project_root / "章节").glob("第*章")
+                          if re.match(r"第(\d+)章", d.name))
+        recent = chapters[-args.last_n:] if chapters else []
+        if not recent:
+            print("[SKIP] 无已写章节")
+            sys.exit(0)
+        for ch in recent:
+            p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
+            changes = load_json(p, {})
+            applied = ((changes.get("self_eval") or {}).get("applied_style") or {})
+            et = applied.get("ending_type", "")
+            per_ch.append((ch, et))
 
     # 缺失检测
     missing_chs = [ch for ch, et in per_ch if not et]

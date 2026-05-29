@@ -30,6 +30,31 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 2026-05-29 修：引入共享反查工具，杜绝把章号机械拼成 cluster_{ch}
+import cluster_lookup
+
+# 2026-05-29 修：收集 ch→cluster 反查失败的 warn（main 结尾统一上报）
+_WARN_LOG: list = []
+
+
+# 2026-05-29 修：ch→cluster 正确反查 + None 时 fallback 标记
+# 返回 (cluster_id, inferred)：inferred=True 表示反查失败按章号近似（需 warn）
+def _ch_to_cluster(project: Path, ch, warn_log: list):
+    """把章号反查为 cluster_id。反查失败时回退 normalize_cluster_id 并标 inferred。
+
+    非 int（已是 cluster 串/None）原样归一，不触发 inferred。
+    """
+    if not isinstance(ch, int):
+        # 已是 cluster 串或其它，直接归一（None → None）
+        return cluster_lookup.normalize_cluster_id(ch), False
+    cid = cluster_lookup.ch_to_cluster_id(project, ch)
+    if cid:
+        return cid, False
+    # 反查不到 cluster 边界（cluster_blueprint/事件簇 尚未含 chapter_range）→ 近似回退
+    fallback = cluster_lookup.normalize_cluster_id(ch)
+    warn_log.append(f"ch={ch} → cluster 反查失败，按章号近似为 {fallback}")
+    return fallback, True
+
 
 def load(p: Path):
     if not p.exists():
@@ -80,7 +105,9 @@ def migrate_progress(project: Path, dry_run: bool):
             cp_new["_legacy_ch"] = cp_new.pop("ch", None)
             cluster_blueprint[cluster_key]["scene_storyboard"].append(cp_new)
         d["cluster_blueprint"] = cluster_blueprint
-        d["chapter_plan"] = d.pop("chapter_plan")  # 保留 legacy
+        # 2026-05-29 修：删除 d["chapter_plan"] = d.pop("chapter_plan") 纯 no-op
+        # （pop 同名 key 再回写无任何效果）。chapter_plan 原样保留为 legacy，
+        # 由下方 _chapter_plan_DEPRECATED_v27 标记说明已被 cluster_blueprint 取代。
         d["_chapter_plan_DEPRECATED_v27"] = "由 cluster_blueprint 取代 · 见 v2_cluster_centric.md"
         changes.append(f"chapter_plan → cluster_blueprint ({len(cluster_blueprint)} 组)")
     if "words_per_chapter" in d:
@@ -115,22 +142,39 @@ def migrate_foreshadowing(project: Path, dry_run: bool):
     if not d:
         return None
     changes = []
+    # 2026-05-29 修：章号→cluster 用 cluster_lookup 正确反查，不再机械拼 cluster_{ch}
     for fs in d.get("promises", []):
         if "setup_ch" in fs and "setup_cluster" not in fs:
             ch = fs.pop("setup_ch")
-            fs["setup_cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else "cluster_001"
+            cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+            fs["setup_cluster"] = cid or "cluster_001"
             fs["_legacy_setup_ch"] = ch
+            if inferred:
+                fs["_cluster_inferred"] = True
         if "due_by" in fs and isinstance(fs["due_by"], int):
-            fs["due_by_cluster"] = f"cluster_{fs['due_by']:03d}" if fs["due_by"] < 100 else None
+            # 沿用原阈值语义：due_by >= 100 视为"无明确截止"→ None
+            if fs["due_by"] < 100:
+                cid, inferred = _ch_to_cluster(project, fs["due_by"], _WARN_LOG)
+                fs["due_by_cluster"] = cid
+                if inferred:
+                    fs["_cluster_inferred"] = True
+            else:
+                fs["due_by_cluster"] = None
     for sec in d.get("secrets", []):
         if "established_ch" in sec and "established_cluster" not in sec:
             ch = sec.pop("established_ch")
-            sec["established_cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else "cluster_001"
+            cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+            sec["established_cluster"] = cid or "cluster_001"
             sec["_legacy_established_ch"] = ch
+            if inferred:
+                sec["_cluster_inferred"] = True
         if "reveal_at_ch" in sec and "reveal_at_cluster" not in sec:
             ch = sec.pop("reveal_at_ch")
-            sec["reveal_at_cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else None
+            cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+            sec["reveal_at_cluster"] = cid
             sec["_legacy_reveal_at_ch"] = ch
+            if inferred:
+                sec["_cluster_inferred"] = True
     changes.append(f"伏笔表 promises/secrets · _ch → _cluster")
     if not dry_run:
         save(p, d)
@@ -144,40 +188,60 @@ def migrate_characters(project: Path, dry_run: bool):
     if not d:
         return None
     changes = []
+    # 2026-05-29 修：8 处章号→cluster 全部改用 cluster_lookup 正确反查
     for c in d.get("characters", []):
         # first_appear
         if "first_appear_ch" in c and not isinstance(c.get("first_appear_ch"), str):
             ch = c.pop("first_appear_ch")
-            c["first_appear_cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else "cluster_001"
+            cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+            c["first_appear_cluster"] = cid or "cluster_001"
             c["_legacy_first_appear_ch"] = ch
+            if inferred:
+                c["_cluster_inferred"] = True
         # locked_facts
         for lf in c.get("locked_facts", []):
             if isinstance(lf, dict) and "since_ch" in lf:
                 ch = lf.pop("since_ch")
-                lf["since_cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else "cluster_001"
+                cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+                lf["since_cluster"] = cid or "cluster_001"
+                if inferred:
+                    lf["_cluster_inferred"] = True
         # knowledge.will_learn
         kn = c.get("knowledge", {})
         for wl in kn.get("will_learn", []) if isinstance(kn, dict) else []:
             if isinstance(wl, dict) and "learn_at_ch" in wl:
                 ch = wl.pop("learn_at_ch")
-                wl["learn_at_cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else None
+                cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+                wl["learn_at_cluster"] = cid
+                if inferred:
+                    wl["_cluster_inferred"] = True
         # knowledge_state
         for ks in kn.get("knowledge_state", []) if isinstance(kn, dict) else []:
             if isinstance(ks, dict) and "since_ch" in ks:
                 ch = ks.pop("since_ch")
-                ks["since_cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else None
+                cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+                ks["since_cluster"] = cid
+                if inferred:
+                    ks["_cluster_inferred"] = True
         # offscreen.actions
         off = c.get("offscreen", {})
         for act in off.get("actions", []) if isinstance(off, dict) else []:
             if isinstance(act, dict) and "ch_range" in act:
                 rng = act.pop("ch_range")
                 if isinstance(rng, list) and len(rng) == 2:
-                    act["cluster_range"] = [f"cluster_{rng[0]:03d}", f"cluster_{rng[1]:03d}"]
+                    lo_cid, lo_inf = _ch_to_cluster(project, rng[0], _WARN_LOG)
+                    hi_cid, hi_inf = _ch_to_cluster(project, rng[1], _WARN_LOG)
+                    act["cluster_range"] = [lo_cid, hi_cid]
+                    if lo_inf or hi_inf:
+                        act["_cluster_inferred"] = True
         # growth_arc
         for ga in c.get("growth_arc", []):
             if isinstance(ga, dict) and "ch" in ga:
                 ch = ga.pop("ch")
-                ga["cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else None
+                cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+                ga["cluster"] = cid
+                if inferred:
+                    ga["_cluster_inferred"] = True
     changes.append(f"人物卡 · 8 处 _ch 字段迁移到 _cluster")
     if not dry_run:
         save(p, d)
@@ -190,10 +254,14 @@ def migrate_items(project: Path, dry_run: bool):
     d = load(p)
     if not d:
         return None
+    # 2026-05-29 修：obtained_ch → obtained_cluster 用 cluster_lookup 正确反查
     for it in d.get("items", []):
         if "obtained_ch" in it:
             ch = it.pop("obtained_ch")
-            it["obtained_cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else "cluster_001"
+            cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+            it["obtained_cluster"] = cid or "cluster_001"
+            if inferred:
+                it["_cluster_inferred"] = True
     if not dry_run:
         save(p, d)
     return ["道具 · obtained_ch → obtained_cluster"]
@@ -205,10 +273,14 @@ def migrate_relations(project: Path, dry_run: bool):
     d = load(p)
     if not d:
         return None
+    # 2026-05-29 修：since_ch → since_cluster 用 cluster_lookup 正确反查
     for r in d.get("relationships", []):
         if "since_ch" in r:
             ch = r.pop("since_ch")
-            r["since_cluster"] = f"cluster_{ch:03d}" if isinstance(ch, int) else "cluster_001"
+            cid, inferred = _ch_to_cluster(project, ch, _WARN_LOG)
+            r["since_cluster"] = cid or "cluster_001"
+            if inferred:
+                r["_cluster_inferred"] = True
     if not dry_run:
         save(p, d)
     return ["关系 · since_ch → since_cluster"]
@@ -309,6 +381,7 @@ def main():
         print()
 
     all_changes = []
+    had_error = False  # 2026-05-29 修：任一子迁移出错 → 不写 done flag（防半迁移被二次 SKIP）
     for fn, name in [
         (migrate_progress, "进度.json"),
         (migrate_chapter_summary, "章纲摘要.json → 故事块摘要.json"),
@@ -331,14 +404,38 @@ def main():
                 print(f"[{name}] no changes")
         except Exception as e:
             print(f"[ERROR · {name}] {e}", file=sys.stderr)
+            had_error = True  # 2026-05-29 修：记录失败，结尾据此决定是否落 flag
 
-    if not args.dry_run:
-        flag.write_text(f"migrated at {datetime.now().isoformat()} · {len(all_changes)} changes\n", encoding="utf-8")
-        print()
-        print(f"[OK · v2 migration done] 共 {len(all_changes)} 处修改")
-    else:
+    # 2026-05-29 修：统一上报 ch→cluster 反查失败的近似项
+    if _WARN_LOG:
+        print(file=sys.stderr)
+        print(f"[WARN] ch→cluster 反查失败 {len(_WARN_LOG)} 处（已按章号近似 + 标 _cluster_inferred）:", file=sys.stderr)
+        for w in _WARN_LOG:
+            print(f"  · {w}", file=sys.stderr)
+
+    if args.dry_run:
+        # 2026-05-29 修：dry-run 永不写任何 flag（确认无副作用）
         print()
         print(f"[OK · dry-run] 共 {len(all_changes)} 处修改（未保存）")
+        return
+
+    if had_error:
+        # 2026-05-29 修：有子迁移失败 → 写 partial flag（非 done），二次运行不会被 SKIP
+        partial = project / "_数据库" / ".migration_v2_partial.flag"
+        partial.write_text(
+            f"PARTIAL migration at {datetime.now().isoformat()} · "
+            f"{len(all_changes)} changes applied · 有子迁移失败，未完成。\n"
+            f"请检查 backup ({bak.name}) 后重跑（先 --rollback 还原再重试）。\n",
+            encoding="utf-8",
+        )
+        print()
+        print(f"[PARTIAL · 有子迁移失败] 已应用 {len(all_changes)} 处 · 未写 done flag · 见 .migration_v2_partial.flag", file=sys.stderr)
+        sys.exit(1)
+
+    # 全部成功才落 done flag
+    flag.write_text(f"migrated at {datetime.now().isoformat()} · {len(all_changes)} changes\n", encoding="utf-8")
+    print()
+    print(f"[OK · v2 migration done] 共 {len(all_changes)} 处修改")
 
 
 if __name__ == "__main__":

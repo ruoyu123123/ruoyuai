@@ -59,21 +59,291 @@ def find_remaining_mes(dashishi: dict, completed_mes: set) -> list:
     return remaining
 
 
-def select_candidate_mes(remaining_mes: list, world_state: dict, character_arc: dict, last_consequence: list) -> list:
-    """启发式：从剩余 ME 中选 2-3 个 candidate，每个对应一个 cluster brief 雏形。
+# ───────────────────────── 启发式打分辅助 ─────────────────────────
 
-    策略：
-    1. 优先选 vol 跟当前推进 vol 一致的 ME
-    2. 优先选 parent_me 链上的下一个 ME（按 vol 顺序）
-    3. 主角 stage=lie_cracking → 优先选触发 setback 的 ME
-    4. 主角 stage=lie_broken → 优先选 recovery / win-streak ME
+# arc 阶段关键词 → 偏好的 ME 描述关键词
+_STAGE_SETBACK_TOKENS = ("lie_crack", "谎言", "裂", "动摇", "怀疑", "危机", "stage_1")
+_STAGE_RECOVERY_TOKENS = ("lie_broken", "觉醒", "recovery", "破局", "成长", "stage_3", "stage_4")
+_SETBACK_DESC_TOKENS = ("危机", "失败", "打击", "反转", "暴露", "背叛", "重创", "崩", "挫", "setback", "陷阱", "审查")
+_RECOVERY_DESC_TOKENS = ("突破", "成长", "反击", "胜", "夺回", "破局", "逆转", "翻盘", "联手", "win", "recovery")
+
+# CJK 安全分词：抽取所有 2-gram 中文片段 + 英文/数字 token
+import re as _re_mod
+
+
+def _vol_of_me(me: dict) -> int:
+    """从 ME 推断所属卷号。优先显式 vol 字段，否则从 me_id 前缀 'V1_ME_002' / 'V2.ME01' 解析。"""
+    if isinstance(me, dict):
+        v = me.get("vol")
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str) and v.strip().isdigit():
+            return int(v.strip())
+    mid = _get_me_id(me)
+    m = _re_mod.match(r"[Vv](\d+)", str(mid))
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return 0
+    return 0
+
+
+def _me_text(me: dict) -> str:
+    """聚合一个 ME 的可比对文本（description + name/title + triggers + trigger_condition）。"""
+    if not isinstance(me, dict):
+        return ""
+    parts = [
+        str(me.get("description", "")),
+        str(me.get("name", "")),
+        str(me.get("title", "")),
+    ]
+    trig = me.get("triggers")
+    if isinstance(trig, list):
+        parts.extend(str(t) for t in trig)
+    elif trig:
+        parts.append(str(trig))
+    tc = me.get("trigger_condition")
+    if isinstance(tc, dict):
+        parts.extend(str(v) for v in tc.values())
+    elif tc:
+        parts.append(str(tc))
+    return " ".join(parts)
+
+
+def _keyword_set(text: str) -> set:
+    """把任意文本拆成关键词集合：中文 2-gram + 英文单词/数字（≥2 字符）。"""
+    if not text:
+        return set()
+    toks = set()
+    # 英文 / 数字 token
+    for w in _re_mod.findall(r"[A-Za-z0-9_]{2,}", text):
+        toks.add(w.lower())
+    # 中文连续段切 2-gram（涟漪呼应靠重叠 2-gram 命中具体名词）
+    for seg in _re_mod.findall(r"[一-鿿]+", text):
+        if len(seg) >= 2:
+            for i in range(len(seg) - 1):
+                toks.add(seg[i:i + 2])
+        elif seg:
+            toks.add(seg)
+    return toks
+
+
+def _consequence_texts(last_consequence: list) -> str:
+    """把 last_consequence（dict / str 混合列表）拍平成一段文本。"""
+    out = []
+    for item in last_consequence or []:
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, dict):
+            # 常见后果字段名兜底全捞
+            for k in ("description", "effect", "consequence", "summary", "text", "note", "result"):
+                if item.get(k):
+                    out.append(str(item[k]))
+            if not any(item.get(k) for k in ("description", "effect", "consequence", "summary", "text", "note", "result")):
+                out.append(" ".join(str(v) for v in item.values() if isinstance(v, (str, int, float))))
+    return " ".join(out)
+
+
+def _faction_state_dict(world_state: dict) -> dict:
+    """兼容两种世界状态形态：显式 factions_state，或退回 global_state。"""
+    if not isinstance(world_state, dict):
+        return {}
+    fs = world_state.get("factions_state")
+    if isinstance(fs, dict) and fs:
+        return fs
+    gs = world_state.get("global_state")
+    if isinstance(gs, dict):
+        return gs
+    return {}
+
+
+def _extreme_factions(world_state: dict) -> list:
+    """找出处于极值（power≤10 或 stress 高）的势力名，用于 faction 张力加分。"""
+    extreme = []
+    fs = _faction_state_dict(world_state)
+    for name, val in fs.items():
+        try:
+            if isinstance(val, dict):
+                power = val.get("power")
+                stress = val.get("stress") or val.get("压力") or val.get("关注度")
+                if isinstance(power, (int, float)) and power <= 10:
+                    extreme.append(str(name))
+                    continue
+                if isinstance(stress, (int, float)) and stress >= 70:
+                    extreme.append(str(name))
+                    continue
+            elif isinstance(val, (int, float)):
+                # 标量极值：很低（濒危）或很高（高压关注）
+                if val <= 10 or val >= 70:
+                    extreme.append(str(name))
+        except Exception:
+            continue
+    return extreme
+
+
+def _current_advancing_vol(world_state: dict, character_arc: dict) -> int:
+    """推断当前推进卷号：优先 world_state.current_cluster.vol / current_vol，否则 0（不可用）。"""
+    if isinstance(world_state, dict):
+        for key in ("current_vol", "advancing_vol", "vol"):
+            v = world_state.get(key)
+            if isinstance(v, int):
+                return v
+            if isinstance(v, str) and v.strip().isdigit():
+                return int(v.strip())
+        cc = world_state.get("current_cluster")
+        if isinstance(cc, dict):
+            v = cc.get("vol")
+            if isinstance(v, int):
+                return v
+    if isinstance(character_arc, dict):
+        v = character_arc.get("current_vol")
+        if isinstance(v, int):
+            return v
+    return 0
+
+
+def _arc_stages(character_arc: dict) -> list:
+    """收集所有角色的 current_stage（小写），主角通常排第一。"""
+    out = []
+    if isinstance(character_arc, dict):
+        for c in character_arc.get("characters", []) or []:
+            if isinstance(c, dict) and c.get("current_stage"):
+                out.append(str(c["current_stage"]).lower())
+    return out
+
+
+def _stage_matches(stages: list, tokens) -> bool:
+    return any(any(tok in s for tok in tokens) for s in stages)
+
+
+def _score_one_me(
+    me: dict,
+    cur_vol: int,
+    completed_me_ids: set,
+    stages: list,
+    consequence_kw: set,
+    extreme_factions: list,
+) -> tuple:
+    """给单个 ME 打分。返回 (score, reasons)。"""
+    score = 0
+    reasons = []
+    me_id = _get_me_id(me)
+    me_text = _me_text(me)
+    me_kw = _keyword_set(me_text)
+
+    # 1. vol 连续性
+    if cur_vol:
+        if _vol_of_me(me) == cur_vol:
+            score += 30
+            reasons.append(f"vol{cur_vol} 连续（与当前推进卷一致）")
+
+    # 2. parent_me 链：ME 的 parent_me 指向已完成 ME → 推进主线
+    parent = me.get("parent_me") if isinstance(me, dict) else None
+    if parent and completed_me_ids and parent in completed_me_ids:
+        score += 25
+        reasons.append(f"承接已完成主线 ME「{parent}」（parent_me 链下游）")
+
+    # 3. arc 阶段匹配
+    setback_hits = [t for t in _SETBACK_DESC_TOKENS if t in me_text]
+    recovery_hits = [t for t in _RECOVERY_DESC_TOKENS if t in me_text]
+    if _stage_matches(stages, _STAGE_SETBACK_TOKENS) and setback_hits:
+        score += 35
+        reasons.append(f"主角处于谎言裂痕期 → 制造 setback/冲突（命中：{','.join(setback_hits[:3])}）")
+    if _stage_matches(stages, _STAGE_RECOVERY_TOKENS) and recovery_hits:
+        score += 35
+        reasons.append(f"主角处于觉醒/恢复期 → 推 recovery/win（命中：{','.join(recovery_hits[:3])}）")
+
+    # 4. 涟漪呼应：ME 文本与最近后果文本关键词重叠
+    if consequence_kw and me_kw:
+        overlap = me_kw & consequence_kw
+        if overlap:
+            inc = min(40, 8 * len(overlap))
+            score += inc
+            sample = list(overlap)[:4]
+            reasons.append(f"呼应最近涟漪后果（重叠：{','.join(sample)}）")
+
+    # 5. faction 张力：ME 提到处于极值的势力名
+    #    real-data 兼容：global_state 键常是「上级审查组_关注度」这类「主体_指标」复合名，
+    #    直接全名 substring 多半命不中 → 同时拿下划线/常见指标后缀切出的主体片段去匹配。
+    for fname in extreme_factions:
+        if not fname:
+            continue
+        frags = {fname}
+        # 切 '_' 分段
+        for seg in str(fname).split("_"):
+            if len(seg) >= 2:
+                frags.add(seg)
+        # 剥常见指标后缀，留主体名
+        for suf in ("关注度", "存续状态", "活跃度", "暴露度", "压力", "状态", "度"):
+            if fname.endswith(suf) and len(fname) > len(suf) + 1:
+                frags.add(fname[: -len(suf)].rstrip("_"))
+        hit = next((fr for fr in frags if fr and len(fr) >= 2 and fr in me_text), None)
+        if hit:
+            score += 20
+            reasons.append(f"涉及极值势力「{hit}」（power/stress 处于临界 → 张力点）")
+            break  # 单 ME 只加一次 faction 分，避免叠爆
+
+    return score, reasons
+
+
+def select_candidate_mes(
+    remaining_mes: list,
+    world_state: dict,
+    character_arc: dict,
+    last_consequence: list,
+    completed_me_ids: set = None,
+) -> list:
+    """启发式：从剩余 ME 中给每个打分排序，取 top 3 个 candidate。
+
+    打分维度（基于世界状态 + 涟漪 + arc 阶段 + 主线链）：
+    1. vol 连续性 —— ME 所属卷 == 当前推进卷（+30）
+    2. parent_me 链 —— ME 承接已完成 ME（+25）
+    3. arc 阶段匹配 —— 谎言裂痕期偏 setback / 觉醒期偏 recovery（+35）
+    4. 涟漪呼应 —— ME 文本与最近后果关键词重叠（+8/重叠，封顶 40）
+    5. faction 张力 —— ME 涉及处于极值（power≤10 或 stress 高）的势力（+20）
+
+    保底：所有信号缺失 / 打分全 0 → 退回 remaining_mes[:3]（保持原行为，不破坏）。
+    返回的每个 ME（浅拷贝）附 `_emergence_score` + `_emergence_reasons`（list[str]）。
     """
-    candidates = []
+    if not remaining_mes:
+        return []
 
-    # 取前 3 个未完成 ME（默认按 ME 池顺序 = 设计的故事推进顺序）
-    candidates = remaining_mes[:3]
+    completed_me_ids = completed_me_ids or set()
+    cur_vol = _current_advancing_vol(world_state, character_arc)
+    stages = _arc_stages(character_arc)
+    consequence_kw = _keyword_set(_consequence_texts(last_consequence))
+    extreme_factions = _extreme_factions(world_state)
 
-    return candidates
+    scored = []
+    for idx, me in enumerate(remaining_mes):
+        score, reasons = _score_one_me(
+            me, cur_vol, completed_me_ids, stages, consequence_kw, extreme_factions
+        )
+        scored.append((score, idx, me, reasons))
+
+    # 保底：所有打分为 0（信号全缺）→ 退回原行为 remaining_mes[:3]
+    if all(s == 0 for s, _, _, _ in scored):
+        out = []
+        for me in remaining_mes[:3]:
+            me2 = dict(me) if isinstance(me, dict) else me
+            if isinstance(me2, dict):
+                me2["_emergence_score"] = 0
+                me2["_emergence_reasons"] = ["保底：无世界状态/涟漪/arc 信号 → 按 ME 池设计顺序取前 3"]
+            out.append(me2)
+        return out
+
+    # 按分降序；同分按原顺序（idx 升序）稳定排序 = 保留设计推进顺序
+    scored.sort(key=lambda t: (-t[0], t[1]))
+
+    out = []
+    for score, _, me, reasons in scored[:3]:
+        me2 = dict(me) if isinstance(me, dict) else me
+        if isinstance(me2, dict):
+            me2["_emergence_score"] = score
+            me2["_emergence_reasons"] = reasons or ["（基础分）按设计顺序保留"]
+        out.append(me2)
+    return out
 
 
 def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) -> dict:
@@ -82,17 +352,25 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) 
     v26: title fallback - 大势卡 ME 可能只有 description 没 title · 自动取 description 头 30 字。
     """
     me_id = _get_me_id(me)
-    title = me.get("title") or ""
+    title = me.get("title") or me.get("name") or ""
     if not title:
         # fallback: description 前 30 字 (截断在标点处) 作为 title
         desc = me.get("description", "")
         title = desc[:30].rstrip("，。！？、")
         if len(desc) > 30:
             title += "…"
+    # v24 fluid: 把涌现打分理由透传进 scope_summary，让用户看到「为什么涌现这个」
+    reasons = me.get("_emergence_reasons") or []
+    score = me.get("_emergence_score")
+    why = ""
+    if reasons:
+        why = f" 〔涌现理由(分{score}): " + "；".join(str(r) for r in reasons) + "〕"
     return {
         "cluster_id": cluster_id,
         "parent_me": me_id,
-        "scope_summary": f"[CANDIDATE {ord}] 围绕 ME「{title}」展开。{me.get('description', '')}",
+        "scope_summary": f"[CANDIDATE {ord}] 围绕 ME「{title}」展开。{me.get('description', '')}{why}",
+        "_emergence_score": score,
+        "_emergence_reasons": reasons,
         "expected_word_range": {"min": 16000, "max": 22000},
         "scenes_estimated": 4,
         "estimated_chapters": 4,
@@ -141,8 +419,8 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     elif isinstance(world_state.get("consequence_tracker"), list):
         last_consequence = world_state["consequence_tracker"][-5:]
 
-    # 选 candidate ME
-    candidate_mes = select_candidate_mes(remaining, world_state, character_arc, last_consequence)
+    # 选 candidate ME（传 completed_mes 供 parent_me 链打分）
+    candidate_mes = select_candidate_mes(remaining, world_state, character_arc, last_consequence, completed_me_ids=completed_mes)
     if not candidate_mes:
         return {"ok": False, "error": "无符合启发式条件的 candidate ME"}
 

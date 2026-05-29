@@ -37,11 +37,15 @@ def main():
     if "plan_tracker" not in command or "step" not in command:
         sys.exit(0)
 
-    # 解析 plan_id 和 step n
-    m = re.search(r"plan_tracker\.py\s+step\s+[\"']?([\w\-]+)[\"']?\s+--n\s+(\d+)", command)
-    if not m:
+    # 2026-05-29 修【安全·绕过】：解耦提取 plan_id / --n，不再要求 plan_id 紧跟 step
+    # 再紧跟 --n（否则把旗标插在中间就能让位置耦合正则 miss 而绕过）。
+    if not re.search(r"plan_tracker\.py\s+step\b", command):
         sys.exit(0)
-    plan_id, n = m.group(1), int(m.group(2))
+    pid_m = re.search(r"\bstep\s+(?:-\S+\s+)*[\"']?([A-Za-z0-9_][\w\-]*)[\"']?", command)
+    n_m = re.search(r"--n\s+(\d+)", command)
+    if not pid_m or not n_m:
+        sys.exit(0)
+    plan_id, n = pid_m.group(1), int(n_m.group(1))
 
     # 找 plan JSON（对齐 plan_tracker.runtime_plans_dir 的实际路径）
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", "."))

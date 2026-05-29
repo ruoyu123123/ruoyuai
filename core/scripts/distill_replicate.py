@@ -294,11 +294,8 @@ def main():
     parser.add_argument("--output", required=True,
                         help="输出 txt 路径")
 
-    # chapter 模式参数
-    parser.add_argument("--chapter-ref",
-                        help="[chapter 模式] 参考章节 txt 路径")
-    parser.add_argument("--target-words", type=int,
-                        help="[chapter 模式] 目标 CJK 字数（默认 4000）· cluster 模式自动估算")
+    # 2026-05-29 修：删除残留的 chapter 模式参数 --chapter-ref / --target-words
+    # （v3 已删 chapter 模式，--mode choices 只剩 cluster，这两个参数无人读取 = 死代码）
 
     # cluster 模式参数
     parser.add_argument("--cluster-ref",
@@ -334,14 +331,10 @@ def main():
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ========== chapter 模式已彻底删除（v3 cluster 化方案 2026-05-28）==========
-    if args.mode == "chapter":
-        print("[FATAL] --mode chapter 已删除（v3 cluster 化方案 2026-05-28）", file=sys.stderr)
-        print("   原因：整个系统为故事块服务 · chapter 视野违背 cluster 单轨原则", file=sys.stderr)
-        print("   替代：用 --mode cluster --cluster-ref cluster_XXX --project <path>", file=sys.stderr)
-        sys.exit(2)
+    # 2026-05-29 修：删除不可达的 `if args.mode == "chapter"` 死分支
+    # （--mode choices=["cluster"]，argparse 已在解析阶段拒绝 chapter，此分支永不可达）
 
-    # ========== 分支 3: cluster 模式（主推） ==========
+    # ========== cluster 模式（v3 唯一形态） ==========
     if not args.cluster_ref or not args.project:
         print("[ERROR] --mode cluster 需要 --cluster-ref + --project", file=sys.stderr)
         sys.exit(2)
@@ -431,7 +424,7 @@ def main():
         "total_target_words": chapters_count * words_per_chapter,
         "total_actual_cjk_chars": cjk_count(full_text),
         "total_elapsed_seconds": round(total_elapsed, 1),
-        "produced_by": "distill_replicate.py v2 · cluster mode · A' 半 cluster timeout 防御",
+        "produced_by": "distill_replicate.py v3 · cluster mode · A' 半 cluster timeout 防御",  # 2026-05-29 修：v2→v3 对齐文件头
     }
     output_path.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')

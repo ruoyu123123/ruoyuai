@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
+import cluster_lookup  # noqa: E402  2026-05-29 修：obtained_cluster 是 cluster_id 不是章号
 
 
 def load_json(p, default=None):
@@ -78,14 +79,24 @@ def build_state_at_chapter(project_root: Path, target_ch: int) -> dict:
         }
     # 加载道具初始状态
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 obtained_cluster
+    # 2026-05-29 修：obtained_cluster 是 cluster_id（如 cluster_002），原代码把抽出的
+    # cluster 序号（2）直接和章号 target_ch 比是量纲错误。改用 cluster_id_to_range 取
+    # 该 cluster 起始章 lo，用 lo <= target_ch 判断道具所属 cluster 是否在 target_ch 前已开始。
+    # 反查不到 range 时保守默认包含（道具已在库即已设定），并记入 fallback 标记。
     items = load_json(project_root / "_数据库" / "道具.json", {}).get("items", [])
-    import re as _re
     for it in items:
         oc = it.get("obtained_cluster", "cluster_999")
-        _m = _re.search(r"(\d+)", oc) if isinstance(oc, str) else None
-        obtained = int(_m.group(1)) if _m else 999
-        if obtained <= target_ch:
+        _rng = cluster_lookup.cluster_id_to_range(project_root, oc)
+        if _rng is not None:
+            include = _rng[0] <= target_ch
+            range_fallback = False
+        else:
+            # 反查不到 cluster 章范围（fluid v27 章数未回填等）：保守默认包含
+            include = True
+            range_fallback = True
+        if include:
             state["items"][it.get("name", "")] = {
+                "_obtained_cluster_range_fallback": range_fallback,
                 "holder": it.get("holder", "unknown"),
                 "obtained_at_cluster": it.get("obtained_cluster"),
                 "type": it.get("type"),

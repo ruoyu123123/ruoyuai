@@ -19,6 +19,22 @@ import json
 import sys
 from pathlib import Path
 
+# 2026-05-29 修 章号当cluster号：章号 ⇄ cluster_id 反查走单一权威工具
+sys.path.insert(0, str(Path(__file__).parent))
+import cluster_lookup
+
+
+def _resolve_cluster(project_root: Path, ch: int) -> tuple[str, bool]:
+    """章号反查真实 cluster_id。返回 (cluster_id, inferred)。
+
+    反查不到 → fallback 到 normalize_cluster_id(ch) 并标 inferred=True
+    （表示按章号推断、不可信，调用方应给记录加 `_cluster_inferred`）。
+    """
+    cid = cluster_lookup.ch_to_cluster_id(project_root, ch)
+    if cid:
+        return cid, False
+    return cluster_lookup.normalize_cluster_id(ch) or f"cluster_{ch:03d}", True
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -91,7 +107,9 @@ def main():
             promoted_emerged.append(name)
             # 同步加最小人物卡骨架
             if not any(c.get("name") == name or c.get("id") == name for c in cards.get("characters", [])):
-                cards["characters"].append({
+                # 2026-05-29 修 章号当cluster号：first_appear_cluster / growth_arc.cluster 由 ch 反查真实 cluster_id
+                appear_cid, appear_inferred = _resolve_cluster(project_root, ch)
+                card_rec = {
                     "id": name, "name": name,
                     "name_aliases": [],
                     "role": role,
@@ -105,10 +123,13 @@ def main():
                     "arc": "（待蒸馏）",
                     "status": "活跃",
                     # v2 cluster 化（2026-05-28）：纯 cluster 模式
-                    "first_appear_cluster": f"cluster_{ch:03d}",
+                    "first_appear_cluster": appear_cid,
                     "_lazy_spawned": True,
                     "_distill_recommended_cluster": f"cluster_{ch+5:03d}",
-                })
+                }
+                if appear_inferred:
+                    card_rec["_cluster_inferred"] = True
+                cards["characters"].append(card_rec)
         else:
             pool["extras"].append({"id": name, "ch": ch, "role": role})
             added_extras.append(name)

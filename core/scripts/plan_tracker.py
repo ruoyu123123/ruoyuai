@@ -70,8 +70,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac  # 2026-05-29 修：attestation 改 HMAC 防伪造
 import json
 import os
+import secrets  # 2026-05-29 修：本地密钥 + plan_id 随机后缀
 import sys
 from copy import deepcopy
 from datetime import datetime
@@ -86,6 +88,8 @@ TEMPLATES_DIR = REPO_ROOT / "core" / "claude-home" / "plans"
 PROJECTS_DIR = REPO_ROOT / "workspace" / "novels"
 STYLES_DIR = REPO_ROOT / "workspace" / "styles"
 GLOBAL_PLANS_DIR = REPO_ROOT / "core" / "claude-home" / ".plans"
+# 2026-05-29 修：attestation HMAC 的机器本地密钥（与 GLOBAL_PLANS_DIR 同级隐藏文件）
+ATTEST_KEY_PATH = GLOBAL_PLANS_DIR / ".attest_key"
 
 STATUS_PENDING = "pending"
 STATUS_IN_PROGRESS = "in_progress"
@@ -152,6 +156,38 @@ class PlanTamperedError(Exception):
     """plan JSON 内容与 attestation 不符 —— 被 plan_tracker 之外的途径改过。"""
 
 
+# 2026-05-29 修【安全·伪造】：原 attestation 用纯 SHA-256(规范化JSON)，攻击者改
+# 内容后自己重算 hash 写回即过校验 —— 防篡改形同虚设。改用 HMAC-SHA256 + 机器
+# 本地密钥（ATTEST_KEY_PATH）：攻击者没有密钥就无法伪造有效 attestation。
+# 向后兼容：旧的纯 sha256 attestation 在 verify 时若 HMAC 不符但旧式 sha256 符合，
+# 视为合法并由调用方自动 reattest（warn 一次），避免现存 plan 全部失效。
+
+_ATTEST_KEY_CACHE: bytes | None = None
+
+
+def _get_attest_key() -> bytes:
+    """读取（或首次生成）机器本地 HMAC 密钥。
+    密钥不存在 → secrets.token_bytes(32) 生成、写盘、chmod 0o600（Windows 容错）。"""
+    global _ATTEST_KEY_CACHE
+    if _ATTEST_KEY_CACHE is not None:
+        return _ATTEST_KEY_CACHE
+    if ATTEST_KEY_PATH.exists():
+        key = ATTEST_KEY_PATH.read_bytes().strip()
+        if key:
+            _ATTEST_KEY_CACHE = key
+            return key
+    # 首次运行：生成新密钥
+    key = secrets.token_bytes(32)
+    ATTEST_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ATTEST_KEY_PATH.write_bytes(key)
+    try:
+        os.chmod(ATTEST_KEY_PATH, 0o600)
+    except (OSError, NotImplementedError):
+        pass  # Windows / 受限平台：chmod 不可用时容错
+    _ATTEST_KEY_CACHE = key
+    return key
+
+
 def _canonical_plan_bytes(plan: dict) -> bytes:
     """attestation 哈希的输入：规范化 JSON 字节流，排除 _attestation 字段自身。"""
     payload = {k: v for k, v in plan.items() if k != ATTESTATION_KEY}
@@ -160,6 +196,13 @@ def _canonical_plan_bytes(plan: dict) -> bytes:
 
 
 def _compute_attestation(plan: dict) -> str:
+    """2026-05-29 修：HMAC-SHA256(本地密钥, 规范化字节流)。"""
+    return hmac.new(_get_attest_key(), _canonical_plan_bytes(plan),
+                    hashlib.sha256).hexdigest()
+
+
+def _compute_legacy_sha256(plan: dict) -> str:
+    """旧式纯 SHA-256 attestation（仅用于向后兼容校验，不再用于盖章）。"""
     return hashlib.sha256(_canonical_plan_bytes(plan)).hexdigest()
 
 
@@ -174,14 +217,25 @@ def _attest(plan: dict) -> dict:
 
 
 def verify_attestation(plan: dict) -> str:
-    """校验 plan dict 的 attestation。返回 "ok" / "tampered" / "unattested"。
-    unattested = 旧 plan（本功能引入前创建）—— 向后兼容，调用方不应阻断。"""
+    """校验 plan dict 的 attestation。
+    返回 "ok" / "legacy" / "tampered" / "unattested"。
+      ok        = HMAC 匹配（当前格式）
+      legacy    = HMAC 不符但旧式纯 sha256 符合 → 向后兼容，调用方应自动 reattest
+      tampered  = 既不匹配 HMAC 也不匹配旧 sha256 → 真篡改
+      unattested= 旧 plan（本功能引入前创建）—— 向后兼容，调用方不应阻断。
+    2026-05-29 修：用 hmac.compare_digest 做常量时间比较。"""
     if not isinstance(plan, dict):
         return "unattested"
     att = plan.get(ATTESTATION_KEY)
     if not isinstance(att, dict) or not att.get("sha256"):
         return "unattested"
-    return "ok" if att["sha256"] == _compute_attestation(plan) else "tampered"
+    stored = att["sha256"]
+    if hmac.compare_digest(stored, _compute_attestation(plan)):
+        return "ok"
+    # 向后兼容：旧式纯 sha256 命中 → legacy（合法，需自动 reattest）
+    if hmac.compare_digest(stored, _compute_legacy_sha256(plan)):
+        return "legacy"
+    return "tampered"
 
 
 _TAMPER_MSG = (
@@ -203,13 +257,20 @@ def _load_plan(path: Path, *, for_write: bool = False) -> dict:
     """plan 专用读盘 + 防篡改校验。
       for_write=True （step/end/abort 写前读）：tampered → raise PlanTamperedError
       for_write=False（status/get_plan 只读） ：tampered → 仅 stderr 警告，不阻断
+      legacy（旧式纯 sha256 attestation）：2026-05-29 修 —— 合法但需迁移，自动
+              用 HMAC 重新盖章并 warn 一次，避免现存 plan 在 HMAC 切换后全部失效。
       unattested（旧 plan）：两种模式都放行（向后兼容），下次写入时自动盖章。
     """
     plan = _load_json(path)
     if not isinstance(plan, dict):
         return plan
     state = verify_attestation(plan)
-    if state == "tampered":
+    if state == "legacy":
+        # 2026-05-29 修：旧式纯 sha256 → 内容真实未篡改，自动迁移到 HMAC 盖章
+        print(f"[plan_tracker] ℹ️ 旧式 sha256 attestation 自动迁移为 HMAC：{path}",
+              file=sys.stderr)
+        _save_plan(path, plan)
+    elif state == "tampered":
         full_msg = f"{_TAMPER_MSG}\n  文件：{path}"
         if for_write:
             raise PlanTamperedError(full_msg)
@@ -327,6 +388,9 @@ def make_plan_id(command: str, project: str, chapter: int | None, key: str | Non
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     # 微秒后缀确保同秒多次创建不冲突
     micro = datetime.now().strftime("%f")[:3]
+    # 2026-05-29 修【可靠性】：同毫秒内连续 create 会产生相同 id 并覆盖前一个 plan。
+    # 追加 secrets.token_hex(3) 随机后缀（6 hex 字符）彻底消除碰撞。
+    rand = secrets.token_hex(3)
     if chapter is not None:
         keypart = f"ch{chapter}"
     elif key:
@@ -334,7 +398,7 @@ def make_plan_id(command: str, project: str, chapter: int | None, key: str | Non
     else:
         keypart = "main"
     project_part = project if project else "noproject"
-    return f"{project_part}_{keypart}_{command}_{ts}{micro}"
+    return f"{project_part}_{keypart}_{command}_{ts}{micro}{rand}"
 
 
 # ============ Python API ============
@@ -924,6 +988,7 @@ def _cli_status(args: argparse.Namespace) -> int:
     att_state = verify_attestation(plan)  # P1-1
     att_label = {
         "ok": "✓ 有效",
+        "legacy": "↻ 旧式 sha256（合法，下次写入自动迁移为 HMAC）",  # 2026-05-29 修
         "tampered": "⚠️ 被篡改！内容与 attestation 不符 —— 跑 reattest 或排查注入",
         "unattested": "— 未盖章（旧 plan，下次写入自动盖章）",
     }.get(att_state, att_state)

@@ -63,8 +63,12 @@ def analyze_chapter_text(text: str) -> dict:
     sentences = [s.strip() for s in sentences if s.strip()]
     avg_sentence_len = sum(len(s) for s in sentences) / len(sentences) if sentences else 0
 
-    # 对话比例（"" 内）
-    dialogue_chars = sum(len(m) for m in re.findall(r'["「『][^"」』]+["」』]', text))
+    # 对话比例（引号内）
+    # 2026-05-29 修：原 r'["「『][^"」』]+["」』]' 把左/右引号塞进同一字符类 → 不配对，
+    # 会出现 “…」 这类跨引号错配。改为各引号对各自配对（"…" / “…” / 「…」 / 『…』），
+    # 与 style_analyzer 的 codepoint 区分一致（“=U+201C ”=U+201D）。
+    dialogue_chars = sum(len(m) for m in re.findall(
+        r'"[^"]+"|“[^”]+”|「[^」]+」|『[^』]+』', text))
     dialogue_ratio = dialogue_chars / cn_chars if cn_chars else 0
 
     # 段落数

@@ -168,7 +168,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 | gate_level | 含义 | 处理 |
 |---|---|---|
-| `advisory` | 风格/工艺/读者体验类 | 写作 agent 有理由可豁免（理由 < 100 字、具体到本章场景）|
+| `advisory` | 风格/工艺/读者体验类 | 写作 agent 有理由可豁免（理由 < 300 字、具体到本 cluster 场景）|
 | `hard_gate` | 一致性 + 文件契约破损 | **不可豁免** |
 
 ### hard_gate 不可豁免清单（12 code · 权威定义见 STRUCTURE.md 第十一节）

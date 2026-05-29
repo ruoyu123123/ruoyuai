@@ -100,4 +100,6 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main() if main() else 0)
+    # 2026-05-29 修：旧写法 `main() if main() else 0` 把 main() 跑两遍 → 现在只跑一次
+    rc = main()
+    sys.exit(rc if rc else 0)

@@ -22,6 +22,10 @@ import json
 import sys
 from pathlib import Path
 
+# 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import atomic_json
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -123,7 +127,8 @@ def main():
             ci = char_index[u["character"]]
             cards["characters"][ci]["offscreen"]["actions"][u["action_index"]]["done"] = True
             cards["characters"][ci]["offscreen"]["actions"][u["action_index"]]["_done_at_ch"] = ch
-        cards_path.write_text(json.dumps(cards, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 2026-05-29 修：裸写 → 原子写（atomic_write_json 内部已 mkdir + fsync）
+        atomic_json.atomic_write_json(cards_path, cards)
         print(f"[OK] 人物卡已更新: {cards_path}")
 
     if skipped:

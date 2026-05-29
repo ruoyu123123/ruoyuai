@@ -67,17 +67,20 @@ def scan_chapter_for_character(body_only: str, name: str) -> dict:
     # 统计提及次数
     out["mention_count"] = body_only.count(name)
     # 简单提取对话：name 后跟引号的引号内容
-    dialogues = re.findall(
-        rf'{re.escape(name)}[^"「\n]{{0,10}}["「]([^"」\n]{{1,80}})["」]',
-        body_only
-    )
+    # 2026-05-29 修：原 ["「]...["」] 把左右引号混进同一字符类 → “…」 跨引号错配。
+    # 改为左右配对：ASCII "…" / 中文 “…”（U+201C/U+201D）/ 「…」 各自匹配（与 style_analyzer 一致）。
+    nm = re.escape(name)
+    _quoted = r'(?:"([^"\n]{1,80})"|“([^”\n]{1,80})”|「([^」\n]{1,80})」)'
+    dialogues = []
+    for m in re.finditer(rf'{nm}[^"“「\n]{{0,10}}{_quoted}', body_only):
+        dialogues.append(next(g for g in m.groups() if g is not None))
     if not dialogues:
         # 退一步：找 name 出现后最近的引号内容
-        for m in re.finditer(rf'{re.escape(name)}', body_only):
+        for m in re.finditer(nm, body_only):
             nearby = body_only[m.end():m.end() + 200]
-            dq = re.search(r'["「]([^"」\n]{1,80})["」]', nearby)
+            dq = re.search(_quoted, nearby)
             if dq:
-                dialogues.append(dq.group(1))
+                dialogues.append(next(g for g in dq.groups() if g is not None))  # 2026-05-29 修：3 组取非空
                 if len(dialogues) >= 3:
                     break
     out["dialogue_samples"] = dialogues[:3]
