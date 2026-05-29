@@ -178,7 +178,7 @@ def main():
         "scan_type": "will_learn",
         "scan_ts": ts,
         "current_ch": cur_ch,
-        "characters_scanned": [c.get("name") for c in characters if c.get("name")],
+        "characters_scanned": [c.get("name") for c in characters if isinstance(c, dict) and c.get("name")],
         "findings": findings,
         "summary": summary,
     }

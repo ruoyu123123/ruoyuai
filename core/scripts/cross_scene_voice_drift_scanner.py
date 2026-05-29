@@ -35,7 +35,9 @@ def split_scenes(text: str, min_scene_len: int = 500) -> list[str]:
     return parts if parts else [text]
 
 
-DIALOGUE_RE = re.compile(r'[""「]([^""」\n]{1,300})[""」]')
+# 2026-05-30 北极星复审：原正则只含 ASCII " + 「」，漏 U+201C/U+201D 弯引号（项目正文实际用弯引号）
+# → scanner 抽不到对话整体空转。补全弯引号（遵 feedback_dialogue_quote_unicode_distinction）。
+DIALOGUE_RE = re.compile('["“「『]([^"”」』\n]{1,300})["”」』]')
 SPEAKER_PATTERN = re.compile(r'([一-鿿]{2,4})(?:说道?|道|问道?|答道?|笑道?|骂道?|喊道?|嘀咕|开口|说)')
 
 
@@ -152,6 +154,8 @@ def main():
     draft = Path(args[1]).resolve()
     report = scan(project, draft)
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    if "_fatal" in report:
+        sys.exit(2)  # 与 locked_fact/pov/foreshadowing_handoff 兄弟 scanner 一致：数据缺失≠干净通过
     if report.get("warning"):
         sys.exit(1)
     sys.exit(0)

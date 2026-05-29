@@ -27,6 +27,30 @@ def load(p: Path):
         return {}
 
 
+_CN_DIGIT = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _cn_to_int(s: str):
+    """中文/阿拉伯数字 → int（覆盖年龄场景 0-99：十八/三十八/二十/十/52）。无法解析返回 None。
+    2026-05-30 北极星复审：原 isdigit() 把中文数字年龄（三十八岁）全漏掉，使 hard_gate 穿帮检测只覆盖一半。"""
+    if not s:
+        return None
+    if s.isdigit():
+        return int(s)
+    if "十" in s:
+        a, _, b = s.partition("十")
+        if a and a not in _CN_DIGIT:
+            return None
+        if b and b not in _CN_DIGIT:
+            return None
+        tens = _CN_DIGIT.get(a, 1) if a else 1
+        ones = _CN_DIGIT.get(b, 0) if b else 0
+        return tens * 10 + ones
+    if len(s) == 1 and s in _CN_DIGIT:
+        return _CN_DIGIT[s]
+    return None
+
+
 def extract_numbers_near(text: str, keyword: str, window: int = 30) -> list[tuple[int, str]]:
     """找 keyword 附近的中文数字 + 阿拉伯数字。"""
     results = []
@@ -38,7 +62,7 @@ def extract_numbers_near(text: str, keyword: str, window: int = 30) -> list[tupl
         for num_m in re.finditer(r"[\d一二三四五六七八九十百]+", ctx):
             num = num_m.group()
             if len(num) >= 1:
-                results.append((m.start(), num))
+                results.append((s + num_m.start(), num))  # 数字真实绝对位置（非关键词位置，使 ±50 窗口围绕数字）
     return results
 
 
@@ -71,14 +95,14 @@ def scan(project_root: Path, draft_path: Path) -> dict:
             ctx_nums = extract_numbers_near(text, name, window=50)
             # 检查是否有矛盾（fact 中数字 vs 正文中数字不一致）
             # 简化：如果 fact 含「N 岁」，正文中 name 附近若有「M 岁」且 M ≠ N → 冲突
-            age_in_fact = re.search(r"(\d+)\s*岁", fact)
+            age_in_fact = re.search(r"([\d一二三四五六七八九十百]+)\s*岁", fact)
             if age_in_fact:
-                fact_age = int(age_in_fact.group(1))
+                fact_age = _cn_to_int(age_in_fact.group(1))
                 for pos, ctx_num in ctx_nums:
-                    if "岁" in text[max(0, pos-50):pos+50]:
+                    if fact_age is not None and "岁" in text[max(0, pos-50):pos+50]:
                         try:
-                            ctx_age = int(ctx_num) if ctx_num.isdigit() else None
-                            if ctx_age and ctx_age != fact_age and abs(ctx_age - fact_age) > 0:
+                            ctx_age = _cn_to_int(ctx_num)  # 支持中文数字年龄（三十八岁）
+                            if ctx_age is not None and ctx_age != fact_age:
                                 conflicts.append({
                                     "character": name,
                                     "fact": fact,

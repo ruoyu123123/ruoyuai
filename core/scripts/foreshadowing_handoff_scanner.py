@@ -102,7 +102,10 @@ def scan(project_root: Path, cluster_id: str) -> dict:
             "code": "FORESHADOWING_NOT_PLANTED",
             # 2026-05-29 复审复修 [M13]：tier 存在 int(1) 与 string("A") 双约定（event_cluster_schema
             # 定义为 "A"/"B"/"C"，运行时部分项目写 1/2/3）。两种都认 tier-1/A 为必埋 → hard_gate。
-            "gate_level": "hard_gate" if any(f.get("tier", 99) in (1, "1", "A") for f in not_planted) else "advisory",
+            # 2026-05-30 北极星复审：伏笔【埋设】漏（计划埋但没埋）≠ 穿帮（读者看不出该埋未埋），属
+            # advisory 提醒；只有伏笔【回收】漏（FORESHADOWING_NOT_PAID，已在 HARD_GATE_CODES）才是穿帮。
+            # 且本检测用 6 连字精确匹配极易误报（实测全 not_planted）→ 不得自立 hard_gate 误卡写作。
+            "gate_level": "advisory",
             "severity": "error" if len(not_planted) >= 2 else "warning",
             "count": len(not_planted),
             "items": not_planted[:5],

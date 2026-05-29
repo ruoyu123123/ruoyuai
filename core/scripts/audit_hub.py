@@ -442,9 +442,12 @@ def _parse_issues_list_scanner(stdout: str, source: str, dimension: str,
         if not code:
             continue
         severity = _norm_severity(it.get("severity", default_severity))
-        # gate_level：HARD_GATE_CODES 命中 → hard_gate；否则尊重 scanner 自报（仅 hard_gate 提升）
+        # gate_level：HARD_GATE_CODES 命中 → hard_gate。2026-05-30 北极星复审：scanner 自报 hard_gate
+        # 仅当其 code 在 HARD_GATE_CODES（权威单一来源）时才尊重——否则任意 scanner 可在清单外自立
+        # hard_gate（foreshadowing_handoff 曾用 FORESHADOWING_NOT_PLANTED 越权卡死写作），违反北极星
+        # 「hard_gate 清单单一来源，不得各自另立」。
         gl = _gate_level_for(code, severity)
-        if gl != "hard_gate" and it.get("gate_level") == "hard_gate":
+        if gl != "hard_gate" and it.get("gate_level") == "hard_gate" and code in HARD_GATE_CODES:
             gl = "hard_gate"
         desc = it.get("msg", "") or it.get("desc", "")
         if it.get("count") is not None:

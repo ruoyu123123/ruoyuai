@@ -632,8 +632,8 @@ def detect_chapter_mode(project_root, ch, body, paragraphs) -> str:
     【单一来源约定】（P1-4 起）：本函数是「章节模式」判定的**唯一权威**。
     其他 scanner（如 plot_structure_scanner 的 Kishōtenketsu）必须从此处导入，
     严禁各自复制实现 —— 避免参差。"""
-    # 1) cluster_blueprint 角色数
-    prog = load_json(project_root / "_数据库" / "进度.json", {}) if 'load_json' in dir() else None
+    # 1) cluster_blueprint 角色数（prog 在下方 try 块读取；原 `load_json if 'load_json' in dir()`
+    #    死代码已删——本模块无 load_json，dir() 恒不含，该行恒 None 且被 640 行覆盖）
     char_count = None
     try:
         import json as _json

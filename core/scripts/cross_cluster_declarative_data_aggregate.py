@@ -205,7 +205,9 @@ def main():
     cards = load_json(db / "人物卡.json", {})
     overdue_wl = []
     for c in cards.get("characters", []):
-        for wl in c.get("knowledge", {}).get("will_learn", []):
+        if not isinstance(c, dict):
+            continue
+        for wl in (c.get("knowledge") or {}).get("will_learn", []):
             lac = wl.get("learn_at_cluster")
             learn_ch = None
             if isinstance(lac, str):

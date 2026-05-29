@@ -33,11 +33,11 @@ from pathlib import Path
 
 def is_dialogue_para(para: str) -> bool:
     """对话段：「」引号包裹内容占段 ≥50%"""
-    quote_chars = sum(1 for c in para if c in '「」"""')
+    quote_chars = sum(1 for c in para if c in '「」“”『』"')  # 补弯引号 U+201C/U+201D
     if quote_chars < 2:
         return False
     # 提取「」内字符
-    inside = re.findall(r'「([^」]*)」', para) + re.findall(r'"([^"]*)"', para) + re.findall(r'"([^"]*)"', para)
+    inside = re.findall(r'「([^」]*)」', para) + re.findall('“([^”]*)”', para) + re.findall(r'"([^"]*)"', para)
     inside_cjk = sum(len(re.findall(r'[一-鿿]', s)) for s in inside)
     total_cjk = len(re.findall(r'[一-鿿]', para))
     if total_cjk == 0:

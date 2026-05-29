@@ -1050,23 +1050,21 @@ def _build_volume_convergence_anchor(scanner, cluster: dict) -> dict | None:
         if m:
             vol = int(m.group(1))
     anchor = {}
-    # 大势卡 volumes（final_image 权威）
     ds = scanner.load("大势卡", {}) or {}
-    for v in (ds.get("volumes") or []):
-        if v.get("vol") == vol:
-            for k in ("ending_state", "key_milestones", "final_image", "volume_arc"):
-                if v.get(k):
-                    anchor[k] = v[k]
-            break
-    # 进度.json volumes 兜底
-    if not anchor:
-        prog = scanner.load("进度", {}) or {}
-        for v in (prog.get("volumes") or []):
-            if v.get("vol") == vol:
-                for k in ("ending_state", "key_milestones", "volume_arc"):
-                    if v.get(k):
+    prog = scanner.load("进度", {}) or {}
+    # 2026-05-30 北极星复审：合并大势卡 + 进度.json 两源——原「命中即 return、if not anchor 才回退」
+    # 会因大势卡有占位 volume_arc 就短路，把进度.json 里真实的 ending_state/key_milestones（本卷真终点）
+    # 挡在外，writer 拿到的收敛锚退化为占位串。兼容 final_image / ending_image 双字段名（大势卡实写 ending_image）。
+    for src in (ds, prog):
+        for v in (src.get("volumes") or []):
+            if isinstance(v, dict) and v.get("vol") == vol:
+                for k in ("ending_state", "key_milestones", "final_image",
+                          "ending_image", "volume_arc", "core_conflict"):
+                    if v.get(k) and k not in anchor:
                         anchor[k] = v[k]
                 break
+    if anchor.get("ending_image") and "final_image" not in anchor:
+        anchor["final_image"] = anchor["ending_image"]
     if not anchor:
         return None
     anchor["_doc"] = ("大势已定：本卷无论小势（走向卡选择/涟漪）怎么折腾，最后都要收束到这里。"

@@ -504,11 +504,16 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
             "last_consequences": last_consequence,
             "active_npc_threads_count": len(world_state.get("active_npc_threads", []))
         },
+        # 2026-05-30 北极星复审：character_arc_state.json 两套 schema——v2 用 {"arcs": {name: {...}}}，
+        # 旧用 {"characters": [{...}]}。原只读 characters → v2 项目恒空、arc 信号进不了涌现。两套兼容。
         "character_arc_snapshot": {
-            "characters": [
-                {"id": c.get("id"), "current_stage": c.get("current_stage")}
-                for c in (character_arc.get("characters", []) or [])
-            ]
+            "characters": (
+                [{"id": _n, "current_stage": _d.get("current_stage")}
+                 for _n, _d in character_arc["arcs"].items() if isinstance(_d, dict)]
+                if isinstance(character_arc.get("arcs"), dict)
+                else [{"id": c.get("id"), "current_stage": c.get("current_stage")}
+                      for c in (character_arc.get("characters", []) or []) if isinstance(c, dict)]
+            )
         },
         "_next_action": "主代理展示 candidates 给用户选 1 个 → 写入 事件簇.json.clusters[N+1] (status: in_progress)"
     }

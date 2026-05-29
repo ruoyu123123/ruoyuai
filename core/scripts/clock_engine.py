@@ -29,6 +29,10 @@ from pathlib import Path
 # 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
+try:
+    import cluster_lookup  # 2026-05-30 北极星：since_cluster 反查真实 cluster_id（防御 import）
+except Exception:
+    cluster_lookup = None
 
 
 def load_json(p: Path, default=None):
@@ -147,6 +151,18 @@ def list_active(project_root: Path, ch: int) -> dict:
     return {"ch": ch, "active_clocks": out, "total_active": len(out)}
 
 
+def _since_cluster(project_root: Path, ch: int) -> str:
+    """反查 ch 所属 cluster_id（北极星铁律：禁用 f"cluster_{ch:03d}" 章号拼接）。反查失败兜底。"""
+    if cluster_lookup is not None:
+        try:
+            cid = cluster_lookup.ch_to_cluster_id(project_root, ch)
+            if cid:
+                return cid
+        except Exception:
+            pass
+    return f"cluster_{ch:03d}"  # 反查失败兜底（dormant 功能；未来启用前应确保 cluster 已涌现）
+
+
 def spawn(project_root: Path, ch: int, clock_def: dict) -> dict:
     """动态创建 clock。clock_def 必含 label/max/tick_on/trigger_on_max。"""
     data = load_clocks(project_root)
@@ -175,7 +191,7 @@ def spawn(project_root: Path, ch: int, clock_def: dict) -> dict:
         "trigger_on_max": clock_def.get("trigger_on_max", ""),
         "visible_to_protagonist": clock_def.get("visible_to_protagonist", False),
         "visible_to_writer": clock_def.get("visible_to_writer", True),
-        "since_cluster": f"cluster_{ch:03d}",  # v2 cluster 化（2026-05-28）：纯 cluster 单位
+        "since_cluster": _since_cluster(project_root, ch),  # 2026-05-30 北极星：反查真实 cluster_id（非章号拼接）
         "spawned_by": clock_def.get("spawned_by", "manual"),
         "status": "active",
         "_reason": clock_def.get("_reason", ""),
