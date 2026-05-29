@@ -127,14 +127,13 @@ def main():
     # subagent_type=claude / general-purpose / Explore 等通用 agent 即便 prompt/desc 含
     # "writer"/"修第" 等字眼也放行（这些是任务描述不是 agent 类型）。
     # 兜底：subagent_type 缺失（罕见）时退回旧 desc 关键词判断。
+    # 2026-05-29 精简：只留故事块流程在用的 10 个 agent（删了 validator-repair/voice-keeper
+    # 废 stub + adversarial-reader/counterfactual-judge/meta-judge/meta-prompt-optimizer 孤儿）。
     NOVEL_SUBAGENT_TYPES = {
-        "novel-writer", "novel-validator-checker", "novel-validator-repair",
-        "novel-voice-checker", "novel-voice-keeper",
+        "novel-writer", "novel-validator-checker", "novel-voice-checker",
         "novel-foreshadower", "novel-reflector", "novel-summarizer",
         "novel-outline-planner", "novel-chapter-splitter",
-        "novel-reading-reflector", "novel-adversarial-reader",
-        "novel-counterfactual-judge", "novel-meta-judge",
-        "novel-meta-prompt-optimizer", "novel-researcher",
+        "novel-reading-reflector", "novel-researcher",
     }
     if subagent_type:
         # subagent_type 明确给了 — 按 type 精确判断
@@ -155,8 +154,8 @@ def main():
         has_mode = "MODE:" in prompt
 
         # v27 修复：写作 agent 子类判别 — 优先 subagent_type 精确匹配，desc 关键词兜底
-        _AUX_TYPES = {"novel-validator-checker", "novel-validator-repair",
-                      "novel-voice-checker", "novel-voice-keeper",
+        _AUX_TYPES = {"novel-validator-checker",
+                      "novel-voice-checker",
                       "novel-foreshadower", "novel-summarizer",
                       "novel-reflector", "novel-outline-planner",
                       "novel-reading-reflector"}

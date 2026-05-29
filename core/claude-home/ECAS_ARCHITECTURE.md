@@ -3,6 +3,10 @@
 > Event-Cluster Auto Split — v22 DCAS 全面升级版
 > 借鉴 [StoryWriter (arxiv 2506.16445)](https://arxiv.org/abs/2506.16445) + [StoryBox (arxiv 2510.11618)](https://arxiv.org/html/2510.11618v3)
 > 设计日期：2026-05-17
+>
+> ⚠️ **历史设计文档（v22→v23 迁移期）**：cluster mode 的**当前权威说明**见 `CLAUDE.md`（🌟 北极星）
+> + `STRUCTURE.md` + `.claude/commands/cluster-write.md` / `cluster-save-state.md`。本文保留作设计史，
+> 部分 agent 名/脚本名已随 2026-05 精简变更（详见各命令文档为准）。
 
 ## 1. 核心理念
 
@@ -98,14 +102,17 @@
 | **novel-outline-planner** | 生成下章走向卡 | **生成下个事件簇 brief** | 输入大势卡 + 抽签事件，输出 cluster_brief |
 | **novel-writer** | 单章/DCAS 双章 | **ECAS 簇写 8K-16K + 内部 mid-checkpoint + sub-summary** | 加 MODE=ecas + 4 防御 |
 | **novel-chapter-splitter** | DCAS 切 2 章 | **multi-chapter 切 N 章** | score 算法升级支持 N 章 |
-| **novel-validator-repair** | 章级修复 | 章级修复（不变） | 沿用 |
-| **novel-voice-keeper** | 章级 voice 审 | 章级 voice 审（不变） | 沿用 + 新增 cluster 内一致性 |
+| **novel-validator-checker** | 章级违规检查（+ gen_fixer 修复） | cluster 级检查 | 2026-05 拆分：检查归 checker，修复归 gen_fixer |
+| **novel-voice-checker** | 章级 voice 审（+ gen_fixer 修复） | + cluster 内一致性 | 2026-05 拆分同上 |
 | **novel-foreshadower** | 章级伏笔评估 | **cluster 级伏笔覆盖率** | 评估整簇是否兑现 brief.foreshadowing_to_plant |
 | **novel-reflector** | 章级经验沉淀 | **cluster 级 + 章级**（双层） | 簇内技巧 + 簇间模式 |
 | **novel-summarizer** | 章级 200 字摘要 | 章级摘要（不变） + cluster_summary 500 字 | 加 cluster 总摘要 |
 | **novel-researcher** | 调研 | 调研（不变） | 沿用 |
-| **novel-meta-judge** | 10 章周期审 | **cluster 周期审**（每 2-3 簇） | 触发条件改 |
-| **novel-meta-prompt-optimizer** | meta-prompt 优化 | 不变 | 沿用 |
+
+> 注：novel-meta-judge / novel-meta-prompt-optimizer / novel-adversarial-reader /
+> novel-counterfactual-judge（异质监督/自进化判审层）已于 2026-05 精简删除——cluster 周期审与
+> prompt 校准由 `learning_loop.py` + `skill_evolver.py` + `evolution_orchestrator.py` 在
+> cluster-save-state 流水线内承担。
 
 ## 4. v22 → v23 字段映射表
 
@@ -243,7 +250,7 @@ parent_me: ["ME_004", "ME_005"]  (王局询问 + 序列觉醒)
 | 10 | write-event-cluster.plan | plans/write-event-cluster.plan.json |
 | 11 | user_preferences ECAS 字段 | schemas/user_preferences_schema.json |
 | 12 | KNOWN_COMMANDS + hooks | plan_tracker.py + hooks ✅ |
-| 13 | dashboard cluster view | project_dashboard.py |
+| 13 | dashboard cluster view | audit_dashboard.py（project_dashboard.py 已并入） |
 | 14 | migration guide | ECAS_MIGRATION.md |
 | 15 | ch3 ECAS pilot | 事件簇.json + ch3.txt |
 | 16 | system audit + memory + commit | system_health_audit + MEMORY |

@@ -115,8 +115,8 @@
     "consumed_by": [
       "build_manifest._collect_character_moves() 注入 manifest（仅本章涉及角色）",
       "writer：让角色行动时优先从 moves 抽 narrative_template，不要凭空发明动作",
-      "voice-keeper：检测角色行动是否符合该角色 moves 池子",
-      "cross_chapter_pattern_scan：检测 moves 频率是否过高（公式化）/ 过低（角色失声）"
+      "voice-checker：检测角色行动是否符合该角色 moves 池子",
+      "cluster 级 scanner：检测 moves 频率是否过高（公式化）/ 过低（角色失声）"
     ]
   }
 }

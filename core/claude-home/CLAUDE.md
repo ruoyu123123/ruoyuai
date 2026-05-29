@@ -47,9 +47,7 @@
 ║  🛠️ 工具                             ║
 ║  [6] /db  [7] /check-quality         ║
 ║  [8] /distill-character              ║
-║  [9] /review-book                    ║
-║                                      ║
-║  ⚙️ [0] /template                    ║
+║  [9] /continue  [0] /export          ║
 ║                                      ║
 ║  输入编号或直接说你想做什么          ║
 ╚══════════════════════════════════════╝
@@ -120,24 +118,25 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ## 命令路由
 
+> **🔴 2026-05-29 精简（只保证故事块流程）**：命令 44→15。删了短剧 /script + 孤儿命令 +
+> 自进化层；world/叙事/深度独立命令（map/events/timeline/relationships/power-system/narrator/
+> fate-system/ensemble/legacy/persona-depth/reaction-engine/foreshadowing/anti-slop/brainstorm/
+> wizard/template）**折叠进 cluster-save-state（自动维护对应子系统 JSON）+ outline（初始化）**——
+> 子系统 JSON 全保留、由 writer 经 build_manifest 消费、流水线自动维护，手动微调走 /db。
+
 | 类别 | 命令 | 功能 |
 |------|------|------|
-| **核心** | `/write` | 写小说完整流程 |
-| | `/script` | 写短剧剧本 |
-| | **`/cluster-write`** | **写故事块（v26 cluster mode · 🔴 唯一形态 · v24 倒置流水线 7 步 · v27 freestyle 默认）** |
-| | **`/cluster-save-state`** | **故事块状态保存（v26 cluster mode · 12 步）** |
-| | `/outline` | 生成大纲+初始化数据库（含 step 1.7 AskUser 每卷 cluster 数） |
+| **核心** | `/write` | 写小说完整流程（端到端引导） |
+| | **`/cluster-write`** | **写故事块（cluster mode · v24 倒置流水线 7 步 · v27 freestyle 默认）** |
+| | **`/cluster-save-state`** | **故事块状态保存（cluster mode · 12 步 · 自动维护所有子系统 JSON + 涌现下一 cluster）** |
+| | `/outline` | 生成大纲+初始化 34 子系统数据库（含 step 1.7 AskUser 每卷 cluster 数） |
 | | `/continue` | 续写/断点恢复 |
-| **蒸馏** | `/distill-style` | 蒸馏作者风格 |
-| | `/distill-character` | 深度角色蒸馏 |
+| | `/export` | 导出全文 |
+| **蒸馏** | `/distill-style` | 蒸馏作者风格（writer 第一权威） |
+| | `/distill-character` | 深度角色蒸馏（产 voice_pack） |
 | **质保** | `/check-quality` | 质量+正典+风格校验 |
-| | `/foreshadowing` | 契诃夫之枪引擎 |
-| | `/anti-slop` | 机械扫描规则库 |
 | | `/reconcile` | 一致性调和 |
-| **世界** | `/map` / `/relationships` / `/events` / `/timeline` / `/power-system` | 世界系统 |
-| **叙事** | `/narrator` / `/fate-system` / `/ensemble` / `/legacy` | 叙事引擎 |
-| **深度** | `/persona-depth` / `/reaction-engine` | 角色深度 |
-| **工具** | `/db` / `/session-start` / `/brainstorm` | 工具 |
+| **工具** | `/db` / `/session-start` / `/plan-status` | 数据库 / 续写状态 / plan 规划 |
 
 ---
 

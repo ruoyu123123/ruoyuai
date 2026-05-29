@@ -31,7 +31,7 @@ PLAN_ID=$(python core/scripts/plan_tracker.py create \
 
 ## 第零步：Anti-Slop 机械扫描（不依赖LLM）
 
-**在LLM评估之前，先执行机械扫描。** 参考 /anti-slop 规则库。
+**在LLM评估之前，先执行机械扫描。** 规则库见 `core/scripts/style_analyzer.py`（AI 结构套话 + 工艺签名词分级）+ `core/scripts/semantic_slop_scanner.py`（句级 AI 腔）+ `CLAUDE.md` 反 AI 腔调守卫节。
 
 用 Bash 执行以下检测：
 

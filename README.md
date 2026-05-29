@@ -36,30 +36,14 @@
 
 ### 特性亮点
 
-- **34 个原创 slash command**（`/write`、`/distill-style`、`/cluster-write`、`/cluster-save-state`、`/reconcile` …）
-- **15 个原创 agent**（writer、chapter-splitter、reading-reflector、voice-checker、validator-checker、adversarial-reader、counterfactual-judge …）
-- **120+ 个 Python 系统脚本**（audit_hub、cross_chapter_*_scan、gen_writer、stuck_loop_guard 等）
-- **v23 异质监督 5 层架构**：破 LLM Self-Correction Blind Spot（业界数据 64.5%），见下文
+- **15 个原创 slash command**（`/write`、`/outline`、`/cluster-write`、`/cluster-save-state`、`/distill-style`、`/reconcile` …）
+- **10 个原创 agent**（writer、chapter-splitter、reading-reflector、voice-checker、validator-checker、outline-planner、foreshadower、summarizer、reflector、researcher）
+- **100+ 个 Python 系统脚本**（audit_hub、cross_cluster_*_aggregate、gen_writer、cluster_lookup、build_manifest 等）
 - **Plan 强制规划层**：6 个多步命令必走 plan_tracker，杜绝跳步
 - **检测体系顾问制**：advisory 可豁免 / hard_gate 不可豁免，含 15 类客观错误（一致性/格式/穿帮）；风格工艺类按作者风格档松绑
 - **没调查没发言权** 元规则：所有决策前必先调研（联网/实地/问用户三选一）
 - **🆕 v27 writer freestyle**：writer 不知章数 + 字数自由发挥 / splitter 按 3000-4500/章字数硬范围切 / 末章不够字数从下个故事块补料
 - **🆕 章末工艺 4 层防御**（L1-L4 · cluster_001 ch4 三次翻车 sediment）：剧本体「（镜头XX）」+ 文学过渡「* 分隔/听觉淡出/收束句」+ 装神弄鬼无锚 cliffhanger 全拦截。详见下文
-
-### v23 异质监督 5 层架构
-
-业界数据：LLM 平均 **64.5% 盲点率**（Self-Correction Bench, arxiv 2507.02778）—— 能改别人的错改不了自己的错。所有「writer / judge / reflector 共享同一套 manifest 视角」的系统都会**集体盲**。
-
-v23 用 4 个独立攻击角度补盲：
-
-| 层 | 文件 | 攻击角度 | 业界依据 |
-|---|---|---|---|
-| **L0 卡死守卫** | `core/scripts/stuck_loop_guard.py` | **纯规则**不调 LLM，不会被同源 prompt 污染 | Antigravity loop break / Wink (arxiv 2602.17037) |
-| **L1 敌对读者** | `.claude/agents/novel-adversarial-reader.md` + `core/scripts/adversarial_blindspot_scan.py` | **屏蔽**所有内部 context，纯网文老读者视角挑刺 | VIGIL (arxiv 2512.07094) sibling supervisor |
-| **L2+3 反事实盲审** | `.claude/agents/novel-counterfactual-judge.md` + `core/scripts/counterfactual_judge_diff.py` | **伪装匿名稿**，破 self-protection 13-22% 偏见 | Counterfactual Debating (arxiv 2406.11514) · SPC (arxiv 2504.19162) |
-| **L4 Pareto 演化** | `core/scripts/gepa_prompt_optimizer.py` | **保留候选多样性**不让单一最优覆盖 | GEPA (ICLR 2026 Oral, arxiv 2507.19457) |
-
-详见 `core/claude-home/lessons/v23-blindspot-layer0-1.md`。
 
 ### 章末工艺 4 层防御（L1-L4）
 
@@ -151,13 +135,12 @@ claude --dangerously-skip-permissions
 | `/distill-style` | 蒸馏作者风格 |
 | `/distill-character` | 深度蒸馏角色 |
 | `/check-quality` | 质量 + 正典 + 风格三维校验 |
-| `/anti-slop` | 机械扫描 AI 腔调 |
 | `/reconcile` | 设定修改后一致性调和 |
 | `/cluster-write` | 写一个故事块（7 步流水线 · v27 freestyle 默认） |
 | `/cluster-save-state` | 故事块状态保存（12 步流水线 + 涌现下个 cluster brief） |
-| `/db` | 数据库管理 |
+| `/db` | 数据库管理（世界/叙事/深度子系统手动微调入口） |
 
-完整 34 个命令见 `.claude/commands/` 或 `使用说明.md`。
+完整 15 个命令见 `.claude/commands/` 或 `使用说明.md`。机械扫描 AI 腔调已并入 `/check-quality`（audit_hub 顾问制）。
 
 > 🔴 **v26 起 chapter mode（`/write-chapter` / `/save-state` 单章命令）已彻底废弃**，统一走 cluster mode（故事块整体迭代→最后才切章）。
 
@@ -173,8 +156,8 @@ ruoyuai/
 │   ├── novels/                # 小说项目（每本独立 Git 仓库）
 │   └── styles/                # 风格库（跨项目共享）
 ├── .claude/
-│   ├── agents/                # 15 个 novel-* sub-agent
-│   ├── commands/              # 34 个 slash command（v26 chapter mode 已删）
+│   ├── agents/                # 10 个 novel-* sub-agent
+│   ├── commands/              # 15 个 slash command（v26 chapter mode + 2026-05 精简）
 │   └── templates/             # agent 调用模板
 └── core/
     ├── claude-home/
@@ -187,7 +170,7 @@ ruoyuai/
     │   ├── regression_gold_suite/  # 回归测试样本
     │   ├── STRUCTURE.md       # 目录权威规范（hard_gate 单一来源）
     │   └── CLAUDE.md          # ⚠️ 仅作为 core 子目录的 README · 项目根 CLAUDE.md 才是 Claude Code 加载的主指令
-    └── scripts/               # 120+ 个 Python 系统脚本
+    └── scripts/               # 100+ 个 Python 系统脚本
         ├── audit_hub.py
         ├── validate_style.py
         ├── cross_cluster_*_aggregate.py  # 22 跨故事块聚合器（v2 cluster 化前为 cross_chapter_*_scan）
@@ -238,15 +221,14 @@ MIT License — 见 [LICENSE](LICENSE)
 
 ### Highlights
 
-- **34 original slash commands** (chapter-mode `/write-chapter` / `/save-state` removed in v26)
-- **15 original sub-agents**
-- **120+ Python system scripts**
+- **15 original slash commands** (chapter-mode `/write-chapter` / `/save-state` removed in v26; pruned to the cluster pipeline in 2026-05)
+- **10 original sub-agents**
+- **100+ Python system scripts**
 - **🆕 v27 writer freestyle**: writer doesn't know chapter count / word target; splitter cuts at 3000-4500 CJK/chapter hard range; tail-end backfill from next cluster (pending_tail mechanism)
 - **🆕 4-layer chapter-end guard** (L1-L4 · sediment from cluster_001 ch4 triple regression): blocks screenplay-style stage directions「(camera pulls back)」, literary closure markers「* divider / sound fade / 'everything fell silent'」, and unanchored mystical cliffhangers. L1 hook + L2 anchor scanner + L3 writer prompt auto-inject + L4 mandatory pipeline step
 - **Mandatory planning layer** with SHA-256 anti-tampering attestation
 - **Advisory/Hard-Gate detection** — advisory waivable with reason, hard-gate enforced
 - **"No investigation, no voice"** meta-rule — all decisions require evidence
-- **v23 Heterogeneous Oversight (4-layer)** — counters the 64.5% LLM Self-Correction Blind Spot (arxiv 2507.02778) via independent siblings that don't share the writer's context: rule-based loop guard (L0), context-blind adversarial reader (L1), blind-review counterfactual judge (L2+3), GEPA Pareto candidate pool (L4, ICLR 2026 Oral)
 
 ### Requirements
 

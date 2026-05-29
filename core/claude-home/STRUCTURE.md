@@ -380,7 +380,7 @@ v17 及之前，章节 txt = 正文 + `---CHANGES_FACTUAL---` JSON + `---CHANGES
 
 ### 11.1 顾问制理念
 
-v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structure_scanner` / `semantic_slop_scanner` / `pacing_analyzer` / `emotion_arc_analyzer` / `hook_strength_scanner` / `golden_three_scanner` / `validate_chapter`）输出的是**「待裁决项」，不是判决**：
+v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structure_scanner` / `semantic_slop_scanner` / `hook_strength_scanner` / `golden_three_scanner` / `validate_chapter` 等 cluster 视野 scanner）输出的是**「待裁决项」，不是判决**：
 
 - 每条 issue 带 `gate_level` 字段，取值 `"hard_gate"` 或 `"advisory"`。
 - **advisory 项**：风格 / 文笔 / 叙事工艺 / 情节结构 / 读者体验层的检测项。AI（writer / validator / voice-keeper / foreshadower）**有充分理由可以豁免**——豁免必带具体理由（< 100 字、具体到本章场景），理由不充分 = 豁免无效。
@@ -422,7 +422,7 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 | `CHAPTER_END_FORBIDDEN_TRANSITION` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏。**为什么不可豁免**：同上，章末不允许任何场景过渡收束 |
 | `LOCKED_FACT_CROSS_SCENE_CONFLICT` | locked_fact_cross_scene_scanner | cluster 跨场景一致性（v2 cluster 新增） | 人物卡 `locked_facts` 中的数值/描述类事实在 cluster 不同场景引用矛盾（如同角色年龄两处不符）= cluster 内设定矛盾。**为什么不可豁免**：与 `LOCKED_FACT_CONFLICT` 同级，是客观设定冲突非风格选择。2026-05-28 v2 cluster 化新增 |
 
-**其余全部 advisory，AI 可凭充分理由豁免**：A 机械（`BANNED_WORD` / `WC_TOO_SHORT` / `WC_TOO_LONG` 等）/ B 文笔（`validate_style` 12 项：对话占比、逗句比、段落均长、极短段、拟声格式 `PSEUDO_SOUND_MISSING` 等）/ B+ 文笔语义层（`semantic_slop_scanner` 8 检测器：`SEMANTIC_metaphor_explain` 隐喻后立即解释 / `SEMANTIC_aphorism` 金句体 / `SEMANTIC_neg_parallel` 否定式排比 / `SEMANTIC_copula_avoid` 系动词回避 / `SEMANTIC_fake_range` 虚假范围 / `SEMANTIC_over_hedge` 过度限定 / `SEMANTIC_forced_triple` 强行三段列举 / `SEMANTIC_tag_synonym_cycle` 对话标签同义词循环——抓 anti-slop 机械层正则漏掉的句级 AI 腔）/ C 叙事工艺（`narrative_scanner` 8 检测器：GMC / MRU / Orphan / Micro-tension / Repetition / POV / info_dump / **perspective_shift**——后者 P2-16 新增的人称切换检测，章内 first ↔ third 跳转报警）/ D 情节结构（`plot_structure_scanner` 7 检测器：beat / tryfail / midpoint / knowledge / arc / subplot / **kishotenketsu**——后者为 P1-4 新增的起承转结四段结构，仅对 `chapter_mode=solo_atmospheric` 激活）/ F 读者体验（`hook_strength_scanner` / `golden_three_scanner` / `HOOK_SUMMARY_ENDING` 等）+ `pacing_analyzer` / `emotion_arc_analyzer` 的所有检测项。
+**其余全部 advisory，AI 可凭充分理由豁免**：A 机械（`BANNED_WORD` / `WC_TOO_SHORT` / `WC_TOO_LONG` 等）/ B 文笔（`validate_style` 12 项：对话占比、逗句比、段落均长、极短段、拟声格式 `PSEUDO_SOUND_MISSING` 等）/ B+ 文笔语义层（`semantic_slop_scanner` 8 检测器：`SEMANTIC_metaphor_explain` 隐喻后立即解释 / `SEMANTIC_aphorism` 金句体 / `SEMANTIC_neg_parallel` 否定式排比 / `SEMANTIC_copula_avoid` 系动词回避 / `SEMANTIC_fake_range` 虚假范围 / `SEMANTIC_over_hedge` 过度限定 / `SEMANTIC_forced_triple` 强行三段列举 / `SEMANTIC_tag_synonym_cycle` 对话标签同义词循环——抓 anti-slop 机械层正则漏掉的句级 AI 腔）/ C 叙事工艺（`narrative_scanner` 8 检测器：GMC / MRU / Orphan / Micro-tension / Repetition / POV / info_dump / **perspective_shift**——后者 P2-16 新增的人称切换检测，章内 first ↔ third 跳转报警）/ D 情节结构（`plot_structure_scanner` 7 检测器：beat / tryfail / midpoint / knowledge / arc / subplot / **kishotenketsu**——后者为 P1-4 新增的起承转结四段结构，仅对 `chapter_mode=solo_atmospheric` 激活）/ F 读者体验（`hook_strength_scanner` / `golden_three_scanner` / `HOOK_SUMMARY_ENDING` 等）的所有检测项。
 
 ### 11.3 强约束
 

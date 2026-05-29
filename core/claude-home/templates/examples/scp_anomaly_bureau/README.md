@@ -54,7 +54,7 @@
 1. 主代理识别题材含「异常局 / SCP / 多身体 / 序列体系」→ 推荐本模板
 2. 用户确认 → 拷贝 8 文件到 `workspace/novels/<book>/_数据库/`，去掉 `.example` 后缀
 3. 主代理引导用户替换 5 个占位符为具体角色名 + 改具体年代/城市/途径名/伏笔内容
-4. `/wizard` 配置偏好（narrative_style 三件 + calendar OFFSET 必问）
+4. `/outline` step 1.7 配置偏好（narrative_style 三件 + calendar OFFSET + 每卷 cluster 数 AskUser），后续微调走 `/db`
 
 ## 经验沉淀（来自实际项目运行）
 

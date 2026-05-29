@@ -6,8 +6,14 @@ description: 若渝AI 命令系统总览（文档非命令）
 
 ## 系统概览
 
-若渝AI 是一个模块化的 AI 小说写作系统，包含 34 个 Skill 命令、34 个核心子系统 JSON。
+若渝AI 是一个以**故事块（cluster）为单位**的 AI 小说写作系统，包含 15 个命令、34 个核心子系统 JSON。
 v26 起写作单位从「章节」升级为「故事块（cluster）」，v27 起 writer 自由发挥 + splitter 按字数切。
+
+> 🔴 **2026-05-29 精简（只保证故事块流程）**：命令 44→15。短剧 /script、孤儿命令、自进化层全删；
+> world/叙事/深度独立命令（map/events/timeline/relationships/power-system/narrator/fate-system/
+> ensemble/legacy/persona-depth/reaction-engine/foreshadowing/anti-slop/brainstorm/template/
+> review-book）**折叠进 cluster-save-state（自动维护对应子系统 JSON）+ outline（初始化）**——
+> 子系统 JSON 全保留、由 writer 经 build_manifest 消费、流水线自动维护，手动微调走 `/db`。
 
 ## 快速开始
 
@@ -15,65 +21,45 @@ v26 起写作单位从「章节」升级为「故事块（cluster）」，v27 �
 2. 选择/蒸馏作者风格
 3. AI 生成灵感 → 你选择
 4. 自动写作（每个故事块后展示走向卡片）
-5. 写完后全书复盘
+5. 写完后 `/export` 导出全文
 
 ## 命令分类
 
 ### 核心流程
 | 命令 | 功能 |
 |------|------|
-| `/write` | 写小说完整流程 |
-| `/script` | 写短剧剧本 |
+| `/write` | 写小说完整流程（端到端引导） |
 | `/cluster-write` | 写一个故事块（7 步 · v27 freestyle 默认） |
-| `/cluster-save-state` | 故事块状态保存（12 步流水线） |
-| `/outline` | 生成大纲+初始化数据库（含 AskUser 每卷 cluster 数） |
+| `/cluster-save-state` | 故事块状态保存（12 步 · 自动维护所有子系统 JSON + 涌现下一 cluster） |
+| `/outline` | 生成大纲+初始化 34 子系统数据库（含 AskUser 每卷 cluster 数） |
 | `/continue` | 续写/断点恢复 |
-| `/template` | 选择项目模板 |
+| `/export` | 导出全文 |
 
 > 🔴 **v26 起 `/write-chapter` / `/save-state` 单章命令彻底废弃**——cluster mode 是唯一形态。
 
 ### 蒸馏系统
 | 命令 | 功能 |
 |------|------|
-| `/distill-style` | 蒸馏作者风格（生成Skill文件） |
-| `/distill-character` | 深度角色蒸馏（Voice DNA） |
+| `/distill-style` | 蒸馏作者风格（writer 第一权威 · 生成 Skill 文件） |
+| `/distill-character` | 深度角色蒸馏（Voice DNA · 产 voice_pack） |
 
 ### 质量保障
 | 命令 | 功能 |
 |------|------|
 | `/check-quality` | 质量+正典+风格三重校验 |
-| `/foreshadowing` | 契诃夫之枪引擎 |
-| `/review-book` | 全书复盘 |
-
-### 世界系统
-| 命令 | 功能 |
-|------|------|
-| `/map` | 地图/空间管理 |
-| `/relationships` | 角色关系（4维数值） |
-| `/events` | 事件触发器（5种类型） |
-| `/timeline` | 时间系统（世界时钟+NPC日程） |
-| `/power-system` | 势力/成长系统 |
-
-### 叙事引擎
-| 命令 | 功能 |
-|------|------|
-| `/narrator` | 叙事导演（节奏调控+NPC计划+涌现规则） |
-| `/fate-system` | 天道大势（大势/小势/因果/气运） |
-| `/ensemble` | 群戏引擎（多角色自主对话） |
-| `/legacy` | 传承/能力协同/世界自转 |
-
-### 角色深度
-| 命令 | 功能 |
-|------|------|
-| `/persona-depth` | 人格双层+认知框架+态度着色 |
-| `/reaction-engine` | 角色反应引擎（BG3+Hades+太吾） |
+| `/reconcile` | 一致性调和 |
 
 ### 工具
 | 命令 | 功能 |
 |------|------|
-| `/db` | 数据库管理（查看/搜索/修复） |
+| `/db` | 数据库管理（查看/搜索/修复 · 世界/叙事/深度子系统手动微调入口） |
 | `/session-start` | 恢复写作会话 |
-| `/brainstorm` | 生成故事灵感 |
+| `/plan-status` | 查看 plan 强制规划状态 |
+
+> **世界/叙事/深度子系统去哪了？** map/relationships/events/timeline/power-system/narrator/
+> fate-system/ensemble/legacy/persona-depth/reaction-engine 等独立命令已删——它们维护的 JSON
+> （地图/关系/事件表/时间线/大势卡/角色弧线…）由 `/outline` 初始化、`/cluster-save-state`
+> 在每个故事块自动更新、writer 经 build_manifest 自动消费。需手动微调时走 `/db`。
 
 ## 核心子系统 JSON（34 个 · 分 9 大类）
 
@@ -117,5 +103,5 @@ Hub/Clock/Storyteller/Stress（4）+ 角色弧线/NPC（3）+ 事件池（2）+ 
        ↓
   走向卡 (用户选择) → 下一个故事块
        ↓
-全书完成 → /review-book 复盘
+全书完成 → /export 导出全文
 ```

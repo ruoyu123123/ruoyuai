@@ -97,7 +97,7 @@
     "consumed_by": [
       "build_manifest._collect_hubs_directive() 注入 manifest",
       "writer step 0w：感知本章应是 depart/quest/return/idle，回 hub 时必带 anchor_props 或 anchor_routines 至少 1 个",
-      "save-state.step9 hub_rhythm_check.py：检查最近 N 章 role 分布是否偏离 rhythm_targets"
+      "cluster-save-state 世界更新 + cluster 级节奏 advisory：检查 role 分布是否偏离 rhythm_targets"
     ]
   }
 }

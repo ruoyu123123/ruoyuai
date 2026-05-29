@@ -559,7 +559,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 ═══ E. 与AI默认输出的对比 ═══
 
-标注该作者与AI默认写作模式的差异（参考 /anti-slop 规则库）：
+标注该作者与AI默认写作模式的差异（参考 `core/scripts/style_analyzer.py` 禁用词规则库 + `CLAUDE.md` 反 AI 腔调守卫节）：
 - sentence_variance：作者的句长标准差 vs AI默认（AI通常std<5）
 - paragraph_variance：作者的段落长度变化 vs AI默认（AI通常均匀3-5句）
 - emotion_method：作者表达情绪的方式 vs AI默认（AI倾向直接描述）

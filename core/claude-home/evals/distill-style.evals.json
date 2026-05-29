@@ -21,7 +21,7 @@
         "Step 3 window_distill：三章窗口蒸馏，spawn novel-researcher（P2-9 iterative-retrieval 跟进）",
         "Step 4 aggregate：跨窗口聚合 voice DNA + style_samples",
         "Step 5 closed_loop：闭环蒸馏验证",
-        "Step 6 write_skill：sync_skill.py 写 workspace/styles/某作者/SKILL.md",
+        "Step 6 write_skill：封装 voice DNA + 规则写 workspace/styles/某作者/SKILL.md",
         "Step 7 end_plan + git commit"
       ],
       "expected_artifacts": [
