@@ -85,8 +85,9 @@ def _extract_character_dialogues(project_root: Path, character_name: str, max_d:
             for m in re.finditer(re.escape(alias), text):
                 start = m.start()
                 window = text[max(0, start-200):min(len(text), start+200)]
-                for q in re.findall(r'"([^"\n]{3,80})"|"([^"\n]{3,80})"', window):
-                    d = (q[0] or q[1]).strip()
+                # 2026-05-30 北极星复审：原两个 alternation 全是 ASCII " 重复 + 漏中文弯引号 → 中文对话提取失效
+                for q in re.findall(r'"([^"\n]{3,80})"|“([^”\n]{1,80})”|「([^」\n]{1,80})」', window):
+                    d = next((g for g in q if g), "").strip()
                     if d and d not in dialogues:
                         dialogues.append(d)
                         if len(dialogues) >= max_d:

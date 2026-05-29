@@ -136,7 +136,7 @@ def main():
     print(f"\n🔧 工具校准建议（tool_calibration）")
     if calib:
         for c in calib:
-            print(f"  · [{c.get('code'):<25}] 被豁免 {c.get('waived_count')} 次 → {c.get('suggestion_type')} (scene={c.get('scene_type_hint')})")
+            print(f"  · [{str(c.get('code') or '?'):<25}] 被豁免 {c.get('waived_count')} 次 → {c.get('suggestion_type')} (scene={c.get('scene_type_hint')})")
     else:
         print("  · 暂无建议")
 

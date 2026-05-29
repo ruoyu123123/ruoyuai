@@ -128,12 +128,14 @@ def build_directive(project_root: Path, chapter: int) -> dict:
 
     db = project_root / "_数据库"
     style = load_json(db / "作者风格.json", {})
-    summaries = load_json(db / "故事块摘要.json", {}).get("chapters", [])
-    if isinstance(summaries, dict):
-        # 兼容 dict 格式
-        summaries = [
-            {**v, "ch": int(k)} for k, v in sorted(summaries.items(), key=lambda x: int(x[0]))
-        ]
+    # 2026-05-30 北极星复审：v2 账本 clusters[].chapters{} 拍平 + 兼容旧顶层/dict（原读恒空、反重复历史失效）
+    _ss_doc = load_json(db / "故事块摘要.json", {})
+    summaries = [c for c in (_ss_doc.get("chapters") or []) if isinstance(c, dict)]
+    for _c in _ss_doc.get("clusters", []) or []:
+        if isinstance(_c, dict):
+            for _k, _r in (_c.get("chapters") or {}).items():
+                if isinstance(_r, dict):
+                    summaries.append({**_r, "ch": int(_k) if str(_k).isdigit() else _r.get("ch", 0)})
     _progress = load_json(db / "进度.json", {})
     cluster_blueprints = []
     # 2026-05-29 复审复修 SC-1：blueprint 可能是 list（城南实测），先归一成 dict 再迭代。

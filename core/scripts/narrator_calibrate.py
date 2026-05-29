@@ -67,7 +67,7 @@ def infer_outcome_from_changes(changes: dict) -> tuple[str, int]:
 
     # 负面关键词扫
     negative_kw = ["失败", "受伤", "死亡", "暴露", "被发现", "被打", "败退", "崩溃", "失控", "受重创"]
-    locked_text = json.dumps(factual.get("locked_facts", []) or [], ensure_ascii=False)
+    locked_text = json.dumps(factual.get("locked_facts") or factual.get("facts_locked") or [], ensure_ascii=False)  # 2026-05-30：writer 实产 facts_locked，双读兜底（否则 setback 信号恒空）
     relations_text = json.dumps(factual.get("relationships", []) or [], ensure_ascii=False)
     full_text = locked_text + " " + relations_text
     negative_hits = sum(1 for kw in negative_kw if kw in full_text)

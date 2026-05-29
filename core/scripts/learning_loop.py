@@ -590,7 +590,11 @@ def scan_recurring(project_root: Path) -> dict:
     exp["_waiver_tracker"] = {}            # v19：豁免计数器同样全量重建
     tracker = exp["_recurrence_tracker"]
 
-    report_files = sorted(audit_dir.glob("ch_*_audit.json")) if audit_dir.is_dir() else []
+    # 2026-05-30 北极星复审：cluster 模式 audit 写 cluster_*_audit.json（ch_* 仅 chapter 模式）。原只
+    # glob ch_* → cluster 流程（cluster-save-state step8 调本函数）扫不到任何报告，而上方已无条件清空
+    # tracker → 每次 scan 抹平 --ingest 累积的复发/豁免计数（自学习闭环死 + 数据损坏）。两种都收。
+    report_files = (sorted(audit_dir.glob("ch_*_audit.json")) +
+                    sorted(audit_dir.glob("cluster_*_audit.json"))) if audit_dir.is_dir() else []
     if not report_files:
         print(f"[scan-recurring] 未找到历史 audit 报告（{audit_dir}），无可扫描")
         save_experience(project_root, exp)
@@ -602,7 +606,15 @@ def scan_recurring(project_root: Path) -> dict:
         audit = _safe_load(rf)
         if not audit:
             continue
+        # 2026-05-30 北极星复审：cluster 报告 chapter=9000 虚拟章 → 用 9000+cluster序号 区分多 cluster
+        # （保持 int 防 _track_waivers 的 chapters.sort() 混 int/str 崩）；与 ingest_audit 同口径加 cluster:: key 前缀。
+        _is_cluster = audit.get("_cluster_mode") is True
+        _ckey = audit.get("_cluster_key", "")
         ch = audit.get("chapter", 0)
+        if _is_cluster and _ckey:
+            _d = "".join(c for c in str(_ckey) if c.isdigit())
+            if _d:
+                ch = 9000 + int(_d)
         scanned_chapters.add(ch)
         # v19：每份报告的豁免项计入豁免计数器（issues 里 waived==True 的不进复发链）
         _track_waivers(exp, project_root, audit, ch)
@@ -617,6 +629,8 @@ def scan_recurring(project_root: Path) -> dict:
             if issue.get("waived") is True:
                 continue
             key = _issue_key(issue)
+            if _is_cluster:
+                key = f"cluster::{key}"
             if key not in seen:
                 seen.add(key)
                 rec = tracker.setdefault(key, {"count": 0, "chapters": [],

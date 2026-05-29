@@ -191,18 +191,25 @@ def main():
         print(f"[OK] 无 plan 数据（项目 {project_name}{scope}）")
         sys.exit(0)
 
-    incomplete = [p for p in plans if p.get("status") not in ("DONE", "done", "ABORT", "abort", "completed")]
+    # 2026-05-30 北极星复审：主路径直接读 plan JSON，顶层无 status 字段（plan_tracker 用
+    # completed_at/aborted_at 时间戳表达完成/放弃，见 plan_tracker is_done/is_aborted）→ 原
+    # p.get("status") 恒 None → 所有 plan 误判中断 exit1 + 错误续跑指令。读真实字段（兼容文本兜底的 status）。
+    def _done(p):
+        return bool(p.get("completed_at")) or p.get("status") in ("DONE", "done", "completed")
+    def _aborted(p):
+        return bool(p.get("aborted_at")) or p.get("status") in ("ABORT", "abort")
+    incomplete = [p for p in plans if not (_done(p) or _aborted(p))]
 
     print(f"[wal_recovery] 项目 {project_name}: 总 plan {len(plans)} / 未完成 {len(incomplete)}")
     for p in plans:
         ch = p.get("chapter")
         cmd = p.get("command")
-        status = p.get("status")
+        status = "completed" if _done(p) else ("aborted" if _aborted(p) else (p.get("status") or "active"))
         steps_meta = p.get("steps", [])
         # 计算 verified/done 步数
         done_count = sum(1 for s in steps_meta if (s.get("status") in ("completed", "done") or s.get("verified")))
         total = len(steps_meta) if steps_meta else (p.get("total_steps") or 0)
-        flag = "✅" if status in ("DONE", "done", "completed") else ("⏸" if status == "ABORT" else "🔴 中断")
+        flag = "✅" if _done(p) else ("⏸" if _aborted(p) else "🔴 中断")
         ch_str = f"ch{ch}" if ch else "全书"
         print(f"  {flag} [{status}] {cmd}/{ch_str}: {done_count}/{total} 步 ({p['id']})")
 

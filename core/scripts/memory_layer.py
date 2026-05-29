@@ -71,9 +71,16 @@ class MemoryLayer:
 
     def _load_summary_memory(self) -> list[dict]:
         """层2：全书摘要"""
-        data = load_json(self.db / "故事块摘要.json", {"chapters": []})
+        # 2026-05-30 北极星复审：v2 账本顶层无 chapters（在 clusters[].chapters{}）→ 原读恒空、层2摘要记忆失效。拍平 + 兼容旧顶层。
+        data = load_json(self.db / "故事块摘要.json", {})
+        rows = [c for c in (data.get("chapters") or []) if isinstance(c, dict)]
+        for _c in data.get("clusters", []) or []:
+            if isinstance(_c, dict):
+                for _k, _r in (_c.get("chapters") or {}).items():
+                    if isinstance(_r, dict):
+                        rows.append({**_r, "ch": int(_k) if str(_k).isdigit() else _r.get("ch", 0)})
         results = []
-        for s in data.get("chapters", []):
+        for s in rows:
             ch = s.get("ch", s.get("chapter", 0))
             if ch >= self.ch: continue
             results.append({"layer": "summary", "ch": ch,

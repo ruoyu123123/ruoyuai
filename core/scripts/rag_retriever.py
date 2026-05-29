@@ -110,7 +110,14 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3) -> list[dict]:
     summaries = {}
     if summaries_path.exists():
         data = json.loads(summaries_path.read_text(encoding='utf-8'))
-        for s in data.get('chapters', []):
+        # 2026-05-30 北极星复审：v2 账本 clusters[].chapters{} 拍平 + 兼容旧顶层 chapters（原读恒空、历史检索失效）
+        _rows = [c for c in (data.get('chapters') or []) if isinstance(c, dict)]
+        for _c in data.get('clusters', []) or []:
+            if isinstance(_c, dict):
+                for _k, _r in (_c.get('chapters') or {}).items():
+                    if isinstance(_r, dict):
+                        _rows.append({**_r, 'ch': int(_k) if str(_k).isdigit() else _r.get('ch', 0)})
+        for s in _rows:
             ch = s.get('ch', s.get('chapter', 0))
             summaries[ch] = s.get('summary', '')
 

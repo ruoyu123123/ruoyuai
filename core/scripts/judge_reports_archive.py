@@ -272,8 +272,17 @@ def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool, cluster_id:
     reflection = load_json(db / ".wal" / f"第{ch:03d}章_reflection.json", {})
     summary = load_json(db / ".wal" / f"第{ch:03d}章_summary.json", {})
     changes = load_json(project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json", {})
-    ch_summary_full = load_json(db / "故事块摘要.json", {"chapters": []})
-    ch_entry = next((c for c in ch_summary_full.get("chapters", []) if c.get("ch") == ch), {})
+    # 2026-05-30 北极星复审：v2 账本 ch_entry 在 clusters[].chapters[str(ch)]（顶层无 chapters）→ 原恒
+    # 取空 → writer-truth-check judge 信号永久缺失。先读旧顶层兼容，再回退 clusters[].chapters。
+    ch_summary_full = load_json(db / "故事块摘要.json", {})
+    ch_entry = next((c for c in ch_summary_full.get("chapters", []) if isinstance(c, dict) and c.get("ch") == ch), {})
+    if not ch_entry:
+        for _c in ch_summary_full.get("clusters", []) or []:
+            if isinstance(_c, dict):
+                _r = (_c.get("chapters") or {}).get(str(ch))
+                if isinstance(_r, dict):
+                    ch_entry = {**_r, "ch": ch}
+                    break
 
     judges = {
         "audit-hub": build_validator_report_from_audit(audit, ch),
@@ -299,19 +308,23 @@ def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool, cluster_id:
         conf = report.get("confidence", "?")
         print(f"  [{judge_id}] grade={grade} confidence={conf}")
 
-    # 累积摘要到 故事块摘要[ch].judge_reports[]
-    if not dry_run and ch_entry:
-        summaries = []
-        for jid, r in valid_judges.items():
-            summaries.append({
-                "judge_id": jid,
-                "grade": r.get("overall_grade"),
-                "confidence": r.get("confidence"),
-                "ts": datetime.now().isoformat(timespec="seconds"),
-            })
-        ch_entry["judge_reports"] = summaries
-        save_json(db / "故事块摘要.json", ch_summary_full)
-        print(f"  [OK] 故事块摘要 ch{ch}.judge_reports 已更新（{len(summaries)} 条摘要）")
+    # 累积 judge_reports 摘要到账本（2026-05-30 北极星复审：原 ch_entry 在 v2 是 clusters 回退副本 +
+    # save_json 整文件覆盖 → 写回无效 + 并发覆盖 builder 风险。改 cluster_summary_store.patch_chapter
+    # 原子合并进 clusters[].chapters[str(ch)]）。judge 报告本体已落 .judge_reports/，此处仅补账本摘要。
+    if not dry_run and valid_judges and _css is not None:
+        _summaries = [{
+            "judge_id": jid, "grade": r.get("overall_grade"),
+            "confidence": r.get("confidence"),
+            "ts": datetime.now().isoformat(timespec="seconds"),
+        } for jid, r in valid_judges.items()]
+        try:
+            import cluster_lookup as _cl  # 局部别名，不遮蔽模块级 _css
+            _cid = _cl.ch_to_cluster_id(project_root, ch)
+            if _cid:
+                _css.patch_chapter(project_root, _cid, ch, {"judge_reports": _summaries})
+                print(f"  [OK] 故事块摘要 ch{ch}.judge_reports 已更新（{len(_summaries)} 条摘要）")
+        except Exception as _e:
+            print(f"  [warn] judge_reports 摘要落账本失败（不影响 .judge_reports/ 落盘）: {_e}")
 
     # 2026-05-29 cluster 化：提取本章 judge_score/grade/waivers
     score, grade, waivers = _chapter_judge_signals(valid_judges)
