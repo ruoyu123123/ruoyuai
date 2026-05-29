@@ -12,10 +12,14 @@ character_lazy_spawn / state_tracker / build_manifest 等处，导致迁移后
 本模块提供单一权威的 章号→cluster_id 反查，所有需要由章号推 cluster 归属
 的地方都应改用 `ch_to_cluster_id`，不得再用 `f"cluster_{ch:03d}"`。
 
-反查链（与 build_manifest._current_cluster_id 一致）：
-  1. 进度.json → cluster_blueprint[cid].chapter_range = [lo, hi]
-  2. 进度.json → cluster_blueprint[cid].scene_storyboard[].ch
-  3. 事件簇.json → clusters[].chapter_range + cluster_id
+反查链（v2 · 2026-05-29 调整：事件簇.json 为唯一权威源）：
+  1. 事件簇.json → clusters[].chapter_range + cluster_id（权威 · 切章后由
+     split_cluster_changes.writeback_event_cluster_range 回填真实范围）
+  2. 进度.json → cluster_blueprint[cid].chapter_range（派生/缓存 · 兜底）
+  3. 进度.json → cluster_blueprint[cid].scene_storyboard[].ch（兜底）
+
+  注：cluster_blueprint 降级为「writer 执行蓝图/缓存」，不再是 chapter_range 权威。
+  故事块本体 = 事件簇.json（cluster_id / status / scope / ME / 切章后真实 range）。
 
 fluid v27 注意：章数由 splitter step 6 决定，chapter_range 可能尚未回填。
 反查不到时返回 None（调用方需自行决定 fallback，禁止静默回退到
@@ -129,7 +133,13 @@ def ch_to_cluster_id(project_root, ch: int) -> str | None:
             return None
         ch = n
 
-    # 1) cluster_blueprint.chapter_range
+    # 1) 事件簇.json.chapter_range（v2 权威源 · 2026-05-29 · 切章后由
+    #    split_cluster_changes.writeback_event_cluster_range 回填真实范围）
+    for cid, rng in _iter_event_cluster_ranges(project_root):
+        if rng and rng[0] <= ch <= rng[1]:
+            return cid
+
+    # 2) cluster_blueprint.chapter_range（派生/缓存 · 事件簇未回填时兜底）
     sb_fallback = None
     for cid, rng, scene_chs in _iter_blueprint_ranges(project_root):
         if rng and rng[0] <= ch <= rng[1]:
@@ -139,11 +149,6 @@ def ch_to_cluster_id(project_root, ch: int) -> str | None:
     if sb_fallback:
         return sb_fallback
 
-    # 2) 事件簇.json.chapter_range
-    for cid, rng in _iter_event_cluster_ranges(project_root):
-        if rng and rng[0] <= ch <= rng[1]:
-            return cid
-
     return None
 
 
@@ -152,10 +157,11 @@ def cluster_id_to_range(project_root, cluster_id) -> list | None:
     target = normalize_cluster_id(cluster_id)
     if target is None:
         return None
-    for cid, rng, _ in _iter_blueprint_ranges(project_root):
+    # 事件簇.json 权威优先（v2 · 2026-05-29），blueprint 兜底
+    for cid, rng in _iter_event_cluster_ranges(project_root):
         if normalize_cluster_id(cid) == target and rng:
             return rng
-    for cid, rng in _iter_event_cluster_ranges(project_root):
+    for cid, rng, _ in _iter_blueprint_ranges(project_root):
         if normalize_cluster_id(cid) == target and rng:
             return rng
     return None
