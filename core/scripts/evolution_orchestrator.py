@@ -32,6 +32,18 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+# 2026-05-29 cluster 化：cluster 模式下触发单位从「每 10 章」改为「每 N 个 cluster」，
+# 三角共演化分析窗口用 cluster_summary_reader 取最近 N cluster 的章 + cluster judge_grade。
+# cluster_lookup 把 --cluster {key} 解析成末章/序号锚点。
+try:
+    import cluster_summary_reader as _csr  # noqa: E402
+except Exception:  # pragma: no cover - 防御性
+    _csr = None
+try:
+    import cluster_lookup as _cl  # noqa: E402
+except Exception:  # pragma: no cover - 防御性
+    _cl = None
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -143,26 +155,69 @@ def analyze_judge(project_root: Path, recent_chs: list[int]) -> dict:
             "findings": findings, "persistent_waivers": dict(persistent)}
 
 
-def trigger_cascade(project_root: Path, signals: list[str]) -> dict:
-    """根据信号触发对应工具"""
+def analyze_judge_cluster(project_root: Path, recent_clusters: list[dict]) -> dict:
+    """2026-05-29 cluster 化：cluster 视野的 Judge 分析 —— 用 cluster 账本 judge_grade
+    取代逐章 changes.waivers 重扫。grade 连续偏低（C/D）→ 一致性/质量信号。
+    账本无 judge_grade（builder 未填）→ 回退逐章 analyze_judge（向后兼容）。
+    """
+    findings = []
+    grade_rank = {"A": 4, "B": 3, "C": 2, "D": 1}
+    graded = [(c.get("cluster_id"), c.get("judge_grade")) for c in recent_clusters
+              if isinstance(c.get("judge_grade"), str) and c.get("judge_grade") in grade_rank]
+    if not graded:
+        # 回退：把最近 cluster 的章拍平走逐章 waiver 分析
+        chs = []
+        for c in recent_clusters:
+            for ch_key in (c.get("chapters") or {}).keys():
+                try:
+                    chs.append(int(ch_key))
+                except (ValueError, TypeError):
+                    pass
+        if chs:
+            return analyze_judge(project_root, sorted(chs))
+        return {"signal": "no_data", "findings": [], "cluster_grades": []}
+
+    low = [(cid, g) for cid, g in graded if grade_rank[g] <= 2]
+    if len(low) >= 2:
+        findings.append({
+            "signal": "JUDGE_CLUSTER_LOW_GRADE",
+            "evidence": f"{len(low)} 个 cluster judge_grade ≤ C: {low[:3]}",
+            "suggestion": "outline-planner 卡设计 / writer 工艺反向校准（meta-prompt-optimizer）",
+        })
+    return {"signal": "ok" if not findings else "needs_evolve",
+            "findings": findings, "cluster_grades": graded}
+
+
+def trigger_cascade(project_root: Path, signals: list[str], cluster_key: str | None = None) -> dict:
+    """根据信号触发对应工具。
+
+    2026-05-29 cluster 化：cluster 模式（cluster_key 非空）下把级联的 skill_evolver
+    evolve/retire 也按 cluster 调（`--cluster {key}`），与 skill_evolver 的 cluster 阈值配套；
+    chapter 模式保持 `--ch {cur_ch}` 不变。
+    """
     triggered = []
-    if "SOLVER_REPEATED_ERRORS" in signals or "SOLVER_QUALITY_DECLINE" in signals:
+    if "SOLVER_REPEATED_ERRORS" in signals or "SOLVER_QUALITY_DECLINE" in signals \
+            or "JUDGE_CLUSTER_LOW_GRADE" in signals:
         triggered.append("meta-prompt-optimizer agent 建议主代理 spawn")
     if "JUDGE_PERSISTENT_WAIVER" in signals:
         triggered.append("learning_loop --scan-recurring 已建议跑")
     # 自动跑 skill_evolver evolve
     script_dir = Path(__file__).parent
     try:
-        chs = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                     for d in (project_root / "章节").glob("第*章")
-                     if re.match(r"第(\d+)章", d.name))
-        cur_ch = chs[-1] if chs else 0
+        if cluster_key:
+            unit_args = ["--cluster", cluster_key.replace("cluster_", "")]
+        else:
+            chs = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
+                         for d in (project_root / "章节").glob("第*章")
+                         if re.match(r"第(\d+)章", d.name))
+            cur_ch = chs[-1] if chs else 0
+            unit_args = ["--ch", str(cur_ch)]
         subprocess.run([sys.executable, str(script_dir / "skill_evolver.py"),
-                       str(project_root), "evolve", "--ch", str(cur_ch)],
+                       str(project_root), "evolve"] + unit_args,
                        capture_output=True, timeout=60, encoding="utf-8")
         triggered.append("skill_evolver evolve 已自动执行")
         subprocess.run([sys.executable, str(script_dir / "skill_evolver.py"),
-                       str(project_root), "retire", "--ch", str(cur_ch)],
+                       str(project_root), "retire"] + unit_args,
                        capture_output=True, timeout=60, encoding="utf-8")
         triggered.append("skill_evolver retire 已自动执行")
         subprocess.run([sys.executable, str(script_dir / "skill_evolver.py"),
@@ -174,14 +229,88 @@ def trigger_cascade(project_root: Path, signals: list[str]) -> dict:
     return {"triggered": triggered}
 
 
+def _run_cluster(project_root: Path, cluster_key: str, cluster_cycle: int) -> int:
+    """2026-05-29 cluster 化（主路径）：触发单位「每 N 个 cluster」。
+
+    分析窗口 = cluster_summary_reader 取最近 N 个 cluster；把这些 cluster 的章拍平给
+    Proposer/Solver 逐章分析器复用，Judge 走 cluster 级 judge_grade 分析。
+    plan cluster-save-state.plan.json:126 以 `--cluster {key} || true` 调用，故绝不能崩。
+    """
+    if _csr is None:
+        print("[SKIP] cluster_summary_reader 不可用，cluster 模式无法分析")
+        return 0
+    recent_clusters = _csr.get_clusters(project_root, last_n=cluster_cycle)
+    cur_cid = "cluster_" + cluster_key.replace("cluster_", "")
+    if not recent_clusters:
+        print(f"[SKIP] cluster 账本无落账 cluster（{cur_cid} 可能账本未建），跳过三角分析")
+        return 0
+
+    # 把最近 cluster 的章拍平给逐章分析器复用
+    recent_chs = sorted({
+        int(k) for c in recent_clusters for k in (c.get("chapters") or {}).keys()
+        if str(k).isdigit()
+    })
+
+    proposer_r = analyze_proposer(project_root, recent_chs)
+    solver_r = analyze_solver(project_root, recent_chs)
+    judge_r = analyze_judge_cluster(project_root, recent_clusters)
+
+    all_signals = []
+    for r in [proposer_r, solver_r, judge_r]:
+        for f in r.get("findings", []):
+            all_signals.append(f.get("signal"))
+    cascade = trigger_cascade(project_root, all_signals, cluster_key=cluster_key)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    cluster_window = [c.get("cluster_id") for c in recent_clusters]
+    report = {
+        "scan_type": "evolution_orchestrator",
+        "scan_ts": ts,
+        "mode": "cluster",
+        "current_cluster": cur_cid,
+        "cluster_cycle_window": cluster_window,
+        "chapter_window": recent_chs,
+        "proposer": proposer_r,
+        "solver": solver_r,
+        "judge": judge_r,
+        "cascade_triggered": cascade,
+        "signals_summary": all_signals,
+    }
+    out_path = project_root / "_数据库" / ".evolution" / f"orchestrator_{ts}.json"
+    save_json(out_path, report)
+    print(f"[evolution_orchestrator · cluster mode] {cur_cid} cycle={len(recent_clusters)} clusters {cluster_window}")
+    print(f"  Proposer: {proposer_r.get('signal')} ({len(proposer_r.get('findings', []))} findings)")
+    print(f"  Solver:   {solver_r.get('signal')} ({len(solver_r.get('findings', []))} findings)")
+    print(f"  Judge:    {judge_r.get('signal')} ({len(judge_r.get('findings', []))} findings)")
+    print(f"  Cascade triggered: {len(cascade.get('triggered', []))} 项")
+    for t in cascade.get("triggered", [])[:5]:
+        print(f"    - {t}")
+    print(f"  报告: {out_path}")
+    return 1 if all_signals else 0
+
+
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="evolution_orchestrator · cluster 模式（--cluster）为 v26 主路径 / --ch 向后兼容"
+    )
     ap.add_argument("project")
     ap.add_argument("--ch", type=int, default=None)
-    ap.add_argument("--cycle", type=int, default=10)
+    ap.add_argument("--cycle", type=int, default=10, help="chapter 模式：每 N 章窗口")
+    # 2026-05-29 cluster 化：plan cluster-save-state.plan.json:126 以 `--cluster {key} || true`
+    # 调用。argparse 不认 --cluster 会被吞 → 三角共演化静默不跑。
+    ap.add_argument("--cluster", type=str, default=None,
+                    help="cluster key（'001' / 'cluster_001'）· 主路径：每 N 个 cluster 触发")
+    ap.add_argument("--cluster-cycle", type=int, default=3,
+                    help="cluster 模式：最近 N 个 cluster 作分析窗口（默认 3）")
     args = ap.parse_args()
 
     project_root = Path(args.project).resolve()
+
+    # cluster 模式优先（plan 主路径）
+    if args.cluster:
+        sys.exit(_run_cluster(project_root, args.cluster, args.cluster_cycle))
+
+    # chapter 兼容模式
     chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
                       for d in (project_root / "章节").glob("第*章")
                       if re.match(r"第(\d+)章", d.name))

@@ -2,14 +2,13 @@
 """
 save_state.py — 状态保存流水线的确定性部分
 
-子命令：
-  --wal-start <ch>       开始 WAL 日志
-  --wal-step <ch> <n>    标记第 n 步完成
-  --wal-end <ch>         标记完成并清理
-  --parse <ch>           读第 ch 章 CHANGES（统一走 chapter_io，v18 分离稿/旧混合稿通吃）
-  --apply-changes <ch>   将 CHANGES 落地到 13 个 JSON（第2/4/5步核心）
-  --git-commit <ch>      章节快照 Git commit
-  --report <ch>          输出第10步报告
+v26 cluster-only CLI 子命令（章级 --wal-* / --parse / --apply-changes / --git-commit /
+--report 已随 chapter mode 废弃下线，章级函数仅作 cluster 函数内部组件复用）：
+  --apply-cluster-changes <key>     整 cluster 落地 13 JSON + writer_truth_check 撒谎检测
+  --git-commit-cluster <key>        1 cluster 1 commit
+  --auto-post-reflect-cluster <key> cluster 级 learning_loop 三步链
+  --build-cluster-summary <key>     富摘要预算写入 故事块摘要.json
+  --ecas-checkpoint <key>           验证 cluster_draft 完整性 + checkpoint_data
 
 所有子命令都幂等（重复执行不产生副作用或破坏数据）。
 确定性逻辑集中在此，AI 只负责：故事块摘要/写作反思/走向卡片。
@@ -66,51 +65,12 @@ def find_chapter_file(root: Path, ch: int) -> Path | None:
 
 
 # ============ WAL ============
-
-def wal_path(root: Path, ch: int) -> Path:
-    # zero-pad 命名，与 plan 模板 expected_outputs 对齐
-    p = root / "_数据库" / ".wal" / f"第{ch:03d}章_save_state.json"
-    if not p.exists():
-        # 兼容历史原长命名
-        legacy = root / "_数据库" / ".wal" / f"第{ch}章_save_state.json"
-        if legacy.exists():
-            return legacy
-    return p
-
-
-def cmd_wal_start(root: Path, ch: int):
-    p = wal_path(root, ch)
-    save_json(p, {
-        "chapter": ch,
-        "started_at": datetime.now().isoformat(timespec="seconds"),
-        "current_step": 0,
-        "completed_steps": [],
-        "status": "in_progress",
-    })
-    print(f"[WAL] 已开启 {p.relative_to(root)}")
-
-
-def cmd_wal_step(root: Path, ch: int, step: int):
-    p = wal_path(root, ch)
-    d = load_json(p, {})
-    d["current_step"] = step
-    completed = d.setdefault("completed_steps", [])
-    if step not in completed:
-        completed.append(step)
-    save_json(p, d)
-
-
-def cmd_wal_end(root: Path, ch: int):
-    # 标记 wal_end 时间戳并保留文件（plan-end 校验 + /continue 断点恢复依赖此文件）
-    p = wal_path(root, ch)
-    if p.exists():
-        d = load_json(p, {})
-        d["status"] = "completed"
-        d["ended_at"] = datetime.now().isoformat(timespec="seconds")
-        save_json(p, d)
-        print(f"[WAL] 已完成（{p.name} 标记 status=completed，保留供 plan-end 校验）")
-    else:
-        print(f"[WAL] 未找到 {p.name}，跳过")
+# 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：章级 WAL 函数
+# wal_path / cmd_wal_start / cmd_wal_step / cmd_wal_end 已删除。
+# 依据：v26 chapter mode 废弃后 main() 无 --wal-* 入口（grep 确认无外部调用方），
+# 章级 WAL 函数互相引用、无其他调用者。cluster WAL 由调度器 shell 直建（不走本脚本）。
+# apply_changes / cmd_parse 写的 .wal/第N章_*.json 是中间产物文件，用直接路径，
+# 与已删的 wal_path()（保存 _save_state.json）无关，不受影响。
 
 
 # ============ 解析 CHANGES ============
@@ -470,19 +430,9 @@ def cmd_git_commit(root: Path, ch: int):
 
 
 # ============ 报告（第10步）============
-
-def cmd_report(root: Path, ch: int):
-    db = root / "_数据库"
-    applied = load_json(db / ".wal" / f"第{ch}章_applied.json", {})
-    progress = load_json(db / "进度.json", {})
-
-    print(f"\n💾 状态已保存 — 第{ch}章\n")
-    print(f"  进度：{progress.get('completed', 0)}/{progress.get('total_chapters', '?')}")
-    print(f"  本章变更：{len(applied.get('applied', []))} 项")
-    if applied.get("warnings"):
-        print(f"  ⚠️ 警告：{len(applied['warnings'])} 条")
-        for w in applied["warnings"][:3]:
-            print(f"    - {w}")
+# 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：cmd_report（章级报告）已删除。
+# 与 cmd_report_cluster（见 CLI 段说明）一起下线 —— grep 确认无任何 plan/命令文档
+# 调 save_state.py --report / --report-cluster（cluster-save-state 报告由其他步骤产出）。
 
 
 # ============ v22.6 自动 post-reflect 链 ============
@@ -696,8 +646,48 @@ def _get_cluster_chapter_range(project_root, cluster_key):
     return []
 
 
+def _run_writer_truth_check(root: Path, chapters: list[int]) -> dict:
+    """2026-05-29 流程贯通（断点 5）：apply 后对整 cluster 跑 writer 撒谎检测。
+
+    cluster-save-state.md:103 / plan:49 声称 --apply-cluster-changes 内部跑 writer_truth_check
+    检测「writer 声明 X 但正文实际 Y」，但旧 cmd_apply_cluster_changes 从不调用 → 失效承诺。
+    writer_truth_check.py CLI 是逐章入口（<项目> <章节号>），故逐章调用聚合结果。
+    失败不中断流水线（记录即可），结果并入返回 summary。
+    """
+    wtc = Path(__file__).parent / "writer_truth_check.py"
+    result = {"ran": 0, "lies_total": 0, "per_chapter": [], "errors": []}
+    if not wtc.is_file():
+        result["errors"].append("writer_truth_check.py 不存在")
+        return result
+    for ch in chapters:
+        try:
+            r = subprocess.run(
+                [sys.executable, str(wtc), str(root), str(ch), "--write-back"],
+                capture_output=True, text=True, timeout=120,
+            )
+            # 退出码契约：0 通过 / 1 撒谎命中 / 2 致命
+            entry = {"ch": ch, "rc": r.returncode}
+            result["ran"] += 1
+            if r.returncode == 1:
+                # 从 stdout 抓「[Total] N 章 / 共 M 条撒谎」
+                m = re.search(r"共\s*(\d+)\s*条撒谎", r.stdout or "")
+                lies = int(m.group(1)) if m else 1
+                entry["lies"] = lies
+                result["lies_total"] += lies
+            elif r.returncode == 2:
+                entry["fatal"] = (r.stderr or "")[:160]
+            result["per_chapter"].append(entry)
+        except Exception as e:
+            # 失败不中断（记录即可）
+            result["errors"].append(f"ch{ch}: {type(e).__name__}: {str(e)[:120]}")
+    return result
+
+
 def cmd_apply_cluster_changes(root, cluster_key):
-    """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes"""
+    """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes。
+
+    2026-05-29 流程贯通（断点 5）：apply 后跑 writer_truth_check（撒谎检测）并入 summary。
+    """
     chapters = _get_cluster_chapter_range(root, cluster_key)
     if not chapters:
         print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
@@ -708,6 +698,24 @@ def cmd_apply_cluster_changes(root, cluster_key):
         cmd_parse(root, ch)
         apply_changes(root, ch)
     print(f"[OK] cluster {cluster_key} apply-changes 完成 {len(chapters)} 章")
+
+    # writer 撒谎检测（apply 落地后跑 · 失败不中断 · 结果并入 summary 写盘）
+    truth = _run_writer_truth_check(root, chapters)
+    summary = {
+        "cluster_id": cluster_key,
+        "chapters": chapters,
+        "applied_at": datetime.now().isoformat(timespec="seconds"),
+        "writer_truth_check": truth,
+    }
+    out = root / "_数据库" / ".wal" / f"{cluster_key}_apply_cluster.json"
+    save_json(out, summary)
+    if truth["lies_total"] > 0:
+        print(f"[truth-check] 🔴 检测到 {truth['lies_total']} 条撒谎"
+              f"（writer 声明与正文不符）· 详见 {out.name}")
+    else:
+        print(f"[truth-check] ✅ {truth['ran']} 章无撒谎"
+              + (f" · {len(truth['errors'])} 章检测异常（已记录）" if truth["errors"] else ""))
+    return summary
 
 
 def cmd_git_commit_cluster(root, cluster_key):
@@ -745,23 +753,18 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
         cmd_auto_post_reflect(root, ch)
 
 
-def cmd_report_cluster(root, cluster_key):
-    """v24 cluster 级 report"""
-    chapters = _get_cluster_chapter_range(root, cluster_key)
-    if not chapters:
-        print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
-        return 2
-    print(f"[cluster {cluster_key}] 章节范围 ch{chapters[0]}-{chapters[-1]} ({len(chapters)} 章)")
-    for ch in chapters:
-        cmd_report(root, ch)
+# 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：cmd_report_cluster 已删除
+# （依赖已删的 cmd_report，且无 plan/命令文档调 --report-cluster）。
 
 
 def main():
     # 🔴 v26: chapter-level CLI 已彻底废弃移除（--wal-start/-step/-end/--parse/--apply-changes/
-    # --git-commit/--report/--auto-post-reflect 全部下线）。chapter 级函数本体（cmd_wal_*/cmd_parse/
-    # apply_changes/cmd_git_commit/cmd_report/cmd_auto_post_reflect）仍保留——是被 cluster 函数
-    # 内部按章迭代复用的底层组件，不是公共 CLI。外部一律走 --apply-cluster-changes /
-    # --git-commit-cluster / --auto-post-reflect-cluster / --report-cluster / --ecas-checkpoint。
+    # --git-commit/--report/--auto-post-reflect 全部下线）。
+    # 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：cmd_wal_* / cmd_report / cmd_report_cluster
+    # 函数本体已删除（无调用方）。仍保留的章级函数（cmd_parse / apply_changes / cmd_git_commit /
+    # cmd_auto_post_reflect）是被 cluster 函数内部按章迭代复用的底层组件，不是公共 CLI。
+    # 外部一律走 --apply-cluster-changes / --git-commit-cluster / --auto-post-reflect-cluster /
+    # --build-cluster-summary / --ecas-checkpoint。
     ap = argparse.ArgumentParser(
         description="save_state.py · v26 cluster-only CLI"
     )
@@ -775,8 +778,7 @@ def main():
                     help="v24: 1 cluster 1 commit · msg = feat(cluster-NNN): N 章 (chX-chY)")
     ap.add_argument("--auto-post-reflect-cluster", type=str, metavar="CLUSTER_KEY",
                     help="v24: cluster 级 learning_loop")
-    ap.add_argument("--report-cluster", type=str, metavar="CLUSTER_KEY",
-                    help="v24: cluster 级报告")
+    # 🔴 2026-05-29 流程贯通（断点 5）：--report-cluster 已删（无 plan/命令调用方）
     ap.add_argument("--build-cluster-summary", type=str, metavar="CLUSTER_KEY",
                     help="v2 账本: 把整 cluster 的富摘要预算写入 故事块摘要.json（走 cluster_summary_builder）")
     args = ap.parse_args()
@@ -790,7 +792,6 @@ def main():
     elif args.apply_cluster_changes: cmd_apply_cluster_changes(root, args.apply_cluster_changes)
     elif args.git_commit_cluster: cmd_git_commit_cluster(root, args.git_commit_cluster)
     elif args.auto_post_reflect_cluster: cmd_auto_post_reflect_cluster(root, args.auto_post_reflect_cluster)
-    elif args.report_cluster: cmd_report_cluster(root, args.report_cluster)
     elif args.build_cluster_summary:
         import cluster_summary_builder
         _res = cluster_summary_builder.build_cluster_summary(root, args.build_cluster_summary)

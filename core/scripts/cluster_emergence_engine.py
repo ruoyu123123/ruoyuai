@@ -365,16 +365,17 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) 
     why = ""
     if reasons:
         why = f" 〔涌现理由(分{score}): " + "；".join(str(r) for r in reasons) + "〕"
+    # 2026-05-29 流程贯通（断点 3b）：删 v27 禁止的章数/字数死锁字段
+    # （expected_word_range / scenes_estimated / estimated_chapters / chapter_range）。
+    # 依据 CLAUDE.md「📐 大纲章数 fluid」+ memory feedback_v27_writer_freestyle_splitter_word_cut：
+    # 章数由 writer 自由发挥 + splitter 按字数切完自动回填，涌现阶段不得预设。
+    # 保留 _emergence_score / _emergence_reasons（涌现可解释性，非章数死锁）。
     return {
         "cluster_id": cluster_id,
         "parent_me": me_id,
         "scope_summary": f"[CANDIDATE {ord}] 围绕 ME「{title}」展开。{me.get('description', '')}{why}",
         "_emergence_score": score,
         "_emergence_reasons": reasons,
-        "expected_word_range": {"min": 16000, "max": 22000},
-        "scenes_estimated": 4,
-        "estimated_chapters": 4,
-        "chapter_range": None,  # 等用户选定后由 outline-planner 计算
         "status": "candidate",
         "ME_to_advance": [me_id],
         "_doc": f"v24 fluid 涌现 · 等待用户从 {ord} 个 candidate 中选 1 个 → status 改 in_progress",
@@ -481,19 +482,60 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     }
 
 
+_ACTIONS = ("emerge", "last-ch", "start-ch")
+
+
 def main():
+    # 2026-05-29 流程贯通（断点 3a）：新增 last-ch / start-ch 动作。
+    # cluster-write.md:98/117 调 `cluster_emergence_engine.py last-ch "<项目>" --cluster <key>`
+    # 和 `start-ch ... --cluster <key>`，旧版 action choices 只有 ["emerge"] → argparse exit 2
+    # （死调用）。这两个动作只打印章号（供 shell $(...) 命令替换），不产生副作用。
+    #
+    # 兼容两种位置参顺序：
+    #   emerge:   <project> emerge --after-cluster <id>   （project 在前）
+    #   last-ch:  last-ch <project> --cluster <key>        （action 在前，见命令文档）
+    # 故 project/action 不固定顺序 → 手动从位置参里按 _ACTIONS 集合识别 action。
     parser = argparse.ArgumentParser(description="v24 cluster fluid 涌现引擎")
-    parser.add_argument("project", help="项目路径（绝对或相对 cwd）")
-    parser.add_argument("action", choices=["emerge"], help="动作")
-    parser.add_argument("--after-cluster", required=True, help="当前已完成 cluster id (如 cluster_001)")
+    parser.add_argument("pos", nargs="+", help="<project> <action> 任意顺序（action ∈ %s）" % (_ACTIONS,))
+    parser.add_argument("--after-cluster", help="[emerge] 当前已完成 cluster id (如 cluster_001)")
+    parser.add_argument("--cluster", help="[last-ch/start-ch] 目标 cluster id")
     args = parser.parse_args()
 
-    project_root = Path(args.project).resolve()
+    action = None
+    project_arg = None
+    for p in args.pos:
+        if p in _ACTIONS and action is None:
+            action = p
+        elif project_arg is None:
+            project_arg = p
+    if action is None or project_arg is None:
+        print(f"[ERROR] 需要 <project> 和 action（{_ACTIONS}）两个位置参", file=sys.stderr)
+        return 2
+
+    project_root = Path(project_arg).resolve()
     if not (project_root / "_数据库").exists():
         print(f"[ERROR] 项目路径不存在 _数据库 目录: {project_root}", file=sys.stderr)
         return 2
 
-    if args.action == "emerge":
+    if action in ("last-ch", "start-ch"):
+        cluster_key = args.cluster or args.after_cluster
+        if not cluster_key:
+            print(f"[ERROR] {action} 需要 --cluster <key>", file=sys.stderr)
+            return 2
+        import cluster_lookup
+        rng = cluster_lookup.cluster_id_to_range(project_root, cluster_key)
+        if not rng or len(rng) != 2:
+            print(f"[ERROR] cluster {cluster_key} 的 chapter_range 未找到（splitter 切完才回填）",
+                  file=sys.stderr)
+            return 2
+        # 只打印纯数字 → 供 cluster-write.md 里 LAST_CH=$(...) / START_CH=$(...) 命令替换
+        print(rng[1] if action == "last-ch" else rng[0])
+        return 0
+
+    if action == "emerge":
+        if not args.after_cluster:
+            print("[ERROR] emerge 需要 --after-cluster <id>", file=sys.stderr)
+            return 2
         result = emerge_next_cluster(project_root, args.after_cluster)
         if result.get("ok"):
             print(f"[OK] cluster {result['next_cluster_id']} 涌现 {result['candidates_count']} 个 candidate")
@@ -504,6 +546,7 @@ def main():
         else:
             print(f"[FAIL] {result.get('error', '未知错误')}", file=sys.stderr)
             return 1
+    return 2
 
 
 if __name__ == "__main__":

@@ -278,14 +278,12 @@ cluster-write / cluster-save-state 内部有一套质检工具（查禁用词、
 
 | 触发节点 | Commit 类型 | Message 示例 |
 |----------|-------------|--------------|
-| 项目初始化（/outline 第15-16步） | chore | `chore: 初始化项目 + 13 个数据库文件` |
-| 大纲生成完成（/outline 末尾） | feat | `feat: 生成大纲（50 章 / 3 卷）` |
-| 章节保存完成（save-state 第10.5步） | feat(ch-N) | `feat(ch-5): 初战告捷 (3021字)` |
+| 项目初始化（/outline 末步） | chore | `chore: 初始化项目 + 34 个数据库文件` |
+| 大纲生成完成（/outline 末尾） | feat | `feat: 生成大纲（3 卷）` |
+| 故事块保存完成（cluster-save-state 第10步） | feat(cluster-N) | `feat(cluster-001): 5 章 (ch1-ch5)` |
 | 风格蒸馏完成（/distill-style） | feat | `feat: 蒸馏作者风格（v3 / 2033 章）` |
 | 角色深度蒸馏（/distill-character） | feat | `feat: 蒸馏角色 李若渝 (v2 / ch 1-12)` |
 | 一致性调和（/reconcile） | fix | `fix: 调和瞳色设定 (影响 3 章)` |
-| 字数补写（save-state 第7.4步） | refactor(ch-N) | `refactor(ch-5): 补写至目标字数 (3000字)` |
-| 黄金三章重写 | fix(ch-N) | `fix(ch-1): 黄金三章重写` |
 
 **好处：**
 - 用户可以回溯任意章节的历史版本（`git log` / `git checkout`）
@@ -301,70 +299,15 @@ cluster-write / cluster-save-state 内部有一套质检工具（查禁用词、
 
 ---
 
-## Agent 子任务 prompt 模板：
-```
-你是小说写作助手。根据以下信息写作第N章，约3000字。
-用 Write 工具保存为 小说_书名/第N章.txt。
+## 写作 prompt 归属（v26 · cluster mode）
 
-[本章大纲]
-[出场角色人物卡+声音包]
-[上一章正文（完整）]
-[到期伏笔列表]
+> 🔴 主代理**不持有也不发出任何章级写作 prompt**。正文一律由 `/cluster-write` 调度器在 step 2 spawn `novel-writer MODE=ecas` 时构造（写整 cluster 草稿）。
 
-🧬 作者风格约束：
-[定量约束：句长X±Y字 / 对话占比X% / 逗号句号比X:1 / 省略号每千字X次]
-[功能词倾向：高频用"的/了/却/便"，低频用"着/竟"——不要刻意计数，自然写作即可]
-[硬性规则列表]
-[禁用句式/过渡/标签列表]
+- writer prompt（cluster brief + scope_summary + scene_storyboard + 作者风格约束 + 锁定事实 + voice_pack + 风格参考段 + 用户走向选择等）由 cluster-write 调度器组装，详见 `cluster-write.md` step 1-2。
+- 输出契约由 splitter 在 step 6 落地：writer 先产 `章节/cluster_<key>_draft/cluster_<key>_draft.txt` + `cluster_<key>_changes.json`，splitter 切章后平铺为 per-chapter `第NNN章/第NNN章.txt` + `第NNN章_changes.json`（正文/数据分离，纯正文无 `---CHANGES` 分隔符）。
+- 🔴 v27 freestyle 默认：writer 不被告知目标章数 + 字数，章数由 splitter 按字数硬范围（3000-4500 CJK/章）在 step 6 切定。
 
-📖 风格参考段落（模仿感觉，不照抄）：
-[场景匹配黄金段落 1-2段]
-[章节开头参考 1段]
-[章节结尾参考 1段]
-
-[本章场景规则]
-[相关写作经验]
-[用户偏好]
-[语义记忆检索结果]
-
-⚠️ 锁定事实（不可违反）：[列表]
-🚫 角色知识边界：[列表]
-🎭 角色说话风格：[voice_pack样本]
-🌍 NPC幕后动态：[列表]
-📈 情绪指令：[目标值/趋势]
-🎯 用户走向选择：[如有]
-🕐 当前时间：[第X天/时段/季节]
-📍 角色位置：[各角色当前所在地点]
-🎒 相关道具：[本章涉及的物品状态]
-
-写作规则：
-- 模仿黄金段落的句式节奏和用词密度，不要照抄内容
-- 与上一章文风保持一致
-- 到期伏笔必须回收
-- 角色行为符合人物卡
-- 锁定事实不可违反
-- 遵守反AI腔调守卫规则
-- 遵守场景规则和作者风格（冲突时作者风格优先）
-- 参考写作经验，避免失败模式
-- 尊重用户偏好
-- 功能词指纹是倾向性指导，自然写作即可，不要刻意凑数
-
-输出格式（⚠️ 正文/数据分离 · 必须遵守）：
-用 Write 工具产出**两个独立文件**——
-  · 正文：章节/第NNN章/第NNN章.txt —— 纯正文，绝不含 `---CHANGES` 字样或任何分隔符
-  · 数据：章节/第NNN章/第NNN章_changes.json —— 合法 JSON，顶层两键
-      {"factual": {9类变更字段}, "self_eval": {applied_style 等自评}}
-两个文件都必须存在，缺一即契约违规。
-
-保存前自检 5 道门禁（CHANGES 指 _changes.json 的 factual 段）：
-1. 引用校验：factual 中的所有角色/地点/势力/物品 ID 必须在档案中或在 new_entities 中声明
-2. 未知实体：单类 new_entities > 5 个需警告，> 10 个强制重写
-3. 蓝图出场：cluster_blueprint 指定的角色必须出场，未出场的在 skipped_characters 中说明理由；视角角色出现 <2 次 → 警告
-4. 描写一致性：角色外貌/地点环境/物品描述必须与档案一致，冲突必须修正
-5. 维度漂移：cluster_blueprint 标注的变更维度必须在 factual 中有对应条目
-
-5道门禁都通过后，用 Write 工具保存两个文件。
-```
+**主代理只需**：spawn cluster-write 调度器、收到「✅ cluster <key> 写好了」后立即 spawn cluster-save-state，绝不在主会话里直接生成正文。
 
 ---
 

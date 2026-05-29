@@ -236,7 +236,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 8 --skip-output
 ```bash
 python core/scripts/save_state_updates.py "<项目路径>" --cluster <key> --all
 python core/scripts/save_state_evaluators.py "<项目路径>" --cluster <key> --all
-python core/scripts/run_cross_chapter_scans.py "<项目路径>" --cluster <key> --tier full_18
+python core/scripts/run_cross_cluster_aggregates.py "<项目路径>" --cluster <key> --tier full_18
 python core/scripts/style_drift_scan.py "<项目路径>" --last-n 10
 python core/scripts/character_index.py "<项目路径>" --write
 python core/scripts/learning_loop.py "<项目路径>" --scan-recurring

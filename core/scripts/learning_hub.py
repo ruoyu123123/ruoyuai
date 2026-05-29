@@ -28,16 +28,29 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 2026-05-29 cluster 化：skill_evolver / evolution_orchestrator 已切到 cluster 主路径，
+# 注入参数从 `--ch {cur_ch}` 改为 `--cluster {cur_cluster}`（取最新落账 cluster_id）。
+# cur_ch 仍保留给可能需要章号的旧学习器；cluster 解析失败时优雅回退 --ch。
+try:
+    import cluster_summary_reader as _csr  # noqa: E402
+except Exception:  # pragma: no cover - 防御性
+    _csr = None
+try:
+    import cluster_lookup as _cl  # noqa: E402
+except Exception:  # pragma: no cover - 防御性
+    _cl = None
+
 
 LEARNERS_FULL = [
     ("user_experience_learner.py", ["{project}"], "L1+L6 用户行为+痛点"),
     ("error_pattern_analyzer.py", ["{project}"], "L2 错误聚类"),
     ("dead_feature_detector.py", ["{project}"], "L3+L4 死功能 + manifest 消费率"),
     ("high_score_pattern_extractor.py", ["{project}", "--update-experience"], "L8 高分章节共性"),
-    ("skill_evolver.py", ["{project}", "evolve", "--ch", "{cur_ch}"], "SE1 evolve"),
-    ("skill_evolver.py", ["{project}", "retire", "--ch", "{cur_ch}"], "SE1 retire"),
+    # 2026-05-29 cluster 化：注入 --cluster {cur_cluster}（cluster 解析失败时 run_learners 回退 --ch）
+    ("skill_evolver.py", ["{project}", "evolve", "--cluster", "{cur_cluster}"], "SE1 evolve"),
+    ("skill_evolver.py", ["{project}", "retire", "--cluster", "{cur_cluster}"], "SE1 retire"),
     ("skill_evolver.py", ["{project}", "promote"], "SE1 promote → universal_skill_pool"),
-    ("evolution_orchestrator.py", ["{project}", "--ch", "{cur_ch}"], "SE4 三角共演化"),
+    ("evolution_orchestrator.py", ["{project}", "--cluster", "{cur_cluster}"], "SE4 三角共演化"),
     ("stuck_loop_guard.py", ["{project}"], "v23 Layer 0 卡死信号扫描"),
     ("adversarial_blindspot_scan.py", ["{project}"], "v23 Layer 1 集体盲点曝光"),
     ("counterfactual_judge_diff.py", ["{project}"], "v23 Layer 2+3 self-protection 曝光"),
@@ -58,6 +71,33 @@ def get_current_ch(project_root: Path) -> int:
                  for d in (project_root / "章节").glob("第*章")
                  if re.match(r"第(\d+)章", d.name))
     return chs[-1] if chs else 0
+
+
+def get_current_cluster(project_root: Path, cur_ch: int) -> str | None:
+    """2026-05-29 cluster 化：取「最新 cluster」的 cluster key（不含 'cluster_' 前缀）。
+
+    链：1) cluster 账本最后一个落账 cluster；2) 回退 cluster_lookup 用最新章号反查；
+    都失败返回 None（run_learners 据此把 cluster 学习器回退到 --ch）。
+    """
+    # 1) 账本最后一个落账 cluster
+    if _csr is not None:
+        try:
+            clusters = _csr.get_clusters(project_root)
+            if clusters:
+                cid = clusters[-1].get("cluster_id")
+                if cid:
+                    return str(cid).replace("cluster_", "")
+        except Exception:  # pragma: no cover - 防御性
+            pass
+    # 2) 用最新章号反查 cluster
+    if _cl is not None and cur_ch:
+        try:
+            cid = _cl.ch_to_cluster_id(project_root, cur_ch)
+            if cid:
+                return str(cid).replace("cluster_", "")
+        except Exception:  # pragma: no cover - 防御性
+            pass
+    return None
 
 
 def status(project_root: Path) -> dict:
@@ -109,13 +149,22 @@ def _summarize(t: str, data: dict) -> dict:
 
 def run_learners(project_root: Path, learners: list) -> dict:
     script_dir = Path(__file__).parent
-    cur_ch = str(get_current_ch(project_root))
+    cur_ch_int = get_current_ch(project_root)
+    cur_ch = str(cur_ch_int)
+    cur_cluster = get_current_cluster(project_root, cur_ch_int)
     results = {"ran": 0, "errors": [], "details": []}
     for script, raw_args, label in learners:
         sp = script_dir / script
         if not sp.exists():
             continue
-        args = [a.format(project=str(project_root), cur_ch=cur_ch) for a in raw_args]
+        # 2026-05-29 cluster 化：raw_args 含 {cur_cluster} 但 cluster 解析失败时，
+        # 回退到 chapter 模式（--cluster <key> → --ch <ch>），保证学习器不会因
+        # cluster 缺失而拿到空串崩。
+        if cur_cluster is None and any("{cur_cluster}" in a for a in raw_args):
+            raw_args = ["--ch" if a == "--cluster" else a for a in raw_args]
+            raw_args = [a.replace("{cur_cluster}", "{cur_ch}") for a in raw_args]
+        args = [a.format(project=str(project_root), cur_ch=cur_ch,
+                         cur_cluster=(cur_cluster or "")) for a in raw_args]
         cmd = [sys.executable, str(sp)] + args
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8")

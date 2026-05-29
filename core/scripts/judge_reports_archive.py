@@ -13,8 +13,12 @@
 
 为 meta-judge / judge_consensus 建数据基础。
 
-用法：python judge_reports_archive.py <项目路径> <章节号> [--dry-run]
+用法：python judge_reports_archive.py <项目路径> --cluster <key> [--dry-run]
 退出码：0 成功 / 1 部分缺失 / 2 致命
+
+2026-05-29 cluster 化：v26 chapter mode 已废，plan 只用 `--cluster`（cluster-save-state
+.plan.json:105）。原 `if args.chapter is None` 的 chapter-mode 向后兼容分支无任何调用方
+（grep 确认），已删。位置参 chapter 仍保留供 ad-hoc 单章调试（走 _archive_one_chapter）。
 """
 
 from __future__ import annotations
@@ -372,68 +376,18 @@ def main():
         return 0
 
     if args.chapter is None:
-        print("[FATAL] 必须指定 chapter 章号 或 --cluster <key>", file=sys.stderr)
+        print("[FATAL] 必须指定 --cluster <key>（cluster 主路径）或位置参 <章节号>（ad-hoc 单章调试）",
+              file=sys.stderr)
         return 2
 
-    # chapter mode (向后兼容)
-    ch = args.chapter
-    db = project_root / "_数据库"
-    # 收集源数据
-    audit = load_json(db / ".audit" / f"ch_{ch:03d}_audit.json", {})
-    reflection = load_json(db / ".wal" / f"第{ch:03d}章_reflection.json", {})
-    summary = load_json(db / ".wal" / f"第{ch:03d}章_summary.json", {})
-    changes = load_json(project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json", {})
-    ch_summary_full = load_json(db / "故事块摘要.json", {"chapters": []})
-    ch_entry = next((c for c in ch_summary_full.get("chapters", []) if c.get("ch") == ch), {})
-
-    # 组装 JudgeReports
-    judges = {
-        "audit-hub": build_validator_report_from_audit(audit, ch),
-        "writer-self-eval": build_writer_self_eval_report(changes, ch),
-        "summarizer": build_summarizer_report(summary, ch),
-        "reflector": build_reflector_report(reflection, ch),
-        "writer-truth-check": build_truth_check_report(ch_entry, ch),
-    }
-
-    # 过滤 None
-    valid_judges = {k: v for k, v in judges.items() if v is not None}
-
-    print(f"[judge_reports_archive] ch{ch}: 汇集 {len(valid_judges)} 个 judge 信号")
-
-    # 存盘
-    archive_dir = db / ".judge_reports"
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    written = []
-    for judge_id, report in valid_judges.items():
-        archive_path = archive_dir / f"ch_{ch:03d}_{judge_id}.json"
-        if args.dry_run:
-            print(f"  [DRY] would write: {archive_path}")
-        else:
-            save_json(archive_path, report)
-            written.append(judge_id)
-        grade = report.get("overall_grade", "?")
-        conf = report.get("confidence", "?")
-        print(f"  [{judge_id}] grade={grade} confidence={conf}")
-
-    # 累积摘要到 故事块摘要[ch].judge_reports[]
-    if not args.dry_run and ch_entry:
-        summaries = []
-        for jid, r in valid_judges.items():
-            summaries.append({
-                "judge_id": jid,
-                "grade": r.get("overall_grade"),
-                "confidence": r.get("confidence"),
-                "ts": datetime.now().isoformat(timespec="seconds"),
-            })
-        ch_entry["judge_reports"] = summaries
-        save_json(db / "故事块摘要.json", ch_summary_full)
-        print(f"  [OK] 故事块摘要 ch{ch}.judge_reports 已更新（{len(summaries)} 条摘要）")
-
-    print(f"\n报告目录: {archive_dir}")
-    if not valid_judges:
-        print("[WARN] 0 个 judge 信号，章节可能未完成 save-state 前 8 步")
-        sys.exit(1)
-    sys.exit(0)
+    # 2026-05-29 cluster 化：原 chapter-mode 向后兼容大分支（重复 _archive_one_chapter 逻辑）
+    # 无任何调用方（plan/命令只用 --cluster），已删。位置参单章调试改走唯一的
+    # _archive_one_chapter（不传 cluster_id → 不写 cluster 账本，行为等价旧逻辑）。
+    r = _archive_one_chapter(project_root, args.chapter, args.dry_run, cluster_id=None)
+    if r.get("judges"):
+        return 0
+    print("[WARN] 0 个 judge 信号，章节可能未完成 save-state 前 8 步")
+    return 1
 
 
 if __name__ == "__main__":

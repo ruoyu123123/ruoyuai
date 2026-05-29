@@ -280,17 +280,24 @@ def scan(project_root: Path, ch: int):
     if _cluster_mode:
         # cluster 视野：检测 cluster 草稿前 1500 CJK 强冲突开场
         # 仅 cluster_001 激活（其他 cluster 走 linear narrative_mode 不评开场）
-        # 通过 cluster_id env 区分（暂用 ch==9000 + 自动激活）
-        if ch != 9000:
-            # 非 cluster 模式虚拟章号 → 跳过
+        # 2026-05-29 修复：旧逻辑只判 ch==9000，而 audit_hub 对「任何」cluster 都借虚拟
+        # ch=9000 跑 → 黄金三章开场检测被恒激活到每个 cluster。现改用 audit_hub 透传的
+        # CLUSTER_ID env 归一化判定：仅 cluster_001（含 "001"/"cluster_001"/"1"）才激活。
+        _cluster_id = _os.environ.get("CLUSTER_ID", "")
+        _norm = _cluster_id.replace("cluster_", "").lstrip("0") or "0"
+        _is_first_cluster = _norm == "1"
+        if ch != 9000 or not _is_first_cluster:
+            # 非虚拟 cluster 章号，或非首个 cluster → 不评开场
             return {
                 "schema_version": "1.0",
                 "scanner": "golden_three_scanner",
                 "chapter": ch,
                 "cluster_mode": True,
+                "cluster_id": _cluster_id or None,
                 "status": "n/a",
                 "gate_level": "advisory",
-                "note": "cluster 模式仅检测 cluster_001 草稿（虚拟 ch=9000）",
+                "note": ("cluster 模式仅 cluster_001 草稿评黄金三章开场"
+                         f"（当前 CLUSTER_ID={_cluster_id or '未传'} → 跳过）"),
                 "warning": None,
             }
         # cluster_001 草稿激活：检测前 1500 CJK 区段

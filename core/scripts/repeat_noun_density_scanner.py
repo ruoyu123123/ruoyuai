@@ -18,9 +18,12 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-# v2 cluster 化（2026-05-28）：CLUSTER_MODE env 感知 · scanner 内部可按 mode 切阈值
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
+# v2 cluster 化（2026-05-29 复核）：本 scanner 用「5 段滑动窗口内同 token ≥4 次」判定，
+# 判定单元是固定大小的段窗口（window_size=5），与整篇文本体量无关：
+# cluster 草稿（12-25k CJK）和 chapter（3-4k CJK）共用同一套窗口扫描，
+# 长文本只是窗口数量更多，每个窗口的密度判定阈值本身不该随体量浮动
+# （否则放宽 = 漏掉同样密集的重复堆叠）。
+# 故 cluster 化对本 scanner 阈值无意义 → 不引入 IS_CLUSTER_MODE 分支（删除死变量 + 误导注释）。
 
 
 # 已知高频「那/这 + 量词? + 名词」模板组合白名单

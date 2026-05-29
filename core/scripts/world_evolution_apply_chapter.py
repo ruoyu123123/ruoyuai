@@ -26,6 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import world_evolution_engine as wee
+# 2026-05-29 流程贯通（断点 2）：--cluster 入口靠章号⇄cluster_id 反查工具取章范围
+import cluster_lookup
 
 
 def load_changes(project_root: Path, ch: int) -> dict:
@@ -63,10 +65,66 @@ def consume_opportunities(project_root: Path, ch: int, opp_ids: list[str]) -> di
     return {"consumed_count": len(consumed), "consumed": consumed, "missing": missing}
 
 
+def apply_one_chapter(project_root: Path, ch: int) -> tuple[dict, bool]:
+    """对单章执行 tick + fate_event + 消费 EO + spawn_emergent 扫描，写日志。
+
+    返回 (summary, half_apply)：half_apply=True 表示有 fate_event 没匹配涟漪规则。
+    （从原 main 抽出，供 --cluster 逐章复用 — 2026-05-29 流程贯通断点 2。）
+    """
+    changes = load_changes(project_root, ch)
+    summary = {"ch": ch, "ts": datetime.now().isoformat(timespec="seconds"), "ops": []}
+
+    # 1. auto_tick
+    tick_r = wee.tick(project_root, ch)
+    summary["ops"].append({"op": "tick", "result": tick_r})
+    print(f"[tick] ch{ch}: matched={tick_r.get('matched_rules')} applied={tick_r.get('applied_count')}")
+
+    # 2. apply_fate_event for each triggered ME_id
+    fate_triggered = (changes.get("factual") or {}).get("fate_events_triggered") or []
+    fate_results = []
+    for ev in fate_triggered:
+        eid = ev.get("event_id") if isinstance(ev, dict) else None
+        if not eid:
+            continue
+        r = wee.apply_fate_event(project_root, ch, eid)
+        fate_results.append({"event_id": eid, "matched_rules": r.get("matched_rules", []), "applied_count": len(r.get("applied_log", []))})
+        print(f"[apply_fate_event] {eid}: matched={r.get('matched_rules')} applied={len(r.get('applied_log', []))}")
+    summary["ops"].append({"op": "apply_fate_events", "count": len(fate_results), "results": fate_results})
+
+    # 3. 消费 emergent_opportunities
+    opp_consumed_ids = (changes.get("factual") or {}).get("world_state_consumption", {}).get("emergent_opportunities_consumed", [])
+    if opp_consumed_ids:
+        c_r = consume_opportunities(project_root, ch, opp_consumed_ids)
+        summary["ops"].append({"op": "consume_opportunities", "result": c_r})
+        print(f"[consume_opp] consumed={c_r.get('consumed', [])} missing={c_r.get('missing', [])}")
+
+    # 4. spawn_emergent 过期扫描
+    spawn_r = wee.spawn_emergent(project_root, ch)
+    summary["ops"].append({"op": "spawn_emergent_scan", "available": spawn_r.get("available"), "expired_this_ch": spawn_r.get("expired_this_ch")})
+    if spawn_r.get("expired_this_ch"):
+        print(f"[spawn_emergent] expired={spawn_r['expired_this_ch']}")
+    print(f"[spawn_emergent] available_next_ch={[o['id'] for o in spawn_r.get('available', [])]}")
+
+    # 写汇总日志
+    out_dir = project_root / "_数据库" / ".world_evolution"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"ch{ch:03d}_apply.json"
+    out_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[OK] 世界演化日志: {out_path}")
+
+    half_apply = any(not r["matched_rules"] for r in fate_results)
+    return summary, half_apply
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
-    ap.add_argument("ch", type=int)
+    # 2026-05-29 流程贯通（断点 2）：ch 改可选位置参 + 新增 --cluster <key>。
+    # plan cluster-save-state.plan.json:123 调 `--cluster {key}`，旧版只收位置参 int
+    # → argparse exit 2。现两入口并存：位置参章级（向后兼容）+ --cluster 整 cluster。
+    ap.add_argument("ch", type=int, nargs="?", default=None)
+    ap.add_argument("--cluster", metavar="CLUSTER_KEY", default=None,
+                    help="对整 cluster 章范围逐章 tick（取代位置参 ch）")
     args = ap.parse_args()
 
     project_root = Path(args.project)
@@ -78,49 +136,30 @@ def main():
         print("[SKIP] 世界状态.json 或 涟漪规则.json 不存在 — 项目未启用世界演化")
         sys.exit(0)
 
-    changes = load_changes(project_root, args.ch)
-    summary = {"ch": args.ch, "ts": datetime.now().isoformat(timespec="seconds"), "ops": []}
+    # --cluster：解析章范围，逐章 tick（tick 语义 = 推进世界一格/章，故每章各 tick 一次）
+    if args.cluster:
+        rng = cluster_lookup.cluster_id_to_range(project_root, args.cluster)
+        if not rng or len(rng) != 2:
+            print(f"[FATAL] cluster {args.cluster} 的 chapter_range 未找到（splitter 切完才回填）",
+                  file=sys.stderr)
+            sys.exit(2)
+        chapters = list(range(rng[0], rng[1] + 1))
+        print(f"[cluster {args.cluster}] 展开 {len(chapters)} 章 (ch{chapters[0]}-{chapters[-1]}) → 逐章 tick")
+        any_half = False
+        for ch in chapters:
+            _, half = apply_one_chapter(project_root, ch)
+            any_half = any_half or half
+        if any_half:
+            print("[WARN] 部分 fate_event 没匹配涟漪规则 → 涟漪规则.json 可能缺定义")
+            sys.exit(1)
+        sys.exit(0)
 
-    # 1. auto_tick
-    tick_r = wee.tick(project_root, args.ch)
-    summary["ops"].append({"op": "tick", "result": tick_r})
-    print(f"[tick] ch{args.ch}: matched={tick_r.get('matched_rules')} applied={tick_r.get('applied_count')}")
+    if args.ch is None:
+        print("[ERROR] 需要位置参 <ch> 或 --cluster <key>", file=sys.stderr)
+        sys.exit(2)
 
-    # 2. apply_fate_event for each triggered ME_id
-    fate_triggered = (changes.get("factual") or {}).get("fate_events_triggered") or []
-    fate_results = []
-    for ev in fate_triggered:
-        eid = ev.get("event_id") if isinstance(ev, dict) else None
-        if not eid:
-            continue
-        r = wee.apply_fate_event(project_root, args.ch, eid)
-        fate_results.append({"event_id": eid, "matched_rules": r.get("matched_rules", []), "applied_count": len(r.get("applied_log", []))})
-        print(f"[apply_fate_event] {eid}: matched={r.get('matched_rules')} applied={len(r.get('applied_log', []))}")
-    summary["ops"].append({"op": "apply_fate_events", "count": len(fate_results), "results": fate_results})
-
-    # 3. 消费 emergent_opportunities
-    opp_consumed_ids = (changes.get("factual") or {}).get("world_state_consumption", {}).get("emergent_opportunities_consumed", [])
-    if opp_consumed_ids:
-        c_r = consume_opportunities(project_root, args.ch, opp_consumed_ids)
-        summary["ops"].append({"op": "consume_opportunities", "result": c_r})
-        print(f"[consume_opp] consumed={c_r.get('consumed', [])} missing={c_r.get('missing', [])}")
-
-    # 4. spawn_emergent 过期扫描
-    spawn_r = wee.spawn_emergent(project_root, args.ch)
-    summary["ops"].append({"op": "spawn_emergent_scan", "available": spawn_r.get("available"), "expired_this_ch": spawn_r.get("expired_this_ch")})
-    if spawn_r.get("expired_this_ch"):
-        print(f"[spawn_emergent] expired={spawn_r['expired_this_ch']}")
-    print(f"[spawn_emergent] available_next_ch={[o['id'] for o in spawn_r.get('available', [])]}")
-
-    # 写汇总日志
-    out_dir = project_root / "_数据库" / ".world_evolution"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"ch{args.ch:03d}_apply.json"
-    out_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[OK] 世界演化日志: {out_path}")
-
+    _, half_apply = apply_one_chapter(project_root, args.ch)
     # 异常退出码：fate_events_triggered 中存在但 apply 后 matched_rules 为空
-    half_apply = any(not r["matched_rules"] for r in fate_results)
     if half_apply:
         print("[WARN] 部分 fate_event 没匹配涟漪规则 → 涟漪规则.json 可能缺定义")
         sys.exit(1)

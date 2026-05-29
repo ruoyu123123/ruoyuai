@@ -14,6 +14,14 @@
 
 用法：
     python structure_layer_anti_slop_scan.py <项目路径> [--ch <N> | --all]
+
+v2 cluster 化（2026-05-29）：
+  · CLUSTER_MODE=1 → 直接扫 cluster 草稿（章节/cluster_<key>_draft/cluster_<key>_draft.txt），
+    不再主动排除 'cluster' 目录（旧逻辑 `if 'cluster' in d.name: continue` 与
+    「cluster 是唯一检测层」相悖，已移除）。CLUSTER_ID 指定时只扫该 cluster。
+  · 未设 CLUSTER_MODE → 沿用逐章扫描（离线/手动趋势诊断）。
+  · 说明：本脚本目前不在 audit_hub.py 的 13-scanner task 列表内（独立工具），
+    上层文档若称其被 audit_hub 调度系误述；如需接入须在 audit_chapter.tasks 注册。
 """
 import sys, os, re, json
 from pathlib import Path
@@ -229,21 +237,43 @@ def main():
     except Exception:
         pass
     results = {}
-    for d in sorted(chap_dir.iterdir()):
-        if not d.is_dir() or 'cluster' in d.name or 'pre_opening' in d.name:
-            continue
-        digits = ''.join(c for c in d.name if c.isdigit())
-        if not digits:
-            continue
-        ch_num = int(digits)
-        if target_ch is not None and ch_num != target_ch:
-            continue
-        for f in d.glob("*.txt"):
-            if 'changes' in f.name or 'pre_opening' in f.name:
+    # v2 cluster 化（2026-05-29）：CLUSTER_MODE=1 → 直接扫 cluster 草稿（唯一检测层），
+    # 不再因 'cluster' in d.name 主动排除（旧逻辑与「cluster 是唯一检测层」相悖）。
+    # CLUSTER_ID 指定时只扫该 cluster 草稿；否则扫全部 cluster 草稿。
+    cluster_mode = os.environ.get("CLUSTER_MODE") == "1"
+    if cluster_mode:
+        cid = os.environ.get("CLUSTER_ID", "").replace("cluster_", "")
+        for d in sorted(chap_dir.iterdir()):
+            if not d.is_dir() or 'cluster' not in d.name or not d.name.endswith('_draft'):
                 continue
-            text = f.read_text(encoding='utf-8')
-            results[f'ch{ch_num:03d}'] = scan_chapter(text, anchor_chars)
-            break
+            # 目录名形如 cluster_001_draft
+            key = d.name.replace('cluster_', '').replace('_draft', '')
+            if cid and key.lstrip('0') != cid.lstrip('0'):
+                continue
+            draft = d / f"{d.name}.txt"
+            if not draft.exists():
+                cand = [f for f in d.glob("*.txt") if 'changes' not in f.name and 'pending_tail' not in f.name]
+                if not cand:
+                    continue
+                draft = cand[0]
+            text = draft.read_text(encoding='utf-8')
+            results[f'cluster_{key}'] = scan_chapter(text, anchor_chars)
+    else:
+        for d in sorted(chap_dir.iterdir()):
+            if not d.is_dir() or 'cluster' in d.name or 'pre_opening' in d.name:
+                continue
+            digits = ''.join(c for c in d.name if c.isdigit())
+            if not digits:
+                continue
+            ch_num = int(digits)
+            if target_ch is not None and ch_num != target_ch:
+                continue
+            for f in d.glob("*.txt"):
+                if 'changes' in f.name or 'pre_opening' in f.name:
+                    continue
+                text = f.read_text(encoding='utf-8')
+                results[f'ch{ch_num:03d}'] = scan_chapter(text, anchor_chars)
+                break
     # 跨章趋势汇总
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
     summary_dims = {}

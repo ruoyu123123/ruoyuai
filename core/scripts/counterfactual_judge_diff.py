@@ -30,9 +30,16 @@
 【CLI】
   python counterfactual_judge_diff.py <project>              # 扫所有有 counterfactual 报告的章
   python counterfactual_judge_diff.py <project> --ch N       # 指定章
-  python counterfactual_judge_diff.py <project> --trend      # 跨章趋势分析
+  python counterfactual_judge_diff.py <project> --cluster K  # 指定 cluster（2026-05-29）
+  python counterfactual_judge_diff.py <project> --trend      # 跨 cluster 趋势分析
 
 退出码：0 健康 / 1 advisory（有分歧但不严重）/ 2 严重 self-protection 曝光
+
+2026-05-29 cluster 化：
+  cluster 才是 v2 检测层。counterfactual 报告物理上仍逐章产出（ch_NNN_counterfactual.json），
+  但 diff/trend 的**分析单位**升到 cluster：把每章 diff 按所属 cluster 聚合成
+  cluster diff（cluster 内 self−cf 均值差 + fatal 汇总），trend 跨 cluster 看系统性宽松。
+  逐章 `--ch` + 逐章 diff 函数完整保留（cluster 聚合复用之）。
 """
 from __future__ import annotations
 
@@ -40,8 +47,17 @@ import argparse
 import json
 import re
 import sys
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cluster_summary_reader as csr  # 2026-05-29 cluster 化
+    import cluster_lookup  # 2026-05-29 cluster 化：章→cluster_id
+except Exception:  # 防御：缺模块退回逐章趋势
+    csr = None
+    cluster_lookup = None
 
 
 # ============================================================
@@ -297,6 +313,74 @@ def find_chapters_with_counterfactual(project_root: Path) -> list[int]:
 
 
 # ============================================================
+# 2026-05-29 cluster 化：把逐章 diff 聚合成 cluster diff + 跨 cluster trend
+# ============================================================
+
+_SEV_RANK = {"ok": 0, "advisory": 1, "warning": 2, "fatal": 3}
+
+
+def aggregate_per_chapter_to_clusters(project_root: Path, per_chapter: list[dict]) -> list[dict]:
+    """把逐章 diff 按所属 cluster 聚合。cluster_lookup 缺失/查不到归到 _unknown_ 桶。"""
+    buckets: dict = defaultdict(list)
+    for r in per_chapter:
+        ch = r.get("ch")
+        cid = None
+        if cluster_lookup is not None and isinstance(ch, int):
+            cid = cluster_lookup.ch_to_cluster_id(project_root, ch)
+        buckets[cid or "_unknown_"].append(r)
+
+    cluster_diffs = []
+    for cid, rows in buckets.items():
+        analyzed = [r for r in rows if r.get("status") == "analyzed"]
+        gaps = [r["self_score"] - r["cf_score"] for r in analyzed
+                if r.get("self_score") is not None and r.get("cf_score") is not None]
+        mean_gap = round(sum(gaps) / len(gaps), 2) if gaps else None
+        worst = max((r.get("severity", "ok") for r in rows),
+                    key=lambda s: _SEV_RANK.get(s, 0), default="ok")
+        fatal_signals = sorted({
+            f["signal"] for r in rows for f in r.get("findings", [])
+            if f.get("severity") == "fatal"
+        })
+        cluster_diffs.append({
+            "cluster_id": cid,
+            "chapters": sorted(r.get("ch") for r in rows if isinstance(r.get("ch"), int)),
+            "chapters_analyzed": len(analyzed),
+            "mean_self_minus_cf": mean_gap,
+            "severity": worst,
+            "fatal_signals": fatal_signals,
+        })
+    cluster_diffs.sort(key=lambda d: (d["cluster_id"] is None, str(d["cluster_id"])))
+    return cluster_diffs
+
+
+def analyze_trend_cluster(cluster_diffs: list[dict]) -> dict:
+    """跨 cluster 趋势：内部 ensemble 是否系统性宽松（cluster 为单位）。"""
+    valid = [d for d in cluster_diffs if d.get("mean_self_minus_cf") is not None]
+    if len(valid) < 3:
+        return {"status": "insufficient_data", "unit": "cluster",
+                "n": len(valid), "min_required": 3}
+    gaps = [d["mean_self_minus_cf"] for d in valid]
+    mean_gap = sum(gaps) / len(gaps)
+    lenient = sum(1 for g in gaps if g >= TREND_PERSISTENT_GAP)
+    ratio = lenient / len(gaps)
+    persistent = ratio >= 0.6 and mean_gap >= TREND_PERSISTENT_GAP
+    return {
+        "status": "analyzed",
+        "unit": "cluster",  # 2026-05-29 cluster 化
+        "n_clusters": len(valid),
+        "mean_self_minus_cf": round(mean_gap, 2),
+        "clusters_self_lenient_count": lenient,
+        "lenient_ratio": round(ratio, 2),
+        "persistent_self_protection": persistent,
+        "interpretation": (
+            f"跨 {len(valid)} 个 cluster，内部 ensemble 平均比外审高 {mean_gap:+.2f} 分；"
+            f"{lenient}/{len(valid)} 个 cluster ({ratio:.0%}) 内部宽松 ≥ {TREND_PERSISTENT_GAP} 分 — "
+            f"{'系统性宽松，建议给 judge prompt 加严标' if persistent else '尚在正常波动'}"
+        ),
+    }
+
+
+# ============================================================
 # 主流程
 # ============================================================
 
@@ -304,7 +388,8 @@ def main():
     ap = argparse.ArgumentParser(description="Self-Protection 曝光器 v23 Layer 2+3")
     ap.add_argument("project")
     ap.add_argument("--ch", type=int, help="只分析指定章")
-    ap.add_argument("--trend", action="store_true", help="只跑跨章趋势")
+    ap.add_argument("--cluster", help="只分析指定 cluster（如 cluster_002 / 2 · 2026-05-29）")
+    ap.add_argument("--trend", action="store_true", help="只跑跨 cluster 趋势")
     args = ap.parse_args()
 
     project_root = Path(args.project).resolve()
@@ -312,9 +397,21 @@ def main():
         print(f"[counterfactual_diff] 项目路径不存在: {project_root}", file=sys.stderr)
         sys.exit(3)
 
-    chs = [args.ch] if args.ch is not None else find_chapters_with_counterfactual(project_root)
+    # 2026-05-29 cluster 化：--cluster 把章范围解析为该 cluster 的物理章
+    cluster_filter_chs = None
+    if args.cluster is not None and cluster_lookup is not None:
+        rng = cluster_lookup.cluster_id_to_range(project_root, args.cluster)
+        if rng and len(rng) == 2:
+            cluster_filter_chs = set(range(rng[0], rng[1] + 1))
+
+    if args.ch is not None:
+        chs = [args.ch]
+    else:
+        chs = find_chapters_with_counterfactual(project_root)
+        if cluster_filter_chs is not None:
+            chs = [c for c in chs if c in cluster_filter_chs]
     if not chs:
-        print("[counterfactual_diff] 未发现任何 ch_*_counterfactual.json — 先 spawn novel-counterfactual-judge")
+        print("[counterfactual_diff] 未发现匹配的 ch_*_counterfactual.json — 先 spawn novel-counterfactual-judge")
         sys.exit(0)
 
     per_chapter = []
@@ -323,7 +420,15 @@ def main():
         if r:
             per_chapter.append(r)
 
-    trend = analyze_trend(per_chapter) if not args.ch else None
+    # 2026-05-29 cluster 化：逐章 diff 聚合成 cluster diff
+    cluster_diffs = aggregate_per_chapter_to_clusters(project_root, per_chapter)
+    # 趋势优先 cluster 单位；cluster 不足回退逐章趋势（向后兼容）
+    single = args.ch is not None or args.cluster is not None
+    trend = None
+    if not single:
+        trend = analyze_trend_cluster(cluster_diffs)
+        if trend.get("status") != "analyzed":
+            trend = analyze_trend(per_chapter)
 
     fatals = [r for r in per_chapter if r.get("severity") == "fatal"]
     warnings = [r for r in per_chapter if r.get("severity") == "warning"]
@@ -339,9 +444,11 @@ def main():
 
     out = {
         "scan_type": "counterfactual_judge_diff",
+        "analysis_unit": "cluster",  # 2026-05-29 cluster 化：trend/聚合按 cluster
         "scan_ts": datetime.now().isoformat(timespec="seconds"),
         "summary": summary,
         "per_chapter": per_chapter,
+        "cluster_diffs": cluster_diffs,  # 2026-05-29 cluster 化
         "trend": trend,
         "_note": (
             "Counterfactual Debating (arxiv 2406.11514) — counterfactual judge 被骗以为是匿名"

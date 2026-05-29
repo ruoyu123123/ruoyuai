@@ -32,6 +32,14 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cluster_summary_reader as csr  # 2026-05-29 cluster 化：cluster 窗口
+    import cluster_lookup  # 2026-05-29 cluster 化：章号→cluster_id
+except Exception:  # 防御：缺模块退回逐章
+    csr = None
+    cluster_lookup = None
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -84,29 +92,73 @@ def collect_chapter_timestamps(project_root: Path) -> list[dict]:
     return out
 
 
-def detect_retry_patterns(project_root: Path) -> list[dict]:
-    """检测章节高 retry 模式（WAL 重启次数 / .audit 多次 audit）"""
+def _count_per_ch_audit(project_root: Path) -> dict:
+    """逐章 audit 重跑次数（共享给 cluster 聚合 + 逐章回退）。"""
+    audit_dir = project_root / "_数据库" / ".audit"
+    per_ch = defaultdict(int)
+    if not audit_dir.exists():
+        return per_ch
+    for f in audit_dir.glob("ch_*_audit*.json"):
+        m = re.match(r"ch_(\d+)", f.name)
+        if m:
+            per_ch[int(m.group(1))] += 1
+    return per_ch
+
+
+def detect_retry_patterns_cluster(project_root: Path) -> list[dict] | None:
+    """检测 cluster 高 retry 模式（2026-05-29 cluster 化）。
+
+    把逐章 audit 重跑次数按 cluster 聚合 —— v27 freestyle 浮动章数下，「同章 retry」
+    不如「cluster 整块反复重跑」有信号。cluster 账本缺失返回 None → 回退逐章。
+    """
+    if csr is None:
+        return None
+    clusters = csr.get_clusters(project_root)
+    if not clusters:
+        return None
+    per_ch = _count_per_ch_audit(project_root)
+    if not per_ch:
+        return []
     findings = []
-    wal_dir = project_root / "_数据库" / ".wal"
-    if wal_dir.exists():
-        # WAL 文件多版本 = retry
-        wal_files = list(wal_dir.glob("第*章_save_state.json"))
-        # 简化：直接看 audit 文件多少
-        audit_dir = project_root / "_数据库" / ".audit"
-        if audit_dir.exists():
-            per_ch = defaultdict(int)
-            for f in audit_dir.glob("ch_*_audit*.json"):
-                m = re.match(r"ch_(\d+)", f.name)
-                if m:
-                    per_ch[int(m.group(1))] += 1
-            for ch, cnt in per_ch.items():
-                if cnt >= 3:
-                    findings.append({
-                        "code": "HIGH_RETRY",
-                        "ch": ch,
-                        "audit_count": cnt,
-                        "signal": f"ch{ch} 已 audit {cnt} 次 → writer 输出反复不满意",
-                    })
+    for c in clusters:
+        cr = c.get("chapter_range")
+        if isinstance(cr, list) and len(cr) == 2:
+            chs = set(range(cr[0], cr[1] + 1))
+        else:
+            chs = {int(k) for k in (c.get("chapters") or {}) if str(k).isdigit()}
+        cluster_audits = sum(per_ch.get(ch, 0) for ch in chs)
+        n_ch = max(len(chs), 1)
+        # cluster 级阈值：整块 audit 重跑次数 ≥ 章数 + 3（明显高于「每章一次」基线）
+        if cluster_audits >= n_ch + 3:
+            findings.append({
+                "code": "HIGH_RETRY",
+                "cluster_id": c.get("cluster_id"),
+                "audit_count": cluster_audits,
+                "chapter_count": n_ch,
+                "signal": f"{c.get('cluster_id')}（{n_ch} 章）累计 audit {cluster_audits} 次 → 整块反复重写",
+            })
+    return findings
+
+
+def detect_retry_patterns(project_root: Path) -> list[dict]:
+    """检测高 retry 模式（.audit 多次 audit）。
+
+    2026-05-29 cluster 化：优先 cluster 聚合，账本缺失回退原逐章（同章 audit ≥ 3）。
+    """
+    cluster_findings = detect_retry_patterns_cluster(project_root)
+    if cluster_findings is not None:
+        return cluster_findings
+
+    findings = []
+    per_ch = _count_per_ch_audit(project_root)
+    for ch, cnt in per_ch.items():
+        if cnt >= 3:
+            findings.append({
+                "code": "HIGH_RETRY",
+                "ch": ch,
+                "audit_count": cnt,
+                "signal": f"ch{ch} 已 audit {cnt} 次 → writer 输出反复不满意",
+            })
     return findings
 
 

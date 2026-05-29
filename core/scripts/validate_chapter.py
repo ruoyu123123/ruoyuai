@@ -43,6 +43,8 @@ from pathlib import Path
 # v18：统一章节读写走 chapter_io
 sys.path.insert(0, str(Path(__file__).parent))
 import chapter_io as cio
+# 2026-05-29 流程贯通（断点 1）：--cluster 入口靠章号⇄cluster_id 反查工具取章范围
+import cluster_lookup
 
 
 BANNED_WORDS = [
@@ -798,12 +800,92 @@ def format_json(result: dict, chapter: int) -> str:
     return json.dumps(out, ensure_ascii=False, indent=2)
 
 
+def validate_cluster(project_root: Path, cluster_key: str) -> dict:
+    """2026-05-29 流程贯通 · cluster 视野校验入口（断点 1）。
+
+    命令文档 cluster-save-state.md:132 调 `validate_chapter.py <项目> --cluster <key>`，
+    但旧 main 只解析位置参 <项目><章节号>，--cluster 被当 flag 丢弃 → 实际只校验第 1 章。
+    本函数用 cluster_lookup.cluster_id_to_range 取 cluster 章范围，对范围内每章设
+    CLUSTER_MODE=1（cluster 视野字数/长引文阈值），逐章跑现有 hard_gate 逻辑后聚合。
+
+    聚合契约与单章 validate() 一致：passed / *_count / errors / chapter_file。
+    errors 每条加 _chapter 字段标明来自哪一章（下游按 code 路由不受影响）。
+    """
+    import os as _os
+    rng = cluster_lookup.cluster_id_to_range(project_root, cluster_key)
+    if not rng or len(rng) != 2:
+        return {
+            "passed": False,
+            "fatal_count": 1, "error_count": 0, "warning_count": 0,
+            "chapter_file": f"{cluster_key}（章范围未回填）",
+            "errors": [{"code": "FILE_NOT_FOUND", "severity": "fatal",
+                        "msg": f"cluster {cluster_key} 的 chapter_range 未在 进度.json/事件簇.json 找到"
+                               "（splitter step 6 切完才回填，或 cluster_key 拼写错）"}],
+        }
+
+    chapters = list(range(rng[0], rng[1] + 1))
+    prev_mode = _os.environ.get("CLUSTER_MODE")
+    _os.environ["CLUSTER_MODE"] = "1"  # cluster 视野语义（字数 8k-30k / 长引文阈值 >5）
+    all_errs: list[dict] = []
+    ch_files: list[str] = []
+    try:
+        for ch in chapters:
+            r = validate(project_root, ch)
+            cf = r.get("chapter_file", f"第{ch}章")
+            ch_files.append(cf)
+            for e in r.get("errors", []):
+                e = dict(e)
+                e["_chapter"] = ch
+                all_errs.append(e)
+    finally:
+        if prev_mode is None:
+            _os.environ.pop("CLUSTER_MODE", None)
+        else:
+            _os.environ["CLUSTER_MODE"] = prev_mode
+
+    fatal = [e for e in all_errs if e["severity"] == "fatal"]
+    errors = [e for e in all_errs if e["severity"] == "error"]
+    warnings = [e for e in all_errs if e["severity"] == "warning"]
+    return {
+        "passed": len(fatal) == 0 and len(errors) == 0,
+        "fatal_count": len(fatal),
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "errors": all_errs,
+        "chapter_file": f"{cluster_key} (ch{chapters[0]}-{chapters[-1]} · {len(chapters)} 章)",
+    }
+
+
 def main():
     args = sys.argv[1:]
     want_json = "--json" in args
+
+    # 2026-05-29 流程贯通（断点 1）：--cluster <key> 整 cluster 视野校验入口
+    # 与原位置参章级入口（向后兼容）并存。
+    cluster_key = None
+    if "--cluster" in args:
+        ci = args.index("--cluster")
+        if ci + 1 < len(args):
+            cluster_key = args[ci + 1]
+    if cluster_key:
+        project_root = Path(import_cluster_project_arg(args)).resolve()
+        result = validate_cluster(project_root, cluster_key)
+        if want_json:
+            # cluster 模式 chapter 字段用 -1 占位（聚合非单章）
+            print(format_json(result, -1))
+        else:
+            print(format_report(result))
+        if result.get("fatal_count", 0) > 0:
+            sys.exit(2)
+        if not result["passed"]:
+            sys.exit(1)
+        sys.exit(0)
+
     positional = [a for a in args if not a.startswith("--")]
     if len(positional) < 2:
         print("用法: python validate_chapter.py <项目路径> <章节号> [--json]",
+              file=sys.stderr)
+        print("  或: python validate_chapter.py <项目路径> --cluster <cluster_key> [--json]",
               file=sys.stderr)
         sys.exit(2)
     project_root = Path(positional[0]).resolve()
@@ -825,6 +907,24 @@ def main():
     if not result["passed"]:
         sys.exit(1)
     sys.exit(0)
+
+
+def import_cluster_project_arg(args: list[str]) -> str:
+    """--cluster 模式下取项目路径：第一个非 -- 开头且不是紧跟 --cluster 的值的位置参。"""
+    cluster_val = None
+    if "--cluster" in args:
+        ci = args.index("--cluster")
+        if ci + 1 < len(args):
+            cluster_val = args[ci + 1]
+    for a in args:
+        if a.startswith("--"):
+            continue
+        if a == cluster_val:
+            continue
+        return a
+    print("用法: python validate_chapter.py <项目路径> --cluster <cluster_key> [--json]",
+          file=sys.stderr)
+    sys.exit(2)
 
 
 if __name__ == "__main__":

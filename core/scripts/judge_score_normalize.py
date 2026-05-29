@@ -8,9 +8,16 @@
 不训练小模型（长期规划），只做工程降噪。
 
 用法：
-    python judge_score_normalize.py <project> --ch <N>     # 输出本章 normalized + 投票结果
-    python judge_score_normalize.py <project> --stats      # 输出各 judge 历史评分分布
+    python judge_score_normalize.py <project> --ch <N>          # 单章 normalized + 投票
+    python judge_score_normalize.py <project> --cluster <key>   # cluster 综合归一化（2026-05-29）
+    python judge_score_normalize.py <project> --stats           # 各 judge 历史评分分布
 退出码: 0 成功
+
+2026-05-29 cluster 化：
+  v27 freestyle 浮动章数下「单章投票」不再是稳定的检测/归一化单位 —— cluster 才是
+  v2 检测层。新增 `--cluster <key>`：对 cluster 的关键章（账本 chapter_range 全部章）
+  各自做单章投票，再综合（per-ch normalized final_score 均值/中位）+ 引入 cluster 级
+  judge_grade 作为锚点对照。`--ch` 完整保留兼容。
 """
 
 from __future__ import annotations
@@ -21,6 +28,14 @@ import math
 import statistics
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cluster_summary_reader as csr  # 2026-05-29 cluster 化：cluster 账本
+    import cluster_lookup  # 2026-05-29 cluster 化：cluster_id ⇄ range
+except Exception:  # 防御：缺模块时 --cluster 不可用，--ch 仍工作
+    csr = None
+    cluster_lookup = None
 
 
 GRADE_TO_NUM = {"A": 5, "A-": 4.5, "B+": 4, "B": 3.5, "B-": 3, "C+": 2.5, "C": 2, "C-": 1.5, "D": 1, "F": 0}
@@ -125,10 +140,72 @@ def chapter_vote(project_root: Path, ch: int) -> dict:
     }
 
 
+def _cluster_chapter_list(project_root: Path, cluster_key) -> tuple[str | None, list[int]]:
+    """解出 cluster_id + 该 cluster 的物理章号列表（chapter_range 优先，回退账本 chapters）。"""
+    if cluster_lookup is None or csr is None:
+        return None, []
+    cid = cluster_lookup.normalize_cluster_id(cluster_key)
+    rng = cluster_lookup.cluster_id_to_range(project_root, cluster_key)
+    chs: list[int] = []
+    if rng and len(rng) == 2:
+        chs = list(range(rng[0], rng[1] + 1))
+    if not chs:
+        # 回退账本 chapters keys
+        for c in csr.get_clusters(project_root):
+            if cluster_lookup.normalize_cluster_id(c.get("cluster_id")) == cid:
+                chs = sorted(int(k) for k in (c.get("chapters") or {}) if str(k).isdigit())
+                break
+    return cid, chs
+
+
+def cluster_vote(project_root: Path, cluster_key) -> dict:
+    """对一个 cluster 的关键章逐章投票后做综合归一化（2026-05-29 cluster 化）。"""
+    if csr is None or cluster_lookup is None:
+        return {"error": "cluster 模块不可用（cluster_summary_reader/cluster_lookup 缺失）"}
+    cid, chs = _cluster_chapter_list(project_root, cluster_key)
+    if not cid:
+        return {"error": f"无法解析 cluster 标识: {cluster_key}"}
+    # cluster 级 judge_grade 锚点
+    cluster_grade = None
+    for c in csr.get_clusters(project_root):
+        if cluster_lookup.normalize_cluster_id(c.get("cluster_id")) == cid:
+            cluster_grade = c.get("judge_grade")
+            break
+    if not chs:
+        return {"cluster_id": cid, "error": "cluster 章范围未知（chapter_range/账本均缺）",
+                "cluster_judge_grade": cluster_grade}
+
+    per_ch = []
+    finals = []
+    for ch in chs:
+        r = chapter_vote(project_root, ch)
+        if "final_score" in r:
+            per_ch.append(r)
+            finals.append(r["final_score"])
+    if not finals:
+        return {"cluster_id": cid, "chapters": chs, "cluster_judge_grade": cluster_grade,
+                "error": "cluster 内无任何章有 judge_reports"}
+
+    cluster_final = (statistics.mean(finals) + statistics.median(finals)) / 2
+    return {
+        "cluster_id": cid,
+        "chapters_voted": [r["ch"] for r in per_ch],
+        "cluster_judge_grade": cluster_grade,   # cluster 级综合评级（账本锚点对照）
+        "per_chapter_final_scores": {r["ch"]: r["final_score"] for r in per_ch},
+        "cluster_normalized_avg": round(statistics.mean(finals), 2),
+        "cluster_normalized_median": round(statistics.median(finals), 2),
+        "cluster_final_score": round(cluster_final, 2),
+        "cluster_final_grade": num_to_grade(cluster_final),
+        "per_chapter": per_ch,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("--ch", type=int, default=None)
+    ap.add_argument("--cluster", default=None,
+                    help="cluster 标识（如 cluster_002 / 2）：对该 cluster 综合归一化（2026-05-29）")
     ap.add_argument("--stats", action="store_true")
     args = ap.parse_args()
 
@@ -146,12 +223,18 @@ def main():
             print(f"  {jid}: n={len(scores)} mean={mean:.2f} stdev={stdev:.2f}")
         sys.exit(0)
 
+    if args.cluster is not None:
+        r = cluster_vote(project_root, args.cluster)
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+        sys.exit(0)
+
     if args.ch:
         r = chapter_vote(project_root, args.ch)
         print(json.dumps(r, ensure_ascii=False, indent=2))
         sys.exit(0)
 
-    print("用法: judge_score_normalize.py <project> --ch <N> | --stats", file=sys.stderr)
+    print("用法: judge_score_normalize.py <project> --cluster <key> | --ch <N> | --stats",
+          file=sys.stderr)
     sys.exit(2)
 
 

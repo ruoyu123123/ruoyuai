@@ -879,7 +879,14 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     audit_mode = _get_user_audit_mode(project_root)
 
     # v2 cluster 化：scanner 子进程 env 透传
-    _env_extra = {"CLUSTER_MODE": "1"} if cluster_mode else None
+    # 2026-05-29：cluster mode 把真实 cluster_key 经 CLUSTER_ID env 透传给子进程
+    # （沿用 run_cross_cluster_aggregates 的 CLUSTER_ID 先例），让 golden_three 能区分
+    # cluster_001 ↔ cluster_002+ —— 否则任何 cluster 都借虚拟 ch=9000 恒激活黄金三章开场检测。
+    _env_extra = None
+    if cluster_mode:
+        _env_extra = {"CLUSTER_MODE": "1"}
+        if cluster_key:
+            _env_extra["CLUSTER_ID"] = cluster_key
 
     # P2-15：13 个 scanner 并行执行（v2 cluster 化方案 · 2026-05-28）
     # 9 升维 + 4 新 cluster-only 全部集成进 audit_hub

@@ -171,9 +171,9 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 | `advisory` | 风格/工艺/读者体验类 | 写作 agent 有理由可豁免（理由 < 300 字、具体到本 cluster 场景）|
 | `hard_gate` | 一致性 + 文件契约破损 | **不可豁免** |
 
-### hard_gate 不可豁免清单（12 code · 权威定义见 STRUCTURE.md 第十一节）
+### hard_gate 不可豁免清单（15 code · 权威定义见 STRUCTURE.md 第十一节）
 
-`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `PROPAGATION_DEBT_CREATED` / `STYLE_单段超长`
+`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `PROPAGATION_DEBT_CREATED` / `STYLE_单段超长` / `CHAPTER_END_FORBIDDEN_SCREENPLAY` / `CHAPTER_END_FORBIDDEN_TRANSITION` / `LOCKED_FACT_CROSS_SCENE_CONFLICT`（后 3 个为 v2 cluster 新增 · 与 audit_hub.HARD_GATE_CODES 对齐）
 
 **权威边界**：hard_gate 清单以 `core/claude-home/STRUCTURE.md` 第十一节为**单一来源**，与 `audit_hub.py` 的 `HARD_GATE_CODES` 一一对应，**不得各自另立**。
 

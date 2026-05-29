@@ -35,7 +35,12 @@ from collections import Counter
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
 
-# v2 cluster 化（2026-05-28）：CLUSTER_MODE env 感知 · scanner 内部可按 mode 切阈值
+# v2 cluster 化（2026-05-29 接入）：CLUSTER_MODE env 感知。
+# 本 scanner 的多数 check（gmc/mru/microten/repetition/pov/perspective_shift）判定单元
+# 是单段/单场景，与整篇体量无关。唯一对文本体量敏感的是 G7 info_dump：
+# 它用「整篇命中 ≥1 段 → 报 advisory」的扁平阈值，cluster 草稿（12-25k CJK，段数 = chapter 数倍）
+# 下绝对命中数天然偏高，扁平阈值会过报。故 cluster 模式给 info_dump 加按段数归一的密度门槛
+# （见 scan_info_dump）。其余 check 不随 mode 浮动。
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
@@ -372,18 +377,33 @@ def scan_info_dump(paragraphs: list[str]) -> dict:
             "kw_hits": kw_hits[:5],
             "preview": p[:60].replace("\n", " "),
         })
-    # 段数判定阈值：单章 ≥1 处 即报 advisory（避免单段疏漏；大量段命中升警告强度）
+    # 段数判定阈值：
+    # · chapter 视野（默认）：单章 ≥1 处 即报 advisory（避免单段疏漏）
+    # · cluster 视野（v2 2026-05-29 接入）：cluster 草稿段数是 chapter 数倍，
+    #   绝对命中 ≥1 的扁平阈值会过报 → 改按段数归一的密度门槛：
+    #   命中数 < max(2, 总段数的 3%) 视为 cluster 体量下的正常本底，不报 warning。
+    n_scanned = len(paragraphs)
+    if IS_CLUSTER_MODE:
+        warn_floor = max(2, round(n_scanned * 0.03))
+        emit = len(hits) >= warn_floor
+    else:
+        warn_floor = 1
+        emit = bool(hits)
     return {
-        "paragraphs_scanned": len(paragraphs),
+        "paragraphs_scanned": n_scanned,
         "hits_count": len(hits),
         "hits": hits[:8],
         "severity": "warning",
         "gate_level": "advisory",
+        "cluster_mode": IS_CLUSTER_MODE,
+        "warn_floor": warn_floor,
         "fix_hint": "把『设定堆砌段』拆成「对话/动作/感官+设定碎片」的混合段，"
                     "或挪到「需要这条设定」的剧情时机才放出。",
         "warning": (
             f"⚠️ {len(hits)} 段 info-dump 嫌疑（长叙述+设定词+低对话），"
-            "建议拆段或后置至需要时刻" if hits else None
+            f"建议拆段或后置至需要时刻"
+            + (f"（cluster 体量门槛 ≥{warn_floor} 段）" if IS_CLUSTER_MODE else "")
+            if emit else None
         ),
     }
 

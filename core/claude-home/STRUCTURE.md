@@ -144,7 +144,7 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 
 **【v18 正文/数据分离】**：
 - `第{N}章.txt` = **纯正文**，`第{N}章_changes.json` = **结构化数据**，两者是两个物理文件，不再混在一个 txt 里靠 `---CHANGES---` 分隔符切。
-- `第{N}章_changes.json` 由 `novel-writer`（单章模式）或 `novel-chapter-splitter`（DCAS 模式由 writer 写整段草稿的 changes）产出，不再由 save-state 产出。
+- `第{N}章_changes.json` 由 `novel-chapter-splitter`（cluster mode · splitter 在 step 6 从 `cluster_<key>_changes.json` 按切点平铺成 per-chapter）产出，不再由 save-state 产出。
 - 所有读写章节正文 / CHANGES 的脚本必须走 `core/scripts/chapter_io.py` 统一模块（`read_body` / `read_changes` / `write_body` / `write_changes`），禁止各自 split。
 - `第{N}章_changes.json` 顶层两键：`factual`（9 类客观变更，judge 可读）+ `self_eval`（writer 自评 applied_style 等，judge 默认不读，v17.4 分权纪律）。
 
@@ -283,9 +283,9 @@ mv "风格库/{书名}_skill.md" "workspace/styles/{书名}/skill_FINAL.md"
 |---|---|---|
 | `/distill-style` | 风格基线 / skill / 衔接分析 / 复刻测试 / 对比报告 / distillation_log | `workspace/styles/{书名}/` |
 | `/distill-character` | 角色 voice DNA | `workspace/styles/{书名}/角色档案/{角色名}.json` |
-| `/outline` | 大纲 / 13 个数据库 JSON | `workspace/novels/{书名}/_数据库/` |
-| `/write-chapter` | 章节正文 + CHANGES 数据 | `workspace/novels/{书名}/章节/第{N}章/第{N}章.txt` + `第{N}章_changes.json` |
-| `/save-state` | 摘要 / 反思 / 走向卡（读 `_changes.json` 的 factual 段 apply 到数据库） | `workspace/novels/{书名}/章节/第{N}章/` 的伴生文件 |
+| `/outline` | 大纲 / 34 个数据库 JSON | `workspace/novels/{书名}/_数据库/` |
+| `/cluster-write` | cluster 整块草稿 + 切章物理文件 + 平铺 CHANGES | `workspace/novels/{书名}/章节/cluster_<key>_draft/cluster_<key>_draft.txt` → splitter 切出 `第{N}章/第{N}章.txt` + `第{N}章_changes.json` |
+| `/cluster-save-state` | cluster 摘要 / 反思 / 走向卡 + 涌现下个 cluster brief（一次性 apply cluster_changes 到数据库） | `workspace/novels/{书名}/_数据库/故事块摘要.json` + `章节/cluster_<key>_draft/` 伴生文件 |
 | `/check-quality` | 校验报告 | `workspace/novels/{书名}/_tmp/quality_ch{N}.md` |
 | `/scan` | 市场分析 | `workspace/novels/{书名}/_数据库/扫榜.json` |
 | `/export` | 拼接全文 | `workspace/novels/{书名}/全文.txt` |
@@ -361,8 +361,8 @@ v17 及之前，章节 txt = 正文 + `---CHANGES_FACTUAL---` JSON + `---CHANGES
 
 | 文件 | 标准路径 | 内容 | 由谁产出 |
 |---|---|---|---|
-| 正文 | `章节/第NNN章/第NNN章.txt` | **纯正文**（无 CHANGES、无分隔符） | `novel-writer`（单章）/ `novel-chapter-splitter`（DCAS） |
-| 数据 | `章节/第NNN章/第NNN章_changes.json` | `{"factual": {9类变更}, "self_eval": {applied_style 等}}` | `novel-writer`（writer 写整段草稿的 changes，DCAS 模式归属 ch） |
+| 正文 | `章节/第NNN章/第NNN章.txt` | **纯正文**（无 CHANGES、无分隔符） | `novel-chapter-splitter`（cluster mode · 从 cluster 草稿切章） |
+| 数据 | `章节/第NNN章/第NNN章_changes.json` | `{"factual": {9类变更}, "self_eval": {applied_style 等}}` | `novel-chapter-splitter`（splitter 从 `cluster_<key>_changes.json` 按切点平铺到各 ch） |
 
 **强约束（开发者必读）**：
 - 所有读写章节正文 / CHANGES 的脚本和 agent，**必须**走 `core/scripts/chapter_io.py` 统一模块——禁止各自写 `split("---CHANGES")`。

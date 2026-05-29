@@ -192,12 +192,77 @@ def trigger_consensus(project_root: Path, ch: int) -> int:
         return 0
 
 
+def _resolve_cluster_chapters(project_root: Path, cluster_key: str) -> list[int]:
+    """2026-05-29 cluster 化：把 cluster key（'001' / 'cluster_001'）展开成章号列表。
+
+    数据来源：事件簇.json.clusters[].chapter_range（与 judge_reports_archive
+    的 _resolve_chapter_range 同源）。range 缺失（fluid 未切）→ 返回 []。
+    """
+    target = cluster_key.replace("cluster_", "")
+    ec = load_json(project_root / "_数据库" / "事件簇.json", {}) or {}
+    for c in ec.get("clusters", []) or []:
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("cluster_id", "")).replace("cluster_", "")
+        if cid == target:
+            cr = c.get("chapter_range") or []
+            if isinstance(cr, list) and len(cr) == 2 and isinstance(cr[0], int) and isinstance(cr[1], int):
+                return list(range(cr[0], cr[1] + 1))
+    return []
+
+
+def run_cluster(project_root: Path, cluster_key: str) -> int:
+    """2026-05-29 cluster 化（主路径）：展开本 cluster 章节，对每个 cluster 触发章
+    （cluster 末章 + climax 章，复用已有 _cluster_trigger_chapters）跑 consensus。
+
+    plan cluster-save-state.plan.json:127 以 `--cluster {key}` 调用（无 || true），
+    故此入口绝不能崩：range 缺失 / 无触发章 → 优雅 [SKIP] + exit 0。
+    """
+    chapters = _resolve_cluster_chapters(project_root, cluster_key)
+    cluster_id = "cluster_" + cluster_key.replace("cluster_", "")
+    if not chapters:
+        print(f"[SKIP] {cluster_id} 在 事件簇.json 无 chapter_range（fluid 未切定），跳过 consensus")
+        return 0
+
+    # cluster 触发章 = 本 cluster 范围内的「末章 + climax 章」
+    trigger_map = _cluster_trigger_chapters(project_root)
+    triggered = [ch for ch in chapters if ch in trigger_map]
+    if not triggered:
+        # blueprint/storyboard 缺失时兜底：至少把本 cluster 末章当触发章
+        triggered = [chapters[-1]]
+        print(f"[INFO] {cluster_id} 无 blueprint 触发章，兜底取末章 ch{triggered[0]}")
+
+    print(f"[judge_consensus · cluster mode] {cluster_id} 章 {chapters} → 触发章 {triggered}")
+    for ch in triggered:
+        reasons = trigger_map.get(ch, [f"{cluster_id} 末章(兜底)"])
+        print(f"[KEY] ch{ch} 触发: {reasons}")
+        trigger_consensus(project_root, ch)
+    return 0
+
+
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="maybe_judge_consensus · cluster 模式为主路径 / chapter 位置参向后兼容"
+    )
     ap.add_argument("project")
-    ap.add_argument("chapter", type=int)
+    # 2026-05-29 cluster 化：chapter 改 optional，新增 --cluster（主路径）。
+    # v26 chapter mode 已废，STC_KEY_CHAPTERS 硬编码无来源，仅为零回归保留位置参兼容。
+    ap.add_argument("chapter", type=int, nargs="?", default=None,
+                    help="单章号（chapter 兼容模式）· 与 --cluster 互斥")
+    ap.add_argument("--cluster", type=str, default=None,
+                    help="cluster key（'001' 或 'cluster_001'）· 展开本 cluster 触发章跑 consensus（主路径）")
     args = ap.parse_args()
     project_root = Path(args.project)
+
+    # cluster 模式优先（plan 主路径）
+    if args.cluster:
+        sys.exit(run_cluster(project_root, args.cluster))
+
+    if args.chapter is None:
+        print("[SKIP] 未指定 chapter 章号 或 --cluster <key>")
+        sys.exit(0)
+
+    # chapter 兼容模式
     ch = args.chapter
     is_key, reasons = is_key_chapter(project_root, ch)
     if not is_key:

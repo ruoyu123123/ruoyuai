@@ -25,6 +25,14 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+# 2026-05-29 cluster 化：cluster 模式下「章阈值」语义改为「cluster 序号阈值」。
+# cluster_lookup 把 cluster key → 末章号，从而沿用按章计的 last_validated_at_ch 比较
+# （retire 的「N 章未验证」改成「N 个 cluster 未验证」时也复用 cluster→末章映射）。
+try:
+    import cluster_lookup as _cl  # noqa: E402
+except Exception:  # pragma: no cover - 防御性
+    _cl = None
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -141,8 +149,29 @@ def evolve(project_root: Path, current_ch: int) -> dict:
     return results
 
 
+def _cluster_to_end_ch(project_root: Path, cluster_key: str) -> int:
+    """2026-05-29 cluster 化：把 cluster key 解析成其末章号，作为按章阈值的等价锚点。
+
+    优先用 cluster_lookup.cluster_id_to_range（进度.cluster_blueprint + 事件簇.json）。
+    解析不到（fluid 未切定）→ 回退用 cluster 序号 × 一个粗略系数，至少保证单调递增、
+    不崩。返回值仅用于和 last_validated_at_ch 比较，不要求精确。
+    """
+    if _cl is not None:
+        try:
+            rng = _cl.cluster_id_to_range(project_root, cluster_key)
+            if isinstance(rng, list) and len(rng) == 2 and isinstance(rng[1], int):
+                return rng[1]
+            num = _cl.cluster_num(cluster_key)
+            if num is not None:
+                return num  # 退化：按 cluster 序号当锚点（用于 cluster 计数语义）
+        except Exception:  # pragma: no cover - 防御性
+            pass
+    m = re.search(r"(\d+)", str(cluster_key))
+    return int(m.group(1)) if m else 0
+
+
 def retire(project_root: Path, current_ch: int, threshold_ch: int = 30) -> dict:
-    """long-unused patterns 标 retired"""
+    """long-unused patterns 标 retired（chapter 语义：current_ch - last > threshold_ch 章）"""
     exp_path = project_root / "_数据库" / "写作经验.json"
     exp = load_json(exp_path, {})
     retired_ids = []
@@ -158,6 +187,52 @@ def retire(project_root: Path, current_ch: int, threshold_ch: int = 30) -> dict:
     if retired_ids:
         save_json(exp_path, exp)
     return {"retired_count": len(retired_ids), "retired_ids": retired_ids}
+
+
+def retire_by_cluster(project_root: Path, cluster_key: str, threshold_clusters: int = 3) -> dict:
+    """2026-05-29 cluster 化：按「N 个 cluster 未验证」淘汰，取代「30 章未验证」。
+
+    把 last_validated_at_ch 反查回所属 cluster 序号，与当前 cluster 序号比较；
+    相差 > threshold_clusters 个 cluster 则 retire。pattern 未记 cluster 来源时
+    用末章号反查（cluster_lookup.ch_to_cluster_id）；反查不到则保守不淘汰（不误杀）。
+    """
+    exp_path = project_root / "_数据库" / "写作经验.json"
+    exp = load_json(exp_path, {})
+    cur_num = (_cl.cluster_num(cluster_key) if _cl is not None else None)
+    if cur_num is None:
+        m = re.search(r"(\d+)", str(cluster_key))
+        cur_num = int(m.group(1)) if m else 0
+    cur_end_ch = _cluster_to_end_ch(project_root, cluster_key)
+
+    retired_ids = []
+    for category in ["success_patterns", "failure_patterns"]:
+        for p in exp.get(category, []) or []:
+            if not isinstance(p, dict) or p.get("status") == "retired":
+                continue
+            last_num = None
+            # 优先 pattern 自带的 cluster 来源字段
+            for key in ("last_validated_at_cluster", "recorded_at_cluster", "cluster_id"):
+                if p.get(key) and _cl is not None:
+                    last_num = _cl.cluster_num(p.get(key))
+                    if last_num is not None:
+                        break
+            # 回退：用 last_validated_at_ch 反查 cluster
+            if last_num is None:
+                last_ch = p.get("last_validated_at_ch", 0)
+                if _cl is not None:
+                    cid = _cl.ch_to_cluster_id(project_root, last_ch)
+                    last_num = _cl.cluster_num(cid) if cid else None
+            if last_num is None:
+                continue  # 反查不到，保守不淘汰
+            if cur_num - last_num > threshold_clusters:
+                p["status"] = "retired"
+                p["retired_at_ch"] = cur_end_ch
+                p["retired_at_cluster"] = "cluster_%03d" % cur_num
+                retired_ids.append(p.get("id") or p.get("name", "?"))
+    if retired_ids:
+        save_json(exp_path, exp)
+    return {"retired_count": len(retired_ids), "retired_ids": retired_ids,
+            "mode": "cluster", "current_cluster": cur_num, "threshold_clusters": threshold_clusters}
 
 
 def promote(project_root: Path) -> dict:
@@ -217,14 +292,40 @@ def dashboard(project_root: Path) -> dict:
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="skill_evolver · cluster 模式（--cluster）为 v26 主路径 / --ch 向后兼容"
+    )
     ap.add_argument("project")
     ap.add_argument("action", choices=["evolve", "promote", "retire", "dashboard"])
-    ap.add_argument("--ch", type=int, default=0)
-    ap.add_argument("--retire-threshold", type=int, default=30)
+    ap.add_argument("--ch", type=int, default=0, help="当前章号（chapter 兼容模式）")
+    # 2026-05-29 cluster 化：plan cluster-save-state.plan.json:124 以 `evolve --cluster {key}`
+    # 调用。argparse 不认 --cluster 会非 0 退出被 `|| true` 吞掉 → skill 演化静默不跑。
+    ap.add_argument("--cluster", type=str, default=None,
+                    help="cluster key（'001' / 'cluster_001'）· 主路径：章阈值换成 cluster 序号阈值")
+    ap.add_argument("--retire-threshold", type=int, default=30,
+                    help="chapter 模式：N 章未验证 retire（默认 30）")
+    ap.add_argument("--retire-cluster-threshold", type=int, default=3,
+                    help="cluster 模式：N 个 cluster 未验证 retire（默认 3）")
     args = ap.parse_args()
 
     project_root = Path(args.project).resolve()
+
+    # cluster 模式：把 cluster key 解析成等价末章号，evolve 沿用按章逻辑（last_validated_at_ch=末章）；
+    # retire 切到 cluster 序号阈值。
+    if args.cluster:
+        end_ch = _cluster_to_end_ch(project_root, args.cluster)
+        if args.action == "evolve":
+            r = evolve(project_root, end_ch)
+        elif args.action == "promote":
+            r = promote(project_root)
+        elif args.action == "retire":
+            r = retire_by_cluster(project_root, args.cluster, args.retire_cluster_threshold)
+        else:
+            r = dashboard(project_root)
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+        sys.exit(0)
+
+    # chapter 兼容模式
     if args.action == "evolve":
         r = evolve(project_root, args.ch)
     elif args.action == "promote":

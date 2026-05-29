@@ -22,9 +22,12 @@ import re
 import sys
 from pathlib import Path
 
-# v2 cluster 化（2026-05-28）：CLUSTER_MODE env 感知 · scanner 内部可按 mode 切阈值
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
+# v2 cluster 化（2026-05-29 复核）：本 scanner 的判定单元是「单个叙述段」——
+# 触发阈值（段长 < 80 CJK 且 句号 ≥3 且 逗号 ≤1）只看单段内部结构，
+# 与整篇文本体量（chapter 3-4k vs cluster 12-25k CJK）无关：cluster 草稿里的
+# 每个段落和 chapter 里的段落是同一批物理段，逐段判定完全一致。
+# violation_density 用 narrative_paras_total 归一，长文本天然不会因段多而误升。
+# 故 cluster 化对本 scanner 阈值无意义 → 不引入 IS_CLUSTER_MODE 分支（删除死变量 + 误导注释）。
 
 
 

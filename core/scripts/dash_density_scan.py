@@ -5,6 +5,11 @@
 
 用法：
     python dash_density_scan.py <项目路径> [--ch <N>]
+
+v2 cluster 化（2026-05-29）：CLUSTER_MODE=1 → 直接扫 cluster 草稿
+（章节/cluster_<key>_draft/cluster_<key>_draft.txt），不再主动排除 'cluster' 目录
+（旧 `if 'cluster' in d.name: continue` 与「cluster 是唯一检测层」相悖，已移除）。
+CLUSTER_ID 指定时只扫该 cluster。未设 CLUSTER_MODE 沿用逐章扫描。
 """
 import sys, os, json
 from pathlib import Path
@@ -58,21 +63,41 @@ def main():
     out_dir = proj / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     results = {}
-    for d in sorted(chap_dir.iterdir()):
-        if not d.is_dir() or 'cluster' in d.name or 'pre_opening' in d.name:
-            continue
-        m = [int(s) for s in d.name if s.isdigit()]
-        if not m:
-            continue
-        ch_num = int(d.name.replace('第', '').replace('章', '').lstrip('0') or '0')
-        if target_ch is not None and ch_num != target_ch:
-            continue
-        for f in d.glob("*.txt"):
-            if 'changes' in f.name or 'pre_opening' in f.name:
+    # v2 cluster 化（2026-05-29）：CLUSTER_MODE=1 → 直接扫 cluster 草稿（唯一检测层），
+    # 不再因 'cluster' in d.name 主动排除。CLUSTER_ID 指定时只扫该 cluster。
+    cluster_mode = os.environ.get("CLUSTER_MODE") == "1"
+    if cluster_mode:
+        cid = os.environ.get("CLUSTER_ID", "").replace("cluster_", "")
+        for d in sorted(chap_dir.iterdir()):
+            if not d.is_dir() or 'cluster' not in d.name or not d.name.endswith('_draft'):
                 continue
-            text = f.read_text(encoding='utf-8')
-            results[f'ch{ch_num:03d}'] = scan_chapter(text)
-            break
+            key = d.name.replace('cluster_', '').replace('_draft', '')
+            if cid and key.lstrip('0') != cid.lstrip('0'):
+                continue
+            draft = d / f"{d.name}.txt"
+            if not draft.exists():
+                cand = [f for f in d.glob("*.txt") if 'changes' not in f.name and 'pending_tail' not in f.name]
+                if not cand:
+                    continue
+                draft = cand[0]
+            text = draft.read_text(encoding='utf-8')
+            results[f'cluster_{key}'] = scan_chapter(text)
+    else:
+        for d in sorted(chap_dir.iterdir()):
+            if not d.is_dir() or 'cluster' in d.name or 'pre_opening' in d.name:
+                continue
+            m = [int(s) for s in d.name if s.isdigit()]
+            if not m:
+                continue
+            ch_num = int(d.name.replace('第', '').replace('章', '').lstrip('0') or '0')
+            if target_ch is not None and ch_num != target_ch:
+                continue
+            for f in d.glob("*.txt"):
+                if 'changes' in f.name or 'pre_opening' in f.name:
+                    continue
+                text = f.read_text(encoding='utf-8')
+                results[f'ch{ch_num:03d}'] = scan_chapter(text)
+                break
     # 汇总报告
     from datetime import datetime
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')

@@ -125,10 +125,15 @@ def main():
                     # v2 cluster 化（2026-05-28）：纯 cluster 模式
                     "first_appear_cluster": appear_cid,
                     "_lazy_spawned": True,
-                    "_distill_recommended_cluster": f"cluster_{ch+5:03d}",
                 }
                 if appear_inferred:
                     card_rec["_cluster_inferred"] = True
+                # 2026-05-29 cluster 化：蒸馏建议 cluster 走 ch 反查真实 cluster_id，
+                # 取代旧残留 f"cluster_{ch+5:03d}"（章号当 cluster 号，正是 cluster_lookup 要消灭的模式）。
+                distill_cid, distill_inferred = _resolve_cluster(project_root, ch + 5)
+                card_rec["_distill_recommended_cluster"] = distill_cid
+                if distill_inferred:
+                    card_rec["_distill_recommended_cluster_inferred"] = True
                 cards["characters"].append(card_rec)
         else:
             pool["extras"].append({"id": name, "ch": ch, "role": role})

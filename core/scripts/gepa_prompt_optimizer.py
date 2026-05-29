@@ -56,6 +56,19 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cluster_summary_reader as csr  # 2026-05-29 cluster 化：cluster 账本 judge_grade
+    import cluster_lookup  # 2026-05-29 cluster 化：章号→cluster_id 反查
+except Exception:  # 防御：缺模块退回逐章 proxy metric
+    csr = None
+    cluster_lookup = None
+
+
+# 2026-05-29 cluster 化：cluster 级 judge_grade → 数值（与 judge_score_normalize 同表）
+GRADE_TO_SCORE = {"A": 5.0, "A-": 4.5, "B+": 4.0, "B": 3.5, "B-": 3.0,
+                  "C+": 2.5, "C": 2.0, "C-": 1.5, "D": 1.0, "F": 0.0}
+
 
 # ============================================================
 # 路径常量
@@ -157,18 +170,83 @@ def get_chapter_scenes_and_scores(project_root: Path, chs: list[int]) -> dict:
     return out
 
 
-def annotate_candidate_with_metrics(project_root: Path, cand: dict) -> dict:
-    """给候选标注 scene 覆盖 + 代理 metric。
+# ============================================================
+# 2026-05-29 cluster 化：cluster 级 proxy metric（取代逐章 consensus.json）
+# ============================================================
 
-    代理 metric: 候选提出后**该 target_agent 产出的章节** judge 分数（按 scene_type 分组）。
+def get_cluster_scenes_and_scores(project_root: Path, chs: list[int]) -> dict:
+    """把候选的 analysis_window_chs 映射到所属 cluster，proxy metric 用 cluster judge_grade。
+
+    返回 {cluster_id: {"scene_type": <scope/throughline 主导>, "score": float}}。
+    cluster 才是 v2 检测层 —— judge_grade 是 cluster 级综合评级，比逐章分稳。
+    """
+    if csr is None or cluster_lookup is None:
+        return {}
+    # 章 → cluster_id
+    cids = []
+    seen = set()
+    for ch in chs:
+        cid = cluster_lookup.ch_to_cluster_id(project_root, ch)
+        if cid and cid not in seen:
+            seen.add(cid)
+            cids.append(cid)
+    if not cids:
+        return {}
+    by_id = {c.get("cluster_id"): c for c in csr.get_clusters(project_root)}
+    out = {}
+    for cid in cids:
+        rec = by_id.get(cid) or {}
+        grade = rec.get("judge_grade")
+        score = GRADE_TO_SCORE.get(grade) if isinstance(grade, str) else None
+        # scope：用 throughline 分布主导项当 "scene"（Pareto 前沿按 cluster.scope）
+        scope = None
+        td = rec.get("throughline_distribution")
+        if isinstance(td, dict) and td:
+            scope = max(td.items(), key=lambda kv: kv[1] if isinstance(kv[1], (int, float)) else 0)[0]
+        out[cid] = {"scene_type": scope, "score": score}
+    return out
+
+
+def annotate_candidate_with_metrics(project_root: Path, cand: dict) -> dict:
+    """给候选标注 scope 覆盖 + 代理 metric。
+
+    2026-05-29 cluster 化：proxy metric 优先用 **cluster judge_grade**（候选 analysis
+    window 映射到的 cluster），按 cluster scope（throughline 主导）分组。cluster 账本
+    缺失时回退原逐章 judge 分数逻辑（向后兼容）。
     """
     chs = cand.get("analysis_window_chs") or []
     if not chs:
         cand["proxy_metric_by_scene"] = {}
         cand["proxy_metric_overall"] = None
         cand["covered_scenes"] = []
+        cand["proxy_unit"] = "none"
         return cand
 
+    # 优先 cluster 级
+    cluster_data = get_cluster_scenes_and_scores(project_root, chs)
+    if any(v.get("score") is not None for v in cluster_data.values()):
+        scene_scores = defaultdict(list)
+        overall_scores = []
+        for _cid, info in cluster_data.items():
+            st = info.get("scene_type")
+            s = info.get("score")
+            if s is not None:
+                overall_scores.append(s)
+                if st:
+                    scene_scores[st].append(s)
+        cand["proxy_metric_by_scene"] = {
+            st: round(sum(ss) / len(ss), 2) for st, ss in scene_scores.items() if ss
+        }
+        cand["proxy_metric_overall"] = (
+            round(sum(overall_scores) / len(overall_scores), 2) if overall_scores else None
+        )
+        cand["covered_scenes"] = sorted(scene_scores.keys())
+        cand["covered_clusters"] = sorted(cluster_data.keys())
+        cand["proxy_unit"] = "cluster"  # 2026-05-29 cluster 化
+        return cand
+
+    # 回退：逐章（cluster 账本无 judge_grade）
+    cand["proxy_unit"] = "chapter"
     chs_data = get_chapter_scenes_and_scores(project_root, chs)
     scene_scores = defaultdict(list)
     overall_scores = []

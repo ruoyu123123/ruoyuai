@@ -422,7 +422,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
        - 隐藏：仅 known_by 列表内角色能感知（默认）
        - 延迟：知道但 N 章内不能透露（writer 必须等到 reveal_at_cluster）
        - 永不明确：作者从不直接揭示，靠读者自己拼图
-5. Write `_数据库/故事块摘要.json` — 初始化 `{"chapters": []}`
+5. Write `_数据库/故事块摘要.json` — 初始化 `{"schema_version": "v2.cluster", "clusters": []}`（cluster 账本主存储 · 每个 cluster 内含 chapters 映射 · 由 cluster-save-state 经 cluster_summary_builder 落库）
 6. Write `_数据库/进度.json` — 初始化进度，结构如下：
 ```json
 {
@@ -463,7 +463,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
    - `cluster_blueprint` 从大纲中提取，每章记录出场角色、关键事件和场景类型
    - 每章关联到所属卷（`vol` 字段），用于卷级一致性检查
    - `scene_type` 标注本章主要场景类型（可多选），用于场景规则注入
-   - 后续 write-chapter 根据 `cluster_blueprint[ch].characters` 按需加载人物卡
+   - 后续 cluster-write（build_manifest）根据 `cluster_blueprint[ch].characters` 按需加载人物卡
 7. Write `_数据库/场景规则.json` — 初始化场景类型对应的写作规则
 ```json
 {
@@ -615,7 +615,7 @@ if command -v git >/dev/null 2>&1; then
     git config user.email "ruoyuai@local" 2>/dev/null
   fi
   git add .gitignore _数据库/
-  git commit -m "chore: 初始化项目 + 13 个数据库文件" 2>&1 | tail -1
+  git commit -m "chore: 初始化项目 + 34 个数据库文件" 2>&1 | tail -1
 fi
 ```
 
@@ -775,7 +775,7 @@ fluid 模式核心好处：
 - **出场角色**：列出本章所有出场角色（含主角、配角、新登场角色）
 - **关键事件**：本章核心事件摘要（2-3个关键词）
 - **场景类型**：标注本章主要场景类型（可多选：战斗/日常/情感/悬疑/转折）
-- 此标注用于后续 write-chapter 按需加载对应人物卡和场景规则，避免全量加载
+- 此标注用于后续 cluster-write（build_manifest）按需加载对应人物卡和场景规则，避免全量加载
 
 ## 情绪节奏标注
 

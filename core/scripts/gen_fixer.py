@@ -5,12 +5,13 @@ gen_fixer.py — Gen-Model 修复/优化工具（OpenAI 兼容 /v1/chat/completi
 用当前 active gen-model profile 修复 reflector 发现的 issue / 微调主代理标记的问题段 / 字数扩写 /
 checker 输出的违规精修。
 
-五种模式：
+六种模式：
   --mode comprehensive       综合修 reading-reflector R1/R2 报告里所有 issue
   --mode polish              主代理亲读后小幅微调（接受 --instructions 自由文本）
   --mode word-count          单章字数 < 2500 时扩写（保 ≥ 2500）
   --mode validator-repair    按 novel-validator-checker 输出 brief.json 精修违规段落
   --mode voice-fix           按 novel-voice-checker 输出 brief.json 修对话 voice 漂移
+  --mode chapter-end-rewrite 按 brief.json 重写命中的物理章末段（切章后格式修复 · 2026-05-29）
 
 用法示例：
 
@@ -425,6 +426,81 @@ novel-voice-checker agent 已审查所有对话，定位 voice 漂移 / tone 不
     return system, user
 
 
+def build_chapter_end_rewrite_prompt(brief: dict, chapter_content: str) -> tuple:
+    """章末 anchor 修复（2026-05-29 流程贯通 · 断点 4）。
+
+    cluster-write.md:420 step6.4 — splitter 切章后，novel-validator-checker 发现某物理章
+    章末翻车（剧本体过渡 / 文学过渡 / 无锚 cliffhanger / 抒情收束），出 brief 交给本 mode 重写。
+    这是切章后的物理章格式修复（合法 · 不碰 cluster_draft 正文走向，只修章末段落）。
+
+    brief schema 复用 validator-repair（version=1 / chapter_path / violations[]），
+    violations 描述章末问题（issue + fix_hint + original 章末段）。
+    """
+    chapter_path = brief.get('chapter_path', '')
+    violations = brief.get('violations', [])
+    violations_table = render_violations_table(violations)
+    # brief 可带 cluster 级章末守则提示（可选）
+    end_guidance = brief.get('end_rules') or (
+        "章末是钩子不是收束。禁剧本体「（镜头XX）」/ 文学过渡符（*、※）/ 听觉淡出 / "
+        "收束抒情句（「他不再是…的那个…了」）。章末须留具体悬念锚点（角色 + 目标/截止/筹码 ≥2 项）。"
+    )
+
+    system = f"""你是长篇小说的章末修复引擎（chapter-end-rewrite）。
+
+splitter 已把 cluster 草稿切成物理章，novel-validator-checker 发现某些物理章的**章末段落**翻车
+（剧本体过渡 / 文学过渡符 / 听觉淡出 / 无锚 cliffhanger / 抒情收束）。
+你的任务：**只重写章末命中段落**，把收束改成留悬念的钩子，不动章节主体情节。
+
+# 章末守则（最高优先级）
+{end_guidance}
+
+{COMMON_HARD_RULES}
+
+# 修复原则
+- 只改 violations 指向的章末段落，章节前面主体一字不动
+- 不改情节走向 / 不删信息 / 不引入下一章才该出现的内容
+- 重写后章末是**悬念钩子**：留具体未决事项（谁要做什么 / 截止 / 筹码），不抒情不总结
+- 长度大致守恒（章末段 ± 30%）
+
+# 输出格式
+
+输出**完整修复后正文**（保留章节标题第一行），用以下格式包裹：
+
+```
+===FILE: <章节相对路径>===
+<完整正文>
+===END===
+```
+
+末尾 JSON 总结：
+```json
+{{
+  "violations_addressed": [1, 2],
+  "chapter_end_before": "...",
+  "chapter_end_after": "..."
+}}
+```
+"""
+
+    user = f"""# 章末违规清单（novel-validator-checker 输出）
+
+共 {len(violations)} 条违规（均指向物理章章末段落）：
+
+{violations_table}
+
+# 待修复章节
+
+`{chapter_path}`
+
+```
+{chapter_content}
+```
+
+按违规清单只重写章末段落，改成留悬念的钩子，不动章节主体，不引入新 anti-slop，输出完整修复后正文 + JSON 总结。
+"""
+    return system, user
+
+
 # ============ Gen-Model 调用（含 fallback 链） ============
 def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str, Profile]:
     """调当前 active profile；失败时按 fallback 链尝试。
@@ -555,7 +631,8 @@ def main():
     parser.add_argument('--project', required=True)
     parser.add_argument('--mode', required=True,
                         choices=['comprehensive', 'polish', 'word-count',
-                                 'validator-repair', 'voice-fix'])
+                                 'validator-repair', 'voice-fix',
+                                 'chapter-end-rewrite'])
     parser.add_argument('--files', nargs='+',
                         help='[comprehensive/polish/word-count] 待修章节文件路径')
     parser.add_argument('--report-file', help='[comprehensive] reading-reflector R*.json 路径')
@@ -573,7 +650,8 @@ def main():
         sys.exit(2)
 
     # 根据 mode 准备输入
-    if args.mode in ('validator-repair', 'voice-fix'):
+    # 2026-05-29 流程贯通（断点 4）：chapter-end-rewrite 与 validator-repair/voice-fix 同走 --brief 通道
+    if args.mode in ('validator-repair', 'voice-fix', 'chapter-end-rewrite'):
         if not args.brief:
             print(f"[ERROR] --mode {args.mode} 需要 --brief <path>", file=sys.stderr)
             sys.exit(2)
@@ -605,6 +683,8 @@ def main():
 
         if args.mode == 'validator-repair':
             system, user = build_validator_repair_prompt(brief, chapter_content)
+        elif args.mode == 'chapter-end-rewrite':
+            system, user = build_chapter_end_rewrite_prompt(brief, chapter_content)
         else:  # voice-fix
             system, user = build_voice_fix_prompt(brief, chapter_content)
     else:

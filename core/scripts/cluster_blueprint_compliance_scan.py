@@ -1,5 +1,15 @@
 """cluster_blueprint_compliance_scan.py — cluster_blueprint vs 正文一致性扫描（v19.4 新增）
 
+[DEPRECATED v26 · 2026-05-29 · 无活跃调用方]
+  实地核查（Grep 全仓）：audit_hub.py 的 13-scanner task 列表不含本脚本，
+  6 个 plan 模板 / check-quality 命令文档均不调用它。webnovel_bench_alignment.py:35
+  的 "cluster_blueprint_compliance" 仅是 source_scanners 元数据「出处标签」字符串，
+  非 subprocess/import 实际调用。其逐章 glob 扫描模型也与「cluster 是唯一检测层」相悖。
+  → 本脚本为 v26 chapter mode 遗留孤儿，仅保留作离线/手动诊断；cluster 视野下的
+     blueprint 一致性由 audit_hub 的 cluster-only scanner 集合（locked_fact_cross_scene /
+     foreshadowing_handoff 等）等价覆盖。如需接回检测层，须改造为读 cluster_draft 并由
+     audit_hub.audit_chapter 的 tasks 调度（当前未接）。
+
 检测 writer 是否真的写了 cluster_blueprint 声明的事件/角色/场景类型。
 
 4 维度：

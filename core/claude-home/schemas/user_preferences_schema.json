@@ -23,23 +23,28 @@
     },
     "project_basics": {
       "type": "object",
-      "description": "Phase 1: 项目基础（之前系统擅自决定）",
+      "description": "Phase 1: 项目基础（之前系统擅自决定）。2026-05-29 cluster 化：章数死锁字段全部解锁为 v27 fluid（章数由 ME 触发节奏 + 涟漪选择 + writer 自由发挥 + splitter 按字数切自然涌现）。",
       "properties": {
         "total_chapters": {
           "type": "integer",
           "minimum": 5,
-          "maximum": 5000
+          "maximum": 5000,
+          "deprecated": true,
+          "description": "DEPRECATED（2026-05-29 v27 fluid）：禁止预设总章数。章数由 cluster + 涟漪 + splitter 字数切自然涌现，不再死锁。保留为 optional 仅兼容旧项目读取。"
         },
         "target_words_per_chapter": {
           "type": "integer",
           "minimum": 1000,
           "maximum": 15000,
-          "default": 3000
+          "default": 3000,
+          "deprecated": true,
+          "description": "DEPRECATED（2026-05-29 v27 fluid）：writer freestyle 不暴露目标字数，splitter 按 3000-4500 CJK 硬范围切。保留为 optional 仅兼容旧项目读取。"
         },
         "dcas_dual_chapter_mode": {
           "type": "boolean",
           "default": true,
-          "description": "DCAS 双章合一+自然截断；false=单章独立"
+          "deprecated": true,
+          "description": "DEPRECATED（2026-05-29 v27 fluid · chapter mode 已废）：DCAS 双章合一是 chapter mode 概念，cluster mode 下无意义。保留仅兼容旧项目。"
         },
         "writer_mode": {
           "type": "string",
@@ -47,13 +52,16 @@
             "完整模式",
             "轻量模式"
           ],
-          "default": "完整模式"
+          "default": "完整模式",
+          "description": "系统运行档（完整/轻量），与 v27 writer freestyle 模式不是同一字段 —— v27 freestyle/locked 写在 workflow_preferences[key=writer_mode]，见 $defs.workflow_preference_entry。"
         },
         "volume_count": {
           "type": "integer",
           "minimum": 1,
           "maximum": 30,
-          "default": 10
+          "default": 10,
+          "deprecated": true,
+          "description": "DEPRECATED（2026-05-29 v27 fluid）：禁止死锁卷数/章数。改用 workflow_preferences[key=cluster_count_per_volume]（每卷 cluster 数，outline step 1.7 AskUser）。保留仅兼容旧项目。"
         },
         "volume_distribution": {
           "type": "string",
@@ -64,7 +72,9 @@
             "金字塔",
             "自定义"
           ],
-          "default": "均分"
+          "default": "均分",
+          "deprecated": true,
+          "description": "DEPRECATED（2026-05-29 v27 fluid）：章数浮动后按卷分配章数无意义。保留仅兼容旧项目。"
         },
         "volume_custom_ratios": {
           "type": "array",
@@ -73,13 +83,17 @@
             "minimum": 0.01,
             "maximum": 1.0
           },
-          "description": "如选自定义，给每卷比例数组（总和=1.0）"
+          "deprecated": true,
+          "description": "DEPRECATED（2026-05-29 v27 fluid · 随 volume_distribution 废弃）：如选自定义，给每卷比例数组（总和=1.0）。"
         }
-      },
-      "required": [
-        "total_chapters",
-        "target_words_per_chapter"
-      ]
+      }
+    },
+    "workflow_preferences": {
+      "type": "array",
+      "description": "2026-05-29 cluster 化新增：扁平 key/value 偏好条目数组（outline step 1.7 等写入）。承载 v27 fluid 字段 cluster_count_per_volume / writer_mode(freestyle) / rhythm_profile，取代 project_basics 已废弃的章数死锁字段。",
+      "items": {
+        "$ref": "#/$defs/workflow_preference_entry"
+      }
     },
     "narrative_pacing": {
       "type": "object",
@@ -481,6 +495,112 @@
           "description": "叙事者声音色调"
         }
       }
+    }
+  },
+  "$defs": {
+    "workflow_preference_entry": {
+      "type": "object",
+      "description": "2026-05-29 cluster 化新增：workflow_preferences[] 的单条目（key/value 偏好）。outline step 1.7 写入 v27 fluid 字段。",
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "偏好键。v27 fluid 已知键：cluster_count_per_volume / writer_mode / rhythm_profile。"
+        },
+        "value": {
+          "description": "偏好值（类型随 key 而定，见下方说明）。"
+        },
+        "set_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "user_decided": {
+          "type": "boolean",
+          "description": "true=用户明确决定 / false=系统默认"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "key": {
+                "const": "cluster_count_per_volume"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "description": "v27 fluid：每卷 cluster 数（= ME 大势事件数）。可为整数（全卷统一），或 object 映射 卷号→cluster 数（如 {\"V1\": 5, \"V2\": 4}）。outline step 1.7 AskUser 得到。",
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 50
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "key": {
+                "const": "writer_mode"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string",
+                "enum": [
+                  "freestyle",
+                  "locked"
+                ],
+                "default": "freestyle",
+                "description": "v27 writer 写作模式（与 project_basics.writer_mode 完整/轻量 档不同）。freestyle=不暴露目标章数+字数·writer 自由发挥·splitter 按字数切（v27 默认推荐）；locked=按预定章数+字数硬约束（v26 兼容旧）。"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "key": {
+                "const": "rhythm_profile"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string",
+                "enum": [
+                  "紧凑",
+                  "标准",
+                  "厚重",
+                  "混合"
+                ],
+                "default": "标准",
+                "description": "v27 节奏档软提示：splitter 按字数切时微调每章区间（紧凑 3000-4000 / 标准 3000-4500 / 厚重 3500-5000 / 混合 卷内混用）。不死锁章数。"
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

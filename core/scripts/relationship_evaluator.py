@@ -49,6 +49,40 @@ def trigger_satisfied(trigger_at: dict, rel: dict) -> bool:
     return True
 
 
+def get_protagonist(project_root: Path) -> str | None:
+    """2026-05-29 cluster 化：从 人物卡.json 读 role==主角/protagonist 的角色名，
+    取代旧硬编码 "陆衍"。兼容两种 人物卡 形态：
+      · {"characters": [{"name": ..., "role": "主角"}]}（build_manifest 主形态）
+      · {name: {"role": "protagonist"/"is_protagonist": true}}（audit_hub 形态）
+    读不到再 fallback 到第一个角色。
+    """
+    cards = load_json(project_root / "_数据库" / "人物卡.json", None)
+    if not cards:
+        return None
+    # 形态一：{"characters": [...]}
+    if isinstance(cards, dict) and isinstance(cards.get("characters"), list):
+        chars = cards["characters"]
+        for c in chars:
+            if isinstance(c, dict) and c.get("role") in ("主角", "protagonist"):
+                return c.get("name")
+            if isinstance(c, dict) and c.get("is_protagonist"):
+                return c.get("name")
+        # fallback：第一个有名字的角色
+        for c in chars:
+            if isinstance(c, dict) and c.get("name"):
+                return c.get("name")
+        return None
+    # 形态二：{name: {...}}
+    if isinstance(cards, dict):
+        for name, info in cards.items():
+            if isinstance(info, dict) and (
+                info.get("role") in ("主角", "protagonist") or info.get("is_protagonist")
+            ):
+                return name
+        return next(iter(cards.keys()), None)
+    return None
+
+
 def evaluate(project_root: Path, ch: int) -> dict:
     ensemble_path = project_root / "_数据库" / "群像档.json"
     rels_path = project_root / "_数据库" / "关系.json"
@@ -58,7 +92,10 @@ def evaluate(project_root: Path, ch: int) -> dict:
     rels_data = load_json(rels_path, {"relationships": []})
     rels = rels_data.get("relationships", [])
 
-    protagonist = "陆衍"  # TODO: 从 cluster_blueprint 取
+    # 2026-05-29 cluster 化：从 人物卡.json 读主角名，取代旧硬编码 "陆衍"。
+    protagonist = get_protagonist(project_root)
+    if not protagonist:
+        return {"skipped": "人物卡.json 无主角，无法评估关系揭密"}
     pending_reveals = []
     for npc, npc_data in (ensemble.get("characters") or {}).items():
         rel = get_relationship_to(rels, protagonist, npc)

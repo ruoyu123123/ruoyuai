@@ -32,6 +32,16 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cluster_summary_reader as csr  # 2026-05-29 cluster 化：cluster judge_grade
+except Exception:  # 防御：缺模块退回逐章
+    csr = None
+
+# 2026-05-29 cluster 化：grade → 数值（与 judge_score_normalize 同表）
+GRADE_TO_SCORE = {"A": 5.0, "A-": 4.5, "B+": 4.0, "B": 3.5, "B-": 3.0,
+                  "C+": 2.5, "C": 2.0, "C-": 1.5, "D": 1.0, "F": 0.0}
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -85,14 +95,78 @@ def check_meta_prompt_suggestions(project_root: Path) -> list[dict]:
     return findings
 
 
+def _cluster_anti_slop_total(rec: dict) -> int:
+    """聚合一个 cluster 内 per-ch 的 anti-slop / waiver 痕迹（客观 metric）。
+
+    账本无专门 anti_slop 字段时，用 waivers 数 + pattern_metrics 里的 slop 类计数兜底。
+    """
+    total = 0
+    chapters = rec.get("chapters") or {}
+    if not isinstance(chapters, dict):
+        return 0
+    for chrec in chapters.values():
+        if not isinstance(chrec, dict):
+            continue
+        w = chrec.get("waivers") or []
+        if isinstance(w, list):
+            total += len(w)
+        pm = chrec.get("pattern_metrics") or {}
+        if isinstance(pm, dict):
+            for k, v in pm.items():
+                if "slop" in str(k).lower() and isinstance(v, (int, float)):
+                    total += v
+    return total
+
+
+def check_judge_vs_objective_cluster(project_root: Path) -> list[dict] | None:
+    """E（cluster 化 2026-05-29）: cluster judge_grade 趋势 vs cluster anti-slop 聚合趋势。
+
+    cluster 才是 v2 检测层。judge_grade 升 + 客观 anti-slop 聚合也升 → judge 被 game。
+    账本不足（< 4 cluster 有 grade）返回 None → 调用方回退逐章。
+    """
+    if csr is None:
+        return None
+    clusters = csr.get_clusters(project_root)
+    graded = [c for c in clusters if isinstance(c.get("judge_grade"), str)
+              and c.get("judge_grade") in GRADE_TO_SCORE]
+    if len(graded) < 4:
+        return None
+    grades = [GRADE_TO_SCORE[c["judge_grade"]] for c in graded]
+    slops = [_cluster_anti_slop_total(c) for c in graded]
+    n = len(grades)
+    half = n // 2
+    g_first = sum(grades[:half]) / half
+    g_second = sum(grades[half:]) / (n - half)
+    s_first = sum(slops[:half]) / half
+    s_second = sum(slops[half:]) / (n - half)
+    findings = []
+    if (g_second - g_first > 0.3) and (s_second - s_first > 0.5):
+        findings.append({
+            "severity": "warning",
+            "code": "JUDGE_GAMED_QUALITY_DOWN",
+            "analysis_unit": "cluster",  # 2026-05-29 cluster 化
+            "judge_grade_change": round(g_second - g_first, 2),
+            "anti_slop_change": round(s_second - s_first, 2),
+            "risk": "cluster judge_grade 上升但 anti-slop 聚合也上升 → 客观质量降但 judge 被 game",
+        })
+    return findings
+
+
 def check_judge_vs_objective_metrics(project_root: Path) -> list[dict]:
     """E: judge 评分趋势 vs 客观质量 metrics 趋势对比
 
     如果 judge 分数升 + 客观 metrics（字数/anti-slop hit 密度）反向下降
     → judge 被 game 了
+
+    2026-05-29 cluster 化：优先 cluster 级（judge_grade vs cluster anti-slop 聚合），
+    cluster 账本不足时回退原逐章 ≥8 章窗口逻辑。
     """
+    cluster_result = check_judge_vs_objective_cluster(project_root)
+    if cluster_result is not None:
+        return cluster_result
+
     findings = []
-    # 收集近 N 章 judge 分数
+    # 回退：收集近 N 章 judge 分数（逐章兼容）
     judge_dir = project_root / "_数据库" / ".judge_reports"
     if not judge_dir.exists():
         return findings

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ruoyuai.changes.v21",
-  "title": "第NNN章_changes.json schema",
-  "description": "v21 writer 输出 _changes.json 的强制 schema。可对接 Anthropic constrained decoding GA（2026）保证 100% 字段合规。",
+  "title": "cluster_changes.json 与 per-chapter 第NNN章_changes.json 共用 schema（2026-05-29 cluster 化：writer 产 cluster 级 changes，splitter 平铺为 per-chapter 第NNN章_changes.json）",
+  "description": "v21 writer 输出 _changes.json 的强制 schema。2026-05-29 cluster 化：writer 在 cluster 级产出 cluster_changes.json，splitter 切章时平铺成各章 per-chapter 第NNN章_changes.json，两者结构同源共用本 schema。可对接 Anthropic constrained decoding GA（2026）保证 100% 字段合规。",
   "type": "object",
   "required": [
     "factual",
@@ -11,7 +11,7 @@
   "properties": {
     "factual": {
       "type": "object",
-      "description": "本章对世界状态的客观变更，会被 save-state apply 到 13 个数据库 JSON",
+      "description": "本章/本 cluster 对世界状态的客观变更，会被 save-state apply 到 34 个数据库 JSON（2026-05-29 cluster 化：原文 13 个为旧表述，现核心子系统为 34 个）",
       "properties": {
         "locked_facts": {
           "type": "array",
