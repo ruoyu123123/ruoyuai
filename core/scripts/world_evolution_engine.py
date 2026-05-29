@@ -94,9 +94,20 @@ def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list, project
     反查成正确 cluster_id（cluster_lookup），不再机械拼 cluster_{ch}。
     """
     target = ripple.get("target")
+    reason = ripple.get("reason", "")
+
+    # ---- narrative（混合式 · 2026-05-29 北极星 P1）：叙事/主观因果，无 target，最先处理 ----
+    # 散文型涟漪后果（心理/关系/叙事）引擎不机械算数值（守原则5「不干涉模型判断」+「不预设因果」），
+    # 只收集进 narrative_consequences，由 build_manifest 注入 writer / cluster_emergence，让模型自行解读。
+    if "narrative" in ripple:
+        nc = world.setdefault("narrative_consequences", [])
+        nc.append({"ch": ch, "text": ripple.get("narrative", ""), "reason": reason, "_kind": "narrative"})
+        applied_log.append({"target": "narrative_consequences", "op": "narrative",
+                            "text": (ripple.get("narrative") or "")[:60]})
+        return True
+
     if not target:
         return False
-    reason = ripple.get("reason", "")
 
     # ---- 数值 delta（factions_state.X.Y） ----
     if "delta" in ripple:
@@ -261,15 +272,74 @@ def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list, project
     return False
 
 
+def _normalize_rule(rule: dict) -> dict:
+    """混合式归一（2026-05-29 北极星 P1）：把两套历史格式统一成引擎可消费的 canonical 形态。
+
+    canonical: {id, trigger_type, trigger_match, ripples:[结构化{target,delta/add_thread} | 叙事{narrative}]}
+    - 规范格式（范例）：已是 ripple_rules[{id,trigger_type,trigger_match,ripples}]，原样返回。
+    - 历史散文格式（真实项目 rules[{(rule_)id, trigger, effect}]）：trigger(散文)→trigger_match，
+      effect(散文 str/list)→**叙事 ripple**（不机械解析成数值 delta，守原则5），trigger_type=None(通配)。
+    """
+    if not isinstance(rule, dict):
+        return {}
+    rid = rule.get("id") or rule.get("rule_id") or ""
+    # 已是规范格式
+    if "ripples" in rule and ("trigger_match" in rule or "trigger_type" in rule):
+        out = dict(rule)
+        out["id"] = rid
+        return out
+    # 历史散文格式（effect: str/list 或 propagate: [{path,op,value}]）
+    trigger_match = rule.get("trigger_match") or rule.get("trigger") or ""
+    ripples = []
+    eff = rule.get("effect")
+    if isinstance(eff, str) and eff.strip():
+        ripples.append({"narrative": eff.strip(), "reason": rule.get("description", "")})
+    elif isinstance(eff, list):
+        for e in eff:
+            if isinstance(e, str) and e.strip():
+                ripples.append({"narrative": e.strip()})
+            elif isinstance(e, dict):
+                ripples.append(e)  # 已结构化的条目原样
+    # propagate 格式（纵尸司：[{path, op, value}]）：path 用「世界状态.X」自由路径，不匹配引擎
+    # factions_state 结构，op 含主观操作(deepen)。按原则5 不机械解析成 delta，转叙事 ripple 保留
+    # path/op/value 文本给模型解读（objective 数值后果交模型在写作时落实，不由脚本预设）。
+    prop = rule.get("propagate")
+    if isinstance(prop, list):
+        for pe in prop:
+            if isinstance(pe, dict) and pe.get("path"):
+                _txt = f"{pe.get('path')} {pe.get('op','')}".strip()
+                if pe.get("value"):
+                    _txt += f" = {pe.get('value')}"
+                ripples.append({"narrative": _txt})
+            elif isinstance(pe, str) and pe.strip():
+                ripples.append({"narrative": pe.strip()})
+    if not rid:
+        import hashlib as _hl  # 散文规则常无 id，给确定性兜底（hash() 跨进程不稳定）
+        rid = "rip_" + _hl.md5(trigger_match.encode("utf-8")).hexdigest()[:6]
+    return {
+        "id": rid,
+        "trigger_type": rule.get("trigger_type"),  # None = 通配（非 auto_tick 时按关键词匹配）
+        "trigger_match": trigger_match,
+        "ripples": ripples,
+        "_from_prose": True,
+    }
+
+
 def _match_rule(rule: dict, trigger_type: str, trigger_value: str) -> bool:
-    """rule 是否匹配本次触发。trigger_match 用 | 分隔多个候选关键词。"""
-    if rule.get("trigger_type") != trigger_type:
+    """rule 是否匹配本次触发。trigger_match 用 | 分隔多个候选关键词。
+
+    2026-05-29 北极星 P1 混合式：rule.trigger_type 为 None（散文规则未声明类型）时，
+    非 auto_tick 触发按关键词匹配（通配 type）；auto_tick 仍要求显式 trigger_type==auto_tick。
+    """
+    rtype = rule.get("trigger_type")
+    if trigger_type == "auto_tick":
+        return rtype == "auto_tick" and rule.get("trigger_match", "") == "every_chapter"
+    # 非 auto_tick：rtype 须匹配或为 None(通配)
+    if rtype is not None and rtype != trigger_type:
         return False
     match_pattern = rule.get("trigger_match", "")
     if not match_pattern:
         return False
-    if trigger_type == "auto_tick":
-        return match_pattern == "every_chapter"
     candidates = [c.strip() for c in match_pattern.split("|") if c.strip()]
     return any(c in trigger_value or trigger_value in c for c in candidates)
 
@@ -279,7 +349,13 @@ def _apply_rules(world: dict, rules_json: dict, trigger_type: str, trigger_value
 
     2026-05-29 修：透传 project_root 给 _apply_ripple 做 ch→cluster 反查。
     """
-    rules = rules_json.get("ripple_rules", [])
+    # 2026-05-29 北极星 P1 混合式：双键兼容（范例写 ripple_rules，真实项目写 rules）
+    # → 归一每条规则成 canonical（散文格式的 effect 转叙事 ripple），根治「引擎读 ripple_rules
+    # 但项目写 rules → 恒拿空 → 涟漪从未触发」。
+    raw_rules = rules_json.get("ripple_rules")
+    if not raw_rules:
+        raw_rules = rules_json.get("rules", [])
+    rules = [_normalize_rule(r) for r in (raw_rules or []) if isinstance(r, dict)]
     applied_log: list = []
     matched_rules = []
     for rule in rules:
