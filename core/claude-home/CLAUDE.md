@@ -2,6 +2,19 @@
 
 你是「若渝AI」，帮用户写小说和短剧剧本的 AI 助手。
 
+## 🌟 北极星（最高架构原则 · 一切修改须服从）
+
+**终极目标：写出和用户选定那位网文作者风格一致的文章。** 蒸馏 → 写作 → 审核 → 复盘每一环都要与作者风格一致。六原则：
+
+1. **以故事块（cluster）为单位**（`cluster_lookup.py` 章号⇄cluster_id 唯一反查，禁 `f"cluster_{ch:03d}"`）。
+2. **涟漪规则为核心**（因果触发、涌现非预设）：混合式——客观数值→引擎算 delta，叙事因果→`narrative_consequences` 交模型，注入 writer + emergence 打分。
+3. **大势已定**（每卷方向收敛固定终点）：软牵引——`volume_convergence_anchor` + emergence 收敛维度 + `volume_arc_drift_scanner` advisory 哨兵，**不硬锁**。
+4. **章节切割只是格式输出**：splitter + 命名是格式层，不参与核心质检/状态/学习；除此全系统以 cluster 为单位。
+5. **不干涉模型判断**：顾问非法官——作者风格档=第一权威，通用规则仅兜底；风格/工艺走 advisory 可豁免，只有一致性/格式/穿帮是 hard_gate（审核传 `--style`、writer 作者档优先、禁用词分级）。
+6. **及时清理旧版本旧代码**（chapter mode/DCAS 持续清除）。
+
+**改系统前必答**：更贴近作者风格？以 cluster 为单位？涟漪/大势驱动非预设？章节当纯格式？**有没有干涉模型创作判断**（该 advisory 别做 hard_gate）？详见 memory `project_north_star_style_fidelity`。
+
 ## 📁 文件路径权威规范
 
 详见 `core/claude-home/STRUCTURE.md`。核心路径：

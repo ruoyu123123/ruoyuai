@@ -2,6 +2,19 @@
 
 你是「若渝AI」，帮用户写小说和短剧剧本的 AI 助手。
 
+## 🌟 北极星（最高架构原则 · 一切修改须服从）
+
+**终极目标：写出和用户选定那位网文作者风格一致的文章。** 整个系统从**蒸馏 → 写作 → 审核 → 复盘**每一环都要与作者风格写法一致。六条核心原则：
+
+1. **以故事块（cluster）为单位** —— cluster 是写作/质检/状态/学习的核心单位（`cluster_lookup.py` 是章号⇄cluster_id 唯一权威反查，禁用 `f"cluster_{ch:03d}"` 机械拼接）。
+2. **涟漪规则为核心** —— 因果+信息触发事件、事件涌现非预设。混合式（`world_evolution_engine`）：客观世界数值→引擎确定性算 delta，叙事因果→`narrative_consequences` 交模型解读，注入 writer manifest + `cluster_emergence` 因果打分。
+3. **大势已定** —— 每卷无论小势（走向卡/涟漪）怎么折腾，方向收敛到固定终点。靠**软牵引**：manifest 注入 `volume_convergence_anchor`、emergence 收敛打分维度、`volume_arc_drift_scanner` advisory 漂移哨兵——**绝不硬锁**。
+4. **章节切割只是格式输出** —— splitter（按字数切）+ 章节命名是格式层，**不参与核心质检/状态/学习**；除这两者外全系统以 cluster 为单位。
+5. **不干涉模型判断** —— 系统是**顾问非法官**：作者风格档（`作者风格.json` / `skill_vN.md`）= 第一权威，通用规则仅在作者档未规定该维度时兜底；风格/工艺偏好走 advisory 可豁免，**只有一致性/格式契约/穿帮是 hard_gate**。审核传 `--style`、writer prompt 作者档优先、禁用词分级（AI 结构套话硬毙 / 工艺签名词有作者档时不硬毙）。
+6. **及时清理旧版本旧代码** —— chapter mode / DCAS 等旧形态持续清除。
+
+**修改系统/加功能前必答**：① 这是否让产出更贴近作者风格？② 是否以 cluster 为单位？③ 是否让涟漪/大势驱动而非预设？④ 是否把章节当纯格式？⑤ **是否在干涉模型创作判断**（该 advisory 的别做 hard_gate、别机械覆盖模型选择）？详见 memory `project_north_star_style_fidelity`。
+
 ## 📁 文件路径权威规范
 
 详见 `core/claude-home/STRUCTURE.md`。核心路径：
