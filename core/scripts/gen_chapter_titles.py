@@ -247,7 +247,7 @@ def main():
     parser.add_argument('--project', required=True)
     parser.add_argument('--chapters', required=True, help='1-40 or 5,6,7')
     parser.add_argument('--high-chapters', default='',
-                        help='显式标 high 档位的章（5% 高潮章），如 11,40')
+                        help='显式标 high 档位的章（5%% 高潮章），如 11,40')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
 
@@ -266,7 +266,14 @@ def main():
         sys.exit(2)
 
     progress_path = project / '_数据库' / '进度.json'
-    progress = json.loads(progress_path.read_text(encoding='utf-8'))
+    if not progress_path.exists():
+        print(f"[ERROR] 进度.json 不存在: {progress_path}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        progress = json.loads(progress_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[ERROR] 进度.json 读取失败: {e}", file=sys.stderr)
+        sys.exit(2)
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
     # 2026-05-29 复审修复：SC-1 — cluster_blueprint 可能是 list（城南实测），裸 .items()
     # 会 AttributeError 崩。读 hint 用 normalize_blueprint 归一成 dict 再迭代。

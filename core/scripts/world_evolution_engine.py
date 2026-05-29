@@ -387,13 +387,27 @@ def tick(project_root: Path, ch: int) -> dict:
     cwt["ch"] = ch
 
     # 2. 跑 auto_tick 规则
+    # 2026-05-30 北极星复审：tick 幂等——cluster-save-state 支持 WAL/断点重跑，会逐章 tick；原实现
+    # 无条件 _apply_rules（累加 delta/spawn/consequence）只对日志去重 → 重跑使 faction power/stress
+    # 等数值重复落地、世界状态漂移。仿 applied_fate_events 加 applied_ticks 幂等账本。
+    applied_ticks = world.setdefault("applied_ticks", [])
+    if ch in applied_ticks:
+        save_world(project_root, world)  # 仅更新 cwt.ch，不重复应用 auto_tick
+        return {
+            "ch": ch, "action": "tick", "skipped": "already_ticked",
+            "matched_rules": [], "applied_count": 0,
+            "active_threads": len(world.get("active_npc_threads", [])),
+            "active_opps": sum(1 for o in world.get("emergent_opportunities", []) if not o.get("consumed_by_writer")),
+        }
     result = _apply_rules(world, rules, "auto_tick", "every_chapter", ch, project_root)
+    applied_ticks.append(ch)
 
-    # 3. 追加 world_ticks_log
+    # 3. 追加 world_ticks_log（去重只匹配 auto_tick 类型，避免与 minor_event/fate_event 同 ch 日志串台）
     log = world.setdefault("world_ticks_log", [])
-    if not any(e.get("ch") == ch for e in log):
+    if not any(e.get("ch") == ch and e.get("trigger_type") == "auto_tick" for e in log):
         log.append({
             "ch": ch,
+            "trigger_type": "auto_tick",
             "tick_summary": f"auto_tick: {len(result['matched_rules'])} 规则触发, {len(result['applied_log'])} 涟漪落地",
             "ts": datetime.now().isoformat(timespec="seconds"),
         })

@@ -603,6 +603,13 @@ def _verify_agent_report(project: str, agent_name: str, chapter: int | None, clu
                     db / ".wal" / f"{cstr}_emergence.json",
                     db / ".wal" / f"第{chapter:03d}章_planner_context.md" if chapter is not None else db / ".wal" / "no_chapter_ctx",
                 ]
+                # 2026-05-30 北极星复审：cluster_emergence 模式（cluster-save-state step11）涌现的是
+                # 【下一个】cluster → emerge 产 cluster_{N+1}_emergence.json，不是当前 cstr。补 next 候选，
+                # 否则正确走完 12 步也因 missing_agent_reports 被 end_plan 误判 exit 2。
+                _nm = re.search(r"(\d+)", cid)
+                if _nm:
+                    _nxt = int(_nm.group(1)) + 1
+                    candidates += [db / ".wal" / f"cluster_{_nxt:03d}_emergence.json"]
             elif agent_name == "novel-writer":
                 candidates += [
                     project_root / "章节" / f"{cstr}_draft" / f"{cstr}_draft.txt",

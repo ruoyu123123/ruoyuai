@@ -211,7 +211,7 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
             caches = sorted(cache_dir.glob('inspiration_*.md'),
                             key=lambda p: p.stat().st_mtime, reverse=True)
         if caches:
-            cache_text = read_text(caches[0], 15000)
+            cache_text = read_text(caches[0])  # 2026-05-30 北极星：去截断，全量传 LLM（feedback_no_token_saving）
 
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
     progress = json.loads((db / '进度.json').read_text(encoding='utf-8'))
@@ -233,11 +233,11 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
         relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_end]
     plan_text = json.dumps(relevant_plans, ensure_ascii=False, indent=2) if relevant_plans else "[]（v27 freestyle · 完全按 cluster_brief.scene_storyboard 自由发挥）"
 
-    # 人物卡
-    char_card = read_text(db / '人物卡.json', 20000)
+    # 人物卡（全量，不截断——含 voice_pack 是声纹复刻第一依据，截断 = 后登场角色声纹丢失）
+    char_card = read_text(db / '人物卡.json')
 
-    # 用户偏好
-    pref = read_text(db / '用户偏好.json', 5000)
+    # 用户偏好（全量，不截断）
+    pref = read_text(db / '用户偏好.json')
 
     # v22.gov.align.fix Gap T2-X: 读 事件簇.json 找当前 cluster 的 brief 注入 prompt
     # 之前 build_prompt 完全没读 事件簇.json，导致 cluster.scope_summary 硬约束未注入 → LLM 自由发挥跑偏 task

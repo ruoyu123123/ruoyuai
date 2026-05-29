@@ -128,9 +128,14 @@ def normalize_changes(data: dict) -> dict:
     if not isinstance(data, dict):
         return {"factual": {}, "self_eval": {}}
     # 布局 A：已规范（含 factual 或 self_eval 任一键即视为标准布局）
+    # 2026-05-30 北极星复审：setdefault 只在 key 缺失时生效——LLM（gen-model 自由产出）可能输出
+    # "self_eval": null / "factual": "n/a"（非 dict），setdefault 不矫正，下游 se.setdefault(...)
+    # 崩 AttributeError（且发生在 API 已花钱、draft 已写盘之后 → changes 永不落盘）。强制两键为 dict。
     if "factual" in data or "self_eval" in data:
-        data.setdefault("factual", {})
-        data.setdefault("self_eval", {})
+        if not isinstance(data.get("factual"), dict):
+            data["factual"] = {}
+        if not isinstance(data.get("self_eval"), dict):
+            data["self_eval"] = {}
         return data
     # 弹出元字段
     meta = data.pop("ecas_metadata", {}) if isinstance(data.get("ecas_metadata"), dict) else {}

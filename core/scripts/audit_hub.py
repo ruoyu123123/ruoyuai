@@ -1178,6 +1178,23 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     info = sum(1 for i in active if i["severity"] == "info")
     waived_count = len(waived_issues)
 
+    # 2026-05-30 北极星复审：hard_gate（一致性/格式/穿帮）契约上不可豁免、必须阻断。但若某 scanner
+    # 把 hard_gate code emit 成 info/warning severity（如 UNKNOWN_CHARACTER_DETECTED=info /
+    # ITEM_HOLDER_ABSENT=warning），原 verdict 只看 fatal/error severity → 这些 hard_gate 进
+    # info_issues 或无路由 agent_issues 死胡同被静默判 pass。兜底：凡未进 pending_agent 的未豁免
+    # hard_gate 残留，强制补进 pending_agent（带 suggested_agent → real_pending → verdict=needs_agent）。
+    _pending_codes = {p.get("code") for p in pending_agent}
+    for issue in active:
+        if issue.get("gate_level") == "hard_gate" and issue.get("code") not in _pending_codes:
+            _hg_agent, _hg_brief = _agent_for(issue)
+            pending_agent.append({
+                "dimension": issue.get("dimension"), "severity": issue.get("severity"),
+                "gate_level": "hard_gate", "code": issue.get("code"), "desc": issue.get("desc"),
+                "suggested_agent": _hg_agent or "novel-validator-checker",
+                "fix_brief": _hg_brief or "hard_gate 一致性/格式/穿帮问题，必须修复（不可豁免）",
+            })
+            _pending_codes.add(issue.get("code"))
+
     # pending_agent 区分：真需派 agent / 仅"可 --auto-fix"提示
     real_pending = [p for p in pending_agent if p.get("suggested_agent")]
 

@@ -454,7 +454,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     cur_vol = _current_advancing_vol(world_state, character_arc)
     if cur_vol:
         for v in (dashishi.get("volumes") or []):
-            if v.get("vol") == cur_vol:
+            if isinstance(v, dict) and v.get("vol") == cur_vol:
                 kms = v.get("key_milestones") or []
                 kms_text = " ".join(str(k) for k in kms) if isinstance(kms, list) else str(kms)
                 milestone_kw = _keyword_set(kms_text + " " + str(v.get("ending_state", "")))

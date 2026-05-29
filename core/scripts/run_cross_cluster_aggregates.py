@@ -142,7 +142,7 @@ def main():
     # 内部换算成章数传给 aggregator 的 --last-n，避免「10 当 10 个 cluster 爆量」误解。
     ap.add_argument("--last-n-clusters", type=int, default=2,
                     help="cluster 模式窗口（含目标在内的最近 N 个已落章 cluster，默认 2；换算成章数）")
-    ap.add_argument("--tier", choices=["core_5", "core_10", "full_18", "off"], help="覆盖 user_preferences intensity")
+    ap.add_argument("--tier", choices=["minimal_5", "core_5", "core_10", "full_18", "off"], help="覆盖 user_preferences intensity（minimal_5 = core_5 别名）")
     args = ap.parse_args()
 
     project_root = Path(args.project).resolve()
@@ -168,6 +168,11 @@ def main():
         sys.exit(2)
 
     intensity = args.tier if args.tier else get_intensity(project_root)
+    # 2026-05-30 北极星复审：minimal_5 是 core_5 的对外别名（docstring/CLAUDE.md 用 minimal_5，
+    # SCAN_TIERS key 用 core_5）。归一——避免命令行 --tier minimal_5 被 argparse 拒、或配置写
+    # minimal_5 时不匹配任何 if 分支静默走默认。
+    if intensity == "minimal_5":
+        intensity = "core_5"
     print(f"[run_cross_cluster_aggregates] ch{args.ch} intensity={intensity}")
 
     if intensity == "off":

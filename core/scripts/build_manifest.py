@@ -176,13 +176,13 @@ class DatabaseScanner:
                         "ch": self.ch,
                         "vol": cluster.get("vol"),
                         "cluster": cluster.get("cluster_id"),
-                        "title": (cluster.get("title", "") + " · 起首待 splitter 切定") if self.ch == cr[0] else cluster.get("title", ""),
+                        "title": ((cluster.get("title") or "") + " · 起首待 splitter 切定") if self.ch == cr[0] else (cluster.get("title") or ""),
                         "characters": first_scene.get("characters", []) or [
                             c for s in storyboard for c in (s.get("characters") or [])
                         ][:8],
                         "key_events": [s.get("title", "") for s in storyboard[:3]],
                         "scene_type": [first_scene.get("type", "悬疑")],
-                        "goal": cluster.get("scope_summary", "")[:200],
+                        "goal": (cluster.get("scope_summary") or "")[:200],
                         "_fluid_fallback_from_event_cluster": True,
                         "_v26_note": "本 cluster_blueprint 由 build_manifest 从 事件簇.json fluid fallback 产生 · 真实切章由 step 6 splitter 决定",
                     }
@@ -1979,14 +1979,13 @@ def _collect_will_learn_due(scanner, chapter: int) -> list[dict]:
     out = []
     for c in data.get("characters", []):
         for wl in c.get("knowledge", {}).get("will_learn", []):
-            # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 learn_at_cluster
+            # 2026-05-30 北极星复审：learn_at_cluster="cluster_005" 是 cluster ID 不是章号，
+            # 必须反查当前章所属 cluster 再比对——禁止抽数字 5 当章号与 chapter 撞（北极星铁律）。
             lac = wl.get("learn_at_cluster")
-            if not isinstance(lac, str):
+            if not isinstance(lac, str) or not lac:
                 continue
-            import re as _re
-            _m = _re.search(r"(\d+)", lac)
-            learn_at = int(_m.group(1)) if _m else None
-            if learn_at == chapter:
+            cur_cid = cluster_lookup.ch_to_cluster_id(scanner.root, chapter)
+            if cur_cid and cluster_lookup.normalize_cluster_id(lac) == cluster_lookup.normalize_cluster_id(cur_cid):
                 out.append({
                     "character": c.get("name") or c.get("id"),
                     "fact": wl.get("fact", ""),
@@ -2006,14 +2005,13 @@ def _collect_secrets_to_reveal(scanner, chapter: int) -> list[dict]:
         return []
     out = []
     for s in data.get("secrets", []):
-        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 reveal_at_cluster
+        # 2026-05-30 北极星复审：reveal_at_cluster 是 cluster ID 不是章号，反查当前章所属
+        # cluster 比对——禁止抽数字当章号与 chapter 撞（北极星铁律，参照 _current_cluster_id）。
         rc = s.get("reveal_at_cluster")
-        reveal_ch = None
-        if isinstance(rc, str):
-            import re as _re
-            m = _re.search(r"(\d+)", rc)
-            reveal_ch = int(m.group(1)) if m else None
-        if reveal_ch == chapter or s.get("status") == "leaked":
+        cur_cid = cluster_lookup.ch_to_cluster_id(scanner.root, chapter)
+        reveal_now = (isinstance(rc, str) and rc and cur_cid
+                      and cluster_lookup.normalize_cluster_id(rc) == cluster_lookup.normalize_cluster_id(cur_cid))
+        if reveal_now or s.get("status") == "leaked":
             out.append({
                 "id": s.get("id"),
                 "secret": s.get("secret", "")[:60],
@@ -2262,13 +2260,27 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         })
 
     # 故事块摘要：v17.5 P1.4 分级注入 — 最近 5 章 + 卷起始章 + 关键事件章
-    summaries = s.load("故事块摘要", {}).get("chapters", [])
+    # 2026-05-30 北极星复审：账本顶层无 chapters（结构为 clusters[].chapters）→ 原 .get("chapters",[])
+    # 恒空 = 整段死代码、历史章摘要从不注入 writer。改从 clusters[].chapters 拍平并注入 ch。
+    _summary_doc = s.load("故事块摘要", {})
+    summaries = []
+    for _c in _summary_doc.get("clusters", []):
+        if not isinstance(_c, dict):
+            continue
+        for _k, _rec in (_c.get("chapters") or {}).items():
+            if not isinstance(_rec, dict):
+                continue
+            try:
+                _ch = int(_k)
+            except (ValueError, TypeError):
+                _ch = _rec.get("ch") or _rec.get("chapter") or 0
+            summaries.append({**_rec, "ch": _ch})
     if summaries:
         # 1) 最近 5 章
         recent = [x for x in summaries if x.get("ch", x.get("chapter", 0)) < chapter][-5:]
         # 2) 卷起始章（每卷第一章）
         volumes_data = s.load("进度", {}).get("volumes", [])
-        volume_starts_chs = {v.get("chapter_range", [0])[0] for v in volumes_data}
+        volume_starts_chs = {(v.get("chapter_range") or [0])[0] for v in volumes_data}
         volume_starts = [x for x in summaries
                         if x.get("ch", x.get("chapter", 0)) in volume_starts_chs
                         and x.get("ch", x.get("chapter", 0)) < chapter

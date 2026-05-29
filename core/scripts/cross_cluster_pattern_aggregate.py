@@ -463,7 +463,12 @@ def main():
     chapter_records: list = []                   # [(ch, rec)]，cluster 模式才填
 
     if use_ledger:
-        chapter_records = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        # 2026-05-30 北极星复审：args.last_n 是【章数】窗口（编排器已把 --last-n-clusters 换算成章数）。
+        # 原把它当 last_n_clusters（cluster 个数）传 reader → 单位错配、cluster 窗口失效扫全量。
+        # 改为全取后按章数截最后 N 章，与磁盘分支 chapters[-last_n:] 语义一致。
+        chapter_records = csr.get_chapter_records(project_root)
+        if args.last_n and args.last_n > 0:
+            chapter_records = chapter_records[-args.last_n:]
         if not chapter_records:
             print("[OK] cluster 账本无章记录，跳过跨章扫描")
             sys.exit(0)
@@ -483,7 +488,18 @@ def main():
         # 与磁盘模式行为一致（磁盘版 20 键恒全），零回归。
         for _ch in per_chapter:
             base = dict(_PER_CHAPTER_DEFAULTS)
-            base.update({k: v for k, v in per_chapter[_ch].items() if v is not None})
+            # 2026-05-30 北极星复审：嵌套 dict（punctuation/particle_dist/sensory_dist）须深合并——
+            # 原 .update 对嵌套 dict 是整体替换，builder 写部分 dict（缺 three_dot 等内部键）会覆盖掉
+            # defaults 的完整 dict → 下游裸下标 p["three_dot"] KeyError（C3 只补了顶层键，漏嵌套键）。
+            for _k, _v in per_chapter[_ch].items():
+                if _v is None:
+                    continue
+                if isinstance(_v, dict) and isinstance(base.get(_k), dict):
+                    _merged = dict(base[_k])
+                    _merged.update(_v)
+                    base[_k] = _merged
+                else:
+                    base[_k] = _v
             per_chapter[_ch] = base
         # 与磁盘分支 chapters 同构：[(ch, None)]，path 在 ledger 模式不可用
         chapters = [(ch, None) for ch in sorted(per_chapter.keys())]
