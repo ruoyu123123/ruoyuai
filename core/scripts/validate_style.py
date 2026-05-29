@@ -138,6 +138,13 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
         t["onomatopoeia_count"]["min"] = int(must["onomatopoeia"])
     if "bracket_settings" in must:
         t["bracket_settings"]["min"] = int(must["bracket_settings"])
+    # 2026-05-29 北极星 P4 [M1-dont]：段长 hard_gate(默认 120 CJK)对长句作者(严肃/古风/意识流)
+    # 是硬伤——一个 121 字精心长段 = fatal 不可豁免。仅当作者风格档【显式声明】max_para_chars
+    # 才放宽（不按 genre 标签自动猜，守原则5「不干涉模型判断」+「没调查没发言权」）。未声明 → 保持默认。
+    mpc = q.get("max_para_chars") or sd.get("max_para_chars")
+    if isinstance(mpc, (int, float)) and mpc > t.get("para_max_chars", {}).get("hard_gate", 120):
+        _exc = t.get("para_max_chars", {}).get("exception_per_chapter", 1)
+        t["para_max_chars"] = {"warn": max(80, int(mpc * 0.7)), "hard_gate": int(mpc), "exception_per_chapter": _exc}
     return t
 
 
