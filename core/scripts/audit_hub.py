@@ -912,6 +912,12 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     # L2 防御：章末 cliffhanger 锚定扫描（cluster_001 ch4 三次翻车 sediment）
     ceas = _SCRIPT_DIR / "chapter_end_anchor_scan.py"
 
+    # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
+    # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
+    # （dialogue/para_mean/chapter_words/onomatopoeia 等 advisory 数值阈按作者基线放宽，不碰 hard_gate）。
+    _style_json = project_root / "_数据库" / "作者风格.json"
+    _style_args = ["--style", str(_style_json)] if _style_json.exists() else []
+
     # 每个任务：(name, cmd, ok_set, parse_fn)
     tasks = [
         ("validate_chapter",
@@ -919,7 +925,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
          {0, 1, 2},
          lambda out, code: _parse_validate_chapter(out, code)),
         ("validate_style",
-         [sys.executable, str(vs), str(body_file), "--strict"],
+         [sys.executable, str(vs), str(body_file), "--strict"] + _style_args,
          {0, 1},
          lambda out, code: _parse_validate_style(out)),
         ("narrative_scanner",

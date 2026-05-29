@@ -430,7 +430,7 @@ cluster_brief 完整内容：
 
 ## 风格 skill
 
-{style_skill[:8000]}
+{style_skill}
 
 ## 调研 cache（写作前必读 synthesis）
 
@@ -442,7 +442,7 @@ cluster_brief 完整内容：
 
 ## manifest（数据库索引）
 
-{manifest[:8000]}
+{manifest}
 
 {prev_ch_section}
 
