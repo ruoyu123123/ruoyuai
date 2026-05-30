@@ -1013,7 +1013,11 @@ def compute_l3a(ref_text: str, gen_text: str) -> dict:
     # 阈值校准（北极星纪律 3 矫枉过正金标准）：真作者实测 CV——蛊真人 0.06-0.11（议论体
     # 节奏平稳）/ 惊悚乐园 0.16-0.20（对话多方差大）；AI 完全均匀化 → CV≈0.0。取 0.04 阈值
     # 干净分开二者（真作者下界 0.06 远高于 0.04 → 绝不误判真作者 · 守金标准）。
-    if burst.get("applicable") and burst.get("overall_burstiness_cv", 1.0) < 0.04:
+    # 放量门控(2026-05-31 验证)：n_windows<5(约<10k CJK·边界小cluster)不出 low_burstiness
+    # advisory——小尺寸下低方差议论体作者(蛊真人 ch1-3·4窗·CV=0.0337)会被误判，属「低方差
+    # 作者+最小窗口数」尺寸伪影(目标域 13-20k/6窗+ CV≥0.06 不受影响·守金标准)。
+    if (burst.get("applicable") and burst.get("n_windows", 0) >= 5
+            and burst.get("overall_burstiness_cv", 1.0) < 0.04):
         issues.append({
             "code": "L3A_LOW_BURSTINESS",
             "gate_level": "advisory",

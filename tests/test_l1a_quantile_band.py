@@ -184,11 +184,14 @@ def test_D_shadow_returns_old_band_no_decision_change():
 
 
 def test_D_active_returns_quantile_band():
-    """active：返回 [p5,p95] 分位数 band（取代旧 mean±容差）。"""
+    """active：返回 [p5,p95] ∪ 旧 band（取并集·绝不窄于旧·防重尾作者更苛·北极星⑤）。"""
     vsx = _reload_vs("active")
     try:
         out = vsx._maybe_quantile_band("段落均长", _STAT_Q, dict(_OLD_BAND))
-        assert abs(out["min"] - 36.9) < 1e-9 and abs(out["max"] - 71.94) < 1e-9, out
+        # 取并集：下沿 min(p5=36.9,旧36.4)=36.4 · 上沿 max(p95=71.94,旧67.6)=71.94
+        assert abs(out["min"] - 36.4) < 1e-9 and abs(out["max"] - 71.94) < 1e-9, out
+        # band ⊇ 旧band（绝不更苛·防矫枉过正·验证发现直接替代会顶坏重尾作者）
+        assert out["min"] <= _OLD_BAND["min"] + 1e-9 and out["max"] >= _OLD_BAND["max"] - 1e-9, out
     finally:
         _reload_vs(None)
 
@@ -249,14 +252,17 @@ def test_E_para_band_shadow_equals_mean_tolerance():
 
 
 def test_E_para_band_active_uses_quantiles():
-    """active：用 [p5,p95] 经验 band 取代 mean±30%。"""
+    """active：[p5,p95] ∪ mean±30%（取并集·上沿救回长段·下沿取旧不误判短段）。"""
     sd = {"quantitative": {"paragraph_length_chars": {
         "mean": 52.0, "p5": 36.9, "p95": 71.94}}}
     try:
         band = _para_band(sd, "active")
-        assert abs(band["min"] - 36.9) < 1e-6 and abs(band["max"] - 71.94) < 1e-6, band
-        # 关键：active band 上界(71.94) 覆盖真 p95，旧 mean±30%(67.6) 容不下 → 根治矫枉过正
+        # 旧 mean±30%=[36.4,67.6] · 分位[36.9,71.94] · 并集=[36.4,71.94]
+        assert abs(band["min"] - 36.4) < 1e-6 and abs(band["max"] - 71.94) < 1e-6, band
+        # 上界覆盖真 p95(71.94)·旧 67.6 容不下 → 救回长段
         assert band["max"] > 52.0 * 1.3, band
+        # 下界取旧(36.4)·不收窄到 p5=36.9(会把 36.6 字误判 WARN)→取并集绝不更苛·北极星⑤
+        assert band["min"] <= 52.0 * 0.7 + 1e-6, band
     finally:
         _reload_vs(None)
 

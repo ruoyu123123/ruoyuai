@@ -391,22 +391,26 @@ def _maybe_quantile_band(
         new_lo = max(lo_min, new_lo)
     if hi_max is not None:
         new_hi = min(hi_max, new_hi)
-    new_band = {"min": new_lo, "max": new_hi}
+    o_lo, o_hi = old_band.get("min"), old_band.get("max")
+    # 分位数 band 与旧 mean±容差 band 取**并集**（绝不窄于旧 band）。
+    # 放量验证实证(2026-05-31)：蛊真人(高方差重尾)[p5,p95]=[24.5,38.3] 比 mean±30%=[22.5,41.7]
+    # 更窄，直接「替代」会把真作者 4 章顶坏(WARN→FAIL/PASS→WARN)=矫枉过正(违北极星⑤)。
+    # 取并集后 band⊇旧band·重尾作者绝不更苛；宽尾作者(惊悚乐园)仍救回长段(上沿 67.6→71.94)。
+    union_lo = min(new_lo, o_lo) if o_lo is not None else new_lo
+    union_hi = max(new_hi, o_hi) if o_hi is not None else new_hi
     if mode == "shadow":
         # 只记录新旧分歧·不改判决（返回旧 band）。便于收敛分析放量决策。
         try:
-            o_lo, o_hi = old_band.get("min"), old_band.get("max")
             print(
                 f"[QUANTILE_BAND shadow] {dim_name}: old(mean±容差)=[{o_lo:.4g},{o_hi:.4g}] "
-                f"vs new(p5-p95)=[{new_lo:.4g},{new_hi:.4g}] "
-                f"Δlo={new_lo - (o_lo or 0):+.4g} Δhi={new_hi - (o_hi or 0):+.4g}",
+                f"vs new(p5-p95∪old)=[{union_lo:.4g},{union_hi:.4g}]",
                 file=sys.stderr,
             )
         except Exception:
             pass
         return old_band
-    # active：正式用分位数 band
-    return new_band
+    # active：分位数 band ∪ 旧 band（取并集·绝不更苛·只可能放宽救回长段作者）
+    return {"min": union_lo, "max": union_hi}
 
 
 def _apply_style_overrides(t: dict, sd: dict, author_dir=None) -> dict:
