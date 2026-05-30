@@ -511,13 +511,33 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
     return text, finish_reason
 
 
+# API 调用健壮性常量（2026-05-30 加固）
+GEN_MODEL_TIMEOUT = 180.0  # 与 ai_wrapper.py:154 对齐
+GEN_MODEL_MAX_RETRIES = 3  # 同 profile 限流/超时的有限重试次数
+GEN_MODEL_RETRY_BASE_DELAY = 2.0  # 指数退避基础秒数（2,4,8）
+
+
 def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str, Profile]:
     """调当前 active profile；失败时按 fallback 链尝试。
 
     返回 (full_text, used_profile)。
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
+
+    2026-05-30 加固：
+      · OpenAI client 显式 timeout（对齐 ai_wrapper）防止无限挂起。
+      · RateLimitError / APITimeoutError 在**同 profile** 做有限指数退避重试（再降级 fallback），
+        避免一次 429/超时就降级到次优模型。
+      · HTTP 200 但零 content（内容过滤 / reasoning model 全进 reasoning_content / 空输出）
+        视为失败 → 切下一 profile；全链皆空才 raise（杜绝写空草稿报成功）。
     """
+    import time
+
     from openai import OpenAI
+
+    try:
+        from openai import APITimeoutError, RateLimitError
+    except ImportError:  # 极旧 SDK 兜底（不应发生 · openai>=1.x 均有）
+        APITimeoutError = RateLimitError = ()
 
     candidates = loader.get_callable_profiles()
     failures: list[tuple[str, str]] = []
@@ -536,10 +556,25 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
         print(f"[gen_writer] prompt size: system={len(system)} chars, user={len(user)} chars",
               file=sys.stderr)
 
-        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
+        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url,
+                        timeout=GEN_MODEL_TIMEOUT)
         full_text = ""
         try:
-            full_text, finish_reason = _stream_once(client, profile, system, user, max_tokens)
+            # 同 profile 内：限流/超时做有限指数退避重试，其余异常立即降级 fallback
+            attempt = 0
+            while True:
+                try:
+                    full_text, finish_reason = _stream_once(client, profile, system, user, max_tokens)
+                    break
+                except (RateLimitError, APITimeoutError) as re_err:
+                    attempt += 1
+                    if attempt > GEN_MODEL_MAX_RETRIES:
+                        raise  # 重试耗尽 → 落到外层 except → 降级 fallback
+                    delay = GEN_MODEL_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                    print(f"\n[gen_writer] ⚠️ {profile.name} 限流/超时 "
+                          f"({type(re_err).__name__})，{delay:.0f}s 后同 profile 重试 "
+                          f"{attempt}/{GEN_MODEL_MAX_RETRIES}…", file=sys.stderr)
+                    time.sleep(delay)
             # 截断检测 + 自动续写（finish_reason == "length" = 命中 max_tokens 被截断）
             cont_rounds = 0
             while finish_reason == "length" and cont_rounds < 3:
@@ -555,6 +590,14 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
         except Exception as e:
             reason = str(e)[:200]
             print(f"\n[FALLBACK] {profile.name} 调用失败: {reason}", file=sys.stderr)
+            failures.append((profile.name, reason))
+            continue  # 切下一个 profile
+
+        # 空响应守卫：HTTP 200 但零 content（内容过滤 / reasoning model 全进 reasoning_content）
+        # 视为失败，切下个 profile（与 except 路径对齐），杜绝写空草稿报成功。
+        if not full_text.strip():
+            reason = "返回空内容（HTTP 200 但零 content · 可能内容过滤/reasoning model 全进 reasoning_content）"
+            print(f"\n[FALLBACK] {profile.name} {reason}", file=sys.stderr)
             failures.append((profile.name, reason))
             continue  # 切下一个 profile
 
@@ -604,6 +647,14 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
 
     v27 freestyle：ch_end=None 时 ch_range 写 'TBD_by_splitter'（splitter 后期填）。
     """
+    # 空 body 守卫（2026-05-30 加固）：拒写空草稿并报错，避免 cjk=0 草稿入库还报成功。
+    # 上游 call_gen_model 已对空响应切 fallback，此处是最后一道防线（含解析后正文为空的情况）。
+    if not body.strip():
+        raise ValueError(
+            f"[gen_writer] 拒绝写入空草稿（cluster_{cluster_id:03d}）：解析后正文为空。"
+            f"可能是 gen-model 返回空内容或全为 CHANGES JSON 无正文 — 请检查 profile 输出。"
+        )
+
     draft_dir = project_root / '章节' / f'cluster_{cluster_id:03d}_draft'
     draft_dir.mkdir(parents=True, exist_ok=True)
     draft_path = draft_dir / f'cluster_{cluster_id:03d}_draft.txt'

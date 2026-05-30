@@ -55,6 +55,8 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+import atomic_json  # 2026-05-30 修[#6]：写作经验.json 原子写，防多写者半截损坏
+
 try:
     import chapter_io as cio  # v18：统一正文/数据分离读写；v19 用于读 _changes.json 的 waivers
 except ImportError:
@@ -120,9 +122,12 @@ def load_experience(project_root: Path) -> dict:
 
 
 def save_experience(project_root: Path, data: dict) -> Path:
+    # 2026-05-30 修[#6]：裸 write_text → 原子写。cluster-save-state step7-9 有 ≥5 个写者
+    # 集中 RMW 同一 写作经验.json，旧实现非原子写——任一进程 subprocess timeout 被 kill
+    # 会留半截 JSON → 下个读者 json.JSONDecodeError 兜底成空 {} → 整库 success/failure_patterns
+    # 静默清空。atomic_write_json 内部已 mkdir + tmp 唯一名 + fsync + os.replace 原子落盘。
     p = _experience_path(project_root)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_json.atomic_write_json(p, data)
     return p
 
 

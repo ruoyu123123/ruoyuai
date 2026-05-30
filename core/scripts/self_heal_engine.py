@@ -18,10 +18,15 @@
 """
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# 2026-05-30 修（并发损坏 bug #5）：注入 scripts 目录以 import atomic_json（原子写 + file lock）。
+# self_heal_kb.json 是系统级跨项目知识库，cluster-save-state step9 多本书并发 --ingest 时是
+# read-modify-write，固定 .json.tmp 名 + 无锁 → tmp 交错损坏 + 丢计数。改走 atomic_json。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import atomic_json  # noqa: E402  原子写 + with_file_lock 读-改-写
 
 REPO_ROOT = Path(__file__).resolve().parents[2]   # 系统根：runtime/ 是系统级（跨小说项目，脚本报错与项目无关）
 RECURRING_THRESHOLD = 3   # 与 learning_loop 升级阈值一致
@@ -69,33 +74,59 @@ def _incidents_path(project_root: Path) -> Path:
     return _runtime_dir(project_root) / "incidents.jsonl"
 
 
+def _empty_kb() -> dict:
+    return {"schema_version": "v1.self_heal", "updated_at": _now(),
+            "patterns": {}, "_ingest_offset": 0, "_total_incidents": 0}
+
+
+def _normalize_kb(data) -> dict:
+    """把任意反序列化结果归一成合法 KB 骨架（Tolerant Reader）。非 dict / 缺字段都兜底。"""
+    if not isinstance(data, dict):
+        return _empty_kb()
+    data.setdefault("schema_version", "v1.self_heal")
+    data.setdefault("patterns", {})
+    data.setdefault("_ingest_offset", 0)
+    data.setdefault("_total_incidents", 0)
+    if not isinstance(data["patterns"], dict):
+        data["patterns"] = {}
+    return data
+
+
 def load_kb(project_root: Path) -> dict:
-    """Tolerant Reader：损坏 / 缺失都返回空骨架，绝不崩。"""
+    """Tolerant Reader：损坏 / 缺失都返回空骨架，绝不崩。
+
+    注意：本函数无锁，仅用于只读命令（suggest/dashboard/emit-lessons）。
+    读-改-写命令（ingest/resolve）必须走 atomic_json.safe_update_json 在锁内 load，
+    否则跨进程并发会丢更新（见 cmd_ingest）。
+    """
     p = _kb_path(project_root)
     if p.exists():
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                data.setdefault("patterns", {})
-                data.setdefault("_ingest_offset", 0)
-                data.setdefault("_total_incidents", 0)
-                return data
+                return _normalize_kb(data)
         except Exception as e:
             print(f"⚠️ self_heal_kb.json 损坏（{e}），重建空库（旧库不覆盖删除，仅旁置 .corrupt）", file=sys.stderr)
             try:
                 p.rename(p.with_suffix(".json.corrupt"))
             except Exception:
                 pass
-    return {"schema_version": "v1.self_heal", "updated_at": _now(),
-            "patterns": {}, "_ingest_offset": 0, "_total_incidents": 0}
+    return _empty_kb()
 
 
 def save_kb(project_root: Path, kb: dict) -> Path:
+    """原子写 KB。
+
+    2026-05-30 修（并发损坏 bug #5）：旧实现自造固定 `.json.tmp` 名 → write_text → os.replace，
+    无 pid/uuid 唯一名 + 无锁。多本书并发 --ingest 时两进程同时写同一 .json.tmp → 内容交错损坏
+    （正是 atomic_json 顶部点名修过的反模式）。改走 atomic_json.atomic_write_json：tmp 名嵌
+    pid+uuid4 唯一、flush+fsync 落盘、Windows 占用重试。
+    注意：本函数只保证「单次写」原子，不保证「读-改-写」不丢更新——后者由 cmd_ingest/cmd_resolve
+    用 safe_update_json 在锁内完成。
+    """
     kb["updated_at"] = _now()
     p = _kb_path(project_root)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(kb, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, p)
+    atomic_json.atomic_write_json(p, kb, indent=2, ensure_ascii=False)
     return p
 
 
@@ -110,14 +141,19 @@ def _make_lesson(pat: dict) -> str:
             f"下次规避：{pat.get('recommended_action')}")
 
 
-def cmd_ingest(project_root: Path) -> int:
-    kb = load_kb(project_root)
-    inc_path = _incidents_path(project_root)
-    if not inc_path.exists():
-        print("[ingest] 无 incidents.jsonl（运行时尚无报错记录），跳过。")
-        return 0
+def _apply_ingest(kb, inc_path: Path, stats: dict) -> dict:
+    """纯（受控副作用：只读 incidents.jsonl）的 KB 变更函数。
 
+    2026-05-30 修（并发损坏 bug #5）：抽成本函数由 safe_update_json 在 with_file_lock 内调用，
+    使「读 KB → 累加计数 → 写回」整体在锁内完成。否则两个并发 --ingest 进程都读到旧 KB、各自
+    累加、各自写回 → 后写覆盖先写，丢对方的计数。
+    offset 从锁内的 current KB 读（不在锁外预读），保证增量游标与计数严格对齐同一份 KB。
+    统计结果写进 stats（new/upgraded/regressions）供调用方打印。
+    """
+    kb = _normalize_kb(kb)
     offset = kb.get("_ingest_offset", 0)
+    if not isinstance(offset, int) or offset < 0:
+        offset = 0
     size = inc_path.stat().st_size
     if size < offset:   # 文件被轮转 / 截断 → 从头读
         print(f"[ingest] incidents.jsonl 被截断（size {size} < offset {offset}），重置 offset=0", file=sys.stderr)
@@ -184,7 +220,27 @@ def cmd_ingest(project_root: Path) -> int:
         if prev != pat["status"] and pat["status"] in ("recurring", "known"):
             upgraded += 1
 
-    save_kb(project_root, kb)
+    kb["updated_at"] = _now()
+    stats["new_count"], stats["upgraded"], stats["regressions"] = new_count, upgraded, regressions
+    return kb
+
+
+def cmd_ingest(project_root: Path) -> int:
+    inc_path = _incidents_path(project_root)
+    if not inc_path.exists():
+        print("[ingest] 无 incidents.jsonl（运行时尚无报错记录），跳过。")
+        return 0
+
+    # 2026-05-30 修（并发损坏 bug #5）：整个「读 KB → 累加 → 写回」走 safe_update_json，
+    # 在 with_file_lock 内闭环。多本书并发 --ingest 时第二个进程必读到第一个进程的结果，零丢计数。
+    stats = {"new_count": 0, "upgraded": 0, "regressions": 0}
+    kb = atomic_json.safe_update_json(
+        _kb_path(project_root),
+        lambda current: _apply_ingest(current, inc_path, stats),
+        default=_empty_kb(),
+    )
+    new_count, upgraded, regressions = stats["new_count"], stats["upgraded"], stats["regressions"]
+
     active = sum(1 for p in kb["patterns"].values() if p.get("status") in ("recurring", "known", "regression"))
     print(f"[ingest] 新增 incident {new_count} 条 · 升级 {upgraded} · regression {regressions} · "
           f"活跃 pattern {active} / 总 {len(kb['patterns'])} · 累计 incident {kb['_total_incidents']}")
@@ -214,14 +270,25 @@ def cmd_suggest(project_root: Path, query: str) -> int:
 
 
 def cmd_resolve(project_root: Path, sig: str) -> int:
-    kb = load_kb(project_root)
-    pat = kb.get("patterns", {}).get(sig)
-    if not pat:
+    # 2026-05-30 修（并发损坏 bug #5）：resolve 也是读-改-写，走 safe_update_json 在锁内闭环，
+    # 否则与并发 --ingest 互相覆盖。found 经闭包回传决定退出码。
+    found = {"hit": False}
+
+    def _apply_resolve(current):
+        kb = _normalize_kb(current)
+        pat = kb["patterns"].get(sig)
+        if not pat:
+            return kb   # 未命中：原样写回（不改任何字段）
+        found["hit"] = True
+        pat["status"] = "resolved"
+        pat["resolved_at"] = _now()
+        kb["updated_at"] = _now()
+        return kb
+
+    atomic_json.safe_update_json(_kb_path(project_root), _apply_resolve, default=_empty_kb())
+    if not found["hit"]:
         print(f"[resolve] 未找到指纹 {sig}", file=sys.stderr)
         return 1
-    pat["status"] = "resolved"
-    pat["resolved_at"] = _now()
-    save_kb(project_root, kb)
     print(f"[resolve] {sig} 标记为已修复（再次出现将标 regression）")
     return 0
 

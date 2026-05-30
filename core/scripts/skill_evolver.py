@@ -25,6 +25,10 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+# 2026-05-30 修[#6]：注入 scripts 目录以 import atomic_json（写作经验.json 原子写）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import atomic_json
+
 # 2026-05-29 cluster 化：cluster 模式下「章阈值」语义改为「cluster 序号阈值」。
 # cluster_lookup 把 cluster key → 末章号，从而沿用按章计的 last_validated_at_ch 比较
 # （retire 的「N 章未验证」改成「N 个 cluster 未验证」时也复用 cluster→末章映射）。
@@ -44,8 +48,10 @@ def load_json(p: Path, default=None):
 
 
 def save_json(p: Path, data: dict):
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 2026-05-30 修[#6]：裸 write_text → 原子写。evolve/promote 都经此写 写作经验.json，
+    # 与 learning_loop.save_experience 同库 RMW；非原子写在 subprocess 被 kill 时留半截 JSON。
+    # atomic_write_json 内部已 mkdir + tmp 唯一名 + fsync + os.replace 原子落盘。
+    atomic_json.atomic_write_json(p, data)
 
 
 def jaccard(a: str, b: str) -> float:
