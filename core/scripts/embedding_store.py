@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 from pathlib import Path
@@ -36,7 +37,123 @@ def cosine_similarity(v1: list[float], v2: list[float]) -> float:
     return sum(a * b for a, b in zip(v1, v2))
 
 
+# ── 真语义 embedding 后端（2026-05-30 · 取代 md5 哈希袋假语义 · 用户选通义 API）──────
+# 降级链：通义/OpenAI兼容 embedding API（.env GEN_EMBED__*）→ 本地 sentence-transformers → hash。
+# compute_embedding 签名不变（消费方 build_manifest RAG / voice drift 零改动）；
+# 默认无 key + 无本地包 → hash（行为完全不变，零回归）；配 .env 的 GEN_EMBED key 自动启用真语义。
+# ⚠️ 切换后端会改变维度（hash 384 / bge 512 / 通义 1024）→ 必须重建缓存（rebuild 写 .embed_manifest.json
+#    记 method+dim；cosine 维度不等返回 0，drift 会显示 sim 异常提示重建）。
+_BACKEND = None          # (method:str, dim:int, fn) 探测缓存
+_LOCAL_MODEL = None      # 本地 sentence-transformers 模型 lazy 缓存
+
+
+def _embed_repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _load_embed_profile() -> "dict | None":
+    """读 .env 的 GEN_EMBED__<name>__{BASE_URL,API_KEY,MODEL,DIM}（同 gen_model_loader 模式）。
+    GEN_EMBED_ACTIVE 指定用哪个 profile；缺则取第一个。字段不全 → None（降级本地/hash）。"""
+    env_path = None
+    for cand in (Path(".env"), _embed_repo_root() / ".env"):
+        if cand.exists():
+            env_path = cand
+            break
+    if env_path is None:
+        return None
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    profiles: dict = {}
+    active = None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#") or not line:
+            continue
+        m_act = re.match(r"GEN_EMBED_ACTIVE\s*=\s*(.+)", line)
+        if m_act:
+            active = m_act.group(1).strip()
+            continue
+        m = re.match(r"^GEN_EMBED__(.+?)__([A-Z_]+)\s*=\s*(.*?)\s*$", line)
+        if m:
+            name, field, val = m.group(1), m.group(2).lower(), m.group(3).strip()
+            profiles.setdefault(name, {})[field] = val
+    if not profiles:
+        return None
+    name = active if (active and active in profiles) else next(iter(profiles))
+    p = profiles[name]
+    if not (p.get("api_key") and p.get("base_url") and p.get("model")):
+        return None
+    p["name"] = name
+    p["dim"] = int(p["dim"]) if str(p.get("dim", "")).isdigit() else 1024
+    return p
+
+
+def _api_embed(profile: dict, text: str) -> list[float]:
+    from openai import OpenAI
+    client = OpenAI(api_key=profile["api_key"], base_url=profile["base_url"])
+    kwargs = {"model": profile["model"], "input": text[:8000]}
+    if profile.get("dim"):
+        kwargs["dimensions"] = profile["dim"]   # 通义 text-embedding-v4 支持自定义维度
+    resp = client.embeddings.create(**kwargs)
+    return list(resp.data[0].embedding)
+
+
+def _local_embed(text: str) -> list[float]:
+    global _LOCAL_MODEL
+    if _LOCAL_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        _LOCAL_MODEL = SentenceTransformer("BAAI/bge-small-zh-v1.5")
+    return _LOCAL_MODEL.encode(text[:8000], normalize_embeddings=True).tolist()
+
+
+def _detect_backend():
+    """探测 embedding 后端（一次，缓存）。返回 (method, dim, fn)。
+
+    🔴 真语义是 **opt-in**：默认 hash（零回归 · 与现有缓存维度一致 · 即使环境恰好装了
+    sentence-transformers 也不自动切，避免「维度混用导致 cosine=0 → voice drift/RAG 静默失效」+
+    「首次 encode 触发模型下载拖慢流水线」）。只有用户显式配置才启用真语义：
+      ① .env 配 GEN_EMBED__* key → 通义/OpenAI 兼容 API
+      ② 环境变量 EMBED_BACKEND=local（且装了 sentence-transformers）→ 本地 bge
+    切换后端务必先 `embedding_store.py <proj> rebuild` 重建缓存（维度变了）。"""
+    global _BACKEND
+    if _BACKEND is not None:
+        return _BACKEND
+    # ① 用户显式配 GEN_EMBED API
+    prof = _load_embed_profile()
+    if prof:
+        _BACKEND = (f"api:{prof['model']}", prof["dim"], lambda t: _api_embed(prof, t))
+        print(f"[embedding_store] 后端=API {prof['model']} (dim={prof['dim']}) · 切后端记得 rebuild", file=sys.stderr)
+        return _BACKEND
+    # ② 用户显式 EMBED_BACKEND=local + 装了包
+    if os.environ.get("EMBED_BACKEND", "").strip().lower() == "local":
+        try:
+            import sentence_transformers  # noqa: F401
+            _BACKEND = ("local:bge-small-zh-v1.5", 512, _local_embed)
+            print("[embedding_store] 后端=本地 bge-small-zh-v1.5 (dim=512) · 切后端记得 rebuild", file=sys.stderr)
+            return _BACKEND
+        except ImportError:
+            print("[embedding_store] EMBED_BACKEND=local 但未装 sentence-transformers，降级 hash", file=sys.stderr)
+    # ③ 默认 hash（零回归 · 不因环境装了包就静默切换）
+    _BACKEND = ("hash", 384, lambda t: _stable_hash_embedding(t, 384))
+    return _BACKEND
+
+
+def embedding_method() -> str:
+    """当前 embedding 后端标识（供 .embed_manifest 记录 + 一致性校验）。"""
+    return _detect_backend()[0]
+
+
 def compute_embedding(text: str) -> list[float]:
+    """真语义 embedding（降级链）。任何后端失败 → hash 兜底（永不崩，呼应 MAPE-K「失败记录降级」）。"""
+    method, _dim, fn = _detect_backend()
+    try:
+        v = fn(text)
+        if v and len(v) > 0:
+            return v
+    except Exception as e:
+        print(f"[embedding_store] {method} 失败降级 hash: {str(e)[:120]}", file=sys.stderr)
     return _stable_hash_embedding(text, dim=384)
 
 
@@ -55,6 +172,7 @@ def store_chapter_embedding(project_root: Path, ch: int):
     chunk_embs = [compute_embedding(c) for c in chunks]
     record = {
         "scope": "chapter", "ch": ch, "wc": len(text), "n_chunks": len(chunks),
+        "method": embedding_method(),   # 维度混用防护：记录生成时的后端
         "chunks": [{"idx": i, "text_preview": c[:80], "embedding": e} for i, (c, e) in enumerate(zip(chunks, chunk_embs))],
     }
     out_path = _emb_dir(project_root) / f"chapter_{ch:03d}.json"
@@ -107,6 +225,7 @@ def store_character_baseline(project_root: Path, character_name: str):
         baseline = [v / norm for v in baseline]
     record = {
         "scope": "character_dialogue", "character": character_name, "n_samples": n,
+        "method": embedding_method(),   # 维度混用防护：记录生成时的后端
         "baseline_embedding": baseline, "sample_dialogues": dialogues[:5],
     }
     out_path = _emb_dir(project_root) / f"character_{character_name}.json"
@@ -120,6 +239,11 @@ def compute_character_drift(project_root: Path, character_name: str, recent_ch: 
         return {"error": "baseline 不存在", "character": character_name}
     baseline_data = json.loads(baseline_path.read_text(encoding="utf-8"))
     baseline_emb = baseline_data.get("baseline_embedding", [])
+    # 维度混用防护：baseline 后端 ≠ 当前后端 → 提示重建（而非 cosine=0 误报 drift）
+    bl_method = baseline_data.get("method", "hash")
+    if bl_method != embedding_method():
+        return {"drift": None, "character": character_name, "recent_ch": recent_ch,
+                "reason": f"baseline method={bl_method} ≠ 当前={embedding_method()}，请先跑 embedding_store rebuild 重建"}
 
     dialogues = _extract_character_dialogues(project_root, character_name, max_d=10, chapters=[recent_ch])
     if not dialogues:
