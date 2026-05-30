@@ -13,6 +13,7 @@ gate_level: advisory（声音漂移 = 工艺类，writer 有理由可豁免）
 """
 from __future__ import annotations
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -75,6 +76,90 @@ def compute_voice_metrics(dialogues: list[str]) -> dict:
     }
 
 
+# ── L4·D4 voice 区分度 + D8 口癖一致性（2026-05-31 · 主代理手动实现）──────────
+# 全 advisory · env VOICE_D4D8_MODE 默认 shadow（只记不进 warning/exit · 回归0）
+# 零依赖纯统计（不用 embedding · 避 hash backend 假语义）· 砍掉项 D6情绪弧/D10情绪直陈不做
+VOICE_TICS = ("啊", "呢", "吧", "嘛", "呗", "啦", "哈", "咯", "喔", "哦",
+              "嗯", "唉", "哼", "咦", "嘞", "咧", "呐", "罢")
+
+
+def _d4d8_mode() -> str:
+    """VOICE_D4D8_MODE：默认 shadow（只记不进顶层 warning）· {shadow, active, off}· 非法回退 shadow。"""
+    m = (os.environ.get("VOICE_D4D8_MODE") or "shadow").strip().lower()
+    return m if m in ("shadow", "active", "off") else "shadow"
+
+
+def _voice_fingerprint(dialogues: list[str]) -> dict | None:
+    """角色对白聚合 voice 指纹（零依赖统计 · D4/D8 共用）。"""
+    if not dialogues:
+        return None
+    n = len(dialogues)
+    total_chars = sum(len(d) for d in dialogues) or 1
+    tic_counts = {t: 0 for t in VOICE_TICS}
+    for d in dialogues:
+        for t in VOICE_TICS:
+            tic_counts[t] += d.count(t)
+    return {
+        "avg_len": sum(len(d) for d in dialogues) / n,
+        "ellipsis_ratio": sum(1 for d in dialogues if "…" in d or "..." in d) / n,
+        "question_ratio": sum(1 for d in dialogues if "?" in d or "？" in d) / n,
+        "exclaim_ratio": sum(1 for d in dialogues if "!" in d or "！" in d) / n,
+        "tic_rate": {t: tic_counts[t] / total_chars * 1000 for t in VOICE_TICS},
+        "_n": n,
+    }
+
+
+def _fingerprint_distance(a: dict, b: dict) -> float:
+    """两角色 voice 指纹归一距离（0=同质 · 越大越区分）。"""
+    dims = []
+    m = (a["avg_len"] + b["avg_len"]) / 2 or 1
+    dims.append(min(abs(a["avg_len"] - b["avg_len"]) / m, 1.0))
+    for k in ("ellipsis_ratio", "question_ratio", "exclaim_ratio"):
+        dims.append(abs(a[k] - b[k]))
+    tic_l1 = sum(abs(a["tic_rate"][t] - b["tic_rate"][t]) for t in VOICE_TICS)
+    dims.append(min(tic_l1 / 10.0, 1.0))
+    return sum(dims) / len(dims)
+
+
+def compute_d4_distinctiveness(char_all_dialogues: dict) -> dict:
+    """D4：角色间 voice 区分度（两两距离均值过低=角色说话同质化 · advisory）。"""
+    chars = [(name, _voice_fingerprint(qs)) for name, qs in char_all_dialogues.items()]
+    chars = [(n, f) for n, f in chars if f and f["_n"] >= 3]
+    if len(chars) < 2:
+        return {"applicable": False, "reason": "少于2个有足够对白(≥3句)的角色"}
+    pairs = []
+    for i in range(len(chars)):
+        for j in range(i + 1, len(chars)):
+            d = _fingerprint_distance(chars[i][1], chars[j][1])
+            pairs.append((chars[i][0], chars[j][0], round(d, 3)))
+    dists = [p[2] for p in pairs]
+    mean_dist = sum(dists) / len(dists)
+    low_pairs = [{"a": a, "b": b, "dist": d} for a, b, d in pairs if d < 0.08]
+    return {
+        "applicable": True,
+        "char_count": len(chars),
+        "mean_pairwise_distance": round(mean_dist, 3),
+        "low_distinctiveness_pairs": low_pairs[:5],
+        "low_distinctiveness": mean_dist < 0.10,
+    }
+
+
+def compute_d8_tic_consistency(char_scene_tics: dict) -> dict:
+    """D8：同角色跨场景口癖一致性（某场景显著口癖另一场景几乎消失=不一致 · advisory）。"""
+    issues = []
+    for name, scene_tics in char_scene_tics.items():
+        valid = [(idx, tr) for idx, tr in scene_tics if tr]
+        if len(valid) < 2:
+            continue
+        for t in VOICE_TICS:
+            rates = [tr.get(t, 0.0) for _, tr in valid]
+            mx, mn = max(rates), min(rates)
+            if mx >= 2.0 and mn < 0.3:
+                issues.append({"character": name, "tic": t,
+                               "max_rate": round(mx, 2), "min_rate": round(mn, 2)})
+    return {"inconsistent_tics": issues[:8], "count": len(issues)}
+
+
 def scan(project_root: Path, draft_path: Path) -> dict:
     if not draft_path.exists():
         return {"_fatal": f"draft 不存在: {draft_path}"}
@@ -92,12 +177,19 @@ def scan(project_root: Path, draft_path: Path) -> dict:
 
     # 每个 scene 提取每个角色的对话
     scene_metrics = []  # [{scene_idx, by_speaker: {name: metrics}}]
+    char_all_dialogues = defaultdict(list)   # D4: 角色 → 跨场景全部对白
+    char_scene_tics = defaultdict(list)      # D8: 角色 → [(scene_idx, tic_rate)]
     for i, scene in enumerate(scenes):
         sd = extract_dialogues_by_speaker(scene, aliases)
         scene_metrics.append({
             "scene_idx": i,
             "by_speaker": {name: compute_voice_metrics(qs) for name, qs in sd.items() if qs},
         })
+        for name, qs in sd.items():
+            if qs:
+                char_all_dialogues[name].extend(qs)
+                fp = _voice_fingerprint(qs)
+                char_scene_tics[name].append((i, fp["tic_rate"] if fp else {}))
 
     # 跨场景检测每个角色的 voice 漂移
     drift_issues = []
@@ -128,8 +220,29 @@ def scan(project_root: Path, draft_path: Path) -> dict:
                         "type": "avg_dialogue_length_drift",
                     })
 
+    # D4/D8（2026-05-31）· env VOICE_D4D8_MODE 默认 shadow（只挂字段不改 warning/exit · 回归0）
+    mode = _d4d8_mode()
+    d4 = compute_d4_distinctiveness(char_all_dialogues) if mode != "off" else None
+    d8 = compute_d8_tic_consistency(char_scene_tics) if mode != "off" else None
+    base_warning = (
+        f"⚠️ {len(drift_issues)} 处跨场景 voice 漂移嫌疑（句长偏差 >50%）"
+        if drift_issues else None
+    )
+    d4d8_warning = None
+    if mode == "active":   # 仅 active 把 D4/D8 升进 advisory warning（shadow 只挂字段不改判决）
+        bits = []
+        if d4 and d4.get("low_distinctiveness"):
+            bits.append(f"角色voice区分度低(两两均距{d4['mean_pairwise_distance']})")
+        elif d4 and d4.get("low_distinctiveness_pairs"):
+            bits.append(f"{len(d4['low_distinctiveness_pairs'])}对角色说话同质化")
+        if d8 and d8.get("count"):
+            bits.append(f"{d8['count']}处角色口癖跨场景不一致")
+        if bits:
+            d4d8_warning = "；".join(bits)
+    final_warning = "；".join([w for w in (base_warning, d4d8_warning) if w]) or None
+
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "scanner": "cross_scene_voice_drift_scanner",
         "gate_level": "advisory",
         "cluster_mode": True,
@@ -137,11 +250,11 @@ def scan(project_root: Path, draft_path: Path) -> dict:
         "characters_with_voice_sample": len(by_char),
         "drift_issues_count": len(drift_issues),
         "drift_issues": drift_issues[:10],
-        "warning": (
-            f"⚠️ {len(drift_issues)} 处跨场景 voice 漂移嫌疑（句长偏差 >50%）"
-            if drift_issues else None
-        ),
-        "severity": "warning" if drift_issues else "info",
+        "d4_voice_distinctiveness": d4,
+        "d8_tic_consistency": d8,
+        "d4d8_mode": mode,
+        "warning": final_warning,
+        "severity": "warning" if final_warning else "info",
     }
 
 
