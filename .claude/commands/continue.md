@@ -14,48 +14,76 @@ $ARGUMENTS
 
 ## 第一步：检测项目状态
 
+> 🔴 **断点权威源纪律（2026-05-30 修 #4）**：中断判断的**唯一权威源**是
+> `wal_recovery.py`（读 `plan_tracker` 持久态）+ `进度.json.completed_clusters`。
+> **禁止**把 `.wal/cluster_<key>_save_state.json` 当主检测信号——该文件由调度器
+> shell 直建、内容仅 `{cluster_id, status, ch_range}`（**无 `cluster_key`、无
+> `completed_steps`**），且 save-state 成功后**永不删除**（见 cluster-save-state.md
+> 完成清单「存在」）。它只能做**辅助佐证**（看 `status` 字段），不能据「文件存在」
+> 判中断（否则已完整完成的项目会被永远误判为「save-state 中断」并重跑）。
+
 1. 扫描 `workspace/novels/{书名}/`，确定项目（含 `_数据库/进度.json`）。
-2. **检测 save-state WAL（崩溃恢复优先）**：
-   - 检查 `_数据库/.wal/` 是否存在 `cluster_<key>_save_state.json`。
-   - 如存在 → Read 它，取 `cluster_key` 与 `completed_steps[]`：
-     - 提示用户：「检测到 cluster <key> 的 save-state 中断（完成 X 步 / 共 12 步），正在续跑…」
-     - 进入第三步「情况 B：续跑 cluster-save-state」。
-   - 如无 → 继续下一步。
-3. Read `_数据库/进度.json`，获取：
-   - `completed` / `current`：已完成 / 当前进度
-   - `cluster_blueprint`：各 cluster 的占位与状态
+2. **跑权威断点检测（plan_tracker 视图）**：
+   ```bash
+   python core/scripts/wal_recovery.py "workspace/novels/<书名>"
+   ```
+   - **exit 0** → 无未完成 plan，所有命令流水线都干净结束 → 进入第二步判「写下一个 cluster」（情况 C）。
+   - **exit 1** → 有未完成 plan，输出里 `🔴 中断 [active] <cmd>/...: X/Y 步 (<plan_id>)` 即中断点：
+     - `<cmd>` = `cluster-write` → 情况 A/A2（写作中断），记下 `<plan_id>` 与 cluster `<key>`。
+     - `<cmd>` = `cluster-save-state` → 情况 B（状态保存中断），记下 `<plan_id>` 与 cluster `<key>`。
+     - **续跑步号以 wal_recovery 输出的「续跑: ... --n N」为准**（plan_tracker 已算好 done_count+1）。
+3. Read `_数据库/进度.json`（**权威进度源**），获取：
+   - `completed_clusters[]`：已完整完成的 cluster 列表（**判「写哪个 cluster」的主依据**）
+   - `current_cluster`：当前/下一个待写 cluster_id
+   - `cluster_blueprint`：各 cluster 的占位与状态（`status` / `_fluid_emergence_pending` / `scope_summary`）
    - `last_updated`：上次更新时间
-4. 检查最近一个 cluster 的草稿与 changes：
+4. **辅助佐证（不作主判据）**：如对某 cluster 的完成度存疑，可 Read
+   `_数据库/.wal/cluster_<key>_save_state.json` 看 `status` 字段（`"done"` = 该 cluster
+   save-state 已完整收尾）。**只看 `status`，不看「文件是否存在」**。
+5. 检查 `current_cluster`（或 wal_recovery 报中断的 cluster）的草稿与 changes：
    - `章节/cluster_<key>_draft/cluster_<key>_draft.txt`（writer 草稿）
    - `章节/cluster_<key>_draft/cluster_<key>_changes.json`（cluster 级变更）
-   - 这两者的存在与否，决定 cluster-write 7 步走到了哪一步。
+   - 物理章节目录 `章节/第NNN章/第NNN章.txt`（零填充三位，splitter 切章产物）
+   - 这三者的存在与否，进一步区分 cluster-write 7 步走到了哪一步。
 
 ---
 
 ## 第二步：判断中断点（cluster 粒度）
 
 ```
-中断点判断逻辑（以 cluster <key> 为单位）：
+中断点判断逻辑（以 wal_recovery + 进度.json 为权威，cluster <key> 为单位）：
 
-情况 A：cluster_<key>_draft.txt 不存在 / 不完整
+情况 A：wal_recovery 报 cluster-write 中断 且 cluster_<key>_draft.txt 不存在 / 不完整
   → cluster-write 写作阶段中断（step 1-2 之间）
   → 执行 /cluster-write CLUSTER_ID=<key> 从头重跑（plan WAL 会跳过已完成 step）
 
-情况 A2：cluster_<key>_draft.txt 存在，但章节物理文件（第NNN章/）未切出
+情况 A2：wal_recovery 报 cluster-write 中断 且 cluster_<key>_draft.txt 存在，
+        但本 cluster 章节物理文件（第NNN章/，零填充三位）未切全
   → cluster-write 切章前的质检/伏笔/voice 阶段中断（step 3-5），或 splitter 未跑（step 6）
-  → 执行 /cluster-write CLUSTER_ID=<key> 续跑（plan_tracker status 显示停在哪步，从下一步继续）
+  → 执行 /cluster-write CLUSTER_ID=<key> 续跑（按 wal_recovery 报的「续跑 --n N」从下一步继续）
 
-情况 B：存在 .wal/cluster_<key>_save_state.json（completed_steps 未满 12）
+情况 B：wal_recovery 报 cluster-save-state 中断（plan 未到 12/12 完成态）
   → cluster-save-state 中断（cluster 已写完但状态未存完）
-  → 执行 /cluster-save-state CLUSTER_ID=<key> 续跑（跳过 completed_steps 已完成项）
+  → 执行 /cluster-save-state CLUSTER_ID=<key> 续跑（按 wal_recovery 报的「续跑 --n N」续）
+  → 🔴 不要因「.wal/cluster_<key>_save_state.json 存在」就判此情况——该文件永久保留，
+     无法据存在与否区分中断/完成；以 wal_recovery 的 plan 完成态为准。
 
-情况 C：cluster <key> 已切章 + save-state WAL 已 end（无残留 wal）
+情况 C：wal_recovery exit 0（无未完成 plan）
   → 上一个 cluster 完整完成，需要写下一个 cluster
-  → 取涌现出的 cluster_<next_key> brief（事件簇.json.clusters[N+1]），执行 /cluster-write
+  → 取 进度.json.current_cluster（= 第一个不在 completed_clusters 里的 cluster_id）
+  → 若该 cluster 的 brief 仍 _fluid_emergence_pending=true / scope_summary="待涌现"
+    → 先走 cluster-save-state 已涌现的 brief，或基于事件簇.json.clusters[N+1] 涌现后再写
+  → 执行 /cluster-write CLUSTER_ID=<current_cluster>
 
 情况 D：无 进度.json 或 _数据库 目录
   → 项目未初始化，提示用户执行 /write 或 /outline
 ```
+
+> **交叉校验**：若 wal_recovery exit 1 报中断的 cluster <key> 已在
+> `进度.json.completed_clusters` 里 且 `.wal/cluster_<key>_save_state.json.status == "done"`，
+> 说明该 plan 是历史残留 active 态（如全 12 步已跑但 plan 未盖 end）——按**情况 C** 处理
+> （写下一个 cluster），不要重跑已完成的 save-state。可选 `plan_tracker abort <plan_id>`
+> 清理该残留 plan 后再继续。
 
 ---
 
@@ -71,7 +99,8 @@ $ARGUMENTS
 ### 情况 B — 续跑 cluster-save-state
 
 1. 输出提示：「cluster <key> 已写完但状态未保存完，正在补存 12 步…」
-2. 执行 `/cluster-save-state CLUSTER_ID=<key>`：从 WAL `completed_steps` 之后续跑，跑完 `wal-end` 删 WAL。
+2. 执行 `/cluster-save-state CLUSTER_ID=<key>`：按 `wal_recovery.py` 报的「续跑 --n N」
+   从 plan_tracker 记录的下一步续跑（plan_tracker 持久态决定续跑点，不读 `_save_state.json`）。
 3. step 11 涌现下个 cluster brief → 展示走向卡 → 等用户选择。
 
 ### 情况 C — 写下一个 cluster
@@ -110,13 +139,16 @@ fi
 
 **处理策略：**
 
-| Git 状态 | WAL 状态 | 判断 | 处理 |
+| Git 状态 | plan_tracker 状态（wal_recovery） | 判断 | 处理 |
 |----------|----------|------|------|
-| 工作区干净 | 无 wal | 上次完整结束 | 正常继续写下一个 cluster（情况 C） |
-| 有未提交章节/草稿 | 无 cluster_<key>_save_state.json wal | cluster-save-state 漏了 commit | 续跑 cluster-save-state（step 10 git-commit-cluster） |
-| 有未提交章节/草稿 | 有 cluster_<key>_save_state.json wal | cluster-save-state 中断 | 从 WAL completed_steps 续跑（情况 B） |
-| 工作区干净 | 有残留 cluster_<key>_save_state.json wal | WAL 元数据未清理 | 清理 wal 文件，正常继续 |
-| 有 .bak 文件残留 | 无 wal | 调和被中断 | 提示用户手动检查 reconcile 状态 |
+| 工作区干净 | exit 0（无未完成 plan） | 上次完整结束 | 正常继续写下一个 cluster（情况 C） |
+| 有未提交章节/草稿 | cluster-save-state 报中断 | cluster-save-state 中断（可能漏了 commit） | 按 wal_recovery 报的 --n N 续跑（情况 B） |
+| 有未提交章节/草稿 | exit 0 | save-state 跑完但 commit 没落地 | 续跑 cluster-save-state step 10 git-commit-cluster（幂等） |
+| 工作区干净 | 报中断但 cluster 已在 completed_clusters | 残留 active plan（已跑完未盖 end） | `plan_tracker abort <plan_id>` 清理，按情况 C 继续 |
+| 有 .bak 文件残留 | exit 0 | 调和被中断 | 提示用户手动检查 reconcile 状态 |
+
+> 🔴 注：`.wal/cluster_<key>_save_state.json` **永久保留**，不能据其存在与否判 WAL 状态；
+> 上表「plan_tracker 状态」一律以 `wal_recovery.py` 输出为准。
 
 **关键原则：**
 - 不自动 `git reset`/`git checkout` 抹掉用户的修改
@@ -128,8 +160,10 @@ fi
 ## WAL 损坏兜底
 
 与 cluster-save-state.md「失败逃生舱」对齐：
-- 优先从 `cluster_<key>_save_state.json` 的 `completed_steps` 跳过已完成步骤续跑。
-- 若 WAL 损坏 → `python core/scripts/wal_recovery.py "<项目路径>" --cluster <key>`。
+- 续跑步号一律走 `wal_recovery.py` 输出的「续跑: ... --n N」（读 plan_tracker 持久态，
+  自动算 done_count+1）。不要去 `cluster_<key>_save_state.json` 找 `completed_steps`——
+  该文件没有此字段（仅 `{cluster_id, status, ch_range}`）。
+- 查特定 cluster 的 plan 中断点 → `python core/scripts/wal_recovery.py "<项目路径>" --cluster <key>`。
 
 ---
 
@@ -154,6 +188,10 @@ fi
 
 - ⚠️ 恢复后的写作流程与 /write 完全一致（cluster-write → cluster-save-state → 走向卡），禁止主会话直接生成正文。
 - 🔴 不降级到 chapter mode：`/write-chapter` / `/save-state` 已整套删除，没有单章续写这回事。
-- 不要问用户「要从哪里开始」——自动检测中断点。
-- 不要重复已完成的工作（cluster 已切章就不重写，plan WAL / save-state WAL 已记录的步骤跳过）。
-- 如果检测到数据不一致（如草稿存在但进度显示未完成），以文件实际存在为准。
+- 不要问用户「要从哪里开始」——自动检测中断点（wal_recovery + 进度.json 权威）。
+- 不要重复已完成的工作（cluster 已切章就不重写，plan_tracker 已记录完成的 step 跳过）。
+- 🔴 不要把 `.wal/cluster_<key>_save_state.json` 文件「存在」当中断信号——它永久保留，
+  只看其 `status` 字段做辅助佐证，断点判定以 `wal_recovery` 的 plan 完成态为准。
+- 如果检测到数据不一致（如 wal_recovery 报某 cluster save-state 中断但它已在
+  `进度.json.completed_clusters` 里），以**进度.json.completed_clusters + 物理章节文件**为准
+  （= 该 cluster 已完成，按情况 C 写下一个），残留 active plan 可 abort 清理。

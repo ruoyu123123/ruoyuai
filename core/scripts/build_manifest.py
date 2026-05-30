@@ -1141,32 +1141,52 @@ def _collect_protagonist_stress(scanner, chapter: int) -> dict:
         return {"mode": "off", "_note": "无主角压力档.json，未启用 Stress 系统"}
     try:
         s = json.loads(stress_path.read_text(encoding="utf-8"))
-        level = s.get("stress_level", 0)
-        threshold = s.get("stress_threshold_break", 8)
-        max_v = s.get("stress_max", 10)
-        coping = s.get("coping_mechanisms", {}).get("high_stress_behaviors", [])
-        recent_log = (s.get("stress_log") or [])[-3:]
+        # 2026-05-30 北极星③契约修复：真实项目用 stress_dimensions（纵尸司扁平 / 诡异嵌套）无标量
+        # stress_level → 旧版 manifest level 恒 0 / is_high_stress 恒 false。改用 stress_evaluator.stress_view
+        # 把 3 套 schema 聚合出统一标量视图（参照 fate_engine accessor 范式），引擎/manifest 共用一套读法。
+        sys.path.insert(0, str(Path(__file__).parent))
+        import stress_evaluator
+        view = stress_evaluator.stress_view(s)
+        level = view["stress_level"]
+        threshold = view["stress_threshold_break"]
+        max_v = view["stress_max"]
+        coping = s.get("coping_mechanisms", {}).get("high_stress_behaviors", []) if isinstance(s.get("coping_mechanisms"), dict) else []
+        # log 兼容 stress_log（v21/城南）/ stress_history（纵尸司/诡异）
+        log_list = s.get("stress_log")
+        if log_list is None:
+            log_list = s.get("stress_history") or []
+        recent_log = log_list[-3:]
         # 检查最近是否触发过 mental_break
         last_break = None
-        for entry in reversed(s.get("stress_log") or []):
-            if entry.get("trigger_type") == "mental_break_triggered":
-                last_break = {"ch": entry["ch"], "card_label": entry.get("card_label")}
+        for entry in reversed(log_list):
+            if isinstance(entry, dict) and entry.get("trigger_type") == "mental_break_triggered":
+                last_break = {"ch": entry.get("ch"), "card_label": entry.get("card_label")}
                 break
+        # 维度 schema：把各维度当前值也透传给 writer（哪个维度最逼近崩溃比单一标量更有指导性）
+        dims_snapshot = None
+        if view["mode"] == "dimensions":
+            raw_dims = s.get("stress_dimensions") or {}
+            dims_snapshot = {
+                k: (v.get("current") if isinstance(v, dict) else v)
+                for k, v in raw_dims.items() if not str(k).startswith("_")
+            }
         return {
             "mode": "on",
-            "protagonist": s.get("protagonist"),
+            "schema_mode": view["mode"],
+            "protagonist": s.get("protagonist") or s.get("protagonist_id"),
             "stress_level": level,
             "stress_threshold_break": threshold,
             "stress_pct": round(level / max_v, 2) if max_v > 0 else 0,
             "is_high_stress": level >= threshold * 0.75,
+            "stress_dimensions": dims_snapshot,
             "coping_behaviors": coping if level >= threshold * 0.6 else [],
             "recent_log": recent_log,
             "last_mental_break": last_break,
             "persona_violations_to_avoid": [
                 {"trait": t.get("trait"), "violation_kw": t.get("violation_keywords", [])[:3]}
-                for t in (s.get("persona_violations_tracked", {}) or {}).get("core_traits", [])
+                for t in view["traits"]
             ],
-            "_note": "writer step 0t 必读：is_high_stress=true 时本章应自然带入至少 1 个 coping 行为；last_mental_break 后所有章节必受 card 永久效应约束",
+            "_note": "writer step 0t 必读（advisory·顾问非法官）：is_high_stress=true 时本章应自然带入至少 1 个 coping 行为；stress_dimensions 显示哪个维度最逼近崩溃；last_mental_break 后所有章节必受 card 永久效应约束",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
@@ -1303,13 +1323,25 @@ def _collect_storyteller_directive(scanner, chapter: int) -> dict:
         return {"mode": "off", "_note": "无叙事节拍器.json，未启用 Storyteller 系统"}
     try:
         pacer = json.loads(pacer_path.read_text(encoding="utf-8"))
-        af = pacer.get("adaptation_factor", {}) or {}
-        rec = pacer.get("narrator_recommendation", {}) or {}
+        # 2026-05-30 北极星③契约修复：真实项目用 framework/beats(纵尸司) 或 rhythm_profile/
+        # beat_density_by_cluster(诡异)，旧版 manifest 只读 v21 storyteller_profile/adaptation_factor
+        # → 这些字段是孤儿，writer 永远看不到 Save_the_Cat 节拍 / cluster 节奏密度。改用 narrator_view
+        # 归一读法（引擎/manifest 共用），并按本 cluster 注入对应节拍 + 密度。
+        sys.path.insert(0, str(Path(__file__).parent))
+        import narrator_calibrate
+        cluster_id = scanner._current_cluster_id()
+        view = narrator_calibrate.narrator_view(pacer, cluster_id)
+        af = view["adaptation_factor"]
+        rec = view["narrator_recommendation"]
         return {
             "mode": "on",
-            "profile": pacer.get("storyteller_profile", "cassandra"),
-            "current_phase": pacer.get("current_pressure_phase", "rising"),
-            "since_phase_change_ch": pacer.get("since_phase_change_ch"),
+            "profile": view["profile"],
+            "current_phase": view["current_phase"],
+            "since_phase_change_ch": view["since_phase_change_ch"],
+            "framework": view["framework"],
+            "current_cluster_beats": view["current_cluster_beats"],
+            "rhythm_profile": view["rhythm_profile"],
+            "current_cluster_density": view["current_cluster_density"],
             "adaptation": {
                 "expected_setback_per_n_ch": af.get("expected_setback_per_n_ch"),
                 "current_setback_count_in_window": af.get("current_setback_count_in_window"),
@@ -1321,7 +1353,7 @@ def _collect_storyteller_directive(scanner, chapter: int) -> dict:
                 "intensity_target": rec.get("next_chapter_intensity_target", "auto"),
                 "reason": rec.get("_reason", ""),
             },
-            "_note": "writer step 0s 必读：target_outcome=setback 时本章必至少有 1 个真实挫败（资源损失/关系破裂/认知打击）；=win 时本章应有明确推进/收获；=auto 时按 cluster_blueprint 自由发挥",
+            "_note": "writer step 0s 必读（advisory·顾问非法官）：current_cluster_beats 是本 cluster 该命中的 Save_the_Cat 节拍（软提示）；current_cluster_density 是节奏密度；target_outcome=setback 时本章必至少有 1 个真实挫败（资源损失/关系破裂/认知打击）；=win 时本章应有明确推进/收获；=auto 时按 cluster_blueprint 自由发挥",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}

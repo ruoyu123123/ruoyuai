@@ -3,8 +3,10 @@
 借鉴 RimWorld 的三种 Storyteller（Cassandra 升压 / Phoebe 长间歇 / Randy 随机）+ Adaptation Factor。
 
 每章 save-state 末尾跑：
-1. 读 _changes.json.self_eval 推断本章 outcome（win/setback/neutral）+ intensity
-2. 写入 叙事节拍器.json.chapter_outcome_log
+1. 取本章 outcome（win/setback/neutral）：优先消费 writer 申报的
+   _changes.json.self_eval.storyteller_alignment.actual_outcome（#7 孤儿契约修复 · 北极星⑤
+   作者申报第一权威），未申报才回退 heuristic 推断；intensity 仍 heuristic 估算
+2. 写入 叙事节拍器.json.chapter_outcome_log（带 outcome_source 标 writer_declared / inferred）
 3. 滑窗 N 章计算 setback_count / win_streak / loss_streak
 4. 对照 storyteller_profile 的 expected_setback_per_n_ch，决定下章 target_outcome:
    - 实际 setback < 预期 → 下章 target=setback（"该让主角吃亏了"）
@@ -49,10 +51,60 @@ def save_json(p: Path, data: dict):
     atomic_json.atomic_write_json(p, data)
 
 
-def infer_outcome_from_changes(changes: dict) -> tuple[str, int]:
-    """从 _changes.json 推断 outcome + intensity（heuristic）。
+# ───────────────────── 真实项目 schema 兼容层（2026-05-30 北极星③契约修复） ─────────────────────
+# 背景（3 真实项目实测）：calibrate 读 storyteller_profile/current_pressure_phase/adaptation_factor
+# （靠 setdefault 部分自愈），但真实项目顶层用别的 schema，导致 outline 产的字段成孤儿：
+#   · 纵尸司：framework:"Save_the_Cat" + beats[]（id/desc/at_cluster/done）—— Save_the_Cat 节拍位点
+#   · 诡异：  rhythm_profile:"混合" + beat_density_by_cluster{cluster_001:"中"...} —— cluster 节奏密度
+#   · 城南：  v21 form（storyteller_profile/adaptation_factor/...）
+# 旧版 calibrate 跑这俩项目时只是 setdefault 出一堆空 v21 字段，但 framework/beats/rhythm_profile
+# 永远不被读、不进 manifest → writer 看不到「本 cluster 该到哪个 Save_the_Cat 节拍 / 节奏密度多高」。
+# 修复：抽 narrator_view() 把 3 套形态归一暴露（参照 fate_engine accessor），calibrate + manifest 共用。
 
-    准则：
+
+def narrator_view(pacer: dict, cluster_id: str = None) -> dict:
+    """归一叙事节拍器视图（calibrate + build_manifest 共用）。
+    保留 v21 调压字段，同时把 framework/beats(Save_the_Cat) 与 rhythm_profile/beat_density 暴露给 writer。
+    """
+    framework = pacer.get("framework")
+    beats = pacer.get("beats") if isinstance(pacer.get("beats"), list) else None
+    # 当前 cluster 该命中的 Save_the_Cat 节拍（at_cluster 命中本 cluster 的）
+    current_beats = None
+    if beats and cluster_id:
+        current_beats = [
+            {"id": b.get("id"), "desc": b.get("desc"), "done": b.get("done", False)}
+            for b in beats
+            if isinstance(b, dict) and str(cluster_id) in str(b.get("at_cluster", ""))
+        ] or None
+    # cluster 节奏密度（诡异 schema）
+    rhythm_profile = pacer.get("rhythm_profile")
+    density_map = pacer.get("beat_density_by_cluster") if isinstance(pacer.get("beat_density_by_cluster"), dict) else None
+    current_density = density_map.get(cluster_id) if (density_map and cluster_id) else None
+    return {
+        "profile": pacer.get("storyteller_profile", "cassandra"),
+        "current_phase": pacer.get("current_pressure_phase", "rising"),
+        "since_phase_change_ch": pacer.get("since_phase_change_ch"),
+        "framework": framework,
+        "current_cluster_beats": current_beats,
+        "rhythm_profile": rhythm_profile,
+        "current_cluster_density": current_density,
+        "adaptation_factor": pacer.get("adaptation_factor", {}) or {},
+        "narrator_recommendation": pacer.get("narrator_recommendation", {}) or {},
+    }
+
+
+def infer_outcome_from_changes(changes: dict) -> tuple[str, int]:
+    """从 _changes.json 取/推断 outcome + intensity。
+
+    2026-05-30 #7 孤儿契约修复：writer 在 self_eval.storyteller_alignment.actual_outcome
+    （changes_schema.json:555）已**主动申报**本章实际结局（setback/win/neutral）。此前 narrator
+    每次都靠下方 heuristic **重推断**，把 writer 的第一手申报丢弃 → storyteller_alignment 成孤儿
+    字段（writer 报了但无消费方）。北极星⑤：作者/写作端的申报是第一权威，系统不该用启发式覆盖
+    模型的判断。故现在**优先消费** writer 申报的 actual_outcome；intensity 仍由 heuristic 估算
+    （schema 未让 writer 申报 intensity）。仅当 writer 未申报 actual_outcome 时回退 heuristic
+    （向后兼容老 changes / 申报缺失）。
+
+    回退 heuristic 准则（writer 未申报时）：
     - factual.fate_events_triggered 含 status=completed → win 偏向（除非是悲剧大事件）
     - factual.foreshadowing_paid 数量 ≥ 2 → win 偏向
     - factual.locked_facts 含负面关键词（死/失/被/暴露/受伤）→ setback
@@ -62,6 +114,18 @@ def infer_outcome_from_changes(changes: dict) -> tuple[str, int]:
     factual = changes.get("factual", {}) or {}
     self_eval = changes.get("self_eval", {}) or {}
 
+    # writer 申报优先（#7 孤儿契约修复）：消费 self_eval.storyteller_alignment.actual_outcome
+    sa = self_eval.get("storyteller_alignment") or {}
+    declared = sa.get("actual_outcome")
+    if declared in ("setback", "win", "neutral"):
+        _, heuristic_intensity = _infer_outcome_heuristic(factual)
+        return (declared, heuristic_intensity)
+
+    return _infer_outcome_heuristic(factual)
+
+
+def _infer_outcome_heuristic(factual: dict) -> tuple[str, int]:
+    """启发式推断 outcome + intensity（writer 未申报 actual_outcome 时的回退）。"""
     fate_count = len(factual.get("fate_events_triggered", []) or [])
     foreshadow_paid = len(factual.get("foreshadowing_paid", []) or [])
 
@@ -133,12 +197,19 @@ def calibrate(project_root: Path, ch: int) -> dict:
     changes = load_json(changes_path, {})
     outcome, intensity = infer_outcome_from_changes(changes)
 
+    # #7 孤儿契约修复：标注 outcome 来源（writer 申报 / heuristic 回退），供审计与下游分布判断
+    declared = ((changes.get("self_eval") or {}).get("storyteller_alignment") or {}).get("actual_outcome")
+    outcome_source = "writer_declared" if declared in ("setback", "win", "neutral") else "inferred"
+    note = ("from _changes.self_eval.storyteller_alignment"
+            if outcome_source == "writer_declared" else "auto-inferred from _changes")
+
     # 写入 log（去重）
     log = pacer.setdefault("chapter_outcome_log", [])
     if any(e.get("ch") == ch for e in log):
         # 替换
         log = [e for e in log if e.get("ch") != ch]
-    log.append({"ch": ch, "outcome": outcome, "intensity": intensity, "_note": "auto-inferred from _changes"})
+    log.append({"ch": ch, "outcome": outcome, "intensity": intensity,
+                "outcome_source": outcome_source, "_note": note})
     log.sort(key=lambda e: e.get("ch", 0))
     pacer["chapter_outcome_log"] = log
 
@@ -191,14 +262,41 @@ def calibrate(project_root: Path, ch: int) -> dict:
         rec["_reason"] = f"近 {n} 章 setback={setback_count} 在期望区间 [{expected-tol}, {expected+tol}] 内 → 自由发挥"
         urgent = False
 
+    # 2026-05-30 孤儿契约修复：Save_the_Cat beats（纵尸司 schema）此前无任何消费方。
+    # 反查本 ch 所属 cluster_id，把该 cluster 的 beats 标 done=true（节拍达成）——让 framework/beats
+    # 真正进入「写→标记达成」闭环，而非 outline 写完就烂在文件里。北极星①：用 cluster_lookup 反查，
+    # 禁 f"cluster_{ch:03d}" 拼接；北极星⑤：只标 done（事实记录），不据此硬约束 writer。
+    cluster_id = None
+    try:
+        import cluster_lookup
+        cluster_id = cluster_lookup.ch_to_cluster_id(project_root, ch)
+    except Exception:
+        cluster_id = None
+    beats_marked = []
+    beats = pacer.get("beats")
+    if isinstance(beats, list) and cluster_id:
+        for b in beats:
+            if isinstance(b, dict) and str(cluster_id) in str(b.get("at_cluster", "")) and not b.get("done"):
+                b["done"] = True
+                b["done_at_ch"] = ch
+                beats_marked.append(b.get("id"))
+
     save_json(pacer_path, pacer)
 
+    view = narrator_view(pacer, cluster_id)
     return {
         "ch": ch,
+        "cluster_id": cluster_id,
         "outcome_inferred": outcome,
+        "outcome_source": outcome_source,
         "intensity": intensity,
         "phase_change": cur_phase != new_phase,
         "phase": new_phase,
+        "framework": view["framework"],
+        "current_cluster_beats": view["current_cluster_beats"],
+        "beats_marked_done": beats_marked,
+        "rhythm_profile": view["rhythm_profile"],
+        "current_cluster_density": view["current_cluster_density"],
         "adaptation_factor": af,
         "next_recommendation": rec,
         "_urgent": urgent,

@@ -5,6 +5,7 @@
 2. apply_fate_event(ch, ME_id)：对 _changes.json.fate_events_triggered[] 中每个 event 触发 fate_event 类涟漪
 3. 消费 emergent_opportunities：把 _changes.json.world_state_consumption.emergent_opportunities_consumed[] 中的 EO 标 consumed_by_writer=true
 3b. 消费 thread_responded：把 _changes.json.world_state_consumption.thread_responded[] 中的 NPC thread 标 responded_by_writer=true 并按 expected_responses 推进/完成（2026-05-30 #7 孤儿契约修复）
+3c. 回写 chapter_hub：把 _changes.json.factual.chapter_hub {hub_id, role} append 到 枢纽场景.json.chapter_hub_log（2026-05-30 #6 Hub 节奏闭环修复）
 4. spawn_emergent(ch)：检查 emergent_opportunities 是否到期 → 标 expired
 
 输出：保存到 _数据库/.world_evolution/ch{ch}_apply.json（汇总日志）
@@ -129,6 +130,44 @@ def respond_threads(project_root: Path, ch: int, thread_ids: list[str]) -> dict:
             "completed": completed, "missing": missing}
 
 
+def append_hub_log(project_root: Path, ch: int, chapter_hub: dict) -> dict:
+    """把 writer 申报的本章 hub 角色回写 枢纽场景.json.chapter_hub_log（chapter_hub 消费方）。
+
+    2026-05-30 #6 Hub 节奏闭环修复：changes_schema.json factual.chapter_hub {hub_id, role}
+    （writer step 0w 标本章是 depart/quest/return/idle）此前**无任何脚本回写** → 枢纽场景.json
+    的 chapter_hub_log 永停种子值，build_manifest._collect_hubs_directive 注入给下章 writer 的
+    recent_chapter_roles 永远只有 outline 初始几条，Hub 节奏系统闭环（manifest 注入→writer 标→
+    回写 log→下章用）静默断裂。这里参照 respond_threads 的 responded_by_writer 范式：把本章
+    {ch, hub_id, role} append 到 chapter_hub_log（按 ch 去重幂等——cluster 逐章重放/WAL 续跑
+    第二次进来覆盖同 ch 条目而非重复 append）。
+
+    北极星边界：纯数据回写（不碰模型创作判断）；hub_id/role 缺失只记 skip 不报错，
+    枢纽场景.json 不存在视为未启用 Hub 系统（advisory · 不阻断流水线）。"""
+    if not isinstance(chapter_hub, dict):
+        return {"appended": False, "reason": "chapter_hub 非 dict"}
+    hub_id = chapter_hub.get("hub_id")
+    role = chapter_hub.get("role")
+    if not hub_id or not role:
+        return {"appended": False, "reason": "chapter_hub 缺 hub_id/role"}
+
+    hubs_path = project_root / "_数据库" / "枢纽场景.json"
+    if not hubs_path.exists():
+        return {"appended": False, "reason": "枢纽场景.json 不存在（未启用 Hub 系统）"}
+    data = wee.load_json(hubs_path, None)
+    if not isinstance(data, dict):
+        return {"appended": False, "reason": "枢纽场景.json 解析失败"}
+
+    log = data.setdefault("chapter_hub_log", [])
+    # 按 ch 去重（幂等）：同章第二次进来覆盖而非重复 append（cluster 逐章重放/WAL 续跑安全）
+    log[:] = [e for e in log if not (isinstance(e, dict) and e.get("ch") == ch)]
+    log.append({"ch": ch, "hub_id": hub_id, "role": role,
+                "_note": "auto-written from _changes.factual.chapter_hub"})
+    log.sort(key=lambda e: e.get("ch", 0) if isinstance(e, dict) else 0)
+    data["chapter_hub_log"] = log
+    wee.save_json(hubs_path, data)
+    return {"appended": True, "hub_id": hub_id, "role": role}
+
+
 def apply_one_chapter(project_root: Path, ch: int) -> tuple[dict, bool]:
     """对单章执行 tick + fate_event + 消费 EO + spawn_emergent 扫描，写日志。
 
@@ -180,6 +219,16 @@ def apply_one_chapter(project_root: Path, ch: int) -> tuple[dict, bool]:
         t_r = respond_threads(project_root, ch, thread_responded_ids)
         summary["ops"].append({"op": "respond_threads", "result": t_r})
         print(f"[thread_responded] responded={t_r.get('responded', [])} completed={t_r.get('completed', [])} missing={t_r.get('missing', [])}")
+
+    # 3c. 回写 chapter_hub（2026-05-30 #6 Hub 节奏闭环修复）：writer 申报的本章 hub 角色 → chapter_hub_log
+    chapter_hub = (changes.get("factual") or {}).get("chapter_hub")
+    if chapter_hub:
+        h_r = append_hub_log(project_root, ch, chapter_hub)
+        summary["ops"].append({"op": "append_hub_log", "result": h_r})
+        if h_r.get("appended"):
+            print(f"[chapter_hub] ch{ch}: hub_id={h_r.get('hub_id')} role={h_r.get('role')} → chapter_hub_log")
+        else:
+            print(f"[chapter_hub] ch{ch}: 跳过（{h_r.get('reason')}）")
 
     # 4. spawn_emergent 过期扫描
     spawn_r = wee.spawn_emergent(project_root, ch)

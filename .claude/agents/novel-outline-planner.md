@@ -13,13 +13,86 @@ tools: Read, Write
 ```
 PROJECT: <项目路径>
 CURRENT_CHAPTER: <刚写完的章号>
-MODE: plan-next | ecas_cluster_brief    # ECAS 模式
+MODE: plan-next | ecas_cluster_brief | cluster_emergence
 PLANNER_CONTEXT: <_数据库/.wal/第N+1章_planner_context.md>
-CLUSTER_ID: cluster_NNN                  # ECAS 模式必填
+CLUSTER_ID: cluster_NNN                  # ECAS / cluster_emergence 模式必填（cluster_emergence 模式 = 刚写完的 cluster_key）
 PARENT_ME: ME_NNN                        # ECAS 模式: 本 cluster 对应的大势事件
+EMERGENCE_CONTEXT_PATH: <_数据库/.wal/cluster_<next>_emergence.json>  # cluster_emergence 模式必填（cluster_emergence_engine.py emerge 产出）
 STYLE_LIB: <workspace/styles/<风格名>/作者风格_FINAL.json>   # 项目用了蒸馏风格时必传；本 agent 据此对齐作者节奏指纹
 ARC_TEMPLATE_DIR: <workspace/styles/<风格名>/arc_templates/>  # 启用时必传；ECAS 模式据此设定 cluster 的 arc 曲线参照
 ```
+
+> **三种模式分工**：
+> - `plan-next` —— 旧 chapter mode 走向卡（2-3 张下章卡片）。
+> - `ecas_cluster_brief` —— 从零读大势卡 + 事件池**自己决定** cluster 范围并生成 brief（无引擎涌现上游时用）。
+> - **`cluster_emergence`**（cluster-save-state step 11 派单走这条）—— `cluster_emergence_engine.py` **已涌现**好 2-3 个
+>   candidate（基于世界状态 + 涟漪 + arc + 剩余 ME 池打分），本 agent **消费 `EMERGENCE_CONTEXT_PATH` 里的
+>   `candidates[]` 详化为走向卡**，**不从零另起炉灶**——否则丢弃引擎的涟漪/打分信号、破坏北极星③涟漪驱动涌现。
+
+## Cluster Emergence 详化模式（cluster-save-state step 11 · 北极星③涟漪驱动）
+
+**当 MODE=cluster_emergence**：
+
+上游 `cluster_emergence_engine.py emerge --after-cluster <key>` **已经**基于世界状态 + 涟漪后果 + 主角 arc 阶段 + 剩余 ME 池**涌现并打分**好了 2-3 个 candidate，写在 `EMERGENCE_CONTEXT_PATH`（`cluster_<next>_emergence.json`）。
+
+**你的职责**：把这些**引擎已涌现的 candidate** 详化为 2-3 张走向卡供用户选 1 个。**绝不从零另起炉灶忽略引擎候选**——那等于丢掉涟漪/打分信号，违反北极星③（涟漪驱动涌现非预设）。
+
+### 执行流程（cluster_emergence）
+
+1. **Read** `EMERGENCE_CONTEXT_PATH`。结构（`cluster_emergence_engine.py` emerge 产出 · `_schema: cluster_emergence_v24`）：
+   ```jsonc
+   {
+     "after_cluster": "cluster_001",
+     "next_cluster_id": "cluster_002",
+     "candidates": [          // 2-3 个，已带涌现打分
+       {
+         "cluster_id": "cluster_002_candidate_1",
+         "parent_me": "ME_003",
+         "scope_summary": "[CANDIDATE 1] 围绕 ME「…」展开。<描述> 〔涌现理由(分N): …；…〕",
+         "_emergence_score": 7,            // 引擎打分（越高越该现在涌现）
+         "_emergence_reasons": ["…", "…"], // 可解释性
+         "ME_to_advance": ["ME_003"],
+         "scene_storyboard": [],            // 雏形空 · 等你详化
+         "anchor_props": [], "foreshadowing_to_plant": [],
+         "status": "candidate"
+       }
+     ],
+     "world_state_snapshot": {...},        // factions_state / last_consequences / npc_threads → 详化语境
+     "character_arc_snapshot": {...}        // 各角色 current_stage → 详化语境
+   }
+   ```
+2. **不要重新挑 ME**：candidates 已是引擎从剩余 ME 池涌现的结果。**按 `_emergence_score` 降序**排候选（高分=引擎更推荐现在涌现的方向）。
+3. **逐 candidate 详化**——把每个 candidate 的雏形补成可写的 brief 走向卡，**保留引擎字段不改写**：
+   - 保留原 `parent_me` / `ME_to_advance` / `_emergence_score` / `_emergence_reasons`（透传，让用户看到「为什么涌现这个」）。
+   - 把空 `scene_storyboard` 详化为 v27 freestyle 4-5 场景骨架（开场/推进/高潮/收束，标 `climax_marker`），场景设计须呼应 `_emergence_reasons` + `world_state_snapshot` 的涟漪后果 + `character_arc_snapshot` 的角色 stage。
+   - 补 `anchor_props` / `foreshadowing_to_plant` / `foreshadowing_to_callback` / `throughline_focus` / `characters_focus` / `hub_locations`。
+   - 按下方「v27 字段语义」补 `_writer_mode: "freestyle"` / `narrative_mode: "linear"`（涌现 cluster 非首簇）/ `climax_hint_scene_index: null` / `mid_checkpoints` / `opus_recommended` / `extended_thinking`。
+   - **禁写 v27 死锁字段**：`estimated_chapters` / `chapter_range` / writer prompt 硬约束的 `expected_word_range`（与 `ecas_cluster_brief` 同纪律）。
+4. **STYLE_LIB / ARC_TEMPLATE_DIR 对齐**：传了就按 `ecas_cluster_brief` 同规则给每张候选补 arc 曲线段 / 节奏指纹对齐（详化语境，不改 candidate 身份）。
+5. **不写入 `事件簇.json`**：本 agent 只产候选走向卡。**用户选定 1 个后**由主代理/调度器把该 candidate 落 `事件簇.json.clusters[N+1]`（status: in_progress）。你只 **Write** 候选到 `_数据库/.wal/cluster_<next>_brief_candidates.json` 并返回卡片摘要。
+
+### 返回报告（cluster_emergence）
+```json
+{
+  "mode": "cluster_emergence",
+  "next_cluster_id": "cluster_002",
+  "consumed_emergence_context": "_数据库/.wal/cluster_002_emergence.json",
+  "candidates_detailed": 3,
+  "candidates_written_to": "_数据库/.wal/cluster_002_brief_candidates.json",
+  "ranked_by_emergence_score": ["cluster_002_candidate_1 (分7)", "cluster_002_candidate_3 (分5)", "cluster_002_candidate_2 (分3)"],
+  "user_choices_required": true,
+  "next_step": "用户选 1 个 → 主代理写入 事件簇.json.clusters[N+1] (status: in_progress) → spawn novel-writer"
+}
+```
+
+**硬性纪律（cluster_emergence）**：
+- ❌ 忽略 `EMERGENCE_CONTEXT_PATH` 的 candidates、自己重新从大势卡挑 ME（= 破坏北极星③涟漪驱动涌现）
+- ❌ 丢弃 / 覆写 `_emergence_score` / `_emergence_reasons`（涌现可解释性，必须透传给用户）
+- ❌ 候选数量改动（引擎给几个就详化几个，不增不减）
+- ❌ 写 v27 死锁字段（estimated_chapters / chapter_range）或注入 writer 字数硬约束
+- **EMERGENCE_CONTEXT_PATH 缺失/读不到** → 警告 + 降级到 `ecas_cluster_brief` 从零生成（输出加 `"emergence_context_missing": true`），不中止
+
+---
 
 ## Cluster Brief 生成模式
 

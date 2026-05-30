@@ -71,10 +71,20 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 ## 第二步：扫描受影响章节
 
-1. Read `_数据库/故事块摘要.json`，获取所有章节列表
+> 🔴 **章节清单权威源纪律（2026-05-30 修 #5）**：章节清单**以物理章节目录为权威**
+> （`章节/第NNN章/第NNN章.txt`，零填充三位）+ `_数据库/进度.json`（`completed` 总章数 /
+> `cluster_blueprint` 各 cluster 占位）佐证。**禁止**用 `_数据库/故事块摘要.json` 当章节
+> 清单来源——该文件是 **cluster 维度** 的账本（`{schema_version, clusters:[]}`，由
+> `cluster_summary_store.py` 按 cluster 数组原子写入），**不是章节清单**，且在 cluster
+> save-state 链路里常为空数组（拿不到任何章节）。它只能做 cluster 级辅助佐证。
+
+1. **获取所有章节清单（权威）**：Glob `章节/第*章/第*章.txt` 列出所有物理章节文件
+   （零填充三位，如 `第001章/第001章.txt`）。用 `进度.json.completed` 核对总章数。
 2. Read `_数据库/人物卡.json`，获取变更涉及角色的 locked_facts 历史
-3. Grep 所有章节 txt 文件（搜索变更前值的关键词）
-4. 收集匹配结果：
+3. Grep 所有章节 txt 文件（搜索变更前值的关键词；glob 用 `章节/第*章/第*章.txt`）
+4. （可选辅助）Read `_数据库/故事块摘要.json` 看 cluster 级摘要做交叉印证——
+   若为空数组则跳过，不影响章节扫描（章节清单已由步骤 1 物理目录拿到）。
+5. 收集匹配结果：
    - 匹配的章节号
    - 匹配的上下文（该关键词出现的段落）
    - 判断匹配类型：
