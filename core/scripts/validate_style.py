@@ -924,13 +924,98 @@ def _chk_long_para_count(text: str, p: dict, t: dict) -> CheckResult:
     return CheckResult("长段计数", "FAIL", vs, ts)
 
 
+# ── D9 滤镜词密度（deep POV · 2026-05-31 · 全 advisory · 非 hard_gate）──────────
+# 「滤镜词」(filter words)：把读者与场景之间隔一层主角感知动词（想/觉得/感到/看到/听到…）。
+# 删掉滤镜词、直写被感知之物 = deep POV（更贴近网文「沉浸式爽感」笔法）。本维度**纯顾问**：
+#   · 命中率超阈值 → advisory「可删滤镜词贴近 deep POV」（写作 agent 可豁免）；
+#   · **绝不 hard_gate**（不进 audit_hub.HARD_GATE_CODES）· 不参与 FAIL 退出码；
+#   · env D9_FILTER_WORDS_MODE 控制：
+#       - shadow（默认）：算密度但**只 print 到 stderr · 不产出 CheckResult**（零回归·默认行为不变）；
+#       - advisory：产出 PASS/WARN CheckResult（WARN 即「可删滤镜词」提示·永不 FAIL）；
+#       - off：完全关闭（连 shadow 日志都不打）。
+#
+# 阈值校准（北极星④顾问非法官 + 纪律 4 真原文不误判）——实证两书全 936 章逐章滤镜词命中率
+# （per 1000 CJK · 同 style_analyzer per_1000 denom 口径）：
+#   · 蛊真人 686 章：mean 4.26 / median 4.01 / p90 6.98 / p95 8.08 / max 12.74
+#   · 惊悚乐园 250 章：mean 5.16 / median 5.16 / p90 7.78 / p95 8.70 / max 10.90
+# 真作者上沿 ~13/1000 → 阈值取 14.0（safely 高于两书 max·正常真作者章绝不触发 advisory），
+# 只有显著滤镜词堆砌（典型 AI「他看到…他感到…他意识到…」流水账）才超阈值提示。这是
+# advisory 软提示不是判决：宁可漏报真问题也绝不误伤真作者签名笔法（守原则⑤）。
+_D9_FILTER_WORDS = ("想", "觉得", "感到", "意识到", "看到", "听到", "明白", "知道", "发现", "察觉")
+# 阈值高于两书原文 max(12.74) · 留余量到 14.0（真作者正常章命中率 ≤ ~13 绝不误判）
+_D9_DENSITY_ADVISORY_PER_1000 = 14.0
+
+
+def _d9_filter_words_mode() -> str:
+    """读 D9_FILTER_WORDS_MODE（默认 shadow）· 仅 {shadow, advisory, off} 合法 · 其余按 shadow。"""
+    m = (_os.environ.get("D9_FILTER_WORDS_MODE") or "shadow").strip().lower()
+    return m if m in ("shadow", "advisory", "off") else "shadow"
+
+
+def _filter_word_density(text: str) -> tuple[float, int, dict[str, int]]:
+    """滤镜词命中率（每 1000 CJK 字命中数 · 同 style_analyzer per_1000 口径）。
+
+    返回 (density_per_1000, total_cjk, {滤镜词: 命中数})。CJK=0 → (0.0, 0, {})。
+    命中数用子串 count（与 _word_hit_check / quota 同口径·tolerant 不分词·零依赖）。"""
+    total_cjk = len(_CJK_RE.findall(text))
+    hits: dict[str, int] = {}
+    for w in _D9_FILTER_WORDS:
+        c = text.count(w)
+        if c:
+            hits[w] = c
+    total_hits = sum(hits.values())
+    density = (total_hits / total_cjk * 1000.0) if total_cjk > 0 else 0.0
+    return density, total_cjk, hits
+
+
+def _chk_filter_words_d9(text: str, p: dict, t: dict) -> CheckResult | None:
+    """D9 滤镜词密度 advisory（deep POV · 全 advisory 非 hard_gate）。
+
+    · off → None（不产出检查项）。
+    · shadow（默认）→ 只 print stderr·返回 None（不产出检查项·默认行为零回归）。
+    · advisory → 产出 CheckResult：超阈值 WARN「可删滤镜词贴近 deep POV」·否则 PASS。
+      **永不 FAIL**（顾问非法官·绝不进 HARD_GATE_CODES·不影响退出码）。"""
+    mode = _d9_filter_words_mode()
+    if mode == "off":
+        return None
+    density, total_cjk, hits = _filter_word_density(text)
+    th = _D9_DENSITY_ADVISORY_PER_1000
+    top = ", ".join(
+        f'"{w}"x{c}' for w, c in sorted(hits.items(), key=lambda kv: -kv[1])[:4]
+    ) or "无"
+    vs_str = f"{density:.2f}/千字 ({sum(hits.values())}/{total_cjk} · {top})"
+    ts_str = f"建议 ≤{th:.0f}/千字 · 超则可删滤镜词贴近 deep POV"
+    if mode == "shadow":
+        # 只记录·不改判决（不产出 CheckResult·默认行为不变）
+        try:
+            verdict = "OVER" if density > th else "ok"
+            print(
+                f"[D9_FILTER_WORDS shadow] 滤镜词密度={density:.2f}/千字 阈值={th:.0f} "
+                f"[{verdict}] top={top}",
+                file=sys.stderr,
+            )
+        except Exception:
+            pass
+        return None
+    # advisory：产出 PASS / WARN（永不 FAIL）
+    if density > th:
+        return CheckResult(
+            "滤镜词密度(deep POV)", "WARN",
+            f"{vs_str} · 滤镜词偏多，可删想/觉得/看到等贴近 deep POV（advisory 可豁免）",
+            ts_str,
+        )
+    return CheckResult("滤镜词密度(deep POV)", "PASS", vs_str, ts_str)
+
+
 # ── 主校验 & 报告 ────────────────────────────────────────────
 
 def validate_style(text: str, thresholds: dict) -> list[CheckResult]:
     """对文本执行 15 项风格校验，返回 CheckResult 列表。
-    v23.12 新增 3 项段长检查（单段超长 hard_gate / 单句独行 / 长段计数）。"""
+    v23.12 新增 3 项段长检查（单段超长 hard_gate / 单句独行 / 长段计数）。
+    2026-05-31 新增 D9 滤镜词密度 advisory（默认 shadow → 不产出检查项·零回归；
+    D9_FILTER_WORDS_MODE=advisory 才产出 PASS/WARN·永不 FAIL·非 hard_gate）。"""
     p = analyze_text(text)
-    return [
+    results = [
         _chk_dialogue(p, thresholds),    _chk_para_len(p, thresholds),
         _chk_ultra_short(p, thresholds), _chk_single_sent(p, thresholds),
         _chk_onomatopoeia(p, thresholds),_chk_long_sent(p, thresholds),
@@ -942,6 +1027,11 @@ def validate_style(text: str, thresholds: dict) -> list[CheckResult]:
         _chk_single_line_ratio(text, p, thresholds),
         _chk_long_para_count(text, p, thresholds),
     ]
+    # D9 滤镜词密度 advisory（shadow/off 默认返回 None → 不进 results · 默认行为零回归）
+    _d9 = _chk_filter_words_d9(text, p, thresholds)
+    if _d9 is not None:
+        results.append(_d9)
+    return results
 
 
 def format_report(results: list[CheckResult]) -> str:
