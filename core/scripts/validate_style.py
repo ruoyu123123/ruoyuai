@@ -294,7 +294,12 @@ def _extract_author_max_para_chars(q: dict, para_mean: float | None) -> int | No
     #     2 章是 209-243 字极端双长段（作者最上沿·不强求 100% 过 = 非放开）。
     # 无 para_mean 但有 gt 分布签名 → 退用保守 208（=52×4 锚）。系数仅对长段签名作者生效·
     # 钳到 [120,300]·守纪律 c（绝对上限防真失控·短段作者/无档仍 120 防 AI 滥用）。
+    # 2026-05-31 北极星⑤ [5 缺口⑤ 天花板覆盖真实长段]：旧 mean×4（惊悚 52→208）略低于作者真实
+    # 开篇 info-dump 长段（惊悚 ch1 段32=209 / 段34=212·纯叙述游戏设定）→ 209/212 踩线 FAIL =
+    # 矫枉过正。修：长段签名作者天花板取 max(mean×4, _SIGNATURE_CEILING_FLOOR=250) 覆盖真实长段·
+    # 仍钳 ≤300 绝对上限（绝不破·>300 纯叙述仍真失控 hard_gate · test_K_true_runaway 守墙）。
     est = (para_mean * 4.0) if (para_mean is not None and para_mean > 0) else 208.0
+    est = max(est, _SIGNATURE_CEILING_FLOOR)
     ceiling = int(round(est))
     ceiling = max(_PARA_MAX_HARD_BASE, min(_PARA_MAX_HARD_ABS_CAP, ceiling))
     return ceiling
@@ -667,17 +672,38 @@ _CJK_RE = re.compile(r"[一-鿿]")
 _Q_OPEN_CP = ("“", "「", "『")   # “ 「 『
 _Q_CLOSE_CP = ("”", "」", "』")  # ” 」 』
 
-# 2026-05-30 北极星⑤ [A-说话人前缀对话段豁免漏检 · R2/R4]：中文网文**最高频**对话形式不是
-# 纯引号段，而是「说话人/动作前缀 + 提示语（：/，X道：）+ 引号包裹主体」——实证两书原文
-# 含冒号引语段 1143 处，提示语字符 715/1143 是 U+FF1A「：」。这类段首字是 CJK（说话人名）
-# 而非引号，旧 _is_full_dialogue_para 只认「段首=开引号」→ 漏检 → 被当非对话超长段触发
-# STYLE_单段超长 hard_gate FAIL（误伤真作者对话段，如蛊真人 ch444 段45『葛光便答：“…”』）。
-# 提示语收尾标记：全/半角冒号是最强判别符（叙述句几乎不会以「：+开引号」起头除非引入言语）。
-_DIALOGUE_CUE_COLONS = ("：", ":")          # 提示语→引语 收尾冒号（全角 U+FF1A / 半角）
-# 说话人前缀允许的最大 CJK 长度（实证：5 处真失误段前缀 4-14 字）。收紧到 20 以排除
-# 「30-100 字叙述块 + 短引语」这类应仍受门禁的真长叙述段（守纪律 a：只认真对话不误豁免叙述）。
-_MAX_SPEAKER_PREFIX_CJK = 20
-_SENT_END_CHARS = "。！？…"                  # 句末终止符（真提示语是单条引入·不含完整句）
+# 2026-05-31 北极星⑤ [对话主导段豁免 · 5 缺口①②④]：连续 5 轮真作者验证（蛊真人 + 惊悚乐园
+# 逐章 strict）暴露旧「说话人前缀对话段」豁免（前缀 ≤20 CJK + 冒号收尾 + 段尾闭引号）漏 3 类
+# **真作者对话段**——全部 <300 绝对上限·非真失控·是矫枉过正：
+#   ① 长动作前缀对话（蛊 ch15 段34「花酒行者…精芒频闪：“…”」前缀 26 CJK / 段38 前缀 35 /
+#      ch18 段9 前缀 37）：旧 20 CJK 前缀上限把真作者长动作铺垫+对话当非对话 FAIL。
+#   ② 段首对话署名后置（蛊 ch28 段7「“对话…”…学堂家老寒声质问。」对话在段首·署名落段尾·
+#      段尾非闭引号）：旧逻辑强制段尾闭引号 → 漏接。
+#   ④ 跨段未闭合引号连续对话（惊悚 ch128 段31「“第一…第二…」开引号闭引落下段末·243 字 /
+#      段49 234 字）：人物长独白被作者拆视觉段·段内开引号未闭合跨段·旧 _is_full_dialogue_para
+#      当非对话。
+# 统一思路（不限前缀长度 / 不论署名前后）：**对话主导段**——段内成对引号包裹内容占段长比例
+# ≥ _DIALOGUE_DOMINANT_RATIO（50%）→ 对话主导·豁免 hard_gate（覆盖①②）；**跨段对话**——
+# 段首是开引号但段内有未闭合开引号（对话跨视觉段延续）→ 豁免（覆盖④）。
+# 守纪律 a：引号占比低（< 50%）且非跨段开头的纯叙述段仍是应受门禁的真长叙述段·不误豁免。
+_DIALOGUE_DOMINANT_RATIO = 0.50             # 成对引号包裹内容 ≥ 此比例 = 对话主导段（豁免）
+
+# 2026-05-31 北极星⑤ [paratext 剔除 · 5 缺口③]：作者「(ps:…)」/「（ps：…）」排版致歉/打赏
+# 后记是 paratext（非正文叙述），实测出现在**章尾**（蛊真人 96 个/250 章 per-chapter 文件
+# marker 位置 pos_ratio ≥0.97），marker 段 + 其后续段构成 trailing 后记块（蛊 ch18 段102
+# 「（ps：…」起，段103-105 续写后记·段104「我幻想…“蛊真人”id…」121 字）。这些段被
+# _chk_para_max 当正文做段长 hard_gate 检测 = 矫枉过正。修：检出 paratext marker 段 + 其后
+# 全部段（trailing 后记块）→ 从段长 hard_gate 剔除（不参与 over_hard 判定）。
+# 守纪律：marker 实证只在章尾·正文段（无 marker / 在 marker 之前）一律照常检测·绝不漏检正文。
+_PARATEXT_MARK_RE = re.compile(r"^[（(]\s*[pPｐＰ][sSｓＳ][：:\s．。]")
+
+# 2026-05-31 北极星⑤ [天花板覆盖真实长段 · 5 缺口⑤]：长段签名作者天花板旧估 mean×4
+#（惊悚 mean_chars 52 → 208）略低于真实开篇 info-dump 长段（惊悚 ch1 段32=209 / 段34=212·
+# 纯叙述游戏设定 info-dump）→ 209/212 踩线 FAIL = 矫枉过正。修：长段签名作者天花板取
+# max(mean×4, _SIGNATURE_CEILING_FLOOR)，确保覆盖作者真实长段·但仍钳 ≤300 绝对上限（绝不破·
+# >300 纯叙述仍真失控 hard_gate）。实证：250 floor 覆盖惊悚 209/212 真长段·而其唯一 >300
+# 真非对话段（ch65 段9=334 / ratio 0.14）仍被绝对上限拦（test_K_true_runaway 守墙）。
+_SIGNATURE_CEILING_FLOOR = 250              # 长段签名作者天花板下限（覆盖真实开篇 info-dump 长段·钳 ≤300）
 
 
 # 2026-05-30 北极星① [#2 混合格式欠切]：\n\n 切后某段仍是**混合格式巨段**（内含多个单 \n
@@ -738,19 +764,46 @@ def _para_cjk_lens(text: str) -> list[int]:
     return [len(_CJK_RE.findall(p)) for p in _split_paras(text)]
 
 
+def _quote_pair_cjk_coverage(s: str) -> tuple[int, bool]:
+    """扫一遍段落，返回 (成对引号包裹内容的 CJK 字数, 末尾是否有未闭合开引号)。
+
+    codepoint 状态机：遇开引号(_Q_OPEN_CP)进引号态·遇**同族**闭引号(_Q_CLOSE_CP)出引号态并
+    把该对引号 [open..close] 内 CJK 计入 covered。扫完仍在引号态 → 末尾有未闭合开引号
+    （= 对话跨视觉段延续·北极星⑤ 5 缺口④）。守纪律：只计「成对包裹」内容·裸开引号不计 covered。
+    """
+    covered = 0
+    in_q = False
+    fam = -1
+    start = -1
+    for i, ch in enumerate(s):
+        if not in_q:
+            if ch in _Q_OPEN_CP:
+                in_q = True
+                fam = _Q_OPEN_CP.index(ch)
+                start = i
+        else:
+            if ch == _Q_CLOSE_CP[fam]:
+                covered += len(_CJK_RE.findall(s[start:i + 1]))
+                in_q = False
+    return covered, in_q
+
+
 def _is_full_dialogue_para(para: str) -> bool:
-    """整段是否为**完整对话段**——对话不可中切是叙事常态（北极星⑤ [A-对话段超长豁免]），
-    此类超长段豁免 STYLE_单段超长 hard_gate（降 advisory）。识别两种形式：
+    """整段是否为**对话主导段**——对话不可中切是叙事常态（北极星⑤ [对话段超长豁免]），此类超长段
+    豁免 STYLE_单段超长 hard_gate（降 advisory）。识别三类（2026-05-31 5 缺口①②④统一重构）：
 
       ① 纯引号段：整段被中文弯引号(U+201C…U+201D)或方头引号(「…」/『…』)成对包裹。
-      ② **说话人前缀对话段**（中文网文最高频形式 · 2026-05-30 R2/R4 补漏）：
-         「可选短说话人/动作前缀 + 提示语（以全/半角冒号收尾）+ 引号包裹的言语主体，
-         且段尾正是闭引号」。如『葛光便答：“……”』『墨瑶意志大笑一阵，语气又缓和道：“……”』。
+      ② **对话主导段**（统一覆盖旧「说话人前缀对话」+ 长动作前缀 + 署名后置）：段内**成对引号
+         包裹内容**的 CJK 占整段 CJK ≥ _DIALOGUE_DOMINANT_RATIO（50%）→ 引语是段落主体即对话主导·
+         **不限前缀长度 / 不论署名前后 / 段尾不必闭引号**。覆盖：长动作前缀对话（蛊 ch15 段34
+         「花酒行者…精芒频闪：“…”」前缀 26 CJK·引号占 79%）·段首对话署名后置（蛊 ch28 段7
+         「“…”…学堂家老寒声质问。」引号占 95%·段尾非闭引号）。
+      ③ **跨段对话延续**：段首是开引号 且 段内有**未闭合开引号**（闭引号落在下一视觉段）→ 人物长
+         独白被作者拆视觉段（惊悚 ch128 段31「“第一…第二…」243 字·闭引落下段末）→ 豁免。
 
-    用 codepoint 严格判左右引号成对，段内换行不影响。守纪律 a「只认真对话不误豁免叙述」：
-    前缀必须**短**（≤_MAX_SPEAKER_PREFIX_CJK CJK）且**不含句末终止符**（真提示语是单条引入·
-    非多句叙述块）·言语主体必须被引号成对包裹且段尾收于闭引号——避免把「长叙述块 + 短引语」
-    误判成对话豁免（那类仍是应受门禁的真长叙述段）。"""
+    用 codepoint 严格判左右引号成对。守纪律 a「只认真对话不误豁免叙述」：引号占比 < 50% 且非
+    跨段开头的纯叙述段（无引号 / 引号占比低）**仍非对话主导**·照常受 hard_gate（真长叙述/info-dump
+    失控不被误豁免）。"""
     s = para.strip()
     if len(s) < 2:
         return False
@@ -758,35 +811,16 @@ def _is_full_dialogue_para(para: str) -> bool:
     for o, c in zip(_Q_OPEN_CP, _Q_CLOSE_CP):
         if s[0] == o and s[-1] == c:
             return True
-    # ② 说话人前缀对话段：段尾必须是闭引号（言语主体收于段尾）
-    if s[-1] not in _Q_CLOSE_CP:
+    total_cjk = len(_CJK_RE.findall(s))
+    if total_cjk == 0:
         return False
-    # 定位言语主体的开引号（首个开引号即提示语之后的引语起点）
-    open_idx = -1
-    for i, ch in enumerate(s):
-        if ch in _Q_OPEN_CP:
-            open_idx = i
-            break
-    if open_idx <= 0:                       # 无开引号 或 段首即开引号（①已处理）
-        return False
-    prefix = s[:open_idx].rstrip()          # 容半角冒号与引号间空格（如 `小明说: "…"`）
-    if not prefix:
-        return False
-    # 前缀必须以提示语冒号收尾（最强判别符：叙述句几乎不会以「：+开引号」引语）
-    if prefix[-1] not in _DIALOGUE_CUE_COLONS:
-        return False
-    # 前缀须短（说话人/动作引入·非整段叙述）且不含句末终止符（真提示语是单条引入）
-    if any(ec in prefix for ec in _SENT_END_CHARS):
-        return False
-    if len(_CJK_RE.findall(prefix)) > _MAX_SPEAKER_PREFIX_CJK:
-        return False
-    # 言语主体须被引号成对包裹（开引号后到段尾闭引号之间是引语）——open_idx 处开引号
-    # 必须与段尾闭引号是同一对弯/方头引号（codepoint 成对）。
-    body_open = s[open_idx]
-    body_close = s[-1]
-    for o, c in zip(_Q_OPEN_CP, _Q_CLOSE_CP):
-        if body_open == o and body_close == c:
-            return True
+    covered, has_unclosed_open = _quote_pair_cjk_coverage(s)
+    # ② 对话主导段：成对引号包裹内容占整段 CJK ≥ 阈值（引语是段落主体）。
+    if covered / total_cjk >= _DIALOGUE_DOMINANT_RATIO:
+        return True
+    # ③ 跨段对话延续：段首是开引号 且 段内有未闭合开引号（闭引落下一视觉段）。
+    if s[0] in _Q_OPEN_CP and has_unclosed_open:
+        return True
     return False
 
 
@@ -804,8 +838,20 @@ def _chk_para_max(text: str, p: dict, t: dict) -> CheckResult:
     lens = [len(_CJK_RE.findall(p_)) for p_ in para_text_list]
     if not lens:
         return CheckResult("单段超长", "PASS", "无段落", f"目标 ≤{warn_th} (hard_gate {hard_th})")
-    # 超 hard_gate 段拆两类：完整对话段（豁免）vs 非对话段（仍 hard_gate）
-    over_hard = [(i + 1, n) for i, n in enumerate(lens) if n > hard_th]
+    # 2026-05-31 北极星⑤ [#3 paratext 剔除]：作者「(ps:…)」/「（ps：…）」后记非正文 → 从段长
+    # hard_gate 剔除。实证 marker 只在章尾·marker 段 + 其后续段构成 trailing 后记块（蛊 ch18
+    # 段102「（ps：」起 → 段102-105 全是后记·段104「我幻想…」121 字被误检测）。守纪律：正文段
+    # （marker 之前）一律照常检测·绝不漏检正文。1-based 段号集合。
+    paratext_start = None
+    for i, p_ in enumerate(para_text_list):
+        if _PARATEXT_MARK_RE.match(p_.lstrip()):
+            paratext_start = i + 1
+            break
+    paratext_idxs = (set(range(paratext_start, len(para_text_list) + 1))
+                     if paratext_start is not None else set())
+    # 超 hard_gate 段拆两类：完整对话段（豁免）vs 非对话段（仍 hard_gate）·paratext 段先剔除
+    over_hard = [(i + 1, n) for i, n in enumerate(lens)
+                 if n > hard_th and (i + 1) not in paratext_idxs]
     over_hard_nondialog = [
         (i, n) for (i, n) in over_hard
         if not _is_full_dialogue_para(para_text_list[i - 1])
@@ -827,7 +873,12 @@ def _chk_para_max(text: str, p: dict, t: dict) -> CheckResult:
     # 2026-05-30 北极星⑤ [#2 绝对上限·守纪律 c]：非对话段超 **绝对上限**（_PARA_MAX_HARD_ABS_CAP
     # =300 CJK）= 真失控叙述段（info-dump 失控/穿帮），**无论作者档放宽到多少、无论例外名额**
     # 都 FAIL——绝对上限是防真失控的最后硬墙，单条 500 字裸叙述段不被「每章 ≤1 例外」放过。
-    runaway = [(i, n) for (i, n) in over_hard_nondialog if n > _PARA_MAX_HARD_ABS_CAP]
+    # 绝对上限 300 墙对**所有段**生效(含 paratext·闭合 verify 提的 (ps:) 注入绕墙隐患)——
+    # paratext 只豁免天花板 hard_th 例外判定(后记长正常)·但任何 >300 非对话主导段一律真失控
+    # hard_gate(防把 350 字纯叙述伪装成后记绕过 300 墙)。对话主导段仍豁免(不可中切·不进 runaway)。
+    runaway = [(i + 1, n) for i, n in enumerate(lens)
+               if n > _PARA_MAX_HARD_ABS_CAP
+               and not _is_full_dialogue_para(para_text_list[i])]
     if runaway:
         detail = f"{len(runaway)} 段非对话 > 绝对上限 {_PARA_MAX_HARD_ABS_CAP} 字（真失控叙述段·不可豁免）：" + \
                  ", ".join(f"段{i}({n}字)" for i, n in runaway[:3])

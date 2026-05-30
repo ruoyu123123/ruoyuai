@@ -163,6 +163,18 @@ def test_A_non_dialogue_over_hard_still_fails():
     assert res.status == "FAIL", (res.status, res.detail)
 
 
+def test_L_paratext_cannot_smuggle_over_300_runaway():
+    """闭合注入缺口(2026-05-31 verify提)：(ps:)后记 marker 后接 >300 纯叙述·绝对上限 300 墙
+    仍拦——paratext 只豁免天花板例外·不豁免 300 绝对墙·防把 360 字纯叙述伪装成后记绕墙。"""
+    paratext_mark = "（ps：占位后记说明）"
+    runaway = "这是一段没有任何对话的纯叙述失控内容" * 20  # ~360 字 >300 纯叙述非对话
+    text = "正文引子。\n\n" + paratext_mark + "\n\n" + runaway
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)
+    assert "绝对上限" in res.detail, res.detail   # 被 300 墙拦(真失控)·非天花板例外漏放
+
+
 def test_A_dialogue_exempt_but_nondialogue_still_fails_mixed():
     """对话超长段豁免，同时存在的非对话超长段仍触发 FAIL（既豁免对话又不放过真超长）。"""
     dialog = _DQ_OPEN + _CJK_FILL * 130 + _DQ_CLOSE   # 对话超长（豁免）
@@ -185,14 +197,14 @@ def test_A_corner_quote_dialogue_also_exempted():
 
 
 def test_A_dialogue_detector_distinguishes_open_close_codepoints():
-    """对话检测必须 codepoint 区分左/右引号——只有左引号开头+右引号结尾才算完整对话段。"""
+    """对话检测必须 codepoint 区分左/右引号——纯引号段（左开右闭）算完整对话段。"""
     full = _DQ_OPEN + "话" * 5 + _DQ_CLOSE
     assert vs._is_full_dialogue_para(full) is True
-    # 只有左引号（未闭合，被切断的对话） → 不算完整对话段
-    assert vs._is_full_dialogue_para(_DQ_OPEN + "话" * 5) is False
-    # 左右引号倒置（右引号开头）→ 不算
+    # 2026-05-31 5 缺口④：段首开引号但段内未闭合（闭引落下一视觉段·跨段对话延续）→ 现豁免（路径③）。
+    assert vs._is_full_dialogue_para(_DQ_OPEN + "话" * 5) is True
+    # 左右引号倒置（右引号开头·非开引号段首·引号不成对覆盖低）→ 不算
     assert vs._is_full_dialogue_para(_DQ_CLOSE + "话" * 5 + _DQ_OPEN) is False
-    # 纯叙述 → 不算
+    # 纯叙述（无引号）→ 不算
     assert vs._is_full_dialogue_para("他走了出去。") is False
 
 
@@ -794,14 +806,14 @@ def test_G_real_jingsong_long_para_not_fail_with_profile_cluster():
 def test_G_real_long_para_override_does_not_relax_hardgate():
     """放宽 long_para（80-120 字 advisory 计数）绝不放松**超天花板**非对话段 hard_gate。
 
-    2026-05-30 [#2]：gt50=0.4379 现会同时把 max_para_chars 天花板放宽到 208（长段签名作者），
-    故用 2 段**> 208**（超放宽后天花板）的非对话段验证——long_para advisory 层放宽绝不
-    放松超天花板 hard_gate FAIL。"""
+    2026-05-31 [5 缺口⑤]：gt50=0.4379 现会同时把 max_para_chars 天花板放宽到 250（长段签名
+    作者·floor 250），故用 2 段**> 250**（超放宽后天花板）的非对话段验证——long_para advisory
+    层放宽绝不放松超天花板 hard_gate FAIL。"""
     sd = {"quantitative": {"paragraph_length_distribution": {"gt50": 0.4379}}}
     t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
     t = vs._apply_style_overrides(t, sd)
-    assert t["para_max_chars"]["hard_gate"] == 208, t["para_max_chars"]  # gt50 签名 → 天花板 208
-    text = ("他" * 220) + "\n\n" + ("她" * 220)  # 2 段非对话 > 208（超例外 1）
+    assert t["para_max_chars"]["hard_gate"] == 250, t["para_max_chars"]  # gt50 签名 → 天花板 250
+    text = ("他" * 270) + "\n\n" + ("她" * 270)  # 2 段非对话 > 250（超例外 1·仍 <300）
     res = vs._chk_para_max(text, vs.analyze_text(text), t)
     assert res.status == "FAIL", (res.status, res.detail)  # hard_gate 绝不被 advisory 放松
 
@@ -861,11 +873,16 @@ def test_H_long_narration_block_plus_short_quote_not_exempted():
     assert vs._is_full_dialogue_para(para) is False  # 前缀含句末符「。」→ 非单条提示语
 
 
-def test_H_prefix_too_long_not_exempted():
-    """纪律 a：前缀 CJK 超 _MAX_SPEAKER_PREFIX_CJK（20）的整段叙述块 + 引语 → 不豁免。"""
-    long_prefix = "甲" * 25 + "缓缓道："  # 25+ CJK 前缀（远超 20）
-    para = long_prefix + _DQ_O + "话" * 100 + _DQ_C
-    assert vs._is_full_dialogue_para(para) is False
+def test_H_long_prefix_but_quote_dominant_now_exempted():
+    """2026-05-31 5 缺口①②：长动作前缀（>20 CJK）+ 引号包裹主体占段主体（≥50%）→ 现豁免。
+    旧 _MAX_SPEAKER_PREFIX_CJK=20 把真作者长动作铺垫对话当非对话 FAIL（蛊 ch15 段34 前缀 26 /
+    段38 前缀 35 / ch18 段9 前缀 37）= 矫枉过正。统一改为对话主导（引号占比）判别·不限前缀长度。"""
+    long_prefix = "甲" * 25 + "缓缓道："  # 25+ CJK 前缀（远超旧 20）
+    para = long_prefix + _DQ_O + "话" * 100 + _DQ_C  # 引号主体 100/~131 ≈ 76% > 50%
+    assert vs._is_full_dialogue_para(para) is True
+    # 纪律 a 守墙：引号占比【低】的真长叙述块（长前缀 + 短引语）仍不豁免（覆盖率 < 50%）。
+    narr = "甲" * 120 + "缓缓道：" + _DQ_O + "走。" + _DQ_C
+    assert vs._is_full_dialogue_para(narr) is False
 
 
 def test_H_unclosed_quote_not_exempted():
@@ -958,15 +975,17 @@ def test_H_speaker_prefix_does_not_exempt_real_long_narration():
 
 
 def test_I_jingsong_signature_raises_hardgate_ceiling():
-    """惊悚乐园档（mean 52 / gt50 0.4379）→ max_para_chars 天花板放宽到 208（>120）。"""
+    """惊悚乐园档（mean 52 / gt50 0.4379）→ max_para_chars 天花板放宽到 250（覆盖真实开篇
+    info-dump 长段 209/212·2026-05-31 5 缺口⑤·floor 250 > mean×4=208 > 120）。"""
     sd = {"quantitative": {
         "paragraph_length": {"mean_chars": 51.9997},
         "paragraph_length_distribution": {"le5": 0.0373, "31to50": 0.2126, "gt50": 0.4379},
     }}
     t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
     t = vs._apply_style_overrides(t, sd)
-    assert t["para_max_chars"]["hard_gate"] == 208, t["para_max_chars"]
+    assert t["para_max_chars"]["hard_gate"] == 250, t["para_max_chars"]
     assert t["para_max_chars"]["hard_gate"] > 120, t["para_max_chars"]
+    assert t["para_max_chars"]["hard_gate"] < 300, t["para_max_chars"]  # 仍 <300 绝对上限
 
 
 def test_I_explicit_max_para_chars_takes_priority():
@@ -1008,13 +1027,15 @@ def test_I_ceiling_clamped_to_absolute_cap_300():
 
 
 def test_I_helper_signature_detection():
-    """直测 _extract_author_max_para_chars 长段签名判别 + 钳位。"""
-    # gt50 ≥ 0.20 签名 → 208
-    assert vs._extract_author_max_para_chars({"paragraph_length_distribution": {"gt50": 0.4379}}, 52.0) == 208
-    # gt80 ≥ 0.05 签名（无段均）→ 退用 208 锚
-    assert vs._extract_author_max_para_chars({"paragraph_length_distribution": {"gt80": 0.08}}, None) == 208
-    # 段均 ≥40 签名（无分布）→ mean×4 钳位
-    assert vs._extract_author_max_para_chars({}, 45.0) == 180
+    """直测 _extract_author_max_para_chars 长段签名判别 + 钳位（2026-05-31 floor 250 · 5 缺口⑤）。"""
+    # gt50 ≥ 0.20 签名 → max(mean×4=208, floor 250) = 250
+    assert vs._extract_author_max_para_chars({"paragraph_length_distribution": {"gt50": 0.4379}}, 52.0) == 250
+    # gt80 ≥ 0.05 签名（无段均·退用 208 锚）→ max(208, floor 250) = 250
+    assert vs._extract_author_max_para_chars({"paragraph_length_distribution": {"gt80": 0.08}}, None) == 250
+    # 段均 ≥40 签名（无分布·mean×4=180）→ max(180, floor 250) = 250
+    assert vs._extract_author_max_para_chars({}, 45.0) == 250
+    # 段均极大（mean×4 > floor）→ 取 mean×4 钳 ≤300：mean 70 → 280
+    assert vs._extract_author_max_para_chars({}, 70.0) == 280
     # 无签名（短段·无分布）→ None
     assert vs._extract_author_max_para_chars({}, 30.0) is None
     assert vs._extract_author_max_para_chars({}, None) is None
@@ -1370,7 +1391,7 @@ def test_K_real_jingsong_chapter025_single_newline_unchanged():
 
 def test_K_true_runaway_narration_over_abs_cap_still_hardgate():
     """混合格式细切后，真 >300 纯叙述失控段仍 hard_gate（不放松真问题·绝对上限 300 不破）。"""
-    sd = {"quantitative": {  # 惊悚长段签名（天花板放宽到 208，绝对上限仍 300）
+    sd = {"quantitative": {  # 惊悚长段签名（天花板放宽到 250，绝对上限仍 300）
         "paragraph_length": {"mean_chars": 51.9997},
         "paragraph_length_distribution": {"gt50": 0.4379},
     }}
@@ -1383,3 +1404,221 @@ def test_K_true_runaway_narration_over_abs_cap_still_hardgate():
     res = vs._chk_para_max(text, vs.analyze_text(text), t)
     assert res.status == "FAIL", (res.status, res.detail)
     assert "绝对上限" in res.detail, res.detail
+
+
+# ════════════════════════════════════════════════════════════════
+# [L] 5 缺口修复（2026-05-31 北极星⑤ · 对话主导/跨段对话/paratext/天花板覆盖真实长段）
+#
+# 连续 5 轮真作者验证（蛊真人 + 惊悚乐园 逐章 strict）暴露 STYLE_单段超长 hard_gate 误伤真
+# 作者 5 类缺口（均 <300 绝对上限·非真失控·矫枉过正）：
+#   ① 长动作前缀对话（蛊 ch15 段34/38·ch18 段9）：前缀 >20 CJK 被旧逻辑当非对话 FAIL。
+#   ② 段首对话署名后置（蛊 ch28 段7）：对话在段首·署名落段尾·段尾非闭引号 → 旧 ② 漏接。
+#   ③ (ps:)作者后记 paratext（蛊 ch18 段104·ch28 段82）：排版致歉/打赏后记被当正文段长检测。
+#   ④ 跨段未闭合引号连续对话（惊悚 ch128 段31/49）：人物长独白被拆视觉段·开引号未闭合跨段。
+#   ⑤ 天花板估值偏低（惊悚 ch1 段32=209/段34=212）：开篇 info-dump 纯叙述长段·旧 mean×4=208
+#      略低于真实 212 → 踩线 FAIL。
+# 统一修：(a) 对话主导段（成对引号包裹内容 ≥50%）豁免·覆盖①②；(b) 跨段对话（段首开引号+段内
+# 未闭合开引号）豁免·覆盖④；(c) paratext（(ps/（ps 标记段 + 其后段）从 hard_gate 剔除·覆盖③；
+# (d) 长段签名作者天花板 max(mean×4, floor 250) 钳 ≤300·覆盖⑤。
+# 纪律：真 >300 绝对上限纯叙述段仍 hard_gate（test_K_true_runaway + 下方 test_L_*_still_hardgate）。
+# ════════════════════════════════════════════════════════════════
+
+_DO = "“"   # 开弯引号
+_DC = "”"   # 闭弯引号
+
+
+# ── (a) 对话主导段豁免（覆盖缺口①长动作前缀 + ②署名后置）──
+
+def test_L_long_action_prefix_dialogue_dominant_exempted():
+    """缺口①：长动作前缀（26-37 CJK·超旧 20）+ 引号主体占段主体 → 对话主导·豁免（is_dialog=True）。"""
+    # 仿蛊 ch15 段34「花酒行者…精芒频闪：“……”」前缀 26 CJK·引号主体 ~98/124=79%
+    para = "花酒行者眯起了双眼他的怒火已经平息眼缝中精芒频闪：" + _DO + "话" * 98 + _DC
+    assert len(vs._CJK_RE.findall(para[:para.index(_DO)])) > 20  # 前缀确超旧 20 上限
+    assert vs._is_full_dialogue_para(para) is True
+
+
+def test_L_dialogue_first_attribution_tail_exempted():
+    """缺口②：对话在段首 + 署名落段尾（段尾非闭引号）→ 对话主导（引号占比高）·豁免。"""
+    # 仿蛊 ch28 段7「“……”学堂家老寒声质问。」引号主体 ~139/147=95%·段尾是「。」非闭引号
+    para = _DO + "话" * 139 + _DC + "学堂家老寒声质问。"
+    assert para.strip()[-1] not in vs._Q_CLOSE_CP  # 段尾非闭引号（旧 ② 会漏接）
+    assert vs._is_full_dialogue_para(para) is True
+
+
+def test_L_gap1_real_gu_zhenren_ch15_not_hardgate():
+    """缺口① 实证：蛊真人 ch15（段34/38 长动作前缀对话）带作者档 → 单段超长 ≠ FAIL。"""
+    raw, sd = _load_body("蛊真人", "第015章")
+    if raw is None:
+        return
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res = vs._chk_para_max(raw, vs.analyze_text(raw), t)
+    assert res.status != "FAIL", (res.status, res.detail)
+
+
+def test_L_gap1_real_gu_zhenren_ch18_not_hardgate():
+    """缺口①③ 实证：蛊真人 ch18（段9 长动作前缀对话 + 段102-105 后记块）带作者档 → 单段超长 ≠ FAIL。"""
+    raw, sd = _load_body("蛊真人", "第018章")
+    if raw is None:
+        return
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res = vs._chk_para_max(raw, vs.analyze_text(raw), t)
+    assert res.status != "FAIL", (res.status, res.detail)
+
+
+def test_L_gap2_real_gu_zhenren_ch28_not_hardgate():
+    """缺口②③ 实证：蛊真人 ch28（段7 署名后置对话 + 段82 (ps:)后记）带作者档 → 单段超长 ≠ FAIL。"""
+    raw, sd = _load_body("蛊真人", "第028章")
+    if raw is None:
+        return
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res = vs._chk_para_max(raw, vs.analyze_text(raw), t)
+    assert res.status != "FAIL", (res.status, res.detail)
+
+
+# ── (b) 跨段对话延续豁免（覆盖缺口④）──
+
+def test_L_cross_para_unclosed_quote_dialogue_exempted():
+    """缺口④：段首开引号 + 段内有未闭合开引号（闭引落下一视觉段·对话跨段延续）→ 豁免。"""
+    # 仿惊悚 ch128 段31：开 “第一…” 闭 → 又开 “第二…  未闭合（闭引落下段）
+    para = _DO + "第一句完整引语。" + _DC + "中间叙述。" + _DO + "第二句开了但没闭合" + "续" * 200
+    assert para.strip()[0] in vs._Q_OPEN_CP
+    _, unclosed = vs._quote_pair_cjk_coverage(para)
+    assert unclosed is True  # 末尾确有未闭合开引号
+    assert vs._is_full_dialogue_para(para) is True
+
+
+def test_L_gap4_real_jingsong_ch128_not_hardgate():
+    """缺口④ 实证：惊悚乐园 ch128（段31=243/段49=234 跨段未闭合引号长独白）带作者档 → 单段超长 ≠ FAIL。"""
+    raw, sd = _load_body("惊悚乐园", "第128章")
+    if raw is None:
+        return
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res = vs._chk_para_max(raw, vs.analyze_text(raw), t)
+    assert res.status != "FAIL", (res.status, res.detail)
+
+
+# ── (c) paratext 剔除（覆盖缺口③）──
+
+def test_L_paratext_marker_para_excluded_fullwidth():
+    """缺口③：「（ps：…）」全角后记长段从 hard_gate 剔除（不触发单段超长）。"""
+    body = "正常短段。\n\n正常短段二。"
+    ps = "（ps：" + "感谢打赏" * 40 + "）"   # 160 CJK 后记长段
+    text = body + "\n\n" + ps
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "PASS", (res.status, res.detail)
+
+
+def test_L_paratext_marker_para_excluded_halfwidth():
+    """缺口③：半角「(ps:…)」后记长段同样剔除。"""
+    body = "正文短段。"
+    ps = "(ps:" + "求推荐票" * 40 + ")"
+    text = body + "\n\n" + ps
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "PASS", (res.status, res.detail)
+
+
+def test_L_paratext_trailing_block_excluded():
+    """缺口③：marker 段 + 其后续段（trailing 后记块·如蛊 ch18 段102-105）整块剔除。"""
+    body = "正文短段。\n\n正文短段二。"
+    ps_marker = "（ps：感谢大家支持。）"
+    afterword = "我幻想这样的情形。" + "怀念" * 60   # 后记续段长段（>120·无 marker 但属后记块）
+    text = body + "\n\n" + ps_marker + "\n\n" + afterword
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "PASS", (res.status, res.detail)  # marker 后整块剔除·不触发 hard_gate
+
+
+def test_L_paratext_does_not_exclude_body_before_marker():
+    """纪律：marker【之前】的正文长段照常检测（绝不漏检正文·只剔 marker 起的后记块）。"""
+    body_runaway = "他" * 130   # marker 之前的非对话超长正文段（应仍 hard_gate·超例外）
+    body_runaway2 = "她" * 130
+    ps = "（ps：感谢打赏。）"
+    text = body_runaway + "\n\n" + body_runaway2 + "\n\n" + ps
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)  # marker 前正文超长仍 FAIL
+
+
+# ── (d) 天花板覆盖真实长段（覆盖缺口⑤）──
+
+def test_L_gap5_real_jingsong_ch1_infodump_not_hardgate():
+    """缺口⑤ 实证：惊悚乐园 ch1（段32=209/段34=212 开篇 info-dump 纯叙述长段）带作者档 →
+    单段超长 ≠ FAIL（天花板 250 覆盖 212）。反证：通用 120 会 FAIL。"""
+    raw, sd = _load_body("惊悚乐园", "第001章")
+    if raw is None:
+        return
+    # ① 带作者档：天花板 250 覆盖 209/212 → 不 FAIL
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    assert t["para_max_chars"]["hard_gate"] == 250, t["para_max_chars"]
+    res = vs._chk_para_max(raw, vs.analyze_text(raw), t)
+    assert res.status != "FAIL", (res.status, res.detail)
+    # ② 反证·不带作者档（通用 120）：同章 info-dump 长段 FAIL（证明确有矫枉过正）
+    t_gen = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    res_gen = vs._chk_para_max(raw, vs.analyze_text(raw), t_gen)
+    assert res_gen.status == "FAIL", (res_gen.status, res_gen.detail)
+
+
+def test_L_ceiling_covers_212_but_under_300():
+    """缺口⑤：长段签名作者天花板 250 覆盖真实 212 长段·但 <300 绝对上限（绝不破墙）。"""
+    sd = {"quantitative": {
+        "paragraph_length": {"mean_chars": 51.9997},
+        "paragraph_length_distribution": {"gt50": 0.4379},
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    # 单段 212 字纯叙述（开篇 info-dump·非对话但属作者真实长段）→ ≤250 天花板·不 FAIL
+    text = "开篇短句。\n\n" + ("设" * 212)
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status != "FAIL", (res.status, res.detail)
+
+
+# ── 纪律守墙：真 >300 绝对上限纯叙述失控段仍 hard_gate（不放松真失控）──
+
+def test_L_true_runaway_over_300_pure_narration_still_hardgate():
+    """守墙：>300 绝对上限纯叙述段（无引号·引号占比 0）即便长段签名作者天花板 250 仍 hard_gate。"""
+    sd = {"quantitative": {
+        "paragraph_length": {"mean_chars": 51.9997},
+        "paragraph_length_distribution": {"gt50": 0.4379},
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    text = "短句。\n\n" + ("失" * 350)  # 350 字纯叙述·无引号 > 300 绝对上限
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)
+    assert "绝对上限" in res.detail, res.detail
+
+
+def test_L_true_runaway_low_quote_ratio_over_300_still_hardgate():
+    """守墙：>300 段且引号占比低（< 50%·非跨段开头）= 真失控叙述（非对话主导）→ 仍 hard_gate。"""
+    sd = {"quantitative": {"paragraph_length": {"mean_chars": 51.9997},
+                           "paragraph_length_distribution": {"gt50": 0.4379}}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    # 350 字叙述 + 段中嵌一句短引语（引号占比 ~10% < 50%·非段首开引号）→ 非对话主导·真失控
+    runaway = "失" * 160 + _DO + "短句" + _DC + "控" * 188
+    assert not vs._is_full_dialogue_para(runaway)  # 引号占比低·非对话主导
+    text = "短句。\n\n" + runaway
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)
+    assert "绝对上限" in res.detail, res.detail
+
+
+def test_L_dialogue_dominant_over_300_exempted_not_runaway():
+    """对照：>300 但对话主导（引号占比 ≥50%）= 真超长对话非失控叙述 → 不触发绝对上限 hard_gate。
+    （对话不可中切·绝对上限墙只拦【非对话主导】真失控叙述段·守北极星⑤ 顾问非法官）。"""
+    sd = {"quantitative": {"paragraph_length": {"mean_chars": 51.9997},
+                           "paragraph_length_distribution": {"gt50": 0.4379}}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    para = "某人怒道：" + _DO + "话" * 340 + _DC   # 340 字·引号主体 340/345≈99% 对话主导
+    assert vs._is_full_dialogue_para(para) is True
+    text = "短句。\n\n" + para
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status != "FAIL", (res.status, res.detail)  # 对话主导段豁免（即便 >300）
