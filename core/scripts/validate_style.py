@@ -117,25 +117,90 @@ def _rng(lo: float, hi: float, u: str = "") -> str:
 
 # ── 风格 JSON 覆盖 ───────────────────────────────────────────
 
-def _stat_mean(v) -> float | None:
-    """从 {"mean": x} 或裸数值取 mean，非数值/缺失返回 None。"""
+def _stat_mean(v, *, mean_keys: tuple[str, ...] = ("mean",)) -> float | None:
+    """从 {"<mean_key>": x} 或裸数值取均值，非数值/缺失返回 None。
+
+    2026-05-30 北极星⑤ [override 键名/单位不符]：不同蒸馏批次对同一统计量用了不同
+    的「均值字段名」（段长用 mean / mean_chars / mean_sentences），故均值字段名也要
+    tolerant —— 按 mean_keys 顺序找第一个数值字段。"""
     if isinstance(v, dict):
-        m = v.get("mean")
-        return float(m) if isinstance(m, (int, float)) else None
+        for mk in mean_keys:
+            m = v.get(mk)
+            if isinstance(m, (int, float)):
+                return float(m)
+        return None
     if isinstance(v, (int, float)):
         return float(v)
     return None
 
 
+def _first_stat_mean(q: dict, *keys: str, mean_keys: tuple[str, ...] = ("mean",)) -> float | None:
+    """按 keys 顺序在 quantitative 里找第一个有数值均值的统计量。
+
+    2026-05-30 北极星⑤：作者档 override 读 key 必须 tolerant 兼容多命名——同一指标
+    在不同蒸馏批次里键名不同（如 chapter_words vs chapter_chars、dialogue_ratio vs
+    dialogue_ratio_pct）。键名/单位不符 = override 失效 = 用通用 band 苛求真作者
+    （矫枉过正）。统一在此处兼容，让作者档真正第一权威。"""
+    for k in keys:
+        m = _stat_mean(q.get(k), mean_keys=mean_keys)
+        if m is not None:
+            return m
+    return None
+
+
+# 对话占比：蒸馏批次键名/单位不一 —— 0-1 ratio 用 dialogue_ratio / dialogue_ratio_mean，
+# 百分比(0-100)用 dialogue_ratio_pct。validate_style 内部 dialogue_ratio 单位是 **0-1 ratio**
+# (style_analyzer.calc_dialogue_ratio = 对话字数/总字数)，故 _pct 键读出后必须 /100 归一。
+_DIALOGUE_RATIO_KEYS = ("dialogue_ratio", "dialogue_ratio_mean")
+_DIALOGUE_PCT_KEYS = ("dialogue_ratio_pct", "dialogue_ratio_percent", "dialogue_pct")
+# 章字数：纯正文字数同一指标的多命名（cio.count_words 口径）。
+_CHAPTER_WORDS_KEYS = ("chapter_words", "chapter_chars", "chapter_char_count")
+
+
+def _extract_author_dialogue_ratio(q: dict) -> float | None:
+    """从作者档 quantitative 推**真实对话占比**（归一到 0-1 ratio，对齐 validate_style 内部单位）。
+
+    2026-05-30 北极星⑤ [override 键名/单位不符]：旧实现只读 q["dialogue_ratio"]（假设 0-1），
+    但蛊真人档实际键是 dialogue_ratio_pct（百分比 25.4）→ 键名+单位双不符 → override 失效
+    → 对话占比退回通用 band(0.30-0.80) 苛求真作者（蛊真人真实 ~25% 被顶成 FAIL = 矫枉过正）。
+    修：① 先读 0-1 ratio 键（dialogue_ratio…）原样用；② 再读 _pct 键并 /100 归一到 ratio。
+    两类都缺 → None（不 override，保通用 band）。"""
+    # ① 0-1 ratio 键（惊悚乐园：dialogue_ratio.mean = 0.2701）
+    r = _first_stat_mean(q, *_DIALOGUE_RATIO_KEYS)
+    if r is not None:
+        # 容错：若误把百分比写进 ratio 键（值 > 1），按百分比归一（防双重错配）
+        return r / 100.0 if r > 1.0 else r
+    # ② 百分比键（蛊真人：dialogue_ratio_pct.mean = 25.409）→ /100 转 ratio
+    p = _first_stat_mean(q, *_DIALOGUE_PCT_KEYS)
+    if p is not None:
+        return p / 100.0
+    return None
+
+
+def _extract_author_chapter_words(q: dict) -> float | None:
+    """从作者档 quantitative 推**真实章字数均值**（tolerant 兼容 chapter_words / chapter_chars）。
+
+    2026-05-30 北极星⑤ [override 键名/单位不符]：旧实现只读 q["chapter_words"]，但蛊真人档
+    实际键是 chapter_chars → 键名不符 → 章字数 override 失效 → 退回通用 band。两者都是
+    「纯正文字数」同口径，单位一致，只差命名，故 tolerant 兼容即可（无需单位换算）。"""
+    return _first_stat_mean(q, *_CHAPTER_WORDS_KEYS)
+
+
 def _extract_author_para_mean(q: dict) -> float | None:
     """从作者档 quantitative 推**真实段落均长**（CJK 字/段）。
     绝不用 sentence_length（句长）——句长≠段长（北极星⑤ [B-段长单位错配]）。
-    ① paragraph_length_chars.mean 直取；② chapter_chars.mean / paragraph_count.mean 算。
-    两者都缺/为 null → 返回 None（调用方据此不收窄段长 band）。"""
+    ① paragraph_length_chars.mean 直取（亦兼容 paragraph_length.mean_chars · 惊悚乐园键）；
+    ② chapter_chars/chapter_words.mean / paragraph_count.mean 算。
+    都缺/为 null → 返回 None（调用方据此不收窄段长 band）。"""
+    # ① 真实段长键（蛊真人 paragraph_length_chars / 惊悚乐园 paragraph_length.mean_chars）
     plc = _stat_mean(q.get("paragraph_length_chars"))
+    if plc is None:
+        # 兼容 {"paragraph_length": {"mean_chars": 52.0}} 命名（mean 字段名也不同）
+        plc = _stat_mean(q.get("paragraph_length"), mean_keys=("mean_chars", "mean"))
     if plc is not None and plc > 0:
         return plc
-    cc = _stat_mean(q.get("chapter_chars"))
+    # ② 章字数÷段数（tolerant 兼容 chapter_chars / chapter_words）
+    cc = _extract_author_chapter_words(q)
     pc = _stat_mean(q.get("paragraph_count"))
     if cc is not None and pc is not None and pc > 0:
         return cc / pc
@@ -148,11 +213,12 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
     # 工艺签名禁用词降 WARN（不硬毙作者签名笔法），AI 结构套话仍 FAIL。
     t["_has_author_profile"] = True
     q = sd.get("quantitative", {})
-    # dialogue_ratio.mean -> +/- 15%
-    dr = q.get("dialogue_ratio", {})
-    m = dr.get("mean") if isinstance(dr, dict) else (dr if isinstance(dr, (int, float)) else None)
-    if m is not None:
-        t["dialogue_ratio"] = {"min": max(0.0, m - 0.15), "max": min(1.0, m + 0.15)}
+    # 对话占比 mean -> +/- 0.15（归一为 0-1 ratio，对齐 validate_style 内部单位）。
+    # 2026-05-30 北极星⑤：tolerant 读 dialogue_ratio(0-1) | dialogue_ratio_pct(百分比/100)，
+    # 键名/单位双兼容 —— 否则蛊真人(pct 键)override 失效，对话占比用通用 band 苛求真作者。
+    dr_mean = _extract_author_dialogue_ratio(q)
+    if dr_mean is not None:
+        t["dialogue_ratio"] = {"min": max(0.0, dr_mean - 0.15), "max": min(1.0, dr_mean + 0.15)}
     # 2026-05-30 北极星⑤ [B-段长单位错配]：段落均长 band 必须用**真实段长数据**推，
     # 绝不拿句长(sentence_length)冒充段长——句长 ≠ 段长，错配会把段落本就长的作者
     # (如蛊真人段均 ~30 字)从通用 PASS 顶成 FAIL，"带作者档反更苛"违反原则⑤。
@@ -162,11 +228,11 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
     para_mean = _extract_author_para_mean(q)
     if para_mean is not None and para_mean > 0:
         t["para_mean_len"] = {"min": max(1, para_mean * 0.7), "max": para_mean * 1.3}
-    # chapter_words.mean -> +/- 500
-    cw = q.get("chapter_words", {})
-    m = cw.get("mean") if isinstance(cw, dict) else (cw if isinstance(cw, (int, float)) else None)
-    if m is not None:
-        t["chapter_words"] = {"min": max(500, m - 500), "max": m + 500}
+    # 章字数 mean -> +/- 500。2026-05-30 北极星⑤：tolerant 读 chapter_words | chapter_chars
+    # （同口径多命名）—— 否则蛊真人(chapter_chars 键)override 失效，章字数退回通用 band。
+    cw_mean = _extract_author_chapter_words(q)
+    if cw_mean is not None:
+        t["chapter_words"] = {"min": max(500, cw_mean - 500), "max": cw_mean + 500}
     # must_have_per_chapter
     must = sd.get("must_have_per_chapter", {})
     if "onomatopoeia" in must:

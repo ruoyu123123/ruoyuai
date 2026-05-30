@@ -255,3 +255,199 @@ def test_C_under_quota_passes_regardless_of_profile():
     t["_has_author_profile"] = True
     res = vs._chk_quota(text, vs.analyze_text(text), t)
     assert res.status == "PASS", (res.status, res.detail)
+
+
+# ════════════════════════════════════════════════════════════════
+# [D] override 键名/单位不符（2026-05-30）：作者档 key tolerant 兼容 + 单位对齐
+#
+# 矫枉过正根源：override 读 q["dialogue_ratio"]（假设 0-1）/ q["chapter_words"]，
+# 但蛊真人档实际键是 dialogue_ratio_pct（百分比 25.4）/ chapter_chars → 键名+单位不符
+# → override 失效 → 退回通用 band 苛求真作者（真实 ~25% 对话被通用 30-80% 顶成 FAIL）。
+# 修：tolerant 读多命名 + 百分比键 /100 归一到 validate_style 内部 0-1 ratio 单位。
+# 纪律：让作者档真正第一权威（北极星⑤），但**不放松对真问题的检测**。
+# ════════════════════════════════════════════════════════════════
+
+def test_D_dialogue_ratio_pct_key_read_and_unit_converted():
+    """dialogue_ratio_pct（百分比 25.409）被正确读取并 /100 归一为 0-1 ratio band。
+    核心 bug：旧实现只读 dialogue_ratio（蛊真人无此键）→ override 失效。"""
+    sd = {"quantitative": {"dialogue_ratio_pct": {"mean": 25.409}}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["dialogue_ratio"]["min"], t["dialogue_ratio"]["max"]
+    # 25.409% -> 0.25409 ± 0.15 = 0.10409 .. 0.40409（单位对齐到 0-1 ratio）
+    assert abs(lo - (0.25409 - 0.15)) < 1e-6 and abs(hi - (0.25409 + 0.15)) < 1e-6, (lo, hi)
+    # 蛊真人真实对话占比 ~0.205 必须落 band 内（旧实现退回通用 0.30-0.80 把 0.205 顶成 FAIL）
+    assert lo <= 0.205 <= hi, (lo, hi)
+    # band 绝不退回通用 0.30-0.80（证明 override 真生效）
+    assert not (abs(lo - 0.30) < 1e-6 and abs(hi - 0.80) < 1e-6), (lo, hi)
+
+
+def test_D_dialogue_ratio_0to1_key_still_works():
+    """dialogue_ratio（0-1 ratio · 惊悚乐园键）原样读取，不被错误 /100（兼容不破坏既有正确读取）。"""
+    sd = {"quantitative": {"dialogue_ratio": {"mean": 0.2701}}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["dialogue_ratio"]["min"], t["dialogue_ratio"]["max"]
+    assert abs(lo - (0.2701 - 0.15)) < 1e-6 and abs(hi - (0.2701 + 0.15)) < 1e-6, (lo, hi)
+    assert lo <= 0.22 <= hi  # 惊悚乐园真实 ~0.22 落 band 内
+
+
+def test_D_dialogue_ratio_prefers_0to1_key_over_pct():
+    """同时存在 dialogue_ratio(0-1) 与 dialogue_ratio_pct → 优先 0-1 ratio 键（明确单位优先）。"""
+    sd = {"quantitative": {
+        "dialogue_ratio": {"mean": 0.30},
+        "dialogue_ratio_pct": {"mean": 99.0},  # 若误用会得到 0.99±0.15 = 离谱 band
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["dialogue_ratio"]["min"], t["dialogue_ratio"]["max"]
+    assert abs(lo - 0.15) < 1e-6 and abs(hi - 0.45) < 1e-6, (lo, hi)
+
+
+def test_D_dialogue_ratio_misfiled_pct_in_ratio_key_normalized():
+    """容错：百分比(25.4)被误写进 0-1 ratio 键(值>1) → 仍按百分比 /100 归一（防双重错配）。"""
+    sd = {"quantitative": {"dialogue_ratio": {"mean": 25.4}}}  # 误把 pct 写进 ratio 键
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["dialogue_ratio"]["min"], t["dialogue_ratio"]["max"]
+    # 归一为 0.254 ± 0.15（而非 25.4±0.15 这种被 min(1.0,..) 钳成 [0,1] 的废 band）
+    assert abs(lo - (0.254 - 0.15)) < 1e-6 and abs(hi - (0.254 + 0.15)) < 1e-6, (lo, hi)
+
+
+def test_D_dialogue_ratio_absent_keeps_generic_band():
+    """两类对话占比键都缺 → 不 override，保持通用 band（不误收窄）。"""
+    sd = {"quantitative": {"sentence_length": {"mean": 19.0}}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    generic = dict(t["dialogue_ratio"])
+    t = vs._apply_style_overrides(t, sd)
+    assert t["dialogue_ratio"] == generic, (t["dialogue_ratio"], generic)
+
+
+def test_D_chapter_chars_key_tolerant():
+    """chapter_chars（蛊真人键）被 tolerant 读为章字数 band（旧实现只读 chapter_words → 失效）。"""
+    sd = {"quantitative": {"chapter_chars": {"mean": 2718.888}}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["chapter_words"]["min"], t["chapter_words"]["max"]
+    assert abs(lo - (2718.888 - 500)) < 1e-6 and abs(hi - (2718.888 + 500)) < 1e-6, (lo, hi)
+    # band 绝不退回通用 1800-5800（证明 override 真生效·band 贴作者真实分布）
+    assert not (lo == 1800 and hi == 5800), (lo, hi)
+
+
+def test_D_chapter_words_key_still_works():
+    """chapter_words（惊悚乐园键）原样读取（兼容不破坏既有正确读取）。"""
+    sd = {"quantitative": {"chapter_words": {"mean": 2921.428}}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["chapter_words"]["min"], t["chapter_words"]["max"]
+    assert abs(lo - (2921.428 - 500)) < 1e-6 and abs(hi - (2921.428 + 500)) < 1e-6, (lo, hi)
+
+
+def test_D_chapter_words_prefers_chapter_words_over_chars():
+    """同时存在 chapter_words 与 chapter_chars → 优先 chapter_words（首选明确命名）。"""
+    sd = {"quantitative": {
+        "chapter_words": {"mean": 3000.0},
+        "chapter_chars": {"mean": 9999.0},
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    assert abs(t["chapter_words"]["min"] - 2500.0) < 1e-6, t["chapter_words"]
+
+
+def test_D_para_mean_from_paragraph_length_mean_chars_key():
+    """惊悚乐园键 paragraph_length.mean_chars=52 → 段长 band 用真实段长推（不退通用苛求）。
+    旧实现只认 paragraph_length_chars，惊悚乐园缺 paragraph_count → 退通用 14-35
+    把段均 52 的作者顶成 FAIL（同属矫枉过正）。"""
+    sd = {"quantitative": {
+        "sentence_length": {"mean": 34.181},          # 句长（绝不能用来推段长）
+        "paragraph_length": {"mean_chars": 51.9997},   # 真实段均长 52（惊悚乐园键）
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["para_mean_len"]["min"], t["para_mean_len"]["max"]
+    assert abs(lo - 51.9997 * 0.7) < 0.01 and abs(hi - 51.9997 * 1.3) < 0.01, (lo, hi)
+    assert lo <= 51.9997 <= hi
+
+
+def test_D_helper_dialogue_ratio_extractor_units():
+    """直测 _extract_author_dialogue_ratio：归一到 0-1 ratio 的纯函数行为。"""
+    assert abs(vs._extract_author_dialogue_ratio({"dialogue_ratio_pct": {"mean": 25.4}}) - 0.254) < 1e-9
+    assert abs(vs._extract_author_dialogue_ratio({"dialogue_ratio": {"mean": 0.27}}) - 0.27) < 1e-9
+    assert vs._extract_author_dialogue_ratio({}) is None
+    assert vs._extract_author_dialogue_ratio({"sentence_length": {"mean": 19}}) is None
+
+
+def test_D_helper_chapter_words_extractor():
+    """直测 _extract_author_chapter_words：tolerant 多命名。"""
+    assert abs(vs._extract_author_chapter_words({"chapter_chars": {"mean": 2718.888}}) - 2718.888) < 1e-9
+    assert abs(vs._extract_author_chapter_words({"chapter_words": {"mean": 2921.428}}) - 2921.428) < 1e-9
+    assert vs._extract_author_chapter_words({}) is None
+
+
+# ── 两书真原文回归（带作者档 · 实证 override 生效 + 真问题不放松）──
+
+def _load_body(proj_name, ch_name):
+    import chapter_io as cio
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / proj_name
+    ch = proj / "原文" / f"{ch_name}.txt"
+    sj = proj / "作者风格_FINAL.json"
+    if not (ch.exists() and sj.exists()):
+        return None, None
+    raw = ch.read_text(encoding="utf-8")
+    for sep in cio.CHANGES_SEPARATORS:
+        if sep in raw:
+            raw = raw.split(sep)[0].rstrip()
+            break
+    import json
+    sd = json.loads(sj.read_text(encoding="utf-8"))
+    return raw, sd
+
+
+def test_D_real_gu_zhenren_dialogue_not_fail_with_profile():
+    """蛊真人原文 ch043 带作者档：对话占比不再 FAIL（核心实证 · 旧 pct 键不符时退通用 30-80% 把真实 ~20% 顶成 FAIL）。"""
+    raw, sd = _load_body("蛊真人", "第043章")
+    if raw is None:
+        return
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    results = vs.validate_style(raw, t)
+    dlg = _res(results, "对话占比")
+    assert dlg.status != "FAIL", (dlg.status, dlg.detail, dlg.target_desc)
+
+
+def test_D_real_gu_zhenren_dialogue_would_fail_under_generic_band():
+    """反证：同一蛊真人原文用通用 band（=旧键名不符退化）对话占比 FAIL —— 证明确有矫枉过正。"""
+    raw, sd = _load_body("蛊真人", "第043章")
+    if raw is None:
+        return
+    t_generic = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    results = vs.validate_style(raw, t_generic)
+    dlg = _res(results, "对话占比")
+    assert dlg.status == "FAIL", (dlg.status, dlg.detail)  # 通用 30-80% 把真实 ~20% 顶 FAIL
+
+
+def test_D_real_jingsong_dialogue_not_fail_with_profile():
+    """惊悚乐园原文 ch043 带作者档：对话占比不 FAIL（0-1 ratio 键仍正确读取·不被回退破坏）。"""
+    raw, sd = _load_body("惊悚乐园", "第043章")
+    if raw is None:
+        return
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    results = vs.validate_style(raw, t)
+    dlg = _res(results, "对话占比")
+    assert dlg.status != "FAIL", (dlg.status, dlg.detail, dlg.target_desc)
+
+
+def test_D_real_both_books_ai_slop_still_fails_with_profile():
+    """两书原文注入 AI 结构套话 → 禁用词仍 FAIL（修 override 不放松对真问题的检测）。"""
+    for name in ("蛊真人", "惊悚乐园"):
+        raw, sd = _load_body(name, "第043章")
+        if raw is None:
+            continue
+        t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+        t = vs._apply_style_overrides(t, sd)
+        injected = "与此同时，他走了出去。\n\n" * 3 + raw
+        results = vs.validate_style(injected, t)
+        banned = _res(results, "禁用词")
+        assert banned.status == "FAIL", (name, banned.status, banned.detail)
+        assert "AI结构套话" in banned.name, (name, banned.name)
