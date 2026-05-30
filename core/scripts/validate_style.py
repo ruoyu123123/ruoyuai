@@ -207,6 +207,43 @@ def _extract_author_para_mean(q: dict) -> float | None:
     return None
 
 
+def _extract_author_long_para_ratio(q: dict, para_mean: float | None) -> float | None:
+    """从作者档推**真实长段率上限**（每章 80-120 CJK 字段占比的合理上界 max_ratio）。
+
+    2026-05-30 北极星⑤ [long_para 不受作者档 override]：CLUSTER_THRESHOLDS 里
+    long_para_per_chapter.max_ratio 固定 2%，是按**短段吐槽爽文**（段均 ~15-20 字）标的。
+    但长段签名作者（蛊真人段均 ~30 字 · 签名密叙段；惊悚乐园段均 ~52 字 · gt50 占 43.8%）
+    真实长段率远高于 2% → 被通用 2% 顶成 FAIL（"带作者档反更苛"，违反原则⑤）。段越长 →
+    80-120 字段天然越多，这是该作者笔法不是穿帮，应放宽 advisory（绝不放松真超长 hard_gate，
+    那是 _chk_para_max 管的 > 120 字非对话段，本函数只动 80-120 字 WARN 带的计数阈值）。
+
+    取数优先级（都缺 → None，调用方保通用 2%）。实证锚点（两书原文逐章统计 80-120 字段率）：
+      · 蛊真人 段均 ~30 字 → per-chapter 长段率 mean 2.8% / p90 6.3%（固定 2% 顶掉约半数真章 = FAIL）
+      · 惊悚乐园 段均 ~52 字 → per-chapter 长段率 mean 14% / p90 23%
+      ① 显式长段分布桶：paragraph_length_distribution.gt80 / .gt50（80-120 字率 ≈ gt50 的一部分，
+         保守取 gt50 的一半上界，再封顶 0.30 防极端）；亦兼容 paragraph_length_chars 分布。
+         惊悚乐园 gt50=0.4379 → 0.219，覆盖其 p90(23%)，对齐真分布。
+      ② 退而用真实段均长推：段均越长 80-120 字段天然越多（实测非线性）。以通用基线段均 ~20 字 / 2%
+         为锚，幂律外推 max_ratio ≈ 0.02 × (para_mean/20)^2.5，钳到 [0.02, 0.15]。
+         蛊真人 段均 30 → 0.055（覆盖其 p85 长段率，正常章不再误 FAIL）。
+    """
+    # ① 显式长段分布桶（惊悚乐园：paragraph_length_distribution.gt50=0.4379）
+    for dist_key in ("paragraph_length_distribution", "paragraph_length_chars_distribution"):
+        dist = q.get(dist_key)
+        if isinstance(dist, dict):
+            gt80 = dist.get("gt80")
+            if isinstance(gt80, (int, float)) and gt80 > 0:
+                return min(0.30, max(0.02, float(gt80)))
+            gt50 = dist.get("gt50")
+            if isinstance(gt50, (int, float)) and gt50 > 0:
+                # gt50 含 50-80 / 80-120 / >120 多段，80-120 带保守取一半，封顶 0.30
+                return min(0.30, max(0.02, float(gt50) * 0.5))
+    # ② 退用真实段均长幂律外推（锚：段均 20 字 ↔ 2% · 指数 2.5 拟合两书实测 p90）
+    if para_mean is not None and para_mean > 20:
+        return min(0.15, max(0.02, 0.02 * (para_mean / 20.0) ** 2.5))
+    return None
+
+
 def _apply_style_overrides(t: dict, sd: dict) -> dict:
     t = {k: dict(v) for k, v in t.items()}
     # 2026-05-29 北极星 P4 [H2-style]：标记「本项目有作者风格档」→ _chk_banned 据此把
@@ -228,6 +265,15 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
     para_mean = _extract_author_para_mean(q)
     if para_mean is not None and para_mean > 0:
         t["para_mean_len"] = {"min": max(1, para_mean * 0.7), "max": para_mean * 1.3}
+    # 2026-05-30 北极星⑤ [long_para 不受作者档 override]：长段率上限按作者真实长段分布/段均长
+    # 放宽——长段签名作者（蛊真人/惊悚乐园）的 80-120 字段率天然高于通用 2%，固定 2% 会把
+    # 作者签名笔法误判 FAIL。仅当 long_para_per_chapter 用 max_ratio（cluster 视野）才 override；
+    # chapter 视野绝对数 max 不动（短章段少，绝对数本就宽）。有数据才放宽，无数据保通用。
+    lp_cfg = t.get("long_para_per_chapter", {})
+    if "max_ratio" in lp_cfg:
+        lp_ratio = _extract_author_long_para_ratio(q, para_mean)
+        if lp_ratio is not None and lp_ratio > lp_cfg["max_ratio"]:
+            t["long_para_per_chapter"] = {"max_ratio": lp_ratio}
     # 章字数 mean -> +/- 500。2026-05-30 北极星⑤：tolerant 读 chapter_words | chapter_chars
     # （同口径多命名）—— 否则蛊真人(chapter_chars 键)override 失效，章字数退回通用 band。
     cw_mean = _extract_author_chapter_words(q)
@@ -397,10 +443,28 @@ _Q_OPEN_CP = ("“", "「", "『")   # “ 「 『
 _Q_CLOSE_CP = ("”", "」", "』")  # ” 」 』
 
 
+def _split_paras(text: str) -> list[str]:
+    """tolerant 段落切分（与 style_analyzer.split_paragraphs 对齐）。
+
+    2026-05-30 北极星⑤ [段落 split bug]：旧实现一律 `text.split("\\n\\n")` 切段，但
+    很多真作者原文（如惊悚乐园第025章）**整章无双换行 \\n\\n**——只用单 \\n 分段 +
+    U+3000 缩进。此时 `\\n\\n` 切出 0 个分隔 → 整章被当成 1 个巨段 → 段落均长/单句
+    独行占比/单段超长/长段计数全部错算（单句独行误成 0% FAIL，单段超长既可能误触发
+    也可能误掩盖 hard_gate）。而 analyze_text 走的 style_analyzer.split_paragraphs
+    一律按单 \\n 切——同一脚本两套段定义，自相矛盾。
+
+    修：**有 \\n\\n 用 \\n\\n 切（保持双换行格式作者不变，如蛊真人 56 个 \\n\\n → 57 段）；
+    无 \\n\\n 退回单 \\n 切（与 style_analyzer 对齐，惊悚乐园 → 59 段）**。
+    去空段 + 去无 CJK 段（与 style_analyzer.split_paragraphs 一致：count_chinese>0）。
+    """
+    sep = "\n\n" if "\n\n" in text else "\n"
+    return [p.strip() for p in text.split(sep)
+            if p.strip() and _CJK_RE.search(p)]
+
+
 def _para_cjk_lens(text: str) -> list[int]:
-    """每段 CJK 字符数。段分隔 = 双换行。"""
-    paras = [p.strip() for p in text.split("\n\n") if p.strip()]
-    return [len(_CJK_RE.findall(p)) for p in paras]
+    """每段 CJK 字符数（tolerant 段切分 · 见 _split_paras）。"""
+    return [len(_CJK_RE.findall(p)) for p in _split_paras(text)]
 
 
 def _is_full_dialogue_para(para: str) -> bool:
@@ -426,7 +490,7 @@ def _chk_para_max(text: str, p: dict, t: dict) -> CheckResult:
     hard_gate 触发在对话段是矫枉过正。**非对话**超长段仍按原逻辑 FAIL（绝不放过真超长）。"""
     cfg = t.get("para_max_chars", {"warn": 80, "hard_gate": 120, "exception_per_chapter": 1})
     warn_th, hard_th, ex = cfg["warn"], cfg["hard_gate"], cfg.get("exception_per_chapter", 1)
-    para_text_list = [p_.strip() for p_ in text.split("\n\n") if p_.strip()]
+    para_text_list = _split_paras(text)  # tolerant 切段（无 \n\n 退单 \n · 见 _split_paras）
     lens = [len(_CJK_RE.findall(p_)) for p_ in para_text_list]
     if not lens:
         return CheckResult("单段超长", "PASS", "无段落", f"目标 ≤{warn_th} (hard_gate {hard_th})")
@@ -488,7 +552,7 @@ def _chk_single_line_ratio(text: str, p: dict, t: dict) -> CheckResult:
     单句独行 = 段内只有 1 个句号/问号/感叹号（不含逗号、分号）。"""
     cfg = t.get("single_line_ratio", {"min": 0.30})
     target = cfg["min"]
-    paras = [p_.strip() for p_ in text.split("\n\n") if p_.strip()]
+    paras = _split_paras(text)  # tolerant 切段（无 \n\n 退单 \n · 见 _split_paras）
     if not paras:
         return CheckResult("单句独行占比", "PASS", "无段落", f"目标 ≥{_pct(target)}")
     # 单句独行 = 段内句子终止符（。！？）总数 ≤ 1 且段长 ≤ 30 CJK

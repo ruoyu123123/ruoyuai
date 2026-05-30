@@ -26,7 +26,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import validate_style as vs  # noqa: E402
-from style_analyzer import CRAFT_SIGNATURE_QUOTA_WORDS  # noqa: E402
+from style_analyzer import (  # noqa: E402
+    CRAFT_SIGNATURE_QUOTA_WORDS,
+    AI_STRUCTURAL_BANNED,
+    CRAFT_SIGNATURE_BANNED,
+)
 
 
 def _res(results, name_contains):
@@ -451,3 +455,348 @@ def test_D_real_both_books_ai_slop_still_fails_with_profile():
         banned = _res(results, "禁用词")
         assert banned.status == "FAIL", (name, banned.status, banned.detail)
         assert "AI结构套话" in banned.name, (name, banned.name)
+
+
+# ════════════════════════════════════════════════════════════════
+# [E] 「事实上」误分类修（2026-05-30 北极星⑤）
+#
+# 根因：「事实上」原在 AI_STRUCTURAL_BANNED 无条件永久 FAIL（设计假设"任何作者都不用"），
+# 但实测蛊真人原文 118 章高频用「事实上」作议论体签名连接词 = 真作者笔法非机器腔。
+# 无条件硬 FAIL = 通用反 AI 腔规则苛求真作者（矫枉过正·违反北极星⑤顾问非法官）。
+# 修：把「事实上」移到 CRAFT_SIGNATURE_BANNED——有作者档降 WARN 可豁免，无作者档仍 FAIL。
+# 纪律：仅「事实上」（实证真作者高频），其余 3 个 AI 结构套话（与此同时/值得一提的是/
+# 不仅如此）未证伪、仍是典型机器腔，保持永久 FAIL 不动。
+# ════════════════════════════════════════════════════════════════
+
+
+def test_E_shishishang_reclassified_to_craft_signature():
+    """前置不变量：「事实上」已从 AI 结构套话移到工艺签名词（其余 3 个仍是 AI 结构套话）。"""
+    assert "事实上" not in AI_STRUCTURAL_BANNED, AI_STRUCTURAL_BANNED
+    assert "事实上" in CRAFT_SIGNATURE_BANNED, CRAFT_SIGNATURE_BANNED
+    # 其余 3 个 AI 结构套话不动
+    for w in ("与此同时", "值得一提的是", "不仅如此"):
+        assert w in AI_STRUCTURAL_BANNED, (w, AI_STRUCTURAL_BANNED)
+    # 两类仍互斥
+    assert set(AI_STRUCTURAL_BANNED).isdisjoint(set(CRAFT_SIGNATURE_BANNED))
+
+
+def test_E_shishishang_with_profile_downgraded_to_warn():
+    """有作者档 +「事实上」命中 → 禁用词降 WARN（作者签名连接词可豁免），不 FAIL。"""
+    text = "事实上，他早就料到了这个结果。\n\n他转身离开。"
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t["_has_author_profile"] = True
+    res = vs._chk_banned(text, vs.analyze_text(text), t)
+    assert res.status == "WARN", (res.status, res.detail, res.name)
+    # 应走「工艺签名词」分支（非「AI结构套话」硬毙分支）
+    assert "AI结构套话" not in res.name, res.name
+
+
+def test_E_shishishang_without_profile_still_fails():
+    """无作者档 +「事实上」命中 → 仍 FAIL（通用写作防 AI 腔，向后兼容旧行为）。"""
+    text = "事实上，他早就料到了这个结果。\n\n他转身离开。"
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    # 不设 _has_author_profile
+    res = vs._chk_banned(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail, res.name)
+
+
+def test_E_other_ai_slop_still_fails_with_profile():
+    """有作者档 +「与此同时/值得一提的是/不仅如此」→ 仍 FAIL（不动·绝不放过真 AI 腔）。"""
+    for w in ("与此同时", "值得一提的是", "不仅如此"):
+        text = f"{w}，他走了出去。\n\n外面下起了雨。"
+        t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+        t["_has_author_profile"] = True
+        res = vs._chk_banned(text, vs.analyze_text(text), t)
+        assert res.status == "FAIL", (w, res.status, res.detail, res.name)
+        assert "AI结构套话" in res.name, (w, res.name)
+
+
+def test_E_shishishang_mixed_with_ai_slop_fails_due_to_ai_slop():
+    """有作者档 +「事实上」(可豁免) 与「与此同时」(硬毙) 同时命中 → 整体仍 FAIL（AI 套话压倒）。"""
+    text = "事实上他笑了。\n\n与此同时，门外有脚步声。"
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t["_has_author_profile"] = True
+    res = vs._chk_banned(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail, res.name)
+    assert "AI结构套话" in res.name, res.name
+
+
+def test_E_real_gu_zhenren_shishishang_chapter_warn_not_fail_with_profile():
+    """蛊真人真原文（含「事实上」的章）带作者档：禁用词 ≠ FAIL（核心实证·真作者签名词不被苛求）。
+    反证：同章不带作者档时「事实上」命中 → FAIL（证明通用规则确会苛求真作者）。"""
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "蛊真人"
+    sj = proj / "作者风格_FINAL.json"
+    if not sj.exists():
+        return  # 样本缺失则跳过（CI 无样本环境）
+    import json
+    import chapter_io as cio
+    # 找一个原文含「事实上」的章（实证锚点：第004/009/019/023章）
+    body = None
+    for cand in ("第004章", "第009章", "第019章", "第023章"):
+        ch = proj / "原文" / f"{cand}.txt"
+        if not ch.exists():
+            continue
+        raw = ch.read_text(encoding="utf-8")
+        for sep in cio.CHANGES_SEPARATORS:
+            if sep in raw:
+                raw = raw.split(sep)[0].rstrip()
+                break
+        if "事实上" in raw:
+            body = raw
+            break
+    if body is None:
+        return  # 没有含「事实上」的样本章则跳过
+    sd = json.loads(sj.read_text(encoding="utf-8"))
+
+    # ① 带作者档：禁用词不 FAIL（「事实上」降级·真作者签名词不被硬毙）。
+    # 直测 _chk_banned（命中工艺签名词时检查项会被重命名为「工艺签名词(作者档下降级)」）。
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    banned_with = vs._chk_banned(body, vs.analyze_text(body), t)
+    assert banned_with.status != "FAIL", (banned_with.status, banned_with.detail, banned_with.name)
+
+    # ② 反证·不带作者档：同章「事实上」命中 → FAIL（通用规则会苛求真作者）
+    t_generic = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    banned_none = vs._chk_banned(body, vs.analyze_text(body), t_generic)
+    assert banned_none.status == "FAIL", (banned_none.status, banned_none.detail)
+
+
+# ════════════════════════════════════════════════════════════════
+# [F] 段落 split bug（2026-05-30 北极星⑤）：tolerant 切段
+#
+# 根因：_chk_para_max / _chk_single_line_ratio / _para_cjk_lens 一律
+# `text.split("\n\n")` 切段，但很多真作者原文整章无双换行 \n\n（只用单 \n + U+3000
+# 缩进，如惊悚乐园第025章 \n\n=0 / 单\n=58）→ 整章被当成 1 个巨段 →
+# 段落均长/单句独行占比/单段超长/长段计数全部错算（单句独行误成 0% FAIL，
+# 单段超长既可能误触发也可能误掩盖 hard_gate）。而 analyze_text 走的
+# style_analyzer.split_paragraphs 一律单 \n 切——同脚本两套段定义自相矛盾。
+# 修：tolerant _split_paras——有 \n\n 用 \n\n 切（双换行格式作者不变），
+# 无 \n\n 退单 \n 切（与 style_analyzer 对齐）。
+# 纪律：绝不破坏 \n\n 作者（蛊真人 \n\n 仍优先）· 只修无 \n\n 的格式 ·
+# 真超长非对话段仍 hard_gate（_chk_para_max 不放松）。
+# ════════════════════════════════════════════════════════════════
+
+
+def test_F_split_double_newline_text_unchanged():
+    """有 \n\n 的文本：用 \n\n 切段（不被退化到单 \n）。3 段 \n\n 文本 → 3 段。"""
+    text = "第一段话。\n\n第二段话。\n\n第三段话。"
+    paras = vs._split_paras(text)
+    assert len(paras) == 3, paras
+    assert paras == ["第一段话。", "第二段话。", "第三段话。"], paras
+
+
+def test_F_split_double_newline_not_oversplit_by_single():
+    """\n\n 文本里段内的单 \n（软换行）不被当段分隔——仍按 \n\n 切。"""
+    # 第一段内部有单 \n（如诗行/段内软换行），整体应仍是 2 段（按 \n\n）
+    text = "上联\n下联。\n\n第二段独立。"
+    paras = vs._split_paras(text)
+    assert len(paras) == 2, paras
+    assert "上联\n下联。" == paras[0], paras  # 段内单 \n 保留，不切
+
+
+def test_F_split_single_newline_text_falls_back():
+    """无 \n\n 的文本（单 \n 分段）：退回单 \n 切（与 style_analyzer 对齐）。3 行 → 3 段。"""
+    text = "　　第一段话。\n　　第二段话。\n　　第三段话。"  # U+3000 缩进 + 单 \n
+    assert "\n\n" not in text
+    paras = vs._split_paras(text)
+    assert len(paras) == 3, paras
+
+
+def test_F_split_drops_blank_and_non_cjk_lines():
+    """空段 / 无 CJK 段被丢弃（与 style_analyzer.split_paragraphs 一致 count_chinese>0）。"""
+    text = "真段落一。\n\n   \n\n12345\n\n真段落二。"  # 空白段 + 纯数字段
+    paras = vs._split_paras(text)
+    assert paras == ["真段落一。", "真段落二。"], paras
+
+
+def test_F_single_line_ratio_correct_under_single_newline():
+    """单 \n 分段文本：单句独行占比按真实多段算（核心 bug：旧 \n\n 切成 1 巨段 → 0% FAIL）。"""
+    # 5 个单句独行短段（每段 1 个句末符 + 短）· 全单 \n 分隔（无 \n\n）
+    text = "他来了。\n她笑了。\n风停了。\n门开了。\n雨下了。"
+    assert "\n\n" not in text
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_single_line_ratio(text, vs.analyze_text(text), t)
+    # 旧 bug：切成 1 段 → 0/1 = 0% → FAIL；修后：5/5 = 100% → PASS
+    assert res.status == "PASS", (res.status, res.detail)
+    assert "5/5" in res.detail or "100" in res.detail, res.detail
+
+
+def test_F_para_max_not_one_giant_para_under_single_newline():
+    """单 \n 分段文本：单段超长按真实分段算，不误把整篇当 1 个巨段。"""
+    # 全是短段，单 \n 分隔。旧 bug：合成 1 个巨段（全篇 CJK 字数）→ 误触 hard_gate。
+    text = "\n".join("短段。" for _ in range(40))
+    assert "\n\n" not in text
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "PASS", (res.status, res.detail)  # 每段仅 3 字，绝不超长
+
+
+def test_F_real_jingsong_chapter025_single_line_ratio_not_zero():
+    """惊悚乐园原文第025章（\n\n=0·单\n=58）：单句独行占比由 0%(split bug) → 真实值 PASS。"""
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "惊悚乐园"
+    ch = proj / "原文" / "第025章.txt"
+    if not ch.exists():
+        return  # CI 无样本环境则跳过
+    import chapter_io as cio
+    raw = ch.read_text(encoding="utf-8")
+    for sep in cio.CHANGES_SEPARATORS:
+        if sep in raw:
+            raw = raw.split(sep)[0].rstrip()
+            break
+    assert raw.count("\n\n") == 0, raw.count("\n\n")  # 前置不变量：确无 \n\n
+    # 修后真实切段 ≈59 段（旧 \n\n 切成 1 段）
+    paras = vs._split_paras(raw)
+    assert len(paras) >= 50, len(paras)
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_single_line_ratio(raw, vs.analyze_text(raw), t)
+    # 核心实证：不再是 0%（旧 bug）→ 真实约 50% PASS
+    assert res.status == "PASS", (res.status, res.detail)
+    assert "0/1" not in res.detail and "0.0%" not in res.detail, res.detail
+
+
+def test_F_real_gu_zhenren_chapter043_split_unchanged():
+    """蛊真人原文第043章（\n\n=56）：tolerant 切段段数不变（\n\n 仍优先·不退化）。"""
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "蛊真人"
+    ch = proj / "原文" / "第043章.txt"
+    if not ch.exists():
+        return
+    import chapter_io as cio
+    raw = ch.read_text(encoding="utf-8")
+    for sep in cio.CHANGES_SEPARATORS:
+        if sep in raw:
+            raw = raw.split(sep)[0].rstrip()
+            break
+    assert raw.count("\n\n") > 0  # 前置不变量：有 \n\n
+    # tolerant 切段 == 直接按 \n\n 切（去空 + 去无 CJK）—— 蛊真人切段不被修改影响
+    expect = [p.strip() for p in raw.split("\n\n") if p.strip() and vs._CJK_RE.search(p)]
+    paras = vs._split_paras(raw)
+    assert paras == expect, (len(paras), len(expect))
+
+
+# ════════════════════════════════════════════════════════════════
+# [G] long_para_per_chapter 不受作者档 override（2026-05-30 北极星⑤）
+#
+# 根因：CLUSTER_THRESHOLDS.long_para_per_chapter.max_ratio 固定 2%，是按短段吐槽爽文
+# （段均 ~15-20 字）标的；_apply_style_overrides 不覆盖它 → 长段签名作者（蛊真人段均
+# ~30 字 / 实测 per-chapter 长段率 p90 6.3% · 惊悚乐园段均 ~52 字 / gt50=43.8%）被通用
+# 2% 顶成 FAIL（"带作者档反更苛"，违反原则⑤）。
+# 修：_apply_style_overrides 加 long_para_per_chapter override——从作者档真实长段分布
+# （gt80/gt50 桶）或段均长幂律外推 max_ratio；仅 max_ratio（cluster 视野）放宽，chapter
+# 视野绝对数 max 不动；有数据才放宽，无数据保通用 2%。
+# 纪律：只放宽 80-120 字 advisory 计数阈值 · 绝不放松 > 120 字非对话段 hard_gate（那是
+# _chk_para_max 管的 STYLE_单段超长，本修不碰）。
+# ════════════════════════════════════════════════════════════════
+
+
+def test_G_long_para_ratio_from_gt50_distribution():
+    """有显式长段分布桶 gt50 → max_ratio 取 gt50 的一半（惊悚乐园 gt50=0.4379 → 0.219）。"""
+    q = {"paragraph_length_distribution": {"gt50": 0.4379}}
+    r = vs._extract_author_long_para_ratio(q, None)
+    assert abs(r - 0.4379 * 0.5) < 1e-9, r
+
+
+def test_G_long_para_ratio_prefers_gt80_over_gt50():
+    """gt80 桶（更精确）优先于 gt50。"""
+    q = {"paragraph_length_distribution": {"gt80": 0.12, "gt50": 0.40}}
+    r = vs._extract_author_long_para_ratio(q, None)
+    assert abs(r - 0.12) < 1e-9, r
+
+
+def test_G_long_para_ratio_falls_back_to_para_mean():
+    """无分布桶 → 用段均长幂律外推（蛊真人段均 ~30 → 覆盖其 p90 长段率 ~6%）。"""
+    r = vs._extract_author_long_para_ratio({}, 30.0)
+    expect = 0.02 * (30.0 / 20.0) ** 2.5  # ≈ 0.0551
+    assert abs(r - expect) < 1e-6, (r, expect)
+    # 必须高于通用 2%（否则 override 无意义），且覆盖蛊真人 p90(6.25%) 量级
+    assert r > 0.02, r
+    assert 0.04 <= r <= 0.08, r  # 覆盖该作者正常长段率范围
+
+
+def test_G_long_para_ratio_capped():
+    """幂律外推封顶 0.15（防极端段均长把阈值放成离谱值）。"""
+    r = vs._extract_author_long_para_ratio({}, 200.0)  # 离谱大段均
+    assert r == 0.15, r
+
+
+def test_G_long_para_ratio_none_when_short_para_author():
+    """段均 ≤20 字（短段作者）且无分布 → None（不放宽·保通用 2%）。"""
+    assert vs._extract_author_long_para_ratio({}, 18.0) is None
+    assert vs._extract_author_long_para_ratio({}, None) is None
+    assert vs._extract_author_long_para_ratio({}, 20.0) is None  # 锚点本身不放宽
+
+
+def test_G_override_only_applies_to_max_ratio_cluster_view():
+    """override 只动 max_ratio（cluster 视野）；chapter 视野绝对数 max 不被改。"""
+    sd = {"quantitative": {"paragraph_length_distribution": {"gt50": 0.4379}}}
+    # chapter 视野（DEFAULT 用 {"max": 3}）—— 不该被 override
+    t_chapter = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t_chapter = vs._apply_style_overrides(t_chapter, sd)
+    assert "max" in t_chapter["long_para_per_chapter"], t_chapter["long_para_per_chapter"]
+    assert t_chapter["long_para_per_chapter"]["max"] == 3, t_chapter["long_para_per_chapter"]
+    # cluster 视野（CLUSTER 用 {"max_ratio": 0.02}）—— 应被放宽
+    t_cluster = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t_cluster = vs._apply_style_overrides(t_cluster, sd)
+    assert "max_ratio" in t_cluster["long_para_per_chapter"]
+    assert abs(t_cluster["long_para_per_chapter"]["max_ratio"] - 0.4379 * 0.5) < 1e-9, t_cluster["long_para_per_chapter"]
+
+
+def test_G_override_not_narrowing_below_generic():
+    """作者长段率推得低于通用 2% → 不收窄（保通用 2%，override 只放宽不收紧）。"""
+    sd = {"quantitative": {"paragraph_length_distribution": {"gt50": 0.02}}}  # gt50/2=1% < 2%
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    # 推得 1% < 通用 2% → 不 override（保 2%）
+    assert abs(t["long_para_per_chapter"]["max_ratio"] - 0.02) < 1e-9, t["long_para_per_chapter"]
+
+
+def test_G_no_profile_data_keeps_generic_2pct():
+    """无任何长段分布/段均长数据 → cluster 视野保通用 2%（不放宽）。"""
+    sd = {"quantitative": {"sentence_length": {"mean": 19.0}}}  # 只有句长（不能推段长）
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    assert abs(t["long_para_per_chapter"]["max_ratio"] - 0.02) < 1e-9, t["long_para_per_chapter"]
+
+
+def test_G_real_gu_zhenren_normal_chapter_long_para_not_fail_cluster():
+    """蛊真人原文第043章 CLUSTER_MODE + 作者档：长段计数不再 FAIL（核心实证·正常章）。"""
+    raw, sd = _load_body("蛊真人", "第043章")
+    if raw is None:
+        return
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    results = vs.validate_style(raw, t)
+    lp = _res(results, "长段计数")
+    assert lp.status != "FAIL", (lp.status, lp.detail, lp.target_desc)
+
+
+def test_G_real_jingsong_long_para_not_fail_with_profile_cluster():
+    """惊悚乐园原文第025章 CLUSTER_MODE + 作者档：长段计数不 FAIL（gt50 分布放宽生效）。"""
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "惊悚乐园"
+    ch = proj / "原文" / "第025章.txt"
+    sj = proj / "作者风格_FINAL.json"
+    if not (ch.exists() and sj.exists()):
+        return
+    import json
+    import chapter_io as cio
+    raw = ch.read_text(encoding="utf-8")
+    for sep in cio.CHANGES_SEPARATORS:
+        if sep in raw:
+            raw = raw.split(sep)[0].rstrip()
+            break
+    sd = json.loads(sj.read_text(encoding="utf-8"))
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    results = vs.validate_style(raw, t)
+    lp = _res(results, "长段计数")
+    assert lp.status != "FAIL", (lp.status, lp.detail, lp.target_desc)
+
+
+def test_G_real_long_para_override_does_not_relax_hardgate_120():
+    """放宽 long_para（80-120 字 advisory）绝不放松 > 120 字非对话段 hard_gate。
+    构造 2 段 > 120 字非对话段 + 作者档（gt50 放宽）→ 单段超长仍 FAIL（hard_gate 不动）。"""
+    sd = {"quantitative": {"paragraph_length_distribution": {"gt50": 0.4379}}}
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    text = ("他" * 130) + "\n\n" + ("她" * 130)  # 2 段非对话 > 120（超例外 1）
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)  # hard_gate 绝不被 long_para override 放松
