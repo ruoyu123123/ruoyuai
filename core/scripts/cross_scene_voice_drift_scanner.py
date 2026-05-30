@@ -84,9 +84,9 @@ VOICE_TICS = ("啊", "呢", "吧", "嘛", "呗", "啦", "哈", "咯", "喔", "�
 
 
 def _d4d8_mode() -> str:
-    """VOICE_D4D8_MODE：默认 shadow（只记不进顶层 warning）· {shadow, active, off}· 非法回退 shadow。"""
-    m = (os.environ.get("VOICE_D4D8_MODE") or "shadow").strip().lower()
-    return m if m in ("shadow", "active", "off") else "shadow"
+    """VOICE_D4D8_MODE：默认 active（2026-05-31 放量·真作者mean_dist=0.422已验证不误判同质·全advisory）· {shadow,active,off}· 非法回退 active。"""
+    m = (os.environ.get("VOICE_D4D8_MODE") or "active").strip().lower()
+    return m if m in ("shadow", "active", "off") else "active"
 
 
 def _voice_fingerprint(dialogues: list[str]) -> dict | None:

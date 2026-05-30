@@ -24,16 +24,17 @@ def _reload(mode):
 
 
 # ════ [A] mode 解析 ════
-def test_A_mode_default_shadow():
-    m = _reload(None)
+def test_A_mode_default_active():
+    m = _reload(None)   # 未设 → active(2026-05-31 放量·真作者13角色mean_dist=0.422已验证不误判)
     try:
-        assert m._d4d8_mode() == "shadow"
+        assert m._d4d8_mode() == "active"
     finally:
         _reload(None)
 
 
-def test_A_mode_active_off():
+def test_A_mode_explicit_shadow_active_off():
     try:
+        assert _reload("shadow")._d4d8_mode() == "shadow"
         assert _reload("active")._d4d8_mode() == "active"
         assert _reload("off")._d4d8_mode() == "off"
         assert _reload("ACTIVE")._d4d8_mode() == "active"
@@ -41,9 +42,9 @@ def test_A_mode_active_off():
         _reload(None)
 
 
-def test_A_mode_garbage_falls_back_shadow():
+def test_A_mode_garbage_falls_back_active():
     try:
-        assert _reload("garbage")._d4d8_mode() == "shadow"
+        assert _reload("garbage")._d4d8_mode() == "active"   # 非法 → active(放量默认态)
     finally:
         _reload(None)
 
@@ -144,7 +145,7 @@ _DRAFT = (
 
 
 def test_F_scan_shadow_default_field_present_no_warning_pollution():
-    vdmod = _reload(None)  # shadow
+    vdmod = _reload("shadow")  # 显式 shadow(放量后默认 active·shadow 仍合法·测其回归行为)
     try:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

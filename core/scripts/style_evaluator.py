@@ -794,10 +794,10 @@ _L3A_STYLE_POS_PREFIXES = ("r", "p", "c", "u", "d", "e", "y", "o")
 
 
 def _l3a_burstiness_mode() -> str:
-    """L3A_BURSTINESS_MODE：默认 shadow · 非法值回退 shadow · {active,off} 原样。"""
+    """L3A_BURSTINESS_MODE：默认 active（2026-05-31 放量·n_windows≥5门控防小尺寸误判·全advisory）· 非法回退 active · {shadow,off} 原样。"""
     import os
-    m = (os.environ.get("L3A_BURSTINESS_MODE") or "shadow").strip().lower()
-    return m if m in ("shadow", "active", "off") else "shadow"
+    m = (os.environ.get("L3A_BURSTINESS_MODE") or "active").strip().lower()
+    return m if m in ("shadow", "active", "off") else "active"
 
 
 def _split_windows(text: str, target: int = _L3A_WINDOW_TARGET,

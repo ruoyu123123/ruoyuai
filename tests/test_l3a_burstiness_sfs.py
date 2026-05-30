@@ -259,16 +259,16 @@ def test_E_style_only_fallback_label_when_no_pos():
 # ════════════════════════════════════════════════════════════════
 
 def test_F_mode_default_shadow_and_values():
-    """L3A_BURSTINESS_MODE 默认 shadow · 非法值回退 shadow · {active,off} 原样。"""
+    """L3A_BURSTINESS_MODE 默认 active（2026-05-31 放量·n_windows≥5门控防小尺寸误判）· 非法回退 active · {shadow,off} 原样。"""
     sx = _reload_se(None)
     try:
-        assert sx._l3a_burstiness_mode() == "shadow"
-        sx = _reload_se("active")
         assert sx._l3a_burstiness_mode() == "active"
+        sx = _reload_se("shadow")
+        assert sx._l3a_burstiness_mode() == "shadow"
         sx = _reload_se("off")
         assert sx._l3a_burstiness_mode() == "off"
         sx = _reload_se("garbage")
-        assert sx._l3a_burstiness_mode() == "shadow"
+        assert sx._l3a_burstiness_mode() == "active"
     finally:
         _reload_se(None)
 

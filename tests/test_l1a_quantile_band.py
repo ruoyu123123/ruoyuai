@@ -151,16 +151,16 @@ def test_C_extract_quantile_pair():
 
 
 def test_C_quantile_band_mode_default_shadow():
-    """QUANTILE_BAND_MODE 默认 shadow · 非法值回退 shadow · {active,off} 原样。"""
-    vsx = _reload_vs(None)            # 未设 env
+    """QUANTILE_BAND_MODE 默认 active（2026-05-31 放量·取并集band⊇旧band绝不更苛）· 非法回退 active · {shadow,off} 原样。"""
+    vsx = _reload_vs(None)            # 未设 env → active(放量)
     try:
-        assert vsx._quantile_band_mode() == "shadow"
-        vsx = _reload_vs("active")
         assert vsx._quantile_band_mode() == "active"
+        vsx = _reload_vs("shadow")
+        assert vsx._quantile_band_mode() == "shadow"
         vsx = _reload_vs("off")
         assert vsx._quantile_band_mode() == "off"
-        vsx = _reload_vs("garbage")   # 非法 → shadow
-        assert vsx._quantile_band_mode() == "shadow"
+        vsx = _reload_vs("garbage")   # 非法 → active
+        assert vsx._quantile_band_mode() == "active"
     finally:
         _reload_vs(None)
 

@@ -348,9 +348,9 @@ import os as _os
 
 
 def _quantile_band_mode() -> str:
-    """读 QUANTILE_BAND_MODE（默认 shadow）· 仅 {shadow, active, off} 合法 · 其余按 shadow。"""
-    m = (_os.environ.get("QUANTILE_BAND_MODE") or "shadow").strip().lower()
-    return m if m in ("shadow", "active", "off") else "shadow"
+    """读 QUANTILE_BAND_MODE（默认 active·2026-05-31 放量·取并集band⊇旧band 绝不更苛）· {shadow,active,off}· 其余按 active。"""
+    m = (_os.environ.get("QUANTILE_BAND_MODE") or "active").strip().lower()
+    return m if m in ("shadow", "active", "off") else "active"
 
 
 def _extract_quantile_pair(stat: dict | None) -> tuple[float, float] | None:
