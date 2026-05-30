@@ -930,7 +930,7 @@ def _collect_ensemble_layer(scanner, chapter: int) -> dict:
             "pending_heart_event_reveals": pending_reveals,
             "must_reveal_count": len(pending_reveals),
             "npc_schedule_hints": npc_schedule_hints,
-            "_note": "writer step 0v 必读：must_reveal_count > 0 时本章必触发对应 reveal（physical_evidence 必出现）；NPC schedule 决定主角找他时的地点/状态",
+            "_note": "writer step 0v 必读：must_reveal_count > 0 时本章必触发对应 reveal（physical_evidence 必出现）；NPC schedule 决定主角找他时的地点/状态。揭密后**必须**在 changes.factual.heart_events_revealed 报告 {event_id, evidence_appeared} —— save-state 据此把对应 heart_event 标 consumed（触发一次即消费，不再反复要求重揭）",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}

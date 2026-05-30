@@ -48,10 +48,28 @@ def save_json(p: Path, data: dict):
 
 
 def _events(fate: dict) -> list:
-    """取 major_events 并滤掉非 dict 元素（2026-05-30 北极星复审：大势卡 ME 池可能混入字符串/None 占位，
-    否则 e.get()/e['id'] 抛 AttributeError，且崩在 build_manifest:620 的 try 里被静默吞成 mode:error，
-    丢失全部大势 fate 牵引——北极星「大势已定」软牵引静默失效）。"""
-    return [e for e in (fate.get("major_events") or []) if isinstance(e, dict)]
+    """取 ME 池并滤掉非 dict 元素。
+
+    2026-05-30 北极星③契约修复（三重背离之一）：真实项目大势卡顶层键是 `major_events_pool`
+    （emergence.find_remaining_mes 同读法），fate_engine 旧版只读 `major_events` → 真实项目恒返 0
+    个事件 → 大势永不 completed / drift 永不触发 / writer 收不到 active_fate_events → 「大势已定」
+    软牵引静默失效。改为 `major_events_pool or major_events` 两套键名兼容（与 emergence 对齐）。
+
+    2026-05-30 北极星复审：ME 池可能混入字符串/None 占位，否则 e.get()/_event_id(e) 抛
+    AttributeError，且崩在 build_manifest:620 的 try 里被静默吞成 mode:error，丢失全部大势牵引。"""
+    pool = fate.get("major_events_pool") or fate.get("major_events") or []
+    return [e for e in pool if isinstance(e, dict)]
+
+
+def _event_id(event: dict) -> str:
+    """取 ME 标识 · 字段名兼容（与 cluster_emergence_engine._get_me_id 同范式）。
+
+    2026-05-30 北极星③契约修复（三重背离之二）：真实项目 ME 用 `me_id`（如 V1_ME_001 / ME-V1-01），
+    fate_engine 旧版全程读 `id` → 永不命中。emergence._get_me_id 已兼容两套字段名，fate_engine
+    此前未同步。统一读 `id or me_id`，让两端对同一 ME 池得到同一标识。"""
+    if not isinstance(event, dict):
+        return ""
+    return event.get("id") or event.get("me_id") or ""
 
 
 def is_event_unlockable(event: dict, fate: dict) -> bool:
@@ -59,7 +77,7 @@ def is_event_unlockable(event: dict, fate: dict) -> bool:
     prereqs = event.get("prerequisites", [])
     if not prereqs:
         return True
-    completed_ids = {e["id"] for e in _events(fate) if e.get("status") == "completed"}
+    completed_ids = {_event_id(e) for e in _events(fate) if e.get("status") == "completed"}
     return all(pid in completed_ids for pid in prereqs)
 
 
@@ -87,7 +105,7 @@ def evaluate(project_root: Path, ch: int) -> dict:
             # 找 prerequisite 完成的章号
             prereq_completed_ch = None
             for pe in events:
-                if pe.get("id") == prereq_event_id and pe.get("status") == "completed":
+                if _event_id(pe) == prereq_event_id and pe.get("status") == "completed":
                     prereq_completed_ch = pe.get("completed_at_ch")
                     break
             if prereq_completed_ch is not None:
@@ -99,11 +117,15 @@ def evaluate(project_root: Path, ch: int) -> dict:
                     priority = 8  # 接近窗口末
                 else:
                     priority = 5
+        # 2026-05-30 北极星③契约修复：字段名两套兼容（真实项目 ME 用 name/triggers，
+        # 旧形态用 title/trigger_when）。原 e["title"] 硬下标在真实 ME（只有 name）上 KeyError，
+        # 旧版因 _events 恒返 0 从未触发；修了键名后必须同步软化字段读取，否则 evaluate 崩在
+        # build_manifest:617 的 try 里被吞成 mode:error → 大势牵引仍然进不了 writer。
         active.append({
-            "id": e["id"],
-            "title": e["title"],
+            "id": _event_id(e),
+            "title": e.get("title") or e.get("name") or "",
             "stage": e.get("stage"),
-            "trigger_when": e.get("trigger_when"),
+            "trigger_when": e.get("trigger_when") or e.get("triggers"),
             "physical_evidence": e.get("physical_evidence"),
             "priority": priority,
             "downstream_unlocks": e.get("downstream_unlocks", []),
@@ -128,7 +150,7 @@ def update(project_root: Path, ch: int) -> dict:
         return {"ch": ch, "updated": 0, "reason": "本章未触发 fate_events"}
 
     fate_path = project_root / "_数据库" / "大势卡.json"
-    fate = load_json(fate_path, {"major_events": []})
+    fate = load_json(fate_path, {"major_events_pool": []})
 
     updated_ids = []
     for trig in triggered:
@@ -136,7 +158,7 @@ def update(project_root: Path, ch: int) -> dict:
         if not eid:
             continue
         for e in _events(fate):
-            if e.get("id") == eid and e.get("status") != "completed":
+            if _event_id(e) == eid and e.get("status") != "completed":
                 e["status"] = "completed"
                 e["completed_at_ch"] = ch
                 e["completion_evidence"] = trig.get("evidence", "")[:120]
@@ -164,7 +186,7 @@ def drift(project_root: Path, ch: int) -> dict:
         max_ch = window.get("max_chapters", 999)
         prereq_ch = None
         for pe in _events(fate):
-            if pe.get("id") == prereq_event_id and pe.get("status") == "completed":
+            if _event_id(pe) == prereq_event_id and pe.get("status") == "completed":
                 prereq_ch = pe.get("completed_at_ch")
                 break
         if prereq_ch is None:
@@ -172,8 +194,8 @@ def drift(project_root: Path, ch: int) -> dict:
         gap = ch - prereq_ch
         if gap > max_ch:
             overdue.append({
-                "event_id": e["id"],
-                "title": e["title"],
+                "event_id": _event_id(e),
+                "title": e.get("title") or e.get("name") or "",
                 "prereq": prereq_event_id,
                 "prereq_completed_at_ch": prereq_ch,
                 "current_ch": ch,
@@ -187,7 +209,7 @@ def drift(project_root: Path, ch: int) -> dict:
 def dashboard(project_root: Path) -> dict:
     """大势全景。"""
     fate_path = project_root / "_数据库" / "大势卡.json"
-    fate = load_json(fate_path, {"major_events": []})
+    fate = load_json(fate_path, {"major_events_pool": []})
     events = _events(fate)
     by_status = {}
     by_stage = {}

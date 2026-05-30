@@ -138,15 +138,17 @@
   "_field_doc": {
     "heart_events": "档位事件清单 — relationship_evaluator 检查 trigger_at 是否满足 → 满足且 consumed=false 强制下章触发",
     "schedule": "NPC 日常时间表 — 主角主动找时按这个决定地点和状态",
-    "tier_unlocks": "档位语义说明 — voice-keeper 据此判断本档可不可解锁的对话深度"
+    "tier_unlocks": "档位语义说明 — voice-keeper 据此判断本档可不可解锁的对话深度",
+    "consumed": "状态机标记 — 初始 false；writer 实际揭密后在 _changes.json factual.heart_events_revealed 报告对应 event_id → relationship_evaluator 写回 consumed=true（触发一次即消费，避免反复重揭）",
+    "consumed_at_ch": "写回字段 — consumed=true 时记录实际揭密的章号（cross_cluster_data_consumption_aggregate 据此检查揭密后角色保持感）"
   },
 
   "_consumption_chain": {
     "produced_by": "/distill-character 蒸馏角色时定义 + 用户/researcher 自由扩展 heart_events",
     "consumed_by": [
       "build_manifest._collect_ensemble_layer() 注入 manifest（仅本章相关 NPC）",
-      "writer step 0v：感知 schedule → 主角找 NPC 时按对应时段写场景",
-      "save-state.step9 relationship_evaluator.py：检查 trigger_at 满足 → 标 next_chapter_must_reveal"
+      "writer step 0v：感知 schedule → 主角找 NPC 时按对应时段写场景；揭密后在 _changes.json factual.heart_events_revealed 报告 event_id",
+      "save-state.step9 relationship_evaluator.py：① 据 factual.heart_events_revealed 写回 consumed=true + consumed_at_ch（状态机闭环）② 检查 trigger_at 满足且未 consumed → 标 pending_reveals"
     ]
   }
 }

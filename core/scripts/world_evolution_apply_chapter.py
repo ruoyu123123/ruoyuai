@@ -4,6 +4,7 @@
 1. auto_tick(ch)：推进世界一格 + RR_AUTO_TICK 涟漪 + 评估超期 NPC threads
 2. apply_fate_event(ch, ME_id)：对 _changes.json.fate_events_triggered[] 中每个 event 触发 fate_event 类涟漪
 3. 消费 emergent_opportunities：把 _changes.json.world_state_consumption.emergent_opportunities_consumed[] 中的 EO 标 consumed_by_writer=true
+3b. 消费 thread_responded：把 _changes.json.world_state_consumption.thread_responded[] 中的 NPC thread 标 responded_by_writer=true 并按 expected_responses 推进/完成（2026-05-30 #7 孤儿契约修复）
 4. spawn_emergent(ch)：检查 emergent_opportunities 是否到期 → 标 expired
 
 输出：保存到 _数据库/.world_evolution/ch{ch}_apply.json（汇总日志）
@@ -65,6 +66,69 @@ def consume_opportunities(project_root: Path, ch: int, opp_ids: list[str]) -> di
     return {"consumed_count": len(consumed), "consumed": consumed, "missing": missing}
 
 
+def respond_threads(project_root: Path, ch: int, thread_ids: list[str]) -> dict:
+    """把 writer 申报呼应的幕后 NPC threads 推进一步（thread_responded 消费方）。
+
+    2026-05-30 #7 孤儿契约修复：changes_schema.json factual.world_state_consumption.thread_responded
+    （writer 申报本 cluster 呼应了哪些幕后 NPC 线）此前**无任何消费方** → NPC thread 永不因 writer
+    主动呼应而推进，只能靠 evaluate_completion 到期被动完成。这里参照 consume_opportunities 的
+    consumed_by_writer 范式：writer 申报的每个 thread_id 标 responded_by_writer=true + 记录呼应章号
+    + responded_count 计数。当呼应次数累计达到 thread 的 expected_responses（默认 1）→ 视为「被呼应
+    推进完成」：从 active_npc_threads 移除 + 写一条 consequence_tracker（与 evaluate_completion 同
+    outcome_if_complete 落地），让幕后线因 writer 呼应真正闭环。
+
+    北极星边界：这是 advisory 性质的客观状态推进（不是 hard_gate）；thread_id 不存在只记 missing
+    不报错，不阻断流水线。"""
+    if not thread_ids:
+        return {"responded_count": 0, "missing": [], "completed": []}
+    world = wee.load_world(project_root)
+    if world is None:
+        return {"error": "世界状态.json 不存在"}
+    threads = world.get("active_npc_threads", [])
+    by_id = {t.get("thread_id"): t for t in threads if isinstance(t, dict)}
+    responded = []
+    missing = []
+    completed = []
+    consequence_tracker = world.setdefault("consequence_tracker", {})
+    for tid in thread_ids:
+        t = by_id.get(tid)
+        if t is None:
+            missing.append(tid)
+            continue
+        t["responded_by_writer"] = True
+        t["responded_count"] = int(t.get("responded_count", 0)) + 1
+        last = t.setdefault("responded_at_ch", [])
+        if isinstance(last, list):
+            last.append(ch)
+        else:
+            t["responded_at_ch"] = [ch]
+        responded.append(tid)
+        # 累计呼应达到 expected_responses（默认 1）→ 因 writer 呼应推进完成
+        expected = t.get("expected_responses")
+        try:
+            expected = int(expected) if expected is not None else 1
+        except (TypeError, ValueError):
+            expected = 1
+        if t["responded_count"] >= expected:
+            completed.append(tid)
+            key = f"ch{ch}_thread_responded_{tid}"
+            consequence_tracker[key] = {
+                "trigger": f"NT thread {tid} 因 writer 主动呼应推进完成",
+                "npc": t.get("npc_id"),
+                "outcome": t.get("outcome_if_complete", ""),
+                "world_changes": [t.get("outcome_if_complete", "")],
+            }
+    # 把已完成的 thread 从 active 列表移除（保留未完成的）
+    if completed:
+        world["active_npc_threads"] = [
+            t for t in threads
+            if not (isinstance(t, dict) and t.get("thread_id") in completed)
+        ]
+    wee.save_world(project_root, world)
+    return {"responded_count": len(responded), "responded": responded,
+            "completed": completed, "missing": missing}
+
+
 def apply_one_chapter(project_root: Path, ch: int) -> tuple[dict, bool]:
     """对单章执行 tick + fate_event + 消费 EO + spawn_emergent 扫描，写日志。
 
@@ -103,11 +167,19 @@ def apply_one_chapter(project_root: Path, ch: int) -> tuple[dict, bool]:
     summary["ops"].append({"op": "apply_fate_events", "count": len(fate_results), "results": fate_results})
 
     # 3. 消费 emergent_opportunities
-    opp_consumed_ids = (changes.get("factual") or {}).get("world_state_consumption", {}).get("emergent_opportunities_consumed", [])
+    wsc = (changes.get("factual") or {}).get("world_state_consumption", {}) or {}
+    opp_consumed_ids = wsc.get("emergent_opportunities_consumed", [])
     if opp_consumed_ids:
         c_r = consume_opportunities(project_root, ch, opp_consumed_ids)
         summary["ops"].append({"op": "consume_opportunities", "result": c_r})
         print(f"[consume_opp] consumed={c_r.get('consumed', [])} missing={c_r.get('missing', [])}")
+
+    # 3b. 消费 thread_responded（2026-05-30 #7 孤儿契约修复）：writer 申报呼应的幕后 NPC 线推进/完成
+    thread_responded_ids = wsc.get("thread_responded", [])
+    if thread_responded_ids:
+        t_r = respond_threads(project_root, ch, thread_responded_ids)
+        summary["ops"].append({"op": "respond_threads", "result": t_r})
+        print(f"[thread_responded] responded={t_r.get('responded', [])} completed={t_r.get('completed', [])} missing={t_r.get('missing', [])}")
 
     # 4. spawn_emergent 过期扫描
     spawn_r = wee.spawn_emergent(project_root, ch)

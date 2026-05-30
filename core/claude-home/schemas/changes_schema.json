@@ -131,7 +131,8 @@
             "properties": {
               "event_id": {
                 "type": "string",
-                "pattern": "^ME_\\d+$"
+                "pattern": "^[\\w.-]*ME[\\w.-]*$",
+                "description": "大势 ME 标识。2026-05-30 北极星③契约修复（三重背离之三）：旧版 ^ME_\\d+$ 只认 ME_001，但真实项目大势卡 ME 用 me_id 如 V1_ME_001 / ME-V1-01（build_manifest 经 fate_engine._event_id 透传真实 id 给 writer，writer 原样回填）→ 旧 pattern 必校验失败。放宽为兼容 ME_001 / V1_ME_001 / ME-V1-01 三套真实格式，让 fate_engine.update 能按 writer 回填的真实 id 命中 ME 池。理由：透传真实 id 比强制 writer 改写 id 更不干涉模型（北极星⑤）+ 不丢失卷号信息。"
               },
               "completion": {
                 "type": "string",

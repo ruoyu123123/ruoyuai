@@ -4,6 +4,16 @@
 当前 关系.json 数值是否到了某个 trigger_at → 满足且 consumed=false → 标 next_chapter_must_reveal[]
 让主代理在下章 outline-planner 阶段把 reveal 安排进走向卡。
 
+2026-05-30 修（#5 状态机闭环）：补「写回端」。本脚本是 heart_event consumed 字段的**唯一读处**
+（line ~110 `he.get("consumed")` 跳过已揭密），但全仓此前**无任何脚本写 consumed=true**——
+关系数值单调累积，trigger_at 一旦满足永久满足 → 每章 save-state 把同一 heart_event 反复重写进
+.ensemble_pending_reveals.json → build_manifest 反复要求 writer 重揭已揭的秘密；且
+cross_cluster_data_consumption_aggregate.scan_heart_event_consistency 只处理 consumed==true
+变成死代码。修：evaluate() 先据 writer 实际产出（_changes.json factual.heart_events_revealed，
+schema 已声明的 {event_id, evidence_appeared}）把对应 heart_event 标 consumed=true + consumed_at_ch，
+再算 pending —— 闭合「触发一次即消费」状态机（与 群像档.example.json 每个 heart_event 硬写
+consumed:false 的设计意图一致）。
+
 用法：python relationship_evaluator.py <project> [--ch N]
 退出码: 0 健康 / 1 有 heart_event 待揭密 / 2 致命
 """
@@ -17,6 +27,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 2026-05-30 修：用原子写持久化 群像档.json 的 consumed 写回（与 declarative_data_update 一致）。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import atomic_json
+    _ATOMIC_WRITE = atomic_json.atomic_write_json
+except Exception:  # pragma: no cover — fallback：atomic_json 缺失时退化为裸写，不阻塞流水线
+    _ATOMIC_WRITE = None
+
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -28,7 +46,56 @@ def load_json(p: Path, default=None):
 
 
 def save_json(p: Path, data: dict):
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if _ATOMIC_WRITE is not None:
+        _ATOMIC_WRITE(p, data)
+    else:
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_changes_factual(project_root: Path, ch: int) -> dict:
+    """读本章 _changes.json 的 factual 段（cluster 模式下 split_cluster_changes 平铺到每章）。
+    路径与 declarative_data_update 一致：章节/第NNN章/第NNN章_changes.json。读不到返回 {}。"""
+    changes_path = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
+    changes = load_json(changes_path, {})
+    if not isinstance(changes, dict):
+        return {}
+    factual = changes.get("factual", {})
+    return factual if isinstance(factual, dict) else {}
+
+
+def mark_consumed_from_changes(ensemble: dict, factual: dict, ch: int) -> list[dict]:
+    """据 writer 实际产出（factual.heart_events_revealed[{event_id, evidence_appeared}]）
+    把 群像档 中对应 heart_event 标 consumed=true + consumed_at_ch=ch，闭合状态机。
+
+    幂等：已 consumed 的不重复写（set 非累加）。返回本次新标记的 [{npc, event_id, consumed_at_ch}]。
+    设计：event_id 唯一定位（schema pattern ^HE_），不靠数值阈值——揭密由模型判断、脚本只记账。
+    """
+    revealed = factual.get("heart_events_revealed", []) or []
+    if not isinstance(revealed, list):
+        return []
+    # 收集本章 writer 报告的 event_id（容错：元素是 dict 取 event_id，是裸字符串直接用）
+    revealed_ids = set()
+    for item in revealed:
+        if isinstance(item, dict) and item.get("event_id"):
+            revealed_ids.add(item["event_id"])
+        elif isinstance(item, str) and item:
+            revealed_ids.add(item)
+    if not revealed_ids:
+        return []
+
+    newly_marked = []
+    for npc, npc_data in (ensemble.get("characters") or {}).items():
+        if not isinstance(npc_data, dict):
+            continue
+        for he in npc_data.get("heart_events", []) or []:
+            if not isinstance(he, dict):
+                continue
+            eid = he.get("event_id")
+            if eid in revealed_ids and not he.get("consumed", False):
+                he["consumed"] = True
+                he["consumed_at_ch"] = ch
+                newly_marked.append({"npc": npc, "event_id": eid, "consumed_at_ch": ch})
+    return newly_marked
 
 
 def get_relationship_to(rels: list[dict], from_char: str, to_char: str) -> dict:
@@ -92,6 +159,13 @@ def evaluate(project_root: Path, ch: int) -> dict:
     rels_data = load_json(rels_path, {"relationships": []})
     rels = rels_data.get("relationships", [])
 
+    # 2026-05-30 修（#5 状态机闭环 · 写回端）：先据本章 writer 实际产出标 consumed，
+    # 再算 pending —— 否则数值阈值满足后会反复 pending 已揭的秘密。
+    factual = _load_changes_factual(project_root, ch)
+    newly_consumed = mark_consumed_from_changes(ensemble, factual, ch)
+    if newly_consumed:
+        save_json(ensemble_path, ensemble)  # 写回 群像档.json，关闭状态机
+
     # 2026-05-29 cluster 化：从 人物卡.json 读主角名，取代旧硬编码 "陆衍"。
     protagonist = get_protagonist(project_root)
     if not protagonist:
@@ -125,6 +199,8 @@ def evaluate(project_root: Path, ch: int) -> dict:
 
     return {
         "ch": ch,
+        "newly_consumed_count": len(newly_consumed),
+        "newly_consumed": newly_consumed,
         "pending_reveals_count": len(pending_reveals),
         "pending_reveals": pending_reveals,
         "_persisted_to": str(out_path),
