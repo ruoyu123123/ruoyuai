@@ -77,11 +77,74 @@ def cjk_count(text: str) -> int:
     return sum(1 for ch in text if '一' <= ch <= '鿿')
 
 
+def collapse_degenerate_runs(
+    text: str,
+    single_char_max_run: int = 30,
+    short_str_max_repeat: int = 20,
+    short_str_max_len: int = 4,
+    keep_single: int = 10,
+    keep_short: int = 10,
+) -> tuple[str, list[dict]]:
+    """检测并截断 LLM 复读退化串（连续重复单字 / 连续重复短串）。
+
+    实测翻车：复刻含 3826 字连续「铛」串（占 27% CJK）→ LLM 复读退化 → 污染 SFS + 产出。
+    作者真实拟声只用单行短串（如「铛。」独段），绝不会 3826 字。
+
+    两类退化：
+    1. 同一字连续 > single_char_max_run 次 → 保留 keep_single 个
+    2. 同一短串（≤ short_str_max_len 字）连续重复 > short_str_max_repeat 次 → 保留 keep_short 个
+
+    返回 (清洗后文本, 命中记录列表)。命中记录供调用方写 stderr WARN + meta sidecar。
+    """
+    hits: list[dict] = []
+
+    # ── 第一类：同一字符连续超长 run（用 backreference 捕获 ≥ run+1 次）──
+    def _collapse_char(m: "re.Match") -> str:
+        ch = m.group(1)
+        run_len = len(m.group(0))
+        hits.append({"type": "single_char", "char": ch,
+                     "run_length": run_len, "kept": keep_single})
+        return ch * keep_single
+
+    # (.) 捕获任一字符（含拟声字 / 标点 / 空白），\1{N,} 要求其后再连续重复 N 次以上
+    # 即同字总连续 > single_char_max_run 才触发
+    char_pat = re.compile(r"(.)\1{" + str(single_char_max_run) + r",}", flags=re.DOTALL)
+    text = char_pat.sub(_collapse_char, text)
+
+    # ── 第二类：同一短串（2..short_str_max_len 字）连续重复超量 ──
+    # 从短到长匹配：优先用最小周期截断（「哈嘿哈嘿…」按周期 2 截，不当周期 4），
+    # 截得更紧更可预测；真正的周期 3/4 串（如「哈嘿呼」复读）不匹配短周期 → 在自身 unit_len 命中。
+    for unit_len in range(2, short_str_max_len + 1):
+        def _collapse_short(m: "re.Match", _ul: int = unit_len) -> str:
+            unit = m.group(1)
+            repeat = len(m.group(0)) // _ul
+            hits.append({"type": "short_str", "unit": unit,
+                         "unit_len": _ul, "repeat": repeat, "kept": keep_short})
+            return unit * keep_short
+
+        # (单元){N,}：单元长度精确 unit_len，连续重复 > short_str_max_repeat 次才触发
+        short_pat = re.compile(
+            r"((?:.){" + str(unit_len) + r"})\1{" + str(short_str_max_repeat) + r",}",
+            flags=re.DOTALL,
+        )
+        text = short_pat.sub(_collapse_short, text)
+
+    return text, hits
+
+
 def clean_output(text: str) -> str:
-    """清理 LLM 输出：去掉 markdown 包裹、前后引言、多余空行"""
+    """清理 LLM 输出：去掉 markdown 包裹、前后引言、退化复读串、多余空行"""
     text = re.sub(r"^```[a-z]*\n", "", text, flags=re.MULTILINE)
     text = re.sub(r"\n```\s*$", "", text)
     text = re.sub(r"^(以下是|这是|这里是|下面是)[^\n]{0,40}[:：]\s*\n", "", text)
+    text, degen_hits = collapse_degenerate_runs(text)
+    for h in degen_hits:
+        if h["type"] == "single_char":
+            print(f"[WARN · degenerate] 检测到单字「{h['char']}」连续复读 {h['run_length']} 次 "
+                  f"→ 截断保留 {h['kept']} 个（LLM 复读退化）", file=sys.stderr)
+        else:
+            print(f"[WARN · degenerate] 检测到短串「{h['unit']}」连续复读 {h['repeat']} 次 "
+                  f"→ 截断保留 {h['kept']} 个（LLM 复读退化）", file=sys.stderr)
     return text.strip()
 
 
@@ -128,7 +191,7 @@ def build_cluster_subcall_prompt(
         f"# 故事块复刻任务（第 {subcall_index}/{subcall_total} 段）\n\n"
         f"**颗粒度**：故事块（cluster），整块连续叙事\n"
         f"**cluster 元信息**：{cluster_meta.get('cluster_id', 'unknown')} · "
-        f"原 cluster 总章数 {cluster_meta.get('chapters_count', '?')} · "
+        f"原 cluster 总章数 {cluster_chapters_count(cluster_meta) or '?'} · "
         f"边界原因 {cluster_meta.get('boundary_reason', '?')}\n"
         f"**本段任务**：写 {chapters_in_this_call} 章份内容（约 {target_words} CJK 字 ±10%）\n"
     )
@@ -230,10 +293,69 @@ def load_cluster_meta(project_root: Path, cluster_id: str) -> dict:
     raise ValueError(f"cluster_id={cluster_id} 在 cluster_index 中找不到")
 
 
-def gather_cluster_ref_text(project_root: Path, cluster_meta: dict, max_chars: int = 4000) -> str:
-    """拼参考原文：cluster 内每章取首段（限总长 4000 字）"""
+def cluster_chapter_bounds(cluster_meta: dict) -> tuple[int | None, int | None]:
+    """容忍多 schema 读 cluster 章节起止。
+
+    契约不符根因（2026-05-30 系统验证发现）：cluster_index.json 实际 key 是
+    chapter_range（2 元数组 [lo, hi]），但旧码只读 chapter_start/ch_start/chapter_end/ch_end
+    → gather_cluster_ref_text 返回空（参考原文没注入·复刻只靠 skill）。
+
+    兼容顺序：
+    1. chapter_range: [lo, hi]（cluster_index.json / 事件簇.json 主 schema）
+    2. chapter_start / chapter_end（扁平 key）
+    3. ch_start / ch_end（简写 key）
+    """
+    rng = cluster_meta.get("chapter_range")
+    if isinstance(rng, (list, tuple)) and len(rng) >= 2:
+        try:
+            return int(rng[0]), int(rng[1])
+        except (TypeError, ValueError):
+            pass
     ch_start = cluster_meta.get("chapter_start") or cluster_meta.get("ch_start")
     ch_end = cluster_meta.get("chapter_end") or cluster_meta.get("ch_end")
+    if ch_start is None or ch_end is None:
+        return None, None
+    try:
+        return int(ch_start), int(ch_end)
+    except (TypeError, ValueError):
+        return None, None
+
+
+def cluster_total_words(cluster_meta: dict) -> int:
+    """容忍多 schema 读 cluster 总字数。
+
+    契约不符根因：cluster_index.json 实际 key 是 estimated_words，但旧码只读
+    total_words/word_count → estimate_words_per_chapter 永远回退默认 3500。
+
+    兼容顺序：estimated_words → total_words → word_count → words。
+    """
+    for key in ("estimated_words", "total_words", "word_count", "words"):
+        v = cluster_meta.get(key)
+        if v:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
+def cluster_chapters_count(cluster_meta: dict) -> int:
+    """容忍多 schema 读 cluster 章数（chapters_count 主 key；缺则由 chapter_range 推算）。"""
+    n = cluster_meta.get("chapters_count")
+    if n:
+        try:
+            return int(n)
+        except (TypeError, ValueError):
+            pass
+    lo, hi = cluster_chapter_bounds(cluster_meta)
+    if lo is not None and hi is not None:
+        return hi - lo + 1
+    return 0
+
+
+def gather_cluster_ref_text(project_root: Path, cluster_meta: dict, max_chars: int = 4000) -> str:
+    """拼参考原文：cluster 内每章取首段（限总长 4000 字）"""
+    ch_start, ch_end = cluster_chapter_bounds(cluster_meta)
     if ch_start is None or ch_end is None:
         return ""
     pieces = []
@@ -272,8 +394,8 @@ def plan_cluster_subcalls(chapters_count: int, max_chapters_per_call: int = 3) -
 
 def estimate_words_per_chapter(cluster_meta: dict) -> int:
     """估算每章字数（cluster 总字数 / 章数），默认 3500"""
-    total_words = cluster_meta.get("total_words") or cluster_meta.get("word_count") or 0
-    n = cluster_meta.get("chapters_count") or 0
+    total_words = cluster_total_words(cluster_meta)
+    n = cluster_chapters_count(cluster_meta)
     if total_words and n:
         return max(2500, min(5000, total_words // n))
     return 3500
@@ -346,7 +468,7 @@ def main():
         print(f"[ERROR] cluster 元信息加载失败: {e}", file=sys.stderr)
         sys.exit(2)
 
-    chapters_count = int(cluster_meta.get("chapters_count") or 0)
+    chapters_count = cluster_chapters_count(cluster_meta)
     if chapters_count <= 0:
         print(f"[ERROR] cluster {args.cluster_ref} 章数无效: {chapters_count}", file=sys.stderr)
         sys.exit(2)
@@ -412,10 +534,10 @@ def main():
         "cluster_id": args.cluster_ref,
         "cluster_meta": {
             "chapters_count": chapters_count,
-            "chapter_start": cluster_meta.get("chapter_start") or cluster_meta.get("ch_start"),
-            "chapter_end": cluster_meta.get("chapter_end") or cluster_meta.get("ch_end"),
+            "chapter_start": cluster_chapter_bounds(cluster_meta)[0],
+            "chapter_end": cluster_chapter_bounds(cluster_meta)[1],
             "boundary_reason": cluster_meta.get("boundary_reason"),
-            "total_words_original": cluster_meta.get("total_words") or cluster_meta.get("word_count"),
+            "total_words_original": cluster_total_words(cluster_meta) or None,
         },
         "style_skill": str(style_skill),
         "project": str(project_root),

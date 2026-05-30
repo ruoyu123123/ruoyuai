@@ -25,7 +25,9 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from style_analyzer import analyze_text, AI_STRUCTURAL_BANNED  # noqa: E402
+from style_analyzer import (  # noqa: E402
+    analyze_text, AI_STRUCTURAL_BANNED, CRAFT_SIGNATURE_QUOTA_WORDS,
+)
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
 
 # ── 阈值定义 ──────────────────────────────────────────────────
@@ -115,6 +117,31 @@ def _rng(lo: float, hi: float, u: str = "") -> str:
 
 # ── 风格 JSON 覆盖 ───────────────────────────────────────────
 
+def _stat_mean(v) -> float | None:
+    """从 {"mean": x} 或裸数值取 mean，非数值/缺失返回 None。"""
+    if isinstance(v, dict):
+        m = v.get("mean")
+        return float(m) if isinstance(m, (int, float)) else None
+    if isinstance(v, (int, float)):
+        return float(v)
+    return None
+
+
+def _extract_author_para_mean(q: dict) -> float | None:
+    """从作者档 quantitative 推**真实段落均长**（CJK 字/段）。
+    绝不用 sentence_length（句长）——句长≠段长（北极星⑤ [B-段长单位错配]）。
+    ① paragraph_length_chars.mean 直取；② chapter_chars.mean / paragraph_count.mean 算。
+    两者都缺/为 null → 返回 None（调用方据此不收窄段长 band）。"""
+    plc = _stat_mean(q.get("paragraph_length_chars"))
+    if plc is not None and plc > 0:
+        return plc
+    cc = _stat_mean(q.get("chapter_chars"))
+    pc = _stat_mean(q.get("paragraph_count"))
+    if cc is not None and pc is not None and pc > 0:
+        return cc / pc
+    return None
+
+
 def _apply_style_overrides(t: dict, sd: dict) -> dict:
     t = {k: dict(v) for k, v in t.items()}
     # 2026-05-29 北极星 P4 [H2-style]：标记「本项目有作者风格档」→ _chk_banned 据此把
@@ -126,10 +153,15 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
     m = dr.get("mean") if isinstance(dr, dict) else (dr if isinstance(dr, (int, float)) else None)
     if m is not None:
         t["dialogue_ratio"] = {"min": max(0.0, m - 0.15), "max": min(1.0, m + 0.15)}
-    # sentence_length.mean -> para_mean_len +/- 30%
-    sl = q.get("sentence_length", {})
-    if isinstance(sl, dict) and "mean" in sl:
-        t["para_mean_len"] = {"min": max(1, sl["mean"] * 0.7), "max": sl["mean"] * 1.3}
+    # 2026-05-30 北极星⑤ [B-段长单位错配]：段落均长 band 必须用**真实段长数据**推，
+    # 绝不拿句长(sentence_length)冒充段长——句长 ≠ 段长，错配会把段落本就长的作者
+    # (如蛊真人段均 ~30 字)从通用 PASS 顶成 FAIL，"带作者档反更苛"违反原则⑤。
+    # 取数优先级：① paragraph_length_chars.mean（蒸馏直出的真实段长）
+    #             ② chapter_chars.mean / paragraph_count.mean（章字数÷段数 = 真实段均长）
+    # 两者都缺 → 段长维度【不做 override】，保持通用 band（14-35，不收窄）。
+    para_mean = _extract_author_para_mean(q)
+    if para_mean is not None and para_mean > 0:
+        t["para_mean_len"] = {"min": max(1, para_mean * 0.7), "max": para_mean * 1.3}
     # chapter_words.mean -> +/- 500
     cw = q.get("chapter_words", {})
     m = cw.get("mean") if isinstance(cw, dict) else (cw if isinstance(cw, (int, float)) else None)
@@ -243,15 +275,33 @@ def _chk_quota(text: str, p: dict, t: dict) -> CheckResult:
     hits, lim = p.get("quota_word_hits", {}), t["quota_per_word"]["max"]
     if not hits:
         return CheckResult("配额词", "PASS", "全部达标", f"各<={lim}")
-    over, lines = [], []
+    # 2026-05-30 北极星⑤ [C-配额词作者档降级]：对齐 _chk_banned 的作者档分级逻辑——
+    # 有作者风格档时，配额词里的**工艺签名类**（顿时/微微/似乎/仿佛 = CRAFT_SIGNATURE_QUOTA_WORDS）
+    # 可能是该作者的签名笔法，超额降 WARN（advisory 可豁免）而非 FAIL；
+    # 非签名类配额词（突然/下一刻/下意识/莫名 = 节奏转场堆砌词）超额仍 FAIL。
+    # 无作者档 → 全部超额即 FAIL（旧行为，向后兼容）。
+    has_profile = bool(t.get("_has_author_profile"))
+    over_hard, over_craft, lines = [], [], []
     for w, c in hits.items():
         if c > lim:
             ls = _find_lines(text, w)
             lines.extend(ls)
-            over.append(f'"{w}" x{c} (行 {", ".join(str(l) for l in ls[:3])})')
-    if not over:
+            entry = f'"{w}" x{c} (行 {", ".join(str(l) for l in ls[:3])})'
+            if has_profile and w in CRAFT_SIGNATURE_QUOTA_WORDS:
+                over_craft.append(entry)
+            else:
+                over_hard.append(entry)
+    if not over_hard and not over_craft:
         return CheckResult("配额词", "PASS", f"各词均<={lim}", f"各<={lim}")
-    return CheckResult("配额词", "FAIL", "超额: " + "; ".join(over), f"各<={lim}", lines)
+    if over_hard:  # 非签名类超额 → FAIL（不可放行）
+        detail = "超额: " + "; ".join(over_hard)
+        if over_craft:
+            detail += "；签名类(作者档降级): " + "; ".join(over_craft)
+        return CheckResult("配额词", "FAIL", detail, f"各<={lim}", lines)
+    # 仅工艺签名类超额 + 有作者档 → WARN（作者可能将其作为签名笔法，可豁免）
+    return CheckResult("配额词(作者档下降级)", "WARN",
+                       "签名类超额(可豁免): " + "; ".join(over_craft),
+                       f"各<={lim} · 若作者签名笔法可豁免", lines)
 
 def _chk_brackets(p: dict, t: dict) -> CheckResult:
     v, lo = p["bracket_setting_count"], t["bracket_settings"]["min"]
@@ -276,43 +326,84 @@ def _chk_words(text: str, p: dict, t: dict) -> CheckResult:
 
 _CJK_RE = re.compile(r"[一-鿿]")
 
+# 中文弯引号 / 方头引号（codepoint 判，区分左右 U+201C≠U+201D）
+_Q_OPEN_CP = ("“", "「", "『")   # “ 「 『
+_Q_CLOSE_CP = ("”", "」", "』")  # ” 」 』
+
+
 def _para_cjk_lens(text: str) -> list[int]:
     """每段 CJK 字符数。段分隔 = 双换行。"""
     paras = [p.strip() for p in text.split("\n\n") if p.strip()]
     return [len(_CJK_RE.findall(p)) for p in paras]
 
 
+def _is_full_dialogue_para(para: str) -> bool:
+    """整段是否为**完整对话段**——整段被中文弯引号(U+201C…U+201D)或方头引号(「…」/『…』)
+    成对包裹。对话不可中切是叙事常态（北极星⑤ [A-对话段超长豁免]），此类超长段豁免
+    hard_gate（降 advisory）。用 codepoint 严格判左右引号成对，段内换行不影响。"""
+    s = para.strip()
+    if len(s) < 2:
+        return False
+    for o, c in zip(_Q_OPEN_CP, _Q_CLOSE_CP):
+        if s[0] == o and s[-1] == c:
+            return True
+    return False
+
+
 def _chk_para_max(text: str, p: dict, t: dict) -> CheckResult:
     """单段超长 hard_gate：单段 > 120 CJK 字（每章 ≤1 例外）。
     超 hard_gate 阈值 = FAIL（audit_hub 标 STYLE_单段超长 = HARD_GATE）。
-    超 warn 阈值 = WARN。"""
+    超 warn 阈值 = WARN。
+
+    2026-05-30 北极星⑤ [A-对话段超长豁免]：**完整对话段**（整段被中文弯/方头引号成对
+    包裹）超 hard_gate 仅降 WARN（advisory 可豁免）——对话不可中切是叙事常态，唯一
+    hard_gate 触发在对话段是矫枉过正。**非对话**超长段仍按原逻辑 FAIL（绝不放过真超长）。"""
     cfg = t.get("para_max_chars", {"warn": 80, "hard_gate": 120, "exception_per_chapter": 1})
     warn_th, hard_th, ex = cfg["warn"], cfg["hard_gate"], cfg.get("exception_per_chapter", 1)
-    lens = _para_cjk_lens(text)
+    para_text_list = [p_.strip() for p_ in text.split("\n\n") if p_.strip()]
+    lens = [len(_CJK_RE.findall(p_)) for p_ in para_text_list]
     if not lens:
         return CheckResult("单段超长", "PASS", "无段落", f"目标 ≤{warn_th} (hard_gate {hard_th})")
+    # 超 hard_gate 段拆两类：完整对话段（豁免）vs 非对话段（仍 hard_gate）
     over_hard = [(i + 1, n) for i, n in enumerate(lens) if n > hard_th]
+    over_hard_nondialog = [
+        (i, n) for (i, n) in over_hard
+        if not _is_full_dialogue_para(para_text_list[i - 1])
+    ]
+    over_hard_dialog = [
+        (i, n) for (i, n) in over_hard
+        if _is_full_dialogue_para(para_text_list[i - 1])
+    ]
     over_warn = [(i + 1, n) for i, n in enumerate(lens) if warn_th < n <= hard_th]
     # 找超长段在 text 中行号（按段索引近似 = 段首行号）
-    para_text_list = [p.strip() for p in text.split("\n\n") if p.strip()]
     fail_lines = []
-    for idx, n in over_hard[:5]:
+    for idx, n in over_hard_nondialog[:5]:
         # 找该段首行
         if idx <= len(para_text_list):
             first_line = para_text_list[idx - 1].split("\n")[0][:20]
             ls = _find_lines(text, first_line)
             if ls:
                 fail_lines.extend(ls[:1])
-    # 例外条款：≤ ex 个超 hard_gate 算 WARN（按调研「每章 ≤1 例外」）
-    if len(over_hard) > ex:
-        detail = f"{len(over_hard)} 段 > {hard_th} 字（超例外 {ex}）：" + \
-                 ", ".join(f"段{i}({n}字)" for i, n in over_hard[:3])
+    # 非对话超长段：例外条款（≤ ex 个 → WARN，> ex → FAIL hard_gate）
+    if len(over_hard_nondialog) > ex:
+        detail = f"{len(over_hard_nondialog)} 段非对话 > {hard_th} 字（超例外 {ex}）：" + \
+                 ", ".join(f"段{i}({n}字)" for i, n in over_hard_nondialog[:3])
+        if over_hard_dialog:
+            detail += f"；另 {len(over_hard_dialog)} 段完整对话超长(已豁免)"
         return CheckResult("单段超长", "FAIL", detail,
                            f"目标 ≤{warn_th} (hard_gate {hard_th}, 例外 ≤{ex})",
                            fail_lines)
-    if over_hard:
-        detail = f"{len(over_hard)} 段 > {hard_th} 字（在例外内）：" + \
-                 ", ".join(f"段{i}({n}字)" for i, n in over_hard[:3])
+    # 完整对话段超长：豁免 hard_gate → WARN（advisory 可豁免）。
+    if over_hard_dialog and not over_hard_nondialog:
+        detail = f"{len(over_hard_dialog)} 段完整对话 > {hard_th} 字（对话不可中切·已豁免 hard_gate）：" + \
+                 ", ".join(f"段{i}({n}字)" for i, n in over_hard_dialog[:3])
+        return CheckResult("单段超长", "WARN", detail,
+                           f"目标 ≤{warn_th} (对话段豁免 hard_gate {hard_th})")
+    if over_hard_nondialog:
+        detail = f"{len(over_hard_nondialog)} 段非对话 > {hard_th} 字（在例外内）：" + \
+                 ", ".join(f"段{i}({n}字)" for i, n in over_hard_nondialog[:3])
+        if over_hard_dialog:
+            detail += f"；另 {len(over_hard_dialog)} 段完整对话超长(已豁免)"
         return CheckResult("单段超长", "WARN", detail,
                            f"目标 ≤{warn_th} (hard_gate {hard_th}, 例外 ≤{ex})",
                            fail_lines)

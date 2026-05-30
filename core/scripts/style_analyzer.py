@@ -106,6 +106,13 @@ BANNED_WORDS = AI_STRUCTURAL_BANNED + CRAFT_SIGNATURE_BANNED  # 全集（向后�
 
 QUOTA_WORDS = ["突然", "下一刻", "下意识", "莫名", "似乎", "仿佛", "顿时", "微微"]
 
+# 2026-05-30 北极星⑤ [C-配额词作者档降级]：配额词里的**工艺签名类**子集——
+# 这些是软性 hedge / 笔法签名词（顿时/微微/似乎/仿佛），可能是某作者的签名笔法，
+# 与 CRAFT_SIGNATURE_BANNED 同源（顿时直接在内，微微来自「微微挑眉」笔法家族），
+# 故 validate_style 在有作者档时把它们超额降 WARN（对齐 _chk_banned 的作者档优先逻辑）。
+# 反之 突然/下一刻/下意识/莫名 是叙事节奏/转场堆砌词（非签名），超额仍 FAIL（不放松真问题）。
+CRAFT_SIGNATURE_QUOTA_WORDS = ["顿时", "微微", "似乎", "仿佛"]
+
 AI_DIALOGUE_TAGS = ["淡淡地说", "缓缓地说", "沉吟片刻", "不容置疑", "微微一笑道"]
 
 
