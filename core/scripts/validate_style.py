@@ -409,7 +409,7 @@ def _maybe_quantile_band(
     return new_band
 
 
-def _apply_style_overrides(t: dict, sd: dict) -> dict:
+def _apply_style_overrides(t: dict, sd: dict, author_dir=None) -> dict:
     t = {k: dict(v) for k, v in t.items()}
     # 2026-05-29 北极星 P4 [H2-style]：标记「本项目有作者风格档」→ _chk_banned 据此把
     # 工艺签名禁用词降 WARN（不硬毙作者签名笔法），AI 结构套话仍 FAIL。
@@ -500,6 +500,19 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
                 "hard_gate": new_hard,
                 "exception_per_chapter": _exc,
             }
+    # ── L2-1 PID 反馈微调（北极星⑤ · 2026-05-30）──────────────────────
+    # 至此作者档【前馈 override】已全部施加（L1a 分位数 band + 各 mean±容差 + cluster band）。
+    # PID 反馈层【最后】叠加：只动 4 个被控连续 advisory 阈值（para_mean_len/dialogue_ratio/
+    # long_para_per_chapter/quota_per_word），把真作者 FPR 驱动到 0。前馈优先级 > 反馈
+    # （前馈先定 band，PID 只在其基础上做保守微调）。env PID_THRESHOLD_MODE=off（默认）时
+    # apply_pid_delta 直接返回原值（零回归·回测验证前不生效）。物理隔离：tuner 白名单只读写 4 键，
+    # 15 个 HARD_GATE_CODES 不在本回路。author_dir=None（旧调用方/回测自管 Δ）→ 不动。
+    if author_dir is not None:
+        try:
+            import pid_threshold_tuner as _pid  # noqa: E402
+            t = _pid.apply_pid_delta(t, author_dir)
+        except Exception as _e:  # 反馈层失败绝不中断校验（顾问非法官）
+            print(f"[PID] apply_pid_delta 跳过（{_e}）", file=sys.stderr)
     return t
 
 
@@ -1010,7 +1023,9 @@ def main() -> None:
             sd = json.loads(style_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
             print(f"[FATAL] 风格 JSON 解析失败: {e}", file=sys.stderr); sys.exit(2)
-        thresholds = _apply_style_overrides(thresholds, sd)
+        # L2-1：作者目录 = 作者风格.json 所在目录（workspace/styles/{作者}/）·per-作者 PID state 锚此。
+        _author_dir = style_path.resolve().parent
+        thresholds = _apply_style_overrides(thresholds, sd, author_dir=_author_dir)
 
     results = validate_style(text, thresholds)
     print(format_report(results))

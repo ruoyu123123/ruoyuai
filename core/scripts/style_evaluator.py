@@ -505,20 +505,18 @@ def _sample_paragraphs(text: str, n: int = 3,
 
 
 def generate_llm_prompt(ref_text: str, gen_text: str) -> str:
-    """生成 LLM 评分 prompt 文本。"""
+    """生成 LLM 评分 prompt 文本。
+
+    L3e（2026-05-31 · env SFS_LLM_DEBIAS）：默认 off → 旧单序 + random.sample 选片
+    （行为完全不变 · 零回归）；on → 转调 generate_pairwise_llm_prompt（pairwise 顺序双跑
+    + 风格代表性选片 · 消 LLM 顺序偏置 + 选片内容偏置）。"""
+    if _sfs_llm_debias_on():
+        return generate_pairwise_llm_prompt(ref_text, gen_text)
+
     ref_samples = _sample_paragraphs(ref_text, 3)
     gen_samples = _sample_paragraphs(gen_text, 3)
 
-    dims = [
-        ("叙事结构", "叙事视角、场景转换、时间线处理的一致性"),
-        ("对话风格", "角色对话的口语化程度、口癖保留、语气词使用"),
-        ("情绪节奏", "紧张/舒缓的交替节奏、段落长短的节奏感"),
-        ("角色声纹", "不同角色的语言辨识度、性格在对话中的体现"),
-        ("章首章末", "开头吸引力、结尾悬念/余韵的处理手法"),
-        ("反AI腔", "是否存在AI常见套话、机械化表达、缺少人味的句式"),
-        ("招牌技法", "原作者独特的修辞手法、比喻风格、描写偏好"),
-        ("信息密度", "每段传递的信息量、描写与叙事的比例平衡"),
-    ]
+    dims = list(_SFS_LLM_DIMS)
     L = ["# 风格保真度 LLM 评分", "",
          "请根据以下原文样本和 AI 生成样本，对 AI 文本的风格匹配度打分。", "",
          "## 原文样本", ""]
@@ -1052,6 +1050,264 @@ def compute_l3a(ref_text: str, gen_text: str) -> dict:
         "style_only_sfs": style_sfs,
         "advisory_issues": issues,
         "note": "全部 advisory · 不改 sfs_quick/grade 判决 · 不进 hard_gate（顾问非法官）",
+    }
+
+
+# ============================================================
+# L3e：SFS 评分消偏（2026-05-31 · 北极星①⑤⑥）
+# ------------------------------------------------------------
+# 根因（本批任务说明 · 实证）：
+#   ① LLM-as-judge 有**顺序偏置**——同一对样本，谁先呈现谁占优，可致 >10% 漂移。
+#   ② few-shot / 参考片段若按**内容相似**选片，反而降低风格保真（Catch Me 实证：内容近
+#      的片段把模型往「抄内容」带，而非「学文风」）。应按**风格代表性**选片
+#      （聚类质心 / 句式覆盖），让参考片段覆盖作者的句长节奏谱系而非贴近 gen 的题材。
+#
+# 升级（全在本文件内自包含 · 纯增量 · 不改 L3a 也不改旧 generate_llm_prompt/_sample_paragraphs）：
+#   (a) generate_pairwise_llm_prompt：复刻稿 vs 作者原文片段做 **pairwise** 评分，且
+#       **交换呈现顺序双跑**（A=原文先/复刻后，B=复刻先/原文后）。prompt 显式要求模型
+#       对两种顺序各打一次分；average_pairwise_scores 取均值消顺序偏置。
+#   (b) _select_representative_samples：参考片段按**风格代表性**选——对候选段算去题材
+#       风格特征向量（句长节奏/标点/虚词/单句成段率），用 k-center（贪心最远点）+ 质心
+#       覆盖选 n 段，最大化句式谱系覆盖，**不看与 gen 的内容相似**。
+#
+# 影子并行（北极星纪律 7 · 回归 0）：env SFS_LLM_DEBIAS 控制——
+#   · off（默认）：generate_llm_prompt 行为完全不变（旧单序 + random.sample 选片）。
+#   · on：generate_llm_prompt 转调 pairwise 双序 + 代表性选片（消偏增强版）。
+# 不论哪种模式，本层只改**评分鲁棒性**（prompt 构造 / 选片 / 取均值），属 advisory：
+#   绝不改 sfs_quick / programmatic_score / grade 任何确定性判决（顾问非法官 · 北极星⑤）。
+# ============================================================
+
+
+def _sfs_llm_debias_on() -> bool:
+    """SFS_LLM_DEBIAS：默认 off（旧单序行为零回归）· 显式 {1,true,on,yes} 才开 pairwise 消偏。"""
+    import os
+    v = (os.environ.get("SFS_LLM_DEBIAS") or "").strip().lower()
+    return v in ("1", "true", "on", "yes")
+
+
+def _segment_style_feature(seg: str) -> list[float]:
+    """单个候选片段的**去题材**风格特征向量（句长节奏/标点/虚词/单句成段率）。
+
+    只取与题材无关的节奏/结构维度（与 L3a / compute_style_only_sfs 同哲学）——名词/人名/
+    情节动词等题材信号一律不进向量。维度固定可比（同序），供 k-center / 质心选片用。"""
+    sents = split_sentences(seg)
+    sent_lens = [float(count_chinese(s)) for s in sents]
+    paras = split_paragraphs(seg)
+    s_stats = calc_stats(sent_lens)
+    cjk = count_chinese(seg) or 1
+    per_1000 = 1000.0 / cjk
+    comma_d = len(COMMA_PATTERN.findall(seg)) * per_1000
+    # 单句成段率（爽文节拍 · 崩塌时先垮 · 风格信号）
+    single = sum(1 for p in paras if len(split_sentences(p)) <= 1)
+    single_ratio = single / len(paras) if paras else 0.0
+    # 功能词密度（虚词指纹 · 去题材核心）
+    fw_vec = [seg.count(w) * per_1000 for w in FUNCTION_WORDS]
+    return [
+        s_stats["mean"],          # 句均长
+        s_stats["std"],           # 句长波动（节奏起伏）
+        comma_d,                  # 逗号密度（断句节奏）
+        single_ratio * 100.0,     # 单句成段率（放大到与上面同量级）
+        *fw_vec,                  # 15 维虚词指纹
+    ]
+
+
+def _l2_dist(a: list[float], b: list[float]) -> float:
+    """两个等长向量的欧氏距离（纯 stdlib · 不依赖 numpy · 选片用）。"""
+    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
+
+def _candidate_segments(text: str, min_len: int = 200, max_len: int = 500) -> list[str]:
+    """把文本切成 ~min_len-max_len CJK 的候选片段（复用 _sample_paragraphs 的合并/截断逻辑，
+    但**返回全部候选**不抽样——交给代表性选片决定选哪些）。"""
+    paras = split_paragraphs(text)
+    chunks: list[str] = []
+    buf = ""
+    for p in paras:
+        buf += p + "\n"
+        if count_chinese(buf) >= min_len:
+            chunks.append(buf.strip())
+            buf = ""
+    if buf.strip() and count_chinese(buf) >= min_len // 2:
+        chunks.append(buf.strip())
+
+    trimmed: list[str] = []
+    for c in chunks:
+        if count_chinese(c) > max_len:
+            idx, cnt = 0, 0
+            for idx, ch in enumerate(c):
+                if re.match(r"[一-鿿]", ch):
+                    cnt += 1
+                if cnt >= max_len:
+                    break
+            c = c[:idx + 1] + "……"
+        if count_chinese(c) >= min_len // 2:
+            trimmed.append(c)
+    return trimmed
+
+
+def _select_representative_samples(text: str, n: int = 3,
+                                   min_len: int = 200, max_len: int = 500) -> list[str]:
+    """按**风格代表性**选 n 个参考片段（取代旧 _sample_paragraphs 的纯 random.sample）。
+
+    算法（确定性 · 可复现 · 不看与 gen 的内容相似）：
+      1. 切全部候选段 → 算每段去题材风格特征向量（_segment_style_feature）。
+      2. 标准化各维度（除以该维标准差）让句长/虚词等不同量纲可比。
+      3. 选第 1 个 = 最贴近**语料风格质心**的段（最具代表性的「典型句式」）。
+      4. 后续每个 = 离已选集合**最远**的段（k-center 贪心 · 最大化句式谱系覆盖：
+         长句段、短句连发段、对话节奏段都被覆盖到，而非全选同一种节奏）。
+    质心打底 + 最远点扩展 = 既「典型」又「全谱系」，比随机选更代表作者风格分布。
+    候选不足 n 个 → 全返回（按原文出现序，保可读）。"""
+    cands = _candidate_segments(text, min_len, max_len)
+    if not cands:
+        return [text[:1500]] if text else []
+    if len(cands) <= n:
+        return cands
+
+    feats = [_segment_style_feature(c) for c in cands]
+    dim = len(feats[0])
+    # 各维标准差（标准化 · 避免句长大数值主导欧氏距离）
+    stds: list[float] = []
+    for d in range(dim):
+        col = [f[d] for f in feats]
+        m = sum(col) / len(col)
+        var = sum((x - m) ** 2 for x in col) / len(col)
+        stds.append(math.sqrt(var) or 1.0)
+    norm = [[v / stds[d] for d, v in enumerate(f)] for f in feats]
+
+    # 语料风格质心
+    centroid = [sum(f[d] for f in norm) / len(norm) for d in range(dim)]
+
+    # 第 1 个 = 最贴质心（最典型）
+    first = min(range(len(norm)), key=lambda i: _l2_dist(norm[i], centroid))
+    selected = [first]
+    # k-center 贪心：每次选离已选集合最远的（最大化句式谱系覆盖）
+    while len(selected) < n:
+        best_i, best_d = -1, -1.0
+        for i in range(len(norm)):
+            if i in selected:
+                continue
+            d_min = min(_l2_dist(norm[i], norm[j]) for j in selected)
+            if d_min > best_d:
+                best_d, best_i = d_min, i
+        if best_i < 0:
+            break
+        selected.append(best_i)
+
+    # 按原文出现序返回（可读性 · 不打乱阅读顺序）
+    return [cands[i] for i in sorted(selected)]
+
+
+# LLM 评分维度（pairwise 与旧单序共用 · 单一来源避免分歧）
+_SFS_LLM_DIMS = [
+    ("叙事结构", "叙事视角、场景转换、时间线处理的一致性"),
+    ("对话风格", "角色对话的口语化程度、口癖保留、语气词使用"),
+    ("情绪节奏", "紧张/舒缓的交替节奏、段落长短的节奏感"),
+    ("角色声纹", "不同角色的语言辨识度、性格在对话中的体现"),
+    ("章首章末", "开头吸引力、结尾悬念/余韵的处理手法"),
+    ("反AI腔", "是否存在AI常见套话、机械化表达、缺少人味的句式"),
+    ("招牌技法", "原作者独特的修辞手法、比喻风格、描写偏好"),
+    ("信息密度", "每段传递的信息量、描写与叙事的比例平衡"),
+]
+
+
+def generate_pairwise_llm_prompt(ref_text: str, gen_text: str,
+                                 n_samples: int = 3) -> str:
+    """生成**消偏** LLM 评分 prompt：pairwise（复刻稿 vs 作者原文片段）+ **交换呈现顺序双跑**。
+
+    消两类偏（任务根因）：
+      ① 顺序偏置：同一对样本两种呈现顺序（A=原文先/复刻后，B=复刻先/原文后）各打一次分，
+         prompt 显式要求两份打分 → average_pairwise_scores 取均值抵消「谁先谁占优」。
+      ② 选片偏置：参考片段按**风格代表性**（_select_representative_samples · 质心+句式覆盖）
+         选，不按与 gen 的内容相似选——避免内容近的片段把模型带去「抄内容」而非「学文风」。
+
+    输出 JSON 要求两个键 order_A / order_B（各 8 维 1-10），由 average_pairwise_scores 合并。"""
+    ref_samples = _select_representative_samples(ref_text, n_samples)
+    gen_samples = _select_representative_samples(gen_text, n_samples)
+
+    def _render_block(title: str, samples: list[str], label: str) -> list[str]:
+        out = [f"## {title}", ""]
+        for i, s in enumerate(samples, 1):
+            out += [f"### {label} {i}", s, ""]
+        return out
+
+    L = ["# 风格保真度 LLM 评分（pairwise 消偏 · 顺序双跑）", "",
+         "下面给出**作者原文片段**与**AI 复刻片段**。请做 pairwise 评分：判断 AI 复刻在多大",
+         "程度上还原了作者的**写作风格**（句式节奏 / 用词 / 语气 / 技法），不是比内容是否相同。", "",
+         "⚠️ 为消除呈现顺序对判断的偏置，请按**两种顺序各独立评分一次**，最后系统会取均值：", ""]
+
+    # —— Order A：作者原文先，AI 复刻后 ——
+    L += ["━━━━━━━━━━ 评分轮 A（先看作者原文，再看 AI 复刻）━━━━━━━━━━", ""]
+    L += _render_block("作者原文片段（轮 A）", ref_samples, "原文段落")
+    L += _render_block("AI 复刻片段（轮 A）", gen_samples, "复刻段落")
+
+    # —— Order B：AI 复刻先，作者原文后（交换顺序）——
+    L += ["", "━━━━━━━━━━ 评分轮 B（先看 AI 复刻，再看作者原文 · 顺序交换）━━━━━━━━━━", ""]
+    L += _render_block("AI 复刻片段（轮 B）", gen_samples, "复刻段落")
+    L += _render_block("作者原文片段（轮 B）", ref_samples, "原文段落")
+
+    L += ["## 评分维度（每维度 1-10 分 · 两轮都要打）", ""]
+    grades = [("9-10", "优秀", "高度一致，几乎无法区分"),
+              ("7-8", "良好", "基本匹配，偶有偏差但不出戏"),
+              ("5-6", "一般", "有明显差异，能感受到不是原作者"),
+              ("3-4", "较差", "严重偏离，AI味明显"),
+              ("1-2", "极差", "完全不匹配，像另一个作者")]
+    for name, desc in _SFS_LLM_DIMS:
+        L += [f"### {name}", f"说明：{desc}",
+              "| 分数 | 等级 | 描述 |", "|------|------|------|"]
+        for sc, lv, ds in grades:
+            L.append(f"| {sc} | {lv} | {name}{ds} |")
+        L.append("")
+
+    L += ["## 输出格式", "请严格按以下 JSON 输出**两轮**评分（order_A 与 order_B）：",
+          "```json", "{", '  "order_A": {']
+    for i, (name, _) in enumerate(_SFS_LLM_DIMS):
+        comma = "," if i < len(_SFS_LLM_DIMS) - 1 else ""
+        L.append(f'    "{name}": {{"score": <1-10>, "reason": "<一句话理由>"}}{comma}')
+    L += ["  },", '  "order_B": {']
+    for i, (name, _) in enumerate(_SFS_LLM_DIMS):
+        comma = "," if i < len(_SFS_LLM_DIMS) - 1 else ""
+        L.append(f'    "{name}": {{"score": <1-10>, "reason": "<一句话理由>"}}{comma}')
+    L += ["  }", "}", "```", "",
+          "注意：order_A 与 order_B 是同一对样本、仅呈现顺序不同，分数应接近；",
+          "系统会对两轮取均值作为最终风格保真分，以抵消呈现顺序带来的偏置。"]
+    return "\n".join(L)
+
+
+def average_pairwise_scores(order_a: dict, order_b: dict) -> dict:
+    """合并 pairwise 双序评分：逐维取两轮均值消顺序偏置，并报告顺序偏置幅度（advisory）。
+
+    入参为 LLM 返回的 order_A / order_B（{维度: {"score": x, "reason": ...}} 或 {维度: x}）。
+    返回 {dimensions: {维度: 均值}, mean_score, order_bias: {per_dim, max_abs, mean_abs}}。
+    order_bias 只是**可读诊断**（顺序偏置有多大）· 不改任何 hard 判决（北极星⑤ advisory）。"""
+    def _score(v):
+        if isinstance(v, dict):
+            return float(v.get("score", 0))
+        if isinstance(v, (int, float)):
+            return float(v)
+        return 0.0
+
+    dims = [n for n, _ in _SFS_LLM_DIMS]
+    keys = dims if all(d in order_a and d in order_b for d in dims) \
+        else sorted(set(order_a) & set(order_b))
+
+    merged: dict[str, float] = {}
+    per_dim_bias: dict[str, float] = {}
+    for k in keys:
+        a, b = _score(order_a.get(k)), _score(order_b.get(k))
+        merged[k] = round((a + b) / 2.0, 4)
+        per_dim_bias[k] = round(abs(a - b), 4)
+
+    mean_score = round(sum(merged.values()) / len(merged), 4) if merged else 0.0
+    bias_vals = list(per_dim_bias.values())
+    return {
+        "dimensions": merged,
+        "mean_score": mean_score,
+        "order_bias": {
+            "per_dim": per_dim_bias,
+            "max_abs": round(max(bias_vals), 4) if bias_vals else 0.0,
+            "mean_abs": round(sum(bias_vals) / len(bias_vals), 4) if bias_vals else 0.0,
+        },
+        "note": "已对两呈现顺序取均值消偏 · order_bias 仅诊断 advisory · 不改 sfs_quick/grade 判决",
     }
 
 

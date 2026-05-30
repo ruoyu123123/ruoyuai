@@ -29,6 +29,7 @@ v3 改动（2026-05-28 全系统 cluster 化方案 · memory feedback_full_syste
 from __future__ import annotations
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -148,6 +149,87 @@ def clean_output(text: str) -> str:
     return text.strip()
 
 
+# ============ L3b · CoT-first 自解释（CoTeX + Register Analysis · 2026-05-31）============
+#
+# 根因：复刻是「得分→盲改 skill→再测」乏力循环 · LLM 直接写长文易段长崩塌（cluster 级 D 级）。
+# 升级（CoTeX 自解释 + Register Analysis）：让 gen-model **先逐条点名「本段命中 skill 哪几条
+# 量化坐标（句长/段长/单句独行/标点密度/虚词）」再写正文** · 用受控语言学坐标
+# （不是「冷峻/华丽」感性词 · 后者改意泄漏内容）。CoTeX 实证 1K 样本 BLEU 68 vs 55。
+#
+# 北极星纪律：只改 prompt 构造（确定性可测）· 不改「复刻走 gen-model」的事实 ·
+# 保留旧 prompt 路径对照（env L3B_COT_FIRST_MODE=off）· CoT 是思考脚手架，落盘正文不含分析段
+# （strip 掉 · 但 meta.json 留 CoT 痕迹 · 不黑箱）。
+
+# CoT 段与正文段的分隔标记（既给 LLM 看也供 strip_cot_analysis 解析）
+COT_ANALYSIS_MARKER = "[本段量化坐标分析]"
+COT_BODY_MARKER = "[正文]"
+
+# 受控语言学坐标自解释指令（Register Analysis · 全部可量化坐标 · 严禁感性词）
+COT_FIRST_DIRECTIVE = f"""# 🔬 先分析后写（CoT-first 自解释 · 必须两段式输出）
+
+在写正文**之前**，先输出一段「量化坐标分析」，逐条点名本段将命中 skill 的哪几条**受控语言学坐标**。
+只准用可量化坐标，**严禁**用「冷峻 / 华丽 / 大气 / 有张力」等感性形容词（感性词会泄漏改意、无法核对）。
+
+## 第一段：{COT_ANALYSIS_MARKER}
+
+逐条写明本段的目标量化坐标（引用 skill 中的具体数值 / 区间）：
+
+1. **句长**：目标 mean ≈ ?（skill 区间）· std 是否高方差（长短句交错）
+2. **段长**：平均段长 ? 字 · 单段是否 ≤ 上限 · 极短段（独句成段）占比 ?%
+3. **单句独行占比**：目标 ?%（非对话段只 1 个句末结束符）
+4. **标点密度**：逗号/句号比 ?（长句加逗号节奏）· 拟声独段 ? 处 · 引号独白 ? 处
+5. **虚词/功能词节奏**：本段倚重哪些功能词做节奏（的/了/着/而/便/竟 等）· 避开哪些 AI 套话虚词
+6. **签名特征落点**：本段命中 skill「作者签名特征」哪 ≥3 条（点名 + 一句话说怎么落到本段场景）
+
+每条 1-2 行，**对准本段具体场景**（不是泛泛复述 skill）。
+
+## 第二段：{COT_BODY_MARKER}
+
+紧接着输出复刻正文，让正文**真实落到上面点名的坐标上**。
+正文段从 {COT_BODY_MARKER} 标记后开始 · 纯文本无 markdown · 无章节标题 · 无解释。
+
+⚠️ 必须严格按 {COT_ANALYSIS_MARKER} → {COT_BODY_MARKER} 两段顺序输出 · 不可只写正文跳过分析。
+"""
+
+
+def _l3b_cot_first_mode() -> str:
+    """读 env L3B_COT_FIRST_MODE 决定复刻 prompt 是否走 CoT-first 自解释。
+
+    值（大小写不敏感）：
+      · off（默认）：旧 prompt 路径——直接出正文、无自解释段。影子纪律：与其他 5 个升级件
+        (QUANTILE_BAND/L3A_BURSTINESS/L1B_SIMILARITY/PID_THRESHOLD/SFS_LLM_DEBIAS) 一致，
+        默认不改复刻行为；CoT-first 待 gen-model 实跑闭环验证 token 预算(8000 ceiling 下
+        分析段与正文共享预算·须确认不挤占截断)后再放量。
+      · active：CoT-first 自解释升级开启——prompt 含「先分析后写」两段式指令，
+        gen-model 先输出受控量化坐标分析再写正文；落盘正文 strip 掉分析段、meta 留 CoT 痕迹。
+      · on/1/true/cot → 归一为 active；空/非法值 → off（保守默认·不静默开启）。
+
+    只改 prompt 构造（确定性可测）· 不改复刻走 gen-model 的事实。
+    """
+    v = (os.environ.get("L3B_COT_FIRST_MODE") or "").strip().lower()
+    if v in ("active", "on", "1", "true", "cot"):
+        return "active"
+    return "off"  # 默认 off（影子纪律·空/非法值保守退旧路径·CoT-first 待实跑验证后放量）
+
+
+def strip_cot_analysis(text: str) -> tuple[str, str]:
+    """从 gen-model 回复里剥离 CoT 量化坐标分析段，只保留正文供落盘/SFS。
+
+    返回 (正文, cot_analysis_trace)：
+      · 命中 COT_BODY_MARKER → 正文 = marker 之后；cot = marker 之前（含分析段，留痕）。
+      · 未命中 marker（旧 prompt 路径 / 模型没遵守两段式）→ 正文 = 原文，cot = ""（不误删）。
+
+    设计：CoT 是思考脚手架（CoTeX），不进 SFS 评分 / 不污染复刻产出，但 meta.json 留痕不黑箱。
+    宽容解析（防模型把 marker 写成全角括号 / 加序号）：按出现的最后一个 body marker 切分。
+    """
+    idx = text.rfind(COT_BODY_MARKER)
+    if idx < 0:
+        return text, ""
+    cot = text[:idx].strip()
+    body = text[idx + len(COT_BODY_MARKER):].lstrip(" \t\r\n:：")
+    return body, cot
+
+
 # ============ Prompt 模板 ============
 
 REPLICATE_SYSTEM_PROMPT = """你是一位极擅长复刻特定作者风格的写作引擎。
@@ -173,6 +255,36 @@ REPLICATE_SYSTEM_PROMPT = """你是一位极擅长复刻特定作者风格的写
 """
 
 
+# L3b CoT-first 变体 system prompt：把第 6 条「直接输出正文」改为「先分析后写」两段式。
+# 其余硬约束（量化基线 / 反模式 / 签名特征 / 不照抄 / 不写标题）原样保留——只追加自解释纪律。
+REPLICATE_SYSTEM_PROMPT_COT = """你是一位极擅长复刻特定作者风格的写作引擎。
+
+主代理（Claude）已蒸馏了源作者的完整 skill（含 48 维度量化基线 / 反模式 / 黄金段落 / 衔接套路）。
+你的任务：严格按 skill 复刻指定颗粒度的文本，用于 SFS（Style Fingerprint Similarity）评分对照。
+
+# 复刻硬约束
+
+1. **量化基线必须命中**（句长 / 段长 / 单句独行占比 / TTR / 标点密度 等）
+2. **反模式必须 0 命中**（禁用词 / 禁用过渡 / 禁用对话标签 一律不出现）
+3. **签名特征至少命中 3 条**（skill 第 1 节"作者签名特征"中任选 3 条以上落到文中）
+4. **黄金段落示例只参考语感，不照抄**（不复刻原文情节 / 角色名 / 专有设定）
+5. **不写章节标题**，正文段不加 markdown 标记
+
+# 🔬 CoT-first 自解释（本次复刻强制两段式 · 不是直接出正文）
+
+6. **先分析后写**：先逐条点名本段命中 skill 哪几条**受控量化坐标**（句长 / 段长 / 单句独行 / 标点密度 / 虚词），
+   再写正文。坐标必须可量化，**严禁**「冷峻 / 华丽」等感性词（感性词改意泄漏内容）。
+   两段式输出格式详见 user prompt「先分析后写」节，按 [本段量化坐标分析] → [正文] 顺序输出。
+
+# 创作要求
+
+- 自创角色（不复刻 skill 中提及的任何原文角色名）
+- 自创场景（不复刻原文情节）
+- 必须有明确的开头 → 中段 → 收笔三拍
+- 字数严格按要求（±10% 容忍）
+"""
+
+
 def build_cluster_subcall_prompt(
     style_skill_md: str,
     ref_text: str,
@@ -182,8 +294,14 @@ def build_cluster_subcall_prompt(
     prev_tail: str,
     chapters_in_this_call: int,
     target_words: int,
+    cot_first: bool = False,
 ) -> str:
-    """cluster 模式的 sub-call prompt（每段都要看见 skill + 上一段尾部 anchor）"""
+    """cluster 模式的 sub-call prompt（每段都要看见 skill + 上一段尾部 anchor）。
+
+    cot_first=True（L3b · env L3B_COT_FIRST_MODE=active 显式开启）：输出节换成「先分析后写」
+    两段式（CoT-first 自解释 + 受控量化坐标）· 直击 cluster 级段长崩塌。
+    cot_first=False（=off · 默认）：旧的「直接输出正文」节，零回归（影子纪律·待实跑验证后放量）。
+    """
     parts = ["# 源作者风格 skill（必须严格遵循）\n\n" + style_skill_md]
     if ref_text:
         parts.append("# 参考原文（仅作语感参考 · 不照抄情节/角色/设定）\n\n" + ref_text[:4000])
@@ -212,7 +330,10 @@ def build_cluster_subcall_prompt(
         "- 不分章节标题（splitter 端会处理）\n"
         "- 段内可有自然空行做场景过渡，但不要插入「***」分隔符"
     )
-    parts.append("# 输出\n\n直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。")
+    if cot_first:
+        parts.append(COT_FIRST_DIRECTIVE)
+    else:
+        parts.append("# 输出\n\n直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。")
     return "\n\n".join(parts)
 
 
@@ -430,6 +551,9 @@ def main():
     # 通用
     parser.add_argument("--profile",
                         help="覆盖 active profile（默认用 .env GEN_MODEL_ACTIVE）")
+    parser.add_argument("--cot-first", choices=["active", "off"], default=None,
+                        help="[L3b] CoT-first 自解释复刻 prompt：active=先分析后写两段式，"
+                             "off=旧直接出正文路径（默认）。缺省读 env L3B_COT_FIRST_MODE（默认 off）。")
     args = parser.parse_args()
 
     style_skill = Path(args.style_skill)
@@ -438,6 +562,14 @@ def main():
         sys.exit(2)
 
     style_skill_md = read_text(style_skill, limit=40000)
+
+    # L3b · CoT-first 模式解析：CLI --cot-first 优先，缺省读 env L3B_COT_FIRST_MODE（默认 off·影子纪律）
+    cot_mode = args.cot_first if args.cot_first is not None else _l3b_cot_first_mode()
+    cot_first = (cot_mode == "active")
+    system_prompt = REPLICATE_SYSTEM_PROMPT_COT if cot_first else REPLICATE_SYSTEM_PROMPT
+    print(f"[L3b] CoT-first 自解释复刻 = {cot_mode}"
+          f"（{'先分析后写两段式 · 受控量化坐标' if cot_first else '旧直接出正文路径 · 对照'}）",
+          file=sys.stderr)
 
     loader = GenModelLoader()
     if args.profile:
@@ -495,12 +627,15 @@ def main():
             prev_tail=prev_tail,
             chapters_in_this_call=chapters_in_call,
             target_words=target_words_this,
+            cot_first=cot_first,
         )
+        # CoT-first 占额外 token（量化坐标分析段）→ 多留 buffer 防正文被截断
         # 单 call max_tokens 估算：CJK 字按 1.5 tokens/字算（含标点），加 buffer
-        max_tokens_this = min(8000, max(4000, int(target_words_this * 2.0)))
+        token_factor = 2.6 if cot_first else 2.0
+        max_tokens_this = min(8000, max(4000, int(target_words_this * token_factor)))
         try:
             reply, used_profile, elapsed = call_gen_model(
-                loader, REPLICATE_SYSTEM_PROMPT, user,
+                loader, system_prompt, user,
                 default_max_tokens=max_tokens_this,
                 tag=f"cluster {i}/{len(subcall_plan)}"
             )
@@ -514,16 +649,29 @@ def main():
             sys.exit(3)
 
         clean_piece = clean_output(reply)
-        full_text_parts.append(clean_piece)
-        prev_tail = clean_piece
+        # L3b：剥离 CoT 量化坐标分析段——只把正文落盘/送 SFS，分析段留 meta 痕迹（不黑箱）。
+        body_piece, cot_trace = strip_cot_analysis(clean_piece)
+        if cot_first:
+            if cot_trace:
+                print(f"[L3b · cluster {i}] CoT 分析段 {cjk_count(cot_trace)} CJK 已剥离落痕 · "
+                      f"正文 {cjk_count(body_piece)} CJK", file=sys.stderr)
+            else:
+                print(f"[L3b · cluster {i}] WARN 模型未按两段式输出（无 [正文] 标记）· "
+                      f"全文当正文处理", file=sys.stderr)
+        full_text_parts.append(body_piece)
+        prev_tail = body_piece
         total_elapsed += elapsed
         subcall_metas.append({
             "subcall_index": i,
             "chapters_in_call": chapters_in_call,
             "target_words": target_words_this,
-            "actual_cjk_chars": cjk_count(clean_piece),
+            "actual_cjk_chars": cjk_count(body_piece),
             "profile_used": used_profile.name,
             "elapsed_seconds": round(elapsed, 1),
+            # L3b CoT 痕迹：分析段全文（供复盘核对模型是否真按受控坐标自解释）+ 命中标志
+            "cot_first": cot_first,
+            "cot_analysis_present": bool(cot_trace),
+            "cot_analysis_trace": cot_trace if cot_trace else None,
         })
 
     full_text = "\n\n".join(full_text_parts)
@@ -546,7 +694,11 @@ def main():
         "total_target_words": chapters_count * words_per_chapter,
         "total_actual_cjk_chars": cjk_count(full_text),
         "total_elapsed_seconds": round(total_elapsed, 1),
-        "produced_by": "distill_replicate.py v3 · cluster mode · A' 半 cluster timeout 防御",  # 2026-05-29 修：v2→v3 对齐文件头
+        # L3b CoT-first 自解释痕迹（顶层 · 复盘可见用了哪个 prompt 路径 + 几段真自解释）
+        "cot_first_mode": cot_mode,
+        "cot_first_enabled": cot_first,
+        "cot_analysis_subcalls": sum(1 for m in subcall_metas if m.get("cot_analysis_present")),
+        "produced_by": "distill_replicate.py v3 · cluster mode · A' 半 cluster timeout 防御 · L3b CoT-first 自解释",
     }
     output_path.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')

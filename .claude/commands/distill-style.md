@@ -2150,9 +2150,31 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 \
    - 收敛状态：N/2 轮无新差距
 ```
 
+### 🧱 skill 双层结构 + 数值契约表头部（L3c · 2026-05-31 · 强制）
+
+**根因**：skill 是长文描述，长文鲁棒性弱（ZeroStylus 实证纯句级方法对长文仅 43% 胜率），**段级结构才是长文鲁棒性来源**。所以每次生成/升级 skill 都必须满足两条结构契约：
+
+**(a) 头部塞作者数值契约表**（作者档第一权威的强化 · 顾问非法官）：
+虚词 Top-N / 句长均值+方差 / 单句独行占比 / 段长分位数 [p5,p50,p95] / 标点分布 / 对话占比 / 章字数 —— **这些 L1a 已在 `style_analyzer.py` 算出并落进 `作者风格_FINAL.json` 的 `quantitative` 块，不要手敲数字**。用确定性脚本注入：
+
+```bash
+# 幂等注入「数值契约表 + 句级/段级双层 scaffold」到 skill 头部（front-matter 之后）
+python core/scripts/skill_contract_table.py \
+  --style "workspace/styles/<书名>/作者风格_FINAL.json" \
+  --skill "workspace/styles/<书名>/skill_v<N+1>.md" \
+  --inject
+# 重跑只替换块内（哨兵 L3C_CONTRACT_BEGIN/END · 不堆叠）· 缺字段标「未蒸出」不编造
+```
+
+**(b) skill 正文显式分两层**（脚本注入的是头部 scaffold，正文细化由主代理补）：
+- **句级层**：句式节奏 / 口癖（虚词指纹）/ 禁用词
+- **段级层**：段落组织规律 / cliffhanger 落点（章末类型分布）/ POV 切换习惯
+
+数值契约表是**写作对齐参照（顾问）不是硬门禁**——审核层各 scanner 仍按 advisory/hard_gate 裁决（北极星⑤ 不干涉模型判断）。脚本 schema 容忍两套 key（蛊真人 `chapter_chars`/`dialogue_ratio_pct` 与惊悚乐园 `chapter_words`/`dialogue_ratio` 分数都吃）。
+
 ### 执行（主代理直接操作 Edit/Write）
 
-主代理读对比报告 → 生成 skill v{N+1} + 追加 lessons + 写 distillation_log → commit。
+主代理读对比报告 → 生成 skill v{N+1}（含上面 L3c 双层结构 + 跑 `skill_contract_table.py --inject` 注入数值契约表头部）→ 追加 lessons + 写 distillation_log → commit。
 
 ### 阶段 4 完成标记（plan-step 5）
 
@@ -2222,6 +2244,9 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 6 --skip-output
   1. 同步 skill.md — 确保 skill.md 版本号与 JSON version.current 一致
   2. 最终校验 — 对最后一轮复刻样本跑 `python core/scripts/validate_style.py --strict`
   3. 基线锁定 — 对原文代表章节跑 `python core/scripts/style_analyzer.py` 生成参考基线
+  4. 数值契约表头部（L3c）— 对 skill_FINAL.md 跑 `python core/scripts/skill_contract_table.py
+     --style 作者风格_FINAL.json --skill skill_FINAL.md --inject`，确保终版 skill 头部
+     带数值契约表 + 句级/段级双层 scaffold（长文鲁棒性骨架 · 幂等可重跑）
 
 终版风格档案：
   · 项目内：_数据库/作者风格.json

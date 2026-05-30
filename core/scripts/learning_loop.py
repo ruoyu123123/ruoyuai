@@ -77,6 +77,35 @@ CONSECUTIVE_ESCALATE = 2
 # v19 豁免阈值：同一 advisory code 被豁免 N 次 -> 产出工具校准建议（V19_PLAN 2.5 建议 N=3）
 WAIVER_CALIBRATION_THRESHOLD = 3
 
+# ── L2-1（2026-05-30）：把 adjust_threshold 文本建议升级成【量化幅度】供 PID 反馈消费 ──
+# 反复豁免的 advisory code → 映射到被控的 4 个连续阈值键（与 pid_threshold_tuner._CONTROLLED_KEYS
+# 严格一致·绝不含任何 HARD_GATE_CODE）。其余 code 不产量化幅度（text 建议照旧）。
+# 量化幅度 = 保守相对放松量（随豁免次数温和增长·钳上限），作为 PID 期望误差方向的【前置提示】，
+# 不直接改阈值（真正改阈值仍由 PID 控制器闭环·此处只给「该往放松方向走多少」的量化锚）。
+_CODE_TO_CONTROLLED_KEY = {
+    "STYLE_段落均长":   "para_mean_len",
+    "STYLE_对话占比":   "dialogue_ratio",
+    "STYLE_长段计数":   "long_para_per_chapter",
+    "STYLE_配额词":     "quota_per_word",
+    "STYLE_QUOTA_WORD": "quota_per_word",
+    "STYLE_LONG_PARA":  "long_para_per_chapter",
+    "STYLE_PARA_MEAN":  "para_mean_len",
+    "STYLE_DIALOGUE":   "dialogue_ratio",
+}
+_QUANT_RELAX_PER_WAIVER = 0.02   # 每次豁免对应 2% 相对放松提示
+_QUANT_RELAX_CAP = 0.10          # 量化幅度上限 10%（保守·防 windup）
+
+
+def _quantized_delta_hint(code: str, waived_count: int) -> dict | None:
+    """把反复豁免次数转成给 PID 的【量化放松幅度提示】（仅 4 被控键·硬拒其余）。
+    返回 {controlled_key, relax_frac, basis} 或 None（非被控键 → 不量化）。"""
+    key = _CODE_TO_CONTROLLED_KEY.get(code)
+    if key is None:
+        return None
+    relax = min(_QUANT_RELAX_CAP, max(0, waived_count) * _QUANT_RELAX_PER_WAIVER)
+    return {"controlled_key": key, "relax_frac": round(relax, 4),
+            "basis": f"waived×{waived_count}"}
+
 EXPERIENCE_FILE = "写作经验.json"
 AUDIT_DIR = ".audit"
 
@@ -437,6 +466,12 @@ def _build_calibration_suggestions(exp: dict, only_codes=None) -> list:
             "confidence": confidence,
             "updated_at": _now(),
         }
+        # L2-1：adjust_threshold 类且命中被控 4 键 → 附【量化幅度】供 PID 反馈消费
+        # （text 建议照旧·此为新增字段·零回归）。add_scene_adaptation 类不量化（属场景适配范畴）。
+        if stype == "adjust_threshold":
+            qd = _quantized_delta_hint(code, rec["count"])
+            if qd is not None:
+                entry["quantized_delta"] = qd
         # 同 code 覆盖刷新（重跑同章不产生重复）
         suggestions[:] = [s for s in suggestions if s.get("code") != code]
         suggestions.append(entry)
