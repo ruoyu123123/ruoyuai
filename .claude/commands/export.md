@@ -21,6 +21,24 @@ $ARGUMENTS
 
 ## 执行流程
 
+0. **导出前收尾检测（advisory · 不阻断）** — 先扫残留 pending_tail 孤儿 + 字数对账：
+
+   ```bash
+   python core/scripts/finalize_book.py "<项目路径>"
+   ```
+
+   背景（修 #3/#4 静默丢失）：v27 splitter 末章 < 3000 CJK 时把末段退回
+   `章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt`，靠下一个 cluster 写完后 prepend 拼接。
+   但**全书最后一个 cluster 无后继**（或后继漏拼）→ 它的 pending_tail 永远没人消费，而 export 只
+   Glob `第*章*.txt`，扫不到 draft 目录里的 pending_tail → 这段正文（最多 ~3000 CJK）会被**静默丢弃**。
+
+   - exit 始终 0（**顾问制 · 绝不阻断导出**）。
+   - 若报告检出孤儿 / 静默丢失下界 > 阈值 → **先告知用户**：「检测到 cluster_NNN 有 X 字未拼接的尾段
+     （路径 …pending_tail.txt），导出会漏掉这段，要不要先拼上？」并给两个 opt-in 选项：
+       - `python core/scripts/finalize_book.py "<项目路径>" --flush append` —— 把尾段并到该 cluster 已切末章尾部（最保守）
+       - `python core/scripts/finalize_book.py "<项目路径>" --flush split` —— 把尾段强切成该 cluster 新末章
+   - 用户不处理也可继续导出（advisory 不强制），但报告里要如实标注「本次导出未含 cluster_NNN 尾段 X 字」。
+
 1. 读取 `_数据库/进度.json` 获取已完成章节数
 2. 按顺序 Glob 所有 `第*章*.txt` 文件
 3. 读取每个文件，只取正文部分（去掉 `---CHANGES---` 之后的内容）
@@ -98,3 +116,4 @@ pandoc exports/书名_全文.md -o exports/书名.epub --metadata title="书名"
 - 总章节数
 - 总字数
 - 导出文件路径
+- **收尾检测结果**（step 0 的 finalize_book 输出）：残留 pending_tail 孤儿数 + 各自字数；若有未拼接孤儿，明确标注「本次导出未含 cluster_NNN 尾段 X 字」（advisory，不阻断）
