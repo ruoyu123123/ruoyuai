@@ -204,26 +204,44 @@ def apply_changes(root: Path, ch: int) -> int:
                                         "pledges": [], "secrets": []})
     # 2026-05-30 北极星复审 A-1：writer（gen_writer prompt 自查项）实产 foreshadowing_planted/paid，
     # 但本函数原只读 foreshadowing_actions（结构化）→ 伏笔表 resolved/status 从不更新（数据流断裂）。
-    # 桥接：无 foreshadowing_actions 时从 planted/paid 构造；元素须为带 id 的 dict 才能精确更新伏笔表，
+    # 桥接：从 planted/paid 构造 action；元素须为带 id 的 dict 才能精确更新伏笔表，
     # 纯描述串无 id → 记 warning（可见而非静默断裂）。
+    #
+    # 2026-05-30 [#6] 门控短路修复：原 `if not _fs_actions:` 让桥接只在 foreshadowing_actions
+    # 为空时执行。真实项目 cluster_005 同时有 foreshadowing_actions（其他项）+ foreshadowing_paid →
+    # 桥接被整体短路 → writer 明确申报兑现的伏笔（foreshadowing_paid）永不标 resolved，伏笔表停在
+    # planted，下游 SECRET_NOT_REVEALED / FORESHADOWING_NOT_PAID 误判。改为**合并**：既处理显式
+    # foreshadowing_actions，也始终把 planted/paid 桥接进 resolve，按 (category, type, id) 去重
+    # （显式 action 已覆盖同一 fs → 不重复构造）。
     _fs_actions = list(changes.get("foreshadowing_actions") or [])
-    if not _fs_actions:
-        for _p in changes.get("foreshadowing_planted", []) or []:
-            if isinstance(_p, dict) and _p.get("id"):
+    _seen = {(a.get("category"), a.get("type"), a.get("id"))
+             for a in _fs_actions if isinstance(a, dict)}
+    _bridged_with_id = False  # planted/paid 里出现过带 id 的可桥接项
+    for _p in changes.get("foreshadowing_planted", []) or []:
+        if isinstance(_p, dict) and _p.get("id"):
+            _bridged_with_id = True
+            _key = (_p.get("category", "promise"), "setup", _p["id"])
+            if _key not in _seen:
+                _seen.add(_key)
                 _fs_actions.append({"category": _p.get("category", "promise"), "type": "setup",
                                     "id": _p["id"], "tier": _p.get("tier", 3),
                                     "description": _p.get("desc") or _p.get("description", ""),
                                     "due_by_cluster": _p.get("due_by_cluster")})
-        for _p in changes.get("foreshadowing_paid", []) or []:
-            if isinstance(_p, dict) and _p.get("id"):
+    for _p in changes.get("foreshadowing_paid", []) or []:
+        if isinstance(_p, dict) and _p.get("id"):
+            _bridged_with_id = True
+            _key = (_p.get("category", "promise"), "payoff", _p["id"])
+            if _key not in _seen:
+                _seen.add(_key)
                 _fs_actions.append({"category": _p.get("category", "promise"), "type": "payoff",
                                     "id": _p["id"],
                                     "description": _p.get("desc") or _p.get("description", "")})
-        _raw = (changes.get("foreshadowing_planted") or []) + (changes.get("foreshadowing_paid") or [])
-        if _raw and not _fs_actions:
-            summary["warnings"].append(
-                f"foreshadowing_planted/paid 共 {len(_raw)} 条为无 id 描述串 → 无法更新伏笔表 resolved/status；"
-                "需 writer 报带 fs_id 的项（gen_writer prompt 已要求引用 cluster_brief fs_id）")
+    # planted/paid 全是无 id 描述串（既无显式 actions 也无可桥接 id）→ 记 warning（可见非静默断裂）
+    _raw = (changes.get("foreshadowing_planted") or []) + (changes.get("foreshadowing_paid") or [])
+    if _raw and not _bridged_with_id and not changes.get("foreshadowing_actions"):
+        summary["warnings"].append(
+            f"foreshadowing_planted/paid 共 {len(_raw)} 条为无 id 描述串 → 无法更新伏笔表 resolved/status；"
+            "需 writer 报带 fs_id 的项（gen_writer prompt 已要求引用 cluster_brief fs_id）")
     for act in _fs_actions:
         cat = act.get("category")
         typ = act.get("type")

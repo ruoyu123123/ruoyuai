@@ -94,6 +94,44 @@ def _build_char_stages_from_ledger(project_root):
     }
 
 
+def _stage_at_ch(sorted_stages: list, ch: int) -> str | None:
+    """返回某章「生效中」的预设 stage —— 取最后一个 stage_ch <= ch 的 stage（step 函数）。
+    sorted_stages = [(stage_ch, stage_str), ...] 已按 ch 升序。"""
+    eff = None
+    for sch, st in sorted_stages:
+        if sch <= ch:
+            eff = st
+        else:
+            break
+    return eff
+
+
+def _read_declared_mckee_beats(project_root: Path, max_ch: int) -> dict:
+    """读各章 _changes.json 里 writer 申报的 self_eval.mckee_truby_alignment。
+    返回 {ch: {desire_pursued_this_ch, need_glimpsed_this_ch, ghost_triggered, moral_argument_advanced}}。
+
+    #5 孤儿契约修复：此前弧光仅按预设 stages_by_chapter 推进（character_arc_update 写），
+    从不读 writer 申报的实际节拍 —— 预设排期与实际写出的 McKee/Truby 节拍可能背离却无人核对。
+    本函数把 writer 申报取出供下游做 advisory 一致性核对（北极星⑤：不读 writer 申报 = 丢弃第一权威）。
+    """
+    out: dict[int, dict] = {}
+    chapters_dir = project_root / "章节"
+    if not chapters_dir.exists():
+        return out
+    hi = max(max_ch, 0) + 1
+    for ch in range(1, hi + 50):  # 兜底多扫 50 章（max_ch 可能滞后）
+        cp = chapters_dir / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
+        if not cp.exists():
+            continue
+        changes = load_json(cp, {})
+        if not isinstance(changes, dict):
+            continue
+        mck = ((changes.get("self_eval") or {}).get("mckee_truby_alignment") or {})
+        if isinstance(mck, dict) and mck:
+            out[ch] = mck
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -133,7 +171,13 @@ def main():
                           if re.match(r"第(\d+)章", d.name))
         max_written_ch = chapters[-1] if chapters else 0
 
+    # #5 孤儿契约修复：读 writer 申报的 mckee_truby 节拍（按章），供下游 advisory 核对预设 stage。
+    # 申报存于 _changes.json（磁盘），账本/磁盘模式都能读 → 两路都核对，不破坏 use_ledger 分支。
+    declared_beats = _read_declared_mckee_beats(project_root, max_written_ch)
+
     findings = []
+    # 主角预设阶序（取 stages_by_chapter 最长者 = 主弧），供 mckee 节拍 advisory 核对用
+    protagonist_stages: list = []
     for char_name, char_data in characters_iter.items():
         stages = char_data.get("stages_by_chapter", {}) or {}
         if not stages:
@@ -143,6 +187,8 @@ def main():
             [(int(c), s) for c, s in stages.items() if str(c).isdigit()],
             key=lambda x: x[0],
         )
+        if len(sorted_stages) > len(protagonist_stages):
+            protagonist_stages = sorted_stages
         if len(sorted_stages) < 2:
             continue
 
@@ -207,6 +253,43 @@ def main():
                 "last_updated_at_ch": last_updated,
                 "max_written_ch": max_written_ch,
                 "suggestion": f"{char_name} current_stage_at_ch 上次更新在 ch{last_updated}，已写到 ch{max_written_ch}（差 {max_written_ch-last_updated} 章无更新）",
+            })
+
+    # 3. BEAT_STAGE_DIVERGENCE（#5 孤儿契约修复 · 全 advisory 不硬锁）
+    # 核对 writer 申报的 McKee/Truby 深层节拍 vs 预设 Save-the-Cat stage 排期是否背离。
+    # 映射：need_glimpsed / moral_argument_advanced = 深层 need/truth 弧的节拍，按 Save-the-Cat
+    # 排期应在中后段（midpoint_revelation 及以后，order ≥ 7）才大量出现；若 writer 在仍处早期
+    # lie/lie_cracking（order ≤ 1）阶段就申报「主角已窥见 need + 道德论点已推进」→ 实际节拍跑在
+    # 预设排期前面，二者背离。
+    # 北极星⑤：预设**不是法律**，writer 申报是第一手；这里只 surface 二者差异交模型裁量（advisory），
+    # **绝不据此硬锁/倒退 stage**（北极星③软牵引）。预设缺失或 writer 未申报 → 自然不产 finding。
+    for ch, mck in sorted(declared_beats.items()):
+        if not protagonist_stages:
+            break
+        preset = _stage_at_ch(protagonist_stages, ch)
+        preset_o = stage_order(preset)
+        if preset_o < 0:
+            continue
+        need_glimpsed = bool(mck.get("need_glimpsed_this_ch"))
+        moral_advanced = bool(mck.get("moral_argument_advanced"))
+        # 深层 need/truth 弧节拍在「仍是早期 lie 区（order ≤ 1）」就被 writer 申报推进
+        if (need_glimpsed and moral_advanced) and preset_o <= ARC_STAGE_ORDER["lie_cracking"]:
+            findings.append({
+                "severity": "advisory",
+                "code": "BEAT_STAGE_DIVERGENCE",
+                "ch": ch,
+                "preset_stage": preset,
+                "declared_beats": {
+                    "need_glimpsed_this_ch": mck.get("need_glimpsed_this_ch"),
+                    "moral_argument_advanced": moral_advanced,
+                    "desire_pursued_this_ch": mck.get("desire_pursued_this_ch"),
+                    "ghost_triggered": bool(mck.get("ghost_triggered")),
+                },
+                "suggestion": (
+                    f"ch{ch} writer 申报主角已窥见 need + 道德论点已推进，但预设 Save-the-Cat 排期此章"
+                    f"仍在早期 {preset} 阶段 → 实际节拍跑在预设前面。可考虑把预设 stages_by_chapter 上调对齐"
+                    f"（或确认 writer 是有意提前埋深度，此为 advisory 仅供裁量，不硬锁/倒退 stage）"
+                ),
             })
 
     # 输出

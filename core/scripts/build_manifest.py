@@ -423,13 +423,49 @@ class DatabaseScanner:
         return hits
 
     def time_state(self) -> dict:
-        """当前时间快照 + 本章是否命中时钟事件。"""
+        """当前时间快照 + 本章是否命中时钟事件。
+
+        2026-05-30 修（孤儿 #3 · clock/timeline producer/consumer 分歧）：
+        world_clock_events 真实 schema 用 {date, event, vol[, cluster]}（见
+        城南火葬场夜班/时间线.json + db_schema_validate.py 只 require `event` ·
+        注释明写「world clock event 用 day/cluster 颗粒」）——全仓**无 producer 写
+        `ch` 字段**。旧实现按废弃的 `e.get("ch") == self.ch` 过滤 → clock_events_this_ch
+        恒空 → 时钟事件浮现机制死掉、时间线 must_read 永停 P1。
+
+        改用 cluster / date 颗粒匹配（北极星②cluster 单位 · ③涟漪/大势驱动 · ⑤顾问层
+        注入不碰 hard_gate 不干涉模型）：
+          1. cluster 颗粒：event.cluster（经 cluster_lookup.normalize_cluster_id 归一）
+             == 本章所属 cluster_id（_current_cluster_id 唯一权威反查）
+          2. date 颗粒：event.date == current_time.date（同一叙事日的世界时钟事件）
+          3. ch 颗粒：兼容仍带 `ch` 字段的旧数据（不破坏既有项目）
+        vol（卷）颗粒过粗——会把整卷每章都标命中——故意不用作 this_ch 命中。
+        """
         data = self.load("时间线", {})
-        current = data.get("current_time", {})
-        hits = [e for e in data.get("world_clock_events", [])
-                if e.get("ch") == self.ch]
+        current = data.get("current_time", {}) or {}
+        cur_date = current.get("date")
+        cur_cid = self._current_cluster_id()
+        cur_cid_norm = cluster_lookup.normalize_cluster_id(cur_cid) if cur_cid else None
+
+        hits: list[dict] = []
+        for e in data.get("world_clock_events", []) or []:
+            if not isinstance(e, dict):
+                continue
+            matched_by = None
+            ev_cluster = e.get("cluster")
+            if (cur_cid_norm and ev_cluster is not None
+                    and cluster_lookup.normalize_cluster_id(ev_cluster) == cur_cid_norm):
+                matched_by = "cluster"
+            elif cur_date and e.get("date") and e.get("date") == cur_date:
+                matched_by = "date"
+            elif e.get("ch") is not None and e.get("ch") == self.ch:
+                matched_by = "ch"
+            if matched_by:
+                hit = dict(e)
+                hit["_matched_by"] = matched_by
+                hits.append(hit)
         return {
             "current_time": current,
+            "current_cluster_id": cur_cid,
             "clock_events_this_ch": hits,
             "npc_schedules_count": len(data.get("npc_schedules", {})),
         }

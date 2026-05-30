@@ -159,12 +159,19 @@ def _write_back_progress(c: dict, new_ticks: int, max_v: int, direction: str):
 
 
 def _do_tick(clocks_data: dict, ch: int, event_type: str, event_value: str = "") -> dict:
-    """对所有活跃且匹配触发条件的 clock 执行 tick。返回触发（满格）的 clock 列表。
+    """对**显式声明触发条件（tick_on）**的 clock 执行 tick。返回触发（满格）的 clock 列表。
 
-    2026-05-30 兼容真实维度 schema：
-      · v21 有 tick_on → 按 tick_on 匹配（chapter_end / event_type:glob）
-      · 维度 schema 无 tick_on → chapter_end 默认推进 1 段（城南 ME 推进 / 诡异正计时 / 纵尸司倒计时）
-        —— 这样 cluster-save-state 每 cluster 跑 tick 时引擎不再 no-op。
+    2026-05-30 北极星③⑤回归修正（batch5 audit-r4 过度修正回退）：
+      · v21 有 tick_on → 按 tick_on 匹配推进（chapter_end / event_type:glob）。
+      · 维度 schema **无 tick_on**（城南 linked_me / 纵尸司 trigger_at_zero / 诡异 incremented_by）
+        → **不再每 chapter_end 机械推进**。这类 clock 由 ME/叙事因果驱动（涟漪效应·事件涌现），
+        引擎只 read-only surface 到 list_active/manifest 让 writer 看到真实状态，**不当章节计数驱动器**。
+        （batch5 让无 tick_on 的 clock 每章无条件 advance，把 Clock 从 advisory soft-pull 变成机械
+         剧情驱动器——3 真实项目全部 tick_on=None 即被全量 force-tick，违反北极星③事件涌现非预设 +
+         ⑤引擎顾问非驱动。此处仅修「机械推进」，保留 batch5「surface 真实状态」的正确部分。）
+
+    显式事件触发（tick_event）仍可推进 v21 clock；维度 schema 的推进交给世界演化/走向卡叙事信号
+    （目前无 changes 申报消费机制 → 维度 clock 保持不自动推进，等真实叙事信号到位再消费）。
     """
     triggered = []
     ticked = []
@@ -172,13 +179,11 @@ def _do_tick(clocks_data: dict, ch: int, event_type: str, event_value: str = "")
         if not _clock_is_active(c):
             continue
         tick_on = c.get("tick_on")
-        if tick_on:
-            if not _match_tick_on(tick_on, event_type, event_value):
-                continue
-        else:
-            # 无 tick_on 的维度 schema：只在 chapter_end 统一推进（事件级触发交给 v21 显式 clock）
-            if event_type != "chapter_end":
-                continue
+        if not tick_on:
+            # 无 tick_on：只 surface 不机械推进（北极星③⑤）——不靠章节计数触发 ME。
+            continue
+        if not _match_tick_on(tick_on, event_type, event_value):
+            continue
         old, max_v, direction = _clock_progress(c)
         delta = c.get("tick_per_event", 1)
         new = min(max_v, old + delta)

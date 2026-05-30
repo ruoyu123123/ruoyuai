@@ -126,41 +126,63 @@ def test_clock_v21_still_works():
         assert r["active_clocks"][0]["max"] == 10
 
 
-def test_clock_tick_advances_segments_schema():
-    """城南 chapter_end tick → current_segments +1（旧版 _do_tick 全跳过 no-op）。"""
+def test_clock_chapter_tick_does_not_mechanically_advance_no_tick_on():
+    """北极星③⑤回归：无 tick_on 的维度 clock（城南 linked_me）chapter_end **不机械推进**。
+    batch5 audit-r4 让无 tick_on 的 clock 每章无条件 advance，把 Clock 从 advisory soft-pull
+    变成机械剧情驱动器（3 真实项目全 tick_on=None → 全被 force-tick）。修正后：surface 但 status 不变。
+    """
     with tempfile.TemporaryDirectory() as d:
         root = _mk_clock_project(Path(d), json.loads(json.dumps(_CLOCK_城南)))
-        clock_engine.tick_chapter(root, 5)
+        # 即便 clk_lao_zheng_curse 已 12/13（差 1 满格），按章 tick 也不得机械触发
+        r = clock_engine.tick_chapter(root, 5)
+        assert r["ticked"] == []  # 无 tick_on → 不推进
+        assert r["triggered"] == []  # → 不机械触发 ME
         after = json.loads((root / "_数据库" / "时钟表.json").read_text(encoding="utf-8"))
         by_id = {c["clock_id"]: c for c in after["clocks"]}
-        assert by_id["clk_18th_face"]["current_segments"] == 1  # 0→1
-        # clk_lao_zheng_curse 12→13 满格触发
-        assert by_id["clk_lao_zheng_curse"]["current_segments"] == 13
-        assert by_id["clk_lao_zheng_curse"]["status"] == "triggered"
+        # 进度保持不变（read-only · 不按章节计数推进）
+        assert by_id["clk_18th_face"]["current_segments"] == 0
+        assert by_id["clk_lao_zheng_curse"]["current_segments"] == 12
+        # 也不写 status=triggered（差 1 满格仍不靠章节计数触发）
+        assert by_id["clk_lao_zheng_curse"].get("status") != "triggered"
+        # 但仍被 surface 给 writer（保留 batch5 修 no-op 的正确部分）
+        la = clock_engine.list_active(root, 5)
+        assert la["total_active"] == 2
 
 
-def test_clock_tick_advances_countdown_schema():
-    """纵尸司 chapter_end tick → current 递减（倒计时正确方向）。"""
+def test_clock_chapter_tick_no_advance_countdown_no_tick_on():
+    """纵尸司倒计时（无 tick_on · trigger_at_zero 由叙事驱动）chapter_end 不机械递减。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_clock_project(Path(d), json.loads(json.dumps(_CLOCK_纵尸司)))
-        clock_engine.tick_chapter(root, 3)
+        r = clock_engine.tick_chapter(root, 3)
+        assert r["ticked"] == [] and r["triggered"] == []
         after = json.loads((root / "_数据库" / "时钟表.json").read_text(encoding="utf-8"))
         by_id = {c["id"]: c for c in after["clocks"]}
-        # 残卷 current 1→0 → 触发
-        assert by_id["clock_松绑残卷收集"]["current"] == 0
-        assert by_id["clock_松绑残卷收集"]["status"] == "triggered"
-        # 陆母 current 12→11
-        assert by_id["clock_陆母病情"]["current"] == 11
+        # 残卷 current 仍 1（不机械递减到 0 触发）· 陆母仍 12
+        assert by_id["clock_松绑残卷收集"]["current"] == 1
+        assert by_id["clock_松绑残卷收集"].get("status") != "triggered"
+        assert by_id["clock_陆母病情"]["current"] == 12
 
 
-def test_clock_tick_advances_story_clocks_schema():
-    """诡异 story_clocks chapter_end tick → current +1。"""
+def test_clock_chapter_tick_no_advance_story_clocks_no_tick_on():
+    """诡异 story_clocks（无 tick_on · incremented_by 叙事事件驱动）chapter_end 不机械推进。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_clock_project(Path(d), json.loads(json.dumps(_CLOCK_诡异)))
-        clock_engine.tick_chapter(root, 2)
+        r = clock_engine.tick_chapter(root, 2)
+        assert r["ticked"] == []
         after = json.loads((root / "_数据库" / "时钟表.json").read_text(encoding="utf-8"))
         by_id = {c["id"]: c for c in after["story_clocks"]}
-        assert by_id["clock_001"]["current"] == 1
+        assert by_id["clock_001"]["current"] == 0  # 不机械 +1
+
+
+def test_clock_v21_tick_on_still_advances():
+    """v21 显式 tick_on=[chapter_end] 仍按章推进（向后兼容·显式声明的才推进）。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = _mk_clock_project(Path(d), json.loads(json.dumps(_CLOCK_v21)))
+        r = clock_engine.tick_chapter(root, 2)
+        # CK_001 ticks 1→2（显式 tick_on 匹配 chapter_end）
+        assert len(r["ticked"]) == 1
+        after = json.loads((root / "_数据库" / "时钟表.json").read_text(encoding="utf-8"))
+        assert after["clocks"][0]["ticks"] == 2
 
 
 def test_clock_dashboard_counts_all_schemas():
@@ -218,6 +240,36 @@ def test_stress_view_nested_dimensions_诡异():
     assert v["mode"] == "dimensions"
     assert v["stress_level"] == 5  # 同事信任 current=5 max=10 → norm 5（峰值维度）
     assert v["stress_max"] == 10
+
+
+def test_stress_view_nondefault_dim_max_threshold_normalized():
+    """🔴 batch5 归一 bug 回归：峰值维度 max != 10 且 trigger_threshold > 10 时，
+    threshold 必须用**该维度自己的 dmax** 归一（旧码硬编码 round(threshold/100*10) → 阈值塌成假高）。
+    构造 max=20 / trigger_threshold=16 的维度（真实量纲非默认 10）：threshold = 16/20*10 = 8
+    （旧 bug：16>10 → round(16/100*10)=2 → 阈值塌成 2 → 任意低 stress 都假高）。
+    """
+    high = {
+        "protagonist_id": "高压",
+        "stress_dimensions": {
+            "罪疚": {"current": 18, "max": 20, "trigger_threshold": 16},
+            "孤立": {"current": 2, "max": 20, "trigger_threshold": 16},
+        },
+        "stress_history": [],
+    }
+    v = stress_evaluator.stress_view(high)
+    assert v["mode"] == "dimensions"
+    assert v["stress_level"] == 9  # 罪疚 18/20 → 归一 9（峰值维度）
+    assert v["stress_threshold_break"] == 8  # 16/20*10 = 8（旧 bug 会塌成 2）
+    # 低 stress 档校验阈值不塌：4/20→level 2，threshold 仍 8 → 非高压（旧 bug threshold=2 会判假高）
+    low = {
+        "protagonist_id": "低压",
+        "stress_dimensions": {"罪疚": {"current": 4, "max": 20, "trigger_threshold": 16}},
+        "stress_history": [],
+    }
+    lv = stress_evaluator.stress_view(low)
+    assert lv["stress_level"] == 2  # 4/20 → 2
+    assert lv["stress_threshold_break"] == 8  # 仍 8（旧 bug 会是 2）
+    assert lv["stress_level"] < lv["stress_threshold_break"] * 0.75  # 真实判据：非高压
 
 
 def test_stress_view_scalar_v21():
