@@ -100,14 +100,14 @@
       "expected_outputs": [],
       "scripts": [
         "python core/scripts/save_state.py {project_root} --auto-post-reflect-cluster {key}",
-        "python core/scripts/judge_reports_archive.py {project_root} --cluster {key} || true",
+        "python core/scripts/adaptive_runner.py --label judge_reports_archive -- python core/scripts/judge_reports_archive.py {project_root} --cluster {key}",
         "python core/scripts/save_state.py {project_root} --build-cluster-summary {key}"
       ]
     },
     {
       "n": 9,
       "name": "cluster-scan+state+drift+evolution",
-      "description": "cluster 级跨章扫描 + 数据库更新 + evaluator + 演化（用 3 个 wrapper 收口，避免堆叠几十行单独调用）",
+      "description": "cluster 级跨章扫描 + 数据库更新 + evaluator + 演化（用 3 个 wrapper 收口，避免堆叠几十行单独调用）+ 自学习闭环（2026-05-30：演化类脚本经 adaptive_runner 记录报错+熔断取代 `|| true` 静默吞错 / self_heal_engine --ingest+--emit-lessons 学本 cluster 运行时报错 / step_completion_monitor 缺步监控）",
       "required": true,
       "skip_output_allowed": true,
       "expected_outputs": [],
@@ -119,12 +119,15 @@
         "python core/scripts/character_index.py {project_root} --write",
         "python core/scripts/learning_loop.py {project_root} --scan-recurring",
         "python core/scripts/world_evolution_apply_chapter.py {project_root} --cluster {key}",
-        "python core/scripts/skill_evolver.py {project_root} evolve --cluster {key} || true",
-        "python core/scripts/skill_evolver.py {project_root} promote || true",
-        "python core/scripts/evolution_orchestrator.py {project_root} --cluster {key} || true",
-        "python core/scripts/maybe_judge_consensus.py {project_root} --cluster {key} || true",
+        "python core/scripts/adaptive_runner.py --label skill_evolver_evolve -- python core/scripts/skill_evolver.py {project_root} evolve --cluster {key}",
+        "python core/scripts/adaptive_runner.py --label skill_evolver_promote -- python core/scripts/skill_evolver.py {project_root} promote",
+        "python core/scripts/adaptive_runner.py --label evolution_orchestrator -- python core/scripts/evolution_orchestrator.py {project_root} --cluster {key}",
+        "python core/scripts/adaptive_runner.py --label maybe_judge_consensus -- python core/scripts/maybe_judge_consensus.py {project_root} --cluster {key}",
         "python core/scripts/audit_dashboard.py {project_root}",
-        "python core/scripts/scan_retention.py {project_root} --keep 5"
+        "python core/scripts/scan_retention.py {project_root} --keep 5",
+        "python core/scripts/self_heal_engine.py --ingest",
+        "python core/scripts/self_heal_engine.py --emit-lessons",
+        "python core/scripts/step_completion_monitor.py --scan-latest --command cluster-save-state --project {project}"
       ]
     },
     {

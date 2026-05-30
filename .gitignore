@@ -51,6 +51,10 @@ _reference/
 core/claude-home/.plans/
 core/claude-home/.sessions/
 
+# 运行时自学习数据（MAPE-K · 2026-05-30 · incidents/self_heal_kb/circuit · 易变运行时日志不入库；
+# 注：lessons/runtime_lessons.md 在 lessons/ 下仍入库作经验快照）
+core/claude-home/runtime/
+
 # GEPA Pareto 前沿运行时快照（v23 Layer 4）
 core/claude-home/.gepa/
 

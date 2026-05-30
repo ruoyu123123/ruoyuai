@@ -62,6 +62,10 @@
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_step_reflection.py\""
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_runtime_monitor.py\""
           }
         ]
       }

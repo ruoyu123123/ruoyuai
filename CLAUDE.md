@@ -215,6 +215,26 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ---
 
+## 🔁 运行时自学习 / 自适应 / 自监控（MAPE-K · 2026-05-30）
+
+> 与上面「写作质量自学习」（learning_loop 学审核 issue）**正交**：这一层学的是**运行时报错 + 流程缺步**，
+> 让脚本越跑越稳。业界对标 MAPE-K + Reflexion + Saga + 熔断/容错，权威设计见 `core/claude-home/SELF_LEARNING_ARCHITECTURE.md`。
+
+MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，跨小说项目）：
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| **Monitor** | `hooks/posttooluse_runtime_monitor.py`（PostToolUse:Bash 常驻） | 扫 stderr 真 Traceback/[FATAL] → 错误指纹 `script::type::loc` → `incidents.jsonl`（查 stderr 不信 exit code · 排除 grep 类误报 · 永不 exit 非0） |
+| **Analyze+Learn** | `self_heal_engine.py` | `--ingest` 复发计数（≥3 recurring/≥5 known，复用 learning_loop 范式）→ `self_heal_kb.json`；`--emit-lessons`→`lessons/runtime_lessons.md`；`--suggest`/`--dashboard`/`--resolve`（再现=regression 警示） |
+| **Adapt（Plan+Execute）** | `adaptive_runner.py` | 跑流水线内部 subprocess：捕报错→查 kb severity→retry(指数退避)/degrade(降级放行)/escalate(升人) + 熔断三态。**取代 `\|\| true` 静默吞错**（失败必记录学习） |
+| **缺步监控（Saga）** | `step_completion_monitor.py` | 扫 plan 检三类缺步（假完成/失败/未跑）；`--auto-heal` 对有 scripts 的假完成/失败 step 经 adaptive_runner **幂等重跑补产出**；agent 类输出 brief 给主代理 |
+
+**集成**：嵌在 `cluster-save-state` step 8/9（每 cluster 跑），非独立层——4 个 `|| true` → adaptive_runner，step 9 末尾 3 行 self_heal ingest/emit + 缺步监控。
+
+**北极星边界**：只学运行时报错（不碰创作判断）· 推荐动作是 advisory（不改 hard_gate）· **绝不自改脚本逻辑**（Gödel Agent 缺 rollback 短板 · Git 快照当锚点）· 补跑幂等 · cluster 为单位。
+
+---
+
 ## Git 版本快照（自动）
 
 每本小说独立 Git 仓库，关键节点自动 commit：

@@ -218,7 +218,8 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 7 --skip-output
 python core/scripts/save_state.py "<项目路径>" --auto-post-reflect-cluster <key>
 
 # 把本 cluster 所有 JudgeReport 存入 故事块摘要[ch_range].judge_reports[]
-python core/scripts/judge_reports_archive.py "<项目路径>" --cluster <key> || true
+# 经 adaptive_runner：失败不阻塞但记录报错供 self_heal_engine 学习（取代旧 `|| true` 静默吞错）
+python core/scripts/adaptive_runner.py --label judge_reports_archive -- python core/scripts/judge_reports_archive.py "<项目路径>" --cluster <key>
 ```
 
 **plan-step 8**：
@@ -231,7 +232,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 8 --skip-output
 
 # 第 9 步：cluster-scan + state + drift + evolution
 
-13 个 wrapper 脚本批量跑：
+13 个 wrapper 脚本 + 3 行自学习闭环批量跑：
 
 ```bash
 python core/scripts/save_state_updates.py "<项目路径>" --cluster <key> --all
@@ -241,15 +242,20 @@ python core/scripts/style_drift_scan.py "<项目路径>" --last-n 10
 python core/scripts/character_index.py "<项目路径>" --write
 python core/scripts/learning_loop.py "<项目路径>" --scan-recurring
 python core/scripts/world_evolution_apply_chapter.py "<项目路径>" --cluster <key>
-python core/scripts/skill_evolver.py "<项目路径>" evolve --cluster <key> || true
-python core/scripts/skill_evolver.py "<项目路径>" promote || true
-python core/scripts/evolution_orchestrator.py "<项目路径>" --cluster <key> || true
-python core/scripts/maybe_judge_consensus.py "<项目路径>" --cluster <key>
+# 演化类经 adaptive_runner：失败不阻塞（degrade 放行）但记录学习 + 熔断（取代旧 `|| true` 静默吞错）
+python core/scripts/adaptive_runner.py --label skill_evolver_evolve -- python core/scripts/skill_evolver.py "<项目路径>" evolve --cluster <key>
+python core/scripts/adaptive_runner.py --label skill_evolver_promote -- python core/scripts/skill_evolver.py "<项目路径>" promote
+python core/scripts/adaptive_runner.py --label evolution_orchestrator -- python core/scripts/evolution_orchestrator.py "<项目路径>" --cluster <key>
+python core/scripts/adaptive_runner.py --label maybe_judge_consensus -- python core/scripts/maybe_judge_consensus.py "<项目路径>" --cluster <key>
 python core/scripts/audit_dashboard.py "<项目路径>"
 python core/scripts/scan_retention.py "<项目路径>" --keep 5
+# 🆕 自学习闭环（2026-05-30）：学本 cluster 运行时报错 → 沉淀 known lesson → 缺步监控
+python core/scripts/self_heal_engine.py --ingest
+python core/scripts/self_heal_engine.py --emit-lessons
+python core/scripts/step_completion_monitor.py --scan-latest --command cluster-save-state --project "<书名>"
 ```
 
-任意非关键脚本失败（`|| true` 保护）→ 不阻塞主流水线。
+演化类脚本经 **adaptive_runner** 自适应执行：失败仍不阻塞主流水线（degrade 放行），但**记录到 `runtime/incidents.jsonl` 供 self_heal_engine 学习 + 熔断器防同一脚本连续崩还盲跑**（取代旧 `|| true` 静默吞错——报错不再消失）。末尾自学习闭环：`self_heal_engine --ingest` 把本 cluster 累积的运行时报错按指纹复发计数（≥3 recurring / ≥5 known），`--emit-lessons` 把 known 级写入 `lessons/runtime_lessons.md`，`step_completion_monitor` 扫本次 plan 是否有假完成/失败/未跑的缺步。
 
 **plan-step 9**：
 
