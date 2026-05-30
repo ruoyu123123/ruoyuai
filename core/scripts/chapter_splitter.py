@@ -82,7 +82,10 @@ ONOMATOPOEIA = re.compile(r"(咯|啪|嗒|哒|轰|咚|哗|砰|咳|噗|滋|嘎|吱
 DASH_END = re.compile(r"[—…]\s*$")
 SCENE_BREAK_START = re.compile(r"^(——|\*\s*\*|\* \* \*)")
 CONTINUE_ACTION = re.compile(r"^[^\n]{0,8}(回头|抬头|睁开|醒来|想起|站起|转身)")
-CHAR_NAMES = ["克莱", "莫顿", "艾尔莎", "伊森", "老亨利", "七夜伯爵"]
+# 2026-05-30 加强：角色名改从 人物卡.json 动态加载（取代硬编码某书角色名 → 切点评分跨书通用）。
+# 默认空表；run_freestyle / main 开头调 _load_char_names(project_root) 覆盖此 module global。
+# 加载失败/无项目 → 保持空表（score_split_point 角色名加分项为 0，退化到其他切点信号，不崩）。
+CHAR_NAMES: list = []
 DIALOGUE_OPEN = re.compile(r'["“「『]')   # 2026-05-30 补弯引号 U+201C（splitter 切点不切对话中段）
 DIALOGUE_CLOSE = re.compile(r'["”」』]')  # 补弯引号 U+201D
 PSYCH_KW = re.compile(r"(他想|她想|他记得|他觉得|他不知)")
@@ -319,6 +322,25 @@ def _best_anchor_split(paras, anchor_word, tolerance, lo, hi, mid_target):
     return best[1] if best else None
 
 
+def _load_char_names(project_root) -> list:
+    """从 人物卡.json（schema: {"characters":[{"name":...}]}）动态加载角色名 → 切点评分跨书通用。
+    失败/缺文件 → 空表（不崩，退化到其他切点信号）。"""
+    try:
+        p = Path(project_root) / "_数据库" / "人物卡.json"
+        if not p.exists():
+            return []
+        data = json.loads(p.read_text(encoding="utf-8"))
+        names = []
+        for c in (data.get("characters") or []):
+            if isinstance(c, dict):
+                nm = c.get("name") or c.get("姓名")
+                if isinstance(nm, str) and 1 <= len(nm) <= 8:
+                    names.append(nm)
+        return names
+    except Exception:
+        return []
+
+
 def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
                   rhythm_profile, previous_pending_tail, dry_run,
                   narrative_mode="linear", climax_hint=None):
@@ -329,6 +351,8 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
     climax 段提前到草稿头部（in_medias_res 开场钩子），再按字数硬范围切。linear 不动。
     """
     cluster_key = str(cluster_id).replace("cluster_", "")
+    global CHAR_NAMES
+    CHAR_NAMES = _load_char_names(project_root) or CHAR_NAMES   # 动态角色名（跨书通用切点评分）
     lo, hi, target = _resolve_rhythm(rhythm_profile)
     tolerance = 600  # freestyle 锚点搜索半径（比 DCAS 略宽，给最佳切点更多空间）
 
@@ -523,6 +547,8 @@ def main():
     # 不再有流水线触达本位置参路径。保留仅为向后兼容旧手动调用；下方 helper（score_split_point/
     # split_paragraphs_with_offset/strip_title）被 _main_freestyle 共用，故不删整文件。
     project_root = Path(args[0])
+    global CHAR_NAMES
+    CHAR_NAMES = _load_char_names(project_root) or CHAR_NAMES   # 动态角色名（跨书通用切点评分）
     ch = int(args[1])
     target = 3000
     tolerance = 500

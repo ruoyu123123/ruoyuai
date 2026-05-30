@@ -475,6 +475,42 @@ cluster_brief 完整内容：
 
 
 # ============ Gen-Model 调用（含 fallback 链） ============
+def _stream_once(client, profile, system: str, user: str, max_tokens: int,
+                 prior_assistant: str | None = None) -> tuple[str, "str | None"]:
+    """单次 stream 生成，返回 (text, finish_reason)。
+
+    2026-05-30 加强：捕获 finish_reason（原循环只累加 content，从不读 finish_reason，
+    导致命中 max_tokens 的截断被静默吞掉 → freestyle 长草稿半截入库）。
+    prior_assistant 非空 → 续写模式（把已生成内容回填，要求接着写不重复）。
+    """
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": user}]
+    if prior_assistant:
+        messages.append({"role": "assistant", "content": prior_assistant})
+        messages.append({"role": "user",
+                         "content": "上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
+                                    "不要重复已经写过的内容、不要重新开头，直接续写后续正文"
+                                    "（如果正文已写完，就补上结尾的 CHANGES JSON 块）。"})
+    stream = client.chat.completions.create(
+        model=profile.model, messages=messages, max_tokens=max_tokens,
+        temperature=profile.temperature, stream=True,
+    )
+    text = ""
+    finish_reason = None
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        choice = chunk.choices[0]
+        piece = getattr(choice.delta, 'content', None)
+        if piece:
+            text += piece
+            sys.stderr.write(piece)
+            sys.stderr.flush()
+        if getattr(choice, 'finish_reason', None):
+            finish_reason = choice.finish_reason
+    return text, finish_reason
+
+
 def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str, Profile]:
     """调当前 active profile；失败时按 fallback 链尝试。
 
@@ -503,25 +539,19 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
         full_text = ""
         try:
-            stream = client.chat.completions.create(
-                model=profile.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=max_tokens,
-                temperature=profile.temperature,
-                stream=True,
-            )
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                piece = getattr(delta, 'content', None)
-                if piece:
-                    full_text += piece
-                    sys.stderr.write(piece)
-                    sys.stderr.flush()
+            full_text, finish_reason = _stream_once(client, profile, system, user, max_tokens)
+            # 截断检测 + 自动续写（finish_reason == "length" = 命中 max_tokens 被截断）
+            cont_rounds = 0
+            while finish_reason == "length" and cont_rounds < 3:
+                cont_rounds += 1
+                print(f"\n[gen_writer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…",
+                      file=sys.stderr)
+                cont_text, finish_reason = _stream_once(
+                    client, profile, system, user, max_tokens, prior_assistant=full_text)
+                full_text += cont_text
+            if finish_reason == "length":
+                print(f"\n[gen_writer] ⚠️ WARN 续写 {cont_rounds} 轮后仍可能未写完"
+                      f"（草稿尾部/CHANGES 块可能不完整 · 下游 cjk 偏短检查兜底）", file=sys.stderr)
         except Exception as e:
             reason = str(e)[:200]
             print(f"\n[FALLBACK] {profile.name} 调用失败: {reason}", file=sys.stderr)
