@@ -331,6 +331,84 @@ def _cluster_chapter_words_band(cw_mean: float, base_lo: float, base_hi: float) 
     return {"min": min(est_lo, base_lo), "max": max(est_hi, base_hi)}
 
 
+# ── L1a 作者经验分位数 band（北极星① · 2026-05-30 · 根治矫枉过正根因）───────────
+# 根因：_apply_style_overrides 用「作者实测 mean ± 固定容差」覆盖 band（段长 mean×0.7-1.3 /
+# 对话占比 mean±0.15）。对**长段议论体作者**（蛊真人段长方差大 · 惊悚乐园段均 52 / 段长跨度
+# 36-72）固定容差系统性误判：mean±30% 把 p95(72) 顶出 band（68 上界）→ 真作者正常长段章 FAIL。
+# 前 6 轮补丁全是 whack-a-mole（B 段长单位 / A 对话段豁免 / C 配额降级 / D 键名兼容 / F split /
+# G long_para）——都在补「容差 band 误判」的个案，未触根。根治：band 从作者样本**经验分位数
+# [p5,p95]** 涌现（覆盖作者真实 90% 章节区间），取代 mean±容差。
+#
+# 影子并行（守纪律 2）：env QUANTILE_BAND_MODE 控制——
+#   · shadow（默认）：算 quantile band 但**只记录新旧 band 分歧到 stderr · 不改判决**（返回旧
+#     mean±容差 band·零回归）。收敛验证后才放量。
+#   · active：正式用 [p5,p95] 分位数 band。
+#   · off：完全关闭（连 shadow 日志都不打·纯旧行为）。
+import os as _os
+
+
+def _quantile_band_mode() -> str:
+    """读 QUANTILE_BAND_MODE（默认 shadow）· 仅 {shadow, active, off} 合法 · 其余按 shadow。"""
+    m = (_os.environ.get("QUANTILE_BAND_MODE") or "shadow").strip().lower()
+    return m if m in ("shadow", "active", "off") else "shadow"
+
+
+def _extract_quantile_pair(stat: dict | None) -> tuple[float, float] | None:
+    """从统计字段取 (p5, p95) 经验分位数对——两者都是数值才返回（否则 None=无分位数 band 数据）。
+
+    L1a：作者档 quantitative 字段（如 paragraph_length_chars）现含 {p5,p25,p50,p75,p95,mean}。
+    只要 p5/p95 都在且 p5<=p95 即可用作经验 band。缺任一 → None（调用方退回旧 mean±容差 band）。"""
+    if not isinstance(stat, dict):
+        return None
+    p5 = stat.get("p5")
+    p95 = stat.get("p95")
+    if isinstance(p5, (int, float)) and isinstance(p95, (int, float)) and p5 <= p95:
+        return float(p5), float(p95)
+    return None
+
+
+def _maybe_quantile_band(
+    dim_name: str, stat: dict | None, old_band: dict, *, lo_min: float | None = None,
+    hi_max: float | None = None,
+) -> dict:
+    """L1a band 决策（影子并行 · 北极星①）：有 [p5,p95] 分位数数据时算经验 band，按
+    QUANTILE_BAND_MODE 决定是否真用——
+
+    · off / 无分位数数据 → 原样返回 old_band（旧 mean±容差·零回归）。
+    · shadow（默认）→ 算新 band·把新旧分歧记 stderr·**返回 old_band**（不改判决）。
+    · active → 返回分位数 band（[p5,p95]·可选钳 lo_min/hi_max 防越界，如对话占比钳 [0,1]）。
+
+    分位数 band = [p5, p95]（覆盖作者真实 90% 章节区间·绝不窄于单点 mean±容差能覆盖的真分布）。"""
+    mode = _quantile_band_mode()
+    if mode == "off":
+        return old_band
+    qp = _extract_quantile_pair(stat)
+    if qp is None:
+        return old_band  # 无分位数数据：保旧 band（向后兼容老蒸馏档）
+    p5, p95 = qp
+    new_lo, new_hi = p5, p95
+    if lo_min is not None:
+        new_lo = max(lo_min, new_lo)
+    if hi_max is not None:
+        new_hi = min(hi_max, new_hi)
+    new_band = {"min": new_lo, "max": new_hi}
+    if mode == "shadow":
+        # 只记录新旧分歧·不改判决（返回旧 band）。便于收敛分析放量决策。
+        try:
+            o_lo, o_hi = old_band.get("min"), old_band.get("max")
+            print(
+                f"[QUANTILE_BAND shadow] {dim_name}: old(mean±容差)=[{o_lo:.4g},{o_hi:.4g}] "
+                f"vs new(p5-p95)=[{new_lo:.4g},{new_hi:.4g}] "
+                f"Δlo={new_lo - (o_lo or 0):+.4g} Δhi={new_hi - (o_hi or 0):+.4g}",
+                file=sys.stderr,
+            )
+        except Exception:
+            pass
+        return old_band
+    # active：正式用分位数 band
+    return new_band
+
+
 def _apply_style_overrides(t: dict, sd: dict) -> dict:
     t = {k: dict(v) for k, v in t.items()}
     # 2026-05-29 北极星 P4 [H2-style]：标记「本项目有作者风格档」→ _chk_banned 据此把
@@ -342,7 +420,14 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
     # 键名/单位双兼容 —— 否则蛊真人(pct 键)override 失效，对话占比用通用 band 苛求真作者。
     dr_mean = _extract_author_dialogue_ratio(q)
     if dr_mean is not None:
-        t["dialogue_ratio"] = {"min": max(0.0, dr_mean - 0.15), "max": min(1.0, dr_mean + 0.15)}
+        _old_dlg_band = {"min": max(0.0, dr_mean - 0.15), "max": min(1.0, dr_mean + 0.15)}
+        # L1a 根治（北极星①）：若 dialogue_ratio 桶含 [p5,p95]（0-1 ratio）经验分位数，用经验 band
+        # 取代 mean±0.15（影子并行·默认 shadow）。钳 [0,1] 防越界。只认 0-1 ratio 键的分位数
+        # （dialogue_ratio_pct 是百分比·单位不一·暂不在分位数路径处理·保 mean±容差 D 修兼容）。
+        _dlg_stat = q.get("dialogue_ratio") if _extract_quantile_pair(
+            q.get("dialogue_ratio")) else None
+        t["dialogue_ratio"] = _maybe_quantile_band(
+            "对话占比", _dlg_stat, _old_dlg_band, lo_min=0.0, hi_max=1.0)
     # 2026-05-30 北极星⑤ [B-段长单位错配]：段落均长 band 必须用**真实段长数据**推，
     # 绝不拿句长(sentence_length)冒充段长——句长 ≠ 段长，错配会把段落本就长的作者
     # (如蛊真人段均 ~30 字)从通用 PASS 顶成 FAIL，"带作者档反更苛"违反原则⑤。
@@ -351,7 +436,19 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
     # 两者都缺 → 段长维度【不做 override】，保持通用 band（14-35，不收窄）。
     para_mean = _extract_author_para_mean(q)
     if para_mean is not None and para_mean > 0:
-        t["para_mean_len"] = {"min": max(1, para_mean * 0.7), "max": para_mean * 1.3}
+        _old_para_band = {"min": max(1, para_mean * 0.7), "max": para_mean * 1.3}
+        # L1a 根治（北极星①）：有 paragraph_length_chars 的 [p5,p95] 经验分位数时，用经验 band
+        # 取代 mean±30%（影子并行·默认 shadow 只记录分歧不改判决·active 才放量）。复用现有
+        # _extract_author_para_mean 同源取数链（paragraph_length_chars / paragraph_length），
+        # 不新起一套。无分位数（老蒸馏档）→ 退回 mean±容差（零回归）。
+        _plc = q.get("paragraph_length_chars")
+        if not isinstance(_plc, dict) or _extract_quantile_pair(_plc) is None:
+            # 兼容惊悚乐园老命名 paragraph_length（mean_chars）——分位数补在 paragraph_length_chars，
+            # 若该键缺分位数则尝试 paragraph_length 桶（蒸馏新批次可能写在此）。
+            _plc = q.get("paragraph_length") if _extract_quantile_pair(
+                q.get("paragraph_length")) else _plc
+        t["para_mean_len"] = _maybe_quantile_band(
+            "段落均长", _plc, _old_para_band, lo_min=1.0)
     # 2026-05-30 北极星⑤ [long_para 不受作者档 override]：长段率上限按作者真实长段分布/段均长
     # 放宽——长段签名作者（蛊真人/惊悚乐园）的 80-120 字段率天然高于通用 2%，固定 2% 会把
     # 作者签名笔法误判 FAIL。仅当 long_para_per_chapter 用 max_ratio（cluster 视野）才 override；

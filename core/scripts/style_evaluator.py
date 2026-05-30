@@ -22,7 +22,11 @@ from style_analyzer import (  # noqa: E402
     CRAFT_SIGNATURE_BANNED,
     count_chinese,
     split_paragraphs,
+    split_sentences,
+    calc_stats,
     CHINESE_CHAR,
+    COMMA_PATTERN,
+    FUNCTION_WORDS,
 )
 
 # ---- JSON 编码器 / 工具函数 ----
@@ -745,6 +749,313 @@ def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
 
 
 # ============================================================
+# L3a：滑窗 burstiness + 去题材 SFS（2026-05-30 · 北极星①⑤⑥）
+# ------------------------------------------------------------
+# 根因（memory reference-system-validation-method）：旧 SFS 把整 cluster 当**一个**
+# 向量比 → 长文里局部段长崩塌被均值抹平（实测蛊真人单章 B 级 / cluster 级仅 D 级）；
+# 且名词/人名/情节动词等**题材信号**淹没了真正的风格信号（虚词/标点/句长节奏）。
+#
+# 升级（全在本文件内自包含 · 不改 style_analyzer · L1a 在那边改避免冲突）：
+#   (a) 滑窗 burstiness：每 ~1500-2000 CJK 一窗，逐窗算句长/段长/功能词指纹 →
+#       输出窗间方差（burstiness）。方差过低 = AI 腔均匀化。并**定位最崩窗**
+#       （索引 + 指标），逐窗逐维可读不黑箱。
+#   (b) 去题材 SFS：cluster 级风格比只看虚词/标点/句长节奏（可加 POS 若 jieba.posseg
+#       可用），对名词/人名/情节动词**停用**（jieba 停用；不可用则用功能词白名单）。
+#
+# 影子并行（北极星纪律 2）：env L3A_BURSTINESS_MODE 控制——
+#   · shadow（默认）：算 L3a 全量指标，挂在 report 的 l3a_* 加项里**只记录不改判决**，
+#     不动 sfs_quick / programmatic_score / grade（零回归）。新旧分歧写 stderr。
+#   · active：同样计算并附加，但额外把 L3a 发现的崩塌窗 / 低 burstiness 升为 advisory
+#     issue（gate_level 永远 advisory · 绝不进 hard_gate · 顾问非法官）。
+#   · off：完全不算 L3a（纯旧 SFS 行为）。
+# 不论哪种模式，产出的所有 issue gate_level 强制 = advisory（北极星⑤）。
+# ============================================================
+
+# 滑窗目标 CJK 字数（窗口下/上界 · 与 CLAUDE.md「每 1500-2000 字一窗」对齐）
+_L3A_WINDOW_TARGET = 1750
+_L3A_WINDOW_MIN = 1500
+_L3A_WINDOW_MAX = 2000
+
+# jieba.posseg 可用性探测（零依赖纪律：不可用则降级到功能词白名单 · 不报错不下载模型）
+try:
+    import jieba  # noqa: E402
+    import jieba.posseg as _pseg  # noqa: E402
+    jieba.setLogLevel(20)
+    _JIEBA_AVAILABLE = True
+except Exception:  # pragma: no cover - 环境无 jieba 时降级
+    _pseg = None
+    _JIEBA_AVAILABLE = False
+
+# 去题材 POS 白名单：保留虚词/结构性词（风格信号），停用内容词（题材信号）。
+# jieba flag 头字母：
+#   r=代词 p=介词 c=连词 u/ul/uj/ud/uv/uz=助词 d=副词 e=叹词 y=语气词 o=拟声 x=标点
+# → 这些是**作者风格指纹**（不随题材变）。停用：n*=名词/人名/地名/机构、v*=动词、
+#   a=形容词、m=数词、i=成语、l=习用语、t=时间、s=处所、nz=专名 等内容词（携带题材）。
+_L3A_STYLE_POS_PREFIXES = ("r", "p", "c", "u", "d", "e", "y", "o")
+# x（标点）单列：标点节奏由 punctuation 指纹单独刻画，POS 分布里排除避免双算。
+
+
+def _l3a_burstiness_mode() -> str:
+    """L3A_BURSTINESS_MODE：默认 shadow · 非法值回退 shadow · {active,off} 原样。"""
+    import os
+    m = (os.environ.get("L3A_BURSTINESS_MODE") or "shadow").strip().lower()
+    return m if m in ("shadow", "active", "off") else "shadow"
+
+
+def _split_windows(text: str, target: int = _L3A_WINDOW_TARGET,
+                   win_min: int = _L3A_WINDOW_MIN,
+                   win_max: int = _L3A_WINDOW_MAX) -> list[str]:
+    """按 CJK 字数把整段文本切成 ~target 字的滑窗（在段落边界处切，不切碎句子）。
+
+    逐段累积，达 target 即收一窗（不超过 win_max）。末窗若 < win_min 且已有 ≥1 窗，
+    并入前一窗（避免尾巴小窗污染方差）。返回窗口文本列表（保留段内换行）。
+    单段超长（> win_max）也独立成窗（不强拆，保段落完整 = 风格单元）。"""
+    paras = split_paragraphs(text)
+    if not paras:
+        return []
+    windows: list[str] = []
+    buf: list[str] = []
+    buf_cjk = 0
+    for p in paras:
+        plen = count_chinese(p)
+        if buf and buf_cjk + plen > win_max:
+            windows.append("\n".join(buf))
+            buf, buf_cjk = [], 0
+        buf.append(p)
+        buf_cjk += plen
+        if buf_cjk >= target:
+            windows.append("\n".join(buf))
+            buf, buf_cjk = [], 0
+    if buf:
+        tail = "\n".join(buf)
+        if count_chinese(tail) < win_min and windows:
+            windows[-1] = windows[-1] + "\n" + tail
+        else:
+            windows.append(tail)
+    return windows
+
+
+def _window_metrics(win_text: str) -> dict:
+    """单窗风格指标（只取与题材无关的节奏/结构维度 · 逐维可读）。"""
+    sents = split_sentences(win_text)
+    sent_lens = [count_chinese(s) for s in sents]
+    paras = split_paragraphs(win_text)
+    para_lens = [count_chinese(p) for p in paras]
+    s_stats = calc_stats([float(x) for x in sent_lens])
+    p_stats = calc_stats([float(x) for x in para_lens])
+    cjk = count_chinese(win_text) or 1
+    per_1000 = 1000.0 / cjk
+    # 单句成段率（爽文节奏的关键节拍 · 崩塌时常先垮）
+    single = 0
+    for p in paras:
+        if len(split_sentences(p)) <= 1:
+            single += 1
+    return {
+        "cjk_chars": count_chinese(win_text),
+        "sentence_mean_len": s_stats["mean"],
+        "sentence_std": s_stats["std"],
+        "paragraph_mean_len": p_stats["mean"],
+        "single_sentence_para_ratio": round(single / len(paras), 4) if paras else 0.0,
+        "comma_per_1000": round(len(COMMA_PATTERN.findall(win_text)) * per_1000, 2),
+        "function_word_per_1000": {
+            w: round(win_text.count(w) * per_1000, 2) for w in FUNCTION_WORDS
+        },
+    }
+
+
+def _variance(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    m = sum(values) / len(values)
+    return sum((v - m) ** 2 for v in values) / len(values)
+
+
+def compute_burstiness(text: str) -> dict:
+    """滑窗 burstiness：逐窗算句长/段长/单句成段率/逗号密度 → 窗间方差 + 定位最崩窗。
+
+    burstiness 高 = 节奏有起伏（真人写作）；过低 = AI 腔把每窗摊成一个模子（均匀化）。
+    「最崩窗」= 段均长偏离全窗中位数最大、且偏**低**方向的窗（局部段长崩塌——长文里被
+    cluster 均值抹平的真痛点），逐窗逐维列出指标（advisory 可读，不黑箱判决）。"""
+    windows = _split_windows(text)
+    if len(windows) < 2:
+        # 单窗（短文/单章）无法算窗间方差——返回 n_windows 让调用方知道不适用。
+        wm = [_window_metrics(windows[0])] if windows else []
+        return {
+            "n_windows": len(windows),
+            "applicable": False,
+            "reason": "窗口数 < 2（文本太短，cluster 级 burstiness 不适用）",
+            "windows": wm,
+        }
+    metrics = [_window_metrics(w) for w in windows]
+    sent_means = [m["sentence_mean_len"] for m in metrics]
+    para_means = [m["paragraph_mean_len"] for m in metrics]
+    single_ratios = [m["single_sentence_para_ratio"] for m in metrics]
+    comma_dens = [m["comma_per_1000"] for m in metrics]
+
+    burst = {
+        "sentence_mean_len": round(_variance(sent_means), 4),
+        "paragraph_mean_len": round(_variance(para_means), 4),
+        "single_sentence_para_ratio": round(_variance(single_ratios), 6),
+        "comma_per_1000": round(_variance(comma_dens), 4),
+    }
+    # 综合 burstiness：用变异系数（CV = std/mean）的均值，跨维度可比（不受量纲影响）。
+    cvs = []
+    for vals in (sent_means, para_means, single_ratios, comma_dens):
+        m = sum(vals) / len(vals)
+        if m > 1e-9:
+            cvs.append(math.sqrt(_variance(vals)) / m)
+    overall_cv = round(sum(cvs) / len(cvs), 4) if cvs else 0.0
+
+    # 定位最崩窗：段均长偏离中位数最大且偏低（局部段长崩塌方向）。
+    srt = sorted(para_means)
+    n = len(srt)
+    median_pm = srt[n // 2] if n % 2 else (srt[n // 2 - 1] + srt[n // 2]) / 2.0
+    worst_idx, worst_dev = 0, -1.0
+    for i, pm in enumerate(para_means):
+        dev = median_pm - pm  # 偏低为正（崩塌）
+        if dev > worst_dev:
+            worst_dev, worst_idx = dev, i
+
+    return {
+        "n_windows": len(windows),
+        "applicable": True,
+        "burstiness_variance": burst,
+        "overall_burstiness_cv": overall_cv,
+        "window_metrics": metrics,
+        "median_paragraph_mean_len": round(median_pm, 2),
+        "worst_window": {
+            "index": worst_idx,
+            "paragraph_mean_len": para_means[worst_idx],
+            "deviation_below_median": round(worst_dev, 2),
+            "metrics": metrics[worst_idx],
+        },
+    }
+
+
+def _pos_style_distribution(text: str) -> dict:
+    """去题材 POS 分布：只保留虚词/结构性 POS（风格信号），停用内容词（题材信号）。
+
+    jieba.posseg 可用 → 按 flag 头字母过滤（保留 r/p/c/u/d/e/y/o，停 n*/v*/a/m/i/l/t/s…）。
+    返回 {pos_flag: 占比}（在保留集合内归一化）。jieba 不可用 → 返回 {}（调用方降级到
+    功能词白名单比对 · 守零依赖纪律不报错）。"""
+    if not _JIEBA_AVAILABLE or _pseg is None:
+        return {}
+    counts: dict[str, int] = {}
+    total = 0
+    for _w, flag in _pseg.cut(text):
+        if not flag:
+            continue
+        head = flag[0]
+        if head in _L3A_STYLE_POS_PREFIXES:
+            counts[flag] = counts.get(flag, 0) + 1
+            total += 1
+    if total == 0:
+        return {}
+    return {k: v / total for k, v in counts.items()}
+
+
+def compute_style_only_sfs(ref_text: str, gen_text: str) -> dict:
+    """去题材风格 SFS：只比风格特征（虚词指纹 / 标点指纹 / 句长节奏 / 去题材 POS 分布），
+    对名词/人名/情节动词停用——避免跨题材时题材信号淹没文风信号导致误判。
+
+    四个子项余弦/匹配后等权平均（0~100）。POS 子项仅在 jieba 可用时计入（否则降级，
+    剩三项重新等权）。逐项输出便于 advisory 可读。"""
+    rp = analyze_text(ref_text)
+    gp = analyze_text(gen_text)
+
+    # ① 功能词指纹（虚词 · 去题材核心）
+    fw_sim = max(_cosine_sim(
+        rp.get("function_word_fingerprint_per_1000", {}),
+        gp.get("function_word_fingerprint_per_1000", {})), 0.0)
+    # ② 标点指纹（5 维节奏 · 与题材无关）
+    punc_keys = ["comma", "period", "ellipsis", "exclamation", "question"]
+    r_punc = {k: rp.get("punctuation_density_per_1000", {}).get(k, 0) for k in punc_keys}
+    g_punc = {k: gp.get("punctuation_density_per_1000", {}).get(k, 0) for k in punc_keys}
+    punc_sim = max(_cosine_sim(r_punc, g_punc), 0.0)
+    # ③ 句长节奏（句长分布 JSD · 节拍而非内容）
+    rhythm = _jsd_score(rp.get("sentence_length_distribution", {}),
+                        gp.get("sentence_length_distribution", {}))
+    # ④ 去题材 POS 分布（jieba 可用时）
+    r_pos = _pos_style_distribution(ref_text)
+    g_pos = _pos_style_distribution(gen_text)
+    pos_available = bool(r_pos) and bool(g_pos)
+    pos_sim = max(_cosine_sim(r_pos, g_pos), 0.0) if pos_available else None
+
+    # 统一转 float（_jsd_score 经 scipy 返回 np.float64 · 显式 cast 让 subscores 纯 stdlib 可读）
+    fw_sim, punc_sim, rhythm = float(fw_sim), float(punc_sim), float(rhythm)
+    subscores = {
+        "function_word_cosine": round(fw_sim * 100, 2),
+        "punctuation_cosine": round(punc_sim * 100, 2),
+        "sentence_rhythm_jsd": round(rhythm * 100, 2),
+    }
+    parts = [fw_sim, punc_sim, rhythm]
+    if pos_sim is not None:
+        pos_sim = float(pos_sim)
+        subscores["detopic_pos_cosine"] = round(pos_sim * 100, 2)
+        parts.append(pos_sim)
+    total = round(sum(parts) / len(parts) * 100, 2)
+    return {
+        "style_only_sfs": total,
+        "subscores": subscores,
+        "jieba_pos_used": pos_available,
+        "topic_stopwords_applied": True if pos_available else "function_word_whitelist_fallback",
+    }
+
+
+def compute_l3a(ref_text: str, gen_text: str) -> dict:
+    """L3a 组合：滑窗 burstiness（gen）+ 去题材 SFS（ref vs gen）+ advisory issue 列表。
+
+    issue gate_level 强制 = advisory（北极星⑤ · 绝不黑箱判决 / 绝不进 hard_gate）。
+    阈值仅作 advisory 触发线（可读提示），不参与任何 PASS/FAIL 判决。"""
+    burst = compute_burstiness(gen_text)
+    style_sfs = compute_style_only_sfs(ref_text, gen_text)
+    issues: list[dict] = []
+
+    # advisory ①：窗间 burstiness 过低（AI 腔均匀化）——CV < 0.04 提示节奏被摊平。
+    # 阈值校准（北极星纪律 3 矫枉过正金标准）：真作者实测 CV——蛊真人 0.06-0.11（议论体
+    # 节奏平稳）/ 惊悚乐园 0.16-0.20（对话多方差大）；AI 完全均匀化 → CV≈0.0。取 0.04 阈值
+    # 干净分开二者（真作者下界 0.06 远高于 0.04 → 绝不误判真作者 · 守金标准）。
+    if burst.get("applicable") and burst.get("overall_burstiness_cv", 1.0) < 0.04:
+        issues.append({
+            "code": "L3A_LOW_BURSTINESS",
+            "gate_level": "advisory",
+            "message": f"窗间节奏方差过低（CV={burst['overall_burstiness_cv']}）"
+                       f"· 共 {burst['n_windows']} 窗 · 疑似 AI 腔均匀化，建议在某些窗加短句连发/段长起伏",
+        })
+    # advisory ②：最崩窗段长显著低于中位数（局部段长崩塌 · cluster 级被均值抹平的真痛点）。
+    if burst.get("applicable"):
+        ww = burst["worst_window"]
+        if ww["deviation_below_median"] > max(8.0, burst["median_paragraph_mean_len"] * 0.35):
+            issues.append({
+                "code": "L3A_WINDOW_COLLAPSE",
+                "gate_level": "advisory",
+                "message": f"第 {ww['index']} 窗段均长 {ww['paragraph_mean_len']} 显著低于"
+                           f"中位数 {burst['median_paragraph_mean_len']}（崩 {ww['deviation_below_median']}）"
+                           f"· 该窗节奏可能局部崩塌，定位复查",
+            })
+    # advisory ③：去题材风格 SFS 偏低（虚词/标点/句长节奏与作者不符）。
+    if style_sfs["style_only_sfs"] < 60.0:
+        issues.append({
+            "code": "L3A_STYLE_ONLY_LOW",
+            "gate_level": "advisory",
+            "message": f"去题材风格 SFS {style_sfs['style_only_sfs']}（虚词/标点/句长节奏）偏低"
+                       f"· 子项 {style_sfs['subscores']}",
+        })
+
+    # 兜底：任何外部消费都不应把 L3a 当判决——显式标注。
+    for it in issues:
+        it["gate_level"] = "advisory"  # 强制（北极星⑤ · 双保险）
+
+    return {
+        "mode": _l3a_burstiness_mode(),
+        "burstiness": burst,
+        "style_only_sfs": style_sfs,
+        "advisory_issues": issues,
+        "note": "全部 advisory · 不改 sfs_quick/grade 判决 · 不进 hard_gate（顾问非法官）",
+    }
+
+
+# ============================================================
 # 主流程
 # ============================================================
 
@@ -812,6 +1123,25 @@ def evaluate(ref_text, gen_text: str,
         "ref_count": len(ref_profiles),
         "has_author_profile": bool(has_author_profile),
     }
+
+    # L3a 滑窗 burstiness + 去题材 SFS（影子并行 · 北极星①⑤⑥）。
+    # shadow（默认）/active：计算并**附加**到 report（加项 · 不改上面任何判决字段，零回归）。
+    # off：完全不算。active 与 shadow 的唯一区别：active 把 advisory issue 升到 report 顶层
+    # advisory_issues 供消费方看见（仍 advisory · 绝不改 sfs_quick/grade / 绝不进 hard_gate）。
+    l3a_mode = _l3a_burstiness_mode()
+    if l3a_mode != "off":
+        # gen 是 cluster 草稿 → 滑窗看 gen；去题材 SFS 用第一个 ref（与 prompt_ref 一致）。
+        l3a = compute_l3a(ref_texts[0], gen_text)
+        report["l3a"] = l3a
+        if l3a_mode == "shadow":
+            # 影子：分歧只写 stderr，不改判决也不把 issue 提到顶层（保默认零回归）。
+            if l3a.get("advisory_issues"):
+                codes = [i["code"] for i in l3a["advisory_issues"]]
+                print(f"[L3a shadow] 检出 {len(codes)} 条 advisory（未改判决）: {codes}",
+                      file=sys.stderr)
+        elif l3a_mode == "active":
+            # active：advisory issue 升顶层（消费方可见）· gate_level 永远 advisory。
+            report["advisory_issues"] = l3a.get("advisory_issues", [])
     return report
 
 

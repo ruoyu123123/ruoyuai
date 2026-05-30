@@ -604,6 +604,104 @@ def calc_stats(values: list[float]) -> dict:
     }
 
 
+def calc_quantiles(values: list[float]) -> dict | None:
+    """经验分位数 [p5,p25,p50,p75,p95]（纯 stdlib · 线性插值 · 对齐 numpy 默认 'linear'）。
+
+    2026-05-30 北极星① [L1a 作者分位数 band]：band/baseline 必须从**作者样本经验分布**涌现，
+    不是「作者实测 mean ± 固定容差」。固定容差对长段议论体作者（蛊真人/惊悚乐园 段长方差大）
+    系统性误判（whack-a-mole 根因）。本函数对一组 per-章值算 5/25/50/75/95 分位数——
+    validate_style._apply_style_overrides 用 [p5,p95] 当 band（覆盖作者真实 90% 章节区间），
+    取代 mean ± 容差。空集返回 None（调用方据此不 override · 保通用 band）。
+
+    注：纯 stdlib 排序 + 线性插值实现（不引 numpy，守零依赖纪律）。"""
+    if not values:
+        return None
+    s = sorted(float(v) for v in values)
+    n = len(s)
+
+    def q(p: float) -> float:
+        if n == 1:
+            return s[0]
+        idx = p * (n - 1)
+        lo = int(idx)
+        frac = idx - lo
+        if lo + 1 < n:
+            return s[lo] + frac * (s[lo + 1] - s[lo])
+        return s[lo]
+
+    mean_val = sum(s) / n
+    var = sum((v - mean_val) ** 2 for v in s) / n if n > 1 else 0.0
+    return {
+        "p5": round(q(0.05), 4), "p25": round(q(0.25), 4),
+        "p50": round(q(0.50), 4), "p75": round(q(0.75), 4),
+        "p95": round(q(0.95), 4),
+        "mean": round(mean_val, 4), "std": round(math.sqrt(var), 4), "n": n,
+    }
+
+
+def chapter_metrics_lite(text: str) -> dict | None:
+    """单章轻量指标（复用 analyze_text 取数原语，但**跳过** O(n²) 的说话人分类）。
+
+    2026-05-30 北极星① [L1a]：per-章分位数统计只需 paragraph_length_chars / punctuation_per_1k
+    / function_words_per_1k 三组 per-章值——不需要 _build_name_registry 的 speaker 数据（那是
+    analyze_text 里最慢的 O(候选池²) 段）。聚合 686 章蒸馏时跳过它快 ~50x。返回单章值，由
+    aggregate_chapter_quantiles 聚合成分位数。无 CJK / 无段落 → None（坏章跳过）。"""
+    total = count_chinese(text)
+    if total <= 0:
+        return None
+    per_1000 = 1000.0 / total
+    paragraphs = split_paragraphs(text)
+    if not paragraphs:
+        return None
+    para_lens = [count_chinese(p) for p in paragraphs]
+    para_mean = sum(para_lens) / len(para_lens)
+    comma = len(COMMA_PATTERN.findall(text))
+    period = max(len(PERIOD_PATTERN.findall(text)), 1)
+    ellipsis = len(ELLIPSIS_PATTERN.findall(text))
+    exclamation = len(EXCLAMATION_PATTERN.findall(text))
+    question = len(QUESTION_PATTERN.findall(text))
+    dash = len(DASH_PATTERN.findall(text))
+    punc = {
+        "comma": comma * per_1000, "period": period * per_1000,
+        "comma_period_ratio": comma / period, "ellipsis": ellipsis * per_1000,
+        "exclamation": exclamation * per_1000, "question": question * per_1000,
+        "dash": dash * per_1000,
+    }
+    fw = {w: text.count(w) * per_1000 for w in FUNCTION_WORDS}
+    return {"paragraph_length_chars": para_mean, "punctuation_per_1k": punc,
+            "function_words_per_1k": fw}
+
+
+def aggregate_chapter_quantiles(chapter_texts: list[str]) -> dict:
+    """对一组章节文本聚合 per-章经验分位数（L1a 蒸馏端补 band 数据源 · 北极星①）。
+
+    输出三组分位数桶（每桶各字段都是 calc_quantiles 结果）：
+      · paragraph_length_chars : per-章段均长（CJK 字/段）分布 → [p5..p95]
+      · punctuation_per_1k      : 各标点 per-1k 密度的 per-章分布
+      · function_words_per_1k   : 各功能词 per-1k 频率的 per-章分布
+    validate_style 据此把 mean±容差 band 升级为 [p5,p95] 经验 band。坏章自动跳过。"""
+    para_vals: list[float] = []
+    punc_vals: dict[str, list[float]] = {}
+    fw_vals: dict[str, list[float]] = {}
+    used = 0
+    for text in chapter_texts:
+        m = chapter_metrics_lite(text)
+        if m is None:
+            continue
+        used += 1
+        para_vals.append(m["paragraph_length_chars"])
+        for k, v in m["punctuation_per_1k"].items():
+            punc_vals.setdefault(k, []).append(v)
+        for w, v in m["function_words_per_1k"].items():
+            fw_vals.setdefault(w, []).append(v)
+    return {
+        "n_chapters_used": used,
+        "paragraph_length_chars": calc_quantiles(para_vals),
+        "punctuation_per_1k": {k: calc_quantiles(v) for k, v in punc_vals.items()},
+        "function_words_per_1k": {w: calc_quantiles(v) for w, v in fw_vals.items()},
+    }
+
+
 def length_distribution(lengths: list[int]) -> dict:
     bins = {"le5": 0, "6to15": 0, "16to30": 0, "31to50": 0, "gt50": 0}
     for length in lengths:

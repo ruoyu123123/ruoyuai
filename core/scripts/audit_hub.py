@@ -578,6 +578,39 @@ def _check_auto_waiver(issue_code: str, scene_types_set: set[str], suggestions: 
     return None
 
 
+# severity 阶梯（严 → 宽）：fatal > error > warning > info。
+# L2-0 soft-cap 只下降一档，绝不把 info 再往下消失。
+_SEVERITY_DOWNGRADE = {"fatal": "error", "error": "warning", "warning": "info", "info": "info"}
+
+
+def _apply_auto_calibration_softcap(issue: dict, match: dict) -> bool:
+    """L2-0 止血（2026-05-30）：calibration suggestion 命中后【降一档严格度】而非整条豁免。
+
+    根因复盘：旧逻辑命中 ≥3 次后把整条 issue waived=True —— 等于「完全关掉该检测」，
+    无穷增益二元跳变、关了回不来、无衰减，是矫枉过正反向震荡源。
+
+    新逻辑（呼应 learning_loop 建议原文「降级默认 severity」）：
+      - 保留检测【存在性】：issue 仍留在 all_issues / 报告里（不 waived、不删除），
+        只是 severity 沿阶梯下降一档（fatal→error→warning→info），不再反复刷屏为高优阻断项。
+      - info 已是最低档：到 info 后只打标记、不再下降（永不彻底消失）。
+      - 北极星⑤顾问制边界：本函数永不碰 hard_gate（调用方已过滤），永不新增/改判 code、
+        永不写 HARD_GATE_CODES，纯 advisory 内部降档。
+
+    原地修改 issue。返回 True 表示真发生了降档（用于计数 / 日志）。
+    """
+    old_sev = issue.get("severity", "info")
+    new_sev = _SEVERITY_DOWNGRADE.get(old_sev, "info")
+    # 已经在最低档 info：仅盖标记保留可审计性，不重复降、不静默
+    issue["severity"] = new_sev
+    issue["_auto_calibration_softcap"] = {
+        "from_severity": old_sev,
+        "to_severity": new_sev,
+        "suggestion": str(match.get("suggestion", ""))[:120],
+        "waived_count": match.get("waived_count"),
+    }
+    return new_sev != old_sev
+
+
 # ============ v19 豁免协议：读取 + 应用 ============
 
 def _load_waivers(waivers_path: str) -> list:
@@ -1056,8 +1089,10 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     # 这里只对单章内"明显误判"打 meta_suspect 标（如 validate_style 在已分离 v18 仍报字数虚高）
     # 单章无法判定 100% 命中，留空 —— meta 判定交给 learning_loop 跨章扫描
 
-    # v19.2 工具校准自动豁免：基于 learning_loop 累积的 tool_calibration_suggestions
-    # 同一 code 在同场景被反复豁免 ≥4 次后，audit_hub 启动时自动加豁免（无需 writer 重新写理由）。
+    # v19.2 工具校准自动降档（L2-0 止血 2026-05-30 · 原「自动豁免」改为「降一档严格度」）：
+    # 基于 learning_loop 累积的 tool_calibration_suggestions。同一 code 在同场景被反复豁免
+    # ≥3 次后，audit_hub 启动时对命中的 advisory issue【降一档 severity】（保留检测存在性，
+    # 不再整条 waived / 完全关闭该检测）—— 修旧逻辑「无穷增益二元跳变、关了回不来」矫枉过正。
     calibration_suggestions = _load_calibration_suggestions(project_root)
     if calibration_suggestions:
         # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
@@ -1081,20 +1116,17 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                         break
             except (json.JSONDecodeError, ValueError):
                 pass
-        auto_waived_count = 0
+        auto_softcap_count = 0
         for issue in all_issues:
             if issue.get("gate_level") == "hard_gate":
-                continue  # hard_gate 不可自动豁免
+                continue  # hard_gate 不可自动降档/豁免（北极星⑤顾问制边界）
             match = _check_auto_waiver(issue.get("code", ""), scene_types_set, calibration_suggestions)
             if match:
-                # 把自动豁免追加到 waivers 列表（让 _apply_waivers 走原有逻辑）
-                waivers.append({
-                    "code": issue["code"],
-                    "reason": f"[auto-calibration] learning_loop 累积建议: {match.get('suggestion', '')[:60]}",
-                })
-                auto_waived_count += 1
-        if auto_waived_count:
-            print(f"  [auto-calibration] 自动豁免 {auto_waived_count} 项（基于 {len(calibration_suggestions)} 条 tool_calibration_suggestion）", file=sys.stderr)
+                # L2-0 止血：命中 → 降一档严格度，【保留检测存在性】（不再 waived 整条关闭）
+                if _apply_auto_calibration_softcap(issue, match):
+                    auto_softcap_count += 1
+        if auto_softcap_count:
+            print(f"  [auto-calibration] 降档 {auto_softcap_count} 项严格度（保留检测，未关闭；基于 {len(calibration_suggestions)} 条 tool_calibration_suggestion）", file=sys.stderr)
 
     # v19 顾问制：应用 AI 豁免 —— advisory 项命中豁免 → waived=True；hard_gate 强制忽略豁免。
     # 在分类之前应用：被豁免的 issue 不进 det_issues/agent_issues，不计入 needs_agent。

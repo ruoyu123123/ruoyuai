@@ -2088,6 +2088,119 @@ def _collect_distill_voice_refs(scanner) -> dict:
     }
 
 
+def _collect_deep_writing_dims(scanner) -> dict:
+    """L4 · 深层创作维度提示（D1-D3）—— 纯 prompt 注入，从源头降问题率。
+
+    北极星⑤顾问非法官：本字段**只注入创作提示、绝不检测/判决**。没有 scanner、没有
+    hard_gate、gate_level 永远 advisory。writer 看到提示可自由取舍（作者档第一权威）。
+
+    三个深层维度（均有「作者档基线（有则优先）」+「通用提示（无基线时兜底）」两档）：
+      D1 心理距离档位：Cohn 意识呈现三模式 + Gardner 四级 psychic distance 谱 +
+         Deep POV 滤镜词删除提示（想 / 觉得 / 感到 / 意识到 / 看到 / 听到）。
+         作者档基线：narrative_craft.narrative_distance_distribution + quantitative.inner_monologue_ratio。
+      D2 visceral-first 情绪顺序：先生理本能反应 → 再认知 → 最后才命名情绪
+         （呼应 CLAUDE.md「不写他感到愤怒，写他把杯子摔在地上」）。
+         作者档基线：writing_techniques_b3_samples.dim25_psychology_technique。
+      D3 动机可溯源 + 弧光铺垫：Ghost 过去创伤 → Lie 错误信念 → Want 剧情目标 vs
+         Need 真相需求；避免动机透明化综合征（角色心理一览无余）。
+         作者档基线：narrative_fingerprint.character_behavior_loops + character_depth_grade_distribution。
+
+    仅注入提示文本与少量基线摘要（context 预算友好），不全量塞分布。
+    """
+    sd = {}
+    style_path = scanner.root / "_数据库" / "作者风格.json"
+    if style_path.exists():
+        try:
+            loaded = json.loads(style_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                sd = loaded
+        except (json.JSONDecodeError, ValueError):
+            sd = {}
+
+    nc = sd.get("narrative_craft") if isinstance(sd.get("narrative_craft"), dict) else {}
+    quant = sd.get("quantitative") if isinstance(sd.get("quantitative"), dict) else {}
+    nf = sd.get("narrative_fingerprint") if isinstance(sd.get("narrative_fingerprint"), dict) else {}
+    b3 = sd.get("writing_techniques_b3_samples") if isinstance(sd.get("writing_techniques_b3_samples"), dict) else {}
+
+    # ---- D1 心理距离档位 ----
+    d1 = {
+        "label": "心理距离档位（psychic distance）",
+        "tip": (
+            "意识呈现三模式（Cohn）：① 直接引语『他想：完了』② 自由间接引语『完了，他确实完了』"
+            "（叙述与人物意识融合，无引导词）③ 心理叙述『他知道大势已去』。"
+            "心理距离谱（Gardner 四级）：远（全景白描）→ 中（角色视角概述）→ 近（贴着角色想）→ "
+            "极近（直接进入意识流）。同一场景可滑动调焦，紧张段贴近、过渡段拉远。"
+            "Deep POV 删滤镜词：贴近视角时删『想 / 觉得 / 感到 / 意识到 / 看到 / 听到』——"
+            "不写『他看到门开了』，写『门开了』。"
+        ),
+    }
+    ndd = nc.get("narrative_distance_distribution")
+    imr = quant.get("inner_monologue_ratio")
+    if isinstance(ndd, dict) and ndd:
+        # 取占比最高的距离档位作为作者基线主调
+        try:
+            top = sorted(ndd.items(), key=lambda kv: kv[1] if isinstance(kv[1], (int, float)) else 0, reverse=True)
+            d1["author_baseline_distance_top"] = [k for k, _ in top[:3]]
+        except Exception:
+            pass
+    if isinstance(imr, dict) and imr.get("mean") is not None:
+        d1["author_inner_monologue_ratio_mean"] = imr.get("mean")
+    d1["_baseline_source"] = (
+        "作者档" if ("author_baseline_distance_top" in d1 or "author_inner_monologue_ratio_mean" in d1)
+        else "通用（作者档未量化该维度）"
+    )
+
+    # ---- D2 visceral-first 情绪顺序 ----
+    d2 = {
+        "label": "visceral-first 情绪顺序",
+        "tip": (
+            "情绪三段式：先写生理本能反应（心跳 / 胃部收紧 / 手指发凉 / 呼吸不畅）→ 再写认知判断"
+            "（意识到危险、想起某事）→ 最后才命名情绪（且尽量用动作替代命名）。"
+            "不写『他感到愤怒』，写『他把杯子摔在地上』。情绪词是最后兜底，优先让身体和动作说话。"
+        ),
+    }
+    psych = b3.get("dim25_psychology_technique")
+    if isinstance(psych, list) and psych:
+        first = psych[0]
+        note = first.get("note") if isinstance(first, dict) else None
+        if isinstance(note, str) and note:
+            d2["author_psychology_sample"] = note[:160]
+    d2["_baseline_source"] = "作者档" if "author_psychology_sample" in d2 else "通用（作者档未给心理技法样本）"
+
+    # ---- D3 动机可溯源 + 弧光铺垫 ----
+    d3 = {
+        "label": "动机可溯源 + 弧光铺垫",
+        "tip": (
+            "角色动机分层：Ghost（过去创伤 / 旧伤痕）→ Lie（由 Ghost 长出的错误信念）→ "
+            "Want（角色自以为想要的剧情目标）vs Need（角色真正需要面对的真相）。"
+            "Want 推动情节、Need 推动弧光，二者常冲突。避免动机透明化综合征：不要一次把角色心理"
+            "和盘托出，让动机靠行为 / 选择 / 矛盾决定逐步显形，读者自行拼图。"
+        ),
+    }
+    loops = nf.get("character_behavior_loops")
+    if isinstance(loops, dict) and loops:
+        d3["author_behavior_loops"] = dict(list(loops.items())[:3])
+    depth = nf.get("character_depth_grade_distribution")
+    if isinstance(depth, dict) and depth:
+        d3["author_depth_grade_distribution_top"] = dict(list(depth.items())[:3])
+    d3["_baseline_source"] = (
+        "作者档" if ("author_behavior_loops" in d3 or "author_depth_grade_distribution_top" in d3)
+        else "通用（作者档未给行为环 / 深度分布）"
+    )
+
+    return {
+        "_note": (
+            "L4 深层创作维度提示（D1 心理距离 / D2 visceral-first 情绪 / D3 动机弧光）——"
+            "纯创作提示，无检测无门禁。作者档若有对应基线则以基线为准（第一权威），否则用通用提示兜底。"
+        ),
+        "gate_level": "advisory",  # 北极星⑤：永远顾问，绝不 hard_gate
+        "advisory_only": True,
+        "D1_psychic_distance": d1,
+        "D2_visceral_first_emotion": d2,
+        "D3_motivation_arc": d3,
+    }
+
+
 def _collect_prev_judge_findings(scanner, chapter: int, lookback: int = 3) -> dict:
     """v19.3: 从前 lookback 章的 .judge_reports/ 抽 health_warnings + reasoning_trace 摘要，
     注入下章 manifest 让 writer 看到具体警告（不只是 grade 数字）。
@@ -2733,6 +2846,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "naming_convention": _collect_naming_convention(s),     # v22.4dim N5: 角色命名规范
         "main_character_arcs": _collect_main_character_arcs(s, top_k=3),  # v22.4dim Round2: 原作主角 Stanford 6 维参考
         "distill_voice_packs_reference": _collect_distill_voice_refs(s),
+        # L4 北极星①+⑤：深层创作维度提示（D1 心理距离 / D2 visceral-first 情绪 / D3 动机弧光）——
+        # 纯 prompt 注入从源头降问题率，无 scanner 无 hard_gate，全 advisory。作者档基线优先、否则通用兜底。
+        "deep_writing_dims": _collect_deep_writing_dims(s),
         "distill_golden_few_shot": _collect_golden_few_shot(s, chapter),
         "selective_history_retrieval": _collect_selective_history(s, chapter, top_k=3),
         "reader_preferences": _collect_reader_preferences(s),
@@ -2796,6 +2912,7 @@ def _build_cache_layout() -> dict:
         "STATIC_99_cacheable": [
             "distill_continuity_template",       # 蒸馏散文衔接模板
             "distill_voice_packs_reference",     # 原作角色风格 DNA
+            "deep_writing_dims",                 # L4: D1 心理距离 / D2 visceral-first / D3 动机弧光（全书不变创作提示）
             "distill_golden_few_shot",           # 蒸馏 golden_passages
             "title_style",                       # v22.4dim N5: 章节标题命名指纹（全书不变）
             "naming_convention",                 # v22.4dim N5: 角色命名规范（全书不变）
