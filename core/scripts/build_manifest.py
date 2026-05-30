@@ -432,31 +432,54 @@ class DatabaseScanner:
         `ch` 字段**。旧实现按废弃的 `e.get("ch") == self.ch` 过滤 → clock_events_this_ch
         恒空 → 时钟事件浮现机制死掉、时间线 must_read 永停 P1。
 
-        改用 cluster / date 颗粒匹配（北极星②cluster 单位 · ③涟漪/大势驱动 · ⑤顾问层
-        注入不碰 hard_gate 不干涉模型）：
-          1. cluster 颗粒：event.cluster（经 cluster_lookup.normalize_cluster_id 归一）
-             == 本章所属 cluster_id（_current_cluster_id 唯一权威反查）
-          2. date 颗粒：event.date == current_time.date（同一叙事日的世界时钟事件）
-          3. ch 颗粒：兼容仍带 `ch` 字段的旧数据（不破坏既有项目）
+        2026-05-30 补全（batch6 #3 不完整修复 · 没调查没发言权）：3 个真实项目实测
+        world_clock_events 是 **3 种 schema**，batch6 只认 `cluster`/`date` 字段名 →
+        只覆盖城南（date），纵尸司/诡异因字段名不符仍孤儿（hits=0 被误当成功）：
+          · 城南：{date, event, vol}             → date 颗粒（current_time.date）
+          · 纵尸司：{day(整数日计数), event, impact} → day 颗粒（current_time.day）
+          · 诡异：{absolute_time, cluster_revealed(="cluster_001 …"), event}
+                  → cluster 颗粒（cluster_revealed）+ date 颗粒（absolute_time）
+        改为 **tolerant 多 schema 字段别名兼容**（应对 AI 自由生成 schema 的通用策略 ·
+        北极星②cluster 单位 · ③涟漪/大势驱动 · ⑤顾问层注入不碰 hard_gate 不干涉模型）：
+          1. cluster 颗粒：event.cluster | event.cluster_revealed（诡异）
+             经 cluster_lookup.normalize_cluster_id 归一（容忍 "cluster_001 (影印件…)"
+             这类带后缀文本——regex 抽首个数字）比 本章所属 cluster_id
+             （_current_cluster_id 唯一权威反查；反查不到时退回 current_time.cluster）
+          2. date 颗粒：event.date | event.absolute_time（诡异）
+             比 current_time.date | current_time.absolute_time
+          3. day 颗粒：event.day（纵尸司整数日计数）比 current_time.day
+          4. ch 颗粒：兼容仍带 `ch` 字段的旧数据（不破坏既有项目）
+        颗粒优先级 cluster > date > day > ch（精准颗粒优先）。
         vol（卷）颗粒过粗——会把整卷每章都标命中——故意不用作 this_ch 命中。
         """
         data = self.load("时间线", {})
         current = data.get("current_time", {}) or {}
-        cur_date = current.get("date")
+        # date 颗粒：current_time 的日期锚（兼容 date / absolute_time 别名）
+        cur_date = current.get("date") or current.get("absolute_time")
+        # day 颗粒：纵尸司用整数「第 N 日」计数（current_time.day == event.day）
+        cur_day = current.get("day")
+        # cluster 颗粒：优先 ch→cluster 权威反查，反查不到退回 current_time.cluster（诡异）
         cur_cid = self._current_cluster_id()
         cur_cid_norm = cluster_lookup.normalize_cluster_id(cur_cid) if cur_cid else None
+        if cur_cid_norm is None:
+            cur_cid_norm = cluster_lookup.normalize_cluster_id(current.get("cluster"))
 
         hits: list[dict] = []
         for e in data.get("world_clock_events", []) or []:
             if not isinstance(e, dict):
                 continue
             matched_by = None
-            ev_cluster = e.get("cluster")
+            # cluster 颗粒：cluster | cluster_revealed（诡异）字段别名
+            ev_cluster = e.get("cluster") or e.get("cluster_revealed")
+            ev_date = e.get("date") or e.get("absolute_time")  # date | absolute_time 别名
+            ev_day = e.get("day")
             if (cur_cid_norm and ev_cluster is not None
                     and cluster_lookup.normalize_cluster_id(ev_cluster) == cur_cid_norm):
                 matched_by = "cluster"
-            elif cur_date and e.get("date") and e.get("date") == cur_date:
+            elif cur_date and ev_date and ev_date == cur_date:
                 matched_by = "date"
+            elif cur_day is not None and ev_day is not None and ev_day == cur_day:
+                matched_by = "day"
             elif e.get("ch") is not None and e.get("ch") == self.ch:
                 matched_by = "ch"
             if matched_by:

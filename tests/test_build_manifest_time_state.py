@@ -8,13 +8,22 @@
 时钟事件浮现机制死掉、时间线 must_read 永停 P1。
 
 守护点：
-  · cluster 颗粒：event.cluster == 本章所属 cluster_id（经 cluster_lookup 归一）
-  · date 颗粒：event.date == current_time.date
+  · cluster 颗粒：event.cluster | event.cluster_revealed == 本章所属 cluster_id（经 cluster_lookup 归一）
+  · date 颗粒：event.date | event.absolute_time == current_time.date | current_time.absolute_time
+  · day 颗粒：event.day == current_time.day（纵尸司整数日计数）
   · ch 颗粒：兼容仍带 ch 字段的旧数据
   · vol（卷）过粗 → 故意不命中（防整卷每章误标）
   · 真实城南 schema（无 ch、有 date/cluster）必须能浮现，不再恒空
   · build_manifest() 时间线 must_read 命中时升 P0（北极星⑤顾问层注入·非 hard_gate）
   · 不崩、不伪造（脏数据 / 文件缺失）
+
+batch6 #3 补全（2026-05-30 · tolerant 多 schema 字段别名 · 没调查没发言权）：
+3 真实项目实测 world_clock_events 是 3 种 schema，batch6 只认 cluster/date 字段名 →
+纵尸司（day）/诡异（cluster_revealed/absolute_time）因字段名不符仍孤儿 hits=0 被误当成功。
+本测试用 3 个真实 schema fixture 各断言对应颗粒能浮现：
+  · 城南：{date, event, vol}                       → date 颗粒
+  · 纵尸司：{day, event, impact}                    → day 颗粒（current_time 也用 day）
+  · 诡异：{absolute_time, cluster_revealed, event}  → cluster 颗粒（含后缀文本）+ absolute_time date 颗粒
 """
 import json
 import sys
@@ -149,6 +158,117 @@ def test_legacy_ch_field_still_matches():
         assert len(hits) == 1
         assert hits[0]["_matched_by"] == "ch"
         assert hits[0]["event"] == "旧 ch 颗粒事件"
+
+
+# ---------- 真实 3 schema 补全（batch6 #3）：day / cluster_revealed / absolute_time ----------
+
+# 纵尸司真实结构：{day(整数日计数), event, impact} · current_time 也用 day
+_ZOMBIE_TIMELINE = {
+    "current_time": {"day": 45, "period": "夜", "chapter": 1,
+                     "season": "暮春", "lunar": "大昭 327 年 三月初九"},
+    "npc_schedules": {"钟离阙": "..."},
+    "world_clock_events": [
+        {"event": "户部查账行文下发", "day": 45, "impact": "主角第一次面对账目压力"},
+        {"event": "江南税赋第三年欠收奏报抵京", "day": 60, "impact": "朝堂三方角力升级"},
+    ],
+}
+
+# 诡异真实结构：{absolute_time, cluster_revealed(="cluster_001 (…)" 带后缀文本), event}
+_EERIE_TIMELINE = {
+    "current_time": {"day": 1, "period": "morning", "cluster": "cluster_001",
+                     "season": "春末（4 月底）", "year": 2026},
+    "npc_schedules": {"上级审查组": "..."},
+    "world_clock_events": [
+        {"event": "1985 SCP-7Q-001 收容协议签订", "absolute_time": "1985-04-12",
+         "cluster_revealed": "cluster_001 (影印件出现)"},
+        {"event": "陆建国入职第七窗口", "absolute_time": "2015 年（约）",
+         "cluster_revealed": "cluster_001 (背景)"},
+        {"event": "2026 Q2 上级审查组下调研令", "absolute_time": "2026-Q2",
+         "cluster_revealed": "cluster_005"},
+    ],
+}
+
+
+def test_day_granularity_surfaces_real_zombie_event():
+    """纵尸司 day 颗粒：event.day == current_time.day → 浮现当日世界时钟事件。
+
+    batch6 只认 cluster/date 字段名 → day 字段孤儿恒空；补全后按 day 命中。
+    current_time.day=45 → 命中 day=45 那条，不命中 day=60 的未来事件（不误命中）。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), timeline=_ZOMBIE_TIMELINE, clusters=_CLUSTERS)
+        s = bm.DatabaseScanner(tmp, 1)
+        r = s.time_state()
+        hits = r["clock_events_this_ch"]
+        assert len(hits) == 1, hits
+        assert hits[0]["_matched_by"] == "day"
+        assert hits[0]["day"] == 45
+        assert "户部查账行文下发" in hits[0]["event"]
+
+
+def test_day_no_match_future_day_empty():
+    """current_time.day 早于所有事件 day → 不误命中（纵尸司 day31 实测：事件在 45/60）。"""
+    tl = dict(_ZOMBIE_TIMELINE)
+    tl["current_time"] = dict(tl["current_time"], day=31)
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), timeline=tl, clusters=_CLUSTERS)
+        s = bm.DatabaseScanner(tmp, 1)
+        r = s.time_state()
+        assert r["clock_events_this_ch"] == []
+
+
+def test_cluster_revealed_alias_surfaces_real_eerie_events():
+    """诡异 cluster_revealed 别名：event.cluster_revealed(带后缀文本)归一 == 本章 cluster_id。
+
+    ch1 ∈ cluster_001（_CLUSTERS [1,4]）；前两条 cluster_revealed='cluster_001 (…)'
+    应命中（regex 抽首个数字容忍后缀），cluster_005 那条不命中。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), timeline=_EERIE_TIMELINE, clusters=_CLUSTERS)
+        s = bm.DatabaseScanner(tmp, 1)
+        r = s.time_state()
+        assert r["current_cluster_id"] == "cluster_001"
+        hits = r["clock_events_this_ch"]
+        assert len(hits) == 2, hits
+        assert all(h["_matched_by"] == "cluster" for h in hits)
+        assert {h["event"] for h in hits} == {
+            "1985 SCP-7Q-001 收容协议签订", "陆建国入职第七窗口"}
+
+
+def test_cluster_revealed_falls_back_to_current_time_cluster():
+    """ch→cluster 反查不到（无 事件簇/blueprint）时退回 current_time.cluster → 仍能命中。
+
+    通用 tolerant 策略：诡异 current_time 直接带 cluster='cluster_001'，
+    即便 _current_cluster_id() 返回 None 也应据此命中 cluster_revealed。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        # 不传 clusters → ch_to_cluster_id 返回 None → 退回 current_time.cluster
+        tmp = _mk_project(Path(d), timeline=_EERIE_TIMELINE)
+        s = bm.DatabaseScanner(tmp, 1)
+        r = s.time_state()
+        assert r["current_cluster_id"] is None  # 反查不到
+        hits = r["clock_events_this_ch"]
+        assert len(hits) == 2, hits
+        assert all(h["_matched_by"] == "cluster" for h in hits)
+
+
+def test_absolute_time_alias_date_granularity():
+    """诡异 absolute_time 别名走 date 颗粒：current_time 无 cluster 时按 absolute_time 比对。"""
+    tl = {
+        "current_time": {"absolute_time": "2026-Q2"},  # 无 cluster → 不走 cluster 颗粒
+        "world_clock_events": [
+            {"event": "调研令", "absolute_time": "2026-Q2"},
+            {"event": "旧事", "absolute_time": "1985-04-12"},
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), timeline=tl)  # 无 clusters → cur_cid None
+        s = bm.DatabaseScanner(tmp, 1)
+        r = s.time_state()
+        hits = r["clock_events_this_ch"]
+        assert len(hits) == 1, hits
+        assert hits[0]["_matched_by"] == "date"
+        assert hits[0]["event"] == "调研令"
 
 
 # ---------- vol（卷）过粗：故意不命中 ----------
