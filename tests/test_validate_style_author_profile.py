@@ -791,12 +791,307 @@ def test_G_real_jingsong_long_para_not_fail_with_profile_cluster():
     assert lp.status != "FAIL", (lp.status, lp.detail, lp.target_desc)
 
 
-def test_G_real_long_para_override_does_not_relax_hardgate_120():
-    """放宽 long_para（80-120 字 advisory）绝不放松 > 120 字非对话段 hard_gate。
-    构造 2 段 > 120 字非对话段 + 作者档（gt50 放宽）→ 单段超长仍 FAIL（hard_gate 不动）。"""
+def test_G_real_long_para_override_does_not_relax_hardgate():
+    """放宽 long_para（80-120 字 advisory 计数）绝不放松**超天花板**非对话段 hard_gate。
+
+    2026-05-30 [#2]：gt50=0.4379 现会同时把 max_para_chars 天花板放宽到 208（长段签名作者），
+    故用 2 段**> 208**（超放宽后天花板）的非对话段验证——long_para advisory 层放宽绝不
+    放松超天花板 hard_gate FAIL。"""
     sd = {"quantitative": {"paragraph_length_distribution": {"gt50": 0.4379}}}
     t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
     t = vs._apply_style_overrides(t, sd)
+    assert t["para_max_chars"]["hard_gate"] == 208, t["para_max_chars"]  # gt50 签名 → 天花板 208
+    text = ("他" * 220) + "\n\n" + ("她" * 220)  # 2 段非对话 > 208（超例外 1）
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)  # hard_gate 绝不被 advisory 放松
+
+
+# ════════════════════════════════════════════════════════════════
+# [H] 说话人前缀对话段豁免（2026-05-30 北极星⑤ · #1 · R2/R4）
+#
+# 根因：_is_full_dialogue_para 只豁免「段首=开引号 且 段尾=闭引号」的纯引号段，漏掉中文
+# 网文**最高频**对话形式「说话人/动作前缀 + ：/，X道： + 整段引号包裹主体」（首字是 CJK
+# 说话人名而非引号 → 豁免失效 → 判非对话 → 超 hard_gate 触发 STYLE_单段超长 FAIL=真作者
+# 对话段误伤）。实证：蛊真人 ch444 段45『葛光便答：“…”』(146字)、段56『蛮多大怒：“…”』
+# (124字)；ch646 段4『方源答道：“…”』(195字)、段30『墨瑶意志大笑一阵，语气又缓和道：
+# “…”』(167字)——首字 CJK，旧检测器判非对话 → FAIL。
+# 修：_is_full_dialogue_para 扩展识别「可选短说话人前缀（以全/半角冒号收尾·≤20 CJK·无句末符）
+# + 引号包裹主体 + 段尾闭引号」也算完整对话段 → 降 WARN（对话不可中切·advisory 可豁免）。
+# 纪律 a：只认真对话（提示语冒号 + 引号成对）·不把普通叙述段误判成对话豁免。
+# ════════════════════════════════════════════════════════════════
+
+_DQ_O = "“"   # 开弯引号 U+201C
+_DQ_C = "”"   # 闭弯引号 U+201D
+
+
+def test_H_speaker_prefix_dialogue_recognized():
+    """说话人前缀 + 冒号 + 引号包裹主体 + 段尾闭引号 → 识别为完整对话段（豁免）。"""
+    para = "葛光便答：" + _DQ_O + "话" * 130 + _DQ_C
+    assert vs._is_full_dialogue_para(para) is True
+
+
+def test_H_action_prefix_with_comma_lead_recognized():
+    """带逗号引导从句的动作前缀（…，X道：）同样识别（前缀短 + 无句末符 + 冒号收尾）。"""
+    para = "墨瑶意志大笑一阵，语气又缓和道：" + _DQ_O + "话" * 150 + _DQ_C
+    assert vs._is_full_dialogue_para(para) is True
+
+
+def test_H_pure_quote_para_still_recognized():
+    """纯引号段（无前缀）仍识别（不破坏既有 ① 路径）。"""
+    assert vs._is_full_dialogue_para(_DQ_O + "话" * 127 + _DQ_C) is True
+    assert vs._is_full_dialogue_para("「" + "话" * 130 + "」") is True
+
+
+def test_H_half_width_colon_with_space_recognized():
+    """半角冒号 + 冒号与引号间空格（如 `小明说: "…"`）容错识别。"""
+    para = "小明说: " + _DQ_O + "话" * 130 + _DQ_C
+    assert vs._is_full_dialogue_para(para) is True
+
+
+def test_H_narration_with_embedded_quote_not_exempted():
+    """纪律 a：叙述段内嵌引语但**段尾非闭引号**（引号后还有叙述）→ 不算对话豁免。"""
+    para = "他说：" + _DQ_O + "好的" + _DQ_C + "，然后转身走了，外面下起了大雨。" + "啊" * 100
+    assert vs._is_full_dialogue_para(para) is False
+
+
+def test_H_long_narration_block_plus_short_quote_not_exempted():
+    """纪律 a：长叙述块（含句末符·前缀超长）+ 尾部短引语 → 仍是应受门禁的真长叙述段，不豁免。"""
+    para = "天色渐暗，乌云压城，远处传来雷声。他站在窗前，望着外面发呆。许久之后他才缓缓道：" \
+           + _DQ_O + "走吧。" + _DQ_C
+    assert vs._is_full_dialogue_para(para) is False  # 前缀含句末符「。」→ 非单条提示语
+
+
+def test_H_prefix_too_long_not_exempted():
+    """纪律 a：前缀 CJK 超 _MAX_SPEAKER_PREFIX_CJK（20）的整段叙述块 + 引语 → 不豁免。"""
+    long_prefix = "甲" * 25 + "缓缓道："  # 25+ CJK 前缀（远超 20）
+    para = long_prefix + _DQ_O + "话" * 100 + _DQ_C
+    assert vs._is_full_dialogue_para(para) is False
+
+
+def test_H_unclosed_quote_not_exempted():
+    """被中切的对话（开引号未闭合·段尾非闭引号）→ 不算完整对话段（不豁免）。"""
+    para = "葛光便答：" + _DQ_O + "叔叔猜对了一半" + "啊" * 100  # 无闭引号
+    assert vs._is_full_dialogue_para(para) is False
+
+
+def test_H_colon_without_quote_not_exempted():
+    """冒号引导但无引号包裹（心理活动直述）→ 非引号对话段，不豁免。"""
+    assert vs._is_full_dialogue_para("他想道：天要塌了。") is False
+
+
+def test_H_real_gu_zhenren_ch444_speaker_prefix_dialogue_not_hardgate():
+    """蛊真人原文 ch444 说话人前缀超长对话段（葛光便答/蛮多大怒）→ 单段超长降 WARN 非 FAIL。"""
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "蛊真人"
+    ch = proj / "原文" / "第444章.txt"
+    sj = proj / "作者风格_FINAL.json"
+    if not (ch.exists() and sj.exists()):
+        return
+    import json
+    import chapter_io as cio
+    raw = ch.read_text(encoding="utf-8")
+    for sep in cio.CHANGES_SEPARATORS:
+        if sep in raw:
+            raw = raw.split(sep)[0].rstrip()
+            break
+    sd = json.loads(sj.read_text(encoding="utf-8"))
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res = vs._chk_para_max(raw, vs.analyze_text(raw), t)
+    assert res.status != "FAIL", (res.status, res.detail)  # 说话人前缀对话段不再误伤 hard_gate
+
+
+def test_H_real_gu_zhenren_ch646_speaker_prefix_dialogue_not_hardgate():
+    """蛊真人原文 ch646 说话人前缀超长对话段（方源答道/墨瑶…道）→ 单段超长降 WARN 非 FAIL。"""
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "蛊真人"
+    ch = proj / "原文" / "第646章.txt"
+    sj = proj / "作者风格_FINAL.json"
+    if not (ch.exists() and sj.exists()):
+        return
+    import json
+    import chapter_io as cio
+    raw = ch.read_text(encoding="utf-8")
+    for sep in cio.CHANGES_SEPARATORS:
+        if sep in raw:
+            raw = raw.split(sep)[0].rstrip()
+            break
+    sd = json.loads(sj.read_text(encoding="utf-8"))
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res = vs._chk_para_max(raw, vs.analyze_text(raw), t)
+    assert res.status != "FAIL", (res.status, res.detail)
+
+
+def test_H_speaker_prefix_dialogue_over_hard_downgrades_to_warn_not_fail():
+    """单段说话人前缀对话超 hard_gate（无其他非对话超长段）→ 降 WARN（不 FAIL）。"""
+    para = "蛮多大怒：" + _DQ_O + "话" * 130 + _DQ_C  # 唯一超长段·说话人前缀对话
+    text = "前一句短话。\n\n" + para
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "WARN", (res.status, res.detail)
+    assert "豁免" in res.detail or "豁免" in res.target_desc, (res.detail, res.target_desc)
+
+
+def test_H_speaker_prefix_does_not_exempt_real_long_narration():
+    """纪律 a 综合：同段含说话人前缀对话（豁免）+ 另有 2 段非对话超长叙述 → 仍 FAIL（不放过真超长）。"""
+    dlg = "葛光便答：" + _DQ_O + "话" * 130 + _DQ_C  # 对话超长（豁免）
+    narr_a = "他" * 130   # 非对话超长 1
+    narr_b = "她" * 130   # 非对话超长 2（超例外 1）
+    text = dlg + "\n\n" + narr_a + "\n\n" + narr_b
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)
+    assert "豁免" in res.detail, res.detail  # 报告点明对话段已豁免
+
+
+# ════════════════════════════════════════════════════════════════
+# [I] 长段签名作者 max_para_chars hard_gate 天花板作者档驱动 override
+#     （2026-05-30 北极星⑤ · #2 · R3/R5）
+#
+# 根因：_chk_para_max 的 120 字 hard_gate 天花板**只在作者档显式 max_para_chars 时放宽**，
+# 但蒸馏产物未产出该字段。惊悚乐园长段是头号签名（画外音对读者 + 游戏 info-dump · 实证作者档
+# paragraph_length.mean_chars=52 / gt50=0.4379 · 真作者非对话段 130-245 字 · 全库 p99=174）被
+# 通用 120 硬墙误伤（121 字精心长段 = fatal）。
+# 修：_apply_style_overrides 加 max_para_chars 天花板的**作者档驱动 override**——作者档实证有
+# 长段签名（gt80/gt50 高 或 段均 ≥40）时放宽天花板到 mean×4（钳 [120,300]）；非签名/无档仍 120。
+# 纪律 b/c：只对实证长段作者放宽·保绝对上限 300（防真失控）·无作者档仍 120（防 AI 滥用）。
+# ════════════════════════════════════════════════════════════════
+
+
+def test_I_jingsong_signature_raises_hardgate_ceiling():
+    """惊悚乐园档（mean 52 / gt50 0.4379）→ max_para_chars 天花板放宽到 208（>120）。"""
+    sd = {"quantitative": {
+        "paragraph_length": {"mean_chars": 51.9997},
+        "paragraph_length_distribution": {"le5": 0.0373, "31to50": 0.2126, "gt50": 0.4379},
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    assert t["para_max_chars"]["hard_gate"] == 208, t["para_max_chars"]
+    assert t["para_max_chars"]["hard_gate"] > 120, t["para_max_chars"]
+
+
+def test_I_explicit_max_para_chars_takes_priority():
+    """作者档显式 max_para_chars（最权威明示）→ 直接用（钳 ≤300）。"""
+    sd = {"quantitative": {"max_para_chars": 180}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    assert t["para_max_chars"]["hard_gate"] == 180, t["para_max_chars"]
+
+
+def test_I_no_signature_author_keeps_120():
+    """无长段签名作者（段均 ~30 · 无分布桶 · 如蛊真人）→ 天花板仍 120（不放宽）。"""
+    sd = {"quantitative": {
+        "chapter_chars": {"mean": 2718.888},
+        "paragraph_count": {"mean": 90.182},  # 段均 ≈30 < 40 → 无长段签名
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    assert t["para_max_chars"]["hard_gate"] == 120, t["para_max_chars"]
+
+
+def test_I_no_profile_keeps_120():
+    """无作者档（仅句长）→ 天花板仍 120（防 AI 滥用超长段）。"""
+    sd = {"quantitative": {"sentence_length": {"mean": 19.0}}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    assert t["para_max_chars"]["hard_gate"] == 120, t["para_max_chars"]
+
+
+def test_I_ceiling_clamped_to_absolute_cap_300():
+    """段均极大的作者（mean 100 → ×4=400）→ 天花板钳到绝对上限 300（防真失控）。"""
+    sd = {"quantitative": {
+        "paragraph_length": {"mean_chars": 100.0},
+        "paragraph_length_distribution": {"gt50": 0.6},
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    assert t["para_max_chars"]["hard_gate"] == 300, t["para_max_chars"]
+
+
+def test_I_helper_signature_detection():
+    """直测 _extract_author_max_para_chars 长段签名判别 + 钳位。"""
+    # gt50 ≥ 0.20 签名 → 208
+    assert vs._extract_author_max_para_chars({"paragraph_length_distribution": {"gt50": 0.4379}}, 52.0) == 208
+    # gt80 ≥ 0.05 签名（无段均）→ 退用 208 锚
+    assert vs._extract_author_max_para_chars({"paragraph_length_distribution": {"gt80": 0.08}}, None) == 208
+    # 段均 ≥40 签名（无分布）→ mean×4 钳位
+    assert vs._extract_author_max_para_chars({}, 45.0) == 180
+    # 无签名（短段·无分布）→ None
+    assert vs._extract_author_max_para_chars({}, 30.0) is None
+    assert vs._extract_author_max_para_chars({}, None) is None
+    # gt50 < 0.20 且段均 < 40 → 无签名 → None
+    assert vs._extract_author_max_para_chars({"paragraph_length_distribution": {"gt50": 0.10}}, 30.0) is None
+
+
+def test_I_runaway_over_abs_cap_still_fails_even_with_signature():
+    """构造单段 500 字纯叙述 + 惊悚乐园档（天花板 208）→ 超绝对上限 300 仍 FAIL（不可豁免·纪律 c）。"""
+    sd = {"quantitative": {
+        "paragraph_length": {"mean_chars": 51.9997},
+        "paragraph_length_distribution": {"gt50": 0.4379},
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    text = "他" * 500  # 单段纯叙述 500 字 > 绝对上限 300
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)
+    assert "绝对上限" in res.detail, res.detail
+
+
+def test_I_ai_superlong_narration_without_profile_still_fails_at_120():
+    """无作者档 AI 超长叙述段（>120 非对话·超例外）→ 仍 FAIL（守 120 防滥用·纪律 c）。"""
+    text = ("他" * 150) + "\n\n" + ("她" * 150)  # 2 段非对话 > 120（超例外 1）
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}  # 无作者档
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)
+
+
+def test_I_generic_narration_over_120_with_short_para_author_still_fails():
+    """普通叙述段（非对话·非长段签名作者）>120 → 仍 FAIL（短段作者天花板仍 120）。"""
+    sd = {"quantitative": {  # 短段作者：段均 ~30 无分布签名
+        "chapter_chars": {"mean": 2718.888},
+        "paragraph_count": {"mean": 90.182},
+    }}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
     text = ("他" * 130) + "\n\n" + ("她" * 130)  # 2 段非对话 > 120（超例外 1）
     res = vs._chk_para_max(text, vs.analyze_text(text), t)
-    assert res.status == "FAIL", (res.status, res.detail)  # hard_gate 绝不被 long_para override 放松
+    assert res.status == "FAIL", (res.status, res.detail)
+
+
+def test_I_real_jingsong_long_para_chapter_not_hardgate_with_profile():
+    """惊悚乐园真原文长段章带作者档：单段超长不再系统性 FAIL（核心实证·画外音/info-dump 长段不误伤）。
+    反证：同章不带作者档（通用 120）单段超长 FAIL（证明确有矫枉过正）。"""
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "惊悚乐园"
+    sj = proj / "作者风格_FINAL.json"
+    if not sj.exists():
+        return
+    import json
+    import chapter_io as cio
+    # 找一个真有长段（>120 非对话段）但 ≤208 的章（实证锚：第002/003/004 等长段章）
+    body = None
+    for cand in ("第002章", "第003章", "第004章", "第005章", "第006章", "第007章"):
+        ch = proj / "原文" / f"{cand}.txt"
+        if not ch.exists():
+            continue
+        raw = ch.read_text(encoding="utf-8")
+        for sep in cio.CHANGES_SEPARATORS:
+            if sep in raw:
+                raw = raw.split(sep)[0].rstrip()
+                break
+        # 该章须含 >120 非对话段（旧 120 会 FAIL）且无 >300 真失控段
+        lens_nd = [len(vs._CJK_RE.findall(pp)) for pp in vs._split_paras(raw)
+                   if not vs._is_full_dialogue_para(pp)]
+        if any(120 < n <= 208 for n in lens_nd) and not any(n > 300 for n in lens_nd):
+            body = raw
+            break
+    if body is None:
+        return
+    sd = json.loads(sj.read_text(encoding="utf-8"))
+    # ① 带作者档：天花板放宽 208 → 不 FAIL
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res_with = vs._chk_para_max(body, vs.analyze_text(body), t)
+    assert res_with.status != "FAIL", (res_with.status, res_with.detail, res_with.target_desc)
+    # ② 反证·不带作者档（通用 120）：同章单段超长 FAIL（矫枉过正实证）
+    t_gen = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    res_none = vs._chk_para_max(body, vs.analyze_text(body), t_gen)
+    assert res_none.status == "FAIL", (res_none.status, res_none.detail)

@@ -244,6 +244,62 @@ def _extract_author_long_para_ratio(q: dict, para_mean: float | None) -> float |
     return None
 
 
+# 单段超长 hard_gate 天花板的绝对上限（北极星⑤ · 2026-05-30 R3/R5）：作者档驱动放宽时
+# 仍封顶 300 CJK，防真失控叙述段（>300 字纯叙述无论作者签名都属穿帮/info-dump 失控）。
+_PARA_MAX_HARD_BASE = 120                   # 通用基线 hard_gate（无长段签名 / 无作者档时守此）
+_PARA_MAX_HARD_ABS_CAP = 300                # 作者档放宽的绝对天花板（防真失控）
+
+
+def _extract_author_max_para_chars(q: dict, para_mean: float | None) -> int | None:
+    """从作者档推**单段超长 hard_gate 天花板**（CJK 字）——仅当作者**实证有长段签名**时放宽。
+
+    2026-05-30 北极星⑤ [#2 长段签名作者 120 字 hard_gate 天花板无作者档 override · R3/R5]：
+    `_chk_para_max` 的 120 字 hard_gate 是按短段爽文标的，但长段签名作者（惊悚乐园：画外音
+    对读者 + 游戏 info-dump · 实证 paragraph_length.mean_chars=52 / gt50=0.4379 / 真作者
+    6/6 章非对话段 130-245 字 · 全库非对话段 p95=121/p99=174）被通用 120 硬墙误伤
+    （121 字精心长段 = fatal 不可豁免）。作者档第一权威（北极星⑤）：作者实证写长段则该维度
+    由作者档说了算，放宽到作者真实长段合理上限。
+
+    判别「长段签名」（任一成立即放宽 · 都基于作者档实证非 genre 猜测）：
+      · 显式长段分布桶 gt80 ≥ 0.05 或 gt50 ≥ 0.20（高比例段落 > 50/80 字）；或
+      · 真实段均长 para_mean ≥ 40 字（段落本就长的作者）。
+    放宽后的 hard_gate 天花板（取最大估计 · 覆盖作者真实长段范围）：
+      · 分布有 p95/p99-级长段证据 → mean_chars × 系数（实测 惊悚乐园 mean 52 ×3 = 156，
+        覆盖其 130-245 真长段段中位且不至放太松）；
+      · 钳到 [_PARA_MAX_HARD_BASE(120), _PARA_MAX_HARD_ABS_CAP(300)]——**绝不破 120 下限**
+        （防把短段作者放松）且**绝不破 300 上限**（防真失控叙述段）。
+
+    无作者档 / 作者无长段签名 → 返回 None（调用方保通用 120 · 防 AI 滥用超长段）。守纪律 b/c。
+    """
+    dist = None
+    for dist_key in ("paragraph_length_distribution", "paragraph_length_chars_distribution"):
+        d = q.get(dist_key)
+        if isinstance(d, dict):
+            dist = d
+            break
+    gt80 = dist.get("gt80") if isinstance(dist, dict) else None
+    gt50 = dist.get("gt50") if isinstance(dist, dict) else None
+    has_signature = (
+        (isinstance(gt80, (int, float)) and gt80 >= 0.05)
+        or (isinstance(gt50, (int, float)) and gt50 >= 0.20)
+        or (para_mean is not None and para_mean >= 40)
+    )
+    if not has_signature:
+        return None
+    # 天花板估计：以真实段均长 × 系数推作者长段合理上限（段均越长 → 长段越长）。
+    # 系数 4.0 拟合 惊悚乐园 全 250 章实测：mean 52 → 208，落在其非对话段 p99(174) 之上、真长段
+    # 上界(任务实证 130-245)之内。逐章回测（per-chapter >ceiling 非对话段计数 p95=1，配例外 1）：
+    #   · 通用 120 天花板：135/250 章 单段超长 FAIL（系统性误伤真作者长段签名）
+    #   · 天花板 208：仅 5/250 FAIL，其中 3 章是 >300 字真失控/坏数据（绝对上限正确拦），
+    #     2 章是 209-243 字极端双长段（作者最上沿·不强求 100% 过 = 非放开）。
+    # 无 para_mean 但有 gt 分布签名 → 退用保守 208（=52×4 锚）。系数仅对长段签名作者生效·
+    # 钳到 [120,300]·守纪律 c（绝对上限防真失控·短段作者/无档仍 120 防 AI 滥用）。
+    est = (para_mean * 4.0) if (para_mean is not None and para_mean > 0) else 208.0
+    ceiling = int(round(est))
+    ceiling = max(_PARA_MAX_HARD_BASE, min(_PARA_MAX_HARD_ABS_CAP, ceiling))
+    return ceiling
+
+
 def _apply_style_overrides(t: dict, sd: dict) -> dict:
     t = {k: dict(v) for k, v in t.items()}
     # 2026-05-29 北极星 P4 [H2-style]：标记「本项目有作者风格档」→ _chk_banned 据此把
@@ -285,13 +341,27 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
         t["onomatopoeia_count"]["min"] = int(must["onomatopoeia"])
     if "bracket_settings" in must:
         t["bracket_settings"]["min"] = int(must["bracket_settings"])
-    # 2026-05-29 北极星 P4 [M1-dont]：段长 hard_gate(默认 120 CJK)对长句作者(严肃/古风/意识流)
-    # 是硬伤——一个 121 字精心长段 = fatal 不可豁免。仅当作者风格档【显式声明】max_para_chars
-    # 才放宽（不按 genre 标签自动猜，守原则5「不干涉模型判断」+「没调查没发言权」）。未声明 → 保持默认。
+    # 2026-05-29 北极星 P4 [M1-dont] + 2026-05-30 [#2 R3/R5]：单段超长 hard_gate(默认 120 CJK)
+    # 对**长段签名作者**是硬伤——一个 121 字精心长段 = fatal 不可豁免。作者档第一权威（北极星⑤）：
+    #   ① 作者档【显式声明】max_para_chars → 直接用（作者最权威的明示意图）；
+    #   ② 否则作者档**实证有长段签名**（gt80/gt50 高 或 段均 ≥40，如惊悚乐园 mean 52/gt50 0.44/
+    #      真作者非对话段 130-245 字）→ 按真实分布驱动放宽天花板（_extract_author_max_para_chars）。
+    # 两路都**钳到 [120, 300]**：绝不破 120 下限（无作者档/短段作者仍守 120 防 AI 滥用超长段）·
+    # 绝不破 300 上限（防真失控叙述段）。守纪律 b/c：只对实证长段作者精准放宽·非放开。
     mpc = q.get("max_para_chars") or sd.get("max_para_chars")
-    if isinstance(mpc, (int, float)) and mpc > t.get("para_max_chars", {}).get("hard_gate", 120):
-        _exc = t.get("para_max_chars", {}).get("exception_per_chapter", 1)
-        t["para_max_chars"] = {"warn": max(80, int(mpc * 0.7)), "hard_gate": int(mpc), "exception_per_chapter": _exc}
+    if not (isinstance(mpc, (int, float)) and mpc > 0):
+        # 无显式声明 → 看作者档长段签名实证驱动（para_mean 已在上方算出·复用）
+        mpc = _extract_author_max_para_chars(q, para_mean)
+    base_hard = t.get("para_max_chars", {}).get("hard_gate", _PARA_MAX_HARD_BASE)
+    if isinstance(mpc, (int, float)) and mpc > base_hard:
+        new_hard = max(_PARA_MAX_HARD_BASE, min(_PARA_MAX_HARD_ABS_CAP, int(mpc)))
+        if new_hard > base_hard:
+            _exc = t.get("para_max_chars", {}).get("exception_per_chapter", 1)
+            t["para_max_chars"] = {
+                "warn": max(80, int(new_hard * 0.7)),
+                "hard_gate": new_hard,
+                "exception_per_chapter": _exc,
+            }
     return t
 
 
@@ -442,6 +512,18 @@ _CJK_RE = re.compile(r"[一-鿿]")
 _Q_OPEN_CP = ("“", "「", "『")   # “ 「 『
 _Q_CLOSE_CP = ("”", "」", "』")  # ” 」 』
 
+# 2026-05-30 北极星⑤ [A-说话人前缀对话段豁免漏检 · R2/R4]：中文网文**最高频**对话形式不是
+# 纯引号段，而是「说话人/动作前缀 + 提示语（：/，X道：）+ 引号包裹主体」——实证两书原文
+# 含冒号引语段 1143 处，提示语字符 715/1143 是 U+FF1A「：」。这类段首字是 CJK（说话人名）
+# 而非引号，旧 _is_full_dialogue_para 只认「段首=开引号」→ 漏检 → 被当非对话超长段触发
+# STYLE_单段超长 hard_gate FAIL（误伤真作者对话段，如蛊真人 ch444 段45『葛光便答：“…”』）。
+# 提示语收尾标记：全/半角冒号是最强判别符（叙述句几乎不会以「：+开引号」起头除非引入言语）。
+_DIALOGUE_CUE_COLONS = ("：", ":")          # 提示语→引语 收尾冒号（全角 U+FF1A / 半角）
+# 说话人前缀允许的最大 CJK 长度（实证：5 处真失误段前缀 4-14 字）。收紧到 20 以排除
+# 「30-100 字叙述块 + 短引语」这类应仍受门禁的真长叙述段（守纪律 a：只认真对话不误豁免叙述）。
+_MAX_SPEAKER_PREFIX_CJK = 20
+_SENT_END_CHARS = "。！？…"                  # 句末终止符（真提示语是单条引入·不含完整句）
+
 
 def _split_paras(text: str) -> list[str]:
     """tolerant 段落切分（与 style_analyzer.split_paragraphs 对齐）。
@@ -468,14 +550,53 @@ def _para_cjk_lens(text: str) -> list[int]:
 
 
 def _is_full_dialogue_para(para: str) -> bool:
-    """整段是否为**完整对话段**——整段被中文弯引号(U+201C…U+201D)或方头引号(「…」/『…』)
-    成对包裹。对话不可中切是叙事常态（北极星⑤ [A-对话段超长豁免]），此类超长段豁免
-    hard_gate（降 advisory）。用 codepoint 严格判左右引号成对，段内换行不影响。"""
+    """整段是否为**完整对话段**——对话不可中切是叙事常态（北极星⑤ [A-对话段超长豁免]），
+    此类超长段豁免 STYLE_单段超长 hard_gate（降 advisory）。识别两种形式：
+
+      ① 纯引号段：整段被中文弯引号(U+201C…U+201D)或方头引号(「…」/『…』)成对包裹。
+      ② **说话人前缀对话段**（中文网文最高频形式 · 2026-05-30 R2/R4 补漏）：
+         「可选短说话人/动作前缀 + 提示语（以全/半角冒号收尾）+ 引号包裹的言语主体，
+         且段尾正是闭引号」。如『葛光便答：“……”』『墨瑶意志大笑一阵，语气又缓和道：“……”』。
+
+    用 codepoint 严格判左右引号成对，段内换行不影响。守纪律 a「只认真对话不误豁免叙述」：
+    前缀必须**短**（≤_MAX_SPEAKER_PREFIX_CJK CJK）且**不含句末终止符**（真提示语是单条引入·
+    非多句叙述块）·言语主体必须被引号成对包裹且段尾收于闭引号——避免把「长叙述块 + 短引语」
+    误判成对话豁免（那类仍是应受门禁的真长叙述段）。"""
     s = para.strip()
     if len(s) < 2:
         return False
+    # ① 纯引号段：段首=开引号 且 段尾=对应闭引号（codepoint 成对）
     for o, c in zip(_Q_OPEN_CP, _Q_CLOSE_CP):
         if s[0] == o and s[-1] == c:
+            return True
+    # ② 说话人前缀对话段：段尾必须是闭引号（言语主体收于段尾）
+    if s[-1] not in _Q_CLOSE_CP:
+        return False
+    # 定位言语主体的开引号（首个开引号即提示语之后的引语起点）
+    open_idx = -1
+    for i, ch in enumerate(s):
+        if ch in _Q_OPEN_CP:
+            open_idx = i
+            break
+    if open_idx <= 0:                       # 无开引号 或 段首即开引号（①已处理）
+        return False
+    prefix = s[:open_idx].rstrip()          # 容半角冒号与引号间空格（如 `小明说: "…"`）
+    if not prefix:
+        return False
+    # 前缀必须以提示语冒号收尾（最强判别符：叙述句几乎不会以「：+开引号」引语）
+    if prefix[-1] not in _DIALOGUE_CUE_COLONS:
+        return False
+    # 前缀须短（说话人/动作引入·非整段叙述）且不含句末终止符（真提示语是单条引入）
+    if any(ec in prefix for ec in _SENT_END_CHARS):
+        return False
+    if len(_CJK_RE.findall(prefix)) > _MAX_SPEAKER_PREFIX_CJK:
+        return False
+    # 言语主体须被引号成对包裹（开引号后到段尾闭引号之间是引语）——open_idx 处开引号
+    # 必须与段尾闭引号是同一对弯/方头引号（codepoint 成对）。
+    body_open = s[open_idx]
+    body_close = s[-1]
+    for o, c in zip(_Q_OPEN_CP, _Q_CLOSE_CP):
+        if body_open == o and body_close == c:
             return True
     return False
 
@@ -514,6 +635,18 @@ def _chk_para_max(text: str, p: dict, t: dict) -> CheckResult:
             ls = _find_lines(text, first_line)
             if ls:
                 fail_lines.extend(ls[:1])
+    # 2026-05-30 北极星⑤ [#2 绝对上限·守纪律 c]：非对话段超 **绝对上限**（_PARA_MAX_HARD_ABS_CAP
+    # =300 CJK）= 真失控叙述段（info-dump 失控/穿帮），**无论作者档放宽到多少、无论例外名额**
+    # 都 FAIL——绝对上限是防真失控的最后硬墙，单条 500 字裸叙述段不被「每章 ≤1 例外」放过。
+    runaway = [(i, n) for (i, n) in over_hard_nondialog if n > _PARA_MAX_HARD_ABS_CAP]
+    if runaway:
+        detail = f"{len(runaway)} 段非对话 > 绝对上限 {_PARA_MAX_HARD_ABS_CAP} 字（真失控叙述段·不可豁免）：" + \
+                 ", ".join(f"段{i}({n}字)" for i, n in runaway[:3])
+        if over_hard_dialog:
+            detail += f"；另 {len(over_hard_dialog)} 段完整对话超长(已豁免)"
+        return CheckResult("单段超长", "FAIL", detail,
+                           f"目标 ≤{warn_th} (hard_gate {hard_th}, 绝对上限 {_PARA_MAX_HARD_ABS_CAP})",
+                           fail_lines)
     # 非对话超长段：例外条款（≤ ex 个 → WARN，> ex → FAIL hard_gate）
     if len(over_hard_nondialog) > ex:
         detail = f"{len(over_hard_nondialog)} 段非对话 > {hard_th} 字（超例外 {ex}）：" + \
