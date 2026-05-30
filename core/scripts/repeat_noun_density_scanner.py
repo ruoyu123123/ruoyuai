@@ -26,39 +26,33 @@ from pathlib import Path
 # 故 cluster 化对本 scanner 阈值无意义 → 不引入 IS_CLUSTER_MODE 分支（删除死变量 + 误导注释）。
 
 
-# 已知高频「那/这 + 量词? + 名词」模板组合白名单
-# 这些是 AI 写作典型的指示性名词，重复出现 = 模板节奏信号
-KNOWN_DEMONSTRATIVE_NOUNS = [
-    # 那 + 量词 + 名词
-    '那只手', '那个手', '那双手',
-    '那个声音', '那种声音', '那阵声音',
-    '那种热', '那种冷', '那种感觉', '那种东西', '那种味道',
-    '那个地方', '那一处', '那条路', '那条道', '那块地',
-    '那根木头', '那截木头', '那块木头', '那段木头',
-    '那只兽', '那只鸟', '那个孩子', '那个人', '那个女人', '那个男人',
-    '那张兽皮', '那块兽皮', '那张皮', '那块皮',
-    '那个梦', '那场梦', '那次梦',
-    '那东西', '那玩意', '那物件',
-    '那一夜', '那一天', '那一刻', '那一次',
-    '那一身', '那一截',
-    # 这 + 量词 + 名词
-    '这只手', '这个声音', '这种感觉', '这个东西', '这个地方',
-    '这种热', '这场梦', '这块兽皮', '这根木头',
-]
+# 「那/这 + [数词?][量词?] + 名词(1-3字)」指示性名词组合提取正则。
+# 2026-05-30 修：原 ~50 项硬白名单子串匹配只覆盖固定词表，白名单外的高频重复名词
+# （那把剑 / 那道光 / 作者特有名词）全漏检。改用正则提取候选名词 token 兑现 docstring：
+#   group(1) = 指示词（那/这），group(2) = 紧跟的名词 token
+# 名词槽限 1-3 个 CJK 字，避免贪婪吃过整句；候选名词以「指示词+名词」组合形态计密度，
+# 既抓 AI 模板节奏（指示性名词反复堆叠），又不会把裸名词在无关语境里误计。
+_DEMONSTRATIVE_RE = re.compile(
+    r'(那|这)[一两二三]?[只个种道把座条根块张段次场]?([一-鿿]{1,3})'
+)
 
 
 def extract_tokens(para: str) -> set:
-    """提取本段所有指示性名词 token（白名单匹配，避免贪婪吃边界）"""
-    tokens = set()
-    for tok in KNOWN_DEMONSTRATIVE_NOUNS:
-        if tok in para:
-            tokens.add(tok)
-    return tokens
+    """提取本段所有指示性名词候选 token（正则提取 group(2) 名词部分）。
+
+    返回名词 token 集合（如「剑」「光」「声音」），后续按窗口统计该名词跟在
+    指示词后的出现密度。"""
+    return {m.group(2) for m in _DEMONSTRATIVE_RE.finditer(para)}
+
+
+def _count_noun_phrase(para: str, noun: str) -> int:
+    """统计本段内「指示词(+数词?+量词?) + <noun>」组合出现次数。"""
+    return sum(1 for m in _DEMONSTRATIVE_RE.finditer(para) if m.group(2) == noun)
 
 
 def count_token_in_window(paras: list, start: int, end: int, token: str) -> int:
-    """统计 token 在 paras[start:end] 中出现次数"""
-    return sum(p.count(token) for p in paras[start:end])
+    """统计名词 token（以指示性名词组合形态）在 paras[start:end] 中出现次数。"""
+    return sum(_count_noun_phrase(p, token) for p in paras[start:end])
 
 
 def scan_chapter(text: str, window_size: int = 5, threshold: int = 4) -> dict:

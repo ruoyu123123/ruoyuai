@@ -29,14 +29,44 @@ def load(p: Path):
 
 _CN_DIGIT = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 
+# 「数字 + 岁」年龄词的正则：数字（**纯阿拉伯** 或 **纯中文**，二者不混）紧跟可选空白后必须接「岁」。
+# 2026-05-30 北极星复审（假阳性修）：年龄绑定判据从「±50 窗口里存在『岁』字」收紧为「数字必须紧邻『岁』」，
+# 杜绝距离（三十里）/数量（三十个）/年份（一九三八年）等无关数字串味成假年龄触发 hard_gate。
+# 阿拉伯/中文分支互斥（不写成 [\d中文]+）—— 否则「张三52岁」会贪婪吃进名字里的「三」匹配出「三52」，
+# _cn_to_int 解析失败 → 整条年龄校验被跳过 → 真年龄矛盾漏报（hard_gate 真阳性丢失，最坏）。
+_AGE_RE = re.compile(r"(\d+|[零一二三四五六七八九十百]+)\s*岁")
+
 
 def _cn_to_int(s: str):
-    """中文/阿拉伯数字 → int（覆盖年龄场景 0-99：十八/三十八/二十/十/52）。无法解析返回 None。
-    2026-05-30 北极星复审：原 isdigit() 把中文数字年龄（三十八岁）全漏掉，使 hard_gate 穿帮检测只覆盖一半。"""
+    """中文/阿拉伯数字 → int（覆盖年龄场景：十八/三十八/二十/十/52/一百二十）。无法解析返回 None。
+    2026-05-30 北极星复审：
+      · 原 isdigit() 把中文数字年龄（三十八岁）全漏掉，使 hard_gate 穿帮检测只覆盖一半。
+      · 补「百」位（一百二十岁→120），覆盖修真/玄幻超长寿命设定的年龄。"""
     if not s:
         return None
     if s.isdigit():
         return int(s)
+    # 「百」位：X百Y十Z / X百Y / 百二十 等（年龄场景上限 999 足够）
+    if "百" in s:
+        hpart, _, rest = s.partition("百")
+        if hpart and hpart not in _CN_DIGIT:
+            return None
+        hundreds = _CN_DIGIT.get(hpart, 1) if hpart else 1
+        if not rest:
+            return hundreds * 100
+        # 「一百零五」（=105）：『零』占位 → 后面单个数字直接当个位。
+        if rest[0] == "零":
+            ones_part = rest[1:]
+            if len(ones_part) == 1 and ones_part in _CN_DIGIT:
+                return hundreds * 100 + _CN_DIGIT[ones_part]
+            return None
+        # 「一百二」简写（=120）：rest 是个位数且无「十」→ 按十位补。
+        if "十" not in rest and len(rest) == 1 and rest in _CN_DIGIT:
+            return hundreds * 100 + _CN_DIGIT[rest] * 10
+        tail = _cn_to_int(rest)
+        if tail is None:
+            return None
+        return hundreds * 100 + tail
     if "十" in s:
         a, _, b = s.partition("十")
         if a and a not in _CN_DIGIT:
@@ -51,18 +81,21 @@ def _cn_to_int(s: str):
     return None
 
 
-def extract_numbers_near(text: str, keyword: str, window: int = 30) -> list[tuple[int, str]]:
-    """找 keyword 附近的中文数字 + 阿拉伯数字。"""
+def extract_ages_near(text: str, keyword: str, window: int = 50) -> list[tuple[int, str]]:
+    """找 keyword 附近、且**紧邻「岁」**的年龄数字（如「三十八岁」「52岁」）。
+    返回 [(年龄数字字符串绝对起始位置, 数字字符串)]。
+
+    2026-05-30 修假阳性：旧 extract_numbers_near 抓窗口内**所有**数字（含距离/数量/年份），
+    再靠「窗口里有『岁』」宽判据绑定年龄 → 「三十里」被当成「三十岁」误报 hard_gate。
+    现在只认「数字+岁」的实例，从源头杜绝串味。"""
     results = []
     for m in re.finditer(re.escape(keyword), text):
         s = max(0, m.start() - window)
         e = min(len(text), m.end() + window)
         ctx = text[s:e]
-        # 找阿拉伯 / 中文数字
-        for num_m in re.finditer(r"[\d一二三四五六七八九十百]+", ctx):
-            num = num_m.group()
-            if len(num) >= 1:
-                results.append((s + num_m.start(), num))  # 数字真实绝对位置（非关键词位置，使 ±50 窗口围绕数字）
+        for age_m in _AGE_RE.finditer(ctx):
+            # group(1) 是数字部分；记录数字在全文的绝对起始位置
+            results.append((s + age_m.start(1), age_m.group(1)))
     return results
 
 
@@ -86,33 +119,26 @@ def scan(project_root: Path, draft_path: Path) -> dict:
             if not fact:
                 continue
             checked_count += 1
-            # 简单启发：fact 中的关键数字/词必须不被矛盾陈述
-            # 抽 fact 中数字
-            fact_nums = re.findall(r"[\d一二三四五六七八九十百]+", fact)
-            if not fact_nums:
-                continue
-            # 找正文中 name 附近的数字（前后 50 字）
-            ctx_nums = extract_numbers_near(text, name, window=50)
-            # 检查是否有矛盾（fact 中数字 vs 正文中数字不一致）
-            # 简化：如果 fact 含「N 岁」，正文中 name 附近若有「M 岁」且 M ≠ N → 冲突
-            age_in_fact = re.search(r"([\d一二三四五六七八九十百]+)\s*岁", fact)
+            # 年龄一致性：仅当 fact 显式声明「N 岁」时启用。
+            # 正文中只比对**真年龄**（数字紧邻「岁」），M ≠ N → 冲突。
+            # 距离（三十里）/数量（三十个）/年份等无关数字不参与，杜绝 hard_gate 假阳性。
+            age_in_fact = _AGE_RE.search(fact)
             if age_in_fact:
                 fact_age = _cn_to_int(age_in_fact.group(1))
-                for pos, ctx_num in ctx_nums:
-                    if fact_age is not None and "岁" in text[max(0, pos-50):pos+50]:
-                        try:
-                            ctx_age = _cn_to_int(ctx_num)  # 支持中文数字年龄（三十八岁）
-                            if ctx_age is not None and ctx_age != fact_age:
-                                conflicts.append({
-                                    "character": name,
-                                    "fact": fact,
-                                    "conflict_value": f"{ctx_num}岁",
-                                    "position": pos,
-                                    "preview": text[max(0, pos-30):pos+30],
-                                })
-                                break
-                        except ValueError:
-                            pass
+                if fact_age is None:
+                    continue
+                ctx_ages = extract_ages_near(text, name, window=50)
+                for pos, ctx_num in ctx_ages:
+                    ctx_age = _cn_to_int(ctx_num)  # 支持中文数字年龄（三十八岁）
+                    if ctx_age is not None and ctx_age != fact_age:
+                        conflicts.append({
+                            "character": name,
+                            "fact": fact,
+                            "conflict_value": f"{ctx_num}岁",
+                            "position": pos,
+                            "preview": text[max(0, pos-30):pos+30],
+                        })
+                        break
 
     return {
         "schema_version": "1.0",

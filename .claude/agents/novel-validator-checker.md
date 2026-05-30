@@ -18,33 +18,63 @@ tools: Read, Write, Bash
 
 ```
 PROJECT: <项目路径>
-CHAPTER: <章节号>
+CHAPTER: <章节号>          # chapter 载体模式必填；cluster 载体模式可缺省
+CLUSTER_ID: <cluster_key>  # cluster 载体模式必填（如 cluster_001）
 MODE: validate-check | style-check
 MAX_ROUNDS: 3
 STYLE_REPORT: [仅 style-check 模式：validate_style.py 的 stdout 输出]
 ```
 
+**两种载体模式**（由是否传 `CLUSTER_ID` 决定）：
+
+- **chapter 载体**（传 `CHAPTER` 不传 `CLUSTER_ID`）：splitter 已切章，读物理章 txt。
+- **cluster 载体**（传 `CLUSTER_ID`）：splitter **尚未跑**（如 cluster-write step 3 双轨质检 fail 派单），
+  此时**没有任何 `第NNN章.txt`**，整 cluster 是一份草稿 txt。你读 cluster 草稿、在草稿上定位违规段落、
+  brief 指向 cluster 草稿相对路径——下游 gen_fixer 也在草稿上精修，**绝不创建章 txt**。
+
 ## 文件载体
+
+**chapter 载体模式**（传 `CHAPTER`、无 `CLUSTER_ID`）：
 
 | 文件 | 路径 | 你怎么用 |
 |------|------|---------|
 | 正文 | `章节/第NNN章/第NNN章.txt` | Read 全文，定位违规段落（line_start/line_end） |
 | 数据 | `章节/第NNN章/第NNN章_changes.json` | 读 `self_eval` 做撒谎复核（先独立判断再读） |
 
-**不再 Edit 任何文件**（除了 Write brief JSON 到 `_数据库/.checker_briefs/ch_NNN_validator.json`）。
+**cluster 载体模式**（传 `CLUSTER_ID=<key>`、splitter 未跑）：
+
+| 文件 | 路径 | 你怎么用 |
+|------|------|---------|
+| 正文 | `章节/cluster_<key>_draft/cluster_<key>_draft.txt` | Read 整 cluster 草稿，定位违规段落（line_start/line_end，基于草稿行号） |
+| 数据 | `章节/cluster_<key>_draft/cluster_<key>_changes.json` | 读 cluster 级 `self_eval` 做撒谎复核（先独立判断再读） |
+
+**不再 Edit 任何文件**（除了 Write brief JSON 到
+`_数据库/.checker_briefs/ch_NNN_validator.json`，cluster 载体模式则写
+`_数据库/.checker_briefs/cluster_<key>_validator.json`）。
+brief 的 `chapter_path` 字段在 cluster 载体模式改填 cluster 草稿相对路径
+`章节/cluster_<key>_draft/cluster_<key>_draft.txt`。
 
 ## 执行流程
 
 ### 第 1 步 — Bash 跑 validate 工具
 
+> **载体路径**：chapter 载体传 `第<N>章.txt`；cluster 载体（传 `CLUSTER_ID`）txt 改用
+> `章节/cluster_<key>_draft/cluster_<key>_draft.txt`（splitter 未跑，无物理章 txt）。
+
 **validate-check 模式**：
 ```bash
+# chapter 载体
 python core/scripts/validate_chapter.py "<项目路径>" <N>
+# cluster 载体（整 cluster 草稿当一个文本对象，与 audit_hub --mode cluster 一致）
+python core/scripts/audit_hub.py "<项目路径>" --mode cluster --cluster-id <key>
 ```
 
 **style-check 模式**：
 ```bash
+# chapter 载体
 python core/scripts/validate_style.py "<项目路径>/章节/第<N>章/第<N>章.txt" --style "<项目路径>/_数据库/作者风格.json" --strict
+# cluster 载体
+python core/scripts/validate_style.py "<项目路径>/章节/cluster_<key>_draft/cluster_<key>_draft.txt" --style "<项目路径>/_数据库/作者风格.json" --strict
 ```
 
 ### 第 2 步 — 解析错误清单 + 独立 style_directive 复核
@@ -56,12 +86,14 @@ python core/scripts/validate_style.py "<项目路径>/章节/第<N>章/第<N>章
 ### 第 3 步 — 写 brief JSON（不修改正文）
 
 输出到：`_数据库/.checker_briefs/ch_<NNN>_validator.json`
+（cluster 载体模式写 `_数据库/.checker_briefs/cluster_<key>_validator.json`）
 
-**Brief schema**：
+**Brief schema**（`chapter_path` 在 cluster 载体模式填 cluster 草稿相对路径）：
 ```json
 {
   "version": 1,
   "chapter_path": "章节/第004章/第004章.txt",
+  "_chapter_path_cluster_example": "章节/cluster_001_draft/cluster_001_draft.txt",
   "checker": "novel-validator-checker",
   "mode": "validate-check",
   "violations": [
@@ -167,6 +199,10 @@ python core/scripts/validate_style.py "<项目路径>/章节/第<N>章/第<N>章
   "next_action": "spawn gen_fixer.py --mode validator-repair --brief <brief_path>"
 }
 ```
+
+> cluster 载体模式 `brief_path` 改为 `_数据库/.checker_briefs/cluster_<key>_validator.json`，
+> 且 brief 内 `chapter_path` 指向 cluster 草稿（`章节/cluster_<key>_draft/cluster_<key>_draft.txt`）——
+> 主代理据此调 `gen_fixer.py --mode validator-repair --brief <path>` 在草稿上精修，splitter 仍推迟到 step 6。
 
 ## 下游 fixer 调用（主代理工作）
 

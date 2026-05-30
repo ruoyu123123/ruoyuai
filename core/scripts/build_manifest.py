@@ -1172,6 +1172,129 @@ def _collect_protagonist_stress(scanner, chapter: int) -> dict:
         return {"mode": "error", "error": str(e)[:120]}
 
 
+def _stage_for_cluster_v2(arc_data: dict, cluster_id: str | None) -> dict | None:
+    """v2 schema（{"arcs": {name: {"stages": [{"id","name","description","active_cluster":[...]}]}}}）：
+    优先用「本 cluster 命中哪个 stage 的 active_cluster」定位当前阶段；命中不到回退 current_stage 字段。
+    返回 {stage_id, stage_name, description, _matched_by}；找不到返回 None。"""
+    stages = arc_data.get("stages") or []
+    norm_cur = cluster_lookup.normalize_cluster_id(cluster_id) if cluster_id else None
+    # ① cluster 命中 active_cluster（最贴合「以 cluster 为单位」北极星）
+    if norm_cur and isinstance(stages, list):
+        for st in stages:
+            if not isinstance(st, dict):
+                continue
+            actives = {cluster_lookup.normalize_cluster_id(a) for a in (st.get("active_cluster") or [])}
+            if norm_cur in actives:
+                return {"stage_id": st.get("id"), "stage_name": st.get("name"),
+                        "description": st.get("description"), "_matched_by": "active_cluster"}
+    # ② 回退：current_stage 字段反查 stage 详情
+    cur_id = arc_data.get("current_stage")
+    if cur_id and isinstance(stages, list):
+        for st in stages:
+            if isinstance(st, dict) and st.get("id") == cur_id:
+                return {"stage_id": st.get("id"), "stage_name": st.get("name"),
+                        "description": st.get("description"), "_matched_by": "current_stage_field"}
+    if cur_id:
+        return {"stage_id": cur_id, "stage_name": None, "description": None,
+                "_matched_by": "current_stage_field_no_detail"}
+    return None
+
+
+def _collect_main_character_arc_stage(scanner, chapter: int) -> dict:
+    """北极星①[#7]：注入「当前主角的弧线 current_stage + 简短上下文」给 writer。
+
+    背景：character_arc_state.json 由 character_arc_update.py 每章 save-state 滚动写、
+    cluster_emergence_engine 读它驱动下个 cluster 涌现——但 writer manifest 此前从不注入它，
+    writer 写正文时看不到主角当前弧线阶段（贴合作者风格的角色塑造需要这个信息）。
+
+    本字段为**内联内容**（非 must_read 指针 —— gen-model 看不到指针，参照 relevant_heuristics/
+    world_state_snapshot 已内联的模式），且**只注入当前主角的当前阶段 + 简短描述**（不全量塞 stages，
+    尊重 context 预算）。advisory（北极星⑤·顾问非法官）：writer 只需将其作为角色塑造软提示，不强制。
+
+    兼容两套 schema：
+      - v2 单层：{"arcs": {name: {"framework", "current_stage", "stages":[{"id","name","description","active_cluster":[...]}]}}}
+      - 旧形态：{"characters": [{"id"/"name", "stages_by_chapter", "current_stage_at_ch": "ch:stage"}]}
+    """
+    arc_path = scanner.db / "character_arc_state.json"
+    if not arc_path.exists():
+        return {"mode": "off", "_note": "无 character_arc_state.json，未启用主角弧线系统"}
+    arc = load_json(arc_path, None)
+    if not isinstance(arc, dict):
+        return {"mode": "error", "error": "character_arc_state.json 解析失败或非 dict"}
+
+    # 主角名单（与全系统一致：人物卡.json role==主角；空则退当前场景出场角色第一名）
+    cards = (scanner.load("人物卡", {}) or {}).get("characters", [])
+    protagonists = [c.get("name") or c.get("id") for c in cards
+                    if isinstance(c, dict) and c.get("role") == "主角"]
+    protagonists = [p for p in protagonists if p]
+    if not protagonists:
+        protagonists = scanner.active_characters()[:1]
+
+    current_cluster = scanner._current_cluster_id()
+    out_chars: list[dict] = []
+
+    arcs_map = arc.get("arcs")
+    if isinstance(arcs_map, dict) and arcs_map:
+        # v2 单层 schema。优先注入主角；主角不在 arc 表内时 fallback 注入弧线表第一个角色。
+        names = [n for n in protagonists if n in arcs_map] or list(arcs_map.keys())[:1]
+        for name in names:
+            data = arcs_map.get(name)
+            if not isinstance(data, dict):
+                continue
+            stage = _stage_for_cluster_v2(data, current_cluster)
+            if stage is None:
+                continue
+            out_chars.append({
+                "character": name,
+                "framework": data.get("framework"),
+                "current_stage_id": stage["stage_id"],
+                "current_stage_name": stage["stage_name"],
+                "stage_description": (stage["description"] or "")[:160] or None,
+                "_resolved_by": stage["_matched_by"],
+            })
+    else:
+        # 旧形态：characters 列表 + current_stage_at_ch="ch:stage"
+        chars_list = arc.get("characters")
+        if isinstance(chars_list, list):
+            by_name = {(c.get("name") or c.get("id")): c for c in chars_list if isinstance(c, dict)}
+            names = [n for n in protagonists if n in by_name] or list(by_name.keys())[:1]
+            for name in names:
+                data = by_name.get(name)
+                if not isinstance(data, dict):
+                    continue
+                # current_stage_at_ch 格式 "ch:stage"，无则 stages_by_chapter 现算
+                raw = data.get("current_stage_at_ch") or ""
+                stage_id = raw.split(":", 1)[1] if ":" in raw else (data.get("current_stage") or None)
+                if not stage_id:
+                    sbc = data.get("stages_by_chapter") or {}
+                    if sbc:
+                        valid = sorted((int(k), v) for k, v in sbc.items() if str(k).isdigit() and int(k) <= chapter)
+                        stage_id = valid[-1][1] if valid else "pre_start"
+                if not stage_id:
+                    continue
+                out_chars.append({
+                    "character": name,
+                    "framework": data.get("framework"),
+                    "current_stage_id": stage_id,
+                    "current_stage_name": None,
+                    "stage_description": (data.get("stage_description") or "")[:160] or None,
+                    "_resolved_by": "current_stage_at_ch" if ":" in raw else "stages_by_chapter_computed",
+                })
+
+    if not out_chars:
+        return {"mode": "off", "_note": "character_arc_state.json 内无可解析的主角弧线阶段"}
+
+    return {
+        "mode": "on",
+        "current_cluster": current_cluster,
+        "main_characters": out_chars,
+        "gate_level": "advisory",
+        "_note": ("writer 角色塑造软提示（advisory·北极星⑤顾问非法官·非硬约束）："
+                  "本 cluster 主角正处于上列弧线阶段，台词/选择/内心活动应自然贴合该阶段的内在状态，"
+                  "不要写成已跨入下一阶段或退回上一阶段；阶段推进由后续 cluster 涌现驱动。"),
+    }
+
+
 def _collect_storyteller_directive(scanner, chapter: int) -> dict:
     """v21 R1.2: 注入 storyteller 风格 + 近窗 adaptation 状态 + 下章建议。
     writer step 0s 据此微调本章 outcome 倾向（setback/win/neutral）。"""
@@ -2501,6 +2624,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "event_cluster_context": _collect_event_cluster_context(s, chapter),
         "storyteller_directive": _collect_storyteller_directive(s, chapter),
         "protagonist_stress": _collect_protagonist_stress(s, chapter),
+        # [#7] 北极星①：主角弧线当前阶段（character_arc_state.json）内联注入 writer —— 此前只有
+        # cluster_emergence 消费、writer 看不到；角色塑造贴合作者风格需要它。advisory（顾问非法官）。
+        "main_character_arc_stage": _collect_main_character_arc_stage(s, chapter),
         "active_aspects": _collect_active_aspects(s, chapter),
         "fate_dice_hint": _collect_fate_dice_hint(s, chapter),
         "ensemble_layer": _collect_ensemble_layer(s, chapter),
@@ -2588,6 +2714,7 @@ def _build_cache_layout() -> dict:
         ],
         "SEMI_STATIC_90_cacheable_v22": [
             "arc_template",                      # v22.cluster: 本章所属 cluster 的 arc 模板（同 cluster 内 manifest 完全相同 → cache hit ratio ≈ cluster.chapters_count/总章数）
+            "main_character_arc_stage",          # [#7]: 主角弧线当前阶段（active_cluster 命中 → 同 cluster 内不变）
         ],
         "SEMI_STATIC_70_cacheable": [
             "active_fate_events",                # 卷内大势事件池

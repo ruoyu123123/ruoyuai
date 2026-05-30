@@ -18,6 +18,8 @@ from style_analyzer import (  # noqa: E402
     analyze_text,
     compare_profiles,
     BANNED_WORDS,
+    AI_STRUCTURAL_BANNED,
+    CRAFT_SIGNATURE_BANNED,
     count_chinese,
     split_paragraphs,
     CHINESE_CHAR,
@@ -241,13 +243,42 @@ def _interval_pct_match(ref_val, gen_val: float) -> float:
     return _pct_match(ref_val, gen_val)
 
 
+def _craft_freq_per_1000(profile: dict, source_profiles: list[dict]) -> float:
+    """工艺签名词（CRAFT_SIGNATURE_BANNED）的每千字频率。
+
+    多基线时跨所有 source_profiles 聚合（总命中 / 总字数 × 1000）——比逐 profile
+    平均更稳健，反映作者用这批词的真实总体频率。banned_word_hits 是原始计数，
+    必须按字数归一化，否则不同长度文本不可比。
+    """
+    profiles = source_profiles or [profile]
+    total_hits = 0
+    total_chars = 0
+    for p in profiles:
+        bw = p.get("banned_word_hits", {}) or {}
+        for w, c in bw.items():
+            if w in CRAFT_SIGNATURE_BANNED and isinstance(c, (int, float)):
+                total_hits += c
+        chars = p.get("total_chinese_chars", 0)
+        if isinstance(chars, (int, float)):
+            total_chars += chars
+    if total_chars <= 0:
+        return 0.0
+    return total_hits * 1000.0 / total_chars
+
+
 def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
-                               gen_text: str) -> dict:
+                               gen_text: str,
+                               has_author_profile: bool = False) -> dict:
     """
     计算 12 维程序化评分，总权重 55%（内部归一化到 100 分制）。
     返回 {"total": float, "dimensions": [...], "grade": str}。
 
     v2 (E5)：支持 ref_profile 是区间 profile（含 _source_profiles 列表）。
+
+    has_author_profile（2026-05-30 北极星①修 #4）：当本项目有作者风格档时，
+    维度7『禁用词扣分』改为分级——AI 结构套话仍单边硬扣（任何作者都不用），
+    工艺签名词（顿时/淡淡/显然…）改为对照 ref 侧频率差值（复刻频率≈参考频率=好），
+    对齐 validate_style._chk_banned 的作者档优先逻辑（守原则①贴合作者风格 + ⑤不干涉模型）。
     """
     dims: list[dict] = []
     # 多基线源 profile（用于 JSD 多基线评分）
@@ -338,9 +369,27 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
 
     # 7. 禁用词扣分 (5%)
     g_banned = gen_profile.get("banned_word_hits", {})
-    hit_count = sum(g_banned.values()) if g_banned else 0
-    banned_score = max(0, 1.0 - hit_count * 0.05)
-    add("禁用词扣分", 0.05, banned_score, 0, hit_count)
+    if has_author_profile:
+        # 2026-05-30 北极星①修 #4：有作者风格档时分级（对齐 validate_style._chk_banned）。
+        # ① AI 结构套话（与此同时/值得一提的是…）：任何作者都不用 → 仍单边硬扣。
+        ai_hit = sum(c for w, c in g_banned.items() if w in AI_STRUCTURAL_BANNED)
+        ai_score = max(0.0, 1.0 - ai_hit * 0.05)
+        # ② 工艺签名词（顿时/淡淡/显然…）：可能是该作者签名笔法 → 改对照 ref 侧频率。
+        #    复刻频率 ≈ 参考频率 = 好（落入即满分），不是单边硬扣。源作者高频用「淡淡」时
+        #    忠实复刻不该被扣分（守原则①贴合作者风格 + ⑤不干涉模型）。
+        g_craft_f = _craft_freq_per_1000(gen_profile, [gen_profile])
+        r_craft_f = _craft_freq_per_1000(ref_profile, source_profiles)
+        craft_score = _pct_match(r_craft_f, g_craft_f)
+        # 两子项各占维度7一半权重
+        banned_score = (ai_score + craft_score) / 2.0
+        add("禁用词扣分", 0.05, banned_score,
+            {"ai_struct_ref": 0, "craft_freq_per1000_ref": round(r_craft_f, 3)},
+            {"ai_struct_hit": ai_hit, "craft_freq_per1000_gen": round(g_craft_f, 3)})
+    else:
+        # 无作者风格档：保持旧行为（全集单边硬扣 · 通用反 AI 腔兜底）。
+        hit_count = sum(g_banned.values()) if g_banned else 0
+        banned_score = max(0, 1.0 - hit_count * 0.05)
+        add("禁用词扣分", 0.05, banned_score, 0, hit_count)
 
     # 8. 段落开头多样性 (3%)
     r_div = _para_opening_diversity(
@@ -508,10 +557,14 @@ def _to_scalar(v, default=0.0):
 
 
 def generate_alerts(ref_profile: dict, gen_profile: dict,
-                    ps_dims: list[dict]) -> tuple[list[dict], list[str]]:
+                    ps_dims: list[dict],
+                    has_author_profile: bool = False) -> tuple[list[dict], list[str]]:
     """生成 style_alerts 和 improvement_suggestions。
 
     v2 (E5)：兼容区间 profile（先转标量）。
+
+    has_author_profile（2026-05-30 修 #4）：有作者风格档时，禁用词告警只对 AI 结构套话
+    报 critical/warning；工艺签名词（顿时/淡淡…）只作 info 提示（不催删 · 守原则①复刻作者优先）。
     """
     alerts: list[dict] = []
     suggestions: list[str] = []
@@ -547,13 +600,33 @@ def generate_alerts(ref_profile: dict, gen_profile: dict,
     # 禁用词
     g_banned = gen_profile.get("banned_word_hits", {})
     if g_banned:
-        hit_words = ", ".join(g_banned.keys())
-        total_hits = sum(g_banned.values())
-        alerts.append({
-            "level": "critical" if total_hits > 5 else "warning",
-            "message": f"命中 {total_hits} 个禁用词: {hit_words}"
-        })
-        suggestions.append(f"删除禁用词: {hit_words}")
+        if has_author_profile:
+            # 有作者档：AI 结构套话照常催删；工艺签名词仅 info（作者签名笔法不催删）。
+            ai_hits = {w: c for w, c in g_banned.items() if w in AI_STRUCTURAL_BANNED}
+            craft_hits = {w: c for w, c in g_banned.items()
+                          if w in CRAFT_SIGNATURE_BANNED}
+            if ai_hits:
+                total_ai = sum(ai_hits.values())
+                alerts.append({
+                    "level": "critical" if total_ai > 5 else "warning",
+                    "message": f"命中 {total_ai} 个 AI 结构套话: {', '.join(ai_hits.keys())}"
+                })
+                suggestions.append(f"删除 AI 结构套话: {', '.join(ai_hits.keys())}")
+            if craft_hits:
+                alerts.append({
+                    "level": "info",
+                    "message": f"工艺签名词 {sum(craft_hits.values())} 处"
+                               f"（{', '.join(craft_hits.keys())}）· 已对照作者频率评分，"
+                               f"若为该作者签名笔法可保留"
+                })
+        else:
+            hit_words = ", ".join(g_banned.keys())
+            total_hits = sum(g_banned.values())
+            alerts.append({
+                "level": "critical" if total_hits > 5 else "warning",
+                "message": f"命中 {total_hits} 个禁用词: {hit_words}"
+            })
+            suggestions.append(f"删除禁用词: {hit_words}")
 
     # 句长标准差
     r_std = _to_scalar(ref_profile.get("sentence_stats", {}).get("std", 0))
@@ -676,10 +749,16 @@ def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
 # ============================================================
 
 def evaluate(ref_text, gen_text: str,
-             baseline: dict | None = None) -> dict:
+             baseline: dict | None = None,
+             has_author_profile: bool | None = None) -> dict:
     """执行完整 SFS 评估，返回结构化报告。
 
     v2 (E5)：ref_text 支持 str（单基线）或 list[str]（多基线，子型区间评分）。
+
+    has_author_profile（2026-05-30 修 #4）：本项目是否有作者风格档。None=自动推断
+    （提供 baseline 风格 JSON 即视为有作者档，对齐 validate_style._apply_style_overrides
+    在应用风格 JSON 时置 _has_author_profile=True 的逻辑）。有作者档时维度7工艺签名词
+    改对照 ref 频率而非单边硬扣（守原则①贴合作者风格）。
     """
     # 标准化为列表
     if isinstance(ref_text, str):
@@ -705,9 +784,15 @@ def evaluate(ref_text, gen_text: str,
     if baseline:
         ref_profile = _apply_baseline(ref_profile, baseline)
 
-    ps = compute_programmatic_score(ref_profile, gen_profile, gen_text)
+    # 自动推断：提供了 baseline 风格 JSON 即视为有作者风格档
+    if has_author_profile is None:
+        has_author_profile = baseline is not None
+
+    ps = compute_programmatic_score(ref_profile, gen_profile, gen_text,
+                                    has_author_profile=has_author_profile)
     alerts, suggestions = generate_alerts(ref_profile, gen_profile,
-                                          ps["dimensions"])
+                                          ps["dimensions"],
+                                          has_author_profile=has_author_profile)
 
     # 同时调用 style_analyzer 的 compare_profiles 作为补充
     # 注意 compare_profiles 不支持区间 profile，传第一个 ref
@@ -725,6 +810,7 @@ def evaluate(ref_text, gen_text: str,
         "improvement_suggestions": suggestions,
         "multi_baseline": len(ref_profiles) > 1,
         "ref_count": len(ref_profiles),
+        "has_author_profile": bool(has_author_profile),
     }
     return report
 
@@ -760,6 +846,16 @@ def main():
     parser.add_argument("--mode", choices=["sfs", "cluster"], default="sfs",
                         help="评分模式标注（无害参数）：sfs=默认 SFS 评分；cluster=plan phase-2 "
                              "cluster 视野调用兼容（行为同 sfs · cluster 6 维由 cluster_evaluator.py 负责）")
+    # 2026-05-30 北极星①修 #4：作者风格档优先。默认 None=自动推断（有 --baseline 即视为有作者档）。
+    # 显式 --has-author-profile / --no-author-profile 可覆盖。有作者档时维度7工艺签名词
+    # （顿时/淡淡/显然…）对照 ref 频率而非单边硬扣 → 忠实复刻高频签名词的作者不再被扣分。
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument("--has-author-profile", dest="has_author_profile",
+                     action="store_true", default=None,
+                     help="强制视为有作者风格档（维度7工艺签名词对照 ref 频率不单边硬扣）")
+    grp.add_argument("--no-author-profile", dest="has_author_profile",
+                     action="store_false",
+                     help="强制视为无作者风格档（维度7禁用词全集单边硬扣 · 通用反 AI 腔兜底）")
     args = parser.parse_args()
 
     gen_path = Path(args.gen)
@@ -805,7 +901,8 @@ def main():
         else:
             print(f"[警告] baseline 文件不存在: {bp}", file=sys.stderr)
 
-    report = evaluate(ref_text, gen_text, baseline)
+    report = evaluate(ref_text, gen_text, baseline,
+                      has_author_profile=args.has_author_profile)
 
     # 生成 LLM prompt 文件（多基线时取第一段作为 prompt 范例）
     prompt_ref = ref_text if isinstance(ref_text, str) else ref_text[0]

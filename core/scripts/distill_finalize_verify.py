@@ -134,6 +134,33 @@ def estimate_cluster_arc(replica_txt: str, cluster_id: str, n_chapters: int) -> 
     }
 
 
+# ============ strict 闸门判定（纯函数 · 可测） ============
+
+# 可估算 3 维：arc 形状(0) / 钩子分布(3) / 场景概述比(4)。
+# 排除 continuity(2)/voice_pack(5)（恒中性，不喂 gen 侧）+ emotion(1)（valence vs intensity 轴错配，
+# cosine 无测量学意义 · 2026-05-30 修 #5）。索引须与 cluster_evaluator.DIM_LABELS 顺序对齐。
+STRICT_ESTIMABLE_IDX = (0, 3, 4)
+
+
+def strict_gate_decision(report: dict | None,
+                         estimable_idx: tuple[int, ...] = STRICT_ESTIMABLE_IDX
+                         ) -> tuple[bool, list[dict]]:
+    """从 cluster_evaluator 报告里取可估算维度，判 strict 是否全过。
+
+    返回 (strict_ok, estimable_rows)。estimable_rows 用于日志展示通过数。
+    只在恰好 6 维（cluster_evaluator v2 章程 6 维 schema）时按 index 抽取；
+    schema 异常时退化为「全维都算」避免 IndexError 误判。
+    """
+    dim_rows = (report or {}).get("scores_by_dim", []) or []
+    if len(dim_rows) == 6:
+        estimable = [dim_rows[i] for i in estimable_idx]
+    else:
+        estimable = dim_rows
+    est_pass = [r for r in estimable if r.get("passes")]
+    strict_ok = bool(estimable) and len(est_pass) == len(estimable)
+    return strict_ok, estimable
+
+
 # ============ 主流程 ============
 
 def run_distill_replicate(skill: Path, project: Path, cluster_id: str, output: Path) -> bool:
@@ -276,7 +303,8 @@ def main():
     # 2026-05-30 北极星复审：不透传 --strict 给子评分器——本 verifier 的 estimate_cluster_arc 只产
     # 4 维（arc/emotion/kicker/scene），cluster_evaluator「6 维全过才 PASS」下 dim2(continuity)/
     # dim5(voice_pack) 因无 gen 侧数据恒中性 <0.7 → 永远 WARN → strict 永远 exit2 = 出货 plan 死锁。
-    # 让子评分器只产报告（exit0），由父进程按【可估算 4 维】重判 strict 闸门（见步骤 5）。
+    # 让子评分器只产报告（exit0），由父进程按【可估算 3 维 arc/kicker/scene】重判 strict 闸门
+    # （见步骤 5；emotion 因 valence/intensity 轴错配 2026-05-30 移出 strict）。
     exit_code, report = run_cluster_evaluator(
         ref_arc_path, gen_arc_path, args.output,
         ref_cont=ref_cont_path, ref_char_dir=ref_char_dir,
@@ -299,21 +327,18 @@ def main():
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2),
                                 encoding="utf-8")
 
-    # ===== 步骤 5：按【可估算 4 维】重判 strict 闸门 =====
-    # 本 verifier 只产 arc(0)/emotion(1)/kicker(3)/scene(4) 4 维数据；continuity(2)/voice_pack(5)
-    # 因不喂 gen 侧数据恒中性，不计入 strict 判定（否则「6 维全过」规则下结构性永不 PASS、出货死锁）。
-    dim_rows = report.get("scores_by_dim", []) if report else []
-    estimable = [dim_rows[i] for i in (0, 1, 3, 4)] if len(dim_rows) == 6 else dim_rows
+    # ===== 步骤 5：按【可估算 3 维】重判 strict 闸门 =====
+    # arc(0)/kicker(3)/scene(4) 为有测量学意义的可估算维（见 strict_gate_decision 注释）。
+    strict_ok, estimable = strict_gate_decision(report)
     est_pass = [r for r in estimable if r.get("passes")]
-    strict_ok = bool(estimable) and len(est_pass) == len(estimable)
-    print(f"\n[verify] 6 维 verdict={report.get('verdict', '?')} · 可估算 4 维(arc/emotion/kicker/scene) "
+    print(f"\n[verify] 6 维 verdict={report.get('verdict', '?')} · 可估算 3 维(arc/kicker/scene) "
           f"通过 {len(est_pass)}/{len(estimable)}", file=sys.stderr)
     print(f"         报告: {args.output}", file=sys.stderr)
     if strict_ok:
-        print(f"[OK · PASS] 写作端回灌（可估算 4 维全过）· 允许 plan_tracker end", file=sys.stderr)
+        print(f"[OK · PASS] 写作端回灌（可估算 3 维全过）· 允许 plan_tracker end", file=sys.stderr)
         sys.exit(0)
     if args.strict:
-        print(f"[FAIL · strict] 可估算 4 维未全过 · 出货前拦截（修 skill 重蒸馏）", file=sys.stderr)
+        print(f"[FAIL · strict] 可估算 3 维未全过 · 出货前拦截（修 skill 重蒸馏）", file=sys.stderr)
         sys.exit(2)
     print(f"[WARN] 可估算维未全过 · 非 strict 放行 · 建议手动审查", file=sys.stderr)
     sys.exit(0)

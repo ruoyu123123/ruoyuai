@@ -512,13 +512,74 @@ splitter 已把 cluster 草稿切成物理章，novel-validator-checker 发现�
 
 
 # ============ Gen-Model 调用（含 fallback 链） ============
+# API 调用健壮性常量（2026-05-30 加固 · 对齐 gen_writer.py:514-517）
+GEN_MODEL_TIMEOUT = 180.0  # 与 ai_wrapper.py:154 / gen_writer 对齐
+GEN_MODEL_MAX_RETRIES = 3  # 同 profile 限流/超时的有限重试次数
+GEN_MODEL_RETRY_BASE_DELAY = 2.0  # 指数退避基础秒数（2,4,8）
+
+
+def _stream_once(client, profile, system: str, user: str, max_tokens: int,
+                 prior_assistant: str | None = None) -> tuple[str, "str | None"]:
+    """单次 stream 生成，返回 (text, finish_reason)。
+
+    2026-05-30 加固（对齐 gen_writer._stream_once）：捕获 finish_reason（原循环只累加
+    content，从不读 finish_reason → 命中 max_tokens 的截断被静默吞掉，截断后的半截正文
+    直接覆写整章 = 销毁已发布章节，比 gen_writer 半截入库后果更重）。
+    prior_assistant 非空 → 续写模式（修复语境：把已生成的修复正文回填，要求接着写不重复
+    且务必补全被截断的 ===FILE: ... ===END=== 块 + 收尾 JSON 块）。
+    """
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": user}]
+    if prior_assistant:
+        messages.append({"role": "assistant", "content": prior_assistant})
+        messages.append({"role": "user",
+                         "content": "上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
+                                    "不要重复已经写过的内容、不要重新开头，直接续写后续正文，"
+                                    "务必补全被截断的 ===FILE: ... === / ===END=== 块和结尾的 "
+                                    "```json``` 总结块（缺了下游无法解析就写不出修复文件）。"})
+    stream = client.chat.completions.create(
+        model=profile.model, messages=messages, max_tokens=max_tokens,
+        temperature=profile.temperature, stream=True,
+    )
+    text = ""
+    finish_reason = None
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        choice = chunk.choices[0]
+        piece = getattr(choice.delta, 'content', None)
+        if piece:
+            text += piece
+            sys.stderr.write(piece)
+            sys.stderr.flush()
+        if getattr(choice, 'finish_reason', None):
+            finish_reason = choice.finish_reason
+    return text, finish_reason
+
+
 def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str, Profile]:
     """调当前 active profile；失败时按 fallback 链尝试。
 
     返回 (full_text, used_profile)。
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
+
+    2026-05-30 加固（对齐 gen_writer.call_gen_model · gen_fixer 会**原地覆写整章正文**，
+    截断/空响应后果比 gen_writer 写草稿更重，故防护必须等价）：
+      · OpenAI client 显式 timeout（对齐 ai_wrapper / gen_writer）防止无限挂起。
+      · RateLimitError / APITimeoutError 在**同 profile** 做有限指数退避重试（再降级 fallback），
+        避免一次 429/超时就降级到次优模型。
+      · finish_reason == "length"（命中 max_tokens 被截断）自动续写，避免半截正文覆写整章。
+      · HTTP 200 但零 content（内容过滤 / reasoning model 全进 reasoning_content / 空输出）
+        视为失败 → 切下一 profile；全链皆空才 raise（杜绝拿空回复去覆写已发布章节）。
     """
+    import time
+
     from openai import OpenAI
+
+    try:
+        from openai import APITimeoutError, RateLimitError
+    except ImportError:  # 极旧 SDK 兜底（不应发生 · openai>=1.x 均有）
+        APITimeoutError = RateLimitError = ()
 
     candidates = loader.get_callable_profiles()
     failures: list[tuple[str, str]] = []
@@ -536,33 +597,50 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
         print(f"[gen_fixer] prompt size: system={len(system)} chars, user={len(user)} chars",
               file=sys.stderr)
 
-        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
+        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url,
+                        timeout=GEN_MODEL_TIMEOUT)
         full_text = ""
         try:
-            stream = client.chat.completions.create(
-                model=profile.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=max_tokens,
-                temperature=profile.temperature,
-                stream=True,
-            )
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                piece = getattr(delta, 'content', None)
-                if piece:
-                    full_text += piece
-                    sys.stderr.write(piece)
-                    sys.stderr.flush()
+            # 同 profile 内：限流/超时做有限指数退避重试，其余异常立即降级 fallback
+            attempt = 0
+            while True:
+                try:
+                    full_text, finish_reason = _stream_once(client, profile, system, user, max_tokens)
+                    break
+                except (RateLimitError, APITimeoutError) as re_err:
+                    attempt += 1
+                    if attempt > GEN_MODEL_MAX_RETRIES:
+                        raise  # 重试耗尽 → 落到外层 except → 降级 fallback
+                    delay = GEN_MODEL_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                    print(f"\n[gen_fixer] ⚠️ {profile.name} 限流/超时 "
+                          f"({type(re_err).__name__})，{delay:.0f}s 后同 profile 重试 "
+                          f"{attempt}/{GEN_MODEL_MAX_RETRIES}…", file=sys.stderr)
+                    time.sleep(delay)
+            # 截断检测 + 自动续写（finish_reason == "length" = 命中 max_tokens 被截断）
+            cont_rounds = 0
+            while finish_reason == "length" and cont_rounds < 3:
+                cont_rounds += 1
+                print(f"\n[gen_fixer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…",
+                      file=sys.stderr)
+                cont_text, finish_reason = _stream_once(
+                    client, profile, system, user, max_tokens, prior_assistant=full_text)
+                full_text += cont_text
+            if finish_reason == "length":
+                print(f"\n[gen_fixer] ⚠️ WARN 续写 {cont_rounds} 轮后仍可能未写完"
+                      f"（修复块/JSON 块可能不完整 · 下游 CJK 守恒校验兜底）", file=sys.stderr)
         except Exception as e:
             reason = str(e)[:200]
             print(f"\n[FALLBACK] {profile.name} 调用失败: {reason}", file=sys.stderr)
             failures.append((profile.name, reason))
-            continue
+            continue  # 切下一个 profile
+
+        # 空响应守卫：HTTP 200 但零 content（内容过滤 / reasoning model 全进 reasoning_content）
+        # 视为失败，切下个 profile（与 except 路径对齐），杜绝拿空回复覆写已发布章节。
+        if not full_text.strip():
+            reason = "返回空内容（HTTP 200 但零 content · 可能内容过滤/reasoning model 全进 reasoning_content）"
+            print(f"\n[FALLBACK] {profile.name} {reason}", file=sys.stderr)
+            failures.append((profile.name, reason))
+            continue  # 切下一个 profile
 
         print(f"\n[gen_fixer] 接收完毕 ({len(full_text)} chars) via {profile.name}",
               file=sys.stderr)
@@ -572,10 +650,40 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
 
 
 # ============ 输出解析 + 应用 ============
-def parse_and_apply(reply: str, project_root: Path) -> tuple:
-    """从返回提取 ===FILE: ... === 块，写到对应路径"""
+# CJK 守恒容差（2026-05-30 加固）：gen_fixer 原地覆写整章正文，prompt 写明「修复段 ±30%」
+# 但脚本从不校验——LLM 截断/退化/漏写大段时会拿半截正文覆写销毁已发布章节。这里做整章
+# before/after CJK 守恒兜底：超出容差则**拒绝覆写**（保留原文不动），把该块记为 rejected。
+CJK_CONSERVATION_TOLERANCE = 0.30  # 修复后整章 CJK 相对原文 ±30%
+
+
+def parse_and_apply(reply: str, project_root: Path,
+                    before_content_by_path: dict | None = None,
+                    enforce_cjk_conservation: bool = True) -> tuple:
+    """从返回提取 ===FILE: ... === 块，写到对应路径。
+
+    2026-05-30 加固：
+      · before_content_by_path: {相对路径: 原文} —— 用于 CJK 守恒校验（main 传 files_content）。
+      · enforce_cjk_conservation: True 时整章 CJK 偏离原文 > ±30% 则**拒绝覆写**（保留原文），
+        防截断/退化输出销毁已发布章节。word-count 扩写模式应传 False（合法大幅增字）。
+
+    返回 (files_written, summary, rejected)：rejected 是被守恒校验挡下的块列表。
+    """
+    before_content_by_path = before_content_by_path or {}
+    # 把原文按「解析后的绝对路径」建索引（兼容 LLM 回传相对/绝对路径、分隔符差异）
+    root_resolved = project_root.resolve()
+    before_cjk_by_abs: dict[str, int] = {}
+    for rp, body in before_content_by_path.items():
+        t = Path(rp)
+        if not t.is_absolute():
+            t = project_root / rp
+        try:
+            before_cjk_by_abs[str(t.resolve())] = cio.count_cjk(body)
+        except Exception:
+            pass
+
     pattern = re.compile(r'===FILE:\s*([^=]+?)\s*===\s*\n(.*?)\n===END===', re.DOTALL)
     files_written = []
+    rejected = []
     for m in pattern.finditer(reply):
         rel_path = m.group(1).strip()
         content = m.group(2).rstrip() + '\n'
@@ -583,7 +691,6 @@ def parse_and_apply(reply: str, project_root: Path) -> tuple:
         if not target.is_absolute():
             target = project_root / rel_path
         # 安全：校验 target 仍在 project_root 内，防 ../../ 路径穿越逃逸项目目录
-        root_resolved = project_root.resolve()
         target_resolved = target.resolve()
         try:
             target_resolved.relative_to(root_resolved)
@@ -591,8 +698,24 @@ def parse_and_apply(reply: str, project_root: Path) -> tuple:
             print(f"  [跳过·路径穿越] {rel_path} 解析到项目外 ({target_resolved})，忽略该块",
                   file=sys.stderr)
             continue
-        target.write_text(content, encoding='utf-8')
         cjk = cio.count_cjk(content)  # v27 修复：统一 CJK 口径
+
+        # CJK 守恒校验：修复后整章字数相对原文偏离 > ±30% → 拒绝覆写（保护已发布章节）
+        before_cjk = before_cjk_by_abs.get(str(target_resolved))
+        if enforce_cjk_conservation and before_cjk:
+            lo = before_cjk * (1 - CJK_CONSERVATION_TOLERANCE)
+            hi = before_cjk * (1 + CJK_CONSERVATION_TOLERANCE)
+            if cjk < lo or cjk > hi:
+                pct = (cjk - before_cjk) / before_cjk * 100
+                print(f"  [拒绝覆写·CJK 守恒] {target} 原文 {before_cjk} → 修复 {cjk} CJK "
+                      f"({pct:+.0f}%，超出 ±{int(CJK_CONSERVATION_TOLERANCE*100)}%)，"
+                      f"保留原文不动（疑似截断/退化输出）", file=sys.stderr)
+                rejected.append({'path': str(target), 'before_cjk': before_cjk,
+                                 'after_cjk': cjk, 'delta_pct': round(pct, 1),
+                                 'reason': 'cjk_conservation_violation'})
+                continue
+
+        target.write_text(content, encoding='utf-8')
         files_written.append({'path': str(target), 'cjk': cjk})
         print(f"  [写出] {target} ({cjk} CJK)", file=sys.stderr)
 
@@ -604,7 +727,7 @@ def parse_and_apply(reply: str, project_root: Path) -> tuple:
         except json.JSONDecodeError:
             summary = {'_raw_json_parse_error': json_match.group(1)[:500]}
 
-    return files_written, summary
+    return files_written, summary, rejected
 
 
 def run_scanners(file_paths: list) -> dict:
@@ -763,8 +886,24 @@ def main():
         sys.exit(3)
 
     print(f"\n[gen_fixer] 解析并应用修改...", file=sys.stderr)
-    files_written, summary = parse_and_apply(reply, project_root)
+    # word-count 模式是合法的大幅扩写 → 关掉 CJK 守恒校验；其余模式（修复/微调/精修）
+    # 字数应守恒，开启守恒兜底防截断输出覆写销毁已发布章节。
+    enforce_cjk = args.mode != 'word-count'
+    files_written, summary, rejected = parse_and_apply(
+        reply, project_root, before_content_by_path=files_content,
+        enforce_cjk_conservation=enforce_cjk)
+    if rejected:
+        print(f"[WARN] {len(rejected)} 个修复块因 CJK 守恒校验被拒绝覆写（保留原文）",
+              file=sys.stderr)
     if not files_written:
+        if rejected:
+            print(f"[ERROR] 所有 {len(rejected)} 个修复块都被 CJK 守恒校验拒绝（疑似截断/退化输出），"
+                  f"原文保持不动，未做任何修复 → 退出 3 由上游重试/降级", file=sys.stderr)
+            debug_path = project_root / '章节' / f'_quality/fixer_raw_output_{datetime.now().strftime("%H%M%S")}_{os.getpid()}.txt'
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            debug_path.write_text(reply, encoding='utf-8')
+            print(f"  原始输出已存: {debug_path}", file=sys.stderr)
+            sys.exit(3)
         print("[WARN] 未从返回中解析出 ===FILE: ... === 块", file=sys.stderr)
         # v27 修复：时间戳加 pid 防并发冲突（feedback: 秒级时间戳不够细）
         debug_path = project_root / '章节' / f'_quality/fixer_raw_output_{datetime.now().strftime("%H%M%S")}_{os.getpid()}.txt'
@@ -789,6 +928,7 @@ def main():
         'used_profile': used_profile.name,
         'used_model': used_profile.model,
         'files_written': files_written,
+        'rejected_blocks': rejected,
         'gen_model_summary': summary,
         'scanner_results': scan_results,
         'timestamp': datetime.now().isoformat(),
