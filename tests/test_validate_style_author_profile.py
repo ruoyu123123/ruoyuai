@@ -1095,3 +1095,291 @@ def test_I_real_jingsong_long_para_chapter_not_hardgate_with_profile():
     t_gen = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
     res_none = vs._chk_para_max(body, vs.analyze_text(body), t_gen)
     assert res_none.status == "FAIL", (res_none.status, res_none.detail)
+
+
+# ════════════════════════════════════════════════════════════════
+# [J] 章字数 band 的 cluster 视野（2026-05-30 北极星① · #1）
+#
+# 根因：CLUSTER_MODE 下 validate 跑在**整 cluster draft**上（cluster-write 产 cluster
+# draft·splitter 才切章·validate 在 cluster draft 上跑），CLUSTER_THRESHOLDS 已把章字数
+# band 设成 cluster 级 8000-30000。但带 --style 时 _apply_style_overrides 用作者**单章**
+# 字数 mean(蛊真人 2719 / 惊悚 2921)±500 塌回单章 band(2218-3218) → 整 cluster
+# (蛊真人 ch641-646=18846 / 惊悚 ch25-30=19754) **必 FAIL**（系统性误伤所有 cluster draft）。
+# 修：仅 cluster 视野（base band 下限 ≥ 8000）时，把作者单章 mean 按估算每 cluster 章数
+# (3-8) 放大成 cluster band 并与健康区间取并集；单章视野(DEFAULT/STRICT)仍 ±500（零回归）。
+# 纪律：只动章字数维度的 cluster 视野·不动其他维度·章字数 ∉ HARD_GATE（advisory）·单章视野不变。
+# ════════════════════════════════════════════════════════════════
+
+
+def test_J_cluster_view_chapter_words_band_not_collapsed_to_single():
+    """CLUSTER_THRESHOLDS（base 下限 8000）+ 作者单章 mean → band 放大到 cluster 级（不塌回单章）。
+    核心 bug：旧实现 chapter_chars 2719 → 2219-3219 把 18846 字真 cluster 顶 FAIL。"""
+    sd = {"quantitative": {"chapter_chars": {"mean": 2718.888}}}  # 蛊真人单章 mean
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["chapter_words"]["min"], t["chapter_words"]["max"]
+    # 绝不塌回单章 band（2219-3219）
+    assert not (abs(lo - (2718.888 - 500)) < 1 and abs(hi - (2718.888 + 500)) < 1), (lo, hi)
+    # cluster 级真字数（18846 / 19754）必落 band 内（修后不再 FAIL）
+    assert lo <= 18846 <= hi, (lo, hi)
+    assert lo <= 19754 <= hi, (lo, hi)
+    # band 绝不窄于健康 cluster 区间（并集口径：带作者档不比纯 CLUSTER_THRESHOLDS 更苛）
+    assert lo <= 8000 and hi >= 30000, (lo, hi)
+
+
+def test_J_single_chapter_view_chapter_words_band_unchanged():
+    """单章视野（DEFAULT·base 下限 1800 < 8000）+ 作者单章 mean → 仍 ±500（零回归·向后兼容）。"""
+    sd = {"quantitative": {"chapter_chars": {"mean": 2718.888}}}
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["chapter_words"]["min"], t["chapter_words"]["max"]
+    assert abs(lo - (2718.888 - 500)) < 1e-6 and abs(hi - (2718.888 + 500)) < 1e-6, (lo, hi)
+
+
+def test_J_strict_chapter_view_chapter_words_band_unchanged():
+    """STRICT 单章视野（base 下限 2800 < 8000）+ 作者单章 mean → 仍 ±500（零回归）。"""
+    sd = {"quantitative": {"chapter_words": {"mean": 2921.428}}}
+    t = {k: dict(v) for k, v in vs.STRICT_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    lo, hi = t["chapter_words"]["min"], t["chapter_words"]["max"]
+    assert abs(lo - (2921.428 - 500)) < 1e-6 and abs(hi - (2921.428 + 500)) < 1e-6, (lo, hi)
+
+
+def test_J_cluster_band_helper_union_with_healthy_range():
+    """直测 _cluster_chapter_words_band：作者单章 mean × [3,8] 与健康 band 取并集。"""
+    # 蛊真人 mean 2719 × [3,8] = [8157, 21752] ∪ [8000,30000] = [8000, 30000]
+    b = vs._cluster_chapter_words_band(2718.888, 8000, 30000)
+    assert b["min"] == 8000 and b["max"] == 30000, b
+    # 极小单章作者（mean 1200）× 3 = 3600 < 8000 → 下限取 3600（不高于健康下限·防短 cluster 误 FAIL）
+    b2 = vs._cluster_chapter_words_band(1200.0, 8000, 30000)
+    assert b2["min"] == 3600.0 and b2["max"] == 30000, b2
+    # 厚重单章作者（mean 4500）× 8 = 36000 > 30000 → 上限取 36000（不低于健康上限·容厚重 cluster）
+    b3 = vs._cluster_chapter_words_band(4500.0, 8000, 30000)
+    assert b3["max"] == 36000.0 and b3["min"] == 8000, b3
+
+
+def test_J_cluster_view_other_dimensions_untouched():
+    """纪律：#1 只动章字数 cluster 视野，不动其他维度（对话占比/段长仍按各自 override）。"""
+    sd = {"quantitative": {
+        "chapter_chars": {"mean": 2718.888},
+        "dialogue_ratio_pct": {"mean": 25.409},
+        "paragraph_length": {"mean_chars": 30.0},
+    }}
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    # 对话占比仍按 _extract_author_dialogue_ratio 归一（不被 #1 改动影响）
+    assert abs(t["dialogue_ratio"]["min"] - (0.25409 - 0.15)) < 1e-6, t["dialogue_ratio"]
+    # 段长仍按真实段长推 band（不被 #1 改动影响）
+    assert abs(t["para_mean_len"]["min"] - 30.0 * 0.7) < 1e-6, t["para_mean_len"]
+
+
+def test_J_real_gu_zhenren_cluster_chapter_words_not_fail():
+    """蛊真人 ch641-646 合并整 cluster CLUSTER_MODE + 作者档：章节字数不再误 FAIL（核心实证）。
+    反证：旧塌回单章 band 会 FAIL（band 2219-3219 顶 18846 字 cluster）。"""
+    import json
+    import chapter_io as cio
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "蛊真人"
+    sj = proj / "作者风格_FINAL.json"
+    if not sj.exists():
+        return
+    bodies = []
+    for ch in range(641, 647):
+        cp = proj / "原文" / f"第{ch:03d}章.txt"
+        if not cp.exists():
+            return  # 样本不全则跳过
+        raw = cp.read_text(encoding="utf-8")
+        for sep in cio.CHANGES_SEPARATORS:
+            if sep in raw:
+                raw = raw.split(sep)[0].rstrip()
+                break
+        bodies.append(raw)
+    cluster = "\n\n".join(bodies)
+    assert cio.count_words(cluster) > 8000  # 前置：确是 cluster 级字数
+    sd = json.loads(sj.read_text(encoding="utf-8"))
+    # ① cluster 视野 + 作者档：章字数 PASS（band 放大到 cluster 级）
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res = _res(vs.validate_style(cluster, t), "章节字数")
+    assert res.status == "PASS", (res.status, res.detail, res.target_desc)
+    # ② 反证：单章视野（DEFAULT·塌回单章 band）会 FAIL（证明确有矫枉过正）
+    t_single = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    t_single = vs._apply_style_overrides(t_single, sd)
+    res_s = _res(vs.validate_style(cluster, t_single), "章节字数")
+    assert res_s.status == "FAIL", (res_s.status, res_s.detail)
+
+
+def test_J_real_jingsong_cluster_chapter_words_not_fail():
+    """惊悚乐园 ch25-30 合并整 cluster CLUSTER_MODE + 作者档：章节字数不再误 FAIL。"""
+    import json
+    import chapter_io as cio
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "惊悚乐园"
+    sj = proj / "作者风格_FINAL.json"
+    if not sj.exists():
+        return
+    bodies = []
+    for ch in range(25, 31):
+        cp = proj / "原文" / f"第{ch:03d}章.txt"
+        if not cp.exists():
+            return
+        raw = cp.read_text(encoding="utf-8")
+        for sep in cio.CHANGES_SEPARATORS:
+            if sep in raw:
+                raw = raw.split(sep)[0].rstrip()
+                break
+        bodies.append(raw)
+    cluster = "\n\n".join(bodies)
+    assert cio.count_words(cluster) > 8000
+    sd = json.loads(sj.read_text(encoding="utf-8"))
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res = _res(vs.validate_style(cluster, t), "章节字数")
+    assert res.status == "PASS", (res.status, res.detail, res.target_desc)
+
+
+# ════════════════════════════════════════════════════════════════
+# [K] _split_paras 混合格式欠切（2026-05-30 北极星① · #2）
+#
+# 根因：_split_paras「有 \n\n 用 \n\n 切·无则单 \n」对**混合格式**（章间 \n\n + 章内单 \n，
+# 如多章合并或 writer 混合输出）：用 \n\n 切 → **每章塌成 1 个巨段**（实测惊悚 6 章合并切出
+# 6 段 2642-3580 字）→ 全超 300 绝对上限 → 误触发 STYLE_单段超长 hard_gate（误伤真作者）。
+# 修：\n\n 切后，对**仍是混合格式巨段**（CJK > 200 且含 ≥2 个单 \n）的段再用单 \n 细切。
+# 纪律：纯 \n\n（蛊真人·\n\n-段最大 84 字）不变 · 纯单 \n（惊悚单章·走 fallback）不变 ·
+# 「单条正常长段含 1 个软换行」< 200 字 / 仅 1 个 \n → 不被细切 · 真 >300 纯叙述段仍 hard_gate。
+# ════════════════════════════════════════════════════════════════
+
+
+def test_K_mixed_format_giant_segment_subsplit():
+    """混合格式（章间 \n\n + 章内单 \n）：\n\n 切出的巨段被单 \n 细切（不再每章 1 巨段）。"""
+    # 两「章」各内部用单 \n 分短段，章间 \n\n。每章 cjk > 200（巨段）·内含 ≥2 单 \n → 触发细切。
+    ch1 = "\n".join("短段甲乙丙。" for _ in range(60))   # 60 段·每段 5 CJK·共 300 cjk·内 59 个单 \n
+    ch2 = "\n".join("短段丁戊己。" for _ in range(60))
+    text = ch1 + "\n\n" + ch2
+    paras = vs._split_paras(text)
+    # 细切后 = 120 短段（而非 \n\n 切的 2 巨段）
+    assert len(paras) == 120, len(paras)
+    assert all(len(vs._CJK_RE.findall(p)) <= 10 for p in paras), \
+        sorted((len(vs._CJK_RE.findall(p)) for p in paras), reverse=True)[:3]
+
+
+def test_K_mixed_format_no_false_hardgate():
+    """混合格式巨段细切后单段超长不再误 hard_gate（核心 bug：旧每章 1 巨段全超绝对上限 FAIL）。"""
+    # 每「章」cjk > 300（不细切则单段超绝对上限 300 → 旧实现 FAIL）·细切后每段仅 ~5 字
+    ch1 = "\n".join("一句短段话。" for _ in range(80))   # 80 段·每段 5 CJK·共 400 cjk
+    ch2 = "\n".join("另外一短段。" for _ in range(80))
+    text = ch1 + "\n\n" + ch2
+    t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "PASS", (res.status, res.detail)  # 细切后每段 ~5 字·绝不超长
+
+
+def test_K_pure_double_newline_normal_paras_not_subsplit():
+    """纯 \n\n 作者的正常段（< 200 字）不被细切——即使段内含 1 个软换行（上联\n下联）。"""
+    # 模拟蛊真人式：每段 \n\n 分隔·段长 < 200·其中一段含 1 个软换行
+    text = "正常段一。\n\n上联\n下联。\n\n正常段三。"
+    paras = vs._split_paras(text)
+    assert paras == ["正常段一。", "上联\n下联。", "正常段三。"], paras  # 软换行段保留不切
+
+
+def test_K_double_newline_long_para_with_one_soft_newline_not_subsplit():
+    """> 200 字但仅含 1 个单 \n 的长段（不满足 ≥2 内 \n）→ 不细切（守「单条正常长段」不破坏）。"""
+    seg = ("描述" * 120) + "\n" + ("续写" * 60)  # >200 cjk 但只有 1 个单 \n
+    text = "短段。\n\n" + seg
+    paras = vs._split_paras(text)
+    # seg 保持为整段（不满足 ≥2 内 \n → 不细切）
+    assert seg in paras, [p[:20] for p in paras]
+    assert len(paras) == 2, len(paras)
+
+
+def test_K_pure_single_newline_fallback_unchanged():
+    """无 \n\n 文本（纯单 \n 分段·如惊悚单章）→ 走 fallback 单 \n 切（零回归）。"""
+    text = "　　第一段。\n　　第二段。\n　　第三段。"
+    assert "\n\n" not in text
+    paras = vs._split_paras(text)
+    assert len(paras) == 3, paras
+
+
+def test_K_real_jingsong_multichapter_join_subsplit_no_false_hardgate():
+    """惊悚乐园 ch25-30 多章 \n\n join（混合格式）：细切后单段超长不再误 hard_gate（核心实证）。
+    反证：旧 \n\n 切成 6 巨段（2642-3580 字）全超绝对上限 → FAIL。"""
+    import json
+    import chapter_io as cio
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "惊悚乐园"
+    sj = proj / "作者风格_FINAL.json"
+    if not sj.exists():
+        return
+    bodies = []
+    for ch in range(25, 31):
+        cp = proj / "原文" / f"第{ch:03d}章.txt"
+        if not cp.exists():
+            return
+        raw = cp.read_text(encoding="utf-8")
+        for sep in cio.CHANGES_SEPARATORS:
+            if sep in raw:
+                raw = raw.split(sep)[0].rstrip()
+                break
+        bodies.append(raw)
+    cluster = "\n\n".join(bodies)
+    # 前置不变量：每章内部无 \n\n（混合格式）→ \n\n 数 = 章数-1
+    assert cluster.count("\n\n") == len(bodies) - 1, cluster.count("\n\n")
+    # 修后细切出真实多段（绝非 6 巨段）·最大段落远小于绝对上限 300
+    paras = vs._split_paras(cluster)
+    assert len(paras) >= 200, len(paras)
+    assert max(len(vs._CJK_RE.findall(p)) for p in paras) < 300, \
+        sorted((len(vs._CJK_RE.findall(p)) for p in paras), reverse=True)[:3]
+    sd = json.loads(sj.read_text(encoding="utf-8"))
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    res = vs._chk_para_max(cluster, vs.analyze_text(cluster), t)
+    assert res.status != "FAIL", (res.status, res.detail)  # 不再误 hard_gate
+
+
+def test_K_real_gu_zhenren_chapter043_split_unchanged():
+    """蛊真人原文第043章（纯 \n\n·段最大 84 字）：细切阈值不触发·切段与纯 \n\n 切完全一致（零回归）。"""
+    import chapter_io as cio
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "蛊真人"
+    ch = proj / "原文" / "第043章.txt"
+    if not ch.exists():
+        return
+    raw = ch.read_text(encoding="utf-8")
+    for sep in cio.CHANGES_SEPARATORS:
+        if sep in raw:
+            raw = raw.split(sep)[0].rstrip()
+            break
+    expect = [p.strip() for p in raw.split("\n\n") if p.strip() and vs._CJK_RE.search(p)]
+    paras = vs._split_paras(raw)
+    assert paras == expect, (len(paras), len(expect))
+
+
+def test_K_real_jingsong_chapter025_single_newline_unchanged():
+    """惊悚乐园原文第025章（纯单 \n·无 \n\n）：走 fallback·切段与纯单 \n 切完全一致（零回归）。"""
+    import chapter_io as cio
+    proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "惊悚乐园"
+    ch = proj / "原文" / "第025章.txt"
+    if not ch.exists():
+        return
+    raw = ch.read_text(encoding="utf-8")
+    for sep in cio.CHANGES_SEPARATORS:
+        if sep in raw:
+            raw = raw.split(sep)[0].rstrip()
+            break
+    assert raw.count("\n\n") == 0
+    expect = [p.strip() for p in raw.split("\n") if p.strip() and vs._CJK_RE.search(p)]
+    paras = vs._split_paras(raw)
+    assert paras == expect, (len(paras), len(expect))
+
+
+def test_K_true_runaway_narration_over_abs_cap_still_hardgate():
+    """混合格式细切后，真 >300 纯叙述失控段仍 hard_gate（不放松真问题·绝对上限 300 不破）。"""
+    sd = {"quantitative": {  # 惊悚长段签名（天花板放宽到 208，绝对上限仍 300）
+        "paragraph_length": {"mean_chars": 51.9997},
+        "paragraph_length_distribution": {"gt50": 0.4379},
+    }}
+    t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
+    t = vs._apply_style_overrides(t, sd)
+    # 混合格式上下文 + 中间嵌一个 500 字纯叙述失控段
+    ch1 = "\n".join("短段。" for _ in range(50))
+    runaway = "他" * 500  # >300 绝对上限·纯叙述（无引号）
+    text = ch1 + "\n\n" + runaway + "\n\n" + "尾段短句。"
+    res = vs._chk_para_max(text, vs.analyze_text(text), t)
+    assert res.status == "FAIL", (res.status, res.detail)
+    assert "绝对上限" in res.detail, res.detail

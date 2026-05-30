@@ -300,6 +300,37 @@ def _extract_author_max_para_chars(q: dict, para_mean: float | None) -> int | No
     return ceiling
 
 
+# ── 章字数 override 的 cluster 视野（北极星① · 2026-05-30 #1）─────────────────
+# 根因：CLUSTER_MODE 下 validate 跑在**整 cluster draft**上（cluster-write 产 cluster
+# draft·splitter 才切章·validate 在 cluster draft 上跑 CLUSTER_MODE），CLUSTER_THRESHOLDS
+# 已把章字数 band 设成 cluster 级 8000-30000。但带 --style 时 _apply_style_overrides 用
+# 作者**单章**字数 mean(蛊真人 chapter_chars 2719 / 惊悚 chapter_words 2921)±500 覆盖 →
+# 塌回单章 band(2218-3218)→ 整 cluster(18846/19754 字)必 FAIL（系统性误伤所有 cluster draft）。
+# 修：仅 cluster 视野（base band 下限 ≥ _CLUSTER_WORDS_FLOOR=8000，即来自 CLUSTER_THRESHOLDS）
+# 时，把作者单章 mean **按估算每 cluster 章数放大到 cluster 级**——下限 = mean × 每 cluster
+# 最少章数(_CLUSTER_MIN_CHAPTERS)，上限 = mean × 最多章数(_CLUSTER_MAX_CHAPTERS)，再与
+# 通用健康 cluster band 取并集（绝不窄于 cluster 健康区间）。单章视野(DEFAULT/STRICT·base
+# 下限 < 8000)不动——仍用作者单章 mean ±500（向后兼容·零回归）。
+_CLUSTER_WORDS_FLOOR = 8000      # 判别 cluster 视野：base band 下限 ≥ 此 = 来自 CLUSTER_THRESHOLDS
+_CLUSTER_MIN_CHAPTERS = 3        # 每 cluster 估算最少章数（下限放大系数）
+_CLUSTER_MAX_CHAPTERS = 8        # 每 cluster 估算最多章数（上限放大系数）
+
+
+def _cluster_chapter_words_band(cw_mean: float, base_lo: float, base_hi: float) -> dict:
+    """cluster 视野下，把作者**单章**字数 mean 放大成 cluster 级 band，再与通用健康
+    cluster band 取并集（北极星① · #1）。
+
+    · 下限 = min(作者单章 mean × 最少章数, 通用 cluster 下限) —— 不高于健康下限，防短 cluster 误 FAIL。
+    · 上限 = max(作者单章 mean × 最多章数, 通用 cluster 上限) —— 不低于健康上限，容厚重 cluster。
+    实证：蛊真人单章 mean 2719 → [2719×3, 2719×8]=[8157,21752] ∪ [8000,30000]=[8000,30000]
+         （18846 字真 cluster 落内·不再 FAIL）；惊悚单章 mean 2921 同理覆盖 19754。
+    并集口径保证「带作者档」绝不比「不带作者档（纯 CLUSTER_THRESHOLDS）」更苛（守原则⑤）。
+    """
+    est_lo = cw_mean * _CLUSTER_MIN_CHAPTERS
+    est_hi = cw_mean * _CLUSTER_MAX_CHAPTERS
+    return {"min": min(est_lo, base_lo), "max": max(est_hi, base_hi)}
+
+
 def _apply_style_overrides(t: dict, sd: dict) -> dict:
     t = {k: dict(v) for k, v in t.items()}
     # 2026-05-29 北极星 P4 [H2-style]：标记「本项目有作者风格档」→ _chk_banned 据此把
@@ -332,9 +363,19 @@ def _apply_style_overrides(t: dict, sd: dict) -> dict:
             t["long_para_per_chapter"] = {"max_ratio": lp_ratio}
     # 章字数 mean -> +/- 500。2026-05-30 北极星⑤：tolerant 读 chapter_words | chapter_chars
     # （同口径多命名）—— 否则蛊真人(chapter_chars 键)override 失效，章字数退回通用 band。
+    # 2026-05-30 北极星① [#1 章字数 band 无 cluster 视野]：CLUSTER_MODE 下 validate 跑在整
+    # cluster draft 上，base band 已是 cluster 级(8000-30000)；此时**绝不能**用作者单章 mean
+    # ±500 塌回单章 band(否则 18846 字真 cluster 必 FAIL)。判 base 下限 ≥ _CLUSTER_WORDS_FLOOR
+    # → cluster 视野：把作者单章 mean 放大成 cluster band 并与健康区间取并集；否则(单章视野)
+    # 仍 ±500（向后兼容）。
     cw_mean = _extract_author_chapter_words(q)
     if cw_mean is not None:
-        t["chapter_words"] = {"min": max(500, cw_mean - 500), "max": cw_mean + 500}
+        _cw_base = t.get("chapter_words", {})
+        if _cw_base.get("min", 0) >= _CLUSTER_WORDS_FLOOR:
+            t["chapter_words"] = _cluster_chapter_words_band(
+                cw_mean, _cw_base["min"], _cw_base["max"])
+        else:
+            t["chapter_words"] = {"min": max(500, cw_mean - 500), "max": cw_mean + 500}
     # must_have_per_chapter
     must = sd.get("must_have_per_chapter", {})
     if "onomatopoeia" in must:
@@ -525,6 +566,17 @@ _MAX_SPEAKER_PREFIX_CJK = 20
 _SENT_END_CHARS = "。！？…"                  # 句末终止符（真提示语是单条引入·不含完整句）
 
 
+# 2026-05-30 北极星① [#2 混合格式欠切]：\n\n 切后某段仍是**混合格式巨段**（内含多个单 \n
+# 的章内分段被 \n\n 切漏）时，对该段再用单 \n 细切的判别阈值。两条件**同时**成立才细切：
+#   · 段 CJK 字数 > _MIXED_SEG_MIN_CJK（巨段·绝非单条正常段）
+#   · 段内含 ≥ _MIXED_SEG_MIN_NL 个单 \n（章内本就用单 \n 分段·被 \n\n 切漏）
+# 实证锚（120 章扫描）：纯 \n\n 作者（蛊真人）最大 \n\n-段仅 84 字 / 0 个 >200字且≥2内\n 段
+# → 永不触发细切（零回归）；惊悚多章 \n\n join 的合并段 2642-3580 字 / 40-66 内 \n → 触发细切。
+# 阈值 200/2 把「单条正常长段（含 1 个软换行如诗行）」与「整章被 \n\n 切漏的混合巨段」分开。
+_MIXED_SEG_MIN_CJK = 200
+_MIXED_SEG_MIN_NL = 2
+
+
 def _split_paras(text: str) -> list[str]:
     """tolerant 段落切分（与 style_analyzer.split_paragraphs 对齐）。
 
@@ -538,9 +590,32 @@ def _split_paras(text: str) -> list[str]:
     修：**有 \\n\\n 用 \\n\\n 切（保持双换行格式作者不变，如蛊真人 56 个 \\n\\n → 57 段）；
     无 \\n\\n 退回单 \\n 切（与 style_analyzer 对齐，惊悚乐园 → 59 段）**。
     去空段 + 去无 CJK 段（与 style_analyzer.split_paragraphs 一致：count_chinese>0）。
+
+    2026-05-30 北极星① [#2 混合格式欠切]：cluster draft 常由**多章合并**或 writer 混合
+    输出而成——**章间 \\n\\n + 章内单 \\n**（如惊悚多章 \\n\\n join：每章内部只用单 \\n
+    分段，章与章之间 \\n\\n）。此时纯按 \\n\\n 切 → **每章塌成 1 个巨段**（实测 6 章合并
+    切出 6 段 2642-3580 字）→ 全超 300 绝对上限 → 误触发 STYLE_单段超长 hard_gate。
+    修：\\n\\n 切后，对**仍是混合格式巨段**（CJK > _MIXED_SEG_MIN_CJK 且含 ≥
+    _MIXED_SEG_MIN_NL 个单 \\n）的段**再用单 \\n 细切**——把章内被 \\n\\n 切漏的单 \\n
+    分段正确拆开。守纪律：纯 \\n\\n（蛊真人·\\n\\n-段最大 84 字·从不触发细切）不变 ·
+    纯单 \\n（惊悚单章·无 \\n\\n 走 fallback）不变 · 「单条正常长段含 1 个软换行（如
+    上联\\n下联）」< 200 字 / 仅 1 个 \\n → 不被细切（不破坏 \\n\\n 作者既有正确分段）。
     """
-    sep = "\n\n" if "\n\n" in text else "\n"
-    return [p.strip() for p in text.split(sep)
+    if "\n\n" in text:
+        out: list[str] = []
+        for seg in text.split("\n\n"):
+            seg = seg.strip()
+            if not seg or not _CJK_RE.search(seg):
+                continue
+            # 混合格式巨段（章内单 \n 被 \n\n 切漏）→ 再用单 \n 细切；否则原样保留
+            if (len(_CJK_RE.findall(seg)) > _MIXED_SEG_MIN_CJK
+                    and seg.count("\n") >= _MIXED_SEG_MIN_NL):
+                out.extend(sub.strip() for sub in seg.split("\n")
+                           if sub.strip() and _CJK_RE.search(sub))
+            else:
+                out.append(seg)
+        return out
+    return [p.strip() for p in text.split("\n")
             if p.strip() and _CJK_RE.search(p)]
 
 
