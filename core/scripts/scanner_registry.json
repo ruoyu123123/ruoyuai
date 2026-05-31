@@ -106,6 +106,14 @@
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["VOLUME_ARC_DRIFT"]
+    },
+    "cross_cluster_style_drift": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_style_drift_scanner.py",
+      "doc": "[2026-05-31 第2轮] 跨 cluster 长程作者文风漂移哨兵 · SFS 距离曲线 + 位置加权 · advisory · env LONGRANGE_DRIFT_MODE 默认 shadow",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["LONGRANGE_STYLE_DRIFT"]
     }
   },
 

@@ -47,6 +47,7 @@ SCAN_TIERS = {
         "cross_cluster_relationship_trend_aggregate",
         "cross_cluster_will_learn_aggregate",
         "volume_arc_drift_scanner",  # 2026-05-29 北极星 P2 [H3-trend]：卷级大势收敛漂移哨兵（advisory）
+        "cross_cluster_style_drift_scanner",  # 2026-05-31 第2轮：跨 cluster 长程作者文风漂移哨兵（advisory · env LONGRANGE_DRIFT_MODE 默认 shadow）
     ],
 }
 

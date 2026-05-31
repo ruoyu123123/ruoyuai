@@ -1118,6 +1118,94 @@ def _build_volume_convergence_anchor(scanner, cluster: dict) -> dict | None:
     return anchor
 
 
+def _collect_rolling_style_anchor(scanner, chapter: int) -> dict | None:
+    """Rolling style anchor（2026-05-31 · 第 2 轮治 D 级长程文风退化 · 北极星①⑤⑥）。
+
+    问题：长篇写到中后段，作者文风会**回归均值**退化成通用 LLM 腔（第 1 轮的静态开局 snippet
+    是固定的，越写离它越远，锚不住）。本锚是**动态**的：每写下一个 cluster 时，从**本书已写的
+    cluster 草稿里挑「离作者参考最近的 1-2 个片段」当锚**——用本书自己写得最像作者的段落
+    重新锚定下一块，对抗回归均值。
+
+    实现（纯 Python · 零 GPU · 复用 SFS · 顾问制软牵引）：
+      1. 收集已写 cluster 草稿（cross_cluster_style_drift_scanner.collect_written_cluster_texts）。
+      2. 定位作者原文参考（style_similarity_scanner.resolve_author_pool）。
+         · 有参考 → 对每个已写 cluster 取头部代表片段，算 vs 作者参考的去题材 SFS，选 top-2 最贴。
+         · 无参考 → 退化：选最近 1-2 个已写 cluster 头部片段（保证锚是「本书最新文风」· 不臆造作者）。
+      3. 返回锚片段（截断到 ~600 CJK 控 prompt 体积）+ 说明。供 writer prompt 注入：
+         「写下一块时，文风向这些本书已写得最贴作者的片段看齐」。
+    全 advisory 软牵引（不限定写法 · 不 hard_gate · 守北极星⑤）。任何异常静默返回 None（不阻断 manifest）。
+    """
+    try:
+        import sys as _sys
+        _sd = str(Path(__file__).resolve().parent)
+        if _sd not in _sys.path:
+            _sys.path.insert(0, _sd)
+        import cross_cluster_style_drift_scanner as ccsd  # type: ignore
+        import style_similarity_scanner as _sss            # type: ignore
+        import style_evaluator as _se                       # type: ignore
+    except Exception:
+        return None
+
+    project_root = scanner.root
+    try:
+        written = ccsd.collect_written_cluster_texts(project_root, last_n=None)
+    except Exception:
+        written = []
+    if not written:
+        return None
+
+    def _head_snippet(text: str, target_cjk: int = 600) -> str:
+        """取片段头部约 target_cjk 汉字（在段落边界处收 · 控 prompt 体积 · 代表该 cluster 文风）。"""
+        out, cjk = [], 0
+        for para in text.split("\n"):
+            out.append(para)
+            cjk += _sss._cjk_count(para)
+            if cjk >= target_cjk:
+                break
+        return "\n".join(out).strip()
+
+    ref_text = None
+    try:
+        ref_text = ccsd.author_reference_text(project_root)
+    except Exception:
+        ref_text = None
+
+    ranked: list[dict] = []
+    if ref_text:
+        # 有作者参考：按「头部片段 vs 作者参考」去题材 SFS 排序，选最贴的 top-2（动态最贴锚）
+        for c in written:
+            snip = _head_snippet(c["text"])
+            if _sss._cjk_count(snip) < 200:
+                continue
+            try:
+                sim = ccsd.style_similarity(ref_text, snip)
+            except Exception:
+                continue
+            ranked.append({"cluster_id": c["cluster_id"], "similarity_to_author": sim, "snippet": snip})
+        ranked.sort(key=lambda x: x["similarity_to_author"], reverse=True)
+        selected = ranked[:2]
+        anchor_basis = "vs_author_reference"
+    else:
+        # 无作者参考：退化为「最近 1-2 个已写 cluster」头部片段（本书最新文风当锚 · 不臆造作者）
+        selected = []
+        for c in written[-2:]:
+            snip = _head_snippet(c["text"])
+            if _sss._cjk_count(snip) >= 200:
+                selected.append({"cluster_id": c["cluster_id"], "snippet": snip})
+        anchor_basis = "recent_clusters_fallback"
+
+    if not selected:
+        return None
+    return {
+        "anchor_basis": anchor_basis,
+        "author_pool_resolved": ref_text is not None,
+        "anchors": selected,
+        "_doc": ("Rolling style anchor（动态锚 · 软牵引）：下面是本书已写片段中**最贴作者文风**的"
+                 "1-2 段（每写一块都重新挑选 · 对抗长篇文风回归均值退化成通用腔）。写下一个 cluster 时，"
+                 "句长节奏 / 虚词标点 / 字组笔迹向它们看齐——这是顾问提示，不限定你写什么内容、不硬锁写法。"),
+    }
+
+
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
     writer 在 MODE=ecas 时必读此字段。
@@ -2826,6 +2914,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "active_clocks": _collect_active_clocks(s, chapter),
         "research_cache_ref": _collect_research_cache_ref(s, chapter),
         "event_cluster_context": _collect_event_cluster_context(s, chapter),
+        # 2026-05-31 第 2 轮：rolling style anchor（动态锚 · 软牵引对抗长程文风退化 · 北极星①⑤⑥）。
+        # 从本书已写片段里挑「最贴作者文风」的 1-2 段当下一块的动态锚（vs 第 1 轮静态开局 snippet）。
+        "rolling_style_anchor": _collect_rolling_style_anchor(s, chapter),
         "storyteller_directive": _collect_storyteller_directive(s, chapter),
         "protagonist_stress": _collect_protagonist_stress(s, chapter),
         # [#7] 北极星①：主角弧线当前阶段（character_arc_state.json）内联注入 writer —— 此前只有
