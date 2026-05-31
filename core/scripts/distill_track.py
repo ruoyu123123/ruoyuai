@@ -172,15 +172,18 @@ def detect_regression(prev_entry, cur_entry, abs_floor=DEFAULT_ABS_FLOOR, std_k=
 
 
 def build_entry(skill_version, cluster_ref, sfs_scores, model=None,
-                git_sha=None, timestamp=None):
+                git_sha=None, timestamp=None, holdout=None):
     """把多趟 SFS 分聚成一条 ledger 记录（纯函数）。
 
     sfs_scores: 多趟分 list（论文强调多趟）·单趟也允许但 variance=0、下游 band 退 abs_floor。
+    holdout（可选 · 2026-05-31）：distill_holdout 挂进来的留出落差信息
+      {tuning_mean, holdout_mean, gap, overfit, verdict}——基线 ledger 多一个 holdout 列。
+      None 时不写该字段（不污染纯 tuning 记录的 schema）。
     """
     scores = [float(s) for s in sfs_scores]
     if not scores:
         raise ValueError("sfs_scores 不能为空：至少要 1 趟分")
-    return {
+    entry = {
         "skill_version": str(skill_version),
         "cluster_ref": str(cluster_ref),
         "sfs_scores": [round(s, 3) for s in scores],
@@ -192,6 +195,9 @@ def build_entry(skill_version, cluster_ref, sfs_scores, model=None,
         "git_sha": git_sha or "unknown",
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
     }
+    if holdout is not None:
+        entry["holdout"] = dict(holdout)
+    return entry
 
 
 def last_entry_for_ref(ledger, cluster_ref):
@@ -381,20 +387,34 @@ def cmd_dashboard(args) -> int:
     print(hdr)
     print("-" * 78)
     regress_count = 0
+    overfit_count = 0
     for r in rows:
         e, reg = r["entry"], r["regression"]
         delta = "" if reg["prev_mean"] is None else f"{reg['delta']:+.2f}"
         glyph = _trend_glyph(reg)
         if reg.get("regressed"):
             regress_count += 1
+        # holdout 列：distill_holdout --track 挂进来的留出落差（过拟合一眼可见）。
+        ho = e.get("holdout") or {}
+        if ho:
+            gap = ho.get("gap")
+            ho_col = (f"Δho{gap:+.1f}" if isinstance(gap, (int, float)) else "ho")
+            if ho.get("overfit"):
+                ho_col += "!过拟合"
+                overfit_count += 1
+        else:
+            ho_col = ""
         print(f"{e.get('skill_version',''):<8}{e.get('cluster_ref',''):<16}"
               f"{e.get('sfs_mean',0):>9.2f}{e.get('std',0):>8.2f}{e.get('runs',0):>4}"
-              f"{delta:>9}{glyph:>10}  {e.get('git_sha','')[:10]:<10}")
+              f"{delta:>9}{glyph:>10}  {e.get('git_sha','')[:10]:<10}{ho_col}")
     print("-" * 78)
-    print(f"共 {len(rows)} 条记录·疑似回归 {regress_count} 条（容差带 abs_floor={args.abs_floor} "
-          f"K={args.std_k}）")
+    print(f"共 {len(rows)} 条记录·疑似回归 {regress_count} 条·疑似过拟合 {overfit_count} 条"
+          f"（容差带 abs_floor={args.abs_floor} K={args.std_k}）")
     if regress_count:
         print("[ADVISORY] 有疑似回归版本·均为 advisory 提示·不阻断（核实是否单趟噪声再定方向）")
+    if overfit_count:
+        print("[ADVISORY] 有疑似过拟合版本（holdout 掉分多）·均为 advisory·"
+              "提醒优化别只盯 tuning SFS（防 metric overfit）")
     return 0
 
 

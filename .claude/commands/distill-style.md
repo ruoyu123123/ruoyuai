@@ -2187,14 +2187,41 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 5 --skip-output
 
 ## 阶段 5：复刻循环（v14 新增 · 终止条件）
 
+> **🔬 L3d · draft-level critic-refine + knockout（PerFine 式 · 2026-05-31 · 默认 active）**
+>
+> 根因（L3b 自认 · memory `reference-system-validation-method`）：复刻一直是「得分 → 盲改 skill →
+> 再测」乏力循环——**草稿出来即定稿，没有 draft 改稿、没有保最优**。差距只能等下一轮蒸 skill 修。
+>
+> 升级（PerFine · arxiv 2510.24469 · GEval +7-13% · 3-5 轮稳）：`distill_replicate.py --mode cluster`
+> 出稿后**自动**进 draft-refine 内循环（无需额外命令）：
+>
+> 1. **critic**：同 active gen-model profile 按 **tone / vocabulary / syntax / topicality** 四类对当前
+>    草稿出**结构化 feedback**，直接指向改稿（draft-level · **不改 skill**）。critic prompt 引用作者
+>    **数值契约表**条目当受控量化坐标（句长/段长/单句独行/标点/虚词 · 严禁「冷峻/华丽」感性词）。
+> 2. **refine**：据 feedback 改写草稿（只改风格不改故事骨架 · 篇幅 ±10%）。
+> 3. **SFS 裁判**：`style_evaluator.evaluate` 取 `sfs_quick` 给候选评分——**透明、确定性、advisory**
+>    （不动 SFS 判决逻辑 · **不进 hard_gate**）。
+> 4. **knockout**：跨轮**保 SFS 更高分的草稿**（refine 退化则丢弃、保最优；裁判不可用则降级吃改稿）。
+>
+> 循环 3-5 轮（`DRAFT_REFINE_ROUNDS` 默认 3 · 钳 [1,5]）。critic feedback + 每轮 SFS + knockout
+> 决策全落 `cluster_<id>_replica.meta.json.draft_refine`（**不黑箱**）。复刻仍走 gen-model（同栈）。
+>
+> **关 / A-B 对照**：`DRAFT_REFINE_MODE=off` 或 `--draft-refine off`（一次出稿即定稿 · 旧行为）。
+> **北极星纪律**：critic=advisory（不黑箱留痕）· SFS 裁判透明（不改 sfs_quick/grade 判决）·
+> 复刻走 gen-model 不变 · 默认全开真生效（用户：默认关闭写他干什么）。
+
 **循环规则**：
 
 ```
 WHILE NOT converged:
-  执行阶段 2 (用最新 skill 复刻 3 个测试段)
+  执行阶段 2 (用最新 skill 复刻 cluster · distill_replicate 内已含 L3d draft-refine+knockout 保最优稿)
   执行阶段 3 (对比 → 找差距)
   执行阶段 4 (修正 → 升级 skill)
-  
+
+  注：L3d 在「单次复刻草稿内」迭代改稿保最优（draft-level · 不改 skill）；
+      阶段 2-4 外循环仍负责跨轮升 skill（skill-level）。二者正交、共存——
+      draft-refine 让每次出稿就更贴作者，外循环让 skill 越蒸越准。
+
   converged 判定（v15 升级 · 双重标准）：
     - **程序化标准**：style_evaluator.py 的 SFS_quick 分数 ≥ 88 且连续 2 轮变化 < 2 分
     - **定性标准**：连续 2 轮新发现的 critical/high 级维度 ≤ 1

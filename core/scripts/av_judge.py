@@ -409,6 +409,46 @@ def _read_text(p: Path) -> str:
 
 
 # ════════════════════════════════════════════════════════════════
+# best-of-N 复用接口（薄 · gen_writer 配对重排择优用 · 不另起调用栈 · 北极星⑥）
+# ════════════════════════════════════════════════════════════════
+
+def pairwise_drift_count(loader: GenModelLoader, author_text: str, replica_text: str,
+                         sample_limit: int = 3000) -> dict:
+    """配对判别一段仿写 vs 作者真迹，返回走味维度计数（best-of-N 择优用 · advisory）。
+
+    这是 av_judge 给写作端 best-of-N 重排的**薄复用接口**——不走 CLI / 不读写文件，
+    直接拿 loader + 两段文本做一次 4 维配对判别，返回结构化结果给调用方做候选排序。
+
+    返回 {drift_count: int, drift_dims: [...], dimensions: {...}, parse_ok: bool,
+          error: str|None}。
+      · drift_count = 走味维度数（0=四维全命中，最像作者；越大越不像 → best-of-N 越靠后）。
+      · 任何 gen-model 失败 → error 非空 + drift_count=None（调用方据此降级到纯 SFS 排序，
+        不阻断 · advisory 永不抛错中断写作流水线 · 北极星⑤）。
+
+    ⚠️ 永远 advisory：本函数只为「在 N 个候选里相对排序」服务，不产 hard_gate、不否决任何稿。
+    LLM-judge 对网文隐性风格会失准（创意写作域约 1/4 难例翻转），故只做 select 不做强判。
+    """
+    user_prompt = build_av_judge_prompt(author_text, replica_text, sample_limit)
+    try:
+        reply, _profile, _elapsed = call_gen_model(
+            loader, AV_JUDGE_SYSTEM_PROMPT, user_prompt, tag="av_judge_bestofn")
+    except GenModelExhaustedError as e:
+        return {"drift_count": None, "drift_dims": [], "dimensions": {},
+                "parse_ok": False, "error": f"gen-model 全部失败: {str(e)[:200]}"}
+    except Exception as e:  # noqa: BLE001 — advisory 永不中断写作流水线
+        return {"drift_count": None, "drift_dims": [], "dimensions": {},
+                "parse_ok": False, "error": str(e)[:200]}
+    parsed = parse_av_verdicts(reply)
+    return {
+        "drift_count": len(parsed["drift_dims"]),
+        "drift_dims": parsed["drift_dims"],
+        "dimensions": parsed["dimensions"],
+        "parse_ok": parsed["parse_ok"],
+        "error": None,
+    }
+
+
+# ════════════════════════════════════════════════════════════════
 # main
 # ════════════════════════════════════════════════════════════════
 

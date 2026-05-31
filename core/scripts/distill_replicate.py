@@ -545,6 +545,305 @@ def subcall_max_tokens(target_words: int, cot_first: bool) -> int:
     return min(ceiling, max(4000, int(target_words * token_factor)))
 
 
+# ============ L3d · draft-level critic-refine + knockout（PerFine 式 · 2026-05-31）============
+#
+# 根因（L3b 自认 · memory reference-system-validation-method）：复刻是「得分→盲改 skill→再测」
+# 乏力循环——**没有 draft 改稿、没有保最优**。一旦草稿出来就定稿，差距只能靠下一轮蒸 skill 修。
+#
+# 升级（PerFine · arxiv 2510.24469 · GEval +7-13% · 3-5 轮稳）：复刻出稿后——
+#   ① critic LLM（同 gen-model profile）按 **tone / 词汇 / 句式 / topicality** 四类
+#      出**结构化 feedback**，**直接改当前草稿**（draft-level · 不改 skill）；
+#   ② 按 feedback 重写草稿；
+#   ③ SFS 分（style_evaluator.evaluate）当**裁判**——透明、确定性、advisory（不进 hard_gate）；
+#   ④ **knockout**：跨轮保留 SFS 更高分的草稿（refine 退化也不丢最优稿）；
+#   循环 3-5 轮。
+#
+# 北极星纪律：
+#   · critic 出的是 advisory feedback（不黑箱 · 落 meta.json 留痕 · 顾问非法官）；
+#   · SFS 当裁判透明（确定性分数 · 不动 sfs_quick/grade 判决逻辑 · 不进 hard_gate）；
+#   · critic 复用 active gen-model profile（复刻仍走 gen-model · 同栈）；
+#   · critic prompt 引用作者**数值契约表**条目（顺带吸收 per-author rubric 精华 · 受控量化坐标）；
+#   · 默认 active（用户：默认关闭写他干什么）· env DRAFT_REFINE_MODE=off 可关。
+
+# critic 评的四类维度（PerFine rubric · 映射作者数值契约表 + 受控语言学坐标）
+DRAFT_CRITIC_DIMENSIONS = ["tone", "vocabulary", "syntax", "topicality"]
+
+
+def _draft_refine_mode() -> str:
+    """读 env DRAFT_REFINE_MODE 决定复刻出稿后是否走 critic-refine + knockout。
+
+    值（大小写不敏感）：
+      · active（默认 / 空 / 非法值）：开启 draft-level critic-refine + knockout——
+        草稿出来后 critic 出结构化 feedback 直接改稿 · SFS 当裁判 · knockout 保最优（3-5 轮）。
+        （用户纪律：默认关闭写他干什么 · 默认全开真生效。）
+      · off：关闭——复刻一次出稿即定稿（旧行为 · A/B 对照）。
+      · on/1/true/refine → 归一为 active。
+
+    只改「出稿后是否多轮精修 + 保最优」（确定性编排 · gen-model/SFS 调用可 mock 测试）·
+    不改复刻走 gen-model 的事实 · 不动 SFS 判决逻辑。
+    """
+    v = (os.environ.get("DRAFT_REFINE_MODE") or "").strip().lower()
+    if v == "off":
+        return "off"
+    return "active"
+
+
+def _draft_refine_rounds() -> int:
+    """读 env DRAFT_REFINE_ROUNDS（精修轮数 · PerFine 实证 3-5 轮稳 · 默认 3 · 钳 [1,5]）。"""
+    raw = (os.environ.get("DRAFT_REFINE_ROUNDS") or "").strip()
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 3
+    return max(1, min(5, n))
+
+
+def _extract_contract_excerpt(style_skill_md: str, max_chars: int = 1400) -> str:
+    """从 skill_FINAL.md 抽「数值契约表」块给 critic 当受控量化坐标 rubric（不另算 · 复用 L3c 注入块）。
+
+    宽容解析：优先用 L3c 哨兵块（SENTINEL_BEGIN/END）；缺哨兵则抓「数值契约表」标题后片段；
+    都没有则回退用 skill 头部（critic 仍能看见量化基线）。critic 据此点名 tone/词汇/句式/topicality
+    对照——把 per-author rubric 精华（作者档第一权威）吸收进 critic 评分坐标。
+    """
+    begin = "L3C_CONTRACT_BEGIN"
+    end = "L3C_CONTRACT_END"
+    bi = style_skill_md.find(begin)
+    ei = style_skill_md.find(end)
+    if bi >= 0 and ei > bi:
+        block = style_skill_md[bi:ei]
+        return block[:max_chars]
+    # 无哨兵：抓「数值契约表」等**标题**（必须是 markdown heading `#`/`##`，避免误中 frontmatter
+    # description 里的「微调量化基线」这类一带而过的提及）。
+    for title in ("数值契约表", "量化基线", "量化约束", "定量基线"):
+        ti = style_skill_md.find(title)
+        # 校验该位置确实是标题：往前找最近的换行，行首应是 # / ## / **
+        if ti >= 0:
+            line_start = style_skill_md.rfind("\n", 0, ti) + 1
+            prefix = style_skill_md[line_start:ti].lstrip()
+            if prefix.startswith("#") or prefix.startswith("**") or prefix == "":
+                return style_skill_md[ti:ti + max_chars]
+    # 无真标题：锚到第一个受控坐标关键词处取窗口（老 skill 量化基线散在正文 · 头部常是 frontmatter）。
+    # 取最早出现的坐标，从其前 100 字开始截窗，保证 critic 看得见真实量化基线（不是 frontmatter 提及）。
+    coord_positions = [style_skill_md.find(c) for c in ("句长", "段长", "单句独行", "标点", "虚词")]
+    coord_positions = [p for p in coord_positions if p >= 0]
+    if coord_positions:
+        start = max(0, min(coord_positions) - 100)
+        return style_skill_md[start:start + max_chars]
+    # 都没有：回退 skill 头部（critic 仍看得见 skill 全貌）
+    return style_skill_md[:max_chars]
+
+
+def build_critic_prompt(draft_text: str, contract_excerpt: str,
+                        ref_text: str = "") -> str:
+    """critic LLM prompt：按 tone/词汇/句式/topicality 四类对当前草稿出**结构化 feedback**。
+
+    PerFine 式：critic 不重写草稿，只产可执行的修改清单（每条点名维度 + 具体位置 + 怎么改），
+    引用作者数值契约表条目当受控坐标（不准用「冷峻/华丽」感性词 · 感性词改意泄漏内容）。
+    feedback 是 advisory（refine 步据此改稿 · 但 SFS 裁判才是判决）。
+    """
+    parts = [
+        "你是一位严苛的中文小说**风格审稿人**（critic）。"
+        "下面是一段「复刻草稿」+ 源作者的「数值契约表」。\n"
+        "你的任务：按 4 类维度逐条诊断草稿**偏离作者风格**的地方，"
+        "出**结构化、可直接执行的修改清单**（你不重写正文，只出清单）。",
+        "# 源作者数值契约表（受控量化坐标 · 第一权威）\n\n" + contract_excerpt,
+    ]
+    if ref_text:
+        parts.append("# 参考原文片段（仅作语感对照 · 不比情节）\n\n" + ref_text[:1500])
+    parts.append("# 待诊断的复刻草稿\n\n" + draft_text[:8000])
+    parts.append(
+        "# 诊断维度（逐类给条目 · 每条点名「位置 + 偏离什么坐标 + 怎么改」）\n\n"
+        "1. **tone（语气/情绪寄存器）**：草稿整体语气是否贴作者？情绪起伏节奏对不对？\n"
+        "2. **vocabulary（词汇/虚词指纹）**：高频虚词分布是否对齐契约表 Top-N？"
+        "有无 AI 套话 / 禁用词？用词丰富度够不够？\n"
+        "3. **syntax（句式/段落节奏）**：句长均值+方差是否对齐契约表？"
+        "单句独行占比、段长分位数对不对？长短句混搭够不够？\n"
+        "4. **topicality（题材/具象度）**：场景具象、细节质感是否到位？有无空泛抽象？\n\n"
+        "⚠️ 只准引用**可量化坐标**（句长/段长/单句独行/标点/虚词频率），"
+        "**严禁**用「冷峻/华丽/大气/有张力」等感性形容词（无法核对 · 会泄漏改意）。\n"
+        "⚠️ 每条修改清单要**具体到本草稿的段落/句子**，不要泛泛复述契约表。"
+    )
+    parts.append(
+        "# 输出格式（严格按此 · 供下一步据此改稿）\n\n"
+        "[tone]\n- <条目1>\n- <条目2>\n"
+        "[vocabulary]\n- <条目1>\n...\n"
+        "[syntax]\n- <条目1>\n...\n"
+        "[topicality]\n- <条目1>\n...\n\n"
+        "若某维度已贴合作者、无需改，该维度下写「- 已对齐」。"
+    )
+    return "\n\n".join(parts)
+
+
+def build_refine_prompt(draft_text: str, critic_feedback: str,
+                        contract_excerpt: str) -> str:
+    """据 critic feedback **改写当前草稿**（draft-level · 非改 skill）。
+
+    PerFine 式 refine：保持情节/角色/篇幅基本不变，只按修改清单调风格坐标 → 产改良稿。
+    强调「只改风格不改故事骨架」（防 refine 把内容写飞 · 也防退化——退化由 knockout 兜底）。
+    """
+    return "\n\n".join([
+        "你是一位极擅长按审稿意见**精修风格**的中文小说写作引擎。"
+        "下面给你一段复刻草稿 + critic 的结构化修改清单 + 作者数值契约表。\n"
+        "你的任务：**严格按修改清单改写草稿**，让它更贴作者风格坐标。",
+        "# 改写硬纪律\n\n"
+        "1. **只改风格，不改故事骨架**：角色、场景、情节走向、篇幅基本不变（±10% 字数）。\n"
+        "2. **逐条落实修改清单**：每条 critic 意见都要在改写稿里有对应调整。\n"
+        "3. **对齐数值契约表**：句长均值+方差 / 段长分位数 / 单句独行占比 / 虚词 Top-N。\n"
+        "4. **0 AI 套话 / 0 禁用词**。\n"
+        "5. **直接输出改写后的完整正文**（纯文本 · 无 markdown · 无章节标题 · 无解释 · 无「以下是」）。",
+        "# 源作者数值契约表\n\n" + contract_excerpt,
+        "# critic 修改清单（逐条落实）\n\n" + critic_feedback,
+        "# 待改写的草稿\n\n" + draft_text,
+    ])
+
+
+def _score_draft_sfs(ref_texts: list[str], draft_text: str) -> float | None:
+    """SFS 裁判（透明 · 确定性 · advisory）：调 style_evaluator.evaluate 取 sfs_quick。
+
+    ref_texts 空 / 评估异常 → 返回 None（裁判不可用 → 调用方降级为「不淘汰、保首稿」· 不崩流程）。
+    绝不改 style_evaluator 任何判决逻辑（顾问非法官 · 北极星⑤）· 不进 hard_gate。
+    """
+    if not ref_texts:
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        import style_evaluator  # noqa: E402 · 延迟导入（避免无 numpy/scipy 环境时影响纯 prompt 测试）
+        ref_arg = ref_texts if len(ref_texts) > 1 else ref_texts[0]
+        report = style_evaluator.evaluate(ref_arg, draft_text)
+        v = report.get("sfs_quick")
+        return float(v) if v is not None else None
+    except Exception as e:  # noqa: BLE001 · 裁判失败降级不崩复刻主流程
+        print(f"[L3d · SFS 裁判] WARN 评分失败，降级保留当前最优稿: {str(e)[:160]}",
+              file=sys.stderr)
+        return None
+
+
+def draft_refine_loop(
+    loader: "GenModelLoader",
+    system_prompt: str,
+    initial_draft: str,
+    style_skill_md: str,
+    ref_texts: list[str],
+    ref_excerpt: str = "",
+    rounds: int | None = None,
+    score_fn=None,
+    call_fn=None,
+) -> tuple[str, dict]:
+    """draft-level critic-refine + knockout 主循环（PerFine 式 · 3-5 轮 · 保最优）。
+
+    流程（每轮）：critic LLM 出结构化 feedback → refine LLM 据此改稿 → SFS 裁判评分 →
+    **knockout 保 SFS 更高分的草稿**（候选退化则丢弃 · 保留当前 best）。
+
+    依赖注入（测试用 · 不实跑 gen-model / SFS）：
+      · call_fn(system, user, tag) -> str：替代 call_gen_model（critic + refine 两次 LLM 调用）。
+      · score_fn(ref_texts, draft) -> float|None：替代 _score_draft_sfs（SFS 裁判）。
+    生产默认：call_fn=call_gen_model 包装、score_fn=_score_draft_sfs。
+
+    返回 (best_draft, trace)：trace 留每轮 critic feedback + 候选 SFS + knockout 决策（不黑箱）。
+    """
+    if rounds is None:
+        rounds = _draft_refine_rounds()
+    if call_fn is None:
+        def call_fn(system, user, tag=""):
+            reply, _prof, _el = call_gen_model(
+                loader, system, user,
+                default_max_tokens=8000, tag=tag)
+            return reply
+    if score_fn is None:
+        score_fn = _score_draft_sfs
+
+    contract_excerpt = _extract_contract_excerpt(style_skill_md)
+    ref_for_critic = ref_texts[0] if ref_texts else ""
+
+    best_draft = initial_draft
+    best_score = score_fn(ref_texts, initial_draft)
+    initial_score = best_score  # 首稿评分锚（不依赖任一轮成功 · 防 critic 首轮即失败缺键）
+    rounds_trace: list[dict] = []
+
+    for r in range(1, rounds + 1):
+        # ① critic：对当前 best 草稿出结构化 feedback（advisory）
+        critic_user = build_critic_prompt(best_draft, contract_excerpt, ref_for_critic)
+        try:
+            critic_feedback = clean_output(
+                call_fn("你是严苛的中文小说风格审稿人，只出结构化修改清单，不重写正文。",
+                        critic_user, tag=f"critic r{r}"))
+        except GenModelExhaustedError as e:
+            print(f"[L3d · critic r{r}] WARN critic 调用失败，提前结束精修循环: {e}",
+                  file=sys.stderr)
+            rounds_trace.append({"round": r, "stage": "critic", "error": str(e)[:160]})
+            break
+
+        # ② refine：据 feedback 改写草稿
+        refine_user = build_refine_prompt(best_draft, critic_feedback, contract_excerpt)
+        try:
+            candidate = clean_output(
+                call_fn(system_prompt, refine_user, tag=f"refine r{r}"))
+            candidate, _cot = strip_cot_analysis(candidate)  # 兼容模型误带 CoT 标记
+        except GenModelExhaustedError as e:
+            print(f"[L3d · refine r{r}] WARN refine 调用失败，保留当前最优稿: {e}",
+                  file=sys.stderr)
+            rounds_trace.append({"round": r, "stage": "refine", "error": str(e)[:160]})
+            break
+
+        # ③ SFS 裁判：给候选评分
+        cand_score = score_fn(ref_texts, candidate)
+
+        # ④ knockout：候选分更高（或裁判不可用时不淘汰、首次接受候选）才替换 best
+        accepted = _knockout_accept(best_score, cand_score)
+        round_meta = {
+            "round": r,
+            "critic_feedback": critic_feedback,
+            "candidate_cjk": cjk_count(candidate),
+            "best_score_before": best_score,
+            "candidate_score": cand_score,
+            "accepted": accepted,
+        }
+        if accepted:
+            best_draft = candidate
+            # 裁判可用则更新 best_score；裁判不可用（None）时保持原 best_score（不污染后续比较）
+            if cand_score is not None:
+                best_score = cand_score
+        round_meta["best_score_after"] = best_score
+        rounds_trace.append(round_meta)
+        print(f"[L3d · r{r}] critic→refine 完成 · 候选 SFS={cand_score} · "
+              f"best={best_score} · {'采纳' if accepted else '淘汰(保最优)'}",
+              file=sys.stderr)
+
+    # initial_score = 首稿评分（记在 best_score_init · 不依赖第一轮成功，防 critic 首轮即失败时缺键）
+    trace = {
+        "draft_refine_enabled": True,
+        "rounds_requested": rounds,
+        "rounds_run": len(rounds_trace),
+        "initial_score": initial_score,
+        "final_best_score": best_score,
+        "rounds": rounds_trace,
+        "sfs_judge_available": best_score is not None
+        or any(rt.get("candidate_score") is not None for rt in rounds_trace),
+        "note": "PerFine 式 draft-level critic-refine + knockout · critic feedback=advisory(留痕不黑箱) · "
+                "SFS 当裁判透明(确定性·不进 hard_gate) · 复刻仍走 gen-model",
+    }
+    return best_draft, trace
+
+
+def _knockout_accept(best_score: float | None, cand_score: float | None) -> bool:
+    """knockout 采纳判定（保最优纪律）：
+
+    · 两者都有分 → 候选 ≥ best 才采纳（refine 退化丢弃 · 严格保最优）。
+    · 候选无分（裁判对候选失败）、best 有分 → 不采纳（不拿没裁判背书的候选换掉有分 best）。
+    · best 无分（首稿裁判失败）、候选有分 → 采纳（候选首次拿到裁判分）。
+    · 两者都无分（裁判全程不可用）→ 采纳候选（降级行为：至少吃到 refine 的改稿；保守可改 False）。
+
+    透明且确定性——纯函数，测试钉死 4 种组合。
+    """
+    if best_score is not None and cand_score is not None:
+        return cand_score >= best_score
+    if cand_score is None and best_score is not None:
+        return False
+    if best_score is None and cand_score is not None:
+        return True
+    return True  # 都无分：裁判不可用，吃 refine 改稿
+
+
 # ============ main ============
 
 def main():
@@ -577,6 +876,10 @@ def main():
     parser.add_argument("--cot-first", choices=["active", "off"], default=None,
                         help="[L3b] CoT-first 自解释复刻 prompt：active=先分析后写两段式，"
                              "off=旧直接出正文路径（默认）。缺省读 env L3B_COT_FIRST_MODE（默认 off）。")
+    parser.add_argument("--draft-refine", choices=["active", "off"], default=None,
+                        help="[L3d] draft-level critic-refine + knockout：active=出稿后 critic 出"
+                             "结构化 feedback 直接改稿 · SFS 当裁判 · 跨轮保最优（3-5 轮 · 默认 active）；"
+                             "off=一次出稿即定稿。缺省读 env DRAFT_REFINE_MODE（默认 active）。")
     args = parser.parse_args()
 
     style_skill = Path(args.style_skill)
@@ -707,6 +1010,28 @@ def main():
         })
 
     full_text = "\n\n".join(full_text_parts)
+
+    # ========== L3d · draft-level critic-refine + knockout（PerFine 式 · 默认 active） ==========
+    # 草稿拼好后：critic 出结构化 feedback 直接改稿 → SFS 裁判评分 → knockout 保最优（3-5 轮）。
+    # critic + refine 复用同 active gen-model profile（复刻仍走 gen-model）· SFS 当裁判透明。
+    refine_mode = args.draft_refine if args.draft_refine is not None else _draft_refine_mode()
+    refine_trace: dict = {"draft_refine_enabled": False, "mode": refine_mode}
+    if refine_mode == "active":
+        # SFS 裁判用同 cluster 的真实原文当 ref（gather 的同源 ref_text 拆段；空则裁判降级保稿）
+        ref_for_score = [ref_text] if ref_text else []
+        print(f"[L3d] draft-refine = active · {_draft_refine_rounds()} 轮 critic→refine→SFS knockout",
+              file=sys.stderr)
+        refined_text, loop_trace = draft_refine_loop(
+            loader, system_prompt,
+            initial_draft=full_text,
+            style_skill_md=style_skill_md,
+            ref_texts=ref_for_score,
+        )
+        full_text = refined_text
+        refine_trace = {"draft_refine_enabled": True, "mode": refine_mode, **loop_trace}
+    else:
+        print("[L3d] draft-refine = off · 一次出稿即定稿（对照）", file=sys.stderr)
+
     output_path.write_text(full_text, encoding='utf-8')
 
     meta = {
@@ -732,7 +1057,10 @@ def main():
         "cot_analysis_subcalls": sum(1 for m in subcall_metas if m.get("cot_analysis_present")),
         # 🎴 真实原文语感种子播种痕迹（P0 · 默认 off · 留痕不黑箱）
         "snippet_seed": seed_trace,
-        "produced_by": "distill_replicate.py v3 · cluster mode · A' 半 cluster timeout 防御 · L3b CoT-first 自解释 · 🎴 snippet-seed 播种",
+        # L3d · draft-level critic-refine + knockout 痕迹（PerFine 式 · critic feedback + 每轮 SFS · 不黑箱）
+        "draft_refine": refine_trace,
+        "produced_by": "distill_replicate.py v3 · cluster mode · A' 半 cluster timeout 防御 · "
+                       "L3b CoT-first 自解释 · 🎴 snippet-seed 播种 · L3d draft critic-refine+knockout",
     }
     output_path.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -742,6 +1070,10 @@ def main():
     print(f"     sub-calls: {len(subcall_plan)} 段", file=sys.stderr)
     print(f"     总字数: {cjk_count(full_text)} CJK (target ≈ {chapters_count * words_per_chapter})",
           file=sys.stderr)
+    if refine_trace.get("draft_refine_enabled"):
+        print(f"     draft-refine: {refine_trace.get('rounds_run')} 轮 · "
+              f"SFS {refine_trace.get('initial_score')} → {refine_trace.get('final_best_score')}"
+              f"（knockout 保最优）", file=sys.stderr)
     print(f"     总耗时: {total_elapsed:.1f}s", file=sys.stderr)
 
 

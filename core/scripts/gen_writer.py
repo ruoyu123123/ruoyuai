@@ -94,6 +94,56 @@ def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
     return 16000, 'default_fallback_16k_NO_PROBE_YET'
 
 
+# ============ best-of-N 择优（写作端 · 非迭代规避同质化 · 2026-05-31）============
+# 根因（本批任务说明 · arxiv 实证）：单稿直生 + av_judge 只事后单次诊断不回灌；self-refine
+#   反复迭代会同质化（模型把自己的输出当锚反复收敛到同一坨）。best-of-N 走「N 稿并行生成
+#   + 配对判别 + 综合择优」——selection（择优）≠ refine（迭代改），天然规避同质化。
+# 怎么择优（advisory · 不黑箱 · 北极星⑤）：
+#   ① SFS（style_evaluator.compute_style_only_sfs）= 统计指纹相似度（越高越像作者 · 透明可读）。
+#   ② AV-judge 配对判别（av_judge.pairwise_drift_count）= 读者视角 4 维走味计数（越少越像）。
+#   综合分 = SFS 归一 - 走味维度惩罚 → 排序取最高（SFS 当裁判透明 · AV-judge 只 select 不强判）。
+# env BEST_OF_N：默认 2（active · N≥2 真生效）· 设 1 = 关（退回单稿直生 · 零回归逃生口）。
+BEST_OF_N_DEFAULT = 2
+BEST_OF_N_MAX = 5  # 上限防 token 失控（用户质量优先但不无限）
+# 综合分：每个走味维度的惩罚（满分 100 的 SFS 尺度上扣多少 · 4 维全走味最多扣 40）。
+AV_DRIFT_PENALTY_PER_DIM = 10.0
+
+
+def _best_of_n() -> int:
+    """读 env BEST_OF_N：默认 2（active 放量 · N≥2 真生效）· 1=关 · 钳到 [1, BEST_OF_N_MAX]。
+
+    空 / 非法值 → 默认 2（与「默认全开 active」纪律一致：用户说默认关掉写它干什么）。
+    设 BEST_OF_N=1 是唯一的关闭口（退回单稿直生 · 零回归）。
+    """
+    raw = (os.environ.get("BEST_OF_N") or "").strip()
+    if not raw:
+        return BEST_OF_N_DEFAULT
+    try:
+        n = int(raw)
+    except (ValueError, TypeError):
+        return BEST_OF_N_DEFAULT
+    if n < 1:
+        return 1
+    return min(n, BEST_OF_N_MAX)
+
+
+def _candidate_temperatures(base_temp: float, n: int) -> list[float]:
+    """为 N 个候选生成**有差异**的 temperature（多样性 = best-of-N 价值来源 · 非迭代）。
+
+    第一稿用 profile 原始 temperature（保持基线行为不变 · 单稿等价）；后续候选在其上加阶梯
+    抖动（+0.1, +0.2, …），钳到 [0.2, 1.2] 合理区间。温度差异让 N 稿真的不同（避免 N 个一样的稿
+    白烧 token），同时不偏离作者风格太远（小步抖动 · 非大跨度）。
+    """
+    temps = [base_temp]
+    step = 0.1
+    for i in range(1, n):
+        t = base_temp + step * i
+        # 钳到合理写作温度区间（过低=刻板 / 过高=发散跑偏）
+        t = max(0.2, min(1.2, round(t, 2)))
+        temps.append(t)
+    return temps
+
+
 # ============ v27 freestyle helpers ============
 def _infer_cluster_start_ch(project_root: Path, cluster_id: int) -> int:
     """v27 freestyle：从事件簇.json + 已写章节推导 cluster 起始章号
@@ -670,6 +720,212 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
     raise GenModelExhaustedError(failures)
 
 
+# ============ best-of-N：生成 N 稿 + 配对重排 + 综合择优 ============
+def gather_author_ref_text(project_root: Path, max_chars: int = 6000) -> str:
+    """定位作者真实原文当 SFS / AV-judge 的锚（best-of-N 择优用 · 找不到则空）。
+
+    复用 snippet_seed.resolve_originals_dir 的同款原文池定位（项目自带 原文/ → 风格库 原文/），
+    取若干章拼成参考文本（截到 max_chars 控 SFS / judge token）。找不到原文池 → 返回 ""，
+    调用方据此优雅降级（无锚则跳 best-of-N · 退回单稿 · 不报错 · 不阻断写作）。
+    """
+    try:
+        originals = snippet_seed.resolve_originals_dir(project_root)
+    except Exception:
+        originals = None
+    if not originals or not originals.exists():
+        return ""
+    chunks: list[str] = []
+    total = 0
+    for p in sorted(originals.glob("*.txt")):
+        try:
+            t = p.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not t:
+            continue
+        chunks.append(t)
+        total += len(t)
+        if total >= max_chars:
+            break
+    ref = "\n\n".join(chunks)
+    return ref[:max_chars] if len(ref) > max_chars else ref
+
+
+def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
+                      n: int) -> list[dict]:
+    """生成 N 个候选稿（temperature 阶梯抖动 · 非迭代 · 规避 self-refine 同质化）。
+
+    每个候选独立调一次 call_gen_model（active→fallback 链复用 · 不另起调用栈）。
+    通过临时改 candidate profile 的 temperature 让 N 稿真有差异（多样性 = best-of-N 价值）。
+    单个候选生成失败（GenModelExhaustedError）→ 记录跳过，不中断其余候选；全失败由调用方 raise。
+
+    返回 [{idx, reply, profile, temperature, error}]（error 非空 = 该候选生成失败被跳过）。
+    """
+    candidates = loader.get_callable_profiles()
+    if not candidates:
+        raise GenModelExhaustedError([("<none>", "no callable profiles")])
+    base_temp = candidates[0].temperature
+    temps = _candidate_temperatures(base_temp, n)
+    drafts: list[dict] = []
+    for i, temp in enumerate(temps):
+        # 临时把 active profile 的 temperature 改成本候选温度（生成后还原 · 不污染 loader）。
+        active0 = candidates[0]
+        orig_temp = active0.temperature
+        active0.temperature = temp
+        print(f"\n[gen_writer][best-of-N] 生成候选 {i+1}/{n} (temperature={temp})",
+              file=sys.stderr)
+        try:
+            reply, used_profile = call_gen_model(loader, system, user)
+            drafts.append({"idx": i, "reply": reply, "profile": used_profile,
+                           "temperature": temp, "error": None})
+        except GenModelExhaustedError as e:
+            print(f"[gen_writer][best-of-N] 候选 {i+1} 生成失败（跳过）: {str(e)[:150]}",
+                  file=sys.stderr)
+            drafts.append({"idx": i, "reply": None, "profile": None,
+                           "temperature": temp, "error": str(e)[:200]})
+        finally:
+            active0.temperature = orig_temp
+    return drafts
+
+
+def score_candidate(body: str, author_ref: str, loader: GenModelLoader,
+                    use_av_judge: bool = True) -> dict:
+    """给单个候选稿打分（SFS 统计指纹 + AV-judge 配对走味计数 · 全 advisory · 透明可读）。
+
+    · sfs：style_evaluator.compute_style_only_sfs(author_ref, body) → style_only_sfs（0-100，越高越像）。
+      无 author_ref 或 style_evaluator 不可用 → sfs=None（调用方据此退化排序）。
+    · av_drift_count：av_judge.pairwise_drift_count → 走味维度数（0-4，越少越像）。
+      use_av_judge=False（无锚 / AV_JUDGE_MODE=off 等）或调用失败 → av_drift_count=None。
+    · composite：综合分 = sfs - AV_DRIFT_PENALTY_PER_DIM * av_drift_count（缺项各自降级）。
+      仅 sfs 缺 → composite=None（调用方按 av_drift_count 升序兜底）；仅 av 缺 → composite=sfs。
+
+    全 advisory：任何子项失败都不抛错（写作流水线不被择优层中断 · 北极星⑤）。
+    """
+    result: dict = {"sfs": None, "sfs_subscores": None,
+                    "av_drift_count": None, "av_drift_dims": [],
+                    "composite": None, "errors": []}
+    # ① SFS 统计指纹（透明裁判）
+    if author_ref and author_ref.strip():
+        try:
+            import style_evaluator as se
+            sfs = se.compute_style_only_sfs(author_ref, body)
+            result["sfs"] = round(float(sfs.get("style_only_sfs")), 2)
+            result["sfs_subscores"] = sfs.get("subscores")
+        except Exception as e:  # noqa: BLE001 — 择优层不阻断写作
+            result["errors"].append(f"sfs: {str(e)[:120]}")
+    # ② AV-judge 配对走味计数（读者视角 · 只 select 不强判）
+    if use_av_judge and author_ref and author_ref.strip():
+        try:
+            import av_judge as avj
+            av = avj.pairwise_drift_count(loader, author_ref, body)
+            if av.get("error") is None and av.get("drift_count") is not None:
+                result["av_drift_count"] = av["drift_count"]
+                result["av_drift_dims"] = av.get("drift_dims", [])
+            elif av.get("error"):
+                result["errors"].append(f"av_judge: {av['error'][:120]}")
+        except Exception as e:  # noqa: BLE001 — 择优层不阻断写作
+            result["errors"].append(f"av_judge: {str(e)[:120]}")
+    # ③ 综合分
+    sfs, avc = result["sfs"], result["av_drift_count"]
+    if sfs is not None:
+        penalty = AV_DRIFT_PENALTY_PER_DIM * avc if avc is not None else 0.0
+        result["composite"] = round(sfs - penalty, 2)
+    return result
+
+
+def select_best_draft(scored: list[dict]) -> tuple[int, str]:
+    """从打分后的候选里选最佳（综合分降序 · 缺 SFS 时按走味数升序兜底 · 确定性可测）。
+
+    scored: [{idx, body, score: {composite, sfs, av_drift_count, ...}, error}]（已过滤生成失败的）。
+    排序键（全候选可比 · 缺项一致降级）：
+      1. composite 有值 → 用 composite 降序（最像作者排最前）。
+      2. 全候选都没 composite（无 author_ref / SFS 全挂）→ 按 av_drift_count 升序（走味越少越好），
+         av 也没有 → 退回原始 idx 升序（= 单稿等价 · 第一稿优先 · 零回归保底）。
+    返回 (best_idx_in_list, reason)。reason 解释凭什么选（不黑箱 · 北极星⑤）。
+    """
+    if not scored:
+        raise ValueError("无可选候选（全部生成失败）")
+    if len(scored) == 1:
+        return 0, "唯一候选（N=1 或仅 1 稿生成成功）"
+
+    have_composite = [s for s in scored if s["score"].get("composite") is not None]
+    if have_composite:
+        best = max(range(len(scored)),
+                   key=lambda i: (scored[i]["score"].get("composite") is not None,
+                                  scored[i]["score"].get("composite") or float("-inf")))
+        sc = scored[best]["score"]
+        reason = (f"综合分最高 composite={sc.get('composite')} "
+                  f"(SFS={sc.get('sfs')} · AV走味={sc.get('av_drift_count')})")
+        return best, reason
+
+    # 无 composite：按走味数升序兜底
+    have_av = any(s["score"].get("av_drift_count") is not None for s in scored)
+    if have_av:
+        best = min(range(len(scored)),
+                   key=lambda i: (scored[i]["score"].get("av_drift_count")
+                                  if scored[i]["score"].get("av_drift_count") is not None
+                                  else 99))
+        return best, (f"无 SFS 锚 · 按 AV-judge 走味数升序选 "
+                      f"(走味={scored[best]['score'].get('av_drift_count')})")
+    # 全无打分信号 → 第一稿（单稿等价 · 零回归）
+    return 0, "无 SFS/AV 打分信号 · 退回第一稿（零回归保底）"
+
+
+def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
+                       project_root: Path, n: int) -> tuple[str, "Profile", dict]:
+    """best-of-N 主流程：生成 N 稿 → 各自打分 → 综合择优 → 返回最佳稿。
+
+    返回 (best_reply, best_profile, selection_trace)。
+    selection_trace 记录每个候选的分数 + 选中理由（写进 changes 不黑箱 · 北极星⑤）。
+    优雅降级：无 author_ref → 跳 SFS/AV-judge，仍生成 N 稿但按 idx 选第一稿（等价单稿 · 不报错）。
+    """
+    author_ref = gather_author_ref_text(project_root)
+    use_av_judge = bool(author_ref.strip())
+    if not author_ref.strip():
+        print("[gen_writer][best-of-N] 未找到作者原文池 · 跳过 SFS/AV-judge 打分 "
+              "（仍生成 N 稿但退回第一稿 · 优雅降级）", file=sys.stderr)
+
+    drafts = generate_n_drafts(loader, system, user, n)
+    ok_drafts = [d for d in drafts if d.get("error") is None and d.get("reply")]
+    if not ok_drafts:
+        # 全部候选生成失败 → 汇总 raise（与单稿全失败行为一致）
+        raise GenModelExhaustedError(
+            [("best_of_n", "; ".join(d.get("error", "?") for d in drafts) or "all empty")])
+
+    scored: list[dict] = []
+    for d in ok_drafts:
+        body, _changes = split_text_and_changes(d["reply"])
+        sc = score_candidate(body, author_ref, loader, use_av_judge=use_av_judge)
+        scored.append({"idx": d["idx"], "reply": d["reply"], "profile": d["profile"],
+                       "temperature": d["temperature"], "body_cjk": cio.count_cjk(body),
+                       "score": sc, "error": None})
+        print(f"[gen_writer][best-of-N] 候选 idx={d['idx']} temp={d['temperature']}: "
+              f"SFS={sc['sfs']} AV走味={sc['av_drift_count']} composite={sc['composite']} "
+              f"cjk={cio.count_cjk(body)}", file=sys.stderr)
+
+    best_i, reason = select_best_draft(scored)
+    best = scored[best_i]
+    print(f"\n[gen_writer][best-of-N] ✅ 选中候选 idx={best['idx']} "
+          f"(temp={best['temperature']}) — {reason}", file=sys.stderr)
+
+    trace = {
+        "best_of_n": n,
+        "candidates_generated": len(drafts),
+        "candidates_scored": len(scored),
+        "author_ref_found": use_av_judge,
+        "selected_idx": best["idx"],
+        "selection_reason": reason,
+        "candidates": [
+            {"idx": s["idx"], "temperature": s["temperature"], "cjk": s["body_cjk"],
+             "sfs": s["score"]["sfs"], "av_drift_count": s["score"]["av_drift_count"],
+             "av_drift_dims": s["score"]["av_drift_dims"],
+             "composite": s["score"]["composite"], "errors": s["score"]["errors"]}
+            for s in scored
+        ],
+    }
+    return best["reply"], best["profile"], trace
+
+
 # ============ 输出解析与保存 ============
 def split_text_and_changes(reply: str) -> tuple:
     """从返回拆出正文 + CHANGES JSON"""
@@ -703,11 +959,12 @@ def split_text_and_changes(reply: str) -> tuple:
 
 def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
                 ch_start: int, ch_end: int, used_profile: Profile,
-                seed_trace: dict = None):
+                seed_trace: dict = None, best_of_n_trace: dict = None):
     """写 draft + changes.json
 
     v27 freestyle：ch_end=None 时 ch_range 写 'TBD_by_splitter'（splitter 后期填）。
     seed_trace：snippet_seed 播种痕迹（用了几段 / 哪个模式）· 留 changes 不黑箱（北极星⑤）。
+    best_of_n_trace：best-of-N 择优痕迹（N 稿各自分数 + 选中理由）· 留 changes 透明可审（北极星⑤）。
     """
     # 空 body 守卫（2026-05-30 加固）：拒写空草稿并报错，避免 cjk=0 草稿入库还报成功。
     # 上游 call_gen_model 已对空响应切 fallback，此处是最后一道防线（含解析后正文为空的情况）。
@@ -747,6 +1004,7 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         'cjk_actual': cjk,
         'writer_mode': 'freestyle_v27' if freestyle else 'locked_v26',
         'snippet_seed': seed_trace or {'snippet_seed_mode': 'on', 'injected': False},
+        'best_of_n': best_of_n_trace or {'best_of_n': 1, 'note': '单稿直生（BEST_OF_N=1 或未启用）'},
     })
     se.setdefault('waivers', [])
     se.setdefault('uncertainty_flags', [])
@@ -862,8 +1120,21 @@ def main():
     system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start,
                                             args.chapter_end, args.target_cjk)
 
+    # best-of-N（默认 active · N≥2 真生效 · BEST_OF_N=1 退回单稿直生 · 2026-05-31）：
+    # N 稿并行生成（temperature 阶梯抖动）→ SFS + AV-judge 配对判别打分 → 综合择优。
+    # selection（择优）≠ refine（迭代）→ 天然规避 self-refine 同质化（arxiv 实证）。
+    n = _best_of_n()
+    best_of_n_trace = None
     try:
-        reply, used_profile = call_gen_model(loader, system, user)
+        if n >= 2:
+            print(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优",
+                  file=sys.stderr)
+            reply, used_profile, best_of_n_trace = best_of_n_pipeline(
+                loader, system, user, project_root, n)
+        else:
+            print(f"[gen_writer][best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）",
+                  file=sys.stderr)
+            reply, used_profile = call_gen_model(loader, system, user)
     except GenModelExhaustedError as e:
         print(f"\n[ERROR] {e}", file=sys.stderr)
         sys.exit(3)
@@ -871,7 +1142,7 @@ def main():
     body, changes = split_text_and_changes(reply)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
                                   ch_start, args.chapter_end, used_profile,
-                                  seed_trace=seed_trace)
+                                  seed_trace=seed_trace, best_of_n_trace=best_of_n_trace)
 
     print(f"\n[gen_writer] 跑 scanner...", file=sys.stderr)
     scan_results = run_scanners(draft_path)
