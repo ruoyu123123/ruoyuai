@@ -952,12 +952,125 @@ def _pos_style_distribution(text: str) -> dict:
     return {k: v / total for k, v in counts.items()}
 
 
-def compute_style_only_sfs(ref_text: str, gen_text: str) -> dict:
-    """去题材风格 SFS：只比风格特征（虚词指纹 / 标点指纹 / 句长节奏 / 去题材 POS 分布），
-    对名词/人名/情节动词停用——避免跨题材时题材信号淹没文风信号导致误判。
+# ============================================================
+# P1：字符 n-gram 风格指纹（2026-05-31 · 北极星①⑤⑥）
+# ------------------------------------------------------------
+# 根因（Oxford 2025 · AMNP 字符/词 n-gram 画像是「最难复刻、最能验真伪」的作者特征）：
+# 当前 compute_style_only_sfs 只看 虚词余弦 / 标点余弦 / 句长节奏 JSD / 去题材 POS——
+# **缺字符 n-gram 维度**（中文字符级天然友好：字符 3-gram 抓的是作者高频字组搭配的细粒度
+# 笔迹，远超「内容词」层面，跨章自比应高、跨作者应可区分）。本块补这一维：
+#   · 作者原文池建 **字符 3-gram + 词 unigram** 频率画像（collections.Counter · 纯 stdlib）；
+#   · 生成稿算同分布，余弦比距离（复用现有 _cosine_sim）；
+#   · 词 unigram 仅 jieba 可用时计入（与 POS 同栈零依赖降级 · 不可用则字符 3-gram 单算）。
+#
+# 影子并行（北极星纪律 2 · 回归 0）：env CHARNGRAM_SFS_MODE 控制——
+#   · shadow（默认）：算字符 n-gram 子分，挂在 subscores 的 charngram_* 加项里**只记录**，
+#     **不并入** style_only_sfs 加权（旧四维分一字不变 · 零回归）。
+#   · active：把字符 n-gram 子分作为第 5 维并入加权平均（与 fw/punc/rhythm/pos 并列）。
+#   · off：完全不算字符 n-gram（最纯旧行为）。
+# 不论哪种模式，字符 n-gram 只是**风格相似度子项**，绝不进 hard_gate（顾问非法官 · 北极星⑤）。
+# ============================================================
 
-    四个子项余弦/匹配后等权平均（0~100）。POS 子项仅在 jieba 可用时计入（否则降级，
-    剩三项重新等权）。逐项输出便于 advisory 可读。"""
+# 字符 n-gram 阶数（3-gram：中文「字组」粒度 · Oxford 研究主力特征）。
+_CHARNGRAM_N = 3
+# 字符 n-gram / 词 unigram 取频率最高的前 K 个进画像（控向量维度 · 长尾噪声不进比对）。
+_CHARNGRAM_TOPK = 400
+_WORDUNIGRAM_TOPK = 300
+
+
+def _charngram_mode() -> str:
+    """CHARNGRAM_SFS_MODE：默认 shadow（只算记录不并入加权 · 零回归）·
+    非法回退 shadow · {active,off} 原样。"""
+    import os
+    m = (os.environ.get("CHARNGRAM_SFS_MODE") or "shadow").strip().lower()
+    return m if m in ("shadow", "active", "off") else "shadow"
+
+
+def _cjk_only(text: str) -> str:
+    """抽出纯 CJK 字符序列（去标点/英文/数字/空白）——字符 n-gram 只在汉字流上滑，
+    避免标点/格式噪声混入字组画像（标点节奏已由 punctuation 指纹单独刻画）。"""
+    return "".join(CHINESE_CHAR.findall(text))
+
+
+def _char_ngram_freq(text: str, n: int = _CHARNGRAM_N,
+                     top_k: int = _CHARNGRAM_TOPK) -> dict:
+    """字符 n-gram 频率画像（纯 stdlib Counter · 零依赖）。
+
+    在纯 CJK 字符流上滑 n 字窗 → Counter 计数 → 取 top_k 高频 n-gram → 频率归一化。
+    返回 {ngram: 频率}（和≈1）。文本不足 n 字 → 返回 {}（短文不适用 · 不抛错）。"""
+    from collections import Counter
+    cjk = _cjk_only(text)
+    if len(cjk) < n:
+        return {}
+    grams = (cjk[i:i + n] for i in range(len(cjk) - n + 1))
+    counter = Counter(grams)
+    total = sum(counter.values())
+    if total == 0:
+        return {}
+    common = counter.most_common(top_k)
+    return {g: c / total for g, c in common}
+
+
+def _word_unigram_freq(text: str, top_k: int = _WORDUNIGRAM_TOPK) -> dict:
+    """词 unigram 频率画像（jieba 可用时 · 纯 stdlib Counter 计频）。
+
+    jieba 分词 → 只留含 CJK 的词（去纯标点/空白 token）→ Counter → top_k → 归一化。
+    jieba 不可用 → 返回 {}（调用方降级到字符 3-gram 单算 · 守零依赖纪律不报错）。"""
+    if not _JIEBA_AVAILABLE or jieba is None:
+        return {}
+    from collections import Counter
+    counter: Counter = Counter()
+    for w in jieba.cut(text):
+        w = w.strip()
+        if w and CHINESE_CHAR.search(w):
+            counter[w] += 1
+    total = sum(counter.values())
+    if total == 0:
+        return {}
+    common = counter.most_common(top_k)
+    return {w: c / total for w, c in common}
+
+
+def compute_charngram_sfs(ref_text: str, gen_text: str) -> dict:
+    """字符 n-gram + 词 unigram 风格指纹相似度（0~100 · 纯函数 · 零依赖）。
+
+    · 字符 3-gram 余弦（核心 · 中文字组笔迹 · 跨题材时虽含部分题材字，但作者高频字组
+      搭配是稳定笔迹特征 · 默认 shadow 故不改判决）；
+    · 词 unigram 余弦（jieba 可用时计入 · 否则降级字符 3-gram 单算）。
+    两子项可用者等权平均。逐项输出便于 advisory 可读。"""
+    r_cg = _char_ngram_freq(ref_text)
+    g_cg = _char_ngram_freq(gen_text)
+    cg_sim = max(_cosine_sim(r_cg, g_cg), 0.0)
+
+    r_wu = _word_unigram_freq(ref_text)
+    g_wu = _word_unigram_freq(gen_text)
+    word_available = bool(r_wu) and bool(g_wu)
+    wu_sim = max(_cosine_sim(r_wu, g_wu), 0.0) if word_available else None
+
+    cg_sim = float(cg_sim)
+    subscores = {"char_3gram_cosine": round(cg_sim * 100, 2)}
+    parts = [cg_sim]
+    if wu_sim is not None:
+        wu_sim = float(wu_sim)
+        subscores["word_unigram_cosine"] = round(wu_sim * 100, 2)
+        parts.append(wu_sim)
+    total = round(sum(parts) / len(parts) * 100, 2)
+    return {
+        "charngram_sfs": total,
+        "subscores": subscores,
+        "char_ngram_n": _CHARNGRAM_N,
+        "word_unigram_used": word_available,
+    }
+
+
+def compute_style_only_sfs(ref_text: str, gen_text: str) -> dict:
+    """去题材风格 SFS：只比风格特征（虚词指纹 / 标点指纹 / 句长节奏 / 去题材 POS 分布
+    / 字符 n-gram 指纹），对名词/人名/情节动词停用——避免跨题材时题材信号淹没文风信号导致误判。
+
+    四个基础子项余弦/匹配后等权平均（0~100）。POS 子项仅在 jieba 可用时计入（否则降级，
+    剩三项重新等权）。字符 n-gram 子项受 env CHARNGRAM_SFS_MODE 控制：shadow（默认）只
+    挂 subscores 记录不并入加权（零回归）· active 并入加权第 5 维 · off 不算。逐项输出便于
+    advisory 可读。"""
     rp = analyze_text(ref_text)
     gp = analyze_text(gen_text)
 
@@ -991,12 +1104,28 @@ def compute_style_only_sfs(ref_text: str, gen_text: str) -> dict:
         pos_sim = float(pos_sim)
         subscores["detopic_pos_cosine"] = round(pos_sim * 100, 2)
         parts.append(pos_sim)
+
+    # ⑤ 字符 n-gram 指纹（P1 · env CHARNGRAM_SFS_MODE 控制 · 默认 shadow 零回归）。
+    # shadow/active 都把字符 n-gram 子分挂进 subscores（charngram_* · 可读）；
+    # 仅 active 才把 charngram_sfs 并入 parts 加权（第 5 维 · 与上面四维并列）。
+    # off → 完全不算（旧四维纯行为）。北极星纪律 2：默认 shadow，验证后再 active 放量。
+    cg_mode = _charngram_mode()
+    if cg_mode != "off":
+        cg = compute_charngram_sfs(ref_text, gen_text)
+        # 扁平挂入 subscores（全 float · 不破坏「subscores 全是 float」的既有契约/测试）。
+        subscores["charngram_sfs"] = float(cg["charngram_sfs"])
+        for k, v in cg["subscores"].items():
+            subscores[k] = float(v)
+        if cg_mode == "active":
+            parts.append(cg["charngram_sfs"] / 100.0)
+
     total = round(sum(parts) / len(parts) * 100, 2)
     return {
         "style_only_sfs": total,
         "subscores": subscores,
         "jieba_pos_used": pos_available,
         "topic_stopwords_applied": True if pos_available else "function_word_whitelist_fallback",
+        "charngram_mode": cg_mode,
     }
 
 
