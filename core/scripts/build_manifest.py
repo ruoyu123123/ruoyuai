@@ -38,6 +38,13 @@ except ImportError:
     except ImportError:
         _build_style_directive = None
 
+# style_profile_extractor：L1a 升格 —— 把作者句长分位数升格为「写作时显式下发 writer 的
+# 多维量化风格指纹（显式目标硬数字）」。env PROFILE_INJECT_MODE 默认 off（影子·接通不改默认 manifest）。
+try:
+    import style_profile_extractor as _style_profile_extractor
+except ImportError:
+    _style_profile_extractor = None
+
 
 # ============ IO helpers ============
 
@@ -2467,6 +2474,50 @@ def _build_hard_constraints(
     return hard_constraints
 
 
+def _collect_author_style_fingerprint(s: "DatabaseScanner") -> dict | None:
+    """L1a 升格：作者量化风格指纹（显式下发 writer 的多维目标硬数字 · advisory）。
+
+    实证（"Breaking the Imitation Game"）：把句长/段长/标点/虚词/对话密度/签名搭配等多维数值
+    **显式告知** writer，比让模型自己看样本去悟更有效。本字段把 validate_style 里只用于 L1a
+    评分阈值的作者句长分位数，升格成写作时下发的显式目标剖面（advisory · 非门禁非硬锁）。
+
+    env PROFILE_INJECT_MODE（守纪律 2「改生成行为的 env 默认 off/shadow」）：
+      · off（默认）：完全不算、返回 None —— manifest 不含本字段，writer 行为零回归。
+      · shadow     ：算指纹并写到 _数据库/.style_fingerprint/ch_NNN.json + stderr 摘要，
+                     但 **不注入返回值**（manifest 仍不含 → writer 看不到 → 零回归），供 gen-model 实跑前离线核对。
+      · active     ：算指纹并注入 manifest.author_style_fingerprint → writer 显式消费。
+
+    数据源：写作时不重扫原文（慢），走已蒸馏 作者风格.json.quantitative（复用 L1a 已算数值）。
+    """
+    import os as _os
+    mode = (_os.environ.get("PROFILE_INJECT_MODE") or "off").strip().lower()
+    if mode == "off" or mode not in ("shadow", "active"):
+        return None
+    if _style_profile_extractor is None or not s.has_style_profile():
+        return None
+    try:
+        profile = s.load("作者风格", {})
+        fp = _style_profile_extractor.build_style_fingerprint(profile=profile)
+    except Exception as e:  # 顾问层失败绝不中断主流水线（build_manifest 是 cluster-write step1 必跑）
+        print(f"[WARN] style_profile_extractor 失败: {e}", file=sys.stderr)
+        return None
+    if not fp or not fp.get("directives"):
+        return None
+    # shadow / active 都落盘一份供离线核对（不改判决）
+    try:
+        out_path = s.db / ".style_fingerprint" / f"ch_{s.ch:03d}.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(fp, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    if mode == "shadow":
+        print(f"[SHADOW] author_style_fingerprint: {len(fp['directives'])} 条指令 "
+              f"(source={fp.get('source')}, n={fp.get('n_chapters')}) — 不注入 manifest",
+              file=sys.stderr)
+        return None  # 影子：不注入 → 零回归
+    return fp  # active：注入 writer
+
+
 def build_manifest(project_root: Path, chapter: int) -> dict:
     s = DatabaseScanner(project_root, chapter)
     preflight = s.preflight()
@@ -2958,6 +3009,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "character_positions": positions_matched,
         "recent_openings": recent_openings,
         "style_directive": style_directive,
+        # L1a 升格：作者量化风格指纹（显式下发 writer 多维目标硬数字 · advisory）。
+        # env PROFILE_INJECT_MODE 默认 off → None（零回归）；shadow → None（仅落盘+日志）；active → 注入。
+        "author_style_fingerprint": _collect_author_style_fingerprint(s),
         "dcas_enabled": dcas_enabled,
         # F5：freestyle 不暴露每章字数目标（None），避免 writer 据此自切章；字数由 splitter 按范围切。
         "dcas_word_target": None,
