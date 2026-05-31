@@ -45,6 +45,7 @@ def cosine_similarity(v1: list[float], v2: list[float]) -> float:
 #    记 method+dim；cosine 维度不等返回 0，drift 会显示 sim 异常提示重建）。
 _BACKEND = None          # (method:str, dim:int, fn) 探测缓存
 _LOCAL_MODEL = None      # 本地 sentence-transformers 模型 lazy 缓存
+_MSTYLE_MODEL = None     # StyleDistance/mstyledistance 模型 lazy 缓存（真风格语义·CPU）
 
 
 def _embed_repo_root() -> Path:
@@ -108,6 +109,16 @@ def _local_embed(text: str) -> list[float]:
     return _LOCAL_MODEL.encode(text[:8000], normalize_embeddings=True).tolist()
 
 
+def _mstyle_embed(text: str) -> list[float]:
+    """StyleDistance/mstyledistance（ACL2025 · content-independent 风格向量 · 含中文 · CPU 推理）。
+    论文定位即 style-transfer-eval（复刻打分）→ 比 bge 的内容语义更对口「作者风格相似度」。768-dim。"""
+    global _MSTYLE_MODEL
+    if _MSTYLE_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        _MSTYLE_MODEL = SentenceTransformer("StyleDistance/mstyledistance")
+    return _MSTYLE_MODEL.encode(text[:8000], normalize_embeddings=True).tolist()
+
+
 def _detect_backend():
     """探测 embedding 后端（一次，缓存）。返回 (method, dim, fn)。
 
@@ -115,7 +126,9 @@ def _detect_backend():
     sentence-transformers 也不自动切，避免「维度混用导致 cosine=0 → voice drift/RAG 静默失效」+
     「首次 encode 触发模型下载拖慢流水线」）。只有用户显式配置才启用真语义：
       ① .env 配 GEN_EMBED__* key → 通义/OpenAI 兼容 API
-      ② 环境变量 EMBED_BACKEND=local（且装了 sentence-transformers）→ 本地 bge
+      ② 环境变量 EMBED_BACKEND=mstyle（且装了 sentence-transformers）→ StyleDistance/mstyledistance
+         （ACL2025 真风格语义 · content-independent · 含中文 · CPU · 风格相似度最对口）
+      ③ 环境变量 EMBED_BACKEND=local（且装了 sentence-transformers）→ 本地 bge（内容语义）
     切换后端务必先 `embedding_store.py <proj> rebuild` 重建缓存（维度变了）。"""
     global _BACKEND
     if _BACKEND is not None:
@@ -126,8 +139,18 @@ def _detect_backend():
         _BACKEND = (f"api:{prof['model']}", prof["dim"], lambda t: _api_embed(prof, t))
         print(f"[embedding_store] 后端=API {prof['model']} (dim={prof['dim']}) · 切后端记得 rebuild", file=sys.stderr)
         return _BACKEND
-    # ② 用户显式 EMBED_BACKEND=local + 装了包
-    if os.environ.get("EMBED_BACKEND", "").strip().lower() == "local":
+    _eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    # ② 用户显式 EMBED_BACKEND=mstyle + 装了包（真风格语义·风格相似度首选）
+    if _eb == "mstyle":
+        try:
+            import sentence_transformers  # noqa: F401
+            _BACKEND = ("mstyle:StyleDistance/mstyledistance", 768, _mstyle_embed)
+            print("[embedding_store] 后端=mstyle StyleDistance/mstyledistance (dim=768·真风格语义) · 切后端记得 rebuild", file=sys.stderr)
+            return _BACKEND
+        except ImportError:
+            print("[embedding_store] EMBED_BACKEND=mstyle 但未装 sentence-transformers，降级 hash", file=sys.stderr)
+    # ③ 用户显式 EMBED_BACKEND=local + 装了包
+    if _eb == "local":
         try:
             import sentence_transformers  # noqa: F401
             _BACKEND = ("local:bge-small-zh-v1.5", 512, _local_embed)
@@ -135,7 +158,7 @@ def _detect_backend():
             return _BACKEND
         except ImportError:
             print("[embedding_store] EMBED_BACKEND=local 但未装 sentence-transformers，降级 hash", file=sys.stderr)
-    # ③ 默认 hash（零回归 · 不因环境装了包就静默切换）
+    # ④ 默认 hash（零回归 · 不因环境装了包就静默切换）
     _BACKEND = ("hash", 384, lambda t: _stable_hash_embedding(t, 384))
     return _BACKEND
 
