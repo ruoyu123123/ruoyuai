@@ -126,6 +126,38 @@ def _pct_match(ref_val: float, gen_val: float) -> float:
     return max(0.0, min(1.0, 1.0 - diff_ratio))
 
 
+# 词汇丰富度稳定指纹维名（compute_programmatic_score 与 _NONCOMP_STABLE_FINGERPRINT_DIMS 共用唯一名）。
+_VOCAB_RICHNESS_DIM = "词汇丰富度匹配"
+
+
+def _vocab_richness_match(ref_val, gen_val: float) -> float:
+    """词汇丰富度（TTR / hapax）**单向**距离匹配：gen 偏低（趋同被拉平）扣分，偏高不罚。
+
+    实证（LLM imitation 向 generic-median 回归 · GPT-4o lexical diversity 反转）：LLM 复刻只会
+    把词汇丰富度**拉平/降低**，不会异常升高 → 只惩罚 gen < 作者目标（被拉平的真盲点），
+    gen ≥ 作者目标（用词同等或更丰富）给满分（北极星⑤ 不矫枉过正 · 不误罚正常波动）。
+
+    支持 ref_val 是区间字典 {min,max,mean}：落入区间或高于上界得满分，低于下界按相对距离扣分。
+    无作者 TTR 基线（ref ≤ 0）→ 不可比 → 满分（不凭空扣分）。
+    """
+    if isinstance(ref_val, dict) and "min" in ref_val and "max" in ref_val:
+        lo = ref_val.get("min", 0)
+        hi = ref_val.get("max", 0)
+        if gen_val >= lo:  # 落入区间内或高于上界都算达标（高于上界=更丰富，不罚）
+            return 1.0
+        base = max(abs(lo), 0.01)
+        return max(0.0, min(1.0, 1.0 - (lo - gen_val) / base))
+
+    ref = ref_val.get("mean", 0) if isinstance(ref_val, dict) else ref_val
+    ref = float(ref) if isinstance(ref, (int, float)) else 0.0
+    if ref <= 0:
+        return 1.0  # 无作者基线 → 不可比 → 不扣分
+    if gen_val >= ref:
+        return 1.0  # 同等或更丰富 → 满分（只抓被拉平）
+    base = max(abs(ref), 0.01)
+    return max(0.0, min(1.0, 1.0 - (ref - gen_val) / base))
+
+
 def _interval_jsd_score(ref_dists: list[dict], gen_dist: dict) -> float:
     """多基线分布的 JSD：取与所有 ref 中最接近一个的 JSD（最佳匹配）。"""
     if not ref_dists:
@@ -439,6 +471,25 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
     add("引号化独白比", 0.02, _interval_pct_match(r_mr, g_mr),
         r_mr if isinstance(r_mr, dict) else round(r_mr, 4),
         round(g_mr, 4))
+
+    # 14. (新增 2026-05-31) 词汇丰富度匹配 TTR + hapax (4%) — 治 LLM 系统性拉平词汇丰富度盲区。
+    # 实证（3 篇研究）：LLM imitation 向 generic-median 回归，用词反复趋同 → TTR/hapax 被系统性
+    # 拉平。把作者 type_token_ratio / hapax_ratio 当稳定风格指纹维打 gen-vs-author 距离分（advisory）。
+    # gen 词汇丰富度**偏低**（趋同）才扣分；偏高（更丰富）不罚 → 只抓「被拉平」这个真盲点（北极星⑤）。
+    if _ttr_fidelity_mode() != "off":
+        r_vr = ref_profile.get("vocabulary_richness", {}) or {}
+        g_vr = gen_profile.get("vocabulary_richness", {}) or {}
+        r_ttr = r_vr.get("type_token_ratio", 0)
+        g_ttr = _resolve_numeric(g_vr.get("type_token_ratio", 0))
+        r_hapax = r_vr.get("hapax_ratio", 0)
+        g_hapax = _resolve_numeric(g_vr.get("hapax_ratio", 0))
+        ttr_score = _vocab_richness_match(r_ttr, g_ttr)
+        hapax_score = _vocab_richness_match(r_hapax, g_hapax)
+        vr_score = (ttr_score + hapax_score) / 2.0
+        add(_VOCAB_RICHNESS_DIM, 0.04, vr_score,
+            {"ttr_ref": r_ttr if isinstance(r_ttr, dict) else round(_resolve_numeric(r_ttr), 4),
+             "hapax_ref": r_hapax if isinstance(r_hapax, dict) else round(_resolve_numeric(r_hapax), 4)},
+            {"ttr_gen": round(g_ttr, 4), "hapax_gen": round(g_hapax, 4)})
 
     # 加权总分
     total_weight = sum(d["weight"] for d in dims)
@@ -1837,7 +1888,22 @@ _NONCOMP_GAP_ADVISORY = 8.0
 _NONCOMP_STABLE_FINGERPRINT_DIMS = frozenset({
     "句长分布 JSD", "段落长度分布 JSD", "标点密度指纹", "功能词指纹",
     "句长标准差匹配", "段落开头多样性", "单句成段率匹配",
+    # 词汇丰富度（TTR/hapax）= 词级风格指纹，跨章稳定（同作者用词多样度一致）→ 列入稳定指纹维
+    # 让单维「被拉平」崩塌不被算术均稀释（非补偿几何均/floor 抓住 · advisory · 2026-05-31）。
+    _VOCAB_RICHNESS_DIM,
 })
+
+
+def _ttr_fidelity_mode() -> str:
+    """TTR_FIDELITY_MODE：词汇丰富度（TTR/hapax）保真打分开关。
+
+    默认 active（2026-05-31 放量·治 LLM 系统性拉平词汇丰富度盲区）·非法/空 → active·off → 不算该维。
+    advisory 边界（北极星⑤）：作为稳定指纹维参与 SFS 第二视角打分，但 code 绝不进 hard_gate。
+    与 build_manifest 同名 env 双端联动（注入端 + 打分端同开同关）。
+    """
+    import os
+    m = (os.environ.get("TTR_FIDELITY_MODE") or "active").strip().lower()
+    return m if m in ("active", "off") else "active"
 
 
 def _sfs_noncomp_mode() -> str:

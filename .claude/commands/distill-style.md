@@ -1007,7 +1007,41 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --output "arc_template
 - 多线章平均情节线数
 - **输出**：交织模式 + 线数均值
 
-**最终输出**：生成 `cross_chapter_diversity` 对象（含跨章多样性 + 描写技法分布 + 章际衔接模式 + 叙事工艺模式 + 作者区分度特征），包含上述所有检测结果和自动推导的规则。这些规则必须写入最终的 skill 文件。
+#### 2.8.10 作者级叙事功能序列（🆕 2026-05-31 · 结构语法层 · 同质化根因）
+
+**⚠️ 这是 skill 此前唯一缺失的「结构语法层」——必须程序化提取。**
+
+2603.14430 实证：中文网文同质化根因不在散文层（前 8 轮加固已覆盖），而在**结构层**——
+LLM 只复现高频默认模板（`current_cluster_beats` 用的 Save-the-Cat **通用编剧节拍**），不复现
+某作者**专属的因果叙事功能链**（如蛊真人「设定投放→反高潮拒战→打脸」、惊悚乐园「危机→算计
+揭示」）。`scene_storyboard` 是逐 cluster 规划，也不是从作者语料蒸馏的功能序列。
+
+**程序化提取（必须跑 · 不靠 LLM 估算）**：
+
+```bash
+# 全语料一次性提取作者签名功能链（按章号序读 · z-score 跨章统计）
+python core/scripts/style_analyzer.py "workspace/styles/<书名>/原文" --narrative-seq \
+  --output "workspace/styles/<书名>/对比报告/narrative_function_sequence.json"
+```
+
+输出 `narrative_function_sequence` 段（7 功能维度：setting_injection / anti_climax_refuse /
+face_slap / confrontation / scheme_reveal / gain_reward / crisis_threat）：
+- `function_distribution`：作者整体功能偏好画像（升级文 gain_reward 偏高 / 恐怖文 crisis 偏高）
+- `signature_bigrams` / `signature_trigrams`：**作者专属高频因果功能链**（如 `face_slap→scheme_reveal`
+  「打脸后揭示算计」、`crisis_threat→confrontation→confrontation`「危机→连续战斗」）
+- `confidence`：high(≥30 章) / mid(≥8) / low(<8)——自报抽取准确率短板
+
+**关键防误判（z-score 相对显著度）**：每章功能分对**全语料 baseline** 取 z-score，把
+always-present 的世界观词汇（蛊/真元/元海）normalize 掉，只留真正 over-index 的结构功能。
+（小验证证实：原始计数法 90% 章全是 setting_injection 误判；z-score 法分布均衡 + 命中真因果链。）
+
+**北极星纪律（必须遵守）**：
+- 纯 **advisory 软提示**——写入 skill 作软提示维（与 `current_cluster_beats` 的 Save-the-Cat 节拍**并列
+  但更深、作者专属非通用**），**绝不 hard_gate**、**不干涉模型创作判断**。
+- 纯启发式（不调 LLM）· 抽取准确率存疑是已知短板 → 输出永远附 `confidence` + advisory note，由模型自行取舍。
+- env `NARRATIVE_SEQ_MODE`：默认 `active`，纯量化对比等场景可设 `off` 旁路（零开销）。
+
+**最终输出**：生成 `cross_chapter_diversity` 对象（含跨章多样性 + 描写技法分布 + 章际衔接模式 + 叙事工艺模式 + 作者区分度特征 + **叙事功能序列**），包含上述所有检测结果和自动推导的规则。这些规则必须写入最终的 skill 文件。
 
 ### 2.9 黄金段落库（从全书蒸馏中精选）
 
@@ -1132,6 +1166,13 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2 --output "arc_template
     "anti_repetition_rules": [
       "从跨章数据自动推导的反重复规则，如：'连续章开头类型不重复'、'灯光元素每3章最多出现1次'"
     ],
+    "narrative_function_sequence": {
+      "_doc": "🆕 2026-05-31 作者级叙事功能序列（结构语法层 · advisory 软提示 · 由 style_analyzer.py --narrative-seq 产出）。比 Save-the-Cat 通用节拍更深、作者专属。z-score 防世界观词误判。绝不 hard_gate。",
+      "function_distribution": {"gain_reward": 0.14, "setting_injection": 0.13, "anti_climax_refuse": 0.13, "...": "..."},
+      "signature_bigrams": [{"seq": "face_slap→scheme_reveal", "count": 14, "ratio": 0.03}],
+      "signature_trigrams": [{"seq": "crisis_threat→confrontation→confrontation", "count": 5, "ratio": 0.014}],
+      "confidence": "high"
+    },
     "writing_techniques": {
       "character_intro": {"路人视角": 0.40, "动作先行": 0.25, "装备侧写": 0.15, "对比反差": 0.20},
       "env_description": {"density": "极简型_每章1-2处每处2-3句", "preferred": ["两字锚点", "感官单点深入", "对话间接展现"]},
@@ -1289,6 +1330,21 @@ analyzed: [分析字数]字 / [章节数]章
 ### 角色对话长度合规
 - 各角色实测平均单句字数：[从聚合数据填入]
 - **voice_pack 执行规则**：角色对话长度必须严格匹配定义；同一吐槽/梗全书只用1次
+
+### 作者级叙事功能序列（🆕 2026-05-31 · advisory 软提示 · 结构语法层）
+
+**⚠️ 此节必须包含——缺失此节的 skill 会让 AI 回落到 Save-the-Cat 通用节拍模板（中文网文同质化结构层根因）。**
+
+从 `narrative_function_sequence.json`（`style_analyzer.py --narrative-seq` 产出）填入：
+- 作者功能偏好画像：[从 function_distribution 填入，如 "gain_reward 14% / setting_injection 13% / anti_climax_refuse 13% / ..."]
+- **签名因果功能链**（top bigram/trigram）：[从 signature_bigrams / signature_trigrams 填入，如：]
+  - `face_slap → scheme_reveal`（打脸后揭示算计）
+  - `crisis_threat → confrontation → confrontation`（危机→连续战斗）
+  - `gain_reward → gain_reward → anti_climax_refuse`（连续获益后反高潮拒战）
+- 提取置信度：[填 confidence，如 "high（686 章）"]
+- **软提示规则（advisory · 非铁律）**：连续故事块的功能转移**优先**贴近上述作者签名功能链，而非默认 LLM 高频模板。
+  这是**软牵引非硬锁**——具体 cluster 有正当理由（剧情/涟漪/大势需要）可偏离，模型自行取舍。
+  **绝不作为 hard_gate，绝不覆盖模型创作判断**（北极星⑤）。
 
 ## 描写技法约束（从 B3 维度聚合数据生成）
 

@@ -2433,6 +2433,61 @@ def _collect_secrets_to_reveal(scanner, chapter: int) -> list[dict]:
     return out
 
 
+def _ttr_fidelity_mode() -> str:
+    """TTR_FIDELITY_MODE：词汇丰富度（TTR/hapax）目标注入 + SFS 打分双端开关。
+
+    默认 active（2026-05-31 放量·治 LLM 系统性拉平词汇丰富度盲区 · 3 篇研究证 LLM imitation
+    向 generic-median 回归 / GPT-4o lexical diversity 反转）。非法/空 → active；off → 关闭。
+    advisory 边界（北极星⑤）：是顾问目标（writer 可校准偏离），绝不进 hard_gate。
+    """
+    import os as _os
+    m = (_os.environ.get("TTR_FIDELITY_MODE") or "active").strip().lower()
+    return m if m in ("active", "off") else "active"
+
+
+def _extract_author_vocab_richness(quant: dict) -> dict | None:
+    """从作者风格.json.quantitative 容错抽取作者 TTR / hapax 目标（数值剖面同款）。
+
+    两套蒸馏 schema 容错（consumer tolerant · 北极星⑥）：
+      · 惊悚乐园：quantitative.vocab_richness.{ttr_mean, ttr_std, hapax_mean, hapax_std}
+      · 蛊真人  ：quantitative.vocabulary.{ttr, hapax_ratio}（可能为 null）
+      · style_analyzer 原生：quantitative.vocabulary_richness.{type_token_ratio, hapax_ratio}
+    返回 {"ttr": float|None, "hapax": float|None, "ttr_std": float|None, "hapax_std": float|None}
+    （至少一个非 None 才返回；全空/全 null → None，不编造）。
+    """
+    if not isinstance(quant, dict):
+        return None
+
+    def _num(v):
+        # LLM 脏数值（"约0.8"/"95%"/null）只接受真数值，否则 None（不崩不编造）
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        return None
+
+    ttr = ttr_std = hapax = hapax_std = None
+    # 候选桶按优先级：vocab_richness（惊悚乐园 mean/std）→ vocabulary（蛊真人）→ vocabulary_richness（原生）
+    vr = quant.get("vocab_richness")
+    if isinstance(vr, dict):
+        ttr = _num(vr.get("ttr_mean")) if ttr is None else ttr
+        ttr_std = _num(vr.get("ttr_std")) if ttr_std is None else ttr_std
+        hapax = _num(vr.get("hapax_mean")) if hapax is None else hapax
+        hapax_std = _num(vr.get("hapax_std")) if hapax_std is None else hapax_std
+    voc = quant.get("vocabulary")
+    if isinstance(voc, dict):
+        ttr = _num(voc.get("ttr")) if ttr is None else ttr
+        hapax = _num(voc.get("hapax_ratio")) if hapax is None else hapax
+    vrn = quant.get("vocabulary_richness")
+    if isinstance(vrn, dict):
+        ttr = _num(vrn.get("type_token_ratio")) if ttr is None else ttr
+        hapax = _num(vrn.get("hapax_ratio")) if hapax is None else hapax
+
+    if ttr is None and hapax is None:
+        return None
+    return {"ttr": ttr, "ttr_std": ttr_std, "hapax": hapax, "hapax_std": hapax_std}
+
+
 def _build_hard_constraints(
     s: DatabaseScanner,
     foreshadow_summary: dict[str, int],
@@ -2474,6 +2529,27 @@ def _build_hard_constraints(
         cpr = _num(cpr_raw.get("mean") if isinstance(cpr_raw, dict) else cpr_raw)
         if cpr is not None and cpr > 1.0:
             hard_constraints.append(f"逗句比 ≥ {max(1.0, cpr - 1.0):.1f}:1（长句用逗号连接）")
+
+        # 词汇丰富度 TTR/hapax 目标（2026-05-31 · 治 LLM 系统性拉平词汇丰富度盲区 · advisory）。
+        # LLM imitation 倾向向 generic-median 回归，用词反复趋同 → 显式下发作者 TTR/hapax 目标，
+        # 让 writer 主动保持作者的用词多样度（数值剖面同款 · 顾问非硬锁 · 北极星⑤）。
+        if _ttr_fidelity_mode() != "off":
+            vrich = _extract_author_vocab_richness(quant)
+            if vrich is not None:
+                bits = []
+                if vrich["ttr"] is not None:
+                    # TTR std 给一档下限容差（≥ 作者均值 - 1σ，避免 writer 用词趋同拉平）
+                    tol = vrich["ttr_std"] if vrich["ttr_std"] is not None else 0.03
+                    lo = max(0.0, vrich["ttr"] - tol)
+                    bits.append(f"词型/词次比(TTR) ≥ {lo:.2f}（作者均值 {vrich['ttr']:.2f}）")
+                if vrich["hapax"] is not None:
+                    tol_h = vrich["hapax_std"] if vrich["hapax_std"] is not None else 0.03
+                    lo_h = max(0.0, vrich["hapax"] - tol_h)
+                    bits.append(f"单现词占比(hapax) ≥ {lo_h:.2f}（作者均值 {vrich['hapax']:.2f}）")
+                if bits:
+                    hard_constraints.append(
+                        "词汇丰富度（advisory · 别堆砌生僻词凑数）：" + "；".join(bits)
+                        + " — 避免反复用同一批词，保持作者级用词多样度")
 
     return hard_constraints
 

@@ -284,6 +284,49 @@ def _ctx_reorder_mode() -> str:
     return (os.environ.get("CTX_REORDER_MODE") or "active").strip().lower()
 
 
+def _skill_primacy_mode() -> str:
+    """skill 硬约束 primacy 重排开关（env SKILL_PRIMACY_MODE · 默认 active · 第8轮同族补完）。
+
+    IFScale 实证：长指令文档里的硬约束维（段长契约 / 禁用词 / 对话格式）在 skill **中段衰减**
+    （指令越多、文档越长，中段那几条越容易被模型"读过即忘"）。现状第8轮 ctx 重排把整个风格 skill
+    下沉到生成点近邻，但 skill 内部仍是一大段连续文本——里面的硬约束维没有被 **primacy 强调**，
+    长 skill 中段那几条照样衰减。
+
+    active（默认）：在生成点近邻（风格锚区）补一段**精简硬约束 primacy 重述**——只点名 3 个最易
+                    衰减的硬约束维（段长契约 / 禁用词 / 对话格式），轻量重述非整 prompt 复制
+                    （黑箱零成本），把硬约束维 primacy 提到显著位置。
+    off / shadow：不注入该段（零回归回退路径）。
+    """
+    return (os.environ.get("SKILL_PRIMACY_MODE") or "active").strip().lower()
+
+
+def _build_hard_constraint_primacy_block() -> str:
+    """生成点近邻的「硬约束维 primacy 重述」段（SKILL_PRIMACY_MODE · 默认 active）。
+
+    轻量重述（非整 prompt / 整 skill 复制 · 黑箱零成本）：只点名 3 个在长 skill 中段最易衰减的
+    硬约束维——段长契约 / 禁用词 / 对话格式——贴生成点 RoPE 高位强调，对抗 IFScale 中段衰减。
+    advisory 措辞（北极星⑤不硬锁 · 以作者风格档为第一权威，本段只是把"已在 skill 里写过的硬约束维"
+    提到显著位置重申，不新增规则、不覆盖 skill）。
+
+    off/shadow → ""（不注入 · 零回归）。
+    """
+    if _skill_primacy_mode() != "active":
+        return ""
+    return (
+        "## ⚙️ 硬约束维 primacy 重述（生成点近邻强调 · advisory · 不覆盖上方风格 skill）\n"
+        "\n"
+        "下面 3 个维度在长风格档里最容易被『读过即忘』（IFScale 中段衰减），写之前再对齐一遍——"
+        "**以上方作者风格 skill 的具体规定为准**，本段只是把这 3 条提到显著位置重申，不新增规则：\n"
+        "\n"
+        "- **段长契约**：贴合作者风格 skill 规定的段长 / 单句独行节奏；skill 未规定时默认非对话段"
+        "一段只收一个句末结束符（。！？……），看到一段堆 ≥2 句立刻拆段。\n"
+        "- **禁用词**：结构性 AI 套话（与此同时 / 值得一提的是 / 不仅如此 / 事实上）零容忍；"
+        "工艺签名词以作者风格 skill 的 signature 为准（skill 列了就是作者笔法，没列就默认避免）。\n"
+        "- **对话格式**：引号样式、对话独行、口癖停顿都沿用作者风格 skill 与人物卡 voice_pack，"
+        "全篇统一不漂移。"
+    )
+
+
 def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                  ch_end: int = None, target_cjk: str = None) -> tuple:
     """组装 system + user prompt
@@ -543,6 +586,9 @@ cluster_brief 完整内容：
     seed_block = (seed_section + "\n\n") if seed_section else ""
     # 作者量化风格指纹段（PROFILE_INJECT_MODE=off/shadow 或无指纹时为空 → 不注入 · 零回归）
     style_fp_block = (style_fp_section + "\n\n") if style_fp_section else ""
+    # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
+    primacy_section = _build_hard_constraint_primacy_block()
+    primacy_block = (primacy_section + "\n\n") if primacy_section else ""
 
     # ── 风格 skill 段（第一权威）+ 语感种子锚 ──
     style_skill_section = f"""## 风格 skill
@@ -559,11 +605,20 @@ cluster_brief 完整内容：
     if reorder_active:
         # 中段：cluster_blueprint + 人物卡 + 调研 cache + 用户偏好 + manifest（事实索引）
         # 风格 skill + seed 锚下沉到 prev_ch 之后、生成点之前。
+        #
+        # 第8轮同族补完（style_fp 下沉 + 硬约束 primacy）：第8轮 ctx 重排只下沉了风格 skill + seed 锚，
+        # 量化指纹 style_fp_block 仍留在 prompt 顶部（task_intro 后），落在 lost-in-the-middle dead zone。
+        # 量化数值约束（句长/段长/对话占比目标）比叙述性 skill 更怕稀释（4 源验证），现把 style_fp_block 也
+        # 下沉到生成点近邻（RoPE 高位 · 风格锚区），紧跟风格 skill 之后；再补一段硬约束维 primacy 重述
+        # （IFScale 实证：长 skill 中段硬约束维衰减）。三者都贴生成点，顺序：
+        #   prev_ch → seed → 风格 skill → 量化指纹 → 硬约束 primacy → 生成点。
         prev_then_anchor = f"""{prev_ch_section}
 
-{seed_block}{style_skill_section}"""
+{seed_block}{style_skill_section}
+
+{style_fp_block}{primacy_block}"""
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}
@@ -623,7 +678,7 @@ cluster_brief 完整内容：
 
 {prev_ch_section}
 
----
+{primacy_block}---
 
 # 现在请写正文"""
 

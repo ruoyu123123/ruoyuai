@@ -50,12 +50,23 @@ hard_gate 项不会出现在 waived_issues（audit_hub 强制忽略其豁免）�
   }
 failure_pattern 里 confidence>=0.5 会被 build_manifest 无条件注入下一章 writer。
 
+【reflect 归因闭环 — skill 段落级反射 credit-assignment（2026-05-31 · 唯一没闭的环）】
+writing-side 风格失败（scanner/judge 检出的 STYLE_* 复发 + 跨 cluster 长程漂移）原本只
+**advisory 报出**，从不归因到 skill_vN.md 的**具体段落**（开环·不知哪条 skill 没生效）。
+本层借 GEPA 的 reflective credit-assignment 一招（不做 GEPA Pareto 多版本 / merge 交叉·
+论文自承不稳·违北极星⑥）：持续风格偏离 → 反射归因到 skill 最相关标题段落 → 产 advisory
+「该改哪条 skill」改写建议（写 写作经验.json.skill_rewrite_suggestions·给人/复盘消费）。
+  · 永远 advisory —— 绝不自动改 skill_vN.md（skill = 作者风格第一权威·人定·北极星⑤）；
+  · 复用 _recurrence_tracker（已按 dimension::code 攒复发章）+ STYLE_DIM 概念·不新立系统；
+  · env LL_REFLECT_ATTRIB 默认 active（off/0/false 关）；--scan-recurring 末尾自动带跑。
+
 【命令行接口】
   python learning_loop.py <项目路径> --merge-reflection <reflection.json路径>
   python learning_loop.py <项目路径> --ingest <audit报告路径>
   python learning_loop.py <项目路径> --scan-recurring
+  python learning_loop.py <项目路径> --reflect-attribution   # 单跑 reflect 归因（默认随 scan 带跑）
 
-退出码：0=正常 / 1=检测到复发问题已升级约束（或产出校准建议）/ 2=致命错误（路径/JSON）
+退出码：0=正常 / 1=检测到复发问题已升级约束（或产出校准建议 / skill 改写建议）/ 2=致命错误（路径/JSON）
 """
 from __future__ import annotations
 
@@ -187,9 +198,10 @@ def _experience_path(project_root: Path) -> Path:
 
 
 def _empty_experience() -> dict:
-    """权威结构的空骨架（含 v19 豁免统计段 + efficacy 闭环段）。"""
+    """权威结构的空骨架（含 v19 豁免统计段 + efficacy 闭环段 + reflect 归因段）。"""
     return {"success_patterns": [], "failure_patterns": [], "preferences": [],
             "tool_calibration_suggestions": [],
+            "skill_rewrite_suggestions": [],
             "_recurrence_tracker": {}, "_waiver_tracker": {},
             "_efficacy_tracker": {}}
 
@@ -209,6 +221,7 @@ def load_experience(project_root: Path) -> dict:
     data.setdefault("failure_patterns", [])
     data.setdefault("preferences", [])
     data.setdefault("tool_calibration_suggestions", [])  # v19 豁免统计产出
+    data.setdefault("skill_rewrite_suggestions", [])     # reflect 归因产出（2026-05-31）
     data.setdefault("_recurrence_tracker", {})
     data.setdefault("_waiver_tracker", {})               # v19 豁免计数内部状态
     data.setdefault("_efficacy_tracker", {})             # efficacy 闭环内部状态（2026-05-31）
@@ -805,6 +818,239 @@ def evaluate_efficacy(exp: dict, observed_chapters=None) -> list:
     return newly_ineffective
 
 
+# ============ reflect 归因闭环：风格失败 → skill 段落归因 → advisory 改写建议 ============
+# 【为什么有这一层 · 唯一没闭的环】
+# writing-side 的风格失败（scanner / judge 检出 STYLE_* 复发 + 跨 cluster 长程漂移）原本只
+# **advisory 报出**，从不归因到 skill_vN.md 的**具体段落** —— 开环：知道「风格没复刻好」，
+# 但不知道「是 skill 的哪条没生效 / 哪条该改」。本层借 GEPA 的 reflective credit-assignment
+# 思路（只取「反射归因」这一招·不做 GEPA Pareto 多版本 / merge 交叉——论文自承不稳·违北极星⑥）：
+#   持续风格偏离 → 把失败的 STYLE_ code/维度反射归因到 skill 里**最相关的标题段落** →
+#   产出 advisory 「该改哪条 skill」改写建议（写 skill_rewrite_suggestions 段·给人/复盘）。
+#
+# 【北极星边界】⑤不干涉模型判断：
+#   · 永远 advisory —— 只产**建议**，绝不自动改写 skill_vN.md（skill = 作者风格第一权威·人定）；
+#   · 复用 learning_loop 既有框架（load/save_experience + _recurrence_tracker + STYLE_DIM 概念），
+#     不新立系统；
+#   · cluster 为单位的复发证据驱动（_recurrence_tracker 已按 dimension::code 攒复发章）。
+#
+# env：LL_REFLECT_ATTRIB（默认 active；设 off/0/false/no → 关）。
+
+# 风格失败 code → (skill 段落定位关键词, 该风格维度的人话名)。
+# 关键词用于在 skill markdown 的标题/正文里**反射定位**最相关段落（credit-assignment）。
+# 只覆盖 STYLE_* 风格类 code（一致性 / 文件契约类 hard_gate 与 skill 无关·不归因）。
+_STYLE_CODE_ATTRIB = {
+    "STYLE_对话占比":     (("对话占比", "对话量", "对话风格", "对话"), "对话占比"),
+    "STYLE_段落均长":     (("段长", "段落均长", "段落结构", "平均段长", "段落"), "平均段长"),
+    "STYLE_单段超长":     (("段长", "单段", "段落硬约束", "字数硬上限", "段落"), "单段长度上限"),
+    "STYLE_长段计数":     (("段长", "长段", "段落硬约束", "段落"), "长段计数"),
+    "STYLE_极短段占比":   (("极短段", "段长策略", "单句独行", "段落"), "极短段占比"),
+    "STYLE_单句成段率":   (("单句独行", "单句段", "单句成段", "段落"), "单句成段率"),
+    "STYLE_单句独行占比": (("单句独行", "单句段", "段落"), "单句独行占比"),
+    "STYLE_拟声格式":     (("拟声", "拟声词独段", "拟声段", "战斗描写"), "拟声词独段"),
+    "STYLE_禁用词":       (("禁用词", "禁用", "AI 套话", "AI套话", "反 AI"), "禁用词"),
+    "STYLE_配额词":       (("限频", "配额词", "白名单", "禁用词"), "配额词限频"),
+    "STYLE_AI对话标签":   (("对话标签", "对话", "AI 套话", "AI腔"), "AI 对话标签"),
+    "STYLE_逗句比":       (("逗号", "逗句比", "长句", "句长", "句式节奏"), "逗号/句号比"),
+    "STYLE_极长句":       (("句长", "极长句", "长句", "句式节奏"), "极长句"),
+    "STYLE_章节字数":     (("章字数", "字数", "字数硬下限", "量化"), "章节字数"),
+    "STYLE_章节末":       (("章末", "衔接", "收尾", "钩子"), "章末/衔接"),
+    "STYLE_DRIFT":        (("量化", "签名", "风格指纹", "节奏"), "整体作者文风（长程漂移）"),
+    "LONGRANGE_STYLE_DRIFT": (("量化", "签名", "风格指纹", "节奏"), "整体作者文风（长程漂移）"),
+}
+
+# 反射归因触发线：同一风格 code 复发 >= N 章 → 视为「持续风格偏离」（值得归因到 skill 段落）。
+REFLECT_RECUR_THRESHOLD = 2
+
+
+def _reflect_enabled() -> bool:
+    """env LL_REFLECT_ATTRIB：默认 active（off/0/false/no 关·北极星②默认全开）。"""
+    import os
+    v = (os.environ.get("LL_REFLECT_ATTRIB") or "").strip().lower()
+    return v not in ("off", "0", "false", "no", "disable", "disabled")
+
+
+def _resolve_skill_path(project_root: Path) -> "Path | None":
+    """从 _数据库/作者风格.json 的 style_source 解析出本项目使用的 skill_vN.md 绝对路径。
+    style_source 是相对仓库根的路径（如 workspace/styles/惊悚乐园/skill_FINAL.md）。
+    缺文件 / 缺字段 / 路径不存在 → None（归因降级为「无 skill 可定位」·不报错·北极星⑥不复杂化）。"""
+    style_json = _db_dir(project_root) / "作者风格.json"
+    if not style_json.is_file():
+        return None
+    try:
+        data = json.loads(style_json.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    src = data.get("style_source")
+    if not src or not isinstance(src, str):
+        return None
+    cand = Path(src)
+    if cand.is_absolute() and cand.is_file():
+        return cand
+    # 相对路径：先按仓库根（learning_loop 在 core/scripts/ → 上溯 2 层）解析，再按项目根兜底。
+    repo_root = _SCRIPT_DIR.parent.parent
+    for base in (repo_root, Path(project_root)):
+        p = (base / src)
+        if p.is_file():
+            return p
+    return None
+
+
+def _parse_skill_sections(skill_text: str) -> list:
+    """把 skill markdown 切成「标题段」列表：[{heading, level, line, body}]。
+    heading = markdown 标题行文本（去 # 前缀）；body = 该标题到下一个同级/更高级标题之间的正文。
+    用于反射归因时按关键词命中标题/正文定位**具体段落**（credit-assignment 的「段落」单位）。"""
+    lines = skill_text.splitlines()
+    sections = []
+    cur = None
+    for i, raw in enumerate(lines):
+        s = raw.strip()
+        if s.startswith("#"):
+            level = len(s) - len(s.lstrip("#"))
+            heading = s.lstrip("#").strip()
+            if cur is not None:
+                sections.append(cur)
+            cur = {"heading": heading, "level": level, "line": i + 1, "body_lines": []}
+        elif cur is not None:
+            cur["body_lines"].append(raw)
+    if cur is not None:
+        sections.append(cur)
+    for sec in sections:
+        sec["body"] = "\n".join(sec.pop("body_lines"))[:600]  # 截 600 字防 advisory 过长
+    return sections
+
+
+def _attribute_to_skill_section(sections: list, keywords) -> "dict | None":
+    """反射归因核心：在 skill 段落里找与失败维度关键词**最相关**的标题段。
+    打分：标题命中关键词 ×3（标题最能代表段落主旨）+ 正文命中 ×1。无任何命中 → None
+    （不强行归因·宁可标「无定位」也不乱指·北极星⑤不干涉）。"""
+    best, best_score = None, 0
+    for sec in sections:
+        heading = sec.get("heading", "")
+        body = sec.get("body", "")
+        score = 0
+        for kw in keywords:
+            if kw in heading:
+                score += 3
+            if kw in body:
+                score += 1
+        if score > best_score:
+            best, best_score = sec, score
+    if best is None or best_score == 0:
+        return None
+    return {"heading": best["heading"], "level": best["level"],
+            "line": best["line"], "score": best_score,
+            "excerpt": best["body"].strip()[:200]}
+
+
+def _collect_persistent_style_failures(exp: dict, drift_findings=None) -> dict:
+    """汇总「持续风格偏离」证据：
+      · 来源 1：_recurrence_tracker 里 STYLE_* code 复发 >= REFLECT_RECUR_THRESHOLD 章；
+      · 来源 2（可选）：cross_cluster_style_drift_scanner 的 LONGRANGE_STYLE_DRIFT advisory findings。
+    返回 {style_code: {chapters[], count, dimension, sample_desc, source}}。
+    只看 STYLE_* / 漂移 code —— 一致性 / 文件契约类与 skill 段落无关·不归因（北极星⑤）。"""
+    out = {}
+    tracker = exp.get("_recurrence_tracker", {})
+    for key, rec in tracker.items():
+        # key 形如 "维度::CODE" 或 "cluster::维度::CODE"
+        code = key.split("::")[-1]
+        if not (code.startswith("STYLE_") or code in _STYLE_CODE_ATTRIB):
+            continue
+        if rec.get("count", 0) < REFLECT_RECUR_THRESHOLD:
+            continue
+        out[code] = {
+            "chapters": sorted(set(rec.get("chapters", []))),
+            "count": rec.get("count", 0),
+            "dimension": rec.get("dimension", "风格"),
+            "sample_desc": rec.get("sample_desc", ""),
+            "source": "recurrence",
+        }
+    # 跨 cluster 长程漂移（advisory · 单独证据流·总是值得归因「整体文风」段落）
+    for f in (drift_findings or []):
+        if not isinstance(f, dict):
+            continue
+        code = f.get("code")
+        if code not in _STYLE_CODE_ATTRIB:
+            continue
+        metric = f.get("metric", {}) if isinstance(f.get("metric"), dict) else {}
+        out.setdefault(code, {
+            "chapters": [],
+            "count": metric.get("n_points", REFLECT_RECUR_THRESHOLD),
+            "dimension": "风格",
+            "sample_desc": (f.get("message", "") or "")[:120],
+            "source": "longrange_drift",
+        })
+    return out
+
+
+def reflect_attribution(project_root: Path, drift_findings=None) -> list:
+    """GEPA 式 reflective credit-assignment（advisory · 默认 active · 北极星⑤不干涉）：
+    持续风格失败 → 反射归因到 skill_vN.md 的**具体标题段落** → 产 advisory 改写建议
+    （写 写作经验.json.skill_rewrite_suggestions·非自动改 skill·给人/复盘消费）。
+
+    幂等：同 code 覆盖刷新（重跑同证据不产重复）。返回本轮产出的建议列表。
+    env LL_REFLECT_ATTRIB=off → 跳过（返回 []·不动文件）。"""
+    if not _reflect_enabled():
+        return []
+    exp = load_experience(project_root)
+    failures = _collect_persistent_style_failures(exp, drift_findings)
+    if not failures:
+        # 无持续风格失败 → 不动既有建议（增量·别误删人工尚未处理的旧建议）
+        return []
+    skill_path = _resolve_skill_path(project_root)
+    sections = []
+    skill_rel = None
+    if skill_path is not None:
+        try:
+            sections = _parse_skill_sections(skill_path.read_text(encoding="utf-8"))
+            skill_rel = str(skill_path)
+        except OSError:
+            sections = []
+
+    suggestions = exp["skill_rewrite_suggestions"]
+    produced = []
+    for code, ev in failures.items():
+        kw, human = _STYLE_CODE_ATTRIB.get(code, ((), code))
+        attrib = _attribute_to_skill_section(sections, kw) if sections else None
+        if attrib is not None:
+            loc = (f"skill 段落「{attrib['heading']}」（第 {attrib['line']} 行）"
+                   if skill_rel else f"skill 段落「{attrib['heading']}」")
+            rewrite = (f"风格维度【{human}】在第 {ev['chapters'] or '多个'} cluster/章持续偏离作者参考"
+                       f"（复发 {ev['count']} 次）—— 反射归因：{loc} 这条 skill 约束**未能让生成贴合作者**，"
+                       f"建议复盘时收紧 / 具体化该段（如补量化下限 + 反例 + 章型适配），而非反复让 writer 豁免。")
+        else:
+            rewrite = (f"风格维度【{human}】在第 {ev['chapters'] or '多个'} cluster/章持续偏离作者参考"
+                       f"（复发 {ev['count']} 次）—— 在 skill 里未定位到对应约束段落，"
+                       f"建议复盘时**新增**一条针对【{human}】的 skill 约束（带量化基线 + 章型适配）。")
+        entry = {
+            "style_code": code,
+            "style_dimension": human,
+            "evidence_source": ev["source"],
+            "chapters": list(ev["chapters"]),
+            "recurrence": ev["count"],
+            "sample_desc": ev.get("sample_desc", "")[:120],
+            "skill_path": skill_rel,
+            "attributed_section": attrib,          # None = 未在 skill 定位到（→ 建议新增）
+            "suggestion_type": ("tighten_clause" if attrib is not None else "add_clause"),
+            "suggestion": rewrite,
+            "gate_level": "advisory",               # 永远 advisory · 不自动改 skill（北极星⑤）
+            "confidence": 0.8 if attrib is not None else 0.6,
+            "updated_at": _now(),
+        }
+        suggestions[:] = [s for s in suggestions if s.get("style_code") != code]
+        suggestions.append(entry)
+        produced.append(entry)
+
+    save_experience(project_root, exp)
+    if produced:
+        print(f"[reflect-attrib] {len(produced)} 类持续风格失败已反射归因到 skill 段落 → advisory 改写建议：")
+        for p in produced:
+            sec = p["attributed_section"]
+            loc = (f"段落「{sec['heading']}」" if sec else "未定位（建议新增 skill 约束）")
+            print(f"  - [{p['style_code']}] {p['style_dimension']} 复发 {p['recurrence']} 次 -> "
+                  f"{p['suggestion_type']}（{loc}）")
+    return produced
+
+
 # ============ 模式 3：--scan-recurring（跨章扫描）============
 
 def _safe_load(p: Path):
@@ -982,8 +1228,13 @@ def scan_recurring(project_root: Path) -> dict:
     if (not escalated and not meta_problems and not calib and not ineffective
             and not time_prune["pruned"] and not time_prune["decayed"]):
         print("  暂无复发问题 / 反复豁免 / 无效约束 / 过期 pattern，写作经验库健康。")
+    # reflect 归因闭环（默认 active · advisory）：持续风格失败 → 反射归因到 skill 段落 →
+    # advisory 改写建议（非自动改 skill）。在 save_experience 之后跑（内部自带 load/save·
+    # 读到刚重建的 _recurrence_tracker·北极星⑤不干涉模型）。
+    skill_suggestions = reflect_attribution(project_root)
     return {"escalated": escalated, "meta_problems": meta_problems,
-            "calibration": calib, "ineffective": ineffective, "time_prune": time_prune}
+            "calibration": calib, "ineffective": ineffective, "time_prune": time_prune,
+            "skill_rewrite": skill_suggestions}
 
 
 # ============ CLI ============
@@ -1024,8 +1275,15 @@ def main():
         result = scan_recurring(project_root)
         sys.exit(1 if (result.get("escalated") or result.get("meta_problems")
                        or result.get("calibration") or result.get("ineffective")) else 0)
+    elif "--reflect-attribution" in args:
+        # 独立入口：单跑 reflect 归因（不重扫 audit·只读已攒的 _recurrence_tracker）。
+        # 通常由 --scan-recurring 自动带跑·此入口供 cluster-save-state / 复盘单独触发。
+        produced = reflect_attribution(project_root)
+        # exit 1 = 产出了 skill 改写建议（值得复盘关注·与其他模式一致语义）
+        sys.exit(1 if produced else 0)
     else:
-        print("[FATAL] 需指定 --merge-reflection / --ingest / --scan-recurring", file=sys.stderr)
+        print("[FATAL] 需指定 --merge-reflection / --ingest / --scan-recurring / --reflect-attribution",
+              file=sys.stderr)
         print(__doc__)
         sys.exit(2)
 

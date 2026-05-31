@@ -10,6 +10,7 @@ style_analyzer.py — 中文小说风格量化分析器
 """
 from __future__ import annotations
 import json
+import os
 import re
 import sys
 import math
@@ -120,6 +121,82 @@ QUOTA_WORDS = ["突然", "下一刻", "下意识", "莫名", "似乎", "仿佛",
 CRAFT_SIGNATURE_QUOTA_WORDS = ["顿时", "微微", "似乎", "仿佛"]
 
 AI_DIALOGUE_TAGS = ["淡淡地说", "缓缓地说", "沉吟片刻", "不容置疑", "微微一笑道"]
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 作者级叙事功能序列（narrative function sequence）· 2026-05-31 · 北极星⑤
+# ════════════════════════════════════════════════════════════════════════
+# 背景（2603.14430 实证）：中文网文同质化根因在**结构层**——LLM 只复现高频默认
+# 模板（Save-the-Cat 通用编剧节拍），不复现某作者**专属的因果叙事功能链**（如
+# 蛊真人「设定投放→反高潮拒战→打脸」、惊悚乐园「危机→算计揭示→获益」）。
+# 前 8 轮加固都在散文/检测/评估/流程层，这是缺失的**结构语法层**。
+#
+# 本模块从作者语料蒸馏「叙事功能序列」：
+#   1) 每章用词典命中给 7 个功能维度打分；
+#   2) **关键防误判**——分数对全语料 baseline 取相对显著度（z-score），把
+#      always-present 的世界观词汇（蛊/真元/元海）normalize 掉，只留真正
+#      OVER-index 的结构功能（小验证证实：原始计数法 90% 章全是 setting，
+#      z-score 法分布均衡 + 命中 face_slap→gain_reward 等真因果链）；
+#   3) 跨章功能标签序列 → bigram/trigram 频次 = 作者专属功能链模式。
+#
+# 北极星纪律：纯**advisory 软提示**（写入 skill 作软提示维，与 beat_map 并列但
+# 更深、作者专属非通用）——绝不 hard_gate、绝不干涉模型创作判断、纯启发式黑箱
+# （不调 LLM）。env NARRATIVE_SEQ_MODE 控制：active(默认) / off。抽取准确率
+# 存疑是已知短板 → 输出永远标 advisory + 附 confidence，由模型自行取舍。
+#
+# 功能维度词典（causal/structural beat，非世界观名词）：
+NARRATIVE_FUNCTION_CUES = {
+    # 设定投放：世界观机制/原理/规则的解释性铺陈（用「解释动作」词而非世界名词，
+    # 防被书内高频专名淹没）
+    "setting_injection": [
+        "设定", "规则", "原理", "机制", "所谓", "等阶", "体系", "构造", "本质",
+        "据说", "传说", "相传", "原本", "其实是", "之所以", "换句话说", "也就是说",
+    ],
+    # 反高潮拒战：主角主动拒绝/回避预期冲突（网文反套路签名）
+    "anti_climax_refuse": [
+        "不必", "无需", "拒绝", "懒得", "何必", "不屑", "算了", "没兴趣", "不愿",
+        "不想理", "置之不理", "不予理会", "懒得理", "毫无兴趣", "不放在眼里",
+    ],
+    # 打脸/反转：他人认知被颠覆的瞬间
+    "face_slap": [
+        "震惊", "不可能", "怎么会", "瞠目", "哑口", "傻眼", "难以置信", "倒吸",
+        "呆住", "僵住", "大跌眼镜", "没想到", "出乎意料", "万万没想到", "脸色大变",
+    ],
+    # 冲突/战斗：实时对抗
+    "confrontation": [
+        "厮杀", "搏杀", "交手", "出手", "战斗", "撕咬", "重创", "拼杀", "对峙",
+        "激战", "缠斗", "迎击", "反击", "围攻", "blade",
+    ],
+    # 算计揭示：隐藏计谋/真相的揭露
+    "scheme_reveal": [
+        "原来", "真相", "算计", "布局", "早已", "竟是", "图谋", "圈套", "陷阱",
+        "计谋", "一切尽在", "棋子", "局中局", "暗中谋划", "蓄谋",
+    ],
+    # 获益/爽点：兑现收获（与钩子相反）
+    "gain_reward": [
+        "得到", "获得", "收获", "炼成", "突破", "晋级", "到手", "囊中", "收入囊",
+        "圆满", "如愿", "大功告成", "满载而归", "终于成功",
+    ],
+    # 危机/威胁：悬念升级、致命压力
+    "crisis_threat": [
+        "危险", "危机", "杀机", "追杀", "险些", "千钧", "致命", "绝境", "九死",
+        "濒死", "警觉", "不妙", "大事不妙", "命悬一线", "凶险",
+    ],
+}
+_NARRATIVE_FUNCTION_KEYS = sorted(NARRATIVE_FUNCTION_CUES.keys())
+# z-score 显著阈值：章节在某功能上超出语料 baseline 多少个标准差才算「该章命中」。
+# 0.6 来自小验证（30 章蛊真人）——更低噪声大、更高漏真链。
+_NARR_SEQ_Z_THRESHOLD = 0.6
+_NARR_SEQ_TOP_K = 2  # 每章最多取 2 个 over-index 功能（主+次）
+
+
+def narrative_seq_mode() -> str:
+    """env NARRATIVE_SEQ_MODE：active(默认) / off。非法值回退 active。
+
+    北极星纪律 2「默认全开 active·env 可关」——本结构层默认生效，
+    用户/CI 可设 NARRATIVE_SEQ_MODE=off 关闭（如纯量化对比场景不需要）。"""
+    m = (os.environ.get("NARRATIVE_SEQ_MODE") or "active").strip().lower()
+    return m if m in ("active", "off") else "active"
 
 
 def count_chinese(text: str) -> int:
@@ -719,6 +796,127 @@ def length_distribution(lengths: list[int]) -> dict:
     return {k: round(v / total, 4) for k, v in bins.items()}
 
 
+# ════════════════════════════════════════════════════════════════════════
+# 作者级叙事功能序列提取（advisory · env NARRATIVE_SEQ_MODE 控制）
+# ════════════════════════════════════════════════════════════════════════
+
+def narrative_function_raw_scores(text: str) -> dict:
+    """单章 7 功能维度原始命中密度（每千 CJK 字命中次数）。
+
+    纯词典计数 / 长度归一——这是 z-score baseline 的输入。单独看意义不大
+    （世界观词汇会让 setting 恒高），必须经 score_narrative_function_sequence
+    的 z-score 相对显著度才有作者区分意义。"""
+    n = max(count_chinese(text), 1)
+    out = {}
+    for fn, cues in NARRATIVE_FUNCTION_CUES.items():
+        hits = sum(text.count(w) for w in cues)
+        out[fn] = round(hits / n * 1000.0, 4)
+    return out
+
+
+def _pstdev(values: list[float]) -> float:
+    """总体标准差（纯 stdlib · 守零依赖）。空/单值 → 极小正数防除零。"""
+    n = len(values)
+    if n <= 1:
+        return 1e-9
+    mean = sum(values) / n
+    var = sum((v - mean) ** 2 for v in values) / n
+    return math.sqrt(var) or 1e-9
+
+
+def score_narrative_function_sequence(chapter_texts: list[str]) -> dict:
+    """从作者多章语料提取**叙事功能序列**（作者专属因果功能链 · advisory）。
+
+    流程（北极星⑤ · 纯启发式黑箱不调 LLM）：
+      1) 每章 narrative_function_raw_scores → 7 维原始密度；
+      2) 对每个功能维度算全语料 mean/std → 每章该维 z-score（相对显著度）；
+         **关键防误判**：z-score 把 always-present 世界观词汇 normalize 掉，
+         只留真正 over-index 的结构功能（小验证：原始计数法 90% 章全 setting，
+         z-score 法分布均衡 + 命中 face_slap→gain_reward 等真因果链）；
+      3) 每章取 z >= 阈值的 top-K 功能作章型标签，主标签拼成序列；
+      4) 序列做 bigram/trigram 频次统计 = 作者签名功能链模式。
+
+    返回 advisory dict（永不判决）：
+      · mode: "active" | "off"（off 时只回 {mode:"off"}）
+      · n_chapters: 实际参与统计的章数（< 2 时 confidence=low，序列无意义）
+      · per_chapter_primary: [每章主功能标签]（baseline = 无 over-index）
+      · function_distribution: {功能: 占比}（作者整体功能偏好）
+      · signature_bigrams / signature_trigrams: [{seq, count, ratio}]（高频因果链）
+      · confidence: high(>=30 章) / mid(>=8) / low(<8)——抽取准确率自报短板
+      · _note: 写入 skill 的 advisory 使用说明
+    """
+    if narrative_seq_mode() == "off":
+        return {"mode": "off", "_note": "NARRATIVE_SEQ_MODE=off · 叙事功能序列提取已关闭"}
+
+    texts = [t for t in chapter_texts if t and count_chinese(t) > 0]
+    n = len(texts)
+    if n == 0:
+        return {"mode": "active", "n_chapters": 0, "per_chapter_primary": [],
+                "function_distribution": {}, "signature_bigrams": [],
+                "signature_trigrams": [], "confidence": "low",
+                "_note": "无有效章节 · 无法提取叙事功能序列"}
+
+    raw_rows = [narrative_function_raw_scores(t) for t in texts]
+    # 每功能维度的语料 baseline（mean/std）
+    base_mean, base_std = {}, {}
+    for fn in _NARRATIVE_FUNCTION_KEYS:
+        col = [r[fn] for r in raw_rows]
+        base_mean[fn] = sum(col) / n
+        base_std[fn] = _pstdev(col)
+
+    per_chapter_primary: list[str] = []
+    per_chapter_labels: list[list[str]] = []
+    for r in raw_rows:
+        z = {fn: (r[fn] - base_mean[fn]) / base_std[fn] for fn in _NARRATIVE_FUNCTION_KEYS}
+        ranked = sorted(z.items(), key=lambda kv: -kv[1])
+        over = [fn for fn, zv in ranked if zv >= _NARR_SEQ_Z_THRESHOLD][:_NARR_SEQ_TOP_K]
+        per_chapter_labels.append(over)
+        per_chapter_primary.append(over[0] if over else "baseline")
+
+    # 功能整体分布（作者偏好画像 · 含 baseline）
+    dist_counter = Counter(per_chapter_primary)
+    function_distribution = {
+        k: round(v / n, 4) for k, v in dist_counter.most_common()
+    }
+
+    # 签名功能链：bigram / trigram（剔除 baseline → 只看真功能间的因果转移）
+    real_seq = [s for s in per_chapter_primary]  # 保留 baseline 占位以反映真实间隔
+
+    def _ngrams(seq, k):
+        grams = Counter()
+        for i in range(len(seq) - k + 1):
+            window = seq[i:i + k]
+            if "baseline" in window:  # 含 baseline 的 n-gram 无功能链意义，跳过
+                continue
+            grams["→".join(window)] += 1
+        total = sum(grams.values()) or 1
+        return [
+            {"seq": g, "count": c, "ratio": round(c / total, 4)}
+            for g, c in grams.most_common(8)
+        ]
+
+    confidence = "high" if n >= 30 else "mid" if n >= 8 else "low"
+
+    return {
+        "mode": "active",
+        "n_chapters": n,
+        "z_threshold": _NARR_SEQ_Z_THRESHOLD,
+        "per_chapter_primary": per_chapter_primary,
+        "function_distribution": function_distribution,
+        "signature_bigrams": _ngrams(real_seq, 2),
+        "signature_trigrams": _ngrams(real_seq, 3),
+        "confidence": confidence,
+        "_note": (
+            "advisory 软提示（顾问非法官·绝不 hard_gate·不干涉模型创作判断）："
+            "signature_bigrams/trigrams 是从作者语料蒸馏的**专属因果叙事功能链**"
+            "（如 face_slap→gain_reward = 打脸后获益），比 Save-the-Cat 通用节拍更深、"
+            "作者专属。写作时作软提示参考——让连续故事块的功能转移贴近作者签名节奏，"
+            "而非默认 LLM 高频模板（中文网文同质化结构层根因）。confidence=low 时"
+            "（<8 章）序列不稳定·仅供参考。抽取为纯启发式·准确率存疑·模型自行取舍。"
+        ),
+    }
+
+
 def analyze_text(text: str) -> dict:
     total_chinese = count_chinese(text)
     per_1000 = 1000 / total_chinese if total_chinese > 0 else 0
@@ -864,6 +1062,9 @@ def analyze_text(text: str) -> dict:
             "parallelism": parallelism_count,
             "rhetorical_question": rhetorical_q_count,
         },
+        # 作者级叙事功能序列：单章只能给原始密度（per-章 z-score 需全语料 baseline，
+        # 由 score_narrative_function_sequence 批量算）。advisory · 不影响任何判决。
+        "narrative_function_raw_scores": narrative_function_raw_scores(text),
     }
 
 
@@ -981,13 +1182,15 @@ def compare_profiles(ref: dict, gen: dict) -> dict:
 
 def main():
     if len(sys.argv) < 2:
-        print("用法: python style_analyzer.py <文件> [--output out.json] [--compare <文件B>]")
+        print("用法: python style_analyzer.py <文件> [--output out.json] "
+              "[--compare <文件B>] [--narrative-seq]")
         sys.exit(1)
 
     file_path = Path(sys.argv[1])
     output_path = None
     compare_path = None
     batch_mode = False
+    narrative_seq = False
 
     i = 2
     while i < len(sys.argv):
@@ -1000,10 +1203,24 @@ def main():
         elif sys.argv[i] == "--batch":
             batch_mode = True
             i += 1
+        elif sys.argv[i] == "--narrative-seq":
+            narrative_seq = True
+            i += 1
         else:
             i += 1
 
-    if batch_mode and file_path.is_dir():
+    if narrative_seq and file_path.is_dir():
+        # 作者级叙事功能序列蒸馏：按章号排序读全目录，跑跨章功能链提取。
+        # 章号自然序对序列语义至关重要（功能链是时间序因果）。
+        files = sorted(file_path.glob("第*章.txt")) or sorted(file_path.glob("*.txt"))
+        chapter_texts = [f.read_text(encoding="utf-8") for f in files]
+        print(f"  叙事功能序列：读 {len(chapter_texts)} 章", file=sys.stderr)
+        output = {
+            "narrative_function_sequence": score_narrative_function_sequence(chapter_texts),
+            "source_dir": str(file_path),
+            "chapter_files": [f.name for f in files],
+        }
+    elif batch_mode and file_path.is_dir():
         results = {}
         for f in sorted(file_path.glob("*.txt")):
             text = f.read_text(encoding="utf-8")
