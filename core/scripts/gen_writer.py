@@ -44,6 +44,7 @@ from gen_model_loader import (  # noqa: E402
 )
 import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化权威口径
 import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster_006" ↔ "6"）
+import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 off · 影子）
 
 
 # ============ 依赖检查 ============
@@ -301,6 +302,14 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     # 自动扫 memory/feedback_*.md，把 type=feedback 的全局规则注入 writer prompt 头部
     feedback_rules_text = _collect_feedback_rules()
 
+    # 🎴 真实原文「语感种子」播种（P0 · env SNIPPET_SEED_MODE 默认 off · 影子纪律 · 不改默认生成）：
+    # 注 1-2 段作者真实原文当语感锚点，防长 cluster 中后段退化回通用 AI 腔。
+    # 按 cluster.scope_summary 的风格/情绪寄存器选样（非题材匹配 · Catch Me 论文避坑），
+    # 并带「只借语感起手势 · 绝不抄情节内容」避坑指令（防抄袭+防内容泄漏）。
+    _scope_for_seed = cluster_brief.get('scope_summary', '') if cluster_brief else ''
+    seed_section, seed_trace = snippet_seed.make_seed_block_for_writer(
+        project_root, scope_text=_scope_for_seed)
+
     # 2026-05-29 北极星修复 [H3-write]：终极目标=写出和【该作者】风格一致的文章。
     # 故 system prompt 第一权威是「作者风格档(下方风格 skill)」，不是写死的通用爽文工艺。
     # 铁律分两层：① 常驻硬铁律(格式/世界观/穿帮防护·任何风格都不可破·不可被 skill 覆盖)；
@@ -419,8 +428,11 @@ cluster_brief 完整内容：
 ⚠️ **重要提醒**：你输出的是**一整块叙事**，不是分好章的成品。**严禁**写「第 N 章 标题」/「——」分章符。把整个故事块当一篇长散文写，场景之间自然过渡。
 """
 
+    # 种子段拼接（mode=off/shadow 时 seed_section 为空 → 不注入 · 零回归）
+    seed_block = (seed_section + "\n\n") if seed_section else ""
+
     user = f"""{task_intro}
-{cluster_constraints_section}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}
@@ -471,7 +483,7 @@ cluster_brief 完整内容：
 
 现在开始写。"""
 
-    return system, user
+    return system, user, seed_trace
 
 
 # ============ Gen-Model 调用（含 fallback 链） ============
@@ -642,10 +654,12 @@ def split_text_and_changes(reply: str) -> tuple:
 
 
 def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
-                ch_start: int, ch_end: int, used_profile: Profile):
+                ch_start: int, ch_end: int, used_profile: Profile,
+                seed_trace: dict = None):
     """写 draft + changes.json
 
     v27 freestyle：ch_end=None 时 ch_range 写 'TBD_by_splitter'（splitter 后期填）。
+    seed_trace：snippet_seed 播种痕迹（用了几段 / 哪个模式）· 留 changes 不黑箱（北极星⑤）。
     """
     # 空 body 守卫（2026-05-30 加固）：拒写空草稿并报错，避免 cjk=0 草稿入库还报成功。
     # 上游 call_gen_model 已对空响应切 fallback，此处是最后一道防线（含解析后正文为空的情况）。
@@ -684,6 +698,7 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         'generated_at': datetime.now().isoformat(),
         'cjk_actual': cjk,
         'writer_mode': 'freestyle_v27' if freestyle else 'locked_v26',
+        'snippet_seed': seed_trace or {'snippet_seed_mode': 'off', 'injected': False},
     })
     se.setdefault('waivers', [])
     se.setdefault('uncertainty_flags', [])
@@ -761,14 +776,15 @@ def main():
 
     # dry-run 模式不需要 active profile
     if args.dry_run:
-        system, user = build_prompt(project_root, args.cluster, ch_start,
-                                    args.chapter_end, args.target_cjk)
+        system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start,
+                                                args.chapter_end, args.target_cjk)
         print("=== SYSTEM PROMPT ===")
         print(system)
         print("\n=== USER PROMPT ===")
         print(user)
         print(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars",
               file=sys.stderr)
+        print(f"[dry-run] snippet_seed: {seed_trace}", file=sys.stderr)
         # 显示当前 active profile 信息
         try:
             loader = GenModelLoader()
@@ -795,8 +811,8 @@ def main():
     if chain:
         print(f"[gen_writer] fallback chain = {','.join(chain)}", file=sys.stderr)
 
-    system, user = build_prompt(project_root, args.cluster, ch_start,
-                                args.chapter_end, args.target_cjk)
+    system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start,
+                                            args.chapter_end, args.target_cjk)
 
     try:
         reply, used_profile = call_gen_model(loader, system, user)
@@ -806,7 +822,8 @@ def main():
 
     body, changes = split_text_and_changes(reply)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
-                                  ch_start, args.chapter_end, used_profile)
+                                  ch_start, args.chapter_end, used_profile,
+                                  seed_trace=seed_trace)
 
     print(f"\n[gen_writer] 跑 scanner...", file=sys.stderr)
     scan_results = run_scanners(draft_path)

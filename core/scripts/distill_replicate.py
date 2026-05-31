@@ -42,6 +42,7 @@ from gen_model_loader import (  # noqa: E402
     GenModelExhaustedError,
     Profile,
 )
+import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 off · 影子）
 
 
 def check_deps():
@@ -295,14 +296,20 @@ def build_cluster_subcall_prompt(
     chapters_in_this_call: int,
     target_words: int,
     cot_first: bool = False,
+    seed_section: str = "",
 ) -> str:
     """cluster 模式的 sub-call prompt（每段都要看见 skill + 上一段尾部 anchor）。
 
     cot_first=True（L3b · env L3B_COT_FIRST_MODE=active 显式开启）：输出节换成「先分析后写」
     两段式（CoT-first 自解释 + 受控量化坐标）· 直击 cluster 级段长崩塌。
     cot_first=False（=off · 默认）：旧的「直接输出正文」节，零回归（影子纪律·待实跑验证后放量）。
+
+    seed_section（P0 · env SNIPPET_SEED_MODE=on 才非空 · 默认 off）：真实原文「语感种子」段
+    （含避坑指令）· 注在 skill 后做语感起手势锚点 · 防长文退化（北极星①·纯 prompt 注入）。
     """
     parts = ["# 源作者风格 skill（必须严格遵循）\n\n" + style_skill_md]
+    if seed_section:
+        parts.append(seed_section)
     if ref_text:
         parts.append("# 参考原文（仅作语感参考 · 不照抄情节/角色/设定）\n\n" + ref_text[:4000])
     parts.append(
@@ -609,6 +616,16 @@ def main():
     subcall_plan = plan_cluster_subcalls(chapters_count, args.max_chapters_per_call)
     ref_text = gather_cluster_ref_text(project_root, cluster_meta)
 
+    # 🎴 真实原文「语感种子」播种（P0 · env SNIPPET_SEED_MODE 默认 off · 影子纪律 · 不改默认复刻）：
+    # 复刻同栈：从 cluster 同源原文池按 ref_text 风格/情绪寄存器选 1-2 段真实片段当语感锚点，
+    # 防 cluster 级长文退化（D 级）；带「只借语感起手势 · 绝不抄情节内容」避坑指令。
+    _originals_dir = project_root / "原文"
+    if not _originals_dir.exists():
+        _originals_dir = None
+    seed_section, seed_trace = snippet_seed.make_seed_block_from_dir(
+        _originals_dir, ref_text=ref_text)
+    print(f"[snippet_seed] {seed_trace}", file=sys.stderr)
+
     print(f"[cluster] {args.cluster_ref} · {chapters_count} 章 · {words_per_chapter} 字/章 估算",
           file=sys.stderr)
     print(f"[cluster] sub-call 计划: {subcall_plan}（共 {len(subcall_plan)} 段）",
@@ -628,6 +645,7 @@ def main():
             chapters_in_this_call=chapters_in_call,
             target_words=target_words_this,
             cot_first=cot_first,
+            seed_section=seed_section,
         )
         # CoT-first 占额外 token（量化坐标分析段）→ 多留 buffer 防正文被截断
         # 单 call max_tokens 估算：CJK 字按 1.5 tokens/字算（含标点），加 buffer
@@ -698,7 +716,9 @@ def main():
         "cot_first_mode": cot_mode,
         "cot_first_enabled": cot_first,
         "cot_analysis_subcalls": sum(1 for m in subcall_metas if m.get("cot_analysis_present")),
-        "produced_by": "distill_replicate.py v3 · cluster mode · A' 半 cluster timeout 防御 · L3b CoT-first 自解释",
+        # 🎴 真实原文语感种子播种痕迹（P0 · 默认 off · 留痕不黑箱）
+        "snippet_seed": seed_trace,
+        "produced_by": "distill_replicate.py v3 · cluster mode · A' 半 cluster timeout 防御 · L3b CoT-first 自解释 · 🎴 snippet-seed 播种",
     }
     output_path.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
