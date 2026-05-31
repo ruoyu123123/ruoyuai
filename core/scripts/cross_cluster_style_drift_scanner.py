@@ -64,9 +64,11 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 # ════════════════════════════════════════════════════════════════
 
 def _mode() -> str:
-    """LONGRANGE_DRIFT_MODE：shadow（默认·只记不判·零回归） / active / off。非法值回退 shadow。"""
-    m = (os.environ.get("LONGRANGE_DRIFT_MODE") or "shadow").strip().lower()
-    return m if m in ("shadow", "active", "off") else "shadow"
+    """LONGRANGE_DRIFT_MODE：默认 active（2026-05-31 放量 · 跨 cluster 长程漂移升 advisory issue ·
+    实证真作者跨章距离曲线斜率平缓不误报退化 · code LONGRANGE_STYLE_DRIFT 永不进 HARD_GATE_CODES）/
+    shadow / off。非法值回退 active。"""
+    m = (os.environ.get("LONGRANGE_DRIFT_MODE") or "active").strip().lower()
+    return m if m in ("shadow", "active", "off") else "active"
 
 
 # ════════════════════════════════════════════════════════════════

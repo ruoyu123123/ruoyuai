@@ -974,16 +974,27 @@ def _pos_style_distribution(text: str) -> dict:
 # 字符 n-gram 阶数（3-gram：中文「字组」粒度 · Oxford 研究主力特征）。
 _CHARNGRAM_N = 3
 # 字符 n-gram / 词 unigram 取频率最高的前 K 个进画像（控向量维度 · 长尾噪声不进比对）。
-_CHARNGRAM_TOPK = 400
-_WORDUNIGRAM_TOPK = 300
+# 2026-05-31 修（charngram active 调权核心）：top_k 从 400/300 提到 600/400——
+# 章级 char-3gram 直比时 top_k 太小（400）会让长尾字组被截断、内容字组主导，加剧内容敏感；
+# 配合「分布距离基线 + intra-author 校准」（_charngram_calibrated_subscores）一起把章级直比的
+# 内容噪声压下去（实证：池化基线 + 校准后 同作者 char3=40-77 vs 跨作者 char3=0.3-0.8 干净分开）。
+_CHARNGRAM_TOPK = 600
+_WORDUNIGRAM_TOPK = 400
+
+# intra-author 自校准窗口（~600 CJK · 单 ref 时把 ref 切窗建「作者自相似带」做基线 ·
+# 章级直比的绝对余弦低且内容敏感，但「相对作者自己的自相似中位数」是题材无关的稳定尺度）。
+_CHARNGRAM_CALIB_WIN = 600
+_CHARNGRAM_CALIB_WIN_MIN = 450
+_CHARNGRAM_CALIB_WIN_MAX = 800
 
 
 def _charngram_mode() -> str:
-    """CHARNGRAM_SFS_MODE：默认 shadow（只算记录不并入加权 · 零回归）·
-    非法回退 shadow · {active,off} 原样。"""
+    """CHARNGRAM_SFS_MODE：默认 active（2026-05-31 放量 · intra-author 自校准 + 降权并入
+    使同作者 SFS 不被拉低 · 跨作者区分力完整 · 仍是 advisory 评分维度绝不进 hard_gate）·
+    非法回退 active · {shadow,off} 原样。"""
     import os
-    m = (os.environ.get("CHARNGRAM_SFS_MODE") or "shadow").strip().lower()
-    return m if m in ("shadow", "active", "off") else "shadow"
+    m = (os.environ.get("CHARNGRAM_SFS_MODE") or "active").strip().lower()
+    return m if m in ("shadow", "active", "off") else "active"
 
 
 def _cjk_only(text: str) -> str:
@@ -1031,24 +1042,80 @@ def _word_unigram_freq(text: str, top_k: int = _WORDUNIGRAM_TOPK) -> dict:
     return {w: c / total for w, c in common}
 
 
-def compute_charngram_sfs(ref_text: str, gen_text: str) -> dict:
+def _intra_author_band(ref_text: str, freq_fn,
+                       author_pool: "list[str] | None" = None) -> "float | None":
+    """作者「自相似中位数」基线（题材无关的相对尺度 · charngram 调权核心）。
+
+    根因（实证 · 北极星纪律 3）：章级 char-3gram **直比**对内容极敏感——同作者跨章 cosine
+    仅 5-26、跨作者 ≈0，二者都很低，绝对值塞进 SFS 加权会把同作者真分拉低 17 分（评分失真）。
+    修法：不比「gen 与某一章的绝对 cosine」，比「gen 对作者基线的 cosine **相对于** 作者自己
+    跨片段的自相似中位数」——同一作者题材换了，char-3gram 绝对 cosine 会掉，但「作者对自己
+    的自相似」也同样在那个低位，比值（相对尺度）才稳定且题材无关。
+
+    · 有 author_pool（作者原文池 · 多段）：基线 = 池拼接画像；带 = 每段 vs 池 cosine 的中位数
+      （实证最佳：同作者 64-85 vs 跨作者 39-42 干净分开）。
+    · 无池（单 ref 兜底）：把 ref 切 ~600 CJK 窗，带 = 每窗 vs 全 ref cosine 的中位数。
+    片段/窗 < 2 或中位数≈0 → 返回 None（不可校准 · 调用方退化为原始余弦 · 不臆造）。"""
+    if author_pool and len(author_pool) >= 2:
+        base = freq_fn("\n\n".join(author_pool))
+        if not base:
+            return None
+        sims = sorted(max(_cosine_sim(base, freq_fn(s)), 0.0) for s in author_pool)
+    else:
+        wins = _split_windows(ref_text, _CHARNGRAM_CALIB_WIN,
+                              _CHARNGRAM_CALIB_WIN_MIN, _CHARNGRAM_CALIB_WIN_MAX)
+        if len(wins) < 2:
+            return None
+        base = freq_fn(ref_text)
+        if not base:
+            return None
+        sims = sorted(max(_cosine_sim(base, freq_fn(w)), 0.0) for w in wins)
+    med = sims[len(sims) // 2]
+    return med if med > 1e-6 else None
+
+
+def _calibrate(raw_sim: float, band_med: "float | None") -> float:
+    """把原始 cosine 用作者自相似中位数归一到 0~1（达到作者自相似水平 = ~满分 · 内容敏感被消）。
+
+    band_med=None（不可校准）→ 原样返回（单 ref 太短/池缺时退化为原始余弦 · 不臆造）。"""
+    if band_med is None or band_med <= 1e-6:
+        return raw_sim
+    return min(1.0, raw_sim / band_med)
+
+
+def compute_charngram_sfs(ref_text: str, gen_text: str,
+                          author_pool: "list[str] | None" = None) -> dict:
     """字符 n-gram + 词 unigram 风格指纹相似度（0~100 · 纯函数 · 零依赖）。
 
-    · 字符 3-gram 余弦（核心 · 中文字组笔迹 · 跨题材时虽含部分题材字，但作者高频字组
-      搭配是稳定笔迹特征 · 默认 shadow 故不改判决）；
-    · 词 unigram 余弦（jieba 可用时计入 · 否则降级字符 3-gram 单算）。
-    两子项可用者等权平均。逐项输出便于 advisory 可读。"""
+    2026-05-31 调权修（charngram active 不再拉低同作者 SFS · 北极星①⑤）：
+    char-3gram 章级直比对内容极敏感（同作者跨章 cosine 仅 5-26、跨作者 ≈0），绝对值并入加权
+    会把同作者真分拉低 ~17 分。改用 **intra-author 自相似中位数校准**（_intra_author_band）——
+    比「gen vs 作者基线」相对于「作者对自己的自相似中位数」的比值，是题材无关的相对尺度：
+      · 有 author_pool（作者原文池 · 多段）→ 池化分布基线 + 池内自相似带（最佳：同作者 64-85
+        vs 跨作者 39-42 干净分开）；
+      · 无池 → ref 切窗自校准（单 ref 兜底 · char-3gram 同作者被抬到自相似水平、跨作者仍 ~0）。
+    词 unigram 本身题材鲁棒（同作者 67-93）故 **不校准**（校准反而会把跨作者也抬高、毁区分力 ·
+    实证）；只校准内容敏感的 char-3gram。raw 余弦仍逐项输出（_raw 后缀 · advisory 可读不黑箱）。
+
+    · 字符 3-gram 余弦（核心字组笔迹 · 校准后并入 charngram_sfs）；
+    · 词 unigram 余弦（jieba 可用时计入 · 否则降级字符 3-gram 单算 · 原始不校准）。
+    两子项（校准后）可用者等权平均。"""
     r_cg = _char_ngram_freq(ref_text)
     g_cg = _char_ngram_freq(gen_text)
-    cg_sim = max(_cosine_sim(r_cg, g_cg), 0.0)
+    cg_raw = max(_cosine_sim(r_cg, g_cg), 0.0)
+    # char-3gram 自相似带（有池用池 · 无池切窗）→ 校准
+    cg_band = _intra_author_band(ref_text, _char_ngram_freq, author_pool)
+    cg_sim = float(_calibrate(cg_raw, cg_band))
 
     r_wu = _word_unigram_freq(ref_text)
     g_wu = _word_unigram_freq(gen_text)
     word_available = bool(r_wu) and bool(g_wu)
     wu_sim = max(_cosine_sim(r_wu, g_wu), 0.0) if word_available else None
 
-    cg_sim = float(cg_sim)
-    subscores = {"char_3gram_cosine": round(cg_sim * 100, 2)}
+    subscores = {
+        "char_3gram_cosine": round(cg_sim * 100, 2),       # 校准后（并入加权用此）
+        "char_3gram_cosine_raw": round(float(cg_raw) * 100, 2),  # 原始（advisory 可读）
+    }
     parts = [cg_sim]
     if wu_sim is not None:
         wu_sim = float(wu_sim)
@@ -1060,17 +1127,35 @@ def compute_charngram_sfs(ref_text: str, gen_text: str) -> dict:
         "subscores": subscores,
         "char_ngram_n": _CHARNGRAM_N,
         "word_unigram_used": word_available,
+        "char_3gram_calibrated": cg_band is not None,
+        "calibration_basis": ("author_pool" if (author_pool and len(author_pool) >= 2)
+                              else "ref_self_window" if cg_band is not None else "raw_uncalibrated"),
     }
 
 
-def compute_style_only_sfs(ref_text: str, gen_text: str) -> dict:
+# charngram active 并入加权时的权重（< 1 = 合理降权 · charngram active 调权核心）。
+# 根因（实证）：即便 char-3gram 已 intra-author 自校准，章级直比信号绝对值仍偏低（同作者
+# 字组 cosine 校准后 ~40-65，低于功能词/标点/句长这些语言无关基础维的 ~80-95）。equal-weight
+# 并入会把同作者真分拉低 ~6-10 分（评分失真）。降到 0.4 后 → 同作者 SFS delta 仅 -0.5~-2.0
+# （噪声级 · 不拉低），同时跨作者 charngram 仍明显更低（区分力完整保留 · 实证 35-37 vs 39-65）。
+_CHARNGRAM_ACTIVE_WEIGHT = 0.4
+# rhythm_cn active 并入权重（< 1 · 同理降权）：章级修辞节奏单维计数噪声大（金标准只断言均值
+# 可分、逐对常翻转）· 小权重 nudge 让中文专属维度生效又不让噪声误拉低同作者真分（不误报）。
+_RHYTHM_CN_ACTIVE_WEIGHT = 0.4
+
+
+def compute_style_only_sfs(ref_text: str, gen_text: str,
+                           author_pool: "list[str] | None" = None) -> dict:
     """去题材风格 SFS：只比风格特征（虚词指纹 / 标点指纹 / 句长节奏 / 去题材 POS 分布
     / 字符 n-gram 指纹），对名词/人名/情节动词停用——避免跨题材时题材信号淹没文风信号导致误判。
 
     四个基础子项余弦/匹配后等权平均（0~100）。POS 子项仅在 jieba 可用时计入（否则降级，
     剩三项重新等权）。字符 n-gram 子项受 env CHARNGRAM_SFS_MODE 控制：shadow（默认）只
-    挂 subscores 记录不并入加权（零回归）· active 并入加权第 5 维 · off 不算。逐项输出便于
-    advisory 可读。"""
+    挂 subscores 记录不并入加权（零回归）· active 以**降权** _CHARNGRAM_ACTIVE_WEIGHT 并入加权
+    （不拉低同作者真分）· off 不算。逐项输出便于 advisory 可读。
+
+    author_pool（可选 · 作者原文池多段）：传入则 char-3gram 用池化分布基线 + 池内自相似带校准
+    （最佳区分力 · 同作者 vs 跨作者干净分开）；不传则 ref 切窗自校准（单 ref 兜底）。"""
     rp = analyze_text(ref_text)
     gp = analyze_text(gen_text)
 
@@ -1109,15 +1194,22 @@ def compute_style_only_sfs(ref_text: str, gen_text: str) -> dict:
     # shadow/active 都把字符 n-gram 子分挂进 subscores（charngram_* · 可读）；
     # 仅 active 才把 charngram_sfs 并入 parts 加权（第 5 维 · 与上面四维并列）。
     # off → 完全不算（旧四维纯行为）。北极星纪律 2：默认 shadow，验证后再 active 放量。
+    # 基础维 parts 视为权重 1.0；charngram active 以降权 _CHARNGRAM_ACTIVE_WEIGHT 并入。
+    # 统一用 (weighted_sum, weighted_n) 累加，最后一次性求加权平均（兼容 rhythm_cn 后续并入）。
+    weighted_sum = sum(parts)
+    weighted_n = float(len(parts))
+
     cg_mode = _charngram_mode()
     if cg_mode != "off":
-        cg = compute_charngram_sfs(ref_text, gen_text)
+        cg = compute_charngram_sfs(ref_text, gen_text, author_pool=author_pool)
         # 扁平挂入 subscores（全 float · 不破坏「subscores 全是 float」的既有契约/测试）。
         subscores["charngram_sfs"] = float(cg["charngram_sfs"])
         for k, v in cg["subscores"].items():
             subscores[k] = float(v)
         if cg_mode == "active":
-            parts.append(cg["charngram_sfs"] / 100.0)
+            # 降权并入（_CHARNGRAM_ACTIVE_WEIGHT < 1 · 小权重 nudge · 不拉低同作者真分）。
+            weighted_sum += _CHARNGRAM_ACTIVE_WEIGHT * (cg["charngram_sfs"] / 100.0)
+            weighted_n += _CHARNGRAM_ACTIVE_WEIGHT
 
     # ⑥ 修辞节奏谱 + 中文特有计量（P2 · env RHYTHM_CN_SFS_MODE 控制 · 默认 shadow 零回归）。
     # shadow/active 都把 rhythm_cn 子分挂进 subscores（rhythm_cn_* · 可读）；
@@ -1131,9 +1223,14 @@ def compute_style_only_sfs(ref_text: str, gen_text: str) -> dict:
         subscores["rhetoric_rhythm_match"] = float(rc["rhetoric_rhythm_match"])
         subscores["chinese_metric_match"] = float(rc["chinese_metric_match"])
         if rc_mode == "active":
-            parts.append(rc["rhythm_cn_sfs"] / 100.0)
+            # rhythm_cn 降权并入（_RHYTHM_CN_ACTIVE_WEIGHT < 1）：实证章级修辞节奏单维计数
+            # **噪声大**（同作者均值 ~50 vs 跨作者 ~45 仅均值可分、逐对常翻转 · 与金标准测断言
+            # 「均值」而非逐对一致）。anaphora/排比/文白比信号真实但章级方差高，故小权重 nudge：
+            # 既让中文专属维度生效（提示），又不让噪声把同作者真分误拉低（不误报真作者）。
+            weighted_sum += _RHYTHM_CN_ACTIVE_WEIGHT * (rc["rhythm_cn_sfs"] / 100.0)
+            weighted_n += _RHYTHM_CN_ACTIVE_WEIGHT
 
-    total = round(sum(parts) / len(parts) * 100, 2)
+    total = round(weighted_sum / weighted_n * 100, 2)
     return {
         "style_only_sfs": total,
         "subscores": subscores,
@@ -1202,11 +1299,12 @@ _COMMON_IDIOMS = frozenset({
 
 
 def _rhythm_cn_mode() -> str:
-    """RHYTHM_CN_SFS_MODE：默认 shadow（只算记录不并入加权 · 零回归）·
-    非法回退 shadow · {active,off} 原样。"""
+    """RHYTHM_CN_SFS_MODE：默认 active（2026-05-31 放量 · 修辞节奏谱+中文计量并入加权 ·
+    实证真作者跨章一致性均值显著 > 跨作者不误报 · 仍是 advisory 评分维度绝不进 hard_gate）·
+    非法回退 active · {shadow,off} 原样。"""
     import os
-    m = (os.environ.get("RHYTHM_CN_SFS_MODE") or "shadow").strip().lower()
-    return m if m in ("shadow", "active", "off") else "shadow"
+    m = (os.environ.get("RHYTHM_CN_SFS_MODE") or "active").strip().lower()
+    return m if m in ("shadow", "active", "off") else "active"
 
 
 def _sent_head(sent: str, k: int = 2) -> str:
@@ -1450,10 +1548,18 @@ def compute_l3a(ref_text: str, gen_text: str) -> dict:
 
 
 def _sfs_llm_debias_on() -> bool:
-    """SFS_LLM_DEBIAS：默认 off（旧单序行为零回归）· 显式 {1,true,on,yes} 才开 pairwise 消偏。"""
+    """SFS_LLM_DEBIAS：默认 active/on（2026-05-31 放量 · pairwise 顺序双跑消偏 + 风格代表性
+    选片 · 只改 LLM prompt 构造侧鲁棒性 · 不改任何确定性判决 sfs_quick/grade · advisory）·
+    显式 {0,false,off,no} 关回旧单序。"""
     import os
-    v = (os.environ.get("SFS_LLM_DEBIAS") or "").strip().lower()
-    return v in ("1", "true", "on", "yes")
+    raw = os.environ.get("SFS_LLM_DEBIAS")
+    if raw is None:
+        return True  # 默认 active（放量）
+    v = raw.strip().lower()
+    if v in ("0", "false", "off", "no"):
+        return False
+    # 其余（含空串 / 非法 / 1/true/on/yes）一律 on（放量默认 · 不静默退回旧行为）
+    return True
 
 
 def _segment_style_feature(seg: str) -> list[float]:

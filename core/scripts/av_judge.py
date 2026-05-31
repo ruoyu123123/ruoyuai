@@ -109,16 +109,19 @@ AV_TRAIT_DIMS = [
 
 
 def _av_judge_mode() -> str:
-    """读 env AV_JUDGE_MODE：off（默认）/ shadow / active。
+    """读 env AV_JUDGE_MODE：默认 active（2026-05-31 放量）/ shadow / off。
 
-    off（默认）：完全跳过——不构 prompt、不调 gen-model、零回归（共同纪律 2 · 改判决行为默认 off）。
+    active（默认）：构 prompt + 调 gen-model + 4 维配对判别 · 走味维度作 advisory 待裁决项上报
+      （仍 advisory · 仍可豁免 · code AV_TRAIT_DRIFT 永不进 HARD_GATE_CODES）。LLM-judge 对网文
+      隐性风格会失准（创意写作域约 1/4 难例翻转）→ 故必 advisory + 报告显式标注「建议人工复核」，
+      绝不黑箱判决、绝不误伤真作者。
     shadow：构 prompt + 调 gen-model + 出 4 维 advisory，但只记录（不上报 audit_hub · 先校准）。
-    active：超阈维度作为 advisory 待裁决项上报（仍 advisory · 仍可豁免 · 永不 hard_gate）。
+    off：完全跳过——不构 prompt、不调 gen-model（无 gen-model 配置/离线环境的逃生口）。
 
-    空 / 非法值 → off（保守默认 · 不静默开启未经人评校准的 LLM-judge）。
+    空 / 非法值 → active（放量默认）。
     """
-    m = (os.environ.get("AV_JUDGE_MODE") or "").strip().lower()
-    return m if m in ("shadow", "active", "off") else "off"
+    m = (os.environ.get("AV_JUDGE_MODE") or "active").strip().lower()
+    return m if m in ("shadow", "active", "off") else "active"
 
 
 # ════════════════════════════════════════════════════════════════

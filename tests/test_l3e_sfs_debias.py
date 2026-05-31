@@ -242,22 +242,24 @@ def test_D_average_partial_keys_intersection():
 # [E] env 开关 + 默认零回归
 # ════════════════════════════════════════════════════════════════
 
-def test_E_debias_mode_default_off():
-    """SFS_LLM_DEBIAS 默认 off · 显式 {1,true,on,yes} 才开 · 其它一律 off。"""
+def test_E_debias_mode_default_active():
+    """SFS_LLM_DEBIAS 默认 active/on（2026-05-31 放量 · pairwise 消偏）· 显式 {0,false,off,no} 才关。"""
     sx = _reload_se(None)
     try:
-        assert sx._sfs_llm_debias_on() is False
-        for v in ("on", "1", "true", "yes", "ON", "True"):
+        assert sx._sfs_llm_debias_on() is True
+        # 放量默认：含空串/非法/正向词一律 on
+        for v in ("on", "1", "true", "yes", "ON", "True", "garbage", ""):
             assert _reload_se(v)._sfs_llm_debias_on() is True, v
-        for v in ("off", "0", "false", "garbage", ""):
+        # 仅显式负向词才关回旧单序
+        for v in ("off", "0", "false", "no"):
             assert _reload_se(v)._sfs_llm_debias_on() is False, v
     finally:
         _reload_se(None)
 
 
-def test_E_default_off_legacy_prompt_unchanged():
-    """默认 off → generate_llm_prompt 走旧单序 + random.sample（零回归 · 与消偏前 byte 级一致）。"""
-    sx = _reload_se(None)
+def test_E_explicit_off_legacy_prompt_unchanged():
+    """显式 off → generate_llm_prompt 走旧单序 + random.sample（旧行为仍可达 · 与消偏前 byte 级一致）。"""
+    sx = _reload_se("off")
     try:
         p = sx.generate_llm_prompt(_REF, _GEN)
         # 旧 prompt 标志：单序标题 / 旧输出格式标题 / 无 pairwise 双序
@@ -269,9 +271,9 @@ def test_E_default_off_legacy_prompt_unchanged():
         _reload_se(None)
 
 
-def test_E_on_routes_to_pairwise():
-    """SFS_LLM_DEBIAS=on → generate_llm_prompt 转调 pairwise（双序消偏）。"""
-    sx = _reload_se("on")
+def test_E_default_active_routes_to_pairwise():
+    """默认 active → generate_llm_prompt 转调 pairwise（双序消偏 · 放量默认）。"""
+    sx = _reload_se(None)
     try:
         p = sx.generate_llm_prompt(_REF, _GEN)
         assert "评分轮 A" in p and "order_A" in p and "顺序双跑" in p

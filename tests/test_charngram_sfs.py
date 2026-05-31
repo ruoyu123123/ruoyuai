@@ -174,17 +174,18 @@ def test_D_charngram_different_text_distinguished():
 # [E] mode 标志 _charngram_mode
 # ════════════════════════════════════════════════════════════════
 
-def test_E_mode_default_shadow_and_values():
-    """CHARNGRAM_SFS_MODE 默认 shadow（零回归）· 非法回退 shadow · {active,off} 原样。"""
+def test_E_mode_default_active_and_values():
+    """CHARNGRAM_SFS_MODE 默认 active（2026-05-31 放量 · 自校准+降权使不拉低同作者）·
+    非法回退 active · {shadow,off} 原样。"""
     sx = _reload_se(None)
     try:
-        assert sx._charngram_mode() == "shadow"
-        sx = _reload_se("active")
         assert sx._charngram_mode() == "active"
+        sx = _reload_se("shadow")
+        assert sx._charngram_mode() == "shadow"
         sx = _reload_se("off")
         assert sx._charngram_mode() == "off"
         sx = _reload_se("garbage")
-        assert sx._charngram_mode() == "shadow"
+        assert sx._charngram_mode() == "active"
     finally:
         _reload_se(None)
 
@@ -198,9 +199,12 @@ _GEN = "她淡淡地笑了笑，显然早就料到这个结果，缓步走开。
 
 
 def test_F_shadow_zero_regression_on_style_only_sfs():
-    """shadow（默认）：style_only_sfs 与 off 完全一致（字符 n-gram 只记录不并入加权 · 零回归核心）。"""
-    sx = _reload_se("shadow")
+    """shadow：style_only_sfs 与 off 完全一致（字符 n-gram 只记录不并入加权 · 零回归核心）。
+
+    （rhythm_cn 默认 active 会改分，故本测显式关掉 rhythm_cn 隔离 charngram 单变量。）"""
+    os.environ["RHYTHM_CN_SFS_MODE"] = "off"
     try:
+        sx = _reload_se("shadow")
         rep_shadow = sx.compute_style_only_sfs(_REF, _GEN)
         rep_off = _reload_se("off").compute_style_only_sfs(_REF, _GEN)
         assert rep_shadow["style_only_sfs"] == rep_off["style_only_sfs"], \
@@ -211,6 +215,7 @@ def test_F_shadow_zero_regression_on_style_only_sfs():
         assert rep_shadow["charngram_mode"] == "shadow"
         assert rep_off["charngram_mode"] == "off"
     finally:
+        os.environ.pop("RHYTHM_CN_SFS_MODE", None)
         _reload_se(None)
 
 
@@ -227,31 +232,37 @@ def test_F_shadow_subscores_all_float_contract_kept():
 
 
 def test_F_active_folds_into_weighted_score():
-    """active：字符 n-gram 子分并入加权第 5 维 → 与 off 同输入分数可不同（验证真并入）。
+    """active：字符 n-gram 子分以**降权** _CHARNGRAM_ACTIVE_WEIGHT 并入加权（验证真并入 + 降权）。
 
-    用一对字符 n-gram 差异明显、但其余维度接近的样本 → active 分应被字符 n-gram 子分拉动。"""
-    sx = _reload_se("active")
+    用一对字符 n-gram 差异明显、但其余维度接近的样本 → active 分应被字符 n-gram 子分轻微拉动。
+    （rhythm_cn 默认 active 会另改分，故显式关掉隔离 charngram 单变量。）"""
+    os.environ["RHYTHM_CN_SFS_MODE"] = "off"
     try:
+        sx = _reload_se("active")
         rep_active = sx.compute_style_only_sfs(_REF, _GEN)
         rep_off = _reload_se("off").compute_style_only_sfs(_REF, _GEN)
+        # 重新关 rhythm_cn 后再 reload active（_reload_se off 调用不动 RHYTHM env）
+        sx = _reload_se("active")
+        W = sx._CHARNGRAM_ACTIVE_WEIGHT
+        rep_active = sx.compute_style_only_sfs(_REF, _GEN)
         # active 含字符 n-gram 子分
         assert "charngram_sfs" in rep_active["subscores"]
-        # active 把 charngram 并入加权 → 与 off 应不同（除非 charngram 子分恰等于其余维度均值，
-        # 本对样本字组差异明显故几乎不可能恰等）
+        # active 把 charngram 降权并入 → 与 off 应不同
         assert rep_active["style_only_sfs"] != rep_off["style_only_sfs"], \
             (rep_active["style_only_sfs"], rep_off["style_only_sfs"])
-        # 并入第 5 维：active 总分 = (off 的真加权 N 维和 + charngram) / (N+1)。
-        # off 的 subscores 含其它影子特征子分（如 rhythm_cn 默认 shadow → 记录但不并入加权），
-        # 必须一并排除，只留真正进加权的基础维（fw/punc/rhythm/pos）。
+        # 降权并入：active 总分 = (off 真加权 N 维和 + W*charngram) / (N + W)。
+        # off 的 subscores 仅含真正进加权的基础维（fw/punc/rhythm/pos · rhythm_cn 已关 · charngram off）。
         cg = rep_active["subscores"]["charngram_sfs"]
-        _shadow_only = {"charngram_sfs", "char_3gram_cosine", "word_unigram_cosine",
-                        "rhythm_cn_sfs", "rhetoric_rhythm_match", "chinese_metric_match"}
+        _shadow_only = {"charngram_sfs", "char_3gram_cosine", "char_3gram_cosine_raw",
+                        "word_unigram_cosine", "rhythm_cn_sfs", "rhetoric_rhythm_match",
+                        "chinese_metric_match"}
         base_keys = [k for k in rep_off["subscores"] if k not in _shadow_only]
         base_vals = [rep_off["subscores"][k] for k in base_keys]
-        expected = round((sum(base_vals) + cg) / (len(base_vals) + 1), 2)
+        expected = round((sum(base_vals) + W * cg) / (len(base_vals) + W), 2)
         assert abs(rep_active["style_only_sfs"] - expected) < 0.5, \
             (rep_active["style_only_sfs"], expected)
     finally:
+        os.environ.pop("RHYTHM_CN_SFS_MODE", None)
         _reload_se(None)
 
 
@@ -302,16 +313,54 @@ def test_G_same_author_beats_cross_author_charngram():
 
 
 def test_G_real_author_shadow_zero_regression():
-    """真作者 cluster 喂 compute_style_only_sfs：shadow 默认下 style_only_sfs 与 off 一致
-    （真作者校验路径零回归 · 金标准）。"""
+    """真作者 cluster 喂 compute_style_only_sfs：显式 shadow 下 style_only_sfs 与 off 一致
+    （shadow 仍零回归 · 金标准）。（rhythm_cn 默认 active 会改分，显式关掉隔离 charngram。）"""
     a = _load_chapter("蛊真人", "第010章")
     c = _load_chapter("蛊真人", "第020章")
     if a is None or c is None:
         return
-    sx = _reload_se(None)  # 默认 shadow
+    os.environ["RHYTHM_CN_SFS_MODE"] = "off"
     try:
-        shadow_v = sx.compute_style_only_sfs(a, c)["style_only_sfs"]
+        shadow_v = _reload_se("shadow").compute_style_only_sfs(a, c)["style_only_sfs"]
         off_v = _reload_se("off").compute_style_only_sfs(a, c)["style_only_sfs"]
         assert shadow_v == off_v, (shadow_v, off_v)
+    finally:
+        os.environ.pop("RHYTHM_CN_SFS_MODE", None)
+        _reload_se(None)
+
+
+def test_G_real_author_active_not_lowered():
+    """🔴 charngram 调权核心金标准：真作者跨章在 **active**（默认）下 style_only_sfs 不被
+    char-3gram 拉低（vs off 差值在噪声级内 · 实证 intra-author 自校准 + 降权后 delta ≤ ~3 分）。
+
+    曾经的问题：char-3gram 章级直比同作者 cosine 仅 5-26，绝对值 equal-weight 并入会把同作者
+    真分拉低 ~17 分。修后：自校准把同作者抬到自相似水平 + 降权并入 → 同作者 active≈off。"""
+    a = _load_chapter("蛊真人", "第010章")
+    c = _load_chapter("蛊真人", "第020章")
+    if a is None or c is None:
+        return
+    os.environ["RHYTHM_CN_SFS_MODE"] = "off"
+    try:
+        active_v = _reload_se("active").compute_style_only_sfs(a, c)["style_only_sfs"]
+        off_v = _reload_se("off").compute_style_only_sfs(a, c)["style_only_sfs"]
+        # active 不该比 off 低太多（同作者真分不被 char-3gram 内容敏感拉低 · 调权核心目标）
+        assert off_v - active_v <= 3.5, (active_v, off_v, "active 拉低了同作者 SFS")
+    finally:
+        os.environ.pop("RHYTHM_CN_SFS_MODE", None)
+        _reload_se(None)
+
+
+def test_G_charngram_calibration_preserves_discrimination():
+    """🔴 调权不能毁区分力：真作者自校准后，同作者 charngram > 跨作者（区分信号完整保留）。"""
+    gu_a = _load_chapter("蛊真人", "第010章")
+    gu_b = _load_chapter("蛊真人", "第020章")
+    js_a = _load_chapter("惊悚乐园", "第010章")
+    if gu_a is None or gu_b is None or js_a is None:
+        return
+    sx = _reload_se("active")
+    try:
+        same = sx.compute_charngram_sfs(gu_a, gu_b)["charngram_sfs"]
+        cross = sx.compute_charngram_sfs(gu_a, js_a)["charngram_sfs"]
+        assert same > cross, (same, cross, "校准后同作者应仍 > 跨作者")
     finally:
         _reload_se(None)

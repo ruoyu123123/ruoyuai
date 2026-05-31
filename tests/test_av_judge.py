@@ -48,17 +48,18 @@ _DIM_NAMES = ["词汇选择", "句法", "话语连接词", "语用语气"]
 # [A] mode 解析 _av_judge_mode
 # ════════════════════════════════════════════════════════════════
 
-def test_A_mode_default_off():
-    """AV_JUDGE_MODE 未设 → 默认 off（共同纪律 2：改判决行为默认 off · 零回归）。"""
+def test_A_mode_default_active():
+    """AV_JUDGE_MODE 未设 → 默认 active（2026-05-31 放量 · 走味维度作 advisory 上报 ·
+    LLM-judge 失准故必 advisory + 报告标注人工复核 · code 绝不进 HARD_GATE_CODES）。"""
     ax = _reload_av(None)
     try:
-        assert ax._av_judge_mode() == "off"
+        assert ax._av_judge_mode() == "active"
     finally:
         _reload_av(None)
 
 
 def test_A_mode_shadow_and_active():
-    """shadow / active 各自识别（大小写不敏感）。"""
+    """shadow / active / off 各自识别（大小写不敏感）。"""
     for v in ("shadow", "SHADOW", "Shadow"):
         try:
             assert _reload_av(v)._av_judge_mode() == "shadow", v
@@ -69,13 +70,18 @@ def test_A_mode_shadow_and_active():
             assert _reload_av(v)._av_judge_mode() == "active", v
         finally:
             _reload_av(None)
-
-
-def test_A_mode_garbage_falls_back_off():
-    """空 / 非法值回退 off（保守默认 · 不静默开启未经人评校准的 LLM-judge）。"""
-    for v in ("", "on", "1", "true", "garbage"):
+    for v in ("off", "OFF"):
         try:
             assert _reload_av(v)._av_judge_mode() == "off", v
+        finally:
+            _reload_av(None)
+
+
+def test_A_mode_garbage_falls_back_active():
+    """空 / 非法值回退 active（放量默认）· 只有显式 off 才关掉（离线/无 gen-model 逃生口）。"""
+    for v in ("", "on", "1", "true", "garbage"):
+        try:
+            assert _reload_av(v)._av_judge_mode() == "active", v
         finally:
             _reload_av(None)
 

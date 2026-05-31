@@ -50,14 +50,15 @@ def _load_author_chapter(book, ch):
 # [A] 模式标志
 # ════════════════════════════════════════════════════════════════
 
-def test_A_mode_default_shadow_and_values():
-    """LONGRANGE_DRIFT_MODE 默认 shadow（零回归）· 非法回退 shadow · {active,off} 原样。"""
+def test_A_mode_default_active_and_values():
+    """LONGRANGE_DRIFT_MODE 默认 active（2026-05-31 放量 · 真作者距离曲线斜率平缓不误报退化）·
+    非法回退 active · {shadow,off} 原样。"""
     m = _reload(None)
     try:
-        assert m._mode() == "shadow"
-        assert _reload("active")._mode() == "active"
+        assert m._mode() == "active"
+        assert _reload("shadow")._mode() == "shadow"
         assert _reload("off")._mode() == "off"
-        assert _reload("garbage")._mode() == "shadow"
+        assert _reload("garbage")._mode() == "active"
         assert _reload("ACTIVE")._mode() == "active"  # 大小写归一
     finally:
         _reload(None)
