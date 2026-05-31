@@ -240,11 +240,13 @@ def test_F_active_folds_into_weighted_score():
         # 本对样本字组差异明显故几乎不可能恰等）
         assert rep_active["style_only_sfs"] != rep_off["style_only_sfs"], \
             (rep_active["style_only_sfs"], rep_off["style_only_sfs"])
-        # 并入第 5 维：active 总分 = (off 的 N 维和 + charngram) / (N+1)
+        # 并入第 5 维：active 总分 = (off 的真加权 N 维和 + charngram) / (N+1)。
+        # off 的 subscores 含其它影子特征子分（如 rhythm_cn 默认 shadow → 记录但不并入加权），
+        # 必须一并排除，只留真正进加权的基础维（fw/punc/rhythm/pos）。
         cg = rep_active["subscores"]["charngram_sfs"]
-        # off 各基础维（不含 charngram）
-        base_keys = [k for k in rep_off["subscores"]
-                     if k not in ("charngram_sfs", "char_3gram_cosine", "word_unigram_cosine")]
+        _shadow_only = {"charngram_sfs", "char_3gram_cosine", "word_unigram_cosine",
+                        "rhythm_cn_sfs", "rhetoric_rhythm_match", "chinese_metric_match"}
+        base_keys = [k for k in rep_off["subscores"] if k not in _shadow_only]
         base_vals = [rep_off["subscores"][k] for k in base_keys]
         expected = round((sum(base_vals) + cg) / (len(base_vals) + 1), 2)
         assert abs(rep_active["style_only_sfs"] - expected) < 0.5, \

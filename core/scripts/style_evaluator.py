@@ -1119,6 +1119,20 @@ def compute_style_only_sfs(ref_text: str, gen_text: str) -> dict:
         if cg_mode == "active":
             parts.append(cg["charngram_sfs"] / 100.0)
 
+    # ⑥ 修辞节奏谱 + 中文特有计量（P2 · env RHYTHM_CN_SFS_MODE 控制 · 默认 shadow 零回归）。
+    # shadow/active 都把 rhythm_cn 子分挂进 subscores（rhythm_cn_* · 可读）；
+    # 仅 active 才把 rhythm_cn_sfs 并入 parts 加权（多一维 · 与上面诸维并列）。
+    # off → 完全不算。北极星纪律 2：默认 shadow，验证后再 active 放量。
+    rc_mode = _rhythm_cn_mode()
+    if rc_mode != "off":
+        rc = compute_rhythm_cn_sfs(ref_text, gen_text)
+        # 扁平挂入 subscores（全 float · 不破坏「subscores 全是 float」的既有契约/测试）。
+        subscores["rhythm_cn_sfs"] = float(rc["rhythm_cn_sfs"])
+        subscores["rhetoric_rhythm_match"] = float(rc["rhetoric_rhythm_match"])
+        subscores["chinese_metric_match"] = float(rc["chinese_metric_match"])
+        if rc_mode == "active":
+            parts.append(rc["rhythm_cn_sfs"] / 100.0)
+
     total = round(sum(parts) / len(parts) * 100, 2)
     return {
         "style_only_sfs": total,
@@ -1126,6 +1140,230 @@ def compute_style_only_sfs(ref_text: str, gen_text: str) -> dict:
         "jieba_pos_used": pos_available,
         "topic_stopwords_applied": True if pos_available else "function_word_whitelist_fallback",
         "charngram_mode": cg_mode,
+        "rhythm_cn_mode": rc_mode,
+    }
+
+
+# ============================================================
+# P2：修辞节奏谱 + 中文特有计量 SFS（2026-05-31 · 北极星①⑤⑥）
+# ------------------------------------------------------------
+# 根因（本批任务说明 · 实证）：
+#   现有 compute_style_only_sfs 全部是**语言无关**的英文 stylometry 移植（虚词余弦 /
+#   标点余弦 / 句长 JSD / 去题材 POS / 字符 n-gram）——**缺中文专属 + 修辞节奏维度**。
+#   (A) 修辞节奏谱：anaphora（句首重复）/ epiphora（句尾重复）/ anadiplosis（顶真）/
+#       排比（连续句共享句首结构）/ 连词叠用（然后/接着/而后）。Lagutina 等纯 rhythm
+#       特征作者验证 F88-96%，且小语料友好（治 cluster 样本少）。网文作者辨识度核心
+#       （「他不是 X 而是 Y」排比、顶真推进、短句轰炸）——字符 n-gram + 句长 band 都测不到。
+#   (B) 中文特有计量：成语密度（内置小词典）/ 文白比（文言虚词之乎者也 vs 白话的了着）/
+#       标点分布（顿号 / 破折号 / 省略号）。LLM 退化时最先崩（成语堆砌或消失、口语化）。
+#
+# 实证校准（真作者原文 · 北极星纪律 3 金标准）：蛊真人 vs 惊悚乐园 章级 anaphora
+#   1.9-3.8 vs 0.0/百句、连词叠用 0-0.94 vs 1.8-6.5/百句、文白比 0.24-0.35 vs 0.39-0.48
+#   ——区分力强。两类维度合成 per-dim profile match：同作者均值 ~0.59 显著 > 跨作者 ~0.31
+#   （章级单维计数噪声大，故合成默认 shadow，与 charngram 同理——只记录不判决）。
+#
+# 影子并行（北极星纪律 2 · 回归 0）：env RHYTHM_CN_SFS_MODE 控制——
+#   · shadow（默认）：算 rhythm_cn 子分挂 subscores · **不并入** style_only_sfs 加权（零回归）。
+#   · active：rhythm_cn 子分并入加权（多一维 · 与诸维并列）。
+#   · off：完全不算。
+# 不论哪种模式，rhythm_cn 只是**风格相似度子项**，绝不进 hard_gate（顾问非法官 · 北极星⑤）。
+# advisory 措辞「作者排比密度 X/百句 · 复刻 Y 偏低」逐项可读不黑箱。
+# ============================================================
+
+# 连词叠用（顺承式过渡词 · 网文作者节奏指纹之一 · 惊悚乐园远高于蛊真人）。
+_RHYTHM_CONJUNCTIONS = ("然后", "接着", "而后", "于是", "随后", "紧接着", "继而", "旋即")
+# 文言虚词（文白比分子 · 文言色彩越重该词频越高）。
+_WENYAN_PARTICLES = ("之", "乎", "者", "矣", "焉", "其", "则", "以", "而", "虽", "故", "遂", "乃")
+# 白话助词/语气词（文白比分母 · 口语化越重该词频越高 · LLM 退化口语化时飙升）。
+_BAIHUA_PARTICLES = ("的", "了", "着", "吧", "呢", "吗", "啊", "呀", "嘛", "哦", "啦")
+# 中文特有标点（顿号 / 破折号 / 省略号 · 与西文标点节奏不同 · 作者偏好稳定）。
+_CN_DUNHAO = "、"
+_CN_DASHES = ("—", "－", "──", "—")
+_CN_ELLIPSIS = ("…", "⋯")
+
+# 内置常见成语小词典（零依赖纪律：不引外部词典 · 仅覆盖高频四字成语做密度估计 ·
+# 成语「密度高低 + 增减趋势」是信号，不追求穷举；LLM 退化时成语堆砌或消失会显形）。
+_COMMON_IDIOMS = frozenset({
+    "莫名其妙", "不由自主", "不约而同", "络绎不绝", "小心翼翼", "震耳欲聋", "目瞪口呆",
+    "不可思议", "心惊胆战", "面面相觑", "不知所措", "无可奈何", "理所当然", "名副其实",
+    "一目了然", "千钧一发", "接二连三", "乱七八糟", "无影无踪", "若有所思", "不慌不忙",
+    "聚精会神", "若无其事", "毫不犹豫", "恍然大悟", "迫不及待", "一动不动", "不知不觉",
+    "纷至沓来", "视而不见", "充耳不闻", "无济于事", "自言自语", "一五一十", "不闻不问",
+    "大同小异", "设身处地", "当务之急", "出乎意料", "一帆风顺", "出人意料", "措手不及",
+    "眼花缭乱", "目不暇接", "应接不暇", "层出不穷", "屈指可数", "寥寥无几", "数不胜数",
+    "成千上万", "包罗万象", "应有尽有", "琳琅满目", "五花八门", "不计其数", "前所未有",
+    "空前绝后", "史无前例", "千载难逢", "难能可贵", "得天独厚", "得心应手", "驾轻就熟",
+    "无可奈何", "情不自禁", "一言不发", "默不作声", "异口同声", "斩钉截铁", "不慌不忙",
+    "气急败坏", "怒不可遏", "暴跳如雷", "勃然大怒", "咬牙切齿", "怒发冲冠", "义愤填膺",
+    "大惊失色", "魂飞魄散", "胆战心惊", "提心吊胆", "惊慌失措", "手忙脚乱", "张口结舌",
+    "目不转睛", "全神贯注", "心不在焉", "魂不守舍", "六神无主", "如释重负", "心花怒放",
+    "兴高采烈", "喜出望外", "眉开眼笑", "欢天喜地", "手舞足蹈", "得意忘形", "趾高气扬",
+})
+
+
+def _rhythm_cn_mode() -> str:
+    """RHYTHM_CN_SFS_MODE：默认 shadow（只算记录不并入加权 · 零回归）·
+    非法回退 shadow · {active,off} 原样。"""
+    import os
+    m = (os.environ.get("RHYTHM_CN_SFS_MODE") or "shadow").strip().lower()
+    return m if m in ("shadow", "active", "off") else "shadow"
+
+
+def _sent_head(sent: str, k: int = 2) -> str:
+    """句首 k 个汉字（去标点 · 句首重复 anaphora / 排比共享前缀用）。"""
+    cn = CHINESE_CHAR.findall(sent)
+    return "".join(cn[:k]) if len(cn) >= k else ""
+
+
+def _sent_tail(sent: str, k: int = 2) -> str:
+    """句尾 k 个汉字（句尾重复 epiphora 用）。"""
+    cn = CHINESE_CHAR.findall(sent)
+    return "".join(cn[-k:]) if len(cn) >= k else ""
+
+
+def compute_rhetoric_rhythm(text: str) -> dict:
+    """(A) 修辞节奏谱：每百句频率（纯 stdlib · 正则 + split_sentences · 零依赖）。
+
+    维度（均归一到「每百句」· 跨文本长度可比）：
+      · anaphora：相邻句句首 2 字相同（句首重复推进）。
+      · epiphora：相邻句句尾 2 字相同（句尾回环）。
+      · anadiplosis（顶真）：前句末字 == 后句首字（顶真链推进 · 网文常见）。
+      · parallelism（排比）：≥3 句连续共享句首 1 字结构（排比段落）。
+      · conjunction_overuse：顺承连词（然后/接着/而后…）每百句出现次数。
+    句数 < 2 → 全 0（短文不适用 · 不抛错）。逐项 advisory 可读。"""
+    sents = split_sentences(text)
+    n = len(sents)
+    if n < 2:
+        return {
+            "n_sentences": n,
+            "anaphora_per100": 0.0, "epiphora_per100": 0.0,
+            "anadiplosis_per100": 0.0, "parallelism_per100": 0.0,
+            "conjunction_overuse_per100": 0.0,
+        }
+    per100 = 100.0 / n
+
+    anaphora = sum(1 for i in range(1, n)
+                   if _sent_head(sents[i]) and _sent_head(sents[i]) == _sent_head(sents[i - 1]))
+    epiphora = sum(1 for i in range(1, n)
+                   if _sent_tail(sents[i]) and _sent_tail(sents[i]) == _sent_tail(sents[i - 1]))
+    anadiplosis = 0
+    for i in range(1, n):
+        cp = CHINESE_CHAR.findall(sents[i - 1])
+        cc = CHINESE_CHAR.findall(sents[i])
+        if cp and cc and cp[-1] == cc[0]:
+            anadiplosis += 1
+    # 排比：≥3 句连续共享句首 1 字（如「他…他…他…」「不是…就是…要么…」式开头同字）。
+    parallelism = 0
+    run = 1
+    for i in range(1, n):
+        h, ph = _sent_head(sents[i], 1), _sent_head(sents[i - 1], 1)
+        if h and h == ph:
+            run += 1
+        else:
+            if run >= 3:
+                parallelism += run
+            run = 1
+    if run >= 3:
+        parallelism += run
+    conj_hits = sum(text.count(c) for c in _RHYTHM_CONJUNCTIONS)
+
+    return {
+        "n_sentences": n,
+        "anaphora_per100": round(anaphora * per100, 3),
+        "epiphora_per100": round(epiphora * per100, 3),
+        "anadiplosis_per100": round(anadiplosis * per100, 3),
+        "parallelism_per100": round(parallelism * per100, 3),
+        "conjunction_overuse_per100": round(conj_hits * per100, 3),
+    }
+
+
+def compute_chinese_metrics(text: str) -> dict:
+    """(B) 中文特有计量（纯 stdlib · 正则 + 内置词典 · 零依赖）。
+
+    维度：
+      · idiom_density_per1000：内置小词典命中的四字成语每千字密度（堆砌↑ / 退化口语化↓）。
+      · wenyan_baihua_ratio：文言虚词词频 / 白话助词词频（文白色彩 · 议论体↑ 口语体↓）。
+      · dunhao_per1000 / dash_per1000 / ellipsis_per1000：中文特有标点每千字密度。
+    无汉字 → 全 0（不抛错）。逐项 advisory 可读。"""
+    cjk = count_chinese(text)
+    if cjk == 0:
+        return {
+            "cjk_chars": 0,
+            "idiom_density_per1000": 0.0, "wenyan_baihua_ratio": 0.0,
+            "dunhao_per1000": 0.0, "dash_per1000": 0.0, "ellipsis_per1000": 0.0,
+        }
+    per_1000 = 1000.0 / cjk
+    # 成语命中：在连续 ≥4 字汉字串上滑 4 字窗匹配词典（标点已自然断开 · 不跨句误匹配）。
+    idiom_hits = 0
+    for run in re.findall(r"[一-鿿]{4,}", text):
+        for i in range(len(run) - 3):
+            if run[i:i + 4] in _COMMON_IDIOMS:
+                idiom_hits += 1
+    wenyan = sum(text.count(c) for c in _WENYAN_PARTICLES)
+    baihua = sum(text.count(c) for c in _BAIHUA_PARTICLES)
+    dunhao = text.count(_CN_DUNHAO)
+    dash = sum(text.count(d) for d in set(_CN_DASHES))
+    ellipsis = sum(text.count(e) for e in _CN_ELLIPSIS)
+
+    return {
+        "cjk_chars": cjk,
+        "idiom_density_per1000": round(idiom_hits * per_1000, 3),
+        "wenyan_baihua_ratio": round(wenyan / (baihua + 1), 4),
+        "dunhao_per1000": round(dunhao * per_1000, 3),
+        "dash_per1000": round(dash * per_1000, 3),
+        "ellipsis_per1000": round(ellipsis * per_1000, 3),
+    }
+
+
+def _profile_match(ref_vals: list[float], gen_vals: list[float],
+                   floor: float = 0.5) -> float:
+    """逐维度 _pct_match 均值（0~1）——每维等权，避免大量纲维度（如文白比）淹没
+    小量纲修辞维度（实证：单 cosine 被 wenyan*100 主导 → 区分力垮）。
+
+    floor：分母下限（修辞 per100 数值小，0 处用绝对 floor 而非相对，避免 0 vs 0.5 被判 0 分
+    的噪声放大 · 与探针校准一致）。两向量等长。"""
+    if not ref_vals:
+        return 0.0
+    parts = []
+    for r, g in zip(ref_vals, gen_vals):
+        base = max(abs(r), floor)
+        parts.append(max(0.0, min(1.0, 1.0 - abs(r - g) / base)))
+    return sum(parts) / len(parts)
+
+
+def compute_rhythm_cn_sfs(ref_text: str, gen_text: str) -> dict:
+    """修辞节奏谱 + 中文特有计量风格相似度（0~100 · 纯函数 · 零依赖）。
+
+    两子项各算 ref/gen 的特征向量 → 逐维 profile match（等权 · 见 _profile_match）：
+      · rhetoric_rhythm_match：5 维修辞节奏谱（anaphora/epiphora/anadiplosis/排比/连词叠用）。
+      · chinese_metric_match：5 维中文计量（成语密度/文白比/顿号/破折号/省略号）。
+    两子项等权平均得 rhythm_cn_sfs。逐项 + 原始特征值一并输出，便于 advisory 可读（不黑箱）。"""
+    r_rh = compute_rhetoric_rhythm(ref_text)
+    g_rh = compute_rhetoric_rhythm(gen_text)
+    rh_keys = ["anaphora_per100", "epiphora_per100", "anadiplosis_per100",
+               "parallelism_per100", "conjunction_overuse_per100"]
+    rhetoric_match = _profile_match([r_rh[k] for k in rh_keys],
+                                    [g_rh[k] for k in rh_keys])
+
+    r_cn = compute_chinese_metrics(ref_text)
+    g_cn = compute_chinese_metrics(gen_text)
+    # 文白比量纲 ~0.2-0.5（与 per1000 量纲不同），用各自 floor 让其与其他维可比。
+    cn_keys = ["idiom_density_per1000", "wenyan_baihua_ratio",
+               "dunhao_per1000", "dash_per1000", "ellipsis_per1000"]
+    chinese_match = _profile_match([r_cn[k] for k in cn_keys],
+                                   [g_cn[k] for k in cn_keys])
+
+    rhetoric_match = float(rhetoric_match)
+    chinese_match = float(chinese_match)
+    total = round((rhetoric_match + chinese_match) / 2.0 * 100, 2)
+    return {
+        "rhythm_cn_sfs": total,
+        "rhetoric_rhythm_match": round(rhetoric_match * 100, 2),
+        "chinese_metric_match": round(chinese_match * 100, 2),
+        "ref_rhetoric": r_rh,
+        "gen_rhetoric": g_rh,
+        "ref_chinese_metrics": r_cn,
+        "gen_chinese_metrics": g_cn,
     }
 
 
