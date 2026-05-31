@@ -1789,6 +1789,196 @@ def average_pairwise_scores(order_a: dict, order_b: dict) -> dict:
 
 
 # ============================================================
+# SFS 非补偿聚合（2026-05-31 · 北极星①⑤⑥）
+# ------------------------------------------------------------
+# 根因（本批任务说明 · 实证）：
+#   compute_programmatic_score 的 total 是**完全补偿性**加权算术平均——12+ 个细维里
+#   若**单一维度风格崩**（如对话格式全错 / 段长崩塌 / 功能词指纹完全不符），它只占
+#   4%-8% 权重，会被其余高分维度**稀释**，总分仍落 A/B 级（盲点）。算术平均的代价函数
+#   允许「一维换另一维」，但风格保真**不可补偿**——对话格式全错的复刻稿即便句长标点都对，
+#   读者一眼出戏。
+#
+# 补（纯增量 · 全在本文件内自包含 · 零依赖 stdlib · 不改 compute_programmatic_score）：
+#   ① 加权**几何平均** geometric_mean：sum(w·ln(s)) / sum(w) 再 exp。任一维 s→0 时
+#      ln(s)→-∞ 把总分拉垮，**不被其他维补偿**（乘性聚合 = 非补偿）。
+#   ② **最差维地板** worst_dimension_floor：取权重≥min_weight 的维度最低分（次要小权重
+#      维度噪声不当主因，门控防误伤）。单维崩 → floor 直接抓住。
+#   ③ **塌陷-稀释缺口** collapse_dilution_gap：算术平均 - 几何平均。缺口大 = 存在被算术
+#      平均稀释的崩维（盲点信号）。
+#
+# 影子并行（北极星纪律 2/7 · 默认 active 真生效但 advisory · 回归 0）：env SFS_NONCOMP_MODE
+#   · active（默认放量）：计算并**附加** report["noncompensatory"]；崩维时升 advisory_issues
+#     顶层（消费方可见）· gate_level 永远 advisory · **绝不改 sfs_quick/programmatic_score/grade**。
+#   · shadow：计算并附加 report["noncompensatory"]，分歧只写 stderr，不升顶层 issue。
+#   · off：完全不算。
+# 不论哪种模式，本层是**第二诊断视角**（顾问非法官 · 北极星⑤）：与算术平均**并存**输出，
+#   绝不替代/覆盖任何确定性判决。advisory 不黑箱——崩维定位+缺口数值全暴露在 report 里。
+#
+# 真作者验证关键（北极星纪律 3 矫枉过正金标准）：
+#   · 同作者各维都高 → 几何平均 ≈ 算术平均（无崩维 → 不被误拉垮 · floor 也高）。
+#   · 崩的复刻单维低 → 几何平均显著 < 算术平均 + floor 低 → 被抓（目的）。
+# ============================================================
+
+# worst_dimension_floor 只看权重 ≥ 此阈值的维度（次要小权重维度噪声不当崩维主因）。
+_NONCOMP_MIN_FLOOR_WEIGHT = 0.04
+# 单维「崩」的判定线（百分制）：低于此分视为该维度风格崩塌。
+_NONCOMP_COLLAPSE_SCORE = 60.0
+# 缺口（算术-几何）超此值视为「存在被稀释的崩维」盲点信号。
+_NONCOMP_GAP_ADVISORY = 8.0
+
+# 🔴 非补偿聚合**只对作者稳定的风格指纹维度**做几何均 / worst-floor（北极星纪律 3 矫枉过正
+# 金标准 · 实证校准）。根因：真作者**自己各章之间**对话占比 / 极短段占比 / 群戏人数 / 拟声段
+# / 引号化独白 / 禁用词配额这些**情节内容依赖**维度天然大幅波动（蛊真人 ch10 vs ch20 实测
+# 对话占比 38 / 极短段 0 / 群戏 0）——把它们算进非补偿几何均会把真作者拉垮到 geo=5-14（巨型
+# 误报）。而句长/段长/标点/功能词/句长 std/段首多样性/单句成段率这些**节奏-词汇-结构指纹**
+# 跨章稳定（同作者 ch10 vs ch20 实测全 ≥ 80），是「不可补偿」的真风格保真维 → 仅对它们做
+# 非补偿聚合。情节内容维度仍计算崩塌并列入 collapsed_dimensions（可见性 advisory），但**不**
+# 进 geometric_mean / worst_dimension_floor 的头条数值（不误拉垮真作者）。
+_NONCOMP_STABLE_FINGERPRINT_DIMS = frozenset({
+    "句长分布 JSD", "段落长度分布 JSD", "标点密度指纹", "功能词指纹",
+    "句长标准差匹配", "段落开头多样性", "单句成段率匹配",
+})
+
+
+def _sfs_noncomp_mode() -> str:
+    """SFS_NONCOMP_MODE：默认 active（2026-05-31 放量 · 非补偿几何平均/worst-floor 治单维
+    崩被稀释成 A/B 的盲点 · 与算术平均并存输出 · 全 advisory 不改判决 · 北极星⑤）·
+    非法回退 active · {shadow,off} 原样。"""
+    import os
+    m = (os.environ.get("SFS_NONCOMP_MODE") or "active").strip().lower()
+    return m if m in ("shadow", "active", "off") else "active"
+
+
+def compute_noncompensatory_aggregation(dims: list[dict]) -> dict:
+    """对 programmatic_score 的维度列表做**非补偿聚合**（第二视角 · advisory）。
+
+    输入 dims：compute_programmatic_score 返回的 dimensions（每项含 name/score(0-100)/weight）。
+    输出（百分制）：
+      · arithmetic_mean：全维补偿性加权算术平均（= programmatic total · 对账用）。
+      · stable_arithmetic_mean：仅稳定风格指纹维的算术均（与几何均同口径 · 缺口对账）。
+      · geometric_mean：仅稳定风格指纹维的加权几何平均（乘性 · 非补偿 · 单指纹维崩拉垮全局）。
+      · worst_dimension_floor：稳定指纹维中权重 ≥ _NONCOMP_MIN_FLOOR_WEIGHT 的最低分（地板）。
+      · worst_dimension：最低分稳定指纹维名（定位崩维 · advisory 不黑箱）。
+      · collapse_dilution_gap：stable_arithmetic_mean - geometric_mean（盲点信号）。
+      · collapsed_dimensions：所有 score < _NONCOMP_COLLAPSE_SCORE 的维度名（稳定 + 情节内容 · 仅可见性）。
+      · collapsed_stable_fingerprint：仅稳定指纹维的崩维（触发 advisory 的真盲点）。
+      · advisory_issues：稳定指纹维崩 / 缺口超阈 时的 advisory issue（gate_level 强制 advisory）。
+
+    🔴 分层（北极星纪律 3 金标准）：几何均 / worst-floor / advisory 触发**只看稳定风格指纹维**
+    （句长/段长/标点/功能词/句长 std/段首多样性/单句成段率——跨章稳定）。情节内容依赖维（对话
+    占比 / 极短段 / 群戏人数 / 拟声段 / 独白比 / 禁用词配额）真作者跨章天然波动，列入会误把真
+    作者拉垮（实测蛊真人 ch10 vs ch20 全维几何均 5-14 = 巨型误报）→ 只列 collapsed_dimensions
+    做可见性，不进头条数值、不触发 advisory。
+
+    数值化策略：score=0 时 ln 取 eps 下限（ln(eps)≈-13.8），几何均仍被拉垮但不抛 math domain error。
+    """
+    issues: list[dict] = []
+    # 只取有效数值维度
+    valid = [d for d in dims
+             if isinstance(d.get("score"), (int, float))
+             and isinstance(d.get("weight"), (int, float))
+             and d.get("weight", 0) > 0]
+    if not valid:
+        return {
+            "mode": _sfs_noncomp_mode(),
+            "applicable": False,
+            "arithmetic_mean": 0.0,
+            "geometric_mean": 0.0,
+            "worst_dimension_floor": 0.0,
+            "worst_dimension": None,
+            "collapse_dilution_gap": 0.0,
+            "collapsed_dimensions": [],
+            "advisory_issues": [],
+            "note": "无有效维度 · 非补偿聚合不适用",
+        }
+
+    total_w = sum(float(d["weight"]) for d in valid)
+    # ① 补偿性算术平均（对账 = programmatic total · 全维 · 与 programmatic.total 一致）
+    arithmetic = sum(float(d["score"]) * float(d["weight"]) for d in valid) / total_w
+
+    # 🔴 分层（北极星纪律 3 金标准）：非补偿几何均 / worst-floor **只看作者稳定的风格指纹维**
+    # （_NONCOMP_STABLE_FINGERPRINT_DIMS）。情节内容依赖维（对话占比 / 极短段 / 群戏人数 /
+    # 拟声段 / 独白比 / 禁用词配额）真作者跨章天然大幅波动，列入会误把真作者拉垮 → 只做
+    # 可见性（collapsed_dimensions），不进头条几何均 / floor。
+    stable = [d for d in valid if d.get("name") in _NONCOMP_STABLE_FINGERPRINT_DIMS]
+    if not stable:
+        stable = valid  # 维度名不匹配（外部自定义 dims）时退回全集（不空 · 健壮）
+
+    eps = 1e-6  # score=0 时的安全下限：ln(eps)≈-13.8 把几何均拉垮但不 domain error
+    stable_w = sum(float(d["weight"]) for d in stable)
+    # ② 加权几何平均（仅稳定指纹维）：exp( Σ w·ln(s) / Σ w )，s 钳到 [eps, 100]
+    ln_sum = 0.0
+    for d in stable:
+        s = max(eps, min(100.0, float(d["score"])))
+        ln_sum += float(d["weight"]) * math.log(s)
+    geometric = math.exp(ln_sum / stable_w) if stable_w > 0 else 0.0
+    # 稳定指纹维的算术均（缺口对账用同口径，否则全维算术 vs 稳定几何不可比）
+    stable_arith = (sum(float(d["score"]) * float(d["weight"]) for d in stable)
+                    / stable_w) if stable_w > 0 else 0.0
+
+    # ③ worst-dimension floor（仅稳定指纹维 · 门控小权重维度）
+    floor_candidates = [d for d in stable
+                        if float(d["weight"]) >= _NONCOMP_MIN_FLOOR_WEIGHT]
+    if not floor_candidates:
+        floor_candidates = stable  # 全是小权重维度时退回稳定全集（不空）
+    worst = min(floor_candidates, key=lambda d: float(d["score"]))
+    worst_floor = float(worst["score"])
+    worst_name = worst.get("name")
+
+    # ④ 塌陷-稀释缺口（同口径：稳定维算术 - 稳定维几何）
+    gap = stable_arith - geometric
+
+    # ⑤ 崩维清单：稳定指纹维崩（真盲点）+ 情节内容维崩（仅可见性 · 不进头条数值）。
+    stable_names = {d.get("name") for d in stable}
+    collapsed_stable = [d.get("name") for d in stable
+                        if float(d["score"]) < _NONCOMP_COLLAPSE_SCORE]
+    collapsed_volatile = [d.get("name") for d in valid
+                          if d.get("name") not in stable_names
+                          and float(d["score"]) < _NONCOMP_COLLAPSE_SCORE]
+    # 对外 collapsed_dimensions 含全部（可见性），但 advisory 触发只看稳定维（不误报真作者）。
+    collapsed = collapsed_stable + collapsed_volatile
+
+    # advisory ①：**稳定指纹维**崩（单维 < 崩塌线）——真风格保真盲点核心场景。
+    if collapsed_stable:
+        issues.append({
+            "code": "SFS_DIMENSION_COLLAPSE",
+            "gate_level": "advisory",
+            "message": f"风格指纹单维崩塌：{collapsed_stable}（最差 '{worst_name}'={round(worst_floor, 2)}）"
+                       f"· 稳定指纹算术 {round(stable_arith, 2)} 被高分维稀释（几何 {round(geometric, 2)}）"
+                       f"· 非补偿视角：该维不可被其他维补偿，定位复修",
+        })
+    # advisory ②：稳定维无显式崩但缺口超阈（多个中等偏低指纹维联合稀释的隐性盲点）。
+    elif gap >= _NONCOMP_GAP_ADVISORY:
+        issues.append({
+            "code": "SFS_COMPENSATION_GAP",
+            "gate_level": "advisory",
+            "message": f"指纹补偿稀释缺口 {round(gap, 2)}（稳定算术 {round(stable_arith, 2)} - 几何 "
+                       f"{round(geometric, 2)}）· 存在被算术平均稀释的偏低指纹维，最差 "
+                       f"'{worst_name}'={round(worst_floor, 2)} · 建议优先补该维",
+        })
+
+    # 兜底：强制 advisory（北极星⑤ · 双保险 · 绝不进 hard_gate）
+    for it in issues:
+        it["gate_level"] = "advisory"
+
+    return {
+        "mode": _sfs_noncomp_mode(),
+        "applicable": True,
+        "arithmetic_mean": round(arithmetic, 2),      # 全维补偿性算术均（对账 programmatic.total）
+        "stable_arithmetic_mean": round(stable_arith, 2),  # 稳定指纹维算术均（缺口同口径对账）
+        "geometric_mean": round(geometric, 2),        # 稳定指纹维加权几何均（非补偿头条）
+        "worst_dimension_floor": round(worst_floor, 2),
+        "worst_dimension": worst_name,
+        "collapse_dilution_gap": round(gap, 2),
+        "collapsed_dimensions": collapsed,
+        "collapsed_stable_fingerprint": collapsed_stable,
+        "stable_fingerprint_dims": sorted(stable_names),
+        "advisory_issues": issues,
+        "note": "全部 advisory · 几何均/floor 仅算作者稳定风格指纹维（情节内容维跨章波动不进头条·防误判真作者）· 与算术平均并存的第二视角 · 不改 sfs_quick/programmatic_score/grade · 不进 hard_gate（顾问非法官）",
+    }
+
+
+# ============================================================
 # 主流程
 # ============================================================
 
@@ -1857,6 +2047,26 @@ def evaluate(ref_text, gen_text: str,
         "has_author_profile": bool(has_author_profile),
     }
 
+    # SFS 非补偿聚合（影子并行 · 北极星①⑤⑥ · 治单维崩被算术平均稀释的盲点）。
+    # active（默认）：附加 report["noncompensatory"] + 崩维 advisory 升顶层；
+    # shadow：附加但分歧只写 stderr；off：不算。绝不改 sfs_quick/programmatic_score/grade。
+    noncomp_mode = _sfs_noncomp_mode()
+    if noncomp_mode != "off":
+        noncomp = compute_noncompensatory_aggregation(ps["dimensions"])
+        report["noncompensatory"] = noncomp
+        nc_issues = noncomp.get("advisory_issues", [])
+        if noncomp_mode == "shadow":
+            if nc_issues:
+                codes = [i["code"] for i in nc_issues]
+                print(f"[SFS noncomp shadow] 检出 {len(codes)} 条 advisory（未改判决）: {codes}"
+                      f" · 几何均 {noncomp['geometric_mean']} vs 算术均 {noncomp['arithmetic_mean']}"
+                      f" · floor {noncomp['worst_dimension_floor']}",
+                      file=sys.stderr)
+        elif noncomp_mode == "active" and nc_issues:
+            # active：崩维 advisory 升顶层（与 L3a 共用 advisory_issues · 永远 advisory）。
+            report.setdefault("advisory_issues", [])
+            report["advisory_issues"].extend(nc_issues)
+
     # L3a 滑窗 burstiness + 去题材 SFS（影子并行 · 北极星①⑤⑥）。
     # shadow（默认）/active：计算并**附加**到 report（加项 · 不改上面任何判决字段，零回归）。
     # off：完全不算。active 与 shadow 的唯一区别：active 把 advisory issue 升到 report 顶层
@@ -1874,7 +2084,9 @@ def evaluate(ref_text, gen_text: str,
                       file=sys.stderr)
         elif l3a_mode == "active":
             # active：advisory issue 升顶层（消费方可见）· gate_level 永远 advisory。
-            report["advisory_issues"] = l3a.get("advisory_issues", [])
+            # 用 setdefault+extend（不覆盖）以与非补偿聚合 advisory 共存于同一顶层列表。
+            report.setdefault("advisory_issues", [])
+            report["advisory_issues"].extend(l3a.get("advisory_issues", []))
     return report
 
 

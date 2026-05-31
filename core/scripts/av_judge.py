@@ -20,6 +20,12 @@
   AV-judge 站中间：**读者视角** + **解耦 4 维** + **配对判别**（A 锚 B 验，比绝对打分可靠——
   Catch Me If You GAN / Are We There Yet 等实证：LLM 对单段绝对风格打分方差大，配对相对判别稳）。
 
+【自一致性重采样（Rating Roulette · 2026-05-31 · 稳方差）】
+  即便配对相对判别，单次 LLM-judge 仍有方差（同一对 A/B 跑两次可能一次走味一次命中）。故
+  同 judge model 跑 N 次重采样（temperature 微抖 · env AV_JUDGE_N_SAMPLES 默认 3 · 设 1 关），
+  4 维**各取多数票**做 robust 聚合 + 暴露方差（agreement / unstable_dims · advisory 不黑箱）。
+  无需 logprob（黑箱模型可用）· 平票偏命中（保守不误伤真作者）· 永远 advisory 永不 hard_gate。
+
 【配对判别 > 绝对打分】(authorship verification 范式)
   不问「B 像不像作者（打 1-10）」，问「给定 A 是作者真迹，B 在哪几维露馅」——
   相对锚定把「这个作者基线长什么样」交给样本 A 决定，绕开 LLM 对网文隐性风格的绝对标尺漂移。
@@ -74,6 +80,20 @@ from gen_model_loader import (  # noqa: E402
 # advisory 专用 issue code · ⚠️ 绝不进 audit_hub.HARD_GATE_CODES（北极星⑤ · 共同纪律 2）
 ISSUE_CODE = "AV_TRAIT_DRIFT"
 
+# ── 自一致性重采样（Rating Roulette · 稳 LLM-judge 方差）─────────────────
+# 根因（本批任务说明 · arxiv 实证）：av_judge 原本**单次**配对判别——LLM-judge 对网文隐性
+#   风格失准（创意写作域约 1/4 难例翻转），单次采样方差大，同一对 (A,B) 跑两次可能一次判
+#   「走味」一次判「命中」。治法 = Rating Roulette / self-consistency：同 judge model 跑
+#   N 次重采样（temperature 微抖），4 维**各取多数票**做 robust 聚合，把单次噪声平滑掉。
+# env AV_JUDGE_N_SAMPLES：默认 3（质量优先 · N≥2 真聚合生效）· 设 1 = 关（退回单次单采样 ·
+#   零回归逃生口）· 钳到 [1, AV_JUDGE_N_SAMPLES_MAX]（防 token / 时延失控）。
+# ⚠️ 仍 advisory：聚合只稳方差、不强判——多数票 + 方差透明上报，仍可豁免、永不 hard_gate。
+AV_JUDGE_N_SAMPLES_DEFAULT = 3
+AV_JUDGE_N_SAMPLES_MAX = 7
+# 每次重采样在 profile 基准 temperature 上的抖动量（Rating Roulette 微抖 · 制造采样多样性
+#   又不让判别失稳）。第 0 次用基准温度，之后按 ±step 交替抖。
+AV_JUDGE_TEMP_JITTER_STEP = 0.15
+
 # 走味判定阈值：维度判别 verdict ∈ {命中, 走味}；命中 = 读者认得出是作者，走味 = 露馅。
 # 这是**读者视角的定性判别**（不是 1-10 打分），阈值即「这一维 LLM 判定走味」。
 DRIFT_VERDICT = "走味"
@@ -122,6 +142,42 @@ def _av_judge_mode() -> str:
     """
     m = (os.environ.get("AV_JUDGE_MODE") or "active").strip().lower()
     return m if m in ("shadow", "active", "off") else "active"
+
+
+def _n_samples() -> int:
+    """读 env AV_JUDGE_N_SAMPLES：默认 3（N≥2 真聚合稳方差）· 1=关（退回单次）· 钳到 [1, MAX]。
+
+    空 / 非法值 → 默认 3。< 1 钳到 1（=关闭聚合，退回单采样，零回归）；> MAX 钳到 MAX。
+    """
+    raw = (os.environ.get("AV_JUDGE_N_SAMPLES") or "").strip()
+    if not raw:
+        return AV_JUDGE_N_SAMPLES_DEFAULT
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return AV_JUDGE_N_SAMPLES_DEFAULT
+    if n < 1:
+        return 1
+    return min(n, AV_JUDGE_N_SAMPLES_MAX)
+
+
+def _jittered_temperatures(base: float, n: int) -> list[float]:
+    """为 n 次重采样生成 temperature 序列（Rating Roulette 微抖 · 制造采样多样性）。
+
+    第 0 次用基准温度（保留单次行为的可复现性）；之后按 +step / -step 交替抖，钳到 [0, 1.5]。
+    确定性纯函数（不随机）→ 测试可断言序列；既造多样性又不让判别失稳。
+    """
+    base = float(base if base is not None else 0.8)
+    temps: list[float] = []
+    for i in range(max(1, n)):
+        if i == 0:
+            t = base
+        else:
+            # i=1 → +step, i=2 → -step, i=3 → +2step, i=4 → -2step ...
+            mag = ((i + 1) // 2) * AV_JUDGE_TEMP_JITTER_STEP
+            t = base + mag if (i % 2 == 1) else base - mag
+        temps.append(round(max(0.0, min(1.5, t)), 3))
+    return temps
 
 
 # ════════════════════════════════════════════════════════════════
@@ -351,6 +407,169 @@ def parse_av_verdicts(reply: str) -> dict:
     }
 
 
+# ════════════════════════════════════════════════════════════════
+# 自一致性重采样聚合（Rating Roulette · N 次重采样 → 4 维多数票 robust 聚合 + 方差透明）
+# ════════════════════════════════════════════════════════════════
+
+def aggregate_verdicts(samples: list[dict]) -> dict:
+    """把 N 次 parse_av_verdicts 结果按 4 维**各取多数票** robust 聚合 + 暴露方差（透明 · 不黑箱）。
+
+    输入 samples：parse_av_verdicts(...) 的列表（每个含 dimensions / drift_dims / parse_ok）。
+    聚合规则（per-dim majority vote · 稳单次 LLM-judge 噪声）：
+      · 每维统计 N 次里判「走味(drift)」vs「未走味」的票数。
+      · drift 票 **严格过半**（> n_valid/2）才聚合判走味 —— **平票偏保守判命中**（不误伤真作者 ·
+        北极星⑤ advisory 顾问非法官）。
+      · 某维 N 次全缺（verdict 都 None）→ 该维 verdict=None / drift=False（不臆造）。
+    方差透明（advisory 不黑箱 · 复盘可核）：每维带 votes（drift/match/abstain 计数）+ agreement
+      （多数派占比，1.0=N 次全一致，越低越不稳）+ flipped（是否出现过分歧）。
+      顶层 mean_agreement / unstable_dims / max_disagreement 供「这次判别稳不稳」一眼可读。
+
+    返回 {dimensions, drift_dims, parse_ok, n_samples, n_valid_samples, mean_agreement,
+          unstable_dims, agreement_by_dim, sample_drift_dims}。
+    """
+    samples = samples or []
+    n_samples = len(samples)
+    valid = [s for s in samples if isinstance(s, dict)]
+    n_valid = sum(1 for s in valid if s.get("parse_ok"))
+
+    dims: dict[str, dict] = {}
+    drift_dims: list[str] = []
+    agreement_by_dim: dict[str, float] = {}
+    unstable_dims: list[str] = []
+
+    for name, _desc, _ask in AV_TRAIT_DIMS:
+        drift_votes = 0
+        match_votes = 0
+        abstain = 0
+        reasons: list[str] = []
+        for s in valid:
+            entry = (s.get("dimensions") or {}).get(name) if isinstance(s, dict) else None
+            if not isinstance(entry, dict):
+                abstain += 1
+                continue
+            verdict = entry.get("verdict")
+            if verdict is None:
+                abstain += 1
+                continue
+            if entry.get("drift"):
+                drift_votes += 1
+                if entry.get("reason"):
+                    reasons.append(str(entry["reason"]))
+            else:
+                match_votes += 1
+        decided = drift_votes + match_votes  # 有效（非弃权）票数
+        # 多数票：drift 严格过半才判走味 → 平票偏命中（保守不误伤）
+        is_drift = decided > 0 and drift_votes > (decided / 2)
+        if decided > 0:
+            majority = max(drift_votes, match_votes)
+            agreement = round(majority / decided, 3)
+            verdict_label = DRIFT_VERDICT if is_drift else MATCH_VERDICT
+        else:
+            agreement = 1.0  # 全弃权 = 无分歧（也无判别）
+            verdict_label = None
+        # flipped = N 次里 drift 与 match 都出现过（判别在该维不稳）
+        flipped = drift_votes > 0 and match_votes > 0
+        dims[name] = {
+            "verdict": verdict_label,
+            "reason": (reasons[0] if (is_drift and reasons) else None),
+            "drift": is_drift,
+            "votes": {"drift": drift_votes, "match": match_votes, "abstain": abstain},
+            "agreement": agreement,
+            "flipped": flipped,
+        }
+        agreement_by_dim[name] = agreement
+        if flipped:
+            unstable_dims.append(name)
+        if is_drift:
+            drift_dims.append(name)
+
+    # 顶层方差透明指标
+    decided_agreements = [
+        d["agreement"] for d in dims.values()
+        if (d["votes"]["drift"] + d["votes"]["match"]) > 0
+    ]
+    mean_agreement = (round(sum(decided_agreements) / len(decided_agreements), 3)
+                      if decided_agreements else 1.0)
+
+    return {
+        "dimensions": dims,
+        "drift_dims": drift_dims,
+        "parse_ok": n_valid > 0,
+        "n_samples": n_samples,
+        "n_valid_samples": n_valid,
+        "mean_agreement": mean_agreement,
+        "unstable_dims": unstable_dims,
+        "agreement_by_dim": agreement_by_dim,
+        "sample_drift_dims": [s.get("drift_dims", []) for s in valid],
+    }
+
+
+def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_text: str,
+                           sample_limit: int = 3000, n_samples: int | None = None,
+                           tag: str = "av_judge") -> dict:
+    """同 judge model 跑 N 次重采样（temperature 微抖）→ 4 维多数票聚合（Rating Roulette）。
+
+    这是 av_judge 的**自一致性核心**：稳住单次 LLM-judge 的方差。N=1 时退化为单次单采样
+    （= 改造前行为 · 零回归逃生口）。
+
+    实现（薄复用 · 北极星⑥）：
+      · build_av_judge_prompt 只构一次（A/B 不变 · 省 token）。
+      · 复用 call_gen_model（签名不变 → 既有 mock 兼容）；temperature 抖动通过临时改写候选
+        profile.temperature 实现（call_gen_model 内部读 profile.temperature），跑完恢复。
+      · 每次回复 parse_av_verdicts → aggregate_verdicts 多数票聚合。
+
+    返回 aggregate_verdicts(...) 的结果，外加 error（任一/全部采样失败时聚合仍尽力 · 全失败才
+    error 非空 + drift_dims 空）。advisory 永不抛错中断流水线（北极星⑤）。
+    """
+    n = n_samples if n_samples is not None else _n_samples()
+    n = max(1, n)
+    user_prompt = build_av_judge_prompt(author_text, replica_text, sample_limit)
+
+    # 取基准 temperature（候选 profile 的第一档 · 缺则 0.8）做抖动序列
+    candidates = []
+    try:
+        candidates = list(loader.get_callable_profiles())
+    except Exception:  # noqa: BLE001 — 取不到候选不致命，后续 call_gen_model 自会报错
+        candidates = []
+    base_temp = candidates[0].temperature if candidates else 0.8
+    temps = _jittered_temperatures(base_temp, n)
+
+    samples: list[dict] = []
+    failures: list[str] = []
+    for i, temp in enumerate(temps):
+        # temperature 微抖：临时改写候选 profile 温度（call_gen_model 内部读 profile.temperature）
+        saved = [(p, getattr(p, "temperature", None)) for p in candidates]
+        for p in candidates:
+            try:
+                p.temperature = temp
+            except Exception:  # noqa: BLE001 — profile 不可写则跳过抖动（不致命）
+                pass
+        try:
+            reply, _profile, _elapsed = call_gen_model(
+                loader, AV_JUDGE_SYSTEM_PROMPT, user_prompt, tag=f"{tag}_sc{i + 1}")
+            samples.append(parse_av_verdicts(reply))
+        except GenModelExhaustedError as e:
+            failures.append(f"sample{i + 1}: gen-model 全部失败 {str(e)[:120]}")
+        except Exception as e:  # noqa: BLE001 — advisory 永不中断
+            failures.append(f"sample{i + 1}: {str(e)[:120]}")
+        finally:
+            for p, t in saved:  # 恢复原温度（不污染 loader 给后续调用）
+                try:
+                    p.temperature = t
+                except Exception:  # noqa: BLE001
+                    pass
+
+    agg = aggregate_verdicts(samples)
+    # 全部采样失败 → error 非空（调用方据此降级）；部分失败聚合仍尽力，只记 partial 警告
+    if not samples:
+        agg["error"] = "; ".join(failures) or "无有效采样"
+    else:
+        agg["error"] = None
+        if failures:
+            agg["sample_failures"] = failures
+    return agg
+
+
 def build_report(mode: str, parsed: dict | None, author_path: str = "",
                  replica_path: str = "", profile_name: str | None = None,
                  elapsed: float | None = None, error: str | None = None) -> dict:
@@ -384,6 +603,16 @@ def build_report(mode: str, parsed: dict | None, author_path: str = "",
     report["dimensions"] = parsed["dimensions"]
     report["drift_dims"] = parsed["drift_dims"]
     report["parse_ok"] = parsed.get("parse_ok", False)
+    # 自一致性透明：N 次重采样多数票聚合时，把方差指标平铺进报告（advisory 不黑箱 · 复盘可核）
+    for k in ("n_samples", "n_valid_samples", "mean_agreement", "unstable_dims",
+              "agreement_by_dim", "sample_drift_dims", "sample_failures"):
+        if k in parsed:
+            report[k] = parsed[k]
+    if parsed.get("unstable_dims"):
+        report["consistency_note"] = (
+            f"自一致性聚合：{len(parsed['unstable_dims'])} 个维度在 "
+            f"{parsed.get('n_valid_samples', '?')} 次重采样中出现分歧（多数票裁定 · "
+            "平票偏命中保守不误伤）· 建议人工复核走味维度")
     if shadow:
         # shadow：只记录 · 不出顶层 verdict（不上报 audit_hub）
         report["verdict"] = None
@@ -427,24 +656,25 @@ def pairwise_drift_count(loader: GenModelLoader, author_text: str, replica_text:
 
     ⚠️ 永远 advisory：本函数只为「在 N 个候选里相对排序」服务，不产 hard_gate、不否决任何稿。
     LLM-judge 对网文隐性风格会失准（创意写作域约 1/4 难例翻转），故只做 select 不做强判。
+
+    自一致性（2026-05-31）：内部走 self_consistency_judge（AV_JUDGE_N_SAMPLES 默认 3 次重采样 ·
+      4 维多数票聚合），稳住单次方差再交 best-of-N 排序。N=1（env 设）退化为单次（零回归）。
     """
-    user_prompt = build_av_judge_prompt(author_text, replica_text, sample_limit)
-    try:
-        reply, _profile, _elapsed = call_gen_model(
-            loader, AV_JUDGE_SYSTEM_PROMPT, user_prompt, tag="av_judge_bestofn")
-    except GenModelExhaustedError as e:
+    agg = self_consistency_judge(loader, author_text, replica_text, sample_limit,
+                                 tag="av_judge_bestofn")
+    if agg.get("error"):
         return {"drift_count": None, "drift_dims": [], "dimensions": {},
-                "parse_ok": False, "error": f"gen-model 全部失败: {str(e)[:200]}"}
-    except Exception as e:  # noqa: BLE001 — advisory 永不中断写作流水线
-        return {"drift_count": None, "drift_dims": [], "dimensions": {},
-                "parse_ok": False, "error": str(e)[:200]}
-    parsed = parse_av_verdicts(reply)
+                "parse_ok": False, "error": agg["error"][:200]}
     return {
-        "drift_count": len(parsed["drift_dims"]),
-        "drift_dims": parsed["drift_dims"],
-        "dimensions": parsed["dimensions"],
-        "parse_ok": parsed["parse_ok"],
+        "drift_count": len(agg["drift_dims"]),
+        "drift_dims": agg["drift_dims"],
+        "dimensions": agg["dimensions"],
+        "parse_ok": agg["parse_ok"],
         "error": None,
+        # 方差透明（调用方可据 mean_agreement 判这次排序信号稳不稳）
+        "n_valid_samples": agg.get("n_valid_samples"),
+        "mean_agreement": agg.get("mean_agreement"),
+        "unstable_dims": agg.get("unstable_dims", []),
     }
 
 
@@ -465,8 +695,11 @@ def main() -> int:
     args = parser.parse_args()
 
     mode = _av_judge_mode()
+    n_samples = _n_samples()
     print(f"[av_judge] AV_JUDGE_MODE = {mode}"
-          f"（{'完全跳过 · 零回归' if mode == 'off' else 'shadow 只记录 · 不上报' if mode == 'shadow' else 'active · 走味维度作 advisory 上报'}）",
+          f"（{'完全跳过 · 零回归' if mode == 'off' else 'shadow 只记录 · 不上报' if mode == 'shadow' else 'active · 走味维度作 advisory 上报'}）"
+          f" · AV_JUDGE_N_SAMPLES = {n_samples}"
+          f"（{'单次 · 关聚合' if n_samples == 1 else f'{n_samples} 次重采样多数票聚合稳方差'}）",
           file=sys.stderr)
 
     # off（默认）：完全跳过——不构 prompt、不调 gen-model（共同纪律 2 · 零回归）
@@ -486,7 +719,6 @@ def main() -> int:
 
     author_text = _read_text(author_path)
     replica_text = _read_text(replica_path)
-    user_prompt = build_av_judge_prompt(author_text, replica_text, args.sample_limit)
 
     loader = GenModelLoader()
     try:
@@ -499,18 +731,19 @@ def main() -> int:
         _emit(report, args.out)
         return 0
 
-    try:
-        reply, profile, elapsed = call_gen_model(
-            loader, AV_JUDGE_SYSTEM_PROMPT, user_prompt, tag="av_judge")
-    except GenModelExhaustedError as e:
+    # 自一致性：N 次重采样 + 4 维多数票聚合（AV_JUDGE_N_SAMPLES 默认 3 · 1=退回单次）
+    t0 = time.time()
+    agg = self_consistency_judge(loader, author_text, replica_text,
+                                 args.sample_limit, n_samples=n_samples, tag="av_judge")
+    elapsed = time.time() - t0
+    if agg.get("error"):
         report = build_report(mode, None, str(author_path), str(replica_path),
-                              error=f"gen-model 全部失败: {str(e)[:300]}")
+                              error=f"gen-model 全部失败: {str(agg['error'])[:300]}")
         _emit(report, args.out)
         return 0  # advisory 不阻断
 
-    parsed = parse_av_verdicts(reply)
-    report = build_report(mode, parsed, str(author_path), str(replica_path),
-                          profile_name=profile.name, elapsed=elapsed)
+    report = build_report(mode, agg, str(author_path), str(replica_path),
+                          profile_name=active.name, elapsed=elapsed)
     _emit(report, args.out)
     return 0
 

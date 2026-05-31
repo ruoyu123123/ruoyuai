@@ -269,6 +269,21 @@ def _build_style_fingerprint_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _ctx_reorder_mode() -> str:
+    """写作上下文位置重排开关（env CTX_REORDER_MODE · 默认 active · P0）。
+
+    lost-in-the-middle / RoPE recency 实证：long-context 中段注意力最弱（U 型），
+    紧贴生成点（prompt 末尾）注意力最强。现状 build_prompt 把**第一权威风格 skill**
+    落在 U 型最低的中段，而紧贴生成点「现在请写正文」之前的是 manifest 事实索引
+    （非风格锚）→ 位置层北极星偏移。
+
+    active（默认）：把风格 skill + 语感种子锚移到 prev_ch 之后、「现在请写正文」之前
+                    （生成点近邻 RoPE 高位）；manifest 事实索引留中段。
+    off / shadow：保持原版 join 顺序（零回归回退路径）。
+    """
+    return (os.environ.get("CTX_REORDER_MODE") or "active").strip().lower()
+
+
 def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                  ch_end: int = None, target_cjk: str = None) -> tuple:
     """组装 system + user prompt
@@ -529,7 +544,57 @@ cluster_brief 完整内容：
     # 作者量化风格指纹段（PROFILE_INJECT_MODE=off/shadow 或无指纹时为空 → 不注入 · 零回归）
     style_fp_block = (style_fp_section + "\n\n") if style_fp_section else ""
 
-    user = f"""{task_intro}
+    # ── 风格 skill 段（第一权威）+ 语感种子锚 ──
+    style_skill_section = f"""## 风格 skill
+
+{style_skill}"""
+
+    # CTX_REORDER（P0 · 位置层北极星偏移修）：lost-in-the-middle / RoPE recency 实证——
+    # context 中段注意力最弱（U 型），紧贴生成点（prompt 末尾）注意力最强。
+    # 原版 join 把**第一权威风格 skill**落在中段最低注意力区，而紧贴生成点的是 manifest
+    # 事实索引（非风格锚）= 位置偏移。active 模式把风格 skill + 语感种子锚移到 prev_ch 之后、
+    # 「现在请写正文」之前的生成点近邻（RoPE 高位），manifest 事实索引留中段。
+    # 正交于 D1-D9 / snippet 种子（那些管「注什么内容」）——本开关只管「注在哪个位置」。
+    reorder_active = (_ctx_reorder_mode() == "active")
+    if reorder_active:
+        # 中段：cluster_blueprint + 人物卡 + 调研 cache + 用户偏好 + manifest（事实索引）
+        # 风格 skill + seed 锚下沉到 prev_ch 之后、生成点之前。
+        prev_then_anchor = f"""{prev_ch_section}
+
+{seed_block}{style_skill_section}"""
+        user = f"""{task_intro}
+{cluster_constraints_section}{style_fp_block}## cluster_blueprint（必落 anchors）
+
+```json
+{plan_text}
+```
+
+## 人物卡（必读 voice_pack）
+
+```json
+{char_card}
+```
+
+## 调研 cache（写作前必读 synthesis）
+
+{cache_text}
+
+## 用户偏好
+
+{pref}
+
+## manifest（数据库索引）
+
+{manifest}
+
+{prev_then_anchor}
+
+---
+
+# 现在请写正文"""
+    else:
+        # off / shadow：原版 join 顺序（零回归回退路径）
+        user = f"""{task_intro}
 {cluster_constraints_section}{style_fp_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
@@ -542,9 +607,7 @@ cluster_brief 完整内容：
 {char_card}
 ```
 
-## 风格 skill
-
-{style_skill}
+{style_skill_section}
 
 ## 调研 cache（写作前必读 synthesis）
 
@@ -562,7 +625,10 @@ cluster_brief 完整内容：
 
 ---
 
-# 现在请写正文
+# 现在请写正文"""
+
+    # 生成点尾部（两个 join 分支共用 · 紧贴生成点的指令 + 自查项）
+    gen_point_tail = f"""
 
 {"按 7 项硬铁律 + 元 anti-slop 防御 · 完整覆盖 cluster_brief 的所有 scene_storyboard 自由发挥（章数由 splitter 后期切，你不必管）。" if freestyle else f"按 7 项硬铁律 + 元 anti-slop 防御，写 {ch_end - ch_start + 1} 章完整故事块。"}
 
@@ -581,6 +647,8 @@ cluster_brief 完整内容：
 
 现在开始写。"""
 
+    user += gen_point_tail
+
     return system, user, seed_trace
 
 
@@ -597,10 +665,20 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
                 {"role": "user", "content": user}]
     if prior_assistant:
         messages.append({"role": "assistant", "content": prior_assistant})
-        messages.append({"role": "user",
-                         "content": "上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
-                                    "不要重复已经写过的内容、不要重新开头，直接续写后续正文"
-                                    "（如果正文已写完，就补上结尾的 CHANGES JSON 块）。"})
+        # CTX_REORDER（P0 · 位置层北极星偏移修）：截断续写回合原本只有「接着写别重复」，
+        # 风格 skill / 语感锚全落在最初那条 user（已被 prior_assistant 推到中段 U 型最低注意力区），
+        # 续写生成点近邻没有任何风格约束 → recency 漂移（越续越退化回通用 AI 腔）。
+        # 这里在续写指令里补一行**精简风格锚**（签名句长 / 对话格式 / 禁结构套话 3 条），
+        # 贴生成点 RoPE 高位重申最关键约束，防长草稿尾段风格崩塌。advisory 性质（不硬锁）。
+        cont_msg = ("上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
+                    "不要重复已经写过的内容、不要重新开头，直接续写后续正文"
+                    "（如果正文已写完，就补上结尾的 CHANGES JSON 块）。")
+        if _ctx_reorder_mode() == "active":
+            cont_msg += (
+                "\n\n续写仍须贴合作者风格档：① 句长 / 段长节奏沿用前文（别越写越碎或越堆长）；"
+                "② 对话格式与前文一致（同款引号、对话独行）；"
+                "③ 严禁结构性 AI 套话（与此同时 / 值得一提的是 / 不仅如此 / 事实上）。")
+        messages.append({"role": "user", "content": cont_msg})
     stream = client.chat.completions.create(
         model=profile.model, messages=messages, max_tokens=max_tokens,
         temperature=profile.temperature, stream=True,

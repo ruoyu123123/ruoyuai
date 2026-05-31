@@ -8,6 +8,9 @@
 4 个能力：
 1. evolve: 合并相似 (Jaccard > 0.6) + 提炼共性 + version+1
 2. promote: usage_count >= 5 + confidence >= 0.8 → 升 universal_skill_pool
+   · transfer_scope filter（2026-05-31 · 防跨项目负迁移）：升级前按 scope 过滤——
+     通用工艺（节奏/结构/钩子）才跨项目，作者 idiolect 特异（口癖/签名词/特有遣词/角色名）
+     锁本地。advisory（pattern 自带 transfer_scope 字段以其为准）· env 默认 active。
 3. retire: last_validated_at > N 章未触发 → 标 retired
 4. dashboard: skill 演化全景
 
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import defaultdict
@@ -241,34 +245,121 @@ def retire_by_cluster(project_root: Path, cluster_key: str, threshold_clusters: 
             "mode": "cluster", "current_cluster": cur_num, "threshold_clusters": threshold_clusters}
 
 
+# ── transfer_scope filter（防跨项目负迁移 · advisory · env 默认 active）──────────
+# 背景：promote() 旧实现「无差别升级」—— 任何 usage≥5 & confidence≥0.8 的 pattern 都升进
+# universal_skill_pool 跨项目复用。但「作者 A 的 idiolect 特异约束」（口癖/签名词/特有遣词/
+# 角色名硬编码）升上去会污染作者 B（负迁移 negative transfer）。北极星⑤不干涉模型判断：
+# 分类是 advisory 建议，pattern 自带显式 transfer_scope 字段时**以其为准**（作者档/模型权威优先）。
+#
+# 两类：
+#   · "universal" 通用工艺 —— 可跨项目升级（节奏/结构/钩子/场景衔接/冲突编排等与作者无关的写作技法）
+#   · "local"     作者 idiolect 特异 —— 锁本地不跨（口癖/签名词/特有用词/具体角色名）
+
+# idiolect 特异信号：category 命中（语义子类）/ 文本命中（关键词）→ 锁本地
+_IDIOLECT_CATEGORIES = {
+    "idiolect", "voice", "voice_dna", "catchphrase", "diction", "lexical",
+    "用词", "遣词", "口癖", "签名词", "声口", "腔调",
+}
+# 文本里出现这些词 → 作者特异（具体口头禅 / 个人化遣词 / 命名硬编码）
+_IDIOLECT_TEXT_MARKERS = (
+    "口癖", "签名词", "口头禅", "招牌词", "特有用词", "惯用词", "遣词",
+    "作者特有", "作者标志", "本作专属", "专有名词", "角色名", "人名",
+    "catchphrase", "idiolect", "signature word", "verbal tic",
+)
+# 通用工艺信号：category 命中 → 倾向 universal（用于显式正向判定，仅辅助）
+_UNIVERSAL_CATEGORIES = {
+    "rhythm", "pacing", "structure", "hook", "plot", "conflict", "scene",
+    "transition", "tension", "节奏", "结构", "钩子", "情节", "冲突", "场景", "悬念",
+}
+
+
+def classify_transfer_scope(pattern: dict) -> str:
+    """把一条 pattern 分类为 'universal'（可跨项目升级）或 'local'（作者 idiolect 锁本地）。
+
+    优先级（advisory · 不干涉模型判断）：
+      1. pattern 自带显式 transfer_scope ∈ {universal, local} → 直接采纳（作者档/模型权威）。
+      2. idiolect 信号命中（category 或文本关键词）→ 'local'（保守锁本地，防负迁移）。
+      3. 通用工艺 category 命中 → 'universal'。
+      4. 都不命中 → 默认 'universal'（保持向后兼容：旧 promote 全升，新增过滤只拦明确特异项）。
+    """
+    if not isinstance(pattern, dict):
+        return "universal"
+    explicit = pattern.get("transfer_scope")
+    if isinstance(explicit, str) and explicit.strip().lower() in ("universal", "local"):
+        return explicit.strip().lower()
+
+    cat = (pattern.get("category") or "").strip().lower()
+    if cat in _IDIOLECT_CATEGORIES:
+        return "local"
+
+    # 文本信号：trigger / technique / description / name / why_works 拼起来扫 idiolect marker
+    blob = " ".join(str(pattern.get(k, "")) for k in
+                     ("trigger", "technique", "description", "name", "why_works")).lower()
+    if any(m in blob for m in _IDIOLECT_TEXT_MARKERS):
+        return "local"
+
+    if cat in _UNIVERSAL_CATEGORIES:
+        return "universal"
+    return "universal"
+
+
+def _transfer_scope_filter_active() -> bool:
+    """env 默认 active。SKILL_TRANSFER_SCOPE_FILTER=0/false/off/no → 关（回退旧无差别升级）。"""
+    v = os.environ.get("SKILL_TRANSFER_SCOPE_FILTER", "1").strip().lower()
+    return v not in ("0", "false", "off", "no", "")
+
+
 def promote(project_root: Path) -> dict:
-    """高 usage + 高 confidence pattern 升 universal_skill_pool（跨项目）"""
+    """高 usage + 高 confidence pattern 升 universal_skill_pool（跨项目）。
+
+    2026-05-31 transfer_scope filter：升级前按 scope 过滤 —— 通用工艺才跨项目，作者
+    idiolect 特异锁本地（防负迁移）。filter env 默认 active；关掉则回退旧无差别升级。
+    分类是 advisory，pattern 自带 transfer_scope 字段时以其为准（不干涉模型/作者档判断）。
+    """
     exp_path = project_root / "_数据库" / "写作经验.json"
     exp = load_json(exp_path, {})
     pool_path = Path(__file__).parent.parent / "claude-home" / "universal_skill_pool.json"
     pool = load_json(pool_path, {"universal_patterns": [], "_meta": {"created_at": datetime.now().isoformat(timespec="seconds")}})
 
+    filter_active = _transfer_scope_filter_active()
     promoted_ids = []
+    locked_local = []  # 达标但 scope=local 被锁本地的（advisory 上报，不重复评估）
     for category in ["success_patterns", "failure_patterns"]:
         for p in exp.get(category, []) or []:
             if not isinstance(p, dict):
                 continue
             usage = p.get("usage_count", 0)
             conf = p.get("confidence", 0)
-            if usage >= 5 and conf >= 0.8 and not p.get("promoted_to_universal"):
-                # 复制到 pool
-                universal_entry = dict(p)
-                universal_entry["category"] = category
-                universal_entry["source_project"] = exp_path.parent.parent.name
-                universal_entry["promoted_at"] = datetime.now().isoformat(timespec="seconds")
-                pool["universal_patterns"].append(universal_entry)
-                p["promoted_to_universal"] = True
-                promoted_ids.append(p.get("id") or p.get("name", "?"))
+            if not (usage >= 5 and conf >= 0.8 and not p.get("promoted_to_universal")):
+                continue
+            scope = classify_transfer_scope(p)
+            if filter_active and scope == "local":
+                # 锁本地：标记一次，避免每轮重复评估；不升进 pool（防负迁移）
+                if not p.get("transfer_scope_locked"):
+                    p["transfer_scope"] = "local"
+                    p["transfer_scope_locked"] = True
+                    p["transfer_scope_locked_at"] = datetime.now().isoformat(timespec="seconds")
+                    locked_local.append(p.get("id") or p.get("name", "?"))
+                continue
+            # 复制到 pool（universal · 或 filter 关闭时无差别升）
+            universal_entry = dict(p)
+            universal_entry["category"] = category
+            universal_entry["source_project"] = exp_path.parent.parent.name
+            universal_entry["promoted_at"] = datetime.now().isoformat(timespec="seconds")
+            universal_entry["transfer_scope"] = "universal"
+            pool["universal_patterns"].append(universal_entry)
+            p["promoted_to_universal"] = True
+            p.setdefault("transfer_scope", "universal")
+            promoted_ids.append(p.get("id") or p.get("name", "?"))
 
-    if promoted_ids:
-        save_json(pool_path, pool)
+    if promoted_ids or locked_local:
+        if promoted_ids:
+            save_json(pool_path, pool)
         save_json(exp_path, exp)
-    return {"promoted_count": len(promoted_ids), "promoted_ids": promoted_ids, "pool_total": len(pool["universal_patterns"])}
+    return {"promoted_count": len(promoted_ids), "promoted_ids": promoted_ids,
+            "pool_total": len(pool["universal_patterns"]),
+            "transfer_scope_filter": "active" if filter_active else "off",
+            "locked_local_count": len(locked_local), "locked_local_ids": locked_local}
 
 
 def dashboard(project_root: Path) -> dict:

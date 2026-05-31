@@ -98,6 +98,13 @@
       "_new": true,
       "issues_emitted": ["POV_CROSS_SCENE_VIOLATION"]
     },
+    "scene_seam": {
+      "layer": "cluster",
+      "script": "scene_seam_scanner.py",
+      "doc": "[2026-05-31 新增] 场景/段落衔接手法分布对账 · 闭环『教了输出不查』· 正文衔接手法(纯规则中文标志词:时间/空间/因果/钩子/动作承接/对话/心理/分隔符/硬切+AI套话连接)分布 vs 作者蒸馏衔接手法分布(transition_method(s)_distribution+connection_type_distribution+never_transitions) · advisory · env SEAM_SCANNER_MODE 默认 active(AI套话轴上浮·L1全分布仅记录不上浮防矫枉过正·2真作者实证过) · 零依赖纯规则不碰黑箱",
+      "_new": true,
+      "issues_emitted": ["SEAM_DISTRIBUTION_DRIFT"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",

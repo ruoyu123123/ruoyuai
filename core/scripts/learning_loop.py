@@ -24,6 +24,19 @@ v17 的"经验沉淀"链路三方字段名不一致、且 save-state 第 8 步�
   - 结果写入 写作经验.json 的 tool_calibration_suggestions 段，供后续人工/工具迭代参考。
 hard_gate 项不会出现在 waived_issues（audit_hub 强制忽略其豁免），故天然不进统计。
 
+【efficacy 闭环 — 约束注入有效性追踪 + 无效自动停注（2026-05-31 · 对照 self_heal regression 范式）】
+原 learning_loop 是**开环**：把复发问题升级成 recur_* failure_pattern 注入下章 writer
+（confidence>=0.5 → build_manifest 无条件注入），但从不验证「注入这条约束后该问题的后续误报是否真降」。
+无效约束（注入后误报没降/反升）会被 confidence=0.95 持续注入，污染 writer prompt。本层闭合
+复盘→改进环（与第 6 轮 holdout 正交：holdout 测蒸馏复刻泛化，这里测约束注入有效性）：
+  1. 约束首次升级（_escalate_recurring）→ _record_efficacy_baseline 记基线（注入前复发率 +
+     注入时已见章集合 baseline_chapters）；基线锚最早注入点·重升级不重置。
+  2. 后续每次 ingest/scan → evaluate_efficacy 算「注入后窗口」（章号 > 基线最大章）的复发率：
+     注入后真正跑过的章数（observed·分母）攒够 EFFICACY_MIN_POST_CHAPTERS 才判（不冤判）。
+  3. 注入后复发率没降（>= 基线 · 含反升）→ 标 ineffective + 该 failure_pattern active=False
+     → build_manifest 不再注入下章 writer（停注）。advisory 软停（不硬删 pattern·保留供人工
+     复核 / 手动 active=true 复活·北极星⑤）。effective 不抖动回退·ineffective 维持停注。
+
 【权威数据结构】_数据库/写作经验.json
   {
     "success_patterns": [ {id,category,trigger,technique,why_works,confidence,source_chapters,scene_types,example_quote} ],
@@ -76,6 +89,19 @@ DECAY_DAYS = 14       # pattern 超过 N 天未强化 → confidence *= 0.8
 CONSECUTIVE_ESCALATE = 2
 # v19 豁免阈值：同一 advisory code 被豁免 N 次 -> 产出工具校准建议（V19_PLAN 2.5 建议 N=3）
 WAIVER_CALIBRATION_THRESHOLD = 3
+
+# ── efficacy 闭环（2026-05-31 · 对照 self_heal_engine regression 范式）──
+# 开环问题：learning_loop 把复发问题升级成 recur_* failure_pattern 注入下章 writer，
+# 但从不验证「注入这条约束后，该问题的后续误报是否真降」。无效约束（注入后误报没降/反升）
+# 会被 confidence=0.95 持续注入，污染 writer prompt。此层闭合复盘→改进环：
+#   1. 约束升级时记基线（escalate 当时的复发率 = count / 已见章数）；
+#   2. 后续每次 ingest/scan 评估「升级后新增章节」里该约束的复发率；
+#   3. 注入后复发率没降（>= 基线 · 且攒够最小评估证据）→ 标 ineffective + active=False（停注）。
+# advisory：active=False 是「建议停注」软停（不硬删 pattern·北极星⑤），保留供人工复核 / 反转。
+# EFFICACY_MIN_POST_CHAPTERS：升级后至少新见 N 章（够独立验证）才下「无效」判定（够样本·不冤判）。
+EFFICACY_MIN_POST_CHAPTERS = 2
+# 允许的相对改善容差：post_rate <= pre_rate*(1-TOL) 才算「真降」；否则视为没降（保守判无效）。
+EFFICACY_IMPROVE_TOLERANCE = 0.0   # 0 = 只要没升就不算无效（严格要求「真降」可调 >0）
 
 # ── L2-1（2026-05-30）：把 adjust_threshold 文本建议升级成【量化幅度】供 PID 反馈消费 ──
 # 反复豁免的 advisory code → 映射到被控的 4 个连续阈值键（与 pid_threshold_tuner._CONTROLLED_KEYS
@@ -161,10 +187,11 @@ def _experience_path(project_root: Path) -> Path:
 
 
 def _empty_experience() -> dict:
-    """权威结构的空骨架（含 v19 豁免统计段）。"""
+    """权威结构的空骨架（含 v19 豁免统计段 + efficacy 闭环段）。"""
     return {"success_patterns": [], "failure_patterns": [], "preferences": [],
             "tool_calibration_suggestions": [],
-            "_recurrence_tracker": {}, "_waiver_tracker": {}}
+            "_recurrence_tracker": {}, "_waiver_tracker": {},
+            "_efficacy_tracker": {}}
 
 
 def load_experience(project_root: Path) -> dict:
@@ -184,6 +211,7 @@ def load_experience(project_root: Path) -> dict:
     data.setdefault("tool_calibration_suggestions", [])  # v19 豁免统计产出
     data.setdefault("_recurrence_tracker", {})
     data.setdefault("_waiver_tracker", {})               # v19 豁免计数内部状态
+    data.setdefault("_efficacy_tracker", {})             # efficacy 闭环内部状态（2026-05-31）
     if legacy_entries:
         for e in legacy_entries:
             _route_entry(data, e)
@@ -580,10 +608,18 @@ def ingest_audit(project_root: Path, audit_path: Path) -> dict:
     waived_codes = _track_waivers(exp, project_root, audit, ch)
     calib = _build_calibration_suggestions(exp, only_codes=waived_codes)
 
+    # efficacy 闭环：评估已升级约束「注入后复发率是否真降」→ 无效约束自动停注（advisory）。
+    # --ingest 拿不到全章集 → observed_chapters=None 退化为「只看复发章」（保守·偏向继续注入）。
+    ineffective = evaluate_efficacy(exp, observed_chapters=None)
+
     save_experience(project_root, exp)
 
     print(f"[ingest] 第{ch}章 audit 报告已吸收，{len(seen_keys)} 类问题入复发追踪"
           f"，{len(waived_codes)} 类豁免入豁免追踪")
+    if ineffective:
+        print(f"[ingest] EFFICACY {len(ineffective)} 条约束注入后误报未降 -> 自动停注（advisory）：")
+        for x in ineffective:
+            print(f"  - {x['pattern_id']}（基线 {x['baseline_rate']} -> 注入后 {x['post_rate']}）")
     if calib:
         print(f"[ingest] CALIB {len(calib)} 类检测项反复被豁免，已产出工具校准建议：")
         for c in calib:
@@ -593,7 +629,8 @@ def ingest_audit(project_root: Path, audit_path: Path) -> dict:
         print(f"[ingest] WARN {len(escalated)} 类问题命中复发阈值，已升级为 failure_pattern：")
         for e in escalated:
             print(f"  - {e['trigger']}（已连续/累计 {e['_recurrence']} 章）")
-    return {"escalated": escalated, "calibration": calib, "ch": ch}
+    return {"escalated": escalated, "calibration": calib,
+            "ineffective": ineffective, "ch": ch}
 
 
 def _is_consecutive(chapters: list, n: int) -> bool:
@@ -628,6 +665,10 @@ def _escalate_recurring(exp: dict, only_keys=None) -> list:
         # （如 结构::NARRATIVE_pov 与 结构::PLOT_beat 都属"结构"维度，不能混为一谈）
         dim = rec.get("dimension", "?")
         code = key.split("::", 1)[1] if "::" in key else key
+        # efficacy 闭环：保留已有 pattern 的 active 标记。若之前已被判 ineffective→停注
+        # （active=False），覆盖刷新时**不**复活它——否则停注的无效约束又被注入（前功尽弃）。
+        prev = next((x for x in fp if x.get("id") == pattern_id), None)
+        prev_active = prev.get("active") if isinstance(prev, dict) else None
         entry = {
             "id": pattern_id,
             "category": "failure",
@@ -642,12 +683,126 @@ def _escalate_recurring(exp: dict, only_keys=None) -> list:
             "severity": "约束升级" if consecutive else "高频警示",
             "_recurrence": rec["count"],
         }
+        if prev_active is False:
+            entry["active"] = False  # 已判无效·维持停注（advisory·人工复核可手动改回 true）
+            if isinstance(prev, dict) and prev.get("efficacy"):
+                entry["efficacy"] = prev["efficacy"]
+        # efficacy 闭环：首次升级该 key → 记基线（注入前的复发率 + 当前已见章），
+        # 供后续 evaluate_efficacy 对照「注入后的复发率是否真降」。重升级不重置基线
+        # （基线必须锚在最早的注入点，否则后续误报被算进基线就永远「没复发」假象）。
+        _record_efficacy_baseline(exp, key, pattern_id, rec)
         # 同 id 覆盖刷新
         fp[:] = [x for x in fp if x.get("id") != pattern_id]
         _stamp_updated(entry)  # P2-5：盖时间戳
         fp.append(entry)
         escalated.append(entry)
     return escalated
+
+
+# ============ efficacy 闭环：约束注入有效性追踪 + 无效自动停注 ============
+
+def _recur_rate(count: int, chapters) -> float:
+    """复发率 = 复发次数 / 涉及的不同章节数（每章每类只计一次·见 ingest 去重）。
+    章数为 0 时返回 0.0（无样本）。"""
+    n = len(set(chapters)) if chapters else 0
+    return (count / n) if n else 0.0
+
+
+def _record_efficacy_baseline(exp: dict, key: str, pattern_id: str, rec: dict) -> None:
+    """约束首次升级时记基线：注入前复发率 + 注入「点」之前的复发章集合（baseline_chapters）。
+    幂等：已有基线则不覆盖（基线锚最早注入点·北极星⑥不复杂化）。
+
+    基线锚「阈值刚被跨过」的那一刻——而非「当前已见的所有章」。否则 --scan-recurring 全量重建
+    时 rec.chapters 一次性灌入全部历史章，base_max 会等于最后一章 → 注入后窗口恒为空（永不评估）。
+    阈值跨越点 = 排序后第 RECUR_THRESHOLD 章（chapters[RECUR_THRESHOLD-1]）；该点及之前算「注入前」，
+    之后的章才算「注入后」（约束真正开始注入下章 writer 的窗口）。"""
+    et = exp.setdefault("_efficacy_tracker", {})
+    if pattern_id in et:
+        return  # 已有基线·重升级不重置
+    all_chs = sorted(set(rec.get("chapters", [])))
+    # 注入前 = 阈值跨越点及之前的章（约束尚未生效·这些复发不该算进有效性评估）
+    cross_idx = min(RECUR_THRESHOLD, len(all_chs)) - 1
+    baseline_chapters = all_chs[:cross_idx + 1] if cross_idx >= 0 else all_chs
+    baseline_count = len(baseline_chapters)
+    et[pattern_id] = {
+        "key": key,
+        "baseline_count": baseline_count,
+        "baseline_chapters": baseline_chapters,
+        "baseline_rate": round(_recur_rate(baseline_count, baseline_chapters), 4),
+        "escalated_at": _now(),
+        "status": "monitoring",                # monitoring → effective / ineffective
+    }
+
+
+def evaluate_efficacy(exp: dict, observed_chapters=None) -> list:
+    """对照 self_heal regression 范式：逐条已升级约束评估「注入后复发率是否真降」。
+
+    observed_chapters：本闭环已观察到的全部章号集合（注入后到底跑了多少章·分母）。
+      · --scan-recurring 传所有扫到的章；--ingest 不易知全集 → 传 None 退化为「只看复发章」。
+    注入后窗口（章号 > 基线最大章 的部分）：
+      · post_observed = 注入后真正跑过的章数（分母·有 observed_chapters 时用它，更准）；
+      · post_recur    = 注入后该约束仍复发的章数（分子）。
+    判定（仅当 post_observed >= EFFICACY_MIN_POST_CHAPTERS·够样本才判·否则维持 monitoring）：
+      · post_rate(=post_recur/post_observed) < baseline_rate*(1-TOL) → effective（误报真降·继续注入）；
+      · 否则（没降 / 反升）→ ineffective + 该 failure_pattern active=False（停注·advisory 软停）。
+    终态不抖动：effective 不回退·ineffective 维持停注（人工复核可手动 active=true 复活）。
+    返回本轮新判 ineffective 的约束列表（供报告 + exit code）。"""
+    et = exp.get("_efficacy_tracker", {})
+    tracker = exp.get("_recurrence_tracker", {})
+    fp = exp.get("failure_patterns", [])
+    fp_by_id = {x.get("id"): x for x in fp if isinstance(x, dict)}
+    obs = set(observed_chapters) if observed_chapters else None
+    newly_ineffective = []
+    for pattern_id, eff in et.items():
+        if eff.get("status") in ("effective", "ineffective"):
+            continue  # 终态不重判（ineffective 维持停注·effective 不抖动回退）
+        rec = tracker.get(eff.get("key"))
+        if not rec:
+            continue  # 该 key 已不在追踪（被全量重建剔除）→ 留 monitoring·下轮再说
+        baseline_chs = set(eff.get("baseline_chapters", []))
+        base_max = max(baseline_chs) if baseline_chs else -1
+        # 注入后复发章：升级后才出现的复发（章号 > 基线最大章）
+        post_recur_chs = sorted(c for c in set(rec.get("chapters", [])) if c > base_max)
+        post_recur = len(post_recur_chs)
+        # 注入后真正跑过的章数（分母）：有全集就用全集里 > base_max 的；否则退化用复发章数
+        if obs is not None:
+            post_observed = len([c for c in obs if c > base_max])
+        else:
+            post_observed = post_recur
+        eff["post_recur_chapters"] = post_recur_chs
+        eff["post_observed"] = post_observed
+        if post_observed < EFFICACY_MIN_POST_CHAPTERS:
+            continue  # 证据不足·维持 monitoring（不冤判）
+        post_rate = round(post_recur / post_observed, 4) if post_observed else 0.0
+        eff["post_rate"] = post_rate
+        eff["evaluated_at"] = _now()
+        baseline_rate = float(eff.get("baseline_rate", 0.0))
+        threshold = baseline_rate * (1.0 - EFFICACY_IMPROVE_TOLERANCE)
+        if post_rate < threshold or (post_rate == 0.0 and baseline_rate > 0):
+            eff["status"] = "effective"  # 误报真降 / 消失 → 约束有效·继续注入
+        else:
+            # 没降 / 反升 → 无效约束·停注（advisory 软停·不硬删）
+            eff["status"] = "ineffective"
+            eff["stopped_at"] = _now()
+            pat = fp_by_id.get(pattern_id)
+            if isinstance(pat, dict):
+                pat["active"] = False
+                pat["efficacy"] = {
+                    "verdict": "ineffective",
+                    "baseline_rate": baseline_rate,
+                    "post_rate": post_rate,
+                    "post_recur_chapters": post_recur_chs,
+                    "note": (f"注入后该问题复发率未下降（基线 {baseline_rate} → 注入后 "
+                             f"{post_rate}）→ 约束无效·已自动停注（advisory·人工复核后可手动 "
+                             "active=true 复活）"),
+                    "stopped_at": eff["stopped_at"],
+                }
+            newly_ineffective.append({
+                "pattern_id": pattern_id, "key": eff.get("key"),
+                "baseline_rate": baseline_rate, "post_rate": post_rate,
+                "post_recur_chapters": post_recur_chs,
+            })
+    return newly_ineffective
 
 
 # ============ 模式 3：--scan-recurring（跨章扫描）============
@@ -776,6 +931,10 @@ def scan_recurring(project_root: Path) -> dict:
     #      先清空旧建议——以历史报告为准，避免已不复现的建议残留。
     exp["tool_calibration_suggestions"] = []
     calib = _build_calibration_suggestions(exp, only_codes=None)
+    # efficacy 闭环：全量重建后评估约束注入有效性（scanned_chapters = 注入后真正跑过的全章集·
+    # 最准的分母）→ 无效约束自动停注（advisory）。_efficacy_tracker 基线**不随全量重建清空**
+    # （基线锚最早注入点·重建只重算 recurrence_tracker）。
+    ineffective = evaluate_efficacy(exp, observed_chapters=scanned_chapters)
     exp["_meta_problems"] = meta_problems
     # P2-5：时间维度衰减 + 过期清理 —— 在 escalate 之后跑，让本轮新刷的 pattern
     # 拿到新鲜的 updated_at；旧 pattern 若长期未被强化则衰减/清理。
@@ -816,10 +975,15 @@ def scan_recurring(project_root: Path) -> dict:
         for d in time_prune["decayed"]:
             print(f"  - [{d['category']}] {d['id']} (age={d['age_days']}d): "
                   f"{d['from']} → {d['to']}")
-    if not escalated and not meta_problems and not calib and not time_prune["pruned"] and not time_prune["decayed"]:
-        print("  暂无复发问题 / 反复豁免 / 过期 pattern，写作经验库健康。")
+    if ineffective:
+        print(f"EFFICACY {len(ineffective)} 条约束注入后误报未降 -> 自动停注（advisory · 人工可复活）：")
+        for x in ineffective:
+            print(f"  - {x['pattern_id']}（基线复发率 {x['baseline_rate']} -> 注入后 {x['post_rate']}）")
+    if (not escalated and not meta_problems and not calib and not ineffective
+            and not time_prune["pruned"] and not time_prune["decayed"]):
+        print("  暂无复发问题 / 反复豁免 / 无效约束 / 过期 pattern，写作经验库健康。")
     return {"escalated": escalated, "meta_problems": meta_problems,
-            "calibration": calib, "time_prune": time_prune}
+            "calibration": calib, "ineffective": ineffective, "time_prune": time_prune}
 
 
 # ============ CLI ============
@@ -853,12 +1017,13 @@ def main():
         if not ap.is_absolute():
             ap = project_root / ap
         result = ingest_audit(project_root, ap)
-        # exit 1 = 检测到复发问题已升级约束，或反复豁免已产出工具校准建议（都值得调用方关注）
-        sys.exit(1 if (result.get("escalated") or result.get("calibration")) else 0)
+        # exit 1 = 检测到复发问题已升级约束 / 反复豁免已产出校准建议 / 无效约束自动停注（都值得关注）
+        sys.exit(1 if (result.get("escalated") or result.get("calibration")
+                       or result.get("ineffective")) else 0)
     elif "--scan-recurring" in args:
         result = scan_recurring(project_root)
         sys.exit(1 if (result.get("escalated") or result.get("meta_problems")
-                       or result.get("calibration")) else 0)
+                       or result.get("calibration") or result.get("ineffective")) else 0)
     else:
         print("[FATAL] 需指定 --merge-reflection / --ingest / --scan-recurring", file=sys.stderr)
         print(__doc__)

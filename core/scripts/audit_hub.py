@@ -515,6 +515,33 @@ def _parse_cross_scene_voice_drift(stdout: str) -> list:
     return issues
 
 
+def _parse_scene_seam(stdout: str) -> list:
+    """scene_seam_scanner：顶层 issues[]，每条 code=SEAM_DISTRIBUTION_DRIFT + gate_level=advisory
+    + detail（非 msg/desc）。shadow/off 模式 issues 永远空 → 不产 issue（零回归）。
+    SEAM_DISTRIBUTION_DRIFT **不在 HARD_GATE_CODES** → _gate_level_for 必判 advisory（北极星 5：
+    顾问非法官 · 衔接手法偏好走 advisory 可豁免 · 绝不进 hard_gate）。"""
+    issues = []
+    report = _load_scanner_json(stdout)
+    if not report:
+        return issues
+    for it in report.get("issues", []) or []:
+        if not isinstance(it, dict):
+            continue
+        code = it.get("code", "")
+        if not code:
+            continue
+        severity = _norm_severity(it.get("severity", report.get("severity", "warning")))
+        desc = it.get("detail", "") or it.get("msg", "") or it.get("desc", "")
+        issues.append({
+            "dimension": "风格", "severity": severity,
+            "gate_level": _gate_level_for(code, severity),  # 永远 advisory（不在 HARD_GATE_CODES）
+            "code": code, "desc": str(desc),
+            "source": "scene_seam_scanner", "fix_hint": "",
+            "waived": False, "waive_reason": "",
+        })
+    return issues
+
+
 def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: str) -> list:
     """narrative_short_sentence / repeat_noun_density：violations[]（无 per-item code），
     顶层 gate_level=advisory。每条 violation 的 severity 为 major/minor（映射 error/warning）。
@@ -948,6 +975,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     fhs = _SCRIPT_DIR / "foreshadowing_handoff_scanner.py"
     lfcs = _SCRIPT_DIR / "locked_fact_cross_scene_scanner.py"
     povs = _SCRIPT_DIR / "pov_consistency_scanner.py"
+    # 「输入教了输出要查」闭环：作者衔接手法分布对账（cluster · advisory · 永不 hard_gate）
+    sseam = _SCRIPT_DIR / "scene_seam_scanner.py"
     # L2 防御：章末 cliffhanger 锚定扫描（cluster_001 ch4 三次翻车 sediment）
     ceas = _SCRIPT_DIR / "chapter_end_anchor_scan.py"
 
@@ -1025,6 +1054,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
                      out, "pov_consistency_scanner", "视角")),
+                # 「输入教了输出要查」闭环：衔接手法分布 vs 作者蒸馏档对账（advisory · 永不 hard_gate）。
+                # 传 --style 走作者基线 + --project 兜底定位 作者风格_FINAL.json；SEAM_SCANNER_MODE 默认 active。
+                ("scene_seam",
+                 [sys.executable, str(sseam), str(cluster_draft),
+                  "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_scene_seam(out)),
             ])
         # L2 防御：章末锚定扫描 · 仅在切章后 (有 第NNN章 文件) 才跑
         # 检测是否已切章

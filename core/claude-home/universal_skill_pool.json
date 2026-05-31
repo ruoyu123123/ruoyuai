@@ -11,10 +11,12 @@
     "source_project": "原项目名",
     "promoted_at": "升级到 universal 时间",
     "applicable_genres": "[中文都市/玄幻/科幻/...]",
+    "transfer_scope": "universal（通用工艺·才会进本池） | local（作者 idiolect 特异·锁本地不跨）",
     "version / confidence / usage_count": "复用 skill_evolver 字段"
   },
+  "_transfer_scope": "2026-05-31：promote 前按 transfer_scope 过滤防跨项目负迁移。通用工艺（节奏/结构/钩子/场景衔接/冲突编排）才跨项目升进本池；作者 idiolect 特异（口癖/签名词/特有遣词/角色名）锁本地不跨。分类 advisory，pattern 自带 transfer_scope 字段以其为准。env SKILL_TRANSFER_SCOPE_FILTER 默认 active，=0 回退旧无差别升级。",
   "_consumption_chain": {
-    "produced_by": "skill_evolver.promote()（usage>=5+confidence>=0.8 自动）",
+    "produced_by": "skill_evolver.promote()（usage>=5+confidence>=0.8 自动 · transfer_scope=universal 才升）",
     "consumed_by": [
       "新项目 /outline 启动时 retrieve 相似题材 patterns 注入初始 writer prompt",
       "/wizard 命令推荐时引用 universal patterns 提示题材选择"

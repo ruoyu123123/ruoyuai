@@ -338,7 +338,11 @@ class DatabaseScanner:
             if not e_scenes or not scene_types or e_scenes & scene_types:
                 out.append(e)
         # 失败模式：对所有章节都该警示，无条件收（仅过滤低置信）
+        # efficacy 闭环（2026-05-31）：active==False 的约束 = 注入后误报没降 → 已自动停注
+        # （advisory 软停·learning_loop 标记·不硬删·北极星⑤）。此处不再注入下章 writer。
         for e in exp.get("failure_patterns", []):
+            if e.get("active") is False:
+                continue
             if e.get("confidence", 0) >= 0.5:
                 out.append(e)
         return out
