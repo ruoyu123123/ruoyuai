@@ -942,6 +942,38 @@ def _attribute_to_skill_section(sections: list, keywords) -> "dict | None":
             "excerpt": best["body"].strip()[:200]}
 
 
+def _collect_live_drift_findings(project_root: Path) -> list:
+    """次通道 source-2 接线：in-process 复跑 cross_cluster_style_drift_scanner.scan()
+    取本项目当前的 LONGRANGE_STYLE_DRIFT advisory findings（复用 build_drift_curve /
+    build_drift_findings·不起 subprocess、不解析 stdout——scanner main() 只把摘要打 stdout
+    不落 JSON，捕 stdout 脆且会漏巨大正文）。
+
+    findings 同时取 active 模式的 report['issues'] 与 shadow 模式的 report['shadow_findings']：
+    scanner 的 shadow/active 闸只控「是否进 audit_hub exit code」，**不该屏蔽 credit-assignment
+    的归因信号**——长程漂移对 reflect 归因永远是有效证据（北极星⑤ advisory 不黑箱）。
+
+    全防御：scanner 不可导入 / 样本不足 / scan 抛错 → 返回 []（降级·绝不打断 learning 流水线·
+    北极星⑥不复杂化）。code 恒 advisory（scanner 已双保险强制 · 这里不再改 gate）。"""
+    try:
+        import cross_cluster_style_drift_scanner as ccsd  # type: ignore
+    except Exception:
+        return []
+    try:
+        report = ccsd.scan(Path(project_root))
+    except Exception:
+        # scanner 内部任何异常（缺依赖 / 文本编码 / 相似度模型 offline）都不该让 reflect 崩
+        return []
+    if not isinstance(report, dict):
+        return []
+    findings = []
+    for key in ("issues", "shadow_findings"):
+        v = report.get(key)
+        if isinstance(v, list):
+            findings.extend(f for f in v if isinstance(f, dict)
+                            and f.get("code") in _STYLE_CODE_ATTRIB)
+    return findings
+
+
 def _collect_persistent_style_failures(exp: dict, drift_findings=None) -> dict:
     """汇总「持续风格偏离」证据：
       · 来源 1：_recurrence_tracker 里 STYLE_* code 复发 >= REFLECT_RECUR_THRESHOLD 章；
@@ -987,10 +1019,21 @@ def reflect_attribution(project_root: Path, drift_findings=None) -> list:
     持续风格失败 → 反射归因到 skill_vN.md 的**具体标题段落** → 产 advisory 改写建议
     （写 写作经验.json.skill_rewrite_suggestions·非自动改 skill·给人/复盘消费）。
 
+    drift_findings 语义（次通道 source-2 接线·2026-05-31）：
+      · None（默认·两个真实调用点 --scan-recurring / --reflect-attribution 都这么传）
+        → in-process 复跑 cross_cluster scanner 自动收集 LONGRANGE_STYLE_DRIFT findings；
+      · 显式 list（含 []）→ 直接当证据用（[] = 明示「无长程漂移」·测试/外部编排可覆盖·不再 live 扫）。
+
     幂等：同 code 覆盖刷新（重跑同证据不产重复）。返回本轮产出的建议列表。
     env LL_REFLECT_ATTRIB=off → 跳过（返回 []·不动文件）。"""
     if not _reflect_enabled():
         return []
+    # source-2 接线：未显式传 drift_findings 时自动 live 收集（让两个真实调用点拿到长程漂移证据）。
+    if drift_findings is None:
+        drift_findings = _collect_live_drift_findings(project_root)
+        if drift_findings:
+            print(f"[reflect-attrib] 自动收集到 {len(drift_findings)} 条跨 cluster 长程漂移 advisory "
+                  f"findings（source-2·in-process scan）")
     exp = load_experience(project_root)
     failures = _collect_persistent_style_failures(exp, drift_findings)
     if not failures:

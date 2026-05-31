@@ -224,6 +224,123 @@ def test_longrange_drift_finding_attributed():
         assert "文风" in s["style_dimension"]
 
 
+# ═══════════════ 6b. source-2 自动接线：reflect_attribution(None) live 收集长程漂移 ═══════════════
+# 两个真实调用点（scan_recurring / --reflect-attribution）都以 drift_findings=None 调用 →
+# reflect_attribution 内部应 in-process 复跑 cross_cluster scanner 自动抓 LONGRANGE_STYLE_DRIFT。
+# 用 monkeypatch 桩住 scanner.scan（不依赖真 embedding / 真 cluster 草稿·测纯接线逻辑）。
+
+def _patch_scanner_scan(report):
+    """把 cross_cluster_style_drift_scanner.scan 临时替换成返回固定 report 的桩。返回 restore()。"""
+    import cross_cluster_style_drift_scanner as ccsd
+    orig = ccsd.scan
+    ccsd.scan = lambda pr, **kw: report
+
+    def restore():
+        ccsd.scan = orig
+    return restore
+
+
+_FAKE_DRIFT = {"code": "LONGRANGE_STYLE_DRIFT", "gate_level": "advisory",
+               "severity": "advisory", "metric": {"n_points": 5, "last": 0.42},
+               "message": "跨 cluster 长程作者文风漂移：相似度单调下行"}
+
+
+def test_default_none_autocollects_drift_from_shadow_findings():
+    """drift_findings=None（两真实调用点的传法）→ 自动收集 scanner shadow_findings 里的漂移 →
+    产 longrange_drift 来源的 advisory 建议。证明 source-2 在 live 默认路径上接通。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d))
+        restore = _patch_scanner_scan(
+            {"mode": "shadow", "issues": [], "shadow_findings": [dict(_FAKE_DRIFT)]})
+        try:
+            produced = ll.reflect_attribution(tmp)  # drift_findings 缺省 = None
+        finally:
+            restore()
+        s = _by_code(produced, "LONGRANGE_STYLE_DRIFT")
+        assert s is not None, "默认 None 路径未自动接通 source-2 长程漂移收集"
+        assert s["evidence_source"] == "longrange_drift"
+        assert s["gate_level"] == "advisory"
+
+
+def test_default_none_autocollects_drift_from_active_issues():
+    """scanner active 模式 findings 落在 report['issues'] → 同样被自动收集（闸不屏蔽归因信号）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d))
+        restore = _patch_scanner_scan(
+            {"mode": "active", "issues": [dict(_FAKE_DRIFT)], "shadow_findings": []})
+        try:
+            produced = ll.reflect_attribution(tmp)
+        finally:
+            restore()
+        assert _by_code(produced, "LONGRANGE_STYLE_DRIFT") is not None
+
+
+def test_explicit_empty_list_disables_autocollect():
+    """显式 drift_findings=[] → 明示「无漂移」·不再 live 扫（即便 scanner 桩有 finding 也不取）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d))
+        restore = _patch_scanner_scan(
+            {"mode": "shadow", "issues": [], "shadow_findings": [dict(_FAKE_DRIFT)]})
+        try:
+            produced = ll.reflect_attribution(tmp, drift_findings=[])
+        finally:
+            restore()
+        assert _by_code(produced, "LONGRANGE_STYLE_DRIFT") is None
+
+
+def test_autocollect_degrades_on_scanner_error():
+    """scanner.scan 抛错 → _collect_live_drift_findings 降级返回 []·reflect 不崩（北极星⑥）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d))
+        import cross_cluster_style_drift_scanner as ccsd
+        orig = ccsd.scan
+
+        def boom(pr, **kw):
+            raise RuntimeError("scanner offline")
+        ccsd.scan = boom
+        try:
+            produced = ll.reflect_attribution(tmp)  # 应平稳返回（无 drift 证据）
+        finally:
+            ccsd.scan = orig
+        assert _by_code(produced, "LONGRANGE_STYLE_DRIFT") is None
+
+
+def test_collect_live_drift_findings_filters_non_attrib_codes():
+    """_collect_live_drift_findings 只抓 _STYLE_CODE_ATTRIB 内的 code（杂 code 不混入归因）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d))
+        restore = _patch_scanner_scan({
+            "mode": "active",
+            "issues": [dict(_FAKE_DRIFT),
+                       {"code": "SOME_OTHER_CODE", "gate_level": "advisory"}],
+            "shadow_findings": [],
+        })
+        try:
+            got = ll._collect_live_drift_findings(tmp)
+        finally:
+            restore()
+        codes = [f["code"] for f in got]
+        assert "LONGRANGE_STYLE_DRIFT" in codes
+        assert "SOME_OTHER_CODE" not in codes
+
+
+def test_scan_recurring_autowires_source2_drift():
+    """端到端：--scan-recurring（scan_recurring）以 None 调 reflect_attribution → 自动带上 source-2
+    漂移建议。返回的 skill_rewrite 段含 LONGRANGE_STYLE_DRIFT（证明真实调用点 1234 已接通）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d))
+        restore = _patch_scanner_scan(
+            {"mode": "shadow", "issues": [], "shadow_findings": [dict(_FAKE_DRIFT)]})
+        try:
+            res = _scan_with_audits(tmp, [_mk_audit(1, "STYLE_禁用词"),
+                                          _mk_audit(2, "STYLE_禁用词")])
+        finally:
+            restore()
+        codes = [s["style_code"] for s in res["skill_rewrite"]]
+        assert "LONGRANGE_STYLE_DRIFT" in codes, "scan_recurring 未把 source-2 漂移带进 reflect"
+        assert "STYLE_禁用词" in codes  # 复发 source-1 仍在
+
+
 # ═══════════════════════ 7. 缺 作者风格.json → 降级（不报错）═══════════════════════
 
 def test_missing_style_json_degrades_gracefully():
