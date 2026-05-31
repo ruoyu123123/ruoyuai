@@ -10,14 +10,15 @@
   prompt 明确「只借语感语调起手势 · 情节按 storyboard/brief 走 · 绝不抄原文情节内容」
   （防抄袭 + 防内容泄漏）。
 
-🔴 影子纪律（env SNIPPET_SEED_MODE 默认 off）：
-  默认 off → 不注入种子段（不改默认生成 · 回归 0）· 待 gen-model 实跑 A/B 验证 token 成本+效果后放量。
+🔴 默认开启（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）：
+  默认 on → 注入 1-2 段作者真原文当语感种子（真生效·有原文池就注入）· 显式 off 做 A/B 对照。
+  无原文池 / 选不到候选 → 优雅降级返回空段（不报错·不改默认生成）。
 
 纪律：纯 prompt 注入 · 不改 writer/复刻走 gen-model 的事实 ·
   测试只验**确定性的 prompt 构造 / 选样纯函数 / mode 解析**（不实跑 gen-model · 需 API）。
   真原文校准（蛊真人/惊悚乐园 原文）：选样确实从真实原文池取片段。
 
-测试覆盖：① mode 解析（默认 off / on / shadow / 归一 / 非法回退）；② 避坑指令文案；
+测试覆盖：① mode 解析（默认 on / off / shadow / 归一 / 非法回退 on）；② 避坑指令文案；
   ③ 种子段构造（空/非空）；④ 风格寄存器选样（情绪相似优先 · 非题材）；
   ⑤ 原文池定位（项目自带 / style_source 链）；⑥ gen_writer/distill 两路注入（mode off 零回归）；
   ⑦ 真原文校准（蛊真人/惊悚乐园 原文池真选得出种子）。
@@ -50,14 +51,14 @@ _CALM_SNIPPET = "他静静坐着，缓缓望向窗外。暖光柔和，他笑了
 
 
 # ════════════════════════════════════════════════════════════════
-# [A] mode 解析 snippet_seed_mode（影子纪律 · 默认 off）
+# [A] mode 解析 snippet_seed_mode（默认 on · 2026-05-31 放量）
 # ════════════════════════════════════════════════════════════════
 
-def test_A_mode_default_off():
-    """SNIPPET_SEED_MODE 未设 → 默认 off（影子纪律·不改默认生成·待实跑验证后放量）。"""
+def test_A_mode_default_on():
+    """SNIPPET_SEED_MODE 未设 → 默认 on（2026-05-31 放量·真生效注入作者真原文语感种子）。"""
     sx = _reload_ss(None)
     try:
-        assert sx.snippet_seed_mode() == "off"
+        assert sx.snippet_seed_mode() == "on"
     finally:
         _reload_ss(None)
 
@@ -81,12 +82,21 @@ def test_A_mode_shadow():
         _reload_ss(None)
 
 
-def test_A_mode_garbage_falls_back_off():
-    """空 / 非法值回退 off（保守默认·不静默开启未经实跑验证的升级）。"""
-    for v in ("", "garbage", "0", "false", "off"):
+def test_A_mode_explicit_off():
+    """显式 off → off（A/B 对照路径 · 唯一关闭手段）。"""
+    sx = _reload_ss("off")
+    try:
+        assert sx.snippet_seed_mode() == "off"
+    finally:
+        _reload_ss(None)
+
+
+def test_A_mode_garbage_falls_back_on():
+    """空 / 非法值 / 旧 0/false → 回退默认 on（2026-05-31 放量·只有显式 off 才关）。"""
+    for v in ("", "garbage", "0", "false"):
         sx = _reload_ss(v)
         try:
-            assert sx.snippet_seed_mode() == "off", v
+            assert sx.snippet_seed_mode() == "on", v
         finally:
             _reload_ss(None)
 
@@ -380,8 +390,8 @@ def test_G_gen_writer_save_output_accepts_seed_trace():
         assert meta["snippet_seed"]["injected"] is True
 
 
-def test_G_gen_writer_save_output_default_seed_trace_off():
-    """不传 seed_trace → 默认记 off/未注入（向后兼容旧调用 · 零回归）。"""
+def test_G_gen_writer_save_output_default_seed_trace_not_injected():
+    """不传 seed_trace → 默认记 未注入（向后兼容旧调用 · 真实路径总会传 trace）。"""
     import gen_writer as gw
 
     class _P:

@@ -212,24 +212,58 @@ def test_learning_loop_quantized_delta_only_for_controlled_keys():
 
 # ---------- env 默认 off → 零回归 ----------
 
-def test_mode_default_off():
-    """PID_THRESHOLD_MODE 缺省 = off（回测验证前不生效）。"""
+def test_mode_default_active():
+    """PID_THRESHOLD_MODE 缺省 = active（回测已证两书 FPR 收敛 92%/85% · 北极星全开）。"""
     os.environ.pop("PID_THRESHOLD_MODE", None)
-    assert pid._mode() == "off"
+    assert pid._mode() == "active"
 
 
-def test_off_mode_zero_regression():
-    """off 模式 apply_pid_delta 返回原 thresholds（即便有非零 Δ state）。"""
+def test_active_no_state_is_harmless():
+    """全开后保护栏：active + 无 per-作者 state（theta_delta 空）→ 不叠加 Δ（无害）。
+    全开真生效靠回测 --save-state 落 state；没 state 时绝不无中生有改阈值。"""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        os.environ.pop("PID_THRESHOLD_MODE", None)  # 默认 active
+        assert pid._mode() == "active"
+        base = {"para_mean_len": {"max": 40}, "quota_per_word": {"max": 5}}
+        # tmp 内无 pid_threshold_state.json → theta_delta 空 → 原样返回
+        out = pid.apply_pid_delta({k: dict(v) for k, v in base.items()}, tmp)
+        assert out == base
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_explicit_off_mode_zero_regression():
+    """显式 PID_THRESHOLD_MODE=off 紧急回退：apply_pid_delta 返回原值（即便有非零 Δ state）。"""
     tmp = Path(tempfile.mkdtemp())
     try:
         st = _fresh_state()
         st["theta_delta"] = {"para_mean_len": {"_scalar": 0.05}}
         pid.save_state(tmp, st)
-        os.environ.pop("PID_THRESHOLD_MODE", None)  # off
+        os.environ["PID_THRESHOLD_MODE"] = "off"  # 显式回退
         base = {"para_mean_len": {"max": 40}}
         out = pid.apply_pid_delta({k: dict(v) for k, v in base.items()}, tmp)
         assert out == base
     finally:
+        os.environ.pop("PID_THRESHOLD_MODE", None)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_active_applies_saved_state_delta():
+    """全开真生效：active + 有落盘 theta_delta state → apply_pid_delta 真叠加 Δ。
+    这是①「接 state 生效」的核心断言——active 默认 + 回测落 state = 真调阈值。"""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        st = _fresh_state()
+        st["theta_delta"] = {"para_mean_len": {"_scalar": 0.05}}
+        pid.save_state(tmp, st)
+        os.environ.pop("PID_THRESHOLD_MODE", None)  # 默认 active
+        base = {"para_mean_len": {"max": 40.0}}
+        out = pid.apply_pid_delta({k: dict(v) for k, v in base.items()}, tmp)
+        assert out["para_mean_len"]["max"] > 40.0  # 真放松
+        assert out["para_mean_len"]["max"] <= 80.0  # 仍守物理上限
+    finally:
+        os.environ.pop("PID_THRESHOLD_MODE", None)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -251,22 +285,23 @@ def test_shadow_mode_does_not_change_thresholds():
 
 # ---------- validate_style 接线零回归 + L1a band 保留 ----------
 
-def test_validate_style_off_mode_preserves_overrides():
-    """validate_style 接 PID 后·off 模式与不接 PID 结果一致（保留 L1a + 现有 override）。"""
+def test_validate_style_active_no_state_preserves_overrides():
+    """validate_style 接 PID 后·active 默认但无 state（空 author_dir）与不接 PID 结果一致
+    （保留 L1a + 现有 override·全开无 state 无害保护栏）。"""
     sd = {"quantitative": {"paragraph_length_chars": {"mean": 30},
                            "dialogue_ratio": {"mean": 0.5},
                            "chapter_chars": {"mean": 2719}}}
     base = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
-    os.environ.pop("PID_THRESHOLD_MODE", None)
-    # 不传 author_dir（旧调用方）vs 传 author_dir 但 off → 应等价
+    os.environ.pop("PID_THRESHOLD_MODE", None)  # 默认 active
+    # 不传 author_dir（旧调用方·PID 完全跳过）vs 传空 author_dir 但无 state → 应等价
     t_none = vs._apply_style_overrides({k: dict(v) for k, v in base.items()}, sd)
     tmp = Path(tempfile.mkdtemp())
     try:
-        t_off = vs._apply_style_overrides({k: dict(v) for k, v in base.items()}, sd,
+        t_act = vs._apply_style_overrides({k: dict(v) for k, v in base.items()}, sd,
                                           author_dir=tmp)
-        assert t_none["para_mean_len"] == t_off["para_mean_len"]
-        assert t_none["dialogue_ratio"] == t_off["dialogue_ratio"]
-        assert t_none["quota_per_word"] == t_off["quota_per_word"]
+        assert t_none["para_mean_len"] == t_act["para_mean_len"]
+        assert t_none["dialogue_ratio"] == t_act["dialogue_ratio"]
+        assert t_none["quota_per_word"] == t_act["quota_per_word"]
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -284,7 +319,7 @@ def test_validate_style_active_relaxes_in_correct_direction():
                              "dialogue_ratio": {"_scalar": 0.05},
                              "quota_per_word": {"_scalar": 0.05}}
         pid.save_state(tmp, st)
-        os.environ.pop("PID_THRESHOLD_MODE", None)
+        os.environ["PID_THRESHOLD_MODE"] = "off"  # 显式 off 取无 Δ 基线（默认已 active·须显式）
         t_off = vs._apply_style_overrides({k: dict(v) for k, v in base.items()}, sd,
                                           author_dir=tmp)
         os.environ["PID_THRESHOLD_MODE"] = "active"
@@ -295,6 +330,82 @@ def test_validate_style_active_relaxes_in_correct_direction():
         assert t_act["quota_per_word"]["max"] > t_off["quota_per_word"]["max"]
     finally:
         os.environ.pop("PID_THRESHOLD_MODE", None)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------- 接 state 生效：回测落盘 + cluster 积累桥 ----------
+
+def test_save_backtest_state_persists_only_when_converged():
+    """红线：回测收敛才落 theta_delta·不收敛拒绝落盘（绝不持久放大误判的 Δ）。"""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        # 收敛 + 有 Δ → 落盘
+        st = _fresh_state()
+        st["theta_delta"] = {"para_mean_len": {"_scalar": 0.05}}
+        res_ok = {"converged": True, "final_fpr": 0.01, "_state": st}
+        p = pid.save_backtest_state(tmp, res_ok)
+        assert p is not None and pid._state_path(tmp).is_file()
+        loaded = pid.load_state(tmp)
+        assert loaded["theta_delta"]["para_mean_len"]["_scalar"] == 0.05
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    # 不收敛 → 拒绝落盘
+    tmp2 = Path(tempfile.mkdtemp())
+    try:
+        res_bad = {"converged": False, "final_fpr": 0.9,
+                   "_state": {"theta_delta": {"para_mean_len": {"_scalar": 0.05}}}}
+        assert pid.save_backtest_state(tmp2, res_bad) is None
+        assert not pid._state_path(tmp2).is_file()
+    finally:
+        shutil.rmtree(tmp2, ignore_errors=True)
+
+
+def test_save_backtest_state_filters_non_whitelist():
+    """落盘前物理隔离复核：非白名单键绝不被持久（即便 _state 混入）。"""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        st = _fresh_state()
+        st["theta_delta"] = {"para_mean_len": {"_scalar": 0.05},
+                             "LOCKED_FACT_CONFLICT": {"_scalar": 0.99}}
+        res = {"converged": True, "final_fpr": 0.0, "_state": st}
+        pid.save_backtest_state(tmp, res)
+        loaded = pid.load_state(tmp)
+        assert "LOCKED_FACT_CONFLICT" not in loaded["theta_delta"]
+        assert "para_mean_len" in loaded["theta_delta"]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_accumulate_pid_state_from_calibration_bridge():
+    """cluster 积累桥：learning_loop 的 quantized_delta 校准建议 → PID per-作者 state 累积。"""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        suggestions = [
+            {"code": "STYLE_配额词", "suggestion_type": "adjust_threshold",
+             "waived_count": 5,
+             "quantized_delta": {"controlled_key": "quota_per_word",
+                                 "relax_frac": 0.10, "basis": "waived×5"}},
+            # 非被控键混入 → 物理隔离忽略（不 raise）
+            {"code": "X", "quantized_delta": {"controlled_key": "banned_words",
+                                              "relax_frac": 0.5}},
+        ]
+        st = ll.accumulate_pid_state_from_calibration(tmp, suggestions, cluster_id="c1")
+        assert st is not None
+        assert "quota_per_word" in st["theta_delta"]
+        assert "banned_words" not in st["theta_delta"]  # 非白名单被隔离
+        # 落盘可被 apply 读取
+        assert pid._state_path(tmp).is_file()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_accumulate_pid_state_no_author_dir_harmless():
+    """积累桥 author_dir=None / 无 quantized_delta → 返回 None（无害空转）。"""
+    assert ll.accumulate_pid_state_from_calibration(None, [{"quantized_delta": {}}]) is None
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        assert ll.accumulate_pid_state_from_calibration(tmp, [{"code": "X"}]) is None
+    finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 

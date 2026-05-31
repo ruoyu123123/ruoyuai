@@ -106,6 +106,46 @@ def _quantized_delta_hint(code: str, waived_count: int) -> dict | None:
     return {"controlled_key": key, "relax_frac": round(relax, 4),
             "basis": f"waived×{waived_count}"}
 
+
+def accumulate_pid_state_from_calibration(author_dir, suggestions, cluster_id=None) -> dict | None:
+    """cluster-save-state 运行积累路径（北极星⑤）：把本 cluster 产出的 quantized_delta
+    校准建议喂进 per-作者 PID 控制器（update_controller·保守增益+抗 windup+死区），
+    在【回测初始化的 theta_delta】基础上低频累积微调。
+
+    · 只读写 4 被控键（pid_threshold_tuner 硬拒其余·物理隔离 HARD_GATE 回路外）。
+    · cluster_id 给低频守卫（同 cluster 不重复迭代）。
+    · author_dir 缺失 / 无 quantized_delta → 返回 None（无害空转）。
+    · 误差 e 用 relax_frac 当「期望放松量」正向驱动（FPR 代理·放松方向 e>0）。
+    返回更新后 state（已落盘）或 None。"""
+    if author_dir is None:
+        return None
+    try:
+        import pid_threshold_tuner as _pid  # noqa: E402
+    except Exception:
+        return None
+    errors = {}
+    evidence = 0  # 校准证据样本量（豁免次数累加·驱动死区随证据收窄）
+    for s in (suggestions or []):
+        qd = s.get("quantized_delta") if isinstance(s, dict) else None
+        if not isinstance(qd, dict):
+            continue
+        key = qd.get("controlled_key")
+        if key not in _pid._CONTROLLED_KEYS:
+            continue  # 物理隔离：非白名单一律忽略（不 raise·积累路径要稳）
+        # 同键多 code 取最大放松量（保守上界·不叠加放大）
+        errors[key] = max(errors.get(key, 0.0), float(qd.get("relax_frac", 0.0)))
+        evidence = max(evidence, int(s.get("waived_count", 0)))
+    if not errors:
+        return None
+    state = _pid.load_state(Path(author_dir))
+    # n_samples 取「已积累样本」与「本批校准证据」的较大者：豁免次数即证据样本，
+    # 否则 relax_frac(≤0.10) 恒落在 n=0 的宽死区(~0.14)内 → 永不积累(死锁)。
+    # 死区仍随证据缩放（少证据不轻易动阈值·北极星⑤保守）。
+    n = max(int(state.get("n_samples", 0)), evidence, _pid._MIN_SAMPLES)
+    _pid.update_controller(state, errors, cluster_id=cluster_id, n_samples=n)
+    _pid.save_state(Path(author_dir), state)
+    return state
+
 EXPERIENCE_FILE = "写作经验.json"
 AUDIT_DIR = ".audit"
 

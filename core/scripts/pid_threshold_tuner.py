@@ -29,7 +29,12 @@ L2-1 升级为完整保守增量 PI 控制器（对标 Filieri SEAMS2015 自适�
 【物理隔离回路外（北极星⑤ + 本件红线）】
   · _CONTROLLED_KEYS 白名单只含 4 键 · 控制器硬拒其余键（raise + 过滤）。
   · 15 个 HARD_GATE_CODES 绝不出现在本模块任何路径（结构性物理隔离）。
-  · env PID_THRESHOLD_MODE 默认 off：回测验证 FPR 收敛前完全不生效。
+  · env PID_THRESHOLD_MODE 默认 active（回测已证两书 FPR 收敛 92%/85% → 全开）。
+    active 真生效靠 per-作者 pid_threshold_state.json 的 theta_delta —— 由
+    `backtest --save-state`（收敛才落盘）初始化 / cluster-save-state 经
+    learning_loop.accumulate_pid_state_from_calibration 运行积累。
+    无 state（theta_delta 空）时 active 仍无害（不叠加 Δ·不改判决）。
+    显式 PID_THRESHOLD_MODE=off 紧急回退（byte 级零回归）。
 
 【per 作者状态】workspace/styles/{作者}/pid_threshold_state.json
   {"version":1,"e_prev":{key:float},"theta_delta":{key:{"_scalar":float}},
@@ -68,9 +73,11 @@ _MAX_STEP_FRAC = 0.10
 
 
 def _mode() -> str:
-    """PID_THRESHOLD_MODE：默认 off（回测验证前不生效）· {off, shadow, active}。"""
-    m = (os.environ.get("PID_THRESHOLD_MODE") or "off").strip().lower()
-    return m if m in ("off", "shadow", "active") else "off"
+    """PID_THRESHOLD_MODE：默认 active（回测已证两书 FPR 收敛 92%/85% · 北极星全开）。
+    · {off, shadow, active}。active 无 per-author state（theta_delta 空）时仍无害（不叠加 Δ）。
+    · 显式 off 紧急回退（零回归）·shadow 只记 stderr 不改判决。"""
+    m = (os.environ.get("PID_THRESHOLD_MODE") or "active").strip().lower()
+    return m if m in ("off", "shadow", "active") else "active"
 
 
 def _state_path(author_dir: Path) -> Path:
@@ -327,9 +334,13 @@ def backtest(author_dir: Path, style_path: Path, rounds: int = 20,
     final = _measure_fpr_per_key(author_dir, style_path, thr, max_chapters)
     final_mean = sum(final.values()) / len(final) if final else 1.0
     converged = final_mean <= curve[0] and final_mean <= 0.15
+    # state 携带回测收敛的 theta_delta（供 --save-state 落 per-作者盘 → active 真生效）。
+    state["fpr_history"] = curve
+    state["n_samples"] = n_ch
     return {"converged": bool(converged), "fpr_curve": curve,
             "initial_fpr": curve[0] if curve else None,
-            "final_fpr": round(final_mean, 4), "final_per_key": final}
+            "final_fpr": round(final_mean, 4), "final_per_key": final,
+            "_state": state}
 
 
 def _apply_state_delta(thresholds: dict, state: dict) -> dict:
@@ -355,6 +366,35 @@ def _apply_state_delta(thresholds: dict, state: dict) -> dict:
     return out
 
 
+def save_backtest_state(author_dir: Path, res: dict) -> Path | None:
+    """把回测收敛的 theta_delta 落 per-作者 pid_threshold_state.json（active 真生效的唯一来源）。
+    红线：**只在收敛时**落盘——发散/不收敛绝不持久 Δ（否则 active 会放大误判·违反北极星⑤）。
+    返回写入路径或 None（未落盘）。"""
+    if not res.get("converged"):
+        print(f"[PID] 回测未收敛（final_fpr={res.get('final_fpr')}）→ 不落 state（保守拒绝）",
+              file=sys.stderr)
+        return None
+    state = res.get("_state")
+    if not isinstance(state, dict) or not state.get("theta_delta"):
+        print("[PID] 回测收敛但无 theta_delta（FPR 已 0 / 全落死区）→ 无 Δ 可落",
+              file=sys.stderr)
+        return None
+    # 物理隔离复核：落盘前再过一遍白名单（绝不持久非被控键）。
+    state["theta_delta"] = {k: v for k, v in state["theta_delta"].items()
+                            if k in _CONTROLLED_KEYS}
+    if not state["theta_delta"]:
+        return None
+    state["version"] = 1
+    state["last_update_cluster"] = None  # 回测初始化·非 cluster 迭代·允许后续 cluster 接力
+    from datetime import datetime, timezone
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    save_state(Path(author_dir), state)
+    p = _state_path(Path(author_dir))
+    print(f"[PID] 已落 per-作者 state → {p}（theta_delta={state['theta_delta']}）",
+          file=sys.stderr)
+    return p
+
+
 def main(argv):
     import argparse
     ap = argparse.ArgumentParser(description="L2-1 PID 阈值控制器 / 离线回测")
@@ -365,13 +405,21 @@ def main(argv):
     ap.add_argument("--tau", type=float, default=0.8)
     ap.add_argument("--max-chapters", type=int, default=None,
                     help="均匀采样上限（大书加速回测·留空=全量）")
+    ap.add_argument("--save-state", action="store_true",
+                    help="回测收敛时把 theta_delta 落 per-作者 pid_threshold_state.json"
+                         "（active 真生效的唯一来源·不收敛拒绝落盘）")
     args = ap.parse_args(argv)
     if args.backtest:
         res = backtest(Path(args.author_dir), Path(args.style), args.rounds, args.tau,
                        max_chapters=args.max_chapters)
-        print(json.dumps(res, ensure_ascii=False, indent=2))
+        if args.save_state:
+            saved = save_backtest_state(Path(args.author_dir), res)
+            res["state_saved_to"] = str(saved) if saved else None
+        # _state 不进 stdout JSON（内部对象·噪声大）
+        out = {k: v for k, v in res.items() if k != "_state"}
+        print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0 if res.get("converged") else 1
-    print("用法: --backtest --author-dir <dir> --style <json>", file=sys.stderr)
+    print("用法: --backtest --author-dir <dir> --style <json> [--save-state]", file=sys.stderr)
     return 2
 
 

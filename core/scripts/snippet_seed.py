@@ -18,14 +18,14 @@
 🔴 prompt 必须明确：「只借语感语调起手势 · 情节严格按 storyboard/brief 走 · 绝不抄原文情节内容」
   （防抄袭 + 防内容泄漏）。
 
-🔴 影子纪律（env SNIPPET_SEED_MODE 默认 off）：
-  默认 off → prompt 不注入种子段（不改默认生成行为 · 回归 0）。
-  待 gen-model 实跑 A/B 验证 token 成本 + 效果后再放量 on/shadow→on。
+🔴 默认开启（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）：
+  默认 on → 注入 1-2 段作者真实原文当语感种子（实跑验证 token 成本可控 + 防长文退化有效后放量）。
   值（大小写不敏感）：
-    · off（默认 / 空 / 非法值）：不注入种子段——零回归对照路径。
-    · on / 1 / true / active：注入 1-2 段真实原文种子 + 避坑指令。
+    · on / 1 / true / active（默认 / 空 / 非法值）：注入 1-2 段真实原文种子 + 避坑指令。
+    · off：不注入种子段——零回归对照路径（显式关闭做 A/B 对照）。
     · shadow：只构造种子段并落痕（供 A/B 复盘），但**不拼进 prompt**——
-      影子先接通管道、量 token 成本，确认不改默认生成行为再放量 on。
+      影子先接通管道、量 token 成本（保留作对照档）。
+  无原文池 / 选不到候选 → seed_section 为空 → 不注入（优雅降级·不报错·不改默认生成）。
 
 只改 prompt 构造（确定性可测）· 不改 writer/复刻走 gen-model 的事实 ·
 种子是「风格起手势」非「内容」· 纯 stdlib（无新重依赖）。
@@ -41,15 +41,16 @@ from pathlib import Path
 def snippet_seed_mode() -> str:
     """读 env SNIPPET_SEED_MODE 决定是否注入真实原文种子段。
 
-    默认 off（影子纪律 · 空 / 非法值保守退默认行为 · 不静默开启未经实跑验证的升级）。
-    on / 1 / true / active → "on"；shadow → "shadow"；其余 → "off"。
+    默认 on（2026-05-31 放量 · 空 / 非法值退默认 on · 真生效注入作者真原文当语感种子）。
+    off → 显式关闭（A/B 对照）；shadow → 只落痕不注入；其余（含空/非法）→ "on"。
+    无原文池 / 选不到候选时 make_seed_block_* 仍返回空 section 优雅降级（不报错）。
     """
     v = (os.environ.get("SNIPPET_SEED_MODE") or "").strip().lower()
-    if v in ("on", "1", "true", "active"):
-        return "on"
+    if v == "off":
+        return "off"
     if v == "shadow":
         return "shadow"
-    return "off"
+    return "on"
 
 
 # ============ 原文池定位 ============

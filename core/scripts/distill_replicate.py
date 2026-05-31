@@ -42,7 +42,7 @@ from gen_model_loader import (  # noqa: E402
     GenModelExhaustedError,
     Profile,
 )
-import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 off · 影子）
+import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
 
 
 def check_deps():
@@ -197,20 +197,19 @@ def _l3b_cot_first_mode() -> str:
     """读 env L3B_COT_FIRST_MODE 决定复刻 prompt 是否走 CoT-first 自解释。
 
     值（大小写不敏感）：
-      · off（默认）：旧 prompt 路径——直接出正文、无自解释段。影子纪律：与其他 5 个升级件
-        (QUANTILE_BAND/L3A_BURSTINESS/L1B_SIMILARITY/PID_THRESHOLD/SFS_LLM_DEBIAS) 一致，
-        默认不改复刻行为；CoT-first 待 gen-model 实跑闭环验证 token 预算(8000 ceiling 下
-        分析段与正文共享预算·须确认不挤占截断)后再放量。
-      · active：CoT-first 自解释升级开启——prompt 含「先分析后写」两段式指令，
-        gen-model 先输出受控量化坐标分析再写正文；落盘正文 strip 掉分析段、meta 留 CoT 痕迹。
-      · on/1/true/cot → 归一为 active；空/非法值 → off（保守默认·不静默开启）。
+      · active（默认 / 空 / 非法值 · 2026-05-31 放量）：CoT-first 自解释升级开启——
+        prompt 含「先分析后写」两段式指令，gen-model 先输出受控量化坐标分析再写正文；
+        落盘正文 strip 掉分析段、meta 留 CoT 痕迹。token 预算阻碍已修（CoT ceiling 上调
+        8000→12000 · 分析段额外预算 · 正文保底不被挤截断）。
+      · off：旧 prompt 路径——直接出正文、无自解释段（显式关闭做 A/B 对照）。
+      · on/1/true/cot → 归一为 active。
 
     只改 prompt 构造（确定性可测）· 不改复刻走 gen-model 的事实。
     """
     v = (os.environ.get("L3B_COT_FIRST_MODE") or "").strip().lower()
-    if v in ("active", "on", "1", "true", "cot"):
-        return "active"
-    return "off"  # 默认 off（影子纪律·空/非法值保守退旧路径·CoT-first 待实跑验证后放量）
+    if v == "off":
+        return "off"
+    return "active"  # 默认 active（2026-05-31 放量·空/非法值退默认开·只有显式 off 才关）
 
 
 def strip_cot_analysis(text: str) -> tuple[str, str]:
@@ -529,6 +528,23 @@ def estimate_words_per_chapter(cluster_meta: dict) -> int:
     return 3500
 
 
+def subcall_max_tokens(target_words: int, cot_first: bool) -> int:
+    """单 sub-call max_tokens 预算（CJK 字 ~1.5 tokens/字 + buffer）。
+
+    🔴 2026-05-31 修阻碍（CoT-first 放量前置）：CoT-first 的「量化坐标分析段」与正文**共享**
+    max_tokens 预算。旧码 cot 用 token_factor 2.6 但被 min(8000) 钳回 8000（与 legacy 同顶）→
+    分析段一占，正文被挤截断（cluster 级长草稿尾部 + 收笔常缺）。修法：CoT 模式给分析段
+    **额外预算**——ceiling 上调 ×1.5（8000→12000），保证正文落字空间 ≥ legacy。
+
+    不变式（测试钉死）：相同 target_words 下 CoT 预算 ≥ legacy 预算（正文不被分析段挤截断）。
+    """
+    if cot_first:
+        token_factor, ceiling = 2.6, 12000   # 分析段额外预算
+    else:
+        token_factor, ceiling = 2.0, 8000
+    return min(ceiling, max(4000, int(target_words * token_factor)))
+
+
 # ============ main ============
 
 def main():
@@ -616,7 +632,7 @@ def main():
     subcall_plan = plan_cluster_subcalls(chapters_count, args.max_chapters_per_call)
     ref_text = gather_cluster_ref_text(project_root, cluster_meta)
 
-    # 🎴 真实原文「语感种子」播种（P0 · env SNIPPET_SEED_MODE 默认 off · 影子纪律 · 不改默认复刻）：
+    # 🎴 真实原文「语感种子」播种（P0 · env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量 · 真生效）：
     # 复刻同栈：从 cluster 同源原文池按 ref_text 风格/情绪寄存器选 1-2 段真实片段当语感锚点，
     # 防 cluster 级长文退化（D 级）；带「只借语感起手势 · 绝不抄情节内容」避坑指令。
     _originals_dir = project_root / "原文"
@@ -647,10 +663,8 @@ def main():
             cot_first=cot_first,
             seed_section=seed_section,
         )
-        # CoT-first 占额外 token（量化坐标分析段）→ 多留 buffer 防正文被截断
-        # 单 call max_tokens 估算：CJK 字按 1.5 tokens/字算（含标点），加 buffer
-        token_factor = 2.6 if cot_first else 2.0
-        max_tokens_this = min(8000, max(4000, int(target_words_this * token_factor)))
+        # max_tokens 预算（CoT-first ceiling 上调防分析段挤占正文 · 详见 subcall_max_tokens）
+        max_tokens_this = subcall_max_tokens(target_words_this, cot_first)
         try:
             reply, used_profile, elapsed = call_gen_model(
                 loader, system_prompt, user,

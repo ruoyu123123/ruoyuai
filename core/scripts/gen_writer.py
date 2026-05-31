@@ -44,7 +44,7 @@ from gen_model_loader import (  # noqa: E402
 )
 import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化权威口径
 import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster_006" ↔ "6"）
-import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 off · 影子）
+import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
 
 
 # ============ 依赖检查 ============
@@ -180,6 +180,45 @@ def read_text(p: Path, limit_chars: int = None) -> str:
     return t
 
 
+def _build_style_fingerprint_section(manifest_path: Path) -> str:
+    """从 manifest.author_style_fingerprint 抽显式量化指令拼成 writer prompt 段。
+
+    L1a 升格消费（2026-05-31）：build_manifest 在 PROFILE_INJECT_MODE=active 下注入
+    多维量化风格指纹（句长/段长/单句独行/标点/虚词/签名搭配 + 显式 directives 文案）。
+    本函数把 directives 升到 prompt 前部醒目位置 —— 实证「显式数值目标」> 让模型看样本自己悟。
+
+    返回值：
+      · 指纹缺失 / 为 None（PROFILE_INJECT_MODE=off/shadow）/ 无 directives → ""（不注入·零回归）。
+      · 有 directives → 拼成「作者量化风格指纹」段（advisory · 标注可校准偏离·北极星⑤不硬锁）。
+    """
+    if not manifest_path.exists():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    fp = m.get('author_style_fingerprint')
+    if not isinstance(fp, dict):
+        return ""
+    directives = fp.get('directives') or []
+    if not directives:
+        return ""
+    src = fp.get('source', 'author_profile')
+    n_ch = fp.get('n_chapters')
+    src_note = f"（数据源 {src}" + (f" · {n_ch} 章聚合" if n_ch else "") + "）"
+    lines = [
+        "## 🎯 作者量化风格指纹（写作时显式校准的多维目标硬数字 · advisory）",
+        "",
+        f"以下是从作者风格档蒸馏出的**量化风格目标**{src_note}。实证表明把这些数值**显式告知你**"
+        "比让你看样本自己悟更有效。**逐条对照校准你的节奏**——它们是目标不是硬锁，",
+        "遇到本场景必要的偏离（如高潮处句长骤变）可偏离，但默认贴合：",
+        "",
+    ]
+    for d in directives:
+        lines.append(f"- {d}")
+    return "\n".join(lines)
+
+
 def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                  ch_end: int = None, target_cjk: str = None) -> tuple:
     """组装 system + user prompt
@@ -198,6 +237,13 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     # 全量读——作者风格 skill 是写作第一权威，不得在 load 时截断。
     manifest_path = db / '.manifest' / f'ch_{ch_start:03d}.json'
     manifest = read_text(manifest_path)
+
+    # L1a 升格消费（2026-05-31）：build_manifest 在 env PROFILE_INJECT_MODE=active 下产出
+    # manifest.author_style_fingerprint（多维量化目标硬数字 + 显式指令文案），但 writer 此前
+    # 只把整 manifest 当 raw text 塞进 prompt 尾部「数据库索引」段 —— 量化指纹深埋 JSON 里
+    # writer 难以识别为「写作目标」。这里**显式解析**该字段，单独拼成醒目的「作者量化风格指纹」
+    # 段注在 prompt 前部（advisory · 北极星⑤不硬锁），让 writer 真消费多维数值目标。
+    style_fp_section = _build_style_fingerprint_section(manifest_path)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
@@ -302,7 +348,7 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     # 自动扫 memory/feedback_*.md，把 type=feedback 的全局规则注入 writer prompt 头部
     feedback_rules_text = _collect_feedback_rules()
 
-    # 🎴 真实原文「语感种子」播种（P0 · env SNIPPET_SEED_MODE 默认 off · 影子纪律 · 不改默认生成）：
+    # 🎴 真实原文「语感种子」播种（P0 · env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量 · 真生效）：
     # 注 1-2 段作者真实原文当语感锚点，防长 cluster 中后段退化回通用 AI 腔。
     # 按 cluster.scope_summary 的风格/情绪寄存器选样（非题材匹配 · Catch Me 论文避坑），
     # 并带「只借语感起手势 · 绝不抄情节内容」避坑指令（防抄袭+防内容泄漏）。
@@ -430,9 +476,11 @@ cluster_brief 完整内容：
 
     # 种子段拼接（mode=off/shadow 时 seed_section 为空 → 不注入 · 零回归）
     seed_block = (seed_section + "\n\n") if seed_section else ""
+    # 作者量化风格指纹段（PROFILE_INJECT_MODE=off/shadow 或无指纹时为空 → 不注入 · 零回归）
+    style_fp_block = (style_fp_section + "\n\n") if style_fp_section else ""
 
     user = f"""{task_intro}
-{cluster_constraints_section}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}
@@ -698,7 +746,7 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         'generated_at': datetime.now().isoformat(),
         'cjk_actual': cjk,
         'writer_mode': 'freestyle_v27' if freestyle else 'locked_v26',
-        'snippet_seed': seed_trace or {'snippet_seed_mode': 'off', 'injected': False},
+        'snippet_seed': seed_trace or {'snippet_seed_mode': 'on', 'injected': False},
     })
     se.setdefault('waivers', [])
     se.setdefault('uncertainty_flags', [])

@@ -4,9 +4,9 @@
   · 纯函数提取（profile 路 + 原文路）产出多维数值剖面 + 显式指令文案
   · 两套蒸馏 schema 容错（惊悚乐园 dialogue_ratio / 蛊真人 dialogue_ratio_pct）
   · LLM 脏数值（"约20字"/"40%" 字符串）不崩
-  · build_manifest 注入：env PROFILE_INJECT_MODE 默认 off → 字段 None（零回归）
-  · shadow → 落盘 + 日志但 manifest 不注入（仍 None · 零回归）
-  · active → 注入真指纹
+  · build_manifest 注入：env PROFILE_INJECT_MODE 默认 active → 注入真指纹（2026-05-31 放量·真生效）
+  · 显式 off → 字段 None（零回归对照）
+  · shadow → 落盘 + 日志但 manifest 不注入（仍 None · A-B 对照）
   · 顾问层失败/无 profile/extractor 缺失 → None（绝不中断主流水线）
 """
 import json
@@ -236,23 +236,32 @@ def _run_with_mode(tmp: Path, mode):
             os.environ["PROFILE_INJECT_MODE"] = prev
 
 
-def test_manifest_off_is_zero_regression():
-    """默认 off（env 缺省）→ collector None + manifest 字段 None（零回归 · 守纪律 2）。"""
+def test_manifest_default_active_injects():
+    """默认 active（env 缺省 · 2026-05-31 放量）→ collector 注入真指纹 + manifest 字段非 None。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_min_project(Path(d))
         collected, m = _run_with_mode(tmp, None)
-        assert collected is None
+        assert collected is not None
         assert m["preflight"]["passed"], m["preflight"]
         assert "author_style_fingerprint" in m  # 字段存在
-        assert m["author_style_fingerprint"] is None  # 但为 None（不影响 writer）
+        assert m["author_style_fingerprint"] is not None  # 默认注入（真生效）
+        assert m["author_style_fingerprint"]["directives"]
 
 
-def test_manifest_off_explicit_string():
-    """显式 PROFILE_INJECT_MODE=off → None。未知值也走 off（安全默认）。"""
+def test_manifest_explicit_off_zero_regression():
+    """显式 PROFILE_INJECT_MODE=off → None（零回归对照路径 · 唯一关闭手段）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_min_project(Path(d))
-        assert _run_with_mode(tmp, "off")[0] is None
-        assert _run_with_mode(tmp, "garbage")[0] is None
+        collected, m = _run_with_mode(tmp, "off")
+        assert collected is None
+        assert m["author_style_fingerprint"] is None
+
+
+def test_manifest_garbage_falls_back_active():
+    """未知值 → 回退默认 active（注入 · 只有显式 off 才关 · 2026-05-31 放量）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_min_project(Path(d))
+        assert _run_with_mode(tmp, "garbage")[0] is not None
 
 
 def test_manifest_shadow_not_injected_but_logged():
@@ -288,6 +297,53 @@ def test_no_style_profile_returns_none():
         tmp = _mk_min_project(Path(d), with_style=False)
         # 没 style → has_style_profile False → None
         assert _run_with_mode(tmp, "active")[0] is None
+
+
+# ============ gen_writer 真消费 author_style_fingerprint（2026-05-31 修阻碍）============
+
+import gen_writer as gw  # noqa: E402
+
+
+def test_gen_writer_consumes_fingerprint_directives():
+    """gen_writer._build_style_fingerprint_section 把 manifest.author_style_fingerprint 的
+    directives 抽成显式 prompt 段 —— 验证 active 下数值真进 writer prompt（不再深埋 JSON）。"""
+    with tempfile.TemporaryDirectory() as d:
+        mp = Path(d) / "ch_001.json"
+        fp = spe.extract_from_author_profile(_PROFILE_JSL)
+        mp.write_text(json.dumps({"author_style_fingerprint": fp}, ensure_ascii=False),
+                      encoding="utf-8")
+        section = gw._build_style_fingerprint_section(mp)
+        assert section  # 非空
+        assert "作者量化风格指纹" in section
+        # directives 逐条进 prompt
+        for d_line in fp["directives"]:
+            assert d_line in section
+        # advisory 措辞（北极星⑤ 不硬锁）
+        assert "目标不是硬锁" in section or "advisory" in section
+
+
+def test_gen_writer_fingerprint_section_empty_when_absent():
+    """manifest 无 author_style_fingerprint（off/shadow 下 None）→ 段为空（零回归不注入）。"""
+    with tempfile.TemporaryDirectory() as d:
+        # 字段为 None（off/shadow）
+        mp = Path(d) / "ch_001.json"
+        mp.write_text(json.dumps({"author_style_fingerprint": None}), encoding="utf-8")
+        assert gw._build_style_fingerprint_section(mp) == ""
+        # 字段完全缺失
+        mp2 = Path(d) / "ch_002.json"
+        mp2.write_text(json.dumps({}), encoding="utf-8")
+        assert gw._build_style_fingerprint_section(mp2) == ""
+        # manifest 文件不存在
+        assert gw._build_style_fingerprint_section(Path(d) / "nope.json") == ""
+
+
+def test_gen_writer_fingerprint_section_no_directives_empty():
+    """指纹存在但 directives 空 → 段为空（无可下发数值就不注入噪声）。"""
+    with tempfile.TemporaryDirectory() as d:
+        mp = Path(d) / "ch_001.json"
+        mp.write_text(json.dumps({"author_style_fingerprint": {"directives": []}}),
+                      encoding="utf-8")
+        assert gw._build_style_fingerprint_section(mp) == ""
 
 
 def test_advisory_never_hard_gate():

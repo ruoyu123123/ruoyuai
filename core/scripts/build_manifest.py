@@ -2481,18 +2481,22 @@ def _collect_author_style_fingerprint(s: "DatabaseScanner") -> dict | None:
     **显式告知** writer，比让模型自己看样本去悟更有效。本字段把 validate_style 里只用于 L1a
     评分阈值的作者句长分位数，升格成写作时下发的显式目标剖面（advisory · 非门禁非硬锁）。
 
-    env PROFILE_INJECT_MODE（守纪律 2「改生成行为的 env 默认 off/shadow」）：
-      · off（默认）：完全不算、返回 None —— manifest 不含本字段，writer 行为零回归。
+    env PROFILE_INJECT_MODE（2026-05-31 放量 · 默认 active · 真生效下发 writer）：
+      · active（默认 / 空 / 非法值）：算指纹并注入 manifest.author_style_fingerprint → writer
+                     经 _build_style_fingerprint_section 显式消费多维量化目标。
       · shadow     ：算指纹并写到 _数据库/.style_fingerprint/ch_NNN.json + stderr 摘要，
-                     但 **不注入返回值**（manifest 仍不含 → writer 看不到 → 零回归），供 gen-model 实跑前离线核对。
-      · active     ：算指纹并注入 manifest.author_style_fingerprint → writer 显式消费。
+                     但 **不注入返回值**（manifest 仍不含 → writer 看不到），供离线核对 / A-B 对照。
+      · off        ：完全不算、返回 None —— manifest 不含本字段，writer 行为零回归（显式关闭做对照）。
 
     数据源：写作时不重扫原文（慢），走已蒸馏 作者风格.json.quantitative（复用 L1a 已算数值）。
+    advisory 边界（北极星⑤）：指纹是顾问数值（writer 可校准偏离），绝不是 hard_gate。
     """
     import os as _os
-    mode = (_os.environ.get("PROFILE_INJECT_MODE") or "off").strip().lower()
-    if mode == "off" or mode not in ("shadow", "active"):
+    mode = (_os.environ.get("PROFILE_INJECT_MODE") or "active").strip().lower()
+    if mode == "off":
         return None
+    if mode not in ("shadow", "active"):
+        mode = "active"  # 空/非法值 → 默认 active（2026-05-31 放量·只有显式 off 才关）
     if _style_profile_extractor is None or not s.has_style_profile():
         return None
     try:
@@ -3010,7 +3014,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "recent_openings": recent_openings,
         "style_directive": style_directive,
         # L1a 升格：作者量化风格指纹（显式下发 writer 多维目标硬数字 · advisory）。
-        # env PROFILE_INJECT_MODE 默认 off → None（零回归）；shadow → None（仅落盘+日志）；active → 注入。
+        # env PROFILE_INJECT_MODE 默认 active → 注入（真生效）；shadow → None（仅落盘+日志）；off → None（显式关闭）。
         "author_style_fingerprint": _collect_author_style_fingerprint(s),
         "dcas_enabled": dcas_enabled,
         # F5：freestyle 不暴露每章字数目标（None），避免 writer 据此自切章；字数由 splitter 按范围切。

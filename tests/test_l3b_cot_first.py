@@ -10,10 +10,10 @@ LLM 直接写长文易段长崩塌（蛊真人单章 B 级 / cluster 级仅 D �
 
 纪律：只测**确定性的 prompt 构造 / strip 纯函数**（不实跑 gen-model · gen-model 需 API）。
   CoT 是思考脚手架 → 落盘正文 strip 掉分析段，meta 留痕（不黑箱）。
-  保留旧 prompt 路径对照（env L3B_COT_FIRST_MODE=off / --cot-first off）· 默认行为零回归。
+  默认 active（2026-05-31 放量·token 预算阻碍已修）· 保留旧 prompt 路径对照（env L3B_COT_FIRST_MODE=off）。
   真原文校准（蛊真人 skill_v7.md）：受控坐标必须真在 skill 里有依据。
 
-测试覆盖：① mode 解析（默认 active / off / 归一 / 非法回退）；② CoT 指令含受控量化坐标 + 无感性词；
+测试覆盖：① mode 解析（默认 active / off / 归一 / 非法回退 active）；② CoT 指令含受控量化坐标 + 无感性词；
 ③ CoT system prompt 变体；④ build_cluster_subcall_prompt 两路（cot_first True/False）；
 ⑤ strip_cot_analysis 切分 / 无标记 / 取最后标记；⑥ 旧路径零回归；⑦ 真 skill_v7 校准。
 """
@@ -52,18 +52,18 @@ _META = {"cluster_id": "cluster_001", "chapter_range": [1, 6],
 # [A] mode 解析 _l3b_cot_first_mode
 # ════════════════════════════════════════════════════════════════
 
-def test_A_mode_default_off():
-    """L3B_COT_FIRST_MODE 未设 → 默认 off（影子纪律·与其他5升级件一致·CoT待gen-model实跑验证token预算后放量）。"""
+def test_A_mode_default_active():
+    """L3B_COT_FIRST_MODE 未设 → 默认 active（2026-05-31 放量·token 预算阻碍已修·真生效）。"""
     dx = _reload_dr(None)
     try:
-        assert dx._l3b_cot_first_mode() == "off"
+        assert dx._l3b_cot_first_mode() == "active"
     finally:
         _reload_dr(None)
 
 
-def test_A_mode_off_legacy():
-    """off / 0 / false / legacy → off（保留旧 prompt 路径对照）。"""
-    for v in ("off", "0", "false", "legacy", "OFF", "Off"):
+def test_A_mode_explicit_off():
+    """显式 off / OFF / Off → off（旧 prompt 路径对照 · 唯一关闭手段）。"""
+    for v in ("off", "OFF", "Off"):
         dx = _reload_dr(v)
         try:
             assert dx._l3b_cot_first_mode() == "off", v
@@ -81,13 +81,14 @@ def test_A_mode_on_normalized_to_active():
             _reload_dr(None)
 
 
-def test_A_mode_garbage_falls_back_off():
-    """空/非法值回退 off（保守默认·不静默开启未经实跑验证的升级）。"""
-    dx = _reload_dr("garbage_value")
-    try:
-        assert dx._l3b_cot_first_mode() == "off"
-    finally:
-        _reload_dr(None)
+def test_A_mode_garbage_falls_back_active():
+    """空/非法值/旧 0/false/legacy → 回退默认 active（2026-05-31 放量·只有显式 off 才关）。"""
+    for v in ("garbage_value", "", "0", "false", "legacy"):
+        dx = _reload_dr(v)
+        try:
+            assert dx._l3b_cot_first_mode() == "active", v
+        finally:
+            _reload_dr(None)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -124,6 +125,33 @@ def test_B_directive_first_analyze_then_write_order():
     d = dr.COT_FIRST_DIRECTIVE
     assert d.index(dr.COT_ANALYSIS_MARKER) < d.index(dr.COT_BODY_MARKER)
     assert "先" in d and ("分析" in d)
+
+
+# ════════════════════════════════════════════════════════════════
+# [B2] token 预算阻碍修复 subcall_max_tokens（CoT 分析段不挤占正文）
+# ════════════════════════════════════════════════════════════════
+
+def test_B2_cot_budget_not_below_legacy():
+    """修阻碍不变式：相同 target_words 下 CoT 预算 ≥ legacy 预算（正文不被分析段挤截断）。"""
+    for tw in (3000, 6000, 9000, 12000, 18000):
+        cot = dr.subcall_max_tokens(tw, cot_first=True)
+        legacy = dr.subcall_max_tokens(tw, cot_first=False)
+        assert cot >= legacy, (tw, cot, legacy)
+
+
+def test_B2_cot_ceiling_raised_above_legacy_8000():
+    """大 cluster（高 target_words）下 CoT ceiling 抬到 12000（旧码被 8000 钳死→正文截断）。"""
+    # legacy 大单 call 顶在 8000；CoT 应突破到 12000 给分析段额外预算
+    assert dr.subcall_max_tokens(18000, cot_first=False) == 8000
+    assert dr.subcall_max_tokens(18000, cot_first=True) == 12000
+    # CoT 在大单 call 真比 legacy 多出 ≥ 4000 token 给分析段（正文保底 ≥ legacy 8000）
+    assert dr.subcall_max_tokens(18000, cot_first=True) - 8000 >= 4000
+
+
+def test_B2_budget_floor_4000():
+    """极小 target_words 仍保底 4000（两路都不低于地板）。"""
+    assert dr.subcall_max_tokens(100, cot_first=True) >= 4000
+    assert dr.subcall_max_tokens(100, cot_first=False) >= 4000
 
 
 # ════════════════════════════════════════════════════════════════
