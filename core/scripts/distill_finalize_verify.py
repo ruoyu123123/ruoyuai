@@ -136,10 +136,19 @@ def estimate_cluster_arc(replica_txt: str, cluster_id: str, n_chapters: int) -> 
 
 # ============ strict 闸门判定（纯函数 · 可测） ============
 
-# 可估算 3 维：arc 形状(0) / 钩子分布(3) / 场景概述比(4)。
+# 可估算 strict 维：kicker 钩子分布(3) / scene 场景概述比(4)。
 # 排除 continuity(2)/voice_pack(5)（恒中性，不喂 gen 侧）+ emotion(1)（valence vs intensity 轴错配，
-# cosine 无测量学意义 · 2026-05-30 修 #5）。索引须与 cluster_evaluator.DIM_LABELS 顺序对齐。
-STRICT_ESTIMABLE_IDX = (0, 3, 4)
+# cosine 无测量学意义 · 2026-05-30 修 #5）+ arc 形状(0)（2026-06-01 修 #6，见下）。
+# 索引须与 cluster_evaluator.DIM_LABELS 顺序对齐。
+#
+# 2026-06-01 修 #6：arc 形状(0) 移出 strict。matched_reagan_shape 从 estimate emotion_curve
+# 拟合（_match_reagan_shape），与已移出的 emotion(1) 同源不可靠。金标准三重验证（distill_finalize_verify
+# 对 惊悚乐园 auto_001 复刻 / auto_002 复刻 / 原文 ch1-6 自比）：estimate 拼接文本拟合 shape 恒 Icarus，
+# 而聚合 cluster_arc 为 Cinderella / Man-in-a-Hole → arc 全 0.0。连真原文自比都 FAIL = estimate-shape
+# vs 聚合-shape 方法论系统性不对等，arc 不该做 strict hard 维。kicker(3) 保留：auto_002 复刻 + 原文自比
+# 均 PASS（gen=18=ref）证明 estimate 对 kicker 可靠（auto_001 复刻 gen=5 是该 cluster 钩子密度真实
+# 个例差距，非工具失效）。
+STRICT_ESTIMABLE_IDX = (3, 4)
 
 
 def strict_gate_decision(report: dict | None,

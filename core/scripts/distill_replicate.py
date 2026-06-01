@@ -222,12 +222,23 @@ def strip_cot_analysis(text: str) -> tuple[str, str]:
     设计：CoT 是思考脚手架（CoTeX），不进 SFS 评分 / 不污染复刻产出，但 meta.json 留痕不黑箱。
     宽容解析（防模型把 marker 写成全角括号 / 加序号）：按出现的最后一个 body marker 切分。
     """
-    idx = text.rfind(COT_BODY_MARKER)
-    if idx < 0:
-        return text, ""
-    cot = text[:idx].strip()
-    body = text[idx + len(COT_BODY_MARKER):].lstrip(" \t\r\n:：")
-    return body, cot
+    # 容错全角/半角 body marker（gen-model 不稳定输出 [正文] 或 【正文】）
+    for bm in (COT_BODY_MARKER, "【正文】"):
+        idx = text.rfind(bm)
+        if idx >= 0:
+            cot = text[:idx].strip()
+            body = text[idx + len(bm):].lstrip(" \t\r\n:：")
+            return body, cot
+    # 无 body marker 但有 analysis marker（全/半角）→ 按其后第一个独行 --- 分隔剥离
+    # （refine 轮 gen-model 常写「【本段量化坐标分析】…---…正文」而漏 [正文] marker）
+    for am in (COT_ANALYSIS_MARKER, "【本段量化坐标分析】"):
+        aidx = text.find(am)
+        if aidx >= 0:
+            m = re.search(r"\n\s*-{3,}\s*\n", text[aidx:])
+            if m:
+                split = aidx + m.end()
+                return text[split:].lstrip(" \t\r\n:："), text[:split].strip()
+    return text, ""
 
 
 # ============ Prompt 模板 ============

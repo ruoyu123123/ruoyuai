@@ -5,13 +5,13 @@
 arc_aggregator 产**情绪强度/intensity+节奏**(pacing 快0.8/中0.5/慢0.3 + dim33 节拍强度)。
 cluster_evaluator.score_emotion_curve 对两条正交轴做 cosine → 无测量学意义 → 随机误拦/误放
 贴合作者节奏的 skill。修复(a)：把 emotion(index1) 移出 strict estimable，与 continuity(2)/
-voice_pack(5) 一致，只留 arc(0)/kicker(3)/scene(4)。
+voice_pack(5) 一致。2026-06-01 修 #6 再移出 arc(0)（金标准三重 FAIL·见下），只留 kicker(3)/scene(4)。
 
 本测试断言：
-  · STRICT_ESTIMABLE_IDX 恰为 (0,3,4)，不含 emotion(1)；
-  · 索引顺序与 cluster_evaluator.DIM_LABELS 对齐（emotion 在 index1、arc/kicker/scene 在 0/3/4）；
-  · emotion 维不通过但 arc/kicker/scene 全过 → strict_ok=True（旧 bug 会误拦）；
-  · arc/kicker/scene 任一不过 → strict_ok=False（hard 维仍守住）；
+  · STRICT_ESTIMABLE_IDX 恰为 (3,4)，不含 emotion(1) 与 arc(0)；
+  · 索引顺序与 cluster_evaluator.DIM_LABELS 对齐（emotion 在 index1、kicker/scene 在 3/4）；
+  · emotion/arc 维不通过但 kicker/scene 全过 → strict_ok=True（旧 bug 会误拦）；
+  · kicker/scene 任一不过 → strict_ok=False（hard 维仍守住）；
   · schema 异常（非 6 维）退化为全维都算、不抛 IndexError。
 
 只测确定性纯函数 strict_gate_decision，不碰 LLM/subprocess/agent。
@@ -37,10 +37,11 @@ def _six_dim_report(scores):
 
 # ---- 索引对齐：守护「emotion 在 index1、可估算 3 维在 0/3/4」 ----
 
-def test_strict_estimable_idx_excludes_emotion():
-    """strict 可估算维恰为 arc(0)/kicker(3)/scene(4)，明确不含 emotion(1)。"""
-    assert dfv.STRICT_ESTIMABLE_IDX == (0, 3, 4), dfv.STRICT_ESTIMABLE_IDX
+def test_strict_estimable_idx_excludes_emotion_and_arc():
+    """strict 可估算维恰为 kicker(3)/scene(4)，不含 emotion(1) 与 arc(0)。"""
+    assert dfv.STRICT_ESTIMABLE_IDX == (3, 4), dfv.STRICT_ESTIMABLE_IDX
     assert 1 not in dfv.STRICT_ESTIMABLE_IDX, "emotion(index1) 不能进 strict（valence/intensity 轴错配）"
+    assert 0 not in dfv.STRICT_ESTIMABLE_IDX, "arc(index0) 不能进 strict（shape 从 estimate emotion 拟合·金标准三重 FAIL·2026-06-01 修#6）"
 
 
 def test_dim_labels_order_assumption_holds():
@@ -54,17 +55,18 @@ def test_dim_labels_order_assumption_holds():
 
 # ---- 核心回归：emotion 不过不应误拦 ----
 
-def test_emotion_fail_does_not_block_when_estimable_pass():
-    """核心回归：emotion(1) 因轴错配恒可能低分，但 arc/kicker/scene 全过 → strict 应放行。
-    旧 bug（estimable 含 index1）会因 emotion 低分误拦贴合作者节奏的 skill。"""
-    # arc=0.9 emotion=0.1(低) continuity=0.5 kicker=0.8 scene=0.75 voice=0.5
-    report = _six_dim_report([0.9, 0.1, 0.5, 0.8, 0.75, 0.5])
+def test_emotion_and_arc_fail_does_not_block_when_estimable_pass():
+    """核心回归：emotion(1)/arc(0) 因轴错配/同源不可靠恒可能低分，但 kicker/scene 全过 → strict 放行。
+    旧 bug（estimable 含 index1/index0）会因 emotion/arc 低分误拦贴合作者风格的 skill。"""
+    # arc=0.0(低·estimate-shape 不可比) emotion=0.1(低) continuity=0.5 kicker=0.8 scene=0.75 voice=0.5
+    report = _six_dim_report([0.0, 0.1, 0.5, 0.8, 0.75, 0.5])
     strict_ok, estimable = dfv.strict_gate_decision(report)
-    assert strict_ok is True, "emotion 低分不应拦截（已移出 strict）"
-    # 只抽 3 维，且不含 emotion 维标签
-    assert len(estimable) == 3
+    assert strict_ok is True, "emotion/arc 低分不应拦截（已移出 strict）"
+    # 只抽 2 维（kicker/scene），不含 emotion/arc 维标签
+    assert len(estimable) == 2
     dims = {r["dim"] for r in estimable}
     assert ce.DIM_LABELS[1] not in dims, dims
+    assert ce.DIM_LABELS[0] not in dims, dims
 
 
 def test_continuity_voice_fail_does_not_block():
@@ -76,11 +78,11 @@ def test_continuity_voice_fail_does_not_block():
 
 # ---- hard 维仍守住 ----
 
-def test_arc_fail_blocks():
-    """arc(0) 不过 → strict_ok=False（可估算 hard 维仍守住，没把闸门拆没）。"""
-    report = _six_dim_report([0.3, 0.9, 0.9, 0.8, 0.75, 0.9])
+def test_arc_fail_does_not_block():
+    """arc(0) 不过但 kicker/scene 过 → strict_ok=True（arc 2026-06-01 移出·estimate-shape 金标准三重 FAIL）。"""
+    report = _six_dim_report([0.0, 0.9, 0.9, 0.8, 0.75, 0.9])
     strict_ok, _ = dfv.strict_gate_decision(report)
-    assert strict_ok is False
+    assert strict_ok is True
 
 
 def test_kicker_fail_blocks():
@@ -98,11 +100,11 @@ def test_scene_fail_blocks():
 
 
 def test_all_estimable_pass():
-    """arc/kicker/scene 全过（其余随意）→ strict_ok=True。"""
-    report = _six_dim_report([0.71, 0.0, 0.0, 0.71, 0.71, 0.0])
+    """kicker/scene 全过（arc/emotion/其余随意）→ strict_ok=True。"""
+    report = _six_dim_report([0.0, 0.0, 0.0, 0.71, 0.71, 0.0])
     strict_ok, estimable = dfv.strict_gate_decision(report)
     assert strict_ok is True
-    assert len(estimable) == 3
+    assert len(estimable) == 2
 
 
 # ---- 边界：schema 异常不崩 ----
