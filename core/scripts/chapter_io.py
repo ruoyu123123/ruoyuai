@@ -136,6 +136,17 @@ def normalize_changes(data: dict) -> dict:
             data["factual"] = {}
         if not isinstance(data.get("self_eval"), dict):
             data["self_eval"] = {}
+        # 2026-06-02 修 HYBRID 布局：gen-model 常产 空 factual={} + 事实字段散在顶层
+        # （facts_locked/foreshadowing_planted/secrets_touched/...）。空 factual 触发 CHANGES_MISSING
+        # 误报（factual 落字但被 normalize 短路丢弃）。若 factual 空但顶层有已知事实字段 → 回填进 factual。
+        if not data["factual"]:
+            _fact_keys = ("facts_locked", "foreshadowing_planted", "foreshadowing_paid",
+                          "secrets_touched", "anchors_hit", "locked_facts",
+                          "world_state_changes", "relationship_changes", "item_changes",
+                          "knowledge_gained", "secret_status_changes", "travel_log_added")
+            recovered = {k: data[k] for k in _fact_keys if data.get(k)}
+            if recovered:
+                data["factual"] = recovered
         return data
     # 弹出元字段
     meta = data.pop("ecas_metadata", {}) if isinstance(data.get("ecas_metadata"), dict) else {}

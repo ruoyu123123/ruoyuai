@@ -188,6 +188,12 @@ def _gate_level_for(code: str, severity: str = "error") -> str:
     """v19：判定一条 issue 的权力等级。hard_gate 不可豁免，其余 advisory。
     v23.12：STYLE_单段超长 只在 fatal/error 时是 hard_gate（超例外 ≤1 才 FAIL）；
     WARN 状态（80-120 警告区或例外内）降 advisory 可豁免。"""
+    # 2026-06-02 修：info severity = 自动生成的旁注（本模块 docstring 定义「下游可忽略」），永不 hard_gate。
+    # 否则像 UNKNOWN_CHARACTER_DETECTED（validate_chapter 恒以 info 发的低置信 NER·历史 250+ 误报）
+    # 会用 NER 垃圾碎片（「一起的味」「人的耳朵」）硬毙整 cluster。真要 block 的项应以 error/fatal 发。
+    # 北极星⑤：检测是顾问非法官·低置信信号 advisory 可豁免。
+    if severity == "info":
+        return "advisory"
     if code == "STYLE_单段超长":
         return "hard_gate" if severity in ("fatal", "error") else "advisory"
     return "hard_gate" if code in HARD_GATE_CODES else "advisory"
