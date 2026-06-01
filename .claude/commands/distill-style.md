@@ -393,6 +393,9 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 3. 并行配额 ≤20 agent / 波（L1.4），分波启动
 4. 每完成约 10 cluster → 调 arc_aggregator.py --all-clusters 增量聚合 arc
 5. 全部 cluster 完成 → skill v0 聚合
+6. **skill v0 聚合后跑 `consolidate_author_profile.py`（照顾弱模型·确定性规整 consumer 字段·必跑）**：
+   `python core/scripts/consolidate_author_profile.py --project workspace/styles/<书名>`
+   从单章 metrics/dim **确定性聚合** quantitative + narrative_craft/fingerprint + cross_chapter_diversity 的 consumer 标准 schema（含别名键 mean/intra_chapter_std_mean/single_sentence_para_ratio_mean/chapter_words 等）。**不靠综合 agent 自由写 schema**——agent 只产创意（golden/core_style_signature/风格标签），数值字段由脚本保证标准，build_manifest(D1/D3/D5)/validate_style(段长band)/skill_contract_table 一定能读。**根因**：agent 自由 schema 与 consumer 期望键不符 = 契约债，强模型尚且乱、弱模型必崩 → 数值确定性化。
 ```
 
 ### 子代理的职责

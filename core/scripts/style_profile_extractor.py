@@ -105,6 +105,7 @@ def extract_from_chapter_texts(chapter_texts: list[str]) -> dict:
     sent_stds: list[float] = []
     single_ratios: list[float] = []
     dialogue_ratios: list[float] = []
+    para_means: list[float] = []
     collo_counter: Counter = Counter()
     used = 0
     for text in chapter_texts:
@@ -119,6 +120,9 @@ def extract_from_chapter_texts(chapter_texts: list[str]) -> dict:
         sr = _num(res.get("single_sentence_para_ratio"))
         if sr is not None:
             single_ratios.append(sr)
+        ps = res.get("paragraph_stats") or {}
+        if _num(ps.get("mean")) is not None:
+            para_means.append(float(ps["mean"]))
         dr = _num(res.get("dialogue_ratio"))
         if dr is not None:
             dialogue_ratios.append(dr)
@@ -137,7 +141,8 @@ def extract_from_chapter_texts(chapter_texts: list[str]) -> dict:
                             **(_quantile_triple(quant_buckets.get("sentence_length")) or {})},
         "sentence_length_quantiles": None,  # 句长分位数（raw 路无逐句聚合·留空）
         "single_sentence_para_ratio": _mean(single_ratios),
-        "paragraph_length_chars": _quantile_triple(quant_buckets.get("paragraph_length_chars")),
+        "paragraph_length_chars": ({**(_quantile_triple(quant_buckets.get("paragraph_length_chars")) or {}),
+                                     **({"mean": _mean(para_means)} if para_means else {})} or None),
         "dialogue_ratio": _mean(dialogue_ratios),
         "punctuation_per_1k": _punct_from_buckets(quant_buckets.get("punctuation_per_1k")),
         "function_words_per_1k": _fw_from_buckets(quant_buckets.get("function_words_per_1k")),
