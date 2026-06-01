@@ -73,6 +73,8 @@ echo '{"started_at":"'$(date -Iseconds)'","cluster_key":"<key>","completed_steps
 
 # 数据库 schema 自检 + 自动迁移（v25+ 字段补全）
 python core/scripts/db_schema_validate.py "<项目路径>" --auto-migrate
+# 34 子系统完整性闸（防 cluster 期间子系统更新漏/坏文件 · 缺或坏 → exit 2 阻断）
+python core/scripts/scaffold_subsystems.py verify "<项目路径>"
 ```
 
 **plan-step 1**：

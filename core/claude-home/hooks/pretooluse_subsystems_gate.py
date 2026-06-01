@@ -162,8 +162,10 @@ def main():
                 print(f"       - {f}", file=sys.stderr)
     print(f"", file=sys.stderr)
     print(f"   📝 解决方案（feedback-default-all-subsystems-enabled-for-new-books）:", file=sys.stderr)
-    print(f"     A. 主代理在 /outline step 3 init-databases 时建全 {len(ALL_REQUIRED)} 个 JSON（推荐）", file=sys.stderr)
-    print(f"        参考模板: core/claude-home/templates/examples/{{scp_anomaly_bureau, urban_supernatural_business}}/", file=sys.stderr)
+    print(f"     A.（推荐·一条命令）python core/scripts/scaffold_subsystems.py emit \"{project_name}\"", file=sys.stderr)
+    print(f"        → 生成 {len(ALL_REQUIRED)} 个 schema 正确空骨架（不覆盖已填），再填创意内容；", file=sys.stderr)
+    print(f"        框架: core/claude-home/templates/subsystem_skeletons.json · 示例: templates/examples/（含 _subsystem_examples/）", file=sys.stderr)
+    print(f"        填完跑 verify: python core/scripts/scaffold_subsystems.py verify \"{project_name}\"", file=sys.stderr)
     print(f"     B. 用户明确要轻量模式 → touch {bypass} 即可跳过（项目级 opt-out）", file=sys.stderr)
     sys.exit(2)
 

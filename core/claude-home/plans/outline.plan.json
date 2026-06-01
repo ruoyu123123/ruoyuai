@@ -30,7 +30,7 @@
     {
       "n": 3,
       "name": "init-34-subsystems",
-      "description": "初始化 34 个核心子系统 JSON · 9 大类 · 不允许部分启用（hook 强制全建）· 高级 16 个允许最小骨架占位但文件必须存在 · 事件簇.json 只详化 clusters[0] (cluster_001)，cluster_002+ 仅占位 status:'未涌现'，等 cluster_emergence_engine 动态产生 · clusters[0].narrative_mode 默认 'in_medias_res'（黄金三章倒叙 · 强冲突放最前 · 用户明示线性叙事除外），后续 cluster 默认 'linear' · 🔴 v2 cluster 化（2026-05-28）：进度.json.cluster_blueprint.cluster_001.scene_storyboard 必须含 N 条 scene_index=0..N-1 占位条目（N=cluster_001.scene_count_estimate，默认 4）· 不允许仅 1 条 scene → 否则 writer 拒绝 spawn 走 single fallback（已废弃）· 用户偏好.json 必须含 ecas_config.ecas_enabled=true 和 ecas_config.v2_cluster_enabled=true（默认 true）",
+      "description": "🆕推荐先跑 python core/scripts/scaffold_subsystems.py emit <书名> 生成 34 个 schema 正确空骨架(单一真理源 templates/subsystem_skeletons.json·不覆盖已填)再填创意内容,末尾 scaffold_subsystems.py verify <书名> + db_schema_validate 校验 · 初始化 34 个核心子系统 JSON · 9 大类 · 不允许部分启用（hook 强制全建）· 高级 16 个允许最小骨架占位但文件必须存在 · 事件簇.json 只详化 clusters[0] (cluster_001)，cluster_002+ 仅占位 status:'未涌现'，等 cluster_emergence_engine 动态产生 · clusters[0].narrative_mode 默认 'in_medias_res'（黄金三章倒叙 · 强冲突放最前 · 用户明示线性叙事除外），后续 cluster 默认 'linear' · 🔴 v2 cluster 化（2026-05-28）：进度.json.cluster_blueprint.cluster_001.scene_storyboard 必须含 N 条 scene_index=0..N-1 占位条目（N=cluster_001.scene_count_estimate，默认 4）· 不允许仅 1 条 scene → 否则 writer 拒绝 spawn 走 single fallback（已废弃）· 用户偏好.json 必须含 ecas_config.ecas_enabled=true 和 ecas_config.v2_cluster_enabled=true（默认 true）",
       "required": true,
       "expected_outputs": [
         "_数据库/人物卡.json",

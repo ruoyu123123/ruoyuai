@@ -29,22 +29,30 @@ def _load_skeletons():
 
 
 def _resolve_db_dir(args) -> Path:
-    """从 args 解析 _数据库 目录。支持 --db-dir <路径> 或 位置参数=项目名。"""
+    """从 args 解析 _数据库 目录。支持四种写法：
+    --db-dir <路径> / 位置参数=项目名 / 项目根路径 / 直接 _数据库 路径。
+    （cluster-save-state 传的是项目路径，/outline 传的是项目名，都要兼容）"""
     if "--db-dir" in args:
         i = args.index("--db-dir")
         return Path(args[i + 1])
-    # 位置参数 = 项目名
     positional = [a for a in args if not a.startswith("--")]
     if not positional:
-        print("[FATAL] 需要 项目名 或 --db-dir 路径", file=sys.stderr)
+        print("[FATAL] 需要 项目名 / 项目路径 / --db-dir 路径", file=sys.stderr)
         sys.exit(2)
-    name = positional[0]
+    arg = positional[0]
+    p = Path(arg)
+    # ① 已经指到 _数据库 目录
+    if p.name == "_数据库":
+        return p
+    # ② 是个路径（含分隔符 或 真实存在的目录）→ 当项目根，拼 _数据库
+    if (os.sep in arg) or ("/" in arg) or p.exists():
+        return p / "_数据库"
+    # ③ 纯名字 → 当项目名，在 workspace/novels|styles 下找
     for base in ("novels", "styles"):
-        cand = ROOT / "workspace" / base / name / "_数据库"
+        cand = ROOT / "workspace" / base / arg / "_数据库"
         if cand.parent.exists():
             return cand
-    # 默认按 novels
-    return ROOT / "workspace" / "novels" / name / "_数据库"
+    return ROOT / "workspace" / "novels" / arg / "_数据库"
 
 
 def _atomic_write(path: Path, obj):
