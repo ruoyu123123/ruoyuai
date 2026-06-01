@@ -557,6 +557,11 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
         name = c.get("name", "")
         if name:
             known_names.add(name)
+        # 2026-06-01 修：scene/正文常用 id 引用（如「乐园之声」），旧版只收 name
+        # 「乐园之声（广播）」→ 正文出现 id 时误报 UNKNOWN_CHARACTER。补 id 进已知集（减少误报）。
+        cid = c.get("id", "")
+        if cid:
+            known_names.add(cid)
         for alias in c.get("aliases", []):
             known_names.add(alias)
 

@@ -655,7 +655,11 @@ class DatabaseScanner:
         if not plan.get("scene_type"):
             warning.append("本章 scene_type 未标注，跳过场景规则注入")
 
-        cards = {c.get("name") for c in self.load("人物卡", {}).get("characters", [])}
+        # 2026-06-01 修：scene_storyboard 用 id 引用，旧版只比 name → id≠name 角色（如「乐园之声」
+        # id≠name「乐园之声（广播）」）被误判新角色。改 id∪name 容错（减少误报方向·低回归风险）。
+        _cards = self.load("人物卡", {}).get("characters", [])
+        cards = {c.get("name") for c in _cards} | {c.get("id") for c in _cards}
+        cards |= {a for c in _cards for a in (c.get("aliases") or [])}
         for n in plan.get("characters", []):
             if n not in cards:
                 warning.append(f"出场角色「{n}」在人物卡中不存在（视为新角色）")

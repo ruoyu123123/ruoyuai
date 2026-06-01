@@ -86,6 +86,38 @@ def resolve_originals_dir(project_root: Path) -> Path | None:
             cand = _resolve_style_src_to_originals(project_root, src)
             if cand and cand.exists() and cand.is_dir():
                 return cand
+        # 2026-06-02 修：风格库复制来的 作者风格.json 顶层常是 source=风格库名（如「惊悚乐园」），
+        # 不是路径 → 旧逻辑找不到原文池 → best-of-N + 语感种子双双退化（影响所有用风格库的新书）。
+        # 补：source 为裸名时 → workspace/styles/<名>/原文。
+        name = (data.get("source") or "").strip()
+        if name and "/" not in name and "\\" not in name:
+            cand = _resolve_style_name_to_originals(project_root, name)
+            if cand:
+                return cand
+    # 兜底：用户偏好 style_library_ref（_project_specific 或 workflow_preferences）→ 风格库原文池
+    pref_json = db / "用户偏好.json"
+    if pref_json.exists():
+        pd = _read_json(pref_json)
+        ref = (pd.get("_project_specific", {}) or {}).get("style_library_ref") or ""
+        if not ref:
+            for wp in pd.get("workflow_preferences", []) or []:
+                if isinstance(wp, dict) and wp.get("key") == "style_library_ref":
+                    ref = wp.get("value") or ""
+                    break
+        if ref:
+            cand = _resolve_style_name_to_originals(project_root, str(ref))
+            if cand:
+                return cand
+    return None
+
+
+def _resolve_style_name_to_originals(project_root: Path, name: str) -> Path | None:
+    """风格库名（如「惊悚乐园」）→ workspace/styles/<名>/原文。从 project_root 向上找含 workspace 的根。"""
+    for base in [project_root, *project_root.parents]:
+        for cand in (base / "workspace" / "styles" / name / "原文",
+                     base / "styles" / name / "原文"):
+            if cand.exists() and cand.is_dir():
+                return cand
     return None
 
 
