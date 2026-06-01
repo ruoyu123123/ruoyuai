@@ -1,0 +1,39 @@
+{
+  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "schema_version": "v2-cluster-fluid-1.0",
+  "_doc": "角色池（无脸者守则）。最小骨架·fluid 涌现：core=永久主要角色（outline 阶段定，每人仅 id/name/role 一句话，深度档由 cluster-save-state 流水线随剧情写入）；emerged=随故事块涌现的新角色（初始空，由 cluster-save-state 维护）；extras=一次性龙套（初始空）。北极星纪律：不预设 cluster_002+ 细节·advisory 不硬锁·以 cluster 为单位。",
+  "core": [
+    {
+      "id": "char_chichi",
+      "name": "池迟",
+      "role": "主角。21 岁松弛飒爽云玩家，毒舌 ACG 宅，零恐惧理性派；软肋是太抽离不肯认真投入，规训系统用「认真一次会死吗」攻他。"
+    },
+    {
+      "id": "char_suwan",
+      "name": "苏挽",
+      "role": "同伴。相声捧逗式搭档，还有脸、有个性，与池迟一冷一热互为映照。"
+    },
+    {
+      "id": "char_laozhong",
+      "name": "老钟",
+      "role": "镜子/警钟。守规守到快没脸的老玩家，塞遗留物（fs_001）给池迟，是不被同化残缺方法的线索。"
+    },
+    {
+      "id": "char_fansiwen",
+      "name": "范斯文",
+      "role": "反派/模范生。已高度同化却自视荣耀，靠劝降抢话语权。"
+    },
+    {
+      "id": "char_leyuanzhisheng",
+      "name": "乐园之声",
+      "role": "全知说书人/不可靠旁白。广播载体，会撒谎，承载元叙事破壁与中途撒谎被识破的反转。"
+    }
+  ],
+  "emerged": [],
+  "extras": [],
+  "_field_notes": {
+    "core": "永久主要角色。每条目前仅 id/name/role 一句话占位，同化值/脸完整度/操行分/关系/voice 等深度字段由 cluster-save-state 随剧情逐 cluster 写入，此处不预填。",
+    "emerged": "随故事块发展涌现的新角色，初始为空，由 cluster-save-state 维护。",
+    "extras": "一次性龙套角色，初始为空。"
+  }
+}

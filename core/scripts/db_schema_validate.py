@@ -65,12 +65,15 @@ SCHEMA_RULES = {
         "collection_type": dict,  # 这个本身是 dict 而非 list
         "item_required_fields": [],
     },
+    # 2026-06-01 根治[契约债]：权威结构 = success_patterns/failure_patterns/preferences
+    # （见 learning_loop.py 文档：entries 是 novel-reflector 的"输入"格式，非本文件结构；
+    # build_manifest.experience_entries() 兼容读两种）。旧规则要 entries 产生持续误报，
+    # 反过来会误导弱模型把对的文件改错。改对齐权威结构，不强约束 item 字段。
     "写作经验": {
-        "required_top_keys": ["schema_version", "entries"],
-        "collection_key": "entries",
+        "required_top_keys": ["schema_version", "success_patterns"],
+        "collection_key": "success_patterns",
         "collection_type": list,
-        # v2 cluster 化（2026-05-28）：observed_in 用 cluster_id list
-        "item_required_fields": ["id", "observed_in", "lesson"],
+        "item_required_fields": [],
     },
     # 2026-05-29 复审修复（L15）：实际 用户偏好.json 顶层是分组键
     # （workflow_preferences / style_preferences / content_preferences / ecas_config），
@@ -84,10 +87,13 @@ SCHEMA_RULES = {
         "item_required_fields": [],
         "optional": True,  # 文件可缺；preferences[] 也可缺（顶层分组键形态）
     },
+    # 2026-06-01 根治[契约债]：locations 是 list（命令文档 / scaffold 骨架 / 本模块自身的
+    # migrate_dict_to_list 都按 list；消费方 build_manifest 只读 character_positions(dict)/
+    # travel_log，不按类型读 locations）。旧规则写成 dict 与自身 migrate 方向矛盾 → 误报 TYPE_MISMATCH。
     "地图": {
         "required_top_keys": ["schema_version", "locations"],
         "collection_key": "locations",
-        "collection_type": dict,
+        "collection_type": list,
         "item_required_fields": [],
     },
     "关系": {

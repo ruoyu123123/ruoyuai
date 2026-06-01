@@ -1,0 +1,59 @@
+{
+  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "schema_version": "1.0",
+  "_doc": "网文 benchmark 维度映射：把通用网文评估维度（黄金三章/钩子/爽点/反套路 等）映射到《无脸者守则》本书落点。本文件为顾问性 advisory 参考，非门禁，不硬锁创作判断；以作者风格档（惊悚乐园）+ cluster 为单位。最小骨架：仅落点 cluster_001（in_medias_res 镜中脸）+ 全书级差异化定位，cluster_002+ 不预设细节，由涟漪涌现后回填。",
+  "dimensions": [
+    {
+      "id": "golden_three",
+      "name": "黄金三章",
+      "desc": "开篇三章抓人，决定读者留存。",
+      "book_landing": "cluster_001 采用 in_medias_res 倒叙：以镜中脸（climax scene_index 4）作强冲突开场，200 字内丢核心悬念（脸被扣/同化），再回溯入育新中学；通关育新中学 + 被标记 0721 收束首段冲突。",
+      "anchor": {
+        "cluster": "cluster_001",
+        "narrative_mode": "in_medias_res",
+        "climax_scene_index": 4
+      },
+      "gate_level": "advisory"
+    },
+    {
+      "id": "hook_strength",
+      "name": "钩子强度",
+      "desc": "章末悬念钩子，驱动追读。",
+      "book_landing": "惊悚乐园式强钩子章末；章末是钩子不是收束，禁场景过渡/剧本体/文学淡出。系统面板【】当正文制造悬念。",
+      "anchor": {},
+      "gate_level": "advisory"
+    },
+    {
+      "id": "payoff_satisfaction",
+      "name": "爽点/反差",
+      "desc": "解构与反杀带来的阅读快感。",
+      "book_landing": "零恐惧理性派主角池迟以元游戏视角解构校规、找漏洞、违规反杀；冷幽默×ACG 梗制造反差爽感，而非传统打脸。",
+      "anchor": {},
+      "gate_level": "advisory"
+    },
+    {
+      "id": "anti_trope",
+      "name": "反套路/差异化",
+      "desc": "题材内核与同类作品的差异点。",
+      "book_landing": "差异化内核=中式社会规训恐怖：守规=达标=活命却也=失我，个性（脸）可拒绝被格式化。区别于普通无限流的怪物追杀，恐怖来自规训同化与抽离软肋的对撞。",
+      "anchor": {},
+      "gate_level": "advisory"
+    },
+    {
+      "id": "protagonist_appeal",
+      "name": "主角魅力",
+      "desc": "主角人设与读者代入/喜爱度。",
+      "book_landing": "池迟：21 岁松弛飒爽云玩家、毒舌 ACG 宅、零恐惧理性派；软肋=太抽离不肯认真投入，规训系统用「认真一次会死吗」攻他。",
+      "anchor": {},
+      "gate_level": "advisory"
+    },
+    {
+      "id": "worldbuilding_clarity",
+      "name": "世界观清晰度",
+      "desc": "核心机制是否易懂且有张力。",
+      "book_landing": "育新中学（永不放学的模范中学）；同化值(0-100·critical=80) / 脸完整度（与同化反相关）/ 操行分（同化表层马甲）。守规涨同化、主动违规降但被标记。",
+      "anchor": {},
+      "gate_level": "advisory"
+    }
+  ]
+}

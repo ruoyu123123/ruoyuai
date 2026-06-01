@@ -253,11 +253,35 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
 
 ## 第 3 步：数据库初始化
 
+### 🆕 3.0 确定性脚手架先行（2026-06-01 根治契约债 · 照顾弱模型）
+
+**先跑 scaffold 生成 34 个 schema 正确的空骨架，再往骨架里填创意内容** —— 弱模型只填内容、不碰 schema，杜绝「agent 自由生成 schema → 与 consumer/validator 漂移 → 契约债」：
+
+```bash
+# ① 生成 34 个 schema 正确的空骨架（已存在的不覆盖，保护已填内容）
+python core/scripts/scaffold_subsystems.py emit "<书名>"
+```
+
+- 单一真理源：`core/claude-home/templates/subsystem_skeletons.json`（34 骨架·都满足 db_schema_validate）
+- 填充示例参考：`core/claude-home/templates/examples/`（含 `_subsystem_examples/` 9 个高级件示例）
+- 然后按下面 1-16 把**创意内容**填进骨架（cluster_001 详化 / 人物 / 大势 / 伏笔等），`作者风格.json` 从风格库复制或 `/distill-style` 蒸馏替换占位。
+
+完成填充后、跑 plan-step 3 前，**强制核对**（流程缺步补全，防 Workflow 名义返回掩盖漏文件）：
+
+```bash
+# ② 校验 34 件存在 + json 合法（缺/坏 → exit 2 阻断，不许带病进 step 3）
+python core/scripts/scaffold_subsystems.py verify "<书名>"
+# ③ schema 契约校验（13 核心件 0 error 才算干净）
+python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
+```
+
+> scaffold 是**底座**不是替代：3.0 给空骨架，下面 1-16 给创意内容，二者配合。手搓 / agent 生成时也以骨架 schema 为准。
+
 # 数据库初始化
 
-大纲确认完成后，自动执行以下操作：
+大纲确认完成后，自动执行以下操作（**优先用 3.0 scaffold 生成骨架后填充**）：
 
-1. `mkdir -p 小说_书名/_数据库/`
+1. `mkdir -p 小说_书名/_数据库/`（scaffold emit 会自动建目录）
 2. Write `_数据库/人物卡.json` — 从大纲中提取主要角色信息（含声音包），结构如下：
 ```json
 {

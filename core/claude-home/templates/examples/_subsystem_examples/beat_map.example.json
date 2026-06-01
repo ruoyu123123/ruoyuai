@@ -1,0 +1,110 @@
+{
+  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "schema_version": "v27.beat_map",
+  "framework": "save_the_cat",
+  "volume": 1,
+  "_doc": "Save the Cat 15 拍 → 第 1 卷映射表（叙事节拍参考层）· 顶层 framework=save_the_cat · beats[] 逐条给出 n/name/position/volume1_landing · 北极星纪律：本表是 advisory 软提示（writer/splitter 可在不脱离大势与既有事实前提下自由发挥），不锁章号不锁字数不构成 hard_gate · 以 cluster 为单位（15 拍中第 1-15 拍核心落点全部发生在 cluster_001=ME-V1-01 育新中学副本内，narrative_mode=in_medias_res 镜中脸倒叙开场，climax=scene_index 4）· cluster_002+ 节拍由 cluster_emergence_engine 涌现，不在此预设",
+  "generated_at": "2026-06-01",
+  "_metadata": {
+    "version": "v27",
+    "narrative_framework": "save_the_cat",
+    "narrative_mode": "in_medias_res",
+    "anchor_cluster": "cluster_001",
+    "anchor_me": "ME-V1-01",
+    "climax_scene_index": 4,
+    "advisory_only": true,
+    "note": "position 为 Save the Cat 经典百分比锚点（软提示），不换算为死锁章号；volume1_landing 描述本卷该拍的具体落点。"
+  },
+  "beats": [
+    {
+      "n": 1,
+      "name": "Opening Image",
+      "position": "0%",
+      "volume1_landing": "倒叙开场：镜中脸开始模糊的危机瞬间（in_medias_res）。池迟盯着镜子里逐渐变平的下巴，旁白『乐园之声』温柔登场——200 字内丢出核心悬念『一张正在被格式化的脸』，再简短回溯触发。映射 cluster_001 climax 段（scene_index 4 镜中脸）提前到卷首。"
+    },
+    {
+      "n": 2,
+      "name": "Theme Stated",
+      "position": "5%",
+      "volume1_landing": "老钟点题：守规守到快没脸的老玩家，半句牢骚半句警告，把『守规=活也=失我』的主题用一句不像主题的话说出来（如『达标的人最后都没脸见人了』），并塞给池迟一片遗留物残片（fs_001 伏笔种下）。"
+    },
+    {
+      "n": 3,
+      "name": "Set-Up",
+      "position": "1%-10%",
+      "volume1_landing": "育新中学 Set-Up：永不放学的模范中学全貌亮相。系统面板【校规公告】【操行分】当正文呈现，走廊脸模糊的无脸学生、达标=活命 / 不达标=扣脸（面部模糊度↑）/ 同化值满=变无脸 NPC 的规则系统铺开。池迟以松弛云玩家心态围观，零恐惧理性解构。"
+    },
+    {
+      "n": 4,
+      "name": "Catalyst",
+      "position": "10%",
+      "volume1_landing": "扣脸 Catalyst：池迟亲历第一次『不达标』触发扣脸惩罚（面部模糊度上升 / 同化值机制首次作用于己身），抽象规则变成贴脸代价。理性派第一次被乐园拽进局内——不再只是云玩家。"
+    },
+    {
+      "n": 5,
+      "name": "Debate",
+      "position": "10%-20%",
+      "volume1_landing": "守规 Debate：池迟内心权衡——守规能高效活命拿学籍，但隐隐不对劲。规训系统用『认真一次会死吗』叩他软肋（太抽离不肯认真投入）。要不要好好当个达标学生？毒舌自嘲与冷幽默掩盖犹豫。"
+    },
+    {
+      "n": 6,
+      "name": "Break into Two",
+      "position": "20%",
+      "volume1_landing": "找漏洞 Break into 2：池迟选择以云玩家方法论『钻规则漏洞』而非乖乖达标——主动进入新打法（元游戏理性解构恐怖）。从被动受规训转为主动逆向校规，正式踏入『玩这套系统』的第二幕世界。"
+    },
+    {
+      "n": 7,
+      "name": "B Story",
+      "position": "22%",
+      "volume1_landing": "苏挽 + 老钟 B Story：同伴线展开。苏挽（还有脸有个性·相声捧逗搭子）入伙，与池迟一逗一捧；老钟作为镜子 / 警钟持续提供旧玩家视角与遗留物线索。B Story 承载主题情感——『还有脸的人之间的连接』对抗格式化。"
+    },
+    {
+      "n": 8,
+      "name": "Fun and Games",
+      "position": "20%-50%",
+      "volume1_landing": "解构校规 Fun & Games（本卷承诺感最足段）：池迟连环拆解育新中学各条校规的逻辑漏洞，高密度冷幽默 × ACG 梗，以云玩家视角把恐怖副本玩成解谜爽场。守规达标与钻空子并行，同化值与脸完整度此消彼长的张力娱乐化呈现。"
+    },
+    {
+      "n": 9,
+      "name": "Midpoint",
+      "position": "50%",
+      "volume1_landing": "广播撒谎被识破 Midpoint：『乐园之声』（不可靠全知旁白 / 广播载体）一次谎言被池迟当场识破，假胜利 / 假失败翻转。池迟意识到旁白会撒谎、规则非中立（sc_001 无脸真相延迟揭示的引线收紧），赌注抬升。"
+    },
+    {
+      "n": 10,
+      "name": "Bad Guys Close In",
+      "position": "50%-75%",
+      "volume1_landing": "范斯文施压 Bad Guys Close In：反派 / 模范生范斯文登场逼近。已高度同化却自视荣耀，靠『现身说法』劝降抢夺话语权，与池迟争『谁更像个正常人』。外部围剿（操行分施压 / 同化逼近 critical=80）与内部松动同时收紧。"
+    },
+    {
+      "n": 11,
+      "name": "All Is Lost",
+      "position": "75%",
+      "volume1_landing": "镜中脸 All Is Lost：与第 1 拍倒叙开场闭环——池迟照镜，赫然发现自己脸真的开始模糊，惊觉『我居然真心觉得守规矩挺好的』。同化值逼近危险值，最低点：抽离派差点被系统格式化（死亡气息：作为『自我』的脸将逝）。"
+    },
+    {
+      "n": 12,
+      "name": "Dark Night of the Soul",
+      "position": "75%-80%",
+      "volume1_landing": "反思抽离软肋 Dark Night：池迟直面自己的软肋——太抽离、不肯认真投入，反而让系统钻了空子（越想置身事外越被同化）。零恐惧的理性派第一次认真审视『我到底是谁、我要哪张脸』，触底。"
+    },
+    {
+      "n": 13,
+      "name": "Break into Three",
+      "position": "80%",
+      "volume1_landing": "违规反杀 Break into 3：池迟想通——用玩家抽离感强行做一件『不达标』的事，主动违规把同化值拉回（主动违规降同化值的机制反用）。综合 A 故事（解构规则）+ B 故事（同伴 / 老钟方法）反杀，进入第三幕。"
+    },
+    {
+      "n": 14,
+      "name": "Finale",
+      "position": "80%-99%",
+      "volume1_landing": "通关 Finale：池迟以违规反杀通关育新中学副本，守住一张没被磨平、还会贫嘴的脸（守规=活但拒绝被格式化）。范斯文话语权被破，老钟遗留物 fs_001 价值显现，乐园之声谎言体系被点破一角。ME-V1-01 落地。"
+    },
+    {
+      "n": 15,
+      "name": "Final Image",
+      "position": "100%",
+      "volume1_landing": "走出被标记 Final Image：与第 1 拍呼应的收束钩子——池迟操行清零、被广播点名标记为『问题学生 0721』（fs_002），带着一张不肯准时达标的脸走出 / 通关副本，却发现乐园不止一所学校（fs_003）。强钩子章末，引向 ME-V1-02。"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "schema_version": "1.0",
+  "_doc": "叙事节拍器（pacing metronome）——记录《无脸者守则》情绪节奏目标。混合档：重事件场景拉长呼吸、轻事件场景节奏紧凑；约束每个 cluster 章末必留钩子；提示爽点（解构校规/违规反杀/毒舌吐槽）分布。advisory 顾问性质，不硬锁章数字数，writer/splitter 可豁免。仅记节奏意图，不预设 cluster_002+ 细节，章号 fluid 涌现由 splitter 按字数切。",
+  "rhythm_profile": "混合",
+  "beat_targets": [
+    {
+      "cluster_id": "cluster_001",
+      "narrative_mode": "in_medias_res",
+      "climax_scene_index": 4,
+      "scene_count": 6,
+      "emotion_curve": "倒叙开场镜中脸的强冲突 → 回溯老钟点题 → 育新中学规训日常铺陈 → 扣脸催化 → 守规与抽离的张力 → 章末找漏洞留钩子",
+      "pacing_intent": "重事件（镜中脸/扣脸）拉长沉浸，轻事件（日常规训铺陈/毒舌吐槽）保持紧凑推进",
+      "hook_required_at_cluster_end": true,
+      "punchline_distribution_hint": "解构校规的元游戏吐槽 + ACG 梗冷幽默均匀穿插轻事件场景，重事件场景克制不抢戏",
+      "_doc": "cluster_001 节拍目标。映射 ME-V1-01。具体每章切点与字数由 splitter freestyle 涌现，此处仅记情绪节奏意图。"
+    }
+  ],
+  "default_beat_policy": {
+    "hook_required_at_cluster_end": true,
+    "heavy_event_pacing": "拉长·增加呼吸感与沉浸细节",
+    "light_event_pacing": "紧凑·快推进多吐槽",
+    "punchline_distribution_hint": "毒舌吐槽/元叙事解构/ACG 梗按场景轻重穿插，重事件克制",
+    "_doc": "未在 beat_targets 中显式列出的 cluster 采用此默认节拍策略；后续 cluster 节拍目标随涟漪涌现，在 cluster-save-state 阶段追加，不在此预设。"
+  }
+}

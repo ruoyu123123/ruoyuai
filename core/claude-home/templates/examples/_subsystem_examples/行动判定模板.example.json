@@ -1,0 +1,60 @@
+{
+  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "schema_version": "1.0",
+  "_doc": "无脸者守则·行动判定模板库。定义类掷骰/属性判定模板，供 cluster 写作时为关键行动（守规/违规/找漏洞/PVP）提供判定维度参考。北极星纪律：本库为 advisory 顾问层（不硬锁、不门禁），writer 与创作判断为第一权威；以 cluster 为单位消费，不预设 cluster_002+ 具体判定。字段不确定处留空数组[]/空对象{}，由后续 cluster 流水线自然涌现填充。",
+  "templates": [
+    {
+      "id": "judge_find_loophole",
+      "name": "找规则漏洞",
+      "category": "找漏洞",
+      "_doc": "玩家试图在育新中学校规中找可钻的空子/字面漏洞，规避同化值上涨同时不触发被标记。",
+      "dimensions": [
+        {
+          "key": "理性",
+          "weight": 0.6,
+          "_doc": "对规则文本的逻辑解构与边界推演能力"
+        },
+        {
+          "key": "信息差",
+          "weight": 0.4,
+          "_doc": "掌握的隐藏规则/遗留物线索 vs 系统已知，差越大越易成"
+        }
+      ],
+      "outcome_bands": [],
+      "consequence_hooks": {
+        "同化值": "",
+        "脸完整度": "",
+        "标记": ""
+      },
+      "notes": ""
+    },
+    {
+      "id": "judge_break_rule",
+      "name": "主动违规",
+      "category": "违规",
+      "_doc": "玩家主动违反校规以降同化值/夺回自我，代价是可能被乐园之声标记（如 0721）。",
+      "dimensions": [
+        {
+          "key": "理性",
+          "weight": 0.5,
+          "_doc": "评估违规收益与被标记风险的权衡"
+        },
+        {
+          "key": "时机",
+          "weight": 0.5,
+          "_doc": "广播/监控盲区时机，规避当场被标记"
+        }
+      ],
+      "outcome_bands": [],
+      "consequence_hooks": {
+        "同化值": "",
+        "脸完整度": "",
+        "标记": ""
+      },
+      "notes": ""
+    }
+  ],
+  "dimension_registry": {},
+  "outcome_band_schema": {},
+  "_usage": ""
+}

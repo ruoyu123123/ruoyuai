@@ -1,0 +1,20 @@
+{
+  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "schema_version": "1.0",
+  "_doc": "角色烙印（Voice DNA 深度蒸馏产物）。最小骨架占位，由 /distill-character 命令从已写章节中深度蒸馏填充每个角色的 5 层 Voice DNA（用词指纹/句式节奏/口癖语气/价值内核/反应模式）。imprints 数组按角色逐个追加。当前为空骨架，等待蒸馏。",
+  "imprints": [],
+  "_imprint_schema": {
+    "_doc": "单条 imprint 的预期结构（由 /distill-character 填充，此处仅作 schema 自洽说明，不参与消费）",
+    "character_id": "",
+    "character_name": "",
+    "voice_dna": {
+      "layer_1_lexicon": {},
+      "layer_2_syntax_rhythm": {},
+      "layer_3_verbal_tics": {},
+      "layer_4_value_core": {},
+      "layer_5_reaction_patterns": {}
+    },
+    "source_clusters": [],
+    "distilled_at": ""
+  }
+}

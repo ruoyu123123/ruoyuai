@@ -1,0 +1,68 @@
+{
+  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "schema_version": "1.0",
+  "_doc": "副线脉络（subplot threads）最小骨架。记录主线之外、随 cluster 与涟漪逐步推进的副线。北极星纪律：advisory 不硬锁、以 cluster 为单位涌现、不预设 cluster_002+ 细节、不干涉创作判断。初始仅登记三条主要副线，beats/related_clusters 等留空，由 cluster-save-state 流水线随写作进度增量回填。",
+  "threads": [
+    {
+      "id": "sub_001",
+      "name": "苏挽同伴线",
+      "status": "active",
+      "type": "companion",
+      "summary": "苏挽作为同伴与相声捧逗，是池迟在副本里少数还有脸、有个性的连接；陪伴线随同化压力推进。",
+      "related_chars": [
+        "池迟",
+        "苏挽"
+      ],
+      "related_secrets": [],
+      "related_foreshadowing": [],
+      "related_clusters": [
+        "cluster_001"
+      ],
+      "beats": [],
+      "notes": {}
+    },
+    {
+      "id": "sub_002",
+      "name": "老钟镜子线",
+      "status": "active",
+      "type": "mirror_warning",
+      "summary": "老钟是镜子与警钟——守规守到快没脸的老玩家，把遗留物塞给池迟，预示守规=失我的下场。",
+      "related_chars": [
+        "池迟",
+        "老钟"
+      ],
+      "related_secrets": [
+        "sc_001"
+      ],
+      "related_foreshadowing": [
+        "fs_001"
+      ],
+      "related_clusters": [
+        "cluster_001"
+      ],
+      "beats": [],
+      "notes": {}
+    },
+    {
+      "id": "sub_003",
+      "name": "乐园运营者悬疑线",
+      "status": "active",
+      "type": "mystery",
+      "summary": "乐园之声作为不可靠全知旁白会撒谎，背后运营者是谁始终悬而未决——永不明确的长线悬疑。",
+      "related_chars": [
+        "乐园之声"
+      ],
+      "related_secrets": [
+        "sc_002"
+      ],
+      "related_foreshadowing": [
+        "fs_003"
+      ],
+      "related_clusters": [
+        "cluster_001"
+      ],
+      "beats": [],
+      "notes": {}
+    }
+  ]
+}

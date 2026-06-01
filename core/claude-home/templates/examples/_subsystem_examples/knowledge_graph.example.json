@@ -1,0 +1,111 @@
+{
+  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "schema_version": "v2-cluster",
+  "_doc": "知识图谱（角色↔事实↔密级）。记录谁知道什么事实及其密级，供 build_manifest 注入 writer / 一致性 scanner 校验「角色不能说出他不知道的事」。最小骨架：仅锚定 cluster_001 已知关系，cluster_002+ 关系由 cluster-save-state 涌现后增量补入，不在此预设。nodes=实体(角色/事实/秘密/伏笔)，edges=关系(knows/not_knows/holds/triggers 等含密级)。北极星：cluster 为单位、advisory 不硬锁、不干涉创作判断。",
+  "nodes": [
+    {
+      "id": "char_chichi",
+      "type": "character",
+      "name": "池迟",
+      "role": "protagonist",
+      "_doc": "21岁松弛飒爽云玩家·毒舌·ACG宅·零恐惧理性派；软肋=太抽离不肯认真投入"
+    },
+    {
+      "id": "char_suwan",
+      "type": "character",
+      "name": "苏挽",
+      "role": "companion",
+      "_doc": "同伴/相声捧逗·还有脸有个性"
+    },
+    {
+      "id": "char_laozhong",
+      "type": "character",
+      "name": "老钟",
+      "role": "mirror_warning",
+      "_doc": "镜子/警钟·守规守到快没脸的老玩家·塞遗留物给池迟"
+    },
+    {
+      "id": "char_fansiwen",
+      "type": "character",
+      "name": "范斯文",
+      "role": "antagonist",
+      "_doc": "反派/模范生·已高度同化却自视荣耀·靠劝降抢话语权"
+    },
+    {
+      "id": "char_leyuanzhisheng",
+      "type": "character",
+      "name": "乐园之声",
+      "role": "unreliable_narrator",
+      "_doc": "全知说书人/不可靠旁白·广播载体·会撒谎"
+    },
+    {
+      "id": "sc_001",
+      "type": "secret",
+      "name": "无脸人=守规失我的老玩家",
+      "secrecy": "leaked",
+      "reveal_timing": "delayed",
+      "_doc": "秘密 sc_001。cluster_001 中已对池迟 leaked（经老钟/遗留物暗示）"
+    },
+    {
+      "id": "sc_002",
+      "type": "secret",
+      "name": "乐园运营者是谁",
+      "secrecy": "hidden",
+      "reveal_timing": "never_explicit",
+      "_doc": "秘密 sc_002。永不明确·全程对所有角色保持 hidden"
+    },
+    {
+      "id": "fs_001",
+      "type": "foreshadowing",
+      "name": "老钟遗留物·如何不被同化残缺方法",
+      "tier": "Tier1",
+      "status": "planted",
+      "_doc": "伏笔 fs_001。cluster_001 由老钟塞给池迟"
+    },
+    {
+      "id": "fs_002",
+      "type": "foreshadowing",
+      "name": "问题学生0721标记",
+      "tier": "Tier2",
+      "status": "planted",
+      "_doc": "伏笔 fs_002。cluster_001 池迟被标记 0721"
+    },
+    {
+      "id": "fs_003",
+      "type": "foreshadowing",
+      "name": "不止一所学校",
+      "tier": "Tier2",
+      "status": "planted",
+      "_doc": "伏笔 fs_003"
+    }
+  ],
+  "edges": [
+    {
+      "from": "char_chichi",
+      "to": "sc_001",
+      "relation": "knows",
+      "secrecy": "leaked",
+      "_doc": "池迟知道无脸人真相（sc_001 已 leaked 给他）"
+    },
+    {
+      "from": "char_chichi",
+      "to": "sc_002",
+      "relation": "not_knows",
+      "secrecy": "hidden",
+      "_doc": "池迟不知道乐园运营者是谁（sc_002 hidden）"
+    },
+    {
+      "from": "char_laozhong",
+      "to": "char_chichi",
+      "relation": "gives_item",
+      "ref": "fs_001",
+      "_doc": "老钟把遗留物（fs_001）塞给池迟"
+    },
+    {
+      "from": "char_chichi",
+      "to": "fs_002",
+      "relation": "marked_as",
+      "_doc": "池迟在 cluster_001 被打上 0721 问题学生标记（fs_002）"
+    }
+  ]
+}

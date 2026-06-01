@@ -1,0 +1,67 @@
+{
+  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "schema_version": "1.0",
+  "_doc": "Dramatica 四贯穿线（four throughlines）骨架·以故事块(cluster)为单位牵引《无脸者守则》主题=守规=活也=失我·此为最小合法骨架：Main=池迟(抽离VS同化)/Influence=老钟(守规活得久的劝说)/Relationship=池迟与苏挽(要不要真的在乎)/Overall=对抗乐园规训系统·不预设 cluster_002+ 细节·四线为 advisory 软牵引非硬锁·writer 经 build_manifest 消费·手动微调走 /db",
+  "throughlines": {
+    "overall": {
+      "name": "对抗乐园规训系统",
+      "domain": "",
+      "concern": "玩家在育新中学（永不放学的模范中学）求生：守规=达标=活命+学籍 / 不达标=扣脸 / 同化值满=变无脸NPC",
+      "problem": "规训系统以「守规」为唯一活路，逼玩家被格式化失去个性（脸）",
+      "solution": "",
+      "core_conflict": "玩家抽离 VS 规训同化",
+      "antagonist_force": "育新中学规训机制 + 乐园之声(全知说书人/不可靠旁白·会撒谎)",
+      "cluster_anchor": "cluster_001",
+      "me_link": [
+        "ME-V1-01"
+      ],
+      "related_secrets": [
+        "sc_001",
+        "sc_002"
+      ],
+      "beats": [],
+      "_doc": "Overall throughline=全局客观线·核心冲突来自 canon·beats 留空待 cluster 涌现填充·domain/solution 不预设由后续故事块涌现"
+    },
+    "main": {
+      "name": "池迟",
+      "character": "池迟",
+      "domain": "",
+      "concern": "21岁松弛飒爽云玩家·毒舌·ACG宅·零恐惧理性派",
+      "problem": "太抽离不肯认真投入（软肋：规训系统用「认真一次会死吗」攻他）",
+      "solution": "",
+      "personal_arc": "抽离 VS 同化",
+      "flaw": "太抽离，把一切当游戏不肯真的投入",
+      "cluster_anchor": "cluster_001",
+      "beats": [],
+      "_doc": "Main throughline=主角池迟主观线·内在冲突=抽离VS同化·arc 由各 cluster 推进·beats 留空待涌现·不预设结局走向"
+    },
+    "influence": {
+      "name": "老钟",
+      "character": "老钟",
+      "domain": "",
+      "concern": "守规守到快没脸的老玩家·镜子/警钟·塞遗留物给池迟",
+      "perspective": "守规活得久的劝说（守规=活得久）",
+      "challenge_to_main": "用「守规才能活下去」的处世经验冲击池迟的抽离态度",
+      "related_foreshadowing": [
+        "fs_001"
+      ],
+      "cluster_anchor": "cluster_001",
+      "beats": [],
+      "_doc": "Influence throughline=影响角色老钟·以守规活得久的劝说挑战主角·fs_001(老钟遗留物·如何不被同化残缺方法·Tier1)挂此线·beats 留空待涌现"
+    },
+    "relationship": {
+      "name": "池迟与苏挽",
+      "characters": [
+        "池迟",
+        "苏挽"
+      ],
+      "domain": "",
+      "concern": "同伴关系/相声捧逗·苏挽还有脸有个性",
+      "central_question": "要不要真的在乎",
+      "dynamic": "",
+      "cluster_anchor": "cluster_001",
+      "beats": [],
+      "_doc": "Relationship throughline=池迟与苏挽的关系线·核心问题=要不要真的在乎·dynamic 不预设由相处涌现·beats 留空待 cluster 推进"
+    }
+  }
+}
