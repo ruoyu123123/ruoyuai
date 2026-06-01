@@ -256,7 +256,11 @@ def collect_character_deltas(continuity_dir: Path) -> dict[str, list[dict]]:
 
         # 优先用新 schema 字段 character_emotion_delta
         cdeltas = data.get("character_emotion_delta", []) or []
+        if not isinstance(cdeltas, list):  # consumer tolerant：骨架/弱模型可能写 str("TODO")
+            cdeltas = []
         for entry in cdeltas:
+            if not isinstance(entry, dict):  # 容错 str/非 dict 元素
+                continue
             name = entry.get("character")
             if not name:
                 continue

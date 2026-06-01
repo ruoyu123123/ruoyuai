@@ -339,13 +339,15 @@ def test_F_gu_zhenren_quantiles_match_known_distribution():
 
 
 def test_F_jingsong_quantiles_match_known_distribution():
-    """惊悚乐园 paragraph_length_chars 分位数落在已知真实区间（p50≈52·p95≈72）。"""
+    """惊悚乐园 paragraph_length_chars 分位数落已知真实区间（ch1-500 增量后 p50≈46·p95≈74·分窗 max 覆盖前期长段卷型）。"""
     sj = _ROOT / "workspace" / "styles" / "惊悚乐园" / "作者风格_FINAL.json"
     if not sj.exists():
         return
     plc = json.loads(sj.read_text(encoding="utf-8"))["quantitative"]["paragraph_length_chars"]
-    assert 48 <= plc["p50"] <= 55, plc
-    assert 68 <= plc["p95"] <= 76, plc       # 真 p95 71.9 > 旧 mean±30% 上界 67.6（矫枉过正锚）
+    # ch1-250 中位 52 → ch1-500 增量后 46（后期剧本段短·L4.14 卷型差异·仍远 > 普通爽文 ~30 = 长段作者）
+    assert 42 <= plc["p50"] <= 55, plc
+    # p95 分窗 max 覆盖前期长段卷型(ch1-250 p95=71.9)·不被后期短段抹平 → 真长段不误伤(矫枉过正锚)
+    assert 68 <= plc["p95"] <= 76, plc
 
 
 # ════════════════════════════════════════════════════════════════

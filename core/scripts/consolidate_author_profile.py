@@ -113,21 +113,21 @@ def aggregate_quantitative(project: Path, total: int) -> dict:
         if _num(vr.get("hapax_ratio")) is not None:
             hapax.append(float(vr["hapax_ratio"]))
 
-    # 段长分位数：用 style_analyzer 从原文聚合（逐段 calc_quantiles）
+    # 段长 band：章段均(para_means)**分窗 p95 取 max**·与 validate_style 段均 band 同量纲。
+    # 2026-06-01 增量修(L4.14 卷型差异化·真作者保护)：全局 p95 会被多 batch 增量的后期短段卷型
+    # 拉低(惊悚 ch1-250 段均 p95=72 / ch251-500=56 / 全局=66)→ band 上界缩小→误伤前期长段章。
+    # 分窗(每~1/4 章)取各窗 p95 的 max→覆盖最长卷型段长(前期长段不被后期抹平)·p5 取各窗 min(短段保护)。
     para_q = None
-    if orig.exists():
-        texts = []
-        for n in range(1, total + 1):
-            f = orig / f"第{n:03d}章.txt"
-            if f.exists():
-                texts.append(f.read_text(encoding="utf-8"))
-        if texts:
-            buckets = sa.aggregate_chapter_quantiles(texts)
-            plc = buckets.get("paragraph_length_chars")
-            if isinstance(plc, dict) and plc.get("p5") is not None and plc.get("p95") is not None:
-                para_q = {"p5": round(plc["p5"], 2),
-                          "p50": round(plc.get("p50") or plc.get("median") or 0, 2),
-                          "p95": round(plc["p95"], 2)}
+    if len(para_means) >= 2:
+        def _pctl(L, p):
+            s = sorted(L); k = (len(s) - 1) * p; f = int(k); c = min(f + 1, len(s) - 1)
+            return s[f] + (s[c] - s[f]) * (k - f)
+        W = max(50, len(para_means) // 4)
+        wins = [w for w in (para_means[i:i + W] for i in range(0, len(para_means), W)) if len(w) >= 2]
+        if wins:
+            para_q = {"p5": round(min(_pctl(w, 0.05) for w in wins), 2),
+                      "p50": round(_pctl(para_means, 0.5), 2),
+                      "p95": round(max(_pctl(w, 0.95) for w in wins), 2)}
 
     para_mean = _mean(para_means)
     plc_out = dict(para_q) if para_q else {}

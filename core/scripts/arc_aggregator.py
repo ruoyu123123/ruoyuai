@@ -521,8 +521,12 @@ def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_si
     character_arc = list(char_seen.values())[:5]
 
     # 伏笔聚合
-    fs_planted = sum(len(c.get("foreshadowing", {}).get("planted", []) or []) for c in continuity_jsons)
-    fs_resolved = sum(len(c.get("foreshadowing", {}).get("resolved", []) or []) for c in continuity_jsons)
+    # consumer tolerant：foreshadowing 可能被抗截断骨架/弱模型写成 str("TODO") → 非 dict 当空（不崩聚合）
+    def _fore_len(c, key):
+        fo = c.get("foreshadowing")
+        return len((fo.get(key) or [])) if isinstance(fo, dict) else 0
+    fs_planted = sum(_fore_len(c, "planted") for c in continuity_jsons)
+    fs_resolved = sum(_fore_len(c, "resolved") for c in continuity_jsons)
 
     # v22.4dim Round 2 应用：Sudowrite tension dial 1-11
     sudowrite_dial = [round(1 + 10 * v) for v in emotion_curve[:arc_size]]
