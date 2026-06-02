@@ -30,6 +30,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import chapter_io as cio  # noqa: E402 · normalize_changes 恢复 HYBRID factual
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     import atomic_json  # noqa: E402  原子写 事件簇.json 回填
 except Exception:  # pragma: no cover
@@ -199,7 +202,10 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
     if not splitter_decisions_path.exists():
         return {"ok": False, "error": f"splitter_decisions 不存在: {splitter_decisions_path}"}
 
-    cluster_changes = load_json(cluster_changes_path)
+    # 2026-06-02 修：走 normalize_changes 恢复 HYBRID 布局（gen-model 常产 空factual={}+事实散顶层
+    # facts_locked/foreshadowing_planted）→ 否则平铺出 per-chapter factual 也空 → 下游 validate 逐章
+    # 误报 CHANGES_MISSING（cluster→split→per-chapter 三级级联）。
+    cluster_changes = cio.normalize_changes(load_json(cluster_changes_path))
     splitter_decisions = load_json(splitter_decisions_path)
 
     # 取 chapter_range —— 统一识别两套 WAL schema（2026-05-29 复审修复 [H1]）

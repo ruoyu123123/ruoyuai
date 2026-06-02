@@ -190,6 +190,14 @@ def apply_changes(root: Path, ch: int) -> int:
         print(f"[APPLY] 无 parsed CHANGES，跳过", file=sys.stderr)
         return 1
 
+    # 2026-06-02 修：gen-model 常把 foreshadowing_planted/paid 报成自评摘要字符串
+    # （如「3/3——fs_001/fs_002/fs_003 全部 planted」）而非结构化 list → 下游 (str or []) + list
+    # 拼接崩 TypeError + for-in 逐字符遍历。统一 coerce 成 list（str/dict→[v]·None 保持·已是 list 不动）。
+    for _fk in ("foreshadowing_planted", "foreshadowing_paid"):
+        _v = changes.get(_fk)
+        if _v is not None and not isinstance(_v, list):
+            changes[_fk] = [_v]
+
     # v16: 生成并保存声明式Patch
     patches = _generate_patch(changes, ch)
     patch_path = db / ".wal" / f"第{ch}章_patch.json"
@@ -270,8 +278,13 @@ def apply_changes(root: Path, ch: int) -> int:
                 # setup_cluster 为按章号推断（反查不到） → 打不可信标记
                 if setup_inferred:
                     promise_rec["_cluster_inferred"] = True
-                fs["promises"].append(promise_rec)
-                summary["applied"].append(f"伏笔 setup: {fid}")
+                # 2026-06-02 修：按 id 去重——同 id 已存在则跳过 append（防 re-apply / split v1 把整
+                # factual 平铺到每章 → apply 5× → 同 id 累积重复·foreshadower 实测 fs_001 被写 6 套）
+                if any(p.get("id") == fid for p in fs["promises"]):
+                    summary["applied"].append(f"伏笔 setup(已存在·去重跳过): {fid}")
+                else:
+                    fs["promises"].append(promise_rec)
+                    summary["applied"].append(f"伏笔 setup: {fid}")
             elif typ == "payoff":
                 for p in fs["promises"]:
                     if p.get("id") == fid:
@@ -282,7 +295,7 @@ def apply_changes(root: Path, ch: int) -> int:
                 else:
                     summary["warnings"].append(f"payoff 引用了不存在的伏笔: {fid}")
         elif cat == "deadline":
-            if typ == "raise":
+            if typ == "raise" and not any(d.get("id") == fid for d in fs["deadlines"]):
                 fs["deadlines"].append({
                     "id": fid, "raised_ch": ch,
                     "description": act.get("description", ""),
@@ -295,7 +308,7 @@ def apply_changes(root: Path, ch: int) -> int:
                         d["status"] = "triggered" if typ == "trigger" else "missed"
                         break
         elif cat == "pledge":
-            if typ == "make":
+            if typ == "make" and not any(pl.get("id") == fid for pl in fs["pledges"]):
                 fs["pledges"].append({
                     "id": fid, "pledger": act.get("pledger", ""),
                     "raised_ch": ch, "pledge": act.get("description", ""),
@@ -330,7 +343,9 @@ def apply_changes(root: Path, ch: int) -> int:
                     secret_rec["reveal_at_pending_resolution"] = True
                 if est_inferred:
                     secret_rec["_cluster_inferred"] = True
-                fs["secrets"].append(secret_rec)
+                # 2026-06-02 修：按 id 去重（同 promises·防 re-apply/平铺累积重复 secrets）
+                if not any(s.get("id") == fid for s in fs["secrets"]):
+                    fs["secrets"].append(secret_rec)
             elif typ == "reveal":
                 for s in fs["secrets"]:
                     if s.get("id") == fid:
