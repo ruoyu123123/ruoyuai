@@ -325,6 +325,42 @@ def test_parse_and_apply_word_count_mode_bypasses_conservation():
         assert not rejected
 
 
+def test_parse_and_apply_recovers_dropped_path_segment():
+    """2026-06-02：LLM 自报 ===FILE: 路径漏段（如 cluster draft 漏「章节/」前缀）→ 旧版写到
+    不存在路径崩 FileNotFoundError。修复后按 basename 回正到「修复前读过的已知文件」，
+    写对位置、不在漏段路径误建文件。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        rel = "章节/cluster_001_draft/cluster_001_draft.txt"  # 真实路径含「章节/」
+        original = "原始草稿正文" * 10  # 60 CJK
+        _make_chapter(root, rel, original)
+        wrong_rel = "cluster_001_draft/cluster_001_draft.txt"  # LLM 漏了「章节/」
+        new_body = "修复后草稿正文" * 9  # 同量级（过 CJK 守恒）
+        reply = _reply_with_file(wrong_rel, new_body)
+        written, summary, rejected = gf.parse_and_apply(
+            reply, root, before_content_by_path={rel: original})
+        assert len(written) == 1, "应按 basename 回正并写入，而非崩 FileNotFoundError"
+        assert not rejected
+        assert (root / rel).read_text(encoding="utf-8").strip() == new_body
+        assert not (root / wrong_rel).exists(), "不应在漏段的错误路径误建文件"
+
+
+def test_parse_and_apply_ambiguous_basename_not_recovered():
+    """回正只在 basename 唯一匹配时生效——多个同名已读文件时不猜（避免写错文件）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        rel_a = "章节/cluster_001_draft/draft.txt"
+        rel_b = "章节/cluster_002_draft/draft.txt"
+        _make_chapter(root, rel_a, "原文A" * 10)
+        _make_chapter(root, rel_b, "原文B" * 10)
+        reply = _reply_with_file("draft.txt", "新正文" * 9)  # 漏段且 basename 二义
+        written, summary, rejected = gf.parse_and_apply(
+            reply, root, before_content_by_path={rel_a: "原文A" * 10, rel_b: "原文B" * 10})
+        # basename 二义 → 不回正 → 该块写不进（不误伤任一文件）
+        assert (root / rel_a).read_text(encoding="utf-8") == "原文A" * 10
+        assert (root / rel_b).read_text(encoding="utf-8") == "原文B" * 10
+
+
 def test_parse_and_apply_no_before_content_does_not_block():
     """守恒校验不误伤：没有 before_content（拿不到原文）时不阻断覆写（仅缺兜底，不能反而失败）。"""
     with tempfile.TemporaryDirectory() as td:

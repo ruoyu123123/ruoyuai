@@ -690,8 +690,18 @@ def parse_and_apply(reply: str, project_root: Path,
         target = Path(rel_path)
         if not target.is_absolute():
             target = project_root / rel_path
-        # 安全：校验 target 仍在 project_root 内，防 ../../ 路径穿越逃逸项目目录
         target_resolved = target.resolve()
+        # 2026-06-02 修：LLM 自报 ===FILE: 路径可能漏段（如 cluster draft 漏「章节/」前缀）→ 写到
+        # 不存在路径直接崩 FileNotFoundError。若 target 既非「修复前读过的已知文件」又不存在，按
+        # basename 在已读文件里找回唯一匹配（不盲信 LLM 路径·权威=修复前读的那个文件）。
+        if str(target_resolved) not in before_cjk_by_abs and not target.exists():
+            _cands = [k for k in before_cjk_by_abs if Path(k).name == target.name]
+            if len(_cands) == 1:
+                target = Path(_cands[0])
+                target_resolved = target.resolve()
+                print(f"  [路径回正] LLM 报『{rel_path}』不存在 → basename 匹配已读文件 {target}",
+                      file=sys.stderr)
+        # 安全：校验 target 仍在 project_root 内，防 ../../ 路径穿越逃逸项目目录
         try:
             target_resolved.relative_to(root_resolved)
         except ValueError:
