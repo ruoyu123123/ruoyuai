@@ -685,7 +685,9 @@ def parse_and_apply(reply: str, project_root: Path,
     files_written = []
     rejected = []
     for m in pattern.finditer(reply):
-        rel_path = m.group(1).strip()
+        # 2026-06-02 修：LLM 常把 ===FILE: 路径用 markdown 反引号/引号包裹（`path` / "path"）→
+        # 非绝对路径被 join 成带反引号的非法路径 OSError。剥掉首尾反引号/引号再解析。
+        rel_path = m.group(1).strip().strip('`"\'').strip()
         content = m.group(2).rstrip() + '\n'
         target = Path(rel_path)
         if not target.is_absolute():

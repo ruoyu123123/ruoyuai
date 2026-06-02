@@ -345,6 +345,23 @@ def test_parse_and_apply_recovers_dropped_path_segment():
         assert not (root / wrong_rel).exists(), "不应在漏段的错误路径误建文件"
 
 
+def test_parse_and_apply_strips_backtick_wrapped_path():
+    """2026-06-02：LLM 把 ===FILE: 路径用 markdown 反引号/引号包裹（`path`）→旧版 join 成带反引号
+    非法路径 OSError 崩。修复后剥掉首尾反引号/引号再解析，正常写入。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        rel = "章节/cluster_002_draft/cluster_002_draft.txt"
+        original = "原始草稿正文" * 10
+        _make_chapter(root, rel, original)
+        abs_path = str(root / rel)
+        new_body = "修复草稿正文" * 9
+        reply = _reply_with_file("`" + abs_path + "`", new_body)  # 反引号包裹绝对路径
+        written, summary, rejected = gf.parse_and_apply(
+            reply, root, before_content_by_path={rel: original})
+        assert len(written) == 1, "反引号包裹路径应剥离后正常写入，而非 OSError"
+        assert (root / rel).read_text(encoding="utf-8").strip() == new_body
+
+
 def test_parse_and_apply_ambiguous_basename_not_recovered():
     """回正只在 basename 唯一匹配时生效——多个同名已读文件时不猜（避免写错文件）。"""
     with tempfile.TemporaryDirectory() as td:
