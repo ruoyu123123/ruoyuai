@@ -105,6 +105,13 @@ def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
 # env BEST_OF_N：默认 2（active · N≥2 真生效）· 设 1 = 关（退回单稿直生 · 零回归逃生口）。
 BEST_OF_N_DEFAULT = 2
 BEST_OF_N_MAX = 5  # 上限防 token 失控（用户质量优先但不无限）
+
+# [2026-06-04] freestyle 正文长度软下限（CJK）：低于此值且模型 finish=stop（写完但偏短）→ call_gen_model
+# 触发 expand 续写兜底（展开剩余场景）。治 pro 等简洁倾向 reasoning 模型单 cluster 仅 ~3650 CJK 偏短问题。
+# 软托底非硬锁（北极星⑤）：防注水——单轮续写增量 < FREESTYLE_EXPAND_MIN_GAIN 即停（模型没料别硬凑）。
+FREESTYLE_MIN_CJK = 12000          # 健康区间 12000-25000 的下限
+FREESTYLE_EXPAND_MAX_ROUNDS = 4    # expand 续写最多轮数
+FREESTYLE_EXPAND_MIN_GAIN = 800    # 单轮增量低于此 CJK → 停止兜底（避免注水）
 # 综合分：每个走味维度的惩罚（满分 100 的 SFS 尺度上扣多少 · 4 维全走味最多扣 40）。
 AV_DRIFT_PENALTY_PER_DIM = 10.0
 
@@ -585,9 +592,9 @@ cluster_brief 完整内容：
 
 **🎯 v27 自由发挥模式**：
 - 你**不知道**目标章数（章数由 splitter 后期按 3000-4500 CJK/章 自然切，章数由你写的内容多少决定）
-- 你**不知道**目标总字数（按 cluster.scope_summary + scene_storyboard 写够即可，不必凑字数）
-- **专注做对的事**：写完 cluster_brief.scope_summary 描述的所有场景 + 兑现 foreshadowing_to_plant
-- 自然结尾即止 — 写完 cluster 主线就停（一般 12000-25000 CJK 是健康范围，不强求）
+- 不锁精确字数，但**这是一个完整的故事块（cluster），不是单章**——它由 scene_storyboard 里的**多个场景**构成，**每个场景都要充分展开**（动作 / 对话 / 环境 / 内心 / 冲突推进逐一到位，切忌一笔带过、切忌只写梗概或跳着叙述）。
+- **健康篇幅 12000-25000 CJK 是软下限**：一个把所有场景都写透的多场景故事块，自然就落在这个体量。**如果你写到三五千字就觉得"讲完了"，几乎一定是场景展开得太简略**——回头逐个场景写够细节再继续，不要急着收尾。
+- **专注做对的事**：把 cluster_brief.scope_summary + scene_storyboard 描述的**每一个场景**都充分展开 + 兑现 foreshadowing_to_plant，全部写透后再自然收尾。
 
 ⚠️ **重要提醒**：你输出的是**一整块叙事**，不是分好章的成品。**严禁**写「第 N 章 标题」/「——」分章符。把整个故事块当一篇长散文写，场景之间自然过渡。
 """
@@ -728,12 +735,13 @@ cluster_brief 完整内容：
 
 # ============ Gen-Model 调用（含 fallback 链） ============
 def _stream_once(client, profile, system: str, user: str, max_tokens: int,
-                 prior_assistant: str | None = None) -> tuple[str, "str | None"]:
+                 prior_assistant: str | None = None, cont_reason: str = "length") -> tuple[str, "str | None"]:
     """单次 stream 生成，返回 (text, finish_reason)。
 
     2026-05-30 加强：捕获 finish_reason（原循环只累加 content，从不读 finish_reason，
     导致命中 max_tokens 的截断被静默吞掉 → freestyle 长草稿半截入库）。
     prior_assistant 非空 → 续写模式（把已生成内容回填，要求接着写不重复）。
+    cont_reason：'length'=被截断续写（接着断点写）；'expand'=写完了但正文太短续写（展开剩余场景·防 pro 类简洁模型偏短）。
     """
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": user}]
@@ -744,9 +752,21 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
         # 续写生成点近邻没有任何风格约束 → recency 漂移（越续越退化回通用 AI 腔）。
         # 这里在续写指令里补一行**精简风格锚**（签名句长 / 对话格式 / 禁结构套话 3 条），
         # 贴生成点 RoPE 高位重申最关键约束，防长草稿尾段风格崩塌。advisory 性质（不硬锁）。
-        cont_msg = ("上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
-                    "不要重复已经写过的内容、不要重新开头，直接续写后续正文"
-                    "（如果正文已写完，就补上结尾的 CHANGES JSON 块）。")
+        if cont_reason == "expand":
+            cont_msg = ("这只是故事块的前半部分——目前篇幅还远不够一个完整故事块（scene_storyboard 里还有场景"
+                        "没写、或被一笔带过写得太简略）。请接着上文最后一个字继续往下写，把剩余的 / 没写透的"
+                        "场景**充分展开**（动作·对话·环境·内心·冲突推进逐一到位），"
+                        "**不要重复已写内容、不要重新开头、不要提前收尾**。"
+                        "**先别写 CHANGES JSON**——等后续轮次正文真正写够了我再让你补。")
+        elif cont_reason == "changes_only":
+            cont_msg = ("正文已经写完。现在请**只输出**这个故事块结尾的 CHANGES JSON 块"
+                        "（用 ```json 围栏包裹），**不要再写任何正文、不要重复正文内容**。"
+                        "JSON 需包含 factual（locked_facts / foreshadowing_planted / foreshadowing_paid / "
+                        "出场角色 等本故事块发生的事实变更）与 self_eval。")
+        else:
+            cont_msg = ("上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
+                        "不要重复已经写过的内容、不要重新开头，直接续写后续正文"
+                        "（如果正文已写完，就补上结尾的 CHANGES JSON 块）。")
         if _ctx_reorder_mode() == "active":
             cont_msg += (
                 "\n\n续写仍须贴合作者风格档：① 句长 / 段长节奏沿用前文（别越写越碎或越堆长）；"
@@ -779,8 +799,13 @@ GEN_MODEL_MAX_RETRIES = 3  # 同 profile 限流/超时的有限重试次数
 GEN_MODEL_RETRY_BASE_DELAY = 2.0  # 指数退避基础秒数（2,4,8）
 
 
-def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str, Profile]:
+def call_gen_model(loader: GenModelLoader, system: str, user: str,
+                   min_cjk: int | None = None) -> tuple[str, Profile]:
     """调当前 active profile；失败时按 fallback 链尝试。
+
+    min_cjk：freestyle 正文长度软下限。设了 → 生成完（finish=stop）但正文 CJK < min_cjk 时，
+    追加 expand 续写（展开剩余场景）兜底，治 pro 等简洁模型单 cluster 偏短。蒸馏复刻/ai_wrapper
+    不传 → 行为零回归。
 
     返回 (full_text, used_profile)。
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
@@ -863,6 +888,63 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
             failures.append((profile.name, reason))
             continue  # 切下一个 profile
 
+        # [2026-06-04] 内容偏短兜底：pro 等简洁倾向 reasoning 模型常 finish=stop 但正文远不够 cluster
+        # 体量（实测 pro 单 cluster 仅 3650 CJK vs 健康 12000-25000）。length 续写只管截断，这里对
+        # 「写完了但太短」追加 expand 续写——把 scene_storyboard 没展开的场景写透。
+        # 防注水：单轮增量 < FREESTYLE_EXPAND_MIN_GAIN 即停（模型没料别硬凑）· 最多 N 轮 · 软托底非硬锁。
+        if min_cjk and full_text.strip():
+            def _raw_split(rep):
+                ms = list(re.finditer(r'```json\s*\n.*?\n```', rep, re.DOTALL))
+                if ms:
+                    return rep[:ms[-1].start()].rstrip(), rep[ms[-1].start():]
+                return rep.strip(), ""
+            _cjk = lambda s: sum(1 for c in s if '一' <= c <= '鿿')
+            accum_body, last_changes = _raw_split(full_text)
+            rounds = 0
+            while rounds < FREESTYLE_EXPAND_MAX_ROUNDS:
+                body_cjk = _cjk(accum_body)
+                if body_cjk >= min_cjk:
+                    break
+                rounds += 1
+                print(f"\n[gen_writer] ⚠️ 正文 {body_cjk} CJK < 软下限 {min_cjk}，"
+                      f"内容续写第 {rounds}/{FREESTYLE_EXPAND_MAX_ROUNDS} 轮（展开剩余场景·非截断）…",
+                      file=sys.stderr)
+                try:
+                    cont_text, _fr = _stream_once(client, profile, system, user, max_tokens,
+                                                  prior_assistant=accum_body, cont_reason="expand")
+                except Exception as e:
+                    print(f"[gen_writer] expand 续写第 {rounds} 轮失败（保留已有正文）: {str(e)[:150]}",
+                          file=sys.stderr)
+                    break
+                cont_body, cont_changes = _raw_split(cont_text)
+                inc = _cjk(cont_body)
+                if cont_body.strip():
+                    accum_body += "\n\n" + cont_body
+                if cont_changes:
+                    last_changes = cont_changes
+                if inc < FREESTYLE_EXPAND_MIN_GAIN:
+                    print(f"[gen_writer] 续写增量仅 {inc} CJK（模型已无更多内容）→ 停止兜底，避免注水",
+                          file=sys.stderr)
+                    break
+            # expand 各轮被要求"先别写 CHANGES" → 收尾时若仍缺 CHANGES，追加一次"只补 CHANGES"请求
+            # （否则下游 CHANGES_MISSING hard_gate）。仅在确实发生过 expand 续写时才补。
+            if rounds > 0 and not last_changes:
+                print("[gen_writer] expand 后缺 CHANGES JSON，追加一次补全请求…", file=sys.stderr)
+                try:
+                    chg_text, _cf = _stream_once(client, profile, system, user, max_tokens,
+                                                 prior_assistant=accum_body, cont_reason="changes_only")
+                    _, cc = _raw_split(chg_text)
+                    if cc:
+                        last_changes = cc
+                    elif "{" in chg_text:
+                        last_changes = "```json\n" + chg_text.strip() + "\n```"
+                except Exception as e:
+                    print(f"[gen_writer] 补 CHANGES 失败（下游 normalize 兜底）: {str(e)[:120]}",
+                          file=sys.stderr)
+            full_text = accum_body + ("\n\n" + last_changes if last_changes else "")
+            print(f"\n[gen_writer] 内容兜底完成：正文 {_cjk(accum_body)} CJK（expand {rounds} 轮）"
+                  f"· CHANGES={'有' if last_changes else '无'}", file=sys.stderr)
+
         # 成功
         print(f"\n[gen_writer] 接收完毕 ({len(full_text)} chars) via {profile.name}",
               file=sys.stderr)
@@ -904,7 +986,7 @@ def gather_author_ref_text(project_root: Path, max_chars: int = 6000) -> str:
 
 
 def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
-                      n: int) -> list[dict]:
+                      n: int, min_cjk: int | None = None) -> list[dict]:
     """生成 N 个候选稿（temperature 阶梯抖动 · 非迭代 · 规避 self-refine 同质化）。
 
     每个候选独立调一次 call_gen_model（active→fallback 链复用 · 不另起调用栈）。
@@ -927,7 +1009,7 @@ def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
         print(f"\n[gen_writer][best-of-N] 生成候选 {i+1}/{n} (temperature={temp})",
               file=sys.stderr)
         try:
-            reply, used_profile = call_gen_model(loader, system, user)
+            reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk)
             drafts.append({"idx": i, "reply": reply, "profile": used_profile,
                            "temperature": temp, "error": None})
         except GenModelExhaustedError as e:
@@ -1024,7 +1106,8 @@ def select_best_draft(scored: list[dict]) -> tuple[int, str]:
 
 
 def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
-                       project_root: Path, n: int) -> tuple[str, "Profile", dict]:
+                       project_root: Path, n: int,
+                       min_cjk: int | None = None) -> tuple[str, "Profile", dict]:
     """best-of-N 主流程：生成 N 稿 → 各自打分 → 综合择优 → 返回最佳稿。
 
     返回 (best_reply, best_profile, selection_trace)。
@@ -1037,7 +1120,7 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
         print("[gen_writer][best-of-N] 未找到作者原文池 · 跳过 SFS/AV-judge 打分 "
               "（仍生成 N 稿但退回第一稿 · 优雅降级）", file=sys.stderr)
 
-    drafts = generate_n_drafts(loader, system, user, n)
+    drafts = generate_n_drafts(loader, system, user, n, min_cjk=min_cjk)
     ok_drafts = [d for d in drafts if d.get("error") is None and d.get("reply")]
     if not ok_drafts:
         # 全部候选生成失败 → 汇总 raise（与单稿全失败行为一致）
@@ -1276,17 +1359,23 @@ def main():
     # N 稿并行生成（temperature 阶梯抖动）→ SFS + AV-judge 配对判别打分 → 综合择优。
     # selection（择优）≠ refine（迭代）→ 天然规避 self-refine 同质化（arxiv 实证）。
     n = _best_of_n()
+    # [2026-06-04] freestyle 才启用正文长度软下限兜底（locked v26 模式由 target_cjk 自己管）。
+    # 治 pro 等简洁倾向模型单 cluster 偏短（实测 3650 vs 健康 12000-25000）。
+    min_cjk = FREESTYLE_MIN_CJK if args.chapter_end is None else None
+    if min_cjk:
+        print(f"[gen_writer] [v27 freestyle] 正文长度软下限 min_cjk={min_cjk}（偏短→expand 续写兜底）",
+              file=sys.stderr)
     best_of_n_trace = None
     try:
         if n >= 2:
             print(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优",
                   file=sys.stderr)
             reply, used_profile, best_of_n_trace = best_of_n_pipeline(
-                loader, system, user, project_root, n)
+                loader, system, user, project_root, n, min_cjk=min_cjk)
         else:
             print(f"[gen_writer][best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）",
                   file=sys.stderr)
-            reply, used_profile = call_gen_model(loader, system, user)
+            reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk)
     except GenModelExhaustedError as e:
         print(f"\n[ERROR] {e}", file=sys.stderr)
         sys.exit(3)

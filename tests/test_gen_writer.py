@@ -248,3 +248,98 @@ def test_save_output_writes_nonempty_body():
         draft_path, cjk = gw.save_output(root, 2, "这是一段真正的正文内容。", {}, 5, None, _profile("p"))
         assert draft_path.exists()
         assert cjk > 0
+
+
+# ============ 2026-06-04 expand 续写兜底回归（治 pro 等简洁模型单 cluster 偏短）============
+def _client_seq(specs, capture_msgs=None):
+    """按 create 调用序号返回不同 chunks 的 mock（测 expand 多轮续写）。
+    specs: [[(content,finish),...], ...] 每次 create 消费下一个（末个之后重复末个）。"""
+    class MockChoice:
+        def __init__(s, c, fr):
+            s.delta = type("D", (), {"content": c})()
+            s.finish_reason = fr
+    class MockChunk:
+        def __init__(s, c, fr):
+            s.choices = [MockChoice(c, fr)]
+    class MockStream:
+        def __init__(s, spec):
+            s.spec = spec
+        def __iter__(s):
+            return iter([MockChunk(c, fr) for c, fr in s.spec])
+    class Comp:
+        def __init__(s):
+            s.calls = 0
+        def create(s, **kw):
+            if capture_msgs is not None:
+                capture_msgs.append(kw["messages"])
+            spec = specs[min(s.calls, len(specs) - 1)]
+            s.calls += 1
+            return MockStream(spec)
+    class Client:
+        def __init__(s):
+            s.chat = type("C", (), {"completions": Comp()})()
+    return Client()
+
+
+def test_expand_skipped_when_min_cjk_none():
+    """零回归：min_cjk=None（蒸馏复刻/ai_wrapper）→ 不触发 expand，单次生成即返回。"""
+    msgs = []
+    restore, _ = _patch_openai([_client_seq([[("短正文", "stop")]], capture_msgs=msgs)])
+    try:
+        text, _u = gw.call_gen_model(_Loader([_profile("a")]), "sys", "usr")  # min_cjk 默认 None
+    finally:
+        restore()
+    assert text == "短正文"
+    assert len(msgs) == 1  # 只调一次 create，无 expand 续写
+
+
+def test_expand_triggers_and_reaches_min():
+    """正文<min_cjk 且 finish=stop → expand 续写，累积达标后停。"""
+    msgs = []
+    spec1 = [("字" * 30 + "\n```json\n{\"factual\": {\"a\": 1}}\n```", "stop")]
+    spec2 = [("续" * 40 + "\n```json\n{\"factual\": {\"a\": 1}}\n```", "stop")]
+    restore, _ = _patch_openai([_client_seq([spec1, spec2], capture_msgs=msgs)])
+    orig = gw.FREESTYLE_EXPAND_MIN_GAIN
+    gw.FREESTYLE_EXPAND_MIN_GAIN = 5
+    try:
+        text, _u = gw.call_gen_model(_Loader([_profile("a")]), "sys", "usr", min_cjk=50)
+    finally:
+        gw.FREESTYLE_EXPAND_MIN_GAIN = orig
+        restore()
+    assert len(msgs) >= 2, "正文偏短应触发 expand 续写"
+    assert "续" in text, "expand 续写内容应并入正文"
+    body, changes = gw.split_text_and_changes(text)
+    assert changes.get("factual") is not None, "达标后应保留 CHANGES"
+
+
+def test_expand_stops_on_low_gain():
+    """防注水：单轮续写增量 < FREESTYLE_EXPAND_MIN_GAIN → 立即停，不续满 4 轮。"""
+    msgs = []
+    spec1 = [("字" * 30 + "\n```json\n{\"factual\": {}}\n```", "stop")]
+    spec_tiny = [("少", "stop")]  # 每轮才 1 CJK，远低于 GAIN → 应停
+    restore, _ = _patch_openai([_client_seq([spec1, spec_tiny], capture_msgs=msgs)])
+    try:
+        text, _u = gw.call_gen_model(_Loader([_profile("a")]), "sys", "usr", min_cjk=50000)
+    finally:
+        restore()
+    assert len(msgs) <= 3, "增量过小应防注水停止，不应续满 4 轮"
+
+
+def test_expand_backfills_missing_changes():
+    """expand 各轮被要求先别给 CHANGES → 缺 CHANGES 时追加 changes_only 补全请求。"""
+    msgs = []
+    spec1 = [("字" * 30, "stop")]            # 首轮无 CHANGES
+    spec_expand = [("续" * 60, "stop")]       # expand 达标(min=50)，仍无 CHANGES
+    spec_changes = [("```json\n{\"factual\": {\"x\": 1}}\n```", "stop")]  # 补全轮给 CHANGES
+    restore, _ = _patch_openai([_client_seq([spec1, spec_expand, spec_changes], capture_msgs=msgs)])
+    orig = gw.FREESTYLE_EXPAND_MIN_GAIN
+    gw.FREESTYLE_EXPAND_MIN_GAIN = 5
+    try:
+        text, _u = gw.call_gen_model(_Loader([_profile("a")]), "sys", "usr", min_cjk=50)
+    finally:
+        gw.FREESTYLE_EXPAND_MIN_GAIN = orig
+        restore()
+    assert any("CHANGES" in m[-1]["content"] and "只输出" in m[-1]["content"] for m in msgs), \
+        "缺 CHANGES 应追加 changes_only 补全请求"
+    body, changes = gw.split_text_and_changes(text)
+    assert changes.get("factual", {}).get("x") == 1, "补全的 CHANGES 应并入最终输出"
