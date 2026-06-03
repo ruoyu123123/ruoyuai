@@ -105,6 +105,13 @@
       "_new": true,
       "issues_emitted": ["SEAM_DISTRIBUTION_DRIFT"]
     },
+    "rhetoric_repetition": {
+      "layer": "cluster",
+      "script": "rhetoric_repetition_scanner.py",
+      "doc": "[2026-06-03 新增] AI 长文退化三连指纹：否定对照/破折号密度 + 比喻喻体复读 + 整段近重复 · 兜底 gen_writer 元anti-slop（弱模型 freestyle 守不住的客观检测闭环）· advisory 永不 hard_gate（作者档可豁免破折号/比喻偏好）· 阈值以 cluster_001 优秀样本校准防矫枉过正",
+      "_new": true,
+      "issues_emitted": ["RHETORIC_REPETITION"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",
