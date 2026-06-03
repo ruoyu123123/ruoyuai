@@ -1192,6 +1192,85 @@ def split_text_and_changes(reply: str) -> tuple:
     return body, changes_obj
 
 
+# ============ [2026-06-04] 句法熔合 pass：治「碎句/流水账作文感」============
+# 实证：prompt/few-shot 喊话治不动 gen-model 句长（C3c 正反例 + snippet_seed 样例都在，pro 句长仍 14）。
+# 但 gen-model 在【明确的编辑任务】下能把碎句合并成复合长句（实测 15.0→28.5·CJK 守恒 630→629·情节全保留）。
+# 故生成后检测句长，偏短则分段喂 gen-model 做「只改句法不改情节」的熔合，CJK 守恒才采用（防删/注水）。
+# 北极星：只治工艺碎句·不碰情节创意（守恒校验兜底）· 偏短才触发 · 不改善则保留原文（不退化）。
+FUSE_MIN_MEAN_CJK = 24      # 叙述句均长低于此（作者基线 31 的 ~0.77）→ 触发句法熔合
+FUSE_BATCH_CJK = 3500       # 分段熔合每批目标字数（避免单次过长 + 不切断段落）
+_FUSE_SYSTEM = ("你是中文文字编辑。只做句法重塑，绝不改动任何情节/对话内容/人物/事实——"
+                "剧情一个字都不删不加不改。")
+_FUSE_USER_PREFIX = (
+    "下面这段网文叙述句子太碎（大量「主语+动作」短句独行，像小学作文流水账）。请重写，**只调句法**：\n"
+    "① 把连续的「主语+动作」短句用逗号连缀成复合长句（例「他睁开眼。他低头看了看自己。他挑了挑眉。」→"
+    "「他睁开眼，低头看了看自己，又挑了挑眉」）；② 省略重复主语；③ 句首多样化（别都「他/某角色名」开头，"
+    "可用环境/状语/动作中段起头）；④ 叙述句平均长度明显拉长，读着像成熟网文。\n"
+    "🔴 铁律：情节 / 对话(引号内) / 人物 / 事实一字不改不删不加；系统面板【】原样保留；只改叙述句断句与连接。\n\n原文：\n")
+
+
+def _avg_sentence_cjk(text: str) -> float:
+    import re as _re
+    import statistics as _st
+    body = [l.strip() for l in text.split("\n") if l.strip() and not l.strip().startswith("【")]
+    s = []
+    for p in body:
+        for x in _re.split(r"[。！？…]+", p):
+            c = sum(1 for ch in x if "一" <= ch <= "鿿")
+            if c >= 2:
+                s.append(c)
+    return _st.mean(s) if s else 0.0
+
+
+def _batch_paragraphs(body: str, target_cjk: int = FUSE_BATCH_CJK) -> list:
+    """按段落攒到 target_cjk 一批（不切断段落 / 对话 / 场景中间）。"""
+    paras = body.split("\n\n") if "\n\n" in body else body.split("\n")
+    batches, cur, cur_cjk = [], [], 0
+    for p in paras:
+        cur.append(p)
+        cur_cjk += sum(1 for c in p if "一" <= c <= "鿿")
+        if cur_cjk >= target_cjk:
+            batches.append("\n\n".join(cur))
+            cur, cur_cjk = [], 0
+    if cur:
+        batches.append("\n\n".join(cur))
+    return batches
+
+
+def maybe_fuse_syntax(loader: GenModelLoader, body: str) -> str:
+    """句长偏短 → 分段句法熔合（gen-model 编辑任务）。CJK 守恒 + 句长改善才采用，否则保留原文。"""
+    cur = _avg_sentence_cjk(body)
+    if cur >= FUSE_MIN_MEAN_CJK:
+        print(f"[gen_writer] 句长 {cur:.1f} ≥ {FUSE_MIN_MEAN_CJK}，无需句法熔合", file=sys.stderr)
+        return body
+    print(f"\n[gen_writer] ⚠️ 句长 {cur:.1f} < {FUSE_MIN_MEAN_CJK}（碎句/流水账）→ 启动句法熔合…",
+          file=sys.stderr)
+    batches = _batch_paragraphs(body)
+    fused = []
+    for i, b in enumerate(batches):
+        try:
+            r, _p = call_gen_model(loader, _FUSE_SYSTEM, _FUSE_USER_PREFIX + b + "\n\n只输出重写后的正文。")
+            fb, _c = split_text_and_changes(r)
+            fused.append(fb.strip() if fb.strip() else b)
+            print(f"[gen_writer] 句法熔合段 {i + 1}/{len(batches)}", file=sys.stderr)
+        except Exception as e:
+            print(f"[gen_writer] 熔合段 {i + 1} 失败，保留原段: {str(e)[:100]}", file=sys.stderr)
+            fused.append(b)
+    new_body = "\n\n".join(fused)
+    new_mean = _avg_sentence_cjk(new_body)
+    o_cjk = sum(1 for c in body if "一" <= c <= "鿿")
+    n_cjk = sum(1 for c in new_body if "一" <= c <= "鿿")
+    ratio = n_cjk / max(o_cjk, 1)
+    # 采用条件：句长真改善（+2 以上）且 CJK 守恒（0.80-1.25·防 gen-model 偷删情节或注水）
+    if new_mean > cur + 2 and 0.80 <= ratio <= 1.25:
+        print(f"[gen_writer] ✅ 句法熔合采用：句长 {cur:.1f}→{new_mean:.1f} · CJK {o_cjk}→{n_cjk}（比 {ratio:.2f}）",
+              file=sys.stderr)
+        return new_body
+    print(f"[gen_writer] 熔合未达标/内容漂移（句长 {cur:.1f}→{new_mean:.1f}·CJK 比 {ratio:.2f}）→ 保留原文",
+          file=sys.stderr)
+    return body
+
+
 def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
                 ch_start: int, ch_end: int, used_profile: Profile,
                 seed_trace: dict = None, best_of_n_trace: dict = None):
@@ -1381,6 +1460,10 @@ def main():
         sys.exit(3)
 
     body, changes = split_text_and_changes(reply)
+    # [2026-06-04] 句法熔合：freestyle 且句长偏短（碎句/流水账）→ 分段熔合成复合长句（CJK 守恒才采用）。
+    # 治 pro/deepseek 等 gen-model 通病——prompt 喊话治不动句长，生成后编辑任务能治（实测 15→28.5 守恒）。
+    if min_cjk is not None:
+        body = maybe_fuse_syntax(loader, body)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
                                   ch_start, args.chapter_end, used_profile,
                                   seed_trace=seed_trace, best_of_n_trace=best_of_n_trace)

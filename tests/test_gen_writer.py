@@ -343,3 +343,69 @@ def test_expand_backfills_missing_changes():
         "缺 CHANGES 应追加 changes_only 补全请求"
     body, changes = gw.split_text_and_changes(text)
     assert changes.get("factual", {}).get("x") == 1, "补全的 CHANGES 应并入最终输出"
+
+
+# ============ 2026-06-04 句法熔合 pass 回归（治碎句/流水账·CJK 守恒才采用）============
+_SHORT = ("他缓缓地睁开了眼睛。\n\n他低头看了看自己的双手。\n\n他又挑了挑眉毛。\n\n"
+          "他慢悠悠地往前走了几步。\n\n他在拐角处停下脚步打量四周。")  # 碎句·句长~10
+# 同内容「合并版」：省重复主语 + 逗号连缀 → CJK 守恒（≈原文）、句长大幅升
+_LONG = "他缓缓地睁开眼睛，低头看了看自己的双手，又挑了挑眉毛，慢悠悠地往前走了几步，在拐角处停下脚步打量四周。"
+
+
+def test_avg_sentence_cjk_basic():
+    assert gw._avg_sentence_cjk("他睁开眼。") < 5
+    assert gw._avg_sentence_cjk(_LONG) > 20  # 复合长句句长高
+
+
+def test_batch_paragraphs_no_split_midparagraph():
+    body = "\n\n".join("段落" + str(i) + "内容" * 20 for i in range(10))
+    batches = gw._batch_paragraphs(body, target_cjk=200)
+    assert len(batches) >= 2  # 分了多批
+    assert "\n\n".join(batches).count("段落") == 10  # 没丢段落
+
+
+def test_fuse_skipped_when_already_long():
+    """句长≥阈值 → 跳过熔合，不调 gen-model。"""
+    calls = {"n": 0}
+    orig = gw.call_gen_model
+    gw.call_gen_model = lambda *a, **k: (calls.update(n=calls["n"] + 1), ("x", _P()))[1]
+    try:
+        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _LONG * 3)
+    finally:
+        gw.call_gen_model = orig
+    assert calls["n"] == 0, "句长够时不应调用熔合"
+    assert out == _LONG * 3
+
+
+def test_fuse_adopts_when_improved_and_conserved():
+    """碎句 + 熔合返回长句(CJK 守恒) → 采用熔合结果。"""
+    orig = gw.call_gen_model
+    gw.call_gen_model = lambda loader, s, u, min_cjk=None: (_LONG, _P())
+    try:
+        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT)
+    finally:
+        gw.call_gen_model = orig
+    assert gw._avg_sentence_cjk(out) > gw._avg_sentence_cjk(_SHORT), "应采用更长句版本"
+
+
+def test_fuse_keeps_original_when_no_improvement():
+    """熔合返回同样碎(没改善) → 保留原文(不退化)。"""
+    orig = gw.call_gen_model
+    gw.call_gen_model = lambda loader, s, u, min_cjk=None: (_SHORT, _P())  # 没改善
+    try:
+        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT)
+    finally:
+        gw.call_gen_model = orig
+    assert out == _SHORT, "无改善应保留原文"
+
+
+def test_fuse_keeps_original_when_cjk_drifts():
+    """熔合偷删大半内容(CJK 漂移到 0.4) → 守恒校验失败，保留原文(防删情节)。"""
+    orig = gw.call_gen_model
+    # 返回长句但内容只剩一句(CJK 远少于原文) → ratio<0.8 拒绝
+    gw.call_gen_model = lambda loader, s, u, min_cjk=None: ("他睁开眼，低头挑眉。", _P())
+    try:
+        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT)
+    finally:
+        gw.call_gen_model = orig
+    assert out == _SHORT, "CJK 漂移(疑似偷删情节)应拒绝熔合保留原文"
