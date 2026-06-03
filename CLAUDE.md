@@ -456,6 +456,8 @@ python core/scripts/distill_replicate.py \
    - **🆕 一段一句末结束符**（非对话段只能有 1 个 。！？……，看到多句立刻拆段。例外：对话段 / 引用文献）
    - 项目级覆盖走 `_数据库/style_scanner_overrides.json`
 
+> **🔴 v28 北极星⑤校准（2026-06-03 · 通用碎句基线 vs 作者基线冲突理顺）**：上面第 2/7 条的「短句连发 / 平均段长 15-30 / 单句独行 ≥40%」是**通用爽文兜底基线，不是天花板**。**作者风格档的句长 / 段长 / 单句独行 / 标点基线 = 第一权威**——作者档规定了该维度就以作者档为准，通用基线自动让位。实证翻车：惊悚乐园真作者**句长均值 31、段长 52、单句独行 54%、破折号 0.3/千**，但通用「短句连发」基线把弱模型推成**句长 16.8 的「主语+动作」流水账作文感**（用户直觉点出 + 金标准对比证实）。**「句长」是此前全链路检测盲区**（validate_style 故意只查段长不查句长）→ 新增 `prose_rhythm_scanner`（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比 · advisory）补检测闭环。详见 memory `project_wulianzhe_novel_state` 流水账根因段。
+
 详见 memory `feedback_paragraph_length_hard_constraint` / `feedback_one_sentence_per_paragraph`。
 
 ---

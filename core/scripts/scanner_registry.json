@@ -112,6 +112,13 @@
       "_new": true,
       "issues_emitted": ["RHETORIC_REPETITION"]
     },
+    "prose_rhythm": {
+      "layer": "cluster",
+      "script": "prose_rhythm_scanner.py",
+      "doc": "[2026-06-03 新增] 句法节奏/「流水账作文感」检测：句长偏离作者基线 + 主语+动作 play-by-play streak + 主语开头占比 · 作者风格档基线第一权威(北极星⑤) · 补 validate_style「绝不查句长」缺口 · advisory · 金标准验证(真作者原文喂自身基线 PASS·本书 FAIL_MAJOR)防矫枉过正",
+      "_new": true,
+      "issues_emitted": ["PROSE_RHYTHM"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",

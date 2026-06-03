@@ -987,6 +987,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     ceas = _SCRIPT_DIR / "chapter_end_anchor_scan.py"
     # [2026-06-03] AI 长文退化三连指纹（否定对照/破折号密度+比喻复读+整段近重复）· advisory
     rrs = _SCRIPT_DIR / "rhetoric_repetition_scanner.py"
+    # [2026-06-03] 句法节奏/流水账作文感（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比）· advisory
+    prs = _SCRIPT_DIR / "prose_rhythm_scanner.py"
 
     # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
     # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
@@ -1071,10 +1073,17 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_scene_seam(out)),
                 # [2026-06-03] 修辞复读三连指纹 · cluster 视野 · advisory（兜底 gen_writer 元anti-slop·弱模型守不住的客观检测闭环）
                 ("rhetoric_repetition",
-                 [sys.executable, str(rrs), str(cluster_draft)],
+                 [sys.executable, str(rrs), str(cluster_draft),
+                  "--project", str(project_root)] + _style_args,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "rhetoric_repetition_scanner", "RHETORIC_REPETITION", "风格")),
+                # [2026-06-03] 句法节奏/流水账作文感 · 作者基线第一权威(传 --project 读作者档+人物卡) · advisory
+                ("prose_rhythm",
+                 [sys.executable, str(prs), str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "prose_rhythm_scanner", "PROSE_RHYTHM", "风格")),
             ])
         # L2 防御：章末锚定扫描 · 仅在切章后 (有 第NNN章 文件) 才跑
         # 检测是否已切章

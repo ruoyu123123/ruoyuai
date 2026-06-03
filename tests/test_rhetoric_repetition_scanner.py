@@ -61,6 +61,16 @@ def test_dash_sparse_pass():
     assert "dash_overuse" not in _kinds(r)
 
 
+def test_dash_tightened_by_author_baseline():
+    """北极星⑤：作者几乎不用破折号(0.3/千) → 阈值收紧到 8/14，~10/kCJK 即报（通用 15/22 本不报）。"""
+    core = "\n".join(f"他停了一下——第{i}次。" for i in range(13))  # 13 破折号
+    text = _pad(core, 55)  # 稀释到约 10/kCJK（落在收紧 8 与通用 15 之间）
+    r_generic = R.scan(text)                              # 无作者基线 → 通用 15/22
+    r_tight = R.scan(text, author_dash_per_kcjk=0.3)      # 作者不用破折号 → 收紧 8/14
+    assert "dash_overuse" not in _kinds(r_generic), "通用阈值下该密度不报"
+    assert "dash_overuse" in _kinds(r_tight), "作者基线收紧后应报"
+
+
 # ── 探针 3：比喻喻体复读 ─────────────────────────────
 def test_simile_reuse_detected():
     """同一喻体复读 ≥5 次 → simile_reuse（≥8 major）。"""

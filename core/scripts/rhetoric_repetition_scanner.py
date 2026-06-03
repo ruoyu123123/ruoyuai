@@ -54,12 +54,19 @@ def _norm_vehicle(v: str) -> str:
     return v
 
 
-def scan(text: str) -> dict:
+def scan(text: str, author_dash_per_kcjk: float | None = None) -> dict:
+    """author_dash_per_kcjk: 作者风格档破折号基线（/千CJK）。北极星⑤：作者几乎不用破折号
+    (如惊悚乐园 0.3/千) → 收紧阈值到 8/14；作者爱用破折号则保持通用 15/22。"""
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     body = [l for l in lines if not re.match(r'^第\d+章\s', l)]
     joined = '\n'.join(body)
     total_cjk = sum(cjk(l) for l in body)
     kcjk = max(total_cjk / 1000.0, 0.001)
+    # 破折号阈值：作者基线感知（作者 <2/千=不爱用 → 收紧；否则通用宽松）
+    if author_dash_per_kcjk is not None and author_dash_per_kcjk < 2.0:
+        dash_minor, dash_major = 8.0, 14.0
+    else:
+        dash_minor, dash_major = DASH_MINOR, DASH_MAJOR
     violations = []
 
     # 探针 1：否定对照密度
@@ -79,12 +86,12 @@ def scan(text: str) -> dict:
     # 探针 2：破折号密度
     dash_n = joined.count('——')
     dash_d = round(dash_n / kcjk, 2)
-    if dash_d >= DASH_MINOR:
-        sev = 'major' if dash_d >= DASH_MAJOR else 'minor'
+    if dash_d >= dash_minor:
+        sev = 'major' if dash_d >= dash_major else 'minor'
         violations.append({
             'kind': 'dash_overuse', 'severity': sev,
             'count': dash_n, 'density_per_kcjk': dash_d,
-            'threshold': DASH_MAJOR if sev == 'major' else DASH_MINOR,
+            'threshold': dash_major if sev == 'major' else dash_minor,
             'hint': '破折号——过载→节奏单一化；改用句号断句/逗号/直接陈述（作者档偏好高频破折号可豁免）',
         })
 
@@ -145,15 +152,45 @@ def scan(text: str) -> dict:
     }
 
 
+def _read_author_dash(style_path: str | None, project: str | None) -> float | None:
+    """从作者风格档读破折号基线（/千CJK）：punctuation_per_1k.dash 或 punctuation_density_per_1000.dash。"""
+    import json as _json
+    cands = []
+    if style_path:
+        cands.append(Path(style_path))
+    if project:
+        cands += [Path(project) / "_数据库" / "作者风格.json",
+                  Path(project) / "_数据库" / "作者风格_FINAL.json"]
+    for c in cands:
+        if c and c.exists():
+            try:
+                q = (_json.loads(c.read_text(encoding='utf-8')) or {}).get("quantitative") or {}
+            except Exception:
+                continue
+            for key in ("punctuation_per_1k", "punctuation_density_per_1000"):
+                d = q.get(key) or {}
+                v = d.get("dash")
+                if isinstance(v, dict):
+                    v = v.get("mean")
+                if isinstance(v, (int, float)):
+                    return float(v)
+    return None
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("用法: python rhetoric_repetition_scanner.py <cluster草稿或章节路径>")
-        sys.exit(2)
-    path = Path(sys.argv[1])
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("draft")
+    ap.add_argument("--style", default=None)
+    ap.add_argument("--project", default=None)
+    args = ap.parse_args()
+    path = Path(args.draft)
     if not path.exists():
         print(f"路径不存在: {path}")
         sys.exit(2)
-    result = scan(path.read_text(encoding='utf-8'))
+    author_dash = _read_author_dash(args.style, args.project)
+    result = scan(path.read_text(encoding='utf-8'), author_dash_per_kcjk=author_dash)
+    result['author_dash_baseline'] = author_dash
     result['file'] = str(path)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     sys.exit(0 if result['verdict'] == 'PASS' else 1)
