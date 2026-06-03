@@ -368,6 +368,26 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 
 ---
 
+## 🔴 卷=阶段触发点 · cluster=小走向（v28 · 2026-06-03 结构根治）
+
+> 用户原话：「每卷其实都是一个触发点，代表一个阶段的结束和下一阶段的开始，可能是主角成长也可能是副本更迭」。调研接地（网文分卷惯例 + 7 套 arc 结构理论 · 31 来源 · `_temp_research/卷阶段结构调研/`）。
+
+**根治的 bug**：旧设计易把「1 个 ME = 1 整副本」+「cluster scope = 整副本」→ **单 cluster 塌缩成一整个副本/阶段**（无脸者守则 cluster_001 一块讲完整个育新中学）。正确：**一个大方向（卷/阶段）下多个小故事走向（cluster）stakes 递增累积，构成整个阶段**。
+
+| 层 | = 什么（实证：卷边界靠转折触发点标记非章数 · 大 arc=多同形小单元累积 · 嵌套/分形）|
+|---|---|
+| **卷 = 阶段** | 1 个 `volume_core_conflict`(卷核心任务) + `volume_thread`(卷线索·串本卷所有 cluster)·**不锁章**(诡秘卷长 215→41 实证 fluid) |
+| **卷边界 = 阶段触发点** | 核心任务「已解决」**且**命中≥1 跃迁信号(①主角力量/身份跃迁 ②舞台/地理转移 ③核心反派/矛盾解决或新反派) → emergence **advisory 建议换卷·绝不按 N 章硬切** |
+| **大势卡 ME 池(每卷)** | 本卷内『小故事走向』候选(每 ME=1 cluster=1 小走向·标 `volume:N`·末 ME 标 `is_volume_finale:true`·携 `stakes_delta` 相对前块强度增量)·**🔴 不再是「1 ME=1 整副本」** |
+| **cluster = 1 小走向** | mini-movie/sub-arc·**禁止覆盖整阶段/整副本**·try-fail 递增·service 卷线索 |
+| **涌现** | `cluster_emergence_engine` 硬过滤到**当前卷**(`_me_volume`)·核心任务未解前不跳新卷/新副本·只剩 finale → `volume_transition_advisory` 建议换卷 |
+| **卷末 cluster** | 高烈度转折/强钩(反派现身/真相揭露/阶段跃迁)·禁平稳收束(章末禁收束的卷尺度) |
+| **卷间软边界** | 换卷不清世界状态·跨卷角色/势力/伏笔/世界数值 delta 经涟漪 + foreshadowing_handoff 延续 |
+
+**🔴 outline 大势卡 authoring 铁律**：每卷的 ME 池 = 把**这一个阶段/副本**拆成 N(=「每卷 cluster 数」)个小走向(入门/摸规则/转折/危机/高潮/通关…)，**全部标 `volume:同号` + 末个标 `is_volume_finale`**；换阶段/换副本 = 换卷(新 vol 号)。`volume_thread`+`volume_core_conflict` 必填。**禁止单 cluster 写完整副本**。详见 memory `project_volume_phase_structure`。
+
+---
+
 ## 🔴 v27 三件套：writer 自由 + splitter 字数切 + 跨 cluster 补料
 
 用户原话：「故事块能切多少章我发现你一开始已经间接限制死了，这是不对的，应该让ai自由发挥，只要不脱离既有事实和大势，然后根据生成内容的字数，按照固定范围字数进行切割（一定程度上要参考最佳切割点），最后一章切出来字数不够就拿下一个故事块生成后的内容来补一些，这个补也是要放在切割的过程中」。

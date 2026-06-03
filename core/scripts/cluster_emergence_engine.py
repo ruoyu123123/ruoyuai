@@ -34,6 +34,19 @@ def _get_me_id(me: dict) -> str:
     return me.get("id") or me.get("me_id") or ""
 
 
+def _me_volume(me: dict):
+    """🆕 2026-06-03 卷=阶段：ME 所属卷/阶段号。优先显式 'volume' 字段，否则从 id
+    (ME-V<N>-xx) 解析；都无 → None（不参与卷过滤·向后兼容旧项目）。"""
+    import re as _re_v
+    v = me.get("volume")
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    m = _re_v.search(r"[Vv](\d+)", str(_get_me_id(me)))
+    return int(m.group(1)) if m else None
+
+
 def find_remaining_mes(dashishi: dict, completed_mes: set) -> list:
     """从大势卡 ME 池中找剩余未完成的 ME。
 
@@ -392,14 +405,24 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) 
     # 依据 CLAUDE.md「📐 大纲章数 fluid」+ memory feedback_v27_writer_freestyle_splitter_word_cut：
     # 章数由 writer 自由发挥 + splitter 按字数切完自动回填，涌现阶段不得预设。
     # 保留 _emergence_score / _emergence_reasons（涌现可解释性，非章数死锁）。
+    # 🆕 2026-06-03 卷=阶段触发点：把 ME 的卷级语义透传进 brief，让卷末 finale cluster 被标记，
+    # build_manifest 据 is_volume_finale 给 writer 注入「卷末高烈度转折(禁平稳收束)」指令，
+    # stakes_delta 让 writer 知道本小走向相对前块的强度增量(避免平铺重复)。
+    is_finale = bool(me.get("is_volume_finale"))
+    scope = f"[CANDIDATE {ord}] 围绕 ME「{title}」展开。{me.get('description', '')}{why}"
+    if is_finale:
+        scope += " 〔🔴卷末小走向(volume_finale)：本 cluster 收束本阶段·走高烈度转折(反派现身/真相揭露/主角阶段跃迁)·禁平稳收束〕"
     return {
         "cluster_id": cluster_id,
         "parent_me": me_id,
-        "scope_summary": f"[CANDIDATE {ord}] 围绕 ME「{title}」展开。{me.get('description', '')}{why}",
+        "scope_summary": scope,
         "_emergence_score": score,
         "_emergence_reasons": reasons,
         "status": "candidate",
         "ME_to_advance": [me_id],
+        "volume": _me_volume(me),
+        "is_volume_finale": is_finale,
+        "stakes_delta": me.get("stakes_delta", ""),
         "_doc": f"v24 fluid 涌现 · 等待用户从 {ord} 个 candidate 中选 1 个 → status 改 in_progress",
         "scene_storyboard": [],  # 雏形 · 用户选定后再让 outline-planner 详化
         "anchor_props": [],
@@ -434,6 +457,23 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     remaining = find_remaining_mes(dashishi, completed_mes)
     if not remaining:
         return {"ok": False, "error": "大势卡 ME 池已全部完成，无新 cluster 可涌现", "completed_count": len(completed_mes)}
+
+    # 🆕 2026-06-03 卷=阶段触发点：硬过滤到「当前阶段(卷)」的剩余 ME——核心任务未解前
+    # 只在本卷内涌现小走向，绝不跳到下一卷/新副本（根治「单 cluster 塌缩成整副本/整阶段」）。
+    # current_volume = 剩余 ME 中最小卷号(最早未收束阶段)；无 volume 标记的 ME 不参与过滤(向后兼容)。
+    _tagged = [v for v in (_me_volume(me) for me in remaining) if v is not None]
+    current_volume = min(_tagged) if _tagged else None
+    volume_transition_advisory = None
+    if current_volume is not None:
+        in_vol = [me for me in remaining if _me_volume(me) in (current_volume, None)]
+        non_finale = [me for me in in_vol if not me.get("is_volume_finale")]
+        if in_vol and not non_finale:
+            # 本卷只剩 volume_finale → 阶段触发点临近：建议卷末高烈度转折后换卷（advisory·绝不硬切）
+            volume_transition_advisory = (
+                f"⚠️ 阶段触发点临近：卷{current_volume} 核心任务剩余 ME 仅余 volume_finale。建议下个 cluster "
+                f"走卷末高烈度转折(反派现身/真相揭露/主角阶段跃迁)收束本阶段，之后换卷至卷{current_volume + 1}"
+                f"(新副本/新阶段)。绝不硬切·由你确认换卷信号(核心任务解决+力量/舞台/反派跃迁任一)。")
+        remaining = in_vol  # 硬过滤：本卷内涌现小走向
 
     # 收集 last consequence（最后一个 cluster 的涟漪后果）
     last_consequence = []
@@ -498,6 +538,8 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         "emerged_at": datetime.now().isoformat(timespec="seconds"),
         "completed_mes_count": len(completed_mes),
         "remaining_mes_count": len(remaining),
+        "current_volume": current_volume,
+        "volume_transition_advisory": volume_transition_advisory,
         "candidates": candidates_briefs,
         "world_state_snapshot": {
             "factions_state": world_state.get("factions_state", {}),

@@ -1273,6 +1273,18 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "narrative_mode": narrative_mode,
                         "climax_hint_scene_index": c.get("climax_hint_scene_index"),
                         "volume_convergence_anchor": _build_volume_convergence_anchor(scanner, c),
+                        # 🆕 2026-06-03 卷=阶段触发点：透传卷级语义给 writer。
+                        # is_volume_finale=True → 本 cluster 是卷末小走向 → writer 走高烈度转折(禁平稳收束)；
+                        # stakes_delta 让 writer 知道相对前块的强度增量(避免同卷小走向平铺重复)。
+                        "volume": c.get("volume"),
+                        "is_volume_finale": bool(c.get("is_volume_finale")),
+                        "stakes_delta": c.get("stakes_delta") or "",
+                        "volume_finale_directive": (
+                            "🔴 本 cluster = 卷末小走向(volume_finale)：收束本阶段/副本。"
+                            "结尾必须高烈度转折(反派现身/真相揭露/主角力量或身份阶段跃迁)+强钩子，"
+                            "禁止平稳收束(章末禁收束的卷尺度)。之后将换卷进入新阶段/新副本。"
+                            if c.get("is_volume_finale") else None
+                        ),
                         "_narrative_mode_doc": "in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；linear = 时间序",
                         "_writer_hint": "MODE=ecas: 用此 brief 生成 8K-16K 字 cluster_draft，每 3000 字 self-audit，每场景生成 100 字 sub-summary"
                     }

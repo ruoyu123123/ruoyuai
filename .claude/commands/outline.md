@@ -192,15 +192,35 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 {"key": "writer_mode", "value": "freestyle", "set_at": "ISO", "user_decided": true}
 ```
 
-### 1.7.3 反推 ME 数 + 写入大势卡
+### 1.7.3 反推 ME 数 + 写入大势卡（🔴 v28 卷=阶段触发点）
 
-**1 个 cluster ≈ 1 个 ME**（大势事件）。卷 1 用户答 N → 大势卡 V1 必须含 N+1 个 ME（含 1 个开局 ME + N-1 个推进 ME + 1 个收束 ME 弹性）。
+> **核心心智**：**1 卷 = 1 个阶段（副本/大故事方向）**，下辖 N 个**小故事走向（cluster）**累积构成整阶段。**1 个 cluster ≈ 1 个 ME**，且**每个 ME 只是「本阶段里的一个小走向」，绝不能是「一整个副本/阶段」**。换阶段/换副本 = 换卷（新 vol 号）。详见 CLAUDE.md「🔴 卷=阶段触发点」+ memory `project_volume_phase_structure`。
 
-写入 `_数据库/大势卡.json` 的 `volumes[].major_events_pool` 数组：每卷数量 = 用户答的 cluster 数 ± 1 弹性。
+卷 1 用户答 N → 大势卡 V1 = **把这一个阶段拆成 N 个小走向**（入门/摸规则/试错/转折/危机/高潮/收束…），全部 `volume: 1`、末个 `is_volume_finale: true`（弹性 N±1）。
+
+**写入 `_数据库/大势卡.json`（schema = `major_events_v21_phase`，scaffold 已生成骨架）**：
+
+1. **`volumes[]`** —— 每卷一条阶段定义（用 `_volume_schema`）：
+   ```json
+   {"vol": 1, "title": "<阶段/副本名>", "volume_core_conflict": "<本阶段核心任务·解决即可收卷>",
+    "volume_thread": "<卷线索:串起本卷所有小走向 cluster 的那根线>",
+    "volume_finale_signal": "<换卷触发:核心任务解决 + (①力量跃迁/②舞台转移/③反派更迭) 任一>"}
+   ```
+   `volume_core_conflict` + `volume_thread` **必填**——没有卷线索 = 散沙 cluster。
+
+2. **`major_events[]`** —— 扁平 ME 池（用 `_me_schema`），每个 ME = 1 cluster = 1 小走向：
+   ```json
+   {"id": "ME-V1-01", "volume": 1, "title": "<小走向>", "is_volume_finale": false,
+    "stakes_delta": "<相对前一小走向的筹码/强度增量·try-fail 递增>", "prerequisites": [], "status": "pending"}
+   ```
+   - **每个 ME 必标 `volume: N`**（`cluster_emergence_engine._me_volume` 据此硬过滤到当前卷·核心任务未解前不跳新卷）。
+   - **本卷末个 ME 标 `is_volume_finale: true`**——它对应卷末高烈度转折 cluster（阶段跃迁/真相揭露/反派现身）。
+   - `stakes_delta` 让同卷各小走向**强度递增**（避免平铺重复·deepseek 品鉴实证「重复解构套路会疲劳」）。
 
 **禁止**：
-- ❌ 在 cluster brief 写 `chapter_count_estimate` / `chapter_range` / `expected_word_range` 这 3 个字段（v27 已 deprecate · 由 splitter 切完后填）
-- ❌ 在大势卡 ME 池里写「expected_chapters」字段（章数由 writer + splitter 涌现）
+- ❌ **把 1 个 ME 写成「一整个副本/阶段」**（=单 cluster 塌缩整阶段·本次系统根治的 bug）
+- ❌ 在 cluster brief 写 `chapter_count_estimate` / `chapter_range` / `expected_word_range`（v27 deprecate · splitter 切完填）
+- ❌ 在 ME 池写「expected_chapters」（章数由 writer + splitter 涌现）
 
 ### plan-step 1.7
 
@@ -214,13 +234,15 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 本步**只描述大势**，不规划每卷章数。
 
+> **🔴 v28 卷=阶段触发点（authoring 铁律）**：**每卷 = 1 个阶段**（1 副本/1 大故事方向），靠 `volume_core_conflict`（卷核心任务）+ `volume_thread`（卷线索）定义；**卷边界 = 阶段触发点**（核心任务解决 **且** 命中①主角力量/身份跃迁 / ②舞台/地理转移 / ③核心反派或矛盾更迭 任一）。一个阶段下挂 N 个**小故事走向 cluster**（step 1.7 用户定 N），stakes 递增累积构成整阶段——**禁止把一整个副本/阶段塞进单个 cluster/ME**。换阶段/换副本 = 换卷。
+
 | ✅ 写 | ❌ 不写 |
 |---|---|
-| 每卷 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` | `volumes[].chapter_range: [1, 10]` 死锁区间 |
-| major_events 池含 `expected_window_after` 宽窗（如 `max_chapters: 15-100`） | 「本卷预计 N 章」类预测 |
-| 每卷大势主题 + 起承转合 | events_per_volume 反推章数 |
+| 每卷 `volume_core_conflict`（核心任务）+ `volume_thread`（卷线索）+ `volume_finale_signal`（换卷触发） | `volumes[].chapter_range: [1, 10]` 死锁区间 |
+| 每卷 `volume_arc` / `key_milestones` / `ending_state` | 「本卷预计 N 章」类预测 |
+| major_events 池：每 ME=1 小走向·标 `volume:N`·末个 `is_volume_finale`·`stakes_delta` 递增 | events_per_volume 反推章数 / 把整副本写成 1 个 ME |
 
-章数由 ME 触发 + 用户涟漪选择**自然涌现**，writer/save-state 累积。
+章数由 ME 触发 + 用户涟漪选择**自然涌现**，writer/save-state 累积；**卷数 = 阶段数**（每换一个大故事方向/副本就 +1 卷）。
 
 请提供：
 1. 各章节的核心事件和情节点
