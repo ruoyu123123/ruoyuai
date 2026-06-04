@@ -366,6 +366,10 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
+    if not (style_skill or "").strip():
+        print("[gen_writer] ⚠️🔴 作者风格_skill.md 缺失/空——writer 只有量化 JSON、缺作者笔法+golden 范例，"
+              "极易跑偏成通用爽文（cluster_001 翻车根因）。请把风格库 skill_FINAL.md 复制为 "
+              "<项目>/_数据库/作者风格_skill.md（/outline 漏拷的已知 bug）。", file=sys.stderr)
 
     # 调研 cache（找最新的）
     cache_dir = db / '.research_cache'
@@ -1197,7 +1201,10 @@ def split_text_and_changes(reply: str) -> tuple:
 # 但 gen-model 在【明确的编辑任务】下能把碎句合并成复合长句（实测 15.0→28.5·CJK 守恒 630→629·情节全保留）。
 # 故生成后检测句长，偏短则分段喂 gen-model 做「只改句法不改情节」的熔合，CJK 守恒才采用（防删/注水）。
 # 北极星：只治工艺碎句·不碰情节创意（守恒校验兜底）· 偏短才触发 · 不改善则保留原文（不退化）。
-FUSE_MIN_MEAN_CJK = 24      # 叙述句均长低于此（作者基线 31 的 ~0.77）→ 触发句法熔合
+FUSE_MIN_MEAN_CJK = 24      # [fallback] 作者基线缺失时的触发线（≈作者 31×0.77）→ 正常用作者句长×0.77
+DEFAULT_AUTHOR_SENTENCE_MEAN = 31.0   # [fallback] 作者风格档无句长基线时的兜底
+FUSE_TRIGGER_RATIO = 0.77   # 句长 < 作者句长 × 此比 → 判碎句触发熔合
+FUSE_CEIL_RATIO = 1.40      # 熔合后句长 > 作者句长 × 此比 → 判过冲（越改越长）拒绝采用
 FUSE_BATCH_CJK = 3500       # 分段熔合每批目标字数（避免单次过长 + 不切断段落）
 _FUSE_SYSTEM = ("你是中文文字编辑。只做句法重塑，绝不改动任何情节/对话内容/人物/事实——"
                 "剧情一个字都不删不加不改。")
@@ -1237,19 +1244,71 @@ def _batch_paragraphs(body: str, target_cjk: int = FUSE_BATCH_CJK) -> list:
     return batches
 
 
-def maybe_fuse_syntax(loader: GenModelLoader, body: str) -> str:
-    """句长偏短 → 分段句法熔合（gen-model 编辑任务）。CJK 守恒 + 句长改善才采用，否则保留原文。"""
+def _read_author_rhythm(project_root: Path):
+    """读作者风格档的句长/段长/单句独行基线（缺失/出错返回 (None,None,None)·纯防御不抛）。
+
+    [2026-06-04 治本] 句法熔合/短段约束必须用**本项目作者**的真实基线，不能硬编码
+    （旧 FUSE_MIN_MEAN_CJK=24 写死惊悚乐园的 31×0.77，对小世界 32.2 凑巧接近但原则错；
+    且熔合无上限→越改越长过冲。长句≠长段：小世界=长句裹短段，句长32但段长35短段·单句独行0.79）。
+    """
+    p = project_root / "_数据库" / "作者风格.json"
+    if not p.exists():
+        return None, None, None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None, None, None
+    q = d.get("quantitative", {})
+    if not isinstance(q, dict):
+        return None, None, None
+
+    def _num(*paths):
+        for path in paths:
+            cur = q
+            ok = True
+            for k in path:
+                if isinstance(cur, dict) and k in cur:
+                    cur = cur[k]
+                else:
+                    ok = False
+                    break
+            if ok and isinstance(cur, (int, float)) and cur > 0:
+                return float(cur)
+        return None
+
+    sent = _num(("sentence_length", "mean"))
+    para = _num(("paragraph_length_chars", "mean"), ("paragraph_length", "mean_chars"))
+    single = _num(("single_sentence_para_ratio",),
+                  ("paragraph_length", "single_sentence_para_ratio_mean"))
+    return sent, para, single
+
+
+def maybe_fuse_syntax(loader: GenModelLoader, body: str,
+                      author_sentence_mean: float = None) -> str:
+    """句长偏短 → 分段句法熔合（gen-model 编辑任务）。
+
+    [2026-06-04 治本] 读作者句长基线：触发线=作者句长×0.77，目标≈作者句长，
+    采用须 CJK 守恒 + 句长改善 + **不过冲**（> 作者句长×1.4 判越改越长，拒绝保留原文）。
+    """
+    base = author_sentence_mean if (author_sentence_mean and author_sentence_mean > 0) \
+        else DEFAULT_AUTHOR_SENTENCE_MEAN
+    floor = base * FUSE_TRIGGER_RATIO
+    ceil = base * FUSE_CEIL_RATIO
     cur = _avg_sentence_cjk(body)
-    if cur >= FUSE_MIN_MEAN_CJK:
-        print(f"[gen_writer] 句长 {cur:.1f} ≥ {FUSE_MIN_MEAN_CJK}，无需句法熔合", file=sys.stderr)
+    if cur >= floor:
+        print(f"[gen_writer] 句长 {cur:.1f} ≥ 触发线 {floor:.1f}（作者基线 {base:.1f}），无需句法熔合",
+              file=sys.stderr)
         return body
-    print(f"\n[gen_writer] ⚠️ 句长 {cur:.1f} < {FUSE_MIN_MEAN_CJK}（碎句/流水账）→ 启动句法熔合…",
+    print(f"\n[gen_writer] ⚠️ 句长 {cur:.1f} < 触发线 {floor:.1f}（作者基线 {base:.1f}·碎句/流水账）→ 启动句法熔合，目标≈{base:.0f}…",
           file=sys.stderr)
+    target_note = (f"\n⑤ 目标长度：把叙述句均长拉到**接近 {base:.0f} 字**（作者基线）——"
+                   f"拉长是为了不碎，但**别过冲**，超过 {base * 1.3:.0f} 字就不像这位作者了。\n")
+    user_prefix = _FUSE_USER_PREFIX.replace("\n\n原文：\n", target_note + "\n原文：\n")
     batches = _batch_paragraphs(body)
     fused = []
     for i, b in enumerate(batches):
         try:
-            r, _p = call_gen_model(loader, _FUSE_SYSTEM, _FUSE_USER_PREFIX + b + "\n\n只输出重写后的正文。")
+            r, _p = call_gen_model(loader, _FUSE_SYSTEM, user_prefix + b + "\n\n只输出重写后的正文。")
             fb, _c = split_text_and_changes(r)
             fused.append(fb.strip() if fb.strip() else b)
             print(f"[gen_writer] 句法熔合段 {i + 1}/{len(batches)}", file=sys.stderr)
@@ -1261,14 +1320,62 @@ def maybe_fuse_syntax(loader: GenModelLoader, body: str) -> str:
     o_cjk = sum(1 for c in body if "一" <= c <= "鿿")
     n_cjk = sum(1 for c in new_body if "一" <= c <= "鿿")
     ratio = n_cjk / max(o_cjk, 1)
+    # 过冲拒绝：熔合越改越长（> 作者句长×1.4）→ 不采用（防本次 cluster_001 翻车：20.3→37.1 过冲作者 32.2）
+    if new_mean > ceil:
+        print(f"[gen_writer] ⚠️ 熔合过冲（句长 {cur:.1f}→{new_mean:.1f} > 上限 {ceil:.1f}）→ 保留原文防越改越长",
+              file=sys.stderr)
+        return body
     # 采用条件：句长真改善（+2 以上）且 CJK 守恒（0.80-1.25·防 gen-model 偷删情节或注水）
     if new_mean > cur + 2 and 0.80 <= ratio <= 1.25:
-        print(f"[gen_writer] ✅ 句法熔合采用：句长 {cur:.1f}→{new_mean:.1f} · CJK {o_cjk}→{n_cjk}（比 {ratio:.2f}）",
+        print(f"[gen_writer] ✅ 句法熔合采用：句长 {cur:.1f}→{new_mean:.1f}（作者基线 {base:.1f}）· CJK {o_cjk}→{n_cjk}（比 {ratio:.2f}）",
               file=sys.stderr)
         return new_body
     print(f"[gen_writer] 熔合未达标/内容漂移（句长 {cur:.1f}→{new_mean:.1f}·CJK 比 {ratio:.2f}）→ 保留原文",
           file=sys.stderr)
     return body
+
+
+def enforce_short_paragraphs(body: str, author_para_mean: float = None) -> str:
+    """[2026-06-04 治本] 长句裹短段：把过长的非对话段按句末切成短段，贴作者段长基线。
+
+    根因：句法熔合只拉句长不管段长，小世界=长句裹短段（句长32/段长35短段/单句独行0.79），
+    熔合后长句若多句挤一段→段长 56.5 远超作者 35.6（用户 2026-06-04 抓到）。本步按作者段长
+    自适应切段：阈值 = max(作者段长×1.3, 45)；超阈值的非对话段按**句末**切成单句段
+    （单长句保持完整·**绝不碰逗号**防切坏「非但…反而」/列举等关联结构）。
+    北极星④：段落是格式层·只切段不改一字。对话/系统面板【】保护不切。作者基线缺失→阈值80（仅切egregious）。
+    """
+    import re as _re
+    base = author_para_mean if (author_para_mean and author_para_mean > 0) else 0
+    threshold = max(base * 1.3, 45.0) if base else 80.0
+    LQ = "“"
+
+    def protected(s: str) -> bool:
+        s = s.lstrip()
+        return s.startswith(LQ) or s.startswith("”") or s.startswith("【") \
+            or s.startswith("「")  # “ ” 【 「
+
+    out, changed = [], 0
+    for blk in body.split("\n\n"):
+        para = blk.replace("\n", "")  # 合软换行回整段
+        if not para.strip():
+            continue
+        if len(para) <= threshold or protected(para):
+            out.append(para)
+            continue
+        sents = _re.findall(r"[^。！？…]*[。！？…]+", para)
+        tail = para[sum(len(x) for x in sents):]
+        if tail.strip():
+            sents.append(tail)
+        if len(sents) > 1:
+            out.extend(s for s in sents if s.strip())
+            changed += 1
+        else:
+            out.append(para)  # 单句长段·不切（防切坏语法·小世界长句允许）
+    new_body = "\n\n".join(out)
+    if changed:
+        print(f"[gen_writer] 短段约束：切分 {changed} 个过长非对话段（阈值 {threshold:.0f} 字·作者段长基线 {base:.1f}）",
+              file=sys.stderr)
+    return new_body
 
 
 def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
@@ -1460,10 +1567,15 @@ def main():
         sys.exit(3)
 
     body, changes = split_text_and_changes(reply)
-    # [2026-06-04] 句法熔合：freestyle 且句长偏短（碎句/流水账）→ 分段熔合成复合长句（CJK 守恒才采用）。
-    # 治 pro/deepseek 等 gen-model 通病——prompt 喊话治不动句长，生成后编辑任务能治（实测 15→28.5 守恒）。
+    # [2026-06-04 治本] 句法熔合 + 短段约束：读本项目作者真实节奏基线（句长/段长），
+    # ① 熔合按作者句长触发+目标+过冲拒绝（不再硬编码 24·不越改越长）；
+    # ② 熔合后按作者段长切过长段（治「长句裹短段」型作者熔合后段长过长·用户 2026-06-04 抓到）。
     if min_cjk is not None:
-        body = maybe_fuse_syntax(loader, body)
+        _auth_sent, _auth_para, _auth_single = _read_author_rhythm(project_root)
+        print(f"[gen_writer] 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}",
+              file=sys.stderr)
+        body = maybe_fuse_syntax(loader, body, author_sentence_mean=_auth_sent)
+        body = enforce_short_paragraphs(body, author_para_mean=_auth_para)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
                                   ch_start, args.chapter_end, used_profile,
                                   seed_trace=seed_trace, best_of_n_trace=best_of_n_trace)

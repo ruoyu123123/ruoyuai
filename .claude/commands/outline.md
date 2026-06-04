@@ -286,7 +286,11 @@ python core/scripts/scaffold_subsystems.py emit "<书名>"
 
 - 单一真理源：`core/claude-home/templates/subsystem_skeletons.json`（34 骨架·都满足 db_schema_validate）
 - 填充示例参考：`core/claude-home/templates/examples/`（含 `_subsystem_examples/` 9 个高级件示例）
-- 然后按下面 1-16 把**创意内容**填进骨架（cluster_001 详化 / 人物 / 大势 / 伏笔等），`作者风格.json` 从风格库复制或 `/distill-style` 蒸馏替换占位。
+- 然后按下面 1-16 把**创意内容**填进骨架（cluster_001 详化 / 人物 / 大势 / 伏笔等）。
+- 🔴 **作者风格必须从风格库复制「两个」文件**（gen_writer 写作时两个都读·**漏 skill = writer 只有量化数字、缺作者笔法+golden 范例 → 跑偏成通用爽文**·2026-06-04 cluster_001 实证根因）：
+  - ① `workspace/styles/<风格名>/作者风格_FINAL.json` → `_数据库/作者风格.json`（量化基线）
+  - ② `workspace/styles/<风格名>/skill_FINAL.md` → `_数据库/作者风格_skill.md`（**笔法 + golden 范例·必拷·别漏**）
+  - 或走 `/distill-style` 蒸馏替换占位（蒸馏会同时产这两件）。
 
 完成填充后、跑 plan-step 3 前，**强制核对**（流程缺步补全，防 Workflow 名义返回掩盖漏文件）：
 

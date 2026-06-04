@@ -378,14 +378,56 @@ def test_fuse_skipped_when_already_long():
 
 
 def test_fuse_adopts_when_improved_and_conserved():
-    """碎句 + 熔合返回长句(CJK 守恒) → 采用熔合结果。"""
+    """碎句 + 熔合返回长句(CJK 守恒·未过冲) → 采用熔合结果。
+    [2026-06-04] _LONG 句长 46 对默认基线 31 会过冲(>43.4)，故传 author_sentence_mean=40
+    （上限 56 容纳 46），测的是「改善+守恒+未过冲→采用」路径。"""
     orig = gw.call_gen_model
     gw.call_gen_model = lambda loader, s, u, min_cjk=None: (_LONG, _P())
     try:
-        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT)
+        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT, author_sentence_mean=40)
     finally:
         gw.call_gen_model = orig
     assert gw._avg_sentence_cjk(out) > gw._avg_sentence_cjk(_SHORT), "应采用更长句版本"
+
+
+def test_fuse_rejects_overshoot_vs_author_baseline():
+    """[2026-06-04 治本] 熔合越改越长过冲作者基线(默认 31·上限 43.4，_LONG 46) → 拒绝保留原文。"""
+    orig = gw.call_gen_model
+    gw.call_gen_model = lambda loader, s, u, min_cjk=None: (_LONG, _P())
+    try:
+        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT)  # 默认基线 31
+    finally:
+        gw.call_gen_model = orig
+    assert out == _SHORT, "熔合过冲作者句长基线应拒绝、保留原文(防越改越长)"
+
+
+def test_enforce_short_paragraphs_splits_long_multi_sentence():
+    """[2026-06-04 治本] 超阈值多句非对话段 → 按句末切成短段(只切段不改字)。"""
+    long_para = "他推开门走进了那个昏暗的房间打量四周。墙上挂着一幅落满灰尘的旧画像。地上散落着许多被人撕碎的纸片。"
+    out = gw.enforce_short_paragraphs(long_para, author_para_mean=20)  # 阈值=max(26,45)=45
+    assert out.count("\n\n") >= 2, "多句长段应按句末切成多个短段"
+    assert out.replace("\n\n", "").replace("\n", "") == long_para, "只切段·一字不改"
+
+
+def test_enforce_short_paragraphs_protects_dialogue():
+    """对话段(弯引号开头)不切，哪怕很长。"""
+    dlg = "“你怎么会知道这扇门走不通，难道你提前来踩过点，还是说你有什么特殊的本事能一眼看穿这一切吗？”"
+    out = gw.enforce_short_paragraphs(dlg, author_para_mean=20)
+    assert out == dlg, "对话段不切"
+
+
+def test_enforce_short_paragraphs_keeps_single_long_sentence():
+    """单句长段(无第二个句末) → 不切(绝不碰逗号·防切坏语法·小世界长句允许)。"""
+    single = "他推开那扇吱呀作响的旧木门缓缓走进了昏暗潮湿的房间仔细打量起落满灰尘的四壁和散落了一地的碎纸片。"
+    out = gw.enforce_short_paragraphs(single, author_para_mean=20)
+    assert out == single, "单句长段不切(不碰逗号)"
+
+
+def test_read_author_rhythm_missing_returns_none():
+    """无作者风格.json → (None,None,None) 防御，不抛。"""
+    from pathlib import Path as _P2
+    s, p, r = gw._read_author_rhythm(_P2("D:/__nonexistent_proj_xyz_123__"))
+    assert (s, p, r) == (None, None, None)
 
 
 def test_fuse_keeps_original_when_no_improvement():

@@ -178,6 +178,18 @@ python core/scripts/audit_hub.py "<项目路径>" --mode cluster --cluster-id <k
 
 派单时 agent prompt 加 `CLUSTER_ID: <key>` + `MODE: cluster`，让被派 agent 也跑 cluster 视野。
 
+## 3.1b 作者金标准对比闸（advisory · 2026-06-04 补漏）
+
+> **为什么补**：audit/reflector/voice 全查机械维（句长/段长/禁用词/voice 一致），**从不拿真作者原文比"调性/喜剧到位度"**——cluster_001 实测全过却跑偏成赛博惊悚（作者是市井喜剧）。本闸拿生成指纹比 `作者风格.json` 基线，**情绪标点（感叹/问号/省略）偏低 = 喜剧引擎没落地的可量化代理信号**。
+
+```bash
+python core/scripts/replication_fidelity_check.py "<项目路径>" --cluster <key>
+# 等价: --project <项目路径> --cluster <key>
+```
+
+- 顾问制 · 永不阻断（exit 0）· advisory。verdict=advisory 时把偏离维度（尤其情绪标点 `tag=comedy_engine`）交写作 agent 参考修，或写理由豁免。
+- 质性调性（市井喜剧 vs 惊悚）量化闸抓不全 → 重大风格书建议另跑 gen-model/agent 读 `风格库 golden_passages` 做调性对比（见 `workspace/_temp_research/仿写对比/`）。
+
 ## 3.2 阅读轨：novel-reading-reflector MODE=ecas（强制）
 
 ```
