@@ -345,60 +345,7 @@ def test_expand_backfills_missing_changes():
     assert changes.get("factual", {}).get("x") == 1, "补全的 CHANGES 应并入最终输出"
 
 
-# ============ 2026-06-04 句法熔合 pass 回归（治碎句/流水账·CJK 守恒才采用）============
-_SHORT = ("他缓缓地睁开了眼睛。\n\n他低头看了看自己的双手。\n\n他又挑了挑眉毛。\n\n"
-          "他慢悠悠地往前走了几步。\n\n他在拐角处停下脚步打量四周。")  # 碎句·句长~10
-# 同内容「合并版」：省重复主语 + 逗号连缀 → CJK 守恒（≈原文）、句长大幅升
-_LONG = "他缓缓地睁开眼睛，低头看了看自己的双手，又挑了挑眉毛，慢悠悠地往前走了几步，在拐角处停下脚步打量四周。"
-
-
-def test_avg_sentence_cjk_basic():
-    assert gw._avg_sentence_cjk("他睁开眼。") < 5
-    assert gw._avg_sentence_cjk(_LONG) > 20  # 复合长句句长高
-
-
-def test_batch_paragraphs_no_split_midparagraph():
-    body = "\n\n".join("段落" + str(i) + "内容" * 20 for i in range(10))
-    batches = gw._batch_paragraphs(body, target_cjk=200)
-    assert len(batches) >= 2  # 分了多批
-    assert "\n\n".join(batches).count("段落") == 10  # 没丢段落
-
-
-def test_fuse_skipped_when_already_long():
-    """句长≥阈值 → 跳过熔合，不调 gen-model。"""
-    calls = {"n": 0}
-    orig = gw.call_gen_model
-    gw.call_gen_model = lambda *a, **k: (calls.update(n=calls["n"] + 1), ("x", _P()))[1]
-    try:
-        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _LONG * 3)
-    finally:
-        gw.call_gen_model = orig
-    assert calls["n"] == 0, "句长够时不应调用熔合"
-    assert out == _LONG * 3
-
-
-def test_fuse_adopts_when_improved_and_conserved():
-    """碎句 + 熔合返回长句(CJK 守恒·未过冲) → 采用熔合结果。
-    [2026-06-04] _LONG 句长 46 对默认基线 31 会过冲(>43.4)，故传 author_sentence_mean=40
-    （上限 56 容纳 46），测的是「改善+守恒+未过冲→采用」路径。"""
-    orig = gw.call_gen_model
-    gw.call_gen_model = lambda loader, s, u, min_cjk=None: (_LONG, _P())
-    try:
-        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT, author_sentence_mean=40)
-    finally:
-        gw.call_gen_model = orig
-    assert gw._avg_sentence_cjk(out) > gw._avg_sentence_cjk(_SHORT), "应采用更长句版本"
-
-
-def test_fuse_rejects_overshoot_vs_author_baseline():
-    """[2026-06-04 治本] 熔合越改越长过冲作者基线(默认 31·上限 43.4，_LONG 46) → 拒绝保留原文。"""
-    orig = gw.call_gen_model
-    gw.call_gen_model = lambda loader, s, u, min_cjk=None: (_LONG, _P())
-    try:
-        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT)  # 默认基线 31
-    finally:
-        gw.call_gen_model = orig
-    assert out == _SHORT, "熔合过冲作者句长基线应拒绝、保留原文(防越改越长)"
+# ============ 短段约束 + 作者节奏基线（2026-06-05 句法熔合已删·只留这些）============
 
 
 def test_enforce_short_paragraphs_splits_long_multi_sentence():
@@ -430,24 +377,36 @@ def test_read_author_rhythm_missing_returns_none():
     assert (s, p, r) == (None, None, None)
 
 
-def test_fuse_keeps_original_when_no_improvement():
-    """熔合返回同样碎(没改善) → 保留原文(不退化)。"""
-    orig = gw.call_gen_model
-    gw.call_gen_model = lambda loader, s, u, min_cjk=None: (_SHORT, _P())  # 没改善
-    try:
-        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT)
-    finally:
-        gw.call_gen_model = orig
-    assert out == _SHORT, "无改善应保留原文"
+def test_enforce_short_paragraphs_protects_system_panel():
+    """系统面板【】开头的段不切。"""
+    panel = "【系统提示：你触发了厚颜无耻判定，对方好感度+1，当前余额9999金币，请勿向NPC透露真相否则惩罚外卖全吐。】"
+    out = gw.enforce_short_paragraphs(panel, author_para_mean=20)
+    assert out == panel, "系统面板段不切"
 
 
-def test_fuse_keeps_original_when_cjk_drifts():
-    """熔合偷删大半内容(CJK 漂移到 0.4) → 守恒校验失败，保留原文(防删情节)。"""
-    orig = gw.call_gen_model
-    # 返回长句但内容只剩一句(CJK 远少于原文) → ratio<0.8 拒绝
-    gw.call_gen_model = lambda loader, s, u, min_cjk=None: ("他睁开眼，低头挑眉。", _P())
-    try:
-        out = gw.maybe_fuse_syntax(_Loader([_profile("a")]), _SHORT)
-    finally:
-        gw.call_gen_model = orig
-    assert out == _SHORT, "CJK 漂移(疑似偷删情节)应拒绝熔合保留原文"
+def test_primacy_emotive_punct_for_high_density_author():
+    """[2026-06-05] 情绪标点密的作者(小世界级)→ primacy 块注入情绪标点强调行(治 flash 全量 prompt 写成叙述向)。"""
+    block = gw._build_hard_constraint_primacy_block({"excl": 4.9, "ques": 5.5, "ellipsis": 4.3})
+    assert "情绪标点" in block and "感叹≈4.9" in block
+
+
+def test_primacy_no_emotive_punct_for_measured_author():
+    """情绪标点疏的作者/缺基线 → 不注入(避免误伤严肃/measured 作者)。"""
+    assert "情绪标点" not in gw._build_hard_constraint_primacy_block(None)
+    assert "情绪标点" not in gw._build_hard_constraint_primacy_block({"excl": 0.5, "ques": 1.0, "ellipsis": 1.0})
+
+
+def test_strip_meta_preamble_reasoning_leak():
+    """[2026-06-05] 推理模型漏出的『### 核心推理概要 … ---』元前言被剥离，正文从故事第一句开始。"""
+    reply = ("### 核心推理概要\n\n本故事块对齐小世界风格，采用 in_medias_res。\n\n"
+             "配角赋予城府。\n\n---\n\n晚上十一点的江临市下着雨。\n\n陆参跨上电动车。")
+    body, _ = gw.split_text_and_changes(reply)
+    assert body.startswith("晚上十一点"), f"应剥掉元前言, 实际开头: {body[:30]}"
+    assert "核心推理概要" not in body
+
+
+def test_strip_meta_preamble_no_false_strip():
+    """正常正文(无元标题)不被误剥。"""
+    reply = "晚上十一点的江临市下着雨。\n\n陆参跨上电动车，心里盘算着这单麻辣烫送完能凑满勤奖。"
+    body, _ = gw.split_text_and_changes(reply)
+    assert body.startswith("晚上十一点")

@@ -30,6 +30,7 @@ class Profile:
     api_key: str
     temperature: float
     max_tokens: int | None  # None = 从 model_probe 缓存读
+    protocol: str = "openai"  # openai(默认·/v1/chat/completions) | gemini(原生·streamGenerateContent·支持隐式前缀缓存)
 
 
 class GenModelConfigError(Exception):
@@ -106,6 +107,7 @@ class GenModelLoader:
                     api_key=(fields.get("api_key") or "").strip(),
                     temperature=float(temp_str),
                     max_tokens=int(max_tok_str) if max_tok_str else None,
+                    protocol=((fields.get("protocol") or "openai").strip().lower() or "openai"),
                 )
             except (ValueError, KeyError):
                 continue  # 字段解析失败 → 跳过该 profile

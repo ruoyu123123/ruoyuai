@@ -307,23 +307,45 @@ def _skill_primacy_mode() -> str:
     return (os.environ.get("SKILL_PRIMACY_MODE") or "active").strip().lower()
 
 
-def _build_hard_constraint_primacy_block() -> str:
+def _author_emotive_punct(db: Path):
+    """读作者风格档情绪标点密度（感叹/问号/省略 per 1000）·缺失返回 None。
+    用于判断该作者要不要在 primacy 块强调情绪标点（搞笑流/口语向作者密·严肃作者疏）。"""
+    p = db / "作者风格.json"
+    if not p.exists():
+        return None
+    try:
+        q = (json.loads(p.read_text(encoding="utf-8")).get("quantitative") or {})
+        pd = q.get("punctuation_density_per_1000") or {}
+    except (json.JSONDecodeError, OSError, AttributeError):
+        return None
+
+    def g(k):
+        v = pd.get(k, {})
+        return v.get("mean") if isinstance(v, dict) else (v if isinstance(v, (int, float)) else None)
+
+    excl, ques, ell = g("exclamation"), g("question"), g("ellipsis")
+    if excl is None and ques is None and ell is None:
+        return None
+    return {"excl": excl or 0, "ques": ques or 0, "ellipsis": ell or 0}
+
+
+def _build_hard_constraint_primacy_block(author_punct: dict = None) -> str:
     """生成点近邻的「硬约束维 primacy 重述」段（SKILL_PRIMACY_MODE · 默认 active）。
 
-    轻量重述（非整 prompt / 整 skill 复制 · 黑箱零成本）：只点名 3 个在长 skill 中段最易衰减的
-    硬约束维——段长契约 / 禁用词 / 对话格式——贴生成点 RoPE 高位强调，对抗 IFScale 中段衰减。
-    advisory 措辞（北极星⑤不硬锁 · 以作者风格档为第一权威，本段只是把"已在 skill 里写过的硬约束维"
-    提到显著位置重申，不新增规则、不覆盖 skill）。
+    轻量重述（非整 prompt / 整 skill 复制 · 黑箱零成本）：点名 skill 中段最易衰减的硬约束维——
+    段长契约 / 禁用词 / 对话格式 / 段首多样 / 情绪标点（作者基线感知）——贴生成点 RoPE 高位强调，
+    对抗 IFScale 中段衰减。advisory 措辞（北极星⑤不硬锁 · 以作者风格档为第一权威，本段只是把
+    "已在 skill 里写过的硬约束维"提到显著位置重申，不新增规则、不覆盖 skill）。
 
     off/shadow → ""（不注入 · 零回归）。
     """
     if _skill_primacy_mode() != "active":
         return ""
-    return (
+    block = (
         "## ⚙️ 硬约束维 primacy 重述（生成点近邻强调 · advisory · 不覆盖上方风格 skill）\n"
         "\n"
-        "下面 4 个维度在长风格档里最容易被『读过即忘』（IFScale 中段衰减），写之前再对齐一遍——"
-        "**以上方作者风格 skill 的具体规定为准**，本段只是把这 4 条提到显著位置重申，不新增规则：\n"
+        "下面这些维度在长风格档里最容易被『读过即忘』（IFScale 中段衰减），写之前再对齐一遍——"
+        "**以上方作者风格 skill 的具体规定为准**，本段只是把它们提到显著位置重申，不新增规则：\n"
         "\n"
         "- **段长契约**：贴合作者风格 skill 规定的段长 / 单句独行节奏；skill 未规定时默认非对话段"
         "一段只收一个句末结束符（。！？……），看到一段堆 ≥2 句立刻拆段。\n"
@@ -336,6 +358,18 @@ def _build_hard_constraint_primacy_block() -> str:
         "连续 ≤2 段，第 3 段换起头方式（省主语 / 动作 / 环境 / 对话起头）；同一肢体动作模板全篇 ≤5 次，"
         "**禁同义词换皮规避**（靠→歪→倒在椅背仍是同一动作）。"
     )
+    # [2026-06-05] 情绪标点维（作者基线感知·只对情绪标点密的作者强调，严肃/measured 作者不注入避免误伤）：
+    # 实证 flash 在全量 24KB prompt 下写成叙述向(感叹0.7 vs 小世界作者4.9)，！？被中段衰减埋没；
+    # 同样的 flash 在简短 prompt 里"情绪标点拉满"显眼时感叹冲到~29。把它提到 primacy 高位才跟得到。
+    if author_punct and (author_punct.get("excl", 0) >= 2 or author_punct.get("ques", 0) >= 3
+                         or author_punct.get("ellipsis", 0) >= 3):
+        block += (
+            f"\n- **情绪标点（🔴 这位作者情绪标点很密：感叹≈{author_punct.get('excl', 0):.1f}/千 · "
+            f"问号≈{author_punct.get('ques', 0):.1f}/千 · 省略≈{author_punct.get('ellipsis', 0):.1f}/千）**："
+            "凡内心吐槽 / 惊呼 / 拍案 / 荒诞反问 / 反高潮拖音处，**该用 ！ ？ …… 就别用句号压平**——"
+            "这位作者的节奏和喜感全靠这几个标点抖出来，别整段写成客观陈述句（这是最易丢的作者声纹）。"
+        )
+    return block
 
 
 def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
@@ -617,7 +651,8 @@ cluster_brief 完整内容：
     # 作者量化风格指纹段（PROFILE_INJECT_MODE=off/shadow 或无指纹时为空 → 不注入 · 零回归）
     style_fp_block = (style_fp_section + "\n\n") if style_fp_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
-    primacy_section = _build_hard_constraint_primacy_block()
+    # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
+    primacy_section = _build_hard_constraint_primacy_block(_author_emotive_punct(db))
     primacy_block = (primacy_section + "\n\n") if primacy_section else ""
 
     # ── 风格 skill 段（第一权威）+ 语感种子锚 ──
@@ -738,45 +773,53 @@ cluster_brief 完整内容：
 
 
 # ============ Gen-Model 调用（含 fallback 链） ============
+def _build_cont_msg(cont_reason: str) -> str:
+    """续写指令文案（openai / gemini 两协议共用 · DRY）。
+
+    CTX_REORDER（P0 · 位置层北极星偏移修）：续写回合原本只有「接着写别重复」，风格 skill 落在最初
+    那条 user（被推到中段 U 型最低注意力区），续写生成点近邻没风格约束 → recency 漂移。这里补一行
+    精简风格锚（句长 / 对话格式 / 禁结构套话）贴生成点 RoPE 高位重申，防长草稿尾段风格崩塌（advisory）。
+    """
+    if cont_reason == "expand":
+        cont_msg = ("这只是故事块的前半部分——目前篇幅还远不够一个完整故事块（scene_storyboard 里还有场景"
+                    "没写、或被一笔带过写得太简略）。请接着上文最后一个字继续往下写，把剩余的 / 没写透的"
+                    "场景**充分展开**（动作·对话·环境·内心·冲突推进逐一到位），"
+                    "**不要重复已写内容、不要重新开头、不要提前收尾**。"
+                    "**先别写 CHANGES JSON**——等后续轮次正文真正写够了我再让你补。")
+    elif cont_reason == "changes_only":
+        cont_msg = ("正文已经写完。现在请**只输出**这个故事块结尾的 CHANGES JSON 块"
+                    "（用 ```json 围栏包裹），**不要再写任何正文、不要重复正文内容**。"
+                    "JSON 需包含 factual（locked_facts / foreshadowing_planted / foreshadowing_paid / "
+                    "出场角色 等本故事块发生的事实变更）与 self_eval。")
+    else:
+        cont_msg = ("上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
+                    "不要重复已经写过的内容、不要重新开头，直接续写后续正文"
+                    "（如果正文已写完，就补上结尾的 CHANGES JSON 块）。")
+    if _ctx_reorder_mode() == "active":
+        cont_msg += (
+            "\n\n续写仍须贴合作者风格档：① 句长 / 段长节奏沿用前文（别越写越碎或越堆长）；"
+            "② 对话格式与前文一致（同款引号、对话独行）；"
+            "③ 严禁结构性 AI 套话（与此同时 / 值得一提的是 / 不仅如此 / 事实上）。")
+    return cont_msg
+
+
 def _stream_once(client, profile, system: str, user: str, max_tokens: int,
                  prior_assistant: str | None = None, cont_reason: str = "length") -> tuple[str, "str | None"]:
     """单次 stream 生成，返回 (text, finish_reason)。
 
-    2026-05-30 加强：捕获 finish_reason（原循环只累加 content，从不读 finish_reason，
-    导致命中 max_tokens 的截断被静默吞掉 → freestyle 长草稿半截入库）。
-    prior_assistant 非空 → 续写模式（把已生成内容回填，要求接着写不重复）。
-    cont_reason：'length'=被截断续写（接着断点写）；'expand'=写完了但正文太短续写（展开剩余场景·防 pro 类简洁模型偏短）。
+    2026-06-05 协议分发：profile.protocol == 'gemini' → 走原生 streamGenerateContent（隐式前缀缓存）；
+    否则走 OpenAI /v1/chat/completions（client 已建好）。
+    2026-05-30：捕获 finish_reason（命中 max_tokens 的截断别静默吞）。prior_assistant 非空 → 续写模式。
+    cont_reason：'length'=截断续写；'expand'=写完但太短续写；'changes_only'=只补 CHANGES。
     """
+    if getattr(profile, "protocol", "openai") == "gemini":
+        return _stream_once_gemini(profile, system, user, max_tokens, prior_assistant, cont_reason)
+
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": user}]
     if prior_assistant:
         messages.append({"role": "assistant", "content": prior_assistant})
-        # CTX_REORDER（P0 · 位置层北极星偏移修）：截断续写回合原本只有「接着写别重复」，
-        # 风格 skill / 语感锚全落在最初那条 user（已被 prior_assistant 推到中段 U 型最低注意力区），
-        # 续写生成点近邻没有任何风格约束 → recency 漂移（越续越退化回通用 AI 腔）。
-        # 这里在续写指令里补一行**精简风格锚**（签名句长 / 对话格式 / 禁结构套话 3 条），
-        # 贴生成点 RoPE 高位重申最关键约束，防长草稿尾段风格崩塌。advisory 性质（不硬锁）。
-        if cont_reason == "expand":
-            cont_msg = ("这只是故事块的前半部分——目前篇幅还远不够一个完整故事块（scene_storyboard 里还有场景"
-                        "没写、或被一笔带过写得太简略）。请接着上文最后一个字继续往下写，把剩余的 / 没写透的"
-                        "场景**充分展开**（动作·对话·环境·内心·冲突推进逐一到位），"
-                        "**不要重复已写内容、不要重新开头、不要提前收尾**。"
-                        "**先别写 CHANGES JSON**——等后续轮次正文真正写够了我再让你补。")
-        elif cont_reason == "changes_only":
-            cont_msg = ("正文已经写完。现在请**只输出**这个故事块结尾的 CHANGES JSON 块"
-                        "（用 ```json 围栏包裹），**不要再写任何正文、不要重复正文内容**。"
-                        "JSON 需包含 factual（locked_facts / foreshadowing_planted / foreshadowing_paid / "
-                        "出场角色 等本故事块发生的事实变更）与 self_eval。")
-        else:
-            cont_msg = ("上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
-                        "不要重复已经写过的内容、不要重新开头，直接续写后续正文"
-                        "（如果正文已写完，就补上结尾的 CHANGES JSON 块）。")
-        if _ctx_reorder_mode() == "active":
-            cont_msg += (
-                "\n\n续写仍须贴合作者风格档：① 句长 / 段长节奏沿用前文（别越写越碎或越堆长）；"
-                "② 对话格式与前文一致（同款引号、对话独行）；"
-                "③ 严禁结构性 AI 套话（与此同时 / 值得一提的是 / 不仅如此 / 事实上）。")
-        messages.append({"role": "user", "content": cont_msg})
+        messages.append({"role": "user", "content": _build_cont_msg(cont_reason)})
     stream = client.chat.completions.create(
         model=profile.model, messages=messages, max_tokens=max_tokens,
         temperature=profile.temperature, stream=True,
@@ -794,6 +837,73 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
             sys.stderr.flush()
         if getattr(choice, 'finish_reason', None):
             finish_reason = choice.finish_reason
+    return text, finish_reason
+
+
+def _gemini_host(base_url: str) -> str:
+    """从 OpenAI 风格 base_url(.../v1) 推 gemini 原生 host(去掉 /v1 尾)。"""
+    return base_url.rsplit("/v1", 1)[0] if "/v1" in base_url else base_url.rstrip("/")
+
+
+def _stream_once_gemini(profile, system: str, user: str, max_tokens: int,
+                        prior_assistant: str | None = None, cont_reason: str = "length") -> tuple[str, "str | None"]:
+    """gemini 原生协议 streamGenerateContent（SSE）· 稳定 system 放 systemInstruction → 隐式前缀缓存命中。
+
+    返回 (text, finish_reason)，finish_reason 归一到 openai 口径（MAX_TOKENS→'length' 触发续写·其余→'stop'），
+    上层截断续写 / expand 逻辑零改动复用。缓存命中 cachedContentTokenCount 打到 stderr 可见。
+    """
+    import urllib.request
+
+    host = _gemini_host(profile.base_url)
+    url = f"{host}/v1beta/models/{profile.model}:streamGenerateContent?alt=sse&key={profile.api_key}"
+
+    contents = [{"role": "user", "parts": [{"text": user}]}]
+    if prior_assistant:
+        contents.append({"role": "model", "parts": [{"text": prior_assistant}]})
+        contents.append({"role": "user", "parts": [{"text": _build_cont_msg(cont_reason)}]})
+    body = {
+        "systemInstruction": {"parts": [{"text": system}]},  # 稳定前缀(system+skill) → 跨调用隐式缓存
+        "contents": contents,
+        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": profile.temperature},
+    }
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+
+    text = ""
+    finish_raw = None
+    usage = {}
+    resp = urllib.request.urlopen(req, timeout=GEN_MODEL_TIMEOUT)
+    for raw in resp:  # 按行迭代 SSE（每事件一行 data: {json}）
+        line = raw.decode("utf-8", "ignore").strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            d = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        for c0 in (d.get("candidates") or [])[:1]:
+            for part in (c0.get("content", {}).get("parts") or []):
+                if part.get("thought"):  # 跳过 reasoning thought 段（只要正文）
+                    continue
+                t = part.get("text")
+                if t:
+                    text += t
+                    sys.stderr.write(t)
+                    sys.stderr.flush()
+            if c0.get("finishReason"):
+                finish_raw = c0["finishReason"]
+        if d.get("usageMetadata"):
+            usage = d["usageMetadata"]
+
+    cached = usage.get("cachedContentTokenCount")
+    if cached:
+        print(f"\n[gen_writer][gemini] 🟢 缓存命中 cachedContentTokenCount={cached}"
+              f"/{usage.get('promptTokenCount', '?')} prompt tokens（省 input 成本）", file=sys.stderr)
+    finish_reason = "length" if finish_raw == "MAX_TOKENS" else ("stop" if finish_raw else None)
     return text, finish_reason
 
 
@@ -1182,6 +1292,15 @@ def split_text_and_changes(reply: str) -> tuple:
     # 去掉可能的 "# 正文" 这类元标题
     body = re.sub(r'^#\s*(正文|cluster.*)\s*\n', '', body, flags=re.MULTILINE)
 
+    # [2026-06-05] 剥离推理模型漏出的「创作说明/推理概要」元前言（正文前 + --- 分隔 · flash 等推理模型常见）：
+    # 仅当 body 开头是含『概要/推理/创作说明/创作思路』的 markdown 标题、且后接 --- 分隔时才剥，避免误伤正文。
+    if re.match(r'^\s*#{1,4}[^\n]*(概要|推理|创作说明|创作思路)[^\n]*\n', body):
+        _sep = re.search(r'\n\s*-{3,}\s*\n', body[:2500])
+        if _sep:
+            body = body[_sep.end():].lstrip()
+            print("[gen_writer] [strip] 剥离模型漏出的『创作说明/推理概要』元前言（正文前 + --- 分隔）",
+                  file=sys.stderr)
+
     # DCAS 模式（用户偏好）：如果 gen-model 仍误带「第 N 章 标题」分章标记，stderr 警告
     # 不主动删除（让 splitter 决定怎么处理），只提示 prompt 没生效
     if re.search(r'^第\s*[一二三四五六七八九十百千\d]+\s*章\s', body, re.MULTILINE):
@@ -1194,54 +1313,6 @@ def split_text_and_changes(reply: str) -> tuple:
     except json.JSONDecodeError:
         changes_obj = {"_doc": "返回 CHANGES JSON 解析失败", "raw": changes_json[:2000]}
     return body, changes_obj
-
-
-# ============ [2026-06-04] 句法熔合 pass：治「碎句/流水账作文感」============
-# 实证：prompt/few-shot 喊话治不动 gen-model 句长（C3c 正反例 + snippet_seed 样例都在，pro 句长仍 14）。
-# 但 gen-model 在【明确的编辑任务】下能把碎句合并成复合长句（实测 15.0→28.5·CJK 守恒 630→629·情节全保留）。
-# 故生成后检测句长，偏短则分段喂 gen-model 做「只改句法不改情节」的熔合，CJK 守恒才采用（防删/注水）。
-# 北极星：只治工艺碎句·不碰情节创意（守恒校验兜底）· 偏短才触发 · 不改善则保留原文（不退化）。
-FUSE_MIN_MEAN_CJK = 24      # [fallback] 作者基线缺失时的触发线（≈作者 31×0.77）→ 正常用作者句长×0.77
-DEFAULT_AUTHOR_SENTENCE_MEAN = 31.0   # [fallback] 作者风格档无句长基线时的兜底
-FUSE_TRIGGER_RATIO = 0.77   # 句长 < 作者句长 × 此比 → 判碎句触发熔合
-FUSE_CEIL_RATIO = 1.40      # 熔合后句长 > 作者句长 × 此比 → 判过冲（越改越长）拒绝采用
-FUSE_BATCH_CJK = 3500       # 分段熔合每批目标字数（避免单次过长 + 不切断段落）
-_FUSE_SYSTEM = ("你是中文文字编辑。只做句法重塑，绝不改动任何情节/对话内容/人物/事实——"
-                "剧情一个字都不删不加不改。")
-_FUSE_USER_PREFIX = (
-    "下面这段网文叙述句子太碎（大量「主语+动作」短句独行，像小学作文流水账）。请重写，**只调句法**：\n"
-    "① 把连续的「主语+动作」短句用逗号连缀成复合长句（例「他睁开眼。他低头看了看自己。他挑了挑眉。」→"
-    "「他睁开眼，低头看了看自己，又挑了挑眉」）；② 省略重复主语；③ 句首多样化（别都「他/某角色名」开头，"
-    "可用环境/状语/动作中段起头）；④ 叙述句平均长度明显拉长，读着像成熟网文。\n"
-    "🔴 铁律：情节 / 对话(引号内) / 人物 / 事实一字不改不删不加；系统面板【】原样保留；只改叙述句断句与连接。\n\n原文：\n")
-
-
-def _avg_sentence_cjk(text: str) -> float:
-    import re as _re
-    import statistics as _st
-    body = [l.strip() for l in text.split("\n") if l.strip() and not l.strip().startswith("【")]
-    s = []
-    for p in body:
-        for x in _re.split(r"[。！？…]+", p):
-            c = sum(1 for ch in x if "一" <= ch <= "鿿")
-            if c >= 2:
-                s.append(c)
-    return _st.mean(s) if s else 0.0
-
-
-def _batch_paragraphs(body: str, target_cjk: int = FUSE_BATCH_CJK) -> list:
-    """按段落攒到 target_cjk 一批（不切断段落 / 对话 / 场景中间）。"""
-    paras = body.split("\n\n") if "\n\n" in body else body.split("\n")
-    batches, cur, cur_cjk = [], [], 0
-    for p in paras:
-        cur.append(p)
-        cur_cjk += sum(1 for c in p if "一" <= c <= "鿿")
-        if cur_cjk >= target_cjk:
-            batches.append("\n\n".join(cur))
-            cur, cur_cjk = [], 0
-    if cur:
-        batches.append("\n\n".join(cur))
-    return batches
 
 
 def _read_author_rhythm(project_root: Path):
@@ -1281,58 +1352,6 @@ def _read_author_rhythm(project_root: Path):
     single = _num(("single_sentence_para_ratio",),
                   ("paragraph_length", "single_sentence_para_ratio_mean"))
     return sent, para, single
-
-
-def maybe_fuse_syntax(loader: GenModelLoader, body: str,
-                      author_sentence_mean: float = None) -> str:
-    """句长偏短 → 分段句法熔合（gen-model 编辑任务）。
-
-    [2026-06-04 治本] 读作者句长基线：触发线=作者句长×0.77，目标≈作者句长，
-    采用须 CJK 守恒 + 句长改善 + **不过冲**（> 作者句长×1.4 判越改越长，拒绝保留原文）。
-    """
-    base = author_sentence_mean if (author_sentence_mean and author_sentence_mean > 0) \
-        else DEFAULT_AUTHOR_SENTENCE_MEAN
-    floor = base * FUSE_TRIGGER_RATIO
-    ceil = base * FUSE_CEIL_RATIO
-    cur = _avg_sentence_cjk(body)
-    if cur >= floor:
-        print(f"[gen_writer] 句长 {cur:.1f} ≥ 触发线 {floor:.1f}（作者基线 {base:.1f}），无需句法熔合",
-              file=sys.stderr)
-        return body
-    print(f"\n[gen_writer] ⚠️ 句长 {cur:.1f} < 触发线 {floor:.1f}（作者基线 {base:.1f}·碎句/流水账）→ 启动句法熔合，目标≈{base:.0f}…",
-          file=sys.stderr)
-    target_note = (f"\n⑤ 目标长度：把叙述句均长拉到**接近 {base:.0f} 字**（作者基线）——"
-                   f"拉长是为了不碎，但**别过冲**，超过 {base * 1.3:.0f} 字就不像这位作者了。\n")
-    user_prefix = _FUSE_USER_PREFIX.replace("\n\n原文：\n", target_note + "\n原文：\n")
-    batches = _batch_paragraphs(body)
-    fused = []
-    for i, b in enumerate(batches):
-        try:
-            r, _p = call_gen_model(loader, _FUSE_SYSTEM, user_prefix + b + "\n\n只输出重写后的正文。")
-            fb, _c = split_text_and_changes(r)
-            fused.append(fb.strip() if fb.strip() else b)
-            print(f"[gen_writer] 句法熔合段 {i + 1}/{len(batches)}", file=sys.stderr)
-        except Exception as e:
-            print(f"[gen_writer] 熔合段 {i + 1} 失败，保留原段: {str(e)[:100]}", file=sys.stderr)
-            fused.append(b)
-    new_body = "\n\n".join(fused)
-    new_mean = _avg_sentence_cjk(new_body)
-    o_cjk = sum(1 for c in body if "一" <= c <= "鿿")
-    n_cjk = sum(1 for c in new_body if "一" <= c <= "鿿")
-    ratio = n_cjk / max(o_cjk, 1)
-    # 过冲拒绝：熔合越改越长（> 作者句长×1.4）→ 不采用（防本次 cluster_001 翻车：20.3→37.1 过冲作者 32.2）
-    if new_mean > ceil:
-        print(f"[gen_writer] ⚠️ 熔合过冲（句长 {cur:.1f}→{new_mean:.1f} > 上限 {ceil:.1f}）→ 保留原文防越改越长",
-              file=sys.stderr)
-        return body
-    # 采用条件：句长真改善（+2 以上）且 CJK 守恒（0.80-1.25·防 gen-model 偷删情节或注水）
-    if new_mean > cur + 2 and 0.80 <= ratio <= 1.25:
-        print(f"[gen_writer] ✅ 句法熔合采用：句长 {cur:.1f}→{new_mean:.1f}（作者基线 {base:.1f}）· CJK {o_cjk}→{n_cjk}（比 {ratio:.2f}）",
-              file=sys.stderr)
-        return new_body
-    print(f"[gen_writer] 熔合未达标/内容漂移（句长 {cur:.1f}→{new_mean:.1f}·CJK 比 {ratio:.2f}）→ 保留原文",
-          file=sys.stderr)
-    return body
 
 
 def enforce_short_paragraphs(body: str, author_para_mean: float = None) -> str:
@@ -1567,14 +1586,13 @@ def main():
         sys.exit(3)
 
     body, changes = split_text_and_changes(reply)
-    # [2026-06-04 治本] 句法熔合 + 短段约束：读本项目作者真实节奏基线（句长/段长），
-    # ① 熔合按作者句长触发+目标+过冲拒绝（不再硬编码 24·不越改越长）；
-    # ② 熔合后按作者段长切过长段（治「长句裹短段」型作者熔合后段长过长·用户 2026-06-04 抓到）。
+    # [2026-06-05] 句法熔合已删（盲目拉长句长的 gen-model 编辑 pass·分不清流水账碎句 vs 反高潮 ！？ 短句·
+    # 会削掉搞笑流命根子·实测 flash 裸输出感叹~29/千→熔合后 0.9·拖后腿）。只留短段约束（按作者段长切过长
+    # 非对话段·格式层·不动 ！？）。流水账靠模型自身 + prose_rhythm / reading-reflector advisory 兜。
     if min_cjk is not None:
         _auth_sent, _auth_para, _auth_single = _read_author_rhythm(project_root)
         print(f"[gen_writer] 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}",
               file=sys.stderr)
-        body = maybe_fuse_syntax(loader, body, author_sentence_mean=_auth_sent)
         body = enforce_short_paragraphs(body, author_para_mean=_auth_para)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
                                   ch_start, args.chapter_end, used_profile,
