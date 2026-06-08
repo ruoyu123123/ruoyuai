@@ -150,6 +150,50 @@ def estimate_cluster_arc(replica_txt: str, cluster_id: str, n_chapters: int) -> 
 # 个例差距，非工具失效）。
 STRICT_ESTIMABLE_IDX = (3, 4)
 
+# 2026-06-08 修 #7（reasoning 模型回灌深修）：reasoning gen-model（active profile thinking_level
+# 非空，如 gemini-3.x pro-preview）下，distill_replicate 把整 cluster 复刻成「叙述浓缩版」
+# （诡秘 auto_009 实测 9273 字 vs 全本 6 章 ~21k），章末 cliffhanger 信号被压缩稀释 → kicker
+# estimate 系统性偏低（auto_009：ref_total=18 vs gen_total=3，cosine 0.548）。这与已移出 strict 的
+# arc(0) 同源（estimate 拼接浓缩文本不可靠）。故 reasoning 下 kicker(3) 也移出 strict，仅看 scene(4)
+# （scene 比是密度比值·对浓缩鲁棒，auto_009 实测 0.823 PASS）。arc/kicker 的真实验证 defer 到
+# gen_writer 写作端（freestyle 全本字数正常·钩子密度真实可测）。
+# 非 reasoning 模型（flash 等，thinking_level=None）字数正常，仍用 STRICT_ESTIMABLE_IDX 含 kicker。
+STRICT_ESTIMABLE_IDX_REASONING = (4,)
+
+
+def strict_idx_for_thinking_level(thinking_level: str | None) -> tuple[tuple[int, ...], bool]:
+    """纯函数：按 gen-model thinking_level 决定 strict 可估算维集合。
+
+    reasoning（thinking_level 非空）→ (4,) 仅 scene（kicker 浓缩复刻失真·同 arc 移出）。
+    非 reasoning（None/空）→ (3,4) 含 kicker。
+    返回 (estimable_idx, is_reasoning)。
+    """
+    if (thinking_level or "").strip():
+        return STRICT_ESTIMABLE_IDX_REASONING, True
+    return STRICT_ESTIMABLE_IDX, False
+
+
+def resolve_strict_estimable_idx() -> tuple[tuple[int, ...], bool, str]:
+    """读 active gen-model profile 的 thinking_level → strict 可估算维 + 人读说明。
+
+    profile 加载失败（无 .env / GEN_MODEL_ACTIVE 未设）时退默认（含 kicker），不阻断 verify。
+    返回 (estimable_idx, is_reasoning, note)。
+    """
+    try:
+        from gen_model_loader import get_default_loader
+        profile = get_default_loader().get_active_profile()
+        idx, is_reasoning = strict_idx_for_thinking_level(profile.thinking_level)
+        if is_reasoning:
+            note = (f"reasoning 模型 {profile.name}(thinking_level={profile.thinking_level}) · "
+                    f"kicker(3) 浓缩复刻失真移出 strict · 仅 scene(4) · "
+                    f"arc/kicker 真实验证 defer 到 gen_writer 写作端")
+        else:
+            note = (f"非 reasoning 模型 {profile.name}(thinking_level=None) · "
+                    f"默认 strict 含 kicker(3)+scene(4)")
+        return idx, is_reasoning, note
+    except Exception as e:  # noqa: BLE001 — profile 加载失败不阻断 verify
+        return STRICT_ESTIMABLE_IDX, False, f"gen-model profile 加载失败({e}) · 退默认 strict 含 kicker"
+
 
 def strict_gate_decision(report: dict | None,
                          estimable_idx: tuple[int, ...] = STRICT_ESTIMABLE_IDX
@@ -320,6 +364,9 @@ def main():
         strict=False,
     )
 
+    # 解析 strict 闸门策略（reasoning 模型移出 kicker · 修#7）——先解析以便写入 metadata
+    strict_idx, is_reasoning, strict_note = resolve_strict_estimable_idx()
+
     # ===== 步骤 4：扩展 report 加 verify metadata =====
     if report:
         report["_verify_metadata"] = {
@@ -331,23 +378,31 @@ def main():
             "replica_path": str(replica_path),
             "replica_chars": len(replica_txt),
             "estimated_n_chapters": n_chapters,
-            "verify_runner": "distill_finalize_verify.py v1",
+            "verify_runner": "distill_finalize_verify.py v2",
+            "strict_policy": {
+                "estimable_idx": list(strict_idx),
+                "is_reasoning_model": is_reasoning,
+                "note": strict_note,
+            },
         }
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2),
                                 encoding="utf-8")
 
-    # ===== 步骤 5：按【可估算 3 维】重判 strict 闸门 =====
-    # arc(0)/kicker(3)/scene(4) 为有测量学意义的可估算维（见 strict_gate_decision 注释）。
-    strict_ok, estimable = strict_gate_decision(report)
+    # ===== 步骤 5：按【可估算维】重判 strict 闸门 =====
+    # arc(0) 已移出（修#6·estimate-shape 金标准三重 FAIL）。reasoning 模型（thinking_level 非空）
+    # 再移出 kicker(3)（修#7·浓缩复刻稀释钩子），仅看 scene(4)；非 reasoning 仍含 kicker(3)+scene(4)。
+    strict_ok, estimable = strict_gate_decision(report, estimable_idx=strict_idx)
     est_pass = [r for r in estimable if r.get("passes")]
-    print(f"\n[verify] 6 维 verdict={report.get('verdict', '?')} · 可估算 3 维(arc/kicker/scene) "
-          f"通过 {len(est_pass)}/{len(estimable)}", file=sys.stderr)
+    est_dims = [r.get("dim", "?") for r in estimable]
+    print(f"\n[verify] 6 维 verdict={report.get('verdict', '?')} · strict 可估算维 "
+          f"{est_dims} 通过 {len(est_pass)}/{len(estimable)}", file=sys.stderr)
+    print(f"         strict 策略: {strict_note}", file=sys.stderr)
     print(f"         报告: {args.output}", file=sys.stderr)
     if strict_ok:
-        print(f"[OK · PASS] 写作端回灌（可估算 3 维全过）· 允许 plan_tracker end", file=sys.stderr)
+        print(f"[OK · PASS] 写作端回灌（strict 可估算维全过）· 允许 plan_tracker end", file=sys.stderr)
         sys.exit(0)
     if args.strict:
-        print(f"[FAIL · strict] 可估算 3 维未全过 · 出货前拦截（修 skill 重蒸馏）", file=sys.stderr)
+        print(f"[FAIL · strict] strict 可估算维未全过 · 出货前拦截（修 skill 重蒸馏）", file=sys.stderr)
         sys.exit(2)
     print(f"[WARN] 可估算维未全过 · 非 strict 放行 · 建议手动审查", file=sys.stderr)
     sys.exit(0)

@@ -134,3 +134,50 @@ def test_non_six_dim_degrades_to_all_dims():
     report2 = {"scores_by_dim": [_row("a", 0.9), _row("b", 0.4), _row("c", 0.75)]}
     strict_ok2, _ = dfv.strict_gate_decision(report2)
     assert strict_ok2 is False
+
+
+# ---- 修#7：reasoning 模型移出 kicker（浓缩复刻稀释钩子·defer 到 gen_writer） ----
+
+def test_reasoning_idx_constant():
+    """reasoning strict 可估算维恰为 scene(4) 单维，不含 kicker(3)。"""
+    assert dfv.STRICT_ESTIMABLE_IDX_REASONING == (4,), dfv.STRICT_ESTIMABLE_IDX_REASONING
+    assert 3 not in dfv.STRICT_ESTIMABLE_IDX_REASONING, "reasoning 下 kicker(3) 须移出 strict"
+
+
+def test_strict_idx_for_thinking_level_reasoning():
+    """thinking_level 非空（LOW/MEDIUM/HIGH）→ 仅 scene(4) + is_reasoning=True。"""
+    for lvl in ("LOW", "MEDIUM", "HIGH", "low", " HIGH "):
+        idx, is_reasoning = dfv.strict_idx_for_thinking_level(lvl)
+        assert idx == (4,), (lvl, idx)
+        assert is_reasoning is True, lvl
+
+
+def test_strict_idx_for_thinking_level_non_reasoning():
+    """thinking_level None/空 → 默认 (3,4) 含 kicker + is_reasoning=False。"""
+    for lvl in (None, "", "   "):
+        idx, is_reasoning = dfv.strict_idx_for_thinking_level(lvl)
+        assert idx == (3, 4), (lvl, idx)
+        assert is_reasoning is False, lvl
+
+
+def test_reasoning_kicker_fail_does_not_block():
+    """核心修#7：reasoning 下 kicker(3) 低分（浓缩复刻稀释）但 scene(4) 过 → strict 放行。
+    复现诡秘 auto_009：kicker 0.548 不过 / scene 0.823 过 → 旧 (3,4) 误拦，新 (4,) 放行。"""
+    report = _six_dim_report([0.0, 0.852, 0.5, 0.548, 0.823, 0.3])  # auto_009 实测六维
+    # 默认（非 reasoning）：kicker 0.548 不过 → 拦
+    strict_ok_default, _ = dfv.strict_gate_decision(report)
+    assert strict_ok_default is False, "非 reasoning 下 kicker 不过应拦（守旧行为）"
+    # reasoning：仅看 scene(4)=0.823 过 → 放行
+    strict_ok_reasoning, estimable = dfv.strict_gate_decision(
+        report, estimable_idx=dfv.STRICT_ESTIMABLE_IDX_REASONING)
+    assert strict_ok_reasoning is True, "reasoning 下仅 scene 过即放行（kicker 浓缩失真已移出）"
+    assert len(estimable) == 1
+    assert estimable[0]["dim"] == ce.DIM_LABELS[4]
+
+
+def test_reasoning_scene_fail_still_blocks():
+    """reasoning 下 scene(4) 仍是 hard 维——scene 不过仍拦（没把闸门拆光）。"""
+    report = _six_dim_report([0.9, 0.9, 0.9, 0.9, 0.5, 0.9])  # 只 scene 低
+    strict_ok, _ = dfv.strict_gate_decision(
+        report, estimable_idx=dfv.STRICT_ESTIMABLE_IDX_REASONING)
+    assert strict_ok is False
