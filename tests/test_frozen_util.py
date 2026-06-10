@@ -5,6 +5,7 @@ dev=no-op(sys.executable) / frozen+RUOYU_PYTHON=bundled / frozen 缺 env=回退+
 真 onedir 端到端需建 exe 验，本测只锁解析逻辑（monkeypatch frozen + env）。
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -56,20 +57,39 @@ def test_frozen_without_env_falls_back_and_warns():
             os.environ["RUOYU_PYTHON"] = saved_env
 
 
-def test_fanout_files_use_child_python_not_raw_executable():
-    """fan-out 文件已不再裸用 sys.executable（全走 child_python·防 frozen 重启 GUI）。"""
+def test_no_bare_child_interpreter_anywhere_in_scripts():
+    """全 core/scripts 扫描：subprocess 启动子脚本绝不裸用 sys.executable 或 "python"
+    字面量（必走 child_python·防 frozen 重启 GUI / PATH 无 python 静默失败）。
+
+    这是 finding #1「comprehensive 根治」的守卫——未来任何新加的 fan-out 漏改都会被
+    本测试当场抓住（reviewer 建议：扫全目录而非写死文件名）。
+    白名单：frozen_util.py（定义处）、orchestrator.py（docstring 注释 + in-process 分支
+    保留 sys.executable 引用做对照说明）。
+    """
     scripts = Path(__file__).resolve().parent.parent / "core" / "scripts"
-    for fname in ["audit_hub.py", "save_state.py", "gen_writer.py", "gen_fixer.py",
-                  "run_cross_cluster_aggregates.py", "save_state_updates.py",
-                  "save_state_evaluators.py", "evolution_orchestrator.py"]:
+    bare_exec = re.compile(r"\[\s*sys\.executable\b")
+    bare_python = re.compile(r"\[\s*[\"']python[3]?[\"']\s*,")
+    offenders = []
+    for p in sorted(scripts.glob("*.py")):
+        if p.name == "frozen_util.py":
+            continue
+        for i, ln in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            code = ln.split("#", 1)[0]  # 去行尾注释
+            if p.name == "orchestrator.py" and "child_python()" in ln:
+                continue  # orchestrator 的 full=[child_python()]+tokens 已正确
+            if bare_exec.search(code) or bare_python.search(code):
+                offenders.append(f"{p.name}:{i}: {ln.strip()[:70]}")
+    assert not offenders, "fan-out 子进程仍裸用解释器（应走 child_python）:\n" + \
+        "\n".join(offenders)
+
+
+def test_wal_recovery_and_maybe_judge_use_child_python():
+    """finding #1 第二轮补漏：wal_recovery + maybe_judge_consensus 两处 "python" 字面量
+    已改 child_python（这俩 pre-existing fan-out 站点在首轮被漏）。"""
+    scripts = Path(__file__).resolve().parent.parent / "core" / "scripts"
+    for fname in ["wal_recovery.py", "maybe_judge_consensus.py"]:
         text = (scripts / fname).read_text(encoding="utf-8")
-        assert "from frozen_util import child_python" in text, f"{fname} 缺 import"
-        # subprocess argv 里不应再有裸 sys.executable（注释/docstring 除外的代码行）
-        for ln in text.splitlines():
-            stripped = ln.strip()
-            if stripped.startswith("#") or "sys.executable" not in ln:
-                continue
-            assert False, f"{fname} 仍有裸 sys.executable: {ln.strip()[:80]}"
+        assert "child_python" in text, f"{fname} 未用 child_python"
 
 
 if __name__ == "__main__":

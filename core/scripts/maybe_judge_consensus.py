@@ -11,6 +11,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+try:
+    from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+except Exception:  # pragma: no cover
+    def child_python():
+        return sys.executable
+
 # 2026-05-29 cluster 化：cluster 模式下关键章触发改为「每个 cluster 的末章 + climax 章」，
 # 取代失准的硬编码章号集合。reader 缺失不影响 chapter 模式（向后兼容）。
 try:
@@ -199,7 +205,7 @@ def trigger_consensus(project_root: Path, ch: int) -> int:
     if not consensus_script.exists():
         print(f"[SKIP] judge_consensus.py 不存在")
         return 0
-    cmd = ["python", str(consensus_script), "merge"] + [str(p) for p in reports]
+    cmd = [child_python(), str(consensus_script), "merge"] + [str(p) for p in reports]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=30)
         out_path = judge_dir / f"ch_{ch:03d}_consensus.json"
