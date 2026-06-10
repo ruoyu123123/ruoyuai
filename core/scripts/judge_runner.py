@@ -341,6 +341,12 @@ def run_judge(agent_name: str, project_root: str | Path, *,
     written: Path | None = None
     if output_path:
         written = Path(output_path)
+        # 🔴 防御（真 end-to-end 暴露）：未解析的 <placeholder>（如 <round>）含 Windows 非法
+        # 文件名字符 < >（Errno22）。绝不带它落盘——清晰报错而非 _atomic_write 里晦涩 OSError。
+        if "<" in str(written) or ">" in str(written):
+            raise ValueError(
+                f"judge 输出路径含未解析占位符（< >·Windows 非法文件名）：{written}"
+                f"——orchestrator default_judge_dispatch 应已解析 {agent_name} 的 output_template")
         written.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write_json(written, data)
         # voice-checker 双载体：brief 内嵌 judge_report 时平铺一份 JudgeReport

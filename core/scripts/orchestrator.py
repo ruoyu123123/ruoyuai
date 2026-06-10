@@ -372,17 +372,39 @@ def default_judge_dispatch(agent_name: str, step: dict, ctx: dict):
             if p.exists():
                 context_files.append((k, p))
 
-    # judge_report_path：str（单 agent）或 {agent_name: path} dict（一步多 agent）
-    jrp = step.get("judge_report_path")
-    out_raw = jrp.get(agent_name, "") if isinstance(jrp, dict) else (jrp or "")
+    # 输出路径解析（🔴 一步多 agent bug 修复·真 end-to-end 暴露）：
+    # step.judge_report_path 是为**主 agent**（round_loop 那个）写的单条路径·含 <round>。
+    # audit_hub exit 2 派单的 validator-checker 等**非主 agent**复用它会：① 写错路径（串到
+    # reading_reflection）② <round> 不在 ctx → 字面 <round> 进文件名 → Windows 非法(Errno22)。
+    # 修：优先用**被派 agent 自己的** output_template（每 agent 命名独立）·{key}/{round} 从
+    # ctx 填（<round> 默认 1·非轮循环 dispatch 也合法）·step.judge_report_path 仅兜底。
+    spec = jr.AGENT_SPECS.get(agent_name)
+    rnd = ctx.get("<round>", 1)
+    out_raw = ""
+    if spec and getattr(spec, "output_template", ""):
+        out_raw = (spec.output_template
+                   .replace("{key}", str(ctx.get("key", "")))
+                   .replace("{round}", str(rnd))
+                   .replace("{next_key}", str(ctx.get("<next_key>", ctx.get("key", "")))))
+    else:
+        jrp = step.get("judge_report_path")
+        raw = jrp.get(agent_name, "") if isinstance(jrp, dict) else (jrp or "")
+        out_raw = resolve_placeholders(raw, ctx).replace("<round>", str(rnd))
     output_path = None
-    if out_raw:
-        op = Path(resolve_placeholders(out_raw, ctx))
+    if out_raw and "<" not in out_raw and ">" not in out_raw:  # 防未解析占位符进文件名
+        op = Path(out_raw)
         output_path = op if op.is_absolute() else project_root / op
-    sec_raw = step.get("judge_report_path_secondary") or ""
+    # secondary（voice-checker 双载体）：同样优先 agent 自己的 secondary_output_template
+    sec_raw = ""
+    if spec and getattr(spec, "secondary_output_template", ""):
+        sec_raw = (spec.secondary_output_template
+                   .replace("{key}", str(ctx.get("key", ""))).replace("{round}", str(rnd)))
+    else:
+        sec_raw = resolve_placeholders(step.get("judge_report_path_secondary") or "",
+                                       ctx).replace("<round>", str(rnd))
     secondary = None
-    if sec_raw:
-        sp = Path(resolve_placeholders(sec_raw, ctx))
+    if sec_raw and "<" not in sec_raw and ">" not in sec_raw:
+        sp = Path(sec_raw)
         secondary = sp if sp.is_absolute() else project_root / sp
 
     return jr.run_judge(agent_name, project_root, params=params,

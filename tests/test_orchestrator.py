@@ -41,6 +41,58 @@ def test_forward_slash_path_unquoted_still_works():
     assert up in toks and "1" in toks
 
 
+def test_judge_dispatch_uses_own_template_not_step_round_path():
+    """🔴 一步多 agent bug 回归（真 end-to-end 暴露）：audit_hub exit 2 派单 validator-checker
+    时，不得复用 step.judge_report_path（reading-reflector 的 <round> 路径）——会写错位置 +
+    <round> 未解析进 Windows 非法文件名(Errno22)。须用 validator-checker 自己的 output_template。"""
+    import judge_runner as jr
+    captured = {}
+    orig = jr.run_judge
+
+    def fake(agent, project_root, **kw):
+        captured["agent"] = agent
+        captured["output_path"] = kw.get("output_path")
+
+        class O:
+            data, ok, output_path = {}, True, kw.get("output_path")
+        return O()
+    jr.run_judge = fake
+    try:
+        step = {"n": 3,
+                "judge_report_path": "_数据库/.reading_reflection/cluster_001_round_<round>.json"}
+        ctx = {"project_root": r"C:\proj", "key": "001"}  # 无 <round>（非轮循环 dispatch）
+        orc.default_judge_dispatch("novel-validator-checker", step, ctx)
+        op = str(captured["output_path"])
+        assert "<" not in op and ">" not in op, f"输出路径仍含非法占位符: {op}"
+        assert "validator" in op and "reading_reflection" not in op, \
+            f"validator-checker 没用自己的 template: {op}"
+    finally:
+        jr.run_judge = orig
+
+
+def test_judge_dispatch_round_loop_path_resolves():
+    """轮循环里 <round> 在 ctx → reading-reflector 路径正确解析成真实轮号（非 <round>）。"""
+    import judge_runner as jr
+    captured = {}
+    orig = jr.run_judge
+
+    def fake(agent, project_root, **kw):
+        captured["output_path"] = kw.get("output_path")
+
+        class O:
+            data, ok, output_path = {}, True, kw.get("output_path")
+        return O()
+    jr.run_judge = fake
+    try:
+        step = {"n": 3, "judge_report_path": "x"}
+        ctx = {"project_root": r"C:\proj", "key": "001", "<round>": 2}
+        orc.default_judge_dispatch("novel-reading-reflector", step, ctx)
+        op = str(captured["output_path"])
+        assert "round_2" in op and "<" not in op, f"<round> 未解析成轮号: {op}"
+    finally:
+        jr.run_judge = orig
+
+
 # ============ 测试隔离：plan_tracker 目录全部指向临时区 ============
 class _Sandbox:
     """monkeypatch plan_tracker 模块常量 → 临时目录（不污染真实 plans/模板）。"""
