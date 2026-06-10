@@ -288,10 +288,11 @@ def default_script_runner(cmd_line: str, *, repo_root: Path = REPO_ROOT,
     # dev：子进程。强制子进程 UTF-8 输出（GBK Windows 上 pipe 默认 locale 编码=gbk，
     # 父进程按 utf-8 解码 → 中文/emoji 全乱码进 GUI 日志·finding H）。
     import os as _os
+    from frozen_util import child_python
     env = dict(_os.environ)
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
-    full = [sys.executable] + tokens
+    full = [child_python()] + tokens
     print(f"[orchestrator][{label}] $ {' '.join(tokens)}", file=sys.stderr)
     proc = subprocess.run(full, cwd=str(repo_root), capture_output=True,
                           text=True, encoding="utf-8", errors="replace",

@@ -26,6 +26,7 @@ import json
 import re
 import subprocess
 import sys
+from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
 import time
 from pathlib import Path
 
@@ -219,7 +220,7 @@ def strict_gate_decision(report: dict | None,
 def run_distill_replicate(skill: Path, project: Path, cluster_id: str, output: Path) -> bool:
     """调 distill_replicate.py --mode cluster 实打 gen-model 复刻"""
     cmd = [
-        sys.executable, str(DISTILL_REPLICATE),
+        child_python(), str(DISTILL_REPLICATE),
         "--style-skill", str(skill),
         "--mode", "cluster",
         "--cluster-ref", cluster_id,
@@ -240,7 +241,7 @@ def run_cluster_evaluator(ref_arc: Path, gen_arc: Path, output: Path,
                           ref_char_dir: Path | None = None,
                           strict: bool = False) -> tuple[int, dict]:
     cmd = [
-        sys.executable, str(CLUSTER_EVALUATOR),
+        child_python(), str(CLUSTER_EVALUATOR),
         "--ref-cluster-arc", str(ref_arc),
         "--gen-cluster-arc", str(gen_arc),
         "--output", str(output),

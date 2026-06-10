@@ -40,10 +40,13 @@ def fake_project(user, tmp_path, monkeypatch):
         "clusters": [{"cluster_id": "cluster_001", "status": "in_progress"}]},
         ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(gs, "NOVELS_DIR", novels)
-    # 重置共享状态（页面测试间隔离）
+    # 重置共享状态（页面测试间隔离）——bridge 必须换新实例，否则上个测试残留的
+    # pending/_active_rid/被 patch 的方法会污染下个测试（test 间共享 STATE 单例）。
     app_module.STATE.projects = []
     app_module.STATE.selected = ""
     app_module.STATE.last_result = ""
+    app_module.STATE.running = False
+    app_module.STATE.bridge = gs.PauseBridge()
     app_module.init_pages()
     return root
 
@@ -154,6 +157,30 @@ async def test_stale_card_reclaimed_when_pending_clears(user: User, fake_project
         await asyncio.sleep(0.05)
     await asyncio.sleep(0.6)                          # 让回收 tick 发火
     await user.should_not_see(marker="card-opt-0")   # 陈旧卡已被回收（根因 C）
+
+
+async def test_no_duplicate_card_after_pick_before_pending_clears(user: User,
+                                                                  fake_project) -> None:
+    """用户选完后~worker清pending前的窗口里，_tick 不对同 rid 重弹卡（再审根因#3）。
+    确定性：直接管 bridge.pending（不跑 run_command/不 patch respond），手控时机。"""
+    br = app_module.STATE.bridge
+    await user.open("/")
+    # 手工登记一轮 pending（等价 worker request 到走向卡）
+    br._req_counter += 1
+    rid = br._req_counter
+    br.pending = {"step": 11, "spec": {"prompt": "选择下一故事块走向"},
+                  "options": [{"label": "A"}], "req_id": rid}
+    br._active_rid = rid
+    await user.should_see(marker="card-opt-0")       # 下一 tick 弹卡
+    user.find(marker="card-opt-0").click()           # 选 A → submit → _await_card 应答
+    # 故意**不清 pending**（模拟 worker 慢），多个 tick 流逝
+    await asyncio.sleep(1.2)
+    # done_rid 守卫：同 rid 不重弹——卡不再出现（无守卫则会再 pop 一张 card-opt-0）
+    await user.should_not_see(marker="card-opt-0")
+    assert br._answer == {"label": "A"}              # 选择已被桥接收（未被重弹覆盖）
+    # 收尾：清 pending（避免残留影响其它断言）
+    br.pending = None
+    br._active_rid = None
 
 
 async def test_pipeline_error_surfaces_in_ui(user: User, fake_project,

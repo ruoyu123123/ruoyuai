@@ -21,6 +21,7 @@ import json
 import re
 import subprocess
 import sys
+from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -47,7 +48,7 @@ def check_script_help(script_path: Path) -> tuple[bool, str]:
     """跑 python script.py --help（5s timeout）"""
     try:
         r = subprocess.run(
-            [sys.executable, str(script_path), "--help"],
+            [child_python(), str(script_path), "--help"],
             capture_output=True, text=True, timeout=10, encoding="utf-8",
         )
         # --help 通常返回 0

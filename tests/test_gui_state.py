@@ -295,6 +295,42 @@ def test_scan_non_dict_toplevel_noted():
         assert "损坏" in info.note
 
 
+def test_scan_clusters_value_null_noted_not_typeerror():
+    """{"clusters": null}（键在值非可迭代）→ 不抛 TypeError，友好提示（再审根因#4）。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "书"
+        (root / "_数据库").mkdir(parents=True)
+        (root / "_数据库" / "事件簇.json").write_text('{"clusters": null}',
+                                                    encoding="utf-8")
+        info = gs.scan_project(root)          # 不抛 TypeError
+        assert "损坏" in info.note
+
+
+def test_scan_clusters_value_scalar_noted():
+    """{"clusters": 5} → 不抛 TypeError（再审根因#4）。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "书"
+        (root / "_数据库").mkdir(parents=True)
+        (root / "_数据库" / "事件簇.json").write_text('{"clusters": 5}',
+                                                    encoding="utf-8")
+        info = gs.scan_project(root)
+        assert "损坏" in info.note
+
+
+def test_scan_summary_clusters_null_no_crash():
+    """故事块摘要.json 的 clusters=null → 不抛 TypeError（再审根因#4·摘要块同缺口）。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "书"
+        (root / "_数据库").mkdir(parents=True)
+        (root / "_数据库" / "事件簇.json").write_text(
+            '{"clusters": [{"cluster_id": "cluster_001", "status": "in_progress"}]}',
+            encoding="utf-8")
+        (root / "_数据库" / "故事块摘要.json").write_text('{"clusters": null}',
+                                                      encoding="utf-8")
+        info = gs.scan_project(root)          # 不抛
+        assert info.clusters_done == 0
+
+
 def test_scan_projects_tolerates_bad_project():
     with tempfile.TemporaryDirectory() as tmp:
         good = _mk_project(tmp, clusters=[])

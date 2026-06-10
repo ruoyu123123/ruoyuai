@@ -265,15 +265,15 @@ def test_D_pairwise_drift_count_gen_model_fail_degrades():
 # [E] 综合择优（SFS - 走味惩罚降序 / 缺项降级 / 单稿等价）
 # ════════════════════════════════════════════════════════════════
 
-def _scored(idx, sfs=None, av_drift=None, composite="__auto__"):
-    """造一个已打分候选（composite 默认按公式自动算）。"""
+def _scored(idx, sfs=None, av_drift=None, composite="__auto__", body_cjk=13000):
+    """造一个已打分候选（composite 默认按公式自动算 · body_cjk 默认达标 13000）。"""
     if composite == "__auto__":
         if sfs is not None:
             composite = round(sfs - gw.AV_DRIFT_PENALTY_PER_DIM * (av_drift or 0), 2)
         else:
             composite = None
     return {"idx": idx, "reply": f"稿{idx}", "profile": _P(),
-            "temperature": 0.7, "body_cjk": 10000,
+            "temperature": 0.7, "body_cjk": body_cjk,
             "score": {"sfs": sfs, "av_drift_count": av_drift, "av_drift_dims": [],
                       "composite": composite, "errors": []},
             "error": None}
@@ -324,12 +324,34 @@ def test_E_fallback_av_only_when_no_sfs():
 
 
 def test_E_no_signal_falls_back_first():
-    """无任何打分信号（SFS/AV 全缺）→ 退回第一稿（单稿等价 · 零回归保底）。"""
-    scored = [_scored(0, sfs=None, av_drift=None),
+    """无任何打分信号（SFS/AV 全缺）+ 候选字数都达标 → 退回第一稿（零回归保底）。"""
+    scored = [_scored(0, sfs=None, av_drift=None),   # body_cjk 默认 13000 达标
               _scored(1, sfs=None, av_drift=None)]
     best, reason = gw.select_best_draft(scored)
     assert best == 0
     assert "第一稿" in reason or "零回归" in reason
+
+
+def test_E_no_signal_word_count_fallback():
+    """无打分信号 + 第一稿偏短 + 后稿达标 → 字数兜底选首个达标候选。
+
+    回归测试：治 best-of-N 在「无作者池→无打分信号」时机械退 idx=0、把 expand 后达标稿
+    丢掉落地短稿的 bug（实测 idx=0=4399短 / idx=1=13606达标 却落地了 4399）。
+    """
+    scored = [_scored(0, sfs=None, av_drift=None, body_cjk=4399),
+              _scored(1, sfs=None, av_drift=None, body_cjk=13606)]
+    best, reason = gw.select_best_draft(scored)
+    assert best == 1
+    assert "字数兜底" in reason
+
+
+def test_E_no_signal_all_short_picks_longest():
+    """无打分信号 + 全候选偏短 → 选 CJK 最大者（最接近健康区间·总比退更短的第一稿强）。"""
+    scored = [_scored(0, sfs=None, av_drift=None, body_cjk=4000),
+              _scored(1, sfs=None, av_drift=None, body_cjk=8000)]
+    best, reason = gw.select_best_draft(scored)
+    assert best == 1
+    assert "字数兜底" in reason
 
 
 def test_E_single_candidate():

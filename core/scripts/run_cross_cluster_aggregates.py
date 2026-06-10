@@ -15,6 +15,7 @@ import argparse
 import json
 import subprocess
 import sys
+from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
 from pathlib import Path
 
 # 18 个 scanner 分级（按用户感知重要度）
@@ -197,13 +198,13 @@ def main():
             continue
         # 构造 cmd
         if sc in SCANNERS_WITH_CH:
-            cmd = [sys.executable, str(sc_path), str(project_root), "--ch", str(args.ch)]
+            cmd = [child_python(), str(sc_path), str(project_root), "--ch", str(args.ch)]
         elif sc in ("cross_cluster_arc_progression_aggregate", "cross_cluster_world_dynamics_aggregate",
                     "cross_cluster_foreshadow_rhythm_aggregate", "cross_cluster_will_learn_aggregate",
                     "cross_cluster_structure_compliance_aggregate"):
-            cmd = [sys.executable, str(sc_path), str(project_root)]
+            cmd = [child_python(), str(sc_path), str(project_root)]
         else:
-            cmd = [sys.executable, str(sc_path), str(project_root), "--last-n", str(args.last_n)]
+            cmd = [child_python(), str(sc_path), str(project_root), "--last-n", str(args.last_n)]
         try:
             # v2 cluster 化（2026-05-28）：cluster 模式给子进程透传 CLUSTER_MODE=1 env
             import os as _os

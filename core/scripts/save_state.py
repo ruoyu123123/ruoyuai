@@ -19,6 +19,7 @@ import json
 import re
 import subprocess
 import sys
+from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
 from datetime import datetime
 from pathlib import Path
 
@@ -557,7 +558,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
     if reflector_json.is_file():
         rel_path = reflector_json.relative_to(root).as_posix()
         r = subprocess.run(
-            [sys.executable, str(learning_loop), project_str, "--merge-reflection", rel_path],
+            [child_python(), str(learning_loop), project_str, "--merge-reflection", rel_path],
             capture_output=True, text=True, timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
         )
         if r.returncode == 0:
@@ -576,7 +577,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
     if audit_json.is_file():
         rel_path = audit_json.relative_to(root).as_posix()
         r = subprocess.run(
-            [sys.executable, str(learning_loop), project_str, "--ingest", rel_path],
+            [child_python(), str(learning_loop), project_str, "--ingest", rel_path],
             capture_output=True, text=True, timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
         )
         if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
@@ -593,7 +594,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
 
     # Step 3: scan-recurring → 跨章复发追踪 + tool_calibration_suggestions
     r = subprocess.run(
-        [sys.executable, str(learning_loop), project_str, "--scan-recurring"],
+        [child_python(), str(learning_loop), project_str, "--scan-recurring"],
         capture_output=True, text=True, timeout=180  # 2026-05-30 北极星：补 timeout 纪律
     )
     if r.returncode in (0, 1):
@@ -800,7 +801,7 @@ def _run_writer_truth_check(root: Path, chapters: list[int]) -> dict:
     for ch in chapters:
         try:
             r = subprocess.run(
-                [sys.executable, str(wtc), str(root), str(ch), "--write-back"],
+                [child_python(), str(wtc), str(root), str(ch), "--write-back"],
                 capture_output=True, text=True, timeout=120,
             )
             # 退出码契约：0 通过 / 1 撒谎命中 / 2 致命
@@ -961,7 +962,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
     # Step 1: merge cluster reflection → 写作经验.success/failure_patterns
     if refl_path:
         r = subprocess.run(
-            [sys.executable, str(learning_loop), project_str, "--merge-reflection",
+            [child_python(), str(learning_loop), project_str, "--merge-reflection",
              refl_path.relative_to(root).as_posix()],
             capture_output=True, text=True, timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
         )
@@ -980,7 +981,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
     # Step 2: ingest cluster audit → _recurrence_tracker / _waiver_tracker
     if audit_path:
         r = subprocess.run(
-            [sys.executable, str(learning_loop), project_str, "--ingest",
+            [child_python(), str(learning_loop), project_str, "--ingest",
              audit_path.relative_to(root).as_posix()],
             capture_output=True, text=True, timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
         )
@@ -998,7 +999,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
 
     # Step 3: scan-recurring → 跨 cluster 复发追踪 + tool_calibration_suggestions
     r = subprocess.run(
-        [sys.executable, str(learning_loop), project_str, "--scan-recurring"],
+        [child_python(), str(learning_loop), project_str, "--scan-recurring"],
         capture_output=True, text=True, timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
     )
     if r.returncode in (0, 1):

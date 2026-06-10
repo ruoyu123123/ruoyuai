@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
 from datetime import datetime
 from pathlib import Path
 
@@ -110,8 +111,8 @@ BEST_OF_N_MAX = 5  # 上限防 token 失控（用户质量优先但不无限）
 # 触发 expand 续写兜底（展开剩余场景）。治 pro 等简洁倾向 reasoning 模型单 cluster 仅 ~3650 CJK 偏短问题。
 # 软托底非硬锁（北极星⑤）：防注水——单轮续写增量 < FREESTYLE_EXPAND_MIN_GAIN 即停（模型没料别硬凑）。
 FREESTYLE_MIN_CJK = 12000          # 健康区间 12000-25000 的下限
-FREESTYLE_EXPAND_MAX_ROUNDS = 4    # expand 续写最多轮数
-FREESTYLE_EXPAND_MIN_GAIN = 800    # 单轮增量低于此 CJK → 停止兜底（避免注水）
+FREESTYLE_EXPAND_MAX_ROUNDS = 6    # expand 续写最多轮数（2026-06-06 4→6·治 pro 等简洁 reasoning 模型偏短·多续几轮逐场景写透）
+FREESTYLE_EXPAND_MIN_GAIN = 400    # 单轮增量低于此 CJK → 停止兜底（2026-06-06 800→400·pro 单轮加得少但累积有效·别过早停）
 # 综合分：每个走味维度的惩罚（满分 100 的 SFS 尺度上扣多少 · 4 维全走味最多扣 40）。
 AV_DRIFT_PENALTY_PER_DIM = 10.0
 
@@ -598,7 +599,11 @@ scope_summary 描述的场景类型/角色构成是**剧情硬契约**（如"对
 
 为什么这样：writer（你）擅长连续叙事的内在节奏；splitter（另一个 agent）擅长判断章节边界。预设章节边界 = writer 为「章末必须有钩子」强行设计信息炸弹结尾 = 显得刻意。让 splitter 在你写完后选自然截断点 = 章节边界看起来像页面物理限制而非刻意叙事设计。
 
-完成正文后再输出 JSON 格式的 CHANGES 部分（用 ```json ... ``` 包裹）。
+完成正文后，在【同一次回复里】紧接着直接输出 JSON 格式的 CHANGES 部分（用 ```json ... ``` 包裹）。
+
+🔴 **你是写作引擎，不是对话助手**（reasoning/instruct 模型尤其注意）：
+- 禁止停下来问我、禁止说「请审阅」「要不要我输出 CHANGES」「当你认为正文满足后请告诉我」「我将为你输出」之类的话、禁止等我确认——正文 + CHANGES JSON 必须在**这一次回复**里一次性给全，正文写完直接接 ```json``` 块。
+- 正文必须是**纯中文叙事**：严禁在正文里夹任何英文词（argue/KPI/offer/NPC/BUG/cluster/fs/CHANGES/JSON 等流程词或技术词一律用中文表达，如 argue→argue 改说「跟…讲道理/对线」），严禁任何流程说明/创作概要/元注释/对读者喊话（除非作者风格档本身要求破壁旁白）。这些技术词只允许出现在 ```json CHANGES``` 块内部。
 """
 
     # v22.gov.align.fix Gap T2-X: cluster 硬约束段（顶部显著位）
@@ -781,11 +786,13 @@ def _build_cont_msg(cont_reason: str) -> str:
     精简风格锚（句长 / 对话格式 / 禁结构套话）贴生成点 RoPE 高位重申，防长草稿尾段风格崩塌（advisory）。
     """
     if cont_reason == "expand":
-        cont_msg = ("这只是故事块的前半部分——目前篇幅还远不够一个完整故事块（scene_storyboard 里还有场景"
-                    "没写、或被一笔带过写得太简略）。请接着上文最后一个字继续往下写，把剩余的 / 没写透的"
-                    "场景**充分展开**（动作·对话·环境·内心·冲突推进逐一到位），"
-                    "**不要重复已写内容、不要重新开头、不要提前收尾**。"
-                    "**先别写 CHANGES JSON**——等后续轮次正文真正写够了我再让你补。")
+        cont_msg = ("【硬指标·你是写作引擎不是摘要器】这个故事块的健康篇幅是 12000-25000 字，你目前**写得远远不够**——"
+                    "scene_storyboard 里一定还有场景没写到、或被一两句话草草带过。"
+                    "请接着上文最后一个字继续往下写：**逐个对照 scene_storyboard 的每一幕，把还没写透的场景充分展开**——"
+                    "每一幕都要落地完整的：具体动作细节、成段你来我往的对话（不是一句带过）、环境与五感描写、人物内心活动、"
+                    "冲突的层层推进与小高潮。宁可把一幕写细写满、也绝不跳过或一笔带过任何一幕。"
+                    "**不要重复已写内容、不要重新开头、不要提前收尾、不要写任何总结或概述**。"
+                    "**先别写 CHANGES JSON**——等正文真正累积到 12000 字以上、scene_storyboard 每一幕都写透了，我再让你补。")
     elif cont_reason == "changes_only":
         cont_msg = ("正文已经写完。现在请**只输出**这个故事块结尾的 CHANGES JSON 块"
                     "（用 ```json 围栏包裹），**不要再写任何正文、不要重复正文内容**。"
@@ -820,10 +827,12 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
     if prior_assistant:
         messages.append({"role": "assistant", "content": prior_assistant})
         messages.append({"role": "user", "content": _build_cont_msg(cont_reason)})
-    stream = client.chat.completions.create(
-        model=profile.model, messages=messages, max_tokens=max_tokens,
-        temperature=profile.temperature, stream=True,
-    )
+    _create_kw = dict(model=profile.model, messages=messages, max_tokens=max_tokens,
+                      temperature=profile.temperature, stream=True)
+    # gemini-3.x reasoning 模型：thinking_level=LOW 回收 15-25k 输出预算给正文（治 pro 偏短·2026-06-06 联网调研）。
+    if getattr(profile, "thinking_level", None):
+        _create_kw["extra_body"] = {"thinking_level": profile.thinking_level}
+    stream = client.chat.completions.create(**_create_kw)
     text = ""
     finish_reason = None
     for chunk in stream:
@@ -1188,7 +1197,8 @@ def select_best_draft(scored: list[dict]) -> tuple[int, str]:
     排序键（全候选可比 · 缺项一致降级）：
       1. composite 有值 → 用 composite 降序（最像作者排最前）。
       2. 全候选都没 composite（无 author_ref / SFS 全挂）→ 按 av_drift_count 升序（走味越少越好），
-         av 也没有 → 退回原始 idx 升序（= 单稿等价 · 第一稿优先 · 零回归保底）。
+         av 也没有 → 字数兜底：优先 CJK 达标(>=FREESTYLE_MIN_CJK)候选里 idx 最小者（保留零回归：
+         第一稿达标就退第一稿），全不达标退 CJK 最大者。治 best-of-N 丢 expand 达标稿落短稿的 bug。
     返回 (best_idx_in_list, reason)。reason 解释凭什么选（不黑箱 · 北极星⑤）。
     """
     if not scored:
@@ -1215,8 +1225,24 @@ def select_best_draft(scored: list[dict]) -> tuple[int, str]:
                                   else 99))
         return best, (f"无 SFS 锚 · 按 AV-judge 走味数升序选 "
                       f"(走味={scored[best]['score'].get('av_drift_count')})")
-    # 全无打分信号 → 第一稿（单稿等价 · 零回归）
-    return 0, "无 SFS/AV 打分信号 · 退回第一稿（零回归保底）"
+    # 全无打分信号（新书无作者池/SFS全挂）→ 字数兜底，不机械退 idx=0。
+    # 根因：freestyle 各候选独立生成，有的触发 expand 补到达标、有的偏短；机械退 idx=0
+    #   会把 expand 后的达标稿丢掉、落地短稿（实测 idx=0=4399 短 vs idx=1=15316 达标却选了 4399）。
+    # 修：优先 CJK 达标(>=FREESTYLE_MIN_CJK)的候选里 idx 最小者（达标 + 保留零回归精神：
+    #   第一稿达标就仍退第一稿）；全不达标 → 退 CJK 最大者（最接近健康区间）。
+    qualified = [i for i in range(len(scored))
+                 if scored[i].get("body_cjk", 0) >= FREESTYLE_MIN_CJK]
+    if qualified:
+        best = min(qualified)
+        cjk0 = scored[0].get("body_cjk", 0)
+        if best == 0:
+            return 0, (f"无 SFS/AV 打分信号 · 第一稿 CJK={cjk0} 达标 · 退回第一稿（零回归保底）")
+        return best, (f"无 SFS/AV 打分信号 · 第一稿 CJK={cjk0} 偏短(<{FREESTYLE_MIN_CJK}) · "
+                      f"选首个达标候选 idx={scored[best]['idx']} CJK={scored[best].get('body_cjk')}（字数兜底）")
+    # 全候选均偏短 → CJK 最大者（最接近健康区间 · 总比退 idx=0 的更短稿强）
+    best = max(range(len(scored)), key=lambda i: scored[i].get("body_cjk", 0))
+    return best, (f"无 SFS/AV 打分信号 · 全候选均偏短 · 选 CJK 最大 idx={scored[best]['idx']} "
+                  f"CJK={scored[best].get('body_cjk')}（字数兜底）")
 
 
 def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
@@ -1300,6 +1326,23 @@ def split_text_and_changes(reply: str) -> tuple:
             body = body[_sep.end():].lstrip()
             print("[gen_writer] [strip] 剥离模型漏出的『创作说明/推理概要』元前言（正文前 + --- 分隔）",
                   file=sys.stderr)
+
+    # [2026-06-06] 剥离 reasoning/对话型模型（pro-preview 等）漏出的「破壁助手尾注」：
+    # 正文末尾蹦出『请审阅。…请告诉我，我将为你输出…CHANGES JSON』类对读者喊话——
+    # 当模型没产 ```json``` 块（改成问用户）时，这段元注释会整段漏进正文 body。按行从尾部剥。
+    _meta_tail_pat = re.compile(
+        r'请审阅|请告诉我|当你认为正文|我将为你输出|我会为你输出|等你确认|'
+        r'准备好.{0,8}CHANGES|CHANGES\s*JSON|带有所有统计数据|伏笔回收状态')
+    _lines = body.split('\n')
+    _stripped_tail = False
+    while _lines and (not _lines[-1].strip() or _meta_tail_pat.search(_lines[-1])):
+        if _meta_tail_pat.search(_lines[-1]):
+            _stripped_tail = True
+        _lines.pop()
+    if _stripped_tail:
+        body = '\n'.join(_lines).rstrip()
+        print("[gen_writer] [strip] 剥离 reasoning 模型破壁助手尾注（请审阅/请告诉我/CHANGES JSON 类）",
+              file=sys.stderr)
 
     # DCAS 模式（用户偏好）：如果 gen-model 仍误带「第 N 章 标题」分章标记，stderr 警告
     # 不主动删除（让 splitter 决定怎么处理），只提示 prompt 没生效
@@ -1414,6 +1457,19 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
             f"可能是 gen-model 返回空内容或全为 CHANGES JSON 无正文 — 请检查 profile 输出。"
         )
 
+    # 2026-06-07 根治：草稿落地前确定性清洗 gen-model 原始输出的机械格式病
+    # ① 整块逐字复制（freestyle expand 复制事故 RR_001）② 成对符号腰斩
+    # （引号“”/【】/《》/（）被句末标点+换行劈开，质检长期只查引号没查【】，靠人读逐个逮）。
+    # 纯文本、幂等、不调模型（draft_sanitizer.py）；失败仅告警不阻断落地。
+    try:
+        from draft_sanitizer import sanitize as _sanitize_draft
+        body, _san_rep = _sanitize_draft(body)
+        if _san_rep.get('dedup_segments_removed') or _san_rep.get('pair_merges'):
+            print(f"[gen_writer] draft_sanitizer 清洗：整块去重 {_san_rep['dedup_segments_removed']} 段 · "
+                  f"成对符号腰斩合并 {_san_rep['pair_merges']} 处", file=sys.stderr)
+    except Exception as _e:
+        print(f"[gen_writer] [WARN] draft_sanitizer 清洗跳过（{_e}）— 草稿原样落地", file=sys.stderr)
+
     draft_dir = project_root / '章节' / f'cluster_{cluster_id:03d}_draft'
     draft_dir.mkdir(parents=True, exist_ok=True)
     draft_path = draft_dir / f'cluster_{cluster_id:03d}_draft.txt'
@@ -1471,7 +1527,7 @@ def run_scanners(draft_path: Path) -> dict:
             results[sc] = {'verdict': 'SKIP', 'reason': 'scanner not found'}
             continue
         r = subprocess.run(
-            [sys.executable, str(sc_path), str(draft_path)],
+            [child_python(), str(sc_path), str(draft_path)],
             capture_output=True, text=True, encoding='utf-8'
         )
         try:

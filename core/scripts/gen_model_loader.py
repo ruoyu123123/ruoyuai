@@ -31,6 +31,7 @@ class Profile:
     temperature: float
     max_tokens: int | None  # None = 从 model_probe 缓存读
     protocol: str = "openai"  # openai(默认·/v1/chat/completions) | gemini(原生·streamGenerateContent·支持隐式前缀缓存)
+    thinking_level: str | None = None  # gemini-3.x reasoning 模型思考档(LOW/MEDIUM/HIGH)·走 extra_body·LOW=回收15-25k输出预算给正文(治pro偏短·2026-06-06联网调研)·None=不传(flash等非reasoning)
 
 
 class GenModelConfigError(Exception):
@@ -108,6 +109,7 @@ class GenModelLoader:
                     temperature=float(temp_str),
                     max_tokens=int(max_tok_str) if max_tok_str else None,
                     protocol=((fields.get("protocol") or "openai").strip().lower() or "openai"),
+                    thinking_level=((fields.get("thinking_level") or "").strip().upper() or None),
                 )
             except (ValueError, KeyError):
                 continue  # 字段解析失败 → 跳过该 profile

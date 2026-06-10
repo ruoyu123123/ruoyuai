@@ -58,6 +58,7 @@ import os
 import re
 import subprocess
 import sys
+from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
 from datetime import datetime
 from pathlib import Path
 
@@ -754,8 +755,8 @@ def run_scanners(file_paths: list) -> dict:
             if not sc_path.exists():
                 results[fp][sc] = {'verdict': 'SKIP'}
                 continue
-            # v27 修复：'python' → sys.executable（防多版本解释器调错）
-            r = subprocess.run([sys.executable, str(sc_path), fp],
+            # v27 修复：'python' → child_python()（防多版本解释器调错）
+            r = subprocess.run([child_python(), str(sc_path), fp],
                                capture_output=True, text=True, encoding='utf-8')
             try:
                 d = json.loads(r.stdout)

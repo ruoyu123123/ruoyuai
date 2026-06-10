@@ -57,6 +57,7 @@ import json
 import re
 import subprocess
 import sys
+from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -852,12 +853,12 @@ def _rescan_codes(project_root: Path, ch: int, body_file: Path) -> set:
     present = set()
     # validate_style --strict
     vs = _SCRIPT_DIR / "validate_style.py"
-    _, out, _ = _run([sys.executable, str(vs), str(body_file), "--strict"])
+    _, out, _ = _run([child_python(), str(vs), str(body_file), "--strict"])
     for issue in _parse_validate_style(out):
         present.add(issue["code"])
     # validate_chapter（BANNED_WORD 来自这里）—— v18 #12：--json 结构化输出
     vc = _SCRIPT_DIR / "validate_chapter.py"
-    _, out, _ = _run([sys.executable, str(vc), str(project_root), str(ch), "--json"])
+    _, out, _ = _run([child_python(), str(vc), str(project_root), str(ch), "--json"])
     for issue in _parse_validate_chapter(out, 0):
         present.add(issue["code"])
     return present
@@ -875,7 +876,7 @@ def _apply_deterministic_fix(project_root: Path, ch: int, det_issues: list) -> t
     if not body_file:
         return [], list(det_issues)
     repair = _SCRIPT_DIR / "style_repair_engine.py"
-    code, out, err = _run([sys.executable, str(repair), str(body_file),
+    code, out, err = _run([child_python(), str(repair), str(body_file),
                            "--mode", "fix", "--output", str(body_file)])
     if code not in (0, 1):
         # 修复脚本自身挂了 —— 一个都没修成，全转待处理
@@ -999,41 +1000,41 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     # 每个任务：(name, cmd, ok_set, parse_fn)
     tasks = [
         ("validate_chapter",
-         [sys.executable, str(vc), str(project_root), str(ch), "--json"],
+         [child_python(), str(vc), str(project_root), str(ch), "--json"],
          {0, 1, 2},
          lambda out, code: _parse_validate_chapter(out, code)),
         ("validate_style",
-         [sys.executable, str(vs), str(body_file), "--strict"] + _style_args,
+         [child_python(), str(vs), str(body_file), "--strict"] + _style_args,
          {0, 1},
          lambda out, code: _parse_validate_style(out)),
         ("narrative_scanner",
-         [sys.executable, str(ns), str(project_root), str(ch), "--all"],
+         [child_python(), str(ns), str(project_root), str(ch), "--all"],
          {0, 1, 2},
          lambda out, code: _parse_scanner_json(out, "narrative", NARRATIVE_DIM)),
         ("plot_structure_scanner",
-         [sys.executable, str(ps), str(project_root), str(ch), "--all"],
+         [child_python(), str(ps), str(project_root), str(ch), "--all"],
          {0, 1, 2},
          lambda out, code: _parse_scanner_json(out, "plot", PLOT_DIM)),
         ("hook_strength_scanner",
-         [sys.executable, str(hs), str(project_root), str(ch)],
+         [child_python(), str(hs), str(project_root), str(ch)],
          {0, 1},
          lambda out, code: _parse_flat_fscanner(out, "hook_strength")),
         ("golden_three_scanner",
-         [sys.executable, str(gt), str(project_root), str(ch)],
+         [child_python(), str(gt), str(project_root), str(ch)],
          {0, 1},
          lambda out, code: _parse_flat_fscanner(out, "golden_three")),
         ("semantic_slop_scanner",
-         [sys.executable, str(ss), str(project_root), str(ch), "--all"],
+         [child_python(), str(ss), str(project_root), str(ch), "--all"],
          {0, 1, 2},
          lambda out, code: _parse_scanner_json(out, "semantic", SEMANTIC_DIM)),
         ("narrative_short_sentence_scanner",
-         [sys.executable, str(nsss), str(body_file)],
+         [child_python(), str(nsss), str(body_file)],
          {0, 1},
          lambda out, code: _parse_violations_scanner(
              out, "narrative_short_sentence_scanner",
              "NARRATIVE_SHORT_SENTENCE_OVERUSE", "风格")),
         ("repeat_noun_density_scanner",
-         [sys.executable, str(rnds), str(body_file)],
+         [child_python(), str(rnds), str(body_file)],
          {0, 1},
          lambda out, code: _parse_violations_scanner(
              out, "repeat_noun_density_scanner",
@@ -1047,40 +1048,40 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
         if cluster_draft.exists():
             tasks.extend([
                 ("cross_scene_voice_drift",
-                 [sys.executable, str(csvd), str(project_root), str(cluster_draft)],
+                 [child_python(), str(csvd), str(project_root), str(cluster_draft)],
                  {0, 1},
                  lambda out, code: _parse_cross_scene_voice_drift(out)),
                 ("foreshadowing_handoff",
-                 [sys.executable, str(fhs), str(project_root), cluster_id_full],
+                 [child_python(), str(fhs), str(project_root), cluster_id_full],
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
                      out, "foreshadowing_handoff_scanner", "剧情")),
                 ("locked_fact_cross_scene",
-                 [sys.executable, str(lfcs), str(project_root), str(cluster_draft)],
+                 [child_python(), str(lfcs), str(project_root), str(cluster_draft)],
                  {0, 1},
                  lambda out, code: _parse_locked_fact_cross_scene(out)),
                 ("pov_consistency",
-                 [sys.executable, str(povs), str(project_root), str(cluster_draft)],
+                 [child_python(), str(povs), str(project_root), str(cluster_draft)],
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
                      out, "pov_consistency_scanner", "视角")),
                 # 「输入教了输出要查」闭环：衔接手法分布 vs 作者蒸馏档对账（advisory · 永不 hard_gate）。
                 # 传 --style 走作者基线 + --project 兜底定位 作者风格_FINAL.json；SEAM_SCANNER_MODE 默认 active。
                 ("scene_seam",
-                 [sys.executable, str(sseam), str(cluster_draft),
+                 [child_python(), str(sseam), str(cluster_draft),
                   "--project", str(project_root)] + _style_args,
                  {0, 1},
                  lambda out, code: _parse_scene_seam(out)),
                 # [2026-06-03] 修辞复读三连指纹 · cluster 视野 · advisory（兜底 gen_writer 元anti-slop·弱模型守不住的客观检测闭环）
                 ("rhetoric_repetition",
-                 [sys.executable, str(rrs), str(cluster_draft),
+                 [child_python(), str(rrs), str(cluster_draft),
                   "--project", str(project_root)] + _style_args,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "rhetoric_repetition_scanner", "RHETORIC_REPETITION", "风格")),
                 # [2026-06-03] 句法节奏/流水账作文感 · 作者基线第一权威(传 --project 读作者档+人物卡) · advisory
                 ("prose_rhythm",
-                 [sys.executable, str(prs), str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 [child_python(), str(prs), str(cluster_draft), "--project", str(project_root)] + _style_args,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_rhythm_scanner", "PROSE_RHYTHM", "风格")),
@@ -1109,7 +1110,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                 ch_range = f"{min(ch_nums)}-{max(ch_nums)}"
                 tasks.append((
                     "chapter_end_anchor_scan",
-                    [sys.executable, str(ceas), str(project_root), "--chapters", ch_range, "--json"],
+                    [child_python(), str(ceas), str(project_root), "--chapters", ch_range, "--json"],
                     {0, 1, 2},
                     lambda out, code: _parse_chapter_end_anchor(out, code),
                 ))
@@ -1345,7 +1346,7 @@ def _feed_learning_loop(project_root: Path, report_path: Path,
     ll = _SCRIPT_DIR / "learning_loop.py"
     if not ll.is_file():
         return
-    code, out, err = _run([sys.executable, str(ll), str(project_root),
+    code, out, err = _run([child_python(), str(ll), str(project_root),
                            "--ingest", str(report_path)])
     if out.strip():
         stream = sys.stderr if quiet else sys.stdout

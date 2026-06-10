@@ -361,6 +361,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                    tag: str = "") -> tuple[str, Profile, float]:
     """调当前 active profile；失败按 fallback 链尝试。返回 (text, profile, elapsed_seconds)"""
     from openai import OpenAI
+    import httpx
 
     candidates = loader.get_callable_profiles()
     failures: list[tuple[str, str]] = []
@@ -380,11 +381,18 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         print(f"{prefix}[distill_replicate] prompt: system={len(system)} chars, user={len(user)} chars",
               file=sys.stderr)
 
-        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
+        # 2026-06-07 修 stream 挂死：pie-xian 代理 reasoning 模型 stream 中途断连时，无 timeout 的
+        # `for chunk in stream` 会无限等（实测卡死 43min 不报错不落盘）。设 read=180s → chunk 间隔超时
+        # 抛 httpx.ReadTimeout → 下方 except 触发 fallback 链，而非僵死。
+        client = OpenAI(
+            api_key=profile.api_key, base_url=profile.base_url,
+            timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=15.0),
+            max_retries=2,
+        )
         full_text = ""
         t0 = time.time()
         try:
-            stream = client.chat.completions.create(
+            _create_kw = dict(
                 model=profile.model,
                 messages=[
                     {"role": "system", "content": system},
@@ -394,6 +402,12 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                 temperature=profile.temperature,
                 stream=True,
             )
+            # reasoning 模型（gemini-3.x pro-preview 等）thinking_level=LOW 回收 thinking 占用的输出预算给正文。
+            # 对齐 gen_writer.py（L831-833）· 2026-06-07 修：不传时 thinking 默认 HIGH 吃光预算 →
+            # 复刻字数严重偏短（pro 实测 2348 vs 原作 9000）→ 回灌 estimate_cluster_arc 钩子/场景粗估失真归 0。
+            if getattr(profile, "thinking_level", None):
+                _create_kw["extra_body"] = {"thinking_level": profile.thinking_level}
+            stream = client.chat.completions.create(**_create_kw)
             for chunk in stream:
                 if not chunk.choices:
                     continue
@@ -500,9 +514,12 @@ def gather_cluster_ref_text(project_root: Path, cluster_meta: dict, max_chars: i
     total = 0
     for ch in range(int(ch_start), int(ch_end) + 1):
         # 兼容 原文/第NNN章.txt 和 章节/第NNN章/第NNN章.txt 两种布局
+        # + 补零(第055章)与不补零(第55章)两种章号命名（与 arc_aggregator/cluster_segmenter 不补零命名对齐）
         candidates = [
             project_root / "原文" / f"第{ch:03d}章.txt",
+            project_root / "原文" / f"第{ch}章.txt",
             project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt",
+            project_root / "章节" / f"第{ch}章" / f"第{ch}章.txt",
         ]
         for cand in candidates:
             if cand.exists():
@@ -919,6 +936,17 @@ def main():
         print(f"[ERROR] gen-model 配置错误: {e}", file=sys.stderr)
         sys.exit(2)
 
+    # 2026-06-07 适配：reasoning 模型（profile 设 thinking_level）自带内部思考，外加 CoT-first
+    # 「先分析后写」两段式会让它输出「量化坐标分析」元前言（不遵守 COT_BODY_MARKER → strip_cot_analysis
+    # 剥不掉 → 泄漏进正文）+ 挤占正文 token 预算（pro-preview 实证：泄漏+字数崩 1895/18000）。
+    # 故 reasoning 模型自动关 CoT-first，除非用户显式 --cot-first active。
+    if cot_first and args.cot_first is None and getattr(active, "thinking_level", None):
+        cot_first = False
+        cot_mode = f"off(reasoning-auto·thinking_level={active.thinking_level})"
+        system_prompt = REPLICATE_SYSTEM_PROMPT
+        print(f"[L3b] 检测到 reasoning 模型({active.model})·自动关 CoT-first "
+              f"→ {cot_mode}（防元前言泄漏+正文预算被挤·2026-06-07 适配）", file=sys.stderr)
+
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1026,6 +1054,14 @@ def main():
     # 草稿拼好后：critic 出结构化 feedback 直接改稿 → SFS 裁判评分 → knockout 保最优（3-5 轮）。
     # critic + refine 复用同 active gen-model profile（复刻仍走 gen-model）· SFS 当裁判透明。
     refine_mode = args.draft_refine if args.draft_refine is not None else _draft_refine_mode()
+    # 2026-06-07 适配：reasoning 模型（thinking_level 非空）的 critic→refine 轮会把正文越改越短
+    # （pro-preview 实证：初稿 ~4700 CJK → refine 3 轮砍到 1737；且其 SFS 在 refine 内算 None 致
+    # knockout 无法择优、退化保最后一轮=最短）。故 reasoning 模型自动关 draft-refine，
+    # 除非用户显式 --draft-refine active。
+    if refine_mode == "active" and args.draft_refine is None and getattr(active, "thinking_level", None):
+        refine_mode = "off"
+        print(f"[L3d] 检测到 reasoning 模型({active.model})·自动关 draft-refine"
+              f"（refine 轮缩写正文 + SFS None 致 knockout 失效·2026-06-07 适配）", file=sys.stderr)
     refine_trace: dict = {"draft_refine_enabled": False, "mode": refine_mode}
     if refine_mode == "active":
         # SFS 裁判用同 cluster 的真实原文当 ref（gather 的同源 ref_text 拆段；空则裁判降级保稿）

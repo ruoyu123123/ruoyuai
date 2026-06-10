@@ -120,7 +120,9 @@ def index():
     # dialog_open 存本 client 正在显示的 req_id（None=未显示）——绑定代际令牌，
     # 防多 tab 抢答 + 超时陈旧卡迟点污染下一轮（对抗审查根因 A/C）。
     card_dialog = ui.dialog().props("persistent")
-    dialog_state = {"req_id": None}
+    # req_id=本 client 正显示的轮次（None=未显示）；done_rid=本 client 刚应答完的轮次
+    # （防「应答后~worker清pending前」窗口里 _tick 对同 rid 重弹卡·根因#3）。
+    dialog_state = {"req_id": None, "done_rid": None}
 
     def _opt_label(opt, i):
         if not isinstance(opt, dict):
@@ -153,7 +155,9 @@ def index():
                 ui.notify("该选择未生效（走向已被处理或已超时）——请到「Plan 续跑」页继续",
                           type="warning")
         finally:
+            dialog_state["done_rid"] = rid   # 记刚处理完的轮次（防 _tick 同 rid 重弹·根因#3）
             dialog_state["req_id"] = None
+            card_dialog.clear()              # 应答后清卡元素（不留隐藏残件·下次 pop 也会清）
 
     def _sync_cards():
         """每 tick 同步执行（不阻塞）：弹新卡 / 回收陈旧卡。"""
@@ -168,30 +172,40 @@ def index():
         if not pending:
             return
         rid = pending.get("req_id")
-        dialog_state["req_id"] = rid
-        card_dialog.clear()
-        options = pending.get("options") or []
-        spec = pending.get("spec") or {}
-        with card_dialog, ui.card().classes("w-[36rem]"):
-            ui.label(spec.get("prompt") or "需要你的选择").classes("font-bold")
-            if options:
-                for i, opt in enumerate(options):
-                    desc = (opt.get("description") or opt.get("scope_summary") or "")\
-                        if isinstance(opt, dict) else ""
-                    with ui.card().classes("w-full"):
-                        ui.label(f"[{i + 1}] {_opt_label(opt, i)}").classes("font-medium")
-                        if desc:
-                            ui.label(str(desc)[:160]).classes("text-xs text-gray-600")
-                        ui.button("选这个",
-                                  on_click=lambda _, o=opt: card_dialog.submit(o))\
-                            .props("dense flat").mark(f"card-opt-{i}")
-            else:
-                free = ui.input(spec.get("prompt") or "输入")
-                ui.button("提交", on_click=lambda: card_dialog.submit(
-                    int(free.value) if spec.get("type") == "integer"
-                    and str(free.value).isdigit() else free.value))
-        card_dialog.open()
-        background_tasks.create(_await_card(rid))
+        # 防重弹：本轮 rid 已被本 client 应答完（worker 尚未清 pending 的窗口）→ 不重弹（根因#3）
+        if rid == dialog_state["done_rid"]:
+            return
+        # 先建卡 + 起后台任务，**成功后**才置 req_id——避免构造异常留下 req_id 非 None
+        # 却无 _await_card 复位它的死锁（根因#2 非原子）。
+        try:
+            card_dialog.clear()
+            options = pending.get("options") or []
+            spec = pending.get("spec") or {}
+            with card_dialog, ui.card().classes("w-[36rem]"):
+                ui.label(spec.get("prompt") or "需要你的选择").classes("font-bold")
+                if options:
+                    for i, opt in enumerate(options):
+                        desc = (opt.get("description") or opt.get("scope_summary") or "")\
+                            if isinstance(opt, dict) else ""
+                        with ui.card().classes("w-full"):
+                            ui.label(f"[{i + 1}] {_opt_label(opt, i)}").classes("font-medium")
+                            if desc:
+                                ui.label(str(desc)[:160]).classes("text-xs text-gray-600")
+                            ui.button("选这个",
+                                      on_click=lambda _, o=opt: card_dialog.submit(o))\
+                                .props("dense flat").mark(f"card-opt-{i}")
+                else:
+                    free = ui.input(spec.get("prompt") or "输入")
+                    ui.button("提交", on_click=lambda: card_dialog.submit(
+                        int(free.value) if spec.get("type") == "integer"
+                        and str(free.value).isdigit() else free.value))
+            card_dialog.open()
+            background_tasks.create(_await_card(rid))
+            dialog_state["req_id"] = rid     # ★ 仅在卡 + 任务都建成后才置（原子保证）
+        except Exception as e:
+            dialog_state["req_id"] = None
+            card_dialog.clear()
+            STATE.log_buffer.append(f"[gui] 走向卡渲染失败（已复位可重弹）：{e}")
 
     # —— 轮询：状态 chip + 日志增量（per-client 游标）+ 停顿桥 ——
     log_cursor = {"v": 0}   # per-client：每个 tab 各持独立游标（根因 B）

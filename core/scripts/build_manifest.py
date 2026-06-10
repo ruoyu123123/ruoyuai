@@ -254,7 +254,9 @@ class DatabaseScanner:
                     result["promises_tier2_due"].append(p)
 
         for d in data.get("deadlines", []):
-            if d.get("status") == "pending" and d.get("deadline_ch", 999) <= self.ch:
+            _dl = d.get("deadline_ch")
+            # 与 promises.due_by [M4] 同款防御：deadline_ch 可为 None（无固定截止，如循环类）→ 不判到期、不崩
+            if d.get("status") == "pending" and isinstance(_dl, int) and not isinstance(_dl, bool) and _dl <= self.ch:
                 result["deadlines_due"].append(d)
 
         for pl in data.get("pledges", []):
@@ -410,7 +412,7 @@ class DatabaseScanner:
         active_ids = {id_map.get(n, n) for n in active} | active
         hits = []
         for it in data.get("items", []):
-            holder = it.get("holder", "")
+            holder = it.get("holder") or ""  # 容忍缺 key 与显式 null（未获得道具 holder=null 合法·防 line425 `h in holder` 崩）
             # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 obtained_cluster
             # 2026-05-29 修：obtained_cluster 是 cluster_id，原代码抽出 cluster 序号直接和
             # 章号 self.ch 比是量纲错误。改用 cluster_id_to_range 取该 cluster 起始章 lo，

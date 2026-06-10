@@ -28,6 +28,7 @@ import json
 import re
 import subprocess
 import sys
+from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -252,15 +253,15 @@ def trigger_cascade(project_root: Path, signals: list[str], cluster_key: str | N
                          if re.match(r"第(\d+)章", d.name))
             cur_ch = chs[-1] if chs else 0
             unit_args = ["--ch", str(cur_ch)]
-        subprocess.run([sys.executable, str(script_dir / "skill_evolver.py"),
+        subprocess.run([child_python(), str(script_dir / "skill_evolver.py"),
                        str(project_root), "evolve"] + unit_args,
                        capture_output=True, timeout=60, encoding="utf-8")
         triggered.append("skill_evolver evolve 已自动执行")
-        subprocess.run([sys.executable, str(script_dir / "skill_evolver.py"),
+        subprocess.run([child_python(), str(script_dir / "skill_evolver.py"),
                        str(project_root), "retire"] + unit_args,
                        capture_output=True, timeout=60, encoding="utf-8")
         triggered.append("skill_evolver retire 已自动执行")
-        subprocess.run([sys.executable, str(script_dir / "skill_evolver.py"),
+        subprocess.run([child_python(), str(script_dir / "skill_evolver.py"),
                        str(project_root), "promote"],
                        capture_output=True, timeout=60, encoding="utf-8")
         triggered.append("skill_evolver promote 已自动执行（→ universal_skill_pool）")

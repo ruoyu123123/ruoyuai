@@ -215,10 +215,14 @@ def scan_project(root: Path) -> ProjectInfo:
         # 本地 except → 友好提示永不触发（对抗审查根因 I）。
         try:
             data = json.loads(sj.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                clusters = [c for c in data.get("clusters", []) if isinstance(c, dict)]
-            else:
+            if not isinstance(data, dict):
                 info.note = "事件簇.json 损坏（顶层非对象）"
+            else:
+                raw = data.get("clusters", [])
+                if isinstance(raw, list):           # clusters 值必须是数组（防 null/标量·根因#4）
+                    clusters = [c for c in raw if isinstance(c, dict)]
+                else:
+                    info.note = "事件簇.json 损坏（clusters 非数组）"
         except (OSError, ValueError):
             info.note = "事件簇.json 损坏"
     info.clusters_total = len(clusters)
@@ -232,7 +236,8 @@ def scan_project(root: Path) -> ProjectInfo:
         # 误推荐已完成 cluster 重跑 save-state（对抗审查根因 G）。
         try:
             sm = json.loads(summary_path.read_text(encoding="utf-8"))
-            items = sm.get("clusters", []) if isinstance(sm, dict) else []
+            raw = sm.get("clusters", []) if isinstance(sm, dict) else []
+            items = raw if isinstance(raw, list) else []   # clusters:null/标量 → 空（根因#4）
             for item in items:
                 cid = item.get("cluster_id") if isinstance(item, dict) else item
                 if isinstance(cid, str) and cid.startswith("cluster_"):

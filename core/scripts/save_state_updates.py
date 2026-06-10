@@ -19,6 +19,7 @@ import argparse
 import json
 import subprocess
 import sys
+from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
@@ -79,7 +80,7 @@ def run_one_module(module_name: str, script_name: str, args_spec: list, project:
 
     try:
         r = subprocess.run(
-            [sys.executable, str(script_path), *cli_args],
+            [child_python(), str(script_path), *cli_args],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
         )
         if r.returncode != 0:
