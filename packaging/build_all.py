@@ -33,10 +33,14 @@ def _clean(*names):
                 shutil.rmtree(p, ignore_errors=True)
 
 
-def build(spec: str, name: str) -> bool:
+def build(spec: str, name: str, production: bool = False) -> bool:
+    import os
     _clean(name)
+    env = dict(os.environ)
+    if production and name == "ruoyu_gui":
+        env["RUOYU_CONSOLE"] = "0"   # 窗口模式·非技术用户双击不弹黑窗（仅 GUI 生产构建）
     r = _run([sys.executable, "-m", "PyInstaller", f"packaging/{spec}",
-              "--noconfirm", "--clean"])
+              "--noconfirm", "--clean"], env=env)
     exe = ROOT / "dist" / name / f"{name}.exe"
     if r.returncode != 0 or not exe.exists():
         print(f"[X] 构建失败: {spec}")
@@ -93,6 +97,8 @@ def security_gate() -> bool:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-smoke", action="store_true", help="跳过 frozen_smoke 阶段A")
+    ap.add_argument("--production", action="store_true",
+                    help="GUI 窗口模式构建（console=False·非技术用户双击不弹黑窗·正式分发）")
     ap.add_argument("--gui-port", type=int, default=8137)
     args = ap.parse_args()
 
@@ -100,7 +106,8 @@ def main():
     if not args.skip_smoke:
         steps.append(("build frozen_smoke", lambda: build("frozen_smoke.spec", "frozen_smoke")))
         steps.append(("frozen_smoke 自验", run_smoke))
-    steps.append(("build ruoyu_gui", lambda: build("ruoyu_gui.spec", "ruoyu_gui")))
+    steps.append((f"build ruoyu_gui{'(生产窗口模式)' if args.production else ''}",
+                  lambda: build("ruoyu_gui.spec", "ruoyu_gui", production=args.production)))
     steps.append(("GUI exe 验证 4/4", lambda: run_gui_validate(args.gui_port)))
     steps.append(("安全闸", security_gate))
 

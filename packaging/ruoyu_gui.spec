@@ -161,11 +161,15 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
+# console 由 RUOYU_CONSOLE env 控（与 bundling 正交·不影响 frozen 路径/datas/hiddenimports）：
+#   "1"(默认·dev/CI/调试)→console=True 看 stderr Traceback；"0"(build_all.py --production)→
+#   console=False 窗口模式，非技术用户双击不弹黑色终端窗（正式分发形态）。
+_CONSOLE = os.environ.get("RUOYU_CONSOLE", "1") != "0"
 exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
     name="ruoyu_gui",
-    console=True,                 # 🔴 暂留 console 看 stderr（验证看 Traceback）·正式分发可改 False
+    console=_CONSOLE,
     disable_windowed_traceback=False,
 )
 coll = COLLECT(

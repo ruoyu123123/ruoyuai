@@ -108,6 +108,20 @@ def test_gui_spec_collects_all_scripts_as_hiddenimports():
         "spec 未用 glob 把全 core/scripts stem 收进 hiddenimports"
 
 
+def test_gui_spec_console_env_toggle():
+    """console 由 RUOYU_CONSOLE env 控（生产窗口模式·非技术用户双击不弹黑窗）。"""
+    spec = (PKG / "ruoyu_gui.spec").read_text(encoding="utf-8")
+    assert 'os.environ.get("RUOYU_CONSOLE"' in spec and "console=_CONSOLE" in spec, \
+        "spec console 未走 RUOYU_CONSOLE env（build_all.py --production 需此 hook）"
+
+
+def test_build_all_runbook_exists():
+    """一键构建验证 runbook 存在（清理→构建→smoke/GUI 验证→安全闸·可复现出货）。"""
+    src = (PKG / "build_all.py").read_text(encoding="utf-8")
+    assert "validate_gui_exe" in src and "security_gate" in src and "--production" in src, \
+        "build_all.py 缺关键阶段（GUI 验证 / 安全闸 / 生产模式）"
+
+
 def test_spec_excludes_torch():
     """torch 已装(GB 级)·spec 必排（否则 onedir 体积爆·实证 _internal 33MB 因排了）。"""
     spec = (PKG / "frozen_smoke.spec").read_text(encoding="utf-8")
