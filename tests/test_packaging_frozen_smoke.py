@@ -63,6 +63,51 @@ def test_frozen_util_has_dispatcher_api():
         assert fn in src, f"frozen_util 缺 {fn}"
 
 
+# ============ 全 GUI onedir spec 守卫（阶段B）============
+def test_gui_spec_exists_and_packaging_only():
+    """ruoyu_gui.spec 权威版在 packaging/（根目录不留第二份·防构建歧义）。"""
+    assert (PKG / "ruoyu_gui.spec").exists(), "缺 packaging/ruoyu_gui.spec"
+    assert not (_ROOT / "ruoyu_gui.spec").exists(), \
+        "根目录残留 ruoyu_gui.spec（应只留 packaging 版·防从旧 spec 误构建）"
+
+
+def test_gui_spec_root_derivation():
+    """spec 在 packaging/ → ROOT 必须上跳一级（SPECPATH/..）才是仓库根。"""
+    spec = (PKG / "ruoyu_gui.spec").read_text(encoding="utf-8")
+    assert 'os.path.join(SPECPATH, "..")' in spec, "ROOT 派生须 SPECPATH/..（落点变更必改）"
+
+
+def test_gui_spec_bundles_critical_resources():
+    """frozen 运行时只读资源全须进 datas（与源码 bundle_root() 定位对齐）。"""
+    spec = (PKG / "ruoyu_gui.spec").read_text(encoding="utf-8")
+    for token in ('collect_all("nicegui")',          # NiceGUI 资源（无 hook）
+                  ".claude/agents",                   # judge prompt
+                  "core/claude-home/plans",           # plan DAG
+                  "core/claude-home/lessons",         # 跨项目教训（北极星·must_fix）
+                  "gen_profiles.default.env",         # 内置回落 config
+                  "subsystem_skeletons.json",         # scaffold
+                  'collect_data_files("numpy")', 'collect_data_files("scipy")'):  # style_evaluator
+        assert token in spec, f"ruoyu_gui.spec 缺关键资源 datas: {token}"
+
+
+def test_gui_spec_excludes_torch_no_dotenv():
+    """torch 排净 + 绝不打包 .env（安全铁律）。"""
+    spec = (PKG / "ruoyu_gui.spec").read_text(encoding="utf-8")
+    assert '"torch"' in spec, "spec 未 exclude torch（GB 级）"
+    for ln in spec.splitlines():
+        if ".env" in ln and "datas" not in ln.lower() and "SPECPATH" not in ln:
+            assert "gen_profiles.default.env" in ln or ln.strip().startswith("#"), \
+                f"spec 疑似打包 .env: {ln.strip()[:70]}"
+
+
+def test_gui_spec_collects_all_scripts_as_hiddenimports():
+    """全 core/scripts/*.py stem 须进 hiddenimports（fan-out dispatcher importlib by stem）。"""
+    spec = (PKG / "ruoyu_gui.spec").read_text(encoding="utf-8")
+    # spec 用 glob 动态生成（for fn in os.listdir(SCRIPTS) ... hiddenimports.append(fn[:-3])）
+    assert "os.listdir(SCRIPTS)" in spec and "hiddenimports.append(fn[:-3])" in spec, \
+        "spec 未用 glob 把全 core/scripts stem 收进 hiddenimports"
+
+
 def test_spec_excludes_torch():
     """torch 已装(GB 级)·spec 必排（否则 onedir 体积爆·实证 _internal 33MB 因排了）。"""
     spec = (PKG / "frozen_smoke.spec").read_text(encoding="utf-8")

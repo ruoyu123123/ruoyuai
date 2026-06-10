@@ -318,7 +318,14 @@ def promote(project_root: Path) -> dict:
     """
     exp_path = project_root / "_数据库" / "写作经验.json"
     exp = load_json(exp_path, {})
-    pool_path = Path(__file__).parent.parent / "claude-home" / "universal_skill_pool.json"
+    # frozen-aware 读（__file__ 扁平化同款）：bundle_root()/core/claude-home（dev 同值）。
+    # 注：frozen 下 bundle 只读，pool 的 promote 写入会失败降级——distill/learning 路径非
+    # GUI cluster-write MVP·留作阶段B残留（writable 学习产物迁用户态）。
+    try:
+        from frozen_util import bundle_root as _bundle_root
+        pool_path = _bundle_root() / "core" / "claude-home" / "universal_skill_pool.json"
+    except Exception:
+        pool_path = Path(__file__).parent.parent / "claude-home" / "universal_skill_pool.json"
     pool = load_json(pool_path, {"universal_patterns": [], "_meta": {"created_at": datetime.now().isoformat(timespec="seconds")}})
 
     filter_active = _transfer_scope_filter_active()

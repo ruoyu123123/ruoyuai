@@ -19,8 +19,17 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent  # 仓库根
-SKELETON_FILE = ROOT / "core" / "claude-home" / "templates" / "subsystem_skeletons.json"
+ROOT = Path(__file__).resolve().parent.parent.parent  # 仓库根（dev）
+# 🔴 frozen-aware（对抗审查 must_fix·__file__ 扁平化同款）：只读骨架资源改用 bundle_root()
+# （frozen=_MEIPASS·dev=parents[2] 逐字节一致·datas 落 bundle_root()/core/claude-home/
+# templates）——否则 frozen 下 /outline scaffold 读不到 subsystem_skeletons.json。
+try:
+    if str(Path(__file__).resolve().parent) not in sys.path:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from frozen_util import bundle_root as _bundle_root
+    SKELETON_FILE = _bundle_root() / "core" / "claude-home" / "templates" / "subsystem_skeletons.json"
+except Exception:
+    SKELETON_FILE = ROOT / "core" / "claude-home" / "templates" / "subsystem_skeletons.json"
 
 
 def _load_skeletons():

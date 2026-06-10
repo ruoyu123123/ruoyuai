@@ -2901,7 +2901,15 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
                     print(f"[WARN] {style_sync_warning}", file=sys.stderr)
 
     # v17.5 P3.2: lessons 注入（跨项目教训） · v19.3 升级
-    lessons_root = project_root.parent.parent.parent / "core" / "claude-home" / "lessons"
+    # 🔴 frozen-aware（对抗审查 must_fix）：lessons 是只读系统资源，应从 bundle_root() 取
+    # （frozen=_MEIPASS·dev=仓库根）——而非 project_root.parent.parent.parent（frozen 下项目
+    # 在用户工作区不在 bundle，旧推算指错 → lessons 静默丢失 → 削弱北极星「风格一致」）。
+    try:
+        from frozen_util import bundle_root as _bundle_root
+        _repo_root = _bundle_root()
+    except Exception:
+        _repo_root = project_root.parent.parent.parent
+    lessons_root = _repo_root / "core" / "claude-home" / "lessons"
     lessons_files = []
     if lessons_root.exists():
         lessons_files = sorted(lessons_root.glob("*.md"))
@@ -2911,7 +2919,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
                 "priority": "P2",
                 "focus": "writer/judge 启动前阅读：跨项目经验沉淀（含 §1-10 各类教训）",
                 "reason": f"避免重复历史错误",
-                "files": [str(p.relative_to(project_root.parent.parent.parent)) for p in lessons_files],
+                "files": [str(p.relative_to(_repo_root)) for p in lessons_files],
             })
 
     # v19.3: 全局 MEMORY 跨项目 feedback 注入（高价值）
