@@ -69,6 +69,46 @@ def check_dispatch(exe: Path) -> list:
     return fails
 
 
+def check_writable_data(exe: Path, dist_dir: Path) -> list:
+    """frozen 可写系统数据迁 user_data_dir 的真二进制验证：经 exe 自我再分派跑
+    plan_tracker create（写 GLOBAL plan + attest HMAC 密钥·最关键可写路径·每命令触达），
+    隔离 APPDATA=临时目录 → 确认写落 %APPDATA%/ruoyuai 而非只读 bundle。"""
+    import os
+    fails = []
+    tmp = Path(tempfile.mkdtemp(prefix="frozen_appdata_"))
+    env = dict(os.environ)
+    env["APPDATA"] = str(tmp)                      # frozen user_data_dir() = tmp/ruoyuai
+    try:
+        r = subprocess.run(
+            [str(exe), "core/scripts/plan_tracker.py", "create",
+             "--command", "cluster-write", "--project", "__frozen_write_probe__",
+             "--key", "cluster_001"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=env, timeout=120)
+        if r.returncode != 0:
+            fails.append(f"plan_tracker create 退出码 {r.returncode}·stderr={r.stderr[-200:]}")
+        if "Traceback" in r.stderr:
+            fails.append(f"plan_tracker create stderr 有 Traceback: {r.stderr[-200:]}")
+        # 写应落 %APPDATA%/ruoyuai（user_data_dir）·attest_key + plan json
+        udd = tmp / "ruoyuai"
+        plans_dir = udd / "core" / "claude-home" / ".plans"
+        if not (plans_dir / ".attest_key").exists():
+            fails.append(f"attest_key 未写到 user_data_dir（{plans_dir}）——可写数据迁移失效")
+        probe_plans = list(plans_dir.glob("*__frozen_write_probe__*.json")) if plans_dir.exists() else []
+        if not probe_plans:
+            fails.append(f"probe plan 未写到 user_data_dir（{plans_dir}）")
+        # 反面：bundle 内 .plans 不该被写（只读·不存在或无 probe）
+        bundle_plans = dist_dir / "_internal" / "core" / "claude-home" / ".plans"
+        if bundle_plans.exists() and list(bundle_plans.glob("*__frozen_write_probe__*")):
+            fails.append("probe plan 误写进只读 bundle _internal（迁移没生效）")
+    except subprocess.TimeoutExpired:
+        fails.append("plan_tracker create 超时")
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+    return fails
+
+
 def check_gui_serve(exe: Path, port: int) -> list:
     fails = []
     proc = subprocess.Popen([str(exe), "--port", str(port)],
@@ -118,6 +158,7 @@ def main():
     all_fails = []
     for name, fn in (("security", lambda: check_security(dist_dir)),
                      ("dispatch", lambda: check_dispatch(exe)),
+                     ("writable_data", lambda: check_writable_data(exe, dist_dir)),
                      ("gui_serve", lambda: check_gui_serve(exe, args.port))):
         fails = fn()
         if fails:
@@ -130,7 +171,7 @@ def main():
     if all_fails:
         _say("RESULT", f"GUI EXE 验证 FAIL · {len(all_fails)} 项")
         return 1
-    _say("RESULT", "GUI EXE 验证 PASS 3/3（安全 + dispatch + GUI serve）")
+    _say("RESULT", "GUI EXE 验证 PASS 4/4（安全 + dispatch + 可写数据 + GUI serve）")
     return 0
 
 
