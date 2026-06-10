@@ -95,7 +95,9 @@ def test_gui_spec_excludes_torch_no_dotenv():
     spec = (PKG / "ruoyu_gui.spec").read_text(encoding="utf-8")
     assert '"torch"' in spec, "spec 未 exclude torch（GB 级）"
     for ln in spec.splitlines():
-        if ".env" in ln and "datas" not in ln.lower() and "SPECPATH" not in ln:
+        # 排除 os.environ（含 .env 子串的误报）+ datas/SPECPATH 行
+        if ".env" in ln and "environ" not in ln and "datas" not in ln.lower() \
+                and "SPECPATH" not in ln:
             assert "gen_profiles.default.env" in ln or ln.strip().startswith("#"), \
                 f"spec 疑似打包 .env: {ln.strip()[:70]}"
 
