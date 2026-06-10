@@ -27,6 +27,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+except Exception:  # pragma: no cover
+    def child_python():
+        return sys.executable
+
 REPO_ROOT = Path(__file__).resolve().parents[2]   # 系统根：incidents/circuit 是系统级（与 Monitor hook 同位置）
 CIRCUIT_THRESHOLD = 5      # 同一 label 累计失败 N 次 → Open（熔断）
 CIRCUIT_COOLDOWN = 300     # Open 冷却秒数 → Half-Open 放一次试探
@@ -133,6 +139,29 @@ def _eval_circuit(cs: dict) -> str:
     return state
 
 
+_PY_TOKENS = ("python", "python3", "py")
+
+
+def _normalize_interpreter(cmd):
+    """把命令首位的 'python'/'python3'/'py' 字面量换成 frozen-aware child_python()。
+
+    list 形态：cmd[0] in _PY_TOKENS → 换 child_python()。
+    str  形态：以 'python '/'python3 '/'py ' 开头 → 替换首 token（不简单 prepend·
+              否则得到 'child_python() python ...'）。
+    dev 下 child_python()==sys.executable，但字面量 'python' 在 dev 也可能因 PATH 无
+    python 而失败——统一归一更稳（dev 行为：'python'→真解释器，等价或更好）。
+    """
+    if isinstance(cmd, str):
+        for tok in _PY_TOKENS:
+            prefix = tok + " "
+            if cmd.startswith(prefix):
+                return f'"{child_python()}" ' + cmd[len(prefix):]
+        return cmd
+    if isinstance(cmd, (list, tuple)) and cmd and str(cmd[0]) in _PY_TOKENS:
+        return [child_python()] + [str(c) for c in cmd[1:]]
+    return cmd
+
+
 def run_with_resilience(cmd, label, project_root=None, max_retries=None,
                         allow_degrade=True, timeout=600):
     """跑子命令并自适应。返回 dict: {ok, degraded, exit_code, action, signature, label, ...}。
@@ -148,6 +177,11 @@ def run_with_resilience(cmd, label, project_root=None, max_retries=None,
                 "label": label, "exit_code": None}
 
     # cmd 可为 list（subprocess 直跑）或 str（shell 命令串，用于跑 plan template 的 scripts 行）
+    # 🔴 frozen 归一（对抗审查 finding·M4）：内层 'python' 字面量（来自 plan 的
+    # `adaptive_runner --label X -- python core/scripts/Y.py` REMAINDER，或 auto_heal 的
+    # str cmd）必须换 child_python()——onedir 里 PATH 上无 python，否则这些间接 fan-out
+    # 静默 degrade（整条自学习/演化/consensus 链在 frozen 包里失效·dev 测不出）。
+    cmd = _normalize_interpreter(cmd)
     is_shell = isinstance(cmd, str)
     if is_shell:
         run_target, cmd_str = cmd, cmd

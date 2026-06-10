@@ -12,4 +12,11 @@ numpy>=1.24.0           # 数值计算
 # Model probe（中转站可达性检测）
 requests>=2.31.0        # /v1/models 端点探测
 
+# 图形界面（程序驱动 GUI · 脱离 Claude CLI · ruoyu_gui.py）
+nicegui>=3.13.0         # core/gui/app.py 唯一 import nicegui（浏览器/桌面界面）
+pywebview              # 仅 --native 桌面窗口模式需要（浏览器模式不需要）
+
+# 判断层结构化输出后校验（llm_transport.parse + judge_runner）——pydantic 是 openai 传递依赖，
+# 显式声明便于 PyInstaller 收集；GUI 测试用 pytest + pytest-asyncio（dev 才需）。
+
 # Python 版本要求：>= 3.10（用了 from __future__ import annotations + PEP 604 union types）

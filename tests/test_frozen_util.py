@@ -92,6 +92,37 @@ def test_wal_recovery_and_maybe_judge_use_child_python():
         assert "child_python" in text, f"{fname} 未用 child_python"
 
 
+def test_adaptive_runner_normalizes_python_interpreter():
+    """第三轮 finding（high·收口闸抓）：adaptive_runner 内层 'python' 字面量（来自
+    plan REMAINDER `-- python core/scripts/Y.py` / auto_heal str cmd）须在
+    run_with_resilience 入口归一 child_python——否则 frozen 下整条自学习/演化链静默失效。
+    这是静态正则扫不到的运行时字面量（首轮 guard 漏网处），故直接测归一函数。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core" / "scripts"))
+    import adaptive_runner as ar
+
+    # list 形态：内层 python 换 child_python
+    out = ar._normalize_interpreter(["python", "core/scripts/Y.py", "--flag"])
+    assert out[0] == fu.child_python() and out[1:] == ["core/scripts/Y.py", "--flag"]
+    out3 = ar._normalize_interpreter(["python3", "x.py"])
+    assert out3[0] == fu.child_python()
+    # str 形态（auto_heal）：首 token 换（带引号保护空格路径）
+    s = ar._normalize_interpreter("python core/scripts/X.py --auto-migrate")
+    assert s.startswith(f'"{fu.child_python()}" ') and "core/scripts/X.py" in s
+    # 非 python 首位（如直接脚本路径）不动
+    assert ar._normalize_interpreter(["core/scripts/Z.py"]) == ["core/scripts/Z.py"]
+    assert ar._normalize_interpreter("echo hi") == "echo hi"
+
+
+def test_no_bare_python_literal_in_any_run_with_resilience_caller():
+    """守卫收口：plan 模板里 adaptive_runner 的内层 'python' 由 run_with_resilience 入口
+    归一兜住——确认 adaptive_runner 已 import child_python（运行时字面量静态扫不到，
+    故验 import 存在 + 归一函数被入口调用）。"""
+    scripts = Path(__file__).resolve().parent.parent / "core" / "scripts"
+    ar_text = (scripts / "adaptive_runner.py").read_text(encoding="utf-8")
+    assert "child_python" in ar_text
+    assert "_normalize_interpreter(cmd)" in ar_text  # 入口确实调归一
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):
