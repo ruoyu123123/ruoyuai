@@ -124,6 +124,18 @@ def test_build_all_runbook_exists():
         "build_all.py 缺关键阶段（GUI 验证 / 安全闸 / 生产模式）"
 
 
+def test_user_manual_exists_and_ships():
+    """非技术用户使用说明存在 + 覆盖关键主题 + build_all 随包出货。"""
+    manual = PKG / "使用说明.md"
+    assert manual.exists(), "缺 packaging/使用说明.md（非技术用户手册）"
+    text = manual.read_text(encoding="utf-8")
+    for topic in ("ruoyu_gui.exe", "设置", "密钥", "写故事块", "章节"):
+        assert topic in text, f"使用说明缺关键主题: {topic}"
+    # build_all 把它随 GUI exe 出货
+    assert "使用说明.md" in (PKG / "build_all.py").read_text(encoding="utf-8"), \
+        "build_all.py 未把使用说明随包"
+
+
 def test_spec_excludes_torch():
     """torch 已装(GB 级)·spec 必排（否则 onedir 体积爆·实证 _internal 33MB 因排了）。"""
     spec = (PKG / "frozen_smoke.spec").read_text(encoding="utf-8")

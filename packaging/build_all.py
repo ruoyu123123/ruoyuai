@@ -45,6 +45,12 @@ def build(spec: str, name: str, production: bool = False) -> bool:
     if r.returncode != 0 or not exe.exists():
         print(f"[X] 构建失败: {spec}")
         return False
+    # 使用说明随 GUI exe 一起出货（非技术用户开包即见）
+    if name == "ruoyu_gui":
+        manual = PKG / "使用说明.md"
+        if manual.exists():
+            shutil.copy2(str(manual), str(exe.parent / "使用说明.md"))
+            print("[OK] 使用说明.md 已随包")
     print(f"[OK] 构建: dist/{name}/{name}.exe")
     return True
 
