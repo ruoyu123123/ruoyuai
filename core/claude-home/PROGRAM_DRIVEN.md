@@ -104,13 +104,22 @@ python core/scripts/judge_runner.py novel-summarizer workspace/novels/书名 \
 
 1. **judge「Claude 过 ≠ gen-model 过」**：8 个 judge 的金标准对比重测（真作者原文当输入，
    对比 JudgeReport 字段完整性 + 作者档维度引用）尚未跑——M2 验证里程碑。
-2. **frozen exe（部分就绪）**：`orchestrator.default_script_runner` 已 frozen-aware——
-   `getattr(sys,'frozen')` 时走 `run_script_in_process`（进程内 importlib 调脚本 main()，
-   不起子进程·已测）。dev 子进程路径强制传 `PYTHONIOENCODING=utf-8`+`PYTHONUTF8=1`
-   治 GBK 日志乱码。**残留 M4**：脚本**内部** `sys.executable` fan-out（`audit_hub` 并行
-   13 scanner / `gen_fixer` / `evolution_orchestrator`）在 onedir 下仍会重启 GUI 本体——
-   这些需同样改进程内调用，且必须用真 onedir 产物端到端验证（dev 无法验 frozen）。
-   在该项完成前，打包版的 cluster-write step3（audit）等会失败。
+2. **frozen exe（解释器解析已全面就绪 · 打包 recipe 待补）**：
+   - 顶层脚本调度：`orchestrator.default_script_runner` frozen 时走 `run_script_in_process`
+     （进程内 importlib 调脚本 main()·已测）；dev 子进程路径强制
+     `PYTHONIOENCODING=utf-8`+`PYTHONUTF8=1` 治 GBK 日志乱码。
+   - **所有 fan-out 子进程解释器统一走 `frozen_util.child_python()`**（dev=`sys.executable`
+     no-op·frozen=`RUOYU_PYTHON` 随包 python·缺则回退+告警暴露）：直接 fan-out
+     `[child_python(), script, …]`（audit_hub 21 scanner / save_state / gen_writer /
+     gen_fixer / run_cross_cluster_aggregates / evolution_orchestrator / maybe_judge_consensus /
+     wal_recovery / distill_finalize_verify / system_health_audit）+ **间接 fan-out**
+     `adaptive_runner.run_with_resilience` 入口 `_normalize_interpreter` 归一内层 `python`
+     字面量（plan REMAINDER `-- python core/scripts/Y.py` + auto_heal str cmd）。
+     守卫测试 `test_no_bare_child_interpreter_anywhere_in_scripts` 扫全 `core/scripts`
+     杜绝未来漏网。
+   - **残留 = 打包 recipe（非代码）**：onedir 打包时须 bundle 一份 python 运行时并
+     `set RUOYU_PYTHON` 指向它；且必须用**真 onedir 产物**在干净 Win11（无 Python）
+     端到端跑一遍 cluster-write/save-state 验证（dev 无法验 frozen·见对抗审查纪律）。
 3. **深 schema judge**（validator-checker 16 维 / outline-planner 3 模式）在 reasoning
    模型上的截断率需实测；必要时拆分多次调用。
 
