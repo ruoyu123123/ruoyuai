@@ -836,6 +836,11 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
     # gemini-3.x reasoning 模型：thinking_level=LOW 回收 15-25k 输出预算给正文（治 pro 偏短·2026-06-06 联网调研）。
     if getattr(profile, "thinking_level", None):
         _create_kw["extra_body"] = {"thinking_level": profile.thinking_level}
+    try:
+        import gen_throttle
+        gen_throttle.wait()   # 限速端点（中转站 <15rpm）：请求前全局节流·默认关零回归
+    except Exception:
+        pass
     stream = client.chat.completions.create(**_create_kw)
     text = ""
     finish_reason = None
@@ -889,6 +894,11 @@ def _stream_once_gemini(profile, system: str, user: str, max_tokens: int,
     # 🔴 BYOK 脱敏（对抗审查 must_fix#3）：gemini key 在 URL（?key=<KEY>），urlopen 的
     # HTTPError/URLError str() 会带整条 URL → 经 stderr → GUI LogBuffer → 界面。BYOK 路由
     # 真实用户 key 必须脱敏后再抛/打印。
+    try:
+        import gen_throttle
+        gen_throttle.wait()   # 限速端点全局节流（gemini native path）
+    except Exception:
+        pass
     try:
         resp = urllib.request.urlopen(req, timeout=GEN_MODEL_TIMEOUT)
     except Exception as _e:

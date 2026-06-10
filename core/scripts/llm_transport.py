@@ -223,6 +223,11 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
 
     def _run(kwargs):
         text, finish = "", None
+        try:
+            import gen_throttle
+            gen_throttle.wait()   # 限速端点全局节流（judge 走此 OpenAI path）
+        except Exception:
+            pass
         stream = client.chat.completions.create(**kwargs)
         for chunk in stream:
             if not chunk.choices:
@@ -311,6 +316,11 @@ def _stream_once_gemini(profile: Profile, system: str, user: str, max_tokens: in
                              response_format_json=response_format_json)
 
     text, finish_raw, usage = "", None, {}
+    try:
+        import gen_throttle
+        gen_throttle.wait()   # 限速端点全局节流（gemini native SSE path）
+    except Exception:
+        pass
     timeout = httpx.Timeout(connect=CONNECT_TIMEOUT, read=DEFAULT_TIMEOUT,
                             write=CONNECT_TIMEOUT, pool=CONNECT_TIMEOUT)
     try:
