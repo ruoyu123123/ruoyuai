@@ -318,12 +318,12 @@ def promote(project_root: Path) -> dict:
     """
     exp_path = project_root / "_数据库" / "写作经验.json"
     exp = load_json(exp_path, {})
-    # frozen-aware 读（__file__ 扁平化同款）：bundle_root()/core/claude-home（dev 同值）。
-    # 注：frozen 下 bundle 只读，pool 的 promote 写入会失败降级——distill/learning 路径非
-    # GUI cluster-write MVP·留作阶段B残留（writable 学习产物迁用户态）。
+    # 🔴 frozen 可写数据修复：universal_skill_pool 是**可写**跨项目学习产物（promote 写入），
+    # 用 user_data_dir()（dev=仓库根逐字节一致·frozen=%APPDATA%/ruoyuai 可写·读写同根）——
+    # 非 bundle_root()（那是只读资源·pool 要写）。对抗验证 sound 收口项。
     try:
-        from frozen_util import bundle_root as _bundle_root
-        pool_path = _bundle_root() / "core" / "claude-home" / "universal_skill_pool.json"
+        from frozen_util import user_data_dir as _udd
+        pool_path = _udd() / "core" / "claude-home" / "universal_skill_pool.json"
     except Exception:
         pool_path = Path(__file__).parent.parent / "claude-home" / "universal_skill_pool.json"
     pool = load_json(pool_path, {"universal_patterns": [], "_meta": {"created_at": datetime.now().isoformat(timespec="seconds")}})

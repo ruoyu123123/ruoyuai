@@ -98,7 +98,15 @@ except Exception:
     TEMPLATES_DIR = REPO_ROOT / "core" / "claude-home" / "plans"
 PROJECTS_DIR = REPO_ROOT / "workspace" / "novels"
 STYLES_DIR = REPO_ROOT / "workspace" / "styles"
-GLOBAL_PLANS_DIR = REPO_ROOT / "core" / "claude-home" / ".plans"
+# 🔴 frozen 可写数据修复：无项目兜底 plan + attest HMAC 密钥是**可写**系统数据，frozen 下
+# 写只读 bundle 必失败（attest_key 每次盖章写 → plan_tracker.step/end 全崩）。用
+# user_data_dir()（dev=REPO_ROOT 逐字节一致·frozen=%APPDATA%/ruoyuai 可写）。
+try:
+    from frozen_util import user_data_dir as _udd
+    _WRITABLE_ROOT = _udd()
+except Exception:
+    _WRITABLE_ROOT = REPO_ROOT
+GLOBAL_PLANS_DIR = _WRITABLE_ROOT / "core" / "claude-home" / ".plans"
 # 2026-05-29 修：attestation HMAC 的机器本地密钥（与 GLOBAL_PLANS_DIR 同级隐藏文件）
 ATTEST_KEY_PATH = GLOBAL_PLANS_DIR / ".attest_key"
 

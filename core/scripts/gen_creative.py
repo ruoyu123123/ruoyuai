@@ -66,7 +66,11 @@ def check_deps():
 
 
 def load_model_capabilities_cache() -> dict:
-    cache_path = Path(__file__).parent.parent.parent / '.claude' / '.model_capabilities.json'
+    try:
+        from frozen_util import user_data_dir as _udd
+        cache_path = _udd() / '.claude' / '.model_capabilities.json'
+    except Exception:
+        cache_path = Path(__file__).parent.parent.parent / '.claude' / '.model_capabilities.json'
     if not cache_path.exists():
         return {}
     try:

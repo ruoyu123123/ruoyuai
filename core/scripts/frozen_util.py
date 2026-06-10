@@ -61,6 +61,30 @@ def resource_path(*parts: str) -> Path:
     return bundle_root().joinpath(*parts)
 
 
+def user_data_dir() -> Path:
+    """**可写**系统数据的根目录——bundle_root() 的对称面（那是只读资源·这是可写状态）。
+
+    🔴 frozen 可写数据修复（2026-06-10·READ 审计对称面）：MAPE-K runtime（incidents.jsonl/
+    self_heal_kb/circuit_state/runtime_lessons）、model_capabilities 缓存、plan_tracker 的
+    全局 plan/attest_key 等是**跨项目可写系统数据**，dev 落仓库根，但 frozen 下 bundle 是
+    **只读** _internal → 写必失败/崩。frozen 改落用户态 %APPDATA%/ruoyuai（同 BYOK
+    user_overrides 范式·_user_override_path）。
+
+    - dev：返回仓库根（_DEV_REPO_ROOT）→ `user_data_dir()/core/claude-home/runtime` 等于
+      现状路径·**逐字节零回归**。
+    - frozen：%APPDATA%/ruoyuai（无 APPDATA 则 ~/.ruoyuai）·可写。
+    """
+    if is_frozen():
+        base = os.environ.get("APPDATA") or str(Path.home() / ".ruoyuai")
+        d = Path(base) / "ruoyuai"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return d
+    return _DEV_REPO_ROOT
+
+
 def scripts_dir() -> Path:
     """core/scripts 目录（fan-out 脚本据此定位兄弟 scanner 子脚本）。
 

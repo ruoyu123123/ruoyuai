@@ -64,8 +64,12 @@ def _project_plan_dirs(project_arg: str) -> list[Path]:
         for cand in (p / "_数据库" / ".plans", p / ".plans"):
             if cand.is_dir():
                 dirs.append(cand)
-    # GLOBAL 兜底（plan_tracker 找不到项目时落这）
-    glob_dir = Path(__file__).parent.parent / "claude-home" / ".plans"
+    # GLOBAL 兜底（plan_tracker 找不到项目时落这）·🔴 引 plan_tracker.GLOBAL_PLANS_DIR 当
+    # 单一权威源（已 frozen-aware 迁 user_data_dir）——否则 frozen 下写读 GLOBAL 不同根断链。
+    try:
+        from plan_tracker import GLOBAL_PLANS_DIR as glob_dir
+    except Exception:
+        glob_dir = Path(__file__).parent.parent / "claude-home" / ".plans"
     if glob_dir.is_dir():
         dirs.append(glob_dir)
     # 传统 runtime 目录（历史兼容）

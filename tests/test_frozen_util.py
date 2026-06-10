@@ -193,6 +193,89 @@ def test_scripts_dir_dev_is_core_scripts():
         sys.frozen = saved
 
 
+def test_user_data_dir_dev_is_repo_root():
+    """user_data_dir() dev=仓库根（writable 锚点逐字节零回归）·frozen=%APPDATA%/ruoyuai。"""
+    saved = getattr(sys, "frozen", False)
+    sys.frozen = False
+    try:
+        assert fu.user_data_dir() == Path(__file__).resolve().parent.parent
+    finally:
+        sys.frozen = saved
+
+
+def test_user_data_dir_frozen_is_appdata():
+    saved_f = getattr(sys, "frozen", False)
+    saved_a = os.environ.get("APPDATA")
+    sys.frozen = True
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    os.environ["APPDATA"] = tmp
+    try:
+        assert fu.user_data_dir() == Path(tmp) / "ruoyuai"
+        assert fu.user_data_dir().exists()    # 自动 mkdir
+    finally:
+        sys.frozen = saved_f
+        if saved_a is None:
+            os.environ.pop("APPDATA", None)
+        else:
+            os.environ["APPDATA"] = saved_a
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_writable_anchors_frozen_aware():
+    """MAPE-K runtime / plan attest / model cache 等可写系统数据 frozen 下迁用户态
+    （dev 仍仓库根·零回归）——否则 frozen 写只读 bundle 必崩。"""
+    _scripts = str(Path(__file__).resolve().parent.parent / "core" / "scripts")
+    if _scripts not in sys.path:
+        sys.path.insert(0, _scripts)
+    import importlib
+    saved_f = getattr(sys, "frozen", False)
+    saved_m = getattr(sys, "_MEIPASS", None)
+    saved_a = os.environ.get("APPDATA")
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    sys.frozen = True
+    sys._MEIPASS = str(Path(tmp) / "_internal")
+    os.environ["APPDATA"] = tmp
+    try:
+        import frozen_util as _fu
+        importlib.reload(_fu)
+        ud = _fu.user_data_dir()
+        import self_heal_engine as she
+        importlib.reload(she)
+        assert str(she.REPO_ROOT).startswith(str(ud)), "self_heal runtime 未迁用户态"
+        import adaptive_runner as ar
+        importlib.reload(ar)
+        assert str(ar.REPO_ROOT).startswith(str(ud)), "adaptive runtime 未迁用户态"
+        import plan_tracker as pt
+        importlib.reload(pt)
+        assert str(pt.ATTEST_KEY_PATH).startswith(str(ud)), "plan attest_key 未迁用户态"
+        import model_probe as mp
+        importlib.reload(mp)
+        assert str(mp.get_cache_path()).startswith(str(ud)), "model cache 未迁用户态"
+    finally:
+        sys.frozen = saved_f
+        if saved_m is None:
+            try:
+                del sys._MEIPASS
+            except AttributeError:
+                pass
+        else:
+            sys._MEIPASS = saved_m
+        if saved_a is None:
+            os.environ.pop("APPDATA", None)
+        else:
+            os.environ["APPDATA"] = saved_a
+        import frozen_util as _fu
+        importlib.reload(_fu)
+        for m in ("self_heal_engine", "adaptive_runner", "plan_tracker", "model_probe"):
+            if m in sys.modules:
+                importlib.reload(sys.modules[m])
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_judge_agents_dir_and_plan_templates_frozen_aware():
     """阶段B GUI exe：judge_runner.AGENTS_DIR(.claude/agents) + plan_tracker.TEMPLATES_DIR
     (core/claude-home/plans) 须 frozen-aware（bundle_root 定位·非 __file__ 扁平推算）——
