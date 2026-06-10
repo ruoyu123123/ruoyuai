@@ -43,6 +43,27 @@
 | `steps[].after_pause_scripts` | 选择落定后的确定性后续（cluster_choice_apply 写回） | |
 | `steps[].touch_outputs` | 标记文件（多轮产物文件名可变时的存在性代理） | |
 
+## BYOK 密钥管理（非技术用户自带 key · 2026-06-10）
+
+分发版绝不带开发者 `.env` 私钥——非技术用户在 GUI 设置页录入**自己的** API key，经
+`keyring`（Windows 凭据管理器·DPAPI 用户级加密）存储。
+
+| 层 | 实现 |
+|---|---|
+| `core/scripts/secrets_store.py` | keyring 薄抽象（唯一 import keyring 的非 GUI 模块）：`get/set/delete/has_api_key`、`is_available()`（isinstance fail/null 判定）、`redact()`（gemini key-in-URL 脱敏）。service=`ruoyuai-gen-model`，username=`profile.name`。软退化：keyring 缺→静默 None |
+| `gen_model_loader._resolve_api_key` | `Profile.api_key` 三级优先级 **keyring > os.environ > .env 文本**（唯一注入点·下游 13 脚本零改）。`load_dotenv(override=True)` 使 environ 层仅在 .env **未定义**该 key 时独立生效 |
+| GUI 设置页 | per-profile 录入卡片（密码框 + 保存到 keyring + 已配置/未配置徽章 + 测试连接）；保存后清空输入、绝不展示明文、绝不写回 .env。`runner.save_api_key` 后 `reset_default_loader()` 让录入即生效 |
+
+**安全红线**：绝不 log/写回 .env key；gemini key 在 URL（gen_writer urllib / llm_transport
+httpx）的异常 str() 必经 `redact()` 再抛（否则经 stderr→GUI LogBuffer→界面泄漏）。
+
+测试：`test_secrets_store(11)`/`test_loader_precedence(7·含 dev 零回归基线)`/
+`tests/gui/test_gui_settings(7·整链端到端+redact 守卫)`。内存 keyring 后端不碰真
+Credential Manager。**残留**：① 非密 config 分离（删 .env 后从内置 `gen_profiles.default.env`
+组装·key 留空走 keyring）② PyInstaller spec（`--collect-submodules keyring` +
+`--hidden-import keyring.backends.Windows.WinVaultKeyring` + datas 白名单排除 .env + CI
+`grep sk- dist/` 闸）③ 真 onedir 冒烟（dev 无法验 frozen keyring 退化）。
+
 ## 图形界面（脱离 Claude CLI · 2026-06-10）
 
 NiceGUI 桌面/浏览器界面，直接驱动 orchestrator——非技术用户无需 Claude CLI。
