@@ -115,11 +115,29 @@ spec 关键：`hiddenimports` 列项目模块（FrozenImporter 只认 PYZ）+ ke
 scanner JSON + 退出码透传·与 audit_hub fan-out 同款路径构造）。exe 级敌对：`exe cluster_lookup.py`
 → exit 3（无 main 契约）。`_internal` 仍 33MB（无第二 python）。
 
-**残留 step6 阶段B（全 GUI onedir · 下轮）**：① `ruoyu_gui.py` 完整 spec（NiceGUI 静态资源 datas
-+ 全 127 脚本 + `.claude/agents/*.md` + `plans/*.json` + jiter/tiktoken/keyring hidden-import）
-② **numpy/scipy 收进 exe**（给 style_evaluator·multi-call 下在 exe 进程内 import·非外部解释器）
-+ style_evaluator import try/except advisory 降级兜底 ③ 干净 Win11 端到端 cluster-write + GUI 录 key
-真机冒烟（PowerShell 复验 stderr·`feedback_verify_stderr_not_exitcode`）。
+### 全 GUI onedir exe（已落地 · 真 exe 验证 3/3 · 2026-06-10）
+
+**可分发的全 GUI onedir exe 诞生并验证**（`dist/ruoyu_gui`·`_internal` 274MB·torch 排净）。
+`packaging/validate_gui_exe.py` 实测 **PASS 3/3**：① 安全 dist 无 .env / 无 sk- 明文 ② fan-out
+dispatch（`ruoyu_gui.exe core/scripts/prose_rhythm_scanner.py draft` → scanner JSON·exe 兼当解释器
+在真 GUI exe 工作）③ GUI serve（`ruoyu_gui.exe --port N` → HTTP 200 + 含「若渝AI」）。
+
+`packaging/ruoyu_gui.spec`（权威·根目录不留第二份）：`collect_all("nicegui")`（无 hook→抓 static/
+elements/templates+子模块+metadata）+ 133 脚本 datas+hiddenimports 双登记 + `.claude/agents`/
+`plans`/`lessons`/`config`/`subsystem_skeletons` datas + `collect_data_files numpy/scipy`（收进 exe·
+style_evaluator multi-call 进程内 import）+ `copy_metadata`（import 期 metadata.version）+ excludes
+torch · **绝不 .env**。
+
+🔴 **FATAL 第 4-6 处修复**（「没调查没发言权」彻底网罗 `__file__` 资源路径 bug）：`build_manifest`
+lessons（cluster-write 路径·`project_root.parent×3`→`bundle_root()`·frozen 下项目在用户工作区不在
+bundle·旧推算 lessons 静默丢失削弱风格一致）/ `scaffold_subsystems` SKELETON / `skill_evolver`
+pool → 全改 `bundle_root()`（dev 逐字节一致）。守卫 `test_packaging_frozen_smoke`（13·含 5 GUI spec）。
+
+**残留 step6（非 cluster-write MVP 路径 · 后续）**：① `wal_recovery`(runtime plans)/
+`.model_capabilities.json` 等 **writable 系统资源** frozen 写只读 bundle 失败——迁用户态或确认降级
+（model_capabilities READ 缺失返默认·已降级；wal_recovery runtime 待迁）② 干净 Win11 真机端到端
+cluster-write + GUI 录 key（需 gen-model API·PowerShell 复验 stderr）③ `console=False` 正式分发 +
+图标 + OV 签名。
 
 ## 图形界面（脱离 Claude CLI · 2026-06-10）
 
