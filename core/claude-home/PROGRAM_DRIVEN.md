@@ -145,7 +145,23 @@ MAPE-K runtime（self_heal/adaptive·incidents/kb/circuit/runtime_lessons·clust
 / wal_recovery 引 plan_tracker.GLOBAL_PLANS_DIR 归一）。**frozen 路径双面闭合**：只读 `bundle_root()`
 + 可写 `user_data_dir()`。守卫 `test_frozen_util`（18·含 user_data_dir/writable 锚点）。
 
-### 🎉 真 GUI exe 端到端写一章（已证 · 2026-06-10 · 用户授权 API）
+### 🎉🎉 完整 7 步 cluster-write 真 exe 闭环（已证 · 2026-06-11 · 用户授权 API）
+
+**整条程序驱动写作主轨在真 frozen GUI exe 完整跑通**（`ruoyu_gui.exe core/scripts/orchestrator.py
+cluster-write --project <copy> --key 001 --auto-pilot`·`GEN_MIN_INTERVAL_S=4.5 BEST_OF_N=1`）：
+step1 build-manifest → step2 gen_writer **13664 CJK 真实正文**（expand 2 轮·18103 chars）→
+step3 质检 scanner + reading-reflector 5 轮循环 + validator-checker 派单 → step4 voice-checker
+（瞬态 404 软降级·不阻断·北极星⑤）→ step5 foreshadower+reflector+summarizer（reflector 撞 429
+自动指数退避重试成功）→ step6 splitter **切 3 章 + gen_chapter_titles**（`第001章 断梯` 等）→
+step7 plan-end·**EXIT=0 无 Traceback 无 520**。产出 3 章真实连贯辰东风格《凿窍纪》正文（断天者
+重黎/建木绝顶/绝天之刀）。**「程序驱动 exe 写小说」终极目标完整达成**。
+
+🔴 **第 5 个 e2e bug·中转站限速**：完整管线快速连发 writer best-of-N/expand+多 judge → pie-xian
+中转站 <15rpm 限速返 Cloudflare 520（用户告知特性·非端点挂）。`gen_throttle.py` 模块级全局
+min-interval 闸（frozen 单进程内 writer+judge 共享·4 处请求点·env `GEN_MIN_INTERVAL_S` 默认 0
+关零回归·15rpm 端点设 4.5）+ llm_transport 429 指数退避 → 瞬态限流优雅处理。
+
+### 🎉 真 GUI exe 端到端写一章（gen_writer 单步 · 已证 · 2026-06-10 · 用户授权 API）
 
 **真 GUI onedir exe + BYOK keyring 密钥 → 写出真实连贯一章**（用户选「端到端真写一章」授权 gen-model
 API）。链路全程真二进制：`ruoyu_gui.exe core/scripts/gen_writer.py --project <copy> --cluster 1`
