@@ -13,13 +13,26 @@ from pathlib import Path
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()  # PyInstaller spawn 防无限 fork（必须第一句）
-    for s in (sys.stdout, sys.stderr):
-        if hasattr(s, "reconfigure"):
-            s.reconfigure(encoding="utf-8", errors="replace")
+
     _REPO = Path(__file__).resolve().parent
     for p in (str(_REPO), str(_REPO / "core" / "scripts")):
         if p not in sys.path:
             sys.path.insert(0, p)
+
+    # === frozen multi-call 自我再分派（方案 M·阶段B）===
+    # exe 收到 [exe, core/scripts/X.py, args]（audit_hub fan-out 形态）→ 进程内跑该 scanner
+    # 带退出码退出·不启 GUI。判别+执行全在 frozen_util（与 frozen_smoke 共享同一段）。
+    # dev 下 is_frozen()=False → dispatch_or_none 恒 None → 照常启 GUI（零回归）。
+    if getattr(sys, "frozen", False):
+        import frozen_util
+        _rc = frozen_util.dispatch_or_none(sys.argv)
+        if _rc is not None:
+            sys.exit(_rc)            # 带 scanner 退出码退出 → audit_hub 据此判 ok
+
+    # === 否则照常启 GUI ===
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
 
     import argparse
     ap = argparse.ArgumentParser()

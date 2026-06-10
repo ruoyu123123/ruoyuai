@@ -19,10 +19,10 @@ import argparse
 import json
 import subprocess
 import sys
-from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).parent
+SCRIPT_DIR = scripts_dir()
 
 # 5 个子模块（每个仍是独立 .py，本 wrapper 用 subprocess 调用 · 简单不重写）
 SUB_MODULES = [

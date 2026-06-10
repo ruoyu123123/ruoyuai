@@ -43,9 +43,24 @@ def test_spec_hiddenimports_cover_smoke_imports():
     spec = (PKG / "frozen_smoke.spec").read_text(encoding="utf-8")
     required = ["_smoke_inproc_target", "cluster_lookup", "orchestrator",
                 "plan_tracker", "secrets_store", "frozen_util", "gen_model_loader",
+                "prose_rhythm_scanner",   # path6 multi-call 真 scanner
                 "keyring.backends.Windows", "keyring.backends.fail", "dotenv"]
     for mod in required:
         assert f'"{mod}"' in spec or f"'{mod}'" in spec, f"spec hiddenimports 缺 {mod}"
+
+
+def test_ruoyu_gui_has_frozen_dispatcher():
+    """ruoyu_gui.py 入口须含 frozen multi-call dispatcher（exe 兼当 fan-out 解释器）。"""
+    src = (_ROOT / "ruoyu_gui.py").read_text(encoding="utf-8")
+    assert "dispatch_or_none" in src and 'getattr(sys, "frozen"' in src, \
+        "ruoyu_gui 缺 frozen dispatcher（方案 M·exe 自我再分派）"
+
+
+def test_frozen_util_has_dispatcher_api():
+    """frozen_util 须提供共享 dispatcher（ruoyu_gui + frozen_smoke 共用同一段）。"""
+    src = (_ROOT / "core" / "scripts" / "frozen_util.py").read_text(encoding="utf-8")
+    for fn in ("def is_script_dispatch", "def dispatch_or_none", "def scripts_dir"):
+        assert fn in src, f"frozen_util 缺 {fn}"
 
 
 def test_spec_excludes_torch():

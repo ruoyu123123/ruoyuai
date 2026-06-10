@@ -41,6 +41,20 @@ if not getattr(sys, "frozen", False):
     print("SKIP: 非 frozen 环境，本 harness 只在 onedir exe 内有意义", file=sys.stderr)
     sys.exit(2)
 
+# === multi-call 自我再分派（方案 M）===
+# frozen_smoke.exe 收到 [exe, core/scripts/X.py, args]（audit_hub fan-out 形态·path6 子进程）
+# → 进程内跑该脚本带退出码退出·不进自检框架（与 ruoyu_gui dispatcher 共享同一段逻辑）。
+try:
+    import frozen_util as _fu_disp
+    _rc = _fu_disp.dispatch_or_none(sys.argv)
+    if _rc is not None:
+        sys.exit(_rc)
+except SystemExit:
+    raise
+except Exception as _e:
+    print(f"[FROZEN-SMOKE] dispatcher 异常: {_e!r}", file=sys.stderr)
+    # dispatcher 自身炸 → 当未派发继续走自检（不静默吞）
+
 _IMPORT_ERRS = []
 for _name in ("orchestrator", "secrets_store", "frozen_util", "gen_model_loader"):
     try:
@@ -101,22 +115,21 @@ def _path1b_real_module():
 
 def _path2_child_python():
     saved = os.environ.get("RUOYU_PYTHON")
-    saved_warned = frozen_util._warned
     try:
+        # env 已设 → 原样返回（B 逃生阀）
         os.environ["RUOYU_PYTHON"] = r"X:\fake\python.exe"
         got = frozen_util.child_python()
         assert got == r"X:\fake\python.exe", f"env 分支期望原样，实得 {got!r}"
+        # 缺失 → 返 exe 本体（方案 M·dispatcher 自我再分派·不告警）
         os.environ.pop("RUOYU_PYTHON", None)
-        frozen_util._warned = False
         got2 = frozen_util.child_python()
-        assert got2 == sys.executable, f"缺失回退期望 sys.executable，实得 {got2!r}"
-        assert frozen_util._warned is True, "缺失 RUOYU_PYTHON 未触发告警标志"
+        assert got2 == sys.executable, f"缺失回退期望 exe 本体，实得 {got2!r}"
+        assert not hasattr(frozen_util, "_warned"), "M 不应再有 _warned 告警机制"
     finally:
         if saved is None:
             os.environ.pop("RUOYU_PYTHON", None)
         else:
             os.environ["RUOYU_PYTHON"] = saved
-        frozen_util._warned = saved_warned
 
 
 def _path3_secrets():
@@ -166,7 +179,45 @@ def _path5_repo_root_frozen_aware():
     # frozen-aware：REPO_ROOT == bundle_root() == _MEIPASS（非指 bundle 外·FATAL 修复）
     assert orchestrator.REPO_ROOT == frozen_util.bundle_root(), \
         f"REPO_ROOT({orchestrator.REPO_ROOT}) != bundle_root({frozen_util.bundle_root()})"
+    assert frozen_util.scripts_dir() == frozen_util.bundle_root() / "core" / "scripts"
     print(f"  [info] orchestrator.REPO_ROOT = {orchestrator.REPO_ROOT}", file=sys.stderr)
+
+
+def _path6_multicall_dispatch_real_scanner():
+    """方案 M 核心验证：fan-out 子进程 [exe, scripts_dir()/scanner.py, draft] → exe 自我
+    再分派 → 真 scanner 进程内跑 → JSON 输出 + 退出码透传。用 audit_hub **同款路径构造**
+    （frozen_util.scripts_dir()·绝对·frozen 命中 _internal/core/scripts）——验的就是 audit_hub
+    真实会传的那个字符串（对抗审查 must_fix#2）。"""
+    import subprocess
+    import tempfile
+    import json as _json
+
+    scanner = frozen_util.scripts_dir() / "prose_rhythm_scanner.py"
+    assert scanner.exists(), f"prose_rhythm_scanner 未进 bundle: {scanner}"
+    tmp = tempfile.mkdtemp(prefix="smoke_draft_")
+    draft = Path(tmp) / "d.txt"
+    draft.write_text("他睁开眼。\n\n外面下着雨，淅淅沥沥，像谁在低声哭。\n\n卧槽，这也行？\n",
+                     encoding="utf-8")
+    try:
+        # 正例：exe 自我再分派跑真 scanner（与 audit_hub child_python()=exe fan-out 一致）
+        r = subprocess.run([sys.executable, str(scanner), str(draft)],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=60)
+        assert r.returncode in (0, 1), \
+            f"scanner 退出码期望 0/1，实得 {r.returncode}·stderr={r.stderr[-200:]}"
+        # stdout 必须是 scanner 的 JSON（非 smoke 的 PASS 文案·证 dispatcher 真接住）
+        data = _json.loads(r.stdout)
+        assert data.get("scanner") == "prose_rhythm", \
+            f"stdout 非 scanner JSON（dispatcher 没接住·跑成 GUI/smoke 了）: {r.stdout[:120]}"
+        print(f"  [info] 自我再分派 scanner JSON ok·rc={r.returncode}", file=sys.stderr)
+        # 负例：不存在草稿 → scanner sys.exit(2) 须被透传（证退出码链路无截断）
+        r2 = subprocess.run([sys.executable, str(scanner), str(Path(tmp) / "ghost.txt")],
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=60)
+        assert r2.returncode == 2, f"不存在草稿期望 rc=2 透传，实得 {r2.returncode}"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 check("path1_run_script_in_process(pos+neg)", _path1_inproc)
@@ -175,6 +226,7 @@ check("path2_child_python_RUOYU_PYTHON", _path2_child_python)
 check("path3_secrets_store_is_available", _path3_secrets)
 check("path4_config_third_fallback_bundle", _path4_config_fallback)
 check("path5_repo_root_frozen_aware", _path5_repo_root_frozen_aware)
+check("path6_multicall_dispatch_real_scanner", _path6_multicall_dispatch_real_scanner)
 
 if FAILS:
     print(f"=== SMOKE FAIL {len(FAILS)} 失败项 ===", file=sys.stderr)
@@ -182,6 +234,6 @@ if FAILS:
     for n, d in FAILS:
         print(f"    - {n}: {d}", file=sys.stderr)
     sys.exit(1)
-print("=== SMOKE PASS 6/6 === [FROZEN-SMOKE] ALL PASS", file=sys.stderr)
-print("=== SMOKE PASS 6/6 === [FROZEN-SMOKE] ALL PASS")
+print("=== SMOKE PASS 7/7 === [FROZEN-SMOKE] ALL PASS", file=sys.stderr)
+print("=== SMOKE PASS 7/7 === [FROZEN-SMOKE] ALL PASS")
 sys.exit(0)

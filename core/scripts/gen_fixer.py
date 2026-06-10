@@ -58,7 +58,7 @@ import os
 import re
 import subprocess
 import sys
-from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
 from datetime import datetime
 from pathlib import Path
 
@@ -746,12 +746,12 @@ def parse_and_apply(reply: str, project_root: Path,
 def run_scanners(file_paths: list) -> dict:
     """对每个修改后的章节跑 scanner"""
     scanners = ['narrative_short_sentence_scanner.py', 'repeat_noun_density_scanner.py']
-    scripts_dir = Path(__file__).parent
+    _sdir = scripts_dir()
     results = {}
     for fp in file_paths:
         results[fp] = {}
         for sc in scanners:
-            sc_path = scripts_dir / sc
+            sc_path = _sdir / sc
             if not sc_path.exists():
                 results[fp][sc] = {'verdict': 'SKIP'}
                 continue

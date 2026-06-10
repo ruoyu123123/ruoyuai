@@ -28,7 +28,7 @@ import json
 import re
 import subprocess
 import sys
-from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -243,7 +243,7 @@ def trigger_cascade(project_root: Path, signals: list[str], cluster_key: str | N
     if "JUDGE_PERSISTENT_WAIVER" in signals:
         triggered.append("learning_loop --scan-recurring 已建议跑")
     # 自动跑 skill_evolver evolve
-    script_dir = Path(__file__).parent
+    script_dir = scripts_dir()
     try:
         if cluster_key:
             unit_args = ["--cluster", cluster_key.replace("cluster_", "")]

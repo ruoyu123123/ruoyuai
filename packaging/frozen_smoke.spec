@@ -28,6 +28,7 @@ hiddenimports = [
     "secrets_store",
     "frozen_util",
     "gen_model_loader",
+    "prose_rhythm_scanner",            # path6：multi-call 自我再分派的真 scanner（纯 stdlib）
 ]
 
 datas = [
@@ -43,6 +44,7 @@ datas = [
     (os.path.join(SCRIPTS, "secrets_store.py"), "core/scripts"),
     (os.path.join(SCRIPTS, "frozen_util.py"), "core/scripts"),
     (os.path.join(SCRIPTS, "gen_model_loader.py"), "core/scripts"),
+    (os.path.join(SCRIPTS, "prose_rhythm_scanner.py"), "core/scripts"),  # path6 真 scanner
     # 🔴 绝不列任何 .env / 绝不 Tree 仓库根（防卷入开发者私钥·安全铁律）
 ]
 

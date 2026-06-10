@@ -124,22 +124,73 @@ def test_frozen_with_ruoyu_python_uses_bundled():
             os.environ["RUOYU_PYTHON"] = saved_env
 
 
-def test_frozen_without_env_falls_back_and_warns():
+def test_frozen_without_env_returns_exe_for_dispatch():
+    """方案 M：frozen 缺 RUOYU_PYTHON → 返 exe 本体（dispatcher 自我再分派·设计正道·
+    不再告警）。"""
     saved = getattr(sys, "frozen", False)
     saved_env = os.environ.get("RUOYU_PYTHON")
-    saved_warned = fu._warned
     sys.frozen = True
     os.environ.pop("RUOYU_PYTHON", None)
-    fu._warned = False
     try:
-        # 缺 env → 回退 sys.executable（暴露不静默·下一次调用不重复告警）
-        assert fu.child_python() == sys.executable
-        assert fu._warned is True
+        assert fu.child_python() == sys.executable      # exe 本体·dispatcher 接住
+        assert not hasattr(fu, "_warned")               # 告警机制已删（M 不告警）
     finally:
         sys.frozen = saved
-        fu._warned = saved_warned
         if saved_env is not None:
             os.environ["RUOYU_PYTHON"] = saved_env
+
+
+# ============ multi-call dispatcher（方案 M）============
+def test_is_script_dispatch_dev_never():
+    saved = getattr(sys, "frozen", False)
+    sys.frozen = False
+    try:
+        assert fu.is_script_dispatch(["exe", "core/scripts/x.py"]) is False  # dev 永不派发
+    finally:
+        sys.frozen = saved
+
+
+def test_is_script_dispatch_whitelist_and_guards():
+    import tempfile
+    saved_f = getattr(sys, "frozen", False)
+    saved_m = getattr(sys, "_MEIPASS", None)
+    meipass = tempfile.mkdtemp()
+    sdir = Path(meipass) / "core" / "scripts"
+    sdir.mkdir(parents=True)
+    (sdir / "prose_rhythm_scanner.py").write_text("x=1\n", encoding="utf-8")
+    sys.frozen = True
+    sys._MEIPASS = meipass
+    try:
+        good = str(sdir / "prose_rhythm_scanner.py")
+        assert fu.is_script_dispatch(["exe", good]) is True            # 白名单命中
+        assert fu.is_script_dispatch(["exe"]) is False                 # 裸跑→GUI
+        assert fu.is_script_dispatch(["exe", "--native"]) is False     # flag→GUI
+        assert fu.is_script_dispatch(["exe", "--port", "9000"]) is False
+        assert fu.is_script_dispatch(["exe", str(sdir / "ghost.py")]) is False  # 不存在
+        # 任意 bundle 外 .py（安全·非白名单根）→ False
+        outside = Path(meipass) / "evil.py"
+        outside.write_text("x=1", encoding="utf-8")
+        assert fu.is_script_dispatch(["exe", str(outside)]) is False
+    finally:
+        sys.frozen = saved_f
+        if saved_m is None:
+            try:
+                del sys._MEIPASS
+            except AttributeError:
+                pass
+        else:
+            sys._MEIPASS = saved_m
+        import shutil
+        shutil.rmtree(meipass, ignore_errors=True)
+
+
+def test_scripts_dir_dev_is_core_scripts():
+    saved = getattr(sys, "frozen", False)
+    sys.frozen = False
+    try:
+        assert fu.scripts_dir() == Path(__file__).resolve().parent.parent / "core" / "scripts"
+    finally:
+        sys.frozen = saved
 
 
 def test_no_bare_child_interpreter_anywhere_in_scripts():

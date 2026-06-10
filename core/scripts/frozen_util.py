@@ -26,8 +26,6 @@ import os
 import sys
 from pathlib import Path
 
-_warned = False
-
 # dev 仓库根：frozen_util 在 core/scripts/ → parents[2] = 仓库根
 _DEV_REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,22 +61,72 @@ def resource_path(*parts: str) -> Path:
     return bundle_root().joinpath(*parts)
 
 
+def scripts_dir() -> Path:
+    """core/scripts 目录（fan-out 脚本据此定位兄弟 scanner 子脚本）。
+
+    🔴 frozen-aware（对抗审查 FATAL 第三处）：audit_hub 等 6 个 fan-out 脚本原用
+    `Path(__file__).parent` 推算脚本目录——frozen 下被 PyInstaller 扁平收录后指向
+    `_internal/`（扁平），fan-out 传出 `_internal/X.py`（磁盘不存在·真 .py 经 datas 落
+    `_internal/core/scripts/`）→ multi-call dispatcher 白名单 miss → 落 GUI → 子进程
+    timeout 全挂。统一改用本函数：frozen=bundle_root()/core/scripts·dev=同值（脚本本就
+    在 core/scripts·与 Path(__file__).parent 逐字节一致）。
+    """
+    return bundle_root() / "core" / "scripts"
+
+
 def child_python() -> str:
-    """返回用于 fan-out 子进程的 python 解释器路径。
+    """返回用于 fan-out 子进程的 python 解释器路径（multi-call 方案 M）。
 
     dev → sys.executable（真 python.exe）。
-    frozen → RUOYU_PYTHON（随包 python）；缺失则回退 sys.executable + 一次性告警
-    （onedir 下 sys.executable 是 GUI 本体，子进程会重启 GUI——暴露不静默）。
+    frozen → RUOYU_PYTHON 优先（方案 B 逃生阀·临时指外部 python）；缺则返 exe 本体——
+    靠 ruoyu_gui/frozen_smoke 入口的 dispatcher 自我再分派（argv[1] 是 core/scripts 脚本就
+    进程内跑·见 dispatch_or_none）。**M 下「frozen+无 env+返 exe」是设计正道，不告警**。
     """
-    global _warned
     if not is_frozen():
         return sys.executable
     bundled = os.environ.get("RUOYU_PYTHON", "").strip()
     if bundled:
         return bundled
-    if not _warned:
-        _warned = True
-        print("[frozen_util] ⚠️ frozen 模式但未设 RUOYU_PYTHON——fan-out 子进程会重启 "
-              "GUI 本体而非跑脚本。打包时须 bundle python 并 set RUOYU_PYTHON。"
-              "（详见 PROGRAM_DRIVEN.md M4）", file=sys.stderr)
-    return sys.executable
+    return sys.executable          # ★方案M：exe 本体·dispatcher 再分派
+
+
+def is_script_dispatch(argv) -> bool:
+    """frozen multi-call：argv[1] 是否为 bundle 内 core/scripts(或 packaging) 下的受控 .py。
+
+    白名单制（合取硬条件·任一不满足即落 GUI·绝不误伤正常启动 / multiprocessing spawn）：
+      - is_frozen()（dev 永不派发·走真 python.exe）
+      - len(argv) >= 2（exe 裸跑 / exe --native → False）
+      - argv[1] 不以 '-' 开头（--native/--port/--multiprocessing-fork → False）
+      - argv[1] 以 .py 结尾
+      - 规范化后真落在 bundle_root()/core/scripts 或 /packaging 下且 .exists()
+        （白名单根·杜绝任意路径执行·天然排除 bundle 根的 ruoyu_gui.py 自身）
+    """
+    if not is_frozen() or len(argv) < 2:
+        return False
+    a1 = argv[1]
+    if not isinstance(a1, str) or a1.startswith("-") or not a1.endswith(".py"):
+        return False
+    try:
+        root = bundle_root()
+        cand = Path(a1)
+        target = cand.resolve() if cand.is_absolute() else (root / a1).resolve()
+        if not target.exists():
+            return False
+        allowed = ((root / "core" / "scripts").resolve(),
+                   (root / "packaging").resolve())
+        return any(ar in target.parents for ar in allowed)
+    except Exception:
+        return False
+
+
+def dispatch_or_none(argv):
+    """命中脚本派发 → 进程内跑该脚本并返回退出码；否则 None（调用方照常启 GUI）。
+
+    复用 orchestrator.run_script_in_process（与顶层脚本调用同一 importlib 内核·已 6/6 PASS）。
+    argv[1:] = [脚本路径, *args]。返回 int 退出码 or None。
+    """
+    if not is_script_dispatch(argv):
+        return None
+    import orchestrator  # 延迟 import：仅派发分支触达·不拖慢 GUI 冷启
+    return orchestrator.run_script_in_process(
+        argv[1:], repo_root=orchestrator.REPO_ROOT, label="fanout")

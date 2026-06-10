@@ -15,7 +15,7 @@ import argparse
 import json
 import subprocess
 import sys
-from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
 from pathlib import Path
 
 # 18 个 scanner 分级（按用户感知重要度）
@@ -188,7 +188,7 @@ def main():
     if intensity == "full_18":
         scanners.extend(SCAN_TIERS["full_18_extra"])
 
-    script_dir = Path(__file__).parent
+    script_dir = scripts_dir()
     # 2026-05-29 复审修复 [C4]：新增 findings（exit 2 严重发现，区别于 errors 真崩溃）
     summary = {"ran": 0, "skipped": 0, "errors": [], "findings": []}
     for sc in scanners:
