@@ -16,6 +16,31 @@ import orchestrator as orc  # noqa: E402
 import plan_tracker as pt  # noqa: E402
 
 
+def test_windows_path_survives_tokenize_roundtrip():
+    """🔴 Windows 路径 bug 回归（真 end-to-end 暴露）：{project_root} 解析成含反斜杠的
+    Windows 路径后，_tokenize_then_resolve 重组 + default_script_runner 二次 shlex.split
+    (posix=True) 不得把反斜杠当转义吃掉（C:\\Users → C:Users）。含反斜杠 token 须引号包裹。"""
+    winpath = r"C:\Users\ruoyu\AppData\Local\Temp\e2e_full"
+    cmd = orc._tokenize_then_resolve(
+        "python core/scripts/build_manifest.py {project_root} 1",
+        {"project_root": winpath})
+    assert '"' + winpath + '"' in cmd, f"含反斜杠路径未被引号包裹: {cmd}"
+    toks = orc._strip_python_prefix(cmd)
+    assert winpath in toks, f"二次 split 破坏了 Windows 路径反斜杠: {toks}"
+    # 含空格+反斜杠的 Windows 路径也要保住
+    sp = r"C:\Program Files\ruoyu data"
+    cmd2 = orc._tokenize_then_resolve("python x.py {project_root}", {"project_root": sp})
+    assert sp in orc._strip_python_prefix(cmd2), "含空格+反斜杠路径被破坏"
+
+
+def test_forward_slash_path_unquoted_still_works():
+    """非反斜杠路径（Unix/forward-slash）不受影响——token 正确。"""
+    up = "/home/user/proj"
+    cmd = orc._tokenize_then_resolve("python x.py {project_root} 1", {"project_root": up})
+    toks = orc._strip_python_prefix(cmd)
+    assert up in toks and "1" in toks
+
+
 # ============ 测试隔离：plan_tracker 目录全部指向临时区 ============
 class _Sandbox:
     """monkeypatch plan_tracker 模块常量 → 临时目录（不污染真实 plans/模板）。"""

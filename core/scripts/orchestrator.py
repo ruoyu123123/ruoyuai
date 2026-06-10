@@ -337,11 +337,14 @@ def _tokenize_then_resolve(line: str, ctx: dict) -> str:
                 cleaned.pop()
             continue
         cleaned.append(t)
-    # 含空格的 token 重新加引号（subprocess 走 list 不走 shell，这里只为日志可读 +
-    # default_script_runner 的二次 shlex.split 不破坏）
+    # 含空格**或反斜杠**的 token 重新加引号——🔴 Windows 路径 bug 修复（真 end-to-end
+    # 暴露）：default_script_runner 的二次 shlex.split(posix=True) 会把裸 Windows 路径的反斜杠
+    # 当转义吃掉（C:\Users\ruoyu → C:Usersruoyu，\U/\A 等被消解）。双引号包裹后 posix shlex
+    # 在双引号内保留这些反斜杠（实证：`"C:\Users"` → `C:\Users`），跨 frozen/dev 都修。
     out = []
     for t in cleaned:
-        out.append(f'"{t}"' if (" " in t and not t.startswith('"')) else t)
+        needs_quote = (" " in t or "\\" in t) and not t.startswith('"')
+        out.append(f'"{t}"' if needs_quote else t)
     return " ".join(out)
 
 
