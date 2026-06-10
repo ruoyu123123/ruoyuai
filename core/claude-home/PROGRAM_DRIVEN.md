@@ -145,6 +145,26 @@ MAPE-K runtime（self_heal/adaptive·incidents/kb/circuit/runtime_lessons·clust
 / wal_recovery 引 plan_tracker.GLOBAL_PLANS_DIR 归一）。**frozen 路径双面闭合**：只读 `bundle_root()`
 + 可写 `user_data_dir()`。守卫 `test_frozen_util`（18·含 user_data_dir/writable 锚点）。
 
+### 🎉 真 GUI exe 端到端写一章（已证 · 2026-06-10 · 用户授权 API）
+
+**真 GUI onedir exe + BYOK keyring 密钥 → 写出真实连贯一章**（用户选「端到端真写一章」授权 gen-model
+API）。链路全程真二进制：`ruoyu_gui.exe core/scripts/gen_writer.py --project <copy> --cluster 1`
+→ dispatch 进程内跑 → build_manifest 读全子系统+lessons → 组装 60k 字 prompt（system 39628 +
+user 20301）→ 调 gemini_pro_preview → 收 5641 chars → 存 `章节/cluster_001_draft.txt`（3619 CJK·
+辰东风格《凿窍纪》真实正文：重黎/断天者/天梯绝顶/法则纹理）+ changes.json·EXIT=0 无 Traceback。
+
+**真二进制 end-to-end 抓出 2 个单测/模拟测不出的真实情况**：
+1. 🔴 **UTF-8 dispatch bug**（已修）：frozen Windows exe stdout 默认 GBK → dispatch 脚本 print
+   emoji（prompt 里的 🔴）UnicodeEncodeError 崩。三道纵深 reconfigure UTF-8（ruoyu_gui 最早 +
+   dispatch_or_none + run_script_in_process·frozen-gated）。prose_rhythm dispatch 没暴露因中文 GBK
+   可编码·emoji 不行。
+2. ✅ **BYOK 强制正确**（设计意图非 bug）：frozen 下 run_script_in_process chdir 到 `_MEIPASS`，
+   gen_model_loader `cwd/.env` 查到 bundle 内（无 .env·安全）→ 内置 config（无密钥）→ keyring。
+   用户须经 GUI 录 key 进 keyring（DPAPI）→ gen_writer 读到。**不泄漏开发者 .env 私钥**。验证时模拟
+   GUI 录入（key→keyring·`secrets_store.set_api_key`）后写成功·测毕删除恢复机器状态。
+
+`packaging/validate_gui_exe.py` + 本次 end-to-end = **整条程序驱动写作主轨在真分发 exe 验证可用**。
+
 ### 一键构建验证 runbook
 
 `python packaging/build_all.py`（清理 → 构建 frozen_smoke + ruoyu_gui onedir → 跑 frozen_smoke.exe
