@@ -259,7 +259,7 @@ def plans_page():
 def settings_page():
     _header("设置")
     from core.gui.runner import (save_api_key, clear_api_key, profile_key_status,
-                                  test_profile_connection)
+                                  test_profile_connection, switch_active)
     try:
         data = list_profiles_masked()
     except Exception as e:
@@ -271,8 +271,22 @@ def settings_page():
     if not data.get("keyring_available", True):
         ui.label("⚠️ 本机安全存储不可用——密钥将无法保存，请联系支持。")\
             .classes("text-sm text-red-600").mark("keyring-unavailable")
-    ui.label(f"当前使用 profile：{data['active'] or '（未设置）'}")\
-        .classes("font-bold").mark("active-profile")
+
+    # 切换当前使用的模型（dev 改 .env / 分发版写用户态覆盖·不碰只读内置 config）
+    with ui.row().classes("items-center gap-2"):
+        ui.label("当前模型").classes("font-bold").mark("active-profile")
+        names = [p["name"] for p in data["profiles"]] or [data["active"]]
+        active_sel = ui.select(options=names, value=data["active"] or None)\
+            .mark("active-select")
+
+        def _switch():
+            v = active_sel.value
+            if v and switch_active(v):
+                ui.notify(f"已切换到 {v}", type="positive")
+                _render()
+            else:
+                ui.notify("切换失败", type="negative")
+        active_sel.on_value_change(lambda e: _switch())
 
     rows_holder = ui.column().classes("w-full gap-2")
 

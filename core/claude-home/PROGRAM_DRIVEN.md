@@ -58,11 +58,30 @@
 httpx）的异常 str() 必经 `redact()` 再抛（否则经 stderr→GUI LogBuffer→界面泄漏）。
 
 测试：`test_secrets_store(11)`/`test_loader_precedence(7·含 dev 零回归基线)`/
-`tests/gui/test_gui_settings(7·整链端到端+redact 守卫)`。内存 keyring 后端不碰真
-Credential Manager。**残留**：① 非密 config 分离（删 .env 后从内置 `gen_profiles.default.env`
-组装·key 留空走 keyring）② PyInstaller spec（`--collect-submodules keyring` +
-`--hidden-import keyring.backends.Windows.WinVaultKeyring` + datas 白名单排除 .env + CI
-`grep sk- dist/` 闸）③ 真 onedir 冒烟（dev 无法验 frozen keyring 退化）。
+`tests/gui/test_gui_settings(8·整链端到端+redact 守卫)`。内存 keyring 后端不碰真
+Credential Manager。
+
+### 非密 config 分离（step5 · 已做 · 2026-06-10）
+
+分发版不带 `.env`（含开发者私钥）。新增内置非密 config `core/config/gen_profiles.default.env`
+（沿用 .env 文本格式·**无任何 `GEN__*__API_KEY` 行**——留空行会被 `load_dotenv(override=True)`
+刷 `''` 打断 environ 注入）。
+
+| 机制 | 实现 |
+|---|---|
+| loader 三级回落 | `gen_model_loader.__init__`：cwd/.env → 仓库根 .env → **内置 config（分发模式）**。`_dist_mode` 按「解析出的 env_path == builtin_cfg」判定（显式传也进 dist·测试生产口径统一） |
+| 模式语义 | 「.env 存在 = dev 单一来源」「.env 不存在 = 分发模式 = 内置 config + keyring」。dev 零回归（有 .env 逐字节不变） |
+| 用户切 active | `gen_model.set_active`/`runner.switch_active`：dev → 原子改写 .env；dist → 写 `%APPDATA%/ruoyuai/user_overrides.env`（`_user_override_path()`·仅 ACTIVE/FALLBACK 两键·绝不碰只读内置 config）。`__init__` dist 模式叠加 user_override（`load_dotenv override=True`·用户选的 active 赢） |
+| frozen 定位 | `Path(__file__).resolve().parent.parent/"config"`·dev 与 onedir 同式命中（**禁 onefile**·否则需读 `sys._MEIPASS`） |
+
+测试：`test_config_split(7·无密钥硬闸/dist回落/keyring供key/user_override切active/set_active dev-dist/dev零回归)`。
+
+**残留（step6 · 打包阶段 · dev 无法验 frozen）**：PyInstaller spec 必含——
+`--collect-submodules keyring` + `--hidden-import keyring.backends.Windows.WinVaultKeyring`
+（onedir entry_points 元数据丢→退化 fail backend→get 永 None）；datas
+`('core/config/gen_profiles.default.env','core/config')` dest 逐字对齐 + 白名单**排除真 .env**；
+CI `grep -r sk- dist/` 闸（防 .env 误打包）；干净 Win11 真 set/get + cluster-write 端到端
+冒烟（按 `feedback_verify_stderr_not_exitcode` 用 PowerShell 复验 stderr 无 Traceback）。
 
 ## 图形界面（脱离 Claude CLI · 2026-06-10）
 

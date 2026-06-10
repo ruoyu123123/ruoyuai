@@ -75,6 +75,34 @@ def cmd_show(args, loader: GenModelLoader) -> int:
     return 0
 
 
+def set_active(loader: GenModelLoader, name: str) -> None:
+    """切 active profile：dev → 原子改写 .env 的 GEN_MODEL_ACTIVE；
+    dist（_dist_mode）→ 写 %APPDATA%/ruoyuai/user_overrides.env（绝不碰只读内置 config）。
+
+    GUI runner 复用本函数。抛 ValueError/RuntimeError 由调用方处理。
+    """
+    from gen_model_loader import _user_override_path
+    if getattr(loader, "_dist_mode", False):
+        ovr = _user_override_path()
+        ovr.parent.mkdir(parents=True, exist_ok=True)
+        chain = ",".join(loader.get_fallback_chain())
+        lines = [f"GEN_MODEL_ACTIVE={name}"]
+        if chain:
+            lines.append(f"GEN_MODEL_FALLBACK_CHAIN={chain}")
+        ovr.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+    # dev：原子改写 .env 文本
+    env_path = loader.env_path
+    text = env_path.read_text(encoding="utf-8")
+    new_text, n = re.subn(r"^GEN_MODEL_ACTIVE\s*=.*$",
+                          f"GEN_MODEL_ACTIVE={name}", text, count=1,
+                          flags=re.MULTILINE)
+    if n == 0:
+        # 无 ACTIVE 行（极少）→ 追加一行
+        new_text = text.rstrip("\n") + f"\nGEN_MODEL_ACTIVE={name}\n"
+    env_path.write_text(new_text, encoding="utf-8")
+
+
 def cmd_switch(args, loader: GenModelLoader) -> int:
     target = args.name
     p = loader.get_profile(target)
@@ -88,20 +116,7 @@ def cmd_switch(args, loader: GenModelLoader) -> int:
         print(f"[WARN] profile '{target}' 还未填 API_KEY，切换后调用会报错",
               file=sys.stderr)
 
-    env_path = loader.env_path
-    text = env_path.read_text(encoding="utf-8")
-    new_text, n = re.subn(
-        r"^GEN_MODEL_ACTIVE\s*=.*$",
-        f"GEN_MODEL_ACTIVE={target}",
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-    if n == 0:
-        print("[ERROR] .env 中未找到 GEN_MODEL_ACTIVE 字段，无法切换", file=sys.stderr)
-        return 2
-
-    env_path.write_text(new_text, encoding="utf-8")
+    set_active(loader, target)
     print(f"[OK] active = {target} ({p.model} @ {p.base_url})")
     return 0
 

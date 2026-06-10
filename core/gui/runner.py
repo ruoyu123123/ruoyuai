@@ -167,6 +167,21 @@ def profile_key_status(name: str) -> bool:
     return secrets_store.has_api_key(name)
 
 
+def switch_active(name: str) -> bool:
+    """切 active 模型：dev 改 .env / dist 写 %APPDATA% user_overrides（绝不碰只读 config）。"""
+    from gen_model_loader import GenModelLoader, reset_default_loader
+    from gen_model import set_active
+    try:
+        loader = GenModelLoader()
+        if loader.get_profile(name) is None:
+            return False
+        set_active(loader, name)
+        reset_default_loader()
+        return True
+    except Exception:
+        return False
+
+
 def _classify_conn_err(e: Exception) -> str:
     """异常归人话 + 脱敏（gemini key 在 URL·绝不回显·must_fix#2/#3）。"""
     import secrets_store

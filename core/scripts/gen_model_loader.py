@@ -84,18 +84,34 @@ class GenModelLoader:
     """
 
     def __init__(self, env_path: str | Path | None = None):
+        builtin_cfg = (Path(__file__).resolve().parent.parent
+                       / "config" / "gen_profiles.default.env")
         if env_path is None:
-            # 优先 cwd/.env，其次脚本同级仓库根 .env
+            # 优先 cwd/.env，其次脚本同级仓库根 .env，最后内置非密 config（分发模式）。
             cwd_env = Path(".env")
+            repo_env = Path(__file__).resolve().parent.parent.parent / ".env"
             if cwd_env.exists():
-                env_path = cwd_env
+                env_path = cwd_env                      # ① dev cwd（逐字节不变）
+            elif repo_env.exists():
+                env_path = repo_env                     # ② 仓库根（逐字节不变）
             else:
-                env_path = Path(__file__).parent.parent.parent / ".env"
+                env_path = builtin_cfg                  # ③ 内置非密 config（分发模式）
         self.env_path = Path(env_path)
-        # 显式加载 .env 到 os.environ
+        # _dist_mode 按「最终解析出的 env_path == 内置 config」判定（must_fix#2）——
+        # 显式传 builtin_cfg 路径也正确进入分发态，测试与生产口径统一。
+        try:
+            self._dist_mode = self.env_path.resolve() == builtin_cfg.resolve()
+        except OSError:
+            self._dist_mode = False
+        # 显式加载 config 到 os.environ（GEN_MODEL_ACTIVE/FALLBACK 经此进 environ）
         try:
             from dotenv import load_dotenv
             load_dotenv(self.env_path, override=True)
+            # 分发模式：叠加用户态 active 覆盖（仅 GEN_MODEL_ACTIVE/FALLBACK_CHAIN 两键）
+            if self._dist_mode:
+                _ovr = _user_override_path()
+                if _ovr.exists():
+                    load_dotenv(_ovr, override=True)    # 用户选的 active 赢
         except ImportError:
             pass  # 没有 dotenv 也行（loader 直接读文件解析）
         self._profiles_cache: dict[str, Profile] | None = None
@@ -221,6 +237,16 @@ class GenModelExhaustedError(Exception):
 
 
 # ============ 便捷函数 ============
+
+def _user_override_path() -> Path:
+    """分发版用户态可写 active 覆盖文件（%APPDATA%/ruoyuai/user_overrides.env）。
+
+    切 active 模型时写这里（仅 GEN_MODEL_ACTIVE/FALLBACK_CHAIN 两键），绝不碰只读的
+    内置 config（_internal/core/config/）。dev 模式不用此文件（改 .env）。
+    """
+    base = os.environ.get("APPDATA") or str(Path.home() / ".ruoyuai")
+    return Path(base) / "ruoyuai" / "user_overrides.env"
+
 
 _default_loader: GenModelLoader | None = None
 

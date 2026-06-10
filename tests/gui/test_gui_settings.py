@@ -110,3 +110,9 @@ async def test_keyring_unavailable_banner(user, byok_env, monkeypatch):
     monkeypatch.setattr(ss, "is_available", lambda: False)
     await user.open("/settings")
     await user.should_see(marker="keyring-unavailable")
+
+
+async def test_active_selector_renders(user, byok_env):
+    """设置页有切模型下拉（后端 switch_active 逻辑由 test_config_split 堅牢覆盖）。"""
+    await user.open("/settings")
+    await user.should_see(marker="active-select")
