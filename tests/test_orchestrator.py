@@ -529,6 +529,92 @@ def test_prime_cluster_context_from_prev_range():
         assert ctx["<prev_pending_tail>"].endswith("cluster_001_pending_tail.txt")
 
 
+# ============ frozen in-process runner（根因 F）+ mojibake env（根因 H） ============
+def test_default_runner_dev_passes_utf8_env(monkeypatch=None):
+    """dev 子进程必须传 PYTHONIOENCODING=utf-8（GBK Windows 防日志乱码·根因 H）。"""
+    import subprocess as sp
+    captured = {}
+
+    def _fake_run(full, **kw):
+        captured["env"] = kw.get("env")
+
+        class _P:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _P()
+
+    saved = sp.run
+    saved_frozen = getattr(sys, "frozen", False)
+    sys.frozen = False
+    orc.subprocess.run = _fake_run
+    try:
+        rc = orc.default_script_runner("python core/scripts/x.py --a 1")
+    finally:
+        orc.subprocess.run = saved
+        sys.frozen = saved_frozen
+    assert rc == 0
+    assert captured["env"]["PYTHONIOENCODING"] == "utf-8"
+    assert captured["env"]["PYTHONUTF8"] == "1"
+
+
+def test_frozen_uses_in_process_runner_not_subprocess():
+    """frozen 时 default_script_runner 走进程内 runner（不起子进程·根因 F）。"""
+    saved_frozen = getattr(sys, "frozen", False)
+    calls = {"subprocess": 0, "inproc": 0}
+
+    def _fake_run(*a, **k):
+        calls["subprocess"] += 1
+
+        class _P:
+            returncode = 0
+            stdout = stderr = ""
+        return _P()
+
+    def _fake_inproc(tokens, **kw):
+        calls["inproc"] += 1
+        return 0
+
+    saved_sp = orc.subprocess.run
+    saved_ip = orc.run_script_in_process
+    sys.frozen = True
+    orc.subprocess.run = _fake_run
+    orc.run_script_in_process = _fake_inproc
+    try:
+        orc.default_script_runner("python core/scripts/x.py")
+    finally:
+        orc.subprocess.run = saved_sp
+        orc.run_script_in_process = saved_ip
+        sys.frozen = saved_frozen
+    assert calls["inproc"] == 1 and calls["subprocess"] == 0
+
+
+def test_run_script_in_process_calls_main_and_captures_systemexit():
+    """进程内 runner 真 import 有 main() 的脚本、调 main()、捕 SystemExit 取退出码、
+    还原 argv（证明 frozen 机制可用·无需建 exe）。cluster_choice_apply.py 有 main()，
+    缺参 → argparse SystemExit(2)。"""
+    saved_argv = list(sys.argv)
+    rc = orc.run_script_in_process(["core/scripts/cluster_choice_apply.py"],
+                                   repo_root=orc.REPO_ROOT, label="t")
+    assert rc == 2                       # argparse 缺必填参 → SystemExit(2)
+    assert sys.argv == saved_argv        # 退出后 argv 必还原（不污染后续步）
+
+
+def test_run_script_in_process_no_main_returns_3():
+    """无 main() 的脚本（cluster_lookup 用 inline __main__ 自测）→ 返回 3 明确失败，
+    不静默成功。"""
+    rc = orc.run_script_in_process(["core/scripts/cluster_lookup.py"],
+                                   repo_root=orc.REPO_ROOT, label="t")
+    assert rc == 3
+
+
+def test_run_script_in_process_import_fail_returns_3():
+    rc = orc.run_script_in_process(["core/scripts/__nonexistent_xyz.py"],
+                                   repo_root=orc.REPO_ROOT, label="t")
+    assert rc == 3
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

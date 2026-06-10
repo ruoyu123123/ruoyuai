@@ -43,6 +43,29 @@
 | `steps[].after_pause_scripts` | 选择落定后的确定性后续（cluster_choice_apply 写回） | |
 | `steps[].touch_outputs` | 标记文件（多轮产物文件名可变时的存在性代理） | |
 
+## 图形界面（脱离 Claude CLI · 2026-06-10）
+
+NiceGUI 桌面/浏览器界面，直接驱动 orchestrator——非技术用户无需 Claude CLI。
+
+| 文件 | 职责 |
+|---|---|
+| `ruoyu_gui.py` | 启动器（`multiprocessing.freeze_support()` 首句 · UTF-8 reconfigure） |
+| `core/gui/state.py` | 纯逻辑（零 nicegui）：`AppState` / `PauseBridge`（req_id 代际令牌防多 tab 抢答）/ `StderrTee`+`LogBuffer`（日志捕获）/ `scan_project`（项目进度 + 下一步推断） |
+| `core/gui/runner.py` | 纯逻辑：`PipelineRunner` 工作线程驱动 `orchestrator.run_command`，与 UI 走 `AppState`+`PauseBridge` 解耦 |
+| `core/gui/app.py` | 唯一 import nicegui：写作台（项目/一键写故事块·保存·连跑/实时日志/走向卡 awaitable dialog）+ Plan 续跑页 + 设置页 |
+
+启动：`python ruoyu_gui.py`（浏览器）/ `--native`（桌面窗口·需 pywebview）。
+
+**官方成熟模式（复用减少排错）**：走向卡 = awaitable `ui.dialog().submit()` + 后台任务解耦；
+日志 = `ui.log` + `LogBuffer` 单调游标（**per-client 闭包游标**，非共享）；长任务 = 工作线程 +
+`ui.timer(0.5)` 轮询；走向卡停顿 = `PauseBridge`（threading.Event 桥 + req_id 防陈旧/串台应答）。
+
+**北极星③**：走向卡默认必弹卡等用户，`auto_pilot` 是显式开关（默认 False）；超时/被抢答的
+陈旧卡由 `_tick` 主动回收，迟到点击被桥 req_id 校验拒绝——绝不静默替用户选剧情走向。
+
+测试：`tests/test_gui_state.py`（28·逻辑）/ `tests/gui/test_gui_user.py`（10·NiceGUI 官方 User
+模拟 UI）。boot smoke 实测服务器起得来且对外服务。
+
 ## 用法
 
 ```bash
@@ -81,9 +104,13 @@ python core/scripts/judge_runner.py novel-summarizer workspace/novels/书名 \
 
 1. **judge「Claude 过 ≠ gen-model 过」**：8 个 judge 的金标准对比重测（真作者原文当输入，
    对比 JudgeReport 字段完整性 + 作者档维度引用）尚未跑——M2 验证里程碑。
-2. **frozen exe**：plan scripts[] 的 `python` 前缀 + 脚本内部 `sys.executable` fan-out
-   （audit_hub/gen_fixer/evolution_orchestrator）在 onedir 无 python.exe 下不可用——
-   script_runner 注入点已预留，进程内 import runner 是 M4 工作。
+2. **frozen exe（部分就绪）**：`orchestrator.default_script_runner` 已 frozen-aware——
+   `getattr(sys,'frozen')` 时走 `run_script_in_process`（进程内 importlib 调脚本 main()，
+   不起子进程·已测）。dev 子进程路径强制传 `PYTHONIOENCODING=utf-8`+`PYTHONUTF8=1`
+   治 GBK 日志乱码。**残留 M4**：脚本**内部** `sys.executable` fan-out（`audit_hub` 并行
+   13 scanner / `gen_fixer` / `evolution_orchestrator`）在 onedir 下仍会重启 GUI 本体——
+   这些需同样改进程内调用，且必须用真 onedir 产物端到端验证（dev 无法验 frozen）。
+   在该项完成前，打包版的 cluster-write step3（audit）等会失败。
 3. **深 schema judge**（validator-checker 16 维 / outline-planner 3 模式）在 reasoning
    模型上的截断率需实测；必要时拆分多次调用。
 

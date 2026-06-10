@@ -204,24 +204,98 @@ def prime_cluster_context(ctx: dict, project_root: Path, key: str | None):
 
 
 # ============ 脚本执行 ============
-def default_script_runner(cmd_line: str, *, repo_root: Path = REPO_ROOT,
-                          label: str = "step") -> int:
-    """dev 模式 script runner：剥 'python ' 前缀 → [sys.executable, ...] 子进程。
-
-    frozen exe 模式（M4）换成进程内 importlib 调 main(argv) 的 runner——onedir 里
-    没有 python.exe，sys.executable 是 GUI 本体（对抗审查头号致命项）。本函数是
-    唯一注入点，orchestrator 主体不感知执行方式。
-    """
+def _strip_python_prefix(cmd_line: str) -> list[str]:
     tokens = shlex.split(cmd_line, posix=True)
     if tokens and tokens[0] in ("python", "python3", "py"):
         tokens = tokens[1:]
+    return tokens
+
+
+def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
+                          label: str = "step") -> int:
+    """frozen-safe：进程内 importlib 跑脚本（不起子进程）。
+
+    onedir exe 里没有 python.exe，sys.executable 是 GUI 本体——subprocess 会重启 GUI
+    而非跑目标脚本（对抗审查头号致命项 F）。frozen 下走本函数：import 脚本模块、
+    临时改 sys.argv/cwd 调 module.main()、捕 SystemExit 取退出码。
+
+    脚本 print 走 sys.stderr（已被 GUI StderrTee 接管）→ 日志照常流入 UI。
+    脚本须有 main()（本库脚本一致满足）。共享解释器状态（sys.argv/cwd/单例）用
+    try/finally 还原，避免步间污染。
+    """
+    import importlib
+    import os as _os
+
     if not tokens:
         return 0
+    script_path = Path(tokens[0])
+    if not script_path.is_absolute():
+        script_path = repo_root / tokens[0]
+    mod_name = script_path.stem
+    argv = [str(script_path)] + tokens[1:]
+    print(f"[orchestrator][{label}] (in-process) {mod_name} {' '.join(tokens[1:])}",
+          file=sys.stderr)
+
+    saved_argv, saved_cwd = sys.argv, _os.getcwd()
+    sys.argv = argv
+    try:
+        try:
+            _os.chdir(str(repo_root))
+        except OSError:
+            pass
+        if str(_SCRIPTS) not in sys.path:
+            sys.path.insert(0, str(_SCRIPTS))
+        mod = importlib.import_module(mod_name)
+        main_fn = getattr(mod, "main", None)
+        if main_fn is None:
+            print(f"[orchestrator][{label}] 脚本 {mod_name} 无 main()，frozen 下无法进程内调用",
+                  file=sys.stderr)
+            return 3
+        try:
+            ret = main_fn()
+        except SystemExit as e:           # 脚本用 sys.exit() 退出
+            ret = e.code
+        return int(ret) if isinstance(ret, int) else (0 if ret is None else 3)
+    except Exception as e:                # 脚本内部异常 → 当失败退出码（不崩 GUI）
+        import traceback
+        print(f"[orchestrator][{label}] in-process 脚本异常: {type(e).__name__}: {e}",
+              file=sys.stderr)
+        for line in traceback.format_exc().splitlines()[-6:]:
+            print(f"[orchestrator][{label}]   {line}", file=sys.stderr)
+        return 3
+    finally:
+        sys.argv = saved_argv
+        try:
+            _os.chdir(saved_cwd)
+        except OSError:
+            pass
+
+
+def default_script_runner(cmd_line: str, *, repo_root: Path = REPO_ROOT,
+                          label: str = "step") -> int:
+    """script runner：dev 走子进程；frozen exe 走进程内 importlib（无 python.exe）。
+
+    本函数是唯一注入点，orchestrator 主体不感知执行方式（GUI/CLI 都用它）。
+    """
+    tokens = _strip_python_prefix(cmd_line)
+    if not tokens:
+        return 0
+
+    # frozen onedir：没有 python.exe，subprocess 会重启 GUI 本体 → 进程内跑（finding F）
+    if getattr(sys, "frozen", False):
+        return run_script_in_process(tokens, repo_root=repo_root, label=label)
+
+    # dev：子进程。强制子进程 UTF-8 输出（GBK Windows 上 pipe 默认 locale 编码=gbk，
+    # 父进程按 utf-8 解码 → 中文/emoji 全乱码进 GUI 日志·finding H）。
+    import os as _os
+    env = dict(_os.environ)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
     full = [sys.executable] + tokens
     print(f"[orchestrator][{label}] $ {' '.join(tokens)}", file=sys.stderr)
     proc = subprocess.run(full, cwd=str(repo_root), capture_output=True,
                           text=True, encoding="utf-8", errors="replace",
-                          timeout=SCRIPT_TIMEOUT)
+                          timeout=SCRIPT_TIMEOUT, env=env)
     if proc.stdout:
         sys.stderr.write(proc.stdout[-4000:])
     if proc.stderr:
@@ -354,6 +428,7 @@ def run_command(command: str, project: str, *, key: str | None = None,
                 judge_dispatch=None,
                 pause_handler=None,
                 pause_stops_run: bool = True,
+                step_callback=None,
                 repo_root: Path = REPO_ROOT) -> RunSummary:
     """跑一个命令的完整 plan 流水线（或从 resume_plan_id 断点续跑）。
 
@@ -379,12 +454,18 @@ def run_command(command: str, project: str, *, key: str | None = None,
     summary = RunSummary(plan_id=plan_id, command=command)
     steps = sorted(plan.get("steps", []), key=lambda s: float(s.get("n", 0)))
 
+    total_steps = len(steps)
     for step in steps:
         n, name = step.get("n"), step.get("name", "")
         if step.get("status") == pt.STATUS_COMPLETED:
             summary.completed.append(StepOutcome(n, name, "skipped", "断点续跑跳过"))
             continue
         print(f"\n[orchestrator] ▶ step {n}: {name}", file=sys.stderr)
+        if step_callback:
+            try:
+                step_callback(n, name, total_steps)
+            except Exception:
+                pass  # 观察者回调绝不打断流水线
 
         # 1)+2) scripts[]（data_flow 按行 lazy 解析——同 step 内脚本产物互喂）
         for raw_line in (step.get("scripts") or []):
