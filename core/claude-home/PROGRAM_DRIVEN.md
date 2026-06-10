@@ -76,12 +76,31 @@ Credential Manager。
 
 测试：`test_config_split(7·无密钥硬闸/dist回落/keyring供key/user_override切active/set_active dev-dist/dev零回归)`。
 
-**残留（step6 · 打包阶段 · dev 无法验 frozen）**：PyInstaller spec 必含——
-`--collect-submodules keyring` + `--hidden-import keyring.backends.Windows.WinVaultKeyring`
-（onedir entry_points 元数据丢→退化 fail backend→get 永 None）；datas
-`('core/config/gen_profiles.default.env','core/config')` dest 逐字对齐 + 白名单**排除真 .env**；
-CI `grep -r sk- dist/` 闸（防 .env 误打包）；干净 Win11 真 set/get + cluster-write 端到端
-冒烟（按 `feedback_verify_stderr_not_exitcode` 用 PowerShell 复验 stderr 无 Traceback）。
+### PyInstaller 打包 step6 阶段A（frozen 架构 de-risk · 已验 · 2026-06-10）
+
+**真 PyInstaller onedir exe 实测验证 6 条 dev 无法验的 frozen 路径全过**（`packaging/frozen_smoke.exe` EXIT=0·6/6 PASS·无 Traceback·`_internal` 33MB·torch 排净·dist 无 .env）。
+
+🔴 **修了一个 FATAL 生产 bug**（dev-no-op 测不出·真 GUI exe 必撞）：PyInstaller 扁平收模块使
+`gen_model_loader`/`orchestrator` 的 `Path(__file__).parent.parent` 推算在 frozen 下指错 →
+config 第三级回落 + REPO_ROOT 脚本解析全失败。修复 = 派生项目路径的模块改用
+`frozen_util.bundle_root()`（frozen=`sys._MEIPASS`·dev=仓库根·`resource_path()` 派生）；
+`gen_model_loader` builtin_cfg 改 bundle_root 定位 + frozen 跳过 dev repo_env；
+`orchestrator.REPO_ROOT` 改 bundle_root。
+
+已验：① `run_script_in_process` 进程内 importlib 在 frozen 工作（正例+无main负例+import-fail负例）
+② `child_python`+RUOYU_PYTHON 解析 ③ `secrets_store` WinVault set→get→delete 真回环
+④ config 第三级回落经 `_MEIPASS` 命中 `_internal/core/config/` ⑤ REPO_ROOT==`_MEIPASS`。
+敌对验证：移走 config → path4 正确 FAIL（harness 非橡皮图章）。
+spec 关键：`hiddenimports` 列项目模块（FrozenImporter 只认 PYZ）+ keyring.backends.Windows/fail/null
++ win32ctypes + dotenv；`excludes` torch/sentence_transformers/transformers/scipy/numpy/nicegui；
+`datas` config + 脚本 .py（dest `core/config`/`core/scripts`·逐字对齐 bundle_root 推算）·**绝不列 .env**。
+测试 `test_packaging_frozen_smoke(6·dev 守卫)` + `test_frozen_util` bundle_root frozen-aware。
+
+**残留 step6 阶段B（全 GUI onedir · 下轮）**：① ruoyu_gui.py 完整 spec（NiceGUI 静态资源
+datas + 全 127 脚本 + .claude/agents/*.md + plans/*.json + jiter/tiktoken hidden-import）
+② **真 bundle 精简 python + set RUOYU_PYTHON**（fan-out 子进程 audit_hub 21 scanner 需真解释器
+import numpy/scipy·embeddable python 能否 import C 扩展是最大未知·须单独 spike）③ 干净 Win11
+端到端 cluster-write + GUI 录 key 真机冒烟（PowerShell 复验 stderr·`feedback_verify_stderr_not_exitcode`）。
 
 ## 图形界面（脱离 Claude CLI · 2026-06-10）
 
