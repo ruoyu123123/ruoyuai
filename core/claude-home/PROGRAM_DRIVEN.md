@@ -96,11 +96,30 @@ spec 关键：`hiddenimports` 列项目模块（FrozenImporter 只认 PYZ）+ ke
 `datas` config + 脚本 .py（dest `core/config`/`core/scripts`·逐字对齐 bundle_root 推算）·**绝不列 .env**。
 测试 `test_packaging_frozen_smoke(6·dev 守卫)` + `test_frozen_util` bundle_root frozen-aware。
 
-**残留 step6 阶段B（全 GUI onedir · 下轮）**：① ruoyu_gui.py 完整 spec（NiceGUI 静态资源
-datas + 全 127 脚本 + .claude/agents/*.md + plans/*.json + jiter/tiktoken hidden-import）
-② **真 bundle 精简 python + set RUOYU_PYTHON**（fan-out 子进程 audit_hub 21 scanner 需真解释器
-import numpy/scipy·embeddable python 能否 import C 扩展是最大未知·须单独 spike）③ 干净 Win11
-端到端 cluster-write + GUI 录 key 真机冒烟（PowerShell 复验 stderr·`feedback_verify_stderr_not_exitcode`）。
+### PyInstaller step6 frozen fan-out（方案 M multi-call · 已验 · 2026-06-10）
+
+🔴 **「最大未知量」消除**：勘察证 cluster-write 质检 17 个 scanner **全是纯 Python**（仅 advisory 的
+`style_evaluator` 用 numpy/scipy）→ 采 **multi-call 二进制**方案——GUI exe 兼当 fan-out 解释器，
+**完全不需 bundle 独立 python**（绕开 embeddable-python-C-扩展兔子洞）。
+
+- `frozen_util.is_script_dispatch(argv)` / `dispatch_or_none(argv)`：白名单 dispatcher（argv[1] 在
+  `bundle_root()/core/scripts` 或 `/packaging` 下且 `.exists()` 才派发·绝不误伤 GUI 启动/spawn）。
+- `ruoyu_gui.py` + `frozen_smoke.py` 入口共享：exe 收 `[exe, core/scripts/X.py, args]`（audit_hub
+  fan-out 形态）→ `run_script_in_process` 进程内跑 → 带退出码退出·不启 GUI。
+- `child_python()` frozen 无 RUOYU_PYTHON → 返 exe 本体（dispatcher 接住·设计正道·去掉旧告警）。
+- 🔴 **FATAL 第三处修复**：`audit_hub` 等 6 个 fan-out 脚本 `_SCRIPT_DIR = Path(__file__).parent`
+  在 frozen 扁平后传出 `_internal/X.py`（磁盘不存在）→ 统一改 `frozen_util.scripts_dir()`
+  （frozen=`bundle_root()/core/scripts`·dev 同值）。
+
+**真 onedir exe 实测 7/7 PASS**（path6 = `[exe, prose_rhythm_scanner.py, draft]` → exe 自我再分派 →
+scanner JSON + 退出码透传·与 audit_hub fan-out 同款路径构造）。exe 级敌对：`exe cluster_lookup.py`
+→ exit 3（无 main 契约）。`_internal` 仍 33MB（无第二 python）。
+
+**残留 step6 阶段B（全 GUI onedir · 下轮）**：① `ruoyu_gui.py` 完整 spec（NiceGUI 静态资源 datas
++ 全 127 脚本 + `.claude/agents/*.md` + `plans/*.json` + jiter/tiktoken/keyring hidden-import）
+② **numpy/scipy 收进 exe**（给 style_evaluator·multi-call 下在 exe 进程内 import·非外部解释器）
++ style_evaluator import try/except advisory 降级兜底 ③ 干净 Win11 端到端 cluster-write + GUI 录 key
+真机冒烟（PowerShell 复验 stderr·`feedback_verify_stderr_not_exitcode`）。
 
 ## 图形界面（脱离 Claude CLI · 2026-06-10）
 
