@@ -236,9 +236,12 @@ def test_E_cli_narrative_seq_mode(tmp_path=None):
     ], 1):
         (d / f"第{i:03d}章.txt").write_text(body, encoding="utf-8")
     script = _ROOT / "core" / "scripts" / "style_analyzer.py"
+    # Windows 下子进程管道 stdout 默认 locale 编码（GBK）——中文 JSON 会让 utf-8
+    # 严格解码在 reader 线程崩掉（stdout=None）。强制子进程 UTF-8 输出。
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     r = subprocess.run(
         [sys.executable, str(script), str(d), "--narrative-seq"],
-        capture_output=True, text=True, encoding="utf-8",
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     )
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
@@ -253,10 +256,10 @@ def test_E_cli_off_mode_env():
     d = Path(tempfile.mkdtemp())
     (d / "第001章.txt").write_text("得到突破收获。" * 10, encoding="utf-8")
     script = _ROOT / "core" / "scripts" / "style_analyzer.py"
-    env = dict(os.environ, NARRATIVE_SEQ_MODE="off")
+    env = dict(os.environ, NARRATIVE_SEQ_MODE="off", PYTHONIOENCODING="utf-8")
     r = subprocess.run(
         [sys.executable, str(script), str(d), "--narrative-seq"],
-        capture_output=True, text=True, encoding="utf-8", env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     )
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["narrative_function_sequence"]["mode"] == "off"

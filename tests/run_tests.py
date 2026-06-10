@@ -15,6 +15,10 @@ from pathlib import Path
 
 
 def main():
+    # Windows GBK 控制台打印 Unicode 符号会 UnicodeEncodeError 崩 runner（吞失败清单）
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
     tests_dir = Path(__file__).resolve().parent
     files = sorted(tests_dir.glob("test_*.py"))
     total = passed = failed = 0
@@ -45,7 +49,7 @@ def main():
     print("=" * 54)
     print(f"测试 {total} · 通过 {passed} · 失败 {failed}")
     for fl in failures:
-        print(f"  ✗ {fl}")
+        print(f"  [X] {fl}")
     return 1 if failed else 0
 
 

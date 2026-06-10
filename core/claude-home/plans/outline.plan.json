@@ -78,5 +78,6 @@
     }
   ],
   "_v2_principle": "整个系统为故事块服务 · outline 产 cluster_blueprint · v2 cluster 化方案 2026-05-28",
-  "_v2_note": "34 子系统 init 时优先用 cluster_id + scene_index schema · 故事块摘要 → 故事块摘要"
+  "_v2_note": "34 子系统 init 时优先用 cluster_id + scene_index schema · 故事块摘要 → 故事块摘要",
+  "_program_driven_status": "v28 程序驱动状态: NOT-YET——本命令零 scripts/零 must_spawn_agent,创作编排(大纲生成/蒸馏分析)仍由 Claude 智能完成,模板仅为产出清单。orchestrator 可加载但无法机械执行。写作主轨 cluster-write/cluster-save-state 已全量程序驱动;本命令迁移需先把创作步骤落为 gen-model 脚本(如 gen_creative/distill_replicate 模式)。2026-06-10"
 }

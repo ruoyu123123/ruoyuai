@@ -1,0 +1,91 @@
+# 程序驱动层（v28 · 2026-06-10）
+
+> 用确定性 Python driver 替换「Claude 主循环人肉跟 plan 走步」的编排层。
+> 写作主轨（cluster-write → cluster-save-state 循环）已全量程序驱动；
+> outline / distill-style / check-quality / reconcile 仍 Claude 编排（见〔迁移状态〕）。
+
+## 三个新模块（core/scripts/）
+
+| 模块 | 职责 | 关键设计 |
+|---|---|---|
+| `llm_transport.py` | 统一 LLM transport（M1） | 双协议分发（OpenAI 兼容 + gemini 原生 SSE）· 异常归一 `TransportRateLimit/Timeout/Empty/Exhausted`（gemini path 429 此前不进重试 → 修复）· finish_reason 归一（MAX_TOKENS→length）· 截断**续写**循环（绝不整发重试——同位置再截不收敛）· gemini 原生补 `generationConfig.thinkingConfig.thinkingLevel`（此前缺失 = reasoning thinking 吃光预算的头号失败模式）· httpx 替 urllib（read-timeout 治 43min 僵死）· Retry-After 优先 · 空响应守卫 · `parse_json_loose` 三级抽取 |
+| `judge_runner.py` | 判断层统一入口（M2）：8 个判断 agent 直连 gen-model | prompt 单一真理源 = 运行时读 `.claude/agents/<name>.md`（剥 frontmatter + 适配头「文件已代读/只输出 JSON/允许 free_notes」）· **四硬契约**见下 · `AGENT_SPECS` 注册表（failure_policy / needs_author_profile / required_keys / 输出路径模板） |
+| `orchestrator.py` | plan-DAG 驱动器（M3）：消费 `plans/*.json` 当声明式 DAG | `plan_tracker` 当库 in-process 调（create/step_complete/end_plan/断点续跑）· `{project_root}` + `<angle>` 占位符解析（plan_tracker 只管 `{key}/{ch}/{next_key}`）· data_flow **lazy 按行解析**（同 step 内脚本产物互喂：splitter→titles）· `prime_cluster_context`（cluster_lookup 权威算 `<cluster_start_ch>/<prev_key>/<prev_pending_tail>/<cluster_num>`）· 占位符解析不掉 = 报错停（绝不带占位符跑命令）· script_runner 可注入（frozen exe 换进程内 import 的唯一改造点） |
+
+辅助：`cluster_choice_apply.py` — 走向卡用户选择 → 机械写回 事件簇.json（status=`in_progress`，
+白名单成员——根治 memory 记录的「active 不在白名单 → brief 注入静默 off」坑）。
+
+## judge_runner 四硬契约（北极星⑤ · 对抗审查定调）
+
+1. **作者档第一权威存续**：`needs_author_profile` 的 judge（voice/validator/outline-planner/
+   reading-reflector）system 必注作者风格档全文；读不到 → 注入「不得输出风格类 finding」守卫 +
+   报告标 `_author_profile_missing`——**绝不退回通用规则审稿**（惊悚乐园流水账实证）。
+2. **重试边界**：只对 JSON 语法破损 / required_keys 顶层缺失整发重试 ≤2；
+   **判断内容/枚举值不符永不重试**（枚举形状不得规训模型判断）；截断走 transport 续写。
+3. **failure_policy 分级**：`block`（summarizer/foreshadower/outline-planner——输出喂状态机，
+   失败抛 `JudgeBlockedError` 停流水线，静默透传 = 状态丢失 = 整本书后半崩）；
+   `soft`（reflector/voice/validator/reading-reflector——降级落 `_degraded` 报告不阻断）。
+4. **自由文本兜底**：所有 judge 输出顶层允许 `free_notes`——schema 是格式闸不是裁决闸。
+
+## plan 模板新增字段（v28 · 增量 · Claude 路径兼容）
+
+| 字段 | 含义 | 示例 |
+|---|---|---|
+| `steps[].scripts[]` 行首 `"? "` | 条件脚本：非零退出仅警告（style_injector 无风格档 exit 1 = 条件不适用） | `"? python core/scripts/style_injector.py {project_root} <cluster_start_ch>"` |
+| `steps[].agent_input` | 判断 agent 的 spawn 参数（从 .md 散文上移）；`*_PATH` 键由 driver 代读为 context_files | `{"MODE": "cluster", "CLUSTER_DRAFT_PATH": "章节/..."}` |
+| `steps[].judge_report_path` | JudgeReport 产物路径（str 或 `{agent: path}` dict）——命名学从 `plan_tracker._verify_agent_report` 的 if/elif 外移；end_plan 优先验声明路径（`<round>` → 通配） | |
+| `steps[].judge_report_path_secondary` | voice-checker 双载体（brief 内嵌 judge_report 平铺一份） | |
+| `steps[].agent_executor: "script"` | 创意 wrapper（novel-writer/splitter）非 judge——工作由 scripts[] 完成，不派 judge_runner（北极星④） | |
+| `steps[].data_flow` | `<angle>` 占位符回填声明（lazy 按行解析）；`join_range` 把 `[lo,hi]` 拼 `"lo-hi"`；只回填路径/数值不固化创作内容（北极星②③） | `{"<chapter_range_dash>": {"source_json": "_数据库/.wal/splitter_...json", "field": "chapter_range", "join_range": true}}` |
+| `steps[].control_flow.exit_codes` | 退出码→动作（`ok` / `fail` / `dispatch:<agent>`）；audit_hub：0=pass/1=auto_fixed/2=needs_agent→派单/3=fatal | |
+| `steps[].control_flow.round_loop` | ROUND 循环（连续 N 轮 clean 放行 / 超 max_rounds 软预算放行）——只表达控制流不编码创作决策 | |
+| `steps[].pause_for_user` | 停顿点（choice/integer + source/options_field/answer_artifact）；auto_pilot 显式开关才取第一候选，**默认必弹卡**（北极星③） | |
+| `steps[].after_pause_scripts` | 选择落定后的确定性后续（cluster_choice_apply 写回） | |
+| `steps[].touch_outputs` | 标记文件（多轮产物文件名可变时的存在性代理） | |
+
+## 用法
+
+```bash
+# 写一个 cluster（程序驱动 · 不经 Claude）
+python core/scripts/orchestrator.py cluster-write --project 书名 --key 001
+# 状态保存 + 涌现下一 cluster（走向卡在终端弹选）
+python core/scripts/orchestrator.py cluster-save-state --project 书名 --key 001
+# 断点续跑（plan JSON steps[].status 是唯一断点真相源）
+python core/scripts/orchestrator.py cluster-write --project 书名 --key 001 --resume <plan_id>
+# 显式全自动（走向卡取引擎第一候选——绝非隐式默认）
+python core/scripts/orchestrator.py cluster-save-state --project 书名 --key 001 --auto-pilot
+# 单 judge 调试
+python core/scripts/judge_runner.py novel-summarizer workspace/novels/书名 \
+  --param CLUSTER_ID=cluster_001 --file 草稿=章节/cluster_001_draft/cluster_001_draft.txt \
+  --output _数据库/.wal/cluster_001_summary.json
+```
+
+## 与 Claude 编排共存
+
+- driver 经 plan_tracker 合法 API 写 plan（每次写盘重盖 attestation 章）→ 不触发防篡改。
+- hooks 拦的是 Claude 工具调用，对独立 python 进程无感。
+- 模板新字段是增量——Claude 路径忽略不认识的字段；`end_plan` 无 `judge_report_path`
+  声明时回落旧命名推算（全向后兼容）。
+- **共存期不删 attestation / hooks**（driver 全量验证后按北极星⑥清旧码）。
+
+## 迁移状态
+
+| 命令 | 状态 |
+|---|---|
+| `/cluster-write` | ✅ 全量程序驱动（7 步：manifest → gen_writer → audit+reading-reflector 循环 → voice → 三 judge → splitter+titles+changes → end） |
+| `/cluster-save-state` | ✅ 全量程序驱动（12 步含 emergence + 走向卡停顿点 + 选择写回） |
+| `/outline` `/distill-style` `/check-quality` `/reconcile` | ⏳ Claude 编排（模板零 scripts——创作步骤需先落为 gen-model 脚本才可机械执行，见各模板 `_program_driven_status`） |
+| novel-researcher | ⏳ soft 降级运行（gen-model 无 web 工具；联网检索待接外部 API 或确认代理透传 grounding） |
+
+## 已知边界（上线前必验）
+
+1. **judge「Claude 过 ≠ gen-model 过」**：8 个 judge 的金标准对比重测（真作者原文当输入，
+   对比 JudgeReport 字段完整性 + 作者档维度引用）尚未跑——M2 验证里程碑。
+2. **frozen exe**：plan scripts[] 的 `python` 前缀 + 脚本内部 `sys.executable` fan-out
+   （audit_hub/gen_fixer/evolution_orchestrator）在 onedir 无 python.exe 下不可用——
+   script_runner 注入点已预留，进程内 import runner 是 M4 工作。
+3. **深 schema judge**（validator-checker 16 维 / outline-planner 3 模式）在 reasoning
+   模型上的截断率需实测；必要时拆分多次调用。
+
+测试：`tests/test_llm_transport.py`（25）/ `test_judge_runner.py`（22）/
+`test_orchestrator.py`（26）/ `test_plan_templates_program_driven.py`（9）。

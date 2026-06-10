@@ -26,6 +26,10 @@
       "description": "开启 cluster 级 WAL + db_schema_validate.py --auto-migrate（34 JSON schema 自检）",
       "required": true,
       "skip_output_allowed": false,
+      "_doc_program_driven": "v28：WAL 骨架在 Claude 流程由 Claude 建·程序驱动下由 driver touch_outputs 建（.json 后缀写 {} 合法骨架）。",
+      "touch_outputs": [
+        "_数据库/.wal/cluster_{key}_save_state.json"
+      ],
       "expected_outputs": [
         "_数据库/.wal/cluster_{key}_save_state.json"
       ],
@@ -58,6 +62,10 @@
       "description": "validate_chapter.py 对整 cluster 跑（所有切出来的章 + cluster 级 hard_gate 校验）",
       "required": true,
       "skip_output_allowed": true,
+      "_doc_program_driven": "v28 程序驱动：行首 '? ' = advisory 复验（cluster-write step 3 已全量质检过·此处为入库前留痕复核·非零退出警告不拦——拦截裁决权在 step 3）。",
+      "scripts": [
+        "? python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id {key} --waivers '{project_root}/章节/cluster_{key}_draft/cluster_{key}_changes.json'"
+      ],
       "expected_outputs": []
     },
     {
@@ -66,6 +74,13 @@
       "description": "spawn novel-summarizer MODE=cluster · 生成 cluster 级摘要（不是单章摘要 · 单章摘要由 splitter 切完后从 cluster 摘要派生）",
       "required": true,
       "must_spawn_agent": "novel-summarizer",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "cluster_{key}",
+        "MODE": "cluster",
+        "CLUSTER_DRAFT_PATH": "章节/cluster_{key}_draft/cluster_{key}_draft.txt"
+      },
+      "judge_report_path": "_数据库/.wal/cluster_{key}_summary.json",
       "skip_output_allowed": false,
       "expected_outputs": [
         "_数据库/.wal/cluster_{key}_summary.json"
@@ -77,9 +92,17 @@
       "description": "spawn novel-foreshadower MODE=cluster · 评估整 cluster 伏笔 plant + 回收 + 健康度",
       "required": true,
       "must_spawn_agent": "novel-foreshadower",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "cluster_{key}",
+        "MODE": "cluster",
+        "CLUSTER_DRAFT_PATH": "章节/cluster_{key}_draft/cluster_{key}_draft.txt",
+        "CLUSTER_CHANGES_PATH": "章节/cluster_{key}_draft/cluster_{key}_changes.json"
+      },
+      "judge_report_path": "_数据库/.judge_reports/cluster_{key}_foreshadower.json",
       "skip_output_allowed": true,
       "expected_outputs": [],
-      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_foreshadower.json"
+      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_foreshadower.json（build_manifest 下章抽 health_warnings·必写盘否则反馈链断·judge_runner failure_policy=block）"
     },
     {
       "n": 7,
@@ -87,6 +110,13 @@
       "description": "spawn novel-reflector MODE=cluster · 提取整 cluster 写作经验（success/failure 模式）",
       "required": true,
       "must_spawn_agent": "novel-reflector",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "cluster_{key}",
+        "MODE": "cluster",
+        "CLUSTER_DRAFT_PATH": "章节/cluster_{key}_draft/cluster_{key}_draft.txt"
+      },
+      "judge_report_path": "_数据库/.wal/cluster_{key}_reflection.json",
       "skip_output_allowed": true,
       "expected_outputs": [],
       "_doc_v24": "JudgeReport 路径 _数据库/.wal/cluster_{key}_reflection.json"
@@ -147,13 +177,31 @@
       "description": "改 E: 跑 cluster_emergence_engine.py emerge --after-cluster {key} → 生成下一 cluster 2-3 个 candidate brief → spawn novel-outline-planner MODE=cluster_emergence 详化 candidates → 输出报告 + 等用户选 1 个 candidate",
       "required": true,
       "must_spawn_agent": "novel-outline-planner",
+      "_doc_program_driven": "v28 程序驱动：① 引擎 emerge 产 candidates（涌现内容运行时算·data_flow 只回填路径不固化内容·北极星②③）② outline-planner（judge_runner·failure_policy=block）详化 → brief_candidates ③ pause_for_user 弹卡（auto_pilot 显式开关才取 _emergence_score 第一候选·默认必等用户·北极星③软牵引）④ after_pause_scripts 跑 cluster_choice_apply 把选中 brief 机械写回 事件簇.json（status=in_progress·白名单成员·根治 active 不在白名单的 brief 注入静默 off 坑）。",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "MODE": "cluster_emergence",
+        "CLUSTER_ID": "cluster_{next_key}",
+        "EMERGENCE_CONTEXT_PATH": "_数据库/.wal/cluster_{next_key}_emergence.json"
+      },
+      "judge_report_path": "_数据库/.wal/cluster_{next_key}_brief_candidates.json",
+      "pause_for_user": {
+        "type": "choice",
+        "prompt": "选择下一故事块走向（candidates 由涌现引擎+planner 运行时产生）",
+        "source": "_数据库/.wal/cluster_{next_key}_brief_candidates.json",
+        "options_field": "candidates",
+        "answer_artifact": "_数据库/.wal/cluster_{next_key}_user_choice.json"
+      },
+      "after_pause_scripts": [
+        "python core/scripts/cluster_choice_apply.py {project_root} --next-key {next_key} --choice _数据库/.wal/cluster_{next_key}_user_choice.json"
+      ],
       "skip_output_allowed": false,
       "expected_outputs": [
         "_数据库/.wal/cluster_{next_key}_emergence.json"
       ],
       "scripts": [
-        "python core/scripts/cluster_emergence_engine.py {project_root} emerge --after-cluster {key}",
-        "# 主代理 spawn novel-outline-planner MODE=cluster_emergence (input EMERGENCE_CONTEXT_PATH)"
+        "python core/scripts/cluster_emergence_engine.py {project_root} emerge --after-cluster cluster_{key}",
+        "# 程序驱动: outline-planner 经 must_spawn_agent 派发 judge_runner (MODE=cluster_emergence)"
       ]
     },
     {

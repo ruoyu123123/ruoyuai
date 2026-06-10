@@ -3,9 +3,16 @@
 import json
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core", "scripts"))
 import replication_fidelity_check as rf
+
+
+def _tmp_dir():
+    """零依赖 runner 无 pytest tmp_path fixture——无参调用时自建临时目录。"""
+    return Path(tempfile.mkdtemp())
 
 
 def test_metrics_basic():
@@ -17,7 +24,8 @@ def test_metrics_basic():
     assert m["para_mean"] > 0
 
 
-def test_author_baseline_reads(tmp_path):
+def test_author_baseline_reads(tmp_path=None):
+    tmp_path = tmp_path or _tmp_dir()
     db = tmp_path / "_数据库"
     db.mkdir()
     (db / "作者风格.json").write_text(json.dumps({
@@ -34,8 +42,8 @@ def test_author_baseline_reads(tmp_path):
     assert abs(b["excl_k"] - 4.9) < 0.01
 
 
-def test_author_baseline_missing_returns_none(tmp_path):
-    assert rf._author_baseline(tmp_path) is None
+def test_author_baseline_missing_returns_none(tmp_path=None):
+    assert rf._author_baseline(tmp_path or _tmp_dir()) is None
 
 
 def test_comedy_punct_low_is_flaggable():

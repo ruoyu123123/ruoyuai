@@ -524,6 +524,27 @@ def _find_step(plan: dict, n) -> dict:
     raise ValueError(f"[plan_tracker] plan 中没有第 {n} 步")
 
 
+def _verify_declared_report(project: str, declared: str) -> bool:
+    """v28 程序驱动（2026-06-10）：plan 模板 steps[].judge_report_path 显式声明产物路径
+    → 直接验该文件存在——JudgeReport 命名学从下方 _verify_agent_report 的 if/elif
+    路径推算**外移到模板字段**（内嵌命名变体是回归高发区·v27 已修过失配）。
+
+    支持 <round> 等角括号占位 → 文件名通配（reading-reflector 多轮任一存在即过）。
+    相对路径以 project_root 为基准；项目找不到 → 防御性放行（与旧逻辑一致）。
+    """
+    project_root = resolve_project_root(project) if project else None
+    if not project_root:
+        return True
+    raw = declared.replace("{project_root}", str(project_root))
+    raw = re.sub(r"<[a-z][a-z0-9_]*>", "*", raw)
+    p = Path(raw)
+    if not p.is_absolute():
+        p = project_root / raw
+    if "*" in p.name:
+        return p.parent.exists() and bool(list(p.parent.glob(p.name)))
+    return p.exists()
+
+
 def _verify_agent_report(project: str, agent_name: str, chapter: int | None, cluster_id: str | None) -> bool:
     """v24 anti-skip: 校验 must_spawn_agent 字段对应的 JudgeReport 文件真实存在。
 
@@ -762,8 +783,19 @@ def end_plan(plan_id: str) -> dict:
                     cluster_id = f"cluster_{_key}" if not _key.startswith("cluster_") else _key
                 else:
                     cluster_id = None
+                # v28 程序驱动：模板显式声明 judge_report_path（str 或 {agent: path} dict）
+                # → 优先验声明路径（命名学外移）；未声明的 agent 回落旧路径推算。
+                jrp = step.get("judge_report_path")
                 for agent_name in must_agents:
-                    found = _verify_agent_report(proj, agent_name, ch, cluster_id)
+                    declared = None
+                    if isinstance(jrp, dict):
+                        declared = jrp.get(agent_name)
+                    elif isinstance(jrp, str) and jrp:
+                        declared = jrp
+                    if declared:
+                        found = _verify_declared_report(proj, declared)
+                    else:
+                        found = _verify_agent_report(proj, agent_name, ch, cluster_id)
                     if not found:
                         missing_agent_reports.append({
                             "step": n, "agent": agent_name,

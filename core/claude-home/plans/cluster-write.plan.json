@@ -15,6 +15,11 @@
       "required": true,
       "skip_output_allowed": false,
       "_doc_h7_fix": "2026-05-29 复审修复（H7）：plan_tracker create 只传 --key（纯数字）不传 --chapter → {ch:03d} 被替换成空 → 旧 expected_outputs 变成不存在的 ch_.json 路径 → step1 死锁。改目录级检查：.manifest 目录必由 build_manifest save_json mkdir 落地（起首章号 START_CH 在 create 时尚未 resolve，故不能用 {ch:03d}）。.style_directive 仅在项目有 style_profile 时才写（条件产物），从 hard expected_output 移除避免误 FAIL。",
+      "_doc_program_driven": "v28 程序驱动（2026-06-10）：scripts 由 orchestrator.py 执行。<cluster_start_ch> 由 driver prime_cluster_context 用 cluster_lookup 权威算出（上一 cluster 范围 hi+1）。行首 '? ' = 条件脚本（style_injector 无风格档 exit 1 是条件不适用非错误）。",
+      "scripts": [
+        "python core/scripts/build_manifest.py {project_root} <cluster_start_ch>",
+        "? python core/scripts/style_injector.py {project_root} <cluster_start_ch>"
+      ],
       "expected_outputs": [
         "_数据库/.manifest"
       ]
@@ -25,6 +30,12 @@
       "description": "spawn novel-writer MODE=ecas · writer 只产 cluster_draft.txt + cluster_changes.json · **禁止调 splitter**（splitter 推迟到 step 6）",
       "required": true,
       "must_spawn_agent": "novel-writer",
+      "agent_executor": "script",
+      "_doc_program_driven": "novel-writer 是创意 wrapper 非 judge——程序驱动下 driver 直接跑 gen_writer.py（agent_executor=script 跳过 judge 派发）。must_spawn_agent 保留供 Claude 编排路径 + end_plan 校验（判存在走 judge_report_path 声明的 draft 文件）。",
+      "scripts": [
+        "python core/scripts/gen_writer.py --project {project_root} --cluster <cluster_num>"
+      ],
+      "judge_report_path": "章节/cluster_{key}_draft/cluster_{key}_draft.txt",
       "skip_output_allowed": false,
       "expected_outputs": [
         "章节/cluster_{key}_draft/cluster_{key}_draft.txt",
@@ -38,6 +49,33 @@
       "required": true,
       "must_spawn_agent": "novel-reading-reflector",
       "skip_output_allowed": false,
+      "_doc_program_driven": "v28 程序驱动：① audit_hub 退出码语义上移成 control_flow.exit_codes（0=pass/1=auto_fixed 均继续·2=needs_agent→派单 validator-checker·3=fatal 停）② reading-reflector ROUND 循环上移成 control_flow.round_loop（连续 3 轮 0 issue 放行·超 5 轮软预算放行·advisory 非门禁）③ judge_report_path 的 <round> 由 end_plan 通配校验（任一轮存在即过）④ touch_outputs 落 .placeholder（多轮产物文件名可变的存在性代理）。control_flow 只表达控制流不编码创作决策（北极星⑤）。",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "cluster_{key}",
+        "MODE": "cluster",
+        "ROUND": "<round>",
+        "CLUSTER_DRAFT_PATH": "章节/cluster_{key}_draft/cluster_{key}_draft.txt"
+      },
+      "judge_report_path": "_数据库/.reading_reflection/cluster_{key}_round_<round>.json",
+      "control_flow": {
+        "exit_codes": {
+          "0": "ok",
+          "1": "ok",
+          "2": "dispatch:novel-validator-checker",
+          "3": "fail"
+        },
+        "round_loop": {
+          "agent": "novel-reading-reflector",
+          "max_rounds": 5,
+          "consecutive_clean": 3,
+          "pass_field": "verdict",
+          "pass_value": "pass"
+        }
+      },
+      "touch_outputs": [
+        "_数据库/.reading_reflection/.placeholder"
+      ],
       "expected_outputs": [
         "_数据库/.audit/cluster_{key}_audit.json",
         "_数据库/.reading_reflection/.placeholder"
@@ -52,9 +90,17 @@
       "description": "spawn novel-voice-checker MODE=cluster · 整 cluster 对话声纹审查（所有角色 voice_pack 校验 + 跨场景 voice 漂移检测）",
       "required": true,
       "must_spawn_agent": "novel-voice-checker",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "cluster_{key}",
+        "MODE": "cluster",
+        "CLUSTER_DRAFT_PATH": "章节/cluster_{key}_draft/cluster_{key}_draft.txt"
+      },
+      "judge_report_path": "_数据库/.checker_briefs/cluster_{key}_voice.json",
+      "judge_report_path_secondary": "_数据库/.judge_reports/cluster_{key}_voice-checker.json",
       "skip_output_allowed": true,
       "expected_outputs": [],
-      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_voice-checker.json"
+      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_voice-checker.json（程序驱动下为 brief 的 secondary 落盘·主载体 brief 供 gen_fixer --mode voice-fix 消费）"
     },
     {
       "n": 5,
@@ -62,6 +108,17 @@
       "description": "cluster 级三 agent 串行：foreshadower（整 cluster 伏笔评估）+ reflector（整 cluster 经验提取）+ summarizer（cluster 级摘要）",
       "required": true,
       "must_spawn_agent": ["novel-foreshadower", "novel-reflector", "novel-summarizer"],
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "cluster_{key}",
+        "MODE": "cluster",
+        "CLUSTER_DRAFT_PATH": "章节/cluster_{key}_draft/cluster_{key}_draft.txt"
+      },
+      "judge_report_path": {
+        "novel-foreshadower": "_数据库/.judge_reports/cluster_{key}_foreshadower.json",
+        "novel-reflector": "_数据库/.wal/cluster_{key}_reflection.json",
+        "novel-summarizer": "_数据库/.wal/cluster_{key}_summary.json"
+      },
       "skip_output_allowed": true,
       "expected_outputs": [
         "_数据库/.wal/cluster_{key}_summary.json"
@@ -73,16 +130,30 @@
       "description": "v2 cluster 化方案 · 纯格式输出步骤 · 0 质检（章节是输出格式，不是检测单位）· v27 freestyle 默认：调度器先检测上 cluster 的 章节/cluster_<prev>_draft/cluster_<prev>_pending_tail.txt 是否存在，存在则透传 PREVIOUS_PENDING_TAIL_PATH（splitter prepend 到本 cluster 草稿头联合切）· spawn novel-chapter-splitter MODE=ecas_freestyle（按字数硬范围 3000-4500/章自动算 N · 末章<3000 退回 cluster_<key>_pending_tail.txt 不强切）或 ecas_multi_chapter（_writer_mode=locked 兼容 · cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ gen_chapter_titles.py --chapters <range>（normal/mid/high 三档）→ split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json · ★ 切章后 0 audit/0 scanner/0 质检 · 直接进 step 7 plan-end",
       "required": true,
       "must_spawn_agent": "novel-chapter-splitter",
+      "agent_executor": "script",
+      "_doc_program_driven": "v28 程序驱动：splitter 是纯格式层非 judge（agent_executor=script·北极星④）。<cluster_start_ch>/<prev_pending_tail> 由 driver prime_cluster_context 算（cluster_lookup 权威+pending_tail 物理探测·空值时 --previous-pending-tail 整对自动丢弃）；<chapter_range_dash> 经 data_flow 从 splitter WAL lazy 回填（同 step 内行 1 产 → 行 2 消费·just-in-time 解析）；<rhythm> 从 用户偏好.json 读（缺省 标准）。",
+      "judge_report_path": "_数据库/.wal/splitter_cluster_{key}_decisions.json",
+      "data_flow": {
+        "<rhythm>": {
+          "source_json": "_数据库/用户偏好.json",
+          "field": "rhythm_profile",
+          "optional": true,
+          "default": "标准"
+        },
+        "<chapter_range_dash>": {
+          "source_json": "_数据库/.wal/splitter_cluster_{key}_decisions.json",
+          "field": "chapter_range",
+          "join_range": true
+        }
+      },
       "skip_output_allowed": false,
       "expected_outputs": [
         "_数据库/.wal/splitter_cluster_{key}_decisions.json"
       ],
       "scripts": [
-        "# 0) v27 跨 cluster 补料检测: 上 cluster pending_tail 存在则透传 PREVIOUS_PENDING_TAIL_PATH",
-        "# PREV_PENDING_TAIL={project_root}/章节/cluster_<prev_key>_draft/cluster_<prev_key>_pending_tail.txt",
-        "# 1) spawn novel-chapter-splitter MODE=ecas_freestyle CLUSTER_ID={key} CLUSTER_START_CH=<start> [PREVIOUS_PENDING_TAIL_PATH=$PREV_PENDING_TAIL] (locked 走 ecas_multi_chapter)",
-        "# freestyle 内部入口: python core/scripts/chapter_splitter.py {project_root} --mode ecas_freestyle --cluster-id cluster_{key} --cluster-start-ch <start> --draft {project_root}/章节/cluster_{key}_draft/cluster_{key}_draft.txt [--previous-pending-tail $PREV_PENDING_TAIL]",
-        "python core/scripts/gen_chapter_titles.py --project {project_root} --chapters <range_from_splitter_wal>",
+        "# v27 跨 cluster 补料: <prev_pending_tail> 为空时 --previous-pending-tail 整对被 driver 丢弃",
+        "python core/scripts/chapter_splitter.py {project_root} --mode ecas_freestyle --cluster-id cluster_{key} --cluster-start-ch <cluster_start_ch> --draft {project_root}/章节/cluster_{key}_draft/cluster_{key}_draft.txt --rhythm <rhythm> --previous-pending-tail <prev_pending_tail>",
+        "python core/scripts/gen_chapter_titles.py --project {project_root} --chapters <chapter_range_dash>",
         "python core/scripts/split_cluster_changes.py {project_root} --cluster {key}"
       ]
     },
