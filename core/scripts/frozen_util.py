@@ -151,6 +151,14 @@ def dispatch_or_none(argv):
     """
     if not is_script_dispatch(argv):
         return None
+    # 🔴 frozen Windows exe stdout/stderr 默认 GBK(cp936)→ 派发的脚本打印 emoji/非 GBK
+    # Unicode(如 prompt 里的 🔴)会 UnicodeEncodeError 崩(真 end-to-end 测试实测)。派发执行前
+    # 强制 UTF-8(所有 dispatch 入口共享此防护·不止 ruoyu_gui)。
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     import orchestrator  # 延迟 import：仅派发分支触达·不拖慢 GUI 冷启
     return orchestrator.run_script_in_process(
         argv[1:], repo_root=orchestrator.REPO_ROOT, label="fanout")

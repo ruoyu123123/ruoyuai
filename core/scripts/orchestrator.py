@@ -236,6 +236,15 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
 
     if not tokens:
         return 0
+    # 🔴 frozen Windows exe stdout/stderr 默认 GBK(cp936)→ 进程内跑的脚本 print emoji/非 GBK
+    # Unicode(prompt 里的 🔴 / 部分中文符号)会 UnicodeEncodeError 崩(真 end-to-end 实测)。
+    # 通用执行点强制 UTF-8(覆盖 dispatch + orchestrator 顶层步全部 in-process 执行)。
+    if getattr(sys, "frozen", False):
+        for _s in (sys.stdout, sys.stderr):
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
     script_path = Path(tokens[0])
     if not script_path.is_absolute():
         script_path = repo_root / tokens[0]

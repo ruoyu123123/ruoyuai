@@ -14,6 +14,16 @@ from pathlib import Path
 if __name__ == "__main__":
     multiprocessing.freeze_support()  # PyInstaller spawn 防无限 fork（必须第一句）
 
+    # 🔴 frozen Windows exe stdout/stderr 默认 GBK → dispatch 的脚本 print emoji/非 GBK
+    # Unicode 崩。最早 reconfigure UTF-8（dispatcher 之前·与 frozen_smoke 同纪律·真
+    # end-to-end 实测必需）。dispatch_or_none/run_script_in_process 内也各有一道（纵深）。
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            try:
+                s.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
     _REPO = Path(__file__).resolve().parent
     for p in (str(_REPO), str(_REPO / "core" / "scripts")):
         if p not in sys.path:
@@ -28,11 +38,6 @@ if __name__ == "__main__":
         _rc = frozen_util.dispatch_or_none(sys.argv)
         if _rc is not None:
             sys.exit(_rc)            # 带 scanner 退出码退出 → audit_hub 据此判 ok
-
-    # === 否则照常启 GUI ===
-    for s in (sys.stdout, sys.stderr):
-        if hasattr(s, "reconfigure"):
-            s.reconfigure(encoding="utf-8", errors="replace")
 
     import argparse
     ap = argparse.ArgumentParser()
