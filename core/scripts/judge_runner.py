@@ -39,7 +39,16 @@ if str(_SCRIPTS) not in sys.path:
 import llm_transport as lt  # noqa: E402
 from gen_model_loader import GenModelLoader  # noqa: E402
 
-REPO_ROOT = _SCRIPTS.parent.parent
+# 🔴 frozen-aware（对抗审查同款 FATAL）：PyInstaller 把 core/scripts 模块扁平收成顶层名，
+# _SCRIPTS=Path(__file__).parent 在 frozen 下指 _internal/（扁平）→ .parent.parent 跑出
+# bundle 外，.claude/agents/*.md 读不到 → 所有 needs_author_profile 的 judge 拿不到 prompt。
+# 用 frozen_util.bundle_root()（frozen=_MEIPASS·dev=仓库根·与 _SCRIPTS.parent.parent 逐字节
+# 一致）。datas 把 .claude/agents/*.md 落到 bundle_root()/.claude/agents → AGENTS_DIR 命中。
+try:
+    from frozen_util import bundle_root as _bundle_root
+    REPO_ROOT = _bundle_root()
+except Exception:
+    REPO_ROOT = _SCRIPTS.parent.parent
 AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 
 JUDGE_TEMPERATURE = 0.3       # 复核档（与 ai_wrapper 对齐·低于创作温度）

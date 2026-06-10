@@ -193,6 +193,42 @@ def test_scripts_dir_dev_is_core_scripts():
         sys.frozen = saved
 
 
+def test_judge_agents_dir_and_plan_templates_frozen_aware():
+    """阶段B GUI exe：judge_runner.AGENTS_DIR(.claude/agents) + plan_tracker.TEMPLATES_DIR
+    (core/claude-home/plans) 须 frozen-aware（bundle_root 定位·非 __file__ 扁平推算）——
+    否则 frozen 下 judge 读不到 agent prompt / orchestrator 读不到 plan 模板（FATAL 同款）。"""
+    _scripts = str(Path(__file__).resolve().parent.parent / "core" / "scripts")
+    if _scripts not in sys.path:
+        sys.path.insert(0, _scripts)
+    import importlib
+    saved_f = getattr(sys, "frozen", False)
+    saved_m = getattr(sys, "_MEIPASS", None)
+    sys.frozen = True
+    sys._MEIPASS = r"X:\app\_internal"
+    try:
+        import judge_runner
+        importlib.reload(judge_runner)   # 重读模块级 AGENTS_DIR（依赖 bundle_root）
+        assert judge_runner.AGENTS_DIR == Path(r"X:\app\_internal") / ".claude" / "agents"
+        import plan_tracker
+        importlib.reload(plan_tracker)
+        assert plan_tracker.TEMPLATES_DIR == \
+            Path(r"X:\app\_internal") / "core" / "claude-home" / "plans"
+    finally:
+        sys.frozen = saved_f
+        if saved_m is None:
+            try:
+                del sys._MEIPASS
+            except AttributeError:
+                pass
+        else:
+            sys._MEIPASS = saved_m
+        # 还原 dev 态模块（避免污染后续测试的模块级常量）
+        import judge_runner
+        importlib.reload(judge_runner)
+        import plan_tracker
+        importlib.reload(plan_tracker)
+
+
 def test_no_bare_child_interpreter_anywhere_in_scripts():
     """全 core/scripts 扫描：subprocess 启动子脚本绝不裸用 sys.executable 或 "python"
     字面量（必走 child_python·防 frozen 重启 GUI / PATH 无 python 静默失败）。

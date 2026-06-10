@@ -85,7 +85,17 @@ from typing import Any
 # ============ 常量 / 路径 ============
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TEMPLATES_DIR = REPO_ROOT / "core" / "claude-home" / "plans"
+# 🔴 frozen-aware（对抗审查同款 FATAL · 2026-06-10 阶段B GUI exe）：PyInstaller 把
+# core/scripts 模块扁平收成顶层名，Path(__file__).parents[2] 在 frozen 下跑出 bundle 外 →
+# load_template 读不到 core/claude-home/plans/*.json（orchestrator.run_command 首步即崩）。
+# 只把**只读模板目录**改用 bundle_root()（frozen=_MEIPASS·dev=parents[2] 逐字节一致·datas
+# 落 bundle_root()/core/claude-home/plans）；writable 的 plan 落盘目录（GLOBAL_PLANS_DIR/
+# PROJECTS_DIR/STYLES_DIR）保持 REPO_ROOT 不动（不写进只读 _internal 概念区）。
+try:
+    from frozen_util import bundle_root as _bundle_root
+    TEMPLATES_DIR = _bundle_root() / "core" / "claude-home" / "plans"
+except Exception:
+    TEMPLATES_DIR = REPO_ROOT / "core" / "claude-home" / "plans"
 PROJECTS_DIR = REPO_ROOT / "workspace" / "novels"
 STYLES_DIR = REPO_ROOT / "workspace" / "styles"
 GLOBAL_PLANS_DIR = REPO_ROOT / "core" / "claude-home" / ".plans"
