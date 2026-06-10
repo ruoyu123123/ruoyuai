@@ -70,6 +70,33 @@ def test_judge_dispatch_uses_own_template_not_step_round_path():
         jr.run_judge = orig
 
 
+def test_judge_dispatch_primary_agent_preserves_next_key():
+    """🔴 静态审计精炼：主 agent（must_spawn_agent·如 save-state outline-planner）用 step.
+    judge_report_path（plan_tracker 已预解析 {next_key}=下一 cluster）——不得退化用 agent 自己
+    template 把 {next_key} 当 {key}（涌现下一 cluster brief 会落错 cluster）。"""
+    import judge_runner as jr
+    captured = {}
+    orig = jr.run_judge
+
+    def fake(agent, project_root, **kw):
+        captured["output_path"] = kw.get("output_path")
+
+        class O:
+            data, ok, output_path = {}, True, kw.get("output_path")
+        return O()
+    jr.run_judge = fake
+    try:
+        # plan_tracker 已把 {next_key} 预解析成 002 写进 step.judge_report_path
+        step = {"n": 11, "must_spawn_agent": "novel-outline-planner",
+                "judge_report_path": "_数据库/.wal/cluster_002_brief_candidates.json"}
+        ctx = {"project_root": r"C:\proj", "key": "001"}   # 当前 cluster=001·下一=002
+        orc.default_judge_dispatch("novel-outline-planner", step, ctx)
+        op = str(captured["output_path"])
+        assert "cluster_002" in op, f"主 agent 丢了 next_key 预解析（退化成 001）: {op}"
+    finally:
+        jr.run_judge = orig
+
+
 def test_judge_dispatch_round_loop_path_resolves():
     """轮循环里 <round> 在 ctx → reading-reflector 路径正确解析成真实轮号（非 <round>）。"""
     import judge_runner as jr

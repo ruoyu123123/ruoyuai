@@ -372,36 +372,47 @@ def default_judge_dispatch(agent_name: str, step: dict, ctx: dict):
             if p.exists():
                 context_files.append((k, p))
 
-    # 输出路径解析（🔴 一步多 agent bug 修复·真 end-to-end 暴露）：
-    # step.judge_report_path 是为**主 agent**（round_loop 那个）写的单条路径·含 <round>。
-    # audit_hub exit 2 派单的 validator-checker 等**非主 agent**复用它会：① 写错路径（串到
-    # reading_reflection）② <round> 不在 ctx → 字面 <round> 进文件名 → Windows 非法(Errno22)。
-    # 修：优先用**被派 agent 自己的** output_template（每 agent 命名独立）·{key}/{round} 从
-    # ctx 填（<round> 默认 1·非轮循环 dispatch 也合法）·step.judge_report_path 仅兜底。
+    # 输出路径解析（🔴 一步多 agent bug 修复·真 end-to-end 暴露·静态审计精炼）：
+    # step.judge_report_path 是为 step 的**主 agent**（must_spawn_agent / round_loop.agent）写的·
+    # plan_tracker 已预解析 {key}/{next_key}·可能含 <round>（ctx 填）。audit_hub exit 2 派单的
+    # validator-checker 等**非主 agent**没有自己的 step path——复用主 agent 的会：① 写错路径
+    # ② <round> 不在 ctx → 字面 <round> 进文件名 → Windows 非法(Errno22)。
+    # 修：主 agent 用 step.judge_report_path（保 plan_tracker 对 {next_key} 的预解析·如 outline-
+    # planner 涌现下一 cluster）；非主 agent 用**自己的** output_template（命名独立·{key}/{round}
+    # 从 ctx 填）。<round> 默认 1·含 < > 的路径丢弃防非法文件名。
     spec = jr.AGENT_SPECS.get(agent_name)
     rnd = ctx.get("<round>", 1)
-    out_raw = ""
-    if spec and getattr(spec, "output_template", ""):
+    msa = step.get("must_spawn_agent")
+    primary = set([msa] if isinstance(msa, str) else (msa or []))
+    _rl = (step.get("control_flow") or {}).get("round_loop") or {}
+    if _rl.get("agent"):
+        primary.add(_rl["agent"])
+    jrp = step.get("judge_report_path")
+    step_path = jrp.get(agent_name, "") if isinstance(jrp, dict) else (jrp or "")
+
+    if agent_name in primary and step_path:
+        out_raw = resolve_placeholders(step_path, ctx).replace("<round>", str(rnd))
+    elif spec and getattr(spec, "output_template", ""):
         out_raw = (spec.output_template
                    .replace("{key}", str(ctx.get("key", "")))
                    .replace("{round}", str(rnd))
                    .replace("{next_key}", str(ctx.get("<next_key>", ctx.get("key", "")))))
     else:
-        jrp = step.get("judge_report_path")
-        raw = jrp.get(agent_name, "") if isinstance(jrp, dict) else (jrp or "")
-        out_raw = resolve_placeholders(raw, ctx).replace("<round>", str(rnd))
+        out_raw = resolve_placeholders(step_path, ctx).replace("<round>", str(rnd))
     output_path = None
     if out_raw and "<" not in out_raw and ">" not in out_raw:  # 防未解析占位符进文件名
         op = Path(out_raw)
         output_path = op if op.is_absolute() else project_root / op
-    # secondary（voice-checker 双载体）：同样优先 agent 自己的 secondary_output_template
-    sec_raw = ""
-    if spec and getattr(spec, "secondary_output_template", ""):
+    # secondary（voice-checker 双载体）：同款主/非主区分。主 agent 用 step 字段（plan_tracker
+    # 预解析）·非主用自己的 secondary_output_template。
+    sec_step = step.get("judge_report_path_secondary") or ""
+    if agent_name in primary and sec_step:
+        sec_raw = resolve_placeholders(sec_step, ctx).replace("<round>", str(rnd))
+    elif spec and getattr(spec, "secondary_output_template", ""):
         sec_raw = (spec.secondary_output_template
                    .replace("{key}", str(ctx.get("key", ""))).replace("{round}", str(rnd)))
     else:
-        sec_raw = resolve_placeholders(step.get("judge_report_path_secondary") or "",
-                                       ctx).replace("<round>", str(rnd))
+        sec_raw = resolve_placeholders(sec_step, ctx).replace("<round>", str(rnd))
     secondary = None
     if sec_raw and "<" not in sec_raw and ">" not in sec_raw:
         sp = Path(sec_raw)
