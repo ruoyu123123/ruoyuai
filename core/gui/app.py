@@ -255,24 +255,85 @@ def plans_page():
     ui.button("🔄 刷新", on_click=_render).props("flat")
 
 
-# ============ 设置 ============
+# ============ 设置（BYOK 密钥管理）============
 def settings_page():
     _header("设置")
+    from core.gui.runner import (save_api_key, clear_api_key, profile_key_status,
+                                  test_profile_connection)
     try:
         data = list_profiles_masked()
     except Exception as e:
         ui.label(f"读取 profile 失败：{e}").classes("text-red-600")
         return
-    ui.label(f"当前 active profile：{data['active'] or '（未设置）'}")\
+
+    ui.label("🔒 你的 API 密钥用 Windows 凭据管理器加密存储，绝不写入任何文件、绝不上传。")\
+        .classes("text-sm text-gray-600")
+    if not data.get("keyring_available", True):
+        ui.label("⚠️ 本机安全存储不可用——密钥将无法保存，请联系支持。")\
+            .classes("text-sm text-red-600").mark("keyring-unavailable")
+    ui.label(f"当前使用 profile：{data['active'] or '（未设置）'}")\
         .classes("font-bold").mark("active-profile")
-    cols = [{"name": k, "label": k, "field": k} for k in
-            ("name", "model", "base_url", "protocol", "thinking_level",
-             "api_key", "active")]
-    ui.table(columns=cols, rows=data["profiles"]).classes("w-full")\
-        .mark("profile-table")
-    ui.label("切换模型：编辑 .env 的 GEN_MODEL_ACTIVE 或运行 "
-             "python core/scripts/gen_model.py switch <name>")\
-        .classes("text-xs text-gray-500")
+
+    rows_holder = ui.column().classes("w-full gap-2")
+
+    def _render():
+        rows_holder.clear()
+        fresh = list_profiles_masked()
+        with rows_holder:
+            for prof in fresh["profiles"]:
+                name = prof["name"]
+                with ui.card().classes("w-full"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label(name).classes("font-medium font-mono")
+                        if prof["active"]:
+                            ui.badge("当前使用").props("color=blue")
+                        configured = prof["key_in_keyring"] or (
+                            prof["api_key"] not in ("未配置",))
+                        ui.badge("已配置" if configured else "未配置")\
+                            .props(f"color={'green' if configured else 'grey'}")\
+                            .mark(f"badge-{name}")
+                    ui.label(f"{prof['model']} · {prof['base_url']} · "
+                             f"{prof['protocol']}").classes("text-xs text-gray-500")
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        key_input = ui.input(placeholder="粘贴你的 API key（如 sk-…）")\
+                            .props("type=password").classes("flex-1")\
+                            .mark(f"key-input-{name}")
+
+                        def _save(n=name, ki=key_input):
+                            val = (ki.value or "").strip()
+                            if not val:
+                                ui.notify("请先粘贴密钥", type="warning")
+                                return
+                            if save_api_key(n, val):
+                                ki.set_value("")            # 立即清空·明文不留 DOM
+                                ui.notify("已保存到本机安全存储", type="positive")
+                                _render()
+                            else:
+                                ui.notify("保存失败：本机安全存储不可用", type="negative")
+
+                        def _clear(n=name):
+                            clear_api_key(n)
+                            ui.notify("已清除该 profile 的密钥", type="info")
+                            _render()
+
+                        def _test(n=name):
+                            async def _run():
+                                from nicegui import run
+                                ui.notify("测试连接中…", type="ongoing")
+                                r = await run.io_bound(test_profile_connection, n)
+                                ui.notify(r["message"],
+                                          type="positive" if r["ok"] else "negative")
+                            return _run()
+
+                        ui.button("保存", on_click=_save).props("dense")\
+                            .mark(f"btn-save-key-{name}")
+                        ui.button("清除", on_click=_clear).props("flat dense")\
+                            .mark(f"btn-clear-key-{name}")
+                        ui.button("测试连接", on_click=_test).props("flat dense")\
+                            .mark(f"btn-test-key-{name}")
+
+    _render()
+    ui.button("🔄 刷新", on_click=_render).props("flat")
 
 
 def init_pages():

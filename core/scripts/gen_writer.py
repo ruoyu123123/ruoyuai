@@ -882,7 +882,19 @@ def _stream_once_gemini(profile, system: str, user: str, max_tokens: int,
     text = ""
     finish_raw = None
     usage = {}
-    resp = urllib.request.urlopen(req, timeout=GEN_MODEL_TIMEOUT)
+    # 🔴 BYOK 脱敏（对抗审查 must_fix#3）：gemini key 在 URL（?key=<KEY>），urlopen 的
+    # HTTPError/URLError str() 会带整条 URL → 经 stderr → GUI LogBuffer → 界面。BYOK 路由
+    # 真实用户 key 必须脱敏后再抛/打印。
+    try:
+        resp = urllib.request.urlopen(req, timeout=GEN_MODEL_TIMEOUT)
+    except Exception as _e:
+        try:
+            from secrets_store import redact as _redact
+        except Exception:
+            def _redact(s):  # 兜底：至少截断 key=
+                import re as _r
+                return _r.sub(r"(key=)[^&\s]+", r"\1***", str(s))
+        raise RuntimeError(f"gemini 请求失败: {_redact(str(_e))}") from None
     for raw in resp:  # 按行迭代 SSE（每事件一行 data: {json}）
         line = raw.decode("utf-8", "ignore").strip()
         if not line.startswith("data:"):

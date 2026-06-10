@@ -215,8 +215,8 @@ async def test_plans_page_shows_resumable(user: User, fake_project,
 async def test_settings_page_masks_keys(user: User, fake_project) -> None:
     await user.open("/settings")
     await user.should_see(marker="active-profile")
-    await user.should_see(marker="profile-table")
-    # 全量 key 绝不出现在页面数据里
+    # v28 BYOK：设置页从只读 table 升级为 per-profile 录入卡片（详见 test_gui_settings.py）
+    # 全量 key 绝不出现在页面数据里（masked 字段 < 20 字符 + key_in_keyring 布尔）
     data = gr.list_profiles_masked()
     for row in data["profiles"]:
         assert len(row["api_key"]) < 20

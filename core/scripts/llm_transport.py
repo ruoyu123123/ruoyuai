@@ -41,6 +41,13 @@ if str(_SCRIPTS) not in sys.path:
 
 from gen_model_loader import GenModelLoader, Profile  # noqa: E402
 
+try:
+    from secrets_store import redact as _redact  # BYOK key 脱敏（gemini key 在 URL）
+except Exception:
+    def _redact(s):
+        import re as _r
+        return _r.sub(r"(key=)[^&\s]+", r"\1***", str(s))
+
 # 与 ai_wrapper.py:154 / gen_writer.GEN_MODEL_TIMEOUT 对齐
 DEFAULT_TIMEOUT = 180.0
 CONNECT_TIMEOUT = 15.0
@@ -344,11 +351,13 @@ def _stream_once_gemini(profile: Profile, system: str, user: str, max_tokens: in
                         usage = d["usageMetadata"]
     except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout,
             httpx.PoolTimeout) as e:
-        raise TransportTimeout(f"gemini-native timeout: {str(e)[:200]}") from e
+        raise TransportTimeout(f"gemini-native timeout: {_redact(str(e))[:200]}") from e
     except TransportError:
         raise
     except httpx.HTTPError as e:
-        raise TransportError(f"gemini-native {type(e).__name__}: {str(e)[:200]}") from e
+        # 🔴 BYOK 脱敏（must_fix#3）：httpx 异常 str() 含请求 URL（?key=<KEY>）→ 脱敏后再抛
+        raise TransportError(
+            f"gemini-native {type(e).__name__}: {_redact(str(e))[:200]}") from e
 
     cached = usage.get("cachedContentTokenCount")
     if cached:

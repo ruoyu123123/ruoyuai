@@ -21,6 +21,38 @@ from pathlib import Path
 import os
 import re
 
+try:
+    import secrets_store  # keyring 薄抽象（BYOK·唯一 import keyring 处）
+except Exception:
+    secrets_store = None
+
+
+def _resolve_api_key(name: str, env_file_value: str) -> str:
+    """三级优先级解析 api_key（第一个 strip 后非空者胜）：
+      1. keyring（BYOK·分发版主路径·DPAPI 加密）
+      2. os.environ["GEN__<name>__API_KEY"]（CI/容器/临时覆盖·仅当 .env 未定义该 key 时
+         才有独立值——load_dotenv(override=True) 会把 .env 的 key 回灌 environ·见下注）
+      3. env_file_value（.env 文本·dev 单一来源·现状逐字节不变）
+
+    🔴 对抗审查 must_fix#1：__init__ 的 load_dotenv(env_path, override=True) 在 _parse_profiles
+    前运行，会用 .env 值**覆盖** os.environ 里同名 GEN__<name>__API_KEY。故当 .env 定义了该
+    key 时，environ 层 == .env 层（无观测差异）；只有 .env **未**定义该 key 时 environ 才是
+    独立注入口（分发版无 .env / CI 场景）。这是真实可达且正确的语义，不做 environ 快照
+    （北极星最小改动）。任何 keyring 故障 → 当 None 降级，绝不冒泡成 GenModelConfigError。
+    """
+    if secrets_store is not None:
+        try:
+            if secrets_store.is_available():
+                kr = secrets_store.get_api_key(name)
+                if kr and kr.strip():
+                    return kr.strip()
+        except Exception:
+            pass  # keyring 故障绝不影响下游降级
+    env_v = (os.environ.get(f"GEN__{name}__API_KEY") or "").strip()
+    if env_v:
+        return env_v
+    return (env_file_value or "").strip()
+
 
 @dataclass
 class Profile:
@@ -105,7 +137,7 @@ class GenModelLoader:
                     name=name,
                     model=(fields.get("model") or "").strip(),
                     base_url=(fields.get("base_url") or "").strip(),
-                    api_key=(fields.get("api_key") or "").strip(),
+                    api_key=_resolve_api_key(name, fields.get("api_key") or ""),
                     temperature=float(temp_str),
                     max_tokens=int(max_tok_str) if max_tok_str else None,
                     protocol=((fields.get("protocol") or "openai").strip().lower() or "openai"),
@@ -147,7 +179,8 @@ class GenModelLoader:
             )
         if not p.api_key:
             raise GenModelConfigError(
-                f"active profile '{active}' 缺 API_KEY；编辑 .env 填入 GEN__{active}__API_KEY"
+                f"active profile '{active}' 缺 API_KEY；请在设置页录入你的密钥，"
+                f"或编辑 .env 填入 GEN__{active}__API_KEY"
             )
         return p
 

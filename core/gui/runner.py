@@ -131,11 +131,65 @@ def list_profiles_masked() -> dict:
     loader = GenModelLoader()
     active = (os.environ.get("GEN_MODEL_ACTIVE") or "").strip()
     rows = []
+    import secrets_store
     for p in loader.list_profiles():
         masked = (p.api_key[:6] + "…" + p.api_key[-4:]) if len(p.api_key) > 12 \
             else ("已配置" if p.api_key else "未配置")
         rows.append({"name": p.name, "model": p.model or "(探测)",
                      "base_url": p.base_url, "protocol": p.protocol,
                      "thinking_level": p.thinking_level or "-",
-                     "api_key": masked, "active": p.name == active})
-    return {"active": active, "profiles": rows}
+                     "api_key": masked, "active": p.name == active,
+                     "key_in_keyring": secrets_store.has_api_key(p.name)})
+    return {"active": active, "profiles": rows,
+            "keyring_available": secrets_store.is_available()}
+
+
+# ============ BYOK 密钥管理（设置页·绝不把 key 写回 .env / 不展示明文）============
+def save_api_key(name: str, key: str) -> bool:
+    """存用户 key 到 keyring + 失效 loader 缓存（不 reset 则 GUI 录入不生效·风险1）。"""
+    import secrets_store
+    from gen_model_loader import reset_default_loader
+    ok = secrets_store.set_api_key(name, key)
+    reset_default_loader()
+    return ok
+
+
+def clear_api_key(name: str) -> bool:
+    import secrets_store
+    from gen_model_loader import reset_default_loader
+    ok = secrets_store.delete_api_key(name)
+    reset_default_loader()
+    return ok
+
+
+def profile_key_status(name: str) -> bool:
+    import secrets_store
+    return secrets_store.has_api_key(name)
+
+
+def _classify_conn_err(e: Exception) -> str:
+    """异常归人话 + 脱敏（gemini key 在 URL·绝不回显·must_fix#2/#3）。"""
+    import secrets_store
+    raw = secrets_store.redact(f"{type(e).__name__}: {e}")
+    low = raw.lower()
+    if "401" in raw or "invalid" in low or "unauthor" in low or "api key" in low:
+        return "密钥无效（鉴权失败）"
+    if "rate" in low or "429" in raw or "quota" in low:
+        return "额度不足或被限流"
+    if "timeout" in low or "timed out" in low:
+        return "网络或代理超时"
+    return f"连接失败：{raw[:80]}"
+
+
+def test_profile_connection(name: str) -> dict:
+    """极短探针验证 key 能用（新建 loader 绕缓存·归一人话·redact key）。"""
+    from gen_model_loader import GenModelLoader
+    import llm_transport as T
+    try:
+        p = GenModelLoader().get_profile(name)
+        if p is None or not p.api_key:
+            return {"ok": False, "message": "未配置密钥"}
+        T.stream_once(p, "ping", "回复ok", max_tokens=8)
+        return {"ok": True, "message": f"连接成功（模型 {p.model or p.name}）"}
+    except Exception as e:
+        return {"ok": False, "message": _classify_conn_err(e)}
