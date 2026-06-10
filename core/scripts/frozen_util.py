@@ -24,13 +24,43 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 _warned = False
+
+# dev 仓库根：frozen_util 在 core/scripts/ → parents[2] = 仓库根
+_DEV_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def is_frozen() -> bool:
     """是否运行在 PyInstaller/cx_Freeze frozen 二进制里。"""
     return bool(getattr(sys, "frozen", False))
+
+
+def bundle_root() -> Path:
+    """资源/代码树的根目录——派生 core/config、core/scripts、core/claude-home 等相对路径的基准。
+
+    🔴 对抗审查 FATAL 修复（2026-06-10）：PyInstaller 把 core/scripts 下的模块收成**扁平
+    顶层名**（gen_model_loader.__file__ = _internal/gen_model_loader.py），于是源码里
+    `Path(__file__).resolve().parent.parent / "config"` 之类的相对推算在 frozen 下全错
+    （core/scripts 两级目录消失）。派生项目路径的模块必须改用本函数当基准，而非 __file__。
+
+    - frozen（PyInstaller onedir）：sys._MEIPASS 指向 _internal/，资源经 datas 落在
+      _internal/core/config、_internal/core/scripts 等 → bundle_root()/core/config 命中。
+    - dev：返回仓库根（core/scripts 的 parents[2]）→ 与现状逐字节一致。
+    """
+    if is_frozen():
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+        # frozen 但无 _MEIPASS（极少·非 PyInstaller 冻结器）→ exe 同级兜底
+        return Path(sys.executable).resolve().parent
+    return _DEV_REPO_ROOT
+
+
+def resource_path(*parts: str) -> Path:
+    """bundle_root() 下的资源绝对路径（如 resource_path('core','config','x.env')）。"""
+    return bundle_root().joinpath(*parts)
 
 
 def child_python() -> str:

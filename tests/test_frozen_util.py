@@ -23,6 +23,91 @@ def test_dev_returns_sys_executable():
         sys.frozen = saved
 
 
+# ============ bundle_root frozen-aware（对抗审查 FATAL 修复）============
+def test_bundle_root_dev_is_repo_root():
+    saved = getattr(sys, "frozen", False)
+    sys.frozen = False
+    try:
+        # dev：core/scripts 的 parents[2] = 仓库根
+        repo = Path(__file__).resolve().parent.parent
+        assert fu.bundle_root() == repo
+        assert fu.resource_path("core", "config") == repo / "core" / "config"
+    finally:
+        sys.frozen = saved
+
+
+def test_bundle_root_frozen_is_meipass():
+    saved_f = getattr(sys, "frozen", False)
+    saved_m = getattr(sys, "_MEIPASS", None)
+    sys.frozen = True
+    sys._MEIPASS = r"X:\app\_internal"
+    try:
+        assert fu.bundle_root() == Path(r"X:\app\_internal")
+        assert fu.resource_path("core", "config", "x.env") == \
+            Path(r"X:\app\_internal") / "core" / "config" / "x.env"
+    finally:
+        sys.frozen = saved_f
+        if saved_m is None:
+            try:
+                del sys._MEIPASS
+            except AttributeError:
+                pass
+        else:
+            sys._MEIPASS = saved_m
+
+
+def test_bundle_root_frozen_no_meipass_falls_to_exe_dir():
+    saved_f = getattr(sys, "frozen", False)
+    saved_m = getattr(sys, "_MEIPASS", None)
+    sys.frozen = True
+    if hasattr(sys, "_MEIPASS"):
+        del sys._MEIPASS
+    try:
+        assert fu.bundle_root() == Path(sys.executable).resolve().parent
+    finally:
+        sys.frozen = saved_f
+        if saved_m is not None:
+            sys._MEIPASS = saved_m
+
+
+def test_loader_builtin_cfg_frozen_aware():
+    """gen_model_loader 在 frozen 下从 bundle_root() 定位 config（非 __file__ 推算）。"""
+    import importlib
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core" / "scripts"))
+    import gen_model_loader as gml
+    saved_f = getattr(sys, "frozen", False)
+    saved_m = getattr(sys, "_MEIPASS", None)
+    import tempfile
+    meipass = tempfile.mkdtemp()
+    cfgdir = Path(meipass) / "core" / "config"
+    cfgdir.mkdir(parents=True)
+    (cfgdir / "gen_profiles.default.env").write_text(
+        "GEN__z__MODEL=zz\nGEN_MODEL_ACTIVE=z\n", encoding="utf-8")
+    sys.frozen = True
+    sys._MEIPASS = meipass
+    cwd = os.getcwd()
+    try:
+        os.chdir(meipass)            # 无 .env 的 cwd → 落第三级 builtin
+        gml.reset_default_loader()
+        ld = gml.GenModelLoader()
+        assert ld._dist_mode is True
+        assert Path(ld.env_path).resolve() == (cfgdir / "gen_profiles.default.env").resolve()
+        assert "z" in {p.name for p in ld.list_profiles()}
+    finally:
+        os.chdir(cwd)
+        sys.frozen = saved_f
+        if saved_m is None:
+            try:
+                del sys._MEIPASS
+            except AttributeError:
+                pass
+        else:
+            sys._MEIPASS = saved_m
+        gml.reset_default_loader()
+        import shutil
+        shutil.rmtree(meipass, ignore_errors=True)
+
+
 def test_frozen_with_ruoyu_python_uses_bundled():
     saved = getattr(sys, "frozen", False)
     saved_env = os.environ.get("RUOYU_PYTHON")

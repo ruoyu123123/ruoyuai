@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 import re
+import sys
 
 try:
     import secrets_store  # keyring 薄抽象（BYOK·唯一 import keyring 处）
@@ -84,16 +85,30 @@ class GenModelLoader:
     """
 
     def __init__(self, env_path: str | Path | None = None):
-        builtin_cfg = (Path(__file__).resolve().parent.parent
-                       / "config" / "gen_profiles.default.env")
+        # 🔴 frozen-aware 定位（对抗审查 FATAL）：PyInstaller 扁平收模块使
+        # __file__.parent.parent 在 frozen 下指错 → 用 frozen_util.bundle_root()（frozen=
+        # _MEIPASS·dev=仓库根）当基准。secrets_store 缺失同款软兜底，frozen_util 一定在。
+        try:
+            from frozen_util import bundle_root as _bundle_root
+            builtin_cfg = _bundle_root() / "core" / "config" / "gen_profiles.default.env"
+        except Exception:
+            builtin_cfg = (Path(__file__).resolve().parent.parent
+                           / "config" / "gen_profiles.default.env")
         if env_path is None:
-            # 优先 cwd/.env，其次脚本同级仓库根 .env，最后内置非密 config（分发模式）。
+            # 优先 cwd/.env（用户可在 exe 同级放 .env 覆盖），其次 dev 仓库根 .env，
+            # 最后内置非密 config（分发模式）。frozen 下跳过 repo_env——它是 dev 概念且
+            # __file__ 在 frozen 被扁平收录后指错（对抗审查 FATAL 同源）。
             cwd_env = Path(".env")
+            try:
+                from frozen_util import is_frozen as _is_frozen
+                _frozen = _is_frozen()
+            except Exception:
+                _frozen = bool(getattr(sys, "frozen", False))
             repo_env = Path(__file__).resolve().parent.parent.parent / ".env"
             if cwd_env.exists():
-                env_path = cwd_env                      # ① dev cwd（逐字节不变）
-            elif repo_env.exists():
-                env_path = repo_env                     # ② 仓库根（逐字节不变）
+                env_path = cwd_env                      # ① dev cwd / exe 同级（逐字节不变）
+            elif (not _frozen) and repo_env.exists():
+                env_path = repo_env                     # ② dev 仓库根（frozen 跳过）
             else:
                 env_path = builtin_cfg                  # ③ 内置非密 config（分发模式）
         self.env_path = Path(env_path)

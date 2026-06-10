@@ -43,7 +43,15 @@ if str(_SCRIPTS) not in sys.path:
 
 import plan_tracker as pt  # noqa: E402
 
-REPO_ROOT = _SCRIPTS.parent.parent
+# 🔴 frozen-aware REPO_ROOT（对抗审查 FATAL）：PyInstaller 扁平收模块使
+# __file__.parent.parent.parent 在 frozen 下指到 bundle 外 → run_script_in_process 的
+# repo_root/tokens[0] 解析不到脚本、plan/数据相对路径全错。用 frozen_util.bundle_root()
+# （frozen=_MEIPASS·dev=仓库根·与 _SCRIPTS.parent.parent 逐字节一致）。
+try:
+    from frozen_util import bundle_root as _bundle_root
+    REPO_ROOT = _bundle_root()
+except Exception:
+    REPO_ROOT = _SCRIPTS.parent.parent
 SCRIPT_TIMEOUT = 1800  # 单脚本 30min 上限（splitter/audit 大 cluster 也够）
 
 
