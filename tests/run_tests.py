@@ -9,9 +9,14 @@
 不碰 LLM、不碰 agent —— 对标业界「把确定性逻辑与 LLM 输出测试分离」共识。
 """
 import importlib.util
+import os
 import sys
 import traceback
 from pathlib import Path
+
+# 🔴 测试态禁 GUI 文件日志（import core.gui.app 触发模块级 STATE=AppState()→_make_log_buffer·
+# 本 runner 不在 sys.modules 留 pytest → 否则往 repo/logs 撒文件污染 git·与 pytest bypass 同闸）。
+os.environ.setdefault("RUOYUAI_GUI_LOG_DISABLE", "1")
 
 
 def main():

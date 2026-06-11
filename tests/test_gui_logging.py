@@ -79,6 +79,8 @@ def test_make_log_buffer_env_override(monkeypatch=None):
     tmp = _tmp()
     saved_pt = sys.modules.pop("pytest", None)
     saved_env = os.environ.get("RUOYUAI_GUI_LOG_DIR")
+    saved_dis = os.environ.get("RUOYUAI_GUI_LOG_DISABLE")  # run_tests.py 设了 1·须临时清
+    os.environ.pop("RUOYUAI_GUI_LOG_DISABLE", None)
     os.environ["RUOYUAI_GUI_LOG_DIR"] = str(tmp)
     try:
         lb = gs._make_log_buffer()
@@ -91,6 +93,8 @@ def test_make_log_buffer_env_override(monkeypatch=None):
             os.environ.pop("RUOYUAI_GUI_LOG_DIR", None)
         else:
             os.environ["RUOYUAI_GUI_LOG_DIR"] = saved_env
+        if saved_dis is not None:
+            os.environ["RUOYUAI_GUI_LOG_DISABLE"] = saved_dis
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 

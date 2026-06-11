@@ -129,3 +129,6 @@ ruoyu.7z
 /build/
 /dist/
 *.spec.bak
+
+# GUI 运行态日志(dev=repo/logs·实测产物·不入库)
+logs/
