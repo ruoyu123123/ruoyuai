@@ -85,6 +85,18 @@ def user_data_dir() -> Path:
     return _DEV_REPO_ROOT
 
 
+def user_workspace_dir() -> Path:
+    """用户**创作产物**根目录（小说项目 novels/ + 风格库 styles/）。
+
+    🔴 workspace-in-frozen 修复（2026-06-11·真 outline e2e 抓出）：novels/styles 是**用户数据**·
+    不在只读 bundle。dev=仓库根/workspace（逐字节零回归）·frozen=user_data_dir()/workspace
+    （%APPDATA%/ruoyuai/workspace·可写·GUI 实际建书落点）。state.NOVELS_DIR + plan_tracker.
+    PROJECTS_DIR/STYLES_DIR + init_project 风格库派生统一用此（否则 frozen 下 REPO_ROOT=dist
+    指错 + run_script_in_process chdir _MEIPASS 使相对路径错位）。
+    """
+    return user_data_dir() / "workspace"
+
+
 def scripts_dir() -> Path:
     """core/scripts 目录（fan-out 脚本据此定位兄弟 scanner 子脚本）。
 

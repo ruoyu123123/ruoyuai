@@ -24,7 +24,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-NOVELS_DIR = REPO_ROOT / "workspace" / "novels"
+# 🔴 workspace-in-frozen 修复：GUI 建书落点用 user_workspace_dir()（dev=仓库根/workspace·
+# frozen=%APPDATA%/ruoyuai/workspace 可写）·与 plan_tracker.PROJECTS_DIR 统一（否则 frozen
+# 下 GUI 建在 dist、resolve_project_root 找在别处 → 建书链路断·真 outline e2e 抓出）。
+try:
+    import sys as _sys
+    _sd = str(Path(__file__).resolve().parent.parent / "scripts")
+    if _sd not in _sys.path:
+        _sys.path.insert(0, _sd)
+    from frozen_util import user_workspace_dir as _uwd
+    NOVELS_DIR = _uwd() / "novels"
+except Exception:
+    NOVELS_DIR = REPO_ROOT / "workspace" / "novels"
 
 # 走向卡等待上限（秒）——超时返回 None 让流水线报错停在停顿点（可 resume），
 # 绝不静默替用户做选择（北极星③）。

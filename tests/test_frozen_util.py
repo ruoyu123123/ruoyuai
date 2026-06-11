@@ -223,6 +223,75 @@ def test_user_data_dir_frozen_is_appdata():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_user_workspace_dir_dev_and_frozen():
+    """user_workspace_dir() dev=仓库根/workspace(零回归)·frozen=%APPDATA%/ruoyuai/workspace。"""
+    saved_f = getattr(sys, "frozen", False)
+    sys.frozen = False
+    try:
+        assert fu.user_workspace_dir() == Path(__file__).resolve().parent.parent / "workspace"
+    finally:
+        sys.frozen = saved_f
+    saved_a = os.environ.get("APPDATA")
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    sys.frozen = True
+    os.environ["APPDATA"] = tmp
+    try:
+        assert fu.user_workspace_dir() == Path(tmp) / "ruoyuai" / "workspace"
+    finally:
+        sys.frozen = saved_f
+        if saved_a is None:
+            os.environ.pop("APPDATA", None)
+        else:
+            os.environ["APPDATA"] = saved_a
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_workspace_anchors_frozen_aware():
+    """plan_tracker.PROJECTS_DIR/STYLES_DIR + state.NOVELS_DIR frozen 下迁 user_workspace
+    （GUI 建书落点 + resolve_project_root 统一·真 outline e2e 抓出）。dev 仍仓库根/workspace。"""
+    _scripts = str(Path(__file__).resolve().parent.parent / "core" / "scripts")
+    if _scripts not in sys.path:
+        sys.path.insert(0, _scripts)
+    import importlib
+    saved_f = getattr(sys, "frozen", False)
+    saved_m = getattr(sys, "_MEIPASS", None)
+    saved_a = os.environ.get("APPDATA")
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    sys.frozen = True
+    sys._MEIPASS = str(Path(tmp) / "_internal")
+    os.environ["APPDATA"] = tmp
+    try:
+        import frozen_util as _fu
+        importlib.reload(_fu)
+        ws = _fu.user_workspace_dir()
+        import plan_tracker as pt
+        importlib.reload(pt)
+        assert str(pt.PROJECTS_DIR).startswith(str(ws)), "PROJECTS_DIR 未迁 user_workspace"
+        assert str(pt.STYLES_DIR).startswith(str(ws)), "STYLES_DIR 未迁 user_workspace"
+    finally:
+        sys.frozen = saved_f
+        if saved_m is None:
+            try:
+                del sys._MEIPASS
+            except AttributeError:
+                pass
+        else:
+            sys._MEIPASS = saved_m
+        if saved_a is None:
+            os.environ.pop("APPDATA", None)
+        else:
+            os.environ["APPDATA"] = saved_a
+        import frozen_util as _fu
+        importlib.reload(_fu)
+        if "plan_tracker" in sys.modules:
+            importlib.reload(sys.modules["plan_tracker"])
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_writable_anchors_frozen_aware():
     """MAPE-K runtime / plan attest / model cache 等可写系统数据 frozen 下迁用户态
     （dev 仍仓库根·零回归）——否则 frozen 写只读 bundle 必崩。"""

@@ -96,16 +96,19 @@ try:
     TEMPLATES_DIR = _bundle_root() / "core" / "claude-home" / "plans"
 except Exception:
     TEMPLATES_DIR = REPO_ROOT / "core" / "claude-home" / "plans"
-PROJECTS_DIR = REPO_ROOT / "workspace" / "novels"
-STYLES_DIR = REPO_ROOT / "workspace" / "styles"
-# 🔴 frozen 可写数据修复：无项目兜底 plan + attest HMAC 密钥是**可写**系统数据，frozen 下
-# 写只读 bundle 必失败（attest_key 每次盖章写 → plan_tracker.step/end 全崩）。用
-# user_data_dir()（dev=REPO_ROOT 逐字节一致·frozen=%APPDATA%/ruoyuai 可写）。
+# 🔴 workspace-in-frozen 修复（真 outline e2e 抓出）：novels/styles 是**用户创作产物**·
+# frozen 下用 user_workspace_dir()（dev=仓库根/workspace 逐字节一致·frozen=%APPDATA%/ruoyuai/
+# workspace 可写）。否则 frozen 下 REPO_ROOT=dist 指错 → GUI 建书/resolve_project_root 全错位。
+# 🔴 frozen 可写数据修复：无项目兜底 plan + attest HMAC 密钥用 user_data_dir()（每次盖章写）。
 try:
-    from frozen_util import user_data_dir as _udd
+    from frozen_util import user_data_dir as _udd, user_workspace_dir as _uwd
     _WRITABLE_ROOT = _udd()
+    _WORKSPACE = _uwd()
 except Exception:
     _WRITABLE_ROOT = REPO_ROOT
+    _WORKSPACE = REPO_ROOT / "workspace"
+PROJECTS_DIR = _WORKSPACE / "novels"
+STYLES_DIR = _WORKSPACE / "styles"
 GLOBAL_PLANS_DIR = _WRITABLE_ROOT / "core" / "claude-home" / ".plans"
 # 2026-05-29 修：attestation HMAC 的机器本地密钥（与 GLOBAL_PLANS_DIR 同级隐藏文件）
 ATTEST_KEY_PATH = GLOBAL_PLANS_DIR / ".attest_key"
