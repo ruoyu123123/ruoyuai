@@ -11,6 +11,7 @@ sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 
 import ingest_author_text as it  # noqa: E402
 import distill_chapter_metrics as cm  # noqa: E402
+import distill_prep_cluster_text as pc  # noqa: E402
 
 _RAW = ("序章导言（章标题前·应丢弃）\n"
         "第1章 开场\n正文一行一\n正文一行二\n"
@@ -83,6 +84,53 @@ def test_chapter_metrics_missing_raw_returns_1():
     tmp = Path(tempfile.mkdtemp())
     try:
         assert cm.run(tmp) == 1   # 无 原文/
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _prep_proj():
+    tmp = Path(tempfile.mkdtemp())
+    (tmp / "原文").mkdir(parents=True)
+    for ch in (1, 2, 3):
+        (tmp / "原文" / f"第{ch}章.txt").write_text(
+            f"第{ch}章 标题\n第{ch}章正文内容", encoding="utf-8")
+    (tmp / "cluster_index.json").write_text(json.dumps({"clusters": [
+        {"cluster_id": "cluster_001", "chapter_range": [1, 2]},
+        {"cluster_id": "cluster_002", "chapter_range": [3, 3]}]},
+        ensure_ascii=False), encoding="utf-8")
+    return tmp
+
+
+def test_prep_cluster_concatenates_range():
+    """cluster_001(章1-2) → 拼第1+2章全文·不含第3章。"""
+    tmp = _prep_proj()
+    try:
+        out = tmp / "full.txt"
+        assert pc.prep(tmp, "cluster_001", out) == 0
+        txt = out.read_text(encoding="utf-8")
+        assert "第1章正文" in txt and "第2章正文" in txt
+        assert "第3章正文" not in txt
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_prep_cluster_index_fallback_and_missing():
+    tmp = _prep_proj()
+    try:
+        assert pc.prep(tmp, "cluster_002", tmp / "f2.txt") == 0   # 章3
+        assert pc.prep(tmp, "cluster_999", tmp / "f3.txt") == 2   # 未找到
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_prep_cluster_no_index_returns_1():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "原文").mkdir()
+        assert pc.prep(tmp, "cluster_001", tmp / "o.txt") == 1
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
