@@ -119,3 +119,23 @@ if __name__ == "__main__":
                 print(f"  [FAIL] {nm}: {e}")
                 traceback.print_exc()
     sys.exit(1 if fails else 0)
+
+
+def test_emit_writes_rhythm_to_user_pref():
+    """轮次4 契约审计回归：用户 pause 答的节奏档必须落 用户偏好.json.rhythm_profile
+    （cluster-write step6 data_flow 的 source·此前无 producer → splitter 永收「标准」）。"""
+    import tempfile
+    import gen_creative as gc
+    from pathlib import Path as _P
+    tmp = _P(tempfile.mkdtemp())
+    try:
+        data = {"story_destiny": {}, "volumes": [], "major_events": [],
+                "cluster_001": {}, "_metadata": {}}
+        gc._emit_volume_arc_to_db(tmp, data, rhythm="紧凑", framework="三幕")
+        pref = json.loads((tmp / "_数据库" / "用户偏好.json").read_text(encoding="utf-8"))
+        assert pref.get("rhythm_profile") == "紧凑"
+        mj = json.loads((tmp / "_数据库" / "大势卡.json").read_text(encoding="utf-8"))
+        assert mj["_metadata"].get("rhythm_profile") == "紧凑"   # 确定性覆盖非 LLM 自觉
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)

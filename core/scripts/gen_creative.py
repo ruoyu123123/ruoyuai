@@ -410,10 +410,35 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
 
 
 # ============ volume_arc 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约）============
-def _emit_volume_arc_to_db(project_root: Path, data: dict) -> tuple[Path, Path]:
-    """把模型产出拆成 大势卡.json + 事件簇.json 原子落盘（确定性平铺·不靠模型写 schema 形状）。"""
+def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
+                           rhythm: str = "", framework: str = "") -> tuple[Path, Path]:
+    """把模型产出拆成 大势卡.json + 事件簇.json 原子落盘（确定性平铺·不靠模型写 schema 形状）。
+
+    rhythm/framework：用户 pause 答案（CLI 透传）——确定性写 _metadata + 用户偏好.json
+    （轮次4 契约审计抓出：cluster-write step6 data_flow <rhythm> 读 用户偏好.json.rhythm_
+    profile·此前无任何 producer 写它 → 用户选「紧凑」被静默丢弃·splitter 永远收「标准」）。"""
     db = project_root / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
+    # producer 补齐：用户偏好.json.rhythm_profile（splitter 经 cluster-write step6 消费）
+    if rhythm:
+        pref_path = db / "用户偏好.json"
+        pref = {}
+        if pref_path.exists():
+            try:
+                pref = json.loads(pref_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pref = {}
+        pref["rhythm_profile"] = rhythm
+        if framework:
+            pref["narrative_framework"] = framework
+        pref_path.write_text(json.dumps(pref, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+        # _metadata 确定性覆盖（不靠 LLM 自觉回写）
+        md = data.setdefault("_metadata", {})
+        if isinstance(md, dict):
+            md["rhythm_profile"] = rhythm
+            if framework:
+                md["narrative_framework"] = framework
     # 大势卡.json：story_destiny + _metadata + volumes + major_events（+ 静态 schema 锚点）
     major = {
         "_schema": "major_events_v21_phase", "schema_version": "v27",
@@ -506,7 +531,9 @@ def _run_volume_arc(args) -> int:
         data["_author_profile_missing"] = True
 
     if args.emit_to_db:
-        pm, pc = _emit_volume_arc_to_db(project_root, data)
+        pm, pc = _emit_volume_arc_to_db(project_root, data,
+                                        rhythm=args.rhythm or "",
+                                        framework=args.framework or "")
         print(f"[gen_creative][volume_arc] 大势卡 {len(data.get('volumes', []))} 卷 / "
               f"{len(data.get('major_events', []))} ME → {pm.name} + {pc.name}",
               file=sys.stderr)
