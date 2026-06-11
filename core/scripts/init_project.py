@@ -38,14 +38,22 @@ except Exception:
     _REPO = _SCRIPTS.parent.parent
 
 
-def _styles_dir() -> Path:
+def _styles_dir(project_root: Path | None = None) -> Path:
+    """风格库目录。🔴 风格库是**用户数据**(与小说项目是工作区兄弟目录)·**不在 bundle**：
+    项目在 <workspace>/novels/<书> → 风格库在 <workspace>/styles。从**项目路径**派生
+    (project_root.parent.parent/styles)·非 bundle_root(frozen 下 _internal 无 workspace)。
+    无 project_root(测试)时回退 _REPO/workspace/styles(dev)。"""
+    if project_root is not None:
+        cand = project_root.resolve().parent.parent / "styles"
+        if cand.is_dir():
+            return cand
     return _REPO / "workspace" / "styles"
 
 
 def emit_style_options(project_root: Path) -> int:
     """扫风格库出 style_options.json（含 作者风格.json 的才算有效风格）。"""
     styles = []
-    sd = _styles_dir()
+    sd = _styles_dir(project_root)
     if sd.is_dir():
         for d in sorted(sd.iterdir()):
             if d.is_dir() and (d / "作者风格.json").exists():
@@ -70,7 +78,7 @@ def emit_style_options(project_root: Path) -> int:
 
 def copy_style(project_root: Path, style_name: str) -> int:
     """拷选中风格的 skill 双文件进项目 _数据库（作者档第一权威）。"""
-    src = _styles_dir() / style_name
+    src = _styles_dir(project_root) / style_name
     if not src.is_dir():
         print(f"[init_project][FATAL] 风格库不存在: {src}", file=sys.stderr)
         return 2

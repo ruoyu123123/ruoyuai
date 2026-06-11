@@ -53,6 +53,27 @@ def test_copy_style_brings_double_file():
         # skill 双文件（多数风格库有 skill*.md）
 
 
+def test_styles_dir_derived_from_project_path():
+    """🔴 frozen bug 回归（真 outline e2e 抓出）：风格库是用户数据(与小说项目工作区兄弟)·
+    不在 bundle。须从项目路径派生 styles(项目 workspace/novels/X → 风格库 workspace/styles)·
+    非 bundle_root(frozen 下 _internal 无 workspace → 空风格 → auto_pilot None → data_flow 崩)。"""
+    proj = _ROOT / "workspace" / "novels" / "测试书"
+    sd = ip._styles_dir(proj)
+    assert sd == (_ROOT / "workspace" / "styles").resolve() or \
+        sd == _ROOT / "workspace" / "styles", f"未从项目路径派生 styles: {sd}"
+    # 仓库有风格库 → 从项目路径 emit 非空
+    real = _ROOT / "workspace" / "novels" / "__styletest_reg__"
+    real.mkdir(parents=True, exist_ok=True)
+    try:
+        ip.emit_style_options(real)
+        opts = json.loads((real / "_数据库" / ".wal" / "style_options.json")
+                          .read_text(encoding="utf-8"))
+        assert len(opts["styles"]) > 0, "从项目路径派生应找到仓库风格库"
+    finally:
+        import shutil
+        shutil.rmtree(real, ignore_errors=True)
+
+
 def test_nonexistent_style_exits_2():
     with tempfile.TemporaryDirectory() as tmp:
         proj = Path(tmp) / "测试书"
