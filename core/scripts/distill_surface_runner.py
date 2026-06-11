@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""distill_surface_runner.py — phase-1 表层蒸馏串联器（阶段3·循环 cluster 调 48 维 judge）。
+
+设计 w2zu042li 路 A：内部读 cluster_index 逐 cluster →
+  ① distill_prep_cluster_text 拼本 cluster 全章全文
+  ② run_judge('novel-distill-analyzer') 产 48 维 surface JSON（蒸馏进度/cluster_{key}_surface.json）
+  ③ 从 judge 的 continuity 段写 衔接分析/cluster_{key}_continuity.json（must_fix#2·arc_aggregator 消费）
+  ④ 逐章投影 蒸馏进度/ch{N}.json（word_count 从 chN_metrics·dims 引 cluster 级·arc_aggregator 读）
+
+判官调用走 judge_runner.run_judge（四硬契约·needs_author_profile=False·全章全文 context 注入）。
+失败 block：surface JSON 是蒸馏链源头·judge block 失败冒泡停 plan。
+
+用法：
+  python distill_surface_runner.py <project_root> [--overwrite] [--max-clusters N]
+退出码：0 成功 / 1 cluster_index 缺失 / 3 某 cluster judge block 失败
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+import distill_prep_cluster_text as prep  # noqa: E402
+
+
+def _chapter_wordcount(project_root: Path, ch: int) -> int:
+    """从 chN_metrics.json 取字数（distill_chapter_metrics 已产·避免重算）。"""
+    mp = project_root / "蒸馏进度" / f"ch{ch}_metrics.json"
+    if mp.exists():
+        try:
+            prof = json.loads(mp.read_text(encoding="utf-8")).get("profile", {})
+            for k in ("total_chars", "cjk_chars", "word_count", "char_count"):
+                if isinstance(prof.get(k), (int, float)):
+                    return int(prof[k])
+        except (OSError, json.JSONDecodeError):
+            pass
+    return 0
+
+
+def run(project_root: Path, *, overwrite: bool = False, max_clusters: int | None = None,
+        judge_fn=None) -> int:
+    """judge_fn：可注入（测试用）·默认 judge_runner.run_judge。"""
+    if judge_fn is None:
+        import judge_runner as jr
+        judge_fn = jr.run_judge
+    idx_path = project_root / "cluster_index.json"
+    if not idx_path.exists():
+        print(f"[surface_runner] cluster_index.json 不存在: {idx_path}", file=sys.stderr)
+        return 1
+    index = json.loads(idx_path.read_text(encoding="utf-8"))
+    clusters = index.get("clusters") if isinstance(index, dict) else index
+    if not isinstance(clusters, list) or not clusters:
+        print("[surface_runner] cluster_index 无 clusters", file=sys.stderr)
+        return 1
+    dist = project_root / "蒸馏进度"
+    cont_dir = project_root / "衔接分析"
+    dist.mkdir(parents=True, exist_ok=True)
+    cont_dir.mkdir(parents=True, exist_ok=True)
+    wal = dist / ".wal"
+    wal.mkdir(parents=True, exist_ok=True)
+
+    done = 0
+    for i, c in enumerate(clusters):
+        if max_clusters and done >= max_clusters:
+            break
+        cid = str(c.get("cluster_id") or f"cluster_{i+1:03d}")
+        key = "".join(ch for ch in cid if ch.isdigit()) or f"{i+1:03d}"
+        surface_out = dist / f"cluster_{key}_surface.json"
+        if surface_out.exists() and not overwrite:
+            done += 1
+            continue
+        rng = c.get("chapter_range") or []
+        if len(rng) != 2:
+            continue
+        start, end = int(rng[0]), int(rng[1])
+        # ① 拼本 cluster 全章全文
+        fulltext = wal / f"cluster_{key}_fulltext.txt"
+        rc = prep.prep(project_root, cid, fulltext)
+        if rc != 0:
+            print(f"[surface_runner] {cid} 全文准备失败 rc={rc}（跳过）", file=sys.stderr)
+            continue
+        # ② 调 48 维 judge（全章全文 context·block 失败冒泡）
+        try:
+            outcome = judge_fn(
+                "novel-distill-analyzer", project_root,
+                params={"CLUSTER_ID": cid, "CHAPTER_RANGE": f"ch{start}-ch{end}"},
+                context_files=[("本 cluster 全章原文", fulltext)],
+                output_path=surface_out)
+        except Exception as e:        # JudgeBlockedError 等 → block 级停
+            print(f"[surface_runner] {cid} judge block 失败: {e}", file=sys.stderr)
+            return 3
+        data = outcome.data if hasattr(outcome, "data") else (outcome or {})
+        # ③ continuity → 衔接分析/
+        cont = data.get("continuity") if isinstance(data, dict) else None
+        if isinstance(cont, dict):
+            (cont_dir / f"cluster_{key}_continuity.json").write_text(
+                json.dumps(cont, ensure_ascii=False, indent=2), encoding="utf-8")
+        # ④ 逐章投影 ch{N}.json（arc_aggregator 读 word_count + dims·cluster 级分析投到每章）
+        dims = data.get("qualitative_dims") if isinstance(data, dict) else None
+        for ch in range(start, end + 1):
+            (dist / f"ch{ch}.json").write_text(json.dumps({
+                "chapter": ch, "cluster_id": cid,
+                "word_count": _chapter_wordcount(project_root, ch),
+                "cluster_surface_ref": surface_out.name,
+                "qualitative_dims": dims or {},
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+        done += 1
+    print(f"[surface_runner] {done} cluster 表层蒸馏完成（surface + continuity + 逐章投影）",
+          file=sys.stderr)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("project_root")
+    ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--max-clusters", type=int, default=None)
+    ap.add_argument("--plan-id", default=None, help="（plan 集成预留·当前未用）")
+    args = ap.parse_args()
+    sys.exit(run(Path(args.project_root), overwrite=args.overwrite,
+                 max_clusters=args.max_clusters))
+
+
+if __name__ == "__main__":
+    main()
