@@ -290,6 +290,7 @@ def run_judge(agent_name: str, project_root: str | Path, *,
               loader: GenModelLoader | None = None,
               agents_dir: Path | None = None,
               retry: lt.RetryPolicy | None = None,
+              required_keys: tuple | None = None,
               _generate_fn=None) -> JudgeOutcome:
     """跑一个判断 agent 端到端：装配 prompt → judge_call → 按 failure_policy 落盘/抛错。
 
@@ -299,6 +300,9 @@ def run_judge(agent_name: str, project_root: str | Path, *,
     spec = AGENT_SPECS.get(agent_name)
     if spec is None:
         raise KeyError(f"未注册的判断 agent: {agent_name}（注册表: {list(AGENT_SPECS)}）")
+    # per-call 结构键覆盖（轮次10：outline-planner 多模式输出形态不同·spec 注释承诺的
+    # 「结构校验交模式各自的调用点传」在此兑现——plan step 可声明 judge_required_keys）。
+    req_keys = tuple(required_keys) if required_keys is not None else spec.required_keys
     project_root = Path(project_root)
 
     # —— system 装配：适配头 + .md 原文 + 作者档（硬契约 1） ——
@@ -319,7 +323,7 @@ def run_judge(agent_name: str, project_root: str | Path, *,
     try:
         data, retries, profile_name = judge_call(
             profiles, system, user,
-            required_keys=spec.required_keys,
+            required_keys=req_keys,
             max_tokens=spec.max_tokens,
             label=f"judge:{agent_name}",
             retry=retry,
@@ -333,14 +337,14 @@ def run_judge(agent_name: str, project_root: str | Path, *,
                 "_transport_exhausted": [f"{n}: {r}" for n, r in e.failures]}
         retries, profile_name = 0, ""
 
-    ok = not data.get("_parse_failed") and not _missing_keys(data, spec.required_keys)
+    ok = not data.get("_parse_failed") and not _missing_keys(data, req_keys)
     degraded = False
     if not ok:
         if spec.failure_policy == "block":
             raise JudgeBlockedError(
                 f"{agent_name} 输出结构破损（重试 {retries} 次后仍 "
                 f"parse_failed={data.get('_parse_failed', False)} / 缺键="
-                f"{_missing_keys(data, spec.required_keys)}）——block 级不可静默透传，"
+                f"{_missing_keys(data, req_keys)}）——block 级不可静默透传，"
                 f"修复后重跑本步。")
         degraded = True
         data.setdefault("_degraded", True)

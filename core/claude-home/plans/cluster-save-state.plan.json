@@ -202,7 +202,11 @@
       "scripts": [
         "python core/scripts/cluster_emergence_engine.py {project_root} emerge --after-cluster cluster_{key}",
         "# 程序驱动: outline-planner 经 must_spawn_agent 派发 judge_runner (MODE=cluster_emergence)"
-      ]
+      ],
+      "judge_required_keys": [
+        "candidates"
+      ],
+      "_judge_required_keys_doc": "轮次10 实测：judge 落盘顶层键漂移(candidates_data)→弹卡空选项→流水线硬停。结构键钉死(缺即整发重试·结构校验非内容规训·北极星⑤)"
     },
     {
       "n": 12,

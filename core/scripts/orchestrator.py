@@ -439,9 +439,11 @@ def default_judge_dispatch(agent_name: str, step: dict, ctx: dict):
         sp = Path(sec_raw)
         secondary = sp if sp.is_absolute() else project_root / sp
 
+    rk = step.get("judge_required_keys")
     return jr.run_judge(agent_name, project_root, params=params,
                         context_files=context_files, output_path=output_path,
-                        secondary_output_path=secondary)
+                        secondary_output_path=secondary,
+                        required_keys=tuple(rk) if rk else None)
 
 
 # ============ 停顿点 ============
@@ -479,6 +481,22 @@ def _resolve_pause(step: dict, ctx: dict, *, auto_pilot: bool,
                     if seg and isinstance(cur, dict):
                         cur = cur.get(seg, [])
                 options = cur if isinstance(cur, list) else []
+                # 🔴 轮次10 实测容错：judge 落盘 schema 间歇漂移（candidates →
+                # candidates_data/candidates_detailed）→ options 空 → 静默降级自由输入
+                # → 原始值落盘 → choice_apply 硬停。同义键嗅探兜一层（producer 端
+                # required_keys 钉死是主修·此处防双重失效）+ WARN 可观测。
+                if not options and isinstance(data, dict):
+                    for alt in ("candidates", "candidates_data",
+                                "candidates_detailed", "options"):
+                        alt_v = data.get(alt)
+                        if isinstance(alt_v, list) and alt_v \
+                                and all(isinstance(x, dict) for x in alt_v):
+                            options = alt_v
+                            print(f"[orchestrator] WARN pause 候选 options_field="
+                                  f"{spec.get('options_field')} 为空·同义键 {alt} "
+                                  f"嗅探命中（上游 schema 漂移·建议查 producer）",
+                                  file=sys.stderr)
+                            break
             except (OSError, json.JSONDecodeError):
                 options = []
     # 🔴 inline_options 回退（阶段2 创建书籍·must_fix）：framework/rhythm 等是**字面枚举**·
