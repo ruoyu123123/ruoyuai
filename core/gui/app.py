@@ -35,8 +35,109 @@ def _header(title: str):
         ui.label(f"若渝AI · {title}").classes("text-lg font-bold")
         with ui.row().classes("gap-2"):
             ui.link("写作台", "/").classes("text-white")
+            ui.link("新建书", "/new-book").classes("text-white")
             ui.link("Plan 续跑", "/plans").classes("text-white")
             ui.link("设置", "/settings").classes("text-white")
+
+
+def _opt_label(opt, i):
+    """走向卡/灵感卡可读标签（label/title/logline/scope_summary 兜底·不暴露裸 dict）。"""
+    if not isinstance(opt, dict):
+        return str(opt)[:80]
+    if opt.get("label"):
+        return opt["label"]
+    if opt.get("title"):
+        return opt["title"]
+    if opt.get("logline"):           # 灵感卡用 logline（gen_creative brainstorm）
+        return str(opt["logline"])[:60]
+    scope = str(opt.get("scope_summary") or "")
+    if scope:
+        return scope.split("。")[0][:60]
+    return opt.get("parent_me") or f"候选{i + 1}"
+
+
+def _mount_pipeline_panel(status_label, result_label, log_view):
+    """共享：走向卡/灵感卡 pause 弹窗 + 0.5s 轮询（status/日志/停顿桥）。写作台 + /new-book 复用。
+
+    对抗审查已收口机制：req_id 代际令牌防多 tab 抢答 + 陈旧卡·per-client 日志游标·
+    背景任务 _await_card 与 _tick 解耦（_tick 不阻塞·能中断陈旧卡）。"""
+    card_dialog = ui.dialog().props("persistent")
+    dialog_state = {"req_id": None, "done_rid": None}
+
+    async def _await_card(rid):
+        try:
+            answer = await card_dialog
+        except Exception:
+            answer = None
+        try:
+            if answer is None:
+                ui.notify("走向卡已失效（已被处理或超时）——如需选择请到「Plan 续跑」页继续",
+                          type="warning")
+            elif not STATE.bridge.respond(answer, req_id=rid):
+                ui.notify("该选择未生效（走向已被处理或已超时）——请到「Plan 续跑」页继续",
+                          type="warning")
+        finally:
+            dialog_state["done_rid"] = rid
+            dialog_state["req_id"] = None
+            card_dialog.clear()
+
+    def _sync_cards():
+        pending = STATE.bridge.pending
+        if dialog_state["req_id"] is not None:
+            if not pending or pending.get("req_id") != dialog_state["req_id"]:
+                card_dialog.submit(None)
+                card_dialog.clear()
+            return
+        if not pending:
+            return
+        rid = pending.get("req_id")
+        if rid == dialog_state["done_rid"]:
+            return
+        try:
+            card_dialog.clear()
+            options = pending.get("options") or []
+            spec = pending.get("spec") or {}
+            with card_dialog, ui.card().classes("w-[36rem]"):
+                ui.label(spec.get("prompt") or "需要你的选择").classes("font-bold")
+                if options:
+                    for i, opt in enumerate(options):
+                        desc = (opt.get("description") or opt.get("scope_summary") or "")\
+                            if isinstance(opt, dict) else ""
+                        with ui.card().classes("w-full"):
+                            ui.label(f"[{i + 1}] {_opt_label(opt, i)}").classes("font-medium")
+                            if desc:
+                                ui.label(str(desc)[:160]).classes("text-xs text-gray-600")
+                            ui.button("选这个",
+                                      on_click=lambda _, o=opt: card_dialog.submit(o))\
+                                .props("dense flat").mark(f"card-opt-{i}")
+                else:
+                    free = ui.input(spec.get("prompt") or "输入")
+                    ui.button("提交", on_click=lambda: card_dialog.submit(
+                        int(free.value) if spec.get("type") == "integer"
+                        and str(free.value).isdigit() else free.value))
+            card_dialog.open()
+            background_tasks.create(_await_card(rid))
+            dialog_state["req_id"] = rid
+        except Exception as e:
+            dialog_state["req_id"] = None
+            card_dialog.clear()
+            STATE.log_buffer.append(f"[gui] 走向卡渲染失败（已复位可重弹）：{e}")
+
+    log_cursor = {"v": 0}
+
+    def _tick():
+        if STATE.running:
+            status_label.set_text(
+                f"运行中 {STATE.current_command} · step {STATE.current_step or '…'}")
+        else:
+            status_label.set_text("空闲")
+        result_label.set_text(STATE.last_result)
+        new, log_cursor["v"] = STATE.log_buffer.since(log_cursor["v"])
+        for line in new:
+            log_view.push(line)
+        _sync_cards()
+
+    ui.timer(0.5, _tick)
 
 
 # ============ 写作台 ============
@@ -116,113 +217,7 @@ def index():
             ui.label("流水线日志").classes("text-sm text-gray-500")
             log_view = ui.log(max_lines=400).classes("w-full h-96 font-mono text-xs")
 
-    # —— 走向卡弹窗（awaitable dialog · persistent 不可点旁边关掉） ——
-    # dialog_open 存本 client 正在显示的 req_id（None=未显示）——绑定代际令牌，
-    # 防多 tab 抢答 + 超时陈旧卡迟点污染下一轮（对抗审查根因 A/C）。
-    card_dialog = ui.dialog().props("persistent")
-    # req_id=本 client 正显示的轮次（None=未显示）；done_rid=本 client 刚应答完的轮次
-    # （防「应答后~worker清pending前」窗口里 _tick 对同 rid 重弹卡·根因#3）。
-    dialog_state = {"req_id": None, "done_rid": None}
-
-    def _opt_label(opt, i):
-        if not isinstance(opt, dict):
-            return str(opt)[:80]
-        if opt.get("label"):
-            return opt["label"]
-        if opt.get("title"):
-            return opt["title"]
-        # 涌现候选无 label/title——取 scope_summary 首句（含 ME 标题）作可读兜底，
-        # 不暴露裸 dict repr（对抗审查根因 E）。
-        scope = str(opt.get("scope_summary") or "")
-        if scope:
-            return scope.split("。")[0][:60]
-        return opt.get("parent_me") or f"候选{i + 1}"
-
-    async def _await_card(rid):
-        """后台任务：等用户点选 → 带 req_id 应答。与 _tick 解耦，故 _tick 不被阻塞、
-        仍能每 0.5s 检测「桥失效」并 submit(None) 中断本任务（根因 C 的关键）。"""
-        try:
-            answer = await card_dialog
-        except Exception:
-            answer = None
-        try:
-            if answer is None:
-                # 被 _tick 中断（桥失效/超时/被抢答）——提示去续跑，不应答
-                ui.notify("走向卡已失效（已被处理或超时）——如需选择请到「Plan 续跑」页继续",
-                          type="warning")
-            elif not STATE.bridge.respond(answer, req_id=rid):
-                # 多 tab 后手点击 / 迟点 → 桥拒绝，不污染下一轮走向（北极星③）
-                ui.notify("该选择未生效（走向已被处理或已超时）——请到「Plan 续跑」页继续",
-                          type="warning")
-        finally:
-            dialog_state["done_rid"] = rid   # 记刚处理完的轮次（防 _tick 同 rid 重弹·根因#3）
-            dialog_state["req_id"] = None
-            card_dialog.clear()              # 应答后清卡元素（不留隐藏残件·下次 pop 也会清）
-
-    def _sync_cards():
-        """每 tick 同步执行（不阻塞）：弹新卡 / 回收陈旧卡。"""
-        pending = STATE.bridge.pending
-        if dialog_state["req_id"] is not None:
-            # 本 client 正显示卡，但桥已无 pending 或换了 req_id（超时/被抢答）
-            # → submit(None) 中断后台 _await_card 任务（它负责关卡 + 提示·根因 C）。
-            if not pending or pending.get("req_id") != dialog_state["req_id"]:
-                card_dialog.submit(None)   # 解析后台 _await_card（它复位 req_id+提示）
-                card_dialog.clear()         # 移除陈旧卡元素（关卡不自动清子元素）
-            return
-        if not pending:
-            return
-        rid = pending.get("req_id")
-        # 防重弹：本轮 rid 已被本 client 应答完（worker 尚未清 pending 的窗口）→ 不重弹（根因#3）
-        if rid == dialog_state["done_rid"]:
-            return
-        # 先建卡 + 起后台任务，**成功后**才置 req_id——避免构造异常留下 req_id 非 None
-        # 却无 _await_card 复位它的死锁（根因#2 非原子）。
-        try:
-            card_dialog.clear()
-            options = pending.get("options") or []
-            spec = pending.get("spec") or {}
-            with card_dialog, ui.card().classes("w-[36rem]"):
-                ui.label(spec.get("prompt") or "需要你的选择").classes("font-bold")
-                if options:
-                    for i, opt in enumerate(options):
-                        desc = (opt.get("description") or opt.get("scope_summary") or "")\
-                            if isinstance(opt, dict) else ""
-                        with ui.card().classes("w-full"):
-                            ui.label(f"[{i + 1}] {_opt_label(opt, i)}").classes("font-medium")
-                            if desc:
-                                ui.label(str(desc)[:160]).classes("text-xs text-gray-600")
-                            ui.button("选这个",
-                                      on_click=lambda _, o=opt: card_dialog.submit(o))\
-                                .props("dense flat").mark(f"card-opt-{i}")
-                else:
-                    free = ui.input(spec.get("prompt") or "输入")
-                    ui.button("提交", on_click=lambda: card_dialog.submit(
-                        int(free.value) if spec.get("type") == "integer"
-                        and str(free.value).isdigit() else free.value))
-            card_dialog.open()
-            background_tasks.create(_await_card(rid))
-            dialog_state["req_id"] = rid     # ★ 仅在卡 + 任务都建成后才置（原子保证）
-        except Exception as e:
-            dialog_state["req_id"] = None
-            card_dialog.clear()
-            STATE.log_buffer.append(f"[gui] 走向卡渲染失败（已复位可重弹）：{e}")
-
-    # —— 轮询：状态 chip + 日志增量（per-client 游标）+ 停顿桥 ——
-    log_cursor = {"v": 0}   # per-client：每个 tab 各持独立游标（根因 B）
-
-    def _tick():
-        if STATE.running:
-            status_label.set_text(
-                f"运行中 {STATE.current_command} · step {STATE.current_step or '…'}")
-        else:
-            status_label.set_text("空闲")
-        result_label.set_text(STATE.last_result)
-        new, log_cursor["v"] = STATE.log_buffer.since(log_cursor["v"])
-        for line in new:
-            log_view.push(line)
-        _sync_cards()
-
-    ui.timer(0.5, _tick)
+    _mount_pipeline_panel(status_label, result_label, log_view)
 
 
 # ============ Plan 续跑 ============
@@ -350,10 +345,76 @@ def settings_page():
     ui.button("🔄 刷新", on_click=_render).props("flat")
 
 
+# ============ 新建书（创建书籍·阶段2） ============
+def new_book():
+    import json
+    from core.gui.state import NOVELS_DIR
+
+    _header("新建书")
+    ui.label("填书名 + 题材，点「开始建书」——AI 会带你选风格、选灵感卡、定框架，"
+             "然后生成大纲 + 全套设定。").classes("text-sm text-gray-600")
+
+    with ui.row().classes("w-full gap-4 items-start"):
+        with ui.column().classes("w-1/3 gap-2"):
+            name_input = ui.input("书名").classes("w-full").mark("book-name")
+            topic_input = ui.textarea("题材方向（想写什么·一两句话）")\
+                .classes("w-full").mark("book-topic")
+            auto_switch = ui.switch("全自动（所有选择取第一候选）").mark("nb-auto")
+            warn_label = ui.label("").classes("text-xs text-red-600").mark("nb-warn")
+
+            def _start_build():
+                book = (name_input.value or "").strip()
+                if not book:
+                    ui.notify("先填书名", type="warning")
+                    return
+                # 前置：active profile 须有 key（否则跑到调研/brainstorm 才 401）
+                try:
+                    data = list_profiles_masked()
+                    active = data.get("active")
+                    has_key = any(p["name"] == active and p.get("key_in_keyring")
+                                  for p in data.get("profiles", []))
+                    if not has_key:
+                        warn_label.set_text("⚠️ 当前模型还没填密钥——先去「设置」录入你的 key 再建书")
+                        return
+                except Exception:
+                    pass
+                proj = NOVELS_DIR / book
+                if (proj / "_数据库").exists():
+                    ui.notify(f"《{book}》已存在——换个书名或去写作台续写", type="warning")
+                    return
+                # 🔴 死锁②前置：RUNNER.start 前真实 mkdir + 写 book_meta.json（topic 给 plan data_flow）
+                wal = proj / "_数据库" / ".wal"
+                wal.mkdir(parents=True, exist_ok=True)
+                (wal / "book_meta.json").write_text(
+                    json.dumps({"topic": (topic_input.value or "").strip() or "网络小说"},
+                               ensure_ascii=False), encoding="utf-8")
+                ok = RUNNER.start(["outline"], book, "",
+                                  auto_pilot=bool(auto_switch.value))
+                if not ok:
+                    ui.notify("已有流水线在运行", type="warning")
+                else:
+                    warn_label.set_text("")
+                    ui.notify(f"开始建《{book}》——跟着弹出的卡片选择就行", type="positive")
+
+            ui.button("📖 开始建书", on_click=_start_build)\
+                .props("color=primary").mark("btn-build")
+            status_label = ui.label("空闲").classes("text-sm font-mono")\
+                .mark("nb-status")
+            result_label = ui.label("").classes("text-sm").mark("nb-result")
+            ui.link("建好后 → 去写作台写第一章", "/").classes("text-sm")
+
+        with ui.column().classes("flex-1"):
+            ui.label("建书日志").classes("text-sm text-gray-500")
+            log_view = ui.log(max_lines=400).classes("w-full h-96 font-mono text-xs")
+
+    _mount_pipeline_panel(status_label, result_label, log_view)
+
+
 def init_pages():
     """注册全部页面。NiceGUI 测试框架每测重置 Client.page_routes——
     页面注册必须可重复调用（官方「无 main.py 项目」测试模式）。"""
     ui.page("/")(index)
+    ui.page("/new-book")(new_book)
     ui.page("/plans")(plans_page)
     ui.page("/settings")(settings_page)
 
