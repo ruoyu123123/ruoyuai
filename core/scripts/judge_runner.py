@@ -179,8 +179,12 @@ def build_author_profile_block(project_root: Path, max_chars: int = 30000) -> st
     全量注入不截断（feedback_no_token_saving）——max_chars 仅作极端兜底（30k 字符
     ≈ 正常作者档 2-3 倍体量，正常档案永远不会触发）。
     """
+    # 两布局（真 distill e2e 抓出）：novels 项目档在 _数据库/·styles 风格库档在项目根
     db = project_root / "_数据库"
     profile_path = db / "作者风格.json"
+    if not profile_path.exists():
+        profile_path = project_root / "作者风格.json"
+        db = project_root
     if not profile_path.exists():
         return None
     try:

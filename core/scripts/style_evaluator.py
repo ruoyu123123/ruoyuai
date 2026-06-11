@@ -2250,6 +2250,7 @@ def main():
     llm_prompt = generate_llm_prompt(prompt_ref, gen_text)
     prompt_filename = (args.output or "sfs_report").replace(".json", "")
     prompt_path = Path(f"{prompt_filename}_llm_eval_prompt.txt")
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)  # 对比报告/ 可能未建（真e2e抓出）
     prompt_path.write_text(llm_prompt, encoding="utf-8")
     report["llm_prompt_file"] = str(prompt_path)
     print(f"[LLM prompt 已保存] {prompt_path}", file=sys.stderr)
@@ -2258,6 +2259,7 @@ def main():
     json_str = json.dumps(report, ensure_ascii=False, indent=2, cls=_NumpyEncoder)
     if args.output:
         out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json_str, encoding="utf-8")
         print(f"[报告已保存] {out}", file=sys.stderr)
     else:
