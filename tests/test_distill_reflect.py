@@ -110,11 +110,31 @@ def test_reflect_block_on_missing_sections():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_reflect_needs_gap_report():
+def test_reflect_v0_no_gap_generates_initial_skill():
+    """gap-report 空 → 首版 v0 生成（破 chicken-egg：复刻需 skill_v0·SFS 需复刻）。"""
     tmp, _ = _setup()
-    a = _Args(tmp, tmp / "nonexist.json")
-    a.gap_report = None
-    assert gc._run_distill_reflect(a) == 2
+    orig = _patch_generate(_GOOD_MD)
+    try:
+        a = _Args(tmp, tmp / "nonexist.json", skill_version=0,
+                  out=str(tmp / "skill_v0.md"))
+        a.gap_report = None
+        assert gc._run_distill_reflect(a) == 0
+        assert (tmp / "skill_v0.md").exists()
+        # v0 prompt 走「从作者档提炼」分支
+        s, u = gc.build_distill_reflect_prompt(
+            gap_text="", current_skill="", author_block="作者档", version=0)
+        assert "首版" in s and "首版 skill" in u
+    finally:
+        lt.generate = orig
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_reflect_with_gap_uses_refine_branch():
+    s, u = gc.build_distill_reflect_prompt(
+        gap_text="句长差距大", current_skill="旧skill", author_block="作者档", version=2)
+    assert "精化版" in s
+    assert "SFS 复刻差距报告" in u
 
 
 def test_reflect_custom_out_path():

@@ -517,23 +517,34 @@ def _run_volume_arc(args) -> int:
 
 def build_distill_reflect_prompt(*, gap_text: str, current_skill: str,
                                  author_block: str, version: int) -> tuple[str, str]:
-    """phase-3 修正反思 prompt：读 SFS 差距 → 产 skill v.N 文字约束（markdown）。"""
+    """phase-3 修正反思 prompt：读 SFS 差距 → 产 skill v.N 文字约束（markdown）。
+
+    gap_text 空 = **首版 v0 生成**（无 SFS 差距·从作者档 + surface 直接写初版 skill·破
+    chicken-egg：复刻需 skill_v0·SFS 需复刻）。有 gap = 基于差距精化。"""
+    is_v0 = not gap_text.strip()
     system = (
-        "你是网文作者风格蒸馏的修正反思专家。任务：基于复刻 vs 原作者的 SFS 多维差距报告，"
-        "产出/精化作者风格 skill（markdown 文字约束），让 gen-model 下次复刻更贴近该作者。\n\n"
+        "你是网文作者风格蒸馏专家。任务：产出/精化作者风格 skill（markdown 文字约束），"
+        "让 gen-model 复刻更贴近该作者。\n\n"
         "🔴 铁律（守北极星⑤·不规训创作）：\n"
         "1. skill 是给**弱 gen-model** 看的可执行文字约束——越简单越好（skill 越复杂弱模型越乱）。\n"
-        "2. 只针对**差距大的维度**补/改约束，差距小的维度别动（别过度约束）。\n"
-        "3. 用**该作者的真实手法**描述（带原文证据），绝不套通用『多用短句』空话。\n"
-        "4. 数值约束给**区间**（如句长均值 28-34），不给死值。\n\n"
-        "输出**纯 markdown**（无 JSON、无围栏标记），必须含这些小节标题：\n"
+        "2. 用**该作者的真实手法**描述（带原文证据），绝不套通用『多用短句』空话。\n"
+        "3. 数值约束给**区间**（如句长均值 28-34），不给死值。\n"
+        + ("4. 这是**首版 skill（v0）**：从作者风格档提炼最显著的笔法签名，全面但精炼。\n"
+           if is_v0 else
+           "4. 这是**精化版**：只针对差距大的维度补/改约束，差距小的别动（别过度约束）。\n")
+        + "\n输出**纯 markdown**（无 JSON、无围栏标记），必须含这些小节标题：\n"
         "`## 句式与节奏` `## 段落与标点` `## 对话工艺` `## 描写与情绪` `## 反模式（绝不做）`\n"
         "每节 2-5 条可执行约束。")
-    user = (
-        f"## 作者风格档（第一权威·复刻目标）\n{author_block}\n\n"
-        f"## 当前 skill（v{version-1}·空=首版从头写）\n{current_skill or '（无·首版）'}\n\n"
-        f"## SFS 复刻差距报告（哪些维度复刻得不像作者·重点攻这些）\n{gap_text}\n\n"
-        f"产出 skill v{version}（markdown·只攻差距维度·针对性补约束）：")
+    if is_v0:
+        user = (
+            f"## 作者风格档（第一权威·复刻目标）\n{author_block}\n\n"
+            f"产出**首版 skill v{version}**（markdown·从作者档提炼笔法签名）：")
+    else:
+        user = (
+            f"## 作者风格档（第一权威·复刻目标）\n{author_block}\n\n"
+            f"## 当前 skill（v{version-1}）\n{current_skill or '（无）'}\n\n"
+            f"## SFS 复刻差距报告（哪些维度复刻得不像作者·重点攻这些）\n{gap_text}\n\n"
+            f"产出 skill v{version}（markdown·只攻差距维度·针对性补约束）：")
     return system, user
 
 
@@ -548,10 +559,8 @@ def _run_distill_reflect(args) -> int:
     if not project_root:
         print("[ERROR] --mode distill_reflect 需要 --project", file=sys.stderr)
         return 2
+    # gap-report 可空 = 首版 v0 生成（从作者档·破 chicken-egg：复刻需 skill_v0·SFS 需复刻）
     gap_text = read_text(Path(args.gap_report) if args.gap_report else None, 12000)
-    if not gap_text:
-        print("[ERROR] distill_reflect 需要 --gap-report（SFS 差距报告）", file=sys.stderr)
-        return 2
     current_skill = read_text(Path(args.current_skill) if args.current_skill else None, 20000)
     author_block = build_author_profile_block(project_root)
     if not author_block and args.style_ref and Path(args.style_ref).exists():
