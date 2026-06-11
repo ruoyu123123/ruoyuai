@@ -146,11 +146,23 @@ def test_generate_ratelimit_exhausted_falls_to_next():
     assert calls[-1]["profile"] == "p2"
 
 
-def test_generate_generic_error_degrades_immediately():
+def test_generate_transient_error_retries_same_profile():
+    """轮次8 语义升级：瞬时类通用错误（断流/404/5xx）同 profile 重试·不再立即降级
+    （主备同主机时立即降级会被亚分钟故障窗 9ms 击穿全链）。"""
     fn, calls = _mk_stream([lt.TransportError("conn broke"), ("ok", "stop")])
     r = lt.generate([_profile("p1"), _profile("p2")], "s", "u",
                     retry=_FAST, _stream_fn=fn)
-    assert r.fallback_index == 1 and len(calls) == 2  # 通用错误不重试直接降级
+    assert r.fallback_index == 0 and r.retries == 1   # 同 profile 重试后成功·未降级
+    assert len(calls) == 2
+
+
+def test_generate_auth_error_degrades_immediately():
+    """认证/账号类（401/403/key）不可恢复 → 不重试·立即降级到下一 profile。"""
+    fn, calls = _mk_stream([lt.TransportError("Error code: 403 forbidden"),
+                            ("ok", "stop")])
+    r = lt.generate([_profile("p1"), _profile("p2")], "s", "u",
+                    retry=_FAST, _stream_fn=fn)
+    assert r.fallback_index == 1 and len(calls) == 2  # p1 一次即降级 p2
 
 
 def test_generate_truncation_continuation():
