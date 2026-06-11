@@ -114,6 +114,15 @@ AGENT_SPECS: dict[str, JudgeSpec] = {
         name="novel-researcher", failure_policy="soft",
         required_keys=("synthesis_summary",),
         output_template="_数据库/.research_cache/{task_type}_{slug}_{ts}.json"),
+    # 🔴 蒸馏 phase-1 表层蒸馏（阶段3）：唯一 needs_author_profile=False 的 judge——它在「产」
+    # 作者档不是消费（driver 代读本 cluster 全章原文经 context 注入）。required_keys 只 3 个顶层
+    # 结构键·绝不逐项列 48 dim（弱模型为凑键产空壳 = 惊悚乐园流水账覆辙·北极星⑤）。block：
+    # surface JSON 是整条蒸馏链源头·喂 consolidate/arc_aggregator 确定性状态机。
+    "novel-distill-analyzer": JudgeSpec(
+        name="novel-distill-analyzer", failure_policy="block",
+        needs_author_profile=False,
+        required_keys=("quantitative", "qualitative_dims", "golden_paragraphs"),
+        output_template="蒸馏进度/cluster_{key}_surface.json"),
 }
 
 

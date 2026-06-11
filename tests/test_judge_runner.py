@@ -60,11 +60,12 @@ def _setup_agents(tmp):
 
 
 # ============ 注册表完整性 ============
-def test_registry_covers_8_agents():
-    assert len(jr.AGENT_SPECS) == 8
-    # block 级 = 喂状态机的三个（对抗审查定调）
+def test_registry_covers_9_agents():
+    assert len(jr.AGENT_SPECS) == 9   # +novel-distill-analyzer（阶段3 蒸馏 phase-1）
+    # block 级 = 喂确定性状态机的（对抗审查定调 + distill surface 喂 consolidate/arc_aggregator）
     blocks = {n for n, s in jr.AGENT_SPECS.items() if s.failure_policy == "block"}
-    assert blocks == {"novel-summarizer", "novel-foreshadower", "novel-outline-planner"}
+    assert blocks == {"novel-summarizer", "novel-foreshadower", "novel-outline-planner",
+                      "novel-distill-analyzer"}
 
 
 def test_registry_style_judges_need_author_profile():
