@@ -33,6 +33,28 @@ def test_windows_path_survives_tokenize_roundtrip():
     assert sp in orc._strip_python_prefix(cmd2), "含空格+反斜杠路径被破坏"
 
 
+def test_resolve_pause_inline_options_fallback():
+    """🔴 阶段2 创建书籍：framework/rhythm 等字面枚举 pause 无 source → 从 spec.inline_options
+    回退读候选(否则 GUI 渲染成自由文本·非技术用户拼错污染下游)。"""
+    step = {"n": 3.2, "pause_for_user": {
+        "type": "choice", "prompt": "选叙事框架",
+        "inline_options": ["三幕", "英雄之旅", "雪花"]}}
+    ctx = {"project_root": r"C:\proj"}
+    # auto_pilot 取 inline 首个
+    assert orc._resolve_pause(step, ctx, auto_pilot=True, pause_handler=None) == "三幕"
+    # handler 收到 inline options
+    cap = {}
+
+    def h(s, spec, options):
+        cap["options"] = options
+        return options[1]
+    got = orc._resolve_pause(step, ctx, auto_pilot=False, pause_handler=h)
+    assert cap["options"] == ["三幕", "英雄之旅", "雪花"] and got == "英雄之旅"
+    # integer 无 inline → default
+    step_i = {"n": 3.3, "pause_for_user": {"type": "integer", "default": 10}}
+    assert orc._resolve_pause(step_i, ctx, auto_pilot=True, pause_handler=None) == 10
+
+
 def test_forward_slash_path_unquoted_still_works():
     """非反斜杠路径（Unix/forward-slash）不受影响——token 正确。"""
     up = "/home/user/proj"

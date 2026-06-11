@@ -460,6 +460,11 @@ def _resolve_pause(step: dict, ctx: dict, *, auto_pilot: bool,
                 options = cur if isinstance(cur, list) else []
             except (OSError, json.JSONDecodeError):
                 options = []
+    # 🔴 inline_options 回退（阶段2 创建书籍·must_fix）：framework/rhythm 等是**字面枚举**·
+    # 无 source JSON → 从 plan 的 spec.inline_options 直读候选（否则 options=[] → GUI 渲染成
+    # 自由文本输入·非技术用户拼错污染下游 volume_arc）。
+    if not options and isinstance(spec.get("inline_options"), list):
+        options = spec["inline_options"]
     if auto_pilot:
         # 显式全自动：choice 取引擎排序第一候选（_emergence_score 序）；integer 取 default。
         # 北极星③：这是显式开关非隐式默认——默认必弹卡等用户。
