@@ -515,6 +515,83 @@ def _run_volume_arc(args) -> int:
     return 0
 
 
+def build_distill_reflect_prompt(*, gap_text: str, current_skill: str,
+                                 author_block: str, version: int) -> tuple[str, str]:
+    """phase-3 修正反思 prompt：读 SFS 差距 → 产 skill v.N 文字约束（markdown）。"""
+    system = (
+        "你是网文作者风格蒸馏的修正反思专家。任务：基于复刻 vs 原作者的 SFS 多维差距报告，"
+        "产出/精化作者风格 skill（markdown 文字约束），让 gen-model 下次复刻更贴近该作者。\n\n"
+        "🔴 铁律（守北极星⑤·不规训创作）：\n"
+        "1. skill 是给**弱 gen-model** 看的可执行文字约束——越简单越好（skill 越复杂弱模型越乱）。\n"
+        "2. 只针对**差距大的维度**补/改约束，差距小的维度别动（别过度约束）。\n"
+        "3. 用**该作者的真实手法**描述（带原文证据），绝不套通用『多用短句』空话。\n"
+        "4. 数值约束给**区间**（如句长均值 28-34），不给死值。\n\n"
+        "输出**纯 markdown**（无 JSON、无围栏标记），必须含这些小节标题：\n"
+        "`## 句式与节奏` `## 段落与标点` `## 对话工艺` `## 描写与情绪` `## 反模式（绝不做）`\n"
+        "每节 2-5 条可执行约束。")
+    user = (
+        f"## 作者风格档（第一权威·复刻目标）\n{author_block}\n\n"
+        f"## 当前 skill（v{version-1}·空=首版从头写）\n{current_skill or '（无·首版）'}\n\n"
+        f"## SFS 复刻差距报告（哪些维度复刻得不像作者·重点攻这些）\n{gap_text}\n\n"
+        f"产出 skill v{version}（markdown·只攻差距维度·针对性补约束）：")
+    return system, user
+
+
+def _run_distill_reflect(args) -> int:
+    """phase-3 修正反思：产 skill markdown。must_fix#5：关 response_format_json·跳 JSON parse·
+    换『非空 + 含必备小节』文本校验（parse_json_loose 对 markdown 必误判 block）。"""
+    import llm_transport as lt
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from judge_runner import build_author_profile_block, AUTHOR_PROFILE_MISSING_GUARD
+
+    project_root = Path(args.project) if args.project else None
+    if not project_root:
+        print("[ERROR] --mode distill_reflect 需要 --project", file=sys.stderr)
+        return 2
+    gap_text = read_text(Path(args.gap_report) if args.gap_report else None, 12000)
+    if not gap_text:
+        print("[ERROR] distill_reflect 需要 --gap-report（SFS 差距报告）", file=sys.stderr)
+        return 2
+    current_skill = read_text(Path(args.current_skill) if args.current_skill else None, 20000)
+    author_block = build_author_profile_block(project_root)
+    if not author_block and args.style_ref and Path(args.style_ref).exists():
+        author_block = read_text(Path(args.style_ref), 30000)
+    author_missing = not author_block
+    if author_missing:
+        author_block = AUTHOR_PROFILE_MISSING_GUARD
+
+    version = args.skill_version or 1
+    system, user = build_distill_reflect_prompt(
+        gap_text=gap_text, current_skill=current_skill,
+        author_block=author_block, version=version)
+    if args.dry_run:
+        print("=== SYSTEM ===\n" + system + "\n\n=== USER ===\n" + user)
+        return 0
+    # must_fix#5：markdown 输出·**不**传 response_format_json·**不** parse_json_loose
+    try:
+        result = lt.generate(
+            GenModelLoader(), system, user, max_tokens=12000,
+            cont_msg_builder=lt.default_cont_msg, label="distill:reflect")
+    except Exception as e:
+        print(f"[ERROR] distill_reflect gen-model 调用失败（block）: {e}", file=sys.stderr)
+        return 1
+    md = (result.text or "").strip()
+    # 文本校验（非 JSON 顶层键）：非空 + 含必备小节（结构破损 block·内容不规训）
+    required_sections = ("## 句式与节奏", "## 段落与标点", "## 对话工艺",
+                         "## 描写与情绪", "## 反模式")
+    missing = [s for s in required_sections if s not in md]
+    if len(md) < 200 or len(missing) > 2:    # 容 2 节缺失（标题措辞可能微变）·过半缺=结构破损
+        print(f"[ERROR] distill_reflect 输出结构破损（block）·len={len(md)} 缺小节 {missing}",
+              file=sys.stderr)
+        return 1
+    out = Path(args.out) if args.out else (project_root / f"skill_v{version}.md")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(md, encoding="utf-8")
+    print(f"[gen_creative][distill_reflect] skill v{version} → {out}（{len(md)} 字"
+          f"{'·作者档缺失' if author_missing else ''}）", file=sys.stderr)
+    return 0
+
+
 # ============ 主入口 ============
 def main():
     # stdout/stderr UTF-8（Windows 默认 GBK·prompt/AUTHOR_PROFILE_MISSING_GUARD 含 ⚠/emoji
@@ -531,7 +608,7 @@ def main():
     )
     parser.add_argument('--mode', required=True,
                         choices=['brainstorm', 'outline_card', 'voice_sample',
-                                 'volume_arc', 'world_entry'])
+                                 'volume_arc', 'world_entry', 'distill_reflect'])
     parser.add_argument('--project', help='项目根路径（outline_card/voice_sample/'
                                           'volume_arc/world_entry 需要）')
     parser.add_argument('--out', help='输出 JSON 文件路径（默认 stdout）')
@@ -561,6 +638,11 @@ def main():
     parser.add_argument('--rhythm', help='[volume_arc] 节奏档')
     parser.add_argument('--emit-to-db', action='store_true',
                         help='[volume_arc] 拆产出落 大势卡.json + 事件簇.json')
+    # distill_reflect 参数（阶段3 phase-3 修正反思·产 skill markdown）
+    parser.add_argument('--gap-report', help='[distill_reflect] style_evaluator SFS 差距报告 JSON')
+    parser.add_argument('--current-skill', help='[distill_reflect] 当前 skill_vN.md 路径（可空=首版）')
+    parser.add_argument('--skill-version', type=int, default=1,
+                        help='[distill_reflect] 产出 skill 版本号')
 
     args = parser.parse_args()
 
@@ -592,6 +674,10 @@ def main():
     elif args.mode == 'volume_arc':
         # 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约·自带 emit/dry-run）
         sys.exit(_run_volume_arc(args))
+
+    elif args.mode == 'distill_reflect':
+        # 蒸馏 phase-3 修正反思（阶段3·产 skill markdown 非 JSON·must_fix#5）
+        sys.exit(_run_distill_reflect(args))
 
     elif args.mode in ('voice_sample', 'world_entry'):
         print(f"[ERROR] mode '{args.mode}' 是 v2 placeholder，待实现", file=sys.stderr)
