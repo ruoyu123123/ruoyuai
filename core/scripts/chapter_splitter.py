@@ -368,21 +368,32 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
     chunks = _slice_by_indices(paras, split_indices)
     per_chapter_cjk = [cio.count_cjk(c) for c in chunks]
 
-    # 4.5 末章上溢再平衡（轮次2 全旅程实测抓出）：等距锚点+最佳切点会把边界压向前段·
-    # 余量全堆末章（实测 [3081,2951,2940,3028,5431] 超 hi 21%）。pending_tail 只防下溢·
-    # 此处补上溢：末章 > hi 时把最后一个切点逐段后移（倒数第二章不破 hi 为限）。
-    # 纯字数再平衡·不理解叙事（北极星④格式层）。
+    # 4.5 末章上溢再平衡（轮次2 实测抓出·轮次6 升级级联）：等距锚点+最佳切点会把边界
+    # 压向前段·余量全堆末章。pending_tail 只防下溢·此处补上溢：末章 > hi 时把切点后移。
+    # 🔴 级联版（轮次6：倒数第二章贴上限 3983/4000 时单切点无路可退·末章仍超 14.5%）：
+    # 从最后一个切点往前找第一个「后移一段不破 hi」的切点移动·空间波浪式前传——
+    # 余量摊给所有有余量的前章。纯字数再平衡·不理解叙事（北极星④格式层）。
     while split_indices and per_chapter_cjk and per_chapter_cjk[-1] > hi:
-        cand = split_indices[-1] + 1
-        if cand >= len(paras):
-            break                      # 挪无可挪·保持现状（advisory）
-        trial = split_indices[:-1] + [cand]
-        tchunks = _slice_by_indices(paras, trial)
-        if len(tchunks) >= 2 and cio.count_cjk(tchunks[-2]) > hi:
-            break                      # 倒数第二章会破上限 → 停
-        split_indices[-1] = cand
-        chunks = tchunks
-        per_chapter_cjk = [cio.count_cjk(c) for c in chunks]
+        moved = False
+        for j in range(len(split_indices) - 1, -1, -1):
+            cand = split_indices[j] + 1
+            if cand >= len(paras):
+                continue
+            if j + 1 < len(split_indices) and cand >= split_indices[j + 1]:
+                continue               # 不可越过下一个切点
+            trial = list(split_indices)
+            trial[j] = cand
+            tchunks = _slice_by_indices(paras, trial)
+            # 后移切点 j 使第 j 章吃进一段——该章不得破上限
+            if cio.count_cjk(tchunks[j]) > hi:
+                continue
+            split_indices = trial
+            chunks = tchunks
+            per_chapter_cjk = [cio.count_cjk(c) for c in chunks]
+            moved = True
+            break
+        if not moved:
+            break                      # 全部切点都挪不动·保持现状（advisory）
 
     # 5. 末章字数补料（Step F_v27）
     pending_tail_text = None

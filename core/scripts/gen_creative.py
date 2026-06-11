@@ -419,19 +419,28 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
     profile·此前无任何 producer 写它 → 用户选「紧凑」被静默丢弃·splitter 永远收「标准」）。"""
     db = project_root / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
-    # producer 补齐：用户偏好.json.rhythm_profile（splitter 经 cluster-write step6 消费）
+    # producer 补齐（轮次6 深检：同名字段多 consumer 源须**全**覆盖·轮次4 只补了半边）：
+    #   用户偏好.json    → splitter（cluster-write step6 data_flow）
+    #   叙事节拍器.json  → narrator_calibrate → writer manifest storyteller_directive
+    #   进度.json        → finalize_book._read_rhythm_profile
     if rhythm:
-        pref_path = db / "用户偏好.json"
-        pref = {}
-        if pref_path.exists():
-            try:
-                pref = json.loads(pref_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                pref = {}
-        pref["rhythm_profile"] = rhythm
-        if framework:
-            pref["narrative_framework"] = framework
-        pref_path.write_text(json.dumps(pref, ensure_ascii=False, indent=2),
+        for fname, extra in (("用户偏好.json", {"narrative_framework": framework}),
+                             ("叙事节拍器.json", {}),
+                             ("进度.json", {})):
+            fpath = db / fname
+            doc = {}
+            if fpath.exists():
+                try:
+                    doc = json.loads(fpath.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    doc = {}
+            if not isinstance(doc, dict):
+                continue
+            doc["rhythm_profile"] = rhythm
+            for k, v in extra.items():
+                if v:
+                    doc[k] = v
+            fpath.write_text(json.dumps(doc, ensure_ascii=False, indent=2),
                              encoding="utf-8")
         # _metadata 确定性覆盖（不靠 LLM 自觉回写）
         md = data.setdefault("_metadata", {})
