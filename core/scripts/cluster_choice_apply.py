@@ -94,8 +94,66 @@ def apply_choice(project_root: Path, next_key: str, choice_path: Path) -> dict:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
                        encoding="utf-8")
         tmp.replace(sj_path)
+    _write_blueprint(project_root, brief, clusters)
     return {"cluster_id": brief["cluster_id"], "replaced": replaced,
             "status": brief["status"]}
+
+
+def _write_blueprint(project_root: Path, brief: dict, clusters: list):
+    """🔴 同步写 进度.json.cluster_blueprint（GUI 全旅程模拟点击抓出的 blocker）。
+
+    build_manifest.current_scene 只认两条路：① blueprint scene.ch==本章 ② 事件簇
+    chapter_range 覆盖本章。v27 fluid 明确 chapter_range 由 splitter 切完回填——②对新
+    cluster 永不可达 → 程序驱动建书的产物 cluster-write step1 preflight 必 fatal。修：
+    应用 brief 时把 scene_storyboard 转写进 blueprint·每 scene 给 ch 占位（start+i·
+    对齐 Claude /outline 既有契约「cluster_001 填 ch1-N 占位」·真切章仍由 splitter 定）。"""
+    cid = brief["cluster_id"]
+    # start_ch：前一 cluster 已回填的 chapter_range 末+1（cluster_001 → 1）
+    start = 1
+    for c in clusters:
+        if not isinstance(c, dict) or c.get("cluster_id") == cid:
+            continue
+        cr = c.get("chapter_range") or []
+        if isinstance(cr, list) and len(cr) == 2:
+            start = max(start, int(cr[1]) + 1)
+    storyboard = []
+    for i, s in enumerate(brief.get("scene_storyboard") or []):
+        sc = dict(s) if isinstance(s, dict) else {"summary": str(s)}
+        sc.setdefault("ch", start + i)
+        sc.setdefault("title", str(sc.get("summary") or sc.get("key_beats")
+                                   or f"场景{i + 1}")[:30])
+        storyboard.append(sc)
+    if not storyboard:           # brief 无 storyboard 也要保 preflight 可过
+        storyboard = [{"ch": start, "title": str(brief.get("scope_summary") or cid)[:30]}]
+    prog_path = project_root / "_数据库" / "进度.json"
+    prog = {}
+    if prog_path.exists():
+        try:
+            prog = json.loads(prog_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            prog = {}
+    bp = prog.setdefault("cluster_blueprint", {})
+    if not isinstance(bp, dict):
+        bp = {}
+        prog["cluster_blueprint"] = bp
+    bp[cid] = {
+        "vol": brief.get("vol", 1),
+        "narrative_mode": brief.get("narrative_mode", "linear"),
+        "scope_summary": brief.get("scope_summary", ""),
+        "foreshadowing_to_plant": brief.get("foreshadowing_to_plant", []),
+        "scene_storyboard": storyboard,
+        "_source": "cluster_choice_apply（程序驱动·ch 为占位·真切章由 splitter 定）",
+    }
+    try:
+        from atomic_json import atomic_write_json
+        atomic_write_json(prog_path, prog)
+    except ImportError:
+        tmp = prog_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(prog, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        tmp.replace(prog_path)
+    print(f"[cluster_choice_apply] blueprint 写入 {cid}（{len(storyboard)} scene·"
+          f"ch 占位 {start}~{start + len(storyboard) - 1}）", file=sys.stderr)
 
 
 def main():

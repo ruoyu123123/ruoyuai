@@ -54,6 +54,50 @@ def test_direct_brief_format():
     assert ev["clusters"][0]["status"] == "in_progress"
 
 
+def test_blueprint_written_for_build_manifest_preflight():
+    """🔴 轮次1 blocker 回归：apply_choice 必须同步写 进度.json.cluster_blueprint
+    （scene ch 占位 start+i）·否则 GUI 建的书 cluster-write step1 preflight 必 fatal
+    （v27 不预填 chapter_range → build_manifest fluid fallback 永不可达）。"""
+    tmp = _proj()
+    ch = tmp / "choice.json"
+    ch.write_text(json.dumps({"answer": {
+        "cluster_id": "cluster_001", "scope_summary": "首块",
+        "scene_storyboard": [{"scene": 0, "summary": "灾难开场"},
+                             {"scene": 1, "summary": "反转"}]}},
+        ensure_ascii=False), encoding="utf-8")
+    try:
+        cca.apply_choice(tmp, "001", ch)
+        prog = json.loads((tmp / "_数据库" / "进度.json").read_text(encoding="utf-8"))
+        bp = prog["cluster_blueprint"]["cluster_001"]
+        chs = [s["ch"] for s in bp["scene_storyboard"]]
+        assert chs == [1, 2], f"ch 占位错: {chs}"
+        assert all(s.get("title") for s in bp["scene_storyboard"])
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_blueprint_start_ch_after_prev_range():
+    """后续 cluster：start = 前一 cluster 已回填 chapter_range 末 + 1。"""
+    tmp = _proj()
+    sj = tmp / "_数据库" / "事件簇.json"
+    sj.write_text(json.dumps({"clusters": [
+        {"cluster_id": "cluster_001", "chapter_range": [1, 5], "status": "done"}]},
+        ensure_ascii=False), encoding="utf-8")
+    ch = tmp / "choice.json"
+    ch.write_text(json.dumps({"answer": {
+        "cluster_id": "cluster_002",
+        "scene_storyboard": [{"scene": 0, "summary": "新块开场"}]}},
+        ensure_ascii=False), encoding="utf-8")
+    try:
+        cca.apply_choice(tmp, "002", ch)
+        prog = json.loads((tmp / "_数据库" / "进度.json").read_text(encoding="utf-8"))
+        assert prog["cluster_blueprint"]["cluster_002"]["scene_storyboard"][0]["ch"] == 6
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_non_brief_raises():
     tmp = _proj()
     ch = tmp / "x.json"

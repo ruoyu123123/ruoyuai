@@ -108,6 +108,14 @@ def _mount_pipeline_panel(status_label, result_label, log_view, *,
         foot_status = ui.label("空闲").classes("text-xs font-mono")
         foot_result = ui.label("").classes("text-xs truncate flex-1")
 
+    def _notify_safe(msg, **kw):
+        """background task 无 slot 上下文·裸 ui.notify 抛 RuntimeError（轮次1 实测
+        Traceback）——降级只写日志（通知本就非关键·日志区可见）。"""
+        try:
+            ui.notify(msg, **kw)
+        except RuntimeError:
+            STATE.log_buffer.append(f"[gui] {msg}")
+
     async def _await_card(rid):
         try:
             answer = await card_dialog
@@ -116,12 +124,12 @@ def _mount_pipeline_panel(status_label, result_label, log_view, *,
         try:
             if answer is None:
                 STATE.log_buffer.append(f"[gui:card] 走向卡失效（超时/已处理） req_id={rid}")
-                ui.notify("该选择已失效——有新卡会自动弹出；若任务已停，"
-                          "去「Plan 续跑」从断点继续", type="warning")
+                _notify_safe("该选择已失效——有新卡会自动弹出；若任务已停，"
+                             "去「Plan 续跑」从断点继续", type="warning")
             elif not STATE.bridge.respond(answer, req_id=rid):
                 STATE.log_buffer.append(f"[gui:card] 选择未生效（陈旧/超时） req_id={rid}")
-                ui.notify("该选择未生效（已在别处选过或超时）——有新卡会自动弹出",
-                          type="warning")
+                _notify_safe("该选择未生效（已在别处选过或超时）——有新卡会自动弹出",
+                             type="warning")
             else:
                 STATE.log_buffer.append(
                     f"[gui:card] 用户选择 req_id={rid} 选项={_opt_label(answer, 0)}")

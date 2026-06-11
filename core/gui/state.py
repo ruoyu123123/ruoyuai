@@ -187,10 +187,22 @@ class _FileLogSink:
     @staticmethod
     def _classify(line: str) -> tuple:
         """从行内既有标记廉价派生 (level, comp)——must_fix#2：命令行真实前缀是
-        `[orchestrator] ▶ step` 不是裸 `▶ step`·须匹配 [orchestrator]/派单/退出码。"""
-        if "[FATAL]" in line or "Traceback" in line or "❌" in line or "异常" in line:
+        `[orchestrator] ▶ step` 不是裸 `▶ step`·须匹配 [orchestrator]/派单/退出码。
+
+        🔴 轮次1 实测收紧：「异常/❌/拒绝」是小说正文/灵感卡/verify 评分的高频合法字符，
+        裸子串匹配会把创作内容误标 ERROR（污染 grep ERROR 排错纪律）。内容词分级只对
+        **系统前缀行**（[gui*]/[orchestrator]/[FATAL] 等）生效；raw 子进程 stdout 只认
+        Traceback/[FATAL] 强信号。"""
+        is_system = line.startswith(("[gui", "[orchestrator", "[judge", "[FATAL"))
+        if "[FATAL]" in line or line.startswith("Traceback") \
+                or line.lstrip().startswith(("File \"", "Traceback")):
             level = "ERROR"
-        elif "⚠" in line or "WARN" in line or "已失效" in line or "拒绝" in line:
+        elif is_system and ("❌" in line or "异常" in line):
+            level = "ERROR"
+        elif is_system and ("⚠" in line or "WARN" in line or "已失效" in line
+                            or "拒绝" in line):
+            level = "WARN"
+        elif "WARN" in line[:30]:    # 子进程自标 WARN 前缀（[orchestrator] WARN 等）
             level = "WARN"
         else:
             level = "INFO"

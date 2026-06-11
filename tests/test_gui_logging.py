@@ -49,7 +49,8 @@ def test_file_sink_redacts_key_in_url():
     tmp = _tmp()
     try:
         lb = gs.LogBuffer(log_file=tmp)
-        lb.append("❌ 异常 https://api.x/v1?key=AIzaSECRETXYZ boom")
+        # 系统前缀行（真实错误都带 [gui]/[orchestrator] 前缀·轮次1 收紧后裸 ❌ 是正文判 INFO）
+        lb.append("[gui] ❌ 异常 https://api.x/v1?key=AIzaSECRETXYZ boom")
         txt = lb.log_file_path.read_text(encoding="utf-8")
         assert "AIzaSECRETXYZ" not in txt, "key 原文落盘了！"
         assert "key=***" in txt
