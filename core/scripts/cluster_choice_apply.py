@@ -37,9 +37,22 @@ def apply_choice(project_root: Path, next_key: str, choice_path: Path) -> dict:
     if not choice_path.exists():
         raise FileNotFoundError(f"用户选择文件不存在: {choice_path}")
     payload = json.loads(choice_path.read_text(encoding="utf-8"))
-    brief = payload.get("answer") if isinstance(payload, dict) else None
+    # 兼容三种来源（真 outline e2e 抓出·brief 嵌套位置不同）：
+    #  ① pause answer_artifact：{"step":n, "answer": <brief>}（cluster-save-state 走向卡）
+    #  ② outline-planner judge：{mode, cluster_id, ..., cluster_brief: <brief>, free_notes}
+    #     （emergence.json·真 brief 在 cluster_brief 键下·顶层是 judge 元数据）
+    #  ③ brief dict 本身（有 scope_summary/scene_storyboard）
+    brief = None
+    if isinstance(payload, dict):
+        if isinstance(payload.get("answer"), dict):
+            brief = payload["answer"]
+        elif isinstance(payload.get("cluster_brief"), dict):
+            brief = payload["cluster_brief"]
+        elif any(k in payload for k in ("scope_summary", "scene_storyboard")):
+            brief = payload
     if not isinstance(brief, dict):
-        raise ValueError(f"answer 字段不是 brief dict: {choice_path}")
+        raise ValueError(f"choice 文件非 brief（无 answer/cluster_brief 包裹 + 非 brief）: "
+                         f"{choice_path}")
 
     brief = dict(brief)
     brief["cluster_id"] = brief.get("cluster_id") or cid
