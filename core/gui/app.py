@@ -36,6 +36,7 @@ def _header(title: str):
         with ui.row().classes("gap-2"):
             ui.link("写作台", "/").classes("text-white")
             ui.link("新建书", "/new-book").classes("text-white")
+            ui.link("蒸馏风格", "/distill").classes("text-white")
             ui.link("Plan 续跑", "/plans").classes("text-white")
             ui.link("设置", "/settings").classes("text-white")
 
@@ -410,11 +411,70 @@ def new_book():
     _mount_pipeline_panel(status_label, result_label, log_view)
 
 
+# ============ 蒸馏（学作者风格·阶段3） ============
+def distill():
+    from core.gui.runner import scan_distill_styles
+
+    _header("蒸馏风格")
+    ui.label("「复刻测试」：拿一个已学好的风格库，让 AI 仿写一段、打分看像不像。"
+             "（学新风格的完整蒸馏正在接入）").classes("text-sm text-gray-600")
+
+    with ui.row().classes("w-full gap-4 items-start"):
+        with ui.column().classes("w-1/3 gap-2"):
+            ui.label("复刻测试（导入现成风格 → 仿写 → 看 SFS 分）").classes("font-bold")
+            try:
+                styles = scan_distill_styles()
+            except Exception:
+                styles = []
+            names = [s["name"] for s in styles]
+            style_sel = ui.select(options=names or ["（无可复刻风格）"],
+                                  value=(names[0] if names else None),
+                                  label="风格库（有 skill + 原文≥5 章）")\
+                .classes("w-full").mark("distill-style")
+            ref_input = ui.input("cluster 参考（默认 cluster_001）", value="cluster_001")\
+                .classes("w-full").mark("distill-ref")
+            warn = ui.label("").classes("text-xs text-red-600").mark("distill-warn")
+
+            def _start_replicate():
+                if not names:
+                    ui.notify("没有可复刻的风格库（需有 skill + 原文≥5 章）", type="warning")
+                    return
+                try:
+                    data = list_profiles_masked()
+                    active = data.get("active")
+                    if not any(p["name"] == active and p.get("key_in_keyring")
+                               for p in data.get("profiles", [])):
+                        warn.set_text("⚠️ 当前模型还没填密钥——先去「设置」录入 key")
+                        return
+                except Exception:
+                    pass
+                ok = RUNNER.run_replicate(style_sel.value,
+                                          (ref_input.value or "cluster_001").strip())
+                warn.set_text("" if ok else "")
+                if ok:
+                    ui.notify(f"开始复刻 {style_sel.value} —— 看右边日志和分数", type="positive")
+                else:
+                    ui.notify("已有任务在运行", type="warning")
+
+            ui.button("🎭 测复刻", on_click=_start_replicate)\
+                .props("color=primary").mark("btn-replicate")
+            status_label = ui.label("空闲").classes("text-sm font-mono")\
+                .mark("distill-status")
+            result_label = ui.label("").classes("text-sm font-bold").mark("distill-result")
+
+        with ui.column().classes("flex-1"):
+            ui.label("蒸馏日志").classes("text-sm text-gray-500")
+            log_view = ui.log(max_lines=400).classes("w-full h-96 font-mono text-xs")
+
+    _mount_pipeline_panel(status_label, result_label, log_view)
+
+
 def init_pages():
     """注册全部页面。NiceGUI 测试框架每测重置 Client.page_routes——
     页面注册必须可重复调用（官方「无 main.py 项目」测试模式）。"""
     ui.page("/")(index)
     ui.page("/new-book")(new_book)
+    ui.page("/distill")(distill)
     ui.page("/plans")(plans_page)
     ui.page("/settings")(settings_page)
 

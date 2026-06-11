@@ -11,6 +11,7 @@ import pytest
 
 import core.gui.app as app_module
 import core.gui.runner as gr
+import core.gui.state as gs
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
@@ -36,6 +37,8 @@ def nb_env(user, tmp_path, monkeypatch):
     orig_kr = keyring.get_keyring()
     keyring.set_keyring(MemKeyring())
     monkeypatch.setenv("GEN_MODEL_ACTIVE", "demo")
+    # 🔴 NOVELS_DIR 指临时目录·不污染真 workspace/novels（测试幂等·防「已存在」早返）
+    monkeypatch.setattr(gs, "NOVELS_DIR", tmp_path / "novels")
     app_module.init_pages()
     yield
     keyring.set_keyring(orig_kr)

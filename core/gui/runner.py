@@ -26,6 +26,27 @@ from core.gui.state import AppState  # noqa: E402
 import orchestrator as orc  # noqa: E402
 
 
+def scan_distill_styles(min_chapters: int = 5) -> list[dict]:
+    """列可复刻的风格库（有 skill_*.md + 原文/ ≥ min_chapters 章·multi-ref SFS 需）。
+
+    阶段1 复刻半程：导现成 skill → 复刻 → SFS。must_fix#1：原文 章数 < min → multi-ref
+    退化单 ref（铁律失真）→ 此处过滤掉，GUI 不让选（避免跑到评分才崩）。
+    """
+    from frozen_util import user_workspace_dir
+    styles_dir = user_workspace_dir() / "styles"
+    out = []
+    if styles_dir.is_dir():
+        for d in sorted(styles_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            skills = sorted(d.glob("skill*.md")) + sorted(d.glob("*skill*.md"))
+            raw = list((d / "原文").glob("*.txt")) if (d / "原文").is_dir() else []
+            if skills and len(raw) >= min_chapters:
+                out.append({"name": d.name, "title": d.name,
+                            "skill": skills[0].name, "raw_chapters": len(raw)})
+    return out
+
+
 class PipelineRunner:
     """驱动 cluster-write / cluster-save-state（可连跑）的工作线程封装。"""
 
@@ -64,6 +85,87 @@ class PipelineRunner:
             self._run_lock.release()
             return False
         return True
+
+    def run_replicate(self, style_name: str, cluster_ref: str = "cluster_001") -> bool:
+        """阶段1 复刻半程：distill_replicate(gen-model 复刻) → style_evaluator(multi-ref SFS)。
+        后台线程·已有任务在跑返 False。"""
+        if not self._run_lock.acquire(blocking=False):
+            self.state.log_buffer.append("[gui] 已有任务在运行，忽略本次复刻")
+            return False
+        self.state.running = True
+        self.state.last_result = ""
+        try:
+            self._thread = threading.Thread(
+                target=self._replicate_work, name="replicate",
+                args=(style_name, cluster_ref), daemon=True)
+            self._thread.start()
+        except BaseException as e:
+            self.state.running = False
+            self._thread = None
+            self.state.last_result = f"❌ 无法启动复刻线程：{e}"
+            self.state.log_buffer.append(f"[gui] {self.state.last_result}")
+            self._run_lock.release()
+            return False
+        return True
+
+    def _replicate_work(self, style_name: str, cluster_ref: str):
+        import json
+        import subprocess
+        from frozen_util import child_python, user_workspace_dir
+        st = self.state
+        try:
+            st.current_command = "复刻测试"
+            style_dir = user_workspace_dir() / "styles" / style_name
+            skills = sorted(style_dir.glob("skill*.md")) + sorted(style_dir.glob("*skill*.md"))
+            if not skills:
+                st.last_result = f"❌ {style_name} 无 skill 文件"
+                st.log_buffer.append(f"[gui] {st.last_result}")
+                return
+            out_dir = style_dir / "复刻测试" / "gui"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            replica = out_dir / f"{cluster_ref}_replica.txt"
+            eval_out = out_dir / f"{cluster_ref}_eval.json"
+
+            def _run(cmd_args, label):
+                st.log_buffer.append(f"[gui] ▶ {label} …")
+                p = subprocess.Popen([child_python()] + cmd_args, cwd=str(_REPO),
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     text=True, encoding="utf-8", errors="replace")
+                for line in iter(p.stdout.readline, ""):
+                    if line.strip():
+                        st.log_buffer.append(line.rstrip())
+                p.wait()
+                return p.returncode
+
+            rc = _run(["core/scripts/distill_replicate.py", "--style-skill", str(skills[0]),
+                       "--mode", "cluster", "--cluster-ref", cluster_ref,
+                       "--project", str(style_dir), "--output", str(replica)], "gen-model 复刻")
+            if rc != 0 or not replica.exists():
+                st.last_result = f"❌ 复刻失败（退出码 {rc}）——检查设置页 key 是否填了"
+                st.log_buffer.append(f"[gui] {st.last_result}")
+                return
+            rc2 = _run(["core/scripts/style_evaluator.py", "--gen", str(replica),
+                        "--multi-ref-from-dir", str(style_dir / "原文"),
+                        "--multi-ref-count", "5", "--output", str(eval_out)], "多维风格评分 SFS")
+            score = "?"
+            try:
+                if eval_out.exists():
+                    ev = json.loads(eval_out.read_text(encoding="utf-8"))
+                    score = ev.get("sfs_quick") or ev.get("total") or \
+                        (ev.get("programmatic_score") or {}).get("total") or "?"
+                    grade = ev.get("grade") or (ev.get("programmatic_score") or {}).get("grade") or ""
+                    st.last_result = f"✅ 复刻 SFS 分：{score} {grade}（越高越像该作者）"
+            except (OSError, json.JSONDecodeError):
+                st.last_result = f"⚠️ 复刻完成但评分解析失败（退出码 {rc2}）"
+            st.log_buffer.append(f"[gui] {st.last_result}")
+        except Exception as e:
+            st.last_result = f"❌ 复刻异常：{e}"
+            st.log_buffer.append(f"[gui] {st.last_result}")
+        finally:
+            st.running = False
+            st.current_command = ""
+            self._thread = None
+            self._run_lock.release()
 
     def list_resumable(self) -> list[dict]:
         """活跃（未完成）plan 列表——断点续跑入口。"""
