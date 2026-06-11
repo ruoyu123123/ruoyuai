@@ -153,7 +153,7 @@
         "python core/scripts/adaptive_runner.py --label skill_evolver_promote -- python core/scripts/skill_evolver.py {project_root} promote",
         "python core/scripts/adaptive_runner.py --label evolution_orchestrator -- python core/scripts/evolution_orchestrator.py {project_root} --cluster {key}",
         "python core/scripts/adaptive_runner.py --label maybe_judge_consensus -- python core/scripts/maybe_judge_consensus.py {project_root} --cluster {key}",
-        "python core/scripts/audit_dashboard.py {project_root}",
+        "? python core/scripts/audit_dashboard.py {project_root}",
         "python core/scripts/scan_retention.py {project_root} --keep 5",
         "python core/scripts/self_heal_engine.py --ingest",
         "python core/scripts/self_heal_engine.py --emit-lessons",

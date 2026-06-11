@@ -368,6 +368,22 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
     chunks = _slice_by_indices(paras, split_indices)
     per_chapter_cjk = [cio.count_cjk(c) for c in chunks]
 
+    # 4.5 末章上溢再平衡（轮次2 全旅程实测抓出）：等距锚点+最佳切点会把边界压向前段·
+    # 余量全堆末章（实测 [3081,2951,2940,3028,5431] 超 hi 21%）。pending_tail 只防下溢·
+    # 此处补上溢：末章 > hi 时把最后一个切点逐段后移（倒数第二章不破 hi 为限）。
+    # 纯字数再平衡·不理解叙事（北极星④格式层）。
+    while split_indices and per_chapter_cjk and per_chapter_cjk[-1] > hi:
+        cand = split_indices[-1] + 1
+        if cand >= len(paras):
+            break                      # 挪无可挪·保持现状（advisory）
+        trial = split_indices[:-1] + [cand]
+        tchunks = _slice_by_indices(paras, trial)
+        if len(tchunks) >= 2 and cio.count_cjk(tchunks[-2]) > hi:
+            break                      # 倒数第二章会破上限 → 停
+        split_indices[-1] = cand
+        chunks = tchunks
+        per_chapter_cjk = [cio.count_cjk(c) for c in chunks]
+
     # 5. 末章字数补料（Step F_v27）
     pending_tail_text = None
     pending_tail_path_rel = None

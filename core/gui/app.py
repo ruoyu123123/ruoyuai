@@ -558,13 +558,15 @@ def new_book():
                     if STATE.running:             # A2：先查再 mkdir·防幽灵书锁死书名
                         ui.notify("已有任务在运行，等它完成再建书", type="warning")
                         return
-                    if not _check_key_ready(warn_label):   # A3 统一预检
-                        return
+                    # 轮次2 实测：零成本本地重名检查先行·_check_key_ready 有文件 IO+凭据
+                    # 查询（并发下偶发 >0.8s）·放后面会让拒绝延迟不确定
                     proj = NOVELS_DIR / book
                     if (proj / "_数据库").exists():
                         ui.notify(f"《{book}》已存在——若上次建书中断，"
                                   f"去「Plan 续跑」页从断点继续；想重建请换个书名",
                                   type="warning")
+                        return
+                    if not _check_key_ready(warn_label):   # A3 统一预检
                         return
                     # 🔴 死锁②前置：RUNNER.start 前 mkdir + 写 book_meta.json（给 plan data_flow）
                     wal = proj / "_数据库" / ".wal"

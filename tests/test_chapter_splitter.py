@@ -53,3 +53,20 @@ def test_load_char_names_missing_or_broken_returns_empty():
         db.mkdir(parents=True)
         (db / "人物卡.json").write_text("{坏", encoding="utf-8")
         assert cs._load_char_names(Path(d)) == []
+
+
+def test_freestyle_tail_overflow_rebalanced():
+    """轮次2 全旅程实测回归：等距锚点把余量堆末章超 hi 21% → 4.5 再平衡把最后切点
+    逐段后移（倒数第二章不破 hi 为限）。合成 17400 CJK 草稿·切完每章须 ≤4500。"""
+    import chapter_splitter as cs
+    from pathlib import Path as _P
+    import tempfile
+    para = "这是一个测试段落，" * 10          # ~90 CJK/段
+    text = "\n\n".join([para] * 195)        # ~17500 CJK
+    with tempfile.TemporaryDirectory() as tmp:
+        r = cs.run_freestyle(_P(tmp), "cluster_001", 1, text,
+                             "标准", None, True, narrative_mode="linear")
+    assert r["per_chapter_cjk"], "应切出章"
+    hi = r["_freestyle_decision_log"]["per_chapter_range"][1]
+    assert all(c <= hi for c in r["per_chapter_cjk"]), \
+        f"末章上溢未再平衡: {r['per_chapter_cjk']} hi={hi}"
