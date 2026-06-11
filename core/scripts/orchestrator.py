@@ -272,7 +272,16 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
                   file=sys.stderr)
             return 3
         try:
-            ret = main_fn()
+            # 签名适配（真 distill e2e 抓出）：8 个脚本（consolidate_author_profile 等）是
+            # main(argv) 风格——有必填位置参则传 sys.argv[1:]（已 set 进 sys.argv）。
+            import inspect
+            try:
+                sig_params = [p for p in inspect.signature(main_fn).parameters.values()
+                              if p.default is inspect.Parameter.empty
+                              and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+            except (ValueError, TypeError):
+                sig_params = []
+            ret = main_fn(sys.argv[1:]) if sig_params else main_fn()
         except SystemExit as e:           # 脚本用 sys.exit() 退出
             ret = e.code
         return int(ret) if isinstance(ret, int) else (0 if ret is None else 3)

@@ -110,9 +110,67 @@ def run(project_root: Path, *, overwrite: bool = False, max_clusters: int | None
                 "qualitative_dims": dims or {},
             }, ensure_ascii=False, indent=2), encoding="utf-8")
         done += 1
+    _aggregate_author_profile(project_root)
     print(f"[surface_runner] {done} cluster 表层蒸馏完成（surface + continuity + 逐章投影）",
           file=sys.stderr)
     return 0
+
+
+def _aggregate_author_profile(project_root: Path):
+    """确定性聚合全部 cluster surface JSON → 作者风格.json 初版（创意字段层）。
+
+    真 distill e2e 抓出的管线 gap：consolidate_author_profile 只**规整已存在**的
+    作者风格.json（旧 Claude 流程由综合 agent 先写创意字段·程序驱动无此角色）。
+    此处零 LLM 聚合：golden 每类取首个非空·anti_patterns 并集·dims 取第一 cluster +
+    各 cluster free_notes 收集。consolidate 随后覆盖/补全 consumer 数值字段。"""
+    dist = project_root / "蒸馏进度"
+    surfaces = sorted(dist.glob("cluster_*_surface.json"))
+    if not surfaces:
+        return
+    golden: dict = {}
+    anti: dict = {}
+    vs_ai: dict = {}
+    dims: dict = {}
+    notes: list = []
+    for sp in surfaces:
+        try:
+            d = json.loads(sp.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for k, v in (d.get("golden_paragraphs") or {}).items():
+            if v and not golden.get(k):
+                golden[k] = v
+        for k, v in (d.get("anti_patterns") or {}).items():
+            if isinstance(v, list):
+                anti.setdefault(k, [])
+                anti[k] = sorted(set(anti[k]) | set(map(str, v)))
+        if not vs_ai and isinstance(d.get("vs_ai"), dict):
+            vs_ai = d["vs_ai"]
+        if not dims and isinstance(d.get("qualitative_dims"), dict):
+            dims = d["qualitative_dims"]
+        fn = d.get("free_notes")
+        if fn:
+            notes.append(str(fn))
+    profile_path = project_root / "作者风格.json"
+    existing = {}
+    if profile_path.exists():
+        try:
+            existing = json.loads(profile_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    existing.update({
+        "_source": "distill_surface_runner 聚合（创意层）+ consolidate（数值层）",
+        "clusters_analyzed": len(surfaces),
+        "qualitative_dims": dims or existing.get("qualitative_dims", {}),
+        "golden_paragraphs": golden or existing.get("golden_paragraphs", {}),
+        "anti_patterns": anti or existing.get("anti_patterns", {}),
+        "vs_ai": vs_ai or existing.get("vs_ai", {}),
+        "free_notes": notes or existing.get("free_notes", []),
+    })
+    profile_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+    print(f"[surface_runner] 作者风格.json 初版聚合（{len(surfaces)} surface）",
+          file=sys.stderr)
 
 
 def main():
