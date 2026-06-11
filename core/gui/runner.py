@@ -77,6 +77,10 @@ class PipelineRunner:
                 args=(list(commands), project, key, auto_pilot, resume_plan_id),
                 daemon=True)
             self._thread.start()
+            self.state.log_buffer.append(
+                f"[gui:run] 启动 cmds={'+'.join(commands)} project={project} "
+                f"key={key or '(空)'}{' resume=' + resume_plan_id if resume_plan_id else ''}"
+                f" auto={auto_pilot}")
         except BaseException as e:        # RuntimeError/MemoryError 等都要复位不变量
             self.state.running = False
             self._thread = None

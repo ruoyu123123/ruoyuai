@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import sys
 import threading
@@ -107,20 +108,146 @@ class PauseBridge:
             return self._active_rid
 
 
+# ============ 文件日志 sink（持久化·时间戳·按日期+大小轮转·全 try/except 吞错） ============
+import datetime as _dt
+
+
+def _redact_for_log(line: str) -> str:
+    """落盘前统一脱敏（防御纵深·must_fix#1）：llm_transport/gen_writer 兜底异常会把含
+    gemini key-in-URL 的原文经 stderr→tee 落盘·持久化比内存更危险·这里再过一道 redact。"""
+    try:
+        from secrets_store import redact
+        return redact(line)
+    except Exception:
+        return line
+
+
+class _FileLogSink:
+    """LogBuffer 的可选文件落地：每行 `ts | level | comp | message`（实测时 grep 切界面/命令）。
+
+    纪律（日志是观察层不是关键路径）：全 open/write try/except 吞错→失败退化纯内存（仿
+    StderrTee.write）·utf-8（frozen Windows GBK 会因中文/emoji 崩）·行缓冲近实时·
+    无 logging.handlers（避免与 StderrTee 接管 sys.stderr 互喂双写）·线程安全由调用方
+    LogBuffer._lock 保证（本类只在 append 临界区内被调·不自带锁）。
+    """
+    MAX_BYTES = 8 * 1024 * 1024
+    BACKUP = 3
+
+    def __init__(self, log_dir):
+        self._dir = Path(log_dir)
+        self._fp = None
+        self._day = None
+        self._path = None
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            self._open_today()
+        except Exception:
+            self._fp = None
+
+    @property
+    def path(self):
+        return self._path
+
+    def _today(self) -> str:
+        return _dt.date.today().isoformat()
+
+    def _open_today(self):
+        day = self._today()
+        self._path = self._dir / f"ruoyuai-gui-{day}.log"
+        self._fp = open(self._path, "a", encoding="utf-8", buffering=1)
+        self._day = day
+
+    def _maybe_rotate(self):
+        if self._day != self._today():
+            try:
+                if self._fp:
+                    self._fp.close()
+            except Exception:
+                pass
+            self._open_today()
+            return
+        try:
+            if self._path and self._path.exists() and \
+                    self._path.stat().st_size > self.MAX_BYTES:
+                self._fp.close()
+                for i in range(self.BACKUP, 0, -1):
+                    src = self._path if i == 1 else \
+                        self._path.with_name(self._path.name + f".{i-1}")
+                    dst = self._path.with_name(self._path.name + f".{i}")
+                    if src.exists():
+                        try:
+                            if dst.exists():
+                                dst.unlink()
+                            src.rename(dst)
+                        except Exception:
+                            pass
+                self._fp = open(self._path, "a", encoding="utf-8", buffering=1)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _classify(line: str) -> tuple:
+        """从行内既有标记廉价派生 (level, comp)——must_fix#2：命令行真实前缀是
+        `[orchestrator] ▶ step` 不是裸 `▶ step`·须匹配 [orchestrator]/派单/退出码。"""
+        if "[FATAL]" in line or "Traceback" in line or "❌" in line or "异常" in line:
+            level = "ERROR"
+        elif "⚠" in line or "WARN" in line or "已失效" in line or "拒绝" in line:
+            level = "WARN"
+        else:
+            level = "INFO"
+        if line.startswith("[gui:card]") or "走向卡" in line:
+            comp = "card"
+        elif line.startswith("[gui:page]"):
+            comp = "page"
+        elif line.startswith("[gui:run]"):
+            comp = "run"
+        elif line.startswith("[gui:event]") or line.startswith("[gui]"):
+            comp = "gui"
+        elif line.startswith("[orchestrator]") or "▶ step" in line or "派单" in line \
+                or "退出码" in line or line.startswith("⏸"):
+            comp = "orch"
+        elif "judge" in line[:14] or "[judge" in line:
+            comp = "judge"
+        else:
+            comp = "raw"
+        return level, comp
+
+    def write(self, line: str):
+        if self._fp is None:
+            return
+        try:
+            self._maybe_rotate()
+            ts = _dt.datetime.now().isoformat(timespec="milliseconds")
+            level, comp = self._classify(line)
+            self._fp.write(f"{ts} | {level:<5} | {comp:<5} | {_redact_for_log(line)}\n")
+        except Exception:
+            self._fp = None
+
+
 # ============ 日志环形缓冲（线程安全 + 单调游标） ============
 class LogBuffer:
     """deque(maxlen) + 单调总计数：UI 端用游标取「自上次以来」的新行，
-    轮转挤掉旧行时游标语义仍正确（不重复不丢当前窗口内的行）。"""
+    轮转挤掉旧行时游标语义仍正确（不重复不丢当前窗口内的行）。
 
-    def __init__(self, maxlen: int = 2000):
+    log_file=None → 纯内存（dev 测试 zero-dep 逐字节零回归）；传目录 → 惰性建文件 sink，
+    所有 append 同锁临界区内旁路落盘（命令状态经 stderr-tee 自然汇入·不重复记）。"""
+
+    def __init__(self, maxlen: int = 2000, log_file=None):
         self._d = deque(maxlen=maxlen)
         self.total = 0
         self._lock = threading.Lock()
+        self._file = _FileLogSink(log_file) if log_file else None
+
+    @property
+    def log_file_path(self):
+        return self._file.path if self._file else None
 
     def append(self, line: str):
         with self._lock:
             self._d.append(line)
             self.total += 1
+            if self._file is not None:
+                self._file.write(line)
 
     def since(self, cursor: int) -> tuple[list[str], int]:
         """返回 (cursor 之后的新行, 新 cursor=当前 total)。"""
@@ -294,6 +421,23 @@ def scan_projects(novels_dir: Path | None = None) -> list[ProjectInfo]:
     return result
 
 
+def _make_log_buffer() -> "LogBuffer":
+    """GUI 运行态 LogBuffer：落 user_data_dir()/logs（dev=仓库根/logs·frozen=%APPDATA%/
+    ruoyuai/logs）。**must_fix#3 测试旁路**：pytest 运行 / RUOYUAI_GUI_LOG_DISABLE=1 →
+    纯内存（不往工作树 repo/logs 撒文件污染 git·8 处 AppState() 测试零副作用）。
+    取路径失败 → 纯内存（绝不让日志初始化拖垮 import app→GUI 起不来）。"""
+    if os.environ.get("RUOYUAI_GUI_LOG_DISABLE") == "1" or "pytest" in sys.modules:
+        return LogBuffer()
+    override = os.environ.get("RUOYUAI_GUI_LOG_DIR")
+    try:
+        if override:
+            return LogBuffer(log_file=Path(override))
+        from frozen_util import user_data_dir
+        return LogBuffer(log_file=user_data_dir() / "logs")
+    except Exception:
+        return LogBuffer()
+
+
 # ============ 应用状态 ============
 @dataclass
 class AppState:
@@ -303,7 +447,7 @@ class AppState:
     current_command: str = ""               # cluster-write / cluster-save-state
     current_step: str = ""                  # "3/7 cluster-quality-full-stack"
     last_result: str = ""                   # 上次运行结论（成功/失败原因）
-    log_buffer: LogBuffer = field(default_factory=LogBuffer)
+    log_buffer: LogBuffer = field(default_factory=_make_log_buffer)
     bridge: PauseBridge = field(default_factory=PauseBridge)
     # 🔴 不在此存日志游标：log_cursor 必须 per-client（每个浏览器 tab 各持一份），
     # 放共享 AppState 会让多 tab 瓜分日志（对抗审查根因 B）。游标由 app.py 的

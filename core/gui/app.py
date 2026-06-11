@@ -72,11 +72,16 @@ def _mount_pipeline_panel(status_label, result_label, log_view):
             answer = None
         try:
             if answer is None:
+                STATE.log_buffer.append(f"[gui:card] 走向卡失效（超时/已处理） req_id={rid}")
                 ui.notify("走向卡已失效（已被处理或超时）——如需选择请到「Plan 续跑」页继续",
                           type="warning")
             elif not STATE.bridge.respond(answer, req_id=rid):
+                STATE.log_buffer.append(f"[gui:card] 选择未生效（陈旧/超时） req_id={rid}")
                 ui.notify("该选择未生效（走向已被处理或已超时）——请到「Plan 续跑」页继续",
                           type="warning")
+            else:
+                STATE.log_buffer.append(
+                    f"[gui:card] 用户选择 req_id={rid} 选项={_opt_label(answer, 0)}")
         finally:
             dialog_state["done_rid"] = rid
             dialog_state["req_id"] = None
@@ -117,6 +122,8 @@ def _mount_pipeline_panel(status_label, result_label, log_view):
                         int(free.value) if spec.get("type") == "integer"
                         and str(free.value).isdigit() else free.value))
             card_dialog.open()
+            STATE.log_buffer.append(
+                f"[gui:card] 渲染走向卡 req_id={rid} 选项数={len(options)}")
             background_tasks.create(_await_card(rid))
             dialog_state["req_id"] = rid
         except Exception as e:
@@ -144,6 +151,7 @@ def _mount_pipeline_panel(status_label, result_label, log_view):
 # ============ 写作台 ============
 def index():
     _header("写作台")
+    STATE.log_buffer.append("[gui:page] 打开 写作台")
     STATE.refresh_projects()
 
     with ui.row().classes("w-full gap-4 items-start"):
@@ -181,6 +189,10 @@ def index():
             def _start(commands: list[str]):
                 p = STATE.project()
                 key = (key_input.value or "").strip()
+                STATE.log_buffer.append(
+                    f"[gui:event] 点击 {'+'.join(commands)} "
+                    f"project={p.name if p else '?'} key={key or '(空)'} "
+                    f"auto={bool(auto_switch.value)}")
                 if not p:
                     ui.notify("先选项目", type="warning")
                     return
@@ -224,6 +236,7 @@ def index():
 # ============ Plan 续跑 ============
 def plans_page():
     _header("Plan 续跑")
+    STATE.log_buffer.append("[gui:page] 打开 Plan续跑")
     rows_holder = ui.column().classes("w-full gap-2")
 
     def _render():
@@ -254,6 +267,7 @@ def plans_page():
 # ============ 设置（BYOK 密钥管理）============
 def settings_page():
     _header("设置")
+    STATE.log_buffer.append("[gui:page] 打开 设置")
     from core.gui.runner import (save_api_key, clear_api_key, profile_key_status,
                                   test_profile_connection, switch_active)
     try:
@@ -352,6 +366,7 @@ def new_book():
     from core.gui.state import NOVELS_DIR
 
     _header("新建书")
+    STATE.log_buffer.append("[gui:page] 打开 新建书")
     ui.label("填书名 + 题材，点「开始建书」——AI 会带你选风格、选灵感卡、定框架，"
              "然后生成大纲 + 全套设定。").classes("text-sm text-gray-600")
 
@@ -365,6 +380,7 @@ def new_book():
 
             def _start_build():
                 book = (name_input.value or "").strip()
+                STATE.log_buffer.append(f"[gui:event] 点击 开始建书 book={book or '(空)'}")
                 if not book:
                     ui.notify("先填书名", type="warning")
                     return
@@ -416,6 +432,7 @@ def distill():
     from core.gui.runner import scan_distill_styles
 
     _header("蒸馏风格")
+    STATE.log_buffer.append("[gui:page] 打开 蒸馏风格")
     ui.label("「复刻测试」：拿一个已学好的风格库，让 AI 仿写一段、打分看像不像。"
              "（学新风格的完整蒸馏正在接入）").classes("text-sm text-gray-600")
 
@@ -436,6 +453,9 @@ def distill():
             warn = ui.label("").classes("text-xs text-red-600").mark("distill-warn")
 
             def _start_replicate():
+                STATE.log_buffer.append(
+                    f"[gui:event] 点击 测复刻 style={style_sel.value} "
+                    f"ref={(ref_input.value or 'cluster_001').strip()}")
                 if not names:
                     ui.notify("没有可复刻的风格库（需有 skill + 原文≥5 章）", type="warning")
                     return
@@ -481,6 +501,12 @@ def init_pages():
 
 def main(native: bool = False, port: int = 8080):
     install_stderr_tee(STATE.log_buffer)
+    # 启动即打印日志文件路径（实测时方便取日志分析界面+命令状态）
+    lp = STATE.log_buffer.log_file_path
+    if lp:
+        msg = f"[gui:run] 日志文件：{lp}"
+        STATE.log_buffer.append(msg)
+        print(msg, file=sys.stderr)
     init_pages()
     ui.run(title="若渝AI", port=port, native=native, reload=False,
            show=not native)
