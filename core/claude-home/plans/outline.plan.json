@@ -1,83 +1,185 @@
 {
   "command": "outline",
-  "version": 3,
-  "description": "大纲 + 34 个核心子系统 JSON 全建（hook pretooluse_subsystems_gate 强制门禁）",
-  "total_steps": 4,
-  "required_steps": [
-    1,
-    2,
-    3,
-    4
-  ],
+  "version": 4,
+  "description": "创建书籍（程序驱动·阶段2）：风格选择→调研→3灵感卡→框架/节奏/cluster数→34子系统→卷级大纲→cluster_001详化。GUI /new-book 页驱动·非技术用户独立建书。",
+  "total_steps": 10,
+  "required_steps": [1, 2, 3, 3.1, 3.2, 3.3, 3.4, 4, 5, 6, 6.5, 7],
   "optional_steps": [],
+  "_program_driven_status": "v28 程序驱动：已落为可执行 DAG（scripts/must_spawn_agent/pause_for_user/data_flow）·orchestrator.run_command 可机械驱动·GUI runner.start([outline]) 可调。2026-06-11 阶段2 创建书籍。前置：GUI 在 RUNNER.start 前已 mkdir 项目目录 + 写 _数据库/.wal/book_meta.json={topic}。",
   "steps": [
     {
       "n": 1,
-      "name": "framework-and-brainstorm",
-      "description": "叙事框架选择（三幕 / Save the Cat / 英雄之旅 / 雪花 / 自定义） + 3 个灵感",
+      "name": "init-project+style-select",
+      "description": "init_project 建目录 + emit style_options 供 pause 选风格 → 拷选中风格 skill 双文件（作者档第一权威）。",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": ["python core/scripts/init_project.py {project_root} --emit-style-options"],
+      "pause_for_user": {
+        "type": "choice",
+        "prompt": "选一个作者风格（决定全书笔法·第一权威）",
+        "source": "_数据库/.wal/style_options.json",
+        "options_field": "styles",
+        "answer_artifact": "_数据库/.wal/style_choice.json"
+      },
+      "data_flow": {
+        "<style_name>": {"source_json": "_数据库/.wal/style_choice.json", "field": "answer.name"}
+      },
+      "after_pause_scripts": ["python core/scripts/init_project.py {project_root} --style <style_name>"],
+      "expected_outputs": ["_数据库/作者风格.json"]
     },
     {
       "n": 2,
-      "name": "volume-outline",
-      "description": "卷级大势大纲生成（不细化逐章）",
+      "name": "research-inspiration",
+      "description": "强制调研先行（novel-researcher·soft·无网降级不阻断·灵感卡引用调研来源）。",
       "required": true,
-      "expected_outputs": [
-        "大纲.md"
-      ]
+      "skip_output_allowed": true,
+      "must_spawn_agent": "novel-researcher",
+      "data_flow": {
+        "<topic>": {"source_json": "_数据库/.wal/book_meta.json", "field": "topic", "optional": true, "default": "网络小说"}
+      },
+      "agent_input": {"TASK_TYPE": "inspiration", "PROJECT": "{project_root}", "TOPIC": "<topic>"},
+      "judge_report_path": "_数据库/.research_cache/inspiration_synthesis.json",
+      "touch_outputs": ["_数据库/.research_cache/.placeholder"],
+      "expected_outputs": ["_数据库/.research_cache/.placeholder"]
     },
     {
       "n": 3,
-      "name": "init-34-subsystems",
-      "description": "🆕推荐先跑 python core/scripts/scaffold_subsystems.py emit <书名> 生成 34 个 schema 正确空骨架(单一真理源 templates/subsystem_skeletons.json·不覆盖已填)再填创意内容,末尾 scaffold_subsystems.py verify <书名> + db_schema_validate 校验 · 初始化 34 个核心子系统 JSON · 9 大类 · 不允许部分启用（hook 强制全建）· 高级 16 个允许最小骨架占位但文件必须存在 · 事件簇.json 只详化 clusters[0] (cluster_001)，cluster_002+ 仅占位 status:'未涌现'，等 cluster_emergence_engine 动态产生 · clusters[0].narrative_mode 默认 'in_medias_res'（黄金三章倒叙 · 强冲突放最前 · 用户明示线性叙事除外），后续 cluster 默认 'linear' · 🔴 v2 cluster 化（2026-05-28）：进度.json.cluster_blueprint.cluster_001.scene_storyboard 必须含 N 条 scene_index=0..N-1 占位条目（N=cluster_001.scene_count_estimate，默认 4）· 不允许仅 1 条 scene → 否则 writer 拒绝 spawn 走 single fallback（已废弃）· 用户偏好.json 必须含 ecas_config.ecas_enabled=true 和 ecas_config.v2_cluster_enabled=true（默认 true）",
+      "name": "brainstorm-3-cards",
+      "description": "基于调研生成 3 灵感卡（gen_creative brainstorm·每卡引用调研来源）。",
       "required": true,
+      "skip_output_allowed": false,
+      "data_flow": {
+        "<topic>": {"source_json": "_数据库/.wal/book_meta.json", "field": "topic", "optional": true, "default": "网络小说"}
+      },
+      "scripts": ["python core/scripts/gen_creative.py --mode brainstorm --topic <topic> --count 3 --research _数据库/.research_cache/inspiration_synthesis.json --style-ref _数据库/作者风格_skill.md --out {project_root}/_数据库/.wal/inspiration_cards.json"],
+      "expected_outputs": ["_数据库/.wal/inspiration_cards.json"]
+    },
+    {
+      "n": 3.1,
+      "name": "pause-pick-card",
+      "description": "用户选 1 张灵感卡。",
+      "required": true,
+      "skip_output_allowed": true,
+      "pause_for_user": {
+        "type": "choice",
+        "prompt": "选一张灵感卡（每张引用了调研来源）",
+        "source": "_数据库/.wal/inspiration_cards.json",
+        "options_field": "cards",
+        "answer_artifact": "_数据库/.wal/outline_choice_card.json"
+      },
+      "expected_outputs": ["_数据库/.wal/outline_choice_card.json"]
+    },
+    {
+      "n": 3.2,
+      "name": "pause-framework",
+      "description": "选叙事框架（字面枚举·inline_options）。",
+      "required": true,
+      "skip_output_allowed": true,
+      "pause_for_user": {
+        "type": "choice",
+        "prompt": "选叙事框架",
+        "inline_options": ["三幕", "Save the Cat", "英雄之旅", "雪花", "自定义"],
+        "default": "三幕",
+        "answer_artifact": "_数据库/.wal/outline_choice_framework.json"
+      },
+      "expected_outputs": ["_数据库/.wal/outline_choice_framework.json"]
+    },
+    {
+      "n": 3.3,
+      "name": "pause-cluster-count",
+      "description": "每卷大概几个故事块（软提示·integer）。",
+      "required": true,
+      "skip_output_allowed": true,
+      "pause_for_user": {
+        "type": "integer",
+        "prompt": "每卷大概几个故事块?(默认10·后续可动态加)",
+        "default": 10,
+        "answer_artifact": "_数据库/.wal/outline_choice_count.json"
+      },
+      "expected_outputs": ["_数据库/.wal/outline_choice_count.json"]
+    },
+    {
+      "n": 3.4,
+      "name": "pause-rhythm",
+      "description": "选节奏档（字面枚举·inline_options）。",
+      "required": true,
+      "skip_output_allowed": true,
+      "pause_for_user": {
+        "type": "choice",
+        "prompt": "选节奏档",
+        "inline_options": ["紧凑", "标准", "厚重", "混合"],
+        "default": "标准",
+        "answer_artifact": "_数据库/.wal/outline_choice_rhythm.json"
+      },
+      "expected_outputs": ["_数据库/.wal/outline_choice_rhythm.json"]
+    },
+    {
+      "n": 4,
+      "name": "scaffold-34-subsystems",
+      "description": "scaffold_subsystems emit 建齐 34 子系统空骨架（先于 volume_arc·schema 正确·不覆盖已存在）。",
+      "required": true,
+      "skip_output_allowed": false,
+      "scripts": ["python core/scripts/scaffold_subsystems.py emit {project_root}"],
       "expected_outputs": [
-        "_数据库/人物卡.json",
-        "_数据库/世界观.json",
-        "_数据库/关系.json",
-        "_数据库/地图.json",
-        "_数据库/道具.json",
-        "_数据库/进度.json",
-        "_数据库/故事块摘要.json",
-        "_数据库/大势卡.json",
-        "_数据库/事件簇.json",
-        "_数据库/事件表.json",
-        "_数据库/时间线.json",
-        "_数据库/伏笔表.json",
-        "_数据库/作者风格.json",
-        "_数据库/场景规则.json",
-        "_数据库/写作经验.json",
-        "_数据库/用户偏好.json",
-        "_数据库/世界状态.json",
-        "_数据库/涟漪规则.json",
-        "_数据库/枢纽场景.json",
-        "_数据库/时钟表.json",
-        "_数据库/叙事节拍器.json",
-        "_数据库/主角压力档.json",
-        "_数据库/character_arc_state.json",
-        "_数据库/角色行动表.json",
-        "_数据库/群像档.json",
-        "_数据库/事件池.json",
-        "_数据库/行动判定模板.json",
-        "_数据库/角色池.json",
-        "_数据库/角色烙印.json",
-        "_数据库/knowledge_graph.json",
-        "_数据库/subplot_threads.json",
-        "_数据库/beat_map.json",
-        "_数据库/四线脉络.json",
+        "_数据库/人物卡.json", "_数据库/世界观.json", "_数据库/关系.json", "_数据库/地图.json",
+        "_数据库/道具.json", "_数据库/进度.json", "_数据库/故事块摘要.json", "_数据库/大势卡.json",
+        "_数据库/事件簇.json", "_数据库/事件表.json", "_数据库/时间线.json", "_数据库/伏笔表.json",
+        "_数据库/作者风格.json", "_数据库/场景规则.json", "_数据库/写作经验.json", "_数据库/用户偏好.json",
+        "_数据库/世界状态.json", "_数据库/涟漪规则.json", "_数据库/枢纽场景.json", "_数据库/时钟表.json",
+        "_数据库/叙事节拍器.json", "_数据库/主角压力档.json", "_数据库/character_arc_state.json",
+        "_数据库/角色行动表.json", "_数据库/群像档.json", "_数据库/事件池.json", "_数据库/行动判定模板.json",
+        "_数据库/角色池.json", "_数据库/角色烙印.json", "_数据库/knowledge_graph.json",
+        "_数据库/subplot_threads.json", "_数据库/beat_map.json", "_数据库/四线脉络.json",
         "_数据库/webnovel_bench_mapping.json"
       ]
     },
     {
-      "n": 4,
-      "name": "plan-end",
-      "description": "Git 初始化 commit + plan 最终校验 + hook pretooluse_subsystems_gate 拦截缺失子系统",
+      "n": 5,
+      "name": "volume-arc-generation",
+      "description": "卷级大纲生成（gen_creative volume_arc·走 llm_transport·四硬契约·守北极星⑤不规训·覆盖 scaffold 的大势卡/事件簇空骨架）。",
       "required": true,
+      "skip_output_allowed": false,
+      "data_flow": {
+        "<cluster_count>": {"source_json": "_数据库/.wal/outline_choice_count.json", "field": "answer", "optional": true, "default": "10"},
+        "<framework>": {"source_json": "_数据库/.wal/outline_choice_framework.json", "field": "answer", "optional": true, "default": "三幕"},
+        "<rhythm>": {"source_json": "_数据库/.wal/outline_choice_rhythm.json", "field": "answer", "optional": true, "default": "标准"}
+      },
+      "scripts": ["python core/scripts/gen_creative.py --mode volume_arc --project {project_root} --selected-card {project_root}/_数据库/.wal/outline_choice_card.json --cluster-count <cluster_count> --framework <framework> --rhythm <rhythm> --style-ref {project_root}/_数据库/作者风格_skill.md --emit-to-db"],
+      "expected_outputs": ["_数据库/大势卡.json", "_数据库/事件簇.json"]
+    },
+    {
+      "n": 6,
+      "name": "cluster_001-storyboard-detail",
+      "description": "outline-planner 精排 cluster_001 倒叙 storyboard（needs_author_profile·block）。judge_report_path 用 _emergence.json 对齐 plan_tracker._verify_agent_report 校验。",
+      "required": true,
+      "skip_output_allowed": false,
+      "must_spawn_agent": "novel-outline-planner",
+      "agent_input": {"PROJECT": "{project_root}", "MODE": "ecas_cluster_brief", "CLUSTER_ID": "cluster_001", "PARENT_ME": "ME-V1-01"},
+      "judge_report_path": "_数据库/.wal/cluster_001_emergence.json",
+      "expected_outputs": ["_数据库/.wal/cluster_001_emergence.json"]
+    },
+    {
+      "n": 6.5,
+      "name": "apply-cluster_001-brief",
+      "description": "cluster_choice_apply 把 outline-planner 的 brief 写回 事件簇.json·status=in_progress（根治 build_manifest 注入-gate 的 active 白名单坑·feedback_build_manifest_cluster_brief_injection_gate）。",
+      "required": true,
+      "skip_output_allowed": false,
+      "scripts": ["python core/scripts/cluster_choice_apply.py {project_root} --next-key 001 --choice _数据库/.wal/cluster_001_emergence.json"],
+      "expected_outputs": ["_数据库/事件簇.json"]
+    },
+    {
+      "n": 7,
+      "name": "plan-end",
+      "description": "scaffold verify + db_schema_validate + git commit（初始化项目 + 生成大纲）。",
+      "required": true,
+      "skip_output_allowed": true,
+      "scripts": [
+        "python core/scripts/scaffold_subsystems.py verify {project_root}",
+        "? python core/scripts/db_schema_validate.py {project_root}"
+      ],
       "expected_outputs": []
     }
   ],
-  "_v2_principle": "整个系统为故事块服务 · outline 产 cluster_blueprint · v2 cluster 化方案 2026-05-28",
-  "_v2_note": "34 子系统 init 时优先用 cluster_id + scene_index schema · 故事块摘要 → 故事块摘要",
-  "_program_driven_status": "v28 程序驱动状态: NOT-YET——本命令零 scripts/零 must_spawn_agent,创作编排(大纲生成/蒸馏分析)仍由 Claude 智能完成,模板仅为产出清单。orchestrator 可加载但无法机械执行。写作主轨 cluster-write/cluster-save-state 已全量程序驱动;本命令迁移需先把创作步骤落为 gen-model 脚本(如 gen_creative/distill_replicate 模式)。2026-06-10"
+  "_v2_principle": "整个系统为故事块服务·outline 产卷级大势卡 + cluster_001 详化·事件簇 fluid 涌现（只详化 cluster_001）·黄金三章倒叙默认·卷=阶段触发点章数 fluid 不锁。",
+  "_north_star_5": "volume_arc/outline-planner 创意步走 gen-model·四硬契约·绝不 schema 枚举规训创作（惊悚乐园流水账覆辙）。"
 }
