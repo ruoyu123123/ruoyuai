@@ -90,6 +90,22 @@ class PipelineRunner:
             return False
         return True
 
+    def start_full_distill(self, book: str, author_text: str, *,
+                           auto_pilot: bool = False) -> bool:
+        """阶段3 全程蒸馏：建风格库目录 + 落作者作品 raw → 跑 distill-style plan。
+        前置（照 new_book 范式·RUNNER.start 前 mkdir + 写 raw）。"""
+        from frozen_util import user_workspace_dir
+        proj = user_workspace_dir() / "styles" / book
+        if (proj / "原文").exists() or (proj / "skill_FINAL.md").exists():
+            self.state.log_buffer.append(f"[gui:event] 蒸馏拦截《{book}》已存在")
+            return False
+        wal = proj / "蒸馏进度" / ".wal"
+        wal.mkdir(parents=True, exist_ok=True)
+        (wal / "raw_author_text.txt").write_text(author_text, encoding="utf-8")
+        self.state.log_buffer.append(
+            f"[gui:event] 开始学风格 book={book} 原文{len(author_text)}字")
+        return self.start(["distill-style"], book, "", auto_pilot=auto_pilot)
+
     def run_replicate(self, style_name: str, cluster_ref: str = "cluster_001") -> bool:
         """阶段1 复刻半程：distill_replicate(gen-model 复刻) → style_evaluator(multi-ref SFS)。
         后台线程·已有任务在跑返 False。"""

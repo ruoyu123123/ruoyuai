@@ -129,6 +129,9 @@ def load_dataflow(step: dict, ctx: dict) -> dict:
                 continue
             if isinstance(cur, dict) and seg in cur:
                 cur = cur[seg]
+            elif isinstance(cur, list) and seg.lstrip("-").isdigit() \
+                    and -len(cur) <= int(seg) < len(cur):
+                cur = cur[int(seg)]   # list 索引（如 clusters.0.cluster_id·蒸馏 DAG）
             else:
                 if spec.get("optional"):
                     cur = spec.get("default", "")

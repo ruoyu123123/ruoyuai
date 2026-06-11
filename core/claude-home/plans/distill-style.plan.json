@@ -1,83 +1,113 @@
 {
   "command": "distill-style",
-  "version": 4,
-  "description": "作者风格闭环蒸馏 v3（cluster 单轨化 · 2026-05-28）· 7 phase · 全系统 cluster 化方案（废弃 chapter 中检 · 单一 cluster 终验复刻为主）",
-  "_v3_changes": "v3 删除 phase-2 chapter-replica（chapter 中检）· phase 数 8→7 · 全程 cluster 视野 · 对齐用户原话「整个系统为故事块服务」",
-  "total_steps": 7,
-  "required_steps": [
-    1,
-    2,
-    3,
-    4,
-    5,
-    6,
-    7
-  ],
+  "version": 5,
+  "description": "作者风格全程蒸馏（程序驱动·阶段3）：作者作品→切章→章级metrics→cluster切分→48维judge表层蒸馏→consolidate聚合→skill_v0→复刻→SFS→修正反思→定稿→回灌验证。",
+  "total_steps": 8,
+  "required_steps": [1, 2, 2.5, 3, 4, 5, 6, 7],
   "optional_steps": [],
+  "_program_driven_status": "v28 程序驱动：已落为可执行 DAG（scripts/must_spawn_agent/data_flow）·orchestrator.run_command 可机械驱动·GUI /distill 全程蒸馏可调。2026-06-11 阶段3。前置：GUI 在 RUNNER.start 前 mkdir STYLES_DIR/<书名>/蒸馏进度/.wal + 把作者作品正文落 蒸馏进度/.wal/raw_author_text.txt。注：distill 项目根直挂 原文/、cluster_index.json（data_flow source_json 不带 _数据库/ 前缀）。",
   "steps": [
     {
       "n": 1,
       "name": "phase-0-preprocess",
-      "description": "阶段 0 预处理：读 distill-style-lessons + 必读 cluster_index.json (.cluster) + 章数检测 + 分批方案（300 章上限）。若 cluster_index 不存在 → 跑 cluster_segmenter.py",
+      "description": "作者作品 raw → 原文/第N章.txt（ingest）+ 逐章 metrics（章级·喂 consolidate）+ cluster 切分。",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/ingest_author_text.py {project_root} --source 蒸馏进度/.wal/raw_author_text.txt",
+        "python core/scripts/distill_chapter_metrics.py {project_root}",
+        "? python core/scripts/cluster_segmenter.py --project {project_root}"
+      ],
+      "expected_outputs": ["cluster_index.json"]
     },
     {
       "n": 2,
-      "name": "phase-1-surface-distill-cluster",
-      "description": "阶段 1 表层蒸馏（cluster 主轨）：FOR cluster in cluster_index.clusters → 单章 JSON × N + cluster 衔接 JSON × 1 + style_analyzer metrics + arc_aggregator 增量聚合",
+      "name": "phase-1-surface-distill",
+      "description": "48 维表层蒸馏（surface_runner 循环 cluster 调 novel-distill-analyzer judge·全章全文注入）+ arc 聚合 + consolidate 确定性聚合 consumer 数值字段产 作者风格.json。",
       "required": true,
-      "expected_outputs": [
-        "蒸馏进度",
-        "衔接分析"
-      ]
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/distill_surface_runner.py {project_root}",
+        "? python core/scripts/arc_aggregator.py --project {project_root} --all-clusters",
+        "python core/scripts/consolidate_author_profile.py --project {project_root}"
+      ],
+      "expected_outputs": ["作者风格.json"]
+    },
+    {
+      "n": 2.5,
+      "name": "skill-v0-generate",
+      "description": "首版 skill v0（distill_reflect 无 gap → 从作者档提炼笔法签名·破 chicken-egg：复刻需 skill_v0）。",
+      "required": true,
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/gen_creative.py --mode distill_reflect --project {project_root} --skill-version 0 --out {project_root}/skill_v0.md"
+      ],
+      "expected_outputs": ["skill_v0.md"]
     },
     {
       "n": 3,
-      "name": "phase-2-multi-dim-compare-cluster-only",
-      "description": "阶段 2 多维度对比（v3 cluster 单轨化 · 不再走 chapter SFS）：抽 1-2 个原文 cluster + style_evaluator.py --mode cluster --multi-ref-from-dir SFS 评分（6 维：arc 形状 / emotion_curve / 衔接模板 / 钩子分布 / 场景概述比 / voice 合规）",
+      "name": "phase-4-cluster-replica",
+      "description": "复刻（提前·复刻先于 SFS）：distill_replicate gen-model 复刻首个 cluster（唯一合法入口·强制 gen-model）。data_flow 取 first_cluster_id。",
       "required": true,
-      "expected_outputs": [
-        "对比报告"
-      ]
+      "skip_output_allowed": false,
+      "data_flow": {
+        "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
+      },
+      "scripts": [
+        "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v0.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --output {project_root}/复刻测试/v0/replica.txt"
+      ],
+      "expected_outputs": ["复刻测试/v0/replica.txt"]
     },
     {
       "n": 4,
-      "name": "phase-3-correction-reflect",
-      "description": "阶段 3 修正反思：差距维度生成新约束 → skill v.N。cluster 复刻差距 > 阈值 → 重做 phase-4 cluster-replica（不再有 chapter skill 升级路径）",
+      "name": "phase-2-multi-dim-compare",
+      "description": "SFS 多维评分（复刻 vs 原作者·🔴写死 --multi-ref-from-dir·铁律防单 ref 高方差失真）。",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/style_evaluator.py --gen {project_root}/复刻测试/v0/replica.txt --multi-ref-from-dir {project_root}/原文 --multi-ref-count 5 --output {project_root}/对比报告/eval_v0.json"
+      ],
+      "expected_outputs": ["对比报告/eval_v0.json"]
     },
     {
       "n": 5,
-      "name": "phase-4-cluster-replica",
-      "description": "阶段 4 cluster 终验复刻（v3 唯一复刻验证 · 主推）：启动 distill_replicate.py --mode cluster 复刻 1-2 个完整故事块（4000-20000 字）。沿用 A' 半 cluster 防 timeout 教训：每 sub-call ≤ 3 章 / ≤ 5000 字 / ≤ 10 min wall-clock。失败重试代价 = 1/N cluster",
+      "name": "phase-3-correction-reflect",
+      "description": "修正反思（distill_reflect 有 gap → 基于 SFS 差距精化 skill v1·轻 gen-model 非 judge）。",
       "required": true,
-      "expected_outputs": [
-        "复刻测试"
-      ]
+      "skip_output_allowed": true,
+      "scripts": [
+        "python core/scripts/gen_creative.py --mode distill_reflect --project {project_root} --gap-report {project_root}/对比报告/eval_v0.json --current-skill {project_root}/skill_v0.md --skill-version 1 --out {project_root}/skill_v1.md"
+      ],
+      "expected_outputs": ["skill_v1.md"]
     },
     {
       "n": 6,
       "name": "phase-5-finalize",
-      "description": "阶段 5 出货：作者风格_FINAL.json + skill_FINAL.md + distillation_log.md + lessons 回写 + git commit",
+      "description": "定稿：最新 skill_v{N} → skill_FINAL.md（出货）+ 作者风格→FINAL + distillation_log（含 SFS）+ git。",
       "required": true,
-      "expected_outputs": [
-        "作者风格_FINAL.json",
-        "skill_FINAL.md",
-        "distillation_log.md"
-      ]
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/finalize_distill.py {project_root} --sfs {project_root}/对比报告/eval_v0.json",
+        "? python core/scripts/git_snapshot.py {project_root} --message 蒸馏作者风格"
+      ],
+      "expected_outputs": ["skill_FINAL.md", "作者风格_FINAL.json"]
     },
     {
       "n": 7,
       "name": "phase-6-writer-feedback-verify",
-      "description": "阶段 6 写作端回灌严闭环（v3 Article 6 · 不通过不出货）：用 skill_FINAL.md 灌 gen_writer.py 写同 cluster → 重跑 cluster_arc_aggregator → 与原 cluster_arc 比 reagan_shape 等价类偏差 ≤ 1 + SFS 差 ≤ 5。不通过 → distill_finalize_verify.py exit 2 → plan end 拦截。这是确保「skill 能让目标 gen-model 真正写出来」的最后一道闸",
+      "description": "写作端回灌验证闸（Article 6·不通过不出货）：用 skill_FINAL 灌 gen_writer 写同 cluster → 与原 cluster_arc 比 → 不过 exit 2 拦。must_fix#4：exit_codes 只 {0:ok, 2:fail}。",
       "required": true,
-      "expected_outputs": [
-        "对比报告"
-      ]
+      "skip_output_allowed": true,
+      "data_flow": {
+        "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
+      },
+      "scripts": [
+        "? python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --output {project_root}/对比报告/verify.json"
+      ],
+      "control_flow": {"exit_codes": {"0": "ok", "2": "fail"}},
+      "expected_outputs": []
     }
   ],
-  "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式",
-  "_program_driven_status": "v28 程序驱动状态: NOT-YET——本命令零 scripts/零 must_spawn_agent,创作编排(大纲生成/蒸馏分析)仍由 Claude 智能完成,模板仅为产出清单。orchestrator 可加载但无法机械执行。写作主轨 cluster-write/cluster-save-state 已全量程序驱动;本命令迁移需先把创作步骤落为 gen-model 脚本(如 gen_creative/distill_replicate 模式)。2026-06-10"
+  "_v2_principle": "整个系统为故事块服务·蒸馏以 cluster 为单位·48 维 judge 全章全文注入·复刻先于 SFS。",
+  "_north_star_5": "复刻强制 gen-model（唯一入口 distill_replicate）·SFS 必 multi-ref·48 维 judge 绝不裁维度规训·回灌严闭环不通过不出货。"
 }

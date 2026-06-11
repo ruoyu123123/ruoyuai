@@ -56,6 +56,32 @@ async def test_replicate_without_key_warns(user, d_env):
     await user.should_see("还没填密钥")
 
 
+async def test_full_distill_form_renders(user, d_env):
+    await user.open("/distill")
+    await user.should_see(marker="fd-name")
+    await user.should_see(marker="fd-text")
+    await user.should_see(marker="btn-full-distill")
+
+
+async def test_full_distill_starts_with_key(user, d_env, monkeypatch):
+    ss.set_api_key("demo", "sk-FULLDISTILL")
+    cap = {}
+
+    def fake_fd(book, author_text, *, auto_pilot=False):
+        cap["book"] = book
+        cap["len"] = len(author_text)
+        return True
+    monkeypatch.setattr(app_module.RUNNER, "start_full_distill", fake_fd)
+
+    await user.open("/distill")
+    user.find(marker="fd-name").type("某作者")
+    user.find(marker="fd-text").type("第1章 开始\n" + "正文内容。" * 120)
+    user.find(marker="btn-full-distill").click()
+    await user.should_see("开始学")
+    assert cap.get("book") == "某作者"
+    assert cap.get("len", 0) > 500
+
+
 async def test_replicate_with_key_starts(user, d_env, monkeypatch):
     ss.set_api_key("demo", "sk-DISTILLKEY")
     captured = {}

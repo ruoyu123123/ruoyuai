@@ -486,6 +486,49 @@ def distill():
             ui.label("蒸馏日志").classes("text-sm text-gray-500")
             log_view = ui.log(max_lines=400).classes("w-full h-96 font-mono text-xs")
 
+    ui.separator()
+    # —— 学新风格（全程蒸馏·阶段3）——
+    with ui.row().classes("w-full gap-4 items-start"):
+        with ui.column().classes("w-1/3 gap-2"):
+            ui.label("学新风格（喂作者作品 → 学出风格档）").classes("font-bold")
+            fd_name = ui.input("风格库名（如 某作者）").classes("w-full").mark("fd-name")
+            fd_text = ui.textarea("作者作品正文（一大段·含「第N章」标题·越多越准）")\
+                .classes("w-full").mark("fd-text")
+            fd_auto = ui.switch("全自动").mark("fd-auto")
+            fd_warn = ui.label("").classes("text-xs text-red-600").mark("fd-warn")
+
+            def _start_full_distill():
+                name = (fd_name.value or "").strip()
+                text = (fd_text.value or "").strip()
+                if not name:
+                    ui.notify("先填风格库名", type="warning")
+                    return
+                if len(text) < 500:
+                    fd_warn.set_text("⚠️ 作品正文太少（建议贴几十章·至少几千字）")
+                    return
+                try:
+                    data = list_profiles_masked()
+                    active = data.get("active")
+                    if not any(p["name"] == active and p.get("key_in_keyring")
+                               for p in data.get("profiles", [])):
+                        fd_warn.set_text("⚠️ 当前模型还没填密钥——先去「设置」录入 key")
+                        return
+                except Exception:
+                    pass
+                ok = RUNNER.start_full_distill(name, text,
+                                               auto_pilot=bool(fd_auto.value))
+                if ok:
+                    fd_warn.set_text("")
+                    ui.notify(f"开始学《{name}》风格——看右边日志", type="positive")
+                else:
+                    ui.notify("已有任务在运行 / 该风格库已存在", type="warning")
+
+            ui.button("🎓 开始学风格", on_click=_start_full_distill)\
+                .props("color=secondary").mark("btn-full-distill")
+        with ui.column().classes("flex-1"):
+            ui.label("提示：学完后会出现在上面「复刻测试」的风格库列表里，"
+                     "也能在「新建书」里选它当写作基线。").classes("text-xs text-gray-500")
+
     _mount_pipeline_panel(status_label, result_label, log_view)
 
 
