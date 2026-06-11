@@ -258,7 +258,8 @@ def test_scan_uninitialized_notes_outline_boundary():
     with tempfile.TemporaryDirectory() as tmp:
         root = _mk_project(tmp, clusters=[])
         info = gs.scan_project(root)
-        assert "outline" in info.note or "未初始化" in info.note
+        # A9 人话文案：非技术用户指引去「新建书」（原为开发者口径「未初始化/outline」）
+        assert "新建书" in info.note
 
 
 def test_scan_done_cluster_with_list_dict_summary():

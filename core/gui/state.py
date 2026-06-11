@@ -95,7 +95,6 @@ class PauseBridge:
             if req_id is not None and req_id != self._active_rid:
                 return False               # 陈旧轮次（捕获时的 rid 已不是当前轮）
             self._answer = answer
-            accepted_rid = self._active_rid
         self._event.set()
         return True
 
@@ -400,10 +399,10 @@ def scan_project(root: Path) -> ProjectInfo:
             info.next_action, info.next_key = "cluster-save-state", key
     elif not clusters:
         if not info.note:  # 「事件簇.json 损坏」等先置 note 不被覆盖
-            info.note = ("未初始化（/outline 仍走 Claude 流程——"
-                         "见 PROGRAM_DRIVEN.md 迁移状态）")
+            info.note = ("这本书还没建好大纲——去「新建书」页开始；"
+                         "若上次建书中断，去「Plan 续跑」页从断点继续")
     else:
-        info.note = "无 in_progress cluster——检查 事件簇.json status 字段"
+        info.note = "这本书没有进行中的故事块——点「保存状态」可生成下一段走向"
     return info
 
 
@@ -447,6 +446,9 @@ class AppState:
     current_command: str = ""               # cluster-write / cluster-save-state
     current_step: str = ""                  # "3/7 cluster-quality-full-stack"
     last_result: str = ""                   # 上次运行结论（成功/失败原因）
+    # 任务完成单调计数（A4 数据破坏修复）：UI per-client 比对·变化即刷新项目/风格/key
+    # （防写作台陈旧 next_key 重写已完成 cluster·比布尔边沿稳——不漏两 tick 间快跑）
+    runs_finished: int = 0
     log_buffer: LogBuffer = field(default_factory=_make_log_buffer)
     bridge: PauseBridge = field(default_factory=PauseBridge)
     # 🔴 不在此存日志游标：log_cursor 必须 per-client（每个浏览器 tab 各持一份），

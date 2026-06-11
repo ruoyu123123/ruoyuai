@@ -74,7 +74,7 @@ async def test_write_without_key_warns(user: User, fake_project) -> None:
     await user.open("/")
     user.find(marker="key-input").elements.pop().set_value("")
     user.find(marker="btn-write").click()
-    await user.should_see("填 cluster key")
+    await user.should_see("还没有可写的故事块")   # 人话文案（B 组·非技术用户）
 
 
 async def test_pipeline_button_runs_and_reports(user: User, fake_project,
@@ -119,9 +119,10 @@ async def test_trajectory_card_dialog_full_loop(user: User, fake_project,
     assert not app_module.STATE.bridge.waiting               # 桥已清理
     # ダイアログ表示中は _tick が await card_dialog でブロック→次 tick 無し。
     # respond 後、result_label を更新する「次の tick」(0.5s) が発火するまで待つ。
-    assert app_module.STATE.last_result == "✅ 全部完成"      # 状態は確定済み
+    # A11 完成信号按命令定制：btn-save → cluster-save-state 的人话提示
+    assert app_module.STATE.last_result.startswith("✅ 已保存")
     await asyncio.sleep(0.6)                                 # 次 tick が label を更新
-    await user.should_see("✅ 全部完成")                     # timer 把结果推上 UI
+    await user.should_see("✅ 已保存")                       # timer 把结果推上 UI
 
 
 async def test_stale_card_reclaimed_when_pending_clears(user: User, fake_project,
@@ -208,7 +209,10 @@ async def test_plans_page_shows_resumable(user: User, fake_project,
         {"plan_id": "书_001_cluster-write_xxx", "command": "cluster-write",
          "project": "测试书", "key": "001", "progress": "3/7"}])
     await user.open("/plans")
-    await user.should_see("cluster-write · 测试书 · key=001 · 进度 3/7")
+    # B7 美化：badge 人话命令名 + 项目名 + 进度分离渲染
+    await user.should_see("写故事块")
+    await user.should_see("测试书")
+    await user.should_see("进度 3/7")
     await user.should_see("从断点续跑")
 
 

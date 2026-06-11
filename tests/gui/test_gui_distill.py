@@ -53,7 +53,7 @@ async def test_distill_page_renders(user, d_env):
 async def test_replicate_without_key_warns(user, d_env):
     await user.open("/distill")
     user.find(marker="btn-replicate").click()
-    await user.should_see("还没填密钥")
+    await user.should_see("还没配密钥")
 
 
 async def test_full_distill_form_renders(user, d_env):

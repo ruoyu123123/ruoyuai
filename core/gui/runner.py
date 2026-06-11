@@ -95,6 +95,10 @@ class PipelineRunner:
         """阶段3 全程蒸馏：建风格库目录 + 落作者作品 raw → 跑 distill-style plan。
         前置（照 new_book 范式·RUNNER.start 前 mkdir + 写 raw）。"""
         from frozen_util import user_workspace_dir
+        # A6①：先查锁再 mkdir（否则已有任务在跑时 start 拒绝·留下孤儿目录锁死名字）
+        if self._run_lock.locked():
+            self.state.log_buffer.append("[gui] 已有任务在运行，忽略本次学风格")
+            return False
         proj = user_workspace_dir() / "styles" / book
         if (proj / "原文").exists() or (proj / "skill_FINAL.md").exists():
             self.state.log_buffer.append(f"[gui:event] 蒸馏拦截《{book}》已存在")
@@ -104,7 +108,16 @@ class PipelineRunner:
         (wal / "raw_author_text.txt").write_text(author_text, encoding="utf-8")
         self.state.log_buffer.append(
             f"[gui:event] 开始学风格 book={book} 原文{len(author_text)}字")
-        return self.start(["distill-style"], book, "", auto_pilot=auto_pilot)
+        ok = self.start(["distill-style"], book, "", auto_pilot=auto_pilot)
+        if not ok:
+            # 启动被拒（竞态）→ 回滚本次创建物（防孤儿目录锁死风格名）
+            import shutil
+            shutil.rmtree(proj / "蒸馏进度", ignore_errors=True)
+            try:
+                proj.rmdir()
+            except OSError:
+                pass
+        return ok
 
     def run_replicate(self, style_name: str, cluster_ref: str = "cluster_001") -> bool:
         """阶段1 复刻半程：distill_replicate(gen-model 复刻) → style_evaluator(multi-ref SFS)。
@@ -146,15 +159,25 @@ class PipelineRunner:
             replica = out_dir / f"{cluster_ref}_replica.txt"
             eval_out = out_dir / f"{cluster_ref}_eval.json"
 
-            def _run(cmd_args, label):
+            def _run(cmd_args, label, timeout_s: int = 1800):
+                # A8：deadline 对齐 orchestrator SCRIPT_TIMEOUT（防 gen-model 挂死永久占锁）
+                import time as _time
                 st.log_buffer.append(f"[gui] ▶ {label} …")
                 p = subprocess.Popen([child_python()] + cmd_args, cwd=str(_REPO),
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      text=True, encoding="utf-8", errors="replace")
+                t0 = _time.monotonic()
                 for line in iter(p.stdout.readline, ""):
                     if line.strip():
                         st.log_buffer.append(line.rstrip())
-                p.wait()
+                    if _time.monotonic() - t0 > timeout_s:
+                        p.kill()
+                        st.log_buffer.append(f"[gui] ❌ {label} 超时（{timeout_s}s）已终止")
+                        return 124
+                try:
+                    p.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    p.kill()
                 return p.returncode
 
             rc = _run(["core/scripts/distill_replicate.py", "--style-skill", str(skills[0]),
@@ -184,6 +207,7 @@ class PipelineRunner:
         finally:
             st.running = False
             st.current_command = ""
+            st.runs_finished += 1          # A4：UI 边沿刷新信号
             self._thread = None
             self._run_lock.release()
 
@@ -193,6 +217,9 @@ class PipelineRunner:
         out = []
         for item in pt.find_active_plans():
             plan = item.get("plan") or {}
+            # 测试/钩子产物（__hook_e2e__ 等）不给真实用户看（视觉评审抓出）
+            if str(plan.get("project", "")).startswith("__"):
+                continue
             steps = plan.get("steps") or []
             done = sum(1 for s in steps if s.get("status") == "completed")
             out.append({"plan_id": plan.get("id", ""),
@@ -228,7 +255,13 @@ class PipelineRunner:
                     st.log_buffer.append(f"[gui] {st.last_result}")
                     return
                 st.log_buffer.append(f"[gui] ✅ {cmd} 完成（plan={summary.plan_id}）")
-            st.last_result = "✅ 全部完成"
+            # 完成信号按命令定制（A11·非技术用户要明确的「下一步去哪」）
+            _MSG = {
+                "outline": f"✅ 《{project}》已建好（大纲+全套设定）——去写作台写第一章",
+                "distill-style": f"✅ 《{project}》风格学好了——可在蒸馏页测复刻、新建书里选用",
+                "cluster-save-state": "✅ 已保存——下一段走向已生成，可继续写",
+            }
+            st.last_result = _MSG.get(commands[-1], "✅ 全部完成")
         except orc.OrchestratorError as e:
             st.last_result = f"❌ 流水线停下：{e}"
             st.log_buffer.append(f"[gui] {st.last_result}")
@@ -242,7 +275,29 @@ class PipelineRunner:
             st.running = False
             st.current_command = ""
             st.current_step = ""
+            st.runs_finished += 1          # A4：UI 边沿刷新信号（项目/风格/next_key）
             self._run_lock.release()
+
+
+def active_key_ready() -> tuple:
+    """(ready, note)——key 预检与流水线真实消费路径 by construction 一致（A3·四入口统一）。
+
+    直接走 GenModelLoader.get_active_profile()（keyring>env>.env 三级已合并），不从打码
+    字符串复刻判据。副产物：GEN_MODEL_ACTIVE 为空/坏配置给人话·.env 持 key 用户不被误拦。
+    """
+    from gen_model_loader import GenModelLoader
+    try:
+        p = GenModelLoader().get_active_profile()   # 每次新建·绕缓存
+        if not (p.api_key or "").strip():
+            return False, "当前模型还没配密钥——先去「设置」页录入"
+        return True, p.name
+    except Exception as e:
+        msg = str(e)
+        if "API_KEY" in msg or "密钥" in msg:        # loader: 「active profile 'X' 缺 API_KEY」
+            return False, "当前模型还没配密钥——先去「设置」页录入"
+        if "GEN_MODEL_ACTIVE" in msg:
+            return False, "还没选生效模型——去「设置」页选一个并录入密钥"
+        return True, ""    # 未知异常 fail-open（不挡用户·流水线自己会报）
 
 
 # ============ 设置页数据（gen-model profile） ============

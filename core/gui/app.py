@@ -21,24 +21,57 @@ for p in (str(_REPO), str(_REPO / "core" / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import re  # noqa: E402
+
 from nicegui import background_tasks, ui  # noqa: E402
 
-from core.gui.runner import PipelineRunner, list_profiles_masked  # noqa: E402
+from core.gui.runner import (PipelineRunner, active_key_ready,  # noqa: E402
+                              list_profiles_masked)
 from core.gui.state import AppState, install_stderr_tee  # noqa: E402
+from core.gui.theme import COMMAND_LABELS, apply_theme  # noqa: E402
 
 STATE = AppState()
 RUNNER = PipelineRunner(STATE)
 
+_NAV = [("写作台", "/"), ("新建书", "/new-book"), ("蒸馏风格", "/distill"),
+        ("Plan 续跑", "/plans"), ("设置", "/settings")]
 
-def _header(title: str):
-    with ui.header().classes("items-center justify-between"):
-        ui.label(f"若渝AI · {title}").classes("text-lg font-bold")
-        with ui.row().classes("gap-2"):
-            ui.link("写作台", "/").classes("text-white")
-            ui.link("新建书", "/new-book").classes("text-white")
-            ui.link("蒸馏风格", "/distill").classes("text-white")
-            ui.link("Plan 续跑", "/plans").classes("text-white")
-            ui.link("设置", "/settings").classes("text-white")
+# Windows 文件名保留字（A7·书名/风格名校验）
+_RESERVED = {"CON", "PRN", "AUX", "NUL",
+             *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
+def _valid_name(s: str) -> bool:
+    """书名/风格名将成为目录名：禁 Windows 非法字符 + 保留字 + 首尾空格点（防目录穿越）。"""
+    return bool(s) and not re.search(r'[\\/:*?"<>|]', s) \
+        and s.strip(" .") == s and s.upper() not in _RESERVED
+
+
+def _check_key_ready(warn_label=None) -> bool:
+    """A3 四入口统一 key 预检（与流水线真实消费路径一致·见 runner.active_key_ready）。"""
+    ready, note = active_key_ready()
+    if not ready:
+        msg = f"⚠️ {note}"
+        if warn_label is not None:
+            warn_label.set_text(msg)
+        else:
+            ui.notify(note, type="warning")
+    elif warn_label is not None:
+        warn_label.set_text("")
+    return ready
+
+
+def _page_shell(title: str, route: str):
+    """B2 页面骨架：主题 + header（当前页高亮）+ 返回统一内容容器。"""
+    apply_theme()
+    with ui.header().classes("items-center justify-between px-6"):
+        ui.label(f"若渝AI · {title}").classes("text-lg font-bold tracking-wide")
+        with ui.row().classes("gap-4"):
+            for name, path in _NAV:
+                cls = "text-white font-bold underline underline-offset-4" \
+                    if path == route else "text-white/75 hover:text-white"
+                ui.link(name, path).classes(cls)
+    return ui.column().classes("w-full max-w-6xl mx-auto p-4 gap-4")
 
 
 def _opt_label(opt, i):
@@ -57,13 +90,23 @@ def _opt_label(opt, i):
     return opt.get("parent_me") or f"候选{i + 1}"
 
 
-def _mount_pipeline_panel(status_label, result_label, log_view):
-    """共享：走向卡/灵感卡 pause 弹窗 + 0.5s 轮询（status/日志/停顿桥）。写作台 + /new-book 复用。
+def _mount_pipeline_panel(status_label, result_label, log_view, *,
+                          buttons: tuple = (), on_idle=None):
+    """共享：走向卡 pause 弹窗 + 0.5s 轮询（status/日志/停顿桥）+ footer 全局状态条。
 
+    buttons：动作按钮列表——运行中统一禁用（B4·防重复点击）。
+    on_idle：任务完成边沿回调（A4·runs_finished 单调计数比对·刷新项目/风格/next_key）。
     对抗审查已收口机制：req_id 代际令牌防多 tab 抢答 + 陈旧卡·per-client 日志游标·
     背景任务 _await_card 与 _tick 解耦（_tick 不阻塞·能中断陈旧卡）。"""
     card_dialog = ui.dialog().props("persistent")
     dialog_state = {"req_id": None, "done_rid": None}
+
+    # —— B2/B3 全局状态条（固定底部·5 页一致可见）——
+    with ui.footer().classes("bg-white text-gray-800 border-t px-6 py-1 items-center gap-4"):
+        foot_progress = ui.linear_progress(value=0, show_value=False)\
+            .props("instant-feedback").classes("w-40")
+        foot_status = ui.label("空闲").classes("text-xs font-mono")
+        foot_result = ui.label("").classes("text-xs truncate flex-1")
 
     async def _await_card(rid):
         try:
@@ -73,11 +116,11 @@ def _mount_pipeline_panel(status_label, result_label, log_view):
         try:
             if answer is None:
                 STATE.log_buffer.append(f"[gui:card] 走向卡失效（超时/已处理） req_id={rid}")
-                ui.notify("走向卡已失效（已被处理或超时）——如需选择请到「Plan 续跑」页继续",
-                          type="warning")
+                ui.notify("该选择已失效——有新卡会自动弹出；若任务已停，"
+                          "去「Plan 续跑」从断点继续", type="warning")
             elif not STATE.bridge.respond(answer, req_id=rid):
                 STATE.log_buffer.append(f"[gui:card] 选择未生效（陈旧/超时） req_id={rid}")
-                ui.notify("该选择未生效（走向已被处理或已超时）——请到「Plan 续跑」页继续",
+                ui.notify("该选择未生效（已在别处选过或超时）——有新卡会自动弹出",
                           type="warning")
             else:
                 STATE.log_buffer.append(
@@ -103,24 +146,40 @@ def _mount_pipeline_panel(status_label, result_label, log_view):
             card_dialog.clear()
             options = pending.get("options") or []
             spec = pending.get("spec") or {}
-            with card_dialog, ui.card().classes("w-[36rem]"):
-                ui.label(spec.get("prompt") or "需要你的选择").classes("font-bold")
-                if options:
-                    for i, opt in enumerate(options):
-                        desc = (opt.get("description") or opt.get("scope_summary") or "")\
-                            if isinstance(opt, dict) else ""
-                        with ui.card().classes("w-full"):
-                            ui.label(f"[{i + 1}] {_opt_label(opt, i)}").classes("font-medium")
-                            if desc:
-                                ui.label(str(desc)[:160]).classes("text-xs text-gray-600")
-                            ui.button("选这个",
-                                      on_click=lambda _, o=opt: card_dialog.submit(o))\
-                                .props("dense flat").mark(f"card-opt-{i}")
-                else:
-                    free = ui.input(spec.get("prompt") or "输入")
-                    ui.button("提交", on_click=lambda: card_dialog.submit(
-                        int(free.value) if spec.get("type") == "integer"
-                        and str(free.value).isdigit() else free.value))
+            # B5 走向卡美化：整卡可点 + hover + badge 序号 + primary 标题条
+            with card_dialog, ui.card().classes(
+                    "w-[40rem] max-h-[80vh] overflow-auto rounded-xl p-0"):
+                with ui.row().classes("w-full bg-primary text-white px-4 py-2 "
+                                      "items-center gap-2"):
+                    ui.icon("alt_route")
+                    ui.label(spec.get("prompt") or "需要你的选择")\
+                        .classes("font-bold")
+                with ui.column().classes("w-full p-4 gap-2"):
+                    if options:
+                        for i, opt in enumerate(options):
+                            desc = (opt.get("description") or opt.get("scope_summary")
+                                    or "") if isinstance(opt, dict) else ""
+                            with ui.card().classes(
+                                    "w-full cursor-pointer hover:shadow-md "
+                                    "hover:border-primary transition-all")\
+                                    .on("click", lambda _, o=opt: card_dialog.submit(o)):
+                                with ui.row().classes("items-center gap-2"):
+                                    ui.badge(str(i + 1)).props("color=primary")
+                                    ui.label(_opt_label(opt, i)).classes("font-medium")
+                                if desc:
+                                    ui.label(str(desc)[:200])\
+                                        .classes("text-xs text-gray-600")
+                                ui.button("选这个",
+                                          on_click=lambda _, o=opt:
+                                          card_dialog.submit(o))\
+                                    .props("unelevated color=primary dense")\
+                                    .mark(f"card-opt-{i}")
+                    else:
+                        free = ui.input(spec.get("prompt") or "输入").classes("w-full")
+                        ui.button("提交", on_click=lambda: card_dialog.submit(
+                            int(free.value) if spec.get("type") == "integer"
+                            and str(free.value).isdigit() else free.value))\
+                            .props("unelevated color=primary")
             card_dialog.open()
             STATE.log_buffer.append(
                 f"[gui:card] 渲染走向卡 req_id={rid} 选项数={len(options)}")
@@ -132,14 +191,33 @@ def _mount_pipeline_panel(status_label, result_label, log_view):
             STATE.log_buffer.append(f"[gui] 走向卡渲染失败（已复位可重弹）：{e}")
 
     log_cursor = {"v": 0}
+    seen = {"v": STATE.runs_finished}      # A4 per-client 完成边沿
 
     def _tick():
         if STATE.running:
-            status_label.set_text(
-                f"运行中 {STATE.current_command} · step {STATE.current_step or '…'}")
+            cmd_cn = COMMAND_LABELS.get(STATE.current_command, STATE.current_command)
+            txt = f"运行中 {cmd_cn} · {STATE.current_step or '…'}"
+            status_label.set_text(txt)
+            foot_status.set_text(txt)
+            # B3 进度条：current_step 形如 "3/7 名称"
+            m = re.match(r"(\d+)(?:\.\d+)?/(\d+)", STATE.current_step or "")
+            foot_progress.set_value(
+                min(int(m.group(1)) / max(int(m.group(2)), 1), 1.0) if m else 0)
         else:
             status_label.set_text("空闲")
+            foot_status.set_text("空闲")
+            foot_progress.set_value(0)
         result_label.set_text(STATE.last_result)
+        foot_result.set_text(STATE.last_result)
+        for b in buttons:                  # B4 运行中按钮统一禁用
+            b.set_enabled(not STATE.running)
+        if seen["v"] != STATE.runs_finished:   # A4 完成边沿 → 刷新数据
+            seen["v"] = STATE.runs_finished
+            if on_idle is not None:
+                try:
+                    on_idle()
+                except Exception as e:
+                    STATE.log_buffer.append(f"[gui] 完成回调失败：{e}")
         new, log_cursor["v"] = STATE.log_buffer.since(log_cursor["v"])
         for line in new:
             log_view.push(line)
@@ -150,132 +228,197 @@ def _mount_pipeline_panel(status_label, result_label, log_view):
 
 # ============ 写作台 ============
 def index():
-    _header("写作台")
+    shell = _page_shell("写作台", "/")
     STATE.log_buffer.append("[gui:page] 打开 写作台")
     STATE.refresh_projects()
 
-    with ui.row().classes("w-full gap-4 items-start"):
-        # —— 左：项目 + 操作 ——
-        with ui.column().classes("w-1/3 gap-2"):
-            project_select = ui.select(
-                options=[p.name for p in STATE.projects] or ["（无项目）"],
-                value=STATE.selected or None, label="小说项目",
-            ).classes("w-full").mark("project-select")
+    with shell:
+        # B6 首开引导卡（无项目时·非技术用户三步指引）
+        if not STATE.projects:
+            with ui.card().classes("w-full bg-blue-50 border-l-4 border-primary"):
+                ui.label("第一次用？三步开始：").classes("font-bold")
+                with ui.row().classes("gap-2 items-center flex-wrap"):
+                    ui.label("1️⃣")
+                    ui.link("去「设置」粘贴你的 API 密钥", "/settings")
+                    ui.label("→ 2️⃣")
+                    ui.link("去「蒸馏风格」学一个作者", "/distill")
+                    ui.label("→ 3️⃣")
+                    ui.link("去「新建书」建第一本书", "/new-book")
 
-            info_label = ui.label("").classes("text-sm text-gray-600")\
-                .mark("project-info")
-            note_label = ui.label("").classes("text-xs text-orange-600")
+        with ui.row().classes("w-full gap-4 items-start"):
+            # —— 左：项目 + 操作 ——
+            with ui.column().classes("w-1/3 gap-2"):
+                names0 = [p.name for p in STATE.projects]
+                project_select = ui.select(
+                    options=names0 or ["（无项目）"],
+                    value=STATE.selected or None, label="小说项目",
+                ).classes("w-full").mark("project-select")
+                if not names0:        # A10：无项目禁用·防假选项污染 STATE.selected
+                    project_select.props("disable")
 
-            key_input = ui.input("cluster key（如 001）").classes("w-full")\
-                .mark("key-input")
-            auto_switch = ui.switch("全自动（走向卡取引擎第一候选·显式开关）")\
-                .mark("auto-pilot")
+                info_label = ui.label("").classes("text-sm text-gray-600")\
+                    .mark("project-info")
+                note_label = ui.label("").classes("text-xs text-orange-600")
 
-            def _sync_project():
-                STATE.selected = project_select.value or ""
-                p = STATE.project()
-                if p:
-                    info_label.set_text(
-                        f"已写 {p.chapters_written} 章 · cluster {p.clusters_done}"
-                        f"/{p.clusters_total} 已保存 · 建议：{p.next_action or '—'} "
-                        f"key={p.next_key or '—'}")
-                    note_label.set_text(p.note)
-                    if not key_input.value and p.next_key:
+                key_input = ui.input("写到第几块（自动填·一般不用改）")\
+                    .classes("w-full").mark("key-input")
+                auto_switch = ui.switch("全自动（走向卡取引擎第一候选·显式开关）")\
+                    .mark("auto-pilot")
+
+                def _sync_project():
+                    STATE.selected = project_select.value or ""
+                    p = STATE.project()
+                    if p:
+                        info_label.set_text(
+                            f"已写 {p.chapters_written} 章 · 故事块 {p.clusters_done}"
+                            f"/{p.clusters_total} 已保存 · 建议：{p.next_action or '—'} "
+                            f"key={p.next_key or '—'}")
+                        note_label.set_text(p.note)
+                        if not key_input.value and p.next_key:
+                            key_input.set_value(p.next_key)
+
+                def _on_idle():
+                    """A4：任务完成边沿——刷新项目 + 下拉 + 无条件覆盖 next_key
+                    （防陈旧 key 重写已完成 cluster·数据破坏级修复）。"""
+                    STATE.refresh_projects()
+                    names = [p.name for p in STATE.projects]
+                    project_select.set_options(names or ["（无项目）"])
+                    if names:
+                        project_select.props(remove="disable")
+                        if STATE.selected not in names:
+                            project_select.set_value(names[0])
+                    _sync_project()
+                    p = STATE.project()
+                    if p and p.next_key:
                         key_input.set_value(p.next_key)
 
-            project_select.on_value_change(lambda e: _sync_project())
-            _sync_project()
+                project_select.on_value_change(lambda e: _sync_project())
+                _sync_project()
 
-            def _start(commands: list[str]):
-                p = STATE.project()
-                key = (key_input.value or "").strip()
-                STATE.log_buffer.append(
-                    f"[gui:event] 点击 {'+'.join(commands)} "
-                    f"project={p.name if p else '?'} key={key or '(空)'} "
-                    f"auto={bool(auto_switch.value)}")
-                if not p:
-                    ui.notify("先选项目", type="warning")
-                    return
-                if not key:
-                    ui.notify("填 cluster key（如 001）", type="warning")
-                    return
-                ok = RUNNER.start(commands, p.name, key,
-                                  auto_pilot=bool(auto_switch.value))
-                if not ok:
-                    ui.notify("已有流水线在运行", type="warning")
+                def _start(commands: list[str]):
+                    p = STATE.project()
+                    key = (key_input.value or "").strip()
+                    STATE.log_buffer.append(
+                        f"[gui:event] 点击 {'+'.join(commands)} "
+                        f"project={p.name if p else '?'} key={key or '(空)'} "
+                        f"auto={bool(auto_switch.value)}")
+                    if not p:
+                        ui.notify("先选项目", type="warning")
+                        return
+                    if not key:
+                        ui.notify("还没有可写的故事块——先去「新建书」建大纲",
+                                  type="warning")
+                        return
+                    if not _check_key_ready():     # A3：写作台原来完全没预检
+                        return
+                    ok = RUNNER.start(commands, p.name, key,
+                                      auto_pilot=bool(auto_switch.value))
+                    if not ok:
+                        # A12：线程启动失败时展示真实原因
+                        ui.notify(STATE.last_result or "已有任务在运行",
+                                  type="warning")
 
-            with ui.row().classes("gap-2"):
-                ui.button("✍ 写故事块",
-                          on_click=lambda: _start(["cluster-write"]))\
-                    .mark("btn-write")
-                ui.button("💾 保存状态",
-                          on_click=lambda: _start(["cluster-save-state"]))\
-                    .mark("btn-save")
-                ui.button("⚡ 连跑（写+存）",
-                          on_click=lambda: _start(
-                              ["cluster-write", "cluster-save-state"]))\
-                    .props("color=primary").mark("btn-both")
+                with ui.row().classes("gap-2"):
+                    btn_w = ui.button("✍ 写故事块",
+                                      on_click=lambda: _start(["cluster-write"]))\
+                        .props("outline color=primary").mark("btn-write")
+                    btn_s = ui.button("💾 保存状态",
+                                      on_click=lambda: _start(["cluster-save-state"]))\
+                        .props("outline color=primary").mark("btn-save")
+                    btn_b = ui.button("⚡ 连跑（写+存）",
+                                      on_click=lambda: _start(
+                                          ["cluster-write", "cluster-save-state"]))\
+                        .props("unelevated color=primary").mark("btn-both")
 
-            status_label = ui.label("空闲").classes("text-sm font-mono")\
-                .mark("status-label")
-            result_label = ui.label("").classes("text-sm").mark("result-label")
-            ui.button("🔄 刷新项目",
-                      on_click=lambda: (STATE.refresh_projects(),
-                                        project_select.set_options(
-                                            [p.name for p in STATE.projects]),
-                                        _sync_project())).props("flat dense")
+                status_label = ui.label("空闲").classes("text-sm font-mono")\
+                    .mark("status-label")
+                result_label = ui.label("").classes("text-sm").mark("result-label")
+                ui.button("🔄 刷新项目", on_click=_on_idle).props("flat dense")
 
-        # —— 右：实时日志 ——
-        with ui.column().classes("flex-1"):
-            ui.label("流水线日志").classes("text-sm text-gray-500")
-            log_view = ui.log(max_lines=400).classes("w-full h-96 font-mono text-xs")
+            # —— 右：实时日志 ——
+            with ui.column().classes("flex-1"):
+                ui.label("流水线日志").classes("text-sm text-gray-500")
+                log_view = ui.log(max_lines=400).classes(
+                    "w-full h-96 font-mono text-xs bg-slate-900 text-slate-200 rounded-lg")
 
-    _mount_pipeline_panel(status_label, result_label, log_view)
+    _mount_pipeline_panel(status_label, result_label, log_view,
+                          buttons=(btn_w, btn_s, btn_b), on_idle=_on_idle)
 
 
 # ============ Plan 续跑 ============
 def plans_page():
-    _header("Plan 续跑")
+    shell = _page_shell("Plan 续跑", "/plans")
     STATE.log_buffer.append("[gui:page] 打开 Plan续跑")
-    rows_holder = ui.column().classes("w-full gap-2")
 
-    def _render():
-        rows_holder.clear()
-        items = RUNNER.list_resumable()
-        with rows_holder:
-            if not items:
-                ui.label("没有未完成的 plan").classes("text-gray-500")\
-                    .mark("no-plans")
-            for it in items:
-                with ui.card().classes("w-full"):
-                    ui.label(f"{it['command']} · {it['project']} · key={it['key']}"
-                             f" · 进度 {it['progress']}").classes("font-mono text-sm")
-                    ui.label(it["plan_id"]).classes("text-xs text-gray-500")
-                    ui.button("▶ 从断点续跑", on_click=lambda _, x=it: _resume(x))\
-                        .props("dense")
+    with shell:
+        ui.label("上次任务中断了？从这里接着跑——选中的卡片和日志就在本页。")\
+            .classes("text-sm text-gray-600")
+        auto_sw = ui.switch("全自动续跑（选择取第一候选）").mark("plans-auto")
+        rows_holder = ui.column().classes("w-full gap-2")
 
-    def _resume(it: dict):
-        ok = RUNNER.start([it["command"]], it["project"], it["key"] or "",
-                          resume_plan_id=it["plan_id"])
-        ui.notify("已启动续跑（写作台看日志）" if ok else "已有流水线在运行",
-                  type="positive" if ok else "warning")
+        def _render():
+            rows_holder.clear()
+            items = RUNNER.list_resumable()
+            with rows_holder:
+                if not items:
+                    ui.label("🎉 没有未完成的任务").classes("text-gray-500")\
+                        .mark("no-plans")
+                for it in items:
+                    cmd_cn = COMMAND_LABELS.get(it["command"], it["command"])
+                    try:
+                        done, total = it["progress"].split("/")
+                        ratio = int(done) / max(int(total), 1)
+                    except (ValueError, ZeroDivisionError):
+                        ratio = 0
+                    with ui.card().classes("w-full"):
+                        with ui.row().classes("items-center gap-2 w-full"):
+                            ui.badge(cmd_cn).props("color=primary")
+                            ui.label(it["project"]).classes("font-medium")
+                            ui.label(f"进度 {it['progress']}")\
+                                .classes("text-sm text-gray-600")
+                        ui.linear_progress(value=ratio, show_value=False)\
+                            .classes("w-full")
+                        ui.label(it["plan_id"]).classes("text-xs text-gray-400")
+                        ui.button("▶ 从断点续跑", on_click=lambda _, x=it: _resume(x))\
+                            .props("unelevated color=primary dense")
 
-    _render()
-    ui.button("🔄 刷新", on_click=_render).props("flat")
+        def _resume(it: dict):
+            ok = RUNNER.start([it["command"]], it["project"], it["key"] or "",
+                              resume_plan_id=it["plan_id"],
+                              auto_pilot=bool(auto_sw.value))
+            mode = "全自动" if auto_sw.value else "有选择时会弹卡"
+            ui.notify(f"已启动续跑（{mode}）" if ok
+                      else (STATE.last_result or "已有任务在运行"),
+                      type="positive" if ok else "warning")
+
+        _render()
+        ui.button("🔄 刷新", on_click=_render).props("flat")
+
+        # A1 完整版：本页也挂状态/日志/走向卡——续跑后人不用跳页
+        status_label = ui.label("空闲").classes("text-sm font-mono")\
+            .mark("plans-status")
+        result_label = ui.label("").classes("text-sm").mark("plans-result")
+        ui.label("任务日志").classes("text-sm text-gray-500")
+        log_view = ui.log(max_lines=400).classes(
+            "w-full h-72 font-mono text-xs bg-slate-900 text-slate-200 rounded-lg")
+
+    _mount_pipeline_panel(status_label, result_label, log_view, on_idle=_render)
 
 
 # ============ 设置（BYOK 密钥管理）============
 def settings_page():
-    _header("设置")
+    shell = _page_shell("设置", "/settings")
     STATE.log_buffer.append("[gui:page] 打开 设置")
-    from core.gui.runner import (save_api_key, clear_api_key, profile_key_status,
+    from core.gui.runner import (save_api_key, clear_api_key,
                                   test_profile_connection, switch_active)
     try:
         data = list_profiles_masked()
     except Exception as e:
-        ui.label(f"读取 profile 失败：{e}").classes("text-red-600")
+        with shell:
+            ui.label(f"读取 profile 失败：{e}").classes("text-red-600")
         return
 
+    shell.__enter__()
     ui.label("🔒 你的 API 密钥用 Windows 凭据管理器加密存储，绝不写入任何文件、绝不上传。")\
         .classes("text-sm text-gray-600")
     if not data.get("keyring_available", True):
@@ -292,6 +435,7 @@ def settings_page():
         def _switch():
             v = active_sel.value
             if v and switch_active(v):
+                STATE.log_buffer.append(f"[gui:event] 切换模型 → {v}")
                 ui.notify(f"已切换到 {v}", type="positive")
                 _render()
             else:
@@ -306,7 +450,9 @@ def settings_page():
         with rows_holder:
             for prof in fresh["profiles"]:
                 name = prof["name"]
-                with ui.card().classes("w-full"):
+                card_cls = "w-full border-l-4 border-primary" if prof["active"] \
+                    else "w-full"
+                with ui.card().classes(card_cls):
                     with ui.row().classes("items-center gap-2"):
                         ui.label(name).classes("font-medium font-mono")
                         if prof["active"]:
@@ -340,24 +486,34 @@ def settings_page():
                             ui.notify("已清除该 profile 的密钥", type="info")
                             _render()
 
-                        def _test(n=name):
-                            async def _run():
-                                from nicegui import run
-                                ui.notify("测试连接中…", type="ongoing")
-                                r = await run.io_bound(test_profile_connection, n)
-                                ui.notify(r["message"],
-                                          type="positive" if r["ok"] else "negative")
-                            return _run()
-
-                        ui.button("保存", on_click=_save).props("dense")\
+                        ui.button("保存", on_click=_save)\
+                            .props("unelevated color=primary dense")\
                             .mark(f"btn-save-key-{name}")
                         ui.button("清除", on_click=_clear).props("flat dense")\
                             .mark(f"btn-clear-key-{name}")
-                        ui.button("测试连接", on_click=_test).props("flat dense")\
+
+                        test_btn = ui.button("测试连接").props("flat dense")\
                             .mark(f"btn-test-key-{name}")
+
+                        def _test(n=name, btn=test_btn):
+                            async def _run():
+                                from nicegui import run
+                                STATE.log_buffer.append(
+                                    f"[gui:event] 测试连接 profile={n}")
+                                btn.disable()        # B4 防抖：测试中禁点
+                                ui.notify("测试连接中…", type="ongoing")
+                                try:
+                                    r = await run.io_bound(test_profile_connection, n)
+                                    ui.notify(r["message"],
+                                              type="positive" if r["ok"] else "negative")
+                                finally:
+                                    btn.enable()
+                            return _run()
+                        test_btn.on_click(_test)
 
     _render()
     ui.button("🔄 刷新", on_click=_render).props("flat")
+    shell.__exit__(None, None, None)   # 配对 __enter__（整页元素都进统一容器）
 
 
 # ============ 新建书（创建书籍·阶段2） ============
@@ -365,171 +521,227 @@ def new_book():
     import json
     from core.gui.state import NOVELS_DIR
 
-    _header("新建书")
+    shell = _page_shell("新建书", "/new-book")
     STATE.log_buffer.append("[gui:page] 打开 新建书")
-    ui.label("填书名 + 题材，点「开始建书」——AI 会带你选风格、选灵感卡、定框架，"
-             "然后生成大纲 + 全套设定。").classes("text-sm text-gray-600")
 
-    with ui.row().classes("w-full gap-4 items-start"):
-        with ui.column().classes("w-1/3 gap-2"):
-            name_input = ui.input("书名").classes("w-full").mark("book-name")
-            topic_input = ui.textarea("题材方向（想写什么·一两句话）")\
-                .classes("w-full").mark("book-topic")
-            auto_switch = ui.switch("全自动（所有选择取第一候选）").mark("nb-auto")
-            warn_label = ui.label("").classes("text-xs text-red-600").mark("nb-warn")
+    with shell:
+        ui.label("填书名 + 题材，点「开始建书」——AI 会带你选风格、选灵感卡、定框架，"
+                 "然后生成大纲 + 全套设定。").classes("text-sm text-gray-600")
 
-            def _start_build():
-                book = (name_input.value or "").strip()
-                STATE.log_buffer.append(f"[gui:event] 点击 开始建书 book={book or '(空)'}")
-                if not book:
-                    ui.notify("先填书名", type="warning")
-                    return
-                # 前置：active profile 须有 key（否则跑到调研/brainstorm 才 401）
-                try:
-                    data = list_profiles_masked()
-                    active = data.get("active")
-                    has_key = any(p["name"] == active and p.get("key_in_keyring")
-                                  for p in data.get("profiles", []))
-                    if not has_key:
-                        warn_label.set_text("⚠️ 当前模型还没填密钥——先去「设置」录入你的 key 再建书")
+        with ui.row().classes("w-full gap-4 items-start"):
+            with ui.column().classes("w-1/3 gap-2"):
+                name_input = ui.input("书名").classes("w-full").mark("book-name")
+                topic_input = ui.textarea("题材方向（想写什么·一两句话）")\
+                    .classes("w-full").mark("book-topic")
+                auto_switch = ui.switch("全自动（所有选择取第一候选）").mark("nb-auto")
+                warn_label = ui.label("").classes("text-xs text-red-600").mark("nb-warn")
+
+                def _start_build():
+                    book = (name_input.value or "").strip()
+                    STATE.log_buffer.append(
+                        f"[gui:event] 点击 开始建书 book={book or '(空)'}")
+                    if not book:
+                        ui.notify("先填书名", type="warning")
                         return
-                except Exception:
-                    pass
-                proj = NOVELS_DIR / book
-                if (proj / "_数据库").exists():
-                    ui.notify(f"《{book}》已存在——换个书名或去写作台续写", type="warning")
-                    return
-                # 🔴 死锁②前置：RUNNER.start 前真实 mkdir + 写 book_meta.json（topic 给 plan data_flow）
-                wal = proj / "_数据库" / ".wal"
-                wal.mkdir(parents=True, exist_ok=True)
-                (wal / "book_meta.json").write_text(
-                    json.dumps({"topic": (topic_input.value or "").strip() or "网络小说"},
-                               ensure_ascii=False), encoding="utf-8")
-                ok = RUNNER.start(["outline"], book, "",
-                                  auto_pilot=bool(auto_switch.value))
-                if not ok:
-                    ui.notify("已有流水线在运行", type="warning")
-                else:
-                    warn_label.set_text("")
-                    ui.notify(f"开始建《{book}》——跟着弹出的卡片选择就行", type="positive")
+                    if not _valid_name(book):     # A7：目录名合法性（防穿越/保留字）
+                        ui.notify('书名不能包含 \\ / : * ? " < > | 这些符号',
+                                  type="warning")
+                        return
+                    if STATE.running:             # A2：先查再 mkdir·防幽灵书锁死书名
+                        ui.notify("已有任务在运行，等它完成再建书", type="warning")
+                        return
+                    if not _check_key_ready(warn_label):   # A3 统一预检
+                        return
+                    proj = NOVELS_DIR / book
+                    if (proj / "_数据库").exists():
+                        ui.notify(f"《{book}》已存在——若上次建书中断，"
+                                  f"去「Plan 续跑」页从断点继续；想重建请换个书名",
+                                  type="warning")
+                        return
+                    # 🔴 死锁②前置：RUNNER.start 前 mkdir + 写 book_meta.json（给 plan data_flow）
+                    wal = proj / "_数据库" / ".wal"
+                    wal.mkdir(parents=True, exist_ok=True)
+                    (wal / "book_meta.json").write_text(
+                        json.dumps({"topic": (topic_input.value or "").strip()
+                                    or "网络小说"}, ensure_ascii=False), encoding="utf-8")
+                    ok = RUNNER.start(["outline"], book, "",
+                                      auto_pilot=bool(auto_switch.value))
+                    if not ok:
+                        # A2：启动被拒（竞态）→ 回滚本次创建物·不留幽灵书
+                        import shutil
+                        shutil.rmtree(proj / "_数据库", ignore_errors=True)
+                        try:
+                            proj.rmdir()
+                        except OSError:
+                            pass
+                        ui.notify(STATE.last_result or "已有任务在运行", type="warning")
+                    else:
+                        warn_label.set_text("")
+                        ui.notify(f"开始建《{book}》——跟着弹出的卡片选择就行",
+                                  type="positive")
 
-            ui.button("📖 开始建书", on_click=_start_build)\
-                .props("color=primary").mark("btn-build")
-            status_label = ui.label("空闲").classes("text-sm font-mono")\
-                .mark("nb-status")
-            result_label = ui.label("").classes("text-sm").mark("nb-result")
-            ui.link("建好后 → 去写作台写第一章", "/").classes("text-sm")
+                btn_build = ui.button("📖 开始建书", on_click=_start_build)\
+                    .props("unelevated color=primary").mark("btn-build")
+                status_label = ui.label("空闲").classes("text-sm font-mono")\
+                    .mark("nb-status")
+                result_label = ui.label("").classes("text-sm").mark("nb-result")
+                ui.link("建好后 → 去写作台写第一章", "/").classes("text-sm")
 
-        with ui.column().classes("flex-1"):
-            ui.label("建书日志").classes("text-sm text-gray-500")
-            log_view = ui.log(max_lines=400).classes("w-full h-96 font-mono text-xs")
+            with ui.column().classes("flex-1"):
+                ui.label("建书日志").classes("text-sm text-gray-500")
+                log_view = ui.log(max_lines=400).classes(
+                    "w-full h-96 font-mono text-xs bg-slate-900 text-slate-200 rounded-lg")
 
-    _mount_pipeline_panel(status_label, result_label, log_view)
+    _mount_pipeline_panel(status_label, result_label, log_view, buttons=(btn_build,))
 
 
 # ============ 蒸馏（学作者风格·阶段3） ============
 def distill():
     from core.gui.runner import scan_distill_styles
 
-    _header("蒸馏风格")
+    shell = _page_shell("蒸馏风格", "/distill")
     STATE.log_buffer.append("[gui:page] 打开 蒸馏风格")
-    ui.label("「复刻测试」：拿一个已学好的风格库，让 AI 仿写一段、打分看像不像。"
-             "（学新风格的完整蒸馏正在接入）").classes("text-sm text-gray-600")
 
-    with ui.row().classes("w-full gap-4 items-start"):
-        with ui.column().classes("w-1/3 gap-2"):
-            ui.label("复刻测试（导入现成风格 → 仿写 → 看 SFS 分）").classes("font-bold")
-            try:
-                styles = scan_distill_styles()
-            except Exception:
-                styles = []
-            names = [s["name"] for s in styles]
-            style_sel = ui.select(options=names or ["（无可复刻风格）"],
-                                  value=(names[0] if names else None),
-                                  label="风格库（有 skill + 原文≥5 章）")\
-                .classes("w-full").mark("distill-style")
-            ref_input = ui.input("cluster 参考（默认 cluster_001）", value="cluster_001")\
-                .classes("w-full").mark("distill-ref")
-            warn = ui.label("").classes("text-xs text-red-600").mark("distill-warn")
+    with shell:
+        # A6③：中断的蒸馏任务直接在本页续（不用知道 /plans 是啥）
+        distill_plans = [it for it in RUNNER.list_resumable()
+                         if it["command"] == "distill-style"]
+        if distill_plans:
+            with ui.card().classes("w-full bg-amber-50 border-l-4 border-warning"):
+                ui.label("有学到一半的风格：").classes("font-bold text-sm")
+                for it in distill_plans:
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label(f"《{it['project']}》进度 {it['progress']}")\
+                            .classes("text-sm")
+                        ui.button("▶ 继续学", on_click=lambda _, x=it: RUNNER.start(
+                            [x["command"]], x["project"], x["key"] or "",
+                            resume_plan_id=x["plan_id"]))\
+                            .props("dense unelevated color=warning")
 
-            def _start_replicate():
-                STATE.log_buffer.append(
-                    f"[gui:event] 点击 测复刻 style={style_sel.value} "
-                    f"ref={(ref_input.value or 'cluster_001').strip()}")
+        # —— ① 学新风格（全程蒸馏·新用户旅程第一站·排前）——
+        with ui.row().classes("w-full gap-4 items-start"):
+            with ui.column().classes("w-1/3 gap-2"):
+                ui.label("学新风格（喂作者作品 → 学出风格档）").classes("font-bold")
+                fd_name = ui.input("风格库名（如 某作者）").classes("w-full")\
+                    .mark("fd-name")
+                # A5：大文本走 HTTP 上传（websocket 1MB 限制·全本小说粘贴必断连）
+                uploaded = {"text": ""}
+                ui.upload(label="上传作者作品 .txt（可多选·推荐·支持全本）",
+                          multiple=True, max_file_size=200 * 1024 * 1024,
+                          on_upload=lambda e: uploaded.__setitem__(
+                              "text", uploaded["text"] +
+                              e.content.read().decode("utf-8", errors="replace")))\
+                    .props("accept=.txt").classes("w-full").mark("fd-upload")
+                fd_text = ui.textarea("或直接粘贴正文（含「第N章」标题·"
+                                      "粘贴上限约 50 万字，全本请用上传）")\
+                    .classes("w-full").mark("fd-text")
+                fd_auto = ui.switch("全自动").mark("fd-auto")
+                fd_warn = ui.label("").classes("text-xs text-red-600").mark("fd-warn")
+
+                def _start_full_distill():
+                    name = (fd_name.value or "").strip()
+                    text = (uploaded["text"] or fd_text.value or "").strip()
+                    STATE.log_buffer.append(
+                        f"[gui:event] 点击 学风格 name={name or '(空)'} 文本{len(text)}字")
+                    if not name:
+                        ui.notify("先填风格库名", type="warning")
+                        return
+                    if not _valid_name(name):     # A7
+                        ui.notify('名字不能包含 \\ / : * ? " < > | 这些符号',
+                                  type="warning")
+                        return
+                    if len(text) < 500:
+                        fd_warn.set_text("⚠️ 作品正文太少（建议几十章·至少几千字）")
+                        return
+                    if STATE.running:             # A6②：拆开两种拒因
+                        ui.notify("已有任务在运行，等它完成再学", type="warning")
+                        return
+                    if not _check_key_ready(fd_warn):   # A3 统一预检
+                        return
+                    ok = RUNNER.start_full_distill(name, text,
+                                                   auto_pilot=bool(fd_auto.value))
+                    if ok:
+                        fd_warn.set_text("")
+                        ui.notify(f"开始学《{name}》风格——看右边日志", type="positive")
+                    else:
+                        ui.notify(f"《{name}》风格库已存在——如之前学到一半，"
+                                  f"用上方「继续学」按钮", type="warning")
+
+                btn_fd = ui.button("🎓 开始学风格", on_click=_start_full_distill)\
+                    .props("unelevated color=primary").mark("btn-full-distill")
+                status_label = ui.label("空闲").classes("text-sm font-mono")\
+                    .mark("distill-status")
+                result_label = ui.label("").classes("text-sm font-bold")\
+                    .mark("distill-result")
+
+            with ui.column().classes("flex-1"):
+                ui.label("蒸馏日志").classes("text-sm text-gray-500")
+                log_view = ui.log(max_lines=400).classes(
+                    "w-full h-96 font-mono text-xs bg-slate-900 text-slate-200 rounded-lg")
+
+        ui.separator()
+        # —— ② 复刻测试（已有风格 → 仿写打分）——
+        with ui.row().classes("w-full gap-4 items-start"):
+            with ui.column().classes("w-1/3 gap-2"):
+                ui.label("复刻测试（已学风格 → AI 仿写一段 → 打分看像不像）")\
+                    .classes("font-bold")
+                try:
+                    styles = scan_distill_styles()
+                except Exception:
+                    styles = []
+                names = [s["name"] for s in styles]
+                style_sel = ui.select(options=names or ["（无可复刻风格）"],
+                                      value=(names[0] if names else None),
+                                      label="风格库（有 skill + 原文≥5 章）")\
+                    .classes("w-full").mark("distill-style")
                 if not names:
-                    ui.notify("没有可复刻的风格库（需有 skill + 原文≥5 章）", type="warning")
-                    return
-                try:
-                    data = list_profiles_masked()
-                    active = data.get("active")
-                    if not any(p["name"] == active and p.get("key_in_keyring")
-                               for p in data.get("profiles", [])):
-                        warn.set_text("⚠️ 当前模型还没填密钥——先去「设置」录入 key")
+                    style_sel.props("disable")
+                ref_input = ui.input("参考故事块（默认 cluster_001·一般不用改）",
+                                     value="cluster_001")\
+                    .classes("w-full").mark("distill-ref")
+                warn = ui.label("").classes("text-xs text-red-600").mark("distill-warn")
+
+                def _refresh_styles():
+                    """A4：学完风格 → 下拉自动出现新风格。"""
+                    try:
+                        fresh = [s["name"] for s in scan_distill_styles()]
+                    except Exception:
+                        fresh = []
+                    style_sel.set_options(fresh or ["（无可复刻风格）"])
+                    if fresh:
+                        style_sel.props(remove="disable")
+                        if style_sel.value not in fresh:
+                            style_sel.set_value(fresh[0])
+
+                def _start_replicate():
+                    STATE.log_buffer.append(
+                        f"[gui:event] 点击 测复刻 style={style_sel.value} "
+                        f"ref={(ref_input.value or 'cluster_001').strip()}")
+                    cur = [o for o in (style_sel.options or [])
+                           if o != "（无可复刻风格）"]
+                    if not cur:
+                        ui.notify("没有可复刻的风格库（先在上面学一个）", type="warning")
                         return
-                except Exception:
-                    pass
-                ok = RUNNER.run_replicate(style_sel.value,
-                                          (ref_input.value or "cluster_001").strip())
-                warn.set_text("" if ok else "")
-                if ok:
-                    ui.notify(f"开始复刻 {style_sel.value} —— 看右边日志和分数", type="positive")
-                else:
-                    ui.notify("已有任务在运行", type="warning")
-
-            ui.button("🎭 测复刻", on_click=_start_replicate)\
-                .props("color=primary").mark("btn-replicate")
-            status_label = ui.label("空闲").classes("text-sm font-mono")\
-                .mark("distill-status")
-            result_label = ui.label("").classes("text-sm font-bold").mark("distill-result")
-
-        with ui.column().classes("flex-1"):
-            ui.label("蒸馏日志").classes("text-sm text-gray-500")
-            log_view = ui.log(max_lines=400).classes("w-full h-96 font-mono text-xs")
-
-    ui.separator()
-    # —— 学新风格（全程蒸馏·阶段3）——
-    with ui.row().classes("w-full gap-4 items-start"):
-        with ui.column().classes("w-1/3 gap-2"):
-            ui.label("学新风格（喂作者作品 → 学出风格档）").classes("font-bold")
-            fd_name = ui.input("风格库名（如 某作者）").classes("w-full").mark("fd-name")
-            fd_text = ui.textarea("作者作品正文（一大段·含「第N章」标题·越多越准）")\
-                .classes("w-full").mark("fd-text")
-            fd_auto = ui.switch("全自动").mark("fd-auto")
-            fd_warn = ui.label("").classes("text-xs text-red-600").mark("fd-warn")
-
-            def _start_full_distill():
-                name = (fd_name.value or "").strip()
-                text = (fd_text.value or "").strip()
-                if not name:
-                    ui.notify("先填风格库名", type="warning")
-                    return
-                if len(text) < 500:
-                    fd_warn.set_text("⚠️ 作品正文太少（建议贴几十章·至少几千字）")
-                    return
-                try:
-                    data = list_profiles_masked()
-                    active = data.get("active")
-                    if not any(p["name"] == active and p.get("key_in_keyring")
-                               for p in data.get("profiles", [])):
-                        fd_warn.set_text("⚠️ 当前模型还没填密钥——先去「设置」录入 key")
+                    if not _check_key_ready(warn):     # A3 统一预检
                         return
-                except Exception:
-                    pass
-                ok = RUNNER.start_full_distill(name, text,
-                                               auto_pilot=bool(fd_auto.value))
-                if ok:
-                    fd_warn.set_text("")
-                    ui.notify(f"开始学《{name}》风格——看右边日志", type="positive")
-                else:
-                    ui.notify("已有任务在运行 / 该风格库已存在", type="warning")
+                    ok = RUNNER.run_replicate(style_sel.value,
+                                              (ref_input.value or "cluster_001").strip())
+                    if ok:
+                        warn.set_text("")
+                        ui.notify(f"开始复刻 {style_sel.value} —— 看上方日志和分数",
+                                  type="positive")
+                    else:
+                        ui.notify(STATE.last_result or "已有任务在运行", type="warning")
 
-            ui.button("🎓 开始学风格", on_click=_start_full_distill)\
-                .props("color=secondary").mark("btn-full-distill")
-        with ui.column().classes("flex-1"):
-            ui.label("提示：学完后会出现在上面「复刻测试」的风格库列表里，"
-                     "也能在「新建书」里选它当写作基线。").classes("text-xs text-gray-500")
+                btn_rep = ui.button("🎭 测复刻", on_click=_start_replicate)\
+                    .props("outline color=primary").mark("btn-replicate")
+            with ui.column().classes("flex-1"):
+                ui.label("提示：学好的风格会出现在左边列表，也能在「新建书」里选它当"
+                         "写作基线。复刻分（SFS）越高越像该作者。")\
+                    .classes("text-xs text-gray-500")
 
-    _mount_pipeline_panel(status_label, result_label, log_view)
+    _mount_pipeline_panel(status_label, result_label, log_view,
+                          buttons=(btn_fd, btn_rep), on_idle=_refresh_styles)
 
 
 def init_pages():
@@ -550,9 +762,15 @@ def main(native: bool = False, port: int = 8080):
         msg = f"[gui:run] 日志文件：{lp}"
         STATE.log_buffer.append(msg)
         print(msg, file=sys.stderr)
+    # A5 保底：socket.io 默认 1MB 缓冲——大 textarea 提交会静默断连（治本走 ui.upload）
+    try:
+        from nicegui import core
+        core.sio.eio.max_http_buffer_size = 64 * 1024 * 1024
+    except Exception:
+        pass
     init_pages()
     ui.run(title="若渝AI", port=port, native=native, reload=False,
-           show=not native)
+           show=not native, language="zh-CN")
 
 
 if __name__ in {"__main__", "__mp_main__"}:

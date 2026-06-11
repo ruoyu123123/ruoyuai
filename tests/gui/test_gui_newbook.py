@@ -63,7 +63,7 @@ async def test_build_without_key_warns(user, nb_env):
     await user.open("/new-book")
     user.find(marker="book-name").type("测试新书")
     user.find(marker="btn-build").click()
-    await user.should_see("还没填密钥")
+    await user.should_see("还没配密钥")
 
 
 async def test_build_with_key_starts(user, nb_env, monkeypatch):
