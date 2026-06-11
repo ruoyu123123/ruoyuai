@@ -109,6 +109,48 @@ def check_writable_data(exe: Path, dist_dir: Path) -> list:
     return fails
 
 
+def check_outline_scripts(exe: Path) -> list:
+    """阶段2 创建书籍：新增的 outline 脚本在真 frozen exe 经 dispatch 跑通（无 API）。
+    init_project --emit-style-options（确定性）+ gen_creative volume_arc --dry-run（不调 API·验
+    prompt 组装 + 作者档注入链路在 frozen 下不崩）。"""
+    import tempfile
+    import json as _json
+    fails = []
+    tmp = Path(tempfile.mkdtemp(prefix="s2_outline_"))
+    (tmp / "_数据库").mkdir(parents=True, exist_ok=True)
+    try:
+        # init_project --emit-style-options（frozen 下扫风格库·确定性）
+        r1 = subprocess.run([str(exe), "core/scripts/init_project.py", str(tmp),
+                             "--emit-style-options", "--no-git"],
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=60)
+        if r1.returncode != 0 or "Traceback" in r1.stderr:
+            fails.append(f"init_project frozen dispatch rc={r1.returncode}·{r1.stderr[-150:]}")
+        so = tmp / "_数据库" / ".wal" / "style_options.json"
+        if not so.exists():
+            fails.append("init_project 未在 frozen 下写 style_options.json")
+        # gen_creative volume_arc --dry-run（不调 API·验 frozen 下 prompt 组装链路）
+        card = tmp / "card.json"
+        card.write_text(_json.dumps({"answer": {"title": "测试", "logline": "梗概"}},
+                                    ensure_ascii=False), encoding="utf-8")
+        r2 = subprocess.run([str(exe), "core/scripts/gen_creative.py", "--mode", "volume_arc",
+                             "--project", str(tmp), "--selected-card", str(card),
+                             "--cluster-count", "8", "--framework", "三幕", "--rhythm", "标准",
+                             "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=90)
+        if r2.returncode != 0 or "Traceback" in r2.stderr:
+            fails.append(f"gen_creative volume_arc dry-run frozen rc={r2.returncode}·{r2.stderr[-150:]}")
+        elif "story_destiny" not in r2.stdout or "绝不写" not in r2.stdout:
+            fails.append("volume_arc dry-run 输出缺脚手架（prompt 组装异常）")
+    except subprocess.TimeoutExpired:
+        fails.append("outline 脚本 frozen dispatch 超时")
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+    return fails
+
+
 def check_gui_serve(exe: Path, port: int) -> list:
     fails = []
     proc = subprocess.Popen([str(exe), "--port", str(port)],
@@ -159,6 +201,7 @@ def main():
     for name, fn in (("security", lambda: check_security(dist_dir)),
                      ("dispatch", lambda: check_dispatch(exe)),
                      ("writable_data", lambda: check_writable_data(exe, dist_dir)),
+                     ("outline_scripts", lambda: check_outline_scripts(exe)),
                      ("gui_serve", lambda: check_gui_serve(exe, args.port))):
         fails = fn()
         if fails:
@@ -171,7 +214,7 @@ def main():
     if all_fails:
         _say("RESULT", f"GUI EXE 验证 FAIL · {len(all_fails)} 项")
         return 1
-    _say("RESULT", "GUI EXE 验证 PASS 4/4（安全 + dispatch + 可写数据 + GUI serve）")
+    _say("RESULT", "GUI EXE 验证 PASS 5/5（安全 + dispatch + 可写数据 + outline脚本 + GUI serve）")
     return 0
 
 
