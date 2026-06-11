@@ -256,13 +256,63 @@ def build_voice_sample_prompt(character_id: str, history_quotes: str,
     )
 
 
-def build_volume_arc_prompt(volume_n: int, structure: dict,
-                            project_context: str) -> tuple[str, str]:
-    """v2 TODO: 生成卷 arc 创意描述"""
-    raise NotImplementedError(
-        "mode 'volume_arc' 待实现 (v2)；"
-        "目前请用主代理在 /outline 流程中手动起 brief，或日后用本 mode 自动化"
-    )
+def build_volume_arc_prompt(*, selected_card: dict, cluster_count: int,
+                            framework: str, rhythm: str,
+                            author_block: str, research_text: str) -> tuple[str, str]:
+    """卷级大纲生成 prompt（阶段2 创建书籍·解死锁①）。
+
+    🔴 北极星⑤铁律：system 只给**脚手架 + 字段语义 + 非约束示例 + 作者档优先**，
+    **绝不硬编码 phase/finale_signal/ME 数量的枚举硬约束**（惊悚乐园 schema 把模型推成
+    流水账覆辙）。模型在作者档第一权威下自由产大势/卷arc/milestones，脚本只做脚手架+parse。
+    cluster_count 是**软提示**（模型按大势节奏可微调），不是硬锁。
+    """
+    system = f"""你是顶尖网文大纲架构师。基于给定的灵感卡，设计一本长篇网文的**卷级大势骨架**。
+
+{author_block}
+
+# 输出一个 JSON 对象，顶层字段（这是脚手架，不是创作约束——字段怎么填由你按作者风格+故事逻辑自由决定）：
+
+- `story_destiny`: {{"final_image": 全书终局定格画面, "thematic_resolution": 主题落点}}
+  （大势已定：无论中途怎么折腾，方向收敛到这个固定终点）
+- `_metadata`: {{"rhythm_profile": "{rhythm}", "narrative_framework": "{framework}",
+  "cluster_count_per_volume": {cluster_count}}}（原样回填，别改）
+- `volumes`: 卷数组。每卷 = 一个**阶段触发点**（一个阶段的结束 + 下一阶段开始）：
+  {{"vol": 卷号, "title": 阶段/副本名, "phase": 该阶段世界位格/主角状态的一个词,
+    "volume_core_conflict": 本阶段核心任务（解决即可收卷）,
+    "volume_thread": 串起本卷所有小走向的那根线索,
+    "volume_finale_signal": 换卷触发（核心任务解决 + 力量跃迁/舞台转移/反派更迭 任一）}}
+- `major_events`: ME 池（大势牵引方向）。每个 ME = 一个 cluster = 一个**小故事走向**（mini-movie，
+  禁止单 cluster 覆盖整阶段）：
+  {{"id": "ME-V<卷号>-<序>", "volume": 所属卷号, "title": 小走向,
+    "is_volume_finale": 是否本卷收尾ME, "stakes_delta": 相对前一小走向的强度增量（try-fail 递增）,
+    "prerequisites": [], "physical_evidence": []}}
+  每卷大约 {cluster_count} 个 ME（软提示·你按大势节奏可增减），每卷末个 ME 标 is_volume_finale=true。
+- `cluster_001`: 第一个故事块的详细 brief（**只详化这一个**，后续 cluster 留涌现）：
+  {{"narrative_mode": "in_medias_res"（黄金三章倒叙·首块固定）,
+    "scope_summary": 这个故事块讲什么,
+    "scene_storyboard": [4-5 个场景。倒叙排列：scene0=强冲突/灾难开场（200字内丢出核心悬念）、
+      scene1=反转/揭底、scene2+=时间序回溯、最后接回开篇。每个场景 {{"scene": 序, "summary": 场景概要}}],
+    "foreshadowing_to_plant": [本块要埋的伏笔]}}
+- 可选 `free_notes`: 字符串，表达作者风格档独有、上面字段装不下的卷级判断（如惯用卷间钩子手法）。
+
+# 铁律
+1. 卷长 fluid——**绝不写 target_chapter_count / 章数**。章数由后续写作自然涌现。
+2. 卷 = 阶段触发点（成长/副本更迭），cluster = 阶段内小走向。stakes 递增累积成整个阶段。
+3. 大势已定：volumes 的方向必须收敛到 story_destiny.final_image。
+4. 风格/题材/人物/走向**全部以上方作者风格档为第一权威**；档案没规定的维度才自由发挥。
+只输出 JSON（```json 围栏包裹），不要任何解释文字。"""
+
+    card_txt = json.dumps(selected_card, ensure_ascii=False, indent=2)
+    user = f"""# 选中的灵感卡（据此展开全卷大势）
+```json
+{card_txt}
+```
+"""
+    if research_text:
+        user += f"\n# 调研背景（可参考）\n{research_text[:8000]}\n"
+    user += (f"\n# 参数\n叙事框架：{framework}\n节奏档：{rhythm}\n"
+             f"每卷故事块数（软提示）：{cluster_count}\n\n现在设计全卷大势骨架。")
+    return system, user
 
 
 def build_world_entry_prompt(entry_id: str, keywords: list,
@@ -359,8 +409,122 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
     raise GenModelExhaustedError(failures)
 
 
+# ============ volume_arc 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约）============
+def _emit_volume_arc_to_db(project_root: Path, data: dict) -> tuple[Path, Path]:
+    """把模型产出拆成 大势卡.json + 事件簇.json 原子落盘（确定性平铺·不靠模型写 schema 形状）。"""
+    db = project_root / "_数据库"
+    db.mkdir(parents=True, exist_ok=True)
+    # 大势卡.json：story_destiny + _metadata + volumes + major_events（+ 静态 schema 锚点）
+    major = {
+        "_schema": "major_events_v21_phase", "schema_version": "v27",
+        "_doc": "卷=阶段触发点·ME池=本卷小走向候选(每ME=1cluster)·每ME标volume:N·卷末ME标"
+                "is_volume_finale·卷长fluid不锁章。",
+        "_metadata": data.get("_metadata", {}),
+        "story_destiny": data.get("story_destiny", {}),
+        "volumes": data.get("volumes", []),
+        "major_events": [{**me, "status": me.get("status", "pending")}
+                         for me in data.get("major_events", [])],
+    }
+    # 事件簇.json：只详化 clusters[0]=cluster_001（其余留涌现）
+    c1 = data.get("cluster_001") or {}
+    cluster = {
+        "_schema": "event_clusters", "schema_version": "v2.cluster",
+        "_doc": "只详化 cluster_001(黄金三章倒叙)·后续 cluster 留 cluster_emergence_engine 涌现。",
+        "clusters": [{
+            "cluster_id": "cluster_001",
+            "status": "pending",   # step6 cluster_choice_apply 改 in_progress（注入-gate 白名单）
+            "narrative_mode": c1.get("narrative_mode", "in_medias_res"),
+            "scope_summary": c1.get("scope_summary", ""),
+            "scene_storyboard": c1.get("scene_storyboard", []),
+            "foreshadowing_to_plant": c1.get("foreshadowing_to_plant", []),
+            "parent_me": c1.get("parent_me", "ME-V1-01"),
+        }],
+    }
+    p_major = db / "大势卡.json"
+    p_cluster = db / "事件簇.json"
+    p_major.write_text(json.dumps(major, ensure_ascii=False, indent=2), encoding="utf-8")
+    p_cluster.write_text(json.dumps(cluster, ensure_ascii=False, indent=2), encoding="utf-8")
+    return p_major, p_cluster
+
+
+def _run_volume_arc(args) -> int:
+    """卷级大纲生成：四硬契约·走 llm_transport(双协议+截断续写+作者档注入)·block 失败非零退出。"""
+    import llm_transport as lt
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from judge_runner import build_author_profile_block, AUTHOR_PROFILE_MISSING_GUARD
+
+    project_root = Path(args.project) if args.project else None
+    if not project_root:
+        print("[ERROR] --mode volume_arc 需要 --project", file=sys.stderr)
+        return 2
+    selected_card = {}
+    if args.selected_card and Path(args.selected_card).exists():
+        try:
+            raw = json.loads(Path(args.selected_card).read_text(encoding="utf-8"))
+            # answer_artifact 形如 {"answer": <card>} 或直接 card
+            selected_card = raw.get("answer", raw) if isinstance(raw, dict) else raw
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # 契约1：作者档第一权威（project 的 + --style-ref 的双重兜底）
+    author_block = build_author_profile_block(project_root)
+    if not author_block and args.style_ref and Path(args.style_ref).exists():
+        author_block = read_text(Path(args.style_ref), 30000)
+    author_missing = not author_block
+    if author_missing:
+        author_block = AUTHOR_PROFILE_MISSING_GUARD
+
+    research_text = read_text(Path(args.research) if args.research else None, 8000)
+    system, user = build_volume_arc_prompt(
+        selected_card=selected_card, cluster_count=args.cluster_count or 10,
+        framework=args.framework or "自定义", rhythm=args.rhythm or "标准",
+        author_block=author_block, research_text=research_text)
+
+    if args.dry_run:
+        print("=== SYSTEM ===\n" + system + "\n\n=== USER ===\n" + user)
+        print(f"\n[dry-run] volume_arc system={len(system)}/user={len(user)} chars",
+              file=sys.stderr)
+        return 0
+
+    # 契约2：截断走续写不整发重试；契约3：parse 彻底失败 block → 非零退出
+    try:
+        result = lt.generate(
+            GenModelLoader(), system, user, max_tokens=24000,
+            response_format_json=True, cont_msg_builder=lt.default_cont_msg,
+            label="gen_outline:volume_arc")
+    except Exception as e:
+        print(f"[ERROR] volume_arc gen-model 调用失败（block）: {e}", file=sys.stderr)
+        return 1
+    data = lt.parse_json_loose(result.text)
+    # 结构校验（顶层键存在·非内容——枚举不反向规训创作）
+    missing = [k for k in ("story_destiny", "volumes", "major_events", "cluster_001")
+               if k not in data]
+    if data.get("_parse_failed") or missing:
+        print(f"[ERROR] volume_arc 输出结构破损（block）·缺顶层键 {missing}", file=sys.stderr)
+        return 1
+    if author_missing:
+        data["_author_profile_missing"] = True
+
+    if args.emit_to_db:
+        pm, pc = _emit_volume_arc_to_db(project_root, data)
+        print(f"[gen_creative][volume_arc] 大势卡 {len(data.get('volumes', []))} 卷 / "
+              f"{len(data.get('major_events', []))} ME → {pm.name} + {pc.name}",
+              file=sys.stderr)
+    else:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    return 0
+
+
 # ============ 主入口 ============
 def main():
+    # stdout/stderr UTF-8（Windows 默认 GBK·prompt/AUTHOR_PROFILE_MISSING_GUARD 含 ⚠/emoji
+    # 直打 GBK 终端会 UnicodeEncodeError·与 frozen dispatch 同款·dev 直跑也防）
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
     check_deps()
     parser = argparse.ArgumentParser(
         description='Gen-Model 创意卡 / 角色样本 / 卷描述生成工具'
@@ -386,10 +550,17 @@ def main():
 
     # voice_sample / volume_arc / world_entry 参数（v2）
     parser.add_argument('--character', help='[voice_sample] 角色 id')
-    parser.add_argument('--volume', type=int, help='[volume_arc] 卷号')
-    parser.add_argument('--structure', help='[volume_arc] 卷骨架 JSON 路径')
+    parser.add_argument('--volume', type=int, help='[volume_arc] 卷号（旧·未用）')
+    parser.add_argument('--structure', help='[volume_arc] 卷骨架 JSON 路径（旧·未用）')
     parser.add_argument('--entry-id', help='[world_entry] 世界观条目 id')
     parser.add_argument('--keywords', help='[world_entry] 触发词逗号分隔')
+    # volume_arc 卷级大纲生成（阶段2 创建书籍）
+    parser.add_argument('--selected-card', help='[volume_arc] 选中灵感卡 JSON 路径')
+    parser.add_argument('--cluster-count', type=int, help='[volume_arc] 每卷故事块数（软提示）')
+    parser.add_argument('--framework', help='[volume_arc] 叙事框架')
+    parser.add_argument('--rhythm', help='[volume_arc] 节奏档')
+    parser.add_argument('--emit-to-db', action='store_true',
+                        help='[volume_arc] 拆产出落 大势卡.json + 事件簇.json')
 
     args = parser.parse_args()
 
@@ -418,9 +589,13 @@ def main():
                                                  args.hint or "", project_context)
         parser_fn = parse_outline_card_output
 
-    elif args.mode in ('voice_sample', 'volume_arc', 'world_entry'):
+    elif args.mode == 'volume_arc':
+        # 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约·自带 emit/dry-run）
+        sys.exit(_run_volume_arc(args))
+
+    elif args.mode in ('voice_sample', 'world_entry'):
         print(f"[ERROR] mode '{args.mode}' 是 v2 placeholder，待实现", file=sys.stderr)
-        print(f"  当前请用 Claude sub-agent 流程替代（distill-character / outline / worldbuild）",
+        print(f"  当前请用 Claude sub-agent 流程替代（distill-character / worldbuild）",
               file=sys.stderr)
         sys.exit(2)
 
