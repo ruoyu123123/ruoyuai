@@ -239,3 +239,42 @@ if __name__ == "__main__":
                 fails += 1
                 print(f"  [FAIL] {nm}: {e}")
     sys.exit(1 if fails else 0)
+
+
+def _mk_profile():
+    class P:
+        name = "p1"; model = "m"; protocol = "openai"; api_key = "k"
+        base_url = "u"; temperature = 1.0; thinking_level = None; max_tokens = 100
+    return P()
+
+
+def test_transient_404_retried_same_profile():
+    """轮次8 实测回归：中转站瞬时 404 nginx 页须同 profile 重试（原零重试立即降级·
+    主备同主机时 9ms 内击穿全链）。"""
+    calls = {"n": 0}
+
+    def flaky(profile, system, user, mt, **kw):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise lt.TransportError("HTTP 404: <!DOCTYPE html> Not Found")
+        return "ok text", "stop"
+    r = lt.generate([_mk_profile()], "sys", "user", max_tokens=100,
+                    retry=lt.RetryPolicy(max_retries=2, base_delay=0.01),
+                    label="t", _stream_fn=flaky)
+    assert r.text == "ok text" and r.retries == 1
+
+
+def test_auth_403_not_retried():
+    """认证/账号类（403 family disabled 等）不可恢复 → 不浪费退避·立即降级。"""
+    calls = {"n": 0}
+
+    def auth_fail(profile, system, user, mt, **kw):
+        calls["n"] += 1
+        raise lt.TransportError("Error code: 403 model family disabled")
+    try:
+        lt.generate([_mk_profile()], "sys", "user", max_tokens=100,
+                    retry=lt.RetryPolicy(max_retries=2, base_delay=0.01),
+                    label="t", _stream_fn=auth_fail)
+        assert False, "应抛 TransportExhausted"
+    except lt.TransportExhausted:
+        assert calls["n"] == 1, f"403 不应重试（调用 {calls['n']} 次）"

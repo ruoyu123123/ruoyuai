@@ -417,7 +417,11 @@ def generate(loader_or_profiles, system: str, user: str, *,
 
         retries_used = 0
         try:
-            # —— 同 profile 重试圈（限流/超时；其余 TransportError 立即降级） ——
+            # —— 同 profile 重试圈 ——
+            # 🔴 轮次8 实测扩围：原只重试限流/超时·中转站瞬时 404 nginx 页/5xx/断流立即
+            # 降级且零退避 → 主备同主机时亚分钟故障窗击穿全链（fallback 9ms 后同 404）。
+            # 瞬时类 TransportError 同 profile 重试；认证/账号类（401/403/key）不可恢复
+            # → 立即降级不浪费退避。TransportEmpty（内容过滤）也不重试。
             attempt = 0
             while True:
                 try:
@@ -427,10 +431,16 @@ def generate(loader_or_profiles, system: str, user: str, *,
                                        response_format_json=response_format_json,
                                        echo=echo)
                     break
-                except (TransportRateLimit, TransportTimeout) as re_err:
+                except TransportEmpty:
+                    raise                          # 空响应非瞬时 → 直接降级
+                except TransportError as re_err:
+                    msg = str(re_err)
+                    non_transient = any(k in msg for k in (
+                        "401", "403", "unauthorized", "Unauthorized",
+                        "forbidden", "Forbidden", "api key", "API key"))
                     attempt += 1
                     retries_used = attempt
-                    if attempt > retry.max_retries:
+                    if non_transient or attempt > retry.max_retries:
                         raise
                     ra = getattr(re_err, "retry_after", None)
                     delay = retry.delay_for(attempt, ra)

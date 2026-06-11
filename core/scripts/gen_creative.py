@@ -605,7 +605,7 @@ def _run_distill_reflect(args) -> int:
     if author_missing:
         author_block = AUTHOR_PROFILE_MISSING_GUARD
 
-    version = args.skill_version or 1
+    version = args.skill_version    # argparse default=1 兜底·`or 1` 会把合法 0(v0) 当 1（轮次8）
     system, user = build_distill_reflect_prompt(
         gap_text=gap_text, current_skill=current_skill,
         author_block=author_block, version=version)

@@ -326,10 +326,19 @@ def default_script_runner(cmd_line: str, *, repo_root: Path = REPO_ROOT,
     proc = subprocess.run(full, cwd=str(repo_root), capture_output=True,
                           text=True, encoding="utf-8", errors="replace",
                           timeout=SCRIPT_TIMEOUT, env=env)
-    if proc.stdout:
-        sys.stderr.write(proc.stdout[-4000:])
-    if proc.stderr:
-        sys.stderr.write(proc.stderr[-4000:])
+    # 🔴 轮次8 可观测性修：纯尾截断会吞掉长步骤的韧性证据行（[RETRY]/[FALLBACK]/
+    # [cluster N/M]/[git_snapshot] 等）·留白名单关键行 + 尾部（防洪泛初衷不变）。
+    _KEY_MARKS = ("[RETRY", "[FALLBACK", "[cluster ", "[FATAL", "Traceback",
+                  "[git_snapshot", "[recovery", "[ERROR")
+    for out in (proc.stdout, proc.stderr):
+        if not out:
+            continue
+        tail = out[-4000:]
+        kept = [ln for ln in out[:-4000].splitlines()
+                if any(m in ln for m in _KEY_MARKS)] if len(out) > 4000 else []
+        if kept:
+            sys.stderr.write("\n".join(kept[-40:]) + "\n…[中段截断·关键行已保留]…\n")
+        sys.stderr.write(tail)
     return proc.returncode
 
 
