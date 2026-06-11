@@ -389,38 +389,58 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
             timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=15.0),
             max_retries=2,
         )
-        full_text = ""
+        _create_kw = dict(
+            model=profile.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens,
+            temperature=profile.temperature,
+            stream=True,
+        )
+        # reasoning 模型（gemini-3.x pro-preview 等）thinking_level=LOW 回收 thinking 占用的输出预算给正文。
+        # 对齐 gen_writer.py（L831-833）· 2026-06-07 修：不传时 thinking 默认 HIGH 吃光预算 →
+        # 复刻字数严重偏短（pro 实测 2348 vs 原作 9000）→ 回灌 estimate_cluster_arc 钩子/场景粗估失真归 0。
+        if getattr(profile, "thinking_level", None):
+            _create_kw["extra_body"] = {"thinking_level": profile.thinking_level}
+
+        # 🔴 轮次7 实测修：中转站瞬时 404/断流时立刻降级 → 撞死 fallback → exit 3。
+        # 同 profile 先重试 2 次（指数退避·SDK max_retries 不覆盖 404/断流），耗尽才降级。
+        # + gen_throttle.wait() 节流补齐（此前 sub-call 间零间隔·绕过全局限速）。
+        full_text = None
         t0 = time.time()
-        try:
-            _create_kw = dict(
-                model=profile.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=max_tokens,
-                temperature=profile.temperature,
-                stream=True,
-            )
-            # reasoning 模型（gemini-3.x pro-preview 等）thinking_level=LOW 回收 thinking 占用的输出预算给正文。
-            # 对齐 gen_writer.py（L831-833）· 2026-06-07 修：不传时 thinking 默认 HIGH 吃光预算 →
-            # 复刻字数严重偏短（pro 实测 2348 vs 原作 9000）→ 回灌 estimate_cluster_arc 钩子/场景粗估失真归 0。
-            if getattr(profile, "thinking_level", None):
-                _create_kw["extra_body"] = {"thinking_level": profile.thinking_level}
-            stream = client.chat.completions.create(**_create_kw)
-            for chunk in stream:
-                if not chunk.choices:
+        for attempt in range(3):
+            try:
+                try:
+                    import gen_throttle
+                    gen_throttle.wait()
+                except ImportError:
+                    pass
+                buf = ""
+                stream = client.chat.completions.create(**_create_kw)
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    piece = getattr(delta, 'content', None)
+                    if piece:
+                        buf += piece
+                        sys.stderr.write(piece)
+                        sys.stderr.flush()
+                full_text = buf
+                break
+            except Exception as e:
+                reason = str(e)[:200]
+                if attempt < 2:
+                    backoff = 8 * (attempt + 1)
+                    print(f"\n{prefix}[RETRY {attempt + 1}/2] {profile.name} 瞬时失败"
+                          f"（{backoff}s 后同 profile 重试）: {reason}", file=sys.stderr)
+                    time.sleep(backoff)
                     continue
-                delta = chunk.choices[0].delta
-                piece = getattr(delta, 'content', None)
-                if piece:
-                    full_text += piece
-                    sys.stderr.write(piece)
-                    sys.stderr.flush()
-        except Exception as e:
-            reason = str(e)[:200]
-            print(f"\n{prefix}[FALLBACK] {profile.name} 失败: {reason}", file=sys.stderr)
-            failures.append((profile.name, reason))
+                print(f"\n{prefix}[FALLBACK] {profile.name} 失败: {reason}", file=sys.stderr)
+                failures.append((profile.name, reason))
+        if full_text is None:
             continue
 
         elapsed = time.time() - t0

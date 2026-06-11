@@ -55,7 +55,9 @@ def apply_choice(project_root: Path, next_key: str, choice_path: Path) -> dict:
                          f"{choice_path}")
 
     brief = dict(brief)
-    brief["cluster_id"] = brief.get("cluster_id") or cid
+    # 🔴 强制规范 id（轮次7 观察项）：涌现候选带 _candidate_N 后缀（cluster_002_candidate_1），
+    # 保留原 id 会让 GUI 草稿路径(state.py 按 id 拼)与写作侧(规范 id)命名错位。next_key 即权威。
+    brief["cluster_id"] = cid
     # build_manifest 白名单成员（"active" 不在白名单·实证坑）
     brief["status"] = "in_progress"
     brief.setdefault("narrative_mode", "linear")
