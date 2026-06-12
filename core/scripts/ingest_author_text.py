@@ -94,6 +94,13 @@ def ingest(project_root: Path, source: Path, overwrite: bool = False) -> int:
         print("[ingest] 未切出任何章（章标题正则未命中·检查源文本格式「第N章」）",
               file=sys.stderr)
         return 2
+    # 狩猎修：多卷重新编号的网文（每卷都从第1章起）章号重复 → 同名互覆静默丢大段语料。
+    # 检测到重复 → 按出现顺序全局重排 1..N（蒸馏只关心连续语料·不关心原始卷内编号）。
+    nums = [n for n, _ in chapters]
+    if len(set(nums)) != len(nums):
+        print(f"[ingest] ⚠ 检测到重复章号（疑多卷重编号·{len(nums)} 章去重后 "
+              f"{len(set(nums))}）→ 按出现顺序重排为 1~{len(chapters)}", file=sys.stderr)
+        chapters = [(i + 1, text) for i, (_, text) in enumerate(chapters)]
     raw_dir.mkdir(parents=True, exist_ok=True)
     for num, text in chapters:
         (raw_dir / f"第{num}章.txt").write_text(text, encoding="utf-8")

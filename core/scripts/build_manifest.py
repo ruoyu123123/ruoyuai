@@ -586,13 +586,15 @@ class DatabaseScanner:
     def memory_search(self, query: str = "", top_k: int = 5) -> list[dict]:
         """三层记忆检索（v16·移植自Mem0/Letta概念）。"""
         try:
-            import importlib.util
-            ml_path = Path(__file__).parent / "memory_layer.py"
-            if not ml_path.exists():
+            # frozen-aware（狩猎修）：__file__ 在 PYZ 顶层·文件路径落空 → exe 下
+            # 记忆层静默丢失（伤北极星）。模块已被 spec hiddenimports 收进 PYZ → 直接 import。
+            import importlib
+            try:
+                ml = importlib.import_module("memory_layer")
+            except ImportError:
+                print("[build_manifest] WARN memory_layer 不可导入·记忆注入跳过",
+                      file=sys.stderr)
                 return []
-            spec = importlib.util.spec_from_file_location("memory_layer", ml_path)
-            ml = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(ml)
             mem = ml.MemoryLayer(self.root, self.ch)
             plan = self.current_scene() or {}
             q = query or json.dumps(plan, ensure_ascii=False)[:200]
@@ -603,13 +605,14 @@ class DatabaseScanner:
     def rag_relevant_chapters(self, top_k: int = 3) -> list[dict]:
         """RAG检索：找到与当前章节最相关的历史章节片段。"""
         try:
-            import importlib.util
-            rag_path = Path(__file__).parent / "rag_retriever.py"
-            if not rag_path.exists():
+            # frozen-aware（狩猎修·同 memory_layer）：PYZ 已收 → 直接 import。
+            import importlib
+            try:
+                rag = importlib.import_module("rag_retriever")
+            except ImportError:
+                print("[build_manifest] WARN rag_retriever 不可导入·RAG 注入跳过",
+                      file=sys.stderr)
                 return []
-            spec = importlib.util.spec_from_file_location("rag_retriever", rag_path)
-            rag = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(rag)
             return rag.retrieve_tfidf(self.root, self.ch, top_k)
         except Exception:
             return []

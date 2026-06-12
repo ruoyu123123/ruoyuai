@@ -160,24 +160,44 @@ class PipelineRunner:
             eval_out = out_dir / f"{cluster_ref}_eval.json"
 
             def _run(cmd_args, label, timeout_s: int = 1800):
-                # A8：deadline 对齐 orchestrator SCRIPT_TIMEOUT（防 gen-model 挂死永久占锁）
-                import time as _time
+                # 🔴 同类bug狩猎修（A8 的循环内超时检查是死代码）：readline 在子进程
+                # **静默挂死**时永久阻塞 → 检查永不执行 → 锁永不释放 → 全 GUI 按钮永久
+                # 禁用。真 watchdog = threading.Timer(输出无关)·kill 后管道 EOF 解除阻塞。
+                # Windows kill 返 1 非负值 → 用 timed_out Event 区分超时与普通失败。
+                import os as _os
+                import threading as _threading
                 st.log_buffer.append(f"[gui] ▶ {label} …")
+                env = {**_os.environ, "PYTHONUNBUFFERED": "1",
+                       "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
                 p = subprocess.Popen([child_python()] + cmd_args, cwd=str(_REPO),
+                                     stdin=subprocess.DEVNULL,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, encoding="utf-8", errors="replace")
-                t0 = _time.monotonic()
-                for line in iter(p.stdout.readline, ""):
-                    if line.strip():
-                        st.log_buffer.append(line.rstrip())
-                    if _time.monotonic() - t0 > timeout_s:
+                                     text=True, encoding="utf-8", errors="replace",
+                                     env=env)
+                timed_out = _threading.Event()
+
+                def _kill_on_timeout():
+                    timed_out.set()
+                    try:
                         p.kill()
-                        st.log_buffer.append(f"[gui] ❌ {label} 超时（{timeout_s}s）已终止")
-                        return 124
+                    except Exception:
+                        pass
+                watchdog = _threading.Timer(timeout_s, _kill_on_timeout)
+                watchdog.start()
+                try:
+                    for line in iter(p.stdout.readline, ""):
+                        if line.strip():
+                            st.log_buffer.append(line.rstrip())
+                finally:
+                    watchdog.cancel()
                 try:
                     p.wait(timeout=30)
                 except subprocess.TimeoutExpired:
                     p.kill()
+                    p.wait()
+                if timed_out.is_set():
+                    st.log_buffer.append(f"[gui] ❌ {label} 超时（{timeout_s}s）已终止")
+                    return 124
                 return p.returncode
 
             rc = _run(["core/scripts/distill_replicate.py", "--style-skill", str(skills[0]),

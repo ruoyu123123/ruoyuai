@@ -40,7 +40,7 @@ except Exception:  # pragma: no cover - 兜底（不阻塞章级路径）
     cluster_lookup = None
 
 try:
-    from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+    from frozen_util import child_python, scripts_dir  # frozen-aware（M4·dev=no-op）
 except Exception:  # pragma: no cover
     def child_python():
         return sys.executable
@@ -105,7 +105,7 @@ def list_plans_for_project(project_arg: str, project_name: str) -> list[dict]:
     # 兜底：plan_tracker list 文本解析
     try:
         result = subprocess.run(
-            [child_python(), str(Path(__file__).parent / "plan_tracker.py"), "list"],
+            [child_python(), str(scripts_dir() / "plan_tracker.py"), "list"],  # frozen-aware（狩猎修）
             capture_output=True, text=True, encoding="utf-8", timeout=10
         )
         return _parse_plan_list_output(result.stdout, project_name)

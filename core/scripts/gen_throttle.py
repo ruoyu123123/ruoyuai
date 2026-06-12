@@ -23,10 +23,24 @@ _last_call = [0.0]
 
 
 def _min_interval() -> float:
+    """env 最优先；env 未设且 frozen（分发 exe）→ 4.5s 兜底（中转站 <15rpm 限速保护）。
+
+    🔴 同类bug狩猎 critical（2026-06-12）：此前只读 env 默认 0——非技术 exe 用户无法设
+    环境变量 → 真 e2e 抓出的 520 限速保护在正式分发形态下完全失效。dev/tests 非 frozen
+    零回归（默认仍 0）。"""
+    raw = os.environ.get("GEN_MIN_INTERVAL_S")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return max(0.0, float(raw))
+        except (ValueError, TypeError):
+            return 0.0
     try:
-        return max(0.0, float(os.environ.get("GEN_MIN_INTERVAL_S", "0") or "0"))
-    except (ValueError, TypeError):
-        return 0.0
+        from frozen_util import is_frozen
+        if is_frozen():
+            return 4.5
+    except Exception:
+        pass
+    return 0.0
 
 
 def wait() -> None:

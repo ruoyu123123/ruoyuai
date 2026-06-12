@@ -36,6 +36,8 @@ def test_builtin_config_has_no_secrets():
 # ② dist 回落：显式指向内置 config → _dist_mode True（must_fix#2）+ profiles 解析
 def test_dist_mode_via_builtin_path():
     saved = {k: v for k, v in os.environ.items() if k.startswith("GEN")}
+    saved_kr = keyring.get_keyring()
+    keyring.set_keyring(MemKeyring())   # 隔离真机 keyring（用户正式 key 在里面·勿依赖勿动）
     try:
         gml.reset_default_loader()
         ld = gml.GenModelLoader(env_path=BUILTIN)
@@ -51,6 +53,7 @@ def test_dist_mode_via_builtin_path():
             if k.startswith("GEN"):
                 os.environ.pop(k, None)
         os.environ.update(saved)
+        keyring.set_keyring(saved_kr)
         gml.reset_default_loader()
 
 

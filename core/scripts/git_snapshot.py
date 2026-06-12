@@ -21,9 +21,14 @@ import sys
 from pathlib import Path
 
 
-def _run(args: list, cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(args, cwd=str(cwd), capture_output=True,
-                          text=True, encoding="utf-8", errors="replace")
+def _run(args: list, cwd: Path, timeout: int = 60) -> subprocess.CompletedProcess:
+    # 狩猎修：无 timeout 时用户机若配了 gpg 签名/钩子·git commit 交互等待 → 流水线挂死
+    try:
+        return subprocess.run(args, cwd=str(cwd), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args, 124, "", "[git_snapshot] timeout")
 
 
 def snapshot(project_root: Path, message: str) -> int:

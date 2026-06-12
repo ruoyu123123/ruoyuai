@@ -19,7 +19,7 @@ import json
 import re
 import subprocess
 import sys
-from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+from frozen_util import child_python, scripts_dir  # frozen-aware（M4·dev=no-op）
 from datetime import datetime
 from pathlib import Path
 
@@ -514,7 +514,7 @@ def cmd_git_commit(root: Path, ch: int):
         subprocess.run(["git", "commit", "-m", msg], cwd=root, check=True,
                        capture_output=True, timeout=30)
         result = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                                cwd=root, capture_output=True, text=True, check=True, timeout=10)
+                                cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=10)
         print(f"[GIT] 快照 {result.stdout.strip()}: {msg}")
     except subprocess.TimeoutExpired:
         print(f"[GIT] commit 超时 (>30s)·跳过本次快照·不阻断流水线", file=sys.stderr)
@@ -545,7 +545,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
     import subprocess
 
     project_str = str(root)
-    script_root = Path(__file__).parent
+    script_root = scripts_dir()   # frozen-aware（狩猎修·__file__在PYZ顶层）
     learning_loop = script_root / "learning_loop.py"
 
     reflector_json = root / "_数据库" / ".judge_reports" / f"ch_{ch:03d}_reflector.json"
@@ -559,7 +559,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
         rel_path = reflector_json.relative_to(root).as_posix()
         r = subprocess.run(
             [child_python(), str(learning_loop), project_str, "--merge-reflection", rel_path],
-            capture_output=True, text=True, timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
         )
         if r.returncode == 0:
             print(f"[auto-post-reflect] step 1/3 merge-reflection OK")
@@ -578,7 +578,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
         rel_path = audit_json.relative_to(root).as_posix()
         r = subprocess.run(
             [child_python(), str(learning_loop), project_str, "--ingest", rel_path],
-            capture_output=True, text=True, timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
         )
         if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
             print(f"[auto-post-reflect] step 2/3 ingest OK (rc={r.returncode})")
@@ -595,7 +595,7 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
     # Step 3: scan-recurring → 跨章复发追踪 + tool_calibration_suggestions
     r = subprocess.run(
         [child_python(), str(learning_loop), project_str, "--scan-recurring"],
-        capture_output=True, text=True, timeout=180  # 2026-05-30 北极星：补 timeout 纪律
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180  # 2026-05-30 北极星：补 timeout 纪律
     )
     if r.returncode in (0, 1):
         print(f"[auto-post-reflect] step 3/3 scan-recurring OK (rc={r.returncode})")
@@ -793,7 +793,7 @@ def _run_writer_truth_check(root: Path, chapters: list[int]) -> dict:
     writer_truth_check.py CLI 是逐章入口（<项目> <章节号>），故逐章调用聚合结果。
     失败不中断流水线（记录即可），结果并入返回 summary。
     """
-    wtc = Path(__file__).parent / "writer_truth_check.py"
+    wtc = scripts_dir() / "writer_truth_check.py"  # frozen: __file__在PYZ顶层·parent指_internal根（狩猎修）
     result = {"ran": 0, "lies_total": 0, "per_chapter": [], "errors": []}
     if not wtc.is_file():
         result["errors"].append("writer_truth_check.py 不存在")
@@ -802,7 +802,7 @@ def _run_writer_truth_check(root: Path, chapters: list[int]) -> dict:
         try:
             r = subprocess.run(
                 [child_python(), str(wtc), str(root), str(ch), "--write-back"],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
             )
             # 退出码契约：0 通过 / 1 撒谎命中 / 2 致命
             entry = {"ch": ch, "rc": r.returncode}
@@ -898,7 +898,7 @@ def cmd_git_commit_cluster(root, cluster_key):
         _cnum = "".join(ch for ch in str(cluster_key) if ch.isdigit()) or str(cluster_key)
         msg = f"feat(cluster-{_cnum}): {len(chapters)} 章 (ch{chapters[0]}-{chapters[-1]})"
         r = _sp.run(["git", "-C", str(root), "commit", "-m", msg],
-                    capture_output=True, text=True, timeout=30)
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         if r.returncode == 0:
             sha = r.stdout.split()[1].strip("]")[:7] if r.stdout else "?"
             print(f"[GIT] cluster_{cluster_key} 快照 {sha}: {msg}")
@@ -933,7 +933,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
     norm_cid = cluster_lookup.normalize_cluster_id(cluster_key) or cluster_key
     raw = cluster_key.replace("cluster_", "") if str(cluster_key).startswith("cluster_") else cluster_key
 
-    learning_loop = Path(__file__).parent / "learning_loop.py"
+    learning_loop = scripts_dir() / "learning_loop.py"  # frozen-aware（狩猎修·exe下学习闭环静默不跑）
     if not learning_loop.is_file():
         print(f"[auto-post-reflect-cluster] learning_loop.py 不存在·跳过", file=sys.stderr)
         return 0
@@ -964,7 +964,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
         r = subprocess.run(
             [child_python(), str(learning_loop), project_str, "--merge-reflection",
              refl_path.relative_to(root).as_posix()],
-            capture_output=True, text=True, timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
         )
         if r.returncode == 0:
             print(f"[auto-post-reflect-cluster] step 1/3 merge-reflection OK ({refl_path.name})")
@@ -983,7 +983,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
         r = subprocess.run(
             [child_python(), str(learning_loop), project_str, "--ingest",
              audit_path.relative_to(root).as_posix()],
-            capture_output=True, text=True, timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
         )
         if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
             print(f"[auto-post-reflect-cluster] step 2/3 ingest OK ({audit_path.name}, rc={r.returncode})")
@@ -1000,7 +1000,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
     # Step 3: scan-recurring → 跨 cluster 复发追踪 + tool_calibration_suggestions
     r = subprocess.run(
         [child_python(), str(learning_loop), project_str, "--scan-recurring"],
-        capture_output=True, text=True, timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
     )
     if r.returncode in (0, 1):
         print(f"[auto-post-reflect-cluster] step 3/3 scan-recurring OK (rc={r.returncode})")

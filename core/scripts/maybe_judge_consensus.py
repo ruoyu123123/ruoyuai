@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
-    from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+    from frozen_util import child_python, scripts_dir  # frozen-aware（M4·dev=no-op）
 except Exception:  # pragma: no cover
     def child_python():
         return sys.executable
@@ -201,7 +201,7 @@ def trigger_consensus(project_root: Path, ch: int) -> int:
     if len(reports) < 2:
         print(f"[SKIP] ch{ch} 仅 {len(reports)} 份 report，<2 不需 consensus")
         return 0
-    consensus_script = Path(__file__).parent / "judge_consensus.py"
+    consensus_script = scripts_dir() / "judge_consensus.py"  # frozen-aware（狩猎修）
     if not consensus_script.exists():
         print(f"[SKIP] judge_consensus.py 不存在")
         return 0

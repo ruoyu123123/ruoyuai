@@ -30,13 +30,19 @@ import adaptive_runner as ar       # 复用 run_with_resilience（韧性重跑 +
 
 
 def _clean_scripts(step: dict):
-    """取可重跑的脚本行：去 `#` 注释行 / 空行。"""
+    """取可重跑的脚本行：去 `#` 注释行 / 空行。
+
+    狩猎修：剥 `? ` advisory 前缀（对齐 orchestrator 语义）——否则 auto_heal 把
+    `? python ...` 原样交 cmd.exe 报「'?' 不是内部或外部命令」。返回 (line, advisory)。"""
     out = []
     for s in (step.get("scripts") or []):
         s = (s or "").strip()
         if not s or s.startswith("#"):
             continue
-        out.append(s)
+        advisory = s.startswith("? ")
+        if advisory:
+            s = s[2:].strip()
+        out.append((s, advisory))
     return out
 
 
@@ -109,13 +115,19 @@ def auto_heal(plan_id: str, include_not_run: bool = False) -> dict:
     targets = [f for f in rep["findings"] if f["heal_kind"] == "scripts" and f["reason"] in reasons]
 
     healed, still_missing, ran = [], [], []
+    import shlex
     for f in targets:
-        for script in f["scripts"]:
-            cmd = script.replace("{project_root}", f'"{project_root}"').replace(" || true", "")
+        for item in f["scripts"]:
+            script, advisory = item if isinstance(item, tuple) else (item, False)
+            # 狩猎修：弃 shell 字符串（cmd.exe 不解 bash 单引号·中文路径双引号嵌单引号
+            # 双重破损）→ shlex list 化·占位符替换后天然单 token·绕 cmd.exe。
+            toks = shlex.split(script.replace(" || true", ""), posix=True)
+            toks = [t.replace("{project_root}", str(project_root)) for t in toks]
             label = f"heal_s{f['n']}_{rep.get('command', 'plan')}"
-            # incidents/circuit 锚系统根（run_with_resilience 默认）；子命令的项目根已在 cmd 串内替换
-            r = ar.run_with_resilience(cmd, label=label)
-            ran.append({"n": f["n"], "cmd": cmd[:120], "ok": r.get("ok"),
+            r = ar.run_with_resilience(toks, label=label)
+            if advisory and not r.get("ok"):
+                r = {**r, "ok": True, "action": "advisory_nonzero_ignored"}
+            ran.append({"n": f["n"], "cmd": " ".join(toks)[:120], "ok": r.get("ok"),
                         "degraded": r.get("degraded"), "action": r.get("action")})
         # 重跑后复查产出（仅对 output_missing 有 expected_outputs 可判）
         try:
