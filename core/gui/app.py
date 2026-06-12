@@ -437,11 +437,16 @@ def index():
                 # —— 缺漏修 P0-1「拿到作品」：导出全书 + 打开作品文件夹 ——
                 async def _export_book():
                     p = _sel_project()
+                    # 事件日志放第一行——预检拦截路径也要可观测（loop 测试抓出：
+                    # 拦截 return 前无任何日志·服务端无法区分「拦了」和「没触发」）
+                    STATE.log_buffer.append(
+                        f"[gui:event] 点击 导出全书 {p.name if p else '(未选项目)'}")
                     if not p:
                         ui.notify("先选项目", type="warning")
                         return
                     if getattr(p, "chapters_written", 0) == 0:
                         # 复验修：0 活章必然失败——预检替代事后挫败
+                        STATE.log_buffer.append("[gui] 导出预检拦截：0 正文章节")
                         ui.notify("这本书还没有正文章节——先写一块再导出",
                                   type="warning")
                         return
@@ -449,7 +454,6 @@ def index():
                     import subprocess
                     from nicegui import run
                     from frozen_util import child_python
-                    STATE.log_buffer.append(f"[gui:event] 点击 导出全书 {p.name}")
                     btn_export.disable()       # 防双击并发写同一目标文件
 
                     def _do():
@@ -877,8 +881,11 @@ def distill():
 
     with shell:
         # A6③：中断的蒸馏任务直接在本页续（不用知道 /plans 是啥）
+        # loop 实测修：resumable=False（旧版空壳 plan）不给「继续学」——点了必被
+        # 空壳检测拦截报错，与 Plans 页「无法续跑」标记矛盾（去那页放弃即可）
         distill_plans = [it for it in RUNNER.list_resumable()
-                         if it["command"] == "distill-style"]
+                         if it["command"] == "distill-style"
+                         and it.get("resumable", True)]
         if distill_plans:
             with ui.card().classes("w-full bg-amber-50 border-l-4 border-warning"):
                 ui.label("有学到一半的风格：").classes("font-bold text-sm")
@@ -1064,9 +1071,8 @@ def main(native: bool = False, port: int = 8080):
     # 启动即打印日志文件路径（实测时方便取日志分析界面+命令状态）
     lp = STATE.log_buffer.log_file_path
     if lp:
-        msg = f"[gui:run] 日志文件：{lp}"
-        STATE.log_buffer.append(msg)
-        print(msg, file=sys.stderr)
+        # 只 print：stderr 已被 tee 进 log_buffer——再 append 一次会双行
+        print(f"[gui:run] 日志文件：{lp}", file=sys.stderr)
     # A5 保底：socket.io 默认 1MB 缓冲——大 textarea 提交会静默断连（治本走 ui.upload）
     try:
         from nicegui import core
