@@ -101,6 +101,11 @@ def security_gate() -> bool:
 
 
 def main():
+    # Windows GBK 控制台打印验证输出（含 � 替换符）会 UnicodeEncodeError
+    # 崩在最后一步打印——同 tests/run_tests.py 的保护
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-smoke", action="store_true", help="跳过 frozen_smoke 阶段A")
     ap.add_argument("--production", action="store_true",
@@ -114,7 +119,7 @@ def main():
         steps.append(("frozen_smoke 自验", run_smoke))
     steps.append((f"build ruoyu_gui{'(生产窗口模式)' if args.production else ''}",
                   lambda: build("ruoyu_gui.spec", "ruoyu_gui", production=args.production)))
-    steps.append(("GUI exe 验证 4/4", lambda: run_gui_validate(args.gui_port)))
+    steps.append(("GUI exe 验证 7/7", lambda: run_gui_validate(args.gui_port)))
     steps.append(("安全闸", security_gate))
 
     for name, fn in steps:
