@@ -285,16 +285,22 @@ def active_key_ready() -> tuple:
     直接走 GenModelLoader.get_active_profile()（keyring>env>.env 三级已合并），不从打码
     字符串复刻判据。副产物：GEN_MODEL_ACTIVE 为空/坏配置给人话·.env 持 key 用户不被误拦。
     """
+    import os
     from gen_model_loader import GenModelLoader
+    active = (os.environ.get("GEN_MODEL_ACTIVE") or "").strip()
     try:
         p = GenModelLoader().get_active_profile()   # 每次新建·绕缓存
         if not (p.api_key or "").strip():
-            return False, "当前模型还没配密钥——先去「设置」页录入"
+            return False, (f"当前使用的模型「{p.name}」还没配密钥——"
+                           f"去「设置」页给标了『当前使用』的那张卡录入")
         return True, p.name
     except Exception as e:
         msg = str(e)
         if "API_KEY" in msg or "密钥" in msg:        # loader: 「active profile 'X' 缺 API_KEY」
-            return False, "当前模型还没配密钥——先去「设置」页录入"
+            who = f"「{active}」" if active else ""
+            # 实测 UX 陷阱：key 录在别的模型卡上仍报没配——提示必须点名是哪张卡
+            return False, (f"当前使用的模型{who}还没配密钥——"
+                           f"去「设置」页给标了『当前使用』的那张卡录入")
         if "GEN_MODEL_ACTIVE" in msg:
             return False, "还没选生效模型——去「设置」页选一个并录入密钥"
         return True, ""    # 未知异常 fail-open（不挡用户·流水线自己会报）

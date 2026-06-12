@@ -514,6 +514,9 @@ def settings_page():
     shell.__enter__()
     ui.label("🔒 你的 API 密钥用 Windows 凭据管理器加密存储，绝不写入任何文件、绝不上传。")\
         .classes("text-sm text-gray-600")
+    ui.label("💡 把密钥录到标了「当前使用」的那张卡上（左侧有蓝色竖条）——"
+             "录到别的卡上不会生效。")\
+        .classes("text-sm text-gray-600")
     if not data.get("keyring_available", True):
         ui.label("⚠️ 本机安全存储不可用——密钥将无法保存，请联系支持。")\
             .classes("text-sm text-red-600").mark("keyring-unavailable")
@@ -594,12 +597,17 @@ def settings_page():
                                 STATE.log_buffer.append(
                                     f"[gui:event] 测试连接 profile={n}")
                                 btn.disable()        # B4 防抖：测试中禁点
-                                ui.notify("测试连接中…", type="ongoing")
+                                # 🔴 实测修：ui.notify(type="ongoing") 是永久型且
+                                # fire-and-forget 无法关闭 → 「测试连接中」永挂。
+                                # 换可关闭的 ui.notification + finally dismiss。
+                                notif = ui.notification("测试连接中…", spinner=True,
+                                                        timeout=None)
                                 try:
                                     r = await run.io_bound(test_profile_connection, n)
                                     ui.notify(r["message"],
                                               type="positive" if r["ok"] else "negative")
                                 finally:
+                                    notif.dismiss()
                                     btn.enable()
                             return _run()
                         test_btn.on_click(_test)
