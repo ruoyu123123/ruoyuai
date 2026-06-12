@@ -11,23 +11,23 @@
 <REPO_ROOT>/                          # 项目根（Claude Code working directory）
 ├── .claude/                                   # Claude Code 配置层
 │   ├── commands/                              # 用户级命令定义
+│   ├── agents/                                # Subagent 定义（judge prompt 单一真理源）
 │   ├── templates/                             # 命令调用模板
-│   ├── settings.json                          # 项目设置
-│   ├── styles/                                # 【全局风格库】
-│   │   └── {书名}/                            # 单个风格项目
-│   └── projects/                              # 【小说项目】
-│       └── {书名}/                            # 单本小说
+│   └── settings.json                          # 项目设置
 ├── core/                                       # 系统核心代码
 │   ├── claude-home/
-│   │   ├── commands/                           # 核心命令模板
+│   │   ├── plans/                              # plan_tracker 强制规划模板
 │   │   ├── hooks/                              # PreToolUse hooks
 │   │   ├── agents/                             # Subagent 定义
 │   │   ├── templates/                          # 通用模板
 │   │   ├── lessons/                            # 蒸馏经验库
 │   │   └── STRUCTURE.md                        # 【本文档】
 │   ├── scripts/                                # Python 工具脚本
-│   └── modules/                                # 模块化逻辑
-├── _reference/                                 # 历史参考资料（不入 Git）
+│   ├── config/                                 # 内置非密 config（gen_profiles.default.env）
+│   └── gui/                                    # NiceGUI 图形界面层（见第四-bis节）
+├── workspace/                                  # 【用户产出区】
+│   ├── styles/{书名}/                          # 全局风格库（见第二节）
+│   └── novels/{书名}/                          # 小说项目（见第三节）
 └── CLAUDE.md                                   # 项目级 AI 指令
 ```
 
@@ -155,7 +155,8 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 ```
 core/claude-home/
 ├── plans/                                      # plan_tracker 强制规划模板（<command>.plan.json）
-│   ├── save-state.plan.json
+│   ├── cluster-write.plan.json
+│   ├── cluster-save-state.plan.json
 │   ├── distill-style.plan.json
 │   └── ...
 ├── hooks/                                      # Pre/Post tool hooks
@@ -176,6 +177,25 @@ core/claude-home/
 ```
 
 > **✅ `core/claude-home/commands/` 历史副本已于 2026-05-15 删除**（曾为 v18 前命令文档副本，长期未与 `.claude/commands/` 同步）。命令文档的**唯一权威**位置是 `.claude/commands/`——改命令文档只改这里，grep 验收也只验这里，系统运行时也只加载这里。
+
+---
+
+## 四-bis、GUI 图形界面层（`core/gui/`）
+
+NiceGUI 图形界面层（v28 · 2026-06-10 引入），让非技术用户脱离 Claude CLI 直接驱动 orchestrator：
+
+```
+core/gui/
+├── app.py                                      # 页面（唯一 import nicegui：写作台 / Plan 续跑页 / 设置页）
+├── runner.py                                   # 流水线驱动 + PauseBridge 接线（工作线程驱动 orchestrator.run_command）
+├── state.py                                    # 纯逻辑状态层（AppState / PauseBridge / LogBuffer · 零 nicegui）
+├── widgets.py                                  # 展示组件
+└── theme.py                                    # 主题
+```
+
+- **入口**：仓库根 `ruoyu_gui.py`（`python ruoyu_gui.py` 浏览器 / `--native` 桌面窗口）。
+- **frozen exe**：由 `packaging/ruoyu_gui.spec` 打包（onedir · 一键构建走 `packaging/build_all.py`）。
+- 详细设计见 `core/claude-home/PROGRAM_DRIVEN.md` 〔图形界面〕节。
 
 ---
 
@@ -393,6 +413,10 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 
 以下 15 个 code 是 hard_gate，**AI 不可豁免**。与 `core/scripts/audit_hub.py` 的 `HARD_GATE_CODES` 常量一一对应（改清单必须两边同步）：
 
+> **🔴 severity 条件降级（与 `audit_hub._gate_level_for()` 对齐 · 2026-06-12 文档补正）**：清单内 code 不是无条件 hard_gate——gate_level 判定前有两条 severity 前置规则：
+> 1. **info severity 永不 hard_gate**（2026-06-02 修：info = 自动生成的低置信旁注，下游可忽略；北极星⑤顾问非法官）。实践影响：`UNKNOWN_CHARACTER_DETECTED` 由 validate_chapter **恒以 info 发**（低置信 NER · 历史 250+ 误报），故**实践中恒为 advisory**；真要 block 的项应以 error/fatal 发。
+> 2. **`STYLE_单段超长` 仅 severity ∈ {fatal, error} 时 hard_gate**；WARN 状态（80-120 警告区或例外内）降 advisory 可豁免（v23.12）。
+
 | 维度 | code 数量 |
 |---|---|
 | E 层一致性 | 5（LOCKED_FACT_CONFLICT / FUTURE_KNOWLEDGE_LEAK / FORESHADOWING_NOT_PAID / SECRET_NOT_REVEALED / UNKNOWN_CHARACTER_DETECTED） |
@@ -410,14 +434,14 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 | `FUTURE_KNOWLEDGE_LEAK` | validate_chapter | E 层一致性 | 角色知道不该知道的 = 逻辑错误 |
 | `FORESHADOWING_NOT_PAID` | validate_chapter | E 层一致性 | Tier-1 到期伏笔未回收 = 对读者的承诺违约 |
 | `SECRET_NOT_REVEALED` | validate_chapter | E 层一致性 | 秘密该揭未揭 = 剧情债 |
-| `UNKNOWN_CHARACTER_DETECTED` | validate_chapter | E 层一致性 | 引用未声明实体 = 引用错误（注：分词误检的另算，需先修检测器，不当普通 advisory 豁免） |
+| `UNKNOWN_CHARACTER_DETECTED` | validate_chapter | E 层一致性 | 引用未声明实体 = 引用错误（注：分词误检的另算，需先修检测器，不当普通 advisory 豁免）。**⚠ severity 条件**：validate_chapter 恒以 info 发该 code，而 info 永不 hard_gate（2026-06-02 修）→ 实践中恒为 advisory |
 | `CHANGES_MISSING` | validate_chapter | 文件契约 | `_changes.json` 缺失或 `factual` 为空 = 文件契约破损 |
 | `MANIFEST_MISSING` | validate_chapter | 文件契约 | manifest 缺失 = 文件契约破损 |
 | `FILE_NOT_FOUND` | validate_chapter | 文件契约 | 正文文件缺失 = 文件契约破损 |
 | `ITEM_HOLDER_ABSENT` | validate_chapter | 道具状态 | 道具持有者不在场 = 道具状态矛盾 |
 | `ITEM_NOT_YET_INTRODUCED` | validate_chapter | 道具状态 | 道具尚未引入就被用 = 道具状态矛盾 |
 | `PROPAGATION_DEBT_CREATED` | validate_chapter | 传播债 | 跨集合数据未同步 = 传播债 |
-| `STYLE_单段超长` | validate_style | 移动阅读 | 单段 > 120 CJK 字（每章 ≤1 例外）= 移动阅读硬上限。**为什么不可豁免**：v23.12 写入，基于 2026-05-21 调研（起点官方+中国作家网+12 来源互证），移动端 > 120 字单段严重不适，是读者体验客观下限。**项目级覆盖**：蒸馏文学向项目可写 `_数据库/style_scanner_overrides.json` 调高阈值，按 [[feedback_distill_scanner_threshold_link_missing]] 流程；不允许 AI 豁免单条。详见 memory `feedback_paragraph_length_hard_constraint` |
+| `STYLE_单段超长` | validate_style | 移动阅读 | 单段 > 120 CJK 字（每章 ≤1 例外）= 移动阅读硬上限。**为什么不可豁免**：v23.12 写入，基于 2026-05-21 调研（起点官方+中国作家网+12 来源互证），移动端 > 120 字单段严重不适，是读者体验客观下限。**⚠ severity 条件**：仅 fatal/error 时 hard_gate；WARN（80-120 警告区或例外内）降 advisory（`_gate_level_for` 实现）。**项目级覆盖**：蒸馏文学向项目可写 `_数据库/style_scanner_overrides.json` 调高阈值，按 [[feedback_distill_scanner_threshold_link_missing]] 流程；不允许 AI 豁免单条。详见 memory `feedback_paragraph_length_hard_constraint` |
 | `CHAPTER_END_FORBIDDEN_SCREENPLAY` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现剧本体过渡（「（镜头XX）」等舞台指示）= 连续小说工艺破坏。**为什么不可豁免**：2026-05-28 cluster_001 ch4 三次翻车 sediment，章末是钩子不是收束。详见 memory `feedback_no_screenplay_stage_directions_in_novels` |
 | `CHAPTER_END_FORBIDDEN_TRANSITION` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏。**为什么不可豁免**：同上，章末不允许任何场景过渡收束 |
 | `LOCKED_FACT_CROSS_SCENE_CONFLICT` | locked_fact_cross_scene_scanner | cluster 跨场景一致性（v2 cluster 新增） | 人物卡 `locked_facts` 中的数值/描述类事实在 cluster 不同场景引用矛盾（如同角色年龄两处不符）= cluster 内设定矛盾。**为什么不可豁免**：与 `LOCKED_FACT_CONFLICT` 同级，是客观设定冲突非风格选择。2026-05-28 v2 cluster 化新增 |

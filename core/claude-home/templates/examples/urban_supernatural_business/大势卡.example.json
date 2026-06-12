@@ -7,7 +7,8 @@
   "story_destiny": {
     "_doc": "全书终极大势——必须达到的结局，路径可变",
     "final_image": "陆衍把神性股权回流给散户，自己不成神，与卷一凌晨写字楼形成时间环",
-    "estimated_total_chapters_range": [400, 600],
+    "rhythm_profile": "混合",
+    "_v27_note": "v27 章数 fluid：已删除 estimated_total_chapters_range（章数死锁）。章数由 cluster 涌现 + writer freestyle + splitter 按字数切自然涌现。",
     "premise": "普通职员陆衍因废票卷入神性股权战，最终把神性还给众生"
   },
 

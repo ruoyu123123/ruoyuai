@@ -40,7 +40,32 @@ except Exception:
 
 # 走向卡等待上限（秒）——超时返回 None 让流水线报错停在停顿点（可 resume），
 # 绝不静默替用户做选择（北极星③）。
-PAUSE_WAIT_TIMEOUT = 3600.0
+PAUSE_WAIT_TIMEOUT = 86400.0   # 复验修 P1-4：1h→24h（过夜走开不烧重跑 API）
+
+# 应用版本（P1-5 升级迁移锚点）：写进用户数据区 data_version.json——
+# 未来版本升级时据此判断旧数据要不要迁移（现在没有迁移逻辑·先把锚打下）。
+APP_VERSION = "1.0.0"
+
+
+def ensure_data_version_marker() -> None:
+    """在用户数据区落 data_version.json（GUI 启动时调·失败不阻断）。"""
+    try:
+        from frozen_util import user_data_dir
+        marker = user_data_dir() / "data_version.json"
+        prev = {}
+        if marker.exists():
+            try:
+                prev = json.loads(marker.read_text(encoding="utf-8"))
+            except Exception:
+                prev = {}
+        info = {"app_version": APP_VERSION,
+                "first_version": prev.get("first_version", APP_VERSION),
+                "last_run": time.strftime("%Y-%m-%d %H:%M:%S")}
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(info, ensure_ascii=False, indent=2),
+                          encoding="utf-8")
+    except Exception:
+        pass
 
 
 # ============ 停顿桥（工作线程 ⇄ UI 线程） ============
@@ -63,6 +88,9 @@ class PauseBridge:
         self._answer = None
         self._req_counter = 0
         self._active_rid: int | None = None  # 当前等待应答的 req_id（None=无人等待）
+        # 复验修（stop×pause 互锁）：停止按钮可打断 pause 等待（runner 注入同一 Event·
+        # 否则走向卡弹着时按停止最长 24h 不生效）
+        self.cancel_event: "threading.Event | None" = None
 
     def request(self, step: dict, spec: dict, options: list):
         """pause_handler 签名兼容（orchestrator 直接把本方法当 handler 传入）。"""
@@ -75,7 +103,20 @@ class PauseBridge:
             self.pending = {"step": step.get("n"), "spec": dict(spec or {}),
                             "options": list(options or []),
                             "req_id": rid, "requested_at": time.time()}
-        ok = self._event.wait(timeout=PAUSE_WAIT_TIMEOUT)
+        # 分片等待：每 1s 检查停止信号（cancel → 返回 None → orchestrator 走
+        # paused_at 体面退出·plan 留在停顿步可续跑）
+        import time as _time
+        _deadline = _time.monotonic() + PAUSE_WAIT_TIMEOUT
+        ok = False
+        while True:
+            remaining = _deadline - _time.monotonic()
+            if remaining <= 0:
+                break
+            if self._event.wait(timeout=min(1.0, remaining)):
+                ok = True
+                break
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                break                      # 用户停止 → 走超时同款 None 返回路径
         with self._lock:
             self.pending = None
             self._active_rid = None        # 退出后任何迟到 respond 失效

@@ -1290,3 +1290,48 @@ writer 写完一章后，**三个 scanner 串行扫描** → judge agent 读三�
 - **hard_gate 只有 `STYLE_单段超长`**（单段 > 120 CJK 字 + 例外 ≤ 1）— 短段独行风格永远不触发
 - 其余 14 项 validate_style 检测全部 advisory（writer agent 可豁免）
 - **结论**：蒸馏 SFS 退步 ≠ 写作会被骂。蒸馏评分错位是测量层 bug（L19.1 已修），不影响实际写作体验
+
+
+---
+
+## 10. 全书分批蒸馏 + Workflow 编排教训（2026-06-02 · 小世界其乐无穷 880 章 · workflow fan-out）
+
+### L10.1 ⛔ 单章蒸馏 brief schema 必须对齐所有 consumer 的 key 命名（契约债簇）
+- **现象**：自定义单章 JSON schema 与多个 consumer 期望命名不匹配——arc_aggregator 认 `ch{s}_{e}_continuity.json` 正则；consolidate_author_profile 认 `ch{N}_metrics.json`/`ch{N}.json` + `cross_chapter.dim16_开头类型`/`narrative_craft.dim34_`/`narrative_fingerprint.dim47_` 旧命名；而 brief 用了 `cluster_auto_NNN_continuity.json`/`第{N}章.json`/`B2_cross_chapter.opening_type` 新命名
+- **影响**：3 处失配 → arc 聚合丢 continuity / consolidate 数值全空 → 修 3 次才聚合成功
+- **修复**：复制衔接为 ch{s}_{e} 命名 + 复制 metrics/单章为 ch{N} 命名 + 注入 dim16_/dim34_/dim47_ 别名 key
+- **预防**：设计蒸馏 brief schema 前先 grep 所有 consumer（arc_aggregator/consolidate_author_profile/cluster_segmenter）的 key 访问，brief 直接用 consumer 期望命名。memory「AI 自由 schema vs consumer」根因在蒸馏端的又一实证
+
+### L10.2 ⛔ Workflow result 不验证文件落盘 → 主代理必须事后扫描补缺
+- **现象**：workflow agent 返回非空 text 即被 result 计 ok（single_ok=2/2/continuity_ok=true），但文件可能没写/损坏/占位未覆盖。45 cluster 批次实测 11 章缺口（BOM/转义损坏/占位未覆盖）而 result 全绿
+- **影响**：若信 result 不扫描，缺口进聚合污染 skill
+- **修复**：每批 workflow 完成后主代理脚本扫描真实文件（json.load + 字段完整性 + BOM 检测），对缺口补跑
+- **预防**：主代理事后扫描是必须兜底。**颗粒度越细越可靠**：3 章/agent 部分失败（写一两章就报完成），1 章/agent 补缺 100% 成功
+
+### L10.3 ⚠️ Workflow scriptPath + args 不兼容 → hardcode 默认值
+- **现象**：Workflow({scriptPath, args}) 时 args 未注入脚本 args 全局，走默认 fallback 只跑 1 cluster
+- **修复**：批次 cluster 列表 hardcode 进脚本默认值
+- **预防**：workflow 参数化优先 hardcode 常量或 inline script，scriptPath+args 组合慎用
+
+### L10.4 ⚠️ gen-agent 写 JSON 防 BOM/对白引号转义
+- **现象**：sonnet agent 写单章 JSON 偶发 UTF-8 BOM（用 Bash/PowerShell 写）+ 黄金段落对白引号未转义（Expecting comma delimiter）
+- **修复**：BOM 内容完整可去 BOM 重写；转义错重蒸
+- **预防**：prompt 强制「用 Write 工具写 JSON（禁 Bash/PowerShell 写防 BOM）+ 对白引号转义」
+
+### L10.5 💡 distill_finalize_verify 回灌门槛只看风格可估算维（非内容维）
+- 复刻测风格非剧情，arc形状/衔接模板/voice 这些内容维必然不匹配（复刻自创剧情），门槛只算 emotion_curve/钩子/场景概述比等风格可估算维。verdict=FAIL(6维54.5) 但 [OK·PASS]（可估算3维过）是设计正确
+
+### L10.6 💡 draft_refine SFS 裁判 None（future work）
+- distill_replicate --draft-refine active 时 critic_feedback 质量极高（精准诊断句长/段长/虚词），但 SFS 裁判返回 None → knockout 未生效（accepted 全 True，未基于 SFS 保最优）。建议查 sfs_quick 在 cluster ref 缺失时的返回
+
+### L10.7 ✅ distill_replicate gather_cluster_ref_text 补零命名 bug 修复（L10.6 根治 · 2026-06-02 batch2）
+- **现象**：gather_cluster_ref_text 找 `第{ch:03d}章.txt`（补零如第055章），与系统其他部分（arc_aggregator/cluster_segmenter）不补零 `第{ch}章.txt` 不一致 → ref_text 空 → draft_refine SFS 裁判 None（L10.6 根因）
+- **修复**：候选路径加双命名兼容（`第{ch:03d}章.txt` + `第{ch}章.txt` + 章节布局两版）· `python tests/run_tests.py` 1085 全过零回归
+- **验证**：batch2 复刻 sfs_judge_available=True · knockout 真生效（round1 采纳 73.76，round2/3 退化稿淘汰保最优）
+- **预防**：跨脚本章号命名必须统一（补零 or 不补零），新脚本读原文一律加双命名兼容（这是 L10.1 命名契约债簇的又一实例）
+
+### L10.8 ⚠️ 回灌 exit 码捕获 + step 不验 verdict 双陷阱（2026-06-03 batch3）
+- **现象**：`python distill_finalize_verify --strict 2>&1 | tail` 后 `echo $?` 取的是 **tail 的 exit(0)** 非 verify 的 exit(2)；且 `plan_tracker step --output` 只验**文件存在**不验回灌 **verdict** → 回灌 FAIL 仍假性 step + plan end 通过
+- **修复**：verify --strict 不接管道单独跑 + `rc=$?` 紧跟；或读 json 的 verdict 字段判定
+- **预防**：Article 6 回灌门槛必须验 **verdict**（非仅文件存在）；管道后 `$?` 永远是最后一段命令的 exit（macOS/Linux 需 `set -o pipefail` 或 `${PIPESTATUS[0]}`）
+- **缓解**：回灌 FAIL 时先 RCA 分离（单样本 vs skill）——换 cluster 复刻确证（auto_110 钩子 0.6 FAIL → auto_120 钩子 0.784 PASS 证单样本 L5.5）

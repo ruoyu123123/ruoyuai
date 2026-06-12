@@ -70,6 +70,7 @@ class PipelineRunner:
         self.state.running = True
         self.state.last_result = ""
         self._cancel.clear()
+        self.state.bridge.cancel_event = self._cancel   # 停止可打断走向卡等待
         # thread.start() 在系统线程资源枯竭时抛 RuntimeError——若不兜底，锁已 acquire
         # 但 _work 永不运行 → finally 永不 release → 后续 start() 永久被拒、running
         # 永久卡 True，非技术用户只能重启 exe（对抗审查根因 D）。
@@ -253,12 +254,29 @@ class PipelineRunner:
                 continue
             steps = plan.get("steps") or []
             done = sum(1 for s in steps if s.get("status") == "completed")
+            # 复验修（僵尸 plan）：旧版 Claude 时代 plan 无 scripts 字段 → 续跑必被
+            # 空壳拒跑且无法清除。标 resumable=False·GUI 渲染「放弃」按钮。
+            _exec_keys = ("scripts", "must_spawn_agent", "pause_for_user",
+                          "touch_outputs")
+            resumable = any(any(s.get(k) for k in _exec_keys) for s in steps)
             out.append({"plan_id": plan.get("id", ""),
                         "command": plan.get("command", ""),
                         "project": plan.get("project", ""),
                         "key": plan.get("key") or "",
-                        "progress": f"{done}/{len(steps)}"})
+                        "progress": f"{done}/{len(steps)}",
+                        "resumable": resumable})
         return out
+
+    def abort_plan(self, plan_id: str) -> bool:
+        """放弃一个 plan（僵尸/不再需要的任务·GUI「🗑 放弃」按钮）。"""
+        import plan_tracker as pt
+        try:
+            pt.abort_plan(plan_id, reason="用户在 GUI 放弃")
+            self.state.log_buffer.append(f"[gui:event] 放弃任务 {plan_id}")
+            return True
+        except Exception as e:
+            self.state.log_buffer.append(f"[gui] 放弃失败：{e}")
+            return False
 
     # ---- 工作线程 ----
     def _work(self, commands: list[str], project: str, key: str,
@@ -295,9 +313,14 @@ class PipelineRunner:
             }
             st.last_result = _MSG.get(commands[-1], "✅ 全部完成")
         except orc.OrchestratorError as e:
-            st.last_result = f"❌ 流水线停下：{e}"
-            st.log_buffer.append(f"[gui] {st.last_result}")
-            st.log_buffer.append("[gui] 修复后可在「Plan 续跑」页从断点继续")
+            if "空壳模板" in str(e):
+                # 复验修：旧版任务的开发者黑话 → 人话·且不给死循环的「可续跑」建议
+                st.last_result = "❌ 这是旧版本创建的任务·当前版本无法续跑——可在「Plan 续跑」页放弃它"
+                st.log_buffer.append(f"[gui] {st.last_result}")
+            else:
+                st.last_result = f"❌ 流水线停下：{e}"
+                st.log_buffer.append(f"[gui] {st.last_result}")
+                st.log_buffer.append("[gui] 修复后可在「Plan 续跑」页从断点继续")
         except Exception as e:
             st.last_result = f"❌ 非预期异常：{type(e).__name__}: {e}"
             st.log_buffer.append(f"[gui] {st.last_result}")

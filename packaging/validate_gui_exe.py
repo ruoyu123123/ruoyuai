@@ -151,6 +151,52 @@ def check_outline_scripts(exe: Path) -> list:
     return fails
 
 
+def check_datas_parity(dist_dir: Path) -> list:
+    """datas 齐全性比对（复验 P2）：仓库里 spec 声明要带的数据集 vs dist/_internal
+    实际落盘——抓「仓库新增脚本/plan/agent 但 exe 是旧的（或 spec 漏带）」。"""
+    fails = []
+    internal = dist_dir / "_internal"
+    pairs = [
+        (ROOT / "core" / "scripts", internal / "core" / "scripts", "*.py"),
+        (ROOT / "core" / "claude-home" / "plans",
+         internal / "core" / "claude-home" / "plans", "*.plan.json"),
+        (ROOT / ".claude" / "agents", internal / ".claude" / "agents", "*.md"),
+        (ROOT / "core" / "claude-home" / "lessons",
+         internal / "core" / "claude-home" / "lessons", "*.md"),
+    ]
+    for src, dst, pat in pairs:
+        if not src.exists():
+            continue
+        missing = [f.name for f in src.glob(pat) if not (dst / f.name).exists()]
+        if missing:
+            fails.append(f"{dst.relative_to(dist_dir)} 缺 {len(missing)} 个文件"
+                         f"（仓库有 exe 没有·exe 过期或 spec 漏带）: {missing[:5]}")
+    for rel in ("core/config/gen_profiles.default.env",
+                "core/claude-home/templates/subsystem_skeletons.json"):
+        if (ROOT / rel).exists() and not (internal / rel).exists():
+            fails.append(f"_internal 缺关键单文件: {rel}")
+    return fails
+
+
+def check_scipy_smoke(exe: Path) -> list:
+    """style_evaluator(scipy) frozen 冒烟（复验 P2：scipy 从未在 frozen 验证过）。
+    --help 即触发顶层 import numpy/scipy——崩了就是 PYZ 缺二进制依赖。"""
+    fails = []
+    try:
+        r = subprocess.run([str(exe), "core/scripts/style_evaluator.py", "--help"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=120)
+        if r.returncode != 0:
+            fails.append(f"style_evaluator --help 退出码 {r.returncode}"
+                         f"·stderr={r.stderr[-200:]}")
+        if "Traceback" in r.stderr:
+            fails.append(f"style_evaluator frozen import 崩（scipy 依赖缺）: "
+                         f"{r.stderr[-200:]}")
+    except subprocess.TimeoutExpired:
+        fails.append("style_evaluator --help 超时")
+    return fails
+
+
 def check_gui_serve(exe: Path, port: int) -> list:
     fails = []
     proc = subprocess.Popen([str(exe), "--port", str(port)],
@@ -199,7 +245,9 @@ def main():
 
     all_fails = []
     for name, fn in (("security", lambda: check_security(dist_dir)),
+                     ("datas_parity", lambda: check_datas_parity(dist_dir)),
                      ("dispatch", lambda: check_dispatch(exe)),
+                     ("scipy_smoke", lambda: check_scipy_smoke(exe)),
                      ("writable_data", lambda: check_writable_data(exe, dist_dir)),
                      ("outline_scripts", lambda: check_outline_scripts(exe)),
                      ("gui_serve", lambda: check_gui_serve(exe, args.port))):
@@ -214,7 +262,8 @@ def main():
     if all_fails:
         _say("RESULT", f"GUI EXE 验证 FAIL · {len(all_fails)} 项")
         return 1
-    _say("RESULT", "GUI EXE 验证 PASS 5/5（安全 + dispatch + 可写数据 + outline脚本 + GUI serve）")
+    _say("RESULT", "GUI EXE 验证 PASS 7/7（安全 + datas齐全 + dispatch + scipy冒烟"
+                   " + 可写数据 + outline脚本 + GUI serve）")
     return 0
 
 

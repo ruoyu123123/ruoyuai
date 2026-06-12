@@ -82,8 +82,8 @@
 |------|------|------|
 | `/cluster-write` | 7 | `cluster-write.plan.json` |
 | `/cluster-save-state` | 12 | `cluster-save-state.plan.json` |
-| `/distill-style` | 7 | `distill-style.plan.json` |
-| `/outline` | 4 | `outline.plan.json` |
+| `/distill-style` | 8 | `distill-style.plan.json` |
+| `/outline` | 12 | `outline.plan.json` |
 | `/check-quality` | 3 | `check-quality.plan.json` |
 | `/reconcile` | 5 | `reconcile.plan.json` |
 
@@ -131,7 +131,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 | **核心** | `/write` | 写小说完整流程（端到端引导） |
 | | **`/cluster-write`** | **写故事块（cluster mode · v24 倒置流水线 7 步 · v27 freestyle 默认）** |
 | | **`/cluster-save-state`** | **故事块状态保存（cluster mode · 12 步 · 自动维护所有子系统 JSON + 涌现下一 cluster）** |
-| | `/outline` | 生成大纲+初始化 34 子系统数据库（含 step 1.7 AskUser 每卷 cluster 数） |
+| | `/outline` | 生成大纲+初始化 34 子系统数据库（含 step 3.3 AskUser 每卷 cluster 数） |
 | | `/continue` | 续写/断点恢复 |
 | | `/export` | 导出全文 |
 | **蒸馏** | `/distill-style` | 蒸馏作者风格（writer 第一权威） |
@@ -340,12 +340,12 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 
 **默认开启**：`/outline` 初始化 `事件簇.json.clusters[0].narrative_mode = "in_medias_res"`（仅首个 cluster），后续 cluster 默认 `"linear"`。
 
-**链路**：outline-planner 写字段 → build_manifest.inject_event_cluster_context 注入 `narrative_mode` + `climax_hint_scene_index` 给 writer + splitter → `novel-chapter-splitter` ECAS 模式按算法重组：
+**🔴 链路（2026-06-07 根治双重倒叙 · 用户定调）**：倒叙由 **outline 设计 scene_storyboard 顺序 + writer 按序写** 负责，**splitter 不再重排**：
 
-1. 扫整 cluster 找 climax 段（emotion ≤ -8 / cliffhanger 关键词 / scene_storyboard 标 climax / 角色 stress 突变）
-2. **ch1** = climax 段提前 + in_medias_res 开场（200 字内丢核心悬念 + 简短回溯触发）
-3. **ch2-3** = 时间序回到 cluster 开头逐步回溯
-4. **ch4+** = climax 之后正常时间序
+1. **outline-planner** 把 cluster_001 的 scene_storyboard 排成倒叙：scene0=强冲突/灾难开场（200 字内丢核心悬念）、scene1=反转/揭底、scene2+=时间序回溯、章末接回开篇。
+2. **build_manifest** 注入 scene_storyboard + `narrative_mode` 给 writer。
+3. **writer** 按 scene_storyboard 顺序写（场景顺序即叙事顺序；gen_writer prompt 只让它「按 storyboard 自由发挥」）→ 草稿开头即倒叙高潮。
+4. **splitter** 只按字数 linear 切（北极星④：纯格式层不理解叙事）——**绝不再做 climax 段提前**。历史 M5 的 reorder 会与 writer 已排好的倒叙叠成「双重倒叙」（cluster_001 实测：ch1 开头被硬塞一句中段「肋骨断裂」与原开篇拼接断裂），已删除。
 
 **例外**（写 `"linear"`）：严肃文学 / IP 改编已定顺序 / 用户明示线性叙事。
 
@@ -360,7 +360,7 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 | `rhythm_profile`（紧凑/标准/厚重/混合）软提示 | `target_chapter_count` / `volume_count` 死锁 |
 | `volumes[]` 的 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` | `volumes[].chapter_range` 死锁区间 |
 | 大势卡 ME `expected_window_after` 宽窗触发 | `T × (1-F) / (V × E)` 章数公式 |
-| **🆕 v27：用户答的「每卷 cluster 数」**（outline step 1.7 AskUser）→ ME 池数量 | **🆕 v27：cluster brief 的 `estimated_chapters` / `chapter_range`**（splitter 切完自动填） |
+| **🆕 v27：用户答的「每卷 cluster 数」**（outline step 3.3 AskUser）→ ME 池数量 | **🆕 v27：cluster brief 的 `estimated_chapters` / `chapter_range`**（splitter 切完自动填） |
 
 **设计哲学**：大势 = 不变（卷主题/milestones/final image），章数 = 浮动。
 

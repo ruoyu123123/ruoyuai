@@ -7,7 +7,7 @@
     {"id": "pref_003", "key": "storyteller_profile", "value": "phoebe"},
     {"id": "pref_004", "key": "happy_vs_dark_ratio", "value": 0.8},
     {"id": "pref_005", "key": "expected_setback_per_n_ch", "value": 10},
-    {"id": "pref_006", "key": "total_chapters", "value": 800},
+    {"id": "pref_006", "key": "rhythm_profile", "value": "混合"},
     {"id": "pref_007", "key": "audit_mode", "value": "advisory"},
     {"id": "pref_008", "key": "writer_model", "value": "claude-sonnet-4-6"},
     {"id": "pref_009", "key": "writer_critical_model", "value": "claude-opus-4-7"}
@@ -18,13 +18,11 @@
     "project_name": "<书名占位>"
   },
   "project_basics": {
-    "total_chapters": 800,
-    "target_words_per_chapter": 2800,
-    "dcas_dual_chapter_mode": true,
-    "writer_mode": "完整模式",
-    "volume_count": 12,
-    "volume_distribution": "金字塔",
-    "volume_custom_ratios": null
+    "target_words_per_chapter": 3500,
+    "writer_mode": "freestyle",
+    "rhythm_profile": "混合",
+    "cluster_count_per_volume": 8,
+    "_v27_note": "v27 章数 fluid：已删除 total_chapters / volume_count / volume_distribution / dcas_dual_chapter_mode（DCAS chapter mode 已废弃）等死锁字段。章数由 cluster 涌现 + writer freestyle + splitter 按字数切自然涌现；每卷 cluster 数由 outline step 1.7 询问用户。"
   },
   "narrative_pacing": {
     "storyteller_profile": "phoebe",

@@ -434,26 +434,46 @@ def index():
                 result_label = ui.label("").classes("text-sm").mark("result-label")
 
                 # —— 缺漏修 P0-1「拿到作品」：导出全书 + 打开作品文件夹 ——
-                def _export_book():
+                async def _export_book():
                     p = _sel_project()
                     if not p:
                         ui.notify("先选项目", type="warning")
                         return
+                    import os as _os
                     import subprocess
+                    from nicegui import run
                     from frozen_util import child_python
                     STATE.log_buffer.append(f"[gui:event] 点击 导出全书 {p.name}")
-                    r = subprocess.run(
-                        [child_python(), "core/scripts/export_book.py", str(p.root)],
-                        cwd=str(_REPO), capture_output=True, text=True,
-                        encoding="utf-8", errors="replace", timeout=120)
-                    for ln in (r.stderr or "").splitlines():
+
+                    def _do():
+                        # UTF-8 env：孤儿尾段警告是防正文静默丢失的唯一防线，
+                        # 乱码就形同没有；io_bound 不冻结事件循环
+                        env = {**_os.environ, "PYTHONIOENCODING": "utf-8",
+                               "PYTHONUTF8": "1"}
+                        return subprocess.run(
+                            [child_python(), "core/scripts/export_book.py",
+                             str(p.root)],
+                            cwd=str(_REPO), capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=120,
+                            env=env)
+                    try:
+                        r = await run.io_bound(_do)
+                    except Exception as e:
+                        ui.notify(f"导出出错：{e}", type="negative")
+                        return
+                    stderr = r.stderr or ""
+                    for ln in stderr.splitlines():
                         if ln.strip():
                             STATE.log_buffer.append(ln)
                     if r.returncode == 0:
-                        ui.notify("✅ 已导出——点「打开作品文件夹」就能看到全文",
-                                  type="positive", timeout=6000)
+                        if "pending_tail" in stderr or "未拼接" in stderr:
+                            ui.notify("⚠️ 已导出·但书末有一段未入章的内容没进全文"
+                                      "——看日志区详情", type="warning",
+                                      timeout=9000)
+                        else:
+                            ui.notify("✅ 已导出——点「打开作品文件夹」就能看到全文",
+                                      type="positive", timeout=6000)
                         try:
-                            import os as _os
                             _os.startfile(str(p.root / "exports"))
                         except Exception:
                             pass
@@ -473,7 +493,7 @@ def index():
                         ui.notify(f"打开失败：{e}", type="negative")
 
                 with ui.row().classes("gap-2"):
-                    ui.button("📤 导出全书", on_click=_export_book)\
+                    btn_export = ui.button("📤 导出全书", on_click=_export_book)\
                         .props("outline color=secondary dense").mark("btn-export")
                     ui.button("📂 打开作品文件夹", on_click=_open_folder)\
                         .props("flat dense").mark("btn-folder")
@@ -505,7 +525,8 @@ def index():
         _catalog["fn"]()                   # 完成边沿刷新目录（新章出现）
 
     _mount_pipeline_panel(status_label, result_label, log_view,
-                          buttons=(btn_w, btn_s, btn_b), on_idle=_on_idle_full)
+                          buttons=(btn_w, btn_s, btn_b, btn_export),
+                          on_idle=_on_idle_full)
 
 
 # ============ Plan 续跑 ============
@@ -543,8 +564,24 @@ def plans_page():
                         ui.linear_progress(value=ratio, show_value=False)\
                             .classes("w-full")
                         ui.label(it["plan_id"]).classes("text-xs text-gray-400")
-                        ui.button("▶ 从断点续跑", on_click=lambda _, x=it: _resume(x))\
-                            .props("unelevated color=primary dense")
+                        with ui.row().classes("gap-2 items-center"):
+                            if it.get("resumable", True):
+                                ui.button("▶ 从断点续跑",
+                                          on_click=lambda _, x=it: _resume(x))\
+                                    .props("unelevated color=primary dense")
+                            else:
+                                ui.label("旧版本任务·无法续跑")\
+                                    .classes("text-xs text-gray-400")
+                            ui.button("🗑 放弃",
+                                      on_click=lambda _, x=it: _abort(x))\
+                                .props("flat dense color=negative")
+
+        def _abort(it: dict):
+            if RUNNER.abort_plan(it["plan_id"]):
+                ui.notify("已放弃该任务", type="info")
+                _render()
+            else:
+                ui.notify("放弃失败——看日志", type="negative")
 
         def _resume(it: dict):
             ok = RUNNER.start([it["command"]], it["project"], it["key"] or "",
@@ -931,6 +968,8 @@ def init_pages():
 
 def main(native: bool = False, port: int = 8080):
     install_stderr_tee(STATE.log_buffer)
+    from core.gui.state import ensure_data_version_marker
+    ensure_data_version_marker()       # P1-5 升级迁移锚点（失败不阻断）
     # 启动即打印日志文件路径（实测时方便取日志分析界面+命令状态）
     lp = STATE.log_buffer.log_file_path
     if lp:

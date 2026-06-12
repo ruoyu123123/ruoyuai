@@ -2,7 +2,8 @@
 
 > 用确定性 Python driver 替换「Claude 主循环人肉跟 plan 走步」的编排层。
 > 写作主轨（cluster-write → cluster-save-state 循环）已全量程序驱动；
-> outline / distill-style / check-quality / reconcile 仍 Claude 编排（见〔迁移状态〕）。
+> outline / distill-style 已程序驱动化（2026-06-11 阶段2/3 落地）；
+> 仅 check-quality / reconcile 仍 Claude 编排（见〔迁移状态〕）。
 
 ## 三个新模块（core/scripts/）
 
@@ -244,7 +245,9 @@ python core/scripts/judge_runner.py novel-summarizer workspace/novels/书名 \
 |---|---|
 | `/cluster-write` | ✅ 全量程序驱动（7 步：manifest → gen_writer → audit+reading-reflector 循环 → voice → 三 judge → splitter+titles+changes → end） |
 | `/cluster-save-state` | ✅ 全量程序驱动（12 步含 emergence + 走向卡停顿点 + 选择写回） |
-| `/outline` `/distill-style` `/check-quality` `/reconcile` | ⏳ Claude 编排（模板零 scripts——创作步骤需先落为 gen-model 脚本才可机械执行，见各模板 `_program_driven_status`） |
+| `/outline` | ✅ 全量程序驱动（12 步 · 2026-06-11 阶段2 落地；GUI 前置 = RUNNER.start 前 mkdir 项目目录 + 写 `_数据库/.wal/book_meta.json`） |
+| `/distill-style` | ✅ 全量程序驱动（8 步 · 2026-06-11 阶段3 落地；GUI 前置 = mkdir `STYLES_DIR/<书名>/蒸馏进度/.wal` + 落原文 `raw_author_text.txt`） |
+| `/check-quality` `/reconcile` | ⏳ Claude 编排（模板零 scripts——创作步骤需先落为 gen-model 脚本才可机械执行，见各模板 `_program_driven_status`） |
 | novel-researcher | ⏳ soft 降级运行（gen-model 无 web 工具；联网检索待接外部 API 或确认代理透传 grounding） |
 
 ## 已知边界（上线前必验）

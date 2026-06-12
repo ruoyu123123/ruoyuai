@@ -518,6 +518,14 @@ def _resolve_pause(step: dict, ctx: dict, *, auto_pilot: bool,
 
 
 # ============ 主驱动 ============
+def _step_is_shell(s: dict) -> bool:
+    """空壳 step（P2 工程债批次1）：check-quality/reconcile 等 NOT-YET 模板
+    零 scripts/零 agent/零 pause/零 touch——机械走步会变「假成功」。
+    边界：单个空 step 合法（纯 expected_outputs 校验步），只拦「全部 step 全空」。"""
+    return not (s.get("scripts") or s.get("must_spawn_agent")
+                or s.get("pause_for_user") or s.get("touch_outputs"))
+
+
 def run_command(command: str, project: str, *, key: str | None = None,
                 chapter: int | None = None,
                 resume_plan_id: str | None = None,
@@ -537,6 +545,18 @@ def run_command(command: str, project: str, *, key: str | None = None,
     runner = script_runner or default_script_runner
     dispatch = judge_dispatch or default_judge_dispatch
 
+    # 🔴 空壳检测前移到 create_plan 之前（复验修）：原先先建后拒——每次尝试跑
+    # NOT-YET 命令都在 plans/ 留一个僵尸 plan。新建路径用模板预检，0 副作用。
+    if not resume_plan_id:
+        _tpl_steps = (pt.load_template(command) or {}).get("steps", [])
+        # 零 steps 也是空壳（end_plan 平凡通过=假成功）——not steps 同拒
+        if not _tpl_steps or all(_step_is_shell(s) for s in _tpl_steps):
+            raise OrchestratorError(
+                f"plan {command} 是未程序驱动化的空壳模板（NOT-YET）·拒绝假成功执行"
+                f"（全部 {len(_tpl_steps)} 步均无 scripts/must_spawn_agent/"
+                f"pause_for_user/touch_outputs——先把创作步骤落为 gen-model 脚本"
+                f"再接 orchestrator）")
+
     if resume_plan_id:
         plan_id = resume_plan_id
     else:
@@ -553,16 +573,7 @@ def run_command(command: str, project: str, *, key: str | None = None,
     summary = RunSummary(plan_id=plan_id, command=command)
     steps = sorted(plan.get("steps", []), key=lambda s: float(s.get("n", 0)))
 
-    # 🔴 空壳 plan 拒跑（P2 工程债批次1 · 2026-06-12 缺漏报告结论）：
-    # check-quality / reconcile 等 _program_driven_status=NOT-YET 模板零 scripts/
-    # 零 must_spawn_agent/零 pause/零 touch_outputs——orchestrator 机械走步会变成
-    # 「每步啥都不干 → step_complete → end_plan ok」的**假成功**。
-    # 边界：单个空 step 合法（如纯 expected_outputs 校验步），只拦「全部 step 全空」。
-    def _step_is_shell(s: dict) -> bool:
-        return not (s.get("scripts") or s.get("must_spawn_agent")
-                    or s.get("pause_for_user") or s.get("touch_outputs"))
-
-    if all(_step_is_shell(s) for s in steps):
+    if not steps or all(_step_is_shell(s) for s in steps):
         raise OrchestratorError(
             f"plan {command} 是未程序驱动化的空壳模板（NOT-YET）·拒绝假成功执行"
             f"（全部 {len(steps)} 步均无 scripts/must_spawn_agent/pause_for_user/"
@@ -618,6 +629,37 @@ def run_command(command: str, project: str, *, key: str | None = None,
                 print(f"[orchestrator] 退出码 {rc} → 派单 {agent}", file=sys.stderr)
                 dispatch(agent, step, ctx)
             # 'ok' → 继续
+
+        # 2.5) 🔴 完本短路（复验修·防捏造走向卡）：step11 的 emergence 脚本检测到
+        # ME 耗尽会写 .book_complete.json + 空 candidates WAL。此时绝不能再派
+        # outline-planner judge（无输入会被 required_keys 逼着编造候选）也不弹走向卡
+        # ——跳过本步剩余执行性动作·expected_outputs 已由 emerge 写好·step 正常完成。
+        _bc_marker = (Path(ctx["project_root"]) / "_数据库"
+                      / ".book_complete.json")
+        if step.get("must_spawn_agent") == "novel-outline-planner" \
+                and step.get("pause_for_user") and _bc_marker.exists():
+            print(f"[orchestrator] 🎉 检测到完本标记——跳过涌现 judge/走向卡"
+                  f"（本书大势已走完·去导出全文吧）", file=sys.stderr)
+            # end_plan anti-skip 校验声明的 JudgeReport 真存在——生产模板该路径
+            # 正好是 emerge 完本分支已写的 brief_candidates.json；这里兜底补写
+            # （诚实记录「完本短路未派 judge」·不削弱 anti-skip）。
+            _jrp = step.get("judge_report_path")
+            _decl = _jrp.get("novel-outline-planner") \
+                if isinstance(_jrp, dict) else _jrp
+            if _decl:
+                _rp = Path(resolve_placeholders(str(_decl), ctx))
+                if not _rp.is_absolute():
+                    _rp = Path(ctx["project_root"]) / _rp
+                if not _rp.exists():
+                    _rp.parent.mkdir(parents=True, exist_ok=True)
+                    _rp.write_text(json.dumps(
+                        {"book_complete": True, "candidates": [],
+                         "note": "完本短路·未派涌现 judge（大势已走完）"},
+                        ensure_ascii=False, indent=2), encoding="utf-8")
+            # output 传 marker 真实路径——step_complete 会校验该路径存在
+            pt.step_complete(plan_id, n, output=str(_bc_marker))
+            summary.completed.append(StepOutcome(n, name, "completed", "book_complete"))
+            continue
 
         # 3) must_spawn_agent（含 ROUND 循环）
         # agent_executor=="script"：创意 wrapper（novel-writer/novel-chapter-splitter）

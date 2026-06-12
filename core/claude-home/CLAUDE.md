@@ -303,12 +303,12 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 **默认开启**：`/outline` 初始化 `事件簇.json.clusters[0].narrative_mode = "in_medias_res"`（仅首个 cluster），后续 cluster 默认 `"linear"`。
 
-**链路**：outline-planner 写字段 → build_manifest.inject_event_cluster_context 注入 `narrative_mode` + `climax_hint_scene_index` 给 writer + splitter → `novel-chapter-splitter` ECAS 模式按算法重组：
+**🔴 链路（2026-06-07 根治双重倒叙 · 用户定调）**：倒叙由 **outline 设计 scene_storyboard 顺序 + writer 按序写** 负责，**splitter 不再重排**：
 
-1. 扫整 cluster 找 climax 段（emotion ≤ -8 / cliffhanger 关键词 / scene_storyboard 标 climax / 角色 stress 突变）
-2. **ch1** = climax 段提前 + in_medias_res 开场（200 字内丢核心悬念 + 简短回溯触发）
-3. **ch2-3** = 时间序回到 cluster 开头逐步回溯
-4. **ch4+** = climax 之后正常时间序
+1. **outline-planner** 把 cluster_001 的 scene_storyboard 排成倒叙：scene0=强冲突/灾难开场（200 字内丢核心悬念）、scene1=反转/揭底、scene2+=时间序回溯、章末接回开篇。
+2. **build_manifest** 注入 scene_storyboard + `narrative_mode` 给 writer。
+3. **writer** 按 scene_storyboard 顺序写（场景顺序即叙事顺序；gen_writer prompt 只让它「按 storyboard 自由发挥」）→ 草稿开头即倒叙高潮。
+4. **splitter** 只按字数 linear 切（北极星④：纯格式层不理解叙事）——**绝不再做 climax 段提前**（历史 M5 的 reorder 会与 writer 已排好的倒叙叠成「双重倒叙」，cluster_001 实测翻车，已删除）。
 
 **例外**（写 `"linear"`）：严肃文学 / IP 改编已定顺序 / 用户明示线性叙事。
 

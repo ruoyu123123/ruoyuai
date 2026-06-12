@@ -479,12 +479,42 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
 
     # 找剩余 ME
     remaining = find_remaining_mes(dashishi, completed_mes)
+    if remaining:
+        # 复验修（完本单向门）：用户加了新 ME（续写新卷）→ 清陈旧完本标记·
+        # 否则 GUI 永远显示已完本不再推荐动作。与幂等写对称。
+        _stale = project_root / "_数据库" / BOOK_COMPLETE_MARKER
+        if _stale.exists():
+            try:
+                _stale.unlink()
+                print("[emergence] 检测到新 ME·已清除陈旧完本标记（重新开张）",
+                      file=sys.stderr)
+            except OSError:
+                pass
     if not remaining:
         # 🎉 完本终态（P0-2 · 2026-06-12）：ME 真耗尽 = 大势已走完 = 完本，不是故障。
         # 写完本标记 + 返回 book_complete=True（main() 据此 exit 0 · 下游 step11 自然过 ·
         # 没有候选 → 走向卡不弹）。注意 ok 仍为 False——「没涌现出新 cluster」语义不变，
         # 既有 consumer 检查 ok 不会误以为有 candidate。
         marker = write_book_complete_marker(project_root, after_cluster_id)
+        # 🔴 复验修（orchestrator 路径捏造走向卡）：完本也要写 step11 的 WAL 产物——
+        # 否则 expected_outputs 缺失卡死 plan + judge 无输入被 required_keys 逼着
+        # 编造 candidates → 弹捏造走向卡。空 candidates + book_complete 标志：
+        # orchestrator 完本短路据此跳过 judge/pause（见 orchestrator step 头检测）。
+        try:
+            import re as _re
+            _m = _re.search(r"(\d+)", after_cluster_id or "")
+            _next_key = f"{int(_m.group(1)) + 1:03d}" if _m else "next"
+            _wal = project_root / "_数据库" / ".wal"
+            _wal.mkdir(parents=True, exist_ok=True)
+            _payload = {"book_complete": True, "candidates": [],
+                        "reason": "ME 池耗尽·大势已走完（完本非故障）"}
+            for _fn in (f"cluster_{_next_key}_emergence.json",
+                        f"cluster_{_next_key}_brief_candidates.json"):
+                (_wal / _fn).write_text(
+                    json.dumps(_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+        except Exception:
+            pass
         return {"ok": False, "book_complete": True,
                 "error": "大势卡 ME 池已全部完成，无新 cluster 可涌现",
                 "completed_count": len(completed_mes),

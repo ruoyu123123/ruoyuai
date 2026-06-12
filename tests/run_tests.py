@@ -55,6 +55,24 @@ def main():
     print(f"测试 {total} · 通过 {passed} · 失败 {failed}")
     for fl in failures:
         print(f"  [X] {fl}")
+    # tests/gui 是 pytest 风格（依赖 nicegui fixture）·零依赖循环发现不了——
+    # 环境有 pytest+nicegui 就委托跑·没有则跳过（保持本 runner 零依赖承诺）
+    gui_dir = tests_dir / "gui"
+    if gui_dir.is_dir():
+        try:
+            import nicegui  # noqa: F401
+            import pytest   # noqa: F401
+            import subprocess
+            print(f"-- 委托 pytest 跑 {gui_dir.name}/ --")
+            r = subprocess.run(
+                [sys.executable, "-m", "pytest", str(gui_dir), "-q",
+                 "--no-header"],
+                cwd=str(tests_dir.parent), timeout=600)
+            if r.returncode != 0:
+                failed += 1
+                print("  [X] tests/gui (pytest)")
+        except ImportError:
+            print("-- 跳过 tests/gui（缺 pytest 或 nicegui）--")
     return 1 if failed else 0
 
 
