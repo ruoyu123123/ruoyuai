@@ -111,6 +111,45 @@ class PauseBridge:
 import datetime as _dt
 
 
+def classify_line(line: str) -> tuple:
+    """从行内既有标记廉价派生 (level, comp)——must_fix#2：命令行真实前缀是
+    `[orchestrator] ▶ step` 不是裸 `▶ step`·须匹配 [orchestrator]/派单/退出码。
+
+    🔴 轮次1 实测收紧：「异常/❌/拒绝」是小说正文/灵感卡/verify 评分的高频合法字符，
+    裸子串匹配会把创作内容误标 ERROR（污染 grep ERROR 排错纪律）。内容词分级只对
+    **系统前缀行**（[gui*]/[orchestrator]/[FATAL] 等）生效；raw 子进程 stdout 只认
+    Traceback/[FATAL] 强信号。模块级公共函数（文件日志 + UI 日志着色共用·P4）。"""
+    is_system = line.startswith(("[gui", "[orchestrator", "[judge", "[FATAL"))
+    if "[FATAL]" in line or line.startswith("Traceback") \
+            or line.lstrip().startswith(("File \"", "Traceback")):
+        level = "ERROR"
+    elif is_system and ("❌" in line or "异常" in line):
+        level = "ERROR"
+    elif is_system and ("⚠" in line or "WARN" in line or "已失效" in line
+                        or "拒绝" in line):
+        level = "WARN"
+    elif "WARN" in line[:30]:    # 子进程自标 WARN 前缀（[orchestrator] WARN 等）
+        level = "WARN"
+    else:
+        level = "INFO"
+    if line.startswith("[gui:card]") or "走向卡" in line:
+        comp = "card"
+    elif line.startswith("[gui:page]"):
+        comp = "page"
+    elif line.startswith("[gui:run]"):
+        comp = "run"
+    elif line.startswith("[gui:event]") or line.startswith("[gui]"):
+        comp = "gui"
+    elif line.startswith("[orchestrator]") or "▶ step" in line or "派单" in line \
+            or "退出码" in line or line.startswith("⏸"):
+        comp = "orch"
+    elif "judge" in line[:14] or "[judge" in line:
+        comp = "judge"
+    else:
+        comp = "raw"
+    return level, comp
+
+
 def _redact_for_log(line: str) -> str:
     """落盘前统一脱敏（防御纵深·must_fix#1）：llm_transport/gen_writer 兜底异常会把含
     gemini key-in-URL 的原文经 stderr→tee 落盘·持久化比内存更危险·这里再过一道 redact。"""
@@ -184,44 +223,7 @@ class _FileLogSink:
         except Exception:
             pass
 
-    @staticmethod
-    def _classify(line: str) -> tuple:
-        """从行内既有标记廉价派生 (level, comp)——must_fix#2：命令行真实前缀是
-        `[orchestrator] ▶ step` 不是裸 `▶ step`·须匹配 [orchestrator]/派单/退出码。
-
-        🔴 轮次1 实测收紧：「异常/❌/拒绝」是小说正文/灵感卡/verify 评分的高频合法字符，
-        裸子串匹配会把创作内容误标 ERROR（污染 grep ERROR 排错纪律）。内容词分级只对
-        **系统前缀行**（[gui*]/[orchestrator]/[FATAL] 等）生效；raw 子进程 stdout 只认
-        Traceback/[FATAL] 强信号。"""
-        is_system = line.startswith(("[gui", "[orchestrator", "[judge", "[FATAL"))
-        if "[FATAL]" in line or line.startswith("Traceback") \
-                or line.lstrip().startswith(("File \"", "Traceback")):
-            level = "ERROR"
-        elif is_system and ("❌" in line or "异常" in line):
-            level = "ERROR"
-        elif is_system and ("⚠" in line or "WARN" in line or "已失效" in line
-                            or "拒绝" in line):
-            level = "WARN"
-        elif "WARN" in line[:30]:    # 子进程自标 WARN 前缀（[orchestrator] WARN 等）
-            level = "WARN"
-        else:
-            level = "INFO"
-        if line.startswith("[gui:card]") or "走向卡" in line:
-            comp = "card"
-        elif line.startswith("[gui:page]"):
-            comp = "page"
-        elif line.startswith("[gui:run]"):
-            comp = "run"
-        elif line.startswith("[gui:event]") or line.startswith("[gui]"):
-            comp = "gui"
-        elif line.startswith("[orchestrator]") or "▶ step" in line or "派单" in line \
-                or "退出码" in line or line.startswith("⏸"):
-            comp = "orch"
-        elif "judge" in line[:14] or "[judge" in line:
-            comp = "judge"
-        else:
-            comp = "raw"
-        return level, comp
+    _classify = staticmethod(lambda line: classify_line(line))
 
     def write(self, line: str):
         if self._fp is None:
@@ -333,6 +335,56 @@ class ProjectInfo:
     next_action: str = ""       # "cluster-write" | "cluster-save-state" | ""
     next_key: str = ""          # 建议操作的 cluster key（如 "002"）
     note: str = ""
+    # —— 写作平台感升级（2026-06-12·调研落地）——
+    total_chars: int = 0        # 全书字数（章节 txt 累计·_WC_CACHE 缓存）
+    total_wan: str = "0"        # 万字显示串（如 "3.2"）
+    style_name: str = ""        # 风格档名（作者风格.json 的 author/source）
+
+
+# 字数缓存：path → (mtime, size, chars)。命中=纯 stat 开销·refresh_projects 可控。
+_WC_CACHE: dict = {}
+
+
+def _chapter_chars(txt: Path) -> int:
+    try:
+        st = txt.stat()
+        hit = _WC_CACHE.get(txt)
+        if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+            return hit[2]
+        n = len(txt.read_text(encoding="utf-8"))
+        _WC_CACHE[txt] = (st.st_mtime, st.st_size, n)
+        return n
+    except Exception:
+        return 0
+
+
+def scan_chapters(root: Path) -> list:
+    """只读章节目录（P3·写作平台 Binder 范式）：[{num, title, chars}]。
+
+    不进 scan_project 主路径（保持 refresh_projects 轻量）——页面按需调用。
+    title 读 第N章_changes.json 的 title（可空）。"""
+    out = []
+    ch_dir = root / "章节"
+    if not ch_dir.exists():
+        return out
+    for d in sorted(ch_dir.iterdir()):
+        m = re.match(r"第(\d+)章", d.name)
+        if not (m and d.is_dir()):
+            continue
+        num = int(m.group(1))
+        txt = d / f"{d.name}.txt"
+        title = ""
+        cj = d / f"{d.name}_changes.json"
+        if cj.exists():
+            try:
+                title = str(json.loads(cj.read_text(encoding="utf-8"))
+                            .get("title") or "")
+            except Exception:
+                title = ""
+        out.append({"num": num, "title": title,
+                    "chars": _chapter_chars(txt) if txt.exists() else 0})
+    out.sort(key=lambda c: c["num"])
+    return out
 
 
 def _cluster_key_of(cluster_id: str) -> str:
@@ -354,8 +406,29 @@ def scan_project(root: Path) -> ProjectInfo:
     db = root / "_数据库"
     ch_dir = root / "章节"
     if ch_dir.exists():
-        info.chapters_written = len([d for d in ch_dir.iterdir()
-                                     if re.match(r"第\d+章", d.name)])
+        total = 0
+        n_ch = 0
+        for d in ch_dir.iterdir():
+            if not re.match(r"第\d+章", d.name):
+                continue
+            n_ch += 1
+            txt = d / f"{d.name}.txt"
+            if txt.exists():
+                total += _chapter_chars(txt)
+        info.chapters_written = n_ch
+        info.total_chars = total
+        info.total_wan = f"{total / 10000:.1f}" if total else "0"
+    # 风格档名（must_fix：用户偏好.json 无风格名·读 作者风格.json 的 author/source）
+    prof_p = db / "作者风格.json"
+    if prof_p.exists():
+        try:
+            prof = json.loads(prof_p.read_text(encoding="utf-8"))
+            if isinstance(prof, dict):
+                info.style_name = str(prof.get("author") or prof.get("作者")
+                                      or prof.get("source") or prof.get("book")
+                                      or "")[:20]
+        except Exception:
+            pass
     clusters: list[dict] = []
     sj = db / "事件簇.json"
     if sj.exists():

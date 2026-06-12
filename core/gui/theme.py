@@ -23,14 +23,32 @@ COMMAND_LABELS = {
 }
 
 
+GOLD = "#C9A86A"        # 描金 · 字数增量仪式
+DARK_PANEL = "#232F42"  # 墨蓝加深 · 日志区（与品牌同族·替代外来 slate）
+
+
 def apply_theme():
-    """每页开头调用（NiceGUI 按页渲染·ui.colors 全局生效但 head_html 须每页注入）。"""
+    """每页开头调用（NiceGUI 按页渲染·ui.colors 全局生效但 head_html 须每页注入）。
+
+    写作平台调研落地（橙瓜/Scrivener/iA/Novelcrafter 合成·2026-06-12）：
+    排印三档字号纪律·tabular-nums 大数字·墨蓝呼吸脉冲点·描金增量闪烁。"""
     ui.colors(primary=PRIMARY, secondary=SECONDARY, accent=ACCENT,
               dark="#1D2A38", positive="#2E7D32", negative=ACCENT,
               warning="#B7791F", info="#3E5C76")
     ui.add_head_html(
         '<style>'
-        f'body{{background:{PAPER};'
+        f':root{{--ry-ink:{PRIMARY};--ry-paper:{PAPER};'
+        f'--ry-gold:{GOLD};--ry-dark:{DARK_PANEL}}}'
+        f'body{{background:{PAPER};font-size:15px;line-height:1.6;'
         'font-family:"Noto Sans SC","Microsoft YaHei",system-ui,sans-serif}'
         '.nicegui-log{border-radius:8px}'
+        '.stat-number{font-size:28px;font-weight:700;color:var(--ry-ink);'
+        'font-variant-numeric:tabular-nums;line-height:1.1}'
+        '.dark-panel{background:var(--ry-dark) !important}'
+        '.pulse-dot{width:8px;height:8px;border-radius:50%;'
+        'background:var(--ry-ink);animation:ry-pulse 1.6s ease-in-out infinite}'
+        '@keyframes ry-pulse{50%{opacity:.25}}'
+        '.word-delta{color:var(--ry-gold);font-weight:600}'
+        '.line-clamp-2{display:-webkit-box;-webkit-line-clamp:2;'
+        '-webkit-box-orient:vertical;overflow:hidden}'
         '</style>')

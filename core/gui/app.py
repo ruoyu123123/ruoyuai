@@ -27,8 +27,28 @@ from nicegui import background_tasks, ui  # noqa: E402
 
 from core.gui.runner import (PipelineRunner, active_key_ready,  # noqa: E402
                               list_profiles_masked)
-from core.gui.state import AppState, install_stderr_tee  # noqa: E402
+from core.gui.state import (AppState, classify_line,  # noqa: E402
+                            install_stderr_tee)
 from core.gui.theme import COMMAND_LABELS, apply_theme  # noqa: E402
+from core.gui.widgets import book_card, chapter_catalog  # noqa: E402
+
+# P4 日志着色（NovelAI 来源着色 × iA「颜色只传信息」·classify_line 与持久日志同源）
+_LOG_LV_CLS = {"ERROR": "text-red-400", "WARN": "text-amber-400"}
+
+
+def _log_line_classes(line: str) -> str:
+    level, comp = classify_line(line)
+    if level in _LOG_LV_CLS:
+        return _LOG_LV_CLS[level]
+    return "text-emerald-300" if comp == "orch" else "text-slate-300"
+
+
+def _log_title(text: str):
+    """日志区标题 + 运行态脉冲点（墨蓝呼吸·bind STATE.running）。"""
+    with ui.row().classes("items-center gap-2"):
+        ui.element("div").classes("pulse-dot")\
+            .bind_visibility_from(STATE, "running")
+        ui.label(text).classes("text-sm text-gray-500")
 
 STATE = AppState()
 RUNNER = PipelineRunner(STATE)
@@ -101,12 +121,40 @@ def _mount_pipeline_panel(status_label, result_label, log_view, *,
     card_dialog = ui.dialog().props("persistent")
     dialog_state = {"req_id": None, "done_rid": None}
 
-    # —— B2/B3 全局状态条（固定底部·5 页一致可见）——
+    # —— B2/B3 全局状态条（固定底部·5 页一致可见）+ P2 字数仪式（橙瓜底栏 ×
+    #    Scrivener Session Target：全书 N 万字 ｜ 本次 +M 字描金闪）——
     with ui.footer().classes("bg-white text-gray-800 border-t px-6 py-1 items-center gap-4"):
         foot_progress = ui.linear_progress(value=0, show_value=False)\
             .props("instant-feedback").classes("w-40")
         foot_status = ui.label("空闲").classes("text-xs font-mono")
         foot_result = ui.label("").classes("text-xs truncate flex-1")
+        foot_words = ui.label("").classes("text-xs text-gray-600")\
+            .style("font-variant-numeric:tabular-nums").mark("foot-words")
+        foot_delta = ui.label("").classes("text-xs word-delta")\
+            .style("font-variant-numeric:tabular-nums")
+
+    def _selected_chars() -> int:
+        """must_fix#3：跨页可用——直接重扫 selected 项目（_WC_CACHE 命中纯 stat 开销）。"""
+        try:
+            from core.gui.state import scan_project
+            p = STATE.project()
+            if p:
+                return scan_project(p.root).total_chars
+        except Exception:
+            pass
+        return 0
+
+    def _refresh_foot_words():
+        try:
+            from core.gui.state import scan_project
+            p = STATE.project()
+            if p:
+                fresh = scan_project(p.root)
+                foot_words.set_text(f"《{fresh.name}》{fresh.total_wan} 万字")
+            else:
+                foot_words.set_text("")
+        except Exception:
+            pass
 
     def _notify_safe(msg, **kw):
         """background task 无 slot 上下文·裸 ui.notify 抛 RuntimeError（轮次1 实测
@@ -200,6 +248,9 @@ def _mount_pipeline_panel(status_label, result_label, log_view, *,
 
     log_cursor = {"v": 0}
     seen = {"v": STATE.runs_finished}      # A4 per-client 完成边沿
+    run_edge = {"running": STATE.running, "words_before": None}  # P2 字数仪式
+
+    _refresh_foot_words()                  # 进页即显示当前书字数
 
     def _tick():
         if STATE.running:
@@ -219,6 +270,10 @@ def _mount_pipeline_panel(status_label, result_label, log_view, *,
         foot_result.set_text(STATE.last_result)
         for b in buttons:                  # B4 运行中按钮统一禁用
             b.set_enabled(not STATE.running)
+        # P2 字数仪式：开跑边沿记基线·完成边沿算增量（AI 替人码字的 session 正反馈）
+        if STATE.running and not run_edge["running"]:
+            run_edge["words_before"] = _selected_chars()
+        run_edge["running"] = STATE.running
         if seen["v"] != STATE.runs_finished:   # A4 完成边沿 → 刷新数据
             seen["v"] = STATE.runs_finished
             if on_idle is not None:
@@ -226,9 +281,21 @@ def _mount_pipeline_panel(status_label, result_label, log_view, *,
                     on_idle()
                 except Exception as e:
                     STATE.log_buffer.append(f"[gui] 完成回调失败：{e}")
+            _refresh_foot_words()
+            before = run_edge.get("words_before")
+            if before is not None:
+                delta = _selected_chars() - before
+                run_edge["words_before"] = None
+                if delta > 0:
+                    foot_delta.set_text(f"本次 +{delta:,} 字")
+                    try:
+                        ui.notify(f"🎉 这一轮写了 {delta:,} 字",
+                                  type="positive", timeout=6000)
+                    except Exception:
+                        pass
         new, log_cursor["v"] = STATE.log_buffer.since(log_cursor["v"])
         for line in new:
-            log_view.push(line)
+            log_view.push(line, classes=_log_line_classes(line))
         _sync_cards()
 
     ui.timer(0.5, _tick)
@@ -264,6 +331,9 @@ def index():
                 if not names0:        # A10：无项目禁用·防假选项污染 STATE.selected
                     project_select.props("disable")
 
+                # P1 当前书仪表卡（书架卡范式·下拉是选择器·卡片是展示层·两层并存）
+                refresh_card = book_card()
+
                 info_label = ui.label("").classes("text-sm text-gray-600")\
                     .mark("project-info")
                 note_label = ui.label("").classes("text-xs text-orange-600")
@@ -273,9 +343,13 @@ def index():
                 auto_switch = ui.switch("全自动（走向卡取引擎第一候选·显式开关）")\
                     .mark("auto-pilot")
 
+                _catalog = {"fn": lambda: None}        # P3 目录在右栏创建·容器后绑定
+
                 def _sync_project():
                     STATE.selected = project_select.value or ""
                     p = STATE.project()
+                    refresh_card(p)                    # P1 仪表卡
+                    _catalog["fn"]()                   # P3 章节目录
                     if p:
                         info_label.set_text(
                             f"已写 {p.chapters_written} 章 · 故事块 {p.clusters_done}"
@@ -343,14 +417,24 @@ def index():
                 result_label = ui.label("").classes("text-sm").mark("result-label")
                 ui.button("🔄 刷新项目", on_click=_on_idle).props("flat dense")
 
-            # —— 右：实时日志 ——
+            # —— 右：章节目录（P3·Binder 范式）+ 实时日志 ——
             with ui.column().classes("flex-1"):
-                ui.label("流水线日志").classes("text-sm text-gray-500")
+                def _scan_sel_chapters():
+                    from core.gui.state import scan_chapters
+                    p = STATE.project()
+                    return scan_chapters(p.root) if p else []
+                _catalog["fn"] = chapter_catalog(_scan_sel_chapters)
+                _catalog["fn"]()
+                _log_title("流水线日志")
                 log_view = ui.log(max_lines=400).classes(
-                    "w-full h-96 font-mono text-xs bg-slate-900 text-slate-200 rounded-lg")
+                    "w-full h-96 font-mono text-xs dark-panel text-slate-200 rounded-lg")
+
+    def _on_idle_full():
+        _on_idle()
+        _catalog["fn"]()                   # 完成边沿刷新目录（新章出现）
 
     _mount_pipeline_panel(status_label, result_label, log_view,
-                          buttons=(btn_w, btn_s, btn_b), on_idle=_on_idle)
+                          buttons=(btn_w, btn_s, btn_b), on_idle=_on_idle_full)
 
 
 # ============ Plan 续跑 ============
@@ -371,6 +455,7 @@ def plans_page():
                 if not items:
                     ui.label("🎉 没有未完成的任务").classes("text-gray-500")\
                         .mark("no-plans")
+                    ui.label("一切正常——写作中断时这里会出现续跑入口").classes("text-xs text-gray-400")
                 for it in items:
                     cmd_cn = COMMAND_LABELS.get(it["command"], it["command"])
                     try:
@@ -406,9 +491,9 @@ def plans_page():
         status_label = ui.label("空闲").classes("text-sm font-mono")\
             .mark("plans-status")
         result_label = ui.label("").classes("text-sm").mark("plans-result")
-        ui.label("任务日志").classes("text-sm text-gray-500")
+        _log_title("任务日志")
         log_view = ui.log(max_lines=400).classes(
-            "w-full h-72 font-mono text-xs bg-slate-900 text-slate-200 rounded-lg")
+            "w-full h-72 font-mono text-xs dark-panel text-slate-200 rounded-lg")
 
     _mount_pipeline_panel(status_label, result_label, log_view, on_idle=_render)
 
@@ -598,9 +683,9 @@ def new_book():
                 ui.link("建好后 → 去写作台写第一章", "/").classes("text-sm")
 
             with ui.column().classes("flex-1"):
-                ui.label("建书日志").classes("text-sm text-gray-500")
+                _log_title("建书日志")
                 log_view = ui.log(max_lines=400).classes(
-                    "w-full h-96 font-mono text-xs bg-slate-900 text-slate-200 rounded-lg")
+                    "w-full h-96 font-mono text-xs dark-panel text-slate-200 rounded-lg")
 
     _mount_pipeline_panel(status_label, result_label, log_view, buttons=(btn_build,))
 
@@ -685,9 +770,9 @@ def distill():
                     .mark("distill-result")
 
             with ui.column().classes("flex-1"):
-                ui.label("蒸馏日志").classes("text-sm text-gray-500")
+                _log_title("蒸馏日志")
                 log_view = ui.log(max_lines=400).classes(
-                    "w-full h-96 font-mono text-xs bg-slate-900 text-slate-200 rounded-lg")
+                    "w-full h-96 font-mono text-xs dark-panel text-slate-200 rounded-lg")
 
         ui.separator()
         # —— ② 复刻测试（已有风格 → 仿写打分）——
@@ -706,6 +791,7 @@ def distill():
                     .classes("w-full").mark("distill-style")
                 if not names:
                     style_sel.props("disable")
+                    ui.label("还没有可复刻的风格——先在上面「学新风格」学一个")                        .classes("text-xs text-gray-400")
                 ref_input = ui.input("参考故事块（默认 cluster_001·一般不用改）",
                                      value="cluster_001")\
                     .classes("w-full").mark("distill-ref")
