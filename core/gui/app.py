@@ -332,10 +332,15 @@ def index():
         with ui.row().classes("w-full gap-4 items-start"):
             # —— 左：项目 + 操作 ——
             with ui.column().classes("w-1/3 gap-2"):
+                # loop 实测修（major·操作错书）：构建用新鲜列表——outline 期间
+                # 新建的书不在旧列表 → value(新书)不在 options → Quasar 清空 value
+                # → _sync 把空写回全局 selected → 完成边沿回落 names[0]=错书
+                STATE.refresh_projects()
                 names0 = [p.name for p in STATE.projects]
                 project_select = ui.select(
                     options=names0 or ["（无项目）"],
-                    value=STATE.selected or None, label="小说项目",
+                    value=(STATE.selected if STATE.selected in names0 else None)
+                    or (names0[0] if names0 else None), label="小说项目",
                 ).classes("w-full").mark("project-select")
                 if not names0:        # A10：无项目禁用·防假选项污染 STATE.selected
                     project_select.props("disable")
@@ -355,7 +360,10 @@ def index():
                 _catalog = {"fn": lambda: None}        # P3 目录在右栏创建·容器后绑定
 
                 def _sync_project():
-                    STATE.selected = project_select.value or ""
+                    # 暂态空值（value 不在 options 被 Quasar 清掉）不得污染全局
+                    # selected——否则别的 client/footer 全跟着回落错书
+                    if project_select.value:
+                        STATE.selected = project_select.value
                     p = STATE.project()
                     refresh_card(p)                    # P1 仪表卡
                     _catalog["fn"]()                   # P3 章节目录
@@ -376,7 +384,11 @@ def index():
                     project_select.set_options(names or ["（无项目）"])
                     if names:
                         project_select.props(remove="disable")
-                        if STATE.selected not in names:
+                        if STATE.selected in names:
+                            # 本 client 显示值与全局对齐（构建期暂态空也在此恢复）
+                            if project_select.value != STATE.selected:
+                                project_select.set_value(STATE.selected)
+                        else:
                             project_select.set_value(names[0])
                     _sync_project()
                     p = STATE.project()
