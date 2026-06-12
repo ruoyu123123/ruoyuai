@@ -42,8 +42,21 @@ def scan_distill_styles(min_chapters: int = 5) -> list[dict]:
             skills = sorted(d.glob("skill*.md")) + sorted(d.glob("*skill*.md"))
             raw = list((d / "原文").glob("*.txt")) if (d / "原文").is_dir() else []
             if skills and len(raw) >= min_chapters:
+                # loop 轮4 修：现存风格库 cluster id 全是 auto_NNN 形态——GUI 复刻
+                # 表单默认值必须取真实第一项（硬编码 cluster_001 对全部库必败）
+                first_cluster = "auto_001"
+                try:
+                    import json as _json
+                    idx = _json.loads((d / "cluster_index.json")
+                                      .read_text(encoding="utf-8"))
+                    cl = idx.get("clusters", idx if isinstance(idx, list) else [])
+                    if cl and cl[0].get("cluster_id"):
+                        first_cluster = cl[0]["cluster_id"]
+                except Exception:
+                    pass
                 out.append({"name": d.name, "title": d.name,
-                            "skill": skills[0].name, "raw_chapters": len(raw)})
+                            "skill": skills[0].name, "raw_chapters": len(raw),
+                            "first_cluster": first_cluster})
     return out
 
 
@@ -203,11 +216,29 @@ class PipelineRunner:
                     return 124
                 return p.returncode
 
+            # loop 轮4 修：cluster_ref 预检——不存在时拦在 API 调用前并给出
+            # 可用列表（原来失败文案一律怪 key·真因被误导）
+            try:
+                _idx = json.loads((style_dir / "cluster_index.json")
+                                  .read_text(encoding="utf-8"))
+                _cl = _idx.get("clusters",
+                               _idx if isinstance(_idx, list) else [])
+                _ids = [c.get("cluster_id") for c in _cl if c.get("cluster_id")]
+                if _ids and cluster_ref not in _ids:
+                    st.last_result = (f"❌ 该风格库没有「{cluster_ref}」——"
+                                      f"可用的参考故事块：{'、'.join(_ids[:5])}"
+                                      f"{' …' if len(_ids) > 5 else ''}")
+                    st.log_buffer.append(f"[gui] {st.last_result}")
+                    return
+            except (OSError, json.JSONDecodeError):
+                pass                       # 无 index 文件 → 交给脚本自己报错
+
             rc = _run(["core/scripts/distill_replicate.py", "--style-skill", str(skills[0]),
                        "--mode", "cluster", "--cluster-ref", cluster_ref,
                        "--project", str(style_dir), "--output", str(replica)], "gen-model 复刻")
             if rc != 0 or not replica.exists():
-                st.last_result = f"❌ 复刻失败（退出码 {rc}）——检查设置页 key 是否填了"
+                st.last_result = (f"❌ 复刻失败（退出码 {rc}）——看日志区详情"
+                                  f"（连接/密钥类报错才需要查设置页）")
                 st.log_buffer.append(f"[gui] {st.last_result}")
                 return
             rc2 = _run(["core/scripts/style_evaluator.py", "--gen", str(replica),

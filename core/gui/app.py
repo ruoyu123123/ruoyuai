@@ -989,15 +989,30 @@ def distill():
                 if not names:
                     style_sel.props("disable")
                     ui.label("还没有可复刻的风格——先在上面「学新风格」学一个")                        .classes("text-xs text-gray-400")
-                ref_input = ui.input("参考故事块（默认 cluster_001·一般不用改）",
-                                     value="cluster_001")\
+                # loop 轮4 修：默认参考块取所选风格的真实第一项（现存库全是
+                # auto_NNN 形态·硬编码 cluster_001 必败）·切风格时联动刷新
+                _fc = {s["name"]: s.get("first_cluster", "auto_001")
+                       for s in styles}
+                _ref0 = _fc.get(names[0], "auto_001") if names else "auto_001"
+                ref_input = ui.input("参考故事块（自动填·一般不用改）",
+                                     value=_ref0)\
                     .classes("w-full").mark("distill-ref")
+
+                def _sync_ref():
+                    fc = _fc.get(style_sel.value)
+                    if fc:
+                        ref_input.set_value(fc)
+                style_sel.on_value_change(lambda e: _sync_ref())
                 warn = ui.label("").classes("text-xs text-red-600").mark("distill-warn")
 
                 def _refresh_styles():
                     """A4：学完风格 → 下拉自动出现新风格。"""
                     try:
-                        fresh = [s["name"] for s in scan_distill_styles()]
+                        fresh_full = scan_distill_styles()
+                        _fc.clear()
+                        _fc.update({s["name"]: s.get("first_cluster", "auto_001")
+                                    for s in fresh_full})
+                        fresh = [s["name"] for s in fresh_full]
                     except Exception:
                         fresh = []
                     style_sel.set_options(fresh or ["（无可复刻风格）"])
@@ -1009,7 +1024,7 @@ def distill():
                 def _start_replicate():
                     STATE.log_buffer.append(
                         f"[gui:event] 点击 测复刻 style={style_sel.value} "
-                        f"ref={(ref_input.value or 'cluster_001').strip()}")
+                        f"ref={(ref_input.value or '').strip() or '(自动)'}")
                     cur = [o for o in (style_sel.options or [])
                            if o != "（无可复刻风格）"]
                     if not cur:
@@ -1017,8 +1032,10 @@ def distill():
                         return
                     if not _check_key_ready(warn):     # A3 统一预检
                         return
-                    ok = RUNNER.run_replicate(style_sel.value,
-                                              (ref_input.value or "cluster_001").strip())
+                    ok = RUNNER.run_replicate(
+                        style_sel.value,
+                        (ref_input.value or "").strip()
+                        or _fc.get(style_sel.value, "auto_001"))
                     if ok:
                         warn.set_text("")
                         ui.notify(f"开始复刻 {style_sel.value} —— 看上方日志和分数",
