@@ -468,6 +468,16 @@ def scan_project(root: Path) -> ProjectInfo:
             pass
     info.clusters_done = len(summarized)
 
+    # 🎉 完本终态（P0-2 缺漏修复 · 2026-06-12）：cluster_emergence_engine 在 ME 池真耗尽
+    # 时写 _数据库/.book_complete.json（完本不是故障）。放在所有「下一步动作」推断的
+    # 最前面短路——完本书绝不再建议写下一块；统计字段（章数/字数/clusters_done）
+    # 已在上方算好，照常给导出页用。完本 note 覆盖解析期可能置的损坏 note（完本是主导状态）。
+    if (db / ".book_complete.json").exists():
+        info.note = "🎉 本书已完本（大势走完）——去导出全文吧"
+        info.next_action = ""
+        info.next_key = ""
+        return info
+
     in_progress = [c for c in clusters if c.get("status") == "in_progress"]
     if in_progress:
         cur = max(in_progress,

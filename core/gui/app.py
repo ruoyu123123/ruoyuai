@@ -377,8 +377,17 @@ def index():
                 project_select.on_value_change(lambda e: _sync_project())
                 _sync_project()
 
+                def _sel_project():
+                    """缺漏修 P1-3（多 tab 串扰）：直读**本 client** 下拉值解析项目——
+                    STATE.selected 是全局·B tab 换书会把 A tab 的任务跑到别的书上。"""
+                    sel = project_select.value or ""
+                    for pr in STATE.projects:
+                        if pr.name == sel:
+                            return pr
+                    return None
+
                 def _start(commands: list[str]):
-                    p = STATE.project()
+                    p = _sel_project()
                     key = (key_input.value or "").strip()
                     STATE.log_buffer.append(
                         f"[gui:event] 点击 {'+'.join(commands)} "
@@ -415,15 +424,69 @@ def index():
                 status_label = ui.label("空闲").classes("text-sm font-mono")\
                     .mark("status-label")
                 result_label = ui.label("").classes("text-sm").mark("result-label")
-                ui.button("🔄 刷新项目", on_click=_on_idle).props("flat dense")
 
-            # —— 右：章节目录（P3·Binder 范式）+ 实时日志 ——
+                # —— 缺漏修 P0-1「拿到作品」：导出全书 + 打开作品文件夹 ——
+                def _export_book():
+                    p = _sel_project()
+                    if not p:
+                        ui.notify("先选项目", type="warning")
+                        return
+                    import subprocess
+                    from frozen_util import child_python
+                    STATE.log_buffer.append(f"[gui:event] 点击 导出全书 {p.name}")
+                    r = subprocess.run(
+                        [child_python(), "core/scripts/export_book.py", str(p.root)],
+                        cwd=str(_REPO), capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=120)
+                    for ln in (r.stderr or "").splitlines():
+                        if ln.strip():
+                            STATE.log_buffer.append(ln)
+                    if r.returncode == 0:
+                        ui.notify("✅ 已导出——点「打开作品文件夹」就能看到全文",
+                                  type="positive", timeout=6000)
+                        try:
+                            import os as _os
+                            _os.startfile(str(p.root / "exports"))
+                        except Exception:
+                            pass
+                    else:
+                        ui.notify("导出失败——看日志区详情", type="negative")
+
+                def _open_folder():
+                    p = _sel_project()
+                    if not p:
+                        ui.notify("先选项目", type="warning")
+                        return
+                    import os as _os
+                    STATE.log_buffer.append(f"[gui:event] 打开作品文件夹 {p.name}")
+                    try:
+                        _os.startfile(str(p.root))
+                    except Exception as e:
+                        ui.notify(f"打开失败：{e}", type="negative")
+
+                with ui.row().classes("gap-2"):
+                    ui.button("📤 导出全书", on_click=_export_book)\
+                        .props("outline color=secondary dense").mark("btn-export")
+                    ui.button("📂 打开作品文件夹", on_click=_open_folder)\
+                        .props("flat dense").mark("btn-folder")
+                    ui.button("🔄 刷新项目", on_click=_on_idle).props("flat dense")
+
+            # —— 右：章节目录（P3·Binder 范式·可点开只读预览）+ 实时日志 ——
             with ui.column().classes("flex-1"):
                 def _scan_sel_chapters():
                     from core.gui.state import scan_chapters
-                    p = STATE.project()
+                    p = _sel_project()
                     return scan_chapters(p.root) if p else []
-                _catalog["fn"] = chapter_catalog(_scan_sel_chapters)
+
+                def _read_chapter(num: int) -> str:
+                    p = _sel_project()
+                    if not p:
+                        return ""
+                    f = p.root / "章节" / f"第{num:03d}章" / f"第{num:03d}章.txt"
+                    if not f.exists():
+                        f = p.root / "章节" / f"第{num}章" / f"第{num}章.txt"
+                    return f.read_text(encoding="utf-8") if f.exists() else "（文件缺失）"
+                _catalog["fn"] = chapter_catalog(_scan_sel_chapters, _read_chapter)
                 _catalog["fn"]()
                 _log_title("流水线日志")
                 log_view = ui.log(max_lines=400).classes(

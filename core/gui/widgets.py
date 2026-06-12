@@ -58,11 +58,34 @@ def book_card():
     return refresh
 
 
-def chapter_catalog(scan_fn):
+def chapter_catalog(scan_fn, read_fn=None):
     """只读章节目录（折叠面板·默认收起不挤日志区）。
 
     scan_fn() → list[{num, title, chars}]（state.scan_chapters 的偏函数）。
-    返回 refresh() 闭包。只读：行上不挂任何点击——驱动器不提供编辑入口。"""
+    read_fn(num) → str 正文（缺漏修 P0-1：行可点开**只读**预览·仍不提供编辑——
+    之前「一个字读不到」是断头路·只读预览不违「驱动器非编辑器」）。
+    返回 refresh() 闭包。"""
+    preview = ui.dialog()
+    with preview, ui.card().classes("w-[44rem] max-h-[85vh] p-0 overflow-hidden"):
+        with ui.row().classes("w-full bg-primary text-white px-4 py-2 "
+                              "items-center justify-between"):
+            pv_title = ui.label("").classes("font-bold")
+            ui.button(icon="close", on_click=preview.close)\
+                .props("flat dense round color=white")
+        pv_body = ui.markdown("").classes(
+            "p-4 overflow-auto max-h-[70vh] whitespace-pre-wrap text-sm")
+
+    def _open_chapter(c):
+        if read_fn is None:
+            return
+        try:
+            text = read_fn(c["num"]) or "（正文为空）"
+        except Exception as e:
+            text = f"（读取失败：{e}）"
+        pv_title.set_text(f"第{c['num']:03d}章 {c['title'] or ''}（只读预览）")
+        pv_body.set_content(text[:60000])
+        preview.open()
+
     with ui.expansion("📚 章节目录").classes("w-full")\
             .props("dense header-class=text-sm").mark("chapter-list"):
         holder = ui.column().classes("w-full gap-0 max-h-64 overflow-auto")
@@ -79,9 +102,14 @@ def chapter_catalog(scan_fn):
                     .classes("text-xs text-gray-400 py-2")
                 return
             for c in chapters:
-                with ui.row().classes(
-                        "w-full items-center gap-2 py-0.5 border-b "
-                        "border-gray-100 no-wrap"):
+                row_cls = ("w-full items-center gap-2 py-0.5 border-b "
+                           "border-gray-100 no-wrap")
+                if read_fn is not None:
+                    row_cls += " cursor-pointer hover:bg-gray-50"
+                row = ui.row().classes(row_cls)
+                if read_fn is not None:
+                    row.on("click", lambda _, cc=c: _open_chapter(cc))
+                with row:
                     ui.label(f"第{c['num']:03d}章").classes(
                         "text-xs font-mono text-gray-500 shrink-0")
                     ui.label(c["title"] or "—").classes(

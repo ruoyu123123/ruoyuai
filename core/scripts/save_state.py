@@ -28,6 +28,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 import chapter_io as cio
 # 2026-05-29 修 章号当cluster号：章号 ⇄ cluster_id 反查走单一权威工具
 import cluster_lookup
+# 2026-06-12 缺漏修复批次1 任务C【原子写改造·P1-1 数据损坏防护】：
+# 写 _数据库/*.json 统一走 atomic_json.atomic_write_json（tmp 唯一名 + fsync + os.replace
+# 原子语义——进程写一半被杀只残留 .tmp、绝不毁掉原文件）。此前 save_json 裸 write_text：
+# 半截写 → 下个读者 json.JSONDecodeError → load_json 兜底成 default → 伏笔表/人物卡/
+# 进度/地图/时间线/道具 整库静默清空。ImportError 兜底见 save_json
+# （照 cluster_choice_apply.py:89-96 范式手写 tmp + replace）。
+try:
+    import atomic_json
+except ImportError:  # 极端环境（脚本被单独拷走执行）缺 atomic_json → save_json 内降级
+    atomic_json = None
 
 
 def _resolve_cluster(root: Path, ch: int) -> tuple[str, bool]:
@@ -56,8 +66,31 @@ def load_json(p: Path, default=None):
 
 
 def save_json(p: Path, data):
+    """统一 JSON 落盘入口（2026-06-12 任务C 原子写改造·P1-1）。
+
+    走 atomic_json.atomic_write_json：tmp 唯一名（pid+uuid）+ fsync + os.replace 原子替换。
+    进程被杀只留 tmp 不毁原文件——本函数是伏笔表/人物卡/进度/地图/时间线/道具 等
+    _数据库 JSON 的唯一写出口，半截写防护在此一处闭环。
+    atomic_json 不可导入时兜底手写 tmp + os.replace（照 cluster_choice_apply.py:89-96 范式，
+    tmp 名加 pid+uuid 防并发交错——不沿用固定 .json.tmp 反模式）。
+    """
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if atomic_json is not None:
+        atomic_json.atomic_write_json(p, data)
+    else:
+        import os as _os
+        import uuid as _uuid
+        tmp = p.parent / f".{p.name}.{_os.getpid()}.{_uuid.uuid4().hex}.tmp"
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            _os.replace(str(tmp), str(p))
+        finally:
+            # 唯一 tmp 名 → 只清理本次自己的 tmp（replace 成功后已不存在·失败时不留垃圾）
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
 
 def find_chapter_file(root: Path, ch: int) -> Path | None:
@@ -750,8 +783,10 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> int:
             result["warnings"].append(f"读 changes.json 失败: {e}")
 
     # Write final checkpoint summary
+    # 2026-06-12 任务C：_数据库/.ecas_checkpoints/*.json 也是数据库 JSON，
+    # 裸 write_text → 统一改走 save_json（原子写·格式与原 ensure_ascii=False/indent=2 一致）
     final_path = checkpoint_dir / f"{cluster_id}_final.json"
-    final_path.write_text(_json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(final_path, result)
     print(f"[ecas-checkpoint] {cluster_id}: {'PASS' if result['passed'] else 'FAIL'}")
     for k, v in result["checks"].items():
         print(f"  {k}: {v}")

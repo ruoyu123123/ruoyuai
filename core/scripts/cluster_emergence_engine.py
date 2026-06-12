@@ -433,6 +433,30 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) 
     }
 
 
+# ───────────────────── 完本终态（P0-2 缺漏修复 · 2026-06-12） ─────────────────────
+# 缺漏报告结论：ME 池耗尽时旧版走 [FAIL] exit 1——把「大势走完=完本」误当故障，
+# 下游 save-state step11 被假失败卡住、GUI 还继续建议写下一块。根治：完本 ≠ 失败。
+BOOK_COMPLETE_MARKER = ".book_complete.json"
+
+
+def write_book_complete_marker(project_root: Path, last_cluster: str) -> Path:
+    """ME 池真耗尽（无可用 ME 且无 finale 可涌现）= 完本，写 _数据库/.book_complete.json。
+
+    标记供 GUI scan_project 识别（提示导出全文·不再建议写下一块）。
+    幂等：标记已存在则不覆盖（保留首次完本时间，重跑 emerge 不刷新 completed_at）。
+    """
+    db = _db_dir_local(project_root)
+    marker = db / BOOK_COMPLETE_MARKER
+    if not marker.exists():
+        payload = {
+            "completed_at": datetime.now().isoformat(timespec="seconds"),
+            "reason": "ME 池耗尽·大势已走完",
+            "last_cluster": str(last_cluster or ""),
+        }
+        marker.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return marker
+
+
 def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     """主入口。"""
     db = project_root / "_数据库"
@@ -456,7 +480,15 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     # 找剩余 ME
     remaining = find_remaining_mes(dashishi, completed_mes)
     if not remaining:
-        return {"ok": False, "error": "大势卡 ME 池已全部完成，无新 cluster 可涌现", "completed_count": len(completed_mes)}
+        # 🎉 完本终态（P0-2 · 2026-06-12）：ME 真耗尽 = 大势已走完 = 完本，不是故障。
+        # 写完本标记 + 返回 book_complete=True（main() 据此 exit 0 · 下游 step11 自然过 ·
+        # 没有候选 → 走向卡不弹）。注意 ok 仍为 False——「没涌现出新 cluster」语义不变，
+        # 既有 consumer 检查 ok 不会误以为有 candidate。
+        marker = write_book_complete_marker(project_root, after_cluster_id)
+        return {"ok": False, "book_complete": True,
+                "error": "大势卡 ME 池已全部完成，无新 cluster 可涌现",
+                "completed_count": len(completed_mes),
+                "marker_path": str(marker)}
 
     # 🆕 2026-06-03 卷=阶段触发点：硬过滤到「当前阶段(卷)」的剩余 ME——核心任务未解前
     # 只在本卷内涌现小走向，绝不跳到下一卷/新副本（根治「单 cluster 塌缩成整副本/整阶段」）。
@@ -721,9 +753,14 @@ def main():
             for line in result.get("summary", []):
                 print(f"     - {line}")
             return 0
-        else:
-            print(f"[FAIL] {result.get('error', '未知错误')}", file=sys.stderr)
-            return 1
+        if result.get("book_complete"):
+            # 🎉 完本终态（P0-2 · 2026-06-12）：ME 池耗尽 = 完本不是失败 → exit 0。
+            # 其他错误路径（启发式无候选/文件损坏等）保持下方 exit 1 不变。
+            print("🎉 本书大势已走完（ME 池耗尽）——这是完本不是故障", file=sys.stderr)
+            print(f"     完本标记: {result.get('marker_path', '')}", file=sys.stderr)
+            return 0
+        print(f"[FAIL] {result.get('error', '未知错误')}", file=sys.stderr)
+        return 1
     return 2
 
 

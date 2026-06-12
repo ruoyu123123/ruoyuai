@@ -552,6 +552,21 @@ def run_command(command: str, project: str, *, key: str | None = None,
     summary = RunSummary(plan_id=plan_id, command=command)
     steps = sorted(plan.get("steps", []), key=lambda s: float(s.get("n", 0)))
 
+    # 🔴 空壳 plan 拒跑（P2 工程债批次1 · 2026-06-12 缺漏报告结论）：
+    # check-quality / reconcile 等 _program_driven_status=NOT-YET 模板零 scripts/
+    # 零 must_spawn_agent/零 pause/零 touch_outputs——orchestrator 机械走步会变成
+    # 「每步啥都不干 → step_complete → end_plan ok」的**假成功**。
+    # 边界：单个空 step 合法（如纯 expected_outputs 校验步），只拦「全部 step 全空」。
+    def _step_is_shell(s: dict) -> bool:
+        return not (s.get("scripts") or s.get("must_spawn_agent")
+                    or s.get("pause_for_user") or s.get("touch_outputs"))
+
+    if all(_step_is_shell(s) for s in steps):
+        raise OrchestratorError(
+            f"plan {command} 是未程序驱动化的空壳模板（NOT-YET）·拒绝假成功执行"
+            f"（全部 {len(steps)} 步均无 scripts/must_spawn_agent/pause_for_user/"
+            f"touch_outputs——先把创作步骤落为 gen-model 脚本再接 orchestrator）")
+
     total_steps = len(steps)
     for step in steps:
         n, name = step.get("n"), step.get("name", "")
