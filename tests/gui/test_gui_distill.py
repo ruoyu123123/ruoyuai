@@ -96,4 +96,6 @@ async def test_replicate_with_key_starts(user, d_env, monkeypatch):
     user.find(marker="btn-replicate").click()
     await user.should_see("开始复刻")
     assert captured.get("style") == "测试风格"
-    assert captured.get("ref") == "cluster_001"
+    # loop 轮4 行为变更：默认 ref 取风格库 cluster_index 真实第一项·
+    # fixture 无 index → 回退 auto_001（现存全部风格库都是 auto_NNN 形态）
+    assert captured.get("ref") == "auto_001"
