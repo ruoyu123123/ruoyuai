@@ -24,6 +24,7 @@ class _FakeSummary:
     def __init__(self, plan_id="plan_t", paused_at=None):
         self.plan_id = plan_id
         self.paused_at = paused_at
+        self.completed = []   # 对齐 orchestrator.RunSummary（runner 查 book_complete 短路）
 
 
 @pytest.fixture

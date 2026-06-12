@@ -27,10 +27,11 @@ from nicegui import background_tasks, ui  # noqa: E402
 
 from core.gui.runner import (PipelineRunner, active_key_ready,  # noqa: E402
                               list_profiles_masked)
+from core.gui.single_instance import probe_existing_instance  # noqa: E402
 from core.gui.state import (AppState, classify_line,  # noqa: E402
                             install_stderr_tee)
 from core.gui.theme import COMMAND_LABELS, apply_theme  # noqa: E402
-from core.gui.widgets import book_card, chapter_catalog  # noqa: E402
+from core.gui.widgets import book_card, chapter_catalog, db_viewer  # noqa: E402
 
 # P4 日志着色（NovelAI 来源着色 × iA「颜色只传信息」·classify_line 与持久日志同源）
 _LOG_LV_CLS = {"ERROR": "text-red-400", "WARN": "text-amber-400"}
@@ -439,11 +440,17 @@ def index():
                     if not p:
                         ui.notify("先选项目", type="warning")
                         return
+                    if getattr(p, "chapters_written", 0) == 0:
+                        # 复验修：0 活章必然失败——预检替代事后挫败
+                        ui.notify("这本书还没有正文章节——先写一块再导出",
+                                  type="warning")
+                        return
                     import os as _os
                     import subprocess
                     from nicegui import run
                     from frozen_util import child_python
                     STATE.log_buffer.append(f"[gui:event] 点击 导出全书 {p.name}")
+                    btn_export.disable()       # 防双击并发写同一目标文件
 
                     def _do():
                         # UTF-8 env：孤儿尾段警告是防正文静默丢失的唯一防线，
@@ -457,28 +464,33 @@ def index():
                             encoding="utf-8", errors="replace", timeout=120,
                             env=env)
                     try:
-                        r = await run.io_bound(_do)
-                    except Exception as e:
-                        ui.notify(f"导出出错：{e}", type="negative")
-                        return
-                    stderr = r.stderr or ""
-                    for ln in stderr.splitlines():
-                        if ln.strip():
-                            STATE.log_buffer.append(ln)
-                    if r.returncode == 0:
-                        if "pending_tail" in stderr or "未拼接" in stderr:
-                            ui.notify("⚠️ 已导出·但书末有一段未入章的内容没进全文"
-                                      "——看日志区详情", type="warning",
-                                      timeout=9000)
-                        else:
-                            ui.notify("✅ 已导出——点「打开作品文件夹」就能看到全文",
-                                      type="positive", timeout=6000)
                         try:
-                            _os.startfile(str(p.root / "exports"))
-                        except Exception:
-                            pass
-                    else:
-                        ui.notify("导出失败——看日志区详情", type="negative")
+                            r = await run.io_bound(_do)
+                        except Exception as e:
+                            ui.notify(f"导出出错：{e}", type="negative")
+                            return
+                        stderr = r.stderr or ""
+                        for ln in stderr.splitlines():
+                            if ln.strip():
+                                STATE.log_buffer.append(ln)
+                        if r.returncode == 0:
+                            # 只匹配真孤儿行「未拼接的 pending_tail 孤儿」——
+                            # 「孤儿检测失败（不影响导出）」的 WARN 不该误触降级
+                            if "未拼接的 pending_tail 孤儿" in stderr:
+                                ui.notify("⚠️ 已导出·但书末有一段未入章的内容没进全文"
+                                          "——看日志区详情", type="warning",
+                                          timeout=9000)
+                            else:
+                                ui.notify("✅ 已导出——点「打开作品文件夹」就能看到全文",
+                                          type="positive", timeout=6000)
+                            try:
+                                _os.startfile(str(p.root / "exports"))
+                            except Exception:
+                                pass
+                        else:
+                            ui.notify("导出失败——看日志区详情", type="negative")
+                    finally:
+                        btn_export.enable()
 
                 def _open_folder():
                     p = _sel_project()
@@ -492,11 +504,30 @@ def index():
                     except Exception as e:
                         ui.notify(f"打开失败：{e}", type="negative")
 
+                # —— P0-3 设定库只读查看器（正典毒化第一级缓解·只看不改）——
+                def _read_db(name: str) -> str:
+                    from core.gui.state import read_db_json
+                    p = _sel_project()
+                    return read_db_json(p.root, name) if p else "（先选项目）"
+                _open_db = db_viewer(_read_db)
+
+                def _open_db_viewer():
+                    p = _sel_project()
+                    if not p:
+                        ui.notify("先选项目", type="warning")
+                        return
+                    STATE.log_buffer.append(f"[gui:event] 打开 设定库 {p.name}")
+                    _open_db()
+
                 with ui.row().classes("gap-2"):
                     btn_export = ui.button("📤 导出全书", on_click=_export_book)\
                         .props("outline color=secondary dense").mark("btn-export")
                     ui.button("📂 打开作品文件夹", on_click=_open_folder)\
                         .props("flat dense").mark("btn-folder")
+                    # 只读查看·🔴 不进 _mount_pipeline_panel 的 buttons 禁用列表——
+                    # 运行中也能随时翻设定（只读无写冲突）
+                    ui.button("📚 设定库", on_click=_open_db_viewer)\
+                        .props("flat dense").mark("btn-db-viewer")
                     ui.button("🔄 刷新项目", on_click=_on_idle).props("flat dense")
 
             # —— 右：章节目录（P3·Binder 范式·可点开只读预览）+ 实时日志 ——
@@ -549,6 +580,21 @@ def plans_page():
                         .mark("no-plans")
                     ui.label("一切正常——写作中断时这里会出现续跑入口").classes("text-xs text-gray-400")
                 for it in items:
+                    # 2026-06-13 修：损坏 plan 不再静默消失——可见 + 可清除
+                    if it.get("corrupt"):
+                        with ui.card().classes("w-full"):
+                            with ui.row().classes("items-center gap-2 w-full"):
+                                ui.badge("⚠ 任务记录已损坏")\
+                                    .props("color=negative")
+                                ui.label(it["plan_id"])\
+                                    .classes("text-xs text-gray-400")
+                            ui.label("文件不是合法 JSON·无法续跑——清除会移入"
+                                     " .corrupt/ 备份（可恢复·不直接删）")\
+                                .classes("text-xs text-gray-500")
+                            ui.button("🗑 清除",
+                                      on_click=lambda _, x=it: _clear_corrupt(x))\
+                                .props("flat dense color=negative")
+                        continue
                     cmd_cn = COMMAND_LABELS.get(it["command"], it["command"])
                     try:
                         done, total = it["progress"].split("/")
@@ -576,7 +622,23 @@ def plans_page():
                                       on_click=lambda _, x=it: _abort(x))\
                                 .props("flat dense color=negative")
 
+        def _clear_corrupt(it: dict):
+            # 照 _abort 范式：运行中一律拒绝（清除只动文件不停线程）
+            if STATE.running:
+                ui.notify("有任务正在运行——先点底部「⏹ 停止」，停稳后再清除",
+                          type="warning")
+                return
+            if RUNNER.clear_corrupt_plan(it.get("path", "")):
+                ui.notify("已清除损坏记录（移入 .corrupt/ 可恢复）", type="info")
+                _render()
+            else:
+                ui.notify("清除失败——看日志", type="negative")
+
         def _abort(it: dict):
+            if STATE.running:
+                ui.notify("有任务正在运行——先点底部「⏹ 停止」，停稳后再放弃",
+                          type="warning")
+                return
             if RUNNER.abort_plan(it["plan_id"]):
                 ui.notify("已放弃该任务", type="info")
                 _render()
@@ -966,7 +1028,36 @@ def init_pages():
     ui.page("/settings")(settings_page)
 
 
+def _graceful_shutdown():
+    """关窗保护（napp.on_shutdown）：任务在跑 → RUNNER.stop() 协作取消（step 边界
+    生效·不等线程结束·shutdown 不阻塞）——已完成步保留·下次打开可从 Plan 续跑。
+    只 append 日志缓冲（缓冲自带文件落盘·stderr tee 已装·再 print 会重复入缓冲）。"""
+    if STATE.running:
+        RUNNER.stop()
+        STATE.log_buffer.append(
+            "[gui:run] 关闭中——已请求体面停止·下次打开可从 Plan 续跑")
+
+
 def main(native: bool = False, port: int = 8080):
+    # —— 单实例闸（ui.run 前·任何初始化副作用前·exe 双击两次/端口冲突的数据安全）——
+    verdict = probe_existing_instance(port)
+    if verdict == "healthy":
+        import webbrowser
+        print(f"[gui:run] 若渝AI 已在运行——直接打开已有窗口 "
+              f"http://127.0.0.1:{port}/", file=sys.stderr)
+        webbrowser.open(f"http://127.0.0.1:{port}/")
+        sys.exit(0)
+    if verdict == "unhealthy":
+        msg = (f"端口被占用·请先关闭旧窗口"
+               f"（127.0.0.1:{port} 被其他程序占用或旧实例无响应）")
+        print(msg, file=sys.stderr)
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, msg, "若渝AI", 0x30)
+        except Exception:
+            pass  # 非 Windows / windowed 异常都不挡退出
+        sys.exit(1)
+
     install_stderr_tee(STATE.log_buffer)
     from core.gui.state import ensure_data_version_marker
     ensure_data_version_marker()       # P1-5 升级迁移锚点（失败不阻断）
@@ -983,6 +1074,22 @@ def main(native: bool = False, port: int = 8080):
     except Exception:
         pass
     init_pages()
+    # —— 关窗保护：点 X 关窗 → 体面停止（协作取消·不等线程·shutdown 不阻塞）——
+    from nicegui import app as napp
+    napp.on_shutdown(_graceful_shutdown)
+    if native:
+        # pywebview 关窗确认（已查 nicegui 3.13 源码：window_args → create_window /
+        # start_args → webview.start 透传）——误关先弹「确认退出」·on_shutdown 兜底
+        try:
+            napp.native.window_args.setdefault("confirm_close", True)
+            napp.native.start_args.setdefault("localization", {
+                "global.quitConfirmation":
+                    "确定关闭若渝AI？正在跑的任务会先体面停下·下次可从 Plan 续跑",
+                "global.ok": "确定",
+                "global.cancel": "取消",
+            })
+        except Exception:
+            pass  # native 配置失败不挡启动（确认框是增强·非必需）
     ui.run(title="若渝AI", port=port, native=native, reload=False,
            show=not native, language="zh-CN")
 

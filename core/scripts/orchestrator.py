@@ -222,6 +222,19 @@ def _strip_python_prefix(cmd_line: str) -> list[str]:
     return tokens
 
 
+def _script_timeout_s() -> float:
+    """步级 watchdog 阈值（秒）。env RUOYUAI_SCRIPT_TIMEOUT_S 可调·默认 1800
+    （30min——gen_writer 一个 cluster 多轮 LLM 可能 10min+·阈值宽到绝不误杀）。
+    非法/非正值一律回退默认（调用时读·测试可 monkeypatch env）。"""
+    import os as _os
+    raw = (_os.environ.get("RUOYUAI_SCRIPT_TIMEOUT_S") or "").strip()
+    try:
+        v = float(raw) if raw else 1800.0
+    except ValueError:
+        v = 1800.0
+    return v if v > 0 else 1800.0
+
+
 def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
                           label: str = "step") -> int:
     """frozen-safe：进程内 importlib 跑脚本（不起子进程）。
@@ -233,6 +246,17 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
     脚本 print 走 sys.stderr（已被 GUI StderrTee 接管）→ 日志照常流入 UI。
     脚本须有 main()（本库脚本一致满足）。共享解释器状态（sys.argv/cwd/单例）用
     try/finally 还原，避免步间污染。
+
+    🔴 步级 watchdog（防 GUI running 永锁·2026-06-13）：dev 子进程路径有
+    SCRIPT_TIMEOUT 兜底，但 frozen 进程内调用此前**无限阻塞**——脚本挂死 →
+    工作线程永不返回 → GUI running 永锁、按钮全禁、非技术用户只能重启 exe。
+    现 main_fn 放 daemon 子线程跑 + join(RUOYUAI_SCRIPT_TIMEOUT_S·默认 1800s)，
+    超时返回 124（orchestrator 判 fail → plan 停本步·可续跑）。
+    ⚠️ 泄漏风险：Python 线程无法强杀，超时后弃置的子线程**可能还在写文件**——
+    该步骤产物可能不完整，续跑会重做本步（expected_outputs 校验 + 脚本幂等兜底）；
+    argv/cwd 在超时返回时照常还原，弃置线程读到还原后的全局状态属泄漏代价的一部分。
+    SystemExit 在子线程内接住取 e.code、其余异常带回本线程重抛——与原 inline
+    调用的 SystemExit/异常处理语义完全一致（外层 except Exception → rc=3）。
     """
     import importlib
     import os as _os
@@ -271,19 +295,41 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
             print(f"[orchestrator][{label}] 脚本 {mod_name} 无 main()，frozen 下无法进程内调用",
                   file=sys.stderr)
             return 3
+        # 签名适配（真 distill e2e 抓出）：8 个脚本（consolidate_author_profile 等）是
+        # main(argv) 风格——有必填位置参则传 sys.argv[1:]（已 set 进 sys.argv）。
+        import inspect
         try:
-            # 签名适配（真 distill e2e 抓出）：8 个脚本（consolidate_author_profile 等）是
-            # main(argv) 风格——有必填位置参则传 sys.argv[1:]（已 set 进 sys.argv）。
-            import inspect
+            sig_params = [p for p in inspect.signature(main_fn).parameters.values()
+                          if p.default is inspect.Parameter.empty
+                          and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        except (ValueError, TypeError):
+            sig_params = []
+
+        # 🔴 watchdog：main_fn 放 daemon 子线程跑·join 超时 → 124（见函数 docstring）。
+        import threading as _threading
+        outcome: dict = {}
+
+        def _invoke():
             try:
-                sig_params = [p for p in inspect.signature(main_fn).parameters.values()
-                              if p.default is inspect.Parameter.empty
-                              and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
-            except (ValueError, TypeError):
-                sig_params = []
-            ret = main_fn(sys.argv[1:]) if sig_params else main_fn()
-        except SystemExit as e:           # 脚本用 sys.exit() 退出
-            ret = e.code
+                outcome["ret"] = main_fn(sys.argv[1:]) if sig_params else main_fn()
+            except SystemExit as e:       # 脚本用 sys.exit() 退出
+                outcome["ret"] = e.code
+            except BaseException as e:    # 带回调用线程重抛（保持原异常语义）
+                outcome["exc"] = e
+
+        timeout_s = _script_timeout_s()
+        worker = _threading.Thread(target=_invoke, name=f"inproc-{mod_name}",
+                                   daemon=True)
+        worker.start()
+        worker.join(timeout_s)
+        if worker.is_alive():
+            print(f"[orchestrator][{label}] [watchdog] 脚本 {mod_name} 超时"
+                  f"（{timeout_s:g}s）·标记失败可续跑——弃置线程可能仍在写文件·"
+                  f"该步骤产物可能不完整·续跑会重做本步", file=sys.stderr)
+            return 124
+        if "exc" in outcome:
+            raise outcome["exc"]          # 落外层 except Exception → rc=3（原语义）
+        ret = outcome.get("ret")
         return int(ret) if isinstance(ret, int) else (0 if ret is None else 3)
     except Exception as e:                # 脚本内部异常 → 当失败退出码（不崩 GUI）
         import traceback
@@ -551,13 +597,22 @@ def run_command(command: str, project: str, *, key: str | None = None,
         _tpl_steps = (pt.load_template(command) or {}).get("steps", [])
         # 零 steps 也是空壳（end_plan 平凡通过=假成功）——not steps 同拒
         if not _tpl_steps or all(_step_is_shell(s) for s in _tpl_steps):
+            # 标记词「未实现命令」区分于 resume 路径的「空壳模板」——GUI 文案
+            # 据此分别映射（新建≠旧版任务）
             raise OrchestratorError(
-                f"plan {command} 是未程序驱动化的空壳模板（NOT-YET）·拒绝假成功执行"
+                f"plan {command} 是未实现命令（NOT-YET 空壳模板）·拒绝假成功执行"
                 f"（全部 {len(_tpl_steps)} 步均无 scripts/must_spawn_agent/"
                 f"pause_for_user/touch_outputs——先把创作步骤落为 gen-model 脚本"
                 f"再接 orchestrator）")
 
     if resume_plan_id:
+        # 复验修（tampered 先验）：被外部改过的 plan 否则会跑若干步（烧 API）后
+        # 才在第一次 step_complete 写盘时炸 PlanTamperedError——一步不跑先拦。
+        if pt.verify_plan(resume_plan_id) == "tampered":
+            raise OrchestratorError(
+                f"plan {resume_plan_id} 防伪校验未过（文件被 plan_tracker 之外的"
+                f"途径改过）——在「Plan 续跑」页放弃它；确为合法手改可用 "
+                f"plan_tracker reattest 重新盖章后再续跑")
         plan_id = resume_plan_id
     else:
         plan_id = pt.create_plan(command, project, chapter=chapter, key=key)
@@ -636,7 +691,9 @@ def run_command(command: str, project: str, *, key: str | None = None,
         # ——跳过本步剩余执行性动作·expected_outputs 已由 emerge 写好·step 正常完成。
         _bc_marker = (Path(ctx["project_root"]) / "_数据库"
                       / ".book_complete.json")
-        if step.get("must_spawn_agent") == "novel-outline-planner" \
+        _msa = step.get("must_spawn_agent")
+        _msa_list = [_msa] if isinstance(_msa, str) else (_msa or [])
+        if "novel-outline-planner" in _msa_list \
                 and step.get("pause_for_user") and _bc_marker.exists():
             print(f"[orchestrator] 🎉 检测到完本标记——跳过涌现 judge/走向卡"
                   f"（本书大势已走完·去导出全文吧）", file=sys.stderr)
@@ -661,12 +718,37 @@ def run_command(command: str, project: str, *, key: str | None = None,
             summary.completed.append(StepOutcome(n, name, "completed", "book_complete"))
             continue
 
+        # 2.6) 复验修（P1-4 残余半边·paused 续跑防重烧 API）：断点续跑回到停顿步
+        # 时（上次跑到弹卡才停的），judge 产物已落盘——不再重派 judge，直接拿既有
+        # 候选弹卡。仅 resume 路径生效（fresh run 用户期望重新生成）。scripts（如
+        # emergence 引擎）仍重跑——确定性脚本不调 LLM、幂等无害。
+        _skip_dispatch = False
+        if resume_plan_id and step.get("pause_for_user") \
+                and step.get("must_spawn_agent") \
+                and step.get("agent_executor") != "script":
+            _jrp2 = step.get("judge_report_path")
+            _decl2 = next(iter(_jrp2.values()), None) \
+                if isinstance(_jrp2, dict) else _jrp2
+            if _decl2:
+                _rp2 = Path(resolve_placeholders(str(_decl2), ctx))
+                if not _rp2.is_absolute():
+                    _rp2 = Path(ctx["project_root"]) / _rp2
+                try:
+                    _skip_dispatch = _rp2.exists() and isinstance(
+                        json.loads(_rp2.read_text(encoding="utf-8")),
+                        (dict, list))
+                except (OSError, json.JSONDecodeError, ValueError):
+                    _skip_dispatch = False
+            if _skip_dispatch:
+                print(f"[orchestrator] ♻ 续跑复用已有 JudgeReport（{_rp2.name}）"
+                      f"·跳过重派 judge 不重烧 API", file=sys.stderr)
+
         # 3) must_spawn_agent（含 ROUND 循环）
         # agent_executor=="script"：创意 wrapper（novel-writer/novel-chapter-splitter）
         # 的真实工作已由本步 scripts[]（gen_writer.py/chapter_splitter.py）完成——
         # must_spawn_agent 仅为 Claude 编排路径兼容 + end_plan 校验保留，不派 judge。
         agents = step.get("must_spawn_agent")
-        if agents and step.get("agent_executor") != "script":
+        if agents and step.get("agent_executor") != "script" and not _skip_dispatch:
             if isinstance(agents, str):
                 agents = [agents]
             loop_cfg = step.get("control_flow", {}).get("round_loop") \

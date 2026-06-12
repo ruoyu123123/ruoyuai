@@ -428,6 +428,41 @@ def scan_chapters(root: Path) -> list:
     return out
 
 
+# ============ 数据库只读查看（P0-3 正典毒化第一级缓解 · 只看不改） ============
+# 白名单 = 真实项目 _数据库/ 实测存在的文件名（凿窍纪 ls 确认）。「锁定事实」没有独立
+# 文件——locked_facts 挂在 人物卡.json 每张角色卡内（与 locked_fact_cross_scene_scanner
+# 读取路径同源），看「人物卡」tab 即可。
+# 🔴 严守只读：本层绝不提供写回（可编辑白名单是待拍板的产品决策）。
+DB_VIEW_FILES: tuple = ("人物卡", "世界状态", "伏笔表", "大势卡", "事件簇")
+
+
+def read_db_json(project_root: Path, name: str) -> str:
+    """读 _数据库/<name>.json 给 GUI 只读渲染（纯函数·零 nicegui 依赖）。
+
+    返回值永远是「可直接展示的字符串」，绝不向 UI 层抛异常：
+    - 正常 → json 重排（ensure_ascii=False indent=2·只为可读·不回写磁盘）
+    - 损坏 JSON / 非法 UTF-8 → 前缀提示行 + 原文原样（让用户看得出哪里坏·只看不改）
+    - 缺文件 / 越白名单 → 中文提示行（缺文件不是故障——大纲初始化前本就没有）
+    """
+    if name not in DB_VIEW_FILES:
+        return f"（不支持查看：{name}——可看：{'、'.join(DB_VIEW_FILES)}）"
+    p = Path(project_root) / "_数据库" / f"{name}.json"
+    if not p.exists():
+        return f"（{name}.json 还不存在——建好大纲后自动生成）"
+    try:
+        # errors="replace"：非法 UTF-8 字节不抛 UnicodeDecodeError——
+        # 走下方「损坏 JSON 展示原文」同一条路径（损坏正是要看的东西）
+        raw = p.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return f"（{name}.json 读取失败：{e}）"
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return (f"⚠️ {name}.json 不是合法 JSON（可能被中断的写入弄坏了）"
+                f"——以下为原文原样（只读）：\n\n{raw}")
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
 def _cluster_key_of(cluster_id: str) -> str:
     m = re.search(r"(\d+)", cluster_id or "")
     return m.group(1) if m else ""

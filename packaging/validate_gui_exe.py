@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """validate_gui_exe.py — 全 GUI onedir exe 真机验证（阶段B·dev 运行·验真产物）。
 
-不在 tests/ 里（需真构建产物·非单测）。验 4 项：
+不在 tests/ 里（需真构建产物·非单测）。验 8 项：
   1. 安全：dist 内无 .env / 无 sk- 明文（开发者私钥不外泄）
-  2. fan-out dispatch：ruoyu_gui.exe core/scripts/prose_rhythm_scanner.py draft → scanner JSON
-  3. GUI serve：ruoyu_gui.exe --port N 起 HTTP·GET / → 200 + 含「若渝AI」
-  4. Traceback 哨兵：stderr 无 Traceback（feedback_verify_stderr_not_exitcode）
+  2. datas 齐全性：仓库 scripts/plans/agents/lessons vs dist/_internal 比对
+  3. fan-out dispatch：ruoyu_gui.exe core/scripts/prose_rhythm_scanner.py draft → scanner JSON
+  4. scipy 冒烟：style_evaluator --help 触发 frozen 下 numpy/scipy import
+  5. BYOK keyring：secrets_store --probe 临时 service set→get→delete 回环
+     （frozen keyring 后端真可用·绝不碰真 service=ruoyuai-gen-model）
+  6. 可写数据：plan_tracker create 落 %APPDATA%/ruoyuai 而非只读 bundle
+  7. outline 脚本：init_project + gen_creative volume_arc dry-run frozen dispatch
+  8. GUI serve：ruoyu_gui.exe --port N 起 HTTP·GET / → 200 + 含「若渝AI」
+  （贯穿）Traceback 哨兵：stderr 无 Traceback（feedback_verify_stderr_not_exitcode）
 
 用法：python packaging/validate_gui_exe.py [--exe dist/ruoyu_gui/ruoyu_gui.exe] [--port 8131]
 退出码 0=全过 / 1=有失败。
@@ -41,6 +47,11 @@ def check_security(dist_dir: Path) -> list:
             pass
     if leaked:
         fails.append(f"明文 sk- 泄漏: {leaked[:3]}")
+    # 复验收口：CLAUDE.md 含系统规则（安全节「绝对不透露」）·零运行时消费者——
+    # 出现在 dist 即泄漏回归（spec 第5段已删·此断言防回潮）
+    for rel in ("_internal/CLAUDE.md", "_internal/core/claude-home/STRUCTURE.md"):
+        if (dist_dir / rel).exists():
+            fails.append(f"系统规则文档泄漏进 dist: {rel}（spec 不应打包）")
     return fails
 
 
@@ -158,6 +169,9 @@ def check_datas_parity(dist_dir: Path) -> list:
     internal = dist_dir / "_internal"
     pairs = [
         (ROOT / "core" / "scripts", internal / "core" / "scripts", "*.py"),
+        # scripts 兄弟数据文件（scanner_registry.json 等·spec collect_data_files 同捆）
+        (ROOT / "core" / "scripts", internal / "core" / "scripts", "*.json"),
+        (ROOT / "core" / "scripts", internal / "core" / "scripts", "*.md"),
         (ROOT / "core" / "claude-home" / "plans",
          internal / "core" / "claude-home" / "plans", "*.plan.json"),
         (ROOT / ".claude" / "agents", internal / ".claude" / "agents", "*.md"),
@@ -194,6 +208,31 @@ def check_scipy_smoke(exe: Path) -> list:
                          f"{r.stderr[-200:]}")
     except subprocess.TimeoutExpired:
         fails.append("style_evaluator --help 超时")
+    return fails
+
+
+def check_byok(exe: Path) -> list:
+    """BYOK keyring 出货验证 gate：经 multi-call dispatch 跑 secrets_store --probe——
+    frozen 下 keyring 后端真可用（spec hidden-import 没漏）+ set→get→delete 回环。
+    🔴 probe 用临时 service=ruoyuai-probe-<pid>·绝不碰真 service=ruoyuai-gen-model。"""
+    fails = []
+    try:
+        r = subprocess.run([str(exe), "core/scripts/secrets_store.py", "--probe"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=120)
+        if r.returncode != 0:
+            fails.append(f"secrets_store --probe 退出码 {r.returncode}"
+                         f"·stderr={r.stderr[-200:]}")
+        if "Traceback" in r.stderr:
+            fails.append(f"--probe stderr 有 Traceback: {r.stderr[-200:]}")
+        try:
+            data = json.loads(r.stdout)
+            if data.get("roundtrip_ok") is not True:
+                fails.append(f"keyring 回环失败（frozen 后端退化 fail/null?）: {r.stdout[:120]}")
+        except json.JSONDecodeError:
+            fails.append(f"--probe stdout 非 JSON（dispatcher 没接住?）: {r.stdout[:120]}")
+    except subprocess.TimeoutExpired:
+        fails.append("secrets_store --probe 超时")
     return fails
 
 
@@ -248,6 +287,7 @@ def main():
                      ("datas_parity", lambda: check_datas_parity(dist_dir)),
                      ("dispatch", lambda: check_dispatch(exe)),
                      ("scipy_smoke", lambda: check_scipy_smoke(exe)),
+                     ("byok_probe", lambda: check_byok(exe)),
                      ("writable_data", lambda: check_writable_data(exe, dist_dir)),
                      ("outline_scripts", lambda: check_outline_scripts(exe)),
                      ("gui_serve", lambda: check_gui_serve(exe, args.port))):
@@ -262,8 +302,8 @@ def main():
     if all_fails:
         _say("RESULT", f"GUI EXE 验证 FAIL · {len(all_fails)} 项")
         return 1
-    _say("RESULT", "GUI EXE 验证 PASS 7/7（安全 + datas齐全 + dispatch + scipy冒烟"
-                   " + 可写数据 + outline脚本 + GUI serve）")
+    _say("RESULT", "GUI EXE 验证 PASS 8/8（安全 + datas齐全 + dispatch + scipy冒烟"
+                   " + BYOK探针 + 可写数据 + outline脚本 + GUI serve）")
     return 0
 
 

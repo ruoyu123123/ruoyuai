@@ -513,8 +513,11 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
                 (_wal / _fn).write_text(
                     json.dumps(_payload, ensure_ascii=False, indent=2),
                     encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as _e:
+            # 磁盘满/只读等极端故障——别静默吞：下游 step11 会因 expected_outputs
+            # 缺失报 FileNotFoundError，这行警告是唯一可读的根因线索
+            print(f"[WARN] 完本 WAL 写入失败（step11 可能因产物缺失停下）: {_e}",
+                  file=sys.stderr)
         return {"ok": False, "book_complete": True,
                 "error": "大势卡 ME 池已全部完成，无新 cluster 可涌现",
                 "completed_count": len(completed_mes),

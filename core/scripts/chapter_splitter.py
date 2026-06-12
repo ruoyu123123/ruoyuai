@@ -39,6 +39,9 @@ from pathlib import Path
 # v18：统一章节读写走 chapter_io
 sys.path.insert(0, str(Path(__file__).parent))
 import chapter_io as cio
+# 2026-06-13 残余非原子写收编：pending_tail 是跨 cluster 补料产物（下个 cluster 拼接消费），
+# 半截文件 = 下次联合切割拼进残缺正文。原子落盘；WAL/.pre_opening 属日志/临时写，不收编。
+from atomic_json import atomic_write_text
 
 
 def strip_title(body: str):
@@ -469,7 +472,8 @@ def _write_pending_tail(project_root, cluster_key, text):
     d = Path(project_root) / "章节" / f"cluster_{cluster_key}_draft"
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"cluster_{cluster_key}_pending_tail.txt"
-    p.write_text(text.rstrip() + "\n", encoding="utf-8")
+    # 2026-06-13 残余非原子写收编：产物落盘走原子写（内容口径不变：rstrip + 末尾单 \n）。
+    atomic_write_text(p, text.rstrip() + "\n")
     return p
 
 

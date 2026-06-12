@@ -2623,6 +2623,105 @@ def _collect_author_style_fingerprint(s: "DatabaseScanner") -> dict | None:
     return fp  # active：注入 writer
 
 
+def _collect_global_feedback_must_read() -> dict | None:
+    """v19.3: 全局 MEMORY 跨项目 feedback 注入（高价值）→ must_read 条目 or None。
+
+    从 C:/Users/<user>/.claude/projects/<harness_dir>/memory/ 取 feedback_*.md 摘要
+    （Claude Code user data）。harness_dir = cwd 的 dirname 化形式
+    （如 X:\\path\\to\\project → X--path-to-project）。
+
+    🔴 frozen fallback（2026-06-13）：exe 用户机上开发机 memory 路径不存在 → 本注入
+    此前整层静默为空。home miss/为空时改读随 exe 出货的汇编
+    lessons/global_feedback_rules.md（frozen_util.resource_path 定位·dev=仓库根·
+    汇编由 assemble_global_feedback_rules.py 产出）。home 路径优先（开发机行为不变）。
+    """
+    import os as _os
+    user_home = Path(_os.path.expanduser("~"))
+    memory_files = []
+    cand_root = user_home / ".claude" / "projects"
+    if cand_root.is_dir():
+        # 优先匹配当前 cwd 对应的 harness dir
+        cwd = Path(_os.getcwd())
+        # Windows: X:\path\to\project → X--path-to-project
+        cwd_str = str(cwd).replace(":", "-").replace("\\", "-").replace("/", "-")
+        # 候选 dirname 列表（优先精确匹配 cwd，然后挨个找含 feedback 的）
+        preferred_names = [cwd_str, cwd_str.rstrip("-")]
+        all_subs = sorted(cand_root.iterdir(), key=lambda p: p.name)
+        # 先试精确匹配
+        for name in preferred_names:
+            target = cand_root / name
+            if target.is_dir():
+                mem = target / "memory"
+                if mem.is_dir():
+                    memory_files = sorted(mem.glob("feedback_*.md"))
+                    break
+        # 兜底：扫所有项目找到 feedback 数最多的
+        if not memory_files:
+            best_count = 0
+            for sub in all_subs:
+                mem = sub / "memory"
+                if mem.is_dir():
+                    files = list(mem.glob("feedback_*.md"))
+                    if len(files) > best_count:
+                        best_count = len(files)
+                        memory_files = sorted(files)
+    if memory_files:
+        # 取前 12 条最新（按修改时间）
+        memory_files = sorted(memory_files, key=lambda p: p.stat().st_mtime, reverse=True)[:12]
+        # 抽 description 字段（frontmatter 第一行 description 后内容）
+        digest = []
+        for mp in memory_files:
+            try:
+                lines = mp.read_text(encoding="utf-8").splitlines()
+                desc = ""
+                for ln in lines[:8]:
+                    if ln.startswith("description:"):
+                        desc = ln[len("description:"):].strip()
+                        break
+                if desc:
+                    digest.append({"file": mp.name, "desc": desc[:160]})
+            except Exception:
+                continue
+        if digest:
+            return {
+                "path": "全局 MEMORY feedback (跨项目元教训)",
+                "priority": "P1",
+                "focus": "审查 12 条元教训摘要 + 命中本场景的展开细节",
+                "reason": f"含 {len(digest)} 条跨项目元失败模式（catchphrase 单一化 / 章节衔接断层 / offscreen 消费链 / 词汇 vs 结构 anti-slop 等）",
+                "digest": digest,
+            }
+    # frozen fallback：home memory miss/无 description 可抽 → bundle 汇编文件
+    try:
+        from frozen_util import resource_path as _res_path
+        gfr = _res_path("core", "claude-home", "lessons", "global_feedback_rules.md")
+        if not gfr.exists():
+            return None
+        # 汇编文件每条规则节 = "<!-- FEEDBACK_RULE: <fname> -->" 锚 + "> description: ..." 行
+        digest = []
+        cur_file = None
+        for ln in gfr.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"<!--\s*FEEDBACK_RULE:\s*(\S+)\s*-->", ln)
+            if m:
+                cur_file = m.group(1)
+                continue
+            if cur_file and ln.startswith("> description:"):
+                digest.append({"file": cur_file,
+                               "desc": ln[len("> description:"):].strip()[:160]})
+                cur_file = None
+        if not digest:
+            return None
+        return {
+            "path": "core/claude-home/lessons/global_feedback_rules.md (bundle 汇编 fallback)",
+            "priority": "P1",
+            "focus": f"审查 {len(digest)} 条元教训摘要 + 命中本场景的展开细节（全文见汇编文件）",
+            "reason": f"开发机 memory 不可达（frozen exe 用户机）→ 读随 exe 出货的汇编·含 {len(digest)} 条跨项目元失败模式",
+            "digest": digest,
+            "files": [str(gfr)],
+        }
+    except Exception:
+        return None
+
+
 def build_manifest(project_root: Path, chapter: int) -> dict:
     s = DatabaseScanner(project_root, chapter)
     preflight = s.preflight()
@@ -2941,63 +3040,11 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         })
 
     # v19.3: 全局 MEMORY 跨项目 feedback 注入（高价值）
-    # 从 C:/Users/<user>/.claude/projects/<harness_dir>/memory/ 取 feedback_*.md 摘要（Claude Code user data）
-    # harness_dir = cwd 的 dirname 化形式（如 X:\path\to\project → X--path-to-project）
-    import os as _os
-    user_home = Path(_os.path.expanduser("~"))
-    memory_files = []
-    cand_root = user_home / ".claude" / "projects"
-    if cand_root.is_dir():
-        # 优先匹配当前 cwd 对应的 harness dir
-        cwd = Path(_os.getcwd())
-        # Windows: X:\path\to\project → X--path-to-project
-        cwd_str = str(cwd).replace(":", "-").replace("\\", "-").replace("/", "-")
-        # 候选 dirname 列表（优先精确匹配 cwd，然后挨个找含 feedback 的）
-        preferred_names = [cwd_str, cwd_str.rstrip("-")]
-        all_subs = sorted(cand_root.iterdir(), key=lambda p: p.name)
-        # 先试精确匹配
-        for name in preferred_names:
-            target = cand_root / name
-            if target.is_dir():
-                mem = target / "memory"
-                if mem.is_dir():
-                    memory_files = sorted(mem.glob("feedback_*.md"))
-                    break
-        # 兜底：扫所有项目找到 feedback 数最多的
-        if not memory_files:
-            best_count = 0
-            for sub in all_subs:
-                mem = sub / "memory"
-                if mem.is_dir():
-                    files = list(mem.glob("feedback_*.md"))
-                    if len(files) > best_count:
-                        best_count = len(files)
-                        memory_files = sorted(files)
-    if memory_files:
-        # 取前 12 条最新（按修改时间）
-        memory_files = sorted(memory_files, key=lambda p: p.stat().st_mtime, reverse=True)[:12]
-        # 抽 description 字段（frontmatter 第一行 description 后内容）
-        digest = []
-        for mp in memory_files:
-            try:
-                lines = mp.read_text(encoding="utf-8").splitlines()
-                desc = ""
-                for ln in lines[:8]:
-                    if ln.startswith("description:"):
-                        desc = ln[len("description:"):].strip()
-                        break
-                if desc:
-                    digest.append({"file": mp.name, "desc": desc[:160]})
-            except Exception:
-                continue
-        if digest:
-            must_read.append({
-                "path": "全局 MEMORY feedback (跨项目元教训)",
-                "priority": "P1",
-                "focus": "审查 12 条元教训摘要 + 命中本场景的展开细节",
-                "reason": f"含 {len(digest)} 条跨项目元失败模式（catchphrase 单一化 / 章节衔接断层 / offscreen 消费链 / 词汇 vs 结构 anti-slop 等）",
-                "digest": digest,
-            })
+    # 2026-06-13 提取为 _collect_global_feedback_must_read（frozen fallback：home memory
+    # miss/为空 → bundle 汇编 lessons/global_feedback_rules.md·开发机行为不变）
+    _fb_must_read = _collect_global_feedback_must_read()
+    if _fb_must_read:
+        must_read.append(_fb_must_read)
 
     # v17.8 DCAS：检测前章是否切了 pre_opening 给本章
     pre_opening_path = project_root / "章节" / f"第{chapter:03d}章" / ".pre_opening.txt"

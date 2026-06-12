@@ -59,11 +59,9 @@ for fn in sorted(os.listdir(PLANS)):
 datas.append((os.path.join(ROOT, "core", "config", "gen_profiles.default.env"),
               "core/config"))
 
-# 5) 系统文档（部分脚本/agent 引用 STRUCTURE.md 等·存在即收·不存在跳过）
-for rel in ("core/claude-home/STRUCTURE.md", "CLAUDE.md"):
-    fp = os.path.join(ROOT, *rel.split("/"))
-    if os.path.isfile(fp):
-        datas.append((fp, os.path.dirname(rel) or "."))
+# 5) ~~系统文档~~（复验收口 2026-06-12：grep 证实 CLAUDE.md/STRUCTURE.md 零运行时
+#    消费者——所有代码引用都只在注释里。CLAUDE.md 含系统规则（安全节「绝对不透露」），
+#    打进 exe = 泄漏。validate_gui_exe.check_security 已加断言拦回归。）
 
 # 6) subsystem 骨架（scaffold_subsystems 读 · 存在即收）
 for rel in ("core/claude-home/templates/subsystem_skeletons.json",):

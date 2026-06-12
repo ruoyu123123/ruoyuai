@@ -51,12 +51,9 @@ def main():
                     failures.append(f"{f.name}::{name}")
                     print(f"  [FAIL] {f.name}::{name}: {e}")
                     traceback.print_exc()
-    print("=" * 54)
-    print(f"测试 {total} · 通过 {passed} · 失败 {failed}")
-    for fl in failures:
-        print(f"  [X] {fl}")
     # tests/gui 是 pytest 风格（依赖 nicegui fixture）·零依赖循环发现不了——
-    # 环境有 pytest+nicegui 就委托跑·没有则跳过（保持本 runner 零依赖承诺）
+    # 环境有 pytest+nicegui 就委托跑·没有则跳过（保持本 runner 零依赖承诺）。
+    # 复验修：委托必须在汇总行**之前**——否则 gui 失败时汇总仍显示「失败 0」。
     gui_dir = tests_dir / "gui"
     if gui_dir.is_dir():
         try:
@@ -70,9 +67,13 @@ def main():
                 cwd=str(tests_dir.parent), timeout=600)
             if r.returncode != 0:
                 failed += 1
-                print("  [X] tests/gui (pytest)")
+                failures.append("tests/gui (pytest)")
         except ImportError:
             print("-- 跳过 tests/gui（缺 pytest 或 nicegui）--")
+    print("=" * 54)
+    print(f"测试 {total} · 通过 {passed} · 失败 {failed}")
+    for fl in failures:
+        print(f"  [X] {fl}")
     return 1 if failed else 0
 
 

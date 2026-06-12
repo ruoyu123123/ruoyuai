@@ -119,7 +119,7 @@ def main():
         steps.append(("frozen_smoke 自验", run_smoke))
     steps.append((f"build ruoyu_gui{'(生产窗口模式)' if args.production else ''}",
                   lambda: build("ruoyu_gui.spec", "ruoyu_gui", production=args.production)))
-    steps.append(("GUI exe 验证 7/7", lambda: run_gui_validate(args.gui_port)))
+    steps.append(("GUI exe 验证 8/8", lambda: run_gui_validate(args.gui_port)))
     steps.append(("安全闸", security_gate))
 
     for name, fn in steps:

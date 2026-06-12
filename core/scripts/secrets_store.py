@@ -134,3 +134,57 @@ def redact(text: str) -> str:
     out = _KEY_PATTERNS[0].sub(r"\1***", out)
     out = _KEY_PATTERNS[1].sub(r"\1***", out)
     return out
+
+
+# ============ --probe CLI（BYOK 出货验证 gate · exe 上 keyring 零验证缺口 · 2026-06-13）============
+_PROBE_USERNAME = "__probe__"           # probe 专用用户名（双下划线·与 profile 名空间隔离）
+
+
+def probe() -> dict:
+    """keyring 真后端探活：is_available() + set→get→delete 回环。
+
+    🔴 回环用临时 service（ruoyuai-probe-<pid>·每进程独立·用完即删），
+    绝不碰真 SERVICE=ruoyuai-gen-model——出货验证跑在真机上，用户真 key 不可受影响。
+    哨兵值是一次性随机串非真 key，但仍不打印（与本模块安全不变量同纪律）。
+    """
+    import os
+
+    available = is_available()
+    roundtrip_ok = False
+    if available and _keyring is not None:
+        svc = f"ruoyuai-probe-{os.getpid()}"
+        sentinel = "probe-" + os.urandom(8).hex()
+        try:
+            _keyring.set_password(svc, _PROBE_USERNAME, sentinel)
+            roundtrip_ok = _keyring.get_password(svc, _PROBE_USERNAME) == sentinel
+        except Exception:
+            roundtrip_ok = False
+        finally:
+            try:                         # 清理临时 service（set 失败时 delete 抛 → 同样吞掉）
+                _keyring.delete_password(svc, _PROBE_USERNAME)
+            except Exception:
+                pass
+    return {"available": available, "roundtrip_ok": roundtrip_ok}
+
+
+def main(argv=None) -> int:
+    """CLI 入口（frozen multi-call dispatch 经 orchestrator.run_script_in_process 调 main()）。"""
+    import argparse
+    import json
+    import sys
+
+    ap = argparse.ArgumentParser(prog="secrets_store", description="BYOK keyring 薄抽象工具")
+    ap.add_argument("--probe", action="store_true",
+                    help="后端探活 + 临时 service 回环（绝不碰真 service）·JSON 输出·失败非零退出")
+    args = ap.parse_args(argv)
+    if args.probe:
+        result = probe()
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if (result["available"] and result["roundtrip_ok"]) else 1
+    ap.print_help(sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(main())

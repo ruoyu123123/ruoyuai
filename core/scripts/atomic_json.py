@@ -106,7 +106,14 @@ def with_file_lock(target: Path, timeout: float = 10.0, poll: float = 0.1):
             pass
 
 
-def atomic_write_json(target: Path, data: dict, indent: int = 2, ensure_ascii: bool = False):
+def atomic_write_text(target: Path, text: str, encoding: str = "utf-8"):
+    """原子写纯文本（2026-06-13 残余非原子写收编）：tmp(pid+uuid) + fsync + os.replace。
+
+    与 atomic_write_json 同一范式 —— 崩溃/断电时目标文件要么旧版完整、要么新版完整，
+    绝不留半截。供草稿 txt / 章节正文 txt / pending_tail / plan JSON（自带序列化）等
+    产物落盘复用。临时/日志类写盘不必收编。
+    """
+    target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     # 2026-05-29 复审修复（盲区②）：tmp 名固定 → 两进程并发写同一 target 时 tmp 文件交错损坏。
     # 改：tmp 名嵌入 os.getpid() + uuid4 hex，进程间/进程内全局唯一，互不踩踏。
@@ -114,9 +121,8 @@ def atomic_write_json(target: Path, data: dict, indent: int = 2, ensure_ascii: b
     tmp = target.parent / f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     try:
         # 2026-05-29 修：os.replace 前先 flush + fsync 落盘，否则崩溃时目标文件可能 0 字节。
-        payload = json.dumps(data, ensure_ascii=ensure_ascii, indent=indent)
-        with open(str(tmp), "w", encoding="utf-8") as f:
-            f.write(payload)
+        with open(str(tmp), "w", encoding=encoding) as f:
+            f.write(text)
             f.flush()
             os.fsync(f.fileno())
         # 2026-05-29 复审修复（盲区②）：Windows 下若 target 句柄被别的进程短暂持有（杀软/索引器/
@@ -140,6 +146,14 @@ def atomic_write_json(target: Path, data: dict, indent: int = 2, ensure_ascii: b
                 tmp.unlink()
         except OSError:
             pass
+
+
+def atomic_write_json(target: Path, data: dict, indent: int = 2, ensure_ascii: bool = False):
+    # 2026-06-13 重构：写盘核心（tmp pid+uuid + fsync + os.replace + PermissionError 退避）
+    # 下沉到 atomic_write_text 共用，本函数只负责 JSON 序列化 —— 字节内容/异常行为与旧实现
+    # 完全一致（json.dumps 失败仍发生在建 tmp 之前，不留 tmp）。
+    payload = json.dumps(data, ensure_ascii=ensure_ascii, indent=indent)
+    atomic_write_text(target, payload, encoding="utf-8")
 
 
 def safe_update_json(target: Path, update_fn, default: dict = None, timeout: float = 10.0):
@@ -174,4 +188,11 @@ if __name__ == "__main__":
                 assert False, "应该超时"
             except TimeoutError:
                 pass
+        # 2026-06-13：atomic_write_text smoke（写后读回一致 + 覆盖替换 + 无 tmp 残留）
+        t = Path(td) / "test.txt"
+        atomic_write_text(t, "第一章\n中文正文。\n")
+        assert t.read_text(encoding="utf-8") == "第一章\n中文正文。\n"
+        atomic_write_text(t, "覆盖后的正文\n")
+        assert t.read_text(encoding="utf-8") == "覆盖后的正文\n"
+        assert not [x for x in Path(td).iterdir() if x.name.endswith(".tmp")]
         print("✓ atomic_json smoke test 通过")

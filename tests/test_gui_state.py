@@ -346,9 +346,11 @@ def test_scan_projects_tolerates_bad_project():
 
 # ============ PipelineRunner ============
 class _FakeSummary:
-    def __init__(self, plan_id="p1", paused_at=None):
+    def __init__(self, plan_id="p1", paused_at=None, completed=None):
         self.plan_id = plan_id
         self.paused_at = paused_at
+        # runner._work 完本短路会扫 summary.completed 的 detail（与真 RunSummary 对齐）
+        self.completed = completed or []
 
 
 def _run_and_wait(r: gr.PipelineRunner, *args, **kw):

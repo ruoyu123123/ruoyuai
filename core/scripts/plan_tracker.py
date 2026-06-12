@@ -81,6 +81,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+# 2026-06-13 残余非原子写收编：plan JSON 写盘走 atomic_json（tmp pid+uuid + fsync +
+# os.replace）——崩溃/断电留半截 plan = json 解析失败 = attestation/断点恢复全废。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import atomic_json  # noqa: E402
+
 
 # ============ 常量 / 路径 ============
 
@@ -151,7 +156,11 @@ def _load_json(path: Path, default: Any = None) -> Any:
 def _save_json(path: Path, data: Any) -> None:
     text = _json_dump_safe(data)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    # 2026-06-13 残余非原子写收编：裸 write_text → atomic_write_text 原子落盘。
+    # 序列化仍由 _json_dump_safe 权威产出（ensure_ascii=False / indent=2 /
+    # sort_keys=False + 不可序列化 → RuntimeError 自检），字节内容与旧实现完全一致，
+    # 只换写盘方式（tmp 唯一名 + fsync + os.replace · 崩溃不留半截 plan）。
+    atomic_json.atomic_write_text(path, text)
 
 
 # ============ 防篡改 attestation（P1-1，借鉴 planning-with-files）============
@@ -382,10 +391,11 @@ def _substitute(text: str, project: str, chapter: int | None, key: str | None) -
         if key:
             m = re.search(r"(\d+)", key)
             if m:
-                num_str = m.group(1)
-                next_num = int(num_str) + 1
-                # 保持原零填充宽度 · 但不带前缀
-                next_key = f"{next_num:0{len(num_str)}d}"
+                next_num = int(m.group(1)) + 1
+                # 复验修：强制 :03d 与 cluster_emergence_engine 完本/涌现两处
+                # 对齐（原「保持原宽度」在 --key 2/0001 时与 engine 写的 WAL
+                # 文件名不一致 → step11 expected_outputs FileNotFoundError 卡死）
+                next_key = f"{next_num:03d}"
             else:
                 next_key = key + "_next"
         out = out.replace("{next_key}", next_key)
@@ -910,7 +920,10 @@ def find_active_plans() -> list[dict]:
 
     容错策略：
     - 任何目录不存在 → 跳过
-    - 任何 JSON 损坏 → 跳过该文件
+    - 任何 JSON 损坏 → 不再静默消失，append 损坏条目
+      {"corrupt": True, "path": str, "plan_id": 文件名 stem, "plan": {}}
+      （消费方按 "corrupt" 键区分；带空 "plan" dict 保既有
+      entry["plan"].get(...) 消费者 tolerant）
     - 缺失关键字段 → 视为非活跃（保守）
 
     本函数永不抛异常，最坏情况返回 []。
@@ -939,7 +952,14 @@ def find_active_plans() -> list[dict]:
                 "tampered": verify_attestation(d) == "tampered",  # P1-1
             })
         except Exception:
-            # 损坏 JSON / IO 错误：跳过
+            # 2026-06-13 修：损坏 JSON / IO 错误不再静默消失——append corrupt
+            # 条目让 GUI Plan 续跑页可见 + 可清除（移 .corrupt/ 可恢复）
+            result.append({
+                "corrupt": True,
+                "path": str(f).replace("\\", "/"),
+                "plan_id": plan_id,  # = 文件名 stem
+                "plan": {},          # 既有消费者 entry["plan"].get(...) tolerant
+            })
             continue
     return result
 

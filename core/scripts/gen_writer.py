@@ -45,6 +45,7 @@ from gen_model_loader import (  # noqa: E402
 )
 import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化权威口径
 import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster_006" ↔ "6"）
+from atomic_json import atomic_write_text  # noqa: E402 · 2026-06-13 草稿/CHANGES 产物原子落盘（崩溃不留半截）
 import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
 
 
@@ -203,32 +204,52 @@ def _collect_feedback_rules() -> str:
 
     设计目标：让 writer 在每段生成时都看到全局禁令（不依赖主代理记得）。
     抽取策略：取 lesson 文件的「## 规则」段（如有），否则取文件头部 1500 字。
+
+    🔴 frozen fallback（2026-06-13）：开发机 memory 路径在 exe 用户机上不存在 →
+    本层此前整层静默为空。home miss/为空时改读随 exe 出货的汇编
+    lessons/global_feedback_rules.md（_collect_feedback_rules_bundle_fallback）。
+    home 路径优先（开发机行为不变）。
     """
     try:
         memory_dir = Path.home() / ".claude" / "projects" / "D--Desktop-ruoyuai" / "memory"
-        if not memory_dir.exists():
-            return ""
         rules_chunks = []
-        for f in sorted(memory_dir.glob("feedback_*.md")):
-            try:
-                text = f.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            # frontmatter 检查 type=feedback
-            if "type: feedback" not in text:
-                continue
-            # 抽 "## 规则" 段或文件正文头部
-            m = re.search(r"##\s*规则[\s\S]*?(?=\n##\s|\Z)", text)
-            chunk = m.group(0) if m else text[text.find("---\n", 5) + 4:]
-            chunk = chunk.strip()[:2500]
-            if not chunk:
-                continue
-            rules_chunks.append(f"### 来自 {f.stem}\n\n{chunk}")
+        if memory_dir.exists():
+            for f in sorted(memory_dir.glob("feedback_*.md")):
+                try:
+                    text = f.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                # frontmatter 检查 type=feedback
+                if "type: feedback" not in text:
+                    continue
+                # 抽 "## 规则" 段或文件正文头部
+                m = re.search(r"##\s*规则[\s\S]*?(?=\n##\s|\Z)", text)
+                chunk = m.group(0) if m else text[text.find("---\n", 5) + 4:]
+                chunk = chunk.strip()[:2500]
+                if not chunk:
+                    continue
+                rules_chunks.append(f"### 来自 {f.stem}\n\n{chunk}")
         if not rules_chunks:
-            return ""
+            return _collect_feedback_rules_bundle_fallback()
         header = "# 🔴 全局 feedback 规则（自动注入 · 来自 memory/feedback_*.md）\n\n"
         header += "以下是历史用户反馈沉淀的全局禁令，写作时**逐条遵守**。违反 = 出货后被打回 + lesson 复发。\n\n"
         return header + "\n\n---\n\n".join(rules_chunks)
+    except Exception:
+        return ""
+
+
+def _collect_feedback_rules_bundle_fallback() -> str:
+    """home memory miss/为空 → 读随 exe 出货的汇编 lessons/global_feedback_rules.md 全文。
+
+    汇编文件由 assemble_global_feedback_rules.py 机械产出（自带「逐条遵守」header 框架行，
+    与 home 路径注入形态等价）；frozen_util.resource_path 定位（frozen=_MEIPASS·dev=仓库根）。
+    """
+    try:
+        from frozen_util import resource_path
+        p = resource_path("core", "claude-home", "lessons", "global_feedback_rules.md")
+        if not p.exists():
+            return ""
+        return p.read_text(encoding="utf-8").strip()
     except Exception:
         return ""
 
@@ -1501,7 +1522,8 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
     draft_path = draft_dir / f'cluster_{cluster_id:03d}_draft.txt'
     changes_path = draft_dir / f'cluster_{cluster_id:03d}_changes.json'
 
-    draft_path.write_text(body, encoding='utf-8')
+    # 2026-06-13 残余非原子写收编：草稿是 cluster 主轨核心产物，原子落盘（tmp+fsync+replace）。
+    atomic_write_text(draft_path, body)
 
     # 补全 changes 元数据
     cjk = cio.count_cjk(body)  # v27 修复：统一 CJK 口径走 chapter_io（覆盖扩展 CJK）
@@ -1531,8 +1553,9 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
     se.setdefault('waivers', [])
     se.setdefault('uncertainty_flags', [])
     changes.setdefault('schema_version', 'v2.cluster')
-    changes_path.write_text(json.dumps(changes, ensure_ascii=False, indent=2),
-                            encoding='utf-8')
+    # 2026-06-13 同批收编：changes.json 半截损坏 = 下游 audit_hub/split_cluster_changes 解析崩。
+    atomic_write_text(changes_path,
+                      json.dumps(changes, ensure_ascii=False, indent=2))
 
     print(f"\n[gen_writer] 写出:", file=sys.stderr)
     print(f"  正文: {draft_path} ({cjk} CJK)", file=sys.stderr)

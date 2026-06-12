@@ -132,3 +132,4 @@ ruoyu.7z
 
 # GUI 运行态日志(dev=repo/logs·实测产物·不入库)
 logs/
+/data_version.json

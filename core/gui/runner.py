@@ -248,6 +248,18 @@ class PipelineRunner:
         import plan_tracker as pt
         out = []
         for item in pt.find_active_plans():
+            # 2026-06-13 修：损坏 plan 透传给 GUI（不再静默消失）——渲染
+            # 「⚠ 任务记录已损坏 + 🗑 清除」，清除走 clear_corrupt_plan。
+            if item.get("corrupt"):
+                out.append({"plan_id": item.get("plan_id", ""),
+                            "command": "损坏",
+                            "project": "",
+                            "key": "",
+                            "progress": "?",
+                            "resumable": False,
+                            "corrupt": True,
+                            "path": item.get("path", "")})
+                continue
             plan = item.get("plan") or {}
             # 测试/钩子产物（__hook_e2e__ 等）不给真实用户看（视觉评审抓出）
             if str(plan.get("project", "")).startswith("__"):
@@ -267,13 +279,65 @@ class PipelineRunner:
                         "resumable": resumable})
         return out
 
+    def clear_corrupt_plan(self, path: str) -> bool:
+        """清除一个损坏的 plan 文件（GUI「🗑 清除」按钮）。
+
+        不直接删——移到同目录 .corrupt/ 子目录（可恢复·_scan 只 glob 顶层
+        *.json 所以移走即从列表消失）；照 abort_plan 范式：运行中一律拒绝
+        （避免和正在写盘的流水线打架）。
+        """
+        if self.state.running:
+            self.state.log_buffer.append(
+                "[gui] 拒绝清除：有任务正在运行——先「⏹ 停止」再清除")
+            return False
+        try:
+            src = Path(path)
+            if not src.is_file():
+                self.state.log_buffer.append(f"[gui] 清除失败：文件不存在 {path}")
+                return False
+            dst_dir = src.parent / ".corrupt"
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            dst = dst_dir / src.name
+            if dst.exists():
+                # 重名兜底：加时间戳后缀，绝不覆盖已有备份
+                import time as _t
+                dst = dst_dir / f"{src.stem}.{int(_t.time())}{src.suffix}"
+            src.replace(dst)
+            self.state.log_buffer.append(
+                f"[gui:event] 已清除损坏任务记录 {src.name} → {dst}")
+            return True
+        except Exception as e:
+            self.state.log_buffer.append(f"[gui] 清除失败：{e}")
+            return False
+
     def abort_plan(self, plan_id: str) -> bool:
-        """放弃一个 plan（僵尸/不再需要的任务·GUI「🗑 放弃」按钮）。"""
+        """放弃一个 plan（僵尸/不再需要的任务·GUI「🗑 放弃」按钮）。
+
+        复验修（major）：运行中一律拒绝——「放弃」只改 plan 状态不停线程，
+        用户会误以为是停止，且 aborted 后从续跑列表消失、流水线照烧 API。
+        """
         import plan_tracker as pt
+        if self.state.running:
+            self.state.log_buffer.append(
+                "[gui] 拒绝放弃：有任务正在运行——先「⏹ 停止」再放弃")
+            return False
         try:
             pt.abort_plan(plan_id, reason="用户在 GUI 放弃")
             self.state.log_buffer.append(f"[gui:event] 放弃任务 {plan_id}")
             return True
+        except pt.PlanTamperedError:
+            # 复验修：被篡改的僵尸 plan 否则永远放弃失败、永久滞留列表。
+            # 放弃语义本就是丢弃——reattest 重新盖章后再 abort 不削弱 L2
+            # 防伪目标（防的是伪造「完成」，不是阻止用户丢弃）。
+            try:
+                pt.reattest_plan(plan_id)
+                pt.abort_plan(plan_id, reason="用户在 GUI 放弃（reattest 后）")
+                self.state.log_buffer.append(
+                    f"[gui:event] 放弃任务 {plan_id}（防伪校验不符·已重新盖章后放弃）")
+                return True
+            except Exception as e:
+                self.state.log_buffer.append(f"[gui] 放弃失败（篡改自救也失败）：{e}")
+                return False
         except Exception as e:
             self.state.log_buffer.append(f"[gui] 放弃失败：{e}")
             return False
@@ -300,11 +364,24 @@ class PipelineRunner:
                     step_callback=_on_step,
                     cancel_event=self._cancel)
                 if summary.paused_at is not None:
-                    st.last_result = (f"⏸ {cmd} 停在 step {summary.paused_at} 等用户输入"
-                                      f"（plan={summary.plan_id}·可续跑）")
+                    if self._cancel.is_set():
+                        # 复验修：停止打断走向卡等待也走 paused 路径——文案要说
+                        # 「已停止」而不是「等用户输入」（用户刚按了停止按钮）
+                        st.last_result = (f"⏹ 已按你的要求停止（停在 step "
+                                          f"{summary.paused_at}·数据不丢·"
+                                          f"可在「Plan 续跑」继续）")
+                    else:
+                        st.last_result = (f"⏸ {cmd} 停在 step {summary.paused_at} "
+                                          f"等用户输入（plan={summary.plan_id}·可续跑）")
                     st.log_buffer.append(f"[gui] {st.last_result}")
                     return
                 st.log_buffer.append(f"[gui] ✅ {cmd} 完成（plan={summary.plan_id}）")
+                # 复验修：完本短路那一次 save-state 不能再说「可继续写」
+                if any(getattr(o, "detail", "") == "book_complete"
+                       for o in summary.completed):
+                    st.last_result = "🎉 本书已完本（大势走完）——去导出全文吧"
+                    st.log_buffer.append(f"[gui] {st.last_result}")
+                    return
             # 完成信号按命令定制（A11·非技术用户要明确的「下一步去哪」）
             _MSG = {
                 "outline": f"✅ 《{project}》已建好（大纲+全套设定）——去写作台写第一章",
@@ -313,7 +390,11 @@ class PipelineRunner:
             }
             st.last_result = _MSG.get(commands[-1], "✅ 全部完成")
         except orc.OrchestratorError as e:
-            if "空壳模板" in str(e):
+            if "未实现命令" in str(e):
+                # 新建路径撞 NOT-YET 命令（仅 CLI 可达·GUI 没暴露入口）
+                st.last_result = f"❌ {commands[0]} 这个功能还没做完——暂时不可用"
+                st.log_buffer.append(f"[gui] {st.last_result}")
+            elif "空壳模板" in str(e):
                 # 复验修：旧版任务的开发者黑话 → 人话·且不给死循环的「可续跑」建议
                 st.last_result = "❌ 这是旧版本创建的任务·当前版本无法续跑——可在「Plan 续跑」页放弃它"
                 st.log_buffer.append(f"[gui] {st.last_result}")

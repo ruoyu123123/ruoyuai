@@ -47,7 +47,14 @@ v18 起：正文 → 第NNN章.txt（纯正文），CHANGES → 第NNN章_change
 
 import json
 import re
+import sys
 from pathlib import Path
+
+# 2026-06-13 残余非原子写收编：章节正文 txt / _changes.json 是核心产物，写盘走 atomic_json
+# （tmp pid+uuid + fsync + os.replace）——崩溃/断电不留半截章节文件（半截正文/JSON 会被
+# 下游 read_body/read_changes 当真消费）。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import atomic_json  # noqa: E402
 
 CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 SELF_EVAL_SEP = "---CHANGES_SELF_EVAL---"
@@ -177,10 +184,10 @@ def read_changes(project_root, ch: int) -> dict:
 # ============ 写 ============
 
 def write_body(project_root, ch: int, text: str) -> Path:
-    """写纯正文到标准路径（章节/第NNN章/第NNN章.txt）。"""
+    """写纯正文到标准路径（章节/第NNN章/第NNN章.txt）。
+    2026-06-13 起原子落盘（内容口径不变：rstrip + 末尾单 \\n；mkdir 由原子写内置）。"""
     p = body_path(project_root, ch)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text.rstrip() + "\n", encoding="utf-8")
+    atomic_json.atomic_write_text(p, text.rstrip() + "\n")
     return p
 
 
@@ -192,8 +199,8 @@ def write_changes(project_root, ch: int, changes: dict) -> Path:
     changes.setdefault("factual", {})
     changes.setdefault("self_eval", {})
     p = changes_path(project_root, ch)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(changes, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 2026-06-13 残余非原子写收编：半截 _changes.json → read_changes/audit_hub 解析崩。
+    atomic_json.atomic_write_text(p, json.dumps(changes, ensure_ascii=False, indent=2))
     return p
 
 
