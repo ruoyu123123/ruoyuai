@@ -2912,18 +2912,33 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         _repo_root = _bundle_root()
     except Exception:
         _repo_root = project_root.parent.parent.parent
-    lessons_root = _repo_root / "core" / "claude-home" / "lessons"
+    # P1-8 缺漏修（2026-06-12）：frozen 下 MAPE-K 闭环断裂——self_heal_engine 把
+    # runtime_lessons.md 写 user_data_dir()（%APPDATA%）·此处只读 bundle → exe 运行时
+    # 学到的教训永远不被 writer/judge 看到。双根合并：bundle（出厂教训）+ 用户态（运行时学的）。
+    lessons_roots = [_repo_root / "core" / "claude-home" / "lessons"]
+    try:
+        from frozen_util import user_data_dir as _udd
+        _user_lessons = _udd() / "core" / "claude-home" / "lessons"
+        if _user_lessons != lessons_roots[0]:
+            lessons_roots.append(_user_lessons)
+    except Exception:
+        pass
     lessons_files = []
-    if lessons_root.exists():
-        lessons_files = sorted(lessons_root.glob("*.md"))
-        if lessons_files:
-            must_read.append({
-                "path": f"core/claude-home/lessons/（{len(lessons_files)} 个文件）",
-                "priority": "P2",
-                "focus": "writer/judge 启动前阅读：跨项目经验沉淀（含 §1-10 各类教训）",
-                "reason": f"避免重复历史错误",
-                "files": [str(p.relative_to(_repo_root)) for p in lessons_files],
-            })
+    _seen_lesson_names = set()
+    for _lr in lessons_roots:
+        if _lr.exists():
+            for _lp in sorted(_lr.glob("*.md")):
+                if _lp.name not in _seen_lesson_names:
+                    _seen_lesson_names.add(_lp.name)
+                    lessons_files.append(_lp)
+    if lessons_files:
+        must_read.append({
+            "path": f"core/claude-home/lessons/（{len(lessons_files)} 个文件）",
+            "priority": "P2",
+            "focus": "writer/judge 启动前阅读：跨项目经验沉淀（含 §1-10 各类教训 + 运行时自学）",
+            "reason": "避免重复历史错误",
+            "files": [str(_lp) for _lp in lessons_files],
+        })
 
     # v19.3: 全局 MEMORY 跨项目 feedback 注入（高价值）
     # 从 C:/Users/<user>/.claude/projects/<harness_dir>/memory/ 取 feedback_*.md 摘要（Claude Code user data）

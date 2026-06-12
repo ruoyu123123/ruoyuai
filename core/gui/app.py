@@ -132,6 +132,14 @@ def _mount_pipeline_panel(status_label, result_label, log_view, *,
             .style("font-variant-numeric:tabular-nums").mark("foot-words")
         foot_delta = ui.label("").classes("text-xs word-delta")\
             .style("font-variant-numeric:tabular-nums")
+        # P1-1 停止按钮（step 边界协作取消·已完成步保留·plan 可续跑·全页可用）
+        def _stop():
+            if RUNNER.stop():
+                ui.notify("将在当前步骤结束后停下——已完成的不会丢，可在「Plan 续跑」继续",
+                          type="info", timeout=6000)
+        btn_stop = ui.button("⏹ 停止", on_click=_stop)\
+            .props("flat dense color=negative").mark("btn-stop")
+        btn_stop.bind_visibility_from(STATE, "running")
 
     def _selected_chars() -> int:
         """must_fix#3：跨页可用——直接重扫 selected 项目（_WC_CACHE 命中纯 stat 开销）。"""

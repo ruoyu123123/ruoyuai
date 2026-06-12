@@ -54,6 +54,7 @@ class PipelineRunner:
         self.state = state
         self._run_lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._cancel = threading.Event()   # P1-1 停止按钮（step 边界协作取消）
 
     # ---- 对 UI 暴露的入口 ----
     def start(self, commands: list[str], project: str, key: str, *,
@@ -68,6 +69,7 @@ class PipelineRunner:
             return False
         self.state.running = True
         self.state.last_result = ""
+        self._cancel.clear()
         # thread.start() 在系统线程资源枯竭时抛 RuntimeError——若不兜底，锁已 acquire
         # 但 _work 永不运行 → finally 永不 release → 后续 start() 永久被拒、running
         # 永久卡 True，非技术用户只能重启 exe（对抗审查根因 D）。
@@ -231,6 +233,15 @@ class PipelineRunner:
             self._thread = None
             self._run_lock.release()
 
+    def stop(self):
+        """请求停止当前流水线（step 边界生效·已完成步保留·plan 可续跑）。"""
+        if self.state.running:
+            self._cancel.set()
+            self.state.log_buffer.append(
+                "[gui:event] 用户请求停止——将在当前步骤结束后停下（数据不丢·可续跑）")
+            return True
+        return False
+
     def list_resumable(self) -> list[dict]:
         """活跃（未完成）plan 列表——断点续跑入口。"""
         import plan_tracker as pt
@@ -268,7 +279,8 @@ class PipelineRunner:
                     resume_plan_id=resume_plan_id if i == 0 else None,
                     auto_pilot=auto_pilot,
                     pause_handler=st.bridge.request,   # 走向卡 → UI 桥
-                    step_callback=_on_step)
+                    step_callback=_on_step,
+                    cancel_event=self._cancel)
                 if summary.paused_at is not None:
                     st.last_result = (f"⏸ {cmd} 停在 step {summary.paused_at} 等用户输入"
                                       f"（plan={summary.plan_id}·可续跑）")

@@ -527,6 +527,7 @@ def run_command(command: str, project: str, *, key: str | None = None,
                 pause_handler=None,
                 pause_stops_run: bool = True,
                 step_callback=None,
+                cancel_event=None,
                 repo_root: Path = REPO_ROOT) -> RunSummary:
     """跑一个命令的完整 plan 流水线（或从 resume_plan_id 断点续跑）。
 
@@ -569,6 +570,12 @@ def run_command(command: str, project: str, *, key: str | None = None,
 
     total_steps = len(steps)
     for step in steps:
+        # P1-1 缺漏修：协作取消（GUI 停止按钮）——step 边界检查·已完成步不回滚·
+        # plan 停在当前步可「Plan 续跑」接上（不硬杀线程·数据零损坏）。
+        if cancel_event is not None and cancel_event.is_set():
+            raise OrchestratorError(
+                f"用户请求停止——plan {plan_id} 停在 step {step.get('n')} 前·"
+                f"可在「Plan 续跑」从断点继续")
         n, name = step.get("n"), step.get("name", "")
         if step.get("status") == pt.STATUS_COMPLETED:
             summary.completed.append(StepOutcome(n, name, "skipped", "断点续跑跳过"))
