@@ -302,6 +302,38 @@ def _build_style_fingerprint_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _build_rhythm_signature_section(manifest_path: Path) -> str:
+    """阶段1：从 manifest.author_rhythm_signature 抽序列级节奏指令拼 writer prompt 段。
+
+    与量化指纹（句长/段长·节点静态属性）互补——这是「写了这一拍接下一拍」的序列骨
+    （节拍转移/翻转率/张力后段保持度/钩子兑现）。RHYTHM_INJECT_MODE=off/shadow 或无
+    指纹 → ""（不注入·零回归）。advisory·作者档第一权威·北极星⑤不硬锁。
+    """
+    if not manifest_path.exists():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    rs = m.get('author_rhythm_signature')
+    if not isinstance(rs, dict):
+        return ""
+    directives = rs.get('directives') or []
+    if not directives:
+        return ""
+    lines = [
+        "## 🎵 作者叙事节奏指纹（序列级·写了这拍接下拍的作者习惯 · advisory）",
+        "",
+        "段长/句长是「一句话长不长」的表层皮；下面是**序列骨**——拍接拍的转移、张力怎么"
+        "起伏、钩子隔多久兑现。**别让张力中段就塌**（AI 通病：过早收束，一爽就泄）。"
+        "逐条贴合作者基线，必要偏离可偏离：",
+        "",
+    ]
+    for d in directives:
+        lines.append(f"- {d}")
+    return "\n".join(lines)
+
+
 def _ctx_reorder_mode() -> str:
     """写作上下文位置重排开关（env CTX_REORDER_MODE · 默认 active · P0）。
 
@@ -423,6 +455,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     # writer 难以识别为「写作目标」。这里**显式解析**该字段，单独拼成醒目的「作者量化风格指纹」
     # 段注在 prompt 前部（advisory · 北极星⑤不硬锁），让 writer 真消费多维数值目标。
     style_fp_section = _build_style_fingerprint_section(manifest_path)
+    # 阶段1：作者叙事节奏指纹段（序列级骨·RHYTHM_INJECT_MODE=off/shadow 或无指纹时空 → 零回归）
+    rhythm_section = _build_rhythm_signature_section(manifest_path)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
@@ -680,6 +714,8 @@ cluster_brief 完整内容：
     seed_block = (seed_section + "\n\n") if seed_section else ""
     # 作者量化风格指纹段（PROFILE_INJECT_MODE=off/shadow 或无指纹时为空 → 不注入 · 零回归）
     style_fp_block = (style_fp_section + "\n\n") if style_fp_section else ""
+    # 阶段1：节奏指纹段（与量化指纹并列贴生成点·空则零回归）
+    rhythm_block = (rhythm_section + "\n\n") if rhythm_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
     primacy_section = _build_hard_constraint_primacy_block(_author_emotive_punct(db))
@@ -711,7 +747,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -745,7 +781,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}

@@ -268,10 +268,139 @@ def aggregate_narrative(project: Path, total: int) -> tuple[dict, dict, dict]:
     return nc_out, nf_out, ccd
 
 
+# ───────── 阶段1：叙事节奏组 A1-A5 聚合（cluster 级·读 surface JSON 避免逐章重复）─────────
+_BEAT_MAJOR = ("推进", "缓冲", "揭示", "钩子")
+
+
+def _beat_major(s: str) -> str:
+    """'推进-灾难' → '推进'；归到 4 大类（转移矩阵用大类降噪）。"""
+    for m in _BEAT_MAJOR:
+        if m in s:
+            return m
+    return s.strip()[:6] or "其他"
+
+
+def _propulsion_bucket(s: str) -> str:
+    """dim53 推进密度自由文本 → 枚举桶。"""
+    for kw, tag in (("三章", "三章一爆"), ("五章", "五章一爆"), ("匀速", "匀速喷设定"),
+                    ("前松", "前松后紧"), ("慢热", "慢热"), ("快", "快节奏")):
+        if kw in s:
+            return tag
+    return "其他"
+
+
+def _reagan_shape(tens: list[float]) -> str:
+    """三段均值比对 → Reagan 式形态标签（升/降/平 两段拼接）。"""
+    n = len(tens)
+    if n < 3:
+        return "平"
+    a = sum(tens[:n // 3]) / (n // 3 or 1)
+    b = sum(tens[n // 3:2 * n // 3]) / ((2 * n // 3 - n // 3) or 1)
+    c = sum(tens[2 * n // 3:]) / ((n - 2 * n // 3) or 1)
+    seg = lambda x, y: "升" if y > x + 0.5 else ("降" if y < x - 0.5 else "平")
+    return seg(a, b) + seg(b, c)
+
+
+def _tension_stats(series_list: list) -> dict:
+    """跨 cluster 张力曲线统计：后段保持度 / 拐点数 / 主导形态。"""
+    post, infl, shapes = [], [], []
+    for pts in series_list:
+        tens = [t for _, t in pts]
+        if not tens:
+            continue
+        mx = max(tens) or 1
+        late = [t for pct, t in pts if pct >= 70]
+        if late:
+            post.append(round(sum(late) / len(late) / mx, 3))   # 后段张力 / 峰值
+        c = 0
+        for i in range(1, len(tens) - 1):
+            if (tens[i] - tens[i - 1]) * (tens[i + 1] - tens[i]) < 0:
+                c += 1
+        infl.append(c)
+        shapes.append(_reagan_shape(tens))
+    out = {}
+    if post:
+        out["post_climax_retention"] = round(sum(post) / len(post), 3)
+    if infl:
+        out["inflection_count_mean"] = round(sum(infl) / len(infl), 1)
+    if shapes:
+        out["dominant_emotion_shape"] = Counter(shapes).most_common(1)[0][0]
+    return out
+
+
+def aggregate_rhythm(project: Path) -> dict:
+    """A1-A5 → narrative_rhythm。读 cluster_*_surface.json（cluster 级·不逐章重复）。"""
+    dist = project / "蒸馏进度"
+    surfaces = sorted(dist.glob("cluster_*_surface.json"))
+    if not surfaces:
+        return {}
+    trans: Counter = Counter()
+    turn_total = turn_yes = 0
+    tension_all: list = []
+    hooks: Counter = Counter()
+    gaps: list = []
+    prop: Counter = Counter()
+    for sp in surfaces:
+        try:
+            dims = (json.loads(sp.read_text(encoding="utf-8")).get("qualitative_dims") or {})
+        except (OSError, json.JSONDecodeError):
+            continue
+        seq = dims.get("dim49_节拍序列")              # A1
+        if isinstance(seq, list) and len(seq) >= 2:
+            for a, b in zip(seq, seq[1:]):
+                if isinstance(a, str) and isinstance(b, str):
+                    trans[f"{_beat_major(a)}→{_beat_major(b)}"] += 1
+        fl = dims.get("dim50_场景翻转")               # A2
+        if isinstance(fl, list):
+            for f in fl:
+                if isinstance(f, dict) and "翻转" in f:
+                    turn_total += 1
+                    if f.get("翻转") in (True, "true", "是", "True"):
+                        turn_yes += 1
+        tc = dims.get("dim51_张力曲线")               # A3
+        if isinstance(tc, list) and tc:
+            pts = [(_num(p.get("pct")), _num(p.get("tension")))
+                   for p in tc if isinstance(p, dict)]
+            pts = sorted((pc, tn) for pc, tn in pts if pc is not None and tn is not None)
+            if pts:
+                tension_all.append(pts)
+        hk = dims.get("dim52_钩子兑现")               # A4
+        if isinstance(hk, list):
+            for h in hk:
+                if isinstance(h, dict):
+                    t = (h.get("类型") or "").strip()
+                    if t and t not in ("null", "None"):
+                        hooks[t[:24]] += 1
+                    g = h.get("兑现章距")
+                    if isinstance(g, (int, float)):
+                        gaps.append(int(g))
+        pd = dims.get("dim53_推进密度")               # A5
+        if isinstance(pd, str) and pd.strip():
+            prop[_propulsion_bucket(pd)] += 1
+    out: dict = {}
+    if trans:
+        tot = sum(trans.values()) or 1
+        out["beat_transition_matrix"] = {
+            k: {"count": v, "prob": round(v / tot, 3)} for k, v in trans.most_common()}
+    if turn_total:
+        out["scene_turn_ratio"] = round(turn_yes / turn_total, 3)
+    if tension_all:
+        out["tension_trajectory"] = _tension_stats(tension_all)
+    if hooks:
+        out["hook_type_distribution"] = dict(hooks.most_common())
+    if gaps:
+        gaps.sort()
+        out["hook_payoff_gap_median"] = gaps[len(gaps) // 2]
+    if prop:
+        out["propulsion_density"] = dict(prop.most_common())
+    return out
+
+
 def consolidate(project: Path, total: int) -> dict:
     """聚合 + 规整 作者风格.json（保留创意字段，覆盖/补全 consumer 数值字段）。"""
     q = aggregate_quantitative(project, total)
     nc_out, nf_out, ccd = aggregate_narrative(project, total)
+    rhythm = aggregate_rhythm(project)   # 阶段1：A1-A5 叙事节奏组
 
     targets = [project / "作者风格.json", project / "作者风格_FINAL.json"]
     written = []
@@ -295,6 +424,8 @@ def consolidate(project: Path, total: int) -> dict:
             scd = style.setdefault("cross_chapter_diversity", {})
             for k, v in ccd.items():
                 scd.setdefault(k, v)  # 不覆盖 agent 已有的分布描述，仅补缺
+        if rhythm:  # 阶段1：叙事节奏组 A1-A5（确定性聚合·覆盖数值）
+            style.setdefault("narrative_rhythm", {}).update(rhythm)
         style.setdefault("_meta", {})["consumer_fields_consolidated"] = {
             "by": "consolidate_author_profile.py",
             "note": "consumer 数值/分布字段由确定性脚本聚合·照顾弱模型驱动·不靠 agent 自由 schema",
@@ -303,7 +434,7 @@ def consolidate(project: Path, total: int) -> dict:
         written.append(sp.name)
     return {"quantitative_keys": list(q.keys()), "narrative_craft": list(nc_out.keys()),
             "narrative_fingerprint": list(nf_out.keys()), "cross_chapter_diversity": list(ccd.keys()),
-            "written": written}
+            "narrative_rhythm": list(rhythm.keys()), "written": written}
 
 
 def main(argv: list[str]) -> int:
@@ -324,6 +455,7 @@ def main(argv: list[str]) -> int:
     print(f"     quantitative: {result['quantitative_keys']}")
     print(f"     narrative_craft: {result['narrative_craft']} | narrative_fingerprint: {result['narrative_fingerprint']}")
     print(f"     cross_chapter_diversity: {result['cross_chapter_diversity']}")
+    print(f"     narrative_rhythm: {result['narrative_rhythm']}")
     return 0
 
 

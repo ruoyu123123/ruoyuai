@@ -119,6 +119,13 @@
       "_new": true,
       "issues_emitted": ["PROSE_RHYTHM"]
     },
+    "narrative_rhythm": {
+      "layer": "cluster",
+      "script": "narrative_rhythm_scanner.py",
+      "doc": "[2026-06-13 阶段1·蒸馏画骨] 叙事节奏序列检测：张力轨迹后段保持度(治 LLM 过早收束/一爽就泄·Spoiler Alert 实证) + 张力匀速平铺 + 节拍单调(连续推进无缓冲) · 作者风格档 narrative_rhythm 基线第一权威 · 补 prose_rhythm(查句长「皮」)抓不到的「写了这拍接下拍」序列骨 · advisory · 金标准(真作者《人生长恨》原文跨3章组全 PASS)防矫枉过正",
+      "_new": true,
+      "issues_emitted": ["NARRATIVE_RHYTHM"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",

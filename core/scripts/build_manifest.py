@@ -2623,6 +2623,75 @@ def _collect_author_style_fingerprint(s: "DatabaseScanner") -> dict | None:
     return fp  # active：注入 writer
 
 
+def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
+    """阶段1：作者叙事节奏指纹（序列级骨·directives 显式下发 writer · advisory）。
+
+    把 consolidate 聚合的 narrative_rhythm（节拍转移矩阵/场景翻转率/张力后段保持度/
+    钩子分布兑现间隔/推进密度）转成 writer 可执行的节奏指令——补段长/句长表层指纹
+    抓不到的「写了这一拍之后写下一拍」的序列骨（呼应 Spoiler Alert「过早收束」诊断）。
+
+    env RHYTHM_INJECT_MODE（首发默认 shadow 灰度·核对真作者样本后切 active）：
+      · shadow（默认）：算+落盘 _数据库/.rhythm_signature/ch_NNN.json + stderr 摘要·不注入。
+      · active：注入 manifest.author_rhythm_signature → writer 经 _build_rhythm_signature_section 消费。
+      · off：返回 None·零回归。
+    advisory 边界（北极星⑤）：作者档实测节奏=第一权威·writer 可校准偏离·绝非 hard_gate。
+    """
+    import os as _os
+    mode = (_os.environ.get("RHYTHM_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+    if not s.has_style_profile():
+        return None
+    try:
+        profile = s.load("作者风格", {})
+        nr = profile.get("narrative_rhythm") if isinstance(profile, dict) else None
+    except Exception as e:
+        print(f"[WARN] rhythm_signature 读取失败: {e}", file=sys.stderr)
+        return None
+    if not isinstance(nr, dict) or not nr:
+        return None
+    directives: list[str] = []
+    bt = nr.get("beat_transition_matrix") or {}
+    if bt:
+        top = sorted(bt.items(), key=lambda kv: -kv[1].get("count", 0))[:3]
+        directives.append("节拍转移主调（写了这拍接下拍的作者习惯）："
+                          + "、".join(f"{k}({v.get('prob')})" for k, v in top))
+    if nr.get("scene_turn_ratio") is not None:
+        directives.append(f"场景价值翻转率目标 {nr['scene_turn_ratio']:.0%}"
+                          "（每个场景开收场极性应翻转·避免不 turn 的平铺伪事件）")
+    tt = nr.get("tension_trajectory") or {}
+    if tt.get("post_climax_retention") is not None:
+        directives.append(f"张力后段保持度目标 {tt['post_climax_retention']:.0%}"
+                          "（爽点/高潮后别秒收·张力撑到收尾·防过早收束）")
+    if tt.get("dominant_emotion_shape"):
+        directives.append(f"情绪弧主形态：{tt['dominant_emotion_shape']}（作者基线形态）")
+    if nr.get("hook_type_distribution"):
+        hk = list(nr["hook_type_distribution"])[:3]
+        directives.append("钩子类型偏好：" + "、".join(hk))
+    if nr.get("hook_payoff_gap_median") is not None:
+        directives.append(f"悬念兑现章距中位 {nr['hook_payoff_gap_median']} 章"
+                          "（埋了别立刻收也别永远不收·钩了必兑现）")
+    if nr.get("propulsion_density"):
+        directives.append("推进密度基线：" + "、".join(list(nr["propulsion_density"])[:2]))
+    if not directives:
+        return None
+    payload = {"source": "narrative_rhythm", "directives": directives, "raw": nr,
+               "_doc": "作者叙事节奏指纹（序列级·advisory·作者档第一权威）"}
+    try:
+        out_path = s.db / ".rhythm_signature" / f"ch_{s.ch:03d}.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    if mode == "shadow":
+        print(f"[SHADOW] author_rhythm_signature: {len(directives)} 条节奏指令 — 不注入 manifest",
+              file=sys.stderr)
+        return None
+    return payload
+
+
 def _collect_global_feedback_must_read() -> dict | None:
     """v19.3: 全局 MEMORY 跨项目 feedback 注入（高价值）→ must_read 条目 or None。
 
@@ -3187,6 +3256,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # L1a 升格：作者量化风格指纹（显式下发 writer 多维目标硬数字 · advisory）。
         # env PROFILE_INJECT_MODE 默认 active → 注入（真生效）；shadow → None（仅落盘+日志）；off → None（显式关闭）。
         "author_style_fingerprint": _collect_author_style_fingerprint(s),
+        # 阶段1：作者叙事节奏指纹（序列级骨·env RHYTHM_INJECT_MODE 默认 shadow 灰度·advisory）。
+        "author_rhythm_signature": _collect_author_rhythm_signature(s),
         "dcas_enabled": dcas_enabled,
         # F5：freestyle 不暴露每章字数目标（None），避免 writer 据此自切章；字数由 splitter 按范围切。
         "dcas_word_target": None,
@@ -3233,6 +3304,7 @@ def _build_cache_layout() -> dict:
             "distill_continuity_template",       # 蒸馏散文衔接模板
             "distill_voice_packs_reference",     # 原作角色风格 DNA
             "deep_writing_dims",                 # L4: D1 心理距离 / D2 visceral-first / D3 动机弧光（全书不变创作提示）
+            "author_rhythm_signature",           # 阶段1: 作者叙事节奏指纹（序列级骨·全书不变）
             "distill_golden_few_shot",           # 蒸馏 golden_passages
             "title_style",                       # v22.4dim N5: 章节标题命名指纹（全书不变）
             "naming_convention",                 # v22.4dim N5: 角色命名规范（全书不变）

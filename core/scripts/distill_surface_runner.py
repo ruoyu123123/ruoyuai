@@ -39,6 +39,8 @@ _CONSUMER_DIM_NEST = {
     "narrative_craft": ("dim33_情绪节拍图", "dim34_叙事距离变化", "dim30_留白潜台词"),
     "narrative_fingerprint": ("dim42_叙事技巧指纹", "dim43_角色行为循环",
                               "dim46_场景结构质量", "dim47_人物丰满度"),
+    # 阶段1 注：A1-A5 节奏组(dim49-53)是 cluster 级序列，逐章投影会重复污染聚合，
+    # 由 consolidate.aggregate_rhythm 直接读 cluster_*_surface.json 聚合，不在此投影。
 }
 
 

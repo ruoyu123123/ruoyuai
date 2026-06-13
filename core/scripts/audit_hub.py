@@ -990,6 +990,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     rrs = _SCRIPT_DIR / "rhetoric_repetition_scanner.py"
     # [2026-06-03] 句法节奏/流水账作文感（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比）· advisory
     prs = _SCRIPT_DIR / "prose_rhythm_scanner.py"
+    # [2026-06-13 阶段1] 叙事节奏序列（张力轨迹后段保持/匀速平铺/节拍单调 vs 作者基线）· advisory
+    nrs = _SCRIPT_DIR / "narrative_rhythm_scanner.py"
 
     # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
     # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
@@ -1085,6 +1087,12 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_rhythm_scanner", "PROSE_RHYTHM", "风格")),
+                # [2026-06-13 阶段1] 叙事节奏序列 · 作者基线第一权威(传 --project 读作者档) · advisory
+                ("narrative_rhythm",
+                 [child_python(), str(nrs), str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "narrative_rhythm_scanner", "NARRATIVE_RHYTHM", "风格")),
             ])
         # L2 防御：章末锚定扫描 · 仅在切章后 (有 第NNN章 文件) 才跑
         # 检测是否已切章
