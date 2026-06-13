@@ -2740,6 +2740,69 @@ def _collect_author_decision_principles(s: "DatabaseScanner") -> dict | None:
     return payload
 
 
+def _resolve_book_genre(s: "DatabaseScanner") -> str:
+    """解析本书题材（题材自适应路由用）：作者档 genre_tags > 用户偏好 > 书名推断 > unknown。"""
+    try:
+        prof = s.load("作者风格", {})
+        gt = prof.get("genre_tags") if isinstance(prof, dict) else None
+        if isinstance(gt, list) and gt:
+            return str(gt[0]).strip().lower()
+    except Exception:
+        pass
+    try:
+        pref = s.load("用户偏好", {})
+        cp = pref.get("content_preferences") if isinstance(pref, dict) else None
+        if isinstance(cp, dict) and cp.get("genre"):
+            return str(cp["genre"]).strip().lower()
+    except Exception:
+        pass
+    try:
+        import cluster_segmenter as _cs
+        return _cs._infer_genre_from_naming(s.root, s.root.name)
+    except Exception:
+        return "unknown"
+
+
+def _collect_genre_pack_directives(s: "DatabaseScanner") -> dict | None:
+    """阶段3：题材专属工艺提示（按 genre 路由·内容工艺层·纯 prompt 注入·全 advisory）。
+
+    通用维度池(作者层)always-on；题材专属(甜宠糖虐/游戏向面板)按 genre 激活。
+    现系统把题材层「爽点」当通用维度=写死爽文根因→本注入按 genre_dimension_packs 路由。
+    unknown/无包 genre → None（退化纯通用池·零回归）。env GENRE_INJECT_MODE 默认 shadow 灰度。
+    """
+    import os as _os
+    mode = (_os.environ.get("GENRE_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+    genre = _resolve_book_genre(s)
+    if not genre or genre == "unknown":
+        return None
+    try:
+        import scaffold_genre_packs as _gp
+        directives = _gp.get_writer_directives(genre)
+    except Exception as e:
+        print(f"[WARN] genre_pack 读取失败: {e}", file=sys.stderr)
+        return None
+    if not directives:
+        return None
+    payload = {"gate_level": "advisory", "advisory_only": True, "genre": genre,
+               "directives": directives,
+               "_doc": f"题材({genre})专属工艺提示·内容工艺层·按genre路由·advisory·hard_gate不随题材变"}
+    try:
+        out_path = s.db / ".genre_pack" / f"ch_{s.ch:03d}.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    if mode == "shadow":
+        print(f"[SHADOW] genre_pack({genre}): {len(directives)} 条题材工艺 — 不注入 manifest",
+              file=sys.stderr)
+        return None
+    return payload
+
+
 def _collect_global_feedback_must_read() -> dict | None:
     """v19.3: 全局 MEMORY 跨项目 feedback 注入（高价值）→ must_read 条目 or None。
 
@@ -3308,6 +3371,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "author_rhythm_signature": _collect_author_rhythm_signature(s),
         # 阶段2：作者决策原则+人物刻画手法（思维/刻画骨·env DECISION_INJECT_MODE 默认 shadow·advisory）。
         "author_decision_principles": _collect_author_decision_principles(s),
+        # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 shadow·advisory·unknown→None）。
+        "genre_pack_directives": _collect_genre_pack_directives(s),
         "dcas_enabled": dcas_enabled,
         # F5：freestyle 不暴露每章字数目标（None），避免 writer 据此自切章；字数由 splitter 按范围切。
         "dcas_word_target": None,
@@ -3356,6 +3421,7 @@ def _build_cache_layout() -> dict:
             "deep_writing_dims",                 # L4: D1 心理距离 / D2 visceral-first / D3 动机弧光（全书不变创作提示）
             "author_rhythm_signature",           # 阶段1: 作者叙事节奏指纹（序列级骨·全书不变）
             "author_decision_principles",        # 阶段2: 作者决策原则+人物刻画手法（思维/刻画骨·全书不变）
+            "genre_pack_directives",             # 阶段3: 题材专属工艺提示（按 genre 路由·全书不变）
             "distill_golden_few_shot",           # 蒸馏 golden_passages
             "title_style",                       # v22.4dim N5: 章节标题命名指纹（全书不变）
             "naming_convention",                 # v22.4dim N5: 角色命名规范（全书不变）

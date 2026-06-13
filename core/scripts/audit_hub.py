@@ -185,6 +185,25 @@ HARD_GATE_CODES = {
 }
 
 
+def _resolve_audit_genre(project_root) -> str:
+    """阶段3：审计期解析本书题材（作者档 genre_tags > 书名推断 > unknown）。"""
+    from pathlib import Path as _P
+    try:
+        sp = _P(project_root) / "_数据库" / "作者风格.json"
+        if sp.exists():
+            prof = json.loads(sp.read_text(encoding="utf-8"))
+            gt = prof.get("genre_tags")
+            if isinstance(gt, list) and gt:
+                return str(gt[0]).strip().lower()
+    except Exception:
+        pass
+    try:
+        import cluster_segmenter as _cs
+        return _cs._infer_genre_from_naming(_P(project_root), _P(project_root).name)
+    except Exception:
+        return "unknown"
+
+
 def _gate_level_for(code: str, severity: str = "error") -> str:
     """v19：判定一条 issue 的权力等级。hard_gate 不可豁免，其余 advisory。
     v23.12：STYLE_单段超长 只在 fatal/error 时是 hard_gate（超例外 ≤1 才 FAIL）；
@@ -1094,6 +1113,24 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "narrative_rhythm_scanner", "NARRATIVE_RHYTHM", "风格")),
             ])
+            # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
+            # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
+            try:
+                import scaffold_genre_packs as _gp
+                _genre = _resolve_audit_genre(project_root)
+                _gscanner = _gp.get_scanner(_genre)
+                if _gscanner:
+                    _gpath = _SCRIPT_DIR / _gscanner
+                    if _gpath.exists():
+                        _code = _gscanner.replace("_scanner.py", "").upper()
+                        tasks.append((
+                            _gscanner.replace("_scanner.py", ""),
+                            [child_python(), str(_gpath), str(cluster_draft),
+                             "--project", str(project_root)] + _style_args, {0, 1},
+                            lambda out, code, _c=_code: _parse_violations_scanner(
+                                out, _gscanner, _c, "风格")))
+            except Exception as _e:
+                print(f"[audit_hub] 题材 scanner 路由跳过: {_e}", file=sys.stderr)
         # L2 防御：章末锚定扫描 · 仅在切章后 (有 第NNN章 文件) 才跑
         # 检测是否已切章
         chapter_dirs = sorted((project_root / "章节").glob("第[0-9]*章"))

@@ -126,6 +126,22 @@
       "_new": true,
       "issues_emitted": ["NARRATIVE_RHYTHM"]
     },
+    "romance_pacing": {
+      "layer": "cluster",
+      "genre_gated": "romance",
+      "script": "romance_pacing_scanner.py",
+      "doc": "[2026-06-13 阶段3·题材自适应] 甜宠/言情题材专属节奏(仅 genre=romance 激活)：对话驱动+情绪标点(？…)+五感铺陈·拉伸时间 vs 爽文压缩时间 · advisory · 阈值保守待金标准校准",
+      "_new": true,
+      "issues_emitted": ["ROMANCE_PACING"]
+    },
+    "litrpg_structure": {
+      "layer": "cluster",
+      "genre_gated": "horror_game",
+      "script": "litrpg_structure_scanner.py",
+      "doc": "[2026-06-13 阶段3·题材自适应] 游戏向/LitRPG 题材专属结构(仅 genre=horror_game 激活)：面板数值+系统提示双语域 · advisory · 阈值保守待金标准校准",
+      "_new": true,
+      "issues_emitted": ["LITRPG_STRUCTURE"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",

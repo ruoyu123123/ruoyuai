@@ -76,19 +76,23 @@ def test_real_author_golden_passes():
     assert r["verdict"] == "PASS", f"真作者被误判: {[v['kind'] for v in r['violations']]}"
 
 
-def test_author_baseline_used_when_present():
-    """作者档有 post_climax_retention 基线时·premature 阈值随之调（第一权威）。"""
+def test_author_baseline_reported_not_used_as_threshold():
+    """作者档 post_climax_retention 基线仅信息上报（judge 0-10 口径与文本代理量纲不同·
+    不当 premature 文本阈值·否则重蒸后高基线误判真作者 3 章样本）。"""
     import json
     import tempfile
     with tempfile.TemporaryDirectory() as d:
         sp = Path(d) / "作者风格.json"
         sp.write_text(json.dumps({"narrative_rhythm": {
-            "tension_trajectory": {"post_climax_retention": 0.6}}}, ensure_ascii=False),
+            "tension_trajectory": {"post_climax_retention": 0.93}}}, ensure_ascii=False),
             encoding="utf-8")
         txt = "\n\n".join(_HOT for _ in range(20))   # >500 CJK 走到 violations 路径
         r = nr.scan(txt, style_path=sp)
+        # 基线被上报（信息）
         assert r["author_baseline"]["from_author_profile"] is True
-        assert r["author_baseline"]["post_climax_retention"] == 0.6
+        assert r["author_baseline"]["post_climax_retention"] == 0.93
+        # 但 premature 阈值仍是固定绝对值（不被 0.93 抬高）
+        assert nr.RETENTION_DEFAULT == 0.25
 
 
 def _run():

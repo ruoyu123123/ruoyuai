@@ -1,0 +1,43 @@
+{
+  "_doc": "题材专属维度包【单一真理源】（蒸馏画骨·阶段3·2026-06-13）。风格分两层：作者层(句法/声纹/节奏=通用维度池·always-on·48维+A1-C3骨已覆盖) + 题材层(内容工艺=爽点/糖虐/面板·按 genre 激活)。现系统把题材层的「爽点」当通用维度测所有书=写死爽文根因；本表把题材专属维度做成按 genre_tags 路由的可插拔包。专属维度全程 advisory·hard_gate 清单不随题材变(北极星⑤)。仿 subsystem_skeletons.json 范式·scaffold_genre_packs.py 消费。",
+  "_version": "v1",
+  "_principle": "通用维度池(作者层·always-on) + 题材专属维度包(内容工艺层·按 genre 路由) + 题材权重(同维度不同题材权重不同)。conventions 是 elements 不是 events(Lucy Monroe)→ 测元素密度/分布·不硬卡必须有某事件。",
+  "_canonical_genres": ["xuanhuan", "xianxia", "urban_supernatural", "scifi_meta", "horror_game", "historical", "romance", "unknown"],
+  "packs": {
+    "romance": {
+      "_label": "甜宠/言情",
+      "judge_dims": {
+        "R1_糖虐节拍密度": "撒糖爽点 vs 玻璃渣虐点的间隔与配比·虐段长度上限(读者虐点耐受极低·连续30-40章虐会退坑)",
+        "R2_关系推进弧": "暧昧→心动→确认→破裂→挽回的相位分布·是否有中点情感顶点+至暗时刻双拐点(Romancing the Beat 20拍)",
+        "R3_触碰阶梯": "肢体亲密度升级(眼→眼/手→手/初吻里程碑…)的间距与单调性·是否镜像情感脆弱度无理由不回退(Desmond Morris 12阶)",
+        "R4_情感流时间膨胀": "心理活动多时外界时间流速放缓·亲密场景五感名词密度·字数/事件比(远高于爽文)",
+        "R5_双标双POV": "「他对所有人冷漠唯独对你不同」唯一性双标频率·男女主POV交替·动作后写感受(扶住后感到腰细)非写动作"
+      },
+      "scanner": "romance_pacing_scanner",
+      "writer_directives": [
+        "节奏哲学=拉伸时间(Quick Quick Slow)：心理戏多则外界放缓·五感/神态/光影全展开·长句蓄势→亲密峰值用极短气音句",
+        "高潮=情感至暗时刻(关系跌谷底)而非动作场面·糖虐配比别连续虐",
+        "触碰升级镜像情感脆弱度·不无理由回退·动作发生后写「感受」非写动作本身",
+        "双POV交替让读者看到双向心动·「唯独对你不同」的唯一性双标"
+      ]
+    },
+    "horror_game": {
+      "_label": "游戏向/LitRPG/无限流",
+      "judge_dims": {
+        "G1_面板规格": "属性条数(≤7)/数值上限与成长比/面板呈现位置(卡章末)·战斗对比用表格还是散文·数值裸露密度",
+        "G2_系统提示双语域": "蓝框/方括号机制文本 vs 散文的视觉+语气切分·提示语气(冷机械 vs 用主角声音拟人)·格式标记密度",
+        "G3_升级节拍曲线": "小奖密集(每章)/中奖(每5章)/大奖(每20章)的间隔分布·升级是否锚在真实风险/牺牲/揭示(防多巴胺贬值)",
+        "G4_副本结构语法": "场景是否封装为带退出条件的副本单元·副本五件套(背景/目标/NPC/暗线/三幕)·无限流叠加规则破解/解谜",
+        "G5_战斗数值密度": "战斗场景占比·招式名词密度·数值穿插频率(抵抗AI默认均衡乏味套路)"
+      },
+      "scanner": "litrpg_structure_scanner",
+      "writer_directives": [
+        "面板/数值卡章末呈现·属性≤7·战斗对比用表格而非散文堆形容词",
+        "系统提示用蓝框/方括号与散文切开·高级写法让提示用主角声音成内心独白延伸",
+        "升级节拍=小奖密集大奖稀少·锚在真实风险/牺牲/揭示时刻·不每场小遭遇都升级",
+        "副本=带退出条件的单元(背景≤500字+通关目标+2-3NPC+暗线钩子+探索→危机→高潮三幕)·契约一致性(承诺单人别突然塞固定队)"
+      ]
+    }
+  },
+  "_pack_fields": "每 pack：judge_dims(题材声明时拼进 judge prompt 的专属提问·进 qualitative_dims 不破 required_keys) + scanner(题材专属 advisory scanner 脚本名) + writer_directives(注入 writer 的题材工艺提示·advisory)。无 pack 的 genre(xuanhuan/xianxia/urban_supernatural/scifi_meta/historical/unknown)→ 退化到纯通用维度池(向后兼容)。"
+}

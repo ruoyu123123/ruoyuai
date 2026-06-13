@@ -131,9 +131,14 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
     cv = (statistics.pstdev(tensions) / mean_t) if mean_t else 0
     retention = (tensions[-1] / peak) if peak else 1.0
 
-    # 探针 1：过早收束（后段张力/峰值 < 作者基线×0.6 或默认 0.25）
+    # 探针 1：过早收束（后段张力/峰值 < 绝对阈值）。
+    # 🔴 注：作者档 narrative_rhythm.post_climax_retention 是 judge 标注的 0-10 张力口径，
+    # 与本 scanner 的「文本代理张力(情绪标点+强度词+短句)」量纲不同·不可直接做阈值比较
+    # （重蒸后 0.93 基线会把真作者 3 章样本误判）。故 premature 用固定绝对阈值(已校准真作者
+    # 跨3章组 PASS)·judge 基线仅信息上报。作者特异的张力形态走 writer 注入(narrative_rhythm
+    # directives)·非 scanner 阈值。
     base_ret = baseline["post_climax_retention"]
-    ret_floor = round(base_ret * 0.6, 3) if base_ret else RETENTION_DEFAULT
+    ret_floor = RETENTION_DEFAULT
     if peak > 0 and retention < ret_floor:
         sev = 'major' if retention < ret_floor * 0.5 else 'minor'
         violations.append({

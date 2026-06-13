@@ -93,6 +93,24 @@ def run(project_root: Path, *, overwrite: bool = False, max_clusters: int | None
     wal = dist / ".wal"
     wal.mkdir(parents=True, exist_ok=True)
 
+    # 阶段3：题材路由——风格库声明/推断 genre 时，把题材专属 judge 维度传给 judge
+    # （通用 48 维 + A1-C3 骨 always-on·题材层按 genre 激活·unknown 则纯通用）。
+    genre = "unknown"
+    genre_dims_note = ""
+    try:
+        import scaffold_genre_packs as _gp
+        g = index.get("genre") if isinstance(index, dict) else None
+        if not g:
+            import cluster_segmenter as _cs
+            g = _cs._infer_genre_from_naming(project_root, project_root.name)
+        genre = g or "unknown"
+        gdims = _gp.get_judge_dims(genre)
+        if gdims:
+            genre_dims_note = (f"本作题材={genre}·额外分析以下题材专属维度(进 qualitative_dims·"
+                               f"非{genre}维度可略)：" + json.dumps(gdims, ensure_ascii=False))
+    except Exception:
+        pass
+
     done = 0
     for i, c in enumerate(clusters):
         if max_clusters and done >= max_clusters:
@@ -115,9 +133,12 @@ def run(project_root: Path, *, overwrite: bool = False, max_clusters: int | None
             continue
         # ② 调 48 维 judge（全章全文 context·block 失败冒泡）
         try:
+            _params = {"CLUSTER_ID": cid, "CHAPTER_RANGE": f"ch{start}-ch{end}"}
+            if genre_dims_note:                    # 阶段3：题材专属维度提示
+                _params["题材专属维度"] = genre_dims_note
             outcome = judge_fn(
                 "novel-distill-analyzer", project_root,
-                params={"CLUSTER_ID": cid, "CHAPTER_RANGE": f"ch{start}-ch{end}"},
+                params=_params,
                 context_files=[("本 cluster 全章原文", fulltext)],
                 output_path=surface_out)
         except Exception as e:        # JudgeBlockedError 等 → block 级停

@@ -334,6 +334,32 @@ def _build_rhythm_signature_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _build_genre_pack_section(manifest_path: Path) -> str:
+    """阶段3：从 manifest.genre_pack_directives 拼题材专属工艺段（按 genre·advisory）。
+
+    通用维度池(作者层)always-on；题材层(甜宠糖虐/游戏向面板)按 genre 激活。
+    GENRE_INJECT_MODE=off/shadow 或 unknown genre → ""（退化纯通用·零回归）。
+    """
+    if not manifest_path.exists():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    gp = m.get('genre_pack_directives')
+    if not isinstance(gp, dict):
+        return ""
+    directives = gp.get('directives') or []
+    if not directives:
+        return ""
+    lines = [f"## 🎭 题材专属工艺（{gp.get('genre','')} · 内容工艺层 · advisory）", "",
+             "下面是这个**题材**特有的工艺（爽文的爽点/甜宠的糖虐节拍/游戏向的面板副本）——"
+             "通用作者风格之外的题材读者期待。贴合：", ""]
+    for d in directives:
+        lines.append(f"- {d}")
+    return "\n".join(lines)
+
+
 def _build_decision_principles_section(manifest_path: Path) -> str:
     """阶段2：从 manifest.author_decision_principles 拼作者思维/人物刻画骨段。
 
@@ -509,6 +535,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     rhythm_section = _build_rhythm_signature_section(manifest_path)
     # 阶段2：作者决策原则+人物刻画手法段（思维/刻画骨·DECISION_INJECT_MODE 控制·空则零回归）
     decision_section = _build_decision_principles_section(manifest_path)
+    # 阶段3：题材专属工艺段（按 genre·GENRE_INJECT_MODE 控制·unknown/空则零回归）
+    genre_section = _build_genre_pack_section(manifest_path)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
@@ -770,6 +798,8 @@ cluster_brief 完整内容：
     rhythm_block = (rhythm_section + "\n\n") if rhythm_section else ""
     # 阶段2：决策原则段（与节奏指纹并列贴生成点·空则零回归）
     decision_block = (decision_section + "\n\n") if decision_section else ""
+    # 阶段3：题材专属工艺段（与决策原则并列·空则零回归）
+    genre_block = (genre_section + "\n\n") if genre_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
     primacy_section = _build_hard_constraint_primacy_block(_author_emotive_punct(db))
@@ -801,7 +831,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -835,7 +865,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}
