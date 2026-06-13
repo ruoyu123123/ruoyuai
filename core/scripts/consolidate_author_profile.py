@@ -180,6 +180,11 @@ def aggregate_narrative(project: Path, total: int) -> tuple[dict, dict, dict]:
     depth: Counter = Counter()
     opening: Counter = Counter()
     ending: Counter = Counter()
+    # 阶段0 新增：补聚合 dim33/42/46/30（此前漏聚合·骨①骨②的确定性底座）
+    tech: Counter = Counter()          # dim42 叙事技巧指纹（技巧类型分布）
+    scene_q: Counter = Counter()       # dim46 场景结构质量（A/B/C/D 分布·仿 dim47）
+    subtext_count = 0                  # dim30 留白潜台词（实例总数→密度）
+    emotion_patterns: list = []        # dim33 情绪节拍图（原始串·阶段1 精聚合）
     for n in range(1, total + 1):
         jp = dist / f"ch{n}.json"
         if not jp.exists():
@@ -214,13 +219,42 @@ def aggregate_narrative(project: Path, total: int) -> tuple[dict, dict, dict]:
                 desc = (it.get("行为") or it.get("pattern") or it.get("行为模式") or "") if isinstance(it, dict) else str(it)
                 if desc and desc not in ("null", "None"):
                     loops[desc[:24]] += 1
+        # 阶段0：dim42 叙事技巧指纹（技巧类型计数）
+        tk = nf.get("dim42_叙事技巧指纹")
+        if isinstance(tk, list):
+            for it in tk:
+                t = (it.get("技巧") or it.get("technique") or "") if isinstance(it, dict) else str(it)
+                if t and t not in ("null", "None"):
+                    tech[t[:24]] += 1
+        # 阶段0：dim46 场景结构质量（A/B/C/D 首字母·仿 dim47 _DEPTH_MAP）
+        sq = nf.get("dim46_场景结构质量") or ""
+        if isinstance(sq, str) and sq.strip():
+            g = sq.strip()[:1]
+            if g in ("A", "B", "C", "D"):
+                scene_q[_DEPTH_MAP[g]] += 1
+        # 阶段0：dim30 留白潜台词（实例计数）
+        sb = nc.get("dim30_留白潜台词")
+        if isinstance(sb, list):
+            subtext_count += sum(1 for x in sb if x and str(x) not in ("null", "None"))
+        # 阶段0：dim33 情绪节拍图（原始串收集·阶段1 narrative_rhythm 精聚合）
+        eb = nc.get("dim33_情绪节拍图")
+        if isinstance(eb, str) and eb.strip() and "参见" not in eb:
+            emotion_patterns.append(eb.strip())
 
     nc_out = {"narrative_distance_distribution": dict(ndist)} if ndist else {}
+    if subtext_count:
+        nc_out["subtext_instance_count"] = subtext_count
+    if emotion_patterns:
+        nc_out["emotion_beat_patterns"] = emotion_patterns[:20]
     nf_out = {}
     if loops:
         nf_out["character_behavior_loops"] = dict(loops.most_common(10))
     if depth:
         nf_out["character_depth_grade_distribution"] = dict(depth)
+    if tech:
+        nf_out["narrative_technique_distribution"] = dict(tech.most_common(10))
+    if scene_q:
+        nf_out["scene_structure_grade_distribution"] = dict(scene_q)
 
     def _dist(counter: Counter) -> dict:
         tot = sum(counter.values()) or 1

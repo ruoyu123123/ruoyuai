@@ -28,6 +28,33 @@ if str(_SCRIPTS) not in sys.path:
 import distill_prep_cluster_text as prep  # noqa: E402
 
 
+# 阶段0 修复（聚合通路·已核实 bug）：judge 的 qualitative_dims 是**扁平** dim 键，而
+# consolidate_author_profile.aggregate_narrative 读的是**嵌套** cross_chapter /
+# narrative_craft / narrative_fingerprint。程序驱动管线只写扁平 qualitative_dims →
+# consolidate 读空 → narrative_craft/narrative_fingerprint/cross_chapter_diversity 全空
+# （实测《人生长恨》三段皆空）。下面确定性把扁平 dim 归位成消费者期望的嵌套结构
+# （纯映射·弱模型不参与·键名与 judge schema 完全一致只是层级不同）。
+_CONSUMER_DIM_NEST = {
+    "cross_chapter": ("dim16_开头类型", "dim18_章末类型"),
+    "narrative_craft": ("dim33_情绪节拍图", "dim34_叙事距离变化", "dim30_留白潜台词"),
+    "narrative_fingerprint": ("dim42_叙事技巧指纹", "dim43_角色行为循环",
+                              "dim46_场景结构质量", "dim47_人物丰满度"),
+}
+
+
+def _project_consumer_dims(dims: dict) -> dict:
+    """把 judge 扁平 qualitative_dims 归位成 consolidate 读的嵌套结构（确定性·纯映射）。"""
+    out: dict = {}
+    if not isinstance(dims, dict):
+        return out
+    for nest, keys in _CONSUMER_DIM_NEST.items():
+        sub = {k: dims[k] for k in keys
+               if k in dims and dims[k] not in (None, "", [])}
+        if sub:
+            out[nest] = sub
+    return out
+
+
 def _chapter_wordcount(project_root: Path, ch: int) -> int:
     """从 chN_metrics.json 取字数（distill_chapter_metrics 已产·避免重算）。"""
     mp = project_root / "蒸馏进度" / f"ch{ch}_metrics.json"
@@ -102,13 +129,18 @@ def run(project_root: Path, *, overwrite: bool = False, max_clusters: int | None
                 json.dumps(cont, ensure_ascii=False, indent=2), encoding="utf-8")
         # ④ 逐章投影 ch{N}.json（arc_aggregator 读 word_count + dims·cluster 级分析投到每章）
         dims = data.get("qualitative_dims") if isinstance(data, dict) else None
+        nested = _project_consumer_dims(dims or {})   # 阶段0：嵌套投影供 consolidate
         for ch in range(start, end + 1):
-            (dist / f"ch{ch}.json").write_text(json.dumps({
+            ch_record = {
                 "chapter": ch, "cluster_id": cid,
                 "word_count": _chapter_wordcount(project_root, ch),
                 "cluster_surface_ref": surface_out.name,
                 "qualitative_dims": dims or {},
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            }
+            ch_record.update(nested)   # cross_chapter/narrative_craft/narrative_fingerprint
+            (dist / f"ch{ch}.json").write_text(
+                json.dumps(ch_record, ensure_ascii=False, indent=2),
+                encoding="utf-8")
         done += 1
     _aggregate_author_profile(project_root)
     print(f"[surface_runner] {done} cluster 表层蒸馏完成（surface + continuity + 逐章投影）",

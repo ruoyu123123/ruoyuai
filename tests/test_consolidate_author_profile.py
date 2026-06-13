@@ -17,6 +17,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import consolidate_author_profile as cap  # noqa: E402
+import distill_surface_runner as dsr  # noqa: E402  阶段0：经真投影函数生成 mock
 import skill_contract_table as sct  # noqa: E402
 
 
@@ -40,15 +41,23 @@ def _mk_project(root: Path, n_chapters: int = 4) -> Path:
             "vocabulary_richness": {"type_token_ratio": 0.55, "hapax_ratio": 0.40},
         }}
         (dist / f"ch{n}_metrics.json").write_text(json.dumps(metrics, ensure_ascii=False), encoding="utf-8")
-        single = {
-            "chapter": n,
-            "cross_chapter": {"dim16_开头类型": "纯对话" if n % 2 else "动作切入",
-                              "dim18_章末类型": "信息炸弹" if n % 2 else "对话悬念"},
-            "narrative_craft": {"dim34_叙事距离变化": "前段拉远全景、后段贴近角色意识"},
-            "narrative_fingerprint": {"dim43_角色行为循环": [{"行为": "紧张时摸下巴"}],
-                                      "dim47_人物丰满度": "A级丰满立体"},
+        # 阶段0 杜绝 schema 漂移：mock 用 judge 的**扁平 qualitative_dims**，经真
+        # _project_consumer_dims 归位成嵌套（与程序驱动真生产者同一条路径）。
+        flat_dims = {
+            "dim16_开头类型": "纯对话" if n % 2 else "动作切入",
+            "dim18_章末类型": "信息炸弹" if n % 2 else "对话悬念",
+            "dim34_叙事距离变化": "前段拉远全景、后段贴近角色意识",
+            "dim43_角色行为循环": [{"行为": "紧张时摸下巴"}],
+            "dim47_人物丰满度": "A级丰满立体",
+            # 阶段0 新增聚合维度
+            "dim33_情绪节拍图": "20%低开→55%升级→90%爆发",
+            "dim42_叙事技巧指纹": [{"技巧": "延迟交付", "段落": "段3"}],
+            "dim46_场景结构质量": "A完整Scene-Sequel·证据段2",
+            "dim30_留白潜台词": ["段4 父子未说出口的愧疚", "段7 欲言又止"],
         }
-        (dist / f"ch{n}.json").write_text(json.dumps(single, ensure_ascii=False), encoding="utf-8")
+        ch_record = {"chapter": n, "qualitative_dims": flat_dims}
+        ch_record.update(dsr._project_consumer_dims(flat_dims))
+        (dist / f"ch{n}.json").write_text(json.dumps(ch_record, ensure_ascii=False), encoding="utf-8")
         # 原文：每段独立(供段长分位数)
         (orig / f"第{n:03d}章.txt").write_text(
             f"第{n:03d}章 测试\n" + "\n".join(["这是一个测试段落用于聚合段长分位数。"] * 8), encoding="utf-8")
@@ -97,6 +106,12 @@ def test_consolidate_aggregates_narrative_dims():
         assert any("高" in str(k) for k in nf["character_depth_grade_distribution"])
         ccd = sd["cross_chapter_diversity"]
         assert ccd["opening_type_distribution"] and ccd["ending_type_distribution"]
+        # 阶段0 新增聚合：dim42/46/30/33 不再落黑洞
+        assert nf["narrative_technique_distribution"]  # dim42
+        assert nf["scene_structure_grade_distribution"]  # dim46（A→高）
+        assert any("高" in str(k) for k in nf["scene_structure_grade_distribution"])
+        assert sd["narrative_craft"]["subtext_instance_count"] == 8  # dim30·4章×2实例
+        assert sd["narrative_craft"]["emotion_beat_patterns"]  # dim33
 
 
 def test_consolidate_preserves_creative_fields():
