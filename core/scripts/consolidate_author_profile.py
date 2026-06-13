@@ -57,6 +57,21 @@ def _num(v):
     return float(v) if isinstance(v, (int, float)) else None
 
 
+def _num_loose(v):
+    """容忍数字字符串（judge 常把 tension 输出成 "8"/"10"·甚至 "8/10" 取首数）。"""
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        import re as _re
+        m = _re.search(r"-?\d+(\.\d+)?", v)
+        if m:
+            try:
+                return float(m.group(0))
+            except ValueError:
+                return None
+    return None
+
+
 def _detect_total(dist_dir: Path) -> int:
     """从 蒸馏进度 检测最大章号。"""
     mx = 0
@@ -359,7 +374,8 @@ def aggregate_rhythm(project: Path) -> dict:
                         turn_yes += 1
         tc = dims.get("dim51_张力曲线")               # A3
         if isinstance(tc, list) and tc:
-            pts = [(_num(p.get("pct")), _num(p.get("tension")))
+            # judge 常把 tension/pct 输出成数字字符串("8"/"10")→ 容忍 coerce
+            pts = [(_num_loose(p.get("pct")), _num_loose(p.get("tension")))
                    for p in tc if isinstance(p, dict)]
             pts = sorted((pc, tn) for pc, tn in pts if pc is not None and tn is not None)
             if pts:
@@ -396,11 +412,60 @@ def aggregate_rhythm(project: Path) -> dict:
     return out
 
 
+# ───────── 阶段2：作者思维/人物刻画骨·跨 cluster 确定性合并（非 LLM 归一·去重）─────────
+def _merge_observations(raw_list: list) -> dict:
+    """合并全 cluster 的结构化观察(去重)。raw_list=[{cluster, observations:{subkey:值}}]。"""
+    merged: dict = {}
+
+    def _key(x):
+        return json.dumps(x, ensure_ascii=False, sort_keys=True) if isinstance(x, (dict, list)) else str(x)
+
+    for item in raw_list or []:
+        obs = (item.get("observations") or {}) if isinstance(item, dict) else {}
+        for k, v in obs.items():
+            if k.startswith("_"):
+                continue
+            if isinstance(v, dict):                 # 嵌套(如 B1_道德滤镜.母题)
+                sub = merged.setdefault(k, {})
+                for sk, sv in v.items():
+                    if isinstance(sv, str) and sv.strip():
+                        vals = sub.setdefault(sk, [])
+                        if sv.strip() not in vals:
+                            vals.append(sv.strip())
+            elif isinstance(v, list):               # 列表(如 C2 声纹三件套)
+                vals = merged.setdefault(k, [])
+                seen = {_key(y) for y in vals}
+                for x in v:
+                    if _key(x) not in seen:
+                        vals.append(x)
+                        seen.add(_key(x))
+            elif isinstance(v, str) and v.strip():
+                vals = merged.setdefault(k, [])
+                if v.strip() not in vals:
+                    vals.append(v.strip())
+    return merged
+
+
+def aggregate_decisions(project: Path) -> tuple[dict, dict]:
+    """阶段2：合并 author_decisions/characterization 全 cluster 观察 → 决策原则+刻画手法。"""
+    sp = project / "作者风格.json"
+    if not sp.exists():
+        return {}, {}
+    try:
+        prof = json.loads(sp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}, {}
+    dec = _merge_observations(prof.get("_raw_decisions_observations"))
+    cha = _merge_observations(prof.get("_raw_characterization_observations"))
+    return dec, cha
+
+
 def consolidate(project: Path, total: int) -> dict:
     """聚合 + 规整 作者风格.json（保留创意字段，覆盖/补全 consumer 数值字段）。"""
     q = aggregate_quantitative(project, total)
     nc_out, nf_out, ccd = aggregate_narrative(project, total)
     rhythm = aggregate_rhythm(project)   # 阶段1：A1-A5 叙事节奏组
+    decisions, characterization = aggregate_decisions(project)   # 阶段2：作者思维+人物刻画
 
     targets = [project / "作者风格.json", project / "作者风格_FINAL.json"]
     written = []
@@ -426,6 +491,10 @@ def consolidate(project: Path, total: int) -> dict:
                 scd.setdefault(k, v)  # 不覆盖 agent 已有的分布描述，仅补缺
         if rhythm:  # 阶段1：叙事节奏组 A1-A5（确定性聚合·覆盖数值）
             style.setdefault("narrative_rhythm", {}).update(rhythm)
+        if decisions:  # 阶段2：作者决策原则（道德滤镜/心理距离/留白·去重合并）
+            style.setdefault("author_decision_principles", {}).update(decisions)
+        if characterization:  # 阶段2：人物刻画手法（刻画比例/声纹/登场签名）
+            style.setdefault("characterization_craft", {}).update(characterization)
         style.setdefault("_meta", {})["consumer_fields_consolidated"] = {
             "by": "consolidate_author_profile.py",
             "note": "consumer 数值/分布字段由确定性脚本聚合·照顾弱模型驱动·不靠 agent 自由 schema",

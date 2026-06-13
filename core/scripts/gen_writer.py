@@ -334,6 +334,56 @@ def _build_rhythm_signature_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _build_decision_principles_section(manifest_path: Path) -> str:
+    """阶段2：从 manifest.author_decision_principles 拼作者思维/人物刻画骨段。
+
+    骨③作者思维(道德滤镜/心理距离/留白)+骨②刻画手法——「作者在 X 情境倾向 Y」的决策
+    原则·段长抓不到的骨。DECISION_INJECT_MODE=off/shadow 或无 → ""（零回归）。advisory。
+    """
+    if not manifest_path.exists():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    dp = m.get('author_decision_principles')
+    if not isinstance(dp, dict):
+        return ""
+    dec = dp.get('author_decision_principles') or {}
+    cha = dp.get('characterization_craft') or {}
+    if not dec and not cha:
+        return ""
+
+    def _render(d: dict) -> list:
+        out = []
+        for k, v in d.items():
+            if k.startswith("_"):
+                continue
+            if isinstance(v, dict):
+                sub = "；".join(f"{sk}：{('/'.join(sv) if isinstance(sv, list) else sv)}"
+                               for sk, sv in v.items() if sv)
+                if sub:
+                    out.append(f"- **{k}**：{sub}")
+            elif isinstance(v, list) and v:
+                items = "；".join(json.dumps(x, ensure_ascii=False) if isinstance(x, dict)
+                                 else str(x) for x in v[:5])
+                out.append(f"- **{k}**：{items}")
+            elif isinstance(v, str) and v.strip():
+                out.append(f"- **{k}**：{'/'.join(v) if False else v}")
+        return out
+
+    lines = ["## 🧠 作者决策原则 + 人物刻画手法（作者在岔路口怎么选 · advisory）", "",
+             "下面不是段长数字，是**作者的思维与刻画手法**——道德滤镜（胜利附带什么代价/对人物"
+             "审判还是共情）、心理距离、留白冰山、人物声纹区分。这是这位作者之所以是这位作者的"
+             "骨。贴合这些决策倾向去写，别塌回通用腔：", ""]
+    lines += _render(dec)
+    if cha:
+        lines.append("")
+        lines.append("**人物刻画手法：**")
+        lines += _render(cha)
+    return "\n".join(lines)
+
+
 def _ctx_reorder_mode() -> str:
     """写作上下文位置重排开关（env CTX_REORDER_MODE · 默认 active · P0）。
 
@@ -457,6 +507,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     style_fp_section = _build_style_fingerprint_section(manifest_path)
     # 阶段1：作者叙事节奏指纹段（序列级骨·RHYTHM_INJECT_MODE=off/shadow 或无指纹时空 → 零回归）
     rhythm_section = _build_rhythm_signature_section(manifest_path)
+    # 阶段2：作者决策原则+人物刻画手法段（思维/刻画骨·DECISION_INJECT_MODE 控制·空则零回归）
+    decision_section = _build_decision_principles_section(manifest_path)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
@@ -716,6 +768,8 @@ cluster_brief 完整内容：
     style_fp_block = (style_fp_section + "\n\n") if style_fp_section else ""
     # 阶段1：节奏指纹段（与量化指纹并列贴生成点·空则零回归）
     rhythm_block = (rhythm_section + "\n\n") if rhythm_section else ""
+    # 阶段2：决策原则段（与节奏指纹并列贴生成点·空则零回归）
+    decision_block = (decision_section + "\n\n") if decision_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
     primacy_section = _build_hard_constraint_primacy_block(_author_emotive_punct(db))
@@ -747,7 +801,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -781,7 +835,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}

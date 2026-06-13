@@ -2692,6 +2692,54 @@ def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
     return payload
 
 
+def _collect_author_decision_principles(s: "DatabaseScanner") -> dict | None:
+    """阶段2：作者决策原则 + 人物刻画手法（纯 prompt 注入·零 scanner·永远 advisory）。
+
+    骨③作者思维（道德滤镜/心理距离/留白）+ 骨②人物刻画手法——「作者在 X 情境倾向 Y」
+    的决策原则，段长/句长表层抓不到。读 consolidate 合并的 author_decision_principles +
+    characterization_craft（去重观察）。**零检测零误报**（照 _collect_deep_writing_dims
+    哲学）——只给 writer 创作提示，绝不当 scanner 判决。
+
+    env DECISION_INJECT_MODE 默认 shadow（首发灰度·skill.md 已含部分决策原则·避免过度注入）：
+      shadow=算+落盘不注入·active=注入·off=None。决策原则本质 author-specific·无作者档则 None（零回归）。
+    """
+    import os as _os
+    mode = (_os.environ.get("DECISION_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+    if not s.has_style_profile():
+        return None
+    try:
+        profile = s.load("作者风格", {})
+        dec = profile.get("author_decision_principles") if isinstance(profile, dict) else None
+        cha = profile.get("characterization_craft") if isinstance(profile, dict) else None
+    except Exception as e:
+        print(f"[WARN] decision_principles 读取失败: {e}", file=sys.stderr)
+        return None
+    if not (isinstance(dec, dict) and dec) and not (isinstance(cha, dict) and cha):
+        return None
+    payload = {
+        "gate_level": "advisory", "advisory_only": True,
+        "author_decision_principles": dec or {},
+        "characterization_craft": cha or {},
+        "_doc": "作者决策原则(道德滤镜/心理距离/留白)+人物刻画手法·纯创作提示·零检测·"
+                "作者档第一权威·北极星⑤顾问非法官",
+    }
+    try:
+        out_path = s.db / ".decision_principles" / f"ch_{s.ch:03d}.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    if mode == "shadow":
+        print(f"[SHADOW] author_decision_principles: {len(dec or {})} 决策 + "
+              f"{len(cha or {})} 刻画维 — 不注入 manifest", file=sys.stderr)
+        return None
+    return payload
+
+
 def _collect_global_feedback_must_read() -> dict | None:
     """v19.3: 全局 MEMORY 跨项目 feedback 注入（高价值）→ must_read 条目 or None。
 
@@ -3258,6 +3306,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "author_style_fingerprint": _collect_author_style_fingerprint(s),
         # 阶段1：作者叙事节奏指纹（序列级骨·env RHYTHM_INJECT_MODE 默认 shadow 灰度·advisory）。
         "author_rhythm_signature": _collect_author_rhythm_signature(s),
+        # 阶段2：作者决策原则+人物刻画手法（思维/刻画骨·env DECISION_INJECT_MODE 默认 shadow·advisory）。
+        "author_decision_principles": _collect_author_decision_principles(s),
         "dcas_enabled": dcas_enabled,
         # F5：freestyle 不暴露每章字数目标（None），避免 writer 据此自切章；字数由 splitter 按范围切。
         "dcas_word_target": None,
@@ -3305,6 +3355,7 @@ def _build_cache_layout() -> dict:
             "distill_voice_packs_reference",     # 原作角色风格 DNA
             "deep_writing_dims",                 # L4: D1 心理距离 / D2 visceral-first / D3 动机弧光（全书不变创作提示）
             "author_rhythm_signature",           # 阶段1: 作者叙事节奏指纹（序列级骨·全书不变）
+            "author_decision_principles",        # 阶段2: 作者决策原则+人物刻画手法（思维/刻画骨·全书不变）
             "distill_golden_few_shot",           # 蒸馏 golden_passages
             "title_style",                       # v22.4dim N5: 章节标题命名指纹（全书不变）
             "naming_convention",                 # v22.4dim N5: 角色命名规范（全书不变）

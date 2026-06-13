@@ -166,6 +166,10 @@ def _aggregate_author_profile(project_root: Path):
     vs_ai: dict = {}
     dims: dict = {}
     notes: list = []
+    # 阶段2：作者思维/人物刻画骨·收集**全 cluster** 原始观察(不取首个·不堆叠)→reflect 归一
+    raw_decisions: list = []      # author_decisions 各 cluster 观察
+    raw_character: list = []      # characterization 各 cluster 观察
+    vs_ai_all: list = []          # 全 cluster vs_ai(阶段2 提炼·替代只取首个)
     for sp in surfaces:
         try:
             d = json.loads(sp.read_text(encoding="utf-8"))
@@ -180,8 +184,16 @@ def _aggregate_author_profile(project_root: Path):
                 anti[k] = sorted(set(anti[k]) | set(map(str, v)))
         if not vs_ai and isinstance(d.get("vs_ai"), dict):
             vs_ai = d["vs_ai"]
+        if isinstance(d.get("vs_ai"), dict):
+            vs_ai_all.append({"cluster": d.get("cluster_id"), "vs_ai": d["vs_ai"]})
         if not dims and isinstance(d.get("qualitative_dims"), dict):
             dims = d["qualitative_dims"]
+        if isinstance(d.get("author_decisions"), dict):
+            raw_decisions.append({"cluster": d.get("cluster_id"),
+                                  "observations": d["author_decisions"]})
+        if isinstance(d.get("characterization"), dict):
+            raw_character.append({"cluster": d.get("cluster_id"),
+                                  "observations": d["characterization"]})
         fn = d.get("free_notes")
         if fn:
             notes.append(str(fn))
@@ -201,6 +213,13 @@ def _aggregate_author_profile(project_root: Path):
         "vs_ai": vs_ai or existing.get("vs_ai", {}),
         "free_notes": notes or existing.get("free_notes", []),
     })
+    # 阶段2：全 cluster 原始观察临时区（reflect 步 LISA 归一成决策原则清单·绝不在此堆叠）
+    if raw_decisions:
+        existing["_raw_decisions_observations"] = raw_decisions
+    if raw_character:
+        existing["_raw_characterization_observations"] = raw_character
+    if vs_ai_all:
+        existing["_raw_vs_ai_observations"] = vs_ai_all
     profile_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2),
                             encoding="utf-8")
     print(f"[surface_runner] 作者风格.json 初版聚合（{len(surfaces)} surface）",

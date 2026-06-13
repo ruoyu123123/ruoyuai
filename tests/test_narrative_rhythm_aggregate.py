@@ -82,6 +82,18 @@ def test_tension_premature_resolution_low_retention():
         assert r["tension_trajectory"]["post_climax_retention"] < 0.3  # 2/9
 
 
+def test_tension_string_values_coerced():
+    """judge 常把 tension 输出成数字字符串("8"/"10")→ 必须 coerce 不丢（真机实测 bug）。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_surfaces(Path(d), [
+            {"dim51_张力曲线": [{"pct": "20", "tension": "8", "valence": "-"},
+                              {"pct": "80", "tension": "10", "valence": "-"}]},
+        ])
+        r = cap.aggregate_rhythm(proj)
+        assert "tension_trajectory" in r  # 字符串没被过滤掉
+        assert r["tension_trajectory"]["post_climax_retention"] >= 0.9
+
+
 def test_hook_distribution_and_payoff():
     """A4：钩子类型分布 + 兑现章距中位数。"""
     with tempfile.TemporaryDirectory() as d:
