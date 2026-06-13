@@ -3,7 +3,7 @@
 钉死：
   · consolidate.aggregate_decisions 跨 cluster 去重合并(不取首个·不堆叠)
   · build_manifest._collect_author_decision_principles 注入(env DECISION_INJECT_MODE)·永远 advisory·零检测
-  · 无作者档 → None(零回归)·shadow 默认不注入
+  · 无作者档 → None(零回归)·默认 active 注入(2026-06-13 放量)·显式 shadow 不注入
 """
 import json
 import os
@@ -90,13 +90,28 @@ def _mk_proj_with_principles(tmp: Path, dec=None, cha=None) -> Path:
     return tmp
 
 
-def test_shadow_default_no_injection():
+def test_active_default_injects():
+    """2026-06-13 切 active 放量：默认（无 env）→ active → 注入（零回归仅 off/旧档）。"""
     _set(None)
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_proj_with_principles(Path(d), dec={"B1_道德滤镜": {"母题": ["孤独"]}})
         s = bm.DatabaseScanner(tmp, 1)
-        assert bm._collect_author_decision_principles(s) is None
-        assert (tmp / "_数据库" / ".decision_principles" / "ch_001.json").exists()
+        r = bm._collect_author_decision_principles(s)
+        assert r is not None
+        assert r["author_decision_principles"]["B1_道德滤镜"]
+
+
+def test_shadow_explicit_no_injection():
+    """显式 shadow（调试）→ None（不注入），但落盘摘要。"""
+    _set("shadow")
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            tmp = _mk_proj_with_principles(Path(d), dec={"B1_道德滤镜": {"母题": ["孤独"]}})
+            s = bm.DatabaseScanner(tmp, 1)
+            assert bm._collect_author_decision_principles(s) is None
+            assert (tmp / "_数据库" / ".decision_principles" / "ch_001.json").exists()
+    finally:
+        _set(None)
 
 
 def test_active_injects_and_advisory():

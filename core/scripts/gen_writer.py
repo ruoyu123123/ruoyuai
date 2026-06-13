@@ -463,7 +463,67 @@ def _author_emotive_punct(db: Path):
     return {"excl": excl or 0, "ques": ques or 0, "ellipsis": ell or 0}
 
 
-def _build_hard_constraint_primacy_block(author_punct: dict = None) -> str:
+def _author_para_dialogue(db: Path):
+    """读作者段落密度(单句独行率/段长) + 对话占比基线（瓶颈修复·让段长契约/对话占比贴作者
+    非通用爽文一段一句）。缺失返回 None。"""
+    p = db / "作者风格.json"
+    if not p.exists():
+        return None
+    try:
+        q = (json.loads(p.read_text(encoding="utf-8")).get("quantitative") or {})
+    except (json.JSONDecodeError, OSError, AttributeError):
+        return None
+
+    def _m(v):
+        return v.get("mean") if isinstance(v, dict) else (v if isinstance(v, (int, float)) else None)
+
+    single = _m(q.get("single_sentence_para_ratio"))
+    if single is None and isinstance(q.get("paragraph_length"), dict):
+        single = q["paragraph_length"].get("single_sentence_para_ratio_mean")
+    dia = _m(q.get("dialogue_ratio"))
+    if dia is None:
+        dp = _m(q.get("dialogue_ratio_pct"))
+        dia = dp / 100 if isinstance(dp, (int, float)) else None
+    para = _m(q.get("paragraph_length_chars"))
+    if para is None and isinstance(q.get("paragraph_length"), dict):
+        para = q["paragraph_length"].get("mean_chars")
+    if single is None and dia is None:
+        return None
+    return {"single": single, "dialogue": dia, "para_mean": para}
+
+
+def _para_contract_line(author_para: dict = None) -> str:
+    """瓶颈1修复（北极星⑤·作者档段落基线让通用一段一句让位）：
+    作者写密实多句长段(single<0.5)→明确要复合长段·不拆碎句；否则保通用一段一句默认。
+    瓶颈2修复：作者对话占比可观(dialogue>0.25)→显著重申对话占比契约。
+    实证锚点《人生长恨水长东》：single 0.1788·段长 97 字·dialogue 0.306（重写仅 18.9% 欠口）。"""
+    lines = []
+    single = (author_para or {}).get("single")
+    para = (author_para or {}).get("para_mean")
+    dia = (author_para or {}).get("dialogue")
+    if single is not None and single < 0.5:
+        # 作者写密实多句长段（《人生长恨》single 0.1788·段长 97 字）——通用「一段一句」让位
+        para_txt = f"·段长均值约 {para:.0f} 字" if para else ""
+        lines.append(
+            f"- **段长契约（作者档第一权威·覆盖通用一段一句）**：本作者写**密实多句长段**"
+            f"（单句独行仅 {single:.0%}{para_txt}）——非对话叙述段用逗号连缀的复合长句承载"
+            f"信息（因果/让步/比喻/列举多句揉一段），**绝不一段一句拆成碎句**；段长贴作者基线"
+            f"（别低于其 7 成{f'≈{para*0.7:.0f}字' if para else ''}），单句独行率压到 {single:.0%} 附近。\n")
+    else:
+        lines.append(
+            "- **段长契约**：贴合作者风格 skill 规定的段长 / 单句独行节奏；skill 未规定时默认非对话段"
+            "一段只收一个句末结束符（。！？……），看到一段堆 ≥2 句立刻拆段。\n")
+    if dia is not None and dia > 0.25:
+        # 作者对话占比可观（《人生长恨》对话占比 ~31%·实测重写仅 18.9% 欠口）——显著重申对话占比契约
+        lines.append(
+            f"- **对话占比契约（作者档第一权威）**：本作者**对话占比可观**（对话占比约 {dia:.0%}）——"
+            f"多写角色交锋/对白推进剧情/潜台词博弈，**别写成纯叙述铺陈**；本 cluster 对话占比"
+            f"贴 {dia:.0%}（叙述与对话交替·让人物用台词承载冲突与情绪）。\n")
+    return "".join(lines)
+
+
+def _build_hard_constraint_primacy_block(author_punct: dict = None,
+                                         author_para: dict = None) -> str:
     """生成点近邻的「硬约束维 primacy 重述」段（SKILL_PRIMACY_MODE · 默认 active）。
 
     轻量重述（非整 prompt / 整 skill 复制 · 黑箱零成本）：点名 skill 中段最易衰减的硬约束维——
@@ -481,9 +541,8 @@ def _build_hard_constraint_primacy_block(author_punct: dict = None) -> str:
         "下面这些维度在长风格档里最容易被『读过即忘』（IFScale 中段衰减），写之前再对齐一遍——"
         "**以上方作者风格 skill 的具体规定为准**，本段只是把它们提到显著位置重申，不新增规则：\n"
         "\n"
-        "- **段长契约**：贴合作者风格 skill 规定的段长 / 单句独行节奏；skill 未规定时默认非对话段"
-        "一段只收一个句末结束符（。！？……），看到一段堆 ≥2 句立刻拆段。\n"
-        "- **禁用词**：结构性 AI 套话（与此同时 / 值得一提的是 / 不仅如此 / 事实上）零容忍；"
+        + _para_contract_line(author_para)
+        + "- **禁用词**：结构性 AI 套话（与此同时 / 值得一提的是 / 不仅如此 / 事实上）零容忍；"
         "工艺签名词以作者风格 skill 的 signature 为准（skill 列了就是作者笔法，没列就默认避免）。\n"
         "- **对话格式**：引号样式按作者风格档 golden_passages 的实际 codepoint——**默认中文弯引号 “…”"
         "（U+201C/U+201D）· 🔴 禁止默认直角引号「」（U+300C/U+300D·gen-model 常错误默认）**，除非作者档"
@@ -802,7 +861,8 @@ cluster_brief 完整内容：
     genre_block = (genre_section + "\n\n") if genre_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
-    primacy_section = _build_hard_constraint_primacy_block(_author_emotive_punct(db))
+    primacy_section = _build_hard_constraint_primacy_block(
+        _author_emotive_punct(db), _author_para_dialogue(db))
     primacy_block = (primacy_section + "\n\n") if primacy_section else ""
 
     # ── 风格 skill 段（第一权威）+ 语感种子锚 ──

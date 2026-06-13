@@ -1,7 +1,8 @@
 """阶段1：build_manifest._collect_author_rhythm_signature 注入测试（北极星①+⑤）。
 
 钉死作者叙事节奏指纹（序列级骨）的 writer 注入：
-  · env RHYTHM_INJECT_MODE 默认 shadow → 算+落盘但不注入（零回归）
+  · env RHYTHM_INJECT_MODE 默认 active（2026-06-13 终验后放量）→ 注入 directives
+  · shadow（调试）→ 算+落盘但不注入（零回归）
   · active → 注入 directives（节拍转移/翻转率/张力后段保持/钩子兑现/推进密度）
   · 永远 advisory · 全 dict 无 hard_gate
   · 缺 narrative_rhythm → None（零回归）
@@ -47,14 +48,28 @@ def _set_mode(m):
         os.environ["RHYTHM_INJECT_MODE"] = m
 
 
-def test_shadow_default_no_injection():
-    """默认 shadow → 返回 None（不注入·零回归），但落盘摘要。"""
+def test_active_default_injects():
+    """2026-06-13 切 active 放量：默认（无 env）→ active → 注入 directives（零回归仅 off/旧档）。"""
     _set_mode(None)
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk(Path(d), rhythm=_RHYTHM)
         s = bm.DatabaseScanner(tmp, 1)
-        assert bm._collect_author_rhythm_signature(s) is None
-        assert (tmp / "_数据库" / ".rhythm_signature" / "ch_001.json").exists()  # 落盘
+        r = bm._collect_author_rhythm_signature(s)
+        assert r is not None
+        assert "后段保持" in "\n".join(r["directives"])  # 治过早收束
+
+
+def test_shadow_explicit_no_injection():
+    """显式 shadow（调试）→ 返回 None（不注入·零回归），但落盘摘要。"""
+    _set_mode("shadow")
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            tmp = _mk(Path(d), rhythm=_RHYTHM)
+            s = bm.DatabaseScanner(tmp, 1)
+            assert bm._collect_author_rhythm_signature(s) is None
+            assert (tmp / "_数据库" / ".rhythm_signature" / "ch_001.json").exists()  # 落盘
+    finally:
+        _set_mode(None)
 
 
 def test_active_injects_directives():

@@ -2630,18 +2630,20 @@ def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
     钩子分布兑现间隔/推进密度）转成 writer 可执行的节奏指令——补段长/句长表层指纹
     抓不到的「写了这一拍之后写下一拍」的序列骨（呼应 Spoiler Alert「过早收束」诊断）。
 
-    env RHYTHM_INJECT_MODE（首发默认 shadow 灰度·核对真作者样本后切 active）：
-      · shadow（默认）：算+落盘 _数据库/.rhythm_signature/ch_NNN.json + stderr 摘要·不注入。
-      · active：注入 manifest.author_rhythm_signature → writer 经 _build_rhythm_signature_section 消费。
+    env RHYTHM_INJECT_MODE（2026-06-13 终验后切 active 放量·实测张力后段保持度 0.872→0.903
+    朝作者 0.93 收敛、CV 0.158→0.314 翻倍·骨注入可量化生效）：
+      · active（默认·已放量）：注入 manifest.author_rhythm_signature → writer 经
+        _build_rhythm_signature_section 消费。
+      · shadow（调试）：算+落盘 _数据库/.rhythm_signature/ch_NNN.json + stderr 摘要·不注入。
       · off：返回 None·零回归。
     advisory 边界（北极星⑤）：作者档实测节奏=第一权威·writer 可校准偏离·绝非 hard_gate。
     """
     import os as _os
-    mode = (_os.environ.get("RHYTHM_INJECT_MODE") or "shadow").strip().lower()
+    mode = (_os.environ.get("RHYTHM_INJECT_MODE") or "active").strip().lower()
     if mode == "off":
         return None
     if mode not in ("shadow", "active"):
-        mode = "shadow"
+        mode = "active"
     if not s.has_style_profile():
         return None
     try:
@@ -2700,15 +2702,15 @@ def _collect_author_decision_principles(s: "DatabaseScanner") -> dict | None:
     characterization_craft（去重观察）。**零检测零误报**（照 _collect_deep_writing_dims
     哲学）——只给 writer 创作提示，绝不当 scanner 判决。
 
-    env DECISION_INJECT_MODE 默认 shadow（首发灰度·skill.md 已含部分决策原则·避免过度注入）：
-      shadow=算+落盘不注入·active=注入·off=None。决策原则本质 author-specific·无作者档则 None（零回归）。
+    env DECISION_INJECT_MODE 默认 active（2026-06-13 切 active 放量·确定性去重观察已够 writer 消费）：
+      active=注入·shadow=算+落盘不注入（调试）·off=None。决策原则本质 author-specific·无作者档则 None（零回归）。
     """
     import os as _os
-    mode = (_os.environ.get("DECISION_INJECT_MODE") or "shadow").strip().lower()
+    mode = (_os.environ.get("DECISION_INJECT_MODE") or "active").strip().lower()
     if mode == "off":
         return None
     if mode not in ("shadow", "active"):
-        mode = "shadow"
+        mode = "active"
     if not s.has_style_profile():
         return None
     try:
@@ -2768,14 +2770,15 @@ def _collect_genre_pack_directives(s: "DatabaseScanner") -> dict | None:
 
     通用维度池(作者层)always-on；题材专属(甜宠糖虐/游戏向面板)按 genre 激活。
     现系统把题材层「爽点」当通用维度=写死爽文根因→本注入按 genre_dimension_packs 路由。
-    unknown/无包 genre → None（退化纯通用池·零回归）。env GENRE_INJECT_MODE 默认 shadow 灰度。
+    unknown/无包 genre → None（退化纯通用池·零回归）。env GENRE_INJECT_MODE 默认 active（2026-06-13
+    切 active 放量·unknown 题材天然 None 零回归·有专属包才注入）。
     """
     import os as _os
-    mode = (_os.environ.get("GENRE_INJECT_MODE") or "shadow").strip().lower()
+    mode = (_os.environ.get("GENRE_INJECT_MODE") or "active").strip().lower()
     if mode == "off":
         return None
     if mode not in ("shadow", "active"):
-        mode = "shadow"
+        mode = "active"
     genre = _resolve_book_genre(s)
     if not genre or genre == "unknown":
         return None
@@ -3367,11 +3370,11 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # L1a 升格：作者量化风格指纹（显式下发 writer 多维目标硬数字 · advisory）。
         # env PROFILE_INJECT_MODE 默认 active → 注入（真生效）；shadow → None（仅落盘+日志）；off → None（显式关闭）。
         "author_style_fingerprint": _collect_author_style_fingerprint(s),
-        # 阶段1：作者叙事节奏指纹（序列级骨·env RHYTHM_INJECT_MODE 默认 shadow 灰度·advisory）。
+        # 阶段1：作者叙事节奏指纹（序列级骨·env RHYTHM_INJECT_MODE 默认 active 放量·advisory）。
         "author_rhythm_signature": _collect_author_rhythm_signature(s),
-        # 阶段2：作者决策原则+人物刻画手法（思维/刻画骨·env DECISION_INJECT_MODE 默认 shadow·advisory）。
+        # 阶段2：作者决策原则+人物刻画手法（思维/刻画骨·env DECISION_INJECT_MODE 默认 active 放量·advisory）。
         "author_decision_principles": _collect_author_decision_principles(s),
-        # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 shadow·advisory·unknown→None）。
+        # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 active 放量·advisory·unknown→None）。
         "genre_pack_directives": _collect_genre_pack_directives(s),
         "dcas_enabled": dcas_enabled,
         # F5：freestyle 不暴露每章字数目标（None），避免 writer 据此自切章；字数由 splitter 按范围切。

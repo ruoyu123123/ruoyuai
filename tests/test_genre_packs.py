@@ -126,12 +126,26 @@ def test_manifest_unknown_genre_none():
         _set(None)
 
 
-def test_manifest_shadow_default_none():
-    _set(None)  # 默认 shadow
+def test_manifest_active_default_romance():
+    """2026-06-13 切 active 放量：默认（无 env）→ active → romance 注入 directives。"""
+    _set(None)  # 默认 active
     with tempfile.TemporaryDirectory() as d:
         proj = _mk(Path(d), genre_tags=["romance"])
         s = bm.DatabaseScanner(proj, 1)
-        assert bm._collect_genre_pack_directives(s) is None  # shadow 不注入
+        r = bm._collect_genre_pack_directives(s)
+        assert r is not None and r["genre"] == "romance" and r["directives"]
+
+
+def test_manifest_shadow_explicit_none():
+    """显式 shadow（调试）→ None（不注入）。"""
+    _set("shadow")
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            proj = _mk(Path(d), genre_tags=["romance"])
+            s = bm.DatabaseScanner(proj, 1)
+            assert bm._collect_genre_pack_directives(s) is None  # shadow 不注入
+    finally:
+        _set(None)
 
 
 def _run():

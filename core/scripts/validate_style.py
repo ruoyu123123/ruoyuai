@@ -177,6 +177,34 @@ def _extract_author_dialogue_ratio(q: dict) -> float | None:
     return None
 
 
+# 单句独行率：同一指标多命名（quantitative 直出 single_sentence_para_ratio，或嵌在
+# paragraph_length.single_sentence_para_ratio_mean）。
+_SINGLE_LINE_KEYS = ("single_sentence_para_ratio", "single_line_ratio", "single_sent_para_ratio")
+
+
+def _extract_author_single_line_ratio(q: dict) -> float | None:
+    """从作者档 quantitative 推**真实单句独行率**（0-1 ratio）。
+
+    2026-06-13 北极星⑤ [瓶颈1·段落密度规则冲突]：single_line_ratio band 的通用 floor
+    （默认 0.30 / strict 0.40 / cluster 0.30）是按**短段吐槽爽文**（一段一句碎句节奏）标的。
+    但密实多句长段签名作者（《人生长恨水长东》实测 single_sentence_para_ratio=0.248）
+    被通用 floor 顶成 FAIL → 把输出反推成「一段一句」碎句、偏离作者「24.8% 单句独行 +
+    密实复合长段」基线（与 gen_writer 段长契约形成同向冲突）。作者档第一权威：作者实证写
+    密实长段则该 floor 由作者档说了算，放宽（relax-only·绝不更苛）。
+
+    取数：① quantitative.single_sentence_para_ratio（蒸馏直出）
+          ② paragraph_length.single_sentence_para_ratio_mean（嵌套命名）
+    都缺/为 null → 返回 None（调用方保通用 floor·零回归）。"""
+    r = _first_stat_mean(q, *_SINGLE_LINE_KEYS)
+    if r is None and isinstance(q.get("paragraph_length"), dict):
+        r = _stat_mean(q["paragraph_length"],
+                       mean_keys=("single_sentence_para_ratio_mean", "single_sentence_para_ratio"))
+    if r is None:
+        return None
+    # 容错：误把百分比(0-100)写进 ratio 键 → 归一
+    return r / 100.0 if r > 1.0 else r
+
+
 def _extract_author_chapter_words(q: dict) -> float | None:
     """从作者档 quantitative 推**真实章字数均值**（tolerant 兼容 chapter_words / chapter_chars）。
 
@@ -458,6 +486,16 @@ def _apply_style_overrides(t: dict, sd: dict, author_dir=None) -> dict:
                 q.get("paragraph_length")) else _plc
         t["para_mean_len"] = _maybe_quantile_band(
             "段落均长", _plc, _old_para_band, lo_min=1.0)
+    # 2026-06-13 北极星⑤ [瓶颈1·段落密度规则冲突]：单句独行 floor 按作者真实单句独行率放宽
+    # （relax-only·绝不更苛）。密实长段作者（《人生长恨》single 0.248）被通用 floor(0.30/0.40)
+    # 顶 FAIL → 输出被反推成一段一句碎句、偏离作者密叙基线。作者实证 single < 通用 floor 则
+    # floor 降到作者基线（取 min·绝不抬高短段作者的 floor）。无数据保通用 floor（零回归）。
+    sl_ratio = _extract_author_single_line_ratio(q)
+    if sl_ratio is not None and sl_ratio > 0:
+        _sl_cfg = t.get("single_line_ratio", {})
+        _sl_floor = _sl_cfg.get("min")
+        if isinstance(_sl_floor, (int, float)) and sl_ratio < _sl_floor:
+            t["single_line_ratio"] = {**_sl_cfg, "min": sl_ratio}
     # 2026-05-30 北极星⑤ [long_para 不受作者档 override]：长段率上限按作者真实长段分布/段均长
     # 放宽——长段签名作者（蛊真人/惊悚乐园）的 80-120 字段率天然高于通用 2%，固定 2% 会把
     # 作者签名笔法误判 FAIL。仅当 long_para_per_chapter 用 max_ratio（cluster 视野）才 override；
