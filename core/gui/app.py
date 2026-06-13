@@ -918,11 +918,27 @@ def distill():
                     .mark("fd-name")
                 # A5：大文本走 HTTP 上传（websocket 1MB 限制·全本小说粘贴必断连）
                 uploaded = {"text": ""}
+
+                # 🔴 loop 实测修（重大）：NiceGUI 3.13 把 upload 事件 API 大改——
+                # e.content 已不存在·内容在 e.file（FileUpload）且 read()/text() 是
+                # **异步**。旧 e.content.read() 每次抛 AttributeError 被框架吞 →
+                # HTTP 层 100%/done_all 但 uploaded["text"] 永远空 → 上传通路（全本
+                # 必走）实际全死·只有真跑蒸馏才暴露。改 async handler + await read。
+                async def _on_upload(e):
+                    try:
+                        raw = await e.file.read()
+                        uploaded["text"] = uploaded["text"] + \
+                            raw.decode("utf-8", errors="replace")
+                        STATE.log_buffer.append(
+                            f"[gui:event] 上传 {e.file.name} "
+                            f"（累计 {len(uploaded['text'])} 字）")
+                    except Exception as ex:
+                        STATE.log_buffer.append(f"[gui] 上传读取失败：{ex}")
+                        ui.notify(f"上传读取失败：{ex}", type="negative")
+
                 ui.upload(label="上传作者作品 .txt（可多选·推荐·支持全本）",
                           multiple=True, max_file_size=200 * 1024 * 1024,
-                          on_upload=lambda e: uploaded.__setitem__(
-                              "text", uploaded["text"] +
-                              e.content.read().decode("utf-8", errors="replace")))\
+                          on_upload=_on_upload)\
                     .props("accept=.txt").classes("w-full").mark("fd-upload")
                 fd_text = ui.textarea("或直接粘贴正文（含「第N章」标题·"
                                       "粘贴上限约 50 万字，全本请用上传）")\
