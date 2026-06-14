@@ -150,6 +150,27 @@ def gather_research_context(queries, max_per_query: int = 3,
     return header + "\n\n".join(blocks), total
 
 
+_QUERY_TEMPLATES = {
+    "inspiration": ["{topic} 网文 爆款 设定", "{topic} 题材 灵感 趋势", "{topic} 小说 创意"],
+    "outline": ["{topic} 剧情 走向 网文", "{topic} 故事 结构", "{topic} 情节 设计"],
+    "character": ["{topic} 人物 设定", "{topic} 角色 塑造 网文"],
+    "fact_check": ["{topic} 设定 考据", "{topic} 真实 背景"],
+}
+
+
+def build_default_queries(task_type: str, topic: str, max_queries: int = 3) -> list[str]:
+    """确定性拼 queries（task_type + topic 模板·exe 模式 gen-model 无 WebSearch 拆 queries 的兜底）。
+
+    novel-researcher CLI 模式由 gen-model 拆 3-7 queries·exe 模式无此能力 → 本函数模板兜底。
+    未知 task_type 回退 inspiration 模板；topic 空 → []（调用方降级·不搜）。
+    """
+    t = (topic or "").strip()
+    if not t:
+        return []
+    tmpl = _QUERY_TEMPLATES.get(task_type, _QUERY_TEMPLATES["inspiration"])
+    return [q.format(topic=t) for q in tmpl[:max(1, max_queries)]]
+
+
 def is_search_available(provider: str = "tavily") -> bool:
     """key 是否已配（keyring 或 env）——调用方预检决定走联网还是静态降级。"""
     try:

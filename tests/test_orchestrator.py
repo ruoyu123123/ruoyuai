@@ -741,6 +741,52 @@ def test_run_script_in_process_import_fail_returns_3():
     assert rc == 3
 
 
+# ============ novel-researcher 联网调研注入（D1·_build_research_blocks·全 mock 不联网）============
+def _patch_gather(fn):
+    """替换 web_search_client.gather_research_context·返回还原函数。"""
+    import web_search_client as wsc
+    orig = wsc.gather_research_context
+    wsc.gather_research_context = fn
+    return lambda: setattr(wsc, "gather_research_context", orig)
+
+
+def test_build_research_blocks_with_results():
+    """topic 有 + 搜到结果 → extra_blocks=[context_md]（确定性拼 queries→gather→注入）。"""
+    restore = _patch_gather(lambda queries, **k: ("# 联网调研结果\n...", 3))
+    try:
+        blocks = orc._build_research_blocks({"TASK_TYPE": "inspiration", "TOPIC": "克苏鲁"})
+        assert blocks == ["# 联网调研结果\n..."]
+    finally:
+        restore()
+
+
+def test_build_research_blocks_empty_topic_returns_none():
+    """topic 空 → build_default_queries 返 [] → None（降级·不注入）。"""
+    assert orc._build_research_blocks({"TASK_TYPE": "inspiration", "TOPIC": ""}) is None
+
+
+def test_build_research_blocks_key_missing_degrades():
+    """key 未配 → gather raise SearchKeyMissing → None（gen-model 降级凭记忆·soft 不阻断）。"""
+    import web_search_client as wsc
+
+    def _raise(queries, **k):
+        raise wsc.SearchKeyMissing("no key")
+    restore = _patch_gather(_raise)
+    try:
+        assert orc._build_research_blocks({"TASK_TYPE": "inspiration", "TOPIC": "X"}) is None
+    finally:
+        restore()
+
+
+def test_build_research_blocks_no_results_returns_none():
+    """搜到 0 条 → None（降级·不注入空 block）。"""
+    restore = _patch_gather(lambda queries, **k: ("", 0))
+    try:
+        assert orc._build_research_blocks({"TASK_TYPE": "inspiration", "TOPIC": "X"}) is None
+    finally:
+        restore()
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

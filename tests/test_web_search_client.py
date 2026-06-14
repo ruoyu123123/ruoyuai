@@ -270,6 +270,32 @@ def test_gather_research_no_results():
     _with_mem(body)
 
 
+# ============ build_default_queries（确定性拼 queries·零依赖纯模板）============
+def test_build_default_queries_inspiration():
+    assert wsc.build_default_queries("inspiration", "克苏鲁灯塔") == [
+        "克苏鲁灯塔 网文 爆款 设定", "克苏鲁灯塔 题材 灵感 趋势", "克苏鲁灯塔 小说 创意"]
+
+
+def test_build_default_queries_per_task_type():
+    assert wsc.build_default_queries("outline", "X")[0] == "X 剧情 走向 网文"
+    assert wsc.build_default_queries("character", "X")[0] == "X 人物 设定"
+    assert wsc.build_default_queries("fact_check", "X")[0] == "X 设定 考据"
+
+
+def test_build_default_queries_unknown_type_falls_back():
+    """未知 task_type 回退 inspiration 模板。"""
+    assert wsc.build_default_queries("nonsense", "X")[0] == "X 网文 爆款 设定"
+
+
+def test_build_default_queries_empty_topic():
+    assert wsc.build_default_queries("inspiration", "") == []
+    assert wsc.build_default_queries("inspiration", "  ") == []
+
+
+def test_build_default_queries_max_cap():
+    assert wsc.build_default_queries("inspiration", "X", max_queries=1) == ["X 网文 爆款 设定"]
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

@@ -416,6 +416,26 @@ def _tokenize_then_resolve(line: str, ctx: dict) -> str:
 
 
 # ============ 判断 agent 派发 ============
+def _build_research_blocks(params: dict) -> list[str] | None:
+    """novel-researcher 联网调研（D1·exe 模式 gen-model 无 WebSearch）：确定性拼 queries →
+    gather_research_context 真联网 → extra_block 注入·让 gen-model 基于真数据综合非编造。
+
+    key 未配 / 搜索失败 / 任何故障 → None（gen-model 降级凭记忆·soft·绝不阻断写作主轨·
+    北极星 failure soft）。
+    """
+    try:
+        import web_search_client as wsc
+        task_type = params.get("TASK_TYPE", "inspiration")
+        topic = params.get("TOPIC", "") or params.get("topic", "")
+        queries = wsc.build_default_queries(task_type, topic)
+        if not queries:
+            return None
+        context_md, n = wsc.gather_research_context(queries)
+        return [context_md] if n > 0 else None
+    except Exception:
+        return None        # SearchKeyMissing / 网络错 / 任何故障 → 降级 gen-model 凭记忆（soft）
+
+
 def default_judge_dispatch(agent_name: str, step: dict, ctx: dict):
     """按 steps[].agent_input / judge_report_path 派发到 judge_runner（gen-model）。
 
@@ -486,9 +506,12 @@ def default_judge_dispatch(agent_name: str, step: dict, ctx: dict):
         secondary = sp if sp.is_absolute() else project_root / sp
 
     rk = step.get("judge_required_keys")
+    # novel-researcher 联网调研注入（D1·exe 模式补 gen-model 无 WebSearch·key 未配则 None 降级）
+    extra_blocks = (_build_research_blocks(params)
+                    if agent_name == "novel-researcher" else None)
     return jr.run_judge(agent_name, project_root, params=params,
                         context_files=context_files, output_path=output_path,
-                        secondary_output_path=secondary,
+                        secondary_output_path=secondary, extra_blocks=extra_blocks,
                         required_keys=tuple(rk) if rk else None)
 
 
