@@ -304,6 +304,10 @@ def run_judge(agent_name: str, project_root: str | Path, *,
     # 「结构校验交模式各自的调用点传」在此兑现——plan step 可声明 judge_required_keys）。
     req_keys = tuple(required_keys) if required_keys is not None else spec.required_keys
     project_root = Path(project_root)
+    # token ledger（一人公司·BYOK 看烧多少钱）：judge 也走 gen-model·设账本路径让其 token 计入（已设则尊重）
+    import os as _os
+    _os.environ.setdefault("RUOYU_TOKEN_LEDGER",
+                           str(project_root / "_数据库" / ".token_ledger.jsonl"))
 
     # —— system 装配：适配头 + .md 原文 + 作者档（硬契约 1） ——
     system_parts = [ADAPTER_HEADER, load_agent_system_prompt(agent_name, agents_dir)]
