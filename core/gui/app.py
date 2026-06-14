@@ -815,6 +815,17 @@ def new_book():
         ui.label("填书名 + 题材，点「开始建书」——AI 会带你选风格、选灵感卡、定框架，"
                  "然后生成大纲 + 全套设定。").classes("text-sm text-gray-600")
 
+        # —— D2 合规护栏（守北极星护城河·防用户刷量起号自毁账号）——
+        # feedback_reader_growth_compliance_redline：平台 2026 严打 AI 铺量·单本精写=天然避雷
+        with ui.card().classes("w-full bg-amber-50 border-l-4 border-warning")\
+                .mark("nb-compliance"):
+            ui.label("⚠️ 合规提示").classes("font-bold text-sm text-amber-800")
+            ui.label("本工具定位「单本精写」·非批量起号。网文平台 2026 严打 AI 铺量"
+                     "（番茄已清 4 万+本·一身份证一账号·百万级 AI 爆款被下架），"
+                     "投稿前请看目标平台最新 AI 披露政策。我们不做一键自动发布——"
+                     "成品本地导出后由你手动合规投稿。")\
+                .classes("text-xs text-gray-700")
+
         with ui.row().classes("w-full gap-4 items-start"):
             with ui.column().classes("w-1/3 gap-2"):
                 name_input = ui.input("书名").classes("w-full").mark("book-name")

@@ -52,6 +52,15 @@ async def test_new_book_page_renders(user, nb_env):
     await user.should_see(marker="btn-build")
 
 
+async def test_new_book_shows_compliance_notice(user, nb_env):
+    """D2 合规护栏：建书页显式展示「单本精写·非批量起号」合规提示（守北极星护城河·
+    防刷量起号自毁账号·feedback_reader_growth_compliance_redline）。"""
+    await user.open("/new-book")
+    await user.should_see(marker="nb-compliance")
+    await user.should_see("单本精写")
+    await user.should_see("严打 AI 铺量")
+
+
 async def test_build_without_name_warns(user, nb_env):
     await user.open("/new-book")
     user.find(marker="btn-build").click()
