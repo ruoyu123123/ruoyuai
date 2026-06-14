@@ -517,6 +517,23 @@ def profile_key_status(name: str) -> bool:
     return secrets_store.has_api_key(name)
 
 
+# —— 联网调研 search key（BYOK·D1·web_search_client 消费·不走 gen_model_loader 故不 reset）——
+def save_search_key(provider: str, key: str) -> bool:
+    """存联网调研 search key 到 keyring（与 gen-model key 隔离·web_search_client 解析消费）。"""
+    import secrets_store
+    return secrets_store.set_search_key(provider, key)
+
+
+def clear_search_key(provider: str) -> bool:
+    import secrets_store
+    return secrets_store.delete_search_key(provider)
+
+
+def search_key_status(provider: str = "tavily") -> bool:
+    import secrets_store
+    return secrets_store.has_search_key(provider)
+
+
 def switch_active(name: str) -> bool:
     """切 active 模型：dev 改 .env / dist 写 %APPDATA% user_overrides（绝不碰只读 config）。"""
     from gen_model_loader import GenModelLoader, reset_default_loader

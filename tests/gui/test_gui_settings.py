@@ -116,3 +116,39 @@ async def test_active_selector_renders(user, byok_env):
     """设置页有切模型下拉（后端 switch_active 逻辑由 test_config_split 堅牢覆盖）。"""
     await user.open("/settings")
     await user.should_see(marker="active-select")
+
+
+# ============ D1 research-web 联网调研 search key 录入（BYOK·独立 service）============
+async def test_search_key_card_renders_unconfigured(user, byok_env):
+    await user.open("/settings")
+    await user.should_see(marker="search-key-card")
+    await user.should_see(marker="search-key-input")
+    await user.should_see("联网调研")
+
+
+async def test_save_search_key_end_to_end(user, byok_env):
+    """录入 search key → keyring（独立 service）→ web_search_client 解析真认到（整链·防假阴性）。"""
+    import web_search_client as wsc
+    await user.open("/settings")
+    user.find(marker="search-key-input").type("tvly-GUISEARCH888")
+    user.find(marker="btn-save-search").click()
+    await user.should_see("已保存联网调研 key")
+    # ① 进了 search keyring（独立 service·不串 gen-model）
+    assert ss.get_search_key("tavily") == "tvly-GUISEARCH888"
+    assert ss.get_api_key("tavily") is None         # service 隔离·不串 gen-model
+    # ② web_search_client 解析真认到（BYOK 整链打通）
+    assert wsc._resolve_search_key("tavily") == "tvly-GUISEARCH888"
+
+
+async def test_save_search_empty_warns(user, byok_env):
+    await user.open("/settings")
+    user.find(marker="btn-save-search").click()
+    await user.should_see("请先粘贴 search key")
+
+
+async def test_clear_search_key_resets(user, byok_env):
+    ss.set_search_key("tavily", "tvly-TOCLEAR")
+    await user.open("/settings")
+    user.find(marker="btn-clear-search").click()
+    await user.should_see("已清除联网调研 key")
+    assert ss.get_search_key("tavily") is None

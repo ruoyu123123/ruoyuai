@@ -689,7 +689,9 @@ def settings_page():
     shell = _page_shell("设置", "/settings")
     STATE.log_buffer.append("[gui:page] 打开 设置")
     from core.gui.runner import (save_api_key, clear_api_key,
-                                  test_profile_connection, switch_active)
+                                  test_profile_connection, switch_active,
+                                  save_search_key, clear_search_key,
+                                  search_key_status)
     try:
         data = list_profiles_masked()
     except Exception as e:
@@ -797,6 +799,43 @@ def settings_page():
                                     btn.enable()
                             return _run()
                         test_btn.on_click(_test)
+
+            # —— 联网调研 search key 卡（BYOK·D1·exe 模式补联网调研·tavily 首选）——
+            with ui.card().classes("w-full").mark("search-key-card"):
+                ui.label("🔍 联网调研 key（Tavily）").classes("font-bold")
+                ui.label("exe 模式下灵感卡/走向卡前的联网调研需要 search key"
+                         "（tavily.com 免费额度友好）·不配则调研降级用静态模板。")\
+                    .classes("text-xs text-gray-500")
+                s_ok = search_key_status("tavily")
+                ui.badge("已配置" if s_ok else "未配置")\
+                    .props(f"color={'green' if s_ok else 'grey'}").mark("badge-search")
+                with ui.row().classes("items-center gap-2 w-full"):
+                    skey_input = ui.input(placeholder="粘贴 Tavily key（如 tvly-…）")\
+                        .props("type=password").classes("flex-1")\
+                        .mark("search-key-input")
+
+                    def _save_search(ki=skey_input):
+                        val = (ki.value or "").strip()
+                        if not val:
+                            ui.notify("请先粘贴 search key", type="warning")
+                            return
+                        if save_search_key("tavily", val):
+                            ki.set_value("")            # 立即清空·明文不留 DOM
+                            ui.notify("已保存联网调研 key", type="positive")
+                            _render()
+                        else:
+                            ui.notify("保存失败：本机安全存储不可用", type="negative")
+
+                    def _clear_search():
+                        clear_search_key("tavily")
+                        ui.notify("已清除联网调研 key", type="info")
+                        _render()
+
+                    ui.button("保存", on_click=_save_search)\
+                        .props("unelevated color=primary dense")\
+                        .mark("btn-save-search")
+                    ui.button("清除", on_click=_clear_search)\
+                        .props("flat dense").mark("btn-clear-search")
 
     _render()
     ui.button("🔄 刷新", on_click=_render).props("flat")
