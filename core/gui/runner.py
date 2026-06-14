@@ -534,6 +534,32 @@ def search_key_status(provider: str = "tavily") -> bool:
     return secrets_store.has_search_key(provider)
 
 
+# —— 业务仪表盘（C2·一人公司·聚合 token 花费 + 字数 + 发布节奏·非技术友好「写到哪+烧多少」）——
+def build_business_dashboard(project_root) -> dict:
+    """聚合业务可观测给 GUI 只读面板（复用 token_ledger + release_calendar·纯函数·零写）。
+
+    token 成本默认不估（BYOK 中转站单价用户不一定知道·只显 token 数）·只读不碰创作（北极星④外延）。
+    """
+    from pathlib import Path as _P
+    import token_ledger
+    import release_calendar
+    root = _P(project_root)
+    tok = token_ledger.summarize(token_ledger.default_ledger_path(root))
+    ch_count, total_chars = release_calendar.scan_project_chars(root)
+    sched = release_calendar.compute_release_schedule(
+        total_chars, release_calendar.DEFAULT_DAILY_CHAR_TARGET)
+    return {
+        "chapter_count": ch_count,
+        "total_chars": total_chars,
+        "token_calls": tok["calls"],
+        "total_tokens": tok["total_tokens"],
+        "output_tokens": tok["output_tokens"],
+        "days_of_buffer": sched["days_of_buffer"],
+        "risk_level": sched["risk_level"],
+        "release_advice": sched["advice"],
+    }
+
+
 def switch_active(name: str) -> bool:
     """切 active 模型：dev 改 .env / dist 写 %APPDATA% user_overrides（绝不碰只读 config）。"""
     from gen_model_loader import GenModelLoader, reset_default_loader

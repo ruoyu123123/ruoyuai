@@ -535,6 +535,32 @@ def index():
                     STATE.log_buffer.append(f"[gui:event] 打开 设定库 {p.name}")
                     _open_db()
 
+                # —— 业务面板（C2·非技术友好「写到哪+烧多少 token+发布节奏」·只读不碰创作）——
+                def _show_dashboard():
+                    p = _sel_project()
+                    if not p:
+                        ui.notify("先选项目", type="warning")
+                        return
+                    from core.gui.runner import build_business_dashboard
+                    try:
+                        d = build_business_dashboard(p.root)
+                    except Exception as e:
+                        ui.notify(f"读面板出错：{e}", type="negative")
+                        return
+                    STATE.log_buffer.append(f"[gui:event] 打开 业务面板 {p.name}")
+                    with ui.dialog() as dlg, ui.card().classes("min-w-80").mark("dashboard-card"):
+                        ui.label("📊 业务面板").classes("font-bold text-lg")
+                        ui.label(f"已写 {d['chapter_count']} 章 · {d['total_chars']} 字")\
+                            .classes("text-sm")
+                        ui.label(f"token 调用 {d['token_calls']} 次 · 累计 "
+                                 f"{d['total_tokens']} tokens（输出 {d['output_tokens']}）")\
+                            .classes("text-sm")
+                        ui.label(f"囤稿 {d['days_of_buffer']} 天 · 风险 {d['risk_level']}")\
+                            .classes("text-sm")
+                        ui.label(d['release_advice']).classes("text-xs text-gray-600")
+                        ui.button("关闭", on_click=dlg.close).props("flat")
+                    dlg.open()
+
                 with ui.row().classes("gap-2"):
                     btn_export = ui.button("📤 导出全书", on_click=_export_book)\
                         .props("outline color=secondary dense").mark("btn-export")
@@ -544,6 +570,8 @@ def index():
                     # 运行中也能随时翻设定（只读无写冲突）
                     ui.button("📚 设定库", on_click=_open_db_viewer)\
                         .props("flat dense").mark("btn-db-viewer")
+                    ui.button("📊 业务面板", on_click=_show_dashboard)\
+                        .props("flat dense").mark("btn-dashboard")
                     ui.button("🔄 刷新项目", on_click=_on_idle).props("flat dense")
 
             # —— 右：章节目录（P3·Binder 范式·可点开只读预览）+ 实时日志 ——
