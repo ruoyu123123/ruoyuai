@@ -104,6 +104,54 @@ def has_api_key(profile_name: str) -> bool:
     return bool(get_api_key(profile_name))
 
 
+# ============ 联网调研 search API key（BYOK·service 独立·D1·2026-06-15）============
+# 蓝图 D1：exe 模式 novel-researcher 联网调研失效（gen-model 无 web）→ BYOK search key
+# （Tavily 首选）走同款 keyring·独立命名空间与 gen-model key 隔离。username=provider。
+SERVICE_SEARCH = "ruoyuai-search"
+
+
+def get_search_key(provider: str = "tavily") -> str | None:
+    """联网调研 search API key（BYOK·username=provider：tavily/brave/exa）。"""
+    if _keyring is None:
+        return None
+    try:
+        v = _keyring.get_password(SERVICE_SEARCH, provider)
+        return v or None
+    except Exception:
+        _log.debug("keyring get search failed for %s", provider)    # 不带 key
+        return None
+
+
+def set_search_key(provider: str, key: str) -> bool:
+    if _keyring is None:
+        return False
+    k = (key or "").strip()
+    if not k:                            # 空串 = 清除（避免存空串污染优先级判断）
+        return delete_search_key(provider)
+    try:
+        _keyring.set_password(SERVICE_SEARCH, provider, k)
+        return get_search_key(provider) == k    # set→get 回读校验（frozen 静默失败防线）
+    except Exception:
+        _log.debug("keyring set search failed for %s", provider)
+        return False
+
+
+def delete_search_key(provider: str = "tavily") -> bool:
+    if _keyring is None:
+        return False
+    try:
+        _keyring.delete_password(SERVICE_SEARCH, provider)
+        return True
+    except _PwDelErr:                    # 本就不存在 → 无可删
+        return False
+    except Exception:
+        return False
+
+
+def has_search_key(provider: str = "tavily") -> bool:
+    return bool(get_search_key(provider))
+
+
 def get_trial_token() -> str | None:
     return get_api_key(_TRIAL_USERNAME)
 
