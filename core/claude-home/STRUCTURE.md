@@ -273,6 +273,53 @@ core/gui/
 
 ---
 
+## 七-bis、CoALA 记忆四分类（34 子系统记忆角色）
+
+> **来源**：记忆与小说数据存储调研 R3 蓝图 A1（`workspace/_temp_research/记忆与小说数据存储调研/`）。CoALA = Cognitive Architectures for Language Agents 记忆四分类，标注每个子系统的记忆角色，供未来改记忆层 / 加子系统时参照（避免乱加破架构）。**纯文档地基 · 不改运行时行为**。
+>
+> 四类定义：**Episodic** 经历事件流（按时序的事件日志）/ **Semantic** 世界事实知识（设定 / 角色 / 关系）/ **Procedural** 程序规则模板（剧情骨架 / 触发器 / 经验规则）/ **Working** 当前工作上下文（每 cluster 变的状态快照）。
+
+| # | 子系统 JSON | CoALA 记忆类型 |
+|---|---|---|
+| 1 | 人物卡 | **Semantic** |
+| 2 | 世界观 | **Semantic** |
+| 3 | 关系 | **Semantic** |
+| 4 | 地图 | **Semantic**（+Working: positions） |
+| 5 | 道具 | **Semantic** |
+| 6 | 进度 | **Working** |
+| 7 | 故事块摘要 | **Episodic**（cluster 账本主存储） |
+| 8 | 大势卡 | **Procedural**（剧情骨架 / 牵引规则） |
+| 9 | 事件簇 | **Procedural**（writer 工单） |
+| 10 | 事件表 | **Procedural**（触发器） |
+| 11 | 时间线 | **Episodic**（+Working: current_time） |
+| 12 | 伏笔表 | **Procedural**（待兑现契约） |
+| 13 | 作者风格 | **Semantic**（风格知识 · 第一权威） |
+| 14 | 场景规则 | **Procedural** |
+| 15 | 写作经验 | **Procedural**（Learning Loop 经验规则） |
+| 16 | 用户偏好 | **Procedural** |
+| 17 | 世界状态 | **Working**（当前世界快照 · 涟漪 delta） |
+| 18 | 涟漪规则 | **Procedural**（因果规则 · 北极星②核心） |
+| 19 | 枢纽场景 | **Semantic**（+Procedural: rhythm） |
+| 20 | 时钟表 | **Working**（剧情时钟倒计时） |
+| 21 | 叙事节拍器 | **Procedural** |
+| 22 | 主角压力档 | **Working**（stress 累计） |
+| 23 | character_arc_state | **Procedural**（弧线规则）+Working（stage） |
+| 24 | 角色行动表 | **Episodic**（NPC 幕后事件流） |
+| 25 | 群像档 | **Semantic** |
+| 26 | 事件池 | **Procedural**（候选池）+Episodic（drawn_log） |
+| 27 | 行动判定模板 | **Procedural** |
+| 28 | 角色池 | **Semantic** |
+| 29 | 角色烙印 | **Semantic**（voice DNA 5 层） |
+| 30 | knowledge_graph | **Semantic**（图结构 · 空骨架待填） |
+| 31 | subplot_threads | **Procedural**（线索追踪） |
+| 32 | beat_map | **Procedural**（scanner 专用不注入 writer） |
+| 33 | 四线脉络 | **Procedural**（Dramatica 四贯穿线） |
+| 34 | webnovel_bench_mapping | **Procedural**（评估维度） |
+
+**分布速览**：Semantic ~12、Procedural ~16、Working ~6、Episodic ~3（部分跨类）。**Episodic（经历事件流）偏薄**——故事块摘要 / 时间线 / 角色行动表勉强算，但缺「按时序连续可检索的事件日志」标准 Episodic 形态（`memory_layer.py` 的 chapter/summary/archive 三层是另一套独立检索记忆，未进 34 子系统）。**加新子系统时优先补 Episodic 缺口、勿无脑堆 Procedural。**
+
+---
+
 ## 八、迁移检查清单（从旧规范迁移）
 
 如果项目存在旧规范文件，按下表迁移：
