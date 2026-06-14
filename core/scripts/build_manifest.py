@@ -3583,6 +3583,13 @@ def _build_cache_layout() -> dict:
     DYNAMIC（cacheable 30%）：每章必变的（cluster_blueprint/上章 changes/prev_judge_findings）
 
     agent prompt 设计：按 STATIC → SEMI_STATIC → DYNAMIC 顺序排放，Anthropic API 自动 detect prefix → 命中率最高。
+
+    🔴 M1 cache 铁律（记忆调研 2026-06-15·前瞻约束·test_m1_cache_layout 守卫）：
+    B1 importance-aware 重排（伏笔 tier→importance / last_seen / recurrence 等动态字段）**只准动
+    DYNAMIC_30 段**，绝不重排 STATIC/SEMI——后者 prefix 字节稳定才命中 cache（省 60-90% token），
+    动态重排会破 prefix → 命中率暴跌 → 成本反升。B1 重排落点（selective_history_retrieval /
+    pending_secrets_to_reveal / hard_constraints）本就在 DYNAMIC，零行为改动；新增 importance 字段
+    务必落 DYNAMIC（守卫测试会拦外溢）。
     """
     return {
         "_doc": "v21 P1: Anthropic prompt caching 友好分层。agent prompt 顶部按本表顺序展示字段，可命中 prefix cache 节省 60-90% token 成本。",
