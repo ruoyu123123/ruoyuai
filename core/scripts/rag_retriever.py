@@ -69,12 +69,27 @@ def _cosine(a: dict, b: dict) -> float:
     return dot / (na * nb)
 
 
+def tier_to_importance(tier) -> float:
+    """伏笔/角色 tier → importance 权重（B1：tier→importance 贯通·分桶变排序）。
+
+    tier1=核心主线(最重要) / tier2=支线 / tier3=细节。映射 0-1·喂 mmr_rerank importance。
+    非法/缺失 tier → 0.2（低·保守）。
+    """
+    try:
+        t = int(tier)
+    except (ValueError, TypeError):
+        return 0.2
+    return {1: 1.0, 2: 0.5, 3: 0.2}.get(t, 0.2)
+
+
 def mmr_rerank(
     cand_indices: list[int],
     relevance: dict[int, float],
     sim_fn,
     k: int,
     alpha: float = 0.7,
+    importance: "dict[int, float] | None" = None,
+    importance_weight: float = 0.0,
 ) -> list[int]:
     """确定性贪心 MMR（Maximal Marginal Relevance）重排，零额外 API。
 
@@ -92,16 +107,22 @@ def mmr_rerank(
     """
     if k <= 0 or not cand_indices:
         return []
-    # 起点 = 相关性最高（并列取最小下标·确定性）
+
+    # B1: importance 先验权重（伏笔 tier→importance）融进 score。importance_weight 默认 0
+    # → _imp 恒 0 → 与原行为逐字节一致（零回归）。weight>0 时高 tier 内容在检索中优先。
+    def _imp(i):
+        return (importance.get(i, 0.0) if importance else 0.0) * importance_weight
+
+    # 起点 = 相关性(+importance)最高（并列取最小下标·确定性）
     remaining = list(cand_indices)
-    remaining.sort(key=lambda i: (-relevance.get(i, 0.0), i))
+    remaining.sort(key=lambda i: (-(relevance.get(i, 0.0) + _imp(i)), i))
     selected: list[int] = [remaining.pop(0)]
     while remaining and len(selected) < k:
         best_i = None
         best_score = None
         for i in remaining:
             max_sim_sel = max((sim_fn(i, s) for s in selected), default=0.0)
-            mmr = alpha * relevance.get(i, 0.0) - (1.0 - alpha) * max_sim_sel
+            mmr = alpha * relevance.get(i, 0.0) + _imp(i) - (1.0 - alpha) * max_sim_sel
             # 并列：score 高优先，再按下标小优先（去随机）
             key = (-mmr, i)
             if best_score is None or key < best_score:
