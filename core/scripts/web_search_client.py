@@ -120,6 +120,36 @@ def _raise_redacted(msg: str):
     raise SearchError(msg) from None
 
 
+def gather_research_context(queries, max_per_query: int = 3,
+                            provider: str = "tavily") -> tuple[str, int]:
+    """多 query 联网搜索 → 格式化成 research context markdown（喂 gen-model 当 driver 代读内容）。
+
+    novel-researcher 在程序驱动模式是 gen-model judge（无 WebSearch）·本函数把真联网结果
+    组装成 context block 经 run_judge 的 extra_blocks 注入·让 gen-model 基于真数据综合非编造。
+    key 未配 → SearchKeyMissing 冒泡（调用方 catch 降级静态模板·北极星 failure soft）。
+    返回 (context_md, source_count)；无结果返回 ("", 0)。
+    """
+    qs = [q.strip() for q in (queries or []) if q and q.strip()]
+    if not qs:
+        return "", 0
+    blocks: list[str] = []
+    total = 0
+    for q in qs:
+        results = search(q, max_results=max_per_query, provider=provider)
+        if not results:
+            continue
+        lines = [f"### 查询：{q}"]
+        for r in results:
+            lines.append(f"- **{r['title']}**（{r['url']}）\n  {r['content']}")
+            total += 1
+        blocks.append("\n".join(lines))
+    if not blocks:
+        return "", 0
+    header = (f"# 联网调研结果（{total} 条来源 · {len(blocks)} 个查询 · "
+              f"基于此综合·勿凭记忆编造）\n")
+    return header + "\n\n".join(blocks), total
+
+
 def is_search_available(provider: str = "tavily") -> bool:
     """key 是否已配（keyring 或 env）——调用方预检决定走联网还是静态降级。"""
     try:

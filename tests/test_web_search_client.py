@@ -218,6 +218,58 @@ def test_search_key_never_leaks_to_error():
     _with_mem(body)
 
 
+# ============ gather_research_context（多 query → gen-model 输入 block）============
+def test_gather_research_context_multi_query():
+    """多 query → 格式化 research context markdown（含来源计数 header + 防编造提示）。"""
+    def body():
+        ss.set_search_key("tavily", "tvly-K")
+        restore = _patch_httpx_client(lambda *a, **k: _FakeClient({
+            "results": [
+                {"title": "T1", "url": "http://a", "content": "C1"},
+                {"title": "T2", "url": "http://b", "content": "C2"},
+            ]}))
+        try:
+            ctx, n = wsc.gather_research_context(["查询1", "查询2"], max_per_query=3)
+            assert n == 4                        # 2 query × 2 results
+            assert "联网调研结果" in ctx
+            assert "查询1" in ctx and "查询2" in ctx
+            assert "T1" in ctx and "http://a" in ctx
+            assert "勿凭记忆编造" in ctx          # gen-model 防编造提示
+        finally:
+            restore()
+    _with_mem(body)
+
+
+def test_gather_research_empty_queries():
+    def body():
+        assert wsc.gather_research_context([]) == ("", 0)
+        assert wsc.gather_research_context(["  ", ""]) == ("", 0)   # 全空白
+    _with_mem(body)
+
+
+def test_gather_research_key_missing_raises():
+    """key 未配 → SearchKeyMissing 冒泡（调用方 catch 降级静态模板）。"""
+    def body():
+        try:
+            wsc.gather_research_context(["查询"])
+            assert False, "key 未配应 raise SearchKeyMissing"
+        except wsc.SearchKeyMissing:
+            pass
+    _with_mem(body)
+
+
+def test_gather_research_no_results():
+    """搜索返回空 → ('', 0)（不崩·调用方降级）。"""
+    def body():
+        ss.set_search_key("tavily", "tvly-K")
+        restore = _patch_httpx_client(lambda *a, **k: _FakeClient({"results": []}))
+        try:
+            assert wsc.gather_research_context(["查询"]) == ("", 0)
+        finally:
+            restore()
+    _with_mem(body)
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):
