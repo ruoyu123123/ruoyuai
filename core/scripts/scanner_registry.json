@@ -133,6 +133,13 @@
       "_new": true,
       "issues_emitted": ["EMOTION_CURVE_RESCAN_DRIFT"]
     },
+    "subtext_rescan": {
+      "layer": "cluster",
+      "script": "subtext_rescan_scanner.py",
+      "doc": "[2026-06-15 记忆调研W1·潜台词/on-the-nose回查] 检测on-the-nose情绪直陈(引导词感到/心中/充满了+情绪状态名词愤怒/悲伤/绝望紧邻·去重)密度·CLAUDE.md反AI腔③『动作>情绪词不写他感到愤怒』·闭环consolidate subtext_instance_count埋设端齐备但writer写完零回查·与semantic_slop主题大词正交·advisory·env SUBTEXT_RESCAN_MODE默认shadow·阈值3.0金标准校准(真作者最大1.14/千字留2.6x余量)·北极星⑤直陈有时合理绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["ON_THE_NOSE_EMOTION_DENSITY"]
+    },
     "romance_pacing": {
       "layer": "cluster",
       "genre_gated": "romance",
