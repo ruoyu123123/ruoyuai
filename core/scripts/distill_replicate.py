@@ -896,56 +896,288 @@ def _knockout_accept(best_score: float | None, cand_score: float | None) -> bool
 # 维度消融驱动骨架（R3 ABL-3/ABL-5 · 2026-06-14 · experiment_gate · 待 gen-model API）
 # ============================================================
 
+def _ablation_record_dir(project_root: Path) -> Path:
+    """消融实验逐 SFS 即时落盘目录（断点可查 · _数据库/.ablation/）。"""
+    d = Path(project_root) / "_数据库" / ".ablation"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _append_ablation_record(project_root: Path, dimension: str, arm: str,
+                            seed: int, sfs):
+    """把一次 (arm, seed) 的 SFS 即时 append 落盘 <dimension>_<arm>.json（断点可查）。
+
+    落盘失败绝不崩实验（顾问非法官·消融只是 advisory 证据）—— IO 错误吞掉记 stderr。
+    """
+    try:
+        rec_path = _ablation_record_dir(project_root) / f"{dimension}_{arm}.json"
+        records = []
+        if rec_path.exists():
+            try:
+                records = json.loads(rec_path.read_text(encoding="utf-8"))
+                if not isinstance(records, list):
+                    records = []
+            except (json.JSONDecodeError, OSError):
+                records = []
+        records.append({
+            "arm": arm, "seed": seed,
+            "sfs": (round(float(sfs), 4) if sfs is not None else None),
+            "ts": time.time(),
+        })
+        rec_path.write_text(
+            json.dumps(records, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+    except Exception as e:  # noqa: BLE001 · 断点记录失败不崩实验
+        print(f"[ablation] WARN 断点落盘失败（{dimension}_{arm} seed{seed}）: "
+              f"{str(e)[:120]}", file=sys.stderr)
+
+
+def _make_real_ablation_runner(project_root: Path, cluster_id: int,
+                               ref_texts, dimension: str):
+    """构造真实 subprocess runner（_run_one 缺省时用）：toggle env → build_manifest →
+    gen_writer → 读草稿 → _score_draft_sfs。
+
+    🔴 北极星④：消融跑 writer 路径（思维注入只在 gen_writer 经 build_manifest 生效），
+    **不**改本文件的复刻 prompt。每次都重跑 build_manifest（带 env）让 ABLATE_* 生效。
+
+    env 传法（subprocess 隔离·不污染父进程 os.environ）：
+      · ABLATE_DIMENSIONS = ablate_dims（"" = baseline 全注入 / "<dim>" = 抹该维）
+      · ABLATE_RANDOM_FIELD = "1" if random_field else ""（负对照注入随机 directive）
+      · BEST_OF_N = "1"（控变量·关 best-of-N 多稿择优·消融只比单稿 SFS）
+
+    鲁棒：subprocess 非 0 / 草稿读不到 / SFS None → 返回 None（该 seed 跳过·不崩整实验）。
+    草稿目录备份/恢复由外层 run_dimension_ablation 的 finally 统一负责（避免污染正式草稿）。
+    """
+    import subprocess  # noqa: E402 · 仅真实 runner 路径用（单测全 mock 不触发）
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from frozen_util import child_python  # noqa: E402 · frozen 兼容解释器（禁写死 "python"）
+
+    proj_str = str(project_root)
+    bm_script = str(Path(__file__).parent / "build_manifest.py")
+    gw_script = str(Path(__file__).parent / "gen_writer.py")
+    ch_start = _ablation_infer_ch_start(project_root, cluster_id)
+    draft_path = (project_root / "章节"
+                  / f"cluster_{cluster_id:03d}_draft"
+                  / f"cluster_{cluster_id:03d}_draft.txt")
+
+    def _run_one(arm: str, seed: int, ablate_dims: str, random_field: bool):
+        env = dict(os.environ)
+        env["ABLATE_DIMENSIONS"] = ablate_dims or ""
+        env["ABLATE_RANDOM_FIELD"] = "1" if random_field else ""
+        env["BEST_OF_N"] = "1"  # 控变量：关 best-of-N（消融比单稿 SFS）
+        py = child_python()
+        try:
+            # ① build_manifest（positional：项目路径 + 章节号）—— ABLATE_* env 在此生效
+            r1 = subprocess.run(
+                [py, bm_script, proj_str, str(ch_start)],
+                env=env, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=300)
+            if r1.returncode != 0:
+                print(f"[ablation·{arm}·seed{seed}] build_manifest 非0退出 "
+                      f"(rc={r1.returncode})·该 seed 跳过\n{(r1.stderr or '')[:400]}",
+                      file=sys.stderr)
+                return None
+            # ② gen_writer（--project / --cluster int）—— 写到固定草稿路径
+            r2 = subprocess.run(
+                [py, gw_script, "--project", proj_str,
+                 "--cluster", str(cluster_id)],
+                env=env, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=900)
+            if r2.returncode != 0:
+                print(f"[ablation·{arm}·seed{seed}] gen_writer 非0退出 "
+                      f"(rc={r2.returncode})·该 seed 跳过\n{(r2.stderr or '')[:400]}",
+                      file=sys.stderr)
+                return None
+        except subprocess.TimeoutExpired as e:  # gen-model 挂住/超时·该 seed 跳过不卡死全实验
+            print(f"[ablation·{arm}·seed{seed}] subprocess 超时（{e.timeout}s·gen-model 可能挂住）"
+                  f"·该 seed 跳过", file=sys.stderr)
+            return None
+        except Exception as e:  # noqa: BLE001 · subprocess 异常该 seed 跳过不崩实验
+            print(f"[ablation·{arm}·seed{seed}] subprocess 异常·该 seed 跳过: "
+                  f"{str(e)[:200]}", file=sys.stderr)
+            return None
+        # ③ 读草稿 → SFS（同一把尺：同 _score_draft_sfs + 同 ref_texts）
+        if not draft_path.exists():
+            print(f"[ablation·{arm}·seed{seed}] 草稿读不到（{draft_path}）·该 seed 跳过",
+                  file=sys.stderr)
+            return None
+        try:
+            draft_text = draft_path.read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"[ablation·{arm}·seed{seed}] 草稿读取失败·该 seed 跳过: "
+                  f"{str(e)[:160]}", file=sys.stderr)
+            return None
+        return _score_draft_sfs(ref_texts, draft_text)
+
+    return _run_one
+
+
+def _ablation_infer_ch_start(project_root: Path, cluster_id: int) -> int:
+    """推 cluster 起始章号（喂 build_manifest 的章节号 positional）。
+
+    复用 gen_writer._infer_cluster_start_ch（事件簇.json.ch_start/chapter_range → 末章+1
+    → cluster_001=1 兜底）·禁用 f"cluster_{ch:03d}" 机械拼接。导入失败兜底返 cluster_id
+    （绝不崩 · 章号无效时 build_manifest 自身会回退 _infer_start_chapter）。
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        import gen_writer  # noqa: E402 · 复用 ch_start 推导（同一权威·不重造）
+        return int(gen_writer._infer_cluster_start_ch(Path(project_root), cluster_id))
+    except Exception as e:  # noqa: BLE001 · 推导失败兜底（build_manifest 会再回退）
+        print(f"[ablation] WARN ch_start 推导失败（cluster {cluster_id}）→ 兜底用 "
+              f"cluster_id: {str(e)[:120]}", file=sys.stderr)
+        return int(cluster_id)
+
+
 def run_dimension_ablation(*, project, cluster_ref, skill_version, dimension,
                            n_seed=3, layer="surface", probe_noise_floor=0.0,
-                           random_field_control=False):
-    """【experiment_gate 骨架·本机做不了·需 gen-model API】维度消融驱动 + A1-A5 自证。
+                           random_field_control=False, ref_texts=None,
+                           _run_one=None):
+    """维度消融驱动 + A1-A5 自证（leave-one-dim-out · experiment_gate 顶层编排）。
 
-    ⚠️ 这是**驱动骨架**——真正跑要 gen-model API（中转站限速 gen_throttle ~13rpm），本机
-    确定性单测覆盖不了。统计判据部分（distill_holdout.effect_significance_detail /
-    build_ablation_entry）已是纯函数本机可测；本函数只负责「跑 gen-model 收 SFS 分」那段。
+    🔴🔴🔴 北极星⑤⑥铁律（调用方必读）：本函数返回的一切（verdict / significant /
+    effect_detail / entry）**纯 advisory 供人看**——
+      · 北极星⑤（顾问非法官）：结果**绝不进 hard_gate**，调用方**绝不据消融结果自动改注入
+        维度**（不据 verdict 把 ABLATE_DIMENSIONS 当决策开关自动 toggle）。只产 entry 给人裁。
+      · 北极星⑥（实验数据非拍脑袋）：正对照（抹真维退化超门 effect_significant=True 且
+        direction='ablation_degrades'）+ 负对照（随机字段无显著效应 negative_control_pass=
+        True）**两条都过**，结论才可信；任一不过 → 视作 inconclusive，**绝不**据此动注入维度。
 
-    ───────────────── 跑法（experiment_gate）─────────────────
-    R3 open_question#1 已定调走 **writer 路径**（A1-A5 思维注入只在 gen_writer 经
-    build_manifest 生效·distill_replicate 自身不消费思维注入）。所以消融驱动 = toggle
-    build_manifest 的 ABLATE_DIMENSIONS env 后跑 writer，**不是**改本文件的复刻 prompt：
-
-      正对照（验有效维·防假阴性）：
-        baseline_runs = 跑 N seed gen_writer（ABLATE_DIMENSIONS 空·含该维注入）→ 各 SFS
-        ablated_runs  = 跑 N seed gen_writer（ABLATE_DIMENSIONS=<dimension>·抹该维）→ 各 SFS
-        判据 = distill_holdout.effect_significance_detail(baseline, ablated,
-                 probe_noise_floor=<av_judge 实测·思维维>, layer=<surface|thinking>)
-               期望 verdict=='effective_dim' 且 direction=='ablation_degrades'
-               （抹 A3 → post_climax_retention/SFS 退化且超 max(1σ_seed, probe_floor)）。
-      负对照（验死维·防假阳性）：
-        random_field_control=True → 跑时设 ABLATE_RANDOM_FIELD=1（注入无意义随机 directive）
-        期望 effect_significant==False·verdict=='noise'（随机维无差异=统计层能分辨噪声）。
+    ───────────────── 跑法（writer 路径·非改复刻 prompt）─────────────────
+    R3 open_question#1 定调走 **writer 路径**（A1-A5 思维注入只在 gen_writer 经 build_manifest
+    生效·distill_replicate 自身不消费思维注入）。消融驱动 = toggle build_manifest 的
+    ABLATE_DIMENSIONS env 后跑 writer：
+      · baseline_runs = N seed（ABLATE_DIMENSIONS 空·含该维注入）→ 各 SFS
+      · ablated_runs  = N seed（ABLATE_DIMENSIONS=<dimension>·抹该维）→ 各 SFS
+      · random_field_control=True → random_runs = N seed（ABLATE_RANDOM_FIELD=1·注入无意义
+        随机 directive）→ 期望与 baseline 无显著差异（=统计层能分辨噪声·防假阳性）。
 
     ───────────────── 量纲铁律 ─────────────────
-    🔴 效应度量两组用**同一把尺**（同 SFS_quick·或同 scanner proxy retention 前后比），
-    **绝不**拿 author_baseline（judge 0-10 口径）跨量纲比（narrative_rhythm_scanner 已警告）。
-    主度量建议 SFS_quick（确定性·无判别噪声）；scanner proxy retention 仅 A3 专属佐证。
-    思维维 probe_noise_floor 取 av_judge.probe_noise_floor(1−mean_agreement)，且须先验
-    mean_agreement≥0.6（否则探针太不稳·该维结论标 inconclusive·不宣称）。
+    🔴 baseline / ablated / random 三组用**同一把尺**（同 _score_draft_sfs + 同 ref_texts），
+    **绝不**跨量纲比（不拿 author_baseline 的 judge 0-10 口径混进来）。
 
-    ───────────────── 预算（gen_throttle 4.5s/call ~13rpm）─────────────────
-    用 distill_holdout.estimate_cost(n_dims, n_seed, n_clusters, n_arms, sec_per_call=4.5)
-    先算墙钟·超 budget_hours → 未验维默认保持 shadow（不拍脑袋切 active）。最小自证集 =
-    1 维 × 2 条件(baseline+ablated) × N≤5 seed × 1-2 cluster ≈ 1-2 小时墙钟。
+    参数：
+      project: 项目根路径（含 _数据库/ + cluster_index）。
+      cluster_ref: cluster_id（"cluster_001" / 1 / "auto_003"）—— 经 cluster_lookup 反查 int。
+      skill_version / dimension: 标在 entry 上（skill 版本 / 被抹维度如 'A3'）。
+      n_seed: 每 arm 跑几趟 seed（默认 3·样本须各 ≥2 才有 seed-level std）。
+      layer / probe_noise_floor: 透传 effect_significance_detail（思维维传 av_judge 探针地板）。
+      random_field_control: True → 跑负对照 arm。
+      ref_texts: SFS 裁判的源作者参考文本 list（同一把尺·真实 runner 必传·否则 SFS 恒 None）。
+      _run_one: **依赖注入**——单测传 mock 不实跑 gen-model。签名见下。缺省→构造真实 subprocess
+                runner（备份草稿目录 → toggle env → build_manifest → gen_writer → 读草稿 → SFS
+                → finally 恢复草稿目录）。
 
-    ───────────────── 切 active 的闸 ─────────────────
-    正对照（抹 A3 复现退化超门）+ 负对照（随机字段无差异）两条都过 → 消融统计层才可信、
-    才准把 ABLATE_DIMENSIONS 用作决策依据。任一不过 → 结论一律 inconclusive，**绝不**据此
-    动注入维度（守北极星⑥用实验数据非拍脑袋·守北极星⑤全 advisory 不进 hard_gate）。
+    _run_one(arm: str, seed: int, ablate_dims: str, random_field: bool) -> float|None
+      arm ∈ {'baseline','ablated','random'}；返回该趟 SFS（None=该 seed 失败·被 filter 掉）。
 
-    返回（实现后）：build_ablation_entry 产的 entry（kind='ablation'·含 verdict/significant）。
+    返回 dict（kind='ablation'）：
+      {kind, dimension, cluster_ref, skill_version, baseline_sfs, ablated_sfs, effect_detail,
+       n_seed_effective:{baseline,ablated[,random]},
+       [random_field_sfs, random_field_detail, negative_control_pass], entry}
     """
-    raise NotImplementedError(
-        "run_dimension_ablation 是 experiment_gate 骨架：需 gen-model API 跑 writer 路径"
-        "（toggle build_manifest ABLATE_DIMENSIONS env + 多 seed gen_writer + SFS 打分），"
-        "本机确定性单测覆盖不了。统计判据用 distill_holdout.effect_significance_detail /"
-        " build_ablation_entry（已纯函数本机可测）。跑法/预算/判据见本 docstring。"
-    )
+    sys.path.insert(0, str(Path(__file__).parent))
+    import distill_holdout  # noqa: E402 · 纯函数统计判据（已 ready·不重造）
+
+    project_root = Path(project)
+
+    # ── cluster_ref → cluster_id int（禁用 f"cluster_{ch:03d}" 机械拼接·走 cluster_lookup） ──
+    import cluster_lookup  # noqa: E402
+    cluster_id = cluster_lookup.cluster_num(cluster_ref)
+    if cluster_id is None:
+        raise ValueError(
+            f"run_dimension_ablation：无法从 cluster_ref={cluster_ref!r} 解析 cluster_id"
+            f"（禁用机械拼接·须走 cluster_lookup.cluster_num）")
+
+    # ── _run_one 缺省 → 构造真实 subprocess runner（含草稿目录备份/恢复 finally） ──
+    backup_dir = None
+    draft_dir = (project_root / "章节" / f"cluster_{cluster_id:03d}_draft")
+    if _run_one is None:
+        import shutil  # noqa: E402 · 仅真实 runner 路径备份草稿目录（单测 mock 不触发）
+        _run_one = _make_real_ablation_runner(
+            project_root, cluster_id, ref_texts or [], dimension)
+        # 备份正式草稿目录（消融会反复重写它）—— 全跑完 finally 恢复·绝不污染正式产物
+        if draft_dir.exists():
+            backup_dir = draft_dir.with_name(draft_dir.name + ".ablation_bak")
+            try:
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                shutil.copytree(draft_dir, backup_dir)
+            except OSError as e:
+                print(f"[ablation] WARN 草稿目录备份失败（消融会改正式草稿·风险自负）: "
+                      f"{str(e)[:160]}", file=sys.stderr)
+                backup_dir = None
+
+    def _collect(arm: str, ablate_dims: str, random_field: bool) -> list:
+        """跑 n_seed 趟同 arm·即时落盘断点·filter 掉 None。"""
+        runs = []
+        for seed in range(n_seed):
+            sfs = _run_one(arm, seed, ablate_dims, random_field)
+            _append_ablation_record(project_root, dimension, arm, seed, sfs)
+            if sfs is not None:
+                runs.append(float(sfs))
+        return runs
+
+    try:
+        baseline_runs = _collect("baseline", "", False)
+        ablated_runs = _collect("ablated", dimension, False)
+
+        effect_detail = distill_holdout.effect_significance_detail(
+            baseline_runs, ablated_runs,
+            probe_noise_floor=probe_noise_floor, layer=layer)
+        entry = distill_holdout.build_ablation_entry(
+            skill_version, dimension, cluster_ref,
+            baseline_runs, ablated_runs,
+            probe_noise_floor=probe_noise_floor, layer=layer)
+
+        result = {
+            "kind": "ablation",
+            "dimension": dimension,
+            "cluster_ref": cluster_ref,
+            "skill_version": skill_version,
+            "baseline_sfs": baseline_runs,
+            "ablated_sfs": ablated_runs,
+            "effect_detail": effect_detail,
+            "n_seed_effective": {
+                "baseline": len(baseline_runs),
+                "ablated": len(ablated_runs),
+            },
+            "entry": entry,
+            "_north_star_note": (
+                "北极星⑤⑥：本结果纯 advisory 供人看·绝不进 hard_gate·调用方不得据此自动"
+                "改注入维度。正对照(抹真维退化超门)+负对照(随机字段无差异)两条都过结论才可信。"
+            ),
+        }
+
+        # ── 负对照（随机字段·验死维·防假阳性）·只在显式开启时跑 ──
+        if random_field_control:
+            random_runs = _collect("random", "", True)
+            rf_detail = distill_holdout.effect_significance_detail(
+                baseline_runs, random_runs,
+                probe_noise_floor=probe_noise_floor, layer=layer)
+            # 随机字段应**无**显著效应（统计层分得清噪声）→ negative_control_pass=True。
+            # 缺键容错默认 True（保守：缺信息时不轻易宣称负对照失败·但样本不足时 detail 已
+            # significant=False 故仍 pass·与 effect_significance_detail inconclusive 行为一致）。
+            negative_control_pass = not rf_detail.get("effect_significant",
+                                                      rf_detail.get("significant", False))
+            result["random_field_sfs"] = random_runs
+            result["random_field_detail"] = rf_detail
+            result["negative_control_pass"] = bool(negative_control_pass)
+            result["n_seed_effective"]["random"] = len(random_runs)
+
+        return result
+    finally:
+        # ── 恢复正式草稿目录（绝不让消融污染正式产物） ──
+        if backup_dir is not None and backup_dir.exists():
+            import shutil  # noqa: E402
+            try:
+                if draft_dir.exists():
+                    shutil.rmtree(draft_dir, ignore_errors=True)
+                shutil.move(str(backup_dir), str(draft_dir))
+            except OSError as e:
+                print(f"[ablation] WARN 草稿目录恢复失败（备份留在 {backup_dir}）: "
+                      f"{str(e)[:160]}", file=sys.stderr)
 
 
 # ============ main ============
