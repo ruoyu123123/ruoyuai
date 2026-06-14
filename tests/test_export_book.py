@@ -127,6 +127,36 @@ def test_changes_markers_stripped():
         assert "facts_locked" not in text and "秘密A" not in text
 
 
+# ============ 改编资料包集成（一人公司·喂 IP 后端·2026-06-15） ============
+
+def test_adaptation_kit_default_off():
+    """默认 with_adaptation_kit=False → 不产改编资料包（零回归）+ report.adaptation_kit=None。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "测试书"
+        root.mkdir()
+        _mk_chapter(root, 1, "正文。")
+        report = eb.export_book(root)
+        assert report["adaptation_kit"] is None
+        assert not (root / "改编资料包").exists()
+
+
+def test_adaptation_kit_flag_produces_kit():
+    """with_adaptation_kit=True + 有人物卡 → 产改编资料包 + report.adaptation_kit 含产出。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "测试书"
+        root.mkdir()
+        _mk_chapter(root, 1, "正文。")
+        dbdir = root / "_数据库"
+        dbdir.mkdir(parents=True, exist_ok=True)
+        (dbdir / "人物卡.json").write_text(json.dumps(
+            {"characters": [{"id": "A", "name": "甲", "role": "主角", "arc": "成长"}]},
+            ensure_ascii=False), encoding="utf-8")
+        report = eb.export_book(root, with_adaptation_kit=True)
+        assert report["adaptation_kit"] is not None
+        assert "人物小传.md" in report["adaptation_kit"]["written"]
+        assert (root / "改编资料包" / "人物小传.md").exists()
+
+
 # ============ 4. 无章节 exit 1 ============
 
 def test_no_chapters_exit_1():

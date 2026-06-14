@@ -190,8 +190,12 @@ def check_pending_tail_orphans(project_root) -> list:
 
 # ============ 导出主流程 ============
 
-def export_book(project_root, out_path=None) -> dict:
-    """拼接全书。成功返回报告 dict；无任何章节可导出返回 None。"""
+def export_book(project_root, out_path=None, with_adaptation_kit=False) -> dict:
+    """拼接全书。成功返回报告 dict；无任何章节可导出返回 None。
+
+    with_adaptation_kit=True（--adaptation-kit）：导出后额外产改编资料包（一人公司·喂 IP 后端·
+    人物小传/世界设定集/故事梗概/高潮伏笔清单·纯确定性投影）。默认 False 零回归。
+    """
     project_root = Path(project_root).resolve()
     found = discover_chapters(project_root)
     if not found:
@@ -229,6 +233,17 @@ def export_book(project_root, out_path=None) -> dict:
         out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(full, encoding="utf-8")
 
+    # 改编资料包（一人公司·IP 后端·可选 --adaptation-kit·默认不产零回归·失败不影响主导出）
+    adaptation = None
+    if with_adaptation_kit:
+        try:
+            sys.path.insert(0, str(Path(__file__).parent))
+            import adaptation_kit
+            adaptation = adaptation_kit.generate_kit(project_root)
+            print(f"[OK] 改编资料包：{len(adaptation.get('written', {}))} 份 → {adaptation.get('out_dir')}")
+        except Exception as e:  # noqa: BLE001 · 改编资料包失败不影响主导出
+            print(f"[WARN] 改编资料包生成失败（不影响导出）: {str(e)[:120]}", file=sys.stderr)
+
     report = {
         "out_path": str(out_path),
         "chapters": len(blocks),
@@ -236,6 +251,7 @@ def export_book(project_root, out_path=None) -> dict:
         "total_words": cio.count_words(full),
         "total_cjk": cio.count_cjk(full),
         "orphan_pending_tails": len(orphans),
+        "adaptation_kit": adaptation,
     }
     print(f"[OK] 导出完成：{len(blocks)} 章 / {report['total_cjk']} CJK → {out_path}")
     return report
@@ -245,6 +261,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="全书导出：章节按章号升序拼接成全文 txt")
     ap.add_argument("project", help="项目路径（workspace/novels/<书名>）")
     ap.add_argument("--out", default=None, help="输出文件路径（默认 <项目>/exports/<书名>_全文_<章数>章.txt）")
+    ap.add_argument("--adaptation-kit", action="store_true",
+                    help="同时产改编资料包(人物小传/设定集/梗概/高潮清单·喂 IP 后端·纯确定性投影)")
     args = ap.parse_args(argv)
 
     project_root = Path(args.project)
@@ -252,7 +270,7 @@ def main(argv=None):
         print(f"[FATAL] 项目路径不存在: {args.project}", file=sys.stderr)
         sys.exit(2)
 
-    report = export_book(project_root, args.out)
+    report = export_book(project_root, args.out, with_adaptation_kit=args.adaptation_kit)
     sys.exit(0 if report else 1)
 
 
