@@ -69,6 +69,49 @@ def _cosine(a: dict, b: dict) -> float:
     return dot / (na * nb)
 
 
+def mmr_rerank(
+    cand_indices: list[int],
+    relevance: dict[int, float],
+    sim_fn,
+    k: int,
+    alpha: float = 0.7,
+) -> list[int]:
+    """确定性贪心 MMR（Maximal Marginal Relevance）重排，零额外 API。
+
+    治高方差作者纯相似 top-k 的「近重复冗余」：相似度第一名和第二名可能讲同一段笔法，
+    MMR 在每步选 argmax( alpha*相关性 − (1-alpha)*与已选集合的最大相似度 )，
+    强制覆盖不同笔法/不同历史片段。
+
+    - cand_indices: 候选文档下标
+    - relevance[i]: 文档 i 对 query 的相关性（0-1，越大越相关）
+    - sim_fn(i, j): 文档 i 与 j 的两两相似度（0-1，对称）
+    - k: 取多少个
+    - alpha: 权重 ∈ [0.5,0.9]（越大越偏相关性·越小越偏多样性）
+
+    确定性：每步打分相同时按 (−score, 下标) 升序定序——去随机，防成 temp1.0 外又一噪声源。
+    """
+    if k <= 0 or not cand_indices:
+        return []
+    # 起点 = 相关性最高（并列取最小下标·确定性）
+    remaining = list(cand_indices)
+    remaining.sort(key=lambda i: (-relevance.get(i, 0.0), i))
+    selected: list[int] = [remaining.pop(0)]
+    while remaining and len(selected) < k:
+        best_i = None
+        best_score = None
+        for i in remaining:
+            max_sim_sel = max((sim_fn(i, s) for s in selected), default=0.0)
+            mmr = alpha * relevance.get(i, 0.0) - (1.0 - alpha) * max_sim_sel
+            # 并列：score 高优先，再按下标小优先（去随机）
+            key = (-mmr, i)
+            if best_score is None or key < best_score:
+                best_score = key
+                best_i = i
+        selected.append(best_i)
+        remaining.remove(best_i)
+    return selected
+
+
 def _snippet(text: str, length: int = 200) -> str:
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     result = []
@@ -81,7 +124,8 @@ def _snippet(text: str, length: int = 200) -> str:
     return '\n'.join(result) if result else text[:length]
 
 
-def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3) -> list[dict]:
+def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3,
+                   use_mmr: bool = True, mmr_alpha: float = 0.7) -> list[dict]:
     # v17.5 修复：接受 str 或 Path
     project_root = Path(project_root) if not isinstance(project_root, Path) else project_root
     chapters = {}
@@ -156,47 +200,60 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3) -> list[dict]:
 
     vectors, _ = _tfidf_vectors(docs)
     query_vec = vectors[-1]
-    scores = []
-    for i, ch in enumerate(ch_nums):
-        sim = _cosine(vectors[i], query_vec)
-        scores.append((ch, sim))
+    # 每个候选章对 query 的相关性（按下标存·MMR 与回填都按下标取）
+    rel = {i: _cosine(vectors[i], query_vec) for i in range(len(ch_nums))}
+    # 先过相关性下限（< 0.01 视为不相关·与历史行为一致），得候选池
+    cand = [i for i in range(len(ch_nums)) if rel[i] >= 0.01]
+    if not cand:
+        return []
 
-    scores.sort(key=lambda x: -x[1])
+    # MMR 覆盖式选取（治近重复冗余）：候选 > top_k 才有去冗余意义；候选 ≤ top_k 时
+    # MMR 退化为纯相关性排序（不强上 diversity·避免简单场景过度工程）。
+    def _doc_sim(i: int, j: int) -> float:
+        return _cosine(vectors[i], vectors[j])
+
+    if use_mmr and len(cand) > top_k:
+        order = mmr_rerank(cand, rel, _doc_sim, top_k, alpha=mmr_alpha)
+    else:
+        # 纯 top-k（确定性：score 高优先·并列下标小优先）
+        order = sorted(cand, key=lambda i: (-rel[i], i))[:top_k]
+
     results = []
-    for ch, score in scores[:top_k]:
-        if score < 0.01:
-            continue
+    for i in order:
+        ch = ch_nums[i]
         results.append({
             'chapter': ch,
-            'score': round(score, 4),
+            'score': round(rel[i], 4),
             'snippet': _snippet(summaries.get(ch, '') or chapters.get(ch, '')[:300]),
         })
     return results
 
 
-def retrieve_embedding(project_root, current_ch: int, top_k: int = 3) -> list[dict]:
+def retrieve_embedding(project_root, current_ch: int, top_k: int = 3,
+                       use_mmr: bool = True, mmr_alpha: float = 0.7) -> list[dict]:
     """v17.6 D2: embedding 模式（SCORE 框架 hybrid retrieval 第二轮）。
 
     优先级：如果设置 OPENAI_API_KEY 环境变量 → 调 OpenAI；
     否则自动降级到 TF-IDF。
 
     实测：SCORE 测试 TF-IDF + 语义 = 23.6% coherence 提升 vs 纯 TF-IDF。
+    MMR 重排参数透传 TF-IDF 降级路径（embedding 实装后亦复用 mmr_rerank·零额外 API）。
     """
     import os
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         print("[INFO] OPENAI_API_KEY 未设，降级 TF-IDF 模式", file=sys.stderr)
-        return retrieve_tfidf(project_root, current_ch, top_k)
+        return retrieve_tfidf(project_root, current_ch, top_k, use_mmr, mmr_alpha)
     try:
         # 延迟导入，避免无 openai 包时报错
         import openai
     except ImportError:
         print("[INFO] openai 包未安装，降级 TF-IDF 模式", file=sys.stderr)
-        return retrieve_tfidf(project_root, current_ch, top_k)
+        return retrieve_tfidf(project_root, current_ch, top_k, use_mmr, mmr_alpha)
     # 简化版：仅占位，实际生产用 OpenAI/Cohere embedding API
-    # TODO: 调用 openai.embeddings.create() 用 text-embedding-3-small
+    # TODO: 调用 openai.embeddings.create() 用 text-embedding-3-small + mmr_rerank 重排
     # 当前先返回 TF-IDF 结果 + 标记 fallback
-    results = retrieve_tfidf(project_root, current_ch, top_k)
+    results = retrieve_tfidf(project_root, current_ch, top_k, use_mmr, mmr_alpha)
     for r in results:
         r["mode"] = "tfidf_fallback (embedding not implemented yet)"
     return results
@@ -204,25 +261,31 @@ def retrieve_embedding(project_root, current_ch: int, top_k: int = 3) -> list[di
 
 def main():
     if len(sys.argv) < 3:
-        print('用法: python rag_retriever.py <项目路径> <章节号> [--top-k 3] [--mode tfidf|embedding|hybrid]', file=sys.stderr)
+        print('用法: python rag_retriever.py <项目路径> <章节号> [--top-k 3] [--mode tfidf|embedding|hybrid] [--no-mmr] [--mmr-alpha 0.7]', file=sys.stderr)
         sys.exit(2)
 
     project_root = Path(sys.argv[1]).resolve()
     chapter = int(sys.argv[2])
     top_k = 3
     mode = "tfidf"
+    use_mmr = True        # P2 默认开 MMR 覆盖式选取（治近重复冗余）
+    mmr_alpha = 0.7
     for i, a in enumerate(sys.argv):
         if a == '--top-k' and i+1 < len(sys.argv):
             top_k = int(sys.argv[i+1])
         if a == '--mode' and i+1 < len(sys.argv):
             mode = sys.argv[i+1]
+        if a == '--no-mmr':
+            use_mmr = False
+        if a == '--mmr-alpha' and i+1 < len(sys.argv):
+            mmr_alpha = float(sys.argv[i+1])
 
     if mode == "embedding":
-        results = retrieve_embedding(project_root, chapter, top_k)
+        results = retrieve_embedding(project_root, chapter, top_k, use_mmr, mmr_alpha)
     elif mode == "hybrid":
         # 双路融合：TF-IDF + embedding 各取 top_k，按分数加权合并
-        a = retrieve_tfidf(project_root, chapter, top_k)
-        b = retrieve_embedding(project_root, chapter, top_k)
+        a = retrieve_tfidf(project_root, chapter, top_k, use_mmr, mmr_alpha)
+        b = retrieve_embedding(project_root, chapter, top_k, use_mmr, mmr_alpha)
         # 简化：去重 + 取并集
         seen = set()
         results = []
@@ -233,7 +296,7 @@ def main():
             if len(results) >= top_k:
                 break
     else:
-        results = retrieve_tfidf(project_root, chapter, top_k)
+        results = retrieve_tfidf(project_root, chapter, top_k, use_mmr, mmr_alpha)
     print(json.dumps(results, ensure_ascii=False, indent=2))
     
 

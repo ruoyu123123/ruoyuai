@@ -96,23 +96,110 @@ def pick_type_weighted_avoiding(
     return candidates[-1][0], "fallback_last"
 
 
+# ── P2·MMR 覆盖式 golden 样本选取（2026-06-14 · 作者思维蒸馏 G6-MMR）──────────
+# 旧逻辑「同 type 取前 ≤2」对高方差作者会拿到两段近重复笔法（同一种开场写两遍）。
+# 改 MMR：相关性=tag 命中强度 · 多样性=正文文本相似度的补——让 2 个样本覆盖不同笔法。
+# 零额外 API（纯字符 bigram 统计）· 确定性（去随机·不引入 temp1.0 外噪声）。
+
+def _char_bigrams(text: str) -> dict:
+    """中文正文 → 字符 bigram 计数向量（零依赖·近重复检测足够）。"""
+    s = re.sub(r"\s+", "", text or "")
+    if len(s) < 2:
+        return {s: 1} if s else {}
+    out: dict = {}
+    for i in range(len(s) - 1):
+        bg = s[i:i + 2]
+        out[bg] = out.get(bg, 0) + 1
+    return out
+
+
+def _text_cosine(a: str, b: str) -> float:
+    """两段正文的字符 bigram 余弦相似度（0=完全不同·1=相同）。"""
+    va, vb = _char_bigrams(a), _char_bigrams(b)
+    keys = set(va) & set(vb)
+    if not keys:
+        return 0.0
+    import math
+    dot = sum(va[k] * vb[k] for k in keys)
+    na = math.sqrt(sum(v * v for v in va.values()))
+    nb = math.sqrt(sum(v * v for v in vb.values()))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _tag_relevance(tag: str, target_type: str) -> float:
+    """tag 对 target_type 的命中强度（1.0=整串命中·0.6=分词命中·0=不沾）。"""
+    if not target_type:
+        return 0.0
+    if target_type in tag:
+        return 1.0
+    if any(t and t in tag for t in target_type.split()):
+        return 0.6
+    return 0.0
+
+
+def _passage_text(p: dict) -> str:
+    """从 golden passage 取用于相似度比对的正文（兼容多字段命名）。"""
+    return str(
+        p.get("text") or p.get("passage") or p.get("excerpt")
+        or p.get("content") or p.get("sample") or p.get("example") or ""
+    )
+
+
+def mmr_select_passages(
+    candidates: list[dict], target_type: str, max_samples: int = 2, alpha: float = 0.7
+) -> list[dict]:
+    """对候选 golden 段做确定性贪心 MMR 选取（覆盖不同笔法·去近重复）。
+
+    相关性 = _tag_relevance；多样性惩罚 = 与已选段的最大文本相似度。
+    每步选 argmax( alpha*rel − (1-alpha)*max_sim_to_selected )；并列按原序下标小优先（去随机）。
+    """
+    pool = list(enumerate(candidates))
+    if not pool or max_samples <= 0:
+        return []
+    rel = {idx: _tag_relevance(p.get("tag", ""), target_type) for idx, p in pool}
+    # 起点：相关性最高（并列取原序最前·确定性）
+    pool.sort(key=lambda ip: (-rel[ip[0]], ip[0]))
+    selected = [pool.pop(0)]
+    while pool and len(selected) < max_samples:
+        best = None
+        best_key = None
+        for idx, p in pool:
+            max_sim = max(
+                (_text_cosine(_passage_text(p), _passage_text(sp)) for _, sp in selected),
+                default=0.0,
+            )
+            mmr = alpha * rel[idx] - (1.0 - alpha) * max_sim
+            key = (-mmr, idx)   # score 高优先·并列原序小优先
+            if best_key is None or key < best_key:
+                best_key = key
+                best = (idx, p)
+        selected.append(best)
+        pool.remove(best)
+    return [p for _, p in selected]
+
+
 def get_golden_samples_for_type(
     passages: list, target_type: str, max_samples: int = 2
 ) -> list[dict]:
-    """从 golden_passages.opening_passages/ending_passages 中筛 tag 含 target_type 的样本。"""
+    """从 golden_passages.opening_passages/ending_passages 中筛 tag 含 target_type 的样本。
+
+    P2：命中候选 > max_samples 时用 MMR 覆盖式选取（不同笔法）取代「取前 N」近重复。
+    """
     if not passages or not target_type:
         return []
-    hits = []
-    for p in passages:
-        tag = p.get("tag", "")
-        if target_type in tag or any(t in tag for t in target_type.split()):
-            hits.append(p)
-        if len(hits) >= max_samples:
-            break
+    hits = [
+        p for p in passages
+        if target_type in p.get("tag", "")
+        or any(t in p.get("tag", "") for t in target_type.split())
+    ]
     if not hits and passages:
-        # 没匹配上时退回前 N 个
+        # 没匹配上时退回前 1 个（与历史行为一致）
         return passages[:1]
-    return hits
+    if len(hits) <= max_samples:
+        return hits   # 候选不多于配额 → 不强上 diversity（避免过度工程）
+    return mmr_select_passages(hits, target_type, max_samples=max_samples)
 
 
 def build_directive(project_root: Path, chapter: int) -> dict:

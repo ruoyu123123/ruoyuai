@@ -2746,6 +2746,58 @@ def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
     return payload
 
 
+def _collect_knowledge_gap_directives(s: "DatabaseScanner") -> dict | None:
+    """D3：读者-角色知识差三态注入（env KNOWLEDGE_GAP_INJECT_MODE 默认 shadow·仿 rhythm·advisory）。
+
+    读 consolidate 聚合的 knowledge_gap_profile（信息差三态占比 + 释放序列）→ writer 节奏指令。
+    默认 shadow（R2:D3 切 active 前过标注一致性闸 G3 + 消融·区别于 rhythm 的 active）·off 零回归·active 注入。
+    """
+    import os as _os
+    mode = (_os.environ.get("KNOWLEDGE_GAP_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+    if not s.has_style_profile():
+        return None
+    try:
+        profile = s.load("作者风格", {})
+        kg = profile.get("knowledge_gap_profile") if isinstance(profile, dict) else None
+    except Exception as e:
+        print(f"[WARN] knowledge_gap 读取失败: {e}", file=sys.stderr)
+        return None
+    if not isinstance(kg, dict) or not kg:
+        return None
+    directives = []
+    kgd = kg.get("knowledge_gap_distribution") or {}
+    if kgd:
+        parts = "、".join(f"{k}{v.get('pct', 0):.0%}" for k, v in list(kgd.items())[:3])
+        ra = kg.get("reader_advantage_pct")
+        tail = f"·读者优势型 {ra:.0%}）" if ra is not None else "）"
+        directives.append(f"信息差主调（读者-角色知识差三态·作者基线）：{parts}"
+                          "（reader_adv=读者优势/上帝视角虐心·reader_disadv=角色优势·double_blind=双盲悬疑"
+                          + tail)
+    rsd = kg.get("release_sequence_distribution") or {}
+    if rsd:
+        directives.append("信息释放节拍偏好：" + "、".join(list(rsd)[:3]))
+    if not directives:
+        return None
+    payload = {"gate_level": "advisory", "advisory_only": True,
+               "directives": directives, "raw": kg,
+               "_doc": "作者信息差主调（读者-角色知识差·序列骨·advisory·作者档第一权威）"}
+    try:
+        out_path = s.db / ".knowledge_gap" / f"ch_{s.ch:03d}.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    if mode == "shadow":
+        print(f"[SHADOW] knowledge_gap_signature: {len(directives)} 条信息差指令 — 不注入 manifest",
+              file=sys.stderr)
+        return None
+    return payload
+
+
 def _collect_author_decision_principles(s: "DatabaseScanner") -> dict | None:
     """阶段2：作者决策原则 + 人物刻画手法（纯 prompt 注入·零 scanner·永远 advisory）。
 
@@ -3485,6 +3537,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "author_style_fingerprint": _collect_author_style_fingerprint(s),
         # 阶段1：作者叙事节奏指纹（序列级骨·env RHYTHM_INJECT_MODE 默认 active 放量·advisory）。
         "author_rhythm_signature": _collect_author_rhythm_signature(s),
+        # D3：读者-角色知识差三态（信息差序列骨·env KNOWLEDGE_GAP_INJECT_MODE 默认 shadow·advisory）。
+        "knowledge_gap_signature": _collect_knowledge_gap_directives(s),
         # 阶段2：作者决策原则+人物刻画手法（思维/刻画骨·env DECISION_INJECT_MODE 默认 active 放量·advisory）。
         "author_decision_principles": _collect_author_decision_principles(s),
         # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 active 放量·advisory·unknown→None）。

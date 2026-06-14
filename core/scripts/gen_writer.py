@@ -334,6 +334,39 @@ def _build_rhythm_signature_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _build_knowledge_gap_section(manifest_path: Path) -> str:
+    """阶段·D3：从 manifest.knowledge_gap_signature 抽读者-角色信息差三态指令拼 writer prompt 段。
+
+    序列骨之一（与 rhythm 并列）——「读者比角色多知道还是少知道」是悬念/虐心/打脸的底层
+    引擎（Sternberg 三态：reader_adv 上帝视角虐心 / reader_disadv 角色优势卖关子 /
+    double_blind 双盲悬疑）。KNOWLEDGE_GAP_INJECT_MODE=off/shadow 或无指令 → ""（不注入·
+    零回归·切 active 前须过 G3 标注一致性闸 + 消融）。advisory·作者档第一权威·北极星⑤不硬锁。
+    """
+    if not manifest_path.exists():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    kg = m.get('knowledge_gap_signature')
+    if not isinstance(kg, dict):
+        return ""
+    directives = kg.get('directives') or []
+    if not directives:
+        return ""
+    lines = [
+        "## 🕳️ 作者信息差主调（读者-角色知识差三态·序列骨 · advisory）",
+        "",
+        "悬念/虐心/打脸的底层引擎不是「写得多惊险」，是**读者和角色谁多知道一层**——读者"
+        "比角色先知道危险（上帝视角虐心）、角色比读者先知道（卖关子）、还是双盲推进（纯悬疑）。"
+        "逐条贴合作者基线的信息差分布：",
+        "",
+    ]
+    for d in directives:
+        lines.append(f"- {d}")
+    return "\n".join(lines)
+
+
 def _build_genre_pack_section(manifest_path: Path) -> str:
     """阶段3：从 manifest.genre_pack_directives 拼题材专属工艺段（按 genre·advisory）。
 
@@ -605,6 +638,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     decision_section = _build_decision_principles_section(manifest_path)
     # 阶段3：题材专属工艺段（按 genre·GENRE_INJECT_MODE 控制·unknown/空则零回归）
     genre_section = _build_genre_pack_section(manifest_path)
+    # 阶段D3：作者信息差主调段（读者-角色知识差三态·KNOWLEDGE_GAP_INJECT_MODE 控制·默认 shadow 时空 → 零回归）
+    knowledge_gap_section = _build_knowledge_gap_section(manifest_path)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
@@ -868,6 +903,8 @@ cluster_brief 完整内容：
     decision_block = (decision_section + "\n\n") if decision_section else ""
     # 阶段3：题材专属工艺段（与决策原则并列·空则零回归）
     genre_block = (genre_section + "\n\n") if genre_section else ""
+    # 阶段D3：信息差主调段（与决策原则并列·序列骨·默认 shadow 时空 → 零回归）
+    knowledge_gap_block = (knowledge_gap_section + "\n\n") if knowledge_gap_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
     primacy_section = _build_hard_constraint_primacy_block(
@@ -900,7 +937,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{genre_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -934,7 +971,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}

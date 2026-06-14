@@ -582,6 +582,51 @@ def build_decision_cheat_sheet(dec: dict) -> list:
     return sheet
 
 
+def aggregate_knowledge_gap(project: Path) -> dict:
+    """D3：读者-角色知识差三态聚合（读 cluster_*_surface.json 的 dim32.per_point·确定性·仿 aggregate_rhythm）。
+
+    只收 confidence!='low' 的点·Counter gap_code(reader_adv/reader_disadv/double_blind)→占比 +
+    reader_advantage_pct(D3 验证锚·信息差流 vs 悬疑作者区分)。单 cluster 有效点<3 标 low_confidence
+    不计入(占比需跨 cluster 累积·防方差爆)。旧格式(dim32 是 str)→ isinstance(dict) 守卫降级不计数(向后兼容)。
+    """
+    dist = project / "蒸馏进度"
+    surfaces = sorted(dist.glob("cluster_*_surface.json"))
+    if not surfaces:
+        return {}
+    gap_counter: Counter = Counter()
+    release_counter: Counter = Counter()
+    for sp in surfaces:
+        try:
+            dims = (json.loads(sp.read_text(encoding="utf-8")).get("qualitative_dims") or {})
+        except (OSError, json.JSONDecodeError):
+            continue
+        dim32 = dims.get("dim32_信息差管理")
+        cluster_gap: Counter = Counter()
+        if isinstance(dim32, dict):   # 新格式（旧 str 自由文本格式跳过·向后兼容）
+            for pt in dim32.get("per_point") or []:
+                if not isinstance(pt, dict) or pt.get("confidence") == "low":
+                    continue
+                code = (pt.get("gap_code") or "").strip()
+                if code in ("reader_adv", "reader_disadv", "double_blind"):
+                    cluster_gap[code] += 1
+        if sum(cluster_gap.values()) >= 3:   # 单 cluster 有效点<3 不计入（low_confidence）
+            gap_counter.update(cluster_gap)
+        dim13 = dims.get("dim13_信息投放")
+        if isinstance(dim13, dict):
+            for r in dim13.get("release_sequence") or []:
+                if isinstance(r, str) and r.strip():
+                    release_counter[r.strip()[:12]] += 1
+    out: dict = {}
+    if gap_counter:
+        tot = sum(gap_counter.values())
+        out["knowledge_gap_distribution"] = {
+            k: {"count": v, "pct": round(v / tot, 3)} for k, v in gap_counter.most_common()}
+        out["reader_advantage_pct"] = round(gap_counter.get("reader_adv", 0) / tot, 3)
+    if release_counter:
+        out["release_sequence_distribution"] = dict(release_counter.most_common())
+    return out
+
+
 def consolidate(project: Path, total: int) -> dict:
     """聚合 + 规整 作者风格.json（保留创意字段，覆盖/补全 consumer 数值字段）。"""
     q = aggregate_quantitative(project, total)
@@ -620,6 +665,9 @@ def consolidate(project: Path, total: int) -> dict:
         sheet = build_decision_cheat_sheet(decisions)  # D7 紧凑决策表（per_scene_rationale 聚类压缩）
         if sheet:
             style["author_decision_cheat_sheet"] = sheet
+        kg = aggregate_knowledge_gap(project)  # D3 读者-角色知识差三态（reader_adv/reader_disadv/double_blind）
+        if kg:
+            style.setdefault("knowledge_gap_profile", {}).update(kg)
         style.setdefault("_meta", {})["consumer_fields_consolidated"] = {
             "by": "consolidate_author_profile.py",
             "note": "consumer 数值/分布字段由确定性脚本聚合·照顾弱模型驱动·不靠 agent 自由 schema",

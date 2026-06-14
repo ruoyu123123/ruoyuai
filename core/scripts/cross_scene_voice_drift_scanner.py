@@ -160,6 +160,47 @@ def compute_d8_tic_consistency(char_scene_tics: dict) -> dict:
     return {"inconsistent_tics": issues[:8], "count": len(issues)}
 
 
+# ── P2·VOICE_COLLAPSE_CROSS_CHAR 跨角色 voice 坍缩（2026-06-14 · 作者思维蒸馏 R1 P2）──
+# 「所有人说话一个味」= 声音坍缩 · 弱模型最典型盲点（D4 区分度已算两两距离·这里把
+# 它升成一条带 code 的『待裁决项』供 audit_hub 透传给写作 agent）。
+# 复用 compute_d4_distinctiveness 已抽好的逐角色句长/catchphrase 桶（机械特征·非 embedding）。
+# 全 advisory · 同身份角色（兄弟/同帮派/群演）本就相似 → writer 有理由可豁免 ·
+# 绝不进 HARD_GATE_CODES（_gate_level_for 不在白名单即降档）。
+VOICE_COLLAPSE_CROSS_CHAR_CODE = "VOICE_COLLAPSE_CROSS_CHAR"
+
+
+def compute_cross_char_voice_collapse(d4: dict | None) -> dict | None:
+    """把 D4 两两距离结果蒸成一条 VOICE_COLLAPSE_CROSS_CHAR 待裁决项（声音坍缩）。
+
+    入参直接吃 compute_d4_distinctiveness 的产物（零重复计算·共用机械桶）。
+    判定：整体两两均距过低（mean<0.10·所有角色趋同）→ collapsed。
+    返回 None 表示不适用（<2 个角色）或未坍缩（无 issue）。
+    """
+    if not d4 or not d4.get("applicable"):
+        return None
+    mean_dist = d4.get("mean_pairwise_distance")
+    low_pairs = d4.get("low_distinctiveness_pairs", []) or []
+    collapsed = bool(d4.get("low_distinctiveness"))
+    if not collapsed:
+        return None
+    pair_hint = ""
+    if low_pairs:
+        p0 = low_pairs[0]
+        pair_hint = f"（如「{p0.get('a','?')}」≈「{p0.get('b','?')}」距离{p0.get('dist','?')}）"
+    return {
+        "issue_code": VOICE_COLLAPSE_CROSS_CHAR_CODE,
+        "gate_level": "advisory",
+        "char_count": d4.get("char_count"),
+        "mean_pairwise_distance": mean_dist,
+        "collapsed_pairs": low_pairs[:5],
+        "msg": (
+            f"跨角色 voice 坍缩：{d4.get('char_count','?')} 个角色两两均距仅 {mean_dist}"
+            f"（所有人说话一个味）{pair_hint}"
+            "·若同身份角色（兄弟/同帮派/群演）本就相似可豁免"
+        ),
+    }
+
+
 def scan(project_root: Path, draft_path: Path) -> dict:
     if not draft_path.exists():
         return {"_fatal": f"draft 不存在: {draft_path}"}
@@ -220,10 +261,14 @@ def scan(project_root: Path, draft_path: Path) -> dict:
                         "type": "avg_dialogue_length_drift",
                     })
 
-    # D4/D8（2026-05-31）· env VOICE_D4D8_MODE 默认 shadow（只挂字段不改 warning/exit · 回归0）
+    # D4/D8（2026-05-31）· env VOICE_D4D8_MODE 默认 active（只挂字段不改 warning/exit 时为 shadow）
     mode = _d4d8_mode()
     d4 = compute_d4_distinctiveness(char_all_dialogues) if mode != "off" else None
     d8 = compute_d8_tic_consistency(char_scene_tics) if mode != "off" else None
+    # P2：跨角色 voice 坍缩（VOICE_COLLAPSE_CROSS_CHAR）· 复用 d4 桶 · 同 mode 门控
+    cross_char_collapse = (
+        compute_cross_char_voice_collapse(d4) if mode != "off" else None
+    )
     base_warning = (
         f"⚠️ {len(drift_issues)} 处跨场景 voice 漂移嫌疑（句长偏差 >50%）"
         if drift_issues else None
@@ -231,7 +276,9 @@ def scan(project_root: Path, draft_path: Path) -> dict:
     d4d8_warning = None
     if mode == "active":   # 仅 active 把 D4/D8 升进 advisory warning（shadow 只挂字段不改判决）
         bits = []
-        if d4 and d4.get("low_distinctiveness"):
+        if cross_char_collapse:   # P2：坍缩优先（更具体·带 code）
+            bits.append(f"跨角色voice坍缩(两两均距{cross_char_collapse['mean_pairwise_distance']})")
+        elif d4 and d4.get("low_distinctiveness"):
             bits.append(f"角色voice区分度低(两两均距{d4['mean_pairwise_distance']})")
         elif d4 and d4.get("low_distinctiveness_pairs"):
             bits.append(f"{len(d4['low_distinctiveness_pairs'])}对角色说话同质化")
@@ -241,8 +288,21 @@ def scan(project_root: Path, draft_path: Path) -> dict:
             d4d8_warning = "；".join(bits)
     final_warning = "；".join([w for w in (base_warning, d4d8_warning) if w]) or None
 
+    # 顶层 issues[]：给 audit_hub / 任意消费方一个带 code 的可解析面（P2 新增坍缩项·
+    # active 才升 issue·shadow/off 只挂字段不产 issue → 回归 0）。
+    issues = []
+    if mode == "active" and cross_char_collapse:
+        issues.append({
+            "code": cross_char_collapse["issue_code"],
+            "gate_level": "advisory",      # 绝不 hard_gate（同身份角色本就相似）
+            "severity": "warning",
+            "msg": cross_char_collapse["msg"],
+            "count": len(cross_char_collapse.get("collapsed_pairs", [])),
+            "items": cross_char_collapse.get("collapsed_pairs", []),
+        })
+
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "scanner": "cross_scene_voice_drift_scanner",
         "gate_level": "advisory",
         "cluster_mode": True,
@@ -252,7 +312,9 @@ def scan(project_root: Path, draft_path: Path) -> dict:
         "drift_issues": drift_issues[:10],
         "d4_voice_distinctiveness": d4,
         "d8_tic_consistency": d8,
+        "cross_char_voice_collapse": cross_char_collapse,
         "d4d8_mode": mode,
+        "issues": issues,
         "warning": final_warning,
         "severity": "warning" if final_warning else "info",
     }

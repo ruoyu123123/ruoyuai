@@ -73,9 +73,9 @@
     "cross_scene_voice_drift": {
       "layer": "cluster",
       "script": "cross_scene_voice_drift_scanner.py",
-      "doc": "[Phase 3 新增] 同角色跨场景 voice 漂移",
+      "doc": "[Phase 3 新增] 同角色跨场景 voice 漂移 + P2 跨角色 voice 坍缩",
       "_new": true,
-      "issues_emitted": ["VOICE_DRIFT_CROSS_SCENE"]
+      "issues_emitted": ["VOICE_DRIFT_CROSS_SCENE", "VOICE_COLLAPSE_CROSS_CHAR"]
     },
     "foreshadowing_handoff": {
       "layer": "cluster",
