@@ -147,6 +147,13 @@
       "_new": true,
       "issues_emitted": ["DRAMATIC_IRONY_DRIFT"]
     },
+    "reveal_show": {
+      "layer": "cluster",
+      "script": "reveal_show_scanner.py",
+      "doc": "[2026-06-15 记忆调研W5·反转揭底tell回查] 检测揭底显式标志词(真相大白/恍然大悟/原来如此/这才明白/谜底揭晓)密度·金标准实证好作者用情节展示真相不用显式tell(惊悚乐园最大0.4遮天/诡秘全0)·故单向检测tell过多(W1/W4/W5同族tell-vs-show)阈值0.8·闭环promise_payoff查承诺-兑现但揭底tell堆砌无检测·非『公平性』本身(铺垫够不够留judge)·advisory·env REVEAL_SHOW_MODE默认shadow·北极星⑤揭底手法是创作选择绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["REVEAL_TELL_OVERUSE"]
+    },
     "romance_pacing": {
       "layer": "cluster",
       "genre_gated": "romance",
