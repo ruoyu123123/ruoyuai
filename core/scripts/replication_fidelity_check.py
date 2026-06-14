@@ -89,6 +89,241 @@ def _author_baseline(project_root):
     }
 
 
+def _mstyle_cosine_subscore(root, gen_text):
+    """C2 mstyle 余弦风格子分（advisory·单一接入点·topic-confound 用相对作者自相似 z）。
+
+    返回 dict 含 status: ok/invalid/skip。🔴 绝不静默 hash 冒充风格余弦·绝不抛异常
+    （main 安全·永不影响 verdict/exit）。复用 style_similarity_scanner 已建的作者 centroid+自相似 σ。
+    """
+    sp = str(Path(__file__).resolve().parent)
+    if sp not in sys.path:
+        sys.path.insert(0, sp)
+    # ① frozen 写作态不跑（无 torch 依赖·标 N/A 而非崩写作流水线）
+    try:
+        from frozen_util import is_frozen
+        if is_frozen():
+            return {"status": "skip", "reason": "frozen 写作态无 mstyle 依赖·余弦子分 N/A"}
+    except Exception:
+        pass
+    # ② 硬断言后端（C1）·失败→标 invalid 不参与判定（护栏·绝不 hash 冒充）
+    try:
+        import embedding_store as es
+        es.assert_mstyle_backend()
+    except Exception as e:
+        return {"status": "invalid", "reason": f"后端非 mstyle/未装包：{e}"[:200],
+                "_doc": "hash 后端→余弦子分自动标 invalid 不参与判定（绝不假风格信号）"}
+    # ③ 复用 style_similarity_scanner 的作者 centroid+自相似分布（topic-confound：相对 z 非绝对值）
+    try:
+        import style_similarity_scanner as ss
+        bl = ss._load_baseline(root) or ss.build_baseline(root)
+        if not bl or "_skip" in bl:
+            return {"status": "skip", "reason": (bl or {}).get("_skip", "无作者基线")}
+        center = bl.get("center_embedding") or []
+        gen_c = ss._text_centroid(gen_text)
+        if not center or not gen_c:
+            return {"status": "skip", "reason": "centroid 计算失败"}
+        sim = es.cosine_similarity(center, gen_c)
+        self_mean = (bl.get("self_similarity") or {}).get("mean")
+        self_std = (bl.get("self_similarity") or {}).get("std")
+        if self_mean is None or self_std is None:
+            return {"status": "skip", "reason": "作者自相似分布缺失"}
+        z = (sim - self_mean) / self_std if self_std > 1e-6 else 0.0
+        return {"status": "ok", "cosine_to_author_center": round(sim, 4),
+                "author_self_sim_mean": round(self_mean, 4), "author_self_sim_std": round(self_std, 4),
+                "z_vs_author_self": round(z, 2), "backend": es.embedding_method(),
+                "note": "相对作者自相似分布的 z（topic-confound 控制·绝对余弦受同题材抬高不直接用）"}
+    except Exception as e:
+        return {"status": "skip", "reason": f"余弦计算异常：{e}"[:200]}
+
+
+# ════════════════════════════════════════════════════════════════
+# intent_recovery（P0 · experiment · advisory）— 作者思维（B1-B3）确定性余弦判决
+# ════════════════════════════════════════════════════════════════
+# 设计（R3 P0-IR-2/3）：av_judge 的「作者思维」第 5 维（include_intent_dim）让 LLM-judge 反推一段
+#   仿写在『价值取舍/情绪处理/信息释放』上的决策走向，但**判决权不交弱模型 verdict**——交确定性
+#   mstyle 余弦：把 judge 反推文本 与 consolidate 聚合的 author_decision_principles（B1-B3 去重观察 ·
+#   consolidate L617 写入）算 StyleDistance 余弦。
+# 🔴 三条护栏（绝不 hash 冒充语义 · 北极星⑤⑥）：
+#   ① frozen 写作态无 torch → skip（不崩写作流水线）。
+#   ② 硬断言 embedding_store.assert_mstyle_backend()——hash 后端标 invalid 不出余弦（绝不假语义信号）。
+#   ③ author_decision_principles 序列化用 sort_keys 固定键序（同输入同输出 · 余弦可复现 · 复用
+#      consolidate._merge_observations._key 的 json.dumps(sort_keys=True) 范式）。
+# 全 advisory/experiment · 永不进 audit_hub.HARD_GATE_CODES · 永不阻断（exit 0）。
+
+
+def _flatten_principles(principles) -> str:
+    """把 author_decision_principles（嵌套 dict / list / str 混合）确定性序列化成稳定文本。
+
+    用于喂 mstyle embed——必须**同输入同输出**（键序固定 · 余弦可复现）。规则（贴合 consolidate
+    的 _merge_observations 产物形状：值或为 {subkey: [strings]} 嵌套、或为 list、或为 list[str]）：
+      · dict：按 sorted(key) 递归展开 `key：<flatten(value)>`，行间换行。
+      · list：逐项 flatten，'；' 连接（dict 项走 json.dumps(sort_keys=True) 稳定化）。
+      · 标量：str()。
+    顶层非 dict（防御）→ 直接 flatten 返回。
+    """
+    def _flat(v) -> str:
+        if isinstance(v, dict):
+            parts = []
+            for k in sorted(v.keys(), key=lambda x: str(x)):
+                if str(k).startswith("_"):   # 跳过 _raw_* / 内部字段（与 consolidate 一致）
+                    continue
+                parts.append(f"{k}：{_flat(v[k])}")
+            return "\n".join(parts)
+        if isinstance(v, list):
+            items = []
+            for x in v:
+                if isinstance(x, (dict, list)):
+                    items.append(json.dumps(x, ensure_ascii=False, sort_keys=True))
+                else:
+                    items.append(str(x))
+            return "；".join(items)
+        return str(v)
+
+    return _flat(principles if principles is not None else {})
+
+
+def intent_recovery_cosine(judge_reconstructed_text: str, author_b_principles) -> dict:
+    """确定性 mstyle 余弦判决（零 LLM）：judge 反推文本 vs 作者 B1-B3 决策原则（author_decision_principles）。
+
+    返回 {cosine, valid, method?, reason?}。判决落带由元验证（_intent_recovery_band · multi-ref 变异带）
+    决定·此函数只产余弦不下判决（advisory）。
+
+    🔴 护栏：
+      · frozen 写作态（无 torch）→ valid=False + status=skip（不崩流水线）。
+      · 后端非 mstyle（含默认 hash）→ valid=False + reason 含「≠mstyle」（绝不返回假余弦 · 防 hash 冒充）。
+      · 空文本 / 空 principles → valid=False（无可比内容）。
+    """
+    sp = str(Path(__file__).resolve().parent)
+    if sp not in sys.path:
+        sys.path.insert(0, sp)
+    # ① frozen 写作态不跑（无 torch 依赖·标 skip 而非崩）
+    try:
+        from frozen_util import is_frozen
+        if is_frozen():
+            return {"cosine": None, "valid": False, "status": "skip",
+                    "reason": "frozen 写作态无 mstyle 依赖·intent_recovery 余弦 N/A"}
+    except Exception:
+        pass
+    # ② 硬断言后端=mstyle（绝不 hash 冒充·R3 P0-IR-2 护栏）
+    try:
+        import embedding_store as es
+        es.assert_mstyle_backend()
+    except Exception as e:
+        method = ""
+        try:
+            import embedding_store as es  # noqa: F811
+            method = es.embedding_method()
+        except Exception:
+            method = "(探测失败)"
+        return {"cosine": None, "valid": False, "status": "invalid",
+                "reason": f"后端={method}≠mstyle·intent_recovery 余弦不可信（hash 假语义）·跳过：{str(e)[:120]}"}
+    # ③ 序列化作者原则 + 算余弦
+    author_text = _flatten_principles(author_b_principles)
+    jt = (judge_reconstructed_text or "").strip()
+    if not jt or not author_text.strip():
+        return {"cosine": None, "valid": False, "status": "skip",
+                "reason": "judge 反推文本 或 author_decision_principles 为空·无可比内容"}
+    try:
+        v1 = es._mstyle_embed(jt)
+        v2 = es._mstyle_embed(author_text)
+        sim = es.cosine_similarity(v1, v2)
+        return {"cosine": round(float(sim), 4), "valid": True, "status": "ok",
+                "method": es.embedding_method()}
+    except Exception as e:
+        return {"cosine": None, "valid": False, "status": "skip",
+                "reason": f"mstyle 余弦计算异常：{str(e)[:160]}"}
+
+
+def _intent_recovery_band(author_texts: list, k: float = 2.0) -> dict:
+    """用作者多章原文两两 mstyle 余弦的分布定义 multi-ref 变异带（mu±kσ）。
+
+    复用「单 ref 失真→强制 multi-ref」纪律：≥2 段原文，两两 _mstyle_embed 余弦 → {mu, sigma, lo, hi, n_pairs}。
+    band 随章数增加收窄（更多 pair → sigma 更稳）。后端非 mstyle / 段数 <2 → {valid: False, reason}。
+    """
+    sp = str(Path(__file__).resolve().parent)
+    if sp not in sys.path:
+        sys.path.insert(0, sp)
+    texts = [t for t in (author_texts or []) if isinstance(t, str) and t.strip()]
+    if len(texts) < 2:
+        return {"valid": False, "reason": f"multi-ref 变异带需 ≥2 段作者原文，当前 {len(texts)} 段"}
+    try:
+        from frozen_util import is_frozen
+        if is_frozen():
+            return {"valid": False, "reason": "frozen 写作态无 mstyle·变异带 N/A"}
+    except Exception:
+        pass
+    try:
+        import embedding_store as es
+        es.assert_mstyle_backend()
+    except Exception as e:
+        return {"valid": False, "reason": f"后端非 mstyle：{str(e)[:120]}"}
+    try:
+        vecs = [es._mstyle_embed(t) for t in texts]
+    except Exception as e:
+        return {"valid": False, "reason": f"mstyle embed 异常：{str(e)[:120]}"}
+    sims = []
+    for i in range(len(vecs)):
+        for j in range(i + 1, len(vecs)):
+            sims.append(es.cosine_similarity(vecs[i], vecs[j]))
+    if not sims:
+        return {"valid": False, "reason": "无有效配对"}
+    mu = st.mean(sims)
+    sigma = st.pstdev(sims) if len(sims) >= 2 else 0.0
+    return {"valid": True, "mu": round(mu, 4), "sigma": round(sigma, 4),
+            "lo": round(mu - k * sigma, 4), "hi": round(min(1.0, mu + k * sigma), 4),
+            "k": k, "n_pairs": len(sims), "n_refs": len(texts)}
+
+
+def intent_recovery_probe(judge_text: str, author_principles, author_ref_texts: list,
+                          k: float = 2.0, cross_stack: "dict | None" = None) -> dict:
+    """intent_recovery 旁挂探针（P0-IR-3 · advisory · 永不阻断）：余弦 + multi-ref 变异带 + 跨栈一致性。
+
+    · cosine = intent_recovery_cosine(judge_text, author_principles)（确定性 mstyle）。
+    · band = _intent_recovery_band(author_ref_texts, k)（作者多章原文两两余弦定义 mu±kσ）。
+    · in_band = band.lo ≤ cosine ≤ band.hi（真作者落带内不误报 / 偏离稿落带外可分辨）。
+    · cross_stack（可选 {'claude_cosine': float}）：gemini 反推余弦 + claude 反推余弦双双落带内 →
+      localization_confidence=high；跨栈不一致 → low（不参与 active/shadow 决策 · 防单模型自偏循环）。
+    恒 gate_level=advisory（顾问制 · 调用方 main 恒 exit 0）。
+    """
+    cos = intent_recovery_cosine(judge_text, author_principles)
+    band = _intent_recovery_band(author_ref_texts, k)
+    sim = cos.get("cosine")
+    in_band = None
+    if cos.get("valid") and band.get("valid") and sim is not None:
+        in_band = bool(band["lo"] <= sim <= band["hi"])
+
+    # 跨栈一致性（R3 P0-IR-3）：gemini 与 claude 反推余弦双双落带内才高置信
+    localization_confidence = "low"
+    cross = None
+    if cross_stack and isinstance(cross_stack, dict):
+        claude_cos = cross_stack.get("claude_cosine")
+        claude_in = (band.get("valid") and claude_cos is not None
+                     and band["lo"] <= claude_cos <= band["hi"])
+        cross = {"claude_cosine": claude_cos, "claude_in_band": bool(claude_in)}
+        if in_band and claude_in:
+            localization_confidence = "high"
+    elif in_band:
+        # 无跨栈对照 → 单栈落带内只给 medium（单模型自偏未排除）
+        localization_confidence = "medium"
+
+    return {
+        "tag": "intent_recovery",
+        "gate_level": "advisory",   # ⚠️ 永远 advisory · 永不阻断 · 永不进 HARD_GATE_CODES
+        "cosine": sim,
+        "cosine_status": cos.get("status"),
+        "cosine_valid": cos.get("valid", False),
+        "cosine_reason": cos.get("reason"),
+        "band": band,
+        "in_band": in_band,
+        "cross_stack": cross,
+        "localization_confidence": localization_confidence,
+        "method": cos.get("method"),
+        "_doc": ("intent_recovery=av_judge 第5维(作者思维)反推 + 确定性 mstyle 余弦判决 · "
+                 "真作者落带内防误报/偏离稿落带外证可分辨/跨栈双落带内防单模型自偏 · "
+                 "全 advisory experiment · frozen/hash 后端自动 skip 不假语义"),
+    }
+
+
 _BANDS = {
     "sentence_mean": (0.80, 1.25), "para_mean": (0.80, 1.30), "single_para_ratio": (0.80, 1.20),
     "comma_k": (0.75, 1.30), "period_k": (0.70, 1.40),
@@ -148,6 +383,9 @@ def main():
 
     report = {"verdict": "advisory" if issues else "pass", "gen": gen, "author": base, "issues": issues,
               "_doc": "作者金标准量化对比·顾问制·情绪标点(感叹/问号/省略)偏低=喜剧引擎未落地代理信号"}
+    report["mstyle_cosine"] = _mstyle_cosine_subscore(root, text)   # C2 advisory 附加·永不影响 verdict/exit
+    if report["mstyle_cosine"].get("status") == "invalid":
+        print(f"  [mstyle余弦] invalid（{report['mstyle_cosine'].get('reason', '')[:60]}）· 不参与判定", file=sys.stderr)
     out_dir = root / "_数据库" / ".audit"
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = f"cluster_{args.cluster:03d}" if args.cluster is not None else (args.chapters or "all")

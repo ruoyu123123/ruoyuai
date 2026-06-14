@@ -892,6 +892,62 @@ def _knockout_accept(best_score: float | None, cand_score: float | None) -> bool
     return True  # 都无分：裁判不可用，吃 refine 改稿
 
 
+# ============================================================
+# 维度消融驱动骨架（R3 ABL-3/ABL-5 · 2026-06-14 · experiment_gate · 待 gen-model API）
+# ============================================================
+
+def run_dimension_ablation(*, project, cluster_ref, skill_version, dimension,
+                           n_seed=3, layer="surface", probe_noise_floor=0.0,
+                           random_field_control=False):
+    """【experiment_gate 骨架·本机做不了·需 gen-model API】维度消融驱动 + A1-A5 自证。
+
+    ⚠️ 这是**驱动骨架**——真正跑要 gen-model API（中转站限速 gen_throttle ~13rpm），本机
+    确定性单测覆盖不了。统计判据部分（distill_holdout.effect_significance_detail /
+    build_ablation_entry）已是纯函数本机可测；本函数只负责「跑 gen-model 收 SFS 分」那段。
+
+    ───────────────── 跑法（experiment_gate）─────────────────
+    R3 open_question#1 已定调走 **writer 路径**（A1-A5 思维注入只在 gen_writer 经
+    build_manifest 生效·distill_replicate 自身不消费思维注入）。所以消融驱动 = toggle
+    build_manifest 的 ABLATE_DIMENSIONS env 后跑 writer，**不是**改本文件的复刻 prompt：
+
+      正对照（验有效维·防假阴性）：
+        baseline_runs = 跑 N seed gen_writer（ABLATE_DIMENSIONS 空·含该维注入）→ 各 SFS
+        ablated_runs  = 跑 N seed gen_writer（ABLATE_DIMENSIONS=<dimension>·抹该维）→ 各 SFS
+        判据 = distill_holdout.effect_significance_detail(baseline, ablated,
+                 probe_noise_floor=<av_judge 实测·思维维>, layer=<surface|thinking>)
+               期望 verdict=='effective_dim' 且 direction=='ablation_degrades'
+               （抹 A3 → post_climax_retention/SFS 退化且超 max(1σ_seed, probe_floor)）。
+      负对照（验死维·防假阳性）：
+        random_field_control=True → 跑时设 ABLATE_RANDOM_FIELD=1（注入无意义随机 directive）
+        期望 effect_significant==False·verdict=='noise'（随机维无差异=统计层能分辨噪声）。
+
+    ───────────────── 量纲铁律 ─────────────────
+    🔴 效应度量两组用**同一把尺**（同 SFS_quick·或同 scanner proxy retention 前后比），
+    **绝不**拿 author_baseline（judge 0-10 口径）跨量纲比（narrative_rhythm_scanner 已警告）。
+    主度量建议 SFS_quick（确定性·无判别噪声）；scanner proxy retention 仅 A3 专属佐证。
+    思维维 probe_noise_floor 取 av_judge.probe_noise_floor(1−mean_agreement)，且须先验
+    mean_agreement≥0.6（否则探针太不稳·该维结论标 inconclusive·不宣称）。
+
+    ───────────────── 预算（gen_throttle 4.5s/call ~13rpm）─────────────────
+    用 distill_holdout.estimate_cost(n_dims, n_seed, n_clusters, n_arms, sec_per_call=4.5)
+    先算墙钟·超 budget_hours → 未验维默认保持 shadow（不拍脑袋切 active）。最小自证集 =
+    1 维 × 2 条件(baseline+ablated) × N≤5 seed × 1-2 cluster ≈ 1-2 小时墙钟。
+
+    ───────────────── 切 active 的闸 ─────────────────
+    正对照（抹 A3 复现退化超门）+ 负对照（随机字段无差异）两条都过 → 消融统计层才可信、
+    才准把 ABLATE_DIMENSIONS 用作决策依据。任一不过 → 结论一律 inconclusive，**绝不**据此
+    动注入维度（守北极星⑥用实验数据非拍脑袋·守北极星⑤全 advisory 不进 hard_gate）。
+
+    返回（实现后）：build_ablation_entry 产的 entry（kind='ablation'·含 verdict/significant）。
+    """
+    raise NotImplementedError(
+        "run_dimension_ablation 是 experiment_gate 骨架：需 gen-model API 跑 writer 路径"
+        "（toggle build_manifest ABLATE_DIMENSIONS env + 多 seed gen_writer + SFS 打分），"
+        "本机确定性单测覆盖不了。统计判据用 distill_holdout.effect_significance_detail /"
+        " build_ablation_entry（已纯函数本机可测）。跑法/预算/判据见本 docstring。"
+    )
+
+
 # ============ main ============
 
 def main():

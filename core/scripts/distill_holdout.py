@@ -54,6 +54,27 @@ in-context reward hacking：优化目标（tuning SFS）和真实目标（任意
   python core/scripts/distill_holdout.py split \\
     --cluster cluster_001 --cluster cluster_002 --cluster cluster_003 \\
     --cluster cluster_004 --holdout-frac 0.25 --seed 42
+
+  # E) 维度消融记录（R3 ABLATION · 同 cluster 多 seed baseline vs ablated → 显著性证据）
+  #    baseline=含该维注入；ablated=ABLATE_DIMENSIONS=该维 抹掉后；两组同一 cluster（配对消题材）。
+  python core/scripts/distill_holdout.py ablation-record \\
+    --project workspace/styles/惊悚乐园 --skill-version v3 \\
+    --dimension A3 --cluster-ref cluster_001 --layer thinking --probe-noise-floor 0.28 \\
+    --baseline-sfs 72.1 --baseline-sfs 70.5 --baseline-sfs 71.8 \\
+    --ablated-sfs 66.0 --ablated-sfs 64.8 --ablated-sfs 65.3 --track
+
+  # F) 消融成本外推（纯算·零调用·按 gen_throttle 节流估墙钟 + 预算退路）
+  python core/scripts/distill_holdout.py cost-estimate \\
+    --dimensions 7 --seeds 5 --clusters 3 --calls-per-replica 2 \\
+    --min-interval 4.5 --budget-hours 6
+
+补充（R3 ABLATION 域 · 2026-06-14）
+----------------------------------
+消融统计层全程 advisory/experiment，**绝不进 audit_hub.HARD_GATE_CODES**，绝不据此自动
+改注入维度。1σ_seed 噪声门**只**取「同一 cluster 多 seed 复刻」的 SFS std
+（distill_track.sample_std），**绝不**用 style_evaluator.sentence_stats.std（量纲不同）。
+消融驱动 + A1-A5 工具自证（抹 A3 看 post_climax_retention 退化）需 gen-model API →
+见 distill_replicate.run_dimension_ablation 骨架的 experiment_gate（跑法/预算/判据）。
 """
 from __future__ import annotations
 import argparse
@@ -82,6 +103,14 @@ DEFAULT_GAP_FLOOR = 4.0
 DEFAULT_GAP_REL = 0.08
 # 最少 holdout 样本数：少于此值 holdout 均值不可信 → 不下过拟合结论（only 提示样本不足）。
 MIN_HOLDOUT_N = 1
+
+# ---- 消融效应显著性常量（R3 ABLATION 域 · 2026-06-14 · advisory/experiment 全程不阻断）----
+# 效应是否「真」的 1σ_seed 门系数：effect 须 > k × 1σ_seed（k=1 即一个标准差）。
+DEFAULT_EFFECT_K = 1.0
+# 表层维（确定性 SFS·无判别噪声）探针噪声地板=0；思维维由 av_judge 实测 instability 填。
+DEFAULT_PROBE_NOISE_FLOOR = 0.0
+# 成本外推：gen_throttle frozen 节流 4.5s/call（~13rpm·见 gen_throttle._min_interval）。
+DEFAULT_SEC_PER_CALL = 4.5
 
 
 # ============================================================
@@ -241,6 +270,262 @@ def detect_overfit(tuning_scores, holdout_scores,
             f"·视作正常波动·非过拟合")
     return {**base, "overfit": False, "applicable": True,
             "verdict": "healthy", "note": note}
+
+
+# ============================================================
+# 消融统计层（R3 ABLATION 域 · 2026-06-14）
+# ------------------------------------------------------------
+# 维度消融（leave-one-dimension-out）显著性判定的纯函数。**全部零 IO / 零模型 /
+# 零网络 · 可单测**。北极星⑤⑥：只产 advisory/experiment 证据，**绝不进
+# audit_hub.HARD_GATE_CODES**，绝不据此自动改注入维度（消融驱动的真机自证走
+# experiment_gate，见 distill_replicate.run_dimension_ablation 骨架）。
+#
+# 🔴 1σ 量纲铁律（R3 已纠正 R1/R2 量纲错配）：
+#   效应显著性的「1σ_seed 噪声门」**只能**取**同一 cluster 多 seed 复刻**的 SFS 分
+#   std（配对设计消题材后的纯抖动）—— 即 distill_track.sample_std / entry['std']。
+#   **绝不**用 style_evaluator.sentence_stats.std（那是「单篇文本内句长离散度」=
+#   作者节奏指纹，量纲完全不同），也不用 multi-ref std（cluster 间题材波动）。
+#   拿错基线当门会把真改进误判为噪声（与「arc-shape 真原文自比 FAIL」同根）。
+# ============================================================
+
+def seed_level_std(paired_sfs_runs):
+    """同一 cluster 多 seed 复刻的 SFS 分 list → seed-level std（配对设计的真噪声源）。
+
+    🔴 paired_sfs_runs **必须**是「**同一个 cluster** 用多个随机 seed 复刻」跑出的
+    SFS 分（配对设计：题材/参考被钉死，组间唯一变量是 seed 抖动）。误传「跨多个
+    不同 cluster」的分会退化回错误量纲（cluster 间题材波动 ≠ seed 抖动）—— 参数名
+    刻意叫 paired_sfs_runs 就是强约束这一点。
+
+    复用 distill_track.sample_std（无偏 · n-1）；distill_track 不可用时本地兜底
+    （同一无偏公式）。runs < 2 无法估抖动 → 返回 0.0（调用方据此退保守：
+    1σ 门退化到 abs_floor，不据不可信的 std 下显著性结论）。
+    """
+    xs = [float(x) for x in (paired_sfs_runs or [])]
+    if len(xs) < 2:
+        return 0.0
+    if _HAVE_DT:
+        return float(_dt.sample_std(xs))
+    # 本地兜底（与 distill_track.sample_variance 同：无偏 n-1）
+    m = sum(xs) / len(xs)
+    var = sum((x - m) ** 2 for x in xs) / (len(xs) - 1)
+    return var ** 0.5
+
+
+def _pooled_seed_std(baseline_runs, ablated_runs):
+    """baseline 与 ablated 两组同 cluster 多 seed 分的合并 seed-level std（pooled）。
+
+    复用 distill_track.pooled_std（两组无偏方差合并）；不可用时本地等价兜底。
+    任一组 < 2 趟其 df=0，退化为另一组；两组都不足 → 0.0（门退 abs_floor）。
+    """
+    b = [float(x) for x in (baseline_runs or [])]
+    a = [float(x) for x in (ablated_runs or [])]
+
+    def _var(xs):
+        if len(xs) < 2:
+            return 0.0
+        m = sum(xs) / len(xs)
+        return sum((x - m) ** 2 for x in xs) / (len(xs) - 1)
+
+    if _HAVE_DT:
+        return float(_dt.pooled_std(_var(b), len(b), _var(a), len(a)))
+    n_a, n_b = len(b), len(a)
+    df = (n_a - 1 if n_a > 1 else 0) + (n_b - 1 if n_b > 1 else 0)
+    if df <= 0:
+        return 0.0
+    num = max(n_a - 1, 0) * _var(b) + max(n_b - 1, 0) * _var(a)
+    return (num / df) ** 0.5
+
+
+def effect_threshold(pooled_std, *, probe_noise_floor=DEFAULT_PROBE_NOISE_FLOOR,
+                     k=DEFAULT_EFFECT_K):
+    """消融效应显著性门 = max(k × 1σ_seed, probe_noise_floor)（纯标量）。
+
+    · 表层维（确定性 SFS · 无判别位置偏）：probe_noise_floor=0 → 门 = k × 1σ_seed。
+    · 思维维（av_judge 探针度量）：探针自身不稳（mean_agreement<1）→ probe_noise_floor=
+      1−mean_agreement（见 av_judge.probe_noise_floor）。此时门取**两者大者**——
+      探针物理噪声地板与 seed 抖动门哪个高用哪个（分栏不同门限·绝不同一 1σ 通吃）。
+    """
+    return max(float(k) * float(pooled_std or 0.0), float(probe_noise_floor or 0.0))
+
+
+def effect_significant(effect, pooled_std, *,
+                       probe_noise_floor=DEFAULT_PROBE_NOISE_FLOOR,
+                       k=DEFAULT_EFFECT_K):
+    """leave-one-dim-out 的效应 |effect| 是否**超过显著性门** → 返回 bool。
+
+    门 = max(k × 1σ_seed(pooled_std), probe_noise_floor)。
+      · effect = baseline_mean − ablated_mean（抹掉该维后掉了多少分 · 正=注入侧更高）。
+      · 思维层传 probe_noise_floor=0.28(>1σ) 时门取大者（思维探针噪声地板）。
+      · 表层维 probe_noise_floor=0 → 纯 1σ_seed 门。
+
+    🔴 返回**布尔**（非 dict）：True=效应超门可宣称、False=门内不宣称（落 1σ_seed/探针
+    噪声内）。需要完整证据（门值/verdict）走 effect_significance_detail()。
+    全 advisory：超门只是「有证据可宣称」，**绝不**据此自动改注入维度。
+    """
+    if effect is None:
+        return False
+    thr = effect_threshold(pooled_std, probe_noise_floor=probe_noise_floor, k=k)
+    return abs(float(effect)) > thr
+
+
+def effect_significance_detail(baseline_runs, ablated_runs, *,
+                               probe_noise_floor=DEFAULT_PROBE_NOISE_FLOOR,
+                               k=DEFAULT_EFFECT_K, layer="surface"):
+    """从两组同 cluster 多 seed 分算完整显著性证据（纯函数 · 供 ledger entry / 自证用）。
+
+    baseline_runs：含目标维注入的 N seed SFS 分（同一 cluster）。
+    ablated_runs ：抹掉目标维（ABLATE_DIMENSIONS=该维）的 N seed SFS 分（同一 cluster）。
+
+    返回 dict（与 build_ablation_entry 消费的字段对齐）：
+      effect=baseline_mean−ablated_mean（正=注入侧更高=抹掉退化），
+      baseline_seed_std / ablated_seed_std / pooled_seed_std，
+      threshold_1sigma=k×pooled_seed_std，probe_noise_floor，
+      effect_threshold_final=max(threshold_1sigma, probe_noise_floor)，
+      significant=|effect|>effect_threshold_final，
+      direction='ablation_degrades'(抹掉掉分·注入有效方向) | 'ablation_improves' | 'flat'，
+      verdict='effective_dim'(显著且抹掉退化) | 'noise'/'dead_dim'(门内) | 'inconclusive'(样本不足)。
+    """
+    b = [float(x) for x in (baseline_runs or [])]
+    a = [float(x) for x in (ablated_runs or [])]
+    bm = _mean(b) if b else None
+    am = _mean(a) if a else None
+    b_std = seed_level_std(b)
+    a_std = seed_level_std(a)
+    pooled = _pooled_seed_std(b, a)
+    thr_1s = float(k) * pooled
+    thr_final = effect_threshold(pooled, probe_noise_floor=probe_noise_floor, k=k)
+    effect = (bm - am) if (bm is not None and am is not None) else None
+
+    out = {
+        "layer": layer,
+        "baseline_mean": round(bm, 3) if bm is not None else None,
+        "ablated_mean": round(am, 3) if am is not None else None,
+        "effect": round(effect, 3) if effect is not None else None,
+        "baseline_seed_std": round(b_std, 4),
+        "ablated_seed_std": round(a_std, 4),
+        "pooled_seed_std": round(pooled, 4),
+        "threshold_1sigma": round(thr_1s, 4),
+        "probe_noise_floor": round(float(probe_noise_floor or 0.0), 4),
+        "effect_threshold_final": round(thr_final, 4),
+        "baseline_n": len(b),
+        "ablated_n": len(a),
+    }
+    # 样本不足（任一组 < 2 → seed_std 不可信）→ 不下显著性结论（没调查没发言权）。
+    if effect is None or len(b) < 2 or len(a) < 2:
+        out.update({
+            "significant": False, "direction": "flat", "verdict": "inconclusive",
+            "note": (f"样本不足（baseline {len(b)} / ablated {len(a)} seed，"
+                     f"需各 ≥2 才有 seed-level std）·不宣称效应（advisory）"),
+        })
+        return out
+
+    sig = abs(effect) > thr_final
+    if effect > 0:
+        direction = "ablation_degrades"  # 抹掉该维 → 掉分（该维有效方向）
+    elif effect < 0:
+        direction = "ablation_improves"  # 抹掉反而涨（该维可能有害/冗余）
+    else:
+        direction = "flat"
+    out["significant"] = bool(sig)
+    out["direction"] = direction
+    if not sig:
+        out["verdict"] = "noise"  # 门内：落 1σ_seed/探针噪声·非有效维（防假阳性）
+        out["note"] = (f"效应 {effect:+.2f} 在门 {thr_final:.2f} 内"
+                       f"（1σ_seed={thr_1s:.2f}, probe_floor={out['probe_noise_floor']:.2f}）"
+                       f"·不宣称效应·可能死维或被维度交互掩盖")
+    elif direction == "ablation_degrades":
+        out["verdict"] = "effective_dim"  # 显著且抹掉退化=有效维
+        out["note"] = (f"抹掉该维退化 {effect:+.2f}（超门 {thr_final:.2f}）"
+                       f"·该维有可量化贡献·advisory")
+    else:
+        out["verdict"] = "harmful_or_redundant_dim"  # 显著但抹掉反而涨
+        out["note"] = (f"抹掉该维反而 {effect:+.2f}（超门 {thr_final:.2f}）"
+                       f"·该维可能有害/冗余·advisory")
+    return out
+
+
+def build_ablation_entry(skill_version, dimension, cluster_ref,
+                         baseline_runs, ablated_runs, *,
+                         layer="surface",
+                         probe_noise_floor=DEFAULT_PROBE_NOISE_FLOOR,
+                         k=DEFAULT_EFFECT_K, model=None, git_sha=None,
+                         timestamp=None):
+    """组装一条**消融** ledger entry（kind='ablation' · 与回归行共存不互污）。
+
+    与 distill_track.build_entry（回归行 · 无 kind 字段）刻意分形态：消融行带
+    kind='ablation' + dimension + layer + 显著性证据；distill_track.last_entry_for_ref
+    取上一基线做版本回归比对时**须跳过 kind=='ablation' 行**（见 ledger 消费方约定，
+    ABL-2 risk）。挂同一 _baseline_ledger.json，dashboard 一眼可见死维 vs 有效维。
+    """
+    det = effect_significance_detail(
+        baseline_runs, ablated_runs, probe_noise_floor=probe_noise_floor,
+        k=k, layer=layer)
+    from datetime import datetime, timezone
+    entry = {
+        "kind": "ablation",  # 🔴 区分回归行（无 kind）vs 消融行
+        "schema": "distill_ablation/1",
+        "skill_version": str(skill_version),
+        "dimension": str(dimension),
+        "layer": layer,
+        "cluster_ref": str(cluster_ref),
+        "baseline_scores": [round(float(s), 3) for s in (baseline_runs or [])],
+        "ablated_scores": [round(float(s), 3) for s in (ablated_runs or [])],
+        "model": model or "unknown",
+        "git_sha": git_sha or "unknown",
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+    }
+    entry.update(det)  # effect / significant / verdict / 各 std / 门 …
+    return entry
+
+
+# ============================================================
+# 成本量化（R3 ABL-6 · 纯算 · 零网络零调用 · advisory）
+# ============================================================
+
+def estimate_cost(n_dims, n_seed, n_clusters, n_arms=2,
+                  sec_per_call=DEFAULT_SEC_PER_CALL, *, budget_hours=None):
+    """按 gen_throttle 实测节流外推消融墙钟（纯算 · 零网络 · 不触 gen-model）。
+
+    leave-one-dimension-out 设计：
+      · conditions = n_dims + 1（1 个 baseline 全注入 + 每维各 1 个抹掉条件）。
+      · replicas   = conditions × n_seed × n_clusters（每条件每 cluster 跑 n_seed 趟）。
+      · gen_calls  = replicas × n_arms（每次复刻按 cluster 字数拆 n_arms 个 sub-call·
+        distill_replicate.plan_cluster_subcalls·默认 ~2·真机须用真实 cluster 标定）。
+      · wall_hours = gen_calls × sec_per_call / 3600（sec_per_call=gen_throttle frozen
+        4.5s/call ~13rpm 上限·dev 不节流更快·但分发态/限速中转站会触发 4.5 → 取保守上限）。
+
+    🔴 预算退路（北极星⑥·守 experiment 边界）：传 budget_hours 且 wall_hours 超 → over_budget=
+    True。**预算耗尽时未验维度默认保持 shadow（advisory_only·不放量 active），绝不拍脑袋
+    切 active**——成本算只给「跑不跑得起」的事实，不替模型决定注入哪维。
+
+    返回 {conditions, replicas, gen_calls, wall_hours, over_budget,
+          n_dims, n_seed, n_clusters, n_arms, sec_per_call, budget_hours}。
+    """
+    n_dims = int(n_dims)
+    n_seed = int(n_seed)
+    n_clusters = int(n_clusters)
+    n_arms = int(n_arms)
+    sec_per_call = float(sec_per_call)
+
+    conditions = n_dims + 1
+    replicas = conditions * n_seed * n_clusters
+    gen_calls = replicas * n_arms
+    wall_s = gen_calls * sec_per_call
+    wall_hours = round(wall_s / 3600.0, 4)
+    over_budget = (budget_hours is not None
+                   and wall_hours > float(budget_hours))
+    return {
+        "conditions": conditions,
+        "replicas": replicas,
+        "gen_calls": gen_calls,
+        "wall_hours": wall_hours,
+        "over_budget": bool(over_budget),
+        "n_dims": n_dims, "n_seed": n_seed, "n_clusters": n_clusters,
+        "n_arms": n_arms, "sec_per_call": sec_per_call,
+        "budget_hours": budget_hours,
+        "note": ("纯算上限（gen_throttle frozen 4.5s/call）·dev 实跑更快·"
+                 "预算耗尽时未验维默认 shadow（不拍脑袋切 active）"),
+    }
 
 
 # ============================================================
@@ -508,6 +793,84 @@ def cmd_score_and_record(args) -> int:
     return 0
 
 
+def _track_ablation(args, entry) -> None:
+    """把消融 entry 挂进同一 distill_track 基线 ledger（kind='ablation' 行 · 与回归行共存）。
+
+    复用 distill_track.append_entry/save_ledger/atomic 写——不新建账本（R3 reject ab_compare）。
+    永不阻断（失败仅 warn · advisory 层）。distill_track 不可用 → 跳过（消融行不影响主流程）。
+    """
+    if not _HAVE_DT:
+        print("[WARN] distill_track 不可用 · 跳过挂 ledger（消融 entry 仍打印/可单独落盘）",
+              file=sys.stderr)
+        return
+    ledger = _dt.load_ledger(Path(args.project))
+    ledger = _dt.append_entry(ledger, entry)
+    _dt.save_ledger(Path(args.project), ledger)
+    print(f"     [TRACK] 已挂 distill_track ledger（kind=ablation 行）: "
+          f"{_dt.ledger_path(Path(args.project))}")
+
+
+def cmd_ablation_record(args) -> int:
+    """消融实验记录：同 cluster 多 seed 的 baseline vs ablated 分 → 显著性证据入 ledger。
+
+    全 advisory/experiment（永返 0）：只产「该维有无可量化贡献」的证据，绝不阻断、
+    绝不据此自动改注入维度（真机自证走 distill_replicate.run_dimension_ablation 骨架的
+    experiment_gate）。表层维 --probe-noise-floor 缺省 0；思维维须填 av_judge 实测 instability。
+    """
+    if holdout_mode() == "off":
+        print("[NOTE] HOLDOUT_SFS_MODE=off · 跳过消融记录（逃生口）", file=sys.stderr)
+        return 0
+    if not args.baseline_sfs:
+        print("[ERROR] 无 baseline SFS 分：用 --baseline-sfs X（同一 cluster 多 seed）",
+              file=sys.stderr)
+        return 1
+    if not args.ablated_sfs:
+        print("[NOTE] 无 ablated SFS 分 · 无法算消融效应（先跑 ABLATE_DIMENSIONS=该维 复刻再传分）",
+              file=sys.stderr)
+    git_sha = (args.git_sha or (_dt.current_git_sha(Path(args.project))
+                                if _HAVE_DT else None))
+    entry = build_ablation_entry(
+        skill_version=args.skill_version, dimension=args.dimension,
+        cluster_ref=args.cluster_ref,
+        baseline_runs=args.baseline_sfs, ablated_runs=args.ablated_sfs,
+        layer=args.layer, probe_noise_floor=args.probe_noise_floor,
+        k=args.k, model=args.model, git_sha=git_sha,
+    )
+    print(f"[OK] 消融记录 维={entry['dimension']}（{entry['layer']}）@ {args.skill_version}")
+    print(f"     baseline 均值 {entry.get('baseline_mean')}（{entry.get('baseline_n')} seed）· "
+          f"ablated 均值 {entry.get('ablated_mean')}（{entry.get('ablated_n')} seed）· "
+          f"效应 {entry.get('effect')}")
+    print(f"     门 {entry.get('effect_threshold_final')}"
+          f"（1σ_seed={entry.get('threshold_1sigma')}, "
+          f"probe_floor={entry.get('probe_noise_floor')}）· "
+          f"显著={entry.get('significant')} · 判定={entry.get('verdict')}")
+    print(f"     [ADVISORY] {entry.get('note', '')}")
+    if args.track:
+        _track_ablation(args, entry)
+    return 0  # 永远 0：消融统计层 advisory/experiment·绝不阻断
+
+
+def cmd_cost_estimate(args) -> int:
+    """纯算消融墙钟（零网络零调用）·按 gen_throttle 节流外推 + 预算退路提示。"""
+    est = estimate_cost(
+        args.dimensions, args.seeds, args.clusters, n_arms=args.calls_per_replica,
+        sec_per_call=args.min_interval, budget_hours=args.budget_hours,
+    )
+    print(f"[OK] 消融成本外推（gen_throttle {args.min_interval}s/call · ~"
+          f"{round(60 / args.min_interval, 1) if args.min_interval else '∞'}rpm 上限）")
+    print(f"     条件数 {est['conditions']}（1 baseline + {args.dimensions} 抹维）· "
+          f"复刻次数 {est['replicas']}（×{args.seeds} seed ×{args.clusters} cluster）")
+    print(f"     gen-model 调用 {est['gen_calls']}（×{args.calls_per_replica} sub-call/复刻）· "
+          f"墙钟约 {est['wall_hours']} 小时")
+    if est["over_budget"]:
+        print(f"     [ADVISORY · 超预算] 墙钟 {est['wall_hours']}h > 预算 {args.budget_hours}h ·"
+              "未跑维度默认保持 shadow（不拍脑袋切 active）· 可用 --proxy 短场景降本",
+              file=sys.stderr)
+    if args.json:
+        print(json.dumps(est, ensure_ascii=False))
+    return 0
+
+
 def cmd_split(args) -> int:
     res = split_clusters(
         args.cluster, holdout_frac=args.holdout_frac,
@@ -580,6 +943,46 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--seed", type=int, default=42, help="洗牌 seed（确定性可复现）")
     pp.add_argument("--json", action="store_true", help="额外打 JSON 行（供脚本消费）")
     pp.set_defaults(func=cmd_split)
+
+    # ablation-record：消融实验记录（同 cluster 多 seed baseline vs ablated）·kind='ablation' 行
+    pa = sub.add_parser("ablation-record",
+                        help="维度消融记录：同 cluster 多 seed 的 baseline vs ablated SFS"
+                             " → 显著性证据（kind=ablation 行·advisory/experiment）")
+    pa.add_argument("--project", required=True, help="风格项目目录（挂同一 _baseline_ledger.json）")
+    pa.add_argument("--skill-version", required=True, help="skill 版本号 如 v8")
+    pa.add_argument("--dimension", required=True,
+                    help="消融维（如 A3=张力后段保持度 · 与 ABLATE_DIMENSIONS 同名）")
+    pa.add_argument("--cluster-ref", required=True,
+                    help="配对设计的同一 cluster（baseline/ablated 必须同 cluster·消题材）")
+    pa.add_argument("--baseline-sfs", type=float, action="append", default=[],
+                    help="含该维注入的单趟 SFS 分（同 cluster 多 seed · 可多次 · N≤5）")
+    pa.add_argument("--ablated-sfs", type=float, action="append", default=[],
+                    help="ABLATE_DIMENSIONS=该维 抹掉后的单趟 SFS 分（同 cluster 多 seed · 可多次）")
+    pa.add_argument("--layer", choices=["surface", "thinking"], default="surface",
+                    help="表层维（确定性 SFS·probe_floor=0）/思维维（av_judge 探针·须填 floor）")
+    pa.add_argument("--probe-noise-floor", type=float, default=DEFAULT_PROBE_NOISE_FLOOR,
+                    help="思维探针噪声地板=1−mean_agreement（av_judge 实测·表层维填 0）")
+    pa.add_argument("--k", type=float, default=DEFAULT_EFFECT_K,
+                    help="1σ_seed 门系数（默认 1.0 即一个标准差）")
+    pa.add_argument("--model", default=None, help="gen-model 名（meta）")
+    pa.add_argument("--git-sha", default=None, help="覆盖 git sha（默认自动取）")
+    pa.add_argument("--track", action="store_true", help="挂 distill_track ledger（kind=ablation 行）")
+    pa.set_defaults(func=cmd_ablation_record)
+
+    # cost-estimate：纯算消融墙钟 + 预算退路（零网络零调用）
+    pc = sub.add_parser("cost-estimate",
+                        help="按 gen_throttle 节流外推消融墙钟 + 预算退路（纯算·零调用）")
+    pc.add_argument("--dimensions", type=int, required=True, help="消融维数（条件数=维数+1）")
+    pc.add_argument("--seeds", type=int, required=True, help="每条件每 cluster 复刻 seed 数（N≤5）")
+    pc.add_argument("--clusters", type=int, required=True, help="覆盖 cluster/卷型数")
+    pc.add_argument("--calls-per-replica", type=int, default=2,
+                    help="每次复刻拆几个 gen-model sub-call（distill_replicate 默认 ~2）")
+    pc.add_argument("--min-interval", type=float, default=DEFAULT_SEC_PER_CALL,
+                    help="gen_throttle 每 call 最坏间隔秒（frozen 4.5=~13rpm）")
+    pc.add_argument("--budget-hours", type=float, default=None,
+                    help="墙钟硬预算（小时）·超 → over_budget advisory")
+    pc.add_argument("--json", action="store_true", help="额外打 JSON 行")
+    pc.set_defaults(func=cmd_cost_estimate)
     return p
 
 

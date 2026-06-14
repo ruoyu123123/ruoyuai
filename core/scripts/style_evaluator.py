@@ -397,6 +397,10 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
     add("功能词指纹", 0.08, score5, r_fw_display, g_fw)
 
     # 6. 句长标准差匹配 (5%)
+    # 🔴 量纲提示（R3 ABLATION 2026-06-14）：这里的 sentence_stats.std 是【单篇文本内部句长
+    # 的标准差】= 作者节奏离散度指纹，是 SFS 维度 6 的合法用途。**绝不可**把它当消融效应的
+    # 「1σ_seed 噪声门」——那个噪声门只能取「同一 cluster 多 seed 复刻的 SFS std」
+    # （distill_track.sample_std / entry['std']），量纲完全不同。详见 distill_holdout.seed_level_std。
     r_std = ref_profile.get("sentence_stats", {}).get("std", 0)
     g_std = gen_profile.get("sentence_stats", {}).get("std", 0)
     add("句长标准差匹配", 0.05, _interval_pct_match(r_std, g_std),

@@ -2623,6 +2623,36 @@ def _collect_author_style_fingerprint(s: "DatabaseScanner") -> dict | None:
     return fp  # active：注入 writer
 
 
+def _ablate_dimensions() -> set:
+    """解析 env ABLATE_DIMENSIONS（R3 ABL-3 · 消融实验单维抑制 · 默认空=零回归）。
+
+    leave-one-dimension-out 消融时显式 export 某维（如 ABLATE_DIMENSIONS=A3）→ 该维
+    对应的注入 directive 被跳过（其余维不变），用于量化「抹掉该维后产出退化多少」。
+    **默认空 → 完全零回归**（只有消融实验显式设才生效）。归一化：大小写/中文逗号/空白。
+
+    维度 ↔ directive 映射（在此钉死避免编号歧义）：
+      节奏组（_collect_author_rhythm_signature）：
+        A1 = beat_transition_matrix（节拍转移主调）
+        A2 = scene_turn_ratio（场景价值翻转率）
+        A3 = tension_trajectory（张力后段保持度 + 情绪弧主形态）
+        A4 = hook_type_distribution + hook_payoff_gap_median（钩子类型 + 兑现章距）
+        A5 = propulsion_density（推进密度）
+      决策/刻画组（_collect_author_decision_principles）：
+        B1/B2/B3… = author_decision_principles 对应键（按 key 名匹配·大写归一）
+        C1/C2/C3… = characterization_craft 对应键
+
+    ⚠️ 北极星⑤：抹维只影响注入内容（全 advisory directives），**绝不**动 hard_gate。
+    消融态非正式写作——设了非空值时往 stderr 打醒目告警。
+    """
+    import os as _os
+    raw = (_os.environ.get("ABLATE_DIMENSIONS") or "").replace("，", ",")
+    dims = {d.strip().upper() for d in raw.split(",") if d.strip()}
+    if dims:
+        print(f"[ABLATE · 消融态·非正式写作] ABLATE_DIMENSIONS={sorted(dims)} "
+              f"— 对应维注入被抑制（仅消融实验用·默认应为空）", file=sys.stderr)
+    return dims
+
+
 def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
     """阶段1：作者叙事节奏指纹（序列级骨·directives 显式下发 writer · advisory）。
 
@@ -2654,32 +2684,54 @@ def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
         return None
     if not isinstance(nr, dict) or not nr:
         return None
+    # R3 ABL-3：消融实验单维抑制（默认空 → 零回归·所有 if 'Ak' not in _ablate 守卫全过）。
+    _ablate = _ablate_dimensions()
     directives: list[str] = []
     bt = nr.get("beat_transition_matrix") or {}
-    if bt:
+    if bt and "A1" not in _ablate:
         top = sorted(bt.items(), key=lambda kv: -kv[1].get("count", 0))[:3]
         directives.append("节拍转移主调（写了这拍接下拍的作者习惯）："
                           + "、".join(f"{k}({v.get('prob')})" for k, v in top))
-    if nr.get("scene_turn_ratio") is not None:
+    if nr.get("scene_turn_ratio") is not None and "A2" not in _ablate:
         directives.append(f"场景价值翻转率目标 {nr['scene_turn_ratio']:.0%}"
                           "（每个场景开收场极性应翻转·避免不 turn 的平铺伪事件）")
     tt = nr.get("tension_trajectory") or {}
-    if tt.get("post_climax_retention") is not None:
+    if tt.get("post_climax_retention") is not None and "A3" not in _ablate:
         directives.append(f"张力后段保持度目标 {tt['post_climax_retention']:.0%}"
                           "（爽点/高潮后别秒收·张力撑到收尾·防过早收束）")
-    if tt.get("dominant_emotion_shape"):
+    if tt.get("dominant_emotion_shape") and "A3" not in _ablate:
         directives.append(f"情绪弧主形态：{tt['dominant_emotion_shape']}（作者基线形态）")
-    if nr.get("hook_type_distribution"):
+    # D2-4：三向度张力机制配比 directive（独立 env D2_TENSION_TYPE_INJECT_MODE 默认 shadow·
+    # G3-ENUMKAPPA 标注一致性 PASS 后才切 active·防注入未验证噪声·北极星⑥用数据定哪维注入）
+    ttd = nr.get("tension_type_distribution") or {}
+    if ttd and (_os.environ.get("D2_TENSION_TYPE_INJECT_MODE") or "shadow").strip().lower() == "active":
+        parts = "、".join(f"{k}{v:.0%}" for k, v in list(ttd.items())[:3])
+        directives.append(f"张力机制配比（读者信息差三向度·作者基线）：{parts}"
+                          "（suspense=读者已知危险等它爆/curiosity=先抛结果勾读者想知道为什么/"
+                          "surprise=withhold后反转打脸·别只会一种）")
+    if nr.get("hook_type_distribution") and "A4" not in _ablate:
         hk = list(nr["hook_type_distribution"])[:3]
         directives.append("钩子类型偏好：" + "、".join(hk))
-    if nr.get("hook_payoff_gap_median") is not None:
+    if nr.get("hook_payoff_gap_median") is not None and "A4" not in _ablate:
         directives.append(f"悬念兑现章距中位 {nr['hook_payoff_gap_median']} 章"
                           "（埋了别立刻收也别永远不收·钩了必兑现）")
-    if nr.get("propulsion_density"):
+    if nr.get("propulsion_density") and "A5" not in _ablate:
         directives.append("推进密度基线：" + "、".join(list(nr["propulsion_density"])[:2]))
+    # R3 ABL-3/ABL-5：死维负对照——ABLATE_RANDOM_FIELD=1 注入一条无意义随机 directive。
+    # 消融自证用：抹真实有效维（如 A3）应退化、注入这条随机维应**无差异**（验统计层能
+    # 分辨噪声 vs 真改进）。默认不设 → 不注入（零回归）。
+    _random_field = False
+    if (_os.environ.get("ABLATE_RANDOM_FIELD") or "").strip() in ("1", "true", "on"):
+        import random as _rnd
+        token = "".join(_rnd.Random(s.ch).choices("0123456789abcdef", k=8))
+        directives.append(f"[消融负对照·无意义随机标记 {token}·writer 应忽略]")
+        _random_field = True
+        print(f"[ABLATE · 负对照] ABLATE_RANDOM_FIELD=1 注入随机 directive {token}"
+              f"（死维对照·仅消融实验用）", file=sys.stderr)
     if not directives:
         return None
     payload = {"source": "narrative_rhythm", "directives": directives, "raw": nr,
+               "_ablation_random": _random_field,
                "_doc": "作者叙事节奏指纹（序列级·advisory·作者档第一权威）"}
     try:
         out_path = s.db / ".rhythm_signature" / f"ch_{s.ch:03d}.json"
@@ -2722,12 +2774,37 @@ def _collect_author_decision_principles(s: "DatabaseScanner") -> dict | None:
         return None
     if not (isinstance(dec, dict) and dec) and not (isinstance(cha, dict) and cha):
         return None
+    # R3 ABL-3：消融实验剔单维（ABLATE_DIMENSIONS 含 B*/C* 时从 dec/cha payload 剔对应键·
+    # 按 key 名大写归一匹配·默认空=零回归·不匹配则 no-op）。
+    _ablate = _ablate_dimensions()
+    if _ablate:
+        if isinstance(dec, dict):
+            dec = {k: v for k, v in dec.items() if str(k).strip().upper() not in _ablate}
+        if isinstance(cha, dict):
+            cha = {k: v for k, v in cha.items() if str(k).strip().upper() not in _ablate}
+    # D7-3：cheat-sheet 独立 size 预算（按 vs_generic 信息量排序·累计字数到 cap 截断·
+    # 防把生成点近邻挤爆稀释 skill）。env DECISION_TOKEN_CAP 可调（工程参数·待消融定数）。
+    cheat = profile.get("author_decision_cheat_sheet") if isinstance(profile, dict) else None
+    decision_token_cap = int(_os.environ.get("DECISION_TOKEN_CAP") or "600")
+    budgeted_cheat: list = []
+    if isinstance(cheat, list):
+        ranked = sorted(cheat, key=lambda c: (bool(c.get("vs_generic")), len(c.get("vs_generic", ""))),
+                        reverse=True)
+        used = 0
+        for c in ranked:
+            s_len = (len(c.get("situation", "")) + len(c.get("author_choice", ""))
+                     + len(c.get("vs_generic", "")))
+            if used + s_len > decision_token_cap:
+                break
+            budgeted_cheat.append(c)
+            used += s_len
     payload = {
         "gate_level": "advisory", "advisory_only": True,
         "author_decision_principles": dec or {},
         "characterization_craft": cha or {},
-        "_doc": "作者决策原则(道德滤镜/心理距离/留白)+人物刻画手法·纯创作提示·零检测·"
-                "作者档第一权威·北极星⑤顾问非法官",
+        "author_decision_cheat_sheet": budgeted_cheat,
+        "_doc": "作者决策原则(道德滤镜/心理距离/留白)+人物刻画手法+紧凑决策 cheat-sheet(D7·size 预算后)·"
+                "纯创作提示·零检测·作者档第一权威·北极星⑤顾问非法官",
     }
     try:
         out_path = s.db / ".decision_principles" / f"ch_{s.ch:03d}.json"
@@ -2802,6 +2879,42 @@ def _collect_genre_pack_directives(s: "DatabaseScanner") -> dict | None:
     if mode == "shadow":
         print(f"[SHADOW] genre_pack({genre}): {len(directives)} 条题材工艺 — 不注入 manifest",
               file=sys.stderr)
+        return None
+    return payload
+
+
+def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
+    """G6 P0：注入作者风格相对通用兜底基线的方向描述（更短/更留白）·advisory·三态。
+
+    数据源=作者风格.json.quantitative.vs_generic_baseline（C4 蒸馏时已算·不重算）。
+    env GENREBASE_INJECT_MODE 默认 shadow（北极星⑥：dump 不注入·经离线消融验证再切 active 放量）。
+    只注入方向 label（更短/更留白）·不暴露精确 diff 值·payload 标 _authority=FALLBACK 让 writer 分清作者档第一权威。
+    """
+    import os as _os
+    mode = (_os.environ.get("GENREBASE_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+    style = s.load("作者风格", {})
+    vg = (style.get("quantitative") or {}).get("vs_generic_baseline")
+    if not isinstance(vg, dict) or not vg.get("dims"):
+        return None
+    lines = [d["label"] for d in vg["dims"].values() if isinstance(d, dict) and d.get("label")]
+    if not lines:
+        return None
+    payload = {"gate_level": "advisory", "advisory_only": True,
+               "_authority": vg.get("_authority"),
+               "relative_style_directions": lines,
+               "_doc": "相对通用网文兜底基线的风格方向（兜底非权威·作者档第一权威·advisory）"}
+    try:
+        out_path = s.db / ".genre_baseline" / f"ch_{s.ch:03d}.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    if mode == "shadow":
+        print(f"[SHADOW] genre_baseline_diff: {len(lines)} 条相对方向 — 不注入 manifest", file=sys.stderr)
         return None
     return payload
 
@@ -3376,6 +3489,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "author_decision_principles": _collect_author_decision_principles(s),
         # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 active 放量·advisory·unknown→None）。
         "genre_pack_directives": _collect_genre_pack_directives(s),
+        "genre_baseline_diff": _collect_genre_baseline_diff(s),
         "dcas_enabled": dcas_enabled,
         # F5：freestyle 不暴露每章字数目标（None），避免 writer 据此自切章；字数由 splitter 按范围切。
         "dcas_word_target": None,

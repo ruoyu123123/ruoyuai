@@ -515,3 +515,77 @@ def test_F_code_not_in_hard_gate():
         return
     codes = getattr(audit_hub, "HARD_GATE_CODES", set())
     assert av.ISSUE_CODE not in codes
+
+
+# ════════════════════════════════════════════════════════════════
+# [G] G2-CYCLIC swap + intent_dim 零回归契约（在既有测试套里加断言 · 防回归）
+# ════════════════════════════════════════════════════════════════
+
+def test_G_default_self_consistency_no_swap_zero_regression():
+    """默认（AV_JUDGE_POSITION_SWAP 未设）self_consistency_judge 全 swap=False → 现有 active 行为零回归。
+
+    断言：默认 _position_swap_on()=False · 聚合 n_swapped_samples=0 · 既有 drift 判别不变。
+    """
+    g = _reload(None)
+    try:
+        assert g._position_swap_on() is False  # 默认 off
+        replies = [_reply({"词汇选择": av.DRIFT_VERDICT}) for _ in range(3)]
+        mock, state = _mock_replies(replies)
+        orig = g.call_gen_model
+        g.call_gen_model = mock
+        try:
+            agg = g.self_consistency_judge(_Loader([_P()]), "AUTH", "REP", n_samples=3)
+        finally:
+            g.call_gen_model = orig
+        assert state["i"] == 3
+        assert agg["n_swapped_samples"] == 0          # 默认 0 个 swap
+        assert all(d["swapped"] is False for d in agg["sample_drift_detail"])
+        assert "词汇选择" in agg["drift_dims"]          # 判别行为不变
+    finally:
+        _reload(None)
+
+
+def test_G_n1_never_swaps_even_when_on():
+    """N=1 即便 swap_on 也退化为 0 个 swap（零回归硬纪律）。"""
+    assert av._swap_assignment(1, swap_on=True) == [False]
+    assert av._swap_assignment(1, swap_on=False) == [False]
+
+
+def test_G_intent_dim_default_off_4_dims():
+    """build_av_judge_prompt 默认 include_intent_dim=False → 仍 4 维 · 不含「作者思维」（零回归）。"""
+    p = av.build_av_judge_prompt("AUTH", "REP")
+    assert "作者思维" not in p
+    # 输出 JSON schema 仍只列 4 维键名
+    for n in _DIM_NAMES:
+        assert f'"{n}"' in p
+    assert "4 个解耦特质维度" in p
+
+
+def test_G_intent_dim_on_adds_fifth_dim():
+    """include_intent_dim=True → 输出含「作者思维」第 5 维 · 4 维键名仍齐全（不挤掉原维）。"""
+    p = av.build_av_judge_prompt("AUTH", "REP", include_intent_dim=True)
+    assert "作者思维" in p
+    assert "5 个解耦特质维度" in p
+    for n in _DIM_NAMES:
+        assert f'"{n}"' in p
+
+
+def test_G_intent_dim_ask_no_author_rationale_leak():
+    """INTENT_DIM 的 ask/说明不含已知 author_decision_principles 聚合文案（切断复述捷径 · R3 P0-IR-1）。"""
+    _name, desc, ask = av.INTENT_DIM
+    blob = desc + ask
+    # 已知 B1-B3 聚合会出现的 rationale 关键词绝不能泄进中性维度定义
+    for leak in ("母题", "胜利代价藏悲凉", "the_why", "gap_filled", "per_scene_rationale"):
+        assert leak not in blob, leak
+
+
+def test_G_parse_still_only_4_dims_with_intent_on():
+    """include_intent_dim=True 时 judge 回了 5 维，parse_av_verdicts 仍只认 4 维（intent 维不进聚合判决）。"""
+    reply = json.dumps({"dimensions": {
+        **{n: {"verdict": av.MATCH_VERDICT} for n in _DIM_NAMES},
+        "作者思维": {"verdict": av.DRIFT_VERDICT, "reason": "决策走向不像"},
+    }}, ensure_ascii=False)
+    parsed = av.parse_av_verdicts(reply)
+    assert set(parsed["dimensions"]) == set(_DIM_NAMES)  # 只 4 维
+    assert "作者思维" not in parsed["dimensions"]
+    assert parsed["drift_dims"] == []  # 第 5 维 drift 不污染 4 维判决

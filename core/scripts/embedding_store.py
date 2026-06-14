@@ -186,6 +186,55 @@ def _emb_dir(project_root: Path) -> Path:
     return p
 
 
+# ── C1 风格余弦护栏（2026-06-14·防 hash 静默冒充 mstyle 风格余弦）──────────────
+class MstyleBackendError(RuntimeError):
+    """风格余弦子分要求 mstyle 后端但当前不是 → 显式失败，绝不静默降级 hash 冒充。"""
+
+
+def assert_mstyle_backend():
+    """硬断言当前 embedding 后端真是 mstyle 且 import 成功（供 dev/蒸馏态的风格余弦消费方调用）。
+
+    🔴 绝不静默降级 hash 冒充风格余弦（hash 是 md5 ngram 袋·风格语义=0）。
+    返回 (method, dim)；非 mstyle / 未装 sentence-transformers / 被 .env GEN_EMBED 抢占 → raise。
+    ⚠️ 只在 dev/蒸馏工作站态调用——frozen 写作态不含 torch 依赖，消费方须先 is_frozen() 跳过（绝不崩写作流水线）。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb != "mstyle":
+        raise MstyleBackendError(f"风格余弦子分要求 EMBED_BACKEND=mstyle，当前={eb or '(未设·默认 hash)'}")
+    try:
+        import sentence_transformers  # noqa: F401
+    except ImportError as e:
+        raise MstyleBackendError(f"EMBED_BACKEND=mstyle 但未装 sentence-transformers：{e}")
+    method, dim, _ = _detect_backend()
+    if not method.startswith("mstyle:"):
+        raise MstyleBackendError(f"后端探测未落到 mstyle（method={method}）——可能 .env GEN_EMBED 抢占")
+    return method, dim
+
+
+def _embed_manifest_path(project_root: Path) -> Path:
+    return _emb_dir(project_root) / ".embed_manifest.json"
+
+
+def write_embed_manifest(project_root: Path):
+    """rebuild 后落 .embed_manifest.json 记 method+dim（兑现 docstring 里此前 vapor 的守卫）。"""
+    m, d, _ = _detect_backend()
+    _embed_manifest_path(project_root).write_text(
+        json.dumps({"method": m, "dim": d}, ensure_ascii=False), encoding="utf-8")
+
+
+def check_embed_manifest(project_root: Path) -> "tuple[bool, str]":
+    """返回 (ok, reason)。manifest.method != 当前后端 → 需 rebuild（维度可能变·cosine 维度不等返 0）。"""
+    p = _embed_manifest_path(project_root)
+    if not p.exists():
+        return False, "no_manifest"
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return False, f"manifest_corrupt: {e}"
+    cur = embedding_method()
+    return (rec.get("method") == cur), f"manifest={rec.get('method')} cur={cur}"
+
+
 def store_chapter_embedding(project_root: Path, ch: int):
     text_path = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
     if not text_path.exists():
@@ -316,6 +365,7 @@ def main():
                     print(f"  [OK] character_{name} baseline")
                 else:
                     print(f"  [SKIP] character_{name}（无对话样本）")
+        write_embed_manifest(project_root)   # C1：落 .embed_manifest.json 守卫（兑现 docstring）
         print(f"[embedding_store] rebuild 完成")
         sys.exit(0)
 

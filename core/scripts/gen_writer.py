@@ -407,6 +407,15 @@ def _build_decision_principles_section(manifest_path: Path) -> str:
         lines.append("")
         lines.append("**人物刻画手法：**")
         lines += _render(cha)
+    # D7-4③：cheat-sheet 走专用纯文本分支（绝不 json.dumps·避免压缩后被吐成 blob 抵消压缩）
+    sheet = dp.get('author_decision_cheat_sheet')
+    if isinstance(sheet, list) and sheet:
+        lines.append("")
+        lines.append("**作者决策 cheat-sheet（情境→作者选｜vs 通用腔·advisory 写之前对齐·可偏离）：**")
+        for c in sheet:
+            if isinstance(c, dict):
+                lines.append(f"- 情境「{c.get('situation', '')}」→ {c.get('author_choice', '')}"
+                             f"｜vs 通用：{c.get('vs_generic', '')}")
     return "\n".join(lines)
 
 

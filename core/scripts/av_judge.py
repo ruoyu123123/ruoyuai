@@ -108,24 +108,47 @@ AV_TRAIT_DIMS = [
     (
         "词汇选择",
         "用词层：具体名词偏好、动词色彩、书面 vs 口语、专有词汇密度",
-        "B 的用词读起来像不像 A 这位作者？具体名词/动词的选择是否露出非作者的痕迹（如更书面、更泛化、更 AI）？",
+        "仿写段的用词读起来像不像作者真迹？具体名词/动词的选择是否露出非作者的痕迹（如更书面、更泛化、更 AI）？",
     ),
     (
         "句法",
         "句子层：句长节奏、长短句交错、单句独行占比、流水句 vs 复句结构",
-        "B 的句子骨架像不像 A？句长节奏 / 长短交错 / 单句成段的习惯是否和作者错位？",
+        "仿写段的句子骨架像不像作者真迹？句长节奏 / 长短交错 / 单句成段的习惯是否和作者错位？",
     ),
     (
         "话语连接词",
         "衔接层：段落/句间过渡套路、转承因果连接词偏好、是否冒出 AI 套话过渡",
-        "B 在衔接上像不像 A？是否出现「与此同时/然而/值得一提的是」等作者不用的 AI 过渡，或丢了作者的衔接习惯？",
+        "仿写段在衔接上像不像作者真迹？是否出现「与此同时/然而/值得一提的是」等作者不用的 AI 过渡，或丢了作者的衔接习惯？",
     ),
     (
         "语用语气",
         "语用层：叙事口吻、与读者的距离感、反讽/克制/留白 vs 说破的倾向",
-        "B 的口吻像不像 A？叙事距离、反讽与留白、是否把情绪说破——这些语用习惯有没有走味？",
+        "仿写段的口吻像不像作者真迹？叙事距离、反讽与留白、是否把情绪说破——这些语用习惯有没有走味？",
     ),
 ]
+
+# ── intent_recovery 扩展维（P0 · experiment · 默认不进 AV_TRAIT_DIMS 主列表）──────────
+# 「作者思维」维（B1-B3 决策骨）= 反推作者在岔路口的取舍倾向，**不是表层文体**。仅在
+#   build_av_judge_prompt(include_intent_dim=True) 时追加渲染（默认 False · 零回归 · 不污染纯文体 4 维）。
+# 🔴 grounding 切断复述捷径（R3 P0-IR-1）：ask 只给「不含作者档 rationale 原文的中性维度定义」，
+#   绝不出现「母题/胜利代价藏悲凉」等已聚合的 author_decision_principles 文案——让 judge 自己反推，
+#   防它照抄作者档原文造成虚假高余弦。判决权**不在此维 verdict**（它仅出 advisory 文本）——真判决
+#   交确定性 mstyle 余弦（replication_fidelity_check.intent_recovery_cosine·embedding_store）。
+# ⚠️ 弱模型对「决策倾向」抽象维执行力弱（惊悚乐园 v2 文字约束 rollback 教训）→ 默认关·仅 experiment 开。
+INTENT_DIM = (
+    "作者思维",
+    "决策层：作者在岔路口的取舍倾向——代价/奖惩怎么排、贴近还是拉远叙事距离、说破还是留白",
+    "仿写段在「遇到价值取舍 / 情绪处理 / 信息释放」时的决策走向，像不像作者真迹这位作者的思维习惯？（只看决策倾向不看辞藻）",
+)
+
+
+def _active_dims(include_intent_dim: bool = False) -> list:
+    """当前渲染的维度列表：默认 4 维文体维；include_intent_dim=True 追加「作者思维」第 5 维。
+
+    parse_av_verdicts 永远只认 AV_TRAIT_DIMS 的 4 维（INTENT_DIM 仅出 advisory 文本不参与聚合判决），
+    故此函数只服务 prompt 渲染 + 输出 schema 列举，不改下游聚合（零回归）。
+    """
+    return AV_TRAIT_DIMS + ([INTENT_DIM] if include_intent_dim else [])
 
 
 def _av_judge_mode() -> str:
@@ -161,6 +184,50 @@ def _n_samples() -> int:
     return min(n, AV_JUDGE_N_SAMPLES_MAX)
 
 
+def _position_swap_on() -> bool:
+    """读 env AV_JUDGE_POSITION_SWAP：默认 **off**（G2-CYCLIC 去位置偏 · experiment）。
+
+    🔴 主代理施工决定（比蓝图「默认半 swap」更保守）：av_judge 已是 active 生产判别组件，
+      position-swap 去偏的**有效性需 API 离线对称性闸验证**（本机验证不了），故默认 off →
+      现有 active 行为**完全零回归**（swap 默认关 · self_consistency_judge 全 swap=False）。
+      只有显式 AV_JUDGE_POSITION_SWAP=on（experiment）才在 N 采样里半数样本 swap。
+      N=1 时即便 on 也退化为 0 个 swap（零回归）。
+
+    认 on / 1 / true / yes（大小写不敏感）为开；其余（含空 / 非法）为 off。
+    """
+    v = (os.environ.get("AV_JUDGE_POSITION_SWAP") or "").strip().lower()
+    return v in ("on", "1", "true", "yes")
+
+
+def _intent_dim_on() -> bool:
+    """读 env AV_JUDGE_INTENT_DIM：默认 **off**（intent_recovery 扩展维 · experiment · 与现有 4 维正交）。
+
+    on 时 build_av_judge_prompt 追加「作者思维」第 5 维（INTENT_DIM）——该维仅出 advisory 文本，
+    **不进 parse_av_verdicts 聚合**（drift_dims 仍只算 4 维），真判决交 mstyle 余弦
+    （replication_fidelity_check.intent_recovery_cosine）。默认 off → 现有 4 维行为零回归。
+
+    认 on / 1 / true / yes（大小写不敏感）为开；其余（含空 / 非法）为 off。
+    """
+    v = (os.environ.get("AV_JUDGE_INTENT_DIM") or "").strip().lower()
+    return v in ("on", "1", "true", "yes")
+
+
+def _swap_assignment(n: int, swap_on: bool) -> list[bool]:
+    """为 n 次重采样分配 swap 方向（前一半 False · 后一半 True · 最大化位置对称采样）。
+
+    · swap_on=False → 全 False（零回归 · 原向）。
+    · swap_on=True 且 n≥2 → 前 ceil(n/2) 个 False、后 floor(n/2) 个 True
+      （N=2→[F,T]·N=3→[F,F,T]·N=4→[F,F,T,T]）。
+    · n=1 → 恒 [False]（单样本无从对称 · 零回归 · 即便 swap_on）。
+    确定性纯函数 → 测试可断言分配序列。
+    """
+    n = max(1, n)
+    if not swap_on or n == 1:
+        return [False] * n
+    half = (n + 1) // 2  # 前一半（含取整偏前）不 swap
+    return [i >= half for i in range(n)]
+
+
 def _jittered_temperatures(base: float, n: int) -> list[float]:
     """为 n 次重采样生成 temperature 序列（Rating Roulette 微抖 · 制造采样多样性）。
 
@@ -186,19 +253,22 @@ def _jittered_temperatures(base: float, n: int) -> list[float]:
 
 AV_JUDGE_SYSTEM_PROMPT = """你是一位资深网文读者兼文本鉴定师，专做「作者验证」（authorship verification）。
 
-给你两段文本：**A 是某位作者的真迹**（锚 · 已确认出自该作者），**B 是一段仿写**（待验证）。
-你的任务**不是**给 B 打一个总分，而是**逐维度做配对判别**——以 A 为基准，判断 B 在每个
-风格维度上**像不像同一位作者写的**，并指出 B 在哪一维「露馅 / 走味」（读者一眼觉得不是 A）。
+给你两段文本：一段是**某位作者的真迹**（锚 · 已确认出自该作者），另一段是一段**仿写**（待验证）。
+每段的身份（作者真迹 / 仿写）会在正文里明确标注。你的任务**不是**给仿写段打一个总分，而是
+**逐维度做配对判别**——以作者真迹为基准，判断仿写段在每个风格维度上**像不像同一位作者写的**，
+并指出仿写段在哪一维「露馅 / 走味」（读者一眼觉得不是这位作者）。
 
 # 判别纪律（authorship verification · 配对相对判别）
 
-1. **以 A 为锚**：A 就是「这位作者长什么样」的唯一基准——不要用你脑中泛泛的「好文笔」标尺，
-   只问「B 这一维像不像 A」。
+1. **以作者真迹为锚**：作者真迹那一段就是「这位作者长什么样」的唯一基准——不要用你脑中泛泛的
+   「好文笔」标尺，只问「仿写段这一维像不像作者真迹」。
 2. **读者视角**：你是读者，凭语感判「读起来是不是同一个人」，不是查统计指标。
-3. **逐维度解耦**：4 个维度**分开判**，不要混成一个印象分。某维像、某维不像，如实分列。
-4. **配对判别输出**：每维给 verdict —— 「命中」（B 这一维读起来像 A）或「走味」（B 露馅、像别人/像 AI）。
-5. **走味必须指证**：判「走味」要点名 B 哪一处露馅、它和 A 的差别在哪（一句话，落到具体文本）。
-6. **不比内容**：A 和 B 写的人物/情节/场景不同是正常的——只比**写法风格**，不比写了什么。
+3. **逐维度解耦**：每个维度**分开判**，不要混成一个印象分。某维像、某维不像，如实分列。
+4. **配对判别输出**：每维给 verdict —— 「命中」（仿写段这一维读起来像作者真迹）或「走味」（仿写段露馅、像别人/像 AI）。
+5. **走味必须指证**：判「走味」要点名仿写段哪一处露馅、它和作者真迹的差别在哪（一句话，落到具体文本）。
+6. **不比内容**：两段写的人物/情节/场景不同是正常的——只比**写法风格**，不比写了什么。
+7. **认准标注的身份判**：以正文标注的「作者真迹 / 仿写」身份为准，**始终判仿写段哪维走味**，不要因为
+   两段呈现先后顺序而改变判别方向（呈现顺序不代表谁是作者）。
 """
 
 
@@ -211,64 +281,87 @@ def _trim(text: str, limit: int) -> str:
 
 
 def build_av_judge_prompt(author_text: str, replica_text: str,
-                          sample_limit: int = 3000) -> str:
-    """构造 AV-judge 配对判别 prompt：A=作者真迹（锚）/ B=仿写（待验）· 4 维解耦 · 读者视角。
+                          sample_limit: int = 3000, swap: bool = False,
+                          include_intent_dim: bool = False) -> str:
+    """构造 AV-judge 配对判别 prompt：作者真迹（锚）vs 仿写（待验）· 解耦维度 · 读者视角。
 
-    确定性纯函数（不调 gen-model）——测试只验此处的配对结构 + 4 维 rubric + 输出 JSON 契约。
+    确定性纯函数（不调 gen-model）——测试只验此处的配对结构 + rubric + 输出 JSON 契约。
+
+    swap（G2-CYCLIC 去位置偏 · experiment · 默认 False=原向零回归）：
+      · False：作者真迹先呈现、仿写后呈现（历史原向）。
+      · True：**仅在 prompt 文本层反转两段的呈现顺序**（仿写先呈现、作者真迹后呈现），但
+        rubric / verdict / 指证要求**始终锚到「仿写段」**（不绑字母槽），让 judge 始终判仿写走味。
+        4 维输出 JSON schema（维度键名）**零变化**——下游 parse_av_verdicts 完全复用。
+      · 多 seed 只压随机噪声、压不掉 LLM 对配对判别的系统性位置偏（倾向判后呈现段更差）；
+        半数样本 swap 让走味维分布对「呈现顺序」不敏感（self_consistency_judge 分配）。
+      · ⚠️ swap 只去**位置偏**，**不去 familiarity 偏**（judge 对同源 gemini 稿的熟悉度偏好）——
+        见报告 position_bias_note，绝不宣称消除自偏。
+
+    include_intent_dim（intent_recovery · experiment · 默认 False）：True 时追加「作者思维」第 5 维
+      （INTENT_DIM）渲染 + 进输出 JSON schema。该维只出 advisory 文本，真判决交 mstyle 余弦。
 
     结构保证（供测试 + 复盘核对，不黑箱）：
-      · 明确标注「A=作者真迹（锚）」在「B=仿写（待验）」之前呈现（配对 + 锚定方向固定）。
-      · 4 维（AV_TRAIT_DIMS）全列 · 每维带读者视角说明 + 配对判别问法。
-      · 输出 JSON 每维要 verdict（命中/走味）+ reason（走味须指证）。
+      · swap=False：作者真迹标签在仿写标签之前；swap=True：仿写标签在作者真迹标签之前。
+      · 维度（_active_dims）全列 · 每维带读者视角说明 + 配对判别问法（始终问「仿写段」走味）。
+      · 输出 JSON 每维要 verdict（命中/走味）+ reason（走味须指证仿写段露馅处）。
     """
     a = _trim(author_text, sample_limit)
     b = _trim(replica_text, sample_limit)
+    dims = _active_dims(include_intent_dim)
+
+    # 两段呈现顺序按 swap 反转；身份标签始终绑「作者真迹 / 仿写」（不绑字母槽）→ verdict 方向稳定
+    author_block = ("━━━━━━━━━━ 作者真迹（锚 · 这位作者长这样）━━━━━━━━━━", a)
+    replica_block = ("━━━━━━━━━━ 仿写（待验证 · 判它哪维露馅）━━━━━━━━━━", b)
+    blocks = [replica_block, author_block] if swap else [author_block, replica_block]
+
+    order_hint = ("（本次仿写段在前、作者真迹段在后呈现——呈现顺序不代表谁是作者，"
+                  "以标签为准始终判仿写段走味）" if swap
+                  else "（本次作者真迹段在前、仿写段在后呈现）")
 
     L = [
-        "# 作者验证 · 配对判别（A=作者真迹 → B=仿写 · 逐维度判 B 哪维走味）",
+        "# 作者验证 · 配对判别（作者真迹 vs 仿写 · 逐维度判仿写段哪维走味）",
         "",
-        "下面 **A 段是作者真迹（锚）**，**B 段是一段仿写（待验证）**。",
-        "请以 A 为基准，逐维度判别 B 像不像同一位作者——这是**配对相对判别**，比给 B 打绝对分可靠。",
-        "",
-        "━━━━━━━━━━ A 段 · 作者真迹（锚 · 这位作者长这样）━━━━━━━━━━",
-        "",
-        a,
-        "",
-        "━━━━━━━━━━ B 段 · 仿写（待验证 · 判它哪维露馅）━━━━━━━━━━",
-        "",
-        b,
-        "",
-        "# 4 个解耦特质维度（分开判 · 不要混成总分）",
+        "下面两段：一段是**作者真迹（锚）**，一段是**仿写（待验证）**，身份见各段标签。",
+        order_hint,
+        "请以作者真迹为基准，逐维度判别仿写段像不像同一位作者——这是**配对相对判别**，比给仿写段打绝对分可靠。",
         "",
     ]
-    for i, (name, desc, ask) in enumerate(AV_TRAIT_DIMS, 1):
+    for label, body in blocks:
+        L += [label, "", body, ""]
+
+    L += [
+        f"# {len(dims)} 个解耦特质维度（分开判 · 不要混成总分）",
+        "",
+    ]
+    for i, (name, desc, ask) in enumerate(dims, 1):
         L += [
             f"## 维度 {i} · {name}",
             f"说明：{desc}",
             f"配对判别问法：{ask}",
-            f"verdict 取值：「{MATCH_VERDICT}」（B 这一维读起来像 A）或「{DRIFT_VERDICT}」（B 露馅，像别人/像 AI）。",
+            f"verdict 取值：「{MATCH_VERDICT}」（仿写段这一维读起来像作者真迹）或"
+            f"「{DRIFT_VERDICT}」（仿写段露馅，像别人/像 AI）。",
             "",
         ]
 
     L += [
         "# 输出格式",
-        "请严格按以下 JSON 输出（4 维各一项 · verdict 必须是「命中」或「走味」二选一）：",
+        f"请严格按以下 JSON 输出（{len(dims)} 维各一项 · verdict 必须是「命中」或「走味」二选一）：",
         "```json",
         "{",
         '  "dimensions": {',
     ]
-    for i, (name, _desc, _ask) in enumerate(AV_TRAIT_DIMS):
-        comma = "," if i < len(AV_TRAIT_DIMS) - 1 else ""
+    for i, (name, _desc, _ask) in enumerate(dims):
+        comma = "," if i < len(dims) - 1 else ""
         L.append(
             f'    "{name}": {{"verdict": "{MATCH_VERDICT}|{DRIFT_VERDICT}", '
-            f'"reason": "<一句话理由 · 判走味须点名 B 哪处露馅及与 A 的差别>"}}{comma}'
+            f'"reason": "<一句话理由 · 判走味须点名仿写段哪处露馅及与作者真迹的差别>"}}{comma}'
         )
     L += [
         "  }",
         "}",
         "```",
         "",
-        f"提醒：以 A 为锚做相对判别，只比写法不比内容；判「{DRIFT_VERDICT}」必须指证 B 的具体露馅处。",
+        f"提醒：以作者真迹为锚做相对判别，只比写法不比内容；判「{DRIFT_VERDICT}」必须指证仿写段的具体露馅处。",
     ]
     return "\n".join(L)
 
@@ -491,6 +584,12 @@ def aggregate_verdicts(samples: list[dict]) -> dict:
     mean_agreement = (round(sum(decided_agreements) / len(decided_agreements), 3)
                       if decided_agreements else 1.0)
 
+    # G2-CYCLIC-3 swap 透明（advisory 不黑箱 · position-swap 是否真消位置偏须可复盘）：
+    #   · 走味语义已锚到「仿写段」（与呈现顺序无关 · 见 build_av_judge_prompt swap），故聚合逻辑
+    #     不需按 _swapped 翻转——_swapped 仅供透明上报 + 位置偏诊断。
+    #   · sample_drift_detail 是 sample_drift_dims 的并行结构（不改原字段 · 保既有测试绿），
+    #     每条 {swapped, drift_dims} 让元验证脚本能比对「同一对在 swap-off / swap-on 下走味分布」。
+    n_swapped = sum(1 for s in valid if isinstance(s, dict) and s.get("_swapped"))
     return {
         "dimensions": dims,
         "drift_dims": drift_dims,
@@ -501,29 +600,59 @@ def aggregate_verdicts(samples: list[dict]) -> dict:
         "unstable_dims": unstable_dims,
         "agreement_by_dim": agreement_by_dim,
         "sample_drift_dims": [s.get("drift_dims", []) for s in valid],
+        "sample_drift_detail": [
+            {"swapped": bool(s.get("_swapped")), "drift_dims": s.get("drift_dims", [])}
+            for s in valid
+        ],
+        "n_swapped_samples": n_swapped,
+        "position_bias_note": ("半数样本已作者真迹/仿写呈现顺序反转（G2-CYCLIC）· 去 judge 位置偏 · "
+                               "不去 familiarity 偏" if n_swapped > 0 else
+                               "本次未启用 position-swap（AV_JUDGE_POSITION_SWAP=off 或 N=1）"),
     }
 
 
 def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_text: str,
                            sample_limit: int = 3000, n_samples: int | None = None,
-                           tag: str = "av_judge") -> dict:
-    """同 judge model 跑 N 次重采样（temperature 微抖）→ 4 维多数票聚合（Rating Roulette）。
+                           tag: str = "av_judge", swap_on: bool | None = None,
+                           include_intent_dim: bool = False) -> dict:
+    """同 judge model 跑 N 次重采样（temperature 微抖 + 半数 position-swap）→ 多数票聚合（Rating Roulette）。
 
     这是 av_judge 的**自一致性核心**：稳住单次 LLM-judge 的方差。N=1 时退化为单次单采样
     （= 改造前行为 · 零回归逃生口）。
 
+    G2-CYCLIC 半数 swap（experiment · AV_JUDGE_POSITION_SWAP=on 才开 · 默认 off=全 swap=False 零回归）：
+      · swap_on=None → 读 env _position_swap_on()（默认 off）。
+      · on 时 N 采样里前一半原向 / 后一半 swap（_swap_assignment）——在**不增调用次数**的现有 N 采样里
+        分配 swap（520 友好 · 复用基建），最大化位置对称采样去 judge 位置偏。N=1 恒不 swap（零回归）。
+      · 走味语义已锚到「仿写段」（不绑字母槽 · 见 build_av_judge_prompt swap）→ swap 样本 drift_dims
+        方向天然一致，聚合无需翻转；_swapped 标志仅供透明上报（aggregate_verdicts 平铺 n_swapped_samples）。
+
+    include_intent_dim（intent_recovery · experiment · 默认 False）：透传给 build_av_judge_prompt
+      追加「作者思维」第 5 维（仅 advisory 文本 · 不进 parse 聚合 · 真判决交 mstyle 余弦）。
+
     实现（薄复用 · 北极星⑥）：
-      · build_av_judge_prompt 只构一次（A/B 不变 · 省 token）。
+      · build_av_judge_prompt 按 swap 方向构（swap-off / swap-on 各构一次 · 缓存复用 · 省 token）。
       · 复用 call_gen_model（签名不变 → 既有 mock 兼容）；temperature 抖动通过临时改写候选
         profile.temperature 实现（call_gen_model 内部读 profile.temperature），跑完恢复。
-      · 每次回复 parse_av_verdicts → aggregate_verdicts 多数票聚合。
+      · 每次回复 parse_av_verdicts → 打 _swapped 标志 → aggregate_verdicts 多数票聚合。
 
     返回 aggregate_verdicts(...) 的结果，外加 error（任一/全部采样失败时聚合仍尽力 · 全失败才
     error 非空 + drift_dims 空）。advisory 永不抛错中断流水线（北极星⑤）。
     """
     n = n_samples if n_samples is not None else _n_samples()
     n = max(1, n)
-    user_prompt = build_av_judge_prompt(author_text, replica_text, sample_limit)
+    swap_on = _position_swap_on() if swap_on is None else swap_on
+    swaps = _swap_assignment(n, swap_on)
+
+    # prompt 按 swap 方向构（最多两种 · 缓存复用省 token）
+    _prompt_cache: dict[bool, str] = {}
+
+    def _prompt_for(sw: bool) -> str:
+        if sw not in _prompt_cache:
+            _prompt_cache[sw] = build_av_judge_prompt(
+                author_text, replica_text, sample_limit, swap=sw,
+                include_intent_dim=include_intent_dim)
+        return _prompt_cache[sw]
 
     # 取基准 temperature（候选 profile 的第一档 · 缺则 0.8）做抖动序列
     candidates = []
@@ -536,7 +665,8 @@ def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_t
 
     samples: list[dict] = []
     failures: list[str] = []
-    for i, temp in enumerate(temps):
+    for i, (temp, sw) in enumerate(zip(temps, swaps)):
+        user_prompt = _prompt_for(sw)
         # temperature 微抖：临时改写候选 profile 温度（call_gen_model 内部读 profile.temperature）
         saved = [(p, getattr(p, "temperature", None)) for p in candidates]
         for p in candidates:
@@ -547,7 +677,9 @@ def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_t
         try:
             reply, _profile, _elapsed = call_gen_model(
                 loader, AV_JUDGE_SYSTEM_PROMPT, user_prompt, tag=f"{tag}_sc{i + 1}")
-            samples.append(parse_av_verdicts(reply))
+            parsed = parse_av_verdicts(reply)
+            parsed["_swapped"] = sw   # G2-CYCLIC 透明：标记该样本呈现方向（聚合不翻转·仅上报）
+            samples.append(parsed)
         except GenModelExhaustedError as e:
             failures.append(f"sample{i + 1}: gen-model 全部失败 {str(e)[:120]}")
         except Exception as e:  # noqa: BLE001 — advisory 永不中断
@@ -603,9 +735,11 @@ def build_report(mode: str, parsed: dict | None, author_path: str = "",
     report["dimensions"] = parsed["dimensions"]
     report["drift_dims"] = parsed["drift_dims"]
     report["parse_ok"] = parsed.get("parse_ok", False)
-    # 自一致性透明：N 次重采样多数票聚合时，把方差指标平铺进报告（advisory 不黑箱 · 复盘可核）
+    # 自一致性透明：N 次重采样多数票聚合时，把方差指标平铺进报告（advisory 不黑箱 · 复盘可核）。
+    # G2-CYCLIC swap 透明（n_swapped_samples / position_bias_note / sample_drift_detail）一并平铺。
     for k in ("n_samples", "n_valid_samples", "mean_agreement", "unstable_dims",
-              "agreement_by_dim", "sample_drift_dims", "sample_failures"):
+              "agreement_by_dim", "sample_drift_dims", "sample_failures",
+              "n_swapped_samples", "position_bias_note", "sample_drift_detail"):
         if k in parsed:
             report[k] = parsed[k]
     if parsed.get("unstable_dims"):
@@ -687,19 +821,27 @@ def main() -> int:
         description="AV-judge 解耦特质·作者验证（配对判别 · 读者视角 · advisory · 默认 off）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--author", required=True, help="作者真迹文本路径（A · 锚）")
-    parser.add_argument("--replica", required=True, help="仿写文本路径（B · 待验证）")
+    parser.add_argument("--author", required=True, help="作者真迹文本路径（锚）")
+    parser.add_argument("--replica", required=True, help="仿写文本路径（待验证）")
     parser.add_argument("--out", help="报告 JSON 输出路径（缺省打印到 stdout）")
     parser.add_argument("--sample-limit", type=int, default=3000,
                         help="每段送审字数上限（默认 3000 · 配对判别只需足量语感样本）")
+    parser.add_argument("--position-swap", action="store_true",
+                        help="G2-CYCLIC 去位置偏（experiment · 半数样本反转呈现顺序 · 等价 AV_JUDGE_POSITION_SWAP=on）")
+    parser.add_argument("--intent-dim", action="store_true",
+                        help="intent_recovery 加「作者思维」第 5 维（experiment · 仅 advisory 文本 · 等价 AV_JUDGE_INTENT_DIM=on）")
     args = parser.parse_args()
 
     mode = _av_judge_mode()
     n_samples = _n_samples()
+    swap_on = _position_swap_on() or args.position_swap
+    intent_on = _intent_dim_on() or args.intent_dim
     print(f"[av_judge] AV_JUDGE_MODE = {mode}"
           f"（{'完全跳过 · 零回归' if mode == 'off' else 'shadow 只记录 · 不上报' if mode == 'shadow' else 'active · 走味维度作 advisory 上报'}）"
           f" · AV_JUDGE_N_SAMPLES = {n_samples}"
-          f"（{'单次 · 关聚合' if n_samples == 1 else f'{n_samples} 次重采样多数票聚合稳方差'}）",
+          f"（{'单次 · 关聚合' if n_samples == 1 else f'{n_samples} 次重采样多数票聚合稳方差'}）"
+          f" · position_swap = {'on（G2-CYCLIC 半 swap · experiment）' if swap_on else 'off（零回归）'}"
+          f" · intent_dim = {'on（第5维 · experiment）' if intent_on else 'off（默认4维）'}",
           file=sys.stderr)
 
     # off（默认）：完全跳过——不构 prompt、不调 gen-model（共同纪律 2 · 零回归）
@@ -731,10 +873,12 @@ def main() -> int:
         _emit(report, args.out)
         return 0
 
-    # 自一致性：N 次重采样 + 4 维多数票聚合（AV_JUDGE_N_SAMPLES 默认 3 · 1=退回单次）
+    # 自一致性：N 次重采样 + 多数票聚合（AV_JUDGE_N_SAMPLES 默认 3 · 1=退回单次）
+    #   + G2-CYCLIC 半数 swap（swap_on · experiment · 默认 off 零回归）+ intent_dim（intent_on · 仅 advisory 文本）
     t0 = time.time()
     agg = self_consistency_judge(loader, author_text, replica_text,
-                                 args.sample_limit, n_samples=n_samples, tag="av_judge")
+                                 args.sample_limit, n_samples=n_samples, tag="av_judge",
+                                 swap_on=swap_on, include_intent_dim=intent_on)
     elapsed = time.time() - t0
     if agg.get("error"):
         report = build_report(mode, None, str(author_path), str(replica_path),

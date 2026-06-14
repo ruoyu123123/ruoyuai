@@ -160,6 +160,18 @@ AGENT_ROUTING = {
 # AI 即便在 --waivers 里传了豁免理由，audit_hub 也强制忽略豁免，仍按问题处理。
 # 其余所有 code（validate_style 12 项 / narrative / plot scanner / WC_ / HOOK_ ...）
 # 一律 advisory，AI 有充分理由可豁免。
+#
+# ---- 🔴 思维层探针硬约束（2026-06-14 · 北极星⑤制度锁 · 设计约束·不可删）----
+# 物理可靠性上限：作者「思维/意图/读者心理/因果链/弧线形状」类探针的 LLM/人评
+# 一致性天花板 ≈ 0.71-0.74（心理深度类标注 alpha 上限；arc-shape 被金标准证伪实证）。
+# 因此任何思维层探针 code（含 PROMISE_PAYOFF_GAP / ARC_SHAPE_* / INTENT_* /
+# READER_* / CAUSALITY_* / PPP_* 等 D1-D8 派生 code）一律 advisory，
+# **永不加入 HARD_GATE_CODES**——探针自身噪声可能 ≥ 真实效应，bootstrap 再窄
+# 也是测探针噪声不是测改动。这类 code 即便其 scanner 自报 gate_level='hard_gate'，
+# 也被 _gate_level_for()（见下）+ 两条 _parse_*_scanner 双闸拦回 advisory（不在白名单即降档）。
+# 升 active 靠跨栈/金标准抽样（replication_fidelity_check / distill_holdout），不靠门禁；
+# judge 同源高一致只证「稳定」不证「准确」。增改本清单 = 同步改 STRUCTURE.md §11.2
+# （单一来源），且新 code 必须先过 tests/test_thinking_probe_advisory.py 的断言。
 HARD_GATE_CODES = {
     "LOCKED_FACT_CONFLICT",        # 正文与已锁定事实冲突 = 设定矛盾
     "FUTURE_KNOWLEDGE_LEAK",       # 角色知道不该知道的 = 逻辑错误
@@ -584,7 +596,11 @@ def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: st
     severity = "error" if has_major else "warning"
     top_gl = report.get("gate_level", "advisory")
     gl = _gate_level_for(code, severity)
-    if gl != "hard_gate" and top_gl == "hard_gate":
+    # 2026-06-14 B-2：顶层 gate_level 升格同样以 HARD_GATE_CODES 为权威（与 _parse_issues_list_scanner
+    # L476 的双闸对称）。防 violations 形态 scanner 顶层越权自立 hard_gate（北极星⑤「hard_gate 清单
+    # 单一来源，不得各自另立」）。现有 narrative_short_sentence / repeat_noun_density 顶层皆 advisory，
+    # 此守卫对现状 no-op；纯防御未来思维层探针（若实现成 violations 输出 + 顶层 hard_gate）绕过制度锁。
+    if gl != "hard_gate" and top_gl == "hard_gate" and code in HARD_GATE_CODES:
         gl = "hard_gate"
     desc = f"{report.get('scanner', source)}: {len(violations)} 处违规（verdict={report.get('verdict','?')}）"
     issues.append({

@@ -100,8 +100,8 @@ def test_B_each_dim_has_desc_and_pairwise_ask():
     """每维带读者视角说明 + 配对判别问法（解耦 · 不混成总分）。"""
     for name, desc, ask in av.AV_TRAIT_DIMS:
         assert desc and ask, name
-        # 配对问法以 A 为锚（问法里出现「A」锚定）
-        assert "A" in ask, (name, ask)
+        # 配对问法以「作者真迹」为锚（G2-CYCLIC 中性化去字母槽·问法锚定「作者真迹」语义角色）
+        assert "作者真迹" in ask, (name, ask)
 
 
 def test_B_prompt_lists_all_four_dims():
@@ -126,8 +126,8 @@ def test_B_prompt_is_reader_perspective():
 def test_C_pairwise_author_anchor_before_replica():
     """配对结构：A=作者真迹（锚）呈现在 B=仿写（待验）之前（锚定方向固定）。"""
     p = av.build_av_judge_prompt(_AUTHOR, _REPLICA)
-    assert "A 段 · 作者真迹" in p and "B 段 · 仿写" in p
-    assert p.index("A 段 · 作者真迹") < p.index("B 段 · 仿写")
+    assert "作者真迹（锚" in p and "仿写（待验证" in p
+    assert p.index("作者真迹（锚") < p.index("仿写（待验证")  # swap=False 默认·作者真迹在前
 
 
 def test_C_pairwise_anchor_semantics():
@@ -332,7 +332,7 @@ def test_G_real_author_prompt_builds():
             continue
         found = True
         p = av.build_av_judge_prompt(a, b)
-        assert "A 段 · 作者真迹" in p and "B 段 · 仿写" in p
+        assert "作者真迹（锚" in p and "仿写（待验证" in p
         for i, name in enumerate(_DIM_NAMES, 1):
             assert f"维度 {i} · {name}" in p
         # 真原文片段进 prompt（前若干字 · 避免截断差异）

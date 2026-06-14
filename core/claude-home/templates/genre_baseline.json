@@ -1,0 +1,26 @@
+{
+  "_doc": "genre 中性基线【P0 兜底版】(G6-GENREBASE · diff-against-average)。把作者档维度表达为『相对此基线的方向性 diff』(更短/更长/更留白)而非绝对值，落地 D7 vs_generic_baseline。",
+  "_maturity": "P0",
+  "_authority": "FALLBACK_NOT_AUTHORITATIVE",
+  "_warning": "P0 基线 = 系统通用爽文兜底(来自 CLAUDE.md 反 AI 腔调守卫·非真实多作者网文平均)。只用于产『方向性词』(更短/更长/更留白)，不用精确 diff 值。真『vs 通用网文平均』降 P2·与 mstyle 多作者池采集合并。作者档仍第一权威。",
+  "_version": "v0-p0",
+  "baseline": {
+    "sentence_mean": 22,
+    "para_mean": 22,
+    "single_para_ratio": 0.40,
+    "comma_k": 55,
+    "period_k": 70,
+    "dash_k": 1.0,
+    "ellipsis_k": 3.0,
+    "excl_k": 4.0,
+    "ques_k": 3.0
+  },
+  "_direction_labels": {
+    "sentence_mean": {"higher": "句子更长更绵密", "lower": "句子更短更碎"},
+    "para_mean": {"higher": "段落更厚重", "lower": "段落更留白更碎"},
+    "single_para_ratio": {"higher": "更多单句独行(更碎更跳)", "lower": "更多多句成段(更绵密)"},
+    "excl_k": {"higher": "情绪更外放(感叹密)", "lower": "情绪更克制"},
+    "ellipsis_k": {"higher": "更多留白停顿", "lower": "更少省略"},
+    "ques_k": {"higher": "更多设问/悬念语气", "lower": "更少疑问"}
+  }
+}

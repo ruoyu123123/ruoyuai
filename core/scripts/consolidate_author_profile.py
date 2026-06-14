@@ -83,6 +83,58 @@ def _detect_total(dist_dir: Path) -> int:
     return mx
 
 
+def _dig(d, *keys):
+    """安全取嵌套数值，返回 float or None（C4 G6 genre diff 摊平用）。"""
+    cur = d
+    for k in keys:
+        if isinstance(cur, dict) and k in cur:
+            cur = cur[k]
+        else:
+            return None
+    return float(cur) if isinstance(cur, (int, float)) else None
+
+
+def _genre_baseline_diff(q: dict):
+    """G6 P0：作者维度 vs 系统兜底 genre 基线的方向性 diff（advisory·标注兜底非权威）。
+
+    只产『方向词+粗档』(更短/更长·明显/略)·不暴露精确 diff 值(P0 兜底基线非权威·作者档第一权威)。
+    0.85-1.15 视为与基线接近·无方向(避免噪声)。任何异常→None(绝不崩蒸馏强制路径)。
+    """
+    try:
+        from frozen_util import resource_path
+        gb = json.loads(resource_path(
+            "core", "claude-home", "templates", "genre_baseline.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    base = gb.get("baseline", {})
+    labels = gb.get("_direction_labels", {})
+    _pmap = {"exclamation": "excl_k", "question": "ques_k", "ellipsis": "ellipsis_k",
+             "comma": "comma_k", "period": "period_k", "dash": "dash_k"}
+    flat = {
+        "sentence_mean": _dig(q, "sentence_length", "mean"),
+        "para_mean": _dig(q, "paragraph_length_chars", "mean"),
+        "single_para_ratio": q.get("single_sentence_para_ratio"),
+    }
+    for pk, fk in _pmap.items():
+        flat[fk] = _dig(q, "punctuation_density_per_1000", pk, "mean")
+    out = {}
+    for k, bv in base.items():
+        av = flat.get(k)
+        if av is None or not bv:
+            continue
+        ratio = av / bv
+        if 0.85 <= ratio <= 1.15:
+            continue
+        direction = "higher" if ratio > 1 else "lower"
+        magnitude = "明显" if (ratio >= 1.4 or ratio <= 0.7) else "略"
+        out[k] = {"direction": direction, "magnitude": magnitude,
+                  "label": f"{magnitude}{labels.get(k, {}).get(direction, '')}"}
+    if not out:
+        return None
+    return {"_authority": gb.get("_authority"), "_maturity": gb.get("_maturity"),
+            "dims": out, "_doc": "P0 方向性 diff（兜底基线非权威·只用方向词不用精确值）"}
+
+
 def aggregate_quantitative(project: Path, total: int) -> dict:
     """从单章 metrics profile + 原文段长分位数聚合 quantitative 标准 schema。"""
     dist = project / "蒸馏进度"
@@ -184,6 +236,9 @@ def aggregate_quantitative(project: Path, total: int) -> dict:
     if ttr_m is not None or hapax_m is not None:
         q["vocab_richness"] = {"ttr_mean": ttr_m, "hapax_mean": hapax_m}
         q["vocabulary_richness"] = {"type_token_ratio": ttr_m, "hapax_ratio": hapax_m}
+    diff = _genre_baseline_diff(q)   # C4 G6：作者 vs 通用兜底基线的方向性 diff（advisory·兜底非权威）
+    if diff:
+        q["vs_generic_baseline"] = diff
     return q
 
 
@@ -304,6 +359,30 @@ def _propulsion_bucket(s: str) -> str:
     return "其他"
 
 
+def _tension_type_bucket(s: str) -> str:
+    """张力机制自由文本/枚举码 → suspense/curiosity/surprise 三桶（Sternberg 三向度·D2）。
+
+    suspense=读者已知危险等它爆 / curiosity=先抛结果勾读者想知道为什么 /
+    surprise=withhold 后反转打脸预期。无法判 → 未分类（不计入占比分母·保守不误分类）。
+    受控码（D2 新 schema 的 tension_type）直通；旧 surface 自由钩名/中文描述走关键词映射兜底。
+    """
+    s = s or ""                      # 防 None：后续 `kw in s` 子串匹配需非 None
+    t = s.strip().lower()
+    if t in ("suspense", "curiosity", "surprise"):
+        return t
+    for kw in ("已知", "危险", "炸弹", "等爆", "倒计时", "高压开头", "悬"):
+        if kw in s:
+            return "suspense"
+    # 注意：勿用「信息差」等宽泛词当锚——子串匹配分不清「有/没有信息差」，且 suspense 也涉信息差
+    for kw in ("想知道", "谜", "疑问", "为什么", "到底", "新设定"):
+        if kw in s:
+            return "curiosity"
+    for kw in ("反转", "打脸", "没想到", "留白反转", "意外", "逆转"):
+        if kw in s:
+            return "surprise"
+    return "未分类"
+
+
 def _reagan_shape(tens: list[float]) -> str:
     """三段均值比对 → Reagan 式形态标签（升/降/平 两段拼接）。"""
     n = len(tens)
@@ -355,6 +434,7 @@ def aggregate_rhythm(project: Path) -> dict:
     hooks: Counter = Counter()
     gaps: list = []
     prop: Counter = Counter()
+    tt_counter: Counter = Counter()   # D2 三向度张力机制(suspense/curiosity/surprise)跨 cluster 计数
     for sp in surfaces:
         try:
             dims = (json.loads(sp.read_text(encoding="utf-8")).get("qualitative_dims") or {})
@@ -380,6 +460,16 @@ def aggregate_rhythm(project: Path) -> dict:
             pts = sorted((pc, tn) for pc, tn in pts if pc is not None and tn is not None)
             if pts:
                 tension_all.append(pts)
+            # D2 三向度张力机制(suspense/curiosity/surprise)：单 cluster 有效 type 点 <3
+            # 标 low_confidence 不计入（占比需跨 cluster 累积·避免单块方差污染·G3 约定）
+            cluster_tt: Counter = Counter()
+            for p in tc:
+                if isinstance(p, dict):
+                    bt = _tension_type_bucket(str(p.get("tension_type", "")))
+                    if bt != "未分类":
+                        cluster_tt[bt] += 1
+            if sum(cluster_tt.values()) >= 3:
+                tt_counter.update(cluster_tt)
         hk = dims.get("dim52_钩子兑现")               # A4
         if isinstance(hk, list):
             for h in hk:
@@ -402,6 +492,10 @@ def aggregate_rhythm(project: Path) -> dict:
         out["scene_turn_ratio"] = round(turn_yes / turn_total, 3)
     if tension_all:
         out["tension_trajectory"] = _tension_stats(tension_all)
+    if tt_counter:
+        tot = sum(tt_counter.values())
+        out["tension_type_distribution"] = {
+            k: round(v / tot, 3) for k, v in tt_counter.most_common()}
     if hooks:
         out["hook_type_distribution"] = dict(hooks.most_common())
     if gaps:
@@ -460,6 +554,34 @@ def aggregate_decisions(project: Path) -> tuple[dict, dict]:
     return dec, cha
 
 
+def build_decision_cheat_sheet(dec: dict) -> list:
+    """D7：把 per_scene_rationale 链确定性压成紧凑 cheat-sheet（按 decision_type 聚类·每类 1 条·非 LLM）。
+
+    输入 dec = aggregate_decisions 产的 author_decision_principles（_merge_observations 已把
+    per_scene_rationale 跨 cluster 去重合并成 list）。输出 [{situation, author_choice, vs_generic}]·
+    每 decision_type 取 the_why 最长(信息量代理)且 gap_filled 非空的 1 条。无 per_scene_rationale(旧档)→[]（零回归）。
+    """
+    rationales = dec.get("per_scene_rationale") if isinstance(dec, dict) else None
+    if not isinstance(rationales, list) or not rationales:
+        return []
+    by_type: dict = {}
+    for r in rationales:
+        if not isinstance(r, dict):
+            continue
+        t = (r.get("decision_type") or "").strip()
+        if t:
+            by_type.setdefault(t, []).append(r)
+    sheet = []
+    for t, rs in by_type.items():
+        best = max((x for x in rs if x.get("gap_filled")),
+                   key=lambda x: len(x.get("the_why", "")), default=None)
+        if best:
+            sheet.append({"situation": f"{t}:{best.get('scene', '')}",
+                          "author_choice": best.get("the_why", ""),
+                          "vs_generic": best.get("gap_filled", "")})
+    return sheet
+
+
 def consolidate(project: Path, total: int) -> dict:
     """聚合 + 规整 作者风格.json（保留创意字段，覆盖/补全 consumer 数值字段）。"""
     q = aggregate_quantitative(project, total)
@@ -495,6 +617,9 @@ def consolidate(project: Path, total: int) -> dict:
             style.setdefault("author_decision_principles", {}).update(decisions)
         if characterization:  # 阶段2：人物刻画手法（刻画比例/声纹/登场签名）
             style.setdefault("characterization_craft", {}).update(characterization)
+        sheet = build_decision_cheat_sheet(decisions)  # D7 紧凑决策表（per_scene_rationale 聚类压缩）
+        if sheet:
+            style["author_decision_cheat_sheet"] = sheet
         style.setdefault("_meta", {})["consumer_fields_consolidated"] = {
             "by": "consolidate_author_profile.py",
             "note": "consumer 数值/分布字段由确定性脚本聚合·照顾弱模型驱动·不靠 agent 自由 schema",
