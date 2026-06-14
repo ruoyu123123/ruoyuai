@@ -1027,6 +1027,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     prs = _SCRIPT_DIR / "prose_rhythm_scanner.py"
     # [2026-06-13 阶段1] 叙事节奏序列（张力轨迹后段保持/匀速平铺/节拍单调 vs 作者基线）· advisory
     nrs = _SCRIPT_DIR / "narrative_rhythm_scanner.py"
+    # [2026-06-15 记忆调研W3] 情绪曲线 live 回查（actual valence 曲线 vs manifest 注入 target）· advisory
+    ecrs = _SCRIPT_DIR / "emotion_curve_rescan_scanner.py"
 
     # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
     # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
@@ -1128,6 +1130,14 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "narrative_rhythm_scanner", "NARRATIVE_RHYTHM", "风格")),
+                # [2026-06-15 记忆调研W3] 情绪曲线 live 回查 · actual valence 曲线 vs manifest 注入
+                # target（emotion_curve_full）· Pearson 趋势相关 · advisory · EMOTION_RESCAN_MODE 默认 shadow
+                ("emotion_curve_rescan",
+                 [child_python(), str(ecrs), str(cluster_draft),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "emotion_curve_rescan_scanner", "EMOTION_CURVE_RESCAN_DRIFT", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

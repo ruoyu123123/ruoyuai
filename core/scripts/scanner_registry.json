@@ -126,6 +126,13 @@
       "_new": true,
       "issues_emitted": ["NARRATIVE_RHYTHM"]
     },
+    "emotion_curve_rescan": {
+      "layer": "cluster",
+      "script": "emotion_curve_rescan_scanner.py",
+      "doc": "[2026-06-15 记忆调研W3·情绪曲线live回查] 草稿实际情绪valence曲线(EMOTION_KEYWORDS映射·复用arc_aggregator Reagan形状)vs manifest注入target(emotion_curve_full)·Pearson趋势相关捕捉「该升却降」(裸cosine对全正值向量不敏感趋势)·闭环build_manifest『注入target从不回查actual』·advisory·env EMOTION_RESCAN_MODE默认shadow·北极星⑤情绪是创作工艺writer可偏离绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["EMOTION_CURVE_RESCAN_DRIFT"]
+    },
     "romance_pacing": {
       "layer": "cluster",
       "genre_gated": "romance",
