@@ -300,6 +300,34 @@ def build_gemini_body(profile: Profile, system: str, user: str, max_tokens: int,
             "contents": contents, "generationConfig": gen_cfg}
 
 
+def _record_token_usage(usage: dict, model: str) -> None:
+    """token ledger（一人公司·BYOK 用户看烧多少钱）：单次 gemini usage append 到 env
+    RUOYU_TOKEN_LEDGER 指向的 jsonl。env 未设 → 不记（零侵入零回归）。落盘失败绝不崩
+    transport（账本是 advisory·不影响写作主轨·北极星⑤）。"""
+    import os as _os
+    ledger_path = _os.environ.get("RUOYU_TOKEN_LEDGER")
+    if not ledger_path or not usage:
+        return
+    try:
+        import json as _json
+        import time as _time
+        from pathlib import Path as _Path
+        rec = {
+            "ts": _time.time(),
+            "model": model,
+            "prompt_tokens": int(usage.get("promptTokenCount", 0) or 0),
+            "output_tokens": int(usage.get("candidatesTokenCount", 0) or 0),
+            "cached_tokens": int(usage.get("cachedContentTokenCount", 0) or 0),
+            "total_tokens": int(usage.get("totalTokenCount", 0) or 0),
+        }
+        p = _Path(ledger_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass   # 账本落盘失败绝不崩 transport
+
+
 def _stream_once_gemini(profile: Profile, system: str, user: str, max_tokens: int, *,
                         prior_assistant: str | None, cont_msg: str | None,
                         temperature: float | None, response_format_json: bool,
@@ -373,6 +401,8 @@ def _stream_once_gemini(profile: Profile, system: str, user: str, max_tokens: in
     if cached:
         print(f"\n[llm_transport][gemini] 缓存命中 cachedContentTokenCount={cached}"
               f"/{usage.get('promptTokenCount', '?')} prompt tokens", file=sys.stderr)
+    # token ledger（B1 一人公司·BYOK 用户看烧多少钱）：env RUOYU_TOKEN_LEDGER 设则 append·零侵入
+    _record_token_usage(usage, getattr(profile, "model", "gemini"))
     finish = "length" if finish_raw == "MAX_TOKENS" else ("stop" if finish_raw else None)
     return text, finish
 

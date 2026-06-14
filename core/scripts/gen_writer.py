@@ -1884,6 +1884,9 @@ def main():
 
     print(f"[gen_writer] 加载配置: {loader.env_path}", file=sys.stderr)
     print(f"[gen_writer] active = {active.name}", file=sys.stderr)
+    # token ledger（一人公司·BYOK 用户看烧多少钱）：设账本路径·llm_transport 自动 append（已设则尊重）
+    os.environ.setdefault("RUOYU_TOKEN_LEDGER",
+                          str(project_root / "_数据库" / ".token_ledger.jsonl"))
     chain = loader.get_fallback_chain()
     if chain:
         print(f"[gen_writer] fallback chain = {','.join(chain)}", file=sys.stderr)
