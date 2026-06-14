@@ -190,7 +190,34 @@ def check_pending_tail_orphans(project_root) -> list:
 
 # ============ 导出主流程 ============
 
-def export_book(project_root, out_path=None, with_adaptation_kit=False) -> dict:
+def build_compliance_checklist() -> str:
+    """发布前合规自查清单（advisory·静态·复用 D2 合规护城河 feedback_reader_growth_compliance_redline·
+    守机器产草稿人做发布决策·不替用户上传）。"""
+    return """# 📋 发布前合规自查清单
+> 本工具只产成品·**不替你上传**——请手动登录平台合规投稿。机器产草稿·发布决策你来做。
+
+## ⚠️ 平台 AI 政策（2026 严打 AI 铺量·投稿前先看）
+- [ ] 已查目标平台最新「AI 创作披露政策」（番茄/起点/七猫/晋江各不同·部分要求显式标注 AI 参与）
+- [ ] 确认单本精写·非批量起号（平台 2026 已清低质违规 4 万+本·一身份证一账号·铺量=重点打击画像）
+
+## 📐 格式与内容规范
+- [ ] 字数 / 分章符合目标平台规范（章节长度·卷结构）
+- [ ] 标题 / 简介 / 标签无违禁词
+- [ ] 敏感内容已自查（涉政 / 暴力 / 色情按平台尺度）
+
+## 🚫 红线（绝不做·封号风险）
+- [ ] 不用一键自动发布 / 模拟登录 / Cookie 复用分发（违 ToS）
+- [ ] 不用「降 AI 率 / 过检」工具（猫鼠游戏·法律 + 政策风险）
+- [ ] 不跨平台铺量起号 / 书评区群发轰炸
+
+## ✅ 发布动作（你手动做）
+- [ ] 登录平台官方作家后台·手动提交
+- [ ] 按平台要求填 AI 参与披露（如适用）
+"""
+
+
+def export_book(project_root, out_path=None, with_adaptation_kit=False,
+                with_compliance_checklist=True) -> dict:
     """拼接全书。成功返回报告 dict；无任何章节可导出返回 None。
 
     with_adaptation_kit=True（--adaptation-kit）：导出后额外产改编资料包（一人公司·喂 IP 后端·
@@ -244,6 +271,17 @@ def export_book(project_root, out_path=None, with_adaptation_kit=False) -> dict:
         except Exception as e:  # noqa: BLE001 · 改编资料包失败不影响主导出
             print(f"[WARN] 改编资料包生成失败（不影响导出）: {str(e)[:120]}", file=sys.stderr)
 
+    # 发布前合规自查清单（一人公司·D2 合规护城河·默认产·advisory·失败不影响主导出）
+    compliance_path = None
+    if with_compliance_checklist:
+        try:
+            compliance_path = out_path.parent / "发布前合规自查.md"
+            compliance_path.write_text(build_compliance_checklist(), encoding="utf-8")
+            print(f"[OK] 发布前合规自查清单 → {compliance_path}")
+        except Exception as e:  # noqa: BLE001 · 合规清单失败不影响主导出
+            print(f"[WARN] 合规自查清单生成失败（不影响导出）: {str(e)[:120]}", file=sys.stderr)
+            compliance_path = None
+
     report = {
         "out_path": str(out_path),
         "chapters": len(blocks),
@@ -252,6 +290,7 @@ def export_book(project_root, out_path=None, with_adaptation_kit=False) -> dict:
         "total_cjk": cio.count_cjk(full),
         "orphan_pending_tails": len(orphans),
         "adaptation_kit": adaptation,
+        "compliance_checklist": str(compliance_path) if compliance_path else None,
     }
     print(f"[OK] 导出完成：{len(blocks)} 章 / {report['total_cjk']} CJK → {out_path}")
     return report

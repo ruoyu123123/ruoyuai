@@ -157,6 +157,42 @@ def test_adaptation_kit_flag_produces_kit():
         assert (root / "改编资料包" / "人物小传.md").exists()
 
 
+# ============ 发布前合规自查清单集成（一人公司·D2 合规护城河·2026-06-15） ============
+
+def test_compliance_checklist_default_produced():
+    """默认 with_compliance_checklist=True → 产 发布前合规自查.md + report 字段。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "测试书"
+        root.mkdir()
+        _mk_chapter(root, 1, "正文。")
+        report = eb.export_book(root)
+        cp = report["compliance_checklist"]
+        assert cp is not None
+        assert Path(cp).name == "发布前合规自查.md"
+        assert (Path(report["out_path"]).parent / "发布前合规自查.md").exists()
+
+
+def test_compliance_checklist_can_disable():
+    """with_compliance_checklist=False → 不产（report 字段 None）。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "测试书"
+        root.mkdir()
+        _mk_chapter(root, 1, "正文。")
+        report = eb.export_book(root, with_compliance_checklist=False)
+        assert report["compliance_checklist"] is None
+        assert not (root / "exports" / "发布前合规自查.md").exists()
+
+
+def test_compliance_checklist_content_d2_points():
+    """合规清单含 D2 核心要点（严打 AI 铺量/单本精写/不替上传/红线·守北极星合规护城河）。"""
+    md = eb.build_compliance_checklist()
+    assert "AI 铺量" in md                 # 平台严打
+    assert "单本精写" in md                # 北极星定位
+    assert "不替你上传" in md              # 机器产草稿人做发布决策
+    assert "一键自动发布" in md            # 红线
+    assert "AI 创作披露" in md             # 平台 AI 政策
+
+
 # ============ 4. 无章节 exit 1 ============
 
 def test_no_chapters_exit_1():
