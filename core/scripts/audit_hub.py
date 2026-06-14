@@ -1031,6 +1031,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     ecrs = _SCRIPT_DIR / "emotion_curve_rescan_scanner.py"
     # [2026-06-15 记忆调研W1] 潜台词/on-the-nose 情绪直陈回查（说透情绪密度·金标准校准阈值）· advisory
     srss = _SCRIPT_DIR / "subtext_rescan_scanner.py"
+    # [2026-06-15 记忆调研W4] dramatic irony 信号回查（显式标志词 tell 过多·金标准证好作者用 show）· advisory
+    dis = _SCRIPT_DIR / "dramatic_irony_scanner.py"
 
     # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
     # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
@@ -1147,6 +1149,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "subtext_rescan_scanner", "ON_THE_NOSE_EMOTION_DENSITY", "风格")),
+                # [2026-06-15 记忆调研W4] dramatic irony 信号回查 · 显式标志词 tell 过多（好作者用 show）
+                # · advisory · DRAMATIC_IRONY_MODE 默认 shadow · 金标准阈值防误伤
+                ("dramatic_irony",
+                 [child_python(), str(dis), str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "dramatic_irony_scanner", "DRAMATIC_IRONY_DRIFT", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
