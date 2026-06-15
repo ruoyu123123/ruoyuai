@@ -302,6 +302,59 @@ def _build_style_fingerprint_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _rolling_anchor_inject_mode() -> str:
+    """rolling style anchor 注入开关（env ROLLING_ANCHOR_INJECT_MODE · 默认 shadow）。
+
+    动态文风锚（build_manifest._collect_rolling_style_anchor · 第2轮治 D 级长程文风退化：用本书已写得
+    最像作者的 1-2 段对抗回归均值退化成通用 LLM 腔）此前只以 raw JSON 躺在 manifest dump 中段
+    （lost-in-the-middle dead zone · writer 难识别为写作目标）。本开关把它升格到生成点近邻风格锚区
+    （同族 style_fp/rhythm/seed）。默认 shadow（位置升格的文风改善效果需 gen-model A/B 定论 · 先影子）。
+    """
+    return (os.environ.get("ROLLING_ANCHOR_INJECT_MODE") or "shadow").strip().lower()
+
+
+def _build_rolling_anchor_section(manifest_path: Path) -> str:
+    """从 manifest.rolling_style_anchor 抽动态文风锚片段拼 writer prompt 段（dead-zone → 生成点近邻升格）。
+
+    返回值：
+      · ROLLING_ANCHOR_INJECT_MODE != active / 字段缺/None / 无 anchors / snippet 全空 → ""（零回归）。
+      · 有 anchors → 拼「本书文风动态锚」段（advisory 软牵引 · 北极星⑤不硬锁 · 每锚 snippet）。
+    """
+    if _rolling_anchor_inject_mode() != "active":
+        return ""
+    if not manifest_path.exists():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    rsa = m.get('rolling_style_anchor')
+    if not isinstance(rsa, dict):
+        return ""
+    anchors = rsa.get('anchors') or []
+    if not anchors:
+        return ""
+    doc = (rsa.get('_doc') or
+           "下面是本书已写片段中最贴作者文风的段落——写下一块时句长节奏/虚词标点/字组笔迹向它们看齐"
+           "（顾问软牵引·不限定写什么内容·不硬锁写法）。")
+    lines = ["## 🪢 本书文风动态锚（向已写得最像作者的片段看齐 · advisory）", "", doc, ""]
+    n = 0
+    for i, a in enumerate(anchors, 1):
+        if not isinstance(a, dict):
+            continue
+        snip = (a.get('snippet') or "").strip()
+        if not snip:
+            continue
+        cid = a.get('cluster_id', '?')
+        lines.append(f"【锚 {i} · 本书 {cid} 最贴作者段】")
+        lines.append(snip)
+        lines.append("")
+        n += 1
+    if n == 0:
+        return ""   # snippet 全空 → 不注入（零回归）
+    return "\n".join(lines).rstrip()
+
+
 def _build_rhythm_signature_section(manifest_path: Path) -> str:
     """阶段1：从 manifest.author_rhythm_signature 抽序列级节奏指令拼 writer prompt 段。
 
@@ -646,6 +699,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     genre_section = _build_genre_pack_section(manifest_path)
     # 阶段D3：作者信息差主调段（读者-角色知识差三态·KNOWLEDGE_GAP_INJECT_MODE 控制·默认 shadow 时空 → 零回归）
     knowledge_gap_section = _build_knowledge_gap_section(manifest_path)
+    # #3 升格：本书文风动态锚段（治 D 级长程退化·ROLLING_ANCHOR_INJECT_MODE 默认 shadow 时空 → 零回归）
+    rolling_anchor_section = _build_rolling_anchor_section(manifest_path)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
@@ -911,6 +966,7 @@ cluster_brief 完整内容：
     genre_block = (genre_section + "\n\n") if genre_section else ""
     # 阶段D3：信息差主调段（与决策原则并列·序列骨·默认 shadow 时空 → 零回归）
     knowledge_gap_block = (knowledge_gap_section + "\n\n") if knowledge_gap_section else ""
+    rolling_anchor_block = (rolling_anchor_section + "\n\n") if rolling_anchor_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
     primacy_section = _build_hard_constraint_primacy_block(
@@ -943,7 +999,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{rolling_anchor_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -977,7 +1033,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{rolling_anchor_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}
