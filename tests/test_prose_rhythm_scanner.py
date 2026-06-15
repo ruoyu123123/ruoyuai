@@ -145,6 +145,49 @@ def test_inverted_metrics_present():
     assert "inverted_mold_max_streak" in r["metrics"]
 
 
+# ── 探针 5：强度副词通胀（极其/死死/毫无/猛地·与倒装同批 gen-model 套路）──
+def test_intensity_adverb_inflation_flagged():
+    """强度副词高密度通胀 → intensity_adverb_inflation。"""
+    text = "\n".join([
+        "他极其愤怒地死死攥住拳头毫无保留地猛地一拳狠狠砸在了桌子上面。",
+        "她极其害怕地紧紧抓住门框毫无办法只能死死盯着那个疯狂逼近的影子。",
+        "他极其用力地牢牢按住对方的肩膀拼命想要把那扇门死死顶住别让它开。",
+    ])
+    r = P.scan(text)
+    v = [x for x in r["violations"] if x["kind"] == "intensity_adverb_inflation"]
+    assert v, f"应报强度副词通胀，metrics={r['metrics']}"
+
+
+def test_intensity_single_word_overused():
+    """单个强度副词高频（极其 ≥12）→ 报（单词过用）。"""
+    text = "\n".join(f"他极其认真地看了第{i}遍那份极其重要的文件感到极其满意极了。" for i in range(7))
+    r = P.scan(text)
+    v = [x for x in r["violations"] if x["kind"] == "intensity_adverb_inflation"]
+    assert v, f"单词过用应报，metrics={r['metrics']}"
+    assert r["metrics"]["intensity_adverb_total"] >= 12
+
+
+def test_intensity_moderate_no_flag():
+    """适度强度副词（长文本低密度·2 个死死/~800 CJK ≈ 2.4/千 < 3.0）→ 不报（防矫枉过正）。
+
+    短文本密度虚高(1 词/280CJK=3.6/千)非真实场景——prose_rhythm 是 cluster 草稿(10k-25k)scanner，
+    真草稿密度真实(金标准 test_real_author_passes 已验长文本不误伤)。本测试用长文本模拟真实密度。"""
+    long_para = ("他走进房间环顾了一下四周的环境然后在靠窗的那个位置慢慢坐了下来"
+                 "又顺手点了一杯热茶安静地等着对方过来谈那件要紧的事情。")   # ~55 CJK
+    paras = [long_para for _ in range(15)]    # ~825 CJK
+    paras[0] = "她死死盯着屏幕看了很久又死死攥着手里那支笔才终于慢慢松了口气。"  # 2 个死死
+    text = "\n".join(paras)
+    r = P.scan(text)
+    assert "intensity_adverb_inflation" not in _kinds(r), \
+        f"低密度不该报，per_1k={r['metrics']['intensity_adverb_per_1k']}"
+
+
+def test_intensity_metrics_present():
+    r = P.scan("他走进房间坐了下来又站了起来。", project=None)
+    assert "intensity_adverb_total" in r["metrics"]
+    assert "intensity_adverb_per_1k" in r["metrics"]
+
+
 # ── 作者基线第一权威 ──────────────────────────────
 def test_author_baseline_from_profile():
     """传作者档(mean=31) → 句长偏短按 31 判（比通用 26 更严）。"""

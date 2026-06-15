@@ -40,6 +40,10 @@ DEFAULT_SUBJ_PCT_CAP = 24.0       # 主语开头占比通用上限(%)
 INVERTED_MOLD_MINOR, INVERTED_MOLD_MAJOR = 0.12, 0.20   # 倒装段首占比阈值
 INVERTED_STREAK_MINOR, INVERTED_STREAK_MAJOR = 3, 5      # 连续倒装段首 streak
 INVERTED_MIN_COUNT = 3                                   # 至少 N 处才报（避免少量误报）
+# 强度副词通胀（gen-model 写作伴生套路·memory feedback_inverted L19·与倒装同批一起治）
+INTENSITY_ADVERBS = ['极其', '死死', '毫无', '猛地', '狠狠', '紧紧', '牢牢', '拼命', '疯狂']
+INTENSITY_PER_1K_MINOR, INTENSITY_PER_1K_MAJOR = 3.0, 5.0   # 总强度副词密度 per 1000 CJK
+INTENSITY_SINGLE_MAX = 12                                    # 单个强度副词频次上限（如极其28）
 
 
 def cjk(s: str) -> int:
@@ -192,6 +196,30 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                     f'(直接主语/环境状语/动作中段/对话/心理起头·别让「X的[主语]」霸占段首)',
         })
 
+    # 探针 5：强度副词通胀（极其/死死/毫无/猛地等·gen-model 伴生套路·与倒装同批一起治）
+    total_cjk = sum(all_lens)
+    intensity_counts = {}
+    for adv in INTENSITY_ADVERBS:
+        c = text.count(adv)
+        if c:
+            intensity_counts[adv] = c
+    intensity_total = sum(intensity_counts.values())
+    intensity_per_1k = round(intensity_total / total_cjk * 1000, 2) if total_cjk else 0.0
+    single_overused = {a: c for a, c in intensity_counts.items() if c >= INTENSITY_SINGLE_MAX}
+    if intensity_per_1k >= INTENSITY_PER_1K_MINOR or single_overused:
+        sev = ('major' if (intensity_per_1k >= INTENSITY_PER_1K_MAJOR
+                           or any(c >= INTENSITY_SINGLE_MAX * 2 for c in single_overused.values()))
+               else 'minor')
+        top = sorted(intensity_counts.items(), key=lambda x: -x[1])[:5]
+        violations.append({
+            'kind': 'intensity_adverb_inflation', 'severity': sev,
+            'per_1k': intensity_per_1k, 'total': intensity_total,
+            'top': top, 'single_overused': single_overused,
+            'hint': f'强度副词通胀(极其/死死/毫无/猛地等) {intensity_total} 处({intensity_per_1k}/千字'
+                    f'·top {top[:3]})=gen-model 强度通胀套路；删冗余强度词·用具体动作/细节传强度'
+                    f'(死死抓住→指节发白·极其愤怒→把杯子摔了)',
+        })
+
     has_major = any(v['severity'] == 'major' for v in violations)
     verdict = 'PASS' if not violations else ('FAIL_MAJOR' if has_major else 'FAIL_MINOR')
     return {
@@ -208,6 +236,8 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             'inverted_mold_count': inv_n,
             'inverted_mold_pct': round(inv_pct * 100, 1),
             'inverted_mold_max_streak': inv_mx,
+            'intensity_adverb_total': intensity_total,
+            'intensity_adverb_per_1k': intensity_per_1k,
         },
         'author_baseline': {'sentence_mean': sent_mean_base,
                             'from_author_profile': baseline["sentence_mean"] is not None},
