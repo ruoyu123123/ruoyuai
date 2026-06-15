@@ -218,9 +218,11 @@ def collect_character_deltas_from_chapter_json(
         appeared = set()
         for name in sorted_chars:
             if name and name in text_blob:
-                # 找到该角色的 canonical（避免子字符串匹配的别名）
-                short = re.split(r"[·.•_\-—\s]", name)[0]
-                appeared.add(short or name)
+                # 用完整 name(known_characters 的 canonical key)·不取 split 短名(2026-06-15 审计修)：
+                # 原 short=re.split(name)[0] 与 continuity 路径的完整名 key('赵子龙·子龙'/'HeroC.CharC5')
+                # 不一致 → 同角色裂成两 key + L227 existing 检查(按完整名 key)查不到 continuity 数据 →
+                # 覆盖优先级失效误加重复数据点。统一用完整 canonical name。
+                appeared.add(name)
 
         # 给每个出现的角色加章节数据点（避免覆盖已有的 continuity 数据）
         for name in appeared:
@@ -267,6 +269,13 @@ def collect_character_deltas(continuity_dir: Path) -> dict[str, list[dict]]:
             for cc in entry.get("chapter_changes", []) or []:
                 ch = cc.get("chapter")
                 if ch is None:
+                    continue
+                # 强制 int(2026-06-15 审计修)：弱模型/旧 schema 写 chapter:"5"/"ch5"(str)·原样存入
+                # 会与 fallback/单章路径(强制 int)的 entries 混入同角色 → 后续 sorted(key=chapter)/
+                # chs[-1]-chs[0]/max() 对 str-int 抛 TypeError 整角色崩。统一 int·非数字键跳过。
+                try:
+                    ch = int(ch)
+                except (TypeError, ValueError):
                     continue
                 actor = cc.get("actor_emotion") or {}
                 experiencer = cc.get("experiencer_emotion") or {}

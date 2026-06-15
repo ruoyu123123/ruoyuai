@@ -86,7 +86,10 @@ def parse_pacing_curve_to_values(curve_str: str, n_chapters: int) -> list[float]
 
     for chunk in chunks:
         matched = 0.5
-        for label, value in PACING_LABEL_TO_VALUE.items():
+        # 最长优先匹配（2026-06-15 审计修）：原按 dict 插入顺序·短 label「中」「快」排在含它的
+        # 「中快」「极快」之前 → chunk「中快」先命中「中」(0.5)误判中速·应 0.65。对齐 sibling
+        # parse_pacing_curve_to_labels 已用的 longest-first。错值会污染 emotion_curve 下游(Reagan/climax)。
+        for label, value in sorted(PACING_LABEL_TO_VALUE.items(), key=lambda kv: -len(kv[0])):
             if label in chunk:
                 matched = value
                 break
@@ -585,8 +588,21 @@ def aggregate_summary(project: Path) -> dict:
         s = a.get("matched_reagan_shape", "Unknown")
         shape_counts[s] = shape_counts.get(s, 0) + 1
 
+    def _arc_len(a):
+        # arc 实际章数(climax_chapter_index 是对此长度 emotion_curve 的下标)：cluster arc 变长
+        # (实测 2/3/4 章·非固定 10)·原硬编码 /10 使高潮位置百分比失真甚至 >100%(2026-06-15 审计修)。
+        # 优先 chapters_count·次 chapter_range('chX-chY')解析·都无 fallback 10。
+        nc = a.get("chapters_count")
+        if isinstance(nc, int) and nc > 0:
+            return nc
+        cr = a.get("chapter_range")
+        if isinstance(cr, str):
+            nums = re.findall(r"\d+", cr)
+            if len(nums) == 2:
+                return max(int(nums[1]) - int(nums[0]) + 1, 1)
+        return 10
     avg_climax_pct = sum(
-        a.get("climax_chapter_index", 5) / 10 for a in arcs
+        a.get("climax_chapter_index", 5) / max(_arc_len(a) - 1, 1) for a in arcs
     ) / len(arcs)
 
     return {
