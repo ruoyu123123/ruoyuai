@@ -69,6 +69,20 @@ def _patch_generate(monkey_text):
     return orig
 
 
+def _patch_generate_sequence(*texts):
+    """序列返回 text（末个之后复用末个）·验 reflect retry 自愈。返回 (orig, calls)。"""
+    orig = lt.generate
+    calls = {"n": 0}
+
+    def fake(loader, system, user, **kw):
+        assert "response_format_json" not in kw or kw["response_format_json"] is False
+        i = min(calls["n"], len(texts) - 1)
+        calls["n"] += 1
+        return types.SimpleNamespace(text=texts[i])
+    lt.generate = fake
+    return orig, calls
+
+
 def test_reflect_writes_skill_markdown():
     tmp, gap = _setup()
     orig = _patch_generate(_GOOD_MD)
@@ -104,6 +118,38 @@ def test_reflect_block_on_missing_sections():
     orig = _patch_generate(bad)
     try:
         assert gc._run_distill_reflect(_Args(tmp, gap)) == 1
+    finally:
+        lt.generate = orig
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_reflect_retry_recovers_from_transient_break():
+    """🔴 真机 e2e 同类加固 2026-06-15：reflect 与 volume_arc 同根——单点 gen-model 调用偶发
+    空/缺小节(限速/抖动)直接 block 逼用户 --resume(GUI 蒸馏致命)。验 retry 自愈：第一次太短
+    (破损)·第二次合法 skill → rc==0 + 落盘(不 block)。"""
+    tmp, gap = _setup()
+    orig, calls = _patch_generate_sequence("太短", _GOOD_MD)  # 破损 → 合法
+    try:
+        rc = gc._run_distill_reflect(_Args(tmp, gap))
+        assert rc == 0, "第二次合法应自愈 rc==0(不 block)"
+        assert calls["n"] == 2, "应重试 1 次(共调 2 次)"
+        assert (tmp / "skill_v2.md").exists(), "自愈后应落盘"
+    finally:
+        lt.generate = orig
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_reflect_retry_exhausted_still_blocks():
+    """3 次全破损 → block exit 1(确定性破损不无限重试·不静默吞断链)。"""
+    tmp, gap = _setup()
+    orig, calls = _patch_generate_sequence("太短")  # 每次都破损
+    try:
+        rc = gc._run_distill_reflect(_Args(tmp, gap))
+        assert rc == 1, "3 次全破损应 block 非零退出"
+        assert calls["n"] == 3, "应尝试满 3 次(MAX_REFLECT_TRIES)"
+        assert not (tmp / "skill_v2.md").exists(), "破损不落盘"
     finally:
         lt.generate = orig
         import shutil

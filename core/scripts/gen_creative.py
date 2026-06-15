@@ -641,20 +641,35 @@ def _run_distill_reflect(args) -> int:
         print("=== SYSTEM ===\n" + system + "\n\n=== USER ===\n" + user)
         return 0
     # must_fix#5：markdown 输出·**不**传 response_format_json·**不** parse_json_loose
-    try:
-        result = lt.generate(
-            GenModelLoader(), system, user, max_tokens=12000,
-            cont_msg_builder=lt.default_cont_msg, label="distill:reflect")
-    except Exception as e:
-        print(f"[ERROR] distill_reflect gen-model 调用失败（block）: {e}", file=sys.stderr)
-        return 1
-    md = (result.text or "").strip()
-    # 文本校验（非 JSON 顶层键）：非空 + 含必备小节（结构破损 block·内容不规训）
+    # 🔴 真机 e2e 同类加固 2026-06-15：与 volume_arc 同根（单点 gen-model 调用偶发空/缺小节·
+    # 限速/抖动直接 block exit 1 逼用户 --resume·对 GUI 非技术用户蒸馏致命）。加重试≤3 次自愈·
+    # 真破损才 block（运行时自学习「一处 incident 推广同类预防」·北极星⑤结构破损非创作判断）。
+    MAX_REFLECT_TRIES = 3
     required_sections = ("## 句式与节奏", "## 段落与标点", "## 对话工艺",
                          "## 描写与情绪", "## 反模式")
-    missing = [s for s in required_sections if s not in md]
-    if len(md) < 200 or len(missing) > 2:    # 容 2 节缺失（标题措辞可能微变）·过半缺=结构破损
-        print(f"[ERROR] distill_reflect 输出结构破损（block）·len={len(md)} 缺小节 {missing}",
+    md = None
+    last_diag = "(未尝试)"
+    for attempt in range(1, MAX_REFLECT_TRIES + 1):
+        try:
+            result = lt.generate(
+                GenModelLoader(), system, user, max_tokens=12000,
+                cont_msg_builder=lt.default_cont_msg, label=f"distill:reflect#{attempt}")
+        except Exception as e:
+            last_diag = f"gen-model 调用失败: {e}"
+            print(f"[WARN] distill_reflect {last_diag}（第 {attempt}/{MAX_REFLECT_TRIES} 次）",
+                  file=sys.stderr)
+            continue
+        cand = (result.text or "").strip()
+        # 文本校验（非 JSON 顶层键）：非空 + 含必备小节（容 2 节缺失·过半缺=结构破损）
+        missing = [s for s in required_sections if s not in cand]
+        if len(cand) >= 200 and len(missing) <= 2:
+            md = cand
+            break
+        last_diag = f"len={len(cand)} 缺小节 {missing}"
+        print(f"[WARN] distill_reflect 输出结构破损·{last_diag}"
+              f"（第 {attempt}/{MAX_REFLECT_TRIES} 次·重试中）", file=sys.stderr)
+    if md is None:
+        print(f"[ERROR] distill_reflect {MAX_REFLECT_TRIES} 次重试后仍 block·{last_diag}",
               file=sys.stderr)
         return 1
     out = Path(args.out) if args.out else (project_root / f"skill_v{version}.md")
