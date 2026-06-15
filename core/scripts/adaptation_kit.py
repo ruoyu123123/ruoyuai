@@ -134,6 +134,54 @@ def build_climax_hooks(project_root) -> str:
     return "\n".join(lines) if has else ""
 
 
+def build_audio_adaptation_hint(project_root) -> str:
+    """有声化适配提示（规则判断单播朗读/多播广播剧·复用对话占比+角色声纹·非承诺·法律免责）。
+
+    规则：对话占比高 + 区分声纹角色多 → 多播友好；对话占比低（叙述为主）→ 单播朗读。
+    数据全缺 → 返回 ""（不编造·跳过·北极星 advisory 非承诺）。
+    """
+    style = _load(project_root, "作者风格", {})
+    quant = (style or {}).get("quantitative", {}) if isinstance(style, dict) else {}
+    dr = quant.get("dialogue_ratio", {})
+    dialogue_ratio = (dr.get("mean") if isinstance(dr, dict)
+                      else (dr if isinstance(dr, (int, float)) else None))
+    pc = _load(project_root, "人物卡", {})
+    chars = (pc or {}).get("characters", []) if isinstance(pc, dict) else []
+    n_voiced = sum(1 for c in chars if isinstance(c, dict)
+                   and isinstance(c.get("voice_pack"), dict)
+                   and (c["voice_pack"].get("style") or c["voice_pack"].get("style_samples")))
+    if dialogue_ratio is None and n_voiced == 0:
+        return ""                        # 无数据可判断 → 跳过（不编造）
+
+    high_dialogue = dialogue_ratio is not None and dialogue_ratio >= 0.40
+    if high_dialogue and n_voiced >= 3:
+        rec = "多播广播剧"
+        reason = (f"对话占比 {dialogue_ratio:.0%} 偏高 + {n_voiced} 个角色有区分声纹 "
+                  f"→ 适合多播分角色演绎")
+    elif dialogue_ratio is not None and dialogue_ratio < 0.25:
+        rec = "单播朗读"
+        reason = f"对话占比 {dialogue_ratio:.0%} 偏低（叙述为主）→ 适合单播朗读"
+    else:
+        rec = "单播朗读（多播可选）"
+        dr_str = f"对话占比 {dialogue_ratio:.0%} 中等" if dialogue_ratio is not None else "对话占比数据缺"
+        reason = f"{dr_str} · {n_voiced} 个区分声纹角色"
+    dr_show = f"{dialogue_ratio:.0%}" if dialogue_ratio is not None else "（未蒸馏·缺）"
+    return f"""# 有声化适配提示
+> 自动从对话占比 + 角色声纹规则判断·**非承诺·仅供选有声平台形态参考**。
+
+## 建议形态：{rec}
+{reason}
+
+## 数据
+- 对话占比：{dr_show}
+- 区分声纹角色数：{n_voiced}
+
+## ⚖️ 法律提示（授权前必读）
+- 简单朗读 = 复制权；多播二度创作 = 改编权；多播演绎涉表演者权。
+- 授权有声平台（如喜马拉雅 A+）前·务必确认授权范围 + 专业法律咨询。
+"""
+
+
 def generate_kit(project_root) -> dict:
     """产 4 份改编资料 + 落盘 改编资料包/。返回 {out_dir, written:{文件:字节}}。"""
     project_root = Path(project_root)
@@ -144,6 +192,7 @@ def generate_kit(project_root) -> dict:
         "世界设定集.md": build_worldbuilding(project_root),
         "故事梗概.md": build_synopsis(project_root),
         "高潮伏笔清单.md": build_climax_hooks(project_root),
+        "有声化适配提示.md": build_audio_adaptation_hint(project_root),
     }
     written = {}
     for fname, content in parts.items():

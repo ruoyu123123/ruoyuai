@@ -70,6 +70,52 @@ def test_climax_hooks():
         assert "五色石身世" in md and "tier1" in md
 
 
+# ============ 有声化适配提示（2.4·adaptation_kit 子产物·规则判断·法律免责） ============
+
+def test_audio_hint_multicast():
+    """对话占比高 + 声纹角色≥3 → 多播广播剧 + 法律提示。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = _setup_project(td,
+            作者风格={"quantitative": {"dialogue_ratio": {"mean": 0.45}}},
+            人物卡={"characters": [{"id": c, "voice_pack": {"style": f"声纹{c}"}}
+                                   for c in ("甲", "乙", "丙")]})
+        md = ak.build_audio_adaptation_hint(root)
+        assert "多播广播剧" in md
+        assert "45%" in md
+        assert "表演者权" in md          # 法律提示硬前置
+
+
+def test_audio_hint_singlecast_low_dialogue():
+    """对话占比低（叙述为主）→ 单播朗读。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = _setup_project(td,
+            作者风格={"quantitative": {"dialogue_ratio": {"mean": 0.15}}},
+            人物卡={"characters": [{"id": "A", "voice_pack": {"style": "x"}}]})
+        md = ak.build_audio_adaptation_hint(root)
+        assert "单播朗读" in md and "15%" in md
+
+
+def test_audio_hint_no_data_empty():
+    """无对话占比 + 无声纹 → 空（不编造·跳过）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "_数据库").mkdir(parents=True)
+        assert ak.build_audio_adaptation_hint(root) == ""
+
+
+def test_generate_kit_includes_audio():
+    """generate_kit 有数据时产有声化适配提示.md（第 5 份）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = _setup_project(td,
+            作者风格={"quantitative": {"dialogue_ratio": {"mean": 0.45}}},
+            人物卡={"characters": [{"id": c, "name": c, "role": "主角",
+                                   "voice_pack": {"style": f"声纹{c}"}}
+                                  for c in ("甲", "乙", "丙")]})
+        result = ak.generate_kit(root)
+        assert "有声化适配提示.md" in result["written"]
+        assert (Path(result["out_dir"]) / "有声化适配提示.md").exists()
+
+
 def test_missing_subsystem_empty_no_crash():
     """缺子系统 → 空字符串（投影现有不编造·不崩）。"""
     with tempfile.TemporaryDirectory() as td:
