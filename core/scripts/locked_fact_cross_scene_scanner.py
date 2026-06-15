@@ -4,10 +4,34 @@
 
 v2 cluster 化方案 Phase 3（2026-05-28）·
 检测 人物卡.locked_facts 中的事实在 cluster 不同场景的引用是否一致：
-  · 数值类（年龄/品级）：所有场景引用必须一致
+  · 数值类（年龄/时长/年份等**恒定量**）：所有场景引用必须一致
   · 描述类（外貌/出身）：cluster 内不能出现矛盾陈述
 
 输出 issue code: LOCKED_FACT_CROSS_SCENE_CONFLICT (hard_gate)
+
+────────────────────────────────────────────────────────────────────────
+2026-06-16 盲区落地（consistency_19_subtypes · B 件 · ConStory 时间线&因果一致性）：
+把「年龄专用」泛化为「**恒定数值类锁定事实**通用对账」——纯确定性、零新依赖、必真阳的部分。
+覆盖 ConStory「绝对时间矛盾（Absolute Time Contradiction）」的**确定性子集**：
+  fact 含「N岁 / 第N天 / N年(寿命/恒定纪年) …」且正文同角色**同句**出现冲突绝对值 → 报。
+
+🔴 北极星铁律 —— 单位集只收「恒定量（invariant）」，**绝不收单调递增的修真品级**（品/阶/层/级/段/重）：
+   角色从「斗之气三段」练到「九段」是合法成长，不是穿帮；对其做 M≠N 判定会制造**假 hard_gate**
+   （test_plan 金标准核心反例）。境界/品级的「同一参照系顺序矛盾」需要语义推理（FlawedFictions 实证
+   连 o1 都做不好），交给 A 件 LLM 判官（av_judge timeline_causality_consistency），**确定性层不碰**。
+   确定性层只抓「白纸黑字同一恒定字段两个值打架」。
+
+单位集来源（作者档/项目第一权威 · 北极星②）：
+  1. 项目可选覆盖 `_数据库/locked_fact_units.json` 的 `invariant_units: [...]`（opt-in·世界观若真有恒定
+     纪年单位可在此声明）——实地核查 8 本项目的 世界观.json **均无结构化等级体系字段**（只有
+     era/location/rules/factions/entries），故不臆造「从世界观读等级」的不存在通路。
+  2. 缺该文件 → 退保底恒定单位集 `_DEFAULT_INVARIANT_UNITS`（仅「岁」·与历史行为完全兼容）。
+
+跨场景的时间**推算**（第3天+5天=第8天对不对）不在确定性层——交给 A 件判官（语义）。
+────────────────────────────────────────────────────────────────────────
+
+输出 code（沿用既有·不新增 hard_gate code·不动 audit_hub.HARD_GATE_CODES / STRUCTURE.md §11）：
+  LOCKED_FACT_CROSS_SCENE_CONFLICT (hard_gate)
 
 用法：python locked_fact_cross_scene_scanner.py <project> <cluster_draft_path>
 """
@@ -29,12 +53,62 @@ def load(p: Path):
 
 _CN_DIGIT = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 
-# 「数字 + 岁」年龄词的正则：数字（**纯阿拉伯** 或 **纯中文**，二者不混）紧跟可选空白后必须接「岁」。
-# 2026-05-30 北极星复审（假阳性修）：年龄绑定判据从「±50 窗口里存在『岁』字」收紧为「数字必须紧邻『岁』」，
-# 杜绝距离（三十里）/数量（三十个）/年份（一九三八年）等无关数字串味成假年龄触发 hard_gate。
-# 阿拉伯/中文分支互斥（不写成 [\d中文]+）—— 否则「张三52岁」会贪婪吃进名字里的「三」匹配出「三52」，
-# _cn_to_int 解析失败 → 整条年龄校验被跳过 → 真年龄矛盾漏报（hard_gate 真阳性丢失，最坏）。
+# ── 恒定数值单位集（北极星②作者/项目第一权威 · 北极星铁律：只收 invariant，绝不收单调递增品级）──
+# 「岁」= 历史唯一单位（保底·与 2026-05-28 起的行为完全兼容 → 老 case 回归不破）。
+# 项目可在 _数据库/locked_fact_units.json 里 opt-in 扩展恒定单位（如世界观确有恒定纪年单位「天/日/年」）。
+_DEFAULT_INVARIANT_UNITS = ("岁",)
+
+# 单调递增品级黑名单：即便项目 opt-in 误填，也强制剔除（永不对成长性数值报 hard_gate）。
+# 🔴 故意拦下 品/阶/层/级/段/重/境/星… —— 这些是单调递增的修真境界，
+#    角色升阶是合法成长（三段→九段），做 M≠N 会制造假 hard_gate（金标准核心反例）。
+_MONOTONIC_BLOCKLIST = frozenset({
+    "品", "阶", "层", "级", "段", "重", "境", "星", "纹", "环", "转",
+})
+
+
+def _make_unit_re(units) -> re.Pattern:
+    """构造「数字（阿拉伯 或 纯中文·互斥）+ 单位」正则。
+
+    互斥分支（不写成 [\\d中文]+）—— 否则「张三52岁」会贪婪吃进名字里的「三」匹配出「三52」，
+    _cn_to_int 解析失败 → 整条校验被跳过 → 真矛盾漏报（hard_gate 真阳性丢失，最坏）。
+    单位用 re.escape 防元字符（虽已校验为 CJK，仍稳妥）。units 空 → 退保底「岁」。"""
+    unit_alt = "|".join(re.escape(u) for u in units) if units else "岁"
+    return re.compile(r"(\d+|[零一二三四五六七八九十百]+)\s*(" + unit_alt + r")")
+
+
+def _load_unit_set(project_root: Path) -> list:
+    """读单位集：项目 opt-in 覆盖优先，缺则退保底 `_DEFAULT_INVARIANT_UNITS`。北极星②第一权威。
+
+    `_数据库/locked_fact_units.json` 形态：{"invariant_units": ["岁", "天", ...]}。
+    校验：单位必须是 1-3 个 CJK 字（防注入正则元字符）·非空·剔除单调递增品级 → 退保底。
+    🔴 即便项目误写单调递增品级（品/阶/层…），也由 `_MONOTONIC_BLOCKLIST` 兜底剔除——
+       确定性层永不对成长性数值报 hard_gate（北极星③不干涉创作 + 金标准防矫枉过正）。"""
+    cfg = load(project_root / "_数据库" / "locked_fact_units.json")
+    units = []
+    if isinstance(cfg, dict):
+        raw = cfg.get("invariant_units")
+        if isinstance(raw, list):
+            for u in raw:
+                if isinstance(u, str):
+                    u = u.strip()
+                    if 1 <= len(u) <= 3 and all("一" <= c <= "鿿" for c in u) \
+                            and u not in _MONOTONIC_BLOCKLIST:
+                        units.append(u)
+    # 始终包含保底单位（岁）·去重保序
+    merged = list(_DEFAULT_INVARIANT_UNITS) + units
+    seen = set()
+    out = []
+    for u in merged:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+# 默认（保底·岁）正则——保留模块级常量供存量测试 / 调用 `_AGE_RE` 引用（向后兼容·单 group 旧形态）。
 _AGE_RE = re.compile(r"(\d+|[零一二三四五六七八九十百]+)\s*岁")
+# 双 group（数字 + 单位）的「岁」正则——供 extract_numeric_facts_near 用（它取 group(2) 单位）。
+_AGE_UNIT_RE = _make_unit_re(["岁"])
 
 
 def _cn_to_int(s: str):
@@ -81,17 +155,18 @@ def _cn_to_int(s: str):
     return None
 
 
-def extract_ages_near(text: str, keyword: str, window: int = 50) -> list[tuple[int, str]]:
-    """找 keyword 附近、且**紧邻「岁」**的年龄数字（如「三十八岁」「52岁」）。
-    返回 [(年龄数字字符串绝对起始位置, 数字字符串)]。
+_SENT_SEP = "。！？；\n"
 
-    2026-05-30 修假阳性：旧 extract_numbers_near 抓窗口内**所有**数字（含距离/数量/年份），
-    再靠「窗口里有『岁』」宽判据绑定年龄 → 「三十里」被当成「三十岁」误报 hard_gate。
-    现在只认「数字+岁」的实例，从源头杜绝串味。"""
+
+def extract_numeric_facts_near(text: str, keyword: str, unit_re: re.Pattern,
+                               window: int = 50) -> list:
+    """找 keyword 同句、且**紧邻恒定单位**的数值实例（如「三十八岁」「第三天」）。
+    返回 [(数字字符串绝对起始位置, 数字字符串, 单位)]。
+
+    2026-05-30 修假阳性：只认「数字+单位」实例，从源头杜绝距离/数量/年份串味。
+    同句锚定（_SENT_SEP 切小句）：杜绝相邻句里**另一个角色**的数值被误归到本角色。
+    2026-06-16 泛化：unit 从硬编码「岁」扩成可配置恒定单位集（unit_re 由 _make_unit_re 给）。"""
     results = []
-    # 句子分隔符：把窗口切成小句，只采纳与 keyword 同句的年龄，
-    # 杜绝相邻句里**另一个角色**的年龄被误归到本角色（喂 hard_gate 假阳性）。
-    _SENT_SEP = "。！？；\n"
     for m in re.finditer(re.escape(keyword), text):
         s = max(0, m.start() - window)
         e = min(len(text), m.end() + window)
@@ -108,12 +183,19 @@ def extract_ages_near(text: str, keyword: str, window: int = 50) -> list[tuple[i
             if ctx[i] in _SENT_SEP:
                 seg_end = i
                 break
-        for age_m in _AGE_RE.finditer(ctx):
-            if age_m.start(1) < seg_start or age_m.start(1) >= seg_end:
-                continue  # 年龄不在 keyword 同句 → 大概率是别人的年龄，跳过
-            # group(1) 是数字部分；记录数字在全文的绝对起始位置
-            results.append((s + age_m.start(1), age_m.group(1)))
+        for um in unit_re.finditer(ctx):
+            if um.start(1) < seg_start or um.start(1) >= seg_end:
+                continue  # 数值不在 keyword 同句 → 大概率是别人的，跳过
+            # group(1)=数字部分；group(2)=单位；记录数字在全文的绝对起始位置
+            results.append((s + um.start(1), um.group(1), um.group(2)))
     return results
+
+
+# 向后兼容别名：存量测试 / audit_hub 可能引用 extract_ages_near（保底「岁」单位）。
+def extract_ages_near(text: str, keyword: str, window: int = 50) -> list:
+    """历史接口（仅「岁」）——返回 [(pos, 数字)]，丢弃单位维度（向后兼容存量调用/测试）。"""
+    return [(pos, num) for pos, num, _u in
+            extract_numeric_facts_near(text, keyword, _AGE_UNIT_RE, window=window)]
 
 
 def scan(project_root: Path, draft_path: Path) -> dict:
@@ -122,6 +204,8 @@ def scan(project_root: Path, draft_path: Path) -> dict:
     text = draft_path.read_text(encoding="utf-8")
 
     cards = load(project_root / "_数据库" / "人物卡.json").get("characters", [])
+    units = _load_unit_set(project_root)          # 北极星②第一权威单位集
+    unit_re = _make_unit_re(units)
 
     conflicts = []
     checked_count = 0
@@ -136,38 +220,47 @@ def scan(project_root: Path, draft_path: Path) -> dict:
             if not fact:
                 continue
             checked_count += 1
-            # 年龄一致性：仅当 fact 显式声明「N 岁」时启用。
-            # 正文中只比对**真年龄**（数字紧邻「岁」），M ≠ N → 冲突。
+            # 恒定数值一致性：仅当 fact 显式声明「N<恒定单位>」时启用（如「N岁」「第N天」）。
+            # 正文中只比对**同单位真值**（数字紧邻该单位），M ≠ N → 冲突。
             # 距离（三十里）/数量（三十个）/年份等无关数字不参与，杜绝 hard_gate 假阳性。
             # 北极星⑥ 对齐 context 侧锚定：name 以中文数字结尾(张三/周七)时，
-            # 直接对整条 fact 跑贪婪 [零一二...百]+ 会把名字尾字吃进年龄数字
+            # 直接对整条 fact 跑贪婪 [零一二...百]+ 会把名字尾字吃进数字
             # （张三三十八岁→'三三十八'→None 静默跳过 / 周七十八岁→78 错值）。
             # 先剥掉 name 前缀再抽，杜绝 fact 侧名字尾字串味。
             fact_body = fact[len(name):] if fact.startswith(name) else fact
-            age_in_fact = _AGE_RE.search(fact_body)
-            if age_in_fact:
-                fact_age = _cn_to_int(age_in_fact.group(1))
-                if fact_age is None:
+            # fact 可能含多个恒定数值（少见，但稳妥支持）→ 逐单位独立比对，单位必须相同才算矛盾。
+            matched = False
+            for fact_m in unit_re.finditer(fact_body):
+                fact_unit = fact_m.group(2)
+                fact_val = _cn_to_int(fact_m.group(1))
+                if fact_val is None:
                     continue
-                ctx_ages = extract_ages_near(text, name, window=50)
-                for pos, ctx_num in ctx_ages:
-                    ctx_age = _cn_to_int(ctx_num)  # 支持中文数字年龄（三十八岁）
-                    if ctx_age is not None and ctx_age != fact_age:
+                ctx_nums = extract_numeric_facts_near(text, name, unit_re, window=50)
+                for pos, ctx_num, ctx_unit in ctx_nums:
+                    if ctx_unit != fact_unit:
+                        continue  # 单位不同（岁 vs 天）→ 不可比，跳过
+                    ctx_val = _cn_to_int(ctx_num)
+                    if ctx_val is not None and ctx_val != fact_val:
                         conflicts.append({
                             "character": name,
                             "fact": fact,
-                            "conflict_value": f"{ctx_num}岁",
+                            "unit": fact_unit,
+                            "conflict_value": f"{ctx_num}{ctx_unit}",
                             "position": pos,
-                            "preview": text[max(0, pos-30):pos+30],
+                            "preview": text[max(0, pos - 30):pos + 30],
                         })
+                        matched = True
                         break
+                if matched:
+                    break  # 该 fact 已找到一处矛盾，不重复报同一 fact
 
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "scanner": "locked_fact_cross_scene_scanner",
         "cluster_mode": True,
         "gate_level": "hard_gate" if conflicts else "advisory",
         "facts_checked": checked_count,
+        "invariant_units": units,
         "conflicts_count": len(conflicts),
         "conflicts": conflicts[:10],
         "warning": (
