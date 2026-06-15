@@ -2513,12 +2513,17 @@ def _build_hard_constraints(
     s: DatabaseScanner,
     foreshadow_summary: dict[str, int],
 ) -> list[str]:
-    """组装 hard_constraints 列表，含剧情约束 + 风格量化约束（v15 新增）。"""
+    """组装 hard_constraints 列表：剧情约束(Tier-1回收/secrets/locked_facts·真硬约束) +
+    风格量化约束(对话占比/句长/字数/逗句比/TTR·全标 advisory·作者档第一权威·可校准偏离·
+    北极星⑤)。2026-06-15 审计修(Workflow confirmed)：风格量化项原无 advisory 标记被
+    critical_summary 框「必满足」=违北极星⑤把 advisory 当 hard_gate；对话占比 0.3 地板覆盖
+    低对话作者基线=违北极星⑤(c)机械覆盖作者档；freestyle_v27 仍注入每章字数=违北极星④。
+    全标 advisory 前缀让 writer 区分(critical_summary 只框 hard_gate 项)·对话地板改 relax-only。"""
     hard_constraints = [
         f"Tier-1 伏笔 {foreshadow_summary['tier1_due_count']} 条本章必须回收",
         f"secrets 本章必须揭露 {foreshadow_summary['must_reveal_this_ch']} 条",
         "locked_facts 零容忍（读人物卡.json 时请完整保留）",
-        f"字数目标 {s.load('进度', {}).get('words_per_chapter', 3500)} 字",
+        f"（advisory·freestyle_v27 由 splitter 按字数切·仅参考非硬锁）字数目标 {s.load('进度', {}).get('words_per_chapter', 3500)} 字",
         "章节开头反重复：检查 manifest.recent_openings，本章开头类型和焦点元素必须与前 2-3 章完全不同",
     ]
 
@@ -2533,23 +2538,23 @@ def _build_hard_constraints(
             return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
         dr_m = _num(quant.get("dialogue_ratio", {}).get("mean"))
         if dr_m is not None:
-            hard_constraints.append(f"对话占比 ≥ {max(0.3, dr_m - 0.15):.0%}")
+            hard_constraints.append(f"（advisory·作者档第一权威·可校准偏离）对话占比 ≥ {max(0.0, dr_m - 0.15):.0%}")
         sl = quant.get("sentence_length", {})
         sl_m = _num(sl.get("mean"))
         if sl_m is not None:
             sl_std = _num(sl.get("std"))
             sl_std = sl_std if sl_std is not None else 8
-            hard_constraints.append(f"句长均值目标 {sl_m:.0f} 字（std ≥ {max(5, sl_std - 3):.0f}）")
+            hard_constraints.append(f"（advisory·作者档第一权威·可校准偏离）句长均值目标 {sl_m:.0f} 字（std ≥ {max(5, sl_std - 3):.0f}）")
         cw_m = _num(quant.get("chapter_words", {}).get("mean"))
         if cw_m is not None:
             low = max(2000, int(cw_m) - 500)
             high = int(cw_m) + 500
-            hard_constraints.append(f"章节字数 {low}-{high}")
+            hard_constraints.append(f"（advisory·freestyle_v27 由 splitter 按字数切·仅参考）章节字数 {low}-{high}")
         punc = quant.get("punctuation_density_per_1000", {})
         cpr_raw = punc.get("comma_period_ratio")
         cpr = _num(cpr_raw.get("mean") if isinstance(cpr_raw, dict) else cpr_raw)
         if cpr is not None and cpr > 1.0:
-            hard_constraints.append(f"逗句比 ≥ {max(1.0, cpr - 1.0):.1f}:1（长句用逗号连接）")
+            hard_constraints.append(f"（advisory·作者档第一权威·可校准偏离）逗句比 ≥ {max(1.0, cpr - 1.0):.1f}:1（长句用逗号连接）")
 
         # 词汇丰富度 TTR/hapax 目标（2026-05-31 · 治 LLM 系统性拉平词汇丰富度盲区 · advisory）。
         # LLM imitation 倾向向 generic-median 回归，用词反复趋同 → 显式下发作者 TTR/hapax 目标，
