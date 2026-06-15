@@ -33,6 +33,38 @@ def cjk(s: str) -> int:
     return sum(1 for c in s if '一' <= c <= '鿿')
 
 
+def _load_json(p: Path):
+    try:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+
+
+def _author_dialogue_floor(project: Path | None, style_path: Path | None) -> float | None:
+    """作者风格档对话占比基线=第一权威(北极星⑤)。返回作者真实对话占比(0-1)或 None。
+
+    对齐 prose_rhythm_scanner._author_baseline 范式：优先读 --style 指定档，
+    否则回退项目 _数据库/作者风格.json / 作者风格_FINAL.json；
+    取 quantitative.dialogue_ratio.mean（consolidate_author_profile 确定性写入·0-1 分数）。
+    """
+    data = None
+    if style_path and style_path.exists():
+        data = _load_json(style_path)
+    if data is None and project:
+        for cand in (project / "_数据库" / "作者风格.json",
+                     project / "_数据库" / "作者风格_FINAL.json"):
+            if cand.exists():
+                data = _load_json(cand)
+                if data:
+                    break
+    if isinstance(data, dict):
+        q = data.get("quantitative") or {}
+        dr = q.get("dialogue_ratio") or {}
+        if isinstance(dr, dict) and isinstance(dr.get("mean"), (int, float)):
+            return float(dr["mean"])
+    return None
+
+
 def scan(text: str, project: Path | None = None, style_path: Path | None = None) -> dict:
     paras = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()
              and not re.match(r'^第[\d一二三四五六七八九十百千]+章', p) and not p.startswith('【')]
@@ -47,11 +79,15 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
     emo_punct = round((ques + ell) / total * 1000, 2)
     sensory = round(sum(text.count(w) for w in SENSORY_WORDS) / total * 1000, 2)
 
+    _author_dia = _author_dialogue_floor(project, style_path)
+    # 作者真实对话占比偏低(如叙述驱动的文学言情)时按其基线放宽·绝不高于通用保守 floor(只减误报·北极星⑤)
+    dia_floor = DIALOGUE_FLOOR if _author_dia is None else min(DIALOGUE_FLOOR, _author_dia * 0.85)
+
     violations = []
-    if dia_ratio < DIALOGUE_FLOOR:
+    if dia_ratio < dia_floor:
         violations.append({'kind': 'dialogue_too_sparse', 'severity': 'minor',
-                           'dialogue_ratio': dia_ratio, 'floor': DIALOGUE_FLOOR,
-                           'hint': f'对话占比 {dia_ratio:.0%}<{DIALOGUE_FLOOR:.0%}=叙述太多·言情应对话驱动'
+                           'dialogue_ratio': dia_ratio, 'floor': round(dia_floor, 3),
+                           'hint': f'对话占比 {dia_ratio:.0%}<{dia_floor:.0%}=叙述太多·言情应对话驱动'
                                    f'(撩点/双向心动靠对话交锋)·提对话比'})
     if emo_punct < EMOTION_PUNCT_FLOOR:
         violations.append({'kind': 'emotion_punct_sparse', 'severity': 'minor',
@@ -67,7 +103,7 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
         'scanner': 'romance_pacing', 'violations_count': len(violations),
         'violations': violations, 'verdict': verdict, 'gate_level': 'advisory',
         'metrics': {'dialogue_ratio': dia_ratio, 'emotion_punct_per_1k': emo_punct,
-                    'sensory_per_1k': sensory},
+                    'sensory_per_1k': sensory, 'dialogue_floor_effective': round(dia_floor, 3)},
         '_doc': '甜宠/言情题材节奏·对话驱动+情绪标点+五感铺陈·advisory·阈值保守待金标准校准',
     }
 

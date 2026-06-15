@@ -208,12 +208,12 @@ def main():
         # 读 manifest
         manifest_path = project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json"
         manifest = load_json(manifest_path, {})
-        expected_actions = manifest.get("active_offscreen_actions", [])
+        expected_actions = manifest.get("active_offscreen_actions") or []
 
         # 读 _changes
         changes_path = ch_dir / f"第{ch:03d}章_changes.json"
         changes = load_json(changes_path, {})
-        executed = changes.get("self_eval", {}).get("offscreen_actions_executed", [])
+        executed = (changes.get("self_eval") or {}).get("offscreen_actions_executed") or []
 
         # 读正文
         text_path = ch_dir / f"第{ch:03d}章.txt"
@@ -222,8 +222,8 @@ def main():
         per_chapter[ch] = {
             "expected_count": len(expected_actions),
             "executed_count": len(executed),
-            "expected_chars": list(set(a.get("character") for a in expected_actions)),
-            "executed_chars": list(set(e.get("character") for e in executed)),
+            "expected_chars": list({a.get("character") for a in expected_actions if isinstance(a, dict)}),
+            "executed_chars": list({e.get("character") for e in executed if isinstance(e, dict)}),
         }
 
         # === 检查 1: manifest 有期望但 _changes 是空 ===
@@ -234,12 +234,14 @@ def main():
                 "chapter": ch,
                 "metric": {"expected": len(expected_actions), "executed": 0},
                 "message": f"ch{ch} manifest 列了 {len(expected_actions)} 条 offscreen action 但 _changes.offscreen_actions_executed 是空",
-                "expected_actions": [{"character": a.get("character"), "action": a.get("action", "")[:60]} for a in expected_actions],
+                "expected_actions": [{"character": a.get("character"), "action": (a.get("action", "") or "")[:60]} for a in expected_actions],
                 "suggestion": "writer 必须按 visible_to_protagonist 落地至少 1 个 action（POV 切换/物件暗示/对话提及/副作用任选一）",
             })
 
         # === 检查 2: 执行了的 action 是否在正文中能找到角色 aliases ===
         for ex in executed:
+            if not isinstance(ex, dict):
+                continue
             char_name = ex.get("character", "")
             aliases = get_character_aliases(project_root, char_name)
             evidence = ex.get("evidence", "")
@@ -280,7 +282,7 @@ def main():
                 for idx, act in enumerate(c.get("offscreen", {}).get("actions", [])):
                     ch_range = act.get("ch_range", [])
                     if len(ch_range) == 2 and ch_range[1] < ch and not act.get("done"):
-                        backlog.append({"character": cname, "idx": idx, "action": act.get("action", "")[:60], "ch_range": ch_range})
+                        backlog.append({"character": cname, "idx": idx, "action": (act.get("action", "") or "")[:60], "ch_range": ch_range})
             if backlog:
                 findings.append({
                     "severity": "advisory",

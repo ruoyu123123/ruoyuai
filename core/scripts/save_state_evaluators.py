@@ -20,6 +20,7 @@ import json
 import subprocess
 import sys
 from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
+import cluster_lookup  # 章号⇄cluster_id 唯一权威反查（北极星①）
 from pathlib import Path
 
 SCRIPT_DIR = scripts_dir()
@@ -33,23 +34,9 @@ SUB_MODULES = [
 
 
 def get_cluster_chapter_range(project_root: Path, cluster_key: str) -> list[int]:
-    shijianji_path = project_root / "_数据库" / "事件簇.json"
-    if not shijianji_path.exists():
-        return []
-    try:
-        data = json.loads(shijianji_path.read_text(encoding="utf-8"))
-        for c in data.get("clusters", []):
-            cid = c.get("cluster_id", "")
-            if cid == cluster_key or cid.replace("cluster_", "") == cluster_key.replace("cluster_", ""):
-                cr = c.get("chapter_range")
-                if isinstance(cr, list) and len(cr) == 2:
-                    return list(range(cr[0], cr[1] + 1))
-                elif isinstance(cr, str) and "-" in cr:
-                    a, b = cr.split("-")
-                    return list(range(int(a), int(b) + 1))
-    except Exception:
-        pass
-    return []
+    # 北极星①：唯一权威反查（事件簇.json 权威 + 进度.json blueprint 兜底 + 归一化）
+    rng = cluster_lookup.cluster_id_to_range(project_root, cluster_key)
+    return list(range(rng[0], rng[1] + 1)) if rng else []
 
 
 def run_one_module(module_name: str, script_name: str, args_spec: list, project: str, chapter: int) -> tuple[bool, str]:

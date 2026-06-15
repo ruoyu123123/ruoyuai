@@ -260,7 +260,10 @@ def main():
     print()
     print(f"报告: {out_path}")
 
+    # 2026-06 退出码契约对齐 [L6/SC-2]：warning 级发现统一 exit 2、advisory 统一 exit 1（旧版 warning 误用 exit 1 → 被调度器当 advisory 丢弃）。
     if any(f["severity"] == "warning" for f in findings):
+        sys.exit(2)
+    if any(f["severity"] == "advisory" for f in findings):
         sys.exit(1)
     sys.exit(0)
 

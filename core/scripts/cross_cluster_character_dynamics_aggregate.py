@@ -186,7 +186,9 @@ def scan_stress_trend(project_root: Path, chapters: list[int]) -> list[dict]:
         for ch in post_chs:
             changes = read_changes(project_root, ch)
             text_dump = json.dumps(changes, ensure_ascii=False)
-            if b_card in text_dump:
+            # 2026-06 修复：b_card 缺失/空串时 `'' in text_dump` 恒 True → any_hit 恒 True →
+            # MENTAL_BREAK_FORGOTTEN 永久静默（假阴性）。加真值守卫，与账本版 L416 对齐。
+            if b_card and b_card in text_dump:
                 any_hit = True
                 break
         if not any_hit:
@@ -288,6 +290,7 @@ def scan_position_effect(project_root: Path, chapters: list[int]) -> list[dict]:
     positions = Counter()
     effects = Counter()
     total_evals = 0
+    total_effects = 0
     for ch in chapters:
         changes = read_changes(project_root, ch)
         evals = (changes.get("self_eval", {}) or {}).get("position_effect_evals", []) or []
@@ -299,33 +302,36 @@ def scan_position_effect(project_root: Path, chapters: list[int]) -> list[dict]:
                 total_evals += 1
             if ef:
                 effects[ef] += 1
-    if total_evals < 3:
+                total_effects += 1
+    # 2026-06 修复：position / effect 是两个独立分布，须各用自己的分母（只有 effect 无
+    # position 的 eval 是合法可达条目 → 复用 total_evals 会让 eff_dist 百分比 >100% 虚报）。
+    if total_evals < 3 and total_effects < 3:
         return []
-    pos_dist = {p: round(positions[p] / total_evals, 2) for p in ["controlled", "risky", "desperate"]}
-    eff_dist = {e: round(effects[e] / total_evals, 2) for e in ["great", "standard", "limited"]}
+    pos_dist = {p: round(positions[p] / total_evals, 2) for p in ["controlled", "risky", "desperate"]} if total_evals else {}
+    eff_dist = {e: round(effects[e] / total_effects, 2) for e in ["great", "standard", "limited"]} if total_effects else {}
 
-    if pos_dist.get("controlled", 0) > 0.85:
+    if total_evals >= 3 and pos_dist.get("controlled", 0) > 0.85:
         findings.append({
             "severity": "advisory",
             "code": "POSITION_TOO_SAFE",
             "distribution": pos_dist,
             "suggestion": f"position 中 {pos_dist['controlled']:.0%} 是 controlled → 主角永远稳，叙事张力低",
         })
-    if pos_dist.get("desperate", 0) > 0.6:
+    if total_evals >= 3 and pos_dist.get("desperate", 0) > 0.6:
         findings.append({
             "severity": "warning",
             "code": "POSITION_TOO_DESPERATE",
             "distribution": pos_dist,
             "suggestion": f"position 中 {pos_dist['desperate']:.0%} 是 desperate → 虐过头，读者疲劳",
         })
-    if eff_dist.get("great", 0) > 0.7:
+    if total_effects >= 3 and eff_dist.get("great", 0) > 0.7:
         findings.append({
             "severity": "advisory",
             "code": "EFFECT_TOO_GREAT",
             "distribution": eff_dist,
             "suggestion": f"effect 中 {eff_dist['great']:.0%} 是 great → 无失败感，无成长压力",
         })
-    if eff_dist.get("limited", 0) > 0.5:
+    if total_effects >= 3 and eff_dist.get("limited", 0) > 0.5:
         findings.append({
             "severity": "advisory",
             "code": "EFFECT_TOO_LIMITED",
@@ -351,6 +357,10 @@ def scan_stress_trend_ledger(project_root: Path, recs) -> list[dict]:
     stress = load_json(project_root / "_数据库" / "主角压力档.json", {}) or {}
     threshold = stress.get("stress_threshold_break", 8)
     high_pct = threshold * 0.75
+    # 2026-06 修复：与 disk 版 scan_stress_trend L157 `if high_chs and coping:` 对齐——
+    # coping 子系统未定义（新书 skeleton 默认 coping_mechanisms: {}）时不报 COPING_NEVER_TRIGGERED，
+    # 否则把『作者没启用可选 coping 子系统』误报成『writer 漏消费』(违北极星⑤)。
+    coping_defined = bool(stress.get("coping_mechanisms", {}).get("high_stress_behaviors"))
 
     findings = []
     by_ch = {}
@@ -398,7 +408,7 @@ def scan_stress_trend_ledger(project_root: Path, recs) -> list[dict]:
         })
 
     # COPING_NEVER_TRIGGERED：高 stress 章中 coping_hit 全 False
-    if len(high_chs) >= 3 and not (set(high_chs) & coping_chs):
+    if coping_defined and len(high_chs) >= 3 and not (set(high_chs) & coping_chs):
         findings.append({
             "severity": "advisory",
             "code": "COPING_NEVER_TRIGGERED",
@@ -505,6 +515,7 @@ def scan_position_effect_ledger(recs) -> list[dict]:
     positions = Counter()
     effects = Counter()
     total_evals = 0
+    total_effects = 0
     for _ch, rec in recs:
         # 2026-05-29 复审修复 [M8]：position_effect_evals 权威来源 self_eval（SC-4）。
         evals = _rec_self_eval_field(rec, "position_effect_evals") or []
@@ -518,33 +529,36 @@ def scan_position_effect_ledger(recs) -> list[dict]:
                 total_evals += 1
             if ef:
                 effects[ef] += 1
-    if total_evals < 3:
+                total_effects += 1
+    # 2026-06 修复：与 disk 版 scan_position_effect 同步——position / effect 是两个独立分布，
+    # 各用自己的分母（只有 effect 无 position 的 eval 合法可达 → 复用 total_evals 会虚报）。
+    if total_evals < 3 and total_effects < 3:
         return []
-    pos_dist = {p: round(positions[p] / total_evals, 2) for p in ["controlled", "risky", "desperate"]}
-    eff_dist = {e: round(effects[e] / total_evals, 2) for e in ["great", "standard", "limited"]}
+    pos_dist = {p: round(positions[p] / total_evals, 2) for p in ["controlled", "risky", "desperate"]} if total_evals else {}
+    eff_dist = {e: round(effects[e] / total_effects, 2) for e in ["great", "standard", "limited"]} if total_effects else {}
 
-    if pos_dist.get("controlled", 0) > 0.85:
+    if total_evals >= 3 and pos_dist.get("controlled", 0) > 0.85:
         findings.append({
             "severity": "advisory",
             "code": "POSITION_TOO_SAFE",
             "distribution": pos_dist,
             "suggestion": f"position 中 {pos_dist['controlled']:.0%} 是 controlled → 主角永远稳，叙事张力低",
         })
-    if pos_dist.get("desperate", 0) > 0.6:
+    if total_evals >= 3 and pos_dist.get("desperate", 0) > 0.6:
         findings.append({
             "severity": "warning",
             "code": "POSITION_TOO_DESPERATE",
             "distribution": pos_dist,
             "suggestion": f"position 中 {pos_dist['desperate']:.0%} 是 desperate → 虐过头，读者疲劳",
         })
-    if eff_dist.get("great", 0) > 0.7:
+    if total_effects >= 3 and eff_dist.get("great", 0) > 0.7:
         findings.append({
             "severity": "advisory",
             "code": "EFFECT_TOO_GREAT",
             "distribution": eff_dist,
             "suggestion": f"effect 中 {eff_dist['great']:.0%} 是 great → 无失败感，无成长压力",
         })
-    if eff_dist.get("limited", 0) > 0.5:
+    if total_effects >= 3 and eff_dist.get("limited", 0) > 0.5:
         findings.append({
             "severity": "advisory",
             "code": "EFFECT_TOO_LIMITED",

@@ -182,7 +182,7 @@ def main():
         active_count = sum(1 for t in THROUGHLINES if pmap[t])
         if active_count < 2:
             chs_with_lt2.append(ch)
-    if len(chs_with_lt2) >= total * 0.4:
+    if total >= 5 and len(chs_with_lt2) >= total * 0.4:
         findings.append({
             "severity": "advisory",
             "code": "PER_CHAPTER_COVERAGE_LOW",

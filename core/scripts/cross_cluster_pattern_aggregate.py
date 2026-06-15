@@ -220,9 +220,13 @@ def scan_paragraph_starts_with_protagonist(text: str, protagonist: str) -> int:
 
 def scan_dialogue_tags(text: str) -> int:
     """X 说道/X 想 模式（不严格区分）。"""
-    # 1) 「他/她+说想道」+ 2) 「[姓]+1-2字+说道」
+    # 1) 「他/她+说想道」+ 2) 通用「[名]+说话动词」（不绑具体姓氏；避开 知道/味道/难道 等假阳）
     patt1 = re.findall(r"[他她][说想道]", text)
-    patt2 = re.findall(r"[陆顾林吴老程韩邵宋钟谢沈周][一-鿿]?[说道]", text)
+    patt2 = re.findall(
+        r"(?<![他她])[一-龥]{1,3}(?:说道|笑道|问道|答道|喝道|低声道|开口道)[：，]?"
+        r"|(?<![他她])[一-龥]{1,3}[说问喊吼][：，]",
+        text,
+    )
     return len(patt1) + len(patt2)
 
 
@@ -376,7 +380,12 @@ def scan_dialogue_stream_flat(text: str) -> int:
     for p in paras:
         # 判定该段是否「纯对话/说话标签」：含引号 + 含「X说/X想/X道」+ 长度 < 80
         has_quote = '"' in p or '“' in p or '”' in p or '「' in p  # 2026-05-30 补弯引号 U+201C/U+201D
-        has_say = bool(re.search(r"[他她][说想道]|[陆顾林吴老程沈周][一-鿿]?[说道]", p))
+        has_say = bool(re.search(
+            r"[他她][说想道]"
+            r"|(?<![他她])[一-龥]{1,3}(?:说道|笑道|问道|答道|喝道|低声道|开口道)"
+            r"|(?<![他她])[一-龥]{1,3}[说问喊吼][：，]",
+            p,
+        ))
         short = len(p) < 80
         if has_quote and (has_say or short):
             cur += 1
@@ -692,7 +701,7 @@ def main():
                 "chapter": ch,
                 "metric": {"top1_pct": round(d["para_first_word_top1_pct"], 2)},
                 "message": f"ch{ch} 前 50 段段首词集中度 {d['para_first_word_top1_pct']:.0%}",
-                "suggestion": "段首词应多样（陆衍/他/动作/对话/场景轮换）",
+                "suggestion": f"段首词应多样（{protagonist}/他/动作/对话/场景轮换）",
             })
 
     # ===== Finding 7: TELL_OVERUSE 内心动词过密 =====

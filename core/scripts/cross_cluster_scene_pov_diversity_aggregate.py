@@ -59,9 +59,11 @@ def main():
     recent: list[int] = []
 
     # ===== 2026-05-29 cluster 化分支：账本有 scene_type → 用实际落账的 scene_type/pov =====
-    # --last-n 在 cluster 模式语义为「最后 N 个 cluster 的章」；数据点来自账本而非磁盘 storyboard 计划
+    # --last-n 在 cluster 模式语义为「最近 N 章」（runner 已把『最近 N 个 cluster』换算成章数窗口经 --last-n 传入·章为单位，与本文件磁盘路径 L99 同口径）；数据点来自账本而非磁盘 storyboard 计划
     if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "scene_type"):
-        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
+        recs = csr.get_chapter_records(project_root)            # 取全账本章记录（已按 ch 升序）
+        if args.last_n and args.last_n > 0:
+            recs = recs[-args.last_n:]                          # 章为单位截最近窗口（对齐 L99 chapters_written[-args.last_n:]）
         for ch, rec in recs:
             st = rec.get("scene_type", "") or ""
             pov = rec.get("pov", "") or ""

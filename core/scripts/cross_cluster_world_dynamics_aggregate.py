@@ -98,11 +98,8 @@ def scan_faction_trends(project_root: Path) -> list[dict]:
         # → 这里降级为：基于 world_state.world_ticks_log 信号识别
         pass
 
-    # 基于 world_ticks_log 的简化分析
-    log = world.get("world_ticks_log", []) or []
-    if len(log) < 3:
-        return findings
-    # 检查 factions current values 极端
+    # 检查 factions current values 极端（仅依赖 factions_state 快照，与 world_ticks_log 无关——
+    # 故不再被 len(log)<3 守卫拦截；原守卫是给上方已废弃趋势逻辑准备的，误 gate 了本检查）
     for fname, fdata in factions.items():
         for dim in ["power", "stability", "wealth"]:
             v = fdata.get(dim)

@@ -31,6 +31,7 @@ IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 sys.path.insert(0, str(Path(__file__).parent))
 import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+import cluster_lookup  # 2026-06 锚 learn_at_cluster → 章范围（与 build_manifest/declarative 对齐）
 
 
 def load_json(p: Path, default=None):
@@ -104,9 +105,18 @@ def main():
         for wl in will_learn:
             if not isinstance(wl, dict):
                 continue
-            item_id = wl.get("id") or wl.get("name", "")
-            content = wl.get("content") or wl.get("description", "")
+            # 2026-06 北极星①复审：will_learn 权威锚是 learn_at_cluster（cluster ID 字符串），
+            # 反查 cluster_id_to_range 取末章作 due_by——禁止抽 learn_at_cluster 里的数字当章号
+            # （对齐 build_manifest._collect_will_learn_due L2416 / cross_cluster_declarative_data L215）。
+            # 旧字段 id/content/by_ch 作 or 兜底向后兼容，但权威路径走 learn_at_cluster + fact。
+            fact = wl.get("fact") or wl.get("content") or wl.get("what") or wl.get("description", "")
+            item_id = wl.get("id") or wl.get("fact") or wl.get("what") or ""
+            content = fact
+            lac = wl.get("learn_at_cluster")
+            _rng = cluster_lookup.cluster_id_to_range(project_root, lac) if isinstance(lac, str) and lac else None
             due_by = wl.get("due_by") or wl.get("by_ch") or 0
+            if not due_by and _rng and len(_rng) == 2 and isinstance(_rng[1], int):
+                due_by = int(_rng[1])
             if not item_id or not due_by:
                 continue
 

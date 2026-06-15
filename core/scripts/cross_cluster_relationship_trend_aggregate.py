@@ -67,7 +67,7 @@ def main():
                 continue
             entry = {"ch": ch}
             for dim in ["affinity", "trust", "fear", "respect"]:
-                if dim in r:
+                if dim in r and isinstance(r[dim], (int, float)) and not isinstance(r[dim], bool):
                     entry[dim] = r[dim]
             if len(entry) > 1:
                 history[(f, t)].append(entry)
@@ -108,7 +108,7 @@ def main():
             continue
         for dim in ["affinity", "trust", "fear", "respect"]:
             v = r.get(dim)
-            if v is None:
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
                 continue
             if v > 10 or v < -10:
                 findings.append({
@@ -124,17 +124,6 @@ def main():
     # 时序检测
     for (f, t), entries in history.items():
         if len(entries) < 2:
-            # FROZEN：在关系.json 有这关系但近 last_n 章无任何变更
-            current = next((r for r in current_rels if r.get("from") == f and r.get("to") == t), None)
-            if current and len(entries) == 0 and len(recent) >= 8:
-                findings.append({
-                    "severity": "advisory",
-                    "code": "RELATIONSHIP_FROZEN",
-                    "from": f,
-                    "to": t,
-                    "no_change_chs": len(recent),
-                    "suggestion": f"关系 {f}→{t} 近 {len(recent)} 章无任何数值变更 → 关系停滞",
-                })
             continue
         # 排序
         entries_sorted = sorted(entries, key=lambda e: e["ch"])
@@ -180,6 +169,25 @@ def main():
                             drop_streak = 0
                     else:
                         drop_streak = 0
+
+    # FROZEN：关系.json 里存在但近 last_n 章窗口内无任何数值变更（不在 history 中）
+    # （history 是 defaultdict，键随首次 append 诞生 → 真正零变更的关系结构性地从不进 history，
+    #  故必须独立遍历 current_rels 找『不在 history』者，原内联 len(entries)==0 分支恒为死代码）
+    if len(recent) >= 8:
+        for r in current_rels:
+            f = r.get("from")
+            t = r.get("to")
+            if not f or not t:
+                continue
+            if (f, t) not in history:
+                findings.append({
+                    "severity": "advisory",
+                    "code": "RELATIONSHIP_FROZEN",
+                    "from": f,
+                    "to": t,
+                    "no_change_chs": len(recent),
+                    "suggestion": f"关系 {f}→{t} 近 {len(recent)} 章无任何数值变更 → 关系停滞",
+                })
 
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)

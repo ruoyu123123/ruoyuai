@@ -111,7 +111,8 @@ def trigger_satisfied(trigger_at: dict, rel: dict) -> bool:
         return False
     for dim, threshold in trigger_at.items():
         cur = rel.get(dim)
-        if cur is None or cur < threshold:
+        # 2026 健壮性：非数值脏值（手工 /db 或弱模型写入 'high' 等）视作未满足而非崩溃
+        if not isinstance(cur, (int, float)) or cur < threshold:
             return False
     return True
 
@@ -176,6 +177,8 @@ def evaluate(project_root: Path, ch: int) -> dict:
         if not rel:
             continue
         for he in npc_data.get("heart_events", []):
+            if not isinstance(he, dict):
+                continue
             if he.get("consumed", False):
                 continue
             if trigger_satisfied(he.get("trigger_at", {}), rel):

@@ -29,7 +29,7 @@ def load_json(p: Path, default=None):
 
 def find_current_stage(stages_by_chapter: dict, ch: int) -> str:
     """找最近一个 ch_key <= 当前 ch 的 stage。"""
-    valid = [(int(k), v) for k, v in stages_by_chapter.items() if int(k) <= ch]
+    valid = [(int(k), v) for k, v in stages_by_chapter.items() if str(k).isdigit() and int(k) <= ch]
     if not valid:
         return "pre_start"
     valid.sort()
@@ -50,8 +50,26 @@ def main():
         print(f"[SKIP] character_arc_state.json 不存在")
         sys.exit(0)
 
+    # 兼容 character_arc_state.json 三套 schema（对齐 build_manifest.py:1435-1481 /
+    # cluster_emergence_engine.py:617-623）：
+    #   (A) {"characters": {name: {...}}}  (B) {"arcs": {name: {...}}}  (C) {"characters": [ {...} ]}
+    arcs_map = arc.get("arcs")
+    if isinstance(arcs_map, dict):
+        chars_map = arcs_map
+    else:
+        raw_chars = arc.get("characters", {})
+        if isinstance(raw_chars, list):
+            chars_map = {(c.get("name") or c.get("id")): c
+                         for c in raw_chars if isinstance(c, dict) and (c.get("name") or c.get("id"))}
+        elif isinstance(raw_chars, dict):
+            chars_map = raw_chars
+        else:
+            chars_map = {}
+
     updated = 0
-    for name, data in arc.get("characters", {}).items():
+    for name, data in chars_map.items():
+        if not isinstance(data, dict):
+            continue
         stages = data.get("stages_by_chapter", {})
         if not stages:
             continue

@@ -44,6 +44,9 @@ INVERTED_MIN_COUNT = 3                                   # 至少 N 处才报（
 INTENSITY_ADVERBS = ['极其', '死死', '毫无', '猛地', '狠狠', '紧紧', '牢牢', '拼命', '疯狂']
 INTENSITY_PER_1K_MINOR, INTENSITY_PER_1K_MAJOR = 3.0, 5.0   # 总强度副词密度 per 1000 CJK
 INTENSITY_SINGLE_MAX = 12                                    # 单个强度副词频次上限（如极其28）
+# 对话起始引号字符集（含中文弯引号 U+201C/U+201D=项目正典对话格式·补漏与姊妹 scanner
+# cross_scene_voice_drift_scanner/validate_style 对齐·三处统一引用防再次漏改）
+_DIALOG_OPEN_CHARS = '""“”\'「『（('
 
 
 def cjk(s: str) -> int:
@@ -113,9 +116,9 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                 continue
             all_lens.append(cjk(s))
             head_raw = s.lstrip('　 ')
-            if head_raw[:1] in '""\'「『（(':   # 对话主导句不计主语流水账
+            if head_raw[:1] in _DIALOG_OPEN_CHARS:   # 对话主导句不计主语流水账
                 continue
-            head = head_raw.lstrip('""\'「『（(')
+            head = head_raw.lstrip(_DIALOG_OPEN_CHARS)
             narr_is_subj.append(any(head.startswith(w) for w in subj_words))
 
     if not all_lens:
@@ -174,7 +177,7 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
         _inv_re = re.compile(r'^(.{2,14})的(' + _subj_alt + r')(?:[，,。、！？]|[一-鿿])')
         for p in body:
             head = p.lstrip('　 ')
-            if head[:1] in '""\'「『（(':       # 对话主导段不计
+            if head[:1] in _DIALOG_OPEN_CHARS:       # 对话主导段不计
                 inverted_flags.append(False)
                 continue
             inverted_flags.append(bool(_inv_re.match(head)))

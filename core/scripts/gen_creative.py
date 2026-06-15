@@ -457,7 +457,7 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
         "story_destiny": data.get("story_destiny", {}),
         "volumes": data.get("volumes", []),
         "major_events": [{**me, "status": me.get("status", "pending")}
-                         for me in data.get("major_events", [])],
+                         for me in data.get("major_events", []) if isinstance(me, dict)],
     }
     # 事件簇.json：只详化 clusters[0]=cluster_001（其余留涌现）
     c1 = data.get("cluster_001") or {}
@@ -746,10 +746,14 @@ def main():
         parser_fn = parse_brainstorm_output
 
     elif args.mode == 'outline_card':
-        if not args.skeleton:
-            print("[ERROR] --mode outline_card 需要 --skeleton", file=sys.stderr)
+        if not args.skeleton or not Path(args.skeleton).exists():
+            print("[ERROR] --mode outline_card 需要 --skeleton（文件须存在）", file=sys.stderr)
             sys.exit(2)
-        skeleton = json.loads(Path(args.skeleton).read_text(encoding='utf-8'))
+        try:
+            skeleton = json.loads(Path(args.skeleton).read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"[ERROR] --skeleton 读取/解析失败: {e}", file=sys.stderr)
+            sys.exit(2)
         project_context = ""
         if args.project:
             pr = Path(args.project)

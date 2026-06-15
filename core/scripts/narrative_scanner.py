@@ -247,7 +247,13 @@ ACTION_INCOMPLETE = re.compile(r"(伸手|抬头|睁开|站起|准备|刚要|正�
 
 def check_paragraph_tension(p: str) -> int:
     """0-5 分。段末张力。"""
-    last_sentence = p.split("。")[-2] if "。" in p else p
+    # 取段末「真正最后一句」：保留所有句末终结符再取最后一个非空句
+    # （对齐姊妹 hook_strength_scanner.py 的「找末句」写法；旧 p.split("。")[-2] 会漏掉
+    #  以钩子符 ？/……/」 收尾的网文刻意钩子形态，把有问句/省略号钩子的段误判成段末张力 0）。
+    # 切分点：句末终结符 / 右引号 之后，且其后不再紧跟同类符——这样 ……（省略号串）与
+    # ？」（问号+右引号）等终结符串整段视为一个收尾，不被切碎（否则末句只剩单 … 或单 」 仍漏）。
+    _sents = re.split(r"(?<=[。！？!?…」”])(?![。！？!?…」”])", p.strip())
+    last_sentence = next((s for s in reversed(_sents) if s and s.strip()), p)
     last_sentence = last_sentence.strip() or p[-30:]
     score = 0
     if TENSION_END_KW.search(last_sentence):
@@ -278,13 +284,28 @@ def scan_micro_tension(paragraphs: list[str]) -> dict:
 
 # ============ G5 重复词扫描 ============
 
+# scan_repetition 局部归一：把 CONCRETE_NOUN 命中片段（带前置修饰字，如「茶杯/门钥匙」）
+# 归一到核心名词（杯/钥匙）再计数，否则「茶杯…又…茶杯…再…茶杯」会被切成多个不同 key，
+# max 计数恒为 1、永不触发 > 3 阈值（漏报）。多字后缀须排在单字前以匹配最长后缀。
+# 后缀集与 CONCRETE_NOUN（L195）保持同步——彻底根治（裸名词 / 异前缀如剑光剑锋长剑）
+# 需把 CONCRETE_NOUN 名词核改捕获组并支持裸名词，会动到 scan_orphan_objects 路径（另案）。
+_NOUN_SUFFIX = re.compile(r"(钥匙|火柴|烟斗|戒指|刻痕|痕迹|杯|簿|灯|斗|钟|表|刀|剑|笔|纸|信|匣|盒|铃|镜|链|绳|带|印|疤)$")
+
+
+def _repetition_core_key(s: str) -> str:
+    m = _NOUN_SUFFIX.search(s)
+    if not m:
+        return s
+    return s[max(0, m.start(1) - 1):]  # 后缀 + 其前 1 字 = 核心名词（茶杯/门钥匙→杯钥匙核）
+
+
 def scan_repetition(paragraphs: list[str]) -> dict:
     """同段内同一具体名词 > 3 次 → 报警。"""
     violations = []
     for i, p in enumerate(paragraphs):
         counts = Counter()
         for m in CONCRETE_NOUN.finditer(p):
-            counts[m.group(0)] += 1
+            counts[_repetition_core_key(m.group(0))] += 1
         for noun, c in counts.items():
             if c > 3:
                 violations.append({

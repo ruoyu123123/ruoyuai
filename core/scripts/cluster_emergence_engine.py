@@ -556,13 +556,19 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     # 2026-05-29 北极星 P2 [H2-trend]：取当前推进卷的「未达成 key_milestones」关键词 → 收敛打分维度。
     # 大势已定：让涌现的候选 ME 朝本卷固定终点收敛（advisory 排序，不锁定，仍由用户选）。
     milestone_kw = set()
-    cur_vol = _current_advancing_vol(world_state, character_arc)
+    # cur_vol 兜底：世界状态/character_arc 无人写 current_vol(契约债)→ 用 emerge 已算出的
+    # current_volume(=剩余 ME 最小卷号·line530·权威 _me_volume)·否则收敛维度全生产环境恒哑火。
+    cur_vol = _current_advancing_vol(world_state, character_arc) or current_volume
     if cur_vol:
         for v in (dashishi.get("volumes") or []):
             if isinstance(v, dict) and v.get("vol") == cur_vol:
+                # 收敛源兼容:旧 schema 用 key_milestones/ending_state·现 producer(gen_creative)
+                # 实写 volume_core_conflict/volume_thread/volume_finale_signal → 全捞·避免维度恒空。
                 kms = v.get("key_milestones") or []
                 kms_text = " ".join(str(k) for k in kms) if isinstance(kms, list) else str(kms)
-                milestone_kw = _keyword_set(kms_text + " " + str(v.get("ending_state", "")))
+                conv_text = " ".join(str(v.get(k, "")) for k in (
+                    "ending_state", "volume_core_conflict", "volume_thread", "volume_finale_signal"))
+                milestone_kw = _keyword_set(kms_text + " " + conv_text)
                 break
 
     # 选 candidate ME（传 completed_mes 供 parent_me 链打分 + milestone_kw 供收敛打分）

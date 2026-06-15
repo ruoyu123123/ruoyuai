@@ -180,16 +180,25 @@ def main():
                 "suggestion": f"{c} 近 {len(recent)} 章 {round(top_pct*100)}% 是 {top_emotion} → 角色情绪僵化，下章应有反差",
             })
 
-        # 检测连续单一情绪章节
-        chs_with_top = [ch for ch, cnt in log if cnt.get(top_emotion, 0) > 0 and not any(cnt.get(e, 0) > cnt.get(top_emotion, 0) for e in EMOTION_KEYWORDS.keys() if e != top_emotion)]
-        if len(chs_with_top) >= 6:
+        # 检测连续单一情绪章节（真·连续段：按章号排序后取相邻 run 最长段，而非全窗口计数）
+        chs_with_top = sorted(ch for ch, cnt in log if cnt.get(top_emotion, 0) > 0 and not any(cnt.get(e, 0) > cnt.get(top_emotion, 0) for e in EMOTION_KEYWORDS.keys() if e != top_emotion))
+        longest_run: list[int] = []
+        cur_run: list[int] = []
+        for ch in chs_with_top:
+            if cur_run and ch == cur_run[-1] + 1:
+                cur_run.append(ch)
+            else:
+                cur_run = [ch]
+            if len(cur_run) > len(longest_run):
+                longest_run = list(cur_run)
+        if len(longest_run) >= 6:
             findings.append({
                 "severity": "advisory",
                 "code": "EMOTION_RUN_TOO_LONG",
                 "character": c,
                 "emotion": top_emotion,
-                "consecutive_chs": chs_with_top[-6:],
-                "suggestion": f"{c} 连续 ≥ 6 章主导情绪都是 {top_emotion} → 建议下章打破",
+                "consecutive_chs": longest_run,
+                "suggestion": f"{c} 连续 {len(longest_run)} 章主导情绪都是 {top_emotion} → 建议下章打破",
             })
 
     # 输出

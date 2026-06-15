@@ -64,7 +64,10 @@ def _author_rhythm_baseline(project: Path | None, style_path: Path | None) -> di
                     break
     ret = None
     if isinstance(data, dict):
-        tt = (data.get("narrative_rhythm") or {}).get("tension_trajectory") or {}
+        nr = data.get("narrative_rhythm")
+        tt = (nr.get("tension_trajectory") if isinstance(nr, dict) else None) or {}
+        if not isinstance(tt, dict):
+            tt = {}
         if isinstance(tt.get("post_climax_retention"), (int, float)):
             ret = float(tt["post_climax_retention"])
     return {"post_climax_retention": ret}

@@ -467,7 +467,7 @@ def apply_changes(root: Path, ch: int) -> int:
     ta = changes.get("time_advance") or {}
     if ta:
         tl = load_json(db / "时间线.json", {})
-        if "current_time" in tl and ta.get("period"):
+        if isinstance(tl.get("current_time"), dict) and ta.get("period"):
             tl["current_time"]["period"] = ta["period"]
             tl["current_time"]["chapter"] = ch
         tl.setdefault("time_log", []).append({

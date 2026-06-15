@@ -170,7 +170,7 @@ def check_protagonist_onstage(body: str, protag_name) -> dict:
     has_action = False
     if appears:
         for m in re.finditer(re.escape(protag_name), window):
-            ctx = window[m.start():m.start() + 25]
+            ctx = window[max(0, m.start() - 20):m.end() + 20]
             if ACTION_VERB.search(ctx):
                 has_action = True
                 break

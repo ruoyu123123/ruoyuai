@@ -100,14 +100,28 @@ def scan_beat(project_root: Path, ch: int) -> dict:
         beat_map_path = project_root / "_数据库" / "beat_map.json"
         beat_map = load_json(beat_map_path, {})
         cluster_beats = beat_map.get("cluster_beats", {})
-        # 取当前 cluster 的 beat 列表（默认 cluster_001 · 虚拟 ch=9000 时）
-        # 简化：取第一个非空 cluster_beats key
-        cluster_id_key = next((k for k in cluster_beats.keys() if cluster_beats.get(k)), None)
+        # 2026-06-16 修：cluster 模式下 audit_hub 用虚拟 ch=9000 跑任何 cluster（audit_hub.py:1565），
+        # 真实 cluster 身份经 CLUSTER_ID env 透传（audit_hub.py:1000）——不能用 ch/cluster_lookup 反查。
+        # 与兄弟 scanner golden_three_scanner.py:286-288 同款归一化定位正确 cluster_beats key。
+        _cluster_id_env = _os.environ.get("CLUSTER_ID", "")
+        _norm = _cluster_id_env.replace("cluster_", "").lstrip("0") or "0"
+        _routed_key = None
+        _fallback = False
+        if _norm != "0":
+            _target = f"cluster_{int(_norm):03d}"
+            if cluster_beats.get(_target):
+                _routed_key = _target
+        if _routed_key is None:
+            # 回退：CLUSTER_ID 缺失/该 cluster 无 beat → 取第一个非空 key（标 fallback）
+            _routed_key = next((k for k in cluster_beats.keys() if cluster_beats.get(k)), None)
+            _fallback = _routed_key is not None and _cluster_id_env != ""
+        cluster_id_key = _routed_key
         beats_declared = cluster_beats.get(cluster_id_key, []) if cluster_id_key else []
         return {
             "chapter": ch,
             "cluster_mode": True,
             "cluster_id_evaluated": cluster_id_key,
+            "routing_fallback": _fallback,
             "beats_declared_count": len(beats_declared),
             "beats_declared": [b.get("beat") for b in beats_declared][:5],
             "warning": (

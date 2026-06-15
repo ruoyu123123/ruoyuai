@@ -1300,11 +1300,10 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                 if ms:
                     return rep[:ms[-1].start()].rstrip(), rep[ms[-1].start():]
                 return rep.strip(), ""
-            _cjk = lambda s: sum(1 for c in s if '一' <= c <= '鿿')
             accum_body, last_changes = _raw_split(full_text)
             rounds = 0
             while rounds < FREESTYLE_EXPAND_MAX_ROUNDS:
-                body_cjk = _cjk(accum_body)
+                body_cjk = cio.count_cjk(accum_body)
                 if body_cjk >= min_cjk:
                     break
                 rounds += 1
@@ -1319,7 +1318,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                           file=sys.stderr)
                     break
                 cont_body, cont_changes = _raw_split(cont_text)
-                inc = _cjk(cont_body)
+                inc = cio.count_cjk(cont_body)
                 if cont_body.strip():
                     accum_body += "\n\n" + cont_body
                 if cont_changes:
@@ -1344,7 +1343,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                     print(f"[gen_writer] 补 CHANGES 失败（下游 normalize 兜底）: {str(e)[:120]}",
                           file=sys.stderr)
             full_text = accum_body + ("\n\n" + last_changes if last_changes else "")
-            print(f"\n[gen_writer] 内容兜底完成：正文 {_cjk(accum_body)} CJK（expand {rounds} 轮）"
+            print(f"\n[gen_writer] 内容兜底完成：正文 {cio.count_cjk(accum_body)} CJK（expand {rounds} 轮）"
                   f"· CHANGES={'有' if last_changes else '无'}", file=sys.stderr)
 
         # 成功
@@ -1676,7 +1675,7 @@ def _read_author_rhythm(project_root: Path):
     return sent, para, single
 
 
-def enforce_short_paragraphs(body: str, author_para_mean: float = None) -> str:
+def enforce_short_paragraphs(body: str, author_para_mean: float = None, author_single: float = None) -> str:
     """[2026-06-04 治本] 长句裹短段：把过长的非对话段按句末切成短段，贴作者段长基线。
 
     根因：句法熔合只拉句长不管段长，小世界=长句裹短段（句长32/段长35短段/单句独行0.79），
@@ -1686,6 +1685,11 @@ def enforce_short_paragraphs(body: str, author_para_mean: float = None) -> str:
     北极星④：段落是格式层·只切段不改一字。对话/系统面板【】保护不切。作者基线缺失→阈值80（仅切egregious）。
     """
     import re as _re
+    # [北极星⑤·对齐 _para_contract_line L546] 作者写密实多句长段(single<0.5)→通用一段一句让位·
+    # 不在 post-processing 反向 tighten 打碎其签名复合段·relax-only(只放宽不收紧)。
+    if author_single is not None and author_single < 0.5:
+        print(f"[gen_writer] 短段约束跳过：作者密实多句长段(单句独行 {author_single:.0%}<0.5)→保留复合长段·不拆碎句(对齐段长契约)", file=sys.stderr)
+        return body
     base = author_para_mean if (author_para_mean and author_para_mean > 0) else 0
     threshold = max(base * 1.3, 45.0) if base else 80.0
     LQ = "“"
@@ -1933,7 +1937,7 @@ def main():
         _auth_sent, _auth_para, _auth_single = _read_author_rhythm(project_root)
         print(f"[gen_writer] 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}",
               file=sys.stderr)
-        body = enforce_short_paragraphs(body, author_para_mean=_auth_para)
+        body = enforce_short_paragraphs(body, author_para_mean=_auth_para, author_single=_auth_single)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
                                   ch_start, args.chapter_end, used_profile,
                                   seed_trace=seed_trace, best_of_n_trace=best_of_n_trace)

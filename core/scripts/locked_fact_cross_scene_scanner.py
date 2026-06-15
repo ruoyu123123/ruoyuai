@@ -89,11 +89,28 @@ def extract_ages_near(text: str, keyword: str, window: int = 50) -> list[tuple[i
     再靠「窗口里有『岁』」宽判据绑定年龄 → 「三十里」被当成「三十岁」误报 hard_gate。
     现在只认「数字+岁」的实例，从源头杜绝串味。"""
     results = []
+    # 句子分隔符：把窗口切成小句，只采纳与 keyword 同句的年龄，
+    # 杜绝相邻句里**另一个角色**的年龄被误归到本角色（喂 hard_gate 假阳性）。
+    _SENT_SEP = "。！？；\n"
     for m in re.finditer(re.escape(keyword), text):
         s = max(0, m.start() - window)
         e = min(len(text), m.end() + window)
         ctx = text[s:e]
+        kw_in_ctx = m.start() - s  # keyword 在 ctx 内的偏移
+        # 找 keyword 所在小句的 [seg_start, seg_end)（ctx 内坐标）
+        seg_start = 0
+        for i in range(kw_in_ctx - 1, -1, -1):
+            if ctx[i] in _SENT_SEP:
+                seg_start = i + 1
+                break
+        seg_end = len(ctx)
+        for i in range(m.end() - s, len(ctx)):
+            if ctx[i] in _SENT_SEP:
+                seg_end = i
+                break
         for age_m in _AGE_RE.finditer(ctx):
+            if age_m.start(1) < seg_start or age_m.start(1) >= seg_end:
+                continue  # 年龄不在 keyword 同句 → 大概率是别人的年龄，跳过
             # group(1) 是数字部分；记录数字在全文的绝对起始位置
             results.append((s + age_m.start(1), age_m.group(1)))
     return results
@@ -122,7 +139,12 @@ def scan(project_root: Path, draft_path: Path) -> dict:
             # 年龄一致性：仅当 fact 显式声明「N 岁」时启用。
             # 正文中只比对**真年龄**（数字紧邻「岁」），M ≠ N → 冲突。
             # 距离（三十里）/数量（三十个）/年份等无关数字不参与，杜绝 hard_gate 假阳性。
-            age_in_fact = _AGE_RE.search(fact)
+            # 北极星⑥ 对齐 context 侧锚定：name 以中文数字结尾(张三/周七)时，
+            # 直接对整条 fact 跑贪婪 [零一二...百]+ 会把名字尾字吃进年龄数字
+            # （张三三十八岁→'三三十八'→None 静默跳过 / 周七十八岁→78 错值）。
+            # 先剥掉 name 前缀再抽，杜绝 fact 侧名字尾字串味。
+            fact_body = fact[len(name):] if fact.startswith(name) else fact
+            age_in_fact = _AGE_RE.search(fact_body)
             if age_in_fact:
                 fact_age = _cn_to_int(age_in_fact.group(1))
                 if fact_age is None:

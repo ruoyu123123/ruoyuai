@@ -1,8 +1,8 @@
 """cross_cluster_foreshadow_rhythm_aggregate.py — 伏笔跨章节奏扫（CCR20）
 
-读 _数据库/伏笔表.json 中所有 foreshadowings，对照已写章节：
+读 _数据库/伏笔表.json 中所有 promises（v27 权威键 · 兼容旧 foreshadowings/items），对照已写章节：
 
-- FORESHADOW_OVERDUE：initiated_at_ch + due_by < 当前章 但 paid_at_ch=null
+- FORESHADOW_OVERDUE：due_by（绝对章号）< 当前章 但未 resolved
 - FORESHADOW_NO_REINFORCEMENT：initiated 后 ≥ 5 章无任何铺垫（reinforced_chs[] 为空且 due_by 还有 ≥ 3 章）
 - FORESHADOW_OVER_REINFORCEMENT：reinforced_chs[] ≥ 8 但 paid_at_ch=null（读者疲劳）
 - FORESHADOW_NEVER_INITIATED：伏笔 declared 但 initiated_at_ch=null 已 ≥ 10 章
@@ -54,7 +54,9 @@ def main():
         print("[SKIP] 伏笔表.json 不存在")
         sys.exit(0)
     data = load_json(fs_path, {})
-    fss = data.get("foreshadowings", []) or data.get("items", []) or []
+    # v27 伏笔表权威键是 promises（兼容旧 foreshadowings/items）。
+    # 与 templates/subsystem_skeletons.json + foreshadowing_handoff_scanner.py 真 schema 对齐。
+    fss = data.get("promises") or data.get("foreshadowings") or data.get("items") or []
     if not fss:
         print("[SKIP] 伏笔表为空")
         sys.exit(0)
@@ -66,6 +68,7 @@ def main():
     cur_ch = 0
     ledger_planted = set()
     ledger_paid = set()
+    ledger_reinforced: dict = {}
     if csr.is_cluster_mode():
         clusters = csr.get_clusters(project_root)
         for c in clusters:
@@ -79,6 +82,12 @@ def main():
                 ledger_planted.add(fid)
             for fid in c.get("foreshadow_paid") or []:
                 ledger_paid.add(fid)
+            # 账本聚合 reinforced（cluster_summary_reader 文档：foreshadow_reinforced={fid:[ch]}）。
+            # 非 cluster 模式不进此分支 → ledger_reinforced 留空 → reinforced 退回伏笔表自带字段。
+            fr = c.get("foreshadow_reinforced") or {}
+            if isinstance(fr, dict):
+                for fid, chs in fr.items():
+                    ledger_reinforced.setdefault(fid, []).extend(chs or [])
     if not cur_ch:
         chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
                           for d in (project_root / "章节").glob("第*章")
@@ -93,13 +102,39 @@ def main():
         if not isinstance(fs, dict):
             continue
         fid = fs.get("id") or fs.get("name", "?")
+        # v27 promises: setup_cluster(int 或 'cluster_00X')→起始章；兼容旧 initiated_at_ch
         initiated = fs.get("initiated_at_ch") or fs.get("set_at_ch") or 0
+        if not initiated:
+            _sc = fs.get("setup_cluster")
+            if _sc is not None:
+                _rng = csr.cluster_id_to_range(project_root, _sc) if hasattr(csr, "cluster_id_to_range") else None
+                if not _rng:
+                    import cluster_lookup as _cl
+                    _rng = _cl.cluster_id_to_range(project_root, _sc)
+                if _rng:
+                    initiated = int(_rng[0])
+        # v27 resolved(bool) 取代 paid_at_ch；兼容旧字段 + 账本兜底
         paid = fs.get("paid_at_ch") or fs.get("resolved_at_ch")
+        if not paid and fs.get("resolved") is True:
+            paid = cur_ch
         # 账本已记录该伏笔回收（增量补强，伏笔表漏标时兜底）
         if not paid and fid in ledger_paid:
             paid = cur_ch
-        due_by = fs.get("due_by") or 0
-        reinforced = fs.get("reinforced_chs") or fs.get("reinforced_at") or []
+        # due_by 为【绝对章号】(对齐 build_manifest/will_learn/db_schema_validate 999 哨兵)；
+        # v27 还有 due_by_cluster / due_by_ch_offset(相对 setup) 两种来源
+        due_by = fs.get("due_by") if isinstance(fs.get("due_by"), int) and not isinstance(fs.get("due_by"), bool) else 0
+        if not due_by:
+            _dbc = fs.get("due_by_cluster")
+            if isinstance(_dbc, (int, str)) and _dbc:
+                _r2 = csr.cluster_id_to_range(project_root, _dbc) if hasattr(csr, "cluster_id_to_range") else None
+                if not _r2:
+                    import cluster_lookup as _cl
+                    _r2 = _cl.cluster_id_to_range(project_root, _dbc)
+                if _r2:
+                    due_by = int(_r2[0])
+            elif isinstance(fs.get("due_by_ch_offset"), int) and initiated:
+                due_by = initiated + int(fs["due_by_ch_offset"])
+        reinforced = fs.get("reinforced_chs") or fs.get("reinforced_at") or ledger_reinforced.get(fid, [])
 
         if paid:
             continue  # 已回收
@@ -122,9 +157,9 @@ def main():
         if not initiated:
             continue
 
-        # FORESHADOW_OVERDUE
-        if due_by and cur_ch > initiated + due_by:
-            overdue = cur_ch - (initiated + due_by)
+        # FORESHADOW_OVERDUE（due_by 为绝对章号，已在 per-item 归一）
+        if due_by and cur_ch > due_by:
+            overdue = cur_ch - due_by
             severity = "warning" if overdue >= 5 else "advisory"
             findings.append({
                 "severity": severity,
@@ -134,11 +169,11 @@ def main():
                 "due_by": due_by,
                 "overdue_by": overdue,
                 "current_ch": cur_ch,
-                "suggestion": f"伏笔 {fid} 设置 ch{initiated} due_by {due_by} → 应在 ch{initiated+due_by} 前回收，已超 {overdue} 章",
+                "suggestion": f"伏笔 {fid} 设置 ch{initiated} due_by ch{due_by} → 应在 ch{due_by} 前回收，已超 {overdue} 章",
             })
 
-        # FORESHADOW_NO_REINFORCEMENT
-        if cur_ch - initiated >= 5 and len(reinforced) == 0 and (not due_by or cur_ch < initiated + due_by - 2):
+        # FORESHADOW_NO_REINFORCEMENT（due_by 为绝对章号）
+        if cur_ch - initiated >= 5 and len(reinforced) == 0 and (not due_by or cur_ch < due_by - 2):
             findings.append({
                 "severity": "advisory",
                 "code": "FORESHADOW_NO_REINFORCEMENT",
