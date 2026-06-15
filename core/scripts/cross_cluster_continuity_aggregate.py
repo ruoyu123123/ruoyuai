@@ -6,7 +6,7 @@
 扫 4 维度：
 1. cliffhanger 回应度    — 前章 ending 是否在后章首段被回应（DCAS pre_opening 例外）
 2. 时间跳跃未交代       — 章间时间跳跃 ≥8h 必须有过渡说明
-3. 物件持续性断层       — 关键物件（陆衍获得的 chekhov_gun）连续 ≥2 章未提及
+3. 物件持续性断层       — 关键物件（主角获得的 chekhov_gun）连续 ≥2 章未提及
 4. 情绪/认知断层        — 前后章 summary.emotion 差 ≥4 且开篇无桥接
 
 输出：
@@ -52,6 +52,28 @@ def load_json(p: Path, default=None):
         return default
 
 
+def get_protagonist(project_root: Path) -> str | None:
+    """从 人物卡.json 读 role==主角/protagonist 的角色名（照 relationship_evaluator
+    范式·取代旧硬编码 "陆衍"）。兼容 {"characters":[...]} 与 {name:{...}} 两形态·
+    读不到 fallback 第一个角色。"""
+    cards = load_json(project_root / "_数据库" / "人物卡.json", None)
+    if not isinstance(cards, dict):
+        return None
+    chars = cards.get("characters")
+    if isinstance(chars, list):
+        for c in chars:
+            if isinstance(c, dict) and (c.get("role") in ("主角", "protagonist") or c.get("is_protagonist")):
+                return c.get("name")
+        for c in chars:
+            if isinstance(c, dict) and c.get("name"):
+                return c.get("name")
+        return None
+    for name, info in cards.items():
+        if isinstance(info, dict) and (info.get("role") in ("主角", "protagonist") or info.get("is_protagonist")):
+            return name
+    return next(iter(cards.keys()), None)
+
+
 def find_chapter_dirs(project_root: Path) -> list[tuple[int, Path]]:
     out: list[tuple[int, Path]] = []
     for d in project_root.glob("章节/第*章"):
@@ -82,14 +104,21 @@ def has_pre_opening(ch_dir: Path) -> bool:
 
 # ===== 维度 1: cliffhanger 回应度 =====
 
-def extract_keywords(text: str, top_n: int = 20) -> set[str]:
-    """简易关键词：长度 ≥2 的中文/英文 + 时间戳 + 数字串。"""
+def extract_keywords(text: str, top_n: int = 20, protagonist: str | None = None) -> set[str]:
+    """简易关键词：长度 ≥2 的中文/英文 + 时间戳 + 数字串。
+
+    protagonist：当前项目主角名（main 经 get_protagonist 从 人物卡.json 动态读）→ 加入
+    stop 过滤。主角名几乎每段都出现，不过滤会让 cliffhanger 关键词重叠虚高。
+    2026-06-15 修：原硬编码 stop={"陆衍",...} 只对某本旧书有效（北极星⑥清硬编码 + ①不绑
+    特定书）→ 动态读主角名，照 relationship_evaluator.get_protagonist 范式。"""
     tokens = re.findall(r"[一-鿿]{2,}|[A-Za-z]{3,}|\d+[:：]\d+|\d{3,}", text)
-    stop = {"陆衍", "他的", "她的", "自己", "一个", "一下", "什么", "这种", "那个", "这个", "那种", "已经", "还是", "就是", "不是", "没有", "他在", "他想", "他说", "她说"}
+    stop = {"他的", "她的", "自己", "一个", "一下", "什么", "这种", "那个", "这个", "那种", "已经", "还是", "就是", "不是", "没有", "他在", "他想", "他说", "她说"}
+    if protagonist:
+        stop.add(protagonist)
     return set(t for t in tokens if t not in stop)
 
 
-def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: Path) -> dict:
+def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: Path, protagonist: str | None = None) -> dict:
     """前章 ending_line + ending_type vs 后章首段 300 字关键词重叠。"""
     if not prev_changes:
         return {"score": -1, "reason": "前章 changes 缺失，跳过"}
@@ -107,8 +136,8 @@ def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: 
 
     # 后章首 300 字
     head = next_text[:600]
-    ending_kw = extract_keywords(ending_line + " " + ending_type)
-    head_kw = extract_keywords(head)
+    ending_kw = extract_keywords(ending_line + " " + ending_type, protagonist=protagonist)
+    head_kw = extract_keywords(head, protagonist=protagonist)
     if not ending_kw:
         return {"score": -1, "reason": "ending_line 关键词不足"}
 
@@ -302,6 +331,7 @@ def main():
         print("[OK] 章节 <2，无衔接可扫")
         sys.exit(0)
     chapter_dirs = chapter_dirs[-args.last_n:]
+    protagonist = get_protagonist(project_root)  # 动态主角名 → extract_keywords stop（取代硬编码陆衍·北极星⑥）
 
     all_changes: dict[int, dict] = {}
     all_texts: dict[int, str] = {}
@@ -344,7 +374,7 @@ def main():
         if prev_ledger_rec is not None and isinstance(prev_ledger_rec.get("cliffhanger_resonance_next"), (int, float)):
             cliff = scan_cliffhanger_resonance_ledger(prev_ledger_rec, next_d)
         else:
-            cliff = scan_cliffhanger_resonance(all_changes.get(prev_ch, {}), all_texts.get(next_ch, ""), next_d)
+            cliff = scan_cliffhanger_resonance(all_changes.get(prev_ch, {}), all_texts.get(next_ch, ""), next_d, protagonist=protagonist)
         if not cliff.get("exempt") and cliff.get("score", -1) >= 0 and cliff["score"] < 0.2:
             findings.append({
                 "dimension": "cliffhanger",
