@@ -337,6 +337,39 @@ def scan_tag_synonym_cycle(body: str) -> dict:
     }
 
 
+# ============ B+9 对话标签密度过用（reading-reflector 维度6·非 B+8 同义词循环）============
+
+DIALOGUE_QUOTE = re.compile(r'["“”「『]')
+NAMED_TAG = re.compile(
+    r'(?:说道|问道|答道|回道|应道|喊道|叫道|笑道|怒道|沉声道|低声道|轻声道|冷声道|'
+    r'开口道|出声道|解释道|补充道|反问道|追问道)'
+    r'|(?:他|她|它|他们|她们|众人|二人|两人)(?:说|道|问|答|喊|叫)(?=[，。、：“”「』！？])'
+)
+
+
+def scan_dialogue_tag_density(paragraphs) -> dict:
+    """对话段带具名标签密度过高（每句「X说道」工艺单一·真人对话标签疏·reading-reflector 维度6）。
+
+    与 B+8 正交：B+8 查「变体太多=换花样说」，本检测查「密度太高=每句都带标签」。
+    与 validate_style AI 标签词正交：那边查特定 AI 词，这边查标签密度。补「密度」缺口。
+    """
+    dialogue_paras = [p for p in paragraphs if DIALOGUE_QUOTE.search(p)]
+    n_dia = len(dialogue_paras)
+    tagged = sum(1 for p in dialogue_paras if NAMED_TAG.search(p))
+    density = round(tagged / n_dia, 3) if n_dia else 0.0
+    return {
+        "dialogue_paras": n_dia,
+        "tagged_paras": tagged,
+        "tag_density": density,
+        "severity": "warning",
+        "gate_level": "advisory",
+        "fix_hint": "对话标签密度过高=每句都「X说道」工艺单一；多用动作节拍/上下文带说话人·标签疏化"
+                    "（双人对话定场后可省标签·靠语气/内容辨说话人）。",
+        "warning": (f"⚠️ {tagged}/{n_dia} 对话段带具名标签（密度 {round(density*100)}%·工艺单一）"
+                    if n_dia >= 6 and density >= 0.65 else None),
+    }
+
+
 # ============ 主入口 ============
 
 ALL_CHECKS = {
@@ -348,6 +381,7 @@ ALL_CHECKS = {
     "over_hedge": "B+6 过度限定",
     "forced_triple": "B+7 强行三段列举",
     "tag_synonym_cycle": "B+8 对话标签同义词循环",
+    "dialogue_tag_density": "B+9 对话标签密度过用",
 }
 
 
@@ -383,6 +417,8 @@ def scan_chapter(project_root: Path, ch: int, checks: list[str]) -> dict:
         report["forced_triple"] = scan_forced_triple(sentences)
     if "tag_synonym_cycle" in checks:
         report["tag_synonym_cycle"] = scan_tag_synonym_cycle(body)
+    if "dialogue_tag_density" in checks:
+        report["dialogue_tag_density"] = scan_dialogue_tag_density(paragraphs)
     return report
 
 

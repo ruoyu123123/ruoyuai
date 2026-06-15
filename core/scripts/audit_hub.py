@@ -104,6 +104,7 @@ SEMANTIC_DIM = {
     "metaphor_explain": "风格", "aphorism": "风格", "neg_parallel": "风格",
     "copula_avoid": "风格", "fake_range": "风格", "over_hedge": "风格",
     "forced_triple": "风格", "tag_synonym_cycle": "对话",
+    "dialogue_tag_density": "对话",
 }
 # v19 F 层「读者体验」检测器 -> code（这两个 scanner 输出扁平结构：单 top-level warning，
 # 不像 narrative/plot 那样有 per-check 子块，故单独一类 code）
