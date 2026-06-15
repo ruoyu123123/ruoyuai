@@ -136,21 +136,21 @@
     "subtext_rescan": {
       "layer": "cluster",
       "script": "subtext_rescan_scanner.py",
-      "doc": "[2026-06-15 记忆调研W1·潜台词/on-the-nose回查] 检测on-the-nose情绪直陈(引导词感到/心中/充满了+情绪状态名词愤怒/悲伤/绝望紧邻·去重)密度·CLAUDE.md反AI腔③『动作>情绪词不写他感到愤怒』·闭环consolidate subtext_instance_count埋设端齐备但writer写完零回查·与semantic_slop主题大词正交·advisory·env SUBTEXT_RESCAN_MODE默认shadow·阈值3.0金标准校准(真作者最大1.14/千字留2.6x余量)·北极星⑤直陈有时合理绝不hard_gate",
+      "doc": "[2026-06-15 记忆调研W1·潜台词/on-the-nose回查] 检测on-the-nose情绪直陈(引导词感到/心中/充满了+情绪状态名词愤怒/悲伤/绝望紧邻·去重)密度·CLAUDE.md反AI腔③『动作>情绪词不写他感到愤怒』·闭环consolidate subtext_instance_count埋设端齐备但writer写完零回查·与semantic_slop主题大词正交·advisory·env SUBTEXT_RESCAN_MODE默认active(2026-06-16金标准6作者零误报放量)·阈值3.0金标准校准(真作者最大1.14/千字留2.6x余量)·北极星⑤直陈有时合理绝不hard_gate",
       "_new": true,
       "issues_emitted": ["ON_THE_NOSE_EMOTION_DENSITY"]
     },
     "dramatic_irony": {
       "layer": "cluster",
       "script": "dramatic_irony_scanner.py",
-      "doc": "[2026-06-15 记忆调研W4·dramatic irony信号回查] 检测dramatic irony显式标志词(殊不知/浑然不知/却不知道/蒙在鼓里/做梦也没想到)密度·金标准实证好作者用情节展示信息差不用显式tell(惊悚乐园/遮天密度全0诡秘最大0.37)·故单向检测tell过多(像W1 on-the-nose)阈值0.8·闭环narrator_calibrate只校准距离不管诡计型信息控制·advisory·env DRAMATIC_IRONY_MODE默认shadow·北极星⑤信息差风格是创作选择绝不hard_gate",
+      "doc": "[2026-06-15 记忆调研W4·dramatic irony信号回查] 检测dramatic irony显式标志词(殊不知/浑然不知/却不知道/蒙在鼓里/做梦也没想到)密度·金标准实证好作者用情节展示信息差不用显式tell(惊悚乐园/遮天密度全0诡秘最大0.37)·故单向检测tell过多(像W1 on-the-nose)阈值0.8·闭环narrator_calibrate只校准距离不管诡计型信息控制·advisory·env DRAMATIC_IRONY_MODE默认active(2026-06-16金标准6作者零误报放量)·北极星⑤信息差风格是创作选择绝不hard_gate",
       "_new": true,
       "issues_emitted": ["DRAMATIC_IRONY_DRIFT"]
     },
     "reveal_show": {
       "layer": "cluster",
       "script": "reveal_show_scanner.py",
-      "doc": "[2026-06-15 记忆调研W5·反转揭底tell回查] 检测揭底显式标志词(真相大白/恍然大悟/原来如此/这才明白/谜底揭晓)密度·金标准实证好作者用情节展示真相不用显式tell(惊悚乐园最大0.4遮天/诡秘全0)·故单向检测tell过多(W1/W4/W5同族tell-vs-show)阈值0.8·闭环promise_payoff查承诺-兑现但揭底tell堆砌无检测·非『公平性』本身(铺垫够不够留judge)·advisory·env REVEAL_SHOW_MODE默认shadow·北极星⑤揭底手法是创作选择绝不hard_gate",
+      "doc": "[2026-06-15 记忆调研W5·反转揭底tell回查] 检测揭底显式标志词(真相大白/恍然大悟/原来如此/这才明白/谜底揭晓)密度·金标准实证好作者用情节展示真相不用显式tell(惊悚乐园最大0.4遮天/诡秘全0)·故单向检测tell过多(W1/W4/W5同族tell-vs-show)阈值0.8·闭环promise_payoff查承诺-兑现但揭底tell堆砌无检测·非『公平性』本身(铺垫够不够留judge)·advisory·env REVEAL_SHOW_MODE默认active(2026-06-16金标准6作者零误报放量)·北极星⑤揭底手法是创作选择绝不hard_gate",
       "_new": true,
       "issues_emitted": ["REVEAL_TELL_OVERUSE"]
     },

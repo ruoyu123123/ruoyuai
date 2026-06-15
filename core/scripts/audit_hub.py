@@ -1155,21 +1155,21 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "emotion_curve_rescan_scanner", "EMOTION_CURVE_RESCAN_DRIFT", "风格")),
                 # [2026-06-15 记忆调研W1] 潜台词/on-the-nose 情绪直陈回查 · 说透情绪密度（金标准阈值）
-                # · advisory · SUBTEXT_RESCAN_MODE 默认 shadow · 与 semantic_slop 主题大词正交
+                # · advisory · SUBTEXT_RESCAN_MODE 默认 active（2026-06-16 金标准 6 作者零误报放量）· 与 semantic_slop 主题大词正交
                 ("subtext_rescan",
                  [child_python(), str(srss), str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "subtext_rescan_scanner", "ON_THE_NOSE_EMOTION_DENSITY", "风格")),
                 # [2026-06-15 记忆调研W4] dramatic irony 信号回查 · 显式标志词 tell 过多（好作者用 show）
-                # · advisory · DRAMATIC_IRONY_MODE 默认 shadow · 金标准阈值防误伤
+                # · advisory · DRAMATIC_IRONY_MODE 默认 active（2026-06-16 金标准 6 作者零误报放量）· 金标准阈值防误伤
                 ("dramatic_irony",
                  [child_python(), str(dis), str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "dramatic_irony_scanner", "DRAMATIC_IRONY_DRIFT", "风格")),
                 # [2026-06-15 记忆调研W5] 反转揭底 tell 回查 · 揭底显式标志词 tell 过多（好作者用 show）
-                # · advisory · REVEAL_SHOW_MODE 默认 shadow · 金标准阈值防误伤
+                # · advisory · REVEAL_SHOW_MODE 默认 active（2026-06-16 金标准 6 作者零误报放量）· 金标准阈值防误伤
                 ("reveal_show",
                  [child_python(), str(rvss), str(cluster_draft), "--project", str(project_root)],
                  {0, 1},

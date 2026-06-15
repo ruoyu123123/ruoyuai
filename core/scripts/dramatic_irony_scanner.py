@@ -43,8 +43,9 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    m = (os.environ.get("DRAMATIC_IRONY_MODE") or "shadow").strip().lower()
-    return m if m in ("off", "shadow", "active") else "shadow"
+    # 2026-06-16 切 active 放量（金标准 6 作者原文零误报实证·irony tell 真作者最大 0.11/千 vs floor 0.8·7x 余量）。
+    m = (os.environ.get("DRAMATIC_IRONY_MODE") or "active").strip().lower()
+    return m if m in ("off", "shadow", "active") else "active"
 
 
 def _strip_changes(text: str) -> str:
