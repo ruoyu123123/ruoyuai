@@ -60,20 +60,71 @@ def summarize(ledger_path) -> dict:
     return {"calls": calls, **tot, "by_model": by_model}
 
 
+# 主力模型官方直连参考价（USD per 1M token·2026-06 联网调研 glbgpt+metacto 双源·标准上下文 ≤200K）。
+# 🔴 仅【官方直连参考价】——active profile 走第三方中转站（pie-xian/superapi）实际按渠道计费·此表只给
+#    BYOK 用户「量级感知」·绝不冒充精确账单（用户 --price 覆盖优先·北极星：不冒充我以为）。
+MODEL_PRICE_REFERENCE = {
+    "gemini-3.1-pro-preview": {"in_per_1m": 2.00, "out_per_1m": 12.00, "confidence": "high",
+                               "source": "Google 官方 ≤200K 标准上下文·2026-06 调研双源"},
+    "gemini-3.5-flash": {"in_per_1m": 1.50, "out_per_1m": 9.00, "confidence": "high",
+                         "source": "Google 官方·2026-06 调研双源"},
+    "gemini-2.5-flash-lite": {"in_per_1m": 0.10, "out_per_1m": 0.40, "confidence": "high",
+                              "source": "Google 官方·2026-06 调研"},
+}
+_PRICE_DISCLAIMER = ("⚠️ 参考价=Google 官方直连 ≤200K 标准上下文价·仅供量级感知；实际走中转站"
+                     "（pie-xian 等）以渠道计费为准·>200K 长上下文翻倍·缓存命中更低·--price 可覆盖。")
+
+
+def resolve_price(model_id) -> "dict | None":
+    """按 model 前缀模糊匹配参考价（账本 model 字段维度·如 gemini-3.1-pro-preview-0612 → 命中）。
+    精确优先 → 最长前缀匹配（避免 flash 误命中 flash-lite）。未命中返 None（不臆造·北极星）。"""
+    if not model_id or not isinstance(model_id, str):
+        return None
+    m = model_id.strip().lower()
+    for k, v in MODEL_PRICE_REFERENCE.items():
+        if m == k.lower():
+            return v
+    best = None
+    for k, v in MODEL_PRICE_REFERENCE.items():
+        kl = k.lower()
+        if m.startswith(kl) or kl.startswith(m):
+            if best is None or len(k) > len(best[0]):
+                best = (k, v)
+    return best[1] if best else None
+
+
 def estimate_cost(summary: dict, price_per_1m_input: float = 0.0,
-                  price_per_1m_output: float = 0.0) -> dict:
-    """按价格估算成本（BYOK 用户自付·价格用户传·默认 0 不估）。cached 不重复计（已含 prompt）。"""
+                  price_per_1m_output: float = 0.0, model: "str | None" = None) -> dict:
+    """按价格估算成本（BYOK 用户自付·价格用户传优先）。两 price 均 0/None + 给 model → 回退
+    MODEL_PRICE_REFERENCE 查表（price_source=reference + disclaimer 量级感知）·查不到 → 0（none）。
+    已传 price → user 优先（零回归）。cached 不重复计（已含 prompt）。"""
+    user_priced = bool(price_per_1m_input or price_per_1m_output)
+    price_source = "user"
+    disclaimer = None
+    if not user_priced:
+        ref = resolve_price(model) if model else None
+        if ref:
+            price_per_1m_input = ref["in_per_1m"]
+            price_per_1m_output = ref["out_per_1m"]
+            price_source = "reference"
+            disclaimer = _PRICE_DISCLAIMER
+        else:
+            price_source = "none"
     inp = int(summary.get("prompt_tokens", 0) or 0)
     out = int(summary.get("output_tokens", 0) or 0)
     cost_input = inp / 1_000_000 * price_per_1m_input
     cost_output = out / 1_000_000 * price_per_1m_output
-    return {
+    result = {
         "cost_input": round(cost_input, 6),
         "cost_output": round(cost_output, 6),
         "cost_total": round(cost_input + cost_output, 6),
         "price_per_1m_input": price_per_1m_input,
         "price_per_1m_output": price_per_1m_output,
+        "price_source": price_source,
     }
+    if disclaimer:
+        result["disclaimer"] = disclaimer
+    return result
 
 
 def main():
@@ -81,11 +132,17 @@ def main():
     ap.add_argument("ledger_path")
     ap.add_argument("--price-per-1m-input", type=float, default=0.0)
     ap.add_argument("--price-per-1m-output", type=float, default=0.0)
+    ap.add_argument("--use-reference-price", action="store_true",
+                    help="无 --price 时用 MODEL_PRICE_REFERENCE 官方参考价（按账本主导 model 查表·量级感知非精确账单）")
     args = ap.parse_args()
     s = summarize(args.ledger_path)
     out = {"summary": s}
-    if args.price_per_1m_input or args.price_per_1m_output:
-        out["cost"] = estimate_cost(s, args.price_per_1m_input, args.price_per_1m_output)
+    model = None
+    if args.use_reference_price and s.get("by_model"):
+        # 账本主导 model（calls 最多）查表
+        model = max(s["by_model"].items(), key=lambda kv: kv[1].get("calls", 0))[0]
+    if args.price_per_1m_input or args.price_per_1m_output or args.use_reference_price:
+        out["cost"] = estimate_cost(s, args.price_per_1m_input, args.price_per_1m_output, model=model)
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 

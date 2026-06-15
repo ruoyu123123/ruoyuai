@@ -236,3 +236,48 @@ def test_stream_openai_records_usage_end_to_end():
             sys.modules["openai"] = openai_bak
         else:
             sys.modules.pop("openai", None)
+
+
+# ═══════════ #5 MODEL_PRICE_REFERENCE 参考价表（2026-06-16·BYOK 开箱估算成本）═══════════
+
+def test_resolve_price_exact_and_prefix():
+    """resolve_price：精确命中 + 前缀模糊（model-0612 后缀）+ flash 不误命中 flash-lite（最长前缀）。"""
+    assert tl.resolve_price("gemini-3.1-pro-preview")["in_per_1m"] == 2.00
+    assert tl.resolve_price("gemini-3.1-pro-preview-0612")["out_per_1m"] == 12.00  # 前缀
+    assert tl.resolve_price("gemini-3.5-flash")["in_per_1m"] == 1.50
+    assert tl.resolve_price("gemini-2.5-flash-lite")["in_per_1m"] == 0.10  # 不被 flash 抢
+
+
+def test_resolve_price_miss_none():
+    """未命中 model / 空 / 非 str → None（不臆造·北极星）。"""
+    assert tl.resolve_price("claude-opus-99") is None
+    assert tl.resolve_price("") is None
+    assert tl.resolve_price(None) is None
+
+
+def test_estimate_cost_reference_fallback():
+    """无 --price + 给 model → 回退官方参考价（price_source=reference + disclaimer 量级感知）。"""
+    s = {"prompt_tokens": 1_000_000, "output_tokens": 500_000}
+    c = tl.estimate_cost(s, model="gemini-3.1-pro-preview")
+    assert c["price_source"] == "reference"
+    assert c["cost_input"] == 2.00 and c["cost_output"] == 6.00  # 1M×$2 + 0.5M×$12
+    assert c["cost_total"] == 8.00
+    assert "disclaimer" in c and "中转站" in c["disclaimer"]
+
+
+def test_estimate_cost_user_price_overrides_reference():
+    """用户 --price 优先（price_source=user·不回退查表·零回归 test_estimate_cost）。"""
+    s = {"prompt_tokens": 1_000_000, "output_tokens": 500_000}
+    c = tl.estimate_cost(s, price_per_1m_input=1.0, price_per_1m_output=4.0,
+                         model="gemini-3.1-pro-preview")
+    assert c["price_source"] == "user"
+    assert c["cost_input"] == 1.0 and c["cost_output"] == 2.0  # 用户价非参考价
+    assert "disclaimer" not in c
+
+
+def test_estimate_cost_no_price_no_model_none():
+    """无 price 无 model → price_source=none·成本 0（零回归·原 default 行为）。"""
+    s = {"prompt_tokens": 1_000_000, "output_tokens": 500_000}
+    c = tl.estimate_cost(s)
+    assert c["price_source"] == "none"
+    assert c["cost_total"] == 0.0
