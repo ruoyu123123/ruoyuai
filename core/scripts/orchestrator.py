@@ -120,7 +120,9 @@ def load_dataflow(step: dict, ctx: dict) -> dict:
             raise OrchestratorError(
                 f"data_flow 源文件不存在: {p}（占位符 {placeholder}）")
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            # utf-8-sig 容错 BOM（Windows 工具/用户手写 JSON 常带 BOM·真机 e2e 抓修 2026-06-15·
+            # outline book_meta.json 带 BOM → 原 utf-8 json.loads 炸 "Unexpected UTF-8 BOM"）
+            data = json.loads(p.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as e:
             raise OrchestratorError(f"data_flow 源解析失败 {p}: {e}") from e
         cur = data
@@ -544,7 +546,9 @@ def _resolve_pause(step: dict, ctx: dict, *, auto_pilot: bool,
             p = Path(ctx["project_root"]) / p
         if p.exists():
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
+                # utf-8-sig 容错 BOM（Windows 工具/用户手写 JSON 常带 BOM·真机 e2e 抓修 2026-06-15·
+                # outline book_meta.json 带 BOM → 原 utf-8 json.loads 炸 "Unexpected UTF-8 BOM"）
+                data = json.loads(p.read_text(encoding="utf-8-sig"))
                 cur = data
                 for seg in (spec.get("options_field") or "").split("."):
                     if seg and isinstance(cur, dict):

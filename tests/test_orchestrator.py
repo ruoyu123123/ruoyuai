@@ -798,6 +798,28 @@ def test_resolve_project_root_accepts_full_path():
         assert pt.resolve_project_root(str(Path(d) / "nope")) is None   # 不存在 → None(原逻辑保留)
 
 
+def test_load_dataflow_tolerates_utf8_bom():
+    """🔴 真机 e2e 抓修：load_dataflow 容错 UTF-8 BOM(Windows 工具/用户手写 JSON 常带 BOM)·防回归。
+    真跑 outline 炸 JSONDecodeError"Unexpected UTF-8 BOM"——book_meta.json 被 PowerShell
+    Set-Content -Encoding utf8 写成带 BOM，原 json.loads(read_text(utf-8)) 不吃 BOM → 炸。
+    utf-8-sig 静默吞 BOM·普通 utf-8(无 BOM)也照常解析(向后兼容·下方双断言锁两路)。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = Path(d)
+        wal = proj / "_数据库" / ".wal"
+        wal.mkdir(parents=True)
+        step = {"data_flow": {"<topic>": {"source_json": "_数据库/.wal/book_meta.json", "field": "topic"}}}
+        # 路 1：带 BOM(﻿)的 JSON——Windows 工具/用户手写常见(原 utf-8 在此炸)
+        (wal / "book_meta.json").write_text("﻿" + json.dumps({"topic": "废土"}, ensure_ascii=False), encoding="utf-8")
+        ctx = {"project_root": str(proj)}
+        orc.load_dataflow(step, ctx)
+        assert ctx["<topic>"] == "废土"
+        # 路 2：无 BOM 的普通 utf-8——向后兼容(utf-8-sig 对无 BOM 等价 utf-8)
+        (wal / "book_meta.json").write_text(json.dumps({"topic": "机械"}, ensure_ascii=False), encoding="utf-8")
+        ctx2 = {"project_root": str(proj)}
+        orc.load_dataflow(step, ctx2)
+        assert ctx2["<topic>"] == "机械"
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):
