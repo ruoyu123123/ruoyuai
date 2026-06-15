@@ -45,10 +45,27 @@ def _kw(text: str) -> set:
     for tok in re.findall(r"[A-Za-z0-9_]+", text):
         if len(tok) >= 2:
             out.add(tok.lower())
-    cjk = re.findall(r"[一-鿿]", text)
-    for i in range(len(cjk) - 1):
-        out.add(cjk[i] + cjk[i + 1])
+    # 段内 2-gram（按 CJK 连续段成词·不跨标点/英数边界拼假 bigram·如「胜利。反派」不再产「利反」
+    # 这种跨句桥接虚词·对齐 cluster_emergence._keyword_set·2026-06-15 审计修）
+    for seg in re.findall(r"[一-鿿]+", text):
+        for i in range(len(seg) - 1):
+            out.add(seg[i:i + 2])
     return out
+
+
+def _cluster_vol(c: dict) -> int | None:
+    """cluster 的卷号：vol → volume → parent_me 正则回退（2026-06-15 审计修：真实 event 簇
+    cluster 存 "volume"/"parent_me" 无 "vol"·原 vol_clusters 只读 c.get("vol") → 本卷 cluster
+    全过滤 → coverage 恒 0 → 每卷过半误报 VOLUME_ARC_DRIFT·verify 隔离实验铁证）。"""
+    v = c.get("vol")
+    if v is None:
+        v = c.get("volume")
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    m = re.search(r"V?(\d+)", str(c.get("parent_me") or ""))
+    return int(m.group(1)) if m else None
 
 
 def _current_vol(shijianji: dict) -> int | None:
@@ -57,10 +74,7 @@ def _current_vol(shijianji: dict) -> int | None:
     for c in shijianji.get("clusters", []):
         if not isinstance(c, dict):
             continue
-        v = c.get("vol")
-        if v is None:
-            m = re.search(r"V?(\d+)", str(c.get("parent_me") or ""))
-            v = int(m.group(1)) if m else None
+        v = _cluster_vol(c)
         cr = c.get("chapter_range")
         landed = isinstance(cr, list) and len(cr) == 2 and isinstance(cr[0], int)
         if v is not None and (landed or c.get("status") in ("done", "in_progress", "进行中", "已完成")):
@@ -94,17 +108,23 @@ def scan(project_root: Path) -> dict:
 
     # 本卷已写 cluster（用于「实际写了什么」内容覆盖）
     vol_clusters = [c for c in shijianji.get("clusters", [])
-                    if isinstance(c, dict) and (c.get("vol") == cur_vol)]
+                    if isinstance(c, dict) and (_cluster_vol(c) == cur_vol)]
     written = [c for c in vol_clusters
                if (isinstance(c.get("chapter_range"), list) and len(c.get("chapter_range")) == 2)
                or c.get("status") in ("done", "已完成")]
     # 2026-05-29 复审 W1：progress 用【卷 ME 完成度】而非 cluster 计数——fluid 下 事件簇.json 通常
     # 只含已涌现 cluster（total≈written→progress 恒≈1.0 卷首即假阳性）。ME 池是固定参照系。
     def _me_vol(m):
-        v = m.get("vol")
+        # 对齐 cluster_emergence._me_volume：ME 权威卷字段是 "volume"(gen_creative schema)·先
+        # volume → vol → id 锚定正则 [Vv](\d+)（避免裸 \d+ 误取 me_id 里非卷号数字·2026-06-15 审计修）
+        v = m.get("volume")
+        if v is None:
+            v = m.get("vol")
         if isinstance(v, int):
             return v
-        mm = re.search(r"(\d+)", str(v or m.get("me_id") or m.get("id") or ""))
+        if isinstance(v, str) and v.strip().isdigit():
+            return int(v.strip())
+        mm = re.search(r"[Vv](\d+)", str(m.get("id") or m.get("me_id") or ""))
         return int(mm.group(1)) if mm else None
     me_pool = dashishi.get("major_events") or dashishi.get("major_events_pool") or []
     vol_mes = [m for m in me_pool if isinstance(m, dict) and _me_vol(m) == cur_vol]
