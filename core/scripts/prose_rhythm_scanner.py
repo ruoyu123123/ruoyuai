@@ -36,6 +36,7 @@ prose_rhythm_scanner.py — 句法节奏 / 「流水账作文感」检测（clus
 from __future__ import annotations
 import argparse
 import json
+import os
 import re
 import statistics
 import sys
@@ -53,6 +54,11 @@ SHORT_Z_MINOR, SHORT_Z_MAJOR = -1.0, -1.8   # z<-1.0 minor（≈作者自身第1
 SHORT_ABS_FLOOR = 0.62
 STREAK_MINOR, STREAK_MAJOR = 4, 6
 DEFAULT_AUTHOR_SENT_MEAN = 26.0   # 无作者档时的通用兜底句长基线（偏保守·网文中位）
+# 探针7 句长方差塌缩（burstiness·cluster std vs 作者 std·单边偏均匀·治 flash 匀速碎句·env PROSE_BURSTINESS_MODE 默认 shadow）
+# 金标准校准（2026-06-16·6 作者各 10 cluster）：真作者 cluster_std/作者 std 最小 0.61（高 σ 作者偏低）→ 阈值
+# 0.5/0.4 留余量（< 0.61 真作者绝不误报·critic 建议 0.6 余量仅 0.01 太险已下调·北极星⑤防矫枉过正）。
+BURST_R_MINOR, BURST_R_MAJOR = 0.5, 0.4
+BURST_ABS_STD_FLOOR = 5.0   # 无作者档兜底：句长 std < 5（几乎齐平·匀速）才报
 DEFAULT_SUBJ_PCT_CAP = 24.0       # 主语开头占比通用上限(%)
 # 段首倒装模具（前置长定语+的+主语后置·补「同语法骨架复用」缺口·
 # memory feedback_inverted_modifier_sentence_mold_overuse·cluster_001 实测 34 次/约 1/9 段）
@@ -302,6 +308,33 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                     f'让段落承载完整的动作单元/对话回合而非一句一段切到底。(长段不是问题·只报偏碎)',
         })
 
+    # 探针 7：句长方差塌缩（burstiness collapse·cluster 句长 std vs 作者 std·单边偏均匀·治 flash 匀速碎句）
+    # env PROSE_BURSTINESS_MODE 默认 shadow（金标准校准真作者最小 r=0.61·阈值 0.5/0.4 留余量·检测力
+    # [flash 匀速碎句真 r<0.5?]待 gen-model 草稿验证再 active）。与探针1解耦：探针1 已报 mean 偏短则不重复报。
+    burst_mode = (os.environ.get("PROSE_BURSTINESS_MODE") or "shadow").strip().lower()
+    cluster_sent_std = round(statistics.pstdev(all_lens), 1) if len(all_lens) >= 2 else None
+    burst_ratio = (round(cluster_sent_std / sent_std_base, 2)
+                   if (cluster_sent_std is not None and sent_std_base) else None)
+    short_already = any(v['kind'] == 'sentence_too_short' for v in violations)  # 探针1解耦防双计数
+    if burst_mode == "active" and cluster_sent_std is not None and not short_already:
+        if sent_std_base and burst_ratio is not None and burst_ratio < BURST_R_MINOR:
+            sev = 'major' if burst_ratio < BURST_R_MAJOR else 'minor'
+            violations.append({
+                'kind': 'burstiness_collapse', 'severity': sev,
+                'cluster_std': cluster_sent_std, 'author_std': round(sent_std_base, 1),
+                'burst_ratio': burst_ratio,
+                'hint': f'句长方差 std={cluster_sent_std} 仅作者基线 σ={round(sent_std_base,1)} 的 {round(burst_ratio*100)}%'
+                        f'→句长过度均匀(匀速碎句·mean 可能达标但缺长短摆动)；长短句交替(短句爆发力+长句'
+                        f'承载因果/铺陈)·别让句长齐平像作文。(单边·只报偏均匀·高方差永不报·北极星③)',
+            })
+        elif not sent_std_base and cluster_sent_std < BURST_ABS_STD_FLOOR:
+            violations.append({
+                'kind': 'burstiness_collapse', 'severity': 'minor',
+                'cluster_std': cluster_sent_std, 'author_std': None,
+                'hint': f'句长方差 std={cluster_sent_std}<{BURST_ABS_STD_FLOOR}(无作者档·绝对地板)=句长几乎齐平'
+                        f'→匀速碎句；长短句交替增节奏。(单边·只报偏均匀)',
+            })
+
     has_major = any(v['severity'] == 'major' for v in violations)
     verdict = 'PASS' if not violations else ('FAIL_MAJOR' if has_major else 'FAIL_MINOR')
     return {
@@ -322,6 +355,8 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             'inverted_mold_max_streak': inv_mx,
             'intensity_adverb_total': intensity_total,
             'intensity_adverb_per_1k': intensity_per_1k,
+            'sentence_std_cluster': cluster_sent_std,        # 探针7 cluster 句长 std
+            'burstiness_ratio': burst_ratio,                 # 探针7 cluster_std/作者 std（<0.5 偏均匀报）
         },
         'author_baseline': {
             'sentence_mean': sent_mean_base,
