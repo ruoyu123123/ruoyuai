@@ -98,6 +98,60 @@ def test_volume_arc_broken_json_block_nonzero():
         assert not (proj / "_数据库" / "大势卡.json").exists(), "破损不该落盘"
 
 
+def _fake_generate_sequence(*payloads):
+    """序列返回：每次调用吐下一个 payload(dict→JSON / str→原文)·末个之后复用末个。
+    带 finish_reason='stop'(真实 GenResult 有·诊断 dump 读它)。验 parse-失败重试自愈。"""
+    calls = {"n": 0}
+
+    def gen(loader, system, user, **kw):
+        i = min(calls["n"], len(payloads) - 1)
+        calls["n"] += 1
+        p = payloads[i]
+        text = p if isinstance(p, str) else json.dumps(p, ensure_ascii=False)
+        return types.SimpleNamespace(text=text, finish_reason="stop")
+    gen._calls = calls
+    return gen
+
+
+def test_volume_arc_retry_recovers_from_transient_break():
+    """🔴 真机 e2e 抓修 2026-06-15：volume_arc 偶发非 JSON/被限速截断 → parse 失败·原「单次
+    失败直接 block exit 1」逼用户手动 --resume(GUI 非技术用户建书致命·不懂 --resume)。实测
+    同 prompt 第一次炸第二次过(瞬时根因)。验 parse-失败重试让偶发抖动自愈：第一次缺键(破损)·
+    第二次合法 → rc==0 + 落盘(不 block)。"""
+    _orig = llm_transport.generate
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = Path(tmp)
+        (proj / "_数据库").mkdir(parents=True)
+        fake = _fake_generate_sequence({"volumes": []}, _VALID)  # 破损 → 合法
+        llm_transport.generate = fake
+        try:
+            rc = gc._run_volume_arc(_args(project=str(proj), emit_to_db=True))
+        finally:
+            llm_transport.generate = _orig
+        assert rc == 0, "第二次合法应自愈 rc==0(不 block)"
+        assert fake._calls["n"] == 2, "应重试 1 次(共调 2 次·非首次即弃也非过度重试)"
+        assert (proj / "_数据库" / "大势卡.json").exists(), "自愈后应落盘"
+
+
+def test_volume_arc_retry_exhausted_still_blocks():
+    """3 次全破损 → block exit 1(确定性破损不无限重试·不静默吞断链)·留 raw 诊断证据。"""
+    _orig = llm_transport.generate
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = Path(tmp)
+        (proj / "_数据库").mkdir(parents=True)
+        fake = _fake_generate_sequence({"volumes": []})  # 每次都破损
+        llm_transport.generate = fake
+        try:
+            rc = gc._run_volume_arc(_args(project=str(proj), emit_to_db=True))
+        finally:
+            llm_transport.generate = _orig
+        assert rc == 1, "3 次全破损应 block 非零退出"
+        assert fake._calls["n"] == 3, "应尝试满 3 次(MAX_VOL_ARC_TRIES)"
+        assert not (proj / "_数据库" / "大势卡.json").exists(), "破损不落盘"
+        dbg = proj / "_数据库" / ".wal" / "volume_arc_block_debug.txt"
+        assert dbg.exists(), "block 应留 raw 诊断证据(失败必记录学习·非静默吞证据)"
+
+
 def test_volume_arc_dry_run_no_api():
     with tempfile.TemporaryDirectory() as tmp:
         proj = Path(tmp)

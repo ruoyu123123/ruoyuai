@@ -521,20 +521,48 @@ def _run_volume_arc(args) -> int:
         return 0
 
     # 契约2：截断走续写不整发重试；契约3：parse 彻底失败 block → 非零退出
-    try:
-        result = lt.generate(
-            GenModelLoader(), system, user, max_tokens=24000,
-            response_format_json=True, cont_msg_builder=lt.default_cont_msg,
-            label="gen_outline:volume_arc")
-    except Exception as e:
-        print(f"[ERROR] volume_arc gen-model 调用失败（block）: {e}", file=sys.stderr)
-        return 1
-    data = lt.parse_json_loose(result.text)
-    # 结构校验（顶层键存在·非内容——枚举不反向规训创作）
-    missing = [k for k in ("story_destiny", "volumes", "major_events", "cluster_001")
-               if k not in data]
-    if data.get("_parse_failed") or missing:
-        print(f"[ERROR] volume_arc 输出结构破损（block）·缺顶层键 {missing}", file=sys.stderr)
+    # 🔴 真机 e2e 抓修 2026-06-15：volume_arc 是建书单点 gen-model 调用·偶发返回非 JSON 或被
+    # 中转站限速截断 → parse 失败。实测同 prompt 第一次炸第二次过(瞬时根因)。原「单次失败直接
+    # block exit 1」逼用户手动 --resume——对 GUI 非技术用户建书致命(不懂 --resume)。加 parse-
+    # 失败重试(≤MAX 次)让偶发抖动自愈·真确定性破损才 block(运行时自学习「失败必记录学习+
+    # adaptive retry」精神·非干涉创作——结构破损是传输/格式问题不是创作判断)。
+    MAX_VOL_ARC_TRIES = 3
+    data = None
+    last_diag = "(未尝试)"
+    for attempt in range(1, MAX_VOL_ARC_TRIES + 1):
+        try:
+            result = lt.generate(
+                GenModelLoader(), system, user, max_tokens=24000,
+                response_format_json=True, cont_msg_builder=lt.default_cont_msg,
+                label=f"gen_outline:volume_arc#{attempt}")
+        except Exception as e:
+            last_diag = f"gen-model 调用失败: {e}"
+            print(f"[WARN] volume_arc {last_diag}（第 {attempt}/{MAX_VOL_ARC_TRIES} 次）",
+                  file=sys.stderr)
+            continue
+        cand = lt.parse_json_loose(result.text)
+        # 结构校验（顶层键存在·非内容——枚举不反向规训创作）
+        missing = [k for k in ("story_destiny", "volumes", "major_events", "cluster_001")
+                   if k not in cand]
+        if not cand.get("_parse_failed") and not missing:
+            data = cand
+            break
+        last_diag = (f"finish={getattr(result, 'finish_reason', None)} "
+                     f"text_len={len(getattr(result, 'text', '') or '')} "
+                     f"parse_failed={bool(cand.get('_parse_failed'))} missing={missing}")
+        # 诊断 dump（最后一次 raw 可追溯·真机 e2e 抓修·区分截断 vs 非 JSON vs 缺键）
+        try:
+            dp = project_root / "_数据库" / ".wal" / "volume_arc_block_debug.txt"
+            dp.parent.mkdir(parents=True, exist_ok=True)
+            dp.write_text(f"attempt={attempt}/{MAX_VOL_ARC_TRIES} {last_diag}\n"
+                          f"--- raw gen-model text ---\n{result.text}", encoding="utf-8")
+        except OSError:
+            pass
+        print(f"[WARN] volume_arc 输出结构破损·{last_diag}"
+              f"（第 {attempt}/{MAX_VOL_ARC_TRIES} 次·重试中）", file=sys.stderr)
+    if data is None:
+        print(f"[ERROR] volume_arc {MAX_VOL_ARC_TRIES} 次重试后仍 block·{last_diag}"
+              f"·raw 见 _数据库/.wal/volume_arc_block_debug.txt", file=sys.stderr)
         return 1
     if author_missing:
         data["_author_profile_missing"] = True
