@@ -60,6 +60,34 @@ def test_get_protagonist_reads_renwu_card():
         assert cc.get_protagonist(Path(d3)) is None
 
 
+def test_build_aliases_no_hardcoded_items():
+    """🔴 _build_aliases 去硬编码物件名(2026-06-15 删 for kw in ["废票","铁皮盒",...] 列表)：
+    对任意书物件名靠通用提取(括号内容/去括号核心/首末字)·不特殊对待特定旧书物件。"""
+    # 通用提取：括号内容 + 去括号核心(任意书都工作)
+    al = cc._build_aliases("女娲补天遗石（混沌余烬）")
+    assert "混沌余烬" in al, "应提取括号内容"
+    assert "女娲补天遗石" in al, "应提取去括号核心"
+    # 旧书物件"废票（彩票）"靠去括号核心通用提取得"废票"·非硬编码列表
+    al2 = cc._build_aliases("废票（彩票）")
+    assert "废票" in al2 and "彩票" in al2, "废票应靠去括号核心通用提取(非硬编码)"
+    # 凿窍纪物件(非旧书硬编码列表)通用工作
+    assert "建木枝" in cc._build_aliases("建木枝")
+
+
+def test_object_continuity_severity_by_gap_not_hardcoded():
+    """🔴 物件持续性 severity 按 gap 分级(2026-06-15 取代硬编码物件名"废票/铁皮盒/..."决定
+    warning)：gap≥5 = warning·否则 advisory·与具体物件名无关(任意书一致)。"""
+    # scan_object_continuity 产 gap → main 据 gap 分级(逻辑：gap>=5 warning)
+    # 验逻辑契约：同一 gap 阈值对任意物件名一致(不再因物件名是"废票"特殊升级)
+    f = cc.scan_object_continuity(
+        {1: {"factual": {"item_transfers": [{"item": "凿窍刀"}]}},
+         2: {"factual": {}}, 3: {"factual": {}}, 4: {"factual": {}},
+         5: {"factual": {}}, 6: {"factual": {}}, 7: {"factual": {}}},
+        {1: "凿窍刀出现", 2: "", 3: "", 4: "", 5: "", 6: "", 7: ""}, 7)
+    assert f, "凿窍刀 ch1 出现后长期未提及应被检出(非硬编码物件名也检出)"
+    assert f[0]["item"] == "凿窍刀" and f[0]["gap"] >= 5, f"gap 应≥5: {f}"
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

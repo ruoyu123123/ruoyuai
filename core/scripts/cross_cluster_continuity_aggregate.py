@@ -226,10 +226,10 @@ def _build_aliases(name: str) -> list[str]:
     if len(name) >= 4:
         aliases.append(name[:3])
         aliases.append(name[-3:])
-    # 特殊：废票 / 灵格 / 铁皮盒 / VIP / 暗码表 / 笔记本 / 邮件
-    for kw in ["废票", "灵格", "铁皮盒", "VIP", "暗码表", "笔记本", "邮件", "PDF", "股票", "持股", "0.001"]:
-        if kw in name:
-            aliases.append(kw)
+    # 2026-06-15 去硬编码：原此处硬编码特定旧书物件名"废票/灵格/铁皮盒/VIP/暗码表/笔记本/
+    # 邮件/PDF/股票/持股/0.001"·只对那本书有效(北极星⑥清硬编码 + ①不绑特定书)。上方括号/
+    # 去括号核心/首末 3 字通用提取对任意书物件名都工作(如"废票（彩票）"经去括号已得"废票")·
+    # 删硬编码补丁不引入过宽匹配削弱检测。
     return list(set(aliases))
 
 
@@ -438,10 +438,9 @@ def main():
     last_ch = chapter_dirs[-1][0]
     obj_findings = scan_object_continuity(all_changes, all_texts, last_ch)
     for of in obj_findings:
-        if "废票" in of["item"] or "铁皮盒" in of["item"] or "VIP" in of["item"] or "暗码表" in of["item"] or "日记本" in of["item"]:
-            sev = "warning"
-        else:
-            sev = "advisory"
+        # gap 越大越严重(取代硬编码特定旧书物件名"废票/铁皮盒/VIP/暗码表/日记本"·北极星⑥清
+        # 硬编码 + ①不绑特定书)：关键物件连续 ≥5 章未提及 = 被遗忘风险高 → warning，否则 advisory。
+        sev = "warning" if of.get("gap", 0) >= 5 else "advisory"
         findings.append({
             "dimension": "object_continuity",
             "severity": sev,
