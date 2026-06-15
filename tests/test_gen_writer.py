@@ -396,6 +396,15 @@ def test_primacy_no_emotive_punct_for_measured_author():
     assert "情绪标点" not in gw._build_hard_constraint_primacy_block({"excl": 0.5, "ques": 1.0, "ellipsis": 1.0})
 
 
+def test_primacy_includes_anti_pattern_hints():
+    """primacy 块注入 3 套路提示（倒装/强度副词/对话标签·与 loop 检测探针
+    prose_rhythm 探针4/5 + semantic_slop B+9 呼应·事前避免=事后检测的事前闭环）。"""
+    block = gw._build_hard_constraint_primacy_block()
+    assert "倒装" in block             # 段首句式骨架多样（倒装模具·prose_rhythm 探针4 呼应）
+    assert "强度副词克制" in block      # 强度副词通胀（prose_rhythm 探针5 呼应）
+    assert "对话标签疏化" in block      # 对话标签密度（semantic_slop B+9 呼应）
+
+
 def test_strip_meta_preamble_reasoning_leak():
     """[2026-06-05] 推理模型漏出的『### 核心推理概要 … ---』元前言被剥离，正文从故事第一句开始。"""
     reply = ("### 核心推理概要\n\n本故事块对齐小世界风格，采用 in_medias_res。\n\n"
