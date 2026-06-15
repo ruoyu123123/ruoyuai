@@ -1036,6 +1036,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     dis = _SCRIPT_DIR / "dramatic_irony_scanner.py"
     # [2026-06-15 记忆调研W5] 反转揭底 tell 回查（揭底显式标志词 tell 过多·金标准证好作者用 show）· advisory
     rvss = _SCRIPT_DIR / "reveal_show_scanner.py"
+    # [2026-06-16 盲区落地] 句法多样性(CR-POS 句法骨架同形复用 + theme over-explanation·作者自适应 z-band) · advisory
+    sds = _SCRIPT_DIR / "syntactic_diversity_scanner.py"
 
     # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
     # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
@@ -1131,6 +1133,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_rhythm_scanner", "PROSE_RHYTHM", "风格")),
+                # [2026-06-16 盲区落地·perplexity_obsolete] 句法骨架同形复用 + 主题过度解释 · 作者自适应
+                # per-scene z-band(无作者档退绝对地板·补 memory feedback_inverted_modifier 同语法骨架盲区) · advisory
+                ("syntactic_diversity",
+                 [child_python(), str(sds), str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "syntactic_diversity_scanner", "SYNTACTIC_DIVERSITY", "风格")),
                 # [2026-06-13 阶段1] 叙事节奏序列 · 作者基线第一权威(传 --project 读作者档) · advisory
                 ("narrative_rhythm",
                  [child_python(), str(nrs), str(cluster_draft), "--project", str(project_root)] + _style_args,
