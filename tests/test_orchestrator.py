@@ -787,6 +787,17 @@ def test_build_research_blocks_no_results_returns_none():
         restore()
 
 
+def test_resolve_project_root_accepts_full_path():
+    """🔴 真机 e2e 抓修：resolve_project_root 支持完整路径(非仅书名)·防回归。
+    orchestrator CLI --project 传完整路径(workspace/novels/X)时原返 None →
+    _verify_outputs project_root=None → expected_outputs 相对 cwd 误判缺失(build_manifest
+    跑对但 plan_tracker 校验炸·两边 fallback 不一致)。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        assert pt.resolve_project_root(d) == Path(d)                    # 完整路径(存在)→ 直接返回
+        assert pt.resolve_project_root(str(Path(d) / "nope")) is None   # 不存在 → None(原逻辑保留)
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

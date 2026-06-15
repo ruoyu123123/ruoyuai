@@ -318,6 +318,13 @@ def resolve_project_root(project: str) -> Path | None:
     """
     if not project:
         return None
+    # 🔴 真机 e2e 抓修(2026-06-15)：project 本身是有效路径(完整/相对·非仅书名)→ 直接用。
+    # 原仅查 PROJECTS_DIR/书名 → orchestrator CLI --project 传完整路径(workspace/novels/X)时
+    # 返回 None → _verify_outputs project_root=None → expected_outputs 相对 cwd 误判缺失
+    # (run_command L646 有 fallback 故 build_manifest 跑对·_verify_outputs 无 fallback 故校验炸·两边不一致)。
+    direct = Path(project)
+    if direct.exists():
+        return direct
     candidate_a = PROJECTS_DIR / project
     if candidate_a.exists():
         return candidate_a
