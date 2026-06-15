@@ -1038,6 +1038,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     rvss = _SCRIPT_DIR / "reveal_show_scanner.py"
     # [2026-06-16 盲区落地] 句法多样性(CR-POS 句法骨架同形复用 + theme over-explanation·作者自适应 z-band) · advisory
     sds = _SCRIPT_DIR / "syntactic_diversity_scanner.py"
+    # [2026-06-16 穷尽核查#2] 情绪标点综合密度 vs 作者基线(感叹/问号/省略号·金标准综合避单类误报·单边下尾) · advisory
+    eps = _SCRIPT_DIR / "emotional_punctuation_scanner.py"
 
     # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
     # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
@@ -1175,6 +1177,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "reveal_show_scanner", "REVEAL_TELL_OVERUSE", "风格")),
+                # [2026-06-16 穷尽核查#2] 情绪标点综合密度 vs 作者基线 · advisory · EMOTIONAL_PUNCT_MODE 默认 shadow
+                # （金标准证单类必误报真作者冷静段→用综合 + FLOOR_RATIO 0.3·检测力待 gen-model 草稿验证再 active）
+                ("emotional_punctuation",
+                 [child_python(), str(eps), str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "emotional_punctuation_scanner", "EMOTIONAL_PUNCT_SPARSE", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

@@ -154,6 +154,13 @@
       "_new": true,
       "issues_emitted": ["REVEAL_TELL_OVERUSE"]
     },
+    "emotional_punctuation": {
+      "layer": "cluster",
+      "script": "emotional_punctuation_scanner.py",
+      "doc": "[2026-06-16 穷尽核查#2·情绪标点综合密度回查] 检测综合情绪标点(！+？+… per1k CJK)vs作者档三类mean之和·feedback_author_goldstandard证情绪标点偏低=喜剧/情绪引擎没落地代理信号·🔴金标准校准(6作者各10cluster)证单类方差极大(excl真作者cluster/mean低到0.15)单类必误报真作者冷静段→改综合(全作者最小0.44)+FLOOR_RATIO0.3单边下尾·偏高永不报(北极星③)·无作者档skip(北极星②)·advisory·env EMOTIONAL_PUNCT_MODE默认shadow(检测力待gen-model草稿验证再active)·EMOTIONAL_PUNCT_SPARSE绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["EMOTIONAL_PUNCT_SPARSE"]
+    },
     "romance_pacing": {
       "layer": "cluster",
       "genre_gated": "romance",
