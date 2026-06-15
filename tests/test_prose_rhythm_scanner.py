@@ -90,6 +90,61 @@ def test_subject_start_ratio_high_flagged():
     assert "subject_start_ratio_high" in _kinds(r), f"subj%={r['metrics']['subject_start_pct']}"
 
 
+# ── 探针 4：段首倒装句式模具（memory feedback_inverted_modifier_sentence_mold_overuse）──
+def test_inverted_modifier_mold_flagged():
+    """连续段首「前置长定语+的+主语后置」倒装模具 → inverted_modifier_mold（实证骨架）。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d), names=["陆参"])
+        text = "\n".join([
+            "摸出手机的陆参看了一眼屏幕上跳动的未接来电然后皱起了眉头。",
+            "愣住的陆参半天没回过神来手里的杯子差点没拿稳掉在地上。",
+            "端起塑料杯喝完半杯豆浆的陆参站起身拍了拍裤子上的灰尘。",
+            "没有去接湿巾的陆参只是盯着桌上那张照片出神了很久很久。",
+            "听到敲门声的他猛地从椅子上站了起来快步走向了门口处。",
+        ])
+        r = P.scan(text, project=proj)
+        v = [x for x in r["violations"] if x["kind"] == "inverted_modifier_mold"]
+        assert v, f"应报段首倒装模具，metrics={r['metrics']}"
+        assert r["metrics"]["inverted_mold_count"] >= 3
+
+
+def test_diverse_heads_no_inverted_flag():
+    """段首多样（直接主语/环境/对话/所属）→ 不报倒装（防矫枉过正）。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d), names=["陆参"])
+        text = "\n".join([
+            "陆参摸出手机看了一眼屏幕上跳动的未接来电然后皱起了眉头想了想。",
+            "窗外的天色已经暗到几乎看不清对面楼里那盏忽明忽暗的旧灯了。",
+            "“你到底来不来，”电话那头的声音压得很低带着点说不出的不耐烦。",
+            "桌上那张照片的边缘已经发黄看得出来有些年头没人动过了。",
+            "他站起身拍了拍裤子上的灰尘快步走向了门口顺手关掉了灯。",
+        ])
+        r = P.scan(text, project=proj)
+        assert "inverted_modifier_mold" not in _kinds(r), \
+            f"多样段首不该报，count={r['metrics']['inverted_mold_count']}"
+
+
+def test_inverted_possessive_not_flagged():
+    """所属定语「X的[物]」不误报（的后非主语集·如桌上的杯子）。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d), names=["陆参"])
+        text = "\n".join([
+            "桌上的杯子已经空了大半只剩下杯底一点凉掉的残茶在晃。",
+            "墙角的照片落了厚厚一层灰看不清上面那个人的脸了。",
+            "窗台的花盆里那株绿萝长得格外茂盛叶子绿得几乎发亮。",
+        ])
+        r = P.scan(text, project=proj)
+        assert r["metrics"]["inverted_mold_count"] == 0, "所属定语不该算倒装"
+
+
+def test_inverted_metrics_present():
+    """metrics 含倒装指标（供 audit_hub 消费）。"""
+    r = P.scan("他低头看手。\n她抬头看天。", project=None)
+    assert "inverted_mold_count" in r["metrics"]
+    assert "inverted_mold_pct" in r["metrics"]
+    assert "inverted_mold_max_streak" in r["metrics"]
+
+
 # ── 作者基线第一权威 ──────────────────────────────
 def test_author_baseline_from_profile():
     """传作者档(mean=31) → 句长偏短按 31 判（比通用 26 更严）。"""

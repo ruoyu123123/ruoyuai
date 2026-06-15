@@ -35,6 +35,11 @@ SHORT_MINOR, SHORT_MAJOR = 0.70, 0.55
 STREAK_MINOR, STREAK_MAJOR = 4, 6
 DEFAULT_AUTHOR_SENT_MEAN = 26.0   # 无作者档时的通用兜底句长基线（偏保守·网文中位）
 DEFAULT_SUBJ_PCT_CAP = 24.0       # 主语开头占比通用上限(%)
+# 段首倒装模具（前置长定语+的+主语后置·补「同语法骨架复用」缺口·
+# memory feedback_inverted_modifier_sentence_mold_overuse·cluster_001 实测 34 次/约 1/9 段）
+INVERTED_MOLD_MINOR, INVERTED_MOLD_MAJOR = 0.12, 0.20   # 倒装段首占比阈值
+INVERTED_STREAK_MINOR, INVERTED_STREAK_MAJOR = 3, 5      # 连续倒装段首 streak
+INVERTED_MIN_COUNT = 3                                   # 至少 N 处才报（避免少量误报）
 
 
 def cjk(s: str) -> int:
@@ -158,6 +163,35 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                     f'句首多样化:环境/状语/对话/感官/说书人评论起头',
         })
 
+    # 探针 4：段首倒装句式模具（前置长定语+的+主语后置·补「同语法骨架复用」缺口）
+    _subj_alt = '|'.join(re.escape(w) for w in subj_words) if subj_words else None
+    inverted_flags = []
+    if _subj_alt:
+        _inv_re = re.compile(r'^(.{2,14})的(' + _subj_alt + r')(?:[，,。、！？]|[一-鿿])')
+        for p in body:
+            head = p.lstrip('　 ')
+            if head[:1] in '""\'「『（(':       # 对话主导段不计
+                inverted_flags.append(False)
+                continue
+            inverted_flags.append(bool(_inv_re.match(head)))
+    inv_n = sum(inverted_flags)
+    para_n = len(inverted_flags)
+    inv_pct = round(inv_n / para_n, 3) if para_n else 0.0
+    inv_streak = inv_mx = 0
+    for x in inverted_flags:
+        inv_streak = inv_streak + 1 if x else 0
+        inv_mx = max(inv_mx, inv_streak)
+    if inv_n >= INVERTED_MIN_COUNT and (inv_pct >= INVERTED_MOLD_MINOR or inv_mx >= INVERTED_STREAK_MINOR):
+        sev = ('major' if (inv_pct >= INVERTED_MOLD_MAJOR or inv_mx >= INVERTED_STREAK_MAJOR)
+               else 'minor')
+        violations.append({
+            'kind': 'inverted_modifier_mold', 'severity': sev,
+            'inverted_pct': round(inv_pct * 100, 1), 'max_streak': inv_mx, 'count': inv_n,
+            'hint': f'段首「前置长定语+的+主语后置」倒装模具 {inv_n} 处({round(inv_pct*100)}%段·最长连 {inv_mx})'
+                    f'=同语法骨架复用(摸出手机的陆参/愣住的他)→塑料感；段首句法骨架多样化'
+                    f'(直接主语/环境状语/动作中段/对话/心理起头·别让「X的[主语]」霸占段首)',
+        })
+
     has_major = any(v['severity'] == 'major' for v in violations)
     verdict = 'PASS' if not violations else ('FAIL_MAJOR' if has_major else 'FAIL_MINOR')
     return {
@@ -171,6 +205,9 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             'subject_start_pct': subj_pct,
             'max_subject_streak': mx,
             'narrative_sentences': narr_n,
+            'inverted_mold_count': inv_n,
+            'inverted_mold_pct': round(inv_pct * 100, 1),
+            'inverted_mold_max_streak': inv_mx,
         },
         'author_baseline': {'sentence_mean': sent_mean_base,
                             'from_author_profile': baseline["sentence_mean"] is not None},
