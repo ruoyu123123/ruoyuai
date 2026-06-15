@@ -215,14 +215,14 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
 
     kw = dict(model=profile.model, messages=messages, max_tokens=max_tokens,
               temperature=profile.temperature if temperature is None else temperature,
-              stream=True)
+              stream=True, stream_options={"include_usage": True})
     if getattr(profile, "thinking_level", None):
         kw["extra_body"] = {"thinking_level": profile.thinking_level}
     if response_format_json:
         kw["response_format"] = {"type": "json_object"}
 
     def _run(kwargs):
-        text, finish = "", None
+        text, finish, usage = "", None, {}
         try:
             import gen_throttle
             gen_throttle.wait()   # 限速端点全局节流（judge 走此 OpenAI path）
@@ -230,6 +230,10 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
             pass
         stream = client.chat.completions.create(**kwargs)
         for chunk in stream:
+            # usage 在 stream 末尾 chunk（include_usage 时·该 chunk choices 常为空）
+            cu = getattr(chunk, "usage", None)
+            if cu is not None:
+                usage = _openai_usage_to_dict(cu)
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
@@ -241,19 +245,30 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
                     sys.stderr.flush()
             if getattr(choice, "finish_reason", None):
                 finish = choice.finish_reason
-        return text, finish
+        return text, finish, usage
 
     try:
         try:
-            return _run(kw)
+            _t, _f, _u = _run(kw)
         except Exception as fmt_err:
-            # response_format 不被 provider 支持 → 去掉重试一次（ai_wrapper 范式）
-            if response_format_json and "response_format" in str(fmt_err).lower():
+            # provider 不支持某 kwarg → 去掉重试一次（ai_wrapper 范式·response_format / stream_options）
+            es = str(fmt_err).lower()
+            _retried = False
+            if response_format_json and "response_format" in es:
                 kw.pop("response_format", None)
-                print(f"[llm_transport] response_format=json_object 不支持，退回普通模式: "
-                      f"{str(fmt_err)[:120]}", file=sys.stderr)
-                return _run(kw)
-            raise
+                _retried = True
+            if "stream_options" in es:
+                kw.pop("stream_options", None)  # 老 provider 不认 → 去掉（usage 拿不到·账本跳该次·零崩）
+                _retried = True
+            if _retried:
+                print(f"[llm_transport] kwarg 不支持，退回重试: {str(fmt_err)[:120]}",
+                      file=sys.stderr)
+                _t, _f, _u = _run(kw)
+            else:
+                raise
+        # token ledger 对称（judge 全走此 OpenAI path·此前漏记 → 账本只有 writer 没 judge）
+        _record_token_usage(_u, profile.model, protocol="openai")
+        return _t, _f
     except RateLimitError as e:
         ra = _parse_retry_after(getattr(getattr(e, "response", None), "headers", None))
         raise TransportRateLimit(f"429 rate-limited: {str(e)[:200]}", retry_after=ra) from e
@@ -300,10 +315,40 @@ def build_gemini_body(profile: Profile, system: str, user: str, max_tokens: int,
             "contents": contents, "generationConfig": gen_cfg}
 
 
-def _record_token_usage(usage: dict, model: str) -> None:
-    """token ledger（一人公司·BYOK 用户看烧多少钱）：单次 gemini usage append 到 env
+def _openai_usage_to_dict(u) -> dict:
+    """OpenAI CompletionUsage（pydantic 对象）→ dict。model_dump 优先·fallback getattr。
+    stream include_usage 末尾 chunk 给 usage（prompt_tokens/completion_tokens/total_tokens
+    + prompt_tokens_details.cached_tokens）。容错任何 SDK 版本/provider 形态。"""
+    if u is None:
+        return {}
+    try:
+        d = u.model_dump()   # pydantic v2
+        if isinstance(d, dict):
+            return d
+    except Exception:
+        pass
+    out = {}
+    for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        v = getattr(u, k, None)
+        if v is not None:
+            out[k] = v
+    det = getattr(u, "prompt_tokens_details", None)
+    if det is not None:
+        ct = getattr(det, "cached_tokens", None)
+        if ct is not None:
+            out["prompt_tokens_details"] = {"cached_tokens": ct}
+    return out
+
+
+def _record_token_usage(usage: dict, model: str, protocol: str = "gemini") -> None:
+    """token ledger（一人公司·BYOK 用户看烧多少钱）：单次 usage append 到 env
     RUOYU_TOKEN_LEDGER 指向的 jsonl。env 未设 → 不记（零侵入零回归）。落盘失败绝不崩
-    transport（账本是 advisory·不影响写作主轨·北极星⑤）。"""
+    transport（账本是 advisory·不影响写作主轨·北极星⑤）。
+
+    2026-06-16 对称双协议（judge 全走 OpenAI path·此前漏记 → 账本只有 writer 没 judge）：
+      protocol='gemini' → 原生字段（promptTokenCount/candidatesTokenCount/…）；
+      protocol='openai' → OpenAI 兼容字段（prompt_tokens/completion_tokens/total_tokens·
+      cached 取 prompt_tokens_details.cached_tokens）。归一到统一账本字段（summarize 直接消费）。"""
     import os as _os
     ledger_path = _os.environ.get("RUOYU_TOKEN_LEDGER")
     if not ledger_path or not usage:
@@ -312,13 +357,26 @@ def _record_token_usage(usage: dict, model: str) -> None:
         import json as _json
         import time as _time
         from pathlib import Path as _Path
+        if protocol == "gemini":
+            prompt_t = int(usage.get("promptTokenCount", 0) or 0)
+            output_t = int(usage.get("candidatesTokenCount", 0) or 0)
+            cached_t = int(usage.get("cachedContentTokenCount", 0) or 0)
+            total_t = int(usage.get("totalTokenCount", 0) or 0)
+        else:  # openai 兼容（judge / 非 gemini profile·此前完全漏记）
+            prompt_t = int(usage.get("prompt_tokens", 0) or 0)
+            output_t = int(usage.get("completion_tokens", 0) or 0)
+            _details = usage.get("prompt_tokens_details")
+            cached_t = int(((_details or {}).get("cached_tokens")
+                            if isinstance(_details, dict) else 0) or 0)
+            total_t = int(usage.get("total_tokens", 0) or 0)
         rec = {
             "ts": _time.time(),
             "model": model,
-            "prompt_tokens": int(usage.get("promptTokenCount", 0) or 0),
-            "output_tokens": int(usage.get("candidatesTokenCount", 0) or 0),
-            "cached_tokens": int(usage.get("cachedContentTokenCount", 0) or 0),
-            "total_tokens": int(usage.get("totalTokenCount", 0) or 0),
+            "protocol": protocol,
+            "prompt_tokens": prompt_t,
+            "output_tokens": output_t,
+            "cached_tokens": cached_t,
+            "total_tokens": total_t,
         }
         p = _Path(ledger_path)
         p.parent.mkdir(parents=True, exist_ok=True)

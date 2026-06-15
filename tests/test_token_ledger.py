@@ -105,3 +105,134 @@ def test_estimate_cost():
     s = {"prompt_tokens": 1_000_000, "output_tokens": 500_000}
     c = tl.estimate_cost(s, price_per_1m_input=1.0, price_per_1m_output=4.0)
     assert c["cost_input"] == 1.0 and c["cost_output"] == 2.0 and c["cost_total"] == 3.0
+
+
+# ═══════════ 对称双协议（2026-06-16·OpenAI path 补记·judge 全走此 path 此前漏记）═══════════
+
+def test_record_openai_protocol_normalize():
+    """OpenAI 兼容 usage（prompt_tokens/completion_tokens…）+ protocol='openai'
+    → 归一到统一账本字段（judge 全走 OpenAI path·此前漏记）。"""
+    import llm_transport as lt
+    bak = os.environ.get("RUOYU_TOKEN_LEDGER")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            ledger = Path(td) / "_数据库" / ".token_ledger.jsonl"
+            _set_ledger(ledger)
+            lt._record_token_usage(
+                {"prompt_tokens": 1234, "completion_tokens": 567, "total_tokens": 1801,
+                 "prompt_tokens_details": {"cached_tokens": 89}},
+                "gemini-3.1-pro-preview", protocol="openai")
+            rec = json.loads(ledger.read_text(encoding="utf-8").strip())
+            assert rec["prompt_tokens"] == 1234 and rec["output_tokens"] == 567
+            assert rec["cached_tokens"] == 89 and rec["total_tokens"] == 1801
+            assert rec["protocol"] == "openai" and rec["model"] == "gemini-3.1-pro-preview"
+    finally:
+        _set_ledger(bak)
+
+
+def test_record_gemini_protocol_still_default():
+    """向后兼容：protocol 缺省 → 仍走 gemini 字段（promptTokenCount…·存量 2 参数调用不破）。"""
+    import llm_transport as lt
+    bak = os.environ.get("RUOYU_TOKEN_LEDGER")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            ledger = Path(td) / "l.jsonl"
+            _set_ledger(ledger)
+            lt._record_token_usage(
+                {"promptTokenCount": 100, "candidatesTokenCount": 50,
+                 "cachedContentTokenCount": 10, "totalTokenCount": 150}, "g")  # 不传 protocol
+            rec = json.loads(ledger.read_text(encoding="utf-8").strip())
+            assert rec["prompt_tokens"] == 100 and rec["output_tokens"] == 50
+            assert rec["protocol"] == "gemini"
+    finally:
+        _set_ledger(bak)
+
+
+def test_openai_usage_to_dict_object():
+    """CompletionUsage 对象 → dict：model_dump 优先；无 model_dump 时 getattr fallback；None→{}。"""
+    import llm_transport as lt
+
+    class _U1:  # pydantic 风格（有 model_dump）
+        def model_dump(self):
+            return {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+    assert lt._openai_usage_to_dict(_U1())["prompt_tokens"] == 10
+
+    class _Det:
+        cached_tokens = 5
+
+    class _U2:  # 无 model_dump → getattr fallback（含 prompt_tokens_details.cached_tokens）
+        prompt_tokens = 7
+        completion_tokens = 8
+        total_tokens = 15
+        prompt_tokens_details = _Det()
+    d = lt._openai_usage_to_dict(_U2())
+    assert d["prompt_tokens"] == 7 and d["total_tokens"] == 15
+    assert d["prompt_tokens_details"]["cached_tokens"] == 5
+    assert lt._openai_usage_to_dict(None) == {}
+
+
+def test_stream_openai_records_usage_end_to_end():
+    """🔴 端到端：OpenAI path stream 末尾 chunk 带 usage → _record_token_usage 落账（judge 场景·
+    缺口修复实证）。注入 fake openai module + fake client（零依赖·不真连网）。"""
+    import sys
+    import types
+    import llm_transport as lt
+    bak = os.environ.get("RUOYU_TOKEN_LEDGER")
+    openai_bak = sys.modules.get("openai")
+    try:
+        fake = types.ModuleType("openai")  # _stream_once_openai 顶部 from openai import OpenAI/Errors
+        fake.OpenAI = lambda **kw: None
+        for en in ("APIConnectionError", "APIStatusError", "APITimeoutError", "RateLimitError"):
+            setattr(fake, en, type(en, (Exception,), {}))
+        sys.modules["openai"] = fake
+
+        class _Usage:
+            def model_dump(self):
+                return {"prompt_tokens": 4000, "completion_tokens": 1200,
+                        "total_tokens": 5200, "prompt_tokens_details": {"cached_tokens": 300}}
+
+        class _Delta:
+            content = "judge verdict text"
+
+        class _Choice:
+            delta = _Delta()
+            finish_reason = "stop"
+
+        class _ChunkText:
+            choices = [_Choice()]
+            usage = None
+
+        class _ChunkUsage:
+            choices = []
+            usage = _Usage()
+
+        class _Completions:
+            def create(self, **kw):
+                assert kw.get("stream_options") == {"include_usage": True}  # 确认请求了 usage
+                return iter([_ChunkText(), _ChunkUsage()])
+
+        class _Chat:
+            completions = _Completions()
+
+        class _Client:
+            chat = _Chat()
+
+        prof = types.SimpleNamespace(model="gemini-3.1-pro-preview", api_key="k",
+                                     base_url="http://x", temperature=1.0,
+                                     thinking_level=None, protocol="openai")
+        with tempfile.TemporaryDirectory() as td:
+            ledger = Path(td) / "_数据库" / ".token_ledger.jsonl"
+            _set_ledger(ledger)
+            text, finish = lt._stream_once_openai(
+                prof, "sys", "user", 1000, prior_assistant=None, cont_msg=None,
+                temperature=None, response_format_json=False, echo=False, client=_Client())
+            assert text == "judge verdict text" and finish == "stop"
+            rec = json.loads(ledger.read_text(encoding="utf-8").strip())
+            assert rec["prompt_tokens"] == 4000 and rec["output_tokens"] == 1200
+            assert rec["cached_tokens"] == 300 and rec["protocol"] == "openai"
+    finally:
+        _set_ledger(bak)
+        if openai_bak is not None:
+            sys.modules["openai"] = openai_bak
+        else:
+            sys.modules.pop("openai", None)
