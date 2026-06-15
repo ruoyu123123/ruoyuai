@@ -10,10 +10,22 @@ prose_rhythm_scanner.py — 句法节奏 / 「流水账作文感」检测（clus
   弱模型守不住 + C3 只管段首管不到句子级流水账，**scanner 层 validate_style 故意「绝不查句长」
   → 句长偏短全程无人报警**。本 scanner 补这个检测闭环。
 
-三探针（全 advisory · 以作者风格档基线为第一权威 · 北极星⑤）：
-  1. sentence_too_short  cluster 均句长 < 作者 sentence_length.mean × 0.70（无作者档退通用 18）
+探针（全 advisory · 以作者风格档基线为第一权威 · 北极星⑤）：
+  1. sentence_too_short  作者内 z-band（self-ECDF·2026-06-16 升级）：有 std → z=(cluster_mean-μ)/σ，
+     z<-1.0 minor / z<-1.8 major，**只报偏短下尾**（长句永不报·北极星③不干涉创作）；
+     **绝对地板取或**：mean < μ×0.62 也触发（防高 σ 作者下尾阈值太松漏报碎句·实证：惊悚 σ=23
+     时碎句 mean16.8 仅 z≈-0.61 触不到 -1.0，靠 floor62=19.2 兜住）。无 std 退通用 ×0.70。
   2. subject_action_streak  连续句首是「主语(人物卡角色名/代词)」的流水账 streak ≥4 minor/≥6 major
-  3. subject_start_ratio_high  主语开头叙述句占比 > max(作者基线×1.6, 24%)
+  3. subject_start_ratio_high  主语开头叙述句占比 > 24%（**通用兜底·非作者锚**：作者档暂无主语
+     占比分布·补它需 style_analyzer 加一维抽取+回灌全部作者档·中成本 defer·见 design D 件）
+  4. inverted_modifier_mold  段首「前置长定语+的+主语后置」倒装模具复用（同语法骨架）
+  5. intensity_adverb_inflation  强度副词通胀（极其/死死/毫无/猛地…）
+  6. paragraph_too_short  cluster 段长均值 < 作者 paragraph_length_chars.p5（明显比作者最短的
+     章还碎）→ minor·**单边下尾**（长段不报·长不是流水账问题）·无作者段长分位 → 跳过
+
+🔴 self-ECDF 不是跨作者群体锚：population=「该作者历史章节」而非 WebNovelBench 那种跨 4000 部语料。
+   跨作者百分位会把 cluster 往「通用网文均值」拽，反噬北极星（惊悚乐园句长 31 离群点教训：拿群体
+   百分位会把它判「太长」往均值拉）。这里只用作者自身 μ/σ/分位，高 σ 作者自动获宽容带、低 σ 收紧。
 
 不做「单句独行率上限」探针：cluster_001(优秀样本)独行率最高(77-84%)但质量好(吐槽短句)，
 独行率高本身不是问题(爽文要独行)，问题是独行的是不是裸动作——靠句长+streak 精准抓，独行率会误伤。
@@ -30,8 +42,15 @@ import sys
 from pathlib import Path
 
 PRONOUNS = ['他们', '她们', '它们', '两人', '二人', '众人', '他', '她', '它']
-# 句长偏短双档系数（相对作者基线 mean）
+# 句长偏短双档系数（相对作者基线 mean·**仅无 std 老档兜底路径**用）
 SHORT_MINOR, SHORT_MAJOR = 0.70, 0.55
+# 作者内 z-band（self-ECDF·有 std 时用·只报偏短下尾·北极星③长句永不报）
+# 实证：诡秘 σ=27 高方差作者下尾自动获宽容带，主神 σ=16 低方差才收紧——WebNovelBench
+# z-score 归一精髓，只是 population 换成「该作者历史章节」而非跨 4000 部语料。
+SHORT_Z_MINOR, SHORT_Z_MAJOR = -1.0, -1.8   # z<-1.0 minor（≈作者自身第16百分位下方）/ z<-1.8 major（≈第4百分位）
+# 绝对地板取或：高 σ 作者 z 阈值太松会漏报碎句（惊悚 σ=23 时 mean16.8 仅 z≈-0.61 触不到 -1.0），
+# 靠 mean<μ×0.62 兜住（floor62=19.2·实证真作者 cluster_mean 全在 floor 之上不误伤）。
+SHORT_ABS_FLOOR = 0.62
 STREAK_MINOR, STREAK_MAJOR = 4, 6
 DEFAULT_AUTHOR_SENT_MEAN = 26.0   # 无作者档时的通用兜底句长基线（偏保守·网文中位）
 DEFAULT_SUBJ_PCT_CAP = 24.0       # 主语开头占比通用上限(%)
@@ -61,7 +80,9 @@ def _load_json(p: Path):
 
 
 def _author_baseline(project: Path | None, style_path: Path | None) -> dict:
-    """从作者风格档读句法基线：sentence_length.mean + 主语占比(若有)。北极星⑤第一权威。"""
+    """从作者风格档读句法**分布矩**：sentence_length.{mean, std} + paragraph_length_chars.{p5,p50,p95}。
+    北极星⑤第一权威·self-ECDF 数据源（population=作者自身历史章节·consolidate_author_profile
+    已确定性产出·8 本作者档 std 全非空 14.7-27.0）。缺字段回退 None（探针自退通用兜底）。"""
     data = None
     if style_path and style_path.exists():
         data = _load_json(style_path)
@@ -72,13 +93,29 @@ def _author_baseline(project: Path | None, style_path: Path | None) -> dict:
                 data = _load_json(cand)
                 if data:
                     break
-    sent_mean = None
+    sent_mean = sent_std = para_p5 = para_p50 = para_p95 = None
     if isinstance(data, dict):
         q = data.get("quantitative") or {}
         sl = q.get("sentence_length") or {}
-        if isinstance(sl, dict) and isinstance(sl.get("mean"), (int, float)):
-            sent_mean = float(sl["mean"])
-    return {"sentence_mean": sent_mean}
+        if isinstance(sl, dict):
+            if isinstance(sl.get("mean"), (int, float)):
+                sent_mean = float(sl["mean"])
+            # std 优先 sentence_length.std，退 intra_chapter_std_mean（同口径·章内句长离散）
+            for k in ("std", "intra_chapter_std_mean"):
+                v = sl.get(k)
+                if isinstance(v, (int, float)) and v > 0:
+                    sent_std = float(v)
+                    break
+        pl = q.get("paragraph_length_chars") or {}
+        if isinstance(pl, dict):
+            if isinstance(pl.get("p5"), (int, float)):
+                para_p5 = float(pl["p5"])
+            if isinstance(pl.get("p50"), (int, float)):
+                para_p50 = float(pl["p50"])
+            if isinstance(pl.get("p95"), (int, float)):
+                para_p95 = float(pl["p95"])
+    return {"sentence_mean": sent_mean, "sentence_std": sent_std,
+            "para_p5": para_p5, "para_p50": para_p50, "para_p95": para_p95}
 
 
 def _char_names(project: Path | None) -> list:
@@ -100,10 +137,14 @@ def _char_names(project: Path | None) -> list:
 def scan(text: str, project: Path | None = None, style_path: Path | None = None) -> dict:
     baseline = _author_baseline(project, style_path)
     sent_mean_base = baseline["sentence_mean"] or DEFAULT_AUTHOR_SENT_MEAN
+    sent_std_base = baseline.get("sentence_std")   # None → 探针1 走通用 ×0.70 兜底
     subj_words = _char_names(project) + PRONOUNS
 
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     body = [l for l in lines if not re.match(r'^第\d+章', l) and not l.startswith('【')]
+    # cluster 段长均值（CJK 字/段·与作者 paragraph_length_chars 同口径·供探针6）
+    para_lens = [cjk(p) for p in body if cjk(p) >= 1]
+    para_mean = round(statistics.mean(para_lens), 1) if para_lens else 0.0
 
     # 全文句长（含对话·对齐作者 sentence_length.mean 口径）
     all_lens = []
@@ -137,14 +178,37 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
 
     violations = []
 
-    # 探针 1：句长偏短（vs 作者基线）
-    ratio = mean_len / sent_mean_base if sent_mean_base else 1.0
-    if ratio < SHORT_MINOR:
+    # 探针 1：句长偏短（作者内 z-band / self-ECDF·只报偏短下尾·长句永不报·北极星③）
+    ratio = round(mean_len / sent_mean_base, 2) if sent_mean_base else 1.0
+    short_z = None
+    if sent_std_base:
+        # 有 std → 作者内 z-score（population=该作者历史章节·非跨作者群体锚）
+        short_z = round((mean_len - sent_mean_base) / sent_std_base, 2)
+        floor_abs = sent_mean_base * SHORT_ABS_FLOOR
+        below_floor = mean_len < floor_abs
+        # 触发 = z 越下尾 OR 跌破绝对地板（绝对地板兜高 σ 作者漏报·实证惊悚 σ=23 mean16.8 z≈-0.61 靠地板兜）
+        if short_z < SHORT_Z_MINOR or below_floor:
+            # 严重度纯 z 驱动（design 铁律：z<-1.8 → major / 否则 minor）·绝对地板只扩触发不升档，
+            # 但极端碎句兜底升 major（mean < μ×0.45·半个地板区·灾难性碎·z 未触发也判 major）
+            sev = 'major' if (short_z < SHORT_Z_MAJOR or mean_len < sent_mean_base * 0.45) else 'minor'
+            pctl = '4%' if short_z < SHORT_Z_MAJOR else '16%'
+            trig = (f'z={short_z}<{SHORT_Z_MINOR}(落作者自身分布下{pctl}尾部)' if short_z < SHORT_Z_MINOR
+                    else f'mean<作者{round(floor_abs,1)}(绝对地板·μ×{SHORT_ABS_FLOOR})')
+            violations.append({
+                'kind': 'sentence_too_short', 'severity': sev,
+                'cluster_mean': mean_len, 'author_mean': round(sent_mean_base, 1),
+                'author_std': round(sent_std_base, 1), 'z': short_z, 'ratio': ratio,
+                'hint': f'均句长 {mean_len}·作者基线 μ={round(sent_mean_base,1)}±σ={round(sent_std_base,1)}·{trig}'
+                        f'→碎句流水账/作文感；多用逗号连缀的复合长句承载信息(因果/让步/比喻)，'
+                        f'长短句交替而非匀速短句。(高 σ 作者本就长短摆动大→宽容；此处仍判偏短)',
+            })
+    elif ratio < SHORT_MINOR:
+        # 无 std（老档）→ 退回通用比值兜底（与 2026-06-03 版一致·回归不破）
         sev = 'major' if ratio < SHORT_MAJOR else 'minor'
         violations.append({
             'kind': 'sentence_too_short', 'severity': sev,
             'cluster_mean': mean_len, 'author_mean': round(sent_mean_base, 1),
-            'ratio': round(ratio, 2),
+            'ratio': ratio,
             'hint': f'均句长 {mean_len} 仅作者基线 {round(sent_mean_base,1)} 的 {round(ratio*100)}%→碎句流水账/作文感；'
                     f'多用逗号连缀的复合长句承载信息(因果/让步/比喻)，长短句交替而非匀速短句',
         })
@@ -223,6 +287,21 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                     f'(死死抓住→指节发白·极其愤怒→把杯子摔了)',
         })
 
+    # 探针 6：段长偏短（cluster 段长均值 < 作者 paragraph_length_chars.p5·单边下尾·长段不报）
+    # self-ECDF 段长维：比作者「最短的章」还碎=明显偏离作者自身段落节奏。无作者段长分位→跳过。
+    para_p5 = baseline.get("para_p5")
+    if para_p5 and para_mean > 0 and para_mean < para_p5:
+        # major 仅当远低于 p5（< p5×0.8·明显碎过作者最短章）
+        sev = 'major' if para_mean < para_p5 * 0.8 else 'minor'
+        violations.append({
+            'kind': 'paragraph_too_short', 'severity': sev,
+            'cluster_para_mean': para_mean, 'author_para_p5': round(para_p5, 1),
+            'author_para_p50': round(baseline.get("para_p50") or 0, 1),
+            'hint': f'段长均值 {para_mean} < 作者段长第5百分位 {round(para_p5,1)}(中位{round(baseline.get("para_p50") or 0,1)})'
+                    f'=比作者最短的章还碎→过度切碎的塑料段落感；合并语义连贯的相邻短段，'
+                    f'让段落承载完整的动作单元/对话回合而非一句一段切到底。(长段不是问题·只报偏碎)',
+        })
+
     has_major = any(v['severity'] == 'major' for v in violations)
     verdict = 'PASS' if not violations else ('FAIL_MAJOR' if has_major else 'FAIL_MINOR')
     return {
@@ -233,6 +312,8 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
         'gate_level': 'advisory',
         'metrics': {
             'sentence_mean': mean_len,
+            'sentence_z': short_z,                 # 作者内 z-score（None=无 std 走通用兜底）
+            'paragraph_mean': para_mean,
             'subject_start_pct': subj_pct,
             'max_subject_streak': mx,
             'narrative_sentences': narr_n,
@@ -242,9 +323,16 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             'intensity_adverb_total': intensity_total,
             'intensity_adverb_per_1k': intensity_per_1k,
         },
-        'author_baseline': {'sentence_mean': sent_mean_base,
-                            'from_author_profile': baseline["sentence_mean"] is not None},
-        '_doc': '句法节奏/流水账作文感检测·作者基线第一权威·advisory·补 validate_style「不查句长」缺口',
+        'author_baseline': {
+            'sentence_mean': sent_mean_base,
+            'sentence_std': sent_std_base,
+            'para_p5': baseline.get("para_p5"),
+            'para_p50': baseline.get("para_p50"),
+            'para_p95': baseline.get("para_p95"),
+            'from_author_profile': baseline["sentence_mean"] is not None,
+            'self_ecdf_active': sent_std_base is not None,   # True=走作者内 z-band·False=通用兜底
+        },
+        '_doc': '句法节奏/流水账作文感检测·作者分布矩第一权威(self-ECDF z-band)·advisory·补 validate_style「不查句长」缺口',
     }
 
 
