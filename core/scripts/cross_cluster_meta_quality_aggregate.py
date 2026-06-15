@@ -231,7 +231,18 @@ def scan_summary_consistency_from_ledger(chapter_records: list[tuple[int, dict]]
         text_kw_set = set(rec.get("text_keyword_set") or [])
         if not text_kw_set:
             continue
-        kws = re.findall(r"[一-鿿]{3,4}", summary_text)[:10]
+        # 量纲对齐 text_keyword_set(builder _extract_text_keywords 抽的高频 2 字 2gram top-4)：
+        # 原 re.findall(r"[一-鿿]{3,4}") 抽 3-4 字片段·与 2gram 集合永不匹配=结构性必然误报
+        # (2026-06-15 审计 high confirmed)。改抽摘要高频 2gram top-8·与正文 2gram 指纹同量纲比
+        # （忠实摘要的高频词会含正文 top 词→miss 低；编故事→miss 高）。短摘要不足 5 个经下方 len 判不触发。
+        _clean = re.sub(r"[^一-鿿]", "", summary_text)
+        _stop = "的了在是我你他她它们这那有和就都不也要会着说道一个不是什么没有"
+        _g: dict[str, int] = {}
+        for _i in range(len(_clean) - 1):
+            _bg = _clean[_i:_i + 2]
+            if _bg[0] not in _stop and _bg[1] not in _stop:
+                _g[_bg] = _g.get(_bg, 0) + 1
+        kws = sorted(_g, key=lambda k: -_g[k])[:8]
         miss_kws = [kw for kw in kws if kw not in text_kw_set]
         if len(miss_kws) >= len(kws) * 0.6 and len(kws) >= 5:
             findings.append({
