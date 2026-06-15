@@ -146,6 +146,26 @@ def test_all_six_templates_still_valid_json():
         assert isinstance(d.get("steps"), list) and d["steps"], f.name
 
 
+def test_all_plan_script_refs_exist():
+    """🔴 plan↔脚本幽灵引用契约（全 6 plan·原占位符测试只覆盖 cluster-write/save-state）：
+    每个 plan template 的 scripts/after_pause_scripts 行引用的 `core/scripts/X.py` 必须真实
+    存在。防 plan 改动(脚本改名/删除但 plan 没跟)引入幽灵引用 → orchestrator 跑到该步炸
+    FileNotFoundError(同 resolve/BOM 一类 plan-脚本集成面 bug)。含 `?` advisory 前缀脚本。
+    2026-06-15 实测当前 41 引用 0 缺失·此测试锁住防未来漂移(project_audit_hardening P2 盲区)。"""
+    script_ref = re.compile(r"(core/scripts/[A-Za-z0-9_]+\.py)")
+    missing = []
+    for f in PLANS.glob("*.plan.json"):
+        plan = json.loads(f.read_text(encoding="utf-8"))
+        for step in plan.get("steps", []):
+            for line in (step.get("scripts") or []) + (step.get("after_pause_scripts") or []):
+                if line.strip().startswith("#"):
+                    continue
+                for m in script_ref.findall(line):   # 正则不管 `? ` advisory 前缀·照查
+                    if not (_ROOT / m).exists():
+                        missing.append(f"{f.name} step {step.get('n')}: {m}")
+    assert not missing, f"plan 引用了不存在的脚本(幽灵引用): {missing}"
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):
