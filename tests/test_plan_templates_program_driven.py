@@ -166,6 +166,22 @@ def test_all_plan_script_refs_exist():
     assert not missing, f"plan 引用了不存在的脚本(幽灵引用): {missing}"
 
 
+def test_all_plan_placeholders_sourced():
+    """🔴 占位符来源契约扩展到全 6 plan（原 test_cluster_write/save_state 只覆盖 2 个·
+    outline/distill/check-quality/reconcile 是盲区）：每个角括号占位符必须有解析来源
+    （data_flow 声明 / driver PRIMED 预算）——缺源 = orchestrator 在该步卡死。
+    2026-06-15 实测全 6 plan 0 处无来源·锁住防漂移(揪头发拉通全命令非只主轨)。"""
+    missing = []
+    for f in PLANS.glob("*.plan.json"):
+        plan = json.loads(f.read_text(encoding="utf-8"))
+        for step in plan.get("steps", []):
+            declared = set((step.get("data_flow") or {}).keys())
+            unsourced = _angle_placeholders_in(step) - declared - PRIMED
+            if unsourced:
+                missing.append(f"{f.name} step {step.get('n')}: {unsourced}")
+    assert not missing, f"占位符无解析来源(orchestrator 会卡死): {missing}"
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):
