@@ -420,6 +420,37 @@ def _build_knowledge_gap_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _build_narrative_seq_section(manifest_path: Path) -> str:
+    """#4：从 manifest.narrative_function_sequence 抽作者签名因果功能链拼 writer prompt 段（结构骨）。
+
+    signature_bigrams（face_slap→gain_reward 等因果转移）比段长/句长表层指纹更深·让连续故事块功能
+    转移贴作者签名节奏而非默认 LLM 高频模板（中文网文同质化结构层根因）。NARR_FUNC_SEQ_INJECT_MODE=
+    off/shadow 或无指令（build_manifest 控字段 None）→ ""（不注入·零回归）。advisory·作者档第一权威·北极星⑤不硬锁。
+    """
+    if not manifest_path.exists():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    nfs = m.get('narrative_function_sequence')
+    if not isinstance(nfs, dict):
+        return ""
+    directives = nfs.get('directives') or []
+    if not directives:
+        return ""
+    lines = [
+        "## 🧬 作者签名叙事功能链（结构骨·连续故事块功能转移看齐作者节奏 · advisory）",
+        "",
+        "段长/句长指纹是表层，**功能链**是深层——作者在「打脸」后习惯接「获益」还是「再起波澜」，"
+        "这种因果功能转移是作者签名（比通用 Save-the-Cat 节拍更专属）。让本块功能节奏贴作者基线：",
+        "",
+    ]
+    for d in directives:
+        lines.append(f"- {d}")
+    return "\n".join(lines)
+
+
 def _build_genre_pack_section(manifest_path: Path) -> str:
     """阶段3：从 manifest.genre_pack_directives 拼题材专属工艺段（按 genre·advisory）。
 
@@ -699,6 +730,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     genre_section = _build_genre_pack_section(manifest_path)
     # 阶段D3：作者信息差主调段（读者-角色知识差三态·KNOWLEDGE_GAP_INJECT_MODE 控制·默认 shadow 时空 → 零回归）
     knowledge_gap_section = _build_knowledge_gap_section(manifest_path)
+    # #4：作者签名因果功能链段（结构骨·NARR_FUNC_SEQ_INJECT_MODE 控制·默认 shadow 时 build_manifest 字段 None → 空段零回归）
+    narr_seq_section = _build_narrative_seq_section(manifest_path)
     # #3 升格：本书文风动态锚段（治 D 级长程退化·ROLLING_ANCHOR_INJECT_MODE 默认 shadow 时空 → 零回归）
     rolling_anchor_section = _build_rolling_anchor_section(manifest_path)
 
@@ -966,6 +999,7 @@ cluster_brief 完整内容：
     genre_block = (genre_section + "\n\n") if genre_section else ""
     # 阶段D3：信息差主调段（与决策原则并列·序列骨·默认 shadow 时空 → 零回归）
     knowledge_gap_block = (knowledge_gap_section + "\n\n") if knowledge_gap_section else ""
+    narr_seq_block = (narr_seq_section + "\n\n") if narr_seq_section else ""
     rolling_anchor_block = (rolling_anchor_section + "\n\n") if rolling_anchor_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
@@ -999,7 +1033,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{rolling_anchor_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -1033,7 +1067,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{rolling_anchor_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}

@@ -2803,6 +2803,56 @@ def _collect_knowledge_gap_directives(s: "DatabaseScanner") -> dict | None:
     return payload
 
 
+def _collect_narrative_function_sequence(s: "DatabaseScanner") -> dict | None:
+    """#4（2026-06-16 穷尽核查）：作者签名因果功能链注入（env NARR_FUNC_SEQ_INJECT_MODE 默认 shadow·仿 D3·advisory）。
+
+    读 consolidate 聚合的 narrative_function_sequence（signature_bigrams 因果功能链如 face_slap→gain_reward·
+    比 Save-the-Cat 通用节拍更深·作者专属·distill-style.md 自述中文网文同质化结构层根因）→ writer 结构骨指令：
+    让连续故事块的功能转移贴近作者签名节奏·而非默认 LLM 高频模板。默认 shadow（结构骨注入效果需 gen-model
+    A/B + 标注一致性·先影子·区别于 rhythm 的 active）·off 零回归·active 注入。confidence<8 章不稳仅参考。
+    """
+    import os as _os
+    mode = (_os.environ.get("NARR_FUNC_SEQ_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+    if not s.has_style_profile():
+        return None
+    try:
+        profile = s.load("作者风格", {})
+        nfs = profile.get("narrative_function_sequence") if isinstance(profile, dict) else None
+    except Exception as e:
+        print(f"[WARN] narrative_function_sequence 读取失败: {e}", file=sys.stderr)
+        return None
+    if not isinstance(nfs, dict) or not nfs:
+        return None
+    bigrams = nfs.get("signature_bigrams") or []
+    top = [b.get("seq") for b in bigrams[:3] if isinstance(b, dict) and b.get("seq")]
+    if not top:
+        return None
+    conf = nfs.get("confidence", "low")
+    directives = [
+        f"作者签名叙事功能链（结构骨·confidence={conf}）：" + "、".join(top)
+        + "（连续故事块的功能转移向作者签名节奏看齐·非默认 LLM 高频模板·中文网文同质化结构层根因·"
+        "advisory 软提示不限定写什么内容）"
+    ]
+    payload = {"gate_level": "advisory", "advisory_only": True,
+               "directives": directives, "raw": nfs,
+               "_doc": "作者签名因果功能链（叙事功能序列·结构骨·advisory·作者档第一权威·confidence<8 章不稳仅参考）"}
+    try:
+        out_path = s.db / ".narr_func_seq" / f"ch_{s.ch:03d}.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    if mode == "shadow":
+        print(f"[SHADOW] narrative_function_sequence: {len(directives)} 条结构骨指令 — 不注入 manifest",
+              file=sys.stderr)
+        return None
+    return payload
+
+
 def _collect_author_decision_principles(s: "DatabaseScanner") -> dict | None:
     """阶段2：作者决策原则 + 人物刻画手法（纯 prompt 注入·零 scanner·永远 advisory）。
 
@@ -3544,6 +3594,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "author_rhythm_signature": _collect_author_rhythm_signature(s),
         # D3：读者-角色知识差三态（信息差序列骨·env KNOWLEDGE_GAP_INJECT_MODE 默认 shadow·advisory）。
         "knowledge_gap_signature": _collect_knowledge_gap_directives(s),
+        # #4：作者签名因果功能链（结构骨·env NARR_FUNC_SEQ_INJECT_MODE 默认 shadow·advisory·中文网文同质化结构层根因）。
+        "narrative_function_sequence": _collect_narrative_function_sequence(s),
         # 阶段2：作者决策原则+人物刻画手法（思维/刻画骨·env DECISION_INJECT_MODE 默认 active 放量·advisory）。
         "author_decision_principles": _collect_author_decision_principles(s),
         # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 active 放量·advisory·unknown→None）。
@@ -3604,6 +3656,7 @@ def _build_cache_layout() -> dict:
             "deep_writing_dims",                 # L4: D1 心理距离 / D2 visceral-first / D3 动机弧光（全书不变创作提示）
             "author_rhythm_signature",           # 阶段1: 作者叙事节奏指纹（序列级骨·全书不变）
             "author_decision_principles",        # 阶段2: 作者决策原则+人物刻画手法（思维/刻画骨·全书不变）
+            "narrative_function_sequence",       # #4: 作者签名因果功能链（结构骨·全书不变·M1 cache 铁律归 STATIC）
             "genre_pack_directives",             # 阶段3: 题材专属工艺提示（按 genre 路由·全书不变）
             "distill_golden_few_shot",           # 蒸馏 golden_passages
             "title_style",                       # v22.4dim N5: 章节标题命名指纹（全书不变）

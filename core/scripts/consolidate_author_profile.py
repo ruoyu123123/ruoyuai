@@ -627,12 +627,49 @@ def aggregate_knowledge_gap(project: Path) -> dict:
     return out
 
 
+def aggregate_narrative_seq(project: Path) -> dict:
+    """#4（2026-06-16 穷尽核查）：作者签名因果功能链 narrative_function_sequence。
+
+    producer style_analyzer.score_narrative_function_sequence（纯启发式 z-score + n-gram·非空才写）：
+    从作者原文多章提取叙事功能序列 + 签名 bigram/trigram（face_slap→gain_reward 等因果链·比通用
+    Save-the-Cat 节拍更深·作者专属·distill-style.md 自述中文网文同质化结构层根因）。读 原文/第*章.txt
+    （全量·feedback_no_token_saving 不截断）。NARRATIVE_SEQ_MODE=off → producer 返回 {mode:off}·
+    非空真值守卫不写（仿 `if rhythm:`·零回归·北极星⑥）。复用现成 producer + 19 测试·零新依赖。
+    """
+    orig = project / "原文"
+    if not orig.exists():
+        return {}
+    raws = sorted(orig.glob("第*章.txt"), key=lambda p: p.name)
+    if not raws:
+        return {}
+    texts = []
+    for rp in raws:
+        try:
+            texts.append(rp.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    if not texts:
+        return {}
+    try:
+        import style_analyzer as _sa
+        result = _sa.score_narrative_function_sequence(texts)
+    except Exception:
+        return {}
+    # 非空真值守卫（仿 `if rhythm:`）：mode 非 active（NARRATIVE_SEQ_MODE=off）/ 无签名链 → 不写（零回归）
+    if not isinstance(result, dict) or result.get("mode") != "active":
+        return {}
+    if not result.get("signature_bigrams"):
+        return {}
+    return result
+
+
 def consolidate(project: Path, total: int) -> dict:
     """聚合 + 规整 作者风格.json（保留创意字段，覆盖/补全 consumer 数值字段）。"""
     q = aggregate_quantitative(project, total)
     nc_out, nf_out, ccd = aggregate_narrative(project, total)
     rhythm = aggregate_rhythm(project)   # 阶段1：A1-A5 叙事节奏组
     decisions, characterization = aggregate_decisions(project)   # 阶段2：作者思维+人物刻画
+    narr_seq = aggregate_narrative_seq(project)   # #4：作者签名因果功能链（读原文调 score·非空才写）
 
     targets = [project / "作者风格.json", project / "作者风格_FINAL.json"]
     written = []
@@ -660,6 +697,8 @@ def consolidate(project: Path, total: int) -> dict:
             style.setdefault("narrative_rhythm", {}).update(rhythm)
         if decisions:  # 阶段2：作者决策原则（道德滤镜/心理距离/留白·去重合并）
             style.setdefault("author_decision_principles", {}).update(decisions)
+        if narr_seq:  # #4：作者签名因果功能链（确定性·非空真值守卫·覆盖·中文网文同质化结构层根因）
+            style["narrative_function_sequence"] = narr_seq
         if characterization:  # 阶段2：人物刻画手法（刻画比例/声纹/登场签名）
             style.setdefault("characterization_craft", {}).update(characterization)
         sheet = build_decision_cheat_sheet(decisions)  # D7 紧凑决策表（per_scene_rationale 聚类压缩）
@@ -676,7 +715,8 @@ def consolidate(project: Path, total: int) -> dict:
         written.append(sp.name)
     return {"quantitative_keys": list(q.keys()), "narrative_craft": list(nc_out.keys()),
             "narrative_fingerprint": list(nf_out.keys()), "cross_chapter_diversity": list(ccd.keys()),
-            "narrative_rhythm": list(rhythm.keys()), "written": written}
+            "narrative_rhythm": list(rhythm.keys()),
+            "narrative_function_sequence": bool(narr_seq), "written": written}
 
 
 def main(argv: list[str]) -> int:
