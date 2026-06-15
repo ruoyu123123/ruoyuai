@@ -186,6 +186,45 @@ def test_minimal5_cluster_run_green():
     assert "ch6" in r.stdout, f"cluster 002 末章锚点应为 ch6: {r.stdout}"
 
 
+# ============ ②-bis full_18 tier：core_5 之外的 13+ 聚合器端到端不崩 ============
+_FULL_CACHE = {}
+
+
+def _full_run_tier(tier):
+    """独立 tier 端到端跑（_full_run 只跑 minimal_5/core_5·这里覆盖 full_18 全集合）。"""
+    if tier in _FULL_CACHE:
+        return _FULL_CACHE[tier]
+    tmp = Path(tempfile.mkdtemp(prefix=f"xcc_{tier}_"))
+    atexit.register(shutil.rmtree, tmp, ignore_errors=True)
+    proj = tmp / "proj"
+    db = proj / "_数据库"
+    r0 = subprocess.run(
+        [sys.executable, str(_SCAFFOLD), "emit", "--db-dir", str(db)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=_ENV)
+    assert r0.returncode == 0, f"scaffold emit 失败: {r0.stderr[-400:]}"
+    _two_cluster_fixture(db)
+    r = _run([proj, "--cluster", "002", "--tier", tier])
+    _FULL_CACHE[tier] = (proj, r)
+    return _FULL_CACHE[tier]
+
+
+def test_full_tier_all_aggregators_no_crash():
+    """🔴 full_18 tier 端到端跑通（原 test_minimal5 只覆盖 core_5 这 5 个·core_10_extra +
+    full_18_extra 共 13+ 个聚合器无端到端跑通验证·可能在真 fixture 下崩 Traceback 无人发现）：
+    --tier full_18 → rc=0(恒 exit 0 铁律) · stderr 无 Traceback/[CRASH](全集合不崩) ·
+    intensity 归一 full_18 · 跑满全集合不 skipped。2026-06-15 凿窍纪真机先验 24/24 不崩·
+    本测试 fixture 化固化(揪头发拉通全 tier 非只 core_5 主轨)。"""
+    proj, r = _full_run_tier("full_18")
+    assert r.returncode == 0, f"full_18 应恒 exit 0，实得 {r.returncode}: {r.stderr[-600:]}"
+    assert "Traceback" not in r.stderr, f"full tier 有聚合器崩 Traceback:\n{r.stderr[-1000:]}"
+    assert "[CRASH]" not in r.stderr, f"full tier 有聚合器 [CRASH]:\n{r.stderr[-1000:]}"
+    assert "intensity=full_18" in r.stdout, f"未归一 full_18: {r.stdout[-400:]}"
+    full_n = (len(rcca.SCAN_TIERS["core_5"]) + len(rcca.SCAN_TIERS["core_10_extra"])
+              + len(rcca.SCAN_TIERS["full_18_extra"]))
+    assert f"{full_n}/{full_n}" in r.stdout, \
+        f"full tier 未跑满 {full_n}/{full_n}(scanner skipped/幽灵): {r.stdout[-400:]}"
+
+
 # ============ ③ 产出契约：报告 JSON 落盘且可解析 ============
 def test_scan_reports_land_and_parse():
     """端到端跑完后 _数据库/.cross_chapter_scan/ 必须有 ≥1 份报告 JSON 且全部可解析
