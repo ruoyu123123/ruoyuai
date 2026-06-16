@@ -420,6 +420,53 @@ def _build_knowledge_gap_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _deep_dims_inject_mode() -> str:
+    """deep_writing_dims 升格开关（env DEEP_DIMS_INJECT_MODE · 默认 shadow）。
+
+    D1 心理距离/D2 visceral-first/D3 动机弧光创作提示（build_manifest._collect_deep_writing_dims）·
+    此前只 raw JSON 躺 manifest dump dead-zone·升格生成点近邻醒目位。默认 shadow（tip 是大段创作提示·
+    升格价值 + context 成本权衡需 gen-model A/B·先影子·该字段 producer 端无 env 闸·gen_writer 侧控）。
+    """
+    return (os.environ.get("DEEP_DIMS_INJECT_MODE") or "shadow").strip().lower()
+
+
+def _build_deep_dims_section(manifest_path: Path) -> str:
+    """#4（round2）：从 manifest.deep_writing_dims 抽 D1/D2/D3 创作提示拼 writer prompt 段（dead-zone→升格）。
+
+    D1_psychic_distance（心理距离档位）/D2_visceral_first_emotion（先生理后命名情绪）/D3_motivation_arc
+    （动机弧光）各 {label, tip}·升格生成点近邻。DEEP_DIMS_INJECT_MODE != active / 字段缺/空 → ""（零回归）。
+    advisory·北极星⑤不硬锁（纯创作提示·无检测无门禁）。
+    """
+    if _deep_dims_inject_mode() != "active":
+        return ""
+    if not manifest_path.exists():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    dwd = m.get('deep_writing_dims')
+    if not isinstance(dwd, dict):
+        return ""
+    lines = ["## 🎭 深层创作维度（心理距离 / 情绪顺序 / 动机弧光 · advisory）", ""]
+    n = 0
+    for key in ("D1_psychic_distance", "D2_visceral_first_emotion", "D3_motivation_arc"):
+        dim = dwd.get(key)
+        if not isinstance(dim, dict):
+            continue
+        tip = (dim.get("tip") or "").strip()
+        if not tip:
+            continue
+        label = dim.get("label", key)
+        lines.append(f"【{label}】")
+        lines.append(tip)
+        lines.append("")
+        n += 1
+    if n == 0:
+        return ""
+    return "\n".join(lines).rstrip()
+
+
 def _golden_fewshot_inject_mode() -> str:
     """golden few-shot 注入开关（env GOLDEN_FEWSHOT_INJECT_MODE · 默认 shadow）。
 
@@ -791,6 +838,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     narr_seq_section = _build_narrative_seq_section(manifest_path)
     # #7：原作金句 few-shot 段（蒸馏 golden_passages 升格·GOLDEN_FEWSHOT_INJECT_MODE 默认 shadow 时空 → 零回归）
     golden_fewshot_section = _build_golden_fewshot_section(manifest_path)
+    # #4(round2)：深层创作维度段（D1心理距离/D2 visceral/D3动机弧光·DEEP_DIMS_INJECT_MODE 默认 shadow 时空 → 零回归）
+    deep_dims_section = _build_deep_dims_section(manifest_path)
     # #3 升格：本书文风动态锚段（治 D 级长程退化·ROLLING_ANCHOR_INJECT_MODE 默认 shadow 时空 → 零回归）
     rolling_anchor_section = _build_rolling_anchor_section(manifest_path)
 
@@ -1060,6 +1109,7 @@ cluster_brief 完整内容：
     knowledge_gap_block = (knowledge_gap_section + "\n\n") if knowledge_gap_section else ""
     narr_seq_block = (narr_seq_section + "\n\n") if narr_seq_section else ""
     golden_fewshot_block = (golden_fewshot_section + "\n\n") if golden_fewshot_section else ""
+    deep_dims_block = (deep_dims_section + "\n\n") if deep_dims_section else ""
     rolling_anchor_block = (rolling_anchor_section + "\n\n") if rolling_anchor_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
@@ -1093,7 +1143,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -1127,7 +1177,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}
