@@ -161,6 +161,13 @@
       "_new": true,
       "issues_emitted": ["EMOTIONAL_PUNCT_SPARSE"]
     },
+    "function_word_fingerprint": {
+      "layer": "cluster",
+      "script": "function_word_fingerprint_scanner.py",
+      "doc": "[2026-06-16 第二轮穷尽核查#2·功能词指纹回查] 检测综合function_word密度(15词的/了/着/却/便/竟/倒/只/又/不过/只是/毕竟/但/而/也·per1k)vs作者档function_word_fingerprint_per_1000综合基线·function_word是SFS评分最高权重维(style_analyzer weight=3.0蒸馏/复刻最看重)却写作时0回查·从style_analyzer.FUNCTION_WORDS import单一真理源·🔴金标准校准(6作者各cluster)综合cluster/base全作者最小0.86(极稳内容无关文体指纹)→FLOOR_RATIO0.6留0.26余量·单边只报偏少(虚词使用/文体扁平偏离)偏高永不报(北极星③)·无作者档skip·advisory·env FUNCTION_WORD_FINGERPRINT_MODE默认shadow·FUNCTION_WORD_FINGERPRINT_DRIFT绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["FUNCTION_WORD_FINGERPRINT_DRIFT"]
+    },
     "romance_pacing": {
       "layer": "cluster",
       "genre_gated": "romance",

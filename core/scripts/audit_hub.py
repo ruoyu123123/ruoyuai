@@ -1040,6 +1040,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     sds = _SCRIPT_DIR / "syntactic_diversity_scanner.py"
     # [2026-06-16 穷尽核查#2] 情绪标点综合密度 vs 作者基线(感叹/问号/省略号·金标准综合避单类误报·单边下尾) · advisory
     eps = _SCRIPT_DIR / "emotional_punctuation_scanner.py"
+    # [2026-06-16 第二轮穷尽核查#2] 功能词指纹偏离作者基线(SFS 最高权重维却 0 写作时回查·金标准综合 min0.86→FLOOR0.6·单边下尾) · advisory
+    fwfs = _SCRIPT_DIR / "function_word_fingerprint_scanner.py"
 
     # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
     # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
@@ -1184,6 +1186,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "emotional_punctuation_scanner", "EMOTIONAL_PUNCT_SPARSE", "风格")),
+                # [2026-06-16 第二轮穷尽核查#2] 功能词指纹偏离 · advisory · FUNCTION_WORD_FINGERPRINT_MODE 默认 shadow
+                # （SFS 最高权重维写作时 0 回查·金标准综合 15 词 cluster/base min0.86→FLOOR0.6·检测力待 gen-model 验证再 active）
+                ("function_word_fingerprint",
+                 [child_python(), str(fwfs), str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "function_word_fingerprint_scanner", "FUNCTION_WORD_FINGERPRINT_DRIFT", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
