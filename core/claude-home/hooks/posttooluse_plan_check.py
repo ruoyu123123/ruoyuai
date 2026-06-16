@@ -216,4 +216,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        pass
+    sys.exit(0)  # PostToolUse 观察层：永远 exit 0（对齐 runtime_monitor/step_reflection·防未捕异常打断主流水线）
