@@ -144,7 +144,6 @@ def writeback_event_cluster_range(project_root: Path, cluster_key: str, chapters
     # writeback_event_cluster_range 是写「权威源 事件簇.json」的 public 函数，可能被独立/未来
     # 调用方传入未经 H2 过滤的 chapters——这是对权威源的廉价兜底防护，刻意保留。
     prev_his = []  # 与本 cluster 有重叠/相邻关系、且 lo <= 其 hi 的前序 cluster hi
-    prev_his = []  # 与本 cluster 有重叠/相邻关系、且 lo <= 其 hi 的前序 cluster hi
     for c in shi.get("clusters", []):
         if not isinstance(c, dict):
             continue
