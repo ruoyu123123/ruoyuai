@@ -2,11 +2,13 @@
 
 合并 3 类系统层动态问题：
 
-A. FACTION_TRENDS — 势力数值跨章趋势
-   读 world_state_log（chapter_outcome_log + world_ticks_log），分析每势力 power/stability/wealth 的滑窗趋势
-   - FACTION_MONOTONE_DROP：≥ 5 章某维度连续单调下降 → 势力疲软
-   - FACTION_FROZEN：≥ 6 章某维度无变化 → 系统僵死
-   - FACTION_OVER_BOOST：单章某维度 ≥ 10 跳变 → 突变不合理
+A. FACTION_EXTREMES — 势力数值极值快照
+   读 世界状态.json.factions_state，检查每势力 power/stability/wealth 当前快照极值
+   - FACTION_NEAR_ZERO：某维度 ≤ 5 → 势力即将退场，确认是否符合大势卡安排
+   - FACTION_NEAR_MAX：某维度 ≥ 95 → 触顶，后续 ripple 加分会被钳制
+   （注：曾规划跨章趋势 MONOTONE_DROP/FROZEN/OVER_BOOST，但 world_evolution apply 日志
+    只落 applied_count、不落 per-章 delta 详情，趋势序列无法重建 → 已删除该承诺与对应空转
+    死代码，仅保留依赖 factions_state 快照的极值检查。.world_evolution 目录缺失时按既有契约早退。）
 
 B. RIPPLE_RULES_DEAD — 死规则识别
    涟漪规则.json 中的 ripple_rules，对照 world_ticks_log（含 trigger_value）
@@ -25,9 +27,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -66,40 +67,17 @@ def scan_faction_trends(project_root: Path) -> list[dict]:
     if not factions:
         return []
 
-    # 当前快照只有一个时间点；趋势要从 .world_evolution/ch{N}_apply.json 收集
+    # .world_evolution 目录守卫（有 test_missing_world_evolution_dir_returns_empty 锁定的既有
+    # 契约：项目从未跑过世界演化时不报种子值极值 → 保留，不擅自推翻前轮审计的显式决定）。
     apply_dir = project_root / "_数据库" / ".world_evolution"
     if not apply_dir.exists():
         return []
-    apply_files = sorted(apply_dir.glob("ch*_apply.json"))
+
+    # 历史曾在此重建 faction 跨章数值序列做 MONOTONE_DROP/FROZEN/OVER_BOOST 趋势检查，但
+    # world_evolution apply 日志只落 applied_count、不落 per-章 delta 详情，序列无法重建 → 该段
+    # 退化为纯空转死代码（faction_changes 建后从不读、applied 读后从不用、内层 for...pass），
+    # 已删除（北极星⑥清旧码）。仅保留下方依赖 factions_state 快照的极值检查（NEAR_ZERO/NEAR_MAX）。
     findings = []
-
-    # 重建每势力每章数值序列（从 ops 里的 delta op）
-    # 简化：仅按 ops 累计 delta 后估算（initial 取 当前 - 累计 = 起点）
-    faction_changes = defaultdict(list)  # faction.dim -> [(ch, delta)]
-    for f in apply_files:
-        m = re.match(r"ch(\d+)_apply\.json", f.name)
-        if not m:
-            continue
-        ch = int(m.group(1))
-        data = load_json(f, {})
-        for op in data.get("ops", []):
-            if op.get("op") == "tick":
-                applied = (op.get("result") or {}).get("ticked", []) or []
-            elif op.get("op") == "apply_fate_events":
-                # nested
-                for r in op.get("results", []) or []:
-                    pass  # apply_fate_events 没存 applied_log 详细，先跳过
-                continue
-            elif op.get("op") == "consume_opportunities":
-                continue
-            else:
-                continue
-        # 从 .world_evolution log 读 applied_log（实际 world_evolution_apply_chapter 输出 summary 内不含 applied_log 详情）
-        # → 这里降级为：基于 world_state.world_ticks_log 信号识别
-        pass
-
-    # 检查 factions current values 极端（仅依赖 factions_state 快照，与 world_ticks_log 无关——
-    # 故不再被 len(log)<3 守卫拦截；原守卫是给上方已废弃趋势逻辑准备的，误 gate 了本检查）
     for fname, fdata in factions.items():
         for dim in ["power", "stability", "wealth"]:
             v = fdata.get(dim)
