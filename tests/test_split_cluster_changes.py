@@ -133,6 +133,73 @@ def test_writeback_cluster_not_found():
         assert out["ok"] is False
 
 
+# ============ split_changes 早返回防御分支（完整写路径需 per-chapter fixture·独立会话补）============
+def _mk_split_fixture(td, key, decisions, changes=None, clusters=None):
+    """造 split_changes fixture：cluster_<key>_draft/changes.json + .wal/decisions.json + 可选 事件簇.json。"""
+    root = Path(td)
+    draft = root / "章节" / f"cluster_{key}_draft"
+    draft.mkdir(parents=True, exist_ok=True)
+    (draft / f"cluster_{key}_changes.json").write_text(
+        json.dumps(changes if changes is not None else {}, ensure_ascii=False), encoding="utf-8")
+    wal = root / "_数据库" / ".wal"
+    wal.mkdir(parents=True, exist_ok=True)
+    (wal / f"splitter_cluster_{key}_decisions.json").write_text(
+        json.dumps(decisions, ensure_ascii=False), encoding="utf-8")
+    if clusters is not None:
+        (root / "_数据库" / "事件簇.json").write_text(
+            json.dumps({"clusters": clusters}, ensure_ascii=False), encoding="utf-8")
+    return root
+
+
+def test_split_missing_changes():
+    """cluster_changes.json 不存在 → ok False。"""
+    with tempfile.TemporaryDirectory() as td:
+        out = scc.split_changes(Path(td), "002")
+        assert out["ok"] is False
+        assert "cluster_changes 不存在" in out["error"]
+
+
+def test_split_missing_decisions():
+    """changes 在但 splitter_decisions 不存在 → ok False。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        draft = root / "章节" / "cluster_002_draft"
+        draft.mkdir(parents=True)
+        (draft / "cluster_002_changes.json").write_text("{}", encoding="utf-8")
+        out = scc.split_changes(root, "002")
+        assert out["ok"] is False
+        assert "splitter_decisions 不存在" in out["error"]
+
+
+def test_split_explicit_zero_cut():
+    """🔴 H1 复修：chapters_split=0 → 早返回 ok True 空·不造 phantom 4 章（pending_tail）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = _mk_split_fixture(td, "002", {"chapters_split": 0, "cluster_start_ch": 5})
+        out = scc.split_changes(root, "002")
+        assert out["ok"] is True
+        assert out["written_count"] == 0
+        assert "pending_tail" in out["_note"]
+
+
+def test_split_cannot_determine_range():
+    """缺 chapter_range/chapters_split/cluster_start_ch + 事件簇 fallback 失败 → ok False（不盲写）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = _mk_split_fixture(td, "002", {})
+        out = scc.split_changes(root, "002")
+        assert out["ok"] is False
+
+
+def test_split_hard_overlap_abort():
+    """拟切章全被他 cluster 占 → hard_overlap 中止 ok False（防覆盖别 cluster 的 _changes）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = _mk_split_fixture(td, "002", {"chapter_range": [1, 4]},
+                                 clusters=[{"cluster_id": "cluster_001", "chapter_range": [1, 4]},
+                                           {"cluster_id": "cluster_002", "chapter_range": None}])
+        out = scc.split_changes(root, "002")
+        assert out["ok"] is False
+        assert "占用" in out["error"]
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):
