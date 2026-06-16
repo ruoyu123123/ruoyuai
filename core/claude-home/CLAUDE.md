@@ -82,8 +82,8 @@
 |------|------|------|
 | `/cluster-write` | 7 | `cluster-write.plan.json` |
 | `/cluster-save-state` | 12 | `cluster-save-state.plan.json` |
-| `/distill-style` | 7 | `distill-style.plan.json` |
-| `/outline` | 4 | `outline.plan.json` |
+| `/distill-style` | 8 | `distill-style.plan.json` |
+| `/outline` | 12 | `outline.plan.json` |
 | `/check-quality` | 3 | `check-quality.plan.json` |
 | `/reconcile` | 5 | `reconcile.plan.json` |
 
