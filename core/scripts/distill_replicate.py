@@ -402,8 +402,13 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         # reasoning 模型（gemini-3.x pro-preview 等）thinking_level=LOW 回收 thinking 占用的输出预算给正文。
         # 对齐 gen_writer.py（L831-833）· 2026-06-07 修：不传时 thinking 默认 HIGH 吃光预算 →
         # 复刻字数严重偏短（pro 实测 2348 vs 原作 9000）→ 回灌 estimate_cluster_arc 钩子/场景粗估失真归 0。
+        _dr_extra = {}
         if getattr(profile, "thinking_level", None):
-            _create_kw["extra_body"] = {"thinking_level": profile.thinking_level}
+            _dr_extra["thinking_level"] = profile.thinking_level
+        if getattr(profile, "reasoning_effort", None):
+            _dr_extra["reasoning_effort"] = profile.reasoning_effort  # OpenAI 标准·new-api 中转认此(elysiver 实测 thinking_level 被忽略致暴走)
+        if _dr_extra:
+            _create_kw["extra_body"] = _dr_extra
 
         # 🔴 轮次7 实测修：中转站瞬时 404/断流时立刻降级 → 撞死 fallback → exit 3。
         # 同 profile 先重试 2 次（指数退避·SDK max_retries 不覆盖 404/断流），耗尽才降级。
@@ -1248,9 +1253,10 @@ def main():
     # 「先分析后写」两段式会让它输出「量化坐标分析」元前言（不遵守 COT_BODY_MARKER → strip_cot_analysis
     # 剥不掉 → 泄漏进正文）+ 挤占正文 token 预算（pro-preview 实证：泄漏+字数崩 1895/18000）。
     # 故 reasoning 模型自动关 CoT-first，除非用户显式 --cot-first active。
-    if cot_first and args.cot_first is None and getattr(active, "thinking_level", None):
+    _active_reasoning = getattr(active, "thinking_level", None) or getattr(active, "reasoning_effort", None)
+    if cot_first and args.cot_first is None and _active_reasoning:
         cot_first = False
-        cot_mode = f"off(reasoning-auto·thinking_level={active.thinking_level})"
+        cot_mode = f"off(reasoning-auto·{_active_reasoning})"
         system_prompt = REPLICATE_SYSTEM_PROMPT
         print(f"[L3b] 检测到 reasoning 模型({active.model})·自动关 CoT-first "
               f"→ {cot_mode}（防元前言泄漏+正文预算被挤·2026-06-07 适配）", file=sys.stderr)
@@ -1366,7 +1372,7 @@ def main():
     # （pro-preview 实证：初稿 ~4700 CJK → refine 3 轮砍到 1737；且其 SFS 在 refine 内算 None 致
     # knockout 无法择优、退化保最后一轮=最短）。故 reasoning 模型自动关 draft-refine，
     # 除非用户显式 --draft-refine active。
-    if refine_mode == "active" and args.draft_refine is None and getattr(active, "thinking_level", None):
+    if refine_mode == "active" and args.draft_refine is None and (getattr(active, "thinking_level", None) or getattr(active, "reasoning_effort", None)):
         refine_mode = "off"
         print(f"[L3d] 检测到 reasoning 模型({active.model})·自动关 draft-refine"
               f"（refine 轮缩写正文 + SFS None 致 knockout 失效·2026-06-07 适配）", file=sys.stderr)

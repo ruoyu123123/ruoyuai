@@ -216,8 +216,13 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
     kw = dict(model=profile.model, messages=messages, max_tokens=max_tokens,
               temperature=profile.temperature if temperature is None else temperature,
               stream=True, stream_options={"include_usage": True})
+    _extra = {}
     if getattr(profile, "thinking_level", None):
-        kw["extra_body"] = {"thinking_level": profile.thinking_level}
+        _extra["thinking_level"] = profile.thinking_level
+    if getattr(profile, "reasoning_effort", None):
+        _extra["reasoning_effort"] = profile.reasoning_effort  # OpenAI 标准·new-api 中转站认此(elysiver 实测)
+    if _extra:
+        kw["extra_body"] = _extra
     if response_format_json:
         kw["response_format"] = {"type": "json_object"}
 

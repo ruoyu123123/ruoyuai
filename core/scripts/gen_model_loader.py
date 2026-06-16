@@ -65,6 +65,7 @@ class Profile:
     max_tokens: int | None  # None = 从 model_probe 缓存读
     protocol: str = "openai"  # openai(默认·/v1/chat/completions) | gemini(原生·streamGenerateContent·支持隐式前缀缓存)
     thinking_level: str | None = None  # gemini-3.x reasoning 模型思考档(LOW/MEDIUM/HIGH)·走 extra_body·LOW=回收15-25k输出预算给正文(治pro偏短·2026-06-06联网调研)·None=不传(flash等非reasoning)
+    reasoning_effort: str | None = None  # OpenAI 标准 reasoning 参数(low/medium/high)·走 extra_body·部分 new-api 中转站认此而非 gemini 专有 thinking_level(elysiver 2026-06-16 实测 effort=low 7s 受控·thinking_level 被忽略 63s 失控暴走)·与 thinking_level 独立·按 profile 配置·None=不传
 
 
 class GenModelConfigError(Exception):
@@ -173,6 +174,7 @@ class GenModelLoader:
                     max_tokens=int(max_tok_str) if max_tok_str else None,
                     protocol=((fields.get("protocol") or "openai").strip().lower() or "openai"),
                     thinking_level=((fields.get("thinking_level") or "").strip().upper() or None),
+                    reasoning_effort=((fields.get("reasoning_effort") or "").strip().lower() or None),
                 )
             except (ValueError, KeyError):
                 continue  # 字段解析失败 → 跳过该 profile

@@ -1284,8 +1284,15 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
     _create_kw = dict(model=profile.model, messages=messages, max_tokens=max_tokens,
                       temperature=profile.temperature, stream=True)
     # gemini-3.x reasoning 模型：thinking_level=LOW 回收 15-25k 输出预算给正文（治 pro 偏短·2026-06-06 联网调研）。
+    # reasoning_effort=low：OpenAI 标准 reasoning 参数·部分 new-api 中转站认此而非 gemini 专有 thinking_level
+    # （elysiver 2026-06-16 实测 effort=low 7s 受控 / thinking_level 被忽略 63s 失控暴走 500）。二者独立·按 profile 配。
+    _wr_extra = {}
     if getattr(profile, "thinking_level", None):
-        _create_kw["extra_body"] = {"thinking_level": profile.thinking_level}
+        _wr_extra["thinking_level"] = profile.thinking_level
+    if getattr(profile, "reasoning_effort", None):
+        _wr_extra["reasoning_effort"] = profile.reasoning_effort
+    if _wr_extra:
+        _create_kw["extra_body"] = _wr_extra
     try:
         import gen_throttle
         gen_throttle.wait()   # 限速端点（中转站 <15rpm）：请求前全局节流·默认关零回归

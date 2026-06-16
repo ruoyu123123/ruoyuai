@@ -183,13 +183,14 @@ def resolve_strict_estimable_idx() -> tuple[tuple[int, ...], bool, str]:
     try:
         from gen_model_loader import get_default_loader
         profile = get_default_loader().get_active_profile()
-        idx, is_reasoning = strict_idx_for_thinking_level(profile.thinking_level)
+        _re = profile.thinking_level or getattr(profile, "reasoning_effort", None)
+        idx, is_reasoning = strict_idx_for_thinking_level(_re)
         if is_reasoning:
-            note = (f"reasoning 模型 {profile.name}(thinking_level={profile.thinking_level}) · "
+            note = (f"reasoning 模型 {profile.name}(reasoning={_re}) · "
                     f"kicker(3) 浓缩复刻失真移出 strict · 仅 scene(4) · "
                     f"arc/kicker 真实验证 defer 到 gen_writer 写作端")
         else:
-            note = (f"非 reasoning 模型 {profile.name}(thinking_level=None) · "
+            note = (f"非 reasoning 模型 {profile.name}(无 thinking/effort) · "
                     f"默认 strict 含 kicker(3)+scene(4)")
         return idx, is_reasoning, note
     except Exception as e:  # noqa: BLE001 — profile 加载失败不阻断 verify
