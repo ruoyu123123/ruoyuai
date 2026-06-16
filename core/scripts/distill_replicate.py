@@ -41,6 +41,7 @@ from gen_model_loader import (  # noqa: E402
     GenModelConfigError,
     GenModelExhaustedError,
     Profile,
+    reasoning_extra_body,
 )
 import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
 
@@ -402,11 +403,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         # reasoning 模型（gemini-3.x pro-preview 等）thinking_level=LOW 回收 thinking 占用的输出预算给正文。
         # 对齐 gen_writer.py（L831-833）· 2026-06-07 修：不传时 thinking 默认 HIGH 吃光预算 →
         # 复刻字数严重偏短（pro 实测 2348 vs 原作 9000）→ 回灌 estimate_cluster_arc 钩子/场景粗估失真归 0。
-        _dr_extra = {}
-        if getattr(profile, "thinking_level", None):
-            _dr_extra["thinking_level"] = profile.thinking_level
-        if getattr(profile, "reasoning_effort", None):
-            _dr_extra["reasoning_effort"] = profile.reasoning_effort  # OpenAI 标准·new-api 中转认此(elysiver 实测 thinking_level 被忽略致暴走)
+        _dr_extra = reasoning_extra_body(profile)  # helper 单一真理源(thinking_level/reasoning_effort·防 thinking 暴走)
         if _dr_extra:
             _create_kw["extra_body"] = _dr_extra
 

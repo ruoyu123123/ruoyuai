@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from gen_model_loader import GenModelLoader, GenModelConfigError
+from gen_model_loader import GenModelLoader, GenModelConfigError, reasoning_extra_body
 try:
     import cluster_lookup  # 2026-05-29 复审修复：SC-1 blueprint list 归一守卫
 except Exception:  # 防御：缺模块退回原 dict 守卫
@@ -195,6 +195,7 @@ def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
 
     profile = loader.get_active_profile()
     client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
+    _xb = reasoning_extra_body(profile)  # reasoning 控制·防 thinking 暴走 content 空(elysiver reasoning_effort)
     try:
         resp = client.chat.completions.create(
             model=profile.model,
@@ -202,8 +203,9 @@ def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=2000,
+            max_tokens=8000,  # 2000→8000：reasoning 模型 thinking 占预算·留够正文(章标题短·8000 够 thinking+标题)
             temperature=0.8,
+            **({"extra_body": _xb} if _xb else {}),
         )
         raw = resp.choices[0].message.content.strip()
         # v23.13 (2026-05-21) 反元话语后处理 —— DeepSeek 等 reasoning model 易输出

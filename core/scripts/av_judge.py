@@ -75,6 +75,7 @@ from gen_model_loader import (  # noqa: E402
     GenModelConfigError,
     GenModelExhaustedError,
     Profile,
+    reasoning_extra_body,
 )
 
 # advisory 专用 issue code · ⚠️ 绝不进 audit_hub.HARD_GATE_CODES（北极星⑤ · 共同纪律 2）
@@ -394,6 +395,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
         full_text = ""
         t0 = time.time()
+        _xb = reasoning_extra_body(profile)  # reasoning 控制(elysiver reasoning_effort/pie-xian thinking_level)·防 thinking 暴走
         try:
             stream = client.chat.completions.create(
                 model=profile.model,
@@ -404,6 +406,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                 max_tokens=max_tokens,
                 temperature=profile.temperature,
                 stream=True,
+                **({"extra_body": _xb} if _xb else {}),
             )
             for chunk in stream:
                 if not chunk.choices:

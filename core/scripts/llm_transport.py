@@ -39,7 +39,7 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from gen_model_loader import GenModelLoader, Profile  # noqa: E402
+from gen_model_loader import GenModelLoader, Profile, reasoning_extra_body  # noqa: E402
 
 try:
     from secrets_store import redact as _redact  # BYOK key 脱敏（gemini key 在 URL）
@@ -216,11 +216,7 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
     kw = dict(model=profile.model, messages=messages, max_tokens=max_tokens,
               temperature=profile.temperature if temperature is None else temperature,
               stream=True, stream_options={"include_usage": True})
-    _extra = {}
-    if getattr(profile, "thinking_level", None):
-        _extra["thinking_level"] = profile.thinking_level
-    if getattr(profile, "reasoning_effort", None):
-        _extra["reasoning_effort"] = profile.reasoning_effort  # OpenAI 标准·new-api 中转站认此(elysiver 实测)
+    _extra = reasoning_extra_body(profile)  # helper 单一真理源(thinking_level/reasoning_effort·防 thinking 暴走)
     if _extra:
         kw["extra_body"] = _extra
     if response_format_json:

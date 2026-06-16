@@ -67,15 +67,9 @@ def test_neither_for_non_reasoning_profile():
 
 
 # ============ 2. extra_body 注入逻辑（复现 llm_transport:220 / gen_writer:1290）============
-def _extra_body(profile):
-    """复现 openai-path extra_body 构造（thinking_level/reasoning_effort 独立·都注入）。
-    与 llm_transport.py:_extra + gen_writer.py:_wr_extra + distill_replicate.py:_dr_extra 一致。"""
-    e = {}
-    if getattr(profile, "thinking_level", None):
-        e["thinking_level"] = profile.thinking_level
-    if getattr(profile, "reasoning_effort", None):
-        e["reasoning_effort"] = profile.reasoning_effort
-    return e
+# 2026-06-16 helper 提取单一真理源后·直接测真实代码（非复现）。8 处 openai-path 调用
+# （llm_transport/gen_writer/distill_replicate/av_judge/gen_creative/gen_fixer/gen_chapter_titles/ai_wrapper）全用此。
+_extra_body = gml.reasoning_extra_body
 
 
 def _profile(**kw):

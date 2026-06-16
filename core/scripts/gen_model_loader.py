@@ -255,6 +255,21 @@ class GenModelExhaustedError(Exception):
 
 # ============ 便捷函数 ============
 
+def reasoning_extra_body(profile) -> dict:
+    """openai-path reasoning 控制 extra_body 单一真理源（thinking_level/reasoning_effort 独立·都注入·按 profile 配）。
+
+    所有走 OpenAI 兼容 chat.completions.create 的 gen-model 调用统一用此构造 extra_body·防 inline
+    漂移/漏注入（2026-06-16：grep 发现 5 处独立 client 裸调用漏 reasoning 控制→elysiver 当主力
+    thinking 暴走 content 空 500）。thinking_level=gemini 专有(pie-xian 认)·reasoning_effort=OpenAI
+    标准(elysiver/new-api 中转认)·二者独立按 profile 配。空 dict=非 reasoning profile(flash 等)不注入。"""
+    e = {}
+    if getattr(profile, "thinking_level", None):
+        e["thinking_level"] = profile.thinking_level
+    if getattr(profile, "reasoning_effort", None):
+        e["reasoning_effort"] = profile.reasoning_effort
+    return e
+
+
 def _user_override_path() -> Path:
     """分发版用户态可写 active 覆盖文件（%APPDATA%/ruoyuai/user_overrides.env）。
 

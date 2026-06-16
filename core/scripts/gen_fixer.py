@@ -69,6 +69,7 @@ from gen_model_loader import (  # noqa: E402
     GenModelConfigError,
     GenModelExhaustedError,
     Profile,
+    reasoning_extra_body,
 )
 import chapter_io as cio  # noqa: E402 · CJK 计数权威口径（统一覆盖扩展 CJK）
 
@@ -542,9 +543,11 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
                                     "不要重复已经写过的内容、不要重新开头，直接续写后续正文，"
                                     "务必补全被截断的 ===FILE: ... === / ===END=== 块和结尾的 "
                                     "```json``` 总结块（缺了下游无法解析就写不出修复文件）。"})
+    _xb = reasoning_extra_body(profile)  # reasoning 控制·防 thinking 暴走(elysiver/pie-xian)
     stream = client.chat.completions.create(
         model=profile.model, messages=messages, max_tokens=max_tokens,
         temperature=profile.temperature, stream=True,
+        **({"extra_body": _xb} if _xb else {}),
     )
     text = ""
     finish_reason = None

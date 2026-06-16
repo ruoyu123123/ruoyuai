@@ -151,6 +151,7 @@ def call_gen_model(system: str, user: str, profile_lock_path: str | None = None)
 
     try:
         from openai import OpenAI
+        from gen_model_loader import reasoning_extra_body
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url, timeout=180.0)
         # v22.gov.align.fix: 用 response_format 强制 JSON（OpenAI 兼容 · reasoning model 友好）
         kwargs = {
@@ -162,6 +163,9 @@ def call_gen_model(system: str, user: str, profile_lock_path: str | None = None)
             "max_tokens": 8000,         # reasoning model 可能 reasoning 段占很多 token
             "temperature": 0.3,
         }
+        _xb = reasoning_extra_body(profile)  # reasoning 控制·防 thinking 暴走(elysiver/pie-xian)
+        if _xb:
+            kwargs["extra_body"] = _xb
         try:
             kwargs["response_format"] = {"type": "json_object"}
             resp = client.chat.completions.create(**kwargs)

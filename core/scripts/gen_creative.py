@@ -46,6 +46,7 @@ from gen_model_loader import (  # noqa: E402
     GenModelConfigError,
     GenModelExhaustedError,
     Profile,
+    reasoning_extra_body,
 )
 
 
@@ -376,6 +377,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
 
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
         full_text = ""
+        _xb = reasoning_extra_body(profile)  # reasoning 控制·防 thinking 暴走(elysiver/pie-xian)
         try:
             stream = client.chat.completions.create(
                 model=profile.model,
@@ -386,6 +388,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                 max_tokens=max_tokens,
                 temperature=profile.temperature,
                 stream=True,
+                **({"extra_body": _xb} if _xb else {}),
             )
             for chunk in stream:
                 if not chunk.choices:
