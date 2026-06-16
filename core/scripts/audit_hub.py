@@ -1042,6 +1042,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     eps = _SCRIPT_DIR / "emotional_punctuation_scanner.py"
     # [2026-06-16 第二轮穷尽核查#2] 功能词指纹偏离作者基线(SFS 最高权重维却 0 写作时回查·金标准综合 min0.86→FLOOR0.6·单边下尾) · advisory
     fwfs = _SCRIPT_DIR / "function_word_fingerprint_scanner.py"
+    # [2026-06-16 第二轮穷尽核查#3] 二阶句长节奏动力学(Δ²var/var·order-sensitive·探针7 permutation-invariant 看不见时序·DivEye·通用 floor3.0) · advisory
+    sors = _SCRIPT_DIR / "second_order_rhythm_scanner.py"
 
     # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
     # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
@@ -1193,6 +1195,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "function_word_fingerprint_scanner", "FUNCTION_WORD_FINGERPRINT_DRIFT", "风格")),
+                # [2026-06-16 第二轮穷尽核查#3] 二阶句长节奏 · advisory · SECOND_ORDER_RHYTHM_MODE 默认 shadow
+                # （探针7 permutation-invariant 看不见时序·Δ²var/var order-sensitive 正交补盲·DivEye·var=0→None 解耦探针7·通用 floor 不传 --project）
+                ("second_order_rhythm",
+                 [child_python(), str(sors), str(cluster_draft)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "second_order_rhythm_scanner", "SECOND_ORDER_RHYTHM_FLAT", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
