@@ -420,6 +420,63 @@ def _build_knowledge_gap_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _golden_fewshot_inject_mode() -> str:
+    """golden few-shot 注入开关（env GOLDEN_FEWSHOT_INJECT_MODE · 默认 shadow）。
+
+    蒸馏 golden_passages 按 scene_type 选的原作金句段·此前只 raw JSON 躺 manifest dump 中段 dead-zone
+    （writer 难识别为写作目标）。本开关升格到生成点近邻 few-shot 段（few-shot 比 zero-shot 提升 23.5x·
+    arxiv 2509.14543）。默认 shadow（位置升格的文风改善效果需 gen-model A/B·先影子·该字段 producer 端
+    无 env 闸·gen_writer 侧控）。
+    """
+    return (os.environ.get("GOLDEN_FEWSHOT_INJECT_MODE") or "shadow").strip().lower()
+
+
+def _build_golden_fewshot_section(manifest_path: Path) -> str:
+    """#7：从 manifest.distill_golden_few_shot.passages_by_type 抽原作金句段拼 writer few-shot 段（升格）。
+
+    蒸馏库按 scene_type 选的原作金句（模仿句法/节奏·非抄内容）·此前只 raw JSON dead-zone·升格到生成点
+    近邻风格锚区。每类取前 1-2 段（passages 已截 800 字）防生成点近邻二次塞爆。
+    GOLDEN_FEWSHOT_INJECT_MODE != active / 字段缺/空 → ""（零回归）。advisory·北极星⑤不硬锁。
+    """
+    if _golden_fewshot_inject_mode() != "active":
+        return ""
+    if not manifest_path.exists():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    gfs = m.get('distill_golden_few_shot')
+    if not isinstance(gfs, dict):
+        return ""
+    pbt = gfs.get('passages_by_type')
+    if not isinstance(pbt, dict) or not pbt:
+        return ""
+    lines = [
+        "## 📜 原作金句 few-shot（模仿句法/节奏·非抄内容 · advisory）",
+        "",
+        "下面是蒸馏库按本章场景类型选的**作者原作金句段**。模仿它们的句法骨架/节奏/用词色彩"
+        "（不是抄内容）——few-shot 范例比抽象描述更能锚住作者笔法：",
+        "",
+    ]
+    n = 0
+    for ptype, passages in pbt.items():
+        if not isinstance(passages, list) or not passages:
+            continue
+        picked = [p for p in passages[:2] if isinstance(p, str) and p.strip()]  # 每类前 1-2 段防爆量
+        if not picked:
+            continue
+        label = str(ptype).replace("_passages", "")
+        lines.append(f"【{label} 类】")
+        for p in picked:
+            lines.append(p.strip())
+            lines.append("")
+        n += 1
+    if n == 0:
+        return ""
+    return "\n".join(lines).rstrip()
+
+
 def _build_narrative_seq_section(manifest_path: Path) -> str:
     """#4：从 manifest.narrative_function_sequence 抽作者签名因果功能链拼 writer prompt 段（结构骨）。
 
@@ -732,6 +789,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     knowledge_gap_section = _build_knowledge_gap_section(manifest_path)
     # #4：作者签名因果功能链段（结构骨·NARR_FUNC_SEQ_INJECT_MODE 控制·默认 shadow 时 build_manifest 字段 None → 空段零回归）
     narr_seq_section = _build_narrative_seq_section(manifest_path)
+    # #7：原作金句 few-shot 段（蒸馏 golden_passages 升格·GOLDEN_FEWSHOT_INJECT_MODE 默认 shadow 时空 → 零回归）
+    golden_fewshot_section = _build_golden_fewshot_section(manifest_path)
     # #3 升格：本书文风动态锚段（治 D 级长程退化·ROLLING_ANCHOR_INJECT_MODE 默认 shadow 时空 → 零回归）
     rolling_anchor_section = _build_rolling_anchor_section(manifest_path)
 
@@ -1000,6 +1059,7 @@ cluster_brief 完整内容：
     # 阶段D3：信息差主调段（与决策原则并列·序列骨·默认 shadow 时空 → 零回归）
     knowledge_gap_block = (knowledge_gap_section + "\n\n") if knowledge_gap_section else ""
     narr_seq_block = (narr_seq_section + "\n\n") if narr_seq_section else ""
+    golden_fewshot_block = (golden_fewshot_section + "\n\n") if golden_fewshot_section else ""
     rolling_anchor_block = (rolling_anchor_section + "\n\n") if rolling_anchor_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
@@ -1033,7 +1093,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -1067,7 +1127,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}
