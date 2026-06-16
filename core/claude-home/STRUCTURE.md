@@ -354,7 +354,6 @@ mv "风格库/{书名}_skill.md" "workspace/styles/{书名}/skill_FINAL.md"
 | `/cluster-write` | cluster 整块草稿 + 切章物理文件 + 平铺 CHANGES | `workspace/novels/{书名}/章节/cluster_<key>_draft/cluster_<key>_draft.txt` → splitter 切出 `第{N}章/第{N}章.txt` + `第{N}章_changes.json` |
 | `/cluster-save-state` | cluster 摘要 / 反思 / 走向卡 + 涌现下个 cluster brief（一次性 apply cluster_changes 到数据库） | `workspace/novels/{书名}/_数据库/故事块摘要.json` + `章节/cluster_<key>_draft/` 伴生文件 |
 | `/check-quality` | 校验报告 | `workspace/novels/{书名}/_tmp/quality_ch{N}.md` |
-| `/scan` | 市场分析 | `workspace/novels/{书名}/_数据库/扫榜.json` |
 | `/export` | 拼接全文 | `workspace/novels/{书名}/全文.txt` |
 | `/reconcile` | 一致性调和 | `workspace/novels/{书名}/_数据库/调和日志_{date}.md` |
 

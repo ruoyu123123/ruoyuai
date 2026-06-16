@@ -3,7 +3,6 @@
 修复"数据库 schema 漂移"问题——常见 migrate：
 - 人物卡 dict→list
 - 故事块摘要 dict→list
-- 伏笔 PR012.due_by_cluster null→默认
 - 进度.cluster_blueprint 字段补全
 
 每次 save-state 前跑一次。schema 不符合 → 自动 migrate（备份后改）或报错。
@@ -167,16 +166,6 @@ def migrate_dict_to_list(data: dict, collection_key: str) -> tuple[dict, bool]:
     return data, True
 
 
-def fix_null_due_by(data: dict) -> tuple[dict, int]:
-    """伏笔表 PR.due_by null → 999。返回 (data, 修复条数)。"""
-    fixed = 0
-    for p in data.get("promises", []):
-        if p.get("due_by") is None:
-            p["due_by"] = 999
-            fixed += 1
-    return data, fixed
-
-
 def validate_file(path: Path, rules: dict, auto_migrate: bool) -> tuple[list[str], list[str], bool]:
     """校验单个 JSON。返回 (errors, warnings, migrated)。"""
     errors = []
@@ -219,26 +208,6 @@ def validate_file(path: Path, rules: dict, auto_migrate: bool) -> tuple[list[str
                 errors.append(
                     f"[TYPE_MISMATCH] {path.name}.{coll_key}: 实际 {current_type}，期望 {expected}"
                 )
-
-    # 字段约束检查
-    fc = rules.get("field_constraints", {})
-    if fc:
-        coll = data.get(coll_key, [])
-        if isinstance(coll, list):
-            for i, item in enumerate(coll):
-                if not isinstance(item, dict):
-                    continue
-                for field, (constraint_type, msg) in fc.items():
-                    v = item.get(field)
-                    if constraint_type == "int_or_999" and v is None:
-                        if auto_migrate:
-                            item[field] = 999
-                            migrated = True
-                            warnings.append(f"[AUTO_FIXED] {path.name}.{coll_key}[{i}].{field}: null→999")
-                        else:
-                            errors.append(f"[NULL_FIELD] {path.name}.{coll_key}[{i}].{field}: {msg}")
-            if migrated:
-                backup_then_save(path, data)
 
     # item 必需字段检查（仅警告，不致命）
     req_fields = rules.get("item_required_fields", [])
