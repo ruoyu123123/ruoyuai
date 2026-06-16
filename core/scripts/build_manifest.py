@@ -2539,6 +2539,12 @@ def _build_hard_constraints(
         dr_m = _num(quant.get("dialogue_ratio", {}).get("mean"))
         if dr_m is not None:
             hard_constraints.append(f"（advisory·作者档第一权威·可校准偏离）对话占比 ≥ {max(0.0, dr_m - 0.15):.0%}")
+        # #2轮穷尽核查纠偏：dialogue_ratio 含引号化内心独白系统性高估(真机惊悚 1000 章 0.32 vs 纯对话 0.21)
+        # → 补纯对话占比 advisory 旁注(保留上方 dr 注入向后兼容·此为真实角色对白基线·防 writer 被高估值误导多写对话)
+        dor_m = _num(quant.get("dialogue_only_ratio", {}).get("mean"))
+        if dor_m is not None:
+            hard_constraints.append(f"（advisory·纯对话占比·剔除引号化独白·作者真实口语基线）纯角色对白占比≈{dor_m:.0%}"
+                                    f"（上方『对话占比』含引号化内心独白偏高·此为真实角色对白占比·二者并存参考）")
         sl = quant.get("sentence_length", {})
         sl_m = _num(sl.get("mean"))
         if sl_m is not None:

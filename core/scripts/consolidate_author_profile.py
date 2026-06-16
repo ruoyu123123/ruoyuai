@@ -141,6 +141,7 @@ def aggregate_quantitative(project: Path, total: int) -> dict:
     orig = project / "原文"
     sent_means, sent_stds, dia, ssr, para_means, ccs, imr = [], [], [], [], [], [], []
     ttr, hapax = [], []
+    dor = []   # #2轮穷尽核查: dialogue_only_ratio（剔除引号化独白的纯对话占比·producer 已算却被聚合丢弃）
     punct: dict[str, list[float]] = defaultdict(list)
     fw: dict[str, list[float]] = defaultdict(list)
 
@@ -168,6 +169,8 @@ def aggregate_quantitative(project: Path, total: int) -> dict:
             ccs.append(float(prof["total_chinese_chars"]))
         if _num(prof.get("inner_monologue_ratio")) is not None:
             imr.append(float(prof["inner_monologue_ratio"]))
+        if _num(prof.get("dialogue_only_ratio")) is not None:
+            dor.append(float(prof["dialogue_only_ratio"]))
         for k, v in (prof.get("punctuation_density_per_1000", {}) or {}).items():
             if _num(v) is not None:
                 punct[k].append(float(v))
@@ -232,6 +235,9 @@ def aggregate_quantitative(project: Path, total: int) -> dict:
         q["function_word_fingerprint_per_1000"] = {k: {"mean": _mean(v)} for k, v in fw.items()}
     if _mean(imr) is not None:
         q["inner_monologue_ratio"] = {"mean": _mean(imr)}  # build_manifest D1 基线
+    if _mean(dor) is not None:
+        # #2轮: 纯对话占比(剔引号化独白)·纠偏 dialogue_ratio 高估(真机惊悚 1000 章 0.32 vs 0.21·gap=inner_monologue)
+        q["dialogue_only_ratio"] = {"mean": _mean(dor)}
     ttr_m, hapax_m = _mean(ttr), _mean(hapax)
     if ttr_m is not None or hapax_m is not None:
         q["vocab_richness"] = {"ttr_mean": ttr_m, "hapax_mean": hapax_m}

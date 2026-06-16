@@ -36,6 +36,7 @@ def _mk_project(root: Path, n_chapters: int = 4) -> Path:
             "dialogue_ratio": 0.25,
             "single_sentence_para_ratio": 0.50,
             "inner_monologue_ratio": 0.10,
+            "dialogue_only_ratio": 0.15,
             "punctuation_density_per_1000": {"comma": 60.0, "period": 25.0, "comma_period_ratio": 2.4},
             "function_word_fingerprint_per_1000": {"的": 38.0, "了": 18.0},
             "vocabulary_richness": {"type_token_ratio": 0.55, "hapax_ratio": 0.40},
@@ -88,6 +89,8 @@ def test_consolidate_produces_consumer_schema():
         assert q["paragraph_length"]["single_sentence_para_ratio_mean"] is not None
         # build_manifest D1 基线
         assert q["inner_monologue_ratio"]["mean"] is not None
+        # #2轮穷尽核查: 纯对话占比聚合（纠偏 dialogue_ratio 含引号化独白高估）
+        assert q["dialogue_only_ratio"]["mean"] is not None
         # 段长含 mean（validate_style 段长 band）
         assert q["paragraph_length_chars"].get("mean") is not None
 
