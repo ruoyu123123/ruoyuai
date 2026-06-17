@@ -42,6 +42,9 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 import plan_tracker as pt  # noqa: E402
+from log_util import get_logger, print_progress  # noqa: E402
+
+logger = get_logger(__name__)
 
 # 🔴 frozen-aware REPO_ROOT（对抗审查 FATAL）：PyInstaller 扁平收模块使
 # __file__.parent.parent.parent 在 frozen 下指到 bundle 外 → run_script_in_process 的
@@ -279,8 +282,7 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
         script_path = repo_root / tokens[0]
     mod_name = script_path.stem
     argv = [str(script_path)] + tokens[1:]
-    print(f"[orchestrator][{label}] (in-process) {mod_name} {' '.join(tokens[1:])}",
-          file=sys.stderr)
+    logger.debug(f"[{label}] (in-process) {mod_name} {' '.join(tokens[1:])}")
 
     saved_argv, saved_cwd = sys.argv, _os.getcwd()
     sys.argv = argv
@@ -294,8 +296,7 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
         mod = importlib.import_module(mod_name)
         main_fn = getattr(mod, "main", None)
         if main_fn is None:
-            print(f"[orchestrator][{label}] 脚本 {mod_name} 无 main()，frozen 下无法进程内调用",
-                  file=sys.stderr)
+            logger.error(f"[{label}] 脚本 {mod_name} 无 main()，frozen 下无法进程内调用")
             return 3
         # 签名适配（真 distill e2e 抓出）：8 个脚本（consolidate_author_profile 等）是
         # main(argv) 风格——有必填位置参则传 sys.argv[1:]（已 set 进 sys.argv）。
@@ -325,9 +326,9 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
         worker.start()
         worker.join(timeout_s)
         if worker.is_alive():
-            print(f"[orchestrator][{label}] [watchdog] 脚本 {mod_name} 超时"
-                  f"（{timeout_s:g}s）·标记失败可续跑——弃置线程可能仍在写文件·"
-                  f"该步骤产物可能不完整·续跑会重做本步", file=sys.stderr)
+            logger.error(f"[{label}] [watchdog] 脚本 {mod_name} 超时"
+                        f"（{timeout_s:g}s）·标记失败可续跑——弃置线程可能仍在写文件·"
+                        f"该步骤产物可能不完整·续跑会重做本步")
             return 124
         if "exc" in outcome:
             raise outcome["exc"]          # 落外层 except Exception → rc=3（原语义）
@@ -335,10 +336,9 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
         return int(ret) if isinstance(ret, int) else (0 if ret is None else 3)
     except Exception as e:                # 脚本内部异常 → 当失败退出码（不崩 GUI）
         import traceback
-        print(f"[orchestrator][{label}] in-process 脚本异常: {type(e).__name__}: {e}",
-              file=sys.stderr)
+        logger.error(f"[{label}] in-process 脚本异常: {type(e).__name__}: {e}")
         for line in traceback.format_exc().splitlines()[-6:]:
-            print(f"[orchestrator][{label}]   {line}", file=sys.stderr)
+            logger.error(f"[{label}]   {line}")
         return 3
     finally:
         sys.argv = saved_argv
@@ -370,7 +370,7 @@ def default_script_runner(cmd_line: str, *, repo_root: Path = REPO_ROOT,
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
     full = [child_python()] + tokens
-    print(f"[orchestrator][{label}] $ {' '.join(tokens)}", file=sys.stderr)
+    logger.debug(f"[{label}] $ {' '.join(tokens)}")
     proc = subprocess.run(full, cwd=str(repo_root), capture_output=True,
                           text=True, encoding="utf-8", errors="replace",
                           timeout=SCRIPT_TIMEOUT, env=env)
@@ -522,11 +522,11 @@ def cli_pause_handler(step: dict, spec: dict, options: list) -> object:
     """CLI 缺省停顿点：终端渲染候选/提问 → input()。NiceGUI 模式换 async handler。"""
     prompt = spec.get("prompt") or f"step {step.get('n')} 需要你的选择"
     if spec.get("type") == "choice" and options:
-        print(f"\n=== {prompt} ===")
+        logger.info(f"\n=== {prompt} ===")
         for i, opt in enumerate(options, 1):
             label = opt.get("label") or opt.get("title") or str(opt)[:80] \
                 if isinstance(opt, dict) else str(opt)[:80]
-            print(f"  [{i}] {label}")
+            logger.info(f"  [{i}] {label}")
         while True:
             raw = input(f"选择 1-{len(options)}: ").strip()
             if raw.isdigit() and 1 <= int(raw) <= len(options):
@@ -565,10 +565,9 @@ def _resolve_pause(step: dict, ctx: dict, *, auto_pilot: bool,
                         if isinstance(alt_v, list) and alt_v \
                                 and all(isinstance(x, dict) for x in alt_v):
                             options = alt_v
-                            print(f"[orchestrator] WARN pause 候选 options_field="
-                                  f"{spec.get('options_field')} 为空·同义键 {alt} "
-                                  f"嗅探命中（上游 schema 漂移·建议查 producer）",
-                                  file=sys.stderr)
+                            logger.warning(f"WARN pause 候选 options_field="
+                                         f"{spec.get('options_field')} 为空·同义键 {alt} "
+                                         f"嗅探命中（上游 schema 漂移·建议查 producer）")
                             break
             except (OSError, json.JSONDecodeError):
                 options = []
@@ -673,7 +672,7 @@ def run_command(command: str, project: str, *, key: str | None = None,
         if step.get("status") == pt.STATUS_COMPLETED:
             summary.completed.append(StepOutcome(n, name, "skipped", "断点续跑跳过"))
             continue
-        print(f"\n[orchestrator] ▶ step {n}: {name}", file=sys.stderr)
+        logger.info(f"▶ step {n}: {name}")
         if step_callback:
             try:
                 step_callback(n, name, total_steps)
@@ -698,8 +697,7 @@ def run_command(command: str, project: str, *, key: str | None = None,
             rc = runner(cmd, repo_root=repo_root, label=f"step{n}")
             if advisory_line:
                 if rc != 0:
-                    print(f"[orchestrator] WARN 条件脚本退出码 {rc}（advisory·继续）: "
-                          f"{cmd}", file=sys.stderr)
+                    logger.warning(f"WARN 条件脚本退出码 {rc}（advisory·继续）: {cmd}")
                 continue
             action = _exit_code_action(step, rc)
             if action == "fail":
@@ -708,7 +706,7 @@ def run_command(command: str, project: str, *, key: str | None = None,
                     f"修复后 --resume 续跑）")
             if action.startswith("dispatch:"):
                 agent = action.split(":", 1)[1]
-                print(f"[orchestrator] 退出码 {rc} → 派单 {agent}", file=sys.stderr)
+                logger.info(f"退出码 {rc} → 派单 {agent}")
                 dispatch(agent, step, ctx)
             # 'ok' → 继续
 
@@ -722,8 +720,8 @@ def run_command(command: str, project: str, *, key: str | None = None,
         _msa_list = [_msa] if isinstance(_msa, str) else (_msa or [])
         if "novel-outline-planner" in _msa_list \
                 and step.get("pause_for_user") and _bc_marker.exists():
-            print(f"[orchestrator] 🎉 检测到完本标记——跳过涌现 judge/走向卡"
-                  f"（本书大势已走完·去导出全文吧）", file=sys.stderr)
+            logger.info(f"检测到完本标记——跳过涌现 judge/走向卡"
+                       f"（本书大势已走完·去导出全文吧）")
             # end_plan anti-skip 校验声明的 JudgeReport 真存在——生产模板该路径
             # 正好是 emerge 完本分支已写的 brief_candidates.json；这里兜底补写
             # （诚实记录「完本短路未派 judge」·不削弱 anti-skip）。
@@ -767,8 +765,8 @@ def run_command(command: str, project: str, *, key: str | None = None,
                 except (OSError, json.JSONDecodeError, ValueError):
                     _skip_dispatch = False
             if _skip_dispatch:
-                print(f"[orchestrator] ♻ 续跑复用已有 JudgeReport（{_rp2.name}）"
-                      f"·跳过重派 judge 不重烧 API", file=sys.stderr)
+                logger.info(f"♻ 续跑复用已有 JudgeReport（{_rp2.name}）"
+                           f"·跳过重派 judge 不重烧 API")
 
         # 3) must_spawn_agent（含 ROUND 循环）
         # agent_executor=="script"：创意 wrapper（novel-writer/novel-chapter-splitter）
@@ -793,8 +791,7 @@ def run_command(command: str, project: str, *, key: str | None = None,
                                     pause_handler=pause_handler)
             if answer is None and not auto_pilot:
                 summary.paused_at = n
-                print(f"[orchestrator] ⏸ step {n} 等待用户输入（plan {plan_id}）",
-                      file=sys.stderr)
+                logger.info(f"⏸ step {n} 等待用户输入（plan {plan_id}）")
                 return summary
             ctx[f"<user_answer_step_{n}>"] = answer
             ans_path = step["pause_for_user"].get("answer_artifact")
@@ -874,8 +871,7 @@ def _run_round_loop(agent: str, step: dict, ctx: dict, cfg: dict, dispatch,
         if verdict == pass_value and not issues:
             clean += 1
             if clean >= need_clean:
-                print(f"[orchestrator] {agent} 连续 {clean} 轮 clean → 放行",
-                      file=sys.stderr)
+                logger.info(f"{agent} 连续 {clean} 轮 clean → 放行")
                 return True
         else:
             clean = 0
@@ -887,10 +883,9 @@ def _run_round_loop(agent: str, step: dict, ctx: dict, cfg: dict, dispatch,
                 rc = runner(cmd, repo_root=repo_root,
                             label=f"step{step.get('n')}-r{rnd}-fix")
                 if rc != 0:
-                    print(f"[orchestrator] WARN 轮间修复脚本退出码 {rc}（advisory·"
-                          f"继续下一轮）", file=sys.stderr)
-    print(f"[orchestrator] WARN {agent} {max_rounds} 轮后未达连续 {need_clean} 轮 "
-          f"clean → 软预算放行（advisory 非门禁·北极星⑤）", file=sys.stderr)
+                    logger.warning(f"WARN 轮间修复脚本退出码 {rc}（advisory·继续下一轮）")
+    logger.warning(f"WARN {agent} {max_rounds} 轮后未达连续 {need_clean} 轮 "
+                   f"clean → 软预算放行（advisory 非门禁·北极星⑤）")
     return False  # 🔴 2026-06-17 显式信号：max_rounds 软放行 ≠ clean（caller 可据此记录/降级·当前 advisory 不阻断）
 
 
@@ -913,8 +908,8 @@ def main():
                           pause_handler=cli_pause_handler)
     done = [s for s in summary.completed if s.status == "completed"]
     skipped = [s for s in summary.completed if s.status == "skipped"]
-    print(f"\n[orchestrator] ✅ {summary.command} 完成 plan={summary.plan_id} "
-          f"(完成 {len(done)} 步 · 续跑跳过 {len(skipped)} 步)")
+    logger.info(f"✅ {summary.command} 完成 plan={summary.plan_id} "
+                f"(完成 {len(done)} 步 · 续跑跳过 {len(skipped)} 步)")
     return 0
 
 
