@@ -76,7 +76,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 > `cluster_blueprint` 各 cluster 占位）佐证。**禁止**用 `_数据库/故事块摘要.json` 当章节
 > 清单来源——该文件是 **cluster 维度** 的账本（`{schema_version, clusters:[]}`，由
 > `cluster_summary_store.py` 按 cluster 数组原子写入），**不是章节清单**，且在 cluster
-> save-state 链路里常为空数组（拿不到任何章节）。它只能做 cluster 级辅助佐证。
+> cluster-save-state 链路里常为空数组（拿不到任何章节）。它只能做 cluster 级辅助佐证。
 
 1. **获取所有章节清单（权威）**：Glob `章节/第*章/第*章.txt` 列出所有物理章节文件
    （零填充三位，如 `第001章/第001章.txt`）。用 `进度.json.completed` 核对总章数。
@@ -300,7 +300,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 - ⚠️ 修改正文前必须先创建备份（复制为 `第N章.txt.bak`）
 - ⚠️ 调和前必须打 Git 标签（`before-reconcile-<时间戳>`）作为回滚点
-- 修复后的章节需要重新执行 save-state 的第7.5步（风格保真度校验）
+- 修复后的章节需要重新执行 `/cluster-save-state` 的质检步骤（风格保真度校验）
 - 锁定事实的修改是不可逆操作，修改前在终端明确提示用户确认
 - 自动修复采用 Agent 子任务独立执行，失败不影响其他章节
 - Git 不可用时：只依赖 .bak 备份，仍可继续调和
