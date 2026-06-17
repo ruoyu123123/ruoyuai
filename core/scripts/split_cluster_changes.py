@@ -384,7 +384,13 @@ def main():
                 advisory = True
         elif wb.get("error"):
             print(f"     ⚠ 事件簇 回填跳过: {wb.get('error')}")
-            advisory = True
+            # 🔴 2026-06-17 bug-hunt 修：进到这里说明切章本体已成功（在 result.ok 分支内·
+            # written_count 章 _changes.json 已落盘）。事件簇.json 回填是 **consistency-only
+            # 可选步骤**，其失败（0切/pending_tail/缺该cluster/事件簇不存在/相邻区间非法/
+            # atomic_json不可用）**绝不应让切章成功的 step 返回 exit1 卡死 orchestrator 管线**。
+            # 仅警告不升 advisory。（原 _zero_cut 守卫只豁免 0 切·漏了「切章成功+回填失败」
+            # 兄弟分支 → 与已修的 0切 exit1 同族 bug。）
+            pass
         # SC-2 exit 语义：advisory 级发现统一 exit 1；纯成功 exit 0
         return 1 if advisory else 0
     else:
@@ -396,4 +402,12 @@ def main():
 
 
 if __name__ == "__main__":
+    # 🔴 2026-06-17 bug-hunt 修：直接 CLI 调用时 Windows GBK 控制台编码不了 print 里的
+    # ⚠(U+26A0)/↩(U+21A9) → UnicodeEncodeError 崩（orchestrator 路径有 PYTHONIOENCODING=utf-8
+    # 或 frozen reconfigure 掩盖·直接调用裸崩）。入口强制 UTF-8 输出（对齐 judge_runner __main__）。
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     sys.exit(main())

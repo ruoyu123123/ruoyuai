@@ -154,6 +154,12 @@ def update(project_root: Path, ch: int) -> dict:
 
     updated_ids = []
     for trig in triggered:
+        # 🔴 2026-06-17 bug-hunt 修：守卫畸形 fate_events_triggered 元素（裸字符串 / evidence=None）。
+        # 原 trig.get 在 str 上 AttributeError·trig.get("evidence","")[:120] 在 None 上 TypeError →
+        # fate_engine CLI 子进程 exit1 → save-state step9 假失败卡死流水线。对齐 world_evolution
+        # _apply_chapter 的 isinstance 守卫。
+        if not isinstance(trig, dict):
+            continue
         eid = trig.get("event_id")
         if not eid:
             continue
@@ -161,7 +167,7 @@ def update(project_root: Path, ch: int) -> dict:
             if _event_id(e) == eid and e.get("status") != "completed":
                 e["status"] = "completed"
                 e["completed_at_ch"] = ch
-                e["completion_evidence"] = trig.get("evidence", "")[:120]
+                e["completion_evidence"] = (trig.get("evidence") or "")[:120]
                 updated_ids.append(eid)
                 break
 

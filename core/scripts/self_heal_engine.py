@@ -177,7 +177,9 @@ def _apply_ingest(kb, inc_path: Path, stats: dict) -> dict:
                 inc = json.loads(line)
             except Exception:
                 continue
-            sig = inc.get("signature") or f"{inc.get('script','')}::{inc.get('error_type','')}"
+            # 🔴 2026-06-17 bug-hunt 修：signature 可能是非字符串（如 int）→ 原 sig.strip 崩
+            # AttributeError·绕过 per-line tolerance 让一条毒记录整批 ingest 失败。强转 str。
+            sig = str(inc.get("signature") or f"{inc.get('script','')}::{inc.get('error_type','')}")
             if not sig.strip(":"):
                 continue
             new_count += 1

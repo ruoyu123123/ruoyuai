@@ -144,6 +144,24 @@ def normalize_blueprint(prog) -> dict:
     return {}
 
 
+def _coerce_range(cr):
+    """归一 chapter_range 到 [lo, hi]·否则 None。
+
+    🔴 2026-06-17 bug-hunt：权威反查统一认两种形态——list[lo,hi]（v2/v27 规范）+ 历史 str
+    "lo-hi"（split_cluster_changes 等历史 schema 会写）。原 cluster_lookup 只认 list → str-form
+    cluster 在权威反查静默返 None → 各 consumer（save_state/evaluators/orchestrator）反查失败。
+    """
+    if isinstance(cr, list) and len(cr) == 2:
+        return cr
+    if isinstance(cr, str) and "-" in cr:
+        try:
+            a, b = cr.split("-", 1)
+            return [int(a.strip()), int(b.strip())]
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def _iter_blueprint_ranges(project_root):
     """yield (cluster_id, [lo, hi] | None, scene_chs:set) from 进度.cluster_blueprint.
 
@@ -156,8 +174,7 @@ def _iter_blueprint_ranges(project_root):
     for cid, cdata in bp.items():
         if not isinstance(cdata, dict):
             continue
-        cr = cdata.get("chapter_range") or []
-        rng = cr if (isinstance(cr, list) and len(cr) == 2) else None
+        rng = _coerce_range(cdata.get("chapter_range") or [])
         scene_chs = set()
         for sb in cdata.get("scene_storyboard", []) or []:
             ch = sb.get("ch") if isinstance(sb, dict) else None
@@ -174,8 +191,7 @@ def _iter_event_cluster_ranges(project_root):
         if not isinstance(c, dict):
             continue
         cid = c.get("cluster_id")
-        cr = c.get("chapter_range") or []
-        rng = cr if (isinstance(cr, list) and len(cr) == 2) else None
+        rng = _coerce_range(c.get("chapter_range") or [])
         yield cid, rng
 
 

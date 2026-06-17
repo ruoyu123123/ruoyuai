@@ -254,7 +254,15 @@ def main():
     args = parser.parse_args()
 
     project = Path(args.project).resolve()
-    chapters = parse_chapters(args.chapters)
+    # 🔴 v27 pending_tail 守卫（2026-06-17 真 API e2e 抓出）：整稿 < 单章下限时 splitter 切 0 章·
+    # 全退 pending_tail 等下 cluster 拼接（chapter_range=[]）→ data_flow 回填 --chapters "[]"/空。
+    # 本 cluster 无章可命名 → no-op 放行（绝不让 parse_chapters("[]") 的 int("[]") 崩溃整条管线）。
+    _raw_chapters = (args.chapters or "").strip().strip("[]").strip()
+    if not _raw_chapters:
+        print("[gen_chapter_titles] 本 cluster 0 章（整稿 < 单章下限·退 pending_tail 等下 "
+              "cluster 拼接）·无章可命名·跳过", file=sys.stderr)
+        sys.exit(0)
+    chapters = parse_chapters(_raw_chapters)
     high_set = parse_high_list(args.high_chapters)
     print(f"[gen_chapter_titles v2] {len(chapters)} 章 / high={sorted(high_set)}",
           file=sys.stderr)

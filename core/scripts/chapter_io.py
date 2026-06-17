@@ -176,7 +176,13 @@ def read_changes(project_root, ch: int) -> dict:
     v27（2026-05-29）：经 normalize_changes 统一 schema（兼容 writer 三种输出布局）。"""
     cp = changes_path(project_root, ch)
     if cp.is_file():
-        data = json.loads(cp.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(cp.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError, OSError):
+            # 🔴 2026-06-17 bug-hunt 修：损坏/空/半截 _changes.json 不崩——返回与缺文件同款
+            # 兜底（Tolerant Reader 哲学）。原裸 json.loads 让 validate_chapter 等裸调 scanner
+            # 整条审核管线 JSONDecodeError 退出非0。
+            return {"factual": {}, "self_eval": {}}
         return normalize_changes(data)
     return {"factual": {}, "self_eval": {}}
 

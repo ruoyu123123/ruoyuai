@@ -49,21 +49,18 @@ CLUSTER_ONCE_MODULES = {"offscreen", "declarative"}
 
 
 def get_cluster_chapter_range(project_root: Path, cluster_key: str) -> list[int]:
-    """从 事件簇.json 找 cluster 的 chapter_range，返回 [ch_start, ..., ch_end]。"""
-    shijianji_path = project_root / "_数据库" / "事件簇.json"
-    if not shijianji_path.exists():
-        return []
+    """拿 cluster 的 chapter_range，返回 [ch_start, ..., ch_end]。
+
+    🔴 2026-06-17 bug-hunt 修：改走 `cluster_lookup.cluster_id_to_range`（唯一权威反查·北极星①·
+    享 blueprint 兜底）。原只读 事件簇.json 无兜底 → blueprint-only 状态返 [] → main FATAL exit2
+    卡死 save-state step9（与 save_state.py / evaluators 权威源不一致·三脚本对齐 cluster_lookup）。"""
     try:
-        data = json.loads(shijianji_path.read_text(encoding="utf-8"))
-        for c in data.get("clusters", []):
-            cid = c.get("cluster_id", "")
-            if cid == cluster_key or cid.replace("cluster_", "") == cluster_key.replace("cluster_", ""):
-                cr = c.get("chapter_range")
-                if isinstance(cr, list) and len(cr) == 2:
-                    return list(range(cr[0], cr[1] + 1))
-                elif isinstance(cr, str) and "-" in cr:
-                    a, b = cr.split("-")
-                    return list(range(int(a), int(b) + 1))
+        import cluster_lookup as _cl
+        cid = _cl.normalize_cluster_id(cluster_key) or \
+            f"cluster_{str(cluster_key).replace('cluster_', '')}"
+        cr = _cl.cluster_id_to_range(project_root, cid)
+        if cr and len(cr) == 2:
+            return list(range(int(cr[0]), int(cr[1]) + 1))
     except Exception:
         pass
     return []

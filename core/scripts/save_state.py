@@ -802,19 +802,20 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> int:
 # ============ CLI ============
 
 def _get_cluster_chapter_range(project_root, cluster_key):
-    """从 事件簇.json 拿 cluster 的 chapter_range，展开 [ch1,...,chN]"""
-    import json as _j
-    p = project_root / "_数据库" / "事件簇.json"
-    if not p.exists():
-        return []
+    """拿 cluster 的 chapter_range，展开 [ch1,...,chN]。
+
+    🔴 2026-06-17 bug-hunt 修：改走 `cluster_lookup.cluster_id_to_range`（唯一权威反查·北极星①·
+    享 blueprint 兜底）。原实现只读 事件簇.json 无兜底 → blueprint-only 状态（事件簇缺 chapter_range·
+    进度.json.cluster_blueprint 有）返 [] → cmd_apply_cluster_changes / cmd_git_commit_cluster
+    FATAL exit2 卡死整条 cluster-save-state 管线（而兄弟脚本 evaluators 走 cluster_lookup 正常推进·
+    三脚本权威源不一致）。对齐 evaluators。"""
     try:
-        data = _j.loads(p.read_text(encoding="utf-8"))
-        for c in data.get("clusters", []):
-            cid = c.get("cluster_id", "")
-            if cid == cluster_key or cid.replace("cluster_", "") == cluster_key.replace("cluster_", ""):
-                cr = c.get("chapter_range")
-                if isinstance(cr, list) and len(cr) == 2:
-                    return list(range(cr[0], cr[1] + 1))
+        import cluster_lookup as _cl
+        cid = _cl.normalize_cluster_id(cluster_key) or \
+            f"cluster_{str(cluster_key).replace('cluster_', '')}"
+        cr = _cl.cluster_id_to_range(project_root, cid)
+        if cr and len(cr) == 2:
+            return list(range(int(cr[0]), int(cr[1]) + 1))
     except Exception:
         pass
     return []

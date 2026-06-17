@@ -174,7 +174,12 @@ def is_key_chapter(project_root: Path, ch: int) -> tuple[bool, list[str]]:
             if kw in tp:
                 reasons.append(f"turning_point 含'{kw}'")
                 break
-        emo = cp.get("emotion", {}).get("value", 0)
+        # 🔴 2026-06-17 bug-hunt 修：emotion 可能是裸标量（int/float）非 dict → 原 .get 链
+        # AttributeError 崩。守卫两种形态（dict.value / 裸数值），其余→0。
+        _emo = cp.get("emotion", {})
+        emo = (_emo.get("value", 0) if isinstance(_emo, dict)
+               else _emo if isinstance(_emo, (int, float)) and not isinstance(_emo, bool)
+               else 0)
         if abs(emo) >= 7:
             reasons.append(f"强情绪 emotion={emo}")
         break

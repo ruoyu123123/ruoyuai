@@ -442,7 +442,13 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                     continue
                 print(f"\n{prefix}[FALLBACK] {profile.name} 失败: {reason}", file=sys.stderr)
                 failures.append((profile.name, reason))
-        if full_text is None:
+        # 🔴 2026-06-17 bug-hunt 修：空内容守卫（对齐 gen_writer）。reasoning 模型把 token 全吐进
+        # reasoning_content / 内容过滤 → HTTP200 但 delta.content 全 None → full_text=""（≠None）
+        # → 原 `if full_text is None` 不触发 → 返回空串当成功 → 写**空复刻** + exit0 **假成功**。
+        # 空内容必须触发 fallback 链 / 最终 GenModelExhaustedError（exit3），杜绝假成功。
+        if not (full_text or "").strip():
+            failures.append((profile.name, "返回空内容（HTTP200 零 content·疑 reasoning token 吃光）"))
+            print(f"\n{prefix}[FALLBACK] {profile.name} 返回空内容·转下一 profile", file=sys.stderr)
             continue
 
         elapsed = time.time() - t0
