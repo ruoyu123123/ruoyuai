@@ -70,7 +70,9 @@ def split_paragraphs_with_offset(content: str):
         if not chunk.strip():
             offset += len(chunk)
             continue
-        wc = len(chunk.replace(" ", "").replace("\n", ""))
+        # 🔴 2026-06-17：纯 CJK 口径（与 anchor=draft_cjk*i/N、target、lo-hi 量纲对齐）。
+        # 原 len(去空白)含标点/ascii → 与纯 CJK 锚点量纲混用·切点系统性偏前（标点密集尤甚）。
+        wc = cio.count_cjk(chunk)
         cumulative += wc
         offset += len(chunk)
         paras.append({

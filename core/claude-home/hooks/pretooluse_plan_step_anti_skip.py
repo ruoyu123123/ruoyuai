@@ -77,9 +77,8 @@ def main():
         if any(b.exists() for b in bypass_candidates):
             sys.exit(0)
 
-    # plan 级旁路：plan 创建时显式标记 --allow-skip-steps
-    if plan.get("allow_skip_steps") is True:
-        sys.exit(0)
+    # 🔴 2026-06-17 移除 allow_skip_steps 全局旁路：无任何 plan 模板使用·是潜在 footgun
+    # （单字段整盘绕过「禁止跳步」最高元规则）。合法 opt-out 走项目级 .subsystems_bypass.json。
 
     # 找 step n 的模板定义
     target_step = next((s for s in plan.get("steps", []) if s.get("n") == n), None)

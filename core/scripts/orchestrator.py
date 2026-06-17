@@ -876,7 +876,7 @@ def _run_round_loop(agent: str, step: dict, ctx: dict, cfg: dict, dispatch,
             if clean >= need_clean:
                 print(f"[orchestrator] {agent} 连续 {clean} 轮 clean → 放行",
                       file=sys.stderr)
-                return
+                return True
         else:
             clean = 0
             for raw_line in between:
@@ -891,6 +891,7 @@ def _run_round_loop(agent: str, step: dict, ctx: dict, cfg: dict, dispatch,
                           f"继续下一轮）", file=sys.stderr)
     print(f"[orchestrator] WARN {agent} {max_rounds} 轮后未达连续 {need_clean} 轮 "
           f"clean → 软预算放行（advisory 非门禁·北极星⑤）", file=sys.stderr)
+    return False  # 🔴 2026-06-17 显式信号：max_rounds 软放行 ≠ clean（caller 可据此记录/降级·当前 advisory 不阻断）
 
 
 # ============ CLI ============

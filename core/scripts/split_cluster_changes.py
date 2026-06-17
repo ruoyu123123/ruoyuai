@@ -303,7 +303,12 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
                         "_note": "splitter 本轮 0 切（pending_tail 等下 cluster 拼接），跳过拆分",
                     }
                 return {"ok": False, "error": f"无法确定 cluster_{cluster_key} chapter_range · splitter_decisions 缺 chapter_range/chapters_split/cluster_start_ch · 事件簇.json fallback 失败"}
-            chapters = list(range(int(start_ch_raw), int(start_ch_raw) + int(target_chapters or 4)))
+            _tc = int(target_chapters or 4)
+            if not target_chapters:
+                print(f"[split_changes] WARN cluster_{cluster_key} 末级兜底：splitter_decisions 缺 "
+                      f"target_chapters/chapter_range/chapters_split·按 cluster_start_ch={start_ch_raw} "
+                      f"猜测 {_tc} 章（无章数上限源·可能越界·建议核 splitter 产出）", file=sys.stderr)
+            chapters = list(range(int(start_ch_raw), int(start_ch_raw) + _tc))
 
     # [H2] 写盘前重叠检测（前移 · 不再先覆盖后 warn）
     overlap = detect_other_cluster_overlap(project_root, cluster_key, chapters)
@@ -354,6 +359,7 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
         "written": written,
         "overlap_skipped": sorted(overlap_skipped),
         "overlap_detail": overlap["detail"],
+        "writeback_ok": (writeback.get("ok") if isinstance(writeback, dict) else None),
         "event_cluster_writeback": writeback,
     }
 
