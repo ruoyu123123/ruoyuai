@@ -233,12 +233,15 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
         chapters = [int(x) for x in chapters_split]
     elif isinstance(chapter_range, list) and len(chapter_range) == 2 \
             and isinstance(chapter_range[0], int) and isinstance(chapter_range[1], int) \
-            and not isinstance(chapter_range[0], bool):
-        # schema A：chapter_range=[lo,hi]（freestyle 真实产出）
+            and not isinstance(chapter_range[0], bool) \
+            and chapter_range[0] <= chapter_range[1]:
+        # schema A：chapter_range=[lo,hi]（freestyle 真实产出）·倒序=损坏→跳过让 fallback 接管
         chapters = list(range(int(chapter_range[0]), int(chapter_range[1]) + 1))
     elif isinstance(chapter_range, str) and "-" in chapter_range:
         start, end = chapter_range.split("-")
-        chapters = list(range(int(start), int(end) + 1))
+        # 🔴 倒序区间=损坏数据·跳过让 fallback 接管（不静默 range(hi,lo+1) 产空列表）
+        if int(start) <= int(end):
+            chapters = list(range(int(start), int(end) + 1))
     elif isinstance(chapters_split, int) and start_ch_raw is not None:
         # [H1] schema A 但 chapter_range 缺失：用 chapters_split(int) + cluster_start_ch 重建
         # chapters = range(start, start + n)。chapters_split==0 → 整段退 pending_tail，0 切
@@ -278,7 +281,8 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
                 cr = c.get("chapter_range") or []
                 if isinstance(cr, list) and len(cr) == 2 \
                         and isinstance(cr[0], int) and isinstance(cr[1], int) \
-                        and not isinstance(cr[0], bool):
+                        and not isinstance(cr[0], bool) \
+                        and cr[0] <= cr[1]:
                     chapters = list(range(cr[0], cr[1] + 1))
                 break
         if not chapters:

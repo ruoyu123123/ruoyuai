@@ -78,3 +78,17 @@ def test_infer_cluster_id_by_chapter():
     assert cl.infer_cluster_id_by_chapter(5) == "cluster_005"
     assert cl.infer_cluster_id_by_chapter(42) == "cluster_042"
     assert cl.infer_cluster_id_by_chapter("7") == "cluster_007"
+
+
+def test_coerce_range_rejects_reversed_and_garbage():
+    """🔴 2026-06-17：倒序/非数值区间=损坏数据→None（防下游 range(lo,hi+1) 静默产空列表级联失败·
+    对齐 evolution_orchestrator:86）。合法区间归一为 [int,int]。"""
+    assert cl._coerce_range([2, 5]) == [2, 5]
+    assert cl._coerce_range([5, 5]) == [5, 5]       # 单章合法
+    assert cl._coerce_range([5, 2]) is None          # 倒序 list→None
+    assert cl._coerce_range("3-7") == [3, 7]
+    assert cl._coerce_range("7-3") is None           # 倒序 str→None
+    assert cl._coerce_range(["1", "4"]) == [1, 4]    # 字符串数字归一为 int
+    assert cl._coerce_range("garbage") is None
+    assert cl._coerce_range([1, 2, 3]) is None       # 非 2 元
+    assert cl._coerce_range(None) is None

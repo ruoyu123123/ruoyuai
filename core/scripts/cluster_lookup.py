@@ -161,15 +161,21 @@ def _coerce_range(cr):
     "lo-hi"（split_cluster_changes 等历史 schema 会写）。原 cluster_lookup 只认 list → str-form
     cluster 在权威反查静默返 None → 各 consumer（save_state/evaluators/orchestrator）反查失败。
     """
+    lo_hi = None
     if isinstance(cr, list) and len(cr) == 2:
-        return cr
-    if isinstance(cr, str) and "-" in cr:
-        try:
-            a, b = cr.split("-", 1)
-            return [int(a.strip()), int(b.strip())]
-        except (ValueError, TypeError):
-            return None
-    return None
+        lo_hi = cr
+    elif isinstance(cr, str) and "-" in cr:
+        a, b = cr.split("-", 1)
+        lo_hi = [a.strip(), b.strip()]
+    if lo_hi is None:
+        return None
+    # 🔴 2026-06-17 well-formedness：归一为 [int,int] + 校验 lo<=hi。倒序/非数值区间 = 损坏数据 → None
+    # （否则下游 range(lo,hi+1) 静默产空列表→章数=0 级联失败·对齐 evolution_orchestrator:86 已有范式）。
+    try:
+        lo, hi = int(lo_hi[0]), int(lo_hi[1])
+    except (ValueError, TypeError):
+        return None
+    return [lo, hi] if lo <= hi else None
 
 
 def _iter_blueprint_ranges(project_root):
