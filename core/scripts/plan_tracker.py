@@ -297,10 +297,29 @@ def _load_plan(path: Path, *, for_write: bool = False) -> dict:
         return plan
     state = verify_attestation(plan)
     if state == "legacy":
-        # 2026-05-29 修：旧式纯 sha256 → 内容真实未篡改，自动迁移到 HMAC 盖章
+        # 2026-06-17 安全修复（HMAC #4·非对称硬化）：legacy=旧式纯 sha256·而 _compute_legacy_sha256
+        # 是**公开无密钥**算法 → 攻击者可篡改 plan（伪造 step 状态）后公开重算盖章绕过防御
+        # （forged-legacy 与 legit-legacy 都返回 legacy·无密钥校验器无法区分）。写路径信任无密钥
+        # hash = 信任伪造 → 同 tampered 拦。合法老 plan（HMAC 迁移 2026-05-29 已满·终态 7 天 cleanup·
+        # 极罕见）走 `plan_tracker.py reattest <plan_id>` 升级恢复。
+        if for_write:
+            raise PlanTamperedError(
+                f"{_TAMPER_MSG}\n  文件：{path}\n"
+                f"  （legacy 旧式 sha256·写路径不信任无密钥盖章[可被公开重算伪造]·"
+                f"合法老 plan 跑 `plan_tracker.py reattest <plan_id>` 升级 HMAC）")
+        # 读路径 tolerant：自动迁移 HMAC（观测平滑·legit 老 plan 升级·不破坏 get_plan/监控/GUI）
         print(f"[plan_tracker] ℹ️ 旧式 sha256 attestation 自动迁移为 HMAC：{path}",
               file=sys.stderr)
         _save_plan(path, plan)
+    elif state == "unattested":
+        # 2026-06-17 安全修复（HMAC #4）：unattested=无 _attestation 字段 → 删 _attestation 即可绕过
+        # 校验（删字段伪造通道）。写路径同 tampered 拦；读路径放行（真 unattested 老 plan 观测兼容·
+        # 新建 plan create 时 _save_plan 已盖 HMAC·不受影响）。
+        if for_write:
+            raise PlanTamperedError(
+                f"{_TAMPER_MSG}\n  文件：{path}\n"
+                f"  （unattested 无 attestation 字段·写路径不放行无章 plan[删字段伪造通道]·"
+                f"合法老 plan 跑 `plan_tracker.py reattest <plan_id>` 盖章）")
     elif state == "tampered":
         full_msg = f"{_TAMPER_MSG}\n  文件：{path}"
         if for_write:
