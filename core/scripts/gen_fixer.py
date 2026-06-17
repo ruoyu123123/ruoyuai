@@ -72,6 +72,9 @@ from gen_model_loader import (  # noqa: E402
     reasoning_extra_body,
 )
 import chapter_io as cio  # noqa: E402 · CJK 计数权威口径（统一覆盖扩展 CJK）
+from log_util import get_logger  # noqa: E402
+
+logger = get_logger(__name__)
 
 
 # ============ 依赖检查 ============
@@ -86,7 +89,7 @@ def check_deps():
     except ImportError:
         missing.append('python-dotenv')
     if missing:
-        print(f"[ERROR] 缺少依赖: {missing}", file=sys.stderr)
+        logger.error(f" 缺少依赖: {missing}")
         sys.exit(2)
 
 
@@ -595,14 +598,14 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
     for i, profile in enumerate(candidates):
         max_tokens, mt_source = resolve_max_tokens(profile)
         if i == 0:
-            print(f"[gen_fixer] 调用 active profile: {profile.name} "
-                  f"({profile.model} @ {profile.base_url})", file=sys.stderr)
-            print(f"[gen_fixer] max_tokens={max_tokens} (source: {mt_source})", file=sys.stderr)
-            print(f"[gen_fixer] temperature={profile.temperature}", file=sys.stderr)
+            logger.info(f" 调用 active profile: {profile.name} "
+                  f"({profile.model} @ {profile.base_url})")
+            logger.info(f" max_tokens={max_tokens} (source: {mt_source})")
+            logger.info(f" temperature={profile.temperature}")
         else:
-            print(f"\n[FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
+            logger.info(f"\n[FALLBACK] -> {profile.name} ({profile.model})")
 
-        print(f"[gen_fixer] prompt size: system={len(system)} chars, user={len(user)} chars",
+        logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars",
               file=sys.stderr)
 
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url,
@@ -620,25 +623,25 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
                     if attempt > GEN_MODEL_MAX_RETRIES:
                         raise  # 重试耗尽 → 落到外层 except → 降级 fallback
                     delay = GEN_MODEL_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                    print(f"\n[gen_fixer] ⚠️ {profile.name} 限流/超时 "
+                    logger.info(f"\n[gen_fixer] ⚠️ {profile.name} 限流/超时 "
                           f"({type(re_err).__name__})，{delay:.0f}s 后同 profile 重试 "
-                          f"{attempt}/{GEN_MODEL_MAX_RETRIES}…", file=sys.stderr)
+                          f"{attempt}/{GEN_MODEL_MAX_RETRIES}…")
                     time.sleep(delay)
             # 截断检测 + 自动续写（finish_reason == "length" = 命中 max_tokens 被截断）
             cont_rounds = 0
             while finish_reason == "length" and cont_rounds < 3:
                 cont_rounds += 1
-                print(f"\n[gen_fixer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…",
+                logger.info(f"\n[gen_fixer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…",
                       file=sys.stderr)
                 cont_text, finish_reason = _stream_once(
                     client, profile, system, user, max_tokens, prior_assistant=full_text)
                 full_text += cont_text
             if finish_reason == "length":
-                print(f"\n[gen_fixer] ⚠️ WARN 续写 {cont_rounds} 轮后仍可能未写完"
-                      f"（修复块/JSON 块可能不完整 · 下游 CJK 守恒校验兜底）", file=sys.stderr)
+                logger.info(f"\n[gen_fixer] ⚠️ WARN 续写 {cont_rounds} 轮后仍可能未写完"
+                      f"（修复块/JSON 块可能不完整 · 下游 CJK 守恒校验兜底）")
         except Exception as e:
             reason = str(e)[:200]
-            print(f"\n[FALLBACK] {profile.name} 调用失败: {reason}", file=sys.stderr)
+            logger.info(f"\n[FALLBACK] {profile.name} 调用失败: {reason}")
             failures.append((profile.name, reason))
             continue  # 切下一个 profile
 
@@ -646,11 +649,11 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
         # 视为失败，切下个 profile（与 except 路径对齐），杜绝拿空回复覆写已发布章节。
         if not full_text.strip():
             reason = "返回空内容（HTTP 200 但零 content · 可能内容过滤/reasoning model 全进 reasoning_content）"
-            print(f"\n[FALLBACK] {profile.name} {reason}", file=sys.stderr)
+            logger.info(f"\n[FALLBACK] {profile.name} {reason}")
             failures.append((profile.name, reason))
             continue  # 切下一个 profile
 
-        print(f"\n[gen_fixer] 接收完毕 ({len(full_text)} chars) via {profile.name}",
+        logger.info(f"\n[gen_fixer] 接收完毕 ({len(full_text)} chars) via {profile.name}",
               file=sys.stderr)
         return full_text, profile
 
@@ -709,13 +712,13 @@ def parse_and_apply(reply: str, project_root: Path,
             if len(_cands) == 1:
                 target = Path(_cands[0])
                 target_resolved = target.resolve()
-                print(f"  [路径回正] LLM 报『{rel_path}』不存在 → basename 匹配已读文件 {target}",
+                logger.info(f"  [路径回正] LLM 报『{rel_path}』不存在 → basename 匹配已读文件 {target}",
                       file=sys.stderr)
         # 安全：校验 target 仍在 project_root 内，防 ../../ 路径穿越逃逸项目目录
         try:
             target_resolved.relative_to(root_resolved)
         except ValueError:
-            print(f"  [跳过·路径穿越] {rel_path} 解析到项目外 ({target_resolved})，忽略该块",
+            logger.info(f"  [跳过·路径穿越] {rel_path} 解析到项目外 ({target_resolved})，忽略该块",
                   file=sys.stderr)
             continue
         cjk = cio.count_cjk(content)  # v27 修复：统一 CJK 口径
@@ -727,9 +730,9 @@ def parse_and_apply(reply: str, project_root: Path,
             hi = before_cjk * (1 + CJK_CONSERVATION_TOLERANCE)
             if cjk < lo or cjk > hi:
                 pct = (cjk - before_cjk) / before_cjk * 100
-                print(f"  [拒绝覆写·CJK 守恒] {target} 原文 {before_cjk} → 修复 {cjk} CJK "
+                logger.info(f"  [拒绝覆写·CJK 守恒] {target} 原文 {before_cjk} → 修复 {cjk} CJK "
                       f"({pct:+.0f}%，超出 ±{int(CJK_CONSERVATION_TOLERANCE*100)}%)，"
-                      f"保留原文不动（疑似截断/退化输出）", file=sys.stderr)
+                      f"保留原文不动（疑似截断/退化输出）")
                 rejected.append({'path': str(target), 'before_cjk': before_cjk,
                                  'after_cjk': cjk, 'delta_pct': round(pct, 1),
                                  'reason': 'cjk_conservation_violation'})
@@ -737,7 +740,7 @@ def parse_and_apply(reply: str, project_root: Path,
 
         target.write_text(content, encoding='utf-8')
         files_written.append({'path': str(target), 'cjk': cjk})
-        print(f"  [写出] {target} ({cjk} CJK)", file=sys.stderr)
+        logger.info(f"  [写出] {target} ({cjk} CJK)")
 
     json_match = re.search(r'```json\s*\n(.*?)\n```', reply, re.DOTALL)
     summary = {}
@@ -771,7 +774,7 @@ def run_scanners(file_paths: list) -> dict:
                                    'violations_count': d.get('violations_count')}
             except Exception as e:
                 # v27 修复：静默 except 加日志（debug 友好）
-                print(f"  [gen_fixer] scanner {sc} 输出解析失败 ({e})·exit={r.returncode}",
+                logger.info(f"  [gen_fixer] scanner {sc} 输出解析失败 ({e})·exit={r.returncode}",
                       file=sys.stderr)
                 results[fp][sc] = {'verdict': 'ERROR', 'stdout': r.stdout[:200]}
     return results
@@ -799,36 +802,36 @@ def main():
 
     project_root = Path(args.project).resolve()
     if not project_root.exists():
-        print(f"[ERROR] 项目路径不存在: {project_root}", file=sys.stderr)
+        logger.error(f" 项目路径不存在: {project_root}")
         sys.exit(2)
 
     # 根据 mode 准备输入
     # 2026-05-29 流程贯通（断点 4）：chapter-end-rewrite 与 validator-repair/voice-fix 同走 --brief 通道
     if args.mode in ('validator-repair', 'voice-fix', 'chapter-end-rewrite'):
         if not args.brief:
-            print(f"[ERROR] --mode {args.mode} 需要 --brief <path>", file=sys.stderr)
+            logger.error(f" --mode {args.mode} 需要 --brief <path>")
             sys.exit(2)
         brief_path = Path(args.brief)
         if not brief_path.is_absolute():
             brief_path = project_root / args.brief
         if not brief_path.exists():
-            print(f"[ERROR] brief 不存在: {brief_path}", file=sys.stderr)
+            logger.error(f" brief 不存在: {brief_path}")
             sys.exit(2)
         brief = json.loads(brief_path.read_text(encoding='utf-8'))
         # brief schema 验证
         if brief.get('version') != 1:
-            print(f"[ERROR] brief schema version 不兼容: {brief.get('version')}, 期望 1",
+            logger.error(f" brief schema version 不兼容: {brief.get('version')}, 期望 1",
                   file=sys.stderr)
             sys.exit(3)
         chapter_path = brief.get('chapter_path')
         if not chapter_path:
-            print(f"[ERROR] brief 缺 chapter_path 字段", file=sys.stderr)
+            logger.error(f" brief 缺 chapter_path 字段")
             sys.exit(3)
         target = Path(chapter_path)
         if not target.is_absolute():
             target = project_root / chapter_path
         if not target.exists():
-            print(f"[ERROR] brief 指向的章节不存在: {target}", file=sys.stderr)
+            logger.error(f" brief 指向的章节不存在: {target}")
             sys.exit(2)
         chapter_content = target.read_text(encoding='utf-8')
         files_content = {chapter_path: chapter_content}
@@ -843,7 +846,7 @@ def main():
     else:
         # comprehensive / polish / word-count 走原 --files
         if not args.files:
-            print(f"[ERROR] --mode {args.mode} 需要 --files", file=sys.stderr)
+            logger.error(f" --mode {args.mode} 需要 --files")
             sys.exit(2)
         files_content = {}
         for fp in args.files:
@@ -851,19 +854,19 @@ def main():
             if not target.is_absolute():
                 target = project_root / fp
             if not target.exists():
-                print(f"[ERROR] 文件不存在: {target}", file=sys.stderr)
+                logger.error(f" 文件不存在: {target}")
                 sys.exit(2)
             files_content[fp] = target.read_text(encoding='utf-8')
 
         if args.mode == 'comprehensive':
             if not args.report_file:
-                print("[ERROR] --mode comprehensive 需要 --report-file", file=sys.stderr)
+                logger.info("[ERROR] --mode comprehensive 需要 --report-file")
                 sys.exit(2)
             report = json.loads(Path(args.report_file).read_text(encoding='utf-8'))
             system, user = build_comprehensive_prompt(args.files, report, files_content)
         elif args.mode == 'polish':
             if not args.instructions:
-                print("[ERROR] --mode polish 需要 --instructions", file=sys.stderr)
+                logger.info("[ERROR] --mode polish 需要 --instructions")
                 sys.exit(2)
             system, user = build_polish_prompt(args.files, args.instructions, files_content)
         elif args.mode == 'word-count':
@@ -871,19 +874,19 @@ def main():
                                                    args.target_min, args.target_max)
 
     if args.dry_run:
-        print("=== SYSTEM ===")
+        logger.info("=== SYSTEM ===")
         print(system)
-        print("\n=== USER ===")
+        logger.info("\n=== USER ===")
         print(user)
-        print(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars",
+        logger.info(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars",
               file=sys.stderr)
         try:
             loader = GenModelLoader()
             p = loader.get_active_profile()
-            print(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})",
+            logger.info(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})",
                   file=sys.stderr)
         except GenModelConfigError as e:
-            print(f"[dry-run] [WARN] active profile 未就绪: {e}", file=sys.stderr)
+            logger.info(f"[dry-run] [WARN] active profile 未就绪: {e}")
         return
 
     # 加载 gen-model 配置
@@ -891,21 +894,21 @@ def main():
         loader = GenModelLoader()
         active = loader.get_active_profile()
     except GenModelConfigError as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
+        logger.error(f" {e}")
         sys.exit(2)
 
-    print(f"[gen_fixer] active = {active.name}", file=sys.stderr)
+    logger.info(f" active = {active.name}")
     chain = loader.get_fallback_chain()
     if chain:
-        print(f"[gen_fixer] fallback chain = {','.join(chain)}", file=sys.stderr)
+        logger.info(f" fallback chain = {','.join(chain)}")
 
     try:
         reply, used_profile = call_gen_model(loader, system, user)
     except GenModelExhaustedError as e:
-        print(f"\n[ERROR] {e}", file=sys.stderr)
+        logger.info(f"\n[ERROR] {e}")
         sys.exit(3)
 
-    print(f"\n[gen_fixer] 解析并应用修改...", file=sys.stderr)
+    logger.info(f"\n[gen_fixer] 解析并应用修改...")
     # word-count 模式是合法的大幅扩写 → 关掉 CJK 守恒校验；其余模式（修复/微调/精修）
     # 字数应守恒，开启守恒兜底防截断输出覆写销毁已发布章节。
     enforce_cjk = args.mode != 'word-count'
@@ -913,32 +916,32 @@ def main():
         reply, project_root, before_content_by_path=files_content,
         enforce_cjk_conservation=enforce_cjk)
     if rejected:
-        print(f"[WARN] {len(rejected)} 个修复块因 CJK 守恒校验被拒绝覆写（保留原文）",
+        logger.warning(f" {len(rejected)} 个修复块因 CJK 守恒校验被拒绝覆写（保留原文）",
               file=sys.stderr)
     if not files_written:
         if rejected:
-            print(f"[ERROR] 所有 {len(rejected)} 个修复块都被 CJK 守恒校验拒绝（疑似截断/退化输出），"
-                  f"原文保持不动，未做任何修复 → 退出 3 由上游重试/降级", file=sys.stderr)
+            logger.error(f" 所有 {len(rejected)} 个修复块都被 CJK 守恒校验拒绝（疑似截断/退化输出），"
+                  f"原文保持不动，未做任何修复 → 退出 3 由上游重试/降级")
             debug_path = project_root / '章节' / f'_quality/fixer_raw_output_{datetime.now().strftime("%H%M%S")}_{os.getpid()}.txt'
             debug_path.parent.mkdir(parents=True, exist_ok=True)
             debug_path.write_text(reply, encoding='utf-8')
-            print(f"  原始输出已存: {debug_path}", file=sys.stderr)
+            logger.info(f"  原始输出已存: {debug_path}")
             sys.exit(3)
-        print("[WARN] 未从返回中解析出 ===FILE: ... === 块", file=sys.stderr)
+        logger.info("[WARN] 未从返回中解析出 ===FILE: ... === 块")
         # v27 修复：时间戳加 pid 防并发冲突（feedback: 秒级时间戳不够细）
         debug_path = project_root / '章节' / f'_quality/fixer_raw_output_{datetime.now().strftime("%H%M%S")}_{os.getpid()}.txt'
         debug_path.parent.mkdir(parents=True, exist_ok=True)
         debug_path.write_text(reply, encoding='utf-8')
-        print(f"  原始输出已存: {debug_path}", file=sys.stderr)
+        logger.info(f"  原始输出已存: {debug_path}")
         sys.exit(3)
 
-    print(f"\n[gen_fixer] 跑 scanner 验证...", file=sys.stderr)
+    logger.info(f"\n[gen_fixer] 跑 scanner 验证...")
     scan_results = run_scanners([f['path'] for f in files_written])
-    print(f"\n=== Scanner Results ===", file=sys.stderr)
+    logger.info(f"\n=== Scanner Results ===")
     for fp, res in scan_results.items():
-        print(f"  {Path(fp).name}:", file=sys.stderr)
+        logger.info(f"  {Path(fp).name}:")
         for sc, v in res.items():
-            print(f"    {sc}: {v}", file=sys.stderr)
+            logger.info(f"    {sc}: {v}")
 
     # 写修复报告
     report_path = project_root / '章节' / f'_quality/fixer_report_{args.mode}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
@@ -953,7 +956,7 @@ def main():
         'scanner_results': scan_results,
         'timestamp': datetime.now().isoformat(),
     }, ensure_ascii=False, indent=2), encoding='utf-8')
-    print(f"\n[gen_fixer] 报告: {report_path}", file=sys.stderr)
+    logger.info(f"\n[gen_fixer] 报告: {report_path}")
 
 
 if __name__ == '__main__':
