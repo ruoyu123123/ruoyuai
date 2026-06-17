@@ -38,6 +38,9 @@ if str(_SCRIPTS) not in sys.path:
 
 import llm_transport as lt  # noqa: E402
 from gen_model_loader import GenModelLoader  # noqa: E402
+from log_util import get_logger  # noqa: E402
+
+logger = get_logger(__name__)
 
 # 🔴 frozen-aware（对抗审查同款 FATAL）：PyInstaller 把 core/scripts 模块扁平收成顶层名，
 # _SCRIPTS=Path(__file__).parent 在 frozen 下指 _internal/（扁平）→ .parent.parent 跑出
@@ -352,8 +355,7 @@ def run_judge(agent_name: str, project_root: str | Path, *,
                 f"修复后重跑本步。")
         degraded = True
         data.setdefault("_degraded", True)
-        print(f"[judge_runner] WARN {agent_name} 降级（soft·该 cluster 少一条顾问意见·"
-              f"不阻断）", file=sys.stderr)
+        logger.warning(f"{agent_name} 降级（soft·该 cluster 少一条顾问意见·不阻断）")
 
     if author_missing:
         data["_author_profile_missing"] = True
@@ -409,10 +411,11 @@ def main():
     outcome = run_judge(args.agent, args.project, params=params,
                         context_files=[(l, Path(p)) for l, p in files],
                         output_path=args.output)
-    print(json.dumps({"agent": outcome.agent, "ok": outcome.ok,
-                      "degraded": outcome.degraded,
-                      "output": str(outcome.output_path),
-                      "profile": outcome.profile_name}, ensure_ascii=False, indent=2))
+    from log_util import print_result_json
+    print_result_json({"agent": outcome.agent, "ok": outcome.ok,
+                       "degraded": outcome.degraded,
+                       "output": str(outcome.output_path),
+                       "profile": outcome.profile_name})
     return 0 if outcome.ok else 1
 
 
