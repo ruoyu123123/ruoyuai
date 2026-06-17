@@ -275,3 +275,6 @@ commit 信息示例：
 ---
 
 **目标：让每个角色都有独一无二的"灵魂"，而不只是一张设定卡**
+
+---
+本命令产出位置遵循 [STRUCTURE.md](../../core/claude-home/STRUCTURE.md) 第九节。

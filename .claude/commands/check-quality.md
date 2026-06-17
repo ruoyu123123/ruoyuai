@@ -386,3 +386,6 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - [ ] Anti-Slop 已跑（plan step 1）
 - [ ] LLM 评估已跑（plan step 2）
 - [ ] plan-end 通过
+
+---
+本命令产出位置遵循 [STRUCTURE.md](../../core/claude-home/STRUCTURE.md) 第九节。

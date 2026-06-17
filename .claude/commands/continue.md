@@ -195,3 +195,6 @@ fi
 - 如果检测到数据不一致（如 wal_recovery 报某 cluster save-state 中断但它已在
   `进度.json.completed_clusters` 里），以**进度.json.completed_clusters + 物理章节文件**为准
   （= 该 cluster 已完成，按情况 C 写下一个），残留 active plan 可 abort 清理。
+
+---
+本命令产出位置遵循 [STRUCTURE.md](../../core/claude-home/STRUCTURE.md) 第九节。

@@ -129,7 +129,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 | **核心** | `/write` | 写小说完整流程（端到端引导） |
 | | **`/cluster-write`** | **写故事块（cluster mode · v24 倒置流水线 7 步 · v27 freestyle 默认）** |
 | | **`/cluster-save-state`** | **故事块状态保存（cluster mode · 12 步 · 自动维护所有子系统 JSON + 涌现下一 cluster）** |
-| | `/outline` | 生成大纲+初始化 34 子系统数据库（含 step 1.7 AskUser 每卷 cluster 数） |
+| | `/outline` | 生成大纲+初始化 34 子系统数据库（含 step 3.3 AskUser 每卷 cluster 数） |
 | | `/continue` | 续写/断点恢复 |
 | | `/export` | 导出全文 |
 | **蒸馏** | `/distill-style` | 蒸馏作者风格（writer 第一权威） |
@@ -183,6 +183,19 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 | `advisory` | 风格/工艺/读者体验类 | 写作 agent 有理由可豁免（理由 < 300 字、具体到本 cluster 场景）|
 | `hard_gate` | 一致性 + 文件契约破损 | **不可豁免** |
 
+### 检测层架构（v2 cluster 单层）
+
+```
+┌─ cluster 草稿层（10k-25k CJK）★ 唯一检测层
+│   · 13 个 cluster 视野 scanner 并行跑（CLUSTER_MODE=1 env）
+│   · 跨场景一致性 / cluster 视野指标
+│   · 修复都在 cluster 草稿上做
+└─ splitter 切章 → chapter 物理文件 → ❌ 不再被任何 scanner 看
+   ↓
+   cross-cluster 层（故事块摘要.json · 由 cluster-save-state step 9 触发）
+   · volume_arc_drift 等 cross-cluster aggregator
+```
+
 ### hard_gate 不可豁免清单（15 code · 权威定义见 STRUCTURE.md 第十一节）
 
 `LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `PROPAGATION_DEBT_CREATED` / `STYLE_单段超长` / `CHAPTER_END_FORBIDDEN_SCREENPLAY` / `CHAPTER_END_FORBIDDEN_TRANSITION` / `LOCKED_FACT_CROSS_SCENE_CONFLICT`（后 3 个为 v2 cluster 新增 · 与 audit_hub.HARD_GATE_CODES 对齐）
@@ -195,6 +208,26 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 - judge agent → JudgeReport 的 `waivers` 段
 - `audit_hub.py --waivers <path>` 收集豁免；advisory 命中 → 转 `waived`；hard_gate 强制忽略豁免
 - 反复豁免 → `learning_loop.py` 产校准建议反向调阈值
+
+---
+
+## 🔁 运行时自学习 / 自适应 / 自监控（MAPE-K · 2026-05-30）
+
+> 与「写作质量自学习」（learning_loop 学审核 issue）**正交**：这一层学**运行时报错 + 流程缺步**，
+> 让脚本越跑越稳。业界对标 MAPE-K + Reflexion + Saga + 熔断/容错，设计见 `core/claude-home/SELF_LEARNING_ARCHITECTURE.md`。
+
+MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，跨小说项目）：
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| **Monitor** | `hooks/posttooluse_runtime_monitor.py`（PostToolUse:Bash 常驻） | 扫 stderr 真 Traceback/[FATAL] → 错误指纹 `script::type::loc` → `incidents.jsonl`（查 stderr 不信 exit code · 永不 exit 非0） |
+| **Analyze+Learn** | `self_heal_engine.py` | `--ingest` 复发计数（≥3 recurring/≥5 known）→ `self_heal_kb.json`；`--emit-lessons`→`lessons/runtime_lessons.md`；`--suggest`/`--dashboard`/`--resolve` |
+| **Adapt（Plan+Execute）** | `adaptive_runner.py` | 跑流水线内部 subprocess：捕报错→查 kb severity→retry(指数退避)/degrade/escalate + 熔断三态。**取代 `\|\| true` 静默吞错** |
+| **缺步监控（Saga）** | `step_completion_monitor.py` | 扫 plan 检三类缺步（假完成/失败/未跑）；`--auto-heal` 对有 scripts 的假完成/失败 step 经 adaptive_runner **幂等重跑补产出** |
+
+**集成**：嵌在 `cluster-save-state` step 8/9（每 cluster 跑），非独立层——4 个 `|| true` → adaptive_runner，step 9 末尾 self_heal ingest/emit + 缺步监控。
+
+**北极星边界**：只学运行时报错（不碰创作判断）· 推荐动作 advisory（不改 hard_gate）· **绝不自改脚本逻辑**（Git 快照当锚点）· 补跑幂等 · cluster 为单位。
 
 ---
 
@@ -323,11 +356,31 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 | `rhythm_profile`（紧凑/标准/厚重/混合）软提示 | `target_chapter_count` / `volume_count` 死锁 |
 | `volumes[]` 的 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` | `volumes[].chapter_range` 死锁区间 |
 | 大势卡 ME `expected_window_after` 宽窗触发 | `T × (1-F) / (V × E)` 章数公式 |
-| **🆕 v27：用户答的「每卷 cluster 数」**（outline step 1.7 AskUser）→ ME 池数量 | **🆕 v27：cluster brief 的 `estimated_chapters` / `chapter_range`**（splitter 切完自动填） |
+| **🆕 v27：用户答的「每卷 cluster 数」**（outline step 3.3 AskUser）→ ME 池数量 | **🆕 v27：cluster brief 的 `estimated_chapters` / `chapter_range`**（splitter 切完自动填） |
 
 **设计哲学**：大势 = 不变（卷主题/milestones/final image），章数 = 浮动。
 
 「想写更多但大势用完」→ save-state 阶段**动态加新 ME**。
+
+---
+
+## 🔴 卷=阶段触发点 · cluster=小走向（v28 · 2026-06-03 结构根治）
+
+> 用户原话：「每卷其实都是一个触发点，代表一个阶段的结束和下一阶段的开始，可能是主角成长也可能是副本更迭」。
+
+**根治的 bug**：旧设计易把「1 个 ME = 1 整副本」+「cluster scope = 整副本」→ **单 cluster 塌缩成一整个副本/阶段**。正确：**一个大方向（卷/阶段）下多个小故事走向（cluster）stakes 递增累积，构成整个阶段**。
+
+| 层 | = 什么 |
+|---|---|
+| **卷 = 阶段** | 1 个 `volume_core_conflict`(卷核心任务) + `volume_thread`(串本卷所有 cluster)·**不锁章** |
+| **卷边界 = 阶段触发点** | 核心任务「已解决」**且**命中≥1 跃迁信号(①主角力量/身份跃迁 ②舞台/地理转移 ③核心反派/矛盾解决或新反派) → emergence **advisory 建议换卷·绝不按 N 章硬切** |
+| **大势卡 ME 池(每卷)** | 本卷内『小故事走向』候选(每 ME=1 cluster=1 小走向·标 `volume:N`·末 ME 标 `is_volume_finale:true`·携 `stakes_delta`)·**🔴 不再是「1 ME=1 整副本」** |
+| **cluster = 1 小走向** | mini-movie/sub-arc·**禁止覆盖整阶段/整副本**·try-fail 递增·service 卷线索 |
+| **涌现** | `cluster_emergence_engine` 硬过滤到**当前卷**(`_me_volume`)·核心任务未解前不跳新卷·只剩 finale → `volume_transition_advisory` 建议换卷 |
+| **卷末 cluster** | 高烈度转折/强钩(反派现身/真相揭露/阶段跃迁)·禁平稳收束 |
+| **卷间软边界** | 换卷不清世界状态·跨卷角色/势力/伏笔/世界数值 delta 经涟漪 + foreshadowing_handoff 延续 |
+
+**🔴 outline 大势卡 authoring 铁律**：每卷的 ME 池 = 把**这一个阶段/副本**拆成 N(=「每卷 cluster 数」)个小走向(入门/摸规则/转折/危机/高潮/通关…)，**全部标 `volume:同号` + 末个标 `is_volume_finale`**；换阶段/换副本 = 换卷。`volume_thread`+`volume_core_conflict` 必填。**禁止单 cluster 写完整副本**。详见 memory `project_volume_phase_structure`。
 
 ---
 
@@ -398,6 +451,8 @@ python core/scripts/distill_replicate.py \
    - 对话独行
    - **🆕 一段一句末结束符**（非对话段只能有 1 个 。！？……，看到多句立刻拆段。例外：对话段 / 引用文献）
    - 项目级覆盖走 `_数据库/style_scanner_overrides.json`
+
+> **🔴 v28 北极星⑤校准（2026-06-03）**：上面「短句连发 / 平均段长 15-30 / 单句独行 ≥40%」是**通用爽文兜底基线，不是天花板**。**作者风格档的句长 / 段长 / 单句独行 / 标点基线 = 第一权威**——作者档规定了该维度就以作者档为准，通用基线自动让位。实证：惊悚乐园真作者句长均值 31、段长 52，但通用「短句连发」基线把弱模型推成句长 16.8 的流水账作文感。新增 `prose_rhythm_scanner`（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比 · advisory）补「句长」检测盲区。
 
 详见 memory `feedback_paragraph_length_hard_constraint` / `feedback_one_sentence_per_paragraph`。
 

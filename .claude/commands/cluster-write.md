@@ -543,3 +543,6 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 1. 把 `cluster_draft.txt` 改名重置：`mv cluster_<key>_draft.txt cluster_<key>_draft.bak.txt`
 2. 重跑 `/cluster-write CLUSTER_ID=<key>` 从 step 1 开始
 3. 若仍崩溃 → 报告用户人工介入。**🔴 v26 不再降级到 chapter mode**——chapter mode (write-chapter / save-state) 命令/plan/CLI 全部已废弃移除，无后门。
+
+---
+本命令产出位置遵循 [STRUCTURE.md](../../core/claude-home/STRUCTURE.md) 第九节。

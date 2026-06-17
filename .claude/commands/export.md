@@ -117,3 +117,6 @@ pandoc exports/书名_全文.md -o exports/书名.epub --metadata title="书名"
 - 总字数
 - 导出文件路径
 - **收尾检测结果**（step 0 的 finalize_book 输出）：残留 pending_tail 孤儿数 + 各自字数；若有未拼接孤儿，明确标注「本次导出未含 cluster_NNN 尾段 X 字」（advisory，不阻断）
+
+---
+本命令产出位置遵循 [STRUCTURE.md](../../core/claude-home/STRUCTURE.md) 第九节。

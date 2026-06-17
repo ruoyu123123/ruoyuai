@@ -304,3 +304,6 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - 锁定事实的修改是不可逆操作，修改前在终端明确提示用户确认
 - 自动修复采用 Agent 子任务独立执行，失败不影响其他章节
 - Git 不可用时：只依赖 .bak 备份，仍可继续调和
+
+---
+本命令产出位置遵循 [STRUCTURE.md](../../core/claude-home/STRUCTURE.md) 第九节。

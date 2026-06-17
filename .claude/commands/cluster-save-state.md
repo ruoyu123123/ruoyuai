@@ -367,3 +367,6 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 1. 重跑 plan：从 WAL 里 completed_steps 跳过已完成 → 从下一步开始
 2. 若 WAL 损坏 → `python core/scripts/wal_recovery.py "<项目路径>" --cluster <key>`
 3. 仍崩 → 报告用户人工介入。**🔴 v26 不降级到 chapter mode**——chapter mode 已彻底删除。
+
+---
+本命令产出位置遵循 [STRUCTURE.md](../../core/claude-home/STRUCTURE.md) 第九节。
