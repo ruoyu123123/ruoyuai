@@ -1,5 +1,9 @@
 # ECAS v23 迁移指南
 
+> ⚠️ **历史存档（v23 迁移记录·已完成）**：本文档描述 v22 DCAS → v23 ECAS 的一次性迁移，记录中提及的
+> `/write-chapter`、`/write-event-cluster` 等命令**已在 v26 随 chapter mode 彻底移除**——当前写作统一走
+> `/cluster-write` + `/cluster-save-state`（命令名以当前 CLAUDE.md 为准）。本文仅作历史参考，勿照其命令操作。
+
 > v22 DCAS → v23 ECAS 升级 / 回滚 / 兼容指南
 > 与 [ECAS_ARCHITECTURE.md](./ECAS_ARCHITECTURE.md) 配合使用
 

@@ -5,7 +5,7 @@
   2. 取 cards[label].ripple_match
   3. 调 world_evolution_engine apply_minor_event(ch, ripple_match)
 
-本脚本是 /write-chapter 入口的"世界先动一格再写"环节。
+本脚本是 /cluster-write 入口的"世界先动一格再写"环节（v26 chapter mode 废弃后·apply_minor_event 由 cluster 流程调）。
 
 用法：python world_evolution_apply_card.py <project> <ch> <label>
        <label> = "A" / "B" / "C"

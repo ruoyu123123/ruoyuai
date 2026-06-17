@@ -5,12 +5,12 @@ gen_creative.py — Gen-Model 创意卡 / 角色样本 / 卷描述生成工具
 把「含创意笔触」的输出从 Claude 主代理迁到当前 active gen-model profile。
 Claude 主代理负责准备 brief（题材/调研缓存/角色骨架），调本工具生成正文段，再接收 JSON 展示给用户。
 
-五种 mode（v1 实现 2 个，其他 3 个 placeholder）：
+五种 mode（已实现 3 个，voice_sample / world_entry 为 v2 placeholder）：
 
-  --mode brainstorm    生成 N 张灵感卡（开书用，配合 /write 命令）                    [v1 ✓]
-  --mode outline_card  生成下一章 N 张走向卡（每 save-state 后展示）                 [v1 ✓]
+  --mode brainstorm    生成 N 张灵感卡（开书用，配合 /write 命令）                    [✓]
+  --mode outline_card  生成下一章 N 张走向卡（每 save-state 后展示）                 [✓]
+  --mode volume_arc    生成卷的 arc / 大事件创意描述（配合 /outline·阶段2 建书）       [✓]
   --mode voice_sample  生成角色 voice_pack.style_samples（配合 /distill-character）  [v2 TODO]
-  --mode volume_arc    生成卷的 arc / 大事件创意描述（配合 /outline）                 [v2 TODO]
   --mode world_entry   生成世界观条目 content（世界观子系统，经 /db 或 cluster-save-state） [v2 TODO]
 
 用法示例：
@@ -247,7 +247,7 @@ def parse_outline_card_output(reply: str) -> dict:
     return _parse_json_loose(reply, fallback={"version": 1, "cards": [], "_raw": reply[:2000]})
 
 
-# ============ MODE: voice_sample / volume_arc / world_entry（v2 placeholder） ============
+# ============ MODE: voice_sample / world_entry（v2 placeholder·volume_arc 已实现见下方 _run_volume_arc） ============
 def build_voice_sample_prompt(character_id: str, history_quotes: str,
                               count: int) -> tuple[str, str]:
     """v2 TODO: 根据角色历史对话生成 style_samples"""
