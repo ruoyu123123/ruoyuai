@@ -28,6 +28,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 import chapter_io as cio
 # 2026-05-29 修 章号当cluster号：章号 ⇄ cluster_id 反查走单一权威工具
 import cluster_lookup
+from log_util import get_logger
+
+logger = get_logger(__name__)
 # 2026-06-12 缺漏修复批次1 任务C【原子写改造·P1-1 数据损坏防护】：
 # 写 _数据库/*.json 统一走 atomic_json.atomic_write_json（tmp 唯一名 + fsync + os.replace
 # 原子语义——进程写一半被杀只残留 .tmp、绝不毁掉原文件）。此前 save_json 裸 write_text：
@@ -138,16 +141,16 @@ def cmd_parse(root: Path, ch: int) -> int:
     会整 cluster 中断。改为返回状态码，由 cmd_apply_cluster_changes 累计、单章失败不中断整 cluster。
     """
     if not find_chapter_file(root, ch) and not cio.changes_path(root, ch).is_file():
-        print(f"[ERROR] 第{ch}章 正文/CHANGES 均未找到", file=sys.stderr)
+        logger.error(f" 第{ch}章 正文/CHANGES 均未找到")
         return 2
     changes, strategy = parse_changes(root, ch)
     if changes is None:
-        print(f"[PARSE] CHANGES 解析失败（无 _changes.json 且旧稿无 CHANGES 段），需要 AI agent 兜底",
+        logger.info(f"[PARSE] CHANGES 解析失败（无 _changes.json 且旧稿无 CHANGES 段），需要 AI agent 兜底",
               file=sys.stderr)
         return 1
     out = root / "_数据库" / ".wal" / f"第{ch}章_parsed.json"
     save_json(out, {"strategy": strategy, "changes": changes})
-    print(f"[PARSE] 策略 {strategy} 成功 → {out.relative_to(root)}")
+    logger.info(f"[PARSE] 策略 {strategy} 成功 → {out.relative_to(root)}")
     return 0
 
 
@@ -221,7 +224,7 @@ def apply_changes(root: Path, ch: int) -> int:
     parsed = load_json(parsed_path, {})
     changes = parsed.get("changes", {})
     if not changes:
-        print(f"[APPLY] 无 parsed CHANGES，跳过", file=sys.stderr)
+        logger.info(f"[APPLY] 无 parsed CHANGES，跳过")
         return 1
 
     # 2026-06-02 修：gen-model 常把 foreshadowing_planted/paid 报成自评摘要字符串
@@ -237,7 +240,7 @@ def apply_changes(root: Path, ch: int) -> int:
     patch_path = db / ".wal" / f"第{ch}章_patch.json"
     save_json(patch_path, {"chapter": ch, "patch_count": len(patches), "patches": patches,
                            "generated_at": datetime.now().isoformat(timespec="seconds")})
-    print(f"[PATCH] 生成 {len(patches)} 条声明式补丁 → {patch_path.name}")
+    logger.info(f"[PATCH] 生成 {len(patches)} 条声明式补丁 → {patch_path.name}")
 
     summary = {"applied": [], "warnings": [], "patch_file": str(patch_path.name)}
 
@@ -436,7 +439,7 @@ def apply_changes(root: Path, ch: int) -> int:
         try:
             progress = json.loads(prog_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            print("[ERROR] 进度.json 损坏，跳过进度更新避免清空进度库（请修复 JSON 后重试）", file=sys.stderr)
+            logger.info("[ERROR] 进度.json 损坏，跳过进度更新避免清空进度库（请修复 JSON 后重试）")
             summary["warnings"].append("进度.json 损坏，进度未更新")
     else:
         progress = {}
@@ -492,10 +495,10 @@ def apply_changes(root: Path, ch: int) -> int:
     # --- 输出 summary ---
     out = db / ".wal" / f"第{ch}章_applied.json"
     save_json(out, summary)
-    print(f"[APPLY] 完成 {len(summary['applied'])} 项变更"
+    logger.info(f"[APPLY] 完成 {len(summary['applied'])} 项变更"
           + (f", {len(summary['warnings'])} 条警告" if summary["warnings"] else ""))
     for w in summary["warnings"]:
-        print(f"  ⚠️ {w}")
+        logger.info(f"  ⚠️ {w}")
     return 0
 
 
@@ -505,15 +508,15 @@ def cmd_git_commit(root: Path, ch: int):
     try:
         subprocess.run(["git", "--version"], capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print("[GIT] git 不可用，跳过")
+        logger.info("[GIT] git 不可用，跳过")
         return
     if not (root / ".git").exists():
-        print("[GIT] 非 git 仓库，跳过")
+        logger.info("[GIT] 非 git 仓库，跳过")
         return
 
     f = find_chapter_file(root, ch)
     if not f:
-        print(f"[GIT] 第{ch}章 txt 未找到", file=sys.stderr)
+        logger.info(f"[GIT] 第{ch}章 txt 未找到")
         return
 
     # v18：正文经 cio 剥离 CHANGES，字数用统一口径
@@ -548,12 +551,12 @@ def cmd_git_commit(root: Path, ch: int):
                        capture_output=True, timeout=30)
         result = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                                 cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=10)
-        print(f"[GIT] 快照 {result.stdout.strip()}: {msg}")
+        logger.info(f"[GIT] 快照 {result.stdout.strip()}: {msg}")
     except subprocess.TimeoutExpired:
-        print(f"[GIT] commit 超时 (>30s)·跳过本次快照·不阻断流水线", file=sys.stderr)
+        logger.info(f"[GIT] commit 超时 (>30s)·跳过本次快照·不阻断流水线")
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", errors="ignore")[:200]
-        print(f"[GIT] commit 失败: {err}", file=sys.stderr)
+        logger.info(f"[GIT] commit 失败: {err}")
 
 
 # ============ 报告（第10步）============
@@ -595,15 +598,15 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
         )
         if r.returncode == 0:
-            print(f"[auto-post-reflect] step 1/3 merge-reflection OK")
+            logger.info(f"[auto-post-reflect] step 1/3 merge-reflection OK")
             for line in (r.stdout or "").splitlines()[-3:]:
-                print(f"  {line}")
+                logger.info(f"  {line}")
             steps_ran += 1
         else:
-            print(f"[auto-post-reflect] step 1/3 merge-reflection FAIL: {r.stderr[:200]}")
+            logger.info(f"[auto-post-reflect] step 1/3 merge-reflection FAIL: {r.stderr[:200]}")
             steps_skipped += 1
     else:
-        print(f"[auto-post-reflect] step 1/3 跳过：reflector 报告不存在 ({reflector_json.name})")
+        logger.info(f"[auto-post-reflect] step 1/3 跳过：reflector 报告不存在 ({reflector_json.name})")
         steps_skipped += 1
 
     # Step 2: ingest audit → _recurrence_tracker / _waiver_tracker
@@ -614,15 +617,15 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
         )
         if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
-            print(f"[auto-post-reflect] step 2/3 ingest OK (rc={r.returncode})")
+            logger.info(f"[auto-post-reflect] step 2/3 ingest OK (rc={r.returncode})")
             for line in (r.stdout or "").splitlines()[-3:]:
-                print(f"  {line}")
+                logger.info(f"  {line}")
             steps_ran += 1
         else:
-            print(f"[auto-post-reflect] step 2/3 ingest FAIL: {r.stderr[:200]}")
+            logger.info(f"[auto-post-reflect] step 2/3 ingest FAIL: {r.stderr[:200]}")
             steps_skipped += 1
     else:
-        print(f"[auto-post-reflect] step 2/3 跳过：audit 报告不存在 ({audit_json.name})")
+        logger.info(f"[auto-post-reflect] step 2/3 跳过：audit 报告不存在 ({audit_json.name})")
         steps_skipped += 1
 
     # Step 3: scan-recurring → 跨章复发追踪 + tool_calibration_suggestions
@@ -631,15 +634,15 @@ def cmd_auto_post_reflect(root: Path, ch: int) -> None:
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180  # 2026-05-30 北极星：补 timeout 纪律
     )
     if r.returncode in (0, 1):
-        print(f"[auto-post-reflect] step 3/3 scan-recurring OK (rc={r.returncode})")
+        logger.info(f"[auto-post-reflect] step 3/3 scan-recurring OK (rc={r.returncode})")
         for line in (r.stdout or "").splitlines()[-3:]:
-            print(f"  {line}")
+            logger.info(f"  {line}")
         steps_ran += 1
     else:
-        print(f"[auto-post-reflect] step 3/3 scan-recurring FAIL: {r.stderr[:200]}")
+        logger.info(f"[auto-post-reflect] step 3/3 scan-recurring FAIL: {r.stderr[:200]}")
         steps_skipped += 1
 
-    print(f"\n[auto-post-reflect] 完成 {steps_ran}/3 步（跳过 {steps_skipped}）")
+    logger.info(f"\n[auto-post-reflect] 完成 {steps_ran}/3 步（跳过 {steps_skipped}）")
 
 
 # ============ v23 ECAS checkpoint ============
@@ -787,14 +790,14 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> int:
     # 裸 write_text → 统一改走 save_json（原子写·格式与原 ensure_ascii=False/indent=2 一致）
     final_path = checkpoint_dir / f"{cluster_id}_final.json"
     save_json(final_path, result)
-    print(f"[ecas-checkpoint] {cluster_id}: {'PASS' if result['passed'] else 'FAIL'}")
+    logger.info(f"[ecas-checkpoint] {cluster_id}: {'PASS' if result['passed'] else 'FAIL'}")
     for k, v in result["checks"].items():
-        print(f"  {k}: {v}")
+        logger.info(f"  {k}: {v}")
     if result["warnings"]:
-        print(f"  warnings: {len(result['warnings'])}")
+        logger.info(f"  warnings: {len(result['warnings'])}")
         for w in result["warnings"]:
-            print(f"    - {w}")
-    print(f"  summary: {final_path.relative_to(root)}")
+            logger.info(f"    - {w}")
+    logger.info(f"  summary: {final_path.relative_to(root)}")
     # 2026-05-29 复审修复 [H3/M20]：返回状态码（1 FAIL / 0 PASS）替代 sys.exit，供 main() 传播
     return 1 if not result["passed"] else 0
 
@@ -868,15 +871,15 @@ def cmd_apply_cluster_changes(root, cluster_key):
     """
     chapters = _get_cluster_chapter_range(root, cluster_key)
     if not chapters:
-        print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
+        logger.info(f"[FATAL] cluster {cluster_key} 未找到 chapter_range")
         return 2
 
     per_chapter_status = []
     failed_chapters = []
     try:
-        print(f"[cluster {cluster_key}] 展开 {len(chapters)} 章 → 逐章 apply-changes")
+        logger.info(f"[cluster {cluster_key}] 展开 {len(chapters)} 章 → 逐章 apply-changes")
         for ch in chapters:
-            print(f"  → ch{ch}")
+            logger.info(f"  → ch{ch}")
             # 单章失败（含未捕获异常）记录后继续下一章，不中断整 cluster
             try:
                 prc = cmd_parse(root, ch)
@@ -887,19 +890,19 @@ def cmd_apply_cluster_changes(root, cluster_key):
             except Exception as e:
                 status = {"ch": ch, "error": f"{type(e).__name__}: {str(e)[:160]}"}
                 failed_chapters.append(ch)
-                print(f"  ⚠️ ch{ch} apply 异常（已记录·不中断）: {status['error']}", file=sys.stderr)
+                logger.info(f"  ⚠️ ch{ch} apply 异常（已记录·不中断）: {status['error']}")
             per_chapter_status.append(status)
         ok_count = len(chapters) - len(failed_chapters)
-        print(f"[OK] cluster {cluster_key} apply-changes 完成 {ok_count}/{len(chapters)} 章"
+        logger.info(f"[OK] cluster {cluster_key} apply-changes 完成 {ok_count}/{len(chapters)} 章"
               + (f"（{len(failed_chapters)} 章失败: {failed_chapters}）" if failed_chapters else ""))
 
         # writer 撒谎检测（apply 落地后跑 · 失败不中断 · 结果并入 summary 写盘）
         truth = _run_writer_truth_check(root, chapters)
         if truth["lies_total"] > 0:
-            print(f"[truth-check] 🔴 检测到 {truth['lies_total']} 条撒谎"
+            logger.info(f"[truth-check] 🔴 检测到 {truth['lies_total']} 条撒谎"
                   f"（writer 声明与正文不符）")
         else:
-            print(f"[truth-check] ✅ {truth['ran']} 章无撒谎"
+            logger.info(f"[truth-check] ✅ {truth['ran']} 章无撒谎"
                   + (f" · {len(truth['errors'])} 章检测异常（已记录）" if truth["errors"] else ""))
     finally:
         # 2026-05-29 复审修复 [M3]：truth-check + 写盘放 finally——任何异常后都落地 summary
@@ -913,7 +916,7 @@ def cmd_apply_cluster_changes(root, cluster_key):
         }
         out = root / "_数据库" / ".wal" / f"{cluster_key}_apply_cluster.json"
         save_json(out, summary)
-        print(f"[apply-cluster] summary → {out.name}")
+        logger.info(f"[apply-cluster] summary → {out.name}")
     # 全部章失败 = 严重（exit 2），否则成功（单章失败已记录·不影响 cluster 流水线推进）
     return 2 if (failed_chapters and len(failed_chapters) == len(chapters)) else 0
 
@@ -922,7 +925,7 @@ def cmd_git_commit_cluster(root, cluster_key):
     """v24 cluster 级 git commit：1 个 cluster 1 个 commit"""
     chapters = _get_cluster_chapter_range(root, cluster_key)
     if not chapters:
-        print(f"[FATAL] cluster {cluster_key} 未找到 chapter_range", file=sys.stderr)
+        logger.info(f"[FATAL] cluster {cluster_key} 未找到 chapter_range")
         return 2
     # 复用 cmd_git_commit 但 commit msg 改 cluster 级
     # v27 修复：cluster 级 git 也加 timeout 防 session 阻塞
@@ -937,13 +940,13 @@ def cmd_git_commit_cluster(root, cluster_key):
                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         if r.returncode == 0:
             sha = r.stdout.split()[1].strip("]")[:7] if r.stdout else "?"
-            print(f"[GIT] cluster_{cluster_key} 快照 {sha}: {msg}")
+            logger.info(f"[GIT] cluster_{cluster_key} 快照 {sha}: {msg}")
         else:
-            print(f"[GIT] {r.stderr[:200] or r.stdout[:200]}", file=sys.stderr)
+            logger.info(f"[GIT] {r.stderr[:200] or r.stdout[:200]}")
     except _sp.TimeoutExpired:
-        print(f"[GIT] cluster_{cluster_key} commit 超时 (>30s)·跳过本次快照·不阻断流水线", file=sys.stderr)
+        logger.info(f"[GIT] cluster_{cluster_key} commit 超时 (>30s)·跳过本次快照·不阻断流水线")
     except Exception as e:
-        print(f"[GIT] {e}", file=sys.stderr)
+        logger.info(f"[GIT] {e}")
     # 2026-05-29 复审修复 [H3/M20]：git 失败不中断流水线（项目规则「失败不中断，仅记录」），
     # 故成功/记录后均返回 0（唯一 fatal 是缺 chapter_range，已 return 2）。
     return 0
@@ -971,7 +974,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
 
     learning_loop = scripts_dir() / "learning_loop.py"  # frozen-aware（狩猎修·exe下学习闭环静默不跑）
     if not learning_loop.is_file():
-        print(f"[auto-post-reflect-cluster] learning_loop.py 不存在·跳过", file=sys.stderr)
+        logger.info(f"[auto-post-reflect-cluster] learning_loop.py 不存在·跳过")
         return 0
 
     # cluster reflection 文件候选（plan_tracker novel-reflector 用 cstr_variants 命名）
@@ -1003,14 +1006,14 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
         )
         if r.returncode == 0:
-            print(f"[auto-post-reflect-cluster] step 1/3 merge-reflection OK ({refl_path.name})")
+            logger.info(f"[auto-post-reflect-cluster] step 1/3 merge-reflection OK ({refl_path.name})")
             steps_ran += 1
         else:
-            print(f"[auto-post-reflect-cluster] step 1/3 merge-reflection FAIL: {(r.stderr or '')[:200]}",
+            logger.info(f"[auto-post-reflect-cluster] step 1/3 merge-reflection FAIL: {(r.stderr or '')[:200]}",
                   file=sys.stderr)
             steps_skipped += 1
     else:
-        print(f"[auto-post-reflect-cluster] step 1/3 跳过：cluster reflection 报告不存在"
+        logger.info(f"[auto-post-reflect-cluster] step 1/3 跳过：cluster reflection 报告不存在"
               f"（找过 {norm_cid}_reflection.json 等）")
         steps_skipped += 1
 
@@ -1022,14 +1025,14 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
         )
         if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
-            print(f"[auto-post-reflect-cluster] step 2/3 ingest OK ({audit_path.name}, rc={r.returncode})")
+            logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest OK ({audit_path.name}, rc={r.returncode})")
             steps_ran += 1
         else:
-            print(f"[auto-post-reflect-cluster] step 2/3 ingest FAIL: {(r.stderr or '')[:200]}",
+            logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest FAIL: {(r.stderr or '')[:200]}",
                   file=sys.stderr)
             steps_skipped += 1
     else:
-        print(f"[auto-post-reflect-cluster] step 2/3 跳过：cluster audit 报告不存在"
+        logger.info(f"[auto-post-reflect-cluster] step 2/3 跳过：cluster audit 报告不存在"
               f"（找过 cluster_{raw}_audit.json 等）")
         steps_skipped += 1
 
@@ -1039,14 +1042,14 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
     )
     if r.returncode in (0, 1):
-        print(f"[auto-post-reflect-cluster] step 3/3 scan-recurring OK (rc={r.returncode})")
+        logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring OK (rc={r.returncode})")
         steps_ran += 1
     else:
-        print(f"[auto-post-reflect-cluster] step 3/3 scan-recurring FAIL: {(r.stderr or '')[:200]}",
+        logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring FAIL: {(r.stderr or '')[:200]}",
               file=sys.stderr)
         steps_skipped += 1
 
-    print(f"[auto-post-reflect-cluster] {cluster_key} 完成 {steps_ran}/3 步（跳过 {steps_skipped}）")
+    logger.info(f"[auto-post-reflect-cluster] {cluster_key} 完成 {steps_ran}/3 步（跳过 {steps_skipped}）")
     return 0
 
 
@@ -1082,7 +1085,7 @@ def main():
 
     root = Path(args.project).resolve()
     if not root.exists():
-        print(f"项目路径不存在: {root}", file=sys.stderr)
+        logger.info(f"项目路径不存在: {root}")
         sys.exit(2)
 
     # 2026-05-29 复审修复 [H3/M20]：原 dispatch 裸调用 cmd_*_cluster 丢弃返回码——
@@ -1102,9 +1105,9 @@ def main():
         import cluster_summary_builder
         _res = cluster_summary_builder.build_cluster_summary(root, args.build_cluster_summary)
         if not _res.get("ok"):
-            print(f"[FAIL] build-cluster-summary {_res.get('cluster_id')} :: {_res.get('error')}", file=sys.stderr)
+            logger.info(f"[FAIL] build-cluster-summary {_res.get('cluster_id')} :: {_res.get('error')}")
             sys.exit(1)
-        print(f"[OK] 账本写入 {_res['cluster_id']} · 填章 {_res['chapters_filled']} · 总CJK {_res['word_count']}")
+        logger.info(f"[OK] 账本写入 {_res['cluster_id']} · 填章 {_res['chapters_filled']} · 总CJK {_res['word_count']}")
         rc = 0
     else:
         ap.print_help()
