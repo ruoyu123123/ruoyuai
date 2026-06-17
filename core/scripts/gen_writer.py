@@ -48,6 +48,9 @@ import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化�
 import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster_006" ↔ "6"）
 from atomic_json import atomic_write_text  # noqa: E402 · 2026-06-13 草稿/CHANGES 产物原子落盘（崩溃不留半截）
 import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
+from log_util import get_logger, info, debug, warning, error  # noqa: E402
+
+logger = get_logger(__name__)
 
 
 # ============ 依赖检查 ============
@@ -62,8 +65,8 @@ def check_deps():
     except ImportError:
         missing.append('python-dotenv')
     if missing:
-        print(f"[ERROR] 缺少依赖: {missing}", file=sys.stderr)
-        print(f"  请运行: pip install {' '.join(missing)}", file=sys.stderr)
+        logger.error(f" 缺少依赖: {missing}")
+        logger.error(f"  请运行: pip install {' '.join(missing)}")
         sys.exit(2)
 
 
@@ -847,9 +850,9 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
     if not (style_skill or "").strip():
-        print("[gen_writer] ⚠️🔴 作者风格_skill.md 缺失/空——writer 只有量化 JSON、缺作者笔法+golden 范例，"
+        logger.warning("⚠️🔴 作者风格_skill.md 缺失/空——writer 只有量化 JSON、缺作者笔法+golden 范例，"
               "极易跑偏成通用爽文（cluster_001 翻车根因）。请把风格库 skill_FINAL.md 复制为 "
-              "<项目>/_数据库/作者风格_skill.md（/outline 漏拷的已知 bug）。", file=sys.stderr)
+              "<项目>/_数据库/作者风格_skill.md（/outline 漏拷的已知 bug）。")
 
     # 调研 cache（找最新的）
     cache_dir = db / '.research_cache'
@@ -937,7 +940,7 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                 if constraints:
                     cluster_hard_constraints_text = "\n".join(constraints)
     except (json.JSONDecodeError, OSError) as e:
-        print(f"[gen_writer] 事件簇.json 读取失败（不阻塞）: {e}", file=sys.stderr)
+        logger.info(f" 事件簇.json 读取失败（不阻塞）: {e}")
 
     # 前一章末尾（用于衔接，如果 ch_start > 1）
     prev_ch_section = ""
@@ -1389,8 +1392,8 @@ def _stream_once_gemini(profile, system: str, user: str, max_tokens: int,
 
     cached = usage.get("cachedContentTokenCount")
     if cached:
-        print(f"\n[gen_writer][gemini] 🟢 缓存命中 cachedContentTokenCount={cached}"
-              f"/{usage.get('promptTokenCount', '?')} prompt tokens（省 input 成本）", file=sys.stderr)
+        logger.info(f"\n[gen_writer][gemini] 🟢 缓存命中 cachedContentTokenCount={cached}"
+              f"/{usage.get('promptTokenCount', '?')} prompt tokens（省 input 成本）")
     finish_reason = "length" if finish_raw == "MAX_TOKENS" else ("stop" if finish_raw else None)
     return text, finish_reason
 
@@ -1434,15 +1437,15 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
     for i, profile in enumerate(candidates):
         max_tokens, mt_source = resolve_max_tokens(profile)
         if i == 0:
-            print(f"[gen_writer] 调用 active profile: {profile.name} "
-                  f"({profile.model} @ {profile.base_url})", file=sys.stderr)
-            print(f"[gen_writer] max_tokens={max_tokens} (source: {mt_source})",
+            logger.info(f" 调用 active profile: {profile.name} "
+                  f"({profile.model} @ {profile.base_url})")
+            logger.info(f" max_tokens={max_tokens} (source: {mt_source})",
                   file=sys.stderr)
-            print(f"[gen_writer] temperature={profile.temperature}", file=sys.stderr)
+            logger.info(f" temperature={profile.temperature}")
         else:
-            print(f"\n[FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
+            logger.info(f"\n[FALLBACK] -> {profile.name} ({profile.model})")
 
-        print(f"[gen_writer] prompt size: system={len(system)} chars, user={len(user)} chars",
+        logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars",
               file=sys.stderr)
 
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url,
@@ -1460,25 +1463,25 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                     if attempt > GEN_MODEL_MAX_RETRIES:
                         raise  # 重试耗尽 → 落到外层 except → 降级 fallback
                     delay = GEN_MODEL_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                    print(f"\n[gen_writer] ⚠️ {profile.name} 限流/超时 "
+                    logger.info(f"\n[gen_writer] ⚠️ {profile.name} 限流/超时 "
                           f"({type(re_err).__name__})，{delay:.0f}s 后同 profile 重试 "
-                          f"{attempt}/{GEN_MODEL_MAX_RETRIES}…", file=sys.stderr)
+                          f"{attempt}/{GEN_MODEL_MAX_RETRIES}…")
                     time.sleep(delay)
             # 截断检测 + 自动续写（finish_reason == "length" = 命中 max_tokens 被截断）
             cont_rounds = 0
             while finish_reason == "length" and cont_rounds < 3:
                 cont_rounds += 1
-                print(f"\n[gen_writer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…",
+                logger.info(f"\n[gen_writer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…",
                       file=sys.stderr)
                 cont_text, finish_reason = _stream_once(
                     client, profile, system, user, max_tokens, prior_assistant=full_text)
                 full_text += cont_text
             if finish_reason == "length":
-                print(f"\n[gen_writer] ⚠️ WARN 续写 {cont_rounds} 轮后仍可能未写完"
-                      f"（草稿尾部/CHANGES 块可能不完整 · 下游 cjk 偏短检查兜底）", file=sys.stderr)
+                logger.info(f"\n[gen_writer] ⚠️ WARN 续写 {cont_rounds} 轮后仍可能未写完"
+                      f"（草稿尾部/CHANGES 块可能不完整 · 下游 cjk 偏短检查兜底）")
         except Exception as e:
             reason = str(e)[:200]
-            print(f"\n[FALLBACK] {profile.name} 调用失败: {reason}", file=sys.stderr)
+            logger.info(f"\n[FALLBACK] {profile.name} 调用失败: {reason}")
             failures.append((profile.name, reason))
             continue  # 切下一个 profile
 
@@ -1486,7 +1489,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         # 视为失败，切下个 profile（与 except 路径对齐），杜绝写空草稿报成功。
         if not full_text.strip():
             reason = "返回空内容（HTTP 200 但零 content · 可能内容过滤/reasoning model 全进 reasoning_content）"
-            print(f"\n[FALLBACK] {profile.name} {reason}", file=sys.stderr)
+            logger.info(f"\n[FALLBACK] {profile.name} {reason}")
             failures.append((profile.name, reason))
             continue  # 切下一个 profile
 
@@ -1507,14 +1510,14 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                 if body_cjk >= min_cjk:
                     break
                 rounds += 1
-                print(f"\n[gen_writer] ⚠️ 正文 {body_cjk} CJK < 软下限 {min_cjk}，"
+                logger.info(f"\n[gen_writer] ⚠️ 正文 {body_cjk} CJK < 软下限 {min_cjk}，"
                       f"内容续写第 {rounds}/{FREESTYLE_EXPAND_MAX_ROUNDS} 轮（展开剩余场景·非截断）…",
                       file=sys.stderr)
                 try:
                     cont_text, _fr = _stream_once(client, profile, system, user, max_tokens,
                                                   prior_assistant=accum_body, cont_reason="expand")
                 except Exception as e:
-                    print(f"[gen_writer] expand 续写第 {rounds} 轮失败（保留已有正文）: {str(e)[:150]}",
+                    logger.info(f" expand 续写第 {rounds} 轮失败（保留已有正文）: {str(e)[:150]}",
                           file=sys.stderr)
                     break
                 cont_body, cont_changes = _raw_split(cont_text)
@@ -1524,13 +1527,13 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                 if cont_changes:
                     last_changes = cont_changes
                 if inc < FREESTYLE_EXPAND_MIN_GAIN:
-                    print(f"[gen_writer] 续写增量仅 {inc} CJK（模型已无更多内容）→ 停止兜底，避免注水",
+                    logger.info(f" 续写增量仅 {inc} CJK（模型已无更多内容）→ 停止兜底，避免注水",
                           file=sys.stderr)
                     break
             # expand 各轮被要求"先别写 CHANGES" → 收尾时若仍缺 CHANGES，追加一次"只补 CHANGES"请求
             # （否则下游 CHANGES_MISSING hard_gate）。仅在确实发生过 expand 续写时才补。
             if rounds > 0 and not last_changes:
-                print("[gen_writer] expand 后缺 CHANGES JSON，追加一次补全请求…", file=sys.stderr)
+                logger.info(" expand 后缺 CHANGES JSON，追加一次补全请求…")
                 try:
                     chg_text, _cf = _stream_once(client, profile, system, user, max_tokens,
                                                  prior_assistant=accum_body, cont_reason="changes_only")
@@ -1540,14 +1543,14 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                     elif "{" in chg_text:
                         last_changes = "```json\n" + chg_text.strip() + "\n```"
                 except Exception as e:
-                    print(f"[gen_writer] 补 CHANGES 失败（下游 normalize 兜底）: {str(e)[:120]}",
+                    logger.info(f" 补 CHANGES 失败（下游 normalize 兜底）: {str(e)[:120]}",
                           file=sys.stderr)
             full_text = accum_body + ("\n\n" + last_changes if last_changes else "")
-            print(f"\n[gen_writer] 内容兜底完成：正文 {cio.count_cjk(accum_body)} CJK（expand {rounds} 轮）"
-                  f"· CHANGES={'有' if last_changes else '无'}", file=sys.stderr)
+            logger.info(f"\n[gen_writer] 内容兜底完成：正文 {cio.count_cjk(accum_body)} CJK（expand {rounds} 轮）"
+                  f"· CHANGES={'有' if last_changes else '无'}")
 
         # 成功
-        print(f"\n[gen_writer] 接收完毕 ({len(full_text)} chars) via {profile.name}",
+        logger.info(f"\n[gen_writer] 接收完毕 ({len(full_text)} chars) via {profile.name}",
               file=sys.stderr)
         return full_text, profile
 
@@ -1607,14 +1610,14 @@ def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
         active0 = candidates[0]
         orig_temp = active0.temperature
         active0.temperature = temp
-        print(f"\n[gen_writer][best-of-N] 生成候选 {i+1}/{n} (temperature={temp})",
+        logger.info(f"\n[gen_writer][best-of-N] 生成候选 {i+1}/{n} (temperature={temp})",
               file=sys.stderr)
         try:
             reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk)
             drafts.append({"idx": i, "reply": reply, "profile": used_profile,
                            "temperature": temp, "error": None})
         except GenModelExhaustedError as e:
-            print(f"[gen_writer][best-of-N] 候选 {i+1} 生成失败（跳过）: {str(e)[:150]}",
+            logger.info(f"[best-of-N] 候选 {i+1} 生成失败（跳过）: {str(e)[:150]}",
                   file=sys.stderr)
             drafts.append({"idx": i, "reply": None, "profile": None,
                            "temperature": temp, "error": str(e)[:200]})
@@ -1735,8 +1738,8 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
     author_ref = gather_author_ref_text(project_root)
     use_av_judge = bool(author_ref.strip())
     if not author_ref.strip():
-        print("[gen_writer][best-of-N] 未找到作者原文池 · 跳过 SFS/AV-judge 打分 "
-              "（仍生成 N 稿但退回第一稿 · 优雅降级）", file=sys.stderr)
+        logger.info("[best-of-N] 未找到作者原文池 · 跳过 SFS/AV-judge 打分 "
+              "（仍生成 N 稿但退回第一稿 · 优雅降级）")
 
     drafts = generate_n_drafts(loader, system, user, n, min_cjk=min_cjk)
     ok_drafts = [d for d in drafts if d.get("error") is None and d.get("reply")]
@@ -1752,14 +1755,14 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
         scored.append({"idx": d["idx"], "reply": d["reply"], "profile": d["profile"],
                        "temperature": d["temperature"], "body_cjk": cio.count_cjk(body),
                        "score": sc, "error": None})
-        print(f"[gen_writer][best-of-N] 候选 idx={d['idx']} temp={d['temperature']}: "
+        logger.info(f"[best-of-N] 候选 idx={d['idx']} temp={d['temperature']}: "
               f"SFS={sc['sfs']} AV走味={sc['av_drift_count']} composite={sc['composite']} "
-              f"cjk={cio.count_cjk(body)}", file=sys.stderr)
+              f"cjk={cio.count_cjk(body)}")
 
     best_i, reason = select_best_draft(scored)
     best = scored[best_i]
-    print(f"\n[gen_writer][best-of-N] ✅ 选中候选 idx={best['idx']} "
-          f"(temp={best['temperature']}) — {reason}", file=sys.stderr)
+    logger.info(f"\n[gen_writer][best-of-N] ✅ 选中候选 idx={best['idx']} "
+          f"(temp={best['temperature']}) — {reason}")
 
     trace = {
         "best_of_n": n,
@@ -1802,7 +1805,7 @@ def split_text_and_changes(reply: str) -> tuple:
         _sep = re.search(r'\n\s*-{3,}\s*\n', body[:2500])
         if _sep:
             body = body[_sep.end():].lstrip()
-            print("[gen_writer] [strip] 剥离模型漏出的『创作说明/推理概要』元前言（正文前 + --- 分隔）",
+            logger.info(" [strip] 剥离模型漏出的『创作说明/推理概要』元前言（正文前 + --- 分隔）",
                   file=sys.stderr)
 
     # [2026-06-06] 剥离 reasoning/对话型模型（pro-preview 等）漏出的「破壁助手尾注」：
@@ -1819,15 +1822,15 @@ def split_text_and_changes(reply: str) -> tuple:
         _lines.pop()
     if _stripped_tail:
         body = '\n'.join(_lines).rstrip()
-        print("[gen_writer] [strip] 剥离 reasoning 模型破壁助手尾注（请审阅/请告诉我/CHANGES JSON 类）",
+        logger.info(" [strip] 剥离 reasoning 模型破壁助手尾注（请审阅/请告诉我/CHANGES JSON 类）",
               file=sys.stderr)
 
     # DCAS 模式（用户偏好）：如果 gen-model 仍误带「第 N 章 标题」分章标记，stderr 警告
     # 不主动删除（让 splitter 决定怎么处理），只提示 prompt 没生效
     if re.search(r'^第\s*[一二三四五六七八九十百千\d]+\s*章\s', body, re.MULTILINE):
-        print("[gen_writer] [WARN] gen-model 输出含「第 N 章 标题」分章标记 — "
+        logger.warning("[WARN] gen-model 输出含「第 N 章 标题」分章标记 — "
               "splitter 应忽略这些标记重新决定截断点。"
-              "若反复出现，调高 prompt 强度或换 profile。", file=sys.stderr)
+              "若反复出现，调高 prompt 强度或换 profile。")
 
     try:
         changes_obj = json.loads(changes_json)
@@ -1888,7 +1891,7 @@ def enforce_short_paragraphs(body: str, author_para_mean: float = None, author_s
     # [北极星⑤·对齐 _para_contract_line L546] 作者写密实多句长段(single<0.5)→通用一段一句让位·
     # 不在 post-processing 反向 tighten 打碎其签名复合段·relax-only(只放宽不收紧)。
     if author_single is not None and author_single < 0.5:
-        print(f"[gen_writer] 短段约束跳过：作者密实多句长段(单句独行 {author_single:.0%}<0.5)→保留复合长段·不拆碎句(对齐段长契约)", file=sys.stderr)
+        logger.info(f" 短段约束跳过：作者密实多句长段(单句独行 {author_single:.0%}<0.5)→保留复合长段·不拆碎句(对齐段长契约)")
         return body
     base = author_para_mean if (author_para_mean and author_para_mean > 0) else 0
     threshold = max(base * 1.3, 45.0) if base else 80.0
@@ -1918,7 +1921,7 @@ def enforce_short_paragraphs(body: str, author_para_mean: float = None, author_s
             out.append(para)  # 单句长段·不切（防切坏语法·小世界长句允许）
     new_body = "\n\n".join(out)
     if changed:
-        print(f"[gen_writer] 短段约束：切分 {changed} 个过长非对话段（阈值 {threshold:.0f} 字·作者段长基线 {base:.1f}）",
+        logger.info(f" 短段约束：切分 {changed} 个过长非对话段（阈值 {threshold:.0f} 字·作者段长基线 {base:.1f}）",
               file=sys.stderr)
     return new_body
 
@@ -1948,10 +1951,10 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         from draft_sanitizer import sanitize as _sanitize_draft
         body, _san_rep = _sanitize_draft(body)
         if _san_rep.get('dedup_segments_removed') or _san_rep.get('pair_merges'):
-            print(f"[gen_writer] draft_sanitizer 清洗：整块去重 {_san_rep['dedup_segments_removed']} 段 · "
-                  f"成对符号腰斩合并 {_san_rep['pair_merges']} 处", file=sys.stderr)
+            logger.info(f" draft_sanitizer 清洗：整块去重 {_san_rep['dedup_segments_removed']} 段 · "
+                  f"成对符号腰斩合并 {_san_rep['pair_merges']} 处")
     except Exception as _e:
-        print(f"[gen_writer] [WARN] draft_sanitizer 清洗跳过（{_e}）— 草稿原样落地", file=sys.stderr)
+        logger.warning(f"[WARN] draft_sanitizer 清洗跳过（{_e}）— 草稿原样落地")
 
     draft_dir = project_root / '章节' / f'cluster_{cluster_id:03d}_draft'
     draft_dir.mkdir(parents=True, exist_ok=True)
@@ -1993,10 +1996,10 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
     atomic_write_text(changes_path,
                       json.dumps(changes, ensure_ascii=False, indent=2))
 
-    print(f"\n[gen_writer] 写出:", file=sys.stderr)
-    print(f"  正文: {draft_path} ({cjk} CJK)", file=sys.stderr)
-    print(f"  CHANGES: {changes_path}", file=sys.stderr)
-    print(f"  profile: {used_profile.name} ({used_profile.model})", file=sys.stderr)
+    logger.info(f"\n[gen_writer] 写出:")
+    logger.info(f"  正文: {draft_path} ({cjk} CJK)")
+    logger.info(f"  CHANGES: {changes_path}")
+    logger.info(f"  profile: {used_profile.name} ({used_profile.model})")
     return draft_path, cjk
 
 
@@ -2020,7 +2023,7 @@ def run_scanners(draft_path: Path) -> dict:
             results[sc] = {'verdict': d.get('verdict'), 'violations_count': d.get('violations_count')}
         except Exception as e:
             # v27 修复：静默 except 加日志（之前完全静默吞错·debug 困难）
-            print(f"  [run_scanners] {sc} 输出 JSON 解析失败 ({e})·exit={r.returncode}·stderr_preview={(r.stderr or '')[:150]}",
+            logger.info(f"  [run_scanners] {sc} 输出 JSON 解析失败 ({e})·exit={r.returncode}·stderr_preview={(r.stderr or '')[:150]}",
                   file=sys.stderr)
             results[sc] = {'verdict': 'ERROR', 'stdout_preview': r.stdout[:300]}
     return results
@@ -2043,43 +2046,43 @@ def main():
 
     project_root = Path(args.project).resolve()
     if not project_root.exists():
-        print(f"[ERROR] 项目路径不存在: {project_root}", file=sys.stderr)
+        logger.error(f" 项目路径不存在: {project_root}")
         sys.exit(2)
 
     # v27：ch_start 缺省 → 从事件簇.json + 已写章节推导
     ch_start = args.chapter_start
     if ch_start is None:
         ch_start = _infer_cluster_start_ch(project_root, args.cluster)
-        print(f"[gen_writer] [v27 freestyle] 推导 ch_start={ch_start} (cluster_{args.cluster:03d})",
+        logger.info(f" [v27 freestyle] 推导 ch_start={ch_start} (cluster_{args.cluster:03d})",
               file=sys.stderr)
 
     # 模式判断 + 提示
     if args.chapter_end is None:
-        print(f"[gen_writer] [v27 freestyle 模式] writer 不知目标章数 · splitter 按字数切 · 章数自然涌现",
+        logger.info(f" [v27 freestyle 模式] writer 不知目标章数 · splitter 按字数切 · 章数自然涌现",
               file=sys.stderr)
     else:
-        print(f"[gen_writer] [v26 兼容模式] ch_start={ch_start} ch_end={args.chapter_end} target_cjk={args.target_cjk}",
+        logger.info(f" [v26 兼容模式] ch_start={ch_start} ch_end={args.chapter_end} target_cjk={args.target_cjk}",
               file=sys.stderr)
 
     # dry-run 模式不需要 active profile
     if args.dry_run:
         system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start,
                                                 args.chapter_end, args.target_cjk)
-        print("=== SYSTEM PROMPT ===")
-        print(system)
-        print("\n=== USER PROMPT ===")
-        print(user)
-        print(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars",
+        logger.info("=== SYSTEM PROMPT ===")
+        logger.debug(system)  # OK: print - dry-run 模式调试输出
+        logger.info("\n=== USER PROMPT ===")
+        logger.debug(user)  # OK: print - dry-run 模式调试输出
+        logger.info(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars",
               file=sys.stderr)
-        print(f"[dry-run] snippet_seed: {seed_trace}", file=sys.stderr)
+        logger.info(f"[dry-run] snippet_seed: {seed_trace}")
         # 显示当前 active profile 信息
         try:
             loader = GenModelLoader()
             p = loader.get_active_profile()
-            print(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})",
+            logger.info(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})",
                   file=sys.stderr)
         except GenModelConfigError as e:
-            print(f"[dry-run] [WARN] active profile 未就绪: {e}", file=sys.stderr)
+            logger.info(f"[dry-run] [WARN] active profile 未就绪: {e}")
         return
 
     # 加载 gen-model 配置
@@ -2087,19 +2090,19 @@ def main():
         loader = GenModelLoader()
         active = loader.get_active_profile()  # 校验 active 就绪
     except GenModelConfigError as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
-        print("  跑 python core/scripts/gen_model.py list / switch 修复",
+        logger.error(f" {e}")
+        logger.info("  跑 python core/scripts/gen_model.py list / switch 修复",
               file=sys.stderr)
         sys.exit(2)
 
-    print(f"[gen_writer] 加载配置: {loader.env_path}", file=sys.stderr)
-    print(f"[gen_writer] active = {active.name}", file=sys.stderr)
+    logger.info(f" 加载配置: {loader.env_path}")
+    logger.info(f" active = {active.name}")
     # token ledger（一人公司·BYOK 用户看烧多少钱）：设账本路径·llm_transport 自动 append（已设则尊重）
     os.environ.setdefault("RUOYU_TOKEN_LEDGER",
                           str(project_root / "_数据库" / ".token_ledger.jsonl"))
     chain = loader.get_fallback_chain()
     if chain:
-        print(f"[gen_writer] fallback chain = {','.join(chain)}", file=sys.stderr)
+        logger.info(f" fallback chain = {','.join(chain)}")
 
     system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start,
                                             args.chapter_end, args.target_cjk)
@@ -2112,21 +2115,21 @@ def main():
     # 治 pro 等简洁倾向模型单 cluster 偏短（实测 3650 vs 健康 12000-25000）。
     min_cjk = FREESTYLE_MIN_CJK if args.chapter_end is None else None
     if min_cjk:
-        print(f"[gen_writer] [v27 freestyle] 正文长度软下限 min_cjk={min_cjk}（偏短→expand 续写兜底）",
+        logger.info(f" [v27 freestyle] 正文长度软下限 min_cjk={min_cjk}（偏短→expand 续写兜底）",
               file=sys.stderr)
     best_of_n_trace = None
     try:
         if n >= 2:
-            print(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优",
+            logger.info(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优",
                   file=sys.stderr)
             reply, used_profile, best_of_n_trace = best_of_n_pipeline(
                 loader, system, user, project_root, n, min_cjk=min_cjk)
         else:
-            print(f"[gen_writer][best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）",
+            logger.info(f"[best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）",
                   file=sys.stderr)
             reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk)
     except GenModelExhaustedError as e:
-        print(f"\n[ERROR] {e}", file=sys.stderr)
+        logger.info(f"\n[ERROR] {e}")
         sys.exit(3)
 
     body, changes = split_text_and_changes(reply)
@@ -2135,43 +2138,43 @@ def main():
     # 非对话段·格式层·不动 ！？）。流水账靠模型自身 + prose_rhythm / reading-reflector advisory 兜。
     if min_cjk is not None:
         _auth_sent, _auth_para, _auth_single = _read_author_rhythm(project_root)
-        print(f"[gen_writer] 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}",
+        logger.info(f" 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}",
               file=sys.stderr)
         body = enforce_short_paragraphs(body, author_para_mean=_auth_para, author_single=_auth_single)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
                                   ch_start, args.chapter_end, used_profile,
                                   seed_trace=seed_trace, best_of_n_trace=best_of_n_trace)
 
-    print(f"\n[gen_writer] 跑 scanner...", file=sys.stderr)
+    logger.info(f"\n[gen_writer] 跑 scanner...")
     scan_results = run_scanners(draft_path)
-    print(f"\n=== Scanner Results ===", file=sys.stderr)
+    logger.info(f"\n=== Scanner Results ===")
     for sc, res in scan_results.items():
-        print(f"  {sc}: {res}", file=sys.stderr)
+        logger.info(f"  {sc}: {res}")
 
     # 字数检查（v27 freestyle 无硬下限 · v26 兼容才校验目标）
     if args.target_cjk:
         try:
             target_min, target_max = map(int, args.target_cjk.split('-'))
             if cjk < target_min:
-                print(f"\n[WARN] 字数 {cjk} < 目标下限 {target_min}", file=sys.stderr)
+                logger.info(f"\n[WARN] 字数 {cjk} < 目标下限 {target_min}")
             elif cjk > target_max:
-                print(f"\n[WARN] 字数 {cjk} > 目标上限 {target_max}", file=sys.stderr)
+                logger.info(f"\n[WARN] 字数 {cjk} > 目标上限 {target_max}")
             else:
-                print(f"\n[OK] 字数 {cjk} 在目标范围 [{target_min}, {target_max}]",
+                logger.info(f"\n[OK] 字数 {cjk} 在目标范围 [{target_min}, {target_max}]",
                       file=sys.stderr)
         except (ValueError, AttributeError):
-            print(f"\n[gen_writer] target_cjk 解析失败，跳过字数校验: {args.target_cjk}",
+            logger.info(f"\n[gen_writer] target_cjk 解析失败，跳过字数校验: {args.target_cjk}",
                   file=sys.stderr)
     else:
         # v27 freestyle：软提示（splitter 健康区间）
         if cjk < 8000:
-            print(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏短 · 切 3 章可能不够（splitter 可能从下个 cluster 补料）",
+            logger.info(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏短 · 切 3 章可能不够（splitter 可能从下个 cluster 补料）",
                   file=sys.stderr)
         elif cjk > 30000:
-            print(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏长 · splitter 会切成 7+ 章",
+            logger.info(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏长 · splitter 会切成 7+ 章",
                   file=sys.stderr)
         else:
-            print(f"\n[v27 freestyle] [OK] cjk={cjk} 健康区间 8000-30000",
+            logger.info(f"\n[v27 freestyle] [OK] cjk={cjk} 健康区间 8000-30000",
                   file=sys.stderr)
 
 
