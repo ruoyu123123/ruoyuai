@@ -80,25 +80,9 @@ def main():
             reflection_file = f
             break
 
-    if reflection_file:
-        # 已有反思 → 静默放行
-        sys.exit(0)
-
-    # 选默认路径作建议（全局）
-    reflection_file = candidate_dirs[0] / f"{plan_id}_step_{n}.md"
-
-    # 提示：请补写反思（不拦截）
-    msg = (
-        f"⚠️ [hook step-reflection] plan_id={plan_id} step n={n} 完成但未发现反思文件。\n"
-        f"  期望路径: {reflection_file}\n"
-        f"  请用 Write 工具补写（参考模板）:\n"
-        f"  ---\n"
-        + REFLECTION_TEMPLATE.format(plan_id=plan_id, n=n).replace("\n", "\n  ")
-        + "\n  ---\n"
-        f"  不写反思不阻塞，但下次循环时会累积「未反思 step」list，可能触发 system_health_audit 警告。"
-    )
-    print(msg, file=sys.stderr)
-    sys.exit(0)   # PostToolUse 不能 exit 2
+    # v28 降噪（2026-06-18）：反思文件从未被流水线采纳，打印模板=纯噪声。
+    # 静默放行，不再打印模板提示。
+    sys.exit(0)
 
 
 if __name__ == "__main__":

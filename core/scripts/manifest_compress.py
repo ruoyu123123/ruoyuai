@@ -27,8 +27,6 @@ from pathlib import Path
 
 # 必须保留的特殊 _ 字段（LLM 要用）
 KEEP_UNDERSCORE_FIELDS = {
-    "_cache_layout",
-    "_critical_summary",
     "_id",
     "_schema",
     "_priority",
@@ -43,6 +41,12 @@ DROP_FIELDS_DEEP = {
     "_phase_doc", "_profile_doc", "_filter_doc",
 }
 
+# 顶层仅 Claude agent 用的元数据字段（gen-model 无法执行 Read/Bash）
+DROP_TOP_LEVEL_KEYS = {
+    "must_read", "_cache_layout", "_critical_summary",
+    "instructions_for_subagent", "post_write_checks", "database_coverage",
+}
+
 MAX_LIST_LEN = 10
 MAX_STR_LEN = 200
 
@@ -52,6 +56,9 @@ def compress(obj, depth: int = 0):
     if isinstance(obj, dict):
         out = {}
         for k, v in obj.items():
+            # 顶层剥除 Claude agent 专用元数据（gen-model 不可操作）
+            if depth == 0 and k in DROP_TOP_LEVEL_KEYS:
+                continue
             # 删冗余字段（但保留必须的）
             if k in DROP_FIELDS_DEEP and k not in KEEP_UNDERSCORE_FIELDS:
                 continue

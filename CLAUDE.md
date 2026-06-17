@@ -364,7 +364,7 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 
 **设计哲学**：大势 = 不变（卷主题/milestones/final image），章数 = 浮动。
 
-「想写更多但大势用完」→ save-state 阶段**动态加新 ME**。
+「想写更多但大势用完」→ cluster-save-state 阶段**动态加新 ME**。
 
 ---
 

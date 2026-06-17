@@ -822,7 +822,9 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     # feedback_no_token_saving「全量传 LLM」+ 作者档第一权威冲突；诡异接待处 skill 34575 字被砍 9k+）。
     # 全量读——作者风格 skill 是写作第一权威，不得在 load 时截断。
     manifest_path = db / '.manifest' / f'ch_{ch_start:03d}.json'
-    manifest = read_text(manifest_path)
+    # v28 系统整改：优先读 compressed 版本（剥除 Claude agent 元数据，省~40% token）
+    compressed_path = db / '.manifest' / f'ch_{ch_start:03d}_compressed.json'
+    manifest = read_text(compressed_path) if compressed_path.exists() else read_text(manifest_path)
 
     # L1a 升格消费（2026-05-31）：build_manifest 在 env PROFILE_INJECT_MODE=active 下产出
     # manifest.author_style_fingerprint（多维量化目标硬数字 + 显式指令文案），但 writer 此前

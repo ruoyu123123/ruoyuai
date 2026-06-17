@@ -13,7 +13,7 @@ $ARGUMENTS
 
 # 🔴 设计哲学（v24 倒置流水线 · 必读）
 
-**问题**：旧 `write-chapter` 调度器在 ECAS 模式下 writer 写整 cluster 草稿（5 章约 19000 字）后**立刻** splitter 切成单章，然后质检按单章 ch1/ch2/.../chN 各跑一遍。后果：
+**问题**：旧流程在 writer 写整 cluster 草稿后**立刻**切成单章再逐章质检。后果：
 
 | 旧流程后果 | 根因 |
 |---|---|
@@ -28,7 +28,7 @@ $ARGUMENTS
 **核心原则**：
 - 🔴 writer 产出 `cluster_draft.txt` 后**禁止立即切章**（splitter 推迟到 step 6）
 - 🔴 audit_hub / reading-reflector / voice-keeper / foreshadower 全部走 `--mode cluster` / `MODE=ecas`
-- 🔴 1 个 cluster = 1 次 cluster-write plan（不是 1 章 1 次 write-chapter plan）
+- 🔴 1 个 cluster = 1 次 cluster-write plan
 - 🔴 title 在 step 6 末尾 splitter 后再生成（chapter 内容已 clean）
 
 ---
@@ -521,28 +521,13 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 ---
 
-# vs write-chapter（旧调度器）差异速查
-
-| 维度 | write-chapter（旧 · 不推荐） | cluster-write（新 · 推荐） |
-|---|---|---|
-| 调用粒度 | 1 章 1 次 | 1 cluster 1 次 |
-| writer 后 splitter 时机 | 立刻 step 2 末切 | 推迟到 step 6 |
-| 质检视野 | 单章 ch{N} | 整 cluster |
-| 跨章 voice/伏笔 | 看不见 | 全程可见 |
-| 总轮数（5 章 cluster） | ≈ 15-25 轮 | ≈ 3-7 轮 |
-| 重复词去重 | 单章局部 | 整块去重 |
-| title 生成 | step 2 内 | step 6 末（内容已 clean）|
-| changes 写法 | per-chapter 写好 | cluster 级写 · step 6 平铺 |
-
----
-
-# 失败逃生舱（v26 · cluster-only）
+# 失败逃生舱
 
 如果 cluster-write 流水线崩溃：
 
 1. 把 `cluster_draft.txt` 改名重置：`mv cluster_<key>_draft.txt cluster_<key>_draft.bak.txt`
 2. 重跑 `/cluster-write CLUSTER_ID=<key>` 从 step 1 开始
-3. 若仍崩溃 → 报告用户人工介入。**🔴 v26 不再降级到 chapter mode**——chapter mode (write-chapter / save-state) 命令/plan/CLI 全部已废弃移除，无后门。
+3. 若仍崩溃 → 报告用户人工介入。
 
 ---
 本命令产出位置遵循 [STRUCTURE.md](../../core/claude-home/STRUCTURE.md) 第九节。

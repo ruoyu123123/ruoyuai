@@ -154,23 +154,11 @@ def main():
     if not missing:
         sys.exit(0)  # 全齐放行
 
-    # 缺失 → exit 2 阻断
-    print(f"❌ [Hook subsystems_gate] 新书全系统强制开启检测失败", file=sys.stderr)
-    print(f"   项目: {project_name}", file=sys.stderr)
-    print(f"   缺失 {len(missing)}/{len(ALL_REQUIRED)} 个必建 JSON:", file=sys.stderr)
-    for category, files in REQUIRED_DB_FILES.items():
-        cat_missing = [f for f in files if f in missing]
-        if cat_missing:
-            print(f"     [{category}]", file=sys.stderr)
-            for f in cat_missing:
-                print(f"       - {f}", file=sys.stderr)
-    print(f"", file=sys.stderr)
-    print(f"   📝 解决方案（feedback-default-all-subsystems-enabled-for-new-books）:", file=sys.stderr)
-    print(f"     A.（推荐·一条命令）python core/scripts/scaffold_subsystems.py emit \"{project_name}\"", file=sys.stderr)
-    print(f"        → 生成 {len(ALL_REQUIRED)} 个 schema 正确空骨架（不覆盖已填），再填创意内容；", file=sys.stderr)
-    print(f"        框架: core/claude-home/templates/subsystem_skeletons.json · 示例: templates/examples/（含 _subsystem_examples/）", file=sys.stderr)
-    print(f"        填完跑 verify: python core/scripts/scaffold_subsystems.py verify \"{project_name}\"", file=sys.stderr)
-    print(f"     B. 用户明确要轻量模式 → touch {bypass} 即可跳过（项目级 opt-out）", file=sys.stderr)
+    # 缺失 → exit 2 阻断（精简输出，不逐类列举）
+    print(f"❌ [subsystems_gate] {project_name}: 缺 {len(missing)}/{len(ALL_REQUIRED)} 个 JSON", file=sys.stderr)
+    print(f"   缺失: {', '.join(missing[:8])}{'...' if len(missing) > 8 else ''}", file=sys.stderr)
+    print(f"   修复: python core/scripts/scaffold_subsystems.py emit \"{project_name}\"", file=sys.stderr)
+    print(f"   旁路: touch {bypass}", file=sys.stderr)
     sys.exit(2)
 
 

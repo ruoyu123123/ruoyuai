@@ -35,18 +35,18 @@ def test_drops_developer_note_fields():
 
 
 def test_keeps_llm_facing_underscore_fields():
-    """KEEP_UNDERSCORE_FIELDS 里的 _ 字段（LLM 要用）必须保留。"""
+    """KEEP_UNDERSCORE_FIELDS 里的 _ 字段（LLM 要用）必须保留。
+    v28 系统整改：_critical_summary/_cache_layout 已移入 DROP_TOP_LEVEL_KEYS（仅 Claude agent 用）。
+    """
     out = mc.compress({
-        "_critical_summary": "关键摘要",
         "_id": "ch_001",
-        "_cache_layout": {"layer": "static"},
         "_schema": "v1",
+        "_priority": "high",
         "_doc": "应被删",
     })
-    assert out["_critical_summary"] == "关键摘要"
     assert out["_id"] == "ch_001"
-    assert out["_cache_layout"] == {"layer": "static"}
     assert out["_schema"] == "v1"
+    assert out["_priority"] == "high"
     assert "_doc" not in out
 
 
@@ -165,7 +165,7 @@ def test_main_writes_compressed_file_and_exits_0():
         src = mdir / "ch_001.json"
         src.write_text(json.dumps({
             "_doc": "开发者注释应被删",
-            "_critical_summary": "保留",
+            "_critical_summary": "顶层元数据应被删",
             "title": "第一章",
             "empty": "",
         }, ensure_ascii=False), encoding="utf-8")
@@ -177,7 +177,8 @@ def test_main_writes_compressed_file_and_exits_0():
         data = json.loads(out.read_text(encoding="utf-8"))
         assert "_doc" not in data
         assert "empty" not in data
-        assert data["_critical_summary"] == "保留"
+        # v28: _critical_summary 已移入 DROP_TOP_LEVEL_KEYS（仅 Claude agent 用）
+        assert "_critical_summary" not in data
         assert data["title"] == "第一章"
 
 

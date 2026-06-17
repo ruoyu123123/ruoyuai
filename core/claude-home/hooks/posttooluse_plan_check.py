@@ -70,29 +70,45 @@ def _path_matches(file_path: str, expected: str) -> bool:
     return False
 
 
+def _cooldown_ok(plan_id: str, label: str, cooldown_min: int = 10) -> bool:
+    """冷却去重：同一 plan + 同一 label 10 分钟内只打印一次。"""
+    tmp = Path(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")))
+    marker = tmp / f"plan_hook_{plan_id}_{label}.ts"
+    now = time.time()
+    if marker.exists():
+        try:
+            last = float(marker.read_text().strip())
+            if now - last < cooldown_min * 60:
+                return False  # 冷却中，不打印
+        except Exception:
+            pass
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(now))
+    except Exception:
+        pass
+    return True
+
+
 def _check_timeout(plan: dict) -> None:
-    """超过 60 分钟未完成的 plan 打 stderr 警告。"""
+    """超过 60 分钟未完成的 plan 打 stderr 警告（同 plan 10 分钟冷却）。"""
     started = plan.get("started_at") or plan.get("created_at")
     if not started:
         return
     try:
-        # ISO 格式：可能是 "2026-05-13T22:30:00" 或带时区
         started_dt = datetime.fromisoformat(started.split("+")[0].split("Z")[0])
-        # 同样用本地 now，与 plan_tracker 一致（datetime.now()）
         age_min = (datetime.now() - started_dt).total_seconds() / 60
         if age_min > 60:
-            print(f"⚠️ [Plan] {plan.get('id')} 已开启 {age_min:.0f} 分钟未完成",
-                  file=sys.stderr)
+            plan_id = plan.get("id", "unknown")
+            if _cooldown_ok(plan_id, "timeout"):
+                print(f"⚠️ [Plan] {plan_id} 已开启 {age_min:.0f}min 未完成",
+                      file=sys.stderr)
     except Exception:
-        # 时间解析失败：忽略
         return
 
 
 def _check_drift(plan: dict, threshold_min: int = 10) -> None:
-    """P1-6 停滞检测：plan 有 step 已 in_progress 或部分 completed 但
-    超过 threshold 分钟无任何 step 推进 → 输出 self-correct 提示。
-    用最近一次 step 完成时间或 plan 启动时间作为基准。
-    """
+    """P1-6 停滞检测（同 plan 10 分钟冷却去重）。"""
     last_progress = None
     pending_step_names = []
     for s in plan.get("steps", []):
@@ -102,9 +118,9 @@ def _check_drift(plan: dict, threshold_min: int = 10) -> None:
             if ts and (last_progress is None or ts > last_progress):
                 last_progress = ts
         elif s.get("required"):
-            pending_step_names.append(f"step {s.get('n')} ({s.get('name')})")
+            pending_step_names.append(f"step {s.get('n')}")
     if not pending_step_names:
-        return  # 没有待完成的 required step，无需提示
+        return
     base = last_progress or plan.get("started_at") or plan.get("created_at")
     if not base:
         return
@@ -113,14 +129,13 @@ def _check_drift(plan: dict, threshold_min: int = 10) -> None:
         idle_min = (datetime.now() - base_dt).total_seconds() / 60
         if idle_min < threshold_min:
             return
-        # 仅当至少有一个 completed step 时才报「停滞」，避免对刚 create 的 plan 误报
         if last_progress is None and idle_min < 30:
             return
-        print(f"📋 [Plan-drift] {plan.get('id')} 停滞 {idle_min:.0f} 分钟，"
-              f"待完成: {', '.join(pending_step_names[:3])}"
-              f"{'...' if len(pending_step_names) > 3 else ''}。"
-              "若已完成请调 plan_tracker step；若卡住请 abort 并重新规划。",
-              file=sys.stderr)
+        plan_id = plan.get("id", "unknown")
+        if _cooldown_ok(plan_id, "drift"):
+            print(f"📋 [Plan-drift] {plan_id} 停滞 {idle_min:.0f}min，"
+                  f"待: {', '.join(pending_step_names[:3])}",
+                  file=sys.stderr)
     except Exception:
         return
 

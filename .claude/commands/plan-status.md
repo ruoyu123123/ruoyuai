@@ -71,7 +71,7 @@ python <REPO_ROOT>/core/scripts/plan_tracker.py status "<plan_id>"
 |----|------|---------|
 | flag | 状态标记 | `🟢 ACTIVE` / `✅ DONE` / `🚫 ABORT` |
 | plan_id (尾段) | 去掉 `project_key_command_` 前缀，仅显示时间戳 | `20260513T214530123` |
-| command | 命令名 | `save-state` |
+| command | 命令名 | `cluster-save-state` |
 | project | 项目/风格名 | `BookB` |
 | chapter | 章节号（无则 `-`） | `42` |
 | age | 距 `started_at` 的分钟数 | `12 min` |
@@ -89,7 +89,7 @@ python <REPO_ROOT>/core/scripts/plan_tracker.py status "<plan_id>"
 
 | 状态 | plan_id 尾段     | command      | project          | chapter | age      |
 |------|------------------|--------------|------------------|---------|----------|
-| 🟢   | T214530123       | save-state   | BookB   | 42      | 3 min    |
+| 🟢   | T214530123       | cluster-save-state| BookB   | 42      | 3 min    |
 | 🟢⚠️ | T203012001       | distill-style| 某书             | -       | 78 min   |
 
 ⚠️ STALE plan 检测到：T203012001 已 78 分钟未结束。
@@ -105,8 +105,8 @@ python <REPO_ROOT>/core/scripts/plan_tracker.py status "<plan_id>"
 ```
 🧭 Plan 详情
 
-ID       : BookB_ch42_save-state_20260513T214530123
-Command  : save-state
+ID       : BookB_ch42_cluster-save-state_20260513T214530123
+Command  : cluster-save-state
 Project  : BookB
 Chapter  : 42
 Progress : 8/12 (66%)
@@ -155,7 +155,7 @@ Age      : 12 min
 ─────────────────────────────────────────
 📊 摘要
 - 总 plan 数：N（活跃 X / 完成 Y / 中止 Z）
-- 涉及命令：save-state(3) distill-style(1) ...
+- 涉及命令：cluster-save-state(3) distill-style(1) ...
 - 涉及项目：BookB(2) ...
 
 💡 建议
