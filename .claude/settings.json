@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_agent_gate.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_agent_gate.py\""
           }
         ]
       },
@@ -15,15 +15,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_step_research.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_step_research.py\""
           },
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_subsystems_gate.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_subsystems_gate.py\""
           },
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_plan_step_anti_skip.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_plan_step_anti_skip.py\""
           }
         ]
       },
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_chapter_edit_gate.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/pretooluse_chapter_edit_gate.py\""
           }
         ]
       }
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_plan_check.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_plan_check.py\""
           }
         ]
       },
@@ -61,11 +61,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_step_reflection.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_step_reflection.py\""
           },
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_runtime_monitor.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/posttooluse_runtime_monitor.py\""
           }
         ]
       }
@@ -75,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/sessionstart_recall.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/sessionstart_recall.py\""
           }
         ]
       }
@@ -85,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/stop_session_memory.py\""
+            "command": "py \"$CLAUDE_PROJECT_DIR/core/claude-home/hooks/stop_session_memory.py\""
           }
         ]
       }
