@@ -39,6 +39,9 @@ _reference/
 !/requirements.txt
 !/requirements*.txt
 
+# Playwright / chrome-devtools MCP 浏览器自动化产物（console/page 快照·体积大·不入库）
+.playwright-mcp/
+
 # ============================================================
 # Claude Code 运行时
 # ============================================================

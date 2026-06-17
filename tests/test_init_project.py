@@ -81,6 +81,44 @@ def test_nonexistent_style_exits_2():
         assert rc == 2
 
 
+def test_scaffold_builds_full_skeleton():
+    """🆕 --scaffold 一键建完整新书骨架：目录 + .wal + 全部 canonical 子系统 JSON。
+    单入口（防 plan 外 ad-hoc mkdir 漏建子系统）。canonical 列表动态读 scaffold·不硬编码。"""
+    sys.path.insert(0, str(_ROOT / "core" / "scripts"))
+    import scaffold_subsystems as scaf  # noqa: E402
+    canonical, _ = scaf._load_skeletons()
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = Path(tmp) / "测试书"
+        sys.argv = ["init_project.py", str(proj), "--scaffold", "--no-git"]
+        rc = ip.main()
+        assert rc == 0
+        db = proj / "_数据库"
+        assert (db / ".wal").is_dir(), ".wal 未建"
+        for name in canonical:
+            p = db / f"{name}.json"
+            assert p.exists(), f"缺子系统 {name}.json"
+            json.loads(p.read_text(encoding="utf-8"))  # 每个合法 json
+
+
+def test_scaffold_idempotent_keeps_filled_content():
+    """--scaffold 幂等：已填内容不被覆盖（复用 scaffold emit 的不覆盖语义）。"""
+    sys.path.insert(0, str(_ROOT / "core" / "scripts"))
+    import scaffold_subsystems as scaf  # noqa: E402
+    canonical, _ = scaf._load_skeletons()
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = Path(tmp) / "测试书"
+        db = proj / "_数据库"
+        db.mkdir(parents=True, exist_ok=True)
+        # 预置一个已填的子系统
+        target = db / f"{canonical[0]}.json"
+        target.write_text(json.dumps({"schema_version": "vTEST", "_filled": "用户内容"},
+                                     ensure_ascii=False), encoding="utf-8")
+        sys.argv = ["init_project.py", str(proj), "--scaffold", "--no-git"]
+        assert ip.main() == 0
+        obj = json.loads(target.read_text(encoding="utf-8"))
+        assert obj.get("_filled") == "用户内容", "--scaffold 覆盖了已填内容（应幂等不覆盖）"
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

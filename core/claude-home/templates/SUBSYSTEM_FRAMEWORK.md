@@ -20,6 +20,20 @@
 - **verify 是流程闸**：防「Workflow 名义返回 done 却静默漏文件」——缺/坏 → exit 2 阻断，不许带病进 plan-step 3。
 - **作者风格.json 是占位**：scaffold 只保证文件存在过门禁，正式写作前必须由 `/distill-style` 或风格库复制替换。
 
+## 🔴 新书 / 新文件夹创建唯一 sanctioned 入口
+
+**禁止在 plan 之外手搓 `mkdir` 建新书项目目录。** 一律走系统脚本——散落的 ad-hoc mkdir 会漏建
+`.wal/` 与 34 子系统 → 后续 plan（resolve_project_root / scaffold / data_flow）错位。两条合法路径：
+
+| 场景 | 入口 | 说明 |
+|---|---|---|
+| **plan 内（/outline 主路径）** | `outline.plan.json` step 1 `init_project.py … --emit-style-options` → after-pause `--style <名>` → step 6 `scaffold_subsystems.py emit` → step 7 `verify` | orchestrator/GUI 机械驱动·分步建目录+风格+34 子系统 |
+| **plan 外（CLI 测试 / 手动 / 一键）** | `python core/scripts/init_project.py "<项目路径>" --scaffold [--style <名>]` | 🆕 一条命令建完整骨架（目录+git+.wal+34 子系统[+风格档]）·幂等不覆盖已填 |
+
+> `--scaffold` 复用 `scaffold_subsystems.emit`（同一真理源 `subsystem_skeletons.json`），所以
+> plan 内分步建 与 plan 外一键建 **产出逐字节一致**，不会分叉。回归锁：
+> `tests/test_init_project.py::test_scaffold_builds_full_skeleton` / `…_idempotent_keeps_filled_content`。
+
 ## 新书 /outline step 3 标准流程
 
 ```bash

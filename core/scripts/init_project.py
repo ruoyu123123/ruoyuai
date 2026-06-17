@@ -12,9 +12,15 @@ None → orchestrator 退化成裸书名相对路径 → scaffold/data_flow/事�
      进项目 _数据库/（作者档第一权威·judge/writer 读·feedback_author_goldstandard_comparison_gate）
 
 用法：
+  python init_project.py <项目路径> --scaffold              # 🆕 一键建完整新书骨架（目录+git+34 子系统）
+  python init_project.py <项目路径> --scaffold --style <名>  # 一键骨架 + 拷风格档（最全·建书一条命令）
   python init_project.py <项目路径> --emit-style-options    # 列风格库供 pause
   python init_project.py <项目路径> --style <风格库名>       # 拷选中风格的 skill 双文件
 退出码：0 成功 / 2 致命（风格库不存在/作者档缺）
+
+🔴 新书/新文件夹创建唯一 sanctioned 入口：禁止在 plan 之外手搓 mkdir 建项目目录——
+   一律走本脚本（plan 内 outline.plan.json 分步 init+scaffold；plan 外/CLI 测试/手动用
+   `--scaffold` 一键全建）。散落的 ad-hoc mkdir 会漏建 .wal/34 子系统 → 后续 plan 错位。
 """
 from __future__ import annotations
 
@@ -103,6 +109,17 @@ def copy_style(project_root: Path, style_name: str) -> int:
     return 0
 
 
+def scaffold_subsystems_emit(project_root: Path) -> int:
+    """一键建齐 34 子系统骨架（调 scaffold_subsystems emit·幂等不覆盖已填）。
+    单入口『建完整新书骨架』用——避免 plan 之外 ad-hoc mkdir 散落漏建子系统。"""
+    try:
+        import scaffold_subsystems as _scaf
+        return _scaf.cmd_emit([str(project_root)])
+    except Exception as e:  # scaffold 失败不静默吞·返非 0 让调用方知
+        print(f"[init_project][WARN] scaffold 34 子系统失败: {e}", file=sys.stderr)
+        return 1
+
+
 def git_init(project_root: Path) -> None:
     """本地 git init（不碰全局 config·失败不阻断·路径含中文加引号由 subprocess list 规避）。"""
     if (project_root / ".git").exists():
@@ -121,6 +138,8 @@ def main() -> int:
     ap.add_argument("--style", default=None, help="选中的风格库名（拷 skill 双文件）")
     ap.add_argument("--emit-style-options", action="store_true",
                     help="扫风格库出 style_options.json 供 pause 选择")
+    ap.add_argument("--scaffold", action="store_true",
+                    help="🆕 一键建齐 34 子系统骨架（建完整新书骨架·plan 外/手动用·幂等）")
     ap.add_argument("--no-git", action="store_true", help="跳过 git init（测试用）")
     args = ap.parse_args()
 
@@ -131,11 +150,19 @@ def main() -> int:
     if not args.no_git:
         git_init(project_root)
 
+    if args.scaffold:
+        rc = scaffold_subsystems_emit(project_root)
+        if rc != 0:
+            return rc
+        if not (args.emit_style_options or args.style):
+            print(f"[init_project] 一键骨架完成 {project_root}（目录+git+34 子系统）")
+            return 0
+
     if args.emit_style_options:
         return emit_style_options(project_root)
     if args.style:
         return copy_style(project_root, args.style)
-    print(f"[init_project] 初始化 {project_root}（无 --style/--emit-style-options·仅建目录）")
+    print(f"[init_project] 初始化 {project_root}（无 --style/--emit-style-options/--scaffold·仅建目录）")
     return 0
 
 
