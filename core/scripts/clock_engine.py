@@ -265,7 +265,10 @@ def _since_cluster(project_root: Path, ch: int) -> str:
                 return cid
         except Exception:
             pass
-    return f"cluster_{ch:03d}"  # 反查失败兜底（dormant 功能；未来启用前应确保 cluster 已涌现）
+    # 反查失败兜底（dormant 功能；未来启用前应确保 cluster 已涌现）。北极星①：机械拼接集中到 cluster_lookup 唯一出处
+    if cluster_lookup is not None:
+        return cluster_lookup.infer_cluster_id_by_chapter(ch)
+    return f"cluster_{ch:03d}"
 
 
 def spawn(project_root: Path, ch: int, clock_def: dict) -> dict:

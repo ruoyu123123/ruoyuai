@@ -79,6 +79,16 @@ def normalize_cluster_id(value) -> str | None:
     return None
 
 
+def infer_cluster_id_by_chapter(ch) -> str:
+    """⚠️ 不可信兜底（北极星①·禁用字面 f"cluster_{ch:03d}" 的唯一合法出处）。
+
+    authoritative 反查 `ch_to_cluster_id` 失败时，按章号机械推断 cluster_id。机械拼接被
+    北极星①禁止散落在各 consumer——集中到本权威模块为唯一出处。**调用方必须标 inferred**
+    （按章号推断 ≠ 真实涌现归属；正常路径一律先走 `ch_to_cluster_id`，本函数仅 dormant/最后兜底）。
+    """
+    return normalize_cluster_id(ch) or f"cluster_{int(ch):03d}"
+
+
 def cluster_num(cluster_id) -> int | None:
     """从 cluster_id 提取数字序号。无法解析返回 None。"""
     if cluster_id is None:

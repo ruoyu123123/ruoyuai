@@ -70,3 +70,11 @@ def test_normalize_blueprint_garbage_returns_empty():
     assert cl.normalize_blueprint(None) == {}
     assert cl.normalize_blueprint("garbage") == {}
     assert cl.normalize_blueprint(123) == {}
+
+
+def test_infer_cluster_id_by_chapter():
+    """🔴 北极星①：禁用字面 f"cluster_{ch:03d}" 的唯一合法出处（character_lazy_spawn/clock_engine
+    兜底集中于此）。行为 = normalize_cluster_id(ch) or f"cluster_{int(ch):03d}"·与原各处兜底逐字节一致。"""
+    assert cl.infer_cluster_id_by_chapter(5) == "cluster_005"
+    assert cl.infer_cluster_id_by_chapter(42) == "cluster_042"
+    assert cl.infer_cluster_id_by_chapter("7") == "cluster_007"

@@ -33,7 +33,7 @@ def _resolve_cluster(project_root: Path, ch: int) -> tuple[str, bool]:
     cid = cluster_lookup.ch_to_cluster_id(project_root, ch)
     if cid:
         return cid, False
-    return cluster_lookup.normalize_cluster_id(ch) or f"cluster_{ch:03d}", True
+    return cluster_lookup.infer_cluster_id_by_chapter(ch), True  # 北极星①：兜底集中到 cluster_lookup 唯一出处
 
 
 def load_json(p: Path, default=None):
