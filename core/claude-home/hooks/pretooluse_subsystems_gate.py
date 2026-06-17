@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """PreToolUse Hook: 新书项目全系统强制开启门禁（v23.13 用户硬规则 2026-05-25）
 
+🔴 opt-out 持久性是【设计如此·非 bug】：项目 `_数据库/.subsystems_bypass.json` 存在即旁路（轻量
+模式）。**刻意无自动过期**——本地单用户工具·opt-out 由用户显式创建/删除·若按 mtime 自动失效会在
+用户写书中途突然重新拦截（更糟）。要重新启用全系统校验，删该文件即可。
+
 v2 cluster 化（2026-05-28）：本 hook 校验的 34 个 JSON 文件包含 v2 schema 字段
 （cluster_blueprint / 故事块摘要 等），逻辑不变·仅文件存在性校验，schema 不挑剔。
 hook 不感知 cluster vs chapter——它只看「文件是否存在」。

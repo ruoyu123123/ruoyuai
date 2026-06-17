@@ -1,5 +1,5 @@
 {
-  "_doc": "34 个核心子系统 JSON 的【确定性骨架】——单一真理源（框架）。scaffold_subsystems.py 据此为新书生成 schema 正确的空骨架，弱模型只需填内容、不碰 schema（照顾弱模型 + 根治契约债）。每个骨架满足 db_schema_validate.py（schema_version + 必需顶层键 + 正确 collection 类型）。保留通用默认（场景规则 5 类 / ecas 标志 / Save the Cat 框架名）。占位用 <...> 或空集合，由 /outline 填创意。",
+  "_doc": "34 个核心子系统 JSON 的【确定性骨架】——单一真理源（框架）。scaffold_subsystems.py 据此为新书生成 schema 正确的空骨架，弱模型只需填内容、不碰 schema（照顾弱模型 + 根治契约债）。每个骨架满足 db_schema_validate.py（schema_version + 必需顶层键 + 正确 collection 类型）。保留通用默认（场景规则 5 类 / ecas 标志 / Save the Cat 框架名）。占位用 <...> 或空集合，由 /outline 填创意。🔴 容差约定：部分子系统（时间线 / character_arc_state / 伏笔表 / 故事块摘要 emotion 等）由 build_manifest 容差读取多种真实项目 schema 变体（多字段别名 + dict/list/标量并存），骨架给的是 canonical 形态；db_schema_validate 只深校验前 13 个核心件，其余 21 件由 scaffold_subsystems verify 查存在 + 合法 JSON + schema_version。",
   "_version": "v27",
   "_canonical_34": ["人物卡","世界观","关系","地图","道具","进度","故事块摘要","大势卡","事件簇","事件表","时间线","伏笔表","作者风格","场景规则","写作经验","用户偏好","世界状态","涟漪规则","枢纽场景","时钟表","叙事节拍器","主角压力档","character_arc_state","角色行动表","群像档","事件池","行动判定模板","角色池","角色烙印","knowledge_graph","subplot_threads","beat_map","四线脉络","webnovel_bench_mapping"],
   "skeletons": {

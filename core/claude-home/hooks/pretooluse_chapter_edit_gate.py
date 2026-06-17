@@ -103,6 +103,8 @@ def check_chapter_end_transitions(content: str) -> list[tuple[str, str]]:
 
 
 def has_bypass(project_root: str | None) -> bool:
+    # 🔴 opt-out 持久性是设计如此·非 bug：.chapter_edit_bypass.flag 存在即旁路·刻意无自动过期
+    # （本地单用户工具·用户显式建/删·自动失效会在编辑中途突然重新拦截）。重启拦截=删该 flag。
     if not project_root:
         return False
     flag = Path(project_root) / "_数据库" / ".chapter_edit_bypass.flag"

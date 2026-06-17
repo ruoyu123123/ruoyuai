@@ -23,7 +23,11 @@ from pathlib import Path
 from datetime import datetime
 
 
-# 13 个核心 JSON + 其 schema 规则
+# 13 个核心 JSON 的【深 schema 规则】（collection 类型 + 必需字段）。其余 21 个高级子系统
+# （见 subsystem_skeletons.json._canonical_34）刻意不在此做深校验——它们 schema 灵活、由
+# build_manifest 容差读取多种真实项目变体；存在性 + 合法 JSON + schema_version 由
+# scaffold_subsystems.py verify 兜底（二者分工不重复·见 SUBSYSTEM_FRAMEWORK.md）。给灵活件
+# 加严 schema 会误报（本验证器自身曾因过严规则反向误导·见下方契约债根治记录）。
 # 字段格式：(json_name, top_keys_required, item_collection_key, expected_item_type, expected_item_required_fields)
 SCHEMA_RULES = {
     "人物卡": {
