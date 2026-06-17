@@ -1,0 +1,65 @@
+{
+  "scan_timestamp": "2026-06-17T23:24:00",
+  "summary": {
+    "total_scripts": 165,
+    "scanned_scripts": 162,
+    "whitelisted_scripts": 6,
+    "violating_scripts": 159,
+    "total_print_calls": 1486,
+    "status": "needs_refactoring"
+  },
+  "severity_breakdown": {
+    "critical": [
+      "gen_writer.py (72处)",
+      "save_state.py (58处)",
+      "gen_fixer.py (49处)",
+      "build_manifest.py (41处)",
+      "plan_tracker.py (39处)"
+    ],
+    "high": [
+      "orchestrator.py (19处)",
+      "audit_hub.py (33处)",
+      "learning_loop.py (44处)"
+    ],
+    "medium": "其余 151 个文件"
+  },
+  "refactoring_plan": {
+    "phase1_core": [
+      "orchestrator.py",
+      "gen_writer.py",
+      "gen_fixer.py",
+      "judge_runner.py"
+    ],
+    "phase2_state": [
+      "save_state.py",
+      "build_manifest.py",
+      "audit_hub.py"
+    ],
+    "phase3_others": [
+      "learning_loop.py",
+      "plan_tracker.py",
+      "其余低频脚本"
+    ]
+  },
+  "standards": {
+    "log_levels": {
+      "SILENT": "orchestrator 默认，只输出结果 JSON",
+      "INFO": "GUI 进度条用，关键 milestone",
+      "DEBUG": "开发调试，需 RUOYU_DEBUG=1",
+      "ERROR": "stderr Traceback 异常"
+    },
+    "migration_rules": {
+      "print(f'[OK]')": "log_util.info()",
+      "print(f'[ERROR]', file=sys.stderr)": "log_util.error()",
+      "print(json.dumps(...))": "log_util.print_result_json()",
+      "print('[DEBUG]')": "log_util.debug()"
+    }
+  },
+  "next_steps": [
+    "1. Git 提交当前改动（3 个文件 + 新建的 log_util.py）",
+    "2. 重构 Phase 1 核心脚本（4 个）",
+    "3. 清理临时文件（__pycache__）",
+    "4. 更新文档（STRUCTURE.md 添加日志规范章节）",
+    "5. Smoke test 验证"
+  ]
+}
