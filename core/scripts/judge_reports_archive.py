@@ -182,6 +182,10 @@ def build_validator_report_from_audit(audit: dict, ch: int) -> dict | None:
 def build_summarizer_report(summary_data: dict, ch: int) -> dict | None:
     if not summary_data:
         return None
+    # 🔴 2026-06-17 守卫：emotion 可能是 dict{value,trend} 或裸标量(int/float) → 原 .get 链对标量崩。对齐 bug-hunt 批。
+    _emo = summary_data.get("emotion", {})
+    _emo_d = _emo if isinstance(_emo, dict) else {}
+    _emo_scalar = _emo if (isinstance(_emo, (int, float)) and not isinstance(_emo, bool)) else None
     return {
         "judge_id": "summarizer",
         "schema_version": "1.0",
@@ -191,8 +195,8 @@ def build_summarizer_report(summary_data: dict, ch: int) -> dict | None:
         "specific_findings": {
             "summary_words": summary_data.get("summary_words"),
             "key_details_count": len(summary_data.get("key_details", [])),
-            "emotion_value": summary_data.get("emotion", {}).get("value"),
-            "emotion_trend": summary_data.get("emotion", {}).get("trend"),
+            "emotion_value": _emo_d.get("value", _emo_scalar),
+            "emotion_trend": _emo_d.get("trend"),
         },
         "uncertainty_flags": [],
         "waivers": [],

@@ -185,6 +185,14 @@ def test_build_summarizer_and_reflector_reports():
     assert refl["specific_findings"]["experience_ids"] == ["e1", "e2", "e3"]
 
 
+def test_build_summarizer_report_scalar_emotion_no_crash():
+    """🔴 2026-06-17 回归：emotion 为裸标量(int/float)时不崩·emotion_value 取标量·trend=None。"""
+    s = mod.build_summarizer_report({"summary_words": 100, "key_details": [], "emotion": 0.8}, 3)
+    assert s is not None
+    assert s["specific_findings"]["emotion_value"] == 0.8
+    assert s["specific_findings"]["emotion_trend"] is None
+
+
 # ---------------------------------------------------------------------------
 # load_json / save_json 容错 + 往返
 # ---------------------------------------------------------------------------

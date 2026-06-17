@@ -224,14 +224,11 @@ def test_cli_malformed_audit_file_does_not_crash():
         assert "共 1 条" in p.stdout, p.stdout
 
 
-def test_cli_gbk_console_crashes_on_emoji():
-    """实测文档化：面板含 emoji，子进程 stdout 编码为 GBK（PYTHONIOENCODING=gbk）时
-    UnicodeEncodeError 崩溃（returncode!=0 且 stderr 现 UnicodeEncodeError）。
-
-    这是真实环境脆弱性（Windows 默认控制台 = GBK）。其余测试通过 _run_cli 注入
-    PYTHONIOENCODING=utf-8 隔离此问题，专测核心确定性逻辑。本测试反向钉死脆弱性，
-    避免被静默掩盖；若将来脚本改为 reconfigure utf-8 / errors=replace 自愈，本断言
-    需同步调整（届时说明脆弱性已修）。
+def test_cli_gbk_console_emoji_no_longer_crashes():
+    """🔴 2026-06-17 修复后回归（原 test_cli_gbk_console_crashes_on_emoji 钉死脆弱性·已自愈）：
+    面板含 emoji，即便子进程 stdout 编码为 GBK（PYTHONIOENCODING=gbk），__main__ 入口的
+    `sys.stdout/stderr.reconfigure(encoding="utf-8", errors="replace")` guard 会把流改回 utf-8，
+    emoji 正常输出不再 UnicodeEncodeError 崩溃（对齐 judge_runner/split_cluster_changes 同款守卫）。
     """
     import os
     with tempfile.TemporaryDirectory() as d:
@@ -242,9 +239,9 @@ def test_cli_gbk_console_crashes_on_emoji():
             [sys.executable, str(_TARGET), str(proj)],
             capture_output=True, cwd=str(_ROOT), env=env)
         err = p.stderr.decode("utf-8", errors="replace") if p.stderr else ""
-        # _数据库 存在 → 不会走 FATAL(exit2)；进入面板打印 emoji → GBK 编码崩
-        assert p.returncode != 0, f"GBK 控制台本应崩溃 但 returncode={p.returncode}"
-        assert "UnicodeEncodeError" in err, f"未见编码崩溃 stderr={err}"
+        # _数据库 存在 → 不走 FATAL(exit2)；reconfigure utf-8 → emoji 不崩
+        assert p.returncode == 0, f"reconfigure 后 GBK 控制台不应崩溃 rc={p.returncode} err={err[:200]}"
+        assert "UnicodeEncodeError" not in err, f"仍现编码崩溃 stderr={err[:200]}"
 
 
 # ──────────────────────────────────────────────────────────────────────────

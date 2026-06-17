@@ -213,6 +213,17 @@ def test_read_emotion_from_wal_summary():
         assert cc.read_emotion(proj, 99) is None  # 无 summary
 
 
+def test_read_emotion_scalar_form_no_crash():
+    """🔴 2026-06-17 回归：emotion 为裸标量(int/float)时 read_emotion 不崩、返回标量值。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d))
+        wal = proj / "_数据库" / ".wal"
+        wal.mkdir(parents=True, exist_ok=True)
+        (wal / "第005章_summary.json").write_text(
+            json.dumps({"emotion": 6}, ensure_ascii=False), encoding="utf-8")
+        assert cc.read_emotion(proj, 5) == 6  # 标量直接返回·不崩
+
+
 def test_scan_emotion_gap_threshold_and_ledger_priority():
     """diff≥5 才 detected；账本 emotion_value 优先于 WAL；任一缺 → not detected。"""
     with tempfile.TemporaryDirectory() as d:

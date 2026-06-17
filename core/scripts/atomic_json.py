@@ -173,7 +173,11 @@ def safe_update_json(target: Path, update_fn, default: dict = None, timeout: flo
 
 
 if __name__ == "__main__":
+    import sys
     import tempfile
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8", errors="replace")
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "test.json"
         atomic_write_json(p, {"a": 1, "中文": "ok"})

@@ -17,12 +17,11 @@ plan 步骤 + 应产出的 artifacts。
 ```
 core/claude-home/evals/
 ├── README.md                  # 本文件
-├── save-state.evals.json
 ├── distill-style.evals.json
 ├── check-quality.evals.json
-├── write-chapter.evals.json
 ├── outline.evals.json
 └── reconcile.evals.json
+（注：v26 删除 chapter mode 后，save-state / write-chapter 两个 eval 已随命令一并移除）
 ```
 
 ## evals.json schema

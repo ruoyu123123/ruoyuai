@@ -289,7 +289,12 @@ def read_emotion(project_root: Path, ch: int) -> int | None:
     if not summary_path.exists():
         return None
     data = load_json(summary_path, {})
-    return data.get("emotion", {}).get("value")
+    # 🔴 2026-06-17 守卫：emotion 可能是 dict{value,trend} 或裸标量(int/float)
+    # （cluster_summary_builder 两种形态）→ 原 .get 链对标量崩 AttributeError。对齐 bug-hunt 批。
+    _emo = data.get("emotion", {})
+    if isinstance(_emo, dict):
+        return _emo.get("value")
+    return _emo if isinstance(_emo, (int, float)) and not isinstance(_emo, bool) else None
 
 
 def scan_emotion_gap(project_root: Path, prev_ch: int, next_ch: int, ledger_by_ch: dict | None = None) -> dict:
