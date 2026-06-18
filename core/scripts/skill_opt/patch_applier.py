@@ -37,7 +37,6 @@ class PatchResult:
 
 def _split_paragraphs(text: str) -> list[str]:
     """按双换行切段,保留分隔语义。"""
-    # 用 \n\n 切,但保留段内的单换行
     parts = text.split("\n\n")
     return [p for p in parts if p.strip() != ""] if parts else []
 
@@ -118,23 +117,41 @@ def _validate_patch(p: dict) -> str | None:
     return None
 
 
-def _find_block_match(paragraphs: list[str], anchor: str, old: str) -> int | None:
-    """找连续段块匹配 (old 可能跨多段)。返回起始 index 或 None。
+def _find_block_match(paragraphs: list[str], anchor: str, old: str):
+    """找连续段块匹配 (old 可能跨多段或在段内)。
 
-    匹配规则:
-    - 段 i 的 _anchor_match(anchor) 命中
-    - paragraphs[i:i+k] 用 "\\n\\n" join 后 strip == old.strip()
-      k 从 1 试到 min(剩余段数, 20) (硬上限防爆)
+    返回 (段起始idx, 段跨度, 行级替换信息或None) 或 None。
+
+    匹配策略 (依次尝试):
+    1. 段首 anchor 命中 + 段块 join == old (原始逻辑)
+    2. 段内行级搜索: 某段内含 anchor 对应的行, old 在该段内
     """
     old_norm = old.strip()
+
+    # 策略 1: 段首 anchor 命中 + 段块 join
     for i, para in enumerate(paragraphs):
         if not _anchor_match(para, anchor):
             continue
-        # 试 1..min(剩余, 20) 段的合并
         for k in range(1, min(len(paragraphs) - i + 1, 21)):
             block = "\n\n".join(paragraphs[i : i + k]).strip()
             if block == old_norm:
-                return i, k  # type: ignore[return-value]
+                return i, k, None
+
+    # 策略 2: 段内行级搜索 (skill 用 \n 分列表项, \n\n 分大节)
+    for i, para in enumerate(paragraphs):
+        lines = para.split("\n")
+        for li, line in enumerate(lines):
+            if not _anchor_match(line, anchor):
+                continue
+            # anchor 命中了段内某行, 试行级 old 匹配
+            # old 可能是连续 N 行
+            old_lines = old_norm.split("\n")
+            n_old = len(old_lines)
+            if li + n_old <= len(lines):
+                block = "\n".join(lines[li : li + n_old]).strip()
+                if block == old_norm:
+                    return i, 1, {"line_start": li, "line_count": n_old}
+
     return None
 
 
@@ -163,14 +180,29 @@ def _apply_one(paragraphs: list[str], patch: dict) -> tuple[list[str], str | Non
         old = patch["old"]
         m = _find_block_match(paragraphs, anchor, old)
         if m is None:
-            # 区分原因
             anchor_hit = any(_anchor_match(p, anchor) for p in paragraphs)
+            if not anchor_hit:
+                # 也检查段内行级
+                anchor_hit = any(
+                    any(_anchor_match(line, anchor) for line in p.split("\n"))
+                    for p in paragraphs
+                )
             if anchor_hit:
                 return paragraphs, (
                     f"delete: anchor 命中但 old 不匹配 (old 长 {len(old)})"
                 )
             return paragraphs, f"delete: anchor 找不到 ({anchor[:30]!r})"
-        i, k = m
+        i, k, line_info = m
+        if line_info is not None:
+            # 行级删除: 段内移除匹配行
+            lines = paragraphs[i].split("\n")
+            ls, lc = line_info["line_start"], line_info["line_count"]
+            lines = lines[:ls] + lines[ls + lc:]
+            new_para = "\n".join(lines).strip()
+            if new_para:
+                return paragraphs[:i] + [new_para] + paragraphs[i + 1:], None
+            else:
+                return paragraphs[:i] + paragraphs[i + 1:], None
         return paragraphs[:i] + paragraphs[i + k :], None
 
     if op == "replace":
@@ -180,12 +212,24 @@ def _apply_one(paragraphs: list[str], patch: dict) -> tuple[list[str], str | Non
         m = _find_block_match(paragraphs, anchor, old)
         if m is None:
             anchor_hit = any(_anchor_match(p, anchor) for p in paragraphs)
+            if not anchor_hit:
+                anchor_hit = any(
+                    any(_anchor_match(line, anchor) for line in p.split("\n"))
+                    for p in paragraphs
+                )
             if anchor_hit:
                 return paragraphs, (
                     f"replace: anchor 命中但 old 不匹配 (old 长 {len(old)})"
                 )
             return paragraphs, f"replace: anchor 找不到 ({anchor[:30]!r})"
-        i, k = m
+        i, k, line_info = m
+        if line_info is not None:
+            # 行级替换: 段内替换匹配行
+            lines = paragraphs[i].split("\n")
+            ls, lc = line_info["line_start"], line_info["line_count"]
+            new_lines = new.split("\n")
+            lines = lines[:ls] + new_lines + lines[ls + lc:]
+            return paragraphs[:i] + ["\n".join(lines)] + paragraphs[i + 1:], None
         new_paras = _split_paragraphs(new)
         return paragraphs[:i] + new_paras + paragraphs[i + k :], None
 
