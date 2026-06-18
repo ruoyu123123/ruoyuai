@@ -35,6 +35,16 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DISTILL_REPLICATE = REPO_ROOT / "core" / "scripts" / "distill_replicate.py"
 STYLE_EVALUATOR = REPO_ROOT / "core" / "scripts" / "style_evaluator.py"
 
+# S1 reward slop penalty: 复刻文本含 AI 腔高频词 → reward 扣分
+# 让"skill 删反 AI 腔约束后复刻文本 AI 腔回潮"在 reward 可见
+AI_SLOP_WORDS = [
+    "顿时", "紧锁", "显然", "似乎", "此刻", "淡淡", "心中一凛",
+    "眼中闪过一丝", "微微挑眉", "仿佛", "嘴角勾起一抹", "深吸一口气",
+    "缓缓地说", "沉吟片刻", "不容置疑", "波涛汹涌",
+    "与此同时", "值得一提的是", "不仅如此", "事实上",
+]
+SLOP_PENALTY_PER_HIT = 0.005  # 每命中一个扣 0.5% reward
+
 
 @dataclass
 class SfsReward:
@@ -203,15 +213,28 @@ def reward_for_cluster_sfs(
             raw={"phase": "eval_failed"},
         )
 
-    # 3. 取分
+    # 3. 取分 + S1 slop penalty
     sfs = _read_sfs_score(eval_json)
+    base_reward = sfs / 100.0
+
+    # 读复刻文本算 slop penalty (让删反 AI 腔约束在 reward 可见)
+    slop_hits = 0
+    try:
+        replica_text = replica_path.read_text(encoding="utf-8", errors="replace")
+        for word in AI_SLOP_WORDS:
+            slop_hits += replica_text.count(word)
+    except Exception:
+        pass
+    slop_penalty = slop_hits * SLOP_PENALTY_PER_HIT
+    final_reward = max(0.0, base_reward - slop_penalty)
+
     return SfsReward(
         sfs_score=sfs,
-        reward=sfs / 100.0,
+        reward=final_reward,
         replica_path=str(replica_path),
         eval_json_path=str(eval_json),
         duration_sec=time.time() - t0,
         distill_exit_code=distill_ec,
         eval_exit_code=eval_ec,
-        raw={"phase": "ok"},
+        raw={"phase": "ok", "slop_hits": slop_hits, "slop_penalty": slop_penalty},
     )

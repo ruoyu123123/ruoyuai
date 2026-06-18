@@ -106,8 +106,44 @@ def format_for_prompt(rejects: Iterable[dict], max_items: int = 30) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _archive_path(project_root: Path) -> Path:
+    out = project_root / "_skillopt" / "reject_buffer"
+    out.mkdir(parents=True, exist_ok=True)
+    return out / "reject_archive.jsonl"
+
+
 def clear_epoch(project_root: Path, epoch: int) -> None:
-    """epoch 结束清空(SkillOpt epoch-local 原则)。"""
+    """epoch 结束: 先归档到 reject_archive.jsonl 再清 epoch 文件。
+
+    F4 调研发现: 原始实现直接 unlink 导致失败案例白丢,
+    无法做跨 epoch 的 failure taxonomy。
+    """
     p = _buffer_path(project_root, epoch)
-    if p.exists():
-        p.unlink()
+    if not p.exists():
+        return
+    # 归档: append 到永久 jsonl
+    archive = _archive_path(project_root)
+    with archive.open("a", encoding="utf-8") as dst:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                dst.write(line + "\n")
+    # 清 epoch 文件
+    p.unlink()
+
+
+def load_archive(project_root: Path) -> list[dict]:
+    """读全量历史 reject 归档(跨 epoch 永久)。"""
+    archive = _archive_path(project_root)
+    if not archive.exists():
+        return []
+    out = []
+    for line in archive.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out

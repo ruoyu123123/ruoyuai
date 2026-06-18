@@ -311,6 +311,44 @@ def test_reject_buffer_clear_epoch():
         assert reject_buffer.load_epoch_rejects(root, 1) == []
 
 
+def test_reject_buffer_clear_archives_before_delete():
+    """S3: clear_epoch 先归档到 reject_archive.jsonl 再删 epoch 文件。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        reject_buffer.record_reject(
+            root, 1, "p1", "v3", {"op": "add", "new": "x"}, 0.5, 0.4, "r1"
+        )
+        reject_buffer.record_reject(
+            root, 1, "p2", "v3", {"op": "delete", "old": "y"}, 0.6, 0.5, "r2"
+        )
+        reject_buffer.clear_epoch(root, 1)
+        # epoch 文件已删
+        assert reject_buffer.load_epoch_rejects(root, 1) == []
+        # archive 保留了 2 条
+        archive = reject_buffer.load_archive(root)
+        assert len(archive) == 2
+        assert archive[0]["patch_id"] == "p1"
+        assert archive[1]["patch_id"] == "p2"
+
+
+def test_reject_buffer_archive_accumulates_across_epochs():
+    """跨 epoch 归档累积。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        reject_buffer.record_reject(
+            root, 1, "ep1", "v3", {"op": "add", "new": "a"}, 0.5, 0.4, "r"
+        )
+        reject_buffer.clear_epoch(root, 1)
+        reject_buffer.record_reject(
+            root, 2, "ep2", "v3", {"op": "add", "new": "b"}, 0.6, 0.5, "r"
+        )
+        reject_buffer.clear_epoch(root, 2)
+        archive = reject_buffer.load_archive(root)
+        assert len(archive) == 2
+        assert archive[0]["patch_id"] == "ep1"
+        assert archive[1]["patch_id"] == "ep2"
+
+
 # -------- 真数据集成测试 (凿窍纪) --------
 
 def test_reward_real_data_凿窍纪_cluster_001():

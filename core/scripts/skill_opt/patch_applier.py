@@ -27,6 +27,29 @@ class PatchError(Exception):
     """patch 应用失败 (anchor 找不到 / old 不匹配 / op 非法)。"""
 
 
+# S1 安全锁: 这些 anchor 关键词命中时 delete/replace 的 patch 被无条件拒绝。
+# G5 调研发现 optimizer 可删反 AI 腔约束段且 reward 无感。
+# 硬表保护不靠 LLM 自觉——patch_applier 层强制拦截。
+IMMUTABLE_KEYWORDS = [
+    "反模式",           # "## 反模式（绝不做）"
+    "绝不做",
+    "拉黑",             # "拉黑高频雷词"
+    "禁用词",           # 禁用词清单
+    "AI套话",
+    "AI 套话",
+    "严禁",             # "严禁 AI 套话"
+    "北极星",           # 北极星原则
+    "hard_gate",        # hard_gate 不可豁免
+    "不可豁免",
+]
+
+
+def _is_immutable(anchor: str, old: str) -> bool:
+    """检查 anchor 或 old 是否命中 IMMUTABLE_KEYWORDS。"""
+    combined = (anchor or "") + " " + (old or "")
+    return any(kw in combined for kw in IMMUTABLE_KEYWORDS)
+
+
 @dataclass
 class PatchResult:
     success: bool
@@ -98,6 +121,10 @@ def _validate_patch(p: dict) -> str | None:
     op = p.get("op")
     if op not in ("add", "delete", "replace"):
         return f"op 必须是 add/delete/replace,收到 {op!r}"
+    # S1 安全锁: delete/replace 命中 IMMUTABLE 关键词 → 无条件拒绝
+    if op in ("delete", "replace"):
+        if _is_immutable(p.get("anchor", ""), p.get("old", "")):
+            return f"IMMUTABLE: 反 AI 腔/北极星约束段不可删改 (anchor 命中安全锁)"
     if op == "add":
         if not p.get("new"):
             return "add 必须给 new"

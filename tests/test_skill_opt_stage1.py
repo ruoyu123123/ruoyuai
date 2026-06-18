@@ -282,3 +282,47 @@ def test_optimizer_prompt_marks_protected_sections():
         )
     assert "PROTECTED" in captured["user"]
     assert "作者数值契约表" in captured["user"]
+
+
+# ---------- S1 安全锁: IMMUTABLE_ANCHORS ----------
+
+def test_immutable_rejects_delete_anti_slop_section():
+    """S1: 删除含"反模式"/"禁用词"关键词的段 → 无条件拒绝。"""
+    skill = "## 反模式（绝不做）\n\n* 拉黑高频雷词\n\n## 正常段\n\n内容"
+    patches = [
+        {"op": "delete", "anchor": "## 反模式（绝不做）", "old": "## 反模式（绝不做）\n\n* 拉黑高频雷词"}
+    ]
+    r = patch_applier.apply_patches(skill, patches)
+    assert not r.success
+    assert "IMMUTABLE" in r.rejected[0][1]
+
+
+def test_immutable_rejects_replace_banned_words():
+    """S1: replace 含"禁用词"关键词 → 拒绝。"""
+    skill = "## 禁用词清单\n\n顿时/紧锁\n\n## 其他\n\n内容"
+    patches = [
+        {"op": "replace", "anchor": "## 禁用词清单", "old": "## 禁用词清单\n\n顿时/紧锁", "new": "## 自由词\n\n随意"}
+    ]
+    r = patch_applier.apply_patches(skill, patches)
+    assert not r.success
+    assert "IMMUTABLE" in r.rejected[0][1]
+
+
+def test_immutable_allows_add_near_protected():
+    """S1: add 操作不受 IMMUTABLE 限制（加东西可以）。"""
+    skill = "## 反模式（绝不做）\n\n* 雷词\n\n## 正常段\n\n内容"
+    patches = [
+        {"op": "add", "after_anchor": "## 反模式", "new": "## 补充禁令\n\n新增一条"}
+    ]
+    r = patch_applier.apply_patches(skill, patches)
+    assert r.success
+
+
+def test_immutable_allows_normal_replace():
+    """S1: 不含 IMMUTABLE 关键词的正常 replace → 允许。"""
+    skill = "## 句式与节奏\n\n内容 A\n\n## 段落与标点\n\n内容 B"
+    patches = [
+        {"op": "replace", "anchor": "## 句式与节奏", "old": "## 句式与节奏\n\n内容 A", "new": "## 句式与节奏\n\n改进内容"}
+    ]
+    r = patch_applier.apply_patches(skill, patches)
+    assert r.success
