@@ -1,0 +1,74 @@
+{
+  "command": "distill-style-skillopt",
+  "version": 1,
+  "description": "SkillOpt 范式蒸馏精化(Microsoft Research arXiv:2605.23904)。把 skill.md 当可训练'权重',epoch=4 训练循环,bounded edit + held-out validation gate + reject buffer。适合已有 skill_FINAL.md 的精化场景(新书首蒸仍走 distill-style.plan.json)。",
+  "total_steps": 5,
+  "required_steps": [1, 2, 3, 4, 5],
+  "optional_steps": [],
+  "_program_driven_status": "v28 程序驱动 · orchestrator.run_command 可机械驱动 · 全程不调 Claude sub-agent · optimizer 走 gen-model (同 active profile)",
+  "_skillopt_paper": "arXiv:2605.23904 + microsoft/SkillOpt · 论文超参 epoch=4 rollout=40 minibatch=8 L_t=4→2",
+  "steps": [
+    {
+      "n": 1,
+      "name": "preflight-compact",
+      "description": "前置:验证 skill_FINAL.md/cluster_index.json 存在 + 切 SLOW/FAST/REFERENCE 三段(skill_compactor)。",
+      "required": true,
+      "skip_output_allowed": false,
+      "scripts": [
+        "python -c \"import sys, pathlib; p=pathlib.Path('{project_root}'); assert (p/'skill_FINAL.md').exists(), 'skill_FINAL.md 缺失,先跑 /distill-style'; assert (p/'cluster_index.json').exists(), 'cluster_index.json 缺失'\"",
+        "python core/scripts/skill_opt/skill_compactor.py --skill {project_root}/skill_FINAL.md --out-dir {project_root}/skill_compact"
+      ],
+      "expected_outputs": ["skill_compact/skill_FAST.md", "skill_compact/skill_SLOW.md"]
+    },
+    {
+      "n": 2,
+      "name": "dataset-split",
+      "description": "确定性切分 train/select/test = 60/20/20 (论文 SearchQA 范式)。同 seed 重跑稳定。",
+      "required": true,
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/skill_opt/dataset.py --project {project_root} --seed skillopt-v1"
+      ],
+      "expected_outputs": ["_skillopt/split.json"]
+    },
+    {
+      "n": 3,
+      "name": "train-loop",
+      "description": "主训练循环 epoch=4 (论文默认)。每 epoch: rollout minibatch → optimizer 出 ≤L_t 条 patch → validation gate 严格优于才升级 → reject buffer epoch-local 反哺。",
+      "required": true,
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/skill_opt/train.py --project {project_root} --skill {project_root}/skill_FINAL.md --epochs 4 --rollout-batch 40 --minibatch 8 --l-t-max 4 --l-t-min 2"
+      ],
+      "expected_outputs": ["_skillopt/train"]
+    },
+    {
+      "n": 4,
+      "name": "promote-best-skill",
+      "description": "把 train 产出的 best_skill.md 合并 SLOW 段提升为新 skill_FINAL.md (备份旧版到 skill_FINAL.md.bak)。",
+      "required": true,
+      "skip_output_allowed": false,
+      "scripts": [
+        "? python -c \"import shutil, pathlib; p=pathlib.Path('{project_root}'); shutil.copy(p/'skill_FINAL.md', p/'skill_FINAL.md.bak')\"",
+        "python -c \"import pathlib, json, glob; p=pathlib.Path('{project_root}'); runs=sorted(p.glob('_skillopt/train/*')); best=runs[-1]/'best_skill.md' if runs else None; assert best and best.exists(), 'best_skill.md 缺失'; (p/'skill_FINAL.md').write_text(best.read_text(encoding='utf-8'), encoding='utf-8'); print(f'[OK] promoted {best} → skill_FINAL.md')\""
+      ],
+      "expected_outputs": ["skill_FINAL.md"]
+    },
+    {
+      "n": 5,
+      "name": "writer-feedback-verify",
+      "description": "回灌验证闸(沿用 distill_finalize_verify): 用 SkillOpt 产 skill_FINAL 灌 gen_writer 写 cluster → 与原 cluster_arc 比 → 不过 exit 2 拦。Article 6 严闭环。",
+      "required": true,
+      "skip_output_allowed": true,
+      "data_flow": {
+        "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
+      },
+      "scripts": [
+        "? python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --output {project_root}/对比报告/skillopt_verify.json"
+      ],
+      "control_flow": {"exit_codes": {"0": "ok", "2": "fail"}},
+      "expected_outputs": []
+    }
+  ],
+  "_north_star_alignment": "①更贴近作者风格(trajectory-driven 优于一次性蒸馏) ②cluster 单位(每 rollout=1 cluster) ③涟漪驱动(reward 来自真实写作链路 judge,非预设) ④章节纯格式(rollout 在 cluster 层) ⑤不干涉模型判断(reward 只读现有 binary 信号,不引入新 hard_gate) ⑥清旧码(替代 dimension_evolver)"
+}

@@ -83,6 +83,7 @@
 | `/cluster-write` | 7 | `cluster-write.plan.json` |
 | `/cluster-save-state` | 12 | `cluster-save-state.plan.json` |
 | `/distill-style` | 8 | `distill-style.plan.json` |
+| `/distill-style-skillopt` | 5 | `distill-style-skillopt.plan.json` |
 | `/outline` | 12 | `outline.plan.json` |
 | `/check-quality` | 3 | `check-quality.plan.json` |
 | `/reconcile` | 5 | `reconcile.plan.json` |
@@ -134,7 +135,8 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 | | `/outline` | 生成大纲+初始化 34 子系统数据库（含 step 3.3 AskUser 每卷 cluster 数） |
 | | `/continue` | 续写/断点恢复 |
 | | `/export` | 导出全文 |
-| **蒸馏** | `/distill-style` | 蒸馏作者风格（writer 第一权威） |
+| **蒸馏** | `/distill-style` | 蒸馏作者风格（新书首蒸 · writer 第一权威） |
+| | `/distill-style-skillopt` | SkillOpt 范式精化已有 skill（epoch=4 训练循环 · arXiv:2605.23904） |
 | | `/distill-character` | 深度角色蒸馏（产 voice_pack） |
 | **质保** | `/check-quality` | 质量+正典+风格校验 |
 | | `/reconcile` | 一致性调和 |
@@ -437,6 +439,36 @@ python core/scripts/distill_replicate.py \
 **三层防御**：L1 命令文档 / L2 唯一合法入口 `distill_replicate.py` / L3 hook 拦截 spawn Agent 做复刻。
 
 紧急旁路：prompt 加 `DISTILL_REPLICATE_BYPASS=1`（触发 lesson 记录）。
+
+---
+
+## 🔁 SkillOpt 范式精化（已有 skill 的训练循环）
+
+业界源 Microsoft Research arXiv:2605.23904 + microsoft/SkillOpt。把 skill.md 当**可训练的"权重"**：冻结目标模型，独立 optimizer 据 trajectory 改 skill，held-out validation 严格优于才升级，bounded edit 控破坏，reject buffer 防重蹈。
+
+**适用场景**：
+
+| 场景 | 命令 |
+|---|---|
+| 新书首蒸（零到一） | `/distill-style` |
+| 已有 skill_FINAL.md 想精化（一到 N） | `/distill-style-skillopt` |
+
+**主循环**（论文超参 SearchQA 默认）：
+- `epoch=4` · `rollout_batch=40` · `minibatch=8`
+- `L_t` (textual learning rate) cosine decay `4→2`
+- 每 step：rollout → optimizer 出 ≤L_t 条 add/delete/replace patch → patch_applier → validation_gate 严格 `>` 才接受
+- ACCEPT → 升级 + 记 best；REJECT → reject_buffer (epoch-local 反哺 optimizer prompt)
+
+**北极星纪律**：
+- 优化对象=作者风格档（=第一权威），只压缩冗余/修破损口径，不引入新规则
+- SLOW_UPDATE 段（量化指纹：句长/段长/标点）**锁死**，optimizer 不许动
+- reward 只读现有 judge/scanner binary 信号 (`audit.verdict` + `reading.verdict` + `voice.drift==0` + `truth.lie==0`)，**不引入新 hard_gate**
+
+**落地**：
+- 5 模块 + train.py：`core/scripts/skill_opt/`
+- plan 模板：`distill-style-skillopt.plan.json` (5 步)
+- 测试：57/57 全绿（确定性 + mock LLM 集成）
+- **替代**：`dimension_evolver.py` 已标 DEPRECATED（功能被 SkillOpt 收编）
 
 ---
 

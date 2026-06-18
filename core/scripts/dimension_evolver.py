@@ -1,4 +1,17 @@
-"""dimension_evolver.py — v22.evolve 蒸馏维度自学习演化器
+"""dimension_evolver.py — DEPRECATED (2026-06-18 SkillOpt 替代)
+
+⚠️ DEPRECATED: 本脚本被 core/scripts/skill_opt/ 范式替代。
+- 旧:蒸馏后扫 F 段提议→双门槛升维度→注入下次 B7 段
+- 新:每 epoch rollout trajectory→optimizer 直接改 skill_FAST.md→validation gate
+SkillOpt 业界源 arXiv:2605.23904 + microsoft/SkillOpt (推荐用 train.py)
+
+E1 调研 (workspace/_temp_research/skillopt重构/E1_蒸馏系统现状.md) 实测:
+本脚本 591 行,被任何 plan 模板调用 0 次,grep --include='*.json' 零命中。
+保留入口仅为兼容性,实际功能已被 SkillOpt 优化器吸收。
+迁移指南: python core/scripts/skill_opt/train.py --project ... --skill ...
+
+----- 历史功能说明 (保留供参考) -----
+v22.evolve 蒸馏维度自学习演化器
 
 蒸馏 agent 已在 F_baseline_comparison / F_comparison 字段中主动提议新维度（实测BookC
 前 50 章 64% 章都含「建议新增…」「建议建立…」「建议区分…」），但没有跨章统筹机制——
@@ -501,7 +514,15 @@ def promote_candidate(candidate: dict, project: Path | None, repo_root: Path,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="dimension_evolver v22.evolve · 蒸馏维度自学习")
+    import sys as _sys
+    print(
+        "⚠️  [DEPRECATED] dimension_evolver.py 已被 SkillOpt 范式 (core/scripts/skill_opt/train.py) 替代。\n"
+        "   业界源 arXiv:2605.23904 + microsoft/SkillOpt\n"
+        "   迁移: python core/scripts/skill_opt/train.py --project <path> --skill <path>\n"
+        "   旧入口仍可用 (本警告无 exit),将在后续 release 移除。\n",
+        file=_sys.stderr,
+    )
+    parser = argparse.ArgumentParser(description="dimension_evolver v22.evolve · 蒸馏维度自学习 (DEPRECATED)")
     parser.add_argument("--project", help="单项目路径（如 workspace/styles/<书名>）")
     parser.add_argument("--all-projects", action="store_true", help="扫所有 workspace/styles/* 找 universal")
     parser.add_argument("--scan", action="store_true", help="扫描出候选维度")
