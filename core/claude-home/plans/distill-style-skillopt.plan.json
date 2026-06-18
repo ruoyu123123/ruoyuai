@@ -38,7 +38,7 @@
       "required": true,
       "skip_output_allowed": false,
       "scripts": [
-        "python core/scripts/skill_opt/train.py --project {project_root} --skill {project_root}/skill_FINAL.md --epochs 4 --rollout-batch 40 --minibatch 8 --l-t-max 4 --l-t-min 2"
+        "python core/scripts/skill_opt/train.py --project {project_root} --skill {project_root}/skill_FINAL.md --reward-route distill --epochs 4 --rollout-batch 40 --minibatch 8 --l-t-max 4 --l-t-min 2 --multi-ref-count 5"
       ],
       "expected_outputs": ["_skillopt/train"]
     },

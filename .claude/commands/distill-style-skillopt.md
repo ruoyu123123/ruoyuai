@@ -25,8 +25,10 @@ held-out validation 严格优于才升级,bounded edit 控破坏,reject buffer �
 ## 前置
 - `<风格库>/skill_FINAL.md` 存在 (经 `/distill-style` 蒸出)
 - `<风格库>/cluster_index.json` 存在
-- `<风格库>/_数据库/.audit/`, `.judge_reports/` 已有数据 (写作链路跑过 ≥1 cluster)
-  - 用于 reward 算分,没有时 reward 默认 0,gate 永远不通过
+- `<风格库>/原文/` 含足够章节文本 (SFS 多基线评分用)
+- **双路由可选**:
+  - `--reward-route distill` (默认): 复刻→SFS 评分,只依赖风格库原文
+  - `--reward-route writing`: 读写作产物 audit/judge,需先用该 skill 写过 cluster
 
 ## 流程(5 步 · plan_tracker 强制)
 
