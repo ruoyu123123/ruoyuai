@@ -56,6 +56,7 @@ from skill_opt import (  # noqa: E402
     patch_applier,
     reject_buffer,
     reward,
+    reward_sfs,
     rollout,
     skill_compactor,
     validation_gate,
@@ -72,6 +73,12 @@ DEFAULT_HPARAMS = {
     "max_reflection_per_minibatch": 3,
     "slow_update_samples_per_epoch": 20,
 }
+
+
+# Reward 路线 (北极星纪律: 解耦的两条路径不互相干涉)
+# - "writing"  : 写作路线 = 读 _数据库/.audit/.judge_reports binary 信号 (剩余 cluster 写完才有)
+# - "distill"  : 蒸馏路线 = 复刻→SFS 评分 (风格库原文即可,不依赖写作产物)
+REWARD_ROUTES = ("writing", "distill")
 
 
 def cosine_decay_lt(epoch: int, total_epochs: int, l_t_max: int, l_t_min: int) -> int:
@@ -110,7 +117,7 @@ class TrainResult:
     hparams: dict = field(default_factory=dict)
 
 
-def _eval_selection(
+def _eval_selection_writing(
     skill_path: Path,
     project: Path,
     selection_ids: Sequence[str],
@@ -118,7 +125,7 @@ def _eval_selection(
     run_id: str,
     reward_mode: str,
 ) -> list[float]:
-    """跑 selection_set,返回每样本 reward 数组(供 validation_gate)。"""
+    """写作路线: rollout 复刻 + 读 audit/judge 信号算 reward。"""
     trajs, _ = rollout.rollout_batch(
         style_skill=skill_path,
         project=project,
@@ -130,6 +137,55 @@ def _eval_selection(
     return [t.reward for t in trajs]
 
 
+def _eval_selection_distill(
+    skill_path: Path,
+    project: Path,
+    selection_ids: Sequence[str],
+    out_root: Path,
+    run_id: str,
+    multi_ref_count: int = 5,
+    multi_ref_seed: int = 42,
+) -> list[float]:
+    """蒸馏路线: 复刻→SFS 评分算 reward(返回 [0,1] 数组)。"""
+    rewards = []
+    for cid in selection_ids:
+        sub_run = f"{run_id}_{cid}"
+        sr = reward_sfs.reward_for_cluster_sfs(
+            style_skill=skill_path,
+            project_root=project,
+            cluster_id=cid,
+            out_root=out_root,
+            run_id=sub_run,
+            multi_ref_count=multi_ref_count,
+            multi_ref_seed=multi_ref_seed,
+        )
+        rewards.append(sr.reward)
+    return rewards
+
+
+def _eval_selection(
+    skill_path: Path,
+    project: Path,
+    selection_ids: Sequence[str],
+    out_root: Path,
+    run_id: str,
+    *,
+    reward_route: str = "writing",
+    reward_mode: str = "soft",
+    multi_ref_count: int = 5,
+    multi_ref_seed: int = 42,
+) -> list[float]:
+    """统一入口: 按 reward_route 分发。"""
+    if reward_route == "distill":
+        return _eval_selection_distill(
+            skill_path, project, selection_ids, out_root, run_id,
+            multi_ref_count=multi_ref_count, multi_ref_seed=multi_ref_seed,
+        )
+    return _eval_selection_writing(
+        skill_path, project, selection_ids, out_root, run_id, reward_mode=reward_mode,
+    )
+
+
 def train(
     project_root: Path,
     initial_skill_path: Path,
@@ -139,7 +195,10 @@ def train(
     minibatch_size: int = DEFAULT_HPARAMS["minibatch"],
     l_t_max: int = DEFAULT_HPARAMS["l_t_max"],
     l_t_min: int = DEFAULT_HPARAMS["l_t_min"],
+    reward_route: str = "writing",
     reward_mode: str = "soft",
+    multi_ref_count: int = 5,
+    multi_ref_seed: int = 42,
     seed: int = 42,
     dry_run: bool = False,
 ) -> TrainResult:
@@ -197,12 +256,16 @@ def train(
             "minibatch": minibatch_size,
             "l_t_max": l_t_max,
             "l_t_min": l_t_min,
+            "reward_route": reward_route,
             "reward_mode": reward_mode,
+            "multi_ref_count": multi_ref_count,
+            "multi_ref_seed": multi_ref_seed,
             "seed": seed,
         },
     )
 
     print(f"[SkillOpt train] project={project_root.name}")
+    print(f"  reward_route={reward_route} (writing=binary 信号 · distill=SFS 评分)")
     print(f"  epochs={epochs} · rollout={rollout_batch_size} · minibatch={minibatch_size}")
     print(f"  L_t={l_t_max}→{l_t_min} (cosine decay)")
     print(f"  split: train={len(split.train)} sel={len(split.selection)} test={len(split.test)}")
@@ -234,15 +297,39 @@ def train(
 
             # rollout minibatch (拿 trajectory)
             run_id = f"ep{ep}_step{step}_mb"
-            trajs, _ = rollout.rollout_batch(
-                style_skill=current_skill_path,
-                project=project_root,
-                cluster_ids=mb,
-                out_root=train_dir,
-                run_id=run_id,
-                reward_mode=reward_mode,
-            )
-            traj_dicts = [asdict(t) for t in trajs]
+            if reward_route == "distill":
+                # 蒸馏路线: 每个 cluster 单独跑 SFS reward
+                traj_dicts = []
+                for cid in mb:
+                    sub_run = f"{run_id}_{cid}"
+                    sr = reward_sfs.reward_for_cluster_sfs(
+                        style_skill=current_skill_path,
+                        project_root=project_root,
+                        cluster_id=cid,
+                        out_root=train_dir,
+                        run_id=sub_run,
+                        multi_ref_count=multi_ref_count,
+                        multi_ref_seed=multi_ref_seed,
+                    )
+                    traj_dicts.append({
+                        "cluster_id": cid,
+                        "reward": sr.reward,
+                        "sfs_score": sr.sfs_score,
+                        "replica_path": sr.replica_path,
+                        "components": {"sfs_score": sr.sfs_score},
+                        "duration_sec": sr.duration_sec,
+                    })
+            else:
+                # 写作路线: rollout 收 binary 信号
+                trajs, _ = rollout.rollout_batch(
+                    style_skill=current_skill_path,
+                    project=project_root,
+                    cluster_ids=mb,
+                    out_root=train_dir,
+                    run_id=run_id,
+                    reward_mode=reward_mode,
+                )
+                traj_dicts = [asdict(t) for t in trajs]
 
             # optimizer 提议 patches
             current_text = current_skill_path.read_text(encoding="utf-8")
@@ -271,11 +358,15 @@ def train(
             # 在 selection_set 上比对
             r_before = _eval_selection(
                 current_skill_path, project_root, split.selection,
-                train_dir, f"{run_id}_sel_before", reward_mode,
+                train_dir, f"{run_id}_sel_before",
+                reward_route=reward_route, reward_mode=reward_mode,
+                multi_ref_count=multi_ref_count, multi_ref_seed=multi_ref_seed,
             )
             r_after = _eval_selection(
                 candidate_path, project_root, split.selection,
-                train_dir, f"{run_id}_sel_after", reward_mode,
+                train_dir, f"{run_id}_sel_after",
+                reward_route=reward_route, reward_mode=reward_mode,
+                multi_ref_count=multi_ref_count, multi_ref_seed=multi_ref_seed,
             )
             gate = validation_gate.decide(r_before, r_after)
             log.selection_reward_history.append(gate.score_after)
@@ -324,7 +415,9 @@ def train(
     if split.test:
         test_rewards = _eval_selection(
             best_path, project_root, split.test,
-            train_dir, "final_test", reward_mode,
+            train_dir, "final_test",
+            reward_route=reward_route, reward_mode=reward_mode,
+            multi_ref_count=multi_ref_count, multi_ref_seed=multi_ref_seed,
         )
         result.final_test_reward = (
             sum(test_rewards) / len(test_rewards) if test_rewards else 0.0
@@ -359,7 +452,15 @@ def main() -> int:
     ap.add_argument("--minibatch", type=int, default=DEFAULT_HPARAMS["minibatch"])
     ap.add_argument("--l-t-max", type=int, default=DEFAULT_HPARAMS["l_t_max"])
     ap.add_argument("--l-t-min", type=int, default=DEFAULT_HPARAMS["l_t_min"])
-    ap.add_argument("--reward-mode", choices=["soft", "strict"], default="soft")
+    ap.add_argument("--reward-route", choices=["writing", "distill"], default="writing",
+                    help="writing=读 audit/judge binary 信号(需写作产物) · "
+                         "distill=复刻→SFS 评分(需风格库原文)")
+    ap.add_argument("--reward-mode", choices=["soft", "strict"], default="soft",
+                    help="仅 writing 路线生效")
+    ap.add_argument("--multi-ref-count", type=int, default=5,
+                    help="仅 distill 路线生效 (SFS 多基线抽样)")
+    ap.add_argument("--multi-ref-seed", type=int, default=42,
+                    help="仅 distill 路线生效")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -372,7 +473,10 @@ def main() -> int:
         minibatch_size=args.minibatch,
         l_t_max=args.l_t_max,
         l_t_min=args.l_t_min,
+        reward_route=args.reward_route,
         reward_mode=args.reward_mode,
+        multi_ref_count=args.multi_ref_count,
+        multi_ref_seed=args.multi_ref_seed,
         seed=args.seed,
         dry_run=args.dry_run,
     )
