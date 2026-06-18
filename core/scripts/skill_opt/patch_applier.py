@@ -42,12 +42,56 @@ def _split_paragraphs(text: str) -> list[str]:
     return [p for p in parts if p.strip() != ""] if parts else []
 
 
+def _normalize(s: str) -> str:
+    """归一化空白: 多空白→单空格, strip, 全角→半角#。"""
+    import re
+    s = s.strip()
+    s = s.replace("＃", "#").replace("　", " ")
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
 def _anchor_match(paragraph: str, anchor: str) -> bool:
-    """anchor 是段首 ≤40 字精确匹配。"""
+    """多策略模糊匹配 (fix: gemini optimizer 经常写错 anchor 导致全崩)。
+
+    策略 (任一命中即匹配):
+    1. 精确段首匹配 (原始逻辑)
+    2. 归一化空白后段首匹配
+    3. anchor 是段落的子串 (LLM 截了中间一段)
+    4. 段落标题完全匹配 (## 标题行 vs anchor)
+    """
     if not anchor:
         return False
-    # 段首字符串完全包含 anchor
-    return paragraph.lstrip().startswith(anchor.lstrip()[:40])
+    p = paragraph.lstrip()
+    a = anchor.lstrip()[:60]  # 放宽到 60 字符
+
+    # 策略 1: 精确段首
+    if p.startswith(a):
+        return True
+
+    # 策略 2: 归一化空白后段首
+    pn = _normalize(p)
+    an = _normalize(a)
+    if pn.startswith(an):
+        return True
+
+    # 策略 3: anchor 是段落子串 (LLM 可能截了中间)
+    if len(an) >= 8 and an in pn:
+        return True
+
+    # 策略 4: 标题行匹配 (段落第一行 vs anchor 都是 ## 开头)
+    first_line = p.split("\n")[0].strip()
+    anchor_first = a.split("\n")[0].strip()
+    if first_line and anchor_first:
+        if _normalize(first_line) == _normalize(anchor_first):
+            return True
+        # 宽松: 标题含 anchor 或反之
+        fl = _normalize(first_line)
+        af = _normalize(anchor_first)
+        if len(af) >= 5 and (af in fl or fl in af):
+            return True
+
+    return False
 
 
 def _validate_patch(p: dict) -> str | None:

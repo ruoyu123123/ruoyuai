@@ -334,13 +334,20 @@ def train(
             # optimizer 提议 patches
             current_text = current_skill_path.read_text(encoding="utf-8")
             rejects = reject_buffer.load_epoch_rejects(project_root, ep)
-            patches, _raw = optimizer.propose_patches(
+            patches, raw_reply = optimizer.propose_patches(
                 skill_text=current_text,
                 trajectories=traj_dicts,
                 protected_sections=protected_titles,
                 rejects=rejects,
                 skill_version=f"ep{ep}_step{step}",
                 max_patches=l_t,
+            )
+            # 落盘 optimizer 原始回复 (调试必须品)
+            opt_log = train_dir / f"ep{ep}_step{step}_optimizer.json"
+            opt_log.write_text(
+                json.dumps({"patches": patches, "raw_reply": raw_reply[:5000]},
+                           ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
             if not patches:
                 print(f"  [ep{ep}_step{step}] optimizer 无 patch,跳过")
@@ -349,7 +356,9 @@ def train(
             # 应用 patches → 候选
             pr = patch_applier.apply_patches(current_text, patches, max_patches=l_t)
             if not pr.success:
-                print(f"  [ep{ep}_step{step}] 全部 patch 应用失败,跳过")
+                # 落盘失败详情 (调试)
+                print(f"  [ep{ep}_step{step}] 全部 patch 应用失败: "
+                      f"{[r[1] for r in pr.rejected]}")
                 continue
 
             candidate_path = train_dir / f"ep{ep}_step{step}_candidate.md"
