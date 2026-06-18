@@ -46,54 +46,113 @@ def _read_json(p: Path) -> dict:
         return {}
 
 
+def _audit_verdict_pass(d: dict) -> bool | None:
+    """audit verdict ∈ {pass, waived, fail, fatal}。pass 和 waived 都算通过(waived=issue全豁免)。"""
+    v = d.get("verdict")
+    if v is None:
+        return None
+    return str(v).lower() in ("pass", "waived")
+
+
+def _last_round_reading(reading_dir: Path, cluster_id: str) -> dict:
+    """reading-reflector 每 cluster 多轮 round,取最后一轮(SRE 健康检查最终态)。"""
+    rounds = sorted(reading_dir.glob(f"{cluster_id}_round_*.json"))
+    if not rounds:
+        return {}
+    return _read_json(rounds[-1])
+
+
+def _grade_to_binary(d: dict, key: str = "overall_grade") -> bool | None:
+    """A/B 算通过, C/D/F 算失败。无 grade 字段 → None。"""
+    g = d.get(key)
+    if g is None:
+        return None
+    return str(g).upper() in ("A", "B", "S")
+
+
+def _cluster_chapter_range(project_root: Path, cluster_id: str) -> list[int]:
+    """从 事件簇.json 取本 cluster 含哪些章号。"""
+    ec_path = project_root / "_数据库" / "事件簇.json"
+    if not ec_path.exists():
+        return []
+    try:
+        d = json.loads(ec_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    for c in d.get("clusters", []):
+        if c.get("cluster_id") == cluster_id:
+            # 真实字段是 chapter_range: [start, end] (闭区间)
+            cr = c.get("chapter_range")
+            if cr and len(cr) == 2:
+                return list(range(int(cr[0]), int(cr[1]) + 1))
+            # 兜底:scene_storyboard 含 ch 字段
+            sb = c.get("scene_storyboard") or []
+            ch_set = set()
+            for s in sb:
+                ch = s.get("ch") or s.get("chapter")
+                if ch:
+                    ch_set.add(int(ch))
+            return sorted(ch_set)
+    return []
+
+
+def _truth_clean_for_cluster(judge_dir: Path, project_root: Path, cluster_id: str) -> bool | None:
+    """truth-check 是章级,聚合 cluster 内所有章:全 A/B → 通过,任一 C/D/F → 失败,无数据 → None。"""
+    chs = _cluster_chapter_range(project_root, cluster_id)
+    if not chs:
+        return None
+    grades = []
+    for ch in chs:
+        d = _read_json(judge_dir / f"ch_{ch:03d}_writer-truth-check.json")
+        g = d.get("overall_grade")
+        if g:
+            grades.append(g)
+    if not grades:
+        return None
+    return all(str(g).upper() in ("A", "B", "S") for g in grades)
+
+
 def collect_for_cluster(
     project_root: Path,
     cluster_id: str,
 ) -> RewardComponents:
-    """从写作链路产物里拣 4 个 binary 信号。
+    """从写作链路真实产物拣 4 个 binary 信号(已按 凿窍纪 实测路径核对)。
 
-    路径约定 (E2 调研实测):
-    - audit_hub:        _数据库/.audit/<cluster_id>.json     字段 .verdict ∈ {pass, fail}
-    - reading-reflect:  _数据库/.judge_reports/<cluster_id>_reading.json  .verdict
-    - voice-checker:    _数据库/.judge_reports/<cluster_id>_voice.json    .voice_drift_count
-    - truth-check:      _数据库/.judge_reports/<cluster_id>_truth.json    .lie_count
+    真实路径 (2026-06-18 凿窍纪 grep 实测):
+    - audit:        _数据库/.audit/<cluster_id>_audit.json  字段 .verdict ∈ {pass, waived, fail, fatal}
+    - reading:      _数据库/.reading_reflection/<cluster_id>_round_<N>.json (取最后一轮) .verdict ∈ {pass, fail}
+    - voice:        _数据库/.judge_reports/<cluster_id>_voice-checker.json .overall_grade ∈ {A,B,C,D,F}
+    - truth:        _数据库/.judge_reports/ch_<NNN>_writer-truth-check.json (章级·聚合 cluster 内所有章)
 
-    缺失 → 字段 None (聚合时按"未通过"处理)。
+    pass/waived 都算 audit 通过 (waived=issue 全豁免=实质 pass)
+    overall_grade A/B/S 算通过, C/D/F 失败
+    缺失 → 字段 None
     """
     db = project_root / "_数据库"
     audit_dir = db / ".audit"
     judge_dir = db / ".judge_reports"
+    reading_dir = db / ".reading_reflection"
 
-    audit = _read_json(audit_dir / f"{cluster_id}.json")
-    reading = _read_json(judge_dir / f"{cluster_id}_reading.json")
-    voice = _read_json(judge_dir / f"{cluster_id}_voice.json")
-    truth = _read_json(judge_dir / f"{cluster_id}_truth.json")
+    audit = _read_json(audit_dir / f"{cluster_id}_audit.json")
+    reading = _last_round_reading(reading_dir, cluster_id)
+    voice = _read_json(judge_dir / f"{cluster_id}_voice-checker.json")
 
     def _verdict_pass(d: dict) -> bool | None:
         v = d.get("verdict")
         if v is None:
             return None
-        return str(v).lower() == "pass"
-
-    def _count_clean(d: dict, key: str) -> bool | None:
-        n = d.get(key)
-        if n is None:
-            return None
-        try:
-            return int(n) == 0
-        except (TypeError, ValueError):
-            return None
+        return str(v).lower() in ("pass", "waived")
 
     return RewardComponents(
-        audit_pass=_verdict_pass(audit),
+        audit_pass=_audit_verdict_pass(audit),
         reading_pass=_verdict_pass(reading),
-        voice_clean=_count_clean(voice, "voice_drift_count"),
-        truth_clean=_count_clean(truth, "lie_count"),
+        voice_clean=_grade_to_binary(voice),
+        truth_clean=_truth_clean_for_cluster(judge_dir, project_root, cluster_id),
         raw={
             "audit": bool(audit),
             "reading": bool(reading),
             "voice": bool(voice),
-            "truth": bool(truth),
+            "truth_chapters": _cluster_chapter_range(project_root, cluster_id),
         },
     )
 

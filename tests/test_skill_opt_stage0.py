@@ -132,34 +132,58 @@ def _mk_judge_files(
     cluster_id: str,
     audit_verdict: str | None = "pass",
     reading_verdict: str | None = "pass",
-    voice_drift: int | None = 0,
-    truth_lies: int | None = 0,
+    voice_grade: str | None = "A",
+    truth_grade: str | None = "A",
+    chapter_range: tuple[int, int] = (1, 3),
 ) -> None:
+    """搭真实路径结构: .audit/<cid>_audit.json + .reading_reflection/<cid>_round_*.json
+       + .judge_reports/<cid>_voice-checker.json + ch_NNN_writer-truth-check.json
+       + _数据库/事件簇.json 含 chapter_range
+    """
     db = root / "_数据库"
     audit = db / ".audit"
     judge = db / ".judge_reports"
+    reading = db / ".reading_reflection"
     audit.mkdir(parents=True, exist_ok=True)
     judge.mkdir(parents=True, exist_ok=True)
+    reading.mkdir(parents=True, exist_ok=True)
+
+    # 事件簇.json: 标 chapter_range
+    (db / "事件簇.json").write_text(
+        json.dumps(
+            {
+                "clusters": [
+                    {"cluster_id": cluster_id, "chapter_range": list(chapter_range)}
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
     if audit_verdict is not None:
-        (audit / f"{cluster_id}.json").write_text(
+        (audit / f"{cluster_id}_audit.json").write_text(
             json.dumps({"verdict": audit_verdict}, ensure_ascii=False),
             encoding="utf-8",
         )
     if reading_verdict is not None:
-        (judge / f"{cluster_id}_reading.json").write_text(
+        # 最后一 round
+        (reading / f"{cluster_id}_round_1.json").write_text(
             json.dumps({"verdict": reading_verdict}, ensure_ascii=False),
             encoding="utf-8",
         )
-    if voice_drift is not None:
-        (judge / f"{cluster_id}_voice.json").write_text(
-            json.dumps({"voice_drift_count": voice_drift}, ensure_ascii=False),
+    if voice_grade is not None:
+        (judge / f"{cluster_id}_voice-checker.json").write_text(
+            json.dumps({"overall_grade": voice_grade}, ensure_ascii=False),
             encoding="utf-8",
         )
-    if truth_lies is not None:
-        (judge / f"{cluster_id}_truth.json").write_text(
-            json.dumps({"lie_count": truth_lies}, ensure_ascii=False),
-            encoding="utf-8",
-        )
+    if truth_grade is not None:
+        # 章级,每章一个
+        for ch in range(chapter_range[0], chapter_range[1] + 1):
+            (judge / f"ch_{ch:03d}_writer-truth-check.json").write_text(
+                json.dumps({"overall_grade": truth_grade}, ensure_ascii=False),
+                encoding="utf-8",
+            )
 
 
 def test_reward_all_pass_strict_1():
@@ -177,7 +201,7 @@ def test_reward_all_pass_strict_1():
 def test_reward_one_fail_strict_0():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        _mk_judge_files(root, "auto_001", voice_drift=3)
+        _mk_judge_files(root, "auto_001", voice_grade="D")  # voice 失败
         r, _ = reward.reward_for_cluster(root, "auto_001", mode="strict")
         assert r == 0.0
 
@@ -185,7 +209,7 @@ def test_reward_one_fail_strict_0():
 def test_reward_one_fail_soft_3of4():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        _mk_judge_files(root, "auto_001", voice_drift=3)
+        _mk_judge_files(root, "auto_001", voice_grade="D")  # voice 失败
         r, _ = reward.reward_for_cluster(root, "auto_001", mode="soft")
         assert r == pytest.approx(3 / 4, abs=1e-6)
 
@@ -208,8 +232,8 @@ def test_reward_partial_missing_soft_ignores_none():
             root, "auto_001",
             audit_verdict="pass",
             reading_verdict=None,  # 缺
-            voice_drift=0,
-            truth_lies=None,  # 缺
+            voice_grade="A",
+            truth_grade=None,  # 缺
         )
         r, _ = reward.reward_for_cluster(root, "auto_001", mode="soft")
         assert r == pytest.approx(2 / 2, abs=1e-6)  # 2 个 pass / 2 个有效
@@ -285,3 +309,32 @@ def test_reject_buffer_clear_epoch():
         assert len(reject_buffer.load_epoch_rejects(root, 1)) == 1
         reject_buffer.clear_epoch(root, 1)
         assert reject_buffer.load_epoch_rejects(root, 1) == []
+
+
+# -------- 真数据集成测试 (凿窍纪) --------
+
+def test_reward_real_data_凿窍纪_cluster_001():
+    """凿窍纪 cluster_001 实测: audit=waived(pass) + reading_last_round=fail + voice=A + truth ch1-3 全A
+    预期 soft reward = 3/4 = 0.75
+    """
+    real = REPO / "workspace" / "novels" / "凿窍纪"
+    if not real.exists():
+        return  # 项目可能没这本书
+    r, comp = reward.reward_for_cluster(real, "cluster_001", mode="soft")
+    assert comp.audit_pass is True
+    assert comp.voice_clean is True
+    assert comp.truth_clean is True
+    assert r == pytest.approx(0.75, abs=1e-3)
+
+
+def test_reward_real_data_凿窍纪_cluster_002():
+    """凿窍纪 cluster_002 实测: audit=fail + voice=A + truth ch4-7 全A → soft = 2/4 = 0.5"""
+    real = REPO / "workspace" / "novels" / "凿窍纪"
+    if not real.exists():
+        return
+    r, comp = reward.reward_for_cluster(real, "cluster_002", mode="soft")
+    # 至少有 audit/voice/truth 数据
+    assert comp.voice_clean is True
+    assert comp.truth_clean is True
+    # cluster_002 chapter_range 应是 [4, 7]
+    assert comp.raw.get("truth_chapters") == [4, 5, 6, 7]
