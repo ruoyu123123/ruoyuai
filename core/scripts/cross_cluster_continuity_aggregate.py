@@ -124,7 +124,6 @@ def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: 
     ending_type = applied.get("ending_type", "")
     ending_line = applied.get("ending_line", "")
 
-    # DCAS pre_opening 例外
     if ending_type in ("悬念断章",):
         return {"score": 1.0, "reason": "悬念断章，物理承接 OK", "exempt": True}
 
