@@ -33,7 +33,7 @@ ISSUE_CODE = "PHYSIO_CUE_FACIAL_BIAS"   # ⚠️ advisory 专用 · 绝不进 HA
 
 # 🔬 待金标准校准（真作者原文喂自身）：占位阈值保守（宁可漏报不误报）。
 # 面部生理线索占比超此 = facial bias（面部区域堆砌·缺非面部躯体信号）。
-FACIAL_RATIO_FLOOR = 0.55
+FACIAL_RATIO_FLOOR = 0.65   # 2026-06-20 金标准校准:5真作者facial_ratio 0.245-0.566(将夜最高0.566)·0.55误报将夜→抬0.65(>真作者max·仍catch>65%极端面部偏置)
 MIN_CUE_SAMPLES = 8   # facial+nonfacial 命中总数低于此 = 样本不足·不判（防小样本噪声）
 
 # 面部生理线索（眉/眼/嘴/脸/额头等面部区域）
@@ -48,8 +48,9 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    m = (os.environ.get("PHYSIO_CUE_DIVERSITY_MODE") or "shadow").strip().lower()
-    return m if m in ("off", "shadow", "active") else "shadow"
+    # 2026-06-20 金标准校准放量 active：floor 抬到 0.65 后 5 真作者(facial_ratio≤0.566)零误报。
+    m = (os.environ.get("PHYSIO_CUE_DIVERSITY_MODE") or "active").strip().lower()
+    return m if m in ("off", "shadow", "active") else "active"
 
 
 def _strip_changes(text: str) -> str:

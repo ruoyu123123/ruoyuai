@@ -63,8 +63,10 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    m = (os.environ.get("SCENE_GROUNDING_MODE") or "shadow").strip().lower()
-    return m if m in ("off", "shadow", "active") else "shadow"
+    # 2026-06-20 金标准校准放量 active：5 真作者(诡秘/主神/惊悚/剑来/将夜)原文实测 ungrounded_ratio 全 0.0
+    # —— 真作者从不白房间·零误报·安全放量。
+    m = (os.environ.get("SCENE_GROUNDING_MODE") or "active").strip().lower()
+    return m if m in ("off", "shadow", "active") else "active"
 
 
 def _strip_changes(text: str) -> str:

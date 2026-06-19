@@ -49,8 +49,10 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    m = (os.environ.get("EMOTION_GRANULARITY_MODE") or "shadow").strip().lower()
-    return m if m in ("off", "shadow", "active") else "shadow"
+    # 2026-06-20 金标准校准放量 active：5 真作者粗情绪密度 0.07-1.32/千字(floor 3.0·2.3x 余量)
+    # —— 真作者用细分情绪词·零误报·安全放量。
+    m = (os.environ.get("EMOTION_GRANULARITY_MODE") or "active").strip().lower()
+    return m if m in ("off", "shadow", "active") else "active"
 
 
 def _strip_changes(text: str) -> str:

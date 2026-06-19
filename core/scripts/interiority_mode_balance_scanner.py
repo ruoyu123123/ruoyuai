@@ -44,8 +44,10 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    m = (os.environ.get("INTERIORITY_MODE_BALANCE_MODE") or "shadow").strip().lower()
-    return m if m in ("off", "shadow", "active") else "shadow"
+    # 2026-06-20 金标准校准放量 active：5 真作者标记独白密度 0-0.51/千字(floor 2.5·5x+ 余量)
+    # —— 真作者用 FID 不用「他想」标记·零误报·安全放量。
+    m = (os.environ.get("INTERIORITY_MODE_BALANCE_MODE") or "active").strip().lower()
+    return m if m in ("off", "shadow", "active") else "active"
 
 
 def _strip_changes(text: str) -> str:
