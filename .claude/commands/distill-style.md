@@ -81,7 +81,7 @@ $ARGUMENTS
   "character_continuity": [{"character": "", "first_appear_in": "", "arc_progress": ""}],
   "G_dimension_proposals": [
     {
-      "_doc": "自学习升级字段：agent 觉得现有 35+ 维度没覆盖但本章观察到的现象，结构化提议。dimension_evolver.py 会聚合跨章提议 → 通过双门槛升级到 auto_evolved_dimensions.json",
+      "_doc": "自学习升级字段：agent 觉得现有 35+ 维度没覆盖但本章观察到的现象，结构化提议。由 SkillOpt 训练循环消费（替代已删除的 dimension_evolver）",
       "proposed_dim_name": "<提议的 dim 名，如 dim50_metaphor_compression_ratio>",
       "observation": "<本章观察的具体现象 < 100 字>",
       "current_dims_missing": "<现有哪些维度本应覆盖但没覆盖到 / 与已有 dim 的区别>",
@@ -328,16 +328,6 @@ Hook 已强制要求所有蒸馏 Agent 子代理 prompt 必须含 `PLAN_ID` 字�
 ## 阶段 0：读经验库（必读 · 自学习入口）
 
 **开工前必须读取**全局蒸馏经验库 **+ 自学习升级的维度池**：
-
-### 维度池注入（必读）
-
-```bash
-# 读取自学习升级的维度（agent 蒸馏单章时必须把这些维度也分析）
-cat core/claude-home/auto_evolved_dimensions.json 2>/dev/null
-# 字段 dimensions[] 中 status=active 的维度 → 注入本次蒸馏 prompt 的 B7 段
-```
-
-**子代理收到 brief 时**，brief 末尾会有「B7 自学习追加维度池」段，列出已升级的 N 个维度（如 cand_001 / cand_002 ...）+ 触发指南。子代理在 B7 段必须像分析 B1-B6 一样分析这些维度。
 
 ### lessons MD 经验库
 
@@ -599,8 +589,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 - 看到「全新现象，35 dim 都没覆盖」时填 high（如「物理代价化超能力三件套」）
 - 看到「孤例无价值」时直接不填（不要把无意义观察硬塞 G 段）
 
-**为什么需要**：F 段是自由文本难聚合，G 段是结构化 → `dimension_evolver.py` 跨章聚合 → 满足
-「≥ N 章 + value 主要为 high/mid」 → 自动升级到 `auto_evolved_dimensions.json` → 下次蒸馏 prompt 自动注入。
+**为什么需要**：F 段是自由文本难聚合，G 段是结构化 → SkillOpt 训练循环消费（每条提议作为 optimizer context 输入，由 `/distill-style-skillopt` 训练闭环升级 skill）。
 
 业界依据（Round 1 调研 · `.research_cache/inspiration_self_evolving_distill_2026-05-24.md`）：
 LLM-based interpretable feature generation (arxiv 2409.07132) workflow B 半自动模式；

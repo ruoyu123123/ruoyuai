@@ -168,7 +168,7 @@ python core/scripts/audit_hub.py "<项目路径>" --mode cluster --cluster-id <k
   --waivers "<项目路径>/章节/cluster_<key>_draft/cluster_<key>_changes.json"
 ```
 
-退出码语义（同 write-chapter）：
+退出码语义：
 - 0 = pass / waived
 - 1 = auto_fixed → 进 3.2
 - 2 = needs_agent → 读 pending_agent · spawn 对应 agent · 修完重跑

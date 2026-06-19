@@ -3,7 +3,7 @@
 ## 问题
 
 `/distill-style` 的 phase-2 / phase-5 复刻测试用 Claude sub-agent（`general-purpose`）生成复刻段。
-但正式写作（`/write-chapter` → `gen_writer.py`）走的是 **gen-model**（OpenAI 兼容协议外部模型，如 deepseek_v4_pro / pie_xian）。
+但正式写作（`/cluster-write` → `gen_writer.py`）走的是 **gen-model**（OpenAI 兼容协议外部模型，如 gemini_pro_preview / pie_xian）。
 
 两栈不一致 → skill v0→v1 升级是针对错的模型迭代。
 

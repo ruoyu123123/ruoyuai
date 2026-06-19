@@ -259,7 +259,7 @@ python core/scripts/gepa_prompt_optimizer.py --status          # 最新 snapshot
 
 - **Process Reward Model**：评 writer 每一步中间产出而不只是最终章节（cross_chapter_meta_quality_scan 接近，但需改成 inline 评估）
 - **DSPy signature 化**：把 prompt 改成声明式 signature，自动 compile 优化（工作量大，**不推荐**——你的 prompt 是中文契约，改 signature 边际收益低）
-- **跨项目 universal skill pool 自动联通**：dimension_evolver 已有 --all-projects，learning_hub 还没纳入
+- **跨项目 universal skill pool 自动联通**：SkillOpt 训练循环已替代 dimension_evolver，跨项目 skill 迁移待 P3 长期项
 
 ## 测试快查
 
