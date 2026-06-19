@@ -262,6 +262,13 @@
       "_new": true,
       "issues_emitted": ["SYNESTHESIA_OVERUSE"]
     },
+    "anachronism": {
+      "layer": "cluster",
+      "script": "anachronism_scanner.py",
+      "doc": "[2026-06-20 R6·时代错位/穿帮] 古代/古言/仙侠/古风最大题材群零覆盖(H3穿越感防控只judge/writer层教·无scanner)·纯规则检测古风背景正文里现代词(网络数码/现代器物/现代制度/现代量词/俚语·精选高确定性穿帮词·剔除古今两栖多义词防误报)·era门控(世界观.json era·无→skip北极星②·非古代→skip)·穿越/搞笑古风只give密度·advisory·env ANACHRONISM_MODE默认shadow·🔬待金标准校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["ANACHRONISM_DETECTED"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",

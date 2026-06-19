@@ -1269,6 +1269,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "synesthesia_density_scanner", "SYNESTHESIA_OVERUSE", "风格")),
+                # [2026-06-20 R6 联网调研] 时代错位/穿帮(古代/古言/仙侠/古风最大题材群·零覆盖)·era门控(世界观.json·无→skip)·advisory·默认shadow
+                ("anachronism",
+                 [child_python(), str(_SCRIPT_DIR / "anachronism_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "anachronism_scanner", "ANACHRONISM_DETECTED", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
