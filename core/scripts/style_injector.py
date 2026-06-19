@@ -209,9 +209,7 @@ def build_directive(project_root: Path, chapter: int) -> dict:
     seed_int = int(hashlib.md5(seed_str.encode("utf-8")).hexdigest()[:8], 16)
     random.seed(seed_int)
 
-    # v17.8 DCAS：检测本章是否继承前章 pre_opening
-    pre_opening_path = project_root / "章节" / f"第{chapter:03d}章" / ".pre_opening.txt"
-    inherits_opening = pre_opening_path.exists()
+    inherits_opening = False
 
     db = project_root / "_数据库"
     style = load_json(db / "作者风格.json", {})

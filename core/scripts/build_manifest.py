@@ -3448,41 +3448,6 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     if _fb_must_read:
         must_read.append(_fb_must_read)
 
-    # v17.8 DCAS：检测前章是否切了 pre_opening 给本章
-    pre_opening_path = project_root / "章节" / f"第{chapter:03d}章" / ".pre_opening.txt"
-    has_pre_opening = pre_opening_path.exists()
-    pre_opening_word_count = 0
-    if has_pre_opening:
-        try:
-            pre_opening_word_count = len(pre_opening_path.read_text(encoding="utf-8").replace(" ", "").replace("\n", ""))
-        except Exception:
-            pass
-        must_read.append({
-            "path": f"章节/第{chapter:03d}章/.pre_opening.txt",
-            "priority": "P0",
-            "focus": (
-                f"v17.8 DCAS：本章开头继承自上章 splitter 切割。"
-                f"约 {pre_opening_word_count} 字。直接作为本章正文开头使用，不要重写。"
-                f"在此基础上继续写 ~2000-3000 字"
-            ),
-            "reason": "DCAS 双章自然衔接——上章 splitter 已选最佳截断点，本章是延续",
-        })
-
-    # v17.8 DCAS：决策本章是否启用双章生成模式
-    # 默认从 ch4 起启用（v17.8 commit 时间点后）
-    # 用户偏好里可改 dcas_threshold
-    user_prefs = s.load("用户偏好", {"preferences": []})
-    prefs_list = user_prefs.get("preferences", []) if isinstance(user_prefs, dict) else []
-    dcas_threshold = 4  # 默认 ch4 起
-    for p in prefs_list:
-        if p.get("key") == "dcas_threshold":
-            dcas_threshold = p.get("value", 4)
-    # 2026-05-29 北极星修复 [F5]：DCAS 双章模式 v26 已废弃，v27 是 freestyle（writer 不知章数/字数，
-    # splitter 按字数切）。dcas_enabled 恒 False —— 不再给 freestyle writer 注入「单章字数目标」类
-    # DCAS 章级字段（与 gen_writer system prompt「writer 不知目标章数」铁律一致）。
-    dcas_enabled = False
-    _ = dcas_threshold  # 保留读取（兼容旧 prefs），但不再据此启用 DCAS
-
     # v17.3: style_directive 注入（蒸馏→写作落地强制契约）
     style_directive = None
     if s.has_style_profile() and _build_style_directive is not None:
@@ -3600,12 +3565,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 active 放量·advisory·unknown→None）。
         "genre_pack_directives": _collect_genre_pack_directives(s),
         "genre_baseline_diff": _collect_genre_baseline_diff(s),
-        "dcas_enabled": dcas_enabled,
-        # F5：freestyle 不暴露每章字数目标（None），避免 writer 据此自切章；字数由 splitter 按范围切。
-        "dcas_word_target": None,
-        "has_pre_opening": has_pre_opening,
-        "pre_opening_word_count": pre_opening_word_count,
-        "writer_mode": "freestyle_v27",  # v27 北极星：freestyle 默认（与 gen_writer changes 的 writer_mode 一致）
+        "writer_mode": "freestyle_v27",
         "rag_relevant_chapters": rag_hits,
         "memory_search_results": memory_hits,
         "database_coverage": s.coverage_report(),
