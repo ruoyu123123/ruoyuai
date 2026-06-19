@@ -4,7 +4,7 @@
 分布均衡 scan_pattern 看节奏，衔接 scan_continuity 看连贯。
 
 扫 4 维度：
-1. cliffhanger 回应度    — 前章 ending 是否在后章首段被回应（DCAS pre_opening 例外）
+1. cliffhanger 回应度    — 前章 ending 是否在后章首段被回应（悬念断章例外）
 2. 时间跳跃未交代       — 章间时间跳跃 ≥8h 必须有过渡说明
 3. 物件持续性断层       — 关键物件（主角获得的 chekhov_gun）连续 ≥2 章未提及
 4. 情绪/认知断层        — 前后章 summary.emotion 差 ≥4 且开篇无桥接
@@ -98,9 +98,6 @@ def read_changes(ch_dir: Path, ch: int) -> dict | None:
     return None
 
 
-def has_pre_opening(ch_dir: Path) -> bool:
-    return (ch_dir / ".pre_opening.txt").exists()
-
 
 # ===== 维度 1: cliffhanger 回应度 =====
 
@@ -128,8 +125,8 @@ def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: 
     ending_line = applied.get("ending_line", "")
 
     # DCAS pre_opening 例外
-    if has_pre_opening(next_ch_dir) or ending_type in ("悬念断章",):
-        return {"score": 1.0, "reason": "DCAS pre_opening 模式或悬念断章，物理承接 OK", "exempt": True}
+    if ending_type in ("悬念断章",):
+        return {"score": 1.0, "reason": "悬念断章，物理承接 OK", "exempt": True}
 
     if not ending_line:
         return {"score": -1, "reason": "前章 ending_line 未声明"}
@@ -154,12 +151,12 @@ def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: 
 
 def scan_cliffhanger_resonance_ledger(prev_rec: dict, next_ch_dir: Path) -> dict:
     """2026-05-29 cluster 化：账本预算了前章 cliffhanger_resonance_next（与下一章 head
-    的重叠分）时，直接取用，省去 ending_line 关键词重扫。DCAS pre_opening 仍 exempt。"""
+    的重叠分）时，直接取用，省去 ending_line 关键词重扫。"""
     score = prev_rec.get("cliffhanger_resonance_next")
     ending_type = prev_rec.get("ending_type", "")
     ending_line = prev_rec.get("ending_line", "")
-    if has_pre_opening(next_ch_dir) or ending_type in ("悬念断章",):
-        return {"score": 1.0, "reason": "DCAS pre_opening 模式或悬念断章，物理承接 OK", "exempt": True}
+    if ending_type in ("悬念断章",):
+        return {"score": 1.0, "reason": "悬念断章，物理承接 OK", "exempt": True}
     if not isinstance(score, (int, float)):
         return {"score": -1, "reason": "账本无 cliffhanger_resonance_next"}
     return {
@@ -480,7 +477,7 @@ def main():
     print()
     print("=== 相邻章衔接 pairwise ===")
     for p in pairwise:
-        cliff = "exempt(DCAS)" if p["cliffhanger_exempt"] else (f"{p['cliffhanger_score']:.0%}" if p["cliffhanger_score"] >= 0 else "N/A")
+        cliff = "exempt" if p["cliffhanger_exempt"] else (f"{p['cliffhanger_score']:.0%}" if p["cliffhanger_score"] >= 0 else "N/A")
         print(f"  ch{p['from_ch']}→ch{p['to_ch']}: cliffhanger={cliff} time_gap={p['time_gap_days']}天 emotion_diff={p['emotion_diff']}")
     print()
     print(f"=== 发现 {len(findings)} 项 (warning={report['summary']['warning']} / advisory={report['summary']['advisory']}) ===")

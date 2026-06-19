@@ -9,7 +9,7 @@ _build_aliases / scan_object_continuity（去硬编码主角名+物件名）。�
 - scan_cliffhanger_resonance_ledger —— 维度 1 账本路径（取预算分 / exempt / 缺字段）
 - scan_time_gap                     —— 维度 2 周日期跳跃（≥2 天才报 / 缺 changes）
 - read_emotion / scan_emotion_gap   —— 维度 4 情绪断层（diff≥5 才 detected / 账本优先 WAL 回退）
-- find_chapter_dirs / read_chapter_text / read_changes / has_pre_opening / load_json —— IO 探测
+- find_chapter_dirs / read_chapter_text / read_changes / load_json —— IO 探测
 - main()                            —— CLI 端到端（报告落盘 + pairwise + 退出码 0/1）
 
 main() 含 sys.exit，走 subprocess 跑真 CLI（参照 test_cross_cluster_fate_drift_aggregate）。
@@ -110,19 +110,16 @@ def test_find_chapter_dirs_sorted_and_filtered():
         assert [ch for ch, _ in dirs] == [1, 3, 12], f"应升序且过滤非章目录: {dirs}"
 
 
-def test_read_chapter_text_and_changes_and_pre_opening():
-    """正文/changes 读取 + has_pre_opening 标记探测。"""
+def test_read_chapter_text_and_changes():
+    """正文/changes 读取。"""
     with tempfile.TemporaryDirectory() as d:
         proj = _mk_project(Path(d))
         ch_dir = _write_chapter(proj, 5, "正文内容五",
-                                changes={"self_eval": {"k": "v"}}, pre_opening=True)
+                                changes={"self_eval": {"k": "v"}})
         assert cc.read_chapter_text(ch_dir, 5) == "正文内容五"
         assert cc.read_changes(ch_dir, 5) == {"self_eval": {"k": "v"}}
-        assert cc.has_pre_opening(ch_dir) is True
-        # 无 pre_opening 标记
         ch_dir2 = _write_chapter(proj, 6, "六", changes=None)
-        assert cc.has_pre_opening(ch_dir2) is False
-        assert cc.read_changes(ch_dir2, 6) is None  # 无 changes 文件 → None
+        assert cc.read_changes(ch_dir2, 6) is None
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -146,15 +143,10 @@ def test_cliffhanger_resonance_overlap_score():
         assert "建木枝" in r["overlap_keywords"] and "深渊" in r["overlap_keywords"]
 
 
-def test_cliffhanger_resonance_dcas_exempt_and_missing():
-    """DCAS pre_opening / 悬念断章 → exempt 满分；缺 ending_line / 缺 prev_changes → -1 哨兵。"""
+def test_cliffhanger_resonance_exempt_and_missing():
+    """悬念断章 → exempt 满分；缺 ending_line / 缺 prev_changes → -1 哨兵。"""
     with tempfile.TemporaryDirectory() as d:
         proj = _mk_project(Path(d))
-        exempt_dir = _write_chapter(proj, 2, "x", pre_opening=True)
-        prev = {"self_eval": {"applied_style": {"ending_line": "随便", "ending_type": "钩子"}}}
-        r = cc.scan_cliffhanger_resonance(prev, "无关首段", exempt_dir)
-        assert r.get("exempt") is True and r["score"] == 1.0, f"pre_opening 应 exempt: {r}"
-        # 悬念断章 ending_type 也 exempt（即使无 pre_opening 标记）
         plain_dir = _write_chapter(proj, 3, "y")
         prev2 = {"self_eval": {"applied_style": {"ending_type": "悬念断章", "ending_line": "x"}}}
         assert cc.scan_cliffhanger_resonance(prev2, "无关", plain_dir).get("exempt") is True
@@ -175,9 +167,9 @@ def test_cliffhanger_resonance_ledger_path():
         assert r["score"] == 0.88, f"应 round(0.876,2)=0.88: {r}"
         # 缺预算字段 → -1
         assert cc.scan_cliffhanger_resonance_ledger({}, plain_dir)["score"] == -1
-        # pre_opening 目录 → exempt 满分（即使无预算字段）
-        ex_dir = _write_chapter(proj, 3, "y", pre_opening=True)
-        assert cc.scan_cliffhanger_resonance_ledger({}, ex_dir)["score"] == 1.0
+        # 悬念断章 → exempt 满分
+        rec2 = {"ending_type": "悬念断章"}
+        assert cc.scan_cliffhanger_resonance_ledger(rec2, plain_dir)["score"] == 1.0
 
 
 # ══════════════════════════════════════════════════════════════════════════
