@@ -206,6 +206,41 @@
       "_new": true,
       "issues_emitted": ["SYNTAX_TEMPLATE_OVERUSE", "THEME_OVER_EXPLAIN"]
     },
+    "scene_grounding": {
+      "layer": "cluster",
+      "script": "scene_grounding_scanner.py",
+      "doc": "[2026-06-19 R1·Turkey City White Room Syndrome] 白房间综合症/欠写检测·全系统首个查『欠写』(其余~30 scanner全查过写)·场景开头缺空间/感官接地锚点(地点/方位/天气时段/非视觉感官)·豁免承接同地+作者档极简留白·advisory·env SCENE_GROUNDING_MODE默认shadow·🔬待金标准校准·SCENE_GROUNDING_THIN绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["SCENE_GROUNDING_THIN"]
+    },
+    "interiority_mode_balance": {
+      "layer": "cluster",
+      "script": "interiority_mode_balance_scanner.py",
+      "doc": "[2026-06-19 R1·arXiv:2605.07102 SAGE/Cohn] 内心戏三态(心理叙述/直接独白/FID)失衡·单向报带引导标记的直接独白过密(他想/心说/暗道等per1k>floor)·建议部分转FID·作者档interiority_profile优先·advisory·env INTERIORITY_MODE_BALANCE_MODE默认shadow·🔬待金标准校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["INTERIORITY_MODE_IMBALANCE"]
+    },
+    "emotion_granularity": {
+      "layer": "cluster",
+      "script": "emotion_granularity_scanner.py",
+      "doc": "[2026-06-19 R1·SAGE Emotional Granularity] 情绪颗粒度粗·四大类粗情绪大词裸词频(愤怒/悲伤/高兴/害怕等)·与subtext_rescan正交(那个查引导词+情绪on-the-nose·本scanner查裸粗大词词汇颗粒度)·单向报偏高·作者档z-band优先·advisory·env EMOTION_GRANULARITY_MODE默认shadow·🔬待金标准校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["EMOTION_GRANULARITY_COARSE"]
+    },
+    "physio_cue_diversity": {
+      "layer": "cluster",
+      "script": "physio_cue_diversity_scanner.py",
+      "doc": "[2026-06-19 R1·arXiv:2509.19595 ELENA] 生理情绪线索面部偏置·对抗LLM facial bias·面部线索(眉/眼/嘴角/脸色)vs非面部(手/呼吸/肠胃/姿态)占比>floor报·样本不足不判·advisory·env PHYSIO_CUE_DIVERSITY_MODE默认shadow·🔬待金标准校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["PHYSIO_CUE_FACIAL_BIAS"]
+    },
+    "group_dialogue_balance": {
+      "layer": "cluster",
+      "script": "group_dialogue_balance_scanner.py",
+      "doc": "[2026-06-19 R1·arXiv:2603.04969 MPCEval] 群戏对话失衡/显式点名过密·对话行≥8(群戏规模)才判·『专名+说/道/问/喊』显式归属占比>floor报·建议隐式指称+主导者/反应者结构·作者档group_dialogue_profile优先·advisory·env GROUP_DIALOGUE_BALANCE_MODE默认shadow·🔬待金标准校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["GROUP_DIALOGUE_IMBALANCE"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",

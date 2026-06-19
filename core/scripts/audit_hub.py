@@ -1208,6 +1208,46 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "premature_resolution_scanner", "PREMATURE_RESOLUTION", "张力")),
+                # [2026-06-19 R1 联网调研] 白房间综合症/欠写检测(全系统首个查『欠写』·Turkey City)
+                # · 场景开头缺空间/感官接地锚点 · advisory · SCENE_GROUNDING_MODE 默认 shadow
+                ("scene_grounding",
+                 [child_python(), str(_SCRIPT_DIR / "scene_grounding_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "scene_grounding_scanner", "SCENE_GROUNDING_THIN", "风格")),
+                # [2026-06-19 R1·arXiv:2605.07102 SAGE/Cohn] 内心戏三态失衡·带标记直接独白过密(建议转FID)
+                # · advisory · INTERIORITY_MODE_BALANCE_MODE 默认 shadow
+                ("interiority_mode_balance",
+                 [child_python(), str(_SCRIPT_DIR / "interiority_mode_balance_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "interiority_mode_balance_scanner", "INTERIORITY_MODE_IMBALANCE", "风格")),
+                # [2026-06-19 R1·SAGE Emotional Granularity] 情绪颗粒度粗·四大类粗情绪大词裸词频(与subtext_rescan正交)
+                # · advisory · EMOTION_GRANULARITY_MODE 默认 shadow
+                ("emotion_granularity",
+                 [child_python(), str(_SCRIPT_DIR / "emotion_granularity_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "emotion_granularity_scanner", "EMOTION_GRANULARITY_COARSE", "风格")),
+                # [2026-06-19 R1·arXiv:2509.19595 ELENA] 生理情绪线索面部偏置·对抗LLM facial bias
+                # · advisory · PHYSIO_CUE_DIVERSITY_MODE 默认 shadow
+                ("physio_cue_diversity",
+                 [child_python(), str(_SCRIPT_DIR / "physio_cue_diversity_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "physio_cue_diversity_scanner", "PHYSIO_CUE_FACIAL_BIAS", "风格")),
+                # [2026-06-19 R1·arXiv:2603.04969 MPCEval] 群戏对话失衡·显式点名过密(建议隐式指称)
+                # · advisory · GROUP_DIALOGUE_BALANCE_MODE 默认 shadow
+                ("group_dialogue_balance",
+                 [child_python(), str(_SCRIPT_DIR / "group_dialogue_balance_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "group_dialogue_balance_scanner", "GROUP_DIALOGUE_IMBALANCE", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
