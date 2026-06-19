@@ -241,6 +241,27 @@
       "_new": true,
       "issues_emitted": ["GROUP_DIALOGUE_IMBALANCE"]
     },
+    "dispreferred_turn_shape": {
+      "layer": "cluster",
+      "script": "dispreferred_turn_shape_scanner.py",
+      "doc": "[2026-06-20 R2·会话分析PMC8504554] 非偏好回应裸拒绝检测·真人拒绝/反对带延迟token+缓冲hedge+account·AI常裸句即否=机器人感·检测对话引号内以否决词开头(不行/做不到/拒绝)且0缓冲的回合占比·dispref_total>=4才判·advisory·env DISPREFERRED_TURN_SHAPE_MODE默认shadow(真作者裸拒常态·潜在误报·金标准校准主神/剑来bare_ratio=1.0)·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["DISPREFERRED_TURN_BARE"]
+    },
+    "temporal_grounding": {
+      "layer": "cluster",
+      "script": "temporal_grounding_scanner.py",
+      "doc": "[2026-06-20 R1·真编辑实证] 时间流逝感缺失·长草稿跨多场景却缺时间推进锚点(时段/相对时间/钟点/流逝动词)=时间扁平·thin_ratio>0.7且场景>=3报·advisory·env TEMPORAL_GROUNDING_MODE默认active(5真作者thin_ratio全0.0零误报)·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["TEMPORAL_GROUNDING_THIN"]
+    },
+    "synesthesia_density": {
+      "layer": "cluster",
+      "script": "synesthesia_density_scanner.py",
+      "doc": "[2026-06-20 R2·arXiv:2110.09710 Inter-Sense] 通感/移觉密度·通感是修辞高光非常态·过用钝化效果·保守正则只抓明显跨感官借用(响亮的光/甜的风)·per_1k>1.5报·单向只报过用·advisory·env SYNESTHESIA_MODE默认active(5真作者per_1k全0零误报)·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["SYNESTHESIA_OVERUSE"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",

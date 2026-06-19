@@ -1248,6 +1248,27 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "group_dialogue_balance_scanner", "GROUP_DIALOGUE_IMBALANCE", "风格")),
+                # [2026-06-20 R2·会话分析 PMC8504554] 非偏好回应裸拒绝 · advisory · 默认 shadow(真作者裸拒常态·潜在误报)
+                ("dispreferred_turn_shape",
+                 [child_python(), str(_SCRIPT_DIR / "dispreferred_turn_shape_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "dispreferred_turn_shape_scanner", "DISPREFERRED_TURN_BARE", "风格")),
+                # [2026-06-20 R1·真编辑实证] 时间流逝感缺失 · advisory · 默认 active(5真作者thin_ratio全0.0)
+                ("temporal_grounding",
+                 [child_python(), str(_SCRIPT_DIR / "temporal_grounding_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "temporal_grounding_scanner", "TEMPORAL_GROUNDING_THIN", "风格")),
+                # [2026-06-20 R2·arXiv:2110.09710 Inter-Sense] 通感过用 · advisory · 默认 active(5真作者per_1k全0)
+                ("synesthesia_density",
+                 [child_python(), str(_SCRIPT_DIR / "synesthesia_density_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "synesthesia_density_scanner", "SYNESTHESIA_OVERUSE", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
