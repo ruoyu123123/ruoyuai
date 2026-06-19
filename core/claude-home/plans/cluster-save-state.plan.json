@@ -157,6 +157,7 @@
         "python core/scripts/scan_retention.py {project_root} --keep 5",
         "python core/scripts/self_heal_engine.py --ingest",
         "python core/scripts/self_heal_engine.py --emit-lessons",
+        "? python core/scripts/causal_verifier.py {project_root}",
         "? python core/scripts/knowledge_graph_update.py {project_root} --cluster {key}",
         "? python core/scripts/subplot_progress_update.py {project_root} --cluster {key}",
         "? python core/scripts/skill_rewrite_advisor.py {project_root}",
