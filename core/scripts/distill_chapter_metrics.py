@@ -33,8 +33,7 @@ _CH_NUM_RE = re.compile(r"第(\d+)章")
 def run(project_root: Path, overwrite: bool = False) -> int:
     raw_dir = project_root / "原文"
     if not raw_dir.is_dir():
-        print(f"[chapter_metrics] 原文/ 不存在: {raw_dir}（先跑 ingest_author_text）",
-              file=sys.stderr)
+        print(f"[chapter_metrics] 原文/ 不存在: {raw_dir}（先跑 ingest_author_text）")
         return 1
     files = sorted(raw_dir.glob("第*章.txt"),
                    key=lambda p: int(_CH_NUM_RE.search(p.stem).group(1))
@@ -66,8 +65,7 @@ def run(project_root: Path, overwrite: bool = False) -> int:
         out.write_text(json.dumps({"file": str(f), "profile": profile},
                                   ensure_ascii=False, indent=2), encoding="utf-8")
         done += 1
-    print(f"[chapter_metrics] 写 {done} 章 metrics·跳过 {skipped}（已存在）→ {dist}",
-          file=sys.stderr)
+    print(f"[chapter_metrics] 写 {done} 章 metrics·跳过 {skipped}（已存在）→ {dist}")
     return 0
 
 

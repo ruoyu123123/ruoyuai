@@ -59,8 +59,7 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
 def assemble(memory_dir: Path, output: Path) -> int:
     files = sorted(memory_dir.glob("feedback_*.md"))
     if not files:
-        print(f"[FATAL] {memory_dir} 下没有 feedback_*.md（路径错 / 非开发机？）",
-              file=sys.stderr)
+        print(f"[FATAL] {memory_dir} 下没有 feedback_*.md（路径错 / 非开发机？）")
         return 1
 
     sections = []

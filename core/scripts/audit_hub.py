@@ -721,8 +721,7 @@ def _load_waivers(waivers_path: str) -> list:
         if not code:
             continue
         if not reason:
-            print(f"  [waivers] {code} 无理由，豁免无效（豁免必带具体理由）",
-                  file=sys.stderr)
+            print(f"  [waivers] {code} 无理由，豁免无效（豁免必带具体理由）")
             continue
         # v2 cluster 化方案 Phase A hot-fix（2026-05-28）：
         # 阈值 100→300。cluster mode 涉及多场景多角色多伏笔，理由 150-280 字常见。
@@ -749,8 +748,7 @@ def _apply_waivers(all_issues: list, waivers: list) -> list:
             continue
         if issue.get("gate_level") == "hard_gate":
             # 不可豁免：即便传了理由也强制忽略
-            print(f"  [waivers] {code} 是 hard_gate，不可豁免，豁免理由已忽略",
-                  file=sys.stderr)
+            print(f"  [waivers] {code} 是 hard_gate，不可豁免，豁免理由已忽略")
             continue
         issue["waived"] = True
         issue["waive_reason"] = by_code[code]
@@ -1686,8 +1684,7 @@ def main():
     args = sys.argv[1:]
     if len(args) < 2:
         print("用法: python audit_hub.py <项目路径> <章节号> [--auto-fix] [--json] [--waivers <json路径>]"
-              " | python audit_hub.py <项目路径> --mode cluster --cluster-id <key> [--auto-fix] [--waivers ...]",
-              file=sys.stderr)
+              " | python audit_hub.py <项目路径> --mode cluster --cluster-id <key> [--auto-fix] [--waivers ...]")
         sys.exit(3)
     project_root = Path(args[0]).resolve()
     if not project_root.is_dir():

@@ -235,8 +235,6 @@ else:
 
 **CD1 — 角色剧情上下文**：本 agent 自行从 `_数据库/` 下对应 JSON 直接 Read 角色剧情数据（9 项：弧光/stress/aspects/heart_events/fate_events/clocks/storyteller/throughlines/propp）。
 
-> 注：旧的 `character_context_pack.py` 预打包脚本已于 2026-05 精简删除，统一走 agent 自读流程——多读几个 JSON 即可，无需预打包。
-
 ## 核心原则：大势已定，小势可改
 
 - **大势**（卷级弧线、卷末状态）**不可改变**

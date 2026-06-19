@@ -161,6 +161,7 @@
         "? python core/scripts/knowledge_graph_update.py {project_root} --cluster {key}",
         "? python core/scripts/subplot_progress_update.py {project_root} --cluster {key}",
         "? python core/scripts/skill_rewrite_advisor.py {project_root}",
+        "? python core/scripts/user_edit_learner.py {project_root} --last-n 10",
         "python core/scripts/step_completion_monitor.py --scan-latest --command cluster-save-state --project {project}"
       ]
     },
@@ -197,7 +198,8 @@
         "answer_artifact": "_数据库/.wal/cluster_{next_key}_user_choice.json"
       },
       "after_pause_scripts": [
-        "python core/scripts/cluster_choice_apply.py {project_root} --next-key {next_key} --choice _数据库/.wal/cluster_{next_key}_user_choice.json"
+        "python core/scripts/cluster_choice_apply.py {project_root} --next-key {next_key} --choice _数据库/.wal/cluster_{next_key}_user_choice.json",
+        "? python core/scripts/user_choice_learner.py {project_root} --chosen _数据库/.wal/cluster_{next_key}_user_choice.json --candidates _数据库/.wal/cluster_{next_key}_brief_candidates.json --source-cluster cluster_{key}"
       ],
       "skip_output_allowed": false,
       "expected_outputs": [

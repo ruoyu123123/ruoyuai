@@ -365,15 +365,12 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
     for i, profile in enumerate(candidates):
         max_tokens, mt_source = resolve_max_tokens(profile, default=default_max_tokens)
         if i == 0:
-            print(f"[gen_creative] 调用 active: {profile.name} ({profile.model})",
-                  file=sys.stderr)
-            print(f"[gen_creative] max_tokens={max_tokens} (source: {mt_source})",
-                  file=sys.stderr)
+            print(f"[gen_creative] 调用 active: {profile.name} ({profile.model})")
+            print(f"[gen_creative] max_tokens={max_tokens} (source: {mt_source})")
         else:
             print(f"\n[FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
 
-        print(f"[gen_creative] prompt: system={len(system)} chars, user={len(user)} chars",
-              file=sys.stderr)
+        print(f"[gen_creative] prompt: system={len(system)} chars, user={len(user)} chars")
 
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
         full_text = ""
@@ -405,8 +402,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
             failures.append((profile.name, reason))
             continue
 
-        print(f"\n[gen_creative] 接收完毕 ({len(full_text)} chars) via {profile.name}",
-              file=sys.stderr)
+        print(f"\n[gen_creative] 接收完毕 ({len(full_text)} chars) via {profile.name}")
         return full_text, profile
 
     raise GenModelExhaustedError(failures)
@@ -519,8 +515,7 @@ def _run_volume_arc(args) -> int:
 
     if args.dry_run:
         print("=== SYSTEM ===\n" + system + "\n\n=== USER ===\n" + user)
-        print(f"\n[dry-run] volume_arc system={len(system)}/user={len(user)} chars",
-              file=sys.stderr)
+        print(f"\n[dry-run] volume_arc system={len(system)}/user={len(user)} chars")
         return 0
 
     # 契约2：截断走续写不整发重试；契约3：parse 彻底失败 block → 非零退出
@@ -540,8 +535,7 @@ def _run_volume_arc(args) -> int:
                 label=f"gen_outline:volume_arc#{attempt}")
         except Exception as e:
             last_diag = f"gen-model 调用失败: {e}"
-            print(f"[WARN] volume_arc {last_diag}（第 {attempt}/{MAX_VOL_ARC_TRIES} 次）",
-                  file=sys.stderr)
+            print(f"[WARN] volume_arc {last_diag}（第 {attempt}/{MAX_VOL_ARC_TRIES} 次）")
             continue
         cand = lt.parse_json_loose(result.text)
         # 结构校验（顶层键存在·非内容——枚举不反向规训创作）
@@ -575,8 +569,7 @@ def _run_volume_arc(args) -> int:
                                         rhythm=args.rhythm or "",
                                         framework=args.framework or "")
         print(f"[gen_creative][volume_arc] 大势卡 {len(data.get('volumes', []))} 卷 / "
-              f"{len(data.get('major_events', []))} ME → {pm.name} + {pc.name}",
-              file=sys.stderr)
+              f"{len(data.get('major_events', []))} ME → {pm.name} + {pc.name}")
     else:
         print(json.dumps(data, ensure_ascii=False, indent=2))
     return 0
@@ -659,8 +652,7 @@ def _run_distill_reflect(args) -> int:
                 cont_msg_builder=lt.default_cont_msg, label=f"distill:reflect#{attempt}")
         except Exception as e:
             last_diag = f"gen-model 调用失败: {e}"
-            print(f"[WARN] distill_reflect {last_diag}（第 {attempt}/{MAX_REFLECT_TRIES} 次）",
-                  file=sys.stderr)
+            print(f"[WARN] distill_reflect {last_diag}（第 {attempt}/{MAX_REFLECT_TRIES} 次）")
             continue
         cand = (result.text or "").strip()
         # 文本校验（非 JSON 顶层键）：非空 + 含必备小节（容 2 节缺失·过半缺=结构破损）
@@ -672,8 +664,7 @@ def _run_distill_reflect(args) -> int:
         print(f"[WARN] distill_reflect 输出结构破损·{last_diag}"
               f"（第 {attempt}/{MAX_REFLECT_TRIES} 次·重试中）", file=sys.stderr)
     if md is None:
-        print(f"[ERROR] distill_reflect {MAX_REFLECT_TRIES} 次重试后仍 block·{last_diag}",
-              file=sys.stderr)
+        print(f"[ERROR] distill_reflect {MAX_REFLECT_TRIES} 次重试后仍 block·{last_diag}")
         return 1
     out = Path(args.out) if args.out else (project_root / f"skill_v{version}.md")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -776,8 +767,7 @@ def main():
 
     elif args.mode in ('voice_sample', 'world_entry'):
         print(f"[ERROR] mode '{args.mode}' 是 v2 placeholder，待实现", file=sys.stderr)
-        print(f"  当前请用 Claude sub-agent 流程替代（distill-character / worldbuild）",
-              file=sys.stderr)
+        print(f"  当前请用 Claude sub-agent 流程替代（distill-character / worldbuild）")
         sys.exit(2)
 
     if args.dry_run:
@@ -785,13 +775,11 @@ def main():
         print(system)
         print("\n=== USER ===")
         print(user)
-        print(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars",
-              file=sys.stderr)
+        print(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars")
         try:
             loader = GenModelLoader()
             p = loader.get_active_profile()
-            print(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})",
-                  file=sys.stderr)
+            print(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})")
         except GenModelConfigError as e:
             print(f"[dry-run] [WARN] active profile 未就绪: {e}", file=sys.stderr)
         return

@@ -371,13 +371,11 @@ def save_backtest_state(author_dir: Path, res: dict) -> Path | None:
     红线：**只在收敛时**落盘——发散/不收敛绝不持久 Δ（否则 active 会放大误判·违反北极星⑤）。
     返回写入路径或 None（未落盘）。"""
     if not res.get("converged"):
-        print(f"[PID] 回测未收敛（final_fpr={res.get('final_fpr')}）→ 不落 state（保守拒绝）",
-              file=sys.stderr)
+        print(f"[PID] 回测未收敛（final_fpr={res.get('final_fpr')}）→ 不落 state（保守拒绝）")
         return None
     state = res.get("_state")
     if not isinstance(state, dict) or not state.get("theta_delta"):
-        print("[PID] 回测收敛但无 theta_delta（FPR 已 0 / 全落死区）→ 无 Δ 可落",
-              file=sys.stderr)
+        print("[PID] 回测收敛但无 theta_delta（FPR 已 0 / 全落死区）→ 无 Δ 可落")
         return None
     # 物理隔离复核：落盘前再过一遍白名单（绝不持久非被控键）。
     state["theta_delta"] = {k: v for k, v in state["theta_delta"].items()
@@ -390,8 +388,7 @@ def save_backtest_state(author_dir: Path, res: dict) -> Path | None:
     state["updated_at"] = datetime.now(timezone.utc).isoformat()
     save_state(Path(author_dir), state)
     p = _state_path(Path(author_dir))
-    print(f"[PID] 已落 per-作者 state → {p}（theta_delta={state['theta_delta']}）",
-          file=sys.stderr)
+    print(f"[PID] 已落 per-作者 state → {p}（theta_delta={state['theta_delta']}）")
     return p
 
 

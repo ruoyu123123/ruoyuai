@@ -308,8 +308,7 @@ def _load_plan(path: Path, *, for_write: bool = False) -> dict:
                 f"  （legacy 旧式 sha256·写路径不信任无密钥盖章[可被公开重算伪造]·"
                 f"合法老 plan 跑 `plan_tracker.py reattest <plan_id>` 升级 HMAC）")
         # 读路径 tolerant：自动迁移 HMAC（观测平滑·legit 老 plan 升级·不破坏 get_plan/监控/GUI）
-        print(f"[plan_tracker] ℹ️ 旧式 sha256 attestation 自动迁移为 HMAC：{path}",
-              file=sys.stderr)
+        print(f"[plan_tracker] ℹ️ 旧式 sha256 attestation 自动迁移为 HMAC：{path}")
         _save_plan(path, plan)
     elif state == "unattested":
         # 2026-06-17 安全修复（HMAC #4）：unattested=无 _attestation 字段 → 删 _attestation 即可绕过
@@ -470,8 +469,7 @@ def create_plan(
     """创建一个 plan，返回 plan_id。"""
     if command not in KNOWN_COMMANDS:
         # 不强制，但给出提示——允许未来扩展新命令
-        print(f"[plan_tracker] 警告：未知命令 '{command}'，已知：{KNOWN_COMMANDS}",
-              file=sys.stderr)
+        print(f"[plan_tracker] 警告：未知命令 '{command}'，已知：{KNOWN_COMMANDS}")
 
     # v17.5 修复：若 chapter 未指定但 key 形如 'ch001' / 'ch1' / 'ch_001'，自动解析
     if chapter is None and key:

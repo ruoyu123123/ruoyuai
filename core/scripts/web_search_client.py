@@ -197,8 +197,7 @@ def main(argv=None) -> int:
         results = search(args.query, max_results=args.max, provider=args.provider)
     except SearchKeyMissing as e:
         print(json.dumps({"error": "search_key_missing", "detail": str(e),
-                          "fallback": "static_template"}, ensure_ascii=False),
-              file=sys.stderr)
+                          "fallback": "static_template"}, ensure_ascii=False))
         return 3                         # 降级信号（调用方走静态 SOP 模板）
     except (SearchError, ValueError) as e:
         print(json.dumps({"error": "search_failed", "detail": str(e)},

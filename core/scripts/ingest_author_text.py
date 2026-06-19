@@ -86,13 +86,11 @@ def ingest(project_root: Path, source: Path, overwrite: bool = False) -> int:
     raw_dir = project_root / "原文"
     existing = list(raw_dir.glob("*.txt")) if raw_dir.is_dir() else []
     if existing and not overwrite:
-        print(f"[ingest] 原文/ 已有 {len(existing)} 章且未 --overwrite → 跳过（防毁已有库）",
-              file=sys.stderr)
+        print(f"[ingest] 原文/ 已有 {len(existing)} 章且未 --overwrite → 跳过（防毁已有库）")
         return 0
     chapters = split_chapters(raw)
     if not chapters:
-        print("[ingest] 未切出任何章（章标题正则未命中·检查源文本格式「第N章」）",
-              file=sys.stderr)
+        print("[ingest] 未切出任何章（章标题正则未命中·检查源文本格式「第N章」）")
         return 2
     # 狩猎修：多卷重新编号的网文（每卷都从第1章起）章号重复 → 同名互覆静默丢大段语料。
     # 检测到重复 → 按出现顺序全局重排 1..N（蒸馏只关心连续语料·不关心原始卷内编号）。

@@ -145,8 +145,7 @@ def cmd_parse(root: Path, ch: int) -> int:
         return 2
     changes, strategy = parse_changes(root, ch)
     if changes is None:
-        logger.info(f"[PARSE] CHANGES 解析失败（无 _changes.json 且旧稿无 CHANGES 段），需要 AI agent 兜底",
-              file=sys.stderr)
+        logger.info(f"[PARSE] CHANGES 解析失败（无 _changes.json 且旧稿无 CHANGES 段），需要 AI agent 兜底")
         return 1
     out = root / "_数据库" / ".wal" / f"第{ch}章_parsed.json"
     save_json(out, {"strategy": strategy, "changes": changes})
@@ -1009,8 +1008,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
             logger.info(f"[auto-post-reflect-cluster] step 1/3 merge-reflection OK ({refl_path.name})")
             steps_ran += 1
         else:
-            logger.info(f"[auto-post-reflect-cluster] step 1/3 merge-reflection FAIL: {(r.stderr or '')[:200]}",
-                  file=sys.stderr)
+            logger.info(f"[auto-post-reflect-cluster] step 1/3 merge-reflection FAIL: {(r.stderr or '')[:200]}")
             steps_skipped += 1
     else:
         logger.info(f"[auto-post-reflect-cluster] step 1/3 跳过：cluster reflection 报告不存在"
@@ -1028,8 +1026,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
             logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest OK ({audit_path.name}, rc={r.returncode})")
             steps_ran += 1
         else:
-            logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest FAIL: {(r.stderr or '')[:200]}",
-                  file=sys.stderr)
+            logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest FAIL: {(r.stderr or '')[:200]}")
             steps_skipped += 1
     else:
         logger.info(f"[auto-post-reflect-cluster] step 2/3 跳过：cluster audit 报告不存在"
@@ -1045,8 +1042,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
         logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring OK (rc={r.returncode})")
         steps_ran += 1
     else:
-        logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring FAIL: {(r.stderr or '')[:200]}",
-              file=sys.stderr)
+        logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring FAIL: {(r.stderr or '')[:200]}")
         steps_skipped += 1
 
     logger.info(f"[auto-post-reflect-cluster] {cluster_key} 完成 {steps_ran}/3 步（跳过 {steps_skipped}）")

@@ -615,8 +615,7 @@ def _score_pair(replica_path, ref_path) -> float | None:
     try:
         import style_evaluator as _se
     except Exception as e:  # pragma: no cover - 环境缺 numpy/scipy 时降级
-        print(f"[WARN] 无法 import style_evaluator（{e}）· 改用 --*-report / --*-sfs 传分",
-              file=sys.stderr)
+        print(f"[WARN] 无法 import style_evaluator（{e}）· 改用 --*-report / --*-sfs 传分")
         return None
     try:
         ref_text = Path(ref_path).read_text(encoding="utf-8")
@@ -659,8 +658,7 @@ def _track_holdout(args, report) -> None:
     永不阻断（distill_track 本身 advisory · 失败仅 warn）。
     """
     if not _HAVE_DT:
-        print("[WARN] distill_track 不可用 · 跳过 --track（落差 report 仍已写出）",
-              file=sys.stderr)
+        print("[WARN] distill_track 不可用 · 跳过 --track（落差 report 仍已写出）")
         return
     det = report.get("detection", {})
     holdout_scores = report.get("holdout_scores") or []
@@ -728,12 +726,10 @@ def cmd_record(args) -> int:
         print("[NOTE] HOLDOUT_SFS_MODE=off · 跳过留出落差计算（逃生口）", file=sys.stderr)
         return 0
     if not tuning:
-        print("[ERROR] 无 tuning SFS 分：用 --tuning-sfs X 或 --tuning-report t.json",
-              file=sys.stderr)
+        print("[ERROR] 无 tuning SFS 分：用 --tuning-sfs X 或 --tuning-report t.json")
         return 1  # 用法错（参数缺失 · 非门禁阻断）
     if not holdout:
-        print("[NOTE] 无 holdout SFS 分 · 无法算泛化落差（先跑 holdout cluster 复刻再传分）",
-              file=sys.stderr)
+        print("[NOTE] 无 holdout SFS 分 · 无法算泛化落差（先跑 holdout cluster 复刻再传分）")
 
     report = build_holdout_report(
         tuning, holdout, skill_version=args.skill_version,
@@ -800,8 +796,7 @@ def _track_ablation(args, entry) -> None:
     永不阻断（失败仅 warn · advisory 层）。distill_track 不可用 → 跳过（消融行不影响主流程）。
     """
     if not _HAVE_DT:
-        print("[WARN] distill_track 不可用 · 跳过挂 ledger（消融 entry 仍打印/可单独落盘）",
-              file=sys.stderr)
+        print("[WARN] distill_track 不可用 · 跳过挂 ledger（消融 entry 仍打印/可单独落盘）")
         return
     ledger = _dt.load_ledger(Path(args.project))
     ledger = _dt.append_entry(ledger, entry)
@@ -821,12 +816,10 @@ def cmd_ablation_record(args) -> int:
         print("[NOTE] HOLDOUT_SFS_MODE=off · 跳过消融记录（逃生口）", file=sys.stderr)
         return 0
     if not args.baseline_sfs:
-        print("[ERROR] 无 baseline SFS 分：用 --baseline-sfs X（同一 cluster 多 seed）",
-              file=sys.stderr)
+        print("[ERROR] 无 baseline SFS 分：用 --baseline-sfs X（同一 cluster 多 seed）")
         return 1
     if not args.ablated_sfs:
-        print("[NOTE] 无 ablated SFS 分 · 无法算消融效应（先跑 ABLATE_DIMENSIONS=该维 复刻再传分）",
-              file=sys.stderr)
+        print("[NOTE] 无 ablated SFS 分 · 无法算消融效应（先跑 ABLATE_DIMENSIONS=该维 复刻再传分）")
     git_sha = (args.git_sha or (_dt.current_git_sha(Path(args.project))
                                 if _HAVE_DT else None))
     entry = build_ablation_entry(
@@ -864,8 +857,7 @@ def cmd_cost_estimate(args) -> int:
           f"墙钟约 {est['wall_hours']} 小时")
     if est["over_budget"]:
         print(f"     [ADVISORY · 超预算] 墙钟 {est['wall_hours']}h > 预算 {args.budget_hours}h ·"
-              "未跑维度默认保持 shadow（不拍脑袋切 active）· 可用 --proxy 短场景降本",
-              file=sys.stderr)
+              "未跑维度默认保持 shadow（不拍脑袋切 active）· 可用 --proxy 短场景降本")
     if args.json:
         print(json.dumps(est, ensure_ascii=False))
     return 0
@@ -880,8 +872,7 @@ def cmd_split(args) -> int:
     print(f"     tuning  ({len(res['tuning'])}): {res['tuning']}")
     print(f"     holdout ({len(res['holdout'])}): {res['holdout']}")
     if not res["holdout"]:
-        print("     [NOTE] holdout 为空（池太小 / 无可留出）· 此时无法量泛化落差",
-              file=sys.stderr)
+        print("     [NOTE] holdout 为空（池太小 / 无可留出）· 此时无法量泛化落差")
     if args.json:
         print(json.dumps(res, ensure_ascii=False))
     return 0

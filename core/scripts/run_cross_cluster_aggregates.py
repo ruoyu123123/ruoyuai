@@ -243,8 +243,7 @@ def main():
               + ", ".join(f["scanner"] for f in summary["findings"]))
     if summary["errors"]:
         crash_names = ", ".join(e["scanner"] for e in summary["errors"])
-        print(f"[CRASH] {len(summary['errors'])} 个 scanner 真崩溃（不打断流水线，但已记录）: {crash_names}",
-              file=sys.stderr)
+        print(f"[CRASH] {len(summary['errors'])} 个 scanner 真崩溃（不打断流水线，但已记录）: {crash_names}")
     # 2026-05-29 复审复修 [C4/SC-2]：本 wrapper 是「跑 + 报告」器，**恒 exit 0 不阻断流水线**
     # （「失败不中断流水线」铁律 + plan 调用处无 || true）。崩溃信号通过上面的 [CRASH] stderr
     # 大声上报（不再像旧版静默吞），但绝不因 scanner 崩溃让本脚本 exit 非 0 而中断 cluster-save-state。

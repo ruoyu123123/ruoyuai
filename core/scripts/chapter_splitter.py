@@ -523,8 +523,7 @@ def main():
     # 本 DCAS 脚本仅暴露参数接口，DCAS 双章模式不做倒叙重组）
     if narrative_mode == "in_medias_res":
         print(f"[INFO] narrative_mode=in_medias_res 已识别 ·"
-              f" DCAS 双章模式不实现倒叙重组，建议改用 ECAS 模式 + novel-chapter-splitter agent",
-              file=sys.stderr)
+              f" DCAS 双章模式不实现倒叙重组，建议改用 ECAS 模式 + novel-chapter-splitter agent")
 
     # 找草稿正文文件（v18：cio 兼容 4 布局 + 旧平铺）
     draft_path = cio.find_body_file(project_root, ch)

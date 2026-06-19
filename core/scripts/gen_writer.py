@@ -1441,14 +1441,12 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         if i == 0:
             logger.info(f" 调用 active profile: {profile.name} "
                   f"({profile.model} @ {profile.base_url})")
-            logger.info(f" max_tokens={max_tokens} (source: {mt_source})",
-                  file=sys.stderr)
+            logger.info(f" max_tokens={max_tokens} (source: {mt_source})")
             logger.info(f" temperature={profile.temperature}")
         else:
             logger.info(f"\n[FALLBACK] -> {profile.name} ({profile.model})")
 
-        logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars",
-              file=sys.stderr)
+        logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars")
 
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url,
                         timeout=GEN_MODEL_TIMEOUT)
@@ -1473,8 +1471,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
             cont_rounds = 0
             while finish_reason == "length" and cont_rounds < 3:
                 cont_rounds += 1
-                logger.info(f"\n[gen_writer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…",
-                      file=sys.stderr)
+                logger.info(f"\n[gen_writer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…")
                 cont_text, finish_reason = _stream_once(
                     client, profile, system, user, max_tokens, prior_assistant=full_text)
                 full_text += cont_text
@@ -1513,14 +1510,12 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                     break
                 rounds += 1
                 logger.info(f"\n[gen_writer] ⚠️ 正文 {body_cjk} CJK < 软下限 {min_cjk}，"
-                      f"内容续写第 {rounds}/{FREESTYLE_EXPAND_MAX_ROUNDS} 轮（展开剩余场景·非截断）…",
-                      file=sys.stderr)
+                      f"内容续写第 {rounds}/{FREESTYLE_EXPAND_MAX_ROUNDS} 轮（展开剩余场景·非截断）…")
                 try:
                     cont_text, _fr = _stream_once(client, profile, system, user, max_tokens,
                                                   prior_assistant=accum_body, cont_reason="expand")
                 except Exception as e:
-                    logger.info(f" expand 续写第 {rounds} 轮失败（保留已有正文）: {str(e)[:150]}",
-                          file=sys.stderr)
+                    logger.info(f" expand 续写第 {rounds} 轮失败（保留已有正文）: {str(e)[:150]}")
                     break
                 cont_body, cont_changes = _raw_split(cont_text)
                 inc = cio.count_cjk(cont_body)
@@ -1529,8 +1524,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                 if cont_changes:
                     last_changes = cont_changes
                 if inc < FREESTYLE_EXPAND_MIN_GAIN:
-                    logger.info(f" 续写增量仅 {inc} CJK（模型已无更多内容）→ 停止兜底，避免注水",
-                          file=sys.stderr)
+                    logger.info(f" 续写增量仅 {inc} CJK（模型已无更多内容）→ 停止兜底，避免注水")
                     break
             # expand 各轮被要求"先别写 CHANGES" → 收尾时若仍缺 CHANGES，追加一次"只补 CHANGES"请求
             # （否则下游 CHANGES_MISSING hard_gate）。仅在确实发生过 expand 续写时才补。
@@ -1545,15 +1539,13 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                     elif "{" in chg_text:
                         last_changes = "```json\n" + chg_text.strip() + "\n```"
                 except Exception as e:
-                    logger.info(f" 补 CHANGES 失败（下游 normalize 兜底）: {str(e)[:120]}",
-                          file=sys.stderr)
+                    logger.info(f" 补 CHANGES 失败（下游 normalize 兜底）: {str(e)[:120]}")
             full_text = accum_body + ("\n\n" + last_changes if last_changes else "")
             logger.info(f"\n[gen_writer] 内容兜底完成：正文 {cio.count_cjk(accum_body)} CJK（expand {rounds} 轮）"
                   f"· CHANGES={'有' if last_changes else '无'}")
 
         # 成功
-        logger.info(f"\n[gen_writer] 接收完毕 ({len(full_text)} chars) via {profile.name}",
-              file=sys.stderr)
+        logger.info(f"\n[gen_writer] 接收完毕 ({len(full_text)} chars) via {profile.name}")
         return full_text, profile
 
     # 全链失败
@@ -1612,15 +1604,13 @@ def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
         active0 = candidates[0]
         orig_temp = active0.temperature
         active0.temperature = temp
-        logger.info(f"\n[gen_writer][best-of-N] 生成候选 {i+1}/{n} (temperature={temp})",
-              file=sys.stderr)
+        logger.info(f"\n[gen_writer][best-of-N] 生成候选 {i+1}/{n} (temperature={temp})")
         try:
             reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk)
             drafts.append({"idx": i, "reply": reply, "profile": used_profile,
                            "temperature": temp, "error": None})
         except GenModelExhaustedError as e:
-            logger.info(f"[best-of-N] 候选 {i+1} 生成失败（跳过）: {str(e)[:150]}",
-                  file=sys.stderr)
+            logger.info(f"[best-of-N] 候选 {i+1} 生成失败（跳过）: {str(e)[:150]}")
             drafts.append({"idx": i, "reply": None, "profile": None,
                            "temperature": temp, "error": str(e)[:200]})
         finally:
@@ -1807,8 +1797,7 @@ def split_text_and_changes(reply: str) -> tuple:
         _sep = re.search(r'\n\s*-{3,}\s*\n', body[:2500])
         if _sep:
             body = body[_sep.end():].lstrip()
-            logger.info(" [strip] 剥离模型漏出的『创作说明/推理概要』元前言（正文前 + --- 分隔）",
-                  file=sys.stderr)
+            logger.info(" [strip] 剥离模型漏出的『创作说明/推理概要』元前言（正文前 + --- 分隔）")
 
     # [2026-06-06] 剥离 reasoning/对话型模型（pro-preview 等）漏出的「破壁助手尾注」：
     # 正文末尾蹦出『请审阅。…请告诉我，我将为你输出…CHANGES JSON』类对读者喊话——
@@ -1824,8 +1813,7 @@ def split_text_and_changes(reply: str) -> tuple:
         _lines.pop()
     if _stripped_tail:
         body = '\n'.join(_lines).rstrip()
-        logger.info(" [strip] 剥离 reasoning 模型破壁助手尾注（请审阅/请告诉我/CHANGES JSON 类）",
-              file=sys.stderr)
+        logger.info(" [strip] 剥离 reasoning 模型破壁助手尾注（请审阅/请告诉我/CHANGES JSON 类）")
 
     # DCAS 模式（用户偏好）：如果 gen-model 仍误带「第 N 章 标题」分章标记，stderr 警告
     # 不主动删除（让 splitter 决定怎么处理），只提示 prompt 没生效
@@ -1923,8 +1911,7 @@ def enforce_short_paragraphs(body: str, author_para_mean: float = None, author_s
             out.append(para)  # 单句长段·不切（防切坏语法·小世界长句允许）
     new_body = "\n\n".join(out)
     if changed:
-        logger.info(f" 短段约束：切分 {changed} 个过长非对话段（阈值 {threshold:.0f} 字·作者段长基线 {base:.1f}）",
-              file=sys.stderr)
+        logger.info(f" 短段约束：切分 {changed} 个过长非对话段（阈值 {threshold:.0f} 字·作者段长基线 {base:.1f}）")
     return new_body
 
 
@@ -2025,8 +2012,7 @@ def run_scanners(draft_path: Path) -> dict:
             results[sc] = {'verdict': d.get('verdict'), 'violations_count': d.get('violations_count')}
         except Exception as e:
             # v27 修复：静默 except 加日志（之前完全静默吞错·debug 困难）
-            logger.info(f"  [run_scanners] {sc} 输出 JSON 解析失败 ({e})·exit={r.returncode}·stderr_preview={(r.stderr or '')[:150]}",
-                  file=sys.stderr)
+            logger.info(f"  [run_scanners] {sc} 输出 JSON 解析失败 ({e})·exit={r.returncode}·stderr_preview={(r.stderr or '')[:150]}")
             results[sc] = {'verdict': 'ERROR', 'stdout_preview': r.stdout[:300]}
     return results
 
@@ -2055,16 +2041,13 @@ def main():
     ch_start = args.chapter_start
     if ch_start is None:
         ch_start = _infer_cluster_start_ch(project_root, args.cluster)
-        logger.info(f" [v27 freestyle] 推导 ch_start={ch_start} (cluster_{args.cluster:03d})",
-              file=sys.stderr)
+        logger.info(f" [v27 freestyle] 推导 ch_start={ch_start} (cluster_{args.cluster:03d})")
 
     # 模式判断 + 提示
     if args.chapter_end is None:
-        logger.info(f" [v27 freestyle 模式] writer 不知目标章数 · splitter 按字数切 · 章数自然涌现",
-              file=sys.stderr)
+        logger.info(f" [v27 freestyle 模式] writer 不知目标章数 · splitter 按字数切 · 章数自然涌现")
     else:
-        logger.info(f" [v26 兼容模式] ch_start={ch_start} ch_end={args.chapter_end} target_cjk={args.target_cjk}",
-              file=sys.stderr)
+        logger.info(f" [v26 兼容模式] ch_start={ch_start} ch_end={args.chapter_end} target_cjk={args.target_cjk}")
 
     # dry-run 模式不需要 active profile
     if args.dry_run:
@@ -2074,15 +2057,13 @@ def main():
         logger.debug(system)  # OK: print - dry-run 模式调试输出
         logger.info("\n=== USER PROMPT ===")
         logger.debug(user)  # OK: print - dry-run 模式调试输出
-        logger.info(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars",
-              file=sys.stderr)
+        logger.info(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars")
         logger.info(f"[dry-run] snippet_seed: {seed_trace}")
         # 显示当前 active profile 信息
         try:
             loader = GenModelLoader()
             p = loader.get_active_profile()
-            logger.info(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})",
-                  file=sys.stderr)
+            logger.info(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})")
         except GenModelConfigError as e:
             logger.info(f"[dry-run] [WARN] active profile 未就绪: {e}")
         return
@@ -2093,8 +2074,7 @@ def main():
         active = loader.get_active_profile()  # 校验 active 就绪
     except GenModelConfigError as e:
         logger.error(f" {e}")
-        logger.info("  跑 python core/scripts/gen_model.py list / switch 修复",
-              file=sys.stderr)
+        logger.info("  跑 python core/scripts/gen_model.py list / switch 修复")
         sys.exit(2)
 
     logger.info(f" 加载配置: {loader.env_path}")
@@ -2117,18 +2097,15 @@ def main():
     # 治 pro 等简洁倾向模型单 cluster 偏短（实测 3650 vs 健康 12000-25000）。
     min_cjk = FREESTYLE_MIN_CJK if args.chapter_end is None else None
     if min_cjk:
-        logger.info(f" [v27 freestyle] 正文长度软下限 min_cjk={min_cjk}（偏短→expand 续写兜底）",
-              file=sys.stderr)
+        logger.info(f" [v27 freestyle] 正文长度软下限 min_cjk={min_cjk}（偏短→expand 续写兜底）")
     best_of_n_trace = None
     try:
         if n >= 2:
-            logger.info(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优",
-                  file=sys.stderr)
+            logger.info(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优")
             reply, used_profile, best_of_n_trace = best_of_n_pipeline(
                 loader, system, user, project_root, n, min_cjk=min_cjk)
         else:
-            logger.info(f"[best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）",
-                  file=sys.stderr)
+            logger.info(f"[best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）")
             reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk)
     except GenModelExhaustedError as e:
         logger.info(f"\n[ERROR] {e}")
@@ -2140,8 +2117,7 @@ def main():
     # 非对话段·格式层·不动 ！？）。流水账靠模型自身 + prose_rhythm / reading-reflector advisory 兜。
     if min_cjk is not None:
         _auth_sent, _auth_para, _auth_single = _read_author_rhythm(project_root)
-        logger.info(f" 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}",
-              file=sys.stderr)
+        logger.info(f" 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}")
         body = enforce_short_paragraphs(body, author_para_mean=_auth_para, author_single=_auth_single)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
                                   ch_start, args.chapter_end, used_profile,
@@ -2162,22 +2138,17 @@ def main():
             elif cjk > target_max:
                 logger.info(f"\n[WARN] 字数 {cjk} > 目标上限 {target_max}")
             else:
-                logger.info(f"\n[OK] 字数 {cjk} 在目标范围 [{target_min}, {target_max}]",
-                      file=sys.stderr)
+                logger.info(f"\n[OK] 字数 {cjk} 在目标范围 [{target_min}, {target_max}]")
         except (ValueError, AttributeError):
-            logger.info(f"\n[gen_writer] target_cjk 解析失败，跳过字数校验: {args.target_cjk}",
-                  file=sys.stderr)
+            logger.info(f"\n[gen_writer] target_cjk 解析失败，跳过字数校验: {args.target_cjk}")
     else:
         # v27 freestyle：软提示（splitter 健康区间）
         if cjk < 8000:
-            logger.info(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏短 · 切 3 章可能不够（splitter 可能从下个 cluster 补料）",
-                  file=sys.stderr)
+            logger.info(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏短 · 切 3 章可能不够（splitter 可能从下个 cluster 补料）")
         elif cjk > 30000:
-            logger.info(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏长 · splitter 会切成 7+ 章",
-                  file=sys.stderr)
+            logger.info(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏长 · splitter 会切成 7+ 章")
         else:
-            logger.info(f"\n[v27 freestyle] [OK] cjk={cjk} 健康区间 8000-30000",
-                  file=sys.stderr)
+            logger.info(f"\n[v27 freestyle] [OK] cjk={cjk} 健康区间 8000-30000")
 
 
 if __name__ == '__main__':

@@ -166,8 +166,7 @@ def run(project_root: Path, *, overwrite: bool = False, max_clusters: int | None
                 encoding="utf-8")
         done += 1
     _aggregate_author_profile(project_root)
-    print(f"[surface_runner] {done} cluster 表层蒸馏完成（surface + continuity + 逐章投影）",
-          file=sys.stderr)
+    print(f"[surface_runner] {done} cluster 表层蒸馏完成（surface + continuity + 逐章投影）")
     return 0
 
 
@@ -243,8 +242,7 @@ def _aggregate_author_profile(project_root: Path):
         existing["_raw_vs_ai_observations"] = vs_ai_all
     profile_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2),
                             encoding="utf-8")
-    print(f"[surface_runner] 作者风格.json 初版聚合（{len(surfaces)} surface）",
-          file=sys.stderr)
+    print(f"[surface_runner] 作者风格.json 初版聚合（{len(surfaces)} surface）")
 
 
 def main():

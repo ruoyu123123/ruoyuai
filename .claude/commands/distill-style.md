@@ -624,11 +624,11 @@ EvolveR (arxiv 2510.16079) offline self-distillation 闭环。
 |---|---|---|
 | 1.5 arc聚合 | `cluster_segmenter.py` + `arc_aggregator.py` | `cluster_index.json` / `arc_templates/` |
 | 2 chapter复刻 | `distill_replicate.py --mode chapter` | `复刻测试/vN_roundM/` |
-| 3 SFS对比 | `distill_replicate.py` + `sfs_scorer.py --multi-ref-from-dir` | SFS score + 对比报告 |
+| 3 SFS对比 | `distill_replicate.py` + `style_evaluator.py --multi-ref-from-dir` | SFS score + 对比报告 |
 | 4 修正 | 主代理 Edit skill | `skill_vN+1.md` |
 | 5 cluster终验 | `distill_replicate.py --mode cluster` | `cluster_<id>_replica.txt` |
 | 6 出货+回灌 | `distill_finalize_verify.py --strict` | `作者风格_FINAL.json` + `skill_FINAL.md` |
-| 6.5 教训沉淀 | `lesson_extractor.py` | 更新 `distill-style-lessons.md` |
+| 6.5 教训沉淀 | 主代理直接总结沉淀到 `distill-style-lessons.md` | 更新经验库 |
 | ~~6.7~~ | ~~已删除·SkillOpt 收编~~ | — |
 
 **详细维度说明**已程序化到 `core/scripts/style_profile_extractor.py` / `consolidate_author_profile.py`。

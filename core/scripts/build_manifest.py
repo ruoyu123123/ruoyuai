@@ -592,8 +592,7 @@ class DatabaseScanner:
             try:
                 ml = importlib.import_module("memory_layer")
             except ImportError:
-                print("[build_manifest] WARN memory_layer 不可导入·记忆注入跳过",
-                      file=sys.stderr)
+                print("[build_manifest] WARN memory_layer 不可导入·记忆注入跳过")
                 return []
             mem = ml.MemoryLayer(self.root, self.ch)
             plan = self.current_scene() or {}
@@ -610,8 +609,7 @@ class DatabaseScanner:
             try:
                 rag = importlib.import_module("rag_retriever")
             except ImportError:
-                print("[build_manifest] WARN rag_retriever 不可导入·RAG 注入跳过",
-                      file=sys.stderr)
+                print("[build_manifest] WARN rag_retriever 不可导入·RAG 注入跳过")
                 return []
             return rag.retrieve_tfidf(self.root, self.ch, top_k)
         except Exception:
@@ -2628,8 +2626,7 @@ def _collect_author_style_fingerprint(s: "DatabaseScanner") -> dict | None:
         pass
     if mode == "shadow":
         print(f"[SHADOW] author_style_fingerprint: {len(fp['directives'])} 条指令 "
-              f"(source={fp.get('source')}, n={fp.get('n_chapters')}) — 不注入 manifest",
-              file=sys.stderr)
+              f"(source={fp.get('source')}, n={fp.get('n_chapters')}) — 不注入 manifest")
         return None  # 影子：不注入 → 零回归
     return fp  # active：注入 writer
 
@@ -2751,8 +2748,7 @@ def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
     except Exception:
         pass
     if mode == "shadow":
-        print(f"[SHADOW] author_rhythm_signature: {len(directives)} 条节奏指令 — 不注入 manifest",
-              file=sys.stderr)
+        print(f"[SHADOW] author_rhythm_signature: {len(directives)} 条节奏指令 — 不注入 manifest")
         return None
     return payload
 
@@ -2803,8 +2799,7 @@ def _collect_knowledge_gap_directives(s: "DatabaseScanner") -> dict | None:
     except Exception:
         pass
     if mode == "shadow":
-        print(f"[SHADOW] knowledge_gap_signature: {len(directives)} 条信息差指令 — 不注入 manifest",
-              file=sys.stderr)
+        print(f"[SHADOW] knowledge_gap_signature: {len(directives)} 条信息差指令 — 不注入 manifest")
         return None
     return payload
 
@@ -2853,8 +2848,7 @@ def _collect_narrative_function_sequence(s: "DatabaseScanner") -> dict | None:
     except Exception:
         pass
     if mode == "shadow":
-        print(f"[SHADOW] narrative_function_sequence: {len(directives)} 条结构骨指令 — 不注入 manifest",
-              file=sys.stderr)
+        print(f"[SHADOW] narrative_function_sequence: {len(directives)} 条结构骨指令 — 不注入 manifest")
         return None
     return payload
 
@@ -2990,8 +2984,7 @@ def _collect_genre_pack_directives(s: "DatabaseScanner") -> dict | None:
     except Exception:
         pass
     if mode == "shadow":
-        print(f"[SHADOW] genre_pack({genre}): {len(directives)} 条题材工艺 — 不注入 manifest",
-              file=sys.stderr)
+        print(f"[SHADOW] genre_pack({genre}): {len(directives)} 条题材工艺 — 不注入 manifest")
         return None
     return payload
 

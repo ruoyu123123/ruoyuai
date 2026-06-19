@@ -316,8 +316,7 @@ def cmd_record(args) -> int:
         print("[ERROR] 没有 SFS 分：用 --sfs X [--sfs Y ...] 或 --from-report r.json", file=sys.stderr)
         return 1  # 用法错（非门禁阻断·是参数缺失）
     if len(scores) < 2:
-        print("[NOTE] 仅 1 趟分·方差=0·容差带退化到 abs_floor。论文建议 ≥3 趟以可靠估噪声。",
-              file=sys.stderr)
+        print("[NOTE] 仅 1 趟分·方差=0·容差带退化到 abs_floor。论文建议 ≥3 趟以可靠估噪声。")
 
     git_sha = args.git_sha or current_git_sha(project)
     entry = build_entry(

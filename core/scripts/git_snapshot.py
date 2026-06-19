@@ -39,8 +39,7 @@ def snapshot(project_root: Path, message: str) -> int:
         # 项目还没 init git（init_project 会建·旧项目可能没有）→ 安静初始化
         r = _run(["git", "init"], project_root)
         if r.returncode != 0:
-            print(f"[git_snapshot] git init 失败·跳过: {r.stderr.strip()[:120]}",
-                  file=sys.stderr)
+            print(f"[git_snapshot] git init 失败·跳过: {r.stderr.strip()[:120]}")
             return 0
     # 本地身份兜底（不动全局 config）
     for k, v in (("user.name", "ruoyuai"), ("user.email", "ruoyuai@local")):
@@ -53,8 +52,7 @@ def snapshot(project_root: Path, message: str) -> int:
         return 0
     r = _run(["git", "commit", "-m", message], project_root)
     if r.returncode != 0:
-        print(f"[git_snapshot] commit 失败: {(r.stderr or r.stdout).strip()[:160]}",
-              file=sys.stderr)
+        print(f"[git_snapshot] commit 失败: {(r.stderr or r.stdout).strip()[:160]}")
         return 1
     print(f"[git_snapshot] 已快照: {message}", file=sys.stderr)
     return 0

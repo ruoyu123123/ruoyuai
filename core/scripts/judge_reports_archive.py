@@ -393,8 +393,7 @@ def main():
         return 0
 
     if args.chapter is None:
-        print("[FATAL] 必须指定 --cluster <key>（cluster 主路径）或位置参 <章节号>（ad-hoc 单章调试）",
-              file=sys.stderr)
+        print("[FATAL] 必须指定 --cluster <key>（cluster 主路径）或位置参 <章节号>（ad-hoc 单章调试）")
         return 2
 
     # 2026-05-29 cluster 化：原 chapter-mode 向后兼容大分支（重复 _archive_one_chapter 逻辑）

@@ -486,8 +486,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         if _stale.exists():
             try:
                 _stale.unlink()
-                print("[emergence] 检测到新 ME·已清除陈旧完本标记（重新开张）",
-                      file=sys.stderr)
+                print("[emergence] 检测到新 ME·已清除陈旧完本标记（重新开张）")
             except OSError:
                 pass
     if not remaining:
@@ -516,8 +515,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         except Exception as _e:
             # 磁盘满/只读等极端故障——别静默吞：下游 step11 会因 expected_outputs
             # 缺失报 FileNotFoundError，这行警告是唯一可读的根因线索
-            print(f"[WARN] 完本 WAL 写入失败（step11 可能因产物缺失停下）: {_e}",
-                  file=sys.stderr)
+            print(f"[WARN] 完本 WAL 写入失败（step11 可能因产物缺失停下）: {_e}")
         return {"ok": False, "book_complete": True,
                 "error": "大势卡 ME 池已全部完成，无新 cluster 可涌现",
                 "completed_count": len(completed_mes),
@@ -774,8 +772,7 @@ def main():
         import cluster_lookup
         rng = cluster_lookup.cluster_id_to_range(project_root, cluster_key)
         if not rng or len(rng) != 2:
-            print(f"[ERROR] cluster {cluster_key} 的 chapter_range 未找到（splitter 切完才回填）",
-                  file=sys.stderr)
+            print(f"[ERROR] cluster {cluster_key} 的 chapter_range 未找到（splitter 切完才回填）")
             return 2
         # 只打印纯数字 → 供 cluster-write.md 里 LAST_CH=$(...) 命令替换
         print(rng[1])

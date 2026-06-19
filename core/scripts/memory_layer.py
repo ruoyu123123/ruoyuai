@@ -176,8 +176,7 @@ class MemoryLayer:
 
 def main():
     if len(sys.argv) < 3:
-        print("用法: python memory_layer.py <项目路径> <章节号> --action search|build|stats [--query ...]",
-              file=sys.stderr); sys.exit(2)
+        print("用法: python memory_layer.py <项目路径> <章节号> --action search|build|stats [--query ...]"); sys.exit(2)
     root = Path(sys.argv[1]).resolve()
     ch = int(sys.argv[2])
     action = "stats"

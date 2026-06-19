@@ -1325,8 +1325,7 @@ def main():
         # exit 1 = 产出了 skill 改写建议（值得复盘关注·与其他模式一致语义）
         sys.exit(1 if produced else 0)
     else:
-        print("[FATAL] 需指定 --merge-reflection / --ingest / --scan-recurring / --reflect-attribution",
-              file=sys.stderr)
+        print("[FATAL] 需指定 --merge-reflection / --ingest / --scan-recurring / --reflect-attribution")
         print(__doc__)
         sys.exit(2)
 

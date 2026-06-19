@@ -378,8 +378,7 @@ def main():
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if report.get("warning"):
-        print(f"\n=== 黄金三章项偏弱（advisory，可豁免）===\n  {report['warning']}",
-              file=sys.stderr)
+        print(f"\n=== 黄金三章项偏弱（advisory，可豁免）===\n  {report['warning']}")
         sys.exit(1)
     sys.exit(0)
 

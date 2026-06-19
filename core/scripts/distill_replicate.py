@@ -372,15 +372,12 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
     for i, profile in enumerate(candidates):
         max_tokens = resolve_max_tokens(profile, default=default_max_tokens)
         if i == 0:
-            print(f"{prefix}[distill_replicate] 调用 active: {profile.name} ({profile.model})",
-                  file=sys.stderr)
-            print(f"{prefix}[distill_replicate] max_tokens={max_tokens}, temperature={profile.temperature}",
-                  file=sys.stderr)
+            print(f"{prefix}[distill_replicate] 调用 active: {profile.name} ({profile.model})")
+            print(f"{prefix}[distill_replicate] max_tokens={max_tokens}, temperature={profile.temperature}")
         else:
             print(f"\n{prefix}[FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
 
-        print(f"{prefix}[distill_replicate] prompt: system={len(system)} chars, user={len(user)} chars",
-              file=sys.stderr)
+        print(f"{prefix}[distill_replicate] prompt: system={len(system)} chars, user={len(user)} chars")
 
         # 2026-06-07 修 stream 挂死：pie-xian 代理 reasoning 模型 stream 中途断连时，无 timeout 的
         # `for chunk in stream` 会无限等（实测卡死 43min 不报错不落盘）。设 read=180s → chunk 间隔超时
@@ -452,8 +449,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
             continue
 
         elapsed = time.time() - t0
-        print(f"\n{prefix}[distill_replicate] 接收完毕 ({len(full_text)} chars, {elapsed:.1f}s) via {profile.name}",
-              file=sys.stderr)
+        print(f"\n{prefix}[distill_replicate] 接收完毕 ({len(full_text)} chars, {elapsed:.1f}s) via {profile.name}")
         return full_text, profile, elapsed
 
     raise GenModelExhaustedError(failures)
@@ -769,8 +765,7 @@ def _score_draft_sfs(ref_texts: list[str], draft_text: str) -> float | None:
         v = report.get("sfs_quick")
         return float(v) if v is not None else None
     except Exception as e:  # noqa: BLE001 · 裁判失败降级不崩复刻主流程
-        print(f"[L3d · SFS 裁判] WARN 评分失败，降级保留当前最优稿: {str(e)[:160]}",
-              file=sys.stderr)
+        print(f"[L3d · SFS 裁判] WARN 评分失败，降级保留当前最优稿: {str(e)[:160]}")
         return None
 
 
@@ -824,8 +819,7 @@ def draft_refine_loop(
                 call_fn("你是严苛的中文小说风格审稿人，只出结构化修改清单，不重写正文。",
                         critic_user, tag=f"critic r{r}"))
         except GenModelExhaustedError as e:
-            print(f"[L3d · critic r{r}] WARN critic 调用失败，提前结束精修循环: {e}",
-                  file=sys.stderr)
+            print(f"[L3d · critic r{r}] WARN critic 调用失败，提前结束精修循环: {e}")
             rounds_trace.append({"round": r, "stage": "critic", "error": str(e)[:160]})
             break
 
@@ -836,8 +830,7 @@ def draft_refine_loop(
                 call_fn(system_prompt, refine_user, tag=f"refine r{r}"))
             candidate, _cot = strip_cot_analysis(candidate)  # 兼容模型误带 CoT 标记
         except GenModelExhaustedError as e:
-            print(f"[L3d · refine r{r}] WARN refine 调用失败，保留当前最优稿: {e}",
-                  file=sys.stderr)
+            print(f"[L3d · refine r{r}] WARN refine 调用失败，保留当前最优稿: {e}")
             rounds_trace.append({"round": r, "stage": "refine", "error": str(e)[:160]})
             break
 
@@ -862,8 +855,7 @@ def draft_refine_loop(
         round_meta["best_score_after"] = best_score
         rounds_trace.append(round_meta)
         print(f"[L3d · r{r}] critic→refine 完成 · 候选 SFS={cand_score} · "
-              f"best={best_score} · {'采纳' if accepted else '淘汰(保最优)'}",
-              file=sys.stderr)
+              f"best={best_score} · {'采纳' if accepted else '淘汰(保最优)'}")
 
     # initial_score = 首稿评分（记在 best_score_init · 不依赖第一轮成功，防 critic 首轮即失败时缺键）
     trace = {
@@ -983,8 +975,7 @@ def _make_real_ablation_runner(project_root: Path, cluster_id: int,
                 errors="replace", timeout=300)
             if r1.returncode != 0:
                 print(f"[ablation·{arm}·seed{seed}] build_manifest 非0退出 "
-                      f"(rc={r1.returncode})·该 seed 跳过\n{(r1.stderr or '')[:400]}",
-                      file=sys.stderr)
+                      f"(rc={r1.returncode})·该 seed 跳过\n{(r1.stderr or '')[:400]}")
                 return None
             # ② gen_writer（--project / --cluster int）—— 写到固定草稿路径
             r2 = subprocess.run(
@@ -994,8 +985,7 @@ def _make_real_ablation_runner(project_root: Path, cluster_id: int,
                 errors="replace", timeout=900)
             if r2.returncode != 0:
                 print(f"[ablation·{arm}·seed{seed}] gen_writer 非0退出 "
-                      f"(rc={r2.returncode})·该 seed 跳过\n{(r2.stderr or '')[:400]}",
-                      file=sys.stderr)
+                      f"(rc={r2.returncode})·该 seed 跳过\n{(r2.stderr or '')[:400]}")
                 return None
         except subprocess.TimeoutExpired as e:  # gen-model 挂住/超时·该 seed 跳过不卡死全实验
             print(f"[ablation·{arm}·seed{seed}] subprocess 超时（{e.timeout}s·gen-model 可能挂住）"
@@ -1007,8 +997,7 @@ def _make_real_ablation_runner(project_root: Path, cluster_id: int,
             return None
         # ③ 读草稿 → SFS（同一把尺：同 _score_draft_sfs + 同 ref_texts）
         if not draft_path.exists():
-            print(f"[ablation·{arm}·seed{seed}] 草稿读不到（{draft_path}）·该 seed 跳过",
-                  file=sys.stderr)
+            print(f"[ablation·{arm}·seed{seed}] 草稿读不到（{draft_path}）·该 seed 跳过")
             return None
         try:
             draft_text = draft_path.read_text(encoding="utf-8")
@@ -1238,16 +1227,14 @@ def main():
     cot_first = (cot_mode == "active")
     system_prompt = REPLICATE_SYSTEM_PROMPT_COT if cot_first else REPLICATE_SYSTEM_PROMPT
     print(f"[L3b] CoT-first 自解释复刻 = {cot_mode}"
-          f"（{'先分析后写两段式 · 受控量化坐标' if cot_first else '旧直接出正文路径 · 对照'}）",
-          file=sys.stderr)
+          f"（{'先分析后写两段式 · 受控量化坐标' if cot_first else '旧直接出正文路径 · 对照'}）")
 
     loader = GenModelLoader()
     if args.profile:
         loader._active_name_override = args.profile  # noqa
     try:
         active = loader.get_active_profile()
-        print(f"[distill_replicate] active profile = {active.name} ({active.model})",
-              file=sys.stderr)
+        print(f"[distill_replicate] active profile = {active.name} ({active.model})")
     except GenModelConfigError as e:
         print(f"[ERROR] gen-model 配置错误: {e}", file=sys.stderr)
         sys.exit(2)
@@ -1301,10 +1288,8 @@ def main():
         _originals_dir, ref_text=ref_text)
     print(f"[snippet_seed] {seed_trace}", file=sys.stderr)
 
-    print(f"[cluster] {args.cluster_ref} · {chapters_count} 章 · {words_per_chapter} 字/章 估算",
-          file=sys.stderr)
-    print(f"[cluster] sub-call 计划: {subcall_plan}（共 {len(subcall_plan)} 段）",
-          file=sys.stderr)
+    print(f"[cluster] {args.cluster_ref} · {chapters_count} 章 · {words_per_chapter} 字/章 估算")
+    print(f"[cluster] sub-call 计划: {subcall_plan}（共 {len(subcall_plan)} 段）")
 
     full_text_parts = []
     subcall_metas = []
@@ -1383,8 +1368,7 @@ def main():
     if refine_mode == "active":
         # SFS 裁判用同 cluster 的真实原文当 ref（gather 的同源 ref_text 拆段；空则裁判降级保稿）
         ref_for_score = [ref_text] if ref_text else []
-        print(f"[L3d] draft-refine = active · {_draft_refine_rounds()} 轮 critic→refine→SFS knockout",
-              file=sys.stderr)
+        print(f"[L3d] draft-refine = active · {_draft_refine_rounds()} 轮 critic→refine→SFS knockout")
         refined_text, loop_trace = draft_refine_loop(
             loader, system_prompt,
             initial_draft=full_text,
@@ -1432,8 +1416,7 @@ def main():
     print(f"\n[OK · cluster] {args.cluster_ref}", file=sys.stderr)
     print(f"     输出: {output_path}", file=sys.stderr)
     print(f"     sub-calls: {len(subcall_plan)} 段", file=sys.stderr)
-    print(f"     总字数: {cjk_count(full_text)} CJK (target ≈ {chapters_count * words_per_chapter})",
-          file=sys.stderr)
+    print(f"     总字数: {cjk_count(full_text)} CJK (target ≈ {chapters_count * words_per_chapter})")
     if refine_trace.get("draft_refine_enabled"):
         print(f"     draft-refine: {refine_trace.get('rounds_run')} 轮 · "
               f"SFS {refine_trace.get('initial_score')} → {refine_trace.get('final_best_score')}"

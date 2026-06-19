@@ -314,8 +314,7 @@ def main():
     ref_arc_path = project / "arc_templates" / f"cluster_arc_{args.cluster_id}.json"
     if not ref_arc_path.exists():
         print(f"[ERROR] 原 cluster_arc 不存在: {ref_arc_path}", file=sys.stderr)
-        print(f"        请先跑 arc_aggregator.py --project ... --cluster {args.cluster_id}",
-              file=sys.stderr)
+        print(f"        请先跑 arc_aggregator.py --project ... --cluster {args.cluster_id}")
         sys.exit(2)
 
     # 衔接分析 / character_arcs（可选）
@@ -331,11 +330,9 @@ def main():
         if args.replica_path:
             replica_path = Path(args.replica_path)
         if not replica_path.exists():
-            print(f"[ERROR] --skip-distill-replicate 但复刻文件不存在: {replica_path}",
-                  file=sys.stderr)
+            print(f"[ERROR] --skip-distill-replicate 但复刻文件不存在: {replica_path}")
             sys.exit(2)
-        print(f"[verify] 跳过 distill_replicate (debug) · 使用已有 {replica_path}",
-              file=sys.stderr)
+        print(f"[verify] 跳过 distill_replicate (debug) · 使用已有 {replica_path}")
     else:
         ok = run_distill_replicate(skill, project, args.cluster_id, replica_path)
         if not ok or not replica_path.exists():
@@ -349,8 +346,7 @@ def main():
     gen_arc_path = verify_dir / f"cluster_arc_{args.cluster_id}_replica.json"
     gen_arc_path.write_text(json.dumps(gen_arc, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[verify] 估算复刻 cluster_arc → {gen_arc_path}", file=sys.stderr)
-    print(f"         emotion_curve = {[round(x, 2) for x in gen_arc['emotion_curve_normalized']]}",
-          file=sys.stderr)
+    print(f"         emotion_curve = {[round(x, 2) for x in gen_arc['emotion_curve_normalized']]}")
     print(f"         matched_shape = {gen_arc['matched_reagan_shape']}", file=sys.stderr)
 
     # ===== 步骤 3：调 cluster_evaluator.py 6 维比对 =====

@@ -37,8 +37,7 @@ def mask_key(key: str) -> str:
 def cmd_list(args, loader: GenModelLoader) -> int:
     profiles = loader.list_profiles()
     if not profiles:
-        print("(无 profile 配置；编辑 .env 添加 GEN__<name>__* 字段，或跑 gen_model.py add <name>)",
-              file=sys.stderr)
+        print("(无 profile 配置；编辑 .env 添加 GEN__<name>__* 字段，或跑 gen_model.py add <name>)")
         return 0
     try:
         active_name = loader.get_active_profile().name
@@ -107,14 +106,11 @@ def cmd_switch(args, loader: GenModelLoader) -> int:
     target = args.name
     p = loader.get_profile(target)
     if p is None:
-        print(f"[ERROR] profile '{target}' 不存在；先跑 'gen_model.py add {target}' 创建模板",
-              file=sys.stderr)
-        print(f"  现有 profile: {[x.name for x in loader.list_profiles()]}",
-              file=sys.stderr)
+        print(f"[ERROR] profile '{target}' 不存在；先跑 'gen_model.py add {target}' 创建模板")
+        print(f"  现有 profile: {[x.name for x in loader.list_profiles()]}")
         return 2
     if not p.api_key:
-        print(f"[WARN] profile '{target}' 还未填 API_KEY，切换后调用会报错",
-              file=sys.stderr)
+        print(f"[WARN] profile '{target}' 还未填 API_KEY，切换后调用会报错")
 
     set_active(loader, target)
     print(f"[OK] active = {target} ({p.model} @ {p.base_url})")

@@ -2130,8 +2130,7 @@ def evaluate(ref_text, gen_text: str,
                 codes = [i["code"] for i in nc_issues]
                 print(f"[SFS noncomp shadow] 检出 {len(codes)} 条 advisory（未改判决）: {codes}"
                       f" · 几何均 {noncomp['geometric_mean']} vs 算术均 {noncomp['arithmetic_mean']}"
-                      f" · floor {noncomp['worst_dimension_floor']}",
-                      file=sys.stderr)
+                      f" · floor {noncomp['worst_dimension_floor']}")
         elif noncomp_mode == "active" and nc_issues:
             # active：崩维 advisory 升顶层（与 L3a 共用 advisory_issues · 永远 advisory）。
             report.setdefault("advisory_issues", [])
@@ -2150,8 +2149,7 @@ def evaluate(ref_text, gen_text: str,
             # 影子：分歧只写 stderr，不改判决也不把 issue 提到顶层（保默认零回归）。
             if l3a.get("advisory_issues"):
                 codes = [i["code"] for i in l3a["advisory_issues"]]
-                print(f"[L3a shadow] 检出 {len(codes)} 条 advisory（未改判决）: {codes}",
-                      file=sys.stderr)
+                print(f"[L3a shadow] 检出 {len(codes)} 条 advisory（未改判决）: {codes}")
         elif l3a_mode == "active":
             # active：advisory issue 升顶层（消费方可见）· gate_level 永远 advisory。
             # 用 setdefault+extend（不覆盖）以与非补偿聚合 advisory 共存于同一顶层列表。
@@ -2215,8 +2213,7 @@ def main():
         if not all_files:
             all_files = sorted(ref_dir.glob("*.txt"))
         if len(all_files) < args.multi_ref_count:
-            print(f"[警告] 目录仅 {len(all_files)} 章 < 抽样数 {args.multi_ref_count}，全用",
-                  file=sys.stderr)
+            print(f"[警告] 目录仅 {len(all_files)} 章 < 抽样数 {args.multi_ref_count}，全用")
             sampled = all_files
         else:
             import random

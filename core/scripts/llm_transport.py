@@ -262,8 +262,7 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
                 kw.pop("stream_options", None)  # 老 provider 不认 → 去掉（usage 拿不到·账本跳该次·零崩）
                 _retried = True
             if _retried:
-                print(f"[llm_transport] kwarg 不支持，退回重试: {str(fmt_err)[:120]}",
-                      file=sys.stderr)
+                print(f"[llm_transport] kwarg 不支持，退回重试: {str(fmt_err)[:120]}")
                 _t, _f, _u = _run(kw)
             else:
                 raise
@@ -535,8 +534,7 @@ def generate(loader_or_profiles, system: str, user: str, *,
                     delay = retry.delay_for(attempt, ra)
                     src = f"Retry-After={ra}s" if ra else "指数退避"
                     print(f"\n{tag} {profile.name} {type(re_err).__name__}，"
-                          f"{delay:.0f}s 后重试 {attempt}/{retry.max_retries}（{src}）…",
-                          file=sys.stderr)
+                          f"{delay:.0f}s 后重试 {attempt}/{retry.max_retries}（{src}）…")
                     time.sleep(delay)
 
             # —— 截断续写圈（length → 续写补全 · 绝不整发重试） ——
@@ -554,8 +552,7 @@ def generate(loader_or_profiles, system: str, user: str, *,
                                         echo=echo)
                 text += cont_text
             if finish == "length":
-                print(f"\n{tag} WARN 续写 {cont_rounds} 轮后仍截断（尾部可能不完整）",
-                      file=sys.stderr)
+                print(f"\n{tag} WARN 续写 {cont_rounds} 轮后仍截断（尾部可能不完整）")
 
             # —— 空响应守卫 ——
             if not text.strip():

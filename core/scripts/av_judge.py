@@ -424,8 +424,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
             continue
 
         elapsed = time.time() - t0
-        print(f"\n{prefix}[av_judge] 接收完毕 ({len(full_text)} chars, {elapsed:.1f}s) via {profile.name}",
-              file=sys.stderr)
+        print(f"\n{prefix}[av_judge] 接收完毕 ({len(full_text)} chars, {elapsed:.1f}s) via {profile.name}")
         return full_text, profile, elapsed
 
     raise GenModelExhaustedError(failures)
@@ -844,8 +843,7 @@ def main() -> int:
           f" · AV_JUDGE_N_SAMPLES = {n_samples}"
           f"（{'单次 · 关聚合' if n_samples == 1 else f'{n_samples} 次重采样多数票聚合稳方差'}）"
           f" · position_swap = {'on（G2-CYCLIC 半 swap · experiment）' if swap_on else 'off（零回归）'}"
-          f" · intent_dim = {'on（第5维 · experiment）' if intent_on else 'off（默认4维）'}",
-          file=sys.stderr)
+          f" · intent_dim = {'on（第5维 · experiment）' if intent_on else 'off（默认4维）'}")
 
     # off（默认）：完全跳过——不构 prompt、不调 gen-model（共同纪律 2 · 零回归）
     if mode == "off":

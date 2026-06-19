@@ -913,10 +913,8 @@ def main():
 
     positional = [a for a in args if not a.startswith("--")]
     if len(positional) < 2:
-        print("用法: python validate_chapter.py <项目路径> <章节号> [--json]",
-              file=sys.stderr)
-        print("  或: python validate_chapter.py <项目路径> --cluster <cluster_key> [--json]",
-              file=sys.stderr)
+        print("用法: python validate_chapter.py <项目路径> <章节号> [--json]")
+        print("  或: python validate_chapter.py <项目路径> --cluster <cluster_key> [--json]")
         sys.exit(2)
     project_root = Path(positional[0]).resolve()
     try:
@@ -952,8 +950,7 @@ def import_cluster_project_arg(args: list[str]) -> str:
         if a == cluster_val:
             continue
         return a
-    print("用法: python validate_chapter.py <项目路径> --cluster <cluster_key> [--json]",
-          file=sys.stderr)
+    print("用法: python validate_chapter.py <项目路径> --cluster <cluster_key> [--json]")
     sys.exit(2)
 
 

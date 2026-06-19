@@ -264,8 +264,7 @@ def main():
         sys.exit(0)
     chapters = parse_chapters(_raw_chapters)
     high_set = parse_high_list(args.high_chapters)
-    print(f"[gen_chapter_titles v2] {len(chapters)} 章 / high={sorted(high_set)}",
-          file=sys.stderr)
+    print(f"[gen_chapter_titles v2] {len(chapters)} 章 / high={sorted(high_set)}")
 
     try:
         loader = GenModelLoader()
@@ -306,8 +305,7 @@ def main():
     if title_style:
         td = title_style.get("tier_distribution_pct", {})
         print(f"[gen_chapter_titles v2.4] per-book title_style 已加载："
-              f"normal={td.get('normal', 0):.0%} / mid={td.get('mid', 0):.0%} / high={td.get('high', 0):.0%}",
-              file=sys.stderr)
+              f"normal={td.get('normal', 0):.0%} / mid={td.get('mid', 0):.0%} / high={td.get('high', 0):.0%}")
     else:
         print(f"[gen_chapter_titles v2.4] 无 per-book title_style，走默认 80/15/5", file=sys.stderr)
 
@@ -366,8 +364,7 @@ def main():
         print(f"\n[gen_chapter_titles] 完成 {total} 章 + 同步进度.json", file=sys.stderr)
         print(f"  分布: normal={tier_counts['normal']} ({100*tier_counts['normal']//total}%) / "
               f"mid={tier_counts['mid']} ({100*tier_counts['mid']//total}%) / "
-              f"high={tier_counts['high']} ({100*tier_counts['high']//total}%)",
-              file=sys.stderr)
+              f"high={tier_counts['high']} ({100*tier_counts['high']//total}%)")
 
 
 if __name__ == '__main__':

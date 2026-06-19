@@ -72,8 +72,7 @@ def finalize(project_root: Path, sfs_path: Path | None = None) -> int:
            f"- 故事块数：{cl_n}\n"
            f"{sfs_line}")
     (project_root / "distillation_log.md").write_text(log, encoding="utf-8")
-    print(f"[finalize] 定稿 {skill.name} → skill_FINAL.md（原文 {raw_n} 章 / {cl_n} cluster）",
-          file=sys.stderr)
+    print(f"[finalize] 定稿 {skill.name} → skill_FINAL.md（原文 {raw_n} 章 / {cl_n} cluster）")
     return 0
 
 

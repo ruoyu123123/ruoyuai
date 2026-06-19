@@ -605,8 +605,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
         else:
             logger.info(f"\n[FALLBACK] -> {profile.name} ({profile.model})")
 
-        logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars",
-              file=sys.stderr)
+        logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars")
 
         client = OpenAI(api_key=profile.api_key, base_url=profile.base_url,
                         timeout=GEN_MODEL_TIMEOUT)
@@ -631,8 +630,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
             cont_rounds = 0
             while finish_reason == "length" and cont_rounds < 3:
                 cont_rounds += 1
-                logger.info(f"\n[gen_fixer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…",
-                      file=sys.stderr)
+                logger.info(f"\n[gen_fixer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…")
                 cont_text, finish_reason = _stream_once(
                     client, profile, system, user, max_tokens, prior_assistant=full_text)
                 full_text += cont_text
@@ -653,8 +651,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
             failures.append((profile.name, reason))
             continue  # 切下一个 profile
 
-        logger.info(f"\n[gen_fixer] 接收完毕 ({len(full_text)} chars) via {profile.name}",
-              file=sys.stderr)
+        logger.info(f"\n[gen_fixer] 接收完毕 ({len(full_text)} chars) via {profile.name}")
         return full_text, profile
 
     raise GenModelExhaustedError(failures)
@@ -712,14 +709,12 @@ def parse_and_apply(reply: str, project_root: Path,
             if len(_cands) == 1:
                 target = Path(_cands[0])
                 target_resolved = target.resolve()
-                logger.info(f"  [路径回正] LLM 报『{rel_path}』不存在 → basename 匹配已读文件 {target}",
-                      file=sys.stderr)
+                logger.info(f"  [路径回正] LLM 报『{rel_path}』不存在 → basename 匹配已读文件 {target}")
         # 安全：校验 target 仍在 project_root 内，防 ../../ 路径穿越逃逸项目目录
         try:
             target_resolved.relative_to(root_resolved)
         except ValueError:
-            logger.info(f"  [跳过·路径穿越] {rel_path} 解析到项目外 ({target_resolved})，忽略该块",
-                  file=sys.stderr)
+            logger.info(f"  [跳过·路径穿越] {rel_path} 解析到项目外 ({target_resolved})，忽略该块")
             continue
         cjk = cio.count_cjk(content)  # v27 修复：统一 CJK 口径
 
@@ -774,8 +769,7 @@ def run_scanners(file_paths: list) -> dict:
                                    'violations_count': d.get('violations_count')}
             except Exception as e:
                 # v27 修复：静默 except 加日志（debug 友好）
-                logger.info(f"  [gen_fixer] scanner {sc} 输出解析失败 ({e})·exit={r.returncode}",
-                      file=sys.stderr)
+                logger.info(f"  [gen_fixer] scanner {sc} 输出解析失败 ({e})·exit={r.returncode}")
                 results[fp][sc] = {'verdict': 'ERROR', 'stdout': r.stdout[:200]}
     return results
 
@@ -820,8 +814,7 @@ def main():
         brief = json.loads(brief_path.read_text(encoding='utf-8'))
         # brief schema 验证
         if brief.get('version') != 1:
-            logger.error(f" brief schema version 不兼容: {brief.get('version')}, 期望 1",
-                  file=sys.stderr)
+            logger.error(f" brief schema version 不兼容: {brief.get('version')}, 期望 1")
             sys.exit(3)
         chapter_path = brief.get('chapter_path')
         if not chapter_path:
@@ -878,13 +871,11 @@ def main():
         print(system)
         logger.info("\n=== USER ===")
         print(user)
-        logger.info(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars",
-              file=sys.stderr)
+        logger.info(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars")
         try:
             loader = GenModelLoader()
             p = loader.get_active_profile()
-            logger.info(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})",
-                  file=sys.stderr)
+            logger.info(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})")
         except GenModelConfigError as e:
             logger.info(f"[dry-run] [WARN] active profile 未就绪: {e}")
         return
@@ -916,8 +907,7 @@ def main():
         reply, project_root, before_content_by_path=files_content,
         enforce_cjk_conservation=enforce_cjk)
     if rejected:
-        logger.warning(f" {len(rejected)} 个修复块因 CJK 守恒校验被拒绝覆写（保留原文）",
-              file=sys.stderr)
+        logger.warning(f" {len(rejected)} 个修复块因 CJK 守恒校验被拒绝覆写（保留原文）")
     if not files_written:
         if rejected:
             logger.error(f" 所有 {len(rejected)} 个修复块都被 CJK 守恒校验拒绝（疑似截断/退化输出），"

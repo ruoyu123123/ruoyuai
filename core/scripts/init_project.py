@@ -104,8 +104,7 @@ def copy_style(project_root: Path, style_name: str) -> int:
         shutil.copy2(str(skill), str(db / "作者风格_skill.md"))
         print(f"[init_project] 拷 skill 双文件(作者风格.json + 作者风格_skill.md) from {style_name}")
     else:
-        print(f"[init_project][WARN] 风格库 {style_name} 无 skill*.md（只拷了作者风格.json）",
-              file=sys.stderr)
+        print(f"[init_project][WARN] 风格库 {style_name} 无 skill*.md（只拷了作者风格.json）")
     return 0
 
 

@@ -41,8 +41,7 @@ def _find_cluster(index: dict, cluster_ref: str) -> dict | None:
 def prep(project_root: Path, cluster_ref: str, output: Path) -> int:
     idx_path = project_root / "cluster_index.json"
     if not idx_path.exists():
-        print(f"[prep_cluster] cluster_index.json 不存在: {idx_path}（先跑 cluster_segmenter）",
-              file=sys.stderr)
+        print(f"[prep_cluster] cluster_index.json 不存在: {idx_path}（先跑 cluster_segmenter）")
         return 1
     raw_dir = project_root / "原文"
     if not raw_dir.is_dir():
@@ -78,8 +77,7 @@ def prep(project_root: Path, cluster_ref: str, output: Path) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n\n".join(parts), encoding="utf-8")
     note = f"（缺 {len(missing)} 章: {missing[:5]}）" if missing else ""
-    print(f"[prep_cluster] {cluster_ref} 章 {start}-{end} 拼 {len(parts)} 章全文 → {output}{note}",
-          file=sys.stderr)
+    print(f"[prep_cluster] {cluster_ref} 章 {start}-{end} 拼 {len(parts)} 章全文 → {output}{note}")
     return 0
 
 
