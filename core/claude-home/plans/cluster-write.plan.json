@@ -17,6 +17,7 @@
       "_doc_h7_fix": "2026-05-29 复审修复（H7）：plan_tracker create 只传 --key（纯数字）不传 --chapter → {ch:03d} 被替换成空 → 旧 expected_outputs 变成不存在的 ch_.json 路径 → step1 死锁。改目录级检查：.manifest 目录必由 build_manifest save_json mkdir 落地（起首章号 START_CH 在 create 时尚未 resolve，故不能用 {ch:03d}）。.style_directive 仅在项目有 style_profile 时才写（条件产物），从 hard expected_output 移除避免误 FAIL。",
       "_doc_program_driven": "v28 程序驱动（2026-06-10）：scripts 由 orchestrator.py 执行。<cluster_start_ch> 由 driver prime_cluster_context 用 cluster_lookup 权威算出（上一 cluster 范围 hi+1）。行首 '? ' = 条件脚本（style_injector 无风格档 exit 1 是条件不适用非错误）。",
       "scripts": [
+        "? python core/scripts/auto_fate_draw.py {project_root} <cluster_start_ch>",
         "python core/scripts/build_manifest.py {project_root} <cluster_start_ch>",
         "? python core/scripts/style_injector.py {project_root} <cluster_start_ch>"
       ],
