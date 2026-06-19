@@ -2,10 +2,6 @@
 description: 生成章节大纲
 ---
 
-> **三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
-> 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
-> hook 自动检 research_cache + 反思文件。关键脚本输出建议过 `ai_wrapper.py` 二次复核。
-
 ## Gen-Model 抽象层
 
 **关键变化**：大纲中**含创意笔触的字段**（卷 arc 描述 / 大事件 description / hook / cliffhanger 等）应走 gen-model；**结构性字段**（卷骨架 / 章节范围 / 事件 ID / prerequisites 关系 / 角色 ID）仍由 Claude 主代理列。

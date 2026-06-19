@@ -6,9 +6,6 @@ description: cluster 级状态保存 12 步流水线 · 一次性应用 cluster_
 
 $ARGUMENTS
 
-> **三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
-> 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
-
 ---
 
 # 🔴 v26 设计哲学

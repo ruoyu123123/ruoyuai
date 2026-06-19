@@ -6,9 +6,6 @@ description: 按故事块（cluster）整块写作 · v24 倒置流水线 · 整
 
 $ARGUMENTS
 
-> **三段式纪律**：本命令所有 plan-step 必须遵守「研 → 干 → 反思」三段式。
-> 详见 [core/claude-home/HOOKS_AND_REFLECTION.md](../../core/claude-home/HOOKS_AND_REFLECTION.md)。
-
 ---
 
 # 🔴 设计哲学（v24 倒置流水线 · 必读）
