@@ -75,6 +75,15 @@ DEFAULT_HPARAMS = {
 }
 
 
+def _get_model_profile_name() -> str:
+    """E5: 取当前 active gen-model profile 名 (model 版本追溯)。"""
+    try:
+        from gen_model_loader import get_default_loader
+        return get_default_loader().get_active_profile().name
+    except Exception:
+        return ""
+
+
 # Reward 路线 (北极星纪律: 解耦的两条路径不互相干涉)
 # - "writing"  : 写作路线 = 读 _数据库/.audit/.judge_reports binary 信号 (剩余 cluster 写完才有)
 # - "distill"  : 蒸馏路线 = 复刻→SFS 评分 (风格库原文即可,不依赖写作产物)
@@ -261,6 +270,8 @@ def train(
             "multi_ref_count": multi_ref_count,
             "multi_ref_seed": multi_ref_seed,
             "seed": seed,
+            # E5: model 版本追溯 (G1: 换模型后能查"这份 skill 对哪个模型优化")
+            "gen_model_profile": _get_model_profile_name(),
         },
     )
 

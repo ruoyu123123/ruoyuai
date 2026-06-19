@@ -190,7 +190,7 @@ def apply_pid_delta(thresholds: dict, author_dir):
     """validate_style._apply_style_overrides 末尾叠加点：把 per-作者 PID Δ 叠到
     4 个被控键（作者档前馈已先施加·此为 PID 反馈微调·前馈优先级高于反馈）。
 
-    · PID_THRESHOLD_MODE=off（默认）/ author_dir 缺失 → 返回原 thresholds（不改判决）。
+    · PID_THRESHOLD_MODE=off / author_dir 缺失 → 返回原 thresholds（不改判决）。注：默认 active（:79）。
     · shadow → 把将施加的 Δ 记 stderr·返回原阈值（零回归·观察用）。
     · active → 真叠加 Δ，每键钳进 _PHYS_BOUNDS（绝不破物理安全栏）。
     硬拒非白名单：只读写 _CONTROLLED_KEYS，其余键原样不动（物理隔离 HARD_GATE 回路外）。"""

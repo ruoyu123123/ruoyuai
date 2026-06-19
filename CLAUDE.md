@@ -468,7 +468,7 @@ python core/scripts/distill_replicate.py \
 - 5 模块 + train.py：`core/scripts/skill_opt/`
 - plan 模板：`distill-style-skillopt.plan.json` (5 步)
 - 测试：57/57 全绿（确定性 + mock LLM 集成）
-- **替代**：`dimension_evolver.py` 已标 DEPRECATED（功能被 SkillOpt 收编）
+- **已删除**：`dimension_evolver.py` + `auto_evolved_dimensions.json` 物理删除（功能被 SkillOpt 收编·北极星⑥）
 
 ---
 

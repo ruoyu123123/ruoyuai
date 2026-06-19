@@ -640,7 +640,7 @@ EvolveR (arxiv 2510.16079) offline self-distillation 闭环。
 | 5 cluster终验 | `distill_replicate.py --mode cluster` | `cluster_<id>_replica.txt` |
 | 6 出货+回灌 | `distill_finalize_verify.py --strict` | `作者风格_FINAL.json` + `skill_FINAL.md` |
 | 6.5 教训沉淀 | `lesson_extractor.py` | 更新 `distill-style-lessons.md` |
-| 6.7 维度自演化 | `dimension_evolver.py` | `auto_evolved_dimensions.json` |
+| ~~6.7~~ | ~~已删除·SkillOpt 收编~~ | — |
 
 **详细维度说明**已程序化到 `core/scripts/style_profile_extractor.py` / `consolidate_author_profile.py`。
 **版本比较**（v10/v14/v16）属历史设计记录，不影响当前流程。

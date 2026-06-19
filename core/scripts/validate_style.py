@@ -551,7 +551,7 @@ def _apply_style_overrides(t: dict, sd: dict, author_dir=None) -> dict:
     # 至此作者档【前馈 override】已全部施加（L1a 分位数 band + 各 mean±容差 + cluster band）。
     # PID 反馈层【最后】叠加：只动 4 个被控连续 advisory 阈值（para_mean_len/dialogue_ratio/
     # long_para_per_chapter/quota_per_word），把真作者 FPR 驱动到 0。前馈优先级 > 反馈
-    # （前馈先定 band，PID 只在其基础上做保守微调）。env PID_THRESHOLD_MODE=off（默认）时
+    # （前馈先定 band，PID 只在其基础上做保守微调）。env PID_THRESHOLD_MODE 默认 active（回测已证 FPR 收敛）；
     # apply_pid_delta 直接返回原值（零回归·回测验证前不生效）。物理隔离：tuner 白名单只读写 4 键，
     # 15 个 HARD_GATE_CODES 不在本回路。author_dir=None（旧调用方/回测自管 Δ）→ 不动。
     if author_dir is not None:
