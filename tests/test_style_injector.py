@@ -316,22 +316,15 @@ def test_build_directive_legacy_top_level_chapters():
     assert directive["opening_type"] == "白描"
 
 
-def test_build_directive_dcas_inheritance_branch():
-    # 章节目录存在 .pre_opening.txt → DCAS 继承分支：opening 强制降级
+def test_build_directive_no_dcas_inheritance():
+    # v27+: DCAS 继承已废弃, .pre_opening.txt 不再产生, inherits_opening 恒 False
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), _FULL_STYLE)
-        ch_dir = tmp / "章节" / "第002章"
-        ch_dir.mkdir(parents=True, exist_ok=True)
-        (ch_dir / ".pre_opening.txt").write_text("继承的开场", encoding="utf-8")
         directive = si.build_directive(tmp, 2)
-    assert directive["inherits_opening_from_prev_dcas"] is True
-    assert directive["opening_type"] == "inherit_from_dcas"
-    assert directive["opening_type_enforcement"] == "skipped_due_to_dcas_inheritance"
-    assert directive["opening_avoid"] == []
-    assert directive["opening_golden_samples"] == []
-    assert directive["pre_opening_path"] is not None
-    # 结尾不受 DCAS 影响，照常选定
-    assert directive["ending_type"] == "钩子收尾"
+    assert directive["inherits_opening_from_prev_dcas"] is False
+    assert directive["opening_type"] != "inherit_from_dcas"
+    assert directive["opening_type_enforcement"] == "strict"
+    assert directive["pre_opening_path"] is None
 
 
 def test_build_directive_cluster_blueprint_summary():
