@@ -1229,17 +1229,17 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     writer 在 MODE=ecas 时必读此字段。
     决策树:
     1. 读 _数据库/事件簇.json 找 status in (active 词表 · 中英文都认) 且 chapter_range 包含 chapter 的 cluster
-    2. 找不到 → mode=off (本章是 DCAS/single 模式)
+    2. 找不到 → mode=off (本章是 非 cluster 模式)
     3. 找到 → 提取 brief 全字段
     """
     clusters_path = scanner.root / "_数据库" / "事件簇.json"
     if not clusters_path.exists():
-        return {"mode": "off", "_note": "无事件簇.json，本章按 DCAS/single 模式"}
+        return {"mode": "off", "_note": "无事件簇.json，本章按 非 cluster 模式"}
     try:
         data = json.loads(clusters_path.read_text(encoding="utf-8"))
         clusters = data.get("clusters") or []
         if not clusters:
-            return {"mode": "off", "_note": "事件簇.json 为空，本章按 DCAS/single 模式"}
+            return {"mode": "off", "_note": "事件簇.json 为空，本章按 非 cluster 模式"}
         # 找匹配 chapter 的 cluster
         for c in clusters:
             if not isinstance(c, dict):

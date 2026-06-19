@@ -5,7 +5,7 @@
 --------
 cluster 级蒸馏反复迭代时（v0→v8…），单趟 SFS 分受 LLM 非确定性噪声污染，
 分不清「skill 真涨」还是「只是这趟运气好」。叠加 arXiv 2601.22025 实证教训
-（"更好的 prompt 实测反而掉分"）+ 本项目 DCAS 方向来回反复 3 次翻车模式，
+（"更好的 prompt 实测反而掉分"）+ 历史方向反复 3 次翻车模式，
 迭代很容易在噪声里空转打转。
 
 本脚本是**元层**（meta-layer）追踪器，不参与生成 / 不参与评分 / 不做 judge：
@@ -343,7 +343,7 @@ def cmd_record(args) -> int:
               f"({reg['delta']:+.2f}, 容差带 {reg['band']:.2f})")
         print(f"     [ADVISORY] {reg['note']}")
         print("     [ADVISORY] 别急着定方向：先确认是真掉分还是单趟噪声（多跑几趟/换 ref 复核）。"
-              "防 DCAS 式来回反复打转。")
+              "防来回反复打转。")
     elif reg["trend"] == "up":
         print(f"     [↑ 真涨] 上版 {reg['prev_mean']} → 本版 {reg['cur_mean']} ({reg['delta']:+.2f})")
     else:

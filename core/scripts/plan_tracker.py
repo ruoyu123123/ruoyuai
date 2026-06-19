@@ -132,8 +132,6 @@ KNOWN_COMMANDS = (
     "reconcile",
     "cluster-write",  # v24 cluster 级写作流水线 7 步（v26 唯一推荐 · 替代废弃的 write-chapter/write-event-cluster）
     "cluster-save-state",  # v24 cluster 级 save-state（v26 唯一推荐 · 替代废弃的 save-state）
-    # 🔴 v26 已删除: save-state / write-chapter / write-event-cluster
-    # 🔴 v27 已删除: init-real-grade (v22.5 老迁移规划) / ecas-v23-transition (v23 老 DCAS→ECAS 迁移工程)
 )
 
 

@@ -209,7 +209,6 @@ def build_directive(project_root: Path, chapter: int) -> dict:
     seed_int = int(hashlib.md5(seed_str.encode("utf-8")).hexdigest()[:8], 16)
     random.seed(seed_int)
 
-    inherits_opening = False
 
     db = project_root / "_数据库"
     style = load_json(db / "作者风格.json", {})
@@ -339,16 +338,14 @@ def build_directive(project_root: Path, chapter: int) -> dict:
         "chapter": chapter,
         "title": this_plan.get("title", ""),
         "scene_type": this_plan.get("scene_type", []),
-        # === v17.8 DCAS：检测 pre_opening 继承 ===
-        "inherits_opening_from_prev_dcas": inherits_opening,
-        "pre_opening_path": str(pre_opening_path.relative_to(project_root)) if inherits_opening else None,
-        "opening_type_enforcement": "skipped_due_to_dcas_inheritance" if inherits_opening else "strict",
-        # === 开头强制约束（DCAS 继承时降级为参考） ===
-        "opening_type": "inherit_from_dcas" if inherits_opening else chosen_opening,
-        "opening_pick_reason": "v17.8 dcas inherit" if inherits_opening else op_reason,
-        "opening_avoid": [] if inherits_opening else recent_opening_clean[-(opening_window - 1):],
-        "opening_rule": "v17.8: pre_opening 继承时跳过；否则: " + opening_rule,
-        "opening_golden_samples": [] if inherits_opening else opening_samples,
+        "inherits_opening_from_prev_dcas": False,
+        "pre_opening_path": None,
+        "opening_type_enforcement": "strict",
+        "opening_type": chosen_opening,
+        "opening_pick_reason": op_reason,
+        "opening_avoid": recent_opening_clean[-(opening_window - 1):],
+        "opening_rule": opening_rule,
+        "opening_golden_samples": opening_samples,
         # === 结尾强制约束 ===
         "ending_type": chosen_ending,
         "ending_pick_reason": en_reason,
