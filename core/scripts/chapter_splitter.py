@@ -1,4 +1,4 @@
-"""chapter_splitter.py — DCAS 章节自动截断（v18 接入 chapter_io）
+"""chapter_splitter.py — cluster 章节自动截断（v27 ecas_freestyle 主模式 · v18 接入 chapter_io）
 
 【设计修正】v17.8 原把 splitter 设计成 LLM agent 是过度设计——
 7 维度评分全是确定性规则，不需要 LLM 语言理解。改为纯 Python 脚本：
