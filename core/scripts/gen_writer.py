@@ -267,7 +267,18 @@ def read_text(p: Path, limit_chars: int = None) -> str:
     return t
 
 
-def _build_style_fingerprint_section(manifest_path: Path) -> str:
+def _load_manifest_once(manifest_path: Path, _preloaded: dict | None = None) -> dict | None:
+    if _preloaded is not None:
+        return _preloaded
+    if not manifest_path.exists():
+        return None
+    try:
+        return json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _build_style_fingerprint_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """从 manifest.author_style_fingerprint 抽显式量化指令拼成 writer prompt 段。
 
     L1a 升格消费（2026-05-31）：build_manifest 在 PROFILE_INJECT_MODE=active 下注入
@@ -278,11 +289,8 @@ def _build_style_fingerprint_section(manifest_path: Path) -> str:
       · 指纹缺失 / 为 None（PROFILE_INJECT_MODE=off/shadow）/ 无 directives → ""（不注入·零回归）。
       · 有 directives → 拼成「作者量化风格指纹」段（advisory · 标注可校准偏离·北极星⑤不硬锁）。
     """
-    if not manifest_path.exists():
-        return ""
-    try:
-        m = json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, OSError):
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
         return ""
     fp = m.get('author_style_fingerprint')
     if not isinstance(fp, dict):
@@ -317,7 +325,7 @@ def _rolling_anchor_inject_mode() -> str:
     return (os.environ.get("ROLLING_ANCHOR_INJECT_MODE") or "shadow").strip().lower()
 
 
-def _build_rolling_anchor_section(manifest_path: Path) -> str:
+def _build_rolling_anchor_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """从 manifest.rolling_style_anchor 抽动态文风锚片段拼 writer prompt 段（dead-zone → 生成点近邻升格）。
 
     返回值：
@@ -326,11 +334,8 @@ def _build_rolling_anchor_section(manifest_path: Path) -> str:
     """
     if _rolling_anchor_inject_mode() != "active":
         return ""
-    if not manifest_path.exists():
-        return ""
-    try:
-        m = json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, OSError):
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
         return ""
     rsa = m.get('rolling_style_anchor')
     if not isinstance(rsa, dict):
@@ -359,18 +364,15 @@ def _build_rolling_anchor_section(manifest_path: Path) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _build_rhythm_signature_section(manifest_path: Path) -> str:
+def _build_rhythm_signature_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """阶段1：从 manifest.author_rhythm_signature 抽序列级节奏指令拼 writer prompt 段。
 
     与量化指纹（句长/段长·节点静态属性）互补——这是「写了这一拍接下一拍」的序列骨
     （节拍转移/翻转率/张力后段保持度/钩子兑现）。RHYTHM_INJECT_MODE=off/shadow 或无
     指纹 → ""（不注入·零回归）。advisory·作者档第一权威·北极星⑤不硬锁。
     """
-    if not manifest_path.exists():
-        return ""
-    try:
-        m = json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, OSError):
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
         return ""
     rs = m.get('author_rhythm_signature')
     if not isinstance(rs, dict):
@@ -391,7 +393,7 @@ def _build_rhythm_signature_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
-def _build_knowledge_gap_section(manifest_path: Path) -> str:
+def _build_knowledge_gap_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """阶段·D3：从 manifest.knowledge_gap_signature 抽读者-角色信息差三态指令拼 writer prompt 段。
 
     序列骨之一（与 rhythm 并列）——「读者比角色多知道还是少知道」是悬念/虐心/打脸的底层
@@ -399,11 +401,8 @@ def _build_knowledge_gap_section(manifest_path: Path) -> str:
     double_blind 双盲悬疑）。KNOWLEDGE_GAP_INJECT_MODE=off/shadow 或无指令 → ""（不注入·
     零回归·切 active 前须过 G3 标注一致性闸 + 消融）。advisory·作者档第一权威·北极星⑤不硬锁。
     """
-    if not manifest_path.exists():
-        return ""
-    try:
-        m = json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, OSError):
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
         return ""
     kg = m.get('knowledge_gap_signature')
     if not isinstance(kg, dict):
@@ -434,7 +433,7 @@ def _deep_dims_inject_mode() -> str:
     return (os.environ.get("DEEP_DIMS_INJECT_MODE") or "shadow").strip().lower()
 
 
-def _build_deep_dims_section(manifest_path: Path) -> str:
+def _build_deep_dims_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """#4（round2）：从 manifest.deep_writing_dims 抽 D1/D2/D3 创作提示拼 writer prompt 段（dead-zone→升格）。
 
     D1_psychic_distance（心理距离档位）/D2_visceral_first_emotion（先生理后命名情绪）/D3_motivation_arc
@@ -443,11 +442,8 @@ def _build_deep_dims_section(manifest_path: Path) -> str:
     """
     if _deep_dims_inject_mode() != "active":
         return ""
-    if not manifest_path.exists():
-        return ""
-    try:
-        m = json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, OSError):
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
         return ""
     dwd = m.get('deep_writing_dims')
     if not isinstance(dwd, dict):
@@ -482,7 +478,7 @@ def _golden_fewshot_inject_mode() -> str:
     return (os.environ.get("GOLDEN_FEWSHOT_INJECT_MODE") or "shadow").strip().lower()
 
 
-def _build_golden_fewshot_section(manifest_path: Path) -> str:
+def _build_golden_fewshot_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """#7：从 manifest.distill_golden_few_shot.passages_by_type 抽原作金句段拼 writer few-shot 段（升格）。
 
     蒸馏库按 scene_type 选的原作金句（模仿句法/节奏·非抄内容）·此前只 raw JSON dead-zone·升格到生成点
@@ -491,11 +487,8 @@ def _build_golden_fewshot_section(manifest_path: Path) -> str:
     """
     if _golden_fewshot_inject_mode() != "active":
         return ""
-    if not manifest_path.exists():
-        return ""
-    try:
-        m = json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, OSError):
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
         return ""
     gfs = m.get('distill_golden_few_shot')
     if not isinstance(gfs, dict):
@@ -528,18 +521,15 @@ def _build_golden_fewshot_section(manifest_path: Path) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _build_narrative_seq_section(manifest_path: Path) -> str:
+def _build_narrative_seq_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """#4：从 manifest.narrative_function_sequence 抽作者签名因果功能链拼 writer prompt 段（结构骨）。
 
     signature_bigrams（face_slap→gain_reward 等因果转移）比段长/句长表层指纹更深·让连续故事块功能
     转移贴作者签名节奏而非默认 LLM 高频模板（中文网文同质化结构层根因）。NARR_FUNC_SEQ_INJECT_MODE=
     off/shadow 或无指令（build_manifest 控字段 None）→ ""（不注入·零回归）。advisory·作者档第一权威·北极星⑤不硬锁。
     """
-    if not manifest_path.exists():
-        return ""
-    try:
-        m = json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, OSError):
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
         return ""
     nfs = m.get('narrative_function_sequence')
     if not isinstance(nfs, dict):
@@ -559,17 +549,14 @@ def _build_narrative_seq_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
-def _build_genre_pack_section(manifest_path: Path) -> str:
+def _build_genre_pack_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """阶段3：从 manifest.genre_pack_directives 拼题材专属工艺段（按 genre·advisory）。
 
     通用维度池(作者层)always-on；题材层(甜宠糖虐/游戏向面板)按 genre 激活。
     GENRE_INJECT_MODE=off/shadow 或 unknown genre → ""（退化纯通用·零回归）。
     """
-    if not manifest_path.exists():
-        return ""
-    try:
-        m = json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, OSError):
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
         return ""
     gp = m.get('genre_pack_directives')
     if not isinstance(gp, dict):
@@ -585,17 +572,14 @@ def _build_genre_pack_section(manifest_path: Path) -> str:
     return "\n".join(lines)
 
 
-def _build_decision_principles_section(manifest_path: Path) -> str:
+def _build_decision_principles_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """阶段2：从 manifest.author_decision_principles 拼作者思维/人物刻画骨段。
 
     骨③作者思维(道德滤镜/心理距离/留白)+骨②刻画手法——「作者在 X 情境倾向 Y」的决策
     原则·段长抓不到的骨。DECISION_INJECT_MODE=off/shadow 或无 → ""（零回归）。advisory。
     """
-    if not manifest_path.exists():
-        return ""
-    try:
-        m = json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (json.JSONDecodeError, OSError):
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
         return ""
     dp = m.get('author_decision_principles')
     if not isinstance(dp, dict):
@@ -826,28 +810,21 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     compressed_path = db / '.manifest' / f'ch_{ch_start:03d}_compressed.json'
     manifest = read_text(compressed_path) if compressed_path.exists() else read_text(manifest_path)
 
-    # L1a 升格消费（2026-05-31）：build_manifest 在 env PROFILE_INJECT_MODE=active 下产出
-    # manifest.author_style_fingerprint（多维量化目标硬数字 + 显式指令文案），但 writer 此前
-    # 只把整 manifest 当 raw text 塞进 prompt 尾部「数据库索引」段 —— 量化指纹深埋 JSON 里
-    # writer 难以识别为「写作目标」。这里**显式解析**该字段，单独拼成醒目的「作者量化风格指纹」
-    # 段注在 prompt 前部（advisory · 北极星⑤不硬锁），让 writer 真消费多维数值目标。
-    style_fp_section = _build_style_fingerprint_section(manifest_path)
-    # 阶段1：作者叙事节奏指纹段（序列级骨·RHYTHM_INJECT_MODE=off/shadow 或无指纹时空 → 零回归）
-    rhythm_section = _build_rhythm_signature_section(manifest_path)
-    # 阶段2：作者决策原则+人物刻画手法段（思维/刻画骨·DECISION_INJECT_MODE 控制·空则零回归）
-    decision_section = _build_decision_principles_section(manifest_path)
-    # 阶段3：题材专属工艺段（按 genre·GENRE_INJECT_MODE 控制·unknown/空则零回归）
-    genre_section = _build_genre_pack_section(manifest_path)
-    # 阶段D3：作者信息差主调段（读者-角色知识差三态·KNOWLEDGE_GAP_INJECT_MODE 控制·默认 shadow 时空 → 零回归）
-    knowledge_gap_section = _build_knowledge_gap_section(manifest_path)
-    # #4：作者签名因果功能链段（结构骨·NARR_FUNC_SEQ_INJECT_MODE 控制·默认 shadow 时 build_manifest 字段 None → 空段零回归）
-    narr_seq_section = _build_narrative_seq_section(manifest_path)
-    # #7：原作金句 few-shot 段（蒸馏 golden_passages 升格·GOLDEN_FEWSHOT_INJECT_MODE 默认 shadow 时空 → 零回归）
-    golden_fewshot_section = _build_golden_fewshot_section(manifest_path)
-    # #4(round2)：深层创作维度段（D1心理距离/D2 visceral/D3动机弧光·DEEP_DIMS_INJECT_MODE 默认 shadow 时空 → 零回归）
-    deep_dims_section = _build_deep_dims_section(manifest_path)
-    # #3 升格：本书文风动态锚段（治 D 级长程退化·ROLLING_ANCHOR_INJECT_MODE 默认 shadow 时空 → 零回归）
-    rolling_anchor_section = _build_rolling_anchor_section(manifest_path)
+    # 预加载 manifest dict（消除 9 个 _build_*_section 各自重复读同一文件的冗余 IO）
+    try:
+        _manifest_dict = json.loads(Path(compressed_path if compressed_path.exists() else manifest_path).read_text(encoding='utf-8'))
+    except Exception:
+        _manifest_dict = {}
+
+    style_fp_section = _build_style_fingerprint_section(manifest_path, _manifest_dict)
+    rhythm_section = _build_rhythm_signature_section(manifest_path, _manifest_dict)
+    decision_section = _build_decision_principles_section(manifest_path, _manifest_dict)
+    genre_section = _build_genre_pack_section(manifest_path, _manifest_dict)
+    knowledge_gap_section = _build_knowledge_gap_section(manifest_path, _manifest_dict)
+    narr_seq_section = _build_narrative_seq_section(manifest_path, _manifest_dict)
+    golden_fewshot_section = _build_golden_fewshot_section(manifest_path, _manifest_dict)
+    deep_dims_section = _build_deep_dims_section(manifest_path, _manifest_dict)
+    rolling_anchor_section = _build_rolling_anchor_section(manifest_path, _manifest_dict)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
