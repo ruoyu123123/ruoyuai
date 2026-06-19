@@ -62,17 +62,18 @@ def _mk_home_memory(home: Path, fname: str, body: str, desc: str = "测试规则
 # ---------- 汇编文件完整性 ----------
 
 def test_bundle_file_exists_with_rule_markers():
-    """汇编文件必须存在·≥20 条规则锚·header 注明机械汇编/重跑汇编·无 frontmatter 残留。"""
+    """汇编文件必须存在·≥12 条规则节（降噪后 13 条）·header 注明随 exe 出货·无 frontmatter 残留。"""
     assert _BUNDLE_FILE.exists(), f"汇编文件缺失: {_BUNDLE_FILE}"
     text = _BUNDLE_FILE.read_text(encoding="utf-8")
-    n_markers = text.count("<!-- FEEDBACK_RULE:")
-    assert n_markers >= 20, f"规则锚仅 {n_markers} 条（应 ≥20·当前源 23 条）"
-    assert text.count("> description:") == n_markers, "description 行数 ≠ 规则锚数"
-    assert "机械汇编" in text and "重跑汇编" in text, "header 缺「机械汇编/重跑汇编」说明"
+    # 降噪后（2026-06-18）每条规则 = "## feedback-<slug>" 节头（去掉了机器锚噪音）
+    import re as _re
+    n_sections = len(_re.findall(r"(?m)^##\s+feedback[-_]", text))
+    assert n_sections >= 12, f"规则节仅 {n_sections} 条（应 ≥12·降噪后源 13 条）"
+    assert "全局 feedback 规则汇编" in text and "随 exe 出货" in text, "header 缺「随 exe 出货」说明"
     assert "originSessionId" not in text, "frontmatter 套话框架未剥干净"
-    # 抽查一条已知规则实质内容（一段一句·用户定稿原文）
-    assert "feedback_one_sentence_per_paragraph.md" in text
-    assert "一个句末标点结束符" in text
+    # 抽查一条已知规则实质内容（no-token-saving·用户定稿原文）
+    assert "feedback-no-token-saving" in text
+    assert "全量传 LLM" in text
 
 
 # ---------- gen_writer fallback ----------
@@ -84,7 +85,7 @@ def test_gen_writer_fallback_loads_bundle_when_home_miss():
             rules = gw._collect_feedback_rules()
     assert rules, "home miss 时 fallback 仍为空 = frozen 断裂未修"
     assert "全局 feedback 规则汇编" in rules, "fallback 没装载汇编文件 header"
-    assert "一个句末标点结束符" in rules, "fallback 缺规则实质内容（一段一句）"
+    assert "全量传 LLM" in rules, "fallback 缺规则实质内容（no-token-saving）"
 
 
 def test_gen_writer_fallback_when_home_dir_empty():
@@ -126,7 +127,7 @@ def test_build_manifest_fallback_digest_from_bundle():
     assert "global_feedback_rules.md" in item["path"]
     assert item["priority"] == "P1"
     digest = item["digest"]
-    assert len(digest) >= 20, f"digest 仅 {len(digest)} 条（应 ≥20）"
+    assert len(digest) >= 12, f"digest 仅 {len(digest)} 条（应 ≥12·降噪后源 13 条）"
     files = {e["file"] for e in digest}
     assert "feedback_no_token_saving.md" in files
     assert all(e["desc"] for e in digest), "存在空 desc"

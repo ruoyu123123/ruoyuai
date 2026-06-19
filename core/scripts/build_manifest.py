@@ -2986,6 +2986,15 @@ def _collect_genre_pack_directives(s: "DatabaseScanner") -> dict | None:
     if mode == "shadow":
         print(f"[SHADOW] genre_pack({genre}): {len(directives)} 条题材工艺 — 不注入 manifest")
         return None
+    # 2026-06-19：从本地知识库补充题材相关知识（随蒸馏/调研自动积累）
+    try:
+        import knowledge_store as _ks
+        kb_items = _ks.query_for_genre(genre, limit=5)
+        if kb_items:
+            payload["knowledge_base_context"] = [item["content"] for item in kb_items]
+            payload["_kb_count"] = len(kb_items)
+    except Exception:
+        pass  # 知识库不存在或异常不影响主流程
     return payload
 
 
@@ -3098,18 +3107,41 @@ def _collect_global_feedback_must_read() -> dict | None:
         gfr = _res_path("core", "claude-home", "lessons", "global_feedback_rules.md")
         if not gfr.exists():
             return None
-        # 汇编文件每条规则节 = "<!-- FEEDBACK_RULE: <fname> -->" 锚 + "> description: ..." 行
+        # 解析每条规则节 → {file, desc}。兼容两种汇编形态：
+        #   · 降噪后（当前·2026-06-18）：节头 "## feedback-<slug>" + 首条正文行作 desc
+        #   · 旧 assemble 输出：可选 "<!-- FEEDBACK_RULE: <fname> -->" 锚 + "> description:" 行
+        lines = gfr.read_text(encoding="utf-8").splitlines()
         digest = []
-        cur_file = None
-        for ln in gfr.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"<!--\s*FEEDBACK_RULE:\s*(\S+)\s*-->", ln)
-            if m:
-                cur_file = m.group(1)
+        pending_fname = None
+        i = 0
+        while i < len(lines):
+            ln = lines[i]
+            mk = re.match(r"<!--\s*FEEDBACK_RULE:\s*(\S+)\s*-->", ln.strip())
+            if mk:
+                pending_fname = mk.group(1)
+                i += 1
                 continue
-            if cur_file and ln.startswith("> description:"):
-                digest.append({"file": cur_file,
-                               "desc": ln[len("> description:"):].strip()[:160]})
-                cur_file = None
+            head = re.match(r"##\s+(feedback[-_][\w-]+)", ln.strip())
+            if head:
+                slug = head.group(1)
+                fname = pending_fname or (slug.replace("-", "_") + ".md")
+                pending_fname = None
+                desc = ""
+                j = i + 1
+                while j < len(lines):
+                    c = lines[j].strip()
+                    if c.startswith("## ") or re.match(r"<!--\s*FEEDBACK_RULE:", c):
+                        break
+                    if c.startswith("> description:"):
+                        desc = c[len("> description:"):].strip()
+                        break
+                    if c and c != "---" and not c.startswith("<!--"):
+                        desc = c
+                        break
+                    j += 1
+                if desc:
+                    digest.append({"file": fname, "desc": desc[:160]})
+            i += 1
         if not digest:
             return None
         return {

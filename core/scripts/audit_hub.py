@@ -1200,6 +1200,14 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "second_order_rhythm_scanner", "SECOND_ORDER_RHYTHM_FLAT", "风格")),
+                # [2026-06-19 联网调研] 过早消解冲突(LLM第一弱点·arXiv:2604.09854)
+                # · 冲突→消解距离<500CJK = 快速消解 · ratio>50%报 · advisory · 默认 shadow
+                ("premature_resolution",
+                 [child_python(), str(_SCRIPT_DIR / "premature_resolution_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "premature_resolution_scanner", "PREMATURE_RESOLUTION", "张力")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

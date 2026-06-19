@@ -398,6 +398,12 @@ def main():
     print(f"         报告: {args.output}", file=sys.stderr)
     if strict_ok:
         print(f"[OK · PASS] 写作端回灌（strict 可估算维全过）· 允许 plan_tracker end", file=sys.stderr)
+        # 2026-06-19：蒸馏完成后自动沉淀知识到本地库（MAPLE 闭环）
+        try:
+            import knowledge_collector as _kc
+            _kc.collect_from_distill(Path(project))
+        except Exception:
+            pass
         sys.exit(0)
     if args.strict:
         print(f"[FAIL · strict] strict 可估算维未全过 · 出货前拦截（修 skill 重蒸馏）", file=sys.stderr)

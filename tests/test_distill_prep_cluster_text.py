@@ -20,7 +20,7 @@ import json
 import shutil
 import sys
 import tempfile
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
@@ -159,21 +159,21 @@ def test_prep_all_chapters_missing_returns_2():
 # ---------- prep 拼接行为 ----------
 
 def test_prep_partial_missing_chapters_returns_0_with_existing():
-    """range [1,3] 但第 2 章缺 → 仍返回 0，只拼第 1+3 章，stderr 报缺 1 章。"""
+    """range [1,3] 但第 2 章缺 → 仍返回 0，只拼第 1+3 章，成功摘要(stdout)报缺 1 章。"""
     tmp = _mk_proj([{"cluster_id": "cluster_001", "chapter_range": [1, 3]}],
                    {1: "第一章正文ALPHA", 3: "第三章正文GAMMA"})  # 故意缺第2章
     try:
         out = tmp / "out.txt"
         buf = io.StringIO()
-        with redirect_stderr(buf):
+        with redirect_stdout(buf):
             rc = mod.prep(tmp, "cluster_001", out)
         assert rc == 0
         txt = out.read_text(encoding="utf-8")
         assert "ALPHA" in txt and "GAMMA" in txt
-        # 缺 1 章提示落 stderr
-        err = buf.getvalue()
-        assert "缺 1 章" in err
-        assert "[2]" in err  # missing[:5] 含第 2 章
+        # 缺 1 章提示落成功摘要行(stdout)
+        msg = buf.getvalue()
+        assert "缺 1 章" in msg
+        assert "[2]" in msg  # missing[:5] 含第 2 章
     finally:
         _rm(tmp)
 

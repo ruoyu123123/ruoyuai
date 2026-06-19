@@ -66,6 +66,7 @@ class Profile:
     protocol: str = "openai"  # openai(默认·/v1/chat/completions) | gemini(原生·streamGenerateContent·支持隐式前缀缓存)
     thinking_level: str | None = None  # gemini-3.x reasoning 模型思考档(LOW/MEDIUM/HIGH)·走 extra_body·LOW=回收15-25k输出预算给正文(治pro偏短·2026-06-06联网调研)·None=不传(flash等非reasoning)
     reasoning_effort: str | None = None  # OpenAI 标准 reasoning 参数(low/medium/high)·走 extra_body·部分 new-api 中转站认此而非 gemini 专有 thinking_level(elysiver 2026-06-16 实测 effort=low 7s 受控·thinking_level 被忽略 63s 失控暴走)·与 thinking_level 独立·按 profile 配置·None=不传
+    max_prompt_chars: int | None = None  # 2026-06-19：中转站 prompt 体量上限(中文字符数·含 system+user)·超限直接跳 fallback 不等超时(elysiver 实测 100KB≈34k 中文字符以上 500)·None=无限制
 
 
 class GenModelConfigError(Exception):
@@ -175,6 +176,7 @@ class GenModelLoader:
                     protocol=((fields.get("protocol") or "openai").strip().lower() or "openai"),
                     thinking_level=((fields.get("thinking_level") or "").strip().upper() or None),
                     reasoning_effort=((fields.get("reasoning_effort") or "").strip().lower() or None),
+                    max_prompt_chars=int(fields["max_prompt_chars"]) if fields.get("max_prompt_chars", "").strip() else None,
                 )
             except (ValueError, KeyError):
                 continue  # 字段解析失败 → 跳过该 profile
@@ -241,6 +243,11 @@ class GenModelLoader:
                 result.append(p)
                 seen.add(name)
         return result
+
+
+class PromptTooLargeError(Exception):
+    """prompt 超过 profile.max_prompt_chars 上限·触发 fallback 跳转而非等超时"""
+    pass
 
 
 class GenModelExhaustedError(Exception):

@@ -63,9 +63,15 @@ def test_get_judge_dims_horror_game():
 def test_get_judge_dims_unknown_and_none_empty():
     """unknown / 无包 / None → {}（退化纯通用池·零回归）。"""
     assert gp.get_judge_dims("unknown") == {}
-    assert gp.get_judge_dims("xianxia") == {}      # canonical 但无专属包
     assert gp.get_judge_dims(None) == {}
     assert gp.get_judge_dims("不存在的题材") == {}
+
+
+def test_get_judge_dims_v2_new_genres():
+    """v2 新增 5 个题材包都有 judge_dims。"""
+    for genre in ("xuanhuan", "xianxia", "urban_supernatural", "scifi_meta", "historical"):
+        jd = gp.get_judge_dims(genre)
+        assert isinstance(jd, dict) and jd, f"{genre} 应有 judge_dims"
 
 
 # ---------- get_pack 归一化：.strip().lower()（既有只测原样小写 key） ----------

@@ -42,7 +42,7 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 import plan_tracker as pt  # noqa: E402
-from log_util import get_logger, print_progress  # noqa: E402
+from log_util import get_logger, print_progress, error as log_stderr  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -326,9 +326,9 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
         worker.start()
         worker.join(timeout_s)
         if worker.is_alive():
-            logger.error(f"[{label}] [watchdog] 脚本 {mod_name} 超时"
-                        f"（{timeout_s:g}s）·标记失败可续跑——弃置线程可能仍在写文件·"
-                        f"该步骤产物可能不完整·续跑会重做本步")
+            log_stderr(f"[{label}] [watchdog] 脚本 {mod_name} 超时"
+                       f"（{timeout_s:g}s）·标记失败可续跑——弃置线程可能仍在写文件·"
+                       f"该步骤产物可能不完整·续跑会重做本步")
             return 124
         if "exc" in outcome:
             raise outcome["exc"]          # 落外层 except Exception → rc=3（原语义）
@@ -336,9 +336,9 @@ def run_script_in_process(tokens: list[str], *, repo_root: Path = REPO_ROOT,
         return int(ret) if isinstance(ret, int) else (0 if ret is None else 3)
     except Exception as e:                # 脚本内部异常 → 当失败退出码（不崩 GUI）
         import traceback
-        logger.error(f"[{label}] in-process 脚本异常: {type(e).__name__}: {e}")
+        log_stderr(f"[{label}] in-process 脚本异常: {type(e).__name__}: {e}")
         for line in traceback.format_exc().splitlines()[-6:]:
-            logger.error(f"[{label}]   {line}")
+            log_stderr(f"[{label}]   {line}")
         return 3
     finally:
         sys.argv = saved_argv
@@ -808,10 +808,17 @@ def run_command(command: str, project: str, *, key: str | None = None,
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue
+                advisory_line = line.startswith("? ")  # 行首 "? " = 条件脚本·非零仅警告
+                if advisory_line:
+                    line = line[2:].strip()
                 ensure_dataflow(step, ctx, line)
                 cmd = _tokenize_then_resolve(line, ctx)
                 rc = runner(cmd, repo_root=repo_root, label=f"step{n}-post-pause")
                 if rc != 0:
+                    if advisory_line:
+                        logger.warning(
+                            f"WARN after_pause 条件脚本退出码 {rc}（advisory·继续）: {cmd}")
+                        continue
                     raise OrchestratorError(
                         f"step {n} after_pause 脚本退出码 {rc}: {cmd}")
 

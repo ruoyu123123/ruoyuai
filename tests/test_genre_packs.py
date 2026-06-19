@@ -34,9 +34,14 @@ def test_canonical_genres_complete():
 def test_get_pack_routing():
     assert gp.get_pack("romance").get("judge_dims")
     assert gp.get_pack("horror_game").get("judge_dims")
-    # unknown / 无包 / None → {} 退化纯通用池（零回归）
+    # v2: xuanhuan/xianxia/urban_supernatural/scifi_meta/historical 全部有包
+    assert gp.get_pack("xuanhuan").get("judge_dims")
+    assert gp.get_pack("xianxia").get("judge_dims")
+    assert gp.get_pack("urban_supernatural").get("judge_dims")
+    assert gp.get_pack("scifi_meta").get("judge_dims")
+    assert gp.get_pack("historical").get("judge_dims")
+    # unknown / None / 空 → {} 退化纯通用池（零回归）
     assert gp.get_pack("unknown") == {}
-    assert gp.get_pack("xianxia") == {}     # 无专属包
     assert gp.get_pack(None) == {}
     assert gp.get_pack("") == {}
 

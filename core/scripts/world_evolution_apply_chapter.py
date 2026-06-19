@@ -277,7 +277,7 @@ def main():
     if args.cluster:
         rng = cluster_lookup.cluster_id_to_range(project_root, args.cluster)
         if not rng or len(rng) != 2:
-            print(f"[FATAL] cluster {args.cluster} 的 chapter_range 未找到（splitter 切完才回填）")
+            print(f"[FATAL] cluster {args.cluster} 的 chapter_range 未找到（splitter 切完才回填）", file=sys.stderr)
             sys.exit(2)
         chapters = list(range(rng[0], rng[1] + 1))
         print(f"[cluster {args.cluster}] 展开 {len(chapters)} 章 (ch{chapters[0]}-{chapters[-1]}) → 逐章 tick")

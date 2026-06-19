@@ -455,7 +455,8 @@ def main():
     warnings = [v["warning"] for k, v in report.items()
                 if isinstance(v, dict) and v.get("warning")]
     if warnings:
-        print(f"\n=== 语义层 AI 腔 {len(warnings)} 项（advisory，写作 agent 可凭理由豁免）===")
+        print(f"\n=== 语义层 AI 腔 {len(warnings)} 项（advisory，写作 agent 可凭理由豁免）===",
+              file=sys.stderr)
         for w in warnings:
             print(f"  {w}", file=sys.stderr)
         sys.exit(1)

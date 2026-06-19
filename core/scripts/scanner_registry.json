@@ -192,6 +192,21 @@
       "issues_emitted": ["LITRPG_STRUCTURE"]
     },
 
+    "premature_resolution": {
+      "layer": "cluster",
+      "script": "premature_resolution_scanner.py",
+      "doc": "[2026-06-19 联网调研·arXiv:2604.09854 LLM第一弱点] 检测冲突/危机提出后过快消解(冲突标志词→消解标志词距离<500CJK)·LLM后段张力仅人类1/3·峰值留存23%(人类52%)·quick_ratio>50%报·🔴金标准(4作者15章拼接各PASS·ratio最高0.1·阈值0.5留5x余量)·advisory·env PREMATURE_RESOLUTION_MODE默认shadow·PREMATURE_RESOLUTION绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["PREMATURE_RESOLUTION"]
+    },
+    "syntactic_diversity": {
+      "layer": "cluster",
+      "script": "syntactic_diversity_scanner.py",
+      "doc": "[2026-06-16 盲区perplexity_obsolete落地] POS n-gram同骨架复用率(per-scene平均覆盖率vs作者基线mean+kσ)+主题过度解释(抽象大词+顿悟连接词同句密度)·arXiv:2407.00211实证AI 95%+含重复句法模板vs人类46%·作者档第一权威(无档退通用兜底)·advisory·env SYNTACTIC_DIVERSITY_MODE默认shadow·SYNTAX_TEMPLATE_OVERUSE/THEME_OVER_EXPLAIN绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["SYNTAX_TEMPLATE_OVERUSE", "THEME_OVER_EXPLAIN"]
+    },
+
     "volume_arc_drift": {
       "layer": "cross-cluster",
       "script": "volume_arc_drift_scanner.py",
