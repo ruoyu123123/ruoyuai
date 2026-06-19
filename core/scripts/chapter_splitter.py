@@ -1,4 +1,4 @@
-"""chapter_splitter.py — cluster 章节自动截断（v27 ecas_freestyle 主模式 · v18 接入 chapter_io）
+"""chapter_splitter.py — cluster 章节自动截断（v27 ecas_freestyle · v18 接入 chapter_io）
 
 【设计修正】v17.8 原把 splitter 设计成 LLM agent 是过度设计——
 7 维度评分全是确定性规则，不需要 LLM 语言理解。改为纯 Python 脚本：
@@ -6,15 +6,11 @@
   - 确定性、可单元测试
   - 速度快（毫秒级）
 
-读 writer 生成的 6000+ 字双章草稿，自动评分候选截断点，切成 ch + ch+1 pre_opening。
+读 writer 生成的整 cluster 草稿，按字数硬范围算 N，自动评分候选切点逐章切。
 
 【v18 改动】正文/数据已分离：
   - 草稿正文从 cio.read_body() 读（v18 纯正文稿 / 旧混合稿通吃）
   - 截断后只重写正文 txt（cio.write_body）——CHANGES 全部归属 ch，splitter 不碰
-  - pre_opening 仍写到 第(N+1)章/.pre_opening.txt
-
-用法（DCAS 双章 · 默认）:
-    python chapter_splitter.py <项目路径> <章节号> [--target 3000] [--tolerance 500] [--dry-run]
 
 用法（v27 ecas_freestyle · 按字数硬范围切 + 末章 pending_tail 补料）:
     python chapter_splitter.py <项目路径> --mode ecas_freestyle \
@@ -178,15 +174,13 @@ def score_split_point(paras, idx, target, tolerance):
 
 # ============ v27 ecas_freestyle 模式 ============
 #
-# 与 DCAS 双章模式的差异（详见 novel-chapter-splitter.md §v27）：
+# 切割规则（详见 novel-chapter-splitter.md §v27）：
 #   - 章数不由外部传 TARGET_CHAPTERS，splitter 按整 cluster 草稿字数自动算
 #     N = round(draft_cjk / 3500)，钳到 [ceil(draft_cjk/4500), floor(draft_cjk/3000)]
 #   - 每章硬范围 3000-4500 CJK（rhythm_profile 微调）
 #   - 末章 < 下限 → 不强切，末段退回 cluster_<key>_pending_tail.txt，本 cluster 只切 N-1 章
 #   - 接 --previous-pending-tail <path> 时把上 cluster 的 pending_tail prepend 到草稿头部联合切
 #   - 沿用 score_split_point 的最佳切点评分（每个等距锚点附近 ±tolerance 选最佳段落边界）
-#
-# 不破坏 DCAS：仅当 --mode ecas_freestyle 时走本分支，默认仍走原 main() 双章逻辑。
 
 # rhythm_profile → (每章下限, 每章上限, 目标)
 RHYTHM_RANGES = {
@@ -281,7 +275,7 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
     global CHAR_NAMES
     CHAR_NAMES = _load_char_names(project_root) or CHAR_NAMES   # 动态角色名（跨书通用切点评分）
     lo, hi, target = _resolve_rhythm(rhythm_profile)
-    tolerance = 600  # freestyle 锚点搜索半径（比 DCAS 略宽，给最佳切点更多空间）
+    tolerance = 600  # freestyle 锚点搜索半径（给最佳切点更多空间）
 
     # 1. prepend 上 cluster pending_tail（跨 cluster 补料）
     prepend_cjk = 0
@@ -494,131 +488,12 @@ def main():
         print(__doc__)
         sys.exit(0)
 
-    # ---- v27 ecas_freestyle 分发（在 DCAS 位置参数解析之前拦截）----
+    # ---- v27 ecas_freestyle 分发 ----
     if "--mode" in args and args[args.index("--mode") + 1:args.index("--mode") + 2] == ["ecas_freestyle"]:
         return _main_freestyle(args)
 
-    # ⚠️ DEPRECATED（2026-05-29 北极星 P3 [F4]）：以下 DCAS 双章切割路径已废弃。
-    # v27 cluster 主轨一律走 --mode ecas_freestyle（按字数硬范围切 + pending_tail 补料），
-    # 不再有流水线触达本位置参路径。保留仅为向后兼容旧手动调用；下方 helper（score_split_point/
-    # split_paragraphs_with_offset/strip_title）被 _main_freestyle 共用，故不删整文件。
-    project_root = Path(args[0])
-    global CHAR_NAMES
-    CHAR_NAMES = _load_char_names(project_root) or CHAR_NAMES   # 动态角色名（跨书通用切点评分）
-    ch = int(args[1])
-    target = 3000
-    tolerance = 500
-    dry_run = "--dry-run" in args
-    # v24 黄金三章倒叙模式参数
-    narrative_mode = "linear"
-    for i, a in enumerate(args):
-        if a == "--target" and i + 1 < len(args):
-            target = int(args[i + 1])
-        if a == "--tolerance" and i + 1 < len(args):
-            tolerance = int(args[i + 1])
-        if a == "--narrative-mode" and i + 1 < len(args):
-            narrative_mode = args[i + 1]  # linear | in_medias_res
-
-    # v24 黄金三章倒叙模式说明（实际重组在 novel-chapter-splitter agent ECAS 模式实现，
-    # 本 DCAS 脚本仅暴露参数接口，DCAS 双章模式不做倒叙重组）
-    if narrative_mode == "in_medias_res":
-        print(f"[INFO] narrative_mode=in_medias_res 已识别 ·"
-              f" DCAS 双章模式不实现倒叙重组，建议改用 ECAS 模式 + novel-chapter-splitter agent")
-
-    # 找草稿正文文件（v18：cio 兼容 4 布局 + 旧平铺）
-    draft_path = cio.find_body_file(project_root, ch)
-    if not draft_path:
-        print(f"[FATAL] 找不到 ch{ch} 草稿", file=sys.stderr)
-        sys.exit(2)
-
-    # v18：正文经 cio 读取（纯正文稿直接读，旧混合稿自动剥离 CHANGES 段）
-    body = cio.read_body(project_root, ch)
-    title, content = strip_title(body)
-    total_wc = cio.count_words(content)
-
-    if total_wc < target + tolerance:
-        print(f"[FATAL] 草稿仅 {total_wc} 字 < {target}+{tolerance}，不足双章长度。"
-              f"不切割——可能 writer 没按 DCAS 模式生成。", file=sys.stderr)
-        sys.exit(1)
-
-    paras = split_paragraphs_with_offset(content)
-    candidates = []
-    for idx in range(len(paras) - 1):
-        r = score_split_point(paras, idx, target, tolerance)
-        if r:
-            candidates.append(r)
-
-    if not candidates:
-        print(f"[FATAL] 无合格候选截断点（字数都偏离 {target}±{tolerance}）", file=sys.stderr)
-        sys.exit(1)
-
-    # v17.8 修正：score 降序 + 字数接近 target 做 tie-break（避免并列）
-    candidates.sort(key=lambda x: (-x["score"], abs(x["word_count_before"] - target)))
-    top1 = candidates[0]
-    top2 = candidates[1] if len(candidates) > 1 else None
-    # uncertainty 改判：score 相同但已用字数 tie-break → 不算 uncertain
-    uncertainty = bool(top2 and top1["score"] == top2["score"]
-                       and abs(top1["word_count_before"] - target) == abs(top2["word_count_before"] - target))
-
-    # 切割
-    split_idx = top1["para_idx"]
-    before_paras = paras[:split_idx + 1]
-    after_paras = paras[split_idx + 1:]
-    before_content = "\n\n".join(p["text"] for p in before_paras)
-    after_content = "\n\n".join(p["text"] for p in after_paras)
-
-    # v18：正文文件只放纯正文（title + 截断前内容）；CHANGES 全部归属 ch，
-    # 留在 第NNN章_changes.json，splitter 不切、不动它。
-    ch_body = f"{title}\n\n{before_content}" if title else before_content
-    pre_opening = after_content
-
-    report = {
-        "schema_version": "1.0",
-        "scanner": "chapter_splitter",
-        "current_chapter": ch,
-        "next_chapter": ch + 1,
-        "draft_total_words": total_wc,
-        "candidates_count": len(candidates),
-        "chosen_split_point": {
-            "para_idx": top1["para_idx"],
-            "word_count_before": top1["word_count_before"],
-            "word_count_after": total_wc - top1["word_count_before"],
-            "score": top1["score"],
-            "reasons": top1["reasons"],
-        },
-        "top3_candidates": [
-            {"para_idx": c["para_idx"], "wc_before": c["word_count_before"], "score": c["score"]}
-            for c in candidates[:3]
-        ],
-        "uncertainty_flag": bool(uncertainty),
-        "dry_run": dry_run,
-    }
-    # v17.8 修正：草稿远超 2×target 时，pre_opening 会偏长
-    pre_opening_wc = total_wc - top1["word_count_before"]
-    if pre_opening_wc > target + tolerance:
-        report["pre_opening_oversized"] = True
-        report["pre_opening_word_count"] = pre_opening_wc
-        report["note"] = (
-            f"pre_opening {pre_opening_wc} 字 > {target}+{tolerance}。"
-            f"writer 在 DCAS 模式写超了（草稿 {total_wc} 字 vs target ~6500）。"
-            f"ch{ch+1} 启动时可直接用 pre_opening 作为完整章节，或再次 DCAS 切割"
-        )
-
-    if not dry_run:
-        # 写 ch 正文（截断前 · 纯正文）——cio.write_body 落到标准嵌套路径
-        written_body = cio.write_body(project_root, ch, ch_body)
-        # 写 ch+1 pre_opening
-        next_dir = project_root / "章节" / f"第{ch+1:03d}章"
-        next_dir.mkdir(parents=True, exist_ok=True)
-        pre_path = next_dir / ".pre_opening.txt"
-        pre_path.write_text(pre_opening, encoding="utf-8")
-        report["files_written"] = [
-            str(written_body.relative_to(project_root)),
-            str(pre_path.relative_to(project_root)),
-        ]
-
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    sys.exit(0)
+    print("[FATAL] DCAS双章模式已废弃(v27+)，请使用 --mode ecas_freestyle", file=sys.stderr)
+    sys.exit(2)
 
 
 def _main_freestyle(args):
