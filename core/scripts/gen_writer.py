@@ -1032,7 +1032,7 @@ scope_summary 描述的场景类型/角色构成是**剧情硬契约**（如"对
 - **🆕 比喻/质感库单一化**：同一核心意象的喻体（如同化=「打磨过的石头」、某角色声纹标签「声音像放凉的粥」）单 cluster 同喻体 ≤ 4 次——换不同喻体别复读同一个，否则恐怖/角色辨识度被钝化成塑料感
 - **🆕 动作环跨场景累计**：单一肢体动作模板（低头看 X / 扯拉链 / 转某道具）单 cluster 累计 ≤ 6 次（C3b 的跨场景强化版·别让配角沦为「单一道具机器」）
 
-# 输出格式（DCAS 模式 · 用户明确偏好）
+# 输出格式（cluster 连续叙事模式）
 
 **核心原则：你输出的是「一整块连续叙事正文」，给后续 chapter-splitter 决定章节自然截断点的素材。**
 
@@ -1815,7 +1815,7 @@ def split_text_and_changes(reply: str) -> tuple:
         body = '\n'.join(_lines).rstrip()
         logger.info(" [strip] 剥离 reasoning 模型破壁助手尾注（请审阅/请告诉我/CHANGES JSON 类）")
 
-    # DCAS 模式（用户偏好）：如果 gen-model 仍误带「第 N 章 标题」分章标记，stderr 警告
+    # cluster 连续叙事模式：如果 gen-model 仍误带「第 N 章 标题」分章标记，stderr 警告
     # 不主动删除（让 splitter 决定怎么处理），只提示 prompt 没生效
     if re.search(r'^第\s*[一二三四五六七八九十百千\d]+\s*章\s', body, re.MULTILINE):
         logger.warning("[WARN] gen-model 输出含「第 N 章 标题」分章标记 — "
