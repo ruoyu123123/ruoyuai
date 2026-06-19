@@ -40,8 +40,14 @@ def record_reject(
     reward_before: float,
     reward_after: float,
     reason: str,
+    model_profile: str = "",
 ) -> Path:
-    """落盘一条 reject 记录。"""
+    """落盘一条 reject 记录。
+
+    Args:
+        model_profile: L3 model 隔离——记录用的 gen-model profile 名,
+            换模型后按 profile 过滤防跨模型污染 (G1 调研发现)。
+    """
     rec = {
         "patch_id": patch_id,
         "epoch": epoch,
@@ -50,6 +56,7 @@ def record_reject(
         "reward_before": reward_before,
         "reward_after": reward_after,
         "reason": reason,
+        "model_profile": model_profile,
         "ts": datetime.now().isoformat(timespec="seconds"),
     }
     p = _buffer_path(project_root, epoch)
@@ -58,8 +65,17 @@ def record_reject(
     return p
 
 
-def load_epoch_rejects(project_root: Path, epoch: int) -> list[dict]:
-    """读本 epoch 已积累的 reject 全量。"""
+def load_epoch_rejects(
+    project_root: Path,
+    epoch: int,
+    model_filter: str = "",
+) -> list[dict]:
+    """读本 epoch 已积累的 reject (可按 model_profile 过滤)。
+
+    Args:
+        model_filter: 非空时只返回该 model 的 reject (G1 model 隔离)。
+            空字符串=不过滤(向后兼容)。
+    """
     p = _buffer_path(project_root, epoch)
     if not p.exists():
         return []
@@ -69,9 +85,12 @@ def load_epoch_rejects(project_root: Path, epoch: int) -> list[dict]:
         if not line:
             continue
         try:
-            out.append(json.loads(line))
+            rec = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if model_filter and rec.get("model_profile", "") != model_filter:
+            continue
+        out.append(rec)
     return out
 
 

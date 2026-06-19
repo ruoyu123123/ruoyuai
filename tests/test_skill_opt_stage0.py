@@ -376,3 +376,24 @@ def test_reward_real_data_凿窍纪_cluster_002():
     assert comp.truth_clean is True
     # cluster_002 chapter_range 应是 [4, 7]
     assert comp.raw.get("truth_chapters") == [4, 5, 6, 7]
+
+
+# -------- L6: validation_gate SFS 地板 --------
+
+def test_gate_floor_rejects_below():
+    """L6: score_after < floor → 无条件拒绝 (即使优于 before)。"""
+    r = validation_gate.decide([0.3, 0.3], [0.5, 0.5], floor=0.7)
+    assert not r.accepted
+    assert "FLOOR_REJECT" in r.reason
+
+
+def test_gate_floor_allows_above():
+    """L6: score_after >= floor + 严格优于 → 接受。"""
+    r = validation_gate.decide([0.5, 0.5], [0.8, 0.8], floor=0.7)
+    assert r.accepted
+
+
+def test_gate_floor_none_backward_compat():
+    """L6: floor=None → 不检查 (向后兼容)。"""
+    r = validation_gate.decide([0.3, 0.3], [0.5, 0.5], floor=None)
+    assert r.accepted

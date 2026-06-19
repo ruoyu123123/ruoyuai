@@ -395,6 +395,12 @@ def train(
                 log.steps_rejected += 1
                 # 落 reject buffer (论文核心:防重蹈)
                 for i, p in enumerate(pr.applied):
+                    # L3: 记录 model profile 防跨模型污染
+                    try:
+                        from gen_model_loader import get_default_loader
+                        _mp = get_default_loader().get_active_profile().name
+                    except Exception:
+                        _mp = ""
                     reject_buffer.record_reject(
                         project_root=project_root,
                         epoch=ep,
@@ -404,6 +410,7 @@ def train(
                         reward_before=gate.score_before,
                         reward_after=gate.score_after,
                         reason=gate.reason,
+                        model_profile=_mp,
                     )
                 print(f"  [ep{ep}_step{step}] REJECT {gate.reason}")
 
