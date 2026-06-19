@@ -131,7 +131,7 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 │       ├── 第{N}章_摘要.md                    # 200 字摘要
 │       ├── 第{N}章_反思.md                    # 写作反思
 │       ├── 第{N}章_走向卡.md                  # 下一章走向卡
-│       └── .pre_opening.txt                   # 【v17.8 DCAS】下章 pre_opening（隐藏文件，不入 git）
+│       └── cluster_{key}_pending_tail.txt      # 【v27】末章不足 3000 CJK 退回的尾段（等下 cluster 拼）
 │
 ├── _tmp/                                       # 临时文件
 └── _archive/                                   # 归档（重写章节时）
@@ -517,7 +517,7 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 | v1.8 | 2026-05-15 | P1-6：`posttooluse_plan_check.py` 加 **self-correct injection** —— (1) auto-step 成功后追加「下一步提示」(`↪ 下一步: step N (name), 期望输出: ...`) 反馈给 agent context；(2) 停滞检测：plan 已 in_progress 但 >10 分钟无新 step 完成 → 输出 `📋 [Plan-drift]` 提示。链式引导 agent self-correct，不拦截不阻断。 |
 | v1.9 | 2026-05-15 | P2-5：`learning_loop.py` 加 **时间维度衰减/清理** —— `success_patterns` / `failure_patterns` 加 `updated_at` 字段（创建/刷新时自动盖戳，`_route_entry` + `_escalate_recurring` 两处植入）；`--scan-recurring` 自动跑 `_prune_and_decay`：超 `DECAY_DAYS=14` 天未强化 → confidence `*=0.8`，超 `EXPIRY_DAYS=30` 天未强化 → 自动清理。旧条目（无 `updated_at`）首次扫描时迁移打戳，**非破坏式**。 |
 | v1.10 | 2026-05-15 | P2-6：`judge_consensus.py` 加 **persona 维度分析** —— `JudgeReport` 可选 `persona` 字段（如 `common_reader` / `developmental_editor` / `line_editor` / `harsh_critic`），merge 时输出 `persona_breakdown`（按 persona 分组的平均评分）+ `persona_dissent_severity`（跨 persona 的 grade level 极差）。Persona 间分歧 ≥ 2 grade levels 触发 escalate。**向前兼容**：所有 report 都无 persona 字段时退回原行为（合并到 default 桶）。schema_version 1.0→1.1。 |
-| v1.11 | 2026-05-15 | P2-7：voice 链路加 **反 over-generalize 守则** —— `novel-voice-keeper.md` 加守则段（不把单段特色横移、catchphrase 是允许非必须、单次样本不构成硬约束）；`distill-character.md` voice_pack 蒸馏要求 `style_samples`/`anti_samples` 频次 ≥2 章节、`catchphrases` 频次 ≥3 次才升级；`banned_phrases` 不受门槛（底线，首次即列）。判断口诀：「频次 ≥3 才算 pattern」「未见 ≠ 违规」「特色 ≠ 必用」。 |
+| v1.11 | 2026-05-15 | P2-7：voice 链路加 **反 over-generalize 守则** —— `novel-voice-checker.md` 加守则段（不把单段特色横移、catchphrase 是允许非必须、单次样本不构成硬约束）；`distill-character.md` voice_pack 蒸馏要求 `style_samples`/`anti_samples` 频次 ≥2 章节、`catchphrases` 频次 ≥3 次才升级；`banned_phrases` 不受门槛（底线，首次即列）。判断口诀：「频次 ≥3 才算 pattern」「未见 ≠ 违规」「特色 ≠ 必用」。 |
 | v1.12 | 2026-05-15 | P2-8：`plan_tracker.py` 加 **subagent cost 追踪** —— `step` 子命令加 `--tokens N` + `--duration-ms N` 可选参数，持久化到 step 字段 `tokens_used`/`duration_ms`；`end_plan` 返回值加 `cost_summary` 段（total_tokens / total_duration_ms / steps_with_cost）；`status` CLI 行末追加 `[X.XK tok, X.Xs]` 显示。**幂等扩展**：已 completed 的 step 可补录 cost（不重写其他字段）。**向后兼容**：不传 cost 参数完全不写字段，所有旧调用零冲击。test 套件加 `TestCostTracking` 4 用例（30→34 全过）。 |
 | v1.13 | 2026-05-15 | P2-9：`novel-researcher.md` 加 **iterative-retrieval 模式（Step 2.5）** —— 首轮广查询完成后基于结果识别 2-3 个跟进问题（空白补全 / 细节深挖 / 矛盾消解），最多 1 轮跟进。触发条件：SCOPE 结果 <2 OR 出现不确定标记 OR 多源矛盾。报告 Synthesis 段末标注跟进状态。**向前兼容**：现有 Step 1/2/3 不重编号，跳过条件明确。 |
 | v1.14 | 2026-05-15 | P2-10：`pretooluse_agent_gate.py` 加 **规则 9 内容级注入模式检测**（warn-only）—— 10 条英中双语 injection 模板（"ignore previous instructions" / "disregard above" / "忽略之前指令" / "重新定义你是" 等）。命中 ≥2 个不同 pattern 时 stderr 警告但 exit 0 不拦截，避免误伤 NPC 对话/研究内容中的合法字符串。补 anti-slop + plan attestation 之外的内容级威胁视角。 |

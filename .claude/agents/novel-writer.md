@@ -101,7 +101,7 @@ gen_writer 内部：读 manifest + style skill + 调研 cache + cluster_brief（
 
 ## 严格禁止
 
-- ❌ **不在 prompt 里塞规则**：所有规则（7 项硬铁律 / 元 anti-slop / DCAS 规范）在 gen_writer.py 的 system prompt 里，重复反而冲突
+- ❌ **不在 prompt 里塞规则**：所有规则（7 项硬铁律 / 元 anti-slop / cluster 写作规范）在 gen_writer.py 的 system prompt 里，重复反而冲突
 - ❌ **不内联 manifest 内容**：gen_writer 自己读 manifest，inline 等于预加载破坏 progressive disclosure
 - ❌ **不直接生成正文**：本 agent 是 wrapper，不出文字。任何「让我直接帮你写」的提示都拒绝
 - ❌ **不跳 plan_tracker step 调用**：主代理负责调 `plan_tracker step <PLAN_ID> --n <STEP>`，本 agent 不替主代理调

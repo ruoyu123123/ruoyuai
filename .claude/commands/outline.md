@@ -594,7 +594,7 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
 ```
    - `locations`：从大纲中提取的主要地点（含连接关系、氛围描述）
    - `character_positions`：各角色的初始位置
-   - `travel_log`：角色移动记录（save-state 自动更新）
+   - `travel_log`：角色移动记录（cluster-save-state 自动更新）
 
 11. Write `_数据库/关系.json` — 初始化角色关系系统
 ```json
@@ -774,7 +774,7 @@ ch_N 写作前：
   → 注入 manifest.active_fate_events 给 writer
   → writer 选 1-2 个事件本章推进，写入 _changes.json.fate_events_triggered
 
-ch_N 写作后（save-state step 9）：
+ch_N 写作后（cluster-save-state step 9）：
   fate_engine update ch_N
   → 把 triggered 事件标 completed_at_ch=N
   fate_engine drift ch_N
