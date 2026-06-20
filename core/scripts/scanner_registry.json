@@ -311,6 +311,20 @@
       "_new": true,
       "issues_emitted": ["ANTAGONIST_FIDELITY_FLAT"]
     },
+    "unreliable_narrator_typology": {
+      "layer": "cluster",
+      "script": "unreliable_narrator_typology_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-G·L19 Brei et al. ACL 2025 TUNa·Phelan Living to Tell about It·LHN Unreliability] Phelan 6 轴(knowledge/perception/value/ethics/narration_reliability/intent) × TUNa 4 原型(picaro/madman/naif/clown) + 8 类 verbal_tic(hedge/fault_admission/defensive/digression/inner_inconsistency/selective_memory/disbelief/picaro_cunning) 密度·LLM 默认产全可靠中性叙述=工艺扁平·门控 unreliable_narrator_profile(reliable=1.0 → skip 爽文默认旁路)·signal_intensity_target 当 floor·与 R7 firstperson_retro 正交(前者查时态距离·本者查可信度距离)·advisory·env UNRELIABLE_NARRATOR_MODE 默认 shadow·🔬阈值占位待校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["UNRELIABLE_NARRATOR_SIGNAL_THIN"]
+    },
+    "gricean_flouting_density": {
+      "layer": "cluster",
+      "script": "gricean_flouting_density.py",
+      "doc": "[2026-06-20 R8 W4 Batch-G·L21 Media Horizons 2025 戏剧 flouting·JELTAL CP&maxims·Lakin 高手对话在没说什么] Gricean 四准则 flouting 潜台词密度·四子检测器 Quality(反讽代理词才怪/呵呵)/Quantity(turn 字数 <4 或 >80)/Relation(说回正事/扯远了/开口 反正/对了)/Manner(也许/或许/再说吧含混词)·聚合 flouting_per_dialogue_turn·作者档 dialogue_flouting_profile.expected_flouting_min 第一权威·通用阈值 0.15 兜底·与 R6 OIR + D2 延迟解码正交·官场/心理类基线高·爽文低·advisory·env GRICEAN_FLOUTING_MODE 默认 shadow·🔬阈值占位待校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["GRICEAN_FLOUTING_THIN"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",
@@ -367,6 +381,14 @@
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["PRESENCE_GINI_DEVIATION", "PRESENCE_LONG_TAIL_FORGOTTEN"]
+    },
+    "motif_recurrence_ledger": {
+      "layer": "cross-cluster",
+      "script": "motif_recurrence_ledger.py",
+      "doc": "[2026-06-20 R8 W4 Batch-G·L20 阮芳水浒哨棒18次+arXiv:2503.07977 leitmotif+arXiv:2510.18561 TUNa folktale motif+Tim Weed Image Systems] 跨 cluster 母题循环账本(草蛇灰线)·五类(物件/意象/口头禅/感官印记/地名·三类内置词典+作者档 author_motif_signature 扩 places/catchphrase)·五态(new_seed N=1/recurring ≥3/dormant 末≥3 cluster 缺席/over_saturated N>7 且覆盖率>80%/payoff_due dormant+promise 标记)·Gini 系数 by category+N、R 直方图·输出 _数据库/motif_ledger.json 完整账本 + .cross_chapter_scan/motif_advisory_snapshot.json 供 build_manifest 注入下个 cluster·零 LLM 确定性·advisory·env MOTIF_RECURRENCE_MODE 默认 shadow·🔬阈值占位待金标准校准·绝不 hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["MOTIF_DORMANT", "MOTIF_OVER_SATURATED", "MOTIF_PAYOFF_DUE", "MOTIF_SEED_PROLIFERATION"]
     }
   },
 

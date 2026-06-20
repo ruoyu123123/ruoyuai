@@ -53,6 +53,7 @@ SCAN_TIERS = {
         "cross_cluster_narrative_debt_ledger_aggregate",  # 2026-06-20 R7 Batch-D：叙事债务账本（book/volume/scene stock+flow·advisory·env NARRATIVE_DEBT_MODE 默认 shadow）
         "cross_cluster_sagging_middle_aggregate",  # 2026-06-20 R7 Batch-D：Sagging Middle 检测（40-60% 区段·advisory·env SAGGING_MIDDLE_MODE 默认 shadow）
         "cross_cluster_character_presence_balance_aggregate",  # 2026-06-20 R7 Batch-D：角色出场失衡+长尾遗忘+作者 ECDF z-band（advisory·env CHARACTER_PRESENCE_BALANCE_MODE 默认 shadow）
+        "motif_recurrence_ledger",  # 2026-06-20 R8 W4 Batch-G L20：跨 cluster 母题循环账本(草蛇灰线·五类 props/imagery/sensory/places/catchphrase·五态 new_seed/recurring/dormant/over_saturated/payoff_due·Gini+N/R 直方图·advisory·env MOTIF_RECURRENCE_MODE 默认 shadow）
     ],
 }
 
@@ -205,7 +206,8 @@ def main():
             cmd = [child_python(), str(sc_path), str(project_root), "--ch", str(args.ch)]
         elif sc in ("cross_cluster_arc_progression_aggregate", "cross_cluster_world_dynamics_aggregate",
                     "cross_cluster_foreshadow_rhythm_aggregate", "cross_cluster_will_learn_aggregate",
-                    "cross_cluster_structure_compliance_aggregate"):
+                    "cross_cluster_structure_compliance_aggregate",
+                    "motif_recurrence_ledger"):  # 不需 --last-n / --ch · 自取末 N cluster
             cmd = [child_python(), str(sc_path), str(project_root)]
         else:
             cmd = [child_python(), str(sc_path), str(project_root), "--last-n", str(args.last_n)]

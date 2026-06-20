@@ -1324,6 +1324,26 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "antagonist_fidelity_scanner", "ANTAGONIST_FIDELITY_FLAT", "剧情")),
+                # [2026-06-20 R8 W4 Batch-G·L19 Phelan 6 轴 × TUNa 4 原型] 不可靠叙述 + 8 类 verbal_tic 密度
+                # · unreliable_narrator_profile 门控(reliable=1.0 → skip)·与 firstperson_retro 正交
+                # · advisory · 默认 shadow
+                ("unreliable_narrator_typology",
+                 [child_python(), str(_SCRIPT_DIR / "unreliable_narrator_typology_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "unreliable_narrator_typology_scanner",
+                     "UNRELIABLE_NARRATOR_SIGNAL_THIN", "风格")),
+                # [2026-06-20 R8 W4 Batch-G·L21 Gricean flouting] 对话四准则 flouting 潜台词密度
+                # · 四子检测器 Quality/Quantity/Relation/Manner·作者档 dialogue_flouting_profile 优先
+                # · 与 R6 OIR + D2 延迟解码正交·advisory·默认 shadow
+                ("gricean_flouting_density",
+                 [child_python(), str(_SCRIPT_DIR / "gricean_flouting_density.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "gricean_flouting_density",
+                     "GRICEAN_FLOUTING_THIN", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
