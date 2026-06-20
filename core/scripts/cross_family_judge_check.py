@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """cross_family_judge_check.py — 跨家族 judge ensemble 抑制 self-preference / family bias
-(advisory · shadow · 2026-06-20 A 方案回滚至 inline 文件协议占位)
+(advisory · shadow · 2026-06-20 A 方案·inline 文件协议·吃 Claude Code 订阅零月费)
 
 【背景】R10 联网调研(arXiv 2604.23178 Judging the Judges May 2026 — Claude
 self-preference +11.2pp · Gemini +4.6pp + NeurIPS 2026 Self-Preference Bias +
 FutureAGI 2026 三家族 ensemble)：单模型 judge 评分系统性偏向同家族产出
 (self-preference bias)。
 
-【2026-06-20 A 方案回滚】用户决策：主代理 Claude Code CLI 即唯一入口·
-不再维护 BYOK Anthropic 协议直连。本模块降级为占位 stub：
-  - 保留 maybe_run 入口契约（status / mode / judge_name / verdict_pair / reason）
-  - 永远返回 status='skipped' + reason='BYOK Claude path removed — awaiting inline file
-    protocol (phase 2)'
-  - 不再调 llm_transport / Anthropic / keyring
-  - orchestrator default_judge_dispatch 末端 hook 调用契约不变（永远拿到 skipped）
+【2026-06-20 A 方案 inline 文件协议】
+本模块**不再直连 Anthropic / 不依赖 BYOK**。
+跨家族复审 = 让**主代理 Claude Code**(同一个跑流水线的 Claude 自身)在
+spawn judge subprocess 之前，先 spawn 一个 Agent(claude) 复审 finale subcluster 的
+audit / voice 维度·结果以 inline 文件落到 `_数据库/.wal/claude_verdict_<sha12>_<judge>.json`。
 
-【下一 phase 设计】跨家族复审改 inline 文件协议（主代理 Claude Code 自身读 draft + judge
-prompt 后写 _数据库/.wal/claude_verdict_<sha>_<name>.json·orchestrator 读该文件做
-agree/disagree 比对）。在那之前永远 skipped 维持 advisory · shadow 默认不阻断主链。
+orchestrator default_judge_dispatch 末端调 maybe_run：
+  ① 模式 off / 非 eligible / 非 finale / 无 draft → skip
+  ② 查 `_数据库/.wal/claude_verdict_<draft_sha[:12]>_<judge>.json` → 命中即用
+     (verdict + reason + source='inline_agent_spawn')
+  ③ 未命中 → skip + reason='无主代理 inline verdict·建议主代理 spawn Agent 写 .wal 后重跑'·
+     **绝不阻断主链**(advisory)
+
+主代理给 finale subcluster 主动 spawn Agent(claude) 复审后调
+`save_inline_verdict_for_main_agent(draft_text, judge_name, verdict, reason, project_root)`
+落 .wal 文件·下一次 cluster-save-state step 7 audit/voice 跑到 orchestrator 末端就会被捡用。
 
 env CROSS_FAMILY_JUDGE_MODE: off / shadow(默认) / active（off 显式标 mode=off）。
 
@@ -27,6 +32,7 @@ env CROSS_FAMILY_JUDGE_MODE: off / shadow(默认) / active（off 显式标 mode=
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -49,14 +55,105 @@ def _mode() -> str:
     return m if m in ("off", "shadow", "active") else "shadow"
 
 
+def _draft_sha12(draft_text: str) -> str:
+    """前 12 位 sha256 = inline verdict 文件名锚·防 draft 改了仍用陈旧裁决。"""
+    h = hashlib.sha256(draft_text.encode("utf-8", errors="replace")).hexdigest()
+    return h[:12]
+
+
+def _inline_verdict_path(project_root, draft_text: str, judge_name: str) -> Path:
+    """返回 inline 复审 verdict 文件标准路径。"""
+    pr = Path(project_root) if project_root else Path(".")
+    sha = _draft_sha12(draft_text)
+    return pr / "_数据库" / ".wal" / f"claude_verdict_{sha}_{judge_name}.json"
+
+
+def _try_load_inline_verdict(draft_text: str, judge_name: str,
+                             project_root) -> dict | None:
+    """读主代理 spawn Agent(claude) 写的 inline verdict 文件。
+
+    路径：<project_root>/_数据库/.wal/claude_verdict_<sha[:12]>_<judge>.json
+    匹配条件：文件存在 + draft_sha256_prefix 字段与当前 draft 算出来的 sha12 一致。
+
+    返回 dict {verdict, reason, source='inline_agent_spawn'} 或 None。
+    任何 OSError / JSONDecodeError / 字段缺失/类型不对 → None（try-catch 全静默）。
+    """
+    if not draft_text or not project_root or not judge_name:
+        return None
+    try:
+        p = _inline_verdict_path(project_root, draft_text, judge_name)
+        if not p.exists():
+            return None
+        try:
+            d = json.loads(p.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(d, dict):
+            return None
+        sha = _draft_sha12(draft_text)
+        if d.get("draft_sha256_prefix") != sha:
+            return None
+        verdict = d.get("verdict")
+        if verdict not in ("pass", "issues"):
+            return None
+        reason = d.get("reason") or ""
+        if not isinstance(reason, str):
+            reason = str(reason)
+        return {
+            "verdict": verdict,
+            "reason": reason,
+            "source": "inline_agent_spawn",
+            "claude_model": d.get("claude_model") or "via-claude-code-agent",
+        }
+    except Exception:    # noqa: BLE001 — 任何异常静默 skip 主链不阻断
+        return None
+
+
+def save_inline_verdict_for_main_agent(draft_text: str, judge_name: str,
+                                       verdict: str, reason: str,
+                                       project_root,
+                                       claude_model: str =
+                                       "via-claude-code-agent") -> bool:
+    """主代理（Claude Code 自身）spawn Agent(claude) 复审 finale subcluster 后调本函数
+    把裁决落 `_数据库/.wal/claude_verdict_<sha[:12]>_<judge>.json`·下一轮
+    orchestrator 调 maybe_run 时自动 _try_load_inline_verdict 捡用。
+
+    返回 True / False（任何 OSError / 目录不存在 → False·绝不抛）。"""
+    if not draft_text or not judge_name or not project_root:
+        return False
+    if verdict not in ("pass", "issues"):
+        return False
+    try:
+        p = _inline_verdict_path(project_root, draft_text, judge_name)
+        # 不主动 mkdir：目录应由 outline / save-state scaffolding 已建好。
+        # 目录缺失 = 项目结构不完整 → 静默 False（北极星：不干涉主流程）。
+        if not p.parent.exists():
+            return False
+        payload = {
+            "draft_sha256_prefix": _draft_sha12(draft_text),
+            "judge_name": judge_name,
+            "verdict": verdict,
+            "reason": reason or "",
+            "source": "inline_agent_spawn",
+            "claude_model": claude_model,
+        }
+        p.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                     encoding="utf-8")
+        return True
+    except Exception:    # noqa: BLE001
+        return False
+
+
 def maybe_run(*, judge_name=None, is_finale_subcluster=False,
               gemini_verdict=None, draft_text=None, project_root=None,
               author_style=None, cluster_key=None,
               _generate_fn=None) -> dict:
-    """主入口（A 方案回滚后占位 stub）。
+    """主入口（A 方案 inline 文件协议·永不阻断主链）。
 
-    永远返回 status='skipped'（详见模块 docstring）。维持 6 个守门返回理由的可区分性，
-    让 orchestrator 与现有调用者契约零回归。
+    流程：
+      ① mode=off / judge_name 不在 ELIGIBLE_JUDGES / 非 finale / 无 draft → skip
+      ② 查 inline verdict 文件命中 → 用 inline (source='inline_agent_spawn')
+      ③ 未命中 → skip + 提示主代理 spawn Agent 写 .wal 后重跑（绝不阻断 advisory）
     """
     mode = _mode()
     out = {"status": "skipped", "mode": mode, "judge_name": judge_name,
@@ -73,15 +170,33 @@ def maybe_run(*, judge_name=None, is_finale_subcluster=False,
     if not draft_text:
         out["reason"] = "无草稿输入"
         return out
-    # A 方案：BYOK Claude path 已删 → inline 文件协议尚未实装 → 永远 skipped。
+    inline = _try_load_inline_verdict(draft_text, judge_name, project_root)
+    if inline is None:
+        out["reason"] = (
+            "无主代理 inline verdict·建议主代理 spawn Agent 写 .wal 后重跑")
+        return out
+    # 命中：标 completed + verdict_pair[1] = claude verdict + 写入 outcome.data
+    claude_verdict = inline["verdict"]
+    out["status"] = "completed"
+    out["verdict_pair"] = [gemini_verdict, claude_verdict]
+    out["claude_verdict"] = claude_verdict
+    out["claude_reason"] = inline["reason"]
+    out["claude_model"] = inline["claude_model"]
+    out["source"] = inline["source"]
+    # agree / disagree 简单语义：双方一致 = agree·否则 disagree (gemini 缺失视为未知)
+    if gemini_verdict in ("pass", "issues"):
+        out["agreement"] = "agree" if gemini_verdict == claude_verdict else "disagree"
+    else:
+        out["agreement"] = "unknown_gemini_verdict"
     out["reason"] = (
-        "BYOK Claude path removed (2026-06-20) — awaiting inline file protocol (phase 2)")
+        f"inline_agent_spawn 命中·gemini={gemini_verdict} / "
+        f"claude={claude_verdict} / {out['agreement']}")
     return out
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="跨家族 judge ensemble 入口 (A 方案占位 stub · 永远 skipped)")
+        description="跨家族 judge ensemble 入口 (A 方案 inline 文件协议)")
     ap.add_argument("--draft", default=None)
     ap.add_argument("--project", default=None)
     ap.add_argument("--judge-name", choices=sorted(ELIGIBLE_JUDGES),

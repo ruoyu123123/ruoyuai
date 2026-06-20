@@ -366,4 +366,30 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 3. 仍崩 → 报告用户人工介入。**🔴 v26 不降级到 chapter mode**——chapter mode 已彻底删除。
 
 ---
+
+# 主代理优化（A 方案 · 跨家族 inline 复审 · 2026-06-20）
+
+主代理（Claude Code 自身）在线时：step 7（audit / voice 系列 judge）触发**之前**可主动 spawn 一个 `Agent(claude)` 复审 **finale subcluster** 的 audit / voice 维度，把裁决落回 `_数据库/.wal/claude_verdict_<sha12>_<judge>.json`，subprocess 流水线下一轮 audit_hub / voice scan 自动捡用 → 写入 `outcome.data['cross_family_check']`。
+
+落地 API（同会话 spawn 后调）：
+
+```python
+from cross_family_judge_check import save_inline_verdict_for_main_agent
+save_inline_verdict_for_main_agent(
+    draft_text=cluster_draft,   # 整 cluster 草稿正文
+    judge_name="audit",         # 或 "voice"
+    verdict="pass",             # 或 "issues"
+    reason="<claude 复审简述>",
+    project_root=project_root,
+)
+```
+
+特性：
+- **吃 Claude Code 订阅**·零月费·不依赖 BYOK Anthropic key
+- 仅 `cluster_finale` 末 sub-cluster 触发（北极星② advisory）
+- 默认 `shadow` 模式·永不阻断主链
+- env `CROSS_FAMILY_JUDGE_MODE=off` 完全关·`active` 也仅做 advisory 落 outcome 元数据
+- 主代理不在线（subprocess only / 批量自动跑）→ `maybe_run` 静默 skip + reason 提示
+
+---
 本命令产出位置遵循 [STRUCTURE.md](../../core/claude-home/STRUCTURE.md) 第九节。
