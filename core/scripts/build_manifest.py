@@ -1282,6 +1282,10 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "expected_word_range": c.get("expected_word_range"),
                         "scenes_estimated": c.get("scenes_estimated"),
                         "anchor_props": c.get("anchor_props") or [],
+                        # R7 W2 P1：Proust 嗅觉/味觉触发非自愿记忆/闪回锚（与 foreshadowing 槽并列·advisory）
+                        # outline 阶段填写 cluster.olfactory_anchors=[{"trigger":"桂花香","memory_seed":"母亲的厨房","scene":N}...]
+                        # writer 闪回 beat 优先用嗅觉/味觉触发非『他想起』式 hindsight tell（D4 advisory）。
+                        "olfactory_anchors": c.get("olfactory_anchors") or [],
                         "foreshadowing_to_plant": c.get("foreshadowing_to_plant") or [],
                         "foreshadowing_to_callback": c.get("foreshadowing_to_callback") or [],
                         "mid_checkpoints": c.get("mid_checkpoints") or [3000, 6000, 9000],
@@ -3026,6 +3030,137 @@ def _collect_genre_pack_directives(s: "DatabaseScanner") -> dict | None:
     return payload
 
 
+def _collect_emotion_body_topography_hint(s: "DatabaseScanner") -> dict | None:
+    """R7 W2 P1：Nummenmaa 情绪身体地图 topography hint 注入（PNAS 2014 Bodily Maps of Emotions）。
+
+    给 writer 一个『情绪标签 → 身体部位高强度激活区』小词典（8 基本情绪 + 6 复杂情绪），
+    让生理线索描写有据可循（避免全堆面部表情·配合 physio_cue_diversity_scanner facial_bias 检测闭环）。
+
+    北极星②让位作者档：作者档若规定 physio_cue 部位偏好（quantitative.physio_cue_distribution
+    或 narrative_craft.physio_preference）则不注入或仅当 fallback。
+
+    env EMOTION_TOPOGRAPHY_INJECT_MODE 默认 shadow（北极星⑥：先影子·待 gen-model 草稿验证再放量）。
+    advisory · 永不 hard_gate。
+    """
+    import os as _os
+    mode = (_os.environ.get("EMOTION_TOPOGRAPHY_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+
+    # 作者档优先豁免：作者档若已规定 physio 部位偏好，则不注入（让位作者档·北极星②）
+    authority_override = False
+    if s.has_style_profile():
+        try:
+            sd = s.load("作者风格", {})
+            quant = sd.get("quantitative") if isinstance(sd, dict) else None
+            nc = sd.get("narrative_craft") if isinstance(sd, dict) else None
+            if isinstance(quant, dict) and isinstance(quant.get("physio_cue_distribution"), dict):
+                authority_override = True
+            elif isinstance(nc, dict) and nc.get("physio_preference"):
+                authority_override = True
+        except Exception:
+            pass
+
+    # PNAS 2014 Nummenmaa 表 1 抽取 · 高强度激活区简化（每情绪 2-4 个核心部位）
+    topography = {
+        # 8 基本情绪
+        "anger":     ["头部/额头充血", "胸口紧绷", "双手握拳/手臂"],
+        "fear":      ["胸口紧缩", "胃部收紧", "四肢冷却"],
+        "disgust":   ["喉部反胃", "嘴角下沉/上腹"],
+        "happiness": ["全身轻盈", "胸口暖意发散", "脸颊"],
+        "sadness":   ["胸口沉重", "喉部哽塞", "四肢无力"],
+        "surprise":  ["头部/眼部张大", "胸口短促"],
+        "neutral":   ["体感弱"],
+        "anxiety":   ["胸口紧绷", "胃部翻搅", "双手发凉/出汗"],
+        # 6 复杂情绪
+        "love":      ["全身暖意", "胸口扩张", "脸颊"],
+        "depression":["全身沉降", "胸口塌陷", "四肢冰冷"],
+        "contempt":  ["上半身收紧", "脸部轻微"],
+        "pride":     ["胸口挺起", "头部上抬"],
+        "shame":     ["全身收缩", "脸部发烫", "胸口闷"],
+        "envy":      ["胸口紧绷", "胃部"],
+        "guilt":     ["胸口闷", "胃部下沉"],
+    }
+
+    payload = {
+        "gate_level": "advisory",
+        "advisory_only": True,
+        "_source": "Nummenmaa et al. PNAS 2014 Bodily Maps of Emotions",
+        "_authority": "FALLBACK" if authority_override else "GENERAL",
+        "topography_lookup": topography,
+        "_doc": (
+            "Nummenmaa 情绪身体地图（PNAS 2014）：14 情绪 → 身体高强度激活部位。"
+            "writer 写生理线索时按本表选部位（避免全堆面部表情·配合 physio_cue_diversity 检测闭环）。"
+            "作者档若规定 physio 部位偏好则以作者档为准（_authority=FALLBACK 时让位）。"
+        ),
+    }
+    if authority_override:
+        payload["_note"] = "作者档已规定 physio 部位偏好 → 本字段降为 fallback 兜底"
+    if mode == "shadow":
+        print(f"[SHADOW] emotion_body_topography: {len(topography)} 情绪 — 不注入 manifest", file=sys.stderr)
+        return None
+    return payload
+
+
+def _collect_focalization_matrix(s: "DatabaseScanner", chapter: int) -> dict | None:
+    """R7 W2 P1：Focalization Type×Facet 二轴矩阵注入（arxiv 2604.14456 FocalLens 2026 /
+    Bal/Rimmon-Kenan Living Handbook of Narratology）。
+
+    Type 轴=四类聚焦人（零聚焦/内聚焦/外聚焦/可变聚焦）；Facet 轴=三 facet
+    （perceptual 感知 / psychological 心理 / ideological 意识形态-价值评判）。
+    writer D4 advisory：同焦点 facet 可解耦，但 facet 切换需有意为之（不要随手在感知/价值评判间无意识切换）。
+
+    本字段不依赖 cluster brief 字段（不强制 outline 阶段就写明 facet）—— 只注入一个
+    标准矩阵 + advisory 提示。后续可由 cluster brief 的 `focalization_facet` 字段精细覆盖。
+
+    env FOCALIZATION_INJECT_MODE 默认 shadow（北极星⑥：先影子·待 gen-model 草稿验证再放量）。
+    advisory · 永不 hard_gate。
+    """
+    import os as _os
+    mode = (_os.environ.get("FOCALIZATION_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+
+    matrix = {
+        "types": {
+            "zero":     "零聚焦：叙事者无所不知，可进入任意角色意识",
+            "internal": "内聚焦：固定贴某角色，只能呈现该角色的感知/心理（POV 主角常态）",
+            "external": "外聚焦：摄影机视角，只呈现外部可见行为，禁入意识",
+            "variable": "可变聚焦：在多角色间切换内聚焦（须有明显 transition 标记）",
+        },
+        "facets": {
+            "perceptual":    "感知 facet：聚焦人看见/听见/嗅到/触到的世界",
+            "psychological": "心理 facet：聚焦人的内心活动/情绪/思考",
+            "ideological":   "意识形态 facet：聚焦人的价值评判/道德立场（隐式贯穿叙述声音）",
+        },
+        "advisory": (
+            "Type×Facet 二轴可独立组合：例如 internal+perceptual 时贴角色看，"
+            "internal+psychological 时贴角色想，internal+ideological 时贴角色评判。"
+            "同焦点的不同 facet 可解耦（看到的≠想的≠评判的），但 facet 切换需有意为之（不要无意识跳）。"
+        ),
+    }
+
+    payload = {
+        "gate_level": "advisory",
+        "advisory_only": True,
+        "_source": "arxiv 2604.14456 FocalLens 2026 + Bal/Rimmon-Kenan Living Handbook of Narratology",
+        "matrix": matrix,
+        "_doc": (
+            "Focalization Type×Facet 二轴矩阵：聚焦类型(zero/internal/external/variable) "
+            "× 三 facet(perceptual/psychological/ideological)。"
+            "advisory · writer D4 提示·作者档若规定聚焦偏好则以作者档为准。"
+        ),
+    }
+    if mode == "shadow":
+        print(f"[SHADOW] focalization_matrix: 4 types × 3 facets — 不注入 manifest", file=sys.stderr)
+        return None
+    return payload
+
+
 def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
     """G6 P0：注入作者风格相对通用兜底基线的方向描述（更短/更留白）·advisory·三态。
 
@@ -3624,6 +3759,10 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "author_decision_principles": _collect_author_decision_principles(s),
         # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 active 放量·advisory·unknown→None）。
         "genre_pack_directives": _collect_genre_pack_directives(s),
+        # R7 W2 P1：Nummenmaa 情绪身体地图 topography hint（PNAS 2014·env EMOTION_TOPOGRAPHY_INJECT_MODE 默认 shadow·advisory·作者档优先）。
+        "emotion_body_topography_hint": _collect_emotion_body_topography_hint(s),
+        # R7 W2 P1：Focalization Type×Facet 二轴矩阵（FocalLens 2026·env FOCALIZATION_INJECT_MODE 默认 shadow·advisory）。
+        "focalization_matrix": _collect_focalization_matrix(s, chapter),
         "genre_baseline_diff": _collect_genre_baseline_diff(s),
         "writer_mode": "freestyle_v27",
         "rag_relevant_chapters": rag_hits,
@@ -3677,6 +3816,8 @@ def _build_cache_layout() -> dict:
             "author_decision_principles",        # 阶段2: 作者决策原则+人物刻画手法（思维/刻画骨·全书不变）
             "narrative_function_sequence",       # #4: 作者签名因果功能链（结构骨·全书不变·M1 cache 铁律归 STATIC）
             "genre_pack_directives",             # 阶段3: 题材专属工艺提示（按 genre 路由·全书不变）
+            "emotion_body_topography_hint",      # R7 W2: Nummenmaa 情绪身体地图（静态·全书不变·advisory）
+            "focalization_matrix",               # R7 W2: Focalization Type×Facet 二轴矩阵（静态·全书不变·advisory）
             "distill_golden_few_shot",           # 蒸馏 golden_passages
             "title_style",                       # v22.4dim N5: 章节标题命名指纹（全书不变）
             "naming_convention",                 # v22.4dim N5: 角色命名规范（全书不变）

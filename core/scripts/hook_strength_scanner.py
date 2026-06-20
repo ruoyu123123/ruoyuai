@@ -81,12 +81,48 @@ EERIE_KW = re.compile(
     r"凉了|冷了下来|背后(?:一凉|发凉)|寒意|"
     r"认得他|等他.{0,6}很久|看着他)")
 
+# R7 W2：章末钩子 11 型 taxonomy 升级（5→11）。来源 CSDN 网文 7 钩子 / RiverEditor 8 型 / SelfPublishingSchool 6 型。
+# 新增 6 型：reversal_setup（反转铺垫）/ unfinished_action（未完成动作）/ new_setting（新场景登场）/
+#          decision_pending（待决断）/ promise（承诺/誓言）/ threat（迫近威胁）
+REVERSAL_SETUP_KW = re.compile(
+    r"(伏笔|铺垫已久|该来的总会来|果然不出所料|早就料到|"
+    r"暗中布置|早有准备|这一刻终于|等的就是这一刻|"
+    r"埋下的种子|该收网了|时机已到|布局多年)")
+UNFINISHED_ACTION_KW = re.compile(
+    r"(刚要|正要|还没来得及|话音未落|手刚伸出|脚还没落地|"
+    r"刚走到一半|刀刚出鞘|门刚推开|字才写到一半|"
+    r"还没说完|没等.{0,4}就|一脚踏出|举到一半)")
+NEW_SETTING_KW = re.compile(
+    r"(推开门|跨过门槛|抵达|来到一处|站在.{0,6}前|"
+    r"眼前出现|展现在眼前|穿过.{0,8}就是|一脚踏进|"
+    r"陌生的地方|从未见过的|第一次踏入|进入这片)")
+DECISION_PENDING_KW = re.compile(
+    r"(必须做出选择|该如何抉择|两难|该不该|要不要|"
+    r"该走哪条|留下还是离开|杀还是不杀|信还是不信|"
+    r"答应还是拒绝|在心里反复|犹豫不决|何去何从)")
+PROMISE_KW = re.compile(
+    r"(我发誓|我保证|此生必|这辈子|总有一天|"
+    r"我一定会|定要|誓不|不达目的不|此仇必报|"
+    r"立下誓言|许下诺言|信守承诺|定不辜负)")
+THREAT_KW = re.compile(
+    r"(已经盯上|正在赶来|很快就会|不日将至|"
+    r"风暴将至|山雨欲来|大祸临头|阴影笼罩|"
+    r"步步紧逼|越来越近|逐渐逼近|迫在眉睫|"
+    r"暗中窥伺|危机四伏|劫数难逃)")
+
 HOOK_TYPES = {
     "suspense": ("悬念", SUSPENSE_KW),
     "conflict": ("冲突", CONFLICT_KW),
     "contrast": ("反差", CONTRAST_KW),
     "infogap": ("信息缺口", INFOGAP_KW),
     "eerie": ("诡异/失控", EERIE_KW),
+    # R7 W2 新增 6 型
+    "reversal_setup": ("反转铺垫", REVERSAL_SETUP_KW),
+    "unfinished_action": ("未完成动作", UNFINISHED_ACTION_KW),
+    "new_setting": ("新场景登场", NEW_SETTING_KW),
+    "decision_pending": ("待决断", DECISION_PENDING_KW),
+    "promise": ("承诺/誓言", PROMISE_KW),
+    "threat": ("迫近威胁", THREAT_KW),
 }
 
 # 形式信号：独立短句 / 省略号 / 破折号收尾 / 问句收尾

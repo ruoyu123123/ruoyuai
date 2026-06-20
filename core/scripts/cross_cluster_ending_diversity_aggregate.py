@@ -3,8 +3,12 @@
 读 _changes.self_eval.applied_style.ending_type（writer 自评章节收束类型），
 检测跨章 ending_type 分布是否单一化。
 
-ending_type 候选：cliffhanger / emotional_pivot / revelation / resolution
-                  question / ambient / time_jump / dialogue_close / image_close
+ending_type 候选（R7 W2 升级 11 型 taxonomy · 与 hook_strength_scanner HOOK_TYPES 同步）：
+  · 原 5 型 + 9 个 ending_type alias：cliffhanger / emotional_pivot / revelation / resolution
+    question / ambient / time_jump / dialogue_close / image_close
+  · R7 W2 新增 6 型：reversal_setup / unfinished_action / new_setting / decision_pending /
+    promise / threat
+  本聚合器不强制 enum 校验（writer 自评字符串自由）·只统计分布·新旧类型混跑零回归。
 
 - ENDING_TYPE_MONOTONE：>50% 是同一 ending_type（连续 ≥ 3 章）
 - ENDING_TYPE_LOW_DIVERSITY：近 N 章只用了 ≤ 2 种 ending_type
