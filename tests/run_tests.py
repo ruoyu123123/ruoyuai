@@ -9,14 +9,9 @@
 不碰 LLM、不碰 agent —— 对标业界「把确定性逻辑与 LLM 输出测试分离」共识。
 """
 import importlib.util
-import os
 import sys
 import traceback
 from pathlib import Path
-
-# 🔴 测试态禁 GUI 文件日志（import core.gui.app 触发模块级 STATE=AppState()→_make_log_buffer·
-# 本 runner 不在 sys.modules 留 pytest → 否则往 repo/logs 撒文件污染 git·与 pytest bypass 同闸）。
-os.environ.setdefault("RUOYUAI_GUI_LOG_DISABLE", "1")
 
 
 def main():
@@ -51,25 +46,7 @@ def main():
                     failures.append(f"{f.name}::{name}")
                     print(f"  [FAIL] {f.name}::{name}: {e}")
                     traceback.print_exc()
-    # tests/gui 是 pytest 风格（依赖 nicegui fixture）·零依赖循环发现不了——
-    # 环境有 pytest+nicegui 就委托跑·没有则跳过（保持本 runner 零依赖承诺）。
-    # 复验修：委托必须在汇总行**之前**——否则 gui 失败时汇总仍显示「失败 0」。
-    gui_dir = tests_dir / "gui"
-    if gui_dir.is_dir():
-        try:
-            import nicegui  # noqa: F401
-            import pytest   # noqa: F401
-            import subprocess
-            print(f"-- 委托 pytest 跑 {gui_dir.name}/ --")
-            r = subprocess.run(
-                [sys.executable, "-m", "pytest", str(gui_dir), "-q",
-                 "--no-header"],
-                cwd=str(tests_dir.parent), timeout=600)
-            if r.returncode != 0:
-                failed += 1
-                failures.append("tests/gui (pytest)")
-        except ImportError:
-            print("-- 跳过 tests/gui（缺 pytest 或 nicegui）--")
+    # 🔴 2026-06-20 GUI 删档：原 tests/gui pytest 委托段一并删除。
     print("=" * 54)
     print(f"测试 {total} · 通过 {passed} · 失败 {failed}")
     for fl in failures:

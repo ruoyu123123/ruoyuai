@@ -9,7 +9,7 @@
   · home 路径 miss → fallback 装载汇编文件内容（防御层不再为空）
   · home 有 type=feedback 文件时优先 home（开发机行为零回归）
   · 汇编文件完整性（23 条规则锚 + 机械汇编 header + 无 frontmatter 残留）
-  · ruoyu_gui.spec 6b 段整目录收 lessons/*.md（汇编文件自动随 exe 出货）
+  · (2026-06-20 GUI 删档后已删 ruoyu_gui.spec 段断言 · 汇编文件由源码自身保证)
 """
 import contextlib
 import os
@@ -149,14 +149,8 @@ def test_build_manifest_home_priority_over_bundle():
     assert any(e["desc"] == "HOME_DESC_MARKER_9527" for e in item["digest"])
 
 
-# ---------- 打包契约（源码级防回归） ----------
-
-def test_spec_collects_lessons_md_dir():
-    """ruoyu_gui.spec 6b 段整目录收 lessons/*.md → 汇编文件自动随 exe 出货。"""
-    spec = (_REPO / "packaging" / "ruoyu_gui.spec").read_text(encoding="utf-8")
-    assert 'os.path.join(ROOT, "core", "claude-home", "lessons")' in spec, \
-        "spec 不再整目录收 lessons —— global_feedback_rules.md 会掉出 bundle"
-    assert 'fn.endswith(".md")' in spec, "spec lessons 段 .md 过滤丢失"
+# ---------- 源码级防回归 ----------
+# 🔴 2026-06-20：原 test_spec_collects_lessons_md_dir 随 packaging/ 目录删除一同剔除。
 
 
 def test_gen_writer_fallback_uses_frozen_util():

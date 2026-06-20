@@ -186,11 +186,6 @@ def stream_once(profile: Profile, system: str, user: str, max_tokens: int, *,
                                    prior_assistant=prior_assistant, cont_msg=cont_msg,
                                    temperature=temperature,
                                    response_format_json=response_format_json, echo=echo)
-    if _protocol == "anthropic":
-        return _stream_once_anthropic(profile, system, user, max_tokens,
-                                      prior_assistant=prior_assistant, cont_msg=cont_msg,
-                                      temperature=temperature,
-                                      response_format_json=response_format_json, echo=echo)
     return _stream_once_openai(profile, system, user, max_tokens,
                                prior_assistant=prior_assistant, cont_msg=cont_msg,
                                temperature=temperature,
@@ -368,13 +363,6 @@ def _record_token_usage(usage: dict, model: str, protocol: str = "gemini") -> No
             output_t = int(usage.get("candidatesTokenCount", 0) or 0)
             cached_t = int(usage.get("cachedContentTokenCount", 0) or 0)
             total_t = int(usage.get("totalTokenCount", 0) or 0)
-        elif protocol == "anthropic":
-            # Anthropic /v1/messages usage 字段 input_tokens/output_tokens(+ cache_read_input_tokens/
-            # cache_creation_input_tokens)·无 total 字段·归一时 total=input+output·cached 取 cache_read。
-            prompt_t = int(usage.get("input_tokens", 0) or 0)
-            output_t = int(usage.get("output_tokens", 0) or 0)
-            cached_t = int(usage.get("cache_read_input_tokens", 0) or 0)
-            total_t = prompt_t + output_t
         else:  # openai 兼容（judge / 非 gemini profile·此前完全漏记）
             prompt_t = int(usage.get("prompt_tokens", 0) or 0)
             output_t = int(usage.get("completion_tokens", 0) or 0)
@@ -478,155 +466,9 @@ def _stream_once_gemini(profile: Profile, system: str, user: str, max_tokens: in
     return text, finish
 
 
-# ============ Anthropic /v1/messages 协议（跨家族 judge ensemble · R10 W6 · 2026-06-20） ============
-# 跨家族 judge（cross_family_judge_check）用 Claude 复审抑制 self-preference bias。Anthropic 协议
-# 与 OpenAI/Gemini 都不同：① system 单独字段（不是 messages 数组里的 role=system）；② SSE 事件名
-# 独特（content_block_delta / message_delta / message_start）；③ 无 finish_reason 而是 stop_reason
-# （max_tokens/end_turn/stop_sequence/tool_use）；④ 必填 max_tokens。
-# 业界源：docs.anthropic.com/en/api/messages（2026-06 GA 校验·content_block_delta.delta.text 是流式
-# 文本累加点·message_delta.delta.stop_reason 是终止理由·usage 在 message_start.message.usage）。
-def build_anthropic_body(profile: Profile, system: str, user: str, max_tokens: int, *,
-                         prior_assistant: str | None = None, cont_msg: str | None = None,
-                         temperature: float | None = None,
-                         response_format_json: bool = False) -> dict:
-    """Anthropic /v1/messages 请求体（纯函数·可测）。
-
-    system 单独字段（不进 messages）→ 利于 Anthropic 的隐式 prompt caching；
-    response_format_json=True 时在 system 末尾追加软约束「仅输出合法 JSON」
-    （Anthropic 原生无 response_mime_type / response_format 字段）。
-    """
-    sys_text = system or ""
-    if response_format_json:
-        sys_text = (sys_text + "\n\n# 输出格式硬约束\n"
-                    "请仅输出一个合法的 JSON 对象（用 ```json 围栏包裹），"
-                    "外层不要任何说明文字。")
-    messages = [{"role": "user", "content": user}]
-    if prior_assistant:
-        messages.append({"role": "assistant", "content": prior_assistant})
-        messages.append({"role": "user", "content": cont_msg or default_cont_msg()})
-    body: dict = {
-        "model": profile.model,
-        "max_tokens": max_tokens,
-        "system": sys_text,
-        "messages": messages,
-        "stream": True,
-    }
-    if temperature is not None:
-        body["temperature"] = temperature
-    elif getattr(profile, "temperature", None) is not None:
-        body["temperature"] = profile.temperature
-    return body
-
-
-def _stream_once_anthropic(profile: Profile, system: str, user: str, max_tokens: int, *,
-                           prior_assistant: str | None, cont_msg: str | None,
-                           temperature: float | None, response_format_json: bool,
-                           echo: bool) -> tuple[str, str | None]:
-    """Anthropic /v1/messages SSE 流式生成（httpx · 与 gemini path 同款异常归一）。"""
-    import httpx
-
-    base = (profile.base_url or "").rstrip("/")
-    # 用户配 base_url 通常是 OpenAI 兼容 .../v1·Anthropic 原生也是 .../v1/messages·容错两种形态
-    if base.endswith("/v1"):
-        url = f"{base}/messages"
-    elif base.endswith("/v1/messages"):
-        url = base
-    else:
-        url = f"{base}/v1/messages"
-    body = build_anthropic_body(profile, system, user, max_tokens,
-                                prior_assistant=prior_assistant, cont_msg=cont_msg,
-                                temperature=temperature,
-                                response_format_json=response_format_json)
-    headers = {
-        "x-api-key": profile.api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-
-    text, finish_raw, usage = "", None, {}
-    try:
-        import gen_throttle
-        gen_throttle.wait()
-    except Exception:
-        pass
-    timeout = httpx.Timeout(connect=CONNECT_TIMEOUT, read=DEFAULT_TIMEOUT,
-                            write=CONNECT_TIMEOUT, pool=CONNECT_TIMEOUT)
-    try:
-        with httpx.Client(timeout=timeout) as hc:
-            with hc.stream("POST", url, json=body, headers=headers) as resp:
-                if resp.status_code == 429:
-                    ra = _parse_retry_after(resp.headers)
-                    raise TransportRateLimit(f"429 anthropic", retry_after=ra)
-                if resp.status_code in (401, 403):
-                    resp.read()
-                    raise TransportError(
-                        f"HTTP {resp.status_code} anthropic auth: "
-                        f"{_redact(resp.text)[:200]}")
-                if resp.status_code >= 400:
-                    resp.read()
-                    raise TransportError(
-                        f"HTTP {resp.status_code} anthropic: "
-                        f"{_redact(resp.text)[:200]}")
-                # Anthropic SSE: event: <name>\ndata: <json>\n\n
-                current_event = None
-                for line in resp.iter_lines():
-                    line = (line or "").strip()
-                    if not line:
-                        continue
-                    if line.startswith("event:"):
-                        current_event = line[6:].strip()
-                        continue
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
-                    if not payload or payload == "[DONE]":
-                        continue
-                    try:
-                        d = json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
-                    et = current_event or d.get("type")
-                    if et == "message_start":
-                        msg = d.get("message", {}) or {}
-                        u = msg.get("usage") or {}
-                        if u:
-                            usage.update(u)
-                    elif et == "content_block_delta":
-                        delta = d.get("delta", {}) or {}
-                        # text_delta / thinking_delta 都可能·只取 text_delta（thinking 不要）
-                        if delta.get("type") == "text_delta":
-                            t = delta.get("text") or ""
-                            if t:
-                                text += t
-                                if echo:
-                                    sys.stderr.write(t)
-                                    sys.stderr.flush()
-                    elif et == "message_delta":
-                        delta = d.get("delta", {}) or {}
-                        if delta.get("stop_reason"):
-                            finish_raw = delta["stop_reason"]
-                        u = d.get("usage") or {}
-                        if u:
-                            usage.update(u)   # message_delta usage 含 output_tokens
-    except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout,
-            httpx.PoolTimeout) as e:
-        raise TransportTimeout(f"anthropic timeout: {_redact(str(e))[:200]}") from e
-    except TransportError:
-        raise
-    except httpx.HTTPError as e:
-        raise TransportError(
-            f"anthropic {type(e).__name__}: {_redact(str(e))[:200]}") from e
-
-    _record_token_usage(usage, getattr(profile, "model", "claude"),
-                        protocol="anthropic")
-    # finish 归一到 openai 口径：max_tokens→length·end_turn/stop_sequence→stop
-    if finish_raw == "max_tokens":
-        finish = "length"
-    elif finish_raw in ("end_turn", "stop_sequence", "tool_use"):
-        finish = "stop"
-    else:
-        finish = "stop" if finish_raw else None
-    return text, finish
+# 🔴 已删除（2026-06-20·A 方案回滚）：Anthropic /v1/messages 协议代码段（build_anthropic_body /
+# _stream_once_anthropic / _record_token_usage anthropic 分支）。主代理 Claude Code CLI 唯一入口
+# 后不再需要直连 Anthropic API（跨家族 judge 改 inline 文件协议）。双协议（OpenAI / gemini）保留。
 
 
 # ============ 统一调用入口（fallback 链 + 重试 + 截断续写 + 空响应守卫） ============

@@ -59,30 +59,6 @@ def test_delete_nonexistent_returns_false_no_raise():
     _with_mem(body)
 
 
-def test_claude_key_roundtrip_isolated_namespace():
-    """R10 W6 跨家族 judge BYOK：Claude key 走 SERVICE_CLAUDE 独立 namespace·
-    与 gen-model 主 key（SERVICE）+ search key（SERVICE_SEARCH）三家隔离。"""
-    def body():
-        assert ss.SERVICE_CLAUDE == "ruoyuai-claude"
-        assert ss.has_claude_key() is False
-        assert ss.set_claude_key("sk-ant-test123") is True
-        assert ss.get_claude_key() == "sk-ant-test123"
-        assert ss.has_claude_key() is True
-        # 与 gen-model SERVICE 隔离：在 SERVICE 同 username 拿不到 Claude key
-        assert ss.get_api_key("judge") is None
-        assert ss.delete_claude_key() is True
-        assert ss.has_claude_key() is False
-    _with_mem(body)
-
-
-def test_claude_key_empty_set_is_delete():
-    def body():
-        ss.set_claude_key("sk-ant-XYZ")
-        assert ss.set_claude_key("   ") is True
-        assert ss.get_claude_key() is None
-    _with_mem(body)
-
-
 def test_is_available_with_mem_backend_true():
     def body():
         assert ss.is_available() is True

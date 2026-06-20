@@ -6,8 +6,8 @@
   1. ME 真耗尽 → 写 _数据库/.book_complete.json（completed_at/reason/last_cluster 三字段）
      + main() exit 0 + stderr 打「完本不是故障」。
   2. 其他错误路径（启发式无候选等）保持 exit 1 不变。
-  3. GUI scan_project 见标记 → note 提示导出全文 · next_action/next_key 清空（不再建议写下一块）。
-  4. 正常书（ME 池未耗尽 / 无标记）不误判：emerge 正常涌现不写标记 · scan_project 照常推断下一步。
+  3. 正常书（ME 池未耗尽 / 无标记）不误判：emerge 正常涌现不写标记。
+（2026-06-20 GUI 删档后收窄：原第 3/4 条 GUI scan_project 断言已删 · 完本契约本身保留。）
 """
 import io
 import json
@@ -22,7 +22,6 @@ for p in (str(_ROOT), str(_ROOT / "core" / "scripts")):
         sys.path.insert(0, p)
 
 import cluster_emergence_engine as cee  # noqa: E402
-from core.gui import state as gs  # noqa: E402
 
 
 # ───────────────────── 测试脚手架 ─────────────────────
@@ -127,30 +126,7 @@ def test_main_other_error_paths_still_exit_1():
         cee.emerge_next_cluster = saved
 
 
-# ───────────────────── 3. GUI scan_project 识别完本 ─────────────────────
-
-def test_scan_project_detects_book_complete():
-    """有完本标记 → note 提示导出 · next_action/next_key 清空（短路所有下一步推断）。"""
-    with tempfile.TemporaryDirectory() as d:
-        # 即便事件簇里还有 in_progress（边界脏数据），完本标记也必须短路推断
-        clusters = [{"cluster_id": "cluster_003", "status": "in_progress"}]
-        root = _mk_project(Path(d), _EXHAUSTED_POOL, clusters=clusters)
-        cee.write_book_complete_marker(root, "cluster_003")
-        info = gs.scan_project(root)
-        assert "完本" in info.note and "导出" in info.note
-        assert info.next_action == ""
-        assert info.next_key == ""
-
-
-def test_scan_project_normal_book_not_flagged():
-    """正常书（无标记）不误判：照常推断下一步动作（in_progress 无草稿 → cluster-write）。"""
-    with tempfile.TemporaryDirectory() as d:
-        clusters = [{"cluster_id": "cluster_001", "status": "in_progress"}]
-        root = _mk_project(Path(d), _ALIVE_POOL, clusters=clusters)
-        info = gs.scan_project(root)
-        assert "完本" not in info.note
-        assert info.next_action == "cluster-write"
-        assert info.next_key == "001"
+# ───────────────────── 3. 完本标记 vs 正常涌现 ─────────────────────
 
 
 def test_emerge_normal_pool_writes_no_marker():
