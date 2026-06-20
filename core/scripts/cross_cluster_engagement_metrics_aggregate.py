@@ -172,6 +172,116 @@ def scan_golden_trend(scores_dict: dict) -> list[dict]:
     return findings
 
 
+# ---------- D. CLIFFHANGER_QUOTA_OVER（R7 W2 Batch-E·2026-06-20）----------
+# 章末配比软目标 80:15:5(hook:cliffhanger:scene_end)·>25% 章末 cliffhanger 或 ≥3 连续 → advisory。
+# 数据源：账本 ending_type（cluster_summary_reader）/ audit 报告 chapter_ending_type。
+# 北极星⑤：纯 advisory · 作者档可豁免 · 不进 HARD_GATE_CODES。
+_CLIFF_TYPES = ("cliffhanger", "悬念", "悬念性", "钩子型", "悬念型")
+_CLIFF_RATIO_THRESHOLD = 0.25
+_CLIFF_STREAK_THRESHOLD = 3
+
+
+def _is_cliffhanger(end_type: str) -> bool:
+    """end_type 字符串归一化判定（容忍中英/大小写/前缀混排）。"""
+    if not isinstance(end_type, str):
+        return False
+    t = end_type.strip().lower()
+    if not t:
+        return False
+    for tag in _CLIFF_TYPES:
+        if tag.lower() in t:
+            return True
+    return False
+
+
+def collect_ending_types(records) -> list[tuple[int, str]]:
+    """从账本 ChapterRecord 取 ending_type → [(ch, type)]·缺字段跳过。"""
+    out = []
+    for ch, rec in records:
+        et = rec.get("ending_type")
+        if isinstance(et, str) and et.strip():
+            out.append((ch, et.strip()))
+    return out
+
+
+def collect_audit_ending_types(project_root: Path, chapters: list[int]) -> list[tuple[int, str]]:
+    """从 _数据库/.audit/ch_NNN_audit.json 取 chapter_ending_type / ending_type → [(ch, type)]。"""
+    audit_dir = project_root / "_数据库" / ".audit"
+    out = []
+    if not audit_dir.exists():
+        return out
+    for ch in chapters:
+        for name in [f"ch_{ch:03d}_audit.json", f"第{ch:03d}章_audit.json"]:
+            p = audit_dir / name
+            if not p.exists():
+                continue
+            data = load_json(p, {})
+            for key in ("chapter_ending_type", "ending_type"):
+                v = data.get(key)
+                if isinstance(v, dict):
+                    v = v.get("type") or v.get("label")
+                if isinstance(v, str) and v.strip():
+                    out.append((ch, v.strip()))
+                    break
+            break
+    return out
+
+
+def scan_cliffhanger_quota(end_types: list[tuple[int, str]]) -> list[dict]:
+    """章末 cliffhanger 配比/连续度 advisory（>25% 或 ≥3 连续 → CLIFFHANGER_QUOTA_OVER）。"""
+    findings = []
+    if not end_types:
+        return findings
+    n = len(end_types)
+    cliff_chs = [ch for ch, t in end_types if _is_cliffhanger(t)]
+    ratio = len(cliff_chs) / n if n else 0.0
+    if ratio > _CLIFF_RATIO_THRESHOLD and n >= 4:
+        findings.append({
+            "severity": "advisory",
+            "code": "CLIFFHANGER_QUOTA_OVER",
+            "metric": "cliffhanger_ratio",
+            "ratio": round(ratio, 3),
+            "threshold": _CLIFF_RATIO_THRESHOLD,
+            "cliffhanger_chs": cliff_chs,
+            "chapters_scanned": n,
+            "suggestion": (
+                f"章末 cliffhanger 占比 {ratio:.0%} > 软目标 25% "
+                f"(80 hook : 15 cliffhanger : 5 scene_end)·读者疲劳风险·"
+                f"考虑下个 cluster 改用 hook/scene_end 收束"),
+        })
+    # 连续 ≥3 章 cliffhanger
+    streak = 0
+    streak_start = None
+    seen_streaks = []
+    for ch, t in end_types:
+        if _is_cliffhanger(t):
+            if streak == 0:
+                streak_start = ch
+            streak += 1
+            if streak >= _CLIFF_STREAK_THRESHOLD:
+                seen_streaks.append((streak_start, ch, streak))
+        else:
+            if streak >= _CLIFF_STREAK_THRESHOLD:
+                pass   # 已落账·清零
+            streak = 0
+            streak_start = None
+    if seen_streaks:
+        start_ch, end_ch, longest = max(seen_streaks, key=lambda x: x[2])
+        findings.append({
+            "severity": "advisory",
+            "code": "CLIFFHANGER_QUOTA_OVER",
+            "metric": "consecutive_cliffhanger_streak",
+            "streak": longest,
+            "threshold": _CLIFF_STREAK_THRESHOLD,
+            "chapter_range": [start_ch, end_ch],
+            "suggestion": (
+                f"连续 {longest} 章末 cliffhanger（ch{start_ch}-ch{end_ch}）·"
+                f"过度反转/连环钩子导致读者疲劳失信任（D7「惊讶过量为负效应」）·"
+                f"下个 cluster 给一次喘息/收束"),
+        })
+    return findings
+
+
 # ---------- C. LAZY_SPAWN_PROMOTION ----------
 
 def scan_lazy_spawn(project_root: Path, chapters: list[int]) -> list[dict]:
@@ -249,6 +359,9 @@ def main():
         findings.extend(scan_hook_trend(scores_dict.get("hook", [])))
         findings.extend(scan_golden_trend(scores_dict))
         findings.extend(scan_lazy_spawn(project_root, chapters))
+        # R7 W2 Batch-E：章末 cliffhanger 配比 advisory（账本驱动）
+        end_types = collect_ending_types(recs)
+        findings.extend(scan_cliffhanger_quota(end_types))
     else:
         chapters = get_chapters(project_root, args.last_n)
         if not chapters:
@@ -260,6 +373,9 @@ def main():
         findings.extend(scan_hook_trend(scores_dict.get("hook", [])))
         findings.extend(scan_golden_trend(scores_dict))
         findings.extend(scan_lazy_spawn(project_root, chapters))
+        # R7 W2 Batch-E：章末 cliffhanger 配比 advisory（audit 报告驱动）
+        end_types = collect_audit_ending_types(project_root, chapters)
+        findings.extend(scan_cliffhanger_quota(end_types))
 
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)

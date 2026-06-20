@@ -917,6 +917,110 @@ def score_narrative_function_sequence(chapter_texts: list[str]) -> dict:
     }
 
 
+# ───────── R7 W2 Batch-E：情感弧 fractal 指纹（Hurst + ApEn · 纯 Python · 零依赖）─────────
+# 调研锚（R7-W1）：长篇叙事情感弧呈分形/长程相关结构（Hurst H≠0.5）；ApEn 衡量序列复杂度。
+# 北极星⑤：仅作为作者档 ECDF 基线产出，不设通用阈值；样本不足时降级返回 None。
+def compute_hurst_rs(series, min_n: int = 10) -> float | None:
+    """R/S 重标极差法 Hurst 指数（纯 stdlib·O(n log n)）。
+
+    H≈0.5 随机游走；H>0.5 长程正相关（趋势性）；H<0.5 反持续（振荡）。
+    样本不足或方差为 0 → None（不强算·北极星⑤）。
+    """
+    n = len(series)
+    if n < min_n:
+        return None
+    x = [float(v) for v in series]
+    # 多尺度回归：lag ∈ [2 .. n//2] 对数等距取 ≤8 点，平衡稳定性与速度。
+    lags = []
+    lo, hi = 2, max(4, n // 2)
+    k = 6
+    step = max(1, (hi - lo) // (k - 1) or 1)
+    for i in range(k):
+        lg = lo + i * step
+        if lg <= hi and lg not in lags:
+            lags.append(lg)
+    if len(lags) < 3:
+        return None
+    log_lags, log_rs = [], []
+    for lag in lags:
+        # 切成 m 个不重叠 lag 长子段，计算每段 R/S 后取均值。
+        m = n // lag
+        if m < 1:
+            continue
+        rs_vals = []
+        for i in range(m):
+            seg = x[i * lag:(i + 1) * lag]
+            if len(seg) < 2:
+                continue
+            mu = sum(seg) / len(seg)
+            dev = [v - mu for v in seg]
+            cum = []
+            acc = 0.0
+            for d in dev:
+                acc += d
+                cum.append(acc)
+            R = max(cum) - min(cum)
+            var = sum(d * d for d in dev) / len(seg)
+            S = math.sqrt(var)
+            if S > 1e-12 and R > 0:
+                rs_vals.append(R / S)
+        if rs_vals:
+            mean_rs = sum(rs_vals) / len(rs_vals)
+            if mean_rs > 0:
+                log_lags.append(math.log(lag))
+                log_rs.append(math.log(mean_rs))
+    if len(log_lags) < 3:
+        return None
+    # OLS 斜率 = Hurst 指数。
+    mean_x = sum(log_lags) / len(log_lags)
+    mean_y = sum(log_rs) / len(log_rs)
+    num = sum((lx - mean_x) * (ly - mean_y) for lx, ly in zip(log_lags, log_rs))
+    den = sum((lx - mean_x) ** 2 for lx in log_lags)
+    if den < 1e-12:
+        return None
+    h = num / den
+    # 钳到 [0, 1]·偶发数值越界视为退化估计。
+    return round(max(0.0, min(1.0, h)), 4)
+
+
+def compute_approx_entropy(series, m: int = 2, r: float | None = None) -> float | None:
+    """近似熵 Approximate Entropy（Pincus 1991·纯 stdlib·O(n²) 适用 n≤300 序列）。
+
+    ApEn 越大序列越无序；典型情感弧 0.3-1.5 区间。r 默认 0.2 * std。
+    样本不足（n < m+2）或方差为 0 → None。
+    """
+    x = [float(v) for v in series]
+    n = len(x)
+    if n < m + 2:
+        return None
+    mean = sum(x) / n
+    var = sum((v - mean) ** 2 for v in x) / n
+    std = math.sqrt(var)
+    if std < 1e-9:
+        return None
+    if r is None:
+        r = 0.2 * std
+
+    def _phi(mm: int) -> float:
+        vecs = [tuple(x[i:i + mm]) for i in range(n - mm + 1)]
+        total = 0.0
+        for vi in vecs:
+            ci = 0
+            for vj in vecs:
+                # Chebyshev 距离 ≤ r
+                if max(abs(a - b) for a, b in zip(vi, vj)) <= r:
+                    ci += 1
+            if ci > 0:
+                total += math.log(ci / len(vecs))
+        return total / len(vecs)
+
+    try:
+        apen = _phi(m) - _phi(m + 1)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return round(max(0.0, apen), 4)
+
+
 def analyze_text(text: str) -> dict:
     total_chinese = count_chinese(text)
     per_1000 = 1000 / total_chinese if total_chinese > 0 else 0

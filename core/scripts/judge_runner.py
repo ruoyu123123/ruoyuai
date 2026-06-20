@@ -360,6 +360,17 @@ def run_judge(agent_name: str, project_root: str | Path, *,
     if author_missing:
         data["_author_profile_missing"] = True
 
+    # R7 W2 Batch-E：style-bias swap-check（advisory · 默认 off · 不改主判决·只挂元数据）
+    try:
+        bias_meta = style_bias_swap_check(
+            agent_name, system, user, data, profiles,
+            required_keys=req_keys, max_tokens=spec.max_tokens,
+            _generate_fn=_generate_fn)
+        if bias_meta.get("mode") != "off" or bias_meta.get("agent_eligible"):
+            data["_style_bias_check"] = bias_meta
+    except Exception as _e:    # noqa: BLE001
+        logger.debug(f"style_bias_swap_check 异常·忽略: {_e}")
+
     # —— 落盘（driver 代写·judge 无 Write） ——
     written: Path | None = None
     if output_path:
@@ -381,6 +392,152 @@ def run_judge(agent_name: str, project_root: str | Path, *,
     return JudgeOutcome(agent=agent_name, ok=ok, data=data, output_path=written,
                         degraded=degraded, author_profile_missing=author_missing,
                         profile_name=profile_name, retries=retries)
+
+
+# ════════════════════════════════════════════════════════════════
+# R7 W2 Batch-E：LLM-judge style bias mitigation（去位置/呈现序偏 · advisory · 不阻断）
+# ════════════════════════════════════════════════════════════════
+# 调研锚（R7-W1·LitBench/HelpSteer）：LLM-judge 输出受 prompt 中候选呈现顺序影响（position bias）
+# 与作者风格偏好（style bias）。缓解：把 user prompt 里的文件 chunk 顺序反转后再判一次，
+# 对比两次输出关键字段的差异 → 显著不对称 = style_bias_suspected advisory（**不阻断**·让 audit_hub
+# 后续按 advisory 处理）。**默认 off**（额外 1 次 API 调用·按需开）；shadow=只标 _swap_check_skipped。
+# 北极星⑤：不引入新 hard_gate · 只在原报告挂 _style_bias_check 元数据段。
+
+_BIAS_MODE_ENV = "JUDGE_STYLE_BIAS_SWAP_MODE"
+_BIAS_DELTA_THRESHOLD = 0.30   # verdict 等核心字段差异占比 > 30% 即标 suspected
+_BIAS_ELIGIBLE_AGENTS = (
+    # 风格类裁决 · 最易受 style bias 影响 · 数值/枚举 judge 不在内（重判预算贵）
+    "novel-voice-checker",
+    "novel-reading-reflector",
+    "novel-validator-checker",
+)
+
+
+def _bias_mode() -> str:
+    """env JUDGE_STYLE_BIAS_SWAP_MODE: off(默认·零额外调用) / shadow(只记不重判) / active(真重判)。"""
+    import os as _os
+    m = (_os.environ.get(_BIAS_MODE_ENV) or "off").strip().lower()
+    return m if m in ("off", "shadow", "active") else "off"
+
+
+def make_swapped_user(user: str) -> str:
+    """把 user prompt 里的【文件: ...】chunk 顺序反转（保留输入契约头+尾的「输出 JSON」提示）。
+
+    用于 swap-check：同样的内容、不同的呈现顺序 → 真鲁棒的裁决两次结果应一致。
+    """
+    if "【文件:" not in user:
+        return user + "\n\n# 位置偏校验提示\n（已切换素材呈现顺序·结论应与正向一致）"
+    # 分块：第一段=输入契约（无【文件:】头）；末段=「现在执行你的职责...」尾巴。
+    parts = user.split("\n\n")
+    head: list[str] = []
+    file_chunks: list[str] = []
+    tail: list[str] = []
+    # 头：连续若干非文件块
+    i = 0
+    while i < len(parts) and not parts[i].startswith("【文件:"):
+        head.append(parts[i]); i += 1
+    # 文件块连续段
+    while i < len(parts) and parts[i].startswith("【文件:"):
+        file_chunks.append(parts[i]); i += 1
+    # 尾：剩余
+    while i < len(parts):
+        tail.append(parts[i]); i += 1
+    if len(file_chunks) < 2:
+        return user + "\n\n# 位置偏校验提示\n（单文件块无可反转·结论应稳定）"
+    swapped = "\n\n".join(head + list(reversed(file_chunks)) + tail)
+    return swapped + "\n\n# 位置偏校验提示\n（已切换素材呈现顺序·结论应与正向一致）"
+
+
+def _bias_signature(data: dict) -> dict:
+    """从 judge 输出抽稳健签名（verdict + violations 计数 + grade）·NaN/缺字段安全。"""
+    if not isinstance(data, dict):
+        return {}
+    sig = {}
+    for k in ("verdict", "overall_grade", "grade", "decision"):
+        v = data.get(k)
+        if isinstance(v, str) and v.strip():
+            sig[k] = v.strip().lower()
+            break
+    vs = data.get("violations")
+    if isinstance(vs, list):
+        sig["violation_count"] = len(vs)
+    nis = data.get("new_issues_this_round")
+    if isinstance(nis, list):
+        sig["new_issue_count"] = len(nis)
+    return sig
+
+
+def _bias_delta(sig_a: dict, sig_b: dict) -> dict:
+    """两签名差异：verdict 不同记 1.0；计数差 / max(1, mean) 归一化。"""
+    if not sig_a or not sig_b:
+        return {"asymmetry": 0.0, "reason": "empty_signature"}
+    diffs: list[float] = []
+    detail: dict = {}
+    for k in ("verdict", "overall_grade", "grade", "decision"):
+        if k in sig_a and k in sig_b:
+            d = 0.0 if sig_a[k] == sig_b[k] else 1.0
+            diffs.append(d)
+            detail[k] = {"a": sig_a[k], "b": sig_b[k], "diff": d}
+            break
+    for k in ("violation_count", "new_issue_count"):
+        if k in sig_a and k in sig_b:
+            a, b = sig_a[k], sig_b[k]
+            denom = max(1.0, (a + b) / 2.0)
+            d = abs(a - b) / denom
+            diffs.append(min(1.0, d))
+            detail[k] = {"a": a, "b": b, "norm_diff": round(min(1.0, d), 3)}
+    asym = round(sum(diffs) / len(diffs), 3) if diffs else 0.0
+    return {"asymmetry": asym, "detail": detail,
+            "style_bias_suspected": asym > _BIAS_DELTA_THRESHOLD}
+
+
+def style_bias_swap_check(agent_name: str, system: str, user: str,
+                          baseline_data: dict, profiles_or_loader, *,
+                          required_keys: tuple = (),
+                          max_tokens: int = JUDGE_MAX_TOKENS,
+                          _generate_fn=None) -> dict:
+    """对已完成 judge 跑一次「素材顺序反转」对照·返回 _style_bias_check 元数据段。
+
+    返回值始终是 advisory 字典（绝不抛错·绝不阻断流水线）：
+      · mode: off / shadow / active
+      · agent_eligible: bool
+      · style_bias_suspected: bool
+      · asymmetry: 0-1
+      · baseline_signature / swapped_signature
+    """
+    mode = _bias_mode()
+    out = {"mode": mode, "agent_eligible": agent_name in _BIAS_ELIGIBLE_AGENTS,
+           "style_bias_suspected": False, "asymmetry": 0.0}
+    if mode == "off" or agent_name not in _BIAS_ELIGIBLE_AGENTS:
+        return out
+    if mode == "shadow":
+        out["_note"] = "shadow·只标 eligible 不重判（零额外 API 成本）"
+        return out
+    # active：真重判一次
+    try:
+        swapped_user = make_swapped_user(user)
+        swapped_data, _, _ = judge_call(
+            profiles_or_loader, system, swapped_user,
+            required_keys=required_keys, max_tokens=max_tokens,
+            max_format_retries=1, label=f"judge:{agent_name}:bias_swap",
+            _generate_fn=_generate_fn)
+    except Exception as e:    # noqa: BLE001 — 永不让 swap-check 拖崩主链
+        out["_note"] = f"swap-check 调用失败·降级（{type(e).__name__}）"
+        return out
+    sig_a = _bias_signature(baseline_data)
+    sig_b = _bias_signature(swapped_data)
+    delta = _bias_delta(sig_a, sig_b)
+    out.update({
+        "baseline_signature": sig_a,
+        "swapped_signature": sig_b,
+        "asymmetry": delta["asymmetry"],
+        "style_bias_suspected": delta.get("style_bias_suspected", False),
+        "detail": delta.get("detail", {}),
+    })
+    if out["style_bias_suspected"]:
+        out["_advisory"] = ("style_bias_suspected：正反呈现序裁决差异显著 > "
+                            f"{_BIAS_DELTA_THRESHOLD}·建议人工抽核·绝不阻断")
+    return out
 
 
 def _atomic_write_json(path: Path, data: dict):

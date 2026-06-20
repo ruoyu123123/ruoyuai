@@ -428,6 +428,58 @@ def _tension_stats(series_list: list) -> dict:
     return out
 
 
+# R7 W2 Batch-E：情感弧 fractal 指纹（Hurst + ApEn · 作者 ECDF band·绝不设通用阈值）
+_FRACTAL_MIN_POINTS = 30   # 单 cluster 张力点 <30 → 降级（北极星⑤）
+
+
+def _sentiment_arc_fractal(series_list: list) -> dict:
+    """Hurst + ApEn 跨 cluster ECDF band（作者档作权威基线，scanner 端拿来对比）。
+
+    series_list：[ [(pct, tension), ...], ... ]（aggregate_rhythm 现有 tension_all）。
+    单 cluster < _FRACTAL_MIN_POINTS 点不算（噪声）→ 不入 band。
+    分布 < 2 个有效 cluster → 返回空 dict（不发布·调用方走 fallback）。
+    """
+    hurst_vals: list[float] = []
+    apen_vals: list[float] = []
+    for pts in series_list:
+        if len(pts) < _FRACTAL_MIN_POINTS:
+            continue
+        # 沿 pct 升序的 tension 序列（aggregate_rhythm 已 sort 过，再保险一次）
+        tens = [t for _, t in sorted(pts, key=lambda x: x[0])]
+        h = sa.compute_hurst_rs(tens)
+        a = sa.compute_approx_entropy(tens)
+        if h is not None:
+            hurst_vals.append(h)
+        if a is not None:
+            apen_vals.append(a)
+
+    def _pctl(L, p):
+        if not L:
+            return None
+        s = sorted(L)
+        k = (len(s) - 1) * p
+        f = int(k); c = min(f + 1, len(s) - 1)
+        return round(s[f] + (s[c] - s[f]) * (k - f), 4)
+
+    def _band(L):
+        if len(L) < 2:
+            return None
+        return {"n": len(L), "p5": _pctl(L, 0.05), "p50": _pctl(L, 0.50),
+                "p95": _pctl(L, 0.95), "mean": round(sum(L) / len(L), 4)}
+
+    out: dict = {}
+    hb = _band(hurst_vals)
+    ab = _band(apen_vals)
+    if hb:
+        out["hurst"] = hb
+    if ab:
+        out["approx_entropy"] = ab
+    if out:
+        out["_doc"] = ("情感弧分形指纹·作者 ECDF band 第一权威·绝不设通用阈值·"
+                       "单 cluster 张力点 <30 不入 band·北极星⑤ advisory")
+    return out
+
+
 def aggregate_rhythm(project: Path) -> dict:
     """A1-A5 → narrative_rhythm。读 cluster_*_surface.json（cluster 级·不逐章重复）。"""
     dist = project / "蒸馏进度"
@@ -498,6 +550,10 @@ def aggregate_rhythm(project: Path) -> dict:
         out["scene_turn_ratio"] = round(turn_yes / turn_total, 3)
     if tension_all:
         out["tension_trajectory"] = _tension_stats(tension_all)
+        # R7 W2 Batch-E：Hurst + ApEn 情感弧 fractal band（cluster<30 句降级·空则不发布）
+        frac = _sentiment_arc_fractal(tension_all)
+        if frac:
+            out["sentiment_arc_fractal"] = frac
     if tt_counter:
         tot = sum(tt_counter.values())
         out["tension_type_distribution"] = {

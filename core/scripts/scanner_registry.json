@@ -345,6 +345,14 @@
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["SAGGING_MIDDLE_REVERSAL_VOID", "SAGGING_MIDDLE_STAKES_FLAT", "SAGGING_MIDDLE_PURPOSE_VOID", "SAGGING_MIDDLE_NEEDS_MIDPOINT_BOMB"]
     },
+    "cross_cluster_engagement_metrics": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_engagement_metrics_aggregate.py",
+      "doc": "[R7 W2 Batch-E·2026-06-20 升级] 跨章engagement: hook_strength_trend+golden_three_trend+lazy_spawn promotion+🆕CLIFFHANGER_QUOTA_OVER(>25%章末cliffhanger或连续≥3章·advisory·D7配比软目标80:15:5任随作者档·绝不hard_gate·北极星⑤)·账本+audit双驱·零LLM确定性",
+      "_new": false,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["HOOK_STRENGTH_DECLINE", "HOOK_PERSISTENT_LOW", "GOLDEN_DEGRADATION", "GOLDEN_FLAT", "LAZY_SPAWN_NEVER_PROMOTED", "CLIFFHANGER_QUOTA_OVER"]
+    },
     "cross_cluster_character_presence_balance": {
       "layer": "cross-cluster",
       "script": "cross_cluster_character_presence_balance_aggregate.py",
