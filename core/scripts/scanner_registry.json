@@ -438,6 +438,73 @@
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["MOTIF_DORMANT", "MOTIF_OVER_SATURATED", "MOTIF_PAYOFF_DUE", "MOTIF_SEED_PROLIFERATION"]
+    },
+    "frame_tale_consistency": {
+      "layer": "cluster",
+      "script": "frame_tale_consistency_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-J·L29 LHN Narrative Levels Genette+BookishBay Mise en Abyme+DMovies Rashomon] Frame-Tale 嵌套叙事一致性卡·作者档 nested_narrative_profile{allowed_max_depth,entry_exit_required,mise_en_abyme_target}门控(无→skip)·scheming_politics/regression/espionage 默认启用·标识词识别入口/出口·depth_imbalance!=0 advisory·entry_count>max_depth advisory·与 L37 location 独立·advisory·env FRAME_TALE_MODE 默认 shadow·FRAME_TALE_DRIFT 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["FRAME_TALE_DRIFT"]
+    },
+    "dialogue_sequence_expansion": {
+      "layer": "cluster",
+      "script": "dialogue_sequence_expansion.py",
+      "doc": "[2026-06-20 R8 W4 Batch-J·L30 Schegloff Sequence Organization 2007+UIN Malang+起点男频试探/谈判三五步扩展] CA Adjacency Pair Expansion Scanner·切对话 turn 序列识别 FPP+pre/insert/post 扩展·CN 触发词表(先说一件事/等等/你是说/再问一下/就这样/那……行吧)·expansion_ratio/pre_seq_density/insert_seq_density·紧张/试探类 manifest expected_min_ratio·通用兜底 0.10·与 R6 OIR 正交·advisory·env DIALOGUE_SEQ_EXPANSION_MODE 默认 shadow·DIALOGUE_SEQUENCE_EXPANSION_THIN 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["DIALOGUE_SEQUENCE_EXPANSION_THIN"]
+    },
+    "dialogue_silence_density": {
+      "layer": "cluster",
+      "script": "dialogue_silence_density.py",
+      "doc": "[2026-06-20 R8 W4 Batch-J·L31 Heldner&Edlund pause/gap/lapse+RB Kelly Power of Pauses+Write Your Books Weight of Silence] 沉默/停顿/失语三档 marker scanner·词表+位置识别 within-turn pause/turn 间 gap/≥2 turn lapse·silence_emotional_context_match(震惊/悲伤/决断/敌意/亲密)·作者档 silence_baseline / cluster manifest expected_silence_marker_min 优先·通用兜底 0.4/千字·与 R5 dispreferred_turn 正交·advisory·env DIALOGUE_SILENCE_MODE 默认 shadow·SILENCE_DENSITY_THIN 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SILENCE_DENSITY_THIN"]
+    },
+    "expansion_ratio_gate": {
+      "layer": "cluster",
+      "script": "expansion_ratio_gate.py",
+      "doc": "[2026-06-20 R8 W4 Batch-J·L32 Hanwen Shen arXiv:2505.12572 Optimal Expansion+LongEval arXiv:2502.19103+arXiv:2309.06009 Content Reduction Surprisal] Genette 扩写率守门(brief→draft 字符比 z-band)·读 cluster brief(scope_summary+scene_storyboard 字符数)+draft 字符数·对比作者档 expansion_ratio_baseline z-band 或通用兜底 4-60·偏低=brief 抄写感/偏高=注水·advisory·env EXPANSION_RATIO_MODE 默认 shadow·EXPANSION_RATIO_DRIFT 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["EXPANSION_RATIO_DRIFT"]
+    },
+    "event_density_rhythm": {
+      "layer": "cross-cluster",
+      "script": "event_density_rhythm_aggregate.py",
+      "doc": "[2026-06-20 R8 W4 Batch-J·L33 Writers Digest Pacing for Emotional Impact tension+release+Darling Axe Building a Novel] 跨 cluster 事件密度节律 scanner·breather 缺位+高烈度 streak 疲劳·聚合 cluster_index.json stakes_delta+走向卡事件烈度·连续≥max(3,cadence+1) cluster intensity>=0.7 无 breather(<0.4) advisory·作者档 breather_cadence_baseline 优先·emergence_engine 候选 brief 软提示·与 R7 Sagging Middle 相反(中段缺事件 vs 连续高事件)·advisory·env EVENT_DENSITY_RHYTHM_MODE 默认 shadow·EVENT_DENSITY_RHYTHM_OVER 绝不 hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["EVENT_DENSITY_RHYTHM_OVER"]
+    },
+    "thematic_argument_motif_balance": {
+      "layer": "cross-cluster",
+      "script": "thematic_argument_motif_balance.py",
+      "doc": "[2026-06-20 R8 W4 Batch-J·L34 Kieffer songbirds vs snakes+Writes With Tools Thematic Metaphors+Fawkes Strengthening Story with Symbolism+庆余年明暗双 motif] thematic_argument 对偶母题平衡 aggregator(opt-in)·author_profile.thematic_argument_pairs 显式声明才激活(distill-style 后期 AskUser)·每 cluster 统计 A/B 池 motif 命中·失衡(差≥3 倍连续≥3 cluster) advisory 建议引入弱侧·绝不替换 throughline_balance·advisory·env THEMATIC_ARGUMENT_BALANCE_MODE 默认 shadow·THEMATIC_ARGUMENT_IMBALANCE 绝不 hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["THEMATIC_ARGUMENT_IMBALANCE"]
+    },
+    "opening_window_milestone": {
+      "layer": "cluster",
+      "only_for_cluster": "cluster_001",
+      "script": "opening_window_milestone_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-J·L35 知乎拆 30+本爆款 2025 番茄+CSDN 番茄爽文方法论+Royal Road Wattpad 50% drop+WebNovelBench arXiv:2505.14818] 番茄 3k/10k 开篇悬念-核心 stake 放置闸(仅 cluster_001 激活)·M1=前 3000 CJK ambiguity_hook(suspense_focus 首次 surface+模糊 2 解+)·M2=前 10000 CJK core_stake(主角 goal+ 失去成本+ 威胁)·严肃文学/IP 改编 override·与 R1 golden_three+R6 in_medias_res 协同·advisory·env OPENING_MILESTONE_MODE 默认 shadow·OPENING_WINDOW_MILESTONE_THIN 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["OPENING_WINDOW_MILESTONE_THIN"]
+    },
+    "world_term_seepage": {
+      "layer": "cluster",
+      "script": "world_term_seepage_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-J·L36 Jo Walton Reactor SF Reading Protocols incluing+Tomeworks+CEUR-WS Vol.2145+Ravid&Berman+AlphaLexChinese] 世界术语首现 Gini 系数+lexical density 突变 scanner(Walton incluing 工程化)·扫 cluster 草稿标每术语首现字符位置·算首现位置 Gini(>0.55=集中爆裂式)·叠加局部 lexical density 突变检测(滑窗 500CJK content-word ratio 超均值 1.5σ)·硬科幻/LitRPG override Gini 阈值到 0.65·与 R3 golden_three+R1 show_tell_density 正交·advisory·env WORLD_TERM_SEEPAGE_MODE 默认 shadow·WORLD_TERM_INFO_DUMP 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["WORLD_TERM_INFO_DUMP"]
+    },
+    "location_signature_consistency": {
+      "layer": "cross-cluster",
+      "script": "location_signature_consistency.py",
+      "doc": "[2026-06-20 R8 W4 Batch-J·L37 Career Authors setting-as-character+Writers Helping Writers atmospheric layering+Writing Crucible multi-sensory+Connie Jasperson 2024] 跨 cluster 地点感官签名一致性 aggregator·cluster-save-state 自动维护 _数据库/location_atmosphere_registry.json(--scan-cluster 增量更新)·确定性抽地点 signature_sensory_motifs(嗅:腥/霉/檀;听:钟声/海浪;触温光)·命中率<50% advisory·作者档 location_atmosphere_override.allow_drift_locations 豁免(灾后/季节)·与 volume_arc_drift 同层·advisory·env LOCATION_SIGNATURE_MODE 默认 shadow·LOCATION_SIGNATURE_DRIFT 绝不 hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["LOCATION_SIGNATURE_DRIFT"]
     }
   },
 

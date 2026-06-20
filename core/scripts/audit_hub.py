@@ -1415,6 +1415,66 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "narratee_address_scanner", "NARRATEE_DRIFT", "风格")),
+                # [2026-06-20 R8 W4 Batch-J·L29 LHN Genette Narrative Levels + BookishBay
+                # Mise en Abyme + DMovies Rashomon] Frame-Tale 嵌套叙事一致性
+                # · 作者档 nested_narrative_profile 门控 / scheming_politics/regression/
+                # espionage 默认启用 · advisory · 默认 shadow
+                ("frame_tale_consistency",
+                 [child_python(), str(_SCRIPT_DIR / "frame_tale_consistency_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "frame_tale_consistency_scanner", "FRAME_TALE_DRIFT", "结构")),
+                # [2026-06-20 R8 W4 Batch-J·L30 Schegloff Sequence Organization 2007 +
+                # 起点男频试探/谈判三五步扩展] CA Adjacency Pair 扩展密度
+                # · CN 触发词表 pre/insert/post · 与 R6 OIR 正交 · advisory · 默认 shadow
+                ("dialogue_sequence_expansion",
+                 [child_python(), str(_SCRIPT_DIR / "dialogue_sequence_expansion.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "dialogue_sequence_expansion",
+                     "DIALOGUE_SEQUENCE_EXPANSION_THIN", "风格")),
+                # [2026-06-20 R8 W4 Batch-J·L31 Heldner & Edlund pause/gap/lapse +
+                # RB Kelly Power of Pauses] 沉默/停顿/失语三档密度
+                # · 词表 within-turn/gap/lapse · 情绪上下文匹配 · advisory · 默认 shadow
+                ("dialogue_silence_density",
+                 [child_python(), str(_SCRIPT_DIR / "dialogue_silence_density.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "dialogue_silence_density",
+                     "SILENCE_DENSITY_THIN", "风格")),
+                # [2026-06-20 R8 W4 Batch-J·L32 Hanwen Shen arXiv:2505.12572 Optimal
+                # Expansion + LongEval arXiv:2502.19103] Genette 扩写率守门
+                # · 作者档 expansion_ratio_baseline z-band · 通用兜底 4-60 · 默认 shadow
+                ("expansion_ratio_gate",
+                 [child_python(), str(_SCRIPT_DIR / "expansion_ratio_gate.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "expansion_ratio_gate",
+                     "EXPANSION_RATIO_DRIFT", "结构")),
+                # [2026-06-20 R8 W4 Batch-J·L35 知乎拆 30+本爆款 2025 番茄 +
+                # WebNovelBench arXiv:2505.14818] 开篇 3k/10k 里程碑 (仅 cluster_001 激活)
+                # · M1 ambiguity_hook + M2 core_stake · 严肃文学/IP 改编 override · 默认 shadow
+                ("opening_window_milestone",
+                 [child_python(), str(_SCRIPT_DIR / "opening_window_milestone_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "opening_window_milestone_scanner",
+                     "OPENING_WINDOW_MILESTONE_THIN", "结构")),
+                # [2026-06-20 R8 W4 Batch-J·L36 Jo Walton Reactor SF Reading Protocols
+                # incluing + AlphaLexChinese] 世界术语首现 Gini + lexical density 突变
+                # · 世界观.json 术语词表 · 硬科幻/LitRPG override 0.65 · 默认 shadow
+                ("world_term_seepage",
+                 [child_python(), str(_SCRIPT_DIR / "world_term_seepage_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "world_term_seepage_scanner",
+                     "WORLD_TERM_INFO_DUMP", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
