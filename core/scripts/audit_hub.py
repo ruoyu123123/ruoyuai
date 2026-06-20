@@ -1276,6 +1276,27 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "anachronism_scanner", "ANACHRONISM_DETECTED", "风格")),
+                # [2026-06-20 R7 联网调研·番茄爆款规则怪谈] 规则块字面歧义/陷阱条款比·genre 门控(rule_anomaly·非则 skip)·advisory·默认 shadow
+                ("rule_text_ambiguity",
+                 [child_python(), str(_SCRIPT_DIR / "rule_text_ambiguity_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "rule_text_ambiguity_scanner", "RULE_TEXT_AMBIGUITY_LOW", "风格")),
+                # [2026-06-20 R7 联网调研·DiLouie/末世生存] 资源稀缺账本·genre 门控(apocalypse_survival·非则 skip)·advisory·默认 shadow
+                ("resource_ledger",
+                 [child_python(), str(_SCRIPT_DIR / "resource_ledger_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "resource_ledger_scanner", "RESOURCE_LEDGER_THIN", "风格")),
+                # [2026-06-20 R7 联网调研·Stanzel/Cohn] 第一人称回溯 hindsight 签到·narrative_pov_mode 门控(first_retro_*·非则 skip)·与 future_knowledge_leak 显式去重·advisory·默认 shadow
+                ("firstperson_retro_self_gap",
+                 [child_python(), str(_SCRIPT_DIR / "firstperson_retro_self_gap_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "firstperson_retro_self_gap_scanner", "FIRSTPERSON_RETRO_HINDSIGHT_THIN", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

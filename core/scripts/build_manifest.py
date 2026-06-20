@@ -1253,6 +1253,27 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                     cluster_id_val = c.get("cluster_id") or ""
                     is_first_cluster = cluster_id_val.endswith("_001") or cluster_id_val == "cluster_001"
                     narrative_mode = c.get("narrative_mode") or ("in_medias_res" if is_first_cluster else "linear")
+                    # 🆕 R7 W2 (2026-06-20): narrative_pov_mode 五分类 (Stanzel/Cohn consonant-dissonant)
+                    # first_present / first_retro_consonant / first_retro_dissonant / third_limited / third_omniscient
+                    # 与 narrative_mode (in_medias_res/linear 时间序) 正交。cluster 优先 → 作者档兜底 → "third_limited" 默认。
+                    _valid_pov_modes = {"first_present", "first_retro_consonant",
+                                         "first_retro_dissonant", "third_limited", "third_omniscient"}
+                    npm_raw = c.get("narrative_pov_mode")
+                    if not (isinstance(npm_raw, str) and npm_raw.strip().lower() in _valid_pov_modes):
+                        # 退作者档
+                        try:
+                            _ap = scanner.root / "_数据库" / "作者风格.json"
+                            if _ap.exists():
+                                _obj = json.loads(_ap.read_text(encoding="utf-8"))
+                                if isinstance(_obj, dict):
+                                    _v = _obj.get("narrative_pov_mode")
+                                    if isinstance(_v, str) and _v.strip().lower() in _valid_pov_modes:
+                                        npm_raw = _v.strip().lower()
+                        except (json.JSONDecodeError, OSError):
+                            pass
+                    narrative_pov_mode = (npm_raw.strip().lower()
+                                          if isinstance(npm_raw, str) and npm_raw.strip().lower() in _valid_pov_modes
+                                          else "third_limited")
                     return {
                         "mode": "on",
                         "cluster_id": cluster_id_val,
@@ -1274,6 +1295,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "estimated_chapters": c.get("estimated_chapters", 4),
                         "cluster_position_hint": _infer_cluster_position(chapter, cr) if cr else "head",
                         "narrative_mode": narrative_mode,
+                        "narrative_pov_mode": narrative_pov_mode,
                         "climax_hint_scene_index": c.get("climax_hint_scene_index"),
                         "volume_convergence_anchor": _build_volume_convergence_anchor(scanner, c),
                         # 🆕 2026-06-03 卷=阶段触发点：透传卷级语义给 writer。
@@ -1289,6 +1311,12 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             if c.get("is_volume_finale") else None
                         ),
                         "_narrative_mode_doc": "in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；linear = 时间序",
+                        "_narrative_pov_mode_doc": ("R7 W2 五分类(Stanzel/Cohn): "
+                                                     "first_present(第一人称当下时)/"
+                                                     "first_retro_consonant(第一人称回溯·贴近 experiencing-self)/"
+                                                     "first_retro_dissonant(第一人称回溯·拉远 narrating-self 评点)/"
+                                                     "third_limited(第三人称有限)/third_omniscient(第三人称全知)。"
+                                                     "first_retro_* 模式触发 firstperson_retro_self_gap_scanner advisory"),
                         "_writer_hint": "MODE=ecas: 用此 brief 生成 8K-16K 字 cluster_draft，每 3000 字 self-audit，每场景生成 100 字 sub-summary"
                     }
         return {"mode": "off", "_note": f"无匹配 cluster (本章 {chapter} 不在任何 active cluster 范围)"}

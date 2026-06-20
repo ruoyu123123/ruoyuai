@@ -269,6 +269,27 @@
       "_new": true,
       "issues_emitted": ["ANACHRONISM_DETECTED"]
     },
+    "rule_text_ambiguity": {
+      "layer": "cluster",
+      "script": "rule_text_ambiguity_scanner.py",
+      "doc": "[2026-06-20 R7·番茄爆款规则怪谈(笔灵/番茄)] 规则块字面歧义/陷阱条款比·rule_anomaly题材核心工艺『半真半假规则』此前零检测·LLM 默认全直陈=工具书读感·纯规则识别编号条款(块头+连续编号项)+歧义标志(或许/不一定/除非)+陷阱标志(不可/否则/必死)·genre门控(rule_anomaly·非则skip)·阈值<0.30报偏低·与anachronism同层·advisory·env RULE_TEXT_AMBIGUITY_MODE默认shadow·🔬待金标准校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["RULE_TEXT_AMBIGUITY_LOW"]
+    },
+    "resource_ledger": {
+      "layer": "cluster",
+      "script": "resource_ledger_scanner.py",
+      "doc": "[2026-06-20 R7·DiLouie/Cannibal Halfling/末世] 末世资源稀缺账本检测·apocalypse_survival题材核心工艺『决策须扎账本』此前零检测·LLM默认无限弹药/无限粮食写法=末世感缺失·纯规则识别资源词(食物/水/弹药/医疗/燃料/电池)+余额修饰词(剩/见底/最后N发)相邻锚定+决策动作(开火/补给/吃/喝)·genre门控(apocalypse_survival·非则skip)·阈值锚定密度<0.5/千字且决策≥3报偏薄·advisory·env RESOURCE_LEDGER_MODE默认shadow·🔬待金标准校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["RESOURCE_LEDGER_THIN"]
+    },
+    "firstperson_retro_self_gap": {
+      "layer": "cluster",
+      "script": "firstperson_retro_self_gap_scanner.py",
+      "doc": "[2026-06-20 R7·Stanzel/Cohn consonant-dissonant 1964/1978·Taylor&Francis 2020] 第一人称回溯叙述 hindsight 签到检测·narrative_pov_mode 五分类(first_present/first_retro_consonant/first_retro_dissonant/third_limited/third_omniscient)新增·LLM 默认全程贴 experiencing-self 写=回溯感缺失→退化第一人称当下时·hindsight 词典(回想起来/后来才明白/那时我并不知道/多年后)签到密度·门控(仅 first_retro_*激活·其他模式 skip)·与 R6 FUTURE_KNOWLEDGE_LEAK 显式去重(前者查不应有=hard_gate方向·本者查应有不足=advisory工艺方向)·阈值<0.4/千字报稀薄·advisory·env FIRSTPERSON_RETRO_MODE默认shadow·🔬待金标准校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["FIRSTPERSON_RETRO_HINDSIGHT_THIN"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",
