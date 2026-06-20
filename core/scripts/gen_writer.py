@@ -573,6 +573,54 @@ def _build_genre_pack_section(manifest_path: Path, _preloaded: dict | None = Non
     return "\n".join(lines)
 
 
+def _build_debt_ledger_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
+    """R7 Batch-D（2026-06-20）：D7 叙事债务状态卡注入（advisory · 北极星⑤不硬锁）。
+
+    数据源 manifest.debt_ledger_snapshot（cross_cluster_narrative_debt_ledger_aggregate 写）。
+    把 book/volume open_debt + advisory_codes 折成一段给 writer 看的债务状态卡——
+    让 writer 知道「现在有多少未偿还的叙事债务」+「卷末是否累积过 60%」+「BOOK_MORTGAGE 缺位」。
+
+    NARRATIVE_DEBT_INJECT_MODE=off / 字段缺/空 → ""（不注入·零回归）。advisory。
+    """
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
+        return ""
+    snap = m.get('debt_ledger_snapshot')
+    if not isinstance(snap, dict):
+        return ""
+    book = snap.get("book") or {}
+    if not book:
+        return ""
+    book_total = book.get("total_planted", 0)
+    book_paid = book.get("total_paid", 0)
+    book_open = book.get("open_debt", 0)
+    book_ratio = book.get("open_ratio", 0.0)
+    codes = snap.get("advisory_codes", []) or []
+    vols = snap.get("volumes", []) or []
+    lines = ["## 📒 叙事债务账本（D7 · 长篇 stock+flow · advisory）", ""]
+    lines.append(
+        f"- 全书：planted {book_total} / paid {book_paid} / **open_debt {book_open}** "
+        f"（{book_ratio:.0%}）"
+    )
+    for v in vols:
+        if not isinstance(v, dict):
+            continue
+        lines.append(
+            f"- 卷 {v.get('volume')}：planted {v.get('total_planted')} / "
+            f"paid {v.get('total_paid')} / open_debt {v.get('open_debt')} "
+            f"（{v.get('open_ratio', 0.0):.0%}）"
+        )
+    if codes:
+        lines.append("")
+        lines.append("**触发 advisory**：" + "、".join(codes))
+        lines.append("- 建议：在本 cluster 偿还 1-2 个最旧的伏笔/秘密（揭露 / 兑现 / 反转）·"
+                     "或在卷末安排集中偿还场景·勿在卷末再大量埋新债")
+    lines.append("")
+    lines.append("> 这是 advisory：让你看见「读者欠的债」当前状态。writer 可自由判断何时偿还，"
+                 "但**长期累积不偿 = 烂尾感**；开篇零借债 = 没翻页动力。")
+    return "\n".join(lines).rstrip()
+
+
 def _build_decision_principles_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """阶段2：从 manifest.author_decision_principles 拼作者思维/人物刻画骨段。
 
@@ -826,6 +874,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     golden_fewshot_section = _build_golden_fewshot_section(manifest_path, _manifest_dict)
     deep_dims_section = _build_deep_dims_section(manifest_path, _manifest_dict)
     rolling_anchor_section = _build_rolling_anchor_section(manifest_path, _manifest_dict)
+    # R7 Batch-D（2026-06-20）：D7 叙事债务状态卡（advisory · 北极星⑤不硬锁）
+    debt_ledger_section = _build_debt_ledger_section(manifest_path, _manifest_dict)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
@@ -1240,6 +1290,8 @@ cluster_brief 完整内容：
     golden_fewshot_block = (golden_fewshot_section + "\n\n") if golden_fewshot_section else ""
     deep_dims_block = (deep_dims_section + "\n\n") if deep_dims_section else ""
     rolling_anchor_block = (rolling_anchor_section + "\n\n") if rolling_anchor_section else ""
+    # R7 Batch-D：D7 叙事债务状态卡 block（advisory · 空则零回归）
+    debt_ledger_block = (debt_ledger_section + "\n\n") if debt_ledger_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
     primacy_section = _build_hard_constraint_primacy_block(
@@ -1272,7 +1324,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -1306,7 +1358,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}

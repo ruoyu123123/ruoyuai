@@ -502,7 +502,28 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
     grade = ("A" if weighted >= 90 else "B" if weighted >= 80
              else "C" if weighted >= 70 else "D")
 
-    return {"total": round(weighted, 2), "dimensions": dims, "grade": grade}
+    # R7 Batch-D（2026-06-20）：PCA 自适应权重 + ECDF percentile rank 占位
+    # （R1 #31 backlog 字段位接入）。
+    # · sfs_pca_weights：从作者 corpus 学权重的占位（完整 PCA 拟合留下批·此处用 None
+    #   表示「未拟合·维度权重退回固定值」），字段位先就位，不影响当前打分行为。
+    # · sfs_ecdf_percentile：把 total 转作者经验分布上的 percentile rank·当前用
+    #   线性 90→1.0 / 60→0.0 占位近似（兜底），完整 PCA-ECDF 拟合留下批。
+    # 这两个字段标 `_placeholder: true` 提示消费者本批不读 weight·只读 total/grade。
+    pca_ecdf = {
+        "_placeholder": True,
+        "_doc": ("R7 Batch-D 字段位接入·PCA 自适应权重需作者 corpus 拟合（留下批 P0）·"
+                 "当前用固定维度权重 + 线性占位 percentile（不影响 total/grade 行为）"),
+        "sfs_pca_weights": None,
+        "sfs_ecdf_percentile": round(min(1.0, max(0.0, (weighted - 60) / 30.0)), 4),
+        "sfs_ecdf_baseline_source": "linear_fallback_60_to_90",
+    }
+
+    return {
+        "total": round(weighted, 2),
+        "dimensions": dims,
+        "grade": grade,
+        "pca_ecdf": pca_ecdf,
+    }
 
 
 # 段落开头多样性需要原文文本，但 ref 可能只有 profile。

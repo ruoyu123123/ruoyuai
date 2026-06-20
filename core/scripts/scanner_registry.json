@@ -328,6 +328,30 @@
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["VOLUME_TRANSITION_HOOK_MISS", "VOLUME_TRANSITION_HARD_RESET", "VOLUME_TRANSITION_EMPTY_OPEN"]
+    },
+    "cross_cluster_narrative_debt_ledger": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_narrative_debt_ledger_aggregate.py",
+      "doc": "[2026-06-20 R7 Batch-D·叙事债务账本] 长篇叙事 stock+flow 三桶账本(book/volume/scene)·伏笔+秘密=借债·偿还=paid·三规则①BOOK_MORTGAGE_ABSENT前30% cluster累计planted=0(开篇无借债·读者无翻页动力)②VOLUME_TAIL_RUNAWAY卷60%后段open_ratio连续上升(烂尾债务累积)③VOLUME_OVERSHOOT卷末open_ratio>60%(跨卷悬空风险)·零LLM确定性·读账本cluster_summary_reader·写snapshot供writer D7注入·advisory·env NARRATIVE_DEBT_MODE默认shadow·🔬阈值占位待金标准校准·绝不hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["DEBT_BOOK_MORTGAGE_ABSENT", "DEBT_VOLUME_TAIL_RUNAWAY", "DEBT_VOLUME_OVERSHOOT"]
+    },
+    "cross_cluster_sagging_middle": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_sagging_middle_aggregate.py",
+      "doc": "[2026-06-20 R7 Batch-D·Save the Cat/Story Grid·Sagging Middle] 全书40-60%区段中段塌陷检测·三规则联合①反转零命中(golden_scores.turn/hook_score均值<阈值+无cluster命中turning_point/beat_signal_hit)②stakes仅量变(stress_total波动+scene_type多样性<=2种)③Scene Purpose五选一全0(reveal/reversal/escalate/decision/transformation连续≥3 cluster无命中)·任一→advisory·≥2→warning·needs_midpoint_bomb标志snapshot供outline-planner advisory·零LLM确定性·advisory·env SAGGING_MIDDLE_MODE默认shadow·🔬阈值占位待金标准校准·绝不hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["SAGGING_MIDDLE_REVERSAL_VOID", "SAGGING_MIDDLE_STAKES_FLAT", "SAGGING_MIDDLE_PURPOSE_VOID", "SAGGING_MIDDLE_NEEDS_MIDPOINT_BOMB"]
+    },
+    "cross_cluster_character_presence_balance": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_character_presence_balance_aggregate.py",
+      "doc": "[2026-06-20 R7 Batch-D·角色出场失衡+长尾遗忘] 群像题材常见症状·主角戏过载/配角长尾遗忘·Gini系数(0=平等·1=集中)+作者character_presence_distribution指纹ECDF z-band偏离±1σ·末3 cluster全缺席角色≥3=长尾遗忘·genre门控(solo_cultivation/first_person_retro/diary/monologue独角戏豁免)·零LLM确定性·读char_mention_counts/char_appearance_chs_flag·advisory·env CHARACTER_PRESENCE_BALANCE_MODE默认shadow·🔬阈值占位待金标准校准·绝不hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["PRESENCE_GINI_DEVIATION", "PRESENCE_LONG_TAIL_FORGOTTEN"]
     }
   },
 

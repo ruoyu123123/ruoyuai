@@ -3161,6 +3161,86 @@ def _collect_focalization_matrix(s: "DatabaseScanner", chapter: int) -> dict | N
     return payload
 
 
+def _collect_debt_ledger_snapshot(s: "DatabaseScanner") -> dict | None:
+    """R7 Batch-D（2026-06-20）：叙事债务账本 snapshot 注入。
+
+    数据源=cluster-save-state step 9 跑 cross_cluster_narrative_debt_ledger_aggregate 写的
+    `_数据库/.cross_chapter_scan/narrative_debt_snapshot.json`（book/volume open_debt + advisory_codes）。
+
+    env NARRATIVE_DEBT_INJECT_MODE 默认 shadow（北极星⑥：先影子）。
+    advisory · 永不 hard_gate · 缺文件 → None（零回归）。
+    """
+    import os as _os
+    mode = (_os.environ.get("NARRATIVE_DEBT_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+    snap_path = s.db / ".cross_chapter_scan" / "narrative_debt_snapshot.json"
+    if not snap_path.exists():
+        return None
+    try:
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(snap, dict):
+        return None
+    payload = {
+        "gate_level": "advisory",
+        "advisory_only": True,
+        "_doc": ("叙事债务账本（book/volume open_debt + flow）·建议 writer D7 偿还设计点·"
+                 "advisory · cluster-save-state step 9 写"),
+        "book": snap.get("book"),
+        "volumes": snap.get("volumes"),
+        "advisory_codes": snap.get("advisory_codes", []),
+    }
+    if mode == "shadow":
+        print(f"[SHADOW] debt_ledger_snapshot: open_debt={payload.get('book', {}).get('open_debt')} — 不注入 manifest",
+              file=sys.stderr)
+        return None
+    return payload
+
+
+def _collect_sagging_middle_snapshot(s: "DatabaseScanner") -> dict | None:
+    """R7 Batch-D（2026-06-20）：Sagging Middle snapshot 注入（needs_midpoint_bomb）。
+
+    数据源=cluster-save-state step 9 跑 cross_cluster_sagging_middle_aggregate 写的
+    `_数据库/.cross_chapter_scan/sagging_middle_snapshot.json`。
+
+    env SAGGING_MIDDLE_INJECT_MODE 默认 shadow。advisory · 永不 hard_gate。
+    """
+    import os as _os
+    mode = (_os.environ.get("SAGGING_MIDDLE_INJECT_MODE") or "shadow").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "shadow"
+    snap_path = s.db / ".cross_chapter_scan" / "sagging_middle_snapshot.json"
+    if not snap_path.exists():
+        return None
+    try:
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(snap, dict):
+        return None
+    payload = {
+        "gate_level": "advisory",
+        "advisory_only": True,
+        "_doc": ("Sagging Middle 中段塌陷 snapshot·needs_midpoint_bomb=True 建议下个 cluster 插入"
+                 "重大反转/角色死亡/秘密揭露·advisory·cluster-save-state step 9 写"),
+        "needs_midpoint_bomb": bool(snap.get("needs_midpoint_bomb", False)),
+        "hit_signals": snap.get("hit_signals", 0),
+        "middle_cluster_ids": snap.get("middle_cluster_ids", []),
+        "advisory_codes": snap.get("advisory_codes", []),
+    }
+    if mode == "shadow":
+        print(f"[SHADOW] sagging_middle_snapshot: needs_bomb={payload['needs_midpoint_bomb']} "
+              f"hit_signals={payload['hit_signals']} — 不注入 manifest", file=sys.stderr)
+        return None
+    return payload
+
+
 def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
     """G6 P0：注入作者风格相对通用兜底基线的方向描述（更短/更留白）·advisory·三态。
 
@@ -3763,6 +3843,10 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "emotion_body_topography_hint": _collect_emotion_body_topography_hint(s),
         # R7 W2 P1：Focalization Type×Facet 二轴矩阵（FocalLens 2026·env FOCALIZATION_INJECT_MODE 默认 shadow·advisory）。
         "focalization_matrix": _collect_focalization_matrix(s, chapter),
+        # R7 Batch-D（2026-06-20）：叙事债务账本 snapshot（book/volume/scene stock+flow·env NARRATIVE_DEBT_INJECT_MODE 默认 shadow·advisory·cluster-save-state step 9 写）。
+        "debt_ledger_snapshot": _collect_debt_ledger_snapshot(s),
+        # R7 Batch-D（2026-06-20）：Sagging Middle 中段塌陷 snapshot（needs_midpoint_bomb·env SAGGING_MIDDLE_INJECT_MODE 默认 shadow·advisory）。
+        "sagging_middle_snapshot": _collect_sagging_middle_snapshot(s),
         "genre_baseline_diff": _collect_genre_baseline_diff(s),
         "writer_mode": "freestyle_v27",
         "rag_relevant_chapters": rag_hits,
@@ -3856,6 +3940,8 @@ def _build_cache_layout() -> dict:
             "hard_constraints",                  # 本章硬约束（含本章伏笔到期）
             "post_write_checks",                 # 本章写后检查
             "_critical_summary",                 # 本章 LiM 关键摘要（动态）
+            "debt_ledger_snapshot",              # R7 Batch-D: 叙事债务账本 snapshot（cluster-save-state 后每 cluster 变）
+            "sagging_middle_snapshot",           # R7 Batch-D: Sagging Middle 中段塌陷 snapshot（needs_midpoint_bomb 动态）
         ],
         "instructions": (
             "Agent prompt 推荐结构：\n"

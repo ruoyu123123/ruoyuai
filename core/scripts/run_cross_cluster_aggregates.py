@@ -50,6 +50,9 @@ SCAN_TIERS = {
         "volume_arc_drift_scanner",  # 2026-05-29 北极星 P2 [H3-trend]：卷级大势收敛漂移哨兵（advisory）
         "cross_cluster_style_drift_scanner",  # 2026-05-31 第2轮：跨 cluster 长程作者文风漂移哨兵（advisory · env LONGRANGE_DRIFT_MODE 默认 shadow）
         "volume_transition_scanner",  # 2026-06-20 R7 W2：卷过渡硬重置/钩零命中哨兵（advisory · env VOLUME_TRANSITION_MODE 默认 shadow）
+        "cross_cluster_narrative_debt_ledger_aggregate",  # 2026-06-20 R7 Batch-D：叙事债务账本（book/volume/scene stock+flow·advisory·env NARRATIVE_DEBT_MODE 默认 shadow）
+        "cross_cluster_sagging_middle_aggregate",  # 2026-06-20 R7 Batch-D：Sagging Middle 检测（40-60% 区段·advisory·env SAGGING_MIDDLE_MODE 默认 shadow）
+        "cross_cluster_character_presence_balance_aggregate",  # 2026-06-20 R7 Batch-D：角色出场失衡+长尾遗忘+作者 ECDF z-band（advisory·env CHARACTER_PRESENCE_BALANCE_MODE 默认 shadow）
     ],
 }
 
