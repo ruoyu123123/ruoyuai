@@ -23,6 +23,13 @@
     },
     "horror_game": {
       "_label": "游戏向/LitRPG/无限流",
+      "metalepsis_budget": {
+        "type": "rhetorical",
+        "target_per_cluster": 4,
+        "marker_style": ["bracket", "system_prompt"],
+        "allowed_speakers": ["system", "narrator"],
+        "_doc": "[R8 W4 Batch-I·L25] 系统流/无限流核心工艺·【系统提示】式 rhetorical metalepsis 非零默认·允许 system/narrator 越界·禁本体越界(角色感知自己是游戏外不算)"
+      },
       "judge_dims": {
         "G1_面板规格": "属性条数(≤7)/数值上限与成长比/面板呈现位置(卡章末)·战斗对比用表格还是散文·数值裸露密度",
         "G2_系统提示双语域": "蓝框/方括号机制文本 vs 散文的视觉+语气切分·提示语气(冷机械 vs 用主角声音拟人)·格式标记密度",
@@ -217,6 +224,13 @@
     "rule_anomaly": {
       "_label": "规则怪谈/无限流(番茄爆款子类)",
       "register_tier": "modern_urban",
+      "metalepsis_budget": {
+        "type": "rhetorical",
+        "target_per_cluster": 3,
+        "marker_style": ["bracket", "system_prompt"],
+        "allowed_speakers": ["system", "narrator"],
+        "_doc": "[R8 W4 Batch-I·L25] 规则怪谈核心工艺·规则块/系统提示式 rhetorical metalepsis 非零默认·禁本体越界(打破第四面墙跟读者对话破坏规则恐怖感)"
+      },
       "_doc": "2026-06-20 R7联网调研新增(笔灵AI番茄经验·番茄『规则类怪谈无限流』关键词页千万订阅·知乎)。核心=半真半假规则+多国炮灰显形+死亡路线导览+金手指节制+解谜节奏。与用户新书《这规则它会还价》直接同构。",
       "judge_dims": {
         "RA1_半真半假规则": "规则块字面歧义/陷阱条款比≥30%·禁全直陈条款(全直陈=工具书读感)·规则可信但留漏洞让读者自行权衡·『不可…否则…』式断句+『或许/也许/据说/不一定』式留疑搭配",

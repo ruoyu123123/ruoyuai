@@ -1364,6 +1364,57 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "first_encounter_anchor_scanner",
                      "FIRST_ENCOUNTER_LABEL_FIRST", "风格")),
+                # [2026-06-20 R8 W4 Batch-I·L25 Pier Metalepsis LHN 2014 + 马良系统流] 元叙事越界预算
+                # · 作者档/genre pack metalepsis_budget 门控 (无 → skip)·type=none/rhetorical/
+                # ontological/mixed·ontological 窗口闭合检测·与 L28 narratee 关联防双计
+                # · advisory · 默认 shadow
+                ("metalepsis_budget",
+                 [child_python(), str(_SCRIPT_DIR / "metalepsis_budget_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "metalepsis_budget_scanner", "METALEPSIS_BUDGET_DRIFT", "风格")),
+                # [2026-06-20 R8 W4 Batch-I·L26 Project MUSE Mimesis and 興·朱熹比兴·SCIRP 2017]
+                # 起兴 scene-opener 检测·新场景前 60-150 字外部环境意象不点情绪
+                # · 作者档 scene_opener_profile.xing_ratio 基线·现代都市/职场题材天然豁免
+                # · advisory · 默认 shadow
+                ("scene_opener_xing",
+                 [child_python(), str(_SCRIPT_DIR / "scene_opener_xing_check.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "scene_opener_xing_check", "SCENE_OPENER_XING_THIN", "风格")),
+                # [2026-06-20 R8 W4 Batch-I·L27 Nature Sci Rep 2025 EC/PD·Keen Theory of Narrative
+                # Empathy] 苦难场景 Empathic Concern vs Personal Distress 二相平衡 (仅
+                # suffering/grief/sacrifice/torment/desperation 触发)·ec_pd_ratio<0.4 advisory
+                # · 与 R7 Nummenmaa body map 协同 (独立维度)·默认 shadow
+                ("empathic_concern_distress",
+                 [child_python(), str(_SCRIPT_DIR / "empathic_concern_distress_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "empathic_concern_distress_scanner",
+                     "EMPATHIC_CONCERN_DISTRESS_IMBALANCE", "风格")),
+                # [2026-06-20 R8 W4 Batch-I·L28 Booth Rhetoric of Irony stable irony 4 步
+                # + Tang arXiv:2209.04712] Discordance 4-cue 反讽信号 (saying_doing/
+                # style_fact/world_clash/value_clash)·作者档 ironic_voice_profile.stable_irony
+                # 第一权威·advisory · 默认 shadow
+                ("discordance_signal",
+                 [child_python(), str(_SCRIPT_DIR / "discordance_signal_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "discordance_signal_scanner",
+                     "DISCORDANCE_SIGNAL_THIN", "风格")),
+                # [2026-06-20 R8 W4 Batch-I·L28 Phelan Ideal Narratee Poetics Today 2022]
+                # narratee 称谓一致性 (元小说/破壁叙述)·作者档 narratee_registry.primary 门控
+                # · 与 L25 metalepsis 关联防双计·advisory · 默认 shadow
+                ("narratee_address",
+                 [child_python(), str(_SCRIPT_DIR / "narratee_address_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "narratee_address_scanner", "NARRATEE_DRIFT", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

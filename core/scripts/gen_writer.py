@@ -1112,6 +1112,8 @@ scope_summary 描述的场景类型/角色构成是**剧情硬契约**（如"对
 
 - **🆕 新世界元素先体感后命名 first_encounter_sensory_first(R8 W4·L22 Shklovsky 1917 陌生化·Tolstoy 马视角·Suvin SF estrangement·诡秘 IP 拆书实证)**：novel-novel 元素 (异种/异象/异术/异物/秘境/规则名) 首次登场**禁直贴标签** (X 是 Y / 这就是 Y / 名叫 Y) 而无前置感官铺垫。正确顺序——①先用 1-2 句**未命名的感官印象**(看见/听见/嗅到 + 形容词 + 反应)『他看见空中飘着一缕半透明的丝线·一动不动·像挂在风里』·②再让角色发问/旁人介绍/主角脑补点名『后来他才知道·那是「魂线」』。让读者像 Tolstoy 那匹马看人类制度一样陌生化体验·而非直接接受概念标签。LitRPG/系统流/规则块题材本就直陈可豁免
 
+- **🆕 起兴 scene-opener (R8 W4·L26 Project MUSE Mimesis and 興 + 朱熹比兴 + SCIRP 2017 武侠仙侠玄幻新书前 3 章 xing_ratio 0.68 vs 失败 0.31)**：中文叙事尤其武侠/仙侠/玄幻题材，**每个新场景的前 60-150 字应先借外部环境/景物意象起兴**(月、风、雨、雪、山、水、灯、钟、街、院……)，再自然过渡到角色心理/动作。**禁劈头就写「他很愤怒」「心中一凛」式情绪命名(tagged_opener)**；也避免直接进入对话动作的 bare_opener。三档：① xing_ok=前 60-150 字含意象不点情绪 ② bare_opener=直接动作/对话 ③ tagged_opener=情绪命名词。作者档 `scene_opener_profile.xing_ratio` 是基线；现代都市/职场/slice_of_life 题材天然低 xing 例外
+
 
 ## D3. 动作/战斗描写
 - **句长控速**：快=短句连发(劈/砸/撕)，蓄力/恢宏=长句排比；同段内短句爆发+长句收尾=顿悟感
@@ -1218,6 +1220,35 @@ scope_summary 描述的场景类型/角色构成是**剧情硬契约**（如"对
 - **🆕 LLM 默认产 scene+summary 高占比·几乎为 0 的是 ellipsis/stretch/pause = 节奏单调**：每个长 cluster 都该有 ≥1 处 ellipsis 时间跳跃 + ≥1 处 stretch 慢镜定格·关键决断/受伤/顿悟瞬间适合 stretch (一瞬间脑海中…) · 长跨度过渡适合 ellipsis (一晃半月) · 场景间情绪沉淀适合 pause (景物特写)
 - **🆕 作者档 duration_mix_baseline 优先**：作者风格档若有 `duration_mix_baseline` (scene_pct/summary_pct/ellipsis_pct/pause_pct/stretch_pct 的 mean/std)·**新 cluster 整体节奏向作者基线靠拢** (不要平均推到通用值)。作者签名 = 五型混搭节奏 = 比段长/句长更深的指纹
 - **🆕 五型混搭 vs 平均**：禁同一 cluster 全 scene (流水账即时叙述) 或全 summary (报告体)·按场景切换 (打斗用 scene+stretch · 关键瞬间慢镜 · 大段时间用 summary 压缩 · 转章接续用 ellipsis · 章节呼吸点 pause 一段景物)
+
+## D10. 元叙事越界预算 (R8 W4·L25 Pier Metalepsis LHN 2014·MasterClass·马良系统流 marker)
+
+- **🆕🗂️ 看作者档 metalepsis_budget**：题材声明决定能不能写元叙事。`type` 四档：
+  - `none`：爽文/玄幻/古风/历史默认——**禁任何元叙事 marker**(【系统】▶式标记 / 「亲爱的读者」「你以为」式破壁)
+  - `rhetorical`：系统流/无限流/规则怪谈默认——只允许 `marker_style` 列表里的口头评点 / 【系统提示】式 cue，**禁本体越界**(角色不感知自己是故事人物)
+  - `ontological`：元小说专用——允许角色越界感知叙述层，但每次切换后 **300 字内必须明确闭合**(回到正文动作 / 角色继续说话)
+  - `mixed`：rhetorical + ontological 混用
+- **🆕 target_per_cluster 软目标**：当前 cluster 实际 marker 数与 target 偏差控制在 ±50% 内。**绝不连续 5 段每段都【系统提示】插入**=滥用，读者疲劳
+- **🆕 allowed_speakers 严格执行**：只允许 `allowed_speakers` 列表里的角色越界(常见值: system / narrator / protagonist)。其他角色破壁 → 视为身份漂浮
+- **🆕 与 D12 narratee 关联防双计**：narratee 类越界(「亲爱的读者」)的称谓稳定性由 D12 管，本节只管 marker 总量预算
+
+## D11. 苦难场景 EC vs PD 二相平衡 (R8 W4·L27 Nature Sci Rep 2025 EC/PD·Keen Theory of Narrative Empathy)
+
+- **🆕🗂️ 苦难场景区分 Empathic Concern vs Personal Distress**：当场景标签 ∈ {suffering, grief, sacrifice, torment, desperation} 时——
+  - **EC(共情关切)**：旁观者 / 同伴 / 主角的**对他人苦难的关切+采取行动**：伸手、上前、搀扶、守护、挡在前面、背起、抱起、相信、不会放弃、护住、为了某人而……
+  - **PD(自我苦痛)**：旁观者 / 同伴 / 主角的**自我中心的恐慌+退缩**：颤抖、不敢看、捂住眼睛、瘫坐、崩溃、无能为力、僵住、心如死灰、麻木
+- **🆕 ec_pd_ratio ≥ 0.4 软线**：PD 过载(只剩颤抖/不敢看/瘫坐)=苦难写成自怜剧本(Personal Distress dominant)·读者也跟着退缩。**至少同等比例**给 EC：在惨烈中**保留 agency 残留**(主角仍挣扎/保留尊严)、**旁观者关切动作**(伸手/守护/挡在前面)、**dignity 保留**(濒死时仍有姓氏/最后一句话/眼神交付)。荷马式英雄抗争 > 自怜独白
+- **🆕 与 R7 Nummenmaa body map 协同**：body map 管「身体哪儿热/冷/紧」；EC/PD 管「面对他人苦难是关切还是退缩」——独立两维
+
+## D12. 反讽 Discordance 4-cue + narratee 注册器 (R8 W4·L28 Booth Rhetoric of Irony·Phelan Ideal Narratee Poetics Today 2022)
+
+- **🆕🗂️ 当作者档 ironic_voice_profile.stable_irony=true 时**：以下 4 类 discordance 是反讽密度的来源，**预算 discordance_target /千字**——
+  1. **saying_doing 言行反差**：『嘴上说……心里却』『一边……一边』『口口声声……实际上』
+  2. **style_fact 语体错配**：宏大词配琐碎事实(『英雄般地走进厨房买菜』『庄严宣告吃泡面』)
+  3. **world_clash 世界观冲撞**：神圣词配世俗污渍 / 古风词配现代物
+  4. **value_clash 价值观冲撞**：正面词反向使用『真是个好人！』(语境明显在骂) / 『天才操作』『多亏了你救命』
+- **🆕 narratee_registry 一致性**：当 cluster 出现破壁式叙述者直接对受述者说话时，称谓**必须锁定 `narratee_registry.primary`**(如全篇『亲爱的读者』)·禁混用『诸位看官』『各位』『你』等。**min_consistency ≥ 0.8** = primary 至少占所有 narratee 称谓 80%。**allowed_addresses 之外的称谓一律不出现**
+- **🆕 与 D10 metalepsis 关联**：narratee 越界(『亲爱的读者』)算 D10 的 narratee 类 marker，**称谓一致性单独由 D12 计数**——不双计但都要满足
 
 # 输出格式（cluster 连续叙事模式）
 

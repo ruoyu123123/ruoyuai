@@ -339,6 +339,41 @@
       "_new": true,
       "issues_emitted": ["FIRST_ENCOUNTER_LABEL_FIRST"]
     },
+    "metalepsis_budget": {
+      "layer": "cluster",
+      "script": "metalepsis_budget_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-I·L25 Pier Metalepsis LHN 2014+MasterClass+全知读者视角+马良系统流 marker] 元叙事越界预算·系统流/无限流/元小说核心工艺『metalepsis = 叙述层/故事层越界』此前全系统零检测·LLM 默认要么完全不写(爽文化退化)要么滥用(每段【系统提示】)·作者档/genre pack metalepsis_budget{type:none/rhetorical/ontological/mixed,target_per_cluster,marker_style,allowed_speakers}门控(无→skip 北极星②)·四类 marker 检测(bracket【】/triangle▶/system_prompt[系统]/narratee 亲爱的读者你以为)·type=none 任何 marker 触发·rhetorical/mixed 偏离 target>0.5 触发·ontological 切换后 ±300 字窗口未闭合 advisory·与 L28 narratee_registry 关联防双计·advisory·env METALEPSIS_BUDGET_MODE 默认 shadow·🔬阈值占位待金标准校准·METALEPSIS_BUDGET_DRIFT 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["METALEPSIS_BUDGET_DRIFT"]
+    },
+    "scene_opener_xing": {
+      "layer": "cluster",
+      "script": "scene_opener_xing_check.py",
+      "doc": "[2026-06-20 R8 W4 Batch-I·L26 Project MUSE Mimesis and 興+中华思想文化术语库朱熹+SCIRP 2017 武侠仙侠玄幻新书前 3 章 ratio 0.68 vs 失败 0.31] 起兴 scene-opener 检测·中文叙事传统场景开篇技法『先借外部环境/景物意象 → 自然过渡到角色心理/动作』此前全系统零检测·LLM 常劈头直接「他很愤怒」式情绪命名(tagged_opener)或直接进入对话动作的 bare_opener·按段落空行+场景切换标志拆场景·每场景前 60-150 字三档分类(xing_ok/bare_opener/tagged_opener)·作者档 scene_opener_profile.xing_ratio 基线·现代都市/职场/slice_of_life/workplace_drama/regression 等天然低 xing 题材若无 baseline → skip·actual<baseline-0.2 advisory·advisory·env SCENE_OPENER_XING_MODE 默认 shadow·🔬阈值占位待校准·SCENE_OPENER_XING_THIN 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SCENE_OPENER_XING_THIN"]
+    },
+    "empathic_concern_distress": {
+      "layer": "cluster",
+      "script": "empathic_concern_distress_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-I·L27 Nature Sci Rep 2025 EC/PD+Cognition & Emotion 2020+Keen Theory of Narrative Empathy] 苦难场景 Empathic Concern vs Personal Distress 二相平衡·共情研究区分 EC(对他人苦难的关切+采取行动:伸手/上前/守护/挡在前面)与 PD(自我中心恐慌/退缩/无能为力:颤抖/不敢看/瘫坐/捂眼)·LLM 写苦难/悲剧/牺牲/折磨/绝望场景常 PD 过载缺 EC=自怜剧本非荷马式英雄抗争·仅 scene tags∈{suffering/grief/sacrifice/torment/desperation}触发(manifest 优先·启发式 fallback)·ec_pd_ratio<0.4 advisory 提示 PD 过载·建议 agency 残留+dignity 保留+旁观者关切动作·与 R7 Nummenmaa body map 协同(独立维度)·advisory·env EMPATHIC_CONCERN_MODE 默认 shadow·🔬阈值占位待校准·EMPATHIC_CONCERN_DISTRESS_IMBALANCE 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["EMPATHIC_CONCERN_DISTRESS_IMBALANCE"]
+    },
+    "discordance_signal": {
+      "layer": "cluster",
+      "script": "discordance_signal_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-I·L28 Booth Rhetoric of Irony stable irony 4 步+Phelan Ideal Narratee+Tang arXiv:2209.04712 verbal irony] Booth Discordance 4-cue 反讽信号·稳定反讽(stable irony)的 4 种 discordance·LLM 默认产直白叙述=反讽零信号·题材如黑色幽默/官场/讽刺缺这一层质感·四子检测器(saying_doing 言行反差/style_fact 语体错配/world_clash 世界观冲撞/value_clash 价值观冲撞)·聚合 discordance_per_1k·作者档 ironic_voice_profile{stable_irony,discordance_target}第一权威·无→skip 北极星②·与 L25 metalepsis 关联防双计(narratee 越界归 L28)·advisory·env DISCORDANCE_MODE 默认 shadow·🔬阈值占位待校准·DISCORDANCE_SIGNAL_THIN 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["DISCORDANCE_SIGNAL_THIN"]
+    },
+    "narratee_address": {
+      "layer": "cluster",
+      "script": "narratee_address_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-I·L28 Phelan Ideal Narratee Poetics Today 2022] narratee(受述者)称谓一致性·元小说/破壁叙述中 narratee 称谓应稳定(全篇『亲爱的读者』vs『诸位看官』vs『你』)·混用撕裂叙述层·LLM 在破壁段常随机切换=narratee 漂浮·作者档 narratee_registry{primary,allowed_addresses,min_consistency}门控(无→skip 北极星②)·抓所有 narratee 称谓命中分类·primary_ratio<min_consistency 报漂浮·allowed_addresses 外称谓报非册命·与 L25 metalepsis 关联防双计·advisory·env NARRATEE_ADDRESS_MODE 默认 shadow·🔬阈值占位待校准·NARRATEE_DRIFT 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["NARRATEE_DRIFT"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",
