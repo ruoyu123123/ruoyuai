@@ -1778,6 +1778,100 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_child_voice_scanner",
                      "CHILD_VOICE_REGISTER_DRIFT", "风格")),
+                # [2026-06-20 R11 W6 Batch-P·P0 STRONG·NeurIPS 2025 LLM Lifecycle Workshop
+                # arXiv 2510.18932 + EMNLP 2022 arXiv 2211.00676] 关系签名图 + LLM 抱团正向
+                # bias 哨兵·作者档 signed_graph_baseline z-band·advisory·默认 shadow
+                ("signed_relation_graph",
+                 [child_python(), str(_SCRIPT_DIR / "signed_relation_graph_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "signed_relation_graph_scanner",
+                     "SIGNED_GRAPH_OVERLY_COZY", "剧情")),
+                # [2026-06-20 R11 W6 Batch-P·P0 STRONG·Microsoft Research arXiv 2603.05890
+                # ConStory-Bench 2026-03] 一致性错误三联分诊带·熵代理+中段窗口+共现 hotspot
+                # · 严禁升 hard_gate 或累加扣分(单条聚合)·advisory·默认 shadow
+                ("consistency_error_triage_band",
+                 [child_python(), str(_SCRIPT_DIR / "consistency_error_triage_band.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "consistency_error_triage_band",
+                     "CONSISTENCY_HOTSPOT_COOCCURRENCE", "结构")),
+                # [2026-06-20 R11 W6 Batch-P·P1 MODEST·EMNLP 2025 arXiv 2507.12260 T-index
+                # + NAACL-W 2018 arXiv 1804.08756 + 余光中《论的的不休》] 译文味 4 桶 advisory
+                # · de_stack_depth / bei_passive / pre_modifier_long / name_overrepetition
+                # · 4 桶 z-score vs 作者档 translationese_baseline·shadow
+                ("translationese_residual",
+                 [child_python(), str(_SCRIPT_DIR / "translationese_residual_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "translationese_residual_scanner",
+                     "TRANSLATIONESE_RESIDUAL", "风格")),
+                # [2026-06-20 R11 W6 Batch-P·P1 MODEST·题材主副 pack 标记密度比漂移]
+                # marker_lexicon.json 17 pack seed·fusion_declaration 主副比·三 advisory
+                # GENRE_DOMINANCE_INVERSION / GENRE_PRIMARY_STARVED / GENRE_BLEND_FLAT
+                # · shadow
+                ("genre_dominance",
+                 [child_python(), str(_SCRIPT_DIR / "genre_dominance_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "genre_dominance_scanner",
+                     "GENRE_DOMINANCE_INVERSION", "风格")),
+                # [2026-06-20 R11 W6 Batch-P·P1 MODEST 占位·Scribble Hub primary/subordinate
+                # + Countercraft Age of Genre Bending] pack 间 trope clash registry 两端峰值
+                # · trope_clash_registry.json 10 seed pair·load_clash_registry 注入 manifest
+                # · advisory CLASH_UNRESOLVED·shadow
+                ("genre_pack_clash",
+                 [child_python(), str(_SCRIPT_DIR / "genre_pack_clash_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "genre_pack_clash_scanner",
+                     "CLASH_UNRESOLVED", "风格")),
+                # [2026-06-20 R11 W6 Batch-P·P1 MODEST·EMNLP 2025 Stanford/UCSD Chengyu-Bench
+                # arXiv 2506.18105 + arXiv 2510.27045 + Thomas 1986 6 类] 三槽典故密度 +
+                # 三读者承重测试·core/data/allusion_seed_zh.json seed·LOAD_BEARING_ALLUSION_NO_GLOSS
+                # · shadow
+                ("allusion_ledger",
+                 [child_python(), str(_SCRIPT_DIR / "allusion_ledger_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "allusion_ledger_scanner",
+                     "LOAD_BEARING_ALLUSION_NO_GLOSS", "风格")),
+                # [2026-06-20 R11 W6 Batch-P·P2 MODEST·Sebald + Kramer + 报告文学] 文档单元插入
+                # · 题材门控(reportage/documentary/literary_journalism/historical_nonfiction_novel
+                # /nonfiction_documentary_lit)·shadow
+                ("paratext_interpolation",
+                 [child_python(), str(_SCRIPT_DIR / "paratext_interpolation_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "paratext_interpolation_scanner",
+                     "PARATEXT_INTERPOLATION_THIN", "风格")),
+                # [2026-06-20 R11 W6 Batch-P·P2 MODEST·Kramer/Wolfe] 信息源 5 桶出处分布
+                # · direct/paraphrase/archived/reconstructed/inferred·题材门控同 paratext
+                # · 与 R9 quotative 8 桶(词法)正交·shadow
+                ("attribution_mode",
+                 [child_python(), str(_SCRIPT_DIR / "attribution_mode_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "attribution_mode_scanner",
+                     "ATTRIBUTION_MODE_MONOTONE", "风格")),
+                # [2026-06-20 R11 W6 Batch-P·P2 MODEST·Quéré&Matias 2025 Nature Sci Rep] 章节
+                # 标题具象度曲线带·作者档 chapter_title_profile.concreteness_ecdf 第一权威
+                # · 作者档未规定该维则静默·shadow
+                ("chapter_title_concreteness",
+                 [child_python(), str(_SCRIPT_DIR / "chapter_title_concreteness_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "chapter_title_concreteness_scanner",
+                     "TITLE_CONCRETENESS_DRIFT", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

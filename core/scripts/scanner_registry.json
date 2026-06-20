@@ -707,6 +707,70 @@
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["OUSIOMETRIC_OSCILLATION_DEGRADED"]
+    },
+    "signed_relation_graph": {
+      "layer": "cluster",
+      "script": "signed_relation_graph_scanner.py",
+      "doc": "[2026-06-20 R11 W6 Batch-P·P0 STRONG·NeurIPS 2025 LLM Lifecycle Workshop arXiv 2510.18932 + EMNLP 2022 arXiv 2211.00676] 关系签名图三指标(graph_density / clustering_coefficient / mean_positivity_ratio) + LLM 抱团正向 bias 哨兵·抽角色对极性边(POS/NEG marker 同段共现)·作者档 signed_graph_baseline z-band(无→兜底带 mu=0.55±0.10)·z>+1.5 → SIGNED_GRAPH_OVERLY_COZY·z<-1.5 → SIGNED_GRAPH_OVERLY_HOSTILE·distill-style 加抽 author 原文社交图基线 phase(占位)·挂 cluster-save-state step 9·advisory·env SIGNED_RELATION_GRAPH_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SIGNED_GRAPH_OVERLY_COZY", "SIGNED_GRAPH_OVERLY_HOSTILE"]
+    },
+    "consistency_error_triage_band": {
+      "layer": "cluster",
+      "script": "consistency_error_triage_band.py",
+      "doc": "[2026-06-20 R11 W6 Batch-P·P0 STRONG·Microsoft Research arXiv 2603.05890 ConStory-Bench 2026-03] 一致性错误三联分诊带·(A)段落 TTR+低频词+标点突变合成 entropy_proxy·(B)splitter act2 区间 mid-band·(C)500-token 滑窗 ≥2 异 code 共现 → CONSISTENCY_HOTSPOT_COOCCURRENCE·产 triage_band_report.json 供 lessons feed·严禁因高熵/共现升 hard_gate 或累加扣分(单条聚合)·advisory·env CONSISTENCY_ERROR_TRIAGE_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CONSISTENCY_HOTSPOT_COOCCURRENCE"]
+    },
+    "translationese_residual": {
+      "layer": "cluster",
+      "script": "translationese_residual_scanner.py",
+      "doc": "[2026-06-20 R11 W6 Batch-P·P1 MODEST·EMNLP 2025 arXiv 2507.12260 T-index + NAACL-W 2018 arXiv 1804.08756 + 余光中《论的的不休》] 译文味 4 桶 advisory·de_stack_depth(多层 NP+的嵌套深度) / bei_passive_density / pre_modifier_long_ratio(吸收 feedback-inverted-modifier 单点锁) / name_overrepetition·4 桶 z-score vs 作者档 translationese_baseline(无→兜底带·sd 加 floor 0.1)·writer manifest 注入 4 桶基线给 D2·shadow 默认·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["TRANSLATIONESE_RESIDUAL"]
+    },
+    "genre_dominance": {
+      "layer": "cluster",
+      "script": "genre_dominance_scanner.py",
+      "doc": "[2026-06-20 R11 W6 Batch-P·P1 MODEST·StoryTricks + AuthorsPathway + COLING 2018 aclanthology C18-1167 + STIL 2021] 题材主副 pack 标记密度比漂移·题材包 marker_lexicon.json(30-80 token 判别词袋·17 pack 已 seed)·fusion_declaration.json 主副比 dominance_ratio·三 advisory:GENRE_DOMINANCE_INVERSION(副 ≥2 scene 反超主) / GENRE_PRIMARY_STARVED(主<0.15) / GENRE_BLEND_FLAT(Gini<0.15)·shadow 默认·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["GENRE_DOMINANCE_INVERSION", "GENRE_PRIMARY_STARVED", "GENRE_BLEND_FLAT"]
+    },
+    "genre_pack_clash": {
+      "layer": "cluster",
+      "script": "genre_pack_clash_scanner.py",
+      "doc": "[2026-06-20 R11 W6 Batch-P·P1 MODEST 占位·Scribble Hub primary/subordinate + Countercraft Age of Genre Bending + Eludamos 2023 + TVTropes Values Dissonance] pack 间已知冲突两端峰值采样·load_clash_registry 取 2-combination 命中 trope_clash_registry.json(10 seed pair)·top/bot 1/3 diff 双峰 → CLASH_UNRESOLVED·作者档 author_fusion_resolution 覆盖 registry·shadow 默认·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CLASH_UNRESOLVED"]
+    },
+    "allusion_ledger": {
+      "layer": "cluster",
+      "script": "allusion_ledger_scanner.py",
+      "doc": "[2026-06-20 R11 W6 Batch-P·P1 MODEST·EMNLP 2025 Stanford/UCSD Chengyu-Bench arXiv 2506.18105 + arXiv 2510.27045 Quantitative Intertextuality + Thomas 1986 6 类] 三槽典故密度{chengyu, classical_locus, pop_modern_ref}·core/data/allusion_seed_zh.json seed·allusions_per_1k_cjk·三读者承重测试(典故首现 ±40 字无 gloss + 同段含决策动词)→ LOAD_BEARING_ALLUSION_NO_GLOSS·consolidate_author_profile.allusion_signature 占位·shadow 默认·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["LOAD_BEARING_ALLUSION_NO_GLOSS"]
+    },
+    "paratext_interpolation": {
+      "layer": "cluster",
+      "script": "paratext_interpolation_scanner.py",
+      "doc": "[2026-06-20 R11 W6 Batch-P·P2 MODEST·Sebald + 报告文学·Creative Nonfiction Mark Kramer + Design Observer Sebald Writing with Pictures + Carole Angier LitHub] 文档单元 picture-and-document 插入密度·识别引用块/『据…记录』/『摄于…』触发标记·paratext_unit_density / paratext_type_entropy·题材门控(reportage/documentary/literary_journalism/historical_nonfiction_novel/nonfiction_documentary_lit·非则 skip)·shadow 默认·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["PARATEXT_INTERPOLATION_THIN", "PARATEXT_TYPE_MONOTONE"]
+    },
+    "attribution_mode": {
+      "layer": "cluster",
+      "script": "attribution_mode_scanner.py",
+      "doc": "[2026-06-20 R11 W6 Batch-P·P2 MODEST·Kramer Creative Nonfiction + Tom Wolfe 四件套报道契约 + Britannica New Journalism composite character] 信息源 5 桶出处分布(direct/paraphrase/archived/reconstructed/inferred)·触发词典识别·mode_entropy + 5 桶占比 + 长 streak·题材门控同 paratext_interpolation·作者档 omniscient_narrator=true 自动豁免·与 R9 quotative 8 桶(词法)正交(本条认识论维)·shadow 默认·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ATTRIBUTION_MODE_MONOTONE", "ATTRIBUTION_DROUGHT_LONG", "THOUGHT_ATTRIBUTED_UNDISCLOSED"]
+    },
+    "chapter_title_concreteness": {
+      "layer": "cross-cluster",
+      "script": "chapter_title_concreteness_scanner.py",
+      "doc": "[2026-06-20 R11 W6 Batch-P·P2 MODEST·Quéré&Matias 2025 Nature Sci Rep 41598-024-81575-9 curvilinear curiosity-gap 8977 标题 + Qidian-Webnovel Corpus 110 部] 章节标题具象度曲线带·具象度 score=0.4·NER 密度+0.3·内容词/虚词比+0.3·具体名词比·作者档 chapter_title_profile.concreteness_ecdf{p10,p50,p90} 第一权威·|z|>2.0 → TITLE_CONCRETENESS_DRIFT·作者档未规定该维则静默·shadow 默认·绝不 hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["TITLE_CONCRETENESS_DRIFT"]
     }
   },
 

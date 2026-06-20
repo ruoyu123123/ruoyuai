@@ -1,0 +1,67 @@
+{
+  "_doc": "题材包之间已知 trope 冲突 + 缓和路径 (R11 W6 MODEST seed)",
+  "_north_star": "advisory · 仅做 fusion_resolution_hints 注入·绝不 hard_gate",
+  "_source": "Scribble Hub primary/subordinate conflict + Countercraft Age of Genre Bending + Eludamos 2023 ludonarrative dissonance + TVTropes Values Dissonance",
+  "clashes": [
+    {
+      "pair": ["apocalypse_survival", "romance"],
+      "axis": "emotional_intensity_baseline",
+      "tension": "末世资源稀缺 stoic 基线 vs 言情高频亲密度",
+      "fusion_hint": "stoic + rationed warmth · 浪漫场景资源化(分一口水/一件衣)·亲密度通过让渡稀缺品体现，避免高强度甜宠铺张"
+    },
+    {
+      "pair": ["horror_game", "slice_of_life"],
+      "axis": "stakes_persistence",
+      "tension": "恐怖游戏化高死亡 stakes vs 日常种田的低焦虑节奏",
+      "fusion_hint": "把规则/任务限制在单一空间（小镇/集市）·日常细节本身成为线索/规则触发点·避免日常段完全脱离 stakes"
+    },
+    {
+      "pair": ["scifi_meta", "xianxia"],
+      "axis": "metaphysics_register",
+      "tension": "科学量化语域 vs 道法心证语域",
+      "fusion_hint": "二选一权威或显式双语域：科学解释做表层 + 修真做内核·避免一句话内同时出现量子+真元的语域跳频"
+    },
+    {
+      "pair": ["scheming_politics", "romance"],
+      "axis": "power_dynamic_clarity",
+      "tension": "权谋人物互信成本极高 vs 言情情感推进需互信",
+      "fusion_hint": "把感情线作为博弈筹码·告白=暴露牌·避免轻易交底破坏权谋节奏"
+    },
+    {
+      "pair": ["historical", "urban_supernatural"],
+      "axis": "anachronism_register",
+      "tension": "历史语域 vs 都市俚语",
+      "fusion_hint": "明确穿越者视角·都市词限定在内心独白·避免对话段混杂"
+    },
+    {
+      "pair": ["heist_caper", "slice_of_life"],
+      "axis": "tempo",
+      "tension": "局中局的高密度反转 vs 日常的慢热",
+      "fusion_hint": "日常段做侦察/铺线·正式行动段集中爆发·避免日常段无所事事"
+    },
+    {
+      "pair": ["regression", "mystery"],
+      "axis": "epistemic_asymmetry",
+      "tension": "重生的预知信息差 vs 推理的同步信息差",
+      "fusion_hint": "重生记忆只覆盖部分线索·剩余 case 用同步推理推进·避免一切答案靠预知"
+    },
+    {
+      "pair": ["espionage", "romance"],
+      "axis": "identity_fidelity",
+      "tension": "谍战隐藏身份 vs 言情身份袒露",
+      "fusion_hint": "感情线即假身份·告白=破防或反间·避免轻易暴露"
+    },
+    {
+      "pair": ["rule_anomaly", "slice_of_life"],
+      "axis": "stakes_persistence",
+      "tension": "规则怪谈触发即死 vs 日常松弛",
+      "fusion_hint": "规则约束生活细节(刷牙顺序/上厕所方向)·日常即遵规·避免规则段与日常段割裂"
+    },
+    {
+      "pair": ["cosmic_horror", "romance"],
+      "axis": "ontological_distance",
+      "tension": "宇宙恐怖的非人 vs 言情的人类亲密",
+      "fusion_hint": "亲密关系是抵御真相的最后锚点·情感升温对应认知崩塌·避免温情消解恐怖"
+    }
+  ]
+}
