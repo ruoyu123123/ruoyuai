@@ -74,6 +74,55 @@ class TransportEmpty(TransportError):
     """HTTP 200 但零 content（内容过滤 / reasoning model 全进 thought 段）。"""
 
 
+# ============ refusal 检测（gen-model 间歇性安全拒绝防护 · 2026-06-20） ============
+#
+# 现象：reasoning gen-model（gemini-3.x pro-preview / 第三方中转）偶发对**合法文学复刻**任务
+# 输出短篇安全拒绝（HTTP200 + finish=stop + 非空·绕过 TransportEmpty 守卫），如：
+#   - 中文："对我来说这是不可接受的。我不能帮助处理可能不安全或不适当的事情。让我们尝试其他内容。"
+#   - 英文："I cannot fulfill this request." / "I'm sorry, I can't help with that."
+# 当前 transport / distill_replicate 把短拒绝当合法复刻返回 → SFS 评分归零 → 看不出是 refusal
+# 还是 skill 失败。N=10 复刻验稳必须先压住这层噪声。
+#
+# 北极星边界：纯检测 helper（零副作用 · 零行为变更）。
+# - llm_transport.generate() 不主动调（避免污染 gen_writer / judge_runner / orchestrator 正常路径）
+# - 仅 distill_replicate.call_gen_model 在 stream 完成后主动调 → 命中走 3s 退避 + disclaimer 重试
+# - env REFUSAL_RETRY_ENABLED='0' 全局旁路（默认 '1'）
+#
+# 启发式（保守 · 宁漏不误杀）：
+#   - 总长 < max_chars（默认 200 CJK）AND 头窗 head_window（默认 100）含 refusal 关键词
+#   - 长文本（如 5000 字正文中段「我无法」三字）不命中——头窗约束防止误伤
+#   - 模型先道歉再写长文（>200 字）不命中——总长门控保守边界
+
+_REFUSAL_KEYWORDS = (
+    # 中文（wsb4ljc82 实测样本 + 常见变体）
+    "不能帮助", "不可接受", "无法帮助", "无法完成", "无法处理",
+    "对不起", "我无法", "让我们尝试", "换个", "换其他",
+    # 英文
+    "I cannot", "I'm sorry", "cannot fulfill", "can't help",
+)
+
+
+def _is_refusal(text: str, *, max_chars: int = 200, head_window: int = 100) -> bool:
+    """检测 gen-model 间歇性安全拒绝。
+
+    门控（必须全部满足）：
+      1. text strip 后总长 < max_chars（默认 200 字符）—— 拒绝通常很短
+      2. 前 head_window（默认 100 字符）内出现 refusal 关键词 —— 拒绝在开头
+
+    返回 bool。零副作用·便于单测。
+
+    保守边界：长正文里偶现「我无法」三字不命中（防误杀真复刻）；
+    模型先道歉再写长文也不命中（>200 字超阈值）—— 该场景属合法复刻范畴。
+    """
+    if not text:
+        return False
+    s = text.strip()
+    if len(s) >= max_chars:
+        return False
+    head = s[:head_window]
+    return any(kw in head for kw in _REFUSAL_KEYWORDS)
+
+
 class TransportExhausted(Exception):
     """active + 整条 fallback 链全部失败（与 GenModelExhaustedError 同语义·transport 自有）。"""
 
