@@ -1297,6 +1297,22 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "firstperson_retro_self_gap_scanner", "FIRSTPERSON_RETRO_HINDSIGHT_THIN", "风格")),
+                # [2026-06-20 R7 W2·Bal/FocalLens] 聚焦人感知边界违例(自体不可见/他人内心/空间不在场)
+                # · 与 R6 pov_consistency 正交去重 · advisory · 默认 shadow
+                ("focalizer_perception_bounds",
+                 [child_python(), str(_SCRIPT_DIR / "focalizer_perception_bounds_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "focalizer_perception_bounds_scanner", "FOCALIZER_PERCEPTION_OUT_OF_BOUNDS", "结构")),
+                # [2026-06-20 R7 W2·safety-alignment] 反派 substitution 扁平化(冷哼/狂笑/嗤笑 anti-pattern)
+                # · 建议 voice_pack.moral_level + manipulation_signature · advisory · 默认 shadow
+                ("antagonist_fidelity",
+                 [child_python(), str(_SCRIPT_DIR / "antagonist_fidelity_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "antagonist_fidelity_scanner", "ANTAGONIST_FIDELITY_FLAT", "剧情")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

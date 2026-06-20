@@ -290,6 +290,20 @@
       "_new": true,
       "issues_emitted": ["FIRSTPERSON_RETRO_HINDSIGHT_THIN"]
     },
+    "focalizer_perception_bounds": {
+      "layer": "cluster",
+      "script": "focalizer_perception_bounds_scanner.py",
+      "doc": "[2026-06-20 R7 W2·Bal/Rimmon-Kenan/FocalLens 2026] 聚焦人感知边界三规则违例·①自体不可见(自己的眼神/脸色)②他人内心(限知POV进他人内心)③空间不在场(与此同时...在远处明显语言标志)·与R6 pov_consistency正交去重(R6查scene主导POV·本scanner查主导者在自己scene内有没有越权)·三规则任一per_1k/hit触发advisory·env FOCALIZER_PERCEPTION_BOUNDS_MODE默认shadow·🔬阈值占位待校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["FOCALIZER_PERCEPTION_OUT_OF_BOUNDS"]
+    },
+    "antagonist_fidelity": {
+      "layer": "cluster",
+      "script": "antagonist_fidelity_scanner.py",
+      "doc": "[2026-06-20 R7 W2·safety-alignment substitution] 反派扁平化检测·RLHF倾向把反派降格为冷哼一声/嗤笑/不屑/狂笑/咆哮等单维刻板印象(stereotype substitution)·anti-pattern词典per_1k命中·建议加voice_pack.moral_level(L1-L4)+manipulation_signature改写操纵性反派·CLAUDE.md D1反派必须信念驱动的检测端·env ANTAGONIST_FIDELITY_MODE默认shadow·🔬阈值占位待校准·绝不hard_gate",
+      "_new": true,
+      "issues_emitted": ["ANTAGONIST_FIDELITY_FLAT"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",
@@ -306,6 +320,14 @@
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["LONGRANGE_STYLE_DRIFT"]
+    },
+    "volume_transition": {
+      "layer": "cross-cluster",
+      "script": "volume_transition_scanner.py",
+      "doc": "[2026-06-20 R7 W2] 卷过渡硬重置/钩零命中哨兵·三规则①下卷钩零命中(上卷末close.hook_text关键词在下卷首scene1覆盖<30%)②cast硬重置(上下卷cast overlap=0像换本书)③卷首scene1无新cast/setting锚点·与volume_arc_drift正交(那个查卷内大势漂移·本scanner查卷间过渡缝合)·advisory·env VOLUME_TRANSITION_MODE默认shadow·🔬阈值占位待校准·绝不hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["VOLUME_TRANSITION_HOOK_MISS", "VOLUME_TRANSITION_HARD_RESET", "VOLUME_TRANSITION_EMPTY_OPEN"]
     }
   },
 

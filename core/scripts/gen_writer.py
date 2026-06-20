@@ -1105,6 +1105,10 @@ scope_summary 描述的场景类型/角色构成是**剧情硬契约**（如"对
 
 - **🆕 Focalization Type×Facet 二轴(R7·FocalLens 2026/Bal/Rimmon-Kenan)**：四类聚焦人(zero零聚焦/internal内聚焦/external外聚焦/variable可变聚焦) × 三 facet(perceptual感知/psychological心理/ideological意识形态-价值评判)二轴矩阵。同焦点 facet 可解耦(看到的≠想的≠评判的)·但 **facet 切换需有意为之**——不要无意识在感知/心理/价值评判间随手跳。例如 internal+perceptual 段贴角色看·切到 internal+ideological 段贴角色评判·须有明显标记(段落分界/语态转换/聚焦人意识到正在评判)·禁同段无标记跳 facet whiplash。advisory·manifest focalization_matrix 给标准矩阵·作者档若规定聚焦偏好则以作者档为准
 
+- **🆕 聚焦人感知边界三规则(R7 W2·Bal/Rimmon-Kenan)**：限知 POV 写作时聚焦人**不能越三道边界**——①**自体不可见**(focalizer 看不见自己的眼神/脸色/背影/瞳孔·镜面/水面例外要先建立)②**他人内心**(不能进未在聚焦的他人『心想/暗忖/盘算』·要靠表征推断『他的指节发白·像在权衡』)③**空间不在场**(不在场的远方场景禁详写·『与此同时在远处』式跳转 = 跳焦点 head-hopping)。与 R6 POV 主导者一致性正交：那个查谁主导本 scene·这个查主导者在自己 scene 里有没有越权。advisory·梦境/镜面/全知刻意越界可豁免
+
+- **🆕 反派 fidelity·拒 safety-alignment 替代扁平化(R7 W2)**：写反派时**禁单维刻板**——『冷哼一声/嗤笑/狰狞/狂笑道/咆哮/不屑/恶狠狠/邪魅一笑』式直陈情绪是 RLHF 默认 substitution，反派真正的可怕在**操纵(manipulation)**(话术/共情陷阱/局部正确/合理化逻辑)。每个重要反派建立 voice_pack：**moral_level (L1 实用主义/L2 信念偏执/L3 系统理性/L4 共情型操纵者)** + **manipulation_signature**(他的标志性操纵手法：诉诸恐惧/诉诸归属/分而治之/扮受害者)·让反派说话时**听起来有道理**比让他怒吼可怕得多。advisory·爽文/喜剧夸张反派可豁免
+
 ## D5. 世界观/设定
 - **冰山理论**：作者懂全部设定，但只 show 与当前剧情相关的 1/8，让读者脑补
 - 设定通过**角色日常行为**自然展示，不 info-dump 解说（角色随手做的事 > 旁白解释规则）

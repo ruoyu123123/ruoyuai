@@ -36,11 +36,23 @@ ISSUE_CODE = "PHYSIO_CUE_FACIAL_BIAS"   # ⚠️ advisory 专用 · 绝不进 HA
 FACIAL_RATIO_FLOOR = 0.65   # 2026-06-20 金标准校准:5真作者facial_ratio 0.245-0.566(将夜最高0.566)·0.55误报将夜→抬0.65(>真作者max·仍catch>65%极端面部偏置)
 MIN_CUE_SAMPLES = 8   # facial+nonfacial 命中总数低于此 = 样本不足·不判（防小样本噪声）
 
+# 🆕 R7 W2 升级：三桶分类（facial / observable-body / interoceptive）
+# 任一桶 ratio > 0.65 → advisory（不限于面部·任何单维度过密都是 cue diversity 问题）
+ANY_BUCKET_FLOOR = 0.65   # 三桶任一占比 > 此 = 单维度过密 advisory
+
 # 面部生理线索（眉/眼/嘴/脸/额头等面部区域）
 FACIAL_CUE = re.compile(
     r"(眉头|眉梢|眉|眼神|眼眶|眼|瞳|嘴角|脸色|面色|脸颊|唇|额头)"
 )
-# 非面部生理线索（手/呼吸/喉/胸口/肠胃/后背/肩/姿态/脚等躯体信号）
+# 可观察躯体线索（外部可见 · 手/肩/脚/姿态等）
+OBSERVABLE_BODY_CUE = re.compile(
+    r"(指节|指|拳|手心|手|后背|脊背|肩|站姿|姿态|膝|脚|腿|颈|脖子|发丝|头发|额角)"
+)
+# 内感受信号（interoceptive · 主观体内感受 · 呼吸/心跳/肠胃/喉咙等）
+INTEROCEPTIVE_CUE = re.compile(
+    r"(呼吸|喉咙|喉|嗓子|胸口|心跳|心脏|肠胃|胃|腹|血液|体温|耳鸣|头晕|发烫)"
+)
+# 旧 NONFACIAL_CUE 保留为兼容别名（observable + interoceptive 合集思路·向后兼容）
 NONFACIAL_CUE = re.compile(
     r"(指节|指|拳|手心|手|呼吸|喉咙|喉|嗓子|胸口|心跳|肠胃|胃|后背|脊背|肩|站姿|姿态|体温|膝|脚)"
 )
@@ -65,14 +77,25 @@ def _cjk_count(text: str) -> int:
 
 
 def detect_physio_cues(text: str) -> dict:
-    """统计面部 vs 非面部生理线索命中数。返回 {facial, nonfacial, facial_samples, nonfacial_samples}。"""
+    """统计三桶生理线索命中（facial / observable-body / interoceptive）。
+
+    返回 {facial, nonfacial(兼容), observable, interoceptive, *_samples}。
+    nonfacial = observable + interoceptive（向后兼容旧字段）。
+    """
     text = _strip_changes(text)
     facial = [m.group(0) for m in FACIAL_CUE.finditer(text)]
+    observable = [m.group(0) for m in OBSERVABLE_BODY_CUE.finditer(text)]
+    interoceptive = [m.group(0) for m in INTEROCEPTIVE_CUE.finditer(text)]
+    # 向后兼容字段（旧 nonfacial = 非面部）
     nonfacial = [m.group(0) for m in NONFACIAL_CUE.finditer(text)]
     return {
         "facial": len(facial),
-        "nonfacial": len(nonfacial),
+        "observable": len(observable),
+        "interoceptive": len(interoceptive),
+        "nonfacial": len(nonfacial),   # 兼容旧字段
         "facial_samples": facial[:8],
+        "observable_samples": observable[:8],
+        "interoceptive_samples": interoceptive[:8],
         "nonfacial_samples": nonfacial[:8],
     }
 
@@ -121,12 +144,20 @@ def scan(draft_path, project_root=None) -> dict:
     cues = detect_physio_cues(draft)
     facial = cues["facial"]
     nonfacial = cues["nonfacial"]
+    observable = cues["observable"]
+    interoceptive = cues["interoceptive"]
     total = facial + nonfacial
+    bucket_total = facial + observable + interoceptive
     out["facial_count"] = facial
     out["nonfacial_count"] = nonfacial
+    out["observable_count"] = observable
+    out["interoceptive_count"] = interoceptive
     out["cue_total"] = total
+    out["bucket_total"] = bucket_total
     out["facial_samples"] = cues["facial_samples"]
     out["nonfacial_samples"] = cues["nonfacial_samples"]
+    out["observable_samples"] = cues["observable_samples"]
+    out["interoceptive_samples"] = cues["interoceptive_samples"]
 
     # 🔬 作者基线（physio_cue_profile.facial_ratio·若日后蒸馏端产）·当前仅 report 参考·不作判据
     author_ratio = _author_facial_ratio(project_root)
@@ -141,10 +172,26 @@ def scan(draft_path, project_root=None) -> dict:
     facial_ratio = round(facial / total, 3)
     out["facial_ratio"] = facial_ratio
 
+    # 🆕 R7 W2 三桶占比
+    if bucket_total > 0:
+        f_share = round(facial / bucket_total, 3)
+        o_share = round(observable / bucket_total, 3)
+        i_share = round(interoceptive / bucket_total, 3)
+    else:
+        f_share = o_share = i_share = 0.0
+    out["bucket_shares"] = {"facial": f_share, "observable": o_share, "interoceptive": i_share}
+
     msg = None
     if facial_ratio > FACIAL_RATIO_FLOOR:
         msg = (f"生理情绪线索面部偏置（facial_ratio {facial_ratio} > {FACIAL_RATIO_FLOOR}·"
                f"面部 {facial}/非面部 {nonfacial}）·建议多用手/呼吸/肠胃/姿态等非面部信号")
+    elif bucket_total >= MIN_CUE_SAMPLES and max(f_share, o_share, i_share) > ANY_BUCKET_FLOOR:
+        # 三桶任一过密（非面部桶也可能 stale）
+        dominant = max(("facial", f_share), ("observable", o_share),
+                        ("interoceptive", i_share), key=lambda kv: kv[1])
+        msg = (f"生理线索 {dominant[0]} 桶过密（占比 {dominant[1]} > {ANY_BUCKET_FLOOR}·"
+               f"三桶 facial/observable/interoceptive={f_share}/{o_share}/{i_share}）·"
+               f"建议跨三桶分布多样化")
     if msg:
         if mode == "active":
             out["violations"].append({

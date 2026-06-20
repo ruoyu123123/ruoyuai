@@ -171,3 +171,44 @@ def test_issue_code_not_in_hard_gate():
         assert "INTERIORITY_MODE_IMBALANCE" not in audit_hub.HARD_GATE_CODES
     except ImportError:
         pass  # audit_hub 不在 path → 不阻断
+
+
+# ---------- R7 W2 FID 正向半算法 ----------
+
+def test_fid_modal_particle_detect():
+    """modal particle 叙述段命中。"""
+    text = "她真的会来吗。他终究是输了。"
+    out = imb.detect_fid_signals(text)
+    assert out["modal"] >= 1, out
+
+
+def test_fid_evaluative_detect():
+    """evaluative 词命中（且不被引导词紧邻误抑）。"""
+    text = "他分明听见了那声响。她竟然没有回头。"
+    out = imb.detect_fid_signals(text)
+    assert out["evaluative"] >= 2, out
+
+
+def test_fid_dialogue_excluded():
+    """对话引号内 modal particle 不计入 FID（FID 只在叙述段）。"""
+    text = "“你真的会来吗。”他问。她终究是没回答。"
+    out = imb.detect_fid_signals(text)
+    # 引号内『真的会来吗。』应被排除；只算引号外『终究是没回答』里的 evaluative
+    assert out["modal"] == 0, out
+    assert out["evaluative"] >= 1, out
+
+
+def test_fid_share_in_scan_report():
+    """scan 报告含 fid_share / fid_per_1k 字段。"""
+    text = (_MONO_UNIT + "她终究还是去了。") * 25
+    p = _write_draft(text)
+    try:
+        _set_mode("active")
+        r = imb.scan(str(p))
+        assert "fid_per_1k" in r
+        assert "fid_share" in r
+        assert "fid_breakdown" in r
+        assert isinstance(r["fid_breakdown"], dict)
+    finally:
+        _clear_mode()
+        p.unlink(missing_ok=True)

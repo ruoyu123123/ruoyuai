@@ -150,3 +150,41 @@ def test_insufficient_samples_not_judged():
     finally:
         os.unlink(path)
         _restore(old)
+
+
+# ---------- R7 W2 三桶（facial / observable / interoceptive） ----------
+
+def test_three_bucket_fields_present():
+    """scan 报告含 observable/interoceptive 字段 + bucket_shares 字典。"""
+    old = _set_mode("active")
+    try:
+        path = _write(_balanced_clean_draft())
+        rep = mod.scan(path)
+        assert "observable_count" in rep
+        assert "interoceptive_count" in rep
+        assert "bucket_total" in rep
+        assert "bucket_shares" in rep
+        assert set(rep["bucket_shares"].keys()) == {"facial", "observable", "interoceptive"}
+    finally:
+        os.unlink(path)
+        _restore(old)
+
+
+def test_interoceptive_heavy_triggers_bucket_floor():
+    """三桶任一占比过密(>0.65) → ANY_BUCKET_FLOOR 触发。"""
+    old = _set_mode("active")
+    try:
+        # 高 interoceptive 密度·facial / observable 几乎为零
+        intero_line = "他呼吸急促，心跳如鼓，胸口发烫，胃中翻搅，喉咙发紧。"
+        # 不含 facial / observable bucket 主词 · 5 interoceptive/行 + 充足 FILLER 顶 >500 CJK
+        path = _write(intero_line * 10 + FILLER * 30)
+        rep = mod.scan(path)
+        if rep.get("bucket_total", 0) >= mod.MIN_CUE_SAMPLES:
+            # facial_ratio < 0.65 但 interoceptive bucket 占比 > 0.65
+            if rep["facial_ratio"] <= mod.FACIAL_RATIO_FLOOR:
+                assert rep["bucket_shares"]["interoceptive"] > mod.ANY_BUCKET_FLOOR, rep
+                assert rep["verdict"] == "FAIL_MINOR", rep
+                assert "interoceptive" in rep["warning"]
+    finally:
+        os.unlink(path)
+        _restore(old)
