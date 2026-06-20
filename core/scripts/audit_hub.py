@@ -581,10 +581,41 @@ def _parse_scene_seam(stdout: str) -> list:
     return issues
 
 
+def _collect_anchor_spans(violations: list) -> list:
+    """[2026-06-20 R9 W5 Batch-M·F3 AnchoredAI] 收集 violation 里的 anchor_span 字段。
+
+    Finding schema 扩展：每条 issue 可携带 anchor_spans[]（char_start/char_end/surface_text），
+    供 gen_fixer prompt 用 surface_text markdown >quote 包裹 + 只锚定段改动闭环；
+    `out_of_anchor_edit_ratio` 可观察 (gen_fixer 日志侧)。
+
+    向后兼容：scanner 未填 anchor_span 时返回空列表，不影响现有判定路径。
+    L41 narrator_commentary_scanner / 后续 prose_rhythm / repeat_noun_density 等可逐步填充。
+    """
+    spans = []
+    for v in violations or []:
+        if not isinstance(v, dict):
+            continue
+        a = v.get("anchor_span")
+        if isinstance(a, dict) and "char_start" in a and "char_end" in a:
+            try:
+                spans.append({
+                    "char_start": int(a["char_start"]),
+                    "char_end": int(a["char_end"]),
+                    "surface_text": str(a.get("surface_text", ""))[:200],
+                })
+            except (TypeError, ValueError):
+                continue
+    return spans
+
+
 def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: str) -> list:
     """narrative_short_sentence / repeat_noun_density：violations[]（无 per-item code），
     顶层 gate_level=advisory。每条 violation 的 severity 为 major/minor（映射 error/warning）。
-    PASS（无 violation）→ 不产 issue。合成 1 条聚合 issue（severity 取最高）。"""
+    PASS（无 violation）→ 不产 issue。合成 1 条聚合 issue（severity 取最高）。
+
+    [F3 AnchoredAI · 2026-06-20] 若 violations 含 anchor_span(char_start/char_end/surface_text)
+    则透传到 issue.anchor_spans[]，供 gen_fixer 仅锚定段改动 + 可观察 out_of_anchor_edit_ratio。
+    向后兼容：scanner 未填则字段缺省。"""
     issues = []
     report = _load_scanner_json(stdout)
     if not report:
@@ -604,12 +635,17 @@ def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: st
     if gl != "hard_gate" and top_gl == "hard_gate" and code in HARD_GATE_CODES:
         gl = "hard_gate"
     desc = f"{report.get('scanner', source)}: {len(violations)} 处违规（verdict={report.get('verdict','?')}）"
-    issues.append({
+    issue = {
         "dimension": dimension, "severity": severity,
         "gate_level": gl, "code": code, "desc": desc,
         "source": source, "fix_hint": "",
         "waived": False, "waive_reason": "",
-    })
+    }
+    # F3 AnchoredAI · 透传锚点
+    anchor_spans = _collect_anchor_spans(violations)
+    if anchor_spans:
+        issue["anchor_spans"] = anchor_spans
+    issues.append(issue)
     return issues
 
 
@@ -1580,6 +1616,30 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "affective_signature_scanner",
                      "CONGENIALITY_SKEW", "风格")),
+                # [2026-06-20 R9 W5 Batch-M·L41 Booth narrator intrusion + Cohn psycho-narration]
+                # 全知点评/evaluative_summary 句式密度 · 三指标 (density/chapter-end share/intra-action)
+                # · 作者档 narrator_voice_signature.commentary_target_per_1k 第一权威·与 R8 L25
+                # metalepsis_budget 严格正交(L25 查 frame-breaking marker·L41 查 telling-weight 句式)
+                # · F3 AnchoredAI · violation 携 anchor_span 供 gen_fixer 锚定段改 · advisory · 默认 shadow
+                ("narrator_commentary",
+                 [child_python(), str(_SCRIPT_DIR / "narrator_commentary_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "narrator_commentary_scanner",
+                     "NARRATOR_COMMENTARY_OVERUSE", "风格")),
+                # [2026-06-20 R9 W5 Batch-M·L38 Bakhtin Dialogic Imagination 1981 chronotope]
+                # 7 型时空体 (road/threshold/castle/salon/town/square/idyll + instance_dungeon)
+                # 场景分布 + cluster 级 distribution_entropy + monotony_streak (同型≥3 advisory)
+                # · 作者档 chronotope_signature.allowed_monotony 豁免独角戏室内剧·与 scene_seam /
+                # scene_grounding / location_signature 正交 · advisory · 默认 shadow
+                ("chronotope_typology",
+                 [child_python(), str(_SCRIPT_DIR / "chronotope_typology_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "chronotope_typology_scanner",
+                     "CHRONOTOPE_MONOTONY", "结构")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

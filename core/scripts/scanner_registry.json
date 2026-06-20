@@ -568,6 +568,27 @@
       "_new": true,
       "issues_emitted": ["CONGENIALITY_SKEW"]
     },
+    "narrator_commentary": {
+      "layer": "cluster",
+      "script": "narrator_commentary_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-M·L41 Booth narrator intrusion + Cohn psycho-narration + implied_author_ethics] 全知点评/evaluative_summary 句式密度·三指标(commentary_density/chapter-end share/intra-action commentary)·EVALUATIVE_PREDICATES 高确定性词典(显然/不得不说/毋庸置疑/这便是/事实上...)·作者档 narrator_voice_signature.commentary_target_per_1k 第一权威·通用兜底 0.8/千字·与 R8 L25 metalepsis_budget 严格正交(L25=frame-breaking marker【】▶·L41=telling-weight 句式·零词典重叠)·F3 AnchoredAI·violation 携 anchor_span(char_start/char_end/surface_text)供 gen_fixer 锚定段改+out_of_anchor_edit_ratio 可观察·advisory·env NARRATOR_COMMENTARY_MODE 默认 shadow·NARRATOR_COMMENTARY_OVERUSE 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["NARRATOR_COMMENTARY_OVERUSE"]
+    },
+    "revision_homogenization": {
+      "layer": "cluster",
+      "script": "revision_homogenization_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-M·F2 ai_assisted_craft_2026·Sudowrite/Novelcrafter user reports] gen_fixer 修订后 SFS 反向下跌哨兵·对比 pre_fix/post_fix 三维风格指纹(function_word_per_1k/sent_len_mean/sent_len_pstdev)·作者档 baseline 优先·无作者档退 pair_fallback(两草稿互比)·delta_sfs=post-pre·>=2.0→advisory REVISION_REDUCED_AUTHOR_FIDELITY·--blind-subset N 实验旗(LLM Review 信息不对称)·cluster_index.json 增三字段(pre_fix_sfs/post_fix_sfs/delta_sfs)由调用方写回·R9 注:PCA-ECDF SFS 完整版未实装·当前三维指纹是 R7 W2 占位 fallback·advisory·env REVISION_HOMOGENIZATION_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["REVISION_REDUCED_AUTHOR_FIDELITY"]
+    },
+    "chronotope_typology": {
+      "layer": "cluster",
+      "script": "chronotope_typology_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-M·L38 Bakhtin Dialogic Imagination 1981 chronotope_spatial] 6+1 时空体场景类型分布(road/threshold/castle/salon/town/square/idyll + instance_dungeon)·关键词词典+段落空行切场景·每场景前 200 字打 top1 chronotope tag·cluster 级 distribution_entropy(归一 Shannon /log2(7))+monotony_streak(同型连续场景数)·streak>=3 → CHRONOTOPE_MONOTONY·entropy<0.35 → CHRONOTOPE_LOW_DIVERSITY·作者档 chronotope_signature.allowed_monotony=true 室内剧/独角戏豁免·writer prompt 建议每 cluster >=1 threshold 转折锚点(Bakhtin 强调 threshold=关键转折)·与 scene_seam/scene_grounding/location_signature 严格正交·advisory·env CHRONOTOPE_TYPOLOGY_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CHRONOTOPE_MONOTONY", "CHRONOTOPE_LOW_DIVERSITY"]
+    },
     "location_signature_consistency": {
       "layer": "cross-cluster",
       "script": "location_signature_consistency.py",
@@ -575,6 +596,14 @@
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["LOCATION_SIGNATURE_DRIFT"]
+    },
+    "macguffin_entanglement": {
+      "layer": "cross-cluster",
+      "script": "macguffin_entanglement_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-M·plot_devices_taxonomy·Hitchcock MacGuffin definition] MacGuffin Entanglement Index 跨 cluster·道具.json 扩 is_macguffin=true 显式声明位·entanglement_ratio = |S_m^goal|/|S_m| (S_m=出现 MacGuffin 的 cluster·S_m^goal=同时出现 goal_pursuit 信号词 追查/夺回/护送/守护/为了/任务 的 cluster)·ratio<0.4 且 appearance>=2 → advisory MACGUFFIN_ORNAMENTAL(装饰性·与主角 goal 脱钩)·单 cluster 出现不判·零 LLM 纯 JSON 抽取+正则匹配·snapshot 写 .cross_chapter_scan/macguffin_advisory_snapshot.json 供 build_manifest 注入·北极星② is_macguffin 必须作者显式声明·env MACGUFFIN_ENTANGLEMENT_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["MACGUFFIN_ORNAMENTAL"]
     }
   },
 
