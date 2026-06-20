@@ -511,10 +511,132 @@ def default_judge_dispatch(agent_name: str, step: dict, ctx: dict):
     # novel-researcher 联网调研注入（D1·exe 模式补 gen-model 无 WebSearch·key 未配则 None 降级）
     extra_blocks = (_build_research_blocks(params)
                     if agent_name == "novel-researcher" else None)
-    return jr.run_judge(agent_name, project_root, params=params,
-                        context_files=context_files, output_path=output_path,
-                        secondary_output_path=secondary, extra_blocks=extra_blocks,
-                        required_keys=tuple(rk) if rk else None)
+    outcome = jr.run_judge(agent_name, project_root, params=params,
+                           context_files=context_files, output_path=output_path,
+                           secondary_output_path=secondary, extra_blocks=extra_blocks,
+                           required_keys=tuple(rk) if rk else None)
+
+    # ════════════════════════════════════════════════════════════════
+    # R10 W6 P1 跨家族 judge ensemble（advisory · shadow 默认 · BYOK Claude）
+    # 仅在 voice-checker / validator-checker + cluster_finale 末 sub-cluster 触发。
+    # 任何异常 → logger.debug + 不动 outcome（北极星② 永不阻断主链 · 与 style_bias 同款守卫）。
+    # ════════════════════════════════════════════════════════════════
+    try:
+        _cf_short_map = {"novel-voice-checker": "voice",
+                         "novel-validator-checker": "audit"}
+        _short = _cf_short_map.get(agent_name)
+        if _short:
+            _cf_inject_cross_family_check(outcome, _short, ctx, project_root)
+    except Exception as _e:    # noqa: BLE001 — 永不让 cross_family 拖崩 judge 主链
+        logger.debug(f"cross_family_judge_check 异常·忽略: {_e}")
+
+    return outcome
+
+
+def _cf_read_is_volume_finale(project_root: Path, key) -> bool:
+    """读 manifest / cluster_index 判定 cluster 是否为本卷末小走向。
+    任何读失败 → False（降级安全：误触发 cross_family 比误判 finale 省 BYOK 成本）。"""
+    if not key:
+        return False
+    try:
+        # 1) 优先 manifest（build_manifest 落点）
+        mpath = (project_root / "_数据库" / ".wal" /
+                 f"cluster_{key}_manifest.json")
+        if mpath.exists():
+            try:
+                d = json.loads(mpath.read_text(encoding="utf-8-sig"))
+                if isinstance(d, dict):
+                    # 形态：cluster_blueprint.is_volume_finale 或顶层
+                    cb = d.get("cluster_blueprint") if isinstance(d, dict) else None
+                    if isinstance(cb, dict) and "is_volume_finale" in cb:
+                        return bool(cb.get("is_volume_finale"))
+                    if "is_volume_finale" in d:
+                        return bool(d.get("is_volume_finale"))
+            except (OSError, json.JSONDecodeError):
+                pass
+        # 2) 事件簇.json fallback
+        ec = project_root / "_数据库" / "事件簇.json"
+        if ec.exists():
+            try:
+                d = json.loads(ec.read_text(encoding="utf-8-sig"))
+                clusters = d.get("clusters") or []
+                for c in clusters:
+                    cid = c.get("cluster_id") or c.get("id")
+                    if str(cid) == str(key):
+                        return bool(c.get("is_volume_finale"))
+            except (OSError, json.JSONDecodeError):
+                pass
+    except Exception:
+        pass
+    return False
+
+
+def _cf_load_cluster_draft(project_root: Path, key) -> str | None:
+    """读 cluster 草稿（splitter 切章前的整段草稿·writer 落点）。无草稿 → None → skip。"""
+    if not key:
+        return None
+    cands = [
+        project_root / "章节" / f"cluster_{key}_draft" / f"cluster_{key}_draft.txt",
+        project_root / "_数据库" / ".wal" / f"cluster_{key}_draft.txt",
+        project_root / "章节" / f"cluster_{key}_draft.txt",
+    ]
+    for p in cands:
+        try:
+            if p.exists():
+                return p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+    return None
+
+
+def _cf_extract_gemini_verdict(data: dict) -> str | None:
+    """从 judge outcome.data 抽 verdict 归一 'pass' / 'issues'。"""
+    if not isinstance(data, dict):
+        return None
+    v = data.get("verdict")
+    if isinstance(v, str):
+        vn = v.strip().lower()
+        if vn in ("pass", "ok"):
+            return "pass"
+        if vn in ("issues", "fail", "block"):
+            return "issues"
+    vs = data.get("violations")
+    if isinstance(vs, list):
+        return "issues" if len(vs) > 0 else "pass"
+    return None
+
+
+def _cf_inject_cross_family_check(outcome, short_judge_name: str,
+                                  ctx: dict, project_root: Path) -> None:
+    """跨家族 judge 集成块：读 finale 标志 + draft → cross_family_judge_check.maybe_run →
+    若非 skipped 挂到 outcome.data['cross_family_check'] + 重写落盘 JSON。
+    """
+    import cross_family_judge_check as cfj
+    key = ctx.get("key")
+    is_finale = _cf_read_is_volume_finale(project_root, key)
+    draft = _cf_load_cluster_draft(project_root, key)
+    gemini_verdict = _cf_extract_gemini_verdict(outcome.data)
+    rep = cfj.maybe_run(
+        judge_name=short_judge_name,
+        is_finale_subcluster=is_finale,
+        gemini_verdict=gemini_verdict,
+        draft_text=draft,
+        project_root=project_root,
+        cluster_key=key,
+    )
+    if rep.get("status") == "skipped":
+        return
+    # 非 skipped → 挂元数据 + 重写落盘（保 audit_hub 读到新字段）
+    if not isinstance(outcome.data, dict):
+        return
+    outcome.data[cfj.OUT_KEY] = rep
+    op = getattr(outcome, "output_path", None)
+    if op:
+        try:
+            import judge_runner as jr
+            jr._atomic_write_json(Path(op), outcome.data)
+        except Exception as _e:    # noqa: BLE001
+            logger.debug(f"cross_family rewrite outcome 失败·忽略: {_e}")
 
 
 # ============ 停顿点 ============

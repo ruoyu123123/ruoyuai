@@ -152,6 +152,56 @@ def has_search_key(provider: str = "tavily") -> bool:
     return bool(get_search_key(provider))
 
 
+# ============ 跨家族 judge Claude key（BYOK·service 独立·R10 W6·2026-06-20）============
+# 跨家族 judge ensemble 用 Claude 复审抑制 self-preference bias（Gemini judge 单家族 → 偏家族）。
+# Claude key 必须独立 namespace · 与 gen-model 主 key 隔离：① 用户误把 Gemini key 当 Claude key
+# 反之亦然 不互相覆盖；② 后续清除 Claude key 不影响主 gen-model。username 固定 'judge'。
+SERVICE_CLAUDE = "ruoyuai-claude"
+_CLAUDE_USERNAME = "judge"
+
+
+def get_claude_key() -> str | None:
+    """跨家族 judge 复审 Claude API key（BYOK·与 gen-model 主 key 隔离）。"""
+    if _keyring is None:
+        return None
+    try:
+        v = _keyring.get_password(SERVICE_CLAUDE, _CLAUDE_USERNAME)
+        return v or None
+    except Exception:
+        _log.debug("keyring get claude failed")    # 不带 key
+        return None
+
+
+def set_claude_key(key: str) -> bool:
+    if _keyring is None:
+        return False
+    k = (key or "").strip()
+    if not k:
+        return delete_claude_key()
+    try:
+        _keyring.set_password(SERVICE_CLAUDE, _CLAUDE_USERNAME, k)
+        return get_claude_key() == k    # set→get 回读校验
+    except Exception:
+        _log.debug("keyring set claude failed")
+        return False
+
+
+def delete_claude_key() -> bool:
+    if _keyring is None:
+        return False
+    try:
+        _keyring.delete_password(SERVICE_CLAUDE, _CLAUDE_USERNAME)
+        return True
+    except _PwDelErr:    # 本就不存在 → 无可删
+        return False
+    except Exception:
+        return False
+
+
+def has_claude_key() -> bool:
+    return bool(get_claude_key())
+
+
 def get_trial_token() -> str | None:
     return get_api_key(_TRIAL_USERNAME)
 
