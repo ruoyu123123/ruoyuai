@@ -41,6 +41,7 @@
     "xuanhuan": {
       "_label": "玄幻/东方奇幻",
       "_doc": "2026-06-19 联网调研新增。力量体系+打脸升级+宗门/势力格局是玄幻三大核心元素。",
+      "register_tier": "xuanhuan",
       "judge_dims": {
         "X1_力量体系层次感": "境界划分是否清晰可感(每个境界有质变标志·不只数字递增)·跨境碾压感呈现·体系规则通过使用和犯错展示(Sanderson硬魔法法则)·禁百科全书式解说",
         "X2_打脸爽点节奏": "打脸频率(每cluster至少1次小打脸+跨卷大打脸)·打脸三步曲(蔑视→展示→震惊)是否完整·打脸后果是否有连锁反应(非一次性爽)",
@@ -58,6 +59,7 @@
     "xianxia": {
       "_label": "仙侠/修真",
       "_doc": "2026-06-19 联网调研新增。与玄幻的区别：更强调悟道、天人关系、因果律、修心。",
+      "register_tier": "xianxia",
       "judge_dims": {
         "XI1_修炼描写质感": "修炼不是坐着发呆→突破·要有身体变化(经脉/丹田/灵气运转)的触觉+内视觉·用感官替代解说·修炼中的顿悟/走火入魔有戏剧张力",
         "XI2_天道法则呈现": "天劫/因果/功德等超自然法则通过事件展示而非旁白解释·法则公平无私(不偏袒主角)·法则的漏洞和边界是剧情驱动力",
@@ -75,6 +77,7 @@
     "urban_supernatural": {
       "_label": "都市超自然/都市异能",
       "_doc": "2026-06-19 联网调研新增。核心=现实基底+超自然入侵的双世界张力。",
+      "register_tier": "modern_urban",
       "judge_dims": {
         "U1_现实基底质感": "都市场景有真实生活质感(上班/堵车/外卖/房租)·超自然元素入侵现实时的违和感和冲击力·不能一开始就全员超能力·普通人视角的震撼要保留",
         "U2_双重身份张力": "主角在普通人和超能者之间切换的戏剧冲突·身份暴露的风险/代价·瞒着亲友的内心挣扎·两个世界的规则冲突",
@@ -92,6 +95,7 @@
     "scifi_meta": {
       "_label": "科幻/元小说",
       "_doc": "2026-06-19 联网调研新增。核心=概念推演+sense of wonder+技术奇点的人性拷问。",
+      "register_tier": "modern_urban",
       "judge_dims": {
         "S1_概念推演深度": "核心科幻概念(时间悖论/意识上传/平行宇宙)是否有逻辑自洽的规则·推演是否到达令人意外的终点·概念不是装饰而是驱动剧情的引擎",
         "S2_sense_of_wonder": "是否有让读者「哇」的认知升级时刻·宏观尺度(星际/文明)和微观尺度(量子/纳米)的视角跳跃·打破日常认知边界的描写",
@@ -109,6 +113,7 @@
     "historical": {
       "_label": "历史/架空历史",
       "_doc": "2026-06-19 联网调研新增（MasterClass/Writer's Digest/National Centre for Writing 2025）。核心=时代质感+避免穿越感+权谋信息差。",
+      "register_tier": "historical",
       "judge_dims": {
         "H1_时代质感密度": "日常细节(衣食住行/礼仪/称谓/度量衡)是否自然融入而非百科全书式罗列·读者能通过角色的日常行为「感受」到时代而非被告知",
         "H2_对话语域控制": "角色说话的用词/句式/礼仪层级符合身份(帝王/士大夫/平民/军伍各有语域)·不使用现代网络用语·但也不过度文言化导致阅读障碍·平衡≈7分古3分今",
@@ -142,6 +147,7 @@
     },
     "scheming_politics": {
       "_label": "权谋/智斗/朝堂",
+      "register_tier": "historical",
       "_doc": "2026-06-20 R4联网调研新增。核心=阳谋设计+多方博弈+配角皆智者(强协同『配角都是聪明人』memory)。",
       "judge_dims": {
         "SP1_势力多元": "≥3势力各有独立目的/底线/利益·禁单线善恶二分·每方都在下自己的棋",
@@ -210,6 +216,7 @@
     },
     "rule_anomaly": {
       "_label": "规则怪谈/无限流(番茄爆款子类)",
+      "register_tier": "modern_urban",
       "_doc": "2026-06-20 R7联网调研新增(笔灵AI番茄经验·番茄『规则类怪谈无限流』关键词页千万订阅·知乎)。核心=半真半假规则+多国炮灰显形+死亡路线导览+金手指节制+解谜节奏。与用户新书《这规则它会还价》直接同构。",
       "judge_dims": {
         "RA1_半真半假规则": "规则块字面歧义/陷阱条款比≥30%·禁全直陈条款(全直陈=工具书读感)·规则可信但留漏洞让读者自行权衡·『不可…否则…』式断句+『或许/也许/据说/不一定』式留疑搭配",
@@ -229,6 +236,7 @@
     },
     "apocalypse_survival": {
       "_label": "末世/丧尸/灾后生存",
+      "register_tier": "modern_urban",
       "_doc": "2026-06-20 R7联网调研新增(DiLouie丧尸craft·Cannibal Halfling scarcity·ScribeCount道德灰区·TVTropes post-apoc)。核心=资源稀缺账本+威胁层级倒置(dead<living)+道德灰区+感染时钟+体感锚。",
       "judge_dims": {
         "AS1_资源稀缺账本": "食物/水/弹药/医疗/燃料等关键资源持续可见账本(剩多少/消耗多少/补给在哪)·决策须扎账本·禁忽略余额硬塞战斗",
@@ -282,5 +290,5 @@
       ]
     }
   },
-  "_pack_fields": "每 pack：judge_dims(题材声明时拼进 judge prompt 的专属提问·进 qualitative_dims 不破 required_keys) + scanner(题材专属 advisory scanner 脚本名·无scanner则仅用通用scanner) + writer_directives(注入 writer 的题材工艺提示·advisory)。v2 已覆盖全部 7 个非 unknown 的 canonical genre。"
+  "_pack_fields": "每 pack：judge_dims(题材声明时拼进 judge prompt 的专属提问·进 qualitative_dims 不破 required_keys) + scanner(题材专属 advisory scanner 脚本名·无scanner则仅用通用scanner) + writer_directives(注入 writer 的题材工艺提示·advisory) + register_tier(R8 L18·world_register_drift_scanner 路由词典·{epic_fantasy,xianxia,xuanhuan,historical,modern_urban}·与 R6 anachronism 时代轴正交)。v2 已覆盖全部 7 个非 unknown 的 canonical genre。"
 }

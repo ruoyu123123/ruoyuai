@@ -689,6 +689,101 @@ def aggregate_knowledge_gap(project: Path) -> dict:
     return out
 
 
+def aggregate_register_tier_baseline(project: Path) -> dict:
+    """L18 Le Guin register drift baseline（2026-06-20 · R8 W4 Batch-F）。
+
+    作者原文里"漂移词"（当代俚语 + 现代管理黑话 + 高语域古风词）的自然密度·
+    供 world_register_drift_scanner 当 floor（作者自己就用过 K/千字 → 别报）。
+
+    确定性零 LLM 聚合（北极星⑥）：读 原文/第*章.txt（全量·不截断·feedback_no_token_saving）·
+    跨所有 tier 词典综合扫一遍·每章计 drift_per_1k → 均值。同时给一个 tier_hint
+    （ratio 最高那类）当 advisory hint（非锁定·作者档第一权威·北极星②）。
+
+    缺数据（无原文/无词典）→ 返回 {}（consumer 走 fallback 默认阈值·零回归）。
+    """
+    orig = project / "原文"
+    if not orig.exists():
+        return {}
+    raws = sorted(orig.glob("第*章.txt"), key=lambda p: p.name)
+    if not raws:
+        return {}
+    # 复用 world_register_drift_scanner 的词典加载逻辑（零依赖）
+    try:
+        import world_register_drift_scanner as _wrd
+    except Exception:
+        return {}
+    tier_dir = _wrd.TIER_DIR
+    if not tier_dir.exists():
+        return {}
+    # 收集所有 tier 的 forward drift 词（modern_slang/jargon · 普适基线）
+    forward_terms: dict[str, str] = {}  # term -> category（去重）
+    reverse_terms: dict[str, str] = {}
+    for tp in sorted(tier_dir.glob("*.json")):
+        lex = _wrd._read_json(tp)
+        if not isinstance(lex, dict):
+            continue
+        flat = _wrd._flatten_terms(lex)
+        bucket = forward_terms if lex.get("direction") == "forward" else reverse_terms
+        for term, cat in flat:
+            bucket.setdefault(term, cat)
+    if not forward_terms and not reverse_terms:
+        return {}
+
+    forward_per_1k_list = []
+    reverse_per_1k_list = []
+    cat_counts_all: dict[str, int] = {}
+    total_cjk = 0
+    for rp in raws:
+        try:
+            text = _wrd._strip_changes(rp.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        cjk = _wrd._cjk_count(text)
+        if cjk < 200:
+            continue
+        total_cjk += cjk
+        # forward 扫
+        fh = _wrd.detect_drift(
+            text, {"drift_terms": {"all": list(forward_terms.keys())}})
+        fwd_n = len(fh)
+        forward_per_1k_list.append(fwd_n / (cjk / 1000.0))
+        # reverse 扫
+        rh = _wrd.detect_drift(
+            text, {"drift_terms": {"all": list(reverse_terms.keys())}})
+        rev_n = len(rh)
+        reverse_per_1k_list.append(rev_n / (cjk / 1000.0))
+        # 综合 cat
+        for h in fh:
+            t = h["term"]
+            c = forward_terms.get(t, "未分类")
+            cat_counts_all[c] = cat_counts_all.get(c, 0) + 1
+        for h in rh:
+            t = h["term"]
+            c = reverse_terms.get(t, "未分类")
+            cat_counts_all[c] = cat_counts_all.get(c, 0) + 1
+    if not forward_per_1k_list and not reverse_per_1k_list:
+        return {}
+
+    fwd_mean = round(sum(forward_per_1k_list) / max(len(forward_per_1k_list), 1), 4)
+    rev_mean = round(sum(reverse_per_1k_list) / max(len(reverse_per_1k_list), 1), 4)
+    drift_per_1k = round(max(fwd_mean, rev_mean), 4)
+
+    # tier_hint：哪个方向更高
+    tier_hint = "forward" if fwd_mean >= rev_mean else "reverse"
+    return {
+        "drift_per_1k": drift_per_1k,
+        "forward_per_1k": fwd_mean,
+        "reverse_per_1k": rev_mean,
+        "direction_hint": tier_hint,
+        "category_counts": cat_counts_all,
+        "chapters_sampled": len(forward_per_1k_list),
+        "total_cjk": total_cjk,
+        "_doc": ("L18 Le Guin register drift baseline·作者原文自然漂移词密度·"
+                 "world_register_drift_scanner 当 floor·确定性零 LLM·"
+                 "与 R6 anachronism 时代轴正交·advisory · 北极星②⑤⑥"),
+    }
+
+
 def aggregate_narrative_seq(project: Path) -> dict:
     """#4（2026-06-16 穷尽核查）：作者签名因果功能链 narrative_function_sequence。
 
@@ -732,6 +827,7 @@ def consolidate(project: Path, total: int) -> dict:
     rhythm = aggregate_rhythm(project)   # 阶段1：A1-A5 叙事节奏组
     decisions, characterization = aggregate_decisions(project)   # 阶段2：作者思维+人物刻画
     narr_seq = aggregate_narrative_seq(project)   # #4：作者签名因果功能链（读原文调 score·非空才写）
+    reg_tier = aggregate_register_tier_baseline(project)   # L18：Le Guin register drift baseline（非空才写）
 
     targets = [project / "作者风格.json", project / "作者风格_FINAL.json"]
     written = []
@@ -761,6 +857,8 @@ def consolidate(project: Path, total: int) -> dict:
             style.setdefault("author_decision_principles", {}).update(decisions)
         if narr_seq:  # #4：作者签名因果功能链（确定性·非空真值守卫·覆盖·中文网文同质化结构层根因）
             style["narrative_function_sequence"] = narr_seq
+        if reg_tier:  # L18：register drift baseline（确定性·非空才写·world_register_drift floor）
+            style["author_register_tier_baseline"] = reg_tier
         if characterization:  # 阶段2：人物刻画手法（刻画比例/声纹/登场签名）
             style.setdefault("characterization_craft", {}).update(characterization)
         sheet = build_decision_cheat_sheet(decisions)  # D7 紧凑决策表（per_scene_rationale 聚类压缩）

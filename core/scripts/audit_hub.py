@@ -1276,6 +1276,17 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "anachronism_scanner", "ANACHRONISM_DETECTED", "风格")),
+                # [2026-06-20 R8 W4 Batch-F · L18 Le Guin Register Drift] 题材语域漂移
+                # (当代俚语/工程黑话漂入高语域 + 反向高语域古风词漂入现代场景)·5 tier 词典
+                # (epic_fantasy/xianxia/xuanhuan/historical/modern_urban)·tier 门控
+                # (genre_packs.register_tier · 无→skip)·voice_pack.allow_register_drift 豁免
+                # ·与 R6 anachronism 时代轴正交·advisory·默认 shadow
+                ("world_register_drift",
+                 [child_python(), str(_SCRIPT_DIR / "world_register_drift_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "world_register_drift_scanner", "REGISTER_DRIFT", "风格")),
                 # [2026-06-20 R7 联网调研·番茄爆款规则怪谈] 规则块字面歧义/陷阱条款比·genre 门控(rule_anomaly·非则 skip)·advisory·默认 shadow
                 ("rule_text_ambiguity",
                  [child_python(), str(_SCRIPT_DIR / "rule_text_ambiguity_scanner.py"),

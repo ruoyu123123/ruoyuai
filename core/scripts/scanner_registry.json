@@ -269,6 +269,13 @@
       "_new": true,
       "issues_emitted": ["ANACHRONISM_DETECTED"]
     },
+    "world_register_drift": {
+      "layer": "cluster",
+      "script": "world_register_drift_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-F·L18 STRONG·Le Guin From Elfland 1973 + Substack Witcher tonal jolt + Pyle drift vs anachronism] 题材语域漂移哨兵·与 R6 anachronism 正交去重(R6 查时代轴物件错位古代场景出现手机/汽车·本 scanner 查 register 语域脱节当代俚语/工程黑话漂入高语域场景 + 反向高语域古风词朕/陛下/卿漂入现代/科幻场景)·5 tier 词典(epic_fantasy/xianxia/xuanhuan/historical 查 forward 漂移 + modern_urban 查 reverse 漂移)·tier 门控三级(genre_packs.register_tier > 世界观.json register_tier > 作者风格.json register_tier · 无→skip 北极星②)·voice_pack.voice_meta.allow_register_drift=True 豁免(戏谑/穿越元 meta narrative)·作者档 author_register_tier_baseline.drift_per_1k 当 floor + 默认 +0.5/千字阈值·单向只报偏高·advisory·env REGISTER_DRIFT_MODE 默认 shadow·🔬待金标准校准·REGISTER_DRIFT 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["REGISTER_DRIFT"]
+    },
     "rule_text_ambiguity": {
       "layer": "cluster",
       "script": "rule_text_ambiguity_scanner.py",
