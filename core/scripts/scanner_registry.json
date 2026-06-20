@@ -325,6 +325,20 @@
       "_new": true,
       "issues_emitted": ["GRICEAN_FLOUTING_THIN"]
     },
+    "duration_mix": {
+      "layer": "cluster",
+      "script": "duration_mix_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-H·L22 Genette《Narrative Discourse》五种持续模式·Numberanalytics+Sciencedirect 2024] scene/summary/ellipsis/pause/stretch 占比·LLM 默认偏 scene+summary·ellipsis/stretch/pause 几乎为 0=节奏单调·按句末符号切句·五型分类标志词优先级匹配(ellipsis>summary>stretch>scene>pause)·作者档 duration_mix_baseline 第一权威 z>1.5σ 报·无作者档走通用兜底(ellipsis<1%+stretch<0.5%+cjk>8000)·advisory·env DURATION_MIX_MODE 默认 shadow·🔬阈值占位待金标准校准·DURATION_MIX_DRIFT 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["DURATION_MIX_DRIFT"]
+    },
+    "first_encounter_anchor": {
+      "layer": "cluster",
+      "script": "first_encounter_anchor_scanner.py",
+      "doc": "[2026-06-20 R8 W4 Batch-H·L23 Shklovsky 1917《Art as Device》ostranenie·Tolstoy《Kholstomer》马视角·Suvin SF 估隔·Gilliam defamiliarization·诡秘 IP 拆书] 新世界元素首次登场是否先体感后命名(避免 X 是 Y 直贴标签丢失陌生化)·manifest.first_encounter_targets 优先·世界观.json entries fallback·±80 字窗口定义模板匹配(X[是叫为称]+Y/这[就便]?[是叫]Y/名[叫为]Y)·前置感官锚定(看见/听见/嗅到/古怪/陌生)豁免·LitRPG/horror_game/rule_anomaly 题材豁免(系统流面板/规则块本就直陈)·label_first_ratio>0.5+count>=2 报·advisory·env FIRST_ENCOUNTER_ANCHOR_MODE 默认 shadow·🔬阈值占位待金标准校准·FIRST_ENCOUNTER_LABEL_FIRST 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["FIRST_ENCOUNTER_LABEL_FIRST"]
+    },
 
     "volume_arc_drift": {
       "layer": "cross-cluster",

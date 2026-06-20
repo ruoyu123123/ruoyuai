@@ -784,6 +784,75 @@ def aggregate_register_tier_baseline(project: Path) -> dict:
     }
 
 
+def aggregate_duration_mix(project: Path) -> dict:
+    """L22 Genette 五型时长比 baseline (2026-06-20 · R8 W4 Batch-H)。
+
+    作者原文按句末符号切句·复用 duration_mix_scanner 的同套规则分类·每章计五型 pct·
+    跨章 mean+std 作为 duration_mix_baseline·供 duration_mix_scanner 当 z-band 基线。
+
+    缺数据/无原文 → 返回 {}（consumer 走通用兜底·零回归·北极星⑥）。
+    """
+    orig = project / "原文"
+    if not orig.exists():
+        return {}
+    raws = sorted(orig.glob("第*章.txt"), key=lambda p: p.name)
+    if not raws:
+        return {}
+    try:
+        import duration_mix_scanner as _dms
+    except Exception:
+        return {}
+    per_dim: dict[str, list[float]] = {
+        "scene_pct": [], "summary_pct": [], "ellipsis_pct": [],
+        "pause_pct": [], "stretch_pct": [],
+    }
+    chapters_sampled = 0
+    for rp in raws:
+        try:
+            text = _dms._strip_changes(rp.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if _dms._cjk_count(text) < 500:
+            continue
+        sents = _dms._split_sentences(text)
+        if len(sents) < 10:
+            continue
+        dist = _dms.compute_distribution(sents)
+        for k in per_dim.keys():
+            v = dist.get(k)
+            if isinstance(v, (int, float)):
+                per_dim[k].append(float(v))
+        chapters_sampled += 1
+    if chapters_sampled == 0:
+        return {}
+    import statistics as _stats
+    baseline: dict = {}
+    for k, vals in per_dim.items():
+        if not vals:
+            continue
+        m = sum(vals) / len(vals)
+        s = _stats.pstdev(vals) if len(vals) > 1 else 0.0
+        baseline[k] = {"mean": round(m, 4), "std": round(s, 4)}
+    if not baseline:
+        return {}
+    # 倾向 hint：占比最高那一型 → directives 给 gen_writer D9 软引导
+    means = {k: v["mean"] for k, v in baseline.items()}
+    top = max(means.items(), key=lambda kv: kv[1])
+    directives = [
+        ("本作者时长分布：scene {scene:.0%} / summary {summary:.0%} / ellipsis {ell:.1%} / "
+         "pause {pause:.1%} / stretch {stretch:.1%}").format(
+            scene=means["scene_pct"], summary=means["summary_pct"],
+            ell=means["ellipsis_pct"], pause=means["pause_pct"], stretch=means["stretch_pct"]),
+        ("主导 duration 型 = {top} ({pct:.0%})·新 cluster 整体节奏向作者基线靠拢").format(
+            top=top[0].replace("_pct", ""), pct=top[1]),
+    ]
+    baseline["directives"] = directives
+    baseline["chapters_sampled"] = chapters_sampled
+    baseline["_doc"] = ("L22 Genette 五型时长比·duration_mix_scanner z-band 基线·"
+                       "gen_writer D9 directives 软引导·advisory·北极星②⑤⑥")
+    return baseline
+
+
 def aggregate_narrative_seq(project: Path) -> dict:
     """#4（2026-06-16 穷尽核查）：作者签名因果功能链 narrative_function_sequence。
 
@@ -828,6 +897,7 @@ def consolidate(project: Path, total: int) -> dict:
     decisions, characterization = aggregate_decisions(project)   # 阶段2：作者思维+人物刻画
     narr_seq = aggregate_narrative_seq(project)   # #4：作者签名因果功能链（读原文调 score·非空才写）
     reg_tier = aggregate_register_tier_baseline(project)   # L18：Le Guin register drift baseline（非空才写）
+    duration_mix = aggregate_duration_mix(project)         # L22：Genette 五型时长比 baseline（非空才写）
 
     targets = [project / "作者风格.json", project / "作者风格_FINAL.json"]
     written = []
@@ -859,6 +929,8 @@ def consolidate(project: Path, total: int) -> dict:
             style["narrative_function_sequence"] = narr_seq
         if reg_tier:  # L18：register drift baseline（确定性·非空才写·world_register_drift floor）
             style["author_register_tier_baseline"] = reg_tier
+        if duration_mix:  # L22：Genette 五型时长比 baseline（确定性·非空才写·duration_mix_scanner z-band 基线）
+            style["duration_mix_baseline"] = duration_mix
         if characterization:  # 阶段2：人物刻画手法（刻画比例/声纹/登场签名）
             style.setdefault("characterization_craft", {}).update(characterization)
         sheet = build_decision_cheat_sheet(decisions)  # D7 紧凑决策表（per_scene_rationale 聚类压缩）

@@ -1344,6 +1344,26 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "gricean_flouting_density",
                      "GRICEAN_FLOUTING_THIN", "风格")),
+                # [2026-06-20 R8 W4 Batch-H·L22 Genette 五型时长比] scene/summary/ellipsis/pause/stretch 占比
+                # · 作者档 duration_mix_baseline 第一权威·无作者档走通用兜底 (ellipsis<1%+stretch<0.5%)
+                # · advisory · 默认 shadow
+                ("duration_mix",
+                 [child_python(), str(_SCRIPT_DIR / "duration_mix_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "duration_mix_scanner", "DURATION_MIX_DRIFT", "风格")),
+                # [2026-06-20 R8 W4 Batch-H·L23 Shklovsky 先体感后命名] 新世界元素首现是否带感官锚
+                # · manifest.first_encounter_targets 优先·世界观.json entries fallback
+                # · LitRPG/horror_game/rule_anomaly 题材豁免·advisory·默认 shadow
+                ("first_encounter_anchor",
+                 [child_python(), str(_SCRIPT_DIR / "first_encounter_anchor_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "first_encounter_anchor_scanner",
+                     "FIRST_ENCOUNTER_LABEL_FIRST", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
@@ -1836,6 +1856,10 @@ def main():
         sys.exit(3)
     auto_fix = "--auto-fix" in args
     want_json = "--json" in args
+    # [2026-06-20 R8 W4 Batch-H · L24] DRAMATURGE 三阶段分层 audit 开关·shadow 默认·
+    # 跑完 audit_hub 再调 audit_hub_hierarchical_planner.run_hierarchical 把 issues 统筹成
+    # revision_plan.json·不破坏现有路径·全 advisory·default shadow (env HIERARCHICAL_AUDIT_MODE)
+    hierarchical = "--hierarchical" in args
     waivers = _load_waivers(_parse_waivers_arg(args))
 
     # v24 cluster mode 入口
@@ -1850,6 +1874,15 @@ def main():
         report_dir.mkdir(parents=True, exist_ok=True)
         report_path = report_dir / f"cluster_{cluster_key}_audit.json"
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        # L24 hierarchical：跑完写 revision_plan.json (advisory · 不影响主报告)
+        if hierarchical:
+            try:
+                import audit_hub_hierarchical_planner as _hp
+                _hier = _hp.run_hierarchical(project_root, cluster_key, report)
+                (report_dir / f"cluster_{cluster_key}_revision_plan.json").write_text(
+                    json.dumps(_hier, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as _e:
+                print(f"[hierarchical] 脚手架跳过: {_e}", file=sys.stderr)
         _feed_learning_loop(project_root, report_path, quiet=want_json)
         if want_json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
