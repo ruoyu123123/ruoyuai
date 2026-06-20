@@ -131,6 +131,45 @@ def _parse_retry_after(headers) -> float | None:
         return None
 
 
+# 外层 markdown JSON 围栏匹配（lazy · 取第一个完整闭合的围栏）。
+# 严格语法：``` + 可选 json/JSON + 仅 [ \t] 空白 + 必须 \n + 内层 + 必须 \n + 仅 [ \t] 空白 + ```
+# 强制 newline 是为了拒绝 ```yaml / ```python / ```bash 等其他语言标签（'yaml' 中的 y
+# 既不是 json/JSON 也不是 [ \t]/\n → 直接 fail-fast）。多围栏 lazy 取第一个。
+_OUTER_FENCE_RE = re.compile(
+    r"```(?:json|JSON)?[ \t]*\r?\n(.*?)\r?\n[ \t]*```", re.DOTALL)
+
+
+def _strip_markdown_fence(text: str) -> str:
+    r"""剥离外层 markdown JSON 围栏（仅 response_format_json=True 路径调用·post-process）。
+
+    背景：真 A/B w5g1636kq 暴露——Gemini 经 elysia 中转输出 JSON 时偶尔用 markdown 围栏
+    ```json ... ``` 包裹·下游 json.loads 直接吃会炸·而 Claude Code Agent 输出裸 JSON。
+    本函数在 transport 层 post-process 剥外壳·收敛到 stream_once 单一真理源·避免
+    av_judge._extract_json / optimizer._extract_patches / gen_fixer 等下游各自剥离。
+
+    语义（保守）：
+      - text strip 后『以 ``` 起首』+ 匹配到围栏 → 返回围栏内层（多围栏取第一个）
+      - 前面有非空白文本（'这是结果：```json ...'）→ 不动·留 parse_json_loose 兜底
+      - 不合法（开围栏无闭合 / lang 非 json/JSON/空 / 无换行）→ 原样返回
+      - 空文本 → 原样返回（generate() 空响应守卫接管）
+
+    边界：
+      - 仅由 _stream_once_* 在 response_format_json=True 时调用·writer 正文+CHANGES 混排
+        路径（response_format_json=False）完全不受影响·不会误剥 CHANGES 围栏。
+      - 截断续写在 generate() 累积·若首段含未闭合开围栏（regex 不匹配）→ 保留原样
+        让模型续写时延续；最终累积文本若仍带围栏·下游 parse_json_loose 已三级兜底。
+    """
+    if not text:
+        return text
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    m = _OUTER_FENCE_RE.search(s)
+    if m is not None:
+        return m.group(1)
+    return text
+
+
 def parse_json_loose(reply: str, fallback: dict | None = None) -> dict:
     """三级宽松 JSON 抽取（合并 gen_creative._parse_json_loose + ai_wrapper 正则范式）。
 
@@ -269,6 +308,10 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
                 raise
         # token ledger 对称（judge 全走此 OpenAI path·此前漏记 → 账本只有 writer 没 judge）
         _record_token_usage(_u, profile.model, protocol="openai")
+        # markdown 围栏 post-process（仅 JSON 协议·裸 JSON 不动·真 A/B w5g1636kq 暴露 Gemini
+        # 经中转输出 ```json ... ``` 包裹）
+        if response_format_json:
+            _t = _strip_markdown_fence(_t)
         return _t, _f
     except RateLimitError as e:
         ra = _parse_retry_after(getattr(getattr(e, "response", None), "headers", None))
@@ -463,6 +506,10 @@ def _stream_once_gemini(profile: Profile, system: str, user: str, max_tokens: in
     # token ledger（B1 一人公司·BYOK 用户看烧多少钱）：env RUOYU_TOKEN_LEDGER 设则 append·零侵入
     _record_token_usage(usage, getattr(profile, "model", "gemini"))
     finish = "length" if finish_raw == "MAX_TOKENS" else ("stop" if finish_raw else None)
+    # markdown 围栏 post-process（仅 JSON 协议·裸 JSON 不动·真 A/B w5g1636kq 暴露 Gemini
+    # 经中转输出 ```json ... ``` 包裹·下游 json.loads 会炸）
+    if response_format_json:
+        text = _strip_markdown_fence(text)
     return text, finish
 
 
