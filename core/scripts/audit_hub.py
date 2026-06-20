@@ -1640,6 +1640,41 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "chronotope_typology_scanner",
                      "CHRONOTOPE_MONOTONY", "结构")),
+                # [2026-06-20 R9 W5 Batch-N P1·plot armor stakes erosion] 3-cluster 滚动窗口
+                # 威胁三档(轻伤/重伤/濒死)vs 持久化代价(state_delta/factual/facts_locked)·
+                # stakes_credibility<0.2 且威胁≥3 触发·题材门控(轻喜剧/slice_of_life skip)
+                # · 作者档 plot_armor_profile.allow_high_armor 豁免 · advisory · 默认 shadow
+                ("plot_armor_tracker",
+                 [child_python(), str(_SCRIPT_DIR / "plot_armor_tracker.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "plot_armor_tracker",
+                     "PLOT_ARMOR_INFLATION", "剧情")),
+                # [2026-06-20 R9 W5 Batch-N P1·red herring recall-at-reveal · R2 setup 对偶]
+                # 仅在 reveal/twist/climax_reveal beat 触发·读 _数据库/伏笔表.json red_herrings
+                # 在草稿正文检查是否被显式否决(±60 字内 NEGATION_MARKER)·dangling → advisory
+                # · 北极星② 作者未声明则 skip · advisory · 默认 shadow
+                ("red_herring_recall",
+                 [child_python(), str(_SCRIPT_DIR / "red_herring_recall_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "red_herring_recall_scanner",
+                     "RED_HERRING_DANGLING", "剧情")),
+                # [2026-06-20 R9 W5 Batch-N P1·quotative/reporting-verb per-character 签名]
+                # 8 桶 60 词词典(lexicons/quotative_verbs.json) · author palette collapse(≤2 桶)
+                # + per-character cosine > 0.9 同质化 · 输出 quotative_bias top-3 供 voice_pack
+                # · 与 R8 L31 silence_marker 正交(那个查停顿沉默·本者查言说动作)·advisory · 默认 shadow
+                ("quotative_signature",
+                 [child_python(), str(_SCRIPT_DIR / "quotative_signature_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "quotative_signature_scanner",
+                     "AUTHOR_QUOTATIVE_PALETTE_COLLAPSE", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
