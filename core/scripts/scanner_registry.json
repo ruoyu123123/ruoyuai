@@ -771,6 +771,42 @@
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["TITLE_CONCRETENESS_DRIFT"]
+    },
+    "covert_foreshadowing_audit": {
+      "layer": "cluster",
+      "script": "covert_foreshadowing_audit.py",
+      "doc": "[2026-06-20 R12 W6 Batch-Q·P2 MODEST·arxiv 2601.07033 CFPG + mystorydoctor Farland + writeseen + darlingaxe reread test + laterpress dramatic irony] 隐性/显性伏笔 delivery_mode 占比 advisory·5 类(overt/buried/passing/objects/parallel)·正文行内 + foreshadowing.json plant_text 双源·covert_ratio = (buried+passing+objects+parallel)/total·作者档 author_covert_ratio_baseline{p10,p50,p90} 第一权威·无作者档兜底 band [0.40, 0.70]·两 advisory(THIN < band[0]·OPAQUE > band[1])·env COVERT_FORESHADOWING_MODE 默认 shadow·🔬阈值占位待金标准校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["COVERT_FORESHADOWING_THIN", "COVERT_FORESHADOWING_OPAQUE"]
+    },
+    "capability_emergence_audit": {
+      "layer": "cluster",
+      "script": "capability_emergence_audit.py",
+      "doc": "[2026-06-20 R12 W6 Batch-Q·P2 MODEST·arxiv 2603.05890 ConStory-Bench 19 子类 + arxiv 2506.05939 Entity-Event KG + arxiv 2311.09648 Event Causality EMNLP] 能力/技艺首现无 acquisition 锚点 advisory(跨 cluster 100+ scene)·capability_ledger.json 驱动({capability_id,name,acquisition_event,acquired_at_cluster,inherent})·使用动词字典(施展/释放/凝聚/激发/觉醒/突破)正文段扫·首次使用前 acquisition 双字段任缺 → CAPABILITY_EMERGENCE_UNGROUNDED·inherent=true 自动豁免·cluster-save-state step 8/9 触发·与 R11 signed_relation_graph 复用 ontology 独立·env CAPABILITY_EMERGENCE_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 8/9",
+      "issues_emitted": ["CAPABILITY_EMERGENCE_UNGROUNDED"]
+    },
+    "chiaroscuro_scanner": {
+      "layer": "cluster",
+      "script": "chiaroscuro_scanner.py",
+      "doc": "[2026-06-20 R12 W6 Batch-Q·P2 MODEST·jonreeve.com Reeve WordNet 跨小说 ratio 基线 + mwany.org MWA chiaroscuro + Caravaggio 跨流派谱系] 光暗意象比 cluster 视野扫描器·core/data/luminance_lexicon_cn.json(光/暗各 40+ 词占位)·输出 light_density/dark_density/chiaroscuro_ratio = light/(light+dark)·作者档 luminance_signature.ratio_p50 第一权威 ±0.20 当 band·无作者档 → 兜底 [0.30, 0.70]·三 advisory(OVER_BRIGHT > band[1] / OVER_DARK < band[0] / DRIFT_FROM_AUTHOR |z|>0.25)·env CHIAROSCURO_MODE 默认 shadow·🔬待真作者 1-2 本 cluster_001-005 校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["OVER_BRIGHT", "OVER_DARK", "DRIFT_FROM_AUTHOR"]
+    },
+    "prose_homophonic_pun_scanner": {
+      "layer": "cluster",
+      "script": "prose_homophonic_pun_scanner.py",
+      "doc": "[2026-06-20 R12 W6 Batch-Q·P2 MODEST·PMC9131095 Hsu 2022 眼动 salience-contrast 72 三元组 + arxiv 2507.07640 Lost in Pronunciation + arxiv 2601.19932 Newspaper Eat + Wikipedia Homophonic puns 无情/无晴 + mandarinblueprint Cihai yi 149 字同音池] 谐音双关 salience-contrast scanner·占位 16 三元组 seed(SUBTLEX-CH/CC-CEDICT 离线 syllable→char 倒排表占位)·4 字滑窗捕 form/homophone + ±150 字 critical context noun(情/恋/福/禄/送)·输出 pun_density_per_10k + pun_with_context_support_ratio·genre-conditioned ECDF(pun_rich = xianxia/comedy/urban_supernatural/infinite_flow·pun_thin = 硬科幻/战争 skip active 闸)·HOMOPHONIC_PUN_THIN(占位阈值)·env HOMOPHONIC_PUN_MODE 默认 shadow·🔬待 SUBTLEX-CH 全表 + 金标准校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["HOMOPHONIC_PUN_THIN"]
+    },
+    "prose_chaizi_ledger": {
+      "layer": "cluster",
+      "script": "prose_chaizi_ledger.py",
+      "doc": "[2026-06-20 R12 W6 Batch-Q·P2 MODEST·brill Chinese Character Manipulation + scholar.harvard Kelly 金瓶梅 chaizi + Wikipedia Tui bei tu 推背图 + tumblr chaizi 6 模板 + github kfcd/chaizi 1.4 万字真值表] 拆字/字谜 glyphic-decomposition scanner·复用 kfcd/chaizi 思路占位 30 字字典·6 模板(split_left_right/split_top_bottom/remove_radical/add_radical/riddle/prophecy) + 字典验证双层召回·输出 chaizi_density_per_10k / chaizi_self_consistent_ratio / chaizi_function_distribution(prophecy/name_pun/secret_msg/divination/joke 五桶)·作者档加 chaizi_density 与 function_mix·genre-gated 默认仅玄幻/仙侠/历史/古风/谍战启用·Volume-level 跨 cluster 检 chaizi 伏笔兑付(占位 hook)·env CHAIZI_LEDGER_MODE 默认 shadow·🔬待 kfcd/chaizi 全表替换 + 金标准校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CHAIZI_DENSITY_THIN", "CHAIZI_INCONSISTENT"]
     }
   },
 

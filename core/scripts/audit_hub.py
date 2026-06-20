@@ -1872,6 +1872,57 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "chapter_title_concreteness_scanner",
                      "TITLE_CONCRETENESS_DRIFT", "风格")),
+                # [2026-06-20 R12 W6 Batch-Q·P2·CFPG arxiv 2601.07033 + Farland reread test]
+                # 隐显伏笔 delivery_mode 占比 advisory·作者档 author_covert_ratio_baseline
+                # 第一权威·无作者档兜底 [0.40, 0.70]·advisory·默认 shadow
+                ("covert_foreshadowing",
+                 [child_python(), str(_SCRIPT_DIR / "covert_foreshadowing_audit.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "covert_foreshadowing_audit",
+                     "COVERT_FORESHADOWING_THIN", "伏笔")),
+                # [2026-06-20 R12 W6 Batch-Q·P2·ConStory-Bench arxiv 2603.05890]
+                # 能力/技艺首现无 acquisition 锚点·capability_ledger.json 驱动·
+                # inherent=true 自动豁免·advisory·默认 shadow
+                ("capability_emergence",
+                 [child_python(), str(_SCRIPT_DIR / "capability_emergence_audit.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "capability_emergence_audit",
+                     "CAPABILITY_EMERGENCE_UNGROUNDED", "剧情")),
+                # [2026-06-20 R12 W6 Batch-Q·P2·Reeve WordNet + MWA chiaroscuro]
+                # 光暗意象比·core/data/luminance_lexicon_cn.json (光/暗各 40+ 词)
+                # 作者档 luminance_signature.ratio_p50 第一权威·advisory·默认 shadow
+                ("chiaroscuro",
+                 [child_python(), str(_SCRIPT_DIR / "chiaroscuro_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "chiaroscuro_scanner", "OVER_BRIGHT", "风格")),
+                # [2026-06-20 R12 W6 Batch-Q·P2·Hsu 2022 salience-contrast +
+                # Lost in Pronunciation arxiv 2507.07640] 谐音双关 salience-contrast
+                # 占位·4 字滑窗 + ±150 字 context noun 支撑·genre-conditioned ECDF
+                # (xianxia/comedy/urban_supernatural 兜底·硬科幻 skip)·advisory·默认 shadow
+                ("homophonic_pun",
+                 [child_python(), str(_SCRIPT_DIR / "prose_homophonic_pun_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "prose_homophonic_pun_scanner",
+                     "HOMOPHONIC_PUN_THIN", "风格")),
+                # [2026-06-20 R12 W6 Batch-Q·P2·Brill Chinese Character Manipulation +
+                # kfcd/chaizi + Kelly 金瓶梅 chaizi] 拆字/字谜 glyphic-decomposition
+                # 6 模板 + 占位字典 + 5 功能桶(prophecy/name_pun/secret_msg/divination/joke)
+                # genre-gated(玄幻/仙侠/历史/古风/谍战)·advisory·默认 shadow
+                ("chaizi_ledger",
+                 [child_python(), str(_SCRIPT_DIR / "prose_chaizi_ledger.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "prose_chaizi_ledger",
+                     "CHAIZI_DENSITY_THIN", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
