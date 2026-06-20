@@ -1923,6 +1923,33 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_chaizi_ledger",
                      "CHAIZI_DENSITY_THIN", "风格")),
+                # [2026-06-20 R13 W6 Batch-R·P1 STRONG·Kopytoff 1986 物件文化传记 + Bill Brown 2003 +
+                # Penn Museum object biography 指南 + Heritage Studies 2023] 物件生命传记相位账本·
+                # 8 相位标签(acquired/in_use/transformed/damaged/lost/recovered/discarded/reentered)·
+                # named_objects 门槛(物件登记表 plot_critical=true 或 mentions>=2)·缺登记表则草稿候选·
+                # 4 信号(phase_skip_rate/phase_dwell_imbalance/phase_silence_gap/terminal_phase_consistency)·
+                # snapshot 写盘供 cluster_emergence_engine 下卷读·与 R8 motif/R10 power_progression/R6
+                # anachronism/R11 signed_relation 全部正交·advisory·默认 shadow·绝不 hard_gate
+                ("object_biography",
+                 [child_python(), str(_SCRIPT_DIR / "object_biography_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "object_biography_scanner",
+                     "OBJECT_BIOGRAPHY_THIN", "剧情")),
+                # [2026-06-20 R13 W6 Batch-R·P1 STRONG·首次落地·Li 2014 Studies in Language 38:1 +
+                # Xiao&McEnery 2004 Benjamins corpus + perfective paradox-guo + Zai/Zhe 构式语法]
+                # 中文体貌前景-背景密度·4 信号(bare_le_unbounded_streak/background_marker_ratio/
+                # prospective_overuse/guo_experiential_misuse)·作者档 aspect_baseline 第一权威·
+                # 无作者档兜底 band·与 R7 prose_rhythm/R8 duration_mix/R9 anachrony_order/R12
+                # narrative_frequency 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("aspect_grounding",
+                 [child_python(), str(_SCRIPT_DIR / "aspect_grounding_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "aspect_grounding_scanner",
+                     "ASPECT_GROUNDING_THIN", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

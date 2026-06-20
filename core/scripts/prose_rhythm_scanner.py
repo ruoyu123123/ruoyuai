@@ -59,6 +59,14 @@ DEFAULT_AUTHOR_SENT_MEAN = 26.0   # 无作者档时的通用兜底句长基线�
 # 0.5/0.4 留余量（< 0.61 真作者绝不误报·critic 建议 0.6 余量仅 0.01 太险已下调·北极星⑤防矫枉过正）。
 BURST_R_MINOR, BURST_R_MAJOR = 0.5, 0.4
 BURST_ABS_STD_FLOOR = 5.0   # 无作者档兜底：句长 std < 5（几乎齐平·匀速）才报
+# 探针8 标点距离 Weibull 形状指纹（2026-06-20 R13 W6 Batch-R P2·shadow）
+# Dolina et al. 2025 Chaos 35:023155 中文散文标点 Weibull 多重分形 + CLSInfra + Bagnall 2016。
+# 6 类标点(。, ！？—— ……)分别提取相邻同类符号 token 距离序列·scipy weibull_min.fit 估(k, λ)·
+# 与作者档 slow_update.punctuation_distance_weibull[mark] KS 检验·Δ>0.15 advisory·
+# SkillOpt 不许动 slow_update（已锁死段）。
+PUNCT_WEIBULL_KS_THRESHOLD = 0.15
+PUNCT_WEIBULL_MIN_SAMPLES = 8   # 单标点距离样本 <8 跳过（统计不可靠）
+PUNCT_WEIBULL_MARKS = ("。", "，", "！", "？", "——", "……")
 DEFAULT_SUBJ_PCT_CAP = 24.0       # 主语开头占比通用上限(%)
 # 段首倒装模具（前置长定语+的+主语后置·补「同语法骨架复用」缺口·
 # memory feedback_inverted_modifier_sentence_mold_overuse·cluster_001 实测 34 次/约 1/9 段）
@@ -81,6 +89,68 @@ def cjk(s: str) -> int:
 def _load_json(p: Path):
     try:
         return json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+
+
+def _author_weibull_baseline(project: Path | None, style_path: Path | None) -> dict:
+    """读作者档 slow_update.punctuation_distance_weibull[mark] = {k, lambda} 形状指纹。
+    R13 P2 落地·SkillOpt 不许动 slow_update 段（北极星⑤锁死）。无作者档 → 返回 {}。"""
+    data = None
+    if style_path and style_path.exists():
+        data = _load_json(style_path)
+    if data is None and project:
+        for cand in (project / "_数据库" / "作者风格.json",
+                     project / "_数据库" / "作者风格_FINAL.json"):
+            if cand.exists():
+                data = _load_json(cand)
+                if data:
+                    break
+    if not isinstance(data, dict):
+        return {}
+    su = data.get("slow_update")
+    if not isinstance(su, dict):
+        return {}
+    pw = su.get("punctuation_distance_weibull")
+    if not isinstance(pw, dict):
+        return {}
+    out = {}
+    for mark, params in pw.items():
+        if isinstance(params, dict):
+            k = params.get("k")
+            lam = params.get("lambda") or params.get("scale")
+            if isinstance(k, (int, float)) and isinstance(lam, (int, float)):
+                out[mark] = {"k": float(k), "lambda": float(lam)}
+    return out
+
+
+def _punctuation_distance_series(text: str, mark: str) -> list:
+    """返回相邻同类标点之间的 token 距离序列（按 CJK + 字符近似 token 数）。"""
+    positions = []
+    i = 0
+    while True:
+        j = text.find(mark, i)
+        if j < 0:
+            break
+        positions.append(j)
+        i = j + len(mark)
+    if len(positions) < 2:
+        return []
+    return [positions[k + 1] - positions[k] for k in range(len(positions) - 1)]
+
+
+def _weibull_ks(distances: list, k_author: float, lam_author: float) -> float | None:
+    """KS 检验：cluster 经验分布 vs 作者 Weibull(k, λ)。返回 KS 统计量。
+    依赖 scipy（已可用·零环境额外）·失败 → None（探针自跳过）。"""
+    try:
+        from scipy.stats import kstest, weibull_min  # noqa: WPS433 (lazy import)
+    except Exception:
+        return None
+    if not distances or len(distances) < PUNCT_WEIBULL_MIN_SAMPLES:
+        return None
+    try:
+        stat, _p = kstest(distances, weibull_min.cdf, args=(k_author, 0.0, lam_author))
+        return float(stat)
     except Exception:
         return None
 
@@ -335,6 +405,45 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                         f'→匀速碎句；长短句交替增节奏。(单边·只报偏均匀)',
             })
 
+    # 探针 8：标点距离 Weibull 形状指纹（R13 W6 Batch-R P2·shadow·advisory）
+    # env PROSE_PUNCT_WEIBULL_MODE 默认 shadow·依赖作者档 slow_update.punctuation_distance_weibull
+    # 无作者档 → 静默 skip（北极星②）
+    weibull_mode = (os.environ.get("PROSE_PUNCT_WEIBULL_MODE") or "shadow").strip().lower()
+    weibull_baseline = _author_weibull_baseline(project, style_path)
+    weibull_results = {}
+    if weibull_mode != "off" and weibull_baseline:
+        worst_mark = None
+        worst_ks = 0.0
+        for mark in PUNCT_WEIBULL_MARKS:
+            params = weibull_baseline.get(mark)
+            if not params:
+                continue
+            dist_series = _punctuation_distance_series(text, mark)
+            ks = _weibull_ks(dist_series, params["k"], params["lambda"])
+            if ks is None:
+                weibull_results[mark] = {"samples": len(dist_series), "ks": None,
+                                         "k_author": params["k"], "lambda_author": params["lambda"]}
+                continue
+            weibull_results[mark] = {"samples": len(dist_series), "ks": round(ks, 4),
+                                     "k_author": params["k"], "lambda_author": params["lambda"]}
+            if ks > worst_ks:
+                worst_ks = ks
+                worst_mark = mark
+        if worst_mark and worst_ks > PUNCT_WEIBULL_KS_THRESHOLD:
+            msg = (f"标点距离 Weibull 指纹偏离: '{worst_mark}' KS={round(worst_ks, 3)}>"
+                   f"{PUNCT_WEIBULL_KS_THRESHOLD}·节奏分布形状与作者基线不同 "
+                   f"(slow_update.punctuation_distance_weibull)")
+            if weibull_mode == "active":
+                violations.append({
+                    'kind': 'punctuation_distance_weibull', 'severity': 'minor',
+                    'mark': worst_mark, 'ks': round(worst_ks, 3),
+                    'threshold': PUNCT_WEIBULL_KS_THRESHOLD,
+                    'per_mark_results': weibull_results,
+                    'hint': msg,
+                })
+            else:
+                print(f"[SHADOW] prose_rhythm punct_weibull: {msg} — 不上报", file=sys.stderr)
+
     has_major = any(v['severity'] == 'major' for v in violations)
     verdict = 'PASS' if not violations else ('FAIL_MAJOR' if has_major else 'FAIL_MINOR')
     return {
@@ -357,6 +466,7 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             'intensity_adverb_per_1k': intensity_per_1k,
             'sentence_std_cluster': cluster_sent_std,        # 探针7 cluster 句长 std
             'burstiness_ratio': burst_ratio,                 # 探针7 cluster_std/作者 std（<0.5 偏均匀报）
+            'punct_weibull_per_mark': weibull_results,       # 探针8 标点距离 Weibull KS（R13 W6 Batch-R P2）
         },
         'author_baseline': {
             'sentence_mean': sent_mean_base,

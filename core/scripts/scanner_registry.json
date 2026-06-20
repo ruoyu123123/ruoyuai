@@ -807,6 +807,27 @@
       "doc": "[2026-06-20 R12 W6 Batch-Q·P2 MODEST·brill Chinese Character Manipulation + scholar.harvard Kelly 金瓶梅 chaizi + Wikipedia Tui bei tu 推背图 + tumblr chaizi 6 模板 + github kfcd/chaizi 1.4 万字真值表] 拆字/字谜 glyphic-decomposition scanner·复用 kfcd/chaizi 思路占位 30 字字典·6 模板(split_left_right/split_top_bottom/remove_radical/add_radical/riddle/prophecy) + 字典验证双层召回·输出 chaizi_density_per_10k / chaizi_self_consistent_ratio / chaizi_function_distribution(prophecy/name_pun/secret_msg/divination/joke 五桶)·作者档加 chaizi_density 与 function_mix·genre-gated 默认仅玄幻/仙侠/历史/古风/谍战启用·Volume-level 跨 cluster 检 chaizi 伏笔兑付(占位 hook)·env CHAIZI_LEDGER_MODE 默认 shadow·🔬待 kfcd/chaizi 全表替换 + 金标准校准·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["CHAIZI_DENSITY_THIN", "CHAIZI_INCONSISTENT"]
+    },
+    "object_biography_scanner": {
+      "layer": "cluster",
+      "script": "object_biography_scanner.py",
+      "doc": "[2026-06-20 R13 W6 Batch-R·P1 STRONG·Kopytoff 1986 物件文化传记 + Bill Brown 2003 U.Chicago Press + Penn Museum object biography 指南 + Heritage Studies 2023] 物件生命传记相位账本·8 相位 cue(acquired/in_use/transformed/damaged/lost/recovered/discarded/reentered)正则窗口打 tag·named_objects 门槛(_数据库/物件登记表.json items[].plot_critical=true 或 mentions>=2 入选·缺登记表则草稿候选 ≥2 次出现 + cue 共现)·4 信号 phase_skip_rate / phase_dwell_imbalance / phase_silence_gap / terminal_phase_consistency·snapshot 写 _数据库/.object_biography/<cluster>.json 供 cluster_emergence_engine 下卷读·与 R8 motif_recurrence / R10 power_progression / R6 anachronism / R11 signed_relation_graph 全部正交·env OBJECT_BIOGRAPHY_MODE 默认 shadow·🔬阈值占位待金标准校准·OBJECT_BIOGRAPHY_THIN 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["OBJECT_BIOGRAPHY_THIN"]
+    },
+    "aspect_grounding_scanner": {
+      "layer": "cluster",
+      "script": "aspect_grounding_scanner.py",
+      "doc": "[2026-06-20 R13 W6 Batch-R·P1 STRONG·首次落地·Li 2014 Studies in Language 38:1 + Xiao&McEnery 2004 Benjamins corpus + perfective paradox-guo 跨语言 + Zai/Zhe 构式语法] 中文动词体貌(aspect grounding)前景-背景密度·4 信号(bare_le_unbounded_streak 连续 ≥4 个『…了。』结句且无 bounding 表达·background_marker_ratio 着/在/正/方/犹/兀自 token 与作者档 ECDF z-band·prospective_overuse 将/就/即将 在 retro 段超 +2σ·guo_experiential_misuse『过』在主线推进位置异常密度)·作者档 aspect_baseline 第一权威·无作者档兜底 band [1.5, 9.0]/1k·与 R7 prose_rhythm/R8 duration_mix/R9 anachrony_order/R12 narrative_frequency 严格正交·env ASPECT_GROUNDING_MODE 默认 shadow·🔬阈值占位待金标准校准·ASPECT_GROUNDING_THIN/OVERUSE 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ASPECT_GROUNDING_THIN", "ASPECT_GROUNDING_OVERUSE"]
+    },
+    "prose_rhythm_punct_weibull": {
+      "layer": "cluster",
+      "script": "prose_rhythm_scanner.py (probe 8)",
+      "doc": "[2026-06-20 R13 W6 Batch-R·P2 MODEST·Dolina et al. 2025 Chaos 35:023155 中文散文标点 Weibull 多重分形 + CLSInfra 计算文学方法学综述 + Bagnall 2016 Random Forest] prose_rhythm_scanner 子模块·6 类标点(。, ！？—— ……)相邻同类符号 token 距离序列·scipy.stats.weibull_min.fit 估(k,λ)·与作者档 slow_update.punctuation_distance_weibull[mark] KS 检验·Δ>0.15 advisory·蒸馏 phase-3 consolidate_author_profile 增量计算写入 slow_update 锁死段(SkillOpt 不许动·北极星⑤)·env PROSE_PUNCT_WEIBULL_MODE 默认 shadow·🔬阈值占位待真作者作者档增 slow_update 段后校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["PROSE_PUNCT_WEIBULL_DRIFT"]
     }
   },
 
