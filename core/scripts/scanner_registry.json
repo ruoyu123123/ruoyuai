@@ -526,6 +526,48 @@
       "_new": true,
       "issues_emitted": ["DEUS_EX_SOLUTION"]
     },
+    "actant_drift": {
+      "layer": "cluster",
+      "script": "actant_drift_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-L·L38 Greimas Sémantique structurale 1966 六 actant] subject/object/sender/receiver/helper/opponent 六位逐 cluster 派分台账+漂移监测·三类 advisory(helper↔opponent 无 pivot / 关键位 subject+opponent 空缺 / 单角色占≥3 actant 位)·读 manifest.cluster_actant_state + _数据库/cluster_actant_ledger.json 历史·作者档 actant_signature.allow_multi_role_hero 豁免清单·写回 ledger 仅 active 不污染 shadow·advisory·env ACTANT_DRIFT_MODE 默认 shadow·🔬阈值占位待校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ACTANT_DRIFT_NO_PIVOT", "ACTANT_VACANCY", "ACTANT_OVERLOADED"]
+    },
+    "bremond_cadence": {
+      "layer": "cluster",
+      "script": "bremond_cadence_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-L·L39 Bremond Logique du récit 1973] potential/process/outcome 三段式 + 四态 cadence 分布(success/failure/mixed/deferred)·读 事件簇.json 各 cluster cluster_bremond_arc.outcome·末窗 N=5 同型 streak/over_success/over_failure 检测·作者档 outcome_signature.allow_no_setback=True 无敌流可屏蔽 success 串·输出 next_recommended_outcome 给下个 cluster brief writer 软提示·advisory·env BREMOND_CADENCE_MODE 默认 shadow·🔬阈值占位待校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["BREMOND_CADENCE_MONOTONE", "BREMOND_CADENCE_OVER_SUCCESS", "BREMOND_CADENCE_OVER_FAILURE"]
+    },
+    "cast_economy": {
+      "layer": "cluster",
+      "script": "cast_economy_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-L·L40 Truby Anatomy of Story 配角网络] cast 经济三症状·CAST_INTRODUCE_BURST(单 cluster 新引入 ≥ budget·默认 2·群像题材 scheming_politics/heist_caper/espionage/ensemble_drama/court_intrigue 自动 4)·CAST_COMPOSITE_HINT(同 actant 位 ≥2 角色挂 helper 建议合并)·CAST_ROLE_SPLIT_IMPLICIT(历史 helper→当前 opponent 且无 pivot 隐式拆分)·读 manifest.active_cast + manifest.cluster_actant_state + cluster_actant_ledger 历史·advisory·env CAST_ECONOMY_MODE 默认 shadow·🔬阈值占位待校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CAST_INTRODUCE_BURST", "CAST_COMPOSITE_HINT", "CAST_ROLE_SPLIT_IMPLICIT"]
+    },
+    "narrating_distance": {
+      "layer": "cluster",
+      "script": "narrating_distance_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-L·L40 Genette narrating distance] time-of-telling vs time-told 五分级(concurrent/recent/distant/posthumous/atemporal)·五桶 tense 锚词 + hindsight 标记词密度推断 detected·R7 firstperson_retro_self_gap 是 distant 子集严格去重·flag DISTANCE_TENSE_DRIFT(无 declared 锚词混杂 top1<1.5×top2 且 hindsight=0)+ DISTANCE_FLATTENED(declared∈distant/posthumous/atemporal 实际全 concurrent 或 hindsight=0)·作者档 narrating_distance + manifest.declared_narrating_distance 第一权威·advisory·env NARRATING_DISTANCE_MODE 默认 shadow·🔬阈值占位待校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["DISTANCE_TENSE_DRIFT", "DISTANCE_FLATTENED"]
+    },
+    "implied_author_ethics": {
+      "layer": "cluster",
+      "script": "implied_author_ethics_probe.py",
+      "doc": "[2026-06-20 R9 W5 Batch-L·L38 Phelan Living to Tell about It 三轴伦理] Ethics of Told/Telling/Reading 三轴探针·指标①asymmetric_screen_ratio(反派 vs 受害方屏占·manifest.antagonist_cast+victim_cast 显式声明 ≥0.75 报)②telling_intrusion_rate(『不得不说/读者可能不知/笔者』作者闯入 per_1k vs 作者档 ethics_signature.intrusion_min)③narratee_address_density(『各位读者/诸位看官』呼语密度 vs ethics_signature.narratee_min)·与 R8 L25 metalepsis_budget(查越界次数) + R8 L28 narratee_address_scanner(查称谓一致性)正交不双计·advisory·env IMPLIED_AUTHOR_ETHICS_MODE 默认 shadow·🔬阈值占位待校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["IMPLIED_AUTHOR_SCREEN_ASYMMETRY", "IMPLIED_AUTHOR_TELLING_THIN", "IMPLIED_AUTHOR_NARRATEE_THIN"]
+    },
+    "affective_signature": {
+      "layer": "cluster",
+      "script": "affective_signature_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-L·L40 Plutchik 8 wheel + LLM congeniality bias documented] implied author 情感分布 KL 漂移·8 类情感 lexicon(joy/trust/fear/surprise/sadness/disgust/anger/anticipation 各 12-18 中文情感词精选剔除多义)·草稿分布 P vs 作者档 author_affective_signature Q(无→均匀 0.125 兜底) KL 散度+ 通道偏移·flag CONGENIALITY_SKEW(joy P/Q ratio>1.5 膨胀 + anger 或 disgust ratio<0.5 塌陷)·零 LLM 纯 lexicon·advisory·env AFFECTIVE_SIGNATURE_MODE 默认 shadow·🔬阈值占位待校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CONGENIALITY_SKEW"]
+    },
     "location_signature_consistency": {
       "layer": "cross-cluster",
       "script": "location_signature_consistency.py",

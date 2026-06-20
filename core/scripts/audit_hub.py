@@ -1516,6 +1516,70 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "deus_ex_solution_audit",
                      "DEUS_EX_SOLUTION", "剧情")),
+                # [2026-06-20 R9 W5 Batch-L·L38 Greimas 6 actant] 角色功能漂移
+                # (helper↔opponent 无 pivot / 关键位空缺 / 单角色过载)·读 manifest
+                # cluster_actant_state + 历史 ledger.json·advisory · 默认 shadow
+                ("actant_drift",
+                 [child_python(), str(_SCRIPT_DIR / "actant_drift_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "actant_drift_scanner", "ACTANT_DRIFT_NO_PIVOT", "结构")),
+                # [2026-06-20 R9 W5 Batch-L·L39 Bremond outcome 节奏] 三段式四态分布
+                # · 同型 streak / over_success / over_failure · 跨 cluster aggregator
+                # · 作者档 outcome_signature.allow_no_setback 豁免 · advisory · 默认 shadow
+                ("bremond_cadence",
+                 [child_python(), str(_SCRIPT_DIR / "bremond_cadence_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "bremond_cadence_scanner",
+                     "BREMOND_CADENCE_MONOTONE", "结构")),
+                # [2026-06-20 R9 W5 Batch-L·L40 Truby cast economy] 配角经济
+                # (introduce_burst / composite_hint / role_split_implicit)·
+                # 群像题材(scheming_politics/heist_caper/espionage) budget override
+                # · advisory · 默认 shadow
+                ("cast_economy",
+                 [child_python(), str(_SCRIPT_DIR / "cast_economy_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "cast_economy_scanner",
+                     "CAST_INTRODUCE_BURST", "结构")),
+                # [2026-06-20 R9 W5 Batch-L·L40 Genette narrating distance] time-of-telling
+                # vs time-told 五分级(concurrent/recent/distant/posthumous/atemporal)
+                # · R7 firstperson_retro 是其 distant 子集 · advisory · 默认 shadow
+                ("narrating_distance",
+                 [child_python(), str(_SCRIPT_DIR / "narrating_distance_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "narrating_distance_scanner",
+                     "DISTANCE_FLATTENED", "风格")),
+                # [2026-06-20 R9 W5 Batch-L·L38 Phelan 三轴伦理] Told/Telling/Reading
+                # 三轴 implied_author_ethics_probe(asymmetric_screen / telling_intrusion /
+                # narratee_address) · 与 L25/L28 正交 · advisory · 默认 shadow
+                ("implied_author_ethics",
+                 [child_python(), str(_SCRIPT_DIR / "implied_author_ethics_probe.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "implied_author_ethics_probe",
+                     "IMPLIED_AUTHOR_SCREEN_ASYMMETRY", "结构")),
+                # [2026-06-20 R9 W5 Batch-L·L40 Plutchik+LLM congeniality bias] 8 类情感
+                # KL vs 作者 author_affective_signature(无→均匀兜底)·flag
+                # CONGENIALITY_SKEW(joy 膨胀 + anger/disgust 塌陷)·advisory · 默认 shadow
+                ("affective_signature",
+                 [child_python(), str(_SCRIPT_DIR / "affective_signature_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "affective_signature_scanner",
+                     "CONGENIALITY_SKEW", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
