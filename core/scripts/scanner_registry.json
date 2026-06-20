@@ -375,6 +375,80 @@
       "issues_emitted": ["NARRATEE_DRIFT"]
     },
 
+    "power_progression": {
+      "layer": "cluster",
+      "script": "power_progression_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L60 P0 STRONG·Sanderson 2025 + Andrew Rowe + 凡人修仙传 9 阶 + 百度百科升级流 + Wikipedia] 升级流主角力量 tier 单调性/加速峰值/停滞·读 _数据库/角色弧线.json characters[<protagonist>].protagonist_power_tier 序列·三 advisory(tier 回退无受伤标志/5-cluster Δ≥2× 中位/8 cluster 停滞无 plateau)·用户偏好 power_progression_mode=off 或 genre∈{romance,mystery,slice_of_life,family_drama} skip(北极星②)·env POWER_PROGRESSION_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["POWER_TIER_REGRESSION", "ESCALATION_ACCELERATION_SPIKE", "PROGRESSION_STALL"]
+    },
+    "chapter_title_couplet": {
+      "layer": "cluster",
+      "script": "chapter_title_couplet_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L60 P1·百度百科章回体 + ACL 2024 NLP4DH 对偶 F1=0.43] 回目 huimu 对仗扫描·门控作者档 huimu_couplet/title_form==huimu_couplet/huaben_zhanghui_pastiche·三维(字数±1 / 句末标点对 / POS 序列相似度 jieba 可选·退用字符长度比)·broken_ratio>=0.4 或 no_split_ratio>=0.5 → advisory·env CHAPTER_TITLE_COUPLET_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ZHANGHUI_HUIMU_PARALLELISM_BROKEN"]
+    },
+    "xiezi_kernel_recall": {
+      "layer": "cluster",
+      "script": "xiezi_kernel_recall_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L60 P1·Literariness pinghua 楔子 + 红楼梦石头楔子 + 儒林外史王冕] 楔子 kernel symbol 末卷召回·门控作者档 huaben_zhanghui_pastiche=true·cluster_001 时四要素弱评(时间断层/地点断层/独立 character/kernel symbol 命名)·末卷 finale 不召回 kernel symbols → XIEZI_KERNEL_NOT_RECALLED·env XIEZI_KERNEL_RECALL_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["XIEZI_KERNEL_NOT_RECALLED", "XIEZI_HOMOLOGY_THIN"]
+    },
+    "cohn_consciousness_mode": {
+      "layer": "cluster",
+      "script": "cohn_consciousness_mode_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L60 P1·Cohn Transparent Minds + LHN Narratology] 意识表征四模式(quoted/psycho-narration/autonomous/narrated_monologue=FID) 分布·句级启发式分类·作者档 cohn_mode_signature 第一权威·2σ 偏离 → COHN_MODE_DRIFT advisory·与 R7 FID detector / interiority_mode_balance 互补不重叠·env COHN_CONSCIOUSNESS_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["COHN_MODE_DRIFT"]
+    },
+    "rhetoric_parallel": {
+      "layer": "cluster",
+      "script": "rhetoric_parallel_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L61 P1·arXiv 2312.00100 中文 parallelism F1=0.43 + 古典骈散排比] 排比/反复密度·四子 metric(anaphora/epistrophe/parallel_clause/polysyndeton)·作者档 author_rhetoric_parallel_signature 基线·gap≥2 维 50% 偏离 → RHETORIC_PARALLEL_GAP·env RHETORIC_PARALLEL_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["RHETORIC_PARALLEL_GAP"]
+    },
+    "antagonist_rotation": {
+      "layer": "cluster",
+      "script": "antagonist_rotation_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L59 P1·TVTropes RotatingArcs + Sanderson 2025 + 吞噬星空 + Wikipedia progression fantasy] 反派轮替节奏(长篇 1000+)·读 _数据库/反派轮替.json append-only ledger {cluster_id,antagonist_id,tier,faction,motive_type,power_system_tag,defeat_cluster}·四 advisory(defeated 后>3 cluster 空窗/tier 不升/motive 同类/power_system 同类)·env ANTAGONIST_ROTATION_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ANTAGONIST_ROTATION_VOID", "ANTAGONIST_ROTATION_TIER_DOWNGRADE", "ANTAGONIST_ROTATION_MOTIVE_MONOTONE", "ANTAGONIST_ROTATION_POWER_MONOTONE"]
+    },
+    "mass_reactor": {
+      "layer": "cluster",
+      "script": "mass_reactor_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L49 P1·Litreactor Storyville Chorus + Greek chorus + 弹幕 + 诡秘朝臣议论] 群口段/弹幕式集体反应块·识别复数集合名词说话人(众人/朝臣/弟子们/网友/弹幕/路人/百姓/观众)+匿名引号串≥3 句聚簇·作者档 author_mass_reactor_baseline.density_target 校准·env MASS_REACTOR_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["MASS_REACTOR_DENSITY_DRIFT"]
+    },
+    "onomatopoeia_density": {
+      "layer": "cluster",
+      "genre_gated": "xianxia/litrpg/anime_isekai/xuanhuan",
+      "script": "onomatopoeia_density_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L58 P1·Atlantis Press ICOLLITE 2020 + ANLP 2024 + Mezzoguild] 拟声/拟态/拟情 mimetic 三类密度+形态分布(AA/ABB/ABAB)·读 core/scripts/lexicons/mimetic_lexicon.json 占位骨架·genre 门控{anime_isekai/xianxia_battle/fantasy_combat/litrpg/xianxia/xuanhuan}·作者档 author_mimetic_baseline.per_kCJK 校准·env ONOMATOPOEIA_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["MIMETIC_DENSITY_DRIFT"]
+    },
+    "status_block_density": {
+      "layer": "cluster",
+      "genre_gated": "litrpg/system_isekai/horror_game",
+      "script": "status_block_density_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L59 P1·World Anvil LitRPG Storyteller's Guide + Dr.O Ludochemist + NamuWiki Status Window] LitRPG 状态框/系统提示密度甜区·正则识别【...】〖...〗/Status:/系统提示:/任务面板/+N 经验/技能等级/血量·genre 门控{litrpg/system_isekai/game_anime/horror_game/rule_anomaly}·作者档 status_block_baseline.per_kCJK==0 反向 advisory 防 LLM 自作主张引入·env STATUS_BLOCK_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["STATUS_BLOCK_DENSITY_DRIFT", "STATUS_BLOCK_UNAUTHORIZED_INTRODUCTION"]
+    },
+    "prose_child_voice": {
+      "layer": "cluster",
+      "genre_gated": "campus/childhood/school",
+      "script": "prose_child_voice_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L58 P1·Oxford ORA + arXiv 2001.01863 + Dale-Chall + Tandfonline 2025] 童声 concrete_noun_ratio + age_graded_lexical_band 词性指纹·三指标(concrete_per_kCJK / hard_word_per_kCJK / abstract_lead_sentence_ratio)·门控 manifest.pov_age<18 或 genre∈{campus/childhood/school}或作者档 child_voice_baseline.enabled=true·env CHILD_VOICE_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CHILD_VOICE_REGISTER_DRIFT"]
+    },
+
     "volume_arc_drift": {
       "layer": "cross-cluster",
       "script": "volume_arc_drift_scanner.py",
@@ -625,6 +699,14 @@
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["MACGUFFIN_ORNAMENTAL"]
+    },
+    "cross_cluster_ousiometric_emd": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_ousiometric_emd_scanner.py",
+      "doc": "[2026-06-20 R10 W6 Batch-O·L58 P1·arXiv 2208.09496 Fudolig 2023 Nature HSS + UVM ousiometric] 长篇 1000+ cross-cluster ousiometric power/danger 多尺度振荡·cluster_count>=30 启用·零依赖近似 EMD(本地极值+振幅包络)·前段/后段振幅塌缩>50% → OUSIOMETRIC_OSCILLATION_DEGRADED advisory·env OUSIOMETRIC_EMD_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "trigger_by": "cluster-save-state step 9",
+      "issues_emitted": ["OUSIOMETRIC_OSCILLATION_DEGRADED"]
     }
   },
 

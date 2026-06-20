@@ -1675,6 +1675,109 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "quotative_signature_scanner",
                      "AUTHOR_QUOTATIVE_PALETTE_COLLAPSE", "风格")),
+                # [2026-06-20 R10 W6 Batch-O·L60 P0 STRONG·Sanderson 2025 + 凡人修仙传 9 阶
+                # + Andrew Rowe progression fantasy] 升级流 tier 单调性/突跳/停滞
+                # · 读 _数据库/角色弧线.json characters[<pid>].protagonist_power_tier
+                # · 用户偏好/genre(romance/mystery)skip·advisory · 默认 shadow
+                ("power_progression",
+                 [child_python(), str(_SCRIPT_DIR / "power_progression_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "power_progression_scanner",
+                     "POWER_TIER_REGRESSION", "结构")),
+                # [2026-06-20 R10 W6 Batch-O·L60 P1·百度百科章回体 + ACL 2024 NLP4DH 对偶]
+                # 回目 huimu 对仗·门控作者档 huimu_couplet/title_form==huimu_couplet
+                # · advisory · 默认 shadow
+                ("chapter_title_couplet",
+                 [child_python(), str(_SCRIPT_DIR / "chapter_title_couplet_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "chapter_title_couplet_scanner",
+                     "ZHANGHUI_HUIMU_PARALLELISM_BROKEN", "风格")),
+                # [2026-06-20 R10 W6 Batch-O·L60 P1·Literariness pinghua 楔子]
+                # 楔子 kernel symbol 末卷召回 · 门控 huaben_zhanghui_pastiche · advisory · 默认 shadow
+                ("xiezi_kernel_recall",
+                 [child_python(), str(_SCRIPT_DIR / "xiezi_kernel_recall_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "xiezi_kernel_recall_scanner",
+                     "XIEZI_KERNEL_NOT_RECALLED", "结构")),
+                # [2026-06-20 R10 W6 Batch-O·L60 P1·Cohn Transparent Minds] Cohn 意识表征四模式
+                # · 作者档 cohn_mode_signature 第一权威 · 2σ 偏离 advisory · 默认 shadow
+                ("cohn_consciousness_mode",
+                 [child_python(), str(_SCRIPT_DIR / "cohn_consciousness_mode_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "cohn_consciousness_mode_scanner",
+                     "COHN_MODE_DRIFT", "风格")),
+                # [2026-06-20 R10 W6 Batch-O·L61 P1·arXiv 2312.00100 中文 parallelism]
+                # 排比/反复密度 · 四子 metric(anaphora/epistrophe/parallel_clause/polysyndeton)
+                # · 作者档 author_rhetoric_parallel_signature 基线 · advisory · 默认 shadow
+                ("rhetoric_parallel",
+                 [child_python(), str(_SCRIPT_DIR / "rhetoric_parallel_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "rhetoric_parallel_scanner",
+                     "RHETORIC_PARALLEL_GAP", "风格")),
+                # [2026-06-20 R10 W6 Batch-O·L59 P1·TVTropes RotatingArcs + 吞噬星空 + Sanderson]
+                # 反派轮替节奏(长篇 1000+)· 读 _数据库/反派轮替.json append-only ledger
+                # · 四 advisory(空窗/tier 不升/motive 同类/power 同类)· 默认 shadow
+                ("antagonist_rotation",
+                 [child_python(), str(_SCRIPT_DIR / "antagonist_rotation_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "antagonist_rotation_scanner",
+                     "ANTAGONIST_ROTATION_VOID", "剧情")),
+                # [2026-06-20 R10 W6 Batch-O·L49 P1·Litreactor Chorus + 弹幕 + 朝臣议论]
+                # 群口段/弹幕式集体反应块 · 复数集合名词说话人 + 匿名引号串 ≥3 句聚簇
+                # · 作者档 author_mass_reactor_baseline.density_target 校准 · 默认 shadow
+                ("mass_reactor",
+                 [child_python(), str(_SCRIPT_DIR / "mass_reactor_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "mass_reactor_scanner",
+                     "MASS_REACTOR_DENSITY_DRIFT", "风格")),
+                # [2026-06-20 R10 W6 Batch-O·L58 P1·Atlantis Press ICOLLITE + ANLP 2024]
+                # 拟声/拟态/拟情 mimetic 三类密度+形态分布
+                # · genre 门控{anime_isekai/xianxia_battle/fantasy_combat/litrpg/xianxia/xuanhuan}
+                # · 默认 shadow
+                ("onomatopoeia_density",
+                 [child_python(), str(_SCRIPT_DIR / "onomatopoeia_density_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "onomatopoeia_density_scanner",
+                     "MIMETIC_DENSITY_DRIFT", "风格")),
+                # [2026-06-20 R10 W6 Batch-O·L59 P1·World Anvil LitRPG Storyteller's Guide]
+                # LitRPG 状态框/系统提示密度甜区 · genre 门控
+                # {litrpg/system_isekai/game_anime/horror_game/rule_anomaly}
+                # · 作者档 0 反向 advisory · 默认 shadow
+                ("status_block_density",
+                 [child_python(), str(_SCRIPT_DIR / "status_block_density_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "status_block_density_scanner",
+                     "STATUS_BLOCK_DENSITY_DRIFT", "风格")),
+                # [2026-06-20 R10 W6 Batch-O·L58 P1·Oxford ORA + arXiv 2001.01863 + Dale-Chall]
+                # 童声 concrete_noun_ratio + 词性指纹 · 门控 pov_age<18 / genre∈{campus/childhood}
+                # · 默认 shadow
+                ("prose_child_voice",
+                 [child_python(), str(_SCRIPT_DIR / "prose_child_voice_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "prose_child_voice_scanner",
+                     "CHILD_VOICE_REGISTER_DRIFT", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
