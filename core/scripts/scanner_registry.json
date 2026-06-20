@@ -498,6 +498,34 @@
       "_new": true,
       "issues_emitted": ["WORLD_TERM_INFO_DUMP"]
     },
+    "anachrony_order": {
+      "layer": "cluster",
+      "script": "anachrony_order_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-K·L38 Genette Narrative Discourse 1980 order 维度] analepsis(回顾)五分类(internal_homo/external_homo/hetero) + prolepsis(闪前)·LLM 默认按 linear 写=时序扁平·回顾/前瞻锚词('刚才/当年/史载/后来/多年后/将来')密度·与 R6 anachronism(时代错位/古风穿帮·物件错位)+R8 duration_mix(时长比)严格正交·零词典重叠·作者档 anachrony_baseline 第一权威·通用兜底(analepsis_per_1k_min=0.3+prolepsis_per_1k_min=0.05)·单向只报扁平偏低·advisory·env ANACHRONY_ORDER_MODE 默认 shadow·🔬阈值占位待金标准校准·ANACHRONY_ORDER_THIN 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ANACHRONY_ORDER_THIN"]
+    },
+    "narrative_frequency": {
+      "layer": "cluster",
+      "script": "narrative_frequency_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-K·L39 Genette Narrative Discourse 1980 frequency 维度] iterative(一次讲多次)/singulative(默认)/repetitive(Rashomon 多次讲一次) 三态·LLM 默认全 singulative=单调线性·iterative 标志词('每当/总是/日复一日/每次/每到')+repetitive 标志词('再次想起/反复浮现/又一次/再度')密度·xianxia/cultivation/training_arc/slice_of_life 修炼/日常题材尤需 montage 迭代笔法·作者档 frequency_baseline 第一权威·通用兜底(iterative_per_1k_min=0.08)·单向只报扁平偏低·advisory·env NARRATIVE_FREQUENCY_MODE 默认 shadow·🔬阈值占位待校准·NARRATIVE_FREQUENCY_FLAT 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["NARRATIVE_FREQUENCY_FLAT"]
+    },
+    "character_distinctiveness": {
+      "layer": "cluster",
+      "script": "character_distinctiveness_scanner.py",
+      "doc": "[2026-06-20 R9 W5 Batch-K·Burrows-Δ/Craig-Zeta 字符 3-gram bootstrap stylometry] 跨角色 idiolect distinctiveness Gini·与 R3/R4 cross_scene_voice_drift(同角色跨场景)正交·LLM 默认所有角色统一旁白腔=voice collapse 对话失人物感·dialogue_attribution 启发式抓'name+说/道/笑道/低声道+「内容」'四 verb 优先级长 verb 先·每角色 ≥40CJK 才入统计·pairwise 字符 3-gram cosine distance·短样本退直接 cosine 算·长样本 N=20 bootstrap 3-gram with replacement·sample_size=500·聚合 mean_pair_distance + Gini·作者档 character_voice_gini_baseline 第一权威·通用兜底 mean_distance_min=0.25·单向只报 collapse 偏低·advisory·env CHARACTER_DISTINCTIVENESS_MODE 默认 shadow·🔬阈值占位待校准·INTER_CHARACTER_VOICE_COLLAPSE 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["INTER_CHARACTER_VOICE_COLLAPSE"]
+    },
+    "deus_ex_solution_audit": {
+      "layer": "cluster",
+      "script": "deus_ex_solution_audit.py",
+      "doc": "[2026-06-20 R9 W5 Batch-K·Aristotle Poetics deus ex machina + Narrative Debt Ledger 对偶] finale cluster present-payoff→past-anchors 方向·与 R7 cross_cluster_narrative_debt_ledger 前向(promise→payoff)完全正交·门控 manifest.is_volume_finale=True 才跑(非 finale skip)·抽 resolution 四类(角色/道具/能力/外力)·末段 30% 范围抽元素·扫整 cluster body + 历史 cluster_summary 回查 anchors_count·<2 → underbacked·外力锚词('突然/不料/没想到/天降/恰好出现') ≥3 高风险信号·走向卡反馈下卷 seeding 修复·advisory·env DEUS_EX_AUDIT_MODE 默认 shadow·🔬阈值占位待校准·DEUS_EX_SOLUTION 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["DEUS_EX_SOLUTION"]
+    },
     "location_signature_consistency": {
       "layer": "cross-cluster",
       "script": "location_signature_consistency.py",

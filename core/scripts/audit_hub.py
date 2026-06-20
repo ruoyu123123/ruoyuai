@@ -1475,6 +1475,47 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "world_term_seepage_scanner",
                      "WORLD_TERM_INFO_DUMP", "风格")),
+                # [2026-06-20 R9 W5 Batch-K·L38 Genette 时序 order 维度] analepsis 五分类 +
+                # prolepsis · 与 R6 anachronism(时代错位) + R8 duration_mix 正交 · 作者档
+                # anachrony_baseline 第一权威·通用兜底·advisory · 默认 shadow
+                ("anachrony_order",
+                 [child_python(), str(_SCRIPT_DIR / "anachrony_order_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "anachrony_order_scanner",
+                     "ANACHRONY_ORDER_THIN", "结构")),
+                # [2026-06-20 R9 W5 Batch-K·L39 Genette frequency 三态] iterative/singulative/
+                # repetitive · xianxia/cultivation/training_arc/slice_of_life 题材尤需 montage
+                # · 作者档 frequency_baseline 第一权威 · advisory · 默认 shadow
+                ("narrative_frequency",
+                 [child_python(), str(_SCRIPT_DIR / "narrative_frequency_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "narrative_frequency_scanner",
+                     "NARRATIVE_FREQUENCY_FLAT", "结构")),
+                # [2026-06-20 R9 W5 Batch-K·Burrows-Δ/Craig-Zeta 字符 3-gram bootstrap]
+                # 跨角色 idiolect Gini · 与 R3/R4 同角色跨场景 voice drift 正交 · 群像题材重要
+                # · 作者档 character_voice_gini_baseline 第一权威 · advisory · 默认 shadow
+                ("character_distinctiveness",
+                 [child_python(), str(_SCRIPT_DIR / "character_distinctiveness_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "character_distinctiveness_scanner",
+                     "INTER_CHARACTER_VOICE_COLLAPSE", "风格")),
+                # [2026-06-20 R9 W5 Batch-K·Aristotle deus ex machina + Narrative Debt 对偶]
+                # finale cluster 触发(manifest is_volume_finale)·present-payoff→past-anchors 方向
+                # · 与 R7 Narrative Debt Ledger 完全正交 · advisory · 默认 shadow
+                ("deus_ex_solution_audit",
+                 [child_python(), str(_SCRIPT_DIR / "deus_ex_solution_audit.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "deus_ex_solution_audit",
+                     "DEUS_EX_SOLUTION", "剧情")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
