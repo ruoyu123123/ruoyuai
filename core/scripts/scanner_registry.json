@@ -947,6 +947,34 @@
       "doc": "[2026-06-21 R19 W8 Batch-V·P0·临床 affect dynamics + arxiv 2503.23547] 3D VAD (Valence/Arousal/Dominance) × 6 UED (Inertia/Variability/Instability/Switch/Pulse/Augmentation) = 18 指标 per-character·零依赖引语切片(_QUOTE_PAT + 后置说/道/答 + 角色池.json 归属)·rolling 10·占位词典 core/data/nrc_vad_v2_placeholder.json (40 字 _placeholder=true) + cvaw_cvap_placeholder.json (30 词 _placeholder=true)·真 NRC-VAD v2 55k + CVAW/CVAP 8.5k defer·consolidate 加 vad_ued_signature SLOW_UPDATE 段(compute_vad_ued_signature)·作者档 quantitative.vad_ued_signature.per_character 第一权威·与 affective_signature(离散标签) / sentiment_arc_fractal(1D) / cross_cluster_ousiometric(2D) / emotion_curve_rescan(cluster 级) 严格正交·env CHARACTER_VAD_UED_MODE 默认 shadow·VAD_UED_DRIFT 绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["VAD_UED_DRIFT"]
+    },
+    "event_relation_graph_validator": {
+      "layer": "cross-cluster",
+      "script": "event_relation_graph_validator.py",
+      "doc": "[2026-06-21 R19 W8 Batch-W·P1·StoryWriter arxiv 2506.16445] outline 跨 cluster 因果 + 角色 throughline DAG·配套 event_relation_graph_builder.py(outline.plan.json step 3.5 可选)读 大势卡/事件簇/伏笔表 产 _数据库/event_relation_graph.json·validator 跑 4 advisory issue(NODE_ORPHAN 入出度 0 / EDGE_CYCLE Tarjan SCC / PAYOFF_UNREACHABLE foreshadowing 无 cluster payoff / CHARACTER_THROUGH_LINE_BROKEN 角色 throughline 中间 cluster 缺位)·与 scene_storyboard/foreshadowing/涟漪规则/signed_relation_graph/motif_recurrence/capability_emergence 全正交·env EVENT_RELATION_GRAPH_MODE(builder) / EVENT_RELATION_GRAPH_VALIDATE_MODE(validator) 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["NODE_ORPHAN", "EDGE_CYCLE", "PAYOFF_UNREACHABLE", "CHARACTER_THROUGH_LINE_BROKEN"]
+    },
+    "bibliotherapy_arc_scanner": {
+      "layer": "cluster",
+      "script": "bibliotherapy_arc_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-W·P1·Shrodes 1949 三阶段 bibliotherapy] cluster brief 加 bibliotherapy_arc 字段(identification/catharsis/insight 三相 scene 索引)·scanner 校验三相全填 + scene 索引合法 + 顺序(identification → catharsis → insight)·缺任一相 / 索引越界 / 顺序错位 → BIBLIOTHERAPY_ARC_TRIAD_MISSING advisory·与 EC vs PD(scene)/opening_window(开场)/motif/thematic_argument/Hurst 全正交·env BIBLIOTHERAPY_ARC_MODE 默认 shadow·绝不 hard_gate·无 brief skip",
+      "_new": true,
+      "issues_emitted": ["BIBLIOTHERAPY_ARC_TRIAD_MISSING"]
+    },
+    "foregrounding_triad_density_scanner": {
+      "layer": "cluster",
+      "script": "foregrounding_triad_density_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-W·P1·Miall-Kuiken 30 年实证] 三维 foregrounding 复合·三桶 per-1k-CJK 密度(phonetic 拟声+引号尾语气+叠字 / grammatical 否定前置+重复+倒装+顿号长串 / semantic 隐喻关联+通感+矛盾修辞) → FTDI = z(p)+z(g)+z(s)·作者档 quantitative.foregrounding_triad.{phonetic_per_1k_ecdf_p20/p80, grammatical_per_1k_ecdf_p20/p80, semantic_per_1k_ecdf_p20/p80} 第一权威·缺基线走兜底地板(单轴)·与 rhetoric_parallel/inverted_modifier/synesthesia_density/syntactic_diversity/prose_homophonic_pun 各单轴严格正交·env FOREGROUNDING_TRIAD_DENSITY_MODE 默认 shadow·FOREGROUNDING_TRIAD_DENSITY_OFF_BAND 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["FOREGROUNDING_TRIAD_DENSITY_OFF_BAND"]
+    },
+    "intra_cluster_style_break_scanner": {
+      "layer": "cluster",
+      "script": "intra_cluster_style_break_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-W·P1·PAN 2025 SSPC + Better Call Claude arxiv 2508.00680] 句对级风格断点定位·双栈(a) SSPC BGE-small-zh + 3 层 MLP _placeholder=true 真模型权重 defer (core/data/sspc_bge_small_zh_placeholder.json)·(b) 规则 ensemble 兜底(句长 z 跳跃 / 标点 KL / quotative 失踪激增 / register 切换 colloq vs formal / 衔接词反转突激)·滑窗 8 句·邻接对 score≥1.5 报 anchor·gen_fixer 接收 style_break_anchors[]·env INTRA_CLUSTER_STYLE_BREAK_MODE 默认 shadow·STYLE_BREAK_LLM_FALLBACK 默认 off·与 character_distinctiveness/cross_scene_voice_drift/voice_pack/SCH/silence_gap_lapse 全正交·STYLE_BREAK_DETECTED 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["STYLE_BREAK_DETECTED"]
     }
   },
 
