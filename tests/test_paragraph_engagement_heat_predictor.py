@@ -184,3 +184,72 @@ def test_main_cli_warns_on_cold():
     assert r.returncode == 1, r.stderr
     rep = json.loads(r.stdout)
     assert rep["warning"] is not None
+
+
+# R20 W9 Batch-CC P2 (2026-06-21) · comment-triggered 密度 + 位置分布扩展
+def test_comment_triggered_density_present():
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("shadow")
+        r = mod.scan(_write(_HOT))
+        assert "comment_triggered_density" in r["metrics"]
+        assert "position_distribution" in r["metrics"]
+        assert "head" in r["metrics"]["position_distribution"]
+        assert "mid" in r["metrics"]["position_distribution"]
+        assert "tail" in r["metrics"]["position_distribution"]
+    finally:
+        _set_mode(bak)
+
+
+def test_comment_triggered_count_zero_for_cold():
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("shadow")
+        r = mod.scan(_write(_COLD_FLAT))
+        assert r["metrics"]["comment_triggered_count"] == 0
+        assert r["metrics"]["comment_triggered_density"] == 0.0
+    finally:
+        _set_mode(bak)
+
+
+def test_comment_triggered_count_nonzero_for_hot():
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("shadow")
+        r = mod.scan(_write(_HOT))
+        # 热度段·至少 1 段触发
+        assert r["metrics"]["comment_triggered_count"] >= 1
+    finally:
+        _set_mode(bak)
+
+
+def test_position_distribution_sums_to_one_or_zero():
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("shadow")
+        r = mod.scan(_write(_HOT))
+        pd = r["metrics"]["position_distribution"]
+        # all triggered → 各位三分占比之和 ≈ 1 (或 0 若无触发)
+        total = pd["head"] + pd["mid"] + pd["tail"]
+        if r["metrics"]["comment_triggered_count"] >= 1:
+            assert abs(total - 1.0) < 0.01
+        else:
+            assert total == 0
+    finally:
+        _set_mode(bak)
+
+
+def test_position_bias_detected_when_all_head():
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("active")
+        # 前 8 段全 hot (字数堆够) · 后 30 段全 cold (字数堆够)
+        hot_para = "怎么会这样？还有十分钟就到了。某种声音从远处传来。那人没说话只是站着。" * 3
+        cold_para = "天空很蓝海水很咸山高路远风吹叶落。" * 5
+        text = "\n\n".join([hot_para] * 8 + [cold_para] * 30)
+        r = mod.scan(_write(text))
+        # 整 hot 集中头部 → 位置偏置
+        if "metrics" in r and r["metrics"]["comment_triggered_count"] >= 5:
+            assert r["metrics"]["position_distribution"]["head"] > 0.5
+    finally:
+        _set_mode(bak)

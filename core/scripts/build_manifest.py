@@ -16,6 +16,7 @@ build_manifest.py — 章节注入清单生成器
 """
 from __future__ import annotations
 import json
+import os  # R20 W9 Batch-CC P2 2026-06-21·ACW_MODE env 检测需 os.environ
 import re  # 2026-05-29 北极星复审 R1：模块级 re（_build_volume_convergence_anchor:1046 +
             # 旧 1801/1824 裸用 re. 但无模块 import → fluid 涌现 cluster_002+ 走 vol 反查分支 NameError
             # → 被 try 吞成 event_cluster mode:error → writer 丢 cluster context。补此根治）
@@ -1268,6 +1269,20 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             "  · 结(ketsu / 約25%)：把『起承』与『转』收回成新稳态·留余味·"
                             "末段不必强钩(治愈节奏)·禁止强反转或 cliffhanger·允许平稳收束。"
                         )
+                    # 🆕 R20 W9 Batch-CC P2 (2026-06-21): ACW Activity-Centric Writing directive
+                    # 每段一个中心活动·防游走·env ACW_MODE=off/shadow/active(默认 shadow 不注入·active 注入)
+                    # 与 kishotenketsu(段级节奏 macro)正交·ACW 是段级 micro 中心活动
+                    _acw_mode = (os.environ.get("ACW_MODE") or "shadow").strip().lower()
+                    _acw_directive = None
+                    if _acw_mode == "active":
+                        _acw_directive = (
+                            "🟢 ACW Activity-Centric Writing 段中心活动指令(R20 Q3-Q4 id 21)：\n"
+                            "  · 每段聚焦一个中心活动(动作链 / 对话回合 / 感官 sequence 三选一)·\n"
+                            "    禁止单段内多个独立子动作堆叠(走到窗前→翻开账本→听到脚步声→想起昨天 = 游走感)。\n"
+                            "  · 段首主语建立中心·段中所有句子服务于该中心·段末该中心收束或转移到下段。\n"
+                            "  · 主语切换=换段·主语稳定=同段·防止段内频繁切换主语造成读者注意力分散。\n"
+                            "  · 与 kishotenketsu macro 节奏正交·ACW 是段级 micro 中心活动一致性。"
+                        )
                     # 🆕 R7 W2 (2026-06-20): narrative_pov_mode 五分类 (Stanzel/Cohn consonant-dissonant)
                     # first_present / first_retro_consonant / first_retro_dissonant / third_limited / third_omniscient
                     # 与 narrative_mode (in_medias_res/linear 时间序) 正交。cluster 优先 → 作者档兜底 → "third_limited" 默认。
@@ -1330,6 +1345,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             if c.get("is_volume_finale") else None
                         ),
                         "kishotenketsu_directive": _kishotenketsu_directive,
+                        "ACW_DIRECTIVE": _acw_directive,
                         "_narrative_mode_doc": ("in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；"
                                                 "linear = 时间序；kishotenketsu_4act = 起承转结无冲突(治愈/iyashikei)"),
                         "_narrative_pov_mode_doc": ("R7 W2 五分类(Stanzel/Cohn): "

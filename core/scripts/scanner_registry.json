@@ -1115,6 +1115,48 @@
       "doc": "[2026-06-21 R20 W9 Batch-AA·P1·起承转结无冲突模式·MFA Q3-Q4 asmr_slow id 10] 不是 scanner·是 narrative_mode 新枚举(kishotenketsu_4act)·cluster_emergence_engine.me_to_cluster_brief 据 me.intent ∈ {healing/contemplative/iyashikei/zen/治愈/禅} 自动激活·build_manifest 注入 kishotenketsu_directive 四段(起 ki/承 shō/转 ten/结 ketsu)·hook_strength_scanner._detect_kishotenketsu_cluster 检测后降 PASS_THRESHOLD 4→2 + severity=info(防 v26 末段强钩误伤治愈结尾)·与 in_medias_res(黄金三章倒叙)/linear(时间序) 三种 narrative_mode 并列·全 advisory·绝不 hard_gate",
       "_new": true,
       "issues_emitted": []
+    },
+    "mid_chapter_micro_cliffhanger_cadence": {
+      "layer": "cluster",
+      "script": "mid_chapter_micro_cliffhanger_cadence_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-CC·P2·SEO id 12] 章内 micro-cliffhanger 间距分布(cadence)·复用 hook_strength 11 型 regex 子集·扫全 cluster 草稿 hook 位置序列·相邻间距均值 + pstdev·作者档 micro_cliffhanger_cadence_baseline.{mean_distance,std_distance} z-band(无作者档兜底 μ=1500 σ=600)·间距 < 500=过密(连珠炮) / > 3000=过疏(中段冷场)·与 hook_strength(章末强度+拟切点均值)/cliffhanger_quota(跨章配比) 严格正交·advisory·env MID_CHAPTER_CLIFF_CADENCE_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["MID_CHAPTER_CLIFF_CADENCE_OFF_BAND"]
+    },
+    "prose_rhythm_300cjk_payload": {
+      "layer": "cluster",
+      "script": "prose_rhythm_scanner.py(probe 9)",
+      "doc": "[2026-06-21 R20 W9 Batch-CC·P2·SEO id 13] 300字 payload 段长占比·扩 prose_rhythm 探针 9·段长 250-350 CJK 占比 vs 作者档 paragraph_300cjk_share_baseline.{target,std} z-band·|z|>1.5 → PARAGRAPH_300CJK_PAYLOAD_OFF_BAND·移动端竖屏 payload 甜区·无作者档兜底 target=0.20 std=0.10·advisory·env PROSE_300CJK_PAYLOAD_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["PARAGRAPH_300CJK_PAYLOAD_OFF_BAND"]
+    },
+    "paragraph_engagement_comment_triggered": {
+      "layer": "cluster",
+      "script": "paragraph_engagement_heat_predictor.py(extended)",
+      "doc": "[2026-06-21 R20 W9 Batch-CC·P2·SEO id 14] 评论触发段密度 + 位置分布·扩 paragraph_engagement_heat_predictor·新字段 comment_triggered_density + position_distribution(head/mid/tail)·热度 ≥ COMMENT_HOT_THRESHOLD(0.30) 为触发段·密度过低(<5%)或位置失衡(任一段位 >60%) → warn·advisory·env PARAGRAPH_ENGAGEMENT_HEAT_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["PARAGRAPH_ENGAGEMENT_FLATLINE"]
+    },
+    "forecasting_tension": {
+      "layer": "cluster",
+      "script": "forecasting_tension_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 16] 句级张力梯度 forecasting(占位 char Shannon entropy 相邻 200CJK 块差分·真版 SBERT 自相关 defer)·梯度 pstdev < 0.3 且 flatline_ratio > 0.55 → FORECASTING_TENSION_FLAT·作者档 forecasting_tension_baseline 第一权威·与 narrative_rhythm(macro 轨迹后段保持) / premature_resolution(冲突→消解距离) 严格正交·advisory·env FORECASTING_TENSION_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["FORECASTING_TENSION_FLAT"]
+    },
+    "imageability": {
+      "layer": "cluster",
+      "script": "imageability_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 20·Paivio 1968 dual-coding] 句级具象度 z-band·占位 core/data/imageability_zh.json(60 high + 60 low CN 词)·imageability_index = (high-low)/(high+low) ∈ [-1, 1]·作者档 imageability_baseline.{mean,std} z-band·|z|>1.0 → IMAGEABILITY_OFF_BAND·无作者档兜底 μ=0 σ=0.3·与 repeat_noun_density / semantic_slop / scene_grounding 严格正交·advisory·env IMAGEABILITY_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["IMAGEABILITY_OFF_BAND"]
+    },
+    "acw_drift": {
+      "layer": "cluster",
+      "script": "acw_drift_scanner.py + build_manifest.py(ACW_DIRECTIVE)",
+      "doc": "[2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 21·Activity-Centric Writing] 段中心活动漂移·HEAD_LEN=1 句首 CJK 主语 proxy·段内 distinct_head_ratio > 0.75 = 中心漂移·全 cluster drift_paragraph_ratio > 30% → ACW_DRIFT_FROM_CENTER·build_manifest 注入 ACW_DIRECTIVE 字段(env ACW_MODE=active 时注入·shadow/off 不注入)·与 narrative_short_sentence / paragraph_engagement_heat / prose_rhythm(主语流水账 streak) 严格正交·作者档 acw_baseline.drift_paragraph_ratio_max 第一权威·advisory·env ACW_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["ACW_DRIFT_FROM_CENTER"]
     }
   },
 

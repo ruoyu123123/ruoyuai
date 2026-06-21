@@ -50,6 +50,13 @@ NEGATIVE_KW = re.compile(r"(怒|惧|惊|颤|抖|冷汗|绝望|崩|碎|血|死|�
 MIN_CJK = 500
 FLATLINE_RATIO_THRESHOLD = 0.80  # ≥80% 段热度=0 才报
 
+# R20 W9 Batch-CC P2 (2026-06-21): comment-triggered 段落密度 + 位置分布扩展
+# 段评热度预测器扩 · 「评论触发段」=热度评分 >= COMMENT_HOT_THRESHOLD
+# 评论分布(head/mid/tail) · 偏置太严重(>0.6 单一段) 报 advisory
+COMMENT_HOT_THRESHOLD = 0.30                # 段评热度 ≥ 阈值 = 评论触发段
+COMMENT_POSITION_BIAS_THRESHOLD = 0.60      # 任一段位占比 >60% = 分布失衡
+COMMENT_TRIGGERED_DENSITY_LOW = 0.05        # 评论触发段密度 <5% = 整章零评论甜点
+
 
 def _mode() -> str:
     m = (os.environ.get("PARAGRAPH_ENGAGEMENT_HEAT_MODE") or "shadow").strip().lower()
@@ -128,12 +135,34 @@ def scan(draft_path, project_root=None) -> dict:
     cold_ratio = cold_count / len(heats)
     mean_score = sum(h["score"] for h in heats) / len(heats)
 
+    # R20 W9 Batch-CC P2 (2026-06-21): comment-triggered 段落密度 + 位置分布
+    # 评论触发段 = 热度评分 ≥ COMMENT_HOT_THRESHOLD
+    # 位置分布 head=[0,1/3) mid=[1/3,2/3) tail=[2/3,1]
+    n = len(paragraphs)
+    triggered_indices = [i for i, h in enumerate(heats)
+                         if h["score"] >= COMMENT_HOT_THRESHOLD]
+    triggered_count = len(triggered_indices)
+    comment_triggered_density = round(triggered_count / n, 4) if n else 0.0
+    head_count = sum(1 for i in triggered_indices if i < n / 3)
+    mid_count = sum(1 for i in triggered_indices if n / 3 <= i < 2 * n / 3)
+    tail_count = sum(1 for i in triggered_indices if i >= 2 * n / 3)
+    pos_total = max(1, triggered_count)
+    position_distribution = {
+        "head": round(head_count / pos_total, 4),
+        "mid": round(mid_count / pos_total, 4),
+        "tail": round(tail_count / pos_total, 4),
+    }
+
     out["metrics"] = {
         "paragraphs": len(paragraphs),
         "mean_heat_score": round(mean_score, 3),
         "cold_paragraph_ratio": round(cold_ratio, 3),
         "valence_jumps": valence_jumps,
         "valence_jump_rate": round(valence_jumps / max(1, len(paragraphs) - 1), 3),
+        # R20 W9 Batch-CC P2 扩展字段
+        "comment_triggered_density": comment_triggered_density,
+        "comment_triggered_count": triggered_count,
+        "position_distribution": position_distribution,
     }
 
     messages = []
@@ -143,6 +172,19 @@ def scan(draft_path, project_root=None) -> dict:
             f"通章 cold flat·{int(cold_ratio*100)}% 段热度=0·"
             f"mean={round(mean_score,3)}·建议加 question/ambiguous referent/"
             f"temporal suspense/character ambiguity 之一")
+    # R20 W9 Batch-CC P2: 评论触发段密度过低 advisory (整章无热段)
+    if triggered_count >= 1 and comment_triggered_density < COMMENT_TRIGGERED_DENSITY_LOW:
+        messages.append(
+            f"comment-triggered 段密度 {round(comment_triggered_density*100,1)}% < "
+            f"{int(COMMENT_TRIGGERED_DENSITY_LOW*100)}%·读者评论甜点稀缺")
+    # R20 W9 Batch-CC P2: 评论触发段位置失衡(任一区段 >60%)
+    if triggered_count >= 5:
+        max_pos, max_share = max(position_distribution.items(), key=lambda x: x[1])
+        if max_share > COMMENT_POSITION_BIAS_THRESHOLD:
+            messages.append(
+                f"comment-triggered 段位置分布失衡·{max_pos} 段占 "
+                f"{round(max_share*100,1)}% > {int(COMMENT_POSITION_BIAS_THRESHOLD*100)}%"
+                f"·分布建议 head/mid/tail 各≈33%")
 
     if messages:
         msg = " · ".join(messages)

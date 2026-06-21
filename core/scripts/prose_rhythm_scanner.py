@@ -54,6 +54,18 @@ SHORT_Z_MINOR, SHORT_Z_MAJOR = -1.0, -1.8   # z<-1.0 minor（≈作者自身第1
 SHORT_ABS_FLOOR = 0.62
 STREAK_MINOR, STREAK_MAJOR = 4, 6
 DEFAULT_AUTHOR_SENT_MEAN = 26.0   # 无作者档时的通用兜底句长基线（偏保守·网文中位）
+# 探针9（R20 W9 Batch-CC P2 2026-06-21 · SEO id 13）300字 payload 段长占比
+# 移动端竖屏阅读经验(番茄/起点/七猫 2024-2025)：单段 300CJK±50 是手机一屏 payload
+# 甜区(滑两下读完不滑屏)。低于占比下限 = 段落太碎(读者频繁滑屏疲劳)，高于上限 =
+# 段落太长(滑很久才到下一段)。作者档 paragraph_300cjk_share_baseline {target, std}
+# 第一权威·无 baseline 兜底 target=0.20 std=0.10（保守范围）。advisory shadow·北极星⑤
+# 写作工艺非格式硬约束·绝不 hard_gate·env PROSE_300CJK_PAYLOAD_MODE 默认 shadow。
+PARA_300_CJK_LOW = 250    # 段长 ≥ 250 才计入 300CJK 段
+PARA_300_CJK_HIGH = 350   # 段长 ≤ 350 才计入 300CJK 段
+PARA_300_SHARE_TARGET_DEFAULT = 0.20
+PARA_300_SHARE_STD_DEFAULT = 0.10
+PARA_300_SHARE_Z_THRESHOLD = 1.5  # |z|>1.5 报偏离
+
 # 探针7 句长方差塌缩（burstiness·cluster std vs 作者 std·单边偏均匀·治 flash 匀速碎句·env PROSE_BURSTINESS_MODE 默认 shadow）
 # 金标准校准（2026-06-16·6 作者各 10 cluster）：真作者 cluster_std/作者 std 最小 0.61（高 σ 作者偏低）→ 阈值
 # 0.5/0.4 留余量（< 0.61 真作者绝不误报·critic 建议 0.6 余量仅 0.01 太险已下调·北极星⑤防矫枉过正）。
@@ -170,6 +182,7 @@ def _author_baseline(project: Path | None, style_path: Path | None) -> dict:
                 if data:
                     break
     sent_mean = sent_std = para_p5 = para_p50 = para_p95 = None
+    para_300_target = para_300_std = None
     if isinstance(data, dict):
         q = data.get("quantitative") or {}
         sl = q.get("sentence_length") or {}
@@ -190,8 +203,16 @@ def _author_baseline(project: Path | None, style_path: Path | None) -> dict:
                 para_p50 = float(pl["p50"])
             if isinstance(pl.get("p95"), (int, float)):
                 para_p95 = float(pl["p95"])
+        # 探针9 300字 payload 作者档 baseline (R20 W9 Batch-CC P2)
+        p300 = data.get("paragraph_300cjk_share_baseline")
+        if isinstance(p300, dict):
+            if isinstance(p300.get("target"), (int, float)):
+                para_300_target = float(p300["target"])
+            if isinstance(p300.get("std"), (int, float)):
+                para_300_std = float(p300["std"])
     return {"sentence_mean": sent_mean, "sentence_std": sent_std,
-            "para_p5": para_p5, "para_p50": para_p50, "para_p95": para_p95}
+            "para_p5": para_p5, "para_p50": para_p50, "para_p95": para_p95,
+            "para_300_target": para_300_target, "para_300_std": para_300_std}
 
 
 def _char_names(project: Path | None) -> list:
@@ -444,6 +465,29 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             else:
                 print(f"[SHADOW] prose_rhythm punct_weibull: {msg} — 不上报", file=sys.stderr)
 
+    # 探针 9：300字 payload share (R20 W9 Batch-CC P2·SEO id 13·shadow advisory)
+    # 段长 250-350 CJK 段占比 vs 作者档 paragraph_300cjk_share_baseline.{target, std}
+    # 兜底 target=0.20·std=0.10·|z|>1.5 报 PARAGRAPH_300CJK_PAYLOAD_OFF_BAND·北极星⑤
+    payload_mode = (os.environ.get("PROSE_300CJK_PAYLOAD_MODE") or "shadow").strip().lower()
+    p300_count = sum(1 for pl in para_lens if PARA_300_CJK_LOW <= pl <= PARA_300_CJK_HIGH)
+    para_300_share = round(p300_count / len(para_lens), 4) if para_lens else 0.0
+    p300_target = baseline.get("para_300_target")
+    p300_std = baseline.get("para_300_std")
+    use_target = p300_target if p300_target is not None else PARA_300_SHARE_TARGET_DEFAULT
+    use_std = p300_std if p300_std is not None else PARA_300_SHARE_STD_DEFAULT
+    p300_z = round((para_300_share - use_target) / use_std, 3) if use_std > 0 else 0.0
+    if payload_mode == "active" and len(para_lens) >= 5 and abs(p300_z) > PARA_300_SHARE_Z_THRESHOLD:
+        direction = "偏多" if p300_z > 0 else "偏少"
+        violations.append({
+            'kind': 'paragraph_300cjk_payload_off_band', 'severity': 'minor',
+            'code': 'PARAGRAPH_300CJK_PAYLOAD_OFF_BAND',
+            'paragraph_300cjk_share': para_300_share,
+            'author_target': use_target, 'author_std': use_std, 'z': p300_z,
+            'hint': (f'300CJK±50 段占比 {round(para_300_share*100,1)}% (作者档 target={round(use_target*100,1)}%'
+                    f'±{round(use_std*100,1)}%·z={p300_z}{direction})·移动端 payload 甜区偏离'
+                    f'·SEO/竖屏阅读体验 advisory·绝不 hard_gate'),
+        })
+
     has_major = any(v['severity'] == 'major' for v in violations)
     verdict = 'PASS' if not violations else ('FAIL_MAJOR' if has_major else 'FAIL_MINOR')
     return {
@@ -467,6 +511,8 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             'sentence_std_cluster': cluster_sent_std,        # 探针7 cluster 句长 std
             'burstiness_ratio': burst_ratio,                 # 探针7 cluster_std/作者 std（<0.5 偏均匀报）
             'punct_weibull_per_mark': weibull_results,       # 探针8 标点距离 Weibull KS（R13 W6 Batch-R P2）
+            'paragraph_300cjk_share': para_300_share,        # 探针9 300CJK±50 段占比（R20 W9 Batch-CC P2）
+            'paragraph_300cjk_z': p300_z,                    # 探针9 z=(share-target)/std
         },
         'author_baseline': {
             'sentence_mean': sent_mean_base,
@@ -474,6 +520,8 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             'para_p5': baseline.get("para_p5"),
             'para_p50': baseline.get("para_p50"),
             'para_p95': baseline.get("para_p95"),
+            'para_300_target': p300_target,                  # 探针9 作者档 300CJK 占比 target
+            'para_300_std': p300_std,                        # 探针9 作者档 300CJK 占比 std
             'from_author_profile': baseline["sentence_mean"] is not None,
             'self_ecdf_active': sent_std_base is not None,   # True=走作者内 z-band·False=通用兜底
         },

@@ -2199,6 +2199,50 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "biber_mda_scanner",
                      "BIBER_MDA_DRIFT_D1", "风格")),
+                # [2026-06-21 R20 W9 Batch-CC·P2·SEO id 12·章内 micro-cliffhanger 节奏]
+                # 复用 hook_strength 11 型 regex 子集·章内 hook 相邻间距 z-band·与 hook_strength
+                # /cliffhanger_quota 严格正交(那俩看章末/拟切点/跨章配比·本者看章内间距分布)·
+                # advisory·默认 shadow·绝不 hard_gate
+                ("mid_chapter_micro_cliffhanger_cadence",
+                 [child_python(), str(_SCRIPT_DIR / "mid_chapter_micro_cliffhanger_cadence_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "mid_chapter_micro_cliffhanger_cadence_scanner",
+                     "MID_CHAPTER_CLIFF_CADENCE_OFF_BAND", "节奏")),
+                # [2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 16·句级张力梯度 forecasting]
+                # 占位 char Shannon entropy 相邻 200 CJK 块差分·真版 SBERT 自相关 defer·
+                # 梯度 pstdev + flatline_ratio 双闸·与 narrative_rhythm(macro)/
+                # premature_resolution(标志词距离) 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("forecasting_tension",
+                 [child_python(), str(_SCRIPT_DIR / "forecasting_tension_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "forecasting_tension_scanner",
+                     "FORECASTING_TENSION_FLAT", "节奏")),
+                # [2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 20·Paivio 1968 dual-coding]
+                # 句级具象度词典 z-band·core/data/imageability_zh.json 60 高 + 60 低·
+                # imageability_index = (high-low)/(high+low) ∈ [-1,1]·与 repeat_noun_density/
+                # semantic_slop/scene_grounding 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("imageability",
+                 [child_python(), str(_SCRIPT_DIR / "imageability_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "imageability_scanner",
+                     "IMAGEABILITY_OFF_BAND", "风格")),
+                # [2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 21·ACW Activity-Centric Writing]
+                # 段中心活动漂移·HEAD_LEN=1 句首 CJK 主语 proxy 去重比·writer 端 ACW_DIRECTIVE
+                # 通过 build_manifest 在 ACW_MODE=active 时注入·与 narrative_short_sentence/
+                # paragraph_engagement_heat/prose_rhythm 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("acw_drift",
+                 [child_python(), str(_SCRIPT_DIR / "acw_drift_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "acw_drift_scanner",
+                     "ACW_DRIFT_FROM_CENTER", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
