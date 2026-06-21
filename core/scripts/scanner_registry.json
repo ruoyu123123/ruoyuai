@@ -1010,6 +1010,48 @@
       "doc": "[2026-06-21 R19 W8 Batch-X·P2·StoryBox sandbox emergence] cluster_emergence_engine 的 bottom-up 沙盒涌现包裹·K=3-5 角色 agent + 1 world agent + T=8-12 turn·占位确定性启发式 harvest 累计 stake top-2 候选·candidate brief 标 sandbox_origin=bottom_up·active 模式才合并进 merged_candidates(shadow 只 stderr)·真 multi-agent 协议 defer·与 cluster_emergence_engine(top-down)包裹关系·与 capability_emergence/signed_relation_graph/涟漪规则 严格正交·env SANDBOX_EMERGENCE_MODE 默认 off·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["SANDBOX_EMERGENCE_ABNORMAL"]
+    },
+    "parallel_rollout_arbiter": {
+      "layer": "cluster",
+      "script": "parallel_rollout_arbiter.py",
+      "doc": "[2026-06-21 R19 W8 Batch-Y·P2·K=2 并行 rollout listwise rank 仲裁器] 高歧义 cluster(opening/volume_finale/重大转折)启用·读 K 个 (draft, judge_report) candidate · 4 维 listwise score(scanner_pass_rate 0.4 + length_band_fit 0.2 + lexical_diversity 0.2 + verdict_penalty 0.2) 排序 winner_index·top-1 与 top-2 差距 <0.02 触发 PARALLEL_ROLLOUT_ARBITER_DEGRADED advisory·gen_writer 加 --parallel-rollout-mode=off env 透传·与 cluster_evaluator(单稿)/adversarial_judge_pair(三角)/meta_critic_audit(元批评)严格正交·env PARALLEL_ROLLOUT_ARBITER_MODE 默认 off·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["PARALLEL_ROLLOUT_ARBITER_DEGRADED"]
+    },
+    "adversarial_judge_pair": {
+      "layer": "cluster",
+      "script": "adversarial_judge_pair.py",
+      "doc": "[2026-06-21 R19 W8 Batch-Y·P2·attacker-defender-arbiter 三角 scaffolding·Constitutional AI / Irving 2018 debate] cluster_brief.is_volume_finale 触发·attacker 5 个启发式 attack(A1 弱钩子/A2 情感对位/A3 副线收束/A4 权力转移/A5 代价签收)·defender 在草稿原文找 ±200 字证据反驳·arbiter tally unanswered≥3 → ADVERSARIAL_JUDGE_DEGRADED advisory·占位 scaffolding 真 LLM debate defer·与 meta_critic_audit/cluster_evaluator/parallel_rollout_arbiter/chapter_end_anchor_scan 严格正交·env ADVERSARIAL_JUDGE_PAIR_MODE 默认 off·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ADVERSARIAL_JUDGE_DEGRADED"]
+    },
+    "affective_theme_iteration_scanner": {
+      "layer": "cluster",
+      "script": "affective_theme_iteration_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-Y·P2·Kuiken 2008 self-modifying feeling] 文学阅读 self-modifying feeling 靠主题情感词 iteratively 再现 + 微调形成·占位词典 core/data/affective_theme_lexicon_placeholder.json(8 themes·_placeholder=true)·真 800 词需中文情感词库授权 defer·草稿三等分 segment_hits + mentions·关键主题(brief.theme_priority)mentions<2 / mentions≥3 但 segment_diversity==1 → AFFECTIVE_THEME_ITERATION_DEGRADED advisory·与 motif_recurrence(意象)/thematic_argument(论证)/sentiment_arc_fractal(序列)/EC_vs_PD(共情)严格正交·env AFFECTIVE_THEME_ITERATION_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["AFFECTIVE_THEME_ITERATION_DEGRADED"]
+    },
+    "strategic_empathy_alignment_scanner": {
+      "layer": "cluster",
+      "script": "strategic_empathy_alignment_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-Y·P2·Keen 2007 Empathy and the Novel 三型 strategic empathy] cluster brief 标 strategic_empathy_intent ∈ {bounded(圈内/同类)/ambassadorial(跨界代言)/broadcast(普世人性)}·三型 cue 词 per_1k_cjk·declared intent ≠ dominant_type 且 intent per_1k < dominant 30% → STRATEGIC_EMPATHY_MISALIGNED advisory·占位词典 core/data/strategic_empathy_cues_placeholder.json(9 类 seed·_placeholder=true)·真 200+ 词需多源校证 defer·与 EC vs PD(scene 共情)/bibliotherapy_arc(Shrodes 三相)/VAD_UED(角色动态)/thematic_argument(论证)严格正交·env STRATEGIC_EMPATHY_ALIGNMENT_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["STRATEGIC_EMPATHY_MISALIGNED"]
+    },
+    "prosodic_pause_anchor_scanner": {
+      "layer": "cluster",
+      "script": "prosodic_pause_anchor_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-Y·P2·Selkirk 1986 / Beckman & Pierrehumbert 1986 prosodic phrase hierarchy] 三层 pause(word 逗号顿号 / phrase 分号破折号 / sentence 句号问号感叹号)·anchor 处前后 ±12 字信息密度(数字+英文+动作动词+实体后缀)局部 valley(<phrase 均值 70%)·valley_rate<0.20 + anchor≥20 → PROSODIC_PAUSE_VALLEY_MISSING advisory·窒息感测度·与 prose_rhythm(句长统计)/syntactic_diversity(POS n-gram)/validate_style 段长 / 标点 per_1k 严格正交·env PROSODIC_PAUSE_ANCHOR_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["PROSODIC_PAUSE_VALLEY_MISSING"]
+    },
+    "temporal_bootstrap_scanner": {
+      "layer": "cluster",
+      "script": "temporal_bootstrap_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-Y·P2·info_provenance Tarjan SCC bootstrap paradox] 读 _数据库/info_provenance.json 或 brief.info_provenance edges(info -> source 边)·Tarjan SCC 找强连通分量·size≥2 或自环 → TEMPORAL_BOOTSTRAP_LOOP advisory·非时间旅行类小说也易出(伏笔回收错置成角色提前知道后来才得知的事)·与 locked_fact_cross_scene(同时刻设定)/future_knowledge_leak(单点)/foreshadowing_handoff(交接)/event_relation_graph_validator(跨 cluster DAG)严格正交·env TEMPORAL_BOOTSTRAP_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["TEMPORAL_BOOTSTRAP_LOOP"]
     }
   },
 

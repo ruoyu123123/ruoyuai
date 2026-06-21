@@ -1,0 +1,24 @@
+{
+  "_placeholder": true,
+  "_schema_version": 1,
+  "_doc": "Suzanne Keen Empathy and the Novel(2007)三型策略式共情线索占位(R19 W8 Batch-Y·P2)·真完整 200+ 词需多源校证 defer·这里 9 类 seed 词",
+  "_axes": {
+    "bounded": "bounded empathy: in-group / 同类 / 已知圈子(亲族/同事/师徒)",
+    "ambassadorial": "ambassadorial empathy: out-group bridge / 他者代言(异国/异族/弱势)",
+    "broadcast": "broadcast empathy: 普世人性 / 跨情境 / 抽象主题"
+  },
+  "cues": {
+    "bounded": [
+      "我们这边", "自家人", "同伴", "兄弟", "战友", "师兄", "师妹", "师傅",
+      "圈内", "同门", "嫡系", "一伙"
+    ],
+    "ambassadorial": [
+      "异乡人", "外族", "蛮夷", "异邦", "孤儿", "弃儿", "外来", "难民",
+      "异国", "他乡", "陌生人", "外乡"
+    ],
+    "broadcast": [
+      "人人", "众生", "天下", "苍生", "万民", "普世", "每个人", "人类",
+      "我们都", "大家", "所有人", "众人"
+    ]
+  }
+}

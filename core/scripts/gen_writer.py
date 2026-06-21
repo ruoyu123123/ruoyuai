@@ -2262,10 +2262,17 @@ def main():
                         help='[R19 W8 Batch-X·AdaMARP 多人对话编排] 默认 off·on 时 build_manifest 调 '
                              'dialogue_scene_manager.inject_orchestrator_prompt 注入四标签 '
                              '[Thought](Action)<<Environment>>Speech turn 80-300 字 prompt')
+    parser.add_argument('--parallel-rollout-mode', default='off',
+                        choices=['off', 'shadow', 'active'],
+                        help='[R19 W8 Batch-Y·P2·K=2 并行 rollout listwise rank] 默认 off·高歧义 '
+                             'cluster(opening/volume_finale/重大转折)启用·on 时 cluster-write 调度器 '
+                             '应跑 K=2 草稿并通过 parallel_rollout_arbiter 仲裁 winner·此 flag 仅 env 透传')
     args = parser.parse_args()
     # 把 flag 设到 env 供 dialogue_scene_manager._mode() 读取(无侵入既有 build_manifest)
     if args.dialogue_orchestrator_mode:
         os.environ["DIALOGUE_ORCHESTRATOR_MODE"] = args.dialogue_orchestrator_mode
+    if args.parallel_rollout_mode:
+        os.environ["PARALLEL_ROLLOUT_ARBITER_MODE"] = args.parallel_rollout_mode
 
     project_root = Path(args.project).resolve()
     if not project_root.exists():

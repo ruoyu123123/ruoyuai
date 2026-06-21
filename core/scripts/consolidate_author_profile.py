@@ -432,15 +432,41 @@ def _tension_stats(series_list: list) -> dict:
 _FRACTAL_MIN_POINTS = 30   # 单 cluster 张力点 <30 → 降级（北极星⑤）
 
 
+def _lag1_autocorrelation(series) -> float | None:
+    """lag-1 自相关 r1·affective inertia 度量(R19 W8 Batch-Y 扩).
+
+    r1 ∈ [-1,1]·>0 长情感惯性(下个点像上个) / ≈0 独立 / <0 反相关震荡.
+    样本 < _FRACTAL_MIN_POINTS 或方差 0 → None.
+    """
+    import math
+    n = len(series)
+    if n < _FRACTAL_MIN_POINTS:
+        return None
+    x = [float(v) for v in series]
+    mu = sum(x) / n
+    var = sum((v - mu) ** 2 for v in x) / n
+    if var < 1e-12:
+        return None
+    cov = 0.0
+    for i in range(n - 1):
+        cov += (x[i] - mu) * (x[i + 1] - mu)
+    cov /= (n - 1)
+    r1 = cov / var
+    # 钳到 [-1, 1] 抗数值越界
+    return round(max(-1.0, min(1.0, r1)), 4)
+
+
 def _sentiment_arc_fractal(series_list: list) -> dict:
-    """Hurst + ApEn 跨 cluster ECDF band（作者档作权威基线，scanner 端拿来对比）。
+    """Hurst + ApEn + affective_inertia(lag-1) 跨 cluster ECDF band.
 
     series_list：[ [(pct, tension), ...], ... ]（aggregate_rhythm 现有 tension_all）。
     单 cluster < _FRACTAL_MIN_POINTS 点不算（噪声）→ 不入 band。
     分布 < 2 个有效 cluster → 返回空 dict（不发布·调用方走 fallback）。
+    R19 W8 Batch-Y 扩 affective_inertia: lag-1 自相关·情感惯性度量·与 Hurst(长程)/ApEn(复杂度)正交.
     """
     hurst_vals: list[float] = []
     apen_vals: list[float] = []
+    inertia_vals: list[float] = []
     for pts in series_list:
         if len(pts) < _FRACTAL_MIN_POINTS:
             continue
@@ -448,10 +474,13 @@ def _sentiment_arc_fractal(series_list: list) -> dict:
         tens = [t for _, t in sorted(pts, key=lambda x: x[0])]
         h = sa.compute_hurst_rs(tens)
         a = sa.compute_approx_entropy(tens)
+        r1 = _lag1_autocorrelation(tens)
         if h is not None:
             hurst_vals.append(h)
         if a is not None:
             apen_vals.append(a)
+        if r1 is not None:
+            inertia_vals.append(r1)
 
     def _pctl(L, p):
         if not L:
@@ -470,13 +499,17 @@ def _sentiment_arc_fractal(series_list: list) -> dict:
     out: dict = {}
     hb = _band(hurst_vals)
     ab = _band(apen_vals)
+    ib = _band(inertia_vals)
     if hb:
         out["hurst"] = hb
     if ab:
         out["approx_entropy"] = ab
+    if ib:
+        out["affective_inertia"] = ib
     if out:
         out["_doc"] = ("情感弧分形指纹·作者 ECDF band 第一权威·绝不设通用阈值·"
-                       "单 cluster 张力点 <30 不入 band·北极星⑤ advisory")
+                       "单 cluster 张力点 <30 不入 band·北极星⑤ advisory·"
+                       "R19 W8 Batch-Y 加 affective_inertia lag-1 自相关")
     return out
 
 

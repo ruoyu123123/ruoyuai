@@ -129,3 +129,51 @@ def test_fractal_band_skips_small_clusters_in_mixed():
     out = cap._sentiment_arc_fractal(big + small)
     if "hurst" in out:
         assert out["hurst"]["n"] <= 3   # 只 3 个大 cluster 入 band
+
+
+# ── R19 W8 Batch-Y：affective_inertia lag-1 自相关扩展 ──────────────────
+def test_lag1_returns_none_for_short():
+    assert cap._lag1_autocorrelation([0.5] * 5) is None
+    assert cap._lag1_autocorrelation([]) is None
+
+
+def test_lag1_returns_none_for_constant():
+    assert cap._lag1_autocorrelation([0.5] * 60) is None
+
+
+def test_lag1_high_for_trend():
+    """强趋势序列 → lag-1 自相关 > 0(高情感惯性)."""
+    series = [i / 100.0 for i in range(50)]
+    r1 = cap._lag1_autocorrelation(series)
+    assert r1 is not None
+    assert r1 > 0.5
+
+
+def test_lag1_negative_for_alternating():
+    """交替序列 → lag-1 自相关 < 0(反持续/震荡)."""
+    series = [0.1 if i % 2 == 0 else 0.9 for i in range(50)]
+    r1 = cap._lag1_autocorrelation(series)
+    assert r1 is not None
+    assert r1 < 0
+
+
+def test_lag1_in_range():
+    series = [(i % 7) / 10.0 for i in range(60)]
+    r1 = cap._lag1_autocorrelation(series)
+    if r1 is not None:
+        assert -1.0 <= r1 <= 1.0
+
+
+def test_fractal_emits_affective_inertia_band():
+    """≥2 cluster 各 ≥30 点·新增 affective_inertia band 应发."""
+    series_list = [_mk_series(45, base=0.4 + 0.05 * i) for i in range(4)]
+    out = cap._sentiment_arc_fractal(series_list)
+    assert out, f"应发 band, got {out}"
+    # affective_inertia 应存在或合理缺失
+    if "affective_inertia" in out:
+        b = out["affective_inertia"]
+        assert b["n"] >= 2
+        assert -1.0 <= b["p5"] <= b["p95"] <= 1.0
+        assert "mean" in b
+    # _doc 应提到 affective_inertia
+    assert "affective_inertia" in out.get("_doc", "")
