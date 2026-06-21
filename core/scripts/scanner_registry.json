@@ -1052,6 +1052,27 @@
       "doc": "[2026-06-21 R19 W8 Batch-Y·P2·info_provenance Tarjan SCC bootstrap paradox] 读 _数据库/info_provenance.json 或 brief.info_provenance edges(info -> source 边)·Tarjan SCC 找强连通分量·size≥2 或自环 → TEMPORAL_BOOTSTRAP_LOOP advisory·非时间旅行类小说也易出(伏笔回收错置成角色提前知道后来才得知的事)·与 locked_fact_cross_scene(同时刻设定)/future_knowledge_leak(单点)/foreshadowing_handoff(交接)/event_relation_graph_validator(跨 cluster DAG)严格正交·env TEMPORAL_BOOTSTRAP_MODE 默认 shadow·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["TEMPORAL_BOOTSTRAP_LOOP"]
+    },
+    "sfs_calibration_probe": {
+      "layer": "meta",
+      "script": "sfs_calibration_probe.py",
+      "doc": "[2026-06-21 R20 W9 Batch-Z·P0·R20 STRONG fanfic_voice_mimicry id 5] SFS / av_judge 校准探针·一次性 shadow 部署前·30 对 same-author + 30 对 cross-author 文本·占位 scorer = char-3gram Jaccard(_placeholder=true·真 scorer = av_judge 同栈 SFS · 传 --scorer module:func)·算 Δ_means + IQR_overlap + ROC-AUC(Mann-Whitney U 等价)·Δ<5 或 AUC<0.65 → SFS_POORLY_CALIBRATED_FOR_AUTHOR advisory·can_promote_to_active gate 要求 AUC≥0.75·非常规 scanner 走法(--same-dir/--cross-dir 池)不嵌 audit_hub 主流水线·作为 av_judge shadow→active 升级前置门·env SFS_CALIBRATION_PROBE_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SFS_POORLY_CALIBRATED_FOR_AUTHOR"]
+    },
+    "cross_character_kth_order_belief_scanner": {
+      "layer": "cluster",
+      "script": "cross_character_kth_order_belief_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-Z·P0·R20 STRONG OSCToM K-order(K=2) belief nesting] 扩 R18 1-order belief_state → belief_about[a][b][topic] K=2 嵌套·按场景遍历维护 K-1 belief_state(mask 嵌套 span 防 B 仅作 nested object 被误算在场习得)+ K-2 nesting 抽取(<A>(以为|认为|觉得|猜|相信|怀疑)<B>(知道|不知道|了解|明白) fact_ref)·末轮 K-order vs K-1 校验·thinks_knows 但 B 全程未知 = a_overestimates_b·thinks_unknown 但 B 当时已知 = a_underestimates_b·outline-planner manifest.dramatic_irony_anchor 显式白名单 (a,b,topic) 合法不报·与 R18 character_belief_ledger(K=1) / dramatic_irony(TELL 词) / focalizer_perception_bounds(narrator 层) / locked_fact_cross_scene(恒定事实) 严格正交·env CROSS_CHARACTER_KTH_ORDER_BELIEF_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CHARACTER_KTH_ORDER_BELIEF_DRIFT"]
+    },
+    "character_state_drift_scanner": {
+      "layer": "cluster",
+      "script": "character_state_drift_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-Z·P0·R20 STRONG NKW 时态可分 entity profile] stable_identity SLOW_UPDATE 冻 distill-character(瞳色/性别/籍贯/血型 …) / dynamic_state FAST_UPDATE 每 save-state 刷(位置/心情/伤势/同伴 …)·扫稿正则抽 <char>(的)?<attr>(是|为|：|:)?<value> 断言·attr∈stable_identity 且 ledger value≠草稿 value → stable_identity drift CHARACTER_STATE_DRIFT_DETECTED·attr∈dynamic_state 任何变化合法不报(二筛白名单)·提供 filter_dynamic_state_changes() 给 R12 contradiction scanner 二筛剔除·dynamic_state_updates[] 反哺 cluster-save-state ledger FAST_UPDATE 段·缺 _数据库/character_state_ledger.json 用 DEFAULT_LEDGER 通用白名单占位(_placeholder=true·真清单需 distill-character 填)·与 R12 contradiction / locked_fact / character_belief_ledger 严格正交·env CHARACTER_STATE_DRIFT_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CHARACTER_STATE_DRIFT_DETECTED"]
     }
   },
 

@@ -32,6 +32,10 @@ THINKING_PROBE_CODES = [
     "READER_TENSION_DRIFT",    # 读者张力漂移
     "CAUSALITY_GAP",           # 因果链断裂
     "PPP_INCOMPLETE",          # Promise/Progress/Payoff 不完整
+    # R20 W9 Batch-Z·P0（2026-06-21）3 件 STRONG 全 advisory：
+    "SFS_POORLY_CALIBRATED_FOR_AUTHOR",   # SFS / av_judge 自身校准探针
+    "CHARACTER_KTH_ORDER_BELIEF_DRIFT",   # OSCToM K-order(K=2) 嵌套信念
+    "CHARACTER_STATE_DRIFT_DETECTED",     # NKW 时态分离 stable_identity drift
 ]
 
 

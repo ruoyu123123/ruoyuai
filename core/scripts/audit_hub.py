@@ -2133,6 +2133,36 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "dialogue_scene_manager",
                      "DIALOGUE_ORCHESTRATOR_DEGRADED", "对话")),
+                # [2026-06-21 R20 W9 Batch-Z·P0·OSCToM K-order(K=2) belief nesting]
+                # 扩 R18 1-order belief_state → belief_about[a][b][topic]·K-2 嵌套
+                # 模式 <A>(以为|认为|觉得|猜) <B>(知道|不知道) <fact_ref> · 末轮
+                # K-order vs K-1 矛盾·outline-planner manifest.dramatic_irony_anchor
+                # 显式白名单合法不报·与 R18 character_belief_ledger(K=1) / dramatic_irony
+                # (TELL 词) / focalizer_perception_bounds(narrator 层) / locked_fact_cross_scene
+                # 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("cross_character_kth_order_belief",
+                 [child_python(), str(_SCRIPT_DIR / "cross_character_kth_order_belief_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--manifest", str(project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json")],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "cross_character_kth_order_belief_scanner",
+                     "CHARACTER_KTH_ORDER_BELIEF_DRIFT", "人物")),
+                # [2026-06-21 R20 W9 Batch-Z·P0·NKW 时态可分 entity profile]
+                # stable_identity SLOW_UPDATE 冻 distill-character / dynamic_state
+                # FAST_UPDATE 每 save-state 刷·扫稿抽 <char>(的)?<attr>(是|为)<value>
+                # 断言·attr∈stable & 与 ledger value 不符 → CHARACTER_STATE_DRIFT_DETECTED·
+                # attr∈dynamic_state 白名单 = 合法剧情进展不报·提供
+                # filter_dynamic_state_changes() 给 R12 contradiction 二筛剔除·
+                # 与 R12 contradiction / locked_fact / character_belief_ledger 严格正交·
+                # advisory·默认 shadow·绝不 hard_gate·缺 ledger 用 DEFAULT 通用白名单
+                ("character_state_drift",
+                 [child_python(), str(_SCRIPT_DIR / "character_state_drift_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "character_state_drift_scanner",
+                     "CHARACTER_STATE_DRIFT_DETECTED", "人物")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
