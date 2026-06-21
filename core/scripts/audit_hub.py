@@ -2057,6 +2057,39 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "zipf_alpha_scanner",
                      "ZIPF_ALPHA_DRIFT", "风格")),
+                # [2026-06-21 R19 W8 Batch-V·P0·PNAS 2025 Reinhart LLM 4 语法过用]
+                # 4 子探针 present participial / nominalization / 嵌套 X的Y / 串联并列堆栈·
+                # 作者档 llm_grammar_overuse_baseline z-band 第一权威·与 anti_slop/semantic_slop
+                # (词项) + syntactic_diversity (POS n-gram) 严格正交·advisory·默认 shadow
+                ("llm_grammar_overuse",
+                 [child_python(), str(_SCRIPT_DIR / "llm_grammar_overuse_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "llm_grammar_overuse_scanner",
+                     "LLM_GRAMMAR_PARTICIPIAL_OVERUSE", "风格")),
+                # [2026-06-21 R19 W8 Batch-V·P0·凡人修仙传仙界篇 / Cradle]
+                # 跨书系列文顶阶角色稀缺性塌缩·读 series_rank_ledger.json·top-rank 密度比 +
+                # leapfrog 战斗·与单本 capability_emergence 严格正交·advisory·默认 shadow·
+                # 无 ledger skip
+                ("cross_book_rank_scarcity",
+                 [child_python(), str(_SCRIPT_DIR / "cross_book_rank_scarcity_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "cross_book_rank_scarcity_scanner",
+                     "CROSS_BOOK_RANK_INFLATION", "剧情")),
+                # [2026-06-21 R19 W8 Batch-V·P0·affect dynamics + arxiv 2503.23547]
+                # 3D VAD × 6 UED = 18 指标 per-character·占位词典 + 引语切片复用 角色池.json·
+                # 作者档 vad_ued_signature.per_character 第一权威·与 affective/sentiment_arc/
+                # ousiometric/emotion_curve 严格正交·advisory·默认 shadow
+                ("character_vad_ued",
+                 [child_python(), str(_SCRIPT_DIR / "character_vad_ued_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "character_vad_ued_scanner",
+                     "VAD_UED_DRIFT", "人物")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

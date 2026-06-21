@@ -926,6 +926,27 @@
       "doc": "[2026-06-21 R18 W7 Batch-U·P2 cross-cluster shadow·番茄完读率公开数据 + 起点新书期攻略 + Kindle Direct Publishing 留存数据 + Webnovel platform locked chapters] 完读率反向工艺指标·R=0.35·hook_strength_norm + 0.25·(1-sagging_middle) + 0.25·cliffhanger_quota + 0.15·section_word_count_health·proxy<0.45 报 RETENTION_PROXY_LOW·与 W6 cross_cluster_engagement_metrics(章级 hook trend)正交(那是 trend·本是 retention)·env READER_RETENTION_PROXY_MODE 默认 shadow·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["RETENTION_PROXY_LOW"]
+    },
+    "llm_grammar_overuse_scanner": {
+      "layer": "cluster",
+      "script": "llm_grammar_overuse_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-V·P0·PNAS 2025 Reinhart LLMs overuse specific grammatical patterns] LLM 4 语法过用中文化·4 子探针(present participial 着/正在 丛 / nominalization 动词名化 / 嵌套 X的Y 主语 ≥3 层 / parallel A、B、C 和 D ≥4 项串联)·作者档 quantitative.llm_grammar_overuse_baseline z-band 第一权威·兜底地板 participial 句平均 0.35 / nominalization per-1k 8.0 / nested 句平均 0.08 / parallel per-1k 1.2·与 anti_slop/semantic_slop(词项)+ syntactic_diversity(POS n-gram)严格正交·env LLM_GRAMMAR_OVERUSE_MODE 默认 shadow·4 个 code 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["LLM_GRAMMAR_PARTICIPIAL_OVERUSE", "LLM_GRAMMAR_NOMINALIZATION_OVERUSE", "LLM_GRAMMAR_NESTED_X_DE_Y_OVERUSE", "LLM_GRAMMAR_PARALLEL_AND_STACK_OVERUSE"]
+    },
+    "cross_book_rank_scarcity_scanner": {
+      "layer": "cluster",
+      "script": "cross_book_rank_scarcity_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-V·P0·凡人修仙传仙界篇 / Cradle Will Wight] 跨书系列文顶阶角色稀缺性塌缩·读 _数据库/series_rank_ledger.json·两探针(top-rank 密度比 = 本 cluster / 上本基线 ≥3× / leapfrog ≥3 场主角对位顶阶轻松取胜)·issue CROSS_BOOK_RANK_INFLATION·与单本 capability_emergence 严格正交(本=跨书 series 层)·build_manifest 注入上本顶阶名单 hint(collect_cross_book_hint)·env CROSS_BOOK_RANK_SCARCITY_MODE 默认 shadow·绝不 hard_gate·无 ledger skip(非系列文)",
+      "_new": true,
+      "issues_emitted": ["CROSS_BOOK_RANK_INFLATION"]
+    },
+    "character_vad_ued_scanner": {
+      "layer": "cluster",
+      "script": "character_vad_ued_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-V·P0·临床 affect dynamics + arxiv 2503.23547] 3D VAD (Valence/Arousal/Dominance) × 6 UED (Inertia/Variability/Instability/Switch/Pulse/Augmentation) = 18 指标 per-character·零依赖引语切片(_QUOTE_PAT + 后置说/道/答 + 角色池.json 归属)·rolling 10·占位词典 core/data/nrc_vad_v2_placeholder.json (40 字 _placeholder=true) + cvaw_cvap_placeholder.json (30 词 _placeholder=true)·真 NRC-VAD v2 55k + CVAW/CVAP 8.5k defer·consolidate 加 vad_ued_signature SLOW_UPDATE 段(compute_vad_ued_signature)·作者档 quantitative.vad_ued_signature.per_character 第一权威·与 affective_signature(离散标签) / sentiment_arc_fractal(1D) / cross_cluster_ousiometric(2D) / emotion_curve_rescan(cluster 级) 严格正交·env CHARACTER_VAD_UED_MODE 默认 shadow·VAD_UED_DRIFT 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["VAD_UED_DRIFT"]
     }
   },
 
