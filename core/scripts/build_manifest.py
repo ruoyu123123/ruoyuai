@@ -1283,6 +1283,24 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             "  · 主语切换=换段·主语稳定=同段·防止段内频繁切换主语造成读者注意力分散。\n"
                             "  · 与 kishotenketsu macro 节奏正交·ACW 是段级 micro 中心活动一致性。"
                         )
+                    # 🆕 R23 W11 Batch-GG P0 (2026-06-22): pace_carrier_window 钩子双侧 ±300 CJK 长记区指引
+                    # neural PACE 框架·钩子两侧 300 CJK 内放长记设定/伏笔/物件 → 后续 cluster 召回率高
+                    # env PACE_CARRIER_WINDOW_MODE=active 时注入 advisory directive
+                    _pace_carrier_mode = (os.environ.get("PACE_CARRIER_WINDOW_MODE") or "shadow").strip().lower()
+                    _pace_carrier_window = None
+                    if _pace_carrier_mode == "active":
+                        _pace_carrier_window = {
+                            "radius_cjk": 300,
+                            "directive": (
+                                "🟢 PACE 长记 window 指令(R23 W11 Batch-GG·neural PACE 框架)：\n"
+                                "  · 章末/段末钩子两侧 ±300 CJK 是读者长记最强 window·\n"
+                                "    把设定/伏笔/物件锚点（locked_fact / foreshadowing_to_plant）优先放此 window·\n"
+                                "    后续 cluster 召回率显著高于章中段 baseline。\n"
+                                "  · 纯节奏型钩子（强情绪标点 + 短句独行 + 无 lexical anchor）合法·\n"
+                                "    豁免 carrier 要求·不强制每钩必带 anchor。"
+                            ),
+                            "_doc": "R23 W11 P0·shadow→active 软提示·advisory·绝不 hard_gate",
+                        }
                     # 🆕 R22 W10 Batch-DD P0 STRONG (2026-06-21): rhetorical_subset 按题材匹配高频辞格 subset
                     # 陈望道《修辞学发凡》38 格四类·题材 prior 注入 writer prompt 提示偏好辞格
                     # env RHETORICAL_BALANCE_MODE=active 时注入 advisory subset hint
@@ -1363,6 +1381,8 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         ),
                         "kishotenketsu_directive": _kishotenketsu_directive,
                         "ACW_DIRECTIVE": _acw_directive,
+                        # 🆕 R23 W11 Batch-GG P0: 钩子双侧 ±300 CJK 长记 window 指引
+                        "pace_carrier_window": _pace_carrier_window,
                         # 🆕 R22 W10 Batch-DD P0 STRONG: 题材 prior 推荐辞格 subset
                         "rhetorical_subset_hint": _rhet_subset,
                         "_narrative_mode_doc": ("in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；"

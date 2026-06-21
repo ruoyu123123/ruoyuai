@@ -1206,6 +1206,41 @@
       "doc": "[2026-06-21 R22 W10 Batch-FF·P1+P2·Fauconnier&Turner CBT 概念整合] outline premise_blend_card 落地度+vital_relations 7 类标记密度·schema 加入 subsystem_skeletons 事件簇.json·cluster_emergence_engine candidate 注入空骨架·四 advisory(MISSING/EMERGENCE_MISSING/INPUT_DROP/LEXICAL_OVER)·作者档 vital_relations_compression{mean,std} 滚动 ±2σ band 第一权威·与 rhetorical_balance/semantic_slop 严格正交·advisory·env PREMISE_BLEND_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
       "_new": true,
       "issues_emitted": ["PREMISE_BLEND_CARD_MISSING", "PREMISE_BLEND_EMERGENCE_MISSING", "PREMISE_BLEND_INPUT_DROP", "PREMISE_BLEND_LEXICAL_OVER"]
+    },
+    "trope_tag_canonicalizer": {
+      "layer": "cross-cluster",
+      "script": "trope_tag_canonicalizer.py + core/data/trope_canon.json",
+      "doc": "[2026-06-22 R23 W11 Batch-GG·P0·fanfic ecosystem 跨 cluster 标签统计层根因] storyboard/cluster brief tag 自由文本同义不同写·cross-cluster aggregator count 字面拆同一 trope 为多低频项·新 core/data/trope_canon.json 维 synonym→canonical 占位 30 对·build_manifest/aggregator 读前调 canonicalize_tags()·新 surface≥3 次出现 → _数据库/.trope_promotion_queue.json·只规范统计层不改 writer 原文·advisory·env TROPE_CANON_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["TROPE_NEW_SURFACE_PROMOTION_CANDIDATE", "TROPE_CANON_DICT_THIN"]
+    },
+    "pace_callback_density": {
+      "layer": "cluster",
+      "script": "pace_callback_density.py + build_manifest.py(pace_carrier_window)",
+      "doc": "[2026-06-22 R23 W11 Batch-GG·P0·neural PACE 框架·钩子两侧长记区]钩子（章末强情绪 beat）双侧 ±300 CJK 是读者长记 window·此区放设定/伏笔/物件 → 后续 cluster 召回率显著高于章中段 baseline·build_manifest 注入 pace_carrier_window 字段提示 writer·本 scanner 测钩子窗口 anchor 命中密度 vs 章中段 baseline·shadow N≥6 cluster 采纳·纯节奏型钩子豁免·三 advisory(EMPTY/OVER_LOADED/PURE_RHYTHM)·与 hook_strength 严格正交·env PACE_CARRIER_WINDOW_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["PACE_CARRIER_WINDOW_EMPTY", "PACE_CARRIER_WINDOW_OVER_LOADED", "PACE_CARRIER_PURE_RHYTHM_HOOK"]
+    },
+    "otter_tail": {
+      "layer": "cluster",
+      "script": "otter_tail_scanner.py",
+      "doc": "[2026-06-22 R23 W11 Batch-GG·P1·脂砚斋《红楼梦评》獭尾法]末段 8% 三特征检(张力衰减≤60%+主角目标偏移 distancing+未来锚点)·特征≥2 命中=獭尾形成·作者档 author_pacing_style∈{悠长余韵/古典留白} 推荐启用·{强爽点} 与 kicker 路由互斥(INCOMPATIBLE advisory)·三 advisory(DETECTED/MISSING/INCOMPATIBLE)·与 hook_strength/cliffhanger_quota 严格正交·env OTTER_TAIL_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["OTTER_TAIL_DETECTED", "OTTER_TAIL_MISSING", "OTTER_TAIL_INCOMPATIBLE"]
+    },
+    "horizontal_cloud_advisor": {
+      "layer": "cluster",
+      "script": "horizontal_cloud_advisor.py",
+      "doc": "[2026-06-22 R23 W11 Batch-GG·P1·金圣叹评水浒横云断山]主线长(arc 占比>60%)+连续 ≥4 场景同 POV+情感强度>0.7+无 POV 切换 → 建议中段 35-55% 插 200-500 CJK 他者断流弧·写入下 cluster brief pacing_suggestions·两 advisory(RECOMMEND/PRESENT)·与 pov_consistency/cross_scene_voice_drift 严格正交·env HORIZONTAL_CLOUD_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["HORIZONTAL_CLOUD_RECOMMEND", "HORIZONTAL_CLOUD_PRESENT"]
+    },
+    "intentional_recurrence": {
+      "layer": "cross-cluster",
+      "script": "intentional_recurrence_scanner.py",
+      "doc": "[2026-06-22 R23 W11 Batch-GG·P1·张竹坡评金瓶梅犯而不犯]跨 cluster 复现母题(动作/场景/对话骨架≥2 次)·sim_form(char 3gram Jaccard)+div_axes 五轴(actor/place/prop/mood/outcome)·0.60≤sim≤0.85 且 div≥3 → STRONG advisory(对 repeat_noun_density 反向豁免)·sim>0.85 且 div<2 → 真重复·三 advisory(DETECTED/REAL_REPEAT/THIN_DATA)·与 repeat_noun_density/motif_recurrence_ledger 严格正交·env INTENTIONAL_RECURRENCE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["INTENTIONAL_RECURRENCE_DETECTED", "INTENTIONAL_RECURRENCE_REAL_REPEAT", "INTENTIONAL_RECURRENCE_THIN_DATA"]
     }
   },
 
