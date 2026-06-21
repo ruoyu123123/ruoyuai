@@ -1434,6 +1434,32 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             if (os.environ.get("BURST_TYPE_MODE") or "shadow").strip().lower() == "active"
                             else None
                         ),
+                        # 🆕 R24 W12 Batch-KK P1 (2026-06-22): writer intent anchor 4 维盲意图卡
+                        # build_manifest 注入·writer 在 step 2 必须按 4 字段写·
+                        # step 6 后 agenda_drift_scanner 比对·任一<0.62 → advisory
+                        "writer_intent_anchor": _load_writer_intent_anchor_for_manifest(
+                            scanner.root, c.get("cluster_id", "")),
+                        # 🆕 R24 W12 Batch-KK P1 (2026-06-22): author_signature_slots
+                        # storyboard 级 [{slot_id, text, preserve_policy, anchor_hint}]
+                        # writer 必须 MUST PRESERVE EXACTLY（verbatim/near_verbatim_punct_only）
+                        # 草稿落地后 author_signature_preservation.py fuzzy match Lev≤5% 闸
+                        "author_signature_slots": _collect_author_signature_slots(c),
+                        "author_signature_directive": (
+                            {
+                                "policies": ["verbatim", "near_verbatim_punct_only"],
+                                "directive": (
+                                    "🟢 作者签名 slot 防篡改指令(R24 W12 Batch-KK)：\n"
+                                    "  · MUST PRESERVE EXACTLY: storyboard.author_signature_slots[]\n"
+                                    "    每 slot text 字段必须在草稿中按 policy 保留：\n"
+                                    "      - verbatim: 逐字保留(Lev 距离 ≤5%)\n"
+                                    "      - near_verbatim_punct_only: 仅允许标点级差异\n"
+                                    "  · anchor_hint 指示 slot 应放置的场景/位置·writer 据此放置。"
+                                ),
+                                "_doc": "R24 W12 Batch-KK·shadow→active 软提示·advisory·绝不 hard_gate",
+                            }
+                            if (os.environ.get("AUTHOR_SIGNATURE_MODE") or "shadow").strip().lower() == "active"
+                            else None
+                        ),
                         # 🆕 R24 W12 Batch-JJ P1 (2026-06-22): Glaser 四杠杆 D9.3 advisory
                         "glaser_four_levers_directive": (
                             {
@@ -1466,6 +1492,75 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
         return {"mode": "off", "_note": f"无匹配 cluster (本章 {chapter} 不在任何 active cluster 范围)"}
     except Exception as e:
         return {"mode": "error", "_error": str(e)[:200]}
+
+
+def _load_writer_intent_anchor_for_manifest(project_root, cluster_id: str) -> dict | None:
+    """R24 W12 Batch-KK · 读 writer_intent_anchor（盲意图卡 SHA-256 锁定）。
+
+    cluster_id 形如 cluster_001 / cluster_无脸者_001 — 提取末段 key 反查。
+    SHA-256 校验失败 → None（safer than 注入篡改值）。
+    """
+    if not cluster_id:
+        return None
+    # 提取 cluster_key（末段数字 / token）
+    key = str(cluster_id).split("_")[-1] if cluster_id else ""
+    if not key:
+        return None
+    try:
+        import writer_intent_anchor as wia
+        a = wia.load_anchor(project_root, key)
+        if not a:
+            return None
+        return {
+            "want": a.get("want", ""),
+            "antagonist": a.get("antagonist", ""),
+            "stake": a.get("stake", ""),
+            "tone_word": a.get("tone_word", ""),
+            "_sha256": a.get("_sha256", ""),
+            "_directive": (
+                "🟢 4 维盲意图卡(R24 W12 Batch-KK·反算法议程占领)：\n"
+                f"  · want={a.get('want', '')}\n"
+                f"  · antagonist={a.get('antagonist', '')}\n"
+                f"  · stake={a.get('stake', '')}\n"
+                f"  · tone_word={a.get('tone_word', '')}\n"
+                "  · 写作过程不得偏离·step 6 后 agenda_drift_scanner 比对。"
+            ),
+        }
+    except Exception:
+        return None
+
+
+def _collect_author_signature_slots(cluster: dict) -> list[dict]:
+    """R24 W12 Batch-KK · 从 storyboard / cluster 顶层收集 author_signature_slots。
+
+    格式：[{slot_id, text, preserve_policy: verbatim|near_verbatim_punct_only, anchor_hint}]
+    供 writer 在指定位置逐字保留；author_signature_preservation.py 后置校验。
+    """
+    slots = []
+    if not isinstance(cluster, dict):
+        return slots
+    for sb in cluster.get("scene_storyboard", []) or []:
+        if not isinstance(sb, dict):
+            continue
+        for s in sb.get("author_signature_slots", []) or []:
+            if isinstance(s, dict) and s.get("text"):
+                slots.append({
+                    "slot_id": s.get("slot_id") or "unnamed",
+                    "text": s.get("text"),
+                    "preserve_policy": s.get("preserve_policy") or "verbatim",
+                    "anchor_hint": s.get("anchor_hint") or "",
+                    "scene_ch": sb.get("ch"),
+                })
+    for s in cluster.get("author_signature_slots", []) or []:
+        if isinstance(s, dict) and s.get("text"):
+            slots.append({
+                "slot_id": s.get("slot_id") or "unnamed",
+                "text": s.get("text"),
+                "preserve_policy": s.get("preserve_policy") or "verbatim",
+                "anchor_hint": s.get("anchor_hint") or "",
+                "scene_ch": None,
+            })
+    return slots
 
 
 def _infer_cluster_position(chapter: int, chapter_range: list) -> str:

@@ -176,6 +176,24 @@ AUTHOR_PROFILE_MISSING_GUARD = """\
 """
 
 
+ANCHORED_ADVISORY_CONTRACT = """\
+# 🔗 Anchored Advisory 引用契约（R24 W12 Batch-KK · 2026-06-22）
+你输出的每条 advisory 类 finding 必须携带 anchor 字段（hard_gate 类选填）：
+{
+  "anchor": {
+    "start_char": <int>,
+    "end_char":   <int>,
+    "anchor_window": <≤40 CJK 引用片段>,   # 必填·让人立刻能在草稿里找到位置
+    "recursive_widen_level": 0   # 0=原 span，1-3=外扩重试层
+  }
+}
+约束：
+  · anchor_window 长度上限 40 CJK 汉字（截断不报错）。
+  · 不写 anchor 的 advisory 会被下游打 `_anchor_missing=true` 标记，但不阻断。
+  · hard_gate 类 finding（一致性/穿帮/契约破损）若无明确 char 位置可省 anchor。
+"""
+
+
 def build_author_profile_block(project_root: Path, max_chars: int = 30000) -> str | None:
     """读项目作者风格档（作者风格.json + 可选 skill 文件）拼注入块。读不到 → None。
 
@@ -312,7 +330,7 @@ def run_judge(agent_name: str, project_root: str | Path, *,
     _os.environ.setdefault("RUOYU_TOKEN_LEDGER",
                            str(project_root / "_数据库" / ".token_ledger.jsonl"))
 
-    # —— system 装配：适配头 + .md 原文 + 作者档（硬契约 1） ——
+    # —— system 装配：适配头 + .md 原文 + 作者档（硬契约 1） + anchored advisory 契约 ——
     system_parts = [ADAPTER_HEADER, load_agent_system_prompt(agent_name, agents_dir)]
     author_missing = False
     if spec.needs_author_profile:
@@ -322,6 +340,8 @@ def run_judge(agent_name: str, project_root: str | Path, *,
         else:
             author_missing = True
             system_parts.append(AUTHOR_PROFILE_MISSING_GUARD)
+    # R24 W12 Batch-KK: advisory 必填 anchor·hard_gate 选填·不阻断
+    system_parts.append(ANCHORED_ADVISORY_CONTRACT)
     system = "\n\n".join(system_parts)
 
     user = assemble_user_prompt(params, context_files or [], extra_blocks)

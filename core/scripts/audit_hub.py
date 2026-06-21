@@ -581,6 +581,9 @@ def _parse_scene_seam(stdout: str) -> list:
     return issues
 
 
+ANCHOR_WINDOW_MAX_CJK = 40  # R24 W12 Batch-KK·anchored_advisory_contract
+
+
 def _collect_anchor_spans(violations: list) -> list:
     """[2026-06-20 R9 W5 Batch-M·F3 AnchoredAI] 收集 violation 里的 anchor_span 字段。
 
@@ -590,6 +593,13 @@ def _collect_anchor_spans(violations: list) -> list:
 
     向后兼容：scanner 未填 anchor_span 时返回空列表，不影响现有判定路径。
     L41 narrator_commentary_scanner / 后续 prose_rhythm / repeat_noun_density 等可逐步填充。
+
+    [2026-06-22 R24 W12 Batch-KK·anchored_advisory_contract] schema 升级：
+      · anchor_window: 引用窗口（≤40 CJK 字符，超出截断）
+      · recursive_widen_level: int(0..3) 递归加宽层（0=原 span，1-3=外扩重试）
+      · 字段都 OPTIONAL·已有 scanner 不强制改·新 scanner 选填
+    advisory 必填 anchor·hard_gate 选填兼容（北极星⑤不可豁免 hard_gate 一致性问题
+    本就有 code/dim，安全裕度）。
     """
     spans = []
     for v in violations or []:
@@ -598,11 +608,26 @@ def _collect_anchor_spans(violations: list) -> list:
         a = v.get("anchor_span")
         if isinstance(a, dict) and "char_start" in a and "char_end" in a:
             try:
-                spans.append({
+                entry = {
                     "char_start": int(a["char_start"]),
                     "char_end": int(a["char_end"]),
                     "surface_text": str(a.get("surface_text", ""))[:200],
-                })
+                }
+                # anchor_window：截到 40 CJK（多语言混合按 char 截）
+                aw = a.get("anchor_window")
+                if isinstance(aw, str) and aw:
+                    cjk_buf, c = [], 0
+                    for ch in aw:
+                        cjk_buf.append(ch)
+                        if "一" <= ch <= "鿿":
+                            c += 1
+                        if c >= ANCHOR_WINDOW_MAX_CJK:
+                            break
+                    entry["anchor_window"] = "".join(cjk_buf)
+                rwl = a.get("recursive_widen_level")
+                if isinstance(rwl, int) and 0 <= rwl <= 3:
+                    entry["recursive_widen_level"] = rwl
+                spans.append(entry)
             except (TypeError, ValueError):
                 continue
     return spans
@@ -2340,6 +2365,43 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "gaoneng_anticipation_signposting_scanner",
                      "BURST_LEAD_SIGNPOST_LOW", "节奏")),
+                # [2026-06-22 R24 W12 Batch-KK·P1·跨语言情感坐标漂移]
+                # CVAW v2 vs NRC-VAD CN 双词典 Δv/Δa>0.15 → ANGLO_DRIFT；
+                # 文化特有词覆盖率<0.6× 基线 → UNDERUSE；
+                # clear/ambivalent 比例>1.8× 基线 → BINARY_POLARIZATION
+                # env CN_EMOTION_VAD_MODE 默认 shadow·绝不 hard_gate·_placeholder=true
+                ("cn_emotion_vad_drift_scanner",
+                 [child_python(), str(_SCRIPT_DIR / "cn_emotion_vad_drift_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "cn_emotion_vad_drift_scanner",
+                     "CN_EMOTION_ANGLO_DRIFT", "风格")),
+                # [2026-06-22 R24 W12 Batch-KK·P1·writer intent agenda drift]
+                # 4 维盲意图卡(want/antagonist/stake/tone-word) SHA-256 锁定 step 1
+                # step 6 草稿 char-Jaccard 比对·任一<0.62 → WRITER_INTENT_AGENDA_DRIFT
+                # env AGENDA_DRIFT_MODE 默认 shadow·绝不 hard_gate
+                ("agenda_drift_scanner",
+                 [child_python(), str(_SCRIPT_DIR / "agenda_drift_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "agenda_drift_scanner",
+                     "WRITER_INTENT_AGENDA_DRIFT", "剧情")),
+                # [2026-06-22 R24 W12 Batch-KK·P1·author signature slot preservation]
+                # scene_storyboard.author_signature_slots[{slot_id,text,preserve_policy,anchor_hint}]
+                # verbatim(Lev≤5%) / near_verbatim_punct_only(剥标点等价)
+                # 失配 → AUTHOR_SIGNATURE_MISMATCH·缺失(verbatim) → NOT_PLACED minor
+                # env AUTHOR_SIGNATURE_MODE 默认 shadow·绝不 hard_gate
+                ("author_signature_preservation",
+                 [child_python(), str(_SCRIPT_DIR / "author_signature_preservation.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "author_signature_preservation",
+                     "AUTHOR_SIGNATURE_MISMATCH", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

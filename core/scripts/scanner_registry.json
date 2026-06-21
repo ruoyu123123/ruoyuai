@@ -1339,7 +1339,40 @@
       "doc": "[2026-06-22 R24 W12 Batch-JJ·P1·anticipation signposting 直播弹幕预测]top-K(3) 爆点段向前回溯 2-3 段 200-400 CJK 窗口·5 类 signpost(sensory_localization/sudden_quiet/physiological/object_closeup/time_distortion)·signpost_density vs 作者档 baseline z-band·<-1σ emit BURST_LEAD_SIGNPOST_LOW·>+2σ emit BURST_LEAD_SIGNPOST_HIGH info·writer prompt 软提示 lead window·env SIGNPOST_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
       "_new": true,
       "issues_emitted": ["BURST_LEAD_SIGNPOST_LOW", "BURST_LEAD_SIGNPOST_HIGH", "BURST_LEAD_NO_PEAK_FOUND"]
+    },
+    "cn_emotion_vad_drift_scanner": {
+      "layer": "cluster",
+      "script": "cn_emotion_vad_drift_scanner.py",
+      "doc": "[2026-06-22 R24 W12 Batch-KK·P1·跨语言情感坐标漂移]CVAW v2 vs NRC-VAD CN 双词典平均 Δv/Δa>0.15 → ANGLO_DRIFT·文化特有情感词(含蓄/悻悻/惆怅...)覆盖率<0.6× 作者基线 → UNDERUSE·clear/ambivalent 比例>1.8× 基线 → BINARY_POLARIZATION·作者档 cn_emotion_baseline.{cultural_density,clear_ambivalent_ratio} 配 baseline·env CN_EMOTION_VAD_MODE 默认 shadow·绝不 hard_gate·_placeholder=true·_supports_anchor=false(密度类指标无单点 char span)",
+      "_new": true,
+      "_supports_anchor": false,
+      "issues_emitted": ["CN_EMOTION_ANGLO_DRIFT", "CN_EMOTION_CULTURAL_UNDERUSE", "CN_EMOTION_BINARY_POLARIZATION", "CN_EMOTION_NO_EMOTION_WORDS", "CN_EMOTION_OK"]
+    },
+    "agenda_drift_scanner": {
+      "layer": "cluster",
+      "script": "agenda_drift_scanner.py + writer_intent_anchor.py (SHA-256 锁 4 维盲意图卡)",
+      "doc": "[2026-06-22 R24 W12 Batch-KK·P1·writer intent agenda drift reflexivity 反算法议程占领]cluster-write step 1 前置 AskUser 4 维盲意图卡(want/antagonist/stake/tone-word)·writer_intent_anchor.py create 写 _数据库/.writer_intent/cluster_<key>_writer_intent.json·SHA-256 锁定·step 6 草稿 落地后 agenda_drift_scanner 用 char-Jaccard 比对 4 字段在草稿中的覆盖率·任一<0.62 → WRITER_INTENT_AGENDA_DRIFT advisory·env AGENDA_DRIFT_MODE 默认 shadow·绝不 hard_gate·_supports_anchor=false(4 维度差·非 char span)",
+      "_new": true,
+      "_supports_anchor": false,
+      "issues_emitted": ["WRITER_INTENT_AGENDA_DRIFT", "WRITER_INTENT_NO_ANCHOR", "WRITER_INTENT_OK"]
+    },
+    "author_signature_preservation": {
+      "layer": "cluster",
+      "script": "author_signature_preservation.py + build_manifest.author_signature_slots directive",
+      "doc": "[2026-06-22 R24 W12 Batch-KK·P1·作者签名 slot 防篡改 MUST PRESERVE EXACTLY]scene_storyboard.author_signature_slots[{slot_id,text,preserve_policy(verbatim|near_verbatim_punct_only),anchor_hint}]·build_manifest 注入指令·writer 必须保留·草稿 fuzzy match Lev≤5% / 剥标点等价 闸·失配 → AUTHOR_SIGNATURE_MISMATCH advisory·缺失(verbatim) → NOT_PLACED minor·env AUTHOR_SIGNATURE_MODE 默认 shadow·绝不 hard_gate·_supports_anchor=true(slot 在草稿有 char span)",
+      "_new": true,
+      "_supports_anchor": true,
+      "issues_emitted": ["AUTHOR_SIGNATURE_MISMATCH", "AUTHOR_SIGNATURE_NOT_PLACED", "AUTHOR_SIGNATURE_OK"]
     }
+  },
+
+  "anchored_advisory_contract": {
+    "_schema_version": "1.0",
+    "_doc": "[2026-06-22 R24 W12 Batch-KK·P1·span-anchored 升级]audit_hub issue.anchor_spans[] schema 加 anchor_window(≤40CJK)+recursive_widen_level(0..3)·advisory 必填(judge_runner system prompt ANCHORED_ADVISORY_CONTRACT 注入)·hard_gate 选填(已有 code+dim 安全裕度)·13 scanner 不强制改·选填_supports_anchor 字段标 capability·向后兼容",
+    "anchor_window_max_cjk": 40,
+    "recursive_widen_level_range": [0, 3],
+    "scanners_marked_capability": ["narrator_commentary_scanner", "author_signature_preservation"],
+    "_principle": "advisory 必填·hard_gate 选填·北极星⑤(不引入新 hard_gate)"
   },
 
   "hard_gate_codes": [
