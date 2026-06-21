@@ -975,6 +975,41 @@
       "doc": "[2026-06-21 R19 W8 Batch-W·P1·PAN 2025 SSPC + Better Call Claude arxiv 2508.00680] 句对级风格断点定位·双栈(a) SSPC BGE-small-zh + 3 层 MLP _placeholder=true 真模型权重 defer (core/data/sspc_bge_small_zh_placeholder.json)·(b) 规则 ensemble 兜底(句长 z 跳跃 / 标点 KL / quotative 失踪激增 / register 切换 colloq vs formal / 衔接词反转突激)·滑窗 8 句·邻接对 score≥1.5 报 anchor·gen_fixer 接收 style_break_anchors[]·env INTRA_CLUSTER_STYLE_BREAK_MODE 默认 shadow·STYLE_BREAK_LLM_FALLBACK 默认 off·与 character_distinctiveness/cross_scene_voice_drift/voice_pack/SCH/silence_gap_lapse 全正交·STYLE_BREAK_DETECTED 绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["STYLE_BREAK_DETECTED"]
+    },
+    "cross_book_invariant_scanner": {
+      "layer": "cluster",
+      "script": "cross_book_invariant_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-X·P1·Sanderson Laws of Magic + Will Wight Cradle] 跨书 magic_system_invariant 不变量校验·读 workspace/styles/<series>/magic_invariants.json(invariant_id/rule_text/scope/coverage_books/source_quotes/severity)·占位 NLI 启发式(rule 关键词命中 + ±40 字窗口 negation/越界 token)·真 XLM-RoBERTa NLI defer·CROSS_BOOK_INVARIANT_BREACH advisory·collect_invariant_hint() top-K=5 给 build_manifest 注入·extract_hard_law_from_profile() distill-style step 7.5 用·与 locked_fact_cross_scene/future_knowledge_leak/motif_recurrence/cross_book_rank_scarcity 全正交·env CROSS_BOOK_INVARIANT_MODE 默认 shadow·绝不 hard_gate·无 ledger skip(非系列文)",
+      "_new": true,
+      "issues_emitted": ["CROSS_BOOK_INVARIANT_BREACH"]
+    },
+    "narration_dialogue_vad_coherence_scanner": {
+      "layer": "cluster",
+      "script": "narration_dialogue_vad_coherence_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-X·P1·Vishnubhotla baseline 0.06-0.09 旁白对话 VAD 相关] 旁白↔对话 VAD 跨通道一致·复用 character_vad_ued _QUOTE_PAT 切两通道(引号内=对话/剩余=旁白)·按场景双换行+1500 CJK 兜底切·两通道各算 (V,A,D) 序列·Pearson per 维度·|r|>0.50 阈值 → NARR_DIAL_VAD_OVERCOUPLED advisory·作者档 quantitative.dial_narr_vad_target_corr={V,A,D} override(放宽阈值 = max(0.50, author+0.15))·与 character_vad_ued(per-character)/cross_scene_voice_drift/voice_pack/affective_signature 严格正交·env NARR_DIAL_VAD_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["NARR_DIAL_VAD_OVERCOUPLED"]
+    },
+    "dialogue_emotion_contagion_scanner": {
+      "layer": "cluster",
+      "script": "dialogue_emotion_contagion_scanner.py",
+      "doc": "[2026-06-21 R19 W8 Batch-X·P1·Hatfield 1994 emotional contagion + Gottman 4 阶段 + BSETD 2026 M3ED] 双人主导对话 lagged cross-correlation 同步窗 [0.30, 0.65]·冲突场景 Gottman 4 阶段(criticism → contempt → defensiveness → stonewalling)级联检测·sync 过松(<0.30)/过紧(>0.65)/Gottman 缺位≥2 阶段/严重顺序颠倒 → DIALOGUE_CONTAGION_ABNORMAL advisory·作者档 quantitative.dialogue_contagion_signature.sync_window_baseline.{p20,p80} override·compute_dialogue_contagion_signature() 给 consolidate SLOW_UPDATE 段·与 character_vad_ued(per-character)/narration_dialogue_vad(旁白对话跨通道)/emotion_curve_rescan/OmniToM 严格正交·env DIALOGUE_CONTAGION_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["DIALOGUE_CONTAGION_ABNORMAL"]
+    },
+    "dialogue_scene_manager": {
+      "layer": "cluster",
+      "script": "dialogue_scene_manager.py",
+      "doc": "[2026-06-21 R19 W8 Batch-X·P2·ACL 2026 AdaMARP] 多人对话编排·四标签 [Thought](Action)<<Environment>>Speech turn 80-300 字·激活条件 scene_type∈{confrontation,negotiation,group_debate,court_session,family_clash} + active_chars≥3 + gen_writer --dialogue-orchestrator-mode=on·inject_orchestrator_prompt() 注入 manifest.dialogue_orchestrator·append_turn_log() 写 _数据库/dialogue_turn_log.json·scan_turn_log() 校验 turn 合规率>30% 异常 → DIALOGUE_ORCHESTRATOR_DEGRADED advisory·与 hierarchical_planner(章级)/antagonist_fidelity/character_distinctiveness/quotative 严格正交·env DIALOGUE_ORCHESTRATOR_MODE 默认 off·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["DIALOGUE_ORCHESTRATOR_DEGRADED"]
+    },
+    "sandbox_emergence_candidates": {
+      "layer": "cross-cluster",
+      "script": "sandbox_emergence_candidates.py",
+      "doc": "[2026-06-21 R19 W8 Batch-X·P2·StoryBox sandbox emergence] cluster_emergence_engine 的 bottom-up 沙盒涌现包裹·K=3-5 角色 agent + 1 world agent + T=8-12 turn·占位确定性启发式 harvest 累计 stake top-2 候选·candidate brief 标 sandbox_origin=bottom_up·active 模式才合并进 merged_candidates(shadow 只 stderr)·真 multi-agent 协议 defer·与 cluster_emergence_engine(top-down)包裹关系·与 capability_emergence/signed_relation_graph/涟漪规则 严格正交·env SANDBOX_EMERGENCE_MODE 默认 off·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SANDBOX_EMERGENCE_ABNORMAL"]
     }
   },
 

@@ -2257,7 +2257,15 @@ def main():
     parser.add_argument('--target-cjk', default=None,
                         help='[v27 optional] 整 cluster 目标字数 · 缺省 = freestyle（按 scope_summary 自然涌现）')
     parser.add_argument('--dry-run', action='store_true', help='只输出 prompt，不调 API')
+    parser.add_argument('--dialogue-orchestrator-mode', default='off',
+                        choices=['off', 'shadow', 'active'],
+                        help='[R19 W8 Batch-X·AdaMARP 多人对话编排] 默认 off·on 时 build_manifest 调 '
+                             'dialogue_scene_manager.inject_orchestrator_prompt 注入四标签 '
+                             '[Thought](Action)<<Environment>>Speech turn 80-300 字 prompt')
     args = parser.parse_args()
+    # 把 flag 设到 env 供 dialogue_scene_manager._mode() 读取(无侵入既有 build_manifest)
+    if args.dialogue_orchestrator_mode:
+        os.environ["DIALOGUE_ORCHESTRATOR_MODE"] = args.dialogue_orchestrator_mode
 
     project_root = Path(args.project).resolve()
     if not project_root.exists():

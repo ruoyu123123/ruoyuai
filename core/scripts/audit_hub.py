@@ -2090,6 +2090,49 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "character_vad_ued_scanner",
                      "VAD_UED_DRIFT", "人物")),
+                # [2026-06-21 R19 W8 Batch-X·P1·Sanderson Laws + Cradle 跨书系列文不变量]
+                # 读 workspace/styles/<series>/magic_invariants.json·占位 NLI 启发式·
+                # CROSS_BOOK_INVARIANT_BREACH advisory·绝不 hard_gate·无 ledger skip·
+                # 与 locked_fact_cross_scene/future_knowledge_leak/motif_recurrence 严格正交
+                ("cross_book_invariant",
+                 [child_python(), str(_SCRIPT_DIR / "cross_book_invariant_scanner.py"),
+                  str(cluster_draft)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "cross_book_invariant_scanner",
+                     "CROSS_BOOK_INVARIANT_BREACH", "剧情")),
+                # [2026-06-21 R19 W8 Batch-X·P1·Vishnubhotla 旁白对话 VAD 0.06-0.09 baseline]
+                # 复用 _QUOTE_PAT 切两通道·Pearson per V/A/D·|r|>0.50 → NARR_DIAL_VAD_OVERCOUPLED
+                # 作者档 dial_narr_vad_target_corr 第一权威·与 character_vad_ued/affective 正交
+                ("narration_dialogue_vad",
+                 [child_python(), str(_SCRIPT_DIR / "narration_dialogue_vad_coherence_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "narration_dialogue_vad_coherence_scanner",
+                     "NARR_DIAL_VAD_OVERCOUPLED", "风格")),
+                # [2026-06-21 R19 W8 Batch-X·P1·Hatfield emotional contagion + Gottman 4 阶段]
+                # 双人主导对话 lagged cross-correlation 同步窗 + 冲突场景 Gottman 级联·
+                # DIALOGUE_CONTAGION_ABNORMAL advisory·作者档 dialogue_contagion_signature 第一
+                # 权威·与 character_vad_ued/narration_dialogue_vad 严格正交·默认 shadow
+                ("dialogue_emotion_contagion",
+                 [child_python(), str(_SCRIPT_DIR / "dialogue_emotion_contagion_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "dialogue_emotion_contagion_scanner",
+                     "DIALOGUE_CONTAGION_ABNORMAL", "对话")),
+                # [2026-06-21 R19 W8 Batch-X·P2·AdaMARP 多人对话编排]
+                # 扫 _数据库/dialogue_turn_log.json 校验 turn 合规率·>30% 异常 →
+                # DIALOGUE_ORCHESTRATOR_DEGRADED advisory·env DIALOGUE_ORCHESTRATOR_MODE
+                # 默认 off(无 turn log 直接 skip)·与 hierarchical_planner/quotative 正交
+                ("dialogue_scene_manager",
+                 [child_python(), str(_SCRIPT_DIR / "dialogue_scene_manager.py"),
+                  "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "dialogue_scene_manager",
+                     "DIALOGUE_ORCHESTRATOR_DEGRADED", "对话")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
