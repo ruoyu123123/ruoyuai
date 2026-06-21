@@ -2288,6 +2288,58 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "integration_ridge_density_scanner",
                      "INTEGRATION_RIDGE_ABSENT", "剧情")),
+                # [2026-06-22 R24 W12 Batch-JJ·P0 STRONG·直播弹幕预测 9-class burst typology]
+                # 9 类爆点(laughter/shock/grief/anticipation/shipping/awe/critique/callback/meta)
+                # 从 cluster brief.intended_burst_type 拿目标·扫尾部 80-200 CJK·缺面 advisory
+                # env BURST_TYPE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true
+                ("cluster_burst_type_predictor",
+                 [child_python(), str(_SCRIPT_DIR / "cluster_burst_type_predictor.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "cluster_burst_type_predictor",
+                     "BURST_TYPE_NOT_DELIVERED", "节奏")),
+                # [2026-06-22 R24 W12 Batch-JJ·P1·Cialdini commitment+consistency K-12 教育叙事]
+                # 首 200 CJK anomaly_seed+pledge·末 500 CJK reveal·三状态 advisory
+                # env MYSTERY_PLEDGE_MODE 默认 shadow·绝不 hard_gate
+                ("mystery_pledge_scanner",
+                 [child_python(), str(_SCRIPT_DIR / "mystery_pledge_scanner.py"),
+                  str(cluster_draft)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "mystery_pledge_scanner",
+                     "MYSTERY_PLEDGE_DANGLING", "剧情")),
+                # [2026-06-22 R24 W12 Batch-JJ·P1·Nathan-Koedinger expert blindspot 教育]
+                # 术语首引登记·距上次具体锚定 gap·base 2000/复杂规则 800/POV 不计
+                # top-5 drift_unanchored·env EXPERT_BLINDSPOT_MODE 默认 shadow·绝不 hard_gate
+                ("expert_blindspot_scanner",
+                 [child_python(), str(_SCRIPT_DIR / "expert_blindspot_scanner.py"),
+                  str(cluster_draft)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "expert_blindspot_scanner",
+                     "EXPERT_BLINDSPOT_DRIFT", "风格")),
+                # [2026-06-22 R24 W12 Batch-JJ·P1·Glaser four levers 教育叙事 info-dump 救援]
+                # 识别 info-dump 段·四杠杆 0/1·0/4 段 advisory 建议补最便宜
+                # env GLASER_LEVERS_MODE 默认 shadow·绝不 hard_gate
+                ("glaser_four_levers",
+                 [child_python(), str(_SCRIPT_DIR / "glaser_four_levers.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "glaser_four_levers",
+                     "GLASER_LEVER_MISSING", "风格")),
+                # [2026-06-22 R24 W12 Batch-JJ·P1·anticipation signposting 直播弹幕预测]
+                # top-K(3) 爆点段向前回溯 2-3 段窗口·5 类 signpost·z-band·<-1σ advisory
+                # env SIGNPOST_MODE 默认 shadow·绝不 hard_gate
+                ("gaoneng_anticipation_signposting_scanner",
+                 [child_python(), str(_SCRIPT_DIR / "gaoneng_anticipation_signposting_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "gaoneng_anticipation_signposting_scanner",
+                     "BURST_LEAD_SIGNPOST_LOW", "节奏")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

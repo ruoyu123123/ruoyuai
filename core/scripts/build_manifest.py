@@ -1407,6 +1407,50 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             if (os.environ.get("FRISSON_LEAD_MODE") or "shadow").strip().lower() == "active"
                             else None
                         ),
+                        # 🆕 R24 W12 Batch-JJ P0 STRONG (2026-06-22): 9 类爆点 intended_burst_type
+                        # event_cluster_context 回灌让 writer 看见目标爆点·尾部 80-200 CJK 收束
+                        "intended_burst_type": c.get("intended_burst_type"),
+                        "burst_type_directive": (
+                            {
+                                "intended": c.get("intended_burst_type"),
+                                "tail_cjk_range": [80, 200],
+                                "supported_types": [
+                                    "laughter", "shock", "grief", "anticipation",
+                                    "shipping", "awe", "critique", "callback", "meta"
+                                ],
+                                "directive": (
+                                    "🟢 9 类爆点收束指令(R24 W12 Batch-JJ·直播弹幕预测)：\n"
+                                    f"  · 本 cluster 目标爆点类 = {c.get('intended_burst_type') or '未设·按场景自由发挥'}\n"
+                                    "  · 在 cluster 尾部 80-200 CJK 内把弹幕反应面收束到该类·\n"
+                                    "    例：shock = 怔住/震惊/瞳孔/倒吸；laughter = 笑/扑哧/捂嘴；\n"
+                                    "    grief = 泪/哭/哽咽；anticipation = 未完/下次/却不知；\n"
+                                    "    shipping = 心动/脸红/对视；awe = 霸气/锋芒/睥睨；\n"
+                                    "    critique = 嗤/冷笑/嘲；callback = 原来/果然/想起；\n"
+                                    "    meta = 诸位/看官/且说。\n"
+                                    "  · intended 未设时按场景自由·不强行套类。"
+                                ),
+                                "_doc": "R24 W12 Batch-JJ·shadow→active 软提示·advisory·绝不 hard_gate",
+                            }
+                            if (os.environ.get("BURST_TYPE_MODE") or "shadow").strip().lower() == "active"
+                            else None
+                        ),
+                        # 🆕 R24 W12 Batch-JJ P1 (2026-06-22): Glaser 四杠杆 D9.3 advisory
+                        "glaser_four_levers_directive": (
+                            {
+                                "levers": ["dramatize", "emotionalize",
+                                           "personalize", "fictionalize"],
+                                "directive": (
+                                    "🟢 Glaser 四杠杆 D9.3 advisory(R24 W12 Batch-JJ·教育叙事)：\n"
+                                    "  · info-dump 段（长段+无对话+抽象名词高密度）必须激活 ≥1 杠杆：\n"
+                                    "    dramatize=动作动词；emotionalize=情绪词；\n"
+                                    "    personalize=具名角色介入；fictionalize=具体物件/五感。\n"
+                                    "  · 最便宜优先序：fictionalize > dramatize > emotionalize > personalize。"
+                                ),
+                                "_doc": "R24 W12 Batch-JJ·shadow→active 软提示·advisory·绝不 hard_gate",
+                            }
+                            if (os.environ.get("GLASER_LEVERS_MODE") or "shadow").strip().lower() == "active"
+                            else None
+                        ),
                         # 🆕 R22 W10 Batch-DD P0 STRONG: 题材 prior 推荐辞格 subset
                         "rhetorical_subset_hint": _rhet_subset,
                         "_narrative_mode_doc": ("in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；"

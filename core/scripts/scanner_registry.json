@@ -1304,6 +1304,41 @@
       "doc": "[2026-06-22 R23 W11 Batch-HH·P1·author brand economics LitBench]cluster-write step 5 在 reading/voice judge 后并行跑·窗口化 char Shannon entropy 替身指标(占位·真版蒸馏阶段产小 LM perplexity ECDF)·落 [p5, p95] 静默·越界 advisory·book_count<2 / _placeholder=true 跳过·三 advisory(DRIFT_LOW/DRIFT_HIGH/BAND_MISSING)·env AUTHOR_BRAND_PERPLEXITY_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
       "_new": true,
       "issues_emitted": ["AUTHOR_BRAND_PERPLEXITY_DRIFT_LOW", "AUTHOR_BRAND_PERPLEXITY_DRIFT_HIGH", "AUTHOR_BRAND_PERPLEXITY_BAND_MISSING"]
+    },
+    "cluster_burst_type_predictor": {
+      "layer": "cluster",
+      "script": "cluster_burst_type_predictor.py + build_manifest.intended_burst_type directive",
+      "doc": "[2026-06-22 R24 W12 Batch-JJ·P0 STRONG·直播弹幕预测 9-class]9 类爆点(laughter/shock/grief/anticipation/shipping/awe/critique/callback/meta)占位词典·从 cluster brief.intended_burst_type 拿目标·扫尾部 80-200 CJK 算每类命中分·缺面 emit BURST_TYPE_NOT_DELIVERED·top1 ≠ intended emit BURST_TYPE_MISMATCH·全 0 emit BURST_TYPE_TAIL_FLAT info·缺 intent emit BURST_TYPE_NO_INTENT info·event_cluster_context 回灌让 writer 看见目标·env BURST_TYPE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["BURST_TYPE_NOT_DELIVERED", "BURST_TYPE_MISMATCH", "BURST_TYPE_NO_INTENT", "BURST_TYPE_TAIL_FLAT"]
+    },
+    "mystery_pledge_scanner": {
+      "layer": "cluster",
+      "script": "mystery_pledge_scanner.py",
+      "doc": "[2026-06-22 R24 W12 Batch-JJ·P1·Cialdini commitment+consistency 教育叙事]首 200 CJK 检 anomaly_seed+pledge 词·末 500 CJK 检 reveal marker·三状态(pledge_kept/dangling/cold_open)·dangling 表示开了契约不兑·env MYSTERY_PLEDGE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["MYSTERY_PLEDGE_DANGLING", "MYSTERY_COLD_OPEN", "MYSTERY_PLEDGE_KEPT"]
+    },
+    "expert_blindspot_scanner": {
+      "layer": "cluster",
+      "script": "expert_blindspot_scanner.py",
+      "doc": "[2026-06-22 R24 W12 Batch-JJ·P1·Nathan-Koedinger 教育]术语首引登记·算每次出现距上次具体锚定距离·base 2000 CJK/复杂规则 800 CJK/POV 段不计·候选=双引号包裹词+高频 4-CJK 复合词·top-5 drift_unanchored 输出 + 建议 anchor 时机·env EXPERT_BLINDSPOT_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["EXPERT_BLINDSPOT_DRIFT", "EXPERT_BLINDSPOT_DRIFT_COMPLEX", "EXPERT_BLINDSPOT_OK"]
+    },
+    "glaser_four_levers": {
+      "layer": "cluster",
+      "script": "glaser_four_levers.py + writer prompt D9.3 advisory",
+      "doc": "[2026-06-22 R24 W12 Batch-JJ·P1·Glaser 教育叙事 four levers]识别 info-dump 段(长段+对话密度低+抽象名词高密度)·四杠杆(dramatize/emotionalize/personalize/fictionalize)0/1 标记·0/4 dump 段 emit GLASER_LEVER_MISSING + 建议补哪个最便宜(fictionalize>dramatize>emotionalize>personalize)·1-2/4 dump 段 emit GLASER_LEVER_THIN info·cluster 汇总 lever_coverage·env GLASER_LEVERS_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["GLASER_LEVER_MISSING", "GLASER_LEVER_THIN", "GLASER_LEVER_OK"]
+    },
+    "gaoneng_anticipation_signposting_scanner": {
+      "layer": "cluster",
+      "script": "gaoneng_anticipation_signposting_scanner.py",
+      "doc": "[2026-06-22 R24 W12 Batch-JJ·P1·anticipation signposting 直播弹幕预测]top-K(3) 爆点段向前回溯 2-3 段 200-400 CJK 窗口·5 类 signpost(sensory_localization/sudden_quiet/physiological/object_closeup/time_distortion)·signpost_density vs 作者档 baseline z-band·<-1σ emit BURST_LEAD_SIGNPOST_LOW·>+2σ emit BURST_LEAD_SIGNPOST_HIGH info·writer prompt 软提示 lead window·env SIGNPOST_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["BURST_LEAD_SIGNPOST_LOW", "BURST_LEAD_SIGNPOST_HIGH", "BURST_LEAD_NO_PEAK_FOUND"]
     }
   },
 
