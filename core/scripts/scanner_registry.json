@@ -1130,6 +1130,34 @@
       "_new": true,
       "issues_emitted": ["PARAGRAPH_300CJK_PAYLOAD_OFF_BAND"]
     },
+    "prose_rhythm_intra_sentence_breath_chain": {
+      "layer": "cluster",
+      "script": "prose_rhythm_scanner.py(probe 10)",
+      "doc": "[2026-06-22 R23 W11 Batch-II·P2·朗读呼吸群·Selkirk 1986 prosodic phrase hierarchy] prose_rhythm 探针 10·单句逗号 > 5 (>=2 句·long_chain) + 全角逗号/顿号/分号区间 > 35 CJK 子句 ≥3 次 → intra_sentence_breath_chain_long / breath_group_violation·作者档 intra_sentence_breath_relax / breath_group_baseline.{max_commas_per_sentence, breath_group_max_cjk} 第一权威·锁长复合句作者档自动 relax (max 8 / 50CJK)·advisory·env PROSE_INTRA_SENT_BREATH_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["intra_sentence_breath_chain_long", "breath_group_violation"]
+    },
+    "audio_performance": {
+      "layer": "cluster",
+      "script": "audio_performance_scanner.py",
+      "doc": "[2026-06-22 R23 W11 Batch-II·P2·Echo Draft 4-Pass 朗读 craft] 三探针 advisory shadow:(a)三分句堆率(单段含 ≥3 完整主谓子句占比·default 20% / relax 30%) (b)抽象名词堆(滑窗 50CJK 含{情况/状况/局面/状态/现实/局势}≥3次·default 1.0/kCJK) (c)括弧带过率(段含 >25CJK 单括弧占比·default 10%)·作者档 audio_performance_relax / audio_performance_baseline.{tri_clause_density_target, abstract_noun_density_target, parenthesis_long_ratio_target} 第一权威·锁长复合句基线 relax·env AUDIO_PERFORMANCE_MODE 默认 shadow·_placeholder=true·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["AUDIO_PERF_TRI_CLAUSE_HEAVY", "AUDIO_PERF_ABSTRACT_NOUN_PILE", "AUDIO_PERF_PARENTHESIS_DRAG"]
+    },
+    "writer_growth_dashboard": {
+      "layer": "system",
+      "script": "writer_growth_dashboard.py",
+      "doc": "[2026-06-22 R23 W11 Batch-II·P2·distributed mentoring] 反馈↔词汇多样性轨迹 dashboard·每 cluster 算 TTR/MTLD/hapax legomena·平行追踪 用户偏好.json (style/content/workflow entries) + 走向卡日志 (事件簇.json clusters[].user_choice/_user_decision) 反馈事件数·TTR 单调下降 → WRITER_GROWTH_VOCAB_DROP·反馈高累积但 TTR 末段不响应 → WRITER_GROWTH_NO_RESPONSE_TO_FEEDBACK·挂 cluster-save-state step 9 cross-cluster·system layer·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["WRITER_GROWTH_VOCAB_DROP", "WRITER_GROWTH_NO_RESPONSE_TO_FEEDBACK"]
+    },
+    "antagonist_valence_trajectory": {
+      "layer": "cross_cluster",
+      "script": "antagonist_valence_trajectory.py",
+      "doc": "[2026-06-22 R23 W11 Batch-II·P2·fanfic 群体生态·反派情感重充电监控] outline 阶段用户标反派 list (人物卡 role=反派/antagonist/BBEG/主反 自动识别) + redemption_arc_authorized:bool 默认 false (人物卡字段或 用户偏好.json.antagonist_redemption_arc_authorized 全局开关)·每 cluster 算反派 valence (占位 lexicon 正向词-负向词·±80CJK 上下文窗口) → 未授权但单调正向 5 cluster 连涨 > +0.3 → ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED·作者授权可豁免·_placeholder=true·真版 NRC-VAD-CN + Riveter power score·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED"]
+    },
     "paragraph_engagement_comment_triggered": {
       "layer": "cluster",
       "script": "paragraph_engagement_heat_predictor.py(extended)",

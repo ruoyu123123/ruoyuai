@@ -1,0 +1,14 @@
+{
+  "_placeholder": true,
+  "_doc": "antagonist_valence_trajectory.py 占位 lexicon · R23 W11 Batch-II · P2 · 真版 = NRC-VAD-CN + Riveter power score 整合",
+  "_source": "占位字面词典 · 待 NRC-VAD-CN / Riveter 中文映射授权后替换",
+  "schema_version": "1.0",
+  "positive_lex": [
+    "温柔", "善良", "怜悯", "悔恨", "懊悔", "释然", "微笑", "温暖", "宽恕", "理解",
+    "同情", "柔软", "歉意", "无奈", "苦笑", "叹息", "保护", "守护"
+  ],
+  "negative_lex": [
+    "残忍", "冷血", "暴虐", "狠厉", "狰狞", "凶狠", "嗜血", "贪婪", "阴险", "狡诈",
+    "恶毒", "邪恶", "癫狂", "扭曲", "毒辣", "凶残"
+  ]
+}

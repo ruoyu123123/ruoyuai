@@ -66,6 +66,20 @@ PARA_300_SHARE_TARGET_DEFAULT = 0.20
 PARA_300_SHARE_STD_DEFAULT = 0.10
 PARA_300_SHARE_Z_THRESHOLD = 1.5  # |z|>1.5 报偏离
 
+# 探针10 intra_sentence_breath_chain (R23 W11 Batch-II P2 · 2026-06-22 · 朗读呼吸群)
+# Selkirk 1986 / Beckman & Pierrehumbert 1986 prosodic phrase hierarchy 朗读延伸：
+# 单句过多逗号 / 子句区间过长 → 听众断气 / 跟丢。
+# 探针：(a) max_commas_per_sentence > 5 (>=2 句) → 候选
+#       (b) breath_group_violation：全角逗号/顿号/分号区间 ≥35 CJK 子句 ≥3 次
+# 作者档锁长复合句基线 relax：作者风格.json.intra_sentence_breath_relax / .breath_group_baseline
+# env PROSE_INTRA_SENT_BREATH_MODE 默认 shadow · 绝不 hard_gate
+INTRA_SENT_COMMAS_MAX = 5            # 单句逗号上限（>5 计长链）
+INTRA_SENT_LONG_CHAIN_MIN = 2        # 长链句数 ≥2 才报
+BREATH_GROUP_MAX_CJK = 35            # 全角逗号/顿号/分号区间 ≤35 CJK
+BREATH_GROUP_VIOLATION_MIN = 3       # ≥3 次违反 才报
+INTRA_SENT_COMMAS_RELAX_MAX = 8      # 长复合句作者档 relax 上限
+BREATH_GROUP_RELAX_CJK = 50          # relax 区间
+
 # 探针7 句长方差塌缩（burstiness·cluster std vs 作者 std·单边偏均匀·治 flash 匀速碎句·env PROSE_BURSTINESS_MODE 默认 shadow）
 # 金标准校准（2026-06-16·6 作者各 10 cluster）：真作者 cluster_std/作者 std 最小 0.61（高 σ 作者偏低）→ 阈值
 # 0.5/0.4 留余量（< 0.61 真作者绝不误报·critic 建议 0.6 余量仅 0.01 太险已下调·北极星⑤防矫枉过正）。
@@ -488,6 +502,73 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                     f'·SEO/竖屏阅读体验 advisory·绝不 hard_gate'),
         })
 
+    # 探针 10：intra_sentence_breath_chain（R23 W11 Batch-II P2·朗读呼吸群·shadow）
+    # 作者档锁长复合句 relax：读 audio_performance_relax 复用 / intra_sentence_breath_relax 优先
+    breath_mode = (os.environ.get("PROSE_INTRA_SENT_BREATH_MODE") or "shadow").strip().lower()
+    intra_relax = False
+    intra_commas_max = INTRA_SENT_COMMAS_MAX
+    breath_max_cjk = BREATH_GROUP_MAX_CJK
+    try:
+        author_path = style_path if style_path else (
+            (project / "_数据库" / "作者风格.json") if project else None
+        )
+        if author_path and Path(author_path).exists():
+            adata = _load_json(Path(author_path)) or {}
+            if isinstance(adata.get("intra_sentence_breath_relax"), bool):
+                intra_relax = adata["intra_sentence_breath_relax"]
+            elif isinstance(adata.get("audio_performance_relax"), bool):
+                intra_relax = adata["audio_performance_relax"]
+            bg = adata.get("breath_group_baseline")
+            if isinstance(bg, dict):
+                if isinstance(bg.get("max_commas_per_sentence"), (int, float)):
+                    intra_commas_max = int(bg["max_commas_per_sentence"])
+                if isinstance(bg.get("breath_group_max_cjk"), (int, float)):
+                    breath_max_cjk = int(bg["breath_group_max_cjk"])
+    except Exception:
+        pass
+    if intra_relax:
+        intra_commas_max = max(intra_commas_max, INTRA_SENT_COMMAS_RELAX_MAX)
+        breath_max_cjk = max(breath_max_cjk, BREATH_GROUP_RELAX_CJK)
+
+    long_chain_sents = 0
+    breath_group_violations = 0
+    if breath_mode != "off":
+        for p in body:
+            # 按句末标点切句
+            for s in re.split(r'(?<=[。！？…])', p):
+                s = s.strip()
+                if not s:
+                    continue
+                # (a) max_commas_per_sentence
+                comma_n = sum(1 for ch in s if ch in '，')
+                if comma_n > intra_commas_max:
+                    long_chain_sents += 1
+                # (b) breath_group: split by 全角逗号/顿号/分号 求子句长度
+                sub_clauses = re.split(r'[，、；]', s)
+                for sc in sub_clauses:
+                    if cjk(sc.strip()) > breath_max_cjk:
+                        breath_group_violations += 1
+
+        if breath_mode == "active":
+            if long_chain_sents >= INTRA_SENT_LONG_CHAIN_MIN:
+                violations.append({
+                    'kind': 'intra_sentence_breath_chain_long',
+                    'severity': 'minor',
+                    'long_chain_sents': long_chain_sents,
+                    'threshold': intra_commas_max,
+                    'hint': (f'{long_chain_sents} 句逗号 > {intra_commas_max}·朗读呼吸断点不足'
+                             f'·拆短句或换分号'),
+                })
+            if breath_group_violations >= BREATH_GROUP_VIOLATION_MIN:
+                violations.append({
+                    'kind': 'breath_group_violation',
+                    'severity': 'minor',
+                    'breath_group_violations': breath_group_violations,
+                    'threshold_cjk': breath_max_cjk,
+                    'hint': (f'{breath_group_violations} 处子句区间 > {breath_max_cjk}CJK '
+                             f'(全角逗号/顿号/分号分隔)·朗读呼吸群过长'),
+                })
+
     has_major = any(v['severity'] == 'major' for v in violations)
     verdict = 'PASS' if not violations else ('FAIL_MAJOR' if has_major else 'FAIL_MINOR')
     return {
@@ -513,6 +594,10 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             'punct_weibull_per_mark': weibull_results,       # 探针8 标点距离 Weibull KS（R13 W6 Batch-R P2）
             'paragraph_300cjk_share': para_300_share,        # 探针9 300CJK±50 段占比（R20 W9 Batch-CC P2）
             'paragraph_300cjk_z': p300_z,                    # 探针9 z=(share-target)/std
+            'long_comma_chain_sents': long_chain_sents,      # 探针10 单句逗号>阈值的句数（R23 W11 Batch-II）
+            'breath_group_violations': breath_group_violations,  # 探针10 子句区间>阈值次数
+            'breath_group_max_cjk_threshold': breath_max_cjk,    # 探针10 实际生效阈值
+            'intra_sentence_breath_relax': intra_relax,          # 探针10 是否走作者档 relax
         },
         'author_baseline': {
             'sentence_mean': sent_mean_base,
