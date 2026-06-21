@@ -129,6 +129,23 @@ HOOK_TYPES = {
 ELLIPSIS_END = re.compile(r"(……|\.\.\.|—{1,2}|――)\s*$")
 QUESTION_END = re.compile(r"[?？]\s*$")
 
+# R18 W7 Batch-U·P2 · mid-sentence cliffhanger primitive (Loewenstein 信息缺口)
+# 末位破折号/省略号 + 前句残缺 · 或末字以连接词（的/了/吗/呢）戛然而止
+MID_SENTENCE_CUT_REGEX = re.compile(
+    r"(?:[，,；;]\s*[^。！？!?…\n]{2,40}(?:——|――|—|……|\.\.\.))"
+    r"|"
+    r"(?:[^。！？!?…\n]{4,60}[的了吗呢着在](?:——|――|—|……|\.\.\.))"
+)
+
+
+def count_mid_sentence_cuts(text: str) -> int:
+    """R18 W7 Batch-U·P2 · 句内悬挂（Loewenstein 信息缺口）命中数。
+    末位破折号/省略号 + 前句以连接词或残缺动词收尾。
+    consolidate 抓真作者 mid_sentence_cut_rate；作者档基线 0 则 skip。"""
+    if not text:
+        return 0
+    return len(MID_SENTENCE_CUT_REGEX.findall(text))
+
 # 反模式：总结式收尾 / 平铺直叙的句号收尾 / 大团圆松弛感
 SUMMARY_ENDING_KW = re.compile(
     r"(就这样|从此|从那以后|总算|终于(?:结束|平静|安定|过去)|"
@@ -319,6 +336,12 @@ def scan(project_root: Path, ch: int):
             severity = "info"
             suppressed_reason = f"过渡章豁免 → info：{transition_reason}"
 
+    # R18 W7 Batch-U·P2 · mid-sentence cliffhanger primitive (Loewenstein)
+    mid_cut_count = count_mid_sentence_cuts(body)
+    mid_sentence_cut_rate = (
+        round(mid_cut_count / (wc / 1000.0), 3) if wc > 0 else 0.0
+    )
+
     report = {
         "schema_version": "1.0",
         "scanner": "hook_strength_scanner",
@@ -336,6 +359,9 @@ def scan(project_root: Path, ch: int):
         "pass_threshold": PASS_THRESHOLD,
         "severity": severity,
         "warning": warning,
+        # R18 W7 Batch-U·P2 · 句内悬挂指纹（作者档基线 0 → consolidate 端 skip）
+        "mid_sentence_cut_count": mid_cut_count,
+        "mid_sentence_cut_rate_per_kcjk": mid_sentence_cut_rate,
     }
     if suppressed_reason:
         report["suppressed_reason"] = suppressed_reason

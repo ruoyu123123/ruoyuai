@@ -1999,6 +1999,64 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "situation_model_5dim_scanner",
                      "SITUATION_MODEL_DIM_DROPOUT", "结构")),
+                # [2026-06-21 R18 W7 Batch-U·P2·filmustage vertical-drama-script +
+                # finaldraft verticals-micro-dramas + medium real-reel china-vertical-drama-2026]
+                # 短剧竖屏相邻集双侧握手桥·激活门控 genre_tags=short_drama_vertical·
+                # resolve_latency_ratio + new_hook_position_ratio·与 R7 hook_strength 11 型(单边)
+                # + R8 frame_tale 正交·advisory·默认 shadow
+                ("episode_bilateral_bridge",
+                 [child_python(), str(_SCRIPT_DIR / "episode_bilateral_bridge_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "episode_bilateral_bridge_scanner",
+                     "BRIDGE_RESOLVE_TOO_LATE", "结构")),
+                # [2026-06-21 R18 W7 Batch-U·P2·Qidian-Webnovel Corpus 2.79M 评论 +
+                # Loewenstein Information Gap 1994 + Groningen Qidian-110]
+                # 段落热度·5 Loewenstein gap 特征·仅通章 cold flat 报·
+                # 与 cross_cluster_engagement_metrics + hook_strength 正交·advisory·默认 shadow
+                ("paragraph_engagement_heat_predictor",
+                 [child_python(), str(_SCRIPT_DIR / "paragraph_engagement_heat_predictor.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "paragraph_engagement_heat_predictor",
+                     "PARAGRAPH_ENGAGEMENT_FLATLINE", "结构")),
+                # [2026-06-21 R18 W7 Batch-U·P2·Cowan 2001/2024 magical number 4±1
+                # + Miller 7±2] 单场景活跃角色数·>5 报 COGNITIVE_OVERLOAD·从角色池.json
+                # 读 emerged/main names·作者档 wm_load_tolerance 可旁路群像·与 R9 cast_economy
+                # (introduce_burst) 正交·advisory·默认 shadow
+                ("active_character_wm_load",
+                 [child_python(), str(_SCRIPT_DIR / "active_character_wm_load_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "active_character_wm_load_scanner",
+                     "COGNITIVE_OVERLOAD", "人物")),
+                # [2026-06-21 R18 W7 Batch-U·P2·arxiv 2510.09116 DITING 2025-10
+                # + PMC8581763 Frontiers 2021 实证 91.3% + ACL 2022 GuoFeng] 中文
+                # pro-drop 零代词残留·三指标(zero_subject/same_sentence_zp/dialogue_gap)·
+                # 作者档 zp_baseline z-band 第一权威·兜底地板 same_sentence_zp≥0.60·
+                # 与 translationese_residual(译入残留 NP/被动)方向相反·advisory·默认 shadow
+                ("zero_pronoun_density",
+                 [child_python(), str(_SCRIPT_DIR / "zero_pronoun_density_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "zero_pronoun_density_scanner",
+                     "ZP_DENSITY_OFF_AUTHOR_BAND", "风格")),
+                # [2026-06-21 R18 W7 Batch-U·P2·Liang 2024 Science Advances Zipf
+                # + Pangram 2025 detector + arxiv 2025-2026 Zipf LLM detection]
+                # 词频 log-log α 斜率·人类 α≈1.0 重尾·LLM 偏高瘦尾·作者档 zipf_baseline z-band·
+                # 兜底地板 α>1.4 报 ZIPF_ALPHA_DRIFT·与 R18 excess_vocab(type 级)正交(本=分布形状)·
+                # advisory·默认 shadow
+                ("zipf_alpha",
+                 [child_python(), str(_SCRIPT_DIR / "zipf_alpha_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "zipf_alpha_scanner",
+                     "ZIPF_ALPHA_DRIFT", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

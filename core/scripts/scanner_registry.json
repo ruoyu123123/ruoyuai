@@ -877,6 +877,55 @@
       "doc": "[2026-06-21 R18 W7 Batch-T·P1·Grosz/Joshi/Weinstein 1995 Computational Linguistics + arxiv 2604.* Centering Theory 2026 + Walker 1998 CT 综述] 读者注意焦点追踪·Cf(forward-looking centers 本句实体按显著度排序首位=Cp) + Cb(backward-looking center 继承前句 Cf 最高显著实体)·4 转移类型(continue: Cb(n)==Cb(n-1) 且 Cb(n)==Cp(n) / retain: Cb(n)==Cb(n-1) 且 Cb(n)!=Cp(n) / smooth-shift: Cb(n)!=Cb(n-1) 且 Cb(n)==Cp(n) / rough-shift: Cb(n)!=Cb(n-1) 且 Cb(n)!=Cp(n))·rough-shift 是读者认知负载最高的转移·作者档 quantitative.centering_baseline{rough_shift_density_mean/std/max} z-band 第一权威·兜底地板 8.0/kCJK·与 R7 focalizer_perception_bounds(narrator 知觉边界) + R6/R7 pov_consistency(scene 主导 POV 一致性) + R18 character_belief_ledger(跨场景信念) 严格正交不重叠·env CENTERING_THEORY_FOCUS_MODE 默认 shadow·🔬阈值占位待金标准校准·CENTERING_ROUGH_SHIFT_OVERLOAD 绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["CENTERING_ROUGH_SHIFT_OVERLOAD"]
+    },
+    "episode_bilateral_bridge_scanner": {
+      "layer": "cluster",
+      "script": "episode_bilateral_bridge_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-U·P2·filmustage vertical-drama-script + finaldraft verticals-micro-dramas + medium real-reel china-vertical-drama-2026] 短剧竖屏相邻集双侧握手桥·激活门控 genre_tags=short_drama_vertical(用户偏好.json/作者风格.json·非短剧 skip)·两探针 resolve_latency_ratio(下集开头 30% 内是否兑现上集钩)+new_hook_position_ratio(下集末段 55% 后是否立新钩)·BRIDGE_RESOLVE_TOO_LATE/BRIDGE_NEW_HOOK_TOO_EARLY·与 R7 hook_strength(单章末钩 11 型单边 WHAT)+R8 frame_tale_consistency(跨层承接)严格正交·env EPISODE_BILATERAL_BRIDGE_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["BRIDGE_RESOLVE_TOO_LATE", "BRIDGE_NEW_HOOK_TOO_EARLY"]
+    },
+    "paragraph_engagement_heat_predictor": {
+      "layer": "cluster",
+      "script": "paragraph_engagement_heat_predictor.py",
+      "doc": "[2026-06-21 R18 W7 Batch-U·P2·Qidian-Webnovel Corpus 2.79M 评论 johd.368 + Loewenstein Information Gap 1994 + Groningen Qidian-110 + ResearchGate 358520938] 段落级评论密度预测·5 个 Loewenstein gap 特征(question density/ambiguous referent/temporal suspense/character ambiguity/valence jump)算段落热度·仅通章 cold(≥80% 段热度=0 且 mean<0.10) 才报 PARAGRAPH_ENGAGEMENT_FLATLINE·避免误伤纯过渡段·与 cross_cluster_engagement_metrics_aggregate(章级 hook trend)+hook_strength(章末/拟切点 11 型钩)正交·env PARAGRAPH_ENGAGEMENT_HEAT_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["PARAGRAPH_ENGAGEMENT_FLATLINE"]
+    },
+    "active_character_wm_load_scanner": {
+      "layer": "cluster",
+      "script": "active_character_wm_load_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-U·P2·Cowan 2001/2024 magical number 4±1 + Miller 7±2 + arxiv 2604.* WM narrative 2026] 单场景活跃角色数·>5 报 COGNITIVE_OVERLOAD advisory·从 _数据库/角色池.json 读 emerged/main names + aliases·作者档 quantitative.wm_load_tolerance(3-12) 可旁路群像题材·与 R9 cast_economy(配角经济·每章新登场密度)严格正交(本 scanner=单场景共时活跃数 WM 心理学)·env ACTIVE_CHARACTER_WM_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["COGNITIVE_OVERLOAD"]
+    },
+    "zero_pronoun_density_scanner": {
+      "layer": "cluster",
+      "script": "zero_pronoun_density_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-U·P2·arxiv 2510.09116 DITING 2025-10 + PMC8581763 Frontiers 2021 实证 91.3% + ACL 2022 GuoFeng 阅文 + arxiv 2412.11732 WMT 2024] 中文 pro-drop 零代词残留·三指标(zero_subject_ratio_per_clause + same_sentence_zp_ratio 91.3% z-band + dialogue_vs_narrator_zp_gap)·作者档 quantitative.zp_baseline z-band 第一权威·兜底地板 same_sentence_zp_rate≥0.60(LLM 翻译腔常偏低)·与 translationese_residual(4 桶 NP 嵌套/被动·译入残留)方向相反·与 R13 aspect_grounding(体貌 le/zhe)正交·env ZERO_PRONOUN_DENSITY_MODE 默认 shadow·🔬占位简化版谓语前主语 NP 检测(jieba 接入 defer)·ZP_DENSITY_OFF_AUTHOR_BAND 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ZP_DENSITY_OFF_AUTHOR_BAND"]
+    },
+    "zipf_alpha_scanner": {
+      "layer": "cluster",
+      "script": "zipf_alpha_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-U·P2·Liang 2024 Science Advances Zipf + Pangram 2025 detector + arxiv 2025-2026 Zipf law LLM detection] 词频曲线 log-log 斜率 α·人类作者中文 α≈1.0 重尾·LLM 生成中文 α 显著偏高瘦尾(避免长尾低频词)·作者档 quantitative.zipf_baseline{alpha_mean/std} z-band 第一权威·兜底地板 α>1.4 报 ZIPF_ALPHA_DRIFT(瘦尾/AI 偏高)+α<0.6 报噪声·与 R18 excess_vocab_corpus_zscan(type 级 vocab 命中) 正交(本 scanner=分布形状斜率)·与 syntactic_diversity(POS n-gram 句法模板)正交·env ZIPF_ALPHA_SCANNER_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ZIPF_ALPHA_DRIFT"]
+    },
+    "cross_cluster_hierarchical_position_surprisal_aggregate": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_hierarchical_position_surprisal_aggregate.py",
+      "doc": "[2026-06-21 R18 W7 Batch-U·P2 cross-cluster shadow·arxiv 2410.16062 Tsipidi 2024 SCH + arxiv 2604.10724 Surprisal Salient 2026-04 + arxiv 2602.14653 IUH grounding] SCH 层级位置惊异度·边界 PARA/SCENE/CLUSTER_END 计 Δsurprisal(LM-free 用 frequency-rank surprise 替身)·期望 ΔS_CLUSTER_END ≥ ΔS_SCENE ≥ ΔS_PARA·颠倒报 SCH_HIERARCHY_INVERTED·与 cross_cluster_engagement_metrics(章级 hook trend)+cross_cluster_style_drift(长程作者文风)正交·env HIERARCHICAL_POSITION_SURPRISAL_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SCH_HIERARCHY_INVERTED"]
+    },
+    "cross_cluster_reader_retention_proxy_aggregate": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_reader_retention_proxy_aggregate.py",
+      "doc": "[2026-06-21 R18 W7 Batch-U·P2 cross-cluster shadow·番茄完读率公开数据 + 起点新书期攻略 + Kindle Direct Publishing 留存数据 + Webnovel platform locked chapters] 完读率反向工艺指标·R=0.35·hook_strength_norm + 0.25·(1-sagging_middle) + 0.25·cliffhanger_quota + 0.15·section_word_count_health·proxy<0.45 报 RETENTION_PROXY_LOW·与 W6 cross_cluster_engagement_metrics(章级 hook trend)正交(那是 trend·本是 retention)·env READER_RETENTION_PROXY_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["RETENTION_PROXY_LOW"]
     }
   },
 

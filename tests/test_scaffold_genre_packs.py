@@ -226,6 +226,34 @@ def test_verify_minimal_valid_returns_0():
     assert rc == 0
 
 
+# ---------- R18 W7 Batch-U·P2 新增 pack 注册回归 ----------
+
+def test_classical_commentary_inline_in_canonical():
+    """2026-06-21 R18 W7 Batch-U·P2 新增·canonical 应含 classical_commentary_inline。"""
+    assert "classical_commentary_inline" in gp.canonical_genres()
+
+
+def test_short_drama_vertical_in_canonical():
+    """2026-06-21 R18 W7 Batch-U·P2 新增·canonical 应含 short_drama_vertical。"""
+    assert "short_drama_vertical" in gp.canonical_genres()
+
+
+def test_classical_commentary_pack_has_writer_directives():
+    directives = gp.get_writer_directives("classical_commentary_inline")
+    assert len(directives) >= 3
+
+
+def test_short_drama_vertical_has_scanner():
+    assert gp.get_scanner("short_drama_vertical") == "episode_bilateral_bridge_scanner"
+
+
+def test_short_drama_vertical_has_writer_directives():
+    directives = gp.get_writer_directives("short_drama_vertical")
+    assert len(directives) >= 3
+    # 应含双侧握手桥提示
+    assert any("双侧握手" in d or "握手桥" in d for d in directives)
+
+
 # ---------- 自跑入口（参照既有约定） ----------
 
 def _run():

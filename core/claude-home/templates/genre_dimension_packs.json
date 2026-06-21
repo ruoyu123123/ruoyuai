@@ -2,7 +2,7 @@
   "_doc": "题材专属维度包【单一真理源】（蒸馏画骨·阶段3·2026-06-13）。风格分两层：作者层(句法/声纹/节奏=通用维度池·always-on·48维+A1-C3骨已覆盖) + 题材层(内容工艺=爽点/糖虐/面板·按 genre 激活)。现系统把题材层的「爽点」当通用维度测所有书=写死爽文根因；本表把题材专属维度做成按 genre_tags 路由的可插拔包。专属维度全程 advisory·hard_gate 清单不随题材变(北极星⑤)。仿 subsystem_skeletons.json 范式·scaffold_genre_packs.py 消费。",
   "_version": "v2_2026-06-19",
   "_principle": "通用维度池(作者层·always-on) + 题材专属维度包(内容工艺层·按 genre 路由) + 题材权重(同维度不同题材权重不同)。conventions 是 elements 不是 events(Lucy Monroe)→ 测元素密度/分布·不硬卡必须有某事件。",
-  "_canonical_genres": ["xuanhuan", "xianxia", "urban_supernatural", "scifi_meta", "horror_game", "historical", "romance", "mystery", "scheming_politics", "slice_of_life", "heist_caper", "regression", "espionage", "rule_anomaly", "apocalypse_survival", "cosmic_horror", "unknown"],
+  "_canonical_genres": ["xuanhuan", "xianxia", "urban_supernatural", "scifi_meta", "horror_game", "historical", "romance", "mystery", "scheming_politics", "slice_of_life", "heist_caper", "regression", "espionage", "rule_anomaly", "apocalypse_survival", "cosmic_horror", "classical_commentary_inline", "short_drama_vertical", "unknown"],
   "packs": {
     "romance": {
       "_label": "甜宠/言情",
@@ -284,6 +284,45 @@
         "知识即代价：每次主角理解真相一步必付代价(精神污染/亲人死亡/能力倒退)·禁查得越深越强爽文模式·题材核心是『不知道是幸福·查到底=毁灭』",
         "宇宙尺度做底色：频繁穿插宇宙尺度对照(『这块石头比太阳还古老』『它出现时人类祖先还是细菌』)·让读者感受人类的渺小与短暂·徒劳感是题材魅力非bug",
         "不可靠叙述：叙述者可能疯/被污染/拼凑残卷·考虑用手稿/日记/录音残片体·让读者拼真相·禁全知第三人称给读者透明答案"
+      ]
+    },
+    "classical_commentary_inline": {
+      "_label": "古典 commentary 评点 inline 注释体(古典文学/历史小说题材)",
+      "_doc": "2026-06-21 R18 W7 Batch-U·P2 新增·金圣叹评水浒+张竹坡评金瓶梅+脂砚斋评红楼+哈佛大学中国古典文学评点学+余英时研究·允许章末段加『评:XXX』(脂砚斋范式)·非默认题材 skip·非 eligible 题材不激活·与 R10 narrator_commentary_scanner(narrator 视角侵入)正交(本 pack 允许 inline 评点 = 题材风格)",
+      "register_tier": "historical",
+      "_eligible_genres": ["historical", "classical"],
+      "judge_dims": {
+        "CC1_评点位置自然": "评点(评:/朱注:/眉批等)出现位置·章末段为优·散文中嵌入需有间隔(不贴主角内心独白后)",
+        "CC2_评点声口差异": "评点声口与叙述/角色对话明显切开·语域更典雅·禁现代口吻入评点(『真的吗』『真假』)",
+        "CC3_评点节制": "全章评点 ≤3 次·不喧宾夺主·章末评点为黄金位置(契合『余言可作』范式)",
+        "CC4_评点含金量": "评点须含具体艺术评价/历史隐喻/伦理评点·禁纯重复正文剧情",
+        "CC5_格式标记一致": "评点标记符号一致(『评:』或『眉批:』或『朱注:』固定单形式·不混用)"
+      },
+      "writer_directives": [
+        "古典 commentary 评点 inline pack 激活·允许章末段加『评:XXX』(脂砚斋范式)·非每章必有",
+        "评点声口与正文切开·更典雅·禁现代口吻入评点",
+        "评点内容含具体艺术评价/历史隐喻/伦理评点·禁纯复述剧情",
+        "格式标记单形式不混用·全书统一『评:』或『眉批:』或『朱注:』一种"
+      ]
+    },
+    "short_drama_vertical": {
+      "_label": "竖屏短剧/微短剧(每集 1-3 分钟)",
+      "_doc": "2026-06-21 R18 W7 Batch-U·P2 新增·filmustage vertical-drama-script + finaldraft verticals-micro-dramas + medium real-reel china-vertical-drama-2026·激活 episode_bilateral_bridge_scanner·相邻集双侧握手桥(上集末段挑钩 → 下集开头 0-30% 兑现 + 下集 55-100% 立新钩)·与 R7 hook_strength 11 型(单边)正交",
+      "register_tier": "modern_urban",
+      "judge_dims": {
+        "SD1_单集长度纪律": "每集字数对齐分钟数(1 分≈300 字 / 2 分≈600 字 / 3 分≈900 字)·禁长集",
+        "SD2_双侧握手桥": "相邻集必须兑现+新钩双侧·上集末段挑钩 → 下集开头 30% 内兑现 + 下集末段 55% 后立新钩",
+        "SD3_首集 3 秒钩": "首集前 50 字(≈3 秒视听)必有强钩·禁交代背景",
+        "SD4_反转密度": "每集 ≥1 反转(身份/能力/情感/真相)·短剧观众的爽点饱和度",
+        "SD5_平均场景长度": "场景长度紧凑 100-300 字·禁单场景跨集"
+      },
+      "scanner": "episode_bilateral_bridge_scanner",
+      "writer_directives": [
+        "每集 300-900 字·对齐 1-3 分钟视听·禁长集",
+        "双侧握手桥铁律·上集末段挑钩 → 下集开头 30% 内兑现 + 下集末段 55% 后立新钩",
+        "首集前 50 字给强钩·禁交代背景",
+        "每集 ≥1 反转·短剧观众爽点饱和度高",
+        "场景 100-300 字·禁单场景跨集"
       ]
     },
     "espionage": {
