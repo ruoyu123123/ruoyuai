@@ -856,6 +856,27 @@
       "doc": "[2026-06-21 R18 W7 Batch-S·P0·Zwaan 1998 event-indexing model + arxiv 2506.* situation model 2026 + Cognitive Load Theory Sweller 2024] 读者构建 situation model 5 维跟踪(time/space/causation/intentionality/protagonist)·场景间检测:time(时间锚突变无 TIME_MARKERS)/space(SPACE_TOKENS 集合无交集无 SPACE_MARKERS)/causation(因果连词 density<0.3/kCJK 且 scene_cjk>800)/intentionality(intent_verbs hits==0 且 scene_cjk>600)/protagonist(focalizer 主角占比<20%)·任一命中 → SITUATION_MODEL_DIM_DROPOUT advisory·作者档 dim_dropout_tolerance:[time/space/...] 旁路·R7-R13 共 101 条 100%craft-output 层·从未触读者心智 situation model·env SITUATION_MODEL_5DIM_MODE 默认 shadow·🔬阈值占位待金标准校准·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["SITUATION_MODEL_DIM_DROPOUT"]
+    },
+    "paratactic_implicit_logic_scanner": {
+      "layer": "cluster",
+      "script": "paratactic_implicit_logic_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-T·P1·HKU 学位论文 hub.hku.hk 127800 + AJHSS 2024 francis-press 14715 + Academy Pub JLTR vol02/01/14] 中文意合 vs 英文形合·逻辑连词显隐度·两探针(connective_density_per_kcjk 30+ 多字连词四类因果/转折/选择/递进 + 句首/逗号后单字连词故则便即却或 + causal_chain_implicit_ratio 短句对承接 implicit vs explicit)·作者档 quantitative.paratactic_baseline{connective_density_mean/std, implicit_ratio_mean/std} z-band 第一权威·兜底地板(implicit_ratio<0.30 报偏低·connective_density>=25/kCJK 报洪流)·与 syntactic_diversity (POS n-gram 句法模板) + translationese_residual (NP 嵌套/被动) + R13 aspect_grounding (体貌 le/zhe) 显式去重正交·env PARATAXIS_IMPLICIT_LOGIC_MODE 默认 shadow·🔬阈值占位待金标准校准·PARATAXIS_OFF_AUTHOR_BAND 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["PARATAXIS_OFF_AUTHOR_BAND"]
+    },
+    "indirect_characterization_ratio_scanner": {
+      "layer": "cluster",
+      "script": "indirect_characterization_ratio_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-T·P1·金圣叹评水浒 + Plaks Four Masterworks of Ming Novel + 脂砚斋评红楼 + 余英时《红楼梦评点研究》] 烘云托月(单 cluster 配角侧写主角 ratio)+横云断山(跨 cluster 冷热基调交替)·两探针 ①indirect_ratio(direct=主角+动作动词 vs indirect=配角名+视/望/盯/瞧/听+主角名 / 对话引号内含主角名议论)·②tonal_pendulum(读 _数据库/.cross_chapter_scan/cluster_tonal_registry.json·HOT/COLD 词典分类·末 5 cluster 同 tone streak≥4 → flat)·作者档 quantitative.indirect_characterization_baseline{mean,std,tonal_alternation_target,allow_monotone} 第一权威·与 R10 mass_reactor(单 cluster 内 ≥3 句反应聚簇不区分指向) 严格正交(本 scanner 只算指向主角的侧写 + 跨 cluster 冷热)·env INDIRECT_CHARACTERIZATION_MODE 默认 shadow·🔬阈值占位待金标准校准·INDIRECT_CHARACTERIZATION_THIN/TONAL_PENDULUM_FLAT 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["INDIRECT_CHARACTERIZATION_THIN", "TONAL_PENDULUM_FLAT"]
+    },
+    "centering_theory_focus_scanner": {
+      "layer": "cluster",
+      "script": "centering_theory_focus_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-T·P1·Grosz/Joshi/Weinstein 1995 Computational Linguistics + arxiv 2604.* Centering Theory 2026 + Walker 1998 CT 综述] 读者注意焦点追踪·Cf(forward-looking centers 本句实体按显著度排序首位=Cp) + Cb(backward-looking center 继承前句 Cf 最高显著实体)·4 转移类型(continue: Cb(n)==Cb(n-1) 且 Cb(n)==Cp(n) / retain: Cb(n)==Cb(n-1) 且 Cb(n)!=Cp(n) / smooth-shift: Cb(n)!=Cb(n-1) 且 Cb(n)==Cp(n) / rough-shift: Cb(n)!=Cb(n-1) 且 Cb(n)!=Cp(n))·rough-shift 是读者认知负载最高的转移·作者档 quantitative.centering_baseline{rough_shift_density_mean/std/max} z-band 第一权威·兜底地板 8.0/kCJK·与 R7 focalizer_perception_bounds(narrator 知觉边界) + R6/R7 pov_consistency(scene 主导 POV 一致性) + R18 character_belief_ledger(跨场景信念) 严格正交不重叠·env CENTERING_THEORY_FOCUS_MODE 默认 shadow·🔬阈值占位待金标准校准·CENTERING_ROUGH_SHIFT_OVERLOAD 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CENTERING_ROUGH_SHIFT_OVERLOAD"]
     }
   },
 
