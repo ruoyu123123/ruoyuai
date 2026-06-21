@@ -259,6 +259,73 @@
             "_v2_note": "2026-05-29 复审修复（M5）：outline-planner 标注本 cluster climax 场景在 scene_storyboard 的下标，供 splitter in_medias_res 重组定位 climax 段。缺省时 splitter 自行扫描 climax。",
             "description": "climax 场景在 scene_storyboard 的下标（in_medias_res 倒叙重组用 · 可缺省）"
           },
+          "scene_storyboard": {
+            "type": "array",
+            "_v_r20bb_note": "R20 W9 Batch-BB · P2 (2026-06-21): 三件 storyboard 扩展（gap_designer / scene_sequel / value_polarity）字段全 optional · 向后兼容旧 brief · 真校验由对应 probe 模块（scene_gap_probe / sequel_drought_advisory / value_polarity_probe）shadow 验证 · 绝不 hard_gate。",
+            "items": {
+              "type": "object",
+              "properties": {
+                "scene_index": {"type": "integer", "minimum": 0},
+                "scene_id": {"type": "string"},
+                "summary": {"type": "string"},
+                "characters": {"type": "array", "items": {"type": "string"}},
+                "location": {"type": "string"},
+                "paragraph_function": {
+                  "type": "string",
+                  "enum": ["scene_setting", "action", "dialogue", "reflection", "transition",
+                           "exposition", "summary", "flashback"],
+                  "_doc": "R20 STRONG (NKW Q3-Q4 id 19): 每 beat 的功能 tag · stable_identity / dynamic_state 时态分离辅助标记"
+                },
+                "expectation": {
+                  "type": "string",
+                  "minLength": 5,
+                  "_doc": "R20 P2 (McKee GAP id 6): 角色在此 beat 期待发生什么"
+                },
+                "actual_outcome": {
+                  "type": "string",
+                  "minLength": 5,
+                  "_doc": "R20 P2 (McKee GAP id 6): 实际发生什么 · expectation 与 actual_outcome 之间的差就是 GAP"
+                },
+                "gap_type": {
+                  "type": "string",
+                  "enum": ["reversal", "escalation", "revelation", "deflection", "ironic", "no_gap"],
+                  "_doc": "R20 P2 (McKee GAP id 6): expectation 与 actual_outcome 的差类型 · av_judge scene_gap_probe 验证"
+                },
+                "unit_type": {
+                  "type": "string",
+                  "enum": ["scene", "sequel"],
+                  "_doc": "R20 P2 (Swain Scene/Sequel id 7): scene 单元(目标→冲突→灾难) 或 sequel 单元(反应→困境→决定)"
+                },
+                "sequel_goal": {
+                  "type": "string",
+                  "_doc": "R20 P2: sequel 单元的 reaction → dilemma → decision 三字段之 dilemma/反应"
+                },
+                "sequel_dilemma": {
+                  "type": "string",
+                  "_doc": "R20 P2: sequel 单元的 dilemma 困境"
+                },
+                "sequel_decision": {
+                  "type": "string",
+                  "_doc": "R20 P2: sequel 单元的 decision · 下个 scene 的目标种子"
+                },
+                "value_axis": {
+                  "type": "string",
+                  "_doc": "R20 P2 (Coyne/McKee 价值极性 id 8): 本场价值轴 · 如 生/死 / 自由/束缚 / 信任/背叛"
+                },
+                "start_polarity": {
+                  "type": "string",
+                  "enum": ["strongly_positive", "positive", "neutral", "negative", "strongly_negative"],
+                  "_doc": "R20 P2: 场景起始极性 5 档"
+                },
+                "end_polarity": {
+                  "type": "string",
+                  "enum": ["strongly_positive", "positive", "neutral", "negative", "strongly_negative"],
+                  "_doc": "R20 P2: 场景结束极性 5 档 · 强制 start ≠ end (no_turn 例外 by_design)"
+                }
+              }
+            },
+            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe 消费"
+          },
           "writer_model_used": {
             "type": "string",
             "description": "实际用的 model (写入后只读, 供后续分析)"

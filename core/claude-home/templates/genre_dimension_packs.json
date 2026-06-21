@@ -2,7 +2,7 @@
   "_doc": "题材专属维度包【单一真理源】（蒸馏画骨·阶段3·2026-06-13）。风格分两层：作者层(句法/声纹/节奏=通用维度池·always-on·48维+A1-C3骨已覆盖) + 题材层(内容工艺=爽点/糖虐/面板·按 genre 激活)。现系统把题材层的「爽点」当通用维度测所有书=写死爽文根因；本表把题材专属维度做成按 genre_tags 路由的可插拔包。专属维度全程 advisory·hard_gate 清单不随题材变(北极星⑤)。仿 subsystem_skeletons.json 范式·scaffold_genre_packs.py 消费。",
   "_version": "v2_2026-06-19",
   "_principle": "通用维度池(作者层·always-on) + 题材专属维度包(内容工艺层·按 genre 路由) + 题材权重(同维度不同题材权重不同)。conventions 是 elements 不是 events(Lucy Monroe)→ 测元素密度/分布·不硬卡必须有某事件。",
-  "_canonical_genres": ["xuanhuan", "xianxia", "urban_supernatural", "scifi_meta", "horror_game", "historical", "romance", "mystery", "scheming_politics", "slice_of_life", "heist_caper", "regression", "espionage", "rule_anomaly", "apocalypse_survival", "cosmic_horror", "classical_commentary_inline", "short_drama_vertical", "unknown"],
+  "_canonical_genres": ["xuanhuan", "xianxia", "urban_supernatural", "scifi_meta", "horror_game", "historical", "romance", "mystery", "scheming_politics", "slice_of_life", "heist_caper", "regression", "espionage", "rule_anomaly", "apocalypse_survival", "cosmic_horror", "classical_commentary_inline", "short_drama_vertical", "iyashikei_healing", "unknown"],
   "packs": {
     "romance": {
       "_label": "甜宠/言情",
@@ -323,6 +323,28 @@
         "首集前 50 字给强钩·禁交代背景",
         "每集 ≥1 反转·短剧观众爽点饱和度高",
         "场景 100-300 字·禁单场景跨集"
+      ]
+    },
+    "iyashikei_healing": {
+      "_label": "治愈/iyashikei/慢生活",
+      "_doc": "2026-06-21 R20 W9 Batch-BB · P2 (asmr_slow id 9) 新增。日式 iyashikei 哲学：mundane 即圣·慢节奏即治愈·季节天气是主角·climax 小到几乎没有。与 slice_of_life 区别：iyashikei 更强调主动 dwell（停留品味）而非只是日常切片·climax_amplitude 上限更低。",
+      "mundane_focus_min": 0.4,
+      "season_weather_per_kcjk_min": 2.5,
+      "climax_amplitude_max": 0.4,
+      "judge_dims": {
+        "IY1_mundane_focus": "日常微事密度(泡茶/扫地/听雨/缝补)·非动作大事件占比·iyashikei 核心",
+        "IY2_季节天气在场": "季节/天气/光线/温度/声音五感锚·每千 CJK 出现 ≥ 2.5 次·建立氛围",
+        "IY3_climax 低振幅": "故事最高戏剧张力 ≤ 0.4(0-1 标尺)·不写撕心裂肺·治愈在缓慢和呼吸",
+        "IY4_dwell 比": "dwell 段(停留品味)占比 ≥ 0.3·plot_beat 段 ≤ 0.5·允许 ambient_setup 多",
+        "IY5_progression 密度": "progression_density (plot_beat/总段) 较低·每段不必推进·允许「无事发生」"
+      },
+      "scanner": "dwell_progression_scanner",
+      "writer_directives": [
+        "慢节奏哲学：mundane 即 hero·每段不必推进·允许「就着雨声泡半页茶」",
+        "季节天气是主角：春夏秋冬/晨午夜暮/晴雨雪雾·每千字至少 2-3 次锚",
+        "climax 小：戏剧张力上限 0.4·治愈不在大转折而在「呼吸」",
+        "dwell 段优先：scene 不必都有目标·允许大段 dwell（停留品味）+ ambient_setup",
+        "拒绝爆点：禁高冲突/反转/危机叠加·读者来此为休息不为肾上腺素"
       ]
     },
     "espionage": {
