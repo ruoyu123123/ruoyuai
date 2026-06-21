@@ -2243,6 +2243,51 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "acw_drift_scanner",
                      "ACW_DRIFT_FROM_CENTER", "风格")),
+                # [2026-06-21 R22 W10 Batch-DD·P0 STRONG·陈望道《修辞学发凡》38 格四类]
+                # 材料/意境/词语/章句四类分布 KL 散度 + 类塌缩 + 总密度·占位 8 词/格·_placeholder=true
+                # 与 zeugma/anadiplosis 单格深扫严格正交·与 semantic_slop/repeat_noun_density
+                # 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("rhetorical_balance",
+                 [child_python(), str(_SCRIPT_DIR / "rhetorical_balance_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "rhetorical_balance_scanner",
+                     "RHETORICAL_BALANCE_DRIFT", "风格")),
+                # [2026-06-21 R21 W10 Batch-DD·R21-NB-01·Nijhof&Willems 2015 motor vs mentalizing]
+                # 动作词 vs 心智词 ratio·脑网络竞争代理 r=-0.48·场景级 ratio 偏离 ±0.20
+                # 通用兜底 0.35-0.65·与 interiority_mode_balance/duration_mix/narrating_distance
+                # 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("action_mentalizing_balance",
+                 [child_python(), str(_SCRIPT_DIR / "action_mentalizing_balance_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "action_mentalizing_balance_scanner",
+                     "ACTION_MENTAL_RATIO_DRIFT", "节奏")),
+                # [2026-06-21 R21 W10 Batch-DD·R21-NB-02·Schoeller 2024 CABN aesthetic chills]
+                # peak 双相架构 anticipation(200-500CJK 前向) + release(50-150CJK 后向)
+                # |valence|>0.7 top-3 peak·任缺一相 → CHILLS_ARCH_INCOMPLETE·与 hook_strength/
+                # premature_resolution/emotion_curve_rescan 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("peak_chills_architecture",
+                 [child_python(), str(_SCRIPT_DIR / "peak_chills_architecture_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "peak_chills_architecture_scanner",
+                     "CHILLS_ARCH_INCOMPLETE", "节奏")),
+                # [2026-06-21 R21 W10 Batch-DD·R21-NB-03·Kaneshiro 2024 EJN ISC r=0.65]
+                # DMN integration ridge 密度·200CJK 滑窗·4 信号(回指 names/locked_fact/foreshadowing
+                # 回收/合流标志)·任窗≥3 命中=ridge·无 ridge→ABSENT·单 ridge<60%→TOO_EARLY
+                # cross-cluster 视野·与 cross_cluster_engagement_metrics/retention_proxy/
+                # paragraph_engagement_heat 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("integration_ridge_density",
+                 [child_python(), str(_SCRIPT_DIR / "integration_ridge_density_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "integration_ridge_density_scanner",
+                     "INTEGRATION_RIDGE_ABSENT", "剧情")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

@@ -1283,6 +1283,23 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             "  · 主语切换=换段·主语稳定=同段·防止段内频繁切换主语造成读者注意力分散。\n"
                             "  · 与 kishotenketsu macro 节奏正交·ACW 是段级 micro 中心活动一致性。"
                         )
+                    # 🆕 R22 W10 Batch-DD P0 STRONG (2026-06-21): rhetorical_subset 按题材匹配高频辞格 subset
+                    # 陈望道《修辞学发凡》38 格四类·题材 prior 注入 writer prompt 提示偏好辞格
+                    # env RHETORICAL_BALANCE_MODE=active 时注入 advisory subset hint
+                    _rhet_subset = None
+                    _rhet_mode = (os.environ.get("RHETORICAL_BALANCE_MODE") or "shadow").strip().lower()
+                    if _rhet_mode == "active":
+                        try:
+                            sys.path.insert(0, str(Path(__file__).parent))
+                            import rhetorical_inventory as _ri
+                            _book_genre = ""
+                            try:
+                                _book_genre = _resolve_book_genre(scanner) or ""
+                            except Exception:
+                                pass
+                            _rhet_subset = _ri.match_subset_by_genre(_ri.load_inventory(), _book_genre)
+                        except Exception:
+                            _rhet_subset = None
                     # 🆕 R7 W2 (2026-06-20): narrative_pov_mode 五分类 (Stanzel/Cohn consonant-dissonant)
                     # first_present / first_retro_consonant / first_retro_dissonant / third_limited / third_omniscient
                     # 与 narrative_mode (in_medias_res/linear 时间序) 正交。cluster 优先 → 作者档兜底 → "third_limited" 默认。
@@ -1346,6 +1363,8 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         ),
                         "kishotenketsu_directive": _kishotenketsu_directive,
                         "ACW_DIRECTIVE": _acw_directive,
+                        # 🆕 R22 W10 Batch-DD P0 STRONG: 题材 prior 推荐辞格 subset
+                        "rhetorical_subset_hint": _rhet_subset,
                         "_narrative_mode_doc": ("in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；"
                                                 "linear = 时间序；kishotenketsu_4act = 起承转结无冲突(治愈/iyashikei)"),
                         "_narrative_pov_mode_doc": ("R7 W2 五分类(Stanzel/Cohn): "

@@ -36,6 +36,16 @@ THINKING_PROBE_CODES = [
     "SFS_POORLY_CALIBRATED_FOR_AUTHOR",   # SFS / av_judge 自身校准探针
     "CHARACTER_KTH_ORDER_BELIEF_DRIFT",   # OSCToM K-order(K=2) 嵌套信念
     "CHARACTER_STATE_DRIFT_DETECTED",     # NKW 时态分离 stable_identity drift
+    # R22 W10 Batch-DD·P0 STRONG + R21-NB·P1/P2 (2026-06-21) 4 件全 advisory：
+    "RHETORICAL_BALANCE_DRIFT",           # 陈望道 38 格 KL 分布偏离
+    "RHETORICAL_CATEGORY_COLLAPSE",       # 某类辞格塌缩
+    "RHETORICAL_INVENTORY_THIN",          # 修辞密度过低
+    "ACTION_MENTAL_RATIO_DRIFT",          # Motor-Mentalizing 脑网络竞争比漂移
+    "ACTION_PURE_PHYSICAL",               # 纯动作流
+    "ACTION_PURE_MENTAL",                 # 纯心智流
+    "CHILLS_ARCH_INCOMPLETE",             # Aesthetic chills 双相架构缺失
+    "INTEGRATION_RIDGE_ABSENT",           # DMN integration ridge 缺失
+    "INTEGRATION_RIDGE_TOO_EARLY",        # ridge 出现过早
 ]
 
 
