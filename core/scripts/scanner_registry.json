@@ -1185,6 +1185,27 @@
       "doc": "[2026-06-21 R21 W10 Batch-DD·R21-NB-03·Kaneshiro 2024 EJN ISC+meta r=0.65 DMN integration] 200 CJK 滑窗扫·四 integration_signals 命中(1)多次回指已建立人物名 ≥2 (2)locked_fact 关键名词回引 (3)多伏笔回收同窗 ≥2 (4)合流标志{终于明白/原来如此/这一切/串到一起/对得上/线索拼合/前后呼应}·任窗 ≥3 项命中=ridge·全 cluster ridge_count + ridge_density/10kCJK·无 ridge → INTEGRATION_RIDGE_ABSENT·单 ridge 出现位置 <60% → INTEGRATION_RIDGE_TOO_EARLY(DMN 实证在 culmination)·与 cross_cluster_engagement_metrics/retention_proxy/paragraph_engagement_heat 严格正交·advisory·env INTEGRATION_RIDGE_MODE 默认 shadow·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["INTEGRATION_RIDGE_ABSENT", "INTEGRATION_RIDGE_TOO_EARLY"]
+    },
+    "zeugma": {
+      "layer": "cluster",
+      "script": "zeugma_scanner.py + core/data/verb_object_collocation_freq.json",
+      "doc": "[2026-06-21 R22 W10 Batch-FF·P1·陈望道《修辞学发凡》拈连格·搞笑流网文签名] 句对级 V+O1...V+O2 启发·V∈占位 8 动词·O1=common 命中+O2=unusual 命中·跨句累计 CJK≤80 字窗·作者档 zeugma_per_kcj 第一权威(搞笑流>0/严肃≈0)·与 rhetorical_balance(38 格分布)/rhetorical_inventory(全格清单)/anadiplosis(顶针单格)严格正交·advisory·env ZEUGMA_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["ZEUGMA_DETECTED", "ZEUGMA_OVER_BASELINE", "ZEUGMA_UNDER_BASELINE"]
+    },
+    "anadiplosis": {
+      "layer": "cluster",
+      "script": "anadiplosis_scanner.py",
+      "doc": "[2026-06-21 R22 W10 Batch-FF·P1·陈望道《修辞学发凡》顶真格·追逐/上升节奏] 相邻句对 sent_i 末 2-4 字 = sent_i+1 首 2-4 字最长命中·剥首尾虚词标点·密度 z-band·作者档 anadiplosis_per_kcj 第一权威+top_connectors 列表·与 rhetorical_balance/inventory/zeugma 严格正交·advisory·env ANADIPLOSIS_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ANADIPLOSIS_DETECTED", "ANADIPLOSIS_OVER_BASELINE", "ANADIPLOSIS_UNDER_BASELINE"]
+    },
+    "premise_blend_card": {
+      "layer": "cluster",
+      "script": "premise_blend_card_scanner.py + vital_relations_probe.py",
+      "doc": "[2026-06-21 R22 W10 Batch-FF·P1+P2·Fauconnier&Turner CBT 概念整合] outline premise_blend_card 落地度+vital_relations 7 类标记密度·schema 加入 subsystem_skeletons 事件簇.json·cluster_emergence_engine candidate 注入空骨架·四 advisory(MISSING/EMERGENCE_MISSING/INPUT_DROP/LEXICAL_OVER)·作者档 vital_relations_compression{mean,std} 滚动 ±2σ band 第一权威·与 rhetorical_balance/semantic_slop 严格正交·advisory·env PREMISE_BLEND_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["PREMISE_BLEND_CARD_MISSING", "PREMISE_BLEND_EMERGENCE_MISSING", "PREMISE_BLEND_INPUT_DROP", "PREMISE_BLEND_LEXICAL_OVER"]
     }
   },
 

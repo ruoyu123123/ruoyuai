@@ -439,6 +439,17 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) 
         "scene_storyboard": [],  # 雏形 · 用户选定后再让 outline-planner 详化
         "anchor_props": [],
         "foreshadowing_to_plant": [],
+        # 🆕 R22 W10 Batch-FF: CBT premise_blend_card 空骨架·outline-planner 选定 candidate 后填
+        # 〔确保候选 brief 至少 1-2 scene 体现 emergent_structure·writer manifest 注入下游〕
+        "premise_blend_card": {
+            "_doc": "Fauconnier&Turner CBT 概念整合卡·R22·candidate 空骨架·outline-planner 详化时填",
+            "blend_type": "",
+            "input_space_A": {"frame": "", "signature_lexemes": []},
+            "input_space_B": {"frame": "", "signature_lexemes": []},
+            "generic_space": "",
+            "emergent_structure": [],
+            "vital_relations_compressed": []
+        },
         "research_ref": {
             "_doc": "v23.1 选定 candidate 后必须独立调研 cluster_brief"
         }
