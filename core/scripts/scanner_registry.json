@@ -1363,6 +1363,41 @@
       "_new": true,
       "_supports_anchor": true,
       "issues_emitted": ["AUTHOR_SIGNATURE_MISMATCH", "AUTHOR_SIGNATURE_NOT_PLACED", "AUTHOR_SIGNATURE_OK"]
+    },
+    "parrhesia_density_scanner": {
+      "layer": "cluster",
+      "script": "parrhesia_density_scanner.py",
+      "doc": "[2026-06-22 R25 W13 Batch-MM·P1·Foucault Fearless Speech + 网文打脸名场面骨架]三信号同段命中 = 1 parrhesia hit·(A)权力反差词(弱方+权者称谓同段)·(B)truth-claim 句式(您说错了/恕我直言/...)出现在引号段·(C)风险姿态身体描写(站起/直视/不卑不亢/...)·密度 = hits / (cluster_cjk/10000)·作者档 parrhesia_signature.density_baseline.mean/sigma 第一权威·缺则 mean=2.0/σ=1.5·>mean+2σ → OVERFLOW(打脸服务疲劳)·<mean-2σ → THIN(缺 payoff)·env PARRHESIA_DENSITY_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["PARRHESIA_DENSITY_OVERFLOW", "PARRHESIA_DENSITY_THIN", "PARRHESIA_DENSITY_OK"]
+    },
+    "cluster_rasa_layer_consistency_scanner": {
+      "layer": "cluster",
+      "script": "cluster_rasa_layer_consistency_scanner.py",
+      "doc": "[2026-06-22 R25 W13 Batch-MM·P1·Bharata Natyashastra Rasa·与 Plutchik/VAD/Reagan 正交]两步:①sthāyī 一致度=场景 top-1 主导 rasa(9 navarasa)·cluster top-1 覆盖率<60% → 底色摇摆·②vyabhicāri 多样度=33 类过场情感映射 12 规范化标签(harṣa/cintā/vitarka/smṛti/vrīḍā/dhṛti/āvega/glāni/viṣāda/autsukya/nirveda/mada)·<4 类 → 过场塌缩单层·作者档 rasa_layer_preferences.dominant_rasa_floor/transient_diversity_floor 覆盖通用阈值·env CLUSTER_RASA_LAYER_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["RASA_LAYER_DOMINANT_DRIFT", "RASA_LAYER_TRANSIENT_FLAT", "RASA_LAYER_OK"]
+    },
+    "rasa_causal_chain_scanner": {
+      "layer": "cluster",
+      "script": "rasa_causal_chain_scanner.py",
+      "doc": "[2026-06-22 R25 W13 Batch-MM·P1·Bharata 公式 + CEA framework arxiv 1903.06901 + SemEval 2024]三段闭环检测 vibhāva(诱因)→sthāyī(rasa)→anubhāva(外显)·【A】sthāyī≠neutral 但 vibhāva=0(突生)·【B】sthāyī strong 但 anubhāva=0(未落地)·【C】vibhāva 充分但 sthāyī≠预期(错位)·≥3 命中 → cluster 提示·作者档 causal_chain_tolerance.{A,B,C} 允许冷峻文风默许 B 高比例/辰东冷叙述默许 C·LLM-judge 真版 defer·env RASA_CAUSAL_CHAIN_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["RASA_CAUSAL_BREAK_NO_VIBHAVA", "RASA_CAUSAL_BREAK_NO_ANUBHAVA", "RASA_CAUSAL_BREAK_MISMATCH", "RASA_CAUSAL_OK"]
+    },
+    "direction_card_poetics_scanner": {
+      "layer": "cluster",
+      "script": "direction_card_poetics_scanner.py",
+      "doc": "[2026-06-22 R25 W13 Batch-MM·P1·Mawhorter Choice Poetics FDG 2014 + Emily Short]novel-outline-planner 产 2-3 张走向卡后立即调度·5 维评分(framing_completeness/dilemma_density/outcome_divergence/false_choice_risk/agency_signal)·写 _数据库/.direction_card_advisory/<cluster_key>.json·mode-gated:默认 advisory_low·--interactive-mode/--multi-ending-mode 升 normal·env DIRECTION_CARD_POETICS_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["DIRECTION_CARD_FRAMING_THIN", "DIRECTION_CARD_DILEMMA_THIN", "DIRECTION_CARD_OUTCOME_CONVERGENT", "DIRECTION_CARD_FALSE_CHOICE_RISK", "DIRECTION_CARD_LOW_AGENCY", "DIRECTION_CARD_OK"]
+    },
+    "choice_consequence_visibility_scanner": {
+      "layer": "cluster",
+      "script": "choice_consequence_ledger.py (scan subcommand)",
+      "doc": "[2026-06-22 R25 W13 Batch-MM·P1·BG3 reactivity + Emily Short delayed-consequence + WHAT-IF arxiv 2412.10582]cluster-save-state 用户选某走向后 ledger entry{cluster_id,choice_key,choice_summary,stakes_tier(life/faction/moral/preference),expected_visibility_window 1-5 cluster,expected_resonance_keywords}·每 cluster 完成跑 visibility scanner 检查窗口内文本是否含 resonance keywords·窗口未到不报·过期未呼应 → STARVING advisory + outline-planner callback 钩子·与 foreshadowing_handoff(author_planted) 命名空间分立·env CHOICE_CONSEQUENCE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["CHOICE_CONSEQUENCE_STARVING", "CHOICE_CONSEQUENCE_VISIBLE", "CHOICE_CONSEQUENCE_PENDING"]
     }
   },
 
