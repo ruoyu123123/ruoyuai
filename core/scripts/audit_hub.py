@@ -2163,6 +2163,42 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "character_state_drift_scanner",
                      "CHARACTER_STATE_DRIFT_DETECTED", "人物")),
+                # [2026-06-21 R20 W9 Batch-AA·P1·Gordon Lish MFA consecution doctrine]
+                # 句间正向回扣链 3 探针(lexical_carryover + syntactic_template_repeat +
+                # phonic_carryover · phonic=placeholder pypinyin defer)·题材 gating
+                # 言情/严肃/古风 active · 爽文 silent·与 R7 prose_rhythm/R8 rhetoric_repetition/
+                # R20 anti_slop 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("lish_consecution_chain",
+                 [child_python(), str(_SCRIPT_DIR / "lish_consecution_chain_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "lish_consecution_chain_scanner",
+                     "LISH_CONSECUTION_THIN", "风格")),
+                # [2026-06-21 R20 W9 Batch-AA·P1·Stephen Baxter《Art of Subtext》MFA staging]
+                # 身体/空间/道具微调度密度·4 桶 staging cue(body_cue/space_cue/prop_cue/posture_shift)·
+                # per-character staging_share + dialogue_tag_to_staging_ratio·gating dialogue_density>p50
+                # + active_chars≥2·与 group_dialogue_balance/physio_cue_diversity/
+                # indirect_characterization 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("baxter_staging_density",
+                 [child_python(), str(_SCRIPT_DIR / "baxter_staging_density_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "baxter_staging_density_scanner",
+                     "STAGING_THIN", "人物")),
+                # [2026-06-21 R20 W9 Batch-AA·P1·Biber 1988 MDA + Xiao 2009 中文映射]
+                # 4 维(D1 涉入度/D2 叙事关切/D3 语境指称/D4 说服度)中文 marker 映射·
+                # per-cluster 4 维 z-score vs 作者档·|z|>1 报 BIBER_MDA_DRIFT_Dn·与
+                # function_word_fingerprint/syntactic_diversity/indirect_characterization
+                # 严格正交·advisory·默认 shadow·绝不 hard_gate
+                ("biber_mda",
+                 [child_python(), str(_SCRIPT_DIR / "biber_mda_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "biber_mda_scanner",
+                     "BIBER_MDA_DRIFT_D1", "风格")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

@@ -412,6 +412,16 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) 
     scope = f"[CANDIDATE {ord}] 围绕 ME「{title}」展开。{me.get('description', '')}{why}"
     if is_finale:
         scope += " 〔🔴卷末小走向(volume_finale)：本 cluster 收束本阶段·走高烈度转折(反派现身/真相揭露/主角阶段跃迁)·禁平稳收束〕"
+    # 🆕 R20 W9 Batch-AA P1: 起承转结无冲突模式
+    # me.intent ∈ {healing/contemplative/iyashikei/zen} → 默认 kishotenketsu_4act 模式
+    # build_manifest 据此注入四段 directive · hook_strength 在此模式 cluster 降阈值转 advisory
+    # (防 v26 末段强钩误伤治愈结尾)。intent 显式 = "in_medias_res" 等不覆盖。
+    intent_val = (me.get("intent") or "").strip().lower()
+    _KISHO_INTENTS = {"healing", "contemplative", "iyashikei", "zen", "治愈", "禅"}
+    if intent_val in _KISHO_INTENTS:
+        narrative_mode = "kishotenketsu_4act"
+    else:
+        narrative_mode = me.get("narrative_mode") or ""
     return {
         "cluster_id": cluster_id,
         "parent_me": me_id,
@@ -423,6 +433,8 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) 
         "volume": _me_volume(me),
         "is_volume_finale": is_finale,
         "stakes_delta": me.get("stakes_delta", ""),
+        "intent": intent_val or None,
+        "narrative_mode": narrative_mode or None,
         "_doc": f"v24 fluid 涌现 · 等待用户从 {ord} 个 candidate 中选 1 个 → status 改 in_progress",
         "scene_storyboard": [],  # 雏形 · 用户选定后再让 outline-planner 详化
         "anchor_props": [],

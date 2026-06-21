@@ -1253,6 +1253,21 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                     cluster_id_val = c.get("cluster_id") or ""
                     is_first_cluster = cluster_id_val.endswith("_001") or cluster_id_val == "cluster_001"
                     narrative_mode = c.get("narrative_mode") or ("in_medias_res" if is_first_cluster else "linear")
+                    # 🆕 R20 W9 Batch-AA P1: kishotenketsu_4act 起承转结无冲突模式合法化
+                    # 由 cluster_emergence_engine 据 me.intent ∈ {healing/contemplative/iyashikei/zen} 标记
+                    # build_manifest 注入四段 directive (ki / shō / ten / ketsu) 给 writer
+                    # writer 据此走治愈/沉静节奏·末段不必强钩(hook_strength 在此模式降阈值)
+                    _kishotenketsu_directive = None
+                    if narrative_mode == "kishotenketsu_4act":
+                        _kishotenketsu_directive = (
+                            "🟢 本 cluster = 起承转结无冲突模式(kishōtenketsu_4act · iyashikei/治愈)：\n"
+                            "  · 起(ki / 約25%)：稳态建立·人物处境+日常节奏·不抛悬念。\n"
+                            "  · 承(shō / 約25%)：延展稳态·微变化(细节深化/季节流转/小动作堆叠)·仍无冲突。\n"
+                            "  · 转(ten / 約25%)：横向偏离·一个不期而至的意外、感官事件或第三者介入·"
+                            "非传统戏剧冲突·读者注意力被『侧推』而非『被钩』。\n"
+                            "  · 结(ketsu / 約25%)：把『起承』与『转』收回成新稳态·留余味·"
+                            "末段不必强钩(治愈节奏)·禁止强反转或 cliffhanger·允许平稳收束。"
+                        )
                     # 🆕 R7 W2 (2026-06-20): narrative_pov_mode 五分类 (Stanzel/Cohn consonant-dissonant)
                     # first_present / first_retro_consonant / first_retro_dissonant / third_limited / third_omniscient
                     # 与 narrative_mode (in_medias_res/linear 时间序) 正交。cluster 优先 → 作者档兜底 → "third_limited" 默认。
@@ -1314,7 +1329,9 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             "禁止平稳收束(章末禁收束的卷尺度)。之后将换卷进入新阶段/新副本。"
                             if c.get("is_volume_finale") else None
                         ),
-                        "_narrative_mode_doc": "in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；linear = 时间序",
+                        "kishotenketsu_directive": _kishotenketsu_directive,
+                        "_narrative_mode_doc": ("in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；"
+                                                "linear = 时间序；kishotenketsu_4act = 起承转结无冲突(治愈/iyashikei)"),
                         "_narrative_pov_mode_doc": ("R7 W2 五分类(Stanzel/Cohn): "
                                                      "first_present(第一人称当下时)/"
                                                      "first_retro_consonant(第一人称回溯·贴近 experiencing-self)/"

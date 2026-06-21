@@ -1073,6 +1073,48 @@
       "doc": "[2026-06-21 R20 W9 Batch-Z·P0·R20 STRONG NKW 时态可分 entity profile] stable_identity SLOW_UPDATE 冻 distill-character(瞳色/性别/籍贯/血型 …) / dynamic_state FAST_UPDATE 每 save-state 刷(位置/心情/伤势/同伴 …)·扫稿正则抽 <char>(的)?<attr>(是|为|：|:)?<value> 断言·attr∈stable_identity 且 ledger value≠草稿 value → stable_identity drift CHARACTER_STATE_DRIFT_DETECTED·attr∈dynamic_state 任何变化合法不报(二筛白名单)·提供 filter_dynamic_state_changes() 给 R12 contradiction scanner 二筛剔除·dynamic_state_updates[] 反哺 cluster-save-state ledger FAST_UPDATE 段·缺 _数据库/character_state_ledger.json 用 DEFAULT_LEDGER 通用白名单占位(_placeholder=true·真清单需 distill-character 填)·与 R12 contradiction / locked_fact / character_belief_ledger 严格正交·env CHARACTER_STATE_DRIFT_MODE 默认 shadow·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["CHARACTER_STATE_DRIFT_DETECTED"]
+    },
+    "lish_consecution_chain_scanner": {
+      "layer": "cluster",
+      "script": "lish_consecution_chain_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-AA·P1·Gordon Lish MFA consecution doctrine + Black 1990 + Saint Mark's School notes] 句间正向回扣链(consecution)·三探针(lexical_carryover_ratio 前句末 2 CJK 在后句首 5 命中比例 + syntactic_template_repeat 前句首 4 char 骨架 == 后句首 4 char + phonic_carryover 前句末 1 char == 后句末 1 char placeholder)·题材 gating 言情/严肃/古风 active·爽文 silent·作者档 lish_consecution_baseline 第一权威·与 prose_rhythm/rhetoric_repetition/anti_slop 严格正交·env LISH_CONSECUTION_MODE 默认 shadow·🔬phonic 占位待 pypinyin·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["LISH_CONSECUTION_THIN", "LISH_TEMPLATE_REPEAT", "LISH_PHONIC_THIN"]
+    },
+    "baxter_staging_density_scanner": {
+      "layer": "cluster",
+      "script": "baxter_staging_density_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-AA·P1·Stephen Baxter《Art of Subtext》MFA staging] 身体/空间/道具微调度密度·四桶 staging cue(body_cue/space_cue/prop_cue/posture_shift)·占位 core/data/staging_lexicon_zh.json 60-80 条·staging_per_kcjk + bucket_share + per_character_staging_share + dialogue_tag_to_staging_ratio·gating dialogue_density>p50 + active_chars≥2·STAGING_THIN/STAGING_BUCKET_UNBALANCED/STAGING_TALKING_HEADS 三 advisory·作者档 staging_baseline 第一权威·与 group_dialogue_balance/physio_cue_diversity/indirect_characterization 严格正交·env BAXTER_STAGING_MODE 默认 shadow·🔬词典占位·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["STAGING_THIN", "STAGING_BUCKET_UNBALANCED", "STAGING_TALKING_HEADS"]
+    },
+    "biber_mda_scanner": {
+      "layer": "cluster",
+      "script": "biber_mda_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-AA·P1·Biber 1988 Variation Across Speech and Writing + Xiao 2009 中文 MDA 映射] 4 维 Multi-Dimensional Analysis(D1 涉入度=1/2 人称+私人动词+情态副词·D2 叙事关切=过去时+3 人称+行动动词·D3 语境指称=时间副词+地点副词+指代·D4 说服度=情态+强调词+推论词)·per-cluster 4 维 per-kcjk vs 作者档 biber_mda_baseline z-score·|z|>1 报 BIBER_MDA_DRIFT_Dn·与 function_word_fingerprint(总虚词)/syntactic_diversity(POS n-gram)/indirect_characterization 严格正交·env BIBER_MDA_MODE 默认 shadow·🔬词表占位待 Xiao 2009 全表·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["BIBER_MDA_DRIFT_D1", "BIBER_MDA_DRIFT_D2", "BIBER_MDA_DRIFT_D3", "BIBER_MDA_DRIFT_D4"]
+    },
+    "summary_chapter_alignment_distribution_scanner": {
+      "layer": "cross-cluster",
+      "script": "summary_chapter_alignment_distribution_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-AA·P1·Attention Flows + Q3-Q4 论文 id 17] 摘要-章节概念质量(summary mass)分布·chapter_position×summary_mass 划 head/mid/tail 三段·head_share>0.40 报 SUMMARY_FIRST_QUARTER_OVERWEIGHT·tail_share>0.40 报 SUMMARY_TAIL_BIAS·作者档 slow_update.summary_mass_signature_band 第一权威·SBERT-zh 真嵌入 defer 占位·_placeholder=true·与 cross_cluster_throughline_balance/cross_cluster_arc_progression/sagging_middle 严格正交·env SUMMARY_MASS_DISTRIBUTION_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SUMMARY_FIRST_QUARTER_OVERWEIGHT", "SUMMARY_TAIL_BIAS"]
+    },
+    "entropy_hotspot_consistency_probe": {
+      "layer": "cluster",
+      "script": "entropy_hotspot_consistency_probe.py",
+      "doc": "[2026-06-21 R20 W9 Batch-AA·P1·ConStory 中段 entropy hotspot 优先级探针·Q3-Q4 论文 id 18] 200-CJK 块 Shannon entropy·middle-50% 区间 entropy>μ+1σ 标 hotspot·写 _临时/probe/hotspot.json 供 audit_hub 调度 R8 consistency_error_triage/R19 intra_cluster_style_break/locked_fact_cross_scene 时优先扫·**不产新 issue 码·只调度 priority bump**·placeholder=true 真 distill 小模型 entropy defer·env ENTROPY_HOTSPOT_PROBE_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": []
+    },
+    "kishotenketsu_4act_mode": {
+      "layer": "narrative_mode",
+      "script": "cluster_emergence_engine.py + build_manifest.py + hook_strength_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-AA·P1·起承转结无冲突模式·MFA Q3-Q4 asmr_slow id 10] 不是 scanner·是 narrative_mode 新枚举(kishotenketsu_4act)·cluster_emergence_engine.me_to_cluster_brief 据 me.intent ∈ {healing/contemplative/iyashikei/zen/治愈/禅} 自动激活·build_manifest 注入 kishotenketsu_directive 四段(起 ki/承 shō/转 ten/结 ketsu)·hook_strength_scanner._detect_kishotenketsu_cluster 检测后降 PASS_THRESHOLD 4→2 + severity=info(防 v26 末段强钩误伤治愈结尾)·与 in_medias_res(黄金三章倒叙)/linear(时间序) 三种 narrative_mode 并列·全 advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": []
     }
   },
 

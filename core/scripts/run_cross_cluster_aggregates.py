@@ -56,6 +56,7 @@ SCAN_TIERS = {
         "motif_recurrence_ledger",  # 2026-06-20 R8 W4 Batch-G L20：跨 cluster 母题循环账本(草蛇灰线·五类 props/imagery/sensory/places/catchphrase·五态 new_seed/recurring/dormant/over_saturated/payoff_due·Gini+N/R 直方图·advisory·env MOTIF_RECURRENCE_MODE 默认 shadow）
         "cross_cluster_hierarchical_position_surprisal_aggregate",  # 2026-06-21 R18 W7 Batch-U·P2：SCH 层级位置惊异度·边界 PARA/SCENE/CLUSTER_END 计 Δsurprisal·期望末段峰最高·颠倒报 SCH_HIERARCHY_INVERTED·advisory·env HIERARCHICAL_POSITION_SURPRISAL_MODE 默认 shadow
         "cross_cluster_reader_retention_proxy_aggregate",  # 2026-06-21 R18 W7 Batch-U·P2：reader retention proxy·R=0.35·hook+0.25·(1-sagging)+0.25·cliff+0.15·length·proxy<0.45 报 RETENTION_PROXY_LOW·advisory·env READER_RETENTION_PROXY_MODE 默认 shadow
+        "summary_chapter_alignment_distribution_scanner",  # 2026-06-21 R20 W9 Batch-AA·P1：Attention Flows 摘要-章节概念质量分布·head_share/tail_share·SBERT-zh 真嵌入 defer 占位·SUMMARY_FIRST_QUARTER_OVERWEIGHT/SUMMARY_TAIL_BIAS 双 advisory·env SUMMARY_MASS_DISTRIBUTION_MODE 默认 shadow
     ],
 }
 

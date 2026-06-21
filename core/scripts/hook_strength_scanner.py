@@ -295,6 +295,30 @@ def scan_cluster_hook_pacing(paragraphs, n_pseudo_cuts=4):
     }
 
 
+def _detect_kishotenketsu_cluster(project_root: Path, ch: int) -> bool:
+    """🆕 R20 W9 Batch-AA P1: 读 事件簇.json 检查本章所在 cluster 是否 kishotenketsu_4act。
+    起承转结无冲突模式 cluster 末段不必强钩·降阈值转 advisory 防误伤治愈结尾。"""
+    try:
+        sj = project_root / "_数据库" / "事件簇.json"
+        if not sj.exists():
+            return False
+        data = json.loads(sj.read_text(encoding="utf-8"))
+        for c in data.get("clusters", []) or []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("narrative_mode") != "kishotenketsu_4act":
+                continue
+            cr = c.get("chapter_range") or []
+            if isinstance(cr, list) and len(cr) == 2 and cr[0] <= ch <= cr[1]:
+                return True
+            # cluster 状态 in_progress 但 range 未填 → intent 在 kishotenketsu 也按 kisho 处理
+            if not cr and c.get("status") in ("in_progress", "进行中"):
+                return True
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False
+    return False
+
+
 def scan(project_root: Path, ch: int):
     body = load_chapter_body(project_root, ch)
     if body is None:
@@ -310,8 +334,9 @@ def scan(project_root: Path, ch: int):
     positions = scan_hook_positions(paragraphs)
     is_transition, transition_reason = detect_transition_chapter(body, paragraphs)
 
-    # 达标线
-    PASS_THRESHOLD = 4
+    # 🆕 R20 W9 Batch-AA P1: kishotenketsu_4act cluster 降阈值 4→2(可豁免治愈结尾)
+    is_kishotenketsu = _detect_kishotenketsu_cluster(project_root, ch)
+    PASS_THRESHOLD = 2 if is_kishotenketsu else 4
     weak = ending["score"] < PASS_THRESHOLD
 
     # v2 cluster 模式：用拟切点均值替换章末单点评估
@@ -335,6 +360,10 @@ def scan(project_root: Path, ch: int):
         if is_transition:
             severity = "info"
             suppressed_reason = f"过渡章豁免 → info：{transition_reason}"
+        elif is_kishotenketsu:
+            # 🆕 R20 W9 Batch-AA P1: kishotenketsu cluster 末段强钩误伤治愈结尾 → 降级 info
+            severity = "info"
+            suppressed_reason = "kishotenketsu_4act 治愈/起承转结无冲突模式·末段不必强钩"
 
     # R18 W7 Batch-U·P2 · mid-sentence cliffhanger primitive (Loewenstein)
     mid_cut_count = count_mid_sentence_cuts(body)
@@ -356,6 +385,7 @@ def scan(project_root: Path, ch: int):
         "ending_hook": ending,
         "hook_positions": positions,
         "cluster_pacing": cluster_pacing,  # v2 cluster 视野拟切点节奏
+        "is_kishotenketsu_cluster": is_kishotenketsu,
         "pass_threshold": PASS_THRESHOLD,
         "severity": severity,
         "warning": warning,
