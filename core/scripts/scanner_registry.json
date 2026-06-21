@@ -828,6 +828,34 @@
       "doc": "[2026-06-20 R13 W6 Batch-R·P2 MODEST·Dolina et al. 2025 Chaos 35:023155 中文散文标点 Weibull 多重分形 + CLSInfra 计算文学方法学综述 + Bagnall 2016 Random Forest] prose_rhythm_scanner 子模块·6 类标点(。, ！？—— ……)相邻同类符号 token 距离序列·scipy.stats.weibull_min.fit 估(k,λ)·与作者档 slow_update.punctuation_distance_weibull[mark] KS 检验·Δ>0.15 advisory·蒸馏 phase-3 consolidate_author_profile 增量计算写入 slow_update 锁死段(SkillOpt 不许动·北极星⑤)·env PROSE_PUNCT_WEIBULL_MODE 默认 shadow·🔬阈值占位待真作者作者档增 slow_update 段后校准·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["PROSE_PUNCT_WEIBULL_DRIFT"]
+    },
+    "character_belief_ledger_scanner": {
+      "layer": "cluster",
+      "script": "character_belief_ledger_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-S·P0·arxiv 2605.26322 OmniToM 2026-05-25 + arxiv 2506.13641 EvolvTrip 2025-06 + arxiv 2601.12410 LLM-vs-Chimps 2026-01] 角色信念账本(OmniToM 7 维)·按 storyboard 顺序维护 belief_state[character]·扫 character_name + KNOWLEDGE_VERB(知道/听说/明白/记起/得知) + fact_ref(_数据库/locked_fact.json items[].key 或占位 fact 词典)窗口·fact_ref 不在 belief_state[char] → CHARACTER_KNOWLEDGE_LEAK·与 focalizer_perception_bounds(narrator 自体不可见/他人内心/空间不在场)·dramatic_irony(TELL 词 saying_doing/style_fact)·locked_fact_cross_scene(恒定事实数值)三者显式去重·env CHARACTER_BELIEF_LEDGER_MODE 默认 shadow·🔬占位简化版仅覆盖 7 维中的 ①+④·待 locked_fact.json 完整 + 金标准校准·CHARACTER_KNOWLEDGE_LEAK 绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CHARACTER_KNOWLEDGE_LEAK"]
+    },
+    "paywall_transition_gradient_scanner": {
+      "layer": "cluster",
+      "script": "paywall_transition_gradient_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-S·P0·tomenovel.com web-novel-cliffhanger-economy + 知乎 681376328 起点新书期 + 橙瓜 chenggua + Qidian-Webnovel Corpus 2.79M 评论] 入V过墙双峰钩位元结构位·读 _数据库/用户偏好.json workflow_preferences[paywall_transition_cluster_id](用户/编辑手填·绝不自动推断)门控·非 paywall cluster skip·切场景算 stake_score(stake_keywords 生死/性命/濒死/绝境/陷阱…命中数/cjk*1000)+ mega_reveal_score(末场 真相/原来/竟然/反转…命中)·末段 stake 非单调递增 OR 末场 mega_reveal_hits==0 → BRIDGE_PAYWALL_HOOK_GRADIENT_OFF·R7-R13 共 101 条无任何 scanner 把『入V』作独立结构位·与 hook_strength(单章末钩)+R18 paragraph_engagement_heat_predictor(段落热度)+cross_cluster_engagement_metrics(钩子趋势)正交·env PAYWALL_TRANSITION_GRADIENT_MODE 默认 shadow·🔬阈值占位待真作者校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["BRIDGE_PAYWALL_HOOK_GRADIENT_OFF"]
+    },
+    "excess_vocab_corpus_zscan": {
+      "layer": "cluster",
+      "script": "excess_vocab_corpus_zscan.py",
+      "doc": "[2026-06-21 R18 W7 Batch-S·P0·Liang 2024 Science Advances PubMed 5.2B token + arxiv 2412.11400 ChineseLLM excess vocab + 番茄AI识别公开规范] LLM 训练偏置词动态语料 z-test·占位 core/scripts/lexicons/llm_chinese_corpus_freq.json + human_webnovel_corpus_freq.json(各 ~40 token·_placeholder=true)·z(LLM_freq vs Human μ/σ)>+2 且 z'(this_text vs Human μ/σ)>+1 且 z(author vs Human μ/σ)<+1σ → EXCESS_VOCAB_SIGNATURE_HIT·机制完全不同于 R12 metaphor anti-AI(那是 anti-pattern 句法二元喻·这是 type 级 vocab 分布偏置)·consolidate_author_profile 增 author_vocab_freq_ecdf SLOW_UPDATE 字段(占位待蒸馏 phase-3 写入·SkillOpt 锁死·北极星⑤)·env EXCESS_VOCAB_CORPUS_ZSCAN_MODE 默认 shadow·🔬待 Liang 5.2B 真语料 + NLPCC 2025 全表 + 真作者档 author_vocab_freq_ecdf 落地后校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["EXCESS_VOCAB_SIGNATURE_HIT"]
+    },
+    "situation_model_5dim_scanner": {
+      "layer": "cluster",
+      "script": "situation_model_5dim_scanner.py",
+      "doc": "[2026-06-21 R18 W7 Batch-S·P0·Zwaan 1998 event-indexing model + arxiv 2506.* situation model 2026 + Cognitive Load Theory Sweller 2024] 读者构建 situation model 5 维跟踪(time/space/causation/intentionality/protagonist)·场景间检测:time(时间锚突变无 TIME_MARKERS)/space(SPACE_TOKENS 集合无交集无 SPACE_MARKERS)/causation(因果连词 density<0.3/kCJK 且 scene_cjk>800)/intentionality(intent_verbs hits==0 且 scene_cjk>600)/protagonist(focalizer 主角占比<20%)·任一命中 → SITUATION_MODEL_DIM_DROPOUT advisory·作者档 dim_dropout_tolerance:[time/space/...] 旁路·R7-R13 共 101 条 100%craft-output 层·从未触读者心智 situation model·env SITUATION_MODEL_5DIM_MODE 默认 shadow·🔬阈值占位待金标准校准·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SITUATION_MODEL_DIM_DROPOUT"]
     }
   },
 

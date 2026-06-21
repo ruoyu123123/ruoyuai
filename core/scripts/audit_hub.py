@@ -1950,6 +1950,55 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "aspect_grounding_scanner",
                      "ASPECT_GROUNDING_THIN", "风格")),
+                # [2026-06-21 R18 W7 Batch-S·P0·arxiv 2605.26322 OmniToM 2026-05-25
+                # + arxiv 2506.13641 EvolvTrip + arxiv 2601.12410 LLM-vs-Chimps] 角色信念
+                # 账本(OmniToM 7 维)·按 storyboard 维护 belief_state[character]·末轮回查
+                # 越权知识(character + KNOWLEDGE_VERB + fact_ref 在该 char belief 之外)·
+                # 与 focalizer_perception_bounds(narrator 层)+ dramatic_irony(TELL 词)+
+                # locked_fact_cross_scene(恒定事实)显式去重·advisory·默认 shadow
+                ("character_belief_ledger",
+                 [child_python(), str(_SCRIPT_DIR / "character_belief_ledger_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "character_belief_ledger_scanner",
+                     "CHARACTER_KNOWLEDGE_LEAK", "结构")),
+                # [2026-06-21 R18 W7 Batch-S·P0·tomenovel cliffhanger-economy + 知乎 681376328 +
+                # 橙瓜 + Qidian-Webnovel Corpus 2.79M] 入V过墙双峰钩(stake 递增 + mega-reveal 末段)·
+                # 读 用户偏好.json workflow_preferences.paywall_transition_cluster_id 门控
+                # (用户/编辑手填·绝不自动推断)·non-paywall 跳过·advisory·默认 shadow
+                ("paywall_transition_gradient",
+                 [child_python(), str(_SCRIPT_DIR / "paywall_transition_gradient_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster-id", f"cluster_{cluster_key}" if cluster_key else ""],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "paywall_transition_gradient_scanner",
+                     "BRIDGE_PAYWALL_HOOK_GRADIENT_OFF", "剧情")),
+                # [2026-06-21 R18 W7 Batch-S·P0·Liang 2024 Science Advances PubMed 5.2B token
+                # + arxiv 2412.11400 ChineseLLM excess vocab + 番茄AI识别公开规范] LLM 训练偏置
+                # 词 type 级 z-test·占位 llm_chinese_corpus_freq + human_webnovel_corpus_freq·
+                # z(LLM)>+2 且 z'(text)>+1 且 z(author)<+1σ → hit·与 R12 metaphor anti-AI
+                # (anti-pattern 句法层)正交·advisory·默认 shadow
+                ("excess_vocab_corpus_zscan",
+                 [child_python(), str(_SCRIPT_DIR / "excess_vocab_corpus_zscan.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "excess_vocab_corpus_zscan",
+                     "EXCESS_VOCAB_SIGNATURE_HIT", "风格")),
+                # [2026-06-21 R18 W7 Batch-S·P0·Zwaan 1998 event-indexing +
+                # arxiv 2506.* situation model 2026 + Cognitive Load Sweller 2024]
+                # 5 维 situation model 跟踪(time/space/causation/intentionality/protagonist)·
+                # 场景间任一维突变无 marker → dropout·作者档 dim_dropout_tolerance 可旁路·
+                # R7-R13 共 101 条全 craft-output 层·首次切到读者认知层·advisory·默认 shadow
+                ("situation_model_5dim",
+                 [child_python(), str(_SCRIPT_DIR / "situation_model_5dim_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "situation_model_5dim_scanner",
+                     "SITUATION_MODEL_DIM_DROPOUT", "结构")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

@@ -1,0 +1,278 @@
+# -*- coding: utf-8 -*-
+"""character_belief_ledger_scanner R18 W7 Batch-S·P0 OmniToM 回归测试
+
+确定性·零依赖·零 LLM/零联网。覆盖：
+  1. off 骨架
+  2. 无人物卡 → skip
+  3. shadow + 无 leak → PASS
+  4. shadow + leak → 不上报 stderr
+  5. active + leak → FAIL_MINOR + warning
+  6. 同场景 reveal 后下场景使用 → 合法
+  7. 跨场景越权使用 → leak
+  8. 草稿太短 skip
+  9. 草稿读取失败 → note
+ 10. _mode 非法回落 shadow
+ 11. _mode None 默认 shadow
+ 12. _strip_changes 两种分隔符
+ 13. _cjk_count
+ 14. locked_fact.json items[].key 读取
+ 15. CLI subprocess 退出码
+"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+_SCRIPTS = _ROOT / "core" / "scripts"
+sys.path.insert(0, str(_SCRIPTS))
+import character_belief_ledger_scanner as mod  # noqa: E402
+
+_TARGET = _SCRIPTS / "character_belief_ledger_scanner.py"
+
+
+def _set_mode(m):
+    if m is None:
+        os.environ.pop("CHARACTER_BELIEF_LEDGER_MODE", None)
+    else:
+        os.environ["CHARACTER_BELIEF_LEDGER_MODE"] = m
+
+
+def _write(text):
+    d = Path(tempfile.mkdtemp())
+    p = d / "draft.txt"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def _mk_project(characters=None, locked_facts=None):
+    proj = Path(tempfile.mkdtemp())
+    db = proj / "_数据库"
+    db.mkdir(parents=True, exist_ok=True)
+    if characters is not None:
+        (db / "人物卡.json").write_text(
+            json.dumps({"characters": characters}, ensure_ascii=False),
+            encoding="utf-8")
+    if locked_facts is not None:
+        (db / "locked_fact.json").write_text(
+            json.dumps({"facts": locked_facts}, ensure_ascii=False),
+            encoding="utf-8")
+    return proj
+
+
+_SCENE_SEP = "\n━━━━━━━━━━━━\n"
+
+# 张三在场景 1 未知秘密；场景 2 突然 "张三知道秘密" → leak
+_LEAK_DRAFT = (
+    "张三走进酒馆。他点了一杯酒。" * 30
+    + _SCENE_SEP
+    + "张三知道秘密。他面色凝重。" * 30
+)
+
+# 场景 1 公开 reveal "秘密"，张三在场；场景 2 张三知道秘密 → 合法
+_LEGAL_DRAFT = (
+    "张三在屋里。说书人讲到秘密。秘密。秘密。" * 30
+    + _SCENE_SEP
+    + "张三知道秘密。他点头。" * 30
+)
+
+
+# ───── 1 off → 骨架 ──
+def test_off_returns_skeleton():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("off")
+        proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+        out = mod.scan(_write(_LEAK_DRAFT), proj)
+        assert out["mode"] == "off"
+        assert out["verdict"] == "PASS"
+        assert out["violations"] == []
+    finally:
+        _set_mode(bak)
+
+
+# ───── 2 无人物卡 → skip ──
+def test_no_character_card_skip():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("active")
+        out = mod.scan(_write(_LEAK_DRAFT), _mk_project())
+        assert out["verdict"] == "PASS"
+        assert out["character_count"] == 0
+    finally:
+        _set_mode(bak)
+
+
+# ───── 3 shadow 无 leak → PASS 无 warning ──
+def test_shadow_legal_no_warning():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("shadow")
+        proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+        out = mod.scan(_write(_LEGAL_DRAFT), proj)
+        assert out["verdict"] == "PASS"
+        assert out["warning"] is None
+    finally:
+        _set_mode(bak)
+
+
+# ───── 4 shadow + leak → 不上报 ──
+def test_shadow_leak_no_report():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("shadow")
+        proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+        out = mod.scan(_write(_LEAK_DRAFT), proj)
+        # shadow 不写 violations
+        assert out["violations"] == []
+        assert out["warning"] is None
+        # 但仍记录 leak_count
+        assert out["leak_count"] >= 1
+    finally:
+        _set_mode(bak)
+
+
+# ───── 5 active + leak → FAIL_MINOR ──
+def test_active_leak_fail_minor():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+        out = mod.scan(_write(_LEAK_DRAFT), proj)
+        assert out["verdict"] == "FAIL_MINOR"
+        assert out["warning"] is not None
+        assert out["violations"][0]["code"] == "CHARACTER_KNOWLEDGE_LEAK"
+        assert out["gate_level"] == "advisory"
+    finally:
+        _set_mode(bak)
+
+
+# ───── 6 当场 reveal → 下场景合法 ──
+def test_legal_after_in_scene_reveal():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+        out = mod.scan(_write(_LEGAL_DRAFT), proj)
+        # leak_count 可能 0
+        assert out["leak_count"] == 0
+        assert out["verdict"] == "PASS"
+    finally:
+        _set_mode(bak)
+
+
+# ───── 7 跨场景越权 → leak 计数≥1 ──
+def test_cross_scene_unauthorized_knowledge_counted():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+        out = mod.scan(_write(_LEAK_DRAFT), proj)
+        assert out["leak_count"] >= 1
+        sample = out["leak_samples"][0]
+        assert sample["character"] == "张三"
+        assert sample["fact_ref"] == "秘密"
+    finally:
+        _set_mode(bak)
+
+
+# ───── 8 短稿 skip ──
+def test_short_draft_skip():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project(characters=[{"name": "张三"}])
+        out = mod.scan(_write("张三知道秘密。" * 10), proj)
+        assert out["note"] == "草稿太短·跳过"
+    finally:
+        _set_mode(bak)
+
+
+# ───── 9 读取失败 → note ──
+def test_read_failure_returns_note():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("active")
+        out = mod.scan(str(Path(tempfile.mkdtemp()) / "nope.txt"))
+        assert "草稿读取失败" in out.get("note", "")
+    finally:
+        _set_mode(bak)
+
+
+# ───── 10 _mode 非法回落 ──
+def test_mode_invalid_falls_back_shadow():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode("bogus")
+        assert mod._mode() == "shadow"
+        _set_mode("ACTIVE")
+        assert mod._mode() == "active"
+    finally:
+        _set_mode(bak)
+
+
+# ───── 11 _mode None 默认 shadow ──
+def test_mode_default_shadow():
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    try:
+        _set_mode(None)
+        assert mod._mode() == "shadow"
+    finally:
+        _set_mode(bak)
+
+
+# ───── 12 _strip_changes 分隔符 ──
+def test_strip_changes_factual():
+    assert mod._strip_changes("正文。\n---CHANGES_FACTUAL---\nlog") == "正文。"
+
+
+def test_strip_changes_plain():
+    assert mod._strip_changes("正文。\n---CHANGES---\nlog") == "正文。"
+
+
+# ───── 13 _cjk_count ──
+def test_cjk_count_basic():
+    assert mod._cjk_count("你好abc世界") == 4
+
+
+# ───── 14 locked_fact.json items[].key 读取 ──
+def test_load_fact_refs_from_locked_fact():
+    proj = _mk_project(
+        characters=[{"name": "张三"}],
+        locked_facts=[{"key": "藏宝图", "character_id": "李四"}])
+    refs = mod._load_fact_refs(proj)
+    assert "藏宝图" in refs
+
+
+def test_load_fact_refs_fallback_placeholder():
+    proj = _mk_project(characters=[{"name": "张三"}])
+    refs = mod._load_fact_refs(proj)
+    # 占位词典含 "秘密"
+    assert "秘密" in refs
+
+
+# ───── 15 CLI subprocess 退出码 ──
+def _run_cli(draft_path, project=None, mode="active"):
+    cmd = [sys.executable, str(_TARGET), str(draft_path)]
+    if project:
+        cmd += ["--project", str(project)]
+    return subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "CHARACTER_BELIEF_LEDGER_MODE": mode,
+             "PYTHONIOENCODING": "utf-8"})
+
+
+def test_main_exit_1_on_warning():
+    proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+    r = _run_cli(_write(_LEAK_DRAFT), proj)
+    assert r.returncode == 1, r.stderr
+    rep = json.loads(r.stdout)
+    assert rep["warning"] is not None
+
+
+def test_main_exit_0_on_clean():
+    proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+    r = _run_cli(_write(_LEGAL_DRAFT), proj)
+    assert r.returncode == 0, r.stderr
