@@ -1383,6 +1383,30 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "ACW_DIRECTIVE": _acw_directive,
                         # 🆕 R23 W11 Batch-GG P0: 钩子双侧 ±300 CJK 长记 window 指引
                         "pace_carrier_window": _pace_carrier_window,
+                        # 🆕 R23 W11 Batch-HH P1 (2026-06-22): 信念更新意图 + LC-NE 边界锐度 + frisson lead window
+                        # belief_update_intent: {preserve|update|None}·writer 据此决定末段是否要 PE 收束
+                        # event_boundary_sharpness: {sharp|dull|default}·volume_finale 强制 sharp 由 emergence 注入
+                        # frisson_lead_window: climax beat 前 1-2 段 200-400 CJK 节奏锐化指令（active 模式）
+                        "belief_update_intent": c.get("belief_update_intent"),
+                        "event_boundary_sharpness": (
+                            "sharp" if c.get("is_volume_finale")
+                            else (c.get("event_boundary_sharpness") or "default")
+                        ),
+                        "frisson_lead_window": (
+                            {
+                                "lead_cjk_range": [200, 400],
+                                "directive": (
+                                    "🟢 frisson 锐化指令(R23 W11 Batch-HH·neural frisson 时序前置)：\n"
+                                    "  · climax beat 前 1-2 段（约 200-400 CJK）= frisson lead window·\n"
+                                    "    在 lead window 做节奏锐化：短句独行 + 标点高潮 + 感官聚焦。\n"
+                                    "  · climax 句本身相对略钝（情绪降落式）·让战栗在前置预期中累积。\n"
+                                    "  · 无 climax beat 的 cluster 豁免（如治愈/iyashikei kishotenketsu 模式）。"
+                                ),
+                                "_doc": "R23 W11 Batch-HH·shadow→active 软提示·advisory·绝不 hard_gate",
+                            }
+                            if (os.environ.get("FRISSON_LEAD_MODE") or "shadow").strip().lower() == "active"
+                            else None
+                        ),
                         # 🆕 R22 W10 Batch-DD P0 STRONG: 题材 prior 推荐辞格 subset
                         "rhetorical_subset_hint": _rhet_subset,
                         "_narrative_mode_doc": ("in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；"

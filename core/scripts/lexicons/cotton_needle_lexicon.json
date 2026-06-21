@@ -1,0 +1,33 @@
+{
+  "_schema_version": "1.0",
+  "_placeholder": true,
+  "_doc": "绵针泥刺潜针对话词典占位骨架·R23 W11 Batch-HH·张竹坡评金瓶梅『绵针泥刺』=表面温情/恭顺/关切语言下藏针锋·shadow→active 后金标准校准扩词·确定性 LLM-free 替身(原 spec 是 LLM judge·这里走 lexicon 启发式做骨架·上层 advisory 不 hard_gate)",
+  "_source": "张竹坡《金瓶梅》评点·李渔《闲情偶寄》·脂砚斋评红楼梦",
+
+  "surface_warmth_lexicon": {
+    "_doc": "表面温情/恭顺/关切 surface_warmth proxy 词典·占位骨架·命中即贡献 surface 分",
+    "warm_address": ["亲爱的", "好兄弟", "老哥", "贤弟", "贤侄", "贤妹", "贤夫人", "我的好", "可怜", "辛苦你了"],
+    "concern": ["注意身体", "保重", "可要当心", "莫要劳累", "好生歇着", "歇歇吧", "别累着", "好生养着"],
+    "honey_compliment": ["你最", "真是辛苦", "了不起", "难为你", "幸亏有你", "亏得你", "全靠你", "多亏"],
+    "deference": ["还请", "敢请", "斗胆", "冒昧", "若是不嫌弃", "若不嫌弃", "听您的", "您说了算"],
+    "smiling_softeners": ["笑道", "含笑道", "柔声道", "和颜悦色", "笑眯眯", "笑盈盈", "温声"]
+  },
+
+  "subtext_aggression_lexicon": {
+    "_doc": "潜针/隐性攻击 subtext_aggression proxy 词典·占位骨架·命中即贡献 subtext 分",
+    "passive_threat": ["万一", "怕只怕", "倘若", "就怕", "若有个三长两短", "若是出了岔子", "万一有个差池"],
+    "guilt_trip": ["难道", "莫非", "怎么舍得", "怎么忍心", "也不想想", "也不替", "也不顾"],
+    "ironic_compliment": ["呵呵", "果然", "真是", "好得很", "高明", "厉害", "本事"],
+    "doubt_planting": ["听说", "外面都在传", "有人说", "据说", "我也是听", "有人议论"],
+    "veiled_reminder": ["别忘了", "你忘了", "还记得吗", "上次", "那回", "当年"],
+    "negation_softener_combo": ["不是我说", "不是我多嘴", "我也不愿意提", "本不想说"]
+  },
+
+  "antagonist_styles": {
+    "_doc": "作者档 antagonist_style 推荐 surface_warmth+subtext_aggression 同段密度",
+    "阴狠": {"density_target_per_1k_dialogue": 1.5, "recommend": "高频"},
+    "伪善": {"density_target_per_1k_dialogue": 2.0, "recommend": "高频"},
+    "直率": {"density_target_per_1k_dialogue": 0.3, "recommend": "低频"},
+    "粗暴": {"density_target_per_1k_dialogue": 0.2, "recommend": "低频"}
+  }
+}

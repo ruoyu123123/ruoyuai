@@ -435,6 +435,13 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict) 
         "stakes_delta": me.get("stakes_delta", ""),
         "intent": intent_val or None,
         "narrative_mode": narrative_mode or None,
+        # 🆕 R23 W11 Batch-HH P1 (2026-06-22): 信念更新意图 + LC-NE 边界锐度
+        # belief_update_intent ∈ {preserve, update}：update=要求末段 PE 收束（强反转）·
+        #   preserve=保留信念（红鲱鱼 / 推理悬念延后）·None=不主张（默认）
+        # event_boundary_sharpness ∈ {sharp, dull, default}：volume_finale 强制 sharp·
+        #   同 cluster 内 scene 切默认 dull·default=不指定（writer 默认走 dull）
+        "belief_update_intent": ("update" if is_finale else None),
+        "event_boundary_sharpness": ("sharp" if is_finale else "default"),
         "_doc": f"v24 fluid 涌现 · 等待用户从 {ord} 个 candidate 中选 1 个 → status 改 in_progress",
         "scene_storyboard": [],  # 雏形 · 用户选定后再让 outline-planner 详化
         "anchor_props": [],

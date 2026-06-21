@@ -1241,6 +1241,41 @@
       "doc": "[2026-06-22 R23 W11 Batch-GG·P1·张竹坡评金瓶梅犯而不犯]跨 cluster 复现母题(动作/场景/对话骨架≥2 次)·sim_form(char 3gram Jaccard)+div_axes 五轴(actor/place/prop/mood/outcome)·0.60≤sim≤0.85 且 div≥3 → STRONG advisory(对 repeat_noun_density 反向豁免)·sim>0.85 且 div<2 → 真重复·三 advisory(DETECTED/REAL_REPEAT/THIN_DATA)·与 repeat_noun_density/motif_recurrence_ledger 严格正交·env INTENTIONAL_RECURRENCE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
       "_new": true,
       "issues_emitted": ["INTENTIONAL_RECURRENCE_DETECTED", "INTENTIONAL_RECURRENCE_REAL_REPEAT", "INTENTIONAL_RECURRENCE_THIN_DATA"]
+    },
+    "cotton_needle_subtext_advisor": {
+      "layer": "cluster",
+      "script": "cotton_needle_subtext_advisor.py + lexicons/cotton_needle_lexicon.json",
+      "doc": "[2026-06-22 R23 W11 Batch-HH·P1·张竹坡评金瓶梅绵针泥刺]对话级 surface_warmth + subtext_aggression 双高同段=笑里藏针·5+6 桶词典占位骨架 LLM-judge 替身·surface≥0.4 且 subtext≥0.4 → 命中·汇总 角色关系.json.subtext_aggression_edges + author_intent_card·作者档 antagonist_style∈{阴狠/伪善} 推荐密度↑·三 advisory(DETECTED/BELOW_TARGET/OVER)·env COTTON_NEEDLE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["COTTON_NEEDLE_DETECTED", "COTTON_NEEDLE_BELOW_TARGET", "COTTON_NEEDLE_OVER"]
+    },
+    "belief_update_alignment": {
+      "layer": "cluster",
+      "script": "belief_update_alignment.py + cluster_emergence_engine brief.belief_update_intent + build_manifest 透传",
+      "doc": "[2026-06-22 R23 W11 Batch-HH·P1·neural mnemonic PE]末 1500 CJK 扫惊讶代理(PE 关键词/标点突变/主语切换)·brief.belief_update_intent ∈ {preserve, update} 透传 writer + judge·update + 末段 PE 弱 → NO_SURPRISE·preserve + 末段过强 → RED_HERRING_KILLED·三 advisory(NO_SURPRISE/RED_HERRING_KILLED/INTENT_MISSING)·env BELIEF_UPDATE_ALIGNMENT_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["BELIEF_UPDATE_NO_SURPRISE", "BELIEF_PRESERVE_RED_HERRING_KILLED", "BELIEF_INTENT_MISSING"]
+    },
+    "event_boundary_lc_signal": {
+      "layer": "cluster",
+      "script": "event_boundary_lc_signal.py + cluster_emergence_engine brief.event_boundary_sharpness + build_manifest 透传",
+      "doc": "[2026-06-22 R23 W11 Batch-HH·P1·neural LC-NE]章末 200 CJK surprise 代理(PE 关键词/标点突变/主语切换)·brief.event_boundary_sharpness ∈ {sharp, dull, default}·volume_finale 强制 sharp·同 cluster 内 scene 切默认 dull·三 advisory(TOO_DULL/TOO_SHARP/DEFAULT)·与 belief_update_alignment 词典正交·env EVENT_BOUNDARY_LC_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["EVENT_BOUNDARY_TOO_DULL", "EVENT_BOUNDARY_TOO_SHARP", "EVENT_BOUNDARY_DEFAULT"]
+    },
+    "frisson_lead_window": {
+      "layer": "cluster",
+      "script": "frisson_lead_window_scanner.py + build_manifest.frisson_lead_window directive",
+      "doc": "[2026-06-22 R23 W11 Batch-HH·P1·neural frisson 时序前置 Salimpoor 2011]climax beat 前 1-2 段(200-400 CJK)=frisson lead window·测 lead vs climax 标点密度 + 单句独行占比·期望 lead/climax ≥1.2x·writer prompt active 模式注入 lead window directive(短句独行+标点高潮+感官聚焦) climax 句相对略钝·三 advisory(LEAD_FLAT/CLIMAX_OVERLOAD/NO_CLIMAX_FOUND)·env FRISSON_LEAD_MODE 默认 shadow·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["FRISSON_LEAD_FLAT", "FRISSON_CLIMAX_OVERLOAD", "FRISSON_NO_CLIMAX_FOUND"]
+    },
+    "author_brand_perplexity_drift": {
+      "layer": "cluster",
+      "script": "author_brand_perplexity_drift.py + 蒸馏阶段产 author_lm_perplexity_band.json 占位",
+      "doc": "[2026-06-22 R23 W11 Batch-HH·P1·author brand economics LitBench]cluster-write step 5 在 reading/voice judge 后并行跑·窗口化 char Shannon entropy 替身指标(占位·真版蒸馏阶段产小 LM perplexity ECDF)·落 [p5, p95] 静默·越界 advisory·book_count<2 / _placeholder=true 跳过·三 advisory(DRIFT_LOW/DRIFT_HIGH/BAND_MISSING)·env AUTHOR_BRAND_PERPLEXITY_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "_new": true,
+      "issues_emitted": ["AUTHOR_BRAND_PERPLEXITY_DRIFT_LOW", "AUTHOR_BRAND_PERPLEXITY_DRIFT_HIGH", "AUTHOR_BRAND_PERPLEXITY_BAND_MISSING"]
     }
   },
 
