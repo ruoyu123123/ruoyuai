@@ -5,9 +5,9 @@
 的 v19.3 全局 MEMORY feedback 注入都读开发机
 ~/.claude/projects/D--Desktop-ruoyuai/memory/feedback_*.md ——
 frozen exe 用户机上该路径不存在 → writer 防御层整层静默为空。
-本脚本把全部 feedback 规则机械汇编成单文件随 exe 出货
-（ruoyu_gui.spec 6b 段整目录收 lessons/*.md 自动带上），
+本脚本把全部 feedback 规则机械汇编成单文件随仓库出货（lessons/*.md 整目录），
 gen_writer/build_manifest 在 home 路径 miss/为空时 fallback 读它。
+[ruoyu_gui.spec 6b 段引用 removed commit 2a4d7ce·spec 已删·留作未来打包基础设施]
 
 🔴 纪律：只做格式搬运 —— 剥 frontmatter 框架（name/metadata/originSessionId 行），
 保留 description + 正文原文逐字节不动，不增删改任何规则语义。

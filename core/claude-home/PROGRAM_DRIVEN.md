@@ -1,9 +1,17 @@
-# 程序驱动层（v28 · 2026-06-10）
+# 程序驱动层（v28 · 2026-06-10 · 2026-06-21 GUI/BYOK 回滚收口）
 
 > 用确定性 Python driver 替换「Claude 主循环人肉跟 plan 走步」的编排层。
 > 写作主轨（cluster-write → cluster-save-state 循环）已全量程序驱动；
 > outline / distill-style 已程序驱动化（2026-06-11 阶段2/3 落地）；
 > 仅 check-quality / reconcile 仍 Claude 编排（见〔迁移状态〕）。
+>
+> **🔴 2026-06-21 commit 2a4d7ce 决策 A**：删 GUI 整层 + 回滚 BYOK·主代理
+> **Claude Code 唯一入口**·吃 Claude Code 订阅。本文档 GUI / BYOK / PyInstaller 打包
+> 相关段落（标 `[DEPRECATED commit 2a4d7ce]`）仅作历史回溯；当前生效路径 =
+> 主代理 Claude Code spawn 调度 → `python core/scripts/orchestrator.py <cmd>` →
+> 程序驱动管线。.env 为唯一 key 来源（仓库根·dev 默认路径）。详见 commit 2a4d7ce
+> + memory `project_gui_layer_nicegui` / `project_byok_keyring` /
+> `project_gui_full_coverage` / `project_packaging_ruoyuai_standalone_exe`。
 
 ## 三个新模块（core/scripts/）
 
@@ -44,25 +52,17 @@
 | `steps[].after_pause_scripts` | 选择落定后的确定性后续（cluster_choice_apply 写回） | |
 | `steps[].touch_outputs` | 标记文件（多轮产物文件名可变时的存在性代理） | |
 
-## BYOK 密钥管理（非技术用户自带 key · 2026-06-10）
+## BYOK 密钥管理 — 🔴 [DEPRECATED commit 2a4d7ce · 2026-06-21 回滚]
 
-分发版绝不带开发者 `.env` 私钥——非技术用户在 GUI 设置页录入**自己的** API key，经
-`keyring`（Windows 凭据管理器·DPAPI 用户级加密）存储。
+**2026-06-21 用户决策 A 回滚**：删 GUI → BYOK keyring 路径不再是用户入口，回到仓库根
+`.env` 单一密钥来源（dev 默认路径·开发者自管）。`secrets_store.py` 保留作 keyring 薄抽象
++ redact 工具（gemini key URL 脱敏仍在用），但 GUI 录入卡片 / `set_api_key` 用户入口已删。
+`gen_model_loader._resolve_api_key` 三级优先级 **keyring > os.environ > .env 文本**链路代码
+保留（向下兼容），实际只走 environ/.env 路径。`tests/gui/` 整目录连同 GUI 一并删除。
 
-| 层 | 实现 |
-|---|---|
-| `core/scripts/secrets_store.py` | keyring 薄抽象（唯一 import keyring 的非 GUI 模块）：`get/set/delete/has_api_key`、`is_available()`（isinstance fail/null 判定）、`redact()`（gemini key-in-URL 脱敏）。service=`ruoyuai-gen-model`，username=`profile.name`。软退化：keyring 缺→静默 None |
-| `gen_model_loader._resolve_api_key` | `Profile.api_key` 三级优先级 **keyring > os.environ > .env 文本**（唯一注入点·下游 13 脚本零改）。`load_dotenv(override=True)` 使 environ 层仅在 .env **未定义**该 key 时独立生效 |
-| GUI 设置页 | per-profile 录入卡片（密码框 + 保存到 keyring + 已配置/未配置徽章 + 测试连接）；保存后清空输入、绝不展示明文、绝不写回 .env。`runner.save_api_key` 后 `reset_default_loader()` 让录入即生效 |
+历史背景（仅供回溯）：v28 2026-06-10 曾设计 BYOK——分发版 + 非技术用户 GUI 录入 keyring。
 
-**安全红线**：绝不 log/写回 .env key；gemini key 在 URL（gen_writer urllib / llm_transport
-httpx）的异常 str() 必经 `redact()` 再抛（否则经 stderr→GUI LogBuffer→界面泄漏）。
-
-测试：`test_secrets_store(11)`/`test_loader_precedence(7·含 dev 零回归基线)`/
-`tests/gui/test_gui_settings(8·整链端到端+redact 守卫)`。内存 keyring 后端不碰真
-Credential Manager。
-
-### 非密 config 分离（step5 · 已做 · 2026-06-10）
+### 非密 config 分离 — 🔴 [DEPRECATED commit 2a4d7ce]
 
 分发版不带 `.env`（含开发者私钥）。新增内置非密 config `core/config/gen_profiles.default.env`
 （沿用 .env 文本格式·**无任何 `GEN__*__API_KEY` 行**——留空行会被 `load_dotenv(override=True)`
@@ -77,7 +77,12 @@ Credential Manager。
 
 测试：`test_config_split(7·无密钥硬闸/dist回落/keyring供key/user_override切active/set_active dev-dist/dev零回归)`。
 
-### PyInstaller 打包 step6 阶段A（frozen 架构 de-risk · 已验 · 2026-06-10）
+### PyInstaller 打包 step6 阶段A — 🔴 [DEPRECATED commit 2a4d7ce]
+（`packaging/` 整目录已删·下面是历史记录·frozen 路径推算代码 `frozen_util.py`/
+`bundle_root()` 等仍在源码——保留作 dev-no-op·未来重新打包可复用·测试 `test_frozen_util`
+按 dev 守卫继续跑。）
+
+
 
 **真 PyInstaller onedir exe 实测验证 6 条 dev 无法验的 frozen 路径全过**（`packaging/frozen_smoke.exe` EXIT=0·6/6 PASS·无 Traceback·`_internal` 33MB·torch 排净·dist 无 .env）。
 
@@ -97,7 +102,11 @@ spec 关键：`hiddenimports` 列项目模块（FrozenImporter 只认 PYZ）+ ke
 `datas` config + 脚本 .py（dest `core/config`/`core/scripts`·逐字对齐 bundle_root 推算）·**绝不列 .env**。
 测试 `test_packaging_frozen_smoke(6·dev 守卫)` + `test_frozen_util` bundle_root frozen-aware。
 
-### PyInstaller step6 frozen fan-out（方案 M multi-call · 已验 · 2026-06-10）
+### PyInstaller step6 frozen fan-out — 🔴 [DEPRECATED commit 2a4d7ce]
+（`ruoyu_gui.py` 入口 + `packaging/` 已删·`frozen_util.is_script_dispatch`/`dispatch_or_none`
+代码保留作未来重新打包基础设施·dev no-op。）
+
+
 
 🔴 **「最大未知量」消除**：勘察证 cluster-write 质检 17 个 scanner **全是纯 Python**（仅 advisory 的
 `style_evaluator` 用 numpy/scipy）→ 采 **multi-call 二进制**方案——GUI exe 兼当 fan-out 解释器，
@@ -116,7 +125,11 @@ spec 关键：`hiddenimports` 列项目模块（FrozenImporter 只认 PYZ）+ ke
 scanner JSON + 退出码透传·与 audit_hub fan-out 同款路径构造）。exe 级敌对：`exe cluster_lookup.py`
 → exit 3（无 main 契约）。`_internal` 仍 33MB（无第二 python）。
 
-### 全 GUI onedir exe（已落地 · 真 exe 验证 4/4 · 2026-06-10）
+### 全 GUI onedir exe — 🔴 [DEPRECATED commit 2a4d7ce]
+（`dist/ruoyu_gui`/`packaging/ruoyu_gui.spec`/`validate_gui_exe.py` 全删·下面是历史记录·
+当前用户入口 = Claude Code CLI。）
+
+
 
 **可分发的全 GUI onedir exe 诞生并验证**（`dist/ruoyu_gui`·`_internal` 274MB·torch 排净）。
 `packaging/validate_gui_exe.py` 实测 **PASS 4/4**：① 安全 dist 无 .env / 无 sk- 明文 ② fan-out
@@ -136,7 +149,11 @@ lessons（cluster-write 路径·`project_root.parent×3`→`bundle_root()`·froz
 bundle·旧推算 lessons 静默丢失削弱风格一致）/ `scaffold_subsystems` SKELETON / `skill_evolver`
 pool → 全改 `bundle_root()`（dev 逐字节一致）。守卫 `test_packaging_frozen_smoke`（13·含 5 GUI spec）。
 
-### frozen 可写系统数据迁 user_data_dir（已做 · READ 审计对称面 · 2026-06-10）
+### frozen 可写系统数据迁 user_data_dir — 🟡 [部分 DEPRECATED commit 2a4d7ce]
+（`frozen_util.user_data_dir()` 代码保留——dev 仍逐字节零回归走仓库根·frozen 分支无入口
+触发但留作未来基础设施。下面记录原 4 类迁移路径。）
+
+
 
 frozen 的 `_internal` 只读 → 跨项目**可写**系统数据写 bundle 必崩。`frozen_util.user_data_dir()`
 （dev=仓库根逐字节零回归·frozen=`%APPDATA%/ruoyuai` 可写·同 BYOK user_overrides 范式）迁 4 类：
@@ -146,7 +163,12 @@ MAPE-K runtime（self_heal/adaptive·incidents/kb/circuit/runtime_lessons·clust
 / wal_recovery 引 plan_tracker.GLOBAL_PLANS_DIR 归一）。**frozen 路径双面闭合**：只读 `bundle_root()`
 + 可写 `user_data_dir()`。守卫 `test_frozen_util`（18·含 user_data_dir/writable 锚点）。
 
-### 🎉🎉 完整 7 步 cluster-write 真 exe 闭环（已证 · 2026-06-11 · 用户授权 API）
+### 🎉🎉 完整 7 步 cluster-write 真 exe 闭环 — 🔴 [HISTORICAL · GUI 已 DEPRECATED commit 2a4d7ce]
+（程序驱动写作主轨**当前生效**——只是不再走 GUI exe·改走 Claude Code CLI 主代理调度
+`python core/scripts/orchestrator.py cluster-write`·下面记录原 GUI exe 闭环验证·留作
+管线完备性证据：`gen_throttle` / llm_transport 429 退避 / 5 个 e2e bug 修复全保留。）
+
+
 
 **整条程序驱动写作主轨在真 frozen GUI exe 完整跑通**（`ruoyu_gui.exe core/scripts/orchestrator.py
 cluster-write --project <copy> --key 001 --auto-pilot`·`GEN_MIN_INTERVAL_S=4.5 BEST_OF_N=1`）：
@@ -162,7 +184,7 @@ step7 plan-end·**EXIT=0 无 Traceback 无 520**。产出 3 章真实连贯辰�
 min-interval 闸（frozen 单进程内 writer+judge 共享·4 处请求点·env `GEN_MIN_INTERVAL_S` 默认 0
 关零回归·15rpm 端点设 4.5）+ llm_transport 429 指数退避 → 瞬态限流优雅处理。
 
-### 🎉 真 GUI exe 端到端写一章（gen_writer 单步 · 已证 · 2026-06-10 · 用户授权 API）
+### 🎉 真 GUI exe 端到端写一章 — 🔴 [DEPRECATED commit 2a4d7ce]
 
 **真 GUI onedir exe + BYOK keyring 密钥 → 写出真实连贯一章**（用户选「端到端真写一章」授权 gen-model
 API）。链路全程真二进制：`ruoyu_gui.exe core/scripts/gen_writer.py --project <copy> --cluster 1`
@@ -182,37 +204,26 @@ user 20301）→ 调 gemini_pro_preview → 收 5641 chars → 存 `章节/clust
 
 `packaging/validate_gui_exe.py` + 本次 end-to-end = **整条程序驱动写作主轨在真分发 exe 验证可用**。
 
-### 一键构建验证 runbook
+### 一键构建验证 runbook — 🔴 [DEPRECATED commit 2a4d7ce]
+（`packaging/build_all.py` 已删·当前无分发版构建路径——主代理 Claude Code 直跑 python
+脚本即可。）
 
-`python packaging/build_all.py`（清理 → 构建 frozen_smoke + ruoyu_gui onedir → 跑 frozen_smoke.exe
-7/7 + validate_gui_exe.py 4/4 → grep sk-/.env 泄漏闸）。可复现出货。
+## 用户入口（2026-06-21 commit 2a4d7ce 后唯一形态）
 
-**残留 step6（需用户输入 / 外部资源 · 非纯自主）**：① 干净 Win11 真机端到端 cluster-write + GUI
-录 key 真写一章（**需 gen-model API 授权**·PowerShell 复验 stderr）② `console=False` 正式分发 +
-图标 + **OV 签名**（需证书）③ 免费试用门（`secrets_store.get/set_trial_token` 已备·**试用策略=产品决策需问用户**）。
+主代理 **Claude Code CLI** 是用户与若渝AI 的唯一入口。流程：
 
-## 图形界面（脱离 Claude CLI · 2026-06-10）
+1. 用户在 Claude Code 会话中输入命令（`/cluster-write` / `/outline` / `/distill-style` …）。
+2. 主代理读 plan 模板（`core/claude-home/plans/*.json`），按强制规划层 spawn 出 `python
+   core/scripts/orchestrator.py <cmd>` 子进程。
+3. orchestrator 按 plan-DAG 跑 scripts / judge_runner / pause_for_user（终端 input() 渲染
+   走向卡候选）。
+4. 走向卡停顿 = 终端候选列表（`orchestrator._cli_pause_handler`）；用户回车选号 →
+   `cluster_choice_apply.py` 机械写回事件簇.json。
+5. key 来源 = 仓库根 `.env`（dev 默认路径·开发者自管·gen-model API key）。
 
-NiceGUI 桌面/浏览器界面，直接驱动 orchestrator——非技术用户无需 Claude CLI。
-
-| 文件 | 职责 |
-|---|---|
-| `ruoyu_gui.py` | 启动器（`multiprocessing.freeze_support()` 首句 · UTF-8 reconfigure） |
-| `core/gui/state.py` | 纯逻辑（零 nicegui）：`AppState` / `PauseBridge`（req_id 代际令牌防多 tab 抢答）/ `StderrTee`+`LogBuffer`（日志捕获）/ `scan_project`（项目进度 + 下一步推断） |
-| `core/gui/runner.py` | 纯逻辑：`PipelineRunner` 工作线程驱动 `orchestrator.run_command`，与 UI 走 `AppState`+`PauseBridge` 解耦 |
-| `core/gui/app.py` | 唯一 import nicegui：写作台（项目/一键写故事块·保存·连跑/实时日志/走向卡 awaitable dialog）+ Plan 续跑页 + 设置页 |
-
-启动：`python ruoyu_gui.py`（浏览器）/ `--native`（桌面窗口·需 pywebview）。
-
-**官方成熟模式（复用减少排错）**：走向卡 = awaitable `ui.dialog().submit()` + 后台任务解耦；
-日志 = `ui.log` + `LogBuffer` 单调游标（**per-client 闭包游标**，非共享）；长任务 = 工作线程 +
-`ui.timer(0.5)` 轮询；走向卡停顿 = `PauseBridge`（threading.Event 桥 + req_id 防陈旧/串台应答）。
-
-**北极星③**：走向卡默认必弹卡等用户，`auto_pilot` 是显式开关（默认 False）；超时/被抢答的
-陈旧卡由 `_tick` 主动回收，迟到点击被桥 req_id 校验拒绝——绝不静默替用户选剧情走向。
-
-测试：`tests/test_gui_state.py`（28·逻辑）/ `tests/gui/test_gui_user.py`（10·NiceGUI 官方 User
-模拟 UI）。boot smoke 实测服务器起得来且对外服务。
+历史背景：v28 2026-06-10 曾经引入 NiceGUI 图形界面（`core/gui/` + `ruoyu_gui.py` +
+`packaging/`），让非技术用户脱离 CLI。2026-06-21 commit 2a4d7ce 整层物理删除——决策见
+memory `project_gui_layer_nicegui` / `project_gui_full_coverage`（均已加 DEPRECATED 标）。
 
 ## 用法
 

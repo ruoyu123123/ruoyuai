@@ -5,7 +5,7 @@
   "total_steps": 8,
   "required_steps": [1, 2, 2.5, 3, 4, 5, 6, 7],
   "optional_steps": [],
-  "_program_driven_status": "v28 程序驱动：已落为可执行 DAG（scripts/must_spawn_agent/data_flow）·orchestrator.run_command 可机械驱动·GUI /distill 全程蒸馏可调。2026-06-11 阶段3。前置：GUI 在 RUNNER.start 前 mkdir STYLES_DIR/<书名>/蒸馏进度/.wal + 把作者作品正文落 蒸馏进度/.wal/raw_author_text.txt。注：distill 项目根直挂 原文/、cluster_index.json（data_flow source_json 不带 _数据库/ 前缀）。",
+  "_program_driven_status": "v28 程序驱动：已落为可执行 DAG（scripts/must_spawn_agent/data_flow）·orchestrator.run_command 可机械驱动·主代理 Claude Code 调度。2026-06-11 阶段3。前置：调用方在 orchestrator 启动前 mkdir STYLES_DIR/<书名>/蒸馏进度/.wal + 把作者作品正文落 蒸馏进度/.wal/raw_author_text.txt。注：distill 项目根直挂 原文/、cluster_index.json（data_flow source_json 不带 _数据库/ 前缀）。[GUI /distill 入口 DEPRECATED commit 2a4d7ce]",
   "steps": [
     {
       "n": 1,

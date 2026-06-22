@@ -42,7 +42,7 @@ if str(_SCRIPTS) not in sys.path:
 from gen_model_loader import GenModelLoader, Profile, reasoning_extra_body  # noqa: E402
 
 try:
-    from secrets_store import redact as _redact  # BYOK key 脱敏（gemini key 在 URL）
+    from secrets_store import redact as _redact  # API key 脱敏（gemini key 在 URL） [BYOK 入口 removed commit 2a4d7ce·redact 仍用作 .env key 脱敏]
 except Exception:
     def _redact(s):
         import re as _r

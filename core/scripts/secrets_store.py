@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""secrets_store.py — keyring 薄抽象（BYOK · 2026-06-10 · GUI 删档后 2026-06-20 收窄）
+"""secrets_store.py — keyring 薄抽象（2026-06-10 · GUI 删档后 2026-06-20 收窄 · 2026-06-21 BYOK 入口 DEPRECATED commit 2a4d7ce）
 
-主代理（Claude Code CLI）唯一入口形态下，本模块仍管 gen-model BYOK key 与联网调研
-search key。密钥经 keyring（Windows 凭据管理器 DPAPI 用户级加密）存储，绝不落 .env /
-任何文件。本模块是 keyring 的唯一封装入口。
+主代理（Claude Code CLI）唯一入口形态下，本模块功能收窄为：
+- `redact()`：gemini key URL 脱敏（仍由 llm_transport / gen_writer 调用·硬功能保留）。
+- search key keyring 路径（web_search_client 联网调研开发者本机存放·`SERVICE_SEARCH`）。
+- gen-model BYOK key keyring 路径：[user-facing 入口 DEPRECATED commit 2a4d7ce]，仅
+  gen_model_loader._resolve_api_key 仍按三级优先级查 keyring → environ → .env 文本，
+  保留作向下兼容；实际 dev 走仓库根 .env，分发版 GUI 录入卡片已删。
+
+安全不变量（仍生效）：
+- 绝不 print/log key 明文（debug 也只打 service/username + bool）。
+- 绝不把 key 写回 .env / 任何文件——keyring 是唯一持久化路径。
+- 任何 keyring 异常吞成 None/False，绝不冒泡到 loader（让 loader 优雅降级到 .env）。
 
 安全不变量（违反即 BYOK 泄漏）：
 - 绝不 print/log key 明文（debug 也只打 service/username + bool）。

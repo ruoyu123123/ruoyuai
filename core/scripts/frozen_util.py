@@ -115,8 +115,9 @@ def child_python() -> str:
 
     dev → sys.executable（真 python.exe）。
     frozen → RUOYU_PYTHON 优先（方案 B 逃生阀·临时指外部 python）；缺则返 exe 本体——
-    靠 ruoyu_gui/frozen_smoke 入口的 dispatcher 自我再分派（argv[1] 是 core/scripts 脚本就
+    靠入口的 dispatcher 自我再分派（argv[1] 是 core/scripts 脚本就
     进程内跑·见 dispatch_or_none）。**M 下「frozen+无 env+返 exe」是设计正道，不告警**。
+    [ruoyu_gui/frozen_smoke 入口 removed commit 2a4d7ce·frozen 分支留作未来打包基础设施]
     """
     if not is_frozen():
         return sys.executable
@@ -135,7 +136,7 @@ def is_script_dispatch(argv) -> bool:
       - argv[1] 不以 '-' 开头（--native/--port/--multiprocessing-fork → False）
       - argv[1] 以 .py 结尾
       - 规范化后真落在 bundle_root()/core/scripts 或 /packaging 下且 .exists()
-        （白名单根·杜绝任意路径执行·天然排除 bundle 根的 ruoyu_gui.py 自身）
+        （白名单根·杜绝任意路径执行） [bundle 根 ruoyu_gui.py 入口 removed commit 2a4d7ce]
     """
     if not is_frozen() or len(argv) < 2:
         return False
@@ -165,7 +166,7 @@ def dispatch_or_none(argv):
         return None
     # 🔴 frozen Windows exe stdout/stderr 默认 GBK(cp936)→ 派发的脚本打印 emoji/非 GBK
     # Unicode(如 prompt 里的 🔴)会 UnicodeEncodeError 崩(真 end-to-end 测试实测)。派发执行前
-    # 强制 UTF-8(所有 dispatch 入口共享此防护·不止 ruoyu_gui)。
+    # 强制 UTF-8(所有 dispatch 入口共享此防护)。[ruoyu_gui 入口 removed commit 2a4d7ce]
     for _s in (sys.stdout, sys.stderr):
         try:
             _s.reconfigure(encoding="utf-8", errors="replace")

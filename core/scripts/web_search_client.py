@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""web_search_client.py — 联网调研 search API 薄抽象（BYOK·D1·2026-06-15）
+"""web_search_client.py — 联网调研 search API 薄抽象（D1·2026-06-15）
 
-程序驱动 exe 模式下 novel-researcher 依赖的 Claude WebSearch/WebFetch 不可用
+程序驱动模式下 novel-researcher 依赖的 Claude WebSearch/WebFetch 不可用
 （gen-model 无 web 能力·PROGRAM_DRIVEN.md L251 自承 soft 降级），本模块补回联网调研：
-BYOK search API key（Tavily 首选·返回 LLM-ready 摘要），key 经 secrets_store keyring
-（service=ruoyuai-search·DPAPI 加密），与 gen-model BYOK 同机制。
+search API key（Tavily 首选·返回 LLM-ready 摘要），key 经 secrets_store keyring
+（service=ruoyuai-search·DPAPI 加密）或 env 变量。
+
+[GUI/BYOK gen-model 入口 removed commit 2a4d7ce·search key 仍走 keyring/env 二路解析]
 
 key 解析三级（照 gen_model_loader._resolve_api_key 范式）：
-  1. keyring（BYOK 主路径·secrets_store.get_search_key）
-  2. os.environ["RUOYU_SEARCH_KEY"]（CI/临时覆盖）
-  3. 未配 → raise SearchKeyMissing（调用方降级静态 SOP 模板·D1 exe 回退·绝不静默吞）
+  1. keyring（secrets_store.get_search_key·开发者本机存放）
+  2. os.environ["RUOYU_SEARCH_KEY"]（CI/临时覆盖·主代理常用路径）
+  3. 未配 → raise SearchKeyMissing（调用方降级静态 SOP 模板·绝不静默吞）
 
 provider：tavily（默认·LLM-ready）/ 预留 brave/exa（薄抽象·端点可换·暂只实现 tavily）。
 

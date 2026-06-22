@@ -23,7 +23,7 @@ import re
 import sys
 
 try:
-    import secrets_store  # keyring 薄抽象（BYOK·唯一 import keyring 处）
+    import secrets_store  # keyring 薄抽象 [BYOK 用户入口 removed commit 2a4d7ce·keyring 路径仍保留作向下兼容]
 except Exception:
     secrets_store = None
 

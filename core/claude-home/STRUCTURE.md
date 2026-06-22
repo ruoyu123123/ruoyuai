@@ -23,8 +23,7 @@
 │   │   ├── lessons/                            # 蒸馏经验库
 │   │   └── STRUCTURE.md                        # 【本文档】
 │   ├── scripts/                                # Python 工具脚本
-│   ├── config/                                 # 内置非密 config（gen_profiles.default.env）
-│   └── gui/                                    # NiceGUI 图形界面层（见第四-bis节）
+│   └── config/                                 # 内置非密 config（gen_profiles.default.env）
 ├── workspace/                                  # 【用户产出区】
 │   ├── styles/{书名}/                          # 全局风格库（见第二节）
 │   └── novels/{书名}/                          # 小说项目（见第三节）
@@ -180,22 +179,16 @@ core/claude-home/
 
 ---
 
-## 四-bis、GUI 图形界面层（`core/gui/`）
+## 四-bis、GUI 图形界面层 — 🔴 [DEPRECATED commit 2a4d7ce · 2026-06-21]
 
-NiceGUI 图形界面层（v28 · 2026-06-10 引入），让非技术用户脱离 Claude CLI 直接驱动 orchestrator：
+**2026-06-21 用户决策 A：删 GUI 整层 + 回滚 BYOK·主代理 Claude Code 唯一入口。**
 
-```
-core/gui/
-├── app.py                                      # 页面（唯一 import nicegui：写作台 / Plan 续跑页 / 设置页）
-├── runner.py                                   # 流水线驱动 + PauseBridge 接线（工作线程驱动 orchestrator.run_command）
-├── state.py                                    # 纯逻辑状态层（AppState / PauseBridge / LogBuffer · 零 nicegui）
-├── widgets.py                                  # 展示组件
-└── theme.py                                    # 主题
-```
+历史背景（仅供回溯）：v28 2026-06-10 曾引入 NiceGUI 图形界面层（`core/gui/`、`ruoyu_gui.py`、`packaging/ruoyu_gui.spec`），让非技术用户脱离 Claude CLI 直接驱动 orchestrator。2026-06-21 commit 2a4d7ce 整层物理删除：
+- `core/gui/` 整目录、`ruoyu_gui.py`、`packaging/` 打包脚本、`tests/gui/` 测试全删；
+- 配套 BYOK keyring 路径回滚（`secrets_store.py` 收窄、`gen_model_loader.py` 优先 .env 私钥）；
+- 用户入口收敛为 **Claude Code CLI 唯一入口**——主代理调度 orchestrator。
 
-- **入口**：仓库根 `ruoyu_gui.py`（`python ruoyu_gui.py` 浏览器 / `--native` 桌面窗口）。
-- **frozen exe**：由 `packaging/ruoyu_gui.spec` 打包（onedir · 一键构建走 `packaging/build_all.py`）。
-- 详细设计见 `core/claude-home/PROGRAM_DRIVEN.md` 〔图形界面〕节。
+理由：用户决定吃 Claude Code 订阅·删除 BYOK 残留与 GUI 维护成本。详见 commit 2a4d7ce + memory `project_gui_layer_nicegui` / `project_gui_full_coverage` / `project_byok_keyring` / `project_packaging_ruoyuai_standalone_exe`（均已加 DEPRECATED 标）。
 
 ---
 

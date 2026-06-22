@@ -641,7 +641,10 @@ def _cf_inject_cross_family_check(outcome, short_judge_name: str,
 
 # ============ 停顿点 ============
 def cli_pause_handler(step: dict, spec: dict, options: list) -> object:
-    """CLI 缺省停顿点：终端渲染候选/提问 → input()。NiceGUI 模式换 async handler。"""
+    """CLI 缺省停顿点：终端渲染候选/提问 → input()。
+
+    [GUI async handler removed commit 2a4d7ce·主代理 Claude Code 唯一入口·永远走终端 input()]
+    """
     prompt = spec.get("prompt") or f"step {step.get('n')} 需要你的选择"
     if spec.get("type") == "choice" and options:
         logger.info(f"\n=== {prompt} ===")
