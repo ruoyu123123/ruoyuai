@@ -203,12 +203,51 @@ def _infer_cluster_start_ch(project_root: Path, cluster_id: int) -> int:
 
 
 # ============ Prompt 组装 ============
+# 🔴 G4 writer prompt 瘦身（2026-06-23）：只有「写作工艺类」feedback 才注入 writer system prompt。
+# 根因——_collect_feedback_rules() 此前把 memory 里**所有** type=feedback 文件（实测 29 个，每文件
+# 截 2500 字 ≈ 45k chars）一股脑塞进 writer system，其中 ~22 个是流程/基建/蒸馏/测试/合规类 lesson
+# （default_no_step_skipping / real_api_tests / verify_stderr / runtime_self_learning …），对「生成正文」
+# 零价值，却随 211 轮 upgrade 不断沉淀、把 system prompt 从 ~20k 撑到 67k → 超 elysiver max_prompt_chars
+# 直接跳过不调用（G3 真 API e2e 抓出的卡死根因）。
+# 北极星⑤：砍的全是与创作无关的流程 lesson；作者档第一权威 + 写作工艺禁令完整保留。
+# 扩展口径：白名单 ∪ 任何带 frontmatter `writer_relevant: true` 的 feedback（新增写作工艺 lesson
+# 只要标这一行就会被注入，无需改本表）。
+_WRITER_RELEVANT_FEEDBACK = frozenset({
+    "feedback_no_screenplay_stage_directions_in_novels",
+    "feedback_one_sentence_per_paragraph",
+    "feedback_dialogue_quote_unicode_distinction",
+    "feedback_dialogue_quote_distill_bug",
+    "feedback_inverted_modifier_sentence_mold_overuse",
+    "feedback_smart_side_characters_no_dumbing_down",
+    "feedback_author_goldstandard_comparison_gate",
+})
+
+
+def _is_writer_relevant_feedback(stem_or_slug: str, text: str = "") -> bool:
+    """该 feedback 文件是否「写作工艺类」（应注入 writer 生成 prompt）。
+
+    判定：① 归一化后命中 _WRITER_RELEVANT_FEEDBACK 白名单；或
+         ② 文件 frontmatter 显式 `writer_relevant: true`（可扩展 opt-in·新工艺 lesson 自助挂载）。
+    其余（流程/基建/蒸馏/测试/合规 lesson）→ False·不进 writer prompt（北极星⑤·与生成无关）。
+    """
+    norm = (stem_or_slug or "").strip().replace("-", "_")
+    if norm in _WRITER_RELEVANT_FEEDBACK:
+        return True
+    if text and re.search(r"writer_relevant:\s*true", text):
+        return True
+    return False
+
+
 def _collect_feedback_rules() -> str:
     """L3 防御：自动扫 ~/.claude/projects/.../memory/feedback_*.md，
-    抽取 type=feedback 的全局规则段，注入 writer system prompt。
+    抽取 type=feedback **且写作工艺类**的全局规则段，注入 writer system prompt。
 
-    设计目标：让 writer 在每段生成时都看到全局禁令（不依赖主代理记得）。
+    设计目标：让 writer 在每段生成时都看到写作工艺禁令（不依赖主代理记得）。
     抽取策略：取 lesson 文件的「## 规则」段（如有），否则取文件头部 1500 字。
+
+    🔴 G4 瘦身（2026-06-23）：只注入 _is_writer_relevant_feedback 通过的文件（写作工艺类），
+    流程/基建/蒸馏/测试/合规 lesson 一律跳过——它们对生成正文零价值，却是 system prompt
+    从 20k 膨到 67k 的主因。详见 _WRITER_RELEVANT_FEEDBACK。
 
     🔴 frozen fallback（2026-06-13）：开发机 memory 路径在 exe 用户机上不存在 →
     本层此前整层静默为空。home miss/为空时改读随 exe 出货的汇编
@@ -227,6 +266,9 @@ def _collect_feedback_rules() -> str:
                 # frontmatter 检查 type=feedback
                 if "type: feedback" not in text:
                     continue
+                # 🔴 G4 瘦身：只注入写作工艺类（白名单 ∪ writer_relevant:true）
+                if not _is_writer_relevant_feedback(f.stem, text):
+                    continue
                 # 抽 "## 规则" 段或文件正文头部
                 m = re.search(r"##\s*规则[\s\S]*?(?=\n##\s|\Z)", text)
                 chunk = m.group(0) if m else text[text.find("---\n", 5) + 4:]
@@ -236,25 +278,43 @@ def _collect_feedback_rules() -> str:
                 rules_chunks.append(f"### 来自 {f.stem}\n\n{chunk}")
         if not rules_chunks:
             return _collect_feedback_rules_bundle_fallback()
-        header = "# 🔴 全局 feedback 规则（自动注入 · 来自 memory/feedback_*.md）\n\n"
-        header += "以下是历史用户反馈沉淀的全局禁令，写作时**逐条遵守**。违反 = 出货后被打回 + lesson 复发。\n\n"
+        header = "# 🔴 全局写作工艺 feedback 规则（自动注入 · 来自 memory/feedback_*.md）\n\n"
+        header += "以下是历史用户反馈沉淀的写作工艺禁令，写作时**逐条遵守**。违反 = 出货后被打回 + lesson 复发。\n\n"
         return header + "\n\n---\n\n".join(rules_chunks)
     except Exception:
         return ""
 
 
 def _collect_feedback_rules_bundle_fallback() -> str:
-    """home memory miss/为空 → 读随 exe 出货的汇编 lessons/global_feedback_rules.md 全文。
+    """home memory miss/为空 → 读随 exe 出货的汇编 lessons/global_feedback_rules.md。
 
     汇编文件由 assemble_global_feedback_rules.py 机械产出（自带「逐条遵守」header 框架行，
     与 home 路径注入形态等价）；frozen_util.resource_path 定位（frozen=_MEIPASS·dev=仓库根）。
+
+    🔴 G4 瘦身（2026-06-23）：与 home 路径同口径——只把汇编里**写作工艺类**的 `## feedback-xxx`
+    节注入 writer prompt（流程/测试/蒸馏类节跳过）。汇编**文件本身不改**（build_manifest 的
+    digest 仍消费全 13 节·只是 gen_writer 注入端过滤）。解析失败 → 兜底返回全文（不退化到 0 注入）。
     """
     try:
         from frozen_util import resource_path
         p = resource_path("core", "claude-home", "lessons", "global_feedback_rules.md")
         if not p.exists():
             return ""
-        return p.read_text(encoding="utf-8").strip()
+        full = p.read_text(encoding="utf-8").strip()
+        # 按 "## feedback-xxx" 节头切（保留捕获组）→ [preamble, h1, body1, h2, body2, ...]
+        parts = re.split(r"(?m)^(##\s+feedback[-_][^\n]*)$", full)
+        if len(parts) < 3:
+            return full  # 无可识别节头 → 兜底全文
+        kept = [parts[0].rstrip()]
+        for i in range(1, len(parts), 2):
+            heading = parts[i]
+            body = parts[i + 1] if i + 1 < len(parts) else ""
+            slug = heading.strip().lstrip("#").strip()  # feedback-xxx
+            if _is_writer_relevant_feedback(slug):
+                kept.append((heading + body).rstrip())
+        if len(kept) <= 1:
+            return full  # 解析后一条工艺节都没匹配（口径异常）→ 兜底全文
+        return "\n\n".join(kept).strip()
     except Exception:
         return ""
 

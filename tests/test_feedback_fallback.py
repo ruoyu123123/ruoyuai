@@ -79,13 +79,22 @@ def test_bundle_file_exists_with_rule_markers():
 # ---------- gen_writer fallback ----------
 
 def test_gen_writer_fallback_loads_bundle_when_home_miss():
-    """home memory 路径不存在 → fallback 装载汇编文件内容（不再整层为空）。"""
+    """home memory 路径不存在 → fallback 装载汇编文件**写作工艺类**节（不再整层为空）。
+
+    🔴 G4 瘦身（2026-06-23）：fallback 与 home 同口径只注入写作工艺节——校验
+    craft 节（no-screenplay）保留、流程节（no-token-saving「全量传 LLM」）被过滤掉。
+    """
     with tempfile.TemporaryDirectory() as d:
         with _fake_home(Path(d)):
             rules = gw._collect_feedback_rules()
     assert rules, "home miss 时 fallback 仍为空 = frozen 断裂未修"
     assert "全局 feedback 规则汇编" in rules, "fallback 没装载汇编文件 header"
-    assert "全量传 LLM" in rules, "fallback 缺规则实质内容（no-token-saving）"
+    # 写作工艺节保留
+    assert "feedback-no-screenplay-stage-directions-in-novels" in rules, "craft 节被误删"
+    assert "章末 = 钩子不是收束" in rules, "craft 节实质内容丢失"
+    # 流程节过滤掉（writer prompt 不该再被流程 lesson 撑大）
+    assert "全量传 LLM" not in rules, "流程节 no-token-saving 未被过滤（G4 瘦身失效）"
+    assert "feedback-verify-stderr-not-exitcode" not in rules, "测试类节未被过滤"
 
 
 def test_gen_writer_fallback_when_home_dir_empty():
@@ -104,16 +113,51 @@ def test_gen_writer_fallback_when_home_dir_empty():
 
 
 def test_gen_writer_home_priority_over_bundle():
-    """home 有 type=feedback 文件 → 优先 home（注入 home 内容·不混汇编 header）。"""
+    """home 有**写作工艺类** type=feedback 文件 → 优先 home（注入 home 内容·不混汇编 header）。
+
+    🔴 G4 瘦身：用白名单内的文件名（smart_side_characters）才会被注入；这同时验证 home 优先。
+    """
     with tempfile.TemporaryDirectory() as d:
         home = Path(d)
-        _mk_home_memory(home, "feedback_unique_marker_rule.md",
+        _mk_home_memory(home, "feedback_smart_side_characters_no_dumbing_down.md",
                         "UNIQUE_HOME_RULE_MARKER_8848 禁止某某行为。")
         with _fake_home(home):
             rules = gw._collect_feedback_rules()
     assert "UNIQUE_HOME_RULE_MARKER_8848" in rules, "home 路径优先被破坏"
     assert "来自 memory/feedback_*.md" in rules, "home 路径 header 丢失"
     assert "全局 feedback 规则汇编" not in rules, "home 命中时不应混入 bundle 汇编内容"
+
+
+def test_gen_writer_home_filters_non_craft_feedback():
+    """🔴 G4 瘦身：home 里非写作工艺类 feedback（流程/测试 lesson）→ 不注入 writer prompt。
+
+    根因回归锁：211 轮 upgrade 沉淀的流程 lesson 此前被无差别灌进 writer system（67k 膨胀根因）。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        # 一个流程类（非白名单·无 writer_relevant）+ 一个工艺类（白名单）
+        _mk_home_memory(home, "feedback_default_no_step_skipping_for_new_books.md",
+                        "PROCESS_RULE_MARKER_4242 禁止跳 plan step。")
+        _mk_home_memory(home, "feedback_one_sentence_per_paragraph.md",
+                        "CRAFT_RULE_MARKER_7777 非对话段只一个句末结束符。")
+        with _fake_home(home):
+            rules = gw._collect_feedback_rules()
+    assert "CRAFT_RULE_MARKER_7777" in rules, "写作工艺类被误删"
+    assert "PROCESS_RULE_MARKER_4242" not in rules, "流程类未被过滤（G4 瘦身失效）"
+
+
+def test_gen_writer_writer_relevant_optin_overrides_whitelist():
+    """🔴 G4 瘦身：非白名单文件但 frontmatter 标 writer_relevant: true → 仍注入（可扩展 opt-in）。"""
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        mem = home / ".claude" / "projects" / "D--Desktop-ruoyuai" / "memory"
+        mem.mkdir(parents=True, exist_ok=True)
+        (mem / "feedback_some_new_craft_rule.md").write_text(
+            "---\nname: x\nmetadata: \n  type: feedback\n  writer_relevant: true\n---\n\n"
+            "OPTIN_CRAFT_MARKER_3131 新写作工艺规则。\n", encoding="utf-8")
+        with _fake_home(home):
+            rules = gw._collect_feedback_rules()
+    assert "OPTIN_CRAFT_MARKER_3131" in rules, "writer_relevant:true opt-in 未生效"
 
 
 # ---------- build_manifest fallback ----------
