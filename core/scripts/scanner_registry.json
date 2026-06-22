@@ -1154,7 +1154,8 @@
     "antagonist_valence_trajectory": {
       "layer": "cross_cluster",
       "script": "antagonist_valence_trajectory.py",
-      "doc": "[2026-06-22 R23 W11 Batch-II·P2·fanfic 群体生态·反派情感重充电监控] outline 阶段用户标反派 list (人物卡 role=反派/antagonist/BBEG/主反 自动识别) + redemption_arc_authorized:bool 默认 false (人物卡字段或 用户偏好.json.antagonist_redemption_arc_authorized 全局开关)·每 cluster 算反派 valence (占位 lexicon 正向词-负向词·±80CJK 上下文窗口) → 未授权但单调正向 5 cluster 连涨 > +0.3 → ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED·作者授权可豁免·_placeholder=true·真版 NRC-VAD-CN + Riveter power score·绝不 hard_gate",
+      "lexicon_path": "core/data/antagonist_valence_lexicon.json",
+      "doc": "[2026-06-22 R23 W11 Batch-II·P2·fanfic 群体生态·反派情感重充电监控] outline 阶段用户标反派 list (人物卡 role=反派/antagonist/BBEG/主反 自动识别) + redemption_arc_authorized:bool 默认 false (人物卡字段或 用户偏好.json.antagonist_redemption_arc_authorized 全局开关)·每 cluster 算反派 valence (占位 lexicon 正向词-负向词·±80CJK 上下文窗口) → 未授权但单调正向 5 cluster 连涨 > +0.3 → ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED·作者授权可豁免·_placeholder=true·真版 NRC-VAD-CN + Riveter power score·绝不 hard_gate·[G2 P2 2026-06-22]词典外部化到 core/data/antagonist_valence_lexicon.json·内嵌为 fallback",
       "_new": true,
       "issues_emitted": ["ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED"]
     },
@@ -1175,7 +1176,8 @@
     "imageability": {
       "layer": "cluster",
       "script": "imageability_scanner.py",
-      "doc": "[2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 20·Paivio 1968 dual-coding] 句级具象度 z-band·占位 core/data/imageability_zh.json(60 high + 60 low CN 词)·imageability_index = (high-low)/(high+low) ∈ [-1, 1]·作者档 imageability_baseline.{mean,std} z-band·|z|>1.0 → IMAGEABILITY_OFF_BAND·无作者档兜底 μ=0 σ=0.3·与 repeat_noun_density / semantic_slop / scene_grounding 严格正交·advisory·env IMAGEABILITY_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "lexicon_path": "core/data/imageability_zh.json",
+      "doc": "[2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 20·Paivio 1968 dual-coding] 句级具象度 z-band·占位 core/data/imageability_zh.json(60 high + 60 low CN 词)·imageability_index = (high-low)/(high+low) ∈ [-1, 1]·作者档 imageability_baseline.{mean,std} z-band·|z|>1.0 → IMAGEABILITY_OFF_BAND·无作者档兜底 μ=0 σ=0.3·与 repeat_noun_density / semantic_slop / scene_grounding 严格正交·advisory·env IMAGEABILITY_MODE 默认 shadow·绝不 hard_gate·_placeholder=true·[G2 P2 2026-06-22]词典外部化(本就外部·补 lexicon_path 字段)",
       "_new": true,
       "issues_emitted": ["IMAGEABILITY_OFF_BAND"]
     },
@@ -1217,7 +1219,8 @@
     "zeugma": {
       "layer": "cluster",
       "script": "zeugma_scanner.py + core/data/verb_object_collocation_freq.json",
-      "doc": "[2026-06-21 R22 W10 Batch-FF·P1·陈望道《修辞学发凡》拈连格·搞笑流网文签名] 句对级 V+O1...V+O2 启发·V∈占位 8 动词·O1=common 命中+O2=unusual 命中·跨句累计 CJK≤80 字窗·作者档 zeugma_per_kcj 第一权威(搞笑流>0/严肃≈0)·与 rhetorical_balance(38 格分布)/rhetorical_inventory(全格清单)/anadiplosis(顶针单格)严格正交·advisory·env ZEUGMA_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "lexicon_path": "core/data/verb_object_collocation_freq.json",
+      "doc": "[2026-06-21 R22 W10 Batch-FF·P1·陈望道《修辞学发凡》拈连格·搞笑流网文签名] 句对级 V+O1...V+O2 启发·V∈占位 8 动词·O1=common 命中+O2=unusual 命中·跨句累计 CJK≤80 字窗·作者档 zeugma_per_kcj 第一权威(搞笑流>0/严肃≈0)·与 rhetorical_balance(38 格分布)/rhetorical_inventory(全格清单)/anadiplosis(顶针单格)严格正交·advisory·env ZEUGMA_MODE 默认 shadow·绝不 hard_gate·_placeholder=true·[G2 P2 2026-06-22]词典外部化(本就外部·补 lexicon_path 字段)",
       "_new": true,
       "issues_emitted": ["ZEUGMA_DETECTED", "ZEUGMA_OVER_BASELINE", "ZEUGMA_UNDER_BASELINE"]
     },
@@ -1367,7 +1370,8 @@
     "parrhesia_density_scanner": {
       "layer": "cluster",
       "script": "parrhesia_density_scanner.py",
-      "doc": "[2026-06-22 R25 W13 Batch-MM·P1·Foucault Fearless Speech + 网文打脸名场面骨架]三信号同段命中 = 1 parrhesia hit·(A)权力反差词(弱方+权者称谓同段)·(B)truth-claim 句式(您说错了/恕我直言/...)出现在引号段·(C)风险姿态身体描写(站起/直视/不卑不亢/...)·密度 = hits / (cluster_cjk/10000)·作者档 parrhesia_signature.density_baseline.mean/sigma 第一权威·缺则 mean=2.0/σ=1.5·>mean+2σ → OVERFLOW(打脸服务疲劳)·<mean-2σ → THIN(缺 payoff)·env PARRHESIA_DENSITY_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
+      "lexicon_path": "core/data/parrhesia_lexicon.json",
+      "doc": "[2026-06-22 R25 W13 Batch-MM·P1·Foucault Fearless Speech + 网文打脸名场面骨架]三信号同段命中 = 1 parrhesia hit·(A)权力反差词(弱方+权者称谓同段)·(B)truth-claim 句式(您说错了/恕我直言/...)出现在引号段·(C)风险姿态身体描写(站起/直视/不卑不亢/...)·密度 = hits / (cluster_cjk/10000)·作者档 parrhesia_signature.density_baseline.mean/sigma 第一权威·缺则 mean=2.0/σ=1.5·>mean+2σ → OVERFLOW(打脸服务疲劳)·<mean-2σ → THIN(缺 payoff)·env PARRHESIA_DENSITY_MODE 默认 shadow·绝不 hard_gate·_placeholder=true·[G2 P2 2026-06-22]词典外部化到 core/data/parrhesia_lexicon.json·内嵌为 fallback",
       "_new": true,
       "issues_emitted": ["PARRHESIA_DENSITY_OVERFLOW", "PARRHESIA_DENSITY_THIN", "PARRHESIA_DENSITY_OK"]
     },

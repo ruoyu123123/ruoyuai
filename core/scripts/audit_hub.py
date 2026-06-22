@@ -674,6 +674,44 @@ def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: st
     return issues
 
 
+def _parse_advisories_scanner(stdout: str, source: str, default_code: str, dimension: str) -> list:
+    """[G2 P2 2026-06-22] 通用解析：scanner 顶层 `advisories[]` 形态(R23 W11 Batch-II
+    writer_growth_dashboard / antagonist_valence_trajectory / 部分 cross-cluster 工具)。
+
+    形态：{ "scanner": "...", "advisories": [{"code", "msg", ...}], "violations"?: [...] }
+    若有 `violations` 优先按 violations 走（沿用 _parse_violations_scanner 合成 1 条聚合）；
+    否则按 advisories 每条出一条 advisory issue。无 advisory / violations → 不产 issue。
+
+    与 _parse_issues_list_scanner 区别：那个吃 `issues[]`（已带 severity + gate_level 元信息），
+    这个吃 `advisories[]`（只带 code+msg，severity 兜底为 info 让顶层 audit_mode 决定）。
+
+    全部以 HARD_GATE_CODES 为权威·北极星⑤：advisory 类 scanner 顶层永不自立 hard_gate。"""
+    issues = []
+    report = _load_scanner_json(stdout)
+    if not report:
+        return issues
+    # 走 violations 优先（active 模式下 scanner 已自带 violations[]）
+    if report.get("violations"):
+        return _parse_violations_scanner(stdout, source, default_code, dimension)
+    advisories = report.get("advisories", []) or []
+    for it in advisories:
+        if not isinstance(it, dict):
+            continue
+        code = it.get("code", "") or default_code
+        if not code:
+            continue
+        severity = _norm_severity(it.get("severity", "info"))
+        gl = _gate_level_for(code, severity)
+        desc = it.get("msg", "") or it.get("desc", "")
+        issues.append({
+            "dimension": dimension, "severity": severity,
+            "gate_level": gl, "code": code, "desc": str(desc),
+            "source": source, "fix_hint": "",
+            "waived": False, "waive_reason": "",
+        })
+    return issues
+
+
 # ============ v19.2 工具校准建议：自动豁免 ============
 
 def _load_calibration_suggestions(project_root: Path) -> list[dict]:
@@ -2402,6 +2440,158 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "author_signature_preservation",
                      "AUTHOR_SIGNATURE_MISMATCH", "风格")),
+                # ============ [G2 P2 2026-06-22] 17 SHADOW_SCANNERS 接齐(R18 Batch-T 3 + R22-R25 14) ============
+                # 解开「在线但 0 advisory」死代码·全 advisory shadow·hard_gate 12 码不变·绝不 hard_gate
+                # 北极星⑤顾问制·作者档第一权威·shadow 默认不上报(仅 scanner_status 痕迹证明在线)
+                # [R18 Batch-T·P0·Halliday parataxis 中文叙事铁律]
+                ("paratactic_implicit_logic",
+                 [child_python(), str(_SCRIPT_DIR / "paratactic_implicit_logic_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "paratactic_implicit_logic_scanner",
+                     "PARATAXIS_OFF_AUTHOR_BAND", "风格")),
+                # [R18 Batch-T·P0·间接刻画密度 + 情感钟摆]
+                ("indirect_characterization_ratio",
+                 [child_python(), str(_SCRIPT_DIR / "indirect_characterization_ratio_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "indirect_characterization_ratio_scanner",
+                     "INDIRECT_CHARACTERIZATION_THIN", "人物")),
+                # [R18 Batch-T·P0·Centering Theory 焦点持续性]
+                ("centering_theory_focus",
+                 [child_python(), str(_SCRIPT_DIR / "centering_theory_focus_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)] + _style_args,
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "centering_theory_focus_scanner",
+                     "CENTERING_ROUGH_SHIFT_OVERLOAD", "节奏")),
+                # [R22 Batch-FF·P1·陈望道拈连格 zeugma]
+                ("zeugma",
+                 [child_python(), str(_SCRIPT_DIR / "zeugma_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "zeugma_scanner",
+                     "ZEUGMA_DETECTED", "风格")),
+                # [R22 Batch-FF·P1·陈望道顶真格 anadiplosis]
+                ("anadiplosis",
+                 [child_python(), str(_SCRIPT_DIR / "anadiplosis_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "anadiplosis_scanner",
+                     "ANADIPLOSIS_DETECTED", "风格")),
+                # [R22 Batch-FF·P1·Fauconnier&Turner CBT premise_blend_card]
+                ("premise_blend_card",
+                 [child_python(), str(_SCRIPT_DIR / "premise_blend_card_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "premise_blend_card_scanner",
+                     "PREMISE_BLEND_CARD_MISSING", "剧情")),
+                # [R22 Batch-FF·P2·CBT 7 类 vital_relations 探针·占位词典 lexicon_placeholder=true]
+                # vital_relations_probe 是 probe(无 violations/advisories)·_parse_advisories_scanner
+                # 兼容空字段·只占在线 scanner_status 痕迹·不产 issue(零回归保障)
+                ("vital_relations_probe",
+                 [child_python(), str(_SCRIPT_DIR / "vital_relations_probe.py"),
+                  str(cluster_draft)],
+                 {0, 1},
+                 lambda out, code: _parse_advisories_scanner(
+                     out, "vital_relations_probe",
+                     "VITAL_RELATIONS_DENSITY_TRACK", "风格")),
+                # [R25 Batch-MM·P1·Foucault Fearless Speech parrhesia·G2 P2 词典外部化]
+                ("parrhesia_density",
+                 [child_python(), str(_SCRIPT_DIR / "parrhesia_density_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "parrhesia_density_scanner",
+                     "PARRHESIA_DENSITY_THIN", "风格")),
+                # [R25 Batch-MM·P1·梵剧 Rasa 双层一致(dominant/transient)]
+                ("cluster_rasa_layer",
+                 [child_python(), str(_SCRIPT_DIR / "cluster_rasa_layer_consistency_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "cluster_rasa_layer_consistency_scanner",
+                     "RASA_LAYER_DOMINANT_DRIFT", "风格")),
+                # [R25 Batch-MM·P1·梵剧 Rasa 因果链(vibhava→anubhava 完整性)]
+                ("rasa_causal_chain",
+                 [child_python(), str(_SCRIPT_DIR / "rasa_causal_chain_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "rasa_causal_chain_scanner",
+                     "RASA_CAUSAL_BREAK_MISMATCH", "剧情")),
+                # [R25 Batch-MM·P1·Mawhorter Choice Poetics 5 维(走向卡 advisory)]
+                # 走向卡 JSON 路径 = _数据库/.direction_card_advisory/<cluster_key>.json
+                # 文件不存在 → scanner 优雅"无候选卡·跳过"(无 violations 产)
+                ("direction_card_poetics",
+                 [child_python(), str(_SCRIPT_DIR / "direction_card_poetics_scanner.py"),
+                  str(project_root / "_数据库" / ".direction_card_advisory" / f"{cluster_key}.json"),
+                  "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "direction_card_poetics_scanner",
+                     "DIRECTION_CARD_FRAMING_THIN", "剧情")),
+                # [R23 Batch-II·P2·Echo Draft 4-Pass 朗读 performance]
+                ("audio_performance",
+                 [child_python(), str(_SCRIPT_DIR / "audio_performance_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "audio_performance_scanner",
+                     "AUDIO_PERF_TRI_CLAUSE_HEAVY", "风格")),
+                # [R23 Batch-II·P2·writer growth 词汇多样性 dashboard·cross-cluster·advisories[] 形态]
+                ("writer_growth_dashboard",
+                 [child_python(), str(_SCRIPT_DIR / "writer_growth_dashboard.py"),
+                  str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_advisories_scanner(
+                     out, "writer_growth_dashboard",
+                     "WRITER_GROWTH_VOCAB_DROP", "风格")),
+                # [R23 Batch-II·P2·反派情感重充电监控·cross-cluster·advisories[] 形态·G2 P2 词典外部化]
+                ("antagonist_valence_trajectory",
+                 [child_python(), str(_SCRIPT_DIR / "antagonist_valence_trajectory.py"),
+                  str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_advisories_scanner(
+                     out, "antagonist_valence_trajectory",
+                     "ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED", "人物")),
+                # [R24 Batch-LL·P2·微短剧节拍栅格(head/mid/tail 3-15-30s)]
+                ("microdrama_intraep_beat_lattice",
+                 [child_python(), str(_SCRIPT_DIR / "microdrama_intraep_beat_lattice.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "microdrama_intraep_beat_lattice",
+                     "MICRODRAMA_HEAD_3S_NO_ACTION", "节奏")),
+                # [R24 Batch-LL·P2·prose 180° 空间轴一致性]
+                ("prose_180_axis",
+                 [child_python(), str(_SCRIPT_DIR / "prose_180_axis_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "prose_180_axis_scanner",
+                     "PROSE_AXIS_FLIP", "剧情")),
+                # [R24 Batch-LL·P2·视觉具象往返(Paivio dual-coding round-trip)]
+                ("imageability_round_trip_probe",
+                 [child_python(), str(_SCRIPT_DIR / "imageability_round_trip_probe.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_key],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "imageability_round_trip_probe",
+                     "IMAGEABILITY_ROUND_TRIP_LOW", "风格")),
+                # ============ [G2 P2 2026-06-22] 17 SHADOW_SCANNERS 接齐 END ============
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

@@ -45,9 +45,12 @@ ISSUE_CODE_OK = "PARRHESIA_DENSITY_OK"
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 # 占位 lexicon · _placeholder=true · 真版 = 打脸名场面聚类
-_LEXICONS = {
+# [G2 P2] 外部化到 core/data/parrhesia_lexicon.json (lexicon_path 字段)·内嵌为 fallback 向后兼容
+_LEXICON_PATH = Path(__file__).resolve().parent.parent / "data" / "parrhesia_lexicon.json"
+
+_LEXICONS_FALLBACK = {
     "_placeholder": True,
-    "_doc": "R25 W13 Batch-MM·parrhesia 三信号占位词典",
+    "_doc": "R25 W13 Batch-MM·parrhesia 三信号占位词典 (fallback · 外部 core/data/parrhesia_lexicon.json 缺失/损坏时启用)",
     "power_lower": [
         "年轻人", "废物", "小子", "毛头小子", "黄毛", "无名之辈",
         "不知天高地厚", "乳臭未干", "无知小儿", "愚徒", "蝼蚁",
@@ -67,6 +70,22 @@ _LEXICONS = {
         "目光不躲", "迎上目光",
     ],
 }
+
+
+def _load_lexicons() -> dict:
+    """[G2 P2] 外部 lexicon 优先·缺失/损坏 fallback 内嵌(向后兼容)"""
+    try:
+        data = json.loads(_LEXICON_PATH.read_text(encoding="utf-8"))
+        # 必须含 4 个信号键，否则视为损坏走 fallback
+        for k in ("power_lower", "power_upper", "truth_claim", "risk_posture"):
+            if k not in data:
+                return _LEXICONS_FALLBACK
+        return data
+    except (OSError, json.JSONDecodeError):
+        return _LEXICONS_FALLBACK
+
+
+_LEXICONS = _load_lexicons()
 
 PARRHESIA_BASELINE_MEAN_DEFAULT = 2.0   # hits / 10k CJK · 占位
 PARRHESIA_BASELINE_SIGMA_DEFAULT = 1.5  # σ · 占位

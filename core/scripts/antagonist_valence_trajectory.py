@@ -31,14 +31,33 @@ from pathlib import Path
 ISSUE_DRIFT = "ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED"
 
 # 占位 lexicon (真版 = NRC-VAD-CN / Riveter power score)
-POSITIVE_LEX = (
+# [G2 P2] 外部化到 core/data/antagonist_valence_lexicon.json (lexicon_path 字段)·内嵌为 fallback 向后兼容
+_LEXICON_PATH = Path(__file__).resolve().parent.parent / "data" / "antagonist_valence_lexicon.json"
+
+_POSITIVE_FALLBACK = (
     "温柔", "善良", "怜悯", "悔恨", "懊悔", "释然", "微笑", "温暖", "宽恕", "理解",
     "同情", "柔软", "歉意", "无奈", "苦笑", "叹息", "保护", "守护",
 )
-NEGATIVE_LEX = (
+_NEGATIVE_FALLBACK = (
     "残忍", "冷血", "暴虐", "狠厉", "狰狞", "凶狠", "嗜血", "贪婪", "阴险", "狡诈",
     "恶毒", "邪恶", "癫狂", "扭曲", "毒辣", "凶残",
 )
+
+
+def _load_valence_lexicon() -> tuple[tuple, tuple]:
+    """[G2 P2] 外部 lexicon 优先·缺失/损坏 fallback 内嵌(向后兼容)"""
+    try:
+        data = json.loads(_LEXICON_PATH.read_text(encoding="utf-8"))
+        pos = tuple(data.get("positive_lex") or ())
+        neg = tuple(data.get("negative_lex") or ())
+        if pos and neg:
+            return pos, neg
+    except (OSError, json.JSONDecodeError):
+        pass
+    return _POSITIVE_FALLBACK, _NEGATIVE_FALLBACK
+
+
+POSITIVE_LEX, NEGATIVE_LEX = _load_valence_lexicon()
 
 VALENCE_WINDOW = 80          # 反派提及 ±80 CJK 上下文窗口
 TREND_MIN_CLUSTERS = 5       # ≥5 cluster 单调正向才报
