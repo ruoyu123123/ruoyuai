@@ -1,37 +1,68 @@
 {
   "command": "check-quality",
-  "version": 1,
-  "description": "双层质量校验：Anti-Slop 扫描（机械层正则 + 语义层 semantic_slop_scanner）+ LLM 评估",
+  "version": 2,
+  "description": "cluster 级质量审查 · v28 程序驱动（2026-06-22 G2 P0a 实装）：机械层 audit_hub（13+ scanner advisory）+ 跨章 validate_chapter（hard_gate）+ LLM 双 judge（reading-reflector audit / voice-checker · 真 API · elysia gen-model）→ 综合 quality_report.json",
   "total_steps": 3,
-  "required_steps": [
-    1,
-    2,
-    3
-  ],
+  "required_steps": [1, 2, 3],
   "optional_steps": [],
   "steps": [
     {
       "n": 1,
-      "name": "anti-slop-scan",
-      "description": "Anti-Slop 双层扫描：机械层 6 类正则（禁用词/AI套话/对话标签/Show-Don't-Tell/总结结尾）+ 语义层 semantic_slop_scanner 8 检测器（隐喻后解释/金句体/否定式排比/系动词回避/虚假范围/过度限定/强行三段列举/对话标签同义词循环，全部 advisory）",
+      "name": "cluster-mechanical-audit",
+      "description": "audit_hub.py --mode cluster · 跑 13+ cluster 视野 scanner（validate_chapter/validate_style/narrative/plot_structure/hook/golden_three/semantic_slop/voice_drift/foreshadowing_handoff/locked_fact/pov/prose_rhythm/...）· 不 --auto-fix（只报告·检查模式）· 全部 advisory 汇总到 cluster_{key}_audit.json",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id cluster_{key}"
+      ],
+      "control_flow": {
+        "exit_codes": {
+          "0": "ok",
+          "1": "ok",
+          "2": "ok",
+          "3": "fail"
+        }
+      },
+      "expected_outputs": [
+        "_数据库/.audit/cluster_{key}_audit.json"
+      ]
     },
     {
       "n": 2,
-      "name": "llm-evaluation",
-      "description": "LLM 评估：核心指标 + 禁忌检查 + 正典校验 + 风格一致性 + AI 默认输出对比 + 对抗式编辑",
+      "name": "cluster-cross-chapter-validate",
+      "description": "validate_chapter.validate_cluster() · 整 cluster 章范围 hard_gate 校验（CLUSTER_MODE=1·CLUSTER_PER_CHAPTER=1·逐章跑后聚合 fatal/error/warning）· 抓 LOCKED_FACT_CONFLICT / FUTURE_KNOWLEDGE_LEAK / FORESHADOWING_NOT_PAID / MANIFEST_MISSING 等 hard_gate 码 · 落盘 cluster_{key}_validate.json",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/check_quality_validate.py {project_root} --cluster {key} --out _数据库/.qa/cluster_{key}_validate.json"
+      ],
+      "control_flow": {
+        "exit_codes": {
+          "0": "ok",
+          "1": "ok",
+          "2": "fail"
+        }
+      },
+      "expected_outputs": [
+        "_数据库/.qa/cluster_{key}_validate.json"
+      ]
     },
     {
       "n": 3,
-      "name": "plan-end",
-      "description": "plan 最终校验 + 输出 quality 报告",
+      "name": "judge-llm+quality-report",
+      "description": "judge_runner 双 judge 真 API（elysia gen-model）：novel-reading-reflector ROUND=1（阅读体验审查 · advisory · 作者档第一权威）+ novel-voice-checker（cluster 整声纹 · 角色 voice_pack 校验）· 综合 step1 audit + step2 validate + 双 judge 输出 → cluster_{key}_quality_report.json（verdict/scores/advisory_count/hard_gate_count/sample_issues）",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/check_quality_judge.py {project_root} --cluster {key} --out _数据库/.qa/cluster_{key}_quality_report.json"
+      ],
+      "expected_outputs": [
+        "_数据库/.qa/cluster_{key}_quality_report.json",
+        "_数据库/.qa/cluster_{key}_audit_judge.json",
+        "_数据库/.qa/cluster_{key}_voice_judge.json"
+      ]
     }
   ],
   "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式",
-  "_program_driven_status": "v28 程序驱动状态: NOT-YET——本命令零 scripts/零 must_spawn_agent,创作编排(大纲生成/蒸馏分析)仍由 Claude 智能完成,模板仅为产出清单。orchestrator 可加载但无法机械执行。写作主轨 cluster-write/cluster-save-state 已全量程序驱动;本命令迁移需先把创作步骤落为 gen-model 脚本(如 gen_creative/distill_replicate 模式)。2026-06-10"
+  "_program_driven_status": "v28 程序驱动 ACTIVE（2026-06-22 G2 P0a 实装）：3 step 全填脚本 · step1 audit_hub 现成 · step2/3 新 wrapper（check_quality_validate.py / check_quality_judge.py）· judge 经 wrapper 直调 judge_runner.run_judge() 真 API · 不再 NOT-YET 空壳"
 }

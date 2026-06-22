@@ -166,10 +166,12 @@ def test_each_executable_field_alone_unblocks():
 
 # ============ 真实回归：仓库里的 NOT-YET 模板必须被拒 ============
 def test_real_not_yet_templates_rejected():
-    """把仓库真实 check-quality / reconcile 模板拷进沙箱 → run_command 必拒。
-    锁住「NOT-YET 模板被 orchestrator 假成功执行」这条工程债不复发。"""
+    """把仓库真实 NOT-YET 模板拷进沙箱 → run_command 必拒。
+    锁住「NOT-YET 模板被 orchestrator 假成功执行」这条工程债不复发。
+    🔴 2026-06-22 G2 P0a：check-quality 已迁移程序驱动 → 从清单移除（见
+    test_check_quality_is_no_longer_notyet），只剩 reconcile。"""
     real_plans = _ROOT / "core" / "claude-home" / "plans"
-    for cmd_name in ("check-quality", "reconcile"):
+    for cmd_name in ("reconcile",):
         src = real_plans / f"{cmd_name}.plan.json"
         assert src.exists(), f"真实模板缺失: {src}"
         # 前置自检：它们当前确实是空壳（哪天补齐了 scripts 本测试应同步退役）

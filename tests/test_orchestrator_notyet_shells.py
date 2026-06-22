@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """NOT-YET 空壳命令拒绝回归锁（2026-06-17 · /loop 自主硬化）。
 
-check-quality / reconcile 的 plan 模板当前是「零 scripts/零 agent/零 pause/零 touch」
+剩余 NOT-YET 的 plan 模板（当前只有 reconcile）是「零 scripts/零 agent/零 pause/零 touch」
 空壳（创作步骤尚未落成 gen-model 脚本，见 PROGRAM_DRIVEN.md 迁移状态表）。
 orchestrator.run_command 必须**拒绝假成功执行**它们（`_step_is_shell` 全空 → 抛
 OrchestratorError），而不是机械走步报「N/N 完成」。
 
 本测试是**特征化回归锁（characterization test）**：
 - 锁住「当前 NOT-YET」这一事实——任何人误以为已迁移而机械接 orchestrator 会被它抓住。
-- 一旦 check-quality/reconcile 真被程序驱动化（步骤补上 scripts/must_spawn_agent），
-  这两条断言会**翻红**，提示来更新本锁 + 补真正的 fake-LLM e2e（见
-  workspace/_temp_research/mock_llm_cli_e2e_harness_plan.md §1.5 / §5 P4）。
+- 一旦 reconcile 真被程序驱动化（步骤补上 scripts/must_spawn_agent），
+  断言会**翻红**，提示来更新本锁 + 补真正的 fake-LLM e2e。
+
+🔴 2026-06-22 G2 P0a：check-quality 已落地程序驱动（3 step 全填脚本 · audit_hub
++ check_quality_validate + check_quality_judge 真 API 综合）→ 从 NOT-YET 名单移除，
+新增正控 `test_check_quality_is_no_longer_notyet` 锁回归。
 
 拒绝发生在 create_plan 之前（orchestrator.py:626-633），**零副作用**（不建 plan、
 不碰项目目录、不调任何 LLM），因此无需沙盒、无 API 风险。
@@ -39,8 +42,20 @@ def _assert_notyet_rejected(command):
     raise AssertionError(f"{command} 是 NOT-YET 空壳，run_command 却未拒绝（假成功风险）")
 
 
-def test_check_quality_is_rejected_as_notyet_shell():
-    _assert_notyet_rejected("check-quality")
+def test_check_quality_is_no_longer_notyet():
+    """🔴 G2 P0a 迁移锁（2026-06-22）：check-quality 已程序驱动·禁止回退到 NOT-YET 空壳。
+
+    一旦本测试翻红 = 有人误把 check-quality 模板改回空壳，本锁会立刻抓到（防回归）。"""
+    tpl = pt.load_template("check-quality")
+    assert tpl, "check-quality 模板应能加载"
+    steps = tpl.get("steps", [])
+    assert steps, "check-quality 应有 steps"
+    assert not all(orc._step_is_shell(s) for s in steps), (
+        "check-quality 退回 NOT-YET 空壳·G2 P0a 迁移被回滚——补回 scripts/agent 后更新本锁")
+    # 每步都应有 scripts（实装契约）
+    for s in steps:
+        assert s.get("scripts"), (
+            f"check-quality step {s.get('n')} 缺 scripts·迁移残破·查 check-quality.plan.json")
 
 
 def test_reconcile_is_rejected_as_notyet_shell():
@@ -48,9 +63,9 @@ def test_reconcile_is_rejected_as_notyet_shell():
 
 
 def test_notyet_templates_really_are_all_shell():
-    """正控：确认这两个模板**确实**全 step 是空壳（拒绝有据，非误伤）。
+    """正控：确认剩余 NOT-YET 模板**确实**全 step 是空壳（拒绝有据，非误伤）。
     若哪天某步补了 scripts/agent，本断言翻红 = 迁移已发生 = 该更新回归锁。"""
-    for command in ("check-quality", "reconcile"):
+    for command in ("reconcile",):
         tpl = pt.load_template(command)
         assert tpl, f"{command} 模板应能加载"
         steps = tpl.get("steps", [])
