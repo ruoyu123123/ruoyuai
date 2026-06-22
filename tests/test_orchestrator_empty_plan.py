@@ -166,29 +166,47 @@ def test_each_executable_field_alone_unblocks():
 
 # ============ 真实回归：仓库里的 NOT-YET 模板必须被拒 ============
 def test_real_not_yet_templates_rejected():
-    """把仓库真实 NOT-YET 模板拷进沙箱 → run_command 必拒。
+    """合成「真 NOT-YET 模板」拷进沙箱 → run_command 必拒。
     锁住「NOT-YET 模板被 orchestrator 假成功执行」这条工程债不复发。
-    🔴 2026-06-22 G2 P0a：check-quality 已迁移程序驱动 → 从清单移除（见
-    test_check_quality_is_no_longer_notyet），只剩 reconcile。"""
+
+    🔴 2026-06-22 G2 P0a：check-quality 已程序驱动化（从清单移除）。
+    🔴 2026-06-22 G2 P0b：reconcile 已程序驱动化（从清单移除）。
+    当前仓库里没有真 NOT-YET 模板了 → 用合成模板（pure shell step）覆盖拒跑路径，
+    防 `_step_is_shell` + create_plan 前置拒绝逻辑回归。"""
+    synthetic_notyet = {
+        "command": "test-notyet-synthetic",
+        "version": 1,
+        "description": "合成 NOT-YET（全 step 零 scripts/agent/pause/touch）",
+        "total_steps": 3,
+        "required_steps": [1, 2, 3],
+        "optional_steps": [],
+        "steps": [
+            {"n": 1, "name": "discuss", "description": "纯讨论", "required": True,
+             "expected_outputs": []},
+            {"n": 2, "name": "decide", "description": "纯决策", "required": True,
+             "expected_outputs": []},
+            {"n": 3, "name": "wrap", "description": "纯收尾", "required": True,
+             "expected_outputs": []},
+        ],
+    }
+    with _Sandbox() as sb:
+        synth_path = sb.templates / "test-notyet-synthetic.plan.json"
+        synth_path.write_text(
+            json.dumps(synthetic_notyet, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+        try:
+            orc.run_command("test-notyet-synthetic", "测试书", key="001",
+                            script_runner=_FakeRunner(),
+                            judge_dispatch=_fake_dispatch)
+            assert False, "合成 NOT-YET 模板必须拒跑"
+        except orc.OrchestratorError as e:
+            assert "空壳" in str(e) and "test-notyet-synthetic" in str(e)
+
+    # 同步正控：reconcile 不再是 NOT-YET（迁移已发生·哪天回退本断言翻红）
     real_plans = _ROOT / "core" / "claude-home" / "plans"
-    for cmd_name in ("reconcile",):
-        src = real_plans / f"{cmd_name}.plan.json"
-        assert src.exists(), f"真实模板缺失: {src}"
-        # 前置自检：它们当前确实是空壳（哪天补齐了 scripts 本测试应同步退役）
-        tpl = json.loads(src.read_text(encoding="utf-8"))
-        assert all(not (s.get("scripts") or s.get("must_spawn_agent")
-                        or s.get("pause_for_user") or s.get("touch_outputs"))
-                   for s in tpl["steps"]), \
-            f"{cmd_name} 模板已程序驱动化——请删除/更新本测试"
-        with _Sandbox() as sb:
-            shutil.copy(src, sb.templates / src.name)
-            try:
-                orc.run_command(cmd_name, "测试书", key="001",
-                                script_runner=_FakeRunner(),
-                                judge_dispatch=_fake_dispatch)
-                assert False, f"真实 NOT-YET 模板 {cmd_name} 必须拒跑"
-            except orc.OrchestratorError as e:
-                assert "空壳" in str(e) and cmd_name in str(e)
+    rec = json.loads((real_plans / "reconcile.plan.json").read_text(encoding="utf-8"))
+    assert any(s.get("scripts") for s in rec["steps"]), \
+        "reconcile 应已程序驱动化·至少一步有 scripts"
 
 
 if __name__ == "__main__":

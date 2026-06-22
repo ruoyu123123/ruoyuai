@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """NOT-YET 空壳命令拒绝回归锁（2026-06-17 · /loop 自主硬化）。
 
-剩余 NOT-YET 的 plan 模板（当前只有 reconcile）是「零 scripts/零 agent/零 pause/零 touch」
-空壳（创作步骤尚未落成 gen-model 脚本，见 PROGRAM_DRIVEN.md 迁移状态表）。
-orchestrator.run_command 必须**拒绝假成功执行**它们（`_step_is_shell` 全空 → 抛
+orchestrator.run_command 必须**拒绝假成功执行** NOT-YET 空壳模板（`_step_is_shell` 全空 → 抛
 OrchestratorError），而不是机械走步报「N/N 完成」。
 
 本测试是**特征化回归锁（characterization test）**：
-- 锁住「当前 NOT-YET」这一事实——任何人误以为已迁移而机械接 orchestrator 会被它抓住。
-- 一旦 reconcile 真被程序驱动化（步骤补上 scripts/must_spawn_agent），
-  断言会**翻红**，提示来更新本锁 + 补真正的 fake-LLM e2e。
+- 锁住「已迁移的命令禁止退回 NOT-YET 空壳」这一事实。
+- 一旦哪个命令被退回空壳（步骤被删 scripts），本锁会**翻红**。
 
 🔴 2026-06-22 G2 P0a：check-quality 已落地程序驱动（3 step 全填脚本 · audit_hub
-+ check_quality_validate + check_quality_judge 真 API 综合）→ 从 NOT-YET 名单移除，
-新增正控 `test_check_quality_is_no_longer_notyet` 锁回归。
++ check_quality_validate + check_quality_judge 真 API 综合）→ 新增正控
+`test_check_quality_is_no_longer_notyet` 锁回归。
+
+🔴 2026-06-22 G2 P0b：reconcile 已落地程序驱动（5 step 全填脚本 · reconcile.py
+detect-changes/compute-radius/patch/audit/report · gen_fixer validator-repair 真 API）
+→ 从 NOT-YET 名单移除，新增正控 `test_reconcile_is_no_longer_notyet` 锁回归。
+当前 NOT-YET 清单为空（写作主轨 + 蒸馏 + check-quality + reconcile 全程序驱动化）。
 
 拒绝发生在 create_plan 之前（orchestrator.py:626-633），**零副作用**（不建 plan、
 不碰项目目录、不调任何 LLM），因此无需沙盒、无 API 风险。
@@ -58,20 +60,23 @@ def test_check_quality_is_no_longer_notyet():
             f"check-quality step {s.get('n')} 缺 scripts·迁移残破·查 check-quality.plan.json")
 
 
-def test_reconcile_is_rejected_as_notyet_shell():
-    _assert_notyet_rejected("reconcile")
+def test_reconcile_is_no_longer_notyet():
+    """🔴 G2 P0b 迁移锁（2026-06-22）：reconcile 已程序驱动·禁止回退到 NOT-YET 空壳。
 
-
-def test_notyet_templates_really_are_all_shell():
-    """正控：确认剩余 NOT-YET 模板**确实**全 step 是空壳（拒绝有据，非误伤）。
-    若哪天某步补了 scripts/agent，本断言翻红 = 迁移已发生 = 该更新回归锁。"""
-    for command in ("reconcile",):
-        tpl = pt.load_template(command)
-        assert tpl, f"{command} 模板应能加载"
-        steps = tpl.get("steps", [])
-        assert steps, f"{command} 模板应有 steps"
-        assert all(orc._step_is_shell(s) for s in steps), (
-            f"{command} 已有非空壳 step（迁移发生了）——更新本回归锁 + 补 fake-LLM e2e")
+    一旦本测试翻红 = 有人误把 reconcile 模板改回空壳，本锁会立刻抓到（防回归）。"""
+    tpl = pt.load_template("reconcile")
+    assert tpl, "reconcile 模板应能加载"
+    steps = tpl.get("steps", [])
+    assert steps, "reconcile 应有 steps"
+    assert not all(orc._step_is_shell(s) for s in steps), (
+        "reconcile 退回 NOT-YET 空壳·G2 P0b 迁移被回滚——补回 scripts/agent 后更新本锁")
+    # 5 步全填 scripts（实装契约）
+    for s in steps:
+        assert s.get("scripts"), (
+            f"reconcile step {s.get('n')} 缺 scripts·迁移残破·查 reconcile.plan.json")
+        cmd = " ".join(s.get("scripts", []))
+        assert "reconcile.py" in cmd, (
+            f"reconcile step {s.get('n')} 应调 reconcile.py·实际: {cmd}")
 
 
 def test_real_writing_command_is_not_shell():

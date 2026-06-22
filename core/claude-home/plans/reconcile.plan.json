@@ -1,54 +1,113 @@
 {
   "command": "reconcile",
-  "version": 1,
-  "description": "一致性调和：设定修改后审查历史章节",
+  "version": 2,
+  "description": "一致性调和（v28 程序驱动 · 2026-06-22 G2 P0b 实装）：locked_fact 变更扫描 → 影响半径 → gen-model 局部 patch（gen_fixer validator-repair · advisory）→ 跨章一致性验证 → 综合 reconcile_report.json。spec 输入预先落 _数据库/.reconcile/<id>/spec.json。",
   "total_steps": 5,
-  "required_steps": [
-    1,
-    2,
-    3,
-    4,
-    5
-  ],
+  "required_steps": [1, 2, 3, 4, 5],
   "optional_steps": [],
   "steps": [
     {
       "n": 1,
-      "name": "identify-change",
-      "description": "识别变更：从用户输入提取变更类型 / 目标 / 前后值",
+      "name": "detect-changes",
+      "description": "识别 locked_fact 变更：从 spec.json 或 CLI 参数规范化变更声明（type/target/field/before/after）→ _数据库/.reconcile/current/change.json。只产文档不改动正文/档案。",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/reconcile.py {project_root} --mode detect-changes --reconcile-id current"
+      ],
+      "control_flow": {
+        "exit_codes": {
+          "0": "ok",
+          "1": "ok",
+          "2": "fail"
+        }
+      },
+      "expected_outputs": [
+        "_数据库/.reconcile/current/change.json"
+      ]
     },
     {
       "n": 2,
-      "name": "scan-affected-chapters",
-      "description": "扫描受影响章节：Grep 所有章节 txt + 故事块摘要 + 人物卡 locked_facts",
+      "name": "compute-radius",
+      "description": "计算影响半径：物理章节清单（章节/第*章/*.txt）+ 人物卡 locked_facts + changes.json 三方扫描 → 分等级 high(直接命中)/medium(间接提及)/low(仅档案) → _数据库/.reconcile/current/radius.json。",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/reconcile.py {project_root} --mode compute-radius --reconcile-id current"
+      ],
+      "control_flow": {
+        "exit_codes": {
+          "0": "ok",
+          "1": "ok",
+          "2": "fail"
+        }
+      },
+      "expected_outputs": [
+        "_数据库/.reconcile/current/radius.json"
+      ]
     },
     {
       "n": 3,
-      "name": "impact-report",
-      "description": "生成影响报告：高 / 中 / 低影响清单 + 建议操作 A/B/C/D",
+      "name": "patch-chapters",
+      "description": "局部 patch（advisory · 真 API · gen-model）：按 strategy=A 默认 → 对每个 high/medium/low 章节调 gen_fixer.py --mode validator-repair（验证器违规精修通道·brief schema v1）→ _数据库/.reconcile/current/patch_log.json。失败不阻断（advisory）。",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/reconcile.py {project_root} --mode patch --reconcile-id current --strategy A"
+      ],
+      "control_flow": {
+        "exit_codes": {
+          "0": "ok",
+          "1": "ok",
+          "2": "fail"
+        }
+      },
+      "expected_outputs": [
+        "_数据库/.reconcile/current/patch_log.json"
+      ]
     },
     {
       "n": 4,
-      "name": "apply-fixes",
-      "description": "执行修复（按用户选择 A/B/C）+ 更新档案",
+      "name": "audit-consistency",
+      "description": "跨章一致性验证：对 patch 后章节统计 before 关键词残留 + after 关键词出现 + 调 locked_fact_cross_scene_scanner（cluster 视野·北极星④）→ _数据库/.reconcile/current/audit.json。verdict ∈ {pass, partial_fail, needs_review, dry_run}。",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/reconcile.py {project_root} --mode audit --reconcile-id current"
+      ],
+      "control_flow": {
+        "exit_codes": {
+          "0": "ok",
+          "1": "ok",
+          "2": "fail"
+        }
+      },
+      "expected_outputs": [
+        "_数据库/.reconcile/current/audit.json"
+      ]
     },
     {
       "n": 5,
-      "name": "plan-end",
-      "description": "Git commit 调和变更 + plan 最终校验",
+      "name": "generate-report",
+      "description": "综合 step1-4 → reconcile_report.json（modules/verdict/changed_files/skipped）。全 advisory · hard_gate 12 码不变。",
       "required": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/reconcile.py {project_root} --mode report --reconcile-id current"
+      ],
+      "control_flow": {
+        "exit_codes": {
+          "0": "ok",
+          "1": "ok",
+          "2": "fail"
+        }
+      },
+      "expected_outputs": [
+        "_数据库/.reconcile/current/reconcile_report.json"
+      ]
     }
   ],
   "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式",
-  "_v2_reconcile_note_20260529": "2026-05-29 复审盲区③核查结论：reconcile 无 ch_to_cluster_id 依赖（无独立 reconcile.py，纯 agent 编排：Grep 物理章节 txt + 读 故事块摘要.json + locked_facts，逐章 spawn novel-validator-checker 拿 brief → gen_fixer 修正文 · v2 拆分）。不做任何「章号→cluster 归属」推断，故 SC-5 边界重叠 / cluster 不可达 场景对本命令的正典处理无风险，无需改 plan 逻辑。step2 扫描单位是物理章 txt（正典修复发生在章文件层），与 cluster 化主轨不冲突。",
-  "_program_driven_status": "v28 程序驱动状态: NOT-YET——本命令零 scripts/零 must_spawn_agent,创作编排(大纲生成/蒸馏分析)仍由 Claude 智能完成,模板仅为产出清单。orchestrator 可加载但无法机械执行。写作主轨 cluster-write/cluster-save-state 已全量程序驱动;本命令迁移需先把创作步骤落为 gen-model 脚本(如 gen_creative/distill_replicate 模式)。2026-06-10"
+  "_v2_reconcile_note_20260529": "2026-05-29 复审盲区③核查结论：reconcile 无 ch_to_cluster_id 依赖（影响半径以物理章 txt 文件层报告）。本 v28 实装继承该原则：reconcile.py compute-radius mode 物理 glob 章节/第*章/第*章.txt + 人物卡 locked_facts 三方扫描，scope 是「章 txt 文件清单」而非「cluster 归属」，故 SC-5 边界重叠 / cluster 不可达 场景对本命令无风险。step4 audit 跑 locked_fact_cross_scene_scanner 时按 cluster_*_draft.txt 自然走 cluster 视野（与 v2 主轨对齐）。",
+  "_program_driven_status": "v28 程序驱动 ACTIVE（2026-06-22 G2 P0b 实装·从 NOT-YET 空壳升级）：5 step 全填脚本 · 核心驱动 reconcile.py 5 mode 一体化（detect-changes/compute-radius/patch/audit/report）· patch step 调 gen_fixer validator-repair（真 API · gen-model）· audit step 复用 locked_fact_cross_scene_scanner · 整体 advisory shadow 不引入新 hard_gate"
 }
