@@ -307,16 +307,68 @@ def test_gen_one_title_fallback_to_hint_on_all_meta():
 
 
 def test_gen_one_title_fallback_on_exception():
-    # create 抛错 → except 分支返回 hint
+    # create 抛错 → except 分支返回干净 hint（hint 本身是干净标题时）
     with _patch_openai(content="无关", raise_exc=RuntimeError("API 520 限速")):
         title = mod.gen_one_title(
             _FakeLoader(), 9, "正文", "孤峰", "normal", [])
-    assert title == "孤峰", f"异常应回退 hint，得 {title!r}"
+    assert title == "孤峰", f"异常应回退干净 hint，得 {title!r}"
     # hint 也为空 → 回退 第N章
     with _patch_openai(content="无关", raise_exc=RuntimeError("boom")):
         title2 = mod.gen_one_title(
             _FakeLoader(), 12, "正文", "", "normal", [])
     assert title2 == "第12章", f"无 hint 异常应回退 第N章，得 {title2!r}"
+
+
+# ============================================================================
+# 13. 🔴 G3 e2e fix #3：storyboard 指令文本 hint 绝不能当标题
+# ============================================================================
+def test_is_clean_title_rejects_directive_and_accepts_clean():
+    # 干净标题：短 / 无标点 / 无占位词 → True
+    assert mod._is_clean_title("孤峰")
+    assert mod._is_clean_title("命运母题")
+    assert mod._is_clean_title("「断牙」")  # 包裹符剥后干净
+    # storyboard 指令文本（含句号 + 「主角」占位）→ False
+    dirty = "倒叙强冲突开场。铁十字街一间逼仄昏暗的出租屋里，主角顶着占卜"
+    assert not mod._is_clean_title(dirty), "含句号+主角占位的 storyboard 指令不该判干净"
+    # 含「主角」占位词 → False
+    assert not mod._is_clean_title("主角登场")
+    # 含分句标点 → False
+    assert not mod._is_clean_title("他来了，她走了")
+    # 超 14 字 → False
+    assert not mod._is_clean_title("一二三四五六七八九十甲乙丙丁戊")
+    # 空 → False
+    assert not mod._is_clean_title("")
+
+
+def test_clean_fallback_title_rejects_storyboard_hint():
+    # storyboard 指令 hint → 不原样返回，退「第N章」
+    dirty = "倒叙强冲突开场。铁十字街一间逼仄昏暗的出租屋里，主角顶着占卜"
+    assert mod._clean_fallback_title(1, dirty) == "第1章"
+    # 干净 hint → 原样（剥包裹符）返回
+    assert mod._clean_fallback_title(3, "孤峰") == "孤峰"
+    assert mod._clean_fallback_title(3, "「断牙」") == "断牙"
+    # 空 hint → 第N章
+    assert mod._clean_fallback_title(7, "") == "第7章"
+
+
+def test_gen_one_title_exception_does_not_emit_storyboard_directive():
+    """🔴 真 API 间歇 500/EMPTY_RESPONSE（异常）+ hint 是 storyboard 指令文本时，
+    fallback 绝不把指令原文当标题（G3 e2e 实测翻车场景）。"""
+    dirty_hint = "倒叙强冲突开场。铁十字街一间逼仄昏暗的出租屋里，主角顶着占卜"
+    with _patch_openai(content="无关", raise_exc=RuntimeError("500 EMPTY_RESPONSE")):
+        title = mod.gen_one_title(
+            _FakeLoader(), 1, "正文内容", dirty_hint, "normal", [])
+    assert title == "第1章", f"脏 storyboard hint 不该当标题，应退第N章，得 {title!r}"
+    assert "倒叙" not in title and "主角" not in title and "。" not in title
+
+
+def test_gen_one_title_all_meta_with_dirty_hint_falls_back_clean():
+    """全元话语响应 + 脏 hint → 终极后处理也走干净 fallback（不吐 storyboard 指令）。"""
+    dirty_hint = "回溯场景。主角走进房间，反派现身"
+    with _patch_openai(content="我们生成需要让我好的"):
+        title = mod.gen_one_title(
+            _FakeLoader(), 5, "正文", dirty_hint, "normal", [])
+    assert title == "第5章", f"全元话语+脏 hint 应退第N章，得 {title!r}"
 
 
 # ============================================================================

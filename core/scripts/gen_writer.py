@@ -233,8 +233,15 @@ def _is_writer_relevant_feedback(stem_or_slug: str, text: str = "") -> bool:
     norm = (stem_or_slug or "").strip().replace("-", "_")
     if norm in _WRITER_RELEVANT_FEEDBACK:
         return True
-    if text and re.search(r"writer_relevant:\s*true", text):
-        return True
+    # 🔴 2026-06-23 fix：只在 frontmatter 块内判 `writer_relevant: true`，**不扫正文**。
+    # 否则正文里只是「文字解释 opt-in 机制」(如 feedback_writer_prompt_bloat_feedback_whitelist
+    # 的正文写了 `frontmatter `writer_relevant: true` opt-in`) 会被误判成 writer-relevant →
+    # 该流程/基建 lesson 反被注入 writer prompt(正是 G4 要堵的膨胀)。
+    if text:
+        fm = re.match(r"\s*---\s*\n(.*?)\n---", text, re.DOTALL)
+        scope = fm.group(1) if fm else ""
+        if re.search(r"^\s*writer_relevant:\s*true\s*$", scope, re.MULTILINE):
+            return True
     return False
 
 
@@ -1080,6 +1087,9 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
 
 ## H4. cluster 契约（user prompt 顶部「CLUSTER 硬约束」段如有）
 scope_summary 描述的场景类型/角色构成是**剧情硬契约**（如"对白场景"应有足够角色 + 对话为主），不可跑偏成别的场景。这是「写对剧情」不是「写某种文风」。
+
+## H5. 占位代号零泄漏（沉浸感硬铁律）
+scene_storyboard / scope_summary / cluster_brief 等大纲材料里出现的「主角」「男主」「女主」「某角色」「XX」「反派」等**占位代号是给你看的写作指引**，**绝不能原样抄进正文**。正文里指代人物**只能**用：① 具体角色名（如「多林」），② 第三人称代词（他/她/它），③ 贴合身份的称谓（那个占卜师 / 穿灰外套的男人 / 守门人）。若某人物在本 cluster 尚未取名，自行用代词或身份称谓承接，**正文里出现「主角」二字即视为破例失败**。
 
 # 二、风格工艺默认基线（仅当作者 skill 未规定该维度时兜底 · skill 规定了以 skill 为准）
 

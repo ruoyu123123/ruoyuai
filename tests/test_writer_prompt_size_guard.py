@@ -91,6 +91,30 @@ def test_feedback_inject_only_craft_and_bounded():
         f"feedback 注入段 {len(rules)} chars 超软上限 {_FEEDBACK_INJECT_CEIL}")
 
 
+def test_writer_relevant_flag_only_read_from_frontmatter():
+    """🔴 2026-06-23 fix：`writer_relevant: true` 只在 frontmatter 生效，正文里的同名
+    文字（文档解释 opt-in 机制）不得触发误注入。
+
+    回归 e2e bug：feedback_writer_prompt_bloat_feedback_whitelist（frontmatter
+    writer_relevant: false，但正文写了 `writer_relevant: true` opt-in 字样）被
+    旧版整文 re.search 误判 writer-relevant → 流程 lesson 反灌 writer prompt。
+    """
+    # frontmatter=false 但正文含 "writer_relevant: true" 文字 → 应 False
+    tricky = (
+        "---\nname: x\nmetadata: \n  type: feedback\n  writer_relevant: false\n---\n\n"
+        "本 lesson 解释：带 frontmatter `writer_relevant: true` 的文件会被注入。\n"
+        "default_no_step_skipping 这类流程指纹不该进 writer prompt。\n")
+    assert not gw._is_writer_relevant_feedback("feedback_some_process_lesson", tricky), \
+        "正文里的 writer_relevant: true 文字不该触发注入（误判=膨胀复发）"
+    # frontmatter=true → 应 True
+    real = ("---\nname: y\nmetadata: \n  type: feedback\n  writer_relevant: true\n---\n\n"
+            "写作工艺正文。\n")
+    assert gw._is_writer_relevant_feedback("feedback_new_craft_lesson", real), \
+        "frontmatter writer_relevant: true 应判 writer-relevant"
+    # 白名单命中（即便无 frontmatter flag）→ True
+    assert gw._is_writer_relevant_feedback("feedback_one_sentence_per_paragraph", "")
+
+
 @pytest.mark.skipif(not (_E2E_PROJECT / "_数据库" / ".manifest" / "ch_001.json").exists(),
                     reason="诡秘e2e测试 项目不在 worktree（workspace/novels 通常不入 git）")
 def test_build_prompt_system_under_ceiling():

@@ -83,6 +83,50 @@ def strip_existing_title(text: str) -> str:
     return text
 
 
+# 🔴 G3 e2e (2026-06-23) fix #3：storyboard hint 是「大纲指令/场景描述文本」(如
+# 「倒叙强冲突开场。铁十字街一间逼仄昏暗的出租屋里，主角顶着占卜…」)，**不是章标题**。
+# 标题 gen 失败(间歇 500/EMPTY_RESPONSE)时绝不能把它原样当标题写进正文。下面两个
+# helper 负责：① 判定 hint 是否「干净到能当标题」；② 失败时给干净 fallback。
+_DIRECTIVE_MARKERS = (
+    "主角", "男主", "女主", "某角色", "占位", "倒叙", "强冲突", "开场", "场景",
+    "回溯", "反转", "揭底", "镜头", "POV", "pov", "storyboard", "scene",
+    "高潮章", "本章", "本场", "钩子", "兑现", "伏笔", "节点",
+)
+_TITLE_PUNCT = "。！？，、；：…．,.!?;\n\r\t"
+
+
+def _strip_title_wrappers(s: str) -> str:
+    return (s or "").strip().strip("「」“”\"'《》【】（）() *—-").strip()
+
+
+def _is_clean_title(s: str) -> bool:
+    """判断一个字符串是否像「干净的章标题」(而非 storyboard 指令/描述句)。
+
+    干净标题：剥包裹符后非空、≤14 字、不含句末/分句标点、不含大纲指令/占位标记词。
+    storyboard hint 多含句号/逗号或「主角」「倒叙强冲突开场」之类 → 判脏，拒用。
+    """
+    s = _strip_title_wrappers(s)
+    if not s or len(s) > 14:
+        return False
+    if any(p in s for p in _TITLE_PUNCT):
+        return False
+    if any(m in s for m in _DIRECTIVE_MARKERS):
+        return False
+    return True
+
+
+def _clean_fallback_title(ch: int, hint: str) -> str:
+    """标题 gen 失败时的干净 fallback：
+
+    优先级 = 干净 hint > 保守「第N章」无副标题。
+    **绝不**把含句末标点/占位词「主角」的 storyboard 指令文本(如
+    「倒叙强冲突开场。…主角顶着占卜」)当标题——那种 hint 判脏后退「第N章」。
+    """
+    if _is_clean_title(hint):
+        return _strip_title_wrappers(hint)
+    return f"第{ch}章"
+
+
 def classify_tier(ch: int, changes: dict, high_set: set[int]) -> str:
     """自动分级 normal/mid/high"""
     if ch in high_set:
@@ -235,13 +279,13 @@ def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
         title = re.sub(r'^第\s*[一二三四五六七八九十百千\d]+\s*章[ \t]*', '', title)
         if len(title) > 14:
             title = title[:14]
-        # 终极后处理：若仍含元话语关键词，回退到 hint
+        # 终极后处理：若仍含元话语关键词，回退到干净 fallback（绝不用 storyboard 指令原文）
         if any(kw in title for kw in ['我们', '好的', '用户', '让我', '生成', '需要', '我们被']):
-            return hint or f"第{ch}章"
-        return title or hint or f"第{ch}章"
+            return _clean_fallback_title(ch, hint)
+        return title or _clean_fallback_title(ch, hint)
     except Exception as e:
         print(f"[ch{ch}] gen 失败: {e}", file=sys.stderr)
-        return hint or f"第{ch}章"
+        return _clean_fallback_title(ch, hint)
 
 
 def main():
