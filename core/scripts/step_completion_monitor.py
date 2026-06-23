@@ -184,20 +184,52 @@ def list_project_plans(project: str):
     return 0
 
 
+def _plan_id_of(fp: Path) -> str:
+    """读 plan 文件里真正的 id 字段（权威）；读不到则退回文件名 stem。
+
+    🔴 G3 e2e 修：当 plan 用路径型 project 创建时 make_plan_id 把斜杠塞进 id，
+    plan 文件落到 .plans/<嵌套子目录>/<id 尾段>.json。此时 fp.stem 只是 id 的尾段，
+    拿去 get_plan 会因 _find_plan_path(project=split前段) 错配而 FileNotFoundError。
+    读文件内的 "id" 字段才能拿到含完整路径的真 plan_id，回喂 get_plan 正好命中。"""
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        pid = data.get("id")
+        if pid:
+            return pid
+    except Exception:
+        pass
+    return fp.stem
+
+
 def _find_latest(command: str, project: str):
     root = _project_root_of(project)
     plans_dir = root / "_数据库" / ".plans"
     if not plans_dir.exists():
         return None
-    cands = [p for p in plans_dir.glob(f"*_{command}_*.json")]
+    # 🔴 G3 e2e 修：rglob 递归扫（含路径型 project 造成的嵌套子目录），否则
+    # 顶层非递归 glob 永远找不到落在 .plans/workspace/novels/... 的 plan。
+    cands = [p for p in plans_dir.rglob(f"*_{command}_*.json")]
     if not cands:
-        cands = [p for p in plans_dir.glob("*.json") if command in p.stem]
+        cands = [p for p in plans_dir.rglob("*.json") if command in p.stem]
     if not cands:
         return None
-    return max(cands, key=lambda p: p.stat().st_mtime).stem
+    latest = max(cands, key=lambda p: p.stat().st_mtime)
+    return _plan_id_of(latest)
+
+
+def _harden_stdio():
+    """🔴 G3 e2e 修：Windows GBK 控制台打 emoji（🟡🔴✅）会 UnicodeEncodeError 崩溃，
+    缺步监控是 advisory 观察层，不该因打印编码崩掉阻断主流水 → stdout/stderr 转 utf-8
+    + errors=replace（无法编码字符降级为占位符不抛异常）。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 def main():
+    _harden_stdio()
     ap = argparse.ArgumentParser(description="Saga 缺步监控 + 幂等补全")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--scan", metavar="PLAN_ID")
@@ -223,8 +255,11 @@ def main():
             return 2
         plan_id = _find_latest(args.command, args.project)
         if not plan_id:
-            print(f"未找到项目 {args.project} 的 {args.command} plan", file=sys.stderr)
-            return 1
+            # 🔴 G3 e2e 修：缺步监控是观察层（advisory），找不到 plan 不该 exit 1
+            # 阻断主流水线（对齐 posttooluse_runtime_monitor「严禁 exit 非 0」纪律）。
+            print(f"⚠️ [step-monitor] 未找到项目 {args.project} 的 {args.command} plan"
+                  f"（advisory · 跳过缺步监控不阻断主流水）", file=sys.stderr)
+            return 0
 
     if args.auto_heal:
         rep = auto_heal(plan_id, include_not_run=args.include_not_run)

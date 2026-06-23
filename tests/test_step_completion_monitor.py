@@ -286,6 +286,42 @@ def test_auto_heal_reverify_outputs_not_script_exit():
             "脚本 exit 0 不等于补全成功·必须复查 expected_outputs"
 
 
+# ============ 9) _find_latest 递归找嵌套 plan + 读真 id 字段（G3 e2e 修） ============
+def test_find_latest_recursive_reads_id_field():
+    """路径型 project 创建 plan 时 make_plan_id 把斜杠塞进 id → plan 文件落到
+    .plans/<嵌套子目录>/<id 尾段>.json。_find_latest 必须 rglob 递归找到，
+    并读文件内 "id" 字段拿到含完整路径的真 plan_id（fp.stem 只是尾段会错配）。"""
+    with _sandbox() as root:
+        plans_dir = root / "_数据库" / ".plans"
+        nested = plans_dir / "workspace" / "novels"
+        nested.mkdir(parents=True)
+        true_id = "workspace/novels/某书_001_cluster-save-state_20260623T2303200000ab"
+        # 文件名只能是 id 尾段（斜杠后部分）—— 复刻真机落盘形态
+        fp = nested / "某书_001_cluster-save-state_20260623T2303200000ab.json"
+        fp.write_text(json.dumps({"id": true_id, "command": "cluster-save-state"},
+                                 ensure_ascii=False), encoding="utf-8")
+        got = sm._find_latest("cluster-save-state", PROJECT)
+        assert got == true_id, f"应读 id 字段拿全路径真 id，得到 {got}"
+        # 顶层非递归 glob 找不到的回归锁：确认旧 glob 形态确实漏（rglob 才命中）
+        assert list(plans_dir.glob("*cluster-save-state*.json")) == []
+        assert len(list(plans_dir.rglob("*cluster-save-state*.json"))) == 1
+
+
+# ============ 10) --scan-latest 找不到 plan = advisory exit 0 不阻断（G3 e2e 修） ============
+def test_scan_latest_not_found_exits_zero():
+    """缺步监控是观察层：--scan-latest 找不到 plan 时必须 advisory（exit 0），
+    绝不 exit 1 阻断 save-state step 9 主流水（对齐 runtime monitor 严禁 exit 非0）。"""
+    with _sandbox():
+        saved_argv = sys.argv
+        sys.argv = ["step_completion_monitor.py", "--scan-latest",
+                    "--command", "cluster-save-state", "--project", "根本不存在的项目"]
+        try:
+            rc = sm.main()
+        finally:
+            sys.argv = saved_argv
+        assert rc == 0, f"找不到 plan 必须 exit 0（advisory），实得 {rc}"
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

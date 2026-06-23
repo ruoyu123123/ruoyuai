@@ -59,6 +59,13 @@ def update(project_root: Path, cluster_id: str) -> dict:
     ts = datetime.now().isoformat(timespec="seconds")
 
     for thread in sub.get("threads", []):
+        if isinstance(thread, str):
+            # 兼容字符串列表 schema：str 元素只能读名匹配计数，不回写状态
+            if thread and thread in cluster_summary_text:
+                updated += 1
+            continue
+        if not isinstance(thread, dict):
+            continue
         thread_id = thread.get("id", "")
         thread_name = thread.get("name", thread_id)
         # 简单关键词匹配: thread 名/id 出现在摘要中
@@ -73,6 +80,8 @@ def update(project_root: Path, cluster_id: str) -> dict:
     all_clusters = [c.get("cluster_id", "") for c in summary.get("clusters", [])]
     if len(all_clusters) >= 5:
         for thread in sub.get("threads", []):
+            if not isinstance(thread, dict):
+                continue
             last = thread.get("last_cluster", "")
             if last and last in all_clusters:
                 idx = all_clusters.index(last)
@@ -89,6 +98,16 @@ def update(project_root: Path, cluster_id: str) -> dict:
     tl = _load(throughline_path)
     tl_updated = 0
     for line in tl.get("throughlines", []):
+        # 🔴 G3 e2e 修：四线脉络 schema 可能存成字符串列表（走向线 = str），
+        # 也可能是 dict 列表。line 是 str 时直接当线名；是 dict 时取 name。
+        # 原 line.get(...) 对 str 抛 'str' object has no attribute 'get'。
+        if isinstance(line, str):
+            line_name = line
+            if line_name and line_name in cluster_summary_text:
+                tl_updated += 1          # str 元素只读不可回写状态（保持 schema 不变）
+            continue
+        if not isinstance(line, dict):
+            continue
         line_name = line.get("name", "")
         if line_name and line_name in cluster_summary_text:
             line["last_cluster"] = cluster_id
