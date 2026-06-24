@@ -863,8 +863,10 @@ def run_command(command: str, project: str, *, key: str | None = None,
                         {"book_complete": True, "candidates": [],
                          "note": "完本短路·未派涌现 judge（大势已走完）"},
                         ensure_ascii=False, indent=2), encoding="utf-8")
-            # output 传 marker 真实路径——step_complete 会校验该路径存在
-            pt.step_complete(plan_id, n, output=str(_bc_marker))
+            # output 传 marker 真实路径——step_complete 会校验该路径存在。
+            # 🔴 G3 e2e #7:传绝对路径·否则 step_complete 对相对路径再 join 一次
+            # project_root → 双拼接(workspace/.../workspace/...)找不到文件。
+            pt.step_complete(plan_id, n, output=str(_bc_marker.resolve()))
             summary.completed.append(StepOutcome(n, name, "completed", "book_complete"))
             continue
 
