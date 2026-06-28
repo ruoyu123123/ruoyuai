@@ -1546,6 +1546,11 @@ def _build_cont_msg(cont_reason: str) -> str:
                     "每一幕都要落地完整的：具体动作细节、成段你来我往的对话（不是一句带过）、环境与五感描写、人物内心活动、"
                     "冲突的层层推进与小高潮。宁可把一幕写细写满、也绝不跳过或一笔带过任何一幕。"
                     "**不要重复已写内容、不要重新开头、不要提前收尾、不要写任何总结或概述**。"
+                    # 🔴 2026-06-28：pro-preview 等模型常对 expand 回一段英文自评（『The narrative chunk is
+                    # written coherently...』）当作「我写完了」搪塞 → 续写增量 0 CJK 兜底失效。明确堵死。
+                    "\n🔴 严禁用任何形式声称『已写完 / 已写透 / 已充分展开』来搪塞——你还没写完。"
+                    "严禁输出任何英文、任何对自己产出的评价/说明（如『The narrative chunk...』『All checks...』）、"
+                    "任何元叙述。你这一轮的输出必须是**纯中文小说正文**，直接从上文最后一个字接着写下一个场景。"
                     "**先别写 CHANGES JSON**——等正文真正累积到 12000 字以上、scene_storyboard 每一幕都写透了，我再让你补。")
     elif cont_reason == "changes_only":
         cont_msg = ("正文已经写完。现在请**只输出**这个故事块结尾的 CHANGES JSON 块"
@@ -2114,6 +2119,26 @@ def split_text_and_changes(reply: str) -> tuple:
     if _stripped_tail:
         body = '\n'.join(_lines).rstrip()
         logger.info(" [strip] 剥离 reasoning 模型破壁助手尾注（请审阅/请告诉我/CHANGES JSON 类）")
+
+    # 🔴 2026-06-28：剥离尾部英文元评论块（pro-preview 等写完正文后用英文自评『The narrative chunk
+    # is written coherently...』漏进 body·实测钟楼弃儿 cluster_001 4707CJK 后接 1303 字符英文解说）。
+    # 中文小说正文绝不以整段英文结尾 → 从尾部剥『ASCII 占比 >0.7 且 ≥20 字符』的元评论行（含其间空行）。
+    # 安全边界：只剥连续尾部英文段·遇到首个中文主导行立停（不误伤正文中的英文引用/人名短串）。
+    def _is_english_meta_line(s):
+        s = s.strip()
+        if len(s) < 20:
+            return False
+        ascii_ct = sum(1 for c in s if ord(c) < 128)
+        return ascii_ct / max(len(s), 1) > 0.7
+    _lines2 = body.split('\n')
+    _stripped_en = False
+    while _lines2 and (not _lines2[-1].strip() or _is_english_meta_line(_lines2[-1])):
+        if _is_english_meta_line(_lines2[-1]):
+            _stripped_en = True
+        _lines2.pop()
+    if _stripped_en:
+        body = '\n'.join(_lines2).rstrip()
+        logger.info(" [strip] 剥离模型尾部英文元评论块（The narrative.../All quantitative... 类自评·非正文）")
 
     # cluster 连续叙事模式：如果 gen-model 仍误带「第 N 章 标题」分章标记，stderr 警告
     # 不主动删除（让 splitter 决定怎么处理），只提示 prompt 没生效

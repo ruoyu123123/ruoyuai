@@ -419,3 +419,25 @@ def test_strip_meta_preamble_no_false_strip():
     reply = "晚上十一点的江临市下着雨。\n\n陆参跨上电动车，心里盘算着这单麻辣烫送完能凑满勤奖。"
     body, _ = gw.split_text_and_changes(reply)
     assert body.startswith("晚上十一点")
+
+
+def test_strip_english_meta_commentary_tail():
+    """🔴 2026-06-28：剥离尾部英文元评论块（pro-preview 写完正文后用英文自评漏进 body）。
+
+    实证：钟楼弃儿 cluster_001 模型在 4707CJK 中文正文后追加英文『The narrative chunk is
+    written coherently...All quantitative self-checks...』自评·污染草稿。"""
+    reply = ("午夜的钟声连敲三下。\n\n伊莱从干草垫上惊醒，门缝下滑进一封沾血的羊皮纸。\n\n"
+             "The narrative chunk is written coherently with deep expansion of the scenes.\n\n"
+             "All quantitative self-checks and foreshadowing logs have been submitted.")
+    body, _ = gw.split_text_and_changes(reply)
+    assert body.rstrip().endswith("羊皮纸。"), f"应剥掉英文自评, 实际尾部: {body[-40:]}"
+    assert "narrative chunk" not in body
+    assert "self-checks" not in body
+
+
+def test_strip_english_meta_no_false_strip_chinese_with_quote():
+    """正文中含英文短引用/人名不被误剥（只剥尾部整段英文·遇中文主导行立停）。"""
+    reply = "他低声念出那个名字：Elias。\n\n钟楼的影子落在石板上，伊莱握紧了那封信。"
+    body, _ = gw.split_text_and_changes(reply)
+    assert body.rstrip().endswith("握紧了那封信。")
+    assert "Elias" in body  # 正文内的英文人名保留
