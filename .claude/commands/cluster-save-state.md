@@ -239,6 +239,8 @@ MODE: cluster
 
 整 cluster 伏笔评估：plant + 回收 + 健康度。
 
+> 🔴 **2026-06-29 戏剧问题账本（PITQ/MDQ）**：foreshadower 同时登记本 cluster 的**戏剧问题**到 JudgeReport 的 `specific_findings.dramatic_questions = {raised:[{qid, question(具体二元PITQ), scope:cluster|volume|series, raised_at_scene, expected_payoff_window}], answered:[{qid, answered_at_scene}]}`（伏笔⊂PITQ 的特例·account 同构）。读者粘性唯一宏观结构缺口：读者追读=想知道核心二元问题的答案。回填由第 10 步 `--apply-dramatic-questions` 确定性落 `戏剧问题账本.json`（只 active cluster·按 qid 幂等去重·全 advisory STATE·未产则 no-op）。
+
 JudgeReport: `_数据库/.judge_reports/cluster_<key>_foreshadower.json`
 
 **plan-step 8**：
@@ -288,6 +290,10 @@ python core/scripts/save_state.py "<项目路径>" --build-cluster-summary <key>
 # 🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion）：把 step 7 summarizer 产的 appraisal_beats
 # 确定性回填 叙事节拍器.json.appraisal_beats（只 active cluster·幂等·全 advisory STATE·summarizer 未产则 no-op）
 python core/scripts/save_state.py "<项目路径>" --apply-appraisal-beats <key>
+
+# 🔴 2026-06-29 戏剧问题账本（PITQ/MDQ·读者粘性）：把 step 8 foreshadower JudgeReport 产的
+# dramatic_questions 确定性回库 戏剧问题账本.json（只 active cluster·按 qid 幂等去重·全 advisory STATE·未产则 no-op）
+python core/scripts/save_state.py "<项目路径>" --apply-dramatic-questions <key>
 ```
 
 **plan-step 10**：
@@ -404,7 +410,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - [ ] `_数据库/.wal/<key>_apply_cluster.json` 存在（step3 apply-cluster-changes 汇总 · 含 writer_truth_check）+ 本 cluster 各章 `第<N>章_parsed.json` 已落地（per-chapter）
 - [ ] `_数据库/.wal/cluster_<key>_archive.json` 存在（step 5 archivist 产出）+ apply_archive 已回库角色/道具/关系/locked_facts/throughline/角色信念(belief_ledger)（step 6）
 - [ ] `_数据库/.wal/cluster_<key>_summary.json` 存在（summarizer 产出 · 含 appraisal_beats 段）+ apply-appraisal-beats 已回填 叙事节拍器.appraisal_beats（step 10·无 beat 则 no-op）
-- [ ] `_数据库/.judge_reports/cluster_<key>_foreshadower.json` 存在
+- [ ] `_数据库/.judge_reports/cluster_<key>_foreshadower.json` 存在（含 specific_findings.dramatic_questions）+ apply-dramatic-questions 已回库 戏剧问题账本.json（step 10·无 dramatic_questions 则 no-op）
 - [ ] Git commit `feat(cluster-NNN): N 章 (chX-chY)` 已落地
 - [ ] `_数据库/.wal/cluster_<next_key>_emergence.json` 存在（emergence 产出）
 - [ ] 2-3 张走向卡 brief 准备好展示给用户

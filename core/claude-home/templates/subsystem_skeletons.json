@@ -36,6 +36,34 @@
     },
     "_default_safety": "默认安全·向后兼容:文件不存在 / 某角色无 entry / scene 无 participants → 下游一律 fallback『全员视角』(不漏报·不假阳)。schema 无 additionalProperties:false(可向后兼容加字段)。北极星⑤:本账本是顾问·CHARACTER_KNOWLEDGE_LEAK 绝不进 HARD_GATE_CODES(梦境/通灵/补叙可豁免)。"
   },
+  "_dramatic_question_ledger_schema": {
+    "_doc": "🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)·辅助态文件 _数据库/戏剧问题账本.json 的 schema 单一真理源(三方对齐:novel-foreshadower producer 读正文登记本块 raised/answered 戏剧问题 / save_state.cmd_apply_dramatic_questions consumer 确定性回库 / dramatic_question_lifecycle_scanner + build_manifest validator/软注入 照此对齐)。⚠️ 非 34 核心子系统·不在 _canonical_34·不计入 scaffold 34 count·同 character_belief_ledger.json / locked_fact.json(辅助态文件·在 outline 阶段由 world_seed_init 播空骨架{schema_version:1,clusters:{}}·后续由 cluster-save-state foreshadower 登记步维护·不进 scaffold canonical 循环)。读者粘性唯一宏观结构缺口:读者追读=想知道某个核心二元问题的答案(Cambridge 2026 PITQ·suspense 与潜在可终结追问的二元问题数强相关 / McKee Major Dramatic Question·激励事件抛核心问句→高潮回答·对答案的饥渴=追读引擎 / Loewenstein 1994 信息缺口·意识到的具体问题才打开缺口·模糊氛围不算 / Zeigarnik 未完成张力·旧问题闭合同时开新但须给足闭合避免 frustration 弃读)。伏笔是 PITQ 的特例(promise/question)·account 同构·qid 可与伏笔表 promise id 交叉引用。🔴 只登记 active cluster 实际提出/回答的问题(fluid·绝不预设 cluster_002+ 的问题)。🔴 必须同时查闭合率(answered/raised)不能只奖励开新坑——防 Zeigarnik 反面/虚假悬念毒点(由 B 的 dramatic_question_lifecycle_scanner 查闭合率/烂尾/章末无 open·本账本只存 STATE 不判决)。",
+    "_skeleton": {"schema_version": 1, "clusters": {}},
+    "_example": {
+      "schema_version": 1,
+      "clusters": {
+        "cluster_003": {
+          "raised": [
+            {"qid": "DQ_祭台献祭真相", "question": "主角能否在第三次月圆前查清育新中学祭台献祭的幕后主使", "scope": "volume", "raised_at_scene": 1, "expected_payoff_window": "3-5 cluster"}
+          ],
+          "answered": [
+            {"qid": "DQ_诡秘信件寄主", "answered_at_scene": 4}
+          ]
+        }
+      }
+    },
+    "_field_semantics": {
+      "clusters.<cluster_id>": "该 cluster 的戏剧问题账目(键=cluster_id·cluster_lookup.py 反查·禁 cluster_{ch:03d} 机械拼接)",
+      "clusters.<cluster_id>.raised[].qid": "全局唯一问题 id(跨 cluster 唯一·answered 据此标对应问题闭合·可与伏笔表 promise id 交叉引用)",
+      "clusters.<cluster_id>.raised[].question": "具体二元 PITQ(『他能否在三天内找到解药』有明确 yes/no 终结追问·非『气氛诡异』这种模糊悬念)",
+      "clusters.<cluster_id>.raised[].scope": "cluster|volume|series·问题量级(cluster=本块小问题/volume=卷核心 MDQ/series=全书贯穿)",
+      "clusters.<cluster_id>.raised[].raised_at_scene": "本块提出该问题的 scene_idx(0-based·对应 scene_storyboard)",
+      "clusters.<cluster_id>.raised[].expected_payoff_window": "期望闭合窗口·『N-M cluster』(advisory·超窗未答=烂尾感·由 B scanner 查)",
+      "clusters.<cluster_id>.answered[].qid": "本块回答的问题 id(指向某 raised.qid·可跨 cluster·标该 PITQ 闭合)",
+      "clusters.<cluster_id>.answered[].answered_at_scene": "本块回答该问题的 scene_idx(0-based)"
+    },
+    "_default_safety": "默认安全·向后兼容:文件不存在(旧书/轻量) / 无 dramatic_questions / 某 cluster 无 entry → save_state 回库 no-op 不报错·下游 scanner fallback 不漏报不假阳。schema 无 additionalProperties:false(可向后兼容加字段)。北极星④:账本在 cluster 状态层·splitter 不感知。北极星⑤:本账本是顾问·open question 数量是创作工艺(慢热文学可少钩·作者档第一权威)·绝不进 HARD_GATE_CODES。"
+  },
   "skeletons": {
     "人物卡": {"schema_version": "v27", "_doc": "角色卡 · build_manifest 按 scene_storyboard[].characters 加载 · item 必需 id/name/role · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema", "consumption": {"layer": "direct_inject", "by": ["build_manifest._char_id_map", "build_manifest.active_characters"], "status": "live"}, "characters": [], "_writer_isolation_schema": {"_doc": "🔴 2026-06-28 写手信息隔离·照抄伏笔 surface_clue/hidden_payoff/trigger_cluster 明暗线范式·默认安全:不标 hidden 字段=普通角色明线原样透传(向后兼容·build_manifest._sanitize_character_card 安全闸)·隐藏身份到 concealed_until_cluster 才解锁 true_role+reveal_directive", "hidden_identity": {"surface_role": "明面叙事位·写手只见(如 ally/mentor·替换 role)", "true_role": "隐藏真实角色(false_hero/伪装者/最终Boss·concealed 前剥离)", "concealed_until_cluster": "cluster_007·揭晓块(>= 此块解锁 true_role)", "surface_propp_function": "表面 propp(可选·缺则 false_hero→ally 自动映射)"}, "ghost": {"surface_driver": "创伤外显·写手可见(留)", "wound": "镜像身份/隐藏动机·reveal(surface_driver 存在时剥·_GHOST_REVEAL_KEYS=wound/wound_reveal/reveal/true_wound/hidden_payoff)"}, "knowledge": {"doesnt_know_yet": ["主角当前未知项·留(防 FUTURE_KNOWLEDGE_LEAK)"], "will_learn": [{"fact": "未来才知的事实", "learn_at_cluster": "cluster_005·学到块(未到则剥·到才注入)"}]}, "voice_pack": {"anti_patterns": ["纯工艺口癖/句式禁忌·字符串(留)", {"pattern": "含未揭晓秘密措辞的护栏", "reveals_secret": true, "hidden_until_cluster": "cluster_007(未到则剥)"}]}, "_writer_hint": "结构化写手提示·含『终卷揭密/false_hero/不可早暴露/灰色合作』reveal 标记整条会被剥(防粉红大象)·普通提示原样留"}},
     "世界观": {"schema_version": "v27", "_doc": "世界设定 · entries 关键词触发注入 · item 必需 id/title/keywords · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema", "consumption": {"layer": "direct_inject", "by": ["build_manifest.world_keyword_hits"], "status": "live"}, "era": "", "location": "", "rules": [], "factions": [], "entries": [], "_writer_isolation_schema": {"_doc": "🔴 2026-06-28 写手信息隔离·世界真相明暗线(同伏笔三元组范式)·默认安全:无 hidden_truth/hidden_rules/hidden = 公开设定原样(build_manifest._resolve_world_entry/_sanitize_faction_focus 安全闸)·公开设定+数值(涟漪 surface·北极星②)always 留", "entry": {"hidden_truth": "条目隐藏真相(reveal_cluster 未到则剥·堵写手直读绕过)", "hidden_rules": "条目隐藏规则(同上)", "reveal_cluster": "cluster_012·揭晓块(>= 此块 merge hidden_truth/hidden_rules+reveal_directive)"}, "faction": {"hidden": true, "surface_focus": "明面动向·写手只见(替换真 current_focus)", "current_focus": "真实当前动向(hidden 时剥·surface_focus 顶替)"}}},

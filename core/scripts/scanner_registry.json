@@ -199,6 +199,13 @@
       "_new": true,
       "issues_emitted": ["PREMATURE_RESOLUTION"]
     },
+    "dramatic_question_lifecycle": {
+      "layer": "cluster",
+      "script": "dramatic_question_lifecycle_scanner.py",
+      "doc": "[2026-06-29 戏剧问题账本(PITQ/MDQ)·读者粘性P0·读者粘性_提案.json designs[0]] 读 _数据库/戏剧问题账本.json{clusters:{<cid>:{raised:[{qid,question,scope,raised_at_scene,expected_payoff_window}],answered:[{qid,answered_at_scene}]}}}·累计到目标 cluster 算 open_questions(raised−answered·cluster_lookup 反查·禁 cluster_{ch:03d})·三类 advisory①NO_OPEN_DRAMATIC_QUESTION(cluster 无 open PITQ·纯过场无追读拉力·含章末无 open 语义折叠·北极星④)②DRAMATIC_QUESTION_STALE(某 question 悬挂≥N cluster 未碰·N 默认8·烂尾感)③OPEN_CLOSE_IMBALANCE(闭合率<0.2+积压≥6·只开坑不闭合·Zeigarnik 反面毒点)·理论 Cambridge 2026 PITQ/McKee MDQ/Loewenstein 信息缺口/Zeigarnik·默认安全(无账本零检测零行为变化)·占位 regex 易误报反问 → 先 shadow·env DRAMATIC_QUESTION_LIFECYCLE_MODE 默认 shadow·三 code 绝不 hard_gate(慢热文学可少钩·作者档第一权威)",
+      "_new": true,
+      "issues_emitted": ["NO_OPEN_DRAMATIC_QUESTION", "DRAMATIC_QUESTION_STALE", "OPEN_CLOSE_IMBALANCE"]
+    },
     "syntactic_diversity": {
       "layer": "cluster",
       "script": "syntactic_diversity_scanner.py",

@@ -294,6 +294,46 @@ def _dead_actor_names(project_root) -> set:
     return names
 
 
+def _open_questions_keywords(project_root, after_num: int) -> set:
+    """🔴 2026-06-29 戏剧问题账本(PITQ/MDQ) 软牵引输入：累计到 after_num 的 open_questions
+    (raised−answered) 的问题文本 → 关键词集合（喂 _score_one_me 维度7·让候选倾向推进悬置问题）。
+
+    默认安全：无 戏剧问题账本.json / 无 open → 空集合（零行为变化·向后兼容）。advisory·绝不硬筛。
+    """
+    if not project_root or after_num is None:
+        return set()
+    try:
+        import cluster_lookup  # 章号⇄cluster_id 唯一权威反查（禁 cluster_{ch:03d}）
+    except Exception:
+        return set()
+    try:
+        p = Path(project_root) / "_数据库" / "戏剧问题账本.json"
+        if not p.exists():
+            return set()
+        ledger = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    clusters = ledger.get("clusters") if isinstance(ledger, dict) else None
+    if not isinstance(clusters, dict):
+        return set()
+    raised_first: dict = {}
+    answered_qids: set = set()
+    for cid, payload in clusters.items():
+        cnum = cluster_lookup.cluster_num(cid)
+        if cnum is None or cnum > after_num or not isinstance(payload, dict):
+            continue
+        for r in payload.get("raised") or []:
+            if isinstance(r, dict) and r.get("qid"):
+                qid = str(r["qid"])
+                if qid not in raised_first or cnum < raised_first[qid][0]:
+                    raised_first[qid] = (cnum, str(r.get("question") or ""))
+        for a in payload.get("answered") or []:
+            if isinstance(a, dict) and a.get("qid"):
+                answered_qids.add(str(a["qid"]))
+    texts = " ".join(q for qid, (_, q) in raised_first.items() if qid not in answered_qids)
+    return _keyword_set(texts)
+
+
 def _score_one_me(
     me: dict,
     cur_vol: int,
@@ -302,6 +342,7 @@ def _score_one_me(
     consequence_kw: set,
     extreme_factions: list,
     milestone_kw: set = None,
+    open_questions_kw: set = None,
 ) -> tuple:
     """给单个 ME 打分。返回 (score, reasons)。"""
     score = 0
@@ -379,6 +420,15 @@ def _score_one_me(
             score += min(35, 8 * len(m_overlap))
             reasons.append(f"大势收敛：推进未达成卷里程碑（重叠：{','.join(list(m_overlap)[:4])}）")
 
+    # 7. 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ) 软牵引：ME 文本与「当前悬而未决核心问题」关键词重叠
+    #    → 让候选倾向推进/回答悬置问题（读者想知道答案）。**软维度·不硬筛**（仿涟漪呼应·封顶 24·
+    #    与涟漪/收敛同量级·绝不盖过其它信号·绝不 -100 硬剔除）·用户走向卡终裁（守北极星③大势已定）。
+    if open_questions_kw and me_kw:
+        q_overlap = me_kw & open_questions_kw
+        if q_overlap:
+            score += min(24, 8 * len(q_overlap))
+            reasons.append(f"推进悬置核心问题（读者想知道答案·重叠：{','.join(list(q_overlap)[:4])}）")
+
     return score, reasons
 
 
@@ -390,6 +440,7 @@ def select_candidate_mes(
     completed_me_ids: set = None,
     milestone_kw: set = None,
     default_vol: int = 0,
+    open_questions_kw: set = None,
 ) -> list:
     """启发式：从剩余 ME 中给每个打分排序，取 top 3 个 candidate。
 
@@ -419,7 +470,8 @@ def select_candidate_mes(
         if not isinstance(me, dict):
             continue
         score, reasons = _score_one_me(
-            me, cur_vol, completed_me_ids, stages, consequence_kw, extreme_factions, milestone_kw
+            me, cur_vol, completed_me_ids, stages, consequence_kw, extreme_factions, milestone_kw,
+            open_questions_kw
         )
         scored.append((score, idx, me, reasons))
 
@@ -704,11 +756,25 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
                 milestone_kw = _keyword_set(kms_text + " " + conv_text)
                 break
 
+    # 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ) 软牵引：累计 open_questions 关键词 → 让候选倾向推进悬置问题。
+    # 默认安全：无账本 → 空集合（零行为变化）。advisory 软维度·不硬筛·用户走向卡终裁（守北极星③）。
+    after_num_for_q = None
+    if after_cluster_id:
+        import re as _re_q
+        _m = _re_q.search(r"(\d+)", str(after_cluster_id))
+        if _m:
+            try:
+                after_num_for_q = int(_m.group(1))
+            except ValueError:
+                after_num_for_q = None
+    open_questions_kw = _open_questions_keywords(project_root, after_num_for_q)
+
     # 选 candidate ME（传 completed_mes 供 parent_me 链打分 + milestone_kw 供收敛打分）
     # 🔴 2026-06-27 P0-02 修：传 default_vol=current_volume·治 +30 vol 连续 bonus dead code
     candidate_mes = select_candidate_mes(remaining, world_state, character_arc, last_consequence,
                                          completed_me_ids=completed_mes, milestone_kw=milestone_kw,
-                                         default_vol=current_volume or 0)
+                                         default_vol=current_volume or 0,
+                                         open_questions_kw=open_questions_kw)
     if not candidate_mes:
         return {"ok": False, "error": "无符合启发式条件的 candidate ME"}
 

@@ -67,6 +67,22 @@ def _belief_ledger_skeleton() -> dict:
     return {"schema_version": 1, "characters": {}, "facts": {}}
 
 
+# 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)：辅助态文件 戏剧问题账本.json 的空骨架单一真理源 =
+# subsystem_skeletons.json 的 _dramatic_question_ledger_schema._skeleton（非 34 核心·像
+# character_belief_ledger.json / locked_fact.json·outline 阶段在此播空骨架·后续由
+# cluster-save-state foreshadower 登记步维护·读者粘性唯一宏观结构缺口·全 advisory STATE）。
+def _dramatic_question_ledger_skeleton() -> dict:
+    """读 subsystem_skeletons.json 的 _dramatic_question_ledger_schema._skeleton（单一真理源）·缺则兜底空骨架。"""
+    try:
+        d = json.loads(_SKELETON_FILE.read_text(encoding="utf-8"))
+        sk = d.get("_dramatic_question_ledger_schema", {}).get("_skeleton")
+        if isinstance(sk, dict) and sk:
+            return json.loads(json.dumps(sk))  # deep copy
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"schema_version": 1, "clusters": {}}
+
+
 # ---------- IO ----------
 
 def _load(p: Path, default):
@@ -267,6 +283,7 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
         "consequence_tracker_normalized": False,
         "ticks_reset": False,
         "belief_ledger_seeded": False,
+        "dramatic_question_ledger_seeded": False,
         "dry_run": dry_run,
     }
 
@@ -372,12 +389,19 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
     seed_ledger = not ledger_path.exists()
     report["belief_ledger_seeded"] = seed_ledger
 
+    # ---- 戏剧问题账本（PITQ/MDQ·辅助态文件·空骨架幂等播种·非 34 核心·像 character_belief_ledger.json）----
+    dq_ledger_path = db / "戏剧问题账本.json"
+    seed_dq_ledger = not dq_ledger_path.exists()
+    report["dramatic_question_ledger_seeded"] = seed_dq_ledger
+
     if dry_run:
         report["_dry_run_note"] = "未写盘"
         return report
 
     if seed_ledger:
         _save(ledger_path, _belief_ledger_skeleton())
+    if seed_dq_ledger:
+        _save(dq_ledger_path, _dramatic_question_ledger_skeleton())
     _save(rules_path, rules_doc)
     _save(world_path, world)
     return report

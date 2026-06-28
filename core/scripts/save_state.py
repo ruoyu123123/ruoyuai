@@ -948,6 +948,110 @@ def cmd_apply_appraisal_beats(root, cluster_key):
         return 0
 
 
+# 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)
+def cmd_apply_dramatic_questions(root, cluster_key):
+    """🔴 2026-06-29 戏剧问题账本（PITQ/MDQ）·foreshadower 梳理产物确定性回库（零模型·幂等）。
+
+    novel-foreshadower（伏笔⊂PITQ 的特例·最适合扩登记戏剧问题）读整 cluster 正文产 JudgeReport 的
+    specific_findings.dramatic_questions = {raised:[{qid(全局唯一), question(具体二元PITQ非模糊悬念),
+    scope:cluster|volume|series, raised_at_scene, expected_payoff_window:'N-M cluster'}],
+    answered:[{qid, answered_at_scene}]}。本步把它确定性 append 进 戏剧问题账本.json.clusters[<cid>]
+    —— 读者粘性唯一宏观结构缺口（读者追读=想知道核心二元问题的答案·SOTA=Cambridge2026 PITQ +
+    McKee MDQ + Loewenstein 信息缺口 + Zeigarnik 未完成张力）。
+
+    🔴 只登记 active cluster（fluid·北极星：绝不预设 cluster_002+ 的问题）：JudgeReport 已是本 cluster
+    范围·account 归到本 cid。
+    幂等·去重：raised 按 qid 去重（qid 全局唯一）·answered 按 qid 去重（标对应 qid 闭合）。re-apply 同
+    JudgeReport 不重复 append、不写盘 churn。
+    默认安全·向后兼容：JudgeReport 无 dramatic_questions（旧书/轻量/foreshadower 未扩产）/ 缺报告 →
+    no-op 不报错·return 0。账本缺/坏 → 从空骨架重建（辅助态文件·我方拥有·world_seed_init 已播种）。
+    全 advisory STATE（账本不进 HARD_GATE_CODES·闭合率防只开坑由 B 的 scanner 查）·永不阻断。
+    """
+    try:
+        db = root / "_数据库"
+        cid = cluster_lookup.normalize_cluster_id(cluster_key) or str(cluster_key)
+        rpt = db / ".judge_reports" / f"{cid}_foreshadower.json"
+        if not rpt.is_file():
+            logger.info(f"[dramatic-questions] {cid} foreshadower JudgeReport 不存在·no-op")
+            return 0
+        sf = (load_json(rpt, {}) or {}).get("specific_findings") or {}
+        dq = sf.get("dramatic_questions")
+        if not isinstance(dq, dict):
+            logger.info(f"[dramatic-questions] {cid} 无 dramatic_questions·no-op（向后兼容）")
+            return 0
+        raised = dq.get("raised") if isinstance(dq.get("raised"), list) else []
+        answered = dq.get("answered") if isinstance(dq.get("answered"), list) else []
+        if not raised and not answered:
+            logger.info(f"[dramatic-questions] {cid} raised/answered 均空·no-op")
+            return 0
+
+        ledger_path = db / "戏剧问题账本.json"
+        ledger = load_json(ledger_path, None)
+        if not isinstance(ledger, dict):
+            ledger = {"schema_version": 1, "clusters": {}}  # 辅助态文件·缺/坏从空骨架重建
+        clusters = ledger.get("clusters")
+        if not isinstance(clusters, dict):
+            clusters = ledger["clusters"] = {}
+        entry = clusters.get(cid)
+        if not isinstance(entry, dict):
+            entry = clusters[cid] = {"raised": [], "answered": []}
+        e_raised = entry.get("raised")
+        if not isinstance(e_raised, list):
+            e_raised = entry["raised"] = []
+        e_answered = entry.get("answered")
+        if not isinstance(e_answered, list):
+            e_answered = entry["answered"] = []
+
+        seen_raised = {r.get("qid") for r in e_raised if isinstance(r, dict)}
+        seen_answered = {a.get("qid") for a in e_answered if isinstance(a, dict)}
+        added_r = added_a = 0
+        for r in raised:
+            if not isinstance(r, dict):
+                continue
+            qid = r.get("qid")
+            if not qid or qid in seen_raised:
+                continue  # qid 全局唯一·幂等去重
+            scope = r.get("scope") if r.get("scope") in ("cluster", "volume", "series") else "cluster"
+            try:
+                ras = int(r.get("raised_at_scene")) if r.get("raised_at_scene") is not None else None
+            except (TypeError, ValueError):
+                ras = None
+            e_raised.append({
+                "qid": qid,
+                "question": r.get("question") or "",
+                "scope": scope,
+                "raised_at_scene": ras,
+                "expected_payoff_window": r.get("expected_payoff_window") or "",
+            })
+            seen_raised.add(qid)
+            added_r += 1
+        for a in answered:
+            if not isinstance(a, dict):
+                continue
+            qid = a.get("qid")
+            if not qid or qid in seen_answered:
+                continue  # 标对应 qid 闭合·幂等去重
+            try:
+                aas = int(a.get("answered_at_scene")) if a.get("answered_at_scene") is not None else None
+            except (TypeError, ValueError):
+                aas = None
+            e_answered.append({"qid": qid, "answered_at_scene": aas})
+            seen_answered.add(qid)
+            added_a += 1
+
+        if added_r or added_a:
+            ledger.setdefault("schema_version", 1)
+            save_json(ledger_path, ledger)
+            logger.info(f"[dramatic-questions] {cid} 回库 raised+{added_r} / answered+{added_a}"
+                        " → 戏剧问题账本（PITQ/MDQ·读者粘性·advisory STATE）")
+        else:
+            logger.info(f"[dramatic-questions] {cid} 无新增（全已存在·幂等）")
+        return 0
+    except Exception as e:
+        logger.info(f"[dramatic-questions] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+        return 0
+
+
 def cmd_apply_cluster_changes(root, cluster_key):
     """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes。
 
@@ -1191,6 +1295,11 @@ def main():
     ap.add_argument("--apply-appraisal-beats", type=str, metavar="CLUSTER_KEY",
                     help="🔴 2026-06-29: summarizer 产的 appraisal_beats 确定性回填 叙事节拍器.json"
                          "（chain-of-emotion·只 active cluster·幂等·全 advisory STATE·未产则 no-op）")
+    # 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)
+    ap.add_argument("--apply-dramatic-questions", type=str, metavar="CLUSTER_KEY",
+                    help="🔴 2026-06-29: foreshadower JudgeReport 的 dramatic_questions 确定性回库"
+                         " 戏剧问题账本.json（PITQ/MDQ·读者粘性·只 active cluster·按 qid 幂等去重·"
+                         "全 advisory STATE·未产则 no-op）")
     args = ap.parse_args()
 
     root = Path(args.project).resolve()
@@ -1213,6 +1322,8 @@ def main():
         rc = cmd_auto_post_reflect_cluster(root, args.auto_post_reflect_cluster)
     elif args.apply_appraisal_beats:
         rc = cmd_apply_appraisal_beats(root, args.apply_appraisal_beats)
+    elif args.apply_dramatic_questions:
+        rc = cmd_apply_dramatic_questions(root, args.apply_dramatic_questions)
     elif args.build_cluster_summary:
         import cluster_summary_builder
         _res = cluster_summary_builder.build_cluster_summary(root, args.build_cluster_summary)

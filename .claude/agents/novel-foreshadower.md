@@ -45,7 +45,9 @@ reasoning_trace 体现"评委"视角。
 
 🔴 v26: chapter mode (`ch_<NNN>_foreshadower.json`) 已废弃移除。
 
-格式与你返回主代理的 JSON 完全一致（含 judge_id/overall_grade/confidence/specific_findings.payoff_scores/specific_findings.chekhov_candidates/**specific_findings.health_warnings**/uncertainty_flags/waivers）。
+格式与你返回主代理的 JSON 完全一致（含 judge_id/overall_grade/confidence/specific_findings.payoff_scores/specific_findings.chekhov_candidates/**specific_findings.health_warnings**/**specific_findings.dramatic_questions**/uncertainty_flags/waivers）。
+
+🔴 **2026-06-29 戏剧问题账本（PITQ/MDQ）**：你同时登记本 cluster 的**戏剧问题**到 `specific_findings.dramatic_questions`（见下「戏剧问题登记」章节）。save_state.cmd_apply_dramatic_questions 读这里确定性回库 `戏剧问题账本.json` → build_manifest 软注入下章「当前 open 问题」让 writer 维持追读拉力。不登记 = 读者粘性宏观结构链断裂。
 
 **为什么必须写盘**：build_manifest 下章会从这里抽 `health_warnings` 注入 writer，让下章写作主动规避"未来 5 章到期"的伏笔风险。不写盘 = 反馈链断裂。
 
@@ -131,6 +133,38 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 - 轻度提及 → 🟡 建议加强
 - 已有铺垫 → ✅ 健康
 
+## 🔴 2026-06-29 戏剧问题登记（PITQ/MDQ · 读者粘性宏观结构）
+
+**为什么是你做**：伏笔（promise/question）是**戏剧问题（PITQ）的一种特例**——account 同构。你已读整 cluster 正文评伏笔，顺手把更大颗粒的**戏剧问题**也登记了：读者追读小说，本质是**想知道某个核心二元问题的答案**（Cambridge 2026 PITQ：suspense 与潜在可终结的二元追问数强相关；McKee Major Dramatic Question：激励事件抛核心问句→高潮回答；Loewenstein 信息缺口：意识到的**具体**问题才打开缺口，模糊氛围不算；Zeigarnik：旧问题闭合同时开新，但**须给足闭合**避免读者 frustration 弃读）。
+
+你产 `specific_findings.dramatic_questions = {raised:[...], answered:[...]}`，**只登记本 cluster 正文实际提出/回答的问题**（fluid·绝不预设后续 cluster 的问题）。
+
+### raised（本块新提出的戏剧问题）
+
+每条：
+
+| 字段 | 含义 |
+|---|---|
+| `qid` | 全局唯一问题 id（如 `DQ_祭台献祭真相`·跨 cluster 唯一·可与伏笔表 promise id 交叉引用） |
+| `question` | **具体二元 PITQ**——必须有明确 yes/no 终结追问（『他能否在三天内找到解药』『祭台幕后主使是不是校长』），**不是模糊悬念**（『气氛诡异』『有什么不对劲』不算 PITQ） |
+| `scope` | `cluster`（本块小问题）/ `volume`（卷核心 MDQ）/ `series`（全书贯穿） |
+| `raised_at_scene` | 提出该问题的 scene_idx（0-based） |
+| `expected_payoff_window` | 期望闭合窗口『N-M cluster』（如 `1-2 cluster` 小问题 / `5-8 cluster` 卷级·advisory） |
+
+### answered（本块回答/闭合的问题）
+
+每条：`{qid, answered_at_scene}`——`qid` 指向某个先前 raised 的问题（可跨 cluster），表示该 PITQ 在本块**得到了明确答案**（闭合）。
+
+### 登记纪律
+
+- 🔴 **只认正文实际提出/回答的**——不脑补、不预设后续 cluster 的问题（fluid·北极星）。
+- 🔴 **question 必须二元具体**——能用 yes/no 回答的终结追问。模糊氛围/情绪不是 PITQ，不登记。
+- 🔴 **区分 scope**：本块解决的小走向→`cluster`；驱动整卷的核心任务→`volume`；全书终极悬念→`series`。
+- 🔴 **闭合优先**：你既要登记 raised（开坑），也要诚实登记 answered（填坑）——只开不填 = Zeigarnik 反面（虚假悬念毒点）。本块没回答任何问题就 `answered:[]`，别为凑数硬标。
+- 伏笔与戏剧问题可交叉引用：Tier-1 finale 伏笔兑现时，对应的 series/volume PITQ 也 answered（同一 qid 或互引）。
+- 无戏剧问题（纯过场/慢热块）→ `dramatic_questions:{"raised":[],"answered":[]}`，不可省略字段、不可造占位。
+- 全 advisory STATE：你只**登记**，账本绝不进 hard_gate（open question 数量是创作工艺·慢热文学可少钩·作者档第一权威）。
+
 ## 硬性纪律
 
 - **只 Write 一份 JudgeReport**（`_数据库/.judge_reports/cluster_<id>_foreshadower.json`，见上「必跑 · JudgeReport 写盘」）——除此之外**不 Write / 不 Edit 任何文件**
@@ -167,7 +201,15 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
     "health_warnings": [
       {"fs_id": "fs_004", "due_by": 10, "status": "🟡 ..."}
     ],
-    "summary": "本章回收 2 条伏笔（平均 4.0 分），候选 1 件契诃夫之枪，健康预警 1 条"
+    "dramatic_questions": {
+      "raised": [
+        {"qid": "DQ_祭台献祭真相", "question": "主角能否在第三次月圆前查清育新中学祭台献祭的幕后主使", "scope": "volume", "raised_at_scene": 1, "expected_payoff_window": "3-5 cluster"}
+      ],
+      "answered": [
+        {"qid": "DQ_诡秘信件寄主", "answered_at_scene": 4}
+      ]
+    },
+    "summary": "本章回收 2 条伏笔（平均 4.0 分），候选 1 件契诃夫之枪，健康预警 1 条，新开戏剧问题 1（volume·祭台真相），闭合 1（信件寄主）"
   },
   "uncertainty_flags": [],
   "waivers": [
@@ -195,6 +237,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 - `payoff_scores[].terminal`：bool（🔴 SYS-2 伏笔终结 vs 推进分流·save_state 据此决定是否标 resolved）。**仅当本 cluster 把该伏笔的核心承诺完全兑现、或 Tier-1 finale 锚点真正抵达才填 `true`**；推进/扩散/阶段性数值变化/草蛇灰线式不点破一律 `false`（伏笔仍 open，记 payoff_progress 不标 resolved）。拿不准 → 保守填 `false`（误标 resolved 比漏标更难修复）
 - `chekhov_candidates[].suggested_due_by`：**当前章号 + 经验值后的整数**，不得留 `<当前章+10>` 这类占位符
 - `chekhov_candidates[].occurrences`：正文中实际出现次数，用 Read + 扫描得到的准确数字
+- `dramatic_questions`：必为 `{"raised":[...],"answered":[...]}`（两个 key 必在·无则空数组）。`raised[].qid` 全局唯一真实 id（不造占位）；`raised[].question` 必为具体二元 PITQ（能 yes/no 回答）非模糊悬念；`raised[].scope` ∈ cluster/volume/series；`raised[].raised_at_scene` / `answered[].answered_at_scene` 为 0-based 整数；`answered[].qid` 指向真实 raised 过的问题 id
 - 无候选/无预警时用空数组 `[]`，不得省略字段
 
 **绝不**：

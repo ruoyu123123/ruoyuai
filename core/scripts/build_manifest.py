@@ -3866,6 +3866,119 @@ def _collect_secrets_to_reveal(scanner, chapter: int) -> list[dict]:
     return out
 
 
+def _parse_payoff_deadline(window: str, raised_num: int) -> int:
+    """从 expected_payoff_window('N-M cluster' / 'N cluster' / 'cluster_NNN') 解析兑现死线 cluster num。
+
+    取窗口上界（最晚兑现点）；无法解析 → 返回一个大数（视为不紧迫）。
+    'N-M cluster' = 相对 raised 的偏移窗口 → deadline = raised_num + M。
+    'cluster_NNN' = 绝对 cluster → deadline = NNN。
+    """
+    if not window:
+        return 10**6
+    w = str(window).strip()
+    abs_m = re.search(r"cluster[_\-]?0*(\d+)", w)
+    if abs_m:
+        try:
+            return int(abs_m.group(1))
+        except ValueError:
+            return 10**6
+    nums = [int(x) for x in re.findall(r"\d+", w)]
+    if not nums:
+        return 10**6
+    return raised_num + max(nums)
+
+
+def _collect_open_dramatic_questions(scanner, current_cluster_id) -> dict | None:
+    """🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)：当前悬而未决的核心问题软注入 writer manifest（advisory）。
+
+    读 _数据库/戏剧问题账本.json{clusters:{<cid>:{raised:[{qid,question,scope,raised_at_scene,
+    expected_payoff_window}],answered:[{qid,answered_at_scene}]}}}·累计到 current_cluster（含）算
+    open_questions = raised(qid) − answered(qid)·按兑现紧迫度（expected_payoff_window 死线 + staleness）
+    排序 → 软提示 writer『当前悬而未决的核心问题:X(读者想知道答案)·本块可推进/部分揭示』。
+
+    理论 Cambridge 2026 PITQ / McKee MDQ / Loewenstein 信息缺口·复用 bremond next_recommended →
+    brief 注入成熟通道范式。**默认安全**：无账本 / 无 current_cluster_id / 无 open → None（不注入·
+    零行为变化·向后兼容）。全 advisory·绝不 hard_gate（北极星⑤·慢热文学可少钩·作者档第一权威）。
+    """
+    if not current_cluster_id:
+        return None
+    cur_num = cluster_lookup.cluster_num(current_cluster_id)
+    if cur_num is None:
+        return None
+    ledger_path = scanner.root / "_数据库" / "戏剧问题账本.json"
+    if not ledger_path.exists():
+        return None
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    clusters = ledger.get("clusters") if isinstance(ledger, dict) else None
+    if not isinstance(clusters, dict):
+        return None
+
+    raised_first: dict = {}   # qid -> {raised_at_num, question, scope, expected_payoff_window}
+    answered_qids: set = set()
+    for cid, payload in clusters.items():
+        cnum = cluster_lookup.cluster_num(cid)
+        if cnum is None or cnum > cur_num or not isinstance(payload, dict):
+            continue
+        for r in payload.get("raised") or []:
+            if not isinstance(r, dict):
+                continue
+            qid = r.get("qid")
+            if not qid:
+                continue
+            qid = str(qid)
+            if qid not in raised_first or cnum < raised_first[qid]["raised_at_num"]:
+                raised_first[qid] = {
+                    "raised_at_num": cnum,
+                    "question": str(r.get("question") or ""),
+                    "scope": str(r.get("scope") or "cluster"),
+                    "expected_payoff_window": str(r.get("expected_payoff_window") or ""),
+                }
+        for a in payload.get("answered") or []:
+            if isinstance(a, dict) and a.get("qid"):
+                answered_qids.add(str(a["qid"]))
+
+    open_qs = []
+    for qid, info in raised_first.items():
+        if qid in answered_qids:
+            continue
+        deadline = _parse_payoff_deadline(info["expected_payoff_window"], info["raised_at_num"])
+        open_qs.append({
+            "qid": qid,
+            "question": info["question"],
+            "scope": info["scope"],
+            "raised_at_cluster": f"cluster_{info['raised_at_num']:03d}",
+            "expected_payoff_window": info["expected_payoff_window"],
+            "staleness": cur_num - info["raised_at_num"],
+            "_deadline": deadline,
+        })
+    if not open_qs:
+        return None  # 默认安全：无 open question → 不注入
+
+    # 紧迫度排序：兑现死线近者优先；同死线按 staleness 大者优先
+    open_qs.sort(key=lambda q: (q["_deadline"], -q["staleness"]))
+    top = open_qs[:5]
+    for q in top:
+        q.pop("_deadline", None)
+
+    primary = top[0]["question"][:50] or top[0]["qid"]
+    return {
+        "_doc": ("🔴 2026-06-29 戏剧问题账本 PITQ/MDQ·当前悬而未决核心问题软注入（advisory·绝不 hard_gate）。"
+                 "读者追读 = 想知道答案（Cambridge 2026 PITQ / McKee MDQ / Loewenstein 信息缺口）。"),
+        "gate_level": "advisory",
+        "current_cluster_id": current_cluster_id,
+        "open_count": len(open_qs),
+        "open_questions": top,
+        "directive": (
+            f"当前悬而未决的核心问题（读者想知道答案）：{primary}。"
+            f"本 cluster 可推进 / 部分揭示这些问题（哪怕给一点新线索），维持追读拉力；"
+            f"也可适度收束 1 个旧问题再开新坑（避免只开不闭的 Zeigarnik 反面）。"
+            f"慢热/严肃文学可少钩·作者档第一权威·这是软提示非硬约束。"),
+    }
+
+
 def _ttr_fidelity_mode() -> str:
     """TTR_FIDELITY_MODE：词汇丰富度（TTR/hapax）目标注入 + SFS 打分双端开关。
 
@@ -5316,6 +5429,10 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "faction_standings_snapshot": _collect_faction_standings(s),
         "will_learn_due_this_ch": _collect_will_learn_due(s, chapter),
         "pending_secrets_to_reveal": _collect_secrets_to_reveal(s, chapter),
+        # 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)：当前悬而未决的核心问题软注入（advisory·读者追读拉力）。
+        # 读 戏剧问题账本.json 算 open_questions(raised−answered·累计到本 cluster)·软提示 writer 推进/部分揭示。
+        # 默认安全闸：无账本 / 无 open → None（不注入·零行为变化·向后兼容）。全 advisory·绝不 hard_gate。
+        "open_dramatic_questions": _collect_open_dramatic_questions(s, current_cluster_id),
         "foreshadowing_summary": foreshadow_summary,
         "world_keyword_hits": world_hits[:5],
         "triggerable_events": [e.get("id") for e in events],
@@ -5446,6 +5563,8 @@ def _build_cache_layout() -> dict:
             "prev_judge_findings",               # 上章 judge 发现
             "will_learn_due_this_ch",            # 本章必学知识
             "pending_secrets_to_reveal",         # 本章必揭秘
+            "open_dramatic_questions",           # 🔴 2026-06-29 戏剧问题账本：当前悬而未决核心问题（每 cluster 变·advisory）
+
             "hard_constraints",                  # 本章硬约束（含本章伏笔到期）
             "post_write_checks",                 # 本章写后检查
             "_critical_summary",                 # 本章 LiM 关键摘要（动态）
