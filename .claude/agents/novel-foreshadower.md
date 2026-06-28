@@ -150,6 +150,24 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 | `scope` | `cluster`（本块小问题）/ `volume`（卷核心 MDQ）/ `series`（全书贯穿） |
 | `raised_at_scene` | 提出该问题的 scene_idx（0-based） |
 | `expected_payoff_window` | 期望闭合窗口『N-M cluster』（如 `1-2 cluster` 小问题 / `5-8 cluster` 卷级·advisory） |
+| `gap_type` | 🔴 2026-06-29 Sternberg 读者知识缺口三态 ∈ `{suspense, curiosity, surprise}`（见下「gap_type 三态怎么判」·advisory·拿不准可省略不标） |
+
+### 🔴 2026-06-29 gap_type 三态怎么判（Sternberg 读者知识缺口类型学）
+
+Sternberg《Poetics of Biblical Narrative》：读者追读的张力源自三种**知识缺口（reader knowledge gap）**，三态混合是最强的张力工具。你登记 raised 时，按**这个问题在读者心里打开的是哪种缺口**标 `gap_type`：
+
+| gap_type | 定义 | 时间朝向 | 判定问句 | 例 |
+|---|---|---|---|---|
+| `suspense` | **未来未披露**缺口——读者知道有事要发生、悬着结果 | 朝向**未来** | 「他**能否**…？」「会不会成功/活下来？」 | 「主角能否在月圆前查清主使」 |
+| `curiosity` | **过去未解**缺口——读者知道发生了什么、但不知前因/真相 | 朝向**过去** | 「**到底是谁/为什么**…？」「之前发生了什么？」 | 「祭台献祭的幕后主使**是谁**」 |
+| `surprise` | **未预期揭示**——读者原本没意识到存在的缺口被突然填上（推进力最强） | 朝向**当下反转** | 这块的核心是一记反转/真相炸弹，读者此前毫无预期 | 「原来老院长就是傀儡」式骤然揭底 |
+
+**判定铁律**：
+- 🔴 **看问题在读者心里打开的缺口方向，不是看剧情题材**：同一桩谜案，「凶手能否被抓住」=suspense（未来）、「凶手到底是谁」=curiosity（过去）——同案不同 gap_type。
+- 🔴 **surprise 只标真·未预期的揭示块**——读者此前**毫无预期**才算 surprise；早有铺垫、读者一直在等的揭晓属 suspense/curiosity 的闭合（走 answered），不是 surprise。surprise 是「读者没意识到这里有缺口」被骤然填上。
+- 🔴 **拿不准就省略 gap_type**（默认安全·不强标）——慢热文学/单一缺口合法，作者档第一权威。**绝不为凑三态硬标**。
+- 🔴 标的是**本块新 raised 问题**各自的 gap_type；`answered` 不需要 gap_type（闭合只认 qid）。
+- 🔴 **三态混合更佳但不强制**：理想情况整 cluster 的 open 问题跨多种缺口（既有 suspense 拉future、又有 curiosity 钩past）；只用一种 → 下游 `SINGLE_GAP_TYPE_MONOTONE` advisory 提示，**不是错误**（你照常登记真实 gap_type，混合是 writer/planner 的创作选择，你只如实标注）。
 
 ### answered（本块回答/闭合的问题）
 
@@ -161,6 +179,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 - 🔴 **question 必须二元具体**——能用 yes/no 回答的终结追问。模糊氛围/情绪不是 PITQ，不登记。
 - 🔴 **区分 scope**：本块解决的小走向→`cluster`；驱动整卷的核心任务→`volume`；全书终极悬念→`series`。
 - 🔴 **闭合优先**：你既要登记 raised（开坑），也要诚实登记 answered（填坑）——只开不填 = Zeigarnik 反面（虚假悬念毒点）。本块没回答任何问题就 `answered:[]`，别为凑数硬标。
+- 🔴 **gap_type 三态如实标**（Sternberg·见上「gap_type 三态怎么判」）：每条 raised 按读者缺口方向标 `suspense`/`curiosity`/`surprise`，**拿不准就省略**（默认安全·慢热单一缺口合法）。**绝不为凑三态硬标**——你只如实标注真实缺口类型，三态混合是 planner/writer 的创作选择，不是你的硬指标。
 - 伏笔与戏剧问题可交叉引用：Tier-1 finale 伏笔兑现时，对应的 series/volume PITQ 也 answered（同一 qid 或互引）。
 - 无戏剧问题（纯过场/慢热块）→ `dramatic_questions:{"raised":[],"answered":[]}`，不可省略字段、不可造占位。
 - 全 advisory STATE：你只**登记**，账本绝不进 hard_gate（open question 数量是创作工艺·慢热文学可少钩·作者档第一权威）。
@@ -203,7 +222,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
     ],
     "dramatic_questions": {
       "raised": [
-        {"qid": "DQ_祭台献祭真相", "question": "主角能否在第三次月圆前查清育新中学祭台献祭的幕后主使", "scope": "volume", "raised_at_scene": 1, "expected_payoff_window": "3-5 cluster"}
+        {"qid": "DQ_祭台献祭真相", "question": "主角能否在第三次月圆前查清育新中学祭台献祭的幕后主使", "scope": "volume", "raised_at_scene": 1, "expected_payoff_window": "3-5 cluster", "gap_type": "suspense"}
       ],
       "answered": [
         {"qid": "DQ_诡秘信件寄主", "answered_at_scene": 4}
@@ -237,7 +256,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 - `payoff_scores[].terminal`：bool（🔴 SYS-2 伏笔终结 vs 推进分流·save_state 据此决定是否标 resolved）。**仅当本 cluster 把该伏笔的核心承诺完全兑现、或 Tier-1 finale 锚点真正抵达才填 `true`**；推进/扩散/阶段性数值变化/草蛇灰线式不点破一律 `false`（伏笔仍 open，记 payoff_progress 不标 resolved）。拿不准 → 保守填 `false`（误标 resolved 比漏标更难修复）
 - `chekhov_candidates[].suggested_due_by`：**当前章号 + 经验值后的整数**，不得留 `<当前章+10>` 这类占位符
 - `chekhov_candidates[].occurrences`：正文中实际出现次数，用 Read + 扫描得到的准确数字
-- `dramatic_questions`：必为 `{"raised":[...],"answered":[...]}`（两个 key 必在·无则空数组）。`raised[].qid` 全局唯一真实 id（不造占位）；`raised[].question` 必为具体二元 PITQ（能 yes/no 回答）非模糊悬念；`raised[].scope` ∈ cluster/volume/series；`raised[].raised_at_scene` / `answered[].answered_at_scene` 为 0-based 整数；`answered[].qid` 指向真实 raised 过的问题 id
+- `dramatic_questions`：必为 `{"raised":[...],"answered":[...]}`（两个 key 必在·无则空数组）。`raised[].qid` 全局唯一真实 id（不造占位）；`raised[].question` 必为具体二元 PITQ（能 yes/no 回答）非模糊悬念；`raised[].scope` ∈ cluster/volume/series；`raised[].raised_at_scene` / `answered[].answered_at_scene` 为 0-based 整数；`answered[].qid` 指向真实 raised 过的问题 id；`raised[].gap_type`（可选·Sternberg 三态）∈ `suspense`/`curiosity`/`surprise`，拿不准则省略不标（默认安全·绝不为凑三态硬标）
 - 无候选/无预警时用空数组 `[]`，不得省略字段
 
 **绝不**：

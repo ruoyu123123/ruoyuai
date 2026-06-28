@@ -54,9 +54,12 @@ def _ledger(db_root):
 _SKELETON_LEDGER = {"schema_version": 1, "clusters": {}}
 
 
-def _raised(qid, scope="cluster", scene=1, q=None, win="1-2 cluster"):
-    return {"qid": qid, "question": q or f"主角能否查清{qid}的真相",
-            "scope": scope, "raised_at_scene": scene, "expected_payoff_window": win}
+def _raised(qid, scope="cluster", scene=1, q=None, win="1-2 cluster", gap_type=None):
+    d = {"qid": qid, "question": q or f"主角能否查清{qid}的真相",
+         "scope": scope, "raised_at_scene": scene, "expected_payoff_window": win}
+    if gap_type is not None:
+        d["gap_type"] = gap_type
+    return d
 
 
 def _answered(qid, scene=2):
@@ -213,6 +216,49 @@ def test_cluster_prefixed_key_accepted():
                            dq={"raised": [_raised("DQ_A")], "answered": []}, key="001")
         assert ss.cmd_apply_dramatic_questions(root, "cluster_001") == 0
         assert len(_ledger(root)["clusters"]["cluster_001"]["raised"]) == 1
+
+
+# ═══════════════════════ 🔴 Sternberg 读者知识缺口三态 gap_type 回库 ═══════════════════════
+
+def test_gap_type_persisted_when_valid():
+    """合法 gap_type（suspense/curiosity/surprise）随 raised 回库（白名单字段·须显式带）。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
+                           dq={"raised": [_raised("DQ_A", gap_type="curiosity")], "answered": []})
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
+        r = _ledger(root)["clusters"]["cluster_001"]["raised"][0]
+        assert r["gap_type"] == "curiosity"
+
+
+def test_gap_type_invalid_normalized_to_none():
+    """非法 gap_type → None（默认安全·不报错）。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
+                           dq={"raised": [_raised("DQ_A", gap_type="garbage")], "answered": []})
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
+        r = _ledger(root)["clusters"]["cluster_001"]["raised"][0]
+        assert r["gap_type"] is None
+
+
+def test_gap_type_missing_defaults_to_none():
+    """旧账本/慢热单一缺口 raised 缺 gap_type → None（向后兼容·字段存在便于下游统一读）。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
+                           dq={"raised": [_raised("DQ_A")], "answered": []})
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
+        r = _ledger(root)["clusters"]["cluster_001"]["raised"][0]
+        assert r["gap_type"] is None
+
+
+def test_skeleton_schema_documents_gap_type():
+    """subsystem_skeletons.json 的 ledger schema 含 gap_type 三态语义（单一真理源）。"""
+    sk = json.loads((_ROOT / "core" / "claude-home" / "templates"
+                     / "subsystem_skeletons.json").read_text(encoding="utf-8"))
+    fs = sk["_dramatic_question_ledger_schema"]["_field_semantics"]
+    key = "clusters.<cluster_id>.raised[].gap_type"
+    assert key in fs
+    for t in ("suspense", "curiosity", "surprise"):
+        assert t in fs[key]
 
 
 # ═══════════════════════ 单一真理源 + 播种 + 白名单 ═══════════════════════

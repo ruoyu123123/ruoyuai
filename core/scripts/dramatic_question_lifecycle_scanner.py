@@ -25,10 +25,15 @@ Dramatic Question、Loewenstein 1994 信息缺口)。若渝只有段级 info gap
    ② DRAMATIC_QUESTION_STALE —— 某 open question 悬挂超 N cluster 未碰（烂尾感·N 默认 8·可配）。
    ③ OPEN_CLOSE_IMBALANCE —— 只开坑不闭合（闭合率过低 + open 积压过多 = Zeigarnik 反面毒点·
       读者 frustration 弃读）。Zeigarnik 张力须给足闭合·绝非越多 open 越好。
+   ④ SINGLE_GAP_TYPE_MONOTONE —— 🔴 2026-06-29 Sternberg 读者知识缺口三态：≥3 个带 gap_type 的
+      open 问题全用同一种缺口（suspense 未来未披露 / curiosity 过去未解 / surprise 未预期揭示）→
+      读者张力维度单一·缺三态混合（Sternberg《Poetics of Biblical Narrative》三态混合=张力工具）。
+      只提示混合缺失·绝不替 writer 选缺口类型（北极星⑤）。缺 gap_type 的问题不计入（默认安全·
+      慢热文学/单一缺口合法·作者档第一权威）。
 
 【北极星② / ④ / ⑤ 顾问非法官】open question 数量是创作工艺（慢热文学/严肃文学可少钩）·
-  作者档第一权威·占位 regex/登记易误报反问修辞问 → 全 advisory，三个 code
-  **绝不进 audit_hub.HARD_GATE_CODES**。env DRAMATIC_QUESTION_LIFECYCLE_MODE:
+  作者档第一权威·占位 regex/登记易误报反问修辞问 → 全 advisory，四个 code（含 Sternberg
+  SINGLE_GAP_TYPE_MONOTONE）**绝不进 audit_hub.HARD_GATE_CODES**。env DRAMATIC_QUESTION_LIFECYCLE_MODE:
   off / shadow(默认·只记不判) / active。默认安全：无账本/旧书 → 零检测零行为变化。
 
 用法：
@@ -51,6 +56,8 @@ import cluster_lookup  # noqa: E402
 ISSUE_CODE_NO_OPEN = "NO_OPEN_DRAMATIC_QUESTION"
 ISSUE_CODE_STALE = "DRAMATIC_QUESTION_STALE"
 ISSUE_CODE_IMBALANCE = "OPEN_CLOSE_IMBALANCE"
+# 🔴 2026-06-29 Sternberg 读者知识缺口三态：整 cluster open 问题只用一种缺口 → 缺三态混合
+ISSUE_CODE_GAP_MONOTONE = "SINGLE_GAP_TYPE_MONOTONE"
 
 LEDGER_NAME = "戏剧问题账本.json"
 
@@ -58,6 +65,10 @@ DEFAULT_STALE_N = 8            # 某 open question 悬挂超 N cluster 未碰 �
 IMBALANCE_MIN_RAISED = 5       # 闭合率判定的最小已开坑数（样本太少不判）
 IMBALANCE_OPEN_BACKLOG = 6     # open 积压数阈值（积压且闭合率低才报）
 IMBALANCE_CLOSE_RATIO = 0.20   # 闭合率 floor（answered/raised < 此值 = 只开坑不闭合）
+# 🔴 2026-06-29 Sternberg 三态：≥ 此数量「带 gap_type 的 open 问题」全用同一种缺口才报单调
+# （1-2 个用单一缺口是自然的·不报；缺 gap_type 的问题不计入·默认安全·北极星⑤）
+GAP_MONOTONE_MIN_TYPED = 3
+GAP_TYPES = ("suspense", "curiosity", "surprise")  # Sternberg：未来未披露 / 过去未解 / 未预期揭示
 
 
 def _mode() -> str:
@@ -135,11 +146,14 @@ def compute_open_questions(ledger: dict, target_num: int) -> dict:
             qid = str(qid)
             # 同 qid 多次 raised → 保留最早出现的 cluster
             if qid not in raised_first or cnum < raised_first[qid]["raised_at_num"]:
+                gt = r.get("gap_type")
                 raised_first[qid] = {
                     "raised_at_num": cnum,
                     "question": str(r.get("question") or ""),
                     "scope": str(r.get("scope") or "cluster"),
                     "expected_payoff_window": str(r.get("expected_payoff_window") or ""),
+                    # 🔴 2026-06-29 Sternberg 三态：只认合法值·非法/缺省 → None（默认安全·不计入单调判定）
+                    "gap_type": gt if gt in GAP_TYPES else None,
                 }
         for a in payload.get("answered") or []:
             if not isinstance(a, dict):
@@ -158,6 +172,7 @@ def compute_open_questions(ledger: dict, target_num: int) -> dict:
             "raised_at_num": info["raised_at_num"],
             "scope": info["scope"],
             "expected_payoff_window": info["expected_payoff_window"],
+            "gap_type": info.get("gap_type"),
             "staleness": target_num - info["raised_at_num"],
         })
     # 紧迫度：staleness 大者优先（更久未碰）
@@ -166,11 +181,18 @@ def compute_open_questions(ledger: dict, target_num: int) -> dict:
     raised_unique = len(raised_first)
     answered_unique = len(answered_qids & set(raised_first.keys()))
     close_ratio = (answered_unique / raised_unique) if raised_unique else 0.0
+    # 🔴 2026-06-29 Sternberg 三态分布（只统计 open 问题中带合法 gap_type 的·缺省不计·默认安全）
+    gap_type_dist: dict[str, int] = {}
+    for q in open_qs:
+        gt = q.get("gap_type")
+        if gt in GAP_TYPES:
+            gap_type_dist[gt] = gap_type_dist.get(gt, 0) + 1
     return {
         "open": open_qs,
         "raised_unique": raised_unique,
         "answered_unique": answered_unique,
         "close_ratio": round(close_ratio, 3),
+        "gap_type_dist": gap_type_dist,
     }
 
 
@@ -199,8 +221,10 @@ def scan(project_root, cluster_id=None, draft_path=None, stale_n=DEFAULT_STALE_N
         "raised_unique": metrics["raised_unique"],
         "answered_unique": metrics["answered_unique"],
         "close_ratio": metrics["close_ratio"],
+        "gap_type_dist": metrics["gap_type_dist"],   # 🔴 2026-06-29 Sternberg 三态分布
         "open_sample": [
-            {"qid": q["qid"], "question": q["question"][:40], "staleness": q["staleness"]}
+            {"qid": q["qid"], "question": q["question"][:40], "staleness": q["staleness"],
+             "gap_type": q.get("gap_type")}
             for q in metrics["open"][:5]
         ],
     }
@@ -250,6 +274,26 @@ def scan(project_root, cluster_id=None, draft_path=None, stale_n=DEFAULT_STALE_N
             "close_ratio": metrics["close_ratio"],
             "open_backlog": len(metrics["open"]),
             "_doc": "Zeigarnik 反面·闭合率过低 = 虚假悬念毒点·advisory·绝不 hard_gate"})
+
+    # ④ 🔴 2026-06-29 Sternberg 读者知识缺口三态单调：整 cluster 带 gap_type 的 open 问题 ≥ MIN
+    #    且全用同一种缺口 → 缺三态混合（suspense/curiosity/surprise 是张力工具）。只提示混合缺失·
+    #    绝不替 writer 选缺口类型（北极星⑤）。缺 gap_type 的问题不计入（默认安全·慢热单一缺口合法）。
+    gap_dist = metrics["gap_type_dist"]
+    typed_total = sum(gap_dist.values())
+    if typed_total >= GAP_MONOTONE_MIN_TYPED and len(gap_dist) == 1:
+        only_type = next(iter(gap_dist))
+        missing = [t for t in GAP_TYPES if t != only_type]
+        violations.append({
+            "code": ISSUE_CODE_GAP_MONOTONE, "kind": "dramatic_question_lifecycle",
+            "severity": "minor",
+            "message": (f"当前 {typed_total} 个悬而未决的核心问题全是『{only_type}』型知识缺口"
+                        f"（缺 {' / '.join(missing)}）·读者张力维度单一。Sternberg 三态混合更抓人："
+                        f"suspense（未来未披露·『他能否…』）/ curiosity（过去未解·『到底是谁/为什么』）/ "
+                        f"surprise（未预期揭示）。建议本卷搭配另一种缺口（如已有 suspense 再钩一个 curiosity）"),
+            "gap_type": only_type, "missing_gap_types": missing,
+            "typed_open_count": typed_total, "gap_type_dist": dict(gap_dist),
+            "_doc": ("Sternberg《Poetics of Biblical Narrative》三态混合=张力工具·advisory·"
+                     "慢热文学/单一缺口合法（作者档第一权威）·绝不替 writer 选缺口类型·绝不 hard_gate")})
 
     out["violations_count"] = len(violations)
     if violations:

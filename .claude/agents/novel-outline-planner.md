@@ -243,6 +243,26 @@ tools: Read, Write
 - 🔴 字段权威 schema = `core/claude-home/schemas/event_cluster_schema.json` 的 `scene_storyboard.items.dialogue_objectives`（与 `build_manifest._collect_dialogue_objectives`（B agent）读的字段名 `character`/`wants`/`tactic`/`obstacle`/`dialogue_act`/`what_unsaid` 一一对应）·`subsystem_skeletons.json` 的 `事件簇._cluster_brief_schema_hint.scene_dialogue_objectives` 是单一真理源 hint。
 - ⚠️ 与 ④ 角色信息差正交：belief 管「谁知道什么」（认知层），dialogue_objectives 管「知道之后嘴上怎么演」（表达层）——认知层信息差自然外化为表达层各说各话（A 不知道的 B 不会说穿），两维不互替。
 
+## ⑦ 🔴 2026-06-29 Sternberg 读者知识缺口三态（gap_type · 设计本块追读问题的缺口类型 · cluster_002+ 涌现时标·不预设）
+
+> **统一原则（与 ①-⑥ 同范式·但作用在「宏观追读问题」层而非 scene 层）**：**Claude 涌现 / 详化 cluster 走向时，为本块抛出的核心追读问题（戏剧问题 PITQ）设计**它在读者心里打开的**知识缺口类型**，让整卷的悬念跨多种缺口（更抓人），但**只设计缺口类型·绝不替 writer 选具体怎么揭。** SOTA 接地：Sternberg《Poetics of Biblical Narrative》三态（curiosity 过去未解 / suspense 未来未披露 / surprise 未预期揭示·最强推进力）/ Neohelicon 2018 认知框架——三态混合是张力工具。此前散落零件（PITQ≈curiosity / dramatic_irony≈suspense / reveal_show/premature_resolution≈surprise）统一进**戏剧问题账本**一本读者知识账本（不另立口径）。
+
+**三态定义（按读者缺口的时间朝向判，不是按题材）**：
+
+| gap_type | 定义 | 朝向 | 判定问句 |
+|---|---|---|---|
+| `suspense` | 未来未披露缺口·读者悬着结果 | 未来 | 「他**能否**…？」「会不会成功/活下来？」 |
+| `curiosity` | 过去未解缺口·读者知发生了什么但不知前因/真相 | 过去 | 「**到底是谁/为什么**…？」 |
+| `surprise` | 未预期揭示·读者原本没意识到存在的缺口被骤然填上 | 当下反转 | 这块核心是一记读者毫无预期的真相炸弹 |
+
+**你（outline-planner / emergence）怎么用**：
+- 涌现 / 详化 **cluster_002+** 走向卡时，想清楚**本块要让读者揪着的那个核心追读问题打开的是哪种缺口**，并对照**当前卷已有的 open 问题缺口分布**（可参考 manifest 软注入的 `open_dramatic_questions.gap_type_distribution`）——若全卷悬念已经全是 `suspense`，本块设计就**有意识地搭一个 `curiosity` 或 `surprise`** 让读者张力更立体。
+- 🔴 **cluster_002+ 是 fluid 涌现·gap_type 随涌现走向当下确定·绝不在 outline 阶段为后续 cluster 预设缺口类型**（守事件簇 fluid 铁律·北极星）。cluster_001 的核心追读问题缺口类型在首块详化时定。
+- 🔴 **gap_type 的权威落库由 `novel-foreshadower` 读正文登记**（伏笔⊂PITQ 特例·它读完整 cluster prose 后按真实缺口标 `戏剧问题账本.json` 的 `raised[].gap_type`）。你这里是**设计意图层**——让走向骨架天然引导出一个有意图的缺口类型 + 卷级三态多样性；foreshadower 据成稿如实标，`dramatic_question_lifecycle_scanner` 的 `SINGLE_GAP_TYPE_MONOTONE`（advisory）哨兵全卷只用一种缺口时提示混合。
+- ✅ **只设计缺口类型·绝不替 writer 选「怎么揭 / 何时反转」**（北极星⑤ 不干涉创作判断）——你给「这块该是个 curiosity 钩」，gemini 决定怎么把真相藏好、怎么挑读者好奇心。
+- ✅ **默认安全·向后兼容**：慢热文学 / 单一缺口合法（作者档第一权威·不强求三态混合）·拿不准就不设计特定缺口类型，让走向自然展开。`SINGLE_GAP_TYPE_MONOTONE` 永远 advisory·**绝不进 HARD_GATE_CODES**。
+- 🔴 字段权威 schema 单一真理源 = `core/claude-home/templates/subsystem_skeletons.json` 的 `_dramatic_question_ledger_schema`（`raised[].gap_type ∈ {suspense, curiosity, surprise}`）。
+
 ---
 
 ## 输入契约

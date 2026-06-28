@@ -37,9 +37,12 @@ def _mk(ledger: dict) -> Path:
     return proj
 
 
-def _q(qid, question="某个核心问题", window="3-6 cluster", scope="cluster"):
-    return {"qid": qid, "question": question, "scope": scope,
-            "raised_at_scene": "0", "expected_payoff_window": window}
+def _q(qid, question="某个核心问题", window="3-6 cluster", scope="cluster", gap_type=None):
+    d = {"qid": qid, "question": question, "scope": scope,
+         "raised_at_scene": "0", "expected_payoff_window": window}
+    if gap_type is not None:
+        d["gap_type"] = gap_type
+    return d
 
 
 # ───────────────────────── compute_open_questions ─────────────────────────
@@ -316,6 +319,135 @@ def test_emergence_soft_pull_capped():
     me = {"id": "ME1", "description": "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥"}
     score, _ = ce._score_one_me(me, 0, set(), [], set(), [], None, kw)
     assert score <= 24
+
+
+# ───────────────── 🔴 2026-06-29 Sternberg 读者知识缺口三态 gap_type ─────────────────
+
+def test_compute_open_captures_gap_type():
+    """compute_open_questions 透传合法 gap_type·非法/缺省 → None。"""
+    led = {"clusters": {"cluster_001": {"raised": [
+        _q("Q1", gap_type="suspense"), _q("Q2", gap_type="curiosity"),
+        _q("Q3", gap_type="garbage"), _q("Q4")], "answered": []}}}
+    m = dq.compute_open_questions(led, 1)
+    by = {q["qid"]: q.get("gap_type") for q in m["open"]}
+    assert by["Q1"] == "suspense" and by["Q2"] == "curiosity"
+    assert by["Q3"] is None and by["Q4"] is None  # 非法 + 缺省 → None
+    assert m["gap_type_dist"] == {"suspense": 1, "curiosity": 1}
+
+
+def test_single_gap_type_monotone_fires():
+    """≥3 个 open 问题全 suspense → SINGLE_GAP_TYPE_MONOTONE（缺三态混合）。"""
+    led = {"clusters": {"cluster_001": {"raised": [
+        _q("Q1", gap_type="suspense"), _q("Q2", gap_type="suspense"),
+        _q("Q3", gap_type="suspense")], "answered": []}}}
+    proj = _mk(led)
+    os.environ["DRAMATIC_QUESTION_LIFECYCLE_MODE"] = "active"
+    r = dq.scan(str(proj), cluster_id="cluster_001", stale_n=99)
+    v = next((v for v in r["violations"] if v["code"] == "SINGLE_GAP_TYPE_MONOTONE"), None)
+    assert v is not None
+    assert v["gap_type"] == "suspense"
+    assert set(v["missing_gap_types"]) == {"curiosity", "surprise"}
+    assert v["typed_open_count"] == 3
+
+
+def test_three_state_mix_no_monotone():
+    """三态混合（suspense/curiosity/surprise）→ 不报单调（PASS 维度）。"""
+    led = {"clusters": {"cluster_001": {"raised": [
+        _q("Q1", gap_type="suspense"), _q("Q2", gap_type="curiosity"),
+        _q("Q3", gap_type="surprise")], "answered": []}}}
+    proj = _mk(led)
+    os.environ["DRAMATIC_QUESTION_LIFECYCLE_MODE"] = "active"
+    r = dq.scan(str(proj), cluster_id="cluster_001", stale_n=99)
+    assert "SINGLE_GAP_TYPE_MONOTONE" not in [v["code"] for v in r["violations"]]
+
+
+def test_two_typed_below_threshold_no_monotone():
+    """仅 2 个带 gap_type 的 open 问题（< MIN=3）→ 不报（单一缺口对少量问题是自然的）。"""
+    led = {"clusters": {"cluster_001": {"raised": [
+        _q("Q1", gap_type="suspense"), _q("Q2", gap_type="suspense")], "answered": []}}}
+    proj = _mk(led)
+    os.environ["DRAMATIC_QUESTION_LIFECYCLE_MODE"] = "active"
+    r = dq.scan(str(proj), cluster_id="cluster_001", stale_n=99)
+    assert "SINGLE_GAP_TYPE_MONOTONE" not in [v["code"] for v in r["violations"]]
+
+
+def test_untyped_questions_not_counted_default_safe():
+    """旧账本 open 问题无 gap_type → 不计入·绝不报单调（默认安全·慢热单一缺口合法）。"""
+    led = {"clusters": {"cluster_001": {"raised": [
+        _q("Q1"), _q("Q2"), _q("Q3"), _q("Q4")], "answered": []}}}
+    proj = _mk(led)
+    os.environ["DRAMATIC_QUESTION_LIFECYCLE_MODE"] = "active"
+    r = dq.scan(str(proj), cluster_id="cluster_001", stale_n=99)
+    assert "SINGLE_GAP_TYPE_MONOTONE" not in [v["code"] for v in r["violations"]]
+    assert r["metrics"]["gap_type_dist"] == {}
+
+
+def test_answered_excluded_from_monotone():
+    """已闭合的问题不算 open → 不参与单调判定。"""
+    led = {"clusters": {
+        "cluster_001": {"raised": [
+            _q("Q1", gap_type="suspense"), _q("Q2", gap_type="suspense"),
+            _q("Q3", gap_type="suspense")], "answered": []},
+        "cluster_002": {"raised": [], "answered": [
+            {"qid": "Q2", "answered_at_scene": "0"}, {"qid": "Q3", "answered_at_scene": "0"}]},
+    }}
+    proj = _mk(led)
+    os.environ["DRAMATIC_QUESTION_LIFECYCLE_MODE"] = "active"
+    r = dq.scan(str(proj), cluster_id="cluster_002", stale_n=99)
+    # 只剩 Q1 open（1 个 < MIN=3）→ 不报单调
+    assert "SINGLE_GAP_TYPE_MONOTONE" not in [v["code"] for v in r["violations"]]
+
+
+def test_gap_monotone_never_hard_gate():
+    """SINGLE_GAP_TYPE_MONOTONE 绝不进 HARD_GATE_CODES（北极星⑤）。"""
+    assert "SINGLE_GAP_TYPE_MONOTONE" not in audit_hub.HARD_GATE_CODES
+    assert audit_hub._gate_level_for("SINGLE_GAP_TYPE_MONOTONE", "error") == "advisory"
+
+
+def test_gap_monotone_shadow_not_surfaced():
+    """shadow 模式下单调被计数但不上报（沿用三态门控）。"""
+    led = {"clusters": {"cluster_001": {"raised": [
+        _q("Q1", gap_type="curiosity"), _q("Q2", gap_type="curiosity"),
+        _q("Q3", gap_type="curiosity")], "answered": []}}}
+    proj = _mk(led)
+    os.environ["DRAMATIC_QUESTION_LIFECYCLE_MODE"] = "shadow"
+    r = dq.scan(str(proj), cluster_id="cluster_001", stale_n=99)
+    assert r["verdict"] == "PASS"
+    assert not r["violations"]
+    assert r.get("violations_count", 0) >= 1
+
+
+# ───────────────── build_manifest gap_type 分布注入 ─────────────────
+
+def test_manifest_injects_gap_type_distribution():
+    led = {"clusters": {"cluster_001": {"raised": [
+        _q("Q1", "甲是凶手吗", gap_type="suspense"),
+        _q("Q2", "宝藏哪来的", gap_type="curiosity")], "answered": []}}}
+    proj = _mk(led)
+    inj = bm._collect_open_dramatic_questions(_FakeScanner(proj), "cluster_001")
+    assert inj is not None
+    assert inj["gap_type_distribution"] == {"suspense": 1, "curiosity": 1}
+    # 混合 → directive 不含单调软提示
+    assert "维度单一" not in inj["directive"]
+
+
+def test_manifest_monotone_soft_note_in_directive():
+    led = {"clusters": {"cluster_001": {"raised": [
+        _q("Q1", gap_type="suspense"), _q("Q2", gap_type="suspense"),
+        _q("Q3", gap_type="suspense")], "answered": []}}}
+    proj = _mk(led)
+    inj = bm._collect_open_dramatic_questions(_FakeScanner(proj), "cluster_001")
+    assert inj["gap_type_distribution"] == {"suspense": 3}
+    assert "维度单一" in inj["directive"]  # 软提示三态混合（不替 writer 选）
+
+
+def test_manifest_no_gap_type_empty_distribution():
+    """旧账本无 gap_type → 分布空·directive 无单调提示（默认安全·向后兼容）。"""
+    led = {"clusters": {"cluster_001": {"raised": [_q("Q1"), _q("Q2")], "answered": []}}}
+    proj = _mk(led)
+    inj = bm._collect_open_dramatic_questions(_FakeScanner(proj), "cluster_001")
+    assert inj["gap_type_distribution"] == {}
+    assert "维度单一" not in inj["directive"]
 
 
 if __name__ == "__main__":

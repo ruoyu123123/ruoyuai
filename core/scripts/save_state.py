@@ -954,7 +954,8 @@ def cmd_apply_dramatic_questions(root, cluster_key):
 
     novel-foreshadower（伏笔⊂PITQ 的特例·最适合扩登记戏剧问题）读整 cluster 正文产 JudgeReport 的
     specific_findings.dramatic_questions = {raised:[{qid(全局唯一), question(具体二元PITQ非模糊悬念),
-    scope:cluster|volume|series, raised_at_scene, expected_payoff_window:'N-M cluster'}],
+    scope:cluster|volume|series, raised_at_scene, expected_payoff_window:'N-M cluster',
+    gap_type(可选·Sternberg 三态 suspense|curiosity|surprise·非法/缺省→None)}],
     answered:[{qid, answered_at_scene}]}。本步把它确定性 append 进 戏剧问题账本.json.clusters[<cid>]
     —— 读者粘性唯一宏观结构缺口（读者追读=想知道核心二元问题的答案·SOTA=Cambridge2026 PITQ +
     McKee MDQ + Loewenstein 信息缺口 + Zeigarnik 未完成张力）。
@@ -1016,12 +1017,16 @@ def cmd_apply_dramatic_questions(root, cluster_key):
                 ras = int(r.get("raised_at_scene")) if r.get("raised_at_scene") is not None else None
             except (TypeError, ValueError):
                 ras = None
+            # 🔴 2026-06-29 Sternberg 读者知识缺口三态：gap_type 随 raised 回库（白名单字段需显式带·
+            # 否则被丢）·只钳到合法三态·非法/缺省 → None（默认安全·旧账本/慢热单一缺口合法·不报错）。
+            gap_type = r.get("gap_type") if r.get("gap_type") in ("suspense", "curiosity", "surprise") else None
             e_raised.append({
                 "qid": qid,
                 "question": r.get("question") or "",
                 "scope": scope,
                 "raised_at_scene": ras,
                 "expected_payoff_window": r.get("expected_payoff_window") or "",
+                "gap_type": gap_type,
             })
             seen_raised.add(qid)
             added_r += 1

@@ -4015,11 +4015,14 @@ def _collect_open_dramatic_questions(scanner, current_cluster_id) -> dict | None
                 continue
             qid = str(qid)
             if qid not in raised_first or cnum < raised_first[qid]["raised_at_num"]:
+                gt = r.get("gap_type")
                 raised_first[qid] = {
                     "raised_at_num": cnum,
                     "question": str(r.get("question") or ""),
                     "scope": str(r.get("scope") or "cluster"),
                     "expected_payoff_window": str(r.get("expected_payoff_window") or ""),
+                    # 🔴 2026-06-29 Sternberg 三态：只认合法值·非法/缺省 → None（默认安全）
+                    "gap_type": gt if gt in ("suspense", "curiosity", "surprise") else None,
                 }
         for a in payload.get("answered") or []:
             if isinstance(a, dict) and a.get("qid"):
@@ -4036,6 +4039,7 @@ def _collect_open_dramatic_questions(scanner, current_cluster_id) -> dict | None
             "scope": info["scope"],
             "raised_at_cluster": f"cluster_{info['raised_at_num']:03d}",
             "expected_payoff_window": info["expected_payoff_window"],
+            "gap_type": info.get("gap_type"),
             "staleness": cur_num - info["raised_at_num"],
             "_deadline": deadline,
         })
@@ -4048,18 +4052,36 @@ def _collect_open_dramatic_questions(scanner, current_cluster_id) -> dict | None
     for q in top:
         q.pop("_deadline", None)
 
+    # 🔴 2026-06-29 Sternberg 读者知识缺口三态分布（统计全部 open 问题·缺 gap_type 不计·默认安全）。
+    gap_type_distribution: dict = {}
+    for q in open_qs:
+        gt = q.get("gap_type")
+        if gt in ("suspense", "curiosity", "surprise"):
+            gap_type_distribution[gt] = gap_type_distribution.get(gt, 0) + 1
+    typed_total = sum(gap_type_distribution.values())
+    gap_note = ""
+    # 仅当 ≥3 个带 gap_type 的 open 问题且全用一种缺口 → 软提示三态混合（绝不替 writer 选类型·北极星⑤）。
+    if typed_total >= 3 and len(gap_type_distribution) == 1:
+        only_type = next(iter(gap_type_distribution))
+        gap_note = (f"（当前悬念全是『{only_type}』型知识缺口·读者张力维度单一·"
+                    f"可顺势搭配另一种缺口让追读更立体：suspense 拉未来/curiosity 钩过去/surprise 骤然揭示·"
+                    f"这是软提示·作者档第一权威）")
+
     primary = top[0]["question"][:50] or top[0]["qid"]
     return {
         "_doc": ("🔴 2026-06-29 戏剧问题账本 PITQ/MDQ·当前悬而未决核心问题软注入（advisory·绝不 hard_gate）。"
-                 "读者追读 = 想知道答案（Cambridge 2026 PITQ / McKee MDQ / Loewenstein 信息缺口）。"),
+                 "读者追读 = 想知道答案（Cambridge 2026 PITQ / McKee MDQ / Loewenstein 信息缺口）。"
+                 "gap_type_distribution = Sternberg 读者知识缺口三态分布（suspense 未来未披露/"
+                 "curiosity 过去未解/surprise 未预期揭示·三态混合=张力工具·只软提示不替 writer 选）。"),
         "gate_level": "advisory",
         "current_cluster_id": current_cluster_id,
         "open_count": len(open_qs),
         "open_questions": top,
+        "gap_type_distribution": gap_type_distribution,
         "directive": (
             f"当前悬而未决的核心问题（读者想知道答案）：{primary}。"
             f"本 cluster 可推进 / 部分揭示这些问题（哪怕给一点新线索），维持追读拉力；"
-            f"也可适度收束 1 个旧问题再开新坑（避免只开不闭的 Zeigarnik 反面）。"
+            f"也可适度收束 1 个旧问题再开新坑（避免只开不闭的 Zeigarnik 反面）。{gap_note}"
             f"慢热/严肃文学可少钩·作者档第一权威·这是软提示非硬约束。"),
     }
 
