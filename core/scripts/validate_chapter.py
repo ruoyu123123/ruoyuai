@@ -566,7 +566,11 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
             known_names.add(alias)
 
     cn_name_pattern = re.compile(r'["“「]([^"”」]+)["”」]\s*[一-鿿]{2,4}(?:说|道|问|答|笑|叹|喊|骂|嘀咕)')  # 2026-05-30 补弯引号
-    speaker_pattern = re.compile(r'([一-鿿]{2,4})(?:说道?|道|问道?|答道?|笑道?|骂道?|喊道?|嘀咕|开口)')
+    # 🔴 2026-06-28：要求说话动词后跟对话标点（：""「『，。！？）。说话归属总是「X道：」「X道，"…"」，
+    # 而复合词里的「道」（下水道/知道/味道/街道/一道）后跟其他汉字 → 不匹配，根治 NER 把句中碎片当人名的误报。
+    speaker_pattern = re.compile(
+        r'([一-鿿]{2,4})(?:说道?|道|问道?|答道?|笑道?|骂道?|喊道?|嘀咕|开口)'
+        r'(?=[：:，,。．！？!?、""""「」『』])')
 
     # v27 NER 收敛（feedback: UNKNOWN_CHARACTER 每 cluster 几十误报·fp 已积 250+）
     # 扩首字黑名单：代词 / 否定词 / 时态副词 / 程度副词 / 量词起首（不可能是中文人名首字）
@@ -574,7 +578,9 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
                           "不没否非无别莫勿"
                           "上下里外前后旁中"
                           "才刚很太极颇较挺真"
-                          "有要会能可应该需想")
+                          "有要会能可应该需想"
+                          # 🔴 2026-06-28：连词/助词/介词起首（钟楼弃儿 cluster_001 NER 误报根因·真名绝不这样起首）
+                          "但及并而却则即既故若虽因由从向往朝己新各另随当")
     # 整词黑名单（NER 误识别的常见动词短语 / 副词搭配 · 通用 · 非项目级 false_positives）
     VERB_PHRASE_BLACKLIST = {
         # X+知 / X+到 / X+见 类（误把动词宾语当人名）
@@ -601,8 +607,12 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
             continue
         if name in VERB_PHRASE_BLACKLIST:
             continue
-        # 含「不/没/又/也/已/再/还/才/刚」第二字时疑似动词短语
-        if len(name) >= 2 and name[1] in "不没又也已再还才刚":
+        # 含「不/没/又/也/已/再/还/才/刚/都」第二字时疑似动词短语（2026-06-28 补 都）
+        if len(name) >= 2 and name[1] in "不没又也已再还才刚都":
+            continue
+        # 🔴 2026-06-28：捕获含功能词/语气副词子串 → 必是句中碎片非人名（似乎/仿佛/已经…绝不入名）
+        if any(fw in name for fw in ("似乎", "仿佛", "好像", "已经", "正在", "忽然",
+                                      "突然", "这时", "此时", "竟然", "居然", "渐渐")):
             continue
         found_speakers.add(name)
 
