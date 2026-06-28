@@ -40,7 +40,7 @@ def _mk_project(characters=None, tolerance=None):
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     if characters is not None:
         (proj / "_数据库" / "角色池.json").write_text(
-            json.dumps({"emerged_characters":
+            json.dumps({"emerged":
                         [{"name": n} for n in characters]},
                        ensure_ascii=False), encoding="utf-8")
     if tolerance is not None:
@@ -171,7 +171,7 @@ def test_load_characters_aliases():
     proj = Path(tempfile.mkdtemp())
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     (proj / "_数据库" / "角色池.json").write_text(
-        json.dumps({"emerged_characters":
+        json.dumps({"emerged":
                     [{"name": "阿正", "aliases": ["小正", "正哥"]}]},
                    ensure_ascii=False), encoding="utf-8")
     names = mod._load_characters(proj)

@@ -59,7 +59,7 @@ def _cjk_count(text: str) -> int:
 
 
 def _load_characters(project_root):
-    """从 _数据库/角色池.json 读 emerged/main names + aliases。返回 set。"""
+    """从 _数据库/角色池.json 读 core/emerged 角色名 + aliases。返回 set。"""
     names = set()
     if not project_root:
         return names
@@ -70,14 +70,12 @@ def _load_characters(project_root):
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return names
-    # 兼容多种结构：emerged/main/characters
+    # 🔴 2026-06-28 角色池schema统一canonical：只读 core/emerged（不兼容·删多 key 兜底）
     sources = []
-    for k in ("emerged_characters", "main_characters", "characters", "emerged"):
+    for k in ("core", "emerged"):
         v = data.get(k)
         if isinstance(v, list):
             sources.extend(v)
-        elif isinstance(v, dict):
-            sources.extend(v.values())
     for entry in sources:
         if isinstance(entry, dict):
             for fk in ("name", "姓名", "id"):

@@ -111,7 +111,7 @@ def inject_orchestrator_prompt(manifest, cluster_brief, characters):
 
     manifest: dict (build_manifest 输出)
     cluster_brief: dict (含 scene_storyboard[{scene_type, characters}, ...])
-    characters: set (角色池.json emerged_characters)
+    characters: set (角色池.json core+emerged 角色名 · 🔴 2026-06-28 canonical)
     返回修改后的 manifest(原地 + 返回)。
     """
     if _mode() == "off":

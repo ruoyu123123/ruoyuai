@@ -41,7 +41,7 @@ def _mk_project(characters=None, baseline=None):
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     if characters:
         (proj / "_数据库" / "角色池.json").write_text(
-            json.dumps({"emerged_characters": [{"name": n} for n in characters]},
+            json.dumps({"emerged": [{"name": n} for n in characters]},
                        ensure_ascii=False), encoding="utf-8")
     if baseline is not None:
         (proj / "_数据库" / "作者风格.json").write_text(

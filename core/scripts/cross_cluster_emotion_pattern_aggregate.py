@@ -135,8 +135,9 @@ def main():
             if pool_path.exists():
                 try:
                     pool = json.loads(pool_path.read_text(encoding="utf-8"))
-                    chars = [c.get("id") for c in (pool.get("core_characters") or []) if c.get("id")]
-                    chars += [c.get("id") for c in (pool.get("emerged_characters") or []) if c.get("id")]
+                    # 🔴 2026-06-28 角色池schema统一canonical：core/emerged（不兼容）
+                    chars = [c.get("id") for c in (pool.get("core") or []) if isinstance(c, dict) and c.get("id")]
+                    chars += [c.get("id") for c in (pool.get("emerged") or []) if isinstance(c, dict) and c.get("id")]
                 except Exception:
                     chars = []
             else:

@@ -34,7 +34,7 @@ def _mk_project(characters=None, factions=None, with_event_cluster=True):
     db.mkdir(parents=True, exist_ok=True)
     if characters:
         (db / "角色池.json").write_text(
-            json.dumps({"emerged_characters": [{"name": n} for n in characters]},
+            json.dumps({"emerged": [{"name": n} for n in characters]},
                        ensure_ascii=False), encoding="utf-8")
     if factions:
         (db / "世界状态.json").write_text(

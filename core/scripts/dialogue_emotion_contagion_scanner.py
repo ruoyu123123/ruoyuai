@@ -260,8 +260,9 @@ def _load_characters(project_root):
         return set()
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
-        emerged = d.get("emerged_characters") or []
-        return {e.get("name") for e in emerged if isinstance(e, dict) and e.get("name")}
+        # 🔴 2026-06-28 角色池schema统一canonical：core/emerged（不兼容）
+        chars = (d.get("core") or []) + (d.get("emerged") or [])
+        return {e.get("name") for e in chars if isinstance(e, dict) and e.get("name")}
     except (OSError, json.JSONDecodeError):
         return set()
 

@@ -13,7 +13,7 @@ B. GOLDEN_THREE_TREND
    - GOLDEN_FLAT：≥ 5 章三项几乎一致 = 缺乏起伏
 
 C. LAZY_SPAWN_PROMOTION
-   读 _数据库/角色池.json + 历史 emerged_characters
+   读 _数据库/角色池.json + 历史 emerged（canonical）
    - SPAWN_NEVER_PROMOTED：spawn_at_ch 后 ≥ 10 章 promoted_to_emerged_at_ch=null
    - PROPOSED_EMERGED_REJECTED_TOO_MANY：writer 提议 _propose_emerged 但被驳回率过高
 
@@ -291,8 +291,9 @@ def scan_lazy_spawn(project_root: Path, chapters: list[int]) -> list[dict]:
     pool = load_json(pool_path, {})
     findings = []
     max_ch = max(chapters) if chapters else 0
-    for c in pool.get("emerged_characters", []) or []:
-        # 2026-05-29 复审修复 [L17]：emerged_characters 可能混入字符串项（如仅角色名），
+    # 🔴 2026-06-28 角色池schema统一canonical：读 emerged（不兼容）
+    for c in pool.get("emerged", []) or []:
+        # 2026-05-29 复审修复 [L17]：emerged 可能混入字符串项（如仅角色名），
         # 直接 c.get() 会 AttributeError 崩溃 → 加 isinstance 守卫跳过非 dict 项。
         if not isinstance(c, dict):
             continue

@@ -98,7 +98,7 @@ def _mk_pool(tmp: pathlib.Path, emerged):
     db = tmp / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
     (db / "角色池.json").write_text(
-        json.dumps({"emerged_characters": emerged}, ensure_ascii=False),
+        json.dumps({"emerged": emerged}, ensure_ascii=False),
         encoding="utf-8")
     return tmp
 
@@ -141,7 +141,7 @@ def test_lazy_spawn_promoted_not_flagged():
 
 
 def test_lazy_spawn_string_item_guard():
-    """emerged_characters 混入字符串项（L17 修复）→ isinstance 守卫跳过不崩。"""
+    """emerged 混入字符串项（L17 修复）→ isinstance 守卫跳过不崩。"""
     with tempfile.TemporaryDirectory() as d:
         proj = _mk_pool(pathlib.Path(d), [
             "仅角色名字符串",  # 非 dict，必须被跳过
