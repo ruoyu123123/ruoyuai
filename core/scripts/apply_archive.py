@@ -373,6 +373,80 @@ def apply_belief_updates(db: Path, cid: str, archive: dict, summary: dict, dry: 
         save_json(p, ledger)
 
 
+# ──── 🔴 2026-06-29 反派轮替ledger接通producer → 反派轮替.json ────
+def apply_antagonist_rotation(db: Path, cid: str, archive: dict, summary: dict, dry: bool):
+    """🔴 2026-06-29 反派轮替ledger接通producer（确定性·幂等·零模型）。
+
+    archivist 读整 cluster 正文 + 人物卡，判定本块**实际出场的反派**的轮替条目，产
+    archive.antagonist_rotation=[{cluster_id, antagonist_id, tier, faction, motive_type,
+    power_system_tag, defeat_cluster}]。本步把它确定性写进 反派轮替.json append-only ledger
+    （schema/consumer/scanner 全就绪·此前**零 producer**→scanner 永远 `note:无...跳过` 死码）。
+
+    antagonist_rotation_scanner.py L52 读 `_数据库/反派轮替.json` 的 entries，四 advisory
+    检测(defeated 后>3 cluster 空窗 / 新反派 tier 不升 / motive 同类 / power 同类)。本 producer
+    落地后 scanner 才第一次有真数据可跑（shadow 观察·绝不 hard_gate·守 19 码三方一致）。
+
+    幂等·去重：按 (cluster_id, antagonist_id) 去重 —— 同键已存在则就地更新可变字段
+    (tier/faction/motive_type/power_system_tag/defeat_cluster)·不重复 append；新键 append。
+    defeat 处理：archivist 击败既有反派时复用其引入 cluster_id（对齐既有引入条目键）→ 此处
+    就地补 defeat_cluster·不另起重复条目。
+
+    C03 fluid：反派是涌现产物·**非每 cluster 必有反派** —— archive 无 antagonist_rotation
+    (多数 cluster 无反派轮替) → no-op 不报错、不建 ledger 文件（同 apply_belief_updates 向后兼容）。"""
+    rotations = archive.get("antagonist_rotation") if isinstance(archive, dict) else None
+    if not isinstance(rotations, list) or not rotations:
+        summary["antagonist_rotation"] = {"appended": 0, "updated": 0}
+        return
+
+    p = db / "反派轮替.json"
+    ledger = load_json(p, {"schema_version": 1, "entries": []})
+    if not isinstance(ledger, dict):
+        ledger = {"schema_version": 1, "entries": []}
+    ledger.setdefault("schema_version", 1)
+    entries = ledger.setdefault("entries", [])
+    if not isinstance(entries, list):
+        entries = ledger["entries"] = []
+
+    # (cluster_id, antagonist_id) → entry（幂等去重键）
+    index = {}
+    for e in entries:
+        if isinstance(e, dict) and e.get("antagonist_id"):
+            index[(e.get("cluster_id"), e.get("antagonist_id"))] = e
+
+    _FIELDS = ("tier", "faction", "motive_type", "power_system_tag", "defeat_cluster")
+    appended = updated = 0
+    for r in rotations:
+        if not isinstance(r, dict):
+            continue
+        aid = r.get("antagonist_id")
+        if not aid:
+            continue
+        ecid = r.get("cluster_id") or cid  # archivist 缺 cluster_id 时默认当前块
+        key = (ecid, aid)
+        existing = index.get(key)
+        if existing is None:
+            entry = {"cluster_id": ecid, "antagonist_id": aid}
+            for f in _FIELDS:
+                if r.get(f) is not None:
+                    entry[f] = r.get(f)
+            entries.append(entry)
+            index[key] = entry
+            appended += 1
+        else:
+            changed = False
+            for f in _FIELDS:
+                v = r.get(f)
+                if v is not None and existing.get(f) != v:
+                    existing[f] = v
+                    changed = True
+            if changed:
+                updated += 1
+
+    summary["antagonist_rotation"] = {"appended": appended, "updated": updated}
+    if not dry and (appended or updated):
+        save_json(p, ledger)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -415,6 +489,8 @@ def main(argv=None):
         apply_throughline(db, cid, archive.get("throughline_progress", {}), summary, args.dry_run)
         # 🔴 2026-06-29 角色信息差(per-character belief)·witness 回库（确定性·幂等·向后兼容）
         apply_belief_updates(db, cid, archive, summary, args.dry_run)
+        # 🔴 2026-06-29 反派轮替ledger接通producer（确定性·幂等·C03 fluid 无反派合法跳过）
+        apply_antagonist_rotation(db, cid, archive, summary, args.dry_run)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[apply_archive] FATAL: {type(e).__name__}: {e}\n")
         sys.stderr.flush()
@@ -429,7 +505,9 @@ def main(argv=None):
           f"叙事线{'已记' if summary.get('throughline',{}).get('written') else '无'} · "
           f"信念+{summary.get('belief',{}).get('known_facts_added',0)}知"
           f"/{summary.get('belief',{}).get('unaware_marked',0)}不知"
-          f"/fact{summary.get('belief',{}).get('facts_registered',0)}")
+          f"/fact{summary.get('belief',{}).get('facts_registered',0)} · "
+          f"反派轮替+{summary.get('antagonist_rotation',{}).get('appended',0)}"
+          f"/{summary.get('antagonist_rotation',{}).get('updated',0)}更")
     return 0
 
 

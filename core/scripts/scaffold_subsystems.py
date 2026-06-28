@@ -53,6 +53,10 @@ KNOWN_EXTRAS = {
     # 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)：辅助态文件·非 34 核心·像 character_belief_ledger.json·
     # 由 world_seed_init 播空骨架 + cluster-save-state foreshadower 登记步维护·不进 canonical 循环。
     "戏剧问题账本.json",
+    # 🔴 2026-06-29 反派轮替ledger接通producer：append-only ledger·非 34 核心·像 locked_fact.json·
+    # 由 apply_archive.apply_antagonist_rotation 在首个反派出场时惰性创建 + cluster-save-state
+    # archivist 步维护·antagonist_rotation_scanner 消费·不进 canonical 循环（C03 fluid·无反派合法缺失）。
+    "反派轮替.json",
 }
 
 # 🔴 2026-06-27 C03/C17：载荷非空标记 key（skeleton 内·单一真理源）。
