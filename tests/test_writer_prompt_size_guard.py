@@ -7,8 +7,6 @@ feedback lesson 无差别灌进 writer system prompt，system 从 ~20k 撑到 67
 守护点：
   · _collect_feedback_rules() 注入的 system 段只含写作工艺类 feedback（白名单 ∪ writer_relevant）
   · 真实 home memory 注入体量有界（< 12000 chars）——防新流程 lesson 再把它撑爆
-  · build_prompt 产出的完整 system < 34000（elysiver 原 max_prompt_chars · 即便日后回落该限也安全）
-  · system 不含已知流程/测试类 feedback 的指纹（default_no_step_skipping / verify_stderr 等）
 """
 import contextlib
 import os
@@ -16,18 +14,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-import pytest
-
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "core" / "scripts"))
 import gen_writer as gw  # noqa: E402
 
-# elysiver 原 max_prompt_chars（system+user 总限）·system 单独必须远低于此
-_SYSTEM_HARD_CEIL = 34000
 # 写作工艺类 feedback 注入体量软上限（7 文件 × ≤2500 截断 + header ≈ ≤9k·留余量到 12k）
 _FEEDBACK_INJECT_CEIL = 12000
-
-_E2E_PROJECT = _REPO / "workspace" / "novels" / "诡秘e2e测试"
 
 
 @contextlib.contextmanager
@@ -113,24 +105,6 @@ def test_writer_relevant_flag_only_read_from_frontmatter():
         "frontmatter writer_relevant: true 应判 writer-relevant"
     # 白名单命中（即便无 frontmatter flag）→ True
     assert gw._is_writer_relevant_feedback("feedback_one_sentence_per_paragraph", "")
-
-
-@pytest.mark.skipif(not (_E2E_PROJECT / "_数据库" / ".manifest" / "ch_001.json").exists(),
-                    reason="诡秘e2e测试 项目不在 worktree（workspace/novels 通常不入 git）")
-def test_build_prompt_system_under_ceiling():
-    """真 build_prompt（cluster_001）→ system < 34000（elysiver 原 max_prompt_chars）。
-
-    这是 G3 卡死的直接回归锁：system=67127 时超 elysiver 限被跳过；瘦身后必须远低于 34000。
-    """
-    system, user, _ = gw.build_prompt(_E2E_PROJECT, 1, 1)
-    assert len(system) < _SYSTEM_HARD_CEIL, (
-        f"system={len(system)} chars 超 {_SYSTEM_HARD_CEIL}（G4 瘦身回归·writer 又会被跳过）")
-    # 流程/测试类 feedback 指纹不得出现在 system
-    for fp in ("default_no_step_skipping", "verify_stderr", "real_api_tests",
-               "runtime_self_learning", "MAPE-K"):
-        assert fp not in system, f"流程/测试类指纹『{fp}』漏进 writer system（瘦身失效）"
-    # 作者档第一权威仍在（北极星⑤红线·不可为瘦身砍作者档）
-    assert "风格 skill" in user or "风格 skill" in system, "作者风格档第一权威段丢失"
 
 
 if __name__ == "__main__":

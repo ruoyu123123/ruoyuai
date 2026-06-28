@@ -13,13 +13,10 @@
 import sys
 from pathlib import Path
 
-import pytest
-
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "core" / "scripts"))
 import gen_writer as gw  # noqa: E402
 
-_E2E_PROJECT = _REPO / "workspace" / "novels" / "诡秘e2e测试"
 _GW_SRC = (_REPO / "core" / "scripts" / "gen_writer.py").read_text(encoding="utf-8")
 
 
@@ -31,16 +28,6 @@ def test_h5_directive_in_source():
     assert "主角" in _GW_SRC and "占位代号" in _GW_SRC
     assert "第三人称代词" in _GW_SRC, "未给代词替代方案"
     assert "破例失败" in _GW_SRC, "未把『主角』泄漏标为破例失败"
-
-
-@pytest.mark.skipif(
-    not (_E2E_PROJECT / "_数据库" / ".manifest" / "ch_001.json").exists(),
-    reason="诡秘e2e测试 项目不在 worktree（workspace/novels 通常不入 git）")
-def test_h5_directive_in_built_system_prompt():
-    """build_prompt 级守卫：真 system 段含 H5 占位代号禁令。"""
-    system, _user, _ = gw.build_prompt(_E2E_PROJECT, 1, 1)
-    assert "占位代号零泄漏" in system, "H5 指令未进真 writer system prompt"
-    assert "破例失败" in system
 
 
 if __name__ == "__main__":

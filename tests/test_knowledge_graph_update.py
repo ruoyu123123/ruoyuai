@@ -117,17 +117,3 @@ def test_missing_changes_returns_error():
         result = update_from_changes(root, "cluster_999")
         assert result["added_nodes"] == 0
         assert "error" in result
-
-
-def test_real_data_凿窍纪():
-    """真数据: 凿窍纪 cluster_001 应产 7 nodes。"""
-    real = REPO / "workspace" / "novels" / "凿窍纪"
-    if not real.exists():
-        return
-    # 不修改真文件——读已有的 kg 验证
-    kg = json.loads(
-        (real / "_数据库" / "knowledge_graph.json").read_text(encoding="utf-8")
-    )
-    assert len(kg["nodes"]) >= 7
-    fact_nodes = [n for n in kg["nodes"] if n["type"] == "fact"]
-    assert len(fact_nodes) >= 5

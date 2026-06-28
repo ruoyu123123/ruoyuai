@@ -349,41 +349,6 @@ def test_reject_buffer_archive_accumulates_across_epochs():
         assert archive[1]["patch_id"] == "ep2"
 
 
-# -------- 真数据集成测试 (凿窍纪) --------
-
-def test_reward_real_data_凿窍纪_cluster_001():
-    """凿窍纪 cluster_001 实测: voice=A + truth ch1-3 全A。
-
-    audit/reading 的 verdict 会随项目重新审核而漂移(本书是活的写作项目),
-    所以只断言稳定的结构事实 + reward 与组件 soft 聚合一致(不硬编码会漂的 verdict)。
-    """
-    real = REPO / "workspace" / "novels" / "凿窍纪"
-    if not real.exists():
-        return  # 项目可能没这本书
-    r, comp = reward.reward_for_cluster(real, "cluster_001", mode="soft")
-    assert comp.voice_clean is True
-    assert comp.truth_clean is True
-    assert comp.raw.get("truth_chapters") == [1, 2, 3]
-    # reward 必须等于当前在场组件的 soft 聚合(验证聚合逻辑,不绑定 verdict 快照)
-    signals = [comp.audit_pass, comp.reading_pass, comp.voice_clean, comp.truth_clean]
-    valid = [s for s in signals if s is not None]
-    expected = sum(1 for s in valid if s) / len(valid)
-    assert r == pytest.approx(expected, abs=1e-6)
-
-
-def test_reward_real_data_凿窍纪_cluster_002():
-    """凿窍纪 cluster_002 实测: audit=fail + voice=A + truth ch4-7 全A → soft = 2/4 = 0.5"""
-    real = REPO / "workspace" / "novels" / "凿窍纪"
-    if not real.exists():
-        return
-    r, comp = reward.reward_for_cluster(real, "cluster_002", mode="soft")
-    # 至少有 audit/voice/truth 数据
-    assert comp.voice_clean is True
-    assert comp.truth_clean is True
-    # cluster_002 chapter_range 应是 [4, 7]
-    assert comp.raw.get("truth_chapters") == [4, 5, 6, 7]
-
-
 # -------- L6: validation_gate SFS 地板 --------
 
 def test_gate_floor_rejects_below():

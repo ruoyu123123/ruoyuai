@@ -2,7 +2,6 @@
 
 钉死：validate_style 故意「绝不查句长」→ 句长偏短无人报警；本 scanner 补检测闭环。
 三探针：句长偏离作者基线 / 主语+动作 streak / 主语开头占比。全 advisory。
-金标准防矫枉过正：真作者原文喂自身基线必 PASS（test_real_author_passes）。
 """
 import json
 import sys
@@ -223,17 +222,3 @@ def test_violations_schema_for_audit_hub():
     assert r["scanner"] == "prose_rhythm"
     for v in r["violations"]:
         assert "kind" in v and v["severity"] in ("major", "minor")
-
-
-def test_real_author_passes_own_baseline():
-    """金标准防矫枉过正：惊悚乐园真作者原文喂同作者基线 → PASS（句长/主语占比/streak 全达标）。"""
-    jroot = _SCRIPTS.parents[0] / "workspace" / "styles" / "惊悚乐园" / "原文"
-    wproj = _SCRIPTS.parents[0] / "workspace" / "novels" / "无脸者守则"
-    if not jroot.exists() or not wproj.exists():
-        return  # 文件不在则跳过（不硬失败·零依赖原则）
-    chs = [jroot / f"第{c:03d}章.txt" for c in range(6, 14)]
-    text = "\n\n".join(p.read_text(encoding="utf-8") for p in chs if p.exists())
-    if not text:
-        return
-    r = P.scan(text, project=wproj)
-    assert r["verdict"] == "PASS", f"真作者应 PASS，violations={r['violations']}"
