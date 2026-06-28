@@ -1106,6 +1106,58 @@ def _mark_cluster_me_completed(root, cluster_key):
         logger.info(f"[ME完成] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
 
 
+def _persist_cluster_locked_facts(root, cluster_key):
+    """🔴 2026-06-28：把 writer changes.factual.facts_locked/locked_facts 写进 事件簇.clusters[].locked_facts。
+
+    根因：save_state apply 原**完全不处理 locked_facts**（grep 零命中）→ writer 报的硬事实（cluster_002
+    实测 4 条：霍华德左手/孩童骨头/瘸腿男孩失踪/遗嘱墨迹变淡）从不落地 → 后续 cluster 无从查矛盾、
+    LOCKED_FACT_CROSS_SCENE 形同虚设。事件簇.clusters[].locked_facts 是 locked_fact_cross_scene_scanner
+    + build_manifest 读取的权威源。兼容模型实用字段名 facts_locked（自查项名）与 locked_facts。dedup by fact。
+    """
+    try:
+        db = root / "_数据库"
+        ec_path = db / "事件簇.json"
+        if not ec_path.exists():
+            return
+        import cluster_lookup as _cl
+        cid = _cl.normalize_cluster_id(cluster_key) or str(cluster_key)
+        key3 = str(cluster_key).replace("cluster_", "")
+        chg_path = root / "章节" / f"cluster_{key3}_draft" / f"cluster_{key3}_changes.json"
+        if not chg_path.exists():
+            return
+        chg = load_json(chg_path, {})
+        fac = chg.get("factual", chg) if isinstance(chg, dict) else {}
+        raw = fac.get("locked_facts") or fac.get("facts_locked") or []
+        norm = []
+        for lf in raw:
+            if isinstance(lf, dict) and (lf.get("fact") or lf.get("description")):
+                norm.append({"fact": lf.get("fact") or lf.get("description"),
+                             "subject": lf.get("subject", ""), "_cluster": cid})
+            elif isinstance(lf, str) and lf.strip():
+                norm.append({"fact": lf.strip(), "subject": "", "_cluster": cid})
+        if not norm:
+            return
+        ec = load_json(ec_path, {})
+        cluster = next((c for c in ec.get("clusters", [])
+                        if _cl.normalize_cluster_id(c.get("cluster_id")) == cid
+                        or str(c.get("cluster_id")) == cid), None)
+        if cluster is None:
+            return
+        existing = cluster.setdefault("locked_facts", [])
+        seen = {(e.get("fact") if isinstance(e, dict) else e) for e in existing}
+        added = 0
+        for lf in norm:
+            if lf["fact"] not in seen:
+                existing.append(lf)
+                seen.add(lf["fact"])
+                added += 1
+        if added:
+            save_json(ec_path, ec)
+            logger.info(f"[locked_facts] {cid} 落地 {added} 条硬事实 → 事件簇.clusters[].locked_facts")
+    except Exception as e:
+        logger.info(f"[locked_facts] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+
+
 def cmd_apply_cluster_changes(root, cluster_key):
     """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes。
 
@@ -1147,6 +1199,8 @@ def cmd_apply_cluster_changes(root, cluster_key):
         _writeback_cluster_progress(root, cluster_key, chapters)
         # 🔴 2026-06-28：标记 parent_me status=completed + 补 ME_to_advance（内容状态一致性）
         _mark_cluster_me_completed(root, cluster_key)
+        # 🔴 2026-06-28：locked_facts 落地 事件簇.clusters[]（后续 cluster 查矛盾的权威源）
+        _persist_cluster_locked_facts(root, cluster_key)
 
         # writer 撒谎检测（apply 落地后跑 · 失败不中断 · 结果并入 summary 写盘）
         # 🔴 2026-06-27 C11：cluster 级一次检测（opening 验首章 / ending 验末章 / anchors 验全拼接）
