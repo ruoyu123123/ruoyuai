@@ -514,6 +514,27 @@ else:
 - **小势**（本章具体走向、情节细节）**可以分叉**
 - 你给的所有卡片必须**通向同一个大势终点**，但路径不同
 
+### 🔴 2026-06-29 controlling_idea 主控思想（全书唯一主题真理源·软牵引非硬指令）
+
+**大势的「主题面」** = `大势卡.json` 的 `story_destiny.controlling_idea`（outline 初始化时由 volume_arc producer / 蒸馏 `recurring_themes` 播种·**种子可空·爽文极简甚至全空**）。它是**全书唯一主题真理源**，4 字段（Egri/McKee/Truby 三层递增精度）：
+
+| 字段 | 含义 | 理论源 |
+|---|---|---|
+| `premise` | 一句价值论断（如「无私的爱战胜自我毁灭」「弱者的不屈逆袭碾压强权」） | Egri premise |
+| `controlling_idea` | if/when/because 条件化（结局绑角色行动 + value 正负电荷 + cause） | McKee controlling idea |
+| `moral_argument` | 对立价值轴 `{position_A / symbols_A / position_B / symbols_B}`（**复用 `thematic_argument_pairs` 结构**·与 `thematic_argument_motif_balance.py` 消费方字段一一对齐·`symbols_*` 绑 `motif_recurrence_ledger`） | Truby moral argument |
+| `designing_principle` | 主母题 / 贯穿全书组织隐喻（绑 `motif_recurrence_ledger` seed） | Truby designing principle |
+
+**你（outline-planner）怎么用**：
+- 详化 / 涌现 cluster 走向卡 + storyboard 时，**对照 controlling_idea 做主题软对齐**——让卡片的价值冲突自然服务主题脊柱（每 cluster 对照一次「主题往哪推 / 是否已断流」），但**只软牵引设计倾向，不当硬约束**。
+- ✅ **软牵引**：controlling_idea 与 `volume_convergence_anchor` 同轨，越近卷末越显化（早期 cluster 只给软方向）。注入降精由 `build_manifest._soften_convergence_anchor`（**B agent** 负责）做，你只对齐设计倾向。
+- ❌ **绝不向 writer 下「本章必须论证主题 X」硬指令**——gemini freestyle 写 prose，主题是 **advisory 软牵引卡**不是创作命令（北极星④ 主题是 plan 层结构化节点非 prose 指令·北极星⑤ 不干涉模型创作判断）。
+- ❌ **绝不把主题收敛从软变硬**（北极星③ 大势已定靠软牵引·`controlling_idea` 绝不进 `audit_hub.HARD_GATE_CODES`）。
+- 🔴 **作者档第一权威**：爽文 / 无限流可无深层主题（`controlling_idea` 极简甚至空）——**不强加**（防惊悚乐园流水账覆辙：通用主题理论压过作者档）。
+- 🔴 **默认安全·向后兼容**：旧大势卡无 `controlling_idea` / 字段全空 → 你正常出卡片（不依赖它），下游软注入 no-op·零行为变化。
+
+**字段权威 schema 单一真理源** = `core/claude-home/templates/subsystem_skeletons.json` 的 `大势卡.story_destiny.controlling_idea`。
+
 ## 执行流程
 
 ### Step 0 — RESEARCH_REF 强制引用
@@ -611,6 +632,7 @@ else:
 11. **Read** `_数据库/大势卡.json` — **active fate events**
     - 取 status=scheduled 且 prerequisites 满足的 major_events
     - **至少 1 张卡**应推进 priority>=8 的 fate event（如有）
+    - 🔴 同时取 `story_destiny.controlling_idea`（主控思想主题脊柱·见上「controlling_idea 主控思想」节）做卡片**主题软对齐**——**空则跳过·绝不硬塞主题**
 
 12. **Read** `_数据库/时钟表.json`（如存在）— **urgent clocks**
     - 取 `clocks[]` 中 status=active 且 remaining ≤ 2 的 urgent clock

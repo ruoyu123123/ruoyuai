@@ -1896,6 +1896,86 @@ def _soften_convergence_anchor(anchor, current_cluster_id, total):
     return out
 
 
+# 🔴 2026-06-29 controlling_idea主控思想软注入（主题脊柱 P0·北极星③软牵引·骑 _soften_convergence_anchor 同轨降精）
+def _build_controlling_idea_anchor(scanner, current_cluster_id, total):
+    """从 大势卡.story_destiny.controlling_idea 读全书主控思想（主题价值命题）软注入 writer brief。
+
+    schema（A agent 产·照此读·设计见 角色建模升级/主题_提案.json designs[0]）：
+      大势卡.story_destiny.controlling_idea = {
+        premise             一句价值论断（Egri premise·价值→冲突→结局因果）,
+        controlling_idea    if/when/because 条件化版（McKee·把结局绑到角色行动）,
+        moral_argument      对立价值轴（Truby·复用 thematic_argument_pairs）,
+        designing_principle  主母题（绑 motif_recurrence_ledger seed）}
+
+    降精逻辑（骑 _soften_convergence_anchor L1875 同轨·同款 idx/total>=0.5 阈值判定）：
+      · 早期 cluster（idx/total < 0.5）：只给软主题方向（premise + 主母题）·
+        留条件化论断/对立价值轴待近卷末显化（北极星③·绝不把大势收敛从软变硬）。
+      · 后半程（idx/total >= 0.5）：显化全字段（补 controlling_idea + moral_argument·越近卷末越显化）。
+      · 无法判定位置（cluster_num None / total<=1）：默认给软方向（安全闸·不超额泄露终局价值落点）。
+
+    北极星⑤全 advisory：绝不向 writer 下『本章必须论证主题 X』硬指令·gemini 仍 freestyle·
+      主题是软牵引卡·有具体到本块的理由可偏离（<300 字）。
+    默认安全闸：无 story_destiny.controlling_idea（旧大势卡/旧书）→ 返回 None（不注入·零行为变化）。
+    """
+    ds = scanner.load("大势卡", {}) or {}
+    sd = ds.get("story_destiny")
+    if not isinstance(sd, dict):
+        return None
+    ci = sd.get("controlling_idea")
+    if not isinstance(ci, dict):
+        return None
+
+    def _s(key):
+        v = ci.get(key)
+        return v.strip() if isinstance(v, str) and v.strip() else None
+
+    premise = _s("premise")
+    controlling = _s("controlling_idea")
+    principle = _s("designing_principle")
+    moral = ci.get("moral_argument") or None  # 对立价值轴·可为 list/dict/str·原样透传
+    if not (premise or controlling or principle or moral):
+        return None  # 四层全空 → 不注入（默认安全·爽文可极简但全空视为未填）
+
+    # 骑 _soften_convergence_anchor 同轨判定位置（同款 idx/total>=0.5 阈值·北极星③软牵引降精）
+    idx = cluster_lookup.cluster_num(current_cluster_id)
+    late = (idx is not None and isinstance(total, int) and total > 1 and (idx / total) >= 0.5)
+
+    card = {"gate_level": "advisory"}
+    if premise:
+        card["premise"] = premise
+    if principle:
+        card["designing_principle"] = principle  # 主母题·全程给（软方向锚）
+    if late:
+        # 后半程显化：补条件化论断 + 对立价值轴（越近卷末越显化）
+        card["_phase"] = "explicit_late"
+        if controlling:
+            card["controlling_idea"] = controlling
+        if moral:
+            card["moral_argument"] = moral
+        card["directive"] = (
+            "🟢 本书主控思想(主题脊柱·advisory·北极星③软牵引·后半程显化)：\n"
+            f"  · 价值命题：{premise or controlling or '（见 designing_principle）'}\n"
+            "  · 已近卷末/全书后半程 → 本块角色关键选择可正面呼应或反讽性复杂化此命题\n"
+            "    (McKee idea vs counter-idea 摆荡皆健康)·用行动论证非台词说教(Truby)。\n"
+            "  · 软牵引主题卡非硬指令·绝不为论主题生硬插入·有具体到本块的理由可偏离(<300 字·北极星⑤)。"
+        )
+    else:
+        # 早期降精：只给软方向（premise + 主母题）·条件化论断/对立价值轴待近卷末显化
+        card["_phase"] = "soft_early"
+        card["_softened_for_early_cluster"] = (
+            "（早期 cluster 降精·北极星③软牵引：全书主题落点随涟漪涌现·暂只给软方向 premise + 主母题·"
+            "条件化论断/对立价值轴近卷末再显化·绝不把大势收敛从软变硬）")
+        card["directive"] = (
+            "🟢 本书主控思想(主题脊柱·advisory·北极星③软牵引·早期软方向)：\n"
+            f"  · 软主题方向：{premise or principle or '（按 designing_principle 自由发挥）'}\n"
+            "  · 本块角色选择可自然呼应/复杂化此方向(早期埋张力即可·不必正面论证主题)。\n"
+            "  · 软牵引提示非硬指令·gemini 自由发挥·有理由可偏离(<300 字·北极星⑤)。"
+        )
+    card["_doc"] = ("🔴 2026-06-29 controlling_idea主控思想软注入·全 advisory·绝不 hard_gate·"
+                    "骑 _soften_convergence_anchor 同轨降精(早期软方向→卷末显化)")
+    return card
+
+
 # 🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架
 _SWAIN_PROACTIVE_KEYS = ("goal", "conflict", "disaster")
 _SWAIN_REACTIVE_KEYS = ("reaction", "dilemma", "decision")
@@ -2238,6 +2318,11 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         # 降精到软方向（不整删不 None·北极星③软牵引载体）·volume_arc/core_conflict/milestones 始终全给。
                         "volume_convergence_anchor": _soften_convergence_anchor(
                             _build_volume_convergence_anchor(scanner, c), cluster_id_val, len(clusters)),
+                        # 🔴 2026-06-29 controlling_idea主控思想软注入（主题脊柱 P0·北极星③软牵引·骑 _soften_convergence_anchor 同轨）：
+                        # 读 大势卡.story_destiny.controlling_idea(A agent 产)·早期 cluster 给软主题方向·越近卷末越显化(同 convergence_anchor 降精逻辑)。
+                        # 默认安全闸：无 controlling_idea(旧大势卡/旧书) → None(不注入·零行为变化)。全 advisory·绝不 hard_gate·不进 HARD_GATE_CODES。
+                        "controlling_idea_anchor": _build_controlling_idea_anchor(
+                            scanner, cluster_id_val, len(clusters)),
                         # 🆕 2026-06-03 卷=阶段触发点：透传卷级语义给 writer。
                         # is_volume_finale=True → 本 cluster 是卷末小走向 → writer 走高烈度转折(禁平稳收束)；
                         # stakes_delta 让 writer 知道相对前块的强度增量(避免同卷小走向平铺重复)。
