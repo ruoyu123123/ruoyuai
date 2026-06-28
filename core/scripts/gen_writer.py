@@ -1519,7 +1519,9 @@ cluster_brief 完整内容：
 - meta_vocab_disclaimer_count（≤ 2）
 - negation_action_count（≤ 25）
 - story_block_ch_range
-- facts_locked
+- **facts_locked（必填·内容状态一致性命脉）**：本块新确立的、后续不可推翻的硬事实，写进 factual.locked_facts=[{{"fact":一句话事实, "subject":涉及谁/什么}}]（如主角身份/能力规则/关键物件性质/世界设定）——漏报 = 后续 cluster 无从查矛盾。
+- **出场角色**：本块出场的角色名写进 factual.出场角色=[名字…]（新角色额外进 factual.new_entities=[{{"name","role"}}]）。
+- **关键道具**：本块登场的关键物件写进 factual.new_items=[{{"name":物件名, "desc":一句话}}]（如信物/凶器/线索物）。
 - foreshadowing_planted / foreshadowing_paid（**每条带 id（引用 cluster_brief.foreshadowing_to_plant 或 manifest 待回收伏笔的真实 fs_id），无对应 fs_id 的新伏笔可只给 desc。paid 每条再加 kind："terminal"（核心承诺彻底兑现 / Tier-1 finale 锚点抵达）或 "progressive"（推进/扩散/阶段性数值，伏笔仍 open）——save_state 据此判是否标 resolved**）
 - throughline_progress（**可选·遥测用**：本块推进了哪几条叙事线，填 factual.throughline_progress={{"OS":bool,"MC":bool,"IC":bool,"RS":bool}}——OS=客观主线/外部事件，MC=主角内心成长，IC=影响者/对手线，RS=核心关系演变；每块至少推 2 条）
 - self_eval.applied_style.ending_type / ending_line（**可选·衔接遥测用**：本块结尾类型（如"悬念断章/情绪收束"）+ 最后一句原文）
