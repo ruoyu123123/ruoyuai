@@ -191,8 +191,11 @@ def test_paid_progressive_keeps_open_records_progress():
 
 # ═══════════════════════ 无 id 描述串 → warning（可见非静默断裂）═══════════════════════
 
-def test_no_id_string_payloads_warn():
-    """planted/paid 全是无 id 描述串 + 无显式 actions → 记 warning（不静默吞）。"""
+def test_no_id_string_payloads_auto_assign():
+    """🔴 2026-06-28：planted 无 id 描述串 → 自动派 fs_auto_<hash> 记入伏笔表（数据不丢·治死路径）。
+
+    旧行为是 warn+丢弃（test_no_id_string_payloads_warn）→ cluster_001 实测 3 伏笔全丢、伏笔表恒空、
+    后续无从回收。改为自动派确定性 id 入 promises。paid 无 id 无对应 fs → 仍无法兑现（不凭空建）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), _empty_fs(), None)
         _write_parsed(tmp, 10, {
@@ -203,9 +206,25 @@ def test_no_id_string_payloads_warn():
         assert rc == 0
         applied = json.loads((tmp / "_数据库" / ".wal" / "第10章_applied.json")
                              .read_text(encoding="utf-8"))
-        assert any("无 id 描述串" in w for w in applied["warnings"])
-        # 无 id → 伏笔表不动
-        assert _read_fs(tmp)["promises"] == []
+        # planted 无 id → 自动派 fs_auto_ 记入伏笔表（不再静默丢）
+        promises = _read_fs(tmp)["promises"]
+        assert len(promises) == 1, f"应自动派 1 条 promise, 实际 {promises}"
+        assert promises[0]["id"].startswith("fs_auto_")
+        assert "另一条纯描述串" in promises[0]["description"]
+        assert not promises[0]["resolved"]
+        # 警告提示自动派（透明·非静默）
+        assert any("自动派" in w or "fs_auto" in w for w in applied["warnings"])
+
+
+def test_no_id_auto_assign_idempotent_on_reapply():
+    """🔴 2026-06-28：同 desc 重复 apply（split 平铺多章/re-apply）→ 确定性 fs_auto id 去重不重复建。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), _empty_fs(), None)
+        _write_parsed(tmp, 10, {"foreshadowing_planted": ["同一条无 id 伏笔描述"]})
+        ss.apply_changes(tmp, 10)
+        ss.apply_changes(tmp, 10)  # 再 apply 一次
+        promises = _read_fs(tmp)["promises"]
+        assert len(promises) == 1, f"re-apply 应幂等去重, 实际 {len(promises)}"
 
 
 def test_no_warn_when_actions_present_even_if_strings():

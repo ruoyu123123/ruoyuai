@@ -347,9 +347,37 @@ def apply_changes(root: Path, ch: int) -> int:
                 _fs_actions.append({"category": _p.get("category", "promise"), "type": "payoff",
                                     "id": _p["id"], "kind": _p.get("kind"),
                                     "description": _p.get("desc") or _p.get("description", "")})
+    # 🔴 2026-06-28：planted 缺 fs_id 自动派确定性 id 并桥接入伏笔表（治 intake 死路径·模型/brief 常
+    # 给纯 desc 无 id → 原仅 warning 丢数据 → 后续 cluster 无从回收·伏笔表恒空）。id=desc 的 sha1 前8位
+    # → re-apply / split 平铺多章重复 apply 时（category,type,id）去重 + promises id 去重双重幂等。
+    # 只对 planted(setup) 自动派——paid(payoff) 无法凭空兑现未知 fs。北极星：模型漏 id 不丢内容状态。
+    import hashlib as _hashlib
+    _auto_assigned_n = 0
+    for _p in changes.get("foreshadowing_planted", []) or []:
+        if isinstance(_p, dict):
+            _desc = (_p.get("desc") or _p.get("description") or "").strip()
+            _has_id = bool(_p.get("id"))
+            _tier = _p.get("tier", 3)
+        elif isinstance(_p, str):
+            _desc, _has_id, _tier = _p.strip(), False, 3
+        else:
+            continue
+        if _desc and not _has_id:
+            _auto_id = "fs_auto_" + _hashlib.sha1(_desc.encode("utf-8")).hexdigest()[:8]
+            _key = ("promise", "setup", _auto_id)
+            if _key not in _seen:
+                _seen.add(_key)
+                _fs_actions.append({"category": "promise", "type": "setup", "id": _auto_id,
+                                    "tier": _tier, "description": _desc, "due_by_cluster": None,
+                                    "_auto_assigned": True})
+                _auto_assigned_n += 1
     # planted/paid 全是无 id 描述串（既无显式 actions 也无可桥接 id）→ 记 warning（可见非静默断裂）
     _raw = (changes.get("foreshadowing_planted") or []) + (changes.get("foreshadowing_paid") or [])
-    if _raw and not _bridged_with_id and not changes.get("foreshadowing_actions"):
+    if _auto_assigned_n:
+        summary["warnings"].append(
+            f"foreshadowing_planted 有 {_auto_assigned_n} 条无 fs_id → 已自动派 fs_auto_<hash> 记入伏笔表"
+            "（数据不丢·后续回收时 foreshadower 按 desc 匹配或人工绑 id）")
+    if _raw and not _bridged_with_id and not changes.get("foreshadowing_actions") and not _auto_assigned_n:
         summary["warnings"].append(
             f"foreshadowing_planted/paid 共 {len(_raw)} 条为无 id 描述串 → 无法更新伏笔表 resolved/status；"
             "需 writer 报带 fs_id 的项（gen_writer prompt 已要求引用 cluster_brief fs_id）")
@@ -1034,6 +1062,50 @@ def _writeback_cluster_progress(root, cluster_key, chapters):
         logger.info(f"[进度回写] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
 
 
+def _mark_cluster_me_completed(root, cluster_key):
+    """🔴 2026-06-28：cluster 写完 → 标记其 parent_me status=completed + 补 ME_to_advance。
+
+    治内容状态一致性双 bug：① volume_arc 建的 cluster 只有 parent_me 无 ME_to_advance、choice_apply
+    建的两者都有 → 两路 ME 映射字段不一致；② 大势卡 ME.status 永不从 pending 更新 → 卷进度/完成检测
+    失真。emergence find_remaining_mes 以 ME.status=='completed' 为**权威排除信号**(line 66)，此处维护它，
+    使 ME.status 成单一真理源（不再只靠 ME_to_advance 派生的 completed_mes）。幂等：已 completed 跳过。
+    """
+    try:
+        db = root / "_数据库"
+        ec_path = db / "事件簇.json"
+        ds_path = db / "大势卡.json"
+        if not ec_path.exists() or not ds_path.exists():
+            return
+        import cluster_lookup as _cl
+        cid = _cl.normalize_cluster_id(cluster_key) or str(cluster_key)
+        ec = load_json(ec_path, {})
+        cluster = next((c for c in ec.get("clusters", [])
+                        if _cl.normalize_cluster_id(c.get("cluster_id")) == cid
+                        or str(c.get("cluster_id")) == cid), None)
+        if not cluster:
+            return
+        me_id = cluster.get("parent_me") or cluster.get("me_id")
+        if not me_id:
+            return
+        adv = list(cluster.get("ME_to_advance") or [])
+        if me_id not in adv:
+            cluster["ME_to_advance"] = adv + [me_id]
+            save_json(ec_path, ec)
+        ds = load_json(ds_path, {})
+        changed = False
+        for m in ds.get("major_events", []):
+            mid = m.get("id") or m.get("me_id")
+            if mid == me_id and m.get("status") != "completed":
+                m["status"] = "completed"
+                m["completed_by_cluster"] = cid
+                changed = True
+        if changed:
+            save_json(ds_path, ds)
+            logger.info(f"[ME完成] {me_id} status=completed (by {cid})")
+    except Exception as e:
+        logger.info(f"[ME完成] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+
+
 def cmd_apply_cluster_changes(root, cluster_key):
     """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes。
 
@@ -1073,6 +1145,8 @@ def cmd_apply_cluster_changes(root, cluster_key):
 
         # 🔴 2026-06-27 P0：cluster 级回写 进度.json 元数据（current_cluster/book_title/completed）
         _writeback_cluster_progress(root, cluster_key, chapters)
+        # 🔴 2026-06-28：标记 parent_me status=completed + 补 ME_to_advance（内容状态一致性）
+        _mark_cluster_me_completed(root, cluster_key)
 
         # writer 撒谎检测（apply 落地后跑 · 失败不中断 · 结果并入 summary 写盘）
         # 🔴 2026-06-27 C11：cluster 级一次检测（opening 验首章 / ending 验末章 / anchors 验全拼接）
