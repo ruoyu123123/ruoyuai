@@ -1775,6 +1775,198 @@ def _collect_active_character_cards(scanner, active_chars, current_cluster_id):
     return out
 
 
+# ──── 🔴 2026-06-29 actant链接通producer（Greimas 六 actant + cast 经济·manifest 注入出口·单一真理源）────
+def _build_char_id_name_map(scanner):
+    """人物卡 id→name 映射（actant/cast 命名空间归一·与 apply_archive.apply_actant_state 同源）。"""
+    id2name = {}
+    p = scanner.root / "_数据库" / "人物卡.json"
+    if not p.exists():
+        return id2name
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return id2name
+    for c in (data.get("characters") or []) if isinstance(data, dict) else []:
+        if isinstance(c, dict) and c.get("id") and c.get("name"):
+            id2name[c["id"]] = c["name"]
+    return id2name
+
+
+def _canon_char_name(tok, id2name):
+    """char_id → display name；已是 name / 尚未建卡 → 原样。命名空间统一到 name·对齐 cast_economy 的 known 集
+    （人物卡 name）+ cluster_actant_ledger assignments（apply_archive 也存 name）→ 三者可比对。"""
+    if not isinstance(tok, str) or not tok.strip():
+        return None
+    t = tok.strip()
+    return id2name.get(t, t)
+
+
+def _norm_actant_multi(names):
+    """helper/opponent 归一：0→None · 1→str · 2+→list（去重保序）。
+
+    1→str：让 actant_drift（_current_assignments 只认 str·list→None→误判 vacancy/不参与 drift）正常
+      判位 + cast_economy role_split（`v==name`）也吃 str。
+    2+→list：让 cast_economy composite（`isinstance(v,list) and len>=2`）点火。actant_drift 对 list 视
+      None（多对手时 opponent vacancy 误报）——是两 scanner 既有 schema 张力·advisory shadow 低害·
+      非本 producer 引入（北极星：只喂真数据·不改 scanner 逻辑）。"""
+    seen, vals = set(), []
+    for n in names:
+        if n and n not in seen:
+            seen.add(n)
+            vals.append(n)
+    if not vals:
+        return None
+    return vals[0] if len(vals) == 1 else vals
+
+
+def _collect_active_cast(scanner, active_chars, current_cluster_id):
+    """🔴 2026-06-29 actant链接通producer：本 cluster 出场角色集（复用 scene participants + active_chars）。
+
+    cast_economy_scanner 读 manifest.active_cast 算 introduce_burst（新引入 > intro_budget）+ role_split。
+    命名空间 = display name（对齐 cast_economy known 集 = 人物卡 name + ledger assignments name）。
+    默认安全闸：无 cluster / 无 participants 且 active_chars 空 → []（scanner 见空自跳过·向后兼容·零行为变化）。"""
+    id2name = _build_char_id_name_map(scanner)
+    names = set()
+    cluster = scanner._event_cluster_by_id(current_cluster_id)
+    if isinstance(cluster, dict):
+        for scene in cluster.get("scene_storyboard") or []:
+            if isinstance(scene, dict):
+                for p in scene.get("participants") or []:
+                    nm = _canon_char_name(p, id2name)
+                    if nm:
+                        names.add(nm)
+    for c in active_chars or []:
+        nm = _canon_char_name(c, id2name)
+        if nm:
+            names.add(nm)
+    return sorted(names)
+
+
+def _read_actant_ledger_entry(scanner, current_cluster_id):
+    """读 cluster_actant_ledger.json 本 cluster 已回库 assignments（archivist post-hoc 权威·re-audit 路径）。"""
+    p = scanner.root / "_数据库" / "cluster_actant_ledger.json"
+    if not p.exists():
+        return None
+    try:
+        led = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(led, dict):
+        return None
+    target = cluster_lookup.normalize_cluster_id(current_cluster_id)
+    for rec in led.get("clusters") or []:
+        if not isinstance(rec, dict):
+            continue
+        if cluster_lookup.normalize_cluster_id(rec.get("cluster_id")) == target:
+            a = rec.get("assignments")
+            return a if isinstance(a, dict) and a else None
+    return None
+
+
+def _resolve_protagonist_name(scanner, id2name):
+    """主角 name（subject 派生源）：角色弧线 role∈{protagonist,主角,主} → 人物卡 role∈{主角,protagonist} 兜底。"""
+    arc_p = scanner.root / "_数据库" / "角色弧线.json"
+    if arc_p.exists():
+        try:
+            arc = json.loads(arc_p.read_text(encoding="utf-8"))
+            chars = arc.get("characters") if isinstance(arc, dict) else None
+            if isinstance(chars, dict):
+                for pid, info in chars.items():
+                    if isinstance(info, dict) and info.get("role") in ("protagonist", "主角", "主"):
+                        nm = _canon_char_name(pid, id2name)
+                        if nm:
+                            return nm
+        except (OSError, json.JSONDecodeError):
+            pass
+    pc_p = scanner.root / "_数据库" / "人物卡.json"
+    if pc_p.exists():
+        try:
+            pc = json.loads(pc_p.read_text(encoding="utf-8"))
+            for c in (pc.get("characters") or []) if isinstance(pc, dict) else []:
+                if isinstance(c, dict) and c.get("role") in ("主角", "protagonist") and c.get("name"):
+                    return c["name"]
+        except (OSError, json.JSONDecodeError):
+            pass
+    return None
+
+
+def _cluster_seq_num(cid):
+    """cluster id → 序号 int（定序用·无法解析 → None）。"""
+    if cid is None:
+        return None
+    try:
+        n = cluster_lookup.normalize_cluster_id(cid)
+    except Exception:  # noqa: BLE001
+        n = None
+    m = re.search(r"(\d+)", n or str(cid))
+    return int(m.group(1)) if m else None
+
+
+def _resolve_standing_antagonists(scanner, current_cluster_id, id2name):
+    """当前 standing 反派 names（opponent 派生源·减 vacancy 噪声）：反派轮替.json 中
+    引入 ≤ 当前块 且 未在当前块之前被击败者。无 ledger / 定不到序 → 保守纳入未击败项。"""
+    p = scanner.root / "_数据库" / "反派轮替.json"
+    if not p.exists():
+        return []
+    try:
+        led = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    cur = _cluster_seq_num(current_cluster_id)
+    out, seen = [], set()
+    for e in (led.get("entries") or []) if isinstance(led, dict) else []:
+        if not isinstance(e, dict) or not e.get("antagonist_id"):
+            continue
+        intro = _cluster_seq_num(e.get("cluster_id"))
+        defeat = _cluster_seq_num(e.get("defeat_cluster"))
+        if cur is not None and intro is not None and intro > cur:
+            continue  # 尚未引入
+        if cur is not None and defeat is not None and defeat < cur:
+            continue  # 当前块之前已被击败
+        nm = _canon_char_name(e.get("antagonist_id"), id2name)
+        if nm and nm not in seen:
+            seen.add(nm)
+            out.append(nm)
+    return out
+
+
+def _collect_cluster_actant_state(scanner, current_cluster_id):
+    """🔴 2026-06-29 actant链接通producer：本 cluster 六 actant 派分（actant_drift + cast_economy 读 manifest）。
+
+    源优先：① cluster_actant_ledger 本 cluster 已回库条目（archivist 读正文 post-hoc·权威·re-audit 路径）；
+    ② 派生（forward 流·本块尚未 archive 时）：subject=主角（角色弧线/人物卡）· opponent=当前 standing
+    反派（反派轮替）· 其余位留空（不脑补·北极星②宁缺毋滥）。
+    命名空间 = display name；helper/opponent 经 _norm_actant_multi（1→str 适配 actant_drift / 2+→list
+    适配 cast_economy composite）。
+    默认安全闸：无 ledger 条目且无主角无反派 → None（actant_drift/cast_economy 见空自跳过·无 actant 旧书零行为变化）。"""
+    id2name = _build_char_id_name_map(scanner)
+    entry = _read_actant_ledger_entry(scanner, current_cluster_id)
+    if entry:  # ① 已回库（ledger 存单值·归一回 1→str/2+→list 适配双 scanner）
+        state = {}
+        for pos in ("subject", "object", "sender", "receiver"):
+            nm = _canon_char_name(entry.get(pos), id2name)
+            if nm:
+                state[pos] = nm
+        for pos in ("helper", "opponent"):
+            v = entry.get(pos)
+            lst = v if isinstance(v, list) else ([v] if v else [])
+            norm = _norm_actant_multi([_canon_char_name(x, id2name) for x in lst])
+            if norm is not None:
+                state[pos] = norm
+        return state or None
+    # ② 派生
+    subject = _resolve_protagonist_name(scanner, id2name)
+    opp = _norm_actant_multi(_resolve_standing_antagonists(scanner, current_cluster_id, id2name))
+    if not subject and opp is None:
+        return None  # 默认安全：无可派生 → 不注入
+    state = {}
+    if subject:
+        state["subject"] = subject
+    if opp is not None:
+        state["opponent"] = opp
+    return state or None
+
+
 def _sanitize_relationship(rel, current_cluster_id):
     """关系写手注入门控（item 2）：拆 type(明面留) + hidden_intent(秘密议程·reveal_cluster 未到→剥)；
     note 拆 surface_note(留) + hidden_note(到 hidden_note_reveal_cluster 才暴露)。默认安全闸：无 hidden_* → 原样透传。"""
@@ -5488,6 +5680,13 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # 让 writer 按各角色受限认知写·物理 masking 防角色用不该知道的知识穿帮（扮猪吃老虎/信息差）。
         # 默认安全闸：无 character_belief_ledger.json / 无 participants → []（向后兼容·零行为变化）。全 advisory。
         "scene_character_knowledge": _collect_scene_character_knowledge(s, current_cluster_id),
+        # 🔴 2026-06-29 actant链接通producer（Greimas 六 actant + cast 经济·此前 build_manifest 零产 →
+        # actant_drift_scanner / cast_economy_scanner 整条死码）。active_cast=本 cluster 出场角色集（scene
+        # participants + active_chars·display name）·cluster_actant_state=六 actant 派分（ledger 已回库优先·
+        # 否则 subject=主角/opponent=standing 反派派生）。全 advisory shadow·两 code 簇绝不进 HARD_GATE_CODES。
+        # 默认安全闸：无可派生 → []/None（scanner 见空自跳过·无 actant 旧书零行为变化·向后兼容）。
+        "active_cast": _collect_active_cast(s, active_chars, current_cluster_id),
+        "cluster_actant_state": _collect_cluster_actant_state(s, current_cluster_id),
         "active_offscreen_actions": _collect_offscreen_actions(s, chapter),
         "active_fate_events": _collect_active_fate_events(s, chapter),
         "world_state_snapshot": _collect_world_state_snapshot(s, chapter),

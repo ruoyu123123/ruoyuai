@@ -152,7 +152,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --skip-output
 
 > 🔴 **2026-06-28 审计清理C类 · 两条数据流分离**：本步起的 archivist / summarizer / foreshadower / reflector 同属「**Claude 读正文梳理**」段，与 writer（gen-model）的「写作自评」流互不越权。
 > - **写作自评（writer）**：cluster_changes.json 的 self_eval / waivers → 喂 audit（创作自评 / 豁免），**不作 factual 回库权威源**。
-> - **状态梳理（Claude archivist）**：读 cluster_draft.txt 正文客观抽取 → archive.json → apply_archive.py 确定性回库角色 / 道具 / 关系 / locked_facts / throughline / 角色信念(belief_ledger) / 反派轮替(反派轮替.json) / 主角力量 tier(角色弧线.json)。
+> - **状态梳理（Claude archivist）**：读 cluster_draft.txt 正文客观抽取 → archive.json → apply_archive.py 确定性回库角色 / 道具 / 关系 / locked_facts / throughline / 角色信念(belief_ledger) / 反派轮替(反派轮替.json) / 主角力量 tier(角色弧线.json) / 六位 actant 派分(cluster_actant_ledger.json)。
 
 spawn novel-archivist（读整 cluster 正文，客观抽取本块新增/变更状态，产 archive.json）：
 
@@ -167,11 +167,13 @@ CLUSTER_DRAFT_PATH: <项目路径>/章节/cluster_<key>_draft/cluster_<key>_draf
 CLUSTER_CHAPTER_RANGE: <START_CH>-<END_CH>
 ```
 
-产出：`_数据库/.wal/cluster_<key>_archive.json`（characters / items / relationships / locked_facts / throughline_progress / belief_updates / belief_unaware / antagonist_rotation / protagonist_power_tier_update）。
+产出：`_数据库/.wal/cluster_<key>_archive.json`（characters / items / relationships / locked_facts / throughline_progress / belief_updates / belief_unaware / antagonist_rotation / protagonist_power_tier_update / cluster_actant_state）。
 
 > 🔴 **2026-06-29 反派轮替ledger接通producer**：archivist 扩产 `antagonist_rotation`——本块**实际出场反派**的轮替条目（antagonist_id 复用角色 id / tier 数值梯度 / faction / motive_type / power_system_tag / defeat_cluster）。引入即报不逐块重复·击败补 defeat_cluster·**非每 cluster 必有反派**（C03 fluid 无反派合法省略）。回库进 `反派轮替.json` append-only ledger 供 `antagonist_rotation_scanner` 消费（此前**零 producer** 死码·全 advisory shadow·绝不 hard_gate）。
 
 > 🔴 **2026-06-29 power_progression接通producer**：archivist 扩产 `protagonist_power_tier_update`——本块**主角力量 tier 变化**（char_id 复用角色 id / tier:int 本书叙事梯度炼气1→筑基2… / notes 标突破/跌境）。**只认正文实写的力量变化·非每 cluster 必有**（铺垫/日常/非升级流题材合法省略·C03 fluid）。回库 append 进 `角色弧线.json` characters[pid].protagonist_power_tier 序列供 `power_progression_scanner` 消费（此前**零 producer** 死码·全 advisory shadow·绝不 hard_gate）。tier 仅 scanner 内部排序·**绝不暴露给 writer**（同 v27 不暴露目标章数）。
+
+> 🔴 **2026-06-29 actant链接通producer**：archivist 扩产 `cluster_actant_state`——本块六位 Greimas actant 派分（subject/object/sender/receiver 单值=角色 id 或 null·helper/opponent=角色 id list）。判不出清晰 actant = 整段省略（C03 fluid 合法跳过）。回库进 `cluster_actant_ledger.json`（clusters[].assignments·id→name 解析·helper/opponent 取首位代表存单值·幂等按 cluster_id 去重）供 `actant_drift_scanner`（功能漂移/关键位空缺/过载）+ `cast_economy_scanner`（隐式 role_split）消费；本 cluster actant 由 `build_manifest` 注入 manifest.cluster_actant_state（ledger 已回库优先·否则 subject=主角/opponent=standing 反派派生）+ manifest.active_cast（scene participants + active_chars·display name）供两 scanner 读（此前 build_manifest **零产**两 key·整条死码）。全 advisory shadow·绝不 hard_gate。
 
 > 🔴 **不降级**：archivist judge `failure_policy=block`——它是 factual 回库的唯一权威源，失败必须硬停（不能 soft 降级让角色/道具/关系/locked_facts 静默丢失）。每个写完的 cluster 必有出场角色。
 
@@ -191,9 +193,9 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 5
 python core/scripts/apply_archive.py "<项目路径>" --cluster <key>
 ```
 
-把 archive.json 落到 人物卡 / 角色池 / 道具 / 关系 / 事件簇.clusters[].locked_facts + 事件簇.clusters[].throughline_progress + character_belief_ledger.json + 反派轮替.json + 角色弧线.json（复用已有 id，绝不为同一角色造第二个 id）。
+把 archive.json 落到 人物卡 / 角色池 / 道具 / 关系 / 事件簇.clusters[].locked_facts + 事件簇.clusters[].throughline_progress + character_belief_ledger.json + 反派轮替.json + 角色弧线.json + cluster_actant_ledger.json（复用已有 id，绝不为同一角色造第二个 id）。
 
-> 🔴 这是 factual 回库的**唯一权威路径**：writer 已不自报 factual（gen_writer 已删 factual 自报 · save_state 已停读 writer factual）——角色/道具/关系/locked_facts/throughline/角色信念(belief_ledger)/反派轮替(反派轮替.json)/主角力量 tier(角色弧线.json) 的权威源 = archivist 读正文，非 writer changes。`apply_antagonist_rotation` + `apply_protagonist_power_tier` 确定性 append（前者按 cluster_id+antagonist_id 去重、后者按 pid 的 series cluster_id 去重·幂等·无对应段则 no-op 不建文件）。
+> 🔴 这是 factual 回库的**唯一权威路径**：writer 已不自报 factual（gen_writer 已删 factual 自报 · save_state 已停读 writer factual）——角色/道具/关系/locked_facts/throughline/角色信念(belief_ledger)/反派轮替(反派轮替.json)/主角力量 tier(角色弧线.json)/六位 actant(cluster_actant_ledger.json) 的权威源 = archivist 读正文，非 writer changes。`apply_antagonist_rotation` + `apply_protagonist_power_tier` + `apply_actant_state` 确定性 append（前者按 cluster_id+antagonist_id 去重、中者按 pid 的 series cluster_id 去重、后者按 cluster_id 去重替换·幂等·无对应段则 no-op 不建文件）。
 >
 > 🔴 **不降级硬停**：archive 缺出场角色 = archivist 失败 = 错误 → apply_archive exit 2 → plan 硬停（不再"空 archive → exit 1 当 no-op"静默降级）。幂等去重保留（re-apply 全已存在 → exit 0 成功）。
 

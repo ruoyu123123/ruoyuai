@@ -545,6 +545,85 @@ def apply_protagonist_power_tier(db: Path, cid: str, archive: dict, summary: dic
         save_json(p, arc)
 
 
+# ──── 🔴 2026-06-29 actant链接通producer → cluster_actant_ledger.json ────
+def apply_actant_state(db: Path, cid: str, archive: dict, summary: dict, dry: bool):
+    """🔴 2026-06-29 actant链接通producer（Greimas 六 actant·确定性·幂等·零模型）。
+
+    archivist 读整 cluster 正文 + 人物卡，按 Greimas actantial model 客观判定本块六位 actant 派分
+    （subject/object/sender/receiver/helper/opponent → 角色），产 archive.cluster_actant_state=
+    {subject, object, sender, receiver, helper:[ids], opponent:[ids]}。本步把它确定性写进
+    `cluster_actant_ledger.json`（{clusters:[{cluster_id, assignments:{pos:name}}]}）当**历史台账**——
+    actant_drift_scanner（同角色 helper↔opponent 无 pivot 漂移 / 关键位空缺 / 过载）+ cast_economy_scanner
+    （role_split 隐式拆分）读它做跨 cluster 比对（此前**零 producer** → 两 scanner 永远
+    `note:无...跳过` 死码·像 反派轮替.json 款契约债）。
+
+    🔴 命名空间纪律：scanner 把 ledger assignments 值当**可哈希键**用（`out[name]=pos` /
+    `setdefault(name,[])`）→ 值必须是**字符串**（list 值会 TypeError 崩 scanner·北极星只读不改逻辑
+    →不可触）；且 cast_economy 的 known 集 = 人物卡 name、active_cast/manifest 也走 name → ledger
+    统一存**角色 display name**（archivist 给的 char_id 在此经 人物卡 id→name 解析·与 manifest 注入同源）。
+    helper/opponent 多角色取**首位代表**（scanner ledger schema 为 {pos:单值}·一位一名；多 helper/
+    opponent 的并存由 manifest.cluster_actant_state 的 list 表达 composite·不进 ledger——这是 scanner
+    既有 schema 约束·非本 producer 引入）。
+
+    幂等：按 cluster_id 去重——同 cluster 已存在则就地替换 assignments·不重复 append。
+    C03 fluid / 默认安全·向后兼容：archive 无 cluster_actant_state（旧数据 / archivist 没标 actant）→
+    no-op 不报错、不建 ledger 文件（同 apply_antagonist_rotation·无 actant 旧书零行为变化）。"""
+    state = archive.get("cluster_actant_state") if isinstance(archive, dict) else None
+    if not isinstance(state, dict) or not state:
+        summary["actant_state"] = {"written": False}
+        return
+
+    # 人物卡 id→name 解析（apply_characters 已先跑·新角色已落 人物卡；非 id 的值原样保留）
+    id2name = {}
+    pc = load_json(db / "人物卡.json", {})
+    for c in (pc.get("characters") or []) if isinstance(pc, dict) else []:
+        if isinstance(c, dict) and c.get("id") and c.get("name"):
+            id2name[c["id"]] = c["name"]
+
+    def _name(tok):
+        if not isinstance(tok, str) or not tok.strip():
+            return None
+        t = tok.strip()
+        return id2name.get(t, t)  # id→name·非 id 则原样（已是 name 或尚未建卡）
+
+    assignments = {}
+    for pos in ("subject", "object", "sender", "receiver"):
+        nm = _name(state.get(pos))
+        if nm:
+            assignments[pos] = nm
+    for pos in ("helper", "opponent"):
+        v = state.get(pos)
+        if isinstance(v, list):
+            names = [n for n in (_name(x) for x in v) if n]
+        else:
+            n = _name(v)
+            names = [n] if n else []
+        if names:
+            # 首位代表（scanner ledger 单值·多位由 manifest list 表 composite·见 docstring 命名空间纪律）
+            assignments[pos] = names[0]
+
+    if not assignments:
+        summary["actant_state"] = {"written": False}
+        return
+
+    p = db / "cluster_actant_ledger.json"
+    ledger = load_json(p, {"clusters": []})
+    if not isinstance(ledger, dict):
+        ledger = {"clusters": []}
+    clusters = ledger.setdefault("clusters", [])
+    if not isinstance(clusters, list):
+        clusters = ledger["clusters"] = []
+    # 幂等：按 cluster_id 去重替换（同 actant_drift active 写回款·不重复 append）
+    clusters = [r for r in clusters
+                if not (isinstance(r, dict) and str(r.get("cluster_id") or "") == str(cid))]
+    clusters.append({"cluster_id": cid, "assignments": assignments})
+    ledger["clusters"] = clusters
+
+    summary["actant_state"] = {"written": True, "positions": len(assignments)}
+    if not dry:
+        save_json(p, ledger)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -591,6 +670,8 @@ def main(argv=None):
         apply_antagonist_rotation(db, cid, archive, summary, args.dry_run)
         # 🔴 2026-06-29 power_progression接通producer（确定性·幂等·C03 fluid 无力量变化合法跳过）
         apply_protagonist_power_tier(db, cid, archive, summary, args.dry_run)
+        # 🔴 2026-06-29 actant链接通producer（确定性·幂等·C03 fluid 无 actant 合法跳过·向后兼容）
+        apply_actant_state(db, cid, archive, summary, args.dry_run)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[apply_archive] FATAL: {type(e).__name__}: {e}\n")
         sys.stderr.flush()
@@ -609,7 +690,8 @@ def main(argv=None):
           f"反派轮替+{summary.get('antagonist_rotation',{}).get('appended',0)}"
           f"/{summary.get('antagonist_rotation',{}).get('updated',0)}更 · "
           f"主角力量tier+{summary.get('protagonist_power_tier',{}).get('appended',0)}"
-          f"/{summary.get('protagonist_power_tier',{}).get('updated',0)}更")
+          f"/{summary.get('protagonist_power_tier',{}).get('updated',0)}更 · "
+          f"actant{'已记' if summary.get('actant_state',{}).get('written') else '无'}")
     return 0
 
 

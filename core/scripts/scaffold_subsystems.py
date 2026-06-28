@@ -61,6 +61,10 @@ KNOWN_EXTRAS = {
     # 由 apply_archive.apply_protagonist_power_tier 在主角首次力量变化时惰性创建 + cluster-save-state
     # archivist 步维护·power_progression_scanner 消费·不进 canonical 循环（C03 fluid·非升级流/无力量变化合法缺失）。
     "角色弧线.json",
+    # 🔴 2026-06-29 actant链接通producer：Greimas 六 actant 跨 cluster 历史台账·非 34 核心·像 反派轮替.json·
+    # 由 apply_archive.apply_actant_state 在 archivist 首次标 actant 时惰性创建（actant_drift active 模式亦写回）·
+    # actant_drift_scanner + cast_economy_scanner 消费·不进 canonical 循环（C03 fluid·无 actant 合法缺失）。
+    "cluster_actant_ledger.json",
 }
 
 # 🔴 2026-06-27 C03/C17：载荷非空标记 key（skeleton 内·单一真理源）。
