@@ -321,10 +321,29 @@
                   "type": "string",
                   "enum": ["strongly_positive", "positive", "neutral", "negative", "strongly_negative"],
                   "_doc": "R20 P2: 场景结束极性 5 档 · 强制 start ≠ end (no_turn 例外 by_design)"
+                },
+                "participants": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "_doc": "🔴 2026-06-29 角色信息差(per-character belief): 本场在场角色 char_id · witness 检测命门(信念只沿在场传播·SymbolicToM arXiv:2306.00924) · 下游 character_belief_ledger witness 回写 + build_manifest per-scene 信念投射据此判定『谁 witness 到本场 reveal 的 fact』 · 默认安全:缺则 fallback 全员视角不漏报(向后兼容) · 通常 = characters(出场角色)"
+                },
+                "focal_character": {
+                  "type": "string",
+                  "_doc": "🔴 2026-06-29 角色信息差: 本场 POV/聚焦者 char_id(build_manifest 据此选 focal 投射其完整认知)"
+                },
+                "focalization_mode": {
+                  "type": "string",
+                  "enum": ["zero", "internal", "external"],
+                  "_doc": "🔴 2026-06-29 角色信息差: Genette 聚焦 · zero=全知 / internal=限知某角色内心 / external=只外部观察"
+                },
+                "knowledge_gap_mode": {
+                  "type": ["string", "null"],
+                  "enum": ["mystery", "suspense", "dramatic_irony", null],
+                  "_doc": "🔴 2026-06-29 角色信息差: advisory 创作提示(不锁剧情·北极星⑤) · McKee 三知识缺口 · 读者知角色不知=dramatic_irony(桌下炸弹) · 设计悬念/反转/戏剧反讽时标 · 否则 null"
                 }
               }
             },
-            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe 消费"
+            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief)·全 optional 向后兼容"
           },
           "writer_model_used": {
             "type": "string",

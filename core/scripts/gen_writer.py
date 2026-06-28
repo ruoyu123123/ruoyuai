@@ -512,6 +512,81 @@ def _build_knowledge_gap_section(manifest_path: Path, _preloaded: dict | None = 
     return "\n".join(lines)
 
 
+# 🔴 2026-06-29 角色信息差(per-character belief)
+def _build_belief_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
+    """从 manifest.scene_character_knowledge 抽各场景各角色认知边界拼 writer prompt 段（生成层物理 masking）。
+
+    提案核心：重心在生成层注入非检测——让写手按各角色受限认知写，防角色用不该知道的知识穿帮
+    （扮猪吃老虎/信息差/悬念底层引擎）。单一真理源 = build_manifest._sanitize_character_belief 投射出的
+    scene_character_knowledge（knows[] = learned<=current 的 fact · must_not_reference[] = unaware/未到期负向）。
+
+    默认安全闸（向后兼容·零回归）：无 scene_character_knowledge / 空 / 无 ledger → ""（不注入·今天所有旧书
+    无 ledger → 零行为变化）。全 advisory·北极星⑤不硬锁。"""
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
+        return ""
+    scenes = m.get('scene_character_knowledge')
+    if not isinstance(scenes, list) or not scenes:
+        return ""
+    lines = [
+        "## 🧠 角色认知边界（per-character belief · 信息差物理 masking · advisory · 见 H7）",
+        "",
+        "下面按场景列出每个在场角色【当下知道什么】【绝不能用什么】。**严格按各角色的认知边界写**——",
+        "每个角色只能基于自己 `knows[]` 行动/说话；`must_not_reference[]` 是该角色本场不知道的事实，"
+        "其言行不得提及/不得基于其行动（角色 A 不知道的事即便 B 知道 ≠ A 知道）。",
+        "",
+    ]
+    for sc in scenes:
+        if not isinstance(sc, dict):
+            continue
+        chars = sc.get('characters')
+        if not isinstance(chars, dict) or not chars:
+            continue
+        head = f"### 场景 {sc.get('scene_index')}"
+        meta = []
+        if sc.get('focal_character'):
+            meta.append(f"聚焦视角={sc.get('focal_character')}")
+        if sc.get('focalization_mode'):
+            meta.append(f"聚焦模式={sc.get('focalization_mode')}")
+        if sc.get('knowledge_gap_mode'):
+            meta.append(f"信息差模式={sc.get('knowledge_gap_mode')}")
+        if meta:
+            head += "（" + " · ".join(meta) + "）"
+        lines.append(head)
+        for cid, cb in chars.items():
+            if not isinstance(cb, dict):
+                continue
+            knows = cb.get('knows') or []
+            must_not = cb.get('must_not_reference') or []
+            lines.append(f"- **{cid}**")
+            if knows:
+                kparts = []
+                for kf in knows:
+                    if not isinstance(kf, dict):
+                        continue
+                    c = kf.get('content') or kf.get('fact_id') or ""
+                    if kf.get('can_speak', True) is False:
+                        kparts.append(f"{c}（知道但本场不能说出口·只内心/行动暗示）")
+                    else:
+                        kparts.append(str(c))
+                if kparts:
+                    lines.append(f"    - 知道（可基于其行动/言说）：{'；'.join(kparts)}")
+            if must_not:
+                mparts = []
+                for mf in must_not:
+                    if not isinstance(mf, dict):
+                        continue
+                    c = mf.get('content') or mf.get('fact_id') or ""
+                    r = mf.get('reason') or ""
+                    mparts.append(f"{c}（{r}）" if r else str(c))
+                if mparts:
+                    lines.append(f"    - 🚫 不知道（绝不提及/不得基于其行动）：{'；'.join(mparts)}")
+    # 只有 head + 引言、没有任一角色条目 → 退回空（零回归）
+    if len(lines) <= 5:
+        return ""
+    return "\n".join(lines)
+
+
 def _deep_dims_inject_mode() -> str:
     """deep_writing_dims 升格开关（env DEEP_DIMS_INJECT_MODE · 默认 shadow）。
 
@@ -1022,6 +1097,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     decision_section = _build_decision_principles_section(manifest_path, _manifest_dict)
     genre_section = _build_genre_pack_section(manifest_path, _manifest_dict)
     knowledge_gap_section = _build_knowledge_gap_section(manifest_path, _manifest_dict)
+    # 🔴 2026-06-29 角色信息差(per-character belief)：各场景各角色认知边界（生成层物理 masking·见 H7）
+    belief_section = _build_belief_section(manifest_path, _manifest_dict)
     narr_seq_section = _build_narrative_seq_section(manifest_path, _manifest_dict)
     golden_fewshot_section = _build_golden_fewshot_section(manifest_path, _manifest_dict)
     deep_dims_section = _build_deep_dims_section(manifest_path, _manifest_dict)
@@ -1191,6 +1268,14 @@ cluster_brief / manifest 给你的 `foreshadowing_to_plant`（要埋的伏笔）
 - **只兑现/揭晓 manifest 或 cluster_brief 里 `reveal_directive`（或 `foreshadowing_to_callback` 带出的 `hidden_payoff`）明确要求揭晓的伏笔**：这些是到期该兑现的暗线，按 `reveal_directive` 把它揭穿 / 回收 / 兑现。
 - **没有 `reveal_directive` 要求揭晓的伏笔一律只埋不揭**——你看不到某条伏笔的暗线含义就对了，照明线细节写，别自己脑补它的秘密再提前点破。
 - **🔴 角色的隐藏身份/真实面目同理（写手信息隔离）**：人物卡的 `role` / `surface_role` 是你**当下能看到的表面身份**，就把它**当真**写——某个表面盟友实际是叛徒（false_hero）、某个老好人其实是幕后黑手、某人与反派暗中灰色合作，这些**真实身份（`true_role`）系统不会给你看**，是故意的。**绝不提前暗示/铺垫/点破任何角色的 true_role、反派身份、伪装或暗藏动机**（不写「他眼底闪过一丝阴鸷」「她的笑意里藏着别的东西」式提前定性）。只有当人物卡里出现该角色的 `reveal_directive`（到了 `concealed_until_cluster` 才解锁）明确要求揭晓时，才在本块把其真实身份揭穿/兑现。
+
+## H7. 角色信息差（per-character belief · 物理 masking · 沉浸感硬铁律）
+# 🔴 2026-06-29 角色信息差(per-character belief)
+若下方给了「## 🧠 角色认知边界（per-character belief）」段（manifest `scene_character_knowledge`），**严格按各角色的认知边界写**：
+- **每个角色只能基于「他自己知道的」（该场景该角色 `knows[]` 列出的事实）行动、说话、推理**。绝不让某个角色用他**在场没亲历、ledger 里没有**的信息——这是**物理 masking** 不是提醒：角色 A 不该知道的事即便另一个角色 B 知道，**也 ≠ A 知道**（扮猪吃老虎 / 信息差喜剧 / 悬念全靠这个）。
+- **`must_not_reference[]` 列出的事实 = 该角色本场景【不知道】**（不知情 / 本块尚未获知）：该角色的言行**不得提及、不得暗示、不得基于其行动**。
+- **`can_speak=false` 的 known 事实**：角色**知道但本场不能说出口**——只能体现在内心活动 / 行动暗示里，**绝不写进该角色的台词**。
+- 没有该段时按常规写（默认安全·此规则不生效）。
 
 # 二、风格工艺默认基线（仅当作者 skill 未规定该维度时兜底 · skill 规定了以 skill 为准）
 
@@ -1499,6 +1584,8 @@ cluster_brief 完整内容：
     genre_block = (genre_section + "\n\n") if genre_section else ""
     # 阶段D3：信息差主调段（与决策原则并列·序列骨·默认 shadow 时空 → 零回归）
     knowledge_gap_block = (knowledge_gap_section + "\n\n") if knowledge_gap_section else ""
+    # 🔴 2026-06-29 角色信息差段（无 ledger / 无 participants → 空 → 不注入 · 零回归）
+    belief_block = (belief_section + "\n\n") if belief_section else ""
     narr_seq_block = (narr_seq_section + "\n\n") if narr_seq_section else ""
     golden_fewshot_block = (golden_fewshot_section + "\n\n") if golden_fewshot_section else ""
     deep_dims_block = (deep_dims_section + "\n\n") if deep_dims_section else ""
@@ -1537,7 +1624,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -1571,7 +1658,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}

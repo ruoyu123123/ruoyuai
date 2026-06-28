@@ -18,6 +18,14 @@
   本占位版只查 ①+④ 最常翻车那条：character_name + 知识动词(知道/听说/明白/记起)
   + fact_ref 出现在 scene_storyboard 里【character 尚未在场】的位置。简化但确定性。
 
+【🔴 2026-06-29 角色信息差(per-character belief)·接真升级】
+  优先读持久化 _数据库/character_belief_ledger.json（Phase A/B 产·schema:
+    {characters:{<char_id>:{known_facts:[{fact_id,content,learned_at_cluster,can_speak,...}],
+     unaware_of:[fact_id]}}, facts:{<fact_id>:{content}}}）：
+    检测正文中角色名 + 知识动词窗口内提及【自己 ledger 里没有(unaware_of)或 can_speak=false】的
+    fact content → CHARACTER_KNOWLEDGE_LEAK。ledger 不存在 → 退回占位词典逻辑(向后兼容·零行为变化)。
+  生成层注入(build_manifest._sanitize_character_belief + gen_writer H7)是重心·本 scanner 是检测兜底。
+
 【与既有 scanner 显式去重】
   - focalizer_perception_bounds：narrator 层 (focalizer 自体不可见/他人内心/空间不在场)
     本 scanner = character 层跨场景信念传播（同一 narrator 不变也会翻）·正交
@@ -180,6 +188,132 @@ def _detect_leaks(scenes, all_names, fact_refs):
     return leaks, belief_state
 
 
+# 🔴 2026-06-29 角色信息差(per-character belief)·接真持久化 ledger（Phase A/B 产）
+# scanner 升级：优先读 character_belief_ledger.json，检测正文中角色提及/基于自己 ledger 里
+# 没有（unaware_of/未在 known_facts）或 can_speak=false 的 fact → CHARACTER_KNOWLEDGE_LEAK。
+# 保持 advisory·绝不进 HARD_GATE_CODES（提案 open_q① 先 advisory 观察期）。
+# ledger 不存在 → 退回占位逻辑（_detect_leaks·向后兼容·零行为变化）。
+_LEDGER_VERB_WINDOW = 40  # ledger fact content 可能较长·窗口比占位版(30)略宽
+
+
+def _load_belief_ledger(project_root):
+    """读持久化 character_belief_ledger.json。无文件 / 破损 / 无 characters → None（退回占位·向后兼容）。"""
+    if not project_root:
+        return None
+    p = Path(project_root) / "_数据库" / "character_belief_ledger.json"
+    if not p.exists():
+        return None
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if isinstance(obj, dict) and isinstance(obj.get("characters"), dict) and obj["characters"]:
+        return obj
+    return None
+
+
+def _build_charid_name_map(project_root):
+    """char_id → 在 prose 里匹配的名字集合（人物卡 id/name 命中则用 name+aliases·否则 char_id 自身）。"""
+    m = {}
+    if not project_root:
+        return m
+    p = Path(project_root) / "_数据库" / "人物卡.json"
+    if not p.exists():
+        return m
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return m
+    for c in (obj.get("characters", []) if isinstance(obj, dict) else []):
+        if not isinstance(c, dict):
+            continue
+        names = set()
+        if c.get("name"):
+            names.add(c["name"])
+        for a in (c.get("aliases") or []):
+            if a:
+                names.add(a)
+        cid = c.get("id") or c.get("name")
+        if cid:
+            m[cid] = names or {cid}
+    return m
+
+
+def _fact_phrase_by_id(fact_id, facts_index):
+    """ledger.facts 索引解 fact_id → 可读短语（content/summary 优先·缺则 fact_id 本身）。"""
+    f = facts_index.get(fact_id) if isinstance(facts_index, dict) else None
+    if isinstance(f, dict):
+        return str(f.get("content") or f.get("summary") or fact_id or "")
+    if isinstance(f, str):
+        return f
+    return str(fact_id) if fact_id else ""
+
+
+def _fact_phrase(kf, facts_index):
+    """known_fact 条目 → 可读短语（content 优先·否则经 fact_id 解 facts 索引）。"""
+    if isinstance(kf, dict):
+        c = kf.get("content")
+        if c:
+            return str(c)
+        return _fact_phrase_by_id(kf.get("fact_id"), facts_index)
+    if isinstance(kf, str):
+        return kf
+    return ""
+
+
+def _detect_leaks_from_ledger(scenes, ledger, charid_names):
+    """接真 ledger 检测：对每个 ledger 角色，构造其【不可引用】短语集——
+       ① unaware_of 的 fact（不知情）② known_facts 中 can_speak=false 的（知道但不能说出口）。
+       在该角色出场的场景里，角色名 + KNOWLEDGE_VERB 窗口内出现不可引用短语 → leak。
+       角色自己 known_facts 里 can_speak!=false 的短语永不算违规（先扣除）。"""
+    chars_ledger = ledger.get("characters") or {}
+    facts_index = ledger.get("facts") if isinstance(ledger.get("facts"), dict) else {}
+    leaks = []
+    for char_id, cl in chars_ledger.items():
+        if not isinstance(cl, dict):
+            continue
+        search_names = charid_names.get(char_id) or {char_id}
+        speakable, cannot_speak = set(), set()
+        for kf in (cl.get("known_facts") or []):
+            ph = _fact_phrase(kf, facts_index)
+            if not ph:
+                continue
+            if isinstance(kf, dict) and kf.get("can_speak", True) is False:
+                cannot_speak.add(ph)
+            else:
+                speakable.add(ph)
+        forbidden = set(cannot_speak)
+        for fid in (cl.get("unaware_of") or []):
+            ph = _fact_phrase_by_id(fid, facts_index)
+            if ph:
+                forbidden.add(ph)
+        forbidden -= speakable  # 角色也确知（可说）的短语不算违规
+        if not forbidden:
+            continue
+        for idx, scene in enumerate(scenes):
+            if not any(nm in scene for nm in search_names):
+                continue
+            for nm in search_names:
+                for mt in re.finditer(re.escape(nm), scene):
+                    window = scene[mt.end(): mt.end() + _LEDGER_VERB_WINDOW]
+                    if not any(v in window for v in KNOWLEDGE_VERBS):
+                        continue
+                    for ph in forbidden:
+                        if ph and ph in window:
+                            leaks.append({
+                                "scene_idx": idx,
+                                "character": char_id,
+                                "fact_ref": ph,
+                                "reason": ("known_but_cannot_speak" if ph in cannot_speak
+                                           else "unaware_of"),
+                                "context": (scene[max(0, mt.start() - 10):
+                                                  mt.end() + _LEDGER_VERB_WINDOW]
+                                            ).replace("\n", " ")[:60],
+                                "_source": "ledger",
+                            })
+    return leaks
+
+
 def scan(draft_path, project_root=None) -> dict:
     mode = _mode()
     out = {"scanner": "character_belief_ledger", "schema_version": "1.0",
@@ -204,13 +338,23 @@ def scan(draft_path, project_root=None) -> dict:
         out["character_count"] = 0
         return out
 
-    fact_refs = _load_fact_refs(project_root)
-    out["fact_ref_count"] = len(fact_refs)
     out["character_count"] = len(all_names)
-
     scenes = _split_scenes(text)
     out["scene_count"] = len(scenes)
-    leaks, _ = _detect_leaks(scenes, all_names, fact_refs)
+
+    # 🔴 2026-06-29 接真：优先读持久化 character_belief_ledger.json（Phase A/B 产）·
+    # 缺则退回占位词典逻辑（向后兼容·今天所有旧书无 ledger → 零行为变化）。
+    ledger = _load_belief_ledger(project_root)
+    if ledger is not None:
+        out["ledger_source"] = "persistent"
+        out["ledger_character_count"] = len(ledger.get("characters") or {})
+        charid_names = _build_charid_name_map(project_root)
+        leaks = _detect_leaks_from_ledger(scenes, ledger, charid_names)
+    else:
+        out["ledger_source"] = "placeholder"
+        fact_refs = _load_fact_refs(project_root)
+        out["fact_ref_count"] = len(fact_refs)
+        leaks, _ = _detect_leaks(scenes, all_names, fact_refs)
     out["leak_count"] = len(leaks)
     out["leak_samples"] = leaks[:5]
 

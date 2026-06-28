@@ -47,6 +47,25 @@ from pathlib import Path
 _SEED_TAG = "world_seed_init"
 _ORG_SUFFIX = "局会殿庭教团盟门派署部堂会社帮阁宗"  # 角色 role 里的组织后缀 → 推势力名
 
+# 🔴 2026-06-29 角色信息差(per-character belief)：辅助态文件 character_belief_ledger.json 的
+# 空骨架单一真理源 = subsystem_skeletons.json 的 _belief_ledger_schema._skeleton（非 34 核心·
+# 像 locked_fact.json 那样·不进 scaffold canonical 循环·outline 阶段在此播空骨架·后续由
+# cluster-save-state witness 回写步维护）。
+_SKELETON_FILE = (Path(__file__).resolve().parent.parent
+                  / "claude-home" / "templates" / "subsystem_skeletons.json")
+
+
+def _belief_ledger_skeleton() -> dict:
+    """读 subsystem_skeletons.json 的 _belief_ledger_schema._skeleton（单一真理源）·缺则兜底空骨架。"""
+    try:
+        d = json.loads(_SKELETON_FILE.read_text(encoding="utf-8"))
+        sk = d.get("_belief_ledger_schema", {}).get("_skeleton")
+        if isinstance(sk, dict) and sk:
+            return json.loads(json.dumps(sk))  # deep copy
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"schema_version": 1, "characters": {}, "facts": {}}
+
 
 # ---------- IO ----------
 
@@ -247,6 +266,7 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
         "protagonist_seeded": False,
         "consequence_tracker_normalized": False,
         "ticks_reset": False,
+        "belief_ledger_seeded": False,
         "dry_run": dry_run,
     }
 
@@ -347,10 +367,17 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
         world["consequence_tracker"] = {}
         report["ticks_reset"] = True
 
+    # ---- 角色信念账本（per-character belief·辅助态文件·空骨架幂等播种·非 34 核心·像 locked_fact.json）----
+    ledger_path = db / "character_belief_ledger.json"
+    seed_ledger = not ledger_path.exists()
+    report["belief_ledger_seeded"] = seed_ledger
+
     if dry_run:
         report["_dry_run_note"] = "未写盘"
         return report
 
+    if seed_ledger:
+        _save(ledger_path, _belief_ledger_skeleton())
     _save(rules_path, rules_doc)
     _save(world_path, world)
     return report

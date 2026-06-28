@@ -244,6 +244,135 @@ def apply_throughline(db: Path, cid: str, tp: dict, summary: dict, dry: bool):
         save_json(p, ec)
 
 
+# ──── 🔴 2026-06-29 角色信息差(per-character belief) → character_belief_ledger.json ────
+def apply_belief_updates(db: Path, cid: str, archive: dict, summary: dict, dry: bool):
+    """🔴 2026-06-29 角色信息差(per-character belief)·witness 检测确定性回库（零模型·幂等）。
+
+    archivist 读整 cluster 正文 + scene_storyboard.participants 判定『本块每个 reveal 的 fact
+    被哪些在场角色 witness 到』，产 archive.belief_updates=[{char_id, fact_id, content,
+    learned_at_scene, source, can_speak, reader_knows, is_red_herring?, subject?}]。本步把它确定性
+    append 进 character_belief_ledger.json（SymbolicToM arXiv:2306.00924：信念只沿在场传播）：
+
+      · facts{} 登记 fact 元信息（content / first_revealed_cluster / subject）。
+      · characters[char_id].known_facts 按 fact_id 去重 append（已有则更新 can_speak / source /
+        reader_knows 等可变字段，绝不重复 append）。
+      · unaware_of 维护（保守）：① 学到 fact → 从该 char.unaware_of 移除（已知不再 unaware·确定性）；
+        ② archivist 显式标的 unaware（archive.belief_unaware·在场集外且 subject 相关的核心角色）→
+        加进 unaware_of（去重）。缺席角色不 learn = 自动 false belief（根本不写进其 known_facts），
+        不确定就不标 unaware。
+
+    默认安全·向后兼容：archive 无 belief_updates（旧数据 / scene 无 participants 退化全员或跳过）
+    → no-op 不报错。确定性·幂等（同 fact_id 不重复 append·re-apply 不变·全已存在时不写盘）。"""
+    updates = archive.get("belief_updates") if isinstance(archive, dict) else None
+    unaware_marks = archive.get("belief_unaware") if isinstance(archive, dict) else None
+    if not isinstance(updates, list):
+        updates = []
+    if not isinstance(unaware_marks, list):
+        unaware_marks = []
+    if not updates and not unaware_marks:
+        summary["belief"] = {"facts_registered": 0, "known_facts_added": 0,
+                             "known_facts_updated": 0, "unaware_marked": 0}
+        return
+
+    p = db / "character_belief_ledger.json"
+    ledger = load_json(p, {"schema_version": 1, "characters": {}, "facts": {}})
+    if not isinstance(ledger, dict):
+        ledger = {"schema_version": 1, "characters": {}, "facts": {}}
+    ledger.setdefault("schema_version", 1)
+    chars = ledger.setdefault("characters", {})
+    facts = ledger.setdefault("facts", {})
+    if not isinstance(chars, dict):
+        chars = ledger["characters"] = {}
+    if not isinstance(facts, dict):
+        facts = ledger["facts"] = {}
+
+    facts_registered = known_added = known_updated = unaware_marked = 0
+
+    def _entry(char_id):
+        e = chars.setdefault(char_id, {"known_facts": [], "unaware_of": []})
+        if not isinstance(e, dict):
+            e = chars[char_id] = {"known_facts": [], "unaware_of": []}
+        if not isinstance(e.get("known_facts"), list):
+            e["known_facts"] = []
+        if not isinstance(e.get("unaware_of"), list):
+            e["unaware_of"] = []
+        return e
+
+    for u in updates:
+        if not isinstance(u, dict):
+            continue
+        char_id = u.get("char_id")
+        fact_id = u.get("fact_id")
+        if not char_id or not fact_id:
+            continue
+        content = u.get("content", "")
+        # ── facts{} 元信息登记（first_revealed_cluster 只在首次登记时写·幂等不覆盖）──
+        fmeta = facts.get(fact_id)
+        if not isinstance(fmeta, dict):
+            facts[fact_id] = {"content": content, "first_revealed_cluster": cid,
+                              "subject": u.get("subject", "")}
+            facts_registered += 1
+        else:
+            if not fmeta.get("content") and content:
+                fmeta["content"] = content
+            if not fmeta.get("subject") and u.get("subject"):
+                fmeta["subject"] = u.get("subject")
+            fmeta.setdefault("first_revealed_cluster", cid)
+        # ── characters[char_id].known_facts append（按 fact_id 去重）──
+        entry = _entry(char_id)
+        existing = next((kf for kf in entry["known_facts"]
+                         if isinstance(kf, dict) and kf.get("fact_id") == fact_id), None)
+        record = {
+            "fact_id": fact_id,
+            "content": content,
+            "learned_at_cluster": u.get("learned_at_cluster", cid),
+            "learned_at_scene": u.get("learned_at_scene"),
+            "source": u.get("source", "witnessed"),
+            "can_speak": bool(u.get("can_speak", True)),
+            "reader_knows": bool(u.get("reader_knows", False)),
+            "is_red_herring": bool(u.get("is_red_herring", False)),
+        }
+        if existing is None:
+            entry["known_facts"].append(record)
+            known_added += 1
+        else:
+            changed = False
+            for k in ("content", "learned_at_cluster", "learned_at_scene",
+                      "source", "can_speak", "reader_knows", "is_red_herring"):
+                if existing.get(k) != record[k]:
+                    existing[k] = record[k]
+                    changed = True
+            if changed:
+                known_updated += 1
+        # 学到 fact → 从 unaware_of 移除（已知不再 unaware·确定性）
+        if fact_id in entry["unaware_of"]:
+            entry["unaware_of"].remove(fact_id)
+
+    # ── 显式 unaware 标记（保守·archivist 确信在场集外且 subject 相关的核心角色才给）──
+    for m in unaware_marks:
+        if not isinstance(m, dict):
+            continue
+        char_id = m.get("char_id")
+        fact_id = m.get("fact_id")
+        if not char_id or not fact_id:
+            continue
+        entry = _entry(char_id)
+        # 已 witness 到该 fact 的角色绝不标 unaware（learn 优先·矛盾保护）
+        if any(isinstance(kf, dict) and kf.get("fact_id") == fact_id
+               for kf in entry["known_facts"]):
+            continue
+        if fact_id not in entry["unaware_of"]:
+            entry["unaware_of"].append(fact_id)
+            unaware_marked += 1
+
+    summary["belief"] = {"facts_registered": facts_registered,
+                         "known_facts_added": known_added,
+                         "known_facts_updated": known_updated,
+                         "unaware_marked": unaware_marked}
+    if not dry and (facts_registered or known_added or known_updated or unaware_marked):
+        save_json(p, ledger)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -284,6 +413,8 @@ def main(argv=None):
         apply_relationships(db, archive.get("relationships", []), summary, args.dry_run)
         apply_locked_facts(db, cid, archive.get("locked_facts", []), summary, args.dry_run)
         apply_throughline(db, cid, archive.get("throughline_progress", {}), summary, args.dry_run)
+        # 🔴 2026-06-29 角色信息差(per-character belief)·witness 回库（确定性·幂等·向后兼容）
+        apply_belief_updates(db, cid, archive, summary, args.dry_run)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[apply_archive] FATAL: {type(e).__name__}: {e}\n")
         sys.stderr.flush()
@@ -295,7 +426,10 @@ def main(argv=None):
           f"道具+{summary.get('items',{}).get('added',0)} · "
           f"关系+{summary.get('relationships',{}).get('added',0)} · "
           f"硬事实+{summary.get('locked_facts',{}).get('added',0)} · "
-          f"叙事线{'已记' if summary.get('throughline',{}).get('written') else '无'}")
+          f"叙事线{'已记' if summary.get('throughline',{}).get('written') else '无'} · "
+          f"信念+{summary.get('belief',{}).get('known_facts_added',0)}知"
+          f"/{summary.get('belief',{}).get('unaware_marked',0)}不知"
+          f"/fact{summary.get('belief',{}).get('facts_registered',0)}")
     return 0
 
 

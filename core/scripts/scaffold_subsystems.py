@@ -46,6 +46,10 @@ def _load_skeletons():
 KNOWN_EXTRAS = {
     "character_index.json",
     "triage_band_report.json",
+    # 🔴 2026-06-29 角色信息差(per-character belief)：辅助态文件·非 34 核心·像 locked_fact.json·
+    # 由 world_seed_init 播空骨架 + cluster-save-state witness 回写维护·不进 canonical 循环。
+    "character_belief_ledger.json",
+    "locked_fact.json",
 }
 
 # 🔴 2026-06-27 C03/C17：载荷非空标记 key（skeleton 内·单一真理源）。

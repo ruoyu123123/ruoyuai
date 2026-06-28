@@ -1633,6 +1633,126 @@ def _sanitize_character_card(card, current_cluster_id):
     return out
 
 
+# 🔴 2026-06-29 角色信息差(per-character belief)
+def _belief_fact_content(facts_index, fact_id, fallback=None):
+    """从 ledger.facts 索引解出 fact_id 的可读内容（content/summary 优先·缺则 fallback/fact_id 本身）。"""
+    f = facts_index.get(fact_id) if isinstance(facts_index, dict) else None
+    if isinstance(f, dict):
+        return f.get("content") or f.get("summary") or fallback or fact_id
+    if isinstance(f, str):
+        return f
+    return fallback or fact_id
+
+
+def _sanitize_character_belief(ledger, scene, current_cluster_id):
+    """🔴 2026-06-29 角色信息差(per-character belief)·生成层物理 masking（提案核心：重心在生成层注入非检测）。
+
+    按 scene 的 participants 投射——为每个【在场】角色注入其认知边界：
+      · knows[]：known_facts 中 learned_at_cluster <= current_cluster_id 的子集（复用 _cluster_due 门控原语·
+        同 _sanitize_knowledge/_sanitize_character_card 范式·单一真理源）·携 can_speak（False=知道但本场不能说出口）。
+      · must_not_reference[]：① unaware_of 的 fact（角色不知情）② known_facts 中 learned_at_cluster 未到期者
+        （角色本块尚未获知·防 FUTURE_KNOWLEDGE_LEAK）——注负向指令『角色 X 不知道 fact_Y·本场 prose 中 X 不得
+        提及/不得基于 Y 行动』。
+
+    默认安全闸（不漏报·向后兼容·今天所有旧书无 ledger → 零行为变化）：ledger 空 / characters 空 /
+      scene 无 participants → 返回 None（不注入任何约束）。全 advisory·绝不产 hard_gate。"""
+    if not isinstance(ledger, dict) or not isinstance(scene, dict):
+        return None
+    chars_ledger = ledger.get("characters")
+    if not isinstance(chars_ledger, dict) or not chars_ledger:
+        return None  # 默认安全闸：ledger 空 → 不注入
+    participants = scene.get("participants")
+    if not isinstance(participants, list) or not participants:
+        return None  # 默认安全闸：scene 无 participants → 不注入（向后兼容旧 storyboard）
+    facts_index = ledger.get("facts") if isinstance(ledger.get("facts"), dict) else {}
+
+    per_char = {}
+    for cid in participants:
+        cl = chars_ledger.get(cid)
+        if not isinstance(cl, dict):
+            continue
+        knows, must_not = [], []
+        for kf in (cl.get("known_facts") or []):
+            if not isinstance(kf, dict):
+                continue
+            fid = kf.get("fact_id")
+            content = kf.get("content") or _belief_fact_content(facts_index, fid)
+            lac = kf.get("learned_at_cluster")
+            if lac is None or _cluster_due(lac, current_cluster_id):
+                # 已学（含无 learned_at_cluster 标记的安全闸·透传）→ knows
+                knows.append({
+                    "fact_id": fid,
+                    "content": content,
+                    "can_speak": kf.get("can_speak", True),
+                })
+            else:
+                # 未到期（未来才学）→ 负向 masking（防 FUTURE_KNOWLEDGE_LEAK）
+                must_not.append({
+                    "fact_id": fid,
+                    "content": content,
+                    "reason": f"{cid} 本块尚未获知（learned_at_cluster={lac}）",
+                })
+        for fid in (cl.get("unaware_of") or []):
+            must_not.append({
+                "fact_id": fid,
+                "content": _belief_fact_content(facts_index, fid),
+                "reason": f"{cid} 不知情（unaware_of）",
+            })
+        if not knows and not must_not:
+            continue
+        per_char[cid] = {"knows": knows, "must_not_reference": must_not}
+
+    if not per_char:
+        return None
+
+    return {
+        "scene_index": scene.get("ch"),
+        "focal_character": scene.get("focal_character"),
+        "focalization_mode": scene.get("focalization_mode"),
+        "knowledge_gap_mode": scene.get("knowledge_gap_mode"),
+        "participants": list(participants),
+        "characters": per_char,
+        "_directive": (
+            "🔴 角色信息差(per-character belief·物理 masking)：每个在场角色只能基于其 knows[] 里的事实"
+            "行动/说话；can_speak=False 的事实=角色知道但本场不能说出口（只能内心/行动暗示·不得写进其台词）。"
+            "must_not_reference[] 是该角色本场【不知道】的事实——prose 中该角色不得提及、不得基于其行动"
+            "（扮猪吃老虎/信息差靠这个·角色 A 不该知道的事即便 B 知道≠A 知道）。"
+        ),
+    }
+
+
+def _collect_scene_character_knowledge(scanner, current_cluster_id):
+    """🔴 2026-06-29 角色信息差(per-character belief)·manifest 注入出口（单一真理源）。
+
+    读持久化 _数据库/character_belief_ledger.json（Phase A/B 产）+ 当前 cluster 的 scene_storyboard，
+    逐 scene 走 _sanitize_character_belief 投射各在场角色认知边界给 writer 做物理 masking。
+
+    默认安全闸（向后兼容·零回归）：无 ledger / characters 空 / 反查不到 cluster / scene 无 participants
+      → 返回 []（不注入·今天所有旧书无 ledger → 零行为变化）。全 advisory·绝不 hard_gate。"""
+    ledger_path = scanner.root / "_数据库" / "character_belief_ledger.json"
+    if not ledger_path.exists():
+        return []
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(ledger, dict) or not ledger.get("characters"):
+        return []
+    cluster = scanner._event_cluster_by_id(current_cluster_id)
+    if not isinstance(cluster, dict):
+        return []
+    out = []
+    for idx, scene in enumerate(cluster.get("scene_storyboard") or []):
+        if not isinstance(scene, dict):
+            continue
+        proj = _sanitize_character_belief(ledger, scene, current_cluster_id)
+        if proj is not None:
+            if proj.get("scene_index") is None:
+                proj["scene_index"] = idx
+            out.append(proj)
+    return out
+
+
 def _collect_active_character_cards(scanner, active_chars, current_cluster_id):
     """写手注入人物卡的出口（item 1）：注入出场角色 + 主角的【已隔离】卡（剥未到期隐藏身份/未来知识/秘密护栏）。
     防 gemini 在埋设/早期 cluster 见全部角色真身份提前定性。raw 人物卡.json 直读由 gen_writer 侧另治（北极星：本层只卡 build_manifest 出口）。"""
@@ -4722,6 +4842,11 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # 🔴 2026-06-28 写手信息隔离（item 1）：出场角色 + 主角的【已隔离】人物卡（剥未到期隐藏身份 true_role/
         # 未来知识 will_learn/秘密护栏 anti_patterns·留 surface_role/doesnt_know_yet/工艺 anti_pattern）。
         "active_character_cards": _collect_active_character_cards(s, active_chars, current_cluster_id),
+        # 🔴 2026-06-29 角色信息差(per-character belief)：按 scene participants 投射各在场角色认知边界
+        # （knows[] = learned<=current 的 fact · must_not_reference[] = unaware_of + 未到期 fact 的负向 masking）。
+        # 让 writer 按各角色受限认知写·物理 masking 防角色用不该知道的知识穿帮（扮猪吃老虎/信息差）。
+        # 默认安全闸：无 character_belief_ledger.json / 无 participants → []（向后兼容·零行为变化）。全 advisory。
+        "scene_character_knowledge": _collect_scene_character_knowledge(s, current_cluster_id),
         "active_offscreen_actions": _collect_offscreen_actions(s, chapter),
         "active_fate_events": _collect_active_fate_events(s, chapter),
         "world_state_snapshot": _collect_world_state_snapshot(s, chapter),
@@ -4865,6 +4990,7 @@ def _build_cache_layout() -> dict:
         ],
         "SEMI_STATIC_70_cacheable": [
             "active_character_cards",            # 🔴 写手信息隔离：已隔离的出场角色卡（卷内慢变·隐藏身份到揭密 cluster 才变）
+            "scene_character_knowledge",         # 🔴 2026-06-29 角色信息差：per-scene 各角色认知边界（同 cluster 内不变·卷内慢变）
             "active_fate_events",                # 卷内大势事件池
             "world_state_snapshot",              # 世界数值（卷间慢变）
             "active_aspects",                    # 角色永久烙印（一旦获得永久）
