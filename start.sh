@@ -17,4 +17,4 @@ fi
 
 # -- Launch Claude Code (interactive) --
 # 用户随便打个字就触发主菜单（CLAUDE.md 接管）
-claude --dangerously-skip-permissions --append-system-prompt "Show main menu on start. Hard rules: writing must go through /cluster-write (cluster mode, no direct chapter generation), distillation runs in cluster mode, cluster-save-state must run all 12 steps, write directly after outline without asking user, auto-switch source on fetch failure without asking user." "$@"
+claude --dangerously-skip-permissions --append-system-prompt "Show main menu on start. Hard rules: writing must go through /cluster-write (cluster mode, no direct chapter generation), distillation runs in cluster mode, cluster-save-state must run all 14 steps, write directly after outline without asking user, auto-switch source on fetch failure without asking user." "$@"

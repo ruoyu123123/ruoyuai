@@ -33,5 +33,5 @@ if exist "%~dp0.claude\commands" (
 
 rem -- Launch claude CLI (interactive mode) --
 rem User types anything to trigger the main menu (CLAUDE.md handles the rest)
-claude --dangerously-skip-permissions --append-system-prompt "Show main menu on start. Hard rules: writing must go through /cluster-write (cluster mode, no direct chapter generation), distillation runs in cluster mode, cluster-save-state must run all 12 steps, write directly after outline without asking user, auto-switch source on fetch failure without asking user." %*
+claude --dangerously-skip-permissions --append-system-prompt "Show main menu on start. Hard rules: writing must go through /cluster-write (cluster mode, no direct chapter generation), distillation runs in cluster mode, cluster-save-state must run all 14 steps, write directly after outline without asking user, auto-switch source on fetch failure without asking user." %*
 if errorlevel 1 pause
