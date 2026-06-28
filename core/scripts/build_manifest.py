@@ -1896,6 +1896,86 @@ def _soften_convergence_anchor(anchor, current_cluster_id, total):
     return out
 
 
+# 🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架
+_SWAIN_PROACTIVE_KEYS = ("goal", "conflict", "disaster")
+_SWAIN_REACTIVE_KEYS = ("reaction", "dilemma", "decision")
+_VALID_SCENE_TYPES = {"proactive_scene", "reactive_sequel"}
+_VALID_LINK_TYPES = {"but", "therefore", "and_then"}
+_VALID_RESULT_TYPES = {"yes_but", "no_and", "yes_and"}
+
+
+def _collect_scene_causal_skeleton(cluster: dict) -> dict | None:
+    """🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架（事件 P0·治流水账·涟漪微观可执行化）。
+
+    透传 outline-planner(A agent) 在 scene_storyboard 每个 scene 标注的 Swain 场景骨架 + But-Therefore 衔接：
+      · scene_type ∈ {proactive_scene|reactive_sequel}
+      · proactive_scene → {goal, conflict, disaster}（Swain Scene = Goal-Conflict-Disaster）
+      · reactive_sequel → {reaction, dilemma, decision}（Swain Sequel = Reaction-Dilemma-Decision）
+      · link_to_prev ∈ {but|therefore|and_then}（相邻 beat 衔接类型·South Park But/Therefore 法则）
+      · result_type ∈ {yes_but|no_and|yes_and}（Butcher Try-Fail·禁纯 yes 顺风局）
+    proactive/reactive 子 beat 既认顶层字段，也认嵌套 proactive{}/reactive{} 子 dict。
+
+    默认安全闸：所有 scene 都无任何这些字段 → 返回 None（不注入·向后兼容旧 storyboard / 旧书·零行为变化）。
+    advisory：场景骨架是参考模板非硬模具·writer 有具体理由可豁免（北极星⑤·绝不 hard_gate）。
+    """
+    if not isinstance(cluster, dict):
+        return None
+    storyboard = cluster.get("scene_storyboard")
+    if not isinstance(storyboard, list) or not storyboard:
+        return None
+    skeleton: list[dict] = []
+    has_any = False
+    for idx, sc in enumerate(storyboard):
+        if not isinstance(sc, dict):
+            continue
+        entry: dict = {"scene_index": idx}
+        st = sc.get("scene_type")
+        if isinstance(st, str) and st.strip().lower() in _VALID_SCENE_TYPES:
+            entry["scene_type"] = st.strip().lower()
+            has_any = True
+        ltp = sc.get("link_to_prev")
+        if isinstance(ltp, str) and ltp.strip().lower() in _VALID_LINK_TYPES:
+            entry["link_to_prev"] = ltp.strip().lower()
+            has_any = True
+        rt = sc.get("result_type")
+        if isinstance(rt, str) and rt.strip().lower() in _VALID_RESULT_TYPES:
+            entry["result_type"] = rt.strip().lower()
+            has_any = True
+        # Swain proactive / reactive 骨架字段（顶层或嵌 proactive/reactive 子 dict 都认）
+        prox = sc.get("proactive") if isinstance(sc.get("proactive"), dict) else sc
+        reac = sc.get("reactive") if isinstance(sc.get("reactive"), dict) else sc
+        beats: dict = {}
+        for k in _SWAIN_PROACTIVE_KEYS:
+            v = prox.get(k)
+            if isinstance(v, str) and v.strip():
+                beats[k] = v.strip()
+                has_any = True
+        for k in _SWAIN_REACTIVE_KEYS:
+            v = reac.get(k)
+            if isinstance(v, str) and v.strip():
+                beats[k] = v.strip()
+                has_any = True
+        if beats:
+            entry["beats"] = beats
+        skeleton.append(entry)
+    if not has_any:
+        return None  # 默认安全闸：无任何 Swain/But-Therefore 字段 → 不注入
+    return {
+        "scenes": skeleton,
+        "directive": (
+            "🟢 But-Therefore 因果连接器 + Swain 场景骨架(事件 P0·治流水账·涟漪微观)：\n"
+            "  · 相邻 scene 必须用 but(冲突转折)/therefore(因果后果)衔接·\n"
+            "    避免 and_then 平铺直叙(『然后…然后…』= 流水账无因果)。\n"
+            "  · proactive_scene 走 Goal→Conflict→Disaster(目标→受阻→更糟)；\n"
+            "    reactive_sequel 走 Reaction→Dilemma→Decision(情绪反应→两难→抉择)。\n"
+            "  · result_type 禁纯 yes(顺风局)：用 yes_but(赢了但有代价)/no_and(输了且更糟)·\n"
+            "    try-fail stakes 逐步递增。\n"
+            "  · 场景骨架是参考模板非硬模具·有具体到本场景的理由可偏离(<300 字·北极星⑤)。"
+        ),
+        "_doc": "🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架·advisory·绝不 hard_gate",
+    }
+
+
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
     writer 在 MODE=ecas 时必读此字段。
@@ -2176,6 +2256,11 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         # 数据源=motif_advisory_snapshot.json.dormant_motifs（top-5），由 motif_recurrence_ledger 落盘。
                         # advisory · 永不 hard_gate · 不存在时为空 list（守北极星⑤顾问非法官）。
                         "motif_callback_hints": _collect_motif_callback_hints_for_cluster(scanner),
+                        # 🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架（事件 P0·治流水账·涟漪微观可执行化）：
+                        # 透传 outline-planner 在 scene_storyboard 标注的 scene_type/proactive/reactive/link_to_prev/result_type，
+                        # 并注入『相邻 scene 须 but/therefore 衔接·避免 and_then 平铺·结果禁纯 yes』指令给 writer。
+                        # 默认安全闸：scene 无这些字段 → None（不注入·向后兼容旧 storyboard / 旧书）。advisory 永不 hard_gate。
+                        "scene_causal_skeleton": _collect_scene_causal_skeleton(c),
                         "_narrative_mode_doc": ("in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；"
                                                 "linear = 时间序；kishotenketsu_4act = 起承转结无冲突(治愈/iyashikei)"),
                         "_narrative_pov_mode_doc": ("R7 W2 五分类(Stanzel/Cohn): "
@@ -2637,6 +2722,107 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
+
+
+# 🔴 2026-06-29 环境location回喂闭环
+_SENSORY_PREFIX_CN = {"smell": "嗅", "sound": "听", "touch": "触", "light": "光"}
+
+
+def _collect_location_atmosphere(scanner, chapter: int) -> dict | None:
+    """🔴 2026-06-29 环境location回喂闭环（环境 P0·闭合 location_atmosphere_registry feed-forward）。
+
+    系统已由 location_signature_consistency.update_registry 增量维护
+    _数据库/location_atmosphere_registry.json（{location_name:{signature_sensory_motifs:[嗅/听/触/光],...}}），
+    但 build_manifest 此前**零消费**——纯写入只做事后漂移检测·从不正向告诉写手该地点有什么签名感官。
+    本 collector 把已学到的地点感官签名【正向回喂】writer（advisory 素材池·非硬约束）。
+
+    定位：经 current_scene().location / 当前 cluster.hub_locations / character_positions 三路收集候选地点名，
+    与 registry key 做双向 substring 匹配。
+    默认安全闸：无 registry / 定位不到地点 / 命中地点无 signature → 返回 None（不注入·向后兼容旧书·零行为变化）。
+    豁免：尊重作者档 location_atmosphere_override.allow_drift_locations（季节/灾后/时间推移合法漂移不锁）。
+    advisory：永不 hard_gate（北极星⑤·正向素材池非填空题）。
+    """
+    reg = scanner.load("location_atmosphere_registry", {})
+    if not isinstance(reg, dict) or not reg:
+        return None
+
+    # allow_drift 豁免（作者档第一权威）
+    allow_drift = set()
+    ap = scanner.load("作者风格", {})
+    if isinstance(ap, dict):
+        ovr = ap.get("location_atmosphere_override") or {}
+        if isinstance(ovr, dict):
+            for loc in (ovr.get("allow_drift_locations") or []):
+                if isinstance(loc, str) and loc.strip():
+                    allow_drift.add(loc.strip())
+
+    # ── 定位当前场景地点候选 ──
+    candidates: set[str] = set()
+    scene = scanner.current_scene() or {}
+    if isinstance(scene, dict):
+        for key in ("location", "place", "scene_location", "setting"):
+            v = scene.get(key)
+            if isinstance(v, str) and v.strip():
+                candidates.add(v.strip())
+    # 当前 cluster 的 hub_locations
+    try:
+        for cl in (scanner.load("事件簇", {}) or {}).get("clusters", []) or []:
+            if not isinstance(cl, dict):
+                continue
+            cr = cl.get("chapter_range") or []
+            if isinstance(cr, list) and len(cr) == 2 and cr[0] <= chapter <= cr[1]:
+                for hl in (cl.get("hub_locations") or []):
+                    if isinstance(hl, str) and hl.strip():
+                        candidates.add(hl.strip())
+    except Exception:
+        pass
+    # 出场角色当前位置
+    try:
+        for loc in scanner.character_positions().values():
+            if isinstance(loc, str) and loc.strip():
+                candidates.add(loc.strip())
+    except Exception:
+        pass
+
+    if not candidates:
+        return None  # 默认安全闸：定位不到地点 → 不注入
+
+    # ── registry key 与候选双向 substring 匹配 ──
+    matched: list[dict] = []
+    seen = set()
+    for loc, entry in reg.items():
+        if not isinstance(loc, str) or not isinstance(entry, dict):
+            continue
+        if loc in allow_drift or loc in seen:
+            continue
+        if not any(loc == c or loc in c or c in loc for c in candidates):
+            continue
+        sig = entry.get("signature_sensory_motifs") or []
+        sig = [m for m in sig if isinstance(m, str) and m.strip()]
+        if not sig:
+            continue
+        seen.add(loc)
+        matched.append({
+            "location": loc,
+            "signature_sensory_motifs": sig,
+            "occurrences": entry.get("occurrences"),
+        })
+
+    if not matched:
+        return None  # 默认安全闸：无命中地点或命中地点无 signature → 不注入
+
+    return {
+        "locations": matched,
+        "directive": (
+            "🟢 地点签名感官回喂(环境 P0·setting-as-character·正向素材池)：\n"
+            "  · 本场景登场地点的签名感官见 locations[].signature_sensory_motifs"
+            "（前缀 smell=嗅/sound=听/touch=触/light=光·此前 cluster 已为该地点建立的恒定质感）。\n"
+            "  · 重访地点延续其签名感官(读者潜意识认地点)·但这是【素材池非填空题】：\n"
+            "    选 1-2 个主感官写透·不要把 5 感全堆上(写得精 > 写得多)。\n"
+            "  · 季节/灾后/时间推移导致的合法漂移由作者档 allow_drift 豁免·环境是活的不锁死。"
+        ),
+        "_doc": "🔴 2026-06-29 环境location回喂闭环·advisory·正向素材池非硬约束·绝不 hard_gate",
+    }
 
 
 def _collect_offscreen_actions(scanner, chapter: int) -> list[dict]:
@@ -4850,6 +5036,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "active_offscreen_actions": _collect_offscreen_actions(s, chapter),
         "active_fate_events": _collect_active_fate_events(s, chapter),
         "world_state_snapshot": _collect_world_state_snapshot(s, chapter),
+        # 🔴 2026-06-29 环境location回喂闭环（环境 P0）：把 location_atmosphere_registry 已学到的地点签名感官
+        # 正向回喂 writer（advisory 素材池·非硬约束）。默认安全闸：无 registry / 定位不到 → None（向后兼容）。
+        "location_atmosphere": _collect_location_atmosphere(s, chapter),
         "active_clocks": _collect_active_clocks(s, chapter),
         "research_cache_ref": _collect_research_cache_ref(s, chapter),
         "event_cluster_context": _collect_event_cluster_context(s, chapter),
@@ -4993,6 +5182,8 @@ def _build_cache_layout() -> dict:
             "scene_character_knowledge",         # 🔴 2026-06-29 角色信息差：per-scene 各角色认知边界（同 cluster 内不变·卷内慢变）
             "active_fate_events",                # 卷内大势事件池
             "world_state_snapshot",              # 世界数值（卷间慢变）
+            "location_atmosphere",               # 🔴 2026-06-29 地点签名感官回喂（同 cluster 内地点稳定·卷内慢变）
+
             "active_aspects",                    # 角色永久烙印（一旦获得永久）
             "throughlines",                      # 4 线弧光
             "ensemble_layer",                    # 群像档（NPC schedule 不变）

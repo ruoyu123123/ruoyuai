@@ -340,10 +340,41 @@
                   "type": ["string", "null"],
                   "enum": ["mystery", "suspense", "dramatic_irony", null],
                   "_doc": "🔴 2026-06-29 角色信息差: advisory 创作提示(不锁剧情·北极星⑤) · McKee 三知识缺口 · 读者知角色不知=dramatic_irony(桌下炸弹) · 设计悬念/反转/戏剧反讽时标 · 否则 null"
+                },
+                "scene_type": {
+                  "type": "string",
+                  "enum": ["proactive_scene", "reactive_sequel"],
+                  "_doc": "🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架: Swain 场景单元类型 · proactive_scene(行动场: goal→conflict→disaster) / reactive_sequel(反应场: reaction→dilemma→decision) · 复用既有 goal/conflict(proactive 场) · build_manifest(B agent) + causal_connector_scanner 读 · ⚠️ 与 chapter-plan 层 scene_type(category 开场/战斗/悬疑·golden_passages 选取用) 是不同对象层(本字段在 scene_storyboard.items 内·不冲突) · 与既有 R20 unit_type(scene/sequel·sequel_drought_advisory 消费) 同概念更细版·并存向后兼容"
+                },
+                "disaster": {
+                  "type": "string",
+                  "_doc": "🔴 2026-06-29 But-Therefore+Swain: proactive_scene 结尾的挫败/恶化(Swain Scene 的 Disaster·目标受挫推动下一 reactive_sequel) · 仅 proactive_scene 填"
+                },
+                "reaction": {
+                  "type": "string",
+                  "_doc": "🔴 2026-06-29 But-Therefore+Swain: reactive_sequel 的情绪反应(Swain Sequel 的 Reaction) · 仅 reactive_sequel 填"
+                },
+                "dilemma": {
+                  "type": "string",
+                  "_doc": "🔴 2026-06-29 But-Therefore+Swain: reactive_sequel 的两难(Swain Sequel 的 Dilemma·无好选项) · 仅 reactive_sequel 填 · 与既有 sequel_dilemma 同义·并存向后兼容"
+                },
+                "decision": {
+                  "type": "string",
+                  "_doc": "🔴 2026-06-29 But-Therefore+Swain: reactive_sequel 的新目标决定(Swain Sequel 的 Decision·下个 proactive_scene 的 goal 种子) · 仅 reactive_sequel 填 · 与既有 sequel_decision 同义·并存向后兼容"
+                },
+                "link_to_prev": {
+                  "type": "string",
+                  "enum": ["but", "therefore", "and_then"],
+                  "_doc": "🔴 2026-06-29 But-Therefore因果连接器(South Park 法则·微观涟漪·因果+信息触发非预设): 与上一 scene 的衔接类型 · but=冲突转折 / therefore=因果后果 / and_then=平铺(流水账根因·要避免) · causal_connector_scanner(B agent) 扫相邻 scene 命中 and_then 平铺则 emit WEAK_CAUSAL_LINK(advisory) · 只查是否 and_then 平铺·不卡 but/therefore 比例(70/30 是英美影视经验值非跨题材硬指标·北极星⑤)"
+                },
+                "result_type": {
+                  "type": "string",
+                  "enum": ["yes_but", "no_and", "yes_and"],
+                  "_doc": "🔴 2026-06-29 But-Therefore+Try-Fail(Butcher): 本场结果 · yes_but=达成但带来新麻烦 / no_and=失败且更糟 / yes_and=达成且顺势(慎用) · 禁纯 yes 顺风局(try-fail 递增) · advisory 参考模板·writer 有理由可豁免(北极星⑤)"
                 }
               }
             },
-            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief)·全 optional 向后兼容"
+            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe / causal_connector_scanner 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief) · 🔴 2026-06-29 scene_type/disaster/reaction/dilemma/decision/link_to_prev/result_type 给 But-Therefore因果连接器+Swain场景骨架(治流水账) · 全 optional 向后兼容"
           },
           "writer_model_used": {
             "type": "string",

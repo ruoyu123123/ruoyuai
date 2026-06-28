@@ -1389,6 +1389,13 @@
       "_new": true,
       "issues_emitted": ["RASA_CAUSAL_BREAK_NO_VIBHAVA", "RASA_CAUSAL_BREAK_NO_ANUBHAVA", "RASA_CAUSAL_BREAK_MISMATCH", "RASA_CAUSAL_OK"]
     },
+    "causal_connector_scanner": {
+      "layer": "cluster",
+      "script": "causal_connector_scanner.py",
+      "doc": "[2026-06-29 事件 P0·But-Therefore因果连接器+Swain场景骨架·治流水账]扫 scene_storyboard 相邻 beat 的 link_to_prev∈{but|therefore|and_then}·命中 and_then 平铺(『然后…然后…』流水账)或已标注 scene 缺 but/therefore 衔接 → WEAK_CAUSAL_LINK·弱衔接数≥2 或连续 and_then run≥2 触发·🔴只查是否 and-then 平铺·绝不卡 but/therefore 比例(70/30 是英美影视经验值非跨题材硬指标·北极星⑤)·storyboard 完全未标注(旧书/旧 storyboard)→ skip(默认安全闸·向后兼容)·input=事件簇.json 非草稿文本·env CAUSAL_CONNECTOR_MODE 默认 shadow·WEAK_CAUSAL_LINK 绝不进 HARD_GATE_CODES",
+      "_new": true,
+      "issues_emitted": ["WEAK_CAUSAL_LINK"]
+    },
     "direction_card_poetics_scanner": {
       "layer": "cluster",
       "script": "direction_card_poetics_scanner.py",
