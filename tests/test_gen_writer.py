@@ -435,6 +435,35 @@ def test_strip_english_meta_commentary_tail():
     assert "self-checks" not in body
 
 
+def test_creative_guard_excludes_flash_tier():
+    """🔴 2026-06-28：写正文禁 flash-tier 兜底（质量攸关·flash 碎句·静默降质违锁 pro 决策）。
+
+    实证：cluster_002 因 pro_preview 瞬时 502 + pro 持久 503 → 静默掉 flash 写正文。改：creative
+    候选剔除含 'flash' 的 profile，pro 全挂则响亮 GenModelExhaustedError·GEN_WRITER_ALLOW_FLASH=1 旁路。"""
+    import os
+
+    class _P:
+        def __init__(self, name, model):
+            self.name, self.model = name, model
+    cands = [_P("gemini_pro_preview", "gemini-3.1-pro-preview"),
+             _P("gemini_pro", "gemini-3.1-pro"),
+             _P("gemini_flash", "gemini-3.5-flash")]
+    bak = os.environ.pop("GEN_WRITER_ALLOW_FLASH", None)
+    try:
+        out = gw._filter_creative_profiles(cands)
+        names = [p.name for p in out]
+        assert "gemini_flash" not in names, f"flash 应被排除, 实际 {names}"
+        assert "gemini_pro_preview" in names and "gemini_pro" in names
+        # 旁路
+        os.environ["GEN_WRITER_ALLOW_FLASH"] = "1"
+        out2 = gw._filter_creative_profiles(cands)
+        assert "gemini_flash" in [p.name for p in out2], "旁路应恢复 flash"
+    finally:
+        os.environ.pop("GEN_WRITER_ALLOW_FLASH", None)
+        if bak is not None:
+            os.environ["GEN_WRITER_ALLOW_FLASH"] = bak
+
+
 def test_strip_english_meta_no_false_strip_chinese_with_quote():
     """正文中含英文短引用/人名不被误剥（只剥尾部整段英文·遇中文主导行立停）。"""
     reply = "他低声念出那个名字：Elias。\n\n钟楼的影子落在石板上，伊莱握紧了那封信。"

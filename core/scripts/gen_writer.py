@@ -1713,9 +1713,32 @@ GEN_MODEL_MAX_RETRIES = 3  # 同 profile 限流/超时的有限重试次数
 GEN_MODEL_RETRY_BASE_DELAY = 2.0  # 指数退避基础秒数（2,4,8）
 
 
+def _filter_creative_profiles(candidates):
+    """🔴 2026-06-28：写正文禁 flash-tier 兜底（质量攸关）。
+
+    根因：fallback 链 pro_preview→pro→flash·中间 gemini_pro 渠道持久 503 model_not_found·
+    pro_preview 一旦瞬时 502 就直接掉到 flash → 静默用 flash(碎句·被淘汰差模型)写正文，
+    违背「gen-model 锁定 pro」决策(memory project_genmodel_flash_locked)。实测 cluster_002 被 flash 写。
+    改：写作候选剔除 model/name 含 'flash' 的 profile → pro 全挂则响亮 GenModelExhaustedError
+    (主代理重试·等中转站恢复)，绝不静默降质。紧急旁路 GEN_WRITER_ALLOW_FLASH=1。
+    """
+    if os.environ.get("GEN_WRITER_ALLOW_FLASH") == "1":
+        return candidates
+    filtered = [p for p in candidates
+                if "flash" not in (getattr(p, "model", "") or "").lower()
+                and "flash" not in (getattr(p, "name", "") or "").lower()]
+    dropped = [getattr(p, "name", "?") for p in candidates if p not in filtered]
+    if dropped:
+        logger.info(f" [creative-guard] 写正文禁 flash 兜底 → 排除 {dropped}"
+                    "（质量攸关·pro 全挂则响亮失败让主代理重试·GEN_WRITER_ALLOW_FLASH=1 可旁路）")
+    return filtered
+
+
 def call_gen_model(loader: GenModelLoader, system: str, user: str,
-                   min_cjk: int | None = None) -> tuple[str, Profile]:
+                   min_cjk: int | None = None, creative: bool = False) -> tuple[str, Profile]:
     """调当前 active profile；失败时按 fallback 链尝试。
+
+    creative=True（写正文）→ 剔除 flash-tier 兜底，pro 全挂响亮失败（不静默降质 · 北极星：质量优先）。
 
     min_cjk：freestyle 正文长度软下限。设了 → 生成完（finish=stop）但正文 CJK < min_cjk 时，
     追加 expand 续写（展开剩余场景）兜底，治 pro 等简洁模型单 cluster 偏短。蒸馏复刻/ai_wrapper
@@ -1741,6 +1764,12 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         APITimeoutError = RateLimitError = ()
 
     candidates = loader.get_callable_profiles()
+    if creative:
+        candidates = _filter_creative_profiles(candidates)
+        if not candidates:
+            raise GenModelExhaustedError(
+                [("<creative-guard>", "pro-tier 全不可用且 flash 被禁(写正文质量攸关)·"
+                  "疑中转站 502/503 故障·稍后重试(GEN_WRITER_ALLOW_FLASH=1 可紧急旁路用 flash)")])
     failures: list[tuple[str, str]] = []
 
     for i, profile in enumerate(candidates):
@@ -1891,7 +1920,7 @@ def gather_author_ref_text(project_root: Path, max_chars: int = 6000) -> str:
 
 
 def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
-                      n: int, min_cjk: int | None = None) -> list[dict]:
+                      n: int, min_cjk: int | None = None, creative: bool = False) -> list[dict]:
     """生成 N 个候选稿（temperature 阶梯抖动 · 非迭代 · 规避 self-refine 同质化）。
 
     每个候选独立调一次 call_gen_model（active→fallback 链复用 · 不另起调用栈）。
@@ -1913,7 +1942,7 @@ def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
         active0.temperature = temp
         logger.info(f"\n[gen_writer][best-of-N] 生成候选 {i+1}/{n} (temperature={temp})")
         try:
-            reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk)
+            reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk, creative=creative)
             drafts.append({"idx": i, "reply": reply, "profile": used_profile,
                            "temperature": temp, "error": None})
         except GenModelExhaustedError as e:
@@ -2027,7 +2056,7 @@ def select_best_draft(scored: list[dict]) -> tuple[int, str]:
 
 def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
                        project_root: Path, n: int,
-                       min_cjk: int | None = None) -> tuple[str, "Profile", dict]:
+                       min_cjk: int | None = None, creative: bool = False) -> tuple[str, "Profile", dict]:
     """best-of-N 主流程：生成 N 稿 → 各自打分 → 综合择优 → 返回最佳稿。
 
     返回 (best_reply, best_profile, selection_trace)。
@@ -2040,7 +2069,7 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
         logger.info("[best-of-N] 未找到作者原文池 · 跳过 SFS/AV-judge 打分 "
               "（仍生成 N 稿但退回第一稿 · 优雅降级）")
 
-    drafts = generate_n_drafts(loader, system, user, n, min_cjk=min_cjk)
+    drafts = generate_n_drafts(loader, system, user, n, min_cjk=min_cjk, creative=creative)
     ok_drafts = [d for d in drafts if d.get("error") is None and d.get("reply")]
     if not ok_drafts:
         # 全部候选生成失败 → 汇总 raise（与单稿全失败行为一致）
@@ -2446,10 +2475,11 @@ def main():
         if n >= 2:
             logger.info(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优")
             reply, used_profile, best_of_n_trace = best_of_n_pipeline(
-                loader, system, user, project_root, n, min_cjk=min_cjk)
+                loader, system, user, project_root, n, min_cjk=min_cjk, creative=True)
         else:
             logger.info(f"[best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）")
-            reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk)
+            # 🔴 2026-06-28：creative=True → 写正文禁 flash 兜底（pro 全挂响亮失败让主代理重试·不静默降质）
+            reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk, creative=True)
     except GenModelExhaustedError as e:
         # 🔴 2026-06-26 fail-fast 走 stderr + flush（log_util INFO 级 logger.info 走 stdout，
         # ERROR 字样混在 stdout 里会让 wrapper agent 把 exit 3 误读成 exit 0；feedback_verify_stderr_not_exitcode
