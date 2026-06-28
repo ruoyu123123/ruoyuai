@@ -322,16 +322,24 @@ class DatabaseScanner:
         return None
 
     def world_keyword_hits(self) -> list[dict]:
-        """世界观按关键词匹配（本章大纲命中哪些条目）。"""
+        """世界观按关键词匹配（本章大纲命中哪些条目）。
+        🔴 2026-06-28 写手信息隔离（item 3b·堵直读绕过）：命中条目经 _resolve_world_entry 剥未到 reveal_cluster
+        的 hidden_truth/hidden_rules 后内联（resolved），让写手用隔离后的 surface 设定·不必直读 raw 世界观.json。"""
         world = self.load("世界观", {})
         entries = world.get("entries", [])
         plan = self.current_scene() or {}
         haystack = " ".join(str(v) for v in plan.values() if isinstance(v, (str, list)))
+        cur_cid = self._current_cluster_id()
         hits = []
         for e in entries:
             for kw in e.get("keywords", []):
                 if kw in haystack:
-                    hits.append({"id": e.get("id"), "keywords": e.get("keywords")})
+                    resolved = _resolve_world_entry(e, cur_cid)
+                    hits.append({
+                        "id": e.get("id"), "keywords": e.get("keywords"),
+                        "priority": e.get("priority", 0),
+                        "resolved": resolved,  # 已剥未到期 hidden_truth/hidden_rules
+                    })
                     break
         hits.sort(key=lambda x: -(x.get("priority", 0)))
         return hits
@@ -408,12 +416,15 @@ class DatabaseScanner:
     # --- 新增 4 类扫描：关系/道具/时间线/场景规则 ---
 
     def relevant_relationships(self) -> list[dict]:
-        """抽取出场角色两两之间的关系条目（有数值或非零强度的才返回）。"""
+        """抽取出场角色两两之间的关系条目（有数值或非零强度的才返回）。
+        🔴 2026-06-28 写手信息隔离（item 2）：经 _sanitize_relationship 剥未到 reveal_cluster 的 hidden_intent
+        （秘密议程）·明面 type/数值不动。must_read focus 只拼 from/to/type（均明面）→ 此处隔离后 focus 天然安全。"""
         data = self.load("关系", {"relationships": []})
         active = set(self.active_characters())
         id_map = self._char_id_map()
         # 把 active 名字映射成 id，两边都能匹配
         active_ids = {id_map.get(n, n) for n in active} | active
+        cur_cid = self._current_cluster_id()
         hits = []
         for r in data.get("relationships", []):
             f, t = r.get("from"), r.get("to")
@@ -422,13 +433,19 @@ class DatabaseScanner:
                 vals = [r.get("affinity", 0), r.get("trust", 0),
                         r.get("fear", 0), r.get("respect", 0)]
                 if any(v != 0 for v in vals):
-                    hits.append({
-                        "from": f, "to": t, "type": r.get("type"),
-                        "affinity": r.get("affinity", 0),
-                        "trust": r.get("trust", 0),
-                        "fear": r.get("fear", 0),
-                        "respect": r.get("respect", 0),
-                    })
+                    rs = _sanitize_relationship(r, cur_cid)
+                    hit = {
+                        "from": f, "to": t, "type": rs.get("type"),
+                        "affinity": rs.get("affinity", 0),
+                        "trust": rs.get("trust", 0),
+                        "fear": rs.get("fear", 0),
+                        "respect": rs.get("respect", 0),
+                    }
+                    if "hidden_intent" in rs:  # 仅到 reveal_cluster 时保留
+                        hit["hidden_intent"] = rs["hidden_intent"]
+                    if rs.get("reveal_directive"):
+                        hit["reveal_directive"] = rs["reveal_directive"]
+                    hits.append(hit)
         return hits
 
     def relevant_items(self) -> list[dict]:
@@ -776,10 +793,12 @@ def _collect_active_fate_events(scanner, chapter: int) -> dict:
         import fate_engine
         result = fate_engine.evaluate(scanner.root, chapter)
         drift_result = fate_engine.drift(scanner.root, chapter)
+        # 🔴 2026-06-28 写手信息隔离（item 5·纯删非延迟）：剥每个 fate event 的 downstream_unlocks
+        # （前向 ME 链·写手永不需要·下游 ME 进 active 时自然注入）。default-safe：无此字段原样。
         return {
             "mode": "fluid",
-            "active": result.get("active_fate_events", [])[:5],
-            "overdue": drift_result.get("overdue_events", []),
+            "active": [_strip_fate_downstream(e) for e in result.get("active_fate_events", [])[:5]],
+            "overdue": [_strip_fate_downstream(e) for e in drift_result.get("overdue_events", [])],
             "total_scheduled": result.get("total_scheduled"),
             "total_completed": result.get("total_completed"),
             "_note": "鬼谷八荒式涌现叙事 - 本章应推进 active 中的 1-2 个事件",
@@ -1471,6 +1490,292 @@ def _resolve_foreshadowing_to_callback(items, current_cluster_id):
     return out
 
 
+# ============================================================================
+# 🔴 2026-06-28 写手信息隔离（防 gemini 在 build_manifest 注入层提前泄露未来/暗线秘密）
+# ----------------------------------------------------------------------------
+# 照抄已建伏笔范式（_sanitize_foreshadowing_to_plant / _resolve_foreshadowing_to_callback）：
+# 每类子系统一个 _sanitize/_resolve/_soften 单一真理源·字段级剥离·到 reveal/trigger cluster 自动暴露。
+#
+# 北极星边界铁律（必守）：
+#   · 延迟注入非删除（除 fate downstream 纯删）：到 trigger/reveal cluster 自动暴露 + reveal_directive。
+#   · 字段级粒度：禁 blanket-strip 整字段·非秘密角色 role 不动·明面 type/surface_note 不动·纯工艺 anti_pattern 留。
+#   · 默认安全闸：无 hidden_*/reveal_cluster/true_role 等显式标记的旧条目（今天几乎全部）一律原样透传零行为变化。
+#   · 涟漪 surface 留（北极星②）：faction 公开动向/npc current_action/offscreen visible/数值 留·只隔离未来结果 + 幕后真实意图。
+#   · 全 advisory·绝不新增 hard_gate·不进 audit_hub.HARD_GATE_CODES·不动北极星不变量回归锁。
+# ============================================================================
+
+_WRITER_HINT_SECRET_MARKERS = ("终卷揭密", "false_hero", "不可早暴露", "灰色合作")
+_GHOST_REVEAL_KEYS = {"wound", "wound_reveal", "reveal", "true_wound", "hidden_payoff"}
+_PROPP_SURFACE_MAP = {"false_hero": "ally"}  # false_hero → 表面盟友（authority/ally）·hero/mentor/helper 不动
+_OFFSCREEN_FUTURE_KEYS = ("result_expected", "outcome_if_complete", "current_plan", "goals", "goals_short")
+
+
+def _cluster_due(reveal_cluster, current_cluster_id):
+    """当前 cluster 是否已到/越过 reveal_cluster（>= 语义·到了就一直暴露·秘密揭晓后不再回收）。
+    无法解析（reveal 缺/畸形 或 current 缺）→ None，调用方据此走默认安全闸/保守剥离决策。"""
+    rn = cluster_lookup.cluster_num(reveal_cluster)
+    cn = cluster_lookup.cluster_num(current_cluster_id)
+    if rn is None or cn is None:
+        return None
+    return cn >= rn
+
+
+def _surface_propp(pf, card):
+    """表面 propp_function：优先 producer 显式 surface_propp_function·否则 false_hero→ally·其余不动。"""
+    sp = card.get("surface_propp_function")
+    if sp is not None:
+        return sp
+    if isinstance(pf, str) and pf.strip().lower() in _PROPP_SURFACE_MAP:
+        return _PROPP_SURFACE_MAP[pf.strip().lower()]
+    return pf
+
+
+def _sanitize_ghost(ghost):
+    """ghost.wound reveal 部分剥离·留 surface_driver。默认安全闸：producer 未拆 surface_driver → 原样透传。"""
+    if not isinstance(ghost, dict):
+        return ghost
+    if ghost.get("surface_driver") is None:
+        return ghost  # 旧 ghost.wound 当普通背景·零行为变化
+    return {k: v for k, v in ghost.items() if k not in _GHOST_REVEAL_KEYS}
+
+
+def _sanitize_knowledge(know, current_cluster_id):
+    """knowledge.will_learn（未来才知）隔离·doesnt_know_yet 本体保留（防 FUTURE_KNOWLEDGE_LEAK 必需）。
+    will_learn 条目：无 learn_at_cluster 标记 → 透传（安全闸）；标记未到/畸形 → 剥（未来知识）；已到 → 留。"""
+    if not isinstance(know, dict):
+        return know
+    wl = know.get("will_learn")
+    if not isinstance(wl, list):
+        return know
+    kept = []
+    for e in wl:
+        if not isinstance(e, dict):
+            kept.append(e)
+            continue
+        lac = e.get("learn_at_cluster")
+        if lac is None:
+            kept.append(e)  # 无显式 reveal 标记 → 默认安全闸·透传
+            continue
+        if _cluster_due(lac, current_cluster_id):  # 已学/正学 → 留（已到知识合法·due-this-ch 另经 will_learn_due_this_ch 注入）
+            kept.append(e)
+        # due False/None（未来 或 标记畸形）→ 剥（未来才知）
+    out = dict(know)
+    out["will_learn"] = kept
+    return out
+
+
+def _sanitize_voice_pack(vp, current_cluster_id):
+    """voice_pack.anti_patterns 含未来秘密的护栏文本剥·纯工艺 anti_pattern（口癖/句式禁忌）留（字段级）。
+    只剥 producer 显式标记的秘密护栏（dict 带 reveals_secret/hidden_until_cluster/reveal_cluster）·纯字符串透传。"""
+    if not isinstance(vp, dict):
+        return vp
+    aps = vp.get("anti_patterns")
+    if not isinstance(aps, list):
+        return vp
+    kept = []
+    for ap in aps:
+        if isinstance(ap, dict):
+            ruc = ap.get("hidden_until_cluster") or ap.get("reveal_cluster")
+            if ap.get("reveals_secret") or ruc is not None:
+                if ruc is not None and _cluster_due(ruc, current_cluster_id):
+                    kept.append(ap)  # 已到揭晓 → 留
+                continue  # 未到/无 reveal cluster → 剥（含秘密措辞的护栏）
+        kept.append(ap)  # 纯字符串/纯工艺 anti_pattern → 留
+    out = dict(vp)
+    out["anti_patterns"] = kept
+    return out
+
+
+def _sanitize_character_card(card, current_cluster_id):
+    """角色卡写手注入门控（item 1 + 6 + 8）·字段级剥离·默认安全闸（无 true_role/concealed/hidden 标记 → 原样透传）。
+      · true_role/concealed_until_cluster 未到 → 剥 true_role·role/propp_function 用 surface 等价替换·注 surface_subtext；
+        到 concealed_until_cluster → 解锁 true_role + reveal_directive。
+      · ghost.wound 剥 reveal 部分留 surface_driver。
+      · _writer_hint 含『终卷揭密/false_hero/不可早暴露/灰色合作』反指令整条剥（反指令进 prompt 必触发粉红大象）。
+      · knowledge.will_learn 未来隔离·doesnt_know_yet 留。
+      · voice_pack.anti_patterns 秘密措辞剥·纯工艺 anti_pattern 留。"""
+    if not isinstance(card, dict):
+        return card
+    out = dict(card)
+    # (1) 隐藏身份 true_role / concealed_until_cluster
+    true_role = card.get("true_role")
+    concealed_until = card.get("concealed_until_cluster")
+    if true_role is not None or concealed_until is not None:
+        due = _cluster_due(concealed_until, current_cluster_id) if concealed_until is not None else False
+        if due:  # 到/越过揭密 cluster → 解锁真身份 + reveal 指令（写手该揭晓一定拿得到·不漏付）
+            if true_role is not None:
+                out["role"] = true_role
+                nm = card.get("name") or card.get("id") or "此角色"
+                out["reveal_directive"] = f"🔴 现在可揭晓 {nm} 的真实身份：{true_role}（本块起身份已揭晓）"
+        else:  # 未到（含 due is None/False）→ 剥真身份·表面替换
+            out.pop("true_role", None)
+            sr = card.get("surface_role")
+            if sr is not None:
+                out["role"] = sr  # false_hero→authority/ally·hero/mentor/helper 不动（由 producer 给 surface_role 决定）
+            out["propp_function"] = _surface_propp(card.get("propp_function"), card)
+            out.setdefault("surface_subtext", "此角色比表面更复杂，可留白，勿过早定性")
+    # (2) ghost.wound reveal 部分
+    if isinstance(card.get("ghost"), dict):
+        out["ghost"] = _sanitize_ghost(card["ghost"])
+    # (3) _writer_hint 反指令（粉红大象）
+    wh = card.get("_writer_hint")
+    if isinstance(wh, str) and any(mk in wh for mk in _WRITER_HINT_SECRET_MARKERS):
+        out.pop("_writer_hint", None)
+    # (6) knowledge.will_learn 未来隔离·doesnt_know_yet 留
+    if isinstance(card.get("knowledge"), dict):
+        out["knowledge"] = _sanitize_knowledge(card["knowledge"], current_cluster_id)
+    # (8) voice_pack.anti_patterns 秘密措辞剥
+    if isinstance(card.get("voice_pack"), dict):
+        out["voice_pack"] = _sanitize_voice_pack(card["voice_pack"], current_cluster_id)
+    # (7·卡内联) offscreen 幕后未来结果/真实意图剥（active_character_cards 出口·与 _collect_offscreen_actions 同口径）
+    if isinstance(card.get("offscreen"), dict):
+        out["offscreen"] = _sanitize_card_offscreen(card["offscreen"])
+    return out
+
+
+def _collect_active_character_cards(scanner, active_chars, current_cluster_id):
+    """写手注入人物卡的出口（item 1）：注入出场角色 + 主角的【已隔离】卡（剥未到期隐藏身份/未来知识/秘密护栏）。
+    防 gemini 在埋设/早期 cluster 见全部角色真身份提前定性。raw 人物卡.json 直读由 gen_writer 侧另治（北极星：本层只卡 build_manifest 出口）。"""
+    cards_path = scanner.root / "_数据库" / "人物卡.json"
+    if not cards_path.exists():
+        return []
+    try:
+        data = json.loads(cards_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    active_set = set(active_chars or [])
+    out = []
+    for c in data.get("characters", []) or []:
+        if not isinstance(c, dict):
+            continue
+        nm = c.get("name") or c.get("id")
+        if active_set and nm not in active_set and c.get("role") != "主角":
+            continue
+        out.append(_sanitize_character_card(c, current_cluster_id))
+    return out
+
+
+def _sanitize_relationship(rel, current_cluster_id):
+    """关系写手注入门控（item 2）：拆 type(明面留) + hidden_intent(秘密议程·reveal_cluster 未到→剥)；
+    note 拆 surface_note(留) + hidden_note(到 hidden_note_reveal_cluster 才暴露)。默认安全闸：无 hidden_* → 原样透传。"""
+    if not isinstance(rel, dict):
+        return rel
+    out = dict(rel)
+    # hidden_intent 秘密议程（明面 type / 数值 不动）
+    if "hidden_intent" in rel:
+        if _cluster_due(rel.get("reveal_cluster"), current_cluster_id):
+            f, t = rel.get("from"), rel.get("to")
+            out["reveal_directive"] = f"🔴 现在可揭晓 {f}→{t} 的关系暗议程：{rel['hidden_intent']}"
+        else:
+            out.pop("hidden_intent", None)
+    # hidden_note（到 hidden_note_reveal_cluster 才暴露）
+    if "hidden_note" in rel:
+        if not _cluster_due(rel.get("hidden_note_reveal_cluster"), current_cluster_id):
+            out.pop("hidden_note", None)
+    return out
+
+
+def _sanitize_faction_focus(faction):
+    """世界真相·阵营写手注入门控（item 3a）：hidden faction 剥真 current_focus 留 surface_focus·数值（涟漪 surface）always 留。
+    默认安全闸：producer 未标 hidden 且未给 surface_focus/hidden_focus → 原样透传（current_focus 是公开动向）。"""
+    if not isinstance(faction, dict):
+        return faction
+    if not faction.get("hidden") and faction.get("surface_focus") is None and faction.get("hidden_focus") is None:
+        return faction
+    out = dict(faction)
+    sf = faction.get("surface_focus")
+    out["current_focus"] = sf if sf is not None else ""
+    out.pop("hidden_focus", None)
+    return out
+
+
+def _resolve_world_entry(entry, current_cluster_id):
+    """世界真相·世界观条目写手注入门控（item 3b）：entry.hidden_truth/hidden_rules 到 reveal_cluster 才 merge（堵直读绕过）。
+    默认安全闸：无 hidden_truth/hidden_rules → 原样透传。涟漪 surface（公开设定/数值）always 留。"""
+    if not isinstance(entry, dict):
+        return entry
+    if entry.get("hidden_truth") is None and entry.get("hidden_rules") is None:
+        return entry
+    if _cluster_due(entry.get("reveal_cluster"), current_cluster_id):  # 到揭晓 → 保留 hidden_truth/hidden_rules + reveal 指令
+        out = dict(entry)
+        nm = entry.get("id") or entry.get("name") or "此设定"
+        out["reveal_directive"] = f"🔴 现在可揭晓世界真相 {nm}：hidden_truth/hidden_rules 本块解锁"
+        return out
+    return {k: v for k, v in entry.items() if k not in ("hidden_truth", "hidden_rules")}
+
+
+def _sanitize_clock_to_writer(clock):
+    """时钟写手注入门控（item 4）：visible_to_writer==True 或 ticks>=max → 含 trigger_on_max·否则剥 trigger_on_max
+    留 label/remaining/max/urgency。visible_to_writer 缺字段默认 True 向后兼容（clock_engine.list_active 将补此字段）。"""
+    if not isinstance(clock, dict):
+        return clock
+    visible = clock.get("visible_to_writer")
+    ticks, mx = clock.get("ticks"), clock.get("max")
+    reached = isinstance(ticks, (int, float)) and isinstance(mx, (int, float)) and ticks >= mx
+    show = (visible is None) or (visible is True) or reached
+    if show:
+        return clock
+    return {k: v for k, v in clock.items() if k != "trigger_on_max"}
+
+
+def _sanitize_offscreen(action):
+    """幕后写手注入门控（item 7）：剥 result_expected/outcome_if_complete（未来结果）+ current_plan/goals（幕后真实意图）·
+    留 visible action/current_action（涟漪 surface·北极星②）。"""
+    if not isinstance(action, dict):
+        return action
+    return {k: v for k, v in action.items() if k not in _OFFSCREEN_FUTURE_KEYS}
+
+
+def _strip_fate_downstream(event):
+    """fate event 写手注入门控（item 5·纯删非延迟）：剥 downstream_unlocks（前向 ME 链·写手永不需要·
+    下游 ME 进 active 时自然注入）。default-safe：无此字段 → 原样透传。"""
+    if not isinstance(event, dict):
+        return event
+    return {k: v for k, v in event.items() if k != "downstream_unlocks"}
+
+
+def _sanitize_card_offscreen(offscreen):
+    """角色卡内联 offscreen 写手注入门控（item 7·active_character_cards 出口）：剥幕后未来结果 +
+    真实意图（current_plan/goals + 每个 action 的 result/result_expected/outcome_if_complete）·留 visible action。"""
+    if not isinstance(offscreen, dict):
+        return offscreen
+    out = {k: v for k, v in offscreen.items()
+           if k not in ("current_plan", "goals", "result_expected", "outcome_if_complete")}
+    acts = offscreen.get("actions")
+    if isinstance(acts, list):
+        out["actions"] = [
+            ({k: v for k, v in a.items()
+              if k not in ("result", "result_expected", "outcome_if_complete")}
+             if isinstance(a, dict) else a)
+            for a in acts
+        ]
+    return out
+
+
+def _soften_convergence_anchor(anchor, current_cluster_id, total):
+    """卷收敛锚降精（item 9·北极星③软牵引载体）：早期 cluster 把 final_image/ending_image 降精到软方向（不整删不 None）·
+    volume_arc/core_conflict/key_milestones/泛化 gloss 始终给所有 cluster。无法判定位置 → 原样透传（默认安全闸）。"""
+    if not isinstance(anchor, dict):
+        return anchor
+    idx = cluster_lookup.cluster_num(current_cluster_id)
+    if idx is None or not isinstance(total, int) or total <= 1:
+        return anchor
+    if idx / total >= 0.5:  # 后半程 → 给精确终局画面
+        return anchor
+    out = dict(anchor)
+    softened = False
+    for k in ("final_image", "ending_image"):
+        if out.get(k):
+            out.pop(k, None)
+            out[k + "_softened"] = (
+                "（早期 cluster 降精·北极星③软牵引：本卷终局方向见 volume_arc/core_conflict/key_milestones，"
+                "具体终局画面随涟漪涌现，暂不锁定细节）")
+            softened = True
+    if softened:
+        out["_softened_for_early_cluster"] = True
+    return out
+
+
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
     writer 在 MODE=ecas 时必读此字段。
@@ -1631,7 +1936,10 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "narrative_mode": narrative_mode,
                         "narrative_pov_mode": narrative_pov_mode,
                         "climax_hint_scene_index": c.get("climax_hint_scene_index"),
-                        "volume_convergence_anchor": _build_volume_convergence_anchor(scanner, c),
+                        # 🔴 2026-06-28 写手信息隔离（item 9）：早期 cluster 把收敛锚的 final_image/ending_image
+                        # 降精到软方向（不整删不 None·北极星③软牵引载体）·volume_arc/core_conflict/milestones 始终全给。
+                        "volume_convergence_anchor": _soften_convergence_anchor(
+                            _build_volume_convergence_anchor(scanner, c), cluster_id_val, len(clusters)),
                         # 🆕 2026-06-03 卷=阶段触发点：透传卷级语义给 writer。
                         # is_volume_finale=True → 本 cluster 是卷末小走向 → writer 走高烈度转折(禁平稳收束)；
                         # stakes_delta 让 writer 知道相对前块的强度增量(避免同卷小走向平铺重复)。
@@ -2085,8 +2393,12 @@ def _collect_active_clocks(scanner, chapter: int) -> dict:
         if "error" in r:
             return {"mode": "error", "error": r["error"]}
         active = r.get("active_clocks", [])
-        # 仅注入 visible_to_writer=True 的 clock
-        visible = [c for c in active if c.get("visible_to_protagonist") is False or True]  # writer 可见所有 active clock
+        # 🔴 2026-06-28 写手信息隔离（item 4）：修恒真 bug——原
+        # `c.get("visible_to_protagonist") is False or True` 永远 True 且读错字段（visible_to_protagonist）。
+        # 改：所有 active clock 仍注入（writer 需感知倒计时存在），但经 _sanitize_clock_to_writer 按
+        # visible_to_writer（缺则默认 True 向后兼容·clock_engine.list_active 将补此字段）或 ticks>=max 决定
+        # 是否含 trigger_on_max（满格触发的事件结果·未到不该让写手提前知道具体后果）。
+        visible = [_sanitize_clock_to_writer(c) for c in active]
         return {
             "mode": "on",
             "active_clocks": visible,
@@ -2120,13 +2432,16 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
             return {"mode": "error", "error": "世界状态.json 解析失败"}
 
         # factions: 精简（去 leader/notes 节省 manifest 字符）
+        # 🔴 2026-06-28 写手信息隔离（item 3a）：hidden faction 经 _sanitize_faction_focus 剥真 current_focus
+        # 留 surface_focus·数值（power/stability/wealth = 涟漪 surface·北极星②）always 留。默认安全闸：无 hidden 标记原样。
         factions = {}
         for name, f in (world.get("factions_state") or {}).items():
+            fs = _sanitize_faction_focus(f)
             factions[name] = {
                 "power": f.get("power"),
                 "stability": f.get("stability"),
                 "wealth": f.get("wealth"),
-                "current_focus": (f.get("current_focus") or "")[:50],
+                "current_focus": (fs.get("current_focus") or "")[:50],
             }
 
         # threads: top 5 by priority
@@ -2140,7 +2455,8 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
                 "since_cluster": t.get("since_cluster"),
                 "expected_complete_cluster": t.get("expected_complete_cluster"),
                 "visible_to_protagonist": t.get("visible_to_protagonist", False),
-                "outcome_if_complete": (t.get("outcome_if_complete") or "")[:50],
+                # 🔴 2026-06-28 写手信息隔离（item 7）：剥 outcome_if_complete（幕后线程完成后的未来结果）·
+                # 留 current_action（公开动向·涟漪 surface·北极星②）。写手只知 NPC 正在做什么·不预知结局。
                 "_priority": t.get("_priority"),
             }
             for t in threads
@@ -2233,7 +2549,9 @@ def _collect_offscreen_actions(scanner, chapter: int) -> list[dict]:
                 continue
             ch_range = act.get("ch_range", [])
             if len(ch_range) == 2 and ch_range[0] <= chapter <= ch_range[1]:
-                out.append({
+                # 🔴 2026-06-28 写手信息隔离（item 7）：_sanitize_offscreen 剥 result_expected/outcome_if_complete
+                # （未来结果）+ current_plan/goals_short（幕后真实意图）·留 visible action（涟漪 surface·北极星②）。
+                out.append(_sanitize_offscreen({
                     "character": name,
                     "character_id": c.get("id"),
                     "action_index": idx,
@@ -2243,7 +2561,7 @@ def _collect_offscreen_actions(scanner, chapter: int) -> list[dict]:
                     "ch_range": ch_range,
                     "current_plan": offscreen.get("current_plan", ""),
                     "goals_short": (offscreen.get("goals", []) or [""])[0][:60],
-                })
+                }))
     return out
 
 
@@ -2895,8 +3213,11 @@ def _collect_prev_judge_findings(scanner, chapter: int, lookback: int = 3) -> di
     }
 
 
-def _collect_active_relationships(scanner, active_chars: list[str]) -> list[dict]:
-    """v19.2: 收集本章出场角色之间的关系数值。"""
+def _collect_active_relationships(scanner, active_chars: list[str], current_cluster_id=None) -> list[dict]:
+    """v19.2: 收集本章出场角色之间的关系数值。
+    🔴 2026-06-28 写手信息隔离（item 2）：① 先修 note/notes 字段名 bug——producer 两种字段名都见过，
+    旧代码只读 `notes` → 半数关系 note 丢失；改 surface_note/note/notes 三名都认。② 经 _sanitize_relationship
+    剥未到 reveal_cluster 的 hidden_intent + 未到 hidden_note_reveal_cluster 的 hidden_note。明面 type/surface_note 留。"""
     if not active_chars:
         return []
     rel_path = scanner.root / "_数据库" / "关系.json"
@@ -2906,19 +3227,35 @@ def _collect_active_relationships(scanner, active_chars: list[str]) -> list[dict
         data = json.loads(rel_path.read_text(encoding="utf-8"))
     except Exception:
         return []
+    if current_cluster_id is None:
+        try:
+            current_cluster_id = cluster_lookup.ch_to_cluster_id(scanner.root, getattr(scanner, "ch", None))
+        except Exception:
+            current_cluster_id = None
     active_set = set(active_chars)
     out = []
     for r in data.get("relationships", []):
         f, t = r.get("from"), r.get("to")
         if f in active_set or t in active_set:
-            out.append({
-                "from": f, "to": t,
-                "affinity": r.get("affinity", 0),
-                "trust": r.get("trust", 0),
-                "fear": r.get("fear", 0),
-                "respect": r.get("respect", 0),
-                "notes": r.get("notes", "")[:60],
-            })
+            rs = _sanitize_relationship(r, current_cluster_id)
+            # note/notes 字段名 bug 修复：surface_note > note > notes 三名都认（明面 note·always 留）
+            surface = (rs.get("surface_note") or rs.get("note") or rs.get("notes") or "")[:60]
+            item = {
+                "from": f, "to": t, "type": rs.get("type"),
+                "affinity": rs.get("affinity", 0),
+                "trust": rs.get("trust", 0),
+                "fear": rs.get("fear", 0),
+                "respect": rs.get("respect", 0),
+                "surface_note": surface,
+                "notes": surface,  # 向后兼容旧消费方键名
+            }
+            if "hidden_note" in rs:  # 仅到 hidden_note_reveal_cluster 时保留
+                item["hidden_note"] = (rs["hidden_note"] or "")[:60]
+            if "hidden_intent" in rs:
+                item["hidden_intent"] = rs["hidden_intent"]
+            if rs.get("reveal_directive"):
+                item["reveal_directive"] = rs["reveal_directive"]
+            out.append(item)
     return out
 
 
@@ -4019,6 +4356,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     world_hits = s.world_keyword_hits()
     events = s.triggerable_events()
     active_chars = s.active_characters()
+    # 🔴 2026-06-28 写手信息隔离：当前章所属 cluster_id（写手注入门控的 reveal/trigger 判定基准·唯一权威反查）。
+    current_cluster_id = s._current_cluster_id()
     prev_file = s.previous_chapter_file()
     recent_openings = s.recent_chapter_openings(lookback=3)
     rag_hits = s.rag_relevant_chapters(top_k=3)
@@ -4380,6 +4719,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             "ending_state": volume.get("ending_state") if volume else None,
         } if volume else None,
         "active_characters": active_chars,
+        # 🔴 2026-06-28 写手信息隔离（item 1）：出场角色 + 主角的【已隔离】人物卡（剥未到期隐藏身份 true_role/
+        # 未来知识 will_learn/秘密护栏 anti_patterns·留 surface_role/doesnt_know_yet/工艺 anti_pattern）。
+        "active_character_cards": _collect_active_character_cards(s, active_chars, current_cluster_id),
         "active_offscreen_actions": _collect_offscreen_actions(s, chapter),
         "active_fate_events": _collect_active_fate_events(s, chapter),
         "world_state_snapshot": _collect_world_state_snapshot(s, chapter),
@@ -4416,7 +4758,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "selective_history_retrieval": _collect_selective_history(s, chapter, top_k=3),
         "reader_preferences": _collect_reader_preferences(s),
         "prev_judge_findings": _collect_prev_judge_findings(s, chapter, lookback=3),
-        "active_relationships": _collect_active_relationships(s, active_chars),
+        "active_relationships": _collect_active_relationships(s, active_chars, current_cluster_id),
         "faction_standings_snapshot": _collect_faction_standings(s),
         "will_learn_due_this_ch": _collect_will_learn_due(s, chapter),
         "pending_secrets_to_reveal": _collect_secrets_to_reveal(s, chapter),
@@ -4522,6 +4864,7 @@ def _build_cache_layout() -> dict:
             "main_character_arc_stage",          # [#7]: 主角弧线当前阶段（active_cluster 命中 → 同 cluster 内不变）
         ],
         "SEMI_STATIC_70_cacheable": [
+            "active_character_cards",            # 🔴 写手信息隔离：已隔离的出场角色卡（卷内慢变·隐藏身份到揭密 cluster 才变）
             "active_fate_events",                # 卷内大势事件池
             "world_state_snapshot",              # 世界数值（卷间慢变）
             "active_aspects",                    # 角色永久烙印（一旦获得永久）

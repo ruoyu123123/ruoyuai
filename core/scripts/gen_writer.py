@@ -60,9 +60,14 @@ from log_util import get_logger, info, debug, warning, error  # noqa: E402
 #   埋设侧 _sanitize_foreshadowing_to_plant 剥 hidden_payoff（写手只见 surface_clue·当普通细节埋）；
 #   揭晓侧 _resolve_foreshadowing_to_callback 仅 trigger_cluster==当前块才暴露 hidden_payoff + reveal_directive。
 # 根治 gen_writer 直读 事件簇.json 把未到触发的暗线秘密 json.dumps 进 writer prompt（绕过 build_manifest 过滤）。
+# 🔴 2026-06-28 写手信息隔离：复用 build_manifest 的 _sanitize_character_card 为单一真理源——
+#   根治 gen_writer 直读 人物卡.json 原文 json.dump 进 writer prompt（角色未到 concealed_until_cluster
+#   的 true_role / false_hero / 与反派灰色合作 / ghost.wound reveal / knowledge.will_learn 未来知识
+#   全裸奔给 gemini）。注入前对每张卡跑该函数字段级脱敏，再 re-serialize。
 from build_manifest import (  # noqa: E402
     _sanitize_foreshadowing_to_plant as _bm_sanitize_fs_plant,
     _resolve_foreshadowing_to_callback as _bm_resolve_fs_callback,
+    _sanitize_character_card as _bm_sanitize_character_card,
 )
 
 logger = get_logger(__name__)
@@ -948,6 +953,43 @@ def _sanitize_cluster_brief_foreshadowing(brief: dict, current_cluster_id) -> di
     return safe
 
 
+# 🔴 2026-06-28 写手信息隔离（闭合直读人物卡泄露口 · Agent A 揪出的最大裸露口）
+def _sanitize_character_cards_for_writer(cards_path: Path, current_cluster_id) -> str:
+    """人物卡.json 注入 writer prompt 前，对每张卡跑 build_manifest._sanitize_character_card
+    （单一真理源）字段级脱敏后 re-serialize——根治 gen_writer 原先 read_text(人物卡.json) 把整份
+    原文（含未到 concealed_until_cluster 的 true_role / surface_role 反差 / ghost.wound reveal /
+    _writer_hint『终卷揭密/false_hero/灰色合作』反指令 / knowledge.will_learn 未来知识 /
+    voice_pack 秘密护栏 / offscreen 幕后意图）原样 json.dump 进 writer prompt 的隐藏身份泄露口。
+
+    脱敏规则全由 _bm_sanitize_character_card 承载（与 build_manifest.active_character_cards 同口径）：
+      · 未到揭密 cluster → 剥 true_role·role/propp_function 用 surface 等价替换·注 surface_subtext。
+      · 到/越过 concealed_until_cluster → 解锁 true_role + reveal_directive（该揭晓的不漏付）。
+
+    默认安全闸（不兼容不降级·零回归）：无 true_role/concealed/hidden 等显式标记的旧卡（今天几乎全部）
+    一律原样透传零行为变化。只做「字段级脱敏」不做「角色集裁剪」——保留全部角色（voice_pack 是声纹复刻
+    第一依据，按 active 过滤会丢后登场角色声纹），与原 char_card 全量注入对非密卡逐字节等价。
+
+    边界：文件不存在 → 同 read_text 的 [WARN] 占位（默认安全）。JSON 破损 / schema 无 characters list
+    → 退回原文（破损 JSON 无法被 build_manifest 加载、不构成可解析的 hidden 标记，零回归不更糟·告警留痕）。
+    """
+    if not cards_path.exists():
+        return f"[WARN] 文件不存在: {cards_path}"
+    raw = cards_path.read_text(encoding='utf-8')
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning(f"⚠️ 人物卡.json 解析失败，无法字段级脱敏隐藏身份，退回原文注入: {cards_path}")
+        return raw
+    if not isinstance(data, dict) or not isinstance(data.get("characters"), list):
+        return raw  # schema 非预期（无 characters list）→ 无可脱敏结构·退回原文（零回归）
+    safe = dict(data)
+    safe["characters"] = [
+        _bm_sanitize_character_card(c, current_cluster_id) if isinstance(c, dict) else c
+        for c in data["characters"]
+    ]
+    return json.dumps(safe, ensure_ascii=False, indent=2)
+
+
 def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                  ch_end: int = None, target_cjk: str = None) -> tuple:
     """组装 system + user prompt
@@ -1027,7 +1069,9 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     plan_text = json.dumps(relevant_plans, ensure_ascii=False, indent=2) if relevant_plans else "[]（v27 freestyle · 完全按 cluster_brief.scene_storyboard 自由发挥）"
 
     # 人物卡（全量，不截断——含 voice_pack 是声纹复刻第一依据，截断 = 后登场角色声纹丢失）
-    char_card = read_text(db / '人物卡.json')
+    # 🔴 2026-06-28 写手信息隔离：注入前对每张卡跑 _sanitize_character_card 字段级脱敏（单一真理源·
+    # 剥未到 concealed_until_cluster 的 true_role / false_hero / 灰色合作 / 未来知识等），绝不再 read_text 原文 dump。
+    char_card = _sanitize_character_cards_for_writer(db / '人物卡.json', cluster_id)
 
     # 用户偏好（全量，不截断）
     pref = read_text(db / '用户偏好.json')
@@ -1146,6 +1190,7 @@ cluster_brief / manifest 给你的 `foreshadowing_to_plant`（要埋的伏笔）
 - **埋伏笔 = 把 `surface_clue` 当一个普通细节自然写进正文**：让它像随手带过的环境 / 物件 / 动作 / 对话细节，**绝不解释它暗示什么、有何深意、为何重要、日后会怎样**。读者此刻**不该察觉它是伏笔**。一旦你写出「他隐约觉得这枚钥匙不简单」「这个细节日后将……」「冥冥中似有深意」式的提示或心理强调，伏笔就废了。
 - **只兑现/揭晓 manifest 或 cluster_brief 里 `reveal_directive`（或 `foreshadowing_to_callback` 带出的 `hidden_payoff`）明确要求揭晓的伏笔**：这些是到期该兑现的暗线，按 `reveal_directive` 把它揭穿 / 回收 / 兑现。
 - **没有 `reveal_directive` 要求揭晓的伏笔一律只埋不揭**——你看不到某条伏笔的暗线含义就对了，照明线细节写，别自己脑补它的秘密再提前点破。
+- **🔴 角色的隐藏身份/真实面目同理（写手信息隔离）**：人物卡的 `role` / `surface_role` 是你**当下能看到的表面身份**，就把它**当真**写——某个表面盟友实际是叛徒（false_hero）、某个老好人其实是幕后黑手、某人与反派暗中灰色合作，这些**真实身份（`true_role`）系统不会给你看**，是故意的。**绝不提前暗示/铺垫/点破任何角色的 true_role、反派身份、伪装或暗藏动机**（不写「他眼底闪过一丝阴鸷」「她的笑意里藏着别的东西」式提前定性）。只有当人物卡里出现该角色的 `reveal_directive`（到了 `concealed_until_cluster` 才解锁）明确要求揭晓时，才在本块把其真实身份揭穿/兑现。
 
 # 二、风格工艺默认基线（仅当作者 skill 未规定该维度时兜底 · skill 规定了以 skill 为准）
 

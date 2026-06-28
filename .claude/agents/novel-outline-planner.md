@@ -66,6 +66,81 @@ tools: Read, Write
 
 > **下游消费一致性确认**：`build_manifest` 读 `surface_clue` + 剥 `hidden_payoff`（plant）/ 到 `trigger_cluster` 暴露 `hidden_payoff` + reveal_directive（callback）；`gen_writer` 把整个 `scene_storyboard`（含 goal/conflict/turn/emotional_tone/plant_foreshadowing_surface）原样注入 writer prompt 作走向骨架；`cluster_choice_apply._normalize_storyboard_ch` 透传所有 beat 字段（只补 scene_idx/ch）。三方均向后兼容旧 brief（旧纯字符串伏笔 / 无 beat 字段照常工作）。
 
+## ③ 幕后实体明暗线隔离（隐藏身份角色 / 幕后关系 / 世界真相 / 幕后黑手 faction / 暗线时钟）
+
+> **统一原则（与上 ① 伏笔 `surface_clue`/`hidden_payoff`/`trigger_cluster` 三元组同范式）**：**Claude 规划明暗线 → 写手（gemini）只见明线 → 暗线到触发点（reveal_cluster）才由 `build_manifest` 注入写手。** 伏笔不是唯一会泄露的载体——隐藏身份角色、幕后关系、世界真相、幕后黑手 faction、暗线时钟同样要拆明暗线。**字段 schema 单一真理源 = `core/claude-home/templates/subsystem_skeletons.json` 的各子系统 `_writer_isolation_schema`**（与 `build_manifest` 的 `_sanitize_*` 门控字段名一一对应）。
+
+当你详化 cluster brief / 涌现走向时，**若该走向引入或推进了下列幕后实体，必须 producer 侧显式标 hidden 字段**（不标 = 系统按明线原样透传给写手，提前泄露）。这些 hidden 标记随 brief 落库到对应子系统 JSON（人物卡 / 关系 / 世界观 / 世界状态 / 时钟表），由 `build_manifest` 在写手注入出口按 cluster 进度门控——**与 `foreshadowing_to_plant` 落 `伏笔表.json` 同一条管线**。
+
+### A. 隐藏身份角色（人物卡 · `_sanitize_character_card`）
+
+```jsonc
+{
+  "id": "C_005", "name": "老院长", "role": "<不要直接填真身份>",
+  "surface_role": "mentor",                  // 明面叙事位·写手只见这个（替换 role·如 ally/mentor/authority）
+  "true_role": "false_hero",                 // 隐藏真实角色（false_hero/伪装者/最终Boss）·concealed 前 manifest 剥离
+  "concealed_until_cluster": "cluster_007",  // 揭晓块（>= 此块 manifest 解锁 true_role + reveal_directive）
+  "ghost": {
+    "surface_driver": "丧女之痛（写手可见的创伤外显）",   // 留
+    "wound": "他本人就是被祭台记忆喂养的傀儡"            // 镜像身份/隐藏动机·surface_driver 存在时被剥（reveal）
+  },
+  "knowledge": {
+    "doesnt_know_yet": ["祭台的真实运作"],              // 主角当前未知·留（防 FUTURE_KNOWLEDGE_LEAK）
+    "will_learn": [{"fact": "傀儡真相", "learn_at_cluster": "cluster_007"}]   // 未来才知·未到则剥
+  }
+}
+```
+
+- **命门**：`surface_role`/`ghost.surface_driver` 里**绝不能剧透** `true_role`/`ghost.wound`——同 `surface_clue` 不剧透 `hidden_payoff`。`true_role` 写真实身份给 Claude 侧/人物卡存，写手到 `concealed_until_cluster` 才见。
+- 默认安全：**普通角色不标 `true_role`/`concealed_until_cluster`/`surface_role` = 明线原样**（向后兼容）。
+
+### B. 幕后关系（关系 · `_sanitize_relationship`）
+
+```jsonc
+{
+  "id": "R_011", "from": "老院长", "to": "祭台",
+  "type": "守护者",                          // 明面关系·写手只见（留）
+  "hidden_intent": "实为祭台延续自身的容器",  // 秘密议程·reveal_cluster 未到则剥
+  "reveal_cluster": "cluster_009",           // hidden_intent 揭晓块
+  "surface_note": "对学生关怀备至",          // 明面备注（留）
+  "hidden_note": "每次关怀都在筛选下一个祭品", // 暗线备注·到 hidden_note_reveal_cluster 才暴露
+  "hidden_note_reveal_cluster": "cluster_009"
+}
+```
+
+### C. 世界真相 + 幕后黑手 faction（世界观 entry · `_resolve_world_entry`；世界状态 factions_state · `_sanitize_faction_focus`）
+
+```jsonc
+// 世界观 entry（hidden_truth / hidden_rules 到 reveal_cluster 才 merge·堵写手直读绕过）
+{ "id": "W_祭台", "title": "育新中学祭台", "keywords": ["祭台", "晚自习"],
+  "hidden_truth": "祭台用师生记忆供养某种存在",
+  "hidden_rules": "敲三下桌沿 = 傀儡程序触发口令",
+  "reveal_cluster": "cluster_012" }
+
+// 世界状态 factions_state（幕后黑手阵营·hidden 时剥真 current_focus·surface_focus 顶替·数值 always 留）
+{ "守墓人会": { "hidden": true, "power": 7, "stability": 5,
+    "surface_focus": "维护校区治安",        // 明面动向·写手只见
+    "current_focus": "为祭台筛选第七个容器"   // 真实焦点·hidden 时剥
+} }
+```
+
+### D. 暗线时钟（时钟表 · `_sanitize_clock_to_writer`）
+
+```jsonc
+{ "name": "祭台苏醒", "current": 3, "max": 7,
+  "is_surprise": true,                 // 暗线时钟语义标记（producer 侧）
+  "visible_to_writer": false,          // 🔴 门控字段：is_surprise 时须同设 false（build_manifest 读的就是这个）
+  "trigger_on_max": "祭台吞噬整个校区"  // 满格爆点·不可见且未满格时被剥（写手不预知暗线时钟的爆点）
+}
+```
+
+**硬性纪律（③ 幕后实体隔离）**：
+- ✅ Claude 出**结构/标记**：surface/hidden 字段对、reveal/concealed cluster——理性明暗线规划。
+- ❌ Claude **不写 prose**、不写台词原文、不锁文笔/字数/章数（北极星⑤）。揭晓那一刻怎么写交 gemini。
+- ❌ **surface 字段绝不剧透对应 hidden 字段**（命门·同伏笔）；`scene_storyboard` 里只放明线 surface（同 ① 的 `plant_foreshadowing_surface`），**绝不把 hidden_truth/true_role/hidden_intent 写进 storyboard**（storyboard 原样注入写手）。
+- ❌ reveal_cluster / concealed_until_cluster 要按大势/卷结构认真定——误标成「既非 null 又非当前块」时下游也会剥离防提前泄露。
+- ✅ 默认安全：不引入幕后实体的普通走向**完全不标这些字段**，零行为变化（向后兼容·今天几乎全部 brief 如此）。
+
 ---
 
 ## 输入契约

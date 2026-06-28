@@ -217,6 +217,43 @@ def test_list_active_urgency_boundaries():
         assert r["total_active"] == 3
 
 
+def test_list_active_surfaces_visible_to_writer_field():
+    """🔴 2026-06-28 写手信息隔离：list_active 透出 visible_to_writer / is_surprise。
+    无字段的旧时钟默认 visible_to_writer=True（明线·向后兼容）；显式暗线时钟原样透出。"""
+    data = {"clocks": [
+        # 旧时钟无 visible_to_writer 字段 → 默认 True（明线）
+        {"clock_id": "CK_OLD", "label": "明线", "ticks": 1, "max": 5, "status": "active"},
+        # 显式暗线时钟（producer 标记）
+        {"clock_id": "CK_DARK", "label": "暗线", "ticks": 1, "max": 5, "status": "active",
+         "visible_to_writer": False, "is_surprise": True, "trigger_on_max": "ME_SECRET"},
+    ]}
+    with tempfile.TemporaryDirectory() as d:
+        root = _mk_project(Path(d), data)
+        r = ce.list_active(root, 1)
+        by_id = {c["clock_id"]: c for c in r["active_clocks"]}
+        # 旧时钟：默认 True 向后兼容
+        assert by_id["CK_OLD"]["visible_to_writer"] is True
+        assert by_id["CK_OLD"]["is_surprise"] is False
+        # 暗线时钟：原样透出供 build_manifest 过滤 trigger_on_max
+        assert by_id["CK_DARK"]["visible_to_writer"] is False
+        assert by_id["CK_DARK"]["is_surprise"] is True
+
+
+def test_spawn_writes_visibility_fields():
+    """🔴 2026-06-28 写手信息隔离：spawn 默认明线（visible_to_writer=True / is_surprise=False）；
+    producer 显式标暗线时可写入。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        ce.spawn(root, 1, {"label": "默认明线", "max": 5})
+        ce.spawn(root, 1, {"label": "暗线惊喜", "max": 5,
+                           "visible_to_writer": False, "is_surprise": True})
+        clocks = {c["label"]: c for c in _read_clocks(root)["clocks"]}
+        assert clocks["默认明线"]["visible_to_writer"] is True
+        assert clocks["默认明线"]["is_surprise"] is False
+        assert clocks["暗线惊喜"]["visible_to_writer"] is False
+        assert clocks["暗线惊喜"]["is_surprise"] is True
+
+
 def test_list_active_excludes_triggered_status():
     """status=triggered 的 clock 非 active → 不进 list_active。"""
     data = {"clocks": [

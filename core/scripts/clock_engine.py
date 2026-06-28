@@ -250,6 +250,10 @@ def list_active(project_root: Path, ch: int) -> dict:
             "urgency": urgency,
             "trigger_on_max": _clock_trigger(c),
             "visible_to_protagonist": c.get("visible_to_protagonist", False),
+            # 🔴 2026-06-28 写手信息隔离：透出 visible_to_writer 供 build_manifest._sanitize_clock_to_writer
+            # 过滤暗线时钟的 trigger_on_max（精确未来触发事件）。默认 True（向后兼容·无此字段的旧时钟=明线·原样可见）。
+            "visible_to_writer": c.get("visible_to_writer", True),
+            "is_surprise": c.get("is_surprise", False),
             "_reason": c.get("_reason") or c.get("description", ""),
         })
     out.sort(key=lambda x: (x["remaining"], -x["ticks"]))
@@ -298,7 +302,10 @@ def spawn(project_root: Path, ch: int, clock_def: dict) -> dict:
         "tick_per_event": clock_def.get("tick_per_event", 1),
         "trigger_on_max": clock_def.get("trigger_on_max", ""),
         "visible_to_protagonist": clock_def.get("visible_to_protagonist", False),
+        # 🔴 2026-06-28 写手信息隔离：producer 可显式标暗线时钟（visible_to_writer=False / is_surprise=True），
+        # 默认明线（visible_to_writer=True · is_surprise=False · 向后兼容原样可见）。
         "visible_to_writer": clock_def.get("visible_to_writer", True),
+        "is_surprise": clock_def.get("is_surprise", False),
         "since_cluster": _since_cluster(project_root, ch),  # 2026-05-30 北极星：反查真实 cluster_id（非章号拼接）
         "spawned_by": clock_def.get("spawned_by", "manual"),
         "status": "active",

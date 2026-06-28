@@ -564,3 +564,101 @@ def test_build_prompt_excludes_untriggered_hidden_payoff():
             os.environ.pop("SNIPPET_SEED_MODE", None)
         else:
             os.environ["SNIPPET_SEED_MODE"] = _bak
+
+
+# ============ 2026-06-28 写手信息隔离·人物卡隐藏身份脱敏 ============
+def _make_cards_with_hidden_identity():
+    """造一份带隐藏身份的人物卡.json（false_hero 表面盟友实为叛徒·concealed_until cluster_005）。"""
+    return {
+        "characters": [
+            {
+                "name": "陈默",
+                "role": "ally",
+                "surface_role": "SURFACEROLE_落魄书生表面盟友_SR",
+                "true_role": "TRUEROLE_暗中投敌的叛徒_SECRET",
+                "concealed_until_cluster": "cluster_005",
+                "propp_function": "false_hero",
+                "voice_pack": {"tone": "温和", "catchphrase": "无妨"},
+            },
+            {"name": "林晚", "role": "主角", "voice_pack": {"tone": "冷峻"}},
+        ]
+    }
+
+
+def test_sanitize_cards_strips_untriggered_true_role():
+    """未到 concealed_until_cluster：剥 true_role·role 用 surface_role 替换（写手把表面身份当真）。"""
+    with _tf.TemporaryDirectory() as td:
+        p = Path(td) / "人物卡.json"
+        p.write_text(json.dumps(_make_cards_with_hidden_identity(), ensure_ascii=False), encoding="utf-8")
+        out = gw._sanitize_character_cards_for_writer(p, 1)  # cluster 1 < 5 未到
+    assert "TRUEROLE_暗中投敌的叛徒_SECRET" not in out, "未到揭密的 true_role 必须剥离"
+    assert "SURFACEROLE_落魄书生表面盟友_SR" in out, "表面身份 surface_role 应保留供写手当真"
+    chen = json.loads(out)["characters"][0]
+    assert "true_role" not in chen
+    assert chen["role"] == "SURFACEROLE_落魄书生表面盟友_SR"
+    assert chen["propp_function"] == "ally", "false_hero 应表面替换成 ally"
+
+
+def test_sanitize_cards_reveals_at_concealed_cluster():
+    """到/越过 concealed_until_cluster：解锁 true_role + reveal_directive（该揭晓的不漏付）。"""
+    with _tf.TemporaryDirectory() as td:
+        p = Path(td) / "人物卡.json"
+        p.write_text(json.dumps(_make_cards_with_hidden_identity(), ensure_ascii=False), encoding="utf-8")
+        out = gw._sanitize_character_cards_for_writer(p, 5)  # cluster 5 == concealed_until → due
+    assert "TRUEROLE_暗中投敌的叛徒_SECRET" in out, "到揭密 cluster 应解锁 true_role"
+    chen = json.loads(out)["characters"][0]
+    assert chen["role"] == "TRUEROLE_暗中投敌的叛徒_SECRET"
+    assert "reveal_directive" in chen and "陈默" in chen["reveal_directive"]
+
+
+def test_sanitize_cards_default_safe_passthrough():
+    """默认安全闸：无 true_role/concealed/hidden 标记的旧卡 → 原样透传零行为变化（不降级）。"""
+    cards = {"characters": [{"name": "路人甲", "role": "配角", "voice_pack": {"tone": "市井"}}]}
+    with _tf.TemporaryDirectory() as td:
+        p = Path(td) / "人物卡.json"
+        p.write_text(json.dumps(cards, ensure_ascii=False), encoding="utf-8")
+        out = gw._sanitize_character_cards_for_writer(p, 1)
+    assert json.loads(out)["characters"][0] == {"name": "路人甲", "role": "配角", "voice_pack": {"tone": "市井"}}
+
+
+def test_sanitize_cards_missing_file_and_broken_json():
+    """① 文件不存在 → [WARN] 占位（默认安全·不抛）；② JSON 破损 → 退回原文（零回归·不更糟）。"""
+    out_missing = gw._sanitize_character_cards_for_writer(Path("____no_such_dir____") / "人物卡.json", 1)
+    assert out_missing.startswith("[WARN] 文件不存在")
+    with _tf.TemporaryDirectory() as td:
+        p = Path(td) / "人物卡.json"
+        p.write_text("{ broken json", encoding="utf-8")
+        out_broken = gw._sanitize_character_cards_for_writer(p, 1)
+    assert out_broken == "{ broken json"
+
+
+def test_build_prompt_excludes_untriggered_true_role():
+    """端到端：build_prompt 产的 writer prompt 不含未到揭密的 true_role·含 surface_role·到揭密 cluster 才解锁。
+
+    根治原泄露口——gen_writer 直读 人物卡.json 把整份原文（含 true_role）原样 json.dump 进 writer prompt。"""
+    _bak = os.environ.get("SNIPPET_SEED_MODE")
+    os.environ["SNIPPET_SEED_MODE"] = "off"
+    try:
+        with _tf.TemporaryDirectory() as td:
+            root = Path(td)
+            db = root / "_数据库"
+            db.mkdir(parents=True)
+            (db / "进度.json").write_text(json.dumps({"cluster_blueprint": {}}, ensure_ascii=False),
+                                          encoding="utf-8")
+            (db / "人物卡.json").write_text(
+                json.dumps(_make_cards_with_hidden_identity(), ensure_ascii=False), encoding="utf-8")
+            # 未到揭密（cluster 1）
+            system1, user1, _ = gw.build_prompt(root, 1, 1)
+            full1 = system1 + "\n" + user1
+            assert "TRUEROLE_暗中投敌的叛徒_SECRET" not in full1, "未到揭密的 true_role 泄露进 prompt"
+            assert "SURFACEROLE_落魄书生表面盟友_SR" in full1, "表面 surface_role 应注入"
+            assert "写手信息隔离" in system1, "system H6 应含隐藏身份脱敏指示"
+            # 到揭密（cluster 5）
+            system5, user5, _ = gw.build_prompt(root, 5, 9)
+            full5 = system5 + "\n" + user5
+            assert "TRUEROLE_暗中投敌的叛徒_SECRET" in full5, "到揭密 cluster 应解锁 true_role 供兑现"
+    finally:
+        if _bak is None:
+            os.environ.pop("SNIPPET_SEED_MODE", None)
+        else:
+            os.environ["SNIPPET_SEED_MODE"] = _bak
