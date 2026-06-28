@@ -1,19 +1,24 @@
 """apply_archive.py — 把 novel-archivist 梳理产物 archive.json 确定性回库（无模型）。
 
 🔴 2026-06-28 架构纠正：配置的写作模型只产正文、不自报"改了什么"；Claude(archivist agent)
-读正文分辨出新增/变更的角色/道具/关系/硬事实，产 cluster_<key>_archive.json；本脚本把它
-确定性写进 人物卡 / 角色池 / 道具 / 关系 / 事件簇.clusters[].locked_facts。
+读正文分辨出新增/变更的角色/道具/关系/硬事实/throughline，产 cluster_<key>_archive.json；本
+脚本把它确定性写进 人物卡 / 角色池 / 道具 / 关系 / 事件簇.clusters[].locked_facts +
+事件簇.clusters[].throughline_progress。
 
 权威源 = archive（Claude 读正文）·不再读 writer 的 changes.factual 自报。
 
 幂等：全部按 id 去重（角色 C_*、道具 I_*、关系 REL_*）·re-apply / 多次跑不重复建、不后移。
+
+🔴 2026-06-28 不降级收尾：archive 是 factual 回库的**唯一权威路径**。每个写完的 cluster 必有
+出场角色——archive 缺 characters = archivist 失败 = 错误，**exit 非0 让 plan 硬停**（不再
+"空 archive → exit 1 当 no-op"静默降级）。幂等去重保留（re-apply 全已存在→exit 0 成功·非降级）。
 
 用法:
     python apply_archive.py <项目路径> --cluster <key>
         [--archive <archive.json 路径，默认 _数据库/.wal/cluster_<key>_archive.json>]
         [--dry-run]
 
-退出码: 0 成功 / 1 archive 缺失或空 / 2 致命错误
+退出码: 0 成功（含幂等无新增）/ 2 archive 缺失/缺出场角色（archivist 失败·硬停）或回库异常
 """
 import sys
 import json
@@ -206,6 +211,39 @@ def apply_locked_facts(db: Path, cid: str, facts: list, summary: dict, dry: bool
         save_json(p, ec)
 
 
+# ─────────────── throughline → 事件簇.clusters[].throughline_progress ───────────────
+def apply_throughline(db: Path, cid: str, tp: dict, summary: dict, dry: bool):
+    """🔴 2026-06-28 不降级收尾：本块推进的叙事线（Dramatica 4 线 OS/MC/IC/RS 的 bool）→
+    事件簇.clusters[].throughline_progress（cluster 级·持久）。
+
+    架构纠正：throughline（本块推进了哪几条叙事线）是叙事分析=梳理，由 archivist 读正文判定，
+    **不再由 writer 自报 changes.factual.throughline_progress**。cluster_summary_builder 从此处
+    读 cluster 级 throughline 注入每章账本记录 → cross_cluster_throughline_balance_aggregate 消费。
+    advisory 遥测：缺失 = no-signal（线 DORMANT），不是 hard_gate（不强制 archivist 必产）。"""
+    if not isinstance(tp, dict) or not tp:
+        summary["throughline"] = {"written": False}
+        return
+    norm = {k: bool(v) for k, v in tp.items() if k in ("OS", "MC", "IC", "RS")}
+    if not norm:
+        summary["throughline"] = {"written": False}
+        return
+    p = db / "事件簇.json"
+    ec = load_json(p, {})
+    cluster = None
+    for c in ec.get("clusters", []):
+        c_id = c.get("cluster_id")
+        if _norm_cid(c_id) == cid or str(c_id) == cid:
+            cluster = c
+            break
+    written = False
+    if cluster is not None:
+        cluster["throughline_progress"] = norm
+        written = True
+    summary["throughline"] = {"written": written}
+    if not dry and written:
+        save_json(p, ec)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -220,15 +258,24 @@ def main(argv=None):
     key3 = str(args.cluster).replace("cluster_", "")
     archive_path = Path(args.archive) if args.archive else (db / ".wal" / f"cluster_{key3}_archive.json")
 
+    # 🔴 2026-06-28 不降级收尾：archive 缺失 = archivist 没产出 = 硬错误（exit 2 让 plan 硬停）。
     if not archive_path.exists():
-        sys.stderr.write(f"[apply_archive] archive 不存在: {archive_path}\n")
+        sys.stderr.write(f"[apply_archive] FATAL: archive 不存在: {archive_path}"
+                         f"（archivist 未产 archive·状态回库链断）\n")
         sys.stderr.flush()
-        return 1
+        return 2
     archive = load_json(archive_path, {})
-    if not isinstance(archive, dict) or not any(
-            archive.get(k) for k in ("characters", "items", "relationships", "locked_facts")):
-        print(f"[apply_archive] {cid} archive 为空 → 无回库")
-        return 1
+    # 🔴 2026-06-28 不降级收尾：每个写完的 cluster 必有出场角色——archive 缺 characters =
+    # archivist 失败 = 错误（非「空 = 静默 no-op」）。exit 2 让 plan（step6 已去 advisory 前缀）硬停。
+    # 道具/关系/locked_facts/throughline 可空（非每块都有新物件/关系/硬事实）·只刚性要求 characters。
+    chars = archive.get("characters") if isinstance(archive, dict) else None
+    if not isinstance(chars, list) or not chars:
+        sys.stderr.write(
+            f"[apply_archive] FATAL: {cid} archive 缺出场角色（characters 空/缺）——"
+            f"archivist 失败或正文未梳理出角色，状态回库链断（每个写完的 cluster 必有角色）。"
+            f"archive={archive_path}\n")
+        sys.stderr.flush()
+        return 2
 
     summary = {"cluster_id": cid}
     try:
@@ -236,6 +283,7 @@ def main(argv=None):
         apply_items(db, archive.get("items", []), summary, args.dry_run)
         apply_relationships(db, archive.get("relationships", []), summary, args.dry_run)
         apply_locked_facts(db, cid, archive.get("locked_facts", []), summary, args.dry_run)
+        apply_throughline(db, cid, archive.get("throughline_progress", {}), summary, args.dry_run)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[apply_archive] FATAL: {type(e).__name__}: {e}\n")
         sys.stderr.flush()
@@ -246,7 +294,8 @@ def main(argv=None):
           f"角色卡 +{c.get('cards_added',0)}建/{c.get('cards_updated',0)}更 · 池+{c.get('pooled',0)} · "
           f"道具+{summary.get('items',{}).get('added',0)} · "
           f"关系+{summary.get('relationships',{}).get('added',0)} · "
-          f"硬事实+{summary.get('locked_facts',{}).get('added',0)}")
+          f"硬事实+{summary.get('locked_facts',{}).get('added',0)} · "
+          f"叙事线{'已记' if summary.get('throughline',{}).get('written') else '无'}")
     return 0
 
 

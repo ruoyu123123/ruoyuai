@@ -4,13 +4,19 @@
 
 根因：split_cluster_changes v1 把整 cluster 的 factual 平铺进每章 _changes.json，apply
 流程对 cluster 内 N 章逐章重放 →
-  · 人物卡 growth_arc      被 append N 次（save_state.apply_changes）
   · 时间线 time_log        被 append N 次（save_state.apply_changes）
   · NPC thread responded_count 被 +N（world_evolution_apply_chapter.respond_threads）
   · writer 撒谎检测逐章验 opening/ending/anchors → 平铺申报 vs 各章实际 → 海量假撒谎
 
+🔴 2026-06-28 审计清理B类：原「人物卡 growth_arc 被 append N 次」一项已不再适用——
+save_state.apply_changes 不再消费 writer changes.character_changes 写 growth_arc（属 B 类违规：
+读 writer 自报 factual 当权威状态源）。角色状态改由 novel-archivist 读正文产 archive →
+apply_archive.py 写 人物卡/state_log。本文件原 3 个 growth_arc 幂等用例改为「character_changes
+现为 no-op」的新契约用例；time_log（save_state 仍保留 time_advance）/ respond_threads /
+撒谎检测 / db_schema_validate 不变量不受影响（growth_arc 不变量仍校验 archive 写入的数据）。
+
 修复后不变量（本文件钉死）：
-  1. N 章 apply 后 growth_arc 累积条目数 == 逻辑成长事件数（去重 (name,key_change,trigger,cluster)）
+  1. writer changes.character_changes → 人物卡 不再写 growth_arc（B 类清理·archive 接管）
   2. N 章 apply 后 time_log 累积条目数 == 逻辑时间推进数
   3. 同 cluster N 章呼应同一 thread → responded_count == 1（下个 cluster 真呼应才合法 +1）
   4. cluster 级撒谎检测 lies == 真实违规数（opening 验首章 / ending 验末章 / anchors 验全拼接）
@@ -77,10 +83,12 @@ def _write_changes_json(root: Path, ch: int, changes: dict) -> None:
     _wj(root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json", changes)
 
 
-# ═══════════════════════ 1. growth_arc 幂等去重 ═══════════════════════
+# ═══════════════════════ 1. character_changes → growth_arc 已下线（B 类清理新契约） ═══════════════════════
 
-def test_growth_arc_no_n_fold_pollution():
-    """同一 cluster 的 4 章重放同一份 character_changes → growth_arc 只留 1 条（非 4 条）。"""
+def test_writer_character_changes_no_longer_writes_growth_arc():
+    """🔴 2026-06-28 审计清理B类：writer changes.character_changes 不再写 人物卡.growth_arc。
+    N 章重放同一份 character_changes → 人物卡 角色条目完全不变（无 growth_arc 字段被创建）。
+    角色状态改由 novel-archivist → apply_archive.py 写（archive 权威·非 writer 自报）。"""
     with tempfile.TemporaryDirectory() as d:
         root = _setup_cluster_project(Path(d), range(1, 5))
         _wj(root / "_数据库" / "人物卡.json",
@@ -89,49 +97,19 @@ def test_growth_arc_no_n_fold_pollution():
         for ch in (1, 2, 3, 4):  # 平铺：每章同一份 character_changes
             _write_parsed(root, ch, {"character_changes": [cc]})
             assert ss.apply_changes(root, ch) == 0
-        arc = _load(root, "人物卡.json")["characters"][0]["growth_arc"]
-        assert len(arc) == 1, f"growth_arc 期望 1 条（cluster 级去重），实得 {len(arc)} 条 → N 倍污染未修"
-        assert arc[0]["_source_cluster"] == "cluster_001"
-        assert arc[0]["key_change"] == "心境: 怯懦 → 决绝"
+        char = _load(root, "人物卡.json")["characters"][0]
+        assert "growth_arc" not in char, f"character_changes 不应再写 growth_arc，实得 {char.get('growth_arc')}"
 
 
-def test_growth_arc_distinct_events_both_kept():
-    """同 cluster 内两个不同成长事件 → 两条都留（去重不误折叠真不同事件）。"""
+def test_writer_new_entities_no_longer_registers_character():
+    """🔴 2026-06-28 审计清理B类：writer changes.new_entities.characters 不再注册进 人物卡。
+    新角色改由 archive（apply_archive.py）建卡。"""
     with tempfile.TemporaryDirectory() as d:
         root = _setup_cluster_project(Path(d), range(1, 5))
-        _wj(root / "_数据库" / "人物卡.json",
-            {"schema_version": "v2", "characters": [{"id": "lin", "name": "林潜", "role": "主角"}]})
-        e1 = {"name": "林潜", "field": "心境", "from": "怯懦", "to": "决绝", "trigger": "目睹灭门"}
-        e2 = {"name": "林潜", "field": "实力", "from": "炼气", "to": "筑基", "trigger": "突破"}
-        _write_parsed(root, 1, {"character_changes": [e1]})
-        ss.apply_changes(root, 1)
-        _write_parsed(root, 2, {"character_changes": [e1, e2]})  # e1 重放 + e2 新
-        ss.apply_changes(root, 2)
-        arc = _load(root, "人物卡.json")["characters"][0]["growth_arc"]
-        assert len(arc) == 2, f"两个不同事件应各留 1 条，实得 {len(arc)}"
-
-
-def test_growth_arc_next_cluster_increments():
-    """下个 cluster 真正产生同字段成长事件（cid 不同）→ 合法 append，不被跨 cluster 误去重。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d)
-        # 两个 cluster：c1=ch1-2 / c2=ch3-4
-        db = root / "_数据库"
-        db.mkdir(parents=True, exist_ok=True)
-        _wj(db / "事件簇.json", {"clusters": [
-            {"cluster_id": "cluster_001", "chapter_range": [1, 2]},
-            {"cluster_id": "cluster_002", "chapter_range": [3, 4]},
-        ]})
-        _wj(db / "人物卡.json",
-            {"schema_version": "v2", "characters": [{"id": "lin", "name": "林潜", "role": "主角"}]})
-        cc = {"name": "林潜", "field": "心境", "from": "怯懦", "to": "决绝", "trigger": "历练"}
-        for ch in (1, 2, 3, 4):
-            _write_parsed(root, ch, {"character_changes": [cc]})
-            ss.apply_changes(root, ch)
-        arc = _load(root, "人物卡.json")["characters"][0]["growth_arc"]
-        clusters = {e["_source_cluster"] for e in arc}
-        assert len(arc) == 2, f"两 cluster 各 1 条 = 2 条，实得 {len(arc)}"
-        assert clusters == {"cluster_001", "cluster_002"}
+        _wj(root / "_数据库" / "人物卡.json", {"schema_version": "v2", "characters": []})
+        _write_parsed(root, 1, {"new_entities": {"characters": [{"name": "陌生剑客", "role": "配角"}]}})
+        assert ss.apply_changes(root, 1) == 0
+        assert _load(root, "人物卡.json")["characters"] == [], "new_entities 不应再注册新角色"
 
 
 # ═══════════════════════ 2. time_log 幂等去重 ═══════════════════════

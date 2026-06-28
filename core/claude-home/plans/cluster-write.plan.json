@@ -30,7 +30,7 @@
     {
       "n": 2,
       "name": "novel-writer-ecas-only",
-      "description": "spawn novel-writer MODE=ecas · writer 只产 cluster_draft.txt + cluster_changes.json · **禁止调 splitter**（splitter 推迟到 step 6）",
+      "description": "spawn novel-writer MODE=ecas · writer 只产 cluster_draft.txt + cluster_changes.json · **禁止调 splitter**（splitter 推迟到 step 6）。🔴 2026-06-28 架构纠正：cluster_changes.json 只承载 writer 创作自评 self_eval/waivers + 确定性遥测（字数等）·**writer 不自报 factual 客观状态**（角色/道具/关系/locked_facts/伏笔 由 cluster-save-state 的 novel-archivist 读正文产 archive.json + apply_archive 确定性回库·非 writer 自报权威）",
       "required": true,
       "must_spawn_agent": "novel-writer",
       "agent_executor": "script",

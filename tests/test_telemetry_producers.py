@@ -7,8 +7,11 @@
      复用 continuity_keywords 单一来源（两边分可比），mega-token 补 2-gram 恢复可信度。
   ② narrative_debt total_planted=0：cluster 摘要无 foreshadow 流水 → 误报
      DEBT_BOOK_MORTGAGE_ABSENT。修：回退伏笔表.json 按 setup_cluster 归集 planted/paid。
-  ③ throughline_progress 全 DORMANT：gen_writer 不让 writer 自报 → 账本恒空。修：
-     CHANGES 自查项增可选 throughline_progress 字段（OS/MC/IC/RS）。
+  ③ throughline_progress 全 DORMANT：🔴 2026-06-28 不降级收尾——throughline（本块推进了哪几条
+     叙事线 OS/MC/IC/RS）是叙事分析=梳理，**移给 novel-archivist 读正文抽取**（writer 自报属
+     A 类违规·已删）。archivist 产 archive.throughline_progress → apply_archive 落
+     事件簇.clusters[].throughline_progress → cluster_summary_builder 注入每章账本 →
+     cross_cluster_throughline_balance_aggregate 消费（archive 单一来源·非 writer 自报）。
 
 全程 advisory/shadow：永不 exit 非 0 阻断、永不升 hard_gate（见各 CLI/读路径断言）。
 """
@@ -233,46 +236,86 @@ def test_cli_no_fallback_when_table_absent_no_crash():
 
 
 # ════════════════════════════════════════════════════════════════════
-# ③ throughline_progress — gen_writer 自报字段（producer 补 + 消费路径锁）
+# ③ throughline_progress — 🔴 2026-06-28 不降级收尾：移给 archivist 抽取（writer 不自报）
+#    archive.throughline_progress → apply_archive → 事件簇.clusters[] → builder → aggregator
 # ════════════════════════════════════════════════════════════════════
 
-def test_gen_writer_prompt_instructs_throughline_self_report():
-    """gen_writer 自查项必须含 throughline_progress 自报指令（OS/MC/IC/RS 与
-    throughline_balance 消费 key 对齐），否则 writer 永不产 → 账本恒空 → 全 DORMANT。"""
-    src = (_SCRIPTS / "gen_writer.py").read_text(encoding="utf-8")
-    assert "throughline_progress" in src
+def test_archivist_extracts_throughline_not_writer():
+    """🔴 2026-06-28 不降级收尾：throughline（OS/MC/IC/RS）由 novel-archivist 读正文抽取，
+    **writer 不自报**（A 类违规·属"writer 报 state"）。archivist agent 定义须指示 4 线，
+    gen_writer 须**不含** throughline 自报指令（架构纠正回归锁）。"""
+    arch = (_ROOT / ".claude" / "agents" / "novel-archivist.md").read_text(encoding="utf-8")
+    assert "throughline_progress" in arch
     for key in ("OS", "MC", "IC", "RS"):
-        assert f'"{key}"' in src or key in src
+        assert key in arch, f"archivist 定义缺 throughline 键 {key}"
+    # writer 不再自报 throughline：gen_writer 里 throughline_progress 只能出现在「已删」注释行，
+    # 绝不在 writer prompt 字符串/自查项里当指令（架构纠正回归锁·允许注释留痕说明它已移走）。
+    gw = (_SCRIPTS / "gen_writer.py").read_text(encoding="utf-8")
+    tp_lines = [ln for ln in gw.splitlines() if "throughline_progress" in ln]
+    assert tp_lines, "应保留一条注释说明 throughline 已移给 archivist"
+    for ln in tp_lines:
+        assert ln.lstrip().startswith("#"), \
+            f"gen_writer 不应在 prompt 指令里出现 throughline_progress（仅允许注释）: {ln.strip()}"
+
+
+def test_apply_archive_writes_throughline_to_event_cluster():
+    """🔴 archivist 产 archive.throughline_progress → apply_archive 落
+    事件簇.clusters[].throughline_progress（cluster_summary_builder 读此处的源）。"""
+    import apply_archive as aa  # noqa: PLC0415
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        db = root / "_数据库"
+        (db / ".wal").mkdir(parents=True)
+        (db / "事件簇.json").write_text(json.dumps({
+            "clusters": [{"cluster_id": "cluster_001", "chapter_range": [1, 2]}]
+        }, ensure_ascii=False), encoding="utf-8")
+        (db / ".wal" / "cluster_001_archive.json").write_text(json.dumps({
+            "cluster_id": "cluster_001",
+            "characters": [{"id": "C_X", "name": "X", "tier": "core", "new": True}],
+            "throughline_progress": {"OS": True, "MC": True, "IC": False, "RS": False},
+        }, ensure_ascii=False), encoding="utf-8")
+        assert aa.main([str(root), "--cluster", "001"]) == 0
+        ec = json.loads((db / "事件簇.json").read_text(encoding="utf-8"))
+        assert ec["clusters"][0]["throughline_progress"] == {
+            "OS": True, "MC": True, "IC": False, "RS": False}
 
 
 def test_gen_writer_prompt_instructs_ending_self_report():
-    """ending_type/ending_line 自报（cliffhanger 衔接遥测 · advisory 不强制）。"""
+    """ending_type/ending_line 自报（cliffhanger 衔接遥测·创作自评 applied_style · advisory 不强制）。"""
     src = (_SCRIPTS / "gen_writer.py").read_text(encoding="utf-8")
     assert "ending_type" in src and "ending_line" in src
 
 
-def test_throughline_progress_flows_builder_to_aggregator():
-    """端到端锁消费路径：changes.factual.throughline_progress → builder 账本 →
-    throughline_balance distribution 非全 0（DORMANT 解除证据）。"""
+def test_throughline_progress_flows_archive_to_aggregator():
+    """🔴 2026-06-28 不降级收尾·端到端锁新消费路径（archive 单一来源）：
+    archive.throughline_progress → apply_archive → 事件簇.clusters[].throughline_progress →
+    cluster_summary_builder 注入每章账本 → throughline_balance distribution 非全 0（DORMANT 解除）。"""
+    import apply_archive as aa  # noqa: PLC0415
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         db = root / "_数据库"
-        db.mkdir(parents=True)
+        (db / ".wal").mkdir(parents=True)
         (db / "事件簇.json").write_text(json.dumps({
             "clusters": [{"cluster_id": "cluster_001", "title": "T", "chapter_range": [1, 2]}]
         }, ensure_ascii=False), encoding="utf-8")
+        # archivist 产 archive（含 throughline）→ apply_archive 落 事件簇
+        (db / ".wal" / "cluster_001_archive.json").write_text(json.dumps({
+            "cluster_id": "cluster_001",
+            "characters": [{"id": "C_X", "name": "X", "tier": "core", "new": True}],
+            "throughline_progress": {"OS": True, "MC": True, "IC": False, "RS": False},
+        }, ensure_ascii=False), encoding="utf-8")
+        assert aa.main([str(root), "--cluster", "001"]) == 0
+        # writer changes 不含 throughline（已不自报）
         for ch in (1, 2):
             cio.write_body(root, ch, "正文内容若干。\n" * 30)
-            cio.write_changes(root, ch, {
-                "factual": {"throughline_progress": {"OS": True, "MC": True, "IC": False, "RS": False}},
-                "self_eval": {},
-            })
+            cio.write_changes(root, ch, {"factual": {}, "self_eval": {}})
         csb.build_cluster_summary(root, "cluster_001")
         from cluster_summary_reader import load_summary
         rec = next(c for c in load_summary(root)["clusters"]
                    if cl.normalize_cluster_id(c["cluster_id"]) == "cluster_001")
-        # 账本逐章保留 throughline_progress
+        # 账本逐章承载 cluster 级 throughline（注入自 事件簇·archive 源）
         assert rec["chapters"]["1"]["throughline_progress"]["OS"] is True
+        assert rec["chapters"]["2"]["throughline_progress"]["MC"] is True
         # 运行 throughline_balance（cluster 模式）→ distribution 非全 0
         target = _SCRIPTS / "cross_cluster_throughline_balance_aggregate.py"
         env = _utf8_env(CLUSTER_MODE="1", CLUSTER_ID="cluster_001")

@@ -1,6 +1,6 @@
 """写作经验.json 原子写回归测试 — 守护 [#6] 多写者半截损坏 bug。
 
-cluster-save-state step7-9 有 ≥5 个写者集中 RMW 同一 _数据库/写作经验.json。
+cluster-save-state step9-11 有 ≥5 个写者集中 RMW 同一 _数据库/写作经验.json。
 旧实现 learning_loop.save_experience / skill_evolver.save_json 用裸 write_text：
 任一进程 subprocess timeout 被 kill 写到一半 → 留半截 JSON →
 下个读者 json.JSONDecodeError 兜底成空 {} → 整库 success/failure_patterns 静默清空。

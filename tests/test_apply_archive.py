@@ -6,8 +6,10 @@
   · 老角色（id 或名字匹配）→ state_log 追加、不造重复卡
   · 道具/关系 → 按 id/pair 去重写入
   · locked_facts → 事件簇.clusters[].locked_facts
+  · throughline_progress（OS/MC/IC/RS）→ 事件簇.clusters[].throughline_progress
   · 幂等：re-apply 不重复建
-  · dry-run 不写盘；空 archive → exit 1
+  · dry-run 不写盘
+  · 🔴 2026-06-28 不降级收尾：archive 缺出场角色 / 缺文件 → exit 2 报错硬停（非静默 no-op）
 """
 import json
 import sys
@@ -141,14 +143,54 @@ def test_dry_run_no_write():
         assert len(_load(db, "人物卡.json")["characters"]) == 1  # 只有原 C_PROT
 
 
-def test_empty_archive_returns_1():
+def test_empty_archive_returns_error():
+    """🔴 2026-06-28 不降级收尾：archive 缺出场角色 = archivist 失败 = 错误 → exit 2（硬停·非 no-op）。
+    每个写完的 cluster 必有出场角色，characters 空说明梳理链断，必须让 plan 硬停。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         _write_archive(db, "001", {"characters": [], "items": [], "relationships": [], "locked_facts": []})
-        assert aa.main([str(Path(d)), "--cluster", "001"]) == 1
+        assert aa.main([str(Path(d)), "--cluster", "001"]) == 2
 
 
-def test_missing_archive_returns_1():
+def test_missing_archive_returns_error():
+    """🔴 2026-06-28 不降级收尾：archive 文件缺失 = archivist 未产出 → exit 2 硬停（原 exit 1 no-op 是降级）。"""
     with tempfile.TemporaryDirectory() as d:
         _mk_project(Path(d))
-        assert aa.main([str(Path(d)), "--cluster", "099"]) == 1
+        assert aa.main([str(Path(d)), "--cluster", "099"]) == 2
+
+
+def test_characters_only_archive_succeeds():
+    """🔴 仅 characters（无道具/关系/locked_facts/throughline）= 合法（非每块都有新物件）→ exit 0。"""
+    with tempfile.TemporaryDirectory() as d:
+        db = _mk_project(Path(d))
+        _write_archive(db, "001", {
+            "characters": [{"id": "C_X", "name": "X", "tier": "extra", "new": True}]})
+        assert aa.main([str(Path(d)), "--cluster", "001"]) == 0
+
+
+def test_throughline_progress_written_to_event_cluster():
+    """🔴 2026-06-28：archivist 抽取的 throughline_progress（OS/MC/IC/RS bool）→
+    事件簇.clusters[].throughline_progress（cluster_summary_builder 从此读 → aggregator 消费）。
+    脏键过滤 + 非 bool 归一 bool。"""
+    with tempfile.TemporaryDirectory() as d:
+        db = _mk_project(Path(d))
+        _write_archive(db, "001", {
+            "characters": [{"id": "C_X", "name": "X", "tier": "extra", "new": True}],
+            "throughline_progress": {"OS": True, "MC": "本章主角内心转变", "IC": False,
+                                     "RS": False, "脏键": True}})
+        assert aa.main([str(Path(d)), "--cluster", "001"]) == 0
+        ec = _load(db, "事件簇.json")
+        tp = ec["clusters"][0].get("throughline_progress")
+        assert tp == {"OS": True, "MC": True, "IC": False, "RS": False}, tp
+        assert "脏键" not in tp
+
+
+def test_no_throughline_no_crash_and_no_field():
+    """archive 无 throughline_progress → 不写字段、不崩（advisory 遥测·缺失 = DORMANT）。"""
+    with tempfile.TemporaryDirectory() as d:
+        db = _mk_project(Path(d))
+        _write_archive(db, "001", {
+            "characters": [{"id": "C_X", "name": "X", "tier": "extra", "new": True}]})
+        assert aa.main([str(Path(d)), "--cluster", "001"]) == 0
+        ec = _load(db, "事件簇.json")
+        assert "throughline_progress" not in ec["clusters"][0]

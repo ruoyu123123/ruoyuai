@@ -16,10 +16,16 @@ v26 兼容模式（显式锁字数 · 仅用于回归测试）：
     --chapter-start 11 --chapter-end 15 \
     --target-cjk 13000-22000
 
+gen_writer 核心职责 = 产正文 draft（配置的写作模型只产正文）。
 读取 manifest + 风格 skill + 调研 cache + cluster_brief + 7 项硬约束，
 组装 prompt，调当前 active 的 gen-model profile（OpenAI 兼容），
 失败时按 fallback 链尝试下一个 profile，
 写出 cluster draft + changes.json + 自动跑 scanner 校验。
+
+🔴 2026-06-28 审计清理A类：changes.json 仅承载 writer 创作期自评（self_eval / waivers）
++ 确定性遥测（word_count_cjk / paragraph_count / 风格自查指标）；cluster 级 factual 状态
+（角色 / 道具 / 关系 / locked_facts / 伏笔）由 Claude（novel-archivist / foreshadower）
+读正文梳理 → apply_archive.py 确定性回库，writer 不再自报任何 factual 状态。
 
 配置：参见 .env 中 GEN__<name>__* 字段 + GEN_MODEL_ACTIVE。
 管理：python core/scripts/gen_model.py list / switch / show / add
@@ -1336,7 +1342,7 @@ scene_storyboard / scope_summary / cluster_brief 等大纲材料里出现的「�
 
 为什么这样：writer（你）擅长连续叙事的内在节奏；splitter（另一个 agent）擅长判断章节边界。预设章节边界 = writer 为「章末必须有钩子」强行设计信息炸弹结尾 = 显得刻意。让 splitter 在你写完后选自然截断点 = 章节边界看起来像页面物理限制而非刻意叙事设计。
 
-完成正文后，在【同一次回复里】紧接着直接输出 JSON 格式的 CHANGES 部分（用 ```json ... ``` 包裹）。
+完成正文后，在【同一次回复里】紧接着直接输出 JSON 格式的 CHANGES 部分（用 ```json ... ``` 包裹）。**CHANGES 只承载你的创作期自评（self_eval / waivers）+ 确定性遥测（字数 / 段数 / 风格自查指标）**——不要在 CHANGES 里自报角色 / 道具 / 关系 / locked_facts / 伏笔等剧情事实状态（这些由系统读你的正文自动梳理入库，你只管把正文写好）。
 
 🔴 **你是写作引擎，不是对话助手**（reasoning/instruct 模型尤其注意）：
 - 禁止停下来问我、禁止说「请审阅」「要不要我输出 CHANGES」「当你认为正文满足后请告诉我」「我将为你输出」之类的话、禁止等我确认——正文 + CHANGES JSON 必须在**这一次回复**里一次性给全，正文写完直接接 ```json``` 块。
@@ -1505,11 +1511,14 @@ cluster_brief 完整内容：
 # 现在请写正文"""
 
     # 生成点尾部（两个 join 分支共用 · 紧贴生成点的指令 + 自查项）
+    # 🔴 2026-06-28 审计清理A类：自查项只留创作期自评 + 确定性遥测；factual 状态簇
+    # （facts_locked/出场角色/new_items/foreshadowing_planted·paid/throughline_progress）已删——
+    # 那些由 Claude（novel-archivist/foreshadower）读正文梳理 → apply_archive 回库，writer 不自报 factual。
     gen_point_tail = f"""
 
 {"按 7 项硬铁律 + 元 anti-slop 防御 · 完整覆盖 cluster_brief 的所有 scene_storyboard 自由发挥（章数由 splitter 后期切，你不必管）。" if freestyle else f"按 7 项硬铁律 + 元 anti-slop 防御，写 {ch_end - ch_start + 1} 章完整故事块。"}
 
-**自查项**（写完后请在 CHANGES JSON 里自报）：
+**自查项**（写完后请在 CHANGES JSON 里自报 · 仅你的创作期自评 + 确定性遥测，**不要自报角色/道具/关系/locked_facts/伏笔等剧情事实状态**）：
 - word_count_cjk
 - paragraph_count
 - narrative_paras_with_short_sentence_overuse（≤ 0）
@@ -1519,11 +1528,6 @@ cluster_brief 完整内容：
 - meta_vocab_disclaimer_count（≤ 2）
 - negation_action_count（≤ 25）
 - story_block_ch_range
-- **facts_locked（必填·内容状态一致性命脉）**：本块新确立的、后续不可推翻的硬事实，写进 factual.locked_facts=[{{"fact":一句话事实, "subject":涉及谁/什么}}]（如主角身份/能力规则/关键物件性质/世界设定）——漏报 = 后续 cluster 无从查矛盾。
-- **出场角色**：本块出场的角色名写进 factual.出场角色=[名字…]（新角色额外进 factual.new_entities=[{{"name","role"}}]）。
-- **关键道具**：本块登场的关键物件写进 factual.new_items=[{{"name":物件名, "desc":一句话}}]（如信物/凶器/线索物）。
-- foreshadowing_planted / foreshadowing_paid（**每条带 id（引用 cluster_brief.foreshadowing_to_plant 或 manifest 待回收伏笔的真实 fs_id），无对应 fs_id 的新伏笔可只给 desc。paid 每条再加 kind："terminal"（核心承诺彻底兑现 / Tier-1 finale 锚点抵达）或 "progressive"（推进/扩散/阶段性数值，伏笔仍 open）——save_state 据此判是否标 resolved**）
-- throughline_progress（**可选·遥测用**：本块推进了哪几条叙事线，填 factual.throughline_progress={{"OS":bool,"MC":bool,"IC":bool,"RS":bool}}——OS=客观主线/外部事件，MC=主角内心成长，IC=影响者/对手线，RS=核心关系演变；每块至少推 2 条）
 - self_eval.applied_style.ending_type / ending_line（**可选·衔接遥测用**：本块结尾类型（如"悬念断章/情绪收束"）+ 最后一句原文）
 
 现在开始写。"""
@@ -1555,10 +1559,13 @@ def _build_cont_msg(cont_reason: str) -> str:
                     "任何元叙述。你这一轮的输出必须是**纯中文小说正文**，直接从上文最后一个字接着写下一个场景。"
                     "**先别写 CHANGES JSON**——等正文真正累积到 12000 字以上、scene_storyboard 每一幕都写透了，我再让你补。")
     elif cont_reason == "changes_only":
+        # 🔴 2026-06-28 审计清理A类：changes_only 兜底不再列举 factual（locked_facts/伏笔/出场角色），
+        # 只补创作期自评 self_eval/waivers + 确定性遥测；factual 状态由 Claude 读正文梳理 → apply_archive 回库。
         cont_msg = ("正文已经写完。现在请**只输出**这个故事块结尾的 CHANGES JSON 块"
                     "（用 ```json 围栏包裹），**不要再写任何正文、不要重复正文内容**。"
-                    "JSON 需包含 factual（locked_facts / foreshadowing_planted / foreshadowing_paid / "
-                    "出场角色 等本故事块发生的事实变更）与 self_eval。")
+                    "JSON 只需包含 self_eval（本块创作自评 + applied_style）与 waivers（如有豁免）"
+                    "+ 确定性遥测（word_count_cjk / paragraph_count 等）——不要自报角色 / 道具 / "
+                    "locked_facts / 伏笔等剧情事实状态。")
     else:
         cont_msg = ("上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
                     "不要重复已经写过的内容、不要重新开头，直接续写后续正文"

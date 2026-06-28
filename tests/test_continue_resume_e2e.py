@@ -98,7 +98,7 @@ def test_wal_recovery_all_done_exit0():
     with _wal_sandbox() as (proj, plans_dir):
         _write_plan(plans_dir, _mk_plan(
             "续跑测试书_csv_001", "续跑测试书", "cluster-save-state",
-            "cluster_001", total=12, done=12, completed=True))
+            "cluster_001", total=14, done=14, completed=True))
         code, out = _run_wal_main(proj)
         assert code == 0, f"全完成应 exit 0·实际 {code}\n{out}"
         assert "未完成 0" in out, out
@@ -127,7 +127,7 @@ def test_wal_recovery_cluster_filter_narrows():
     with _wal_sandbox() as (proj, plans_dir):
         _write_plan(plans_dir, _mk_plan(
             "续跑测试书_csv_003", "续跑测试书", "cluster-save-state",
-            "cluster_003", total=12, done=12, completed=True))
+            "cluster_003", total=14, done=14, completed=True))
         _write_plan(plans_dir, _mk_plan(
             "续跑测试书_cw_004", "续跑测试书", "cluster-write",
             "cluster_004", total=7, done=2))

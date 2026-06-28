@@ -499,9 +499,10 @@ def _build_changes_derived(factual: dict, self_eval: dict) -> dict:
     if isinstance(rel, list):
         rec["relationships"] = rel
 
-    tp = _first(factual, "throughline_progress", "throughlines_addressed", "throughlines")
-    if isinstance(tp, dict):
-        rec["throughline_progress"] = tp
+    # 🔴 2026-06-28 不降级收尾：删除 factual.throughline_progress 孤儿读——writer 已不自报
+    # throughline（A 类违规·属"writer 报 state"）。本块推进的叙事线改由 archivist 读正文判定 →
+    # apply_archive 落 事件簇.clusters[].throughline_progress → build_cluster_summary 经 ctx
+    # 注入每章 rec（见 _build_chapter_record·archive 单一来源）。
 
     items = _first(factual, "item_changes", "items_changed", "items", "props")
     if isinstance(items, list):
@@ -659,6 +660,14 @@ def _build_chapter_record(project_root, db, cluster_id, ch, ctx) -> dict:
 
     # ---- changes 派生 ----
     rec.update(_build_changes_derived(factual, self_eval))
+
+    # ---- throughline 注入（archive 单一来源·2026-06-28 不降级收尾）----
+    # writer 不再自报 throughline_progress——cluster 级叙事线推进由 archivist 读正文判定、
+    # apply_archive 落 事件簇.clusters[].throughline_progress（cluster 级·本 cluster 各章同值）。
+    # 注入每章账本记录供 cross_cluster_throughline_balance_aggregate（读 rec.throughline_progress）消费。
+    _ctp = ctx.get("cluster_throughline")
+    if isinstance(_ctp, dict) and _ctp:
+        rec["throughline_progress"] = dict(_ctp)
 
     # ---- blueprint / storyboard 派生 ----
     sb = _load_blueprint_scene(db, cluster_id, ch)
@@ -828,6 +837,23 @@ def _compute_cliffhanger_resonance(chapters: dict, bodies: dict, lo: int, hi: in
 # cluster 级 rollup + 主入口
 # ============================================================
 
+def _load_cluster_throughline(db, norm_cid: str):
+    """读 事件簇.clusters[].throughline_progress（archivist → apply_archive 落点·archive 单一来源）。
+
+    🔴 2026-06-28 不降级收尾：throughline 不再来自 writer 自报 changes.factual，权威源 = archivist
+    读正文判定 → apply_archive 落 事件簇。返回归一后的 {OS/MC/IC/RS: bool} 或 None（无 → 四线 DORMANT）。
+    """
+    ec = _load_json(db / "事件簇.json", {}) or {}
+    for c in ec.get("clusters", []) or []:
+        if isinstance(c, dict) and cluster_lookup.normalize_cluster_id(c.get("cluster_id")) == norm_cid:
+            tp = c.get("throughline_progress")
+            if isinstance(tp, dict) and tp:
+                norm = {k: bool(v) for k, v in tp.items() if k in ("OS", "MC", "IC", "RS")}
+                return norm or None
+            return None
+    return None
+
+
 def build_cluster_summary(project_root, cluster_id) -> dict:
     """构建并原子写入一个 cluster 的富摘要。返回 {ok, cluster_id, ...stats}。"""
     project_root = Path(project_root)
@@ -869,6 +895,10 @@ def build_cluster_summary(project_root, cluster_id) -> dict:
         _aspect_kw = _aspect_keyword_sets(db)
     except Exception:
         _aspect_kw = []
+    try:
+        _cluster_tl = _load_cluster_throughline(db, norm_cid)
+    except Exception:
+        _cluster_tl = None
     ctx = {
         "protagonist": protagonist,
         "catchphrases": catchphrases,
@@ -881,6 +911,7 @@ def build_cluster_summary(project_root, cluster_id) -> dict:
         "coping_keywords": _coping_kw,
         "arc_stage": _arc_stage,
         "aspect_kw_sets": _aspect_kw,
+        "cluster_throughline": _cluster_tl,
     }
 
     chapters: dict[str, dict] = {}

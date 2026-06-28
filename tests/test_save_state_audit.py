@@ -8,17 +8,22 @@
     若 时间线.json 的 current_time 是 str/None（旧 schema / migrate_data_model_v2 在野遗留 /
     脏数据），二者都能过 `in` 检查 → L471 抛 TypeError。
 
-    该 TypeError 会被 cmd_apply_cluster_changes 逐章 try/except（L880-889）捕获 →
-    标该章 failed + 继续 + cluster 仍 exit 0，但**本章后续的 道具.json（item_transfers）落地
-    + .wal/applied 摘要写盘被整段跳过** → 道具持有人静默不更新（可能触发 ITEM_HOLDER_ABSENT
-    误判）+ 审计丢失 + 数据库部分更新。
+    该 TypeError 会被 cmd_apply_cluster_changes 逐章 try/except 捕获 → 标该章 failed + 继续 +
+    cluster 仍 exit 0，但**本章后续的 time_log 追加 + .wal/applied 摘要写盘被整段跳过** →
+    审计丢失 + 数据库部分更新。
 
-    修复：`if isinstance(tl.get("current_time"), dict) and ta.get("period"):`，与本函数 L443
-    `isinstance(progress, dict)` 守卫 + 消费端 build_manifest.py:469 `or {}` 防御对齐。
+    修复：`if isinstance(tl.get("current_time"), dict) and ta.get("period"):`，与本函数
+    `isinstance(progress, dict)` 守卫 + 消费端 build_manifest.py `or {}` 防御对齐。
+
+🔴 2026-06-28 审计清理B类：item_transfers → 道具.json holder/status 回库路径已从 apply_changes
+移除（属 B 类违规·道具由 novel-archivist→apply_archive.py 写）。原「malformed current_time 不吞掉
+后续 item_transfers」用例改测「不吞掉后续 time_log 追加 + summary 写盘」，并钉死 item_transfers
+现为 no-op（道具.json 不再被 writer 自报触碰）。
 
 守护点：
   (1) current_time 为 str/None 时整块跳过、不抛 TypeError、apply_changes 返回 0；
-  (2) 该章后续的 item_transfers 仍落地、.wal/applied 摘要仍写盘（修复的真正价值）；
+  (2) 该章 time_advance 的 time_log 追加 + .wal/applied 摘要仍写盘（修复的真正价值）；
+      且 item_transfers 不再回库 道具.json（B 类清理后为 no-op）；
   (3) current_time 为 dict 的 happy-path 照常滚动 period/chapter；
   (4) current_time 键缺失时不崩、不伪造。
 
@@ -130,16 +135,16 @@ def test_old_code_expression_would_crash_on_malformed():
 
 
 # ============================================================
-# [L470] 守护点 2：malformed current_time 不再吞掉后续 item_transfers + summary 写盘
+# [L470] 守护点 2：malformed current_time 不再吞掉后续 time_log 追加 + summary 写盘
+#   （🔴 2026-06-28 审计清理B类：原断言 item_transfers 回库改为断言 time_log + summary）
 # ============================================================
 
-def test_malformed_current_time_still_applies_item_transfers_and_summary():
-    """[L470 真正价值] current_time 是 str 时，本章后续的 道具.json（item_transfers）落地
-    + .wal/第{ch}章_applied.json 摘要写盘**仍要发生**。
+def test_malformed_current_time_still_appends_timelog_and_summary():
+    """[L470 真正价值·B 类清理后] current_time 是 str 时，本章 time_advance 的 time_log 追加
+    + .wal/第{ch}章_applied.json 摘要写盘**仍要发生**（守卫使时间线段不中断 apply_changes）。
 
-    旧代码 L471 TypeError 会在时间线段中断 apply_changes，整段后续（道具落地、summary 写盘）
-    被跳过——cmd_apply_cluster_changes 的 try/except 只把它标 failed 但 cluster 仍 exit 0，
-    造成道具持有人静默不更新 + 审计丢失。修复后该路径不再中断。
+    同时钉死新契约：writer changes.item_transfers 不再回库 道具.json（B 类违规已移除·道具由
+    novel-archivist→apply_archive.py 写）→ 道具.json 原样不动。
     """
     with tempfile.TemporaryDirectory() as d:
         root = _setup_project(
@@ -150,23 +155,27 @@ def test_malformed_current_time_still_applies_item_transfers_and_summary():
         )
         ch = 9
         _write_parsed(root, ch, {
-            "time_advance": {"period": "正午"},          # 旧代码在此崩
-            "item_transfers": [                            # 旧代码崩后这块被跳过
+            "time_advance": {"period": "正午", "elapsed": "半日", "key_events": ["渡江"]},  # 旧代码在此崩
+            "item_transfers": [                            # B 类清理后：now no-op
                 {"item": "断刃", "to": "夸父", "new_status": "破损"}
             ],
         })
         rc = ss.apply_changes(root, ch)
         assert rc == 0, f"expected rc=0, got {rc}"
-        # 道具持有人已更新（修复后不再被时间线段崩溃吞掉）。
+        # current_time 是 str → 守卫整块跳过、不破坏；但 time_log 追加仍发生（段未中断）。
+        tl = _load(root, "时间线.json")
+        assert tl["current_time"] == "黎明"  # 未被破坏
+        assert tl["time_log"] and tl["time_log"][-1]["ch"] == ch
+        # 新契约：item_transfers 不再回库 → 道具持有人原样不变。
         items = _load(root, "道具.json")
         knife = next(it for it in items["items"] if it["name"] == "断刃")
-        assert knife["holder"] == "夸父", f"holder should update to 夸父, got {knife['holder']}"
-        assert knife["status"] == "破损"
+        assert knife["holder"] == "重黎", f"item_transfers 应为 no-op，holder 不应变，实得 {knife['holder']}"
+        assert knife["status"] == "完整"
         # .wal/applied 摘要写盘发生（审计未丢失）。
         applied_path = root / "_数据库" / ".wal" / f"第{ch}章_applied.json"
         assert applied_path.exists(), "applied summary must be persisted"
         applied = json.loads(applied_path.read_text(encoding="utf-8"))
-        assert any("断刃" in a for a in applied["applied"]), applied["applied"]
+        assert any("时间线" in a for a in applied["applied"]), applied["applied"]
 
 
 # ============================================================

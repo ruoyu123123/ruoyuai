@@ -107,16 +107,48 @@ def test_creative_wrappers_marked_script_executor():
 
 
 def test_pause_point_is_explicit_choice_with_apply():
-    """save-state step 11 走向卡停顿点：声明式 choice + 选择写回脚本
+    """save-state 走向卡停顿点（emergence 步·2026-06-28 起为 step 13·原 11·archivist+apply-archive
+    插在 step5/6 后顺延 2）：声明式 choice + 选择写回脚本
     （北极星③：默认弹卡等用户·auto_pilot 是显式开关非隐式默认）。"""
     plan = _load("cluster-save-state")
-    step11 = next(s for s in plan["steps"] if s["n"] == 11)
-    p = step11.get("pause_for_user")
+    emergence = next(s for s in plan["steps"]
+                     if s.get("name") == "cluster-emergence+report-and-card")
+    p = emergence.get("pause_for_user")
     assert p and p["type"] == "choice" and p.get("options_field") == "candidates"
     assert p.get("answer_artifact")
-    apply_lines = [l for l in step11.get("after_pause_scripts", [])
+    apply_lines = [l for l in emergence.get("after_pause_scripts", [])
                    if "cluster_choice_apply" in l]
     assert apply_lines, "缺 cluster_choice_apply 写回脚本"
+
+
+def test_archivist_step_is_judge_with_apply_archive_followup():
+    """🔴 2026-06-28 架构纠正回归锁：cluster-save-state 必须有 archivist judge 步（产 archive.json·
+    权威 factual 状态源·非 writer 自报）+ 紧随的 apply_archive 确定性回库步。守住「writer 不自报
+    factual → Claude 梳理 → 确定性回库」链路不被未来重构悄悄抹掉。"""
+    plan = _load("cluster-save-state")
+    by_name = {s.get("name"): s for s in plan["steps"]}
+    arch = by_name.get("novel-archivist-cluster")
+    assert arch, "缺 novel-archivist-cluster 判断步（factual 权威源）"
+    # archivist 是真 judge（非 script executor）·必在 AGENT_SPECS·产 archive.json
+    assert arch.get("must_spawn_agent") == "novel-archivist"
+    assert arch.get("agent_executor") != "script", "archivist 是判断 agent 非创意 wrapper"
+    assert "novel-archivist" in jr.AGENT_SPECS, "novel-archivist 未注册 judge_runner.AGENT_SPECS"
+    assert "archive.json" in str(arch.get("judge_report_path", "")), \
+        "archivist judge_report_path 应为 archive.json"
+    assert any("archive" in str(o) for o in arch.get("expected_outputs", [])), \
+        "archivist expected_outputs 应含 archive.json"
+    # apply-archive 紧随其后·跑 apply_archive.py 回库
+    applyer = by_name.get("apply-archive-to-db")
+    assert applyer, "缺 apply-archive-to-db 回库步"
+    assert applyer["n"] == arch["n"] + 1, "apply-archive 必紧随 archivist（archive.json 已产才回库）"
+    apply_lines = [l for l in applyer.get("scripts", []) if "apply_archive.py" in l]
+    assert apply_lines, "apply-archive 步缺 apply_archive.py"
+    # 🔴 2026-06-28 不降级收尾：apply_archive **不再 advisory**——archive 是 factual 回库唯一
+    # 权威路径，缺出场角色=archivist 失败=错误→exit 2 硬停。去掉 '? ' 前缀 + skip_output_allowed=false。
+    assert not apply_lines[0].strip().startswith("? "), \
+        "apply_archive 不再 advisory（archive 缺角色 → exit 2 硬停·不降级·factual 回库唯一权威路径）"
+    assert applyer.get("skip_output_allowed") is False, \
+        "apply-archive skip_output_allowed 必 false（必跑·不降级）"
 
 
 def test_round_loop_is_control_flow_only():

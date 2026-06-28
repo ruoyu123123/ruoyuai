@@ -59,7 +59,7 @@ STEP: <当前步骤号>
      ↓
 1.   build_manifest.py              （cluster 起首章 manifest · 注入 cluster brief + 全 25+ 子系统状态）
      ↓
-2.   novel-writer MODE=ecas         （写整 cluster 草稿 · ★禁止 splitter）
+2.   novel-writer MODE=ecas         （写整 cluster 正文草稿 + self_eval/waivers 自评 · 不自报 factual · ★禁止 splitter）
      ↓
 3.   cluster 级双轨质检（强制）
      ├─ 机械: audit_hub.py --mode cluster --cluster-id <key> --auto-fix --waivers
@@ -77,7 +77,7 @@ STEP: <当前步骤号>
 6.   ★ 最后才切章
      ├─ novel-chapter-splitter MODE=ecas_multi_chapter（含 narrative_mode=in_medias_res）
      ├─ gen_chapter_titles.py --chapters <range_from_splitter_wal>   （normal/mid/high 三档）
-     └─ split_cluster_changes.py --cluster <key>                     （平铺 cluster_changes 到 per-chapter）
+     └─ split_cluster_changes.py --cluster <key>                     （只平铺纯格式 + self_eval/waivers 到 per-chapter · 不平铺 factual）
      ↓
 7.   报告 + plan-end → 准备进 cluster-save-state
 ```
@@ -142,9 +142,11 @@ MODE: ecas
 ```
 
 writer 行为：
-- 产出 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`（整 cluster 草稿 · 13000-22000 CJK）
-- 产出 `章节/cluster_<key>_draft/cluster_<key>_changes.json`（cluster 级 factual/self_eval/伏笔变更）
+- 产出 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`（整 cluster 正文草稿 · 13000-22000 CJK）
+- 产出 `章节/cluster_<key>_draft/cluster_<key>_changes.json`（只 cluster 级 `self_eval` / `waivers` 创作自评 + 确定性遥测 · **writer 不自报 factual**）
 - 🔴 **禁止自行调 splitter**（v24 流水线：splitter 推迟到 step 6）
+
+> 🔴 **2026-06-28 审计清理C类**：writer（gen-model）只产正文 + 创作自评（self_eval/waivers），**不产任何 factual 状态自报**。cluster 级 factual（角色/道具/关系/locked_facts/伏笔）由 Claude agent 事后读正文梳理回库（archivist→apply_archive / foreshadower / outline brief），见 `/cluster-save-state`。
 
 writer 返回后，检查两文件落地。任一缺失 → 停止，向用户报告（writer 契约违规）。
 
@@ -398,9 +400,10 @@ python core/scripts/gen_chapter_titles.py \
 python core/scripts/split_cluster_changes.py "<项目路径>" --cluster <key>
 ```
 
-把 `cluster_changes.json` 按 splitter_wal 的切点拆成 N 个 `第<NNN>章_changes.json`：
-- factual 段（人物状态/世界状态/伏笔变更）按发生章节落在对应 _changes.json
+把 `cluster_changes.json` 按 splitter_wal 的切点拆成 N 个 `第<NNN>章_changes.json`（**只平铺纯格式元数据 + 创作自评**）：
+- 纯格式段（每章章号 / 字数范围 / 切点 meta）按切点落到对应 _changes.json
 - self_eval / waivers 按段所在章号分配
+- 🔴 **不平铺 factual**：writer 已不自报 factual（changes.factual 为空），cluster 级 factual 状态由 `/cluster-save-state` 的 archivist→apply_archive 在 cluster 级确定性回库，**不下放到 per-chapter**
 
 **plan-step 6**（splitter WAL 必须落地）：
 
@@ -482,7 +485,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - [ ] `_数据库/.wal/cluster_<key>_summary.json` 落地
 - [ ] `_数据库/.wal/splitter_cluster_<key>_decisions.json` 落地
 - [ ] N 个 `章节/第<NNN>章/第<NNN>章.txt` 全落地
-- [ ] N 个 `章节/第<NNN>章/第<NNN>章_changes.json` 全落地（含 factual/self_eval 真实数据，非 placeholder）
+- [ ] N 个 `章节/第<NNN>章/第<NNN>章_changes.json` 全落地（含 self_eval/waivers 真实数据，非 placeholder · factual 由 cluster-save-state 的 archivist 回库不在此）
 - [ ] N 个章标题已重生（normal/mid/high 三档分布）
 
 任何一项不达 → 不允许声称"cluster 写作完成"。

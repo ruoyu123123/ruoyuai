@@ -1,8 +1,8 @@
 {
   "command": "cluster-save-state",
-  "version": 3,
-  "description": "cluster 级状态保存 12 步流水线 · 替代 chapter-level save-state · 1 个 cluster = 1 次完整流水线（数据库一次性应用 cluster_changes）",
-  "total_steps": 12,
+  "version": 4,
+  "description": "cluster 级状态保存 14 步流水线 · 替代 chapter-level save-state · 1 个 cluster = 1 次完整流水线。🔴 2026-06-28 架构纠正：factual 客观状态（角色/道具/关系/locked_facts）由 novel-archivist 读正文产 archive.json + apply_archive.py 确定性回库（非 writer 自报）·新增 step5(archivist judge)+step6(apply-archive)·原 12 步顺延为 14",
+  "total_steps": 14,
   "required_steps": [
     1,
     2,
@@ -15,7 +15,9 @@
     9,
     10,
     11,
-    12
+    12,
+    13,
+    14
   ],
   "optional_steps": [],
   "_doc_v24": "状态同步单位 cluster 级。章节只是输出层，cluster 才是数据库更新单位。所有 agent (summarizer/foreshadower/reflector/reading-reflector/voice-checker/outline-planner) 走 cluster mode。git commit per cluster (不再 per chapter)",
@@ -40,7 +42,7 @@
     {
       "n": 2,
       "name": "parse-cluster-changes",
-      "description": "2026-05-29 复审修复[H6]：读 章节/cluster_{key}_draft/cluster_changes.json 后逐章产出 per-chapter 第N章_parsed.json（save_state.cmd_parse 实际产物）+ cluster 级 {key}_apply_cluster.json 汇总（由 step3 --apply-cluster-changes 一并落地）。原 expected_output cluster_{key}_parsed.json 是幻影（代码从不产出此命名）→ 改 skip_output_allowed:true 不强校固定单文件名（章数 freestyle 浮动，per-chapter 文件名无法预列）。解析本身仍由 step3 强制覆盖（apply 前必 parse）",
+      "description": "解析 writer 的 cluster_changes.json —— 🔴 2026-06-28 架构纠正：只取 writer 创作自评 self_eval/waivers + 确定性遥测（字数等），**factual 客观状态不再从 writer changes 解析**（角色/道具/关系/locked_facts 由 step5 archivist 读正文梳理 + step6 apply_archive 回库·非 writer 自报）。解析由 step3 --apply-cluster-changes 一并落地（apply 前必 parse·time_advance/location 等非 archive 域）。skip_output_allowed:true 不强校固定单文件名（章数 freestyle 浮动）",
       "required": true,
       "skip_output_allowed": true,
       "expected_outputs": []
@@ -48,7 +50,7 @@
     {
       "n": 3,
       "name": "apply-cluster-changes+writer-truth-check",
-      "description": "一次性应用 cluster_changes.json 的 factual 段到 13 JSON（人物卡/伏笔表/世界状态/时间线/道具/故事块摘要等）+ 调 writer_truth_check.py 检测撒谎",
+      "description": "落地 cluster_changes.json 的**非 archive 域**（time_advance / location / 故事块摘要遥测等）+ 调 writer_truth_check.py 检测撒谎。🔴 2026-06-28 架构纠正：角色/道具/关系/locked_facts 等 factual 客观状态**不在此步 apply**——改由 step5 novel-archivist 读正文产 archive.json + step6 apply_archive.py 确定性回库（save_state 已停读 writer factual·非 writer 自报权威）",
       "required": true,
       "skip_output_allowed": true,
       "expected_outputs": [],
@@ -73,6 +75,40 @@
     },
     {
       "n": 5,
+      "name": "novel-archivist-cluster",
+      "description": "🔴 2026-06-28 架构纠正：spawn novel-archivist MODE=cluster · 读整 cluster 正文 + 当前库，客观抽取本块新增/变更的角色/道具/关系/硬事实（+ throughline_progress 本块推进的叙事线 OS/MC/IC/RS），产 _数据库/.wal/cluster_{key}_archive.json（权威状态源·非 writer 自报）。只抽取不创作、不评判。配套 step6 apply_archive.py 确定性回库。🔴 2026-06-28 不降级收尾：failure_policy=block（judge_runner AGENT_SPECS·原 soft）——archive 是 factual 回库唯一权威路径（writer 已不自报 factual），archivist 失败=状态梳理链断必须硬停，不能 soft 降级让角色/道具/关系/locked_facts 丢失",
+      "required": true,
+      "must_spawn_agent": "novel-archivist",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "cluster_{key}",
+        "MODE": "cluster",
+        "CLUSTER_DRAFT_PATH": "章节/cluster_{key}_draft/cluster_{key}_draft.txt",
+        "CHARACTER_CARDS_PATH": "_数据库/人物卡.json",
+        "ROLE_POOL_PATH": "_数据库/角色池.json",
+        "ITEMS_PATH": "_数据库/道具.json",
+        "RELATIONSHIPS_PATH": "_数据库/关系.json"
+      },
+      "judge_report_path": "_数据库/.wal/cluster_{key}_archive.json",
+      "skip_output_allowed": false,
+      "expected_outputs": [
+        "_数据库/.wal/cluster_{key}_archive.json"
+      ],
+      "_doc_archivist": "agent_input 的 *_PATH 键由 driver 代读注入 context（judge 无 Read 工具·见 default_judge_dispatch）：CLUSTER_DRAFT_PATH=整块正文·人物卡/角色池/道具/关系=已存在基准供 id 复用（防同角色双 id）。judge_report_path=archive.json（= AGENT_SPECS.output_template·apply_archive 默认读路径）。"
+    },
+    {
+      "n": 6,
+      "name": "apply-archive-to-db",
+      "description": "🔴 2026-06-28：把 step5 novel-archivist 产的 archive.json 确定性回库（无模型·幂等按 id 去重）：角色→人物卡+角色池 / 道具→道具.json / 关系→关系.json / 硬事实→事件簇.clusters[].locked_facts / throughline_progress→事件簇.clusters[]。🔴 2026-06-28 不降级收尾：去掉 '? ' advisory 前缀 + skip_output_allowed=false——archive 是 factual 回库唯一权威路径，每个写完的 cluster 必有出场角色，archive 缺角色=archivist 失败=错误→apply_archive 退非0→plan 硬停（不再静默 no-op 降级）。幂等去重保留（re-apply 全已存在→exit 0 成功）",
+      "required": true,
+      "skip_output_allowed": false,
+      "expected_outputs": [],
+      "scripts": [
+        "python core/scripts/apply_archive.py {project_root} --cluster {key}"
+      ]
+    },
+    {
+      "n": 7,
       "name": "novel-summarizer-cluster",
       "description": "spawn novel-summarizer MODE=cluster · 生成 cluster 级摘要（不是单章摘要 · 单章摘要由 splitter 切完后从 cluster 摘要派生）",
       "required": true,
@@ -90,7 +126,7 @@
       ]
     },
     {
-      "n": 6,
+      "n": 8,
       "name": "novel-foreshadower-cluster",
       "description": "spawn novel-foreshadower MODE=cluster · 评估整 cluster 伏笔 plant + 回收 + 健康度",
       "required": true,
@@ -108,7 +144,7 @@
       "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_foreshadower.json（build_manifest 下章抽 health_warnings·必写盘否则反馈链断·judge_runner failure_policy=block）"
     },
     {
-      "n": 7,
+      "n": 9,
       "name": "novel-reflector-cluster",
       "description": "spawn novel-reflector MODE=cluster · 提取整 cluster 写作经验（success/failure 模式）",
       "required": true,
@@ -125,9 +161,9 @@
       "_doc_v24": "JudgeReport 路径 _数据库/.wal/cluster_{key}_reflection.json"
     },
     {
-      "n": 8,
+      "n": 10,
       "name": "wal-merge+learning-loop+judge-reports-archive+ledger-build",
-      "description": "合并 cluster 级 WAL + learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ 把本 cluster 所有 JudgeReport 存入 故事块摘要[cluster_id].judge_reports[] + 调 cluster_summary_builder.py（经 save_state --build-cluster-summary）把整 cluster 富摘要（每章正文/changes/manifest/audit/judge 派生字段 + cluster 级 rollup）预算写入 故事块摘要.json 账本，供 step 9 cross_cluster aggregator 复用",
+      "description": "合并 cluster 级 WAL + learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ 把本 cluster 所有 JudgeReport 存入 故事块摘要[cluster_id].judge_reports[] + 调 cluster_summary_builder.py（经 save_state --build-cluster-summary）把整 cluster 富摘要（每章正文/changes/manifest/audit/judge 派生字段 + cluster 级 rollup）预算写入 故事块摘要.json 账本，供 step 11 cross_cluster aggregator 复用",
       "required": true,
       "skip_output_allowed": true,
       "expected_outputs": [],
@@ -138,7 +174,7 @@
       ]
     },
     {
-      "n": 9,
+      "n": 11,
       "name": "cluster-scan+state+drift+evolution",
       "description": "cluster 级跨章扫描 + 数据库更新 + evaluator + 演化（用 3 个 wrapper 收口，避免堆叠几十行单独调用）+ 自学习闭环（2026-05-30：演化类脚本经 adaptive_runner 记录报错+熔断取代 `|| true` 静默吞错 / self_heal_engine --ingest+--emit-lessons 学本 cluster 运行时报错 / step_completion_monitor 缺步监控）",
       "required": true,
@@ -169,7 +205,7 @@
       ]
     },
     {
-      "n": 10,
+      "n": 12,
       "name": "git-commit-cluster",
       "description": "1 cluster 1 commit · commit msg: feat(cluster-NNN): N 章 (chX-chY)",
       "required": true,
@@ -180,7 +216,7 @@
       ]
     },
     {
-      "n": 11,
+      "n": 13,
       "name": "cluster-emergence+report-and-card",
       "description": "改 E: 跑 cluster_emergence_engine.py emerge --after-cluster {key} → 生成下一 cluster 2-3 个 candidate brief → spawn novel-outline-planner MODE=cluster_emergence 详化 candidates → 输出报告 + 等用户选 1 个 candidate",
       "required": true,
@@ -218,7 +254,7 @@
       "_judge_required_keys_doc": "轮次10 实测：judge 落盘顶层键漂移(candidates_data)→弹卡空选项→流水线硬停。结构键钉死(缺即整发重试·结构校验非内容规训·北极星⑤)"
     },
     {
-      "n": 12,
+      "n": 14,
       "name": "wal-end",
       "description": "关闭 cluster WAL + plan 最终校验",
       "required": true,
@@ -229,6 +265,7 @@
   "_v2_principle": "整个系统为故事块服务 · 章节是输出格式 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · cross_cluster 聚合用 run_cross_cluster_aggregates.py",
   "_v2_changes_in_steps": [
     "step 4 validate-cluster: 走 audit_hub --mode cluster（升维后）",
-    "step 9 cluster-scan: 走 cross_cluster_aggregator（22 个 scanner 加 CLUSTER_MODE）"
+    "step 5+6 archivist+apply-archive: factual 客观状态由 novel-archivist 读正文产 archive.json + apply_archive 确定性回库（2026-06-28 架构纠正·非 writer 自报）",
+    "step 11 cluster-scan: 走 cross_cluster_aggregator（22 个 scanner 加 CLUSTER_MODE）"
   ]
 }

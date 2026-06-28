@@ -126,7 +126,7 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 ├── 章节/                                       # 每章产物
 │   └── 第{N}章/
 │       ├── 第{N}章.txt                        # 【v18】纯正文（用户可读，不含任何 CHANGES 段/分隔符）
-│       ├── 第{N}章_changes.json               # 【v18】CHANGES 数据：{"factual":{9类变更}, "self_eval":{applied_style 等}}
+│       ├── 第{N}章_changes.json               # 【v18】CHANGES 数据：{"self_eval":{applied_style/waivers}, "factual":{确定性遥测+archive 派生镜像·非 writer 自报}}
 │       ├── 第{N}章_摘要.md                    # 200 字摘要
 │       ├── 第{N}章_反思.md                    # 写作反思
 │       ├── 第{N}章_走向卡.md                  # 下一章走向卡
@@ -145,7 +145,11 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 - `第{N}章.txt` = **纯正文**，`第{N}章_changes.json` = **结构化数据**，两者是两个物理文件，不再混在一个 txt 里靠 `---CHANGES---` 分隔符切。
 - `第{N}章_changes.json` 由 `novel-chapter-splitter`（cluster mode · splitter 在 step 6 从 `cluster_<key>_changes.json` 按切点平铺成 per-chapter）产出，不再由 save-state 产出。
 - 所有读写章节正文 / CHANGES 的脚本必须走 `core/scripts/chapter_io.py` 统一模块（`read_body` / `read_changes` / `write_body` / `write_changes`），禁止各自 split。
-- `第{N}章_changes.json` 顶层两键：`factual`（9 类客观变更，judge 可读）+ `self_eval`（writer 自评 applied_style 等，judge 默认不读，v17.4 分权纪律）。
+- `第{N}章_changes.json` 顶层两键：`self_eval`（writer 创作自评 applied_style / `waivers` 等，judge 默认不读，v17.4 分权纪律）+ `factual`（确定性遥测如字数 + archivist 回库后的客观状态派生镜像，**非 writer 自报权威源**）。
+- **🔴 2026-06-28 架构纠正（北极星⑥不留双口径）**：配置的写作模型（gen-model writer）**只产正文**、**不自报"改了什么"**。cluster 级客观状态（角色 / 道具 / 关系 / `locked_facts` / 伏笔）的**权威源**由 Claude 梳理、确定性脚本回库——**不再以 writer 的 `changes.factual` 自报为准**：
+  - **角色 / 道具 / 关系 / `locked_facts`**：`novel-archivist` 读整 cluster 正文客观抽取 → `_数据库/.wal/cluster_<key>_archive.json` → `apply_archive.py <项目> --cluster <key>` 确定性回库（幂等·按 id 去重）。
+  - **伏笔**：`novel-foreshadower` 的 JudgeReport + `outline` brief（plant / payoff 由 Claude 梳理，非 writer 自报）。
+  - `save_state` 已停读 writer factual；`time_advance` / `location` 等**非 archive 域**仍由 `save_state --apply-cluster-changes` 落地。
 
 ---
 
@@ -345,7 +349,7 @@ mv "风格库/{书名}_skill.md" "workspace/styles/{书名}/skill_FINAL.md"
 | `/distill-character` | 角色 voice DNA | `workspace/styles/{书名}/角色档案/{角色名}.json` |
 | `/outline` | 大纲 / 34 个数据库 JSON | `workspace/novels/{书名}/_数据库/` |
 | `/cluster-write` | cluster 整块草稿 + 切章物理文件 + 平铺 CHANGES | `workspace/novels/{书名}/章节/cluster_<key>_draft/cluster_<key>_draft.txt` → splitter 切出 `第{N}章/第{N}章.txt` + `第{N}章_changes.json` |
-| `/cluster-save-state` | cluster 摘要 / 反思 / 走向卡 + 涌现下个 cluster brief（一次性 apply cluster_changes 到数据库） | `workspace/novels/{书名}/_数据库/故事块摘要.json` + `章节/cluster_<key>_draft/` 伴生文件 |
+| `/cluster-save-state` | cluster 摘要 / 反思 / 走向卡 + 涌现下个 cluster brief（factual 客观状态由 `novel-archivist`→`archive.json`→`apply_archive` 确定性回库·`time_advance`/`location` 等非 archive 域由 `save_state --apply-cluster-changes` 落地·均**非 writer 自报**） | `workspace/novels/{书名}/_数据库/故事块摘要.json` + `章节/cluster_<key>_draft/` 伴生文件 |
 | `/check-quality` | 校验报告 | `workspace/novels/{书名}/_tmp/quality_ch{N}.md` |
 | `/export` | 拼接全文 | `workspace/novels/{书名}/全文.txt` |
 | `/reconcile` | 一致性调和 | `workspace/novels/{书名}/_数据库/调和日志_{date}.md` |
@@ -421,7 +425,7 @@ v17 及之前，章节 txt = 正文 + `---CHANGES_FACTUAL---` JSON + `---CHANGES
 | 文件 | 标准路径 | 内容 | 由谁产出 |
 |---|---|---|---|
 | 正文 | `章节/第NNN章/第NNN章.txt` | **纯正文**（无 CHANGES、无分隔符） | `novel-chapter-splitter`（cluster mode · 从 cluster 草稿切章） |
-| 数据 | `章节/第NNN章/第NNN章_changes.json` | `{"factual": {9类变更}, "self_eval": {applied_style 等}}` | `novel-chapter-splitter`（splitter 从 `cluster_<key>_changes.json` 按切点平铺到各 ch） |
+| 数据 | `章节/第NNN章/第NNN章_changes.json` | `{"self_eval": {applied_style/waivers}, "factual": {确定性遥测 + archive 派生镜像·非 writer 自报}}` | `novel-chapter-splitter`（splitter 从 `cluster_<key>_changes.json` 按切点平铺到各 ch） |
 
 **强约束（开发者必读）**：
 - 所有读写章节正文 / CHANGES 的脚本和 agent，**必须**走 `core/scripts/chapter_io.py` 统一模块——禁止各自写 `split("---CHANGES")`。
@@ -429,7 +433,7 @@ v17 及之前，章节 txt = 正文 + `---CHANGES_FACTUAL---` JSON + `---CHANGES
   - 读数据：`read_changes(project_root, ch)` → `{"factual": {...}, "self_eval": {...}}`（只读 `_changes.json`，v2 后旧混合稿解析已删）
   - 写正文：`write_body(project_root, ch, text)` / 写数据：`write_changes(project_root, ch, changes)`
   - 路径：`body_path()` / `changes_path()`；字数：`count_words()`（全系统统一口径）
-- judge agent（validator-repair / voice-keeper / foreshadower 等）只拿正文 txt；看 9 类变更读 `_changes.json` 的 `factual` 段；`self_eval` 段按 v17.4 分权纪律默认不读。
+- judge agent（validator-repair / voice-keeper / foreshadower 等）只拿正文 txt。**cluster 级客观状态变更（角色 / 道具 / 关系 / `locked_facts` / 伏笔）的权威源 = Claude 梳理 + 确定性回库**：`novel-archivist` 读正文产 `archive.json` → `apply_archive.py` 回库（角色/道具/关系/locked_facts），伏笔走 `novel-foreshadower` + `outline` brief——**不再读 writer 的 `changes.factual` 自报**。`_changes.json` 的 `factual` 段仅承载确定性遥测（字数等）+ 回库后的派生镜像；`self_eval` / `waivers` 段是 writer 创作自评，按 v17.4 分权纪律 judge 默认不读。
 
 ---
 

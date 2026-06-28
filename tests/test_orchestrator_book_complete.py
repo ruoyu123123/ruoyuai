@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """orchestrator 完本短路回归测试（复验修 · 2026-06-12）
 
-复验发现的 MAJOR：ME 池耗尽时 emerge 写了 .book_complete.json，但 plan step11
+复验发现的 MAJOR：ME 池耗尽时 emerge 写了 .book_complete.json，但 plan step13
 仍带 must_spawn_agent=novel-outline-planner + pause_for_user——judge 无输入会被
 judge_required_keys 逼着**编造候选**（捏造走向卡）→ 幽灵 cluster 写进事件簇。
 钉死三条契约：
@@ -104,7 +104,7 @@ class _SpyPause:
 
 
 def _emergence_template():
-    """最小化的「涌现+选卡」步（对齐 cluster-save-state step11 形态）。"""
+    """最小化的「涌现+选卡」步（对齐 cluster-save-state step13 形态）。"""
     return {"command": "test-emerge", "total_steps": 1,
             "required_steps": [1], "optional_steps": [],
             "steps": [{

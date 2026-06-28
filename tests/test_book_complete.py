@@ -103,7 +103,7 @@ def _run_main(argv: list):
 
 
 def test_main_exit_0_on_me_exhaustion():
-    """完本不是失败：ME 耗尽 → exit 0 + stderr 打庆祝行（下游 step11 自然过）。"""
+    """完本不是失败：ME 耗尽 → exit 0 + stderr 打庆祝行（下游 step13 自然过）。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), _EXHAUSTED_POOL, clusters=[])
         code, err = _run_main([str(root), "emerge", "--after-cluster", "cluster_002"])

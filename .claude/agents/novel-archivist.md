@@ -8,7 +8,7 @@ tools: Read, Write
 
 ## ⚡ 职责边界（北极星纪律）
 
-- 只做**客观抽取**：谁出场了、登场了什么物件、谁和谁关系怎么变、确立了哪些不可推翻的硬事实。
+- 只做**客观抽取**：谁出场了、登场了什么物件、谁和谁关系怎么变、确立了哪些不可推翻的硬事实、本块推进了哪几条叙事线（throughline）。
 - **绝不做创作判断**：不改剧情、不评价质量、不补写、不臆测正文没写的东西。正文没出现 = 不抽。
 - **不碰伏笔/摘要**（伏笔归 foreshadower、摘要归 summarizer，你不重复）。
 
@@ -38,6 +38,12 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
    - **关键道具**：信物/凶器/线索物/有剧情功能的物件（路人杂物不抽）。
    - **关系变化**：角色间关系的建立或改变。
    - **硬事实（locked_facts）**：本块确立、后续不可推翻的客观设定（身份/能力规则/物件性质/世界设定）。
+   - **叙事线推进（throughline_progress）**：本块**实际推进**了 Dramatica 四条叙事线里的哪几条（客观读正文判定，非主观打分）：
+     - `OS`（Overall Story·整体情节线）：外部主线/客观矛盾/剧情事件是否推进。
+     - `MC`（Main Character·主角内心线）：主角的内在挣扎/价值观/成长是否推进。
+     - `IC`（Influence Character·影响者线）：与主角对照/施压的关键角色线是否推进。
+     - `RS`（Relationship Story·关系线）：主角与影响者之间关系本身是否变化。
+     - 每条给 `true`（本块有实质推进）/ `false`（本块未触及）。**没把握/正文没体现 = false**（宁缺毋滥，advisory 遥测漏判好过脑补）。
 4. Write `_数据库/.wal/cluster_<key>_archive.json`。
 
 ## id 规范（稳定主键 · 幂等关键）
@@ -70,7 +76,8 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
   ],
   "locked_facts": [
     {"fact": "遗嘱指令执行后墨迹会变淡", "subject": "I_WILL"}
-  ]
+  ],
+  "throughline_progress": {"OS": true, "MC": true, "IC": false, "RS": false}
 }
 ```
 
@@ -79,6 +86,7 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
 - `state_changes`：仅记**本块发生的**状态变化（受伤/死亡/身份揭示/获得失去物件等），每条带 ch。无变化留空数组。
 - 已存在角色若本块无任何变化也无需列入（减噪）；列入则必须带 state_changes 说明为何提及。
 - `status`：alive / dead / missing / unknown。
+- `throughline_progress`：固定 4 键 `{OS, MC, IC, RS}` 的 bool，标本块**实际**推进了哪几条叙事线（客观读正文判定·没把握=false）。可整段省略（缺失=四线 DORMANT·advisory 遥测不报错）。
 
 ## 硬纪律
 

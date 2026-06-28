@@ -172,7 +172,9 @@ def test_real_cluster_save_state_template_machine_executable():
                             script_runner=runner, judge_dispatch=dispatch)
         assert s.end_report.get("ok"), s.end_report
         done = [o for o in s.completed if o.status == "completed"]
-        assert len(done) == 12  # 12 步全过
+        assert len(done) == 14  # 14 步全过（2026-06-28：+archivist judge step5 + apply-archive step6）
+        # archivist 判断步真被派发（factual 权威源·非 writer 自报）
+        assert "novel-archivist" in {a for a, _ in dispatch.calls}
         # step1 WAL 骨架由 driver 建（Claude 流程里 Claude 建）
         wal = sb.proj / "_数据库" / ".wal" / "cluster_001_save_state.json"
         assert wal.exists() and json.loads(wal.read_text(encoding="utf-8")) == {}
@@ -186,8 +188,8 @@ def test_real_cluster_save_state_template_machine_executable():
         # save-state 全链脚本按模板顺序真的跑了（抽查关键几个）
         joined = "\n".join(runner.cmds)
         for must in ("db_schema_validate.py", "--apply-cluster-changes 001",
-                     "run_cross_cluster_aggregates.py", "--git-commit-cluster 001",
-                     "cluster_emergence_engine.py"):
+                     "apply_archive.py", "run_cross_cluster_aggregates.py",
+                     "--git-commit-cluster 001", "cluster_emergence_engine.py"):
             assert must in joined, f"模板脚本未被执行: {must}"
 
 

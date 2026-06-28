@@ -74,9 +74,11 @@ gen_writer 内部：读 manifest + style skill + 调研 cache + cluster_brief（
 整块草稿必须 2 个文件齐全：
 
 - `<PROJECT>/章节/cluster_<id>_draft/cluster_<id>_draft.txt`（整块正文 · 未切章）
-- `<PROJECT>/章节/cluster_<id>_draft/cluster_<id>_changes.json`（`{factual, self_eval}` · cluster 级）
+- `<PROJECT>/章节/cluster_<id>_draft/cluster_<id>_changes.json`（只 `{self_eval, waivers}` + 确定性遥测（字数 / 段数 / 风格自查指标）· cluster 级 · **不含 factual 自报**）
 
 任一缺失 → return `{ok:false, reason:"output missing X"}`。
+
+> 🔴 **2026-06-28 审计清理C类**：writer 的 changes.json 只承载创作期自评（self_eval / waivers）+ 确定性遥测，**不产任何 factual 状态自报**。cluster 级 factual 状态（角色 / 道具 / 关系 / locked_facts / 伏笔）由 Claude agent 事后读正文梳理 → 确定性回库：novel-archivist 读 cluster_draft.txt 产 archive.json → `apply_archive.py` 回库（人物卡/角色池/道具/关系/locked_facts），伏笔由 novel-foreshadower 读正文评估 + outline brief 规划回库。**writer 不产 factual**——与顶部分工表（创意笔触→gen-model / 收集整理梳理→Claude）对齐。
 
 > chapter_titles 重生 + per-chapter 落地文件校验由 splitter 阶段（cluster-write step 6+）负责，不属本 agent 职责。
 

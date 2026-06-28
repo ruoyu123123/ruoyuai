@@ -74,7 +74,7 @@ class JudgeSpec:
     secondary_output_template: str = ""  # voice-checker 双载体（brief + JudgeReport）
 
 
-# 8 个判断 agent 注册表。
+# 判断 agent 注册表。
 # failure_policy 依据（对抗审查）：summarizer/foreshadower/outline-planner 的输出被
 # build_manifest / foreshadowing_handoff / cluster_emergence / 事件簇.json 当输入消费
 # （确定性状态机）→ block；其余纯 advisory → soft。
@@ -126,6 +126,21 @@ AGENT_SPECS: dict[str, JudgeSpec] = {
         needs_author_profile=False,
         required_keys=("quantitative", "qualitative_dims", "golden_paragraphs"),
         output_template="蒸馏进度/cluster_{key}_surface.json"),
+    # 🔴 2026-06-28 状态梳理员（cluster-save-state archivist 步）：写作模型只产正文、
+    # 不自报"改了什么"——archivist 读正文客观抽取本块新增/变更的角色/道具/关系/硬事实
+    # （+ throughline_progress 本块推进了哪几条叙事线 OS/MC/IC/RS），产 archive.json 供
+    # apply_archive.py 确定性回库（权威状态源·非 writer 自报）。
+    # needs_author_profile=False（客观抽取非风格判断）。
+    # 🔴 2026-06-28 不降级收尾：failure_policy=block（原 soft）——archive 是 factual 回库的
+    # **唯一权威路径**（writer 已不自报 factual），archivist 失败=状态梳理链断=整条 save-state
+    # 状态层脱节，必须硬停（不能 soft 降级静默透传让角色/道具/关系/locked_facts 丢失）。
+    # required_keys 仅 2 个结构键（cluster_id + characters）·绝不逐项列道具/关系/硬事实/throughline
+    # （弱模型为凑键脑补正文没写的 = 违 archivist「正文没写不抽」纪律·北极星⑤）。
+    "novel-archivist": JudgeSpec(
+        name="novel-archivist", failure_policy="block",
+        needs_author_profile=False,
+        required_keys=("cluster_id", "characters"),
+        output_template="_数据库/.wal/cluster_{key}_archive.json"),
 }
 
 

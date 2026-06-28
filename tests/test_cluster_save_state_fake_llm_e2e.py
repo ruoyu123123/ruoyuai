@@ -2,15 +2,18 @@
 """cluster-save-state 状态保存主轨 fake-LLM 端到端集成测试（2026-06-17 · P1）。
 
 延续 P0（tests/test_cluster_write_fake_llm_e2e.py）：先 fake-LLM 跑 cluster-write 产出
-draft+changes，再 fake-LLM 跑 cluster-save-state 12 步——验证状态保存主轨的确定性骨架
-（db_schema_validate / cluster_changes apply / cross_cluster aggregate / emergence 涌现下
-个 cluster 走向卡 / wal 生命周期）。
+draft+changes，再 fake-LLM 跑 cluster-save-state 14 步——验证状态保存主轨的确定性骨架
+（db_schema_validate / cluster_changes apply / archivist 回库 / cross_cluster aggregate /
+emergence 涌现下个 cluster 走向卡 / wal 生命周期）。
 
-安全性已实地核实（2026-06-17）：cluster-save-state step8/9 经 adaptive_runner 派 subprocess
+🔴 2026-06-28：archivist+apply-archive（step5/6）插入后原 12 步顺延为 14（emergence 走向卡
+由 step11→step13）。
+
+安全性已实地核实（2026-06-17）：cluster-save-state step10/11 经 adaptive_runner 派 subprocess
 跑的脚本（evolution_orchestrator/skill_evolver/maybe_judge_consensus/learning_loop/…）**全部
-纯确定性·零 gen-model 调用**，故子进程无真 API 花钱风险；LLM 仅在 step5/6/7/11 的 judge
-（summarizer/foreshadower/reflector/outline-planner），全走 orchestrator in-process judge_dispatch
-→ jr.lt.generate（已被 fake 覆盖）。叠加 _network_hard_block 兜底 + _frozen_environ 隔离。
+纯确定性·零 gen-model 调用**，故子进程无真 API 花钱风险；LLM 仅在 step5/7/8/9/13 的 judge
+（archivist/summarizer/foreshadower/reflector/outline-planner），全走 orchestrator in-process
+judge_dispatch → jr.lt.generate（已被 fake 覆盖）。叠加 _network_hard_block 兜底 + _frozen_environ 隔离。
 
 复用 P0 夹具（_Sandbox/_seed_min_subsystems/三-seam fake/网络兜底/环境隔离/in-process runner），
 避免重复。走向卡停顿点用 auto_pilot=True 取 emergence 第一候选。只断言确定性骨架。
@@ -44,7 +47,7 @@ def _run(command, judge_log):
 
 
 def test_cluster_save_state_after_write_fake_llm():
-    """cluster-write → cluster-save-state 全链 fake-LLM：状态保存 12 步确定性骨架。"""
+    """cluster-write → cluster-save-state 全链 fake-LLM：状态保存 14 步确定性骨架。"""
     judge_log = []
     with _Sandbox() as sb:
         _seed_min_subsystems(sb.proj)
@@ -52,12 +55,15 @@ def test_cluster_save_state_after_write_fake_llm():
         w = _run("cluster-write", judge_log)
         assert w.end_report.get("ok"), f"前置 cluster-write 应过: {w.end_report}"
 
-        # 2) cluster-save-state 12 步
+        # 2) cluster-save-state 14 步
         s = _run("cluster-save-state", judge_log)
         assert s.end_report.get("ok"), f"save-state end_report 应 ok: {s.end_report}"
         done = [o for o in s.completed if o.status == "completed"]
-        assert len(done) >= 10, f"save-state 应基本走完 12 步·实际完成 {len(done)}: " \
+        assert len(done) >= 12, f"save-state 应基本走完 14 步·实际完成 {len(done)}: " \
             f"{[(o.n, o.status) for o in s.completed]}"
+        # archivist judge 真被派发（factual 权威源·非 writer 自报）
+        assert "novel-archivist" in judge_log, \
+            f"archivist 未派发（factual 回库链断）: {judge_log}"
 
         db = sb.proj / "_数据库"
         # —— 骨架断言：故事块摘要.json 被 build-cluster-summary 真更新（step8）——
@@ -66,7 +72,7 @@ def test_cluster_save_state_after_write_fake_llm():
         lj = json.loads(ledger.read_text(encoding="utf-8"))
         assert lj.get("clusters"), f"故事块摘要 clusters 应非空: {list(lj)}"
 
-        # —— 骨架断言：emergence 真涌现下个 cluster 写回 事件簇.json（step11·走向卡）——
+        # —— 骨架断言：emergence 真涌现下个 cluster 写回 事件簇.json（step13·走向卡）——
         shijianji = json.loads((db / "事件簇.json").read_text(encoding="utf-8"))
         clusters = shijianji.get("clusters", [])
         # auto_pilot 选定第一候选后应写入 clusters[1]（下个 cluster brief）·或完本短路
@@ -95,7 +101,7 @@ def _seed_fate_pool(proj):
 
 
 def test_save_state_emergence_emerges_next_cluster():
-    """save-state step11 涌现路径（非完本短路）：ME 池有余 → emerge 出候选 →
+    """save-state step13 涌现路径（非完本短路）：ME 池有余 → emerge 出候选 →
     outline-planner judge(fake) → 走向卡 auto_pilot 取第一候选 → cluster_choice_apply
     写回 事件簇.json.clusters[1]。覆盖产品核心涟漪/涌现 + 走向卡选定写回链路。"""
     judge_log = []

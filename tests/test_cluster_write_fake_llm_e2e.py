@@ -215,6 +215,12 @@ _JUDGE_JSON = {
     "novel-outline-planner": {"candidates": [
         {"label": "走向A·主线推进", "_emergence_score": 0.9},
         {"label": "走向B·支线碰撞", "_emergence_score": 0.7}]},
+    # archivist（cluster-save-state step5·2026-06-28）：产非空 archive → apply_archive 回库 0 退出。
+    "novel-archivist": {
+        "cluster_id": "cluster_001",
+        "characters": [{"id": "林默", "name": "林默", "tier": "core", "first_ch": 1,
+                        "new": False, "state_changes": [{"ch": 1, "change": "踏入育新中学"}]}],
+        "items": [], "relationships": [], "locked_facts": []},
 }
 
 

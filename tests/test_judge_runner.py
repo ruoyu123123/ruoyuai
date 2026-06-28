@@ -60,12 +60,16 @@ def _setup_agents(tmp):
 
 
 # ============ 注册表完整性 ============
-def test_registry_covers_9_agents():
-    assert len(jr.AGENT_SPECS) == 9   # +novel-distill-analyzer（阶段3 蒸馏 phase-1）
-    # block 级 = 喂确定性状态机的（对抗审查定调 + distill surface 喂 consolidate/arc_aggregator）
+def test_registry_covers_10_agents():
+    # 10 = 8 写作/质检 judge + novel-distill-analyzer（阶段3 蒸馏 phase-1）
+    #      + novel-archivist（cluster-save-state 状态梳理·2026-06-28 架构纠正）
+    assert len(jr.AGENT_SPECS) == 10
+    # 🔴 2026-06-28 不降级收尾：block 级 = 喂确定性状态机的（对抗审查定调 + distill surface 喂
+    # consolidate/arc_aggregator）。novel-archivist 升 block——archive 是 factual 回库唯一权威路径，
+    # 失败必须硬停（不能 soft 降级让状态丢失·apply_archive 回库链断）。
     blocks = {n for n, s in jr.AGENT_SPECS.items() if s.failure_policy == "block"}
     assert blocks == {"novel-summarizer", "novel-foreshadower", "novel-outline-planner",
-                      "novel-distill-analyzer"}
+                      "novel-distill-analyzer", "novel-archivist"}
 
 
 def test_registry_style_judges_need_author_profile():

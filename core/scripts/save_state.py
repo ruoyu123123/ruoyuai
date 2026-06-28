@@ -57,66 +57,13 @@ def _resolve_cluster(root: Path, ch: int) -> tuple[str, bool]:
     return cluster_lookup.normalize_cluster_id(ch) or f"cluster_{ch:03d}", True
 
 
-# 🔴 2026-06-27 SYS-2/SYS-3：伏笔 payoff terminal vs progressive 分流（治批量误标 resolved）
-# 病灶：原 apply_changes 把每条 foreshadowing_paid 无差别当 terminal payoff（无条件 resolved=True），
-# split_cluster_changes 把整 cluster 的 paid 平铺进每章 → 逐章 re-apply 放大成「统一盖末章 resolved」。
-# 修：terminal（核心承诺彻底兑现 / Tier-1 finale 抵达）才标 resolved；progressive（推进/扩散/阶段
-# 数值）只记 payoff_progress 保持 open。优先级：foreshadower.terminal > writer.kind > 词面默认。
-_PAYOFF_TERMINAL_WORDS = ("回收", "兑现", "揭晓", "收束")
-_PAYOFF_PROGRESSIVE_WORDS = ("推进", "扩散", "进展", "数值")
-
-
-def _word_surface_terminal(desc: str) -> bool:
-    """词面默认分类：含 terminal 词且不含 progressive 词 → True；其余（含 progressive / 同时命中 /
-    皆无）一律保守 progressive(False)。措辞模糊时绝不轻易判 terminal（防误标 resolved）。"""
-    if not desc:
-        return False
-    has_t = any(w in desc for w in _PAYOFF_TERMINAL_WORDS)
-    has_p = any(w in desc for w in _PAYOFF_PROGRESSIVE_WORDS)
-    return bool(has_t and not has_p)
-
-
-def _classify_payoff_terminal(fid, writer_kind, desc, terminal_map) -> bool:
-    """判某条 payoff 是否 terminal。优先级：① foreshadower 显式 terminal > ② writer self-eval
-    kind > ③ 词面默认。terminal_map 缺该 fs / 字段 None → 降级到下一级信号。"""
-    if fid in terminal_map and terminal_map[fid] is not None:
-        return bool(terminal_map[fid])
-    if writer_kind in ("terminal", "progressive"):
-        return writer_kind == "terminal"
-    return _word_surface_terminal(desc or "")
-
-
-def _load_foreshadower_maps(root: Path, ch: int) -> tuple[dict, dict]:
-    """读 ch 所属 cluster 的 foreshadower JudgeReport，建 (terminal_map, score_map)。
-
-    🔴 2026-06-27 SYS-2/SYS-3：payoff_scores 是 specific_findings 下的嵌套 list（非顶层），
-    按 fs_id 匹配抽 terminal（SYS-2 分流权威信号）+ score（SYS-3 score==0 门控：foreshadower
-    判正文 0 痕迹 → 不标 resolved）。报告缺失 → 空 map（回退 writer.kind / 词面默认，行为不变）。"""
-    terminal_map: dict = {}
-    score_map: dict = {}
-    try:
-        cid, _ = _resolve_cluster(root, ch)
-        rpt = root / "_数据库" / ".judge_reports" / f"{cid}_foreshadower.json"
-        if not rpt.is_file():
-            return terminal_map, score_map
-        data = json.loads(rpt.read_text(encoding="utf-8"))
-        for it in (data.get("specific_findings") or {}).get("payoff_scores", []) or []:
-            if not isinstance(it, dict):
-                continue
-            fid = it.get("fs_id")
-            if not fid:
-                continue
-            if "terminal" in it:
-                terminal_map[fid] = it.get("terminal")
-            if "score" in it:
-                try:
-                    score_map[fid] = int(it.get("score"))
-                except (TypeError, ValueError):
-                    pass
-    except Exception:
-        # 报告坏/缺 → 不阻断 apply，回退二级信号
-        pass
-    return terminal_map, score_map
+# 🔴 2026-06-28 审计清理B类：伏笔 payoff terminal/progressive 分流助手已删除
+# （原 _PAYOFF_*_WORDS / _word_surface_terminal / _classify_payoff_terminal /
+# _load_foreshadower_maps）。它们只服务于 apply_changes 里「writer 自报 foreshadowing_planted/
+# paid → 伏笔表」桥接——该桥接判为 B 类违规（消费侧读 writer 自报 factual 当权威状态源），已移除。
+# 伏笔注册/兑现改走两条 Claude 权威路径：_register_brief_foreshadowings（读 outline brief 的
+# foreshadowing_to_plant）+ _apply_foreshadower_payoffs（读 foreshadower JudgeReport·自带
+# terminal→resolved / progressive→payoff_progress 分流 + score>0 门控）。
 
 
 # ============ IO ============
@@ -218,32 +165,16 @@ def cmd_parse(root: Path, ch: int) -> int:
 # ============ 应用 CHANGES（结构化更新） ============
 
 def _generate_patch(changes: dict, ch: int) -> list[dict]:
-    """v16: 生成声明式JSON Patch（可审计/可回放/可撤销）。"""
+    """v16: 生成声明式JSON Patch（可审计/可回放/可撤销）。
+
+    🔴 2026-06-28 审计清理B类：删除 writer 自报 factual（foreshadowing_actions /
+    character_changes / character_movements / item_transfers / new_entities.characters）→ JSON
+    的补丁生成。这些 cluster 级 factual 状态（角色/道具/关系/伏笔/locked_facts）改由
+    novel-archivist 读正文产 archive.json → apply_archive.py 确定性回库（人物卡/角色池/道具/关系/
+    事件簇.locked_facts），伏笔走 brief + foreshadower 两条 Claude 路径——save_state 不再消费
+    writer changes.factual 当权威状态源。仅保留 time_advance（时间线·非 archive 域·无替代 producer）。
+    """
     patches = []
-    for act in changes.get("foreshadowing_actions", []):
-        patches.append({
-            "target": "伏笔表.json",
-            "op": "add" if act.get("type") in ("setup", "raise", "make", "establish") else "update",
-            "path": f"/{act.get('category', 'promise')}/{act.get('id', '')}",
-            "value": act,
-            "chapter": ch,
-        })
-    for cc in changes.get("character_changes", []):
-        patches.append({
-            "target": "人物卡.json",
-            "op": "update",
-            "path": f"/characters/{cc.get('name', '')}/growth_arc",
-            "value": {"ch": ch, "field": cc.get("field"), "from": cc.get("from"), "to": cc.get("to")},
-            "chapter": ch,
-        })
-    for mov in changes.get("character_movements", []):
-        patches.append({
-            "target": "地图.json",
-            "op": "update",
-            "path": f"/character_positions/{mov.get('character', '')}",
-            "value": mov.get("to", ""),
-            "chapter": ch,
-        })
     ta = changes.get("time_advance") or {}
     if ta:
         patches.append({
@@ -251,22 +182,6 @@ def _generate_patch(changes: dict, ch: int) -> list[dict]:
             "op": "append",
             "path": "/time_log",
             "value": {"ch": ch, "elapsed": ta.get("elapsed", ""), "key_events": ta.get("key_events", [])},
-            "chapter": ch,
-        })
-    for t in changes.get("item_transfers", []):
-        patches.append({
-            "target": "道具.json",
-            "op": "update",
-            "path": f"/items/{t.get('item', '')}/holder",
-            "value": t.get("to", ""),
-            "chapter": ch,
-        })
-    for ne in (changes.get("new_entities", {}) or {}).get("characters", []):
-        patches.append({
-            "target": "人物卡.json",
-            "op": "add",
-            "path": f"/characters/{ne.get('name', '')}",
-            "value": ne,
             "chapter": ch,
         })
     return patches
@@ -288,14 +203,6 @@ def apply_changes(root: Path, ch: int) -> int:
         logger.info(f"[APPLY] 无 parsed CHANGES，跳过")
         return 1
 
-    # 2026-06-02 修：gen-model 常把 foreshadowing_planted/paid 报成自评摘要字符串
-    # （如「3/3——fs_001/fs_002/fs_003 全部 planted」）而非结构化 list → 下游 (str or []) + list
-    # 拼接崩 TypeError + for-in 逐字符遍历。统一 coerce 成 list（str/dict→[v]·None 保持·已是 list 不动）。
-    for _fk in ("foreshadowing_planted", "foreshadowing_paid"):
-        _v = changes.get(_fk)
-        if _v is not None and not isinstance(_v, list):
-            changes[_fk] = [_v]
-
     # v16: 生成并保存声明式Patch
     patches = _generate_patch(changes, ch)
     patch_path = db / ".wal" / f"第{ch}章_patch.json"
@@ -305,266 +212,16 @@ def apply_changes(root: Path, ch: int) -> int:
 
     summary = {"applied": [], "warnings": [], "patch_file": str(patch_path.name)}
 
-    # --- 伏笔表（第4步）---
-    fs = load_json(db / "伏笔表.json", {"promises": [], "deadlines": [],
-                                        "pledges": [], "secrets": []})
-    # 2026-05-30 北极星复审 A-1：writer（gen_writer prompt 自查项）实产 foreshadowing_planted/paid，
-    # 但本函数原只读 foreshadowing_actions（结构化）→ 伏笔表 resolved/status 从不更新（数据流断裂）。
-    # 桥接：从 planted/paid 构造 action；元素须为带 id 的 dict 才能精确更新伏笔表，
-    # 纯描述串无 id → 记 warning（可见而非静默断裂）。
-    #
-    # 2026-05-30 [#6] 门控短路修复：原 `if not _fs_actions:` 让桥接只在 foreshadowing_actions
-    # 为空时执行。真实项目 cluster_005 同时有 foreshadowing_actions（其他项）+ foreshadowing_paid →
-    # 桥接被整体短路 → writer 明确申报兑现的伏笔（foreshadowing_paid）永不标 resolved，伏笔表停在
-    # planted，下游 SECRET_NOT_REVEALED / FORESHADOWING_NOT_PAID 误判。改为**合并**：既处理显式
-    # foreshadowing_actions，也始终把 planted/paid 桥接进 resolve，按 (category, type, id) 去重
-    # （显式 action 已覆盖同一 fs → 不重复构造）。
-    _fs_actions = list(changes.get("foreshadowing_actions") or [])
-    _seen = {(a.get("category"), a.get("type"), a.get("id"))
-             for a in _fs_actions if isinstance(a, dict)}
-    _bridged_with_id = False  # planted/paid 里出现过带 id 的可桥接项
-    for _p in changes.get("foreshadowing_planted", []) or []:
-        if isinstance(_p, dict) and _p.get("id"):
-            _bridged_with_id = True
-            _key = (_p.get("category", "promise"), "setup", _p["id"])
-            if _key not in _seen:
-                _seen.add(_key)
-                _fs_actions.append({"category": _p.get("category", "promise"), "type": "setup",
-                                    "id": _p["id"], "tier": _p.get("tier", 3),
-                                    "description": _p.get("desc") or _p.get("description", ""),
-                                    "due_by_cluster": _p.get("due_by_cluster")})
-    # 🔴 2026-06-27 SYS-2：writer self-eval foreshadowing_paid[].kind（terminal|progressive）作
-    # foreshadower 缺字段时二级信号——按 fs_id 建 map 供 payoff 分流读（覆盖 bridged + dedup 两路径）。
-    _writer_kind_map = {_p["id"]: _p.get("kind")
-                        for _p in (changes.get("foreshadowing_paid") or [])
-                        if isinstance(_p, dict) and _p.get("id") and _p.get("kind")}
-    for _p in changes.get("foreshadowing_paid", []) or []:
-        if isinstance(_p, dict) and _p.get("id"):
-            _bridged_with_id = True
-            _key = (_p.get("category", "promise"), "payoff", _p["id"])
-            if _key not in _seen:
-                _seen.add(_key)
-                _fs_actions.append({"category": _p.get("category", "promise"), "type": "payoff",
-                                    "id": _p["id"], "kind": _p.get("kind"),
-                                    "description": _p.get("desc") or _p.get("description", "")})
-    # 🔴 2026-06-28：planted 缺 fs_id 自动派确定性 id 并桥接入伏笔表（治 intake 死路径·模型/brief 常
-    # 给纯 desc 无 id → 原仅 warning 丢数据 → 后续 cluster 无从回收·伏笔表恒空）。id=desc 的 sha1 前8位
-    # → re-apply / split 平铺多章重复 apply 时（category,type,id）去重 + promises id 去重双重幂等。
-    # 只对 planted(setup) 自动派——paid(payoff) 无法凭空兑现未知 fs。北极星：模型漏 id 不丢内容状态。
-    import hashlib as _hashlib
-    _auto_assigned_n = 0
-    for _p in changes.get("foreshadowing_planted", []) or []:
-        if isinstance(_p, dict):
-            _desc = (_p.get("desc") or _p.get("description") or "").strip()
-            _has_id = bool(_p.get("id"))
-            _tier = _p.get("tier", 3)
-        elif isinstance(_p, str):
-            _desc, _has_id, _tier = _p.strip(), False, 3
-        else:
-            continue
-        if _desc and not _has_id:
-            _auto_id = "fs_auto_" + _hashlib.sha1(_desc.encode("utf-8")).hexdigest()[:8]
-            _key = ("promise", "setup", _auto_id)
-            if _key not in _seen:
-                _seen.add(_key)
-                _fs_actions.append({"category": "promise", "type": "setup", "id": _auto_id,
-                                    "tier": _tier, "description": _desc, "due_by_cluster": None,
-                                    "_auto_assigned": True})
-                _auto_assigned_n += 1
-    # planted/paid 全是无 id 描述串（既无显式 actions 也无可桥接 id）→ 记 warning（可见非静默断裂）
-    _raw = (changes.get("foreshadowing_planted") or []) + (changes.get("foreshadowing_paid") or [])
-    if _auto_assigned_n:
-        summary["warnings"].append(
-            f"foreshadowing_planted 有 {_auto_assigned_n} 条无 fs_id → 已自动派 fs_auto_<hash> 记入伏笔表"
-            "（数据不丢·后续回收时 foreshadower 按 desc 匹配或人工绑 id）")
-    if _raw and not _bridged_with_id and not changes.get("foreshadowing_actions") and not _auto_assigned_n:
-        summary["warnings"].append(
-            f"foreshadowing_planted/paid 共 {len(_raw)} 条为无 id 描述串 → 无法更新伏笔表 resolved/status；"
-            "需 writer 报带 fs_id 的项（gen_writer prompt 已要求引用 cluster_brief fs_id）")
-    # 🔴 2026-06-27 SYS-2/SYS-3：读本 cluster foreshadower JudgeReport → terminal/score map（payoff 分流权威信号）
-    _terminal_map, _score_map = _load_foreshadower_maps(root, ch)
-    for act in _fs_actions:
-        cat = act.get("category")
-        typ = act.get("type")
-        fid = act.get("id")
-        if cat == "promise":
-            if typ == "setup":
-                # v2 cluster 化（2026-05-28）：纯 cluster 模式
-                # 2026-05-29 修 章号当cluster号：setup_cluster 由 ch 反查真实 cluster_id
-                setup_cid, setup_inferred = _resolve_cluster(root, ch)
-                # 2026-05-29 复审修复 [M4/SC-5]：due_by 不再用 ch+20 反查（未来 cluster 尚未
-                # 涌现，反查必 None → fallback 拼出 cluster_NNN 是 SC-5 明禁的「章号当 cluster 号」）。
-                # 改：优先用 writer 给的 due_by_cluster（归一化）；没给则存「章偏移语义」
-                # due_by_ch_offset，cluster_id 留 None 待后续 cluster 涌现时回填。
-                due_by_cluster = cluster_lookup.normalize_cluster_id(act.get("due_by_cluster")) \
-                    if act.get("due_by_cluster") else None
-                promise_rec = {
-                    "id": fid, "setup_cluster": setup_cid, "tier": act.get("tier", 3),
-                    "description": act.get("description", ""),
-                    "due_by_cluster": due_by_cluster,  # None = 待 cluster 涌现后回填
-                    "resolved": False,
-                }
-                # writer 未指定到期 cluster → 保留章偏移语义供后续回填
-                if not due_by_cluster:
-                    promise_rec["due_by_ch_offset"] = act.get("due_by_ch_offset", 20)
-                    promise_rec["due_by_pending_resolution"] = True
-                # setup_cluster 为按章号推断（反查不到） → 打不可信标记
-                if setup_inferred:
-                    promise_rec["_cluster_inferred"] = True
-                # 2026-06-02 修：按 id 去重——同 id 已存在则跳过 append（防 re-apply / split v1 把整
-                # factual 平铺到每章 → apply 5× → 同 id 累积重复·foreshadower 实测 fs_001 被写 6 套）
-                if any(p.get("id") == fid for p in fs["promises"]):
-                    summary["applied"].append(f"伏笔 setup(已存在·去重跳过): {fid}")
-                else:
-                    fs["promises"].append(promise_rec)
-                    summary["applied"].append(f"伏笔 setup: {fid}")
-            elif typ == "payoff":
-                # 🔴 2026-06-27 SYS-2/SYS-3：terminal vs progressive 分流 + foreshadower score==0 门控
-                for p in fs["promises"]:
-                    if p.get("id") == fid:
-                        # SYS-3：foreshadower 判 score==0（声明 paid 但正文 0 痕迹/谎报）→ 不标 resolved
-                        if _score_map.get(fid) == 0:
-                            summary["warnings"].append(
-                                f"伏笔 payoff(score=0·foreshadower 判正文 0 痕迹·不标 resolved·待补写或撤回): {fid}")
-                            break
-                        _wk = _writer_kind_map.get(fid) or act.get("kind")
-                        _is_terminal = _classify_payoff_terminal(
-                            fid, _wk, act.get("description", ""), _terminal_map)
-                        if _is_terminal:
-                            # terminal：核心承诺彻底兑现 → 标 resolved（首次兑现章为准·re-apply 幂等不后移）
-                            if not p.get("resolved"):
-                                p["resolved"] = True
-                                p["resolved_at_ch"] = ch
-                            summary["applied"].append(f"伏笔 payoff(terminal): {fid}")
-                        else:
-                            # progressive：推进/扩散/阶段数值 → 不动 resolved，记 payoff_progress 保持 open；
-                            # 按 (fs_id,ch) 去重（防 split 平铺逐章 + 多次 re-apply 累积 N 条）
-                            prog = p.setdefault("payoff_progress", [])
-                            if not any(isinstance(e, dict) and e.get("ch") == ch for e in prog):
-                                prog.append({"ch": ch, "desc": act.get("description", "")})
-                            p["last_advanced_at_ch"] = ch
-                            summary["applied"].append(f"伏笔 payoff(progressive·保持 open): {fid}")
-                        break
-                else:
-                    summary["warnings"].append(f"payoff 引用了不存在的伏笔: {fid}")
-        elif cat == "deadline":
-            if typ == "raise" and not any(d.get("id") == fid for d in fs["deadlines"]):
-                fs["deadlines"].append({
-                    "id": fid, "raised_ch": ch,
-                    "description": act.get("description", ""),
-                    "deadline_ch": act.get("deadline_ch", ch + 5),
-                    "status": "pending",
-                })
-            elif typ in ("trigger", "miss"):
-                for d in fs["deadlines"]:
-                    if d.get("id") == fid:
-                        d["status"] = "triggered" if typ == "trigger" else "missed"
-                        break
-        elif cat == "pledge":
-            if typ == "make" and not any(pl.get("id") == fid for pl in fs["pledges"]):
-                fs["pledges"].append({
-                    "id": fid, "pledger": act.get("pledger", ""),
-                    "raised_ch": ch, "pledge": act.get("description", ""),
-                    "status": "active",
-                })
-            elif typ in ("fulfill", "break"):
-                for pl in fs["pledges"]:
-                    if pl.get("id") == fid:
-                        pl["status"] = "fulfilled" if typ == "fulfill" else "broken"
-                        break
-        elif cat == "secret":
-            if typ == "establish":
-                # v2 cluster 化（2026-05-28）：纯 cluster 模式
-                # 2026-05-29 修 章号当cluster号：established_cluster 由 ch 反查
-                est_cid, est_inferred = _resolve_cluster(root, ch)
-                # 2026-05-29 复审修复 [M4/SC-5]：reveal_at 不再用 ch+50 反查（未来 cluster
-                # 尚未涌现，反查必 None → fallback 拼 cluster_NNN 是 SC-5 明禁的「章号当 cluster 号」）。
-                # 改：优先用 writer 给的 reveal_at_cluster（归一化）；没给则存「章偏移语义」
-                # reveal_at_ch_offset，cluster_id 留 None 待后续 cluster 涌现时回填。
-                reveal_at_cluster = cluster_lookup.normalize_cluster_id(act.get("reveal_at_cluster")) \
-                    if act.get("reveal_at_cluster") else None
-                secret_rec = {
-                    "id": fid,
-                    "secret": act.get("description", ""),
-                    "established_cluster": est_cid,
-                    "reveal_at_cluster": reveal_at_cluster,  # None = 待 cluster 涌现后回填
-                    "known_by": act.get("known_by", []),
-                    "status": "hidden",
-                }
-                if not reveal_at_cluster:
-                    secret_rec["reveal_at_ch_offset"] = act.get("reveal_at_ch_offset", 50)
-                    secret_rec["reveal_at_pending_resolution"] = True
-                if est_inferred:
-                    secret_rec["_cluster_inferred"] = True
-                # 2026-06-02 修：按 id 去重（同 promises·防 re-apply/平铺累积重复 secrets）
-                if not any(s.get("id") == fid for s in fs["secrets"]):
-                    fs["secrets"].append(secret_rec)
-            elif typ == "reveal":
-                for s in fs["secrets"]:
-                    if s.get("id") == fid:
-                        s["status"] = "revealed"
-                        break
-            elif typ == "leak":
-                for s in fs["secrets"]:
-                    if s.get("id") == fid:
-                        s["status"] = "leaked"
-                        s["known_by"] = list(set(s.get("known_by", []) + act.get("known_by", [])))
-                        break
-    save_json(db / "伏笔表.json", fs)
-
-    # --- 人物卡 growth_arc（v16 Codex Progressions · 角色时间线变化追踪）---
-    cards = load_json(db / "人物卡.json", {"characters": []})
-    char_map = {c.get("name"): c for c in cards.get("characters", [])}
-    # 🔴 2026-06-27 C11（cluster 级幂等去重）：split_cluster_changes v1 把整 cluster 的
-    # character_changes 平铺进每章 _changes.json，cmd_apply_cluster_changes 对 N 章逐章 apply
-    # → 同一逻辑成长事件被 append N 次（growth_arc 膨胀 N 倍）。按 (name,key_change,trigger,
-    # _source_cluster) 去重：同 cluster 内同一成长事件只记一次（_source_cluster 由章号反查 cluster_id，
-    # per-cluster 非全局——下个 cluster 真正产生的不同成长事件 cid 不同，仍合法 append）。
-    for cc in changes.get("character_changes", []):
-        name = cc.get("name", "")
-        if name in char_map:
-            char = char_map[name]
-            src_cid, _src_inferred = _resolve_cluster(root, ch)
-            key_change = f"{cc.get('field', '')}: {cc.get('from', '')} → {cc.get('to', '')}"
-            trigger = cc.get("trigger", "")
-            arc = char.setdefault("growth_arc", [])
-            _dup = any(
-                isinstance(e, dict)
-                and e.get("key_change") == key_change
-                and e.get("trigger", "") == trigger
-                and e.get("_source_cluster") == src_cid
-                for e in arc
-            )
-            if _dup:
-                summary["applied"].append(f"角色弧(去重跳过): {name} {cc.get('field', '')}")
-            else:
-                arc.append({
-                    "ch": ch,
-                    "state": cc.get("to", ""),
-                    "key_change": key_change,
-                    "trigger": trigger,
-                    "_source_cluster": src_cid,  # 🔴 2026-06-27 C11 幂等去重键
-                })
-                summary["applied"].append(f"角色弧: {name} ch{ch} {cc.get('field', '')}")
-    # 新角色注册
-    for ne in (changes.get("new_entities", {}) or {}).get("characters", []):
-        ne_name = ne.get("name", "")
-        if ne_name and ne_name not in char_map:
-            # v2 cluster 化（2026-05-28）：纯 cluster 模式
-            # 2026-05-29 修 章号当cluster号：first_appear_cluster / growth_arc.cluster 由 ch 反查
-            appear_cid, appear_inferred = _resolve_cluster(root, ch)
-            ne_rec = {
-                "id": ne_name.lower().replace(" ", "_"),
-                "name": ne_name,
-                "role": ne.get("role", "配角"),
-                "first_appear_cluster": appear_cid,
-                "growth_arc": [{"cluster": appear_cid, "state": "初次登场", "key_change": "出场", "trigger": ""}],
-            }
-            if appear_inferred:
-                ne_rec["_cluster_inferred"] = True
-            cards["characters"].append(ne_rec)
-            summary["applied"].append(f"新角色: {ne_name}")
-    save_json(db / "人物卡.json", cards)
+    # 🔴 2026-06-28 审计清理B类：删除 writer 自报 factual → 伏笔表 / 人物卡 的回库路径。
+    #   · 伏笔表（promises/secrets/deadlines/pledges resolved/status）：原读 writer 的
+    #     foreshadowing_actions / foreshadowing_planted / foreshadowing_paid（含 fs_auto_<hash>
+    #     自动派 id）桥接——属 B 类违规（消费 writer 自报 factual 当权威状态源），全部移除。
+    #     伏笔注册/兑现改走两条 Claude 权威路径（cmd_apply_cluster_changes 调度·读 outline brief +
+    #     foreshadower JudgeReport）：_register_brief_foreshadowings + _apply_foreshadower_payoffs。
+    #   · 人物卡（growth_arc / 新角色注册）：原读 writer 的 character_changes / new_entities.characters，
+    #     现由 novel-archivist 读正文产 archive → apply_archive.py 写人物卡/角色池/state_log。
+    # save_state 仅保留 time_advance（时间线）/ location_changes（地图地点）/ 进度推进——
+    # 它们非 archive 域、无替代 producer，且不属「角色/道具/关系/伏笔/locked_facts」factual 状态。
 
     # --- 进度（completed+1, current+1）---
     # 2026-05-30 北极星复审：进度.json 损坏时 load_json 静默返回 {}，下方覆写会清空 cluster_blueprint/
@@ -585,14 +242,11 @@ def apply_changes(root: Path, ch: int) -> int:
         save_json(prog_path, progress)
         summary["applied"].append(f"进度: completed={progress['completed']}")
 
-    # --- 地图（角色移动 + 新地点）---
+    # --- 地图（新地点状态）---
+    # 🔴 2026-06-28 审计清理B类：删除 character_movements → 地图.character_positions 回库
+    #   （消费 writer 自报 factual·角色位置属 archive 关系/状态域）。仅保留 location_changes
+    #   （地点 status·非 archive 域、无替代 producer）。
     loc_data = load_json(db / "地图.json", {"locations": [], "character_positions": {}})
-    for mov in changes.get("character_movements", []):
-        c = mov.get("character")
-        to = mov.get("to")
-        if c and to:
-            loc_data.setdefault("character_positions", {})[c] = to
-            summary["applied"].append(f"位置: {c} → {to}")
     for lc in changes.get("location_changes", []):
         loc_id = lc.get("location_id")
         if loc_id:
@@ -634,17 +288,9 @@ def apply_changes(root: Path, ch: int) -> int:
             summary["applied"].append("时间线: 已推进")
         save_json(db / "时间线.json", tl)
 
-    # --- 道具（item_transfers）---
-    items_data = load_json(db / "道具.json", {"items": []})
-    for t in changes.get("item_transfers", []):
-        for it in items_data.get("items", []):
-            if it.get("name") == t.get("item") or it.get("id") == t.get("item"):
-                it["holder"] = t.get("to", it.get("holder"))
-                if t.get("new_status"):
-                    it["status"] = t["new_status"]
-                summary["applied"].append(f"道具: {it.get('name')} → {t.get('to')}")
-                break
-    save_json(db / "道具.json", items_data)
+    # 🔴 2026-06-28 审计清理B类：删除 item_transfers → 道具.json holder/status 回库
+    #   （消费 writer 自报 factual·道具属 archive 域）。道具现由 novel-archivist 读正文产 archive
+    #   → apply_archive.py 写 道具.json（建卡/holder/状态）。save_state 不再触碰 道具.json。
 
     # --- 输出 summary ---
     out = db / ".wal" / f"第{ch}章_applied.json"
@@ -1106,56 +752,11 @@ def _mark_cluster_me_completed(root, cluster_key):
         logger.info(f"[ME完成] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
 
 
-def _persist_cluster_locked_facts(root, cluster_key):
-    """🔴 2026-06-28：把 writer changes.factual.facts_locked/locked_facts 写进 事件簇.clusters[].locked_facts。
-
-    根因：save_state apply 原**完全不处理 locked_facts**（grep 零命中）→ writer 报的硬事实（cluster_002
-    实测 4 条：霍华德左手/孩童骨头/瘸腿男孩失踪/遗嘱墨迹变淡）从不落地 → 后续 cluster 无从查矛盾、
-    LOCKED_FACT_CROSS_SCENE 形同虚设。事件簇.clusters[].locked_facts 是 locked_fact_cross_scene_scanner
-    + build_manifest 读取的权威源。兼容模型实用字段名 facts_locked（自查项名）与 locked_facts。dedup by fact。
-    """
-    try:
-        db = root / "_数据库"
-        ec_path = db / "事件簇.json"
-        if not ec_path.exists():
-            return
-        import cluster_lookup as _cl
-        cid = _cl.normalize_cluster_id(cluster_key) or str(cluster_key)
-        key3 = str(cluster_key).replace("cluster_", "")
-        chg_path = root / "章节" / f"cluster_{key3}_draft" / f"cluster_{key3}_changes.json"
-        if not chg_path.exists():
-            return
-        chg = load_json(chg_path, {})
-        fac = chg.get("factual", chg) if isinstance(chg, dict) else {}
-        raw = fac.get("locked_facts") or fac.get("facts_locked") or []
-        norm = []
-        for lf in raw:
-            if isinstance(lf, dict) and (lf.get("fact") or lf.get("description")):
-                norm.append({"fact": lf.get("fact") or lf.get("description"),
-                             "subject": lf.get("subject", ""), "_cluster": cid})
-            elif isinstance(lf, str) and lf.strip():
-                norm.append({"fact": lf.strip(), "subject": "", "_cluster": cid})
-        if not norm:
-            return
-        ec = load_json(ec_path, {})
-        cluster = next((c for c in ec.get("clusters", [])
-                        if _cl.normalize_cluster_id(c.get("cluster_id")) == cid
-                        or str(c.get("cluster_id")) == cid), None)
-        if cluster is None:
-            return
-        existing = cluster.setdefault("locked_facts", [])
-        seen = {(e.get("fact") if isinstance(e, dict) else e) for e in existing}
-        added = 0
-        for lf in norm:
-            if lf["fact"] not in seen:
-                existing.append(lf)
-                seen.add(lf["fact"])
-                added += 1
-        if added:
-            save_json(ec_path, ec)
-            logger.info(f"[locked_facts] {cid} 落地 {added} 条硬事实 → 事件簇.clusters[].locked_facts")
-    except Exception as e:
-        logger.info(f"[locked_facts] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+# 🔴 2026-06-28 审计清理B类：_persist_cluster_locked_facts 已删除。
+# 它读 writer changes.factual.facts_locked/locked_facts 写 事件簇.clusters[].locked_facts——属 B
+# 类违规（消费 writer 自报 factual 当权威状态源）。locked_facts 现由 novel-archivist 读正文产
+# archive.json → apply_archive.py 的 apply_locked_facts 写 事件簇.clusters[].locked_facts（权威源 =
+# Claude 读正文，非 writer 自报）。cmd_apply_cluster_changes 不再调用本函数。
 
 
 def _register_brief_foreshadowings(root, cluster_key):
@@ -1301,8 +902,8 @@ def cmd_apply_cluster_changes(root, cluster_key):
         _writeback_cluster_progress(root, cluster_key, chapters)
         # 🔴 2026-06-28：标记 parent_me status=completed + 补 ME_to_advance（内容状态一致性）
         _mark_cluster_me_completed(root, cluster_key)
-        # 🔴 2026-06-28：locked_facts 落地 事件簇.clusters[]（后续 cluster 查矛盾的权威源）
-        _persist_cluster_locked_facts(root, cluster_key)
+        # 🔴 2026-06-28 审计清理B类：原 _persist_cluster_locked_facts（读 writer factual 写
+        #   事件簇.locked_facts）已删除——locked_facts 由 apply_archive.py 从 archive 写（Claude 权威）。
         # 🔴 2026-06-28：brief 规划伏笔注册伏笔表（writer 漏报兜底·排桥接前使可立即 resolve）
         _register_brief_foreshadowings(root, cluster_key)
         # 🔴 2026-06-28：foreshadower payoff 桥接伏笔表 resolution（foreshadower 跑完后 re-apply 生效）

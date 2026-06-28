@@ -5,8 +5,12 @@
 - offscreen_update.py（offscreen_actions_executed 字段处理）
 - declarative_data_update.py（6 类声明式字段更新）
 - character_arc_update.py（character_arc_state.json stage_log 更新）
-- character_lazy_spawn.py（章节中出现的新角色自动入档）
 - fate_engine.py update <ch>（fate event 应用）
+
+🔴 2026-06-28 不降级收尾：character_lazy_spawn.py 已删除（孤儿码）——它读 writer
+changes.factual.new_entities 自动入档新角色，但 writer 已不自报 factual（A 类清理删除），
+其输入恒空=永远 no-op。新角色入档的唯一权威路径 = novel-archivist 读正文产 archive →
+apply_archive.py 回库人物卡/角色池（cluster-save-state step5/6·archive 单一来源）。
 
 调用方式（v26 唯一入口）：
 - python save_state_updates.py <project> --cluster <key> [--all | --only offscreen,declarative,...]
@@ -29,7 +33,8 @@ SUB_MODULES = [
     ("offscreen", "offscreen_update.py", ["project", "chapter"]),
     ("declarative", "declarative_data_update.py", ["project", "chapter"]),
     ("character_arc", "character_arc_update.py", ["project", "chapter"]),
-    ("character_lazy_spawn", "character_lazy_spawn.py", ["project", "ch"]),
+    # 🔴 2026-06-28 不降级收尾：character_lazy_spawn 已删（孤儿·输入 writer new_entities 已删）
+    #   —— 新角色入档走 archivist → apply_archive（step5/6·archive 单一权威路径）。
     ("fate_engine_update", "fate_engine.py", ["project", "update", "chapter"]),  # 三段式 CLI
 ]
 
@@ -42,7 +47,6 @@ SUB_MODULES = [
 #   - offscreen：self_eval.offscreen_actions_executed 也是 cluster 级整份（平铺相同），
 #     且 offscreen_update 本身幂等（done=true 不反向），但同样只跑首章避免无谓 N 次。
 #   - character_arc：按 ch 映射 stage（每章语义不同，幂等 set 不累加）→ 逐章跑。
-#   - character_lazy_spawn：新角色入档（set 去重）→ 逐章跑。
 #   - fate_engine_update：按 status!=completed 守卫幂等 → 逐章跑（真正应用在世界演化层另有幂等）。
 # 「只跑首章」的模块（读 cluster 级整份增量，逐章会乘倍）：
 CLUSTER_ONCE_MODULES = {"offscreen", "declarative"}

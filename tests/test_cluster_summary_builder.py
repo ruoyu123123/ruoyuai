@@ -206,9 +206,13 @@ def _mk_project(root: Path, cluster_id="cluster_001", rng=(1, 2)):
     db = root / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
     lo, hi = rng
+    # 🔴 2026-06-28 不降级收尾：throughline_progress 改由 archivist→apply_archive 落
+    # 事件簇.clusters[].throughline_progress（archive 单一来源·非 writer 自报 changes.factual）。
     (db / "事件簇.json").write_text(json.dumps({
         "clusters": [{"cluster_id": cluster_id, "title": "第一战",
-                      "chapter_range": [lo, hi]}]
+                      "chapter_range": [lo, hi],
+                      "throughline_progress": {"OS": True, "MC": False,
+                                               "IC": False, "RS": False}}]
     }, ensure_ascii=False), encoding="utf-8")
     # 人物卡 + 地图（供正文派生命中）
     (db / "人物卡.json").write_text(json.dumps({
@@ -224,7 +228,6 @@ def _mk_project(root: Path, cluster_id="cluster_001", rng=(1, 2)):
         cio.write_changes(root, ch, {
             "factual": {
                 "secrets_revealed": [f"sec_{ch}"],
-                "throughline_progress": {"主线": True, "支线": False},
             },
             "self_eval": {"applied_style": {"ending_type": "cliffhanger"}},
         })
@@ -252,8 +255,12 @@ def test_build_cluster_summary_end_to_end():
         assert rec["word_count"] == res["word_count"]
         # 两章各 sec_1 / sec_2 → 去重排序汇总
         assert rec["secrets_revealed"] == ["sec_1", "sec_2"]
-        # throughline 只有「主线」命中（支线 False 不计）→ 分布 100%
-        assert rec["throughline_distribution"] == {"主线": 1.0}
+        # throughline 来自 事件簇.clusters[].throughline_progress（archive 源·非 writer 自报）：
+        # 仅 OS 命中（MC/IC/RS False 不计）·cluster 级值注入两章 → 分布 100% OS
+        assert rec["throughline_distribution"] == {"OS": 1.0}
+        # 每章账本记录承载 cluster 级 throughline（aggregator 读 rec.throughline_progress）
+        assert rec["chapters"]["1"]["throughline_progress"] == {
+            "OS": True, "MC": False, "IC": False, "RS": False}
         # 每章富摘要里有正文派生字段
         ch1 = rec["chapters"]["1"]
         assert ch1["cjk_count"] > 0
