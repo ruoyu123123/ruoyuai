@@ -447,6 +447,104 @@ def apply_antagonist_rotation(db: Path, cid: str, archive: dict, summary: dict, 
         save_json(p, ledger)
 
 
+# ──── 🔴 2026-06-29 power_progression接通producer → 角色弧线.json ────
+def apply_protagonist_power_tier(db: Path, cid: str, archive: dict, summary: dict, dry: bool):
+    """🔴 2026-06-29 power_progression接通producer（确定性·幂等·零模型）。
+
+    archivist 读整 cluster 正文客观抽取**本块主角力量 tier 变化**，产 archive
+    .protagonist_power_tier_update={char_id, cluster_id, tier:int, notes}（单条 dict 或 list）。
+    本步把它确定性 append 进 `角色弧线.json` 的 characters[pid].protagonist_power_tier
+    序列（schema/consumer/scanner 全就绪·此前 **零 producer** → power_progression_scanner
+    永远命中 `note:tier 序列过短/无 角色弧线.json·跳过` 死码·同 反派轮替.json 款契约债）。
+
+    power_progression_scanner.py L88/L108 读 `_数据库/角色弧线.json`：
+      `characters`(**dict** keyed by pid) → `_protagonist_id` 取 role∈{protagonist,主角,主}
+      或第一个 → `protagonist_power_tier`(list of {cluster_id, tier, notes}) 序列化判
+      单调性(POWER_TIER_REGRESSION)/加速峰(ESCALATION_ACCELERATION_SPIKE)/停滞(PROGRESSION_STALL)。
+    本 producer 落地后 scanner 才第一次有真 tier 序列可跑（shadow 观察·全 advisory·绝不
+    hard_gate·守 19 码三方一致）。tier 是 archivist 内部叙事梯度（炼气1→筑基2…按本书梯度·
+    非绝对战力·**绝不暴露给 writer**·同 v27 不暴露目标章数），仅 scanner 内部排序用。
+
+    pid 解析：优先 update.char_id（archivist 给的主角人物卡 id）；缺失则复用 角色弧线.json
+    既有 protagonist 条目 pid；再缺 → 跳过该条（不脑补·北极星②宁缺毋滥）。首次写入某 pid
+    时标 role="protagonist" 让 scanner._protagonist_id 能识别。
+
+    幂等·去重：同 pid 的 series 按 cluster_id 去重 —— 同 cluster 已存在则就地更新
+    tier/notes·不重复 append；新 cluster append（保持写入即时间序·scanner 不排序）。
+
+    C03 fluid / 默认安全：非升级流题材(scanner 自有 _GENRE_SKIP romance/mystery…)/本块主角
+    力量无变化 → archivist 不产 protagonist_power_tier_update → no-op 不报错、不建 角色弧线.json
+    文件（同 apply_antagonist_rotation 向后兼容）。"""
+    updates = archive.get("protagonist_power_tier_update") if isinstance(archive, dict) else None
+    if isinstance(updates, dict):  # 单条 dict 归一成 list
+        updates = [updates]
+    if not isinstance(updates, list) or not updates:
+        summary["protagonist_power_tier"] = {"appended": 0, "updated": 0}
+        return
+
+    p = db / "角色弧线.json"
+    arc = load_json(p, {"schema_version": 1, "characters": {}})
+    if not isinstance(arc, dict):
+        arc = {"schema_version": 1, "characters": {}}
+    arc.setdefault("schema_version", 1)
+    chars = arc.setdefault("characters", {})
+    if not isinstance(chars, dict):
+        chars = arc["characters"] = {}
+
+    # 缺 char_id 时复用既有 protagonist pid（role∈markers·与 scanner._protagonist_id 对齐）
+    _ROLE_MARKERS = {"protagonist", "主角", "主"}
+
+    def _existing_pid():
+        for pid, info in chars.items():
+            if isinstance(info, dict) and info.get("role") in _ROLE_MARKERS:
+                return pid
+        return None
+
+    def _norm_tier(t):
+        if isinstance(t, bool) or not isinstance(t, (int, float)):
+            return None
+        return int(t) if float(t).is_integer() else t
+
+    appended = updated = 0
+    for u in updates:
+        if not isinstance(u, dict):
+            continue
+        tier = _norm_tier(u.get("tier"))
+        if tier is None:
+            continue
+        pid = u.get("char_id") or u.get("protagonist_id") or _existing_pid()
+        if not pid:
+            continue
+        ucid = u.get("cluster_id") or u.get("cluster") or cid
+        notes = u.get("notes") or u.get("note") or ""
+        entry = chars.setdefault(pid, {})
+        if not isinstance(entry, dict):
+            entry = chars[pid] = {}
+        entry.setdefault("role", "protagonist")  # 让 scanner._protagonist_id 能识别
+        series = entry.setdefault("protagonist_power_tier", [])
+        if not isinstance(series, list):
+            series = entry["protagonist_power_tier"] = []
+        existing = next((s for s in series if isinstance(s, dict)
+                         and (s.get("cluster_id") or s.get("cluster")) == ucid), None)
+        if existing is None:
+            series.append({"cluster_id": ucid, "tier": tier, "notes": notes})
+            appended += 1
+        else:
+            changed = False
+            if existing.get("tier") != tier:
+                existing["tier"] = tier
+                changed = True
+            if notes and existing.get("notes") != notes:
+                existing["notes"] = notes
+                changed = True
+            if changed:
+                updated += 1
+
+    summary["protagonist_power_tier"] = {"appended": appended, "updated": updated}
+    if not dry and (appended or updated):
+        save_json(p, arc)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -491,6 +589,8 @@ def main(argv=None):
         apply_belief_updates(db, cid, archive, summary, args.dry_run)
         # 🔴 2026-06-29 反派轮替ledger接通producer（确定性·幂等·C03 fluid 无反派合法跳过）
         apply_antagonist_rotation(db, cid, archive, summary, args.dry_run)
+        # 🔴 2026-06-29 power_progression接通producer（确定性·幂等·C03 fluid 无力量变化合法跳过）
+        apply_protagonist_power_tier(db, cid, archive, summary, args.dry_run)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[apply_archive] FATAL: {type(e).__name__}: {e}\n")
         sys.stderr.flush()
@@ -507,7 +607,9 @@ def main(argv=None):
           f"/{summary.get('belief',{}).get('unaware_marked',0)}不知"
           f"/fact{summary.get('belief',{}).get('facts_registered',0)} · "
           f"反派轮替+{summary.get('antagonist_rotation',{}).get('appended',0)}"
-          f"/{summary.get('antagonist_rotation',{}).get('updated',0)}更")
+          f"/{summary.get('antagonist_rotation',{}).get('updated',0)}更 · "
+          f"主角力量tier+{summary.get('protagonist_power_tier',{}).get('appended',0)}"
+          f"/{summary.get('protagonist_power_tier',{}).get('updated',0)}更")
     return 0
 
 

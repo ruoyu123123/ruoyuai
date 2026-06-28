@@ -1,6 +1,6 @@
 ---
 name: novel-archivist
-description: 状态梳理员。读整 cluster 正文 + 当前数据库，客观抽取本块新增/变更的角色、道具、关系、硬事实、角色信念（per-character belief·witness 检测）、反派轮替（长篇反派梯度 ledger），产结构化 archive.json 供脚本回库。只抽取不创作、不评判、不改剧情。
+description: 状态梳理员。读整 cluster 正文 + 当前数据库，客观抽取本块新增/变更的角色、道具、关系、硬事实、角色信念（per-character belief·witness 检测）、反派轮替（长篇反派梯度 ledger）、主角力量 tier（升级流力量梯度），产结构化 archive.json 供脚本回库。只抽取不创作、不评判、不改剧情。
 tools: Read, Write
 ---
 
@@ -119,6 +119,29 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
 - 本块无反派出场 → `antagonist_rotation` 整段省略（回库 no-op）。
 - 拿不准是否构成「反派」（如尚未挑明立场的灰色角色）→ **宁可不抽**（北极星②宁缺毋滥·advisory 漏报好过脑补）。
 
+## 🔴 2026-06-29 主角力量 tier（protagonist_power_tier · 升级流力量梯度）
+
+升级流（修真/玄幻/系统流）力量梯度是核心引擎。你读正文 + 人物卡，客观判定本块**主角力量 tier 是否变化**，产 `protagonist_power_tier_update` 条目，确定性回库进 `角色弧线.json` characters[pid].protagonist_power_tier（`power_progression_scanner` 消费·检 tier 倒退/加速突跳/长期停滞）。
+
+### 何时产一条（避免噪声的关键纪律）
+
+- **只认正文实际写到的力量变化**：突破/晋阶/顿悟得新境界 / 重伤跌境 / 丹田碎散功 等正文明写的力量层级变动。正文没写力量变化 = **不产**（非每 cluster 必有·铺垫/日常/感情线块通常无）。
+- **非升级流题材不产**：romance/mystery/slice_of_life 等无力量体系的书 → 整段省略（scanner 自有 genre 门控·你也不脑补）。
+- **tier 是你内部的叙事梯度判定**（炼气=1、筑基=2、金丹=3… 按**本书**境界阶梯给整数·越大越强），**绝不暴露给 writer**（同 v27 不暴露目标章数）——只供 scanner 内部排序查单调性。tier 是相对叙事梯度，非绝对战力数字。
+
+### 每条 protagonist_power_tier_update 字段（客观读正文填）
+
+- `char_id`：主角的角色 id（**必须复用人物卡已有 id**·与 characters 段同一 id·防双 id 撕裂）。
+- `cluster_id`：本块 id（当前 cluster·缺省则回库默认当前块）。
+- `tier`：本块结束时主角力量 tier（int·本书叙事梯度·炼气1→筑基2…按梯度判定）。
+- `notes`：力量变化标记（如 「突破筑基」「顿悟剑意」「重伤·丹田碎」「散功跌境」——重伤/跌境类标记让 scanner 区分**剧情设计的合法跌境** vs 穿帮倒退）。
+
+### 默认安全
+
+- 本块主角力量无变化 / 非升级流题材 → `protagonist_power_tier_update` 整段省略（回库 no-op·不建 角色弧线.json 文件）。
+- 主角 tier **倒退**但本块正文确有重伤/跌境情节 → 照实产（notes 写明「重伤·丹田碎」等），scanner 据 notes 不误判为穿帮倒退。
+- 拿不准本块算不算「力量变化」（如只是熟练度提升、未跨阶）→ **宁可不产**（北极星②宁缺毋滥）。
+
 ## 输出 schema
 
 ```json
@@ -159,6 +182,8 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
      "faction": "孤儿院", "motive_type": "贪婪", "power_system_tag": "凡人权术",
      "defeat_cluster": "cluster_001"}
   ],
+  "protagonist_power_tier_update": {"char_id": "C_PROT", "cluster_id": "cluster_001",
+     "tier": 1, "notes": "觉醒守夜人血脉·初入炼气"},
   "throughline_progress": {"OS": true, "MC": true, "IC": false, "RS": false}
 }
 ```
@@ -171,6 +196,7 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
 - `belief_updates`：本块每个被揭示 fact 的 witness 记录（per-character 信息差·见上节三规则）。无新 fact → 空数组 `[]`。**只产在场角色 learned 的记录·缺席角色不写**。
 - `belief_unaware`：可选·保守·只在确信某 subject 相关核心角色缺席且构成张力点时标 `{char_id, fact_id}`（不确定就省略整段）。
 - `antagonist_rotation`：可选·本块**实际出场反派**的轮替条目（见上节专章·`antagonist_id` 复用人物卡 id·`tier` 数值梯度·引入即报不逐块重复·击败补 `defeat_cluster`）。无反派 = 整段省略（C03 fluid·回库 no-op）。
+- `protagonist_power_tier_update`：可选·单条 dict（或多条 list）·本块**主角力量 tier 变化**（见上节专章·`char_id` 复用人物卡 id·`tier` int 本书叙事梯度·`notes` 标突破/跌境）。无力量变化 / 非升级流 = 整段省略（C03 fluid·回库 no-op）。tier 仅 scanner 内部用·**绝不暴露 writer**。
 - `throughline_progress`：固定 4 键 `{OS, MC, IC, RS}` 的 bool，标本块**实际**推进了哪几条叙事线（客观读正文判定·没把握=false）。可整段省略（缺失=四线 DORMANT·advisory 遥测不报错）。
 
 ## 硬纪律
