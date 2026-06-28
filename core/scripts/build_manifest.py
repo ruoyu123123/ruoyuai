@@ -223,7 +223,12 @@ class DatabaseScanner:
             "promises_tier2_due": [],
             "deadlines_due": [],
             "active_pledges": [],
+            # 🔴 2026-06-28 伏笔明暗线隔离：hidden_secrets 不再装秘密内容（写手见全部未揭晓秘密
+            # = 提前剧透·gemini 易泄露）。保留空列表仅为向前兼容旧读取方（len()/迭代不崩），永远为空。
             "hidden_secrets": [],
+            # 未到触发时机的 hidden secret 只计数·不给内容——让写手知"有未揭晓伏笔存在"防误删伏笔，
+            # 但绝不把 secret/hidden_payoff 注入 manifest。
+            "pending_secret_count": 0,
             "reveal_this_ch": [],
         }
         for p in data.get("promises", []):
@@ -264,26 +269,35 @@ class DatabaseScanner:
             if pl.get("status") == "active":
                 result["active_pledges"].append(pl)
 
-        for s in data.get("secrets", []):
-            if s.get("status") == "hidden":
-                result["hidden_secrets"].append(s)
-                # v2 cluster 化修正（2026-05-28 · cluster_002 ch5 翻车 bug fix）：
-                # reveal_at_cluster="cluster_005" 是 cluster ID 不是 chapter 号，
-                # 必须比对当前 章 所属 cluster ID（通过 cluster_blueprint 反查），
-                # 不能直接 int 数字（之前 bug：cluster_005 → 抽数字 5 → 与 ch=5 撞）
-                rc = s.get("reveal_at_cluster")
-                if isinstance(rc, str) and rc:
-                    cur_cluster_id = self._current_cluster_id()
-                    if cur_cluster_id and rc == cur_cluster_id:
-                        result["reveal_this_ch"].append(s)
-                elif s.get("reveal_at_pending_resolution"):
-                    # 2026-05-29 复审复修 [M4]：未指定 reveal cluster → 读时解析
-                    # established cluster 起始章 + reveal_at_ch_offset = 目标章；
-                    # 当前章达到即揭晓（消费 save_state 写入的 pending 标记，根治「永不揭晓」）。
-                    _est = s.get("established_cluster")
-                    _rng = cluster_lookup.cluster_id_to_range(self.db, _est) if _est else None
-                    if _rng and self.ch >= int(_rng[0]) + int(s.get("reveal_at_ch_offset", 50)):
-                        result["reveal_this_ch"].append(s)
+        # 🔴 2026-06-28 伏笔明暗线隔离：到揭晓时机（reveal_at_cluster==当前 cluster / pending 到期）
+        # 的 secret 才放 reveal_this_ch（该揭晓·写手这一块兑现）；其余未到触发的只累加
+        # pending_secret_count，内容（secret/hidden_payoff）绝不进 result（不被任何下游注入 manifest），
+        # 根治写手提前见全部未揭晓秘密泄露。
+        for sec in data.get("secrets", []):
+            if sec.get("status") != "hidden":
+                continue
+            _revealing_now = False
+            # v2 cluster 化修正（2026-05-28 · cluster_002 ch5 翻车 bug fix）：
+            # reveal_at_cluster="cluster_005" 是 cluster ID 不是 chapter 号，
+            # 必须比对当前 章 所属 cluster ID（通过 cluster_blueprint 反查），
+            # 不能直接 int 数字（之前 bug：cluster_005 → 抽数字 5 → 与 ch=5 撞）
+            rc = sec.get("reveal_at_cluster")
+            if isinstance(rc, str) and rc:
+                cur_cluster_id = self._current_cluster_id()
+                if cur_cluster_id and rc == cur_cluster_id:
+                    result["reveal_this_ch"].append(sec)
+                    _revealing_now = True
+            elif sec.get("reveal_at_pending_resolution"):
+                # 2026-05-29 复审复修 [M4]：未指定 reveal cluster → 读时解析
+                # established cluster 起始章 + reveal_at_ch_offset = 目标章；
+                # 当前章达到即揭晓（消费 save_state 写入的 pending 标记，根治「永不揭晓」）。
+                _est = sec.get("established_cluster")
+                _rng = cluster_lookup.cluster_id_to_range(self.db, _est) if _est else None
+                if _rng and self.ch >= int(_rng[0]) + int(sec.get("reveal_at_ch_offset", 50)):
+                    result["reveal_this_ch"].append(sec)
+                    _revealing_now = True
+            if not _revealing_now:
+                result["pending_secret_count"] += 1
         return result
 
     def _current_cluster_id(self) -> str | None:
@@ -1396,6 +1410,67 @@ def _collect_motif_callback_hints_for_cluster(scanner) -> list:
     return hints
 
 
+# 🔴 2026-06-28 伏笔明暗线隔离（防 gemini 提前泄露暗线）·共享 schema：
+# 伏笔条目 = {fs_id, surface_clue(明线·写手埋的细节·不解释意义),
+#            hidden_payoff(暗线·真正指向的秘密·Claude 侧存·到 trigger_cluster 才注入),
+#            trigger_cluster(揭晓 cluster), tier}。
+def _sanitize_foreshadowing_to_plant(items):
+    """埋设侧（plant）：写手埋伏笔时只见明线 surface_clue（当普通细节埋·不解释意义），
+    剥离暗线 hidden_payoff（真正指向的秘密）——根治写手在埋设阶段就见全部未揭晓秘密提前剧透。
+
+    schema 演进读容错（非降级·北极星⑥）：
+      · 新格式 dict {fs_id, surface_clue, hidden_payoff, trigger_cluster, tier} → 去掉 hidden_payoff，
+        其余字段保留；缺 surface_clue 时把旧字段 desc/description/clue 回填为 surface_clue。
+      · 旧格式纯字符串 → 整条当 surface_clue。
+    """
+    out = []
+    for it in items or []:
+        if isinstance(it, str):
+            out.append({"surface_clue": it})
+            continue
+        if isinstance(it, dict):
+            entry = {k: v for k, v in it.items() if k != "hidden_payoff"}
+            if "surface_clue" not in entry:
+                _desc = it.get("desc") or it.get("description") or it.get("clue")
+                if _desc:
+                    entry["surface_clue"] = _desc
+            out.append(entry)
+            continue
+        out.append(it)
+    return out
+
+
+def _resolve_foreshadowing_to_callback(items, current_cluster_id):
+    """触发揭晓注入（callback）：callback = 到触发 cluster 该兑现的伏笔。
+
+    entry.trigger_cluster == 当前 cluster（或未标 trigger_cluster·既然进了本块 callback 列表即视为到期）
+    → 暴露 hidden_payoff（暗线·让写手这一块兑现）+ 注入 reveal_directive「现在揭晓/兑现 fs_id: hidden_payoff」；
+    entry.trigger_cluster 明确指向别的 cluster（误列/未到期）→ 剥离 hidden_payoff 防提前泄露。
+    旧格式纯字符串 / 无 hidden_payoff → 原样透传。"""
+    out = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            out.append(it)
+            continue
+        tc = it.get("trigger_cluster")
+        _due = (tc is None) or (
+            cluster_lookup.normalize_cluster_id(tc)
+            == cluster_lookup.normalize_cluster_id(current_cluster_id)
+        )
+        if _due:
+            entry = dict(it)
+            if entry.get("hidden_payoff"):
+                _fid = entry.get("fs_id") or entry.get("id") or "本伏笔"
+                entry["reveal_directive"] = (
+                    f"🔴 现在揭晓/兑现 {_fid}：{entry['hidden_payoff']}"
+                    "（本 cluster = trigger_cluster·写手须在本块把暗线兑现）"
+                )
+            out.append(entry)
+        else:
+            out.append({k: v for k, v in it.items() if k != "hidden_payoff"})
+    return out
+
+
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
     writer 在 MODE=ecas 时必读此字段。
@@ -1538,8 +1613,11 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         # outline 阶段填写 cluster.olfactory_anchors=[{"trigger":"桂花香","memory_seed":"母亲的厨房","scene":N}...]
                         # writer 闪回 beat 优先用嗅觉/味觉触发非『他想起』式 hindsight tell（D4 advisory）。
                         "olfactory_anchors": c.get("olfactory_anchors") or [],
-                        "foreshadowing_to_plant": c.get("foreshadowing_to_plant") or [],
-                        "foreshadowing_to_callback": c.get("foreshadowing_to_callback") or [],
+                        # 🔴 2026-06-28 伏笔明暗线隔离：埋设只注入明线 surface_clue（剥离暗线 hidden_payoff）；
+                        # callback 到 trigger_cluster 才暴露 hidden_payoff + reveal 指令（让写手兑现）。
+                        "foreshadowing_to_plant": _sanitize_foreshadowing_to_plant(c.get("foreshadowing_to_plant")),
+                        "foreshadowing_to_callback": _resolve_foreshadowing_to_callback(
+                            c.get("foreshadowing_to_callback"), cluster_id_val),
                         "mid_checkpoints": c.get("mid_checkpoints") or [3000, 6000, 9000],
                         "sub_summary_template": c.get("sub_summary_template") or "[场景 N] 关键事件 + 角色行动 + 伏笔进度（100 字内）",
                         "opus_recommended": c.get("opus_recommended", False),
@@ -3980,7 +4058,10 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "tier2_due_count": len(due["promises_tier2_due"]),
         "deadlines_due": len(due["deadlines_due"]),
         "active_pledges": len(due["active_pledges"]),
-        "hidden_secrets": len(due["hidden_secrets"]),
+        # 🔴 2026-06-28 伏笔明暗线隔离：hidden_secrets 现仅为「未揭晓伏笔数量」计数（不含内容），
+        # 与 pending_secret_count 同义（向后兼容旧消费方的键名 + 显式新键名并存）。
+        "hidden_secrets": due.get("pending_secret_count", 0),
+        "pending_secret_count": due.get("pending_secret_count", 0),
         "must_reveal_this_ch": len(due["reveal_this_ch"]),
     }
     if any(foreshadow_summary.values()):

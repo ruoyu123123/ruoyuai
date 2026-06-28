@@ -56,6 +56,14 @@ import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster
 from atomic_json import atomic_write_text  # noqa: E402 · 2026-06-13 草稿/CHANGES 产物原子落盘（崩溃不留半截）
 import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
 from log_util import get_logger, info, debug, warning, error  # noqa: E402
+# 🔴 2026-06-28 伏笔明暗线隔离：复用 build_manifest 的明暗线过滤为单一真理源——
+#   埋设侧 _sanitize_foreshadowing_to_plant 剥 hidden_payoff（写手只见 surface_clue·当普通细节埋）；
+#   揭晓侧 _resolve_foreshadowing_to_callback 仅 trigger_cluster==当前块才暴露 hidden_payoff + reveal_directive。
+# 根治 gen_writer 直读 事件簇.json 把未到触发的暗线秘密 json.dumps 进 writer prompt（绕过 build_manifest 过滤）。
+from build_manifest import (  # noqa: E402
+    _sanitize_foreshadowing_to_plant as _bm_sanitize_fs_plant,
+    _resolve_foreshadowing_to_callback as _bm_resolve_fs_callback,
+)
 
 logger = get_logger(__name__)
 
@@ -913,6 +921,33 @@ def _build_hard_constraint_primacy_block(author_punct: dict = None,
     return block
 
 
+# 🔴 2026-06-28 伏笔明暗线隔离（防 gen_writer 直读 事件簇.json 泄露暗线）
+def _sanitize_cluster_brief_foreshadowing(brief: dict, current_cluster_id) -> dict:
+    """gen_writer 直读 事件簇.json 的 cluster dict 注入 writer prompt 前，对其 foreshadowing 字段做与
+    build_manifest 同款的明暗线过滤——根治「绕过 build_manifest 的 _sanitize/_resolve、把未到触发的
+    hidden_payoff 暗线秘密直接 json.dumps 进 writer prompt」泄露口（Agent A 揪出的最后一口）。
+
+      · foreshadowing_to_plant（埋设侧）→ 只留 surface_clue·剥 hidden_payoff（写手当普通细节埋·不剧透）。
+      · foreshadowing_to_callback（揭晓侧·若 cluster dict 带）→ 仅 trigger_cluster==当前块才暴露
+        hidden_payoff + 注入 reveal_directive（该揭晓的·正常）；未到期剥离 hidden_payoff 防提前泄露。
+      · scene_storyboard 的 beat（goal/conflict/turn/emotional_tone/plant_foreshadowing_surface 等）
+        原样透传——已确认不含 hidden_payoff（安全）。
+
+    返回浅拷贝（不改原 brief·原 dict 仍供 scope_summary/expected_word_range/hard_constraints 等非密字段消费）。
+    复用 build_manifest 两个纯函数为单一真理源（schema 演进读容错：旧格式纯字符串伏笔当 surface_clue·
+    见其 docstring·非降级·北极星⑥）。
+    """
+    if not isinstance(brief, dict):
+        return brief
+    safe = dict(brief)
+    if "foreshadowing_to_plant" in safe:
+        safe["foreshadowing_to_plant"] = _bm_sanitize_fs_plant(safe.get("foreshadowing_to_plant"))
+    if "foreshadowing_to_callback" in safe:
+        safe["foreshadowing_to_callback"] = _bm_resolve_fs_callback(
+            safe.get("foreshadowing_to_callback"), current_cluster_id)
+    return safe
+
+
 def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                  ch_end: int = None, target_cjk: str = None) -> tuple:
     """组装 system + user prompt
@@ -1012,7 +1047,13 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                     cluster_brief = c
                     break
             if cluster_brief:
-                cluster_brief_text = json.dumps(cluster_brief, ensure_ascii=False, indent=2)
+                # 🔴 2026-06-28 伏笔明暗线隔离：dump 进 writer prompt 前先过滤——埋设侧只留 surface_clue
+                # （剥 hidden_payoff）·揭晓侧仅 trigger_cluster 才暴露。绝不把整 cluster dict（含未到触发
+                # 的 foreshadowing_to_plant.hidden_payoff）原样 json.dumps 给写手（原泄露口）。
+                # 用 _safe_brief 只供「注入文本」；下面 scope_summary/expected_word_range/hard_constraints
+                # 等非密字段仍读原 cluster_brief（不受过滤影响）。
+                _safe_brief = _sanitize_cluster_brief_foreshadowing(cluster_brief, cluster_id)
+                cluster_brief_text = json.dumps(_safe_brief, ensure_ascii=False, indent=2)
                 # 从 scope_summary 提取硬约束（≥/≤/百分比/角色数等）
                 scope = cluster_brief.get('scope_summary', '')
                 ewr = cluster_brief.get('expected_word_range', {})
@@ -1098,6 +1139,13 @@ scope_summary 描述的场景类型/角色构成是**剧情硬契约**（如"对
 
 ## H5. 占位代号零泄漏（沉浸感硬铁律）
 scene_storyboard / scope_summary / cluster_brief 等大纲材料里出现的「主角」「男主」「女主」「某角色」「XX」「反派」等**占位代号是给你看的写作指引**，**绝不能原样抄进正文**。正文里指代人物**只能**用：① 具体角色名（如「多林」），② 第三人称代词（他/她/它），③ 贴合身份的称谓（那个占卜师 / 穿灰外套的男人 / 守门人）。若某人物在本 cluster 尚未取名，自行用代词或身份称谓承接，**正文里出现「主角」二字即视为破例失败**。
+
+## H6. 伏笔明暗线工艺（埋伏笔零剧透 · 沉浸感硬铁律）
+# 🔴 2026-06-28 伏笔明暗线隔离
+cluster_brief / manifest 给你的 `foreshadowing_to_plant`（要埋的伏笔）**只有明线 `surface_clue`（一个表面细节）**——它真正指向的暗线秘密**不会给你看**，这是故意的，防你提前剧透。
+- **埋伏笔 = 把 `surface_clue` 当一个普通细节自然写进正文**：让它像随手带过的环境 / 物件 / 动作 / 对话细节，**绝不解释它暗示什么、有何深意、为何重要、日后会怎样**。读者此刻**不该察觉它是伏笔**。一旦你写出「他隐约觉得这枚钥匙不简单」「这个细节日后将……」「冥冥中似有深意」式的提示或心理强调，伏笔就废了。
+- **只兑现/揭晓 manifest 或 cluster_brief 里 `reveal_directive`（或 `foreshadowing_to_callback` 带出的 `hidden_payoff`）明确要求揭晓的伏笔**：这些是到期该兑现的暗线，按 `reveal_directive` 把它揭穿 / 回收 / 兑现。
+- **没有 `reveal_directive` 要求揭晓的伏笔一律只埋不揭**——你看不到某条伏笔的暗线含义就对了，照明线细节写，别自己脑补它的秘密再提前点破。
 
 # 二、风格工艺默认基线（仅当作者 skill 未规定该维度时兜底 · skill 规定了以 skill 为准）
 
@@ -1380,7 +1428,7 @@ cluster_brief 完整内容：
 - 你**不知道**目标章数（章数由 splitter 后期按 3000-4500 CJK/章 自然切，章数由你写的内容多少决定）
 - 不锁精确字数，但**这是一个完整的故事块（cluster），不是单章**——它由 scene_storyboard 里的**多个场景**构成，**每个场景都要充分展开**（动作 / 对话 / 环境 / 内心 / 冲突推进逐一到位，切忌一笔带过、切忌只写梗概或跳着叙述）。
 - **健康篇幅 12000-25000 CJK 是软下限**：一个把所有场景都写透的多场景故事块，自然就落在这个体量。**如果你写到三五千字就觉得"讲完了"，几乎一定是场景展开得太简略**——回头逐个场景写够细节再继续，不要急着收尾。
-- **专注做对的事**：把 cluster_brief.scope_summary + scene_storyboard 描述的**每一个场景**都充分展开 + 兑现 foreshadowing_to_plant，全部写透后再自然收尾。
+- **专注做对的事**：把 cluster_brief.scope_summary + scene_storyboard 描述的**每一个场景**都充分展开（逐拍据 beat 的 goal/conflict/turn 补写）+ **自然埋设** foreshadowing_to_plant 的 surface_clue（当普通细节埋·只埋不解释·见 H6），全部写透后再自然收尾。
 
 ⚠️ **重要提醒**：你输出的是**一整块叙事**，不是分好章的成品。**严禁**写「第 N 章 标题」/「——」分章符。把整个故事块当一篇长散文写，场景之间自然过渡。
 """
@@ -1517,6 +1565,10 @@ cluster_brief 完整内容：
     gen_point_tail = f"""
 
 {"按 7 项硬铁律 + 元 anti-slop 防御 · 完整覆盖 cluster_brief 的所有 scene_storyboard 自由发挥（章数由 splitter 后期切，你不必管）。" if freestyle else f"按 7 项硬铁律 + 元 anti-slop 防御，写 {ch_end - ch_start + 1} 章完整故事块。"}
+
+**🧬 据 scene_storyboard 的 beat 骨架补写（走向是骨·你补创作 · advisory）**：scene_storyboard 的每个 beat 带 `goal`（这一拍要达成什么）/ `conflict`（阻力）/ `turn`（转折）/ `emotional_tone`（情绪基调）/ `key_beats`（关键节拍）。**逐拍据 beat 的目标/冲突/转折把 prose 补写出来**——你负责创作层（具体动作、你来我往的对话、五感细节、内心、句子节奏），骨架负责「这一拍发生什么、往哪走」。**别脱离 beat 骨架自由发挥**（给了 conflict 就别跳过冲突直接和解、给了 turn 就写到那个转折），防剧情漂移跑偏大势；但**不锁文笔/字数/分句**——怎么写、写多细由作者风格定。
+
+**🔴 伏笔只埋不剧透（见 H6）**：foreshadowing_to_plant 的 surface_clue 当普通细节自然写·绝不解释它暗示什么；只兑现 reveal_directive 明确要求揭晓的伏笔，没要求揭晓的一律只埋不揭。
 
 **自查项**（写完后请在 CHANGES JSON 里自报 · 仅你的创作期自评 + 确定性遥测，**不要自报角色/道具/关系/locked_facts/伏笔等剧情事实状态**）：
 - word_count_cjk

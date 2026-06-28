@@ -470,3 +470,97 @@ def test_strip_english_meta_no_false_strip_chinese_with_quote():
     body, _ = gw.split_text_and_changes(reply)
     assert body.rstrip().endswith("握紧了那封信。")
     assert "Elias" in body  # 正文内的英文人名保留
+
+
+# ============ 🔴 2026-06-28 伏笔明暗线隔离回归（防 gen_writer 直读 事件簇.json 泄露暗线）============
+import os
+import tempfile as _tf
+
+
+def _make_brief_with_foreshadowing():
+    """造一个带明暗线伏笔的 cluster brief（埋设侧 + 揭晓侧·到期/未到期各一）。"""
+    return {
+        "cluster_id": "cluster_001",
+        "scope_summary": "开场强冲突场景",
+        "scene_storyboard": [{"ch": 1, "goal": "G", "conflict": "C", "turn": "T",
+                              "emotional_tone": "紧张", "key_beats": ["B1"]}],
+        "foreshadowing_to_plant": [
+            {"fs_id": "FS_PLANT", "surface_clue": "SURFACECLUE_桌上一枚生锈铜钥匙_SC",
+             "hidden_payoff": "HIDDENPLANT_铜钥匙能开地窖通真相_SECRET",
+             "trigger_cluster": "cluster_005", "tier": "major"},
+        ],
+        "foreshadowing_to_callback": [
+            {"fs_id": "FS_DUE", "surface_clue": "门后脚步声",
+             "hidden_payoff": "REVEALDUE_脚步声是叛徒偷听_SECRET",
+             "trigger_cluster": "cluster_001", "tier": "minor"},
+            {"fs_id": "FS_FUTURE", "surface_clue": "远处钟声",
+             "hidden_payoff": "FUTUREPAYOFF_钟声是仪式倒计时_SECRET",
+             "trigger_cluster": "cluster_003", "tier": "major"},
+        ],
+    }
+
+
+def test_sanitize_cluster_brief_strips_plant_hidden_payoff():
+    """埋设侧 foreshadowing_to_plant：只留 surface_clue·剥 hidden_payoff（写手当普通细节埋·不剧透）。"""
+    brief = _make_brief_with_foreshadowing()
+    safe = gw._sanitize_cluster_brief_foreshadowing(brief, 1)
+    plant = safe["foreshadowing_to_plant"][0]
+    assert "hidden_payoff" not in plant, "埋设侧暗线 hidden_payoff 必须被剥离"
+    assert plant["surface_clue"] == "SURFACECLUE_桌上一枚生锈铜钥匙_SC", "明线 surface_clue 应保留"
+    assert plant["fs_id"] == "FS_PLANT" and plant["tier"] == "major", "其余非密字段保留"
+
+
+def test_sanitize_cluster_brief_callback_due_vs_future():
+    """揭晓侧：到期(trigger==当前)暴露 hidden_payoff + reveal_directive；未到期剥离 hidden_payoff。"""
+    brief = _make_brief_with_foreshadowing()
+    safe = gw._sanitize_cluster_brief_foreshadowing(brief, 1)
+    due, fut = safe["foreshadowing_to_callback"]
+    assert due["hidden_payoff"] == "REVEALDUE_脚步声是叛徒偷听_SECRET", "到期伏笔应暴露暗线"
+    assert "reveal_directive" in due and "FS_DUE" in due["reveal_directive"], "到期应注入 reveal_directive"
+    assert "hidden_payoff" not in fut, "未到触发的伏笔 hidden_payoff 必须剥离防提前泄露"
+
+
+def test_sanitize_cluster_brief_no_mutation_and_legacy_string():
+    """① 不改原 brief（原 dict 仍供非密字段消费）；② 旧格式纯字符串伏笔容错当 surface_clue（非降级）。"""
+    brief = _make_brief_with_foreshadowing()
+    gw._sanitize_cluster_brief_foreshadowing(brief, 1)
+    assert "hidden_payoff" in brief["foreshadowing_to_plant"][0], "原 brief 不应被 mutate"
+    legacy = {"foreshadowing_to_plant": ["一枚生锈的铜钥匙"]}
+    out = gw._sanitize_cluster_brief_foreshadowing(legacy, 1)
+    assert out["foreshadowing_to_plant"][0] == {"surface_clue": "一枚生锈的铜钥匙"}, "旧格式字符串当 surface_clue"
+
+
+def test_build_prompt_excludes_untriggered_hidden_payoff():
+    """端到端：build_prompt 产的 writer prompt 不含未到触发的 hidden_payoff·含 surface_clue + 到期 reveal。
+
+    根治原泄露口——gen_writer 直读 事件簇.json 把整 cluster dict（含 foreshadowing_to_plant.hidden_payoff）
+    原样 json.dumps 进 writer prompt（绕过 build_manifest 过滤）。"""
+    _bak = os.environ.get("SNIPPET_SEED_MODE")
+    os.environ["SNIPPET_SEED_MODE"] = "off"  # 禁种子注入·测试确定性
+    try:
+        with _tf.TemporaryDirectory() as td:
+            root = Path(td)
+            db = root / "_数据库"
+            db.mkdir(parents=True)
+            (db / "进度.json").write_text(json.dumps({"cluster_blueprint": {}}, ensure_ascii=False),
+                                          encoding="utf-8")
+            (db / "事件簇.json").write_text(
+                json.dumps({"clusters": [_make_brief_with_foreshadowing()]}, ensure_ascii=False),
+                encoding="utf-8")
+            system, user, _seed = gw.build_prompt(root, 1, 1)  # freestyle
+            full = system + "\n" + user
+            # 埋设侧暗线：绝不出现在 writer prompt
+            assert "HIDDENPLANT_铜钥匙能开地窖通真相_SECRET" not in full, "埋设侧 hidden_payoff 泄露进 prompt"
+            # 未到触发的揭晓侧暗线：绝不出现
+            assert "FUTUREPAYOFF_钟声是仪式倒计时_SECRET" not in full, "未到触发的 hidden_payoff 泄露进 prompt"
+            # 明线 surface_clue：应注入（写手要埋）
+            assert "SURFACECLUE_桌上一枚生锈铜钥匙_SC" in full, "明线 surface_clue 应注入"
+            # 到期揭晓侧暗线：应注入（该兑现的·正常）
+            assert "REVEALDUE_脚步声是叛徒偷听_SECRET" in full, "到期 reveal 暗线应注入供兑现"
+            # 埋伏笔工艺 prompt 在场
+            assert "伏笔明暗线工艺" in system, "system 应含埋伏笔工艺指示"
+    finally:
+        if _bak is None:
+            os.environ.pop("SNIPPET_SEED_MODE", None)
+        else:
+            os.environ["SNIPPET_SEED_MODE"] = _bak
