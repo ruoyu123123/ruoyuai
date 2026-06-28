@@ -375,10 +375,29 @@
                   "type": "string",
                   "enum": ["yes_but", "no_and", "yes_and"],
                   "_doc": "🔴 2026-06-29 But-Therefore+Try-Fail(Butcher): 本场结果 · yes_but=达成但带来新麻烦 / no_and=失败且更糟 / yes_and=达成且顺势(慎用) · 禁纯 yes 顺风局(try-fail 递增) · advisory 参考模板·writer 有理由可豁免(北极星⑤)"
+                },
+                "dialogue_objectives": {
+                  "type": "array",
+                  "_doc": "🔴 2026-06-29 对白即行动dialogue_objectives(McKee《Dialogue: The Art of Verbal Action》每句台词=verbal action·角色为达成未说出口 objective 采取 tactic·on-the-nose=说透目标=零潜台词；CoSER arXiv:2502.09082 三通道 Speech/Action/Thought·去 inner-thought 一致性显著下降；dialogue_act 骨架): 本场对话密集时每个说话角色的言语策略意图 · outline-planner(A agent) 详化/涌现时产 · build_manifest._collect_dialogue_objectives(B agent) 透传 writer · 与 scene_causal_skeleton/scene_goal 平级并存 · 🔴 全 advisory 场景级建议非逐句锁 · 非每场必填(纯叙述/独白场可空·过度结构化→对话变机械任务清单是 pitfall) · Claude 只标意图(what·角色想干嘛)·措辞(how·具体台词)永远交 gemini freestyle(北极星④规划管意图/创作管表达) · what_unsaid 是隐藏 Thought 通道·只驱动潜台词·绝不写进正文·涉未到期 hidden 伏笔须走 reveal 隔离绝不剧透(对齐 _sanitize_character_belief) · 默认安全:旧 scene 无此字段→下游 fallback 不注入·向后兼容 · 作者档第一权威(爽文直球对喷不强加 subtext) · 绝不 hard_gate",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "character": {"type": "string", "_doc": "说话角色 char_id(对齐人物卡 id)"},
+                      "wants": {"type": "string", "_doc": "本场该角色想从对方拿到什么(未说出口的 objective·Stanislavski scene-objective 的对白侧)"},
+                      "tactic": {"type": "string", "_doc": "active verb 言语策略(试探/施压/回避/示弱/反问/讨好)·达成 wants 的手段·how 留给 gemini"},
+                      "obstacle": {"type": "string", "_doc": "被谁/什么阻挠(对手的反 objective / 外部障碍)"},
+                      "dialogue_act": {
+                        "type": "string",
+                        "enum": ["试探", "回避", "威胁", "让步", "反讽", "求证", "施压", "示弱"],
+                        "_doc": "dialogue_act 骨架·本土校准枚举·Claude 标意图(what) gemini 填措辞(how)"
+                      },
+                      "what_unsaid": {"type": "string", "_doc": "压着不说的潜文本(隐藏 Thought 通道·CoSER)·只驱动潜台词不写进正文·涉未到期 hidden 伏笔走 reveal 隔离绝不剧透"}
+                    }
+                  }
                 }
               }
             },
-            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe / causal_connector_scanner 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief) · 🔴 2026-06-29 scene_type/disaster/reaction/dilemma/decision/link_to_prev/result_type 给 But-Therefore因果连接器+Swain场景骨架(治流水账) · 🔴 2026-06-29 scene_goal 给逐场景动机(Stanislavski scene-objective·心理 P0·治场景漂移) · 全 optional 向后兼容"
+            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe / causal_connector_scanner 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief) · 🔴 2026-06-29 scene_type/disaster/reaction/dilemma/decision/link_to_prev/result_type 给 But-Therefore因果连接器+Swain场景骨架(治流水账) · 🔴 2026-06-29 scene_goal 给逐场景动机(Stanislavski scene-objective·心理 P0·治场景漂移) · 🔴 2026-06-29 dialogue_objectives 给对白即行动(McKee Verbal Action·对话密集 scene 标言语策略意图·advisory·what_unsaid 隐藏 Thought 通道驱动潜台词) · 全 optional 向后兼容"
           },
           "writer_model_used": {
             "type": "string",

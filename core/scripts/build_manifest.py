@@ -1988,6 +1988,92 @@ def _collect_scene_causal_skeleton(cluster: dict) -> dict | None:
     }
 
 
+# 🔴 2026-06-29 对白即行动dialogue_objectives注入（对话表达层 P1·McKee verbal action·治 on-the-nose）
+# dialogue_act 意图骨架枚举（advisory 软提示·不强校验·outline-planner/A agent 自由标）
+_VALID_DIALOGUE_ACTS = {"试探", "回避", "威胁", "让步", "反讽", "求证", "施压", "示弱"}
+
+
+def _sanitize_dialogue_objectives(objectives, current_cluster_id):
+    """🔴 2026-06-29 对白即行动 dialogue_objectives 写手注入门控（what_unsaid 防剧透）。
+
+    隔离规则（对齐 _sanitize_knowledge / _sanitize_character_belief 未来知识隔离·单一真理源）：
+      · objective 标了 reveal_cluster（producer 显式标 what_unsaid 涉未到期 hidden 伏笔）：
+        - _cluster_due 为 True（到/越过揭晓点）→ 保留 what_unsaid；
+        - 未到期 / 畸形 reveal_cluster（_cluster_due 非 True）→ 剥 what_unsaid（防 writer 提前把暗线说漏）。
+      · 无 reveal_cluster 标记（默认安全闸·今天几乎全部）→ 原样透传（零行为变化）。
+    其余字段（character/wants/tactic/obstacle/dialogue_act）一律保留——表达层言语策略·非秘密。
+    """
+    if not isinstance(objectives, list):
+        return objectives
+    out = []
+    for o in objectives:
+        if not isinstance(o, dict):
+            out.append(o)
+            continue
+        rc = o.get("reveal_cluster")
+        if rc is None:
+            out.append(o)  # 默认安全闸：无 reveal_cluster 标记 → 原样透传（零行为变化）
+            continue
+        if _cluster_due(rc, current_cluster_id) is True:
+            out.append(o)  # 到/越过揭晓点 → 保留 what_unsaid
+        else:
+            # 未到期 / 畸形 reveal_cluster → 剥 what_unsaid（保守隔离·防提前剧透）
+            out.append({k: v for k, v in o.items() if k != "what_unsaid"})
+    return out
+
+
+def _collect_dialogue_objectives(cluster: dict, current_cluster_id=None) -> dict | None:
+    """🔴 2026-06-29 对白即行动 dialogue_objectives 注入（对话表达层 P1·McKee《Dialogue: Art of Verbal Action》）。
+
+    透传 outline-planner(A agent) 在 scene_storyboard 每个 scene 标注的 dialogue_objectives：
+      [{character, wants(本场想从对方拿到什么), tactic(active verb 言语策略:试探/施压/回避/示弱/反问),
+        obstacle(被谁/什么阻挠), dialogue_act(意图枚举), what_unsaid(压着不说的潜文本·只驱动表演·不写进正文)}]
+    与 scene_causal_skeleton（事件 P0·Swain 场景骨架）平级并存——前者管「话怎么说(表达层)」·后者管「场景因果(事件层)」·正交。
+
+    what_unsaid 隔离门控（防剧透·复用 _sanitize_dialogue_objectives 为单一真理源·与 gen_writer 直读路径同口径）：
+      objective 标了 reveal_cluster 且未到期 → 剥 what_unsaid（防 writer 把未到期暗线说漏·对齐 _sanitize_character_belief）。
+
+    默认安全闸：所有 scene 都无 dialogue_objectives → 返回 None（不注入·向后兼容旧 storyboard / 旧书·零行为变化）。
+    advisory：对白即行动是场景级软提示·不强制每场都填·规划层只标意图(what)·措辞(how) writer 自由发挥
+    （北极星④规划层管意图、创作层管表达 + ⑤不干涉创作·绝不 hard_gate）。
+    """
+    if not isinstance(cluster, dict):
+        return None
+    storyboard = cluster.get("scene_storyboard")
+    if not isinstance(storyboard, list) or not storyboard:
+        return None
+    scenes: list[dict] = []
+    has_any = False
+    for idx, sc in enumerate(storyboard):
+        if not isinstance(sc, dict):
+            continue
+        raw = sc.get("dialogue_objectives")
+        if not isinstance(raw, list) or not raw:
+            continue
+        # 隔离门控（what_unsaid 涉未到期 hidden 伏笔 → 剥离·防剧透）
+        safe = _sanitize_dialogue_objectives(raw, current_cluster_id)
+        kept = [o for o in safe if isinstance(o, dict)]
+        if kept:
+            scenes.append({"scene_index": idx, "objectives": kept})
+            has_any = True
+    if not has_any:
+        return None  # 默认安全闸：无任何 dialogue_objectives → 不注入
+    return {
+        "scenes": scenes,
+        "directive": (
+            "🟢 对白即行动 Dialogue-as-Action(对话表达层 P1·McKee verbal action·治 on-the-nose)：\n"
+            "  · 本场每个角色对白即行动：X(character) 想要 Y(wants)·用 Z(tactic) 策略·被 W(obstacle) 阻挠。\n"
+            "  · 对白是策略不是信息——每句台词是为达成 wants 采取的 active verb(试探/施压/回避/示弱/反问)·\n"
+            "    不是把目标/背景/设定念出来。\n"
+            "  · 每句话底下压着未说出口的目标(what_unsaid)——潜文本只驱动表演·**绝不写进正文**·\n"
+            "    严禁把内心想法/情绪/目标直接说出口(透明原则·on-the-nose=说透目标=零潜台词=AI 腔)。\n"
+            "  · dialogue_act(试探/回避/威胁/让步/反讽/求证/施压/示弱)是本句意图骨架·措辞(how)你自由发挥。\n"
+            "  · 对白即行动是场景级软提示非逐句锁·爽文直球对喷场景可豁免 subtext(作者档第一权威·北极星⑤·<300 字理由)。"
+        ),
+        "_doc": "🔴 2026-06-29 对白即行动dialogue_objectives注入·advisory·绝不 hard_gate",
+    }
+
+
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
     writer 在 MODE=ecas 时必读此字段。
@@ -2273,6 +2359,12 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         # 并注入『相邻 scene 须 but/therefore 衔接·避免 and_then 平铺·结果禁纯 yes』指令给 writer。
                         # 默认安全闸：scene 无这些字段 → None（不注入·向后兼容旧 storyboard / 旧书）。advisory 永不 hard_gate。
                         "scene_causal_skeleton": _collect_scene_causal_skeleton(c),
+                        # 🔴 2026-06-29 对白即行动dialogue_objectives注入（对话表达层 P1·McKee verbal action·治 on-the-nose）：
+                        # 透传 scene_storyboard 每场的 dialogue_objectives(character/wants/tactic/obstacle/dialogue_act/what_unsaid)
+                        # + 注入『对白是策略不是信息·严禁把内心想法/情绪/目标直接说出口(透明原则)』指令给 writer。
+                        # what_unsaid 涉未到期 hidden 伏笔(标 reveal_cluster) → _sanitize_dialogue_objectives 隔离门控剥离防剧透。
+                        # 默认安全闸：scene 无 dialogue_objectives → None（不注入·向后兼容旧 storyboard / 旧书）。advisory 永不 hard_gate。
+                        "dialogue_objectives": _collect_dialogue_objectives(c, cluster_id_val),
                         "_narrative_mode_doc": ("in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；"
                                                 "linear = 时间序；kishotenketsu_4act = 起承转结无冲突(治愈/iyashikei)"),
                         "_narrative_pov_mode_doc": ("R7 W2 五分类(Stanzel/Cohn): "

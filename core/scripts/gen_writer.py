@@ -68,6 +68,10 @@ from build_manifest import (  # noqa: E402
     _sanitize_foreshadowing_to_plant as _bm_sanitize_fs_plant,
     _resolve_foreshadowing_to_callback as _bm_resolve_fs_callback,
     _sanitize_character_card as _bm_sanitize_character_card,
+    # 🔴 2026-06-29 对白即行动dialogue_objectives注入：复用 build_manifest 隔离门控为单一真理源——
+    #   闭合 gen_writer 直读 事件簇.json 把 scene_storyboard[*].dialogue_objectives[*].what_unsaid
+    #   未到期 hidden 伏笔(标 reveal_cluster) json.dumps 进 writer prompt 的剧透口。
+    _sanitize_dialogue_objectives as _bm_sanitize_dialogue_objectives,
 )
 
 logger = get_logger(__name__)
@@ -1037,9 +1041,13 @@ def _sanitize_cluster_brief_foreshadowing(brief: dict, current_cluster_id) -> di
         hidden_payoff + 注入 reveal_directive（该揭晓的·正常）；未到期剥离 hidden_payoff 防提前泄露。
       · scene_storyboard 的 beat（goal/conflict/turn/emotional_tone/plant_foreshadowing_surface 等）
         原样透传——已确认不含 hidden_payoff（安全）。
+      · 🔴 2026-06-29 对白即行动：scene_storyboard[*].dialogue_objectives[*].what_unsaid 若涉未到期
+        hidden 伏笔（objective 标 reveal_cluster 且未到期）→ 经 _bm_sanitize_dialogue_objectives 隔离门控
+        剥 what_unsaid（与 build_manifest._collect_dialogue_objectives 同口径·单一真理源）·防 gemini 提前剧透。
+        默认安全闸：objective 无 reveal_cluster 标记 → 原样透传（零行为变化）。
 
     返回浅拷贝（不改原 brief·原 dict 仍供 scope_summary/expected_word_range/hard_constraints 等非密字段消费）。
-    复用 build_manifest 两个纯函数为单一真理源（schema 演进读容错：旧格式纯字符串伏笔当 surface_clue·
+    复用 build_manifest 纯函数为单一真理源（schema 演进读容错：旧格式纯字符串伏笔当 surface_clue·
     见其 docstring·非降级·北极星⑥）。
     """
     if not isinstance(brief, dict):
@@ -1050,6 +1058,19 @@ def _sanitize_cluster_brief_foreshadowing(brief: dict, current_cluster_id) -> di
     if "foreshadowing_to_callback" in safe:
         safe["foreshadowing_to_callback"] = _bm_resolve_fs_callback(
             safe.get("foreshadowing_to_callback"), current_cluster_id)
+    # 🔴 2026-06-29 对白即行动dialogue_objectives注入·闭合直读 scene_storyboard 的 what_unsaid 剧透口
+    _sb = safe.get("scene_storyboard")
+    if isinstance(_sb, list):
+        _new_sb = []
+        for _sc in _sb:
+            if isinstance(_sc, dict) and isinstance(_sc.get("dialogue_objectives"), list):
+                _sc2 = dict(_sc)
+                _sc2["dialogue_objectives"] = _bm_sanitize_dialogue_objectives(
+                    _sc.get("dialogue_objectives"), current_cluster_id)
+                _new_sb.append(_sc2)
+            else:
+                _new_sb.append(_sc)
+        safe["scene_storyboard"] = _new_sb
     return safe
 
 
@@ -1475,6 +1496,8 @@ cluster_brief / manifest 给你的 `foreshadowing_to_plant`（要埋的伏笔）
 
 - **🆕🗂️ 对话自我修复(R3·会话分析·认知/欺骗/紧张微表征)**：高认知负荷/说谎/紧张时台词带同轮自纠(切断重启/找词停顿/中止改述)·映射心理态(找词=回忆吃力·中止改述=自我审查)·高张力对话零自修=AI扁平信号(Schegloff十操作)
 - **🆕🗂️ 他启修复OIR三型(R3·误解/听岔序列)**：把理解障碍写成3轮序列(麻烦源→修复发起→完成)·按关系选发起型(open"啊?"=彻底懵 / restricted部分重复+疑问词=精准质问 / candidate"你是说X?"=拼真相节拍)·修AI"角色永远完美互懂"通病(Dingemanse OIR)
+
+- **🆕🗂️ 对白即行动 Dialogue-as-Action(2026-06-29·McKee verbal action·治 on-the-nose)**：若 cluster_brief/manifest 的 scene 带 `dialogue_objectives`，照它演——**本场角色对白即行动：X(character) 想要 Y(wants)·用 Z(tactic·active verb 言语策略:试探/施压/回避/示弱/反问) 策略·被 W(obstacle) 阻挠**。对白是策略不是信息：每句台词都是为达成 wants 采取的动作，不是把目标/背景/设定念出来。**每句话底下压着未说出口的目标(what_unsaid)——潜文本只驱动表演、绝不写进正文；严禁把内心想法/情绪/目标直接说出口(透明原则·on-the-nose=说透目标=零潜台词=AI 腔)**。dialogue_act 是本句意图骨架(what)，措辞(how)你自由发挥。场景级软提示非逐句锁，爽文直球对喷可豁免 subtext(作者档第一权威)
 
 ## D7. 叙事节奏
 - **快慢交替**：高密度动作场(短段/快节奏) 后必须有低密度喘息场(长段/反思/日常)——匀速 = 疲劳

@@ -74,7 +74,7 @@ tools: Read, Write
 
 > 兼容：scene 仍可带 schema 既有的 R20 可选探针字段（`expectation` / `actual_outcome` / `gap_type` / `unit_type` / `value_axis` / `start_polarity` / `end_polarity`）—— 与 goal/conflict/turn 正交并存，全 optional、向后兼容旧 brief。
 
-> **下游消费一致性确认**：`build_manifest` 读 `surface_clue` + 剥 `hidden_payoff`（plant）/ 到 `trigger_cluster` 暴露 `hidden_payoff` + reveal_directive（callback）；`gen_writer` 把整个 `scene_storyboard`（含 goal/conflict/turn/emotional_tone/plant_foreshadowing_surface + 🔴 participants/focal_character/focalization_mode/knowledge_gap_mode + 🔴 scene_type/link_to_prev/result_type/disaster/reaction/dilemma/decision + 🔴 scene_goal）原样注入 writer prompt 作走向骨架；`build_manifest._collect_scene_causal_skeleton` 另把 `scene_goal` 结构化透传 writer（治场景漂移·每场有目标驱动）；`build_manifest` 据 `participants`/`focal_character` 做 per-scene 角色认知投射（见下 ④）；`build_manifest` + `causal_connector_scanner`（B agent）读 `scene_type`/`link_to_prev`/`result_type` 做 But-Therefore 因果连接器 + Swain 场景骨架（见下 ⑤）；`cluster_choice_apply._normalize_storyboard_ch` 透传所有 beat 字段（只补 scene_idx/ch）。三方均向后兼容旧 brief（旧纯字符串伏笔 / 无 beat 字段 / 无 belief 字段 / 无 causal 字段照常工作）。
+> **下游消费一致性确认**：`build_manifest` 读 `surface_clue` + 剥 `hidden_payoff`（plant）/ 到 `trigger_cluster` 暴露 `hidden_payoff` + reveal_directive（callback）；`gen_writer` 把整个 `scene_storyboard`（含 goal/conflict/turn/emotional_tone/plant_foreshadowing_surface + 🔴 participants/focal_character/focalization_mode/knowledge_gap_mode + 🔴 scene_type/link_to_prev/result_type/disaster/reaction/dilemma/decision + 🔴 scene_goal + 🔴 dialogue_objectives）原样注入 writer prompt 作走向骨架；`build_manifest._collect_scene_causal_skeleton` 另把 `scene_goal` 结构化透传 writer（治场景漂移·每场有目标驱动）；`build_manifest._collect_dialogue_objectives`（B agent）把对话密集 scene 的 `dialogue_objectives` 结构化透传 writer（对白即行动·见下 ⑥·what_unsaid 涉未到期 hidden 伏笔走 reveal 隔离）；`build_manifest` 据 `participants`/`focal_character` 做 per-scene 角色认知投射（见下 ④）；`build_manifest` + `causal_connector_scanner`（B agent）读 `scene_type`/`link_to_prev`/`result_type` 做 But-Therefore 因果连接器 + Swain 场景骨架（见下 ⑤）；`cluster_choice_apply._normalize_storyboard_ch` 透传所有 beat 字段（只补 scene_idx/ch）。三方均向后兼容旧 brief（旧纯字符串伏笔 / 无 beat 字段 / 无 belief 字段 / 无 causal 字段 / 无 dialogue_objectives 字段照常工作）。
 
 ## ③ 幕后实体明暗线隔离（隐藏身份角色 / 幕后关系 / 世界真相 / 幕后黑手 faction / 暗线时钟）
 
@@ -202,6 +202,46 @@ tools: Read, Write
 - ✅ **默认安全·向后兼容**：旧 scene 无这些字段 → 下游 fallback（不约束）。但你**新产的 brief 应带** scene_type/link_to_prev/result_type。
 - 🔴 字段权威 schema = `core/claude-home/schemas/event_cluster_schema.json` 的 `scene_storyboard.items`（与 `build_manifest` / `causal_connector_scanner`（B agent）读的字段名一一对应）·`subsystem_skeletons.json` 的 `事件簇._cluster_brief_schema_hint.scene_causal_fields` 是单一真理源 hint。
 - ⚠️ 本字段 `scene_type` 是 **scene_storyboard 层** Swain 标记（proactive/reactive），**不同于** chapter-plan 层的 `scene_type`（开场/战斗/悬疑 category·golden_passages 选取用）——两者不同对象层不冲突；亦与既有 R20 `unit_type`（scene/sequel·`sequel_drought_advisory` 消费）同概念更细版·并存向后兼容。
+
+## ⑥ 🔴 2026-06-29 对白即行动 dialogue_objectives（每句台词=言语行动·潜台词靠 what_unsaid 驱动）
+
+> **统一原则（与 ①伏笔 / ③隐藏身份 / ④信息差 / ⑤Swain 同范式）**：**Claude 规划『这场对话每个角色想从对方拿到什么、用什么言语策略、压着什么不说』结构 → 写手（gemini）据意图自由发挥写出有潜台词的台词，对白成了策略博弈不是信息播报。** SOTA 接地：McKee《Dialogue: The Art of Verbal Action》（每句台词=verbal action·角色为达成**未说出口的 objective** 采取 tactic·on-the-nose=说透目标=零潜台词）；Stanislavski beat 体系（scene objective → line objective 层层向下）；CoSER（arXiv:2502.09082）三通道 Speech/Action/Thought 消融证明去掉 inner-thought 一致性显著下降——`what_unsaid` 就是那条隐藏 Thought 通道；dialogue_act 骨架（Claude 标意图 what、gemini freestyle 填措辞 how）。
+
+**你详化 / 涌现 cluster brief 的 `scene_storyboard` 时，对话密集的 scene 给 `dialogue_objectives` 数组（每个说话角色一项·与 ② 的 goal/conflict/turn、④ 的 belief、⑤ 的 Swain 字段正交并存）**：
+
+```jsonc
+"dialogue_objectives": [
+  {
+    "character": "老周",           // 说话角色 char_id（对齐人物卡 id）
+    "wants": "想确认陈默到底查到哪一步，又不暴露自己知情",  // 本场该角色想从对方拿到什么（未说出口的 objective）
+    "tactic": "试探",              // active verb 言语策略（试探/施压/回避/示弱/反问/讨好）·达成 wants 的手段
+    "obstacle": "陈默警惕·反过来反问他",  // 被谁/什么阻挠（对手的反 objective / 外部障碍）
+    "dialogue_act": "试探",        // enum：试探/回避/威胁/让步/反讽/求证/施压/示弱
+    "what_unsaid": "他其实早知道名单真相，但不能让陈默看出来"  // 压着不说的潜文本·隐藏 Thought 通道·只驱动潜台词·绝不写进正文
+  }
+]
+```
+
+| 字段 | 必产? | 含义 | 北极星⑤ 性质 |
+|---|---|---|---|
+| `character` | ✅ | 说话角色 char_id（对齐人物卡 id） | 结构事实 |
+| `wants` | ✅ | 本场该角色想从对方拿到什么（未说出口的 objective·Stanislavski scene-objective 的对白侧） | 意图（what） |
+| `tactic` | ✅ | active verb 言语策略（试探/施压/回避/示弱/反问/讨好）·达成 wants 的手段 | 意图（what） |
+| `obstacle` | ✅ | 被谁/什么阻挠（对手的反 objective / 外部障碍） | 意图（what） |
+| `dialogue_act` | ✅ | enum：试探/回避/威胁/让步/反讽/求证/施压/示弱 | 意图（what） |
+| `what_unsaid` | 按需 | 压着不说的潜文本（隐藏 Thought 通道·CoSER）·驱动潜台词 | 意图（what·**绝不写进正文**） |
+
+**铁律（对白即行动）**：
+- 🔴 **Claude 只标意图（what·角色想干嘛），措辞（how·具体台词）永远交 gemini freestyle**——你写 `wants`/`tactic`/`what_unsaid`（角色想要什么、用什么策略、压着什么不说），**绝不写台词原文/句子**（北极星④规划管意图·创作管表达）。退化成机械填空模板 = 违北极星⑤。
+- 🔴 **非每场必填**——`dialogue_objectives` 只给**对话密集**的 scene；纯叙述 / 独白 / 动作场可空（不填）。**过度结构化会让对话变机械任务清单 / 角色像百科全书**（pitfall），宁缺毋滥。
+- 🔴 **`what_unsaid` 绝不剧透**——它是隐藏 Thought 通道，只驱动潜台词、**绝不写进正文**；若涉及**未到期 hidden 伏笔 / 隐藏身份**，须走 ①③ 的 reveal 隔离（对齐 `_sanitize_character_belief`），**绝不把暗线真相写进 `what_unsaid`**（scene_storyboard 原样注入写手·写进去=泄露）。
+- 🔴 **作者档第一权威**——爽文直球对喷场景（人物心口如一、信息直给）**不强加 subtext**；该维度作者档规定了就以作者档为准。
+
+**北极星边界（⑥ 不干涉模型创作判断）**：
+- ✅ 全部 **advisory · 场景级建议非逐句锁**——这是「这场对话的张力地图」，不是「每句话怎么说」的脚本。writer 有理由可豁免（理由<300 字·具体到本 cluster 场景）。
+- ✅ **默认安全·向后兼容**：旧 scene 无此字段 → 下游 fallback（不注入·零行为变化）。你**只对话密集 scene 才产**，不是每 scene 必产。
+- 🔴 字段权威 schema = `core/claude-home/schemas/event_cluster_schema.json` 的 `scene_storyboard.items.dialogue_objectives`（与 `build_manifest._collect_dialogue_objectives`（B agent）读的字段名 `character`/`wants`/`tactic`/`obstacle`/`dialogue_act`/`what_unsaid` 一一对应）·`subsystem_skeletons.json` 的 `事件簇._cluster_brief_schema_hint.scene_dialogue_objectives` 是单一真理源 hint。
+- ⚠️ 与 ④ 角色信息差正交：belief 管「谁知道什么」（认知层），dialogue_objectives 管「知道之后嘴上怎么演」（表达层）——认知层信息差自然外化为表达层各说各话（A 不知道的 B 不会说穿），两维不互替。
 
 ---
 
@@ -331,7 +371,7 @@ ARC_TEMPLATE_DIR: <workspace/styles/<风格名>/arc_templates/>  # 启用时必�
   "parent_me": "ME_002",
   "scope_summary": "1-2 句话总结本簇全程（writer 必读首字段）",
   "scene_storyboard": [
-    {"scene_idx": 0, "scene": "开场 · ...", "goal": "...", "conflict": "...", "turn": "...", "scene_type": "proactive_scene", "link_to_prev": "but", "result_type": "no_and", "disaster": "...", "characters": ["..."], "participants": ["..."], "focal_character": "...", "focalization_mode": "internal", "knowledge_gap_mode": null, "emotional_tone": "...→...", "plant_foreshadowing_surface": [{"fs_id": "FS_007", "surface_clue": "明线·普通细节·不解释意义"}], "key_beats": ["...", "..."]},
+    {"scene_idx": 0, "scene": "开场 · ...", "goal": "...", "conflict": "...", "turn": "...", "scene_type": "proactive_scene", "link_to_prev": "but", "result_type": "no_and", "disaster": "...", "characters": ["..."], "participants": ["..."], "focal_character": "...", "focalization_mode": "internal", "knowledge_gap_mode": null, "emotional_tone": "...→...", "plant_foreshadowing_surface": [{"fs_id": "FS_007", "surface_clue": "明线·普通细节·不解释意义"}], "dialogue_objectives": [{"character": "老周", "wants": "套出陈默查到哪一步又不暴露自己知情", "tactic": "试探", "obstacle": "陈默反过来反问他", "dialogue_act": "试探", "what_unsaid": "他早知名单真相·不能让陈默看出来"}], "key_beats": ["...", "..."]},
     {"scene_idx": 1, "scene": "推进 · ...", "goal": "...", "conflict": "...", "turn": "...", "characters": ["..."], "emotional_tone": "...→...", "key_beats": ["..."]},
     {"scene_idx": 2, "scene": "高潮 · ...", "goal": "...", "conflict": "...", "turn": "...", "characters": ["..."], "emotional_tone": "...→...", "climax_marker": true, "key_beats": ["..."]},
     {"scene_idx": 3, "scene": "收束 · ...", "goal": "...", "conflict": "...", "turn": "...", "characters": ["..."], "emotional_tone": "...→...", "key_beats": ["..."]}
@@ -407,6 +447,8 @@ ARC_TEMPLATE_DIR: <workspace/styles/<风格名>/arc_templates/>  # 启用时必�
 > **🔴 2026-06-29 角色信息差字段补充（见 ④）**：每个 scene 还**必产** `participants`（在场角色·witness 命门）/ `focal_character`（POV）/ `focalization_mode`（zero/internal/external），并按需标 `knowledge_gap_mode`（mystery/suspense/dramatic_irony/null·advisory）。与 scene_idx / beat 字段正交，`_normalize_storyboard_ch` 全部透传保留。旧 brief 缺这些字段时下游 fallback『全员视角』向后兼容。
 
 > **🔴 2026-06-29 But-Therefore+Swain 字段补充（见 ⑤）**：每个 scene 还应标 `scene_type`（proactive_scene/reactive_sequel）/ `link_to_prev`（but/therefore/and_then·**避免 and_then 平铺**）/ `result_type`（yes_but/no_and/yes_and·**禁纯 yes**），proactive 场加填 `disaster`、reactive 场加填 `reaction`/`dilemma`/`decision`。与 scene_idx / beat / belief 字段正交，`_normalize_storyboard_ch` 全部透传保留。旧 brief 缺这些字段时下游 fallback（不约束）向后兼容。consumer = `build_manifest` + `causal_connector_scanner`（B agent·只查是否 and_then 平铺·advisory）。
+
+> **🔴 2026-06-29 对白即行动字段补充（见 ⑥）**：**对话密集**的 scene 加 `dialogue_objectives` 数组（每个说话角色一项·`character`/`wants`/`tactic`/`obstacle`/`dialogue_act`/`what_unsaid`）。**非每场必填**（纯叙述/独白场可空·过度结构化是 pitfall）。Claude 只标意图（what），措辞（how·台词原文）永远交 gemini。`what_unsaid` 是隐藏 Thought 通道·**绝不写进正文**·涉未到期 hidden 伏笔走 reveal 隔离绝不剧透。与 scene_idx / beat / belief / causal 字段正交，`_normalize_storyboard_ch` 全部透传保留。旧 brief 缺此字段时下游 fallback（不注入）向后兼容。consumer = `build_manifest._collect_dialogue_objectives`（B agent·advisory）。
 
 ### Narrative Mode 默认规则（黄金三章倒叙）
 
