@@ -861,6 +861,93 @@ def _apply_foreshadower_payoffs(root, cluster_key):
         logger.info(f"[foreshadower-payoff] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
 
 
+# 🔴 2026-06-29 场景级Appraisal Beat(chain-of-emotion)
+def cmd_apply_appraisal_beats(root, cluster_key):
+    """🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion）·summarizer 梳理产物确定性回库（零模型·幂等）。
+
+    novel-summarizer 读整 cluster 正文（梳理非创作·禁占位词典浅扫）按 Scherer CPM/OCC 评价链推理产
+    summary.appraisal_beats=[{cluster_id, scene_idx, focal_character, trigger_event, appraisal{6维},
+    prospect, derived_emotion（自然语言·非情绪词标签）, behavior_externalization, vad_bin}]。本步把它
+    确定性 append 进 叙事节拍器.json.appraisal_beats —— 把情绪从『prose 一句提示』升维为『结构化可追踪
+    STATE』（SOTA arXiv:2309.05076 chain-of-emotion + CAPE arXiv:2410.14145）。
+
+    🔴 只填 active cluster（fluid·北极星：不预设/回填别的 cluster）：beat 显式 cluster_id 归一后 != 本
+    cluster 则跳过，其余强制归到本 cluster_id。
+
+    幂等·去重：按 (cluster_id, scene_idx, focal_character) 去重——同一 scene 可有多个 focal 角色各一拍，
+    故去重键在 cluster_id+scene_idx 之外补 focal_character（防同 scene 多角色 beat 被误并）。re-apply 同
+    summary 不重复 append、不写盘 churn。
+
+    默认安全·向后兼容：summary 无 appraisal_beats（旧书 / summarizer 未产）或 叙事节拍器.json 缺/坏 →
+    no-op 不报错。全 advisory STATE（非判决·不进 HARD_GATE_CODES）。永不阻断（STATE 回库失败仅记录·return 0）。
+    """
+    try:
+        db = root / "_数据库"
+        cid = cluster_lookup.normalize_cluster_id(cluster_key) or str(cluster_key)
+        raw = str(cluster_key).replace("cluster_", "")
+        # summarizer 输出候选（cluster_<norm>_summary.json 主路径 + raw key 兜底·与 cluster_summary_builder 同源）
+        cand = [
+            db / ".wal" / f"{cid}_summary.json",
+            db / ".wal" / f"cluster_{raw}_summary.json",
+            db / ".wal" / f"{cluster_key}_summary.json",
+        ]
+        summary_path = next((p for p in cand if p.is_file()), None)
+        if not summary_path:
+            logger.info(f"[appraisal-beats] {cid} summary.json 不存在·no-op（summarizer 未产）")
+            return 0
+        summ = load_json(summary_path, {})
+        beats = summ.get("appraisal_beats") if isinstance(summ, dict) else None
+        if not isinstance(beats, list) or not beats:
+            logger.info(f"[appraisal-beats] {cid} 无 appraisal_beats·no-op（向后兼容）")
+            return 0
+
+        pacer_path = db / "叙事节拍器.json"
+        pacer = load_json(pacer_path, None)
+        if not isinstance(pacer, dict):
+            logger.info(f"[appraisal-beats] {cid} 叙事节拍器.json 缺/坏·跳过（不新建·不阻断）")
+            return 0
+        existing = pacer.get("appraisal_beats")
+        if not isinstance(existing, list):
+            existing = pacer["appraisal_beats"] = []
+        seen = {(b.get("cluster_id"), b.get("scene_idx"), b.get("focal_character"))
+                for b in existing if isinstance(b, dict)}
+        added = 0
+        for b in beats:
+            if not isinstance(b, dict):
+                continue
+            # 只填 active cluster：显式标了别的 cluster → 跳过（fluid·不回填非本 cluster）
+            b_cid_raw = b.get("cluster_id")
+            if b_cid_raw:
+                b_cid = cluster_lookup.normalize_cluster_id(b_cid_raw) or str(b_cid_raw)
+                if b_cid != cid:
+                    continue
+            rec = dict(b)
+            rec["cluster_id"] = cid  # 强制归到本 active cluster
+            try:
+                rec["scene_idx"] = int(b.get("scene_idx")) if b.get("scene_idx") is not None else None
+            except (TypeError, ValueError):
+                rec["scene_idx"] = None
+            focal = rec.get("focal_character")
+            if not focal:
+                continue  # focal_character 必填（真角色 id）
+            key = (cid, rec["scene_idx"], focal)
+            if key in seen:
+                continue
+            existing.append(rec)
+            seen.add(key)
+            added += 1
+        if added:
+            save_json(pacer_path, pacer)
+            logger.info(f"[appraisal-beats] {cid} 回填 {added} 拍 → 叙事节拍器.appraisal_beats"
+                        "（chain-of-emotion·结构化 STATE·advisory）")
+        else:
+            logger.info(f"[appraisal-beats] {cid} 无新增（全已存在或非本 cluster·幂等）")
+        return 0
+    except Exception as e:
+        logger.info(f"[appraisal-beats] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+        return 0
+
+
 def cmd_apply_cluster_changes(root, cluster_key):
     """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes。
 
@@ -1100,6 +1187,10 @@ def main():
     # 🔴 2026-05-29 流程贯通（断点 5）：--report-cluster 已删（无 plan/命令调用方）
     ap.add_argument("--build-cluster-summary", type=str, metavar="CLUSTER_KEY",
                     help="v2 账本: 把整 cluster 的富摘要预算写入 故事块摘要.json（走 cluster_summary_builder）")
+    # 🔴 2026-06-29 场景级Appraisal Beat(chain-of-emotion)
+    ap.add_argument("--apply-appraisal-beats", type=str, metavar="CLUSTER_KEY",
+                    help="🔴 2026-06-29: summarizer 产的 appraisal_beats 确定性回填 叙事节拍器.json"
+                         "（chain-of-emotion·只 active cluster·幂等·全 advisory STATE·未产则 no-op）")
     args = ap.parse_args()
 
     root = Path(args.project).resolve()
@@ -1120,6 +1211,8 @@ def main():
         rc = cmd_git_commit_cluster(root, args.git_commit_cluster)
     elif args.auto_post_reflect_cluster:
         rc = cmd_auto_post_reflect_cluster(root, args.auto_post_reflect_cluster)
+    elif args.apply_appraisal_beats:
+        rc = cmd_apply_appraisal_beats(root, args.apply_appraisal_beats)
     elif args.build_cluster_summary:
         import cluster_summary_builder
         _res = cluster_summary_builder.build_cluster_summary(root, args.build_cluster_summary)

@@ -1915,7 +1915,12 @@ def _collect_scene_causal_skeleton(cluster: dict) -> dict | None:
       · result_type ∈ {yes_but|no_and|yes_and}（Butcher Try-Fail·禁纯 yes 顺风局）
     proactive/reactive 子 beat 既认顶层字段，也认嵌套 proactive{}/reactive{} 子 dict。
 
-    默认安全闸：所有 scene 都无任何这些字段 → 返回 None（不注入·向后兼容旧 storyboard / 旧书·零行为变化）。
+    🔴 2026-06-29 scene_goal动机（心理 P0·design2 非冗余部分·补 arc-want 到 scene 的桥）：
+    同步透传每个 scene 的 `scene_goal`（本场 POV 角色动作化临场目标·Stanislavski scene-objective·
+    『此刻我想要什么』·治场景漂移·每场有目标驱动）。与 Swain scene_type/disaster/dilemma 正交并存
+    （Swain 主体已由事件 P0 建·本字段不重复·只补「逐场景动机」这一非冗余维）。
+
+    默认安全闸：所有 scene 都无任何这些字段（含 scene_goal）→ 返回 None（不注入·向后兼容旧 storyboard / 旧书·零行为变化）。
     advisory：场景骨架是参考模板非硬模具·writer 有具体理由可豁免（北极星⑤·绝不 hard_gate）。
     """
     if not isinstance(cluster, dict):
@@ -1940,6 +1945,11 @@ def _collect_scene_causal_skeleton(cluster: dict) -> dict | None:
         rt = sc.get("result_type")
         if isinstance(rt, str) and rt.strip().lower() in _VALID_RESULT_TYPES:
             entry["result_type"] = rt.strip().lower()
+            has_any = True
+        # 🔴 2026-06-29 scene_goal动机（Stanislavski scene-objective·逐场景动机·治场景漂移）
+        sg = sc.get("scene_goal")
+        if isinstance(sg, str) and sg.strip():
+            entry["scene_goal"] = sg.strip()
             has_any = True
         # Swain proactive / reactive 骨架字段（顶层或嵌 proactive/reactive 子 dict 都认）
         prox = sc.get("proactive") if isinstance(sc.get("proactive"), dict) else sc
@@ -1970,9 +1980,11 @@ def _collect_scene_causal_skeleton(cluster: dict) -> dict | None:
             "    reactive_sequel 走 Reaction→Dilemma→Decision(情绪反应→两难→抉择)。\n"
             "  · result_type 禁纯 yes(顺风局)：用 yes_but(赢了但有代价)/no_and(输了且更糟)·\n"
             "    try-fail stakes 逐步递增。\n"
+            "  · scene_goal(逐场景动机·Stanislavski scene-objective·『此刻 POV 角色想要什么』·动作化)：\n"
+            "    每场让 POV 角色带明确临场目标驱动行动(治场景漂移·每场有目标)·目标受阻即冲突。\n"
             "  · 场景骨架是参考模板非硬模具·有具体到本场景的理由可偏离(<300 字·北极星⑤)。"
         ),
-        "_doc": "🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架·advisory·绝不 hard_gate",
+        "_doc": "🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架+scene_goal动机·advisory·绝不 hard_gate",
     }
 
 
@@ -2583,6 +2595,137 @@ def _collect_storyteller_directive(scanner, chapter: int) -> dict:
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
+
+
+# 🔴 2026-06-29 场景级Appraisal Beat注入（心理 P0·情绪余烬 + 本块方向·上限防 prompt 膨胀）
+_APPRAISAL_RESIDUE_MAX = 2   # 注入的历史 cluster 情绪余烬条数（延续上块强情绪）
+_APPRAISAL_PLANNED_MAX = 4   # 注入的本 active cluster 已规划 beat 条数
+# appraisal 6 维评价子字段 → 中文标签（渲染「为何感受」摘要·只渲染语义值·不造情绪词标签）
+_APPRAISAL_DIM_LABELS = {
+    "relevance": "相关性",
+    "congruence": "合意性",
+    "certainty": "确定性",
+    "coping_potential": "应对力",
+    "accountability": "归因",
+    "agency": "归因",
+    "norm_compat": "规范契合",
+}
+
+
+def _appraisal_beat_to_lines(b: dict, *, residue: bool) -> list[str]:
+    """把一条 appraisal_beat 渲染成 advisory 方向卡文字（为何感受 + 情绪走向 + 如何外化）。
+
+    🔴 北极星⑤纪律：只渲染 derived_emotion(自然语言推理·非标签) + appraisal 评价(为何) +
+    behavior_externalization(如何外化·动作非情绪词)，**绝不由本函数造『他很愤怒/心中一凛』式情绪词标签**。
+    """
+    focal = (str(b.get("focal_character") or "")).strip() or "（本场 POV 角色）"
+    trig = (str(b.get("trigger_event") or "")).strip()
+    de = (str(b.get("derived_emotion") or "")).strip()
+    bx = (str(b.get("behavior_externalization") or "")).strip()
+    ap = b.get("appraisal") if isinstance(b.get("appraisal"), dict) else {}
+    why_parts = []
+    for k, label in _APPRAISAL_DIM_LABELS.items():
+        v = ap.get(k)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            continue
+        why_parts.append(f"{label}={str(v).strip()}")
+    pros = b.get("prospect") if isinstance(b.get("prospect"), dict) else {}
+    ptype = (str(pros.get("type") or "")).strip()
+    presolved = (str(pros.get("resolved_to") or "")).strip()
+    tag = "情绪余烬（上块延续·不归零）" if residue else "本拍情绪方向"
+    head = f"- 【{tag}】{focal}"
+    if trig:
+        head += f"｜触发：{trig}"
+    lines = [head]
+    if why_parts:
+        lines.append(f"    · 为何（评价 appraisal·不贴情绪标签）：{'·'.join(why_parts)}")
+    if ptype:
+        pl = f"    · 预期（prospect）：{ptype}"
+        if presolved:
+            pl += f" → {presolved}"
+        lines.append(pl)
+    if de:
+        lines.append(f"    · 情绪走向（derived_emotion·写成评价+反应不写标签）：{de}")
+    if bx:
+        lines.append(f"    · 如何外化（写成动作/细节·非情绪词）：{bx}")
+    return lines
+
+
+def _collect_appraisal_directive(scanner, current_cluster_id) -> dict | None:
+    """🔴 2026-06-29 场景级Appraisal Beat注入（心理 P0·chain-of-emotion 两步法·治情绪贴标签/逐场景重置）。
+
+    读 叙事节拍器.json 的 appraisal_beats[]（A agent 由 Claude 梳理读正文回填·schema：
+      {cluster_id, scene_idx, focal_character, trigger_event,
+       appraisal:{relevance,congruence,certainty,coping_potential,accountability,norm_compat},
+       prospect:{type,resolved_to}, derived_emotion(自然语言·非情绪词标签),
+       behavior_externalization(外化成动作/细节), vad_bin}）。
+
+    注入两部分 advisory 情绪方向卡：
+      ① 情绪余烬（emotion residue）：上一/历史 cluster 末尾强情绪 beat → 本块开篇情绪不归零延续/衰减
+      ② 本 active cluster 已规划的 beat → 这一拍 focal_character 情绪应往哪走 + 为何 + 如何外化
+
+    🔴 北极星⑤纪律：只注入「为何感受（appraisal 评价）+ 如何外化（behavior_externalization·动作非情绪词）+
+       derived_emotion 方向」，**绝不注入『他很愤怒/心中一凛』式情绪词标签**（否则退化反 AI 腔堆砌·撞禁用词）。
+       全 advisory·绝不 hard_gate（情绪是创作判断）。只排 active cluster·守 fluid 涌现（不预设 cluster_002+）。
+    默认安全闸：无叙事节拍器.json / 无 appraisal_beats / 空 → None（不注入·向后兼容旧书·零行为变化）。
+    """
+    pacer_path = scanner.root / "_数据库" / "叙事节拍器.json"
+    if not pacer_path.exists():
+        return None
+    try:
+        pacer = json.loads(pacer_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    beats = pacer.get("appraisal_beats") if isinstance(pacer, dict) else None
+    if not isinstance(beats, list) or not beats:
+        return None
+    try:
+        cur_num = cluster_lookup.cluster_num(current_cluster_id) if current_cluster_id else None
+    except Exception:
+        cur_num = None
+    # cur 无法定位序号 → 无法判定『历史 vs 未来』，默认安全不注入（守 fluid·不泄露未来块情绪）
+    if cur_num is None:
+        return None
+    current_beats: list[dict] = []
+    prior_beats: list[dict] = []
+    for b in beats:
+        if not isinstance(b, dict):
+            continue
+        try:
+            bnum = cluster_lookup.cluster_num(b.get("cluster_id")) if b.get("cluster_id") else None
+        except Exception:
+            bnum = None
+        if bnum is None:
+            continue
+        if bnum == cur_num:
+            current_beats.append(b)        # 本 active cluster 已规划 beat
+        elif bnum < cur_num:
+            prior_beats.append(b)          # 历史 cluster → 情绪余烬候选
+        # bnum > cur_num（未来块）→ 跳过：绝不注入未来块情绪（守 fluid 涌现·不预设/不泄露）
+    # ① 情绪余烬：取最近 N 条历史 beat（按出现顺序末尾·延续上块强情绪）
+    residue = prior_beats[-_APPRAISAL_RESIDUE_MAX:] if prior_beats else []
+    # ② 本块已规划 beat（advisory 方向·限量防 prompt 膨胀·守 feedback_writer_prompt_bloat）
+    planned = current_beats[:_APPRAISAL_PLANNED_MAX]
+    if not residue and not planned:
+        return None
+    lines: list[str] = [
+        "🟢 场景级 Appraisal 情绪方向卡（心理 P0·chain-of-emotion·advisory·顾问非法官）：",
+        "  · 情绪靠『事件 → 角色如何评价(appraisal) → 外化成动作/细节』写(appraisal-as-prose)，",
+        "    **不写『他感到X / 他很愤怒 / 心中一凛』式情绪词标签**（贴标签 = 反 AI 腔·撞禁用词）。",
+        "  · 余烬：上一块的强情绪不归零，本块开篇情绪在其基础上延续 / 自然衰减。",
+    ]
+    for b in residue:
+        lines.extend(_appraisal_beat_to_lines(b, residue=True))
+    for b in planned:
+        lines.extend(_appraisal_beat_to_lines(b, residue=False))
+    return {
+        "mode": "on",
+        "gate_level": "advisory",
+        "residue_count": len(residue),
+        "planned_count": len(planned),
+        "directive": "\n".join(lines),
+        "_doc": "🔴 2026-06-29 场景级Appraisal Beat注入·心理 P0·advisory·绝不 hard_gate",
+    }
 
 
 def _collect_active_clocks(scanner, chapter: int) -> dict:
@@ -5046,6 +5189,11 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # 从本书已写片段里挑「最贴作者文风」的 1-2 段当下一块的动态锚（vs 第 1 轮静态开局 snippet）。
         "rolling_style_anchor": _collect_rolling_style_anchor(s, chapter),
         "storyteller_directive": _collect_storyteller_directive(s, chapter),
+        # 🔴 2026-06-29 场景级Appraisal Beat注入（心理 P0·情绪余烬 + 本块情绪方向·appraisal-as-prose·advisory）：
+        # 注入「这一拍 focal_character 情绪往哪走(derived_emotion 方向) + 为何(appraisal 评价) +
+        # 如何外化(behavior_externalization·动作非情绪词)」+ 上块情绪余烬不归零延续。
+        # 默认安全闸：无 叙事节拍器.appraisal_beats → None（不注入·零行为变化）。全 advisory·绝不 hard_gate。
+        "appraisal_directive": _collect_appraisal_directive(s, current_cluster_id),
         "protagonist_stress": _collect_protagonist_stress(s, chapter),
         # [#7] 北极星①：主角弧线当前阶段（character_arc_state.json）内联注入 writer —— 此前只有
         # cluster_emergence 消费、writer 看不到；角色塑造贴合作者风格需要它。advisory（顾问非法官）。
@@ -5198,6 +5346,7 @@ def _build_cache_layout() -> dict:
             "must_read",                         # 当前章需读文件清单（每章不同）
             "active_clocks",                     # urgent 状态每章变
             "storyteller_directive",             # next_target_outcome 每章变
+            "appraisal_directive",               # 🔴 2026-06-29 场景级Appraisal Beat：情绪余烬+本块方向（每 cluster 变·advisory）
             "protagonist_stress",                # stress 累计每章变
             "fate_dice_hint",                    # 本章抽签状态
             "active_offscreen_actions",          # 本章生效幕后

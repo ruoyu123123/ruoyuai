@@ -14,7 +14,7 @@ $ARGUMENTS
 
 - **状态回库两条数据流分离（2026-06-28 审计清理C类 + 不降级收尾）**：
   - **写作自评流（writer · gen-model）**：`cluster_changes.json` 的 `self_eval` / `waivers` 只作创作自评 / 豁免喂 audit，**factual 不再作回库权威源**。
-  - **状态梳理流（archivist · Claude 读正文）**：角色 / 道具 / 关系 / locked_facts / throughline 由 novel-archivist 读 cluster_draft.txt 正文产 archive.json → `apply_archive.py` 确定性回库（北极星⑤：创作=gen-model writer / 状态梳理=Claude archivist · 互不越权）。
+  - **状态梳理流（archivist · Claude 读正文）**：角色 / 道具 / 关系 / locked_facts / throughline / 角色信念(belief_ledger·per-character witness) 由 novel-archivist 读 cluster_draft.txt 正文产 archive.json → `apply_archive.py` 确定性回库（北极星⑤：创作=gen-model writer / 状态梳理=Claude archivist · 互不越权）。
   - 🔴 **不降级**：archive 是 factual 回库的**唯一权威路径**——archivist judge `failure_policy=block`、apply_archive 步无 advisory 前缀，archive 缺出场角色=archivist 失败=错误→硬停（不静默放行状态丢失）。
 - Git 1 cluster 1 commit（不再 per chapter）
 - 所有 agent (archivist/summarizer/foreshadower/reflector/outline-planner) 走 cluster mode
@@ -51,12 +51,12 @@ STEP: <当前步骤号>
 2.  parse cluster_changes.json (self_eval/waivers · 创作自评 · 不含 factual 自报)
 3.  apply-cluster-changes + writer_truth_check (非 archive 域 time_advance/location + 撒谎检测)
 4.  validate_chapter (整 cluster 跑 · hard_gate 校验)
-5.  novel-archivist MODE=cluster (读正文产 archive.json · factual 权威源 · failure_policy=block)
-6.  apply_archive.py (角色/道具/关系/locked_facts/throughline 确定性回库 · 不降级硬停)
-7.  novel-summarizer MODE=cluster (cluster 级摘要)
+5.  novel-archivist MODE=cluster (读正文产 archive.json · factual 权威源 · failure_policy=block · 含 belief_updates witness)
+6.  apply_archive.py (角色/道具/关系/locked_facts/throughline + 角色信念 belief_ledger 确定性回库 · 不降级硬停)
+7.  novel-summarizer MODE=cluster (cluster 级摘要 + 场景级 Appraisal Beat chain-of-emotion)
 8.  novel-foreshadower MODE=cluster (整 cluster 伏笔评估)
 9.  novel-reflector MODE=cluster (经验沉淀)
-10. wal-merge + learning_loop + judge_reports_archive + build-cluster-summary
+10. wal-merge + learning_loop + judge_reports_archive + build-cluster-summary + apply-appraisal-beats
 11. cluster-scan + state + drift + evolution (wrapper 脚本 + 自学习闭环)
 12. git-commit-cluster (1 cluster 1 commit)
 13. cluster-emergence + novel-outline-planner (涌现下个 cluster brief)
@@ -152,7 +152,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --skip-output
 
 > 🔴 **2026-06-28 审计清理C类 · 两条数据流分离**：本步起的 archivist / summarizer / foreshadower / reflector 同属「**Claude 读正文梳理**」段，与 writer（gen-model）的「写作自评」流互不越权。
 > - **写作自评（writer）**：cluster_changes.json 的 self_eval / waivers → 喂 audit（创作自评 / 豁免），**不作 factual 回库权威源**。
-> - **状态梳理（Claude archivist）**：读 cluster_draft.txt 正文客观抽取 → archive.json → apply_archive.py 确定性回库角色 / 道具 / 关系 / locked_facts / throughline。
+> - **状态梳理（Claude archivist）**：读 cluster_draft.txt 正文客观抽取 → archive.json → apply_archive.py 确定性回库角色 / 道具 / 关系 / locked_facts / throughline / 角色信念(belief_ledger)。
 
 spawn novel-archivist（读整 cluster 正文，客观抽取本块新增/变更状态，产 archive.json）：
 
@@ -167,7 +167,7 @@ CLUSTER_DRAFT_PATH: <项目路径>/章节/cluster_<key>_draft/cluster_<key>_draf
 CLUSTER_CHAPTER_RANGE: <START_CH>-<END_CH>
 ```
 
-产出：`_数据库/.wal/cluster_<key>_archive.json`（characters / items / relationships / locked_facts / throughline_progress）。
+产出：`_数据库/.wal/cluster_<key>_archive.json`（characters / items / relationships / locked_facts / throughline_progress / belief_updates / belief_unaware）。
 
 > 🔴 **不降级**：archivist judge `failure_policy=block`——它是 factual 回库的唯一权威源，失败必须硬停（不能 soft 降级让角色/道具/关系/locked_facts 静默丢失）。每个写完的 cluster 必有出场角色。
 
@@ -189,7 +189,7 @@ python core/scripts/apply_archive.py "<项目路径>" --cluster <key>
 
 把 archive.json 落到 人物卡 / 角色池 / 道具 / 关系 / 事件簇.clusters[].locked_facts + 事件簇.clusters[].throughline_progress（复用已有 id，绝不为同一角色造第二个 id）。
 
-> 🔴 这是 factual 回库的**唯一权威路径**：writer 已不自报 factual（gen_writer 已删 factual 自报 · save_state 已停读 writer factual）——角色/道具/关系/locked_facts/throughline 的权威源 = archivist 读正文，非 writer changes。
+> 🔴 这是 factual 回库的**唯一权威路径**：writer 已不自报 factual（gen_writer 已删 factual 自报 · save_state 已停读 writer factual）——角色/道具/关系/locked_facts/throughline/角色信念(belief_ledger) 的权威源 = archivist 读正文，非 writer changes。
 >
 > 🔴 **不降级硬停**：archive 缺出场角色 = archivist 失败 = 错误 → apply_archive exit 2 → plan 硬停（不再"空 archive → exit 1 当 no-op"静默降级）。幂等去重保留（re-apply 全已存在 → exit 0 成功）。
 
@@ -215,6 +215,8 @@ MODE: cluster
 产出：`_数据库/.wal/cluster_<key>_summary.json`
 
 cluster 级摘要（不是单章摘要 · 单章摘要由 splitter 切完后从 cluster 摘要派生）。
+
+> 🔴 **2026-06-29 场景级 Appraisal Beat（chain-of-emotion）**：summarizer 同时扩产 `appraisal_beats[]`（读整 cluster 正文 + scene_storyboard 按 Scherer CPM/OCC 评价链把关键情绪拐点反推成结构化 STATE：trigger → appraisal 6 维 → derived_emotion 自然语言 → behavior_externalization + vad_bin）。它**梳理非创作**（禁占位词典浅扫·禁情绪词标签），与 archivist 同属 Claude 读正文梳理段。回填由第 10 步 `--apply-appraisal-beats` 确定性落 `叙事节拍器.json.appraisal_beats`（全 advisory STATE·不进 HARD_GATE_CODES）。
 
 **plan-step 7**：
 
@@ -282,6 +284,10 @@ python core/scripts/adaptive_runner.py --label judge_reports_archive -- python c
 
 # 把整 cluster 富摘要预算写入 故事块摘要.json 账本（供 step 11 cross_cluster aggregator 复用）
 python core/scripts/save_state.py "<项目路径>" --build-cluster-summary <key>
+
+# 🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion）：把 step 7 summarizer 产的 appraisal_beats
+# 确定性回填 叙事节拍器.json.appraisal_beats（只 active cluster·幂等·全 advisory STATE·summarizer 未产则 no-op）
+python core/scripts/save_state.py "<项目路径>" --apply-appraisal-beats <key>
 ```
 
 **plan-step 10**：
@@ -396,8 +402,8 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - [ ] `plan_tracker.py end $PLAN_ID` 返回 exit 0
 - [ ] `_数据库/.wal/cluster_<key>_save_state.json` 存在
 - [ ] `_数据库/.wal/<key>_apply_cluster.json` 存在（step3 apply-cluster-changes 汇总 · 含 writer_truth_check）+ 本 cluster 各章 `第<N>章_parsed.json` 已落地（per-chapter）
-- [ ] `_数据库/.wal/cluster_<key>_archive.json` 存在（step 5 archivist 产出）+ apply_archive 已回库角色/道具/关系/locked_facts/throughline（step 6）
-- [ ] `_数据库/.wal/cluster_<key>_summary.json` 存在（summarizer 产出）
+- [ ] `_数据库/.wal/cluster_<key>_archive.json` 存在（step 5 archivist 产出）+ apply_archive 已回库角色/道具/关系/locked_facts/throughline/角色信念(belief_ledger)（step 6）
+- [ ] `_数据库/.wal/cluster_<key>_summary.json` 存在（summarizer 产出 · 含 appraisal_beats 段）+ apply-appraisal-beats 已回填 叙事节拍器.appraisal_beats（step 10·无 beat 则 no-op）
 - [ ] `_数据库/.judge_reports/cluster_<key>_foreshadower.json` 存在
 - [ ] Git commit `feat(cluster-NNN): N 章 (chX-chY)` 已落地
 - [ ] `_数据库/.wal/cluster_<next_key>_emergence.json` 存在（emergence 产出）

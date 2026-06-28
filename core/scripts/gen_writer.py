@@ -587,6 +587,31 @@ def _build_belief_section(manifest_path: Path, _preloaded: dict | None = None) -
     return "\n".join(lines)
 
 
+def _build_appraisal_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
+    """🔴 2026-06-29 场景级Appraisal Beat消费（心理 P0·消费 manifest.appraisal_directive 结构化情绪方向卡）。
+
+    升级 EBS appraisal-prose（原 system prompt 一句提示·见下 system 段「情绪经角色个性化评估」）为消费
+    build_manifest 注入的结构化情绪方向卡：『这一拍 focal_character 情绪往哪走(derived_emotion 方向) +
+    为何(appraisal 评价) + 如何外化(behavior_externalization·动作非情绪词)』+ 情绪余烬(上块强情绪不归零延续)。
+
+    🔴 北极星⑤纪律：情绪靠『事件→评价→动作/细节』落地(appraisal-as-prose)·**不写『他感到X』式情绪词标签**。
+    默认安全闸（向后兼容·零回归）：无 appraisal_directive / mode!=on / 无 directive → ""（不注入·旧书零行为变化）。
+    全 advisory·北极星⑤不硬锁。"""
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
+        return ""
+    ad = m.get('appraisal_directive')
+    if not isinstance(ad, dict) or ad.get('mode') != 'on':
+        return ""
+    directive = (ad.get('directive') or "").strip()
+    if not directive:
+        return ""
+    return (
+        "## 🎭 场景级 Appraisal 情绪方向卡（心理 P0 · appraisal-as-prose · advisory）\n\n"
+        + directive
+    )
+
+
 def _deep_dims_inject_mode() -> str:
     """deep_writing_dims 升格开关（env DEEP_DIMS_INJECT_MODE · 默认 shadow）。
 
@@ -1099,6 +1124,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     knowledge_gap_section = _build_knowledge_gap_section(manifest_path, _manifest_dict)
     # 🔴 2026-06-29 角色信息差(per-character belief)：各场景各角色认知边界（生成层物理 masking·见 H7）
     belief_section = _build_belief_section(manifest_path, _manifest_dict)
+    # 🔴 2026-06-29 场景级Appraisal Beat（心理 P0）：情绪余烬 + 本块情绪方向（appraisal-as-prose·见 system EBS 段）
+    appraisal_section = _build_appraisal_section(manifest_path, _manifest_dict)
     narr_seq_section = _build_narrative_seq_section(manifest_path, _manifest_dict)
     golden_fewshot_section = _build_golden_fewshot_section(manifest_path, _manifest_dict)
     deep_dims_section = _build_deep_dims_section(manifest_path, _manifest_dict)
@@ -1403,7 +1430,7 @@ cluster_brief / manifest 给你的 `foreshadowing_to_plant`（要埋的伏笔）
 
 - **🆕🗂️ 内心戏三态渲染分类法**：心理呈现分三态——①心理叙述(远观概述心境·用于过渡)②直接独白(关键决断"他想/心说")③自由间接引语FID(叙述贴人物意识流·无引导标记·用于日常)。**禁全程单态**(尤禁全程"他想式"标记独白)(arXiv:2605.07102 SAGE / Cohn)
 - **🆕 情绪颗粒度**：情绪优先用细分词(不甘/讪讪/悻悻/怅惘/悸动)或结构性呈现，少用"愤怒/悲伤/高兴/害怕"四大类粗标签直陈(SAGE Emotional Granularity)
-- **🆕 情绪经角色个性化评估(appraisal)**：内心戏写"**为什么这件事对TA重要**"(勾连往事/价值观)而非贴情绪标签；同一事件不同角色因评估差异情绪应分化(arXiv:2508.09954 EBS)
+- **🆕 情绪经角色个性化评估(appraisal)**：内心戏写"**为什么这件事对TA重要**"(勾连往事/价值观)而非贴情绪标签；同一事件不同角色因评估差异情绪应分化(arXiv:2508.09954 EBS)。**🔴 2026-06-29 若下方给了「## 🎭 场景级 Appraisal 情绪方向卡」段(manifest appraisal_directive)，按其逐条写：据 derived_emotion(情绪走向)+appraisal(为何感受·评价)+behavior_externalization(如何外化·动作/细节)落成 prose——情绪靠『事件→角色如何评价→外化成动作/细节』写，绝不写"他感到X/他很愤怒/心中一凛"式情绪词标签；余烬:上一块的强情绪不归零、本块开篇在其基础上延续/衰减**
 
 - **🆕🗂️ 角色签名防御机制(R3·appraisal下游)**：wound-trigger场景角色用一致可识别的人物化防御(否认/投射/合理化/转移/反向形成/麻木)而非泛化"愤怒/害怕"·防御底层露出primary emotion(恐惧/羞耻/受伤)·不写心理也传创伤(lisahallwilson)
 
@@ -1586,6 +1613,8 @@ cluster_brief 完整内容：
     knowledge_gap_block = (knowledge_gap_section + "\n\n") if knowledge_gap_section else ""
     # 🔴 2026-06-29 角色信息差段（无 ledger / 无 participants → 空 → 不注入 · 零回归）
     belief_block = (belief_section + "\n\n") if belief_section else ""
+    # 🔴 2026-06-29 场景级Appraisal Beat段（无 appraisal_beats → 空 → 不注入 · 零回归）
+    appraisal_block = (appraisal_section + "\n\n") if appraisal_section else ""
     narr_seq_block = (narr_seq_section + "\n\n") if narr_seq_section else ""
     golden_fewshot_block = (golden_fewshot_section + "\n\n") if golden_fewshot_section else ""
     deep_dims_block = (deep_dims_section + "\n\n") if deep_dims_section else ""
@@ -1624,7 +1653,7 @@ cluster_brief 完整内容：
 
 {seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{appraisal_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -1658,7 +1687,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{appraisal_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}

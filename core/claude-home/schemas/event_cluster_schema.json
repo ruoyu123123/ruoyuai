@@ -268,6 +268,10 @@
                 "scene_index": {"type": "integer", "minimum": 0},
                 "scene_id": {"type": "string"},
                 "summary": {"type": "string"},
+                "scene_goal": {
+                  "type": "string",
+                  "_doc": "🔴 2026-06-29 scene_goal动机(心理 P0·Stanislavski scene-objective·逐场景动机·补 arc-want 到 scene 的桥): 本场 POV 角色动作化临场目标(『此刻我想要什么』·动作化·如『让老周松口交出名单』『不被发现地溜出去』) · outline-planner 每 scene 产 · build_manifest._collect_scene_causal_skeleton 透传 writer(治场景漂移·每场有目标驱动·目标受阻即冲突) · 与 Swain scene_type/disaster/dilemma 正交并存(Swain 主体已由事件 P0 建·本字段不重复) · 全 optional 向后兼容(旧 scene 无则下游不约束)"
+                },
                 "characters": {"type": "array", "items": {"type": "string"}},
                 "location": {"type": "string"},
                 "paragraph_function": {
@@ -374,7 +378,7 @@
                 }
               }
             },
-            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe / causal_connector_scanner 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief) · 🔴 2026-06-29 scene_type/disaster/reaction/dilemma/decision/link_to_prev/result_type 给 But-Therefore因果连接器+Swain场景骨架(治流水账) · 全 optional 向后兼容"
+            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe / causal_connector_scanner 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief) · 🔴 2026-06-29 scene_type/disaster/reaction/dilemma/decision/link_to_prev/result_type 给 But-Therefore因果连接器+Swain场景骨架(治流水账) · 🔴 2026-06-29 scene_goal 给逐场景动机(Stanislavski scene-objective·心理 P0·治场景漂移) · 全 optional 向后兼容"
           },
           "writer_model_used": {
             "type": "string",

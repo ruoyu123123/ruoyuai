@@ -662,3 +662,32 @@ def test_build_prompt_excludes_untriggered_true_role():
             os.environ.pop("SNIPPET_SEED_MODE", None)
         else:
             os.environ["SNIPPET_SEED_MODE"] = _bak
+
+
+# ---------- 🔴 2026-06-29 场景级Appraisal Beat消费（心理 P0·_build_appraisal_section） ----------
+
+def test_build_appraisal_section_renders_directive():
+    """manifest.appraisal_directive mode=on → 拼出含 header + directive 的段（消费结构化方向卡）。"""
+    manifest = {
+        "appraisal_directive": {
+            "mode": "on", "gate_level": "advisory", "residue_count": 1, "planned_count": 1,
+            "directive": ("🟢 场景级 Appraisal 情绪方向卡（advisory）：\n"
+                          "- 【情绪余烬（上块延续·不归零）】陈默｜触发：老周递来红色档案盒\n"
+                          "    · 如何外化（写成动作/细节·非情绪词）：指节抵着盒盖却没掀开"),
+        }
+    }
+    sec = gw._build_appraisal_section(Path("nonexistent_manifest.json"), manifest)
+    assert sec, "mode=on 应拼出非空段"
+    assert "场景级 Appraisal 情绪方向卡" in sec
+    assert "appraisal-as-prose" in sec        # header 强调写法
+    assert "指节抵着盒盖却没掀开" in sec        # directive 透传
+
+
+def test_build_appraisal_section_default_safe_no_directive():
+    """无 appraisal_directive / mode!=on / 空 directive → ""（默认安全·零回归）。"""
+    assert gw._build_appraisal_section(Path("x.json"), {}) == ""
+    assert gw._build_appraisal_section(Path("x.json"), {"appraisal_directive": None}) == ""
+    assert gw._build_appraisal_section(
+        Path("x.json"), {"appraisal_directive": {"mode": "off"}}) == ""
+    assert gw._build_appraisal_section(
+        Path("x.json"), {"appraisal_directive": {"mode": "on", "directive": ""}}) == ""

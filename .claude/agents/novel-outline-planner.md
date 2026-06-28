@@ -48,6 +48,7 @@ tools: Read, Write
   "goal": "本场景视角人物想达成什么（目标）",
   "conflict": "什么阻碍这个目标（冲突 / 对抗力 / 障碍）",
   "turn": "本场景的转折 / 价值翻转（从 X 到 Y，或揭露 / 反转）",
+  "scene_goal": "本场 POV 角色此刻动作化临场目标（🔴 心理 P0·Stanislavski scene-objective·『此刻我想要什么』·动作化·如『让老周松口交出名单』『不被发现地溜出去』）",  // 🔴 2026-06-29 scene_goal动机·治场景漂移·每场有目标驱动·必产
   "scene_type": "proactive_scene",      // 🔴 But-Therefore+Swain·proactive(行动场:复用 goal/conflict+填 disaster)/reactive(反应场:填 reaction/dilemma/decision)·见下 ⑤·必产
   "link_to_prev": "therefore",          // 🔴 But-Therefore·与上一 scene 衔接·but(冲突转折)/therefore(因果后果)/and_then(平铺·流水账根因·要避免)·scene_idx>0 必产
   "result_type": "no_and",              // 🔴 try-fail·本场结果·yes_but(达成但有新麻烦)/no_and(失败且更糟)/yes_and(达成且顺势·慎用)·禁纯 yes 顺风局·必产
@@ -66,13 +67,14 @@ tools: Read, Write
 ```
 
 **走向骨架 vs prose（北极星⑤ 边界）**：
-- ✅ Claude 给：goal / conflict / turn（叙事结构三要素）+ 出场角色 + 情绪基调 + 要埋的明线伏笔 + 推进节拍 —— **理性结构骨架**。
+- ✅ Claude 给：goal / conflict / turn（叙事结构三要素）+ **scene_goal（🔴 心理 P0·本场 POV 角色动作化临场目标·Stanislavski scene-objective·治场景漂移）** + 出场角色 + 情绪基调 + 要埋的明线伏笔 + 推进节拍 —— **理性结构骨架**。
+  - 🔴 `scene_goal` 与 `goal` 正交：`goal` 是本场叙事目标（这场戏要完成什么）；`scene_goal` 是 POV 角色的**表演性临场动机**（『此刻 TA 想要什么』·动作化动词起手·驱动角色每个动作），让每场有目标驱动不漂移。Swain `scene_type`/`disaster`/`dilemma`（见下 ⑤）是事件骨架·**scene_goal 不重复它们**·只补「逐场景动机」这一维。
 - ❌ Claude 不给：具体句子 / 台词原文 / 文笔风格 / 字数 / 章数 —— **prose 全交 gemini 创作**。goal/conflict/turn 写「发生什么 + 往哪转」，**不写「怎么写」**。
 - gemini（`gen_writer`）拿到 beat 级 storyboard → 据每个 scene 的 goal/conflict/turn 充分展开成 prose，自然埋明线 surface_clue；暗线只在 trigger_cluster 由 manifest 注入。
 
 > 兼容：scene 仍可带 schema 既有的 R20 可选探针字段（`expectation` / `actual_outcome` / `gap_type` / `unit_type` / `value_axis` / `start_polarity` / `end_polarity`）—— 与 goal/conflict/turn 正交并存，全 optional、向后兼容旧 brief。
 
-> **下游消费一致性确认**：`build_manifest` 读 `surface_clue` + 剥 `hidden_payoff`（plant）/ 到 `trigger_cluster` 暴露 `hidden_payoff` + reveal_directive（callback）；`gen_writer` 把整个 `scene_storyboard`（含 goal/conflict/turn/emotional_tone/plant_foreshadowing_surface + 🔴 participants/focal_character/focalization_mode/knowledge_gap_mode + 🔴 scene_type/link_to_prev/result_type/disaster/reaction/dilemma/decision）原样注入 writer prompt 作走向骨架；`build_manifest` 据 `participants`/`focal_character` 做 per-scene 角色认知投射（见下 ④）；`build_manifest` + `causal_connector_scanner`（B agent）读 `scene_type`/`link_to_prev`/`result_type` 做 But-Therefore 因果连接器 + Swain 场景骨架（见下 ⑤）；`cluster_choice_apply._normalize_storyboard_ch` 透传所有 beat 字段（只补 scene_idx/ch）。三方均向后兼容旧 brief（旧纯字符串伏笔 / 无 beat 字段 / 无 belief 字段 / 无 causal 字段照常工作）。
+> **下游消费一致性确认**：`build_manifest` 读 `surface_clue` + 剥 `hidden_payoff`（plant）/ 到 `trigger_cluster` 暴露 `hidden_payoff` + reveal_directive（callback）；`gen_writer` 把整个 `scene_storyboard`（含 goal/conflict/turn/emotional_tone/plant_foreshadowing_surface + 🔴 participants/focal_character/focalization_mode/knowledge_gap_mode + 🔴 scene_type/link_to_prev/result_type/disaster/reaction/dilemma/decision + 🔴 scene_goal）原样注入 writer prompt 作走向骨架；`build_manifest._collect_scene_causal_skeleton` 另把 `scene_goal` 结构化透传 writer（治场景漂移·每场有目标驱动）；`build_manifest` 据 `participants`/`focal_character` 做 per-scene 角色认知投射（见下 ④）；`build_manifest` + `causal_connector_scanner`（B agent）读 `scene_type`/`link_to_prev`/`result_type` 做 But-Therefore 因果连接器 + Swain 场景骨架（见下 ⑤）；`cluster_choice_apply._normalize_storyboard_ch` 透传所有 beat 字段（只补 scene_idx/ch）。三方均向后兼容旧 brief（旧纯字符串伏笔 / 无 beat 字段 / 无 belief 字段 / 无 causal 字段照常工作）。
 
 ## ③ 幕后实体明暗线隔离（隐藏身份角色 / 幕后关系 / 世界真相 / 幕后黑手 faction / 暗线时钟）
 
