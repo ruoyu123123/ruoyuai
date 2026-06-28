@@ -1158,6 +1158,62 @@ def _persist_cluster_locked_facts(root, cluster_key):
         logger.info(f"[locked_facts] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
 
 
+def _apply_foreshadower_payoffs(root, cluster_key):
+    """🔴 2026-06-28：foreshadower JudgeReport 的 payoff 检测桥接到伏笔表 resolution。
+
+    根因：apply 只处理 writer changes.foreshadowing_paid（模型常漏报·cluster_006 实测 paid=0），
+    foreshadower 从正文检测到的 payoff（FS_012 paid_terminal）流不进伏笔表 → 伏笔恒不 resolved、
+    foreshadow_rhythm 失衡。foreshadower 是正文 payoff 的权威检测器（比 writer 自报可靠）。
+    桥接：读 cluster_<key>_foreshadower.json 的 payoff_scores —— verdict=paid_terminal+score>0 →
+    resolved=True；paid_progressive → 记 payoff_progress（不 resolved）。幂等：已 resolved 不后移。
+    报告缺失（foreshadower 未跑）→ 静默跳过（apply 前调用是常态·foreshadower 跑完需再调本桥）。
+    """
+    try:
+        db = root / "_数据库"
+        import cluster_lookup as _cl
+        cid = _cl.normalize_cluster_id(cluster_key) or str(cluster_key)
+        rpt = db / ".judge_reports" / f"{cid}_foreshadower.json"
+        if not rpt.is_file():
+            return
+        scores = (load_json(rpt, {}).get("specific_findings") or {}).get("payoff_scores", []) or []
+        if not scores:
+            return
+        fs_path = db / "伏笔表.json"
+        fs = load_json(fs_path, {})
+        by_id = {p.get("id"): p for p in fs.get("promises", []) if isinstance(p, dict)}
+        chapters = _get_cluster_chapter_range(root, cluster_key) or []
+        last_ch = max(chapters) if chapters else None
+        changed = 0
+        for it in scores:
+            if not isinstance(it, dict):
+                continue
+            p = by_id.get(it.get("fs_id"))
+            try:
+                score = int(it.get("score", 0))
+            except (TypeError, ValueError):
+                score = 0
+            if not p or score <= 0:
+                continue
+            verdict = str(it.get("verdict", ""))
+            if it.get("terminal") is True or verdict == "paid_terminal":
+                if not p.get("resolved"):
+                    p["resolved"] = True
+                    p["resolved_at_ch"] = last_ch
+                    p["_resolved_by"] = "foreshadower"
+                    changed += 1
+            elif "progressive" in verdict or it.get("terminal") is False:
+                prog = p.setdefault("payoff_progress", [])
+                if cid not in prog:
+                    prog.append(cid)
+                    changed += 1
+        if changed:
+            save_json(fs_path, fs)
+            logger.info(f"[foreshadower-payoff] {cid} 桥接 {changed} 条 payoff → 伏笔表"
+                        "（terminal→resolved / progressive→progress）")
+    except Exception as e:
+        logger.info(f"[foreshadower-payoff] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+
+
 def cmd_apply_cluster_changes(root, cluster_key):
     """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes。
 
@@ -1201,6 +1257,8 @@ def cmd_apply_cluster_changes(root, cluster_key):
         _mark_cluster_me_completed(root, cluster_key)
         # 🔴 2026-06-28：locked_facts 落地 事件簇.clusters[]（后续 cluster 查矛盾的权威源）
         _persist_cluster_locked_facts(root, cluster_key)
+        # 🔴 2026-06-28：foreshadower payoff 桥接伏笔表 resolution（foreshadower 跑完后 re-apply 生效）
+        _apply_foreshadower_payoffs(root, cluster_key)
 
         # writer 撒谎检测（apply 落地后跑 · 失败不中断 · 结果并入 summary 写盘）
         # 🔴 2026-06-27 C11：cluster 级一次检测（opening 验首章 / ending 验末章 / anchors 验全拼接）
