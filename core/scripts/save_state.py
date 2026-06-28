@@ -1158,6 +1158,52 @@ def _persist_cluster_locked_facts(root, cluster_key):
         logger.info(f"[locked_facts] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
 
 
+def _register_brief_foreshadowings(root, cluster_key):
+    """🔴 2026-06-28：把 事件簇.clusters[].foreshadowing_to_plant（outline-planner 规划·带 fs_id）
+    注册进伏笔表.promises。治：writer 常漏报 brief 计划的伏笔（FS_014-017 实测不在伏笔表）→ 孤儿 payoff
+    （foreshadower 判 terminal 却无对应 promise 可标 resolved）。brief 是 fs_id 权威来源（同 locked_facts
+    哲学）。dedup by fs_id·不覆盖已存在（含已 resolved）。排在 foreshadower 桥接前，使新注册可被立即 resolve。
+    """
+    try:
+        db = root / "_数据库"
+        ec_path = db / "事件簇.json"
+        if not ec_path.exists():
+            return
+        import cluster_lookup as _cl
+        cid = _cl.normalize_cluster_id(cluster_key) or str(cluster_key)
+        ec = load_json(ec_path, {})
+        cluster = next((c for c in ec.get("clusters", [])
+                        if _cl.normalize_cluster_id(c.get("cluster_id")) == cid
+                        or str(c.get("cluster_id")) == cid), None)
+        if not cluster:
+            return
+        ftp = cluster.get("foreshadowing_to_plant", []) or []
+        fs_path = db / "伏笔表.json"
+        fs = load_json(fs_path, {})
+        promises = fs.setdefault("promises", [])
+        existing = {p.get("id") for p in promises if isinstance(p, dict)}
+        added = 0
+        for f in ftp:
+            if not isinstance(f, dict):
+                continue
+            fid = f.get("id") or f.get("fs_id")
+            if not fid or fid in existing:
+                continue
+            promises.append({
+                "id": fid, "setup_cluster": cid, "tier": f.get("tier", 3),
+                "description": f.get("desc") or f.get("description") or "",
+                "due_by_cluster": None, "resolved": False,
+                "due_by_pending_resolution": True, "_source": "brief",
+            })
+            existing.add(fid)
+            added += 1
+        if added:
+            save_json(fs_path, fs)
+            logger.info(f"[brief-foreshadow] {cid} 注册 {added} 条 brief 规划伏笔 → 伏笔表（writer 漏报兜底）")
+    except Exception as e:
+        logger.info(f"[brief-foreshadow] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+
+
 def _apply_foreshadower_payoffs(root, cluster_key):
     """🔴 2026-06-28：foreshadower JudgeReport 的 payoff 检测桥接到伏笔表 resolution。
 
@@ -1257,6 +1303,8 @@ def cmd_apply_cluster_changes(root, cluster_key):
         _mark_cluster_me_completed(root, cluster_key)
         # 🔴 2026-06-28：locked_facts 落地 事件簇.clusters[]（后续 cluster 查矛盾的权威源）
         _persist_cluster_locked_facts(root, cluster_key)
+        # 🔴 2026-06-28：brief 规划伏笔注册伏笔表（writer 漏报兜底·排桥接前使可立即 resolve）
+        _register_brief_foreshadowings(root, cluster_key)
         # 🔴 2026-06-28：foreshadower payoff 桥接伏笔表 resolution（foreshadower 跑完后 re-apply 生效）
         _apply_foreshadower_payoffs(root, cluster_key)
 
