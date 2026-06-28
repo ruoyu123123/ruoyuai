@@ -150,7 +150,7 @@ def _patch_call_gen_model(g, replies, fail_indices=()):
     seq = list(replies)
     orig = g.call_gen_model
 
-    def fake(loader, system, user, min_cjk=None):
+    def fake(loader, system, user, min_cjk=None, creative=False, **kwargs):
         i = log["n"]
         log["n"] += 1
         log["temps"].append(loader.get_callable_profiles()[0].temperature)
