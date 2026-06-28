@@ -50,6 +50,41 @@ def _write_changes(project: Path, ch: int, characters: list) -> Path:
     return p
 
 
+def _write_changes_list_form(project: Path, ch: int, characters: list) -> Path:
+    """🔴 2026-06-28：new_entities 的 **list 形式**（gen_writer CHANGES prompt 让 writer 产
+    factual.new_entities=[{name,role}]）。原 consumer 只读 dict.get('characters') → list 撞
+    AttributeError 崩（cluster_006 实测 7 章全崩）。本 helper 造 list 形式验 consumer 兼容。"""
+    cdir = project / "章节" / f"第{ch:03d}章"
+    cdir.mkdir(parents=True, exist_ok=True)
+    p = cdir / f"第{ch:03d}章_changes.json"
+    p.write_text(json.dumps({"factual": {"new_entities": characters}}, ensure_ascii=False),
+                 encoding="utf-8")
+    return p
+
+
+def test_new_entities_list_form_no_crash_and_spawns():
+    """🔴 2026-06-28：new_entities=list 形式不崩 + 正常 spawn（consumer-tolerant 双形回归锁）。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d))
+        _write_changes_list_form(proj, 21, [{"name": "塞拉斯", "role": "欺诈者途径非凡者"}])
+        r = _run_main(proj, 21)
+        assert r.returncode == 0, f"list 形式应不崩, stderr={r.stderr[-400:]}"
+        pool = json.loads((proj / "_数据库" / "角色池.json").read_text(encoding="utf-8"))
+        names = {c.get("id") or c.get("name")
+                 for grp in ("emerged_characters", "extras", "core_characters")
+                 for c in pool.get(grp, [])}
+        assert "塞拉斯" in names, f"list 形式新角色应入池, pool={names}"
+
+
+def test_new_entities_dict_form_still_works():
+    """旧 dict 形式 {'characters':[...]} 仍兼容（不破存量契约）。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d))
+        _write_changes(proj, 22, [{"name": "玛莎修女", "role": "孤儿院修女"}])
+        r = _run_main(proj, 22)
+        assert r.returncode == 0, f"dict 形式应仍工作, stderr={r.stderr[-400:]}"
+
+
 def _run_main(project: Path, ch: int, dry_run: bool = False):
     """以子进程跑 main()（main 调 sys.exit，子进程隔离）。返回 CompletedProcess。
 

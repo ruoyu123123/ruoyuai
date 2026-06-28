@@ -61,7 +61,17 @@ def main():
 
     changes_path = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
     changes = load_json(changes_path, {})
-    new_chars = changes.get("factual", {}).get("new_entities", {}).get("characters", [])
+    # 🔴 2026-06-28：new_entities 双形兼容（consumer-tolerant）。gen_writer CHANGES prompt 让 writer 产
+    # factual.new_entities=[{name,role}]（list 形式）·旧契约是 {"characters":[...]}（dict 形式）。
+    # 原只读 dict.get("characters") → list 形式撞 AttributeError 崩（cluster_006 实测 7 章全崩）。
+    _ne = changes.get("factual", {}).get("new_entities", [])
+    if isinstance(_ne, dict):
+        new_chars = _ne.get("characters", [])
+    elif isinstance(_ne, list):
+        new_chars = _ne
+    else:
+        new_chars = []
+    new_chars = [c for c in new_chars if isinstance(c, dict)]  # 过滤模型可能混入的字符串项
     if not new_chars:
         print(f"[OK] ch{ch} 无新角色 spawn")
         sys.exit(0)
