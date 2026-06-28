@@ -218,7 +218,7 @@
     {
       "n": 13,
       "name": "cluster-emergence+report-and-card",
-      "description": "改 E: 跑 cluster_emergence_engine.py emerge --after-cluster {key} → 生成下一 cluster 2-3 个 candidate brief → spawn novel-outline-planner MODE=cluster_emergence 详化 candidates → 输出报告 + 等用户选 1 个 candidate",
+      "description": "改 E: 跑 cluster_emergence_engine.py emerge --after-cluster {key} → 生成下一 cluster 2-3 个 candidate brief → spawn novel-outline-planner MODE=cluster_emergence 详化 candidates → 输出报告 + 等用户选 1 个 candidate（用户选后 after_pause cluster_choice_apply 落库·🔴 2026-06-29 同步据 scene_storyboard 派生下一 cluster 的 起承转合 cluster_beats 回写 beat_map.json·beat_map_update.py·advisory·守 C03 fluid 只产被选中的那个 cluster）",
       "required": true,
       "must_spawn_agent": "novel-outline-planner",
       "_doc_pipeline": "① 引擎 emerge 产 candidates（涌现内容运行时算·data_flow 只回填路径不固化内容·北极星②③）② 主代理 spawn outline-planner（failure_policy=block）详化 → brief_candidates ③ pause_for_user 弹卡（auto_pilot 显式开关才取 _emergence_score 第一候选·默认必等用户·北极星③软牵引）④ after_pause_scripts 跑 cluster_choice_apply 把选中 brief 机械写回 事件簇.json（status=in_progress·白名单成员·根治 active 不在白名单的 brief 注入静默 off 坑）。",

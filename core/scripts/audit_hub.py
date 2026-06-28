@@ -2388,13 +2388,17 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                      out, "cross_character_kth_order_belief_scanner",
                      "CHARACTER_KTH_ORDER_BELIEF_DRIFT", "人物")),
                 # [2026-06-21 R20 W9 Batch-Z·P0·NKW 时态可分 entity profile]
-                # stable_identity SLOW_UPDATE 冻 distill-character / dynamic_state
-                # FAST_UPDATE 每 save-state 刷·扫稿抽 <char>(的)?<attr>(是|为)<value>
+                # stable_identity SLOW_UPDATE 慢变身份维度 / dynamic_state FAST_UPDATE
+                # 快变状态维度·扫稿抽 <char>(的)?<attr>(是|为)<value>
                 # 断言·attr∈stable & 与 ledger value 不符 → CHARACTER_STATE_DRIFT_DETECTED·
                 # attr∈dynamic_state 白名单 = 合法剧情进展不报·提供
                 # filter_dynamic_state_changes() 给 R12 contradiction 二筛剔除·
                 # 与 R12 contradiction / locked_fact / character_belief_ledger 严格正交·
-                # advisory·默认 shadow·绝不 hard_gate·缺 ledger 用 DEFAULT 通用白名单
+                # advisory·默认 shadow·绝不 hard_gate·
+                # 🔴 2026-06-29 清假producer口径:per-project character_state_ledger.json 当前
+                # 无 producer(曾误称 distill-character/save-state step 12 填·实无此步)·恒走
+                # DEFAULT 通用白名单兜底(合法基线非降级)·此兜底下 stable_drift 恒 0·
+                # archivist character_state baseline 为 TODO
                 ("character_state_drift",
                  [child_python(), str(_SCRIPT_DIR / "character_state_drift_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],

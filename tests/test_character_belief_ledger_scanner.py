@@ -56,8 +56,12 @@ def _mk_project(characters=None, locked_facts=None):
             json.dumps({"characters": characters}, ensure_ascii=False),
             encoding="utf-8")
     if locked_facts is not None:
-        (db / "locked_fact.json").write_text(
-            json.dumps({"facts": locked_facts}, ensure_ascii=False),
+        # 🔴 2026-06-29 重接线：真 locked facts 在 事件簇.json.clusters[].locked_facts
+        # (producer: apply_archive.apply_locked_facts)·非零 producer 的幻影 locked_fact.json
+        (db / "事件簇.json").write_text(
+            json.dumps({"clusters": [{"cluster_id": "cluster_001",
+                                      "locked_facts": locked_facts}]},
+                       ensure_ascii=False),
             encoding="utf-8")
     return proj
 
@@ -237,11 +241,11 @@ def test_cjk_count_basic():
     assert mod._cjk_count("你好abc世界") == 4
 
 
-# ───── 14 locked_fact.json items[].key 读取 ──
+# ───── 14 事件簇.json.clusters[].locked_facts[].fact 读取（重接线后真数据源）──
 def test_load_fact_refs_from_locked_fact():
     proj = _mk_project(
         characters=[{"name": "张三"}],
-        locked_facts=[{"key": "藏宝图", "character_id": "李四"}])
+        locked_facts=[{"fact": "藏宝图", "subject": "李四"}])
     refs = mod._load_fact_refs(proj)
     assert "藏宝图" in refs
 

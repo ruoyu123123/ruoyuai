@@ -30,16 +30,29 @@ def _write(text):
     return p
 
 
-def _mk_project(reader_ledger=None, locked_facts=None):
+def _mk_project(reader_known=None, locked_facts=None, ledger=None):
+    """造真数据源（🔴 2026-06-29 重接线）：
+       - 读者信念 → character_belief_ledger.json（known_facts[].reader_knows==true）
+       - fact_ref 候选 → 事件簇.json.clusters[].locked_facts[].fact
+       reader_known=[phrase...] 便捷参数：构造一个全 reader_knows=true 的 ledger。"""
     proj = Path(tempfile.mkdtemp())
     db = proj / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
-    if reader_ledger is not None:
-        (db / "读者信念账本.json").write_text(
-            json.dumps(reader_ledger, ensure_ascii=False), encoding="utf-8")
+    if ledger is not None:
+        (db / "character_belief_ledger.json").write_text(
+            json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
+    elif reader_known is not None:
+        led = {"schema_version": 1, "facts": {}, "characters": {"C1": {
+            "known_facts": [{"fact_id": f"F{i}", "content": ph, "reader_knows": True}
+                            for i, ph in enumerate(reader_known)],
+            "unaware_of": []}}}
+        (db / "character_belief_ledger.json").write_text(
+            json.dumps(led, ensure_ascii=False), encoding="utf-8")
     if locked_facts is not None:
-        (db / "locked_fact.json").write_text(
-            json.dumps({"facts": locked_facts}, ensure_ascii=False), encoding="utf-8")
+        (db / "事件簇.json").write_text(
+            json.dumps({"clusters": [{"cluster_id": "cluster_001",
+                                      "locked_facts": locked_facts}]},
+                       ensure_ascii=False), encoding="utf-8")
     return proj
 
 
@@ -85,11 +98,11 @@ def test_active_violation_fail_minor_reader_empty():
 
 
 def test_active_reader_known_no_violation():
-    """reader_known 含秘密 → 同样信号词不报警"""
+    """reader_known 含秘密（ledger reader_knows==true）→ 同样信号词不报警"""
     bak = os.environ.get(_ENV)
     try:
         _set_mode("active")
-        proj = _mk_project(reader_ledger={"reader_known": ["秘密"]})
+        proj = _mk_project(reader_known=["秘密"])
         out = mod.scan(_write(_VIOLATING), proj)
         # fact_ref 已在 reader_known → 不算 premature
         assert out["violation_count"] == 0
@@ -123,13 +136,15 @@ def test_clean_draft_no_violation():
 
 
 def test_locked_fact_priority_over_placeholder():
-    """locked_fact 提供新 fact_ref·占位 fallback 不用"""
+    """事件簇.json.clusters[].locked_facts 提供新 fact_ref·占位 fallback 不用（重接线后真数据源）"""
     bak = os.environ.get(_ENV)
     try:
         _set_mode("active")
-        proj = _mk_project(locked_facts=[{"key": "藏宝图"}])
+        proj = _mk_project(locked_facts=[{"fact": "藏宝图"}])
         refs = mod._load_fact_refs(proj)
         assert "藏宝图" in refs
+        # 占位词典（秘密）不再混入（真数据源优先）
+        assert "秘密" not in refs
     finally:
         _set_mode(bak)
 
@@ -148,8 +163,38 @@ def test_load_reader_known_invalid_json():
     proj = Path(tempfile.mkdtemp())
     db = proj / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
-    (db / "读者信念账本.json").write_text("not json", encoding="utf-8")
+    (db / "character_belief_ledger.json").write_text("not json", encoding="utf-8")
     assert mod._load_reader_known(proj) == set()
+
+
+def test_load_reader_known_from_ledger_reader_knows():
+    """ledger 中 reader_knows==true 的 content 进 reader_known·false 的不进。"""
+    proj = _mk_project(ledger={"schema_version": 1, "facts": {}, "characters": {
+        "C1": {"known_facts": [
+            {"fact_id": "F1", "content": "已揭真相", "reader_knows": True},
+            {"fact_id": "F2", "content": "未揭真相", "reader_knows": False}],
+            "unaware_of": []}}})
+    rk = mod._load_reader_known(proj)
+    assert "已揭真相" in rk
+    assert "未揭真相" not in rk
+
+
+def test_active_premature_real_ledger_fact():
+    """真 ledger fact（reader_knows=false）被当公知使用 → premature 激活（不再 skip）。"""
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("active")
+        proj = _mk_project(ledger={"schema_version": 1,
+                                   "facts": {"F1": {"content": "祭台真相"}},
+                                   "characters": {"C1": {"known_facts": [
+                                       {"fact_id": "F1", "content": "祭台真相",
+                                        "reader_knows": False}], "unaware_of": []}}})
+        out = mod.scan(_write("众所周知祭台真相。" * 80), proj)
+        assert out["violation_count"] >= 1
+        assert out["verdict"] == "FAIL_MINOR"
+        assert out["violations"][0]["code"] == "PREMATURE_READER_REVEAL"
+    finally:
+        _set_mode(bak)
 
 
 def test_read_failure():

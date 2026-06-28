@@ -470,6 +470,8 @@ ARC_TEMPLATE_DIR: <workspace/styles/<风格名>/arc_templates/>  # 启用时必�
 
 > **🔴 2026-06-29 对白即行动字段补充（见 ⑥）**：**对话密集**的 scene 加 `dialogue_objectives` 数组（每个说话角色一项·`character`/`wants`/`tactic`/`obstacle`/`dialogue_act`/`what_unsaid`）。**非每场必填**（纯叙述/独白场可空·过度结构化是 pitfall）。Claude 只标意图（what），措辞（how·台词原文）永远交 gemini。`what_unsaid` 是隐藏 Thought 通道·**绝不写进正文**·涉未到期 hidden 伏笔走 reveal 隔离绝不剧透。与 scene_idx / beat / belief / causal 字段正交，`_normalize_storyboard_ch` 全部透传保留。旧 brief 缺此字段时下游 fallback（不注入）向后兼容。consumer = `build_manifest._collect_dialogue_objectives`（B agent·advisory）。
 
+> **🔴 2026-06-29 beat_map.cluster_beats 自动派生（无需手写）**：本 cluster 的「起承转合（Kishōtenketsu）结构功能 beat 序列」由下游 `cluster_choice_apply` 落库时调 `beat_map_update.py` **据你产出的 `scene_storyboard` 确定性派生**（首场=起·尾场=结·`climax_marker`/`climax_hint_scene_index` 标 climax·其余按位置承/转），回写 `beat_map.cluster_beats[cluster_id]` 供 `plot_structure_scanner`（CLUSTER_MODE）做 cluster 内 beat 兑现检测（全 advisory）。**你不必另外手写 beat_map**——只要把 `scene_storyboard` 排好（开场/推进/高潮/收束 + `climax_marker`），beat 序列即自然涌现。**C03 fluid**：只为当前详化的 active cluster 派生·绝不预设 cluster_002+（同 storyboard fluid 铁律）。
+
 ### Narrative Mode 默认规则（黄金三章倒叙）
 
 用户要求「黄金三章需要调整叙事顺序，故事块正常生成即可，应该以强冲突部分放在最前面，按倒叙方式来吸引读者」 → 首个 cluster **默认** 走 in_medias_res：

@@ -6,14 +6,22 @@
 R12 的 contradiction scanner 把「稳定身份变化（=真矛盾）」和「动态状态变化
 （=正常剧情·从家走到酒馆/心情从喜到悲/HP 满到濒死）」混在一起·导致大量假阳。
 NKW(Narrative Knowledge World) 框架主张时态分离：
-  - stable_identity   SLOW_UPDATE 冻 distill-character（姓名/性别/籍贯/瞳色/血型 …）
-  - dynamic_state    FAST_UPDATE 每 save-state 刷（位置/心情/伤势/同伴/装备 …）
+  - stable_identity   SLOW_UPDATE 慢变身份维度（姓名/性别/籍贯/瞳色/血型 …）
+  - dynamic_state    FAST_UPDATE 快变状态维度（位置/心情/伤势/同伴/装备 …）
 变化属性 ∈ dynamic_state 白名单 = 合法剧情进展·不报；
 变化属性 ∈ stable_identity = 角色档真矛盾·报 CHARACTER_STATE_DRIFT_DETECTED。
 
-【数据锚】
-  _数据库/character_state_ledger.json（占位骨架·scaffold 由 distill-character /
-    cluster-save-state step 12 填充·缺则用通用 DEFAULT_LEDGER）
+【数据锚 · 🔴 2026-06-29 清假producer口径(防误导)】
+  _数据库/character_state_ledger.json（per-project ledger 当前【无专用 producer】·
+    全仓零 producer·distill-character / cluster-save-state 均【无填充此文件的步骤】
+    (曾误称「scaffold 由 distill-character / cluster-save-state step 12 填充」=假口径·
+    该 step 不存在·已清)·故实际恒走 DEFAULT_LEDGER 通用兜底=白名单角色状态词典·
+    这是【合法通用基线·非降级】。
+    ⚠ 后果：stable_identity drift 检测需 per-project ground-truth ledger 才能点火·
+    DEFAULT 兜底下 char_ledger 为空 → stable_drift 恒 0（即 CHARACTER_STATE_DRIFT_DETECTED
+    在无 per-project ledger 时永不触发）；但属性 stable/dynamic 分类、dynamic_state_updates、
+    filter_dynamic_state_changes 二筛仅靠通用白名单仍有效。
+    若需 per-project 精度·可后续由 archivist 产 character_state baseline 落此文件·TODO·暂缺）
   {
     "schema_version": 1,
     "_doc": "时态可分 entity profile·stable_identity SLOW_UPDATE / dynamic_state FAST_UPDATE",
@@ -62,7 +70,8 @@ from pathlib import Path
 ISSUE_CODE = "CHARACTER_STATE_DRIFT_DETECTED"
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
-# 通用兜底（占位 _placeholder=true·真清单需 distill-character 填）
+# 通用兜底（_placeholder=true·合法通用基线·非降级；per-project 真清单当前无 producer·
+# 🔴 2026-06-29 清假producer口径(防误导)·详见模块 docstring 数据锚·archivist baseline 为 TODO）
 DEFAULT_LEDGER = {
     "_placeholder": True,
     "stable_identity_attrs": [

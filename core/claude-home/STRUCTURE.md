@@ -310,7 +310,7 @@ core/claude-home/
 | 29 | 角色烙印 | **Semantic**（voice DNA 5 层） |
 | 30 | knowledge_graph | **Semantic**（图结构 · 空骨架待填） |
 | 31 | subplot_threads | **Procedural**（线索追踪） |
-| 32 | beat_map | **Procedural**（scanner 专用不注入 writer） |
+| 32 | beat_map | **Procedural**（scanner 专用不注入 writer · `cluster_beats[cluster_id]` 由 `beat_map_update.py` 据 scene_storyboard 确定性派生·`cluster_choice_apply` 落库时接通·plot_structure_scanner CLUSTER_MODE 消费·advisory） |
 | 33 | 四线脉络 | **Procedural**（Dramatica 四贯穿线） |
 | 34 | webnovel_bench_mapping | **Procedural**（评估维度） |
 

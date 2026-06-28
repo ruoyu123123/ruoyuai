@@ -839,7 +839,7 @@
     "character_belief_ledger_scanner": {
       "layer": "cluster",
       "script": "character_belief_ledger_scanner.py",
-      "doc": "[2026-06-21 R18 W7 Batch-S·P0·arxiv 2605.26322 OmniToM 2026-05-25 + arxiv 2506.13641 EvolvTrip 2025-06 + arxiv 2601.12410 LLM-vs-Chimps 2026-01] 角色信念账本(OmniToM 7 维)·按 storyboard 顺序维护 belief_state[character]·扫 character_name + KNOWLEDGE_VERB(知道/听说/明白/记起/得知) + fact_ref(_数据库/locked_fact.json items[].key 或占位 fact 词典)窗口·fact_ref 不在 belief_state[char] → CHARACTER_KNOWLEDGE_LEAK·与 focalizer_perception_bounds(narrator 自体不可见/他人内心/空间不在场)·dramatic_irony(TELL 词 saying_doing/style_fact)·locked_fact_cross_scene(恒定事实数值)三者显式去重·env CHARACTER_BELIEF_LEDGER_MODE 默认 shadow·🔬占位简化版仅覆盖 7 维中的 ①+④·待 locked_fact.json 完整 + 金标准校准·CHARACTER_KNOWLEDGE_LEAK 绝不 hard_gate",
+      "doc": "[2026-06-21 R18 W7 Batch-S·P0·arxiv 2605.26322 OmniToM 2026-05-25 + arxiv 2506.13641 EvolvTrip 2025-06 + arxiv 2601.12410 LLM-vs-Chimps 2026-01] 角色信念账本(OmniToM 7 维)·按 storyboard 顺序维护 belief_state[character]·扫 character_name + KNOWLEDGE_VERB(知道/听说/明白/记起/得知) + fact_ref(🔴2026-06-29重接线:_数据库/事件簇.json.clusters[].locked_facts[].fact producer apply_locked_facts·缺则占位 fact 词典)窗口·fact_ref 不在 belief_state[char] → CHARACTER_KNOWLEDGE_LEAK·与 focalizer_perception_bounds(narrator 自体不可见/他人内心/空间不在场)·dramatic_irony(TELL 词 saying_doing/style_fact)·locked_fact_cross_scene(恒定事实数值)三者显式去重·env CHARACTER_BELIEF_LEDGER_MODE 默认 shadow·🔬占位简化版仅覆盖 7 维中的 ①+④·优先读持久化 character_belief_ledger.json(reader_knows/can_speak/unaware_of)·待金标准校准·CHARACTER_KNOWLEDGE_LEAK 绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["CHARACTER_KNOWLEDGE_LEAK"]
     },
@@ -1077,7 +1077,7 @@
     "character_state_drift_scanner": {
       "layer": "cluster",
       "script": "character_state_drift_scanner.py",
-      "doc": "[2026-06-21 R20 W9 Batch-Z·P0·R20 STRONG NKW 时态可分 entity profile] stable_identity SLOW_UPDATE 冻 distill-character(瞳色/性别/籍贯/血型 …) / dynamic_state FAST_UPDATE 每 save-state 刷(位置/心情/伤势/同伴 …)·扫稿正则抽 <char>(的)?<attr>(是|为|：|:)?<value> 断言·attr∈stable_identity 且 ledger value≠草稿 value → stable_identity drift CHARACTER_STATE_DRIFT_DETECTED·attr∈dynamic_state 任何变化合法不报(二筛白名单)·提供 filter_dynamic_state_changes() 给 R12 contradiction scanner 二筛剔除·dynamic_state_updates[] 反哺 cluster-save-state ledger FAST_UPDATE 段·缺 _数据库/character_state_ledger.json 用 DEFAULT_LEDGER 通用白名单占位(_placeholder=true·真清单需 distill-character 填)·与 R12 contradiction / locked_fact / character_belief_ledger 严格正交·env CHARACTER_STATE_DRIFT_MODE 默认 shadow·绝不 hard_gate",
+      "doc": "[2026-06-21 R20 W9 Batch-Z·P0·R20 STRONG NKW 时态可分 entity profile] stable_identity SLOW_UPDATE 慢变身份维度(瞳色/性别/籍贯/血型 …) / dynamic_state FAST_UPDATE 快变状态维度(位置/心情/伤势/同伴 …)·扫稿正则抽 <char>(的)?<attr>(是|为|：|:)?<value> 断言·attr∈stable_identity 且 ledger value≠草稿 value → stable_identity drift CHARACTER_STATE_DRIFT_DETECTED·attr∈dynamic_state 任何变化合法不报(二筛白名单)·提供 filter_dynamic_state_changes() 给 R12 contradiction scanner 二筛剔除·dynamic_state_updates[] 反哺 cluster-save-state ledger FAST_UPDATE 段·缺 _数据库/character_state_ledger.json 用 DEFAULT_LEDGER 通用白名单兜底(_placeholder=true·合法通用基线非降级·per-project 真清单当前无 producer·🔴2026-06-29清假口径:曾误称 distill-character 填实则无此步·DEFAULT 兜底下 stable_drift 恒 0·archivist character_state baseline 为 TODO)·与 R12 contradiction / locked_fact / character_belief_ledger 严格正交·env CHARACTER_STATE_DRIFT_MODE 默认 shadow·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["CHARACTER_STATE_DRIFT_DETECTED"]
     },

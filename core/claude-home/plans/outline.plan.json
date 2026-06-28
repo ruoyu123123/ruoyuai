@@ -176,7 +176,7 @@
     {
       "n": 6.5,
       "name": "apply-cluster_001-brief",
-      "description": "cluster_choice_apply 把 outline-planner 的 brief 写回 事件簇.json·status=in_progress（根治 build_manifest 注入-gate 的 active 白名单坑·feedback_build_manifest_cluster_brief_injection_gate）。",
+      "description": "cluster_choice_apply 把 outline-planner 的 brief 写回 事件簇.json·status=in_progress（根治 build_manifest 注入-gate 的 active 白名单坑·feedback_build_manifest_cluster_brief_injection_gate）。🔴 2026-06-29 同步据 brief.scene_storyboard 确定性派生 起承转合 cluster_beats 回写 beat_map.json（beat_map_update.py·plot_structure_scanner CLUSTER_MODE 消费·全 advisory·只产当前 active cluster 守 C03 fluid·失败不阻断）。",
       "required": true,
       "skip_output_allowed": false,
       "scripts": ["python core/scripts/cluster_choice_apply.py {project_root} --next-key 001 --choice _数据库/.wal/cluster_001_emergence.json"],

@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""premature_reader_reveal_scanner.py — 读者尚未被 show 的 fact 角色却当公知·shadow
+"""premature_reader_reveal_scanner.py — 读者尚未被 show 的 fact 角色却当公知·advisory
 
 【缺口 · R22 W10 Batch-EE·P1 · 2026-06-21】reader belief ledger 反向穿帮：
-  叙事方向：角色当公知信息使用某 fact，但该 fact 在读者信念账本里从未被 show
+  叙事方向：角色当公知信息使用某 fact，但该 fact 读者从未被 show
   → 读者一脸懵，等于反向越权（与 character_knowledge_leak 互补：那个查 character
   越知道·这个查 reader 没被 show 却被当成『大家都知道』的事实）。
+
+【🔴 2026-06-29 孤儿scanner重接线(名字错配·指向真数据源)】
+  旧版读 _数据库/读者信念账本.json（零 producer 幻影文件·永远缺失 → 死码）+ locked_fact.json
+  （同零 producer 幻影）。真数据：
+    - 读者信念 = character_belief_ledger.json 的 known_facts[].reader_knows==true 的并集
+      （fact content 短语·producer: apply_archive.apply_belief_updates）
+    - fact_ref 候选 = 事件簇.json.clusters[].locked_facts[].fact（producer: apply_locked_facts）
+      ∪ ledger 全 fact content；缺则占位词典兜底（向后兼容）
 
 【与既有 scanner 显式去重】
   - character_belief_ledger_scanner (CHARACTER_KNOWLEDGE_LEAK)
@@ -13,15 +21,14 @@
   - dramatic_irony_gap_scanner
     那个查整体差集结构·本 scanner 查具体『当公知使用』语言信号
 
-【做法 · 确定性占位（零 LLM）】
-  1. 读 _数据库/读者信念账本.json 的 reader_known
-  2. 当公知信号词典占位：「众所周知/大家都知道/谁都明白/不用说也知道/向来如此」
-     + 后接 fact_ref（占位词典或 locked_fact.json）
-  3. 信号词后 ±30 CJK 命中 fact_ref，但 fact_ref ∉ reader_known
-     → PREMATURE_READER_REVEAL advisory
+【做法 · 确定性（零 LLM）】
+  1. 读 character_belief_ledger.json → reader_known（reader_knows==true 的 content 短语）
+  2. 当公知信号词典：「众所周知/大家都知道/谁都明白/不用说也知道/向来如此」+ 后接 fact_ref
+  3. 信号词后 ±30 CJK 命中 fact_ref，但 fact_ref ∉ reader_known → PREMATURE_READER_REVEAL advisory
 
 【北极星⑤】顾问非法官·全 advisory·env PREMATURE_READER_REVEAL_MODE
   PREMATURE_READER_REVEAL 绝不进 audit_hub.HARD_GATE_CODES。
+  默认安全·向后兼容：ledger 不存在（旧书）→ reader_known 空·fact_ref 退回占位词典。
 
 用法: python premature_reader_reveal_scanner.py <draft> [--project <root>]
 """
@@ -74,41 +81,94 @@ def _cjk_count(text: str) -> int:
     return sum(1 for ch in text if "一" <= ch <= "鿿")
 
 
-def _load_reader_known(project_root) -> set:
+# 🔴 2026-06-29 孤儿scanner重接线(名字错配·指向真数据源)
+def _load_ledger_contents(project_root):
+    """读 character_belief_ledger.json → (reader_known, all_contents)：
+       reader_known = reader_knows==true 的 fact content 短语集；all_contents = 全部 fact content。
+       无文件 / 破损 / 无 characters → (set(), set())（旧书·向后兼容·同原 file-not-exist 行为）。"""
+    reader_known: set = set()
+    all_contents: set = set()
     if not project_root:
-        return set()
-    p = Path(project_root) / "_数据库" / "读者信念账本.json"
+        return reader_known, all_contents
+    p = Path(project_root) / "_数据库" / "character_belief_ledger.json"
     if not p.exists():
-        return set()
+        return reader_known, all_contents
     try:
         obj = json.loads(p.read_text(encoding="utf-8"))
-        if isinstance(obj, dict):
-            rk = obj.get("reader_known") or []
-            if isinstance(rk, list):
-                return {x for x in rk if isinstance(x, str)}
     except (OSError, json.JSONDecodeError):
-        pass
-    return set()
+        return reader_known, all_contents
+    if not isinstance(obj, dict) or not isinstance(obj.get("characters"), dict):
+        return reader_known, all_contents
+    facts_index = obj.get("facts") if isinstance(obj.get("facts"), dict) else {}
+    for fid, fm in facts_index.items():
+        c = fm.get("content") if isinstance(fm, dict) else None
+        if c:
+            all_contents.add(str(c))
+    for _cid, cl in (obj.get("characters") or {}).items():
+        if not isinstance(cl, dict):
+            continue
+        for kf in (cl.get("known_facts") or []):
+            if not isinstance(kf, dict):
+                continue
+            ph = kf.get("content")
+            if not ph:
+                fm = facts_index.get(kf.get("fact_id"))
+                ph = fm.get("content") if isinstance(fm, dict) else None
+            if not ph:
+                continue
+            ph = str(ph)
+            all_contents.add(ph)
+            if kf.get("reader_knows") is True:
+                reader_known.add(ph)
+    return reader_known, all_contents
+
+
+def _load_reader_known(project_root) -> set:
+    """读者已被 show 的 fact = ledger 中 reader_knows==true 的 content 短语集。"""
+    reader_known, _ = _load_ledger_contents(project_root)
+    return reader_known
+
+
+def _load_locked_facts_from_clusters(project_root) -> list:
+    """读 事件簇.json.clusters[].locked_facts[].fact（producer: apply_locked_facts·去重保序）。"""
+    if not project_root:
+        return []
+    p = Path(project_root) / "_数据库" / "事件簇.json"
+    if not p.exists():
+        return []
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(obj, dict):
+        return []
+    out, seen = [], set()
+    for c in (obj.get("clusters") or []):
+        if not isinstance(c, dict):
+            continue
+        for lf in (c.get("locked_facts") or []):
+            fact = lf.get("fact") if isinstance(lf, dict) else (lf if isinstance(lf, str) else None)
+            if fact and fact not in seen:
+                seen.add(fact)
+                out.append(str(fact))
+    return out
 
 
 def _load_fact_refs(project_root) -> list:
-    if project_root:
-        p = Path(project_root) / "_数据库" / "locked_fact.json"
-        if p.exists():
-            try:
-                obj = json.loads(p.read_text(encoding="utf-8"))
-                if isinstance(obj, dict):
-                    items = obj.get("facts") or obj.get("items") or []
-                    refs = []
-                    for it in items:
-                        if isinstance(it, dict) and it.get("key"):
-                            refs.append(str(it["key"]))
-                        elif isinstance(it, str):
-                            refs.append(it)
-                    if refs:
-                        return refs
-            except (OSError, json.JSONDecodeError):
-                pass
+    """fact_ref 候选宇宙 = 事件簇.json locked_facts ∪ ledger 全 fact content·去重保序；
+       全空（旧书）→ 占位词典兜底（向后兼容）。"""
+    refs, seen = [], set()
+    for f in _load_locked_facts_from_clusters(project_root):
+        if f not in seen:
+            seen.add(f)
+            refs.append(f)
+    _, all_contents = _load_ledger_contents(project_root)
+    for f in sorted(all_contents):
+        if f not in seen:
+            seen.add(f)
+            refs.append(f)
+    if refs:
+        return refs
     return list(DEFAULT_FACT_LEXICON_PLACEHOLDER["facts"])
 
 

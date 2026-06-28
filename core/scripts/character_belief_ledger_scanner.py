@@ -36,8 +36,8 @@
 
 【做法 · 确定性占位（零 LLM）】
   1. 读 _数据库/人物卡.json → 角色名集合 + alias
-  2. 读 _数据库/locked_fact.json (若存在) → fact[i] = {key, character_id?, source_scene?}
-     缺则从草稿 harvest「reveal/真相/秘密/告诉」前后 ±50 CJK 抓 fact_ref 候选
+  2. 读 _数据库/事件簇.json.clusters[].locked_facts[].fact (producer: apply_archive.apply_locked_facts)
+     → fact_ref 候选；缺则用占位词典兜底（向后兼容）
   3. belief_state[char] = set()，按 storyboard 顺序遍历每个 scene：
      - scene 出现 char → 把该 scene 的 "公开 reveals" 加进 belief_state[char]
      - 同时扫该 scene 内 char_name + KNOWLEDGE_VERB + fact_ref 段：
@@ -120,25 +120,41 @@ def _load_characters(project_root):
     return names
 
 
+# 🔴 2026-06-29 孤儿scanner重接线(名字错配·指向真数据源)
+# 旧读 _数据库/locked_fact.json = 零 producer 幻影文件（永远缺失 → 永远兜底占位）。真 locked
+# facts 在 _数据库/事件簇.json.clusters[].locked_facts[].fact（producer: apply_archive.
+# apply_locked_facts）。改读它提精度·保留占位词典兜底（向后兼容·缺则兜底）。
+def _load_locked_facts_from_clusters(project_root):
+    """读 事件簇.json.clusters[].locked_facts[].fact（producer: apply_locked_facts）。
+       聚合全 cluster 的硬事实字符串（去重保序）。无文件/破损/无 locked_facts → []。"""
+    if not project_root:
+        return []
+    p = Path(project_root) / "_数据库" / "事件簇.json"
+    if not p.exists():
+        return []
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(obj, dict):
+        return []
+    out, seen = [], set()
+    for c in (obj.get("clusters") or []):
+        if not isinstance(c, dict):
+            continue
+        for lf in (c.get("locked_facts") or []):
+            fact = lf.get("fact") if isinstance(lf, dict) else (lf if isinstance(lf, str) else None)
+            if fact and fact not in seen:
+                seen.add(fact)
+                out.append(str(fact))
+    return out
+
+
 def _load_fact_refs(project_root):
-    """读 locked_fact.json fact_ref 候选·缺则用占位词典"""
-    if project_root:
-        p = Path(project_root) / "_数据库" / "locked_fact.json"
-        if p.exists():
-            try:
-                obj = json.loads(p.read_text(encoding="utf-8"))
-                if isinstance(obj, dict):
-                    items = obj.get("facts") or obj.get("items") or []
-                    refs = []
-                    for it in items:
-                        if isinstance(it, dict) and it.get("key"):
-                            refs.append(str(it["key"]))
-                        elif isinstance(it, str):
-                            refs.append(it)
-                    if refs:
-                        return refs
-            except (OSError, json.JSONDecodeError):
-                pass
+    """事件簇.json.clusters[].locked_facts fact_ref 候选·缺则用占位词典兜底"""
+    refs = _load_locked_facts_from_clusters(project_root)
+    if refs:
+        return refs
     return list(FACT_REF_LEXICON_PLACEHOLDER["facts"])
 
 
