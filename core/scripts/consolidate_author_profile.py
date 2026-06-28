@@ -922,6 +922,38 @@ def aggregate_narrative_seq(project: Path) -> dict:
     return result
 
 
+# 🔴 2026-06-27 C14①：作者档数值契约核心 consumer 键（build_manifest/validate_style 做 band 门控硬依赖）。
+# 这些键缺失 → consumer 静默退通用兜底基线（弱模型被推成流水账·惊悚乐园翻车根因）。total>0（有章可聚合）
+# 却缺任一 = 源 metrics schema 漂移（producer 写错）→ 响亮 [FATAL] exit2，绝不静默写半残档。
+# 只断言键 PRESENCE + 来自真 metrics·**绝不断言数值落区间**（高方差作者句长 31 也合法·防题材先验误杀·北极星④⑤）。
+def _missing_consumer_keys(q: dict) -> list[str]:
+    missing: list[str] = []
+    if not (isinstance(q.get("sentence_length"), dict) and q["sentence_length"]):
+        missing.append("sentence_length")
+    if not ("paragraph_length_chars" in q
+            or (isinstance(q.get("paragraph_length"), dict) and "mean_chars" in q["paragraph_length"])):
+        missing.append("paragraph_length_chars|paragraph_length.mean_chars")
+    if not ("dialogue_ratio_pct" in q or "dialogue_ratio" in q):
+        missing.append("dialogue_ratio_pct|dialogue_ratio")
+    if "single_sentence_para_ratio" not in q:
+        missing.append("single_sentence_para_ratio")
+    return missing
+
+
+def _assert_consumer_contract(q: dict, total: int) -> None:
+    """total>0 却缺核心 consumer 契约键 → [FATAL] stderr + exit2（缺数据静默不写 → 缺契约键即响亮失败）。"""
+    if total <= 0:
+        return
+    missing = _missing_consumer_keys(q)
+    if missing:
+        print(f"[FATAL] consolidate_author_profile：聚合了 {total} 章却缺核心 consumer 契约键 {missing} "
+              f"— 疑似源 metrics schema 漂移（蒸馏进度/ch*_metrics.json 的 profile.sentence_stats.mean / "
+              f"paragraph_stats.mean / dialogue_ratio / single_sentence_para_ratio 字段名或结构变了）。"
+              f"作者档=第一权威·缺契约键即响亮失败（绝不静默写半残档让 consumer 退通用基线·北极星④⑤）。",
+              file=sys.stderr)
+        sys.exit(2)
+
+
 def consolidate(project: Path, total: int) -> dict:
     """聚合 + 规整 作者风格.json（保留创意字段，覆盖/补全 consumer 数值字段）。"""
     q = aggregate_quantitative(project, total)
@@ -931,6 +963,9 @@ def consolidate(project: Path, total: int) -> dict:
     narr_seq = aggregate_narrative_seq(project)   # #4：作者签名因果功能链（读原文调 score·非空才写）
     reg_tier = aggregate_register_tier_baseline(project)   # L18：Le Guin register drift baseline（非空才写）
     duration_mix = aggregate_duration_mix(project)         # L22：Genette 五型时长比 baseline（非空才写）
+
+    # 🔴 2026-06-27 C14①：写盘前自断言核心 consumer 契约键齐全（缺 → [FATAL] exit2·绝不静默写半残档）
+    _assert_consumer_contract(q, total)
 
     targets = [project / "作者风格.json", project / "作者风格_FINAL.json"]
     written = []

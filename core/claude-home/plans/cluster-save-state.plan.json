@@ -63,8 +63,11 @@
       "required": true,
       "skip_output_allowed": true,
       "_doc_program_driven": "v28 程序驱动：行首 '? ' = advisory 复验（cluster-write step 3 已全量质检过·此处为入库前留痕复核·非零退出警告不拦——拦截裁决权在 step 3）。",
+      "_doc_c03_c17": "🔴 2026-06-27 接线 W2：① gate_content_check_advisory=载荷非空复核（涟漪规则/当前卷 ME 池/cluster_001 storyboard 是否点火）·**advisory**（非 hard·step4 文档明定非零不拦·拦截裁决权在 cluster-write step3·北极星「绝不过度拦截」·inert→log+记 waiver 放行·尊重 .subsystems_bypass.json）。② C17 浅漂移哨兵 scaffold verify --shallow-drift（高级 16 子系统顶层结构 vs skeleton·advisory·永不阻断·永不写文件）。",
+      "gate_content_check_advisory": true,
       "scripts": [
-        "? python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id {key} --waivers '{project_root}/章节/cluster_{key}_draft/cluster_{key}_changes.json'"
+        "? python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id {key} --waivers '{project_root}/章节/cluster_{key}_draft/cluster_{key}_changes.json'",
+        "? python core/scripts/scaffold_subsystems.py verify {project_root} --shallow-drift"
       ],
       "expected_outputs": []
     },

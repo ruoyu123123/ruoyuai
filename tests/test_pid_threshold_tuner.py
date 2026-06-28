@@ -315,3 +315,103 @@ def test_compute_error_defaults_and_rate_equals_tau():
     e = pid.compute_error(fpr=0.2, ai_detect_rate=0.8)  # 全用默认
     assert abs(e - (1.0 * 0.2 - 0.5 * (0.8 - 0.8))) < 1e-9
     assert abs(e - 0.2) < 1e-9
+
+
+# ---------- 🔴 2026-06-27 C20: PID 未初始化哨兵（active + 有原文 + theta 空） ----------
+# 根治 PID 装饰性 active 无 Δ：apply_pid_delta 在 active 模式下若 per-作者 state 从未
+# 回测初始化（theta_delta 空）但作者原文存在，则发一次性 [PID advisory] 哨兵。纯 advisory：
+# 只发 stderr·thresholds 原样不变（北极星⑤顾问非法官）。
+
+def _clear_pid_uninit_dedup():
+    pid._PID_UNINIT_WARNED.clear()
+
+
+def _mk_author_with_chapter(tmp: Path):
+    (tmp / "原文").mkdir(parents=True, exist_ok=True)
+    (tmp / "原文" / "第1章.txt").write_text("作者原文正文内容。", encoding="utf-8")
+
+
+def test_pid_uninit_sentinel_warns_and_thresholds_unchanged(capsys):
+    """active + 作者原文存在 + theta 空 → 发 [PID advisory] 哨兵·thresholds 字节级不变。"""
+    tmp = Path(tempfile.mkdtemp())
+    old = os.environ.get("PID_THRESHOLD_MODE")
+    try:
+        _clear_pid_uninit_dedup()
+        _mk_author_with_chapter(tmp)
+        os.environ["PID_THRESHOLD_MODE"] = "active"
+        base = {"para_mean_len": {"max": 40.0}, "quota_per_word": {"max": 5.0}}
+        out = pid.apply_pid_delta({k: dict(v) for k, v in base.items()}, tmp)
+        assert out == base, "哨兵是纯 advisory·绝不改判决/阈值"
+        err = capsys.readouterr().err
+        assert "[PID advisory]" in err
+        assert "装饰性 active" in err
+    finally:
+        if old is None:
+            os.environ.pop("PID_THRESHOLD_MODE", None)
+        else:
+            os.environ["PID_THRESHOLD_MODE"] = old
+        _clear_pid_uninit_dedup()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_pid_uninit_sentinel_dedups_per_author_dir(capsys):
+    """author_dir 级去重：同一作者目录进程内只发一次（第二次调用静默）。"""
+    tmp = Path(tempfile.mkdtemp())
+    old = os.environ.get("PID_THRESHOLD_MODE")
+    try:
+        _clear_pid_uninit_dedup()
+        _mk_author_with_chapter(tmp)
+        os.environ["PID_THRESHOLD_MODE"] = "active"
+        base = {"para_mean_len": {"max": 40.0}}
+        pid.apply_pid_delta({k: dict(v) for k, v in base.items()}, tmp)
+        assert "[PID advisory]" in capsys.readouterr().err  # 第一次发
+        pid.apply_pid_delta({k: dict(v) for k, v in base.items()}, tmp)
+        assert "[PID advisory]" not in capsys.readouterr().err  # 第二次去重静默
+    finally:
+        if old is None:
+            os.environ.pop("PID_THRESHOLD_MODE", None)
+        else:
+            os.environ["PID_THRESHOLD_MODE"] = old
+        _clear_pid_uninit_dedup()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_pid_uninit_sentinel_silent_without_author_chapters(capsys):
+    """无作者原文（写作项目而非作者库）→ 哨兵静默（去噪·不误报）。"""
+    tmp = Path(tempfile.mkdtemp())
+    old = os.environ.get("PID_THRESHOLD_MODE")
+    try:
+        _clear_pid_uninit_dedup()
+        os.environ["PID_THRESHOLD_MODE"] = "active"
+        base = {"para_mean_len": {"max": 40.0}}
+        out = pid.apply_pid_delta({k: dict(v) for k, v in base.items()}, tmp)
+        assert out == base
+        assert "[PID advisory]" not in capsys.readouterr().err
+    finally:
+        if old is None:
+            os.environ.pop("PID_THRESHOLD_MODE", None)
+        else:
+            os.environ["PID_THRESHOLD_MODE"] = old
+        _clear_pid_uninit_dedup()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_pid_uninit_sentinel_silent_in_off_and_shadow(capsys):
+    """只 active 才提示：off（提前 return）/ shadow（非 active）都不发哨兵·即便有原文。"""
+    tmp = Path(tempfile.mkdtemp())
+    old = os.environ.get("PID_THRESHOLD_MODE")
+    try:
+        _mk_author_with_chapter(tmp)
+        base = {"para_mean_len": {"max": 40.0}}
+        for m in ("off", "shadow"):
+            _clear_pid_uninit_dedup()
+            os.environ["PID_THRESHOLD_MODE"] = m
+            pid.apply_pid_delta({k: dict(v) for k, v in base.items()}, tmp)
+            assert "[PID advisory]" not in capsys.readouterr().err, f"{m} 不应发哨兵"
+    finally:
+        if old is None:
+            os.environ.pop("PID_THRESHOLD_MODE", None)
+        else:
+            os.environ["PID_THRESHOLD_MODE"] = old
+        _clear_pid_uninit_dedup()
+        shutil.rmtree(tmp, ignore_errors=True)

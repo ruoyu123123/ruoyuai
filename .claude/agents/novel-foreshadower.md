@@ -158,8 +158,8 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
   ],
   "specific_findings": {
     "payoff_scores": [
-      {"fs_id": "fs_015", "score": 5, "reason": "..."},
-      {"fs_id": "fs_003", "score": 3, "reason": "..."}
+      {"fs_id": "fs_015", "score": 5, "terminal": true, "reason": "..."},
+      {"fs_id": "fs_003", "score": 3, "terminal": false, "reason": "..."}
     ],
     "chekhov_candidates": [
       {"item": "保温杯", "occurrences": 4, "suggested_tier": 3, "suggested_due_by": 12, "reason": "..."}
@@ -192,6 +192,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 - `reasoning_trace`：≥3 步
 - `payoff_scores[].fs_id`：伏笔表中真实存在的 id（不得造假）
 - `payoff_scores[].score`：0-5 整数
+- `payoff_scores[].terminal`：bool（🔴 SYS-2 伏笔终结 vs 推进分流·save_state 据此决定是否标 resolved）。**仅当本 cluster 把该伏笔的核心承诺完全兑现、或 Tier-1 finale 锚点真正抵达才填 `true`**；推进/扩散/阶段性数值变化/草蛇灰线式不点破一律 `false`（伏笔仍 open，记 payoff_progress 不标 resolved）。拿不准 → 保守填 `false`（误标 resolved 比漏标更难修复）
 - `chekhov_candidates[].suggested_due_by`：**当前章号 + 经验值后的整数**，不得留 `<当前章+10>` 这类占位符
 - `chekhov_candidates[].occurrences`：正文中实际出现次数，用 Read + 扫描得到的准确数字
 - 无候选/无预警时用空数组 `[]`，不得省略字段

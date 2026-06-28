@@ -134,10 +134,10 @@ ARC_TEMPLATE_DIR: <workspace/styles/<风格名>/arc_templates/>  # 启用时必�
   "parent_me": "ME_002",
   "scope_summary": "1-2 句话总结本簇全程（writer 必读首字段）",
   "scene_storyboard": [
-    {"scene": "开场 · ...", "key_beats": ["...", "..."], "characters": ["..."]},
-    {"scene": "推进 · ...", "key_beats": ["..."]},
-    {"scene": "高潮 · ...", "key_beats": ["..."], "climax_marker": true},
-    {"scene": "收束 · ...", "key_beats": ["..."]}
+    {"scene_idx": 0, "scene": "开场 · ...", "key_beats": ["...", "..."], "characters": ["..."]},
+    {"scene_idx": 1, "scene": "推进 · ...", "key_beats": ["..."]},
+    {"scene_idx": 2, "scene": "高潮 · ...", "key_beats": ["..."], "climax_marker": true},
+    {"scene_idx": 3, "scene": "收束 · ...", "key_beats": ["..."]}
   ],
   "_writer_mode": "freestyle",
   "scenes_estimated": 4,
@@ -176,6 +176,32 @@ ARC_TEMPLATE_DIR: <workspace/styles/<风格名>/arc_templates/>  # 启用时必�
   }
 }
 ```
+
+### 🔴 scene_storyboard 字段规约（2026-06-27 P2-10）
+
+**禁写**：`ch` / `chapter` / `chapter_no` 等全局章号字段——这些字段在 outline 阶段会与 `cluster_choice_apply` 写 `进度.json.cluster_blueprint` 时的全局章号占位冲突（cluster_001 起首章号≠scene 顺序）。
+
+**要表场景顺序**：用 `scene_idx`（0-based，0/1/2/...）。`cluster_choice_apply._normalize_storyboard_ch` 会按 `start_ch + scene_idx` 计算全局章号并写入 `cluster_blueprint`，本字段在 outline 产物里**不必填**。
+
+❌ 错误（曾翻车 cluster_003 写作 sediment）：
+```json
+"scene_storyboard": [
+  {"ch": 0, "scene": "开场"},
+  {"ch": 1, "scene": "推进"}
+]
+```
+此处 `ch` 被误当 scene index，cluster_002+ 起首章号 5/9/... build_manifest.current_scene 永远找不到 → writer 丢 cluster context。
+
+✅ 正确：
+```json
+"scene_storyboard": [
+  {"scene_idx": 0, "scene": "开场"},
+  {"scene_idx": 1, "scene": "推进"}
+]
+```
+全局章号由 `cluster_choice_apply` 在 apply 时计算并写入 cluster_blueprint，事件簇.json 主表的 storyboard 也会经 `_normalize_storyboard_ch` 同步归一（原值落 `scene_idx`，`ch` 改写为全局章号）。
+
+两种模式（`ecas_cluster_brief` / `cluster_emergence`）都遵循此规约。
 
 ### Narrative Mode 默认规则（黄金三章倒叙）
 

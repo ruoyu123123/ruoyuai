@@ -71,6 +71,7 @@ writing-side 风格失败（scanner/judge 检出的 STYLE_* 复发 + 跨 cluster
 from __future__ import annotations
 
 import json
+import re  # 🔴 2026-06-27 C07：_bridge_pid_state(L226 re.search) 缺此 import·NameError 被调用方 try/except 静默吞·P0-04 PID 桥从未生效
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -128,6 +129,11 @@ _CODE_TO_CONTROLLED_KEY = {
     "STYLE_LONG_PARA":  "long_para_per_chapter",
     "STYLE_PARA_MEAN":  "para_mean_len",
     "STYLE_DIALOGUE":   "dialogue_ratio",
+    # 🔴 2026-06-27 P1-07: 章末弱锚 advisory 3 码 → chapter_end_weak_anchor_ratio
+    # （CHAPTER_END_FORBIDDEN_* 仍是 hard_gate·不映射·北极星⑤物理隔离）
+    "CHAPTER_END_NO_ANCHOR":          "chapter_end_weak_anchor_ratio",
+    "CHAPTER_END_WEAK_ANCHOR":        "chapter_end_weak_anchor_ratio",
+    "CHAPTER_END_CLOSURE_ADVISORY":   "chapter_end_weak_anchor_ratio",
 }
 _QUANT_RELAX_PER_WAIVER = 0.02   # 每次豁免对应 2% 相对放松提示
 _QUANT_RELAX_CAP = 0.10          # 量化幅度上限 10%（保守·防 windup）
@@ -183,6 +189,50 @@ def accumulate_pid_state_from_calibration(author_dir, suggestions, cluster_id=No
     _pid.save_state(Path(author_dir), state)
     return state
 
+# 🔴 2026-06-27 P0-04 PID 桥 helper：从 audit/experience 派生 author_dir + cluster_id·调 accumulate_pid_state
+def _bridge_pid_state(project_root: Path, audit_path) -> None:
+    """ingest/scan-recurring 末尾接通 PID 桥·让 quantized_delta 真落 pid_threshold_state.json。"""
+    # 1. 找 author_dir（作者风格档目录）
+    author_dir = None
+    try:
+        sp = Path(project_root) / "_数据库" / "作者风格.json"
+        if sp.exists():
+            sj = json.loads(sp.read_text(encoding="utf-8"))
+            src = sj.get("style_source") or sj.get("_source_path")
+            if src:
+                author_dir = Path(src).parent if Path(src).is_file() else Path(src)
+    except Exception:
+        pass
+    if author_dir is None or not Path(author_dir).exists():
+        # 兜底：workspace/styles/<项目名>
+        guess = Path(project_root).parent.parent / "styles" / Path(project_root).name
+        if guess.exists():
+            author_dir = guess
+    if author_dir is None:
+        return  # 找不到 author_dir → 静默退出
+    # 2. 读 experience tool_calibration_suggestions
+    exp_path = _experience_path(Path(project_root))
+    if not exp_path.exists():
+        return
+    try:
+        exp = json.loads(exp_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    suggestions = exp.get("tool_calibration_suggestions") or []
+    if not suggestions:
+        return
+    # 3. cluster_id 从 audit_path 派生（兜底 None）
+    cluster_id = None
+    if audit_path is not None:
+        m = re.search(r"cluster_(\d+)", str(audit_path))
+        if m:
+            cluster_id = f"cluster_{m.group(1)}"
+    # 4. 调用 PID 积累
+    state = accumulate_pid_state_from_calibration(author_dir, suggestions, cluster_id)
+    if state is not None:
+        print(f"[learning_loop] [pid-bridge] author_dir={author_dir.name} updated state n_samples={state.get('n_samples', 0)}")
+
+
 EXPERIENCE_FILE = "写作经验.json"
 AUDIT_DIR = ".audit"
 
@@ -203,6 +253,8 @@ def _empty_experience() -> dict:
             "tool_calibration_suggestions": [],
             "skill_rewrite_suggestions": [],
             "_recurrence_tracker": {}, "_waiver_tracker": {},
+            # 🔴 2026-06-27 C09：apply-moment 豁免诚实审计 per-cluster ledger（喂自学习信号）
+            "_waiver_audit_ledger": {},
             "_efficacy_tracker": {}}
 
 
@@ -224,6 +276,7 @@ def load_experience(project_root: Path) -> dict:
     data.setdefault("skill_rewrite_suggestions", [])     # reflect 归因产出（2026-05-31）
     data.setdefault("_recurrence_tracker", {})
     data.setdefault("_waiver_tracker", {})               # v19 豁免计数内部状态
+    data.setdefault("_waiver_audit_ledger", {})          # 🔴 2026-06-27 C09 apply-moment 豁免审计 ledger
     data.setdefault("_efficacy_tracker", {})             # efficacy 闭环内部状态（2026-05-31）
     if legacy_entries:
         for e in legacy_entries:
@@ -383,7 +436,12 @@ def _issue_key(issue: dict) -> str:
 
 def _chapter_scene_types(project_root: Path, ch: int) -> list:
     """读 进度.json 的 cluster_blueprint，取本章 scene_type 列表（章节类型信号）。
-    找不到返回 []。scene_type 形如 ["日常", "心理外化", "悬疑"]。"""
+    找不到返回 []。scene_type 形如 ["日常", "心理外化", "悬疑"]。
+
+    🔴 2026-06-27 P1-07 cluster 模式分支：ch >= 9000 = 虚拟 cluster 章（audit_hub 给的虚拟章号）·
+    反查 cluster_key = ch - 9000 + 1·聚合该 cluster 所有 scene_storyboard scene_type（去重）。
+    cluster 视野下章号不可信·走 cluster 聚合更稳。
+    """
     prog_path = _db_dir(project_root) / "进度.json"
     if not prog_path.is_file():
         return []
@@ -399,6 +457,25 @@ def _chapter_scene_types(project_root: Path, ch: int) -> list:
         _bp = prog.get("cluster_blueprint") or {}
         if not isinstance(_bp, dict):
             _bp = {}
+    # 🔴 P1-07 cluster 模式：ch >= 9000 → 反查 cluster_key 聚合 scene_storyboard scene_type
+    if ch >= 9000:
+        cluster_idx = ch - 9000  # 9001=cluster_001, 9002=cluster_002...
+        cluster_id = f"cluster_{cluster_idx:03d}"
+        cdata = _bp.get(cluster_id) if isinstance(_bp, dict) else None
+        if isinstance(cdata, dict):
+            aggregated = []
+            seen = set()
+            for p in cdata.get("scene_storyboard", []) or []:
+                if not isinstance(p, dict):
+                    continue
+                st = p.get("scene_type") or []
+                if isinstance(st, str):
+                    st = [st]
+                for t in st:
+                    if t and t not in seen:
+                        seen.add(t)
+                        aggregated.append(t)
+            return aggregated
     for cid, cdata in _bp.items():
         if not isinstance(cdata, dict):
             continue
@@ -498,6 +575,25 @@ def _track_waivers(exp: dict, project_root: Path, audit: dict, ch: int) -> set:
             rec["reasons"].append(reason)
             rec["reasons"] = rec["reasons"][-5:]  # 留最近 5 条样本
         touched.add(code)
+
+    # 🔴 2026-06-27 C09：把 audit_hub apply-moment 算的 waiver_audit 信号落 per-cluster ledger。
+    # _track_waivers 上面已 ingest 本章/本 cluster 豁免「计数」，这里补「apply-moment 比率/blanket/orphan」
+    # 维度——纯观察信号喂自学习，绝不翻 verdict、绝不剥合法 waiver（北极星护栏 · META-only）。
+    wa = audit.get("waiver_audit")
+    if isinstance(wa, dict):
+        ledger = exp.setdefault("_waiver_audit_ledger", {})
+        is_cluster = audit.get("_cluster_mode") is True
+        ck = audit.get("_cluster_key", "")
+        key = f"cluster::{ck}" if (is_cluster and ck) else f"ch::{ch}"
+        ledger[key] = {
+            "waive_rate": wa.get("waive_rate", 0.0),
+            "advisory_total": wa.get("advisory_total", 0),
+            "advisory_waived": wa.get("advisory_waived", 0),
+            "blanket_suspected": bool(wa.get("blanket_suspected", False)),
+            "orphan_codes": list(wa.get("orphan_codes", []) or []),
+            "repeated_reason_codes": dict(wa.get("repeated_reason_codes", {}) or {}),
+            "ts": _now(),
+        }
     return touched
 
 
@@ -668,7 +764,10 @@ def _escalate_recurring(exp: dict, only_keys=None) -> list:
     for key, rec in tracker.items():
         if only_keys is not None and key not in only_keys:
             continue
-        if rec["count"] < RECUR_THRESHOLD:
+        # 🔴 2026-06-27 P2-11：cluster 视野阈值 3→2 解锁 efficacy 闭环·chapter 视野保持 3
+        # （rec._view_mode = 'cluster'/'chapter'·line 651 已写入）
+        _threshold = 2 if rec.get("_view_mode") == "cluster" else RECUR_THRESHOLD
+        if rec["count"] < _threshold:
             continue
         consecutive = _is_consecutive(rec["chapters"], CONSECUTIVE_ESCALATE)
         # 连续命中 -> 0.95（约束升级级别）；累计命中 -> 0.8
@@ -1112,6 +1211,7 @@ def scan_recurring(project_root: Path) -> dict:
     # 重建 tracker（全量扫描时以历史报告为准，避免计数器漂移）
     exp["_recurrence_tracker"] = {}
     exp["_waiver_tracker"] = {}            # v19：豁免计数器同样全量重建
+    exp["_waiver_audit_ledger"] = {}      # 🔴 2026-06-27 C09：apply-moment 审计 ledger 同样全量重建
     tracker = exp["_recurrence_tracker"]
 
     # 2026-05-30 北极星复审：cluster 模式 audit 写 cluster_*_audit.json（ch_* 仅 chapter 模式）。原只
@@ -1311,11 +1411,21 @@ def main():
         if not ap.is_absolute():
             ap = project_root / ap
         result = ingest_audit(project_root, ap)
+        # 🔴 2026-06-27 P0-04 PID 桥：把 quantized_delta 校准建议喂 PID 控制器·MAPE-K Plan->Execute 闭环
+        try:
+            _bridge_pid_state(project_root, ap)
+        except Exception as _e:
+            print(f"[WARN] PID 桥失败(不阻断 learning): {_e}", file=sys.stderr)
         # exit 1 = 检测到复发问题已升级约束 / 反复豁免已产出校准建议 / 无效约束自动停注（都值得关注）
         sys.exit(1 if (result.get("escalated") or result.get("calibration")
                        or result.get("ineffective")) else 0)
     elif "--scan-recurring" in args:
         result = scan_recurring(project_root)
+        # 🔴 2026-06-27 P0-04 PID 桥
+        try:
+            _bridge_pid_state(project_root, None)
+        except Exception as _e:
+            print(f"[WARN] PID 桥失败(不阻断 learning): {_e}", file=sys.stderr)
         sys.exit(1 if (result.get("escalated") or result.get("meta_problems")
                        or result.get("calibration") or result.get("ineffective")) else 0)
     elif "--reflect-attribution" in args:

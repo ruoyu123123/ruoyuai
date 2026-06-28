@@ -5,12 +5,13 @@ gen_creative.py — Gen-Model 创意卡 / 角色样本 / 卷描述生成工具
 把「含创意笔触」的输出从 Claude 主代理迁到当前 active gen-model profile。
 Claude 主代理负责准备 brief（题材/调研缓存/角色骨架），调本工具生成正文段，再接收 JSON 展示给用户。
 
-五种 mode（已实现 3 个，voice_sample / world_entry 为 v2 placeholder）：
+六种 mode（已实现 5 个，world_entry 仍为 v2 placeholder）：
 
   --mode brainstorm    生成 N 张灵感卡（开书用，配合 /write 命令）                    [✓]
   --mode outline_card  生成下一章 N 张走向卡（每 save-state 后展示）                 [✓]
   --mode volume_arc    生成卷的 arc / 大事件创意描述（配合 /outline·阶段2 建书）       [✓]
-  --mode voice_sample  生成角色 voice_pack.style_samples（配合 /distill-character）  [v2 TODO]
+  --mode distill_reflect  蒸馏 phase-3 修正反思·产 skill markdown（配合 /distill-style） [✓]
+  --mode voice_sample  生成角色 voice_pack.style_samples/anti_samples（配合 /distill-character·🔴 C13 同栈 gen-model）  [✓]
   --mode world_entry   生成世界观条目 content（世界观子系统，经 /db 或 cluster-save-state） [v2 TODO]
 
 用法示例：
@@ -247,14 +248,121 @@ def parse_outline_card_output(reply: str) -> dict:
     return _parse_json_loose(reply, fallback={"version": 1, "cards": [], "_raw": reply[:2000]})
 
 
-# ============ MODE: voice_sample / world_entry（v2 placeholder·volume_arc 已实现见下方 _run_volume_arc） ============
-def build_voice_sample_prompt(character_id: str, history_quotes: str,
+# ============ MODE: voice_sample（🔴 2026-06-27 C13 实现·world_entry 仍 v2 placeholder）============
+def build_voice_sample_prompt(character_id: str, character_name: str,
+                              history_quotes: str, voice_dna_text: str,
                               count: int) -> tuple[str, str]:
-    """v2 TODO: 根据角色历史对话生成 style_samples"""
-    raise NotImplementedError(
-        "mode 'voice_sample' 待实现 (v2)；"
-        "目前请用 /distill-character agent 蒸馏现有对话"
-    )
+    """🔴 2026-06-27 C13：角色 voice_pack.style_samples / anti_samples 候选生成（gen-model·同栈）。
+
+    守『蒸馏复刻必须同栈 gen-model』（北极星）：含创意笔触的对白样本不让 Claude 主代理凭印象编
+    （脱离实战 voice），强制 gen-model 接收**角色历史真实对白 few-shot** + voice_dna 基础字段。
+
+    主代理（Claude）已完成分析段（提取历史对白 + 5 层 persona），把 history_quotes（实战对白片段）
+    和 voice_dna 交给 gen-model；gen-model 只产含创意笔触的样本（style_samples 正例 / anti_samples 反例）。
+    消除原 NotImplementedError / gen_fixer polish hack。
+    """
+    system = """你是角色对白声纹（voice）样本生成引擎。
+
+主代理（Claude）已从已写章节里提取了某角色的**真实历史对白**（few-shot）+ 5 层 persona 分析（voice_dna）。
+你的任务：严格贴着该角色的实战 voice，生成 style_samples（正例）+ anti_samples（反例）候选。
+
+# 硬约束
+
+1. **贴实战 voice**：style_samples 必须读起来就是「这个角色会说的话」——句长/标点/口头禅/语气词/态度都对齐历史对白，不是泛泛的「角色对白」。
+2. **anti_samples = 反面教材**：写出「这个角色绝对不会这么说」的版本（同一情境下被写飞/同质化/AI 腔/违背 layer_0 硬规则的台词），供 voice-keeper 后续比对避坑。
+3. **每条样本标注它命中/违背的 voice 维度**（dim：如「短句连发」「嘴硬心软」「回避型」）——供下游溯源，不是空话。
+4. **不复述 voice_dna 原文**：用具体台词体现，不要把分析当台词写。
+5. **0 AI 套话 / 0 禁用词**（与此同时/顿时/淡淡/微微挑眉 等一律不出现，除非该角色历史对白本就有该签名词）。
+
+# 输出格式
+
+严格输出 JSON（无 markdown 围栏包裹），schema：
+
+{
+  "version": 1,
+  "character": "<角色 id 或名>",
+  "style_samples": [
+    {"text": "一条正例台词（贴实战 voice）", "dim": "命中的 voice 维度", "scene_hint": "适用情境（≤20字）"}
+  ],
+  "anti_samples": [
+    {"text": "一条反例台词（该角色绝不会这么说）", "violates": "违背的 voice 维度/layer_0 硬规则"}
+  ],
+  "banned_phrases_candidates": ["与角色明确人设冲突、建议禁说的词（首次明确即可·下游主代理裁定）"]
+}
+
+不要写解释、不要加引言、不要写「以下是」。直接输出 JSON。
+"""
+    user = f"""# 目标角色
+
+id/名：{character_name or character_id or '（未命名角色）'}
+
+# 5 层 persona 分析（voice_dna · 决定 voice 边界）
+
+{voice_dna_text if voice_dna_text else '（未提供 voice_dna，仅凭历史对白推断 voice）'}
+
+# 历史真实对白（few-shot · 实战 voice 锚点 · 必须贴着这个语感写）
+
+{history_quotes if history_quotes else '（未提供历史对白，警告：缺 few-shot 时样本易脱离实战 voice，请保守生成）'}
+
+# 任务
+
+为该角色生成 **{count}** 条 style_samples（正例）+ 至少 2 条 anti_samples（反例）+ banned_phrases 候选。
+按上方 JSON schema 输出，不要 markdown 包裹。
+"""
+    return system, user
+
+
+def parse_voice_sample_output(reply: str) -> dict:
+    """解析 voice_sample 输出 JSON（宽容解析·失败回退空骨架供主代理人审）。"""
+    return _parse_json_loose(reply, fallback={
+        "version": 1, "style_samples": [], "anti_samples": [],
+        "banned_phrases_candidates": [], "_raw": reply[:2000]})
+
+
+def _load_material(material_path: Path | None) -> dict:
+    """读 step1 产的 material.json（角色历史素材）。容错：缺/坏 → {}。"""
+    if material_path is None or not material_path.exists():
+        return {}
+    try:
+        d = json.loads(material_path.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _voice_sample_history_text(material_path: Path | None, max_quotes: int = 30) -> str:
+    """把 material.json 的历史对白拼成 few-shot 文本（标来源章号·实战 voice 锚点）。
+
+    兼容 schema：dialogue_quotes:[{text, from_chapter}] 主；也容忍纯字符串列表 / quotes 别名。
+    """
+    mat = _load_material(material_path)
+    quotes = (mat.get("dialogue_quotes") or mat.get("quotes")
+              or mat.get("dialogues") or [])
+    lines: list[str] = []
+    for q in quotes[:max_quotes]:
+        if isinstance(q, dict):
+            text = (q.get("text") or q.get("quote") or "").strip()
+            ch = q.get("from_chapter") or q.get("chapter") or q.get("ch")
+            if not text:
+                continue
+            lines.append(f"- 「{text}」" + (f"（ch{ch}）" if ch else ""))
+        elif isinstance(q, str) and q.strip():
+            lines.append(f"- 「{q.strip()}」")
+    # 顺带带上动作/内心片段（给 voice 更立体的实战锚点）
+    for key, label in (("action_quotes", "动作"), ("inner_quotes", "内心")):
+        extra = mat.get(key) or []
+        for e in extra[:5]:
+            t = e.get("text", "").strip() if isinstance(e, dict) else (e or "").strip()
+            if t:
+                lines.append(f"- [{label}] {t}")
+    return "\n".join(lines)
+
+
+def _voice_sample_character_name(material_path: Path | None, fallback: str) -> str:
+    """优先用 material.json 里的角色名/称谓，回退 --character。"""
+    mat = _load_material(material_path)
+    return (mat.get("character_name") or mat.get("name")
+            or mat.get("character") or fallback or "")
 
 
 def build_volume_arc_prompt(*, selected_card: dict, cluster_count: int,
@@ -268,6 +376,13 @@ def build_volume_arc_prompt(*, selected_card: dict, cluster_count: int,
     cluster_count 是**软提示**（模型按大势节奏可微调），不是硬锁。
     """
     system = f"""你是顶尖网文大纲架构师。基于给定的灵感卡，设计一本长篇网文的**卷级大势骨架**。
+
+🔴🔴 故事内容 vs 笔法 的权威分离（2026-06-28 W6 揪出污染 bug·必读）🔴🔴
+- **故事内容**（题材/世界观/主角名/势力/情节走向/final_image）= **唯一来源是下方「选中的灵感卡」**。
+- **作者风格档**（下方 author_block）= **只学笔法**（句长/段长/voice/signature/调性/对话风格/节奏）。
+- 🔴 作者风格档里若出现任何**具体人名/地名/世界设定/情节示例**（如示例故事的角色、副本名），那是**笔法演示样本**，
+  **绝对禁止**把它们当成本书的故事内容搬过来——本书的人物/世界/情节**只能**从灵感卡长出来。
+  （实证翻车：诡秘风格档含「沙盒天道/燧明部/天道」示例·模型偷懒直接抄成大纲·完全无视了「钟楼守夜人」灵感卡。）
 
 {author_block}
 
@@ -295,12 +410,20 @@ def build_volume_arc_prompt(*, selected_card: dict, cluster_count: int,
       scene1=反转/揭底、scene2+=时间序回溯、最后接回开篇。每个场景 {{"scene": 序, "summary": 场景概要}}],
     "foreshadowing_to_plant": [本块要埋的伏笔]}}
 - 可选 `free_notes`: 字符串，表达作者风格档独有、上面字段装不下的卷级判断（如惯用卷间钩子手法）。
+- 可选 `world_seed`: 世界演化的**最小初始条件**（只播 cluster_001 开场已存在的·后续留涌现，绝不预生成全书人物表）：
+  {{"protagonist_state": {{"name": 主角名, "arc_stage": 开场阶段, "status": "alive"}},
+    "factions_state": {{"<阵营key>": {{"name": 阵营名, "power": 0-100, "stability": 0-100, "wealth": 0-100, "current_focus": 当前动向}} (1-3 个核心阵营)}},
+    "ripple_rules": [2-5 条 seed 因果规则·{{"id","trigger_type"(minor_event/fate_event/auto_tick),"trigger_match","ripples"}}],
+    "characters": [主角 1 张·{{"id","name","role"}}],
+    "relationships": [cluster_001 已可见的关系·{{"id","from","to","type"}}]}}
+  （怎么填由你按故事自由决定；脚本只确定性 reshape，不规训枚举。可整体省略，由通用兜底播种器补。）
 
 # 铁律
 1. 卷长 fluid——**绝不写 target_chapter_count / 章数**。章数由后续写作自然涌现。
 2. 卷 = 阶段触发点（成长/副本更迭），cluster = 阶段内小走向。stakes 递增累积成整个阶段。
 3. 大势已定：volumes 的方向必须收敛到 story_destiny.final_image。
-4. 风格/题材/人物/走向**全部以上方作者风格档为第一权威**；档案没规定的维度才自由发挥。
+4. **笔法/语言风格**（句长/段长/voice/signature/调性）以上方作者风格档为第一权威；**故事内容**
+   （题材/世界观/人物/情节/走向）以**选中的灵感卡**为唯一来源——绝不从风格档示例搬故事（见顶部🔴）。
 只输出 JSON（```json 围栏包裹），不要任何解释文字。"""
 
     card_txt = json.dumps(selected_card, ensure_ascii=False, indent=2)
@@ -408,7 +531,175 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
     raise GenModelExhaustedError(failures)
 
 
+# ============ C19 ME 池归一（确定性·结构/引用完整性·绝不增删/重排/预设 cluster_002+）============
+def _normalize_me_pool(mes: list, project_root: Path | None = None) -> dict:
+    """🔴 2026-06-27 C19：对 大势卡 ME 池做确定性归一（只修结构/引用完整性·不碰创意内容）。
+
+    模型自由产 ME 池（北极星⑤），但弱模型常漏标 volume / 写悬空 prerequisites / 漏 finale。
+    本函数 in-place 修补这些**结构破损**（非创作判断）：
+      (a) ME 无 volume → regex `ME-V(\\d+)-` 从 id 反推回填 → 记 volume_backfilled
+      (b) 收集真实 id 集 → 逐 ME 过滤 prerequisites 仅留命中真实 id 的 → dropped 记 dangling_prereqs_dropped
+      (c) 按 volume 分组 → 无 is_volume_finale 的卷 → 最大序号 ME 兜底标 finale + warn
+      (d) 残留混标（仍有 ME 无 volume 无法反推）→ 记 _integrity_violations（由调用方落 major + dump）
+
+    返回 report dict：{volume_backfilled, dangling_prereqs_dropped, finale_fallback, integrity_violations}。
+    绝不增删 ME、不重排、不预设 cluster_002+（北极星：fluid 涌现）。
+    """
+    report = {
+        "volume_backfilled": [],
+        "dangling_prereqs_dropped": [],
+        "finale_fallback": [],
+        "integrity_violations": [],
+    }
+    if not isinstance(mes, list):
+        return report
+    valid_mes = [m for m in mes if isinstance(m, dict)]
+
+    # (a) volume 回填（regex 从 id 反推）
+    _vol_re = re.compile(r"ME-?V(\d+)-", re.IGNORECASE)
+    for m in valid_mes:
+        if m.get("volume") in (None, "", 0):
+            mid = str(m.get("id") or m.get("me_id") or "")
+            mm = _vol_re.search(mid)
+            if mm:
+                m["volume"] = int(mm.group(1))
+                report["volume_backfilled"].append(mid)
+
+    # (b) 悬空 prerequisites 过滤（仅留命中真实 id 的）
+    real_ids = set()
+    for m in valid_mes:
+        rid = m.get("id") or m.get("me_id")
+        if rid:
+            real_ids.add(str(rid))
+    for m in valid_mes:
+        prereqs = m.get("prerequisites")
+        if not isinstance(prereqs, list) or not prereqs:
+            continue
+        kept, dropped = [], []
+        for p in prereqs:
+            (kept if str(p) in real_ids else dropped).append(p)
+        if dropped:
+            m["prerequisites"] = kept
+            report["dangling_prereqs_dropped"].append(
+                {"me": str(m.get("id") or m.get("me_id") or "?"), "dropped": dropped})
+
+    # (c) 按 volume 分组 → 无 finale 的卷兜底标最大序号 ME
+    by_vol: dict = {}
+    for m in valid_mes:
+        v = m.get("volume")
+        if v in (None, "", 0):
+            continue
+        by_vol.setdefault(v, []).append(m)
+
+    def _me_seq(me: dict) -> int:
+        mid = str(me.get("id") or me.get("me_id") or "")
+        seqm = re.search(r"-(\d+)\s*$", mid) or re.search(r"(\d+)\s*$", mid)
+        return int(seqm.group(1)) if seqm else -1
+
+    for v, group in by_vol.items():
+        if any(bool(m.get("is_volume_finale")) for m in group):
+            continue
+        # 该卷无 finale → 取最大序号 ME 兜底标 finale
+        anchor = max(group, key=_me_seq)
+        anchor["is_volume_finale"] = True
+        anchor.setdefault("_finale_inferred", True)
+        aid = str(anchor.get("id") or anchor.get("me_id") or "?")
+        report["finale_fallback"].append({"volume": v, "me": aid})
+        print(f"[_normalize_me_pool][WARN] 卷 {v} 无 is_volume_finale → 兜底标 {aid}",
+              file=sys.stderr)
+
+    # (d) 残留混标：仍无法定位 volume 的 ME（id 不含 V<n> 且字段缺）
+    for m in valid_mes:
+        if m.get("volume") in (None, "", 0):
+            report["integrity_violations"].append(
+                {"me": str(m.get("id") or m.get("me_id") or "?"),
+                 "issue": "无 volume 且无法从 id 反推"})
+
+    return report
+
+
 # ============ volume_arc 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约）============
+def _emit_world_seed_projection(db: Path, world_seed: dict) -> list[str]:
+    """🔴 2026-06-27 C02：把模型 volume_arc 产出的 world_seed 创意投影确定性 reshape 落盘。
+
+    模型自由产内容（北极星⑤·脚本只 reshape 不规训 schema 枚举），_emit 把它平铺进：
+      · 世界状态.json   → protagonist_state(主角 arc 基线) + factions_state(1-3 核心阵营 power/stability/wealth)
+      · 涟漪规则.json   → ripple_rules(2-5 条 seed·模型产的因果)
+      · 人物卡.json     → characters(主角 1 张)
+      · 关系.json       → relationships(cluster_001 可见)
+
+    幂等：只在目标当前为空/骨架时写（不覆盖已有内容）。world_seed_init(step5.5) 补本投影没覆盖的。
+    返回写入的文件名列表（供日志）。
+    """
+    written: list[str] = []
+    if not isinstance(world_seed, dict) or not world_seed:
+        return written
+
+    def _load(name: str) -> dict:
+        p = db / name
+        if p.exists():
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                return d if isinstance(d, dict) else {}
+            except (OSError, json.JSONDecodeError):
+                return {}
+        return {}
+
+    def _save(name: str, doc: dict):
+        (db / name).write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+        if name not in written:
+            written.append(name)
+
+    # 1) 世界状态：protagonist_state + factions_state（仅当当前为空）
+    prot = world_seed.get("protagonist_state") or world_seed.get("protagonist")
+    factions = world_seed.get("factions_state") or world_seed.get("factions")
+    if prot or factions:
+        ws = _load("世界状态.json")
+        ws.setdefault("current_world_time", {"ch": 0, "cluster": "cluster_001", "day": 1})
+        if isinstance(prot, dict) and not ws.get("protagonist_state"):
+            ws["protagonist_state"] = {**prot, "_seeded_by": "volume_arc_emit"}
+        if isinstance(factions, dict) and not ws.get("factions_state"):
+            fs = {}
+            for k, v in factions.items():
+                if isinstance(v, dict):
+                    fs[k] = {"power": 50, "stability": 50, "wealth": 50, **v,
+                             "_seeded_by": "volume_arc_emit"}
+            if fs:
+                ws["factions_state"] = fs
+        # consequence_tracker 必须是 dict（engine setdefault+字符串键·list 会 TypeError）
+        if not isinstance(ws.get("consequence_tracker"), dict):
+            ws["consequence_tracker"] = {}
+        ws.setdefault("active_npc_threads", [])
+        ws.setdefault("emergent_opportunities", [])
+        _save("世界状态.json", ws)
+
+    # 2) 涟漪规则：seed ripple_rules（仅当当前为空）
+    seed_rules = world_seed.get("ripple_rules") or world_seed.get("seed_rules")
+    if isinstance(seed_rules, list) and seed_rules:
+        rr = _load("涟漪规则.json")
+        if not rr.get("ripple_rules"):
+            rr["ripple_rules"] = [r for r in seed_rules if isinstance(r, dict)]
+            _save("涟漪规则.json", rr)
+
+    # 3) 人物卡：主角 1 张（仅当当前为空）
+    chars = world_seed.get("characters")
+    if isinstance(chars, list) and chars:
+        cc = _load("人物卡.json")
+        if not cc.get("characters"):
+            cc["characters"] = [c for c in chars if isinstance(c, dict)]
+            _save("人物卡.json", cc)
+
+    # 4) 关系：cluster_001 可见（仅当当前为空）
+    rels = world_seed.get("relationships")
+    if isinstance(rels, list) and rels:
+        rj = _load("关系.json")
+        if not rj.get("relationships"):
+            rj["relationships"] = [r for r in rels if isinstance(r, dict)]
+            _save("关系.json", rj)
+
+    return written
+
+
 def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
                            rhythm: str = "", framework: str = "") -> tuple[Path, Path]:
     """把模型产出拆成 大势卡.json + 事件簇.json 原子落盘（确定性平铺·不靠模型写 schema 形状）。
@@ -458,6 +749,21 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
         "major_events": [{**me, "status": me.get("status", "pending")}
                          for me in data.get("major_events", []) if isinstance(me, dict)],
     }
+    # 🔴 2026-06-27 C19：ME 池确定性归一（volume 回填 / 悬空 prereq 过滤 / finale 兜底 / 完整性）
+    _norm = _normalize_me_pool(major["major_events"], project_root)
+    major["_normalized"] = {k: v for k, v in _norm.items() if k != "integrity_violations"}
+    if _norm.get("integrity_violations"):
+        major["_integrity_violations"] = _norm["integrity_violations"]
+        try:
+            dp = db / ".wal" / "volume_arc_block_debug.txt"
+            dp.parent.mkdir(parents=True, exist_ok=True)
+            dp.write_text("ME 池完整性破损（_normalize_me_pool 无法定位 volume）:\n"
+                          + json.dumps(_norm["integrity_violations"], ensure_ascii=False, indent=2),
+                          encoding="utf-8")
+        except OSError:
+            pass
+        print(f"[_emit_volume_arc][WARN] ME 池残留 {len(_norm['integrity_violations'])} 条完整性破损"
+              f"·见 _数据库/.wal/volume_arc_block_debug.txt", file=sys.stderr)
     # 事件簇.json：只详化 clusters[0]=cluster_001（其余留涌现）
     c1 = data.get("cluster_001") or {}
     cluster = {
@@ -477,6 +783,10 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
     p_cluster = db / "事件簇.json"
     p_major.write_text(json.dumps(major, ensure_ascii=False, indent=2), encoding="utf-8")
     p_cluster.write_text(json.dumps(cluster, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 🔴 2026-06-27 C02：模型 world_seed 创意投影 → 世界状态/涟漪规则/人物卡/关系（仅当为空·幂等）
+    seeded = _emit_world_seed_projection(db, data.get("world_seed") or {})
+    if seeded:
+        print(f"[_emit_volume_arc][world_seed] 投影落盘: {', '.join(seeded)}", file=sys.stderr)
     return p_major, p_cluster
 
 
@@ -709,6 +1019,9 @@ def main():
 
     # voice_sample / volume_arc / world_entry 参数（v2）
     parser.add_argument('--character', help='[voice_sample] 角色 id')
+    # 🔴 2026-06-27 C13 voice_sample 参数
+    parser.add_argument('--history', help='[voice_sample] 角色历史真实对白素材 JSON 路径（few-shot）')
+    parser.add_argument('--voice-dna', help='[voice_sample] 5 层 persona 分析 voice_dna JSON 路径')
     parser.add_argument('--volume', type=int, help='[volume_arc] 卷号（旧·未用）')
     parser.add_argument('--structure', help='[volume_arc] 卷骨架 JSON 路径（旧·未用）')
     parser.add_argument('--entry-id', help='[world_entry] 世界观条目 id')
@@ -765,9 +1078,26 @@ def main():
         # 蒸馏 phase-3 修正反思（阶段3·产 skill markdown 非 JSON·must_fix#5）
         sys.exit(_run_distill_reflect(args))
 
-    elif args.mode in ('voice_sample', 'world_entry'):
+    elif args.mode == 'voice_sample':
+        # 🔴 2026-06-27 C13：角色 voice_pack 样本生成（gen-model·同栈·喂历史对白 few-shot）。
+        # 走通用 call_gen_model 路径（自动补 _meta.generated_by_model = 同栈 provenance 证据）。
+        if not args.character:
+            print("[ERROR] --mode voice_sample 需要 --character", file=sys.stderr)
+            sys.exit(2)
+        history_text = _voice_sample_history_text(
+            Path(args.history) if args.history else None)
+        voice_dna_text = read_text(Path(args.voice_dna) if args.voice_dna else None, 8000)
+        char_name = _voice_sample_character_name(
+            Path(args.history) if args.history else None, args.character)
+        system, user = build_voice_sample_prompt(
+            character_id=args.character, character_name=char_name,
+            history_quotes=history_text, voice_dna_text=voice_dna_text,
+            count=args.count)
+        parser_fn = parse_voice_sample_output
+
+    elif args.mode == 'world_entry':
         print(f"[ERROR] mode '{args.mode}' 是 v2 placeholder，待实现", file=sys.stderr)
-        print(f"  当前请用 Claude sub-agent 流程替代（distill-character / worldbuild）")
+        print(f"  当前请用 Claude sub-agent 流程替代（worldbuild）")
         sys.exit(2)
 
     if args.dry_run:

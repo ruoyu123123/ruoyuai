@@ -39,6 +39,18 @@ def _write_parsed(tmp: Path, ch: int, changes: dict) -> None:
                                       ensure_ascii=False), encoding="utf-8")
 
 
+def _write_foreshadower(tmp: Path, ch: int, payoff_scores: list) -> None:
+    """🔴 2026-06-27 SYS-2/SYS-3：写本 cluster foreshadower JudgeReport（payoff_scores 带
+    terminal/score）到 _resolve_cluster 解析的真实路径，供 apply_changes._load_foreshadower_maps 读。"""
+    cid, _ = ss._resolve_cluster(tmp, ch)
+    rpt_dir = tmp / "_数据库" / ".judge_reports"
+    rpt_dir.mkdir(parents=True, exist_ok=True)
+    (rpt_dir / f"{cid}_foreshadower.json").write_text(
+        json.dumps({"judge_id": "foreshadower", "cluster_id": cid,
+                    "specific_findings": {"payoff_scores": payoff_scores}}, ensure_ascii=False),
+        encoding="utf-8")
+
+
 def _read_fs(tmp: Path) -> dict:
     return json.loads((tmp / "_数据库" / "伏笔表.json").read_text(encoding="utf-8"))
 
@@ -51,7 +63,10 @@ def _empty_fs() -> dict:
 
 def test_paid_resolves_even_when_actions_nonempty():
     """[#6 核心] foreshadowing_actions 非空 + foreshadowing_paid 带 id →
-    paid 仍被桥接 resolve（不再被门控短路）。复刻 cluster_005/ch12 真实场景。"""
+    paid 仍被桥接 resolve（不再被门控短路）。复刻 cluster_005/ch12 真实场景。
+
+    🔴 2026-06-27 SYS-2 迁移：terminal payoff（核心承诺兑现）才标 resolved。两条 paid 显式
+    kind:"terminal"（按钮兑现 / 锦旗回收 = 核心承诺彻底兑现）→ resolved=True（不再无差别标）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), {
             "promises": [
@@ -68,14 +83,14 @@ def test_paid_resolves_even_when_actions_nonempty():
                 {"category": "secret", "type": "reveal", "id": "fs_003",
                  "how": "1985 照片揭示", "reveal_scene": 5}],
             "foreshadowing_paid": [
-                {"id": "fs_018", "description": "师姐按按钮兑现"},
-                {"id": "fs_008", "description": "1985 锦旗半回收"}],
+                {"id": "fs_018", "kind": "terminal", "description": "师姐按按钮兑现"},
+                {"id": "fs_008", "kind": "terminal", "description": "1985 锦旗回收"}],
         })
         rc = ss.apply_changes(tmp, 12)
         assert rc == 0
         fs = _read_fs(tmp)
         pmap = {p["id"]: p for p in fs["promises"]}
-        # 关键断言：paid 的两条 promise 被标 resolved（修复前停在 False）
+        # 关键断言：terminal paid 的两条 promise 被标 resolved（修复前停在 False）
         assert pmap["fs_018"]["resolved"] is True
         assert pmap["fs_018"]["resolved_at_ch"] == 12
         assert pmap["fs_008"]["resolved"] is True
@@ -117,8 +132,9 @@ def test_dedup_explicit_action_covers_paid():
         _write_parsed(tmp, 12, {
             "foreshadowing_actions": [
                 {"category": "promise", "type": "payoff", "id": "fs_018"}],
+            # 🔴 2026-06-27 SYS-2：paid 带 kind:"terminal" → writer_kind_map 供 dedup 后的显式 action 读
             "foreshadowing_paid": [
-                {"id": "fs_018", "description": "同一 fs · 应被去重不重复处理"}],
+                {"id": "fs_018", "kind": "terminal", "description": "同一 fs · 应被去重不重复处理"}],
         })
         rc = ss.apply_changes(tmp, 12)
         assert rc == 0
@@ -128,24 +144,49 @@ def test_dedup_explicit_action_covers_paid():
         assert fs["promises"][0]["resolved"] is True
         applied = json.loads((tmp / "_数据库" / ".wal" / "第12章_applied.json")
                              .read_text(encoding="utf-8"))["applied"]
-        assert applied.count("伏笔 payoff: fs_018") == 1  # 不重复
+        assert applied.count("伏笔 payoff(terminal): fs_018") == 1  # 不重复
 
 
 # ═══════════════════════ 向后兼容：无 actions 时 paid/planted 仍桥接 ═══════════════════════
 
-def test_paid_bridged_when_no_actions():
-    """foreshadowing_actions 缺省（v27 freestyle 默认）→ paid 照常桥接 resolve。"""
+def test_paid_terminal_bridged_when_no_actions():
+    """foreshadowing_actions 缺省（v27 freestyle 默认）→ terminal paid 照常桥接 resolve。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), {
             "promises": [{"id": "fs_005", "setup_cluster": "cluster_002", "resolved": False}],
             "deadlines": [], "pledges": [], "secrets": [],
         }, None)
         _write_parsed(tmp, 10, {
-            "foreshadowing_paid": [{"id": "fs_005", "description": "林若昭被派来监督"}],
+            "foreshadowing_paid": [{"id": "fs_005", "kind": "terminal",
+                                    "description": "林若昭身世真相揭晓·核心承诺兑现"}],
         })
         rc = ss.apply_changes(tmp, 10)
         assert rc == 0
         assert _read_fs(tmp)["promises"][0]["resolved"] is True
+
+
+def test_paid_progressive_keeps_open_records_progress():
+    """🔴 2026-06-27 SYS-2 迁移：progressive paid（推进/扩散/阶段数值）→ 不标 resolved，
+    记 payoff_progress 保持 open。治『918 逐章 re-apply 把每条 paid 无差别盖 resolved』根因。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), {
+            "promises": [{"id": "fs_005", "setup_cluster": "cluster_002", "resolved": False}],
+            "deadlines": [], "pledges": [], "secrets": [],
+        }, None)
+        _write_parsed(tmp, 10, {
+            # 无 kind + 词面含「推进」→ 词面默认 progressive
+            "foreshadowing_paid": [{"id": "fs_005", "description": "林若昭被派来监督（阶段推进）"}],
+        })
+        rc = ss.apply_changes(tmp, 10)
+        assert rc == 0
+        p = _read_fs(tmp)["promises"][0]
+        assert p["resolved"] is False               # progressive 不标 resolved
+        assert p["last_advanced_at_ch"] == 10
+        assert any(e.get("ch") == 10 for e in p.get("payoff_progress", []))
+        # re-apply 幂等：payoff_progress 同 ch 不重复 append（(fs_id,ch) 去重）
+        ss.apply_changes(tmp, 10)
+        p2 = _read_fs(tmp)["promises"][0]
+        assert len([e for e in p2.get("payoff_progress", []) if e.get("ch") == 10]) == 1
 
 
 # ═══════════════════════ 无 id 描述串 → warning（可见非静默断裂）═══════════════════════
@@ -186,3 +227,93 @@ def test_no_warn_when_actions_present_even_if_strings():
         # 有显式 actions → 不报「无 id 描述串」warning（结构化路径已生效）
         assert not any("无 id 描述串" in w for w in applied["warnings"])
         assert _read_fs(tmp)["secrets"][0]["status"] == "revealed"
+
+
+# ═══════════ 🔴 2026-06-27 SYS-2/SYS-3 金标准回放 + 优先级/门控 ═══════════
+
+def test_golden_replay_cluster004_terminal_progressive_split():
+    """SYS-2 金标准回放（cluster_004 型 changes+foreshadower）：foreshadower.terminal 权威分流——
+      · fs_006「登记册成立」terminal:true → resolved=True（terminal 覆盖词面默认 progressive）
+      · fs_010 tier1 finale 仅推进 terminal:false → resolved=False（保持 open + payoff_progress）
+      · fs_007「×N」数值扩散 terminal:false → resolved=False（保持 open + payoff_progress）"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), {
+            "promises": [
+                {"id": "fs_006", "setup_cluster": "cluster_003", "resolved": False},
+                {"id": "fs_007", "setup_cluster": "cluster_003", "resolved": False, "tier": 1},
+                {"id": "fs_010", "setup_cluster": "cluster_002", "resolved": False, "tier": 1},
+            ],
+            "deadlines": [], "pledges": [], "secrets": [],
+        }, None)
+        _write_foreshadower(tmp, 14, [
+            {"fs_id": "fs_006", "score": 5, "terminal": True, "reason": "国运继承登记册正式成立"},
+            {"fs_id": "fs_007", "score": 5, "terminal": False, "reason": "关联标的扩散 ×5→×7"},
+            {"fs_id": "fs_010", "score": 5, "terminal": False, "reason": "渗透率推进·vol1 finale 仍远"},
+        ])
+        _write_parsed(tmp, 14, {
+            "foreshadowing_paid": [
+                # fs_006 词面「成立」无 terminal 关键词（词面默认 progressive）→ 靠 foreshadower.terminal 翻成 terminal
+                {"id": "fs_006", "description": "国运继承登记册成立"},
+                {"id": "fs_007", "description": "关联标的扩散（×5 → ×7）"},
+                {"id": "fs_010", "description": "主体推进（渗透率 22.7% → 26.8%）"},
+            ],
+        })
+        rc = ss.apply_changes(tmp, 14)
+        assert rc == 0
+        pmap = {p["id"]: p for p in _read_fs(tmp)["promises"]}
+        assert pmap["fs_006"]["resolved"] is True       # terminal:true → resolved
+        assert pmap["fs_010"]["resolved"] is False      # tier1 finale 仅推进 → 保持 open
+        assert pmap["fs_007"]["resolved"] is False      # 数值扩散 → 保持 open
+        assert any(e.get("ch") == 14 for e in pmap["fs_010"].get("payoff_progress", []))
+        assert any(e.get("ch") == 14 for e in pmap["fs_007"].get("payoff_progress", []))
+
+
+def test_score_zero_gate_keeps_unresolved():
+    """SYS-3：foreshadower 判 score==0（声明 paid 但正文 0 痕迹/谎报）→ 即使 kind/词面像
+    terminal 也不标 resolved（治『声明 paid 正文 0 落字 lie=0』）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), {
+            "promises": [{"id": "fs_004", "setup_cluster": "cluster_003", "resolved": False}],
+            "deadlines": [], "pledges": [], "secrets": [],
+        }, None)
+        _write_foreshadower(tmp, 14, [
+            {"fs_id": "fs_004", "score": 0, "terminal": True,
+             "reason": "声明剑胚兑现但正文 0 出现剑胚/草籽 → 谎报"}])
+        _write_parsed(tmp, 14, {
+            "foreshadowing_paid": [{"id": "fs_004", "kind": "terminal",
+                                    "description": "青青剑胚裂缝兑现"}],
+        })
+        rc = ss.apply_changes(tmp, 14)
+        assert rc == 0
+        p = _read_fs(tmp)["promises"][0]
+        assert p["resolved"] is False  # score==0 门控压过 terminal
+        applied = json.loads((tmp / "_数据库" / ".wal" / "第14章_applied.json")
+                             .read_text(encoding="utf-8"))
+        assert any("score=0" in w for w in applied["warnings"])
+
+
+def test_word_surface_default_no_foreshadower_no_kind():
+    """无 foreshadower 报告 + 无 writer kind → 纯词面默认：含「回收/兑现/揭晓/收束」→ terminal；
+    含「推进/扩散/进展/数值」或两者皆无 → 保守 progressive。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), {
+            "promises": [
+                {"id": "fs_a", "setup_cluster": "cluster_001", "resolved": False},
+                {"id": "fs_b", "setup_cluster": "cluster_001", "resolved": False},
+                {"id": "fs_c", "setup_cluster": "cluster_001", "resolved": False},
+            ],
+            "deadlines": [], "pledges": [], "secrets": [],
+        }, None)
+        _write_parsed(tmp, 5, {
+            "foreshadowing_paid": [
+                {"id": "fs_a", "description": "悬念最终揭晓收束"},   # terminal 词 → resolved
+                {"id": "fs_b", "description": "势力扩散数值推进"},   # progressive 词 → open
+                {"id": "fs_c", "description": "某人来了又走"},        # 皆无 → 保守 progressive
+            ],
+        })
+        rc = ss.apply_changes(tmp, 5)
+        assert rc == 0
+        pmap = {p["id"]: p for p in _read_fs(tmp)["promises"]}
+        assert pmap["fs_a"]["resolved"] is True
+        assert pmap["fs_b"]["resolved"] is False
+        assert pmap["fs_c"]["resolved"] is False

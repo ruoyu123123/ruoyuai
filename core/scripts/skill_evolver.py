@@ -6,7 +6,7 @@
 - 自动 evolve：合并相似 patterns / 提炼通用规则 / 淘汰长期未用
 
 4 个能力：
-1. evolve: 合并相似 (Jaccard > 0.6) + 提炼共性 + version+1
+1. evolve: 合并相似 (token 级 Jaccard > 0.6·producer 真填字段·空 blob 不并) + 提炼共性 + version+1
 2. promote: usage_count >= 5 + confidence >= 0.8 → 升 universal_skill_pool
    · transfer_scope filter（2026-05-31 · 防跨项目负迁移）：升级前按 scope 过滤——
      通用工艺（节奏/结构/钩子）才跨项目，作者 idiolect 特异（口癖/签名词/特有遣词/角色名）
@@ -86,6 +86,79 @@ def upgrade_to_versioned(pattern: dict, current_ch: int) -> dict:
     return upgraded
 
 
+# 🔴 2026-06-27 C12: producer 真填字段并集（取代旧 description+name —— 那俩常空：
+# learning_loop/self_heal 写的 recur_* 经验把内容塞进 trigger/technique/why_works，
+# description/name 多为空 → 旧 p_desc=" " → char-set jaccard(" "," ")=1.0 → 不相干经验
+# 被结构性误并）。id 仅作身份不进相似度文本（unique id 会注入唯一 token 压低合法合并的
+# jaccard，尤其无 jieba 的降级路径）。北极星⑤：这是「经验沉淀的数据流形状」修复，不规定
+# 哪两条该合并（阈值+模型判断的事），只根除空 blob 必并的结构 bug。
+_SIMILARITY_FIELDS = ("trigger", "technique", "why_works", "description", "name")
+
+_JIEBA_TRIED = False
+_JIEBA_MOD = None
+
+
+def _get_jieba():
+    """缓存式探测 jieba（可选依赖·别硬依赖）。"""
+    global _JIEBA_TRIED, _JIEBA_MOD
+    if not _JIEBA_TRIED:
+        _JIEBA_TRIED = True
+        try:
+            import jieba as _j  # noqa: F401
+            _JIEBA_MOD = _j
+        except Exception:
+            _JIEBA_MOD = None
+    return _JIEBA_MOD
+
+
+def _similarity_blob(pattern: dict) -> str:
+    """🔴 2026-06-27 C12: 拼 producer 真填字段为相似度文本（空字段跳过）。"""
+    if not isinstance(pattern, dict):
+        return ""
+    parts = [str(pattern.get(k, "") or "").strip() for k in _SIMILARITY_FIELDS]
+    return " ".join(p for p in parts if p).strip()
+
+
+def _tokenize(text: str) -> set:
+    """🔴 2026-06-27 C12: token 级分词（取代 char-set 字符集 jaccard）。
+
+    jieba 精确分词优先；未装则降级——空白/标点切分 + 对含 CJK 段补字符 bigram
+    （纯中文无词边界，单纯空白分词会把整句当 1 个 token 而漏并近义经验；bigram 是
+    确定性 token，既能并近义又绝不会把空 blob 误并）。别硬依赖 jieba。
+    """
+    text = (text or "").strip()
+    if not text:
+        return set()
+    jb = _get_jieba()
+    if jb is not None:
+        toks = {t.strip() for t in jb.cut(text) if t and t.strip()}
+        if toks:
+            return toks
+    # 降级：空白 + 标点切分
+    segs = re.split(
+        r"[\s，。、；：！？,.!?;:\"'“”‘’（）()\[\]【】<>《》·\-—_/\\|~`@#$%^&*+=]+", text)
+    tokens = set()
+    for seg in segs:
+        seg = seg.strip()
+        if not seg:
+            continue
+        if len(seg) >= 2 and re.search(r"[一-鿿]", seg):
+            # 含 CJK 的多字段：字符 bigram（确定性 token）
+            tokens.update(seg[i:i + 2] for i in range(len(seg) - 1))
+        else:
+            tokens.add(seg)
+    return tokens
+
+
+def _token_jaccard(a: set, b: set) -> float:
+    """token 集合 jaccard。任一空集合 → 0.0（空 blob 永不相似 → 永不误并）。"""
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
 def evolve(project_root: Path, current_ch: int) -> dict:
     """合并相似 patterns + 提炼共性 + version+1"""
     exp_path = project_root / "_数据库" / "写作经验.json"
@@ -102,21 +175,33 @@ def evolve(project_root: Path, current_ch: int) -> dict:
         upgraded = [upgrade_to_versioned(p, current_ch) if isinstance(p, dict) else p for p in patterns]
         results["upgraded_count"] += sum(1 for p in upgraded if p.get("version") == 1 and len(p.get("evolution_history", [])) == 1)
 
-        # Step 2: 找相似 pattern pair（描述 Jaccard > 0.6）
+        # Step 2: 找相似 pattern pair（token 级 jaccard > 0.6）
+        # 🔴 2026-06-27 C12: producer 真填字段并集 + token 分词替代 char-set jaccard。
+        # 空 blob 显式不参与合并（根除旧 description+name 双空 → jaccard(" "," ")=1.0 误并）。
         merged_indices = set()
         new_patterns = []
+        _tok_cache: dict[int, set] = {}
+
+        def _tokens_for(idx, pat):
+            if idx not in _tok_cache:
+                _tok_cache[idx] = _tokenize(_similarity_blob(pat)) if isinstance(pat, dict) else set()
+            return _tok_cache[idx]
+
         for i, p in enumerate(upgraded):
             if i in merged_indices:
                 continue
-            p_desc = p.get("description", "") + " " + p.get("name", "")
+            p_tokens = _tokens_for(i, p)
             similar = []
-            for j in range(i + 1, len(upgraded)):
-                if j in merged_indices:
-                    continue
-                q = upgraded[j]
-                q_desc = q.get("description", "") + " " + q.get("name", "")
-                if jaccard(p_desc, q_desc) > 0.6:
-                    similar.append((j, q))
+            if p_tokens:  # 🔴 C12: 空 blob 不发起合并
+                for j in range(i + 1, len(upgraded)):
+                    if j in merged_indices:
+                        continue
+                    q = upgraded[j]
+                    q_tokens = _tokens_for(j, q)
+                    if not q_tokens:  # 🔴 C12: 空 blob 不被并入
+                        continue
+                    if _token_jaccard(p_tokens, q_tokens) > 0.6:
+                        similar.append((j, q))
             if similar:
                 # 合并：取最高 confidence + 累积 usage + 升 version
                 all_p = [p] + [q for _, q in similar]

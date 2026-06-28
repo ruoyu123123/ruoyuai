@@ -42,15 +42,33 @@ _TITLE_LINE_RE = re.compile(r"^第(\d+)章\s*(.*)$")
 
 # ============ 章节发现 ============
 
-def discover_chapters(project_root) -> dict:
-    """扫描章节正文文件，返回 {章号(int): 正文 Path}。
+def _is_excluded(f: Path, project_root: Path) -> bool:
+    """章节正文是否落在非正典区（`_` 前缀目录 / *_draft 目录）→ 不参与导出。
 
-    覆盖布局：章节/第NNN章/第NNN章.txt（标准）+ 平铺旧布局（项目根直放）。
     排除：任何 `_` 前缀目录（_archived_v1 / _tmp / _数据库 …）+ *_draft 目录
     （cluster 草稿目录里的中间产物绝不能混进导出）。
     """
+    try:
+        rel_parts = f.relative_to(project_root).parts
+    except ValueError:
+        rel_parts = f.parts
+    if any(p.startswith("_") for p in rel_parts[:-1]):
+        return True
+    if f.parent.name.endswith("_draft"):
+        return True
+    return False
+
+
+def scan_chapter_sources(project_root) -> dict:
+    """扫描所有候选章节正文（未折叠），返回 {章号(int): [正文 Path, ...]}。
+
+    🔴 2026-06-27 W5：用于全书完整性自检的「同章号重复源」检测——一个章号对应
+    2+ 个正典源文件 = 数据完整性异常（hard）。物理文件按 resolve() 去重（root 基址
+    rglob 会重复扫到 章节/ 下的同一文件 · 不去重会把每章误判为重复）。
+    """
     project_root = Path(project_root)
-    found = {}
+    multimap: dict = {}
+    seen: set = set()
     bases = []
     if (project_root / "章节").is_dir():
         bases.append(project_root / "章节")
@@ -60,19 +78,29 @@ def discover_chapters(project_root) -> dict:
             continue
         for f in base.rglob("第*章.txt"):
             try:
-                rel_parts = f.relative_to(project_root).parts
-            except ValueError:
-                rel_parts = f.parts
-            # 任何 `_` 前缀目录都是非正典区（归档/临时/数据库）
-            if any(p.startswith("_") for p in rel_parts[:-1]):
+                rp = f.resolve()
+            except OSError:
+                rp = f
+            if rp in seen:
                 continue
-            if f.parent.name.endswith("_draft"):
+            seen.add(rp)
+            if _is_excluded(f, project_root):
                 continue
             m = _CH_FILE_RE.match(f.name)
             if not m:
                 continue
-            found.setdefault(int(m.group(1)), f)
-    return found
+            multimap.setdefault(int(m.group(1)), []).append(f)
+    return multimap
+
+
+def discover_chapters(project_root) -> dict:
+    """扫描章节正文文件，返回 {章号(int): 正文 Path}（每章取首个候选）。
+
+    覆盖布局：章节/第NNN章/第NNN章.txt（标准）+ 平铺旧布局（项目根直放）。
+    首个候选 = 基址顺序（章节/ 优先于平铺根）下最先发现的物理文件，与历史
+    `setdefault` 口径一致。重复源检测见 scan_chapter_sources。
+    """
+    return {ch: paths[0] for ch, paths in scan_chapter_sources(project_root).items()}
 
 
 def find_missing_chapter_dirs(project_root, found: dict) -> list:
@@ -137,11 +165,12 @@ def _strip_changes_defensive(text: str) -> str:
     return text.rstrip()
 
 
-def build_chapter_block(ch: int, raw_text: str, title: str) -> str:
-    """拼单章块：「第N章 标题」行 + 空行 + 纯正文。
+def build_chapter_parts(ch: int, raw_text: str, title: str) -> tuple:
+    """拆单章为 (标题行 header, 纯正文 body)。
 
     正文自带「第N章 …」标题行 → 摘出（避免双标题）；其标题文本可作
-    changes.json title 缺失时的兜底。
+    changes.json title 缺失时的兜底。🔴 2026-06-27 W5：拆出 header/body 供
+    全书字数守恒自检分别计 CJK（标题行 = 固定开销，正文 = 内容）。
     """
     body = _strip_changes_defensive(raw_text)
     lines = body.split("\n")
@@ -157,7 +186,13 @@ def build_chapter_block(ch: int, raw_text: str, title: str) -> str:
     body = "\n".join(lines).strip("\n")
     t = title or body_title
     header = f"第{ch}章 {t}" if t else f"第{ch}章"
-    return header + "\n\n" + body.strip()
+    return header, body.strip()
+
+
+def build_chapter_block(ch: int, raw_text: str, title: str) -> str:
+    """拼单章块：「第N章 标题」行 + 空行 + 纯正文（= build_chapter_parts 的拼接形态）。"""
+    header, body = build_chapter_parts(ch, raw_text, title)
+    return header + "\n\n" + body
 
 
 # ============ P1-2：pending_tail 孤儿检测接线 ============
@@ -186,6 +221,147 @@ def check_pending_tail_orphans(project_root) -> list:
               "python core/scripts/finalize_book.py <项目> --flush append/split", file=sys.stderr)
         print("=" * 64, file=sys.stderr)
     return orphans
+
+
+# ============ 🔴 2026-06-27 W5：全书结构完整性自检（北极星④ 只查结构·不查内容质量）============
+#
+# 对齐 C18 splitter 守恒哲学，但作用在**全书层面**。export 是「最终交付物」——
+# 章节缺失/重复/顺序错乱/跨 cluster 字数丢失此前完全无人守（silently 失败）。
+# 这里加确定性自检：缺章/重复 = hard（数据丢失·--strict 下 exit 2）·字数偏差/覆盖
+# 缺口 = advisory。**绝不断言内容质量/风格/叙事**——export 是格式层（北极星④）。
+
+def _load_cluster_coverage(project_root) -> set:
+    """汇总 事件簇.json + cluster_blueprint 所有 cluster 的 chapter_range 并集（章号集合）。
+
+    无任何可用 range（fluid 未回填 / 文件缺失 / cluster_lookup 不可用）→ 返回 None
+    （coverage 检查跳过 · advisory，绝不因此中断导出）。
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        import cluster_lookup as cl  # noqa: WPS433
+        covered: set = set()
+        for _cid, rng in cl._iter_event_cluster_ranges(project_root):
+            if rng:
+                covered.update(range(rng[0], rng[1] + 1))
+        if not covered:  # 事件簇未回填 → blueprint 兜底
+            for _cid, rng, _sb in cl._iter_blueprint_ranges(project_root):
+                if rng:
+                    covered.update(range(rng[0], rng[1] + 1))
+        return covered or None
+    except Exception:
+        return None
+
+
+def check_book_integrity(project_root, parts_by_ch: dict, full_text: str) -> dict:
+    """拼接后全书结构完整性自检（确定性 · 只查结构 · 北极星④）。
+
+    parts_by_ch: {章号: (header, body, block)}（已导出的章 · 升序拼接源）。
+    三查：① 章号连续性（1..max 无缺号 + 同章号无重复源） ② 升序 ③ 跨 cluster 字数守恒
+    （sum(各章 CJK) == 拼接全书 CJK · 标题行作固定开销分项计）。
+    缺章/重复/乱序 = hard（数据丢失）· 字数偏差/覆盖缺口 = advisory。
+    """
+    exported = sorted(parts_by_ch.keys())
+    issues = []
+
+    # ① 连续性：1..max 内的缺号（最强数据丢失信号——线性书不可能有 N 而无 N-1）
+    missing = []
+    if exported:
+        present = set(exported)
+        missing = [c for c in range(min(exported), max(exported) + 1) if c not in present]
+
+    # ① 重复：同章号 2+ 个正典源文件（数据完整性异常 · 导出取首个 → 另一份静默丢失）
+    try:
+        multimap = scan_chapter_sources(project_root)
+        duplicates = {ch: [str(p) for p in paths]
+                      for ch, paths in multimap.items() if len(paths) > 1}
+    except Exception:
+        duplicates = {}
+
+    # ② 升序（导出已 sorted · 防御性核对·恒 True，留作未来重构哨兵）
+    ascending = (exported == sorted(exported))
+
+    # ③ 字数守恒：full = "\n\n".join(blocks) + "\n"（分隔符为换行·0 CJK）→
+    #    full_cjk 应恒等于 sum(各章 header_cjk + body_cjk)·diff != 0 即结构异常
+    body_cjk = sum(cio.count_cjk(b) for (_h, b, _bl) in parts_by_ch.values())
+    header_cjk = sum(cio.count_cjk(h) for (h, _b, _bl) in parts_by_ch.values())
+    full_cjk = cio.count_cjk(full_text)
+    cons_diff = full_cjk - (body_cjk + header_cjk)
+
+    # coverage（advisory · best-effort · cluster range 交叉核对）
+    covered = _load_cluster_coverage(project_root)
+    coverage = {"available": covered is not None, "uncovered": [], "extra": []}
+    if covered is not None and exported:
+        present = set(exported)
+        coverage["uncovered"] = sorted(covered - present)   # range 声明但未导出
+        coverage["extra"] = sorted(present - covered)        # 导出但无 cluster 声明（fluid 常见）
+
+    if missing:
+        issues.append({"code": "CHAPTER_MISSING", "level": "hard", "detail": missing})
+    if duplicates:
+        issues.append({"code": "CHAPTER_DUPLICATE", "level": "hard",
+                       "detail": sorted(duplicates.keys())})
+    if not ascending:
+        issues.append({"code": "CHAPTER_OUT_OF_ORDER", "level": "hard", "detail": exported})
+    if cons_diff != 0:
+        issues.append({"code": "WORD_CONSERVATION_DRIFT", "level": "advisory", "detail": cons_diff})
+    if coverage["uncovered"]:
+        issues.append({"code": "CLUSTER_RANGE_UNCOVERED", "level": "advisory",
+                       "detail": coverage["uncovered"]})
+
+    has_hard = any(i["level"] == "hard" for i in issues)
+    has_adv = any(i["level"] == "advisory" for i in issues)
+    verdict = "hard" if has_hard else ("advisory" if has_adv else "ok")
+    return {
+        "verdict": verdict,
+        "ok": not has_hard,
+        "exported_chapters": exported,
+        "continuity": {
+            "expected_range": [min(exported), max(exported)] if exported else [],
+            "missing": missing,
+            "duplicates": duplicates,
+            "ascending": ascending,
+        },
+        "coverage": coverage,
+        "word_conservation": {
+            "body_content_cjk": body_cjk,
+            "title_overhead_cjk": header_cjk,
+            "full_cjk": full_cjk,
+            "diff": cons_diff,
+            "ok": cons_diff == 0,
+        },
+        "issues": issues,
+    }
+
+
+def _print_integrity_report(integrity: dict, strict: bool) -> None:
+    """完整性自检结果 → stderr。缺章/重复/乱序：strict→[FATAL]·默认→[WARN]
+    （默认 advisory 不打 [FATAL]·避免污染 runtime_monitor 误报真故障）。"""
+    if integrity["verdict"] == "ok":
+        return
+    cont = integrity["continuity"]
+    miss, dup = cont["missing"], cont["duplicates"]
+    wc, cov = integrity["word_conservation"], integrity["coverage"]
+    print("=" * 64, file=sys.stderr)
+    if miss or dup or not cont["ascending"]:
+        tag = "[FATAL]" if strict else "[WARN]"
+        bits = []
+        if miss:
+            bits.append(f"缺失章节 {miss}")
+        if dup:
+            bits.append(f"重复章节 {sorted(dup.keys())}")
+        if not cont["ascending"]:
+            bits.append("章号非升序")
+        suffix = "（--strict · exit 2）" if strict else "（advisory · 导出照常 · 硬门禁加 --strict）"
+        print(f"{tag} 全书完整性破损：{' / '.join(bits)} {suffix}", file=sys.stderr)
+        for ch, paths in dup.items():
+            print(f"    第{ch}章 重复源: {paths}", file=sys.stderr)
+    if not wc["ok"]:
+        print(f"[WARN] 字数守恒偏差 diff={wc['diff']}（正文 {wc['body_content_cjk']} + 标题 "
+              f"{wc['title_overhead_cjk']} vs 全书 {wc['full_cjk']} CJK · advisory）", file=sys.stderr)
+    if cov["available"] and cov["uncovered"]:
+        print(f"[WARN] cluster 覆盖缺口：range 声明但未导出 {cov['uncovered']}"
+              f"（advisory · 可能 fluid 未回填 / 尚未写）", file=sys.stderr)
+    print("=" * 64, file=sys.stderr)
 
 
 # ============ 导出主流程 ============
@@ -217,11 +393,15 @@ def build_compliance_checklist() -> str:
 
 
 def export_book(project_root, out_path=None, with_adaptation_kit=False,
-                with_compliance_checklist=True) -> dict:
+                with_compliance_checklist=True, strict=False) -> dict:
     """拼接全书。成功返回报告 dict；无任何章节可导出返回 None。
 
     with_adaptation_kit=True（--adaptation-kit）：导出后额外产改编资料包（一人公司·喂 IP 后端·
     人物小传/世界设定集/故事梗概/高潮伏笔清单·纯确定性投影）。默认 False 零回归。
+
+    🔴 2026-06-27 W5：拼接后跑 check_book_integrity 全书结构自检（缺章/重复/乱序/字数守恒），
+    结果写 report['integrity']。strict 只影响 stderr 标签（[FATAL] vs [WARN]）与 main 退出码——
+    export_book 本身**永远完成导出并返回报告**（顾问非法官 · 北极星④/⑤）。
     """
     project_root = Path(project_root).resolve()
     found = discover_chapters(project_root)
@@ -238,19 +418,27 @@ def export_book(project_root, out_path=None, with_adaptation_kit=False,
 
     blocks = []
     exported = []
+    parts_by_ch = {}
     for ch in sorted(found):
         try:
             raw = found[ch].read_text(encoding="utf-8")
         except Exception as e:
             print(f"[WARN] 第{ch}章 正文读取失败 · 跳过: {e}", file=sys.stderr)
             continue
-        blocks.append(build_chapter_block(ch, raw, read_title(project_root, ch)))
+        header, body = build_chapter_parts(ch, raw, read_title(project_root, ch))
+        block = header + "\n\n" + body
+        parts_by_ch[ch] = (header, body, block)
+        blocks.append(block)
         exported.append(ch)
     if not blocks:
         print("[FATAL] 所有章节均读取失败，无内容可导出", file=sys.stderr)
         return None
 
     full = "\n\n".join(blocks) + "\n"  # 章间空行
+
+    # 🔴 2026-06-27 W5：全书结构完整性自检（缺章/重复/乱序/字数守恒 · 只查结构不查内容）
+    integrity = check_book_integrity(project_root, parts_by_ch, full)
+    _print_integrity_report(integrity, strict)
     if out_path is None:
         out_dir = project_root / "exports"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -289,10 +477,12 @@ def export_book(project_root, out_path=None, with_adaptation_kit=False,
         "total_words": cio.count_words(full),
         "total_cjk": cio.count_cjk(full),
         "orphan_pending_tails": len(orphans),
+        "integrity": integrity,  # 🔴 2026-06-27 W5：全书结构完整性自检段
         "adaptation_kit": adaptation,
         "compliance_checklist": str(compliance_path) if compliance_path else None,
     }
-    print(f"[OK] 导出完成：{len(blocks)} 章 / {report['total_cjk']} CJK → {out_path}")
+    print(f"[OK] 导出完成：{len(blocks)} 章 / {report['total_cjk']} CJK"
+          f" · 完整性 {integrity['verdict']} → {out_path}")
     return report
 
 
@@ -302,6 +492,8 @@ def main(argv=None):
     ap.add_argument("--out", default=None, help="输出文件路径（默认 <项目>/exports/<书名>_全文_<章数>章.txt）")
     ap.add_argument("--adaptation-kit", action="store_true",
                     help="同时产改编资料包(人物小传/设定集/梗概/高潮清单·喂 IP 后端·纯确定性投影)")
+    ap.add_argument("--strict", action="store_true",
+                    help="🔴 W5：全书完整性 hard 破损(缺章/重复/乱序)时 exit 2(默认 advisory·exit 0·绝不阻断导出)")
     args = ap.parse_args(argv)
 
     project_root = Path(args.project)
@@ -309,8 +501,16 @@ def main(argv=None):
         print(f"[FATAL] 项目路径不存在: {args.project}", file=sys.stderr)
         sys.exit(2)
 
-    report = export_book(project_root, args.out, with_adaptation_kit=args.adaptation_kit)
-    sys.exit(0 if report else 1)
+    report = export_book(project_root, args.out, with_adaptation_kit=args.adaptation_kit,
+                         strict=args.strict)
+    if report is None:
+        sys.exit(1)
+    # 🔴 2026-06-27 W5：--strict 下 hard 完整性破损(数据丢失) → exit 2；默认顾问制 exit 0
+    if args.strict and report.get("integrity", {}).get("verdict") == "hard":
+        print("[FATAL] --strict：全书完整性 hard 破损(缺章/重复/乱序·数据丢失) → exit 2",
+              file=sys.stderr)
+        sys.exit(2)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

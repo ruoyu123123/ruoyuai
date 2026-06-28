@@ -132,6 +132,10 @@ def test_hard_gate_codes_not_polluted_by_softcap_change():
         "ITEM_NOT_YET_INTRODUCED", "PROPAGATION_DEBT_CREATED", "STYLE_单段超长",
         "CHAPTER_END_FORBIDDEN_SCREENPLAY", "CHAPTER_END_FORBIDDEN_TRANSITION",
         "LOCKED_FACT_CROSS_SCENE_CONFLICT",
+        # 🔴 2026-06-27 C03：子系统载荷点火 3 码（经独立 C03 特性入列·非本 L2-0 soft-cap 改动）
+        "RIPPLE_RULES_EMPTY", "GRAND_TREND_ME_POOL_EMPTY", "CLUSTER001_STORYBOARD_EMPTY",
+        # 🔴 2026-06-27 C18：splitter 字数守恒 1 码（经独立 C18 特性入列·非本 L2-0 soft-cap 改动）
+        "SPLIT_WORD_NOT_CONSERVED",
     }
     assert ah.HARD_GATE_CODES == expected, (
         "HARD_GATE_CODES 被污染！L2-0 soft-cap 是纯 advisory 机制，"

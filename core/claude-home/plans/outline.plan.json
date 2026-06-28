@@ -2,8 +2,8 @@
   "command": "outline",
   "version": 4,
   "description": "创建书籍（程序驱动·阶段2）：风格选择→调研→3灵感卡→框架/节奏/cluster数→34子系统→卷级大纲→cluster_001详化。主代理 Claude Code 驱动 orchestrator·走 plan-DAG。[GUI /new-book 页 DEPRECATED commit 2a4d7ce]",
-  "total_steps": 12,
-  "required_steps": [1, 2, 3, 3.1, 3.2, 3.3, 3.4, 4, 5, 6, 6.5, 7],
+  "total_steps": 13,
+  "required_steps": [1, 2, 3, 3.1, 3.2, 3.3, 3.4, 4, 5, 5.5, 6, 6.5, 7],
   "optional_steps": [],
   "_program_driven_status": "v28 程序驱动：已落为可执行 DAG（scripts/must_spawn_agent/pause_for_user/data_flow）·orchestrator.run_command 可机械驱动·主代理 Claude Code 调度。2026-06-11 阶段2 创建书籍。前置：调用方在 orchestrator 启动前已 mkdir 项目目录 + 写 _数据库/.wal/book_meta.json={topic}（init_project.py --scaffold 一键骨架）。[GUI RUNNER.start 前置入口 DEPRECATED commit 2a4d7ce]",
   "steps": [
@@ -48,6 +48,8 @@
       "description": "基于调研生成 3 灵感卡（gen_creative brainstorm·每卡引用调研来源）。",
       "required": true,
       "skip_output_allowed": false,
+      "_doc_c16": "🔴 2026-06-27 C16：灵感卡=决策前置步·加 research_ref（调研先行门·orchestrator advisory 可豁免/hook 硬校验·指 step2 产的 inspiration_synthesis.json·该文件由 novel-researcher 必写·无网降级亦由 gen-model 写出·不会误阻断）。",
+      "research_ref": "_数据库/.research_cache/inspiration_synthesis.json",
       "data_flow": {
         "<topic>": {"source_json": "_数据库/.wal/book_meta.json", "field": "topic", "optional": true, "default": "网络小说"}
       },
@@ -145,7 +147,18 @@
         "<rhythm>": {"source_json": "_数据库/.wal/outline_choice_rhythm.json", "field": "answer", "optional": true, "default": "标准"}
       },
       "scripts": ["python core/scripts/gen_creative.py --mode volume_arc --project {project_root} --selected-card {project_root}/_数据库/.wal/outline_choice_card.json --cluster-count <cluster_count> --framework <framework> --rhythm <rhythm> --style-ref {project_root}/_数据库/作者风格_skill.md --emit-to-db"],
-      "expected_outputs": ["_数据库/大势卡.json", "_数据库/事件簇.json"]
+      "_doc_c02": "🔴 2026-06-27 C02：emit 同时把模型 world_seed 创意投影确定性 reshape 落 涟漪规则/世界状态/人物卡/关系（仅当为空·幂等·模型未产则留 step5.5 通用兜底补）→ 四文件入 expected_outputs（scaffold step4 已建骨架·此处确保存在）。",
+      "expected_outputs": ["_数据库/大势卡.json", "_数据库/事件簇.json", "_数据库/涟漪规则.json", "_数据库/世界状态.json", "_数据库/人物卡.json", "_数据库/关系.json"]
+    },
+    {
+      "n": 5.5,
+      "name": "world-seed-init",
+      "description": "世界演化初始条件幂等播种（SYS-1·让 world_evolution_engine 复活）：从大势卡 ME 池 + 群像档 + character_arc_state 派生 ① 基线 auto_tick 规则 ② per-ME fate_event 规则 ③ per-势力 minor_event 规则 + factions/protagonist/NPC-thread 基线，写回 涟漪规则.json + 世界状态.json。与 step5 的 world_seed 投影互补（_emit 优先·本步补没覆盖的·非空不覆盖）。",
+      "required": true,
+      "skip_output_allowed": false,
+      "_doc_sys1": "🔴 2026-06-27 SYS-1：根因=scaffold 把涟漪规则/世界状态建空骨架 → tick 每章 0 规则触发 → 世界永不演化（北极星②/③ 静默失效）。本步播最小起始集让引擎复活。北极星：只播初始条件非预设剧情·cluster_002+ 留 emergence 涌现·全 advisory。",
+      "scripts": ["python core/scripts/world_seed_init.py {project_root}"],
+      "expected_outputs": ["_数据库/涟漪规则.json", "_数据库/世界状态.json"]
     },
     {
       "n": 6,
@@ -153,6 +166,8 @@
       "description": "outline-planner 精排 cluster_001 倒叙 storyboard（needs_author_profile·block）。judge_report_path 用 _emergence.json 对齐 plan_tracker._verify_agent_report 校验。",
       "required": true,
       "skip_output_allowed": false,
+      "_doc_c16": "🔴 2026-06-27 C16：cluster_001 storyboard=走向决策步·加 research_ref（调研先行门·advisory·指 inspiration_synthesis.json·走向决策应有调研背书）。agent_gate 规则 10 在 Claude 路径已强制 ecas_cluster_brief 含 RESEARCH_REF·此处补 orchestrator 路径。",
+      "research_ref": "_数据库/.research_cache/inspiration_synthesis.json",
       "must_spawn_agent": "novel-outline-planner",
       "agent_input": {"PROJECT": "{project_root}", "MODE": "ecas_cluster_brief", "CLUSTER_ID": "cluster_001", "PARENT_ME": "ME-V1-01"},
       "judge_report_path": "_数据库/.wal/cluster_001_emergence.json",
@@ -170,12 +185,13 @@
     {
       "n": 7,
       "name": "plan-end",
-      "description": "scaffold verify + db_schema_validate + git commit（初始化项目 + 生成大纲）。",
+      "description": "scaffold verify + db_schema_validate（含 C19 大势卡 ME 池结构契约·消费）+ git commit（初始化项目 + 生成大纲）。",
       "required": true,
       "skip_output_allowed": true,
+      "_doc_c19": "🔴 2026-06-27 接线 W2 / C19：db_schema_validate.py --auto-migrate --strict（**消费**·非 advisory）——check_grand_trend_structure 校验大势卡 ME 池结构契约（major_events 非空·每 ME 有 id+volume·每卷≥1 is_volume_finale·prerequisites 引用可解析）·破损 → exit 1 → 停 plan-end（写作开工前堵 ME 池结构债·北极星③大势已定）。--auto-migrate 先归一可迁移 schema 漂移避免误阻断·真错才 --strict 阻断。C03 content_check（plan-end existence+content hard）已并行兜「ME 池空」（GRAND_TREND_ME_POOL_EMPTY），此处补「结构破损/引用不完整」。",
       "scripts": [
         "python core/scripts/scaffold_subsystems.py verify {project_root}",
-        "? python core/scripts/db_schema_validate.py {project_root}"
+        "python core/scripts/db_schema_validate.py {project_root} --auto-migrate --strict"
       ],
       "expected_outputs": []
     }

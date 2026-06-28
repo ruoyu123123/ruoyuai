@@ -249,6 +249,60 @@ def test_all_advisory_waived_verdict_waived():
         assert report["verdict"] == "waived"
 
 
+# ════════════════════════════════════════════════════════════════
+# C06 整段草稿剧本体 SCREENPLAY 扫（2026-06-27 · step3 真阻断点）
+# ════════════════════════════════════════════════════════════════
+
+def test_c06_screenplay_emits_hard_gate():
+    """含（镜头）的草稿 → _scan_cluster_draft_screenplay emit hard_gate · severity error。"""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "cluster_001_draft.txt"
+        p.write_text("他抬起头，望向门外。\n\n（镜头拉远）\n\n风继续吹。", encoding="utf-8")
+        issues = ah._scan_cluster_draft_screenplay(p)
+        assert issues, "（镜头）应命中 SCREENPLAY"
+        iss = issues[0]
+        assert iss["code"] == "CHAPTER_END_FORBIDDEN_SCREENPLAY"
+        assert iss["gate_level"] == "hard_gate"
+        assert iss["severity"] == "error"
+        # 经权威裁决口复核：error 严重度落 hard_gate（→ verdict needs_agent → exit 2）
+        assert ah._gate_level_for(iss["code"], iss["severity"]) == "hard_gate"
+
+
+def test_c06_screenplay_position_independent():
+    """位置无关：（旁白）出现在草稿【中段】（非章末）也命中（整段硬扫）。"""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "cluster_001_draft.txt"
+        p.write_text("开场第一段。\n\n（旁白：多年以后）\n\n" + "正文继续。\n\n" * 50, encoding="utf-8")
+        issues = ah._scan_cluster_draft_screenplay(p)
+        assert any(i["code"] == "CHAPTER_END_FORBIDDEN_SCREENPLAY" for i in issues)
+
+
+def test_c06_closure_not_flagged_no_upgrade_regression():
+    """🔴 防升格回归：语义收束句『灯熄了』绝不被整段 SCREENPLAY 扫升 hard_gate（保持 advisory 边界）。"""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "cluster_001_draft.txt"
+        p.write_text("他关上门。\n\n灯熄了。\n\n一切安静下来。", encoding="utf-8")
+        issues = ah._scan_cluster_draft_screenplay(p)
+        assert issues == [], "收束句不是剧本体污染 · 整段层零 hard_gate（语义类保持 advisory）"
+
+
+def test_c06_separator_not_flagged_at_draft_layer():
+    """北极星⑤边界：物理分隔符 *** 须锚定章末 → 整段草稿层【不】硬扫（中段场景分隔某些作者合法）。"""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "cluster_001_draft.txt"
+        p.write_text("场景一结束。\n\n***\n\n场景二开始。", encoding="utf-8")
+        issues = ah._scan_cluster_draft_screenplay(p)
+        assert issues == [], "*** 在整段层不硬扫（由 chapter_end_anchor_scan --hard-gate-only 章末位置敏感复扫）"
+
+
+def test_c06_clean_draft_no_issue():
+    """干净草稿（无剧本体标记）→ 零 issue。"""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "cluster_001_draft.txt"
+        p.write_text("他握紧刀柄，迈步走入祭坛深处。\n\n黑刀在掌心微微发烫。", encoding="utf-8")
+        assert ah._scan_cluster_draft_screenplay(p) == []
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

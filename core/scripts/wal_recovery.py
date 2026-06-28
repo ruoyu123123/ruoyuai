@@ -106,7 +106,9 @@ def list_plans_for_project(project_arg: str, project_name: str) -> list[dict]:
     try:
         result = subprocess.run(
             [child_python(), str(scripts_dir() / "plan_tracker.py"), "list"],  # frozen-aware（狩猎修）
-            capture_output=True, text=True, encoding="utf-8", timeout=10
+            # 🔴 2026-06-27 W5：errors="replace" 防子进程在 Windows GBK 控制台输出中文时
+            # reader 线程 UnicodeDecodeError 崩（降级不崩纪律·原仅靠外层 except 兜底会丢 stdout）
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
         )
         return _parse_plan_list_output(result.stdout, project_name)
     except Exception:
@@ -149,6 +151,32 @@ def _filter_plans_by_cluster(plans: list[dict], project_arg: str,
         return False
 
     return [p for p in plans if _match(p)]
+
+
+def _step_is_done(s: dict) -> bool:
+    """单 step 是否已完成（与 main 的 done_count 口径一致）。"""
+    return s.get("status") in ("completed", "done") or bool(s.get("verified"))
+
+
+def _first_resume_step(steps_meta: list, done_count: int) -> int:
+    """🔴 2026-06-27 W5：续跑点 = **第一个未完成 step**（按 n 升序），而非 done_count+1。
+
+    根因（completeness critic 揪出的恢复点裸奔）：原 `next_step = done_count + 1` 只在
+    『已完成步恒为前缀 1..k』时正确。一旦出现非连续完成（中途某步 pending、后续步已
+    completed —— 失败重跑 / 部分手改 / WAL 漂移都可能造成），done_count+1 会**跳过中间
+    pending 步**（漏步 bug：恢复指令告诉主代理从更靠后的 step 续跑，中间未完成步永不补跑）。
+    取第一个未完成步才是正确恢复点——既不重放已完成步，也不漏跑任何未完成步。
+
+    连续完成场景（绝大多数）下 == done_count+1，对既有行为零回归。
+    退化：steps_meta 缺 n 字段 / 为空 → 退回 done_count+1（保旧语义不崩）。
+    """
+    n_steps = [s for s in steps_meta if isinstance(s.get("n"), int)]
+    pending_ns = [s["n"] for s in n_steps if not _step_is_done(s)]
+    if pending_ns:
+        return min(pending_ns)
+    if n_steps:  # 有带 n 的步且全完成（理论上不进 incomplete 分支）→ 尾后
+        return max(s["n"] for s in n_steps) + 1
+    return done_count + 1  # 无任何带 n 的步 → 退回旧语义（不崩）
 
 
 def _parse_plan_list_output(text: str, project: str) -> list[dict]:
@@ -228,7 +256,8 @@ def main():
         for p in incomplete:
             steps_meta = p.get("steps", [])
             done_count = sum(1 for s in steps_meta if (s.get("status") in ("completed", "done") or s.get("verified")))
-            next_step = done_count + 1
+            # 🔴 2026-06-27 W5：续跑点取第一个未完成步（防非连续完成漏步），连续场景 == done_count+1
+            next_step = _first_resume_step(steps_meta, done_count)
             print(f"  {p['id']}:")
             print(f"    续跑: plan_tracker step {p['id']} --n {next_step} （或主代理重新进入 {p['command']} 流水线从 step {next_step} 续跑）")
             print(f"    放弃: plan_tracker abort {p['id']}")

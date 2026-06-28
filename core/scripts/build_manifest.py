@@ -295,6 +295,18 @@ class DatabaseScanner:
         hard_gate 计数与 writer 揭秘提示自相矛盾。北极星：cluster_lookup 是章号⇄cluster 唯一权威反查。"""
         return cluster_lookup.ch_to_cluster_id(self.db, self.ch)
 
+    def _event_cluster_by_id(self, cluster_id) -> dict | None:
+        """🔴 2026-06-27 C15: 按 cluster_id 在 事件簇.json 里取该 cluster dict（归一比对·容错）。
+        反查不到 / 入参非法 → None（调用方据此跳过契约校验，不误升 fatal）。
+        归一经 cluster_lookup.normalize_cluster_id（唯一权威·容忍 cluster_6/cluster_006 等形态）。"""
+        target = cluster_lookup.normalize_cluster_id(cluster_id)
+        if target is None:
+            return None
+        for c in (self.load("事件簇", {}) or {}).get("clusters", []) or []:
+            if isinstance(c, dict) and cluster_lookup.normalize_cluster_id(c.get("cluster_id")) == target:
+                return c
+        return None
+
     def world_keyword_hits(self) -> list[dict]:
         """世界观按关键词匹配（本章大纲命中哪些条目）。"""
         world = self.load("世界观", {})
@@ -645,17 +657,83 @@ class DatabaseScanner:
             fatal.append("进度.json 不存在，执行 /outline 初始化")
             return {"fatal": fatal, "warning": warning, "passed": False}
         if not self.current_scene():
-            fatal.append(f"cluster_blueprint 内 ch={self.ch} 不存在，大纲未覆盖本章")
+            # 🔴 2026-06-26 加修复提示（cluster_001 写作翻车 sediment）：
+            # outline plan step 6.5 漏跑时，cluster_blueprint 是空 dict，本错误无任何指引。
+            # 现在自动检测 outline 残步，给具体修复命令。
+            hint = ""
+            try:
+                # 🔴 2026-06-27 修（cluster_003 写作翻车 sediment）：
+                # ① 找 emergence.json 用 .wal 里所有 cluster_*_emergence.json 取最新一个；
+                # ② 检测 scene["ch"] 字段是否被错写成 scene index（0/1/2 而非全局章号）。
+                wal = self.db / ".wal"
+                emergence_files = sorted(wal.glob("cluster_*_emergence.json")) if wal.exists() else []
+                latest = emergence_files[-1] if emergence_files else None
+                # 检 cluster_blueprint 里 scene.ch 字段是不是 0-based scene index 命名冲突
+                prog = self.load("进度", {})
+                cluster_blueprint_check = ""
+                for cid, cdata in _bp_items(prog).items():
+                    if not isinstance(cdata, dict):
+                        continue
+                    sb = cdata.get("scene_storyboard", [])
+                    chs = [p.get("ch") for p in sb if isinstance(p, dict) and p.get("ch") is not None]
+                    if chs and max(chs) < 5:  # 0-based scene index 多半 < 5
+                        cluster_blueprint_check += (
+                            f"\n  → {cid} 的 scene_storyboard ch 字段是 0-based scene index"
+                            f"(范围 {min(chs)}-{max(chs)})，应该是全局章号。"
+                        )
+                if cluster_blueprint_check:
+                    hint = (
+                        cluster_blueprint_check +
+                        "\n     补救：重跑 py core/scripts/cluster_choice_apply.py（已修 ch 强制覆盖）"
+                        " 或手改 进度.json.cluster_blueprint 里的 scene.ch 字段。"
+                    )
+                elif latest:
+                    hint = (
+                        f"\n  → 检测到 {latest.name} 已落地但 cluster_blueprint 没填。"
+                        f"\n     补救：py core/scripts/cluster_choice_apply.py <项目路径> "
+                        f"--next-key <对应 key> --choice {latest}"
+                    )
+                else:
+                    hint = (
+                        "\n  → outline plan 看起来没跑完。"
+                        "\n     补救：py core/scripts/plan_tracker.py list | grep outline 看残步，"
+                        "\n     或重跑 /outline。"
+                    )
+            except Exception:
+                pass
+            fatal.append(f"cluster_blueprint 内 ch={self.ch} 不存在，大纲未覆盖本章{hint}")
         if not (self.db / "人物卡.json").exists():
             fatal.append("人物卡.json 不存在")
         if self.ch > 1 and self.previous_chapter_file() is None:
             fatal.append(f"上一章（第{self.ch-1}章）txt 文件未找到")
 
         plan = self.current_scene() or {}
+
+        # 🔴 2026-06-27 C15 BUILD-MANIFEST-INJECTION-CONTRACT：上游声明 active 却 brief 空 = 注入契约破损。
+        # 取本章所属 cluster（cluster_lookup 唯一权威反查·禁机械拼接 f"cluster_{ch:03d}"·北极星①），
+        # 若其 status∈active 但 scope_summary + scene_storyboard 双空 → fatal（穿帮层·writer 会拿空约束写偏）。
+        # 🔴 fluid 回归锁：只 fire 在「status active yet brief 空」的契约矛盾；
+        # ripple 早期空 / cluster_002+ 未涌现 / 新角色 / 源文件缺失 / 本章 characters 空 全保持 warning 不升 fatal。
+        _c15_cid = cluster_lookup.ch_to_cluster_id(self.db, self.ch)
+        _c15_cluster = self._event_cluster_by_id(_c15_cid) if _c15_cid else None
+        if (_c15_cluster is not None
+                and _c15_cluster.get("status") in _EVENT_CLUSTER_ACTIVE_STATUSES
+                and _cluster_brief_empty(_c15_cluster)):
+            _emit_empty_injection_signal("event_cluster_context", _c15_cid, self.ch)
+            fatal.append(
+                f"{_c15_cid} 声明 active（status={_c15_cluster.get('status')}）但 brief 内容为空"
+                f"（scope_summary + scene_storyboard 全空·注入契约破损·writer 将拿空约束写偏）。"
+                f"\n     补救：重跑 py core/scripts/cluster_choice_apply.py <项目路径> "
+                f"--next-key {_c15_cid} --choice <对应 .wal/{_c15_cid}_emergence.json>，"
+                f"或重跑 /outline step6.5 填该 cluster 的 scope_summary + scene_storyboard。"
+            )
+
         if not plan.get("characters"):
             warning.append("本章 characters 字段为空，将 fallback 到全量人物卡")
+            _emit_empty_injection_signal("characters", _c15_cid or "?", self.ch)  # 🔴 C15
         if not plan.get("key_events") and not plan.get("summary"):
             warning.append("本章 key_events/summary 为空，大纲过于简略")
+            _emit_empty_injection_signal("key_events_summary", _c15_cid or "?", self.ch)  # 🔴 C15
         if not plan.get("scene_type"):
             warning.append("本章 scene_type 未标注，跳过场景规则注入")
 
@@ -748,7 +826,8 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
                 continue
             if p.get("status") == "retired":
                 continue
-            all_patterns.append({**p, "_category": category})
+            # 🔴 2026-06-27 C12: 带原对象引用 _orig，供检索命中后回写 usage_count（producer）。
+            all_patterns.append({**p, "_category": category, "_orig": p})
 
     if not all_patterns:
         return {"mode": "on", "total_patterns": 0, "retrieved": []}
@@ -767,11 +846,27 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
     all_patterns.sort(key=score, reverse=True)
     top = all_patterns[:top_k]
 
-    # 标记 usage（这次被检索 → 视为被参考）
+    # 🔴 2026-06-27 C12: usage_count producer —— 检索命中即对原对象 +1 写回 写作经验.json
+    # （原子写复用 atomic_json）。此前全系统无 producer 写 usage_count → skill_evolver.promote
+    # 门槛 usage_count>=5 永远到不了 → 升 universal_skill_pool 结构性空转。北极星⑤：只沉淀
+    # 「被检索=被参考」的数据流事实，不碰创作判断；失败仅 advisory（degrade），永不阻断 manifest。
+    usage_dirty = False
     for t in top:
-        pid = t.get("id") or t.get("name", "?")
-        # 找原对象 +1 usage（注意：build_manifest 只读不写，这里只标记，由 reflector 实际累加）
         t["_retrieved_at_ch"] = chapter
+        orig = t.get("_orig")
+        if isinstance(orig, dict):
+            try:
+                orig["usage_count"] = int(orig.get("usage_count", 0) or 0) + 1
+            except (TypeError, ValueError):
+                orig["usage_count"] = 1
+            orig["last_retrieved_at_ch"] = chapter
+            usage_dirty = True
+    if usage_dirty:
+        try:
+            import atomic_json as _aj
+            _aj.atomic_write_json(exp_path, exp)
+        except Exception:
+            pass  # advisory：写回失败不阻断 build_manifest（degrade）
 
     return {
         "mode": "on",
@@ -1101,6 +1196,49 @@ _EVENT_CLUSTER_ACTIVE_STATUSES = (
 )
 
 
+# 🔴 2026-06-27 C15 BUILD-MANIFEST-INJECTION-CONTRACT
+def _cluster_brief_empty(cluster) -> bool:
+    """判定一个事件簇 cluster 的 brief 内容是否「全空」（注入契约破损判据）。
+
+    brief 已填（返回 False · 不空）= scope_summary 非空 **或** scene_storyboard 含任一
+    key_events / summary / goal / title 的场景。两者皆空才返回 True（→ fatal / contract_violation）。
+
+    🔴 fluid 回归锁核心：scene_storyboard 已填 = 不空 = 绝不误拦（天灾继承法 cluster_006
+    实战——已 in_progress 但 storyboard 非空 → 此函数返回 False → preflight passed=True）。
+    只在「上游声明 active 却 scope+storyboard 双空」的契约矛盾（穿帮层）才返回 True。
+    """
+    if not isinstance(cluster, dict):
+        return False
+    if (cluster.get("scope_summary") or "").strip():
+        return False
+    for s in cluster.get("scene_storyboard") or []:
+        if isinstance(s, dict) and (
+            s.get("key_events") or s.get("summary") or s.get("goal") or s.get("title")
+        ):
+            return False
+    return True
+
+
+# 🔴 2026-06-27 C15: 空注入运行时指纹 —— 仿 incidents 指纹 script::empty_injection::<field>
+def _emit_empty_injection_signal(field: str, cluster_key, chapter) -> None:
+    """对「子系统注入内容为空」类事件写一行结构化 [RUNTIME] 信号到 stderr（不改 exit）。
+
+    指纹 = build_manifest.py::empty_injection::<field>，与 self_heal_engine 的
+    `signature` 计数口径对齐 → `self_heal --ingest` 复发计数（≥3 recurring）即可暴露
+    「哪个 producer 系统性产空」。北极星边界：纯 advisory 信号，永不抛异常打断 manifest 生成。
+    """
+    try:
+        sig = f"build_manifest.py::empty_injection::{field}"
+        print(
+            f"[RUNTIME] empty_injection signature={sig} "
+            f"script=build_manifest.py field={field} "
+            f"cluster={cluster_key or '?'} ch={chapter}",
+            file=sys.stderr,
+        )
+    except Exception:
+        pass
+
+
 def _build_volume_convergence_anchor(scanner, cluster: dict) -> dict | None:
     """2026-05-29 北极星 P2 [M1-trend]：本卷「大势已定」的固定终点锚。
 
@@ -1225,6 +1363,39 @@ def _collect_rolling_style_anchor(scanner, chapter: int) -> dict | None:
     }
 
 
+# 🔴 2026-06-27 P1-08: cluster brief 用 helper · 取 motif advisory snapshot 的 dormant top-5 当回收建议。
+def _collect_motif_callback_hints_for_cluster(scanner) -> list:
+    # 容差读 scanner.db / scanner.root._数据库（兼容 mock scanner）
+    db = getattr(scanner, "db", None)
+    if db is None:
+        root = getattr(scanner, "root", None)
+        if root is None:
+            return []
+        db = Path(root) / "_数据库"
+    snap_path = db / ".cross_chapter_scan" / "motif_advisory_snapshot.json"
+    if not snap_path.exists():
+        return []
+    try:
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(snap, dict):
+        return []
+    dormant = snap.get("dormant_motifs") or []
+    hints = []
+    for it in dormant[:5]:
+        if isinstance(it, dict):
+            term = it.get("term")
+            cat = it.get("category")
+            last = it.get("last_cluster")
+            if term:
+                hints.append({
+                    "term": term, "category": cat, "last_cluster": last,
+                    "suggestion": f"上 cluster 已休眠的 motif『{term}』可在本块自然回收（advisory）",
+                })
+    return hints
+
+
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
     writer 在 MODE=ecas 时必读此字段。
@@ -1251,6 +1422,22 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
             if status in _EVENT_CLUSTER_ACTIVE_STATUSES:
                 # pending cluster (未指定 chapter_range) 也算（writer 启动时本章 = first ch）
                 if not cr or (len(cr) == 2 and cr[0] <= chapter <= cr[1]):
+                    # 🔴 2026-06-27 C15: mode 细分——status active 命中后再校验 brief 是否真有内容。
+                    # 上游声明 active 却 scope_summary + scene_storyboard 双空 → mode=contract_violation
+                    # （不再静默注入空 brief 当 mode=on 让 writer 拿空约束写偏）。fluid 回归锁：
+                    # scene_storyboard 已填即不空 → 照常走 mode=on（天灾继承法 cluster_006 实战）。
+                    if _cluster_brief_empty(c):
+                        _emit_empty_injection_signal(
+                            "event_cluster_context", c.get("cluster_id") or "?", chapter)
+                        return {
+                            "mode": "contract_violation",
+                            "cluster_id": c.get("cluster_id") or "",
+                            "status": status,
+                            "_error": (
+                                f"cluster {c.get('cluster_id')} 声明 active（{status}）但 brief 内容为空"
+                                f"（scope_summary + scene_storyboard 全空·注入契约破损）"),
+                            "_hint": "重跑 py core/scripts/cluster_choice_apply.py 或 /outline step6.5 填 cluster brief",
+                        }
                     cluster_id_val = c.get("cluster_id") or ""
                     is_first_cluster = cluster_id_val.endswith("_001") or cluster_id_val == "cluster_001"
                     narrative_mode = c.get("narrative_mode") or ("in_medias_res" if is_first_cluster else "linear")
@@ -1479,6 +1666,10 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         ),
                         # 🆕 R22 W10 Batch-DD P0 STRONG: 题材 prior 推荐辞格 subset
                         "rhetorical_subset_hint": _rhet_subset,
+                        # 🔴 2026-06-27 P1-08: cluster brief 注入 motif_callback_hints（上一 cluster 的 dormant motif 回收建议）。
+                        # 数据源=motif_advisory_snapshot.json.dormant_motifs（top-5），由 motif_recurrence_ledger 落盘。
+                        # advisory · 永不 hard_gate · 不存在时为空 list（守北极星⑤顾问非法官）。
+                        "motif_callback_hints": _collect_motif_callback_hints_for_cluster(scanner),
                         "_narrative_mode_doc": ("in_medias_res = 黄金三章倒叙（cluster_001 默认开启 · 强冲突放最前）；"
                                                 "linear = 时间序；kishotenketsu_4act = 起承转结无冲突(治愈/iyashikei)"),
                         "_narrative_pov_mode_doc": ("R7 W2 五分类(Stanzel/Cohn): "
@@ -3476,6 +3667,58 @@ def _collect_sagging_middle_snapshot(s: "DatabaseScanner") -> dict | None:
     return payload
 
 
+# 🔴 2026-06-27 P1-08：注入 motif advisory snapshot（payoff_due / dormant / over_saturated 三态各 top-3）。
+# 数据源=motif_recurrence_ledger 在 _数据库/.cross_chapter_scan/motif_advisory_snapshot.json 落盘。
+# advisory · 永不 hard_gate · 缺文件 → None（零回归 · 北极星⑤顾问非法官）。
+def _collect_motif_advisory(s: "DatabaseScanner") -> dict | None:
+    import os as _os
+    mode = (_os.environ.get("MOTIF_ADVISORY_INJECT_MODE") or "active").strip().lower()
+    if mode == "off":
+        return None
+    if mode not in ("shadow", "active"):
+        mode = "active"
+    snap_path = s.db / ".cross_chapter_scan" / "motif_advisory_snapshot.json"
+    if not snap_path.exists():
+        return None
+    try:
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(snap, dict):
+        return None
+    # 兼容 ledger snapshot 三态字段（直接来自 motif_recurrence_ledger 的 sort 已截 top-10）。
+    payoff_due_raw = snap.get("payoff_due_motifs") or snap.get("recurring_unchanged_motifs") or []
+    dormant_raw = snap.get("dormant_motifs") or []
+    saturated_raw = snap.get("over_saturated_motifs") or []
+    def _slim(items, n=3):
+        out = []
+        for it in items[:n]:
+            if isinstance(it, dict):
+                out.append({k: it.get(k) for k in ("term", "category", "last_cluster", "total")
+                            if it.get(k) is not None})
+        return out
+    payload = {
+        "gate_level": "advisory",
+        "advisory_only": True,
+        "_doc": ("motif advisory snapshot · payoff_due/dormant/over_saturated 三态各 top-3·"
+                 "writer 优先回收 dormant + 节制 over_saturated · 不进 hard_gate（顾问非法官）"),
+        "payoff_due": _slim(payoff_due_raw),
+        "dormant": _slim(dormant_raw),
+        "over_saturated": _slim(saturated_raw),
+        "n_clusters": snap.get("n_clusters"),
+        "advisory_codes": snap.get("advisory_codes", []),
+    }
+    if mode == "shadow":
+        try:
+            print(f"[SHADOW] motif_advisory: dormant={len(payload['dormant'])} "
+                  f"over_sat={len(payload['over_saturated'])} — 不注入 manifest",
+                  file=sys.stderr)
+        except Exception:
+            pass
+        return None
+    return payload
+
+
 def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
     """G6 P0：注入作者风格相对通用兜底基线的方向描述（更短/更留白）·advisory·三态。
 
@@ -3510,6 +3753,51 @@ def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
         print(f"[SHADOW] genre_baseline_diff: {len(lines)} 条相对方向 — 不注入 manifest", file=sys.stderr)
         return None
     return payload
+
+
+# 🔴 2026-06-27 P0-05：子系统消费层级 audit·遍历 KNOWN_DBS 列每件的 consumed_by/status，写入 manifest 末尾。
+# 用途：让 writer/judge 一眼看清哪些子系统是 live direct_inject、哪些是 via_scanner/via_engine、
+# 哪些是 deferred（如 webnovel_bench_mapping 等 G13 评估器未启用）。骨架 _doc.consumption 是
+# 单一真理源（subsystem_skeletons.json）；本函数兼容缺 consumption（旧骨架）→ status=unknown。
+def _collect_subsystem_consumption_audit(s: "DatabaseScanner") -> dict:
+    try:
+        from frozen_util import bundle_root as _bundle_root
+        skel_path = _bundle_root() / "core" / "claude-home" / "templates" / "subsystem_skeletons.json"
+    except Exception:
+        skel_path = Path(__file__).resolve().parent.parent / "claude-home" / "templates" / "subsystem_skeletons.json"
+    skeletons = {}
+    try:
+        if skel_path.is_file():
+            sk = json.loads(skel_path.read_text(encoding="utf-8"))
+            skeletons = sk.get("skeletons", {}) or {}
+    except (OSError, json.JSONDecodeError):
+        skeletons = {}
+    audit = []
+    for name in sorted(DatabaseScanner.KNOWN_DBS):
+        skel = skeletons.get(name) or {}
+        cons = skel.get("consumption") if isinstance(skel, dict) else None
+        if isinstance(cons, dict):
+            entry = {
+                "name": name,
+                "consumed_by": list(cons.get("by") or []),
+                "layer": cons.get("layer") or "unknown",
+                "status": cons.get("status") or "unknown",
+            }
+            if cons.get("reason"):
+                entry["reason"] = cons["reason"]
+        else:
+            entry = {"name": name, "consumed_by": [], "layer": "unknown", "status": "unknown"}
+        audit.append(entry)
+    return {
+        "_doc": ("子系统消费层级 audit·骨架 _doc.consumption 是单一真理源·"
+                 "status: live=运行时消费 / deferred=保留待启用 / unknown=骨架未标注（应补）"),
+        "subsystems": audit,
+        "_summary": {
+            "live": sum(1 for a in audit if a["status"] == "live"),
+            "deferred": sum(1 for a in audit if a["status"] == "deferred"),
+            "unknown": sum(1 for a in audit if a["status"] == "unknown"),
+        },
+    }
 
 
 def _collect_global_feedback_must_read() -> dict | None:
@@ -4082,6 +4370,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "debt_ledger_snapshot": _collect_debt_ledger_snapshot(s),
         # R7 Batch-D（2026-06-20）：Sagging Middle 中段塌陷 snapshot（needs_midpoint_bomb·env SAGGING_MIDDLE_INJECT_MODE 默认 shadow·advisory）。
         "sagging_middle_snapshot": _collect_sagging_middle_snapshot(s),
+        # 🔴 2026-06-27 P1-08: motif advisory snapshot 注入 manifest（payoff_due/dormant/over_saturated 三态 top-3）。
+        "motif_recurrence_directive": _collect_motif_advisory(s),
         "genre_baseline_diff": _collect_genre_baseline_diff(s),
         "writer_mode": "freestyle_v27",
         "rag_relevant_chapters": rag_hits,
@@ -4106,6 +4396,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # v21 P2-3 LiM 缓解：关键约束在末尾再次摘要（头部 P0 详细 + 尾部 critical_summary 强调）
         "_critical_summary": _build_critical_summary(chapter, foreshadow_summary,
                                                     must_read, locals().get("foreshadow_summary", {})),
+        # 🔴 2026-06-27 P0-05：子系统消费层级 audit（骨架 _doc.consumption 单一真理源·遍历 KNOWN_DBS·writer/judge 一眼看清 live/deferred/unknown）。
+        "_subsystem_consumption_audit": _collect_subsystem_consumption_audit(s),
     }
 
 

@@ -42,6 +42,7 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 import plan_tracker as pt  # noqa: E402
+import plan_step_gates as gates  # noqa: E402  # 🔴 2026-06-27 C16：5 门共享判定库
 from log_util import get_logger, print_progress, error as log_stderr  # noqa: E402
 
 logger = get_logger(__name__)
@@ -77,6 +78,8 @@ class RunSummary:
     completed: list = field(default_factory=list)   # list[StepOutcome]
     paused_at: object = None                        # 停顿点 step n（None=跑完）
     end_report: dict | None = None                  # end_plan 返回
+    gates_engaged: int = 0                           # 🔴 C16：本 plan 触发的 step 门数（0=疑似配置漂移）
+    gate_waivers: list = field(default_factory=list)  # 🔴 C16：advisory 门软放行记录
 
 
 # ============ 占位符解析 ============
@@ -723,6 +726,122 @@ def _step_is_shell(s: dict) -> bool:
                 or s.get("pause_for_user") or s.get("touch_outputs"))
 
 
+# ============ 🔴 2026-06-27 C16：step 门（补 PreToolUse hook 在程序驱动路径的失效）====
+def _record_gate_waiver(project_root, *, code: str, reason: str, step_n,
+                        plan_id, key=None) -> Path:
+    """advisory 门软放行落 waiver。主 sink=_数据库/.gate_waivers.json（确定性·可审计）；
+    次 sink（best-effort）=cluster changes.json self_eval.waivers（与 audit_hub 豁免对齐）。
+    理由 ≤300 字（北极星：豁免理由具体且短）。"""
+    import time
+    db = Path(project_root) / "_数据库"
+    try:
+        db.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    rec = {"code": code, "reason": (reason or "")[:300], "step": step_n,
+           "plan_id": plan_id, "ts": int(time.time())}
+    sink = db / ".gate_waivers.json"
+    try:
+        existing = (json.loads(sink.read_text(encoding="utf-8-sig"))
+                    if sink.exists() else [])
+        if not isinstance(existing, list):
+            existing = []
+    except (OSError, json.JSONDecodeError):
+        existing = []
+    existing.append(rec)
+    try:
+        sink.write_text(json.dumps(existing, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+    except OSError:
+        pass
+    if key:
+        ch = (Path(project_root) / "章节" / f"cluster_{key}_draft"
+              / f"cluster_{key}_changes.json")
+        if ch.exists():
+            try:
+                d = json.loads(ch.read_text(encoding="utf-8-sig"))
+                if isinstance(d, dict):
+                    se = d.setdefault("self_eval", {})
+                    if isinstance(se, dict):
+                        se.setdefault("waivers", []).append(
+                            {"code": code, "reason": (reason or "")[:300]})
+                        ch.write_text(json.dumps(d, ensure_ascii=False, indent=2),
+                                      encoding="utf-8")
+            except (OSError, json.JSONDecodeError):
+                pass
+    return sink
+
+
+def _run_step_gates(step: dict, ctx: dict, *, command: str, auto_pilot: bool,
+                    summary: "RunSummary") -> None:
+    """步循环 step_complete 前补 hook 层失效的门（C16 根因：orchestrator 是独立进程·
+    PreToolUse hooks 对它无感→5 守卫整体失效）。补回【orchestrator 路径真正适用】的两门：
+
+      · subsystems（hard_gate）——子系统 JSON 缺失 → raise OrchestratorError 停步（可续）。
+        触发：outline 的 plan-end 步 或 step 显式 `gate_subsystems:true`。尊重旁路。
+      · research_ref（advisory）——决策前置 step 调研缓存缺失 → log_stderr + 记 waiver 放行。
+        北极星⑤：research 永不硬锁写作主轨；尊重 auto_pilot/旁路/无网无 key 降级。
+
+    其余 3 门（anti_skip/chapter_edit/agent_injection）的不变式在 deterministic
+    orchestrator 路径结构性成立（从不传非法 --skip-output·不 Edit 章节文件·agent 走
+    judge_runner 非 Claude prompt·tampered 由 resume verify_plan 覆盖），留 hook 层守 Claude 路径。
+    hard_gate-class 只认 STRUCTURE§11 既有语义·不新增创作类硬约束。
+    """
+    project_root = Path(ctx["project_root"])
+    db_dir = project_root / "_数据库"
+    bypass_active = (db_dir / gates.SUBSYSTEMS_BYPASS_FILE).exists()
+    n = step.get("n")
+    key = ctx.get("key")
+
+    # ---- subsystems 门（hard）----
+    # 🔴 2026-06-27 C03：content_check 落点分两档（北极星：写作前主门 hard·入库后复核 advisory）：
+    #   · outline plan-end → existence + content_check（hard·inert 阻断·写作开工前唯一刚性门）。
+    #   · cluster-save-state validate（gate_content_check_advisory）→ advisory（留痕复核·拦截裁决权
+    #     在 cluster-write step3·北极星「绝不过度拦截」·step4 文档明定「非零退出警告不拦」）→ 见下方块。
+    want_subsystems = (
+        step.get("gate_subsystems") is True
+        or (command == "outline" and step.get("name") == "plan-end"))
+    want_content_hard = (command == "outline" and step.get("name") == "plan-end")
+    if want_subsystems:
+        summary.gates_engaged += 1
+        r = gates.check_subsystems(db_dir, bypass_active=bypass_active,
+                                   content_check=want_content_hard)
+        if not r["ok"]:
+            raise OrchestratorError(
+                f"[gates] step {n} 子系统门未过（hard·不可豁免·plan {ctx.get('plan_id')} "
+                f"停在本步·补齐后 --resume 续跑）:\n  {r['msg']}")
+
+    # ---- content_check 门（advisory · cluster-save-state validate 步 · 北极星⑤永不硬锁入库）----
+    if step.get("gate_content_check_advisory") and not bypass_active:
+        summary.gates_engaged += 1
+        r = gates.check_subsystems(db_dir, bypass_active=bypass_active,
+                                   content_check=True)
+        if not r["ok"]:
+            reason = (f"step {n} content_check advisory 未过（留痕复核·拦截裁决权在 "
+                      f"cluster-write step3·北极星⑤不硬锁入库）: {(r.get('msg') or '')[:180]}")
+            log_stderr(f"[gates] step {n} 载荷复核 advisory 未过·放行 + 记 waiver:\n  {reason}")
+            _record_gate_waiver(project_root, code="SUBSYSTEM_CONTENT_INERT",
+                                reason=reason, step_n=n,
+                                plan_id=ctx.get("plan_id"), key=key)
+            summary.gate_waivers.append({"step": n, "code": "SUBSYSTEM_CONTENT_INERT"})
+
+    # ---- research_ref 门（advisory · 北极星⑤永不硬锁）----
+    if step.get("research_ref"):
+        summary.gates_engaged += 1
+        r = gates.check_research_ref(
+            step, project_dir=project_root,
+            auto_pilot=auto_pilot, research_skipped=bypass_active)
+        if not r["ok"]:
+            reason = (f"step {n} research_ref 缺失·advisory 软放行"
+                      f"（auto_pilot={auto_pilot}·调研 soft·无网/无 key 降级不阻断·北极星⑤）")
+            log_stderr(f"[gates] step {n} 调研门 advisory 未过·放行 + 记 waiver:\n"
+                       f"  {r['msg']}")
+            _record_gate_waiver(project_root, code="RESEARCH_REF_MISSING",
+                                reason=reason, step_n=n,
+                                plan_id=ctx.get("plan_id"), key=key)
+            summary.gate_waivers.append({"step": n, "code": "RESEARCH_REF_MISSING"})
+
+
 def run_command(command: str, project: str, *, key: str | None = None,
                 chapter: int | None = None,
                 resume_plan_id: str | None = None,
@@ -831,8 +950,17 @@ def run_command(command: str, project: str, *, key: str | None = None,
                     f"修复后 --resume 续跑）")
             if action.startswith("dispatch:"):
                 agent = action.split(":", 1)[1]
-                logger.info(f"退出码 {rc} → 派单 {agent}")
-                dispatch(agent, step, ctx)
+                # 🔴 2026-06-27 C05：声明 hard_gate_reverify → 派单后有界修-验闭环（治 fire-and-
+                #   forget）。未声明 → 退化为原单次 dispatch（向后兼容·零回归）。
+                _rv = (step.get("control_flow") or {}).get("hard_gate_reverify")
+                if _rv:
+                    logger.info(f"退出码 {rc} → 派单 {agent} + hard_gate 修-验闭环（C05）")
+                    _run_hard_gate_repair_loop(step, ctx, _rv, dispatch, runner,
+                                               repo_root, fix_agent=agent,
+                                               origin="reverify")
+                else:
+                    logger.info(f"退出码 {rc} → 派单 {agent}")
+                    dispatch(agent, step, ctx)
             # 'ok' → 继续
 
         # 2.5) 🔴 完本短路（复验修·防捏造走向卡）：step11 的 emergence 脚本检测到
@@ -912,6 +1040,20 @@ def run_command(command: str, project: str, *, key: str | None = None,
                 else:
                     dispatch(agent, step, ctx)
 
+        # 3.5) 🔴 2026-06-27 C04：hard_gate 质量地板（独立于 round_loop 软放行）。
+        #   round_loop（reading-reflector）软放行只管阅读轨 advisory；此地板读 audit 全量报告·
+        #   **只认 HARD_GATE_CODES 残留**——非空 → 有界修复（≤2）→ 仍残留 raise（带病草稿禁进切章）。
+        #   纯 advisory 残留 / 无报告 → 放行（北极星护栏命门：绝不过度拦截·绝不升 reading-reflector 为门禁）。
+        _rv_floor = (step.get("control_flow") or {}).get("hard_gate_reverify")
+        if _rv_floor:
+            _residual_floor = _residual_hard_gate_issues(
+                _hard_gate_report_path(_rv_floor, ctx))
+            if _residual_floor:
+                logger.warning(f"WARN C04 质量地板检出 {len(_residual_floor)} 条残留 "
+                               f"hard_gate·启动有界修复（step {n}）")
+                _run_hard_gate_repair_loop(step, ctx, _rv_floor, dispatch, runner,
+                                           repo_root, origin="floor")
+
         # 4) pause_for_user
         if step.get("pause_for_user"):
             answer = _resolve_pause(step, ctx, auto_pilot=auto_pilot,
@@ -960,6 +1102,11 @@ def run_command(command: str, project: str, *, key: str | None = None,
             if not tp.exists():
                 tp.write_text("{}" if tp.suffix == ".json" else "", encoding="utf-8")
 
+        # 5.5) 🔴 C16：step 门（补 hook 在程序驱动路径失效的守卫）。hard 未过 → 停步可续；
+        #      advisory 未过 → log + 记 waiver 放行（北极星⑤·research 永不硬锁主轨）。
+        _run_step_gates(step, ctx, command=command, auto_pilot=auto_pilot,
+                        summary=summary)
+
         # 6) step_complete（expected_outputs assert·plan_tracker 内置）
         pt.step_complete(plan_id, n, skip_output=bool(step.get("skip_output_allowed")))
         summary.completed.append(StepOutcome(n, name, "completed"))
@@ -968,6 +1115,17 @@ def run_command(command: str, project: str, *, key: str | None = None,
     if not summary.end_report.get("ok"):
         raise OrchestratorError(
             f"end_plan 校验未过: {json.dumps(summary.end_report, ensure_ascii=False)}")
+    # 🔴 C16 自报告：模板**声明了** step 门（research_ref/gate_subsystems/outline plan-end），
+    # 却一个都没触发 → 疑似配置漂移（如 plan-end 步被改名 / 门字段被删）·闭合开环。
+    # 不声明门的命令（cluster-save-state/reconcile…）engaged==0 是正常·不误报。
+    _gates_expected = any(
+        s.get("research_ref") or s.get("gate_subsystems")
+        or s.get("gate_content_check_advisory")
+        or (command == "outline" and s.get("name") == "plan-end")
+        for s in steps)
+    if _gates_expected and summary.gates_engaged == 0:
+        log_stderr(f"[gates] 本 plan（{command}）模板声明了 step 门却 0 触发·疑似配置漂移"
+                   f"（plan-end 步改名 / research_ref 字段被删？建议核对 plan 模板）")
     return summary
 
 
@@ -1021,6 +1179,107 @@ def _run_round_loop(agent: str, step: dict, ctx: dict, cfg: dict, dispatch,
     logger.warning(f"WARN {agent} {max_rounds} 轮后未达连续 {need_clean} 轮 "
                    f"clean → 软预算放行（advisory 非门禁·北极星⑤）")
     return False  # 🔴 2026-06-17 显式信号：max_rounds 软放行 ≠ clean（caller 可据此记录/降级·当前 advisory 不阻断）
+
+
+# ============ 🔴 2026-06-27 C04/C05：hard_gate 质量地板 + 修复重验闭环 ============
+# C04 病灶：reading-reflector round_loop 跑满 max_rounds 后无条件软放行·orchestrator 写作
+#   step3 连返回值都不接 → 带病草稿（残留 hard_gate）原封进切章 step6。
+# C05 病灶：audit_hub 命中 hard_gate 时 orchestrator 只派单 validator-checker 一次（fire-and-
+#   forget）·从不重跑确认真修掉。
+# 共用机制：读 audit 报告 → residual=[未豁免 hard_gate] → 有界修-验闭环（dispatch validator
+#   -checker + 重跑 audit_hub --auto-fix ≤2 轮）→ 用尽仍残留 raise（停本步·可 --resume）。
+# 🔴 北极星护栏（命门·绝不过度拦截）：阻断**只认 audit_hub.HARD_GATE_CODES 单一权威清单**·
+#   绝不数阅读轨/prose_rhythm/hook/voice 的 advisory issues·纯 advisory 残留绝不触发 FAIL。
+_HARD_GATE_CODES_CACHE = None
+
+
+def _hard_gate_codes() -> frozenset:
+    """audit_hub.HARD_GATE_CODES 单一权威清单（懒导入 + 缓存·失败回退空集→用报告 gate_level）。"""
+    global _HARD_GATE_CODES_CACHE
+    if _HARD_GATE_CODES_CACHE is None:
+        try:
+            import audit_hub  # 重模块·懒导入·sys.modules 缓存后零额外成本
+            _HARD_GATE_CODES_CACHE = frozenset(audit_hub.HARD_GATE_CODES)
+        except Exception:       # noqa: BLE001 — 导入失败不崩主链·回退 gate_level 判定
+            _HARD_GATE_CODES_CACHE = frozenset()
+    return _HARD_GATE_CODES_CACHE
+
+
+def _residual_hard_gate_issues(report_path: Path):
+    """读 audit 报告 → 返回「未豁免的 hard_gate」issue 列表（北极星护栏：只认权威 code 清单）。
+
+    返回：
+      · None —— 报告缺失 / 解析失败 / 非 dict（无法判定 → 调用方按「无残留」处理·不阻断）。
+      · list —— 0 或多条未豁免 hard_gate（**只数 HARD_GATE_CODES 命中**·绝不数 advisory）。
+    """
+    try:
+        if report_path is None or not Path(report_path).exists():
+            return None
+        data = json.loads(Path(report_path).read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    codes = _hard_gate_codes()
+    out = []
+    for i in (data.get("issues") or []):
+        if not isinstance(i, dict) or i.get("waived"):
+            continue
+        code = i.get("code")
+        # 权威优先：code 在 HARD_GATE_CODES → hard。导入失败(空集)才回退报告自带 gate_level。
+        is_hard = (code in codes) if codes else (i.get("gate_level") == "hard_gate")
+        if is_hard:
+            out.append(i)
+    return out
+
+
+def _hard_gate_report_path(rv: dict, ctx: dict) -> Path:
+    report_rel = rv.get("audit_report") or "_数据库/.audit/cluster_{key}_audit.json"
+    rp = Path(resolve_placeholders(report_rel, ctx))
+    if not rp.is_absolute():
+        rp = Path(ctx["project_root"]) / rp
+    return rp
+
+
+def _run_hard_gate_repair_loop(step: dict, ctx: dict, rv: dict, dispatch, runner,
+                               repo_root: Path, *, fix_agent: str | None = None,
+                               origin: str = "floor") -> None:
+    """有界 hard_gate 修-验闭环（C04 floor / C05 reverify 共用·北极星：≤max_fix_rounds 非死循环）。
+
+    先读残留：0（None/[]）→ 直接返回（exit2 是 advisory needs_agent·无 hard_gate 可修·零浪费）。
+    有残留 → for r in range(max_fix_rounds): dispatch(fix_agent 修)→重跑 reaudit_script(确定性
+      --auto-fix)→读报告 residual→空 break。用尽仍残留 → raise OrchestratorError（停本步·可 resume）。
+    """
+    rp = _hard_gate_report_path(rv, ctx)
+    pre = _residual_hard_gate_issues(rp)
+    if not pre:                      # None(无报告) 或 [](纯 advisory) → 无 hard_gate 残留·放行
+        return
+    max_rounds = max(1, int(rv.get("max_fix_rounds", 2)))
+    fix_agent = fix_agent or rv.get("fix_agent") or "novel-validator-checker"
+    reaudit = rv.get("reaudit_script") or ""
+    n = step.get("n")
+    for r in range(1, max_rounds + 1):
+        logger.info(f"[{origin}] hard_gate 修-验第 {r}/{max_rounds} 轮 → 派单 {fix_agent} + 重跑 audit")
+        dispatch(fix_agent, step, ctx)          # validator-checker 产 repair brief
+        if reaudit:                              # 重跑确定性 audit_hub --auto-fix（修可修的 hard_gate）
+            ensure_dataflow(step, ctx, reaudit)
+            cmd = _tokenize_then_resolve(reaudit, ctx)
+            if not unresolved_angle_placeholders(cmd):
+                runner(cmd, repo_root=repo_root, label=f"step{n}-{origin}-r{r}")
+            else:
+                logger.warning(f"WARN [{origin}] reaudit_script 占位符未解析·跳过重跑: {cmd}")
+        residual = _residual_hard_gate_issues(rp)
+        if not residual:
+            logger.info(f"[{origin}] 第 {r} 轮后 0 残留 hard_gate → 闭合放行")
+            return
+        logger.warning(f"WARN [{origin}] 第 {r}/{max_rounds} 轮后仍残留 {len(residual)} 条 hard_gate")
+    residual = _residual_hard_gate_issues(rp) or []
+    codes = ", ".join(sorted({str(i.get("code")) for i in residual})) or "?"
+    raise OrchestratorError(
+        f"step {n} hard_gate 质量地板未过（{origin}）：{max_rounds} 轮修复后仍残留 "
+        f"{len(residual)} 条不可豁免 hard_gate [{codes}]——带病草稿禁止进切章/入库"
+        f"（plan {ctx.get('plan_id')} 停在本步·修掉后 --resume 续跑；"
+        f"advisory 类请在 changes.json self_eval.waivers 合理豁免后重跑·北极星⑤）")
 
 
 # ============ CLI ============

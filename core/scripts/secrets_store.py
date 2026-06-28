@@ -230,6 +230,74 @@ def probe() -> dict:
     return {"available": available, "roundtrip_ok": roundtrip_ok}
 
 
+def _list_profiles() -> list[dict]:
+    """列 keyring 里所有已存的 gen-model profile（不打 key 明文·只打 tail 8 位）。"""
+    if _keyring is None:
+        return []
+    try:
+        creds = _keyring.get_credential(SERVICE, None)  # 部分 backend 支持枚举·null 也 OK
+    except Exception:
+        pass
+    # 标准 keyring API 没有跨 service 枚举；改读 .env 文本里的 profile 名 + 查每个有没有 key
+    out: list[dict] = []
+    from pathlib import Path
+    import re as _r
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return out
+    text = env_path.read_text(encoding="utf-8")
+    names = sorted(set(_r.findall(r"^GEN__([A-Za-z0-9_]+)__API_KEY\s*=", text, flags=_r.MULTILINE)))
+    for name in names:
+        k = get_api_key(name)
+        out.append({
+            "profile": name,
+            "in_keyring": bool(k),
+            "tail": (k[-8:] if k else None),
+        })
+    return out
+
+
+def _sync_from_env(dry_run: bool = False) -> dict:
+    """把 .env 里所有 GEN__<name>__API_KEY 写入 keyring（覆盖 keyring 里旧值）。
+
+    用于 cluster_001 写作翻车场景：用户改了 .env 的 key 但 keyring 旧 key 静默覆盖。
+    sync-from-env 一键把 .env 的真相回灌到 keyring。
+    """
+    from pathlib import Path
+    import re as _r
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return {"ok": False, "reason": "no .env"}
+    text = env_path.read_text(encoding="utf-8")
+    pat = _r.compile(r"^GEN__([A-Za-z0-9_]+)__API_KEY[ \t]*=[ \t]*(.*?)[ \t]*$", _r.MULTILINE)
+    changed: list[dict] = []
+    skipped: list[dict] = []
+    for m in pat.finditer(text):
+        name, new_key = m.group(1), m.group(2).strip()
+        if not new_key:
+            continue
+        old = get_api_key(name)
+        if old == new_key:
+            skipped.append({"profile": name, "reason": "identical"})
+            continue
+        if dry_run:
+            changed.append({
+                "profile": name,
+                "old_tail": (old[-8:] if old else None),
+                "new_tail": new_key[-8:],
+                "would_change": True,
+            })
+            continue
+        ok = set_api_key(name, new_key)
+        changed.append({
+            "profile": name,
+            "old_tail": (old[-8:] if old else None),
+            "new_tail": new_key[-8:],
+            "ok": ok,
+        })
+    return {"ok": True, "dry_run": dry_run, "changed": changed, "skipped": skipped}
+
+
 def main(argv=None) -> int:
     """CLI 入口（frozen multi-call dispatch 经 orchestrator.run_script_in_process 调 main()）。"""
     import argparse
@@ -237,13 +305,56 @@ def main(argv=None) -> int:
     import sys
 
     ap = argparse.ArgumentParser(prog="secrets_store", description="BYOK keyring 薄抽象工具")
-    ap.add_argument("--probe", action="store_true",
-                    help="后端探活 + 临时 service 回环（绝不碰真 service）·JSON 输出·失败非零退出")
+    sub = ap.add_subparsers(dest="cmd")
+
+    sub.add_parser("probe", help="后端探活 + 临时 service 回环（绝不碰真 service）")
+    ap.add_argument("--probe", action="store_true", help="[deprecated alias] 同 probe 子命令")
+
+    p_list = sub.add_parser("list", help="列 .env 已定义 profile 在 keyring 的状态（不打 key 明文）")
+    p_list.add_argument("--json", action="store_true")
+
+    p_set = sub.add_parser("set", help="写入/更新 keyring 中某 profile 的 key")
+    p_set.add_argument("profile")
+    p_set.add_argument("key")
+
+    p_unset = sub.add_parser("unset", help="清除 keyring 中某 profile 的 key（让 .env 接管）")
+    p_unset.add_argument("profile")
+
+    p_sync = sub.add_parser("sync-from-env",
+        help="🔴 把 .env 里所有 GEN__<name>__API_KEY 写进 keyring（治 keyring 静默覆盖 .env 陷阱）")
+    p_sync.add_argument("--dry-run", action="store_true")
+
     args = ap.parse_args(argv)
-    if args.probe:
+    cmd = args.cmd or ("probe" if args.probe else None)
+
+    if cmd == "probe":
         result = probe()
         print(json.dumps(result, ensure_ascii=False))
         return 0 if (result["available"] and result["roundtrip_ok"]) else 1
+    if cmd == "list":
+        rows = _list_profiles()
+        if getattr(args, "json", False):
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+        else:
+            print(f"keyring service: {SERVICE}")
+            for r in rows:
+                tail = f"...{r['tail']}" if r["tail"] else "(none)"
+                print(f"  {r['profile']:<22} keyring={tail}")
+        return 0
+    if cmd == "set":
+        ok = set_api_key(args.profile, args.key)
+        print(json.dumps({"profile": args.profile, "ok": ok,
+                          "tail": (get_api_key(args.profile) or "")[-8:] or None}))
+        return 0 if ok else 1
+    if cmd == "unset":
+        ok = delete_api_key(args.profile)
+        print(json.dumps({"profile": args.profile, "deleted": ok}))
+        return 0
+    if cmd == "sync-from-env":
+        res = _sync_from_env(dry_run=args.dry_run)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0 if res.get("ok") else 1
+
     ap.print_help(sys.stderr)
     return 2
 

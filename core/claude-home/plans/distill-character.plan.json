@@ -1,0 +1,74 @@
+{
+  "command": "distill-character",
+  "version": 1,
+  "description": "🔴 2026-06-27 C13：深度角色蒸馏（Voice DNA · 产 voice_pack）纳入 plan 强制规划层（此前整条命令脱离 6 命令矩阵·无 PLAN_ID/STEP/plan_tracker/L3 hook·6 步全靠主代理自觉）。6 步：收集素材→5层persona分析→voice_sample 同栈 gen-model 生成→确定性合并人物卡(带 provenance)→PROCESS-INTEGRITY 硬闸 + 回灌 voice-fidelity advisory→git。唯一 hard 项 = PROCESS-INTEGRITY（voice_sample 须来自同栈 gen-model + style/anti_sample 须带 ≥2 章 provenance · banned_phrases 首次明确即可入列不要求 ≥2 源）；fidelity 永 advisory（voice 是采集非预设·随角色成长 fluid 演化·绝不 hard-lock 对白 match·中途反复跑校准忌重量级 per-character SFS 循环）。",
+  "total_steps": 6,
+  "required_steps": [1, 2, 3, 4, 5],
+  "optional_steps": [6],
+  "_program_driven_status": "Claude 驱动命令（分析/合并步 = Claude 判断·北极星⑤不干涉模型创作判断）：step1/2 收集素材 + 5 层 persona 分析 = Claude（分析非生成），step3 voice_sample = gen-model（含创意笔触·同栈契约），step4 合并 = Claude 确定性增量合并，step5 回灌 verify = distill_character_verify.py 闸。scripts 行内 {project_root} 由调用方（主代理/orchestrator）替换为真实项目路径；{key} = 角色 id（plan create --key <角色>），由 plan_tracker 在 create 时替换。",
+  "_north_star_alignment": "①更贴近作者风格(voice_sample 喂角色历史真实对白 few-shot·gen-model 同栈复刻实战 voice·非 Claude 凭印象编) ②cluster 单位(素材按角色出场 cluster 收集·章号经 cluster_lookup 反查) ③涟漪驱动(voice 随剧情/角色 arc 演化采集·非预设) ④章节纯格式(provenance 标章号只为溯源·不参与质检) ⑤不干涉模型判断(fidelity 永 advisory·绝不 hard-lock 对白 match·唯一硬=PROCESS-INTEGRITY 同栈/provenance 契约) ⑥清旧码(消除 gen_creative voice_sample 的 NotImplementedError/polish hack)",
+  "_c13": "🔴 2026-06-27 C13-DISTILL-CHARACTER-PLAN-REPLICATE：voice_sample 走 gen_creative.py --mode voice_sample（gen-model·OpenAI 兼容·同栈·守『蒸馏复刻必须同栈 gen-model』）。回灌 verify advisory（exit0 默认·exit2 仅 PROCESS-INTEGRITY 契约/provenance 破损·非 fidelity delta）——强制完美 voice 复制会(a)干涉模型创作(b)冻结本应随角色成长 fluid 演化的 voice。",
+  "steps": [
+    {
+      "n": 1,
+      "name": "collect-material",
+      "description": "收集素材（Claude 分析·非生成）：读 _数据库/人物卡.json 取目标角色当前档案 + _数据库/故事块摘要.json 定位该角色出场 cluster/章 → 逐章读正文 txt 提取该角色全部对白/动作描写/内心活动，每条标注来源章号。产 material.json：{character, dialogue_quotes:[{text, from_chapter}], action_quotes, inner_quotes, appearance_chapters:[...]}（≥2 章来源供下游 provenance）。",
+      "required": true,
+      "skip_output_allowed": false,
+      "expected_outputs": ["_数据库/.distill_character/{key}_material.json"]
+    },
+    {
+      "n": 2,
+      "name": "voice-dna-analysis",
+      "description": "Voice DNA 5 层 persona 分析（Claude 判断·非生成·北极星⑤不干涉模型创作）：layer_0 硬规则(never_say/never_do/never_attitude/boundaries/knowledge_limits) / layer_1 身份 / layer_2 语言指纹(句长/标点/口头禅/语气词) / layer_3 情感模式 / layer_4 行为规则 + cognition。产 voice_dna.json。",
+      "required": true,
+      "skip_output_allowed": false,
+      "expected_outputs": ["_数据库/.distill_character/{key}_voice_dna.json"]
+    },
+    {
+      "n": 3,
+      "name": "voice-sample-gen-genmodel",
+      "description": "🔴 同栈契约（C13 核心）：含创意笔触的 voice_pack.style_samples / anti_samples 候选走 gen_creative.py --mode voice_sample（gen-model·OpenAI 兼容协议·喂角色历史真实对白 few-shot + voice_dna 基础字段），禁 Claude 凭印象编（脱离实战 voice）。输出 _meta.generated_by_model / generated_by_profile 做同栈 provenance 证据（step4 合并须带入 voice_pack._gen_provenance·step5 PROCESS-INTEGRITY 据此判同栈）。",
+      "required": true,
+      "skip_output_allowed": false,
+      "scripts": [
+        "python core/scripts/gen_creative.py --mode voice_sample --project {project_root} --character {key} --history {project_root}/_数据库/.distill_character/{key}_material.json --voice-dna {project_root}/_数据库/.distill_character/{key}_voice_dna.json --count 4 --out {project_root}/_数据库/.distill_character/{key}_voice_samples.json"
+      ],
+      "expected_outputs": ["_数据库/.distill_character/{key}_voice_samples.json"]
+    },
+    {
+      "n": 4,
+      "name": "merge-voice-pack",
+      "description": "确定性增量合并（Claude·保留历史·版本追踪）：把 voice_dna + voice_samples 合并进 _数据库/人物卡.json 该角色 voice_pack。硬契约（供 step5 PROCESS-INTEGRITY 校验）：① voice_pack._gen_provenance 带入 step3 _meta 的 generated_by_model/generated_by_profile（同栈证据）；② 每条 style_samples/anti_samples 是 {text, from_chapters:[...]} 且 from_chapters ≥2 个不同章号（命令文档 P2-7 反 over-generalize）；③ banned_phrases 首次明确即可入列（底线·不要求 ≥2 源）。写 distill_history 版本标记。",
+      "required": true,
+      "skip_output_allowed": false,
+      "expected_outputs": ["_数据库/人物卡.json"]
+    },
+    {
+      "n": 5,
+      "name": "process-integrity-and-feedback-verify",
+      "description": "🔴 回灌验证闸（distill_character_verify.py·C13）：PROCESS-INTEGRITY 硬（voice_pack._gen_provenance 同栈 gen-model 证据 + 每 style/anti_sample ≥2 章 provenance + banned_phrases 列表结构合法）→ 破损 + --strict 则 exit 2 拦在出货前。voice-fidelity（轻量·gen-model 写新对白比对历史 voice·复用 distill_finalize_verify 简化 estimate 哲学·非全 SFS multi-ref）永 advisory REPORT（绝不 hard-lock 对白 match 分数·voice 随角色成长 fluid·中途反复校准忌重量级 SFS 循环）。exit0 默认·exit2 仅契约/provenance 破损非 fidelity delta。",
+      "required": true,
+      "skip_output_allowed": false,
+      "control_flow": {"exit_codes": {"0": "ok", "2": "fail"}},
+      "scripts": [
+        "python core/scripts/distill_character_verify.py --project {project_root} --character {key} --output {project_root}/对比报告/voice_verify_{key}.json --strict"
+      ],
+      "expected_outputs": ["对比报告/voice_verify_{key}.json"]
+    },
+    {
+      "n": 6,
+      "name": "git-snapshot",
+      "description": "git 快照（人物卡.json 已更新·失败不阻断流水线·仅记录）。",
+      "required": false,
+      "optional": true,
+      "skip_output_allowed": true,
+      "scripts": [
+        "? python core/scripts/git_snapshot.py {project_root} --message 蒸馏角色"
+      ],
+      "expected_outputs": []
+    }
+  ],
+  "_v2_principle": "整个系统为故事块服务·角色蒸馏以 cluster 为单位收集素材·章号经 cluster_lookup 反查·voice 是采集非预设。",
+  "_north_star_5": "唯一 hard 项 = PROCESS-INTEGRITY（同栈 gen-model + ≥2 章 provenance 契约）·voice-fidelity 永 advisory（不干涉模型创作·不冻结 fluid 演化的 voice）。"
+}

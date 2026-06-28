@@ -42,6 +42,9 @@ IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+# 🔴 2026-06-27 SYS-5 ①：extract_keywords 上移 continuity_keywords（单一来源），
+# builder 预算 cliffhanger_resonance_next 与本 scanner 回退重算须用同一套关键词逻辑才可比。
+from continuity_keywords import extract_keywords  # noqa: E402 · re-export 保持 cc.extract_keywords 可用
 
 def load_json(p: Path, default=None):
     if not p.exists():
@@ -100,19 +103,7 @@ def read_changes(ch_dir: Path, ch: int) -> dict | None:
 
 
 # ===== 维度 1: cliffhanger 回应度 =====
-
-def extract_keywords(text: str, top_n: int = 20, protagonist: str | None = None) -> set[str]:
-    """简易关键词：长度 ≥2 的中文/英文 + 时间戳 + 数字串。
-
-    protagonist：当前项目主角名（main 经 get_protagonist 从 人物卡.json 动态读）→ 加入
-    stop 过滤。主角名几乎每段都出现，不过滤会让 cliffhanger 关键词重叠虚高。
-    2026-06-15 修：原硬编码 stop={"陆衍",...} 只对某本旧书有效（北极星⑥清硬编码 + ①不绑
-    特定书）→ 动态读主角名，照 relationship_evaluator.get_protagonist 范式。"""
-    tokens = re.findall(r"[一-鿿]{2,}|[A-Za-z]{3,}|\d+[:：]\d+|\d{3,}", text)
-    stop = {"他的", "她的", "自己", "一个", "一下", "什么", "这种", "那个", "这个", "那种", "已经", "还是", "就是", "不是", "没有", "他在", "他想", "他说", "她说"}
-    if protagonist:
-        stop.add(protagonist)
-    return set(t for t in tokens if t not in stop)
+# extract_keywords 已上移 continuity_keywords（SYS-5 ①），见顶部 import（cc.extract_keywords 仍可用）。
 
 
 def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: Path, protagonist: str | None = None) -> dict:

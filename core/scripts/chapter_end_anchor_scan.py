@@ -28,9 +28,14 @@
 """
 import argparse
 import json
+import os  # 🔴 2026-06-27 P1-07: 读 CHAPTER_END_WEAK_ANCHOR_RATIO env
 import re
 import sys
 from pathlib import Path
+
+# 🔴 2026-06-27 P1-07: 弱锚阈值外提（让 PID 控制器 + audit_hub env 注入可调）。
+# 默认 0.15（沿用历史值·零回归）·env / CLI 任一传值即覆盖（CLI 优先）。
+_WEAK_ANCHOR_RATIO = float(os.environ.get("CHAPTER_END_WEAK_ANCHOR_RATIO", "0.15"))
 
 # 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测），裸 .items() 会崩。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -196,8 +201,14 @@ def collect_anchors(db_dir: Path) -> set[str]:
 
 # ============ 检测主逻辑 ============
 
-def scan_chapter_end(chapter_path: Path, anchors: set[str]) -> dict:
-    """扫一章末段，返回 issues。"""
+def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool = False) -> dict:
+    """扫一章末段，返回 issues。
+
+    🔴 2026-06-27 C06：hard_gate_only=True（--hard-gate-only）只跑 SCREENPLAY + SEPARATOR
+    两族 hard_gate（供切章后复扫·与 audit_hub step3 整段 SCREENPLAY 扫互补：此处补 SEPARATOR
+    须锚定章末的位置敏感检测），跳过 closure / anchor / POV advisory（避免 advisory 噪声干扰
+    复扫纯阻断语义）。北极星⑤：语义收束/弱锚永不在此升格 hard_gate。
+    """
     text = chapter_path.read_text(encoding="utf-8")
     tail_paras = get_chapter_tail_paragraphs(text, n=5)
     tail_text = "\n\n".join(tail_paras)
@@ -226,6 +237,16 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str]) -> dict:
                 "reason": reason,
                 "fix_hint": "删除章末物理分隔符 · 章节是格式输出不该出现排版分隔",
             })
+    # 🔴 2026-06-27 C06：--hard-gate-only 模式到此为止（只 SCREENPLAY + SEPARATOR 两族 hard_gate）。
+    if hard_gate_only:
+        return {
+            "chapter_path": str(chapter_path),
+            "tail_text_preview": tail_text[:200] + ("..." if len(tail_text) > 200 else ""),
+            "tail_keywords_count": 0,
+            "hit_anchors": [],
+            "anchor_ratio": 0.0,
+            "issues": issues,
+        }
     # 语义收束句 → advisory（读者体验偏好 · 写作 agent 有理由可豁免 · 不再 hard_gate 误升格）
     for pat, reason in CHAPTER_END_CLOSURE_PATTERNS:
         for m in re.finditer(pat, tail_text, re.MULTILINE):
@@ -252,13 +273,13 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str]) -> dict:
             "reason": "章末 5 段 0 关键词命中 cluster_blueprint / 伏笔表 / 事件簇 brief — 可能装神弄鬼无锚 cliffhanger",
             "fix_hint": "重写章末，锚定到下一 cluster brief 的具体伏笔 / 角色 / 物件 / 事件",
         })
-    elif anchor_ratio < 0.15:
+    elif anchor_ratio < _WEAK_ANCHOR_RATIO:
         issues.append({
             "code": "CHAPTER_END_WEAK_ANCHOR",
             "gate_level": "advisory",
             "severity": "warning",
             "matched": f"hit={len(hit_anchors)}/{len(tail_keywords)} keywords ({anchor_ratio:.1%})",
-            "reason": "章末锚定率偏低 (< 15%) — cliffhanger 与已存在剧情关联弱",
+            "reason": f"章末锚定率偏低 (< {_WEAK_ANCHOR_RATIO:.0%}) — cliffhanger 与已存在剧情关联弱",
             "fix_hint": "增加章末与下一 cluster 伏笔/角色/物件的具体绑定",
         })
 
@@ -287,7 +308,17 @@ def main():
     ap.add_argument("--chapters", required=True, help="章节范围（如 1-4 或 5）")
     ap.add_argument("--strict", action="store_true", help="严格模式：advisory 也 exit 1")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
+    # 🔴 2026-06-27 C06：只跑 SCREENPLAY + SEPARATOR 两族 hard_gate（跳 closure/anchor/POV advisory）·
+    # 供切章后复扫纯阻断（与 audit_hub step3 整段 SCREENPLAY 扫互补：补章末位置敏感的 SEPARATOR）。
+    ap.add_argument("--hard-gate-only", action="store_true",
+                    help="只检测 SCREENPLAY + SEPARATOR 两族 hard_gate · 跳过所有 advisory")
+    # 🔴 2026-06-27 P1-07: CLI 覆盖弱锚阈值（优先级高于 env CHAPTER_END_WEAK_ANCHOR_RATIO）
+    ap.add_argument("--weak-anchor-ratio", type=float, default=None,
+                    help="弱锚 advisory 触发阈值（默认 0.15·env CHAPTER_END_WEAK_ANCHOR_RATIO·CLI 优先）")
     args = ap.parse_args()
+    if args.weak_anchor_ratio is not None:
+        global _WEAK_ANCHOR_RATIO
+        _WEAK_ANCHOR_RATIO = float(args.weak_anchor_ratio)
 
     project = Path(args.project).resolve()
     if not project.exists():
@@ -312,7 +343,7 @@ def main():
         if not ch_path.exists():
             print(f"[SKIP] 第{ch:03d}章 正文未找到", file=sys.stderr)
             continue
-        r = scan_chapter_end(ch_path, anchors)
+        r = scan_chapter_end(ch_path, anchors, hard_gate_only=args.hard_gate_only)
         results.append(r)
         for iss in r["issues"]:
             if iss["gate_level"] == "hard_gate":
@@ -340,8 +371,19 @@ def main():
                 print(f"  ✅ {ch_name}: anchor_ratio={r['anchor_ratio']}")
 
     if total_hard > 0:
+        # 🔴 2026-06-26 fatal 走 stderr+flush（同 gen_writer/gen_fixer 修法）
+        sys.stderr.write(f"[chapter_end_anchor_scan][HARD_GATE] {total_hard} 条 hard_gate 命中，必修\n")
+        sys.stderr.flush()
         sys.exit(2)
     if total_advisory > 0 and args.strict:
+        # 🔴 2026-06-26 加 banner（cluster_001 翻车 sediment）：
+        # exit 1 在 shell 惯例下 = failed，调用方易误以为 scanner 崩了。
+        # 实际上是 --strict 模式下 advisory 也阻断的设计。明示「advisory · 非崩溃」。
+        sys.stderr.write(
+            f"[chapter_end_anchor_scan][ADVISORY] {total_advisory} 条 advisory 命中。"
+            f"--strict 模式下用 exit 1 标记（非 fatal · 主代理可写 waiver 到 changes.json 豁免）。\n"
+            f"  取消 --strict → advisory 不阻断（exit 0）；hard_gate 任何模式都 exit 2。\n")
+        sys.stderr.flush()
         sys.exit(1)
     sys.exit(0)
 

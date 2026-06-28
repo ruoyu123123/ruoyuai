@@ -136,10 +136,11 @@ def test_low_frequency_per_cluster_update():
 
 # ---------- 物理隔离红线（白名单 4 键 · 硬拒其余） ----------
 
-def test_controlled_keys_exactly_four():
-    """被控键严格 4 个（与本件圈定一致·绝不扩张）。"""
+def test_controlled_keys_exactly_five():
+    """被控键严格 5 个（2026-06-27 P1-07 起·新增 chapter_end_weak_anchor_ratio·物理隔离仍守白名单）。"""
     assert pid._CONTROLLED_KEYS == (
-        "para_mean_len", "dialogue_ratio", "long_para_per_chapter", "quota_per_word")
+        "para_mean_len", "dialogue_ratio", "long_para_per_chapter", "quota_per_word",
+        "chapter_end_weak_anchor_ratio")
 
 
 def test_reject_non_whitelist_key():
@@ -186,6 +187,10 @@ def test_hard_gate_codes_not_polluted():
         "ITEM_NOT_YET_INTRODUCED", "PROPAGATION_DEBT_CREATED", "STYLE_单段超长",
         "CHAPTER_END_FORBIDDEN_SCREENPLAY", "CHAPTER_END_FORBIDDEN_TRANSITION",
         "LOCKED_FACT_CROSS_SCENE_CONFLICT",
+        # 🔴 2026-06-27 C03：子系统载荷点火 3 码（经独立 C03 特性入列·非本 L2-1 PID 改动）
+        "RIPPLE_RULES_EMPTY", "GRAND_TREND_ME_POOL_EMPTY", "CLUSTER001_STORYBOARD_EMPTY",
+        # 🔴 2026-06-27 C18：splitter 字数守恒 1 码（经独立 C18 特性入列·非本 L2-1 PID 改动）
+        "SPLIT_WORD_NOT_CONSERVED",
     }
     assert ah.HARD_GATE_CODES == expected, (
         f"HARD_GATE_CODES 被污染！多出={ah.HARD_GATE_CODES - expected} "
@@ -193,7 +198,7 @@ def test_hard_gate_codes_not_polluted():
 
 
 def test_controlled_keys_disjoint_from_hard_gate():
-    """白名单 4 键与 15 HARD_GATE_CODES 物理无交集（回路彻底隔离）。"""
+    """白名单 4 键与 18 HARD_GATE_CODES 物理无交集（回路彻底隔离·C03 后基线 18）。"""
     sys.path.insert(0, str(_ROOT / "core" / "scripts"))
     import audit_hub as ah
     assert set(pid._CONTROLLED_KEYS).isdisjoint(ah.HARD_GATE_CODES)

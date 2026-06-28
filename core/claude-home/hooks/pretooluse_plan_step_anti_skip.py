@@ -21,6 +21,14 @@ import re
 import sys
 from pathlib import Path
 
+# 🔴 2026-06-27 C16：判定逻辑抽到共享库 plan_step_gates（北极星⑥消重复）。
+# 本 hook 改薄 wrapper：解析 stdin → 找 step → 调 check_anti_skip → ok?exit0:exit2。
+_SCRIPTS = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from plan_step_gates import check_anti_skip  # noqa: E402
+
 
 def main():
     try:
@@ -68,45 +76,32 @@ def main():
         sys.exit(0)
 
     # 用户轻量模式旁路：项目 _数据库/.subsystems_bypass.json 存在即放行
+    # 🔴 2026-06-17 移除 allow_skip_steps 全局旁路：无任何 plan 模板使用·是潜在 footgun
+    # （单字段整盘绕过「禁止跳步」最高元规则）。合法 opt-out 走项目级 .subsystems_bypass.json。
     project_name = plan.get("project", "")
+    bypass_active = False
     if project_name:
         bypass_candidates = [
             project_dir / "workspace" / "novels" / project_name / "_数据库" / ".subsystems_bypass.json",
             project_dir / "workspace" / "styles" / project_name / "_数据库" / ".subsystems_bypass.json",
         ]
-        if any(b.exists() for b in bypass_candidates):
-            sys.exit(0)
-
-    # 🔴 2026-06-17 移除 allow_skip_steps 全局旁路：无任何 plan 模板使用·是潜在 footgun
-    # （单字段整盘绕过「禁止跳步」最高元规则）。合法 opt-out 走项目级 .subsystems_bypass.json。
+        bypass_active = any(b.exists() for b in bypass_candidates)
 
     # 找 step n 的模板定义
     target_step = next((s for s in plan.get("steps", []) if s.get("n") == n), None)
     if not target_step:
         sys.exit(0)
 
-    expected = target_step.get("expected_outputs", []) or []
-    skip_allowed = target_step.get("skip_output_allowed", False)
+    # 🔴 C16：核心校验下沉到 check_anti_skip（命中即此处含 --skip-output → requested=True）。
+    result = check_anti_skip(target_step, skip_output_requested=True,
+                             bypass_active=bypass_active)
+    if result["ok"]:
+        sys.exit(0)
 
-    # 核心校验
-    if expected and not skip_allowed:
-        print(f"❌ [Hook anti_skip] plan_tracker step --skip-output 被拒绝", file=sys.stderr)
-        print(f"   plan_id: {plan_id}", file=sys.stderr)
-        print(f"   step: {n} ({target_step.get('name', '?')})", file=sys.stderr)
-        print(f"   该 step 模板要求 expected_outputs ({len(expected)} 个文件):", file=sys.stderr)
-        for f in expected[:5]:
-            print(f"     - {f}", file=sys.stderr)
-        if len(expected) > 5:
-            print(f"     ... 及 {len(expected) - 5} 个其他文件", file=sys.stderr)
-        print(f"", file=sys.stderr)
-        print(f"   🔴 v24 禁跳步规则（memory feedback-default-no-step-skipping-for-new-books）", file=sys.stderr)
-        print(f"   解决方案：", file=sys.stderr)
-        print(f"     A. 真跑 step 产生 expected_outputs 后用正常 step 命令（不带 --skip-output）", file=sys.stderr)
-        print(f"     B. 项目「轻量模式」→ touch <project>/_数据库/.subsystems_bypass.json 旁路", file=sys.stderr)
-        print(f"     C. plan template 该 step 改 skip_output_allowed: true（仅在场景明确无输出时合法）", file=sys.stderr)
-        sys.exit(2)
-
-    sys.exit(0)
+    print(f"❌ [Hook anti_skip] plan_tracker step --skip-output 被拒绝（plan {plan_id}）",
+          file=sys.stderr)
+    print(f"   {result['msg']}", file=sys.stderr)
+    sys.exit(2)
 
 
 if __name__ == "__main__":

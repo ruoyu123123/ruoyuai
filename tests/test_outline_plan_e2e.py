@@ -45,10 +45,25 @@ def _fake_runner(project_root: Path):
                 if not f.exists():
                     f.write_text("{}", encoding="utf-8")
         elif "--mode volume_arc" in cmd:
-            (db / "大势卡.json").write_text(json.dumps({"volumes": [], "major_events": []},
-                                                      ensure_ascii=False), encoding="utf-8")
-            (db / "事件簇.json").write_text(json.dumps({"clusters": [{"cluster_id": "cluster_001"}]},
-                                                      ensure_ascii=False), encoding="utf-8")
+            # 🔴 2026-06-27 C03：outline plan-end 现 hard content_check（载荷非空）·volume_arc
+            #   产物必须填 大势卡.major_events + 事件簇.clusters[0].scene_storyboard（真 outline
+            #   由 gen-model 填·此 fake 须同形态否则地板正确拦下「outline 未填载荷」）。
+            (db / "大势卡.json").write_text(json.dumps(
+                {"volumes": [{"vol": 1}],
+                 "major_events": [{"id": "ME-V1-01", "volume": 1,
+                                   "is_volume_finale": True}]},
+                ensure_ascii=False), encoding="utf-8")
+            (db / "事件簇.json").write_text(json.dumps(
+                {"clusters": [{"cluster_id": "cluster_001",
+                               "scene_storyboard": [{"scene": 1, "summary": "灾难开场"}]}]},
+                ensure_ascii=False), encoding="utf-8")
+        elif "world_seed_init.py" in cmd:
+            # 🔴 C03：world_seed_init 播 涟漪规则（载荷·让 world_evolution_engine 点火）。
+            (db / "涟漪规则.json").write_text(json.dumps(
+                {"ripple_rules": [{"id": "R1", "trigger_type": "auto_tick"}]},
+                ensure_ascii=False), encoding="utf-8")
+            (db / "世界状态.json").write_text(json.dumps(
+                {"state": {"day": 1}}, ensure_ascii=False), encoding="utf-8")
         elif "cluster_choice_apply.py" in cmd:
             pass  # 事件簇.json 已存在
         # scaffold verify / db_schema_validate / research → no-op 成功

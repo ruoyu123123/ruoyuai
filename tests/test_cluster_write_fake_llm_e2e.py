@@ -168,9 +168,19 @@ class _FakeLoader:
         return []
 
 
-# writer 正文 fake：返回足够长的确定性正文（>12000 CJK 过 splitter 字数下限）。
-# finish=stop 避免触发续写循环。带一个合法 CHANGES JSON 围栏（gen_writer 解析约定）。
-_FAKE_BODY = "正文" * 4000   # 8000 CJK 字符 → save_output count_cjk ≈ 8000
+# writer 正文 fake：返回足够长的**契约合法**确定性正文（>12000 CJK 过 splitter 字数下限）。
+# 🔴 2026-06-27 C04/C05 适配：fake 正文必须是 proper 短段落（每段 < 单段超长阈值 + 句末标点）
+#   + changes.factual 非空——否则真 audit_hub（step3 in-process 真跑）命中 STYLE_单段超长 /
+#   CHANGES_MISSING（hard_gate），新增的 C04 质量地板会（正确地）拦下这种带病 garbage 草稿。
+#   旧 fake（"正文"*4000 单段 + 空 factual）正是 C04 该拦的形态——改为合法形态测确定性骨架。
+def _fake_body(n_paras, *, start=0):
+    """n 段**各不相同**的单句短段落（句末 。·远 < 单段超长阈值）。
+    🔴 段落必须互不相同——gen_writer draft_sanitizer 会「整块去重」把重复段折叠掉
+    （重复段会被压成 ~1 段·draft 塌缩成 120 CJK）。用段号嵌入保证唯一。"""
+    return "\n".join(f"第{i}段正文在此推进剧情。" for i in range(start, start + n_paras))
+
+
+_FAKE_BODY = _fake_body(1800)              # ~18000 CJK 唯一短段落（越过 freestyle 软下限 16000）
 
 
 def _fake_stream_once(client, profile, system, user, max_tokens,
@@ -178,16 +188,15 @@ def _fake_stream_once(client, profile, system, user, max_tokens,
     """替 gen_writer._stream_once。
 
     第一次调用返回主体正文；若 gen_writer 因 freestyle min_cjk 软下限触发 expand 续写
-    （prior_assistant 非空），再补一段——保证累计正文越过 FREESTYLE_MIN_CJK=12000，
-    否则 expand 循环每轮加 8000 也会在 2 轮内越线。finish=stop 不触发 length 续写。
+    （prior_assistant 非空），再补一段唯一短段落（不引入单段超长·不与主体重复被去重）。
+    finish=stop 不触发续写。
     """
     if prior_assistant:
-        # expand 续写：再补 8000 CJK（无 CHANGES·gen_writer 末尾会单独补 CHANGES 请求）
-        return ("正文" * 4000), "stop"
-    body = _FAKE_BODY
-    changes = {"factual": {}, "self_eval": {"waivers": []}}
+        return _fake_body(500, start=50000), "stop"
+    changes = {"factual": {"_note": "冒烟测试·无真实事实变更"},
+               "self_eval": {"waivers": []}}
     fenced = "\n\n```json\n" + json.dumps(changes, ensure_ascii=False) + "\n```"
-    return body + fenced, "stop"
+    return _FAKE_BODY + fenced, "stop"
 
 
 # judge fake：按 agent 返回满足该 spec.required_keys 的 JSON（block 级缺键会抛
@@ -483,13 +492,15 @@ def test_seed_subsystems_preflight_passes():
 
 def _short_fake_stream_once(client, profile, system, user, max_tokens,
                             prior_assistant=None, cont_reason="length"):
-    """短稿 fake（~2500 CJK < 单章下限 3000）→ splitter 全退 pending_tail·0 章。
-    expand 续写也只加一点点（模拟真模型「已无更多内容」·实测真 API 偶发）。"""
+    """短稿 fake（~2300 CJK < 单章下限 3000）→ splitter 全退 pending_tail·0 章。
+    expand 续写也只加一点点（模拟真模型「已无更多内容」·实测真 API 偶发）。
+    🔴 2026-06-27 C04/C05 适配：同样用 proper 短段落 + 非空 factual（避免 STYLE_单段超长 /
+    CHANGES_MISSING hard_gate 被 C04 地板拦下·短稿 pending_tail 是 v27 合法流程非 garbage）。"""
     if prior_assistant:
-        return ("正文" * 10), "stop"
-    changes = {"factual": {}, "self_eval": {"waivers": []}}
+        return _fake_body(2, start=90000), "stop"
+    changes = {"factual": {"_note": "短稿冒烟"}, "self_eval": {"waivers": []}}
     fenced = "\n\n```json\n" + json.dumps(changes, ensure_ascii=False) + "\n```"
-    return ("正文" * 1250) + fenced, "stop"
+    return _fake_body(230) + fenced, "stop"
 
 
 @contextmanager

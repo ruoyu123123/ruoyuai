@@ -265,8 +265,12 @@ def test_D_pairwise_drift_count_gen_model_fail_degrades():
 # [E] 综合择优（SFS - 走味惩罚降序 / 缺项降级 / 单稿等价）
 # ════════════════════════════════════════════════════════════════
 
-def _scored(idx, sfs=None, av_drift=None, composite="__auto__", body_cjk=13000):
-    """造一个已打分候选（composite 默认按公式自动算 · body_cjk 默认达标 13000）。"""
+def _scored(idx, sfs=None, av_drift=None, composite="__auto__", body_cjk=18000):
+    """造一个已打分候选（composite 默认按公式自动算 · body_cjk 默认达标 18000）。
+
+    🔴 2026-06-27 P1-06 同批：FREESTYLE_MIN_CJK 12000→16000 之后，默认 body_cjk
+    需 ≥ 16000 才"达标"·原 13000 已不达标导致 test_E 走偏短分支报错。
+    """
     if composite == "__auto__":
         if sfs is not None:
             composite = round(sfs - gw.AV_DRIFT_PENALTY_PER_DIM * (av_drift or 0), 2)

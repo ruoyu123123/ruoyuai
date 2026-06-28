@@ -20,8 +20,10 @@ M3 orchestrator 把它判 NOT-YET 拒绝。本脚本补缺：把 5 个 step 落�
                           策略默认 strategy=A（全部自动修复）·--strategy B/C/D 可控。
   --mode audit            读 radius.json · 调 audit_hub.py 或 locked_fact_cross_scene_scanner
                           对 patch 后章节做跨章一致性验证·写 {workspace}/audit.json。
-  --mode report           汇总 step1-4 · 输出 {workspace}/reconcile_report.json
-                          （summary/changed_files/skipped/audit_verdict/git_tag）。
+  --mode propagation-check 🔴 W5：扫受影响章节·统计正文/changes 里 before 旧值残留·列『未传播
+                          章节』→ {workspace}/propagation_debt.json（advisory·只标债务绝不改正文）。
+  --mode report           汇总 step1-4 + 传播校验 · 输出 {workspace}/reconcile_report.json
+                          （summary/changed_files/skipped/audit_verdict/propagation_debt/git_tag）。
 
 【workspace 选择】
   --reconcile-id ID  默认 "current"·plan 单次 run 用 "current" 覆盖式写
@@ -552,13 +554,127 @@ def audit_consistency(project_root: Path, workspace: Path, args) -> int:
     return 0
 
 
+# ============ propagation-check（🔴 2026-06-27 W5）============
+def propagation_check(project_root: Path, workspace: Path, args) -> int:
+    """🔴 2026-06-27 W5：传播债务校验（advisory · 只标债务 · 绝不改正文）。
+
+    根因（completeness critic 揪出的零约束裸奔环节）：/reconcile 改设定（locked_fact/
+    人物卡/世界观）后，没有任何机器校验旧值是否真正传播到受影响章节——patch 可能失败/
+    跳过/用户选 strategy D 只更新档案，旧值（before）仍残留在历史章节正文/changes
+    （propagation debt），下次写作 build_manifest 仍读到旧描述 → 穿帮无人察觉。
+
+    本 mode 确定性扫受影响章节范围（radius.json），统计每章正文 + changes.json 里 before
+    旧值的残留次数：
+      · 残留 > 0 → 列入『未传播章节』(un_propagated)
+      · 残留 = 0 → 已传播(propagated)
+    产 propagation_debt.json 顾问清单给主代理 / GUI 看。
+
+    北极星⑤（不干涉模型创作判断）：调和是 advisory，传播决策权在模型/用户——本 mode
+    **绝不自动改正文**，只标债务。永远返回 0（不阻断·配合 plan `?` 容忍前缀双保险）。
+    """
+    change = _read_json(workspace / "change.json")
+    radius = _read_json(workspace / "radius.json")
+    if not change or not radius:
+        print("[FATAL] propagation-check: change.json/radius.json 缺失·先跑前序 step",
+              file=sys.stderr)
+        return 2
+
+    before = (change.get("before") or "").strip()
+    after = change.get("after", "")
+    target = change.get("target", "")
+
+    patch_log = _read_json(workspace / "patch_log.json") or {}
+    strategy = patch_log.get("strategy", "?")
+    dry_run = bool(patch_log.get("dry_run"))
+
+    # 纯新增设定（无 before 旧值）→ 无残留可判定 · advisory skip（绝不误标）
+    if not before:
+        debt = {
+            "schema_version": SCHEMA_VERSION,
+            "reconcile_id": args.reconcile_id,
+            "gate_level": "advisory",
+            "skipped": "no_before_value",
+            "note": "变更无 before 旧值（纯新增设定）·无残留可查·传播校验跳过",
+            "change_summary": {"target": target, "before": before, "after": after},
+            "un_propagated_count": 0,
+            "un_propagated_chapters": [],
+            "propagated_count": 0,
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        _write_json(workspace / "propagation_debt.json", debt)
+        print("[OK] propagation-check · skipped(no before value)·无残留可查（advisory）",
+              file=sys.stderr)
+        return 0
+
+    un_propagated: list[dict] = []
+    propagated: list[dict] = []
+    for a in radius.get("affected_chapters", []):
+        rel = a.get("chapter_path")
+        full = project_root / rel
+        body_residual = 0
+        changes_residual = 0
+        if full.exists():
+            try:
+                body_residual = full.read_text(encoding="utf-8").count(before)
+            except OSError:
+                pass
+        changes_path = full.parent / f"{full.stem}_changes.json"
+        if changes_path.exists():
+            try:
+                changes_residual = changes_path.read_text(
+                    encoding="utf-8-sig").count(before)
+            except OSError:
+                pass
+        rec = {
+            "chapter_path": rel,
+            "chapter_name": a.get("chapter_name"),
+            "impact_level": a.get("impact_level"),
+            "body_residual": body_residual,
+            "changes_residual": changes_residual,
+        }
+        if (body_residual + changes_residual) > 0:
+            un_propagated.append(rec)
+        else:
+            propagated.append(rec)
+
+    debt = {
+        "schema_version": SCHEMA_VERSION,
+        "reconcile_id": args.reconcile_id,
+        "gate_level": "advisory",
+        "change_summary": {"target": target, "before": before, "after": after},
+        "strategy": strategy,
+        "dry_run": dry_run,
+        "affected_count": len(radius.get("affected_chapters", [])),
+        "un_propagated_count": len(un_propagated),
+        "un_propagated_chapters": un_propagated,
+        "propagated_count": len(propagated),
+        "advisory": (
+            f"{len(un_propagated)} 章旧值『{before[:20]}』仍残留（propagation debt·未传播·"
+            f"主代理/用户决定是否补 patch 或归档为已知债务）"
+            if un_propagated else "全部受影响章节旧值已清·传播完成"),
+        "_note": ("advisory·只标债务不改正文（北极星⑤调和决策权在模型/用户）·"
+                  "strategy=D 只更新档案时残留属用户主动选择的已知债务·非穿帮"),
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    out = workspace / "propagation_debt.json"
+    _write_json(out, debt)
+    print(f"[OK] propagation-check · un_propagated={len(un_propagated)} "
+          f"propagated={len(propagated)}（advisory·只标债务不改正文）", file=sys.stderr)
+    if un_propagated:
+        head = ", ".join(str(c["chapter_name"]) for c in un_propagated[:8])
+        print(f"     未传播章节（旧值残留）: {head}", file=sys.stderr)
+    print(f"     report: {out}", file=sys.stderr)
+    return 0
+
+
 # ============ step 5 report ============
 def generate_report(project_root: Path, workspace: Path, args) -> int:
-    """汇总 step1-4 · 写 reconcile_report.json。"""
+    """汇总 step1-4 + 传播校验 · 写 reconcile_report.json。"""
     change = _read_json(workspace / "change.json")
     radius = _read_json(workspace / "radius.json")
     patch_log = _read_json(workspace / "patch_log.json")
     audit = _read_json(workspace / "audit.json")
+    propagation = _read_json(workspace / "propagation_debt.json")  # 🔴 W5（tolerant·可缺）
 
     summary = {
         "schema_version": SCHEMA_VERSION,
@@ -593,7 +709,21 @@ def generate_report(project_root: Path, workspace: Path, args) -> int:
                      if isinstance(audit.get("cross_scene_scanner"), dict) else None)}
                 if audit else {"_missing": True}
             ),
+            # 🔴 W5：传播债务校验摘要（advisory·绝不翻转 verdict·只让主代理看见未传播章节）
+            "propagation_summary": (
+                {"gate_level": "advisory",
+                 "un_propagated_count": propagation.get("un_propagated_count"),
+                 "propagated_count": propagation.get("propagated_count"),
+                 "advisory": propagation.get("advisory"),
+                 "skipped": propagation.get("skipped")}
+                if propagation else {"_missing": True}
+            ),
         },
+        # 🔴 W5：未传播章节名单（顶层 advisory·主代理据此决定补 patch / 归档已知债务）
+        "propagation_debt_chapters": (
+            [c.get("chapter_name") for c in propagation.get("un_propagated_chapters", [])]
+            if propagation else []
+        ),
         "_program_driven_note": (
             "/reconcile v28 program-driven (2026-06-22 G2 P0b) · 5 step "
             "全 advisory shadow · 作者档第一权威 · hard_gate 12 码不变 · "
@@ -629,7 +759,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("project", help="项目路径（workspace/novels/<书名>）")
     ap.add_argument("--mode", required=True,
                     choices=["detect-changes", "compute-radius", "patch",
-                             "audit", "report"],
+                             "audit", "propagation-check", "report"],
                     help="选择本次跑的 reconcile mode")
     ap.add_argument("--reconcile-id", default="current",
                     help="reconcile workspace 子目录名·默认 'current'·覆盖式写")
@@ -667,6 +797,8 @@ def main() -> int:
         return patch_chapters(project_root, workspace, args)
     if mode == "audit":
         return audit_consistency(project_root, workspace, args)
+    if mode == "propagation-check":  # 🔴 W5
+        return propagation_check(project_root, workspace, args)
     if mode == "report":
         return generate_report(project_root, workspace, args)
     return 2

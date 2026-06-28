@@ -27,8 +27,12 @@ def _set_mode(m):
 def _mk_project_with_cluster() -> Path:
     proj = Path(tempfile.mkdtemp())
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
+    # 🔴 2026-06-27 C15: active cluster 必须带非空 brief（真实 cluster 总有 scope_summary +
+    # scene_storyboard）·否则 build_manifest C15 注入契约校验会判 contract_violation。
+    # 本 fixture 测的是 ACW directive 注入·补最小 brief 让 cluster 合法（mode=on 才有 ACW_DIRECTIVE）。
     cluster = {"cluster_id": "cluster_001", "status": "in_progress",
-               "chapter_range": [1, 3]}
+               "chapter_range": [1, 3], "scope_summary": "测试用故事块简述",
+               "scene_storyboard": [{"ch": 1, "title": "场景", "key_events": ["事件"]}]}
     (proj / "_数据库" / "事件簇.json").write_text(
         json.dumps({"clusters": [cluster]}, ensure_ascii=False),
         encoding="utf-8")

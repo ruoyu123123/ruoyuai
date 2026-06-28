@@ -195,6 +195,17 @@ HARD_GATE_CODES = {
     # v2 cluster 化（2026-05-28）：锁定事实跨场景引用冲突 = cluster 内设定矛盾
     # locked_fact_cross_scene_scanner emit；不可豁免（与 LOCKED_FACT_CONFLICT 同级）
     "LOCKED_FACT_CROSS_SCENE_CONFLICT",
+    # 🔴 2026-06-27 C03：子系统载荷空货架 = 机器永不点火（性质同 MANIFEST_MISSING·文件契约层）。
+    # 由 scaffold_subsystems verify --content / plan_step_gates.check_subsystems(content_check=True)
+    # emit。仅这 3 个「引擎零触发」码 hard；其余 31 子系统裸骨架 = fluid-allowed 永远 advisory。
+    # 回归锁：cluster_002+ ME/storyboard 空必须显式豁免（标记只查 clusters[0] + 池非空·永不命中）。
+    "RIPPLE_RULES_EMPTY",            # 涟漪规则空 = world_evolution_engine 零触发（北极星②）
+    "GRAND_TREND_ME_POOL_EMPTY",    # 当前卷 ME 池空 = 大势无方向·cluster_emergence 不点火（北极星③）
+    "CLUSTER001_STORYBOARD_EMPTY",  # cluster_001 scene_storyboard 空 = 首块未详化（黄金三章必详化）
+    # 🔴 2026-06-27 C18：splitter 字数守恒被破坏（丢字/重复/空块/计数失配）= 北极星④纯格式层契约破损。
+    # chapter_splitter.run_freestyle 落盘前确定性自检 raise SplitterIntegrityError → main exit2；
+    # 性质同 MANIFEST_MISSING/FILE_NOT_FOUND（文件契约客观断点·非风格选择）。
+    "SPLIT_WORD_NOT_CONSERVED",
 }
 
 
@@ -260,6 +271,40 @@ def _run(cmd: list, env_extra: dict = None) -> tuple:
         return 99, "", "[TIMEOUT] 校验器超时 180s"
     except Exception as e:
         return 98, "", f"[EXEC-ERROR] {e}"
+
+
+# 🔴 2026-06-27 P1-07: 解析 PID per-作者 state 给 chapter_end_anchor_scan 算 --weak-anchor-ratio。
+# 找 author_dir → 调 pid_threshold_tuner.apply_pid_delta（带物理 clamp）→ 取出新阈值。
+# 失败返回 None（scanner 走默认 0.15 · 零回归）。
+def _resolve_chapter_end_weak_anchor_ratio(project_root: Path):
+    try:
+        author_dir = None
+        sp = project_root / "_数据库" / "作者风格.json"
+        if sp.exists():
+            try:
+                sj = json.loads(sp.read_text(encoding="utf-8"))
+                src = sj.get("style_source") or sj.get("_source_path")
+                if src:
+                    cand = Path(src)
+                    author_dir = cand.parent if cand.is_file() else cand
+            except (OSError, json.JSONDecodeError):
+                author_dir = None
+        if author_dir is None or not author_dir.exists():
+            guess = project_root.parent.parent / "styles" / project_root.name
+            if guess.exists():
+                author_dir = guess
+        if author_dir is None or not author_dir.exists():
+            return None
+        import importlib
+        pid = importlib.import_module("pid_threshold_tuner")
+        base = {"chapter_end_weak_anchor_ratio": {"_scalar": 0.15}}
+        out = pid.apply_pid_delta({k: dict(v) for k, v in base.items()}, author_dir)
+        val = out.get("chapter_end_weak_anchor_ratio", {}).get("_scalar")
+        if isinstance(val, (int, float)) and val != 0.15:
+            return float(val)
+    except Exception:
+        return None
+    return None
 
 
 def load_scanner_registry() -> dict:
@@ -351,6 +396,61 @@ def _parse_chapter_end_anchor(stdout: str, exit_code: int) -> list:
                         + (f" · matched={iss.get('matched','')[:50]}" if iss.get('matched') else ""),
                 "source": "chapter_end_anchor_scan",
                 "fix_hint": iss.get("fix_hint", ""),
+                "waived": False,
+                "waive_reason": "",
+            })
+    return issues
+
+
+# 🔴 2026-06-27 C06：章末物理污染 hard_gate 真阻断（治 v27 freestyle 无真阻断点）。
+# 病灶：CHAPTER_END_FORBIDDEN_SCREENPLAY 在 STRUCTURE§11 钉死不可豁免，但 freestyle 链路无真阻断——
+#   step3 audit 时草稿【尚未切章】（chapter_end_anchor_scan 依赖 第NNN章 文件，在 step6 切章后才跑且只
+#   advisory 不 exit2）→ 剧本体污染溜过最该拦的点。修：step3 对【整段 cluster_draft】跑 SCREENPLAY_PATTERNS。
+# 北极星⑤边界：只硬毙【位置无关】的 SCREENPLAY（剧本体镜头/旁白/音效指令 = 排版/格式契约破损·任何风格、
+#   任何位置都非法 → 整段硬扫安全）。TRANSITION 物理分隔符须锚定章末（中段场景分隔某些作者合法）故不在
+#   整段层硬扫；语义收束句（『灯熄了』等）保持 advisory（绝不在此升格）。
+def _scan_cluster_draft_screenplay(cluster_draft_path: Path) -> list:
+    """C06：整段 cluster 草稿扫剧本体 SCREENPLAY 标记（位置无关 hard_gate）。
+
+    复用 chapter_end_anchor_scan.SCREENPLAY_PATTERNS（同源·防口径分歧），命中即 emit
+    CHAPTER_END_FORBIDDEN_SCREENPLAY · severity=error → _gate_level_for 落 hard_gate →
+    verdict=needs_agent → main() exit 2（当前真正能拦的点）。仅 SCREENPLAY 一族（排版污染·
+    任何位置非法）；不碰 TRANSITION/CLOSURE（位置/语义敏感→保 advisory·不升格）。"""
+    issues = []
+    try:
+        text = cluster_draft_path.read_text(encoding="utf-8")
+    except Exception:
+        return issues
+    try:
+        import chapter_end_anchor_scan as _ceas_mod
+        patterns = _ceas_mod.SCREENPLAY_PATTERNS
+    except Exception:
+        # fallback：模块不可用时用内联同源 pattern（保持检测闭环·绝不静默放过）
+        patterns = [
+            (r"（镜头[^）]{0,15}）", "剧本体镜头指令"),
+            (r"（切镜[^）]{0,10}）", "剧本体切镜"),
+            (r"（旁白[^）]{0,15}）", "剧本体旁白"),
+            (r"（画外音[^）]{0,15}）", "剧本体画外音"),
+            (r"（音效[^）]{0,15}）", "剧本体音效"),
+            (r"（[^）]{0,15}的视角[^）]{0,5}）", "剧本体 POV 指令"),
+            (r"（[^）]{0,10}离开[^）]{0,10}视角[^）]{0,5}）", "剧本体 POV 切换"),
+        ]
+    seen = set()
+    for pat, reason in patterns:
+        for m in re.finditer(pat, text, re.IGNORECASE | re.MULTILINE):
+            frag = m.group(0)[:60]
+            if frag in seen:
+                continue
+            seen.add(frag)
+            issues.append({
+                "dimension": "格式契约",
+                "severity": "error",  # → _gate_level_for 落 hard_gate（info 会被降 advisory）
+                "gate_level": "hard_gate",
+                "code": "CHAPTER_END_FORBIDDEN_SCREENPLAY",
+                "desc": f"整段草稿出现剧本体标记（{reason}）· matched={frag}"
+                        f" · 小说正文禁止剧本体镜头/旁白/音效指令（位置无关 hard_gate）",
+                "source": "audit_hub_cluster_screenplay_scan",
+                "fix_hint": "删除剧本体过渡标记 · POV 不切换让角色全程在场",
                 "waived": False,
                 "waive_reason": "",
             })
@@ -782,6 +882,14 @@ def _apply_auto_calibration_softcap(issue: dict, match: dict) -> bool:
 
 # ============ v19 豁免协议：读取 + 应用 ============
 
+# 🔴 2026-06-27 C09 豁免诚实审计（WAIVER-HONESTY-AUDIT · META-only · 绝不翻 verdict）：
+# 运动员当裁判防线——writer 自己在 self_eval.waivers 写豁免，旧逻辑唯一校验是「理由非空 + <300 字」。
+# 下面两个阈值用于「疑似 blanket 豁免」检测，只 emit META 信号 + 喂 learning_loop，
+# 绝不 block / cap-reject / downgrade-fail（风格与通用爽文基线合法冲突的 cluster 应能全豁免）。
+_WAIVER_BLANKET_RATE = 0.7        # advisory 豁免率 > 此值 → 疑似 blanket
+_WAIVER_BLANKET_REASON_K = 3      # 单一 reason 串映射 >= K 个 distinct code → 疑似 blanket
+
+
 def _load_waivers(waivers_path: str) -> list:
     """从 --waivers 指向的 json 读豁免清单，返回 [{code, reason}, ...]。
     兼容两种文件：
@@ -829,17 +937,43 @@ def _load_waivers(waivers_path: str) -> list:
             print(f"  [waivers] {code} 理由超 300 字，已截断: {reason[:80]}…", file=sys.stderr)
             reason = reason[:300]
         out.append({"code": code, "reason": reason})
-    return out
+    # 🔴 2026-06-27 C09 豁免诚实审计：按 code 去重（保最长 reason · 冲突打 warn）。
+    # 运动员当裁判防线之一——writer 可能对同一 code 重复声明（复制粘贴/刷豁免）。去重纯卫生·
+    # 行为中性（同 code 本就映射一条 reason），保最长是因更长更可能是具体到本 cluster 的真理由。
+    deduped: dict = {}
+    for w in out:
+        code = w["code"]
+        prev = deduped.get(code)
+        if prev is None:
+            deduped[code] = w
+            continue
+        if prev["reason"] != w["reason"]:
+            print(f"  [waivers] {code} 多条豁免理由冲突，保留最长一条", file=sys.stderr)
+        if len(w["reason"]) > len(prev["reason"]):
+            deduped[code] = w
+    return list(deduped.values())
 
 
 def _apply_waivers(all_issues: list, waivers: list) -> list:
     """v19 顾问制核心：对 issue 应用 AI 豁免。
       - advisory 项 code 命中豁免清单 → waived=True + waive_reason 记录理由
       - hard_gate 项即便命中豁免清单也【强制忽略豁免】（不可豁免，仍按问题处理）
-    原地修改 all_issues，返回被成功豁免的 issue 引用列表（供报告 waived_issues 段）。"""
+    原地修改 all_issues，返回被成功豁免的 issue 引用列表（供报告 waived_issues 段）。
+
+    🔴 2026-06-27 C09 豁免诚实审计：orphan 豁免（code 不在本次任何 issue 里）从 by_code
+    排除并 log——而非静默 no-op（旧逻辑里 orphan 只是「凑巧没命中」，不留痕迹）。排除是行为中性
+    的（orphan 本就匹配不到 issue），只是把「凭空豁免不存在的 code」显性化。apply-moment 的
+    blanket / orphan 量化信号在 _compute_waiver_audit 里统一算（META-only · 不在此翻 verdict）。"""
     if not waivers:
         return []
+    issue_codes = {i.get("code", "") for i in all_issues}
     by_code = {w["code"]: w["reason"] for w in waivers}
+    # orphan：豁免了一个本次根本不存在的 code → 从 by_code 排除（不再误匹配后续 issue）+ log
+    for c in sorted(by_code):
+        if c not in issue_codes:
+            print(f"  [waivers] {c} 豁免的 code 在本次 issue 中不存在（orphan），已忽略该豁免",
+                  file=sys.stderr)
+    by_code = {c: r for c, r in by_code.items() if c in issue_codes}
     waived = []
     for issue in all_issues:
         code = issue.get("code", "")
@@ -853,6 +987,48 @@ def _apply_waivers(all_issues: list, waivers: list) -> list:
         issue["waive_reason"] = by_code[code]
         waived.append(issue)
     return waived
+
+
+def _compute_waiver_audit(all_issues: list, waivers: list, waived_issues: list) -> dict:
+    """🔴 2026-06-27 C09 豁免诚实审计信号（META-only · 喂 learning_loop · 【绝不翻 verdict】）。
+
+    纯函数：不改 all_issues / waived_issues，只产观察信号。北极星护栏——
+    blanket / orphan 只是 advisory META flag + ledger 喂 learning_loop，
+    绝不 block / cap-reject / downgrade-fail / 剥合法 waiver。
+
+    blanket_suspected 触发条件（任一）：
+      - advisory 豁免率 waive_rate > _WAIVER_BLANKET_RATE
+      - 单一 reason 串映射 >= _WAIVER_BLANKET_REASON_K 个 distinct code（同理由刷多 code）
+    orphan_codes：豁免了本次 issue 里不存在的 code（与 _apply_waivers 同口径重算）。
+    """
+    issue_codes = {i.get("code", "") for i in all_issues}
+    # advisory 总数 = 非 hard_gate 的 issue（hard_gate 不可豁免，不进豁免分母）
+    advisory_total = sum(1 for i in all_issues if i.get("gate_level") != "hard_gate")
+    advisory_waived = len(waived_issues)
+    waive_rate = round(advisory_waived / advisory_total, 4) if advisory_total else 0.0
+    # 单一 reason → distinct code 集合（同 reason 刷多 code = 运动员当裁判典型特征）
+    reason_to_codes: dict = {}
+    for issue in waived_issues:
+        reason = (issue.get("waive_reason") or "").strip()
+        if not reason:
+            continue
+        reason_to_codes.setdefault(reason, set()).add(issue.get("code", ""))
+    repeated_reason_codes = {
+        # reason 串可能很长 → key 截断到 60 字便于人读 + ledger 落盘
+        (r[:60] + ("…" if len(r) > 60 else "")): sorted(codes)
+        for r, codes in reason_to_codes.items()
+        if len(codes) >= _WAIVER_BLANKET_REASON_K
+    }
+    orphan_codes = sorted({w["code"] for w in waivers} - issue_codes)
+    blanket_suspected = (waive_rate > _WAIVER_BLANKET_RATE) or bool(repeated_reason_codes)
+    return {
+        "advisory_total": advisory_total,
+        "advisory_waived": advisory_waived,
+        "waive_rate": waive_rate,
+        "blanket_suspected": blanket_suspected,
+        "repeated_reason_codes": repeated_reason_codes,
+        "orphan_codes": orphan_codes,
+    }
 
 
 # ============ 修复决策 ============
@@ -2611,6 +2787,16 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                                 out, _gscanner, _c, "风格")))
             except Exception as _e:
                 print(f"[audit_hub] 题材 scanner 路由跳过: {_e}", file=sys.stderr)
+            # 🔴 2026-06-27 C06：整段草稿扫剧本体 SCREENPLAY 标记（位置无关 hard_gate · step3 真阻断点）。
+            # 此处草稿尚未切章 → chapter_end_anchor_scan（依赖 第NNN章 文件）跑不到，整段硬扫补上这个缺口。
+            _screenplay_issues = _scan_cluster_draft_screenplay(cluster_draft)
+            all_issues += _screenplay_issues
+            scanner_status.append({
+                "scanner": "cluster_draft_screenplay_scan",
+                "exit_code": 2 if _screenplay_issues else 0,
+                "ok": True,
+                "issues_count": len(_screenplay_issues),
+            })
         # L2 防御：章末锚定扫描 · 仅在切章后 (有 第NNN章 文件) 才跑
         # 检测是否已切章
         chapter_dirs = sorted((project_root / "章节").glob("第[0-9]*章"))
@@ -2633,9 +2819,19 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                     ch_nums = list(range(lo, hi + 1))
             if ch_nums:
                 ch_range = f"{min(ch_nums)}-{max(ch_nums)}"
+                # 🔴 2026-06-27 P1-07: 按 PID state 注入 chapter_end_weak_anchor_ratio（advisory 阈值）。
+                # 解析失败 / 无 state / off → 不传 --weak-anchor-ratio（scanner 走默认 0.15·零回归）。
+                _ceas_cmd = [child_python(), str(ceas), str(project_root),
+                             "--chapters", ch_range, "--json"]
+                try:
+                    _wa_ratio = _resolve_chapter_end_weak_anchor_ratio(project_root)
+                    if _wa_ratio is not None:
+                        _ceas_cmd += ["--weak-anchor-ratio", f"{_wa_ratio:.4f}"]
+                except Exception:
+                    pass
                 tasks.append((
                     "chapter_end_anchor_scan",
-                    [child_python(), str(ceas), str(project_root), "--chapters", ch_range, "--json"],
+                    _ceas_cmd,
                     {0, 1, 2},
                     lambda out, code: _parse_chapter_end_anchor(out, code),
                 ))
@@ -2716,6 +2912,9 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     # v19 顾问制：应用 AI 豁免 —— advisory 项命中豁免 → waived=True；hard_gate 强制忽略豁免。
     # 在分类之前应用：被豁免的 issue 不进 det_issues/agent_issues，不计入 needs_agent。
     waived_issues = _apply_waivers(all_issues, waivers)
+    # 🔴 2026-06-27 C09 豁免诚实审计：在 apply-moment 算 blanket/orphan/waive_rate 信号。
+    # META-only —— 下面的 verdict 判定【完全不读】waiver_audit，blanket 也判不出 block。
+    waiver_audit = _compute_waiver_audit(all_issues, waivers, waived_issues)
 
     # 分类：确定性可修 vs 需 agent。已豁免的 issue（waived=True）不参与修复决策。
     det_issues, agent_issues, info_issues = [], [], []
@@ -2851,6 +3050,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
              "waive_reason": i.get("waive_reason", "")}
             for i in waived_issues
         ],
+        # 🔴 2026-06-27 C09 豁免诚实审计 META 段（绝不参与 verdict 判定 · 喂 learning_loop）
+        "waiver_audit": waiver_audit,
         "scanner_status": scanner_status,
     }
 

@@ -2,19 +2,52 @@
 description: 深度蒸馏角色，从已写章节中提取完整 Voice DNA
 ---
 
-## Gen-Model 抽象层（语音样本走 gen_creative.py）
+## 🛡️ Plan 强制规划（🔴 2026-06-27 C13 · 纳入 6 命令矩阵之外的第 7 个 plan 命令）
+
+distill-character 现走 **plan 强制规划层**（与 cluster-write / distill-style 等同等待遇·此前整条命令脱离规划层全靠主代理自觉）。**没有 plan_id 不开工，没有 step 验证不宣称完成。**
+
+- 模板：`core/claude-home/plans/distill-character.plan.json`（**6 步**）
+- 开工前：`python core/scripts/plan_tracker.py create --command distill-character --project <书名> --key <角色id>`（`--key` = 角色 id，会替换模板里的 `{key}`）
+- spawn 任何 sub-agent 的 prompt 必须含 `PLAN_ID:` 和 `STEP:`（缺失 = L3 hook 拦截 exit 2）
+- 每步跑完由**主代理**调 `plan_tracker.py step <plan_id> --n N`
+- 收尾 `plan_tracker.py end <plan_id>`
+
+### 6 步流水线
+
+| step | 名称 | 谁干 | 产物 |
+|------|------|------|------|
+| 1 | collect-material | Claude 分析 | `_数据库/.distill_character/{角色}_material.json`（历史对白/动作/内心 + 来源章号） |
+| 2 | voice-dna-analysis | Claude 判断 | `_数据库/.distill_character/{角色}_voice_dna.json`（5 层 persona） |
+| 3 | **voice-sample-gen** | **gen-model（同栈）** | `_数据库/.distill_character/{角色}_voice_samples.json`（style/anti_samples 候选） |
+| 4 | merge-voice-pack | Claude 确定性合并 | 更新 `_数据库/人物卡.json` voice_pack |
+| 5 | **process-integrity-verify** | `distill_character_verify.py` | `对比报告/voice_verify_{角色}.json`（PROCESS-INTEGRITY 硬 + fidelity advisory） |
+| 6 | git-snapshot（optional） | git | commit |
+
+## Gen-Model 抽象层（🔴 C13：语音样本走 gen_creative.py --mode voice_sample · 同栈 gen-model）
 
 **关键变化**：角色蒸馏分两段：
-- **分析段**（提取角色实战对话 / 统计 rhythm / 识别 catchphrase 频率 / 分类 banned_phrases）→ **Claude 主代理 / sub-agent**（这是分析判断，不是生成）
-- **生成段**（`voice_pack.style_samples` 候选 / `anti_samples` 候选 / catchphrase 范例改写）→ **gen-model**（含创意笔触的对话样本生成）
+- **分析段**（提取角色实战对话 / 统计 rhythm / 识别 catchphrase 频率 / 分类 banned_phrases / 5 层 persona）→ **Claude 主代理 / sub-agent**（这是分析判断，不是生成）
+- **生成段**（`voice_pack.style_samples` 候选 / `anti_samples` 候选）→ **gen-model**（含创意笔触的对话样本生成·守『蒸馏复刻必须同栈 gen-model』）
 
-**新工作流**：
-1. 主代理读已写章节 → 提取该角色全部对话 → grep + 统计实战数据（基础字段 sentence_avg / banned_phrases / rhythm 直接从数据算）
-2. 对 `style_samples` / `anti_samples` 这种「**含创意笔触的样本**」字段：
-   - 主代理准备 brief（角色 id / 历史真实对话片段 5-10 条 / voice_pack 基础字段）
-   - 调 `gen_creative.py --mode voice_sample`（placeholder，待实现）
-   - 临时兜底：用 `gen_fixer.py --mode polish` 加 `--instructions "为角色 X 生成 3 条 style_samples，参考真实对话：..."`
-3. 主代理把 gen-model 输出合并回 `_数据库/人物卡.json` 的 voice_pack 段
+**工作流（step 3 同栈契约）**：
+1. step1 主代理读已写章节 → 提取该角色全部对话 → 标注来源章号（每条 ≥2 章供 provenance）→ 写 `material.json`
+2. step3 对 `style_samples` / `anti_samples` 这种「**含创意笔触的样本**」字段，**直接调**（不再是 placeholder，C13 已实现）：
+   ```bash
+   python core/scripts/gen_creative.py --mode voice_sample \
+     --project <项目> --character <角色> \
+     --history <material.json> --voice-dna <voice_dna.json> \
+     --count 4 --out <voice_samples.json>
+   ```
+   - gen-model 接收**真实历史对话 few-shot** + voice_dna → 产样本（输出 `_meta.generated_by_model` = 同栈 provenance 证据）
+   - 🔴 **禁用** `gen_fixer.py --mode polish` 兜底 hack（已废除·原让 Claude 凭印象编脱离实战 voice）
+3. step4 主代理把 gen-model 输出合并回 `_数据库/人物卡.json` voice_pack，**必须**带入：
+   - `voice_pack._gen_provenance`（= step3 `_meta` 的 generated_by_model/profile · 同栈证据）
+   - 每条 `style_samples`/`anti_samples` 形如 `{"text": "...", "from_chapters": [ch1, ch2]}`（≥2 章 provenance）
+   - `banned_phrases`（首次明确即入·不要求 ≥2 源）
+
+**step 5 回灌验证闸**：`distill_character_verify.py --strict` 校验上述契约：
+- **唯一 hard 项 = PROCESS-INTEGRITY**：同栈 gen-model 证据 + 每样本 ≥2 章 provenance + banned_phrases 结构合法。破损 + `--strict` → exit 2 拦在出货前。
+- **voice-fidelity 永 advisory**：gen-model 新对白 / 现有样本词法自洽比对，**绝不 hard-lock 对白 match 分数**（voice 是采集非预设·随角色成长 fluid 演化·中途反复跑校准忌重量级 per-character SFS 循环）。fidelity 不达标也 exit 0。
 
 **为什么改**：原工作流让 Claude 主代理凭印象编 style_samples 容易脱离实战 voice；新流程强制 gen-model 接收**真实历史对话作为 few-shot**，生成的样本更贴近实战。
 

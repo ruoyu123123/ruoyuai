@@ -58,6 +58,24 @@ def test_volume_arc_prompt_no_schema_coercion():
         assert bad not in system, f"违北极星⑤·硬编码枚举规训: {bad}"
 
 
+def test_volume_arc_story_content_from_card_not_style_ref():
+    """🔴 2026-06-28 W6：故事内容 vs 笔法 权威分离回归锁（治污染 bug）。
+
+    实证翻车：诡秘风格档含「沙盒天道/燧明部」示例·模型偷懒抄成大纲·无视「钟楼弃儿」灵感卡。
+    修：prompt 必须明确『故事内容(题材/人物/世界/走向)唯一来源=灵感卡·作者档只学笔法·
+    示例里的人名/地名/情节是笔法演示禁当故事搬』。本测试锁该指令不被回退掉。"""
+    system, user = gc.build_volume_arc_prompt(
+        selected_card={"title": "钟楼弃儿", "logline": "守夜人捡到未来遗嘱"}, cluster_count=10,
+        framework="Save the Cat", rhythm="混合",
+        author_block="（风格档·含「沙盒天道」示例）", research_text="")
+    # 必含故事内容来自灵感卡的明确指令
+    assert "唯一来源" in system, "缺『故事内容唯一来源=灵感卡』指令"
+    assert "只学笔法" in system, "缺『作者风格档只学笔法』分离"
+    assert ("禁止" in system or "绝对禁止" in system), "缺禁止从风格档示例搬故事的护栏"
+    # 灵感卡确实进了 user prompt
+    assert "钟楼弃儿" in user, "选定卡未进 user prompt"
+
+
 def test_volume_arc_emit_splits_two_files():
     _orig = llm_transport.generate
     with tempfile.TemporaryDirectory() as tmp:

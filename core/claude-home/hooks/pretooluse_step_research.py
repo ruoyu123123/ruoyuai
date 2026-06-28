@@ -23,6 +23,16 @@ import re
 import sys
 from pathlib import Path
 
+# 🔴 2026-06-27 C16：判定逻辑抽到共享库 plan_step_gates（北极星⑥消重复）。本 hook 改薄
+# wrapper：解析 stdin → 找 step → 调 check_research_ref → ok?exit0:exit2。
+# 🔴 北极星护栏：research 门是 advisory（gate_level=advisory·orchestrator 路径软放行），
+# 但 hook 路径**保持原行为不变**（缺失 → exit 2），由 wrapper 一律 fail→exit2 实现。
+_SCRIPTS = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from plan_step_gates import check_research_ref  # noqa: E402
+
 
 def main():
     try:
@@ -76,38 +86,17 @@ def main():
     if not step_info:
         sys.exit(0)
 
-    research_ref = step_info.get("research_ref")
-    if not research_ref:
-        # 旧 plan 无 research_ref → 放行（向后兼容）
+    # 🔴 C16：判定下沉到 check_research_ref。hook 路径不传 auto_pilot/research_skipped
+    # → 与原 hook 行为等价（缺 research_ref 文件 → ok=False → exit 2）。advisory 软放行
+    # 仅 orchestrator 路径生效（北极星⑤：research 永不在写作主轨硬锁）。
+    result = check_research_ref(step_info, project_dir=project_dir,
+                               auto_pilot=False, research_skipped=False)
+    if result["ok"]:
         sys.exit(0)
 
-    # research_ref 可能是 str（单文件）或 list（多文件）
-    refs = [research_ref] if isinstance(research_ref, str) else research_ref
-    if not isinstance(refs, list):
-        sys.exit(0)
-
-    missing = []
-    for ref in refs:
-        if not isinstance(ref, str):
-            continue
-        # ref 可以是绝对路径或相对项目根
-        p = Path(ref)
-        if not p.is_absolute():
-            p = project_dir / ref
-        if not p.exists():
-            missing.append(ref)
-
-    if missing:
-        msg = (
-            f"❌ [hook step-research] plan_id={plan_id} step n={n} 的 research_ref 文件不存在：\n"
-            + "\n".join(f"  - {m}" for m in missing)
-            + "\n\n请先 spawn novel-researcher 写这些 research_cache 文件（按 CLAUDE.md「没调查没发言权」原则）。\n"
-            + "豁免方式：从 plan 模板移除该 step 的 research_ref 字段（不推荐）。"
-        )
-        print(msg, file=sys.stderr)
-        sys.exit(2)
-
-    sys.exit(0)
+    print(f"❌ [hook step-research] plan_id={plan_id} step n={n}\n   {result['msg']}",
+          file=sys.stderr)
+    sys.exit(2)
 
 
 if __name__ == "__main__":

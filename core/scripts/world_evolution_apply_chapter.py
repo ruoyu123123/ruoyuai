@@ -79,23 +79,48 @@ def respond_threads(project_root: Path, ch: int, thread_ids: list[str]) -> dict:
     outcome_if_complete 落地），让幕后线因 writer 呼应真正闭环。
 
     北极星边界：这是 advisory 性质的客观状态推进（不是 hard_gate）；thread_id 不存在只记 missing
-    不报错，不阻断流水线。"""
+    不报错，不阻断流水线。
+
+    🔴 2026-06-27 C11（cluster 级幂等去重）：split_cluster_changes v1 把整 cluster 的
+    world_state_consumption.thread_responded 平铺进每章 _changes.json，apply_one_chapter
+    对 cluster 内 N 章逐章重放 → 同一 thread 的 responded_count 被 +N（实测 N 倍污染）→
+    expected_responses>1 的线被「同一 cluster 内的一次呼应」假性多次计数 → 提前 complete。
+    修：每个 thread 记 `responded_by_cluster: [cluster_id]`（由章号反查所属 cluster）。本 cluster
+    已在列 → 幂等跳过（skipped_idempotent），responded_count 每 cluster 只 +1。对齐同文件
+    apply_fate_event 的 skipped_idempotent 范式（事件/簇级一次性，非每章累加）。
+    北极星：dedup key=cluster_id+thread_id（per-cluster 非全局）——下个 cluster 真正再次呼应
+    同一 NPC 线时 responded_count 仍合法递增；completed 仍由 expected_responses 阈值自然涌现，
+    不硬锁 thread 何时完成。"""
     if not thread_ids:
-        return {"responded_count": 0, "missing": [], "completed": []}
+        return {"responded_count": 0, "missing": [], "completed": [],
+                "skipped_idempotent": []}
     world = wee.load_world(project_root)
     if world is None:
         return {"error": "世界状态.json 不存在"}
+    # 🔴 2026-06-27 C11：由章号反查所属 cluster_id 作幂等键。反查不到（无 chapter_range·
+    # 单章直跑场景）→ 退化为单章身份 `_ch{ch}_unmapped`（不触发跨章幂等，保单章语义）。
+    cluster_id = cluster_lookup.ch_to_cluster_id(project_root, ch) or f"_ch{ch}_unmapped"
     threads = world.get("active_npc_threads", [])
     by_id = {t.get("thread_id"): t for t in threads if isinstance(t, dict)}
     responded = []
     missing = []
     completed = []
+    skipped_idempotent = []  # 🔴 2026-06-27 C11：本 cluster 已记一次响应 → 跳过的 thread
     consequence_tracker = world.setdefault("consequence_tracker", {})
     for tid in thread_ids:
         t = by_id.get(tid)
         if t is None:
             missing.append(tid)
             continue
+        # 🔴 2026-06-27 C11：同一 cluster 同一 thread 只计一次响应（幂等去重）
+        responded_clusters = t.setdefault("responded_by_cluster", [])
+        if not isinstance(responded_clusters, list):
+            responded_clusters = []
+            t["responded_by_cluster"] = responded_clusters
+        if cluster_id in responded_clusters:
+            skipped_idempotent.append(tid)
+            continue
+        responded_clusters.append(cluster_id)
         t["responded_by_writer"] = True
         t["responded_count"] = int(t.get("responded_count", 0)) + 1
         last = t.setdefault("responded_at_ch", [])
@@ -127,7 +152,8 @@ def respond_threads(project_root: Path, ch: int, thread_ids: list[str]) -> dict:
         ]
     wee.save_world(project_root, world)
     return {"responded_count": len(responded), "responded": responded,
-            "completed": completed, "missing": missing}
+            "completed": completed, "missing": missing,
+            "skipped_idempotent": skipped_idempotent}
 
 
 def append_hub_log(project_root: Path, ch: int, chapter_hub: dict) -> dict:

@@ -305,3 +305,51 @@ def test_scan_chapter_end_result_shape():
             assert key in r, f"结果缺键 {key}"
         assert isinstance(r["issues"], list)
         assert isinstance(r["anchor_ratio"], float)
+
+
+# ---------- C06 --hard-gate-only（2026-06-27 切章后复扫）----------
+
+def test_hard_gate_only_catches_screenplay_and_separator():
+    # --hard-gate-only：SCREENPLAY + SEPARATOR 两族 hard_gate 仍命中
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ch = _write_chapter(tmp, "他抬起头。\n\n（镜头拉远）\n\n***")
+        r = mod.scan_chapter_end(ch, anchors=set(), hard_gate_only=True)
+        codes = {i["code"] for i in r["issues"]}
+        assert "CHAPTER_END_FORBIDDEN_SCREENPLAY" in codes
+        assert "CHAPTER_END_FORBIDDEN_TRANSITION" in codes
+        assert all(i["gate_level"] == "hard_gate" for i in r["issues"])
+
+
+def test_hard_gate_only_skips_closure_advisory():
+    # 🔴 防升格回归：--hard-gate-only 下语义收束句「灯熄了」既不报 advisory 也绝不升 hard_gate
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ch = _write_chapter(tmp, "他走出房间。\n\n灯熄了。")
+        r = mod.scan_chapter_end(ch, anchors=set(), hard_gate_only=True)
+        codes = {i["code"] for i in r["issues"]}
+        # closure 在 hard_gate_only 模式被整族跳过（既无 advisory 也无 hard_gate）
+        assert "CHAPTER_END_CLOSURE_ADVISORY" not in codes
+        assert r["issues"] == []  # 纯收束句 · 无任何 hard_gate
+
+
+def test_hard_gate_only_skips_anchor_advisory():
+    # --hard-gate-only 下锚定类 advisory（NO_ANCHOR/WEAK_ANCHOR）全跳过（纯阻断语义）
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ch = _write_chapter(tmp, "他望向远方的雪山，沉默不语，雾气弥漫。")
+        r = mod.scan_chapter_end(ch, anchors={"黑刀", "祭坛"}, hard_gate_only=True)
+        codes = {i["code"] for i in r["issues"]}
+        assert "CHAPTER_END_NO_ANCHOR" not in codes
+        assert "CHAPTER_END_WEAK_ANCHOR" not in codes
+        assert r["issues"] == []
+
+
+def test_default_mode_still_emits_closure_advisory():
+    # 对照：不传 hard_gate_only（默认 False）→ closure advisory 照常 emit（不破坏原行为）
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ch = _write_chapter(tmp, "他走出房间。\n\n灯熄了。")
+        r = mod.scan_chapter_end(ch, anchors=set())
+        codes = {i["code"] for i in r["issues"]}
+        assert "CHAPTER_END_CLOSURE_ADVISORY" in codes

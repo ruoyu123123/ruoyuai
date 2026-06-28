@@ -40,6 +40,76 @@ import chapter_io as cio
 from atomic_json import atomic_write_text
 
 
+# 🔴 2026-06-27 C18：splitter 字数守恒 hard_gate（治北极星④纯格式层 0 校验·丢字/重复 silently）。
+class SplitterIntegrityError(Exception):
+    """splitter 字数守恒被破坏（丢字 / 重复 / 空块落盘 / 切片计数失配）= 北极星④纯格式层契约破损。
+
+    code=SPLIT_WORD_NOT_CONSERVED（与 audit_hub.HARD_GATE_CODES / STRUCTURE§11.2 / CLAUDE.md 三方一致）·
+    携 delta(accounted - draft_cjk)。main / _main_freestyle 捕获 → stderr [FATAL] → sys.exit(2)，
+    使 cluster-write step6 fail-fast（坏章节零落盘）。
+    """
+    code = "SPLIT_WORD_NOT_CONSERVED"
+
+    def __init__(self, message, delta=None):
+        super().__init__(message)
+        self.delta = delta
+
+
+def _assert_word_conservation(report, draft_cjk, per_chapter_cjk, pending_tail_cjk,
+                              chunks_for_empty_check, chapters_split):
+    """🔴 2026-06-27 C18：落盘前字数守恒确定性自检。守护边界严限三条恒等（北极星⑤边界：
+    绝不越界断言章数 N / 切点质量 / 叙事顺序 / 任何内容判断·只查 CJK 守恒 + 无空块 + 计数同步）：
+
+      ① sum(per_chapter_cjk) + pending_tail_cjk == draft_cjk（CJK 精确整数·基线取 strip-title/
+         prepend 后 draft_cjk·别把故意剥离的伪标题算丢字）
+      ② 无空 chunk 落盘
+      ③ len(chunks) == chapters_split == len(per_chapter_cjk)（切片与计数同步）
+
+    任一破 → report['integrity'].conserved=False 后 raise SplitterIntegrityError。守恒则写
+    integrity 段返回（report 增 integrity:{conserved, draft_cjk, accounted, pending_tail_cjk, delta}）。
+    """
+    accounted = sum(per_chapter_cjk) + pending_tail_cjk
+    empty_chunk = any(not c.strip() for c in chunks_for_empty_check)
+    chunk_count = len(chunks_for_empty_check)
+    count_mismatch = (chunk_count != chapters_split) or (len(per_chapter_cjk) != chapters_split)
+    conserved = (accounted == draft_cjk) and (not empty_chunk) and (not count_mismatch)
+    report["integrity"] = {
+        "conserved": conserved,
+        "draft_cjk": draft_cjk,
+        "accounted": accounted,
+        "pending_tail_cjk": pending_tail_cjk,
+        "delta": accounted - draft_cjk,
+    }
+    if not conserved:
+        raise SplitterIntegrityError(
+            f"SPLIT_WORD_NOT_CONSERVED · draft_cjk={draft_cjk} accounted={accounted} "
+            f"delta={accounted - draft_cjk} empty_chunk={empty_chunk} count_mismatch={count_mismatch} "
+            f"(chunks={chunk_count} chapters_split={chapters_split} per_chapter_cjk={len(per_chapter_cjk)})",
+            delta=accounted - draft_cjk)
+    return conserved
+
+
+def _strip_pseudo_title(draft_text: str):
+    """🔴 2026-06-27 P0-2：剥离 freestyle 草稿前几行的伪章标题（writer v26 锁字数路径吐出）。
+
+    匹配「第N章」「第N章 标题」「第N章 <短标题>」等独行伪头·只扫前 3 个非空行(防误伤正文中段)。
+    freestyle 草稿不该有章标题·splitter step 6 自己 gen_chapter_titles·任何前导伪头都是噪声。
+    """
+    lines = draft_text.split("\n")
+    out = []
+    scanned_nonblank = 0
+    for ln in lines:
+        s = ln.strip()
+        if scanned_nonblank < 3:
+            if s:
+                scanned_nonblank += 1
+                # 伪头：第N章 单独 / 第N章 标题 / 第N章 后接 ≤12 字短串
+                if re.match(r"^第\d+章(\s*标题)?\s*$", s) or re.match(r"^第\d+章\s+\S{1,12}\s*$", s):
+                    continue  # 丢弃此行
+        out.append(ln)
+    return "\n".join(out).lstrip("\n")
+
+
 def strip_title(body: str):
     """分离章节标题行和正文。返回 (title_line, content)。"""
     lines = body.split("\n")
@@ -277,6 +347,11 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
     lo, hi, target = _resolve_rhythm(rhythm_profile)
     tolerance = 600  # freestyle 锚点搜索半径（给最佳切点更多空间）
 
+    # 🔴 2026-06-27 P0-2(审计 sediment)：剥离 writer v26 锁字数路径吐出的伪标题头（如「第5章 标题」）。
+    # freestyle 草稿不应含章标题（splitter 自己起标题）·任何前 3 行的「第N章[ 标题]」伪头都是 spurious·
+    # 不剥会拼进首章正文第一屏(实证：cluster_005 ch18 line3 泄漏「第5章 标题」·读者可见)。
+    draft_text = _strip_pseudo_title(draft_text)
+
     # 1. prepend 上 cluster pending_tail（跨 cluster 补料）
     prepend_cjk = 0
     content = draft_text
@@ -343,6 +418,9 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
                 "_doc": f"整段 {draft_cjk} CJK < 单章下限 {lo} · 不切 · 退 pending_tail 等下 cluster 拼接",
             },
         })
+        # 🔴 2026-06-27 C18：N==0 全退 pending_tail 也守恒（accounted = pending_tail_cjk = draft_cjk）。
+        _assert_word_conservation(report, draft_cjk, [], draft_cjk,
+                                  chunks_for_empty_check=[], chapters_split=0)
         if not dry_run:
             _write_pending_tail(project_root, cluster_key, content)
             _write_splitter_wal(project_root, cluster_key, report)
@@ -421,6 +499,11 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
                      if pending_tail_text else None),
         },
     })
+
+    # 🔴 2026-06-27 C18：末章 pending_tail 处理完、落盘前插确定性守恒自检（坏章节零落盘）。
+    _pending_tail_cjk = cio.count_cjk(pending_tail_text) if pending_tail_text else 0
+    _assert_word_conservation(report, draft_cjk, per_chapter_cjk, _pending_tail_cjk,
+                              chunks_for_empty_check=chunks, chapters_split=chapters_split)
 
     files_written = []
     if not dry_run:
@@ -560,9 +643,15 @@ def _main_freestyle(args):
         else:
             print(f"[WARN] --previous-pending-tail 指定但文件不存在: {prev_pending_path}", file=sys.stderr)
 
-    report = run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
-                           rhythm, previous_pending_tail, dry_run,
-                           narrative_mode=narrative_mode, climax_hint=climax_hint)
+    # 🔴 2026-06-27 C18：守恒被破坏 → [FATAL] SPLIT_WORD_NOT_CONSERVED stderr → exit 2（step6 fail-fast·坏章节零落盘）。
+    try:
+        report = run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
+                               rhythm, previous_pending_tail, dry_run,
+                               narrative_mode=narrative_mode, climax_hint=climax_hint)
+    except SplitterIntegrityError as e:
+        sys.stderr.write(f"[FATAL] {e.code}: {e}\n")
+        sys.stderr.flush()
+        sys.exit(2)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     sys.exit(0)
 

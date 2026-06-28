@@ -233,6 +233,67 @@ def _stage_matches(stages: list, tokens) -> bool:
     return any(any(tok in s for tok in tokens) for s in stages)
 
 
+def _resolve_parents(me: dict) -> list:
+    """🔴 2026-06-27 P0-01 helper：兼容 prerequisites(列表·producer 实写) + parent_me(旧字段)·防漂移。
+
+    producer (core/scripts/gen_creative.py:289) 实写 ME schema 用 prerequisites:[];
+    引擎旧版读 me.get('parent_me') 字段错配·+25 bonus dead code 永不触发。
+    本 helper 统一双字段读·返回前置 ME id 列表。
+    """
+    if not isinstance(me, dict):
+        return []
+    prereqs = me.get("prerequisites")
+    if isinstance(prereqs, list) and prereqs:
+        return [str(x) for x in prereqs if x]
+    pm = me.get("parent_me")
+    if pm:
+        return [str(pm)]
+    return []
+
+
+def _resolve_cur_vol(world_state: dict, character_arc: dict, fallback: int = 0) -> int:
+    """🔴 2026-06-27 P0-02 helper：cur_vol 兜底解析·统一 select_candidate_mes/emerge_next_cluster 两处。
+
+    原 select_candidate_mes line 341 调 _current_advancing_vol 无 fallback·world_state/character_arc 缺
+    current_vol 字段时返回 None·+30 vol 连续 bonus 永不触发。
+    本 helper 加 fallback 兜底（emerge_next_cluster 传 current_volume=剩余 ME 最小卷号）。
+    """
+    v = _current_advancing_vol(world_state, character_arc)
+    return v if v else fallback
+
+
+def _dead_actor_names(project_root) -> set:
+    """🔴 2026-06-27 P0-03 helper：读 character_arc_state.json 找已死/牺牲角色名集合。
+
+    用途：emergence engine 在 find_remaining_mes 后剔除 ME 文本含死角色名的项（如李暴躁牺牲后
+    ME-V1-02「李暴躁砸新手村神坛」应被剔除）。源数据缺失/字段不标准时返空集合（advisory 不阻断）。
+    """
+    if not project_root:
+        return set()
+    try:
+        from pathlib import Path as _P
+        p = _P(project_root) / "_数据库" / "character_arc_state.json"
+        if not p.exists():
+            return set()
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    dead_keywords = {"dead", "died", "deceased", "牺牲", "死亡", "去世", "已死"}
+    names = set()
+    # 🔴 schema：character_arc_state.json 结构是 {"characters": {name: {...}}}·迭代 characters 子 dict
+    chars = data.get("characters") if isinstance(data, dict) else None
+    if isinstance(chars, dict):
+        for cname, cdata in chars.items():
+            if not isinstance(cdata, dict):
+                continue
+            status = str(cdata.get("status") or cdata.get("life_status") or "").lower()
+            cs = str(cdata.get("current_stage") or "").lower()
+            blob = status + " " + cs
+            if any(k in blob for k in dead_keywords):
+                names.add(str(cname))
+    return names
+
+
 def _score_one_me(
     me: dict,
     cur_vol: int,
@@ -255,11 +316,18 @@ def _score_one_me(
             score += 30
             reasons.append(f"vol{cur_vol} 连续（与当前推进卷一致）")
 
-    # 2. parent_me 链：ME 的 parent_me 指向已完成 ME → 推进主线
-    parent = me.get("parent_me") if isinstance(me, dict) else None
-    if parent and completed_me_ids and parent in completed_me_ids:
-        score += 25
-        reasons.append(f"承接已完成主线 ME「{parent}」（parent_me 链下游）")
+    # 2. 前置链：ME 的 prerequisites/parent_me 全部指向已完成 ME → +25·有未完成 → 硬剔除
+    # 🔴 2026-06-27 P0-01 修：原读 me.get("parent_me") 但 producer (gen_creative) 实写 prerequisites
+    #   字段错配·+25 bonus dead code 永不触发·V1-02 等 ME 被错跳的根因之一。
+    parents = _resolve_parents(me)
+    if parents and completed_me_ids is not None:
+        unmet = [p for p in parents if p not in completed_me_ids]
+        if not unmet:
+            score += 25
+            reasons.append(f"承接已完成主线 ME「{','.join(parents)}」（前置链全部满足）")
+        else:
+            score -= 100  # 硬剔除·防断链跳子节点
+            reasons.append(f"⚠️ 前置 ME「{','.join(unmet)}」未完成·已剔除（防断链）")
 
     # 3. arc 阶段匹配
     setback_hits = [t for t in _SETBACK_DESC_TOKENS if t in me_text]
@@ -321,6 +389,7 @@ def select_candidate_mes(
     last_consequence: list,
     completed_me_ids: set = None,
     milestone_kw: set = None,
+    default_vol: int = 0,
 ) -> list:
     """启发式：从剩余 ME 中给每个打分排序，取 top 3 个 candidate。
 
@@ -338,7 +407,8 @@ def select_candidate_mes(
         return []
 
     completed_me_ids = completed_me_ids or set()
-    cur_vol = _current_advancing_vol(world_state, character_arc)
+    # 🔴 2026-06-27 P0-02 修：用 _resolve_cur_vol 加 default_vol 兜底·治 +30 vol 连续 bonus dead code
+    cur_vol = _resolve_cur_vol(world_state, character_arc, default_vol)
     stages = _arc_stages(character_arc)
     consequence_kw = _keyword_set(_consequence_texts(last_consequence))
     extreme_factions = _extreme_factions(world_state)
@@ -371,8 +441,14 @@ def select_candidate_mes(
     # 按分降序；同分按原顺序（idx 升序）稳定排序 = 保留设计推进顺序
     scored.sort(key=lambda t: (-t[0], t[1]))
 
+    # 🔴 2026-06-27 P0-01 配套：有正分候选时·剔除负分(prereq 未满足被 -100 硬剔/finale 降分)候选·
+    # 防 prereq-blocked ME 被当合法走向卡选项展示给用户(实证 cluster_006 涌现 V1-08/-92 V1-06/-100)。
+    # 全负分(罕见·链断)才退回展示前 3·保留可解释 reasons。
+    positives = [t for t in scored if t[0] >= 0]
+    display = positives if positives else scored
+
     out = []
-    for score, _, me, reasons in scored[:3]:
+    for score, _, me, reasons in display[:3]:
         me2 = dict(me) if isinstance(me, dict) else me
         if isinstance(me2, dict):
             me2["_emergence_score"] = score
@@ -568,6 +644,35 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
                 f"(新副本/新阶段)。绝不硬切·由你确认换卷信号(核心任务解决+力量/舞台/反派跃迁任一)。")
         remaining = in_vol  # 硬过滤：本卷内涌现小走向
 
+    # 🔴 2026-06-27 P0-03a finale progress gate：vol_progress < 70% + 还有 non_finale ME → 剔除 finale
+    # 治 cluster_002(2/10) 就涌现 V1-10 finale 的 bug。阈值用大势卡 _metadata.cluster_count_per_volume(用户设)。
+    _FINALE_PROGRESS_GATE = 0.7
+    try:
+        _cpv = int(dashishi.get("_metadata", {}).get("cluster_count_per_volume", 10))
+        if _cpv > 0 and current_volume is not None:
+            _done_in_vol = sum(1 for c in shijianji.get("clusters", [])
+                               if isinstance(c, dict) and c.get("status") != "candidate"
+                               and (c.get("vol") == current_volume or _me_volume(
+                                   next((m for m in (dashishi.get("major_events") or [])
+                                         if _get_me_id(m) == c.get("parent_me")), {})) == current_volume))
+            _vol_progress = _done_in_vol / _cpv
+            _non_finale = [m for m in remaining if not m.get("is_volume_finale")]
+            if _vol_progress < _FINALE_PROGRESS_GATE and _non_finale:
+                _before = len(remaining)
+                remaining = _non_finale
+                if _before > len(remaining):
+                    print(f"[emergence] vol{current_volume} 进度 {_vol_progress:.0%} < {_FINALE_PROGRESS_GATE:.0%}·剔除 {_before - len(remaining)} 个 finale ME（防过早收束）")
+    except Exception as _e:
+        print(f"[emergence] finale progress gate 跳过: {_e}")
+
+    # 🔴 2026-06-27 P0-03b 死角色 gate：ME 文本提及已死角色 → 剔除（V1-02 李暴躁砸神坛在李死后死锁）
+    _dead = _dead_actor_names(project_root)
+    if _dead:
+        _before = len(remaining)
+        remaining = [m for m in remaining if not any(name in _me_text(m) for name in _dead)]
+        if _before > len(remaining):
+            print(f"[emergence] 剔除 {_before - len(remaining)} 个 ME（提及已死角色: {','.join(sorted(_dead))}）")
+
     # 收集 last consequence（最后一个 cluster 的涟漪后果）
     last_consequence = []
     if isinstance(world_state.get("consequence_tracker"), dict):
@@ -600,8 +705,10 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
                 break
 
     # 选 candidate ME（传 completed_mes 供 parent_me 链打分 + milestone_kw 供收敛打分）
+    # 🔴 2026-06-27 P0-02 修：传 default_vol=current_volume·治 +30 vol 连续 bonus dead code
     candidate_mes = select_candidate_mes(remaining, world_state, character_arc, last_consequence,
-                                         completed_me_ids=completed_mes, milestone_kw=milestone_kw)
+                                         completed_me_ids=completed_mes, milestone_kw=milestone_kw,
+                                         default_vol=current_volume or 0)
     if not candidate_mes:
         return {"ok": False, "error": "无符合启发式条件的 candidate ME"}
 

@@ -400,17 +400,23 @@ def main():
 
     db = project_root / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
+    # 🔴 2026-06-27 P2-12: motif_ledger.json 迁 .cross_chapter_scan/（与 advisory snapshot 同目录·根目录干净·scaffold KNOWN_EXTRAS 不必再网开一面）。
+    snap_dir = db / ".cross_chapter_scan"
+    snap_dir.mkdir(parents=True, exist_ok=True)
     # 持久化 motif_ledger.json (完整账本)
-    ledger_path = db / "motif_ledger.json"
+    ledger_path = snap_dir / "motif_ledger.json"
     try:
         ledger_path.write_text(
             json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as e:
         print(f"[WARN] motif_ledger.json 写失败: {e}", file=sys.stderr)
-
-    # advisory snapshot 给 build_manifest 注入下个 cluster
-    snap_dir = db / ".cross_chapter_scan"
-    snap_dir.mkdir(parents=True, exist_ok=True)
+    # 兼容旧位置：若 _数据库/motif_ledger.json 残留则尝试静默清理（不阻塞）
+    _legacy = db / "motif_ledger.json"
+    try:
+        if _legacy.exists():
+            _legacy.unlink()
+    except OSError:
+        pass
     snapshot = {
         "scan_type": "motif_recurrence_ledger",
         "scan_ts": datetime.now().strftime("%Y%m%d_%H%M%S"),

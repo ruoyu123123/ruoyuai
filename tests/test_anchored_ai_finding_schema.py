@@ -162,5 +162,5 @@ def test_anchor_span_advisory_only_not_hard_gate():
     assert "REVISION_REDUCED_AUTHOR_FIDELITY" not in audit_hub.HARD_GATE_CODES
     assert "CHRONOTOPE_MONOTONY" not in audit_hub.HARD_GATE_CODES
     assert "MACGUFFIN_ORNAMENTAL" not in audit_hub.HARD_GATE_CODES
-    # 15 码不变
-    assert len(audit_hub.HARD_GATE_CODES) == 15
+    # 🔴 2026-06-27 C03+C18：授权基线 15→18→19（子系统载荷点火 3 码 + splitter 字数守恒 1 码·本 schema 改造不增 hard_gate）
+    assert len(audit_hub.HARD_GATE_CODES) == 19

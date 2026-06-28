@@ -134,6 +134,27 @@ def _apply_ripple(world: dict, ripple: dict, ch: int, applied_log: list, project
         applied_log.append({"target": target, "op": "delta", "old": old, "new": new, "delta": delta, "reason": reason})
         return True
 
+    # ---- advance（无界数值增量）🔴 2026-06-27 SYS-1 ----
+    # delta 钳 0-100 不适合时间/累计计数（current_world_time.day 等）；set 又只硬写覆盖。
+    # advance = 无界 += inc，让基线 auto_tick 能让 day 按章自然推进（北极星③：机械时间推进
+    # 非创作判断·不钳制不硬锁）。与 consequence_tracker 的 "add"(dict 追加) 互不冲突（键不同）。
+    if "advance" in ripple:
+        parent, key = _resolve_path(world, target)
+        if parent is None:
+            applied_log.append({"target": target, "op": "advance", "result": "skip_path_missing"})
+            return False
+        inc = ripple["advance"]
+        if not isinstance(inc, (int, float)) or isinstance(inc, bool):
+            applied_log.append({"target": target, "op": "advance", "result": "skip_inc_not_numeric"})
+            return False
+        old = parent.get(key, 0)
+        if not isinstance(old, (int, float)) or isinstance(old, bool):
+            old = 0  # 旧值脏（None/str）→ 从 0 起推进，不崩
+        new = old + inc  # 无界（不 clamp）
+        parent[key] = new
+        applied_log.append({"target": target, "op": "advance", "old": old, "new": new, "inc": inc, "reason": reason})
+        return True
+
     # ---- set 值 ----
     if "set" in ripple:
         parent, key = _resolve_path(world, target)

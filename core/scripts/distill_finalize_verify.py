@@ -34,6 +34,7 @@ from pathlib import Path
 CWD = Path(__file__).resolve().parent
 DISTILL_REPLICATE = CWD / "distill_replicate.py"
 CLUSTER_EVALUATOR = CWD / "cluster_evaluator.py"
+STYLE_EVALUATOR = CWD / "style_evaluator.py"  # 🔴 2026-06-27 C01 SFS 出货闸
 
 
 # ============ 简化 cluster_arc 估算（不依赖 章节/ 目录） ============
@@ -216,6 +217,103 @@ def strict_gate_decision(report: dict | None,
     return strict_ok, estimable
 
 
+# ============ 🔴 2026-06-27 C01：SFS 出货闸（纯函数 · 可测） ============
+#
+# 根因：本 verifier 此前只调 cluster_evaluator（arc/kicker/scene 6 维），**完全不看 SFS** ——
+# STRICT_ESTIMABLE_IDX_REASONING=(4,) 把五维风格保真度全移出 strict → SFS=40 跑飞的 skill
+# 也能正常出货污染全书。C01 补一道 SFS 出货闸：对「实际出货的 skill_FINAL 复刻」重测 SFS。
+#
+# 北极星护栏（铁律）：
+#  ① 绝不做绝对 SFS≥80 hard-lock（单次方差 std≈5.56·reasoning 模型系统性压低·诡秘 88.35 /
+#     轮回乐园 / 蛊真人 B 级均正常出货）。hard 档只在【灾难性坍缩】触发：SFS < floor 或 grade==D。
+#  ② floor 用相对锚 max(绝对地板 55, v0_sfs×0.85)，不用平直 ΔSFS<ε。
+#  ③ 55-80 健康但低于目标 band → 恒 advisory（写 report 放行，绝不拦）。
+#  ④ SFS 测的对象必须对齐【实际出货的 skill】（修「ship v1 却只有 v0 SFS」错配）——
+#     故对 skill_FINAL 的 verify 复刻重跑 style_evaluator，而非读旧 eval_v0。
+CATASTROPHIC_SFS_FLOOR = 55.0   # SFS 灾难性坍缩绝对地板（低于 = 风格完全没复刻出来）
+SFS_TARGET_BAND_LOW = 80.0      # 健康目标 band 下沿（B 级·仅 advisory·绝非 hard-lock）
+SFS_V0_REL_FLOOR_RATIO = 0.85   # 相对 v0 暴跌锚（v0×0.85·防 reflect 把 skill 改坏）
+
+
+def sfs_catastrophic_floor(v0_sfs: float | None) -> float:
+    """SFS 灾难地板 = max(绝对地板 55, v0_sfs×0.85)。
+
+    相对锚优先（北极星②）：v0 已是 88 的高分作者，跌到 70 也算坍缩（70 < 88×0.85=74.8）；
+    v0 本就 60 的难仿作者，55 绝对地板兜底不误杀。v0_sfs None（无 v0 eval）→ 仅绝对地板。
+    """
+    if v0_sfs is None:
+        return CATASTROPHIC_SFS_FLOOR
+    return max(CATASTROPHIC_SFS_FLOOR, round(v0_sfs * SFS_V0_REL_FLOOR_RATIO, 2))
+
+
+def sfs_gate_decision(sfs: float | None,
+                      grade: str | None,
+                      floor: float = CATASTROPHIC_SFS_FLOOR) -> tuple[str, dict]:
+    """SFS 三档判定（纯函数）。
+
+    返回 (verdict, detail)：
+      · "catastrophic" → SFS < floor 或 grade==D · gate_level=hard_gate ·
+        --strict 下父进程 exit 2 拦在出货前（print [FAIL·SFS跑飞]）。
+      · "below_band"   → floor ≤ SFS < 目标 band(80) · gate_level=advisory · 写 report 放行。
+      · "healthy"      → SFS ≥ 目标 band · gate_level=pass。
+      · "unknown"      → SFS 无法解析（None）· 不阻断（infra 失败不punish·真闸在 step7 cluster 维）。
+    """
+    g = (grade or "").strip().upper()
+    if sfs is None:
+        return "unknown", {
+            "sfs": None, "grade": grade, "floor": floor,
+            "gate_level": "advisory",
+            "note": "SFS 无法解析（原文缺失/style_evaluator 失败）· 闸跳过不阻断 · 真闸在 cluster 维",
+        }
+    if (sfs < floor) or (g == "D"):
+        cause = []
+        if sfs < floor:
+            cause.append(f"SFS {sfs:.2f} < floor {floor:.2f}")
+        if g == "D":
+            cause.append("grade==D")
+        return "catastrophic", {
+            "sfs": sfs, "grade": grade, "floor": floor,
+            "gate_level": "hard_gate",
+            "note": "SFS 灾难性坍缩（" + " / ".join(cause) + "）· skill 没复刻出作者风格 · 出货前拦",
+        }
+    if sfs < SFS_TARGET_BAND_LOW:
+        return "below_band", {
+            "sfs": sfs, "grade": grade, "floor": floor,
+            "gate_level": "advisory",
+            "note": (f"SFS {sfs:.2f}({grade or '?'}) 健康但低于目标 band {SFS_TARGET_BAND_LOW:.0f} · "
+                     f"advisory 放行（单次方差大·reasoning 压低·B 级正常出货·绝不 hard-lock）"),
+        }
+    return "healthy", {
+        "sfs": sfs, "grade": grade, "floor": floor,
+        "gate_level": "pass",
+        "note": f"SFS {sfs:.2f}({grade or '?'}) ≥ 目标 band · 风格保真度健康",
+    }
+
+
+def parse_sfs_eval(path: Path) -> tuple[float | None, str | None]:
+    """从 style_evaluator eval JSON 解析 (total_sfs, grade)。
+
+    口径对齐 finalize_distill.py：total 取 sfs_quick → total → programmatic_score.total；
+    grade 取顶层 grade → programmatic_score.grade。解析失败 → (None, None)（不抛）。
+    """
+    try:
+        ev = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    ps = ev.get("programmatic_score") or {}
+    score = ev.get("sfs_quick")
+    if score is None:
+        score = ev.get("total")
+    if score is None:
+        score = ps.get("total")
+    grade = ev.get("grade") or ps.get("grade")
+    try:
+        score = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        score = None
+    return score, (str(grade) if grade else None)
+
+
 # ============ 主流程 ============
 
 def run_distill_replicate(skill: Path, project: Path, cluster_id: str, output: Path) -> bool:
@@ -262,6 +360,54 @@ def run_cluster_evaluator(ref_arc: Path, gen_arc: Path, output: Path,
         except json.JSONDecodeError:
             pass
     return r.returncode, report
+
+
+# 🔴 2026-06-27 C01
+def run_sfs_gate(replica_path: Path, project: Path, verify_dir: Path,
+                 v0_eval_path: Path | None = None) -> tuple[str, dict]:
+    """对【出货 skill 的复刻】重跑 SFS（multi-ref·铁律 feedback_distill_sfs_multi_ref）+ 三档判定。
+
+    replica_path = 步骤 1 用 skill_FINAL 实打 gen-model 的复刻（= 实际出货 skill 的产物 ·
+    对齐北极星④，修「ship v1 却只有 v0 SFS」错配）。v0_eval_path = step4 的 eval_v0.json（取相对 floor 锚）。
+
+    infra 失败（原文缺/style_evaluator 崩/SFS 不可解析）→ verdict="unknown" 不阻断（真闸在 cluster 维）。
+    """
+    ref_dir = project / "原文"
+    if not ref_dir.is_dir() or not any(ref_dir.glob("*.txt")):
+        verdict, detail = sfs_gate_decision(None, None)
+        detail["reason"] = f"原文目录缺失或无 txt: {ref_dir}"
+        return verdict, detail
+
+    sfs_out = verify_dir / "sfs_ship.json"
+    cmd = [
+        child_python(), str(STYLE_EVALUATOR),
+        "--gen", str(replica_path),
+        "--multi-ref-from-dir", str(ref_dir),
+        "--multi-ref-count", "5",
+        "--output", str(sfs_out),
+    ]
+    print(f"[verify] SFS 出货闸：style_evaluator --multi-ref-from-dir 原文 (对齐出货 skill_FINAL 复刻) ...",
+          file=sys.stderr)
+    try:
+        subprocess.run(cmd, capture_output=False)
+    except Exception as e:  # noqa: BLE001 — SFS 评分崩不阻断出货（真闸在 cluster 维）
+        verdict, detail = sfs_gate_decision(None, None)
+        detail["reason"] = f"style_evaluator 调用异常: {e}"
+        return verdict, detail
+
+    ship_sfs, ship_grade = parse_sfs_eval(sfs_out)
+    v0_sfs, _v0_grade = (parse_sfs_eval(v0_eval_path)
+                         if v0_eval_path and Path(v0_eval_path).exists() else (None, None))
+    floor = sfs_catastrophic_floor(v0_sfs)
+    verdict, detail = sfs_gate_decision(ship_sfs, ship_grade, floor)
+    detail.update({
+        "ship_sfs": ship_sfs,
+        "ship_grade": ship_grade,
+        "v0_sfs": v0_sfs,
+        "ship_sfs_report": str(sfs_out),
+        "multi_ref_dir": str(ref_dir),
+    })
+    return verdict, detail
 
 
 def main():
@@ -396,8 +542,26 @@ def main():
           f"{est_dims} 通过 {len(est_pass)}/{len(estimable)}", file=sys.stderr)
     print(f"         strict 策略: {strict_note}", file=sys.stderr)
     print(f"         报告: {args.output}", file=sys.stderr)
-    if strict_ok:
-        print(f"[OK · PASS] 写作端回灌（strict 可估算维全过）· 允许 plan_tracker end", file=sys.stderr)
+
+    # ===== 步骤 5.5（🔴 2026-06-27 C01）：SFS 出货闸 =====
+    # 对【出货 skill_FINAL 的复刻】重测 SFS（multi-ref·铁律）。灾难性坍缩（<floor 或 grade==D）
+    # 且 --strict → exit 2 拦在出货前；健康但 <80 band → advisory 放行（绝不 hard-lock·北极星①）。
+    v0_eval_path = project / "对比报告" / "eval_v0.json"
+    sfs_verdict, sfs_detail = run_sfs_gate(replica_path, project, verify_dir,
+                                           v0_eval_path=v0_eval_path)
+    sfs_catastrophic = (sfs_verdict == "catastrophic")
+    print(f"[verify] SFS 出货闸: verdict={sfs_verdict} · {sfs_detail.get('note', '')}", file=sys.stderr)
+    if report:
+        report["_sfs_gate"] = {"verdict": sfs_verdict, **sfs_detail}
+        args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+
+    # ===== 步骤 6：综合判决（cluster strict 可估算维 + SFS 出货闸） =====
+    if strict_ok and not sfs_catastrophic:
+        if sfs_verdict == "below_band":
+            print(f"[verify] SFS advisory: {sfs_detail.get('note', '')}", file=sys.stderr)
+        print(f"[OK · PASS] 写作端回灌（strict 可估算维全过 + SFS 未坍缩）· 允许 plan_tracker end",
+              file=sys.stderr)
         # 2026-06-19：蒸馏完成后自动沉淀知识到本地库（MAPLE 闭环）
         try:
             import knowledge_collector as _kc
@@ -406,9 +570,16 @@ def main():
             pass
         sys.exit(0)
     if args.strict:
-        print(f"[FAIL · strict] strict 可估算维未全过 · 出货前拦截（修 skill 重蒸馏）", file=sys.stderr)
+        if sfs_catastrophic:
+            print(f"[FAIL·SFS跑飞 · strict] {sfs_detail.get('note', '')} · 出货前拦截（修 skill 重蒸馏）",
+                  file=sys.stderr)
+        if not strict_ok:
+            print(f"[FAIL · strict] strict 可估算维未全过 · 出货前拦截（修 skill 重蒸馏）", file=sys.stderr)
         sys.exit(2)
-    print(f"[WARN] 可估算维未全过 · 非 strict 放行 · 建议手动审查", file=sys.stderr)
+    if sfs_catastrophic:
+        print(f"[WARN·SFS跑飞] {sfs_detail.get('note', '')} · 非 strict 放行 · 强烈建议重蒸馏", file=sys.stderr)
+    if not strict_ok:
+        print(f"[WARN] 可估算维未全过 · 非 strict 放行 · 建议手动审查", file=sys.stderr)
     sys.exit(0)
 
 

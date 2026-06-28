@@ -89,6 +89,151 @@ def test_validate_auto_migrate_true_converts_and_persists():
         assert backup_root.exists() and any(backup_root.iterdir())
 
 
+# ============ C19 大势卡结构契约（2026-06-27）============
+def _mk_db(td) -> Path:
+    db = Path(td) / "_数据库"
+    db.mkdir(parents=True)
+    return db
+
+
+def _write_gt(db: Path, card: dict) -> Path:
+    p = db / "大势卡.json"
+    p.write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def test_c19_missing_file_optional():
+    """大势卡.json 缺失 → OPTIONAL_MISSING warning·非 error（IP 线性/未到 outline）。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        errs, warns = dsv.check_grand_trend_structure(db)
+        assert errs == []
+        assert any("OPTIONAL_MISSING" in w for w in warns)
+
+
+def test_c19_bare_scaffold_advisory_not_error():
+    """bare scaffold 空骨架（volumes/major_events 皆空）→ advisory·绝不当结构破损（fluid 起步）。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _write_gt(db, {"schema_version": "v27", "volumes": [], "major_events": []})
+        errs, warns = dsv.check_grand_trend_structure(db)
+        assert errs == [], errs
+        assert any("GRAND_TREND_NOT_AUTHORED" in w for w in warns)
+
+
+def test_c19_well_formed_card_clean():
+    """良构 ME 池（id+volume 齐·每卷有 finale·prereq 可解析）→ 0 error。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _write_gt(db, {"volumes": [{"vol": 1}], "major_events": [
+            {"id": "ME-V1-01", "volume": 1, "is_volume_finale": False, "prerequisites": []},
+            {"id": "ME-V1-02", "volume": 1, "is_volume_finale": True, "prerequisites": ["ME-V1-01"]},
+        ]})
+        errs, warns = dsv.check_grand_trend_structure(db)
+        assert errs == [], errs
+
+
+def test_c19_volume_defined_me_pool_empty_error():
+    """卷已定义但 ME 池空 → ME_POOL_EMPTY error（emergence 大势无方向·hard）。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _write_gt(db, {"volumes": [{"vol": 1}], "major_events": []})
+        errs, _ = dsv.check_grand_trend_structure(db)
+        assert any("GRAND_TREND_ME_POOL_EMPTY" in e for e in errs), errs
+
+
+def test_c19_missing_field_no_finale_dangling_prereq():
+    """缺 id / 卷无 finale / prereq 悬空 → 三类 hard error 各命中。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _write_gt(db, {"volumes": [{"vol": 1}], "major_events": [
+            {"id": "ME-V1-01", "volume": 1, "is_volume_finale": False, "prerequisites": ["ME-V9-99"]},
+            {"volume": 1, "is_volume_finale": False},  # 缺 id
+        ]})
+        errs, _ = dsv.check_grand_trend_structure(db)
+        assert any("GRAND_TREND_ME_MISSING_FIELD" in e for e in errs)
+        assert any("GRAND_TREND_VOLUME_NO_FINALE" in e for e in errs)
+        assert any("GRAND_TREND_PREREQ_UNRESOLVED" in e for e in errs)
+
+
+def test_c19_finale_string_true_accepted():
+    """is_volume_finale 字符串 'true' 也认（容忍 LLM 输出）→ 不误报无 finale。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _write_gt(db, {"volumes": [{"vol": 2}], "major_events": [
+            {"id": "ME-V2-01", "volume": 2, "is_volume_finale": "true"},
+        ]})
+        errs, _ = dsv.check_grand_trend_structure(db)
+        assert not any("VOLUME_NO_FINALE" in e for e in errs), errs
+
+
+# ============ C02 live-consumed 空内容 advisory 背板 ============
+def _gt_authored(db: Path):
+    """写一张 authored 大势卡（C02 gate=outline 完成·major_events 非空）。"""
+    _write_gt(db, {"major_events": [{"id": "ME-V1-01", "volume": 1, "is_volume_finale": True}]})
+
+
+def test_c02_consumed_but_empty_advisory():
+    """live-consumed（world_evolution_engine）子系统内容全空 → advisory warning。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _gt_authored(db)
+        (db / "涟漪规则.json").write_text(json.dumps({
+            "schema_version": 1,
+            "consumption": {"status": "live", "by": ["world_evolution_engine"]},
+            "rules": [],
+        }, ensure_ascii=False), encoding="utf-8")
+        warns = dsv.check_consumed_but_empty(db)
+        assert any("CONSUMED_BUT_EMPTY" in w and "涟漪规则" in w for w in warns), warns
+
+
+def test_c02_gate_skips_pre_outline():
+    """大势卡 ME 池空（outline 未完成）→ gate 关·不产 C02 噪声。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _write_gt(db, {"volumes": [], "major_events": []})  # 未 authored
+        (db / "涟漪规则.json").write_text(json.dumps({
+            "schema_version": 1,
+            "consumption": {"status": "live", "by": ["world_evolution_engine"]},
+            "rules": [],
+        }, ensure_ascii=False), encoding="utf-8")
+        assert dsv.check_consumed_but_empty(db) == []
+
+
+def test_c02_skips_nonempty_content():
+    """live-consumed 但有内容 → 不报 advisory。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _gt_authored(db)
+        (db / "世界状态.json").write_text(json.dumps({
+            "schema_version": 1,
+            "consumption": {"status": "live", "by": ["build_manifest"]},
+            "factions": [{"name": "立序派"}],
+        }, ensure_ascii=False), encoding="utf-8")
+        assert not any("世界状态" in w for w in dsv.check_consumed_but_empty(db))
+
+
+def test_c02_skips_non_target_consumer():
+    """consumption.by 不含目标引擎（world_evolution_engine/build_manifest）→ 不报。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _gt_authored(db)
+        (db / "某档.json").write_text(json.dumps({
+            "schema_version": 1,
+            "consumption": {"status": "live", "by": ["some_other_engine"]},
+            "items": [],
+        }, ensure_ascii=False), encoding="utf-8")
+        assert dsv.check_consumed_but_empty(db) == []
+
+
+def test_c02_story_destiny_empty_strings_count_as_empty():
+    """story_destiny 全空串不算内容（_has_content 递归）→ 空骨架被正确识别为空。"""
+    assert dsv._has_content({"final_image": "", "thematic_resolution": ""}) is False
+    assert dsv._has_content({"final_image": "末法纪"}) is True
+    assert dsv._has_content([]) is False
+    assert dsv._has_content([{"x": "y"}]) is True
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

@@ -26,6 +26,99 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 
+def _try_fix_ascii_quote_pollution(raw: str) -> tuple[str, int]:
+    """🔴 2026-06-26 加（cluster_001 翻车 sediment）：LLM agent 写 JSON 时常把中文短语用
+    ASCII 双引号包起来（如 `"利息回血"`），破坏 JSON 结构。
+
+    检测：在 JSON 字符串值（即 `: "..."` 或 `, "..."` 后到对应 `"` 闭合）内部，把所有
+    CJK 字符之间夹的 ASCII 双引号替换成中文左/右单角双引号。
+    返回 (修复后文本, 替换次数)。
+    """
+    import re as _re
+    # 只在"含中文 + 含 ASCII 双引号"的简单场景下尝试。把 `"<CJK>` 替换为 `『<CJK>`，
+    # 把 `<CJK>"` 替换为 `<CJK>』`。保守做法避开 JSON 结构字符。
+    fixed = raw
+    # 把 "中文 改成 『中文（左角）
+    fixed, n1 = _re.subn(r'"([一-鿿])', r'『\1', fixed)
+    # 把 中文" 改成 中文』（右角）
+    fixed, n2 = _re.subn(r'([一-鿿])"', r'\1』', fixed)
+    return fixed, (n1 + n2)
+
+
+def _load_choice_json_with_recovery(choice_path: Path) -> dict:
+    """读 emergence.json / choice.json·首次失败时尝试 ASCII 引号修复后重试·仍失败抛原异常。"""
+    raw = choice_path.read_text(encoding="utf-8")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        fixed, n = _try_fix_ascii_quote_pollution(raw)
+        if n == 0:
+            raise
+        try:
+            data = json.loads(fixed)
+        except json.JSONDecodeError:
+            raise e  # 修了仍坏 → 抛原始错给 main agent 看
+        # 修复成功 → 把修后内容写回原文件 + 留 .raw 备份
+        backup = choice_path.with_suffix(choice_path.suffix + ".raw")
+        if not backup.exists():
+            backup.write_text(raw, encoding="utf-8")
+        choice_path.write_text(fixed, encoding="utf-8")
+        sys.stderr.write(
+            f"[cluster_choice_apply][AUTOFIX] {choice_path.name}: 修复 {n} 处 ASCII 引号污染"
+            f"（备份 -> {backup.name}）\n")
+        sys.stderr.flush()
+        return data
+
+
+def _compute_cluster_start_ch(project_root: Path, cid: str, clusters: list) -> int:
+    """🔴 2026-06-27 P2-10: 计算本 cluster 在全局章号空间内的 start_ch。
+    优先取前一 cluster 已回填 chapter_range 末 + 1；都没有则起始 1。供 _normalize_storyboard_ch 用。
+    """
+    start = 1
+    for c in clusters:
+        if not isinstance(c, dict) or c.get("cluster_id") == cid:
+            continue
+        cr = c.get("chapter_range") or []
+        if isinstance(cr, list) and len(cr) == 2:
+            try:
+                start = max(start, int(cr[1]) + 1)
+            except (TypeError, ValueError):
+                continue
+    return start
+
+
+def _normalize_storyboard_ch(brief: dict, start: int) -> dict:
+    """🔴 2026-06-27 P2-10: brief.scene_storyboard 字段规约归一化（agent prompt 反 ch 误用 sediment）。
+
+    outline-planner agent prompt 此前允许 storyboard scene 写 `ch` 字段，agent 实际把它当 scene index
+    用（0/1/2...），不是全局章号。下游 build_manifest.current_scene 按全局章号(start+i)反查 → cluster_002+
+    永远找不到 → writer 丢 cluster context（cluster_003 写作翻车 sediment）。
+
+    规则：若 storyboard scene 有 `ch` 且无 `scene_idx` → 把原 ch 落 `scene_idx`，强制覆盖 `ch` 为 start+i。
+    保持 brief 其他字段不变·返回新 brief（不在原对象上原地改）。
+    """
+    if not isinstance(brief, dict):
+        return brief
+    sb = brief.get("scene_storyboard")
+    if not isinstance(sb, list):
+        return brief
+    new_sb = []
+    for i, s in enumerate(sb):
+        if not isinstance(s, dict):
+            new_sb.append(s)
+            continue
+        sc = dict(s)
+        # 原 ch 误用 → 落 scene_idx
+        if "ch" in sc and "scene_idx" not in sc:
+            sc["scene_idx"] = sc["ch"]
+        # 全局章号覆写（即便 agent 写对了 scene_idx，也保 ch 是全局章号）
+        sc["ch"] = start + i
+        new_sb.append(sc)
+    out = dict(brief)
+    out["scene_storyboard"] = new_sb
+    return out
+
+
 def apply_choice(project_root: Path, next_key: str, choice_path: Path) -> dict:
     """读 answer_artifact（{"answer": <chosen brief dict>}）→ upsert 事件簇.json。"""
     try:
@@ -36,7 +129,7 @@ def apply_choice(project_root: Path, next_key: str, choice_path: Path) -> dict:
 
     if not choice_path.exists():
         raise FileNotFoundError(f"用户选择文件不存在: {choice_path}")
-    payload = json.loads(choice_path.read_text(encoding="utf-8"))
+    payload = _load_choice_json_with_recovery(choice_path)
     # 兼容三种来源（真 outline e2e 抓出·brief 嵌套位置不同）：
     #  ① pause answer_artifact：{"step":n, "answer": <brief>}（cluster-save-state 走向卡）
     #  ② outline-planner judge：{mode, cluster_id, ..., cluster_brief: <brief>, free_notes}
@@ -77,6 +170,11 @@ def apply_choice(project_root: Path, next_key: str, choice_path: Path) -> dict:
     if not isinstance(clusters, list):
         raise ValueError("事件簇.json.clusters 不是数组")
 
+    # 🔴 2026-06-27 P2-10: 写 事件簇.json 前先归一化 brief.scene_storyboard 字段（ch 当 scene_idx 误用 sediment）。
+    # 让 事件簇.json 主表的 storyboard.ch 也变全局章号、原值落 scene_idx，与 cluster_blueprint 形态一致。
+    _start = _compute_cluster_start_ch(project_root, brief["cluster_id"], clusters)
+    brief = _normalize_storyboard_ch(brief, _start)
+
     replaced = False
     for i, c in enumerate(clusters):
         if isinstance(c, dict) and c.get("cluster_id") == brief["cluster_id"]:
@@ -111,17 +209,16 @@ def _write_blueprint(project_root: Path, brief: dict, clusters: list):
     对齐 Claude /outline 既有契约「cluster_001 填 ch1-N 占位」·真切章仍由 splitter 定）。"""
     cid = brief["cluster_id"]
     # start_ch：前一 cluster 已回填的 chapter_range 末+1（cluster_001 → 1）
-    start = 1
-    for c in clusters:
-        if not isinstance(c, dict) or c.get("cluster_id") == cid:
-            continue
-        cr = c.get("chapter_range") or []
-        if isinstance(cr, list) and len(cr) == 2:
-            start = max(start, int(cr[1]) + 1)
+    # 🔴 2026-06-27 P2-10: 委托 _compute_cluster_start_ch（与 apply_choice 同语义·避免漂移）。
+    start = _compute_cluster_start_ch(project_root, cid, clusters)
     storyboard = []
+    # 🔴 2026-06-27 P2-10: brief 已由 apply_choice 经 _normalize_storyboard_ch 归一化，
+    # 这里只补 title fallback·绝不再做 ch↔scene_idx 双重归一（避免把 normalize 后的 ch 当 idx 二次 sediment）。
     for i, s in enumerate(brief.get("scene_storyboard") or []):
         sc = dict(s) if isinstance(s, dict) else {"summary": str(s)}
-        sc.setdefault("ch", start + i)
+        # 兜底：apply_choice 已设 ch=start+i；此处仅守 ch 缺失场景（不经 apply_choice 直调本函数的旧调用方）
+        if not isinstance(sc.get("ch"), int):
+            sc["ch"] = start + i
         sc.setdefault("title", str(sc.get("summary") or sc.get("key_beats")
                                    or f"场景{i + 1}")[:30])
         storyboard.append(sc)

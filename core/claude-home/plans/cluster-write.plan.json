@@ -16,6 +16,8 @@
       "skip_output_allowed": false,
       "_doc_h7_fix": "2026-05-29 复审修复（H7）：plan_tracker create 只传 --key（纯数字）不传 --chapter → {ch:03d} 被替换成空 → 旧 expected_outputs 变成不存在的 ch_.json 路径 → step1 死锁。改目录级检查：.manifest 目录必由 build_manifest save_json mkdir 落地（起首章号 START_CH 在 create 时尚未 resolve，故不能用 {ch:03d}）。.style_directive 仅在项目有 style_profile 时才写（条件产物），从 hard expected_output 移除避免误 FAIL。",
       "_doc_program_driven": "v28 程序驱动（2026-06-10）：scripts 由 orchestrator.py 执行。<cluster_start_ch> 由 driver prime_cluster_context 用 cluster_lookup 权威算出（上一 cluster 范围 hi+1）。行首 '? ' = 条件脚本（style_injector 无风格档 exit 1 是条件不适用非错误）。",
+      "_doc_c16": "🔴 2026-06-27 C16：build-manifest=cluster 开写前/走向卡前步·加 research_ref（调研先行门·**advisory 永不硬锁写作主轨**·北极星⑤）。⚠️ 刻意指 .research_cache **目录**而非定值文件：① novel-researcher 输出是时间戳变名（{task_type}_{slug}_{ts}）·定值文件名必误报 ② 目录在 outline step2 即建（.placeholder）→ cluster-write 时恒存在 → 门恒过·零噪声 ③ 真研究全无的 book 才 advisory 提示（orchestrator 软放行+记 waiver·绝不像「没调研缓存就不让写」那样硬锁 fluid 涌现）。绝不接 writer 正文步（step2）。",
+      "research_ref": "_数据库/.research_cache",
       "scripts": [
         "? python core/scripts/auto_fate_draw.py {project_root} <cluster_start_ch>",
         "python core/scripts/build_manifest.py {project_root} <cluster_start_ch>",
@@ -72,6 +74,13 @@
           "consecutive_clean": 3,
           "pass_field": "verdict",
           "pass_value": "pass"
+        },
+        "_doc_c04_c05": "🔴 2026-06-27 C04/C05：hard_gate 质量地板 + 修复重验闭环（治①round_loop 软放行后带病草稿原封切章 ②audit 命中 hard_gate 只派单一次不重验）。orchestrator 读 audit_report·residual=[未豁免 hard_gate]（**只认 audit_hub.HARD_GATE_CODES**·阅读轨/prose_rhythm/hook/voice 的 advisory 残留绝不触发 FAIL·北极星护栏命门）·非空→有界 dispatch fix_agent + 重跑 reaudit_script(--auto-fix) ≤max_fix_rounds 轮·用尽仍残留 raise 停 step3 不进切章 step6（可 --resume）。",
+        "hard_gate_reverify": {
+          "audit_report": "_数据库/.audit/cluster_{key}_audit.json",
+          "reaudit_script": "python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id {key} --auto-fix --waivers '{project_root}/章节/cluster_{key}_draft/cluster_{key}_changes.json'",
+          "fix_agent": "novel-validator-checker",
+          "max_fix_rounds": 2
         }
       },
       "touch_outputs": [

@@ -853,13 +853,13 @@ def main():
 
         if args.mode == 'comprehensive':
             if not args.report_file:
-                logger.info("[ERROR] --mode comprehensive 需要 --report-file")
+                sys.stderr.write("[ERROR gen_fixer] --mode comprehensive 需要 --report-file\n"); sys.stderr.flush()
                 sys.exit(2)
             report = json.loads(Path(args.report_file).read_text(encoding='utf-8'))
             system, user = build_comprehensive_prompt(args.files, report, files_content)
         elif args.mode == 'polish':
             if not args.instructions:
-                logger.info("[ERROR] --mode polish 需要 --instructions")
+                sys.stderr.write("[ERROR gen_fixer] --mode polish 需要 --instructions\n"); sys.stderr.flush()
                 sys.exit(2)
             system, user = build_polish_prompt(args.files, args.instructions, files_content)
         elif args.mode == 'word-count':
@@ -896,7 +896,10 @@ def main():
     try:
         reply, used_profile = call_gen_model(loader, system, user)
     except GenModelExhaustedError as e:
-        logger.info(f"\n[ERROR] {e}")
+        # 🔴 2026-06-26 同 gen_writer fail-fast 修法：走 stderr+flush 防 wrapper 误判 exit code
+        msg = f"\n[FATAL gen_fixer] GenModelExhausted: {e}\n"
+        sys.stderr.write(msg)
+        sys.stderr.flush()
         sys.exit(3)
 
     logger.info(f"\n[gen_fixer] 解析并应用修改...")

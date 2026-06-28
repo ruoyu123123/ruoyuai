@@ -181,16 +181,20 @@ def test_distill_style_real_api_smoke():
 def test_distill_style_plan_template_structure_only():
     tpl = pt.load_template("distill-style")
     assert tpl, "distill-style plan template 加载失败"
-    assert tpl.get("total_steps") == 8, f"应 8 步，实际 {tpl.get('total_steps')}"
+    # 🔴 2026-06-27 C20：加 step 6.5 pid-state-bootstrap（PID 阈值自动回测初始化）·8→9 步
+    # 🔴 2026-06-27 C01：加 step 5.5 phase-4b-v1-reverify-converge（v1 再复刻+再 SFS+收敛闸）·9→10 步
+    assert tpl.get("total_steps") == 10, f"应 10 步，实际 {tpl.get('total_steps')}"
     steps = tpl.get("steps", [])
-    assert len(steps) == 8, f"steps 应 8 条，实际 {len(steps)}"
-    # required_steps 含 2.5（float·skill-v0-generate 破 chicken-egg）
-    assert set(tpl.get("required_steps", [])) == {1, 2, 2.5, 3, 4, 5, 6, 7}
+    assert len(steps) == 10, f"steps 应 10 条，实际 {len(steps)}"
+    # required_steps 含 2.5（skill-v0-generate 破 chicken-egg）+ 5.5（C01 收敛闸）+ 6.5（C20 PID bootstrap）
+    assert set(tpl.get("required_steps", [])) == {1, 2, 2.5, 3, 4, 5, 5.5, 6, 6.5, 7}
 
     names = [s.get("name", "") for s in steps]
     for need in ("phase-0-preprocess", "phase-1-surface-distill", "skill-v0-generate",
                  "phase-4-cluster-replica", "phase-2-multi-dim-compare",
-                 "phase-3-correction-reflect", "phase-5-finalize",
+                 "phase-3-correction-reflect", "phase-4b-v1-reverify-converge",
+                 "phase-5-finalize",
+                 "pid-state-bootstrap",
                  "phase-6-writer-feedback-verify"):
         assert need in names, f"缺 step: {need} · 实际 {names}"
 
@@ -222,6 +226,20 @@ def test_distill_style_plan_template_structure_only():
     assert "finalize_distill.py" in " ".join(s6.get("scripts", []))
     assert "skill_FINAL.md" in s6.get("expected_outputs", []), \
         "定稿步 expected_outputs 应含 skill_FINAL.md"
+
+    # 🔴 2026-06-27 C01 收敛闸 step5.5：v1 再复刻+再 SFS+validation_gate 收敛判定
+    s55 = next(s for s in steps if s.get("name") == "phase-4b-v1-reverify-converge")
+    s55_cmd = " ".join(s55.get("scripts", []))
+    assert "distill_replicate.py" in s55_cmd and "skill_v1.md" in s55_cmd, \
+        "收敛步应用 skill_v1 复刻（distill_replicate 唯一合法入口）"
+    assert "--multi-ref-from-dir" in s55_cmd, "收敛步 v1 SFS 必 --multi-ref-from-dir（铁律）"
+    assert "distill_convergence_gate.py" in s55_cmd, "收敛步应调 distill_convergence_gate.py"
+    assert "skill_v2.md" in s55.get("expected_outputs", []), \
+        "收敛步 expected_outputs 应含 skill_v2.md（finalize 出货最新版）"
+    # C01：reflect step5 升为强契约（skip_output_allowed=false·skill_v1 是收敛环必备输入）
+    s5 = next(s for s in steps if s.get("name") == "phase-3-correction-reflect")
+    assert s5.get("skip_output_allowed") is False, \
+        "C01：reflect step5 skip_output_allowed 应为 false（skill_v1 必落盘喂收敛环）"
 
     # 回灌闸（Article 6）：exit_codes 只 {0:ok, 2:fail}（must_fix#4）
     s7 = next(s for s in steps if s.get("name") == "phase-6-writer-feedback-verify")

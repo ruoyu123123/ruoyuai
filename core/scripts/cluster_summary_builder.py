@@ -46,8 +46,12 @@ try:
     import cross_cluster_structure_compliance_aggregate as _struct  # noqa: E402  beat 关键词
 except Exception:  # pragma: no cover
     _struct = None
-# 注：cliffhanger_resonance_next 字段的 ledger 产出未实现（continuity aggregator 有磁盘兜底），
-# 原 _cliff_keywords 死导入已于 2026-05-29 复审清理删除。
+# 🔴 2026-06-27 SYS-5 ①：cliffhanger_resonance_next 改由 builder 确定性预算（wiring_gap 补 producer）。
+# extract_keywords 复用 continuity scanner 同源逻辑（continuity_keywords 单一来源·两边分可比）。
+try:
+    from continuity_keywords import extract_keywords as _cliff_keywords  # noqa: E402
+except Exception:  # pragma: no cover
+    _cliff_keywords = None
 
 
 # ============================================================
@@ -778,7 +782,46 @@ def _build_chapter_record(project_root, db, cluster_id, ch, ctx) -> dict:
         except Exception:
             pass
 
-    return rec, factual, self_eval
+    # 🔴 2026-06-27 SYS-5 ①：把正文回传给 cluster 级 rollup（cliffhanger 第二遍需要下一章 head）。
+    return rec, factual, self_eval, (body or "")
+
+
+# ============================================================
+# 🔴 2026-06-27 SYS-5 ①：cliffhanger_resonance_next 确定性预算（零 LLM）
+# ============================================================
+
+def _compute_cliffhanger_resonance(chapters: dict, bodies: dict, lo: int, hi: int,
+                                   protagonist: str | None) -> None:
+    """逐章预算「前章 ending 关键词 ∩ 下一章 head 600 字关键词」重叠分，写 rec['cliffhanger_resonance_next']。
+
+    与 continuity scanner.scan_cliffhanger_resonance 同款逻辑（continuity_keywords 单一来源）。
+    · 本 cluster 末章（ch==hi）或下一章正文缺失 → 安全返回 -1（no-signal skip，非 0% 误报）。
+    · ending_line 取 rec 已派生字段（applied_style/factual/正文末行兜底），缺关键词 → -1。
+    悬念断章 exemption 由 scanner 读 rec['ending_type'] 时叠加，此处只产 raw 重叠分。原地改 chapters。
+    """
+    if _cliff_keywords is None:
+        return
+    for ch in range(lo, hi + 1):
+        rec = chapters.get(str(ch))
+        if not isinstance(rec, dict):
+            continue
+        next_body = bodies.get(ch + 1)
+        if ch >= hi or not next_body:
+            rec["cliffhanger_resonance_next"] = -1.0
+            continue
+        ending_line = rec.get("ending_line") or ""
+        ending_type = rec.get("ending_type") or ""
+        try:
+            ending_kw = _cliff_keywords(ending_line + " " + ending_type, protagonist=protagonist)
+            if not ending_kw:
+                rec["cliffhanger_resonance_next"] = -1.0
+                continue
+            head_kw = _cliff_keywords(next_body[:600], protagonist=protagonist)
+            overlap = ending_kw & head_kw
+            score = len(overlap) / max(len(ending_kw), 1)
+            rec["cliffhanger_resonance_next"] = round(score, 2)
+        except Exception:
+            rec["cliffhanger_resonance_next"] = -1.0
 
 
 # ============================================================
@@ -841,6 +884,7 @@ def build_cluster_summary(project_root, cluster_id) -> dict:
     }
 
     chapters: dict[str, dict] = {}
+    bodies: dict[int, str] = {}            # 🔴 SYS-5 ①：cliffhanger 第二遍需要下一章 head
     cjk_list: list[int] = []
     throughline_tally = Counter()
     fs_planted, fs_paid, fs_reinforced = [], [], {}
@@ -848,7 +892,9 @@ def build_cluster_summary(project_root, cluster_id) -> dict:
     field_fill_counter: Counter = Counter()
 
     for ch in range(lo, hi + 1):
-        rec, factual, self_eval = _build_chapter_record(project_root, db, cluster_id, ch, ctx)
+        rec, factual, self_eval, body = _build_chapter_record(project_root, db, cluster_id, ch, ctx)
+        if body:
+            bodies[ch] = body
         if not rec:
             continue
         chapters[str(ch)] = rec
@@ -873,6 +919,12 @@ def build_cluster_summary(project_root, cluster_id) -> dict:
         for r in rec.get("relationships", []) or []:
             if isinstance(r, dict):
                 rel_changes.append({"from": r.get("from"), "to": r.get("to"), "ch": ch})
+
+    # 🔴 2026-06-27 SYS-5 ①：第二遍预算 cliffhanger_resonance_next（需相邻章正文，故在逐章 rec 建好后跑）。
+    _compute_cliffhanger_resonance(chapters, bodies, lo, hi, protagonist)
+    for _ch_key, _rec in chapters.items():
+        if "cliffhanger_resonance_next" in _rec:
+            field_fill_counter["cliffhanger_resonance_next"] += 1
 
     # ---- cluster 级 rollup ----
     word_count = sum(cjk_list)

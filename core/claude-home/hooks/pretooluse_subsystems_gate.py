@@ -34,45 +34,13 @@ import re
 import sys
 from pathlib import Path
 
-
-# 34 个必建 JSON（基础 18 + 高级 16）
-REQUIRED_DB_FILES = {
-    # 基础 18 个（v23 出来时已经在 init-13-databases 中)
-    "基础-人物世界": [
-        "人物卡.json", "世界观.json", "关系.json", "地图.json", "道具.json",
-    ],
-    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 校验 故事块摘要.json
-    "基础-叙事": [
-        "进度.json", "故事块摘要.json", "大势卡.json", "事件簇.json", "事件表.json", "时间线.json", "伏笔表.json",
-    ],
-    "基础-风格质控": [
-        "作者风格.json", "场景规则.json", "写作经验.json", "用户偏好.json",
-    ],
-    "基础-世界演化（v20.1 R 系列）": [
-        "世界状态.json", "涟漪规则.json",
-    ],
-    # 高级 16 个（v21+ R 系列 + v22 SE3 蒸馏 + v23 fluid）
-    "高级-Hub/Clock/Storyteller/Stress（v21 R 系列）": [
-        "枢纽场景.json", "时钟表.json", "叙事节拍器.json", "主角压力档.json",
-    ],
-    "高级-角色弧线 + NPC 动态（v21+）": [
-        "character_arc_state.json", "角色行动表.json", "群像档.json",
-    ],
-    "高级-fluid 事件池 + 行动判定": [
-        "事件池.json", "行动判定模板.json",
-    ],
-    "高级-v22 SE3 蒸馏专用（角色蒸馏 + 烙印）": [
-        "角色池.json", "角色烙印.json",
-    ],
-    "高级-v23 长篇叙事工具": [
-        "knowledge_graph.json", "subplot_threads.json", "beat_map.json", "四线脉络.json", "webnovel_bench_mapping.json",
-    ],
-}
-
-# 展开为单一清单
-ALL_REQUIRED = []
-for category, files in REQUIRED_DB_FILES.items():
-    ALL_REQUIRED.extend(files)
+# 🔴 2026-06-27 C16：判定逻辑 + 34 必建 JSON 清单抽到共享库 plan_step_gates（北极星⑥消重复）。
+# 本 hook 改薄 wrapper：解析 stdin → 算 db_dir → 调 check_subsystems → ok?exit0:exit2。
+_SCRIPTS = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from plan_step_gates import check_subsystems, ALL_REQUIRED  # noqa: E402,F401
 
 
 def main():
@@ -144,21 +112,13 @@ def main():
     if not db_dir:
         sys.exit(0)
 
-    # 旁路：用户说"轻量模式"建一个 .subsystems_bypass.json 即跳过
-    bypass = db_dir / ".subsystems_bypass.json"
-    if bypass.exists():
+    # 🔴 C16：判定下沉到 check_subsystems（含 .subsystems_bypass.json 旁路 + 34 文件清单）。
+    result = check_subsystems(db_dir)
+    if result["ok"]:
         sys.exit(0)
 
-    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 校验 故事块摘要.json
-    missing = [f for f in ALL_REQUIRED if not (db_dir / f).exists()]
-    if not missing:
-        sys.exit(0)  # 全齐放行
-
-    # 缺失 → exit 2 阻断（精简输出，不逐类列举）
-    print(f"❌ [subsystems_gate] {project_name}: 缺 {len(missing)}/{len(ALL_REQUIRED)} 个 JSON", file=sys.stderr)
-    print(f"   缺失: {', '.join(missing[:8])}{'...' if len(missing) > 8 else ''}", file=sys.stderr)
-    print(f"   修复: python core/scripts/scaffold_subsystems.py emit \"{project_name}\"", file=sys.stderr)
-    print(f"   旁路: touch {bypass}", file=sys.stderr)
+    # 缺失 → exit 2 阻断（保持原 hook exit 语义）
+    print(f"❌ [subsystems_gate] {project_name}: {result['msg']}", file=sys.stderr)
     sys.exit(2)
 
 

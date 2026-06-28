@@ -57,6 +57,68 @@ def _resolve_cluster(root: Path, ch: int) -> tuple[str, bool]:
     return cluster_lookup.normalize_cluster_id(ch) or f"cluster_{ch:03d}", True
 
 
+# 🔴 2026-06-27 SYS-2/SYS-3：伏笔 payoff terminal vs progressive 分流（治批量误标 resolved）
+# 病灶：原 apply_changes 把每条 foreshadowing_paid 无差别当 terminal payoff（无条件 resolved=True），
+# split_cluster_changes 把整 cluster 的 paid 平铺进每章 → 逐章 re-apply 放大成「统一盖末章 resolved」。
+# 修：terminal（核心承诺彻底兑现 / Tier-1 finale 抵达）才标 resolved；progressive（推进/扩散/阶段
+# 数值）只记 payoff_progress 保持 open。优先级：foreshadower.terminal > writer.kind > 词面默认。
+_PAYOFF_TERMINAL_WORDS = ("回收", "兑现", "揭晓", "收束")
+_PAYOFF_PROGRESSIVE_WORDS = ("推进", "扩散", "进展", "数值")
+
+
+def _word_surface_terminal(desc: str) -> bool:
+    """词面默认分类：含 terminal 词且不含 progressive 词 → True；其余（含 progressive / 同时命中 /
+    皆无）一律保守 progressive(False)。措辞模糊时绝不轻易判 terminal（防误标 resolved）。"""
+    if not desc:
+        return False
+    has_t = any(w in desc for w in _PAYOFF_TERMINAL_WORDS)
+    has_p = any(w in desc for w in _PAYOFF_PROGRESSIVE_WORDS)
+    return bool(has_t and not has_p)
+
+
+def _classify_payoff_terminal(fid, writer_kind, desc, terminal_map) -> bool:
+    """判某条 payoff 是否 terminal。优先级：① foreshadower 显式 terminal > ② writer self-eval
+    kind > ③ 词面默认。terminal_map 缺该 fs / 字段 None → 降级到下一级信号。"""
+    if fid in terminal_map and terminal_map[fid] is not None:
+        return bool(terminal_map[fid])
+    if writer_kind in ("terminal", "progressive"):
+        return writer_kind == "terminal"
+    return _word_surface_terminal(desc or "")
+
+
+def _load_foreshadower_maps(root: Path, ch: int) -> tuple[dict, dict]:
+    """读 ch 所属 cluster 的 foreshadower JudgeReport，建 (terminal_map, score_map)。
+
+    🔴 2026-06-27 SYS-2/SYS-3：payoff_scores 是 specific_findings 下的嵌套 list（非顶层），
+    按 fs_id 匹配抽 terminal（SYS-2 分流权威信号）+ score（SYS-3 score==0 门控：foreshadower
+    判正文 0 痕迹 → 不标 resolved）。报告缺失 → 空 map（回退 writer.kind / 词面默认，行为不变）。"""
+    terminal_map: dict = {}
+    score_map: dict = {}
+    try:
+        cid, _ = _resolve_cluster(root, ch)
+        rpt = root / "_数据库" / ".judge_reports" / f"{cid}_foreshadower.json"
+        if not rpt.is_file():
+            return terminal_map, score_map
+        data = json.loads(rpt.read_text(encoding="utf-8"))
+        for it in (data.get("specific_findings") or {}).get("payoff_scores", []) or []:
+            if not isinstance(it, dict):
+                continue
+            fid = it.get("fs_id")
+            if not fid:
+                continue
+            if "terminal" in it:
+                terminal_map[fid] = it.get("terminal")
+            if "score" in it:
+                try:
+                    score_map[fid] = int(it.get("score"))
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        # 报告坏/缺 → 不阻断 apply，回退二级信号
+        pass
+    return terminal_map, score_map
+
+
 # ============ IO ============
 
 def load_json(p: Path, default=None):
@@ -271,6 +333,11 @@ def apply_changes(root: Path, ch: int) -> int:
                                     "id": _p["id"], "tier": _p.get("tier", 3),
                                     "description": _p.get("desc") or _p.get("description", ""),
                                     "due_by_cluster": _p.get("due_by_cluster")})
+    # 🔴 2026-06-27 SYS-2：writer self-eval foreshadowing_paid[].kind（terminal|progressive）作
+    # foreshadower 缺字段时二级信号——按 fs_id 建 map 供 payoff 分流读（覆盖 bridged + dedup 两路径）。
+    _writer_kind_map = {_p["id"]: _p.get("kind")
+                        for _p in (changes.get("foreshadowing_paid") or [])
+                        if isinstance(_p, dict) and _p.get("id") and _p.get("kind")}
     for _p in changes.get("foreshadowing_paid", []) or []:
         if isinstance(_p, dict) and _p.get("id"):
             _bridged_with_id = True
@@ -278,7 +345,7 @@ def apply_changes(root: Path, ch: int) -> int:
             if _key not in _seen:
                 _seen.add(_key)
                 _fs_actions.append({"category": _p.get("category", "promise"), "type": "payoff",
-                                    "id": _p["id"],
+                                    "id": _p["id"], "kind": _p.get("kind"),
                                     "description": _p.get("desc") or _p.get("description", "")})
     # planted/paid 全是无 id 描述串（既无显式 actions 也无可桥接 id）→ 记 warning（可见非静默断裂）
     _raw = (changes.get("foreshadowing_planted") or []) + (changes.get("foreshadowing_paid") or [])
@@ -286,6 +353,8 @@ def apply_changes(root: Path, ch: int) -> int:
         summary["warnings"].append(
             f"foreshadowing_planted/paid 共 {len(_raw)} 条为无 id 描述串 → 无法更新伏笔表 resolved/status；"
             "需 writer 报带 fs_id 的项（gen_writer prompt 已要求引用 cluster_brief fs_id）")
+    # 🔴 2026-06-27 SYS-2/SYS-3：读本 cluster foreshadower JudgeReport → terminal/score map（payoff 分流权威信号）
+    _terminal_map, _score_map = _load_foreshadower_maps(root, ch)
     for act in _fs_actions:
         cat = act.get("category")
         typ = act.get("type")
@@ -322,11 +391,31 @@ def apply_changes(root: Path, ch: int) -> int:
                     fs["promises"].append(promise_rec)
                     summary["applied"].append(f"伏笔 setup: {fid}")
             elif typ == "payoff":
+                # 🔴 2026-06-27 SYS-2/SYS-3：terminal vs progressive 分流 + foreshadower score==0 门控
                 for p in fs["promises"]:
                     if p.get("id") == fid:
-                        p["resolved"] = True
-                        p["resolved_at_ch"] = ch
-                        summary["applied"].append(f"伏笔 payoff: {fid}")
+                        # SYS-3：foreshadower 判 score==0（声明 paid 但正文 0 痕迹/谎报）→ 不标 resolved
+                        if _score_map.get(fid) == 0:
+                            summary["warnings"].append(
+                                f"伏笔 payoff(score=0·foreshadower 判正文 0 痕迹·不标 resolved·待补写或撤回): {fid}")
+                            break
+                        _wk = _writer_kind_map.get(fid) or act.get("kind")
+                        _is_terminal = _classify_payoff_terminal(
+                            fid, _wk, act.get("description", ""), _terminal_map)
+                        if _is_terminal:
+                            # terminal：核心承诺彻底兑现 → 标 resolved（首次兑现章为准·re-apply 幂等不后移）
+                            if not p.get("resolved"):
+                                p["resolved"] = True
+                                p["resolved_at_ch"] = ch
+                            summary["applied"].append(f"伏笔 payoff(terminal): {fid}")
+                        else:
+                            # progressive：推进/扩散/阶段数值 → 不动 resolved，记 payoff_progress 保持 open；
+                            # 按 (fs_id,ch) 去重（防 split 平铺逐章 + 多次 re-apply 累积 N 条）
+                            prog = p.setdefault("payoff_progress", [])
+                            if not any(isinstance(e, dict) and e.get("ch") == ch for e in prog):
+                                prog.append({"ch": ch, "desc": act.get("description", "")})
+                            p["last_advanced_at_ch"] = ch
+                            summary["applied"].append(f"伏笔 payoff(progressive·保持 open): {fid}")
                         break
                 else:
                     summary["warnings"].append(f"payoff 引用了不存在的伏笔: {fid}")
@@ -398,17 +487,37 @@ def apply_changes(root: Path, ch: int) -> int:
     # --- 人物卡 growth_arc（v16 Codex Progressions · 角色时间线变化追踪）---
     cards = load_json(db / "人物卡.json", {"characters": []})
     char_map = {c.get("name"): c for c in cards.get("characters", [])}
+    # 🔴 2026-06-27 C11（cluster 级幂等去重）：split_cluster_changes v1 把整 cluster 的
+    # character_changes 平铺进每章 _changes.json，cmd_apply_cluster_changes 对 N 章逐章 apply
+    # → 同一逻辑成长事件被 append N 次（growth_arc 膨胀 N 倍）。按 (name,key_change,trigger,
+    # _source_cluster) 去重：同 cluster 内同一成长事件只记一次（_source_cluster 由章号反查 cluster_id，
+    # per-cluster 非全局——下个 cluster 真正产生的不同成长事件 cid 不同，仍合法 append）。
     for cc in changes.get("character_changes", []):
         name = cc.get("name", "")
         if name in char_map:
             char = char_map[name]
-            char.setdefault("growth_arc", []).append({
-                "ch": ch,
-                "state": cc.get("to", ""),
-                "key_change": f"{cc.get('field', '')}: {cc.get('from', '')} → {cc.get('to', '')}",
-                "trigger": cc.get("trigger", ""),
-            })
-            summary["applied"].append(f"角色弧: {name} ch{ch} {cc.get('field', '')}")
+            src_cid, _src_inferred = _resolve_cluster(root, ch)
+            key_change = f"{cc.get('field', '')}: {cc.get('from', '')} → {cc.get('to', '')}"
+            trigger = cc.get("trigger", "")
+            arc = char.setdefault("growth_arc", [])
+            _dup = any(
+                isinstance(e, dict)
+                and e.get("key_change") == key_change
+                and e.get("trigger", "") == trigger
+                and e.get("_source_cluster") == src_cid
+                for e in arc
+            )
+            if _dup:
+                summary["applied"].append(f"角色弧(去重跳过): {name} {cc.get('field', '')}")
+            else:
+                arc.append({
+                    "ch": ch,
+                    "state": cc.get("to", ""),
+                    "key_change": key_change,
+                    "trigger": trigger,
+                    "_source_cluster": src_cid,  # 🔴 2026-06-27 C11 幂等去重键
+                })
+                summary["applied"].append(f"角色弧: {name} ch{ch} {cc.get('field', '')}")
     # 新角色注册
     for ne in (changes.get("new_entities", {}) or {}).get("characters", []):
         ne_name = ne.get("name", "")
@@ -472,12 +581,30 @@ def apply_changes(root: Path, ch: int) -> int:
         if isinstance(tl.get("current_time"), dict) and ta.get("period"):
             tl["current_time"]["period"] = ta["period"]
             tl["current_time"]["chapter"] = ch
-        tl.setdefault("time_log", []).append({
-            "ch": ch, "elapsed": ta.get("elapsed", ""),
-            "key_events": ta.get("key_events", []),
-        })
+        # 🔴 2026-06-27 C11（cluster 级幂等去重）：time_advance 同样被 split_cluster_changes
+        # 平铺进每章，逐章 apply 让 time_log 同一 elapsed/key_events 累积 N 条。按
+        # (elapsed,key_events,_source_cluster) 去重——同 cluster 内同一时间推进只记一次。
+        src_cid, _src_inferred = _resolve_cluster(root, ch)
+        elapsed = ta.get("elapsed", "")
+        key_events = ta.get("key_events", [])
+        log = tl.setdefault("time_log", [])
+        _dup = any(
+            isinstance(e, dict)
+            and e.get("elapsed", "") == elapsed
+            and e.get("key_events", []) == key_events
+            and e.get("_source_cluster") == src_cid
+            for e in log
+        )
+        if _dup:
+            summary["applied"].append("时间线: 已推进(去重跳过)")
+        else:
+            log.append({
+                "ch": ch, "elapsed": elapsed,
+                "key_events": key_events,
+                "_source_cluster": src_cid,  # 🔴 2026-06-27 C11 幂等去重键
+            })
+            summary["applied"].append("时间线: 已推进")
         save_json(db / "时间线.json", tl)
-        summary["applied"].append("时间线: 已推进")
 
     # --- 道具（item_transfers）---
     items_data = load_json(db / "道具.json", {"items": []})
@@ -828,36 +955,83 @@ def _run_writer_truth_check(root: Path, chapters: list[int]) -> dict:
 
     cluster-save-state.md:103 / plan:49 声称 --apply-cluster-changes 内部跑 writer_truth_check
     检测「writer 声明 X 但正文实际 Y」，但旧 cmd_apply_cluster_changes 从不调用 → 失效承诺。
-    writer_truth_check.py CLI 是逐章入口（<项目> <章节号>），故逐章调用聚合结果。
-    失败不中断流水线（记录即可），结果并入返回 summary。
+
+    🔴 2026-06-27 C11：改 cluster 级一次调用（--cluster-chapters），取代旧逐章循环。
+    根因：split_cluster_changes v1 把整 cluster 的 applied_style（opening_line/ending_line/
+    anchors_hit 是 cluster 级一次性申报）平铺进每章 → 逐章验时 chapters[1..N] 的章首/章末
+    各异、anchor 散落各章 → 海量假 opening_line/ending_line 不匹配 + 假 missing anchor。
+    cluster 级：opening 只验首章 / ending 只验末章 / anchors 验全拼接 body（见 writer_truth_check
+    .truth_check_cluster）。失败不中断流水线（记录即可），结果并入返回 summary。
     """
     wtc = scripts_dir() / "writer_truth_check.py"  # frozen: __file__在PYZ顶层·parent指_internal根（狩猎修）
     result = {"ran": 0, "lies_total": 0, "per_chapter": [], "errors": []}
     if not wtc.is_file():
         result["errors"].append("writer_truth_check.py 不存在")
         return result
-    for ch in chapters:
-        try:
-            r = subprocess.run(
-                [child_python(), str(wtc), str(root), str(ch), "--write-back"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
-            )
-            # 退出码契约：0 通过 / 1 撒谎命中 / 2 致命
-            entry = {"ch": ch, "rc": r.returncode}
-            result["ran"] += 1
-            if r.returncode == 1:
-                # 从 stdout 抓「[Total] N 章 / 共 M 条撒谎」
-                m = re.search(r"共\s*(\d+)\s*条撒谎", r.stdout or "")
-                lies = int(m.group(1)) if m else 1
-                entry["lies"] = lies
-                result["lies_total"] += lies
-            elif r.returncode == 2:
-                entry["fatal"] = (r.stderr or "")[:160]
-            result["per_chapter"].append(entry)
-        except Exception as e:
-            # 失败不中断（记录即可）
-            result["errors"].append(f"ch{ch}: {type(e).__name__}: {str(e)[:120]}")
+    if not chapters:
+        return result
+    try:
+        r = subprocess.run(
+            [child_python(), str(wtc), str(root), "--cluster-chapters",
+             ",".join(str(c) for c in chapters), "--write-back"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
+        )
+        # 退出码契约：0 通过 / 1 撒谎命中 / 2 致命
+        result["ran"] = 1  # cluster 级一次调用（=1 次检测，覆盖 len(chapters) 章）
+        result["chapters_checked"] = list(chapters)
+        if r.returncode == 1:
+            # 从 stdout 抓「[Total] cluster N 章 / 共 M 条撒谎」
+            m = re.search(r"共\s*(\d+)\s*条撒谎", r.stdout or "")
+            result["lies_total"] = int(m.group(1)) if m else 1
+        elif r.returncode == 2:
+            result["errors"].append((r.stderr or "")[:160])
+        # 🔴 2026-06-27 SYS-3/C10（shadow）：从 stdout 抓声明-vs-正文 advisory 计数 → 列主代理待裁决。
+        # SHADOW 决策：C10 corroboration/quarantine 先以 advisory 跑（只 surface 不延迟写账本），确认
+        # 无假阳再 active（届时把 corroborated!=true 的 factual 项 defer-write 防脏账本）。
+        _nt = re.search(r"SYS-3 申报兑现但正文 0 痕迹：(\d+)", r.stdout or "")
+        _uc = re.search(r"FACTUAL_CLAIM_UNCORROBORATED（弱信号·advisory）：(\d+)", r.stdout or "")
+        result["foreshadowing_no_trace"] = int(_nt.group(1)) if _nt else 0
+        result["factual_uncorroborated"] = int(_uc.group(1)) if _uc else 0
+    except Exception as e:
+        # 失败不中断（记录即可）
+        result["errors"].append(f"cluster truth-check: {type(e).__name__}: {str(e)[:120]}")
     return result
+
+
+def _writeback_cluster_progress(root, cluster_key, chapters):
+    """🔴 2026-06-27 P0(审计 sediment)：cluster 级回写 进度.json 元数据。
+
+    根因：原 save_state 只在 per-chapter apply 写 `completed`(章数)·从不写 current_cluster/book_title·
+    导致 4 次 save-state 后 current_cluster 仍卡 cluster_001、book_title 仍占位「<书名>」→ /continue
+    误判从 cluster_001 续起、/export 拿占位书名。本 helper 在 cluster apply 后补齐这些字段。
+    """
+    try:
+        prog_path = root / "_数据库" / "进度.json"
+        if not prog_path.exists():
+            return
+        prog = json.loads(prog_path.read_text(encoding="utf-8"))
+        if not isinstance(prog, dict):
+            return
+        # current_cluster：规范化 id
+        try:
+            import cluster_lookup as _cl
+            cid = _cl.normalize_cluster_id(cluster_key) or f"cluster_{str(cluster_key).replace('cluster_', '')}"
+        except Exception:
+            cid = f"cluster_{str(cluster_key).replace('cluster_', '')}"
+        prog["current_cluster"] = cid
+        # completed：取 max(现值, cluster 末章)
+        if chapters:
+            prog["completed"] = max(int(prog.get("completed", 0) or 0), max(chapters))
+            prog["current"] = prog["completed"] + 1
+        # book_title：仍占位则用项目目录名兜底
+        bt = str(prog.get("book_title") or "")
+        if (not bt) or bt.startswith("<") or bt == "<书名>":
+            prog["book_title"] = Path(root).name
+        prog["last_updated"] = datetime.now().isoformat(timespec="seconds")
+        save_json(prog_path, prog)
+        logger.info(f"[进度回写] current_cluster={cid} completed={prog.get('completed')} book_title={prog['book_title']}")
+    except Exception as e:
+        logger.info(f"[进度回写] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
 
 
 def cmd_apply_cluster_changes(root, cluster_key):
@@ -870,7 +1044,9 @@ def cmd_apply_cluster_changes(root, cluster_key):
     """
     chapters = _get_cluster_chapter_range(root, cluster_key)
     if not chapters:
-        logger.info(f"[FATAL] cluster {cluster_key} 未找到 chapter_range")
+        # 🔴 2026-06-26 fail-fast 走 stderr+flush（同 gen_writer/gen_fixer 修法）
+        sys.stderr.write(f"[FATAL save_state] cluster {cluster_key} 未找到 chapter_range\n")
+        sys.stderr.flush()
         return 2
 
     per_chapter_status = []
@@ -895,14 +1071,24 @@ def cmd_apply_cluster_changes(root, cluster_key):
         logger.info(f"[OK] cluster {cluster_key} apply-changes 完成 {ok_count}/{len(chapters)} 章"
               + (f"（{len(failed_chapters)} 章失败: {failed_chapters}）" if failed_chapters else ""))
 
+        # 🔴 2026-06-27 P0：cluster 级回写 进度.json 元数据（current_cluster/book_title/completed）
+        _writeback_cluster_progress(root, cluster_key, chapters)
+
         # writer 撒谎检测（apply 落地后跑 · 失败不中断 · 结果并入 summary 写盘）
+        # 🔴 2026-06-27 C11：cluster 级一次检测（opening 验首章 / ending 验末章 / anchors 验全拼接）
         truth = _run_writer_truth_check(root, chapters)
         if truth["lies_total"] > 0:
             logger.info(f"[truth-check] 🔴 检测到 {truth['lies_total']} 条撒谎"
-                  f"（writer 声明与正文不符）")
+                  f"（writer 声明与正文不符 · cluster 级）")
         else:
-            logger.info(f"[truth-check] ✅ {truth['ran']} 章无撒谎"
-                  + (f" · {len(truth['errors'])} 章检测异常（已记录）" if truth["errors"] else ""))
+            logger.info(f"[truth-check] ✅ cluster {len(chapters)} 章无撒谎"
+                  + (f" · 检测异常（已记录·{truth['errors']}）" if truth["errors"] else ""))
+        # 🔴 2026-06-27 SYS-3/C10（shadow）：声明-vs-正文 advisory 列主代理待裁决（不延迟写账本）
+        _nt = truth.get("foreshadowing_no_trace", 0)
+        _uc = truth.get("factual_uncorroborated", 0)
+        if _nt or _uc:
+            logger.info(f"[声明-vs-正文 · shadow] 🟡 待裁决：申报兑现但正文 0 痕迹 {_nt} 条 / "
+                        f"factual 弱信号未印证 {_uc} 条（advisory·账本未延迟写·详见 故事块摘要.factual_corroboration）")
     finally:
         # 2026-05-29 复审修复 [M3]：truth-check + 写盘放 finally——任何异常后都落地 summary
         summary = {
@@ -924,7 +1110,9 @@ def cmd_git_commit_cluster(root, cluster_key):
     """v24 cluster 级 git commit：1 个 cluster 1 个 commit"""
     chapters = _get_cluster_chapter_range(root, cluster_key)
     if not chapters:
-        logger.info(f"[FATAL] cluster {cluster_key} 未找到 chapter_range")
+        # 🔴 2026-06-26 fail-fast 走 stderr+flush（同 gen_writer/gen_fixer 修法）
+        sys.stderr.write(f"[FATAL save_state] cluster {cluster_key} 未找到 chapter_range\n")
+        sys.stderr.flush()
         return 2
     # 复用 cmd_git_commit 但 commit msg 改 cluster 级
     # v27 修复：cluster 级 git 也加 timeout 防 session 阻塞

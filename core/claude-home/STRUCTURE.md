@@ -450,7 +450,7 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 
 ### 11.2 hard_gate 不可豁免清单（权威）
 
-以下 15 个 code 是 hard_gate，**AI 不可豁免**。与 `core/scripts/audit_hub.py` 的 `HARD_GATE_CODES` 常量一一对应（改清单必须两边同步）：
+以下 19 个 code 是 hard_gate，**AI 不可豁免**。与 `core/scripts/audit_hub.py` 的 `HARD_GATE_CODES` 常量一一对应（改清单必须两边同步）：
 
 > **🔴 severity 条件降级（与 `audit_hub._gate_level_for()` 对齐 · 2026-06-12 文档补正）**：清单内 code 不是无条件 hard_gate——gate_level 判定前有两条 severity 前置规则：
 > 1. **info severity 永不 hard_gate**（2026-06-02 修：info = 自动生成的低置信旁注，下游可忽略；北极星⑤顾问非法官）。实践影响：`UNKNOWN_CHARACTER_DETECTED` 由 validate_chapter **恒以 info 发**（低置信 NER · 历史 250+ 误报），故**实践中恒为 advisory**；真要 block 的项应以 error/fatal 发。
@@ -465,6 +465,8 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 | 移动阅读体验 | 1（STYLE_单段超长 · v23.12 新增） |
 | 章末工艺（v2 cluster 新增） | 2（CHAPTER_END_FORBIDDEN_SCREENPLAY / CHAPTER_END_FORBIDDEN_TRANSITION） |
 | cluster 跨场景一致性（v2 cluster 新增） | 1（LOCKED_FACT_CROSS_SCENE_CONFLICT） |
+| 子系统载荷点火（C03 · 2026-06-27 新增） | 3（RIPPLE_RULES_EMPTY / GRAND_TREND_ME_POOL_EMPTY / CLUSTER001_STORYBOARD_EMPTY） |
+| splitter 字数守恒（C18 · 2026-06-27 新增） | 1（SPLIT_WORD_NOT_CONSERVED） |
 
 
 | code | 来源 | 类别 | 为什么不可豁免 |
@@ -484,6 +486,10 @@ v19 起，检测工具（`validate_style` / `narrative_scanner` / `plot_structur
 | `CHAPTER_END_FORBIDDEN_SCREENPLAY` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现剧本体过渡（「（镜头XX）」等舞台指示）= 连续小说工艺破坏。**为什么不可豁免**：2026-05-28 cluster_001 ch4 三次翻车 sediment，章末是钩子不是收束。详见 memory `feedback_no_screenplay_stage_directions_in_novels` |
 | `CHAPTER_END_FORBIDDEN_TRANSITION` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏。**为什么不可豁免**：同上，章末不允许任何场景过渡收束 |
 | `LOCKED_FACT_CROSS_SCENE_CONFLICT` | locked_fact_cross_scene_scanner | cluster 跨场景一致性（v2 cluster 新增） | 人物卡 `locked_facts` 中的数值/描述类事实在 cluster 不同场景引用矛盾（如同角色年龄两处不符）= cluster 内设定矛盾。**为什么不可豁免**：与 `LOCKED_FACT_CONFLICT` 同级，是客观设定冲突非风格选择。2026-05-28 v2 cluster 化新增 |
+| `RIPPLE_RULES_EMPTY` | scaffold_subsystems verify --content / plan_step_gates.check_subsystems | 子系统载荷点火（C03 新增） | `涟漪规则.json` 的 `ripple_rules` 为空 = `world_evolution_engine` 零触发，涟漪核心机器永不点火（北极星②）。**为什么不可豁免**：性质同 `MANIFEST_MISSING`——不是风格选择而是机器无法运转的客观断点。其余 31 子系统裸骨架 = fluid-allowed 仅 advisory；轻量模式可 `_数据库/.subsystems_bypass.json` 旁路。2026-06-27 C03 新增 |
+| `GRAND_TREND_ME_POOL_EMPTY` | scaffold_subsystems verify --content / plan_step_gates.check_subsystems | 子系统载荷点火（C03 新增） | `大势卡.json` 的 ME 池 `major_events` 为空 = `cluster_emergence_engine` 大势无方向，无法涌现下一 cluster（北极星③大势已定）。**为什么不可豁免**：性质同 `MANIFEST_MISSING`。**回归锁**：只查池非空，不逐 cluster 校验，cluster_002+ 未涌现 ME 属 fluid 合法显式豁免。2026-06-27 C03 新增 |
+| `CLUSTER001_STORYBOARD_EMPTY` | scaffold_subsystems verify --content / plan_step_gates.check_subsystems | 子系统载荷点火（C03 新增） | `事件簇.json` 的 `clusters[0].scene_storyboard` 为空 = 首块未详化（黄金三章必详化）。**为什么不可豁免**：cluster_001 是唯一必须 outline 阶段详化的块。**回归锁**：标记只查 `clusters[0]`，cluster_002+ 空 storyboard 属 fluid 涌现合法显式豁免（北极星·事件簇 fluid 涌现）。2026-06-27 C03 新增 |
+| `SPLIT_WORD_NOT_CONSERVED` | chapter_splitter.run_freestyle | splitter 字数守恒（C18 新增） | splitter 切章后 `sum(per_chapter_cjk) + pending_tail_cjk != draft_cjk`（丢字/重复）或落盘空 chunk 或切片计数失配 = 北极星④纯格式层契约破损。**为什么不可豁免**：splitter 是纯格式层（切章后 0 audit），却必须 round-trip 完整——丢字/重复无人守。落盘前确定性自检 raise `SplitterIntegrityError` → main `[FATAL]` stderr → exit 2（坏章节零落盘·cluster-write step6 fail-fast）。**北极星⑤边界**：只查 CJK 守恒 + 无空块 + 计数同步，**绝不断言章数 N（v27/v28 fluid 由字数涌现禁锁）/ 切点质量 / 叙事顺序 / 任何内容判断**。2026-06-27 C18 新增 |
 
 **其余全部 advisory，AI 可凭充分理由豁免**：A 机械（`BANNED_WORD` / `WC_TOO_SHORT` / `WC_TOO_LONG` 等）/ B 文笔（`validate_style` 12 项：对话占比、逗句比、段落均长、极短段、拟声格式 `PSEUDO_SOUND_MISSING` 等）/ B+ 文笔语义层（`semantic_slop_scanner` 8 检测器：`SEMANTIC_metaphor_explain` 隐喻后立即解释 / `SEMANTIC_aphorism` 金句体 / `SEMANTIC_neg_parallel` 否定式排比 / `SEMANTIC_copula_avoid` 系动词回避 / `SEMANTIC_fake_range` 虚假范围 / `SEMANTIC_over_hedge` 过度限定 / `SEMANTIC_forced_triple` 强行三段列举 / `SEMANTIC_tag_synonym_cycle` 对话标签同义词循环——抓 anti-slop 机械层正则漏掉的句级 AI 腔）/ C 叙事工艺（`narrative_scanner` 8 检测器：GMC / MRU / Orphan / Micro-tension / Repetition / POV / info_dump / **perspective_shift**——后者 P2-16 新增的人称切换检测，章内 first ↔ third 跳转报警）/ D 情节结构（`plot_structure_scanner` 7 检测器：beat / tryfail / midpoint / knowledge / arc / subplot / **kishotenketsu**——后者为 P1-4 新增的起承转结四段结构，仅对 `chapter_mode=solo_atmospheric` 激活）/ F 读者体验（`hook_strength_scanner` / `golden_three_scanner` / `HOOK_SUMMARY_ENDING` 等）的所有检测项。
 

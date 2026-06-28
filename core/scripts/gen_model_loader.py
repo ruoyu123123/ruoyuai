@@ -28,31 +28,46 @@ except Exception:
     secrets_store = None
 
 
-def _resolve_api_key(name: str, env_file_value: str) -> str:
-    """三级优先级解析 api_key（第一个 strip 后非空者胜）：
-      1. keyring（BYOK·分发版主路径·DPAPI 加密）
-      2. os.environ["GEN__<name>__API_KEY"]（CI/容器/临时覆盖·仅当 .env 未定义该 key 时
-         才有独立值——load_dotenv(override=True) 会把 .env 的 key 回灌 environ·见下注）
-      3. env_file_value（.env 文本·dev 单一来源·现状逐字节不变）
+def _resolve_api_key_with_source(name: str, env_file_value: str) -> tuple[str, str]:
+    """三级优先级解析 api_key，返回 (key, source)。source ∈ {keyring, environ, file, none}。
 
-    🔴 对抗审查 must_fix#1：__init__ 的 load_dotenv(env_path, override=True) 在 _parse_profiles
-    前运行，会用 .env 值**覆盖** os.environ 里同名 GEN__<name>__API_KEY。故当 .env 定义了该
-    key 时，environ 层 == .env 层（无观测差异）；只有 .env **未**定义该 key 时 environ 才是
-    独立注入口（分发版无 .env / CI 场景）。这是真实可达且正确的语义，不做 environ 快照
-    （北极星最小改动）。任何 keyring 故障 → 当 None 降级，绝不冒泡成 GenModelConfigError。
+    优先级（第一个 strip 后非空者胜）：
+      1. keyring（BYOK·分发版主路径·DPAPI 加密）— **会覆盖 .env**·静默覆盖陷阱
+      2. os.environ["GEN__<name>__API_KEY"]（CI/容器/临时覆盖）
+      3. env_file_value（.env 文本）
+
+    🔴 2026-06-26 加 source 标注（cluster_001 写作翻车 sediment）：keyring 旧 key 静默覆盖
+    .env 新 key 是隐藏 bug 主战场 — main agent 改 .env 后 writer 仍读 keyring 旧 key，撞 503
+    花 30 分钟才查出根因。本函数返 source 让 `dump_key_sources` / `--diag` CLI 能直观告诉
+    用户「.env 改了但生效的是 keyring」。
     """
     if secrets_store is not None:
         try:
             if secrets_store.is_available():
                 kr = secrets_store.get_api_key(name)
                 if kr and kr.strip():
-                    return kr.strip()
+                    return kr.strip(), "keyring"
         except Exception:
             pass  # keyring 故障绝不影响下游降级
     env_v = (os.environ.get(f"GEN__{name}__API_KEY") or "").strip()
     if env_v:
-        return env_v
-    return (env_file_value or "").strip()
+        # environ vs file 区分：load_dotenv(override=True) 后两者等值时倾向报 file
+        if env_v == (env_file_value or "").strip():
+            return env_v, "file"
+        return env_v, "environ"
+    file_v = (env_file_value or "").strip()
+    if file_v:
+        return file_v, "file"
+    return "", "none"
+
+
+def _resolve_api_key(name: str, env_file_value: str) -> str:
+    """三级优先级解析 api_key（向后兼容 wrapper·只返 key）。
+
+    详细优先级与陷阱说明见 `_resolve_api_key_with_source`。
+    """
+    key, _ = _resolve_api_key_with_source(name, env_file_value)
+    return key
 
 
 @dataclass
@@ -244,6 +259,45 @@ class GenModelLoader:
                 seen.add(name)
         return result
 
+    def dump_key_sources(self) -> list[dict]:
+        """诊断：列出所有 profile 的 key 来源（keyring/environ/file/none）+ key 尾部 + .env 文本是否定义。
+
+        🔴 2026-06-26 加（cluster_001 写作 keyring 覆盖陷阱根治）。让用户 / agent 看到
+        「.env 改了但生效的是 keyring 旧 key」时直接定位。
+        """
+        if not self.env_path.exists():
+            return []
+        text = self.env_path.read_text(encoding="utf-8")
+        pattern = re.compile(
+            r"^GEN__(.+?)__([A-Z_]+)[ \t]*=[ \t]*(.*?)[ \t]*$",
+            re.MULTILINE,
+        )
+        env_keys: dict[str, str] = {}
+        for m in pattern.finditer(text):
+            name, field, value = m.group(1), m.group(2), m.group(3)
+            if name.startswith("<"):
+                continue
+            if field.lower() == "api_key":
+                env_keys[name] = value.strip()
+        active = (os.environ.get("GEN_MODEL_ACTIVE") or "").strip()
+        rows: list[dict] = []
+        for name in sorted(env_keys.keys()):
+            env_file_v = env_keys.get(name, "")
+            resolved_key, source = _resolve_api_key_with_source(name, env_file_v)
+            row = {
+                "profile": name,
+                "is_active": name == active,
+                "source": source,
+                "resolved_tail": resolved_key[-8:] if resolved_key else None,
+                "env_file_defined": bool(env_file_v),
+                "env_file_tail": env_file_v[-8:] if env_file_v else None,
+                "keyring_overrides_env": False,
+            }
+            if source == "keyring" and env_file_v and resolved_key != env_file_v:
+                row["keyring_overrides_env"] = True
+            rows.append(row)
+        return rows
+
 
 class PromptTooLargeError(Exception):
     """prompt 超过 profile.max_prompt_chars 上限·触发 fallback 跳转而非等超时"""
@@ -302,3 +356,60 @@ def reset_default_loader():
     """测试用：重置 loader 单例（适用于 .env 改动后）"""
     global _default_loader
     _default_loader = None
+
+
+# ============ CLI ============
+
+def main(argv=None) -> int:
+    """诊断 CLI。
+
+    用法：
+      py core/scripts/gen_model_loader.py diag        # 列所有 profile 的 key 来源 + 警告 keyring 覆盖
+      py core/scripts/gen_model_loader.py diag --json # JSON 输出
+    """
+    import argparse
+    import json
+    import sys as _sys
+
+    ap = argparse.ArgumentParser(prog="gen_model_loader", description="gen-model profile 诊断")
+    sub = ap.add_subparsers(dest="cmd")
+    diag = sub.add_parser("diag", help="列出每个 profile 的 key 来源（keyring/environ/file）")
+    diag.add_argument("--json", action="store_true", help="JSON 输出")
+    args = ap.parse_args(argv)
+
+    if args.cmd == "diag":
+        loader = GenModelLoader()
+        rows = loader.dump_key_sources()
+        if args.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+            return 0
+        active = (os.environ.get("GEN_MODEL_ACTIVE") or "").strip()
+        print(f"[gen_model_loader diag] GEN_MODEL_ACTIVE = {active or '(unset)'}")
+        print(f"  .env path: {loader.env_path}")
+        print(f"  {len(rows)} profile(s) defined.\n")
+        warnings = 0
+        for r in rows:
+            mark = "*" if r["is_active"] else " "
+            src = r["source"]
+            tail = f"...{r['resolved_tail']}" if r["resolved_tail"] else "(empty)"
+            line = f"{mark} {r['profile']:<22} source={src:<8} key={tail}"
+            print(line)
+            if r["keyring_overrides_env"]:
+                env_tail = f"...{r['env_file_tail']}" if r["env_file_tail"] else "(empty)"
+                print(f"  ⚠️  keyring 覆盖 .env：keyring={tail} vs .env={env_tail}")
+                print(f"     → 改 .env 不生效。用 secrets_store sync 或 set 写入新 key。")
+                warnings += 1
+        if warnings:
+            print(f"\n⚠️  {warnings} 个 profile 的 keyring 与 .env 不一致，可能正经历静默覆盖。")
+            print("    修复：py core/scripts/secrets_store.py set <profile> <key>  或  sync-from-env")
+            return 1
+        print("\nOK 无 keyring/.env 不一致。")
+        return 0
+
+    ap.print_help(_sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(main())

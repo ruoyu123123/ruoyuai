@@ -36,6 +36,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_summary_reader as csr  # noqa: E402
+# 🔴 2026-06-27 SYS-5 ②：cluster 摘要无 foreshadow 流水时回退伏笔表.json，需 normalize_cluster_id
+# 把 setup_cluster 归一到与摘要 cluster_id 同形（防 "6"/"cluster_006" 比对漏匹配）。
+try:
+    import cluster_lookup  # noqa: E402
+except Exception:  # pragma: no cover
+    cluster_lookup = None
 
 IS_CLUSTER_MODE = os.environ.get("CLUSTER_MODE") == "1"
 
@@ -70,8 +76,61 @@ def _cluster_volume(c: dict) -> int:
     return 0
 
 
-def _cluster_planted_paid(c: dict) -> tuple[set, set]:
-    """从 cluster 摘要取本块 planted/paid 集合（伏笔 + secrets 联合·secrets 视作 paid 的揭示）。"""
+def _norm_cid(cid) -> str:
+    """归一 cluster_id（"6"/"cluster_006" → "cluster_006"）。cluster_lookup 不可用时原样返回。"""
+    if cluster_lookup is not None:
+        try:
+            n = cluster_lookup.normalize_cluster_id(cid)
+            if n:
+                return n
+        except Exception:
+            pass
+    return str(cid or "")
+
+
+def _load_foreshadow_table_fallback(project_root: Path) -> dict:
+    """🔴 2026-06-27 SYS-5 ②：读 伏笔表.json，按 setup_cluster 归集 planted/paid。
+
+    返回 {normalized_cluster_id: {"planted": set[fid], "paid": set[fid]}}。
+    · planted = 该 cluster 埋下的所有 promises/deadlines/pledges/secrets 的 id（authoring 即确定·可靠）。
+    · paid = 其中 resolved/revealed 为真者（伏笔表是权威结算账·消除 cluster 摘要 foreshadow 流水缺失
+      导致的恒 0 → 误报 DEBT_BOOK_MORTGAGE_ABSENT）。
+    无表/损坏/空 → {}（调用方据此判定是否回退·零回归）。
+    """
+    db = project_root if project_root.name == "_数据库" else project_root / "_数据库"
+    p = db / "伏笔表.json"
+    try:
+        if not p.is_file():
+            return {}
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict = {}
+    for bucket in ("promises", "deadlines", "pledges", "secrets"):
+        for item in data.get(bucket, []) or []:
+            if not isinstance(item, dict):
+                continue
+            fid = item.get("id") or item.get("fid")
+            if not fid:
+                continue
+            cid = _norm_cid(item.get("setup_cluster") or item.get("cluster_id"))
+            if not cid:
+                continue
+            entry = out.setdefault(cid, {"planted": set(), "paid": set()})
+            entry["planted"].add(str(fid))
+            if item.get("resolved") or item.get("revealed") or item.get("paid"):
+                entry["paid"].add(str(fid))
+    return out
+
+
+def _cluster_planted_paid(c: dict, fb_index: dict | None = None) -> tuple[set, set]:
+    """从 cluster 摘要取本块 planted/paid 集合（伏笔 + secrets 联合·secrets 视作 paid 的揭示）。
+
+    🔴 SYS-5 ②：cluster 摘要既无 foreshadow_planted 也无 foreshadow_paid（流水未持久化）时，
+    回退伏笔表.json 按 setup_cluster 归集的 planted/paid（fb_index）→ 消除 total_planted 恒 0。
+    """
     planted = set()
     for fid in c.get("foreshadow_planted", []) or []:
         if isinstance(fid, str) and fid.strip():
@@ -84,16 +143,22 @@ def _cluster_planted_paid(c: dict) -> tuple[set, set]:
     for sid in c.get("secrets_revealed", []) or []:
         if isinstance(sid, str) and sid.strip():
             paid.add(f"_secret:{sid.strip()}")
+    # 🔴 SYS-5 ②：本 cluster 摘要零 foreshadow 流水 → 回退伏笔表（按 setup_cluster 归集）。
+    if not planted and not paid and fb_index:
+        fb = fb_index.get(_norm_cid(c.get("cluster_id")))
+        if fb:
+            planted |= set(fb.get("planted") or set())
+            paid |= set(fb.get("paid") or set())
     return planted, paid
 
 
-def compute_book_ledger(clusters: list[dict]) -> dict:
-    """全书 stock+flow 账本。"""
+def compute_book_ledger(clusters: list[dict], fb_index: dict | None = None) -> dict:
+    """全书 stock+flow 账本。fb_index = 伏笔表回退索引（SYS-5 ②·摘要缺流水时启用）。"""
     total_planted: set = set()
     total_paid: set = set()
     timeline = []  # 每 cluster 的累计 stock 序列
     for c in clusters:
-        planted, paid = _cluster_planted_paid(c)
+        planted, paid = _cluster_planted_paid(c, fb_index)
         total_planted |= planted
         total_paid |= paid
         open_set = total_planted - total_paid
@@ -116,12 +181,12 @@ def compute_book_ledger(clusters: list[dict]) -> dict:
     }
 
 
-def compute_volume_ledger(clusters: list[dict]) -> dict:
-    """分卷 stock+flow 账本（每卷独立 set·跨卷不串）。"""
+def compute_volume_ledger(clusters: list[dict], fb_index: dict | None = None) -> dict:
+    """分卷 stock+flow 账本（每卷独立 set·跨卷不串）。fb_index = 伏笔表回退索引（SYS-5 ②）。"""
     by_vol: dict = {}
     for c in clusters:
         vol = _cluster_volume(c)
-        planted, paid = _cluster_planted_paid(c)
+        planted, paid = _cluster_planted_paid(c, fb_index)
         entry = by_vol.setdefault(vol, {
             "volume": vol,
             "planted_set": set(),
@@ -258,9 +323,13 @@ def main():
     if not clusters:
         print("[SKIP] 账本无 cluster 记录")
         sys.exit(0)
-    book = compute_book_ledger(clusters)
-    by_vol = compute_volume_ledger(clusters)
+    # 🔴 2026-06-27 SYS-5 ②：cluster 摘要 foreshadow 流水未持久化时回退伏笔表.json（消除 total_planted 恒 0）。
+    fb_index = _load_foreshadow_table_fallback(project_root)
+    book = compute_book_ledger(clusters, fb_index)
+    by_vol = compute_volume_ledger(clusters, fb_index)
     findings = detect_findings(book, by_vol, total_clusters=len(clusters))
+    fb_used = bool(fb_index) and book["total_planted"] > 0 and not any(
+        (c.get("foreshadow_planted") or c.get("foreshadow_paid")) for c in clusters)
 
     out_dir = project_root / "_数据库" / ".cross_chapter_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -270,6 +339,7 @@ def main():
         "scan_type": "narrative_debt_ledger",
         "scan_ts": ts,
         "mode": mode,
+        "foreshadow_table_fallback": fb_used,  # SYS-5 ②：摘要缺流水→读伏笔表
         "clusters_total": len(clusters),
         "book": book,
         "volumes": by_vol,
@@ -287,7 +357,8 @@ def main():
     snap_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"[narrative_debt_ledger] book open_debt={book['open_debt']}/{book['total_planted']} · "
-          f"volumes={len(by_vol)} · findings={len(findings)}")
+          f"volumes={len(by_vol)} · findings={len(findings)}"
+          + ("  [fallback=伏笔表.json]" if fb_used else ""))
     for f in findings[:4]:
         print(f"  [{f['severity'].upper()}] {f['code']}: {f.get('suggestion', '')[:80]}")
     print(f"报告: {out_path}")

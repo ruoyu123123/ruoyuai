@@ -5,9 +5,10 @@
 L2-0（audit_hub soft-cap）是「降档止血」：命中即降一档 severity，事后补救。
 L2-1 升级为完整保守增量 PI 控制器（对标 Filieri SEAMS2015 自适应软件控制 / CFAR
 恒虚警率）—— 主动把真作者原文被误判的虚警率(FPR)驱动到 0，同时不放任 AI 检出率
-崩塌（双目标）。控制对象严格圈定 4 个连续 advisory 阈值：
+崩塌（双目标）。控制对象严格圈定 5 个连续 advisory 阈值（🔴 2026-06-27 P1-07 新增第 5）：
 
     para_mean_len.max / dialogue_ratio(.min/.max) / long_para_per_chapter / quota_per_word.max
+    / chapter_end_weak_anchor_ratio（章末弱锚阈值·sign=-1 豁免多=阈值下调）
 
 【双目标误差】e = w1·(真作者FPR − 0) − w2·(AI检出率 − τ)
   · FPR>0（真作者被误 FAIL）→ e>0 → 放松阈值（朝放宽方向）。
@@ -27,13 +28,19 @@ L2-1 升级为完整保守增量 PI 控制器（对标 Filieri SEAMS2015 自适�
 缺省 Kp=0.05 / Ki=0.02。
 
 【物理隔离回路外（北极星⑤ + 本件红线）】
-  · _CONTROLLED_KEYS 白名单只含 4 键 · 控制器硬拒其余键（raise + 过滤）。
+  · _CONTROLLED_KEYS 白名单只含 5 键 · 控制器硬拒其余键（raise + 过滤）。
   · 15 个 HARD_GATE_CODES 绝不出现在本模块任何路径（结构性物理隔离）。
   · env PID_THRESHOLD_MODE 默认 active（回测已证两书 FPR 收敛 92%/85% → 全开）。
-    active 真生效靠 per-作者 pid_threshold_state.json 的 theta_delta —— 由
-    `backtest --save-state`（收敛才落盘）初始化 / cluster-save-state 经
-    learning_loop.accumulate_pid_state_from_calibration 运行积累。
-    无 state（theta_delta 空）时 active 仍无害（不叠加 Δ·不改判决）。
+    active 真生效**唯一稳定来源** = per-作者 pid_threshold_state.json 的 theta_delta·
+    而该 state 唯一稳定初始化入口 = `backtest --save-state`（收敛才落盘）。
+    🔴 2026-06-27 C20 修正旧 doc 误导：此前**无任何 plan/orchestrator 自动触发**该回测
+    （`--save-state` 仅出现在 tuner 自身 + tests）→ PID 表面 active、实际 theta 恒空、
+    无 Δ 生效（装饰性 active）。现已把 `--backtest --save-state` 自动接入
+    distill-style.plan.json（step `pid-state-bootstrap`·经 adaptive_runner 失败不阻断）。
+    learning_loop.accumulate_pid_state_from_calibration 是**次级 eventual 积累**
+    （需同一 code ≥4 次豁免攒出校准建议才落 quantized_delta），非主初始化路径。
+    无 state（theta_delta 空）时 active 仍无害（不叠加 Δ·不改判决）；apply_pid_delta
+    在『active + 有作者原文 + theta 空』时发一次性 `[PID advisory]` 哨兵（纯提示·不改判决）。
     显式 PID_THRESHOLD_MODE=off 紧急回退（byte 级零回归）。
 
 【per 作者状态】workspace/styles/{作者}/pid_threshold_state.json
@@ -48,8 +55,10 @@ import os
 import sys
 from pathlib import Path
 
-# 被控 4 键白名单（物理隔离 · 硬拒其余）
-_CONTROLLED_KEYS = ("para_mean_len", "dialogue_ratio", "long_para_per_chapter", "quota_per_word")
+# 被控 5 键白名单（物理隔离 · 硬拒其余）
+# 🔴 2026-06-27 P1-07: 新增 chapter_end_weak_anchor_ratio（章末弱锚阈值·sign=-1 与其他相反·豁免多=下调）。
+_CONTROLLED_KEYS = ("para_mean_len", "dialogue_ratio", "long_para_per_chapter",
+                    "quota_per_word", "chapter_end_weak_anchor_ratio")
 
 # 每键物理安全 band（clamp 用 · PID Δ 叠加后阈值绝不越界）
 _PHYS_BOUNDS = {
@@ -57,6 +66,8 @@ _PHYS_BOUNDS = {
     "dialogue_ratio":        {"min": (0.0, 0.50), "max": (0.40, 1.0)},
     "long_para_per_chapter": {"max_ratio": (0.01, 0.30), "max": (1.0, 12.0)},
     "quota_per_word":        {"max": (3.0, 12.0)},
+    # 🔴 P1-07: 章末弱锚阈值物理安全栏（0.05-0.30·默认 0.15·豁免多则下调到 0.05 不再触发）
+    "chapter_end_weak_anchor_ratio": {"_scalar": (0.05, 0.30)},
 }
 
 # 保守增益（无回测 Ku 时极保守缺省）
@@ -70,6 +81,9 @@ _BASE_DEADBAND = 0.05
 _MIN_SAMPLES = 8
 # 单步 Δ 最大幅度（保守限幅·防单 cluster 跳变）
 _MAX_STEP_FRAC = 0.10
+
+# 🔴 2026-06-27 C20: PID 未初始化哨兵的 author_dir 级去重集（进程内一次性·纯 advisory）。
+_PID_UNINIT_WARNED: set = set()
 
 
 def _mode() -> str:
@@ -183,7 +197,47 @@ def _direction_unit(key: str, cfg: dict) -> dict:
     elif key == "quota_per_word":
         if "max" in cfg:
             units["max"] = (cfg["max"], +1)
+    # 🔴 2026-06-27 P1-07: 章末弱锚阈值（豁免多=阈值下调=不再触发·sign=-1·配置形如 {"_scalar": 0.15}）
+    elif key == "chapter_end_weak_anchor_ratio":
+        if "_scalar" in cfg:
+            units["_scalar"] = (cfg["_scalar"], -1)    # 放松 = _scalar 下调
     return units
+
+
+# 🔴 2026-06-27 C20: PID state 自动初始化哨兵（根治 PID 装饰性 active 无 Δ 生效）。
+def _has_author_chapters(author_dir: Path) -> bool:
+    """author_dir 直下或 原文/ 下是否有 第*章.txt（判定它本该被 backtest --save-state 初始化）。
+    无原文 = 可能是写作项目而非作者风格库·不该回测·哨兵不提示（避免误报）。"""
+    try:
+        for base in (author_dir, author_dir / "原文"):
+            if base.is_dir():
+                for _ in base.glob("第*章.txt"):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def _warn_pid_uninitialized(author_dir: Path) -> None:
+    """一次性 advisory（author_dir 级去重）：active 但 theta 空 + 有作者原文 → 提示从未回测初始化。
+    纯 advisory·只发 stderr·绝不改判决（北极星⑤顾问非法官）。"""
+    try:
+        key = str(Path(author_dir).resolve())
+    except OSError:
+        key = str(author_dir)
+    if not key or key in _PID_UNINIT_WARNED:
+        return
+    if not _has_author_chapters(Path(author_dir)):
+        return  # 无原文：不该回测·不提示（去噪）
+    _PID_UNINIT_WARNED.add(key)
+    try:
+        print(f"[PID advisory] 作者 {Path(author_dir).name} 从未回测初始化"
+              f"（pid_threshold_state.json 无 theta_delta）·PID 装饰性 active 无 Δ 生效。"
+              f"建议跑 pid_threshold_tuner.py --backtest --save-state "
+              f"--author-dir <styledir> --style <styledir/作者风格.json>（收敛才落盘）。",
+              file=sys.stderr)
+    except Exception:
+        pass
 
 
 def apply_pid_delta(thresholds: dict, author_dir):
@@ -200,6 +254,10 @@ def apply_pid_delta(thresholds: dict, author_dir):
     state = load_state(Path(author_dir))
     theta = state.get("theta_delta", {})
     if not theta:
+        # 🔴 2026-06-27 C20 哨兵：active 但 theta 空（从未回测初始化）→ 一次性 advisory，
+        # 提示「PID 装饰性 active 无 Δ」。纯 advisory·return 不改判决（北极星⑤）。
+        if mode == "active":
+            _warn_pid_uninitialized(Path(author_dir))
         return thresholds
     out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in thresholds.items()}
     for key in _CONTROLLED_KEYS:

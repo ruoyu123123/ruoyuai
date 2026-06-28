@@ -120,7 +120,9 @@ BEST_OF_N_MAX = 5  # 上限防 token 失控（用户质量优先但不无限）
 # [2026-06-04] freestyle 正文长度软下限（CJK）：低于此值且模型 finish=stop（写完但偏短）→ call_gen_model
 # 触发 expand 续写兜底（展开剩余场景）。治 pro 等简洁倾向 reasoning 模型单 cluster 仅 ~3650 CJK 偏短问题。
 # 软托底非硬锁（北极星⑤）：防注水——单轮续写增量 < FREESTYLE_EXPAND_MIN_GAIN 即停（模型没料别硬凑）。
-FREESTYLE_MIN_CJK = 12000          # 健康区间 12000-25000 的下限
+# 🔴 2026-06-27 P1-06：12000→16000·治 cluster 字数偏低(5 cluster 17 章·应 22-25 章)。
+# env FREESTYLE_MIN_CJK_OVERRIDE 允许短篇例外回退。健康区间 15000-22000·目标中段 ~18000。
+FREESTYLE_MIN_CJK = int(os.environ.get("FREESTYLE_MIN_CJK_OVERRIDE", "16000"))
 FREESTYLE_EXPAND_MAX_ROUNDS = 6    # expand 续写最多轮数（2026-06-06 4→6·治 pro 等简洁 reasoning 模型偏短·多续几轮逐场景写透）
 FREESTYLE_EXPAND_MIN_GAIN = 400    # 单轮增量低于此 CJK → 停止兜底（2026-06-06 800→400·pro 单轮加得少但累积有效·别过早停）
 # 综合分：每个走味维度的惩罚（满分 100 的 SFS 尺度上扣多少 · 4 维全走味最多扣 40）。
@@ -1518,7 +1520,9 @@ cluster_brief 完整内容：
 - negation_action_count（≤ 25）
 - story_block_ch_range
 - facts_locked
-- foreshadowing_planted / foreshadowing_paid（**每条务必带 id 字段，引用 cluster_brief.foreshadowing_to_plant 或 manifest 待回收伏笔的真实 fs_id——save_state 据 id 更新伏笔表 resolved 状态；无对应 fs_id 的新伏笔可只给 desc**）
+- foreshadowing_planted / foreshadowing_paid（**每条带 id（引用 cluster_brief.foreshadowing_to_plant 或 manifest 待回收伏笔的真实 fs_id），无对应 fs_id 的新伏笔可只给 desc。paid 每条再加 kind："terminal"（核心承诺彻底兑现 / Tier-1 finale 锚点抵达）或 "progressive"（推进/扩散/阶段性数值，伏笔仍 open）——save_state 据此判是否标 resolved**）
+- throughline_progress（**可选·遥测用**：本块推进了哪几条叙事线，填 factual.throughline_progress={{"OS":bool,"MC":bool,"IC":bool,"RS":bool}}——OS=客观主线/外部事件，MC=主角内心成长，IC=影响者/对手线，RS=核心关系演变；每块至少推 2 条）
+- self_eval.applied_style.ending_type / ending_line（**可选·衔接遥测用**：本块结尾类型（如"悬念断章/情绪收束"）+ 最后一句原文）
 
 现在开始写。"""
 
@@ -2420,7 +2424,12 @@ def main():
             logger.info(f"[best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）")
             reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk)
     except GenModelExhaustedError as e:
-        logger.info(f"\n[ERROR] {e}")
+        # 🔴 2026-06-26 fail-fast 走 stderr + flush（log_util INFO 级 logger.info 走 stdout，
+        # ERROR 字样混在 stdout 里会让 wrapper agent 把 exit 3 误读成 exit 0；feedback_verify_stderr_not_exitcode
+        # 也叮嘱必看 stderr 的 Traceback）。stderr 单独打+ flush 保证不被 buffer 截。
+        msg = f"\n[FATAL gen_writer] GenModelExhausted: {e}\n"
+        sys.stderr.write(msg)
+        sys.stderr.flush()
         sys.exit(3)
 
     body, changes = split_text_and_changes(reply)

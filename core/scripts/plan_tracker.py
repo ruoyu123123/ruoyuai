@@ -127,6 +127,7 @@ STATUS_ABORTED = "aborted"
 
 KNOWN_COMMANDS = (
     "distill-style",
+    "distill-character",  # 🔴 2026-06-27 C13：角色蒸馏纳入 plan 强制规划层（6 步·PLAN_ID/STEP/attestation）
     "check-quality",
     "outline",
     "reconcile",
@@ -698,6 +699,37 @@ def _verify_agent_report(project: str, agent_name: str, chapter: int | None, clu
     return any(c.exists() for c in candidates)
 
 
+def _apply_touch_outputs(plan: dict, step: dict, project: str | None) -> list[str]:
+    """🔴 2026-06-26 加（cluster_001 翻车 sediment）：消费模板 step.touch_outputs。
+
+    模板里有 touch_outputs 声明的（如 `.reading_reflection/.placeholder`）是
+    "多轮产物文件名可变的存在性代理"，原意是 orchestrator/调用方跑完后 touch。
+    Claude Code CLI 路径下没人 touch → expected_outputs 校验失败 → 主代理被迫手补。
+    现在 plan_tracker 在 step --n 时自动 touch，免去主代理 New-Item 苦力。
+
+    返回 touched 路径列表（仅作日志用，绝对路径）。
+    """
+    touch_list = step.get("touch_outputs") or []
+    if not touch_list:
+        return []
+    project_root = resolve_project_root(project) if project else None
+    touched: list[str] = []
+    for raw in touch_list:
+        if not raw:
+            continue
+        p = Path(raw)
+        if not p.is_absolute() and project_root is not None:
+            p = project_root / raw
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if not p.exists():
+                p.write_text("", encoding="utf-8")
+            touched.append(str(p).replace("\\", "/"))
+        except Exception:
+            pass  # touch 失败不阻断；后续 expected_outputs 校验会暴露
+    return touched
+
+
 def _verify_outputs(plan: dict, step: dict, project: str | None) -> tuple[list[str], list[str]]:
     """校验 expected_outputs 是否存在。
 
@@ -757,6 +789,9 @@ def step_complete(
         step["tokens_used"] = int(tokens)
     if duration_ms is not None:
         step["duration_ms"] = int(duration_ms)
+
+    # 🔴 2026-06-26：先消费 touch_outputs（模板声明的存在性代理）再校验 expected_outputs
+    _apply_touch_outputs(plan, step, plan.get("project"))
 
     # 校验 expected_outputs
     if not skip_output:
@@ -839,14 +874,26 @@ def end_plan(plan_id: str) -> dict:
                 # v28 程序驱动：模板显式声明 judge_report_path（str 或 {agent: path} dict）
                 # → 优先验声明路径（命名学外移）；未声明的 agent 回落旧路径推算。
                 jrp = step.get("judge_report_path")
+                # 🔴 2026-06-26 加 secondary fallback（cluster_001 翻车 sediment）：
+                # voice-checker 无违规时不写 primary brief（.checker_briefs/cluster_*_voice.json），
+                # 但 secondary judge_report（.judge_reports/cluster_*_voice-checker.json）总有。
+                # 之前 primary 缺就 fail-end，逼用户手补 placeholder JSON。现在让 secondary 兜底。
+                jrp_sec = step.get("judge_report_path_secondary")
                 for agent_name in must_agents:
                     declared = None
+                    declared_sec = None
                     if isinstance(jrp, dict):
                         declared = jrp.get(agent_name)
                     elif isinstance(jrp, str) and jrp:
                         declared = jrp
+                    if isinstance(jrp_sec, dict):
+                        declared_sec = jrp_sec.get(agent_name)
+                    elif isinstance(jrp_sec, str) and jrp_sec:
+                        declared_sec = jrp_sec
                     if declared:
                         found = _verify_declared_report(proj, declared)
+                        if not found and declared_sec:
+                            found = _verify_declared_report(proj, declared_sec)
                     else:
                         found = _verify_agent_report(proj, agent_name, ch, cluster_id)
                     if not found:

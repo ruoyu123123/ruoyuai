@@ -2,8 +2,8 @@
   "command": "distill-style",
   "version": 5,
   "description": "作者风格全程蒸馏（程序驱动·阶段3）：作者作品→切章→章级metrics→cluster切分→48维judge表层蒸馏→consolidate聚合→skill_v0→复刻→SFS→修正反思→定稿→回灌验证。",
-  "total_steps": 8,
-  "required_steps": [1, 2, 2.5, 3, 4, 5, 6, 7],
+  "total_steps": 10,
+  "required_steps": [1, 2, 2.5, 3, 4, 5, 5.5, 6, 6.5, 7],
   "optional_steps": [],
   "_program_driven_status": "v28 程序驱动：已落为可执行 DAG（scripts/must_spawn_agent/data_flow）·orchestrator.run_command 可机械驱动·主代理 Claude Code 调度。2026-06-11 阶段3。前置：调用方在 orchestrator 启动前 mkdir STYLES_DIR/<书名>/蒸馏进度/.wal + 把作者作品正文落 蒸馏进度/.wal/raw_author_text.txt。注：distill 项目根直挂 原文/、cluster_index.json（data_flow source_json 不带 _数据库/ 前缀）。[GUI /distill 入口 DEPRECATED commit 2a4d7ce]",
   "steps": [
@@ -26,10 +26,12 @@
       "description": "48 维表层蒸馏（surface_runner 循环 cluster 调 novel-distill-analyzer judge·全章全文注入）+ arc 聚合 + consolidate 确定性聚合 consumer 数值字段产 作者风格.json。",
       "required": true,
       "skip_output_allowed": false,
+      "_doc_c14": "🔴 2026-06-27 C14：作者档数值契约（治作者档静默退通用基线）。expected_outputs 从『文件存在』升级为『键存在性契约』：consolidate_author_profile 末尾自断言（total>0 却缺核心 consumer 键 sentence_length/paragraph_length(_chars)/dialogue_ratio(_pct)/single_sentence_para_ratio → [FATAL] exit2·生产端门）+ 末尾 db_schema_validate --require-quantitative-keys 二道闸（plan 层再确认产出的 作者风格.json 契约键齐全·消费端门）。只断言键 PRESENCE·绝不断言数值区间（高方差作者句长 31 防误杀·北极星④⑤）。",
       "scripts": [
         "python core/scripts/distill_surface_runner.py {project_root}",
         "? python core/scripts/arc_aggregator.py --project {project_root} --all-clusters",
-        "python core/scripts/consolidate_author_profile.py --project {project_root}"
+        "python core/scripts/consolidate_author_profile.py --project {project_root}",
+        "python core/scripts/db_schema_validate.py {project_root} --require-quantitative-keys {project_root}/作者风格.json"
       ],
       "expected_outputs": ["作者风格.json"]
     },
@@ -74,23 +76,52 @@
       "name": "phase-3-correction-reflect",
       "description": "修正反思（distill_reflect 有 gap → 基于 SFS 差距精化 skill v1·轻 gen-model 非 judge）。",
       "required": true,
-      "skip_output_allowed": true,
+      "_doc_c01": "🔴 2026-06-27 C01：skip_output_allowed true→false。reflect 产 skill_v1 是收敛环（step5.5）的必备输入·不产 v1 则无 v0→v1 严格优于判定·收敛闸退化为单遍。skill_v1.md 必须真落盘。",
+      "skip_output_allowed": false,
       "scripts": [
         "python core/scripts/gen_creative.py --mode distill_reflect --project {project_root} --gap-report {project_root}/对比报告/eval_v0.json --current-skill {project_root}/skill_v0.md --skill-version 1 --out {project_root}/skill_v1.md"
       ],
       "expected_outputs": ["skill_v1.md"]
     },
     {
-      "n": 6,
-      "name": "phase-5-finalize",
-      "description": "定稿：最新 skill_v{N} → skill_FINAL.md（出货）+ 作者风格→FINAL + distillation_log（含 SFS）+ git。",
+      "n": 5.5,
+      "name": "phase-4b-v1-reverify-converge",
+      "description": "🔴 2026-06-27 C01·v1 再复刻+再 SFS+收敛闸（落实命令文档 L194『连续2轮无新差距 + cluster SFS≥80』的 bounded 单轮）：① distill_replicate(skill_v1) 复刻同 cluster（? 失败容忍）；② style_evaluator multi-ref 测 v1 SFS → eval_v1.json（? 失败容忍）；③ distill_convergence_gate 复用 skill_opt.validation_gate.decide(rewards_before=[v0],rewards_after=[v1],floor=v0×0.97)·v1 严格优于才采纳否则回退 v0·选中 skill 写 skill_v2.md(finalize 出货最新版即它)+选中 eval 写 eval_ship.json。北极星①复用 binary/连续 SFS 不引新 hard_gate·②floor 相对锚 v0×0.97·③收敛闸只选 skill 不阻断 plan(永远 exit0·真出货拦截在 step7 SFS 灾难闸)·④SFS 必 multi-ref。skip_output_allowed=false：①②即便 ?-失败(gen-model 崩)，③收敛闸仍 required 运行并必落 skill_v2.md（infra 失败走 infra_skip 出货 v1·skill_v1 由 step5 保证存在）→ skill_v2.md 是可强制契约。",
       "required": true,
       "skip_output_allowed": false,
+      "data_flow": {
+        "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
+      },
       "scripts": [
-        "python core/scripts/finalize_distill.py {project_root} --sfs {project_root}/对比报告/eval_v0.json",
+        "? python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v1.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --output {project_root}/复刻测试/v1/replica.txt",
+        "? python core/scripts/style_evaluator.py --gen {project_root}/复刻测试/v1/replica.txt --multi-ref-from-dir {project_root}/原文 --multi-ref-count 5 --output {project_root}/对比报告/eval_v1.json",
+        "python core/scripts/distill_convergence_gate.py --before-eval {project_root}/对比报告/eval_v0.json --after-eval {project_root}/对比报告/eval_v1.json --skill-before {project_root}/skill_v0.md --skill-after {project_root}/skill_v1.md --ship-out {project_root}/skill_v2.md --ship-sfs-out {project_root}/对比报告/eval_ship.json"
+      ],
+      "expected_outputs": ["skill_v2.md"]
+    },
+    {
+      "n": 6,
+      "name": "phase-5-finalize",
+      "description": "定稿：最新 skill_v{N}（C01 后 = step5.5 收敛选中的 skill_v2）→ skill_FINAL.md（出货）+ 作者风格→FINAL + distillation_log（含 SFS）+ git。",
+      "required": true,
+      "skip_output_allowed": false,
+      "_doc_c01": "🔴 2026-06-27 C01：--sfs 从 eval_v0.json 改为 eval_ship.json（step5.5 收敛选中 skill 对应的 SFS·对齐出货 skill 的真实分数·修『出货 v 但 log 写 v0 SFS』错配）。eval_ship.json 缺失（infra/收敛 skip）时 finalize 优雅降级不写 SFS 行。",
+      "scripts": [
+        "python core/scripts/finalize_distill.py {project_root} --sfs {project_root}/对比报告/eval_ship.json",
         "? python core/scripts/git_snapshot.py {project_root} --message 蒸馏作者风格"
       ],
       "expected_outputs": ["skill_FINAL.md", "作者风格_FINAL.json"]
+    },
+    {
+      "n": 6.5,
+      "name": "pid-state-bootstrap",
+      "description": "🔴 2026-06-27 C20·PID 阈值 state 自动初始化（根治 PID 装饰性 active 无 Δ 生效）：用作者原文 + 作者风格.json 离线回测 FPR 收敛曲线，**收敛才**落 pid_threshold_state.json 的 theta_delta（active 真生效唯一稳定来源·发散绝不持久 Δ 红线由 save_backtest_state 守）。经 adaptive_runner 包裹取代旧 `|| true` 静默吞错——失败记 incident 供 self_heal 学习、degrade 放行不阻断 distill；state 可能因发散/全落死区不落盘，故 skip_output_allowed=true + expected_outputs 空。北极星⑤：PID 只动 5 个 advisory 阈值·绝不碰 HARD_GATE_CODES。",
+      "required": true,
+      "skip_output_allowed": true,
+      "scripts": [
+        "python core/scripts/adaptive_runner.py --label pid_state_bootstrap -- python core/scripts/pid_threshold_tuner.py --backtest --save-state --author-dir {project_root} --style {project_root}/作者风格.json --max-chapters 40"
+      ],
+      "expected_outputs": []
     },
     {
       "n": 7,

@@ -23,35 +23,14 @@ import sys
 import os
 from pathlib import Path
 
-# ============ banned patterns（来自 lesson 权威清单）============
-
-# 剧本体（任何位置出现都拦）
-SCREENPLAY_PATTERNS = [
-    (r"（镜头[^）]{0,15}）", "剧本体镜头指令"),
-    (r"（切镜[^）]{0,10}）", "剧本体切镜"),
-    (r"（旁白[^）]{0,15}）", "剧本体旁白"),
-    (r"（画外音[^）]{0,15}）", "剧本体画外音"),
-    (r"（音效[^)]{0,15}）", "剧本体音效"),
-    (r"（背景音[^）]{0,15}）", "剧本体背景音"),
-    (r"（[^）]{0,15}的视角[^）]{0,5}）", "剧本体 POV 指令"),
-    (r"（[^）]{0,10}离开[^）]{0,10}视角[^）]{0,5}）", "剧本体 POV 切换"),
-    (r"\bCUT TO\b", "英文剧本切镜"),
-    (r"\bFADE\s+(IN|OUT)\b", "英文剧本淡入淡出"),
-    (r"\(V\.O\.\)", "英文画外音标记"),
-    (r"\(O\.S\.\)", "英文 off-screen 标记"),
-]
-
-# 章末过渡（仅文末 30 行拦）
-# 2026-05-29 北极星 P4 [H2-dont]：落字瞬间 hard 拦（exit 2）只保留【物理分隔符 + 剧本体】
-# ——这些是格式污染，任何风格都不该有。原先一并 hard 拦的【语义收束句】（一切安静下来/
-# 灯熄了/画面渐暗…）是读者体验偏好，落字瞬间硬拦比顾问制更刚、连「先写后豁免」都剥夺，
-# 且正则误杀场景中段正常句 → 移出 hook 硬拦，下放给 audit 的 CHAPTER_END_CLOSURE_ADVISORY
-# （advisory 可豁免）。守原则5「不干涉模型判断」。
-CHAPTER_END_PATTERNS = [
-    (r"^\s*\*{1,3}\s*$", "章末单独 * 分隔符 · 大结局感"),
-    (r"^\s*[·]{3,}\s*$", "章末单独 ··· 分隔符"),
-    (r"^\s*—{3,}\s*$", "章末单独 ——— 分隔符"),
-]
+# 🔴 2026-06-27 C16：banned pattern + 扫描判定抽到共享库 plan_step_gates（北极星⑥消重复）。
+# 本 hook 改薄 wrapper：解析 stdin → 取 content/project_root → 调 check_chapter_edit
+# → ok?exit0:exit2。SCREENPLAY_PATTERNS/CHAPTER_END_PATTERNS/scan_* 现为 lib 单一真相源。
+_SCRIPTS = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from plan_step_gates import check_chapter_edit  # noqa: E402
 
 
 def is_chapter_file(file_path: str) -> tuple[bool, str | None]:
@@ -82,26 +61,6 @@ def extract_content(tool_name: str, tool_input: dict) -> str:
     return ""
 
 
-def check_screenplay_patterns(content: str) -> list[tuple[str, str]]:
-    """扫剧本体（任意位置）。返回 [(matched_text, reason)]。"""
-    hits = []
-    for pattern, reason in SCREENPLAY_PATTERNS:
-        for m in re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE):
-            hits.append((m.group(0), reason))
-    return hits
-
-
-def check_chapter_end_transitions(content: str) -> list[tuple[str, str]]:
-    """扫章末过渡（仅文末 30 行）。"""
-    hits = []
-    lines = content.split("\n")
-    tail = "\n".join(lines[-30:])
-    for pattern, reason in CHAPTER_END_PATTERNS:
-        for m in re.finditer(pattern, tail, re.MULTILINE):
-            hits.append((m.group(0), reason))
-    return hits
-
-
 def has_bypass(project_root: str | None) -> bool:
     # 🔴 opt-out 持久性是设计如此·非 bug：.chapter_edit_bypass.flag 存在即旁路·刻意无自动过期
     # （本地单用户工具·用户显式建/删·自动失效会在编辑中途突然重新拦截）。重启拦截=删该 flag。
@@ -128,36 +87,20 @@ def main():
     if not is_ch:
         sys.exit(0)
 
-    if has_bypass(project_root):
-        sys.exit(0)
-
     content = extract_content(tool_name, tool_input)
     if not content:
         sys.exit(0)
 
-    screenplay_hits = check_screenplay_patterns(content)
-    end_hits = check_chapter_end_transitions(content)
-
-    all_hits = screenplay_hits + end_hits
-    if not all_hits:
+    # 🔴 C16：判定下沉到 check_chapter_edit（含 .chapter_edit_bypass.flag 旁路 + 扫描）。
+    result = check_chapter_edit(content, bypass_active=has_bypass(project_root))
+    if result["ok"]:
         sys.exit(0)
 
-    # 命中 → exit 2 hard_gate 拦截
-    print(f"❌ [Hook chapter_edit_gate] 章节正文检测到禁用 pattern", file=sys.stderr)
-    print(f"   文件: {file_path}", file=sys.stderr)
-    print(f"   命中:", file=sys.stderr)
-    for matched, reason in all_hits[:8]:
-        snippet = matched.strip()[:60]
-        print(f"     - [{reason}] {snippet!r}", file=sys.stderr)
-    if len(all_hits) > 8:
-        print(f"     ... 还有 {len(all_hits) - 8} 处", file=sys.stderr)
-    print(f"", file=sys.stderr)
-    print(f"   📝 权威 lesson: memory/feedback_no_screenplay_stage_directions_in_novels.md", file=sys.stderr)
-    print(f"   📝 修复:", file=sys.stderr)
-    print(f"     · 剧本体 → 删掉，POV 不切换让角色全程在场", file=sys.stderr)
-    print(f"     · 章末过渡 → 删掉，最后一句 = 心理悬念峰值（具体可验证的异常事实）", file=sys.stderr)
-    print(f"", file=sys.stderr)
-    print(f"   旁路（仅紧急）：touch <项目>/_数据库/.chapter_edit_bypass.flag", file=sys.stderr)
+    # 命中 → exit 2 hard_gate 拦截（保持原 hook exit 语义）
+    print(f"❌ [Hook chapter_edit_gate] 文件: {file_path}", file=sys.stderr)
+    print(f"   {result['msg']}", file=sys.stderr)
+    print(f"   📝 权威 lesson: memory/feedback_no_screenplay_stage_directions_in_novels.md",
+          file=sys.stderr)
     sys.exit(2)
 
 

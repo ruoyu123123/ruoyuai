@@ -158,7 +158,7 @@ def test_shadow_mode_no_violation_but_writes_ledger():
     r = _run(proj, mode="shadow")
     assert r.returncode == 0
     # 账本仍写出
-    assert (proj / "_数据库" / "motif_ledger.json").exists()
+    assert (proj / "_数据库" / ".cross_chapter_scan" / "motif_ledger.json").exists()
     assert (proj / "_数据库" / ".cross_chapter_scan" / "motif_advisory_snapshot.json").exists()
 
 
@@ -181,7 +181,7 @@ def test_author_signature_extends_places():
     )
     r = _run(proj, mode="active")
     # 必须不崩 · 杏花村 motif 应被识别 (recurring 状态)
-    ledger = json.loads((proj / "_数据库" / "motif_ledger.json").read_text(encoding="utf-8"))
+    ledger = json.loads((proj / "_数据库" / ".cross_chapter_scan" / "motif_ledger.json").read_text(encoding="utf-8"))
     terms = {m["term"] for m in ledger["motifs"].values()}
     assert "杏花村" in terms
 
@@ -196,7 +196,7 @@ def test_author_signature_extends_catchphrase():
         author_sig={"catchphrase": ["就这样吧"]},
     )
     r = _run(proj, mode="active")
-    ledger = json.loads((proj / "_数据库" / "motif_ledger.json").read_text(encoding="utf-8"))
+    ledger = json.loads((proj / "_数据库" / ".cross_chapter_scan" / "motif_ledger.json").read_text(encoding="utf-8"))
     terms = {m["term"] for m in ledger["motifs"].values()}
     assert "就这样吧" in terms
 

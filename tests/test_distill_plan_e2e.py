@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """distill-style.plan.json 程序驱动 e2e（阶段3·dev·fake runner/judge·不调 API）。
 
-验 orchestrator 能机械驱动 8 步全程蒸馏 DAG（字段格式/data_flow list 索引/复刻先于 SFS）。
+验 orchestrator 能机械驱动 10 步全程蒸馏 DAG（字段格式/data_flow list 索引/复刻先于 SFS/
+C01 收敛闸 step5.5）。
 """
 import json
 import sys
@@ -39,9 +40,15 @@ def _fake_runner(project_root: Path):
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text("复刻文本", encoding="utf-8")
         elif "style_evaluator" in cmd:
-            f = project_root / "对比报告" / "eval_v0.json"
+            # step4 写 eval_v0.json；step5.5 写 eval_v1.json（按 --output 路径落盘）
+            out = "eval_v1.json" if "eval_v1.json" in cmd else "eval_v0.json"
+            f = project_root / "对比报告" / out
             f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(json.dumps({"sfs_quick": 85, "grade": "B"}), encoding="utf-8")
+            sfs = 88 if out == "eval_v1.json" else 85  # v1 略优 → 收敛采纳 v1
+            f.write_text(json.dumps({"sfs_quick": sfs, "grade": "B"}), encoding="utf-8")
+        elif "distill_convergence_gate" in cmd:
+            # 🔴 2026-06-27 C01：收敛闸选中 skill 落 skill_v2.md（finalize 出货最新版）
+            (project_root / "skill_v2.md").write_text("# v2 (selected)", encoding="utf-8")
         elif "finalize_distill" in cmd:
             (project_root / "skill_FINAL.md").write_text("# FINAL", encoding="utf-8")
             (project_root / "作者风格_FINAL.json").write_text("{}", encoding="utf-8")
@@ -50,7 +57,7 @@ def _fake_runner(project_root: Path):
     return runner
 
 
-def test_distill_plan_drives_8_steps():
+def test_distill_plan_drives_10_steps():
     with tempfile.TemporaryDirectory() as tmp:
         proj = Path(tmp) / "测试风格"
         (proj / "蒸馏进度" / ".wal").mkdir(parents=True)
@@ -67,6 +74,8 @@ def test_distill_plan_drives_8_steps():
         assert (proj / "skill_v0.md").exists()          # 破 chicken-egg
         assert (proj / "复刻测试" / "v0" / "replica.txt").exists()  # 复刻先于 SFS
         assert (proj / "对比报告" / "eval_v0.json").exists()
+        assert (proj / "skill_v1.md").exists()          # C01 step5 reflect 强契约(skip_output_allowed=false)
+        assert (proj / "skill_v2.md").exists()          # C01 step5.5 收敛闸选中 skill
         assert (proj / "skill_FINAL.md").exists()       # 定稿出货
 
 
