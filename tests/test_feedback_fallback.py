@@ -9,7 +9,7 @@
   · home 路径 miss → fallback 装载汇编文件内容（防御层不再为空）
   · home 有 type=feedback 文件时优先 home（开发机行为零回归）
   · 汇编文件完整性（23 条规则锚 + 机械汇编 header + 无 frontmatter 残留）
-  · (2026-06-20 GUI 删档后已删 ruoyu_gui.spec 段断言 · 汇编文件由源码自身保证)
+  · (汇编文件完整性由源码自身保证)
 """
 import contextlib
 import os

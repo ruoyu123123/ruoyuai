@@ -11,10 +11,11 @@ import json
 import sys
 from pathlib import Path
 
+# 🔴 2026-06-28 移除exe/gen-model梳理方向：judge_runner 已删除，本件去掉对其
+# system-prompt 装配的两条断言；audit_hub anchor schema + 19 码 hard_gate 锁全保留。
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import audit_hub  # noqa: E402
-import judge_runner  # noqa: E402
 
 
 def test_anchor_window_max_constant():
@@ -105,23 +106,6 @@ def test_anchor_window_non_str_ignored():
     }}]
     out = audit_hub._collect_anchor_spans(vs)
     assert "anchor_window" not in out[0]
-
-
-def test_judge_runner_injects_anchored_contract():
-    """judge_runner system prompt 含 ANCHORED_ADVISORY_CONTRACT 块"""
-    assert "ANCHORED_ADVISORY_CONTRACT" in judge_runner.__dict__
-    block = judge_runner.ANCHORED_ADVISORY_CONTRACT
-    assert "anchor" in block
-    assert "anchor_window" in block
-    assert "40" in block
-    assert "recursive_widen_level" in block
-
-
-def test_judge_runner_system_assembly_includes_contract(monkeypatch, tmp_path):
-    """run_judge 装配 system 时 ANCHORED_ADVISORY_CONTRACT 出现在 system parts"""
-    # 直接验证 system_parts.append(ANCHORED_ADVISORY_CONTRACT) 这一行存在
-    src = (_ROOT / "core" / "scripts" / "judge_runner.py").read_text(encoding="utf-8")
-    assert "system_parts.append(ANCHORED_ADVISORY_CONTRACT)" in src
 
 
 def test_registry_has_anchored_advisory_contract_block():

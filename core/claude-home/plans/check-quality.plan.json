@@ -1,7 +1,7 @@
 {
   "command": "check-quality",
   "version": 2,
-  "description": "cluster 级质量审查 · v28 程序驱动（2026-06-22 G2 P0a 实装）：机械层 audit_hub（13+ scanner advisory）+ 跨章 validate_chapter（hard_gate）+ LLM 双 judge（reading-reflector audit / voice-checker · 真 API · elysia gen-model）→ 综合 quality_report.json",
+  "description": "cluster 级质量审查（2026-06-22 G2 P0a 实装）：机械层 audit_hub（13+ scanner advisory）+ 跨章 validate_chapter（hard_gate）+ LLM 双 judge（主代理 spawn reading-reflector / voice-checker · 真 API · gen-model）→ check_quality_judge.py 综合 quality_report.json",
   "total_steps": 3,
   "required_steps": [1, 2, 3],
   "optional_steps": [],
@@ -50,7 +50,7 @@
     {
       "n": 3,
       "name": "judge-llm+quality-report",
-      "description": "judge_runner 双 judge 真 API（elysia gen-model）：novel-reading-reflector ROUND=1（阅读体验审查 · advisory · 作者档第一权威）+ novel-voice-checker（cluster 整声纹 · 角色 voice_pack 校验）· 综合 step1 audit + step2 validate + 双 judge 输出 → cluster_{key}_quality_report.json（verdict/scores/advisory_count/hard_gate_count/sample_issues）",
+      "description": "主代理 spawn 双 judge 真 API（gen-model）：novel-reading-reflector ROUND=1（阅读体验审查 · advisory · 作者档第一权威）+ novel-voice-checker（cluster 整声纹 · 角色 voice_pack 校验）落 judge JSON → check_quality_judge.py 确定性综合 step1 audit + step2 validate + 双 judge 输出 → cluster_{key}_quality_report.json（verdict/scores/advisory_count/hard_gate_count/sample_issues）",
       "required": true,
       "skip_output_allowed": false,
       "scripts": [
@@ -64,5 +64,5 @@
     }
   ],
   "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式",
-  "_program_driven_status": "v28 程序驱动 ACTIVE（2026-06-22 G2 P0a 实装）：3 step 全填脚本 · step1 audit_hub 现成 · step2/3 新 wrapper（check_quality_validate.py / check_quality_judge.py）· judge 经 wrapper 直调 judge_runner.run_judge() 真 API · 不再 NOT-YET 空壳"
+  "_pipeline_status": "主代理 Claude Code 跑 3 step（2026-06-22 G2 P0a 实装）：step1 audit_hub 现成 · step2 wrapper check_quality_validate.py（跨章 hard_gate）· step3 主代理 spawn reading-reflector / voice-checker 落 judge JSON → check_quality_judge.py 确定性综合（真 API · gen-model）"
 }

@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
-"""plan_step_gates.py + orchestrator step 门 测试（🔴 2026-06-27 C16）。
+"""plan_step_gates.py 门库确定性单测（🔴 2026-06-27 C16）。
 
-覆盖：
-  · 门库确定性单测——5 个 check 各自的纯判定逻辑（subsystems/anti_skip/
-    chapter_edit/research_ref/agent_injection）。
-  · orchestrator 集成测——缺子系统→停步(hard)；缺 research_ref→advisory 放行+waiver；
-    research_ref 存在→放行无 waiver；auto_pilot→静默豁免。
-  · 两路径同判定一致性锁——同一 check 在「hook 抽参」与「orchestrator 抽参」下同结论
-    （block↔block / pass↔pass）。
+# 🔴 2026-06-28 移除exe/gen-model梳理方向
+原文件含「orchestrator 集成测 + 两路径一致性锁」整段（import orchestrator +
+from test_orchestrator import _Sandbox/_FakeRunner/_FakeDispatch）。orchestrator 随
+exe/程序驱动方向删除，本件回到**纯门库判定单测**——5 个 check 各自的纯逻辑
+（subsystems / anti_skip / chapter_edit / research_ref / agent_injection），这些是
+plan_step_gates 被 PreToolUse hooks / audit_hub / scaffold_subsystems 复用的核心契约。
 """
-import json
 import sys
 import tempfile
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
-sys.path.insert(0, str(_ROOT / "tests"))
 
 import plan_step_gates as gates  # noqa: E402
-import orchestrator as orc  # noqa: E402
-import plan_tracker as pt  # noqa: E402
-from test_orchestrator import _Sandbox, _FakeRunner, _FakeDispatch  # noqa: E402
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -222,184 +216,11 @@ def test_check_agent_injection_non_novel_general_agent_ok():
 
 
 # ════════════════════════════════════════════════════════════════════
-# orchestrator 集成测：缺子系统 → 停步（hard）
+# check_research_ref 核心判定锁（与调用方无关·hook 据此 exit2）
 # ════════════════════════════════════════════════════════════════════
-def _outline_template_with_planend():
-    return {
-        "command": "outline", "total_steps": 2,
-        "required_steps": [1, 2], "optional_steps": [],
-        "steps": [
-            {"n": 1, "name": "init", "required": True,
-             "skip_output_allowed": True, "expected_outputs": [],
-             "scripts": ["python core/scripts/x.py {project_root}"]},
-            {"n": 2, "name": "plan-end", "required": True,
-             "skip_output_allowed": True, "expected_outputs": [],
-             "scripts": ["python core/scripts/y.py {project_root}"]},
-        ],
-    }
-
-
-def _make_all_subsystems(db_dir: Path):
-    db_dir.mkdir(parents=True, exist_ok=True)
-    for f in gates.ALL_REQUIRED:
-        (db_dir / f).write_text("{}", encoding="utf-8")
-    # 🔴 2026-06-27 C03：outline plan-end 现 hard content_check（载荷非空）·填 3 个载荷文件
-    #   （涟漪规则/大势卡 ME 池/cluster_001 storyboard）否则 bare `{}` → inert → 误判 block。
-    (db_dir / "涟漪规则.json").write_text(json.dumps(
-        {"ripple_rules": [{"id": "R1", "trigger_type": "auto_tick"}]},
-        ensure_ascii=False), encoding="utf-8")
-    (db_dir / "大势卡.json").write_text(json.dumps(
-        {"major_events": [{"id": "ME-V1-01", "volume": 1,
-                           "is_volume_finale": True}]},
-        ensure_ascii=False), encoding="utf-8")
-    (db_dir / "事件簇.json").write_text(json.dumps(
-        {"clusters": [{"cluster_id": "cluster_001",
-                       "scene_storyboard": [{"scene": 1}]}]},
-        ensure_ascii=False), encoding="utf-8")
-
-
-def test_orc_missing_subsystems_stops_at_planend():
-    with _Sandbox() as sb:
-        sb.write_template("outline", _outline_template_with_planend())
-        # _数据库 存在但 0 子系统 JSON
-        try:
-            orc.run_command("outline", "测试书", script_runner=_FakeRunner(),
-                            judge_dispatch=_FakeDispatch())
-            assert False, "缺子系统必须在 plan-end 子系统门 hard 停步"
-        except orc.OrchestratorError as e:
-            assert "子系统门" in str(e)
-        # plan 停在 step 2（可续）：step1 已完成
-        actives = [a for a in pt.find_active_plans()
-                   if a["plan"].get("command") == "outline"]
-        assert len(actives) == 1
-        steps = {s["n"]: s["status"] for s in actives[0]["plan"]["steps"]}
-        assert steps[1] == pt.STATUS_COMPLETED and steps[2] != pt.STATUS_COMPLETED
-
-
-def test_orc_subsystems_present_passes_planend():
-    with _Sandbox() as sb:
-        sb.write_template("outline", _outline_template_with_planend())
-        _make_all_subsystems(sb.proj_root / "_数据库")
-        s = orc.run_command("outline", "测试书", script_runner=_FakeRunner(),
-                            judge_dispatch=_FakeDispatch())
-        assert s.end_report.get("ok")
-        assert s.gates_engaged >= 1            # plan-end 子系统门触发过
-
-
-def test_orc_subsystems_bypass_passes_even_when_missing():
-    with _Sandbox() as sb:
-        sb.write_template("outline", _outline_template_with_planend())
-        (sb.proj_root / "_数据库" / gates.SUBSYSTEMS_BYPASS_FILE).write_text(
-            "{}", encoding="utf-8")
-        s = orc.run_command("outline", "测试书", script_runner=_FakeRunner(),
-                            judge_dispatch=_FakeDispatch())
-        assert s.end_report.get("ok")          # 旁路 → 缺子系统也放行
-
-
-# ════════════════════════════════════════════════════════════════════
-# orchestrator 集成测：缺 research_ref → advisory 放行 + waiver
-# ════════════════════════════════════════════════════════════════════
-def _research_template(ref):
-    return {
-        "command": "test-flow", "total_steps": 1,
-        "required_steps": [1], "optional_steps": [],
-        "steps": [
-            {"n": 1, "name": "decide", "required": True,
-             "skip_output_allowed": True, "expected_outputs": [],
-             "research_ref": ref,
-             "scripts": ["python core/scripts/x.py {project_root}"]},
-        ],
-    }
-
-
-def test_orc_missing_research_ref_advisory_passes_with_waiver():
-    with _Sandbox() as sb:
-        sb.write_template("test-flow",
-                          _research_template("_数据库/.research_cache/none.json"))
-        s = orc.run_command("test-flow", "测试书", script_runner=_FakeRunner(),
-                            judge_dispatch=_FakeDispatch())
-        assert s.end_report.get("ok")                  # advisory 不阻断
-        assert s.gates_engaged >= 1
-        assert any(w["code"] == "RESEARCH_REF_MISSING" for w in s.gate_waivers)
-        # waiver 落盘（确定性 sink）
-        sink = sb.proj_root / "_数据库" / ".gate_waivers.json"
-        assert sink.exists()
-        recs = json.loads(sink.read_text(encoding="utf-8"))
-        assert recs and recs[-1]["code"] == "RESEARCH_REF_MISSING"
-        assert len(recs[-1]["reason"]) <= 300           # 理由 ≤300 字
-
-
-def test_orc_present_research_ref_no_waiver():
-    with _Sandbox() as sb:
-        rc = sb.proj_root / "_数据库" / ".research_cache"
-        rc.mkdir(parents=True)
-        (rc / "syn.json").write_text("{}", encoding="utf-8")
-        sb.write_template("test-flow",
-                          _research_template("_数据库/.research_cache/syn.json"))
-        s = orc.run_command("test-flow", "测试书", script_runner=_FakeRunner(),
-                            judge_dispatch=_FakeDispatch())
-        assert s.end_report.get("ok")
-        assert s.gates_engaged >= 1 and not s.gate_waivers
-        assert not (sb.proj_root / "_数据库" / ".gate_waivers.json").exists()
-
-
-def test_orc_research_ref_dir_existence_passes():
-    """cluster-write 式 .research_cache 目录路径：目录存在即过·零 waiver（永不硬锁写作）。"""
-    with _Sandbox() as sb:
-        (sb.proj_root / "_数据库" / ".research_cache").mkdir(parents=True)
-        sb.write_template("test-flow", _research_template("_数据库/.research_cache"))
-        s = orc.run_command("test-flow", "测试书", script_runner=_FakeRunner(),
-                            judge_dispatch=_FakeDispatch())
-        assert s.end_report.get("ok") and not s.gate_waivers
-
-
-def test_orc_auto_pilot_waives_research_silently():
-    with _Sandbox() as sb:
-        sb.write_template("test-flow",
-                          _research_template("_数据库/.research_cache/none.json"))
-        s = orc.run_command("test-flow", "测试书", auto_pilot=True,
-                            script_runner=_FakeRunner(),
-                            judge_dispatch=_FakeDispatch())
-        assert s.end_report.get("ok")
-        assert s.gates_engaged >= 1 and not s.gate_waivers   # 自动豁免·不记 waiver
-        assert not (sb.proj_root / "_数据库" / ".gate_waivers.json").exists()
-
-
-# ════════════════════════════════════════════════════════════════════
-# 两路径同判定一致性锁
-# ════════════════════════════════════════════════════════════════════
-def test_two_path_consistency_subsystems_block_and_pass():
-    """同一 check_subsystems：orchestrator 路径（run_command 硬停）与直接调用（hook 同款）
-    对同一项目 block↔block / pass↔pass 一致。"""
-    with _Sandbox() as sb:
-        sb.write_template("outline", _outline_template_with_planend())
-        db = sb.proj_root / "_数据库"
-        # —— 缺子系统：两路径都 block ——
-        direct_missing = gates.check_subsystems(db)
-        assert not direct_missing["ok"]
-        blocked = False
-        try:
-            orc.run_command("outline", "测试书", script_runner=_FakeRunner(),
-                            judge_dispatch=_FakeDispatch())
-        except orc.OrchestratorError:
-            blocked = True
-        assert blocked and (not direct_missing["ok"]) , "两路径未对 block 同判定"
-        # —— 补齐子系统：两路径都 pass ——
-        _make_all_subsystems(db)
-        direct_ok = gates.check_subsystems(db)
-        # 续跑停着的 plan
-        actives = [a for a in pt.find_active_plans()
-                   if a["plan"].get("command") == "outline"]
-        s = orc.run_command("outline", "测试书",
-                            resume_plan_id=actives[0]["plan"]["id"],
-                            script_runner=_FakeRunner(),
-                            judge_dispatch=_FakeDispatch())
-        assert direct_ok["ok"] and s.end_report.get("ok"), "两路径未对 pass 同判定"
-
-
-def test_two_path_consistency_research_same_core_decision():
-    """check_research_ref 核心（auto_pilot=False·research_skipped=False）= hook 与
-    orchestrator 共享的同一判定：文件缺 → ok False / 文件在 → ok True（与调用方无关）。"""
+def test_research_ref_core_decision():
+    """check_research_ref 核心（auto_pilot=False·research_skipped=False）：
+    文件缺 → ok False / 文件在 → ok True·gate_level 恒 advisory。"""
     with tempfile.TemporaryDirectory() as d:
         step = {"n": 3, "research_ref": "_数据库/.research_cache/syn.json"}
         miss = gates.check_research_ref(step, project_dir=d,
@@ -410,7 +231,6 @@ def test_two_path_consistency_research_same_core_decision():
         present = gates.check_research_ref(step, project_dir=d,
                                            auto_pilot=False, research_skipped=False)
         assert (not miss["ok"]) and present["ok"]
-        # gate_level 恒为 advisory（两路径都拿到同 gate_level·hook 据此仍 exit2·orc 软放行）
         assert miss["gate_level"] == gates.GATE_ADVISORY
 
 

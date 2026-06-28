@@ -1,29 +1,24 @@
 #!/usr/bin/env python3
-"""check_quality_judge.py — /check-quality step 3 wrapper（2026-06-22 G2 P0a）
+"""check_quality_judge.py — /check-quality step 3 综合器（synthesize-only）
 
-step 3 三件事一气呵成（orchestrator 主体执行顺序 scripts→judges→...，scripts 跑在
-judges 之前；想在同 step 里"先 judges 再 synthesize"必须把整段都打包成单脚本）：
+# 🔴 2026-06-28 移除exe/gen-model梳理方向
+原本本脚本"自主把 reading-reflector / voice-checker 两 judge 派 gen-model
+(judge_runner.run_judge)"。新架构下 judge/梳理由**主代理 spawn Claude agent**完成：
+主代理先 spawn novel-reading-reflector + novel-voice-checker（Claude），各自把裁决
+JSON 落盘 `_数据库/.qa/cluster_{key}_audit_judge.json` / `cluster_{key}_voice_judge.json`，
+**本脚本只做确定性综合**——读这两份 judge 输出 + step1 audit + step2 validate →
+quality_report.json（北极星④：综合/聚合是确定性脚本活，不调 LLM）。
 
-  1. 真 API 调 judge_runner.run_judge(novel-reading-reflector, ROUND=1)
-     —— 阅读体验 advisory · 作者档第一权威（needs_author_profile=True）
-     —— 落盘 _数据库/.qa/cluster_{key}_audit_judge.json
-  2. 真 API 调 judge_runner.run_judge(novel-voice-checker)
-     —— cluster 整声纹审 · 角色 voice_pack 校验 + 跨场景漂移
-     —— 落盘 _数据库/.qa/cluster_{key}_voice_judge.json
-  3. 综合 step1 audit + step2 validate + 两 judge 输出 → quality_report.json
-     —— verdict / advisory_count / hard_gate_count / 子模块 sample_issues
-     —— 落盘 _数据库/.qa/cluster_{key}_quality_report.json
-
-【为什么不让 orchestrator 自己派 judges】
-orchestrator must_spawn_agent 派完 judges 之后就到 step_complete，没有"judges
-后置 hook"放综合脚本。改 orchestrator 加新生命周期是更大动作（北极星⑥宁可单点
-wrapper 不动主框架）；本 wrapper 在单脚本里串完所有依赖更稳。
+综合内容：
+  - 读 _数据库/.audit/cluster_{key}_audit.json（step1 机械层 13+ scanner advisory）
+  - 读 _数据库/.qa/cluster_{key}_validate.json（step2 跨章 hard_gate）
+  - 读 _数据库/.qa/cluster_{key}_audit_judge.json（主代理 reading-reflector 落盘·缺则标 degraded）
+  - 读 _数据库/.qa/cluster_{key}_voice_judge.json（主代理 voice-checker 落盘·缺则标 degraded）
+  - 综合 verdict + sample_issues → _数据库/.qa/cluster_{key}_quality_report.json
 
 【北极星】
-- 全 advisory shadow · hard_gate 12 码不变 · 作者档第一权威
-- judge 真 API 真烧钱 · 不省 max_tokens · 不省 retry（feedback_real_api_tests_no_economize）
-- 任一 judge 抛 block 异常 → 即时停（写明确错·让用户复跑而非吞错糊弄）
-- soft 降级（reading-reflector）→ JSON 写入 _degraded=true · synthesize 仍出报告
+- 全 advisory shadow · 作者档第一权威 · hard_gate 仅来自 step2 validate_cluster
+- 纯确定性聚合·零 LLM 调用·judge JSON 缺失不崩（标 present=False/degraded）
 
 【用法】
   python core/scripts/check_quality_judge.py <项目路径> --cluster <key> --out <相对路径>
@@ -38,8 +33,6 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
-
-import judge_runner as jr  # noqa: E402
 
 
 def _resolve_path(project_root: Path, p: str) -> Path:
@@ -150,7 +143,8 @@ def _compute_verdict(audit_sum: dict, val_sum: dict,
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="check-quality step 3 · 双 judge 真 API + 综合 quality_report")
+        description="check-quality step 3 · 综合 quality_report（synthesize-only · "
+                    "judge 由主代理 spawn Claude agent 预落盘）")
     ap.add_argument("project", help="项目路径（workspace/novels/<书名>）")
     ap.add_argument("--cluster", required=True,
                     help="cluster key（纯数字或 cluster_NNN 形态）")
@@ -168,84 +162,25 @@ def main() -> int:
         key = key[len("cluster_"):]
     cluster_id = f"cluster_{key}"
 
-    # judge agent_input · 与 cluster-write step3/4 同款契约（北极星④格式层不参与判断）
+    # judge 输出由**主代理 spawn Claude agent**（novel-reading-reflector + novel-voice-checker）
+    # 预落盘到下面两个路径·本脚本只读不派单（北极星④综合是确定性脚本活）。
     qa_dir = project_root / "_数据库" / ".qa"
     qa_dir.mkdir(parents=True, exist_ok=True)
-    cluster_draft = (project_root / "章节" / f"cluster_{key}_draft"
-                     / f"cluster_{key}_draft.txt")
-    context_files: list[tuple[str, Path]] = []
-    if cluster_draft.exists():
-        context_files.append(("CLUSTER_DRAFT_PATH", cluster_draft))
-    else:
-        # cluster draft 已归档/未保留 → 尝试拼接已切的章节正文（splitter 后形态）
-        # 不存在 cluster_draft.txt 不阻断 · judge 凭 manifest + 章节扫描凭借
-        # （context_files 为空 judge 仍可凭 system prompt 给方向性 advisory）
-        print(f"[WARN] cluster draft 未找到: {cluster_draft}（judge 将无 draft 上下文）",
-              file=sys.stderr)
-
     audit_judge_out = qa_dir / f"cluster_{key}_audit_judge.json"
     voice_judge_out = qa_dir / f"cluster_{key}_voice_judge.json"
     quality_report_out = _resolve_path(project_root, args.out)
     quality_report_out.parent.mkdir(parents=True, exist_ok=True)
 
     judge_errors: list[str] = []
+    for label, jp in (("reading-reflector", audit_judge_out),
+                      ("voice-checker", voice_judge_out)):
+        if not jp.exists():
+            judge_errors.append(f"{label}: judge 输出缺失 {jp.name}（主代理未 spawn 该 agent？）")
+            print(f"[WARN] {label} judge 输出缺失: {jp}（synthesize 标 degraded）",
+                  file=sys.stderr)
 
-    # —— 1) novel-reading-reflector ROUND=1 ——
-    print(f"[1/3] judge: novel-reading-reflector (ROUND=1 · 真 API)", file=sys.stderr)
-    try:
-        rr_outcome = jr.run_judge(
-            "novel-reading-reflector",
-            project_root,
-            params={
-                "PROJECT": str(project_root),
-                "CLUSTER_ID": cluster_id,
-                "MODE": "cluster",
-                "ROUND": "1",
-            },
-            context_files=context_files,
-            output_path=audit_judge_out,
-        )
-        print(f"      ok={rr_outcome.ok} degraded={rr_outcome.degraded} "
-              f"retries={rr_outcome.retries}", file=sys.stderr)
-    except Exception as e:  # noqa: BLE001
-        judge_errors.append(f"reading-reflector: {type(e).__name__}: {e}")
-        print(f"      [ERROR] {e}", file=sys.stderr)
-        # 兜底写空壳让 expected_outputs 通过 · synthesize 标 degraded
-        audit_judge_out.write_text(json.dumps(
-            {"_judge_exception": str(e),
-             "_judge_exception_type": type(e).__name__,
-             "_degraded": True,
-             "verdict": "exception"},
-            ensure_ascii=False, indent=2), encoding="utf-8")
-
-    # —— 2) novel-voice-checker ——
-    print(f"[2/3] judge: novel-voice-checker (真 API)", file=sys.stderr)
-    try:
-        vc_outcome = jr.run_judge(
-            "novel-voice-checker",
-            project_root,
-            params={
-                "PROJECT": str(project_root),
-                "CLUSTER_ID": cluster_id,
-                "MODE": "cluster",
-            },
-            context_files=context_files,
-            output_path=voice_judge_out,
-        )
-        print(f"      ok={vc_outcome.ok} degraded={vc_outcome.degraded} "
-              f"retries={vc_outcome.retries}", file=sys.stderr)
-    except Exception as e:  # noqa: BLE001
-        judge_errors.append(f"voice-checker: {type(e).__name__}: {e}")
-        print(f"      [ERROR] {e}", file=sys.stderr)
-        voice_judge_out.write_text(json.dumps(
-            {"_judge_exception": str(e),
-             "_judge_exception_type": type(e).__name__,
-             "_degraded": True,
-             "violations": []},
-            ensure_ascii=False, indent=2), encoding="utf-8")
-
-    # —— 3) 综合 quality_report.json ——
-    print(f"[3/3] synthesize quality_report.json", file=sys.stderr)
+    # —— 综合 quality_report.json ——
+    print(f"[synthesize] quality_report.json", file=sys.stderr)
     audit_path = project_root / "_数据库" / ".audit" / f"cluster_{key}_audit.json"
     validate_path = project_root / "_数据库" / ".qa" / f"cluster_{key}_validate.json"
     audit_sum = _summarize_audit(_load_json_safe(audit_path))

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """secrets_store.py — keyring 薄抽象（2026-06-10 · GUI 删档后 2026-06-20 收窄 · 2026-06-21 BYOK 入口 DEPRECATED commit 2a4d7ce）
 
+# 🔴 2026-06-28 移除exe/gen-model梳理方向：删 trial token / probe / search-key 三段 exe 分发专属逻辑。
+# 保留 api-key 主体 + redact + is_available（gen_model_loader 创作链读 key 命脉·不可动）。
+
 主代理（Claude Code CLI）唯一入口形态下，本模块功能收窄为：
 - `redact()`：gemini key URL 脱敏（仍由 llm_transport / gen_writer 调用·硬功能保留）。
-- search key keyring 路径（web_search_client 联网调研开发者本机存放·`SERVICE_SEARCH`）。
-- gen-model BYOK key keyring 路径：[user-facing 入口 DEPRECATED commit 2a4d7ce]，仅
-  gen_model_loader._resolve_api_key 仍按三级优先级查 keyring → environ → .env 文本，
-  保留作向下兼容；实际 dev 走仓库根 .env，分发版 GUI 录入卡片已删。
+- gen-model BYOK key keyring 路径：仅 gen_model_loader._resolve_api_key 仍按三级优先级查
+  keyring → environ → .env 文本，保留作向下兼容；实际 dev 走仓库根 .env。
 
 安全不变量（仍生效）：
 - 绝不 print/log key 明文（debug 也只打 service/username + bool）。
@@ -29,7 +30,6 @@ from __future__ import annotations
 import logging
 
 SERVICE = "ruoyuai-gen-model"          # 固定命名空间·一个 service 管所有 profile key
-_TRIAL_USERNAME = "__trial_token__"     # 试用 token 保留名（双下划线·避开 profile 名）
 
 _log = logging.getLogger("ruoyuai.secrets")
 
@@ -113,66 +113,11 @@ def has_api_key(profile_name: str) -> bool:
     return bool(get_api_key(profile_name))
 
 
-# ============ 联网调研 search API key（BYOK·service 独立·D1·2026-06-15）============
-# 蓝图 D1：exe 模式 novel-researcher 联网调研失效（gen-model 无 web）→ BYOK search key
-# （Tavily 首选）走同款 keyring·独立命名空间与 gen-model key 隔离。username=provider。
-SERVICE_SEARCH = "ruoyuai-search"
-
-
-def get_search_key(provider: str = "tavily") -> str | None:
-    """联网调研 search API key（BYOK·username=provider：tavily/brave/exa）。"""
-    if _keyring is None:
-        return None
-    try:
-        v = _keyring.get_password(SERVICE_SEARCH, provider)
-        return v or None
-    except Exception:
-        _log.debug("keyring get search failed for %s", provider)    # 不带 key
-        return None
-
-
-def set_search_key(provider: str, key: str) -> bool:
-    if _keyring is None:
-        return False
-    k = (key or "").strip()
-    if not k:                            # 空串 = 清除（避免存空串污染优先级判断）
-        return delete_search_key(provider)
-    try:
-        _keyring.set_password(SERVICE_SEARCH, provider, k)
-        return get_search_key(provider) == k    # set→get 回读校验（frozen 静默失败防线）
-    except Exception:
-        _log.debug("keyring set search failed for %s", provider)
-        return False
-
-
-def delete_search_key(provider: str = "tavily") -> bool:
-    if _keyring is None:
-        return False
-    try:
-        _keyring.delete_password(SERVICE_SEARCH, provider)
-        return True
-    except _PwDelErr:                    # 本就不存在 → 无可删
-        return False
-    except Exception:
-        return False
-
-
-def has_search_key(provider: str = "tavily") -> bool:
-    return bool(get_search_key(provider))
-
-
 # 🔴 已删除（2026-06-20·A 方案回滚）：跨家族 judge Claude BYOK key（SERVICE_CLAUDE /
 # get_claude_key / set_claude_key / has_claude_key / delete_claude_key）。主代理 Claude
-# Code CLI 唯一入口后，跨家族 judge 复审改走主代理 inline 文件协议（下一 phase 改造），
-# 不再走 keyring 存 Anthropic API key。
-
-
-def get_trial_token() -> str | None:
-    return get_api_key(_TRIAL_USERNAME)
-
-
-def set_trial_token(token: str) -> bool:
-    return set_api_key(_TRIAL_USERNAME, token)
+# Code CLI 唯一入口后，跨家族 judge 复审改走主代理 inline 文件协议，不再走 keyring 存 Anthropic API key。
+# 🔴 2026-06-28 移除exe/gen-model梳理方向：删 search-key 段（SERVICE_SEARCH / get-set-delete-has_search_key·
+# web_search_client 已删·此段已死）+ trial token 段（_TRIAL_USERNAME / get-set_trial_token·exe 试用分发专属）。
 
 
 # ============ key 脱敏（对抗审查 must_fix#3：gemini key 在 URL·err 字符串泄漏面）============
@@ -199,35 +144,8 @@ def redact(text: str) -> str:
     return out
 
 
-# ============ --probe CLI（BYOK 出货验证 gate · exe 上 keyring 零验证缺口 · 2026-06-13）============
-_PROBE_USERNAME = "__probe__"           # probe 专用用户名（双下划线·与 profile 名空间隔离）
-
-
-def probe() -> dict:
-    """keyring 真后端探活：is_available() + set→get→delete 回环。
-
-    🔴 回环用临时 service（ruoyuai-probe-<pid>·每进程独立·用完即删），
-    绝不碰真 SERVICE=ruoyuai-gen-model——出货验证跑在真机上，用户真 key 不可受影响。
-    哨兵值是一次性随机串非真 key，但仍不打印（与本模块安全不变量同纪律）。
-    """
-    import os
-
-    available = is_available()
-    roundtrip_ok = False
-    if available and _keyring is not None:
-        svc = f"ruoyuai-probe-{os.getpid()}"
-        sentinel = "probe-" + os.urandom(8).hex()
-        try:
-            _keyring.set_password(svc, _PROBE_USERNAME, sentinel)
-            roundtrip_ok = _keyring.get_password(svc, _PROBE_USERNAME) == sentinel
-        except Exception:
-            roundtrip_ok = False
-        finally:
-            try:                         # 清理临时 service（set 失败时 delete 抛 → 同样吞掉）
-                _keyring.delete_password(svc, _PROBE_USERNAME)
-            except Exception:
-                pass
-    return {"available": available, "roundtrip_ok": roundtrip_ok}
+# 🔴 2026-06-28 移除exe/gen-model梳理方向：删 probe()（BYOK exe 出货验证 gate · _PROBE_USERNAME）
+# + main 里 probe 子命令 / --probe alias（属 exe 分发专属·主代理 CLI 入口形态不需要）。
 
 
 def _list_profiles() -> list[dict]:
@@ -307,9 +225,6 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="secrets_store", description="BYOK keyring 薄抽象工具")
     sub = ap.add_subparsers(dest="cmd")
 
-    sub.add_parser("probe", help="后端探活 + 临时 service 回环（绝不碰真 service）")
-    ap.add_argument("--probe", action="store_true", help="[deprecated alias] 同 probe 子命令")
-
     p_list = sub.add_parser("list", help="列 .env 已定义 profile 在 keyring 的状态（不打 key 明文）")
     p_list.add_argument("--json", action="store_true")
 
@@ -325,12 +240,8 @@ def main(argv=None) -> int:
     p_sync.add_argument("--dry-run", action="store_true")
 
     args = ap.parse_args(argv)
-    cmd = args.cmd or ("probe" if args.probe else None)
+    cmd = args.cmd  # 🔴 2026-06-28 移除exe/gen-model梳理方向：删 --probe alias 后直接取 cmd
 
-    if cmd == "probe":
-        result = probe()
-        print(json.dumps(result, ensure_ascii=False))
-        return 0 if (result["available"] and result["roundtrip_ok"]) else 1
     if cmd == "list":
         rows = _list_profiles()
         if getattr(args, "json", False):

@@ -794,7 +794,8 @@ def _run_volume_arc(args) -> int:
     """卷级大纲生成：四硬契约·走 llm_transport(双协议+截断续写+作者档注入)·block 失败非零退出。"""
     import llm_transport as lt
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from judge_runner import build_author_profile_block, AUTHOR_PROFILE_MISSING_GUARD
+    # 🔴 2026-06-28 移除exe/gen-model梳理方向：从共享小模块取，解除创作链对 judge_runner 的依赖
+    from author_profile_util import build_author_profile_block, AUTHOR_PROFILE_MISSING_GUARD
 
     project_root = Path(args.project) if args.project else None
     if not project_root:
@@ -923,7 +924,8 @@ def _run_distill_reflect(args) -> int:
     换『非空 + 含必备小节』文本校验（parse_json_loose 对 markdown 必误判 block）。"""
     import llm_transport as lt
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from judge_runner import build_author_profile_block, AUTHOR_PROFILE_MISSING_GUARD
+    # 🔴 2026-06-28 移除exe/gen-model梳理方向：从共享小模块取，解除创作链对 judge_runner 的依赖
+    from author_profile_util import build_author_profile_block, AUTHOR_PROFILE_MISSING_GUARD
 
     project_root = Path(args.project) if args.project else None
     if not project_root:

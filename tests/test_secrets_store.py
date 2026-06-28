@@ -65,14 +65,7 @@ def test_is_available_with_mem_backend_true():
     _with_mem(body)
 
 
-def test_trial_token_separate_namespace():
-    def body():
-        ss.set_api_key("p1", "sk-PROFILE")
-        ss.set_trial_token("sk-TRIAL")
-        assert ss.get_trial_token() == "sk-TRIAL"
-        assert ss.get_api_key("p1") == "sk-PROFILE"     # 互不串
-        assert ss.get_api_key(ss._TRIAL_USERNAME) == "sk-TRIAL"
-    _with_mem(body)
+# 🔴 2026-06-28 移除exe/gen-model梳理方向：删 test_trial_token_separate_namespace（trial token 段已移除）
 
 
 def test_soft_degrade_when_keyring_none():

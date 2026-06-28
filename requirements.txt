@@ -12,8 +12,8 @@ numpy>=1.24.0           # 数值计算
 # Model probe（中转站可达性检测）
 requests>=2.31.0        # /v1/models 端点探测
 
-# 🔴 2026-06-20 A 方案：GUI 整层删除·主代理 Claude Code CLI 唯一入口·nicegui / pywebview 移除。
+# 2026-06-20：用户入口 = 主代理 Claude Code CLI（无图形界面依赖）。
 
-# 判断层结构化输出后校验（llm_transport.parse + judge_runner）——pydantic 是 openai 传递依赖。
+# 判断层结构化输出后校验（llm_transport.parse）——pydantic 是 openai 传递依赖。
 
 # Python 版本要求：>= 3.10（用了 from __future__ import annotations + PEP 604 union types）

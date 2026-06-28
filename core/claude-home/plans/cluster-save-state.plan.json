@@ -28,7 +28,7 @@
       "description": "开启 cluster 级 WAL + db_schema_validate.py --auto-migrate（34 JSON schema 自检）",
       "required": true,
       "skip_output_allowed": false,
-      "_doc_program_driven": "v28：WAL 骨架在 Claude 流程由 Claude 建·程序驱动下由 driver touch_outputs 建（.json 后缀写 {} 合法骨架）。",
+      "_doc_pipeline": "WAL 骨架由主代理 touch_outputs 建（.json 后缀写 {} 合法骨架）。",
       "touch_outputs": [
         "_数据库/.wal/cluster_{key}_save_state.json"
       ],
@@ -64,7 +64,7 @@
       "description": "validate_chapter.py 对整 cluster 跑（所有切出来的章 + cluster 级 hard_gate 校验）",
       "required": true,
       "skip_output_allowed": true,
-      "_doc_program_driven": "v28 程序驱动：行首 '? ' = advisory 复验（cluster-write step 3 已全量质检过·此处为入库前留痕复核·非零退出警告不拦——拦截裁决权在 step 3）。",
+      "_doc_pipeline": "行首 '? ' = advisory 复验（cluster-write step 3 已全量质检过·此处为入库前留痕复核·非零退出警告不拦——拦截裁决权在 step 3）。",
       "_doc_c03_c17": "🔴 2026-06-27 接线 W2：① gate_content_check_advisory=载荷非空复核（涟漪规则/当前卷 ME 池/cluster_001 storyboard 是否点火）·**advisory**（非 hard·step4 文档明定非零不拦·拦截裁决权在 cluster-write step3·北极星「绝不过度拦截」·inert→log+记 waiver 放行·尊重 .subsystems_bypass.json）。② C17 浅漂移哨兵 scaffold verify --shallow-drift（高级 16 子系统顶层结构 vs skeleton·advisory·永不阻断·永不写文件）。",
       "gate_content_check_advisory": true,
       "scripts": [
@@ -76,7 +76,7 @@
     {
       "n": 5,
       "name": "novel-archivist-cluster",
-      "description": "🔴 2026-06-28 架构纠正：spawn novel-archivist MODE=cluster · 读整 cluster 正文 + 当前库，客观抽取本块新增/变更的角色/道具/关系/硬事实（+ throughline_progress 本块推进的叙事线 OS/MC/IC/RS），产 _数据库/.wal/cluster_{key}_archive.json（权威状态源·非 writer 自报）。只抽取不创作、不评判。配套 step6 apply_archive.py 确定性回库。🔴 2026-06-28 不降级收尾：failure_policy=block（judge_runner AGENT_SPECS·原 soft）——archive 是 factual 回库唯一权威路径（writer 已不自报 factual），archivist 失败=状态梳理链断必须硬停，不能 soft 降级让角色/道具/关系/locked_facts 丢失",
+      "description": "🔴 2026-06-28 架构纠正：spawn novel-archivist MODE=cluster · 读整 cluster 正文 + 当前库，客观抽取本块新增/变更的角色/道具/关系/硬事实（+ throughline_progress 本块推进的叙事线 OS/MC/IC/RS），产 _数据库/.wal/cluster_{key}_archive.json（权威状态源·非 writer 自报）。只抽取不创作、不评判。配套 step6 apply_archive.py 确定性回库。🔴 2026-06-28 不降级收尾：failure_policy=block（原 soft）——archive 是 factual 回库唯一权威路径（writer 已不自报 factual），archivist 失败=状态梳理链断必须硬停，不能 soft 降级让角色/道具/关系/locked_facts 丢失",
       "required": true,
       "must_spawn_agent": "novel-archivist",
       "agent_input": {
@@ -94,7 +94,7 @@
       "expected_outputs": [
         "_数据库/.wal/cluster_{key}_archive.json"
       ],
-      "_doc_archivist": "agent_input 的 *_PATH 键由 driver 代读注入 context（judge 无 Read 工具·见 default_judge_dispatch）：CLUSTER_DRAFT_PATH=整块正文·人物卡/角色池/道具/关系=已存在基准供 id 复用（防同角色双 id）。judge_report_path=archive.json（= AGENT_SPECS.output_template·apply_archive 默认读路径）。"
+      "_doc_archivist": "agent_input 的 *_PATH 键由主代理代读注入 context（judge agent 无 Read 工具）：CLUSTER_DRAFT_PATH=整块正文·人物卡/角色池/道具/关系=已存在基准供 id 复用（防同角色双 id）。judge_report_path=archive.json（apply_archive 默认读路径）。"
     },
     {
       "n": 6,
@@ -141,7 +141,7 @@
       "judge_report_path": "_数据库/.judge_reports/cluster_{key}_foreshadower.json",
       "skip_output_allowed": true,
       "expected_outputs": [],
-      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_foreshadower.json（build_manifest 下章抽 health_warnings·必写盘否则反馈链断·judge_runner failure_policy=block）"
+      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_foreshadower.json（build_manifest 下章抽 health_warnings·必写盘否则反馈链断·failure_policy=block）"
     },
     {
       "n": 9,
@@ -221,7 +221,7 @@
       "description": "改 E: 跑 cluster_emergence_engine.py emerge --after-cluster {key} → 生成下一 cluster 2-3 个 candidate brief → spawn novel-outline-planner MODE=cluster_emergence 详化 candidates → 输出报告 + 等用户选 1 个 candidate",
       "required": true,
       "must_spawn_agent": "novel-outline-planner",
-      "_doc_program_driven": "v28 程序驱动：① 引擎 emerge 产 candidates（涌现内容运行时算·data_flow 只回填路径不固化内容·北极星②③）② outline-planner（judge_runner·failure_policy=block）详化 → brief_candidates ③ pause_for_user 弹卡（auto_pilot 显式开关才取 _emergence_score 第一候选·默认必等用户·北极星③软牵引）④ after_pause_scripts 跑 cluster_choice_apply 把选中 brief 机械写回 事件簇.json（status=in_progress·白名单成员·根治 active 不在白名单的 brief 注入静默 off 坑）。",
+      "_doc_pipeline": "① 引擎 emerge 产 candidates（涌现内容运行时算·data_flow 只回填路径不固化内容·北极星②③）② 主代理 spawn outline-planner（failure_policy=block）详化 → brief_candidates ③ pause_for_user 弹卡（auto_pilot 显式开关才取 _emergence_score 第一候选·默认必等用户·北极星③软牵引）④ after_pause_scripts 跑 cluster_choice_apply 把选中 brief 机械写回 事件簇.json（status=in_progress·白名单成员·根治 active 不在白名单的 brief 注入静默 off 坑）。",
       "agent_input": {
         "PROJECT": "{project_root}",
         "MODE": "cluster_emergence",
@@ -246,7 +246,7 @@
       ],
       "scripts": [
         "python core/scripts/cluster_emergence_engine.py {project_root} emerge --after-cluster cluster_{key}",
-        "# 程序驱动: outline-planner 经 must_spawn_agent 派发 judge_runner (MODE=cluster_emergence)"
+        "# outline-planner 经 must_spawn_agent 由主代理 spawn (MODE=cluster_emergence)"
       ],
       "judge_required_keys": [
         "candidates"

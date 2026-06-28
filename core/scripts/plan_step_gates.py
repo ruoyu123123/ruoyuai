@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """plan_step_gates.py — 5 门「纯判定逻辑」共享库（C16 · 2026-06-27）
 
-# 🔴 2026-06-27 C16-L3-GATES-IN-ORCHESTRATOR
-根因：orchestrator.py 是独立进程，PreToolUse hooks「拦的是 Claude 工具调用·对
-独立进程无感」（见 orchestrator.py 头注释）。于是 5 个 PreToolUse 守卫
-（subsystems_gate / agent_gate / plan_step_anti_skip / chapter_edit_gate /
-step_research）在程序驱动 orchestrator 默认执行路径**整体失效**。
+# 🔴 2026-06-28 移除exe/gen-model梳理方向
+原 C16 设计有「两条消费路径」（PreToolUse hooks + 程序驱动 orchestrator._run_step_gates）。
+orchestrator 随 exe/程序驱动方向整体删除，本模块回到**单一消费路径 = PreToolUse hooks**
+（拦的是 Claude 主代理工具调用）；本体纯判定函数不变，audit_hub / scaffold_subsystems 仍复用。
 
-本模块把 5 门的**纯判定逻辑**抽成可被两条路径共享的函数：
+本模块把 5 门的**纯判定逻辑**抽成可被 hook 共享的函数：
   · check_subsystems()      — 34 子系统 JSON 存在性（hard_gate）·🔴 C03 content_check=True
                               追加载荷非空验收（inert→hard·裸骨架→advisory）
   · check_agent_injection() — Agent prompt 契约/注入/篡改（hard_gate）
@@ -15,12 +14,8 @@ step_research）在程序驱动 orchestrator 默认执行路径**整体失效**�
   · check_chapter_edit()    — 章节正文剧本体/章末过渡（hard_gate）
   · check_research_ref()    — 决策前置 step 的调研缓存（advisory · 可豁免）
 
-两条消费路径：
-  1) 5 个 pretooluse_*.py 改薄 wrapper：读 stdin → 抽参 → 调对应 check →
-     ok ? exit 0 : exit 2（**保持现有 hook exit 语义不变**·gate_level 不影响
-     hook，hook 一律 fail→exit2；gate_level 只供 orchestrator 区分硬停/软放行）。
-  2) orchestrator._run_step_gates(step, ctx)：hard_gate-class 未过 → 停步（可续）；
-     advisory-class 未过 → log + 记 waiver 放行（北极星⑤ research 门永不硬锁）。
+消费路径：5 个 pretooluse_*.py 薄 wrapper 读 stdin → 抽参 → 调对应 check →
+  ok ? exit 0 : exit 2（hook 一律 fail→exit2；gate_level 字段标注硬/软语义供消费方区分）。
 
 每个 check 返回统一形状（北极星⑥消重复·单一真相源）：
     {"ok": bool, "gate_level": "hard_gate"|"advisory", "msg": str,
@@ -100,7 +95,7 @@ def check_subsystems(db_dir, *, required=None, bypass_active=None,
     🔴 2026-06-27 C03：content_check=True 时，**全齐后追加载荷白名单非空检查**——
     3 个「机器永不点火」载荷文件(涟漪规则/大势卡当前卷 ME 池/cluster_001 storyboard)空
     → inert → ok=False · hard_gate(不可豁免)；非载荷裸骨架 → advisory(不阻断·fluid 合法)。
-    默认 False 保持纯存在性语义（orchestrator 既有调用零回归）；wiring 点见 _check_load_bearing
+    默认 False 保持纯存在性语义（既有调用零回归）；wiring 点见 _check_load_bearing
     docstring（outline plan-end / cluster-save-state validate 步可显式传 content_check=True）。
     """
     required = required or ALL_REQUIRED
@@ -283,7 +278,7 @@ def check_research_ref(step_def: dict, *, project_dir, auto_pilot: bool = False,
     无 research_ref 字段（旧 plan / 非决策步）→ ok=True。
     auto_pilot / research_skipped（用户跳过调研 or 旁路）→ 自动豁免（ok=True·waived）。
     文件缺失 → ok=False · gate_level=advisory · waivable=True
-      （hook 路径仍硬 exit 2 保持原行为；orchestrator 路径软放行 + 记 waiver）。
+      （hook 路径硬 exit 2；advisory gate_level 字段供消费方区分软语义）。
     """
     research_ref = step_def.get("research_ref")
     if not research_ref:
@@ -317,8 +312,7 @@ def check_research_ref(step_def: dict, *, project_dir, auto_pilot: bool = False,
 
 # ════════════════════════════════════════════════════════════════════
 # 门 4：Agent 注入门（hard_gate）——来源 pretooluse_agent_gate.py
-# 主用于 Claude 工具路径（orchestrator 走 judge_runner·deterministic 构造 prompt·
-# 注入门在 orchestrator 路径不适用，仅 tampered 已由 resume verify_plan 覆盖）。
+# 用于 Claude 主代理 spawn Agent 工具路径（拦 prompt 契约/注入/篡改）。
 # ════════════════════════════════════════════════════════════════════
 NOVEL_NAME_KEYWORDS = [
     "Writer", "writer", "Validator", "validator",
@@ -384,7 +378,7 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
     warn-only（rule4/9）收进 warnings（不影响 ok·wrapper 打印不退出）。
 
     plan_state：调用方（hook）传 plan_tracker.verify_plan(PLAN_ID) 结果；"tampered"
-    → block（rule8）。测试可直接传。orchestrator 不调本门（其 agent 走 judge_runner）。
+    → block（rule8）。测试可直接传。
     """
     prompt = prompt or ""
     desc = desc or ""

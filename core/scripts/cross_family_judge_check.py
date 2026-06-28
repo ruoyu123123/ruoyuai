@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """cross_family_judge_check.py — 跨家族 judge ensemble 抑制 self-preference / family bias
-(advisory · shadow · 2026-06-20 A 方案·inline 文件协议·吃 Claude Code 订阅零月费)
+(advisory · shadow · inline 文件协议·吃 Claude Code 订阅零月费)
+
+# 🔴 2026-06-28 移除exe/gen-model梳理方向
+原 maybe_run 由已删除的 orchestrator.default_judge_dispatch 末端调用。管线回到「主代理
+spawn Claude agent + 跑确定性脚本」后，跨家族复审天然由**主代理**驱动：主代理 spawn
+Agent(claude) 复审 finale subcluster → 调 save_inline_verdict_for_main_agent 落 .wal →
+后续 cluster-save-state step 7 audit/voice 综合时由主代理读 .wal verdict（maybe_run 保留
+为纯函数助手·CLI 兼容入口仍可用·无 judge_runner / orchestrator 依赖）。
 
 【背景】R10 联网调研(arXiv 2604.23178 Judging the Judges May 2026 — Claude
 self-preference +11.2pp · Gemini +4.6pp + NeurIPS 2026 Self-Preference Bias +
 FutureAGI 2026 三家族 ensemble)：单模型 judge 评分系统性偏向同家族产出
 (self-preference bias)。
 
-【2026-06-20 A 方案 inline 文件协议】
-本模块**不再直连 Anthropic / 不依赖 BYOK**。
-跨家族复审 = 让**主代理 Claude Code**(同一个跑流水线的 Claude 自身)在
-spawn judge subprocess 之前，先 spawn 一个 Agent(claude) 复审 finale subcluster 的
-audit / voice 维度·结果以 inline 文件落到 `_数据库/.wal/claude_verdict_<sha12>_<judge>.json`。
+【inline 文件协议】本模块**不直连 Anthropic / 不依赖 BYOK / 不调 gen-model**。
+跨家族复审 = 让**主代理 Claude Code**(同一个跑流水线的 Claude 自身)先 spawn 一个
+Agent(claude) 复审 finale subcluster 的 audit / voice 维度·结果以 inline 文件落到
+`_数据库/.wal/claude_verdict_<sha12>_<judge>.json`。
 
-orchestrator default_judge_dispatch 末端调 maybe_run：
+maybe_run（纯函数助手·主代理或其它消费方可调）：
   ① 模式 off / 非 eligible / 非 finale / 无 draft → skip
   ② 查 `_数据库/.wal/claude_verdict_<draft_sha[:12]>_<judge>.json` → 命中即用
      (verdict + reason + source='inline_agent_spawn')
@@ -23,7 +29,7 @@ orchestrator default_judge_dispatch 末端调 maybe_run：
 
 主代理给 finale subcluster 主动 spawn Agent(claude) 复审后调
 `save_inline_verdict_for_main_agent(draft_text, judge_name, verdict, reason, project_root)`
-落 .wal 文件·下一次 cluster-save-state step 7 audit/voice 跑到 orchestrator 末端就会被捡用。
+落 .wal 文件·下一次 cluster-save-state step 7 audit/voice 综合时被捡用。
 
 env CROSS_FAMILY_JUDGE_MODE: off / shadow(默认) / active（off 显式标 mode=off）。
 
@@ -115,8 +121,8 @@ def save_inline_verdict_for_main_agent(draft_text: str, judge_name: str,
                                        claude_model: str =
                                        "via-claude-code-agent") -> bool:
     """主代理（Claude Code 自身）spawn Agent(claude) 复审 finale subcluster 后调本函数
-    把裁决落 `_数据库/.wal/claude_verdict_<sha[:12]>_<judge>.json`·下一轮
-    orchestrator 调 maybe_run 时自动 _try_load_inline_verdict 捡用。
+    把裁决落 `_数据库/.wal/claude_verdict_<sha[:12]>_<judge>.json`·下一轮主代理（或
+    maybe_run 助手）读取时自动 _try_load_inline_verdict 捡用。
 
     返回 True / False（任何 OSError / 目录不存在 → False·绝不抛）。"""
     if not draft_text or not judge_name or not project_root:

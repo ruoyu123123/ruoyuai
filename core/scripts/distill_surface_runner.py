@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""distill_surface_runner.py — phase-1 表层蒸馏串联器（阶段3·循环 cluster 调 48 维 judge）。
+"""distill_surface_runner.py — phase-1 表层蒸馏综合器（synthesize-only）。
 
-设计 w2zu042li 路 A：内部读 cluster_index 逐 cluster →
-  ① distill_prep_cluster_text 拼本 cluster 全章全文
-  ② run_judge('novel-distill-analyzer') 产 48 维 surface JSON（蒸馏进度/cluster_{key}_surface.json）
-  ③ 从 judge 的 continuity 段写 衔接分析/cluster_{key}_continuity.json（must_fix#2·arc_aggregator 消费）
+# 🔴 2026-06-28 移除exe/gen-model梳理方向
+原本本脚本"自主把 novel-distill-analyzer 派 gen-model(judge_runner.run_judge)"逐 cluster
+产 48 维 surface JSON。新架构下 48 维分析（梳理/判断）由**主代理 spawn Claude agent**
+(novel-distill-analyzer) 完成并把 surface JSON 落盘，本脚本只做确定性综合：
+
+  ① （主代理已完成）每 cluster surface JSON 落盘 蒸馏进度/cluster_{key}_surface.json
+  ② 读盘取 surface（生产路径 judge_fn=None）；测试/旧注入路径可传 judge_fn 回调自产
+  ③ 从 surface 的 continuity 段写 衔接分析/cluster_{key}_continuity.json（arc_aggregator 消费）
   ④ 逐章投影 蒸馏进度/ch{N}.json（word_count 从 chN_metrics·dims 引 cluster 级·arc_aggregator 读）
-
-判官调用走 judge_runner.run_judge（四硬契约·needs_author_profile=False·全章全文 context 注入）。
-失败 block：surface JSON 是蒸馏链源头·judge block 失败冒泡停 plan。
+  ⑤ _aggregate_author_profile 确定性聚合全部 surface → 作者风格.json 初版
 
 用法：
   python distill_surface_runner.py <project_root> [--overwrite] [--max-clusters N]
-退出码：0 成功 / 1 cluster_index 缺失 / 3 某 cluster judge block 失败
+退出码：0 成功 / 1 cluster_index 缺失 / 3 注入 judge_fn 回调 block 失败
 """
 from __future__ import annotations
 
@@ -73,10 +75,13 @@ def _chapter_wordcount(project_root: Path, ch: int) -> int:
 
 def run(project_root: Path, *, overwrite: bool = False, max_clusters: int | None = None,
         judge_fn=None) -> int:
-    """judge_fn：可注入（测试用）·默认 judge_runner.run_judge。"""
-    if judge_fn is None:
-        import judge_runner as jr
-        judge_fn = jr.run_judge
+    """phase-1 表层蒸馏综合（synthesize-only · 2026-06-28 移除 gen-model 自主派单）。
+
+    judge_fn：可注入回调（测试/旧注入路径自产 surface）。**生产路径 judge_fn=None**——
+    主代理先 spawn novel-distill-analyzer(Claude) 把每 cluster 48 维 surface JSON 落盘
+    蒸馏进度/cluster_{key}_surface.json，本函数读盘做衔接(③)+逐章投影(④)+聚合(⑤)。
+    judge_fn 为 None 且某 cluster 无 surface → 跳过该 cluster（绝不自调 gen-model）。
+    """
     idx_path = project_root / "cluster_index.json"
     if not idx_path.exists():
         print(f"[surface_runner] cluster_index.json 不存在: {idx_path}", file=sys.stderr)
@@ -118,35 +123,50 @@ def run(project_root: Path, *, overwrite: bool = False, max_clusters: int | None
         cid = str(c.get("cluster_id") or f"cluster_{i+1:03d}")
         key = "".join(ch for ch in cid if ch.isdigit()) or f"{i+1:03d}"
         surface_out = dist / f"cluster_{key}_surface.json"
-        if surface_out.exists() and not overwrite:
-            done += 1
-            continue
         rng = c.get("chapter_range") or []
         if len(rng) != 2:
             continue
         start, end = int(rng[0]), int(rng[1])
-        # ① 拼本 cluster 全章全文
-        fulltext = wal / f"cluster_{key}_fulltext.txt"
-        rc = prep.prep(project_root, cid, fulltext)
-        if rc != 0:
-            print(f"[surface_runner] {cid} 全文准备失败 rc={rc}（跳过）", file=sys.stderr)
+        # —— 取本 cluster 48 维 surface ——
+        data = None
+        if surface_out.exists() and not overwrite:
+            # 生产路径：surface 已由主代理 spawn novel-distill-analyzer(Claude) 落盘 → 读盘
+            try:
+                data = json.loads(surface_out.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                print(f"[surface_runner] {cid} surface 读取失败（跳过衔接/投影）",
+                      file=sys.stderr)
+                continue
+        elif judge_fn is not None:
+            # 注入路径（测试/旧 driver）：① 拼全章全文 → ② 调 48 维 judge 回调（block 冒泡）
+            fulltext = wal / f"cluster_{key}_fulltext.txt"
+            rc = prep.prep(project_root, cid, fulltext)
+            if rc != 0:
+                print(f"[surface_runner] {cid} 全文准备失败 rc={rc}（跳过）", file=sys.stderr)
+                continue
+            try:
+                _params = {"CLUSTER_ID": cid, "CHAPTER_RANGE": f"ch{start}-ch{end}"}
+                if genre_dims_note:                    # 阶段3：题材专属维度提示
+                    _params["题材专属维度"] = genre_dims_note
+                outcome = judge_fn(
+                    "novel-distill-analyzer", project_root,
+                    params=_params,
+                    context_files=[("本 cluster 全章原文", fulltext)],
+                    output_path=surface_out)
+            except Exception as e:        # JudgeBlockedError 等 → block 级停
+                print(f"[surface_runner] {cid} judge block 失败: {e}", file=sys.stderr)
+                return 3
+            data = outcome.data if hasattr(outcome, "data") else (outcome or {})
+        else:
+            # 生产路径但无 surface：主代理须先 spawn novel-distill-analyzer 落盘 surface
+            print(f"[surface_runner] {cid} 无 surface JSON·未注入 judge_fn → 跳过"
+                  f"（主代理须先 spawn novel-distill-analyzer 落盘 surface JSON）",
+                  file=sys.stderr)
             continue
-        # ② 调 48 维 judge（全章全文 context·block 失败冒泡）
-        try:
-            _params = {"CLUSTER_ID": cid, "CHAPTER_RANGE": f"ch{start}-ch{end}"}
-            if genre_dims_note:                    # 阶段3：题材专属维度提示
-                _params["题材专属维度"] = genre_dims_note
-            outcome = judge_fn(
-                "novel-distill-analyzer", project_root,
-                params=_params,
-                context_files=[("本 cluster 全章原文", fulltext)],
-                output_path=surface_out)
-        except Exception as e:        # JudgeBlockedError 等 → block 级停
-            print(f"[surface_runner] {cid} judge block 失败: {e}", file=sys.stderr)
-            return 3
-        data = outcome.data if hasattr(outcome, "data") else (outcome or {})
+        if not isinstance(data, dict):
+            continue
         # ③ continuity → 衔接分析/
-        cont = data.get("continuity") if isinstance(data, dict) else None
+        cont = data.get("continuity")
         if isinstance(cont, dict):
             (cont_dir / f"cluster_{key}_continuity.json").write_text(
                 json.dumps(cont, ensure_ascii=False, indent=2), encoding="utf-8")

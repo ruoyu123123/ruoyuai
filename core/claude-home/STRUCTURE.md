@@ -158,6 +158,7 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 ```
 core/claude-home/
 ├── plans/                                      # plan_tracker 强制规划模板（<command>.plan.json）
+│   ├── README.md                               # plan 字段词表（主代理 checklist 字段说明）
 │   ├── cluster-write.plan.json
 │   ├── cluster-save-state.plan.json
 │   ├── distill-style.plan.json
@@ -187,10 +188,10 @@ core/claude-home/
 
 **2026-06-21 用户决策 A：删 GUI 整层 + 回滚 BYOK·主代理 Claude Code 唯一入口。**
 
-历史背景（仅供回溯）：v28 2026-06-10 曾引入 NiceGUI 图形界面层（`core/gui/`、`ruoyu_gui.py`、`packaging/ruoyu_gui.spec`），让非技术用户脱离 Claude CLI 直接驱动 orchestrator。2026-06-21 commit 2a4d7ce 整层物理删除：
+历史背景（仅供回溯）：v28 2026-06-10 曾引入 NiceGUI 图形界面层（`core/gui/`、`ruoyu_gui.py`、`packaging/ruoyu_gui.spec`），让非技术用户脱离 Claude CLI 直接驱动写作管线。2026-06-21 commit 2a4d7ce 整层物理删除：
 - `core/gui/` 整目录、`ruoyu_gui.py`、`packaging/` 打包脚本、`tests/gui/` 测试全删；
-- 配套 BYOK keyring 路径回滚（`secrets_store.py` 收窄、`gen_model_loader.py` 优先 .env 私钥）；
-- 用户入口收敛为 **Claude Code CLI 唯一入口**——主代理调度 orchestrator。
+- 配套 BYOK keyring 路径回滚（`secrets_store.py` 收窄为 `.env` key 脱敏工具、`gen_model_loader.py` 优先 .env 私钥）；
+- 用户入口收敛为 **Claude Code CLI 唯一入口**——主代理 Claude Code spawn Agent + 跑确定性脚本驱动管线。
 
 理由：用户决定吃 Claude Code 订阅·删除 BYOK 残留与 GUI 维护成本。详见 commit 2a4d7ce + memory `project_gui_layer_nicegui` / `project_gui_full_coverage` / `project_byok_keyring` / `project_packaging_ruoyuai_standalone_exe`（均已加 DEPRECATED 标）。
 

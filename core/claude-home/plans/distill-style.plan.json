@@ -1,11 +1,11 @@
 {
   "command": "distill-style",
   "version": 5,
-  "description": "作者风格全程蒸馏（程序驱动·阶段3）：作者作品→切章→章级metrics→cluster切分→48维judge表层蒸馏→consolidate聚合→skill_v0→复刻→SFS→修正反思→定稿→回灌验证。",
+  "description": "作者风格全程蒸馏（阶段3）：作者作品→切章→章级metrics→cluster切分→48维judge表层蒸馏→consolidate聚合→skill_v0→复刻→SFS→修正反思→定稿→回灌验证。",
   "total_steps": 10,
   "required_steps": [1, 2, 2.5, 3, 4, 5, 5.5, 6, 6.5, 7],
   "optional_steps": [],
-  "_program_driven_status": "v28 程序驱动：已落为可执行 DAG（scripts/must_spawn_agent/data_flow）·orchestrator.run_command 可机械驱动·主代理 Claude Code 调度。2026-06-11 阶段3。前置：调用方在 orchestrator 启动前 mkdir STYLES_DIR/<书名>/蒸馏进度/.wal + 把作者作品正文落 蒸馏进度/.wal/raw_author_text.txt。注：distill 项目根直挂 原文/、cluster_index.json（data_flow source_json 不带 _数据库/ 前缀）。[GUI /distill 入口 DEPRECATED commit 2a4d7ce]",
+  "_pipeline_status": "主代理 Claude Code 按 plan steps spawn Agent + 跑确定性脚本驱动管线（scripts/must_spawn_agent/data_flow 字段见 plans/README.md）。2026-06-11 阶段3。前置：主代理在跑 distill-style 前 mkdir STYLES_DIR/<书名>/蒸馏进度/.wal + 把作者作品正文落 蒸馏进度/.wal/raw_author_text.txt。注：distill 项目根直挂 原文/、cluster_index.json（data_flow source_json 不带 _数据库/ 前缀）。",
   "steps": [
     {
       "n": 1,

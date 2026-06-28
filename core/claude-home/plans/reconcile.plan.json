@@ -1,7 +1,7 @@
 {
   "command": "reconcile",
   "version": 2,
-  "description": "一致性调和（v28 程序驱动 · 2026-06-22 G2 P0b 实装）：locked_fact 变更扫描 → 影响半径 → gen-model 局部 patch（gen_fixer validator-repair · advisory）→ 跨章一致性验证 → 综合 reconcile_report.json。spec 输入预先落 _数据库/.reconcile/<id>/spec.json。",
+  "description": "一致性调和（2026-06-22 G2 P0b 实装）：locked_fact 变更扫描 → 影响半径 → gen-model 局部 patch（gen_fixer validator-repair · advisory）→ 跨章一致性验证 → 综合 reconcile_report.json。spec 输入预先落 _数据库/.reconcile/<id>/spec.json。",
   "total_steps": 5,
   "required_steps": [1, 2, 3, 4, 5],
   "optional_steps": [],
@@ -110,6 +110,6 @@
   ],
   "_v2_principle": "整个系统为故事块服务 · v2 cluster 化方案 2026-05-28 · scanner 全部 cluster 视野 · 章节是输出格式",
   "_v2_reconcile_note_20260529": "2026-05-29 复审盲区③核查结论：reconcile 无 ch_to_cluster_id 依赖（影响半径以物理章 txt 文件层报告）。本 v28 实装继承该原则：reconcile.py compute-radius mode 物理 glob 章节/第*章/第*章.txt + 人物卡 locked_facts 三方扫描，scope 是「章 txt 文件清单」而非「cluster 归属」，故 SC-5 边界重叠 / cluster 不可达 场景对本命令无风险。step4 audit 跑 locked_fact_cross_scene_scanner 时按 cluster_*_draft.txt 自然走 cluster 视野（与 v2 主轨对齐）。",
-  "_program_driven_status": "v28 程序驱动 ACTIVE（2026-06-22 G2 P0b 实装·从 NOT-YET 空壳升级）：5 step 全填脚本 · 核心驱动 reconcile.py 6 mode 一体化（detect-changes/compute-radius/patch/audit/propagation-check/report）· patch step 调 gen_fixer validator-repair（真 API · gen-model）· audit step 复用 locked_fact_cross_scene_scanner · 整体 advisory shadow 不引入新 hard_gate",
+  "_pipeline_status": "主代理 Claude Code 跑 5 step（2026-06-22 G2 P0b 实装）：核心 reconcile.py 6 mode 一体化（detect-changes/compute-radius/patch/audit/propagation-check/report）· patch step 调 gen_fixer validator-repair（真 API · gen-model）· audit step 复用 locked_fact_cross_scene_scanner · 整体 advisory shadow 不引入新 hard_gate",
   "_w5_propagation_note_20260627": "🔴 W5 传播债务校验（completeness critic 揪出的零约束裸奔环节）：reconcile 改设定后旧值是否真正传播到受影响章节此前无机器校验——patch 失败/跳过/strategy=D 时旧值残留正文/changes（propagation debt）无人察觉 → 下次写作 build_manifest 仍读旧描述穿帮。step5 prepend `? --mode propagation-check`（容忍·advisory）扫受影响章节 before 旧值残留·列『未传播章节』→ propagation_debt.json·report 汇总进 propagation_summary + propagation_debt_chapters。北极星⑤：advisory·只标债务绝不自动改正文（传播决策权在模型/用户）·绝不翻转 verdict·不引入新 hard_gate。"
 }

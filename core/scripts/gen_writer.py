@@ -1715,7 +1715,7 @@ def _stream_once_gemini(profile, system: str, user: str, max_tokens: int,
 
 
 # API 调用健壮性常量（2026-05-30 加固）
-GEN_MODEL_TIMEOUT = 180.0  # 与 ai_wrapper.py:154 对齐
+GEN_MODEL_TIMEOUT = 180.0  # 与 llm_transport.DEFAULT_TIMEOUT 对齐
 GEN_MODEL_MAX_RETRIES = 3  # 同 profile 限流/超时的有限重试次数
 GEN_MODEL_RETRY_BASE_DELAY = 2.0  # 指数退避基础秒数（2,4,8）
 
@@ -1748,14 +1748,14 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
     creative=True（写正文）→ 剔除 flash-tier 兜底，pro 全挂响亮失败（不静默降质 · 北极星：质量优先）。
 
     min_cjk：freestyle 正文长度软下限。设了 → 生成完（finish=stop）但正文 CJK < min_cjk 时，
-    追加 expand 续写（展开剩余场景）兜底，治 pro 等简洁模型单 cluster 偏短。蒸馏复刻/ai_wrapper
+    追加 expand 续写（展开剩余场景）兜底，治 pro 等简洁模型单 cluster 偏短。蒸馏复刻路径
     不传 → 行为零回归。
 
     返回 (full_text, used_profile)。
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
 
     2026-05-30 加固：
-      · OpenAI client 显式 timeout（对齐 ai_wrapper）防止无限挂起。
+      · OpenAI client 显式 timeout 防止无限挂起。
       · RateLimitError / APITimeoutError 在**同 profile** 做有限指数退避重试（再降级 fallback），
         避免一次 429/超时就降级到次优模型。
       · HTTP 200 但零 content（内容过滤 / reasoning model 全进 reasoning_content / 空输出）

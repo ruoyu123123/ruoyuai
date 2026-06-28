@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""llm_transport.py — 统一 LLM transport 层（程序驱动 M1 · 2026-06-10）
+"""llm_transport.py — 统一 LLM transport 层（2026-06-10）
 
-收敛 gen_writer / gen_creative / distill_replicate / ai_wrapper 4 份近重复 transport
-为单一模块。新代码（judge_runner / orchestrator）一律走本模块；存量脚本逐个迁移，
+收敛 gen_writer / gen_creative / distill_replicate 等多份近重复 transport
+为单一模块。新代码一律走本模块；存量脚本逐个迁移，
 迁移前行为零回归（本模块不 import 它们、不改它们）。
 
 统一的 8 件事：
@@ -48,7 +48,7 @@ except Exception:
         import re as _r
         return _r.sub(r"(key=)[^&\s]+", r"\1***", str(s))
 
-# 与 ai_wrapper.py:154 / gen_writer.GEN_MODEL_TIMEOUT 对齐
+# 与 gen_writer.GEN_MODEL_TIMEOUT 对齐
 DEFAULT_TIMEOUT = 180.0
 CONNECT_TIMEOUT = 15.0
 
@@ -84,7 +84,7 @@ class TransportEmpty(TransportError):
 # 还是 skill 失败。N=10 复刻验稳必须先压住这层噪声。
 #
 # 北极星边界：纯检测 helper（零副作用 · 零行为变更）。
-# - llm_transport.generate() 不主动调（避免污染 gen_writer / judge_runner / orchestrator 正常路径）
+# - llm_transport.generate() 不主动调（避免污染 gen_writer 等正常路径）
 # - 仅 distill_replicate.call_gen_model 在 stream 完成后主动调 → 命中走 3s 退避 + disclaimer 重试
 # - env REFUSAL_RETRY_ENABLED='0' 全局旁路（默认 '1'）
 #
@@ -220,7 +220,7 @@ def _strip_markdown_fence(text: str) -> str:
 
 
 def parse_json_loose(reply: str, fallback: dict | None = None) -> dict:
-    """三级宽松 JSON 抽取（合并 gen_creative._parse_json_loose + ai_wrapper 正则范式）。
+    """三级宽松 JSON 抽取（合并 gen_creative._parse_json_loose + 正则范式）。
 
     reasoning 模型前置 thinking 里可能混 {} 片段——优先 ```json 围栏（最后一个，
     模型常先打草稿再给终稿），其次整体 strip 后首字符判定，最后 first{...last} 兜底。
@@ -341,7 +341,7 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
         try:
             _t, _f, _u = _run(kw)
         except Exception as fmt_err:
-            # provider 不支持某 kwarg → 去掉重试一次（ai_wrapper 范式·response_format / stream_options）
+            # provider 不支持某 kwarg → 去掉重试一次（response_format / stream_options）
             es = str(fmt_err).lower()
             _retried = False
             if response_format_json and "response_format" in es:

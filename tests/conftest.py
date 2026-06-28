@@ -1,5 +1,4 @@
-# 顶层 conftest（rootdir=tests）—— 2026-06-20 GUI 删档后只剩 sys.path 注入。
-# 原 pytest_plugins=['nicegui.testing.user_plugin'] 随 tests/gui/ 整目录一同删除。
+# 顶层 conftest（rootdir=tests）—— 只做 sys.path 注入（项目根 + core/scripts）。
 import sys
 from pathlib import Path
 

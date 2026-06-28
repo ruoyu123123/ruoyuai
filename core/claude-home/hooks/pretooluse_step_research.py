@@ -25,7 +25,7 @@ from pathlib import Path
 
 # 🔴 2026-06-27 C16：判定逻辑抽到共享库 plan_step_gates（北极星⑥消重复）。本 hook 改薄
 # wrapper：解析 stdin → 找 step → 调 check_research_ref → ok?exit0:exit2。
-# 🔴 北极星护栏：research 门是 advisory（gate_level=advisory·orchestrator 路径软放行），
+# 🔴 北极星护栏：research 门是 advisory（gate_level=advisory·plan 层软放行），
 # 但 hook 路径**保持原行为不变**（缺失 → exit 2），由 wrapper 一律 fail→exit2 实现。
 _SCRIPTS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
@@ -88,7 +88,7 @@ def main():
 
     # 🔴 C16：判定下沉到 check_research_ref。hook 路径不传 auto_pilot/research_skipped
     # → 与原 hook 行为等价（缺 research_ref 文件 → ok=False → exit 2）。advisory 软放行
-    # 仅 orchestrator 路径生效（北极星⑤：research 永不在写作主轨硬锁）。
+    # 仅在脚本路径传 auto_pilot/research_skipped 时生效（北极星⑤：research 永不在写作主轨硬锁）。
     result = check_research_ref(step_info, project_dir=project_dir,
                                auto_pilot=False, research_skipped=False)
     if result["ok"]:

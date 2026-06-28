@@ -27,7 +27,7 @@
 
 | 场景 | 入口 | 说明 |
 |---|---|---|
-| **plan 内（/outline 主路径）** | `outline.plan.json` step 1 `init_project.py … --emit-style-options` → after-pause `--style <名>` → step 6 `scaffold_subsystems.py emit` → step 7 `verify` | orchestrator/GUI 机械驱动·分步建目录+风格+34 子系统 |
+| **plan 内（/outline 主路径）** | `outline.plan.json` step 1 `init_project.py … --emit-style-options` → after-pause `--style <名>` → step 6 `scaffold_subsystems.py emit` → step 7 `verify` | 主代理 Claude Code 按 plan steps 分步建目录+风格+34 子系统 |
 | **plan 外（CLI 测试 / 手动 / 一键）** | `python core/scripts/init_project.py "<项目路径>" --scaffold [--style <名>]` | 🆕 一条命令建完整骨架（目录+git+.wal+34 子系统[+风格档]）·幂等不覆盖已填 |
 
 > `--scaffold` 复用 `scaffold_subsystems.emit`（同一真理源 `subsystem_skeletons.json`），所以

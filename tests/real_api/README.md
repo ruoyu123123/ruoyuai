@@ -50,7 +50,7 @@ done
 | `test_real_judge_truncation.py` | **§3 深 schema judge 截断率**：10669 CJK 长 draft 喂 validator/voice/reading-reflector | ✅ 长输入全 ok·retries=0·无截断（截断只在完整管线 manifest 撑大总 prompt 时触发·transport 续写兜住） |
 | `test_real_write_save_loop.py` | **完整写作循环**：真 cluster-write → 真 save-state → 真 emergence·验唯一没测的 outline-planner 真走向卡 | ✅ 真风格档种子 → 12246 CJK 健康稿·切 3 章·outline-planner 涌现 cluster_002 3 候选·全循环跑通 |
 
-闭合 PROGRAM_DRIVEN.md「上线前必验」§1（M2 金标准）+ §3（深 schema 截断率）。
+覆盖真模型行为的关键上线前验证：judge 金标准（M2 · 真作者原文喂 judge 验字段完整性 + 作者档第一权威注入）+ 深 schema judge 截断率。
 
 ## 关键纪律（写新真 API 测试照搬）
 

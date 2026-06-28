@@ -14,8 +14,7 @@ exit 0 = 放行, exit 2 = 拒绝
 plan_state(tampered) → 调 check → 打印 warnings → ok ? exit 0 : exit 2。
 
 与原 hook **exit 语义完全等价**：所有硬规则命中 → exit 2；warn-only（规则 4/9）
-只打印不退出。orchestrator 程序驱动路径的 agent 走 judge_runner（gen-model·
-deterministic 构造），不经本注入门——其 tampered 不变式由 resume 时 verify_plan 覆盖。
+只打印不退出。
 
 历史背景（保留供追溯）：
 - 规则 5/6：多步流水线 Agent 必须含 PLAN_ID/STEP；含 PLAN_ID 视为契约完整跳过

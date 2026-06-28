@@ -522,7 +522,7 @@ splitter 已把 cluster 草稿切成物理章，novel-validator-checker 发现�
 
 # ============ Gen-Model 调用（含 fallback 链） ============
 # API 调用健壮性常量（2026-05-30 加固 · 对齐 gen_writer.py:514-517）
-GEN_MODEL_TIMEOUT = 180.0  # 与 ai_wrapper.py:154 / gen_writer 对齐
+GEN_MODEL_TIMEOUT = 180.0  # 与 gen_writer.GEN_MODEL_TIMEOUT 对齐
 GEN_MODEL_MAX_RETRIES = 3  # 同 profile 限流/超时的有限重试次数
 GEN_MODEL_RETRY_BASE_DELAY = 2.0  # 指数退避基础秒数（2,4,8）
 
@@ -576,7 +576,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
 
     2026-05-30 加固（对齐 gen_writer.call_gen_model · gen_fixer 会**原地覆写整章正文**，
     截断/空响应后果比 gen_writer 写草稿更重，故防护必须等价）：
-      · OpenAI client 显式 timeout（对齐 ai_wrapper / gen_writer）防止无限挂起。
+      · OpenAI client 显式 timeout（对齐 gen_writer）防止无限挂起。
       · RateLimitError / APITimeoutError 在**同 profile** 做有限指数退避重试（再降级 fallback），
         避免一次 429/超时就降级到次优模型。
       · finish_reason == "length"（命中 max_tokens 被截断）自动续写，避免半截正文覆写整章。

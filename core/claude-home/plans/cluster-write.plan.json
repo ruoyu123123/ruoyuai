@@ -15,8 +15,8 @@
       "required": true,
       "skip_output_allowed": false,
       "_doc_h7_fix": "2026-05-29 复审修复（H7）：plan_tracker create 只传 --key（纯数字）不传 --chapter → {ch:03d} 被替换成空 → 旧 expected_outputs 变成不存在的 ch_.json 路径 → step1 死锁。改目录级检查：.manifest 目录必由 build_manifest save_json mkdir 落地（起首章号 START_CH 在 create 时尚未 resolve，故不能用 {ch:03d}）。.style_directive 仅在项目有 style_profile 时才写（条件产物），从 hard expected_output 移除避免误 FAIL。",
-      "_doc_program_driven": "v28 程序驱动（2026-06-10）：scripts 由 orchestrator.py 执行。<cluster_start_ch> 由 driver prime_cluster_context 用 cluster_lookup 权威算出（上一 cluster 范围 hi+1）。行首 '? ' = 条件脚本（style_injector 无风格档 exit 1 是条件不适用非错误）。",
-      "_doc_c16": "🔴 2026-06-27 C16：build-manifest=cluster 开写前/走向卡前步·加 research_ref（调研先行门·**advisory 永不硬锁写作主轨**·北极星⑤）。⚠️ 刻意指 .research_cache **目录**而非定值文件：① novel-researcher 输出是时间戳变名（{task_type}_{slug}_{ts}）·定值文件名必误报 ② 目录在 outline step2 即建（.placeholder）→ cluster-write 时恒存在 → 门恒过·零噪声 ③ 真研究全无的 book 才 advisory 提示（orchestrator 软放行+记 waiver·绝不像「没调研缓存就不让写」那样硬锁 fluid 涌现）。绝不接 writer 正文步（step2）。",
+      "_doc_pipeline": "主代理 Claude Code 执行 scripts。<cluster_start_ch> 用 cluster_lookup 权威算出（上一 cluster 范围 hi+1）·主代理跑脚本前解析填实。行首 '? ' = 条件脚本（style_injector 无风格档 exit 1 是条件不适用非错误）。",
+      "_doc_c16": "🔴 2026-06-27 C16：build-manifest=cluster 开写前/走向卡前步·加 research_ref（调研先行门·**advisory 永不硬锁写作主轨**·北极星⑤）。⚠️ 刻意指 .research_cache **目录**而非定值文件：① novel-researcher 输出是时间戳变名（{task_type}_{slug}_{ts}）·定值文件名必误报 ② 目录在 outline step2 即建（.placeholder）→ cluster-write 时恒存在 → 门恒过·零噪声 ③ 真研究全无的 book 才 advisory 提示（主代理软放行+记 waiver·绝不像「没调研缓存就不让写」那样硬锁 fluid 涌现）。绝不接 writer 正文步（step2）。",
       "research_ref": "_数据库/.research_cache",
       "scripts": [
         "? python core/scripts/auto_fate_draw.py {project_root} <cluster_start_ch>",
@@ -34,7 +34,7 @@
       "required": true,
       "must_spawn_agent": "novel-writer",
       "agent_executor": "script",
-      "_doc_program_driven": "novel-writer 是创意 wrapper 非 judge——程序驱动下 driver 直接跑 gen_writer.py（agent_executor=script 跳过 judge 派发）。must_spawn_agent 保留供 Claude 编排路径 + end_plan 校验（判存在走 judge_report_path 声明的 draft 文件）。",
+      "_doc_pipeline": "novel-writer 是创意 wrapper 非 judge——agent_executor=script 表示工作由 scripts[] 的 gen_writer.py 完成，主代理不另派 judge。must_spawn_agent 供 end_plan 校验（判存在走 judge_report_path 声明的 draft 文件）。",
       "scripts": [
         "python core/scripts/gen_writer.py --project {project_root} --cluster <cluster_num>"
       ],
@@ -52,7 +52,7 @@
       "required": true,
       "must_spawn_agent": "novel-reading-reflector",
       "skip_output_allowed": false,
-      "_doc_program_driven": "v28 程序驱动：① audit_hub 退出码语义上移成 control_flow.exit_codes（0=pass/1=auto_fixed 均继续·2=needs_agent→派单 validator-checker·3=fatal 停）② reading-reflector ROUND 循环上移成 control_flow.round_loop（连续 3 轮 0 issue 放行·超 5 轮软预算放行·advisory 非门禁）③ judge_report_path 的 <round> 由 end_plan 通配校验（任一轮存在即过）④ touch_outputs 落 .placeholder（多轮产物文件名可变的存在性代理）。control_flow 只表达控制流不编码创作决策（北极星⑤）。",
+      "_doc_pipeline": "① audit_hub 退出码语义上移成 control_flow.exit_codes（0=pass/1=auto_fixed 均继续·2=needs_agent→主代理派单 validator-checker·3=fatal 停）② reading-reflector ROUND 循环上移成 control_flow.round_loop（连续 3 轮 0 issue 放行·超 5 轮软预算放行·advisory 非门禁）③ judge_report_path 的 <round> 由 end_plan 通配校验（任一轮存在即过）④ touch_outputs 落 .placeholder（多轮产物文件名可变的存在性代理）。control_flow 只表达控制流不编码创作决策（北极星⑤）。",
       "agent_input": {
         "PROJECT": "{project_root}",
         "CLUSTER_ID": "cluster_{key}",
@@ -75,7 +75,7 @@
           "pass_field": "verdict",
           "pass_value": "pass"
         },
-        "_doc_c04_c05": "🔴 2026-06-27 C04/C05：hard_gate 质量地板 + 修复重验闭环（治①round_loop 软放行后带病草稿原封切章 ②audit 命中 hard_gate 只派单一次不重验）。orchestrator 读 audit_report·residual=[未豁免 hard_gate]（**只认 audit_hub.HARD_GATE_CODES**·阅读轨/prose_rhythm/hook/voice 的 advisory 残留绝不触发 FAIL·北极星护栏命门）·非空→有界 dispatch fix_agent + 重跑 reaudit_script(--auto-fix) ≤max_fix_rounds 轮·用尽仍残留 raise 停 step3 不进切章 step6（可 --resume）。",
+        "_doc_c04_c05": "🔴 2026-06-27 C04/C05：hard_gate 质量地板 + 修复重验闭环（治①round_loop 软放行后带病草稿原封切章 ②audit 命中 hard_gate 只派单一次不重验）。主代理读 audit_report·residual=[未豁免 hard_gate]（**只认 audit_hub.HARD_GATE_CODES**·阅读轨/prose_rhythm/hook/voice 的 advisory 残留绝不触发 FAIL·北极星护栏命门）·非空→有界 dispatch fix_agent + 重跑 reaudit_script(--auto-fix) ≤max_fix_rounds 轮·用尽仍残留 raise 停 step3 不进切章 step6（可 --resume）。",
         "hard_gate_reverify": {
           "audit_report": "_数据库/.audit/cluster_{key}_audit.json",
           "reaudit_script": "python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id {key} --auto-fix --waivers '{project_root}/章节/cluster_{key}_draft/cluster_{key}_changes.json'",
@@ -110,7 +110,7 @@
       "judge_report_path_secondary": "_数据库/.judge_reports/cluster_{key}_voice-checker.json",
       "skip_output_allowed": true,
       "expected_outputs": [],
-      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_voice-checker.json（程序驱动下为 brief 的 secondary 落盘·主载体 brief 供 gen_fixer --mode voice-fix 消费）"
+      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_voice-checker.json（brief 的 secondary 落盘·主载体 brief 供 gen_fixer --mode voice-fix 消费）"
     },
     {
       "n": 5,
@@ -141,7 +141,7 @@
       "required": true,
       "must_spawn_agent": "novel-chapter-splitter",
       "agent_executor": "script",
-      "_doc_program_driven": "v28 程序驱动：splitter 是纯格式层非 judge（agent_executor=script·北极星④）。<cluster_start_ch>/<prev_pending_tail> 由 driver prime_cluster_context 算（cluster_lookup 权威+pending_tail 物理探测·空值时 --previous-pending-tail 整对自动丢弃）；<chapter_range_dash> 经 data_flow 从 splitter WAL lazy 回填（同 step 内行 1 产 → 行 2 消费·just-in-time 解析）；<rhythm> 从 用户偏好.json 读（缺省 标准）。",
+      "_doc_pipeline": "splitter 是纯格式层非 judge（agent_executor=script·北极星④）。<cluster_start_ch>/<prev_pending_tail> 用 cluster_lookup 权威算 + pending_tail 物理探测（空值时 --previous-pending-tail 整对自动丢弃）；<chapter_range_dash> 经 data_flow 从 splitter WAL lazy 回填（同 step 内行 1 产 → 行 2 消费·just-in-time 解析）；<rhythm> 从 用户偏好.json 读（缺省 标准）。",
       "judge_report_path": "_数据库/.wal/splitter_cluster_{key}_decisions.json",
       "data_flow": {
         "<rhythm>": {
@@ -161,7 +161,7 @@
         "_数据库/.wal/splitter_cluster_{key}_decisions.json"
       ],
       "scripts": [
-        "# v27 跨 cluster 补料: <prev_pending_tail> 为空时 --previous-pending-tail 整对被 driver 丢弃",
+        "# v27 跨 cluster 补料: <prev_pending_tail> 为空时 --previous-pending-tail 整对被主代理丢弃",
         "python core/scripts/chapter_splitter.py {project_root} --mode ecas_freestyle --cluster-id cluster_{key} --cluster-start-ch <cluster_start_ch> --draft {project_root}/章节/cluster_{key}_draft/cluster_{key}_draft.txt --rhythm <rhythm> --previous-pending-tail <prev_pending_tail>",
         "python core/scripts/gen_chapter_titles.py --project {project_root} --chapters <chapter_range_dash>",
         "python core/scripts/split_cluster_changes.py {project_root} --cluster {key}"
