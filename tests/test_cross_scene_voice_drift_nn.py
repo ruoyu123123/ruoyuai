@@ -158,6 +158,24 @@ def test_embedding_exception_graceful_fallback(monkeypatch):
     assert all(it["type"] != "embedding_voice_drift" for it in rep["drift_issues"])
 
 
+# ─────────────────────────── 阈值 env 覆盖 ───────────────────────────
+def test_embed_drift_floor_env_override(monkeypatch):
+    """CROSS_SCENE_EMBED_DRIFT_FLOOR 抬高到 1.5 → 即便正交(距离 1.0)也不报（floor 可调·🔬 校准）。"""
+    monkeypatch.setattr(es, "embedding_method", lambda: "mstyle:test")
+    monkeypatch.setattr(es, "compute_embedding", _fake_marker)
+    monkeypatch.setenv("CROSS_SCENE_EMBED_DRIFT_FLOOR", "1.5")
+    root, d = _draft_orthogonal()
+    rep = vd.scan(root, d)
+    assert rep["embed_backend_active"] is True
+    assert rep["embedding_drift_count"] == 0      # 1.0 < 1.5 floor → 不报
+    assert vd._embed_drift_floor() == 1.5
+
+
+def test_embed_drift_floor_default():
+    """无 env → 默认 0.3。"""
+    assert vd._embed_drift_floor() == vd.DEFAULT_EMBED_DRIFT_FLOOR == 0.3
+
+
 # ─────────────────────────── advisory 边界 ───────────────────────────
 def test_embedding_path_always_advisory(monkeypatch):
     """embedding 命中也永远 advisory·report 无 hard_gate。"""
