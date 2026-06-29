@@ -150,3 +150,7 @@ core/ml/**/*.safetensors
 core/ml/**/*.onnx
 core/ml/models/
 core/ml/hf_cache/
+core/ml/**/training_data/
+core/ml/**/training_pool/
+core/ml/**/cache/
+core/ml/.venv/

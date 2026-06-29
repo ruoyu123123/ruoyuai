@@ -1,0 +1,57 @@
+{
+  "models": {
+    "coherence_binary": {
+      "versions": [
+        {
+          "version": "v1",
+          "path": "core/ml/coherence/runs/coherence_v1",
+          "metrics": {
+            "accuracy": 0.604,
+            "precision": 0.8634,
+            "recall": 0.1663,
+            "f1": 0.2788,
+            "spearman": 0.4863
+          },
+          "data_size": 25000,
+          "env_gate": "RUOYU_NN_COHERENCE",
+          "status": "shadow",
+          "registered_at": "2026-06-29T14:46:20Z"
+        }
+      ],
+      "active_version": null,
+      "shadow_version": "v1"
+    },
+    "emotion_vad": {
+      "versions": [
+        {
+          "version": "v1",
+          "path": "core/ml/emotion_vad/checkpoints/va_base",
+          "metrics": {
+            "mean_ccc": 0.8
+          },
+          "data_size": 12000,
+          "env_gate": "RUOYU_NN_VAD",
+          "status": "active",
+          "registered_at": "2026-06-29T14:46:20Z"
+        }
+      ],
+      "active_version": "v1",
+      "shadow_version": null
+    },
+    "style_embed": {
+      "versions": [
+        {
+          "version": "v1",
+          "path": "core/ml/style_embed/runs/style_embed_char_v1/final",
+          "metrics": {},
+          "data_size": 0,
+          "env_gate": "EMBED_BACKEND",
+          "status": "active",
+          "registered_at": "2026-06-29T14:46:20Z"
+        }
+      ],
+      "active_version": "v1",
+      "shadow_version": null
+    }
+  }
+}

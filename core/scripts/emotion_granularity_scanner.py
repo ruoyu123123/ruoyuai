@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# 🔴 2026-06-29 NN增强路径
 """emotion_granularity_scanner.py — 情绪颗粒度粗（粗类情绪大词裸用）检测（advisory · cluster · 2026-06-19）
 
 【缺口】SAGE (Emotional Granularity) 实证：高情绪颗粒度 = 用细分情绪词（不甘/讪讪/悻悻/
@@ -22,6 +23,11 @@
   advisory，code EMOTION_GRANULARITY_COARSE **绝不进 audit_hub.HARD_GATE_CODES**。
   env EMOTION_GRANULARITY_MODE: off / shadow(默认·只记不判) / active。
   🔬 阈值 COARSE_EMOTION_PER_1K_FLOOR 待金标准校准（真作者原文喂自身 PASS·防矫枉过正）。
+
+【🔴 2026-06-29 NN增强路径（env RUOYU_NN_VAD=1·默认 off）】裸关键词词频之外另开真 NN VAD 路径：
+  段级 (V,A,D) → vad_variance（各轴方差之和·越大颗粒度越高=好）+ vad_coverage（各轴极差之积·
+  情绪丰富度）。方差低于 floor = 情绪平铺(颗粒度粗) → 同 code EMOTION_GRANULARITY_COARSE（details
+  多带 vad_variance）。NN 优先·桥失败/未启用 → 回退关键词词频（零回归·默认安全·不崩）·仍全 advisory。
 
 用法：python emotion_granularity_scanner.py <draft_path> [--manifest m.json] [--project <root>]
 """
@@ -100,6 +106,75 @@ def _author_floor(project_root):
     return round(float(mean) + 2.0 * float(sigma), 3)
 
 
+# ── 🔴 2026-06-29 NN增强路径 — 段级 VAD 方差/覆盖量化情绪颗粒度（env RUOYU_NN_VAD=1 门控）─────
+# 思路（北极星⑤·全 advisory）：高情绪颗粒度 = 段与段之间 VAD 读数有起伏（精准命名不同感受）；
+# 低颗粒度 = 所有段 VAD 平铺一个调子。真 NN VAD（CCC0.80）取每段 (V,A,D)：
+#   · vad_variance = 各轴方差之和（越大=颗粒度越高=好）→ 低于 floor = 情绪平铺(颗粒度粗)
+#   · vad_coverage = 各轴极差之积（bounding box 体积·凸包体积的零依赖稳健代理）= 情绪丰富度
+# 比裸关键词词频更精确（量化真实情绪起伏·非数大词）。env 默认 off → predict_batch 返全 None →
+# 本函数返 None → scan 回退关键词路径（零回归·默认安全·失败不崩）。
+MIN_VAD_SEGMENTS = 5          # 至少 5 段有效 VAD 读数才算方差（样本足·否则退关键词）
+MIN_SEG_CJK_FOR_VAD = 8       # 段 < 8 CJK 噪声大·丢弃
+# 🔬 待金标准校准（真作者原文喂自身 PASS·防矫枉过正）：段级 VAD 各轴方差之和低于此 = 情绪平铺。
+# 保守占位（VAD∈[0,1]·单轴方差≤0.25·健康文本 2-3 轴和 ~0.04-0.13）·宁可漏报不误报（北极星⑤）。
+VAD_VARIANCE_FLOOR = 0.02
+
+
+def _variance(xs) -> float:
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    m = sum(xs) / n
+    return sum((x - m) ** 2 for x in xs) / n
+
+
+def _nn_vad_granularity(text: str):
+    """🔴 2026-06-29 NN增强路径 — 段级 VAD 方差/覆盖（env 门控·一次 subprocess·失败/未启用→None）。
+
+    返回 {vad_variance, vad_coverage, per_axis_variance, axes, segments_scored} 或 None
+    （RUOYU_NN_VAD≠1 / 有效段不足 / 桥失败/条数失配 → None → 调用方回退关键词·零回归·不崩）。
+    """
+    if os.environ.get("RUOYU_NN_VAD") != "1":
+        return None
+    paras = [p.strip() for p in re.split(r"\n\s*\n", _strip_changes(text)) if p.strip()]
+    segs = [p for p in paras if _cjk_count(p) >= MIN_SEG_CJK_FOR_VAD]
+    if len(segs) < MIN_VAD_SEGMENTS:
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import nn_vad_bridge
+        preds = nn_vad_bridge.predict_batch(segs)
+    except Exception:  # noqa: BLE001 NN 不可用 → 退关键词（不崩）
+        return None
+    if not preds or len(preds) != len(segs):
+        return None
+    vs, as_, ds = [], [], []
+    for p in preds:
+        if p and p.get("valence") is not None and p.get("arousal") is not None:
+            vs.append(float(p["valence"]))
+            as_.append(float(p["arousal"]))
+            d = p.get("dominance")
+            if d is not None:
+                ds.append(float(d))
+    if len(vs) < MIN_VAD_SEGMENTS:
+        return None
+    has_d = len(ds) == len(vs)
+    var_v, var_a = _variance(vs), _variance(as_)
+    var_d = _variance(ds) if has_d else None
+    vad_variance = round(var_v + var_a + (var_d or 0.0), 5)
+    rng_d = (max(ds) - min(ds)) if has_d else None
+    vad_coverage = round((max(vs) - min(vs)) * (max(as_) - min(as_))
+                         * (rng_d if rng_d is not None else 1.0), 5)
+    return {
+        "vad_variance": vad_variance,
+        "vad_coverage": vad_coverage,
+        "per_axis_variance": {"V": round(var_v, 5), "A": round(var_a, 5),
+                              "D": round(var_d, 5) if var_d is not None else None},
+        "axes": 3 if has_d else 2,
+        "segments_scored": len(vs),
+    }
+
+
 def scan(draft_path, project_root=None) -> dict:
     """情绪颗粒度粗（粗类情绪大词裸用密度）检测。永远 advisory（北极星⑤）。"""
     mode = _mode()
@@ -132,20 +207,39 @@ def scan(draft_path, project_root=None) -> dict:
     out["floor_used"] = floor
     out["author_baseline"] = author_floor
 
+    # 🔴 2026-06-29 NN增强路径 — RUOYU_NN_VAD=1 时段级 VAD 方差量化颗粒度(更精确·NN 优先)·失败兜底关键词
+    nn = _nn_vad_granularity(draft)
+    out["detection_method"] = "nn_vad_variance" if nn else "keyword_density"
+
     msg = None
-    if per_1k > floor:
+    if nn is not None:
+        out["vad_variance"] = nn["vad_variance"]
+        out["vad_coverage"] = nn["vad_coverage"]
+        out["vad_per_axis_variance"] = nn["per_axis_variance"]
+        out["vad_segments_scored"] = nn["segments_scored"]
+        if nn["vad_variance"] < VAD_VARIANCE_FLOOR:
+            msg = (f"情绪颗粒度偏粗：段级 VAD 方差 {nn['vad_variance']} < {VAD_VARIANCE_FLOOR}"
+                   f"（{nn['segments_scored']} 段情绪平铺缺起伏·VAD 覆盖 {nn['vad_coverage']}）·"
+                   f"建议增强情绪层次/换细分词精准命名感受")
+    elif per_1k > floor:
         msg = (f"情绪颗粒度偏粗：粗情绪大词裸用 {per_1k}/千字 > {floor}"
                f"（{len(hits)} 处·愤怒/悲伤/高兴/害怕 等四大类直陈）·"
                f"缺细分词（不甘/讪讪/悻悻/怅惘/悸动）·建议换细分词或结构化呈现")
     if msg:
         if mode == "active":
-            out["violations"].append({
+            violation = {
                 "kind": "emotion_granularity_coarse", "severity": "minor",
                 "message": msg, "per_1k": per_1k, "count": len(hits),
                 "floor_used": floor,
+                "detection_method": out["detection_method"],
                 "_doc": "情绪颗粒度是创作判断·粗大词有时合理(高潮直给/快节奏短打)→advisory 待裁决·"
-                        "裸词频是可算半边粗糙哨兵·真情绪表达质量留 judge/作者",
-            })
+                        "裸词频/段级 VAD 方差是可算半边粗糙哨兵·真情绪表达质量留 judge/作者",
+            }
+            if nn is not None:   # NN 路径 details 多带 vad_variance（团队约定）
+                violation["vad_variance"] = nn["vad_variance"]
+                violation["vad_coverage"] = nn["vad_coverage"]
+                violation["vad_variance_floor"] = VAD_VARIANCE_FLOOR
+            out["violations"].append(violation)
             out["verdict"] = "FAIL_MINOR"
             out["warning"] = msg
         else:  # shadow：只记不判（violations 空·零回归）

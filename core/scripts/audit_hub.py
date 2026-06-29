@@ -588,7 +588,7 @@ def _parse_issues_list_scanner(stdout: str, source: str, dimension: str,
         gl = _gate_level_for(code, severity)
         if gl != "hard_gate" and it.get("gate_level") == "hard_gate" and code in HARD_GATE_CODES:
             gl = "hard_gate"
-        desc = it.get("msg", "") or it.get("desc", "")
+        desc = it.get("msg", "") or it.get("message", "") or it.get("desc", "")
         if it.get("count") is not None:
             desc = f"{desc}（命中 {it.get('count')} 处）"
         issues.append({
@@ -802,7 +802,7 @@ def _parse_advisories_scanner(stdout: str, source: str, default_code: str, dimen
             continue
         severity = _norm_severity(it.get("severity", "info"))
         gl = _gate_level_for(code, severity)
-        desc = it.get("msg", "") or it.get("desc", "")
+        desc = it.get("msg", "") or it.get("message", "") or it.get("desc", "")
         issues.append({
             "dimension": dimension, "severity": severity,
             "gate_level": gl, "code": code, "desc": str(desc),
@@ -2772,6 +2772,47 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                      out, "imageability_round_trip_probe",
                      "IMAGEABILITY_ROUND_TRIP_LOW", "风格")),
                 # ============ [G2 P2 2026-06-22] 17 SHADOW_SCANNERS 接齐 END ============
+                # ============ [2026-06-29 NN 模型扩展] 5 个 NN-backed scanner ============
+                # [2026-06-29 NN②] 信息密度 surprisal · GPT-2 token-level 段间方差/断崖/单调/高潮失衡
+                # · RUOYU_NN_SURPRISAL 门控(默认 off·桥不可用返回空)·advisory·默认 shadow
+                ("surprisal",
+                 [child_python(), str(_SCRIPT_DIR / "surprisal_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_issues_list_scanner(
+                     out, "surprisal_scanner", "风格")),
+                # [2026-06-29 NN⑥] 主题漂移 · embedding cosine 距离 vs scope_summary
+                # · EMBED_BACKEND 非 hash 才激活·advisory·默认 shadow
+                ("topic_drift",
+                 [child_python(), str(_SCRIPT_DIR / "topic_drift_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_issues_list_scanner(
+                     out, "topic_drift_scanner", "风格")),
+                # [2026-06-29 NN③A] 情感弧线分类 · Reagan 六弧型 · 复用 VAD 或词典兜底
+                # · RUOYU_NN_VAD 门控(VAD 桥不可用退词典)·advisory·默认 shadow
+                ("emotion_arc",
+                 [child_python(), str(_SCRIPT_DIR / "emotion_arc_classifier.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_issues_list_scanner(
+                     out, "emotion_arc_classifier", "风格")),
+                # [2026-06-29 NN①] 段落连贯性 · 相邻段对 BERT 二分类 + 滑窗
+                # · RUOYU_NN_COHERENCE 门控(桥不可用返回空)·advisory·默认 shadow
+                ("coherence",
+                 [child_python(), str(_SCRIPT_DIR / "coherence_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_issues_list_scanner(
+                     out, "coherence_scanner", "风格")),
+                # [2026-06-29 NN⑤④] 角色一致性 · 角色网络+共指消解整合
+                # · CHARACTER_CONSISTENCY_MODE 门控(默认 shadow)·advisory
+                ("character_consistency",
+                 [child_python(), str(_SCRIPT_DIR / "character_consistency_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_issues_list_scanner(
+                     out, "character_consistency_scanner", "角色")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
