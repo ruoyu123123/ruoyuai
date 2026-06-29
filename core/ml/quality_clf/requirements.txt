@@ -1,0 +1,19 @@
+# 🔴 2026-06-29 NN训练:质量AI腔判别 — 训练/评估依赖
+# 安装（venv: core/ml/.venv·后台已在装·别重装）：
+#   torch 走 cu124 轮子（RTX 4070Ti / Ada / CUDA 12.4）
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#
+# 注意：data_prep.py / features.py 纯 stdlib，无需以下任何依赖即可跑。
+#       以下仅 train.py / eval.py / ai_tone_scanner.py（GPU 推理）+ gen_negatives.py 需要。
+
+torch>=2.4            # cu124 轮子
+transformers>=4.44
+datasets>=2.20
+peft>=0.12            # 大模型 LoRA（--lora）
+scikit-learn>=1.3     # AUC/F1/PR-AUC 指标
+numpy>=1.26
+accelerate>=0.33      # 可选·多卡/混精调度
+sentencepiece>=0.2    # DeBERTa-v2 / bge-m3 分词
+openai>=1.40          # 仅 gen_negatives.py 造负样本用（用系统 Python 跑亦可）
+# 可选·PPL 辅助特征（compute_ppl，见 README §特征）：
+#   transformers 已含；需额外下载 Qwen/Qwen2.5-0.5B 或 uer/gpt2-chinese-cluecorpussmall

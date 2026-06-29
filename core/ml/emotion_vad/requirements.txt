@@ -1,0 +1,10 @@
+# 🔴 2026-06-29 NN训练:情绪VAD回归 依赖
+# data_prep.py / metrics.py / eval.py(--baseline-only) / vad_infer.py(lexicon 模式) = 纯 stdlib，无需以下任何包。
+# train.py / eval.py(--ckpt) / vad_infer.py(model 模式) 需：
+torch>=2.4            # cu124（RTX 4070Ti·fp16）·随 torch 装 numpy
+transformers>=4.40
+numpy>=1.24
+# 可选：
+# datasets>=2.18                     # 本管线用 stdlib 解析，未强依赖 datasets
+# scikit-learn>=1.3                  # metrics 已纯 stdlib 实现，无需 sklearn
+# opencc-python-reimplemented>=0.1.7 # data_prep --simplify 繁→简（生产建议·系统正文为简体）

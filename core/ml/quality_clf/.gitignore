@@ -1,0 +1,8 @@
+# 🔴 2026-06-29 NN训练:质量AI腔判别 — 数据/模型产物不入库
+data/
+runs/
+*.pt
+*.bin
+*.safetensors
+__pycache__/
+*.pyc

@@ -134,3 +134,19 @@ logs/
 
 # 🔴 2026-06-27 P2-12: triage band 运行时报告（band 自校准·不入库·避免 scaffold KNOWN_EXTRAS 网开）
 workspace/novels/*/_数据库/triage_band_report.json
+
+# ============================================================
+# 🔴 2026-06-29 本地GPU神经网络训练(core/ml/)：venv已被.venv/忽略·数据集+模型权重大二进制不入库(训练脚本入库)
+# ============================================================
+外部/
+core/ml/**/data/
+core/ml/**/datasets/
+core/ml/**/checkpoints/
+core/ml/**/runs/
+core/ml/**/wandb/
+core/ml/**/*.pt
+core/ml/**/*.bin
+core/ml/**/*.safetensors
+core/ml/**/*.onnx
+core/ml/models/
+core/ml/hf_cache/

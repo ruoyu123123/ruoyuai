@@ -1,0 +1,12 @@
+# 🔴 2026-06-29 NN训练:风格声纹嵌入 — 数据/权重/缓存不入库
+data/
+runs/
+checkpoints/
+*.bin
+*.safetensors
+*.pt
+*.ckpt
+__pycache__/
+*.pyc
+.cache/
+wandb/
