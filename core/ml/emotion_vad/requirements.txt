@@ -4,7 +4,8 @@
 torch>=2.4            # cu124（RTX 4070Ti·fp16）·随 torch 装 numpy
 transformers>=4.40
 numpy>=1.24
+opencc-python-reimplemented>=0.1.7  # 🔴 2026-06-29 NN情绪VAD集成：推理端简转繁(s2t)对齐繁体训练分布·
+                                    #   data_prep --simplify 亦用。缺失则原样输入(不崩·精度略降)。
 # 可选：
 # datasets>=2.18                     # 本管线用 stdlib 解析，未强依赖 datasets
 # scikit-learn>=1.3                  # metrics 已纯 stdlib 实现，无需 sklearn
-# opencc-python-reimplemented>=0.1.7 # data_prep --simplify 繁→简（生产建议·系统正文为简体）

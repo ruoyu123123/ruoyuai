@@ -5,6 +5,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import character_distinctiveness_scanner as cds  # noqa: E402
 
@@ -261,3 +263,81 @@ def test_invalid_mode_fallback():
     finally:
         os.environ.pop("CHARACTER_DISTINCTIVENESS_MODE", None)
         p.unlink(missing_ok=True)
+
+
+# ---------- 🔴 2026-06-29 NN风格声纹集成 ----------
+
+def test_nn_code_constant_not_hard_gate():
+    assert cds.CROSS_CHARACTER_VOICE_COLLISION_CODE == "CROSS_CHARACTER_VOICE_COLLISION"
+    try:
+        import audit_hub
+        assert "CROSS_CHARACTER_VOICE_COLLISION" not in audit_hub.HARD_GATE_CODES
+    except ImportError:
+        pass
+
+
+def test_default_distance_method_is_char3gram():
+    """CHARACTER_VOICE_EMBED 未开 → char-3gram 路径（零回归）。"""
+    os.environ.pop("CHARACTER_VOICE_EMBED", None)
+    text = "\n".join(_LONG_DIALOGUES_DISTINCT) + "\n" + _filler()
+    r = cds.compute_distinctiveness(text)
+    assert r["distance_method"] == "char_3gram_bootstrap"
+
+
+def test_nn_fallback_to_char3gram_when_bridge_none(monkeypatch):
+    """CHARACTER_VOICE_EMBED=1 但声纹桥返回 None → 兜底 char-3gram（不崩·默认安全）。"""
+    monkeypatch.setattr("embedding_store.ruoyu_style_encode_batch",
+                        lambda texts, model="author", **k: None)
+    monkeypatch.setenv("CHARACTER_VOICE_EMBED", "1")
+    text = "\n".join(_LONG_DIALOGUES_DISTINCT) + "\n" + _filler()
+    r = cds.compute_distinctiveness(text)
+    assert r["distance_method"] == "char_3gram_bootstrap"
+    assert r["mean_pair_distance"] is not None
+
+
+def test_nn_backend_collapse_emits_collision_code(monkeypatch):
+    """NN 桥返回近重合向量 → 撞声 → CROSS_CHARACTER_VOICE_COLLISION（active·advisory·永不 hard_gate）。"""
+    monkeypatch.setattr("embedding_store.ruoyu_style_encode_batch",
+                        lambda texts, model="author", **k: [[1.0, 0.0, 0.0] for _ in texts])
+    monkeypatch.setenv("CHARACTER_VOICE_EMBED", "1")
+    monkeypatch.setenv("CHARACTER_DISTINCTIVENESS_MODE", "active")
+    p = _write("\n".join(_LONG_DIALOGUES_DISTINCT) + "\n" + _filler())
+    try:
+        r = cds.scan(str(p))
+        assert r["distance_method"] == "ruoyu_style_char_nn"
+        assert r["code"] == "CROSS_CHARACTER_VOICE_COLLISION"
+        assert r["verdict"] == "FAIL_MINOR"
+        assert r["violations"][0]["code"] == "CROSS_CHARACTER_VOICE_COLLISION"
+        assert r["gate_level"] == "advisory"
+        assert "hard_gate" not in json.dumps(r, ensure_ascii=False)
+    finally:
+        p.unlink(missing_ok=True)
+
+
+def test_nn_backend_distinct_voices_pass(monkeypatch):
+    """NN 桥返回正交向量 → 距离大 → 不报（北极星⑤ 不矫枉过正）。"""
+    def _fake(texts, model="author", **k):
+        return [[1.0 if i == j else 0.0 for j in range(len(texts))]
+                for i in range(len(texts))]
+    monkeypatch.setattr("embedding_store.ruoyu_style_encode_batch", _fake)
+    monkeypatch.setenv("CHARACTER_VOICE_EMBED", "1")
+    monkeypatch.setenv("CHARACTER_DISTINCTIVENESS_MODE", "active")
+    p = _write("\n".join(_LONG_DIALOGUES_DISTINCT) + "\n" + _filler())
+    try:
+        r = cds.scan(str(p))
+        assert r["distance_method"] == "ruoyu_style_char_nn"
+        assert r["verdict"] == "PASS"
+        assert r["violations"] == []
+    finally:
+        p.unlink(missing_ok=True)
+
+
+@pytest.mark.skipif(os.environ.get("RUOYU_RUN_REAL_MODEL") != "1",
+                    reason="真声纹桥测试·需 venv+torch·设 RUOYU_RUN_REAL_MODEL=1 开启")
+def test_nn_real_bridge_runs(monkeypatch):
+    """venv 在 → 真 char 声纹 NN 互距跑通（distance_method=ruoyu_style_char_nn·不崩）。"""
+    monkeypatch.setenv("CHARACTER_VOICE_EMBED", "1")
+    text = "\n".join(_LONG_DIALOGUES_DISTINCT) + "\n" + _filler()
+    r = cds.compute_distinctiveness(text)
+    assert r["distance_method"] in ("ruoyu_style_char_nn", "char_3gram_bootstrap")
+    assert r["mean_pair_distance"] is not None

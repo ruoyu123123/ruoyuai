@@ -2176,6 +2176,22 @@ def evaluate(ref_text, gen_text: str,
             # 用 setdefault+extend（不覆盖）以与非补偿聚合 advisory 共存于同一顶层列表。
             report.setdefault("advisory_issues", [])
             report["advisory_issues"].extend(l3a.get("advisory_issues", []))
+
+    # 🔴 2026-06-29 NN风格声纹集成 — embedding-SFS 影子子维（env STYLE_EMBED_SFS·默认 off）。
+    # NN 作者风格向量 cosine(gen centroid, 作者 centroid)·与启发式 sfs_quick **并存对比**·
+    # 绝不替换 / 绝不改 sfs_quick/programmatic_score/grade 任何判决（北极星⑤ 顾问非法官）。
+    # 默认安全：系统 py3.14 无 torch → 经 embedding_store venv subprocess 桥编码·venv/模型缺
+    # → available=False·不崩（默认 off 时完全不算·零回归·零 torch 依赖）。
+    import os as _os
+    _emb_sfs_mode = (_os.environ.get("STYLE_EMBED_SFS") or "off").strip().lower()
+    if _emb_sfs_mode in ("shadow", "active", "1", "on"):
+        try:
+            from style_embed_sfs import compute_embedding_sfs
+            report["embedding_sfs"] = compute_embedding_sfs(gen_text, ref_texts=ref_texts)
+        except Exception as e:  # noqa: BLE001 — embedding-SFS 永远不阻断 SFS 评分
+            report["embedding_sfs"] = {"available": False, "embedding_sfs": None,
+                                       "gate_level": "advisory",
+                                       "reason": f"compute_failed: {str(e)[:160]}"}
     return report
 
 

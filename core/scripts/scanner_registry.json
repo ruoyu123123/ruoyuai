@@ -951,7 +951,7 @@
     "character_vad_ued_scanner": {
       "layer": "cluster",
       "script": "character_vad_ued_scanner.py",
-      "doc": "[2026-06-21 R19 W8 Batch-V·P0·临床 affect dynamics + arxiv 2503.23547] 3D VAD (Valence/Arousal/Dominance) × 6 UED (Inertia/Variability/Instability/Switch/Pulse/Augmentation) = 18 指标 per-character·零依赖引语切片(_QUOTE_PAT + 后置说/道/答 + 角色池.json 归属)·rolling 10·占位词典 core/data/nrc_vad_v2_placeholder.json (40 字 _placeholder=true) + cvaw_cvap_placeholder.json (30 词 _placeholder=true)·真 NRC-VAD v2 55k + CVAW/CVAP 8.5k defer·consolidate 加 vad_ued_signature SLOW_UPDATE 段(compute_vad_ued_signature)·作者档 quantitative.vad_ued_signature.per_character 第一权威·与 affective_signature(离散标签) / sentiment_arc_fractal(1D) / cross_cluster_ousiometric(2D) / emotion_curve_rescan(cluster 级) 严格正交·env CHARACTER_VAD_UED_MODE 默认 shadow·VAD_UED_DRIFT 绝不 hard_gate",
+      "doc": "[2026-06-21 R19 W8 Batch-V·P0·临床 affect dynamics + arxiv 2503.23547] 3D VAD (Valence/Arousal/Dominance) × 6 UED (Inertia/Variability/Instability/Switch/Pulse/Augmentation) = 18 指标 per-character·零依赖引语切片(_QUOTE_PAT + 后置说/道/答 + 角色池.json 归属)·rolling 10·词典 core/data/nrc_vad_v2_placeholder.json (40 字 _placeholder=true·中文无 per-char D 真标注) + cvaw_cvap_placeholder.json (7724 词 V/A·2026-06-29 NN情绪VAD集成 Phase-0 已替换为真 CVAW/CVAP 简体词典·_placeholder=false)·env RUOYU_NN_VAD=1 经 nn_vad_bridge 升级真 NN 模型(CCC 0.80·失败兜底词典)·consolidate 加 vad_ued_signature SLOW_UPDATE 段(compute_vad_ued_signature)·作者档 quantitative.vad_ued_signature.per_character 第一权威·与 affective_signature(离散标签) / sentiment_arc_fractal(1D) / cross_cluster_ousiometric(2D) / emotion_curve_rescan(cluster 级) 严格正交·env CHARACTER_VAD_UED_MODE 默认 shadow·VAD_UED_DRIFT 绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["VAD_UED_DRIFT"]
     },

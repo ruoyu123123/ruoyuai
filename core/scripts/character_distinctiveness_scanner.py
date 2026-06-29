@@ -41,6 +41,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 ISSUE_CODE = "INTER_CHARACTER_VOICE_COLLAPSE"   # ⚠️ advisory · 绝不进 HARD_GATE_CODES
+# 🔴 2026-06-29 NN风格声纹集成 — 声纹 NN 后端（env CHARACTER_VOICE_EMBED=1）的升级版 code。
+# 出场角色对话两两 NN cosine 互距「撞声」→ CROSS_CHARACTER_VOICE_COLLISION（advisory）。
+# = INTER_CHARACTER_VOICE_COLLAPSE 的声纹 NN 版（char-3gram 字面相似 → 真风格声纹相似）。
+# ⚠️ advisory · 绝不进 HARD_GATE_CODES（北极星②/⑤ 顾问非法官）。
+CROSS_CHARACTER_VOICE_COLLISION_CODE = "CROSS_CHARACTER_VOICE_COLLISION"
 
 # 对话归属正则（专名 ± 1-2 字 + 引导词 + 冒号/引号）
 # 启发式抓 "X说：" / "X道：" / "X笑道：" / "X低声道："
@@ -61,7 +66,12 @@ MIN_CJK = 500
 MIN_CHAR_TOKENS = 40         # 每角色 dialogue 至少 40 CJK 才入统计（样本足）
 MIN_CHARACTERS = 2           # 至少 2 个角色才能算 pair
 BOOTSTRAP_N = 20             # bootstrap 重抽样次数
-DEFAULT_MEAN_DISTANCE_FLOOR = 0.25  # mean pair distance < 此 → collapse
+DEFAULT_MEAN_DISTANCE_FLOOR = 0.25  # mean pair distance < 此 → collapse（char-3gram 标度）
+# 🔴 2026-06-29 NN风格声纹集成 — NN 声纹标度的 collapse floor（与 char-3gram 标度不同）。
+# 诚实：char 声纹模型 cos_same 0.93-0.97 偏塌缩（绝对值中等·AUC 0.653 超基线 8 点但非高判别），
+# 故 NN 标度的「异角色距离」天然偏小 → floor 取保守值（默认只在角色 NN 向量几乎重合才报·
+# 不矫枉过正·北极星⑤）。作者档 nn_mean_distance_min 第一权威·env CHARACTER_VOICE_EMBED_FLOOR 可覆盖。
+DEFAULT_NN_MEAN_DISTANCE_FLOOR = 0.05
 
 
 def _mode() -> str:
@@ -170,6 +180,39 @@ def _bootstrap_distance(a_text: str, b_text: str, n: int = BOOTSTRAP_N,
     return round(sum(distances) / len(distances), 4)
 
 
+def _nn_pair_distances(bag: dict):
+    """🔴 2026-06-29 NN风格声纹集成 — 角色声纹 NN 两两 cosine 互距（env CHARACTER_VOICE_EMBED=1）。
+
+    一次 batch 编码所有角色累积台词（走 embedding_store venv subprocess 桥·**character** 模型）
+    → 两两 distance = 1 - cosine。返回 (pairs, "ruoyu_style_char_nn") 或 **None**。
+
+    🔴 默认安全：env 未开 / venv / 模型 / torch 缺 / 桥失败 / 条数不符 → 返回 None
+       （调用方兜底 char-3gram bootstrap·绝不崩·零回归）。
+    """
+    if os.environ.get("CHARACTER_VOICE_EMBED") != "1":
+        return None
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        from embedding_store import ruoyu_style_encode_batch, cosine_similarity
+    except Exception:
+        return None
+    names = sorted(bag.keys())
+    try:
+        embs = ruoyu_style_encode_batch([bag[n] for n in names], model="character")
+    except Exception:
+        return None
+    if not embs or len(embs) != len(names):
+        return None
+    pairs = []
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            d = round(1.0 - cosine_similarity(embs[i], embs[j]), 4)
+            pairs.append({"a": names[i], "b": names[j], "distance": d})
+    return pairs, "ruoyu_style_char_nn"
+
+
 def _gini(values) -> float:
     """Gini 系数（0=完全均匀·1=完全集中）。values 必须非负。"""
     vals = sorted([float(v) for v in values if v is not None])
@@ -204,15 +247,22 @@ def compute_distinctiveness(text: str) -> dict:
             "pair_distances": [],
             "mean_pair_distance": None,
             "inter_character_voice_gini": None,
+            "distance_method": None,
             "note": "角色样本不足·不算",
         }
     names = sorted(bag.keys())
-    pairs = []
-    for i in range(len(names)):
-        for j in range(i + 1, len(names)):
-            a, b = names[i], names[j]
-            d = _bootstrap_distance(bag[a], bag[b])
-            pairs.append({"a": a, "b": b, "distance": d})
+    # 🔴 2026-06-29 NN风格声纹集成 — CHARACTER_VOICE_EMBED=1 时优先声纹 NN 互距·桥失败兜底 char-3gram。
+    nn = _nn_pair_distances(bag)
+    if nn is not None:
+        pairs, distance_method = nn
+    else:
+        pairs = []
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                a, b = names[i], names[j]
+                d = _bootstrap_distance(bag[a], bag[b])
+                pairs.append({"a": a, "b": b, "distance": d})
+        distance_method = "char_3gram_bootstrap"
     distances = [p["distance"] for p in pairs]
     mean_d = round(sum(distances) / len(distances), 4) if distances else 0.0
     gini = _gini(distances)
@@ -222,6 +272,7 @@ def compute_distinctiveness(text: str) -> dict:
         "pair_distances": pairs,
         "mean_pair_distance": mean_d,
         "inter_character_voice_gini": gini,
+        "distance_method": distance_method,
     }
 
 
@@ -250,12 +301,26 @@ def scan(draft_path, project_root=None) -> dict:
     out["pair_distances"] = result["pair_distances"][:10]
     out["mean_pair_distance"] = result["mean_pair_distance"]
     out["inter_character_voice_gini"] = result["inter_character_voice_gini"]
+    # 🔴 2026-06-29 NN风格声纹集成 — NN 后端在用时升级 code → CROSS_CHARACTER_VOICE_COLLISION。
+    distance_method = result.get("distance_method")
+    out["distance_method"] = distance_method
+    nn_mode = distance_method == "ruoyu_style_char_nn"
+    out["code"] = CROSS_CHARACTER_VOICE_COLLISION_CODE if nn_mode else ISSUE_CODE
     if "note" in result:
         out["note"] = result["note"]
         return out
 
     baseline = _read_baseline(project_root)
-    if baseline:
+    if nn_mode:
+        # NN 声纹标度 floor：作者档 nn_mean_distance_min 第一权威 > env > 保守默认。
+        if baseline and baseline.get("nn_mean_distance_min") is not None:
+            floor = float(baseline["nn_mean_distance_min"])
+            baseline_source = "author_profile_nn"
+        else:
+            env_floor = os.environ.get("CHARACTER_VOICE_EMBED_FLOOR")
+            floor = float(env_floor) if env_floor else DEFAULT_NN_MEAN_DISTANCE_FLOOR
+            baseline_source = "env" if env_floor else "default_nn_fallback"
+    elif baseline:
         floor = float(baseline.get("mean_distance_min", DEFAULT_MEAN_DISTANCE_FLOOR))
         baseline_source = "author_profile"
     else:
@@ -267,20 +332,27 @@ def scan(draft_path, project_root=None) -> dict:
     mean_d = result["mean_pair_distance"]
     over = mean_d is not None and mean_d < floor
     if over:
+        method_note = ("声纹 NN 互距(ruoyu_style char 模型)" if nn_mode
+                       else "字符 3-gram bootstrap(Burrows-Δ/Craig-Zeta stylometry)")
         msg = (f"跨角色 voice 区分度过低：mean pair distance {mean_d} < {floor}·"
-               f"所有角色听起来过近(idiolect collapse)·"
+               f"所有角色听起来过近(idiolect collapse·{method_note})·"
                f"建议为每角色加 distinctiveness_anchors(口癖/句末助词/语速)·"
-               f"群像题材尤需 Burrows-Δ/Craig-Zeta 风格指纹")
+               f"群像题材尤需角色声纹分离")
         if mode == "active":
             out["violations"].append({
-                "kind": "inter_character_voice_collapse", "severity": "minor",
+                # NN 模式用新 kind/code·char-3gram 模式保持原 kind（兼容现有消费方）。
+                "kind": ("cross_character_voice_collision" if nn_mode
+                         else "inter_character_voice_collapse"),
+                "code": out["code"],
+                "gate_level": "advisory",
+                "severity": "minor",
                 "message": msg,
                 "mean_pair_distance": mean_d,
                 "inter_character_voice_gini": result["inter_character_voice_gini"],
                 "char_count": result["char_count"],
+                "distance_method": distance_method,
                 "sample_pairs": result["pair_distances"][:4],
-                "_doc": "Burrows-Δ/Craig-Zeta stylometry·字符 3-gram bootstrap·"
-                        "配角戏分少/独白驱动作者档可豁免→advisory"})
+                "_doc": "声纹 NN/字符 3-gram·配角戏分少/独白驱动/同身份角色作者档可豁免→advisory"})
             out["verdict"] = "FAIL_MINOR"
             out["warning"] = msg
         else:

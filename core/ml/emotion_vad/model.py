@@ -68,7 +68,8 @@ class VADRegressor(nn.Module):
     """中文 encoder + n_dims sigmoid 回归头。"""
 
     def __init__(self, base_model: str = "hfl/chinese-roberta-wwm-ext",
-                 dims: str = "va", dropout: float = 0.1, pooling: str = "mean"):
+                 dims: str = "va", dropout: float = 0.1, pooling: str = "mean",
+                 encoder_config=None):
         super().__init__()
         if dims not in DIM_SETS:
             raise ValueError(f"dims 必须 ∈ {list(DIM_SETS)}，收到 {dims!r}")
@@ -77,7 +78,13 @@ class VADRegressor(nn.Module):
         self.n_dims = len(self.dim_names)
         self.base_model = base_model
         self.pooling = pooling
-        self.encoder = AutoModel.from_pretrained(base_model)
+        # 🔴 2026-06-29 NN情绪VAD集成 — 离线自包含加载：
+        #   给定 encoder_config（来自 checkpoint 本地 config.json）→ from_config（不下载预训练权重，
+        #   随后 load_state_dict 覆盖为真权重）。训练首建 / 无本地 config 时退 from_pretrained（联网拉骨架）。
+        if encoder_config is not None:
+            self.encoder = AutoModel.from_config(encoder_config)
+        else:
+            self.encoder = AutoModel.from_pretrained(base_model)
         hidden = self.encoder.config.hidden_size
         self.dropout = nn.Dropout(dropout)
         self.head = nn.Linear(hidden, self.n_dims)
@@ -116,6 +123,9 @@ class VADRegressor(nn.Module):
         if extra_meta:
             meta.update(extra_meta)
         (out / "vad_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 🔴 2026-06-29 NN情绪VAD集成 — 落盘 encoder config.json，使 checkpoint 离线自包含
+        # （load 时本地 from_config 重建骨架，无需联网拉 base_model）。
+        self.encoder.config.save_pretrained(out)
         if tokenizer is not None:
             tokenizer.save_pretrained(out)
 
@@ -123,7 +133,13 @@ class VADRegressor(nn.Module):
     def load(cls, ckpt_dir: str, map_location="cpu"):
         d = Path(ckpt_dir)
         meta = json.loads((d / "vad_meta.json").read_text(encoding="utf-8"))
-        model = cls(base_model=meta["base_model"], dims=meta["dims"], pooling=meta.get("pooling", "mean"))
+        # 🔴 2026-06-29 NN情绪VAD集成 — 优先本地 config.json 离线重建骨架（不联网）；
+        # 缺则退 from_pretrained（首建 / 旧 checkpoint）。
+        enc_cfg = None
+        if (d / "config.json").exists():
+            enc_cfg = AutoConfig.from_pretrained(str(d))
+        model = cls(base_model=meta["base_model"], dims=meta["dims"],
+                    pooling=meta.get("pooling", "mean"), encoder_config=enc_cfg)
         state = torch.load(d / "pytorch_model.bin", map_location=map_location)
         model.load_state_dict(state)
         model.eval()

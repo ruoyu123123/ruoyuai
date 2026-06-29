@@ -8,7 +8,9 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -119,6 +121,143 @@ def _mstyle_embed(text: str) -> list[float]:
     return _MSTYLE_MODEL.encode(text[:8000], normalize_embeddings=True).tolist()
 
 
+# ── 🔴 2026-06-29 NN风格声纹集成 — ruoyu_style 后端（venv subprocess 桥）────────────
+# 若渝主流水线跑**系统 Python 3.14（无 torch）**，本仓 fine-tune 的风格/声纹模型只能在
+# **venv Python 3.10（torch CUDA）** 加载。所以 ruoyu_style 后端**不在系统 py 直接 import
+# sentence_transformers**（那会 ImportError），而是经 subprocess 调 venv python 跑
+# `core/ml/style_embed/style_infer.py` 批量编码。
+#
+# 🔴 默认安全铁律：venv 缺 / 模型缺 / torch 缺 / subprocess 失败/超时 / 输出不符
+#    → 一律返回 None（批量）或 raise（单条·被 compute_embedding 捕获兜底 hash）。
+#    调用方回退现有 backend（stable_hash / 启发式 char-3gram）·**绝不崩**·零回归。
+#
+# 两个模型（一空间两用法·见 core/ml/style_embed/INTEGRATION.md）：
+#   · author（默认·SFS）   → runs/style_embed_v1/final   （AP 0.887）
+#   · character（千人千面） → runs/style_embed_char_v1/final（char voice AUC 0.653）
+_RUOYU_MODEL_DIRS = {
+    "author": "core/ml/style_embed/runs/style_embed_v1/final",
+    "character": "core/ml/style_embed/runs/style_embed_char_v1/final",
+}
+_RUOYU_MODEL_ENV = {"author": "RUOYU_STYLE_MODEL", "character": "RUOYU_CHAR_STYLE_MODEL"}
+_RUOYU_DIM_CACHE: dict = {}
+
+
+def _ruoyu_venv_python() -> "Path | None":
+    """定位 venv py3.10（带 torch）解释器。env RUOYU_STYLE_VENV_PY 可覆盖。缺则 None。"""
+    root = _embed_repo_root()
+    cands = []
+    env_py = os.environ.get("RUOYU_STYLE_VENV_PY")
+    if env_py:
+        cands.append(Path(env_py))
+    cands += [
+        root / "core" / "ml" / ".venv" / "Scripts" / "python.exe",  # Windows
+        root / "core" / "ml" / ".venv" / "bin" / "python",          # POSIX
+        root / "core" / "ml" / ".venv" / "bin" / "python3",
+    ]
+    for c in cands:
+        try:
+            if c.exists():
+                return c
+        except OSError:
+            continue
+    return None
+
+
+def _ruoyu_model_path(model: str = "author") -> "Path | None":
+    """解析模型目录（env 覆盖 > 默认相对路径）。目录不存在 → None。"""
+    env_key = _RUOYU_MODEL_ENV.get(model)
+    if env_key and os.environ.get(env_key):
+        p = Path(os.environ[env_key])
+    else:
+        p = _embed_repo_root() / _RUOYU_MODEL_DIRS.get(model, _RUOYU_MODEL_DIRS["author"])
+    return p if p.exists() else None
+
+
+def ruoyu_style_dim(model: str = "author") -> "int | None":
+    """读 ruoyu_meta.json 的 dim（纯 stdlib·不加载 torch）。模型缺 → None。"""
+    if model in _RUOYU_DIM_CACHE:
+        return _RUOYU_DIM_CACHE[model]
+    mp = _ruoyu_model_path(model)
+    if mp is None:
+        return None
+    try:
+        dim = int(json.loads(
+            (mp / "ruoyu_meta.json").read_text(encoding="utf-8")).get("dim", 768))
+    except Exception:
+        dim = 768
+    _RUOYU_DIM_CACHE[model] = dim
+    return dim
+
+
+def ruoyu_style_available(model: str = "author") -> bool:
+    """venv + 模型 + style_infer.py 三者俱在 → True（消费方先探测再决定是否走 NN）。"""
+    if _ruoyu_venv_python() is None or _ruoyu_model_path(model) is None:
+        return False
+    return (_embed_repo_root() / "core" / "ml" / "style_embed" / "style_infer.py").exists()
+
+
+def ruoyu_style_encode_batch(texts, model: str = "author",
+                             timeout: int = 600) -> "list | None":
+    """🔴 2026-06-29 NN风格声纹集成 — 批量编码（subprocess 调 venv py + style_infer.py）。
+
+    入：texts=list[str]，model ∈ {"author","character"}。
+    出：list[list[float]]（与 texts 等长·已 L2 归一化）或 **None**（任何不可用/失败）。
+
+    🔴 默认安全：venv/模型/torch 缺、subprocess 非零退出/超时、输出条数或内容不符
+       → 返回 None（调用方回退 stable_hash / char-3gram）·绝不抛到调用栈外·绝不崩。
+    """
+    if not texts:
+        return []
+    vpy = _ruoyu_venv_python()
+    mp = _ruoyu_model_path(model)
+    if vpy is None or mp is None:
+        print(f"[embedding_store] ruoyu_style 不可用（venv={vpy is not None} "
+              f"model={mp is not None}）→ 回退现有 backend", file=sys.stderr)
+        return None
+    infer = _embed_repo_root() / "core" / "ml" / "style_embed" / "style_infer.py"
+    if not infer.exists():
+        print("[embedding_store] ruoyu_style 缺 style_infer.py → 回退", file=sys.stderr)
+        return None
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            outp = Path(td) / "out.jsonl"
+            with inp.open("w", encoding="utf-8") as fh:
+                for t in texts:
+                    fh.write(json.dumps({"text": (t or "")[:8000]},
+                                        ensure_ascii=False) + "\n")
+            proc = subprocess.run(
+                [str(vpy), str(infer), "--model", str(mp),
+                 "--input", str(inp), "--output", str(outp)],
+                capture_output=True, text=True, timeout=timeout)
+            if proc.returncode != 0 or not outp.exists():
+                tail = (proc.stderr or "")[-300:]
+                print(f"[embedding_store] ruoyu_style subprocess 失败"
+                      f"(rc={proc.returncode}): {tail} → 回退", file=sys.stderr)
+                return None
+            embs = []
+            for line in outp.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    embs.append(json.loads(line).get("embedding"))
+            if len(embs) != len(texts) or any(not e for e in embs):
+                print(f"[embedding_store] ruoyu_style 输出条数/内容不符"
+                      f"(got={len(embs)} want={len(texts)}) → 回退", file=sys.stderr)
+                return None
+            return embs
+    except Exception as e:  # noqa: BLE001 — 桥任何异常都降级（默认安全）
+        print(f"[embedding_store] ruoyu_style 桥异常降级: {str(e)[:160]}", file=sys.stderr)
+        return None
+
+
+def _ruoyu_style_embed(text: str) -> list[float]:
+    """ruoyu_style 单条编码（backend fn 用）。桥不可用 → raise → compute_embedding 兜底 hash。"""
+    embs = ruoyu_style_encode_batch([text], model="author")
+    if not embs:
+        raise RuntimeError("ruoyu_style bridge unavailable")
+    return embs[0]
+
+
 def _detect_backend():
     """探测 embedding 后端（一次，缓存）。返回 (method, dim, fn)。
 
@@ -128,6 +267,10 @@ def _detect_backend():
       ① .env 配 GEN_EMBED__* key → 通义/OpenAI 兼容 API
       ② 环境变量 EMBED_BACKEND=mstyle（且装了 sentence-transformers）→ StyleDistance/mstyledistance
          （ACL2025 真风格语义 · content-independent · 含中文 · CPU · 风格相似度最对口）
+      ②.5 环境变量 EMBED_BACKEND=ruoyu_style（🔴 2026-06-29 NN风格声纹集成）→ 本仓 fine-tune
+         风格模型（runs/style_embed_v1/final·dim 768）经 venv py3.10 subprocess 桥编码
+         （系统 py3.14 无 torch·故不直接 import·走 ruoyu_style_encode_batch）。venv/模型缺
+         → 降级 hash（默认安全·零崩）。
       ③ 环境变量 EMBED_BACKEND=local（且装了 sentence-transformers）→ 本地 bge（内容语义）
     切换后端务必先 `embedding_store.py <proj> rebuild` 重建缓存（维度变了）。"""
     global _BACKEND
@@ -149,6 +292,23 @@ def _detect_backend():
             return _BACKEND
         except ImportError:
             print("[embedding_store] EMBED_BACKEND=mstyle 但未装 sentence-transformers，降级 hash", file=sys.stderr)
+    # ②.5 🔴 2026-06-29 NN风格声纹集成 · EMBED_BACKEND=ruoyu_style → 本仓 fine-tune 风格模型
+    #      （venv subprocess 桥·系统 py3.14 无 torch·见上方 ruoyu_style_encode_batch）。
+    #      默认安全：venv 或模型缺 → 降级 hash（保持 dim 384 一致·零崩）。
+    if _eb == "ruoyu_style":
+        dim = ruoyu_style_dim("author")
+        vpy = _ruoyu_venv_python()
+        infer = _embed_repo_root() / "core" / "ml" / "style_embed" / "style_infer.py"
+        if dim is None or vpy is None or not infer.exists():
+            print(f"[embedding_store] EMBED_BACKEND=ruoyu_style 不可用"
+                  f"(model={dim is not None} venv={vpy is not None} "
+                  f"infer={infer.exists()})，降级 hash", file=sys.stderr)
+        else:
+            mp = _ruoyu_model_path("author")
+            _BACKEND = (f"ruoyu_style:{mp.name}", dim, _ruoyu_style_embed)
+            print(f"[embedding_store] 后端=ruoyu_style {mp.name} (dim={dim}·venv subprocess 桥) "
+                  f"· 切后端记得 rebuild", file=sys.stderr)
+            return _BACKEND
     # ③ 用户显式 EMBED_BACKEND=local + 装了包
     if _eb == "local":
         try:

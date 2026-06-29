@@ -3,7 +3,29 @@
 
 > **一句话**：训出的 VAD 模型是一个**传感器**，只为现有的 advisory 子系统提供更准的「情绪三维读数」，
 > 替换当前的**启发式（词典查表 / 关键词映射 / summarizer 五档手判）**。北极星⑤：全程 advisory，
-> 永不 hard_gate，永不覆盖 writer 的创作判断。所有接入走唯一桥 **`vad_infer.py`**（确定性）。
+> 永不 hard_gate，永不覆盖 writer 的创作判断。
+
+## ✅ 实现状态（🔴 2026-06-29 NN情绪VAD集成 · 已落地）
+
+**进程隔离架构（已实现，覆盖本文档原『直接 import』设想）**：
+- 若渝主流水线跑**系统 py3.14（无 torch）**；模型跑 **venv py3.10（torch）**。两进程隔离。
+- 系统侧组件**不直接 import 模型**，而是经 **`core/scripts/nn_vad_bridge.py`** 用 subprocess 批量调
+  `core/ml/.venv/Scripts/python.exe core/ml/emotion_vad/vad_infer.py --batch in.jsonl --out out.jsonl`
+  （批量·非实时·每 cluster/每 scan 一次性整批，摊薄模型加载）。
+- **总门控 `RUOYU_NN_VAD=1`**（默认 off → 全系统等价旧行为·零回归）。ckpt 走 `RUOYU_VAD_CKPT` 或默认
+  `checkpoints/va_base`。
+- **默认安全铁律**：env off / venv 缺 / ckpt 缺 / torch 缺 / subprocess 失败 / 超时 / 条数失配 /
+  vad_infer 退词典（source!=model）→ 桥逐条返回 **None** → 调用方**回退启发式**，绝不崩。
+- **离线自包含**：checkpoint 已落 `config.json`（`model.py` load 本地 `from_config` 重建骨架），
+  `vad_infer` 默认 `TRANSFORMERS_OFFLINE=1`，杜绝联网 HEAD 探测挂起。
+- **繁简**：训练语料繁体（manifest `simplified=false`）→ `vad_infer` 模型输入经 **opencc s2t（简转繁）**
+  对齐训练分布（venv 已装 `opencc-python-reimplemented`；缺失则原样输入·不崩）。
+- **Phase-0 已完成**：`core/data/cvaw_cvap_placeholder.json` 已替换为真 CVAW/CVAP **7724 词简体** V/A
+  词典（`_placeholder=false`，opencc t2s 转简）；`nrc_vad_v2_placeholder.json`（per-char V/A/**D**）仍占位
+  （中文无原生 per-char D 真标注·诚实保留）。
+
+> 下文 §1-§3 的 `RUOYU_VAD_BIN_RECOMPUTE` / 直接 `from vad_infer import get_predictor` 为**原始设想**，
+> 实际统一改为 **`RUOYU_NN_VAD` 门控 + `nn_vad_bridge.predict_batch`**（见上）。
 
 ## 0. 唯一入口与确定性契约
 
@@ -81,13 +103,15 @@ def _score_vad(text):
 - 因此默认产 **VA 模型**：V/A 是真模型预测，**D 维仍走词典/summarizer 判断**（落点 A/B 已做兜底）。
 - 想要真 D：① `data_prep.py --nrc-vad <NRC-VAD 中文词典>` 加 D 弱标签（需自行向 NRC 申请下载）→ `train.py --dims vad`；
   ② 或英文 EmoBank（全 VAD）跨语言迁移（XLM-R）。两者都是**弱/迁移监督**，D 维精度天然低于 V/A（业界共识：D 最难）。
-- **繁简**：训练数据是繁体（台湾 NYCU/DimABSA）。系统正文是简体 → 生产应 `data_prep.py --simplify`（装 opencc），
-  且推理输入也应同口径（可在 `vad_infer` 入口加 opencc t2s，二者一致即可）。
+- **繁简（已实现·诚实）**：本 checkpoint 的训练语料**未简化**（manifest `simplified=false`），即模型见的是
+  **繁体**。系统正文是简体 → `vad_infer` 模型路径对输入做 **opencc s2t（简转繁）** 对齐训练分布（venv 已装
+  `opencc-python-reimplemented`；缺失则原样输入，base encoder 兼容简体·精度略降·不崩）。
+  （若改训简体语料：`data_prep.py --simplify` 重训后，可关掉推理端 s2t·二者同口径即可。）
 
 ## 5. 灰度与回归
 
-1. **Phase 0（零 GPU·立即可做）**：把 `core/data/*_placeholder.json` 占位词典换成 `data/processed/word_lexicon.jsonl`
-   导出的真 CVAW/CVAP 词典（7762 词）——现有词典 scanner 立刻变准，无需模型。
+1. **Phase 0（零 GPU·✅ 已完成）**：`core/data/cvaw_cvap_placeholder.json` 已替换为 `data/processed/word_lexicon.jsonl`
+   导出的真 CVAW/CVAP 词典（7762→**7724 词**·opencc t2s 转简）——4 个 VAD scanner + vad_infer 词典模式立刻变准，无需模型。
 2. **Phase 1（shadow）**：训出 checkpoint → 设 `RUOYU_VAD_CKPT`，scanner 维持 `*_MODE=shadow`（只记不判），跑几个 cluster 看读数。
 3. **Phase 2（active）**：确认稳定 → `*_MODE=active`（仍 advisory 上报，不 hard_gate）；`RUOYU_VAD_BIN_RECOMPUTE=1` 开 vad_bin 重算。
 4. **回归锁**：模型缺失/加载失败 → `vad_infer` 显式退词典并 stderr 标记，**绝不静默假成功**，scanner 行为退回现状（零回归）。

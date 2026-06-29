@@ -71,20 +71,41 @@ def _strip_changes(text: str) -> str:
     return text
 
 
+def _nn_segment_valence(chunks: "list[str]") -> "list[float | None]":
+    """🔴 2026-06-29 NN情绪VAD集成 — 批量取每段真 valence（env RUOYU_NN_VAD=1 门控·一次 subprocess）。
+    失败/未启用 → 全 None（调用方退关键词兜底·不崩·零回归）。保序一一对应。"""
+    n = len(chunks)
+    if os.environ.get("RUOYU_NN_VAD") != "1" or n == 0:
+        return [None] * n
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        import nn_vad_bridge
+        preds = nn_vad_bridge.predict_batch(chunks)
+    except Exception:  # noqa: BLE001 NN 不可用 → 退关键词（不崩）
+        return [None] * n
+    if len(preds) != n:
+        return [None] * n
+    return [(p.get("valence") if (p and p.get("valence") is not None) else None) for p in preds]
+
+
 def segment_valence_curve(text: str, n_seg: int = 10) -> "list[float]":
     """草稿分 n_seg 段·每段算情绪 valence(0-1)。无情绪词的段 → 0.5 中性。
 
-    确定性可算半边（关键词加权·非真情绪分析）——粗糙哨兵·只够判「曲线形状漂移」advisory，
-    绝不当情绪判决（语义裁决留 judge/作者）。
+    NN 模型优先（env RUOYU_NN_VAD=1·桥成功 → 每段真 valence）；否则确定性可算半边（关键词加权·
+    非真情绪分析）——粗糙哨兵·只够判「曲线形状漂移」advisory，绝不当情绪判决（语义裁决留 judge/作者）。
     """
     text = _strip_changes(text)
     paras = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
     if not paras:
         return []
     seg_size = max(1, math.ceil(len(paras) / n_seg))
+    chunks = ["".join(paras[i:i + seg_size]) for i in range(0, len(paras), seg_size)]
+    nn_vals = _nn_segment_valence(chunks)   # 模型 valence·同序·未启用→全 None
     curve: "list[float]" = []
-    for i in range(0, len(paras), seg_size):
-        chunk = "".join(paras[i:i + seg_size])
+    for idx, chunk in enumerate(chunks):
+        if nn_vals[idx] is not None:
+            curve.append(round(float(nn_vals[idx]), 4))   # 模型真 valence
+            continue
         total_w = 0.0
         total_v = 0.0
         for emotion, kws in EMOTION_KEYWORDS.items():

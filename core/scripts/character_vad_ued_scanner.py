@@ -25,10 +25,10 @@ VAD (Valence/Arousal/Dominance) 三维比离散情绪 / 1D sentiment / 2D ousiom
 
 【角色名集合】从 _数据库/角色池.json 读·与 active_character_wm_load_scanner 同源。
 
-【词典】
-  core/data/nrc_vad_v2_placeholder.json  (40 字 V/A/D 占位)
-  core/data/cvaw_cvap_placeholder.json   (30 词 V/A 占位)
-  真词典(NRC-VAD v2 55k + CVAW/CVAP 8.5k)+ 真训练参数 defer。
+【词典 · 🔴 2026-06-29 NN情绪VAD集成】
+  core/data/nrc_vad_v2_placeholder.json  (40 字 V/A/D·仍占位·中文无 per-char D 真标注)
+  core/data/cvaw_cvap_placeholder.json   (7724 词 V/A·Phase-0 已替换为真 CVAW/CVAP 简体词典)
+  另：env RUOYU_NN_VAD=1 时 _score_vad 经 nn_vad_bridge 用真 NN 模型(CCC 0.80)·失败兜底本词典。
 
 【北极星⑤】顾问非法官·全 advisory·env CHARACTER_VAD_UED_MODE 默认 shadow·
   VAD_UED_DRIFT 绝不 hard_gate。
@@ -114,8 +114,48 @@ def _load_cvaw():
     return _CVAW_CACHE
 
 
+# 🔴 2026-06-29 NN情绪VAD集成 — 进程级 NN VAD 缓存（text→(V,A,D)）。
+# 占位词典浅扫 → 真模型升级（advisory·env RUOYU_NN_VAD=1 门控·默认 off·失败兜底词典·零回归）。
+# 每次 scan 经 _nn_vad_prime 一次性批量推理（一个 subprocess·摊薄模型加载），_score_vad 仅查缓存，
+# 杜绝 per-utterance spawn。
+_NN_VAD_CACHE: dict = {}
+
+
+def _lexicon_dominance(text):
+    """从占位 VAD 词典(per-char D)算 D 均值·缺命中→0.5 中性（模型为 VA 时退词典 D 保 UED D 轴可算）。"""
+    vad = _load_vad()
+    ds = [float(v[2]) for ch in text
+          if isinstance((v := vad.get(ch)), list) and len(v) >= 3]
+    return sum(ds) / len(ds) if ds else 0.5
+
+
+def _nn_vad_prime(texts):
+    """批量预热 NN VAD（env 门控·一次 subprocess）。失败/未启用 → 不缓存（_score_vad 自动退词典）。"""
+    if os.environ.get("RUOYU_NN_VAD") != "1":
+        return
+    uniq = [t for t in dict.fromkeys(texts) if t and t not in _NN_VAD_CACHE]
+    if not uniq:
+        return
+    try:
+        sys.path.insert(0, str(_SCRIPT_DIR))
+        import nn_vad_bridge
+        preds = nn_vad_bridge.predict_batch(uniq)
+    except Exception:  # noqa: BLE001 NN 不可用 → 退词典（不缓存·不崩）
+        return
+    for t, r in zip(uniq, preds):
+        if r and r.get("valence") is not None and r.get("arousal") is not None:
+            d = r.get("dominance")
+            d = float(d) if d is not None else _lexicon_dominance(t)  # 模型 VA → 退词典 D
+            _NN_VAD_CACHE[t] = (float(r["valence"]), float(r["arousal"]), d)
+
+
 def _score_vad(text):
-    """对一段文本算 (V, A, D) 平均·命中加权·缺命中返回 None。"""
+    """对一段文本算 (V, A, D)·NN 模型优先(env 门控·经 _nn_vad_prime 批量缓存)·否则占位词典平均·缺命中 None。"""
+    # 🔴 2026-06-29 NN情绪VAD集成 — 模型读数优先（命中缓存才用·未命中→占位词典兜底·零回归）
+    if os.environ.get("RUOYU_NN_VAD") == "1":
+        hit = _NN_VAD_CACHE.get(text)
+        if hit is not None:
+            return hit
     vad = _load_vad()
     cvaw = _load_cvaw()
     vs, as_, ds = [], [], []
@@ -301,6 +341,8 @@ def _drift_score(cur_ued, base_ued):
 
 def compute_vad_ued_signature(utterances, character_filter=None):
     """consolidate_author_profile 用入口·给定切好的 utterances 算每角色 UED 指纹。"""
+    # 🔴 2026-06-29 NN情绪VAD集成 — 批量预热 NN VAD（env 门控·一次 subprocess·失败 no-op 退词典）
+    _nn_vad_prime([u.get("text", "") for u in utterances if isinstance(u, dict)])
     by_char = {}
     for u in utterances:
         spk = u.get("speaker")

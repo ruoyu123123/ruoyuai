@@ -901,6 +901,28 @@ def cmd_apply_appraisal_beats(root, cluster_key):
             logger.info(f"[appraisal-beats] {cid} 无 appraisal_beats·no-op（向后兼容）")
             return 0
 
+        # 🔴 2026-06-29 NN情绪VAD集成 — vad_bin 的 V/A 真模型重算（advisory·env RUOYU_NN_VAD 门控·
+        # 默认 off·零行为变化）。批量一次性推理（摊薄模型加载开销）；D 维保留 summarizer 判断；
+        # 任何失败/未启用 → nn_vad_by_id 空 → 保留 summarizer 手判 vad_bin（兜底·不崩）。
+        nn_vad_by_id, _vad_bridge = {}, None
+        import os as _os_vad
+        if _os_vad.environ.get("RUOYU_NN_VAD") == "1":
+            try:
+                import nn_vad_bridge as _vad_bridge
+                _bd = [b for b in beats if isinstance(b, dict)]
+                _txts = [" ".join(str(b.get(k, "")) for k in
+                                  ("trigger_event", "derived_emotion", "behavior_externalization")).strip()
+                         for b in _bd]
+                for b, pr in zip(_bd, _vad_bridge.predict_batch(_txts)):
+                    if pr and pr.get("valence") is not None:
+                        nn_vad_by_id[id(b)] = pr
+                if nn_vad_by_id:
+                    logger.info(f"[appraisal-beats] {cid} NN VAD 重算 {len(nn_vad_by_id)}/{len(_bd)} 拍 "
+                                "vad_bin.V/A（D 保留 summarizer·advisory）")
+            except Exception as e:  # noqa: BLE001 NN 失败 → 退 summarizer（不阻断）
+                logger.info(f"[appraisal-beats] NN VAD 跳过(不阻断): {type(e).__name__}: {str(e)[:80]}")
+                nn_vad_by_id = {}
+
         pacer_path = db / "叙事节拍器.json"
         pacer = load_json(pacer_path, None)
         if not isinstance(pacer, dict):
@@ -930,6 +952,14 @@ def cmd_apply_appraisal_beats(root, cluster_key):
             focal = rec.get("focal_character")
             if not focal:
                 continue  # focal_character 必填（真角色 id）
+            # 🔴 2026-06-29 NN情绪VAD集成 — 用模型 V/A 覆盖 summarizer 手判（D 保留）·命中才覆盖
+            pr = nn_vad_by_id.get(id(b))
+            if pr is not None and _vad_bridge is not None:
+                _old_bin = rec.get("vad_bin") if isinstance(rec.get("vad_bin"), dict) else {}
+                _nb = _vad_bridge.to_vad_bin(pr.get("valence"), pr.get("arousal"))
+                rec["vad_bin"] = {"valence": _nb["valence"], "arousal": _nb["arousal"],
+                                  "dominance": _old_bin.get("dominance"),
+                                  "_source": "model_va+summarizer_d"}
             key = (cid, rec["scene_idx"], focal)
             if key in seen:
                 continue

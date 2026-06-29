@@ -3,7 +3,7 @@
 
 确定性·零依赖。覆盖 off/短稿/无角色池/无作者基线 skip/_score_vad/_split_utterances/
 _ued_for_series 6 维计算/compute_vad_ued_signature/drift/shadow/active/CLI/
-hard_gate registry 守卫·占位词典 _placeholder=true 守卫。
+hard_gate registry 守卫·词典守卫（nrc_vad 仍占位 / cvaw_cvap 已 Phase-0 真词典）。
 """
 import json
 import os
@@ -74,14 +74,19 @@ def test_short_draft_skip():
 
 
 def test_placeholder_dicts_present():
-    """北极星纪律：占位词典必须标 _placeholder=true。"""
+    """🔴 2026-06-29 NN情绪VAD集成 Phase-0：
+    nrc_vad_v2(per-char V/A/D) 仍为占位（中文无原生 per-char D 真标注·诚实保留）；
+    cvaw_cvap(V/A 词级) 已 Phase-0 替换为真实 CVAW/CVAP 简体词典（_placeholder=False·≥1000 词）。"""
     p1 = _DATA_DIR / "nrc_vad_v2_placeholder.json"
     p2 = _DATA_DIR / "cvaw_cvap_placeholder.json"
     assert p1.exists() and p2.exists()
     d1 = json.loads(p1.read_text(encoding="utf-8"))
     d2 = json.loads(p2.read_text(encoding="utf-8"))
+    # nrc_vad 仍是真·占位（D 维无真标注）
     assert d1.get("_placeholder") is True
-    assert d2.get("_placeholder") is True
+    # cvaw_cvap 已升级为真词典（Phase-0 零 GPU 快赢）
+    assert d2.get("_placeholder") is False
+    assert len(d2.get("entries", {})) >= 1000
 
 
 def test_score_vad_returns_none_on_no_hit():
