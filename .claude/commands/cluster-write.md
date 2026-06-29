@@ -167,6 +167,8 @@ python core/scripts/audit_hub.py "<项目路径>" --mode cluster --cluster-id <k
   --waivers "<项目路径>/章节/cluster_<key>_draft/cluster_<key>_changes.json"
 ```
 
+> 🔴 **NN 模型自动接入（2026-06-30）**：audit_hub `main()` 默认开启 5 个 NN 门控（surprisal 信息密度 / coherence 连贯 / VAD 情绪弧 / coref 共指 / character-network 角色网络），**无需手动 export**——经 `nn_runtime_defaults.enable_creative_nn_defaults()` 在命令行入口自动开（能力不足时各桥 `enabled()` 安全回退·显式 `RUOYU_NN_*=0` 可关闭做对照）。NN 输出**全 advisory**（不进 hard_gate·北极星⑤）。surprisal/coherence/VAD 经 `core/ml/.venv` subprocess 桥推理（首用加载模型~90s·已统一 300s timeout）。
+
 退出码语义：
 - 0 = pass / waived
 - 1 = auto_fixed → 进 3.2

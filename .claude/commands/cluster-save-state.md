@@ -111,6 +111,8 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
 python core/scripts/save_state.py "<项目路径>" --apply-cluster-changes <key>
 ```
 
+> 🔴 **NN 模型自动接入（2026-06-30）**：save_state `main()` 默认开启 NN 门控（同 audit_hub·经 `nn_runtime_defaults`·无需手动 export）。其中 **VAD 情绪模型**在 `--apply-appraisal-beats` 步对 appraisal beat 的 valence/arousal 真模型重算（CCC 0.80·advisory·`vad_bin._source=model_va+summarizer_d`·能力不足退 summarizer 启发式不阻断）。
+
 > 🔴 **2026-06-28 审计清理C类**：cluster 级 factual 状态（角色 / 道具 / 关系 / locked_facts / 伏笔）**不再从 writer changes.factual 回库**——这些由第 5/6 步 novel-archivist 读正文产 archive.json → `apply_archive.py` 确定性回库，伏笔由 foreshadower + outline brief 回库。本步 apply 只落地**无替代 producer 的非 archive 域**项（time_advance 时间线 / location_changes 地点 status）+ 跑 writer_truth_check。
 
 内部会：

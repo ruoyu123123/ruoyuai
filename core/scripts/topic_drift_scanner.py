@@ -223,17 +223,41 @@ def scan_topic_drift(draft_text: str, scope_summary: str,
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+def _read_scope_summary(project_dir: str | None, draft_path: str) -> str | None:
+    if not project_dir:
+        return None
+    p = Path(project_dir) / "_数据库" / "事件簇.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        draft_name = Path(draft_path).stem.replace("_draft", "")
+        for c in data.get("clusters", []):
+            if c.get("cluster_id", "") == draft_name:
+                return c.get("scope_summary")
+        if data.get("clusters"):
+            return data["clusters"][0].get("scope_summary")
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="主题漂移检测 scanner（advisory · embedding-based）")
     ap.add_argument("draft_path", help="草稿文件路径")
-    ap.add_argument("--scope-summary", required=True,
-                    help="cluster scope_summary 文本")
+    ap.add_argument("--scope-summary", default=None,
+                    help="cluster scope_summary 文本（不传则从事件簇.json读）")
     ap.add_argument("--project", default=None, help="项目根目录")
     args = ap.parse_args()
 
+    scope = args.scope_summary or _read_scope_summary(args.project, args.draft_path)
+    if not scope:
+        print(json.dumps([], ensure_ascii=False))
+        sys.exit(0)
+
     text = Path(args.draft_path).read_text(encoding="utf-8")
-    issues = scan_topic_drift(text, args.scope_summary, args.project)
+    issues = scan_topic_drift(text, scope, args.project)
     print(json.dumps(issues, ensure_ascii=False, indent=2))
     sys.exit(1 if issues else 0)
 

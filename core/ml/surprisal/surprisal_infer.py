@@ -143,20 +143,14 @@ def predict_one(text: str, model_name: str = DEFAULT_MODEL, device: str = "auto"
         if device != "auto":
             _set_device(sc, device)
 
-        # minicons IncrementalLMScorer.token_score 返回 list[list[(token, score)]]
-        # base=2 → bits（信息论标准单位）
-        token_scores = sc.token_score([text], base=2)
+        # minicons 0.3.38: token_score(surprisal=True, base_two=True)
+        # → list[list[(token, surprisal_bits)]]·surprisal 已为正值（-log2 prob·信息论标准单位 bits）
+        token_scores = sc.token_score([text], surprisal=True, base_two=True)
         if not token_scores or not token_scores[0]:
             return {**_compute_stats([]), "source": "no_tokens"}
 
-        # 提取 surprisal 值（minicons 返回 log-probability·取负 = surprisal）
-        # minicons token_score 默认返回 log-prob（负值）·surprisal = -log_prob
-        surprisals = []
-        for token_str, score in token_scores[0]:
-            # score from minicons with base=2 is log2(prob) → negative
-            # surprisal = -log2(prob) → positive
-            s = -score if score <= 0 else score
-            surprisals.append(s)
+        # 提取 surprisal 值（surprisal=True 直接返回正 surprisal·无需取负）
+        surprisals = [float(score) for _token_str, score in token_scores[0]]
 
         stats = _compute_stats(surprisals)
         stats["source"] = "model"

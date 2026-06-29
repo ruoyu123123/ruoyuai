@@ -1310,6 +1310,12 @@ def main():
     # cmd_auto_post_reflect）是被 cluster 函数内部按章迭代复用的底层组件，不是公共 CLI。
     # 外部一律走 --apply-cluster-changes / --git-commit-cluster / --auto-post-reflect-cluster /
     # --build-cluster-summary / --ecas-checkpoint。
+    # 🔴 2026-06-30 创作流程 NN 默认接入（命令行入口·main only·测试 import 不触发·能力不足各桥自动回退）
+    import sys as _sys_nn
+    import nn_runtime_defaults
+    _nn_on = nn_runtime_defaults.enable_creative_nn_defaults()
+    if _nn_on:
+        print(f"[nn] 创作 save_state 默认开启 NN 门控: {', '.join(_nn_on)}", file=_sys_nn.stderr)
     ap = argparse.ArgumentParser(
         description="save_state.py · v26 cluster-only CLI"
     )

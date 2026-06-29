@@ -254,10 +254,11 @@ def _dimension_for_code(code: str) -> str:
     return "剧情"
 
 
-def _run(cmd: list, env_extra: dict = None) -> tuple:
+def _run(cmd: list, env_extra: dict = None, timeout: int = 180) -> tuple:
     """跑子进程，返回 (exit_code, stdout, stderr)。子进程隔离 —— 任一校验器挂了不连累其他。
 
     env_extra: v2 cluster 化支持。传 {"CLUSTER_MODE": "1"} 让子进程 scanner 感知 cluster 视野。
+    timeout: 秒。NN scanner 批推理需要更长(300s)。
     """
     try:
         env = None
@@ -265,10 +266,10 @@ def _run(cmd: list, env_extra: dict = None) -> tuple:
             import os as _os
             env = {**_os.environ, **env_extra}
         p = subprocess.run(cmd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=180, env=env)
+                           encoding="utf-8", errors="replace", timeout=timeout, env=env)
         return p.returncode, p.stdout or "", p.stderr or ""
     except subprocess.TimeoutExpired:
-        return 99, "", "[TIMEOUT] 校验器超时 180s"
+        return 99, "", f"[TIMEOUT] 校验器超时 {timeout}s"
     except Exception as e:
         return 98, "", f"[EXEC-ERROR] {e}"
 
@@ -2780,7 +2781,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
-                     out, "surprisal_scanner", "风格")),
+                     out, "surprisal_scanner", "风格"),
+                 300),
                 # [2026-06-29 NN⑥] 主题漂移 · embedding cosine 距离 vs scope_summary
                 # · EMBED_BACKEND 非 hash 才激活·advisory·默认 shadow
                 ("topic_drift",
@@ -2788,15 +2790,17 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
-                     out, "topic_drift_scanner", "风格")),
+                     out, "topic_drift_scanner", "风格"),
+                 300),
                 # [2026-06-29 NN③A] 情感弧线分类 · Reagan 六弧型 · 复用 VAD 或词典兜底
                 # · RUOYU_NN_VAD 门控(VAD 桥不可用退词典)·advisory·默认 shadow
                 ("emotion_arc",
                  [child_python(), str(_SCRIPT_DIR / "emotion_arc_classifier.py"),
-                  str(cluster_draft), "--project", str(project_root)],
+                  str(cluster_draft), "--project", str(project_root), "--scan"],
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
-                     out, "emotion_arc_classifier", "风格")),
+                     out, "emotion_arc_classifier", "风格"),
+                 300),
                 # [2026-06-29 NN①] 段落连贯性 · 相邻段对 BERT 二分类 + 滑窗
                 # · RUOYU_NN_COHERENCE 门控(桥不可用返回空)·advisory·默认 shadow
                 ("coherence",
@@ -2804,7 +2808,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
-                     out, "coherence_scanner", "风格")),
+                     out, "coherence_scanner", "风格"),
+                 300),
                 # [2026-06-29 NN⑤④] 角色一致性 · 角色网络+共指消解整合
                 # · CHARACTER_CONSISTENCY_MODE 门控(默认 shadow)·advisory
                 ("character_consistency",
@@ -2812,7 +2817,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
-                     out, "character_consistency_scanner", "角色")),
+                     out, "character_consistency_scanner", "角色"),
+                 300),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
@@ -2882,9 +2888,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                 ))
 
     def _exec_one(task):
-        name, cmd, ok_set, parse_fn = task
+        name, cmd, ok_set, parse_fn = task[:4]
+        # 默认 300s：NN 开启后 VAD/coherence/emotion 等 scanner 需 spawn venv + 加载模型(~90s+)·
+        # 显式 task[4] 可覆盖（5 个 NN scanner 已显式 300）。非 NN scanner 秒退不受影响·
+        # 只有真卡死才等满（罕见·兜底）。根治 emotion_granularity 等 VAD scanner 180s 超时(exit 99)。
+        task_timeout = task[4] if len(task) > 4 else 300
         # v2 cluster 化：cluster 调用上下文给 scanner 传 CLUSTER_MODE=1 env
-        code, out, err = _run(cmd, env_extra=_env_extra)
+        code, out, err = _run(cmd, env_extra=_env_extra, timeout=task_timeout)
         try:
             issues = parse_fn(out, code)
         except Exception as e:
@@ -3320,6 +3330,11 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
 
 def main():
     args = sys.argv[1:]
+    # 🔴 2026-06-30 创作流程 NN 默认接入（命令行入口·main only·测试 import 不触发·能力不足各桥自动回退）
+    import nn_runtime_defaults
+    _nn_on = nn_runtime_defaults.enable_creative_nn_defaults()
+    if _nn_on:
+        print(f"[nn] 创作 audit 默认开启 NN 门控: {', '.join(_nn_on)}", file=sys.stderr)
     if len(args) < 2:
         print("用法: python audit_hub.py <项目路径> <章节号> [--auto-fix] [--json] [--waivers <json路径>]"
               " | python audit_hub.py <项目路径> --mode cluster --cluster-id <key> [--auto-fix] [--waivers ...]")
