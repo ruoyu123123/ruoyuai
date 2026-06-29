@@ -54,8 +54,8 @@ def test_strip_changes():
 
 
 def test_split_paragraphs():
-    text = "这是一个足够长的中文段落用来测试分段功能的哦\n短\n另一个足够长的中文段落用来测试分段功能"
-    paras = _split_paragraphs(text, min_cjk=10)
+    text = "这是一个足够长的中文段落用来测试分段功能的哦\n短短\n另一个足够长的中文段落用来测试分段功能"
+    paras = _split_paragraphs(text, min_cjk=6)
     assert len(paras) == 2
 
 
@@ -77,9 +77,9 @@ def test_collect_paragraphs(tmp_path):
 
 def test_collect_weak_labels(tmp_path):
     proj = tmp_path / "novel"
-    db = proj / "_数据库"
-    db.mkdir(parents=True)
-    report = db / "cluster_001_audit_report.json"
+    audit_dir = proj / "_数据库" / ".audit"
+    audit_dir.mkdir(parents=True)
+    report = audit_dir / "cluster_001_audit.json"
     report.write_text(json.dumps({
         "issues": [
             {"code": "SEMANTIC_APHORISM", "paragraph": "这是一段含有格言体AI腔调的文本，需要被检测出来进行分析"},
@@ -113,7 +113,7 @@ def test_collect_strong_labels(tmp_path):
     proj = tmp_path / "novel"
     ch_dir = proj / "章节" / "cluster_001_draft"
     ch_dir.mkdir(parents=True)
-    changes = ch_dir / "第001章_changes.json"
+    changes = ch_dir / "cluster_001_changes.json"
     changes.write_text(json.dumps({
         "self_eval": {
             "waivers": [

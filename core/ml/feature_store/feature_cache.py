@@ -57,6 +57,9 @@ class FeatureStore:
         if key in self._mem_cache:
             self._stats["hits"] += 1
             return self._mem_cache[key]
+        if not enabled():
+            self._stats["misses"] += 1
+            return None
         p = self._disk_path(key)
         if p.exists():
             try:
@@ -71,6 +74,8 @@ class FeatureStore:
 
     def _put_cached(self, key: str, value: dict) -> None:
         self._mem_cache[key] = value
+        if not enabled():
+            return
         p = self._disk_path(key)
         try:
             p.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")

@@ -188,9 +188,14 @@ class ModelRegistry:
             return {"error": f"model {model_name} not found"}
         for v in model_entry["versions"]:
             if v["version"] == version:
-                v["status"] = status
                 if status == "active":
+                    old_active = model_entry.get("active_version")
+                    if old_active and old_active != version:
+                        for ov in model_entry["versions"]:
+                            if ov["version"] == old_active:
+                                ov["status"] = "retired"
                     model_entry["active_version"] = version
+                v["status"] = status
                 self._save(reg)
                 return {"model": model_name, "version": version,
                         "status": status}

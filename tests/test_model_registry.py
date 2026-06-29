@@ -132,6 +132,16 @@ def test_promote_nonexistent(reg):
     assert "error" in result
 
 
+def test_set_status_active_retires_old(reg):
+    reg.register("m", "v1", "/p1", {}, status="active")
+    reg.register("m", "v2", "/p2", {}, status="shadow")
+    reg.set_status("m", "v2", "active")
+    models = reg.list_models()
+    v1 = next(v for v in models["m"]["versions"] if v["version"] == "v1")
+    assert v1["status"] == "retired"
+    assert models["m"]["active"] == "v2"
+
+
 def test_persistence_across_instances(tmp_path):
     path = tmp_path / "reg.json"
     r1 = ModelRegistry(path)

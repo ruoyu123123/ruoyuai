@@ -58,7 +58,7 @@ def _strip_changes(text: str) -> str:
     return parts[0].rstrip() if parts else text
 
 
-def _split_paragraphs(text: str, min_cjk: int = 20) -> list[str]:
+def _split_paragraphs(text: str, min_cjk: int = 6) -> list[str]:
     cjk_re = re.compile(r"[一-鿿]")
     paras = []
     for line in text.split("\n"):
@@ -174,9 +174,14 @@ class ClusterDataCollector:
         return _append_jsonl(_POOL_DIR / "ai_tone" / "fix_pairs.jsonl", records)
 
     def _collect_weak_labels(self) -> int:
-        audit_path = (self.project / "_数据库" /
-                      f"{self.cluster_id}_audit_report.json")
-        if not audit_path.exists():
+        audit_dir = self.project / "_数据库" / ".audit"
+        cluster_key = self.cluster_id.replace("cluster_", "")
+        candidates = [
+            audit_dir / f"cluster_{cluster_key}_audit.json",
+            audit_dir / f"{self.cluster_id}_audit.json",
+        ]
+        audit_path = next((p for p in candidates if p.exists()), None)
+        if audit_path is None:
             return 0
         try:
             report = json.loads(audit_path.read_text(encoding="utf-8"))
@@ -205,9 +210,13 @@ class ClusterDataCollector:
         return total
 
     def _collect_strong_labels(self) -> int:
-        changes_glob = list(
-            (self.project / "章节").glob(f"{self.cluster_id}_draft/第*_changes.json")
-        )
+        ch_dir = self.project / "章节"
+        changes_glob = []
+        cluster_changes = ch_dir / f"{self.cluster_id}_draft" / f"{self.cluster_id}_changes.json"
+        if cluster_changes.exists():
+            changes_glob.append(cluster_changes)
+        for p in ch_dir.glob("第*章/第*_changes.json"):
+            changes_glob.append(p)
         records = []
         for cp in changes_glob:
             try:
