@@ -199,7 +199,7 @@ def main():
         metric_for_best_model=best_metric,  # 动态自 evaluator.primary_metric
         greater_is_better=True,
         seed=args.seed,
-        dataloader_num_workers=2,
+        dataloader_num_workers=0,  # 🔴 Windows 必须 0：spawn+gradient_checkpointing 闭包 hook 不可 pickle(make_inputs_require_grads)
         gradient_checkpointing=True,  # 省显存(略慢) → 12GB 稳
         report_to=[],
     )
