@@ -154,3 +154,4 @@ core/ml/**/training_data/
 core/ml/**/training_pool/
 core/ml/**/cache/
 core/ml/.venv/
+core/ml/.cache/
