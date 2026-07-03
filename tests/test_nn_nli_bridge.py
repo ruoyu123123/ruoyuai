@@ -231,6 +231,120 @@ def test_unexpected_exception_graceful(monkeypatch):
     assert mod.predict_batch([_pair()]) == [None]
 
 
+# ---------------- daemon-first（Wave-5 常驻推理 daemon·~0.1s） ----------------
+
+def test_daemon_hit_bypasses_subprocess(monkeypatch):
+    """daemon 命中 → 直接用其结果（含归一化）·绝不碰 subprocess（mock 为炸弹断言零调用）。"""
+    _force_enabled(monkeypatch)
+
+    class _FakeDaemonClientHit:
+        @staticmethod
+        def enabled():
+            return True
+
+        @staticmethod
+        def ensure_daemon():
+            return True
+
+        @staticmethod
+        def infer(task, items, model=None, timeout=None):
+            assert task == "nli"
+            assert items == [{"premise": "张三把钥匙给了李四", "hypothesis": "李四拿到了钥匙"},
+                             {"premise": "甲", "hypothesis": "乙"}]
+            return [
+                {"label": "ENTAILMENT",
+                 "probs": {"CONTRADICTION": 0.05, "NEUTRAL": 0.1, "ENTAILMENT": 0.85}, "source": "nli"},
+                {"label": "NEUTRAL",
+                 "probs": {"CONTRADICTION": 0.1, "NEUTRAL": 0.8, "ENTAILMENT": 0.1}, "source": "nli"},
+            ]
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", _FakeDaemonClientHit())
+
+    def _boom(*a, **k):
+        raise AssertionError("daemon 命中时不应调用 subprocess")
+    monkeypatch.setattr(mod.subprocess, "run", _boom)
+
+    res = mod.predict_batch([_pair(), _pair("甲", "乙")])
+    assert res[0]["label"] == "entailment"
+    assert abs(res[0]["probs"]["entailment"] - 0.85) < 1e-9
+    assert res[1]["label"] == "neutral"
+
+
+def test_daemon_miss_falls_back_to_subprocess(monkeypatch):
+    """daemon 返回 None（未命中/不可用）→ 无缝落 subprocess 路径（mock subprocess 验证照常执行）。"""
+    _force_enabled(monkeypatch)
+
+    class _FakeDaemonClientMiss:
+        @staticmethod
+        def enabled():
+            return True
+
+        @staticmethod
+        def ensure_daemon():
+            return True
+
+        @staticmethod
+        def infer(task, items, model=None, timeout=None):
+            return None
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", _FakeDaemonClientMiss())
+
+    out_lines = [json.dumps({"label": "CONTRADICTION",
+                             "probs": {"CONTRADICTION": 0.9, "NEUTRAL": 0.05, "ENTAILMENT": 0.05},
+                             "source": "nli"})]
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run(out_lines))
+    res = mod.predict_batch([_pair()])
+    assert res[0]["label"] == "contradiction"
+
+
+def test_daemon_flag_off_never_triggers_daemon_client(monkeypatch):
+    """RUOYU_NN_DAEMON 关（默认）→ 即便塞一个 enabled() 即炸的假模块，_daemon_infer 的
+    try/except 也吞掉异常·predict_batch 无缝落回既有 subprocess 路径（不崩）。"""
+    _force_enabled(monkeypatch)
+
+    class _BoomDaemonClient:
+        @staticmethod
+        def enabled():
+            raise AssertionError("不该被有效触发导致崩溃")
+
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", _BoomDaemonClient())
+
+    out_lines = [json.dumps({"label": "ENTAILMENT",
+                             "probs": {"CONTRADICTION": 0.05, "NEUTRAL": 0.05, "ENTAILMENT": 0.9},
+                             "source": "nli"})]
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run(out_lines))
+    res = mod.predict_batch([_pair()])
+    assert res[0]["label"] == "entailment"
+
+
+def test_daemon_count_mismatch_falls_back_to_subprocess(monkeypatch):
+    """daemon 结果条数与输入不齐 → 视为不可信·回退 subprocess。"""
+    _force_enabled(monkeypatch)
+
+    class _FakeDaemonClientShort:
+        @staticmethod
+        def enabled():
+            return True
+
+        @staticmethod
+        def ensure_daemon():
+            return True
+
+        @staticmethod
+        def infer(task, items, model=None, timeout=None):
+            return [{"label": "ENTAILMENT", "probs": {"ENTAILMENT": 0.9}, "source": "nli"}]  # 故意少一条
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", _FakeDaemonClientShort())
+
+    out_lines = [json.dumps({"label": "CONTRADICTION",
+                             "probs": {"CONTRADICTION": 0.9, "NEUTRAL": 0.05, "ENTAILMENT": 0.05},
+                             "source": "nli"}),
+                 json.dumps({"label": "NEUTRAL",
+                             "probs": {"CONTRADICTION": 0.1, "NEUTRAL": 0.8, "ENTAILMENT": 0.1},
+                             "source": "nli"})]
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run(out_lines))
+    res = mod.predict_batch([_pair(), _pair()])
+    assert res[0]["label"] == "contradiction"
+    assert res[1]["label"] == "neutral"
+
+
 # ---------------- 真 venv 冒烟（门控·慢·用真下载的 checkpoint） ----------------
 
 @pytest.mark.skipif(os.environ.get("RUOYU_RUN_REAL_NN") != "1",

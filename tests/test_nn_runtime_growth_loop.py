@@ -18,16 +18,28 @@ import save_state  # noqa: E402
 def test_creative_defaults_include_growth_loop_gates(monkeypatch):
     for gate in nn_runtime_defaults.creative_nn_gates():
         monkeypatch.delenv(gate, raising=False)
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
     newly = nn_runtime_defaults.enable_creative_nn_defaults()
     expected = {
         "RUOYU_NN_SURPRISAL", "RUOYU_NN_COHERENCE", "RUOYU_NN_VAD",
         "RUOYU_NN_COREF", "RUOYU_CHARACTER_NETWORK",
         "RUOYU_FEATURE_STORE", "RUOYU_DATA_FLYWHEEL", "RUOYU_MODEL_REGISTRY",
         "RUOYU_PREF_RANKER",   # 2026-07-03 W3：pairwise 偏好观察捕获（纯 python 零延迟）
+        "RUOYU_NN_DAEMON",     # 2026-07-04 W5：常驻推理 daemon（热路径 0.04-0.13s 实测）
+        "RUOYU_NN_NLI",        # 2026-07-04 W5：NLI 桥随 daemon 达标默认开
     }
     assert set(nn_runtime_defaults.creative_nn_gates()) == expected
-    assert set(newly) == expected
-    assert all(__import__("os").environ[g] == "1" for g in expected)
+    assert set(newly) == expected | {"EMBED_BACKEND"}   # 字符串值型默认也在 newly 里
+    os = __import__("os")
+    assert all(os.environ[g] == "1" for g in expected)
+    assert os.environ["EMBED_BACKEND"] == "ruoyu_style"  # W5：真语义后端创作默认
+
+
+def test_creative_defaults_do_not_override_explicit_embed_backend(monkeypatch):
+    """显式 EMBED_BACKEND（含设成 hash 对照）→ setdefault 不覆盖。"""
+    monkeypatch.setenv("EMBED_BACKEND", "hash")
+    nn_runtime_defaults.enable_creative_nn_defaults()
+    assert __import__("os").environ["EMBED_BACKEND"] == "hash"
 
 
 def test_creative_defaults_do_not_override_explicit_zero(monkeypatch):

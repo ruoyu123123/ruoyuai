@@ -87,11 +87,30 @@ def _parse_one(obj) -> "dict | None":
     return {"coherence_score": score, "is_coherent": is_coherent, "source": "model"}
 
 
-def _run_infer(records: "list[dict]", extra_args: "list[str]",
-               timeout: "float | None") -> "list[dict | None]":
-    """通用批量推理 worker：写 jsonl → subprocess → 读 jsonl → 解析 → 保序一一对应。
+def _daemon_infer(items: list, timeout: float) -> "list | None":
+    """daemon-first 尝试（Wave-5 常驻推理 daemon·~0.1s）：未启用/不可达/结果条数不齐 → None，
+    调用方回退既有 subprocess 路径（~25s）。daemon 任何问题都不抛异常（try/except 兜底）。"""
+    try:
+        import nn_daemon_client
+        if nn_daemon_client.enabled() and nn_daemon_client.ensure_daemon():
+            res = nn_daemon_client.infer("coherence", items, timeout=timeout)
+            if res is not None and len(res) == len(items):
+                return res
+    except Exception:
+        pass
+    return None
+
+
+def _run_infer(records: "list[dict]", extra_args: "list[str]", timeout: "float | None",
+               daemon_items: "list | None" = None) -> "list[dict | None]":
+    """通用批量推理 worker：daemon-first（常驻推理服务命中即返回）→ 否则写 jsonl → subprocess →
+    读 jsonl → 解析 → 保序一一对应。
 
     任何不可用/失败 → 全 None（调用方回退启发式·不崩）。records 与返回值同序同长。
+    daemon_items：daemon `/infer` 请求体的 items 形状——单文本窗口传裸字符串列表（daemon 侧
+    `_is_pair_item` 靠 isinstance(dict) 判定·裸字符串必落单文本分支）；文本对沿用 records 本身
+    的 {"text_a","text_b"} dict 形状（与 subprocess jsonl 的 records 可能不同，由调用方按
+    model_daemon._infer_coherence 的契约传入正确形状）。缺省退回 records 本身。
     """
     n = len(records)
     if n == 0:
@@ -99,6 +118,12 @@ def _run_infer(records: "list[dict]", extra_args: "list[str]",
     none_list: "list[dict | None]" = [None] * n
     if not enabled():
         return none_list
+
+    daemon_res = _daemon_infer(daemon_items if daemon_items is not None else records,
+                               timeout or _DEFAULT_TIMEOUT)
+    if daemon_res is not None:
+        return [_parse_one(o) for o in daemon_res]
+
     py = _venv_python()
     ckpt = _resolve_ckpt()
     if py is None or ckpt is None:
@@ -162,13 +187,13 @@ def _run_infer(records: "list[dict]", extra_args: "list[str]",
 def predict_batch(texts: "list[str]", timeout: "float | None" = None) -> "list[dict | None]":
     """批量单文本窗口连贯性。任何不可用/失败 → 全 None（调用方回退启发式·不崩）。保序一一对应。"""
     records = [{"text": str(t)} for t in texts]
-    return _run_infer(records, [], timeout)
+    return _run_infer(records, [], timeout, daemon_items=[str(t) for t in texts])
 
 
 def predict_pairs(pairs: "list[tuple[str, str]]", timeout: "float | None" = None) -> "list[dict | None]":
     """批量文本对衔接连贯性（--mode pairs）。任何不可用/失败 → 全 None（不崩）。保序一一对应。"""
     records = [{"text_a": str(a), "text_b": str(b)} for (a, b) in pairs]
-    return _run_infer(records, ["--mode", "pairs"], timeout)
+    return _run_infer(records, ["--mode", "pairs"], timeout, daemon_items=records)
 
 
 def predict_one(text: str, timeout: "float | None" = None) -> "dict | None":

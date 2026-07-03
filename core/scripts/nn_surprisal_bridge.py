@@ -57,24 +57,72 @@ def enabled() -> bool:
     return True
 
 
+def _parse_one(obj, item_id) -> "dict | None":
+    """单条输出解析：仅当真模型命中（source==model 且 mean_surprisal 非空）才采纳，否则 None。
+    subprocess（jsonl 逐行·id 由 surprisal_infer._run_batch 写回 obj）和 daemon（裸 predict_batch
+    结果·不带 id）两条路径共用本函数——id 统一用调用方按位置对应传入的 item_id（str 化对齐
+    jsonl 往返后的字符串类型），防口径漂移。"""
+    if isinstance(obj, dict) and obj.get("source") == "model" and obj.get("mean_surprisal") is not None:
+        return {
+            "id": str(item_id),
+            "mean_surprisal": obj.get("mean_surprisal"),
+            "std_surprisal": obj.get("std_surprisal"),
+            "max_surprisal": obj.get("max_surprisal"),
+            "min_surprisal": obj.get("min_surprisal"),
+            "skewness": obj.get("skewness"),
+            "kurtosis": obj.get("kurtosis"),
+            "token_count": obj.get("token_count"),
+            "source": "model",
+        }
+    return None
+
+
+def _daemon_infer(items: list, timeout: float) -> "list | None":
+    """daemon-first 尝试（Wave-5 常驻推理 daemon·~0.1s）：未启用/不可达/结果条数不齐 → None，
+    调用方回退既有 subprocess 路径（~25s）。daemon 任何问题都不抛异常（try/except 兜底）。
+
+    🔴 已知差异（不在本桥可修范围内·见交付报告）：daemon 侧 `_infer_surprisal(items, model=None)`
+    忽略传入的 model 参数，只读 daemon 进程自己的 RUOYU_SURPRISAL_MODEL env（daemon 是长驻进程，
+    调用方运行时改 env 不会被其感知）。本函数不传 model（传了也被忽略，避免误导）。
+    """
+    try:
+        import nn_daemon_client
+        if nn_daemon_client.enabled() and nn_daemon_client.ensure_daemon():
+            res = nn_daemon_client.infer("surprisal", items, timeout=timeout)
+            if res is not None and len(res) == len(items):
+                return res
+    except Exception:
+        pass
+    return None
+
+
 def predict_batch(texts: "list[str]", ids: "list[str] | None" = None,
                   timeout: "float | None" = None) -> "list[dict | None]":
-    """批量推理。任何不可用/失败 → 全 None（调用方静默降级·不崩）。保序一一对应。"""
+    """批量推理。任何不可用/失败 → 全 None（调用方静默降级·不崩）。保序一一对应。
+
+    daemon-first：常驻推理 daemon 命中 → 直接用其结果（与 subprocess 路径共用 _parse_one 后处理）；
+    daemon 未启用/不可达/结果异常 → 回退既有 subprocess 路径（零回归）。
+    """
     n = len(texts)
     if n == 0:
         return []
     none_list: "list[dict | None]" = [None] * n
     if not enabled():
         return none_list
-    py = _venv_python()
-    if py is None:
-        return none_list
 
-    # 构建 ID 列表
+    # 构建 ID 列表（daemon 和 subprocess 两条路径都需要）
     if ids is None:
         ids = [f"para_{i:04d}" for i in range(n)]
     if len(ids) != n:
         print(f"[nn_surprisal_bridge] ids 长度 {len(ids)} != texts {n}·回退", file=sys.stderr)
+        return none_list
+
+    daemon_res = _daemon_infer([str(t) for t in texts], timeout or _DEFAULT_TIMEOUT)
+    if daemon_res is not None:
+        return [_parse_one(obj, item_id) for obj, item_id in zip(daemon_res, ids)]
+
+    py = _venv_python()
+    if py is None:
         return none_list
 
     # 模型名（环境变量透传）
@@ -125,23 +173,7 @@ def predict_batch(texts: "list[str]", ids: "list[str] | None" = None,
             except json.JSONDecodeError:
                 results.append(None)
                 continue
-            # 仅当真模型命中才采纳；error/empty → None
-            if (isinstance(obj, dict)
-                    and obj.get("source") == "model"
-                    and obj.get("mean_surprisal") is not None):
-                results.append({
-                    "id": obj.get("id"),
-                    "mean_surprisal": obj.get("mean_surprisal"),
-                    "std_surprisal": obj.get("std_surprisal"),
-                    "max_surprisal": obj.get("max_surprisal"),
-                    "min_surprisal": obj.get("min_surprisal"),
-                    "skewness": obj.get("skewness"),
-                    "kurtosis": obj.get("kurtosis"),
-                    "token_count": obj.get("token_count"),
-                    "source": "model",
-                })
-            else:
-                results.append(None)
+            results.append(_parse_one(obj, obj.get("id")))
 
         if len(results) != n:
             print(f"[nn_surprisal_bridge] 输出条数失配 {len(results)}!={n}·回退", file=sys.stderr)

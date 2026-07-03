@@ -24,6 +24,36 @@ import sys
 from pathlib import Path
 
 
+def load_model(model_dir):
+    """加载 SentenceTransformer 模型（venv 侧）。
+
+    🔴 2026-07-03 Wave-5 常驻 daemon 集成 — 供 `core/ml/daemon/model_daemon.py` 首次请求时
+    调用一次并常驻缓存复用（取代每次 subprocess 都重新加载）；main() CLI 路径仍每次独立调用一次，
+    行为与重构前逐字节一致。
+    """
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer(str(model_dir))
+    model.eval()  # 确定性：关 dropout 等
+    return model
+
+
+def encode_with_model(model, texts, batch_size=32, max_cjk=8000):
+    """已加载模型 → 批量编码 texts → L2 归一化 embedding（6 位小数·与 main() 原输出格式一致）。
+
+    daemon 侧（模型常驻）与 CLI 侧（main() 每次独立加载）共用本函数，确保两条路径编码逻辑
+    单一真理源、不会因为重构分叉出不同数值。
+    """
+    truncated = [str(t)[:max_cjk] for t in texts]
+    embs = model.encode(
+        truncated,
+        normalize_embeddings=True,
+        batch_size=batch_size,
+        show_progress_bar=False,
+        convert_to_numpy=True,
+    )
+    return [[round(float(x), 6) for x in e] for e in embs]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="风格/声纹嵌入批量编码桥（venv 侧）")
     ap.add_argument("--model", required=True, help="SentenceTransformer 模型目录")
@@ -56,21 +86,14 @@ def main() -> int:
         return 0
 
     try:
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer  # noqa: F401  保留原始 import 探测（错误信息逐字节不变）
     except Exception as e:  # noqa: BLE001
         print(f"[FATAL] 无法 import sentence_transformers（venv 缺 torch?）: {e}", file=sys.stderr)
         return 2
 
     try:
-        model = SentenceTransformer(str(mp))
-        model.eval()  # 确定性：关 dropout 等
-        embs = model.encode(
-            texts,
-            normalize_embeddings=True,
-            batch_size=args.batch_size,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-        )
+        model = load_model(mp)
+        embs = encode_with_model(model, texts, batch_size=args.batch_size, max_cjk=args.max_cjk)
     except Exception as e:  # noqa: BLE001
         print(f"[FATAL] 编码失败: {e}", file=sys.stderr)
         return 2
@@ -78,9 +101,7 @@ def main() -> int:
     try:
         with open(args.output, "w", encoding="utf-8") as fh:
             for e in embs:
-                fh.write(json.dumps(
-                    {"embedding": [round(float(x), 6) for x in e]},
-                    ensure_ascii=False) + "\n")
+                fh.write(json.dumps({"embedding": e}, ensure_ascii=False) + "\n")
     except Exception as e:  # noqa: BLE001
         print(f"[FATAL] 写出失败: {e}", file=sys.stderr)
         return 2

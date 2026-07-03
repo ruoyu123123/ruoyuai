@@ -42,9 +42,18 @@ _CREATIVE_NN_GATES = (
     "RUOYU_MODEL_REGISTRY",     # 创作入口登记 active/shadow 模型版本与运行指标
     "RUOYU_PREF_RANKER",        # user_choice_learner pairwise 偏好观察捕获+训练（纯 python 零延迟·
                                 # 不开则观察永不积累、排序器永远训不起来；annotate 只加 advisory 字段）
+    "RUOYU_NN_DAEMON",          # 🔴 2026-07-04 W5：常驻推理 daemon（5 类模型驻内存·热路径 0.04-0.13s
+                                # 实测·idle 30min 自退·pytest 环境拒绝真拉起）
+    "RUOYU_NN_NLI",             # 🔴 2026-07-04 W5：NLI 蕴含桥——daemon 热路径下延迟达标后随之默认开
+                                # （W4 前逐声明 subprocess ~16s 的顾虑已被 daemon+单批根治）
 )
-# 🔴 刻意不在此列的门控：RUOYU_NN_NLI（每次 subprocess 冷加载 110M 模型 ~16s，writer_truth_check
-# 逐 uncertain 声明调用会线性放大——等 wave-4 批量/常驻层落地后再评估默认开，见 LEARNABLE_BACKLOG）。
+
+# 🔴 2026-07-04 W5：字符串值型创作默认（非 0/1 布尔门控）。EMBED_BACKEND=ruoyu_style 点亮全仓
+# 20+ 语义接线（本仓 fine-tune 风格声纹模型·daemon 热路径 0.04s/批实测）；显式设过（含设成
+# hash 对照）不覆盖，与布尔门控同一 setdefault 纪律。
+_CREATIVE_ENV_DEFAULTS = (
+    ("EMBED_BACKEND", "ruoyu_style"),
+)
 
 
 def creative_nn_gates() -> tuple[str, ...]:
@@ -55,7 +64,8 @@ def creative_nn_gates() -> tuple[str, ...]:
 def enable_creative_nn_defaults() -> list[str]:
     """创作流程命令行入口调用：setdefault 默认开启所有模型/可成长门控。
 
-    - setdefault 语义：未显式设置的门控 → 设 "1"；已设（含 "0" 显式关）→ 不动。
+    - setdefault 语义：未显式设置的门控 → 设 "1"（字符串值型设对应值）；已设（含 "0"/其他值
+      显式指定）→ 不动。
     - 返回本次实际新设的门控名列表（供日志/审计·便于排查「为何没开/开了哪些」）。
     """
     newly_set: list[str] = []
@@ -63,4 +73,8 @@ def enable_creative_nn_defaults() -> list[str]:
         if gate not in os.environ:
             os.environ[gate] = "1"
             newly_set.append(gate)
+    for key, value in _CREATIVE_ENV_DEFAULTS:
+        if key not in os.environ:
+            os.environ[key] = value
+            newly_set.append(key)
     return newly_set

@@ -138,6 +138,110 @@ def test_to_vad_bin():
     assert b2["valence"] == "M" and b2["dominance"] == "M"
 
 
+# ---------------- daemon-first（Wave-5 常驻推理 daemon·~0.1s） ----------------
+
+class _FakeDaemonClientHit:
+    """假 nn_daemon_client：daemon 命中·返回 content-aware 假结果（区分不同输入文本）。"""
+    @staticmethod
+    def enabled():
+        return True
+
+    @staticmethod
+    def ensure_daemon():
+        return True
+
+    @staticmethod
+    def infer(task, items, model=None, timeout=None):
+        assert task == "vad"
+        return [{"valence": 0.1 * (i + 1), "arousal": 0.9, "dominance": None, "source": "model"}
+                for i, _ in enumerate(items)]
+
+
+def test_daemon_hit_bypasses_subprocess(monkeypatch):
+    """daemon 命中 → 直接用其结果·绝不碰 subprocess（monkeypatch subprocess.run 为炸弹断言零调用）。"""
+    _force_enabled(monkeypatch)
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", _FakeDaemonClientHit())
+
+    def _boom(*a, **k):
+        raise AssertionError("daemon 命中时不应调用 subprocess")
+    monkeypatch.setattr(mod.subprocess, "run", _boom)
+
+    res = mod.predict_batch(["怒", "喜"])
+    assert res[0]["source"] == "model" and abs(res[0]["valence"] - 0.1) < 1e-9
+    assert res[1]["source"] == "model" and abs(res[1]["valence"] - 0.2) < 1e-9
+
+
+def test_daemon_miss_falls_back_to_subprocess(monkeypatch):
+    """daemon 返回 None（未命中/不可用）→ 无缝落 subprocess 路径（mock subprocess 验证照常执行）。"""
+    _force_enabled(monkeypatch)
+
+    class _FakeDaemonClientMiss:
+        @staticmethod
+        def enabled():
+            return True
+
+        @staticmethod
+        def ensure_daemon():
+            return True
+
+        @staticmethod
+        def infer(task, items, model=None, timeout=None):
+            return None
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", _FakeDaemonClientMiss())
+
+    out_lines = [json.dumps({"valence": 0.7, "arousal": 0.6, "dominance": None, "source": "model"})]
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run(out_lines))
+    res = mod.predict_batch(["甲"])
+    assert res[0]["source"] == "model" and abs(res[0]["valence"] - 0.7) < 1e-9
+
+
+def test_daemon_flag_off_never_triggers_daemon_client(monkeypatch):
+    """RUOYU_NN_DAEMON 关（默认）→ nn_daemon_client 完全不产生实质效果：即便塞一个 enabled()
+    即炸的假模块，_daemon_infer 的 try/except 也吞掉异常·predict_batch 无缝落回既有 subprocess
+    路径（不因 daemon 侧任何异常而崩/而跳过 subprocess）。"""
+    _force_enabled(monkeypatch)
+
+    class _BoomDaemonClient:
+        @staticmethod
+        def enabled():
+            raise AssertionError("不该被有效触发导致崩溃")
+
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", _BoomDaemonClient())
+
+    out_lines = [json.dumps({"valence": 0.3, "arousal": 0.4, "dominance": None, "source": "model"})]
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run(out_lines))
+    res = mod.predict_batch(["甲"])
+    assert res[0]["source"] == "model" and abs(res[0]["valence"] - 0.3) < 1e-9
+
+
+def test_daemon_count_mismatch_falls_back_to_subprocess(monkeypatch):
+    """daemon 结果条数与输入不齐 → 视为不可信·回退 subprocess（保序契约同样适用于 daemon 路径）。"""
+    _force_enabled(monkeypatch)
+
+    class _FakeDaemonClientShort:
+        @staticmethod
+        def enabled():
+            return True
+
+        @staticmethod
+        def ensure_daemon():
+            return True
+
+        @staticmethod
+        def infer(task, items, model=None, timeout=None):
+            return [{"valence": 0.5, "arousal": 0.5, "dominance": None, "source": "model"}]  # 故意少一条
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", _FakeDaemonClientShort())
+
+    out_lines = [
+        json.dumps({"valence": 0.2, "arousal": 0.8, "dominance": None, "source": "model"}),
+        json.dumps({"valence": 0.9, "arousal": 0.3, "dominance": None, "source": "model"}),
+    ]
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run(out_lines))
+    res = mod.predict_batch(["甲", "乙"])
+    assert abs(res[0]["valence"] - 0.2) < 1e-9
+    assert abs(res[1]["valence"] - 0.9) < 1e-9
+
+
 # ---------------- 真 venv 冒烟（门控·慢） ----------------
 
 @pytest.mark.skipif(os.environ.get("RUOYU_RUN_REAL_NN") != "1",

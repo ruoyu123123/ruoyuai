@@ -81,10 +81,37 @@ def enabled() -> bool:
     return _resolve_ckpt() is not None
 
 
+def _parse_one(obj) -> "dict | None":
+    """单条输出解析：仅当真模型命中（source==nli 且 label 非空）才采纳，否则 None；label/probs
+    key 归一化小写。subprocess（jsonl 逐行）和 daemon（dict 列表）两条路径共用本函数，防口径漂移。"""
+    if isinstance(obj, dict) and obj.get("source") == "nli" and obj.get("label"):
+        raw_probs = obj.get("probs") or {}
+        norm_probs = {_LABEL_NORM.get(k, str(k).lower()): v for k, v in raw_probs.items()}
+        norm_label = _LABEL_NORM.get(obj["label"], str(obj["label"]).lower())
+        return {"label": norm_label, "probs": norm_probs, "source": "nli"}
+    return None
+
+
+def _daemon_infer(items: list, timeout: float) -> "list | None":
+    """daemon-first 尝试（Wave-5 常驻推理 daemon·~0.1s）：未启用/不可达/结果条数不齐 → None，
+    调用方回退既有 subprocess 路径（~25s）。daemon 任何问题都不抛异常（try/except 兜底）。"""
+    try:
+        import nn_daemon_client
+        if nn_daemon_client.enabled() and nn_daemon_client.ensure_daemon():
+            res = nn_daemon_client.infer("nli", items, timeout=timeout)
+            if res is not None and len(res) == len(items):
+                return res
+    except Exception:
+        pass
+    return None
+
+
 def predict_batch(pairs: "list[dict]", timeout: "float | None" = None) -> "list[dict | None]":
     """批量 NLI 推理。pairs[i] = {"premise": str, "hypothesis": str}。
 
     任何不可用/失败 → 全 None（调用方回退纯字面判断·不崩）。保序一一对应。
+    daemon-first：常驻推理 daemon 命中 → 直接用其结果（与 subprocess 路径共用 _parse_one 后处理）；
+    daemon 未启用/不可达/结果异常 → 回退既有 subprocess 路径（零回归）。
     """
     n = len(pairs)
     if n == 0:
@@ -92,6 +119,15 @@ def predict_batch(pairs: "list[dict]", timeout: "float | None" = None) -> "list[
     none_list: "list[dict | None]" = [None] * n
     if not enabled():
         return none_list
+
+    # 统一净化（daemon items 与 subprocess jsonl 共用同一份·避免两处各写一遍口径漂移）
+    sanitized = [{"premise": str((pr or {}).get("premise", "")),
+                  "hypothesis": str((pr or {}).get("hypothesis", ""))} for pr in pairs]
+
+    daemon_res = _daemon_infer(sanitized, timeout or _DEFAULT_TIMEOUT)
+    if daemon_res is not None:
+        return [_parse_one(o) for o in daemon_res]
+
     py = _venv_python()
     ckpt = _resolve_ckpt()
     if py is None or ckpt is None:
@@ -102,10 +138,8 @@ def predict_batch(pairs: "list[dict]", timeout: "float | None" = None) -> "list[
     out_path = Path(tmpdir) / "out.jsonl"
     try:
         with in_path.open("w", encoding="utf-8") as f:
-            for pr in pairs:
-                f.write(json.dumps({"premise": str((pr or {}).get("premise", "")),
-                                     "hypothesis": str((pr or {}).get("hypothesis", ""))},
-                                    ensure_ascii=False) + "\n")
+            for rec in sanitized:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
         env = dict(os.environ)
         env["RUOYU_NLI_CKPT"] = ckpt
@@ -134,14 +168,7 @@ def predict_batch(pairs: "list[dict]", timeout: "float | None" = None) -> "list[
             except json.JSONDecodeError:
                 results.append(None)
                 continue
-            # 仅当真模型命中才采纳；unavailable/error → None（让调用方用自己的字面判断）
-            if isinstance(obj, dict) and obj.get("source") == "nli" and obj.get("label"):
-                raw_probs = obj.get("probs") or {}
-                norm_probs = {_LABEL_NORM.get(k, str(k).lower()): v for k, v in raw_probs.items()}
-                norm_label = _LABEL_NORM.get(obj["label"], str(obj["label"]).lower())
-                results.append({"label": norm_label, "probs": norm_probs, "source": "nli"})
-            else:
-                results.append(None)
+            results.append(_parse_one(obj))
 
         if len(results) != n:
             print(f"[nn_nli_bridge] 输出条数失配 {len(results)}!={n}·回退字面判断", file=sys.stderr)

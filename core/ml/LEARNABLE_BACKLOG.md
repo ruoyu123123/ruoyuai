@@ -199,3 +199,20 @@
 **基准实测（EMBED_BACKEND=ruoyu_style）**：10 段 prefetch 26.1s（vs 改造前逐条 ~230s，**~9x**）；prefetch 后逐条 0.000s；跨进程磁盘命中 0.004s；单条冷未命中仍 ~30s（子进程冷启动物理下限）。
 
 **翻默认决策（数据支撑·暂不翻）**：批量化后每个语义 scanner 每 cluster 仍付 ~25s 一次性子进程成本，全审核 ~20 个语义 scanner ≈ +8 分钟/cluster（修复循环 rescan 对新文本重付）。稳定语料（prototype/锚点/milestone）磁盘缓存终身命中，但正文段落每 cluster 全新。**真正的解锁是 wave-5：venv 常驻 daemon**（stdin/stdout 协议·模型常驻内存·预期 ~0.1s/调用，彻底消掉子进程冷启动）——daemon 落地后翻 `EMBED_BACKEND=ruoyu_style` + `RUOYU_NN_NLI` 进创作默认门控，再做阈值金标准校准。在此之前真语义保持 opt-in（现已实用：配 env 即享批量+缓存性能）。
+
+---
+
+## 2026-07-04 Wave-5 已落地：常驻推理 daemon + 真语义翻进创作默认（campaign 点火时刻）
+
+**架构**（对标 llama.cpp server / MLflow local inference / vLLM sleep mode·纯 stdlib 零新依赖）：
+- `core/ml/daemon/model_daemon.py`：venv 侧 ThreadingHTTPServer（127.0.0.1+token），**5 类模型懒加载驻内存**（style_embed author/character、vad、coherence、surprisal、nli——复用各 infer 模块函数不复制逻辑），全局推理锁串行化 GPU，idle 30min 自退（`RUOYU_NN_DAEMON_IDLE_SEC`），发现文件 `core/ml/.cache/daemon/daemon.json` 原子写。
+- `core/scripts/nn_daemon_client.py`：系统侧 stdlib urllib 客户端，`enabled()`（`RUOYU_NN_DAEMON`）/`ensure_daemon()`（并发锁防重复拉起）/`infer()`（任何失败返 None）。
+- **五桥 daemon-first**：4 个 nn 桥 + `embedding_store.ruoyu_style_encode_batch` 三层降级链 daemon（热 0.04-0.13s）→ 子进程（~25s）→ 启发式，daemon/subprocess 共用同一后处理函数防口径漂移。
+
+**实现期抓修的 3 个真 bug**：① vad/coherence 同名 `model.py` 在常驻同进程撞 `sys.modules` 缓存（第二个加载的 task 拿到第一个的模型类·真机三连跳验证修复）；② HTTP header 大小写鉴权 bug（urllib 自动 capitalize token header，`dict(headers)` 丢大小写不敏感 → 真实鉴权必败·`_get_header_ci` 修复）；③ **daemon 进程风暴**（用户目击"弹一堆命令行"：拉起无失败冷却+部分路径无隐藏窗口标志+测试真拉起不收尾 → 积 24 僵尸进程）——三层根治：`CREATE_NO_WINDOW`（任何路径不弹窗）+ pytest 环境拒绝真拉起（`PYTEST_CURRENT_TEST` 守卫·显式 `RUOYU_NN_DAEMON_ALLOW_SPAWN_IN_TESTS=1` 才放行）+ 拉起失败 300s 冷却，各配回归锁（决定性验证：跑完整套 daemon 测试后系统 daemon 进程数=0）。
+
+**真机基准（2026-07-04）**：daemon 壳启动 0.7s；style_embed 模型加载 24.8s（daemon 生命周期一次）；**热路径 style_embed 10 段 0.042s / vad 0.131s**——对比 Wave-4 每 scanner 每 scan ~25s，热路径 ~600x，"+8 分钟/cluster"顾虑消灭。
+
+**已翻创作默认**（`nn_runtime_defaults`·setdefault 不破测试·显式设置不覆盖）：`RUOYU_NN_DAEMON=1` + `RUOYU_NN_NLI=1` + **`EMBED_BACKEND=ruoyu_style`**（新增字符串值型 `_CREATIVE_ENV_DEFAULTS` 机制）——全仓 20+ embedding 语义接线、NLI 蕴含补判、5 类 NN 桥在创作流程真实点亮。conftest 隔离同步（`EMBED_BACKEND` 进 `_NN_GATES` 防测试泄漏）。
+
+**Wave-6 候选**：① 语义阈值金标准校准（真后端已默认点亮·用 workspace/styles 作者语料标定 0.5-0.75 一批初值——现在是解锁状态）；② daemon 生产观测（首次真实 /cluster-write 全流程下的 daemon 命中率/延迟分布·MAPE-K incidents 有无新指纹）；③ Tier A 剩余（A1 叙事句级分类/A2 ToM/A5 话语标记）；④ 真中文共指模型调研。

@@ -67,14 +67,46 @@ def enabled() -> bool:
     return _resolve_ckpt() is not None
 
 
+def _parse_one(obj) -> "dict | None":
+    """单条输出解析：仅当真模型命中（source==model 且 valence 非空）才采纳，否则 None。
+    subprocess（jsonl 逐行）和 daemon（dict 列表）两条路径共用本函数，防口径漂移。"""
+    if isinstance(obj, dict) and obj.get("source") == "model" and obj.get("valence") is not None:
+        return {"valence": obj.get("valence"), "arousal": obj.get("arousal"),
+                "dominance": obj.get("dominance"), "source": "model"}
+    return None
+
+
+def _daemon_infer(items: list, timeout: float) -> "list | None":
+    """daemon-first 尝试（Wave-5 常驻推理 daemon·~0.1s）：未启用/不可达/结果条数不齐 → None，
+    调用方回退既有 subprocess 路径（~25s）。daemon 任何问题都不抛异常（try/except 兜底）。"""
+    try:
+        import nn_daemon_client
+        if nn_daemon_client.enabled() and nn_daemon_client.ensure_daemon():
+            res = nn_daemon_client.infer("vad", items, timeout=timeout)
+            if res is not None and len(res) == len(items):
+                return res
+    except Exception:
+        pass
+    return None
+
+
 def predict_batch(texts: "list[str]", timeout: "float | None" = None) -> "list[dict | None]":
-    """批量推理。任何不可用/失败 → 全 None（调用方回退启发式·不崩）。保序一一对应。"""
+    """批量推理。任何不可用/失败 → 全 None（调用方回退启发式·不崩）。保序一一对应。
+
+    daemon-first：常驻推理 daemon 命中 → 直接用其结果（与 subprocess 路径共用 _parse_one 后处理）；
+    daemon 未启用/不可达/结果异常 → 回退既有 subprocess 路径（零回归）。
+    """
     n = len(texts)
     if n == 0:
         return []
     none_list: "list[dict | None]" = [None] * n
     if not enabled():
         return none_list
+
+    daemon_res = _daemon_infer([str(t) for t in texts], timeout or _DEFAULT_TIMEOUT)
+    if daemon_res is not None:
+        return [_parse_one(o) for o in daemon_res]
+
     py = _venv_python()
     ckpt = _resolve_ckpt()
     if py is None or ckpt is None:
@@ -115,12 +147,7 @@ def predict_batch(texts: "list[str]", timeout: "float | None" = None) -> "list[d
             except json.JSONDecodeError:
                 results.append(None)
                 continue
-            # 仅当真模型命中才采纳；词典/未命中 → None（让调用方用自己的启发式）
-            if isinstance(obj, dict) and obj.get("source") == "model" and obj.get("valence") is not None:
-                results.append({"valence": obj.get("valence"), "arousal": obj.get("arousal"),
-                                "dominance": obj.get("dominance"), "source": "model"})
-            else:
-                results.append(None)
+            results.append(_parse_one(obj))
 
         if len(results) != n:
             print(f"[nn_vad_bridge] 输出条数失配 {len(results)}!={n}·回退启发式", file=sys.stderr)

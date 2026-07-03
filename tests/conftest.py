@@ -20,7 +20,10 @@ _NN_GATES = (
     "RUOYU_NN_SURPRISAL", "RUOYU_NN_COHERENCE", "RUOYU_NN_VAD",
     "RUOYU_NN_COREF", "RUOYU_CHARACTER_NETWORK", "RUOYU_NN_NLI",
     "RUOYU_FEATURE_STORE", "RUOYU_DATA_FLYWHEEL", "RUOYU_MODEL_REGISTRY",
-    "RUOYU_PREF_RANKER",
+    "RUOYU_PREF_RANKER", "RUOYU_NN_DAEMON",
+    # EMBED_BACKEND：W5 起创作入口 setdefault=ruoyu_style（字符串值型）。测试前必须清空——
+    # 泄漏进测试会让语义路径真调 venv（daemon 有 pytest 守卫不会拉起，但会走 25s 子进程）。
+    "EMBED_BACKEND",
 )
 
 

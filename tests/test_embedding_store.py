@@ -147,6 +147,43 @@ def test_cache_gate_off_disables_all(_isolated_embed_cache, monkeypatch):
     assert counter["calls"] == 2 and not es._EMBED_MEM_CACHE
 
 
+def test_ruoyu_style_daemon_first_hit(monkeypatch):
+    """Wave-5：daemon 命中时直接用其结果，不碰子进程路径。"""
+    import types, subprocess as _sp
+    fake = types.SimpleNamespace(
+        enabled=lambda: True, ensure_daemon=lambda: True,
+        infer=lambda task, items, model=None, timeout=None: [
+            {"embedding": [float(len(t))] * 4} for t in items])
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", fake)
+    monkeypatch.setattr(_sp, "run", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("daemon 命中时不得走子进程")))
+    out = es.ruoyu_style_encode_batch(["甲甲", "乙乙乙"], model="author")
+    assert out == [[2.0] * 4, [3.0] * 4]
+
+
+def test_ruoyu_style_daemon_none_falls_to_subprocess(monkeypatch):
+    """Wave-5：daemon 返 None → 无缝落既有子进程路径（此处 venv 探测失败 → 返 None 兜底）。"""
+    import types
+    fake = types.SimpleNamespace(
+        enabled=lambda: True, ensure_daemon=lambda: True,
+        infer=lambda *a, **kw: None)
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", fake)
+    monkeypatch.setattr(es, "_ruoyu_venv_python", lambda: None)
+    assert es.ruoyu_style_encode_batch(["文本"], model="author") is None
+
+
+def test_ruoyu_style_daemon_gate_off_untouched(monkeypatch):
+    """Wave-5 零回归锁：RUOYU_NN_DAEMON 关（默认）→ daemon 客户端完全不被触发。"""
+    import types
+    bomb = types.SimpleNamespace(
+        enabled=lambda: False,
+        ensure_daemon=lambda: (_ for _ in ()).throw(AssertionError("gate off 不得 ensure")),
+        infer=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("gate off 不得 infer")))
+    monkeypatch.setitem(sys.modules, "nn_daemon_client", bomb)
+    monkeypatch.setattr(es, "_ruoyu_venv_python", lambda: None)
+    assert es.ruoyu_style_encode_batch(["文本"], model="author") is None  # 走原路径不炸
+
+
 def test_batch_backend_failure_falls_back_hash_uncached(_isolated_embed_cache, monkeypatch):
     monkeypatch.setattr(es, "ruoyu_style_encode_batch",
                         lambda texts, model="author", timeout=600: None)

@@ -213,6 +213,19 @@ def ruoyu_style_encode_batch(texts, model: str = "author",
     """
     if not texts:
         return []
+    # 🔴 2026-07-04 Wave-5：daemon-first——常驻推理服务命中时 ~0.1s/批（模型驻内存），
+    # 未启用(RUOYU_NN_DAEMON!=1 默认)/不可达/结果不齐 → 无缝落下方既有子进程冷启动路径。
+    try:
+        import nn_daemon_client
+        if nn_daemon_client.enabled() and nn_daemon_client.ensure_daemon():
+            res = nn_daemon_client.infer(
+                "style_embed", [(t or "")[:8000] for t in texts], model=model, timeout=timeout)
+            if res is not None and len(res) == len(texts):
+                embs = [r.get("embedding") if isinstance(r, dict) else None for r in res]
+                if all(e for e in embs):
+                    return embs
+    except Exception:  # noqa: BLE001 — daemon 任何问题都不影响子进程回退路径
+        pass
     vpy = _ruoyu_venv_python()
     mp = _ruoyu_model_path(model)
     if vpy is None or mp is None:
