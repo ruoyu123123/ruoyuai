@@ -443,3 +443,58 @@ def test_issues_have_local_window_mean():
     assert result, "极端跑题应产出 issue"
     for it in result:
         assert "local_window_mean" in it, f"{it['code']} 缺 local_window_mean"
+
+
+# ── 🔴 2026-07-03 Wave-4 性能层：prefetch 批量预热回归锁（范式源头） ─────────────────
+
+def test_prefetch_called_once_with_scope_and_paragraphs():
+    """scan_topic_drift 语义路径开头一次性 prefetch_embeddings(scope+全部段落)，
+    而不是逐段各自触发后端计算——断言只调一次且文本集合符合预期。"""
+    paras = _ON_TOPIC_PARAS[:4] + _OFF_TOPIC_PARAS + _ON_TOPIC_PARAS[4:8]
+    text = "\n".join(paras)
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)),
+                "cache_hits": 0, "computed": len(set(texts))}
+
+    with patch.dict(os.environ, {"EMBED_BACKEND": "mock"}):
+        import embedding_store
+        orig_compute = embedding_store.compute_embedding
+        orig_prefetch = embedding_store.prefetch_embeddings
+        embedding_store.compute_embedding = _char_freq_embedding
+        embedding_store.prefetch_embeddings = _rec_prefetch
+        try:
+            tds.scan_topic_drift(text, _SCOPE)
+        finally:
+            embedding_store.compute_embedding = orig_compute
+            embedding_store.prefetch_embeddings = orig_prefetch
+
+    assert len(calls) == 1, f"prefetch 应只调一次，实际 {len(calls)}"
+    expected = [_SCOPE] + tds._split_paragraphs(text)
+    assert calls[0] == expected
+
+
+def test_prefetch_not_called_when_too_few_paragraphs():
+    """段落太少（< 6）提前返回·prefetch 不该被触发（零浪费）。"""
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {}
+
+    with patch.dict(os.environ, {"EMBED_BACKEND": "mock"}):
+        import embedding_store
+        orig_compute = embedding_store.compute_embedding
+        orig_prefetch = embedding_store.prefetch_embeddings
+        embedding_store.compute_embedding = _char_freq_embedding
+        embedding_store.prefetch_embeddings = _rec_prefetch
+        try:
+            result = tds.scan_topic_drift("第一段\n第二段\n第三段", "主题")
+        finally:
+            embedding_store.compute_embedding = orig_compute
+            embedding_store.prefetch_embeddings = orig_prefetch
+
+    assert result == []
+    assert calls == [], "段落不足 6 段时不该跑到 prefetch"

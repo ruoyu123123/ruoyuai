@@ -1045,7 +1045,11 @@ def _semantic_attribute_to_skill_section(sections: list, keywords) -> "dict | No
     if not query:
         return None
     try:
-        from embedding_store import compute_embedding, cosine_similarity
+        from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
+        # 2026-07-03 Wave-4：query + 全部 skill 段落一次性预热缓存，其后逐段 compute_embedding
+        # 命中缓存（否则 ruoyu_style 等真后端下每段各起一次子进程暖机不可用）。
+        prefetch_embeddings([query] + [(sec.get("heading", "") + " " + sec.get("body", "")).strip()
+                                        for sec in sections])
         q_emb = compute_embedding(query)
     except Exception:
         return None

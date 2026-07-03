@@ -28,6 +28,11 @@ reread test + laterpress dramatic irony 综合：网文 LLM 写伏笔默认全�
   zero_shot_embedding）；否则/无真后端 → 100% 用原词典判定桶位（classify_source=lexicon，
   默认零回归）。classify_plant() 函数本体不变，继续当 fallback 唯一真理源。
 
+【🔴 2026-07-03 Wave-4 性能层】scan() 内不再逐 plant 调 _classify_plant_mode() 触发子
+  进程——先收集本次全部候选 plant（草稿行 + foreshadowing.json 两源合并），再用
+  _classify_plants_batch() 一次交给 zero_shot_prototype.classify_batch()（单条
+  _classify_plant_mode() 仍保留供单条场景调用，行为不变）。
+
 【北极星】②④⑤ cluster 视野·作者档第一权威·advisory shadow·绝不 hard_gate
 COVERT_FORESHADOWING_* 绝不进 audit_hub.HARD_GATE_CODES。
 
@@ -90,6 +95,30 @@ def _classify_plant_mode(text: str, fallback: str) -> "tuple[str, str]":
         except Exception:
             pass
     return fallback, "lexicon"
+
+
+def _classify_plants_batch(items: list) -> list:
+    """items: [(text, fallback_bucket), ...] → [(delivery_mode, classify_source), ...]。
+
+    🔴 2026-07-03 Wave-4：本次全部候选 plant 一次 classify_batch（取代逐条
+    _classify_plant_mode 子进程调用）。真后端不可用/置信不足的条目 100% 用调用方传入的
+    fallback（各调用点自己的原词典判定结果，零回归）。
+    """
+    if not items:
+        return []
+    texts = [t for t, _ in items]
+    try:
+        import zero_shot_prototype
+        results = zero_shot_prototype.classify_batch(texts, _DELIVERY_MODE_PROTOTYPES, floor=0.5)
+    except Exception:
+        results = [None] * len(items)
+    out = []
+    for (_text, fallback), r in zip(items, results):
+        if r is not None:
+            out.append((r["label"], r["source"]))
+        else:
+            out.append((fallback, "lexicon"))
+    return out
 
 
 def _mode() -> str:
@@ -162,7 +191,8 @@ def scan(draft_path, project_root=None) -> dict:
         return out
 
     # 双源 plant 收集：(A) 正文行内匹配 (B) 项目级 foreshadowing.json plant entries
-    plants = []
+    # candidates: [(source, display_text(截80), classify_text(全文), fallback_bucket)]
+    candidates = []
     for line in text.split("\n"):
         stripped = line.strip()
         if len(stripped) < 8:
@@ -176,11 +206,7 @@ def scan(draft_path, project_root=None) -> dict:
             continue
         # 🔴 2026-07-03 模型优先精化桶位：pre-filter 仍用原词典判定「是不是候选 plant」，
         # 桶位分类真后端可用时优先信模型（否则 100% 用 matched_bucket，零回归）
-        # 注意：变量名不可叫 mode——scan() 顶部 `mode = _mode()` 是函数级单一命名空间，
-        # for 循环没有块作用域，重名会覆盖外层 mode 导致后面 if mode == "active" 失效。
-        dmode, csrc = _classify_plant_mode(stripped, matched_bucket)
-        plants.append({"source": "draft_line", "text": stripped[:80],
-                       "delivery_mode": dmode, "classify_source": csrc})
+        candidates.append(("draft_line", stripped[:80], stripped, matched_bucket))
 
     fjson_path = None
     if project_root:
@@ -200,10 +226,17 @@ def scan(draft_path, project_root=None) -> dict:
                         if not t:
                             continue
                         fallback_mode = classify_plant(str(t))
-                        dmode, csrc = _classify_plant_mode(str(t), fallback_mode)
-                        plants.append({"source": "foreshadowing_json",
-                                       "text": str(t)[:80],
-                                       "delivery_mode": dmode, "classify_source": csrc})
+                        candidates.append(("foreshadowing_json", str(t)[:80], str(t), fallback_mode))
+
+    # 🔴 2026-07-03 Wave-4：本次全部候选 plant 一次 classify_batch（取代逐条
+    # _classify_plant_mode 子进程调用）。注意：变量名不可叫 mode——scan() 顶部
+    # `mode = _mode()` 是函数级单一命名空间，重名会覆盖外层 mode 导致后面
+    # if mode == "active" 失效。
+    classified = _classify_plants_batch([(c[2], c[3]) for c in candidates])
+    plants = [
+        {"source": src, "text": disp, "delivery_mode": dmode, "classify_source": csrc}
+        for (src, disp, _ctext, _fb), (dmode, csrc) in zip(candidates, classified)
+    ]
 
     out["plant_total"] = len(plants)
     if not plants:

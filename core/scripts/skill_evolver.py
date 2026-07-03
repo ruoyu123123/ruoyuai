@@ -235,8 +235,12 @@ def evolve(project_root: Path, current_ch: int) -> dict:
         _embed_fn = _cos_fn = None
         if _use_semantic:
             try:
-                from embedding_store import compute_embedding, cosine_similarity
+                from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
                 _embed_fn, _cos_fn = compute_embedding, cosine_similarity
+                # 2026-07-03 Wave-4：本 category 全部 pattern blob 一次性预热缓存，其后 O(N^2)
+                # 两两比对的逐条 compute_embedding 命中缓存（否则真后端下 N 条各起一次子进程）。
+                all_blobs = [_blob_for(i, p) for i, p in enumerate(upgraded)]
+                prefetch_embeddings([b for b in all_blobs if b])
             except ImportError:
                 _use_semantic = False
 

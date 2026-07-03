@@ -489,6 +489,87 @@ def test_semantic_path_falls_back_when_encode_fails():
             os.environ.pop("EMBED_BACKEND", None)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-03 Wave-4：语义路径批量 prefetch（一次 prefetch 取代已写内容+逐条
+# milestone 各自触发后端调用）。手写 save/restore（不用 monkeypatch fixture）——
+# 本文件底部 __main__ 直接零参调用 globals() 里的 test_*，需与之兼容。
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_prefetch_called_once_with_written_text_and_milestones():
+    """语义路径下 scan() 应一次性 prefetch 已写内容聚合 + 全部 milestone 文本，
+    而非已写内容 1 次 + 每条 milestone 各自触发一次后端调用。"""
+    proj = _mk_project()
+    dashishi = {
+        "volumes": [{"vol": 1, "key_milestones": ["夺取王座", "击败魔王", "寻回圣物"]}],
+        "major_events": [
+            {"volume": 1, "status": "completed"},
+            {"volume": 1, "status": "completed"},
+        ],
+    }
+    _write_all(proj, dashishi=dashishi,
+               shijianji={"clusters": [
+                   {"volume": 1, "chapter_range": [1, 9], "status": "已完成",
+                    "scope_summary": "主角登上帝位统治天下"}]})
+
+    old_eb = os.environ.get("EMBED_BACKEND")
+    import embedding_store
+    orig_embed = embedding_store.compute_embedding
+    orig_prefetch = embedding_store.prefetch_embeddings
+    calls = []
+
+    def fake_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)),
+                "cache_hits": 0, "computed": len(set(texts))}
+
+    embedding_store.compute_embedding = lambda t: (
+        [1.0, 0.0] if ("帝位" in t or "王座" in t) else [0.0, 1.0])
+    embedding_store.prefetch_embeddings = fake_prefetch
+    try:
+        os.environ["EMBED_BACKEND"] = "mock"
+        r = mod.scan(proj)
+    finally:
+        embedding_store.compute_embedding = orig_embed
+        embedding_store.prefetch_embeddings = orig_prefetch
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+    assert len(calls) == 1, calls
+    expected = {"主角登上帝位统治天下", "夺取王座", "击败魔王", "寻回圣物"}
+    assert set(calls[0]) == expected, calls[0]
+    assert r["match_method"] == "embedding_cosine", r
+
+
+def test_prefetch_not_called_without_real_backend():
+    """默认（无真后端）→ 整段语义分支不执行 → prefetch_embeddings 零调用（零回归）。"""
+    proj = _mk_synonym_project()
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+    calls = []
+
+    def fake_prefetch(texts):
+        calls.append(list(texts))
+        return {}
+
+    embedding_store.prefetch_embeddings = fake_prefetch
+    try:
+        r = mod.scan(proj)
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+    assert calls == []
+    assert r["match_method"] == "bigram_keyword_overlap"
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(globals()):

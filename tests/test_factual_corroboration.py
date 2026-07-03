@@ -410,3 +410,150 @@ def test_corroborate_uncertain_branch_no_supplement_when_bridge_off():
     res = wtc._corroborate("林若昭被派来监督", body)
     assert res["corroborated"] == "uncertain"
     assert "nli_supplement" not in res
+
+
+# ═══════════ 🔴 2026-07-03 W3-4：corroborate_factual 核对循环单批 NLI（Wave-4 性能层·G7-nli-batch） ═══════════
+#
+# 背景：_nli_supplement 每次调用都起一次 nn_nli_bridge 子进程（冷加载 ~16s）。旧 corroborate_factual
+# 经 _corroborate 逐 uncertain 声明各触发一次，多 uncertain 线性放大。现改走 _corroborate_literal
+# （纯字面·不含 NLI）+ 核对循环结束后 _batch_nli_supplement 统一一次 predict_batch，覆盖本次
+# corroborate_factual 调用内**跨全部四类**的所有候选段落。本节验证：单批调用 + 正确回填不串号 +
+# 桥关闭/异常时输出与不调用完全一致。
+
+def _batch_two_claims_fixture():
+    """两个互相独立、对彼此段落零字面锚点命中的 uncertain 声明（构造给单批 NLI 测试用·
+    已用 _corroborate_literal 逐一验证过零字面命中，确保真落 uncertain 分支）。"""
+    claim1 = "对方收下了那份心意"
+    p1 = "少女把手中之物郑重地交给了他，他默默接过，藏入怀中。"
+    claim2 = "那件兵器换了归属"
+    p2 = "枪早不在旧主怀里，握枪的是个陌生面孔。"
+    p3 = "窗外正下着淅淅沥沥的雨，街道上没什么人。"
+    body = "\n".join([p1, p2, p3])
+    return claim1, claim2, body
+
+
+def test_corroborate_factual_batches_nli_across_categories_single_call(monkeypatch):
+    """跨两个不同 factual 类别（伏笔兑现 + 道具转移）各出一个 uncertain 声明 → 核对循环结束后
+    只触发**一次** predict_batch（覆盖两条声明的全部候选段落合并成的单个批次），且正确回填
+    到各自对应的 claim 记录（不串号）。"""
+    claim1, claim2, body = _batch_two_claims_fixture()
+    calls = []
+
+    def fake_predict_batch(pairs, timeout=None):
+        calls.append(pairs)
+        out = []
+        for pr in pairs:
+            premise, hyp = pr["premise"], pr["hypothesis"]
+            if hyp == claim1 and "少女" in premise:
+                out.append({"label": "entailment",
+                            "probs": {"entailment": 0.91, "neutral": 0.05, "contradiction": 0.04},
+                            "source": "nli"})
+            elif hyp == claim2 and "旧主" in premise:
+                out.append({"label": "entailment",
+                            "probs": {"entailment": 0.77, "neutral": 0.13, "contradiction": 0.10},
+                            "source": "nli"})
+            else:
+                out.append({"label": "neutral",
+                            "probs": {"entailment": 0.1, "neutral": 0.8, "contradiction": 0.1},
+                            "source": "nli"})
+        return out
+
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", fake_predict_batch)
+
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), _empty_fs())
+        changes = {"factual": {
+            "foreshadowing_paid": [{"id": "fs_batch_1", "desc": claim1}],
+            "item_transfers": [{"item": claim2, "to": ""}],
+        }}
+        fc = wtc.corroborate_factual(tmp, changes, body)
+
+    assert len(calls) == 1, "整个 corroborate_factual 调用应只触发一次 predict_batch（单批覆盖两条声明）"
+    all_pairs = calls[0]
+    assert len(all_pairs) == 6  # 2 声明 × 3 段候选（本 body 仅 3 段·均 <= NLI_MAX_PARAGRAPHS）
+    assert {p["hypothesis"] for p in all_pairs} == {claim1, claim2}
+
+    rec1 = next(c for c in fc["claims"] if c["category"] == "伏笔兑现")
+    rec2 = next(c for c in fc["claims"] if c["category"] == "道具转移")
+    # corroborated 三态不被 NLI 改写（仍是 uncertain·不升级为 True）
+    assert rec1["corroborated"] == "uncertain"
+    assert rec2["corroborated"] == "uncertain"
+    # 正确回填到各自记录，互不串号
+    assert rec1["nli_supplement"]["entailment_prob"] == 0.91
+    assert "少女" in rec1["nli_supplement"]["evidence_span"]
+    assert rec2["nli_supplement"]["entailment_prob"] == 0.77
+    assert "旧主" in rec2["nli_supplement"]["evidence_span"]
+
+
+def test_corroborate_factual_batch_nli_zero_calls_when_bridge_disabled(monkeypatch):
+    """桥默认关闭：即便同一次调用里有多个 uncertain 声明，predict_batch 也 0 次调用
+    （回归锁·用 boom 断言而非仅凭字段缺失，防止「悄悄调用了但没生效」的隐藏回归）。"""
+    def boom(pairs, timeout=None):
+        raise AssertionError("桥关闭时不该调用 predict_batch")
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", boom)
+
+    claim1, claim2, body = _batch_two_claims_fixture()
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), _empty_fs())
+        changes = {"factual": {
+            "foreshadowing_paid": [{"id": "fs_batch_2", "desc": claim1}],
+            "item_transfers": [{"item": claim2, "to": ""}],
+        }}
+        fc = wtc.corroborate_factual(tmp, changes, body)
+
+    assert len(fc["claims"]) == 2
+    for c in fc["claims"]:
+        assert c["corroborated"] == "uncertain"
+        assert "nli_supplement" not in c
+
+
+def test_corroborate_factual_batch_nli_exception_safe(monkeypatch):
+    """批 NLI 补判子进程异常 → corroborate_factual 不崩·输出与桥不可用时完全一致
+    （硬约束：桥关闭/失败时输出与不调用完全一致）。"""
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+
+    def boom(pairs, timeout=None):
+        raise RuntimeError("subprocess exploded")
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", boom)
+
+    claim1, claim2, body = _batch_two_claims_fixture()
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), _empty_fs())
+        changes = {"factual": {
+            "foreshadowing_paid": [{"id": "fs_batch_3", "desc": claim1}],
+            "item_transfers": [{"item": claim2, "to": ""}],
+        }}
+        fc = wtc.corroborate_factual(tmp, changes, body)
+
+    assert len(fc["claims"]) == 2
+    for c in fc["claims"]:
+        assert c["corroborated"] == "uncertain"
+        assert "nli_supplement" not in c
+
+
+def test_corroborate_factual_batch_nli_no_pending_no_import_call(monkeypatch):
+    """没有任何 uncertain 声明（全部 True/False）→ pending 为空 → 连 nn_nli_bridge.enabled() 都不该
+    被探测（提前 return，零开销）。"""
+    probed = {"n": 0}
+    real_enabled = nn_nli_bridge.enabled
+
+    def spy_enabled():
+        probed["n"] += 1
+        return real_enabled()
+    monkeypatch.setattr(nn_nli_bridge, "enabled", spy_enabled)
+
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), {
+            "promises": [{"id": "fs_005", "description": "护腕"}],
+            "deadlines": [], "pledges": [], "secrets": [],
+        })
+        body = "李暴躁的护腕咔地碎成两半，掉在地上。"
+        changes = {"factual": {"foreshadowing_paid": [
+            {"id": "fs_005", "desc": "碎裂护腕从天而降"}]}}
+        fc = wtc.corroborate_factual(tmp, changes, body)
+
+    assert fc["claims"][0]["corroborated"] is True
+    assert probed["n"] == 0

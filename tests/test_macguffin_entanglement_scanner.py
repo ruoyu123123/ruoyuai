@@ -495,6 +495,59 @@ def test_compute_entanglement_import_error_falls_back_to_lexicon():
             os.environ.pop("EMBED_BACKEND", None)
 
 
+# ── 🔴 2026-07-03 Wave-4：语义路径批量 prefetch（一次 prefetch 取代逐条各自后端调用）──
+
+def test_prefetch_called_once_with_expected_texts(monkeypatch):
+    """语义路径下 compute_entanglement 应一次性 prefetch goal 原型句 + 各 macguffin 命中
+    cluster 的语境窗口，而非逐条各自触发后端调用。"""
+    proj = Path(tempfile.mkdtemp())
+    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
+    macguffins = [{"name": "古剑", "id": "i1"}]
+    clusters = [
+        {"cluster_id": "cluster_001", "scope_summary": "他为了夺回古剑追查敌人。", "chapter_range": [1, 5]},
+        {"cluster_id": "cluster_002", "scope_summary": "古剑挂在墙上落灰。"},
+        {"cluster_id": "cluster_003", "scope_summary": "无关内容。"},
+    ]
+    calls = []
+
+    def fake_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)),
+                "cache_hits": 0, "computed": len(set(texts))}
+
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", fake_prefetch)
+    per = _run_with_mock_embedding(mac.compute_entanglement, macguffins, clusters, proj)
+
+    assert per["古剑"]["match_method"] == "semantic"
+    assert len(calls) == 1
+    expected = {mac._goal_pursuit_prototype_text(),
+                "他为了夺回古剑追查敌人。", "古剑挂在墙上落灰。"}
+    assert set(calls[0]) == expected
+
+
+def test_prefetch_not_called_without_real_backend(monkeypatch):
+    """默认(无真后端) → compute_entanglement 不进语义分支 → prefetch_embeddings 零调用(零回归)。"""
+    proj = Path(tempfile.mkdtemp())
+    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
+    macguffins = [{"name": "古剑", "id": "i1"}]
+    clusters = [
+        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
+        {"cluster_id": "cluster_002", "scope_summary": "他追查古剑去向。"},
+    ]
+    calls = []
+
+    def fake_prefetch(texts):
+        calls.append(list(texts))
+        return {}
+
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", fake_prefetch)
+    per = mac.compute_entanglement(macguffins, clusters, proj)
+    assert per["古剑"]["match_method"] == "lexicon"
+    assert calls == []
+
+
 def test_main_top_level_match_method_lexicon_by_default():
     """subprocess 端到端(无真后端) → 顶层 out["match_method"] == "lexicon"。"""
     items = [{"id": "i1", "name": "古剑", "is_macguffin": True}]

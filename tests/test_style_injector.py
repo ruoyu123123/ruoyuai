@@ -583,3 +583,64 @@ def test_mmr_select_passages_semantic_path_no_crash():
             os.environ["EMBED_BACKEND"] = bak
         else:
             os.environ.pop("EMBED_BACKEND", None)
+
+
+# ════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-03 Wave-4 性能层：MMR 候选段批量 prefetch（真后端子进程按条调用极贵·
+# 两两 cosine 前先一次性 prefetch 全部候选文本，其后逐条 compute_embedding 命中缓存）
+# ════════════════════════════════════════════════════════════════════
+def test_mmr_select_passages_prefetches_candidates_once():
+    """MMR 贪心选取前应恰好触发一次批量 prefetch，文本集合 = 全部候选段原文（原序）。"""
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
+
+    embedding_store.prefetch_embeddings = _rec_prefetch
+    try:
+        passages = [
+            {"tag": "悬念开场", "text": "刀光一闪敌人已倒地"},
+            {"tag": "悬念开场", "text": "剑气纵横对手轰然倒下"},
+            {"tag": "悬念开场", "text": "雨下了整夜老人慢慢擦拭旧匕首"},
+        ]
+        out = si.mmr_select_passages(passages, "悬念", max_samples=2)
+        assert len(out) == 2
+        assert len(calls) == 1, f"应恰好一次批量 prefetch·实际 {len(calls)} 次"
+        assert calls[0] == [
+            "刀光一闪敌人已倒地", "剑气纵横对手轰然倒下", "雨下了整夜老人慢慢擦拭旧匕首",
+        ]
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_mmr_select_passages_gate_off_never_prefetches():
+    """🔴 零回归锁：门控关（无 EMBED_BACKEND / 无 GEN_EMBED__*）→ prefetch_embeddings
+    完全不被调用（与既有 _text_cosine 门控关零回归锁互补）。"""
+    bak_eb, bak_gen = _clear_embed_env()
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+
+    def _boom(texts):
+        raise AssertionError("门控关时绝不应调用 prefetch_embeddings")
+
+    embedding_store.prefetch_embeddings = _boom
+    try:
+        passages = [
+            {"tag": "悬念开场", "text": "刀光一闪敌人已倒地"},
+            {"tag": "悬念开场", "text": "剑气纵横对手轰然倒下"},
+            {"tag": "悬念开场", "text": "雨下了整夜老人慢慢擦拭旧匕首"},
+        ]
+        out = si.mmr_select_passages(passages, "悬念", max_samples=2)
+        assert len(out) == 2
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        _restore_embed_env(bak_eb, bak_gen)

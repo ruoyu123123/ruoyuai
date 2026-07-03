@@ -328,6 +328,77 @@ def test_promotion_candidate_field_absent_when_gate_off():
         _restore_embed_env(bak_eb, bak_gen)
 
 
+def test_scan_prefetches_targets_and_surfaces_once():
+    """🔴 2026-07-03 Wave-4：canonical 目标值 + 候选 surface 应恰好一次批量 prefetch
+    （真后端子进程按条调用极贵·不应逐候选/逐目标各自触发一次）。"""
+    bak_mode = os.environ.get("TROPE_CANON_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        _set_mode("active")
+        os.environ["EMBED_BACKEND"] = "fake-real"
+        import embedding_store
+        orig_prefetch = embedding_store.prefetch_embeddings
+        calls = []
+
+        def _rec_prefetch(texts):
+            calls.append(list(texts))
+            return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
+
+        embedding_store.prefetch_embeddings = _rec_prefetch
+        try:
+            clusters = [
+                {"trope_tags": ["死而复生", "重生", "穿越"]},
+                {"trope_tags": ["死而复生", "金手指"]},
+                {"trope_tags": ["死而复生", "杀手"]},
+            ]
+            proj = _mk_project(clusters)
+            out = mod.scan_for_promotions(proj)
+            assert len(calls) == 1, f"应恰好一次批量 prefetch·实际 {len(calls)} 次"
+            texts = set(calls[0])
+            canon_map = mod.load_canon().get("canonical_map") or {}
+            canonical_targets = set(canon_map.values())
+            # canonical 目标全集 + 候选 surface 全部收进同一次 prefetch
+            assert canonical_targets.issubset(texts)
+            cand_surfaces = {c["surface"] for c in out["promotion_candidates"]}
+            assert cand_surfaces.issubset(texts)
+            assert "死而复生" in cand_surfaces
+        finally:
+            embedding_store.prefetch_embeddings = orig_prefetch
+    finally:
+        _set_mode(bak_mode)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_scan_gate_off_never_calls_prefetch():
+    """🔴 零回归锁：门控关 → prefetch_embeddings 完全不被调用。"""
+    bak_mode = os.environ.get("TROPE_CANON_MODE")
+    bak_eb, bak_gen = _clear_embed_env()
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+
+    def _boom(texts):
+        raise AssertionError("门控关时绝不应调用 prefetch_embeddings")
+
+    embedding_store.prefetch_embeddings = _boom
+    try:
+        _set_mode("active")
+        clusters = [
+            {"trope_tags": ["新型 trope X", "重生", "穿越"]},
+            {"trope_tags": ["新型 trope X", "金手指"]},
+            {"trope_tags": ["新型 trope X", "杀手"]},
+        ]
+        proj = _mk_project(clusters)
+        out = mod.scan_for_promotions(proj)
+        assert out["promotion_candidates"]
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        _set_mode(bak_mode)
+        _restore_embed_env(bak_eb, bak_gen)
+
+
 def test_canonicalize_tag_never_touches_embedding():
     """canonicalize_tag 本体不动：真后端就绪时也绝不调用 compute_embedding（纯字典精确匹配·
     只有 scan_for_promotions 的晋升候选队列才叠加 embedding 建议）。"""

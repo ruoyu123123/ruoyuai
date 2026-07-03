@@ -214,6 +214,18 @@ def scan(project_root: str | Path) -> dict:
             use_semantic = False
     out["match_method"] = "semantic" if use_semantic else "lexicon"
 
+    # 🔴 2026-07-03 Wave-4：语义路径下先收集本次全部 cluster 摘要文本，一次性 prefetch
+    # 灌缓存——下面 O(N²) 逐对 compute_embedding 调用全部命中缓存（N 个 cluster 只需
+    # 1 次后端批调用，取代当前每个 cluster 首次出现即各自触发一次单条 subprocess 调用）。
+    if use_semantic:
+        summary_texts = [t for t in (_summary_text_for_sim(s) for s in summaries) if t]
+        if summary_texts:
+            try:
+                from embedding_store import prefetch_embeddings
+                prefetch_embeddings(summary_texts)
+            except (ImportError, TypeError):
+                pass
+
     pairs_intentional = []
     pairs_real_repeat = []
     pair_records = []

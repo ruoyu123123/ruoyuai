@@ -131,6 +131,11 @@ def extract_last_line(body: str) -> str:
 # 🔴 2026-07-03：字面 uncertain（弱锚词全 0 命中/无可抽锚词）时额外补一次 NLI 蕴含推理
 # （见 _nli_supplement·经 core/scripts/nn_nli_bridge.py）——只加 nli_supplement 旁证字段，
 # corroborated 三态判定本身永不被 NLI 改写（字面证据始终第一权威·桥默认关不影响任何现有行为）。
+#
+# 🔴 2026-07-03 W3-4（Wave-4 性能层）：corroborate_factual 的核对循环不再逐 uncertain 声明各起
+# 一次 NLI 子进程（每次冷加载 ~16s·线性放大）——改走 _corroborate_literal（纯字面）收集全部
+# uncertain 声明，循环结束后 _batch_nli_supplement 一次 predict_batch 覆盖所有候选段落再回填。
+# _corroborate（单条便捷封装）仍即时补判，供直接调用方/单测使用，行为不变。
 
 _QUOTED_ANCHOR_RE = re.compile(r"[『「“]([^』」”\n]{2,20})[』」”]|【([^】\n]{2,20})】")
 
@@ -216,15 +221,17 @@ def _nli_supplement(claim_text: str, body: str) -> "dict | None":
     return None
 
 
-def _corroborate(claim_text: str, body: str, extra_text: str = "") -> dict:
-    """宽松正文证据匹配。返回 {corroborated: True|False|"uncertain", anchors, evidence_span}。
+def _corroborate_literal(claim_text: str, body: str, extra_text: str = "") -> dict:
+    """纯字面三态匹配（不含 NLI）。返回 {corroborated: True|False|"uncertain", anchors, evidence_span}。
       True       = 任一锚词命中正文（有字面痕迹·措辞不同不判违）
       False      = 有 strong 锚词（具体专名/信物）但全部 0 命中（完全无痕迹·硬矛盾域）
       "uncertain"= 只有弱锚词且全 0 命中 / 无可抽锚词（弱信号·走 advisory）
 
-    🔴 2026-07-03：uncertain 分支额外尝试 NLI 补充证据（见 _nli_supplement）——绝不用于
-    True/False 分支，corroborated 三态值本身永不被 NLI 改写，只在 uncertain 时追加
-    `nli_supplement` 旁证字段（敏感核对层：字面判断永远第一权威，NLI 不否决不改判）。"""
+    🔴 2026-07-03 W3-4（Wave-4 性能层·NLI 单批化）：从 _corroborate 拆出纯字面判定——
+    corroborate_factual 的核对循环改走本函数（不即时触发 NLI），uncertain 声明先收集，
+    循环结束后统一批 nn_nli_bridge.predict_batch 补判（见 _batch_nli_supplement），避免
+    逐声明各起一次子进程（每次冷加载 ~16s·多 uncertain 线性放大）。_corroborate（单条
+    便捷封装·供直接调用方/单测使用）仍在本函数基础上即时附加单条 NLI 补充，行为不变。"""
     strong, weak = _extract_anchors((claim_text or "") + " " + (extra_text or ""))
     anchors = strong + [w for w in weak if w not in strong]
     if not anchors:
@@ -236,11 +243,80 @@ def _corroborate(claim_text: str, body: str, extra_text: str = "") -> dict:
         return {"corroborated": True, "anchors": anchors, "evidence_span": span}
     if strong:
         return {"corroborated": False, "anchors": anchors, "evidence_span": ""}
-    result = {"corroborated": "uncertain", "anchors": anchors, "evidence_span": ""}
-    nli_sup = _nli_supplement(claim_text, body)
-    if nli_sup:
-        result["nli_supplement"] = nli_sup
+    return {"corroborated": "uncertain", "anchors": anchors, "evidence_span": ""}
+
+
+def _corroborate(claim_text: str, body: str, extra_text: str = "") -> dict:
+    """宽松正文证据匹配 + 单条即时 NLI 补充（便捷封装·供直接调用方/单测使用）。
+
+    🔴 2026-07-03：uncertain 分支额外尝试 NLI 补充证据（见 _nli_supplement）——绝不用于
+    True/False 分支，corroborated 三态值本身永不被 NLI 改写，只在 uncertain 时追加
+    `nli_supplement` 旁证字段（敏感核对层：字面判断永远第一权威，NLI 不否决不改判）。
+
+    🔴 W3-4：corroborate_factual 的批量核对循环走 _corroborate_literal + _batch_nli_supplement
+    单批补判，不经本函数（避免逐声明各起一次 NLI 子进程）。本函数保留给直接调用方/单测。"""
+    result = _corroborate_literal(claim_text, body, extra_text=extra_text)
+    if result["corroborated"] == "uncertain":
+        nli_sup = _nli_supplement(claim_text, body)
+        if nli_sup:
+            result["nli_supplement"] = nli_sup
     return result
+
+
+def _batch_nli_supplement(pending: "list[tuple[str, dict]]", body: str) -> None:
+    """🔴 2026-07-03 W3-4（Wave-4 性能层）：corroborate_factual 核对循环收集全部 uncertain
+    声明后，一次 nn_nli_bridge.predict_batch 覆盖所有候选段落，取代逐声明各起一次子进程
+    （每次冷加载 ~16s·多 uncertain 线性放大）。原地把 nli_supplement 回填进 pending 里的
+    rec dict（claims 列表内同一对象·调用方无需处理返回值）。
+
+    pending = [(claim_text, rec_dict), ...] —— claim_text 是该声明喂给 NLI 的假设句
+    （与 _corroborate 单条路径完全同一变量口径：foreshadowing_paid 用 desc / 角色死亡用
+    name / 道具转移用 item / 秘密揭示用 setup_desc），rec_dict 是 corroborate_factual._record
+    已 append 进 claims 列表的记录（原地 mutate，无需额外回填步骤）。
+
+    桥关闭/不可用/异常/条数不符 → 直接返回·pending 里的 rec 全部不获得 nli_supplement，
+    与「逐声明调用但桥不可用」输出完全一致（corroborated 三态不受影响，advisory 只是少了
+    佐证字段·零回归）。"""
+    if not pending:
+        return
+    try:
+        import nn_nli_bridge
+    except ImportError:
+        return
+    if not nn_nli_bridge.enabled():
+        return
+    paras = [p.strip() for p in (body or "").split("\n") if p.strip()]
+    if not paras:
+        return
+    pairs: "list[dict]" = []
+    spans: "list[tuple[dict, list[str], int, int]]" = []  # (rec, candidates, start, end)
+    for claim_text, rec in pending:
+        if not (claim_text or "").strip():
+            continue
+        claim_chars = set(claim_text)
+        candidates = sorted(paras, key=lambda p: len(claim_chars & set(p)), reverse=True)[:NLI_MAX_PARAGRAPHS]
+        start = len(pairs)
+        pairs.extend({"premise": p, "hypothesis": claim_text} for p in candidates)
+        spans.append((rec, candidates, start, len(pairs)))
+    if not pairs:
+        return
+    try:
+        results = nn_nli_bridge.predict_batch(pairs)
+    except Exception:  # noqa: BLE001 — advisory 佐证，任何异常都不影响主判定
+        return
+    if not results or len(results) != len(pairs):
+        return
+    for rec, candidates, start, end in spans:
+        best_p, best_span = 0.0, ""
+        for p, res in zip(candidates, results[start:end]):
+            if not res:
+                continue
+            ent_p = (res.get("probs") or {}).get("entailment", 0.0)
+            if ent_p > best_p:
+                best_p, best_span = ent_p, p[:120]
+        if best_p >= NLI_ENTAILMENT_THRESHOLD:
+            rec["nli_supplement"] = {"label": "entailment", "entailment_prob": round(best_p, 4),
+                                     "evidence_span": best_span, "source": "nli"}
 
 
 _DEATH_WORDS = ("死", "亡", "牺牲", "陨落", "殒", "丧命", "毙", "dead", "died", "deceased")
@@ -265,6 +341,9 @@ def corroborate_factual(project_root: Path, changes: dict, body: str) -> dict:
     claims: list = []
     advisories: list = []
     foreshadowing_trace: list = []
+    # 🔴 2026-07-03 W3-4：uncertain 声明的 (claim_text, rec) 待批 NLI 补判·核对循环结束后
+    # 统一交 _batch_nli_supplement 一次性 predict_batch（不逐声明各起一次 NLI 子进程）。
+    pending_nli: "list[tuple[str, dict]]" = []
 
     def _setup_desc(fid):
         sp = fs_by_id.get(fid) or {}
@@ -290,8 +369,10 @@ def corroborate_factual(project_root: Path, changes: dict, body: str) -> dict:
             desc = it.get("desc") or it.get("description") or ""
         else:
             fid, desc = None, str(it)
-        res = _corroborate(desc, body, extra_text=_setup_desc(fid))
-        _record("伏笔兑现", desc or (fid or ""), res, fs_id=fid)
+        res = _corroborate_literal(desc, body, extra_text=_setup_desc(fid))
+        rec = _record("伏笔兑现", desc or (fid or ""), res, fs_id=fid)
+        if res["corroborated"] == "uncertain":
+            pending_nli.append((desc, rec))
         # SYS-3：锚词集非空且全部在 body 0 命中（对齐 foreshadower 零-grep 判据）→ no_trace（advisory）
         if res["anchors"] and not res["evidence_span"]:
             foreshadowing_trace.append({"field": "foreshadowing_paid_no_trace",
@@ -313,8 +394,10 @@ def corroborate_factual(project_root: Path, changes: dict, body: str) -> dict:
             descr = it.get("desc") or it.get("description") or it.get("key_change") or ""
         else:
             name, descr = str(it), ""
-        res = _corroborate(name, body, extra_text=descr)
-        _record("角色死亡", f"{name} {descr}".strip(), res)
+        res = _corroborate_literal(name, body, extra_text=descr)
+        rec = _record("角色死亡", f"{name} {descr}".strip(), res)
+        if res["corroborated"] == "uncertain":
+            pending_nli.append((name, rec))
 
     # 3. 道具转移（item_transfers）—— 检物件名 + 新持有者是否在正文留痕
     for t in factual.get("item_transfers", []) or []:
@@ -322,8 +405,10 @@ def corroborate_factual(project_root: Path, changes: dict, body: str) -> dict:
             continue
         item = t.get("item") or ""
         to = t.get("to") or ""
-        res = _corroborate(item, body, extra_text=to)
-        _record("道具转移", f"{item} → {to}".strip(" →"), res)
+        res = _corroborate_literal(item, body, extra_text=to)
+        rec = _record("道具转移", f"{item} → {to}".strip(" →"), res)
+        if res["corroborated"] == "uncertain":
+            pending_nli.append((item, rec))
 
     # 4. 秘密揭示（foreshadowing_actions secret.reveal）—— anchors 取 伏笔表 secret desc + how
     for a in factual.get("foreshadowing_actions", []) or []:
@@ -332,8 +417,14 @@ def corroborate_factual(project_root: Path, changes: dict, body: str) -> dict:
         if a.get("category") == "secret" and a.get("type") == "reveal":
             fid = a.get("id")
             how = a.get("how") or a.get("description") or ""
-            res = _corroborate(_setup_desc(fid), body, extra_text=how)
-            _record("秘密揭示", how or (fid or ""), res, fs_id=fid)
+            setup = _setup_desc(fid)
+            res = _corroborate_literal(setup, body, extra_text=how)
+            rec = _record("秘密揭示", how or (fid or ""), res, fs_id=fid)
+            if res["corroborated"] == "uncertain":
+                pending_nli.append((setup, rec))
+
+    # 🔴 2026-07-03 W3-4：核对循环结束·统一批 NLI 补判（单批 subprocess·见 _batch_nli_supplement）
+    _batch_nli_supplement(pending_nli, body)
 
     counts = {"true": 0, "false": 0, "uncertain": 0}
     for c in claims:

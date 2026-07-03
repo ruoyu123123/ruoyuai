@@ -118,6 +118,40 @@ def update(project_root: Path, cluster_id: str) -> dict:
     updated = 0
     ts = datetime.now().isoformat(timespec="seconds")
 
+    # 四线脉络提前读取（供下面 prefetch 收集 query 文本 + 后面判定循环复用·不重复 _load）
+    tl = _load(throughline_path)
+
+    # 🔴 2026-07-03 Wave-4：本次 update() 会用到的全部待编码文本（corpus 摘要 +
+    # 所有 thread/throughline query）一次性 prefetch（真后端子进程按条调用极贵·
+    # 合并成一次批调用），后续 _embed_corpus_once / _thread_appears 内的逐条
+    # compute_embedding 全部命中缓存。
+    if _has_real_embedding_backend():
+        try:
+            from embedding_store import prefetch_embeddings
+            queries = [cluster_summary_text] if cluster_summary_text else []
+            for thread in sub.get("threads", []):
+                if isinstance(thread, str):
+                    if thread:
+                        queries.append(thread)
+                elif isinstance(thread, dict):
+                    name = thread.get("name", thread.get("id", ""))
+                    if name:
+                        desc = thread.get("description") or thread.get("desc") or ""
+                        queries.append(f"{name} {desc}".strip())
+            for line in tl.get("throughlines", []):
+                if isinstance(line, str):
+                    if line:
+                        queries.append(line)
+                elif isinstance(line, dict):
+                    name = line.get("name", "")
+                    if name:
+                        desc = line.get("description") or line.get("desc") or ""
+                        queries.append(f"{name} {desc}".strip())
+            if queries:
+                prefetch_embeddings(queries)
+        except Exception:
+            pass
+
     # 真后端就绪时 cluster 摘要只编码一次（本函数下面两个循环复用·2026-07-02）
     corpus_emb = _embed_corpus_once(cluster_summary_text)
 
@@ -165,7 +199,7 @@ def update(project_root: Path, cluster_id: str) -> dict:
 
     # 四线脉络同理（同一 cluster_summary_text·同一 corpus_emb·同一 _thread_appears 判定·
     # 2026-07-02 举一反三：与上面 subplot_threads 同函数同 bug 模式一起升级语义补漏）
-    tl = _load(throughline_path)
+    # tl 已在函数开头为 prefetch 收集提前读取（见上），此处复用不重复 _load
     tl_updated = 0
     for line in tl.get("throughlines", []):
         # 🔴 G3 e2e 修：四线脉络 schema 可能存成字符串列表（走向线 = str），

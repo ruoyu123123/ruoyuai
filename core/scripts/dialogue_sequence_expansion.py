@@ -22,6 +22,10 @@ LLM 默认走 FPP→SPP 二步对答 → 试探/谈判/审讯类对话扁平化�
   不取代·不会让已命中的类别消失）；否则/无真后端 → 100% 沿用固定触发词表（默认零回归）。
   output.turn_classify_source 标注本次是否有 turn 被模型补召回。
 
+【🔴 2026-07-03 Wave-4 性能层】scan() 内不再逐 turn 调 classify_turn() 触发子进程——改
+  用 _classify_turns_batch() 把本次全部 turn 一次交给 zero_shot_prototype.classify_batch()
+  （单条 classify_turn()/_classify_turn_kind() 仍保留供单 turn 场景调用，行为不变）。
+
 【与 R6 OIR 正交】: OIR 查"非问句回答" (反类型回应), 本 scanner 查 turn 间扩展结构密度。
 
 【北极星② / ⑤ 顾问非法官】对话类型由 manifest/cluster brief 声明 · 扩展密度是工艺
@@ -75,6 +79,23 @@ def _classify_turn_kind(turn: str) -> "str | None":
     except Exception:
         pass
     return None
+
+
+def _classify_turns_batch(turns: list) -> list:
+    """真后端优先批量分类全部 turn 语义（Wave-4：一次 classify_batch 取代逐 turn 子进程调用）。
+
+    返回与 turns 等长的 label list（每项 str 或 None）。异常/无真后端 → 全 None
+    （调用方 100% 回退正则词典判定，零回归）。数学结果与逐条调 _classify_turn_kind
+    完全一致，只是省去 N-1 次重复子进程往返。
+    """
+    if not turns:
+        return []
+    try:
+        import zero_shot_prototype
+        results = zero_shot_prototype.classify_batch(turns, _SEQ_KIND_PROTOTYPES, floor=0.5)
+        return [r["label"] if r is not None else None for r in results]
+    except Exception:
+        return [None] * len(turns)
 
 
 def _mode() -> str:
@@ -184,14 +205,19 @@ def scan(draft_path, project_root=None) -> dict:
         out["dialogue_turn_count"] = n_turns
         return out
 
+    # 🔴 2026-07-03 Wave-4：全部 turn 一次 classify_batch（取代逐 turn classify_turn 子进程调用）
+    model_labels = _classify_turns_batch(turns)
+
     pre_count = 0
     insert_count = 0
     post_count = 0
     expansion_turns = 0
     model_boosted_turns = 0
-    for t in turns:
+    for t, model_label in zip(turns, model_labels):
         lex_k = _lexicon_turn_kinds(t)
-        k = classify_turn(t)  # 词典 ∪ 模型（真后端不可用时 k == lex_k）
+        k = set(lex_k)
+        if model_label is not None:
+            k.add(model_label)  # 词典 ∪ 模型（真后端不可用时 k == lex_k）
         if k != lex_k:
             model_boosted_turns += 1
         if k:

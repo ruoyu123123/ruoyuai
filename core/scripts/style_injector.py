@@ -205,6 +205,15 @@ def mmr_select_passages(
     pool = list(enumerate(candidates))
     if not pool or max_samples <= 0:
         return []
+    # 🔴 2026-07-03 Wave-4：两两 cosine 前先把候选段全文本批量 prefetch 一次
+    # （N 候选 = 后续最多 N 次 compute_embedding·真后端子进程按条调用极贵·
+    # 批量后仅一次后端调用·其后 _text_cosine 内逐条 compute_embedding 命中缓存）。
+    if _has_real_embedding_backend():
+        try:
+            from embedding_store import prefetch_embeddings
+            prefetch_embeddings([_passage_text(p) for _, p in pool])
+        except Exception:
+            pass
     rel = {idx: _tag_relevance(p.get("tag", ""), target_type) for idx, p in pool}
     # 起点：相关性最高（并列取原序最前·确定性）
     pool.sort(key=lambda ip: (-rel[ip[0]], ip[0]))

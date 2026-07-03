@@ -224,6 +224,19 @@ def _iter_pair_dir(root: Path) -> List[Tuple[Path, Path]]:
     return pairs
 
 
+def _read_pair_texts(pairs: List[Tuple[Path, Path]]) -> List[str]:
+    """辅助：读出全部文本对（不做 CJK 过滤，过滤仍只在 _score_pairs 内发生）——
+    仅供 Wave-4 批量预热 embedding 缓存用，多读几条不影响正确性。"""
+    out: List[str] = []
+    for a, b in pairs:
+        try:
+            out.append(a.read_text(encoding="utf-8"))
+            out.append(b.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    return out
+
+
 def _score_pairs(pairs: List[Tuple[Path, Path]],
                  scorer: Callable[[str, str], float]) -> List[float]:
     scores: List[float] = []
@@ -276,6 +289,18 @@ def probe(same_dir: Path, cross_dir: Path,
 
     scorer, is_placeholder = _load_scorer(scorer_spec)
     out["_placeholder_scorer"] = is_placeholder
+
+    # 🔴 2026-07-03 Wave-4：默认 embedding scorer 对每对文本各 2 次 compute_embedding，
+    # _score_pairs 对 same/cross 逐对循环调用 = 真后端下 up to 2*(N_same+N_cross) 次子进程
+    # 调用。默认 scorer 精确等于 _embedding_sfs_score 时才一次性 prefetch 全部文本灌缓存
+    # （自定义 --scorer 不保证走 embedding_store，不能替它预热）；失败不影响主流程。
+    if scorer is _embedding_sfs_score:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from embedding_store import prefetch_embeddings
+            prefetch_embeddings(_read_pair_texts(same_pairs) + _read_pair_texts(cross_pairs))
+        except Exception:
+            pass
 
     same_scores = _score_pairs(same_pairs, scorer)
     cross_scores = _score_pairs(cross_pairs, scorer)

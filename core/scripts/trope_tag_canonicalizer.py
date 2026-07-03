@@ -226,7 +226,18 @@ def scan_for_promotions(project_root: str | Path) -> dict:
     # 真后端就绪时给每个候选加 embedding 最近邻 canonical 建议（不改 canonicalize_tag 本体·
     # 不自动改 trope_canon.json·仍要求人审）；无真后端 → 字段缺省（2026-07-02）
     if promotion_candidates:
-        target_embs = _embed_canonical_targets(sorted(set(canon_map.values())))
+        canonical_targets = sorted(set(canon_map.values()))
+        # 🔴 2026-07-03 Wave-4：canonical 目标值 + 候选 surface 两侧文本一次性 prefetch
+        # （真后端子进程按条调用极贵·合并成一次批调用）——下面 _embed_canonical_targets /
+        # _nearest_canonical_suggestion 内的逐条 compute_embedding 全部命中缓存。
+        if _has_real_embedding_backend():
+            try:
+                from embedding_store import prefetch_embeddings
+                prefetch_embeddings(
+                    canonical_targets + [c["surface"] for c in promotion_candidates])
+            except Exception:
+                pass
+        target_embs = _embed_canonical_targets(canonical_targets)
         for cand in promotion_candidates:
             suggestion = _nearest_canonical_suggestion(cand["surface"], target_embs)
             if suggestion is not None:

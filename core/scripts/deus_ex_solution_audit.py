@@ -121,13 +121,27 @@ def _embed_history_once(history_text: str) -> "list[tuple[str, list]] | None":
         return None
 
 
-def _semantic_anchor_hit(element: str, tail_context: str, history_embs) -> bool:
-    """真后端下：element（+tail 语境窗口）与历史段落语义扫描 —— 命中 → 视为已有语义铺垫
-    （意译/概念性铺垫 · 字面子串扫不出）。
+def _anchor_query_text(element: str, tail_context: str) -> str:
+    """element 在 tail_context 中的语境窗口查询文本（_semantic_anchor_hit 判定用·也供
+    audit_deus_ex 批量 prefetch 收集复用·2026-07-03 抽出，避免两处重复算 window）。
 
     语境窗口取 element 在 tail_context 中实际出现位置前后 ANCHOR_CONTEXT_WINDOW 字符
     （而非整段 tail 头部截断——tail 可能长达数千字，resolution 短语可能出现在任意位置，
     头部截断会把它截没）；element 定位不到 → 退回 tail_context 头部截断兜底。
+    """
+    idx = tail_context.find(element)
+    if idx >= 0:
+        lo = max(0, idx - ANCHOR_CONTEXT_WINDOW)
+        hi = min(len(tail_context), idx + len(element) + ANCHOR_CONTEXT_WINDOW)
+        window = tail_context[lo:hi]
+    else:
+        window = tail_context[:200]
+    return f"{element} {window}".strip()
+
+
+def _semantic_anchor_hit(element: str, tail_context: str, history_embs) -> bool:
+    """真后端下：element（+tail 语境窗口）与历史段落语义扫描 —— 命中 → 视为已有语义铺垫
+    （意译/概念性铺垫 · 字面子串扫不出）。
 
     history_embs 为 None（无真后端/无历史）/ element 空 / 计算异常 → False
     （调用方回退字面子串计数 · _count_anchors_for_element 仍是兜底）。
@@ -136,14 +150,7 @@ def _semantic_anchor_hit(element: str, tail_context: str, history_embs) -> bool:
         return False
     try:
         from embedding_store import compute_embedding, cosine_similarity
-        idx = tail_context.find(element)
-        if idx >= 0:
-            lo = max(0, idx - ANCHOR_CONTEXT_WINDOW)
-            hi = min(len(tail_context), idx + len(element) + ANCHOR_CONTEXT_WINDOW)
-            window = tail_context[lo:hi]
-        else:
-            window = tail_context[:200]
-        query = f"{element} {window}".strip()
+        query = _anchor_query_text(element, tail_context)
         qe = compute_embedding(query)
         if not qe:
             return False
@@ -269,6 +276,19 @@ def audit_deus_ex(text: str, history_text: str = "") -> dict:
     elements = _extract_resolution_elements(tail)
     all_elements = (elements["char_names"] + elements["item_names"] +
                     elements["power_hits"])
+
+    # 🔴 2026-07-03 Wave-4：历史段落 + 每个 resolution 元素的语境窗口查询——两侧文本
+    # 集合一次性 prefetch（真后端子进程按条调用极贵·合并成一次批调用），下面
+    # _embed_history_once / _semantic_anchor_hit 内的逐条 compute_embedding 全部命中缓存。
+    if _has_real_embedding_backend():
+        try:
+            from embedding_store import prefetch_embeddings
+            prefetch_embeddings(
+                _split_history_paragraphs(history_text) +
+                [_anchor_query_text(el, tail) for el in all_elements])
+        except Exception:
+            pass
+
     history_embs = _embed_history_once(history_text)
     anchors = {}
     anchor_source = {}

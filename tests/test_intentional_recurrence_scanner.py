@@ -336,6 +336,58 @@ def test_semantic_match_method_when_backend_available():
         _set_mode(bak)
 
 
+# ── 🔴 2026-07-03 Wave-4：语义路径批量 prefetch（一次 prefetch 取代逐对首见各自后端调用）──
+
+def test_prefetch_called_once_with_all_summary_texts(monkeypatch):
+    """语义路径下 scan() 应一次性 prefetch 全部 cluster 摘要文本，而非逐对 compute_embedding
+    各自触发后端调用（3 个 cluster→C(3,2)=3 对但 prefetch 只应调用 1 次·文本只 3 份）。"""
+    _CLUSTER_C = {
+        "cluster_id": "cluster_777",
+        "scope_summary": "主角在密室里破解机关找到线索",
+        "characters_focus": ["主角"], "hub_locations": ["密室"],
+        "anchor_props": ["机关"], "mood": "紧张", "outcome": "找到线索",
+    }
+    calls = []
+
+    def fake_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)),
+                "cache_hits": 0, "computed": len(set(texts))}
+
+    bak = os.environ.get("INTENTIONAL_RECURRENCE_MODE")
+    try:
+        _set_mode("active")
+        import embedding_store
+        monkeypatch.setattr(embedding_store, "prefetch_embeddings", fake_prefetch)
+        _run_with_mock_embedding(
+            mod.scan, _mk_project([_CLUSTER_A_INTENT, _CLUSTER_B_INTENT, _CLUSTER_C]))
+        assert len(calls) == 1
+        expected = {mod._summary_text_for_sim(c)
+                    for c in (_CLUSTER_A_INTENT, _CLUSTER_B_INTENT, _CLUSTER_C)}
+        assert set(calls[0]) == expected
+    finally:
+        _set_mode(bak)
+
+
+def test_prefetch_not_called_when_no_real_backend(monkeypatch):
+    """默认（无真后端）→ 语义路径整体不进入 → prefetch_embeddings 零调用（零回归）。"""
+    calls = []
+
+    def fake_prefetch(texts):
+        calls.append(list(texts))
+        return {}
+
+    bak = os.environ.get("INTENTIONAL_RECURRENCE_MODE")
+    try:
+        _set_mode("active")
+        import embedding_store
+        monkeypatch.setattr(embedding_store, "prefetch_embeddings", fake_prefetch)
+        mod.scan(_mk_project([_CLUSTER_A_INTENT, _CLUSTER_B_INTENT]))
+        assert calls == []
+    finally:
+        _set_mode(bak)
+
+
 def test_semantic_import_error_falls_back_to_lexicon_end_to_end():
     """scan() 端到端：embedding_store 不可导入 → 全程退回 trigram Jaccard·match_method="lexicon"。"""
     bak = os.environ.get("INTENTIONAL_RECURRENCE_MODE")

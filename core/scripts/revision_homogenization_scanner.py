@@ -113,16 +113,23 @@ def _semantic_floor() -> float:
     return DEFAULT_DELTA_SFS_SEMANTIC_FLOOR
 
 
+def _chunk_text(text: str, chunk: int = 500) -> "list[str]":
+    """按定长切块·过滤空白块（与 _embedding_centroid 逐块编码口径一致，供 prefetch 复用）。"""
+    text = (text or "").strip()
+    if not text:
+        return []
+    return [text[i:i + chunk] for i in range(0, len(text), chunk) if text[i:i + chunk].strip()]
+
+
 def _embedding_centroid(text: str, chunk: int = 500) -> "list[float] | None":
     """按 chunk 切分求 embedding 均值并 L2 归一 → 该文本的语义/风格 centroid。
     范式同 embedding_store.store_character_baseline / style_similarity_scanner._text_centroid
     （chunk + 均值 + 归一·本仓既有 idiom）。无内容/编码异常/维度不一致 → None。"""
     from embedding_store import compute_embedding
-    text = (text or "").strip()
-    if not text:
+    chunks = _chunk_text(text, chunk)
+    if not chunks:
         return None
-    chunks = [text[i:i + chunk] for i in range(0, len(text), chunk)]
-    embs = [compute_embedding(c) for c in chunks if c.strip()]
+    embs = [compute_embedding(c) for c in chunks]
     embs = [e for e in embs if e]
     if not embs:
         return None
@@ -142,11 +149,16 @@ def _semantic_pre_post_distance(pre_text: str, post_text: str) -> "dict | None":
     pair_fallback「无作者档 baseline 时两稿互比」范式，只是把 3 维字面指纹换成真语义向量）。
     post_fix 与其的余弦距离即修订造成的语义/风格漂移量·越大同质化风险越高。
     真后端不可用 / 编码失败 / 维度不符 → None（调用方回退数值指纹路径·绝不崩·
-    绝不拿 hash 袋子冒充语义）。"""
+    绝不拿 hash 袋子冒充语义）。
+
+    🔴 2026-07-03 Wave-4：pre/post 两份文本的全部 chunk 一次性 prefetch_embeddings 批量预热
+    （单次后端批调用覆盖两份文本），随后 _embedding_centroid 内逐 chunk compute_embedding
+    全部命中缓存——取代此前 pre/post 各自独立触发一串单条后端调用。"""
     if not _has_real_embedding_backend():
         return None
     try:
-        from embedding_store import cosine_similarity, embedding_method
+        from embedding_store import cosine_similarity, embedding_method, prefetch_embeddings
+        prefetch_embeddings(_chunk_text(pre_text) + _chunk_text(post_text))
         pre_c = _embedding_centroid(pre_text)
         post_c = _embedding_centroid(post_text)
     except Exception:

@@ -407,3 +407,59 @@ def test_placeholder_path_untouched_by_semantic_upgrade(monkeypatch):
     assert "semantic_matching_active" not in out
     for lk in out["leak_samples"]:
         assert "match_method" not in lk
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-03 Wave-4：语义路径批量 prefetch（一次 prefetch 取代逐条各自后端调用）
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_prefetch_called_once_before_detection_pass(monkeypatch):
+    """语义路径下 _detect_leaks_from_ledger 应先一次性 prefetch 全部待 embed 文本
+    （forbidden 短语 + 命中知识动词的窗口），而非逐条各自触发后端调用。"""
+    calls = []
+
+    def fake_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)),
+                "cache_hits": 0, "computed": len(set(texts))}
+
+    monkeypatch.setenv("EMBED_BACKEND", "test_semantic")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _fake_semantic_embed)
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", fake_prefetch)
+    monkeypatch.setenv("CHARACTER_BELIEF_LEDGER_MODE", "active")
+    proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+    _write_ledger(proj, {
+        "characters": {"张三": {"known_facts": [], "unaware_of": ["f1"]}},
+        "facts": {"f1": {"content": "父亲被杀"}},
+    })
+    out = mod.scan(_write(_PARAPHRASE_DRAFT), proj)
+    # prefetch 不论场景/命中窗口多少都恰好触发 1 次
+    assert len(calls) == 1
+    prefetched = calls[0]
+    # forbidden 短语（ledger 原文）必在其中
+    assert "父亲被杀" in prefetched
+    # 至少捕到命中知识动词的正文窗口（同义改写片段）
+    assert any("爹被人害死" in t for t in prefetched)
+    # 语义检测结果不受批量化影响（与 test_semantic_backend_catches_paraphrase_literal_misses 同一断言）
+    assert out["leak_count"] >= 1
+    assert out["leak_samples"][0]["match_method"] == "semantic"
+
+
+def test_prefetch_not_called_when_semantic_path_inactive(monkeypatch):
+    """无真后端（默认）→ 走字面逻辑 → prefetch_embeddings 零调用（零回归）。"""
+    calls = []
+
+    def fake_prefetch(texts):
+        calls.append(list(texts))
+        return {}
+
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", fake_prefetch)
+    monkeypatch.setenv("CHARACTER_BELIEF_LEDGER_MODE", "active")
+    proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+    _write_ledger(proj, {
+        "characters": {"张三": {"known_facts": [], "unaware_of": ["f1"]}},
+        "facts": {"f1": {"content": "父亲被杀"}},
+    })
+    mod.scan(_write(_PARAPHRASE_DRAFT), proj)
+    assert calls == []

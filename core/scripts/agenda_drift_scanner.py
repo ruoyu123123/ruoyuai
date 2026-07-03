@@ -129,6 +129,19 @@ def _semantic_coverage(field_text: str, draft_embedding) -> "float | None":
     return cosine_similarity(field_emb, draft_embedding)
 
 
+def _safe_prefetch(texts: list) -> None:
+    """批量预热 embedding 缓存（Wave-4 2026-07-03）：草稿 + 4 字段一次性灌缓存，随后
+    draft/field 的逐条 compute_embedding 全部命中。prefetch 失败不影响主流程（回退逐条现算）。"""
+    if not texts:
+        return
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embedding_store import prefetch_embeddings
+        prefetch_embeddings(texts)
+    except Exception:
+        pass
+
+
 def scan(draft_path, project_root, cluster_key) -> dict:
     mode = _mode()
     out = {
@@ -169,6 +182,9 @@ def scan(draft_path, project_root, cluster_key) -> dict:
     match_method = "char_jaccard"
     draft_embedding = None
     if _has_real_embedding_backend():
+        # Wave-4 2026-07-03：草稿 + 4 字段一次性批量预热·下面 draft/field embedding 全部命中缓存
+        field_vals = [str(anchor.get(f, "")) for f in _FIELDS]
+        _safe_prefetch([draft] + [v for v in field_vals if v.strip()])
         draft_embedding = _safe_compute_embedding(draft)
         if draft_embedding is not None:
             match_method = "embedding_cosine"

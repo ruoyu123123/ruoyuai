@@ -248,6 +248,14 @@ def scan(project_root: Path) -> dict:
         close_hook_match_method = "bigram_keyword_overlap"
         coverage = None
         if _has_real_embedding_backend():
+            # 🔴 2026-07-03 Wave-4：先 prefetch 两段文本（上卷末钩 + 下卷首开篇）一次性
+            # 灌缓存，下面两次 _embed_or_none 命中缓存（取代各自触发一次后端 subprocess 调用）。
+            try:
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
+                from embedding_store import prefetch_embeddings
+                prefetch_embeddings([close_hook, open_text])
+            except Exception:
+                pass
             sim = _cosine_or_none(_embed_or_none(close_hook), _embed_or_none(open_text))
             if sim is not None:
                 coverage = sim

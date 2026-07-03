@@ -482,3 +482,73 @@ def test_audit_deus_ex_gate_off_matches_original_logic():
     finally:
         embedding_store.compute_embedding = orig
         _restore_embed_env(bak_eb, bak_gen)
+
+
+# ════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-03 Wave-4 性能层：audit_deus_ex 批量 prefetch（历史段落 + 每个
+# resolution 元素语境窗口 query 两侧文本一次性预热，其后 _embed_history_once /
+# _semantic_anchor_hit 内的逐条 compute_embedding 全部命中缓存·真后端子进程按条
+# 调用极贵）
+# ════════════════════════════════════════════════════════════════════
+def test_audit_deus_ex_prefetches_history_and_element_queries_once():
+    body = _filler(30)
+    tail_text = "我取出玄铁剑挡在身前林师兄出手击败了魔王。"
+    history = "玄铁剑传说流传已久。\n林师兄曾经历此劫。"
+    text = body + "\n" + tail_text
+
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
+
+    embedding_store.prefetch_embeddings = _rec_prefetch
+    try:
+        des.audit_deus_ex(text, history_text=history)
+        assert len(calls) == 1, f"应恰好一次批量 prefetch·实际 {len(calls)} 次"
+        prefetched = calls[0]
+
+        # 独立重算 tail/elements（与 audit_deus_ex 内部同口径）核对文本集合完整性
+        n = len(text)
+        tail_start = int(n * (1.0 - des.TAIL_RATIO))
+        tail = text[tail_start:]
+        elements = des._extract_resolution_elements(tail)
+        all_elements = (elements["char_names"] + elements["item_names"] + elements["power_hits"])
+        assert all_elements, "前置条件：本用例必须真的抽出 resolution 元素才有意义"
+
+        for p in des._split_history_paragraphs(history):
+            assert p in prefetched
+        for el in all_elements:
+            assert des._anchor_query_text(el, tail) in prefetched
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_audit_deus_ex_gate_off_never_calls_prefetch():
+    """🔴 零回归锁：门控关 → prefetch_embeddings 完全不被调用。"""
+    bak_eb, bak_gen = _clear_embed_env()
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+
+    def _boom(texts):
+        raise AssertionError("门控关时绝不应调用 prefetch_embeddings")
+
+    embedding_store.prefetch_embeddings = _boom
+    try:
+        body = _filler(30)
+        tail = "我取出上古神剑一剑斩了敌首。"
+        history = "很久以前一柄神剑现世无人可挡。" * 3
+        text = body + "\n" + tail
+        r = des.audit_deus_ex(text, history_text=history)
+        assert "underbacked" in r
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        _restore_embed_env(bak_eb, bak_gen)

@@ -289,8 +289,9 @@ def retrieve_embedding(project_root, current_ch: int, top_k: int = 3,
     门控 = _has_real_embedding_backend()（EMBED_BACKEND 非空非 hash，或配了 GEN_EMBED__* /
     通义等 API·统一走 embedding_store，不再自行探测 OPENAI_API_KEY/openai 包）。
     无真后端 → 退 TF-IDF（与此前行为、fallback 标签一致·零回归）。
-    真后端 → embedding_store.compute_embedding 编码历史章文本 + 当前章 plan(query)，
-    cosine_similarity 排序，MMR 重排复用 mmr_rerank（sim_fn 换成 embedding 余弦）。
+    真后端 → prefetch_embeddings 一次批量预热历史章文本 + 当前章 plan(query)，随后
+    compute_embedding 逐条命中缓存，cosine_similarity 排序，MMR 重排复用 mmr_rerank
+    （sim_fn 换成 embedding 余弦）。
 
     实测：SCORE 测试 TF-IDF + 语义 = 23.6% coherence 提升 vs 纯 TF-IDF。
     """
@@ -306,7 +307,7 @@ def retrieve_embedding(project_root, current_ch: int, top_k: int = 3,
         return _fallback()
 
     try:
-        from embedding_store import compute_embedding, cosine_similarity
+        from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
     except (ImportError, TypeError):
         print("[INFO] embedding_store 不可用，降级 TF-IDF 模式", file=sys.stderr)
         return _fallback()
@@ -316,6 +317,9 @@ def retrieve_embedding(project_root, current_ch: int, top_k: int = 3,
         return []
     ch_nums, docs, chapters, summaries = corpus
 
+    # 🔴 2026-07-03 Wave-4：docs=历史章语料+当前章 query，一次批量预热缓存（真后端子进程/API
+    # 只付一次成本），随后逐条 compute_embedding 全部命中缓存（hash 后端 prefetch 本来就是 no-op）。
+    prefetch_embeddings(docs)
     embs = [compute_embedding(d) for d in docs]
     query_emb = embs[-1]
     # 维度一致性守卫（同 topic_drift_scanner）：单条失败会兜底 hash(384)，与真后端维度不一致

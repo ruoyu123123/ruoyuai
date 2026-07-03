@@ -457,6 +457,42 @@ def test_semantic_rescue_falls_back_on_embedding_error(monkeypatch):
         assert "semantic_anchor_rescue" not in r
 
 
+def test_semantic_rescue_prefetches_tail_and_anchor_pool_once(monkeypatch):
+    """🔴 2026-07-03 Wave-4 批量改造回归锁：_semantic_anchor_match 开头应对
+    [tail_text]+去重后的 anchor_texts 池调用**一次** prefetch_embeddings（而非每条 anchor
+    各自触发后端·ruoyu_style 等真后端下逐条各起一次子进程暖机不可用）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    import embedding_store
+    embedding_store._BACKEND = None  # 重探测后端（隔离跨测试残留缓存）
+
+    calls = []
+
+    def _record_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)), "cache_hits": 0, "computed": len(texts)}
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _record_prefetch)
+
+    def _mock_embed(text):
+        if "雪山" in text or "冰封的巨兽" in text:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+    # 池含 1 条重复（"冰封的巨兽正在苏醒"）—— 验证 prefetch 传入的是去重后的集合
+    pool = ["冰封的巨兽正在苏醒", "无关的伏笔A", "无关的伏笔B", "冰封的巨兽正在苏醒"]
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ch = _write_chapter(tmp, "他望向远方的雪山，沉默不语，雾气弥漫。")
+        r = mod.scan_chapter_end(ch, anchors={"黑刀", "祭坛"}, anchor_texts=pool)
+        assert "semantic_anchor_rescue" in r  # 确认真走到了语义分支
+
+    assert len(calls) == 1, f"应且只应调用一次 prefetch_embeddings，实际 {len(calls)} 次"
+    got = calls[0]
+    assert got[0] == "他望向远方的雪山，沉默不语，雾气弥漫。"  # tail_text 在第一位
+    assert set(got[1:]) == {"冰封的巨兽正在苏醒", "无关的伏笔A", "无关的伏笔B"}
+    assert len(got) == 4  # tail + 3 条去重后 anchor（原池 4 条含 1 条重复）
+
+
 def test_semantic_rescue_below_floor_does_not_suppress(monkeypatch):
     """语义相似度低于 floor（无真正相关的 anchor_text）→ 不 rescue，字面判定原样保留。"""
     monkeypatch.setenv("EMBED_BACKEND", "mock")

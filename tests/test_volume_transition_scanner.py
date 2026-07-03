@@ -383,6 +383,99 @@ def test_rule_2_hard_reset_untouched_by_semantic_backend():
             os.environ.pop("EMBED_BACKEND", None)
 
 
+def test_prefetch_called_once_with_hook_and_open_text():
+    """🔴 2026-07-03 Wave-4：语义路径下规则① 应一次性 prefetch [close_hook, open_text]
+    两段文本，而非各自触发一次后端调用。"""
+    old_mode = _set_mode("active")
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        last_finale = {"cluster_id": "c1", "volume": 1, "status": "done",
+                       "chapter_range": [1, 3], "cast": ["林尘"],
+                       "scope_summary": "林尘对峙巨龙",
+                       "volume_transition_hooks": {
+                           "close": {"hook_text": "巨龙即将苏醒"}
+                       }}
+        next_first = {"cluster_id": "c2", "volume": 2,
+                     "cast": ["林尘"],
+                     "scope_summary": "黑龙睁开双眼",
+                     "scene_storyboard": [{"summary": "黑龙睁开双眼"}]}
+        proj = _mk_project(shijianji={"clusters": [last_finale, next_first]})
+        expected_close_hook = mod._close_hook(last_finale)
+        expected_open_text = mod._scene1_text(next_first) + " " + str(next_first.get("scope_summary") or "")
+
+        os.environ["EMBED_BACKEND"] = "mock"
+        import embedding_store
+        orig_embed = embedding_store.compute_embedding
+        orig_prefetch = embedding_store.prefetch_embeddings
+        calls = []
+
+        def fake_prefetch(texts):
+            calls.append(list(texts))
+            return {"total": len(texts), "unique": len(set(texts)),
+                    "cache_hits": 0, "computed": len(set(texts))}
+
+        embedding_store.compute_embedding = lambda text: [1.0, 0.0] if "龙" in text else [0.0, 1.0]
+        embedding_store.prefetch_embeddings = fake_prefetch
+        try:
+            rep = mod.scan(proj)
+        finally:
+            embedding_store.compute_embedding = orig_embed
+            embedding_store.prefetch_embeddings = orig_prefetch
+
+        assert len(calls) == 1, calls
+        assert calls[0] == [expected_close_hook, expected_open_text], calls[0]
+        assert rep["close_hook_match_method"] == "embedding_cosine", rep
+    finally:
+        _restore(old_mode)
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_prefetch_not_called_without_real_backend():
+    """默认（无真后端）→ 规则①语义分支不执行 → prefetch_embeddings 零调用（零回归）。"""
+    old_mode = _set_mode("active")
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        proj = _mk_project(shijianji={
+            "clusters": [
+                {"cluster_id": "c1", "volume": 1, "status": "done",
+                 "chapter_range": [1, 3], "cast": ["林尘", "王虎"],
+                 "scope_summary": "林尘大战王虎",
+                 "volume_transition_hooks": {
+                     "close": {"hook_text": "黑龙将在北境苏醒，吞噬星辰"}
+                 }},
+                {"cluster_id": "c2", "volume": 2,
+                 "cast": ["林尘"],
+                 "scope_summary": "他在山间打坐修炼",
+                 "scene_storyboard": [{"summary": "他在山间打坐修炼"}]},
+            ]})
+        import embedding_store
+        orig_prefetch = embedding_store.prefetch_embeddings
+        calls = []
+
+        def fake_prefetch(texts):
+            calls.append(list(texts))
+            return {}
+
+        embedding_store.prefetch_embeddings = fake_prefetch
+        try:
+            rep = mod.scan(proj)
+        finally:
+            embedding_store.prefetch_embeddings = orig_prefetch
+        assert calls == []
+        assert rep["close_hook_match_method"] == "bigram_keyword_overlap"
+    finally:
+        _restore(old_mode)
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
 def test_rule_3_empty_open_untouched_by_semantic_backend():
     """规则③(scene1 缺新钩=固定 regex 锚词匹配) 即便真 embedding 后端就绪也不该被
     语义化（本任务范围只改规则①）。复用 test_empty_open_triggers 同款数据 + mock 后端

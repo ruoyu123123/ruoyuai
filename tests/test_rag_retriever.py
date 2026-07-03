@@ -336,6 +336,39 @@ def test_retrieve_embedding_real_backend_uses_semantic_path(monkeypatch):
         assert set(res[0].keys()) >= {"chapter", "score", "snippet", "mode"}
 
 
+def test_retrieve_embedding_batches_prefetch_once(monkeypatch):
+    """🔴 2026-07-03 Wave-4：语义分支对『历史章语料+当前章 query』只触发一次批量
+    prefetch_embeddings（而非逐条各自撞真后端），且不影响既有排序结果。"""
+    monkeypatch.setenv("EMBED_BACKEND", "fake-real")
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write_chapter(root, 1, "剑修在剑冢里淬炼剑心剑意剑光浩荡当空")
+        _write_chapter(root, 2, "厨房里炖着汤水柴米油盐生活气息温暖惬意")
+        _write_progress_blueprint(root, {
+            "cluster_001": [{"ch": 3, "summary": "剑修剑光剑意大战剑冢"}],
+        })
+
+        import embedding_store
+        prefetch_calls = []
+
+        def _recording_prefetch(texts):
+            prefetch_calls.append(list(texts))
+            return {"total": len(texts), "unique": len(set(texts)),
+                    "cache_hits": 0, "computed": len(set(texts))}
+
+        monkeypatch.setattr(embedding_store, "prefetch_embeddings", _recording_prefetch)
+        monkeypatch.setattr(embedding_store, "compute_embedding", _char_freq_embedding)
+        with redirect_stderr(io.StringIO()):
+            res = rr.retrieve_embedding(root, current_ch=3, top_k=2, use_mmr=False)
+
+        assert len(prefetch_calls) == 1, "语义分支应只触发一次批量 prefetch"
+        # docs = 2 条历史章语料 + 1 条当前章 query
+        assert len(prefetch_calls[0]) == 3
+        # 排序结果不受批量改造影响：剑主题章仍排第一
+        assert res and res[0]["chapter"] == 1
+        assert res[0]["mode"] == "embedding"
+
+
 def test_retrieve_embedding_dimension_mismatch_falls_back(monkeypatch):
     """embedding 维度不一致（模拟部分条目降级 hash）→ 不冒充语义，退 TF-IDF。"""
     monkeypatch.setenv("EMBED_BACKEND", "fake-real")

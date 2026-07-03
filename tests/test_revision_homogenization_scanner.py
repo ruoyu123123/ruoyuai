@@ -434,6 +434,61 @@ def test_embedding_centroid_none_on_empty_text():
     assert rh._embedding_centroid("   ") is None
 
 
+# ── 🔴 2026-07-03 Wave-4 性能层：pre/post 合批 prefetch 回归锁 ──────────────────────
+
+def test_chunk_text_matches_centroid_chunking():
+    """_chunk_text 与 _embedding_centroid 内联切块口径一致（供 prefetch 复用的前提）。"""
+    assert rh._chunk_text("") == []
+    assert rh._chunk_text("   ") == []
+    chunks = rh._chunk_text(_SEM_PRE, chunk=500)
+    assert chunks, "非空文本应切出至少一块"
+    assert all(c.strip() for c in chunks)
+    assert "".join(chunks) == _SEM_PRE  # 500 定长切块·无过滤丢字（本文本没有空白块）
+
+
+def test_prefetch_called_once_with_pre_and_post_chunks(monkeypatch):
+    """真后端时 _semantic_pre_post_distance 一次性 prefetch_embeddings(pre+post 全部chunk)，
+    而非 pre/post 各自独立触发一串单条后端调用——断言只调一次且文本集合符合预期。"""
+    monkeypatch.setenv("EMBED_BACKEND", "test_semantic")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _fake_embed_factory())
+    monkeypatch.setattr(embedding_store, "embedding_method", lambda: "test_semantic_backend")
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)),
+                "cache_hits": 0, "computed": len(set(texts))}
+
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _rec_prefetch)
+
+    result = rh._semantic_pre_post_distance(_SEM_PRE, _SEM_POST)
+
+    assert result is not None
+    assert len(calls) == 1, f"prefetch 应只调一次，实际 {len(calls)}"
+    expected = rh._chunk_text(_SEM_PRE) + rh._chunk_text(_SEM_POST)
+    assert calls[0] == expected
+
+
+def test_prefetch_not_called_without_real_backend(monkeypatch):
+    """无真后端（默认）→ _semantic_pre_post_distance 提前返回 None·prefetch 完全不触发。"""
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    for k in list(os.environ):
+        if k.startswith("GEN_EMBED__"):
+            monkeypatch.delenv(k, raising=False)
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {}
+
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _rec_prefetch)
+
+    result = rh._semantic_pre_post_distance(_SEM_PRE, _SEM_POST)
+
+    assert result is None
+    assert calls == [], "无真后端时不该调用 prefetch_embeddings"
+
+
 def test_semantic_code_not_in_hard_gate_registry():
     """语义路径升级后仍是同一个 ISSUE_CODE·不新增 code·hard_gate 名单校验依旧成立。"""
     rg = Path(__file__).resolve().parents[1] / "core" / "scripts" / "scanner_registry.json"

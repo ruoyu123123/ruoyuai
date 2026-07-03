@@ -913,6 +913,20 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         # 综合分：context match 主导 + confidence 加成 + usage log 加成
         return kw_hits * 2 + confidence + math.log(usage + 1)
 
+    # 🔴 2026-07-03 Wave-4：sort(key=score) 对 all_patterns 每项各调一次 score()，真后端下
+    # 逐条 compute_embedding(desc) = N 次子进程调用。排序前一次性 prefetch 全部 desc 灌缓存，
+    # 其后 score() 内逐条 compute_embedding 全部命中缓存（query embed 已在循环外算过不重复）。
+    if _query_emb is not None:
+        _all_descs = [
+            p.get("description", "") + " " + p.get("name", "") + " "
+            + " ".join(p.get("keywords", []) or [])
+            for p in all_patterns
+        ]
+        try:
+            _embed_mod.prefetch_embeddings(_all_descs)
+        except Exception:
+            pass
+
     all_patterns.sort(key=score, reverse=True)
     top = all_patterns[:top_k]
 

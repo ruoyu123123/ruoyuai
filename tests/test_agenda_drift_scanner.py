@@ -285,6 +285,83 @@ def test_semantic_path_replaces_jaccard_for_synonym():
             os.environ.pop("EMBED_BACKEND", None)
 
 
+def test_prefetch_called_once_with_draft_and_fields(monkeypatch):
+    """🔴 2026-07-03 Wave-4：真后端路径下 scan() 开头一次性 prefetch_embeddings(draft+4字段)，
+    而不是逐条各自触发后端计算——断言只调一次且文本集合符合预期。"""
+    import embedding_store
+    monkeypatch.setenv("AGENDA_DRIFT_MODE", "active")
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    monkeypatch.setattr(embedding_store, "compute_embedding", lambda t: [1.0, 0.0])
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)),
+                "cache_hits": 0, "computed": len(set(texts))}
+
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _rec_prefetch)
+    proj = _mk_project_with_anchor(
+        want="决战", antagonist="无脸者", stake="灵魂被吞", tone_word="冷峻")
+    draft_text = "殊死搏杀·无脸者·灵魂被吞·冷峻\n" * 50
+    mod.scan(_write_draft(draft_text), proj, "001")
+
+    assert len(calls) == 1, f"prefetch 应只调一次，实际 {len(calls)}"
+    stripped = mod._strip_changes(draft_text)
+    assert calls[0] == [stripped, "决战", "无脸者", "灵魂被吞", "冷峻"]
+
+
+def test_prefetch_skips_blank_fields(monkeypatch):
+    """空字段不进 prefetch 文本集合（与 _semantic_coverage 对空字段短路一致）。
+
+    真实 anchor 创建流程 (writer_intent_anchor._validate_fields) 拒绝空字段，
+    正常路径永远拿不到空字段的已验证 anchor——这里直接 monkeypatch load_anchor
+    模拟该边界数据形态，单独验证 scan() 内 _safe_prefetch 调用点的过滤逻辑。"""
+    import embedding_store
+    monkeypatch.setenv("AGENDA_DRIFT_MODE", "active")
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    monkeypatch.setattr(embedding_store, "compute_embedding", lambda t: [1.0, 0.0])
+    monkeypatch.setattr(wia, "load_anchor", lambda project, key: {
+        "want": "决战", "antagonist": "", "stake": "灵魂被吞", "tone_word": "冷峻",
+        "_sha256": "fake",
+    })
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {}
+
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _rec_prefetch)
+    proj = Path(tempfile.mkdtemp())
+    draft_text = "殊死搏杀·灵魂被吞·冷峻\n" * 50
+    mod.scan(_write_draft(draft_text), proj, "001")
+
+    assert len(calls) == 1
+    stripped = mod._strip_changes(draft_text)
+    assert calls[0] == [stripped, "决战", "灵魂被吞", "冷峻"]
+
+
+def test_prefetch_not_called_without_real_backend(monkeypatch):
+    """无真后端（默认）→ 不进语义分支·prefetch_embeddings 完全不触发（零回归）。"""
+    import embedding_store
+    monkeypatch.setenv("AGENDA_DRIFT_MODE", "active")
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    for k in list(os.environ):
+        if k.startswith("GEN_EMBED__"):
+            monkeypatch.delenv(k, raising=False)
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {}
+
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _rec_prefetch)
+    proj = _mk_project_with_anchor()
+    out = mod.scan(_write_draft("甜蜜蜜的婚礼在春天举行。" * 200), proj, "001")
+
+    assert out["match_method"] == "char_jaccard"
+    assert calls == [], "无真后端时不该调用 prefetch_embeddings"
+
+
 def test_semantic_path_falls_back_when_embedding_encode_fails():
     """真后端配置但草稿整体编码异常 → 回退字面 Jaccard（不崩·不误判为语义路径）。"""
     bak_mode = os.environ.get("AGENDA_DRIFT_MODE")

@@ -423,3 +423,75 @@ def test_scan_gate_off_matches_original_literal_logic():
         embedding_store.compute_embedding = orig
         _set_mode(bak_mode)
         _restore_embed_env(bak_eb, bak_gen)
+
+
+# ════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-03 Wave-4 性能层：scan() 批量 prefetch（正文段落 + 全部待判定 entry
+# query 一次性预热，其后 _build_semantic_context / _semantic_resonance 内的逐条
+# compute_embedding 全部命中缓存·真后端子进程按条调用极贵）
+# ════════════════════════════════════════════════════════════════════
+def test_scan_prefetches_paragraphs_and_queries_once():
+    bak_mode = os.environ.get(_ENV)
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        _set_mode("active")
+        os.environ["EMBED_BACKEND"] = "fake-real"
+        proj = _mk_project()
+        mod.append_entry(proj, "cluster_005", "card_b",
+                         "主角决定揭露真相", "faction", 3, ["仇视", "恨意"])
+        mod.append_entry(proj, "cluster_005", "card_c",
+                         "另一个选择", "life", 3, ["kwX"])
+        draft_text = "第一段正文内容足够长用于切段测试。\n第二段正文内容也足够长用于切段。"
+        draft = _write_draft(draft_text)
+
+        import embedding_store
+        orig_prefetch = embedding_store.prefetch_embeddings
+        calls = []
+
+        def _rec_prefetch(texts):
+            calls.append(list(texts))
+            return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
+
+        embedding_store.prefetch_embeddings = _rec_prefetch
+        try:
+            mod.scan(proj, "cluster_006", str(draft))
+            assert len(calls) == 1, f"应恰好一次批量 prefetch·实际 {len(calls)} 次"
+            texts = calls[0]
+            assert "第一段正文内容足够长用于切段测试。" in texts
+            assert "第二段正文内容也足够长用于切段。" in texts
+            assert "主角决定揭露真相 仇视 恨意" in texts
+            assert "另一个选择 kwX" in texts
+        finally:
+            embedding_store.prefetch_embeddings = orig_prefetch
+    finally:
+        _set_mode(bak_mode)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_scan_gate_off_never_calls_prefetch():
+    """🔴 零回归锁：门控关 → prefetch_embeddings 完全不被调用。"""
+    bak_mode = os.environ.get(_ENV)
+    bak_eb, bak_gen = _clear_embed_env()
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+
+    def _boom(texts):
+        raise AssertionError("门控关时绝不应调用 prefetch_embeddings")
+
+    embedding_store.prefetch_embeddings = _boom
+    try:
+        _set_mode("active")
+        proj = _mk_project()
+        mod.append_entry(proj, "cluster_005", "card_b",
+                         "揭露 X", "faction", 3, ["仇视", "X 派"])
+        draft_text = "于是众人对他生出仇视·X 派开始反扑。" * 30
+        draft = _write_draft(draft_text)
+        rep = mod.scan(proj, "cluster_006", str(draft))
+        assert rep["scanner"] == "choice_consequence_visibility_scanner"
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        _set_mode(bak_mode)
+        _restore_embed_env(bak_eb, bak_gen)

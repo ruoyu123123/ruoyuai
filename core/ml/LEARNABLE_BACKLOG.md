@@ -187,3 +187,15 @@
 5. **数据飞轮端到端首跑**（主线程）：`主神验尸官` cluster_001 真实收集 987 条样本落 11 桶（813 段落+11 weak labels+163 audit metadata），`save_state.py:1307` 挂线确认——可成长架构数据侧闭环。
 
 **Wave-4 候选（按本轮实测数据排定）**：① embedding/NLI 性能层（磁盘缓存 + `compute_embeddings_batch` 批量 API + scanner 收集后批调改造，或 venv 常驻 daemon 根治 23s/16s 子进程冷启动）→ 之后才能翻 `EMBED_BACKEND=ruoyu_style` / `RUOYU_NN_NLI` 创作默认；② 语义阈值金标准校准（真后端点亮后用 workspace/styles 作者语料标定 0.5-0.75 一批初值）；③ 真中文共指模型调研（HanLP 路线已证伪）；④ Tier A 剩余（A1 叙事句级分类/A2 ToM/NLI 扩展消费方/A5 话语标记）。
+
+---
+
+## 2026-07-03 Wave-4 已落地：embedding/NLI 性能层（地基主线程 + 7 组 Workflow 并发改造）
+
+**地基**（`embedding_store.py`·commit 4a63e25）：①内存+磁盘缓存（`(method, sha256(text[:8000]))` 键·仅真后端缓存·失败兜底绝不入缓存防污染·`RUOYU_EMBED_CACHE=0` 可关·`RUOYU_EMBED_CACHE_MAX_FILES` 容量护栏）；②`compute_embeddings_batch`（去重→缓存→misses 单次后端批调用：ruoyu_style 走既有 encode_batch 单子进程、API 走原生 list input、mstyle/local 进程内逐条即批量）；③`prefetch_embeddings`（scanner 语义分支开头预热一次，其后既有逐条 `compute_embedding` 全部命中缓存——消费方最小 diff 改造模式）。
+
+**消费方改造**（26 文件·7 组 Sonnet Workflow）：G1-G4 共 19 个 scanner/工具 prefetch 化；G5 rag_retriever/build_manifest 心跳循环 prefetch 前置（sfs_axis_decomposer 经 grep 实证单调用点仅 2 embed/次·合法跳过）；G6 `zero_shot_prototype.classify_batch`（prototype+待分类文本合一批）+ dialogue_sequence/covert/sdt 三消费方批量化（cluster_burst 单调用/scan·合法跳过）；G7 `writer_truth_check` 拆 `_corroborate_literal`（字节等价·9 既有测试原样过）+ uncertain 声明收集后单次 `nn_nli_bridge.predict_batch`（每次 corroborate_factual 固定 1 个子进程成本，不再逐声明 16s 线性放大）。
+
+**基准实测（EMBED_BACKEND=ruoyu_style）**：10 段 prefetch 26.1s（vs 改造前逐条 ~230s，**~9x**）；prefetch 后逐条 0.000s；跨进程磁盘命中 0.004s；单条冷未命中仍 ~30s（子进程冷启动物理下限）。
+
+**翻默认决策（数据支撑·暂不翻）**：批量化后每个语义 scanner 每 cluster 仍付 ~25s 一次性子进程成本，全审核 ~20 个语义 scanner ≈ +8 分钟/cluster（修复循环 rescan 对新文本重付）。稳定语料（prototype/锚点/milestone）磁盘缓存终身命中，但正文段落每 cluster 全新。**真正的解锁是 wave-5：venv 常驻 daemon**（stdin/stdout 协议·模型常驻内存·预期 ~0.1s/调用，彻底消掉子进程冷启动）——daemon 落地后翻 `EMBED_BACKEND=ruoyu_style` + `RUOYU_NN_NLI` 进创作默认门控，再做阈值金标准校准。在此之前真语义保持 opt-in（现已实用：配 env 即享批量+缓存性能）。

@@ -180,10 +180,10 @@ def scan(draft_path, project_root=None) -> dict:
 
     # 🔴 2026-07-01 真语义后端可用时：场景 embedding vs pack 原型描述文本余弦相似度替代词袋计数
     use_semantic = False
-    compute_embedding = cosine_similarity = None
+    compute_embedding = cosine_similarity = prefetch_embeddings = None
     if _has_real_embedding_backend():
         try:
-            from embedding_store import compute_embedding, cosine_similarity
+            from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
             use_semantic = True
         except (ImportError, TypeError):
             use_semantic = False
@@ -199,6 +199,12 @@ def scan(draft_path, project_root=None) -> dict:
             except Exception:
                 proto_cache[pack] = None
         return proto_cache[pack]
+
+    # 🔴 2026-07-03 Wave-4：全部场景 + 各 pack 原型描述一次性批量预热（单次后端批调用）·
+    # 随后下面循环里逐条 compute_embedding 全部命中缓存（不改变任何判定逻辑）。
+    if use_semantic:
+        proto_texts = [_pack_prototype_text(p) for p in packs]
+        prefetch_embeddings(scenes + [t for t in proto_texts if t])
 
     # 每 scene 算每 pack 归属度（语义可用优先·单点失败退回词袋·不影响其他 scene/pack）
     per_pack_total = {p: 0.0 for p in packs}

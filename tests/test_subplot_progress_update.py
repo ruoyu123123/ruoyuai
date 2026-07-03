@@ -239,6 +239,74 @@ def test_update_gate_off_matches_original_literal_logic():
         _restore_embed_env(bak_eb, bak_gen)
 
 
+# ════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-03 Wave-4 性能层：update() 批量 prefetch（corpus + 所有 thread/
+# throughline query 一次性预热，其后 _embed_corpus_once / _thread_appears 内的
+# 逐条 compute_embedding 全部命中缓存·真后端子进程按条调用极贵）
+# ════════════════════════════════════════════════════════════════════
+def test_update_prefetches_all_queries_once_when_real_backend():
+    d = _mkproj(
+        throughlines=[{"name": "复仇之路", "description": "对仇人的执念"}, "支线甲"],
+        threads=[{"id": "t1", "name": "主线复仇", "description": "复仇进度"}, "配角线"])
+    (d / "_数据库" / "故事块摘要.json").write_text(
+        json.dumps({"clusters": [
+            {"cluster_id": "001", "summary": "他终于向杀父仇人寻仇"}]},
+            ensure_ascii=False), encoding="utf-8")
+
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
+
+    embedding_store.prefetch_embeddings = _rec_prefetch
+    try:
+        m.update(d, "001")
+        assert len(calls) == 1, f"应恰好一次批量 prefetch·实际 {len(calls)} 次"
+        texts = calls[0]
+        summary_doc = json.loads(
+            (d / "_数据库" / "故事块摘要.json").read_text(encoding="utf-8"))
+        cluster_summary_text = json.dumps(summary_doc["clusters"][0], ensure_ascii=False)
+        # corpus 摘要 + thread（dict/str 两种 schema）+ throughline（dict/str 两种 schema）
+        # 全部收进同一次 prefetch
+        assert cluster_summary_text in texts
+        assert "主线复仇 复仇进度" in texts
+        assert "配角线" in texts
+        assert "复仇之路 对仇人的执念" in texts
+        assert "支线甲" in texts
+        assert len(texts) == 5
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_update_gate_off_never_calls_prefetch():
+    """🔴 零回归锁：门控关 → prefetch_embeddings 完全不被调用（与既有字面逻辑零回归锁互补）。"""
+    bak_eb, bak_gen = _clear_embed_env()
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+
+    def _boom(texts):
+        raise AssertionError("门控关时绝不应调用 prefetch_embeddings")
+
+    embedding_store.prefetch_embeddings = _boom
+    try:
+        d = _mkproj(throughlines=[{"name": "主线复仇"}],
+                   threads=[{"id": "t1", "name": "主线复仇"}])
+        r = m.update(d, "001")
+        assert "subplot_updated" in r
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        _restore_embed_env(bak_eb, bak_gen)
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

@@ -180,6 +180,62 @@ def test_relevant_heuristics_real_backend_uses_embedding_cosine(monkeypatch):
         _rm(td)
 
 
+def test_relevant_heuristics_batches_prefetch_once(monkeypatch):
+    """🔴 2026-07-03 Wave-4：score() 对每条经验 desc 逐条 compute_embedding 之前，应先对
+    全部 all_patterns 的 desc 触发一次批量 prefetch_embeddings（而非各自撞真后端 N 次）。
+    query embed（_ctx_text）不在这次批量文本集合内——它已在循环外单独算过。"""
+    td, root = _mk_heuristics_project([
+        {"id": "p1", "name": "移花接玉技法", "description": "移花接玉挪移武功精髓",
+         "confidence": 0.6, "usage_count": 0},
+        {"id": "p2", "name": "无关技法", "description": "完全不相关的另一套写法",
+         "confidence": 0.6, "usage_count": 0},
+        {"id": "p3", "name": "第三条", "description": "又一条独立的写作经验描述",
+         "confidence": 0.5, "usage_count": 0},
+    ])
+    try:
+        monkeypatch.setenv("EMBED_BACKEND", "fake-real")
+        import embedding_store
+        monkeypatch.setattr(embedding_store, "compute_embedding", _char_freq_embedding)
+        prefetch_calls = []
+
+        def _recording_prefetch(texts):
+            prefetch_calls.append(list(texts))
+            return {"total": len(texts), "unique": len(set(texts)),
+                    "cache_hits": 0, "computed": len(set(texts))}
+
+        monkeypatch.setattr(embedding_store, "prefetch_embeddings", _recording_prefetch)
+        scanner = bm.DatabaseScanner(root, 2)
+        res = bm._collect_relevant_heuristics(scanner, 2)
+        assert len(prefetch_calls) == 1, "应只触发一次批量 prefetch"
+        assert len(prefetch_calls[0]) == 3   # 3 条 pattern desc（不含 query 文本）
+        assert res["match_method"] == "embedding"
+    finally:
+        _rm(td)
+
+
+def test_relevant_heuristics_gate_off_never_calls_prefetch(monkeypatch):
+    """无真后端（_query_emb 恒 None）时批量 prefetch 分支也不应触发（与 compute_embedding 同款零调用）。"""
+    _clear_embed_env(monkeypatch)
+    td, root = _mk_heuristics_project([
+        {"id": "hit1", "name": "移花接玉技法", "description": "移花接玉挪移武功精髓",
+         "confidence": 0.6, "usage_count": 0},
+    ])
+    try:
+        import embedding_store
+        calls = {"n": 0}
+
+        def _counting_prefetch(texts):
+            calls["n"] += 1
+            return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
+
+        monkeypatch.setattr(embedding_store, "prefetch_embeddings", _counting_prefetch)
+        scanner = bm.DatabaseScanner(root, 2)
+        bm._collect_relevant_heuristics(scanner, 2)
+        assert calls["n"] == 0, "无真后端不应调用 prefetch_embeddings"
+    finally:
+        _rm(td)
+
+
 def test_relevant_heuristics_real_backend_failure_falls_back_to_keyword(monkeypatch):
     """真后端配置但 embedding_store 计算异常 → 静默回退关键词路径（不崩·不阻断 manifest）。"""
     td, root = _mk_heuristics_project([

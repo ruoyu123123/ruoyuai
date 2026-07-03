@@ -447,6 +447,40 @@ def test_semantic_attribution_matches_synonym_with_zero_literal_overlap(monkeypa
     assert hit["method"] == "semantic"
 
 
+def test_semantic_attribution_prefetches_all_sections_once(monkeypatch):
+    """🔴 2026-07-03 Wave-4 批量改造回归锁：_semantic_attribute_to_skill_section 开头应对
+    [query]+全部 skill 段落 blob 调用**一次** prefetch_embeddings（而非每段各自触发后端·
+    ruoyu_style 等真后端下逐段各起一次子进程暖机不可用）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    import embedding_store
+    embedding_store._BACKEND = None  # 重探测后端（隔离跨测试残留缓存）
+
+    secs = ll._parse_skill_sections(_SKILL_MD)
+
+    calls = []
+
+    def _record_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)), "cache_hits": 0, "computed": len(texts)}
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _record_prefetch)
+
+    def _mock_embed(text):
+        if "对话要简短" in text or "对话占比" in text:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+    hit = ll._attribute_to_skill_section(secs, ("对话要简短",))
+    assert hit is not None
+
+    assert len(calls) == 1, f"应且只应调用一次 prefetch_embeddings，实际 {len(calls)} 次"
+    got = calls[0]
+    assert got[0] == "对话要简短"  # query 在第一位
+    expected_blobs = {(sec.get("heading", "") + " " + sec.get("body", "")).strip() for sec in secs}
+    assert expected_blobs.issubset(set(got[1:])), "prefetch 文本集合应覆盖全部 skill 段落 blob"
+    assert len(got) == len(secs) + 1  # query + 每段各一条（未去重·与后续逐条 compute_embedding 一一对应）
+
+
 def test_semantic_attribution_falls_back_on_embedding_error(monkeypatch):
     """真后端配置但编码异常 → 回退关键词计数法（不崩·结果与门控关时一致）。"""
     monkeypatch.setenv("EMBED_BACKEND", "mock")

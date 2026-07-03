@@ -8,6 +8,7 @@ match_method="semantic" 且语义路径被正确使用。
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -242,6 +243,70 @@ def test_semantic_match_method_when_backend_available():
             assert f["match_method"] == "semantic"
     finally:
         _set_mode(bak)
+
+
+def test_prefetch_called_once_with_scenes_and_pair_prototypes():
+    """🔴 2026-07-03 Wave-4：真后端(mock)时 scan() 在 pair 循环前一次性
+    prefetch_embeddings(全部场景+涉及pack原型)——断言只调一次且文本集合符合预期。"""
+    bak = os.environ.get("GENRE_PACK_CLASH_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    orig_compute = embedding_store.compute_embedding
+    orig_prefetch = embedding_store.prefetch_embeddings
+    embedding_store.compute_embedding = _char_freq_embedding
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)),
+                "cache_hits": 0, "computed": len(set(texts))}
+
+    embedding_store.prefetch_embeddings = _rec_prefetch
+    try:
+        _set_mode("active")
+        proj = _mk_project(["apocalypse_survival", "romance"])
+        out = mod.scan(_write(_BIPOLAR), proj)
+    finally:
+        embedding_store.compute_embedding = orig_compute
+        embedding_store.prefetch_embeddings = orig_prefetch
+        _set_mode(bak)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+    assert out["match_method"] == "semantic"
+    assert out["fusion_resolution_hints"], "registry 应命中该 pair(前置假设)"
+    assert len(calls) == 1, f"prefetch 应只调一次，实际 {len(calls)}"
+    text = mod._strip_changes(_BIPOLAR)
+    scenes = [s for s in re.split(r"\n\s*\n+", text) if mod._cjk_count(s) >= 80]
+    expected = scenes + [mod._pack_prototype_text(p) for p in ("apocalypse_survival", "romance")]
+    assert calls[0] == expected
+
+
+def test_prefetch_not_called_without_real_backend():
+    """无真后端(默认)→ 不进语义分支·prefetch_embeddings 完全不触发（零回归）。"""
+    bak = os.environ.get("GENRE_PACK_CLASH_MODE")
+    import embedding_store
+    orig_prefetch = embedding_store.prefetch_embeddings
+    calls = []
+
+    def _rec_prefetch(texts):
+        calls.append(list(texts))
+        return {}
+
+    embedding_store.prefetch_embeddings = _rec_prefetch
+    try:
+        _set_mode("active")
+        proj = _mk_project(["apocalypse_survival", "romance"])
+        out = mod.scan(_write(_BIPOLAR), proj)
+    finally:
+        embedding_store.prefetch_embeddings = orig_prefetch
+        _set_mode(bak)
+
+    assert out["match_method"] == "lexicon"
+    assert calls == [], "无真后端时不该调用 prefetch_embeddings"
 
 
 def test_pair_scores_lexicon_basic():

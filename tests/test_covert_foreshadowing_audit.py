@@ -317,19 +317,31 @@ def _char_freq_embedding(text, dim=32):
     return vec
 
 
+def _char_freq_embedding_batch(texts, dim=32):
+    """_char_freq_embedding 的批量版（供 mock embedding_store.compute_embeddings_batch）。"""
+    return [_char_freq_embedding(t, dim) for t in texts]
+
+
 def _run_with_mock_embedding(fn):
-    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding(_batch) 后跑 fn。
+
+    🔴 2026-07-03 Wave-4：zero_shot_prototype 内部改走 compute_embeddings_batch，两个
+    mock 都打（single-item 路径也委托 batch，实际只会用到 _batch 版）。
+    """
     bak_eb = os.environ.get("EMBED_BACKEND")
     os.environ["EMBED_BACKEND"] = "mock"
     import embedding_store
     import zero_shot_prototype
     orig = embedding_store.compute_embedding
+    orig_batch = embedding_store.compute_embeddings_batch
     embedding_store.compute_embedding = _char_freq_embedding
+    embedding_store.compute_embeddings_batch = _char_freq_embedding_batch
     zero_shot_prototype.clear_cache()
     try:
         return fn()
     finally:
         embedding_store.compute_embedding = orig
+        embedding_store.compute_embeddings_batch = orig_batch
         zero_shot_prototype.clear_cache()
         if bak_eb is not None:
             os.environ["EMBED_BACKEND"] = bak_eb
@@ -371,3 +383,55 @@ def test_scan_active_with_mock_backend_smoke():
 
 def test_delivery_mode_prototypes_cover_all_buckets():
     assert set(mod._DELIVERY_MODE_PROTOTYPES.keys()) == set(mod._DELIVERY_LEXICON.keys())
+
+
+# ── 🔴 2026-07-03 Wave-4 性能层：scan() 批量分类回归 ─────────────────────────
+def test_classify_plants_batch_empty_list():
+    assert mod._classify_plants_batch([]) == []
+
+
+def test_classify_plants_batch_gate_off_uses_fallback():
+    items = [("案上摆着一只玉匣", "objects"), ("随口提了一句旧事", "passing")]
+    result = mod._classify_plants_batch(items)
+    assert result == [("objects", "lexicon"), ("passing", "lexicon")]
+
+
+def test_classify_plants_batch_model_overrides_when_backend_available():
+    """fallback 故意传错(overt)·真后端下模型应正确判 objects 并覆盖 fallback（批量路径）。"""
+    def _do():
+        items = [("案上摆着一枚不起眼的旧玉佩", "overt")]
+        result = mod._classify_plants_batch(items)
+        assert result == [("objects", "zero_shot_embedding")]
+    _run_with_mock_embedding(_do)
+
+
+def test_scan_calls_classify_batch_exactly_once():
+    """🔴 Wave-4 核心契约：scan() 对全部候选 plant（草稿行 + foreshadowing.json 两源合并）
+    只触发一次 zero_shot_prototype.classify_batch。"""
+    bak = os.environ.get("COVERT_FORESHADOWING_MODE")
+    calls = []
+
+    def _recording_classify_batch(texts, label_prototypes, floor=0.5):
+        calls.append(list(texts))
+        return [None] * len(texts)
+
+    try:
+        _set_mode("active")
+        import zero_shot_prototype
+        orig = zero_shot_prototype.classify_batch
+        zero_shot_prototype.classify_batch = _recording_classify_batch
+        try:
+            fjson = {"entries": [
+                {"plant_text": "案上摆着的玉匣里藏着秘密"},
+                {"plant_text": "她无意中瞥见了那张地图"},
+            ]}
+            out = mod.scan(_write(_COVERT_DRAFT),
+                            project_root=_mk_project(foreshadowing=fjson))
+        finally:
+            zero_shot_prototype.classify_batch = orig
+        assert len(calls) == 1
+        assert out["plant_total"] == len(calls[0])
+        # draft_line 候选 + 2 条 foreshadowing.json 候选都合并进同一批
+        assert out["plant_total"] > 2
+    finally:
+        _set_mode(bak)

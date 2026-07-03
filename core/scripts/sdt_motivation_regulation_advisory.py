@@ -37,6 +37,11 @@
   原词典逐词累加（默认无真后端时逐字节零回归）。用了模型的角色 distribution dict 混入
   `_source=zero_shot_embedding` 标记键（不参与 top-1 计票）。
 
+【🔴 2026-07-03 Wave-4 性能层】scan() 内不再逐角色调 _dominant_regulation()（其内部逐
+  窗口触发子进程）——改用 _dominant_regulations_batch() 把本次全部角色 × 全部窗口一次
+  交给 zero_shot_prototype.classify_batch()（单角色 _dominant_regulation() 仍保留供单
+  角色场景/测试直接调用，行为不变）。
+
 【北极星⑤】顾问非法官·全 advisory·env SDT_REGULATION_MODE
   SDT_REGULATION_DRIFT 绝不进 audit_hub.HARD_GATE_CODES。
   作者档『_sdt_regulation_override=true』可豁免（反类型作者刻意）。
@@ -200,6 +205,79 @@ def _dominant_regulation(text: str, char_name: str, window: int = 30) -> tuple[s
     return top, dist
 
 
+def _classify_windows_batch(windows: list) -> list:
+    """真后端优先批量分类全部窗口语义（Wave-4：一次 classify_batch 取代逐窗口子进程调用）。
+
+    返回与 windows 等长的 label list（每项 str 或 None）。异常/无真后端 → 全 None
+    （调用方 100% 回退词典逐词累加，零回归）。
+    """
+    if not windows:
+        return []
+    try:
+        import zero_shot_prototype
+        results = zero_shot_prototype.classify_batch(windows, _SDT_REGULATION_PROTOTYPES, floor=0.5)
+        return [r["label"] if r is not None else None for r in results]
+    except Exception:
+        return [None] * len(windows)
+
+
+def _dominant_regulations_batch(text: str, char_names: list, window: int = 30) -> dict:
+    """批量版 _dominant_regulation：本次全部角色 × 全部窗口一次 classify_batch。
+
+    🔴 2026-07-03 Wave-4：先收集全部角色的全部 ±window CJK 窗口，一次交给
+    zero_shot_prototype.classify_batch()（取代逐窗口调 _classify_sdt_window 触发子进程），
+    再按角色拆回 top-1 + distribution——数学结果与逐角色调 _dominant_regulation 完全一致。
+
+    返回 {char_name: (dominant, distribution)}（角色名不在文本中 → ("", {})，同
+    _dominant_regulation 语义对齐）。
+    """
+    tokens_map = SDT_LEXICON_PLACEHOLDER["tokens"]
+    window_owners: list = []   # 与 all_windows 等长·记录该窗口属于哪个角色
+    all_windows: list = []
+    matches_by_char: "dict[str, list]" = {}
+    for char_name in char_names:
+        if not char_name or char_name not in text:
+            continue
+        spans = list(re.finditer(re.escape(char_name), text))
+        matches_by_char[char_name] = spans
+        for m in spans:
+            lo = max(0, m.start() - window)
+            hi = min(len(text), m.end() + window)
+            window_owners.append(char_name)
+            all_windows.append(text[lo:hi])
+
+    model_labels = _classify_windows_batch(all_windows)
+
+    counts_by_char: "dict[str, Counter]" = {c: Counter() for c in matches_by_char}
+    used_model_by_char: "dict[str, bool]" = {c: False for c in matches_by_char}
+    for char_name, ctx, model_label in zip(window_owners, all_windows, model_labels):
+        counts = counts_by_char[char_name]
+        if model_label is not None:
+            counts[model_label] += 1
+            used_model_by_char[char_name] = True
+            continue
+        for reg, lex in tokens_map.items():
+            for w in lex:
+                if w in ctx:
+                    counts[reg] += 1
+
+    out: dict = {}
+    for char_name in char_names:
+        if char_name not in matches_by_char:
+            out[char_name] = ("", {})
+            continue
+        counts = counts_by_char[char_name]
+        if not counts:
+            out[char_name] = ("", {})
+            continue
+        top = counts.most_common(1)[0][0]
+        dist = dict(counts)
+        if used_model_by_char[char_name]:
+            dist["_source"] = "zero_shot_embedding"
+        out[char_name] = (top, dist)
+    return out
+
+
 def _has_trigger(text: str) -> bool:
     for w in TRIGGER_LEXICON_PLACEHOLDER["tokens"]:
         if w in text:
@@ -262,8 +340,11 @@ def scan(draft_path, project_root=None, cluster_id=None) -> dict:
 
     curr_doms: dict = {}
     drifts = []
+    # 🔴 2026-07-03 Wave-4：全部角色一次 classify_batch（取代逐角色 _dominant_regulation 内部
+    # 逐窗口子进程调用）
+    dom_by_char = _dominant_regulations_batch(text, chars)
     for ch in chars:
-        dom, dist = _dominant_regulation(text, ch)
+        dom, dist = dom_by_char.get(ch, ("", {}))
         if not dom:
             continue
         curr_doms[ch] = {"dominant": dom, "distribution": dist}

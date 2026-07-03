@@ -310,6 +310,45 @@ def test_search_semantic_finds_paraphrase_literal_tfidf_misses(monkeypatch):
         assert res[0]["method"] == "semantic"
 
 
+def test_search_semantic_prefetches_query_and_all_memories_once(monkeypatch):
+    """🔴 2026-07-03 Wave-4 批量改造回归锁：_search_semantic 开头应对
+    [query]+全部记忆内容调用**一次** prefetch_embeddings（而非每条记忆各自触发后端·
+    ruoyu_style 等真后端下逐条各起一次子进程暖机不可用）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        db = _mk_db(tmp)
+        _write_json(db / "故事块摘要.json", {"chapters": [
+            {"ch": 1, "summary": "许遥的父亲失踪了"},
+            {"ch": 2, "summary": "云霄宗弟子御剑飞行修炼"},
+        ]})
+        ml = mod.MemoryLayer(tmp, current_ch=5)
+
+        monkeypatch.setenv("EMBED_BACKEND", "mock")
+        import embedding_store
+        embedding_store._BACKEND = None  # 重探测后端（隔离跨测试残留缓存）
+
+        calls = []
+
+        def _record_prefetch(texts):
+            calls.append(list(texts))
+            return {"total": len(texts), "unique": len(set(texts)), "cache_hits": 0, "computed": len(texts)}
+        monkeypatch.setattr(embedding_store, "prefetch_embeddings", _record_prefetch)
+
+        def _mock_embed(text):
+            return [1.0, 0.0] if "许遥" in text else [0.0, 1.0]
+        monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+        res = ml.search("许遥的父亲", top_k=5)
+
+        assert len(calls) == 1, f"应且只应调用一次 prefetch_embeddings，实际 {len(calls)} 次"
+        got = set(calls[0])
+        assert "许遥的父亲" in got  # query
+        assert "许遥的父亲失踪了" in got  # ch1 记忆
+        assert "云霄宗弟子御剑飞行修炼" in got  # ch2 记忆
+        assert len(calls[0]) == 3  # query + 2 条记忆（本用例无 chapter/archive 层）
+        assert len(res) >= 1
+
+
 def test_search_semantic_falls_back_on_embedding_error(monkeypatch):
     """真后端配置但 query 编码异常 → 回退 TF-IDF（不崩·不误标 semantic）。"""
     with tempfile.TemporaryDirectory() as d:

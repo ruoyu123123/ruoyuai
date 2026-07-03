@@ -233,6 +233,22 @@ def scan(project_root, cluster_id, draft_path) -> dict:
     starving, visible, pending = [], [], []
     updated = False
 
+    # 🔴 2026-07-03 Wave-4：正文段落 + 全部待判定 entry 的 choice 摘要/关键词查询
+    # 两侧文本一次性 prefetch（真后端子进程按条调用极贵·合并成一次批调用）——
+    # 下面 _build_semantic_context / _semantic_resonance 内逐条 compute_embedding 命中缓存。
+    if _has_real_embedding_backend():
+        try:
+            from embedding_store import prefetch_embeddings
+            paras = [p.strip() for p in text.split("\n") if len(p.strip()) >= 10]
+            queries = [
+                " ".join([e.get("choice_summary", "")] +
+                        list(e.get("expected_resonance_keywords") or [])).strip()
+                for e in entries if e.get("status") not in ("visible", "expired")
+            ]
+            prefetch_embeddings(paras + [q for q in queries if q])
+        except Exception:
+            pass
+
     # 真后端就绪时正文只切段编码一次（本次 scan() 内所有 entry 复用·2026-07-02）
     semantic_ctx = _build_semantic_context(text)
 

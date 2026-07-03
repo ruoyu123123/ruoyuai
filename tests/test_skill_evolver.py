@@ -405,6 +405,51 @@ def test_semantic_merge_catches_zero_token_overlap_synonym(monkeypatch):
         shutil.rmtree(td, ignore_errors=True)
 
 
+def test_semantic_merge_prefetches_all_pattern_blobs_once(monkeypatch):
+    """🔴 2026-07-03 Wave-4 批量改造回归锁：evolve() 语义分支开头应对本 category 全部
+    pattern blob 调用**一次** prefetch_embeddings（而非 O(N^2) 两两比对时逐条各自触发
+    后端·ruoyu_style 等真后端下 N 条各起一次子进程暖机不可用）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    import embedding_store
+    embedding_store._BACKEND = None  # 重探测后端（隔离跨测试残留缓存）
+
+    calls = []
+
+    def _record_prefetch(texts):
+        calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)), "cache_hits": 0, "computed": len(texts)}
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _record_prefetch)
+
+    def _mock_embed(text):
+        if "对话要简短" in text or "台词不宜过长" in text:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+    payload = {
+        "success_patterns": [
+            {"id": "syn_a", "trigger": "对话要简短", "technique": "短促应答",
+             "why_works": "节奏快", "confidence": 0.7, "usage_count": 3},
+            {"id": "syn_b", "trigger": "台词不宜过长", "technique": "避免长篇独白",
+             "why_works": "保持张力", "confidence": 0.6, "usage_count": 2},
+            {"id": "unrelated_c", "trigger": "场景切换要快", "technique": "场景闪切",
+             "why_works": "留白", "confidence": 0.5, "usage_count": 1},
+        ],
+        "failure_patterns": [],
+    }
+    td, root = _mk_project(payload)
+    try:
+        r = mod.evolve(root, current_ch=10)
+        assert len(r["merged"]) == 1  # a+b 语义合并；c 不相关不并入（行为不变）
+
+        assert len(calls) == 1, f"应且只应调用一次 prefetch_embeddings，实际 {len(calls)} 次"
+        expected_blobs = {mod._similarity_blob(p) for p in payload["success_patterns"]}
+        assert set(calls[0]) == expected_blobs
+    finally:
+        import shutil
+        shutil.rmtree(td, ignore_errors=True)
+
+
 def test_semantic_merge_off_by_default_matches_old_behavior():
     """🔴 零回归锁：无真后端（默认）→ evolve 合并判定仍是纯字面 token jaccard（不合并两条
     token 零重叠的经验）。"""

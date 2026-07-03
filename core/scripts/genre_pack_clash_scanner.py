@@ -190,16 +190,24 @@ def scan(draft_path, project_root=None) -> dict:
 
     # 🔴 2026-07-01 真语义后端可用时优先用 embedding 相似度差；否则(含逐 pair 兜底)走词袋密度差
     use_semantic = False
-    compute_embedding = cosine_similarity = None
+    compute_embedding = cosine_similarity = prefetch_embeddings = None
     if _has_real_embedding_backend():
         try:
-            from embedding_store import compute_embedding, cosine_similarity
+            from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
             use_semantic = True
         except (ImportError, TypeError):
             use_semantic = False
     out["match_method"] = "semantic" if use_semantic else "lexicon"
 
     proto_cache: dict = {}
+    # 🔴 2026-07-03 Wave-4：本次涉及的全部 pack 原型 + 全部场景一次性批量预热（单次后端批
+    # 调用）·随后 _pair_scores_semantic 内逐条 compute_embedding 全部命中缓存(不改变判定逻辑)。
+    if use_semantic:
+        hint_packs = {p for h in hints for p in h["pair"]}
+        ordered_packs = [p for p in packs if p in hint_packs]
+        proto_texts = [_pack_prototype_text(p) for p in ordered_packs]
+        prefetch_embeddings(scenes + [t for t in proto_texts if t])
+
     flags = []
     for h in hints:
         pa, pb = h["pair"][0], h["pair"][1]

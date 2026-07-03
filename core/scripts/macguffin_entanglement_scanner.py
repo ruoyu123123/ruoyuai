@@ -190,23 +190,39 @@ def compute_entanglement(macguffins: list, clusters: list,
     (match_method="semantic")；否则关键词共现 (match_method="lexicon"·原逻辑不变·零回归)。
     物件出现(S_m)判定不变——字面匹配(MacGuffin 是具名实体)。
     """
-    use_semantic = False
-    compute_embedding = cosine_similarity = None
-    goal_proto_emb = None
-    if _has_real_embedding_backend():
-        try:
-            from embedding_store import compute_embedding, cosine_similarity
-            goal_proto_emb = compute_embedding(_goal_pursuit_prototype_text())
-        except Exception:
-            goal_proto_emb = None
-        use_semantic = bool(goal_proto_emb)
-
     per_mac = {}
     cluster_texts = []
     for c in clusters:
         cid = c.get("cluster_id") or "?"
         text = _read_cluster_text(project_root, c)
         cluster_texts.append((cid, text))
+
+    use_semantic = False
+    compute_embedding = cosine_similarity = None
+    goal_proto_emb = None
+    if _has_real_embedding_backend():
+        try:
+            from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
+        except Exception:
+            compute_embedding = cosine_similarity = prefetch_embeddings = None
+        if compute_embedding is not None:
+            # 🔴 2026-07-03 Wave-4：先收集本次要 embed 的全部文本（goal 原型句 + 各
+            # macguffin×cluster 命中的语境窗口）一次性 prefetch 灌缓存——下面
+            # goal_proto_emb / _semantic_goal_entangled 的逐条 compute_embedding
+            # 全部命中缓存（取代每个 mention 窗口各自触发一次后端 subprocess 调用）。
+            proto_text = _goal_pursuit_prototype_text()
+            prefetch_texts = [proto_text]
+            for mac in macguffins:
+                name_pat = re.escape(mac["name"])
+                for _cid, text in cluster_texts:
+                    if text and re.search(name_pat, text):
+                        prefetch_texts.extend(_mention_context_windows(text, name_pat))
+            try:
+                prefetch_embeddings(prefetch_texts)
+                goal_proto_emb = compute_embedding(proto_text)
+            except Exception:
+                goal_proto_emb = None
+            use_semantic = bool(goal_proto_emb)
 
     for mac in macguffins:
         name = mac["name"]

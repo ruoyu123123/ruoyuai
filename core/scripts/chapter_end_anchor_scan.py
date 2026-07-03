@@ -81,7 +81,10 @@ def _semantic_anchor_match(tail_text: str, anchor_texts: list[str]) -> "dict | N
     if not anchor_texts:
         return None
     try:
-        from embedding_store import compute_embedding, cosine_similarity
+        from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
+        # 2026-07-03 Wave-4：章末文本 + 全部 anchor 池一次性预热缓存，其后逐条 compute_embedding
+        # 命中缓存（否则 ruoyu_style 等真后端下每条 anchor 各起一次子进程暖机不可用）。
+        prefetch_embeddings([tail_text] + [t for t in dict.fromkeys(anchor_texts) if t])
         tail_emb = compute_embedding(tail_text)
     except Exception:
         return None

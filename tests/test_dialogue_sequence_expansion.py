@@ -188,19 +188,31 @@ def _char_freq_embedding(text, dim=32):
     return vec
 
 
+def _char_freq_embedding_batch(texts, dim=32):
+    """_char_freq_embedding 的批量版（供 mock embedding_store.compute_embeddings_batch）。"""
+    return [_char_freq_embedding(t, dim) for t in texts]
+
+
 def _run_with_mock_embedding(fn):
-    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding(_batch) 后跑 fn。
+
+    🔴 2026-07-03 Wave-4：zero_shot_prototype 内部改走 compute_embeddings_batch，两个
+    mock 都打（single-item 路径也委托 batch，实际只会用到 _batch 版）。
+    """
     bak_eb = os.environ.get("EMBED_BACKEND")
     os.environ["EMBED_BACKEND"] = "mock"
     import embedding_store
     import zero_shot_prototype
     orig = embedding_store.compute_embedding
+    orig_batch = embedding_store.compute_embeddings_batch
     embedding_store.compute_embedding = _char_freq_embedding
+    embedding_store.compute_embeddings_batch = _char_freq_embedding_batch
     zero_shot_prototype.clear_cache()
     try:
         return fn()
     finally:
         embedding_store.compute_embedding = orig
+        embedding_store.compute_embeddings_batch = orig_batch
         zero_shot_prototype.clear_cache()
         if bak_eb is not None:
             os.environ["EMBED_BACKEND"] = bak_eb
@@ -265,3 +277,49 @@ def test_scan_turn_classify_source_model_boosted():
 
 def test_seq_kind_prototypes_cover_pre_insert_post():
     assert set(mod._SEQ_KIND_PROTOTYPES.keys()) == {"pre", "insert", "post"}
+
+
+# ── 🔴 2026-07-03 Wave-4 性能层：scan() 批量分类回归 ─────────────────────────
+def test_classify_turns_batch_empty_list():
+    assert mod._classify_turns_batch([]) == []
+
+
+def test_classify_turns_batch_gate_off_returns_all_none():
+    labels = mod._classify_turns_batch(["先说一件事", "就这样？", "好。"])
+    assert labels == [None, None, None]
+
+
+def test_classify_turns_batch_matches_lexicon_free_semantics():
+    """无正则锚词的 turn·真后端下批量分类应识别语义类别（同单条 _classify_turn_kind）。"""
+    def _do():
+        turns = ["没有别的了吗？完了？", "普通陈述句没有任何标志"]
+        labels = mod._classify_turns_batch(turns)
+        assert labels[0] == "post"
+    _run_with_mock_embedding(_do)
+
+
+def test_scan_calls_classify_batch_exactly_once():
+    """🔴 Wave-4 核心契约：scan() 对全部 turn 只触发一次 zero_shot_prototype.classify_batch。"""
+    bak = os.environ.get("DIALOGUE_SEQ_EXPANSION_MODE")
+    calls = []
+
+    def _recording_classify_batch(texts, label_prototypes, floor=0.5):
+        calls.append(list(texts))
+        return [None] * len(texts)
+
+    try:
+        _set_mode("active")
+        import zero_shot_prototype
+        orig = zero_shot_prototype.classify_batch
+        zero_shot_prototype.classify_batch = _recording_classify_batch
+        try:
+            out = mod.scan(_write(_EXPANSION_DIALOGUE))
+        finally:
+            zero_shot_prototype.classify_batch = orig
+        assert len(calls) == 1
+        expected_turns = mod.extract_turns(
+            mod._strip_changes(_EXPANSION_DIALOGUE))
+        assert calls[0] == expected_turns
+        assert out["dialogue_turn_count"] == len(expected_turns)
+    finally:
+        _set_mode(bak)

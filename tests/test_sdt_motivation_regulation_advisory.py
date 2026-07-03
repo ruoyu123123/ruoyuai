@@ -5,6 +5,7 @@
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -263,19 +264,31 @@ def _char_freq_embedding(text, dim=32):
     return vec
 
 
+def _char_freq_embedding_batch(texts, dim=32):
+    """_char_freq_embedding 的批量版（供 mock embedding_store.compute_embeddings_batch）。"""
+    return [_char_freq_embedding(t, dim) for t in texts]
+
+
 def _run_with_mock_embedding(fn):
-    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding(_batch) 后跑 fn。
+
+    🔴 2026-07-03 Wave-4：zero_shot_prototype 内部改走 compute_embeddings_batch，两个
+    mock 都打（single-item 路径也委托 batch，实际只会用到 _batch 版）。
+    """
     bak_eb = os.environ.get("EMBED_BACKEND")
     os.environ["EMBED_BACKEND"] = "mock"
     import embedding_store
     import zero_shot_prototype
     orig = embedding_store.compute_embedding
+    orig_batch = embedding_store.compute_embeddings_batch
     embedding_store.compute_embedding = _char_freq_embedding
+    embedding_store.compute_embeddings_batch = _char_freq_embedding_batch
     zero_shot_prototype.clear_cache()
     try:
         return fn()
     finally:
         embedding_store.compute_embedding = orig
+        embedding_store.compute_embeddings_batch = orig_batch
         zero_shot_prototype.clear_cache()
         if bak_eb is not None:
             os.environ["EMBED_BACKEND"] = bak_eb
@@ -313,3 +326,68 @@ def test_dominant_regulation_with_model_injects_source():
 def test_sdt_prototypes_cover_all_six_levels():
     assert (set(mod._SDT_REGULATION_PROTOTYPES.keys())
             == set(mod.SDT_LEXICON_PLACEHOLDER["regulation_order"]))
+
+
+# ── 🔴 2026-07-03 Wave-4 性能层：scan() 批量分类回归 ─────────────────────────
+def test_classify_windows_batch_empty_list():
+    assert mod._classify_windows_batch([]) == []
+
+
+def test_classify_windows_batch_gate_off_returns_all_none():
+    labels = mod._classify_windows_batch(["他觉得很有趣", "他被迫做这件事"])
+    assert labels == [None, None]
+
+
+def test_dominant_regulations_batch_matches_single_char_no_backend():
+    """gate off（默认词典累加）：批量版与逐角色 _dominant_regulation 结果一致。"""
+    text = _INTRINSIC_DRAFT + _EXTERNAL_DRAFT
+    batch_result = mod._dominant_regulations_batch(text, ["张三"])
+    single = mod._dominant_regulation(text, "张三")
+    assert batch_result["张三"] == single
+
+
+def test_dominant_regulations_batch_unknown_character_empty():
+    result = mod._dominant_regulations_batch("无关文本", ["张三", "李四"])
+    assert result == {"张三": ("", {}), "李四": ("", {})}
+
+
+def test_dominant_regulations_batch_multi_character_with_model():
+    """真后端下·多角色批量结果应与逐角色调用 _dominant_regulation 完全一致（数学不变）。"""
+    def _do():
+        text = ("张三" + "他觉得这件事很有趣，忍不住想多做一会儿" * 3
+                + "李四" + "他是被逼的，不得不照命令去做" * 3)
+        batch_result = mod._dominant_regulations_batch(text, ["张三", "李四"], window=40)
+        for ch in ("张三", "李四"):
+            single = mod._dominant_regulation(text, ch, window=40)
+            assert batch_result[ch] == single
+        assert batch_result["张三"][0] == "intrinsic"
+        assert batch_result["李四"][0] == "external"
+    _run_with_mock_embedding(_do)
+
+
+def test_scan_calls_classify_batch_exactly_once_across_characters():
+    """🔴 Wave-4 核心契约：scan() 对全部角色 × 全部窗口只触发一次 classify_batch。"""
+    bak = os.environ.get(_ENV)
+    calls = []
+
+    def _recording_classify_batch(texts, label_prototypes, floor=0.5):
+        calls.append(list(texts))
+        return [None] * len(texts)
+
+    try:
+        _set_mode("active")
+        import zero_shot_prototype
+        orig = zero_shot_prototype.classify_batch
+        zero_shot_prototype.classify_batch = _recording_classify_batch
+        try:
+            proj = _mk_project(characters=[{"name": "张三"}])
+            text = _INTRINSIC_DRAFT + _EXTERNAL_DRAFT
+            out = mod.scan(_write(text), proj)
+        finally:
+            zero_shot_prototype.classify_batch = orig
+        assert len(calls) == 1
+        expected_windows = len(list(re.finditer("张三", text)))
+        assert len(calls[0]) == expected_windows
+        assert out["character_count"] == 1
+    finally:
+        _set_mode(bak)

@@ -119,6 +119,11 @@ def _kw(text: str) -> set:
     return out
 
 
+def _milestone_text(ms) -> str:
+    """milestone 条目 → 可读文本（str 直用·dict 取 text/milestone·否则整体 json 化）。"""
+    return str(ms if isinstance(ms, str) else (ms.get("text") or ms.get("milestone") or json.dumps(ms, ensure_ascii=False)))
+
+
 def _cluster_vol(c: dict) -> int | None:
     """cluster 的卷号：vol → volume → parent_me 正则回退（2026-06-15 审计修：真实 event 簇
     cluster 存 "volume"/"parent_me" 无 "vol"·原 vol_clusters 只读 c.get("vol") → 本卷 cluster
@@ -221,6 +226,16 @@ def scan(project_root: Path) -> dict:
     written_embedding = None
     semantic_floor = None
     if _has_real_embedding_backend():
+        # 🔴 2026-07-03 Wave-4：先收集本次要 embed 的全部文本（已写内容聚合 + 每条
+        # milestone）一次性 prefetch 灌缓存——下面 written_embedding + 逐条 milestone
+        # 的 _embed_or_none 全部命中缓存（取代已写内容 1 次 + 每个 milestone 各自
+        # 触发一次后端 subprocess 调用）。
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from embedding_store import prefetch_embeddings
+            prefetch_embeddings([written_text] + [_milestone_text(ms) for ms in milestones])
+        except Exception:
+            pass
         written_embedding = _embed_or_none(written_text)
         if written_embedding is not None:
             match_method = "embedding_cosine"
@@ -231,7 +246,7 @@ def scan(project_root: Path) -> dict:
     touched = 0
     untouched = []
     for ms in milestones:
-        ms_text = str(ms if isinstance(ms, str) else (ms.get("text") or ms.get("milestone") or json.dumps(ms, ensure_ascii=False)))
+        ms_text = _milestone_text(ms)
         is_touched = None
         if written_embedding is not None:
             sim = _cosine_or_none(_embed_or_none(ms_text), written_embedding)

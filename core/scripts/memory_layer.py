@@ -88,7 +88,10 @@ def _search_semantic(query: str, memories: list[dict], top_k: int) -> "list[dict
     真后端「查不到相关的」和「后端跑不起来」是两回事，不该混为一谈静默假装退回 TF-IDF）。
     """
     try:
-        from embedding_store import compute_embedding, cosine_similarity
+        from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
+        # 2026-07-03 Wave-4：query + 全部记忆内容一次性预热缓存，其后逐条 compute_embedding 命中缓存
+        # （否则 ruoyu_style 等真后端下每条记忆各起一次子进程，N 条记忆 N 次暖机不可用）。
+        prefetch_embeddings([query] + [m.get("content", "") for m in memories])
         q_emb = compute_embedding(query)
     except Exception:
         return None

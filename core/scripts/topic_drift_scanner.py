@@ -13,6 +13,11 @@
   EMBED_BACKEND 未设（默认 hash = md5 n-gram 袋·无真语义距离意义）→ 静默返回空列表。
   只有配了真后端（mstyle / local / ruoyu_style / api）才运行。
 
+【🔴 2026-07-03 Wave-4 性能层】编码前先调 embedding_store.prefetch_embeddings(scope+全部
+  段落) 一次性批量预热缓存（真后端单批子进程/API 调用），随后逐条 compute_embedding 全部
+  命中缓存零成本——本仓其余消费 embedding_store 的 scanner（agenda_drift / genre_dominance /
+  genre_pack_clash / revision_homogenization 等）复用同一范式，本文件是范式源头。
+
 【北极星⑤】所有 issue 永远 advisory，绝不进 HARD_GATE_CODES。
 """
 from __future__ import annotations
@@ -113,7 +118,7 @@ def scan_topic_drift(draft_text: str, scope_summary: str,
 
     # ── 动态导入 embedding_store（系统 py 一定有·但 import 异常也兜底）──
     try:
-        from embedding_store import compute_embedding, cosine_similarity
+        from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
     except (ImportError, TypeError):
         return []
 
@@ -121,8 +126,9 @@ def scan_topic_drift(draft_text: str, scope_summary: str,
     if len(paras) < 6:
         return []
 
-    # ── 编码 ──
+    # ── 编码（Wave-4 2026-07-03：先一次性批量预热缓存·下面逐条 compute_embedding 全部命中）──
     try:
+        prefetch_embeddings([scope_summary] + paras)
         scope_emb = compute_embedding(scope_summary)
         para_embs = [compute_embedding(p) for p in paras]
     except Exception:

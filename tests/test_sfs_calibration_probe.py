@@ -384,6 +384,60 @@ def test_embedding_sfs_score_dimension_mismatch_falls_back(monkeypatch):
     assert score == mod._placeholder_sfs_score(_TEMPLATE_A, _TEMPLATE_B)
 
 
+def test_probe_batches_prefetch_once_for_default_embedding_scorer(monkeypatch):
+    """🔴 2026-07-03 Wave-4：默认 embedding scorer 命中时，probe() 对 same+cross 全部
+    文本只触发一次批量 prefetch_embeddings（而非每对各自 2 次 compute_embedding 撞真后端）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "fake-real")
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "compute_embedding", _char_freq_embedding)
+    prefetch_calls = []
+
+    def _recording_prefetch(texts):
+        prefetch_calls.append(list(texts))
+        return {"total": len(texts), "unique": len(set(texts)),
+                "cache_hits": 0, "computed": len(set(texts))}
+
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _recording_prefetch)
+    bak = os.environ.get("SFS_CALIBRATION_PROBE_MODE")
+    try:
+        _set_mode("active")
+        same = _mk_pair_dir(12, lambda i: _TEMPLATE_A + str(i),
+                            lambda i: _TEMPLATE_A2 + str(i))
+        cross = _mk_pair_dir(12, lambda i: _TEMPLATE_A + str(i),
+                             lambda i: _TEMPLATE_B + str(i))
+        out = mod.probe(same, cross)
+        assert len(prefetch_calls) == 1, "same+cross 应只触发一次批量 prefetch"
+        # 12 same 对 + 12 cross 对，每对 2 条文本(a.txt+b.txt) = 48 条
+        assert len(prefetch_calls[0]) == 48
+        assert out["_placeholder_scorer"] is False
+    finally:
+        _set_mode(bak)
+
+
+def test_probe_placeholder_scorer_never_calls_prefetch(monkeypatch):
+    """占位 scorer（无真后端）不应触发批量 prefetch——批量优化只作用于默认 embedding scorer。"""
+    import embedding_store
+    calls = {"n": 0}
+
+    def _counting_prefetch(texts):
+        calls["n"] += 1
+        return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
+
+    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _counting_prefetch)
+    bak = os.environ.get("SFS_CALIBRATION_PROBE_MODE")
+    try:
+        _set_mode("active")
+        same = _mk_pair_dir(12, lambda i: _TEMPLATE_A + str(i),
+                            lambda i: _TEMPLATE_A2 + str(i))
+        cross = _mk_pair_dir(12, lambda i: _TEMPLATE_A + str(i),
+                             lambda i: _TEMPLATE_B + str(i))
+        out = mod.probe(same, cross)
+        assert calls["n"] == 0, "占位 scorer 路径不应调用 prefetch_embeddings"
+        assert out["_placeholder_scorer"] is True
+    finally:
+        _set_mode(bak)
+
+
 def test_probe_uses_real_embedding_scorer_end_to_end(monkeypatch):
     """probe() 端到端：真后端 + 不传 --scorer → _placeholder_scorer=False（用了 embedding 默认
     scorer），且分辨力判定仍走同一套统计管线（same/cross 分数分布够开时 PASS）。"""

@@ -334,18 +334,23 @@ def _detect_leaks_from_ledger(scenes, ledger, charid_names):
     🔴 2026-07-01 语义匹配路径：真 embedding 后端可用时，字面子串未命中的窗口再补一次
     compute_embedding+cosine_similarity 语义比对（forbidden 短语 vs 正文窗口），抓字面不
     重叠但语义同指的改写。真后端不可用/未装/编码异常 → 只走原有字面子串匹配，
-    与升级前逐字节零回归（绝不拿 hash 袋子冒充语义）。"""
+    与升级前逐字节零回归（绝不拿 hash 袋子冒充语义）。
+
+    🔴 2026-07-03 Wave-4：语义路径先两遍扫描——第一遍只算各角色 forbidden 短语集
+    （不编码），据此收集本次会真正碰到的全部待 embed 文本（forbidden 短语 + 命中
+    知识动词的窗口）一次性 prefetch 灌缓存；第二遍走原检测逻辑，逐条 compute_embedding
+    全部命中缓存（取代每个窗口/短语首次出现各自触发一次后端 subprocess 调用）。"""
     chars_ledger = ledger.get("characters") or {}
     facts_index = ledger.get("facts") if isinstance(ledger.get("facts"), dict) else {}
     leaks = []
 
     # 语义路径预备：只有真后端就绪才 import + 建缓存，默认(hash)完全不进这段
     use_semantic = _has_real_embedding_backend()
-    _embed_fn, _cos_fn = None, None
+    _embed_fn, _cos_fn, _prefetch_fn = None, None, None
     if use_semantic:
         try:
-            from embedding_store import compute_embedding, cosine_similarity
-            _embed_fn, _cos_fn = compute_embedding, cosine_similarity
+            from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
+            _embed_fn, _cos_fn, _prefetch_fn = compute_embedding, cosine_similarity, prefetch_embeddings
         except ImportError:
             use_semantic = False
     _floor = _semantic_leak_floor() if use_semantic else None
@@ -359,6 +364,8 @@ def _detect_leaks_from_ledger(scenes, ledger, charid_names):
                 _phrase_embed_cache[ph] = None
         return _phrase_embed_cache[ph]
 
+    # 第一遍：只算每个角色的 forbidden 短语集（跟 embedding 无关·先算好供下面收集 prefetch 用）
+    char_infos = []
     for char_id, cl in chars_ledger.items():
         if not isinstance(cl, dict):
             continue
@@ -380,6 +387,28 @@ def _detect_leaks_from_ledger(scenes, ledger, charid_names):
         forbidden -= speakable  # 角色也确知（可说）的短语不算违规
         if not forbidden:
             continue
+        char_infos.append((char_id, search_names, cannot_speak, forbidden))
+
+    # 收集 + 一次性 prefetch：forbidden 短语（去重跨角色复用） + 命中知识动词的窗口
+    if use_semantic and char_infos:
+        prefetch_texts = []
+        for _char_id, search_names, _cannot_speak, forbidden in char_infos:
+            prefetch_texts.extend(forbidden)
+            for scene in scenes:
+                if not any(nm in scene for nm in search_names):
+                    continue
+                for nm in search_names:
+                    for mt in re.finditer(re.escape(nm), scene):
+                        window = scene[mt.end(): mt.end() + _LEDGER_VERB_WINDOW]
+                        if any(v in window for v in KNOWLEDGE_VERBS):
+                            prefetch_texts.append(window)
+        try:
+            _prefetch_fn(prefetch_texts)
+        except Exception:
+            pass
+
+    # 第二遍：原检测逻辑不变（逐条 compute_embedding 现在全部命中上面灌好的缓存）
+    for char_id, search_names, cannot_speak, forbidden in char_infos:
         for idx, scene in enumerate(scenes):
             if not any(nm in scene for nm in search_names):
                 continue
