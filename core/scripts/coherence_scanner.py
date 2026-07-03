@@ -131,12 +131,24 @@ def _make_issue(code: str, message: str, severity: str = "warning",
 def _load_bridge():
     """延迟导入 nn_coherence_bridge。失败 → None（调用方静默降级）。
 
-    返回 (predict_pairs, enabled) 或 None。
+    返回 (predict_pairs, enabled) 或 None。RUOYU_FEATURE_STORE=1 时 predict_pairs
+    会经 FeatureStore 批量缓存；缓存未开仍直连 bridge。
     """
     try:
-        from nn_coherence_bridge import predict_pairs, enabled
+        from nn_coherence_bridge import predict_pairs as _bridge_predict_pairs, enabled
     except ImportError:
         return None
+
+    def predict_pairs(pairs):
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            if feature_store_enabled():
+                return FeatureStore.get().compute_coherence_pairs(pairs)
+        except Exception:  # noqa: BLE001 feature store 失败 → 退 bridge，绝不影响 scanner
+            pass
+        return _bridge_predict_pairs(pairs)
+
     return predict_pairs, enabled
 
 

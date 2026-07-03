@@ -78,9 +78,13 @@ def _nn_segment_valence(chunks: "list[str]") -> "list[float | None]":
     if os.environ.get("RUOYU_NN_VAD") != "1" or n == 0:
         return [None] * n
     try:
-        sys.path.insert(0, str(Path(__file__).parent))
-        import nn_vad_bridge
-        preds = nn_vad_bridge.predict_batch(chunks)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            preds = FeatureStore.get().compute_vad_batch(chunks)
+        else:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(chunks)
     except Exception:  # noqa: BLE001 NN 不可用 → 退关键词（不崩）
         return [None] * n
     if len(preds) != n:

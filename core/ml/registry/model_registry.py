@@ -27,6 +27,51 @@ def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _rel(path: str | Path) -> str:
+    try:
+        return str(Path(path).resolve().relative_to(Path(__file__).resolve().parents[3]))
+    except Exception:
+        return str(path)
+
+
+def sync_runtime_models(registry_path: str | Path | None = None) -> dict:
+    """把当前创作流程可用的模型登记进 registry。
+
+    这是运行时治理入口：不训练、不切换模型，只记录 active/shadow 版本、路径、指标和 env gate。
+    """
+    if not enabled():
+        return {"skipped": True, "reason": "RUOYU_MODEL_REGISTRY != 1"}
+    root = Path(__file__).resolve().parents[3]
+    mr = ModelRegistry(registry_path)
+    registered: list[dict] = []
+
+    vad_path = root / "core" / "ml" / "emotion_vad" / "checkpoints" / "va_base"
+    if vad_path.exists():
+        registered.append(mr.register(
+            "emotion_vad", "v1", _rel(vad_path), {"mean_ccc": 0.8},
+            data_size=12000, env_gate="RUOYU_NN_VAD", status="active"))
+
+    coh_path = root / "core" / "ml" / "coherence" / "runs" / "coherence_v1"
+    if coh_path.exists():
+        registered.append(mr.register(
+            "coherence_binary", "v1", _rel(coh_path),
+            {"accuracy": 0.604, "precision": 0.8634, "recall": 0.1663,
+             "f1": 0.2788, "spearman": 0.4863},
+            data_size=25000, env_gate="RUOYU_NN_COHERENCE", status="shadow"))
+
+    style_path = root / "core" / "ml" / "style_embed" / "runs" / "style_embed_char_v1" / "final"
+    if style_path.exists():
+        registered.append(mr.register(
+            "style_embed", "v1", _rel(style_path), {},
+            data_size=0, env_gate="EMBED_BACKEND", status="active"))
+
+    registered.append(mr.register(
+        "surprisal_gpt2", "uer-gpt2-chinese-cluecorpussmall",
+        "hf://uer/gpt2-chinese-cluecorpussmall", {},
+        data_size=0, env_gate="RUOYU_NN_SURPRISAL", status="active"))
+    return {"registered": registered, "count": len(registered)}
+
+
 def _load_registry() -> dict:
     if _REG_FILE.exists():
         try:

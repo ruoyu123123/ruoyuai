@@ -121,7 +121,7 @@ def _next_cluster_emergence(project_root, cluster_key) -> str:
 
 
 def _extract_keys(text: str, top_k=8) -> set:
-    """从文本里抽 top-K 高频 CJK 2-gram 当 framing 关键词（占位·零依赖）。"""
+    """从文本里抽 top-K 高频 CJK 2-gram 当 framing 关键词（字面 fallback 专用·零依赖）。"""
     if not isinstance(text, str) or not text:
         return set()
     cjk = "".join(ch for ch in text if "一" <= ch <= "鿿")
@@ -135,10 +135,48 @@ def _extract_keys(text: str, top_k=8) -> set:
     return {bg for bg, _ in top}
 
 
-def _drift_score(want_text: str, next_framing: str) -> float:
-    """want_text vs next_cluster framing 的 2-gram Jaccard 反相似度（漂移度）。
+# 🔴 2026-07-02: 真 embedding 后端接线（本仓约定：每个消费 embedding 的脚本自带一份门控副本）。
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+    原样复制自 topic_drift_scanner.py（不 import 跨脚本依赖）。也检查 .env 的
+    GEN_EMBED__* API 配置（由 embedding_store._load_embed_profile 消费）。"""
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
 
+
+def _semantic_drift(want_text: str, next_framing: str) -> "float | None":
+    """真后端时：want_text vs next_framing 的 embedding 余弦距离当漂移度。
+
+    embedding_store 不可用 / 任一侧为空 / 编码失败 / 维度不一致 → None
+    （调用方回退 2-gram Jaccard·绝不拿默认 hash 假语义冒充）。"""
+    if not want_text.strip() or not next_framing.strip():
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embedding_store import compute_embedding, cosine_similarity
+        a = compute_embedding(want_text)
+        b = compute_embedding(next_framing)
+    except Exception:
+        return None
+    if not a or not b or len(a) != len(b):
+        return None
+    return round(1.0 - cosine_similarity(a, b), 4)
+
+
+def _drift_score(want_text: str, next_framing: str) -> float:
+    """want_text vs next_cluster framing 的漂移度：真后端时用 embedding 余弦距离（能抓
+    「殊死搏杀」vs「决一死战」这类零字面 2-gram 重叠的同义改写——字面 Jaccard 会误判成
+    drift=1.0 完全偏离），否则回退 2-gram Jaccard 反相似度（占位·零依赖）。
     返回 0-1·0=完全对齐·1=完全偏离。"""
+    if _has_real_embedding_backend():
+        sem = _semantic_drift(want_text, next_framing)
+        if sem is not None:
+            return sem
     a = _extract_keys(want_text)
     b = _extract_keys(next_framing)
     if not a or not b:

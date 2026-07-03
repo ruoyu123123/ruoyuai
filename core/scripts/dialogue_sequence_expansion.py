@@ -17,6 +17,11 @@ LLM 默认走 FPP→SPP 二步对答 → 试探/谈判/审讯类对话扁平化�
   3. expansion_ratio = expansion_turn_count / dialogue_turn_count
   4. 紧张/试探/谈判类 cluster manifest expected_min_ratio (默认 0.30) 缺位即 advisory。
 
+【🔴 2026-07-03 zero_shot_prototype 模型优先路径】真 embedding 后端可用时每 turn 额外走
+  zero_shot_prototype.classify() 语义分类 pre/insert/post，并入触发词表命中集合（并集补召回·
+  不取代·不会让已命中的类别消失）；否则/无真后端 → 100% 沿用固定触发词表（默认零回归）。
+  output.turn_classify_source 标注本次是否有 turn 被模型补召回。
+
 【与 R6 OIR 正交】: OIR 查"非问句回答" (反类型回应), 本 scanner 查 turn 间扩展结构密度。
 
 【北极星② / ⑤ 顾问非法官】对话类型由 manifest/cluster brief 声明 · 扩展密度是工艺
@@ -51,6 +56,26 @@ _QUOTE_RE = re.compile(r"[“「]([^“”「」]{1,300}?)[”」]", re.DOTALL)
 
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
+# 🔴 2026-07-03 zero_shot_prototype 模型优先路径·CA pre/insert/post-sequence embedding 原型例句
+# （占位·3 条/类·待金标准校准·真后端不可用时 100% 走固定触发词表兜底）
+_SEQ_KIND_PROTOTYPES = {
+    "pre": ["先说一件事，你先别急", "等一下，我有句话想问你", "听我说完，这事没那么简单"],
+    "insert": ["你是说他早就知道了？", "等等，你的意思是他背叛了我们？", "我能不能先确认一下这件事"],
+    "post": ["就这样？没有别的了吗？", "那就这么定了，没别的事了", "完了？就这些？"],
+}
+
+
+def _classify_turn_kind(turn: str) -> "str | None":
+    """真后端优先用 zero_shot_prototype 分类 turn 语义·否则 None（调用方不并入结果集）。"""
+    try:
+        import zero_shot_prototype
+        result = zero_shot_prototype.classify(turn, _SEQ_KIND_PROTOTYPES, floor=0.5)
+        if result is not None:
+            return result["label"]
+    except Exception:
+        pass
+    return None
+
 
 def _mode() -> str:
     m = (os.environ.get("DIALOGUE_SEQ_EXPANSION_MODE") or "shadow").strip().lower()
@@ -73,8 +98,8 @@ def extract_turns(text: str) -> list:
     return [m.group(1) for m in _QUOTE_RE.finditer(text)]
 
 
-def classify_turn(turn: str) -> set:
-    """识别 turn 含哪几类扩展标志。返回 set ⊂ {pre, insert, post}。"""
+def _lexicon_turn_kinds(turn: str) -> set:
+    """纯正则触发词表判定（fallback 唯一真理源）。返回 set ⊂ {pre, insert, post}。"""
     kinds = set()
     if PRE_MARKERS.search(turn):
         kinds.add("pre")
@@ -82,6 +107,20 @@ def classify_turn(turn: str) -> set:
         kinds.add("insert")
     if POST_MARKERS.search(turn):
         kinds.add("post")
+    return kinds
+
+
+def classify_turn(turn: str) -> set:
+    """识别 turn 含哪几类扩展标志。返回 set ⊂ {pre, insert, post}。
+
+    🔴 2026-07-03 模型优先：真后端可用时额外用 zero_shot_prototype 分类 turn 语义
+    （pre/insert/post 三选一·置信达标才采信），并入正则命中集合（**并集不取代**——
+    正则召回的类别永远保留，模型只补召回、不删除，默认无真后端时逐字节零回归）。
+    """
+    kinds = _lexicon_turn_kinds(turn)
+    model_label = _classify_turn_kind(turn)
+    if model_label is not None:
+        kinds.add(model_label)
     return kinds
 
 
@@ -149,8 +188,12 @@ def scan(draft_path, project_root=None) -> dict:
     insert_count = 0
     post_count = 0
     expansion_turns = 0
+    model_boosted_turns = 0
     for t in turns:
-        k = classify_turn(t)
+        lex_k = _lexicon_turn_kinds(t)
+        k = classify_turn(t)  # 词典 ∪ 模型（真后端不可用时 k == lex_k）
+        if k != lex_k:
+            model_boosted_turns += 1
         if k:
             expansion_turns += 1
         if "pre" in k:
@@ -171,6 +214,9 @@ def scan(draft_path, project_root=None) -> dict:
         "pre_seq_density": pre_density,
         "insert_seq_density": insert_density,
         "post_seq_density": post_density,
+        "model_boosted_turns": model_boosted_turns,
+        "turn_classify_source": ("zero_shot_embedding+lexicon" if model_boosted_turns
+                                  else "lexicon"),
     })
 
     expected_min = _resolve_expected_min(project_root)

@@ -32,16 +32,85 @@ import sys
 from pathlib import Path
 from collections import Counter
 
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
 _DATA = Path(__file__).resolve().parent.parent / "data" / "trope_canon.json"
 _CACHE: dict | None = None
 
 ISSUE_CODE_NEW_SURFACE = "TROPE_NEW_SURFACE_PROMOTION_CANDIDATE"
 ISSUE_CODE_DICT_THIN = "TROPE_CANON_DICT_THIN"
 
+NEAREST_CANONICAL_SIM_THRESHOLD = 0.75   # 新 surface vs 已有 canonical 值最近邻余弦阈值 · 待金标准校准
+
 
 def _mode() -> str:
     m = (os.environ.get("TROPE_CANON_MODE") or "shadow").strip().lower()
     return m if m in ("off", "shadow", "active") else "shadow"
+
+
+# ── 🔴 2026-07-02 真语义 embedding 可选路径（照抄 topic_drift_scanner 已验证的模式）───────
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+
+    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
+    embedding 的文件自带一份，不互相 import）。也检查 .env 的 GEN_EMBED__* API 配置。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+def _embed_canonical_targets(canonical_targets: list) -> "list[tuple[str, list]] | None":
+    """真后端就绪时把去重后的 canonical 目标值编码一次，供本次扫描内所有新 surface
+    候选复用（避免 O(候选 × 目标) 重复编码·2026-07-02）。
+
+    未配真后端 / 无目标 / 编码异常 → None（调用方不给建议·仍要求人审）。
+    """
+    if not _has_real_embedding_backend() or not canonical_targets:
+        return None
+    try:
+        from embedding_store import compute_embedding
+        out = []
+        for cand in canonical_targets:
+            ce = compute_embedding(cand)
+            if ce:
+                out.append((cand, ce))
+        return out or None
+    except Exception:
+        return None
+
+
+def _nearest_canonical_suggestion(surface: str, target_embs) -> "dict | None":
+    """真后端下：新 surface 与已有 canonical 值的最近邻建议（相似度 ≥ 阈值才给）。
+
+    target_embs 为 None（无真后端/编码失败）/ surface 空 / 计算异常 → None
+    （调用方不加字段·字段缺省·仍要求人审·绝不自动改 trope_canon.json）。
+    """
+    if not target_embs or not surface:
+        return None
+    try:
+        from embedding_store import compute_embedding, cosine_similarity
+        se = compute_embedding(surface)
+        if not se:
+            return None
+        best_name, best_sim = None, -1.0
+        for cand, ce in target_embs:
+            if len(ce) != len(se):
+                continue
+            sim = cosine_similarity(se, ce)
+            if sim > best_sim:
+                best_name, best_sim = cand, sim
+        if best_name is not None and best_sim >= NEAREST_CANONICAL_SIM_THRESHOLD:
+            return {"canonical": best_name, "similarity": round(best_sim, 4)}
+    except Exception:
+        return None
+    return None
 
 
 def load_canon() -> dict:
@@ -154,6 +223,15 @@ def scan_for_promotions(project_root: str | Path) -> dict:
         for k, v in new_surface_counter.items()
         if v >= promotion_threshold
     ]
+    # 真后端就绪时给每个候选加 embedding 最近邻 canonical 建议（不改 canonicalize_tag 本体·
+    # 不自动改 trope_canon.json·仍要求人审）；无真后端 → 字段缺省（2026-07-02）
+    if promotion_candidates:
+        target_embs = _embed_canonical_targets(sorted(set(canon_map.values())))
+        for cand in promotion_candidates:
+            suggestion = _nearest_canonical_suggestion(cand["surface"], target_embs)
+            if suggestion is not None:
+                cand["embedding_nearest_canonical"] = suggestion["canonical"]
+                cand["embedding_similarity"] = suggestion["similarity"]
     out["canonical_distribution"] = dict(canonical_counter.most_common(10))
     out["promotion_candidates"] = promotion_candidates
     out["total_tags_scanned"] = len(tags)

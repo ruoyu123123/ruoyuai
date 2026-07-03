@@ -161,3 +161,159 @@ def test_audit_hub_integrates_scanner():
     src = (_SCRIPTS / "audit_hub.py").read_text(encoding="utf-8")
     assert "agenda_drift_scanner" in src
     assert "WRITER_INTENT_AGENDA_DRIFT" in src
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-01 语义覆盖率补齐（embedding cosine 替代字面 Jaccard · 同义改写零容错）
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_has_real_embedding_backend_false_by_default():
+    """未配置 EMBED_BACKEND / GEN_EMBED__* → False（默认 hash 袋·无真语义）。"""
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_has_real_embedding_backend_false_when_hash():
+    """EMBED_BACKEND=hash → 仍 False（不拿 hash 假语义袋冒充）。"""
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "hash"
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_has_real_embedding_backend_true_when_embed_backend_set():
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "local"
+        assert mod._has_real_embedding_backend() is True
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_has_real_embedding_backend_true_when_gen_embed_env_set():
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    try:
+        os.environ["GEN_EMBED__test__API_KEY"] = "fake"
+        assert mod._has_real_embedding_backend() is True
+    finally:
+        os.environ.pop("GEN_EMBED__test__API_KEY", None)
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+
+
+def test_default_match_method_is_char_jaccard_and_scores_unchanged():
+    """🔴 零回归锁：无真 embedding 后端（默认）→ match_method=char_jaccard，field_scores
+    与直接调用 _coverage() 逐字节一致（语义路径是"加"上去的，不是"换"掉字面路径）。"""
+    bak_mode = os.environ.get("AGENDA_DRIFT_MODE")
+    bak_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        _set_mode("active")
+        fields = {"want": "救妹妹", "antagonist": "无脸者",
+                  "stake": "灵魂被吞", "tone_word": "冷峻"}
+        proj = _mk_project_with_anchor(**fields)
+        draft_text = "甜蜜蜜的婚礼在春天举行。" * 200
+        out = mod.scan(_write_draft(draft_text), proj, "001")
+        assert out["match_method"] == "char_jaccard"
+        stripped = mod._strip_changes(draft_text)
+        expected = {f: round(mod._coverage(v, stripped), 4) for f, v in fields.items()}
+        assert out["field_scores"] == expected, (out["field_scores"], expected)
+    finally:
+        _set_mode(bak_mode)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_semantic_path_replaces_jaccard_for_synonym():
+    """真 embedding 后端 mock：字面零重叠的同义改写（意图卡 want="决战"，草稿写"殊死搏杀"·
+    两词共 0 个相同汉字）应被余弦相似度识别为一致（字面 Jaccard 会误判 drift）——验证语义
+    路径被正确使用。"""
+    bak_mode = os.environ.get("AGENDA_DRIFT_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        _set_mode("active")
+        os.environ["EMBED_BACKEND"] = "mock"   # 触发 _has_real_embedding_backend()=True
+        proj = _mk_project_with_anchor(
+            want="决战", antagonist="无脸者", stake="灵魂被吞", tone_word="冷峻")
+        # "决战"={决,战} vs "殊死搏杀"={殊,死,搏,杀} 无共享汉字 → 字面 Jaccard 覆盖率必为 0.0
+        # （同义改写零容错场景：字面法完全无法识别两者语义相同）
+        draft_text = "殊死搏杀·无脸者·灵魂被吞·冷峻\n" * 50
+        stripped = mod._strip_changes(draft_text)
+        assert mod._coverage("决战", stripped) == 0.0   # 前置断言：确认字面法确实零重叠
+
+        import embedding_store
+        orig = embedding_store.compute_embedding
+
+        def _mock_embed(text):
+            if "决战" in text or "殊死搏杀" in text:
+                return [1.0, 0.0]
+            return [0.0, 1.0]
+
+        embedding_store.compute_embedding = _mock_embed
+        try:
+            out = mod.scan(_write_draft(draft_text), proj, "001")
+        finally:
+            embedding_store.compute_embedding = orig
+
+        assert out["match_method"] == "embedding_cosine", out
+        assert out["field_scores"]["want"] == 1.0, out["field_scores"]
+        assert "want" not in {d["field"] for d in out["drift_fields"]}, out["drift_fields"]
+    finally:
+        _set_mode(bak_mode)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_semantic_path_falls_back_when_embedding_encode_fails():
+    """真后端配置但草稿整体编码异常 → 回退字面 Jaccard（不崩·不误判为语义路径）。"""
+    bak_mode = os.environ.get("AGENDA_DRIFT_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        _set_mode("active")
+        os.environ["EMBED_BACKEND"] = "mock"
+        proj = _mk_project_with_anchor(
+            want="救妹妹", antagonist="无脸者", stake="灵魂被吞", tone_word="冷峻")
+        draft_text = "救妹妹·无脸者·灵魂被吞·冷峻\n" * 50
+
+        import embedding_store
+        orig = embedding_store.compute_embedding
+
+        def _boom(text):
+            raise RuntimeError("模拟真后端编码失败")
+
+        embedding_store.compute_embedding = _boom
+        try:
+            out = mod.scan(_write_draft(draft_text), proj, "001")
+        finally:
+            embedding_store.compute_embedding = orig
+
+        assert out["match_method"] == "char_jaccard", out
+        stripped = mod._strip_changes(draft_text)
+        assert out["field_scores"]["want"] == round(mod._coverage("救妹妹", stripped), 4)
+    finally:
+        _set_mode(bak_mode)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)

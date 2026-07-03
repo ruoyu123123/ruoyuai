@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 # ============ 模式解析（影子纪律 · 默认 off）============
@@ -153,8 +154,8 @@ _CALM_LEXICON = {
 _SENT_SPLIT = re.compile(r"[。！？…\n]")
 
 
-def _emotion_register(text: str) -> float:
-    """估片段情绪寄存器（-1 平静 ↔ +1 紧张）· 纯词频近似 · 只为「风格相似」选样。"""
+def _emotion_register_lexicon(text: str) -> float:
+    """词频近似情绪寄存器（-1 平静 ↔ +1 紧张）· VAD 模型不可用时的确定性 fallback。"""
     if not text:
         return 0.0
     tension = sum(text.count(w) for w in _TENSION_LEXICON)
@@ -163,6 +164,57 @@ def _emotion_register(text: str) -> float:
     if total == 0:
         return 0.0
     return (tension - calm) / total
+
+
+def _model_va_batch(texts: list) -> "list | None":
+    """批量取 (valence, arousal)；env 未开/模型不可用/批量失配 → None（调用方整批回退词典）。
+    一次性整批调用（摊薄模型加载开销），供 _profile_texts_batch 消费——不逐条重试模型。"""
+    if not texts or os.environ.get("RUOYU_NN_VAD") != "1":
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(texts) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(texts)
+    except Exception:
+        return None
+    if not preds or len(preds) != len(texts):
+        return None
+    out = []
+    for p in preds:
+        if p and p.get("valence") is not None and p.get("arousal") is not None:
+            try:
+                out.append((float(p["valence"]), float(p["arousal"])))
+                continue
+            except (TypeError, ValueError):
+                pass
+        out.append(None)
+    return out
+
+
+def _emotion_register_from_va(valence: float, arousal: float) -> float:
+    """VAD (valence, arousal)∈[0,1] → 情绪寄存器(-1平静..+1紧张)：
+    arousal 高 + valence 负 → 紧张端（tension 词典本质是高唤醒词，calm 词典是低唤醒词，
+    故 arousal 权重更高；valence 负向做次要修正，对齐"valence 负→紧张端"直觉）。"""
+    reg = 0.6 * (2 * arousal - 1) + 0.4 * (1 - 2 * valence)
+    return max(-1.0, min(1.0, round(reg, 4)))
+
+
+def _emotion_register(text: str) -> float:
+    """估片段情绪寄存器（-1 平静 ↔ +1 紧张）。VAD 模型可用时用 valence/arousal，否则词频近似。
+    单条便捷入口（批量选样场景走 _profile_texts_batch，一次性整批调用摊薄模型加载开销）。"""
+    if not text:
+        return 0.0
+    va = _model_va_batch([text])
+    if va and va[0] is not None:
+        return _emotion_register_from_va(*va[0])
+    return _emotion_register_lexicon(text)
 
 
 def _avg_sentence_len(text: str) -> float:
@@ -197,13 +249,28 @@ def style_distance(a_profile: dict, b_profile: dict) -> float:
     return de * 1.0 + dl * 0.6 + dd * 0.6
 
 
+def _profile_texts_batch(texts: list) -> list:
+    """批量抽风格寄存器 profile：VAD 一次性整批调用（未启用/失败 → 全部回退词典·
+    不逐条重试模型 · 供 select_snippets 对多个候选片段一次性打分，避免 N 次模型子进程调用）。"""
+    va_list = _model_va_batch(texts)
+    profiles = []
+    for i, text in enumerate(texts):
+        if va_list and va_list[i] is not None:
+            emotion = _emotion_register_from_va(*va_list[i])
+        else:
+            emotion = _emotion_register_lexicon(text)
+        profiles.append({
+            "emotion": emotion,
+            "avg_sent_len": _avg_sentence_len(text),
+            "dialogue_ratio": _dialogue_ratio(text),
+        })
+    return profiles
+
+
 def profile_text(text: str) -> dict:
-    """抽片段的风格寄存器 profile（情绪 / 句长 / 对话占比）。"""
-    return {
-        "emotion": _emotion_register(text),
-        "avg_sent_len": _avg_sentence_len(text),
-        "dialogue_ratio": _dialogue_ratio(text),
-    }
+    """抽片段的风格寄存器 profile（情绪 / 句长 / 对话占比）。单条入口；
+    批量选样走 _profile_texts_batch（见 select_snippets）。"""
+    return _profile_texts_batch([text])[0]
 
 
 # ============ 片段抽取 ============
@@ -275,9 +342,11 @@ def select_snippets(originals_dir: Path, target_profile: dict,
     cands = _extract_candidate_snippets(originals_dir)
     if not cands:
         return []
+    # 批量算全部候选的 profile（VAD 一次性整批调用·避免逐条候选各自起一次模型子进程）
+    profiles = _profile_texts_batch(cands)
     scored = []
-    for idx, snip in enumerate(cands):
-        d = style_distance(profile_text(snip), target_profile)
+    for idx, (snip, prof) in enumerate(zip(cands, profiles)):
+        d = style_distance(prof, target_profile)
         scored.append((d, idx, snip))
     scored.sort(key=lambda x: (x[0], (x[1] + seed) % len(cands)))
     return [s for _, _, s in scored[:max(1, n)]]

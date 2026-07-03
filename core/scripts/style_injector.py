@@ -24,6 +24,7 @@ style_directive，注入到 writer prompt。
 
 import sys
 import json
+import os
 import random
 import re
 from pathlib import Path
@@ -113,8 +114,41 @@ def _char_bigrams(text: str) -> dict:
     return out
 
 
-def _text_cosine(a: str, b: str) -> float:
-    """两段正文的字符 bigram 余弦相似度（0=完全不同·1=相同）。"""
+# ── 🔴 2026-07-02 真语义 embedding 可选路径（照抄 topic_drift_scanner 已验证的模式）───────
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+
+    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
+    embedding 的文件自带一份，不互相 import）。也检查 .env 的 GEN_EMBED__* API 配置。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+def _semantic_text_cosine(a: str, b: str) -> "float | None":
+    """真语义 embedding 余弦（能捕捉"同一笔法换说法"·字面 bigram 抓不到的改写近似）。
+
+    embedding_store 不可用 / 任一文本编码失败 / 维度不一致 → None（调用方回退字符 bigram）。
+    """
+    if not a or not b:
+        return None
+    try:
+        from embedding_store import compute_embedding, cosine_similarity
+        ea, eb_ = compute_embedding(a), compute_embedding(b)
+    except Exception:
+        return None
+    if not ea or not eb_ or len(ea) != len(eb_):
+        return None
+    return cosine_similarity(ea, eb_)
+
+
+def _text_cosine_bigram(a: str, b: str) -> float:
+    """两段正文的字符 bigram 余弦相似度（0=完全不同·1=相同）。原逻辑原样抽出（零回归）。"""
     va, vb = _char_bigrams(a), _char_bigrams(b)
     keys = set(va) & set(vb)
     if not keys:
@@ -126,6 +160,19 @@ def _text_cosine(a: str, b: str) -> float:
     if na == 0 or nb == 0:
         return 0.0
     return dot / (na * nb)
+
+
+def _text_cosine(a: str, b: str) -> float:
+    """两段正文的相似度（0=完全不同·1=相同）。
+
+    真 embedding 后端就绪（_has_real_embedding_backend()）→ 语义余弦（同一笔法换说法
+    也能识别为高相似）；否则/失败 → 退化字符 bigram 余弦（原逻辑·零回归）。
+    """
+    if _has_real_embedding_backend():
+        sim = _semantic_text_cosine(a, b)
+        if sim is not None:
+            return sim
+    return _text_cosine_bigram(a, b)
 
 
 def _tag_relevance(tag: str, target_type: str) -> float:

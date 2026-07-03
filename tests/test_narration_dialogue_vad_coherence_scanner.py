@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +51,24 @@ def _multi_scene_draft(n=5):
     for i in range(n):
         narr = ("夜色无边，灯火阑珊。" * 60)
         dial = f"“你怎么来了？”他低声问。“我有话要说。”她回答。"
+        blocks.append(narr + "\n" + dial)
+    return "\n\n".join(blocks)
+
+
+# U+201C/U+201D 转义写法(不用字面量花引号)防止误用直引号/误改码点(见 lesson
+# feedback_dialogue_quote_unicode_distinction)。
+_LDQUO = "“"
+_RDQUO = "”"
+
+
+def _big_multi_scene_draft(n=6):
+    """每场景独立超过 1500 CJK 阈值(不被 _split_scenes 合并)·narr/dial 两通道都命中
+    VAD 词典("暖"/"甜")，保证不论开不开模型都能稳定凑够 N 对场景算 Pearson。"""
+    blocks = []
+    for _ in range(n):
+        narr = "夜色温暖静谧无边。" * 200
+        dial = (f"{_LDQUO}你怎么来了，心里一暖？{_RDQUO}他低声问。"
+                f"{_LDQUO}我有话要说，甜甜地笑。{_RDQUO}她回答。")
         blocks.append(narr + "\n" + dial)
     return "\n\n".join(blocks)
 
@@ -168,3 +187,42 @@ def test_registry_entry_new_true():
     assert entry is not None
     assert entry.get("_new") is True
     assert "NARR_DIAL_VAD_OVERCOUPLED" in entry.get("issues_emitted", [])
+
+
+def test_model_vad_source_when_enabled(monkeypatch):
+    """RUOYU_NN_VAD=1 + 模型有效命中 → metrics.vad_source 标 model_vad。"""
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("shadow")
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts: [
+                {"valence": 0.7, "arousal": 0.55, "dominance": None, "source": "model"}
+                for _ in texts
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        r = mod.scan(_write_draft(_big_multi_scene_draft()))
+        assert r["metrics"]["vad_source"] == "model_vad"
+    finally:
+        _set_mode(bak)
+
+
+def test_model_vad_unavailable_matches_lexicon_parity(monkeypatch):
+    """模型 enabled 但每条都返回 None(未部署/加载失败)→ 与不开模型时逐字节一致(零回归)。"""
+    bak = os.environ.get(_ENV)
+    draft = _write_draft(_big_multi_scene_draft())
+    try:
+        _set_mode("shadow")
+        baseline = mod.scan(draft)
+
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        with_env = mod.scan(draft)
+
+        assert with_env["metrics"]["vad_source"] == "lexicon_fallback"
+        assert with_env["metrics"]["correlations"] == baseline["metrics"]["correlations"]
+        assert with_env["metrics"]["paired_scenes"] == baseline["metrics"]["paired_scenes"]
+    finally:
+        _set_mode(bak)

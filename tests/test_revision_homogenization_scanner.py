@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import revision_homogenization_scanner as rh  # noqa: E402
+import embedding_store  # noqa: E402
 
 
 def _write(text):
@@ -293,3 +294,149 @@ def test_invalid_profile_falls_back():
 def test_sfs_distance_pair_zero_when_identical():
     fp = rh._fingerprint(_AUTHOR_LIKE)
     assert rh._sfs_distance_pair(fp, fp) == 0.0
+
+
+# ============================================================================
+# 🔴 2026-07-01 语义路径升级测试（真 embedding 后端才跑 · mock embedding_store）
+# 钉死两头：默认(无真后端)行为逐字节不变 / mock 真后端后语义路径独立生效。
+# ============================================================================
+
+_SEM_BASE_SENTENCE = "他在山脊的青石阶上独自向上攀登。"
+_SEM_PRE = _SEM_BASE_SENTENCE * 40                     # 纯净：全部编码方向1（无 MARKER_B）
+_SEM_POST = ("MARKER_B" + _SEM_BASE_SENTENCE) * 40     # 每句都带 MARKER_B → 全部编码方向2
+# pre/post 的 CJK 内容完全一致（MARKER_B 是 ASCII，不计入 _cjk_count / FUNCTION_WORDS_PATTERN）
+# → 数值三维指纹恒等·delta_sfs≈0·确保语义信号独立可观测（不被数值路径掩盖）。
+
+
+def _fake_embed_factory():
+    """确定性假 embedding：文本含 MARKER_B → 方向2，否则方向1（模拟语义差异·测试专用）。"""
+    def _fake(text):
+        if "MARKER_B" in (text or ""):
+            return [0.0, 1.0, 0.0, 0.0]
+        return [1.0, 0.0, 0.0, 0.0]
+    return _fake
+
+
+def test_default_no_real_backend_output_unchanged(monkeypatch):
+    """无真后端（EMBED_BACKEND 未设/为 hash）→ 逐字节零回归：output 无任何新增语义字段
+    （复用 test_homogenization_detected_active 的已验证触发场景）。"""
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    for k in list(os.environ):
+        if k.startswith("GEN_EMBED__"):
+            monkeypatch.delenv(k, raising=False)
+    assert rh._has_real_embedding_backend() is False
+    monkeypatch.setenv("REVISION_HOMOGENIZATION_MODE", "active")
+    proj = _mk_project(profile={
+        "function_word_fingerprint_per_1000": {"mean": 150.0, "std": 10.0},
+        "sentence_length_mean": {"mean": 35.0, "std": 3.0},
+        "sentence_length_pstdev": {"mean": 8.0, "std": 1.5},
+    })
+    rep = rh.scan(str(_write(_AUTHOR_LIKE)), str(_write(_LLM_LIKE)), project_root=proj)
+    expected_keys = {
+        "scanner", "schema_version", "mode", "code", "gate_level", "verdict",
+        "violations", "warning", "pre_fix_fingerprint", "post_fix_fingerprint",
+        "baseline_source", "pre_fix_sfs", "post_fix_sfs", "delta_sfs", "violations_count",
+    }
+    assert set(rep.keys()) == expected_keys, f"不该有新字段泄漏到默认路径：{set(rep.keys()) - expected_keys}"
+    assert rep["verdict"] == "FAIL_MINOR"  # 与 test_homogenization_detected_active 同场景·已验证触发
+    assert set(rep["violations"][0].keys()) == {
+        "code", "kind", "severity", "message", "delta_sfs",
+        "pre_fix_sfs", "post_fix_sfs", "_doc",
+    }
+
+
+def test_has_real_embedding_backend_env_gate(monkeypatch):
+    """_has_real_embedding_backend 门控：未设/hash → False；非空非 hash / GEN_EMBED__* → True。"""
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    assert rh._has_real_embedding_backend() is False
+    monkeypatch.setenv("EMBED_BACKEND", "hash")
+    assert rh._has_real_embedding_backend() is False
+    monkeypatch.setenv("EMBED_BACKEND", "mstyle")
+    assert rh._has_real_embedding_backend() is True
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    monkeypatch.setenv("GEN_EMBED__default__API_KEY", "x")
+    assert rh._has_real_embedding_backend() is True
+
+
+def test_semantic_helper_none_without_real_backend(monkeypatch):
+    """_semantic_pre_post_distance 无真后端 → None（调用方回退数值路径）。"""
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    for k in list(os.environ):
+        if k.startswith("GEN_EMBED__"):
+            monkeypatch.delenv(k, raising=False)
+    assert rh._semantic_pre_post_distance(_SEM_PRE, _SEM_PRE) is None
+
+
+def test_semantic_path_triggers_independent_of_numeric(monkeypatch):
+    """mock 真后端：pre/post 数值指纹恒等(数值路径不触发)·语义方向正交 → 语义路径独立触发。"""
+    monkeypatch.setenv("EMBED_BACKEND", "test_semantic")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _fake_embed_factory())
+    monkeypatch.setattr(embedding_store, "embedding_method", lambda: "test_semantic_backend")
+    monkeypatch.setenv("REVISION_HOMOGENIZATION_MODE", "active")
+    rep = rh.scan(str(_write(_SEM_PRE)), str(_write(_SEM_POST)))
+    assert rep["embedding_backend_active"] is True
+    assert rep["embedding_method"] == "test_semantic_backend"
+    assert rep["delta_sfs"] < rh.DELTA_SFS_FLOOR, "数值路径本不该触发(pre/post CJK 内容恒等)"
+    assert rep["delta_sfs_semantic"] > 0.9, "两个正交单位向量·余弦距离应≈1"
+    assert rep["verdict"] == "FAIL_MINOR"
+    codes = [v["code"] for v in rep["violations"]]
+    assert "REVISION_REDUCED_AUTHOR_FIDELITY" in codes
+    assert rep["match_method"] == "embedding_semantic"
+    assert rep["violations"][0]["match_method"] == "embedding_semantic"
+
+
+def test_semantic_path_no_trigger_when_embeddings_identical(monkeypatch):
+    """mock 真后端：pre/post 完全相同 → 语义距离=0·不触发·verdict PASS。"""
+    monkeypatch.setenv("EMBED_BACKEND", "test_semantic")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _fake_embed_factory())
+    monkeypatch.setattr(embedding_store, "embedding_method", lambda: "test_semantic_backend")
+    monkeypatch.setenv("REVISION_HOMOGENIZATION_MODE", "active")
+    rep = rh.scan(str(_write(_SEM_PRE)), str(_write(_SEM_PRE)))
+    assert rep["embedding_backend_active"] is True
+    assert rep["delta_sfs_semantic"] < 1e-6
+    assert rep["verdict"] == "PASS"
+    assert "match_method" not in rep
+
+
+def test_semantic_path_combines_with_numeric_trigger(monkeypatch):
+    """mock 真后端 + 数值指纹也触发(沿用 test_homogenization_detected_active 场景)
+    → match_method 数值+语义两者兼有。"""
+    monkeypatch.setenv("EMBED_BACKEND", "test_semantic")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _fake_embed_factory())
+    monkeypatch.setattr(embedding_store, "embedding_method", lambda: "test_semantic_backend")
+    monkeypatch.setenv("REVISION_HOMOGENIZATION_MODE", "active")
+    proj = _mk_project(profile={
+        "function_word_fingerprint_per_1000": {"mean": 150.0, "std": 10.0},
+        "sentence_length_mean": {"mean": 35.0, "std": 3.0},
+        "sentence_length_pstdev": {"mean": 8.0, "std": 1.5},
+    })
+    post_text = _LLM_LIKE.replace("他", "MARKER_B他")  # 不改变 CJK 数值指纹·只改变 mock 语义方向
+    rep = rh.scan(str(_write(_AUTHOR_LIKE)), str(_write(post_text)), project_root=proj)
+    assert rep["verdict"] == "FAIL_MINOR"
+    assert rep["delta_sfs"] >= rh.DELTA_SFS_FLOOR
+    assert rep["delta_sfs_semantic"] > 0.9
+    assert rep["match_method"] == "numeric_fingerprint+embedding_semantic"
+    assert rep["violations"][0]["match_method"] == "numeric_fingerprint+embedding_semantic"
+
+
+def test_semantic_floor_env_override(monkeypatch):
+    """env REVISION_HOMOGENIZATION_EMBED_FLOOR 覆盖 > 默认值·非法值回退默认。"""
+    monkeypatch.delenv("REVISION_HOMOGENIZATION_EMBED_FLOOR", raising=False)
+    assert rh._semantic_floor() == rh.DEFAULT_DELTA_SFS_SEMANTIC_FLOOR
+    monkeypatch.setenv("REVISION_HOMOGENIZATION_EMBED_FLOOR", "0.3")
+    assert rh._semantic_floor() == 0.3
+    monkeypatch.setenv("REVISION_HOMOGENIZATION_EMBED_FLOOR", "not_a_number")
+    assert rh._semantic_floor() == rh.DEFAULT_DELTA_SFS_SEMANTIC_FLOOR
+
+
+def test_embedding_centroid_none_on_empty_text():
+    assert rh._embedding_centroid("") is None
+    assert rh._embedding_centroid("   ") is None
+
+
+def test_semantic_code_not_in_hard_gate_registry():
+    """语义路径升级后仍是同一个 ISSUE_CODE·不新增 code·hard_gate 名单校验依旧成立。"""
+    rg = Path(__file__).resolve().parents[1] / "core" / "scripts" / "scanner_registry.json"
+    reg = json.loads(rg.read_text(encoding="utf-8"))
+    hgs = set(reg.get("hard_gate_codes", []))
+    assert "REVISION_REDUCED_AUTHOR_FIDELITY" not in hgs

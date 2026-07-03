@@ -913,7 +913,13 @@ def cmd_apply_appraisal_beats(root, cluster_key):
                 _txts = [" ".join(str(b.get(k, "")) for k in
                                   ("trigger_event", "derived_emotion", "behavior_externalization")).strip()
                          for b in _bd]
-                for b, pr in zip(_bd, _vad_bridge.predict_batch(_txts)):
+                try:
+                    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+                    from feature_cache import FeatureStore, enabled as _fs_enabled
+                    _preds = FeatureStore.get().compute_vad_batch(_txts) if _fs_enabled() else _vad_bridge.predict_batch(_txts)
+                except Exception:  # noqa: BLE001 feature store 失败 → 直连桥
+                    _preds = _vad_bridge.predict_batch(_txts)
+                for b, pr in zip(_bd, _preds):
                     if pr and pr.get("valence") is not None:
                         nn_vad_by_id[id(b)] = pr
                 if nn_vad_by_id:
@@ -1294,7 +1300,30 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
         logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring FAIL: {(r.stderr or '')[:200]}")
         steps_skipped += 1
 
-    logger.info(f"[auto-post-reflect-cluster] {cluster_key} 完成 {steps_ran}/3 步（跳过 {steps_skipped}）")
+    # Step 4: DataFlywheel → cluster 训练样本池（paragraph/fix_pair/weak/strong/judge/checker/fixer/repair/reading/audit-meta labels）。
+    # 创作入口默认打开 RUOYU_DATA_FLYWHEEL；函数 import 调用仍保持门控，测试/单独 import 不污染。
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "flywheel"))
+        import data_collector as _data_collector
+        fly = _data_collector.ClusterDataCollector(project_str, norm_cid).collect()
+        if fly.get("skipped"):
+            logger.info(f"[data-flywheel] {norm_cid} 跳过：{fly.get('reason')}")
+        else:
+            logger.info(f"[data-flywheel] {norm_cid} 训练样本收集 total={fly.get('total', 0)} "
+                        f"paragraphs={fly.get('paragraphs', 0)} weak={fly.get('weak_labels', 0)} "
+                        f"strong={fly.get('strong_labels', 0)} fixes={fly.get('fix_pairs', 0)} "
+                        f"judge_reports={fly.get('judge_reports', 0)} "
+                        f"checker_briefs={fly.get('checker_briefs', 0)} "
+                        f"fixer_reports={fly.get('fixer_reports', 0)} "
+                        f"repair_reports={fly.get('repair_reports', 0)} "
+                        f"reading_reflections={fly.get('reading_reflections', 0)} "
+                        f"audit_metadata={fly.get('audit_metadata', 0)}")
+            steps_ran += 1
+    except Exception as e:  # noqa: BLE001 数据飞轮故障不吞：记录，但不阻断状态保存
+        logger.info(f"[data-flywheel] {norm_cid} 收集失败(不阻断): {type(e).__name__}: {str(e)[:160]}")
+        steps_skipped += 1
+
+    logger.info(f"[auto-post-reflect-cluster] {cluster_key} 完成 {steps_ran}/4 步（跳过 {steps_skipped}）")
     return 0
 
 
@@ -1315,7 +1344,15 @@ def main():
     import nn_runtime_defaults
     _nn_on = nn_runtime_defaults.enable_creative_nn_defaults()
     if _nn_on:
-        print(f"[nn] 创作 save_state 默认开启 NN 门控: {', '.join(_nn_on)}", file=_sys_nn.stderr)
+        print(f"[nn] 创作 save_state 默认开启模型/可成长门控: {', '.join(_nn_on)}", file=_sys_nn.stderr)
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "registry"))
+        import model_registry as _model_registry
+        _reg = _model_registry.sync_runtime_models()
+        if _reg.get("count"):
+            print(f"[model-registry] 同步运行模型 { _reg['count'] } 个", file=_sys_nn.stderr)
+    except Exception as _e:  # noqa: BLE001 registry 失败不阻断 save_state，但必须留痕
+        print(f"[model-registry] 同步跳过: {type(_e).__name__}: {str(_e)[:120]}", file=_sys_nn.stderr)
     ap = argparse.ArgumentParser(
         description="save_state.py · v26 cluster-only CLI"
     )

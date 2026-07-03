@@ -15,6 +15,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import cross_book_invariant_scanner as mod  # noqa: E402
+import nn_nli_bridge  # noqa: E402
 
 _TARGET = _SCRIPTS / "cross_book_invariant_scanner.py"
 _ENV = "CROSS_BOOK_INVARIANT_MODE"
@@ -216,3 +217,158 @@ def test_extract_keywords_filters_stopwords():
     kws = mod._extract_keywords("不能跨界传送")
     assert "跨界" in kws or "传送" in kws
     assert "不能" not in kws  # stop word
+
+
+# ═══════════════════════ 🔴 2026-07-03 NLI 补充证据（W3-4·advisory·零回归） ═══════════════════════
+
+_NLI_LEDGER = [
+    {"invariant_id": "I001", "rule_text": "金丹境不能跨界传送",
+     "scope": "main_world", "coverage_books": ["凡人修仙传"], "severity": "advisory"}
+]
+_NLI_DRAFT = _LONG_BASE + "\n金丹境的他居然能跨界传送出去，破例了！" * 8
+
+
+def test_nli_augment_noop_when_bridge_disabled():
+    """默认 RUOYU_NN_NLI 关（conftest 每测试前清空）→ breaches 无 nli_evidence 字段·100% 原逻辑。"""
+    bak = os.environ.get(_ENV)
+    try:
+        assert nn_nli_bridge.enabled() is False  # 门控确实关（conftest 隔离生效）
+        _set_mode("active")
+        led_dir = _mk_ledger(_NLI_LEDGER)
+        r = mod.scan(_write_draft(_NLI_DRAFT), series_path=str(led_dir))
+        assert r["violations"], "应命中 breach（前置条件）"
+        for b in r["violations"][0]["breaches"]:
+            for h in b["hits"]:
+                assert "nli_evidence" not in h
+    finally:
+        _set_mode(bak)
+
+
+def test_nli_augment_adds_high_confidence_contradiction(monkeypatch):
+    """桥启用 + mock 高置信 contradiction → hits 附加 nli_evidence（单批调用·不改变 breach 判定）。"""
+    bak = os.environ.get(_ENV)
+    try:
+        monkeypatch.setenv("RUOYU_NN_NLI", "1")
+        monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+        calls = []
+
+        def fake_predict_batch(pairs, timeout=None):
+            calls.append(pairs)
+            return [{"label": "contradiction",
+                     "probs": {"contradiction": 0.93, "neutral": 0.05, "entailment": 0.02},
+                     "source": "nli"} for _ in pairs]
+        monkeypatch.setattr(nn_nli_bridge, "predict_batch", fake_predict_batch)
+
+        _set_mode("active")
+        led_dir = _mk_ledger(_NLI_LEDGER)
+        r = mod.scan(_write_draft(_NLI_DRAFT), series_path=str(led_dir))
+        assert r["violations"]
+        hits = r["violations"][0]["breaches"][0]["hits"]
+        assert hits, "前置条件：应有字面命中的 hit"
+        for h in hits:
+            assert h["nli_evidence"] == {"label": "contradiction", "contradiction_prob": 0.93}
+        assert len(calls) == 1, "应是单批调用·不逐 hit spawn 子进程"
+        # breach 判定/verdict 不受 NLI 影响（数量与 mock 前一致）
+        assert r["metrics"]["breaches_count"] == 1
+        assert r["verdict"] == "FAIL_MINOR"
+    finally:
+        _set_mode(bak)
+
+
+def test_nli_augment_skips_low_confidence(monkeypatch):
+    """contradiction 置信度低于阈值 → 不附加 nli_evidence（不是「假装矛盾」）。"""
+    bak = os.environ.get(_ENV)
+    try:
+        monkeypatch.setenv("RUOYU_NN_NLI", "1")
+        monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+        monkeypatch.setattr(nn_nli_bridge, "predict_batch",
+                            lambda pairs, timeout=None: [
+                                {"label": "contradiction",
+                                 "probs": {"contradiction": 0.3, "neutral": 0.4, "entailment": 0.3},
+                                 "source": "nli"} for _ in pairs])
+        _set_mode("active")
+        led_dir = _mk_ledger(_NLI_LEDGER)
+        r = mod.scan(_write_draft(_NLI_DRAFT), series_path=str(led_dir))
+        for b in r["violations"][0]["breaches"]:
+            for h in b["hits"]:
+                assert "nli_evidence" not in h
+    finally:
+        _set_mode(bak)
+
+
+def test_nli_augment_skips_non_contradiction_label(monkeypatch):
+    """label 非 contradiction（即便某个 prob 数值凑巧高）→ 不附加。"""
+    bak = os.environ.get(_ENV)
+    try:
+        monkeypatch.setenv("RUOYU_NN_NLI", "1")
+        monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+        monkeypatch.setattr(nn_nli_bridge, "predict_batch",
+                            lambda pairs, timeout=None: [
+                                {"label": "neutral",
+                                 "probs": {"contradiction": 0.65, "neutral": 0.7, "entailment": 0.05},
+                                 "source": "nli"} for _ in pairs])
+        _set_mode("active")
+        led_dir = _mk_ledger(_NLI_LEDGER)
+        r = mod.scan(_write_draft(_NLI_DRAFT), series_path=str(led_dir))
+        for b in r["violations"][0]["breaches"]:
+            for h in b["hits"]:
+                assert "nli_evidence" not in h
+    finally:
+        _set_mode(bak)
+
+
+def test_nli_augment_bridge_exception_safe(monkeypatch):
+    """predict_batch 抛异常 → breaches 原样返回（advisory 佐证异常绝不影响主判定）。"""
+    bak = os.environ.get(_ENV)
+    try:
+        monkeypatch.setenv("RUOYU_NN_NLI", "1")
+        monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+
+        def boom(pairs, timeout=None):
+            raise RuntimeError("subprocess exploded")
+        monkeypatch.setattr(nn_nli_bridge, "predict_batch", boom)
+
+        _set_mode("active")
+        led_dir = _mk_ledger(_NLI_LEDGER)
+        r = mod.scan(_write_draft(_NLI_DRAFT), series_path=str(led_dir))
+        assert r["violations"], "breach 判定不受 NLI 异常影响"
+        for b in r["violations"][0]["breaches"]:
+            for h in b["hits"]:
+                assert "nli_evidence" not in h
+    finally:
+        _set_mode(bak)
+
+
+def test_nli_augment_not_invoked_in_shadow_mode(monkeypatch):
+    """shadow 模式(默认)不上报 violations → NLI 不该被调用（性能优化：不为丢弃的数据算证据）。"""
+    bak = os.environ.get(_ENV)
+    try:
+        monkeypatch.setenv("RUOYU_NN_NLI", "1")
+        monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+
+        def boom(pairs, timeout=None):
+            raise AssertionError("shadow 模式不该调用 NLI")
+        monkeypatch.setattr(nn_nli_bridge, "predict_batch", boom)
+
+        _set_mode("shadow")
+        led_dir = _mk_ledger(_NLI_LEDGER)
+        r = mod.scan(_write_draft(_NLI_DRAFT), series_path=str(led_dir))
+        assert r["violations"] == []  # shadow 不上报（不会触发上面的 boom）
+    finally:
+        _set_mode(bak)
+
+
+def test_nli_augment_bridge_module_missing_graceful(monkeypatch):
+    """import nn_nli_bridge 失败(ImportError) → _nli_augment_breaches 静默跳过·不崩。"""
+    breaches = [{"invariant_id": "I001", "rule_text": "规则",
+                "hits": [{"keyword": "kw", "neg": "不能", "snippet": "窗口文本"}]}]
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **k):
+        if name == "nn_nli_bridge":
+            raise ImportError("simulated missing module")
+        return real_import(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    mod._nli_augment_breaches(breaches)  # 不应抛异常
+    assert "nli_evidence" not in breaches[0]["hits"][0]

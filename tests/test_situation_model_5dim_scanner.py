@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -268,6 +269,39 @@ def test_split_scenes_single():
 def test_split_scenes_multi():
     parts = mod._split_scenes("段一。" + _SEP + "段二。")
     assert len(parts) == 2
+
+
+def test_model_coherence_evidence_disabled_by_default():
+    bak = os.environ.get("RUOYU_NN_COHERENCE")
+    try:
+        os.environ.pop("RUOYU_NN_COHERENCE", None)
+        ev = mod._scene_coherence_evidence(["场景一。", "场景二。"])
+        assert ev["status"] == "unavailable"
+        assert ev["boundary_scores"] == []
+    finally:
+        if bak is None:
+            os.environ.pop("RUOYU_NN_COHERENCE", None)
+        else:
+            os.environ["RUOYU_NN_COHERENCE"] = bak
+
+
+def test_model_coherence_evidence_shadow_only(monkeypatch):
+    monkeypatch.setenv("RUOYU_NN_COHERENCE", "1")
+    monkeypatch.delenv("RUOYU_FEATURE_STORE", raising=False)
+    fake_bridge = types.SimpleNamespace(
+        predict_pairs=lambda pairs: [
+            {"coherence_score": 0.22, "is_coherent": False, "source": "model"}
+            for _ in pairs
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_coherence_bridge", fake_bridge)
+    out = mod.scan(_write(_CLEAN), _mk_project(characters=[{"name": "张三", "role": "主角"}]))
+    ev = out["model_coherence_at_boundaries"]
+    assert ev["status"] == "ok"
+    assert ev["source"] == "nn_coherence_bridge"
+    assert ev["min_coherence"] == 0.22
+    assert out["gate_level"] == "advisory"
+    assert "SITUATION_MODEL_DIM_DROPOUT" not in [v.get("code") for v in out["violations"]]
 
 
 def _run_cli(draft_path, project=None, mode="active"):

@@ -15,6 +15,10 @@
     - preserve + 末段 PE 信号过强 → BELIEF_PRESERVE_RED_HERRING_KILLED
     - 无 intent 或 None → 跳过（北极星②不主张）
 
+【2026-07-02 接入真模型】末段惊讶分数优先混入已训练部署的 surprisal_gpt2（经 nn_surprisal_bridge /
+feature_cache 二选一）算末段 mean/max surprisal 归一后按 0.4 权重混进词典拼分（词典基线分保留
+0.6 权重·`source` 标注切换）；RUOYU_NN_SURPRISAL 未开启/模型未命中时 100% 走词典拼分（不变）。
+
 【三 advisory】
   · BELIEF_UPDATE_NO_SURPRISE              — update intent 但末段无惊讶收束
   · BELIEF_PRESERVE_RED_HERRING_KILLED     — preserve intent 但末段强反转误伤红鲱鱼
@@ -114,8 +118,37 @@ def _read_intent_from_manifest(manifest_path) -> str | None:
     return None
 
 
+def _predict_surprisal_batch(texts: list[str]) -> "list[dict | None]":
+    """批量取完整 surprisal 统计量(经 FeatureStore 缓存优先→退 nn_surprisal_bridge 直连)。
+    全不可用 → 全 None(调用方整体回退词典拼分·不变)。"""
+    if not texts:
+        return []
+    preds = None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            preds = FeatureStore.get().compute_surprisal_batch(texts)
+    except Exception:  # noqa: BLE001 FeatureStore 故障 → 退 bridge，绝不影响 scanner
+        preds = None
+    if preds is None:
+        try:
+            import nn_surprisal_bridge as bridge
+        except ImportError:
+            return [None] * len(texts)
+        preds = bridge.predict_batch(texts)
+    if len(preds) != len(texts):
+        return [None] * len(texts)
+    return preds
+
+
+def _predict_surprisal_one(text: str) -> "dict | None":
+    return _predict_surprisal_batch([text])[0]
+
+
 def _surprise_signal_score(text: str) -> dict:
-    """末段惊讶信号三项归一组合分（0..1）"""
+    """末段惊讶信号三项归一组合分（0..1）· 词典基线(始终计算) + 真模型 surprisal 归一分(可用时
+    按 0.4 权重混入·mean/max 各半)。模型不可用 → score 与词典基线完全一致(零回归)。"""
     cjk = _cjk_count(text) or 1
     surprise_hits = sum(text.count(w) for w in _SURPRISE_LEX)
     twist_hits = sum(text.count(w) for w in _REAL_TWIST_LEX)
@@ -136,12 +169,28 @@ def _surprise_signal_score(text: str) -> dict:
     surprise_per_1k = surprise_hits / (cjk / 1000)
     twist_per_1k = twist_hits / (cjk / 1000)
     punct_per_1k = punct_burst / (cjk / 1000)
-    # 综合分数（按 PE 权重）
-    score = min(1.0,
+    # 词典基线分数（按 PE 权重·始终计算·模型不可用时即最终 score）
+    lexicon_score = min(1.0,
                 0.4 * min(1.0, surprise_per_1k / 5.0) +
                 0.3 * min(1.0, twist_per_1k / 3.0) +
                 0.2 * min(1.0, punct_per_1k / 8.0) +
                 0.1 * subj_switch)
+
+    source = "heuristic"
+    surprisal_norm = None
+    score = lexicon_score
+    model_stat = _predict_surprisal_one(text)
+    if model_stat is not None:
+        mean_s = model_stat.get("mean_surprisal")
+        max_s = model_stat.get("max_surprisal")
+        if mean_s is not None and max_s is not None:
+            # base-2 bits 量纲(surprisal_infer.py base_two=True)·mean/max 各半归一(启发式上限)
+            surprisal_norm = round(min(1.0,
+                        0.6 * min(1.0, mean_s / 10.0) +
+                        0.4 * min(1.0, max_s / 18.0)), 4)
+            score = round(0.6 * lexicon_score + 0.4 * surprisal_norm, 4)
+            source = "model"
+
     return {
         "surprise_hits": surprise_hits,
         "twist_hits": twist_hits,
@@ -150,7 +199,10 @@ def _surprise_signal_score(text: str) -> dict:
         "surprise_per_1k": round(surprise_per_1k, 3),
         "twist_per_1k": round(twist_per_1k, 3),
         "punct_per_1k": round(punct_per_1k, 3),
+        "lexicon_score": round(lexicon_score, 3),
+        "surprisal_norm": surprisal_norm,
         "score": round(score, 3),
+        "source": source,
     }
 
 

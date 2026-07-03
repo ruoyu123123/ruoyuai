@@ -19,10 +19,14 @@ LLM 静默违反 → 系统失自治。需要 cross-book invariant ledger + NLI 
       ]
     }
 
-【探针·NLI 占位】
-  真 XLM-RoBERTa NLI defer。占位用「字面规则关键词命中 + 否定/反义词触发」启发式：
+【探针·字面启发式 + NLI 补充证据（2026-07-03）】
+  主判定仍是「字面规则关键词命中 + 否定/反义词触发」启发式（breach 判定逻辑不变）：
   - 抽 rule_text 关键词 set·扫草稿正文找 contradicts_kw（否定/反义/越界标志）
   - 命中 +20 字窗口 → CROSS_BOOK_INVARIANT_BREACH advisory（仅 advisory·北极星⑤）
+  桥（`nn_nli_bridge.py`·IDEA-CCNL/Erlangshen-Roberta-110M-NLI）可用时，对已命中的 hit
+  额外批量跑一次 NLI(window, rule_text) 蕴含推理，contradiction 高置信 → 附加 `nli_evidence`
+  字段佐证（单批 subprocess 调用·不逐 hit spawn）。桥不可用/关闭/异常 → breaches 100% 原字面
+  逻辑不变——NLI 只加字段不改判定，零回归。
 
 【与既有 scanner 严格正交】
   - locked_fact_cross_scene  : 单本场景一致性·正交(本=跨书宇宙)
@@ -54,6 +58,7 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 MIN_CJK = 600
 DEFAULT_TOP_K = 5
 WINDOW_RADIUS = 40  # 命中规则关键词后扫描 ±40 字窗口找否定/反义
+NLI_CONTRADICTION_THRESHOLD = 0.6  # 🔴 2026-07-03 NLI 补充证据高置信阈值（3 分类·非校准值·经验保守取值）
 
 # 否定/越界/反义标志词（简化占位 · 真 NLI defer）
 _NEGATION_TOKENS = (
@@ -146,6 +151,42 @@ def _find_breach(text: str, rule: dict):
         "rule_text": rule_text[:200],
         "hits": hits[:3],
     }
+
+
+def _nli_augment_breaches(breaches: "list[dict]") -> None:
+    """🔴 2026-07-03 NLI 补充证据（advisory·原地追加字段·绝不改变已判定的 breach 集合）。
+
+    对已由字面否定词启发式确认的每条 hit，单批跑一次 NLI(window, rule_text) 蕴含推理
+    （不逐 hit spawn 子进程·摊薄模型加载开销），contradiction 高置信时附加 `nli_evidence`
+    字段佐证。桥不可用/关闭/异常/条数不符 → breaches 原样不变（100% 原字面逻辑·零回归）。
+    """
+    try:
+        import nn_nli_bridge
+    except ImportError:
+        return
+    if not nn_nli_bridge.enabled():
+        return
+    hits_flat: "list[dict]" = []
+    candidates: "list[dict]" = []
+    for b in breaches:
+        rule_text = b.get("rule_text", "")
+        for h in (b.get("hits") or []):
+            hits_flat.append(h)
+            candidates.append({"premise": h.get("snippet", ""), "hypothesis": rule_text})
+    if not candidates:
+        return
+    try:
+        results = nn_nli_bridge.predict_batch(candidates)
+    except Exception:  # noqa: BLE001 — advisory 佐证，任何异常都不影响已判定的 breach
+        return
+    if not results or len(results) != len(hits_flat):
+        return
+    for hit, res in zip(hits_flat, results):
+        if not res:
+            continue
+        contradiction_p = (res.get("probs") or {}).get("contradiction", 0.0)
+        if res.get("label") == "contradiction" and contradiction_p >= NLI_CONTRADICTION_THRESHOLD:
+            hit["nli_evidence"] = {"label": res["label"], "contradiction_prob": contradiction_p}
 
 
 def collect_invariant_hint(series_path, top_k: int = DEFAULT_TOP_K):
@@ -257,6 +298,7 @@ def scan(draft_path, series_path=None, top_k: int = DEFAULT_TOP_K) -> dict:
         msg = (f"{len(breaches)} 条 cross-book invariant 疑似违反 · "
                f"top: {breaches[0]['invariant_id']}·{breaches[0]['rule_text'][:60]}")
         if mode == "active":
+            _nli_augment_breaches(breaches)  # advisory 补充证据·不影响本轮 breaches 集合/verdict
             out["violations"].append({
                 "kind": "cross_book_invariant_breach",
                 "severity": "minor",

@@ -294,3 +294,191 @@ def test_read_failure():
         assert "读取失败" in r.get("note", "")
     finally:
         os.environ.pop("DEUS_EX_AUDIT_MODE", None)
+
+
+# ════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-02 embedding 语义铺垫扫描接线（真后端命中 + 门控关零回归）
+# 参考范式：topic_drift_scanner._has_real_embedding_backend（本仓约定每文件自留一份）
+# ════════════════════════════════════════════════════════════════════
+def _clear_embed_env():
+    bak_eb = os.environ.pop("EMBED_BACKEND", None)
+    bak_gen = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("GEN_EMBED__")}
+    return bak_eb, bak_gen
+
+
+def _restore_embed_env(bak_eb, bak_gen):
+    if bak_eb is not None:
+        os.environ["EMBED_BACKEND"] = bak_eb
+    for k, v in bak_gen.items():
+        os.environ[k] = v
+
+
+def test_has_real_embedding_backend_false_by_default():
+    bak_eb, bak_gen = _clear_embed_env()
+    try:
+        assert des._has_real_embedding_backend() is False
+    finally:
+        _restore_embed_env(bak_eb, bak_gen)
+
+
+def test_has_real_embedding_backend_true_when_set():
+    bak = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "fake-real"
+        assert des._has_real_embedding_backend() is True
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_semantic_anchor_hit_resolves_underbacked_via_history():
+    """字面子串扫不出的意译铺垫（history 提到"神剑"但不是字面元素名"上古神"），真后端
+    语义扫描应能补上——这正是本次升级要根治的漏检（前置断言：字面法确实测不出）。"""
+    body = _filler(30)
+    tail = "我取出上古神剑一剑斩了敌首。"
+    history = "很久以前一柄神剑现世无人可挡。" * 3
+    text = body + "\n" + tail
+
+    bak_eb, bak_gen = _clear_embed_env()
+    try:
+        pre = des.audit_deus_ex(text, history_text=history)
+        assert "上古神" in pre["underbacked"], "前置条件：字面法必须测不出这个意译铺垫"
+        assert pre["anchor_source_per_element"]["上古神"] == "literal_substring"
+    finally:
+        _restore_embed_env(bak_eb, bak_gen)
+
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = lambda t: [1.0, 0.0] if "神剑" in t else [0.0, 1.0]
+    try:
+        r = des.audit_deus_ex(text, history_text=history)
+        assert "上古神" not in r["underbacked"]
+        assert r["underbacked_count"] == 0
+        assert r["anchor_source_per_element"]["上古神"] == "embedding_cosine"
+        assert r["anchors_per_element"]["上古神"] == des.ANCHOR_FLOOR
+        assert r["deus_ex_risk"] is False
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_literal_sufficient_anchor_source_stays_literal():
+    """字面 anchors_count 已达标（≥ ANCHOR_FLOOR）→ 即便真后端就绪也不该被语义"升级"，
+    anchor_source 仍是 literal_substring（字面子串永远是兜底优先判定）。"""
+    body = ("林师兄递给我玄铁剑。" * 3) + _filler(20)
+    tail = "我取出玄铁剑挡在身前林师兄出手击败了魔王。"
+    text = body + "\n" + tail
+
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = lambda t: [1.0, 0.0]   # 随便返回什么都不该被采用
+    try:
+        r = des.audit_deus_ex(text)
+        assert r["underbacked_count"] == 0
+        for el, src in r["anchor_source_per_element"].items():
+            assert src == "literal_substring", f"{el} 不该被语义路径覆盖"
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_semantic_below_threshold_stays_underbacked():
+    """真后端就绪但相似度 < 阈值（history 与 resolution 元素完全无关）→ 不误判为已铺垫，
+    仍报 underbacked（不是随便配了后端就无脑判定已铺垫）。"""
+    body = _filler(30)
+    tail = "我取出上古神剑一剑斩了敌首。"
+    history = "完全不相关的历史段落内容在这里展开描写风景。" * 3
+    text = body + "\n" + tail
+
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = lambda t: [1.0, 0.0] if "神剑" in t else [0.0, 1.0]
+    try:
+        r = des.audit_deus_ex(text, history_text=history)
+        assert "上古神" in r["underbacked"]
+        assert r["anchor_source_per_element"]["上古神"] == "literal_substring"
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_scan_active_propagates_anchor_source_and_resolves_via_semantic():
+    """scan() 全链路：真后端命中语义铺垫 → underbacked 清空 → verdict 从 FAIL_MINOR 变 PASS，
+    anchor_source_per_element 正确透传到顶层输出。"""
+    body = _filler(30)
+    tail = "我取出上古神剑一剑斩了敌首。"
+    history = "很久以前一柄神剑现世无人可挡。" * 3
+    p = _write(body + "\n" + tail)
+    m = _write_manifest(True)
+    proj = _mk_project(history={
+        "cluster_001": {"summary": "很久以前一柄神剑现世无人可挡。"},
+    })
+
+    bak_mode = os.environ.get("DEUS_EX_AUDIT_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    os.environ["DEUS_EX_AUDIT_MODE"] = "active"
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = lambda t: [1.0, 0.0] if "神剑" in t else [0.0, 1.0]
+    try:
+        r = des.scan(str(p), project_root=proj, manifest_path=str(m))
+        assert r["verdict"] == "PASS"
+        assert r["anchor_source_per_element"].get("上古神") == "embedding_cosine"
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak_mode is not None:
+            os.environ["DEUS_EX_AUDIT_MODE"] = bak_mode
+        else:
+            os.environ.pop("DEUS_EX_AUDIT_MODE", None)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+        p.unlink(missing_ok=True)
+
+
+def test_audit_deus_ex_gate_off_matches_original_logic():
+    """🔴 零回归锁：门控关（无 EMBED_BACKEND / 无 GEN_EMBED__*）→ audit_deus_ex 结果与原
+    纯字面子串逻辑逐项一致（anchors_per_element / underbacked / deus_ex_risk），且
+    embedding_store.compute_embedding 即便被换成任意值也绝不会被调用
+    （_embed_history_once 在最前面短路返回 None）。"""
+    bak_eb, bak_gen = _clear_embed_env()
+    import embedding_store
+    orig = embedding_store.compute_embedding
+
+    def _boom(t):
+        raise AssertionError("门控关时绝不应调用 compute_embedding")
+
+    embedding_store.compute_embedding = _boom
+    try:
+        body = _filler(30)
+        tail = "我取出上古神剑一剑斩了敌首。"
+        history = "很久以前一柄神剑现世无人可挡。" * 3
+        text = body + "\n" + tail
+
+        r = des.audit_deus_ex(text, history_text=history)
+        assert r["anchors_per_element"] == {"上古神": 0}
+        assert r["underbacked"] == ["上古神"]
+        assert r["anchor_source_per_element"] == {"上古神": "literal_substring"}
+        assert r["deus_ex_risk"] is True
+    finally:
+        embedding_store.compute_embedding = orig
+        _restore_embed_env(bak_eb, bak_gen)

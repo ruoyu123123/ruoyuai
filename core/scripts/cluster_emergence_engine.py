@@ -800,6 +800,17 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         brief = me_to_cluster_brief(me, f"{next_cluster_id}_candidate_{i}", i, world_state)
         candidates_briefs.append(brief)
 
+    # 🆕 A4 pairwise 偏好排序(BPR·advisory·RUOYU_PREF_RANKER=1 才生效)：只给每个 candidate
+    # 就地加 preference_score/preference_rank_hint 参考字段，candidates_briefs 的生成顺序/
+    # 数量/其余内容不变——涌现排序仍由上面的启发式(_score_one_me)决定。默认(门控关/无已训练
+    # weights)是 no-op。逻辑全在 preference_ranker.py（cluster_emergence_engine.py 已逼近
+    # 1000 行软上限，新增判断力不下沉进这里）。
+    try:
+        import preference_ranker as _pref_ranker
+        _pref_ranker.annotate_candidates(project_root, candidates_briefs)
+    except ImportError:
+        pass
+
     # 写入 emergence.json WAL
     emergence_path = db / ".wal" / f"{next_cluster_id}_emergence.json"
     emergence_path.parent.mkdir(parents=True, exist_ok=True)

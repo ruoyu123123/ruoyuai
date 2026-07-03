@@ -23,6 +23,7 @@ v2 章程的最后一道闸：阶段 6 _FINAL 文件齐全后，跑本脚本验�
 from __future__ import annotations
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -39,7 +40,8 @@ STYLE_EVALUATOR = CWD / "style_evaluator.py"  # 🔴 2026-06-27 C01 SFS 出货�
 
 # ============ 简化 cluster_arc 估算（不依赖 章节/ 目录） ============
 
-# 情绪关键词（粗暴版 · 用 narrative_scanner 同一套思路）
+# 情绪关键词（粗暴版 fallback · 用 narrative_scanner 同一套思路）· _estimate_emotion 现优先
+# 走 VAD 模型 valence（RUOYU_NN_VAD 门控·见 _model_window_valence），本词典仅模型不可用时兜底
 POSITIVE_EMOTIONS = ["笑", "喜", "兴奋", "释然", "得意", "畅快", "胜利", "成功", "踏实"]
 NEGATIVE_EMOTIONS = ["怒", "怕", "颤", "崩", "绝望", "痛", "悔", "恨", "悲", "冷", "寒"]
 # 2026-05-29 修：原列表含「可」「却」高频单字 → 章末统计被普通行文噪声淹没，钩子维度失真
@@ -62,8 +64,52 @@ def _split_into_chapters(text: str, n_chapters: int) -> list[str]:
     return chapters
 
 
+def _model_window_valence(windows: list) -> tuple:
+    """用现有 VAD 模型算窗口 valence 均值；失败只返回 None，调用方回退词典估算。
+    与 antagonist_valence_trajectory.py 的 _model_window_valence 完全同构
+    （同一模型优先证据链路：FeatureStore 优先 → nn_vad_bridge 兜底 → RUOYU_NN_VAD 门控）。"""
+    if not windows or os.environ.get("RUOYU_NN_VAD") != "1":
+        return None, 0
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(windows) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(windows)
+    except Exception:
+        return None, 0
+    vals = []
+    for p in preds or []:
+        if p and p.get("valence") is not None:
+            try:
+                vals.append(float(p["valence"]))
+            except (TypeError, ValueError):
+                pass
+    if not vals:
+        return None, 0
+    return round(sum(vals) / len(vals), 3), len(vals)
+
+
+def _chapter_emotion_windows(chapter_text: str) -> list:
+    """章节文本切窗口（按段落）供 VAD 模型批量消费；无换行/空白行时整段当 1 个窗口。"""
+    paragraphs = [p.strip() for p in chapter_text.split("\n") if p.strip()]
+    if paragraphs:
+        return paragraphs
+    return [chapter_text] if chapter_text.strip() else []
+
+
 def _estimate_emotion(chapter_text: str) -> float:
-    """估算章节情绪值 (0-1)：正向 - 负向，归一化"""
+    """估算章节情绪值 (0-1)：VAD valence 模型优先（模型 valence 本就是 0=全负/1=全正的
+    同一语义空间，直接取窗口均值·RUOYU_NN_VAD 门控）；不可用 → 回退正向-负向关键词占比
+    （粗暴版·原逻辑零回归）。"""
+    model_valence, _model_count = _model_window_valence(_chapter_emotion_windows(chapter_text))
+    if model_valence is not None:
+        return model_valence
     pos = sum(chapter_text.count(k) for k in POSITIVE_EMOTIONS)
     neg = sum(chapter_text.count(k) for k in NEGATIVE_EMOTIONS)
     total = pos + neg

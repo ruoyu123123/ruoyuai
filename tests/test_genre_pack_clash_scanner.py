@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
-"""genre_pack_clash_scanner R11 W6 MODEST 占位回归"""
+"""genre_pack_clash_scanner R11 W6 MODEST 占位回归
+
+2026-07-01 追加：真语义 embedding 可选路径回归(mock 后端·完全照抄 topic_drift_scanner
+测试手法)——钉死 (a) 无真后端时 match_method="lexicon"(零回归) (b) mock 真后端时
+match_method="semantic" 且语义路径被正确使用。
+"""
 import json
+import math
 import os
 import sys
 import tempfile
@@ -143,3 +149,168 @@ def test_read_fail():
         assert "草稿读取失败" in out.get("note", "")
     finally:
         _set_mode(bak)
+
+
+# ── 🔴 2026-07-01 真语义 embedding 可选路径（完全照抄 topic_drift_scanner 测试手法）──────
+
+def _char_freq_embedding(text: str, dim: int = 32) -> list:
+    """确定性 mock embedding（字符频率向量·同 test_topic_drift_scanner 手法）。"""
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _run_with_mock_embedding(fn, *args, **kwargs):
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _char_freq_embedding
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_has_real_embedding_backend_false_by_default():
+    bak = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_has_real_embedding_backend_true_with_mstyle():
+    bak = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "mstyle"
+        assert mod._has_real_embedding_backend() is True
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_pack_prototype_text():
+    assert mod._pack_prototype_text("apocalypse_survival")
+    assert mod._pack_prototype_text("bogus_pack_not_exist") == ""
+
+
+def test_semantic_diff_threshold_constant():
+    """双峰阈值：语义相似度差值域[-1,1]·区别于词袋密度差阈值 1.0（回归锁·防误改）。"""
+    assert mod._SEMANTIC_DIFF_THRESHOLD == 0.15
+
+
+def test_default_match_method_lexicon():
+    """无真后端(默认) → match_method="lexicon"（零回归基线）。"""
+    bak = os.environ.get("GENRE_PACK_CLASH_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project(["apocalypse_survival", "romance"])
+        out = mod.scan(_write(_BIPOLAR), proj)
+        assert out["match_method"] == "lexicon"
+        for f in out["bipolar_flags"]:
+            assert f["match_method"] == "lexicon"
+    finally:
+        _set_mode(bak)
+
+
+def test_semantic_match_method_when_backend_available():
+    """真后端(mock)可用 → match_method="semantic"·命中的 bipolar_flags 也标 semantic。"""
+    bak = os.environ.get("GENRE_PACK_CLASH_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project(["apocalypse_survival", "romance"])
+        out = _run_with_mock_embedding(mod.scan, _write(_BIPOLAR), proj)
+        assert out["match_method"] == "semantic"
+        for f in out["bipolar_flags"]:
+            assert f["match_method"] == "semantic"
+    finally:
+        _set_mode(bak)
+
+
+def test_pair_scores_lexicon_basic():
+    scenes = ["丧尸变异感染病毒物资罐头" * 3, "她心跳加速脸红耳根怀里温柔" * 3]
+    scores = mod._pair_scores_lexicon(scenes, "apocalypse_survival", "romance")
+    assert scores is not None
+    assert len(scores) == 2
+
+
+def test_pair_scores_lexicon_missing_pack_returns_none():
+    scores = mod._pair_scores_lexicon(["随便的文字内容测试" * 20], "bogus1", "bogus2")
+    assert scores is None
+
+
+def test_pair_scores_semantic_dimension_mismatch_returns_none():
+    """某 scene embedding 维度与原型不一致 → 该 pair 整体 None(调用方兜底词袋)。"""
+    def _mixed(text, dim=32):
+        if "SHORT" in text:
+            return [0.1] * 8
+        return _char_freq_embedding(text, dim)
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _mixed
+    try:
+        cache = {}
+        scores = mod._pair_scores_semantic(
+            ["正常场景文字内容充足描写" * 5, "SHORT 场景"],
+            "apocalypse_survival", "romance",
+            embedding_store.compute_embedding, embedding_store.cosine_similarity, cache)
+        assert scores is None
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_pair_scores_semantic_missing_prototype_returns_none():
+    """pack 的 marker_lexicon 缺失(原型文本空) → None(调用方兜底词袋)。"""
+    import embedding_store
+    cache = {}
+    scores = mod._pair_scores_semantic(
+        ["随便场景内容" * 10], "bogus_pack_a", "bogus_pack_b",
+        embedding_store.compute_embedding, embedding_store.cosine_similarity, cache)
+    assert scores is None
+
+
+def test_semantic_import_error_falls_back_to_lexicon():
+    """embedding_store 不可导入(mock ImportError) → 全程退回词袋·match_method="lexicon"。"""
+    bak = os.environ.get("GENRE_PACK_CLASH_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    saved = sys.modules.get("embedding_store")
+    try:
+        _set_mode("active")
+        os.environ["EMBED_BACKEND"] = "mock"
+        sys.modules["embedding_store"] = None  # type: ignore[assignment]
+        proj = _mk_project(["apocalypse_survival", "romance"])
+        out = mod.scan(_write(_BIPOLAR), proj)
+        assert out["match_method"] == "lexicon"
+    finally:
+        if saved is not None:
+            sys.modules["embedding_store"] = saved
+        else:
+            sys.modules.pop("embedding_store", None)
+        _set_mode(bak)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)

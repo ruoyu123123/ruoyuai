@@ -127,8 +127,16 @@ def extract_last_line(body: str) -> str:
 # 跑宽松正文证据匹配器，写回 truth_check.factual_corroboration。
 # 北极星护栏：匹配器宽松（多 token + 同义/指代容忍，复用 validate_chapter core_tokens 思路 + cluster
 # 整草稿视野避免切章误判跨章兑现）；措辞不同字面不判违，只有完全无任何痕迹才算硬矛盾；不确定走 advisory。
+#
+# 🔴 2026-07-03：字面 uncertain（弱锚词全 0 命中/无可抽锚词）时额外补一次 NLI 蕴含推理
+# （见 _nli_supplement·经 core/scripts/nn_nli_bridge.py）——只加 nli_supplement 旁证字段，
+# corroborated 三态判定本身永不被 NLI 改写（字面证据始终第一权威·桥默认关不影响任何现有行为）。
 
 _QUOTED_ANCHOR_RE = re.compile(r"[『「“]([^』」”\n]{2,20})[』」”]|【([^】\n]{2,20})】")
+
+# 🔴 2026-07-03 NLI 补充证据（advisory·仅 uncertain 分支用·绝不改写 True/False 判定）
+NLI_ENTAILMENT_THRESHOLD = 0.6  # 3 分类·非校准值·经验保守取值（与 cross_book_invariant_scanner 同口径）
+NLI_MAX_PARAGRAPHS = 12  # 单条声明最多送 NLI 检查的候选段落数（控子进程批量大小）
 
 
 def _extract_anchors(text: str) -> tuple[list[str], list[str]]:
@@ -162,11 +170,61 @@ def _extract_anchors(text: str) -> tuple[list[str], list[str]]:
     return _dedup(strong), _dedup(weak)[:24]
 
 
+def _nli_supplement(claim_text: str, body: str) -> "dict | None":
+    """🔴 2026-07-03 NLI 补充证据（advisory·只在字面判定落 uncertain 时调用）。
+
+    🔴 候选段落**不能**用 anchors 子串预筛：调用方只在 anchors 于 body 全 0 字面命中时才落
+    uncertain 分支（见 _corroborate），此时任何「段落含 anchor 子串」的筛选必然是空集——
+    子串命中的段落早在 _corroborate 里被判 True 了，根本到不了这里（逻辑真空 bug·2026-07-03
+    单测揪出）。改用字符集合重叠度对全部段落粗排序（不要求子串命中，允许换序/近义字面），
+    取重叠度最高的前 N 段当候选——这恰是「字面精确匹配失败」和「NLI 语义补判」之间的空档。
+
+    对候选段落批量跑 NLI(paragraph, claim) 蕴含推理（单批调用），取最高 entailment 置信度
+    段落当补充证据。桥不可用/关闭/异常/正文为空/无候选/低置信 → None（调用方 corroborated
+    三态判定不受影响，本字段缺失只是「没有额外佐证」，绝非「NLI 否决」）。
+    """
+    if not (claim_text or "").strip():
+        return None
+    try:
+        import nn_nli_bridge
+    except ImportError:
+        return None
+    if not nn_nli_bridge.enabled():
+        return None
+    paras = [p.strip() for p in (body or "").split("\n") if p.strip()]
+    if not paras:
+        return None
+    claim_chars = set(claim_text)
+    candidates = sorted(paras, key=lambda p: len(claim_chars & set(p)), reverse=True)[:NLI_MAX_PARAGRAPHS]
+    try:
+        results = nn_nli_bridge.predict_batch(
+            [{"premise": p, "hypothesis": claim_text} for p in candidates])
+    except Exception:  # noqa: BLE001 — advisory 佐证，任何异常都不影响主判定
+        return None
+    if not results:
+        return None
+    best_p, best_span = 0.0, ""
+    for p, res in zip(candidates, results):
+        if not res:
+            continue
+        ent_p = (res.get("probs") or {}).get("entailment", 0.0)
+        if ent_p > best_p:
+            best_p, best_span = ent_p, p[:120]
+    if best_p >= NLI_ENTAILMENT_THRESHOLD:
+        return {"label": "entailment", "entailment_prob": round(best_p, 4),
+                "evidence_span": best_span, "source": "nli"}
+    return None
+
+
 def _corroborate(claim_text: str, body: str, extra_text: str = "") -> dict:
     """宽松正文证据匹配。返回 {corroborated: True|False|"uncertain", anchors, evidence_span}。
       True       = 任一锚词命中正文（有字面痕迹·措辞不同不判违）
       False      = 有 strong 锚词（具体专名/信物）但全部 0 命中（完全无痕迹·硬矛盾域）
-      "uncertain"= 只有弱锚词且全 0 命中 / 无可抽锚词（弱信号·走 advisory）"""
+      "uncertain"= 只有弱锚词且全 0 命中 / 无可抽锚词（弱信号·走 advisory）
+
+    🔴 2026-07-03：uncertain 分支额外尝试 NLI 补充证据（见 _nli_supplement）——绝不用于
+    True/False 分支，corroborated 三态值本身永不被 NLI 改写，只在 uncertain 时追加
+    `nli_supplement` 旁证字段（敏感核对层：字面判断永远第一权威，NLI 不否决不改判）。"""
     strong, weak = _extract_anchors((claim_text or "") + " " + (extra_text or ""))
     anchors = strong + [w for w in weak if w not in strong]
     if not anchors:
@@ -178,7 +236,11 @@ def _corroborate(claim_text: str, body: str, extra_text: str = "") -> dict:
         return {"corroborated": True, "anchors": anchors, "evidence_span": span}
     if strong:
         return {"corroborated": False, "anchors": anchors, "evidence_span": ""}
-    return {"corroborated": "uncertain", "anchors": anchors, "evidence_span": ""}
+    result = {"corroborated": "uncertain", "anchors": anchors, "evidence_span": ""}
+    nli_sup = _nli_supplement(claim_text, body)
+    if nli_sup:
+        result["nli_supplement"] = nli_sup
+    return result
 
 
 _DEATH_WORDS = ("死", "亡", "牺牲", "陨落", "殒", "丧命", "毙", "dead", "died", "deceased")

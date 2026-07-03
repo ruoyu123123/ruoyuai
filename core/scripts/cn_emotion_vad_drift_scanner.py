@@ -18,6 +18,13 @@
   · 三 signal 全 advisory，作者基线读 作者风格.json.cn_emotion_baseline
   · 缺基线时用默认（density=2.0/千CJK / clear_ambivalent_ratio=2.0）
 
+【signal A 打分 · 🔴 2026-07-01 NN情绪VAD集成】_signal_a_drift 原是 CVAW_V2 占位坐标 vs
+  NRC_VAD_CN 占位坐标的固定差值；NRC_VAD_CN(刻意英译偏移基准)保持不变，CVAW_V2 一侧优先换成
+  emotion_vad 模型(RoBERTa 微调·held-out meanCCC 0.80)对命中词 ±40 字语境窗口的真实读数
+  (env RUOYU_NN_VAD=1 门控·FeatureStore 优先→nn_vad_bridge 兜底→都不行/未启用回退 CVAW_V2
+  占位坐标·逐词零回归)。全部命中词窗口合并一次批量调用。signal_a_anglo_drift 输出带
+  source(model_vad|mixed|lexicon_fallback) 供后续训练数据归因。
+
 【五 advisory · 全 advisory shadow】
   · CN_EMOTION_ANGLO_DRIFT       — Δv/Δa > 0.15
   · CN_EMOTION_CULTURAL_UNDERUSE  — 文化特有词覆盖率 < 0.6× 基线
@@ -143,28 +150,99 @@ def _cjk_count(text: str) -> int:
     return sum(1 for ch in text if "一" <= ch <= "鿿")
 
 
+_VAD_DRIFT_WINDOW = 40  # 命中词 ±40 字上下文窗口·供模型判该词在本文实际语境的 V/A
+
+
+def _cvaw_word_windows(text: str, word: str) -> list:
+    """提取某词在文中每次出现的 ±40 字窗口，供模型算该词实际语境 (v, a)。"""
+    windows = []
+    i = 0
+    while True:
+        j = text.find(word, i)
+        if j < 0:
+            break
+        start = max(0, j - _VAD_DRIFT_WINDOW)
+        end = min(len(text), j + len(word) + _VAD_DRIFT_WINDOW)
+        windows.append(text[start:end])
+        i = j + len(word)
+    return windows
+
+
+# 🔴 2026-07-01 NN情绪VAD集成 — 批量算多个命中词在本文语境下的真实 (v, a)。
+# 优先 FeatureStore 缓存 → 不行直连 nn_vad_bridge → 都不行/未启用 → 空 dict(调用方回退占位坐标)。
+# 全部命中词的全部窗口合并成一次模型调用，摊薄加载开销(而非逐词单独调用)。
+def _model_va_for_words(text: str, words: list) -> dict:
+    """返回 {word: (v, a)}·仅含模型真命中的词；未命中/未启用的词不在返回值里。"""
+    if os.environ.get("RUOYU_NN_VAD") != "1" or not words:
+        return {}
+    windows: list = []
+    owner: list = []
+    for w in words:
+        for win in _cvaw_word_windows(text, w):
+            windows.append(win)
+            owner.append(w)
+    if not windows:
+        return {}
+    preds = None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        try:
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(windows) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(windows)
+    except Exception:
+        return {}
+    if not preds or len(preds) != len(windows):
+        return {}
+    by_word: dict = {}
+    for w, p in zip(owner, preds):
+        if p and p.get("valence") is not None and p.get("arousal") is not None:
+            try:
+                by_word.setdefault(w, []).append((float(p["valence"]), float(p["arousal"])))
+            except (TypeError, ValueError):
+                pass
+    return {w: (sum(v for v, _ in vs) / len(vs), sum(a for _, a in vs) / len(vs))
+            for w, vs in by_word.items()}
+
+
 def _signal_a_drift(text: str) -> dict:
-    """signal A：CVAW v2 vs NRC-VAD CN 平均 Δv/Δa。"""
+    """signal A：CVAW v2(模型优先·env 门控) vs NRC-VAD CN 平均 Δv/Δa。"""
     cvaw = _CVAW_V2["_words"]
     nrc = _NRC_VAD_CN["_words"]
+    matched = [(w, v_c, a_c, text.count(w)) for w, (v_c, a_c) in cvaw.items()
+               if text.count(w) > 0 and w in nrc]
+    if not matched:
+        return {"avg_dv": 0.0, "avg_da": 0.0, "drift_words": [], "source": "none"}
+
+    model_va_by_word = _model_va_for_words(text, [w for w, *_ in matched])
+
     hits = []
-    for w, (v_c, a_c) in cvaw.items():
-        n = text.count(w)
-        if n > 0 and w in nrc:
-            v_n, a_n = nrc[w]
-            hits.append({
-                "word": w, "count": n,
-                "dv": v_c - v_n, "da": a_c - a_n,
-            })
-    if not hits:
-        return {"avg_dv": 0.0, "avg_da": 0.0, "drift_words": []}
+    model_hit_words = 0
+    for w, v_c, a_c, n in matched:
+        v_n, a_n = nrc[w]
+        mva = model_va_by_word.get(w)
+        if mva is not None:
+            v_c, a_c = mva
+            model_hit_words += 1
+        hits.append({
+            "word": w, "count": n,
+            "dv": v_c - v_n, "da": a_c - a_n,
+            "source": "model_vad" if mva is not None else "lexicon_fallback",
+        })
     total = sum(h["count"] for h in hits)
     avg_dv = sum(h["dv"] * h["count"] for h in hits) / total
     avg_da = sum(h["da"] * h["count"] for h in hits) / total
+    source = ("model_vad" if model_hit_words == len(hits)
+              else "mixed" if model_hit_words else "lexicon_fallback")
     return {
         "avg_dv": round(avg_dv, 4),
         "avg_da": round(avg_da, 4),
         "drift_words": hits[:10],
+        "source": source,
     }
 
 

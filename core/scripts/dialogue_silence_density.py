@@ -11,13 +11,14 @@ Pauses + Write Your Books The Weight of Silence): 真实对话有三档沉默:
 
 LLM 默认 turn-by-turn 紧凑对答, 沉默/停顿/失语全缺位 → 紧张/告白/审讯场景失温。
 
-【做法 · 确定性纯规则正则(不依赖 LLM)】:
+【做法 · pause/gap/lapse 主检测维度纯规则正则(不依赖 LLM) + 情绪浓度模型优先】:
   1. within-turn pause: 对话引号内出现 ……/--/、、、/...(三连点)/半截话(以…结尾)。
   2. turn-间 gap: 引号外的描述短语命中 (沉默片刻/沉默良久/沉默不语/无人开口/一阵沉默/
      久久没有回应)。
   3. ≥2 turn lapse: 连续 ≥2 个 gap 标志或长沉默(良久/许久/沉默了好一会儿)。
-  4. silence_emotional_context_match: 上下文情绪标签 (震惊/悲伤/决断/敌意/亲密)
-     提取 ±100 字窗口情绪词命中度。
+  4. silence_emotional_context_match: 沉默标志 ±100 字窗口情绪浓度——VAD 模型优先
+     (arousal 高强度 H/VH bin 或 valence 偏离中性·RUOYU_NN_VAD 门控)，模型不可用 → 回退
+     固定情绪标签词表 (震惊/悲伤/决断/敌意/亲密) 命中度。
   5. 作者档 silence_baseline / cluster manifest expected_silence_marker_min 优先。
 
 【与 R5 dispreferred_turn 正交】: dispreferred 查"裸拒绝缺缓冲", 本 scanner 查沉默/停顿/
@@ -92,16 +93,67 @@ def _count_gaps_and_lapses(draft: str):
     return gaps, lapses
 
 
+# 窗口情绪浓度模型判定阈值：复用 nn_vad_bridge.to_vad_bin 的 (0.2,0.4,0.6,0.8) 分箱边界。
+# arousal 落 H/VH bin（强度高）或 valence 偏离中性 M bin（[0.4,0.6)·情绪有明确正/负极性）
+# 任一命中 → 判定该窗口情绪浓度足够（对齐原 EMOTION_CONTEXT 词表既含中性强度词也含正负极词）。
+WINDOW_AROUSAL_HIGH = 0.6
+WINDOW_VALENCE_DEVIATION = 0.2
+
+
+def _model_window_emotion_matches(windows: list) -> list:
+    """批量 VAD 模型判窗口情绪浓度：arousal>=0.6(H/VH) 或 |valence-0.5|>=0.2(超出 M bin) → 1，
+    否则 0。模型未启用(RUOYU_NN_VAD!=1)/不可用/异常 → 对应位置 None（调用方回退固定情绪词表·零回归）。"""
+    if not windows or os.environ.get("RUOYU_NN_VAD") != "1":
+        return [None] * len(windows)
+    try:
+        preds = None
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(windows) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(windows)
+    except Exception:
+        return [None] * len(windows)
+    out = []
+    for p in preds or []:
+        if not p or (p.get("valence") is None and p.get("arousal") is None):
+            out.append(None)
+            continue
+        try:
+            v = float(p["valence"]) if p.get("valence") is not None else 0.5
+            a = float(p["arousal"]) if p.get("arousal") is not None else 0.0
+        except (TypeError, ValueError):
+            out.append(None)
+            continue
+        hit = a >= WINDOW_AROUSAL_HIGH or abs(v - 0.5) >= WINDOW_VALENCE_DEVIATION
+        out.append(1 if hit else 0)
+    if len(out) != len(windows):
+        return [None] * len(windows)
+    return out
+
+
 def _emotion_context_match(draft: str) -> int:
-    """统计沉默标志 ±100 字窗口情绪词命中次数。"""
-    total = 0
+    """统计沉默标志 ±100 字窗口情绪浓度命中次数：VAD 模型优先(arousal 强度/valence 偏离)，
+    不可用 → 回退固定情绪词表命中。"""
+    windows = []
     for rx in (GAP_MARKERS, LAPSE_MARKERS):
         for m in rx.finditer(draft):
             lo = max(0, m.start() - 100)
             hi = min(len(draft), m.end() + 100)
-            window = draft[lo:hi]
-            if EMOTION_CONTEXT.search(window):
-                total += 1
+            windows.append(draft[lo:hi])
+    if not windows:
+        return 0
+    model_hits = _model_window_emotion_matches(windows)
+    total = 0
+    for window, model_hit in zip(windows, model_hits):
+        if model_hit is not None:
+            total += model_hit
+        elif EMOTION_CONTEXT.search(window):
+            total += 1
     return total
 
 

@@ -17,6 +17,7 @@
 scanner 为 advisory，测试只锚确定性逻辑，绝不 mock 被测函数。
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import pov_consistency_scanner as pov  # noqa: E402
+import nn_coref_bridge  # noqa: E402
 
 _TARGET = _SCRIPTS / "pov_consistency_scanner.py"
 
@@ -287,6 +289,99 @@ def test_cli_fatal_no_protagonist_exits_2():
         draft = _write_draft(proj, "王虎觉得很累。")
         p = _run_cli(str(proj), str(draft))
         assert p.returncode == 2, f"rc={p.returncode} stdout={p.stdout} stderr={p.stderr}"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 🔴 2026-07 NN 共指桥集成回归（零指代/代词承前分支 → nn_coref_bridge）
+# RUOYU_NN_COREF 门控关闭（默认）→ 100% 回退现有正则 + 宾语位启发式逻辑；
+# 手动 patch nn_coref_bridge.resolve_coreferences 才验证桥被正确采用。
+# 显式主语判定（_find_subject_name 含宾语位排除）完全不受影响。
+# ══════════════════════════════════════════════════════════════════════════
+def test_coref_disabled_by_default_report_field():
+    """默认门控关闭（真实桥调用，不 mock）→ report 里 coref_resolution_source=regex_fallback。"""
+    bak_coref = os.environ.get("RUOYU_NN_COREF")
+    os.environ.pop("RUOYU_NN_COREF", None)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            proj = _mk_project(Path(d), _default_cards())
+            draft = _write_draft(
+                proj, "林尘走进房间。他觉得很安静。林尘想到该收手了。")
+            report = pov.scan(proj, draft)
+            assert report["coref_resolution_source"] == "regex_fallback", report
+            assert report["coref_resolved_mentions"] == 0, report
+    finally:
+        if bak_coref is not None:
+            os.environ["RUOYU_NN_COREF"] = bak_coref
+
+
+def test_resolve_coref_empty_when_disabled():
+    """RUOYU_NN_COREF 未设 → _resolve_coref 返回空列表（真实桥调用·非 mock）。"""
+    bak_coref = os.environ.get("RUOYU_NN_COREF")
+    os.environ.pop("RUOYU_NN_COREF", None)
+    try:
+        assert pov._resolve_coref("张三走来。他笑了。", ["张三"]) == []
+    finally:
+        if bak_coref is not None:
+            os.environ["RUOYU_NN_COREF"] = bak_coref
+
+
+def test_nearest_coref_target_before_picks_closest_preceding():
+    """_nearest_coref_target_before：取 span 结束位置 <= pos 且最靠近 pos 的 resolved_to。"""
+    results = [
+        {"mention": "他", "span": [0, 1], "resolved_to": "张三"},
+        {"mention": "她", "span": [10, 11], "resolved_to": "李四"},
+    ]
+    assert pov._nearest_coref_target_before(results, 5) == "张三"
+    assert pov._nearest_coref_target_before(results, 15) == "李四"
+    assert pov._nearest_coref_target_before(results, 0) is None
+
+
+def test_detect_pov_signal_holders_uses_coref_bridge_when_patched():
+    """手动 patch nn_coref_bridge.resolve_coreferences → 桥结果优先于正则回退被采用。
+
+    强制桥指向「张姐」（不是正则回退会选的王虎，也不是文本里出现过的名字）—— 断言
+    counts["张姐"]==1 唯一能证明的就是桥路径真被走通，而非碰巧与正则回退结果一致。
+    """
+    orig = nn_coref_bridge.resolve_coreferences
+
+    def fake_resolve(text, known):
+        idx = text.find("他")
+        if idx < 0:
+            return []
+        return [{"mention": "他", "span": [idx, idx + 1], "resolved_to": "张姐",
+                 "confidence": 0.9, "backend": "rule", "ambiguous": False}]
+
+    nn_coref_bridge.resolve_coreferences = fake_resolve
+    try:
+        names = {PROTAG, SIDE, "张姐"}
+        text = "王虎走上前。他觉得有人在跟踪自己。"
+        stats = {}
+        counts = pov.detect_pov_signal_holders(text, names, protagonist=PROTAG,
+                                               coref_stats=stats)
+        assert counts["张姐"] == 1, counts
+        assert counts[SIDE] == 0, counts
+        assert stats["resolved_count"] == 1, stats
+    finally:
+        nn_coref_bridge.resolve_coreferences = orig
+
+
+def test_detect_pov_signal_holders_falls_back_when_bridge_disabled():
+    """桥返回空列表（默认门控关闭即是如此）→ 逐字节回退现有正则 + 宾语位启发式。
+
+    与 test_pov_consistency.py::test_pronoun_carries_forward_to_last_explicit_subject
+    同一场景·锁定改造前后行为一致（零回归）。
+    """
+    bak_coref = os.environ.get("RUOYU_NN_COREF")
+    os.environ.pop("RUOYU_NN_COREF", None)
+    try:
+        names = {PROTAG, SIDE, "张姐"}
+        text = "王虎走上前。他觉得有人在跟踪自己。"
+        counts = pov.detect_pov_signal_holders(text, names, protagonist=PROTAG)
+        assert counts[SIDE] == 1, counts
+        assert counts[PROTAG] == 0, counts
+    finally:
+        if bak_coref is not None:
+            os.environ["RUOYU_NN_COREF"] = bak_coref
 
 
 def _run():

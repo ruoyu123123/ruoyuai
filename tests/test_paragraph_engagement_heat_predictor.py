@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,25 @@ import paragraph_engagement_heat_predictor as mod  # noqa: E402
 
 _TARGET = _SCRIPTS / "paragraph_engagement_heat_predictor.py"
 _ENV = "PARAGRAPH_ENGAGEMENT_HEAT_MODE"
+
+
+def _fake_vad(predict_batch_fn):
+    """临时装 RUOYU_NN_VAD=1 + 假 nn_vad_bridge 模块，返回还原函数（无 monkeypatch 依赖）。"""
+    old_env = os.environ.get("RUOYU_NN_VAD")
+    old_mod = sys.modules.get("nn_vad_bridge")
+    os.environ["RUOYU_NN_VAD"] = "1"
+    sys.modules["nn_vad_bridge"] = types.SimpleNamespace(predict_batch=predict_batch_fn)
+
+    def _restore():
+        if old_env is None:
+            os.environ.pop("RUOYU_NN_VAD", None)
+        else:
+            os.environ["RUOYU_NN_VAD"] = old_env
+        if old_mod is None:
+            sys.modules.pop("nn_vad_bridge", None)
+        else:
+            sys.modules["nn_vad_bridge"] = old_mod
+    return _restore
 
 
 def _set_mode(m):
@@ -159,6 +179,51 @@ def test_valence_negative():
 
 def test_valence_neutral():
     assert mod._valence("普通描述。") == 0
+
+
+def test_compute_valences_model_hit_uses_model_and_batches_once():
+    """RUOYU_NN_VAD=1 + 假模型命中 → _compute_valences 走模型路径(source=model_vad)，
+    且只调一次 predict_batch（整批·非逐段 N 次调用·摊薄模型加载开销）。
+    假模型按内容区分（'开心'→高valence，'愤怒'→低valence，其余中性），防常量导致断言恒真。"""
+    calls = []
+
+    def _fake(items):
+        calls.append(list(items))
+        out = []
+        for t in items:
+            if "开心" in t:
+                out.append({"valence": 0.9, "arousal": 0.5, "dominance": None, "source": "model"})
+            elif "愤怒" in t:
+                out.append({"valence": 0.1, "arousal": 0.8, "dominance": None, "source": "model"})
+            else:
+                out.append({"valence": 0.5, "arousal": 0.3, "dominance": None, "source": "model"})
+        return out
+    restore = _fake_vad(_fake)
+    try:
+        paras = ["他很开心地笑了", "普通的一句话", "他愤怒地咆哮"]
+        vals, source = mod._compute_valences(paras)
+        assert source == "model_vad"
+        assert vals == [1, 0, -1], f"应按模型 valence 映射 1/0/-1，得 {vals}"
+        assert len(calls) == 1, f"应整批调用一次，实际调了 {len(calls)} 次"
+        assert calls[0] == paras, "整批传入应含全部段落（非逐段拆调）"
+    finally:
+        restore()
+
+
+def test_compute_valences_model_unavailable_zero_regression():
+    """RUOYU_NN_VAD=1 但 predict_batch 返回 None（模型不可用）→ 与默认(env off)词典路径逐位一致。"""
+    paras = ["他微笑温暖安心", "普通描述。", "怒火冷汗死亡"]
+    baseline_vals, baseline_source = mod._compute_valences(paras)
+    assert baseline_source == "lexicon_fallback"
+    assert baseline_vals == [mod._valence(p) for p in paras]
+
+    restore = _fake_vad(lambda items: None)
+    try:
+        got_vals, got_source = mod._compute_valences(paras)
+        assert got_source == "lexicon_fallback"
+        assert got_vals == baseline_vals, "模型不可用应与默认词典路径逐位一致（零回归）"
+    finally:
+        restore()
 
 
 def test_split_paragraphs():

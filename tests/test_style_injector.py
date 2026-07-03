@@ -14,6 +14,7 @@ _text_cosine / _passage_text / _tag_relevance。
 零依赖纯标准库·确定性·真 import 真调用。
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -415,3 +416,170 @@ def test_main_success_writes_directive_file():
     assert written["chapter"] == 3
     assert written["opening_type"] == "动作开场"
     assert "[OK]" in r.stdout
+
+
+# ════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-02 _text_cosine embedding 语义路径接线（真后端命中 + 门控关零回归）
+# 参考范式：topic_drift_scanner._has_real_embedding_backend（本仓约定每文件自留一份）
+# 沿用本仓既有测试惯例：手工 os.environ 存/复 + 直接换 embedding_store.compute_embedding
+# 属性（不用 pytest monkeypatch fixture · 与 test_topic_drift_scanner / test_agenda_drift_scanner
+# 同款 · 兼容本文件可能被直接 python 执行的旧式 __main__ 场景）。
+# ════════════════════════════════════════════════════════════════════
+def _clear_embed_env():
+    bak_eb = os.environ.pop("EMBED_BACKEND", None)
+    bak_gen = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("GEN_EMBED__")}
+    return bak_eb, bak_gen
+
+
+def _restore_embed_env(bak_eb, bak_gen):
+    if bak_eb is not None:
+        os.environ["EMBED_BACKEND"] = bak_eb
+    for k, v in bak_gen.items():
+        os.environ[k] = v
+
+
+def test_has_real_embedding_backend_false_by_default():
+    bak_eb, bak_gen = _clear_embed_env()
+    try:
+        assert si._has_real_embedding_backend() is False
+    finally:
+        _restore_embed_env(bak_eb, bak_gen)
+
+
+def test_has_real_embedding_backend_true_when_set():
+    bak = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "fake-real"
+        assert si._has_real_embedding_backend() is True
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_has_real_embedding_backend_false_when_hash():
+    bak = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "hash"
+        assert si._has_real_embedding_backend() is False
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_text_cosine_semantic_path_hits_on_paraphrase():
+    """真后端命中：字面 bigram 近乎零重叠的改写句，语义余弦应正确判定为高相似
+    （bigram 法测不出"同一笔法换说法"）。"""
+    a = "刀光一闪敌人已然倒地"
+    b = "剑气纵横对手轰然倒下"
+    shared = set(si._char_bigrams(a)) & set(si._char_bigrams(b))
+    assert len(shared) <= 1, f"前置条件：字面 bigram 重叠应很低，实际共享 {shared}"
+
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+
+    def _content_aware_embed(text):
+        # 两句都描写"敌人被击倒"这同一件事 → content-aware 假向量给相同方向
+        if ("倒地" in text) or ("倒下" in text):
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+
+    embedding_store.compute_embedding = _content_aware_embed
+    try:
+        sim = si._text_cosine(a, b)
+        assert sim == 1.0   # 语义路径命中 → 完全相似（bigram 法在此处会判得远低于此）
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_text_cosine_semantic_unavailable_falls_back_to_bigram():
+    """真后端配置但 embedding_store 编码异常 → 回退字符 bigram（不崩·不误判为语义路径）。"""
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+
+    def _boom(text):
+        raise RuntimeError("模拟真后端编码失败")
+
+    embedding_store.compute_embedding = _boom
+    try:
+        a = "刀光一闪，敌人已然倒地"
+        b = "刀光一闪，敌人已然倒地啊"
+        assert si._text_cosine(a, b) == si._text_cosine_bigram(a, b)
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_text_cosine_gate_off_matches_bigram_exactly():
+    """🔴 零回归锁：门控关（无 EMBED_BACKEND / 无 GEN_EMBED__*）→ _text_cosine 结果与手算
+    字符 bigram 余弦逐字节一致，且即便 embedding_store.compute_embedding 被换成任意值
+    也绝不会被调用（门控在语义路径最前面短路）。"""
+    bak_eb, bak_gen = _clear_embed_env()
+    import embedding_store
+    orig = embedding_store.compute_embedding
+
+    def _boom(text):
+        raise AssertionError("门控关时绝不应调用 compute_embedding")
+
+    embedding_store.compute_embedding = _boom
+    try:
+        a = "刀光一闪，敌人已然倒地"
+        b = "刀光一闪，敌人已然倒地啊"          # 近重复（高 bigram 重叠）
+        c = "雨下了整夜，老人慢慢擦拭旧匕首"     # 迥异
+
+        sim_dup = si._text_cosine(a, b)
+        sim_diff = si._text_cosine(a, c)
+
+        assert sim_dup == si._text_cosine_bigram(a, b)
+        assert sim_diff == si._text_cosine_bigram(a, c)
+        assert sim_dup > 0.8
+        assert sim_diff < 0.3
+    finally:
+        embedding_store.compute_embedding = orig
+        _restore_embed_env(bak_eb, bak_gen)
+
+
+def test_mmr_select_passages_semantic_path_no_crash():
+    """MMR 贪心选取逻辑本身不动：真后端接线后 mmr_select_passages 仍正常工作、不崩、
+    仍返回 max_samples 个覆盖不同笔法的样本。"""
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "fake-real"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+
+    def _content_aware_embed(text):
+        if "刀光" in text:
+            return [1.0, 0.0, 0.0]
+        if "剑气" in text:
+            return [0.9, 0.1, 0.0]     # 语义上更接近"刀光"而非"迥异段"
+        return [0.0, 0.0, 1.0]
+
+    embedding_store.compute_embedding = _content_aware_embed
+    try:
+        passages = [
+            {"tag": "悬念开场", "text": "刀光一闪敌人已倒地"},
+            {"tag": "悬念开场", "text": "剑气纵横对手轰然倒下"},
+            {"tag": "悬念开场", "text": "雨下了整夜老人慢慢擦拭旧匕首"},
+        ]
+        out = si.get_golden_samples_for_type(passages, "悬念", max_samples=2)
+        assert len(out) == 2
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)

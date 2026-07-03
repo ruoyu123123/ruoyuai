@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -211,3 +212,48 @@ def test_non_finale_brief_defaults():
     brief = cee.me_to_cluster_brief(me, "cluster_x", 1, {})
     assert brief["belief_update_intent"] is None
     assert brief["event_boundary_sharpness"] == "default"
+
+
+# ============ 🔴 2026-07-02 真模型(surprisal_gpt2) 接入回归 ============
+
+def test_model_source_used_when_enabled(monkeypatch):
+    """RUOYU_NN_SURPRISAL=1 且 bridge 命中 → signal.source == model·score 与纯词典基线不同。"""
+    bak = os.environ.get("BELIEF_UPDATE_ALIGNMENT_MODE")
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        # content-aware 假模型：surprisal 随文本长度轻微变化(确定性·非常量)
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts, ids=None: [
+                {"mean_surprisal": 7.5, "max_surprisal": 15.0, "source": "model"}
+                for _ in texts
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        out = mod.scan(_write(_UPDATE_FLAT_TEXT), None, "update")
+        assert out["signal"]["source"] == "model"
+        assert out["signal"]["surprisal_norm"] is not None
+        assert out["signal"]["score"] != out["signal"]["lexicon_score"]
+    finally:
+        _set_mode(bak)
+
+
+def test_model_unavailable_keeps_lexicon_score_unchanged(monkeypatch):
+    """bridge enabled 但返回 None → 整体回退词典拼分·score 与不开模型时完全一致(零回归)。"""
+    bak = os.environ.get("BELIEF_UPDATE_ALIGNMENT_MODE")
+    try:
+        _set_mode("active")
+        path = _write(_UPDATE_FLAT_TEXT)
+        baseline = mod.scan(path, None, "update")
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts, ids=None: [None for _ in texts])
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        out = mod.scan(path, None, "update")
+        assert out["signal"]["source"] == "heuristic"
+        assert out["signal"]["surprisal_norm"] is None
+        assert out["signal"] == baseline["signal"]
+        assert out["verdict"] == baseline["verdict"]
+        assert out["warning"] == baseline["warning"]
+    finally:
+        _set_mode(bak)

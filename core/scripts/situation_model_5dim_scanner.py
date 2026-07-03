@@ -176,6 +176,54 @@ def _detect_dropouts(scenes, protag, tol):
     return dropouts
 
 
+def _scene_coherence_evidence(scenes: list[str]) -> dict:
+    """旁挂相邻场景 coherence 分数；只做 evidence，不改变 dropout 裁决。"""
+    pairs = [(scenes[i], scenes[i + 1]) for i in range(len(scenes) - 1)]
+    evidence = {
+        "status": "unavailable",
+        "source": None,
+        "boundary_scores": [],
+    }
+    if not pairs or os.environ.get("RUOYU_NN_COHERENCE") != "1":
+        return evidence
+    preds = None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            preds = FeatureStore.get().compute_coherence_pairs(pairs)
+            evidence["source"] = "feature_store_coherence"
+    except Exception:
+        preds = None
+    if preds is None:
+        try:
+            import nn_coherence_bridge
+            preds = nn_coherence_bridge.predict_pairs(pairs)
+            evidence["source"] = "nn_coherence_bridge"
+        except Exception:
+            return evidence
+    scores = []
+    for idx, pred in enumerate(preds or [], start=1):
+        if not pred:
+            continue
+        score = pred.get("coherence")
+        if score is None:
+            score = pred.get("coherence_score")
+        if score is None:
+            score = pred.get("score")
+        try:
+            scores.append({"boundary_idx": idx, "coherence": round(float(score), 4)})
+        except (TypeError, ValueError):
+            continue
+    if scores:
+        evidence["status"] = "ok"
+        evidence["boundary_scores"] = scores
+        evidence["min_coherence"] = min(s["coherence"] for s in scores)
+        evidence["mean_coherence"] = round(
+            sum(s["coherence"] for s in scores) / len(scores), 4)
+    return evidence
+
+
 def scan(draft_path, project_root=None) -> dict:
     mode = _mode()
     out = {"scanner": "situation_model_5dim", "schema_version": "1.0",
@@ -204,6 +252,7 @@ def scan(draft_path, project_root=None) -> dict:
         return out
 
     dropouts = _detect_dropouts(scenes, protag, tol)
+    out["model_coherence_at_boundaries"] = _scene_coherence_evidence(scenes)
     total_hits = sum(len(v) for v in dropouts.values())
     out["dropout_summary"] = {k: len(v) for k, v in dropouts.items()}
     out["dropout_samples"] = {k: v[:3] for k, v in dropouts.items() if v}

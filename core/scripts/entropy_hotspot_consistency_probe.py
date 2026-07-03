@@ -24,6 +24,12 @@ _临时/probe/hotspot.json，audit_hub 调度时优先扫这些区段。
   · **不引入新 issue 码** — 这是『scheduler priority signal』，非 detector
   · shadow 默认开 + 不报：探针文件写入永远成功，scanner 是否消费由其自决定
 
+【2026-07-02 接入真模型】block 指标优先调用已训练部署的 surprisal_gpt2（经 nn_surprisal_bridge /
+feature_cache 二选一）算 block 级 mean_surprisal 代替字符 Shannon entropy（`metric` 标注切换为
+"model"·`_placeholder` 随之置 False）；z-score / middle-50% hotspot 判定逻辑完全复用不变。
+RUOYU_NN_SURPRISAL 未开启/模型未完整命中该 cluster 全部 block 时整体回退字符 Shannon entropy
+（`metric="heuristic"`·`_placeholder` 保持 True·不变）。
+
 【与既有 scanner 严格正交】
   · cross_cluster_continuity 查跨章 timeline · 不分块算 entropy
   · revision_homogenization 查全文 entropy 同质化 · 不分块定位 hotspot
@@ -89,21 +95,58 @@ def _mean_std(values: list[float]) -> tuple[float, float]:
     return m, math.sqrt(var)
 
 
+def _predict_surprisal_batch(texts: list[str]) -> list[float | None]:
+    """批量取 GPT-2 mean_surprisal(经 FeatureStore 缓存优先→退 nn_surprisal_bridge 直连)。
+    全不可用 → 全 None(调用方整体回退字符 Shannon entropy·不变)。"""
+    if not texts:
+        return []
+    preds = None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            preds = FeatureStore.get().compute_surprisal_batch(texts)
+    except Exception:  # noqa: BLE001 FeatureStore 故障 → 退 bridge，绝不影响探针
+        preds = None
+    if preds is None:
+        try:
+            import nn_surprisal_bridge as bridge
+        except ImportError:
+            return [None] * len(texts)
+        preds = bridge.predict_batch(texts)
+    if len(preds) != len(texts):
+        return [None] * len(texts)
+    return [(p.get("mean_surprisal") if p else None) for p in preds]
+
+
+def _block_metric_values(chunks: list[str]) -> "tuple[list[float], str]":
+    """优先真模型(GPT-2 surprisal)block 均值批量代替字符熵·任一 block 未命中 → 整体回退熵(不变)。
+    返回 (block 值列表, metric 标注)。"""
+    scores = _predict_surprisal_batch(chunks)
+    if len(scores) == len(chunks) and all(v is not None for v in scores):
+        return scores, "model"
+    return [_block_entropy(c) for c in chunks], "heuristic"
+
+
 def detect_hotspots(text: str, block_size: int = BLOCK_SIZE) -> dict:
     cjk = _cjk_only(text)
     if len(cjk) < block_size * 4:
         return {"hotspots": [], "mean": 0.0, "std": 0.0,
                 "block_size": block_size, "blocks_total": 0,
                 "skipped": "正文 CJK 过短"}
-    blocks = []
+    positions = []
+    chunks = []
     for i in range(0, len(cjk), block_size):
         chunk = cjk[i:i + block_size]
         if len(chunk) < block_size // 2:
             break
-        blocks.append((i, i + len(chunk), _block_entropy(chunk)))
-    if not blocks:
+        positions.append((i, i + len(chunk)))
+        chunks.append(chunk)
+    if not chunks:
         return {"hotspots": [], "mean": 0.0, "std": 0.0,
                 "block_size": block_size, "blocks_total": 0}
+    values, metric = _block_metric_values(chunks)
+    blocks = [(positions[i][0], positions[i][1], values[i]) for i in range(len(chunks))]
     entropies = [b[2] for b in blocks]
     mean, std = _mean_std(entropies)
     n = len(blocks)
@@ -125,6 +168,7 @@ def detect_hotspots(text: str, block_size: int = BLOCK_SIZE) -> dict:
         "std": round(std, 4),
         "block_size": block_size,
         "blocks_total": n,
+        "metric": metric,
     }
 
 
@@ -155,6 +199,10 @@ def run(draft_path, project_root=None, cluster_id=None) -> dict:
     text = _strip_changes(raw)
     info = detect_hotspots(text)
     out.update(info)
+    if info.get("metric") == "model":
+        out["_placeholder"] = False
+        out["_doc"] = ("2026-07-02 已接入真模型(GPT-2 surprisal 经 nn_surprisal_bridge)·"
+                        "block 均值 surprisal 代替字符 Shannon 近似")
     # 写探针文件(包括 0 hotspot 也写 · 让消费方区分『跑过零结果』vs『没跑』)
     out_path = _probe_path(project_root, cluster_id)
     try:

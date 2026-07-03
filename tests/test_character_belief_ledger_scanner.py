@@ -29,6 +29,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import character_belief_ledger_scanner as mod  # noqa: E402
+import embedding_store  # noqa: E402
 
 _TARGET = _SCRIPTS / "character_belief_ledger_scanner.py"
 
@@ -280,3 +281,129 @@ def test_main_exit_0_on_clean():
     proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
     r = _run_cli(_write(_LEGAL_DRAFT), proj)
     assert r.returncode == 0, r.stderr
+
+
+# ============================================================================
+# 🔴 2026-07-01 语义匹配路径升级测试（真 embedding 后端才跑 · mock embedding_store）
+# 钉死两头：默认(无真后端)行为逐字节不变 / mock 真后端后语义路径独立生效
+# （抓字面子串未命中的同义改写，字面命中依旧优先标 literal）。
+# ============================================================================
+
+def _write_ledger(proj, ledger):
+    (proj / "_数据库" / "character_belief_ledger.json").write_text(
+        json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
+
+
+def _fake_semantic_embed(text: str):
+    """确定性假 embedding：命中「父亲被杀」或其同义改写关键片段 → 方向1，否则方向2（测试专用）。"""
+    markers = ("父亲被杀", "爹被人害死", "害死", "被杀")
+    if any(m in (text or "") for m in markers):
+        return [1.0, 0.0]
+    return [0.0, 1.0]
+
+
+_PAD = "张三走进了城南的老酒馆里独自坐下慢慢喝酒。" * 30
+# ledger 记「父亲被杀」·正文写同义改写「爹被人害死」→ 字面子串不重叠·只有语义路径能抓
+_PARAPHRASE_DRAFT = (
+    _PAD + _SCENE_SEP
+    + "张三知道爹被人害死了。他攥紧了拳头。" * 5
+)
+
+
+def test_default_no_real_backend_paraphrase_missed():
+    """无真后端 → 字面子串不命中同义改写 → 漏检（且不带 match_method/semantic_matching_active，
+    逐字节零回归）。"""
+    bak = os.environ.get("CHARACTER_BELIEF_LEDGER_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ.pop("EMBED_BACKEND", None)
+        assert mod._has_real_embedding_backend() is False
+        _set_mode("active")
+        proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+        _write_ledger(proj, {
+            "characters": {"张三": {"known_facts": [], "unaware_of": ["f1"]}},
+            "facts": {"f1": {"content": "父亲被杀"}},
+        })
+        out = mod.scan(_write(_PARAPHRASE_DRAFT), proj)
+        assert out["leak_count"] == 0
+        assert out["leak_samples"] == []
+        assert "semantic_matching_active" not in out
+    finally:
+        _set_mode(bak)
+        if bak_eb is None:
+            os.environ.pop("EMBED_BACKEND", None)
+        else:
+            os.environ["EMBED_BACKEND"] = bak_eb
+
+
+def test_semantic_backend_catches_paraphrase_literal_misses(monkeypatch):
+    """mock 真后端：字面「父亲被杀」未命中窗口·语义比对抓住同义改写「爹被人害死」→ leak。"""
+    monkeypatch.setenv("EMBED_BACKEND", "test_semantic")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _fake_semantic_embed)
+    monkeypatch.setenv("CHARACTER_BELIEF_LEDGER_MODE", "active")
+    proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+    _write_ledger(proj, {
+        "characters": {"张三": {"known_facts": [], "unaware_of": ["f1"]}},
+        "facts": {"f1": {"content": "父亲被杀"}},
+    })
+    out = mod.scan(_write(_PARAPHRASE_DRAFT), proj)
+    assert out["semantic_matching_active"] is True
+    assert out["leak_count"] >= 1
+    sample = out["leak_samples"][0]
+    assert sample["fact_ref"] == "父亲被杀"
+    assert sample["match_method"] == "semantic"
+    assert sample["reason"] == "unaware_of"
+    assert out["verdict"] == "FAIL_MINOR"
+
+
+def test_semantic_backend_still_reports_literal_hits(monkeypatch):
+    """mock 真后端：字面命中依旧优先标 literal（语义路径升级不丢失原有字面检测能力）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "test_semantic")
+    monkeypatch.setattr(embedding_store, "compute_embedding", lambda t: [1.0, 0.0])
+    monkeypatch.setenv("CHARACTER_BELIEF_LEDGER_MODE", "active")
+    proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])
+    _write_ledger(proj, {
+        "characters": {"张三": {"known_facts": [], "unaware_of": ["f_secret"]}},
+        "facts": {"f_secret": {"content": "宝藏"}},
+    })
+    draft = _write(_PAD + "张三知道宝藏埋在哪里。" * 5)
+    out = mod.scan(draft, proj)
+    assert out["leak_count"] >= 1
+    assert out["leak_samples"][0]["match_method"] == "literal"
+
+
+def test_has_real_embedding_backend_env_gate(monkeypatch):
+    """_has_real_embedding_backend 门控：未设/hash → False；非空非 hash / GEN_EMBED__* → True。"""
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    assert mod._has_real_embedding_backend() is False
+    monkeypatch.setenv("EMBED_BACKEND", "hash")
+    assert mod._has_real_embedding_backend() is False
+    monkeypatch.setenv("EMBED_BACKEND", "local")
+    assert mod._has_real_embedding_backend() is True
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    monkeypatch.setenv("GEN_EMBED__default__API_KEY", "x")
+    assert mod._has_real_embedding_backend() is True
+
+
+def test_semantic_leak_floor_env_override(monkeypatch):
+    """env CHARACTER_BELIEF_SEMANTIC_FLOOR 覆盖 > 默认值·非法值回退默认。"""
+    monkeypatch.delenv("CHARACTER_BELIEF_SEMANTIC_FLOOR", raising=False)
+    assert mod._semantic_leak_floor() == mod.DEFAULT_SEMANTIC_LEAK_FLOOR
+    monkeypatch.setenv("CHARACTER_BELIEF_SEMANTIC_FLOOR", "0.7")
+    assert mod._semantic_leak_floor() == 0.7
+    monkeypatch.setenv("CHARACTER_BELIEF_SEMANTIC_FLOOR", "nope")
+    assert mod._semantic_leak_floor() == mod.DEFAULT_SEMANTIC_LEAK_FLOOR
+
+
+def test_placeholder_path_untouched_by_semantic_upgrade(monkeypatch):
+    """占位词典路径（无 ledger）不受语义升级影响：即便真后端就绪也只走原字面逻辑
+    （任务范围明确只升级持久化 ledger 路径）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "test_semantic")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _fake_semantic_embed)
+    monkeypatch.setenv("CHARACTER_BELIEF_LEDGER_MODE", "active")
+    proj = _mk_project(characters=[{"name": "张三", "role": "主角"}])  # 无 ledger
+    out = mod.scan(_write(_LEAK_DRAFT), proj)
+    assert out["ledger_source"] == "placeholder"
+    assert "semantic_matching_active" not in out
+    for lk in out["leak_samples"]:
+        assert "match_method" not in lk

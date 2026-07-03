@@ -1,4 +1,4 @@
-"""cross_cluster_continuity_aggregate.py — 跨章衔接扫描（v19.1 新增）
+"""cross_cluster_continuity_aggregate.py — 跨章衔接扫描（v19.1 新增 · 2026-07-01 NN 连贯性模型接入）
 
 补 cross_cluster_pattern_aggregate 的盲区：**章节衔接质量**。
 分布均衡 scan_pattern 看节奏，衔接 scan_continuity 看连贯。
@@ -8,6 +8,19 @@
 2. 时间跳跃未交代       — 章间时间跳跃 ≥8h 必须有过渡说明
 3. 物件持续性断层       — 关键物件（主角获得的 chekhov_gun）连续 ≥2 章未提及
 4. 情绪/认知断层        — 前后章 summary.emotion 差 ≥4 且开篇无桥接
+
+【2026-07-01 NN 连贯性模型接入（scanner-NN 升级批）】
+维度 1/2 本质是「文本对是否自然衔接」判断，原先只能靠关键词/n-gram 字面重叠做代理指标，
+对同义改写零容错。现优先调用已训练部署的 coherence_binary 模型（经 nn_coherence_bridge.
+predict_pairs · 文本对衔接连贯性）：
+  · 维度 1 cliffhanger：前章 ending_line vs 后章首段 → 模型衔接连贯性分替代关键词重叠比例
+  · 维度 2 时间跳跃：前章尾段 vs 后章首段 → 模型 is_coherent 替代 plot_nodes 关键词命中检测
+  · 维度 3 物件持续性：本质是「实体是否被提及」的词面存在性核对，不是「文本衔接自然度」
+    问题——coherence 模型答不出"这段文本有没有提到某个具体物件"，硬套只会引入噪声，故
+    不模型化，保留确定性别名匹配（北极星⑤·不强行给不适配的子任务套模型）
+模型不可用（RUOYU_NN_COHERENCE 未开 / venv 或 checkpoint 缺失 / subprocess 失败）时维度 1/2
+逐字节回退原确定性逻辑——若渝必须「无 NN 也能跑」，模型路径是"加"上去的不是"换"掉的
+（零回归）。所有维度输出统一加 source 字段（"model"|"heuristic"）标注证据来源。
 
 输出：
 - 报告 JSON 写到 _数据库/.cross_chapter_scan/continuity_<timestamp>.json
@@ -101,32 +114,128 @@ def read_changes(ch_dir: Path, ch: int) -> dict | None:
     return None
 
 
+# ============================================================
+# NN 连贯性模型接入（2026-07-01 scanner-NN 升级批 · 与 coherence_scanner.py 同款接入范式）
+# 维度 1（cliffhanger）+ 维度 2（时间跳跃过渡）本质都是「文本对是否自然衔接」判断，优先交给
+# 已训练部署的 coherence_binary 模型；不可用/未启用 → 调用方回退各自原确定性逻辑，不崩主流水线。
+# ============================================================
+
+SCENE_WINDOW_CHARS = 600   # ending/前后场景窗口尺寸（cliffhanger head 与 time-gap 前后场景共用）
+
+
+def _load_coherence_bridge():
+    """延迟导入 nn_coherence_bridge。不可用（未安装/被禁）→ None（调用方回退确定性逻辑，不崩）。
+
+    返回 (predict_pairs, enabled) 或 None。RUOYU_FEATURE_STORE=1 时 predict_pairs 优先走
+    FeatureStore 缓存（复用 coherence_scanner 已建立的缓存 key），未开/失败则直连 bridge。
+    """
+    try:
+        from nn_coherence_bridge import predict_pairs as _bridge_predict_pairs, enabled
+    except ImportError:
+        return None
+
+    def predict_pairs(pairs):
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            if feature_store_enabled():
+                return FeatureStore.get().compute_coherence_pairs(pairs)
+        except Exception:  # noqa: BLE001 feature store 失败 → 退 bridge，绝不影响 scanner
+            pass
+        return _bridge_predict_pairs(pairs)
+
+    return predict_pairs, enabled
+
+
+def _predict_pairs_safe(bridge, pairs: list) -> list:
+    """批量调用 predict_pairs；任何异常/输出条数失配 → 全 None（不崩主流水线）。"""
+    if not pairs:
+        return []
+    predict_pairs, _enabled = bridge
+    try:
+        results = predict_pairs(pairs)
+    except Exception as e:  # noqa: BLE001 bridge 任何意外 → 全降级
+        print(f"[cross_cluster_continuity_aggregate] predict_pairs 异常·回退确定性逻辑："
+              f"{type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
+        return [None] * len(pairs)
+    if not isinstance(results, list) or len(results) != len(pairs):
+        print("[cross_cluster_continuity_aggregate] predict_pairs 输出条数失配·回退确定性逻辑",
+              file=sys.stderr)
+        return [None] * len(pairs)
+    return results
+
+
+def _valid_pair_result(r) -> "dict | None":
+    """校验单条 predict_pairs 结果形状（防缓存/上游产出畸形）；不合规 → None（回退确定性逻辑）。"""
+    if not isinstance(r, dict):
+        return None
+    score = r.get("coherence_score")
+    if not isinstance(score, (int, float)) or isinstance(score, bool):
+        return None
+    return r
+
+
+def _batch_model_results(coherence_bridge, pair_slots: "list[tuple[str, str] | None]") -> "list[dict | None]":
+    """给定「每个位置的候选文本对（None=本位置不需要模型）」，一次性批量调用 predict_pairs
+    （只对非 None 位置发请求，摊薄 subprocess+模型加载开销），结果按原顺序映射回填。
+
+    bridge 为 None 或没有任何候选 → 全 None，且**不发起任何调用**（零开销）。
+    """
+    out: "list[dict | None]" = [None] * len(pair_slots)
+    if coherence_bridge is None:
+        return out
+    idxs = [j for j, p in enumerate(pair_slots) if p is not None]
+    if not idxs:
+        return out
+    batch_results = _predict_pairs_safe(coherence_bridge, [pair_slots[j] for j in idxs])
+    for j, res in zip(idxs, batch_results):
+        out[j] = _valid_pair_result(res)
+    return out
+
 
 # ===== 维度 1: cliffhanger 回应度 =====
 # extract_keywords 已上移 continuity_keywords（SYS-5 ①），见顶部 import（cc.extract_keywords 仍可用）。
 
 
-def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: Path, protagonist: str | None = None) -> dict:
-    """前章 ending_line + ending_type vs 后章首段 300 字关键词重叠。"""
+def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: Path,
+                                protagonist: str | None = None,
+                                model_result: "dict | None" = None) -> dict:
+    """前章 ending_line + ending_type vs 后章首段：NN 连贯性模型优先，关键词重叠回退。
+
+    model_result：调用方（main）批量算好的 predict_pairs 结果
+    （{"coherence_score","is_coherent","source":"model"}）；None（模型未启用/不可用/本对不
+    适用）→ 逐字节回退原关键词重叠逻辑——模型路径是"加"上去的，不是"换"掉的（零回归）。
+    """
     if not prev_changes:
-        return {"score": -1, "reason": "前章 changes 缺失，跳过"}
+        return {"score": -1, "reason": "前章 changes 缺失，跳过", "source": "heuristic"}
     se = prev_changes.get("self_eval", {})
     applied = se.get("applied_style", {})
     ending_type = applied.get("ending_type", "")
     ending_line = applied.get("ending_line", "")
 
     if ending_type in ("悬念断章",):
-        return {"score": 1.0, "reason": "悬念断章，物理承接 OK", "exempt": True}
+        return {"score": 1.0, "reason": "悬念断章，物理承接 OK", "exempt": True, "source": "heuristic"}
 
     if not ending_line:
-        return {"score": -1, "reason": "前章 ending_line 未声明"}
+        return {"score": -1, "reason": "前章 ending_line 未声明", "source": "heuristic"}
 
     # 后章首 300 字
-    head = next_text[:600]
+    head = next_text[:SCENE_WINDOW_CHARS]
+
+    if model_result is not None:
+        return {
+            "score": round(float(model_result["coherence_score"]), 2),
+            "ending_type": ending_type,
+            "ending_line_preview": ending_line[:50],
+            "overlap_keywords": [],
+            "reason": "NN 连贯性模型判定前章 ending 与后章首段衔接连贯性",
+            "source": "model",
+        }
+
     ending_kw = extract_keywords(ending_line + " " + ending_type, protagonist=protagonist)
     head_kw = extract_keywords(head, protagonist=protagonist)
     if not ending_kw:
-        return {"score": -1, "reason": "ending_line 关键词不足"}
+        return {"score": -1, "reason": "ending_line 关键词不足", "source": "heuristic"}
 
     overlap = ending_kw & head_kw
     score = len(overlap) / max(len(ending_kw), 1)
@@ -136,25 +245,43 @@ def scan_cliffhanger_resonance(prev_changes: dict, next_text: str, next_ch_dir: 
         "ending_line_preview": ending_line[:50],
         "overlap_keywords": list(overlap),
         "reason": "前章 ending 关键词与后章首段重叠度",
+        "source": "heuristic",
     }
 
 
-def scan_cliffhanger_resonance_ledger(prev_rec: dict, next_ch_dir: Path) -> dict:
+def scan_cliffhanger_resonance_ledger(prev_rec: dict, next_ch_dir: Path,
+                                       model_result: "dict | None" = None) -> dict:
     """2026-05-29 cluster 化：账本预算了前章 cliffhanger_resonance_next（与下一章 head
-    的重叠分）时，直接取用，省去 ending_line 关键词重扫。"""
+    的重叠分）时，直接取用，省去 ending_line 关键词重扫。
+
+    model_result 命中（NN 连贯性模型）→ 优先替代账本预算分；None（模型未启用/不可用）→
+    逐字节回退账本预算分（零回归）。
+    """
     score = prev_rec.get("cliffhanger_resonance_next")
     ending_type = prev_rec.get("ending_type", "")
     ending_line = prev_rec.get("ending_line", "")
     if ending_type in ("悬念断章",):
-        return {"score": 1.0, "reason": "悬念断章，物理承接 OK", "exempt": True}
+        return {"score": 1.0, "reason": "悬念断章，物理承接 OK", "exempt": True, "source": "heuristic"}
+
+    if model_result is not None:
+        return {
+            "score": round(float(model_result["coherence_score"]), 2),
+            "ending_type": ending_type,
+            "ending_line_preview": ending_line[:50],
+            "overlap_keywords": [],
+            "reason": "NN 连贯性模型判定前章 ending 与后章首段衔接连贯性（cluster 摘要驱动）",
+            "source": "model",
+        }
+
     if not isinstance(score, (int, float)):
-        return {"score": -1, "reason": "账本无 cliffhanger_resonance_next"}
+        return {"score": -1, "reason": "账本无 cliffhanger_resonance_next", "source": "heuristic"}
     return {
         "score": round(float(score), 2),
         "ending_type": ending_type,
         "ending_line_preview": ending_line[:50],
         "overlap_keywords": [],
         "reason": "账本预算的前章 ending 与后章首段重叠度（cluster 摘要驱动）",
+        "source": "heuristic",
     }
 
 
@@ -196,6 +323,29 @@ def scan_time_gap(prev_changes: dict, next_changes: dict) -> dict:
     return {"detected": False, "prev_end": str(prev_end)[:40], "next_start": str(next_start)[:40]}
 
 
+# 后章 plot_nodes 关键词命中即视为"已交代过渡"（NN 连贯性模型不可用时的回退逻辑）
+TRANSITION_KEYWORDS = ("过渡", "周末", "回忆", "醒来", "睡了")
+
+
+def check_time_transition(next_plots: list, model_result: "dict | None" = None) -> dict:
+    """判断后章开篇是否已对检测到的时间跳跃给出过渡说明。
+
+    model_result：main() 批量算好的 NN 连贯性结果（前章尾段 vs 后章首段衔接连贯性）；
+    None（模型未启用/不可用）→ 逐字节回退 plot_nodes 关键词命中检测——与改前 main() 内联
+    逻辑完全一致（零回归·模型路径是"加"上去的不是"换"掉的）。
+    """
+    if model_result is not None:
+        is_coherent = model_result.get("is_coherent")
+        if is_coherent is None:
+            is_coherent = model_result.get("coherence_score", 0) >= 0.5
+        return {"has_transition": bool(is_coherent), "source": "model"}
+    has_transition = any(
+        any(kw in str(p).lower() for kw in TRANSITION_KEYWORDS)
+        for p in next_plots
+    )
+    return {"has_transition": has_transition, "source": "heuristic"}
+
+
 # ===== 维度 3: 物件持续性 =====
 
 def _build_aliases(name: str) -> list[str]:
@@ -221,7 +371,14 @@ def _build_aliases(name: str) -> list[str]:
 
 
 def scan_object_continuity(all_changes: dict[int, dict], all_texts: dict[int, str], current_ch: int) -> list[dict]:
-    """关键物件（chekhovs_gun）连续 ≥2 章未提及。"""
+    """关键物件（chekhovs_gun）连续 ≥2 章未提及。
+
+    【2026-07-01 NN 接入评估结论：本维度不接 coherence 模型】本质是「某实体是否被提及」
+    的词面存在性核对，不是「两段文本是否自然衔接」的问题——coherence_binary 模型衡量的是
+    文本对的衔接连贯度，答不出"这段文本有没有提到某个具体物件"，硬套只会引入噪声（北极星
+    ⑤·不强行给不适配的子任务套模型）。因此保留确定性别名匹配，只补 source 字段与维度 1/2
+    输出对齐（本维度恒为 "heuristic"）。
+    """
     findings = []
     if current_ch < 3:
         return findings
@@ -265,6 +422,7 @@ def scan_object_continuity(all_changes: dict[int, dict], all_texts: dict[int, st
                 "last_seen_ch": info["last_seen_ch"],
                 "gap": gap,
                 "current_ch": current_ch,
+                "source": "heuristic",
             })
     return findings
 
@@ -353,20 +511,68 @@ def main():
             "plot_nodes": rec.get("plot_nodes", []) or [],
         }}
 
+    # ===== 2026-07-01 NN 连贯性模型批量预算（scanner-NN 升级批）=====
+    # cliffhanger 回应度（维度 1）+ 时间跳跃过渡（维度 2）本质都是「文本对是否自然衔接」判断，
+    # 模型可用时一次性批量算完（摊薄 subprocess+模型加载开销），逐对扫描时直接查表；模型未
+    # 启用/不可用 → 两张表全 None，两维度分别回退各自原确定性逻辑，逐字节零回归。
+    coherence_bridge = _load_coherence_bridge()
+    coherence_on = False
+    if coherence_bridge is not None:
+        try:
+            coherence_on = bool(coherence_bridge[1]())
+        except Exception:
+            coherence_on = False
+
+    pair_count = len(chapter_dirs) - 1
+    cliff_pair_texts: "list[tuple[str, str] | None]" = [None] * pair_count
+    time_pair_texts: "list[tuple[str, str] | None]" = [None] * pair_count
+    time_gap_cache: "list[dict | None]" = [None] * pair_count
+
+    for i in range(pair_count):
+        prev_ch, _prev_d = chapter_dirs[i]
+        next_ch, _next_d = chapter_dirs[i + 1]
+
+        # --- 维度 1 候选文本对：ending_line/ending_type 优先取账本（与下方实际扫描同源）---
+        prev_ledger_rec = (ledger_by_ch or {}).get(prev_ch)
+        if prev_ledger_rec is not None and isinstance(prev_ledger_rec.get("cliffhanger_resonance_next"), (int, float)):
+            ending_type = prev_ledger_rec.get("ending_type", "")
+            ending_line = prev_ledger_rec.get("ending_line", "")
+        else:
+            se = all_changes.get(prev_ch, {}).get("self_eval", {})
+            applied = se.get("applied_style", {})
+            ending_type = applied.get("ending_type", "")
+            ending_line = applied.get("ending_line", "")
+        next_head = all_texts.get(next_ch, "")[:SCENE_WINDOW_CHARS]
+        if coherence_on and ending_type not in ("悬念断章",) and ending_line and next_head.strip():
+            cliff_pair_texts[i] = (ending_line, next_head)
+
+        # --- 维度 2 候选文本对：先探测时间跳跃（确定性·下方主循环复用同一份结果）---
+        tg = scan_time_gap(_changes_like(prev_ch), _changes_like(next_ch))
+        time_gap_cache[i] = tg
+        if tg.get("detected") and coherence_on:
+            prev_tail = all_texts.get(prev_ch, "")[-SCENE_WINDOW_CHARS:]
+            next_head_full = all_texts.get(next_ch, "")[:SCENE_WINDOW_CHARS]
+            if prev_tail.strip() and next_head_full.strip():
+                time_pair_texts[i] = (prev_tail, next_head_full)
+
+    cliff_model_results = _batch_model_results(coherence_bridge, cliff_pair_texts)
+    time_model_results = _batch_model_results(coherence_bridge, time_pair_texts)
+
     findings = []
     pairwise = []
 
     # 逐对相邻章扫
-    for i in range(len(chapter_dirs) - 1):
+    for i in range(pair_count):
         prev_ch, prev_d = chapter_dirs[i]
         next_ch, next_d = chapter_dirs[i + 1]
 
-        # 维度 1: cliffhanger
+        # 维度 1: cliffhanger（model_result 命中 → 模型衔接连贯性分；None → 回退关键词重叠/账本预算分）
         prev_ledger_rec = (ledger_by_ch or {}).get(prev_ch)
         if prev_ledger_rec is not None and isinstance(prev_ledger_rec.get("cliffhanger_resonance_next"), (int, float)):
-            cliff = scan_cliffhanger_resonance_ledger(prev_ledger_rec, next_d)
+            cliff = scan_cliffhanger_resonance_ledger(prev_ledger_rec, next_d, model_result=cliff_model_results[i])
         else:
-            cliff = scan_cliffhanger_resonance(all_changes.get(prev_ch, {}), all_texts.get(next_ch, ""), next_d, protagonist=protagonist)
+            cliff = scan_cliffhanger_resonance(all_changes.get(prev_ch, {}), all_texts.get(next_ch, ""), next_d,
+                                                protagonist=protagonist, model_result=cliff_model_results[i])
         if not cliff.get("exempt") and cliff.get("score", -1) >= 0 and cliff["score"] < 0.2:
             findings.append({
                 "dimension": "cliffhanger",
@@ -375,21 +581,20 @@ def main():
                 "code": "CLIFFHANGER_NOT_RESONATED",
                 "from_ch": prev_ch,
                 "to_ch": next_ch,
-                "metric": {"resonance_score": cliff["score"], "ending_type": cliff.get("ending_type"), "ending_preview": cliff.get("ending_line_preview")},
+                "metric": {"resonance_score": cliff["score"], "ending_type": cliff.get("ending_type"),
+                           "ending_preview": cliff.get("ending_line_preview"), "source": cliff.get("source", "heuristic")},
                 "message": f"ch{prev_ch}→ch{next_ch}: 前章 ending ({cliff.get('ending_type')}) 未在后章首段被回应（重叠度 {cliff['score']:.0%}）",
                 "suggestion": f"后章首段 ≤300 字内必须回应前章 ending 关键词；当前 ending_line='{cliff.get('ending_line_preview', '')}'",
             })
 
-        # 维度 2: 时间跳跃
-        time_gap = scan_time_gap(_changes_like(prev_ch), _changes_like(next_ch))
+        # 维度 2: 时间跳跃（has_transition 优先模型判断；model_result=None 回退 plot_nodes 关键词命中）
+        time_gap = time_gap_cache[i]
+        transition_source = None
         if time_gap.get("detected"):
-            # 检查后章 plot_nodes 是否有过渡说明
             next_plots = _changes_like(next_ch).get("factual", {}).get("plot_nodes", [])
-            has_transition = any(
-                any(kw in str(p).lower() for kw in ["过渡", "周末", "回忆", "醒来", "睡了"])
-                for p in next_plots
-            )
-            if not has_transition:
+            transition = check_time_transition(next_plots, model_result=time_model_results[i])
+            transition_source = transition["source"]
+            if not transition["has_transition"]:
                 findings.append({
                     "dimension": "time_gap",
                     "severity": "warning",
@@ -397,12 +602,12 @@ def main():
                     "code": "TIME_JUMP_UNEXPLAINED",
                     "from_ch": prev_ch,
                     "to_ch": next_ch,
-                    "metric": time_gap,
+                    "metric": {**time_gap, "source": transition_source},
                     "message": f"ch{prev_ch}→ch{next_ch}: 时间跳跃 {time_gap['gap_days']} 天，后章 plot_nodes 无过渡说明",
                     "suggestion": "后章开篇加 1-2 段过渡说明（周末做了什么/如何消化前章震撼）",
                 })
 
-        # 维度 4: 情绪断层
+        # 维度 4: 情绪断层（未变动·不在本次 NN 接入范围）
         emo_gap = scan_emotion_gap(project_root, prev_ch, next_ch, ledger_by_ch)
         if emo_gap.get("detected"):
             findings.append({
@@ -422,7 +627,9 @@ def main():
             "to_ch": next_ch,
             "cliffhanger_score": cliff.get("score", -1),
             "cliffhanger_exempt": cliff.get("exempt", False),
+            "cliffhanger_source": cliff.get("source", "heuristic"),
             "time_gap_days": time_gap.get("gap_days", 0),
+            "time_transition_source": transition_source,
             "emotion_diff": emo_gap.get("diff", 0),
         })
 

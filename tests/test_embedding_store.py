@@ -49,3 +49,25 @@ def test_load_embed_profile():
 def test_cosine_dim_mismatch_returns_zero():
     """维度不等 → cosine 返回 0（维度混用安全兜底，不崩）。"""
     assert es.cosine_similarity([1.0] * 384, [1.0] * 512) == 0.0
+
+
+def test_api_embed_l2_normalized(monkeypatch):
+    """API 后端返回裸向量必须 L2 归一 —— cosine_similarity 是纯点积，未归一会越界（2026-07-02 修）。"""
+    class _FakeResp:
+        class _D:
+            embedding = [3.0, 4.0]  # 模长 5，未归一
+        data = [_D()]
+
+    class _FakeClient:
+        def __init__(self, **kw):
+            self.embeddings = self
+
+        def create(self, **kw):
+            return _FakeResp()
+
+    import types
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+    vec = es._api_embed({"api_key": "k", "base_url": "https://x/v1", "model": "m"}, "文本")
+    assert abs(vec[0] - 0.6) < 1e-9 and abs(vec[1] - 0.8) < 1e-9
+    # 自身点积 = 1（归一化后 cosine(v,v)==1 不越界）
+    assert abs(es.cosine_similarity(vec, vec) - 1.0) < 1e-9

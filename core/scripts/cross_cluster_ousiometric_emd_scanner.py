@@ -19,6 +19,15 @@ LLM 默认易在后段塌缩振幅(单调 plateau)。此前【0 跨 cluster 振�
   说明：完整 PyEMD 不在 stdlib，本 scanner 用零依赖近似算法供 baseline；
   接入 PyEMD 时无需改 API。
 
+【🔴 2026-07-01 emotion_vad 模型集成】每个滑窗优先用 emotion_vad 模型(RoBERTa 微调·held-out
+  meanCCC 0.80)的 Dominance(power 轴代理)-Arousal(danger 轴代理)连续值替换关键词计数——power/danger
+  是 ousiometric 已证的两个语义主轴(arXiv:2110.06847 实测 power≈0.50V+0.48A+0.72D、danger≈
+  -0.72V+0.69A+0.04D)，本处用 D/A 直接代理是任务范围内的简化(非完整旋转公式)。
+  该窗 dominance 与 arousal 需同时可用才用模型分(如现网 va_base 检查点只训 V/A、D 恒 None →
+  自动回退)；模型不可用/未启用 → 该窗回退关键词计数(与旧逻辑逐字节一致·零回归)。
+  衰减比/振幅包络数学部分不变。env RUOYU_NN_VAD 门控(默认 off)；
+  输出 valence_source 字段(model_vad/lexicon_fallback/mixed)供训练数据归因。
+
 【北极星② / ⑤】纯 advisory · 短篇 skip · 绝不 hard_gate。
   env OUSIOMETRIC_EMD_MODE: off / shadow(默认) / active。
 
@@ -92,25 +101,88 @@ def _cluster_draft_paths(project_root, clusters):
     return paths
 
 
-def compute_valence_series(text):
-    """5k CJK 窗滑动 power-danger valence 序列。"""
-    series = []
+def _model_window_scores(chunks):
+    """emotion_vad 模型批量算每窗 Dominance(power 轴代理)-Arousal(danger 轴代理)。
+
+    仅当该窗 dominance 与 arousal 同时可用才返回模型分；否则该窗 None(调用方回退关键词计数·
+    零回归)。RUOYU_NN_VAD 未开 / 桥不可用 / 批量条数失配 → 全 None。保序一一对应。"""
+    n = len(chunks)
+    if n == 0 or os.environ.get("RUOYU_NN_VAD") != "1":
+        return [None] * n
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        try:
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(chunks) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(chunks)
+    except Exception:
+        return [None] * n
+    if not preds or len(preds) != n:
+        return [None] * n
+    scores = []
+    for p in preds:
+        dominance = p.get("dominance") if p else None
+        arousal = p.get("arousal") if p else None
+        if dominance is not None and arousal is not None:
+            try:
+                scores.append(float(dominance) - float(arousal))
+            except (TypeError, ValueError):
+                scores.append(None)
+        else:
+            scores.append(None)
+    return scores
+
+
+def compute_valence_series_detail(text) -> dict:
+    """5k CJK 窗滑动 power-danger valence 序列 + source 归因(供训练数据溯源)。
+
+    模型优先(RUOYU_NN_VAD=1 时用 emotion_vad 模型 Dominance-Arousal 连续值替代关键词计数)；
+    模型不可用/该窗未命中 → 该窗回退关键词命中密度差(与旧逻辑逐字节一致·零回归)。"""
     n = len(text)
     if n < WINDOW_CJK:
         # 整段一窗
-        p = len(POWER_LEX.findall(text))
-        d = len(DANGER_LEX.findall(text))
-        series.append((p - d) / max(n, 1) * 1000)
-        return series
-    step = WINDOW_CJK // 2
-    i = 0
-    while i + WINDOW_CJK <= n:
-        chunk = text[i:i + WINDOW_CJK]
-        p = len(POWER_LEX.findall(chunk))
-        d = len(DANGER_LEX.findall(chunk))
-        series.append((p - d) / WINDOW_CJK * 1000)
-        i += step
-    return series
+        chunks, lens = [text], [n]
+    else:
+        chunks, lens = [], []
+        step = WINDOW_CJK // 2
+        i = 0
+        while i + WINDOW_CJK <= n:
+            chunks.append(text[i:i + WINDOW_CJK])
+            lens.append(WINDOW_CJK)
+            i += step
+
+    model_scores = _model_window_scores(chunks)
+    series = []
+    model_hits = 0
+    for chunk, wlen, mscore in zip(chunks, lens, model_scores):
+        if mscore is not None:
+            series.append(round(mscore, 4))
+            model_hits += 1
+        else:
+            p = len(POWER_LEX.findall(chunk))
+            d = len(DANGER_LEX.findall(chunk))
+            series.append((p - d) / max(wlen, 1) * 1000)
+    lexicon_hits = len(chunks) - model_hits
+
+    if not chunks:
+        source = "none"
+    elif model_hits == len(chunks):
+        source = "model_vad"
+    elif model_hits == 0:
+        source = "lexicon_fallback"
+    else:
+        source = "mixed"
+    return {"series": series, "source": source,
+            "model_window_count": model_hits, "lexicon_window_count": lexicon_hits}
+
+
+def compute_valence_series(text):
+    """5k CJK 窗滑动 power-danger valence 序列(兼容旧调用签名·只要序列)。"""
+    return compute_valence_series_detail(text)["series"]
 
 
 def local_extrema(series):
@@ -160,8 +232,13 @@ def scan_project(project_root) -> dict:
         except OSError:
             continue
     all_text = "\n".join(all_text_parts)
-    series = compute_valence_series(all_text)
+    detail = compute_valence_series_detail(all_text)
+    series = detail["series"]
     out["valence_series_len"] = len(series)
+    # 🔴 2026-07-01 emotion_vad 模型集成：source 归因(model_vad/lexicon_fallback/mixed)供训练数据溯源
+    out["valence_source"] = detail["source"]
+    out["model_window_count"] = detail["model_window_count"]
+    out["lexicon_window_count"] = detail["lexicon_window_count"]
     if len(series) < 6:
         out["note"] = "valence 序列样本不足 · 跳过"
         return out
@@ -186,6 +263,7 @@ def scan_project(project_root) -> dict:
             out["violations"].append({
                 "code": ISSUE_CODE, "kind": "oscillation_degraded",
                 "severity": "minor", "message": msg,
+                "source": detail["source"],
                 "_doc": "advisory · 长篇拐点决策 · 绝不 hard_gate"})
             out["verdict"] = "FAIL_MINOR"
             out["warning"] = msg

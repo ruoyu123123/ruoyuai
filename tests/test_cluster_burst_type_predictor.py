@@ -221,3 +221,95 @@ def test_build_manifest_injects_intended_burst_type():
     src = (_SCRIPTS / "build_manifest.py").read_text(encoding="utf-8")
     assert '"intended_burst_type"' in src
     assert "BURST_TYPE_MODE" in src
+
+
+# ── 🔴 2026-07-03 zero_shot_prototype 模型优先路径测试(W3) ──────────────────
+import math  # noqa: E402
+
+
+def _char_freq_embedding(text, dim=32):
+    """确定性 mock embedding（字符频率向量·同 test_macguffin_entanglement_scanner 手法）。"""
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _run_with_mock_embedding(fn):
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    import zero_shot_prototype
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _char_freq_embedding
+    zero_shot_prototype.clear_cache()
+    try:
+        return fn()
+    finally:
+        embedding_store.compute_embedding = orig
+        zero_shot_prototype.clear_cache()
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_classify_burst_type_model_gate_off_returns_none():
+    assert mod._classify_burst_type_model("他瞳孔一缩，僵在原地。") is None
+
+
+def test_classify_burst_type_model_direct():
+    """直接测 _classify_burst_type_model：mock 真后端 → shock 尾部命中 shock 原型。"""
+    def _do():
+        tail = ("他瞳孔一缩，整个人僵在原地不敢动弹，心头猛地一震，怎么会是这样简直难以置信，"
+                "众人倒吸一口冷气都不敢置信眼前的景象脸色瞬间惨白，他浑身发冷僵住了半晌说不出话")
+        result = mod._classify_burst_type_model(tail)
+        assert result is not None
+        assert result["label"] == "shock"
+        assert result["source"] == "zero_shot_embedding"
+    _run_with_mock_embedding(_do)
+
+
+def test_active_top1_source_lexicon_by_default():
+    """默认无真后端 → top1.source == 'lexicon'（零回归契约）。"""
+    bak = os.environ.get("BURST_TYPE_MODE")
+    try:
+        _set_mode("active")
+        out = mod.scan(_write(_DRAFT_SHOCK), cli_intended="shock")
+        assert out["top1"]["source"] == "lexicon"
+    finally:
+        _set_mode(bak)
+
+
+def test_active_top1_source_model_when_backend_available():
+    """真后端可用且分类置信达标 → top1.source == 'zero_shot_embedding'。
+
+    用自建 draft（尾段单段独立 ≥80 CJK）避免 _DRAFT_SHOCK 的 _TAIL_SHOCK(仅约45 CJK)
+    被 _take_tail 拉入前面中性 _PARA 填充稀释语义信号（_take_tail 逐段往前累积到
+    cjk_min 才停，前置中性段会混进 tail 干扰 nearest-centroid 分类）。
+    """
+    bak = os.environ.get("BURST_TYPE_MODE")
+    try:
+        _set_mode("active")
+        draft = _PARA * 60 + (
+            "他瞳孔一缩，整个人僵在原地不敢动弹，心头猛地一震，怎么会是这样简直难以置信，"
+            "众人倒吸一口冷气都不敢置信眼前的景象脸色瞬间惨白，他浑身发冷僵住了半晌说不出话，"
+            "脑子里一片空白，久久无法回神，只觉得天旋地转，浑身僵硬得像块石头\n\n")
+
+        def _do():
+            out = mod.scan(_write(draft), cli_intended="shock")
+            assert out["top1"]["source"] == "zero_shot_embedding"
+            assert out["top1"]["type"] == "shock"
+
+        _run_with_mock_embedding(_do)
+    finally:
+        _set_mode(bak)
+
+
+def test_burst_type_prototypes_cover_all_nine_types():
+    lexicon_types = {k for k in mod._BURST_LEXICONS if not k.startswith("_")}
+    assert set(mod._BURST_TYPE_PROTOTYPES.keys()) == lexicon_types

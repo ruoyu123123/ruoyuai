@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 from datetime import datetime
@@ -142,27 +143,61 @@ def _walk_nested(obj, key_substring: str):
     return None
 
 
-def extract_chapter_emotion_intensity(chapter_json: dict) -> float:
-    """从单章 JSON 估算本章情绪强度（0-1）。
+def _direction_intensity_lexicon(d: str) -> float:
+    """单条情绪方向词按 DIRECTION_INTENSITY 词典打分（VAD 不可用时的确定性 fallback）。"""
+    matched = 0.3
+    for kw, v in DIRECTION_INTENSITY.items():
+        if kw in d:
+            matched = max(matched, v)
+    return matched
 
-    兼容字段路径：
-    - B4_narrative_craft.dim33_emotion_beats (list of {pct, direction}) — v17 标准 schema
-    - qualitative.emotion_beat_map / 情绪节拍图 / dim33 — 旧 schema
-    """
+
+def _model_direction_intensity(directions: list) -> "float | None":
+    """VAD 模型给情绪方向词打分：用 arousal 近似"强度"（DIRECTION_INTENSITY 本就是
+    0.2平静-0.95决战极限的唤醒度量表，与 arousal 语义对齐）。模型不可用/未命中 → None，
+    调用方回退词典。"""
+    if not directions or os.environ.get("RUOYU_NN_VAD") != "1":
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(directions) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(directions)
+    except Exception:
+        return None
+    vals = []
+    for p in preds or []:
+        if p and p.get("arousal") is not None:
+            try:
+                vals.append(float(p["arousal"]))
+            except (TypeError, ValueError):
+                pass
+    if not vals:
+        return None
+    return min(1.0, max(vals))
+
+
+def extract_chapter_emotion_intensity_detail(chapter_json: dict) -> dict:
+    """同 extract_chapter_emotion_intensity，多带 source 字段（model_vad/lexicon_fallback）
+    供训练池 / 测试区分证据来源。"""
     # 优先：递归找 dim33（无论嵌套层级）
     beats = _walk_nested(chapter_json, "dim33")
     if isinstance(beats, list) and beats:
         directions = [str(b.get("direction", "")) for b in beats if isinstance(b, dict)]
         if directions:
-            intensities = []
-            for d in directions:
-                matched = 0.3
-                for kw, v in DIRECTION_INTENSITY.items():
-                    if kw in d:
-                        matched = max(matched, v)
-                intensities.append(matched)
+            non_empty = [d for d in directions if d.strip()]
+            model_intensity = _model_direction_intensity(non_empty) if non_empty else None
+            if model_intensity is not None:
+                return {"intensity": round(model_intensity, 3), "source": "model_vad"}
+            intensities = [_direction_intensity_lexicon(d) for d in directions]
             # 用最大值（不是平均）—— 本章情绪最高峰最有代表性
-            return min(1.0, max(intensities))
+            return {"intensity": min(1.0, max(intensities)), "source": "lexicon_fallback"}
 
     # fallback：把 beats 当字符串扫高潮关键词
     if beats:
@@ -170,7 +205,7 @@ def extract_chapter_emotion_intensity(chapter_json: dict) -> float:
         climax_keywords = ["高潮", "爆发", "炸弹", "震惊", "崩溃", "决战", "极限"]
         score = sum(1 for kw in climax_keywords if kw in beat_str) * 0.25
         if score:
-            return min(1.0, 0.3 + score)
+            return {"intensity": min(1.0, 0.3 + score), "source": "lexicon_fallback"}
 
     # fallback：humor + satisfaction
     humor = _walk_nested(chapter_json, "dim39")
@@ -185,7 +220,19 @@ def extract_chapter_emotion_intensity(chapter_json: dict) -> float:
     sat_n = sat if isinstance(sat, (int, float)) else 0
 
     raw = 0.3 + min(humor_n, 5) * 0.05 + min(sat_n, 5) * 0.05
-    return min(1.0, max(0.0, raw))
+    return {"intensity": min(1.0, max(0.0, raw)), "source": "lexicon_fallback"}
+
+
+def extract_chapter_emotion_intensity(chapter_json: dict) -> float:
+    """从单章 JSON 估算本章情绪强度（0-1）。
+
+    兼容字段路径：
+    - B4_narrative_craft.dim33_emotion_beats (list of {pct, direction}) — v17 标准 schema
+    - qualitative.emotion_beat_map / 情绪节拍图 / dim33 — 旧 schema
+
+    VAD 模型优先（RUOYU_NN_VAD=1 时对 direction 词条打分），词典 fallback（兼容旧调用）。
+    """
+    return float(extract_chapter_emotion_intensity_detail(chapter_json)["intensity"])
 
 
 def extract_dim_value(chapter_json: dict, dim_names: list[str], default: float = 0.0) -> float:

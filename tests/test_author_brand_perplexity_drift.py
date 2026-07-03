@@ -5,6 +5,7 @@ import math
 import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -217,3 +218,83 @@ def test_windowed_entropies_yields_expected_count():
     es = mod._windowed_entropies(text, window=500, step=250)
     # 窗口 500·步 250 → (2500-500)/250 + 1 = 9
     assert len(es) == 9
+
+
+# ============ 🔴 2026-07-02 真模型(surprisal_gpt2) 接入回归 ============
+
+def test_model_metric_used_when_enabled(monkeypatch):
+    """RUOYU_NN_SURPRISAL=1 且 bridge 全窗口命中 → metric_used 切换为 gpt2_mean_surprisal。"""
+    bak = os.environ.get("AUTHOR_BRAND_PERPLEXITY_MODE")
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        # content-aware 假模型：surprisal 与窗口内「夜」字出现次数挂钩(确定性·非常量)
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts, ids=None: [
+                {"mean_surprisal": 5.0 + t.count("夜") * 0.3, "source": "model"} for t in texts
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        proj = _mk_project_with_band(p5=0.0, p95=20.0)
+        out = mod.scan(_write(_NORMAL_TEXT), proj)
+        assert out["metric_used"] == "gpt2_mean_surprisal"
+        assert out["windows"] > 0
+    finally:
+        _set_mode(bak)
+
+
+def test_model_unavailable_keeps_entropy_metric_unchanged(monkeypatch):
+    """bridge enabled 但返回全 None → 整体回退 char Shannon entropy·
+    结果与不开模型时完全一致(零回归)。"""
+    bak = os.environ.get("AUTHOR_BRAND_PERPLEXITY_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project_with_band(p5=0.0, p95=20.0)
+        path = _write(_NORMAL_TEXT)
+        baseline = mod.scan(path, proj)
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts, ids=None: [None for _ in texts])
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        out = mod.scan(path, proj)
+        assert out["metric_used"] == "char_shannon_entropy"
+        assert baseline["metric_used"] == "char_shannon_entropy"
+        assert out["windows_entropy_mean"] == baseline["windows_entropy_mean"]
+        assert out["below_p5_ratio"] == baseline["below_p5_ratio"]
+        assert out["above_p95_ratio"] == baseline["above_p95_ratio"]
+        assert out["verdict"] == baseline["verdict"]
+    finally:
+        _set_mode(bak)
+
+
+def test_model_partial_none_falls_back_to_entropy(monkeypatch):
+    """bridge 部分命中/部分 None(混合) → 整体仍回退熵(避免部分 None 破坏 ecdf 比较语义)。"""
+    bak = os.environ.get("AUTHOR_BRAND_PERPLEXITY_MODE")
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        counter = {"n": 0}
+
+        def fake_predict(texts, ids=None):
+            out = []
+            for _ in texts:
+                counter["n"] += 1
+                out.append(None if counter["n"] % 4 == 0 else
+                           {"mean_surprisal": 6.0, "source": "model"})
+            return out
+
+        fake_bridge = types.SimpleNamespace(predict_batch=fake_predict)
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        proj = _mk_project_with_band(p5=0.0, p95=20.0)
+        out = mod.scan(_write(_NORMAL_TEXT), proj)
+        assert out["metric_used"] == "char_shannon_entropy"
+    finally:
+        _set_mode(bak)
+
+
+def test_window_slices_matches_entropy_window_count():
+    """_window_slices 与 _windowed_entropies 窗口边界数一致(模型/熵路径同构对比基础)。"""
+    text = "一二三四五" * 500  # 2500 CJK
+    slices = mod._window_slices(text, window=500, step=250)
+    es = mod._windowed_entropies(text, window=500, step=250)
+    assert len(slices) == len(es) == 9

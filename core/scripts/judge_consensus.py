@@ -98,6 +98,48 @@ def persona_dissent_severity(breakdown: dict) -> float:
     return max(avgs) - min(avgs)
 
 
+def calibration_features(reports: list[dict], consensus: dict | None = None) -> dict:
+    """标准化 judge reliability 特征，供后续校准模型 shadow 训练。"""
+    grades = [r.get("overall_grade", "C") for r in reports]
+    confidences = [r.get("confidence", 0.5) for r in reports]
+    grade_nums = [GRADE_TO_NUM.get(g, 2) for g in grades]
+    evidence_counts = [
+        len(r.get("evidence_quotes", [])) if isinstance(r.get("evidence_quotes"), list) else 0
+        for r in reports
+    ]
+    uncertainty_counts = [
+        len(r.get("uncertainty_flags", [])) if isinstance(r.get("uncertainty_flags"), list) else 0
+        for r in reports
+    ]
+    personas = [r.get("persona") or "default" for r in reports]
+    out = {
+        "feature_schema": "judge_reliability_calibration_v1",
+        "n_reports": len(reports),
+        "grade_nums": grade_nums,
+        "grade_range": (max(grade_nums) - min(grade_nums)) if grade_nums else 0,
+        "mean_confidence": round(sum(confidences) / max(1, len(confidences)), 4),
+        "min_confidence": round(min(confidences), 4) if confidences else 0.0,
+        "evidence_quote_counts": evidence_counts,
+        "mean_evidence_quotes": round(sum(evidence_counts) / max(1, len(evidence_counts)), 4),
+        "reports_without_evidence": sum(1 for c in evidence_counts if c < 2),
+        "uncertainty_flag_counts": uncertainty_counts,
+        "total_uncertainty_flags": sum(uncertainty_counts),
+        "persona_count": len(set(personas)),
+        "personas": sorted(set(personas)),
+        "model_status": "shadow_features_only",
+        "gate_level": "advisory",
+    }
+    if consensus:
+        out.update({
+            "agreement_score": consensus.get("agreement_score"),
+            "persona_dissent_severity": consensus.get("persona_dissent_severity"),
+            "evidence_quality": consensus.get("evidence_quality"),
+            "escalate_to_user": consensus.get("escalate_to_user"),
+            "escalate_reason_count": len(consensus.get("escalate_reasons", [])),
+        })
+    return out
+
+
 def merge_reports(reports: list[dict]) -> dict:
     """合并 N 个 JudgeReport 为 consensus。"""
     if not reports:
@@ -190,8 +232,8 @@ def merge_reports(reports: list[dict]) -> dict:
         # 不一致告警
         print(f"[WARN] reports schema_version 不一致：{schema_versions}", file=sys.stderr)
 
-    return {
-        "schema_version": "1.2",  # P2-6：persona | P2-11：evidence_quality
+    result = {
+        "schema_version": "1.3",  # P2-6：persona | P2-11：evidence_quality | 1.3：calibration_features
         "consensus_grade": consensus_grade,
         "consensus_confidence": round(avg_confidence, 3),
         "agreement_score": round(agreement, 3),
@@ -208,6 +250,8 @@ def merge_reports(reports: list[dict]) -> dict:
         "escalate_to_user": escalate,
         "escalate_reasons": escalate_reasons,
     }
+    result["calibration_features"] = calibration_features(reports, result)
+    return result
 
 
 def main():

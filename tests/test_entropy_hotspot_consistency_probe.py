@@ -9,6 +9,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -166,3 +167,72 @@ def test_main_cli_returns_json():
     assert r.returncode == 0, r.stderr
     rep = json.loads(r.stdout)
     assert rep["probe"] == "entropy_hotspot_consistency"
+
+
+# ============ 🔴 2026-07-02 真模型(surprisal_gpt2) 接入回归 ============
+
+def test_model_metric_used_when_enabled_and_placeholder_flips(monkeypatch):
+    """RUOYU_NN_SURPRISAL=1 且 bridge 全 block 命中 → metric='model'·_placeholder 转 False。"""
+    bak = os.environ.get("ENTROPY_HOTSPOT_PROBE_MODE")
+    try:
+        _set_mode("shadow")
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        # content-aware 假模型：surprisal 与 block 内唯一字符数挂钩(确定性·非常量)
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts, ids=None: [
+                {"mean_surprisal": len(set(t)) * 0.05, "source": "model"} for t in texts
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        proj = _mk_project()
+        text = _make_middle_high_entropy()
+        out = mod.run(_write(text), proj, "cluster_model")
+        assert out["metric"] == "model"
+        assert out["_placeholder"] is False
+        assert len(out["hotspots"]) >= 1
+        for h in out["hotspots"]:
+            assert 0.25 <= h["position"] <= 0.75
+    finally:
+        _set_mode(bak)
+
+
+def test_model_unavailable_keeps_heuristic_unchanged(monkeypatch):
+    """bridge enabled 但返回全 None → 整体回退字符熵·结果与不开模型时完全一致(零回归)。"""
+    bak = os.environ.get("ENTROPY_HOTSPOT_PROBE_MODE")
+    try:
+        _set_mode("shadow")
+        text = _make_middle_high_entropy()
+        baseline = mod.run(_write(text), _mk_project(), "cluster_baseline")
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts, ids=None: [None for _ in texts])
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        out = mod.run(_write(text), _mk_project(), "cluster_fallback")
+        assert out["metric"] == "heuristic"
+        assert out["_placeholder"] is True
+        assert out["mean"] == baseline["mean"]
+        assert out["std"] == baseline["std"]
+        assert out["hotspots"] == baseline["hotspots"]
+    finally:
+        _set_mode(bak)
+
+
+def test_block_metric_values_gate_off_falls_back_to_heuristic():
+    """门控关(默认)·_block_metric_values 直接回退字符熵(不发起模型调用)。"""
+    chunks = ["天" * 200, "天" * 200]
+    values, metric = mod._block_metric_values(chunks)
+    assert metric == "heuristic"
+    assert values == [mod._block_entropy(c) for c in chunks]
+
+
+def test_block_metric_values_partial_none_falls_back(monkeypatch):
+    """bridge 部分命中/部分 None(混合) → 整体回退熵(避免部分 None 破坏 z-score 语义)。"""
+    monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts, ids=None: (
+            [{"mean_surprisal": 5.0, "source": "model"}] + [None] * (len(texts) - 1)))
+    monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+    chunks = ["天" * 200, "地" * 200]
+    values, metric = mod._block_metric_values(chunks)
+    assert metric == "heuristic"
+    assert values == [mod._block_entropy(c) for c in chunks]

@@ -15,6 +15,15 @@
 - 事件簇.json clusters[]（vol 归属 + status + scope_summary）
 - 故事块摘要.json clusters[]（已写 cluster 的摘要，判断「实际写了什么」）
 
+【2026-07-01 语义覆盖率补齐】milestone「是否已触及」默认判据是关键词 2-gram 字面
+重叠——同义改写零容错（如milestone写「夺取王座」，已写内容写「登上帝位」，字面零
+重叠会误判「未触及」→ 假阳性 VOLUME_ARC_DRIFT）。_has_real_embedding_backend() 真
+语义后端就绪时，改用 milestone 文本 vs 已写内容（cluster scope_summary + 账本章
+summary 聚合）embedding 的余弦相似度，≥ 阈值（占位 0.5，待金标准校准，env
+VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 可覆盖）才算「已触及」；embedding 不可用/维度不
+一致/未配后端 → 回退关键词重叠，逐字节零回归。返回值 match_method 字段标注本次
+实际用的是 "embedding_cosine" 还是 "bigram_keyword_overlap"。
+
 CLI: python volume_arc_drift_scanner.py <project> [--last-n N]
 退出码：0=无漂移/数据不足 · 1=advisory 漂移告警（SC-2）
 """
@@ -23,9 +32,66 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
+
+
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+
+    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
+    embedding 的 scanner 自带一份，不互相 import）。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+# 🔬 阈值占位待金标准校准：milestone embedding 与已写内容聚合 embedding 余弦相似度
+# ≥ 此值才视为「已触及」。默认 0.5（无校准数据前的中间值·呼应 emotion_curve_rescan_scanner
+# 的 COSINE_FLOOR=0.55 同数量级）。env VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 可覆盖。
+MILESTONE_SEMANTIC_TOUCH_FLOOR = 0.5
+
+
+def _semantic_touch_floor() -> float:
+    raw = os.environ.get("VOLUME_ARC_SEMANTIC_TOUCH_FLOOR")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return MILESTONE_SEMANTIC_TOUCH_FLOOR
+
+
+def _embed_or_none(text: str):
+    """真语义 embedding；embedding_store 不可用/编码异常/空文本 → None（调用方回退字面 bigram）。"""
+    if not text or not str(text).strip():
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embedding_store import compute_embedding
+        emb = compute_embedding(text)
+        return emb if emb else None
+    except Exception:
+        return None
+
+
+def _cosine_or_none(v1, v2) -> "float | None":
+    """维度不一致/任一为 None → None（调用方回退字面 bigram，不误判)。"""
+    if v1 is None or v2 is None or len(v1) != len(v2):
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embedding_store import cosine_similarity
+        return cosine_similarity(v1, v2)
+    except Exception:
+        return None
 
 
 def _load(p: Path, default=None):
@@ -149,16 +215,35 @@ def scan(project_root: Path) -> dict:
                     written_text += " " + str(rec["summary"])
     written_kw = _kw(written_text)
 
-    # milestone 覆盖率：每个 milestone 与已写内容关键词有重叠即视为「已触及」
+    # 真语义后端就绪 → 已写内容整体只编码一次（milestone 逐条复用比余弦相似度）；
+    # 否则（默认）保留关键词 2-gram 重叠原样不动
+    match_method = "bigram_keyword_overlap"
+    written_embedding = None
+    semantic_floor = None
+    if _has_real_embedding_backend():
+        written_embedding = _embed_or_none(written_text)
+        if written_embedding is not None:
+            match_method = "embedding_cosine"
+            semantic_floor = _semantic_touch_floor()
+
+    # milestone 覆盖率：真语义就绪 → 余弦相似度 ≥ floor 视为「已触及」；
+    # 否则 → 与已写内容关键词有重叠即视为「已触及」（原逻辑不动）
     touched = 0
     untouched = []
     for ms in milestones:
-        ms_text = ms if isinstance(ms, str) else (ms.get("text") or ms.get("milestone") or json.dumps(ms, ensure_ascii=False))
-        ms_kw = _kw(str(ms_text))
-        if ms_kw and (ms_kw & written_kw):
+        ms_text = str(ms if isinstance(ms, str) else (ms.get("text") or ms.get("milestone") or json.dumps(ms, ensure_ascii=False)))
+        is_touched = None
+        if written_embedding is not None:
+            sim = _cosine_or_none(_embed_or_none(ms_text), written_embedding)
+            if sim is not None:
+                is_touched = sim >= semantic_floor
+        if is_touched is None:   # 语义路径不可用（未配后端/该条编码失败/维度不一致）→ 回退字面
+            ms_kw = _kw(ms_text)
+            is_touched = bool(ms_kw and (ms_kw & written_kw))
+        if is_touched:
             touched += 1
         else:
-            untouched.append(str(ms_text)[:40])
+            untouched.append(ms_text[:40])
     coverage = touched / len(milestones) if milestones else 1.0
 
     # 漂移判据（advisory）：卷推进过半（≥50%）但 milestone 覆盖明显落后于推进（coverage < progress - 0.25）
@@ -177,6 +262,7 @@ def scan(project_root: Path) -> dict:
         })
     return {"scanner": "volume_arc_drift", "vol": cur_vol,
             "progress": round(progress, 2), "milestone_coverage": round(coverage, 2),
+            "match_method": match_method,
             "issues": issues}
 
 

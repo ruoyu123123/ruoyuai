@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import chapter_io as cio  # noqa: E402
 import writer_truth_check as wtc  # noqa: E402
+import nn_nli_bridge  # noqa: E402
 
 
 # ═══════════════════════ _extract_anchors ═══════════════════════
@@ -211,3 +212,201 @@ def test_truth_check_cluster_no_trace_is_advisory_not_lie():
         fc = rep["factual_corroboration"]
         assert any(t["fs_id"] == "fs_004" for t in fc["foreshadowing_trace"])
         assert rep["lie_count"] == 0  # advisory 不升级为撒谎
+
+
+# ═══════════════════════ 🔴 2026-07-03 NLI 补充证据（W3-4·_nli_supplement·advisory·零回归） ═══════════════════════
+#
+# 🔴 设计要点（单测揪出的真实 bug·记录防重蹈）：_nli_supplement 的候选段落**不能**用「段落含
+# anchor 子串」预筛——调用方 _corroborate 只在 anchors 于 body 全 0 字面命中时才落 uncertain
+# 分支，此时任何子串预筛必然是空集（子串命中的段落早被 _corroborate 判 True，根本到不了这里）。
+# 现改用字符集合重叠度对全部段落粗排序（不要求子串命中），签名也从 3 参（含 anchors）改 2 参。
+
+def test_nli_supplement_none_when_bridge_disabled():
+    """默认 RUOYU_NN_NLI 关（conftest 每测试前清空）→ None（无候选调用）。"""
+    assert nn_nli_bridge.enabled() is False
+    res = wtc._nli_supplement("李四拿到了钥匙", "张三把钥匙给了李四。")
+    assert res is None
+
+
+def test_nli_supplement_none_when_empty_claim():
+    """声明文本为空 → 提前返回 None（不浪费一次子进程调用）。"""
+    res = wtc._nli_supplement("", "随便什么正文段落。")
+    assert res is None
+
+
+def test_nli_supplement_none_when_empty_body(monkeypatch):
+    """正文无可用段落 → 无候选·None（即便桥启用也不该被调用）。"""
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+
+    def boom(pairs, timeout=None):
+        raise AssertionError("无候选段落时不该调用 predict_batch")
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", boom)
+    res = wtc._nli_supplement("李四拿到了钥匙", "   \n\n  \n")
+    assert res is None
+
+
+def test_nli_supplement_high_confidence_attached(monkeypatch):
+    """桥启用 + mock 高置信 entailment → 返回补充证据 dict（含 evidence_span + source）。"""
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+    calls = []
+
+    def fake_predict_batch(pairs, timeout=None):
+        calls.append(pairs)
+        return [{"label": "entailment",
+                 "probs": {"entailment": 0.82, "neutral": 0.1, "contradiction": 0.08},
+                 "source": "nli"} for _ in pairs]
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", fake_predict_batch)
+
+    body = "张三缓缓走近。\n张三把钥匙给了李四。\n夜色渐渐深了。\n"
+    res = wtc._nli_supplement("李四拿到了钥匙", body)
+    assert res == {"label": "entailment", "entailment_prob": 0.82,
+                   "evidence_span": "张三把钥匙给了李四。", "source": "nli"}
+    assert len(calls) == 1  # 单批调用（候选段落一次性送入）
+
+
+def test_nli_supplement_picks_best_of_multiple_paragraphs(monkeypatch):
+    """多个候选段落 → 取 entailment 置信度最高的那段。"""
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+
+    def fake_predict_batch(pairs, timeout=None):
+        out = []
+        for p in pairs:
+            if "关键" in p["premise"]:
+                out.append({"label": "entailment",
+                            "probs": {"entailment": 0.9, "neutral": 0.05, "contradiction": 0.05},
+                            "source": "nli"})
+            else:
+                out.append({"label": "neutral",
+                            "probs": {"entailment": 0.2, "neutral": 0.7, "contradiction": 0.1},
+                            "source": "nli"})
+        return out
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", fake_predict_batch)
+
+    body = "钥匙掉在了地上。\n这是关键的一段：钥匙最终到了李四手里。\n钥匙生锈了。\n"
+    res = wtc._nli_supplement("李四拿到了钥匙", body)
+    assert res is not None
+    assert "关键" in res["evidence_span"]
+    assert res["entailment_prob"] == 0.9
+
+
+def test_nli_supplement_below_threshold_returns_none(monkeypatch):
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch",
+                        lambda pairs, timeout=None: [
+                            {"label": "entailment",
+                             "probs": {"entailment": 0.4, "neutral": 0.4, "contradiction": 0.2},
+                             "source": "nli"} for _ in pairs])
+    body = "张三把钥匙给了李四。\n"
+    res = wtc._nli_supplement("李四拿到了钥匙", body)
+    assert res is None
+
+
+def test_nli_supplement_bridge_exception_safe(monkeypatch):
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+
+    def boom(pairs, timeout=None):
+        raise RuntimeError("subprocess exploded")
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", boom)
+    body = "张三把钥匙给了李四。\n"
+    res = wtc._nli_supplement("李四拿到了钥匙", body)
+    assert res is None
+
+
+def test_nli_supplement_caps_candidate_paragraphs(monkeypatch):
+    """候选段落数超过 NLI_MAX_PARAGRAPHS → 只送前 N 段（控子进程批量大小）。"""
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+    seen = {}
+
+    def fake_predict_batch(pairs, timeout=None):
+        seen["n"] = len(pairs)
+        return [{"label": "neutral", "probs": {"entailment": 0.1, "neutral": 0.8, "contradiction": 0.1},
+                 "source": "nli"} for _ in pairs]
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", fake_predict_batch)
+
+    body = "\n".join(f"第{i}段提到了钥匙。" for i in range(30))
+    wtc._nli_supplement("李四拿到了钥匙", body)
+    assert seen["n"] == wtc.NLI_MAX_PARAGRAPHS
+
+
+def test_nli_supplement_ranks_by_char_overlap_not_substring():
+    """🔴 回归锁：候选排序用字符集合重叠度，不要求字面子串命中（否则从 _corroborate 的
+    uncertain 分支调用时必然拿到空候选集——见本节前言 bug 记录）。直接验证排序机制本身：
+    高字符重叠段落应排到高字符重叠段落之前（即便都不是 claim 的子串）。"""
+    claim = "李四收下了信物"  # 字符集合 {李,四,收,下,了,信,物}
+    high_overlap = "少女将信物交予李家四子收好。"  # 与 claim 共享 李/四/收/信/物/了 等多字
+    low_overlap = "窗外正下着淅淅沥沥的雨。"       # 与 claim 几乎无字符重叠
+    body = f"{low_overlap}\n{high_overlap}\n"
+    claim_chars = set(claim)
+    assert len(claim_chars & set(high_overlap)) > len(claim_chars & set(low_overlap))
+
+
+# ═══════════════════════ _corroborate：NLI 只在 uncertain 分支生效 · 绝不改写 True/False ═══════════════════════
+
+def test_corroborate_true_branch_never_calls_nli(monkeypatch):
+    """字面命中(True) → 绝不调用 NLI（即便桥启用）。"""
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+
+    def boom(pairs, timeout=None):
+        raise AssertionError("True 分支不该调用 predict_batch")
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", boom)
+
+    body = "李暴躁的护腕咔地碎成两半，掉在地上。"
+    res = wtc._corroborate("主体回收·碎裂护腕从天而降", body)
+    assert res["corroborated"] is True
+    assert "nli_supplement" not in res
+
+
+def test_corroborate_false_branch_never_calls_nli(monkeypatch):
+    """强锚词硬矛盾域(False) → 绝不调用 NLI，不给 NLI 任何「翻盘」机会。"""
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+
+    def boom(pairs, timeout=None):
+        raise AssertionError("False 分支不该调用 predict_batch")
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", boom)
+
+    body = "会议室里一片安静，没人说话，窗外下着雨。"
+    res = wtc._corroborate("青青掏出『玄铁剑胚草籽』裂出金色细缝", body)
+    assert res["corroborated"] is False
+    assert "nli_supplement" not in res
+
+
+def test_corroborate_uncertain_branch_attaches_nli_supplement(monkeypatch):
+    """uncertain 分支 + 桥启用 + 高置信 → 附加 nli_supplement，但 corroborated 值仍是 'uncertain'
+    （NLI 只补证据字段·不升级为 True，敏感核对层字面判断第一权威）。
+
+    claim/body 刻意用完全不同的措辞构造（zero 字面 anchor 命中·真落 uncertain 分支——
+    若字面有任何 2/3 字子串重合，_corroborate 会在到达 NLI 之前就判 True，见前言 bug 记录）。"""
+    monkeypatch.setenv("RUOYU_NN_NLI", "1")
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch",
+                        lambda pairs, timeout=None: [
+                            {"label": "entailment",
+                             "probs": {"entailment": 0.75, "neutral": 0.15, "contradiction": 0.1},
+                             "source": "nli"} for _ in pairs])
+
+    claim = "对方收下了那份心意"
+    body = "少女把手中之物郑重地交给了他，他默默接过，藏入怀中。"
+    # 前置断言：确认这组 claim/body 真的零字面 anchor 命中（否则测试就没测到 uncertain 分支）
+    strong, weak = wtc._extract_anchors(claim)
+    assert strong == []
+    assert not any(a in body for a in weak), "测试夹具需零字面命中才能触达 uncertain 分支"
+
+    res = wtc._corroborate(claim, body)
+    assert res["corroborated"] == "uncertain"  # 🔴 关键：NLI 绝不把 uncertain 升级为 True
+    assert res.get("nli_supplement", {}).get("label") == "entailment"
+
+
+def test_corroborate_uncertain_branch_no_supplement_when_bridge_off():
+    """现有基线用例（bridge 默认关）：uncertain 分支无 nli_supplement 字段·输出与桥引入前完全一致。"""
+    body = "天空很蓝，街道很长。"
+    res = wtc._corroborate("林若昭被派来监督", body)
+    assert res["corroborated"] == "uncertain"
+    assert "nli_supplement" not in res

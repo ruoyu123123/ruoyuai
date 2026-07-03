@@ -10,6 +10,7 @@
 """
 import io
 import json
+import os
 import sys
 import tempfile
 from contextlib import redirect_stdout, redirect_stderr
@@ -222,24 +223,139 @@ def test_retrieve_tfidf_accepts_str_path():
 
 
 # ════════════════════════════════════════════════════════════════════
-# [E] retrieve_embedding：无 OPENAI_API_KEY → 降级 TF-IDF
+# [E] retrieve_embedding：门控 = _has_real_embedding_backend()（2026-07-02 接线 embedding_store
+#     取代此前误导性的 OPENAI_API_KEY/openai 包检测——那条检测路径从未真正调用过 OpenAI）
 # ════════════════════════════════════════════════════════════════════
-def test_retrieve_embedding_falls_back_to_tfidf_without_key():
-    import os
+def _clear_embed_env(monkeypatch):
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    for k in [k for k in os.environ if k.startswith("GEN_EMBED__")]:
+        monkeypatch.delenv(k, raising=False)
+
+
+def _char_freq_embedding(text: str, dim: int = 64) -> list:
+    """确定性、内容感知的假 embedding（字符频率向量）——同 test_topic_drift_scanner 手法。"""
+    import math as _math
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = _math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+class TestHasRealEmbeddingBackend:
+    """_has_real_embedding_backend 门控判断（跟 topic_drift_scanner 同款逻辑）。"""
+
+    def test_no_env_returns_false(self, monkeypatch):
+        _clear_embed_env(monkeypatch)
+        assert rr._has_real_embedding_backend() is False
+
+    def test_hash_returns_false(self, monkeypatch):
+        monkeypatch.setenv("EMBED_BACKEND", "hash")
+        assert rr._has_real_embedding_backend() is False
+
+    def test_real_backend_name_returns_true(self, monkeypatch):
+        monkeypatch.setenv("EMBED_BACKEND", "mstyle")
+        assert rr._has_real_embedding_backend() is True
+
+    def test_gen_embed_env_returns_true(self, monkeypatch):
+        monkeypatch.delenv("EMBED_BACKEND", raising=False)
+        monkeypatch.setenv("GEN_EMBED__test__API_KEY", "fake")
+        assert rr._has_real_embedding_backend() is True
+
+
+def test_retrieve_embedding_falls_back_to_tfidf_without_real_backend(monkeypatch):
+    """无真 embedding 后端（默认环境）→ 降级 TF-IDF，结果与 TF-IDF 一致。"""
+    _clear_embed_env(monkeypatch)
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _write_chapter(root, 1, "剑光剑意剑冢")
         _write_progress_blueprint(root, {"cluster_001": [{"ch": 3, "summary": "剑光剑意"}]})
-        old = os.environ.pop("OPENAI_API_KEY", None)
-        try:
-            # 吞掉 [INFO] 降级提示（写在 stderr）
-            with redirect_stderr(io.StringIO()):
-                res = rr.retrieve_embedding(root, current_ch=3, top_k=2, use_mmr=False)
-        finally:
-            if old is not None:
-                os.environ["OPENAI_API_KEY"] = old
+        # 吞掉 [INFO] 降级提示（写在 stderr）
+        with redirect_stderr(io.StringIO()):
+            res = rr.retrieve_embedding(root, current_ch=3, top_k=2, use_mmr=False)
         # 降级路径返回与 TF-IDF 同样的结果（chapter=1）
         assert res and res[0]["chapter"] == 1
+
+
+def test_retrieve_embedding_gate_off_never_calls_compute_embedding(monkeypatch):
+    """零回归证明：门控关（默认环境）时 retrieve_embedding 绝不调用 compute_embedding，
+    且输出与「retrieve_tfidf + fallback 标签」逐字节一致。"""
+    _clear_embed_env(monkeypatch)
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write_chapter(root, 1, "剑光剑意剑冢淬炼")
+        _write_chapter(root, 2, "厨房里炖着汤水柴米油盐")
+        _write_progress_blueprint(root, {"cluster_001": [{"ch": 3, "summary": "剑光剑意剑冢"}]})
+
+        import embedding_store
+        calls = {"n": 0}
+
+        def _counting_embed(text):
+            calls["n"] += 1
+            return [0.0]
+
+        monkeypatch.setattr(embedding_store, "compute_embedding", _counting_embed)
+        with redirect_stderr(io.StringIO()):
+            res_embed = rr.retrieve_embedding(root, current_ch=3, top_k=2, use_mmr=False)
+        assert calls["n"] == 0, "无真后端时 retrieve_embedding 不应调用 compute_embedding"
+
+        res_tfidf = rr.retrieve_tfidf(root, current_ch=3, top_k=2, use_mmr=False)
+        expected = [dict(r, mode="tfidf_fallback (embedding not implemented yet)") for r in res_tfidf]
+        assert res_embed == expected
+
+
+def test_retrieve_embedding_real_backend_uses_semantic_path(monkeypatch):
+    """真后端命中：EMBED_BACKEND 配置 + compute_embedding 内容感知假向量 → 语义路径生效
+    （不是 TF-IDF 降级），且能正确检出语义相关章节。"""
+    monkeypatch.setenv("EMBED_BACKEND", "fake-real")
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write_chapter(root, 1, "剑修在剑冢里淬炼剑心剑意剑光浩荡当空")
+        _write_chapter(root, 2, "厨房里炖着汤水柴米油盐生活气息温暖惬意")
+        _write_progress_blueprint(root, {
+            "cluster_001": [{"ch": 3, "summary": "剑修剑光剑意大战剑冢"}],
+        })
+
+        import embedding_store
+        calls = {"n": 0}
+
+        def _counting_char_freq(text):
+            calls["n"] += 1
+            return _char_freq_embedding(text)
+
+        monkeypatch.setattr(embedding_store, "compute_embedding", _counting_char_freq)
+        with redirect_stderr(io.StringIO()):
+            res = rr.retrieve_embedding(root, current_ch=3, top_k=2, use_mmr=False)
+
+        assert calls["n"] > 0, "真后端应真调用 compute_embedding"
+        assert res, "应至少检出 1 章"
+        assert res[0]["chapter"] == 1          # 剑主题章语义最相关
+        assert res[0]["mode"] == "embedding"   # 走的是语义路径而非 tfidf_fallback
+        assert set(res[0].keys()) >= {"chapter", "score", "snippet", "mode"}
+
+
+def test_retrieve_embedding_dimension_mismatch_falls_back(monkeypatch):
+    """embedding 维度不一致（模拟部分条目降级 hash）→ 不冒充语义，退 TF-IDF。"""
+    monkeypatch.setenv("EMBED_BACKEND", "fake-real")
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write_chapter(root, 1, "剑光剑意剑冢淬炼")
+        _write_progress_blueprint(root, {"cluster_001": [{"ch": 3, "summary": "剑光剑意"}]})
+
+        import embedding_store
+
+        def _mixed_dim(text):
+            if "剑光剑意" in text and "淬炼" not in text:  # query 命中，维度故意不同
+                return [0.1] * 8
+            return _char_freq_embedding(text, dim=64)
+
+        monkeypatch.setattr(embedding_store, "compute_embedding", _mixed_dim)
+        with redirect_stderr(io.StringIO()):
+            res = rr.retrieve_embedding(root, current_ch=3, top_k=2, use_mmr=False)
+        # 维度混用 → 降级 TF-IDF fallback（标签可辨识，不是语义 mode）
+        assert all(r.get("mode") != "embedding" for r in res)
 
 
 # ════════════════════════════════════════════════════════════════════

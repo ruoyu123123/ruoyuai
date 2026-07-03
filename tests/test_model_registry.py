@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "ml" / "registry"))
-from model_registry import ModelRegistry, enabled, VALID_STATUSES
+from model_registry import ModelRegistry, enabled, VALID_STATUSES, sync_runtime_models
 
 
 @pytest.fixture
@@ -150,3 +150,21 @@ def test_persistence_across_instances(tmp_path):
     active = r2.get_active("m")
     assert active is not None
     assert active["metrics"]["x"] == 1
+
+
+def test_sync_runtime_models_respects_gate(monkeypatch, tmp_path):
+    monkeypatch.delenv("RUOYU_MODEL_REGISTRY", raising=False)
+    assert sync_runtime_models(tmp_path / "registry.json")["skipped"] is True
+
+
+def test_sync_runtime_models_registers_available_models(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUOYU_MODEL_REGISTRY", "1")
+    out = sync_runtime_models(tmp_path / "registry.json")
+    assert out["count"] >= 1
+    models = ModelRegistry(tmp_path / "registry.json").list_models()
+    assert "surprisal_gpt2" in models
+    assert models["surprisal_gpt2"]["active"] == "uer-gpt2-chinese-cluecorpussmall"
+    if "emotion_vad" in models:
+        assert models["emotion_vad"]["active"] == "v1"
+    if "coherence_binary" in models:
+        assert models["coherence_binary"]["shadow"] == "v1"

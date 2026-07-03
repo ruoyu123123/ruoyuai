@@ -6,16 +6,24 @@
 【缺口】题材融合(多 pack)时 LLM 经常把副 pack 标记密度顶过主 pack，或主 pack 标记
 "挨饿"(starved)·或两 pack 标记分布过平(Gini<0.15)看不出主副。
 
-【做法 · 词袋密度·零 LLM】
+【做法 · 词袋密度（默认）· 真语义 embedding（可选）】
   1. 读 author_genre_packs(作者档 author_profile.author_genre_packs · 或 manifest.genre)
   2. 多 pack 时读 fusion_declaration(_数据库/fusion_declaration.json) 主副比 dominance_ratio
      默认 0.6/0.4
   3. 加载各 pack 的 marker_lexicon.json(30-80 token 判别词袋)
-  4. 按场景(段落空行切)计算每 pack token-density
+  4. 按场景(段落空行切)计算每 pack 归属度：
+     · 默认 = marker token-density（词袋计数 / 每千字）
+     · 🔴 2026-07-01 EMBED_BACKEND 配置真后端时 = 场景文本 embedding 与该 pack「原型描述文本」
+       (由 marker_lexicon 词袋拼接而成) 的余弦相似度（clamp 到 [0,1]）· 逐 scene/pack 兜底：
+       原型/场景 embedding 缺失或维度不一致 → 单独退回词袋计数（不影响其他 scene/pack）
   5. 三 advisory:
      GENRE_DOMINANCE_INVERSION（副 pack 在 ≥2 scene 反超主 pack）
      GENRE_PRIMARY_STARVED（主 pack 总占比 < 0.15）
      GENRE_BLEND_FLAT（Gini 系数 < 0.15·分布过平）
+
+【依赖】embedding_store.compute_embedding() + cosine_similarity()（同 topic_drift_scanner 模式）。
+  EMBED_BACKEND 未设（默认 hash·无真语义）→ 完全走词袋密度·输出 match_method="lexicon"。
+  配置真后端（mstyle/local/ruoyu_style/api）→ match_method="semantic"。
 
 【北极星】② 作者档第一权威·shadow 默认·绝不 hard_gate
 """
@@ -95,6 +103,26 @@ def _load_marker_lexicon(pack: str) -> list:
     return []
 
 
+# ── 🔴 2026-07-01 真语义 embedding 可选路径（完全照抄 topic_drift_scanner 已验证的模式）───────
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+    跟 topic_drift_scanner._has_real_embedding_backend 判断逻辑完全一致（各文件各自留一份）。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+def _pack_prototype_text(pack: str) -> str:
+    """题材包"原型描述文本"：marker_lexicon 无独立 description 字段·由判别词袋拼接代替。"""
+    markers = _load_marker_lexicon(pack)
+    return "、".join(markers)
+
+
 def _scene_density(scene: str, markers: list) -> float:
     if not scene.strip() or not markers:
         return 0.0
@@ -150,15 +178,50 @@ def scan(draft_path, project_root=None) -> dict:
         out["note"] = "场景数 <2·跳过"
         return out
 
-    # 每 scene 算每 pack token-density
+    # 🔴 2026-07-01 真语义后端可用时：场景 embedding vs pack 原型描述文本余弦相似度替代词袋计数
+    use_semantic = False
+    compute_embedding = cosine_similarity = None
+    if _has_real_embedding_backend():
+        try:
+            from embedding_store import compute_embedding, cosine_similarity
+            use_semantic = True
+        except (ImportError, TypeError):
+            use_semantic = False
+    out["match_method"] = "semantic" if use_semantic else "lexicon"
+
+    proto_cache: dict = {}
+
+    def _proto_embedding(pack: str):
+        if pack not in proto_cache:
+            proto_text = _pack_prototype_text(pack)
+            try:
+                proto_cache[pack] = compute_embedding(proto_text) if proto_text else None
+            except Exception:
+                proto_cache[pack] = None
+        return proto_cache[pack]
+
+    # 每 scene 算每 pack 归属度（语义可用优先·单点失败退回词袋·不影响其他 scene/pack）
     per_pack_total = {p: 0.0 for p in packs}
     per_scene = []
     inversion_count = 0
     for sc in scenes:
         ds = {}
+        scene_emb = None
+        if use_semantic:
+            try:
+                scene_emb = compute_embedding(sc)
+            except Exception:
+                scene_emb = None
         for p in packs:
-            markers = _load_marker_lexicon(p)
-            ds[p] = _scene_density(sc, markers)
+            val = None
+            if use_semantic and scene_emb:
+                proto_emb = _proto_embedding(p)
+                if proto_emb and len(scene_emb) == len(proto_emb):
+                    val = round(max(0.0, cosine_similarity(scene_emb, proto_emb)), 4)
+            if val is None:
+                markers = _load_marker_lexicon(p)
+                val = _scene_density(sc, markers)
+            ds[p] = val
             per_pack_total[p] += ds[p]
         if primary in ds:
             primary_d = ds[primary]
@@ -193,6 +256,7 @@ def scan(draft_path, project_root=None) -> dict:
                 out["violations"].append({
                     "kind": "genre_dominance", "severity": "minor",
                     "code": f["code"], "message": f["msg"],
+                    "match_method": out["match_method"],
                     "_doc": "题材主副比·advisory·绝不 hard_gate",
                 })
             out["verdict"] = "FAIL_MINOR"

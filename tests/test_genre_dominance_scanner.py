@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
-"""genre_dominance_scanner R11 W6 MODEST 回归(确定性·零依赖)"""
+"""genre_dominance_scanner R11 W6 MODEST 回归(确定性·零依赖)
+
+2026-07-01 追加：真语义 embedding 可选路径回归(mock 后端·完全照抄 topic_drift_scanner
+测试手法)——钉死 (a) 无真后端时 match_method="lexicon"(零回归) (b) mock 真后端时
+match_method="semantic" 且语义路径被正确使用。
+"""
 import json
+import math
 import os
 import sys
 import tempfile
@@ -174,3 +180,166 @@ def test_mode_invalid():
         assert mod._mode() == "shadow"
     finally:
         _set_mode(bak)
+
+
+# ── 🔴 2026-07-01 真语义 embedding 可选路径（完全照抄 topic_drift_scanner 测试手法）──────
+
+def _char_freq_embedding(text: str, dim: int = 32) -> list:
+    """确定性 mock embedding（字符频率向量·同 test_topic_drift_scanner 手法）。"""
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _run_with_mock_embedding(fn, *args, **kwargs):
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _char_freq_embedding
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_has_real_embedding_backend_false_by_default():
+    bak = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_has_real_embedding_backend_true_with_mstyle():
+    bak = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "mstyle"
+        assert mod._has_real_embedding_backend() is True
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_pack_prototype_text_from_lexicon():
+    text = mod._pack_prototype_text("xianxia")
+    assert text  # xianxia lexicon 非空 → 原型文本非空
+    assert "、" in text
+
+
+def test_pack_prototype_text_missing_pack_empty():
+    assert mod._pack_prototype_text("bogus_pack_not_exist") == ""
+
+
+def test_default_match_method_is_lexicon():
+    """无真后端(默认) → match_method="lexicon"（零回归基线）。"""
+    bak = os.environ.get("GENRE_DOMINANCE_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project(["xianxia", "romance"], primary="xianxia")
+        out = mod.scan(_write(_INVERSION_DRAFT), proj)
+        assert out["match_method"] == "lexicon"
+        for f in out["violations"]:
+            assert f["match_method"] == "lexicon"
+    finally:
+        _set_mode(bak)
+
+
+def test_semantic_match_method_when_backend_available():
+    """真后端(mock)可用 → match_method="semantic"·per_scene_density 用余弦相似度(clamp [0,1])。"""
+    bak = os.environ.get("GENRE_DOMINANCE_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project(["xianxia", "romance"], primary="xianxia")
+        out = _run_with_mock_embedding(mod.scan, _write(_INVERSION_DRAFT), proj)
+        assert out["match_method"] == "semantic"
+        for ds in out["per_scene_density"]:
+            for v in ds.values():
+                assert 0.0 <= v <= 1.0
+    finally:
+        _set_mode(bak)
+
+
+def test_semantic_violations_carry_match_method():
+    """active 模式下 violations 携带 match_method 字段(语义/字面来源可追溯)。"""
+    bak = os.environ.get("GENRE_DOMINANCE_MODE")
+    try:
+        _set_mode("active")
+        proj = _mk_project(["xianxia", "romance"], primary="xianxia")
+        out = _run_with_mock_embedding(mod.scan, _write(_STARVED_DRAFT), proj)
+        for v in out["violations"]:
+            assert v["match_method"] == "semantic"
+    finally:
+        _set_mode(bak)
+
+
+def test_semantic_import_error_falls_back_to_lexicon():
+    """embedding_store 不可导入(mock ImportError) → 全程退回词袋·match_method="lexicon"。"""
+    bak = os.environ.get("GENRE_DOMINANCE_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    saved = sys.modules.get("embedding_store")
+    try:
+        _set_mode("active")
+        os.environ["EMBED_BACKEND"] = "mock"
+        sys.modules["embedding_store"] = None  # type: ignore[assignment]
+        proj = _mk_project(["xianxia", "romance"], primary="xianxia")
+        out = mod.scan(_write(_INVERSION_DRAFT), proj)
+        assert out["match_method"] == "lexicon"
+    finally:
+        if saved is not None:
+            sys.modules["embedding_store"] = saved
+        else:
+            sys.modules.pop("embedding_store", None)
+        _set_mode(bak)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_semantic_dimension_mismatch_falls_back_per_scene():
+    """场景 embedding 维度与原型不一致 → 该 scene/pack 单独退回词袋(不影响其他)·不崩。"""
+    def _mixed(text, dim=32):
+        if "MISMATCH" in text:
+            return [0.1] * 8
+        return _char_freq_embedding(text, dim)
+    bak = os.environ.get("GENRE_DOMINANCE_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _mixed
+    try:
+        _set_mode("active")
+        proj = _mk_project(["xianxia", "romance"], primary="xianxia")
+        draft = ("\n\n".join([
+            "MISMATCH 这段会触发维度不一致" * 40,
+            "她心跳加速脸红耳根怀里温柔暖意环绕气息相贴" * 40,
+        ]) + "\n")
+        out = mod.scan(_write(draft), proj)
+        # 不崩·仍产出合法结构
+        assert "per_scene_density" in out
+        assert len(out["per_scene_density"]) == 2
+    finally:
+        embedding_store.compute_embedding = orig
+        _set_mode(bak)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)

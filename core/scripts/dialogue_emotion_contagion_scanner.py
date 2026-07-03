@@ -24,6 +24,13 @@ LLM 写双人对话时常出现两类异常：
      - 阶段缺位 ≥ 2 → CONTAGION_GOTTMAN_INCOMPLETE
      - 顺序颠倒(后阶段先出现) → CONTAGION_GOTTMAN_REVERSED
 
+【VAD 打分 · 🔴 2026-07-01 NN情绪VAD集成】_score_vad 词典查表签名/返回结构不变；新增
+  _nn_batch_vad 批量优先走 emotion_vad 模型(RoBERTa 微调·held-out meanCCC 0.80·env
+  RUOYU_NN_VAD=1 门控)：优先 FeatureStore 缓存 → 不行直连 nn_vad_bridge → 都不行/未启用
+  回退占位词典(逐条零回归)。全稿去重 utterance 一次性批量调用摊薄模型加载开销。
+  sync_results / compute_dialogue_contagion_signature 输出带 vad_source
+  (model_vad|mixed|lexicon_fallback) 供后续训练数据归因。
+
 【consolidate 加 dialogue_contagion_signature】
   compute_dialogue_contagion_signature() 给 consolidate SLOW_UPDATE 段·按作者
   原文统计 sync_window_baseline(p20/p80) + gottman_cascade_freq。
@@ -149,6 +156,43 @@ def _score_vad(text):
     return (_mean(vs), _mean(as_), _mean(ds) if ds else 0.5)
 
 
+# 🔴 2026-07-01 NN情绪VAD集成 — 批量模型打分(优先 FeatureStore 缓存→直连 nn_vad_bridge→
+# 都不行/未启用返回全 None)。无状态·一次性整批调用摊薄模型加载开销·调用方逐条回退 _score_vad。
+def _nn_batch_vad(texts: list) -> list:
+    """批量算 texts 对应的 (V, A, D)；env RUOYU_NN_VAD!=1 或模型不可用 → 全 None(保序对应)。"""
+    n = len(texts)
+    if os.environ.get("RUOYU_NN_VAD") != "1" or n == 0:
+        return [None] * n
+    preds = None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        try:
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(texts) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(texts)
+    except Exception:
+        return [None] * n
+    if not preds or len(preds) != n:
+        return [None] * n
+    out = []
+    for p in preds:
+        if p and p.get("valence") is not None:
+            try:
+                v = float(p["valence"])
+                a = float(p["arousal"]) if p.get("arousal") is not None else 0.5
+                d = float(p["dominance"]) if p.get("dominance") is not None else 0.5
+                out.append((v, a, d))
+            except (TypeError, ValueError):
+                out.append(None)
+        else:
+            out.append(None)
+    return out
+
+
 # ============ 引语切片(复用 quote_attributor 占位) ============
 
 def _split_utterances(text, names=None):
@@ -271,17 +315,28 @@ def _load_characters(project_root):
 
 def compute_dialogue_contagion_signature(draft_paths, names=None) -> dict:
     """consolidate 入口·汇总作者级 sync_window_baseline + gottman_cascade_freq。"""
-    sync_scores = []
-    cascade_complete = 0
-    cascade_total = 0
+    scenes_per_file = []
     for fp in draft_paths or []:
         try:
             text = Path(fp).read_text(encoding="utf-8")
         except OSError:
             continue
-        text = _strip_changes(text)
-        for sc in _split_scenes(text):
-            uts = _split_utterances(sc, names)
+        scenes_per_file.append(_split_scenes(_strip_changes(text)))
+    uts_per_file = [[_split_utterances(sc, names) for sc in scenes] for scenes in scenes_per_file]
+
+    # 🔴 2026-07-01 NN VAD 模型优先：全部文件去重 utterance 一次性批量打分
+    # (env 门控·未启用/失败→空结果·逐条自动回退 _score_vad 词典·零回归)
+    uniq_texts = list(dict.fromkeys(
+        ut for file_uts in uts_per_file for uts in file_uts for _, ut in uts if ut))
+    model_vad_map = dict(zip(uniq_texts, _nn_batch_vad(uniq_texts)))
+
+    sync_scores = []
+    cascade_complete = 0
+    cascade_total = 0
+    model_hits_total = 0
+    scored_total = 0
+    for scenes, file_uts in zip(scenes_per_file, uts_per_file):
+        for sc, uts in zip(scenes, file_uts):
             if not uts:
                 continue
             counts = {}
@@ -297,9 +352,13 @@ def compute_dialogue_contagion_signature(draft_paths, names=None) -> dict:
             n1, n2 = top2[0][0], top2[1][0]
             xs, ys = [], []
             for sp, ut in uts:
-                v = _score_vad(ut)
+                mv = model_vad_map.get(ut)
+                v = mv if mv is not None else _score_vad(ut)
                 if v is None:
                     continue
+                scored_total += 1
+                if mv is not None:
+                    model_hits_total += 1
                 if sp == n1:
                     xs.append(v[0])
                 elif sp == n2:
@@ -333,6 +392,8 @@ def compute_dialogue_contagion_signature(draft_paths, names=None) -> dict:
             cascade_complete / cascade_total if cascade_total else None
         ),
         "gottman_cascade_n": cascade_total,
+        "vad_source": ("model_vad" if scored_total and model_hits_total == scored_total
+                       else "mixed" if model_hits_total else "lexicon_fallback"),
     }
 
 
@@ -394,8 +455,12 @@ def scan(draft_path, project_root=None, style_path=None) -> dict:
     findings = []
     sync_results = []
     cascade_results = []
-    for idx, sc in enumerate(scenes):
-        uts = _split_utterances(sc, names)
+    scene_uts = [_split_utterances(sc, names) for sc in scenes]
+    # 🔴 2026-07-01 NN VAD 模型优先：全稿去重 utterance 一次性批量打分
+    # (env 门控·未启用/失败→空结果·逐条自动回退 _score_vad 词典·零回归)
+    uniq_texts = list(dict.fromkeys(ut for uts in scene_uts for _, ut in uts if ut))
+    model_vad_map = dict(zip(uniq_texts, _nn_batch_vad(uniq_texts)))
+    for idx, (sc, uts) in enumerate(zip(scenes, scene_uts)):
         if not uts:
             continue
         counts = {}
@@ -410,19 +475,27 @@ def scan(draft_path, project_root=None, style_path=None) -> dict:
             continue
         n1, n2 = top2[0][0], top2[1][0]
         xs, ys = [], []
+        model_hits, scored_total = 0, 0
         for sp, ut in uts:
-            v = _score_vad(ut)
+            mv = model_vad_map.get(ut)
+            v = mv if mv is not None else _score_vad(ut)
             if v is None:
                 continue
+            scored_total += 1
+            if mv is not None:
+                model_hits += 1
             if sp == n1:
                 xs.append(v[0])
             elif sp == n2:
                 ys.append(v[0])
+        vad_source = ("model_vad" if scored_total and model_hits == scored_total
+                      else "mixed" if model_hits else "lexicon_fallback")
         if len(xs) >= 3 and len(ys) >= 3:
             r = _max_lagged_corr(xs, ys)
             if r is not None:
                 ar = abs(r)
-                sync_results.append({"scene": idx, "n1": n1, "n2": n2, "max_abs_r": round(ar, 3)})
+                sync_results.append({"scene": idx, "n1": n1, "n2": n2, "max_abs_r": round(ar, 3),
+                                     "vad_source": vad_source})
                 if ar < sync_window_lo:
                     findings.append({"scene": idx, "kind": "sync_too_loose",
                                      "max_abs_r": round(ar, 3),
@@ -454,6 +527,11 @@ def scan(draft_path, project_root=None, style_path=None) -> dict:
         "sync_evaluated_scenes": len(sync_results),
         "conflict_scenes": len(cascade_results),
         "sync_window": [round(sync_window_lo, 3), round(sync_window_hi, 3)],
+        # 🔴 2026-07-01 训练数据归因：本次 sync_results 各来源计数(model_vad/mixed/lexicon_fallback)
+        "vad_source_summary": {
+            src: sum(1 for r in sync_results if r.get("vad_source") == src)
+            for src in ("model_vad", "mixed", "lexicon_fallback")
+        },
     }
     out["sync_results"] = sync_results[:8]
     out["cascade_results"] = cascade_results[:8]

@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 from datetime import datetime
@@ -56,35 +57,77 @@ def estimate_intensity_from_label(label: str) -> float:
     return 0.4
 
 
+def _model_arc_progress_scores(arc_progress: str) -> "tuple[float, float] | None":
+    """VAD 模型给 arc_progress 原文打分，拆成 actor(偏正向决断)/experiencer(偏负向承受)
+    两路强度——两路都从同一 (valence, arousal) 派生但方向相反，避免同源导致 corr=1.0：
+    actor = arousal 中正向 valence 的部分（完成/突破/接受类决断动作多中性偏正）；
+    experiencer = arousal 中负向 valence 的部分（崩溃/恐惧/绝望类事件多负面高唤醒）。
+    模型不可用/未命中 → None，调用方回退关键词词典。
+    """
+    if not arc_progress or os.environ.get("RUOYU_NN_VAD") != "1":
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch([arc_progress]) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch([arc_progress])
+    except Exception:
+        return None
+    if not preds or not preds[0]:
+        return None
+    p = preds[0]
+    valence, arousal = p.get("valence"), p.get("arousal")
+    if valence is None or arousal is None:
+        return None
+    try:
+        valence, arousal = float(valence), float(arousal)
+    except (TypeError, ValueError):
+        return None
+    actor_score = max(0.0, min(1.0, arousal * valence))
+    experiencer_score = max(0.0, min(1.0, arousal * (1.0 - valence)))
+    return actor_score, experiencer_score
+
+
 def estimate_from_arc_progress(arc_progress: str, chapter: int = 0) -> tuple[float, float]:
     """fallback：从 character_continuity.arc_progress 字符串估算 actor/experiencer 强度。
 
-    v22.cluster 改进：actor 强调主动动作类关键词，experiencer 强调承受感受类关键词，
-    各自独立估算 → 避免 corr=1.0 假相关。
+    VAD 模型优先（RUOYU_NN_VAD=1）：直接用 arc_progress 原文的 valence/arousal 拆两路；
+    模型不可用 → 回退关键词词典（v22.cluster 改进：actor 强调主动动作类关键词，experiencer
+    强调承受感受类关键词，各自独立估算 → 避免 corr=1.0 假相关）。
     """
     if not arc_progress:
         return 0.3, 0.3
 
-    actor_keywords_high = ["完成", "突破", "决战", "决定", "出击", "击杀", "压制", "宣告", "拒绝", "接受"]
-    actor_keywords_mid = ["推进", "执行", "调查", "学习", "招募", "汇报", "下令", "选择"]
-    experiencer_keywords_high = ["崩溃", "震惊", "恐惧", "绝望", "崩裂", "致命", "重伤", "目睹"]
-    experiencer_keywords_mid = ["承受", "感受", "经历", "面临", "察觉", "适应", "陷入", "迷茫"]
+    model_scores = _model_arc_progress_scores(arc_progress)
+    if model_scores is not None:
+        actor_score, experiencer_score = model_scores
+    else:
+        actor_keywords_high = ["完成", "突破", "决战", "决定", "出击", "击杀", "压制", "宣告", "拒绝", "接受"]
+        actor_keywords_mid = ["推进", "执行", "调查", "学习", "招募", "汇报", "下令", "选择"]
+        experiencer_keywords_high = ["崩溃", "震惊", "恐惧", "绝望", "崩裂", "致命", "重伤", "目睹"]
+        experiencer_keywords_mid = ["承受", "感受", "经历", "面临", "察觉", "适应", "陷入", "迷茫"]
 
-    actor_score = 0.3
-    for kw in actor_keywords_high:
-        if kw in arc_progress:
-            actor_score = max(actor_score, 0.75)
-    for kw in actor_keywords_mid:
-        if kw in arc_progress:
-            actor_score = max(actor_score, 0.55)
+        actor_score = 0.3
+        for kw in actor_keywords_high:
+            if kw in arc_progress:
+                actor_score = max(actor_score, 0.75)
+        for kw in actor_keywords_mid:
+            if kw in arc_progress:
+                actor_score = max(actor_score, 0.55)
 
-    experiencer_score = 0.25
-    for kw in experiencer_keywords_high:
-        if kw in arc_progress:
-            experiencer_score = max(experiencer_score, 0.8)
-    for kw in experiencer_keywords_mid:
-        if kw in arc_progress:
-            experiencer_score = max(experiencer_score, 0.5)
+        experiencer_score = 0.25
+        for kw in experiencer_keywords_high:
+            if kw in arc_progress:
+                experiencer_score = max(experiencer_score, 0.8)
+        for kw in experiencer_keywords_mid:
+            if kw in arc_progress:
+                experiencer_score = max(experiencer_score, 0.5)
 
     # 用 chapter 号做轻微抖动（避免完全恒定）—— actor / experiencer 各自不同方向
     if chapter > 0:

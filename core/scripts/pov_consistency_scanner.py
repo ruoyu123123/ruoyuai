@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# 🔴 2026-07 指代消解（零指代/代词承前分支）接入 nn_coref_bridge
 """pov_consistency_scanner.py — POV 跨场景切换合法性检测
 
 v2 cluster 化方案 Phase 3（2026-05-28）·
@@ -9,6 +10,12 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
   · 跨场景 POV 切换 → 必须在场景边界（\n---\n）
 
 输出 issue code: POV_CROSS_SCENE_VIOLATION (advisory)
+
+【NN 共指桥集成】detect_pov_signal_holders 在「无显式主语」分支（零指代/代词承前）
+优先问 nn_coref_bridge.resolve_coreferences()：有解析结果 → 取 span 结束位置最靠近
+POV 动词的一条 resolved_to 作为归因目标；桥无结果（RUOYU_NN_COREF 门控关闭默认状态）
+→ 100% 回退本文件原有 _last_explicit_subject_before 正则 + 宾语位启发式逻辑。
+显式主语（is_explicit=True，含宾语位排除）判定不受影响。
 
 用法：python pov_consistency_scanner.py <project> <cluster_draft_path>
 """
@@ -112,8 +119,45 @@ def _last_explicit_subject_before(text: str, pos: int, names_sorted: list[str]) 
     return best_name
 
 
+def _resolve_coref(text: str, known: list[str]) -> list[dict]:
+    """调用 nn_coref_bridge 解析 text 中的代词/非命名指代 → 具体角色。
+
+    RUOYU_NN_COREF 门控关闭（默认）/ 无结果 / 任何异常 → 返回 []，
+    上层 detect_pov_signal_holders 100% 回退现有正则 + 宾语位启发式逻辑。
+    """
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        from nn_coref_bridge import resolve_coreferences
+        return resolve_coreferences(text, known) or []
+    except Exception as e:  # noqa: BLE001 — 桥失败绝不影响本 scanner 主流程
+        print(f"[pov_consistency_scanner] 共指消解失败·回退正则："
+              f"{type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
+        return []
+
+
+def _nearest_coref_target_before(coref_results: list[dict], pos: int) -> str | None:
+    """coref_results 中 span 结束位置 <= pos 且最靠近 pos 的一条 resolved_to。
+
+    用于零指代 / 代词承前场景：让 nn_coref_bridge 的消解结果优先于
+    _last_explicit_subject_before 的正则回退（同类问题，桥通常更准）。
+    """
+    best_name, best_end = None, -1
+    for r in coref_results:
+        span = r.get("span")
+        resolved = r.get("resolved_to")
+        if not span or not resolved:
+            continue
+        end = span[1]
+        if end <= pos and end > best_end:
+            best_end, best_name = end, resolved
+    return best_name
+
+
 def detect_pov_signal_holders(text: str, character_names: set[str],
-                              protagonist: str | None = None) -> dict[str, int]:
+                              protagonist: str | None = None,
+                              coref_stats: dict | None = None) -> dict[str, int]:
     """统计每个角色 POV 信号词出现次数。
 
     v2 归因改进（2026-05-30 修 #7 POV 归因缺陷）：
@@ -121,11 +165,19 @@ def detect_pov_signal_holders(text: str, character_names: set[str],
       · 零指代 / 代词承前 → 归段落已确立的主导视角（最近显式主语，默认主角）；
       · 主角在场且 POV 动词无显式他人主语 → 倾向归主角。
     保守原则：宁可少报（归主导/主角）也不错报方向（错归宾语配角）。
+
+    2026-07 NN 共指桥集成：零指代/代词承前分支优先问 nn_coref_bridge，
+    有解析结果才用（门控关闭默认返回 [] → 逐字节回退原有正则逻辑）。
+    coref_stats（可选，调用方传入 dict）：命中桥解析时 "resolved_count" 计数 +1，
+    仅用于上层 scan() 汇总 source 诊断字段，不影响归因结果本身。
     """
     counts = {n: 0 for n in character_names}
     # 角色名按长度降序匹配（先匹配长别名，避免「林」抢「林尘」），并定序保证确定性
     names_sorted = sorted([n for n in character_names if n], key=lambda n: (-len(n), n))
     protag_in_text = bool(protagonist) and protagonist in text
+
+    # 🔴 NN共指桥（优先）：门控关闭时返回 []·完全回退下面现有正则+宾语位启发式逻辑
+    coref_results = _resolve_coref(text, names_sorted)
 
     for m in POV_VERBS.finditer(text):
         start = max(0, m.start() - 30)
@@ -136,8 +188,14 @@ def detect_pov_signal_holders(text: str, character_names: set[str],
             counts[name] = counts.get(name, 0) + 1
         else:
             # 零指代 / 代词承前 / 仅宾语位名：
-            #   先按代词承前找全文最近显式主语；找不到再退主角（主角在场时）。
-            target = _last_explicit_subject_before(text, m.start(), names_sorted)
+            #   先问 nn_coref_bridge（有结果才用）；否则按代词承前找全文最近显式
+            #   主语；再否则退主角（主角在场时）。
+            target = _nearest_coref_target_before(coref_results, m.start()) \
+                if coref_results else None
+            if target and coref_stats is not None:
+                coref_stats["resolved_count"] = coref_stats.get("resolved_count", 0) + 1
+            if not target:
+                target = _last_explicit_subject_before(text, m.start(), names_sorted)
             if not target and protag_in_text:
                 target = protagonist
             if target:
@@ -174,8 +232,10 @@ def scan(project_root: Path, draft_path: Path) -> dict:
 
     scenes = split_scenes(text)
     scene_povs = []  # [(scene_idx, dominant_pov, runner_up)]
+    coref_stats = {"resolved_count": 0}
     for i, scene in enumerate(scenes):
-        counts = detect_pov_signal_holders(scene, character_names, protagonist=protag)
+        counts = detect_pov_signal_holders(scene, character_names, protagonist=protag,
+                                           coref_stats=coref_stats)
         # 确定性排序：信号数降序，平局按名字升序（character_names 是 set，必须显式定序）
         sorted_pov = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         if sorted_pov and sorted_pov[0][1] > 0:
@@ -231,6 +291,10 @@ def scan(project_root: Path, draft_path: Path) -> dict:
         "head_hopping_count": len(head_hopping),
         "non_protag_scenes_count": len(non_protag_scenes),
         "issues": issues,
+        # 🔴 NN 共指桥集成（2026-07）：source 区分零指代/代词承前归因是否用到桥解析结果
+        "coref_resolution_source": "nn_coref_bridge" if coref_stats["resolved_count"] > 0
+        else "regex_fallback",
+        "coref_resolved_mentions": coref_stats["resolved_count"],
         "warning": (
             f"⚠️ POV 一致性: {len(head_hopping)} head-hopping + {len(non_protag_scenes)} 非主角场景"
             if (head_hopping or non_protag_scenes) else None

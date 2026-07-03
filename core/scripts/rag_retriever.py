@@ -15,7 +15,7 @@ build_manifest.py 调用本模块检索与当前章节最相关的历史内容�
 输出：JSON列表，每项含 {chapter, score, snippet}
 """
 from __future__ import annotations
-import json, math, re, sys
+import json, math, os, re, sys
 from collections import Counter
 from pathlib import Path
 
@@ -25,6 +25,19 @@ try:
     import cluster_lookup  # 2026-05-29 复审修复：SC-1 blueprint list 归一守卫
 except Exception:  # 防御：缺模块时不影响主检索路径
     cluster_lookup = None
+
+
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+    跟 topic_drift_scanner._has_real_embedding_backend 判断逻辑完全一致（各文件各自留一份）。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
 
 
 def _chinese_tokens(text: str) -> list[str]:
@@ -145,8 +158,14 @@ def _snippet(text: str, length: int = 200) -> str:
     return '\n'.join(result) if result else text[:length]
 
 
-def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3,
-                   use_mmr: bool = True, mmr_alpha: float = 0.7) -> list[dict]:
+def _load_retrieval_corpus(project_root, current_ch: int):
+    """章节正文 + 摘要 + 当前章 plan(query) 统一装载 —— TF-IDF / embedding 两种检索模式共用。
+
+    返回 None（无可检索历史章 或 当前章无 plan 信号）或 (ch_nums, docs, chapters, summaries)：
+      - ch_nums: 排序后的历史章号列表
+      - docs: 与 ch_nums 一一对应的候选文本 + 末项是当前章 query（current_plan）
+      - chapters/summaries: 供结果 snippet 回填用
+    """
     # v17.5 修复：接受 str 或 Path
     project_root = Path(project_root) if not isinstance(project_root, Path) else project_root
     chapters = {}
@@ -169,7 +188,7 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3,
             continue
 
     if not chapters:
-        return []
+        return None
 
     summaries_path = project_root / '_数据库' / '故事块摘要.json'
     summaries = {}
@@ -210,7 +229,7 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3,
                 break
 
     if not current_plan:
-        return []
+        return None
 
     ch_nums = sorted(chapters.keys())
     docs = []
@@ -218,6 +237,15 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3,
         text = summaries.get(ch, '') or chapters[ch][:500]
         docs.append(text)
     docs.append(current_plan)
+    return ch_nums, docs, chapters, summaries
+
+
+def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3,
+                   use_mmr: bool = True, mmr_alpha: float = 0.7) -> list[dict]:
+    corpus = _load_retrieval_corpus(project_root, current_ch)
+    if corpus is None:
+        return []
+    ch_nums, docs, chapters, summaries = corpus
 
     vectors, _ = _tfidf_vectors(docs)
     query_vec = vectors[-1]
@@ -250,33 +278,74 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3,
     return results
 
 
+_EMBED_MIN_RELEVANCE = 0.01  # 真后端候选相关性下限·先复用 TF-IDF 同阈值·待金标准校准调优
+
+
 def retrieve_embedding(project_root, current_ch: int, top_k: int = 3,
                        use_mmr: bool = True, mmr_alpha: float = 0.7) -> list[dict]:
-    """v17.6 D2: embedding 模式（SCORE 框架 hybrid retrieval 第二轮）。
+    """v17.6 D2 → 2026-07-02 接线 embedding_store：真语义 embedding 检索模式
+    （SCORE 框架 hybrid retrieval 第二轮）。
 
-    优先级：如果设置 OPENAI_API_KEY 环境变量 → 调 OpenAI；
-    否则自动降级到 TF-IDF。
+    门控 = _has_real_embedding_backend()（EMBED_BACKEND 非空非 hash，或配了 GEN_EMBED__* /
+    通义等 API·统一走 embedding_store，不再自行探测 OPENAI_API_KEY/openai 包）。
+    无真后端 → 退 TF-IDF（与此前行为、fallback 标签一致·零回归）。
+    真后端 → embedding_store.compute_embedding 编码历史章文本 + 当前章 plan(query)，
+    cosine_similarity 排序，MMR 重排复用 mmr_rerank（sim_fn 换成 embedding 余弦）。
 
     实测：SCORE 测试 TF-IDF + 语义 = 23.6% coherence 提升 vs 纯 TF-IDF。
-    MMR 重排参数透传 TF-IDF 降级路径（embedding 实装后亦复用 mmr_rerank·零额外 API）。
     """
-    import os
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        print("[INFO] OPENAI_API_KEY 未设，降级 TF-IDF 模式", file=sys.stderr)
-        return retrieve_tfidf(project_root, current_ch, top_k, use_mmr, mmr_alpha)
+    def _fallback():
+        results = retrieve_tfidf(project_root, current_ch, top_k, use_mmr, mmr_alpha)
+        for r in results:
+            r["mode"] = "tfidf_fallback (embedding not implemented yet)"
+        return results
+
+    if not _has_real_embedding_backend():
+        print("[INFO] 无真 embedding 后端（EMBED_BACKEND 未设/=hash 且无 GEN_EMBED__* 配置），"
+              "降级 TF-IDF 模式", file=sys.stderr)
+        return _fallback()
+
     try:
-        # 延迟导入，避免无 openai 包时报错
-        import openai
-    except ImportError:
-        print("[INFO] openai 包未安装，降级 TF-IDF 模式", file=sys.stderr)
-        return retrieve_tfidf(project_root, current_ch, top_k, use_mmr, mmr_alpha)
-    # 简化版：仅占位，实际生产用 OpenAI/Cohere embedding API
-    # TODO: 调用 openai.embeddings.create() 用 text-embedding-3-small + mmr_rerank 重排
-    # 当前先返回 TF-IDF 结果 + 标记 fallback
-    results = retrieve_tfidf(project_root, current_ch, top_k, use_mmr, mmr_alpha)
-    for r in results:
-        r["mode"] = "tfidf_fallback (embedding not implemented yet)"
+        from embedding_store import compute_embedding, cosine_similarity
+    except (ImportError, TypeError):
+        print("[INFO] embedding_store 不可用，降级 TF-IDF 模式", file=sys.stderr)
+        return _fallback()
+
+    corpus = _load_retrieval_corpus(project_root, current_ch)
+    if corpus is None:
+        return []
+    ch_nums, docs, chapters, summaries = corpus
+
+    embs = [compute_embedding(d) for d in docs]
+    query_emb = embs[-1]
+    # 维度一致性守卫（同 topic_drift_scanner）：单条失败会兜底 hash(384)，与真后端维度不一致
+    # → cosine 静默退化为 0（假不相关）。维度混用直接跳过语义检索、退 TF-IDF（不冒充语义）。
+    if not query_emb or any(len(e) != len(query_emb) for e in embs):
+        print("[INFO] embedding 维度不一致（部分条目降级 hash），降级 TF-IDF 模式", file=sys.stderr)
+        return _fallback()
+
+    rel = {i: cosine_similarity(embs[i], query_emb) for i in range(len(ch_nums))}
+    cand = [i for i in range(len(ch_nums)) if rel[i] >= _EMBED_MIN_RELEVANCE]
+    if not cand:
+        return []
+
+    def _doc_sim(i: int, j: int) -> float:
+        return cosine_similarity(embs[i], embs[j])
+
+    if use_mmr and len(cand) > top_k:
+        order = mmr_rerank(cand, rel, _doc_sim, top_k, alpha=mmr_alpha)
+    else:
+        order = sorted(cand, key=lambda i: (-rel[i], i))[:top_k]
+
+    results = []
+    for i in order:
+        ch = ch_nums[i]
+        results.append({
+            'chapter': ch,
+            'score': round(rel[i], 4),
+            'snippet': _snippet(summaries.get(ch, '') or chapters.get(ch, '')[:300]),
+            'mode': 'embedding',
+        })
     return results
 
 

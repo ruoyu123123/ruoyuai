@@ -12,6 +12,10 @@
 喘不过气. 本 scanner 测"anchor 处信息密度落差"——pause anchor 处前后 N 字内信息密度的
 locally low(valley) → 节奏健康. 全高密度无 valley → 窒息感.
 
+【2026-07-01 接入真模型】信息密度优先调用已训练部署的 surprisal_gpt2(经 nn_surprisal_bridge /
+feature_cache 二选一)算句子级 + anchor 窗口级 mean_surprisal 代替信息密度打分；
+RUOYU_NN_SURPRISAL 未开启/模型未完整命中时整体回退下面这套 marker 计数密度代理(不变)。
+
 【输入】cluster 草稿(CLUSTER_MODE=1 env).
 
 【探针】
@@ -97,8 +101,33 @@ def _split_sentences(text):
     return [p for p in parts if p.strip()]
 
 
-def analyze_anchors(text: str) -> dict:
-    """对每句内 phrase 级 anchor 统计 info_density valley."""
+def _predict_density_batch(texts: list[str]) -> list[float | None]:
+    """批量取 GPT-2 mean_surprisal 当局部信息密度代理。优先 FeatureStore(带缓存)→
+    回退 nn_surprisal_bridge 直连·与 surprisal_scanner 同构。全不可用 → 全 None
+    (调用方整体回退 marker 计数密度代理·不变)。"""
+    if not texts:
+        return []
+    preds = None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            preds = FeatureStore.get().compute_surprisal_batch(texts)
+    except Exception:  # noqa: BLE001 FeatureStore 故障 → 退 bridge，绝不影响 scanner
+        preds = None
+    if preds is None:
+        try:
+            import nn_surprisal_bridge as bridge
+        except ImportError:
+            return [None] * len(texts)
+        preds = bridge.predict_batch(texts)
+    if len(preds) != len(texts):
+        return [None] * len(texts)
+    return [(p.get("mean_surprisal") if p else None) for p in preds]
+
+
+def _analyze_anchors_heuristic(text: str) -> dict:
+    """对每句内 phrase 级 anchor 统计 info_density valley(marker 计数代理·真模型不可用兜底)."""
     sentences = _split_sentences(text)
     total_anchors = 0
     valley_anchors = 0
@@ -136,7 +165,82 @@ def analyze_anchors(text: str) -> dict:
         "valley_anchors": valley_anchors,
         "valley_rate": round(valley_rate, 4) if valley_rate is not None else None,
         "samples": anchor_samples,
+        "source": "heuristic",
     }
+
+
+def _analyze_anchors_model(text: str) -> dict | None:
+    """真模型版：句子级 + anchor 窗口级批量算 GPT-2 mean_surprisal 代替 info_density。
+    窗口切法/valley 判定跟启发式版本同构(仅把 _info_density 换成模型 surprisal)。
+    任一句/窗口模型未命中 → None(调用方整体回退启发式版本·不变——避免部分 None 破坏均值语义)。"""
+    sentences = [s for s in _split_sentences(text) if s.strip()]
+    if not sentences:
+        return None
+
+    per_sentence_anchors = []
+    for sent in sentences:
+        anchors = []
+        for m in _PAUSE_PHRASE.finditer(sent):
+            idx = m.start()
+            left = sent[max(0, idx - ANCHOR_WINDOW):idx]
+            right = sent[idx + 1:idx + 1 + ANCHOR_WINDOW]
+            window = left + right
+            if len(window.strip()) < 3:
+                continue
+            anchors.append({"char": m.group(), "window": window})
+        per_sentence_anchors.append(anchors)
+
+    all_windows = [a["window"] for anchors in per_sentence_anchors for a in anchors]
+    if not all_windows:
+        return None  # 无 anchor·没必要跑模型(回退启发式会算出同样的 0 anchor 结果)
+
+    densities = _predict_density_batch(sentences + all_windows)
+    if len(densities) != len(sentences) + len(all_windows) or any(v is None for v in densities):
+        return None  # 任一句/窗口未命中 → 整体回退启发式(避免部分 None 破坏均值语义)
+
+    sent_density = densities[:len(sentences)]
+    anchor_density = densities[len(sentences):]
+
+    total_anchors = 0
+    valley_anchors = 0
+    anchor_samples = []
+    cursor = 0
+    for s_i, anchors in enumerate(per_sentence_anchors):
+        if not anchors:
+            continue
+        phrase_density = sent_density[s_i]
+        if phrase_density == 0:
+            cursor += len(anchors)
+            continue
+        for a in anchors:
+            local_density = anchor_density[cursor]
+            cursor += 1
+            total_anchors += 1
+            is_valley = local_density < phrase_density * 0.70
+            if is_valley:
+                valley_anchors += 1
+            if len(anchor_samples) < 10:
+                anchor_samples.append({
+                    "char": a["char"],
+                    "phrase_density": round(phrase_density, 4),
+                    "local_density": round(local_density, 4),
+                    "is_valley": is_valley,
+                })
+    valley_rate = (valley_anchors / total_anchors) if total_anchors else None
+    return {
+        "total_anchors": total_anchors,
+        "valley_anchors": valley_anchors,
+        "valley_rate": round(valley_rate, 4) if valley_rate is not None else None,
+        "samples": anchor_samples,
+        "source": "model",
+    }
+
+
+def analyze_anchors(text: str) -> dict:
+    """对每句内 phrase 级 anchor 统计 info_density valley。
+    优先真模型(GPT-2 surprisal)·不可用/未完整命中 → 回退 marker 计数密度代理(不变)。"""
+    result = _analyze_anchors_model(text)
+    return result if result is not None else _analyze_anchors_heuristic(text)
 
 
 def scan(draft_path) -> dict:
@@ -159,6 +263,7 @@ def scan(draft_path) -> dict:
 
     metrics = analyze_anchors(text)
     out["metrics"] = metrics
+    out["source"] = metrics.get("source")
     vr = metrics["valley_rate"]
     if metrics["total_anchors"] < 20:
         out["note"] = "anchor 不足·skip 告警"

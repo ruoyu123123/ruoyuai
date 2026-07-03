@@ -13,6 +13,12 @@ G2 调研发现: 用户选走向卡(3选1)的偏好信号被丢弃。被否决�
 接入点: cluster-save-state step11 (cluster_choice_apply 之后跑)
 exit 0: 不阻断
 
+🆕 pairwise 偏好排序(BPR·core/ml/LEARNABLE_BACKLOG.md A4)：上面的逐维标量均值只看单维度
+方向，丢了候选间的组合信号。RUOYU_PREF_RANKER=1 时(默认 off)，本文件额外把每次 choice 的
+chosen/rejected 候选特征向量存进 用户偏好.json.pairwise_observations，观察数达标(≥8)后调
+preference_ranker.train() 做 pairwise logistic 训练并落盘 _数据库/.preference_ranker.json。
+逐维标量均值逻辑本身不变——两套机制并存、互不覆盖。详见 preference_ranker.py。
+
 用法:
   python core/scripts/user_choice_learner.py <project_root> \
     --chosen <chosen_brief.json> \
@@ -24,6 +30,10 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
 
 
 def _load(p: Path) -> dict:
@@ -131,13 +141,44 @@ def learn_from_choice(
         ib[dim_key]["confidence"] = min(1.0, len(ib[dim_key]["observations"]) / 10.0)
 
     pref["inferred_behavior"] = ib
+
+    # 🆕 pairwise 偏好排序(BPR·advisory·RUOYU_PREF_RANKER=1 才生效)：门控关闭时以下整块
+    # no-op，pref 内容与门控前逐字节相同 → _save 落盘结果零回归。
+    ranker_info: dict = {}
+    try:
+        import preference_ranker as pr
+    except ImportError:
+        pr = None
+    if pr is not None and pr.enabled():
+        history_kw = pr.build_history_keywords(pref.get("pairwise_observations", []))
+        pref.setdefault("pairwise_observations", []).append({
+            "chosen_features": pr.extract_features(chosen_brief, history_kw),
+            "chosen_text": pr.candidate_text(chosen_brief),
+            "rejected_features": [pr.extract_features(r, history_kw) for r in rejected],
+            "source_cluster": source_cluster,
+            "ts": ts,
+        })
+        observations = pref["pairwise_observations"]
+        ranker_info["pairwise_observations_count"] = len(observations)
+        weights = pr.train(observations)
+        ranker_info["ranker_trained"] = weights is not None
+        if weights is not None:
+            pr.save(project_root, weights, n_observations=len(observations))
+
     _save(pref_path, pref)
 
-    return {"updated_dims": len(signals), "new_signals": signals}
+    return {"updated_dims": len(signals), "new_signals": signals, **ranker_info}
 
 
 def main() -> int:
     import argparse
+    # 创作流程独立 CLI 入口（cluster-save-state plan 直接调用·不经 save_state.main）——
+    # 与 audit_hub/save_state 同款 setdefault 默认门控，否则 RUOYU_PREF_RANKER 观察永不积累。
+    try:
+        import nn_runtime_defaults
+        nn_runtime_defaults.enable_creative_nn_defaults()
+    except ImportError:
+        pass
     ap = argparse.ArgumentParser(description="从走向卡选择学习用户偏好 (零 LLM · advisory)")
     ap.add_argument("project_root")
     ap.add_argument("--chosen", required=True, help="用户选中的 brief JSON 路径")
@@ -162,6 +203,9 @@ def main() -> int:
     print(f"[user_choice_learner] 学到 {result['updated_dims']} 个偏好维度")
     for s in result["new_signals"]:
         print(f"  {s['dim']}: {s.get('direction', s.get('chosen_val', '?'))}")
+    if "pairwise_observations_count" in result:
+        print(f"[user_choice_learner] pairwise 观察数={result['pairwise_observations_count']}"
+              f" ranker_trained={result.get('ranker_trained')}")
     return 0
 
 

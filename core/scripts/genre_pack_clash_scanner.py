@@ -9,10 +9,17 @@
 【做法】
   1. 取 author_genre_packs 2-combination 命中 registry 的 axis(emotional_intensity_baseline /
      stakes_persistence / metaphysics_register 等)
-  2. 每 scene 给 axis 打分(简化为 marker_density 差)
+  2. 每 scene 给 axis 打分：
+     · 默认 = marker_density 差(词袋计数 pack A - pack B)
+     · 🔴 2026-07-01 EMBED_BACKEND 配置真后端时 = scene embedding 与两 pack「原型描述文本」
+       (marker_lexicon 词袋拼接) 余弦相似度之差·原型/场景 embedding 缺失或维度不一致时
+       该 pair 单独退回词袋差(不影响其他 pair)
   3. 若分布双峰(top 1/3 全 pack A 主导 + bottom 1/3 全 pack B 主导 + 中段无过渡)
-     → advisory CLASH_UNRESOLVED
+     → advisory CLASH_UNRESOLVED（双峰阈值：词袋差值 1.0 / 语义相似度差值 0.15·量纲不同分开标定）
   4. 作者档 author_fusion_resolution 覆盖 registry 时 skip
+
+【依赖】embedding_store.compute_embedding() + cosine_similarity()（同 topic_drift_scanner 模式）。
+  EMBED_BACKEND 未设（默认 hash·无真语义）→ 完全走词袋差·输出 match_method="lexicon"。
 
 【北极星】② 作者档显式 fusion_resolution > registry seed·shadow 默认占位·绝不 hard_gate
 """
@@ -76,6 +83,74 @@ def _load_marker_lexicon(pack):
     return []
 
 
+# ── 🔴 2026-07-01 真语义 embedding 可选路径（完全照抄 topic_drift_scanner 已验证的模式）───────
+def _has_real_embedding_backend() -> bool:
+    """跟 topic_drift_scanner._has_real_embedding_backend 判断逻辑完全一致（各文件各自留一份）。"""
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+def _pack_prototype_text(pack: str) -> str:
+    """题材包"原型描述文本"：marker_lexicon 无独立 description 字段·由判别词袋拼接代替。"""
+    markers = _load_marker_lexicon(pack)
+    return "、".join(markers)
+
+
+# 语义余弦相似度差值双峰阈值(值域[-1,1])。区别于词袋密度差阈值 1.0（量纲不同分开标定）。
+_SEMANTIC_DIFF_THRESHOLD = 0.15
+
+
+def _pair_scores_lexicon(scenes: list, pa: str, pb: str) -> "list[dict] | None":
+    """词袋密度差（原逻辑不变）。lexicon 缺任一 pack → None。"""
+    ma, mb = _load_marker_lexicon(pa), _load_marker_lexicon(pb)
+    if not ma or not mb:
+        return None
+    scores = []
+    for sc in scenes:
+        k = max(1, _cjk_count(sc) / 1000.0)
+        da = sum(sc.count(t) for t in ma) / k
+        db = sum(sc.count(t) for t in mb) / k
+        scores.append({"scene_idx": len(scores), "da": round(da, 3),
+                       "db": round(db, 3), "diff": round(da - db, 3)})
+    return scores
+
+
+def _pair_scores_semantic(scenes: list, pa: str, pb: str,
+                          compute_embedding, cosine_similarity, cache: dict) -> "list[dict] | None":
+    """embedding 余弦相似度替代词袋密度差：scene vs 两 pack 原型描述文本相似度之差。
+    原型缺失/维度不一致 → None（调用方对该 pair 整体兜底词袋差·不产生半真半假统计）。"""
+    def _proto(pack):
+        if pack not in cache:
+            proto_text = _pack_prototype_text(pack)
+            try:
+                cache[pack] = compute_embedding(proto_text) if proto_text else None
+            except Exception:
+                cache[pack] = None
+        return cache[pack]
+
+    emb_a, emb_b = _proto(pa), _proto(pb)
+    if not emb_a or not emb_b or len(emb_a) != len(emb_b):
+        return None
+    scores = []
+    try:
+        for sc in scenes:
+            sc_emb = compute_embedding(sc)
+            if not sc_emb or len(sc_emb) != len(emb_a):
+                return None
+            da = cosine_similarity(sc_emb, emb_a)
+            db = cosine_similarity(sc_emb, emb_b)
+            scores.append({"scene_idx": len(scores), "da": round(da, 3),
+                           "db": round(db, 3), "diff": round(da - db, 3)})
+    except Exception:
+        return None
+    return scores
+
+
 def scan(draft_path, project_root=None) -> dict:
     mode = _mode()
     out = {"scanner": "genre_pack_clash", "schema_version": "1.0", "mode": mode,
@@ -112,33 +187,47 @@ def scan(draft_path, project_root=None) -> dict:
     if len(scenes) < 4:
         out["note"] = "场景 <4·二态分布判定不充分·跳过"
         return out
+
+    # 🔴 2026-07-01 真语义后端可用时优先用 embedding 相似度差；否则(含逐 pair 兜底)走词袋密度差
+    use_semantic = False
+    compute_embedding = cosine_similarity = None
+    if _has_real_embedding_backend():
+        try:
+            from embedding_store import compute_embedding, cosine_similarity
+            use_semantic = True
+        except (ImportError, TypeError):
+            use_semantic = False
+    out["match_method"] = "semantic" if use_semantic else "lexicon"
+
+    proto_cache: dict = {}
     flags = []
     for h in hints:
         pa, pb = h["pair"][0], h["pair"][1]
-        ma, mb = _load_marker_lexicon(pa), _load_marker_lexicon(pb)
-        if not ma or not mb:
-            continue
-        scores = []
-        for sc in scenes:
-            k = max(1, _cjk_count(sc) / 1000.0)
-            da = sum(sc.count(t) for t in ma) / k
-            db = sum(sc.count(t) for t in mb) / k
-            scores.append({"scene_idx": len(scores), "da": round(da, 3),
-                           "db": round(db, 3), "diff": round(da - db, 3)})
+        scores = None
+        pair_method = "lexicon"
+        if use_semantic:
+            scores = _pair_scores_semantic(scenes, pa, pb, compute_embedding,
+                                           cosine_similarity, proto_cache)
+            if scores is not None:
+                pair_method = "semantic"
+        if scores is None:
+            scores = _pair_scores_lexicon(scenes, pa, pb)
         if not scores:
             continue
-        # 双峰检测：top 1/3 平均 diff > 1，bottom 1/3 平均 diff < -1
+        # 双峰检测：top 1/3 平均 diff 与 bottom 1/3 平均 diff 反向超阈值(词袋 1.0 / 语义 0.15)
         n = len(scores)
         top = sorted(scores, key=lambda s: -s["diff"])[:max(1, n // 3)]
         bot = sorted(scores, key=lambda s: s["diff"])[:max(1, n // 3)]
         top_mu = sum(s["diff"] for s in top) / len(top)
         bot_mu = sum(s["diff"] for s in bot) / len(bot)
-        if top_mu > 1 and bot_mu < -1:
+        threshold = _SEMANTIC_DIFF_THRESHOLD if pair_method == "semantic" else 1.0
+        if top_mu > threshold and bot_mu < -threshold:
             flags.append({
                 "pair": h["pair"],
                 "top_mu": round(top_mu, 3),
                 "bot_mu": round(bot_mu, 3),
                 "fusion_hint": h.get("fusion_hint"),
+                "match_method": pair_method,
             })
     out["bipolar_flags"] = flags
     if flags:
@@ -150,6 +239,7 @@ def scan(draft_path, project_root=None) -> dict:
                     "code": ISSUE_CODE,
                     "message": f"pair={f['pair']}·top diff={f['top_mu']}·bot diff={f['bot_mu']}",
                     "fusion_hint": f.get("fusion_hint"),
+                    "match_method": f.get("match_method", "lexicon"),
                     "_doc": "registry 冲突·advisory·绝不 hard_gate",
                 })
             out["verdict"] = "FAIL_MINOR"

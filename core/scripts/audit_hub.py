@@ -3334,7 +3334,15 @@ def main():
     import nn_runtime_defaults
     _nn_on = nn_runtime_defaults.enable_creative_nn_defaults()
     if _nn_on:
-        print(f"[nn] 创作 audit 默认开启 NN 门控: {', '.join(_nn_on)}", file=sys.stderr)
+        print(f"[nn] 创作 audit 默认开启模型/可成长门控: {', '.join(_nn_on)}", file=sys.stderr)
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "registry"))
+        import model_registry as _model_registry
+        _reg = _model_registry.sync_runtime_models()
+        if _reg.get("count"):
+            print(f"[model-registry] 同步运行模型 { _reg['count'] } 个", file=sys.stderr)
+    except Exception as _e:  # noqa: BLE001 registry 失败不阻断 audit，但必须留痕
+        print(f"[model-registry] 同步跳过: {type(_e).__name__}: {str(_e)[:120]}", file=sys.stderr)
     if len(args) < 2:
         print("用法: python audit_hub.py <项目路径> <章节号> [--auto-fix] [--json] [--waivers <json路径>]"
               " | python audit_hub.py <项目路径> --mode cluster --cluster-id <key> [--auto-fix] [--waivers ...]")

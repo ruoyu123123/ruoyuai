@@ -22,6 +22,12 @@ reread test + laterpress dramatic irony 综合：网文 LLM 写伏笔默认全�
   5. ratio < band[0] → COVERT_FORESHADOWING_THIN advisory (overt 化)
      ratio > band[1] → COVERT_FORESHADOWING_OPAQUE advisory (二刷不可读)
 
+【🔴 2026-07-03 zero_shot_prototype 模型优先路径】pre-filter（是否候选 plant）仍固定用
+  _DELIVERY_LEXICON/classify_plant() 原判定；真 embedding 后端可用时桶位（5 类里选哪个）
+  额外走 zero_shot_prototype.classify() 精化，置信达标 → 覆盖桶位（plant.classify_source=
+  zero_shot_embedding）；否则/无真后端 → 100% 用原词典判定桶位（classify_source=lexicon，
+  默认零回归）。classify_plant() 函数本体不变，继续当 fallback 唯一真理源。
+
 【北极星】②④⑤ cluster 视野·作者档第一权威·advisory shadow·绝不 hard_gate
 COVERT_FORESHADOWING_* 绝不进 audit_hub.HARD_GATE_CODES。
 
@@ -53,6 +59,37 @@ _DELIVERY_LEXICON = {
     "parallel": re.compile(r"(街角|远处|另一边|另一头|窗外|墙外|楼下|楼上|"
                             r"邻桌|隔壁|对面|路过|擦肩|背景里|远远地)"),
 }
+
+# 🔴 2026-07-03 zero_shot_prototype 模型优先路径·5 类伏笔隐蔽度 embedding 原型例句
+# （占位·3 条/类·待金标准校准·真后端不可用时 100% 走 classify_plant() 词典兜底）
+_DELIVERY_MODE_PROTOTYPES = {
+    "overt": ["日后这件事会带来大麻烦", "他心想，将来必有一场恶战",
+              "多年后回想起来，这正是转折点"],
+    "buried": ["她心头隐隐有些不安，说不清为什么", "他下意识摸了摸口袋，若有所思",
+               "那一瞬间他仿佛想起了什么，又很快压下"],
+    "passing": ["他随口提了一句旧事，便转开话题", "她顺嘴说了句谁也没在意的话",
+                "对话中夹杂着一句无关紧要的嘀咕"],
+    "objects": ["案上摆着一枚不起眼的旧玉佩", "墙角挂着一幅蒙尘的画像",
+                "他怀里揣着一封没有拆开的信"],
+    "parallel": ["街角另一头，两个陌生人低声交谈", "窗外远远传来一阵脚步声",
+                 "隔壁桌的客人正谈论着一桩旧案"],
+}
+
+
+def _classify_plant_mode(text: str, fallback: str) -> "tuple[str, str]":
+    """(delivery_mode, classify_source)。真后端优先用 zero_shot_prototype 分类·
+
+    否则/置信不足 → 100% 用调用方传入的 fallback（各调用点自己的原词典判定结果，
+    保证维持各自原有优先级顺序不被打乱，零回归）。"""
+    if text:
+        try:
+            import zero_shot_prototype
+            result = zero_shot_prototype.classify(text, _DELIVERY_MODE_PROTOTYPES, floor=0.5)
+            if result is not None:
+                return result["label"], result["source"]
+        except Exception:
+            pass
+    return fallback, "lexicon"
 
 
 def _mode() -> str:
@@ -127,13 +164,23 @@ def scan(draft_path, project_root=None) -> dict:
     # 双源 plant 收集：(A) 正文行内匹配 (B) 项目级 foreshadowing.json plant entries
     plants = []
     for line in text.split("\n"):
-        if len(line.strip()) < 8:
+        stripped = line.strip()
+        if len(stripped) < 8:
             continue
+        matched_bucket = None
         for bucket, rx in _DELIVERY_LEXICON.items():
-            if rx.search(line):
-                plants.append({"source": "draft_line", "text": line.strip()[:80],
-                               "delivery_mode": bucket})
-                break  # 首命中即止
+            if rx.search(stripped):
+                matched_bucket = bucket
+                break  # 首命中即止（pre-filter：至少命中一类才算候选 plant）
+        if matched_bucket is None:
+            continue
+        # 🔴 2026-07-03 模型优先精化桶位：pre-filter 仍用原词典判定「是不是候选 plant」，
+        # 桶位分类真后端可用时优先信模型（否则 100% 用 matched_bucket，零回归）
+        # 注意：变量名不可叫 mode——scan() 顶部 `mode = _mode()` 是函数级单一命名空间，
+        # for 循环没有块作用域，重名会覆盖外层 mode 导致后面 if mode == "active" 失效。
+        dmode, csrc = _classify_plant_mode(stripped, matched_bucket)
+        plants.append({"source": "draft_line", "text": stripped[:80],
+                       "delivery_mode": dmode, "classify_source": csrc})
 
     fjson_path = None
     if project_root:
@@ -152,9 +199,11 @@ def scan(draft_path, project_root=None) -> dict:
                         t = e.get("plant_text") or e.get("text") or ""
                         if not t:
                             continue
+                        fallback_mode = classify_plant(str(t))
+                        dmode, csrc = _classify_plant_mode(str(t), fallback_mode)
                         plants.append({"source": "foreshadowing_json",
                                        "text": str(t)[:80],
-                                       "delivery_mode": classify_plant(str(t))})
+                                       "delivery_mode": dmode, "classify_source": csrc})
 
     out["plant_total"] = len(plants)
     if not plants:

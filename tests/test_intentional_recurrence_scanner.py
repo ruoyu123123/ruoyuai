@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
-"""intentional_recurrence_scanner R23 W11 Batch-GG · P1"""
+"""intentional_recurrence_scanner R23 W11 Batch-GG · P1
+
+2026-07-01 追加：真语义 embedding 可选路径回归(mock 后端·完全照抄 topic_drift_scanner
+测试手法)——钉死 (a) 无真后端时 match_method="lexicon"(零回归·trigram Jaccard 不变)
+(b) mock 真后端时 match_method="semantic" 且语义路径被正确使用。
+"""
 import json
+import math
 import os
 import sys
 import tempfile
@@ -200,3 +206,154 @@ def test_no_db_returns_thin():
         assert "cluster 摘要 < 2" in (out.get("note") or "")
     finally:
         _set_mode(bak)
+
+
+# ── 🔴 2026-07-01 真语义 embedding 可选路径（完全照抄 topic_drift_scanner 测试手法）──────
+
+def _char_freq_embedding(text: str, dim: int = 32) -> list:
+    """确定性 mock embedding（字符频率向量·同 test_topic_drift_scanner 手法）。"""
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _run_with_mock_embedding(fn, *args, **kwargs):
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _char_freq_embedding
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_has_real_embedding_backend_false_by_default():
+    bak = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_has_real_embedding_backend_true_with_mstyle():
+    bak = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "mstyle"
+        assert mod._has_real_embedding_backend() is True
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_semantic_similarity_direct_with_mock_backend():
+    """直接测 _semantic_similarity：mock 后端下返回浮点相似度(完全相同文本 → 相似度 1)。
+    compute_embedding/cosine_similarity 由调用方传入(scan() 一次性 import 后传参的设计)。"""
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _char_freq_embedding
+    try:
+        sim = mod._semantic_similarity("主角在山顶挥剑", "主角在山顶挥剑",
+                                       embedding_store.compute_embedding,
+                                       embedding_store.cosine_similarity)
+        assert sim is not None
+        assert abs(sim - 1.0) < 1e-6
+    finally:
+        embedding_store.compute_embedding = orig
+
+
+def test_semantic_similarity_dimension_mismatch_returns_none():
+    """维度不一致 → None（调用方兜底 trigram Jaccard）。"""
+    def _mixed(text, dim=32):
+        if "MISMATCH" in text:
+            return [0.1] * 8
+        return _char_freq_embedding(text, dim)
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _mixed
+    try:
+        sim = mod._semantic_similarity("正常文本内容", "MISMATCH 维度不同",
+                                       embedding_store.compute_embedding,
+                                       embedding_store.cosine_similarity)
+        assert sim is None
+    finally:
+        embedding_store.compute_embedding = orig
+
+
+def test_semantic_similarity_compute_exception_returns_none():
+    """compute_embedding 抛异常 → None（调用方兜底 trigram Jaccard·不崩）。"""
+    def _boom(text):
+        raise RuntimeError("模拟 embedding 计算异常")
+    import embedding_store
+    sim = mod._semantic_similarity("文本 A", "文本 B", _boom,
+                                   embedding_store.cosine_similarity)
+    assert sim is None
+
+
+def test_default_match_method_is_lexicon():
+    """无真后端(默认) → match_method="lexicon"（零回归基线·trigram Jaccard 不变）。"""
+    bak = os.environ.get("INTENTIONAL_RECURRENCE_MODE")
+    try:
+        _set_mode("active")
+        out = mod.scan(_mk_project([_CLUSTER_A_INTENT, _CLUSTER_B_INTENT]))
+        assert out["match_method"] == "lexicon"
+        for rec in out["samples"]:
+            assert rec["match_method"] == "lexicon"
+        for v in out["violations"]:
+            assert v["match_method"] == "lexicon"
+    finally:
+        _set_mode(bak)
+
+
+def test_semantic_match_method_when_backend_available():
+    """真后端(mock)可用 → match_method="semantic"·pair 记录随之标 semantic。"""
+    bak = os.environ.get("INTENTIONAL_RECURRENCE_MODE")
+    try:
+        _set_mode("active")
+        out = _run_with_mock_embedding(
+            mod.scan, _mk_project([_CLUSTER_A_INTENT, _CLUSTER_B_INTENT]))
+        assert out["match_method"] == "semantic"
+        for rec in out["samples"]:
+            assert rec["match_method"] == "semantic"
+    finally:
+        _set_mode(bak)
+
+
+def test_semantic_import_error_falls_back_to_lexicon_end_to_end():
+    """scan() 端到端：embedding_store 不可导入 → 全程退回 trigram Jaccard·match_method="lexicon"。"""
+    bak = os.environ.get("INTENTIONAL_RECURRENCE_MODE")
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    saved = sys.modules.get("embedding_store")
+    try:
+        _set_mode("active")
+        os.environ["EMBED_BACKEND"] = "mock"
+        sys.modules["embedding_store"] = None  # type: ignore[assignment]
+        out = mod.scan(_mk_project([_CLUSTER_A_INTENT, _CLUSTER_B_INTENT]))
+        assert out["match_method"] == "lexicon"
+    finally:
+        if saved is not None:
+            sys.modules["embedding_store"] = saved
+        else:
+            sys.modules.pop("embedding_store", None)
+        _set_mode(bak)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)

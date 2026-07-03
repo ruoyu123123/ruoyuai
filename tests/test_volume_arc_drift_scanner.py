@@ -21,6 +21,7 @@ main() 含 sys.exit，故 in-process 捕 SystemExit 取退出码（不 mock 被�
 """
 import io
 import json
+import os
 import sys
 import tempfile
 from contextlib import redirect_stdout, redirect_stderr
@@ -333,6 +334,159 @@ def test_main_exits_0_when_no_drift():
     assert code == 0, (code, out)
     parsed = json.loads(out)
     assert parsed["issues"] == [], parsed
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-01 语义覆盖率补齐（embedding cosine 替代 2-gram 字面重叠 · 同义改写零容错）
+# 北极星③「大势已定」核心哨兵，语义路径不能引入回归——下面锁死默认路径与旧行为逐字节
+# 一致，再单独验证 mock 真后端时语义路径被正确使用。
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_has_real_embedding_backend_false_by_default():
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_has_real_embedding_backend_false_when_hash():
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "hash"
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_has_real_embedding_backend_true_when_set():
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "local"
+        assert mod._has_real_embedding_backend() is True
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def _mk_synonym_project() -> Path:
+    """milestone「夺取王座」 vs 已写内容「登上帝位」——同义但字面 2-gram 零重叠的场景。"""
+    proj = _mk_project()
+    dashishi = {
+        "volumes": [{"vol": 1, "key_milestones": ["夺取王座"]}],
+        "major_events": [{"volume": 1, "status": "completed"}],
+    }
+    _write_all(proj, dashishi=dashishi,
+               shijianji={"clusters": [
+                   {"volume": 1, "chapter_range": [1, 9], "status": "已完成",
+                    "scope_summary": "主角登上帝位统治天下"}]})
+    return proj
+
+
+def test_default_bigram_path_reports_drift_for_synonym_case():
+    """🔴 零回归锁：无真 embedding 后端（默认）→ match_method=bigram_keyword_overlap，
+    milestone「夺取王座」与已写内容「登上帝位」字面 2-gram 零重叠 → 报 VOLUME_ARC_DRIFT
+    （对照组：证明默认路径与改动前行为逐字节一致）。"""
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        proj = _mk_synonym_project()
+        # 前置断言：证明这确实是「字面零重叠但语义相同」的场景
+        assert not (mod._kw("夺取王座") & mod._kw("主角登上帝位统治天下"))
+        r = mod.scan(proj)
+        assert r["match_method"] == "bigram_keyword_overlap", r
+        assert r["milestone_coverage"] == 0.0, r
+        assert len(r["issues"]) == 1 and r["issues"][0]["code"] == "VOLUME_ARC_DRIFT", r
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_semantic_path_used_when_backend_mocked_no_false_drift():
+    """真 embedding 后端 mock：同一同义改写场景下，余弦相似度应正确识别「夺取王座」≈
+    「登上帝位」→ 不误报漂移。验证语义路径被正确使用（match_method=embedding_cosine）。"""
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        proj = _mk_synonym_project()
+        os.environ["EMBED_BACKEND"] = "mock"
+
+        import embedding_store
+        orig = embedding_store.compute_embedding
+
+        def _mock_embed(text):
+            # 语义分组：「帝位」/「王座」同指「统治地位」这一概念 → 同向量
+            return [1.0, 0.0] if ("帝位" in text or "王座" in text) else [0.0, 1.0]
+
+        embedding_store.compute_embedding = _mock_embed
+        try:
+            r = mod.scan(proj)
+        finally:
+            embedding_store.compute_embedding = orig
+
+        assert r["match_method"] == "embedding_cosine", r
+        assert r["milestone_coverage"] == 1.0, r   # 语义识别为已触及
+        assert r["issues"] == [], r                 # 不误报漂移
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_semantic_touch_floor_env_override():
+    """VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 覆盖默认 0.5·非法值回退默认。"""
+    old = os.environ.get("VOLUME_ARC_SEMANTIC_TOUCH_FLOOR")
+    try:
+        os.environ["VOLUME_ARC_SEMANTIC_TOUCH_FLOOR"] = "0.8"
+        assert mod._semantic_touch_floor() == 0.8
+        os.environ["VOLUME_ARC_SEMANTIC_TOUCH_FLOOR"] = "not_a_float"
+        assert mod._semantic_touch_floor() == mod.MILESTONE_SEMANTIC_TOUCH_FLOOR
+    finally:
+        if old is not None:
+            os.environ["VOLUME_ARC_SEMANTIC_TOUCH_FLOOR"] = old
+        else:
+            os.environ.pop("VOLUME_ARC_SEMANTIC_TOUCH_FLOOR", None)
+
+
+def test_semantic_path_falls_back_when_encode_fails():
+    """真后端配置但 embedding 编码异常 → 回退字面 bigram（不崩·不误判为语义路径）。"""
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        proj = _mk_synonym_project()
+        os.environ["EMBED_BACKEND"] = "mock"
+
+        import embedding_store
+        orig = embedding_store.compute_embedding
+
+        def _boom(text):
+            raise RuntimeError("模拟真后端编码失败")
+
+        embedding_store.compute_embedding = _boom
+        try:
+            r = mod.scan(proj)
+        finally:
+            embedding_store.compute_embedding = orig
+
+        assert r["match_method"] == "bigram_keyword_overlap", r
+        assert r["milestone_coverage"] == 0.0, r
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
 
 
 if __name__ == "__main__":

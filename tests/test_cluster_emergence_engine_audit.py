@@ -19,6 +19,7 @@
 零依赖范式：文件尾 __main__ 循环跑所有 test_·import 被测模块·不引 pytest。
 """
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -26,6 +27,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parents[1] / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import cluster_emergence_engine as cee  # noqa: E402
+import preference_ranker as pref_ranker  # noqa: E402
 
 
 # ───────────────────── 0. 根因前提：契约债下 _current_advancing_vol 恒 0 ─────────────────────
@@ -178,6 +180,69 @@ def test_no_volumes_block_does_not_crash():
         em = _read_emergence(r)
         # 仍有候选（涟漪/arc/faction 维度照常）·收敛维度只是没贡献而已
         assert em["candidates"]
+
+
+# ───────────────────── 5. A4 pairwise 偏好排序接线(advisory·只加字段不改序) ─────────────────────
+
+def test_preference_ranker_gate_off_no_new_fields():
+    """RUOYU_PREF_RANKER 门控关闭(默认)：candidates 不应出现 preference_score/
+    preference_rank_hint —— emerge_next_cluster 的输出与升级前逐字节一致。"""
+    bak = os.environ.get("RUOYU_PREF_RANKER")
+    try:
+        os.environ.pop("RUOYU_PREF_RANKER", None)
+        with tempfile.TemporaryDirectory() as d:
+            root = _mk_project(Path(d), major_events=_ME_POOL, volumes=_VOL_NEW_FIELDS,
+                               world_state={"factions_state": {}})
+            r = cee.emerge_next_cluster(root, "cluster_001")
+            assert r["ok"] is True, r
+            em = _read_emergence(r)
+            for c in em["candidates"]:
+                assert "preference_score" not in c
+                assert "preference_rank_hint" not in c
+    finally:
+        if bak is None:
+            os.environ.pop("RUOYU_PREF_RANKER", None)
+        else:
+            os.environ["RUOYU_PREF_RANKER"] = bak
+
+
+def test_preference_ranker_gate_on_adds_fields_without_reordering():
+    """门控开启 + 已有训练好的 weights：candidates 应被就地加上 preference_score/
+    preference_rank_hint，但候选的生成顺序/数量/parent_me 序列必须与门控关闭时完全一致
+    —— 涌现排序仍由既有启发式(_score_one_me)决定，pairwise 排序器只是顾问字段。"""
+    bak = os.environ.get("RUOYU_PREF_RANKER")
+    try:
+        # 先跑一遍门控关闭的基线，拿到「不受 pairwise 排序器影响」的候选顺序
+        os.environ.pop("RUOYU_PREF_RANKER", None)
+        with tempfile.TemporaryDirectory() as d_off:
+            root_off = _mk_project(Path(d_off), major_events=_ME_POOL, volumes=_VOL_NEW_FIELDS,
+                                   world_state={"factions_state": {}})
+            r_off = cee.emerge_next_cluster(root_off, "cluster_001")
+            baseline_order = [c["parent_me"] for c in _read_emergence(r_off)["candidates"]]
+
+        # 门控开启 + 项目已有训练好的 weights
+        os.environ["RUOYU_PREF_RANKER"] = "1"
+        with tempfile.TemporaryDirectory() as d_on:
+            root_on = _mk_project(Path(d_on), major_events=_ME_POOL, volumes=_VOL_NEW_FIELDS,
+                                  world_state={"factions_state": {}})
+            pref_ranker.save(root_on, {"is_volume_finale": 1.5, "emergence_score": 0.02},
+                             n_observations=10)
+            r_on = cee.emerge_next_cluster(root_on, "cluster_001")
+            assert r_on["ok"] is True, r_on
+            em_on = _read_emergence(r_on)
+            on_order = [c["parent_me"] for c in em_on["candidates"]]
+
+            assert on_order == baseline_order, (
+                "pairwise 排序器不得改变 candidates 的生成顺序/数量（只加字段）：\n"
+                f"  门控关: {baseline_order}\n  门控开: {on_order}")
+            for c in em_on["candidates"]:
+                assert isinstance(c.get("preference_score"), float)
+                assert isinstance(c.get("preference_rank_hint"), int)
+    finally:
+        if bak is None:
+            os.environ.pop("RUOYU_PREF_RANKER", None)
+        else:
+            os.environ["RUOYU_PREF_RANKER"] = bak
 
 
 # ───────────────────── 零依赖 runner ─────────────────────

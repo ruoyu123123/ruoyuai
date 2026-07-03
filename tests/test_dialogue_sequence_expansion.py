@@ -171,3 +171,97 @@ def test_read_failure_returns_note():
         assert "草稿读取失败" in out.get("note", "")
     finally:
         _set_mode(bak)
+
+
+# ── 🔴 2026-07-03 zero_shot_prototype 模型优先路径测试(W3) ──────────────────
+import math  # noqa: E402
+
+
+def _char_freq_embedding(text, dim=32):
+    """确定性 mock embedding（字符频率向量·同 test_macguffin_entanglement_scanner 手法）。"""
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _run_with_mock_embedding(fn):
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    import zero_shot_prototype
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _char_freq_embedding
+    zero_shot_prototype.clear_cache()
+    try:
+        return fn()
+    finally:
+        embedding_store.compute_embedding = orig
+        zero_shot_prototype.clear_cache()
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_classify_turn_kind_gate_off_returns_none():
+    assert mod._classify_turn_kind("你好。") is None
+
+
+def test_classify_turn_kind_model_hit():
+    def _do():
+        result = mod._classify_turn_kind("就这样？没有别的了吗？")
+        assert result == "post"
+    _run_with_mock_embedding(_do)
+
+
+def test_classify_turn_model_augments_lexicon_union():
+    """turn 本身不含任何正则触发词·但语义上属于 post → 模型补入(并集不取代)。"""
+    def _do():
+        turn = "没有别的了吗？完了？"  # 不含 PRE/INSERT/POST_MARKERS 任何锚词
+        assert mod._lexicon_turn_kinds(turn) == set()
+        kinds = mod.classify_turn(turn)
+        assert kinds == {"post"}
+    _run_with_mock_embedding(_do)
+
+
+def test_classify_turn_lexicon_preserved_when_gate_off():
+    """真后端关闭时·classify_turn 与 _lexicon_turn_kinds 逐字节一致（零回归契约）。"""
+    turn = "先说一件事，听我说"
+    assert mod.classify_turn(turn) == mod._lexicon_turn_kinds(turn) == {"pre"}
+
+
+def test_scan_turn_classify_source_default_lexicon():
+    bak = os.environ.get("DIALOGUE_SEQ_EXPANSION_MODE")
+    try:
+        _set_mode("active")
+        out = mod.scan(_write(_FLAT_DIALOGUE))
+        assert out["turn_classify_source"] == "lexicon"
+        assert out["model_boosted_turns"] == 0
+    finally:
+        _set_mode(bak)
+
+
+def test_scan_turn_classify_source_model_boosted():
+    bak = os.environ.get("DIALOGUE_SEQ_EXPANSION_MODE")
+    try:
+        _set_mode("active")
+
+        def _do():
+            # turn 语义像 post 但不含任何正则触发词 → 只能靠模型补召回
+            boosted_dialogue = "他问：“事情就到这里，没有别的了吗？完了？”\n" * 40
+            out = mod.scan(_write(boosted_dialogue))
+            assert out["model_boosted_turns"] > 0
+            assert out["turn_classify_source"] == "zero_shot_embedding+lexicon"
+
+        _run_with_mock_embedding(_do)
+    finally:
+        _set_mode(bak)
+
+
+def test_seq_kind_prototypes_cover_pre_insert_post():
+    assert set(mod._SEQ_KIND_PROTOTYPES.keys()) == {"pre", "insert", "post"}

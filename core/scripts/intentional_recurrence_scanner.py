@@ -6,8 +6,11 @@
 （动作/场景/对话骨架≥2 次）+ 细节差异化 → 制造熟悉与陌生的张力。当前
 repeat_noun_density 把所有重复都判为坏 · 真"犯而不犯"被误伤。
 
-【做法 · 确定性 · 零 LLM/零联网】
-  · 跨 cluster scan 摘要 / cluster_draft（占位简化版用字符 3gram Jaccard 相似度）
+【做法 · 确定性】
+  · 跨 cluster scan 摘要 / cluster_draft 相似度：
+    · 默认（无真语义后端）= 字符 3gram Jaccard 相似度（占位简化版·零 LLM/零联网）
+    · 🔴 2026-07-01 EMBED_BACKEND 配置真后端时 = embedding 余弦相似度（能抓住同义改写的
+      重复 motif——trigram Jaccard 抓不到换词表达的复现）
   · 五轴 div_axes：
     (1) actor   主角变化
     (2) place   场所变化
@@ -17,6 +20,9 @@ repeat_noun_density 把所有重复都判为坏 · 真"犯而不犯"被误伤。
   · 0.60 ≤ sim ≤ 0.85 且 div ≥ 3 → STRONG advisory（intentional recurrence）·
     对 repeat_noun_density 反向豁免
   · sim > 0.85 且 div < 2 → real_repeat advisory（真重复）
+
+【依赖】embedding_store.compute_embedding() + cosine_similarity()（同 topic_drift_scanner 模式）。
+  EMBED_BACKEND 未设（默认 hash·无真语义）→ 完全走 trigram Jaccard·match_method="lexicon"。
 
 【三 advisory】
   · INTENTIONAL_RECURRENCE_DETECTED — 犯而不犯命中 · 对 repeat_noun_density 反向豁免
@@ -68,6 +74,34 @@ def _jaccard(a: set, b: set) -> float:
     inter = len(a & b)
     union = len(a | b)
     return inter / union if union else 0.0
+
+
+# ── 🔴 2026-07-01 真语义 embedding 可选路径（完全照抄 topic_drift_scanner 已验证的模式）───────
+def _has_real_embedding_backend() -> bool:
+    """跟 topic_drift_scanner._has_real_embedding_backend 判断逻辑完全一致（各文件各自留一份）。"""
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+def _semantic_similarity(ta: str, tb: str, compute_embedding, cosine_similarity) -> "float | None":
+    """embedding 余弦相似度替代字符 3gram Jaccard（抓同义改写的重复 motif）。
+    维度不一致/计算异常 → None（调用方兜底 trigram Jaccard·不半真半假）。
+    compute_embedding/cosine_similarity 由调用方（scan()）一次性 import 后传入——
+    避免每对 cluster 都重复尝试 import·且顶层 match_method 能如实反映 import 是否成功。
+    """
+    try:
+        emb_a = compute_embedding(ta)
+        emb_b = compute_embedding(tb)
+    except Exception:
+        return None
+    if not emb_a or not emb_b or len(emb_a) != len(emb_b):
+        return None
+    return cosine_similarity(emb_a, emb_b)
 
 
 def _extract_axes(cluster: dict) -> dict:
@@ -170,6 +204,16 @@ def scan(project_root: str | Path) -> dict:
         out["violations_count"] = len(out["violations"])
         return out
 
+    use_semantic = False
+    compute_embedding = cosine_similarity = None
+    if _has_real_embedding_backend():
+        try:
+            from embedding_store import compute_embedding, cosine_similarity
+            use_semantic = True
+        except (ImportError, TypeError):
+            use_semantic = False
+    out["match_method"] = "semantic" if use_semantic else "lexicon"
+
     pairs_intentional = []
     pairs_real_repeat = []
     pair_records = []
@@ -181,7 +225,15 @@ def scan(project_root: str | Path) -> dict:
             tb = _summary_text_for_sim(b)
             if not ta or not tb:
                 continue
-            sim = _jaccard(_trigrams(ta), _trigrams(tb))
+            pair_method = "lexicon"
+            sim = None
+            if use_semantic:
+                sim = _semantic_similarity(ta, tb, compute_embedding, cosine_similarity)
+                if sim is not None:
+                    pair_method = "semantic"
+            if sim is None:
+                sim = _jaccard(_trigrams(ta), _trigrams(tb))
+                pair_method = "lexicon"
             axes_a = _extract_axes(a)
             axes_b = _extract_axes(b)
             div_count, diff_axes = _div_axes(axes_a, axes_b)
@@ -193,6 +245,7 @@ def scan(project_root: str | Path) -> dict:
                 "div_count": div_count,
                 "diff_axes": diff_axes,
                 "kind": None,
+                "match_method": pair_method,
             }
             if SIM_LO <= sim <= SIM_HI and div_count >= DIV_MIN_FOR_INTENTIONAL:
                 rec["kind"] = "intentional_recurrence"
@@ -229,6 +282,7 @@ def scan(project_root: str | Path) -> dict:
                 out["violations"].append({
                     "kind": "intentional_recurrence", "severity": f.get("severity", "minor"),
                     "code": f["code"], "message": f["msg"],
+                    "match_method": out["match_method"],
                     "_doc": "张竹坡犯而不犯·R23 W11 Batch-GG·advisory·绝不 hard_gate"})
             out["verdict"] = "FAIL_MINOR"
             out["warning"] = msg

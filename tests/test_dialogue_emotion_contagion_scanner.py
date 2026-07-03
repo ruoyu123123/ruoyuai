@@ -4,12 +4,17 @@
 确定性·零依赖。覆盖 off/短稿/场景数不足/_max_lagged_corr/_is_conflict_scene/
 _detect_gottman_sequence/compute_dialogue_contagion_signature/作者档 override/
 shadow vs active/CLI/hard_gate registry 守卫。
+
+🔴 2026-07-01 NN情绪VAD集成回归：_nn_batch_vad(model_vad|None) + scan()/
+compute_dialogue_contagion_signature 的 vad_source 归因·核心断言=NN 开启但桥
+未命中时输出必须与 NN 完全关闭时逐字节一致(零回归)。
 """
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -197,3 +202,120 @@ def test_registry_entry_new_true():
     assert entry is not None
     assert entry.get("_new") is True
     assert "DIALOGUE_CONTAGION_ABNORMAL" in entry.get("issues_emitted", [])
+
+
+# ═══════════════ 🔴 2026-07-01 NN情绪VAD集成回归 ═══════════════
+
+def _big_dialogue_draft():
+    """两个场景(第一场景独立越过 1500 CJK flush 阈值)·小王/李雷双人主导对话·
+    对白含 CVAW/NRC 词典真命中词(喜欢/恼怒)·总量越过 MIN_CJK(800)供 scan() 走完整 sync 流程。"""
+    s1 = ("夜色无边，灯火阑珊，寂静无人。" * 150 + "\n"
+          + "“我很喜欢你。”小王说道。" * 6 + "\n"
+          + "“我十分恼怒。”李雷说道。" * 6)
+    s2 = ("第二天清晨，阳光洒满窗台。" * 30 + "\n"
+          + "“我很喜欢你。”小王说道。" * 6 + "\n"
+          + "“我十分恼怒。”李雷说道。" * 6)
+    return s1 + "\n\n" + s2
+
+
+def test_nn_batch_vad_off_by_default(monkeypatch):
+    """env 未开(默认) → _nn_batch_vad 全 None·不碰 FeatureStore/nn_vad_bridge。"""
+    monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+    assert mod._nn_batch_vad(["随便写点什么", "再来一句"]) == [None, None]
+
+
+def test_nn_batch_vad_empty_input():
+    assert mod._nn_batch_vad([]) == []
+
+
+def test_nn_batch_vad_model_source_when_enabled(monkeypatch):
+    """env 开 + 桥命中模型 → 批量返回 (V,A,D)·D 缺省补 0.5。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts: [
+            {"valence": 0.81, "arousal": 0.4, "dominance": None, "source": "model"}
+            for _ in texts
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    result = mod._nn_batch_vad(["文本一", "文本二"])
+    assert result == [(0.81, 0.4, 0.5), (0.81, 0.4, 0.5)]
+
+
+def test_nn_batch_vad_bridge_miss_returns_none_list(monkeypatch):
+    """env 开但桥未命中(全 None) → _nn_batch_vad 也全 None(调用方回退词典)。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    assert mod._nn_batch_vad(["文本一", "文本二"]) == [None, None]
+
+
+def test_scan_model_unavailable_matches_lexicon_baseline(monkeypatch):
+    """🔴 零回归核心断言：NN 开启但桥返回 None → scan() 完整输出须与 NN 完全关闭时逐字节一致。"""
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("active")
+        draft = _write_draft(_big_dialogue_draft())
+        monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+        baseline = mod.scan(draft)
+        assert baseline["sync_results"], "fixture 应至少产出 1 组同步分析(否则本测试无意义)"
+
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        with_model_unavailable = mod.scan(draft)
+        assert with_model_unavailable == baseline
+    finally:
+        _set_mode(bak)
+
+
+def test_scan_model_vad_source_when_enabled(monkeypatch):
+    """env 开 + 桥命中模型 → sync_results/metrics 的 vad_source 标 model_vad。"""
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("active")
+        draft = _write_draft(_big_dialogue_draft())
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts: [
+                {"valence": 0.2 if "喜欢" in t else 0.8, "arousal": 0.5,
+                 "dominance": None, "source": "model"}
+                for t in texts
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        r = mod.scan(draft)
+        assert r["sync_results"], "应至少算出一组双人同步分析"
+        assert all(s["vad_source"] == "model_vad" for s in r["sync_results"])
+        assert r["metrics"]["vad_source_summary"]["model_vad"] == len(r["sync_results"])
+        assert r["metrics"]["vad_source_summary"]["lexicon_fallback"] == 0
+    finally:
+        _set_mode(bak)
+
+
+def test_compute_signature_vad_source_model_and_fallback(monkeypatch):
+    """compute_dialogue_contagion_signature 的 vad_source：默认词典·桥未命中零回归·桥命中模型。"""
+    p = _write_draft(_big_dialogue_draft())
+    monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+    baseline = mod.compute_dialogue_contagion_signature([str(p)], names={"小王", "李雷"})
+    assert baseline["vad_source"] == "lexicon_fallback"
+    assert baseline["sync_window_baseline"]["sample_n"] > 0
+
+    fake_none = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_none)
+    sig_none = mod.compute_dialogue_contagion_signature([str(p)], names={"小王", "李雷"})
+    assert sig_none == baseline  # 零回归：桥不可用时逐字节一致
+
+    fake_model = types.SimpleNamespace(predict_batch=lambda texts: [
+        {"valence": 0.5, "arousal": 0.5, "dominance": None, "source": "model"} for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_model)
+    sig_model = mod.compute_dialogue_contagion_signature([str(p)], names={"小王", "李雷"})
+    assert sig_model["vad_source"] == "model_vad"
+
+
+def test_code_not_in_hard_gate_after_nn_integration():
+    """确认 NN 集成后 ISSUE_CODE 仍不在 hard_gate 清单(北极星⑤守卫)。"""
+    reg = _SCRIPTS / "scanner_registry.json"
+    data = json.loads(reg.read_text(encoding="utf-8"))
+    assert mod.ISSUE_CODE not in set(data.get("hard_gate_codes", []))

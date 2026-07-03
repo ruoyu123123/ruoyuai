@@ -32,6 +32,11 @@
   5. 写回 sdt_regulation_profile.json 当前 cluster 的 dominant_regulation
      （cluster-save-state step 9 时合并）
 
+【🔴 2026-07-03 zero_shot_prototype 模型优先路径】每扇 ±30 CJK 窗口真后端可用时优先用
+  zero_shot_prototype.classify() 做语义分类（该窗口记 1 票）；否则/置信不足 → 100% 走
+  原词典逐词累加（默认无真后端时逐字节零回归）。用了模型的角色 distribution dict 混入
+  `_source=zero_shot_embedding` 标记键（不参与 top-1 计票）。
+
 【北极星⑤】顾问非法官·全 advisory·env SDT_REGULATION_MODE
   SDT_REGULATION_DRIFT 绝不进 audit_hub.HARD_GATE_CODES。
   作者档『_sdt_regulation_override=true』可豁免（反类型作者刻意）。
@@ -77,6 +82,35 @@ TRIGGER_LEXICON_PLACEHOLDER = {
         "重创", "重生", "失去", "崩塌", "灾", "诀别",
     ],
 }
+
+# 🔴 2026-07-03 zero_shot_prototype 模型优先路径·SDT 六级调节 embedding 原型例句
+# （占位·3 条/类·待金标准校准·真后端不可用时 100% 走词典逐词累加兜底）
+_SDT_REGULATION_PROTOTYPES = {
+    "intrinsic": ["他觉得这件事很有趣，忍不住想多做一会儿", "她喜欢这种感觉，纯粹是因为好奇",
+                  "他乐在其中，根本不需要理由"],
+    "integrated": ["他一直是这样的人，这就是他的天性", "这本来就是他的本性，从未改变过",
+                   "他向来如此，仿佛生来就该这么做"],
+    "identified": ["他觉得这件事很重要，必须做好", "这是应该做的，值得付出代价",
+                   "他认定这有意义，才咬牙坚持"],
+    "introjected": ["他觉得丢脸，愧疚得抬不起头", "不这么做他会良心不安",
+                    "对不起大家，他心里满是羞愧"],
+    "external": ["他是被逼的，不得不照命令去做", "为了赚钱，他只能忍着去做",
+                 "上头下了命令，他没有选择"],
+    "amotivation": ["他觉得无所谓，反正怎样都一样", "随便吧，他懒得再多想",
+                    "算了，他心里已经麻木"],
+}
+
+
+def _classify_sdt_window(ctx: str) -> "str | None":
+    """真后端优先用 zero_shot_prototype 分类窗口调节类型·否则 None（调用方 100% 走词典累加）。"""
+    try:
+        import zero_shot_prototype
+        result = zero_shot_prototype.classify(ctx, _SDT_REGULATION_PROTOTYPES, floor=0.5)
+        if result is not None:
+            return result["label"]
+    except Exception:
+        pass
+    return None
 
 
 def _mode() -> str:
@@ -132,15 +166,27 @@ def _override_flag(project_root) -> bool:
 
 
 def _dominant_regulation(text: str, char_name: str, window: int = 30) -> tuple[str, dict]:
-    """扫角色名 ±window CJK 上下文 6 类 lexicon 命中 → top-1"""
+    """扫角色名 ±window CJK 上下文 6 类调节类型 → top-1。
+
+    🔴 2026-07-03 模型优先：每扇窗口真后端可用时优先用 zero_shot_prototype 分类
+    （该窗口记 1 票）；否则/置信不足 → 100% 走原词典逐词累加（同窗口可能命中多词多类，
+    默认无真后端时逐字节零回归）。任一窗口用了模型 → 返回的 distribution dict 混入
+    `_source` 标记键（不参与 top-1 计票，同 `_BURST_LEXICONS._placeholder` 记法）。
+    """
     if not char_name or char_name not in text:
         return ("", {})
     counts: Counter = Counter()
     tokens_map = SDT_LEXICON_PLACEHOLDER["tokens"]
+    used_model = False
     for m in re.finditer(re.escape(char_name), text):
         lo = max(0, m.start() - window)
         hi = min(len(text), m.end() + window)
         ctx = text[lo:hi]
+        model_label = _classify_sdt_window(ctx)
+        if model_label is not None:
+            counts[model_label] += 1
+            used_model = True
+            continue
         for reg, lex in tokens_map.items():
             for w in lex:
                 if w in ctx:
@@ -148,7 +194,10 @@ def _dominant_regulation(text: str, char_name: str, window: int = 30) -> tuple[s
     if not counts:
         return ("", {})
     top = counts.most_common(1)[0][0]
-    return top, dict(counts)
+    dist = dict(counts)
+    if used_model:
+        dist["_source"] = "zero_shot_embedding"
+    return top, dist
 
 
 def _has_trigger(text: str) -> bool:

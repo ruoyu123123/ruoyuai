@@ -9,6 +9,13 @@
 - writer reflector 据此发现「角色行为模式正在固化」
 
 退出码: 0 健康 / 1 advisory / 2 致命
+
+【🔴 2026-07-01 emotion_vad 模型集成】detect_emotions_for_char 的 ±150 字窗口判断优先用
+emotion_vad 模型(RoBERTa 微调·held-out meanCCC 0.80)的 valence 连续值最近邻分类到 7 类之一
+(锚点复用 emotion_curve_rescan_scanner.EMOTION_VALENCE 同源数值)，替换关键词命中判断；
+模型不可用/该窗未命中 → 该窗回退关键词扫描(与旧逻辑逐字节一致·零回归)。分布/单一化/连续段
+判定数学部分不变。env RUOYU_NN_VAD 门控(默认 off)；main() 报告加 vad_source 字段
+(model_vad/lexicon_fallback/mixed/not_applicable_ledger_mode)供训练数据归因。
 """
 
 from __future__ import annotations
@@ -46,6 +53,52 @@ EMOTION_KEYWORDS = {
     "fearful": ["恐惧", "害怕", "战栗", "毛骨悚然", "不寒而栗", "颤抖"],
 }
 
+# 🔴 2026-07-01 emotion_vad 模型集成：valence 锚点(0=最负·1=最正·0.5=中性)，供模型 valence
+# 最近邻分类到上面 7 类之一。数值与 emotion_curve_rescan_scanner.EMOTION_VALENCE 同源
+# (该文件反向 import 本文件的 EMOTION_KEYWORDS，为避免循环 import 在此单独定义同一份数值)。
+_EMOTION_VALENCE_ANCHOR = {
+    "joyful": 1.0, "calm": 0.6, "curious": 0.55,
+    "anxious": 0.35, "angry": 0.28, "fearful": 0.2, "sad": 0.12,
+}
+
+
+def _nearest_emotion_by_valence(valence: float) -> str:
+    """模型 valence 最近邻分类到 EMOTION_KEYWORDS 7 类之一(复用同一套类目体系)。"""
+    return min(_EMOTION_VALENCE_ANCHOR, key=lambda e: abs(_EMOTION_VALENCE_ANCHOR[e] - valence))
+
+
+def _model_window_valences(windows: list) -> list:
+    """emotion_vad 模型批量取每个窗口 valence(RUOYU_NN_VAD=1 门控·一次 subprocess·摊薄加载)。
+
+    命中 → float；未命中/模型不可用 → None(调用方回退关键词扫描·零回归)。保序一一对应。"""
+    n = len(windows)
+    if n == 0 or _os.environ.get("RUOYU_NN_VAD") != "1":
+        return [None] * n
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        try:
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(windows) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(windows)
+    except Exception:
+        return [None] * n
+    if not preds or len(preds) != n:
+        return [None] * n
+    out = []
+    for p in preds:
+        if p and p.get("valence") is not None:
+            try:
+                out.append(float(p["valence"]))
+            except (TypeError, ValueError):
+                out.append(None)
+        else:
+            out.append(None)
+    return out
+
 
 def load_chapter_text(project_root: Path, ch: int) -> str:
     p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
@@ -54,21 +107,49 @@ def load_chapter_text(project_root: Path, ch: int) -> str:
     return p.read_text(encoding="utf-8")
 
 
-def detect_emotions_for_char(text: str, char_name: str) -> Counter:
-    """近似算法：扫角色名附近 ±150 字内的情绪关键词。"""
+def detect_emotions_for_char_detail(text: str, char_name: str) -> dict:
+    """近似算法(detail 版)：扫角色名附近 ±150 字窗口 → counts + source 归因。
+
+    🔴 2026-07-01 emotion_vad 模型集成：每窗先试模型 valence(RUOYU_NN_VAD=1)→最近邻分类到
+    EMOTION_KEYWORDS 7 类之一；模型不可用/该窗未命中 → 回退关键词扫描(与旧逻辑逐字节一致·
+    零回归)。source 字段(model_vad/lexicon_fallback/mixed/none)供训练数据归因。
+    """
+    empty = {"counts": Counter(), "source": "none",
+             "model_window_count": 0, "lexicon_window_count": 0}
     if not text or not char_name:
-        return Counter()
-    counts = Counter()
+        return empty
     # 找所有角色名出现位置
     positions = [m.start() for m in re.finditer(re.escape(char_name), text)]
-    for pos in positions:
-        window = text[max(0, pos - 150):pos + 150]
+    if not positions:
+        return empty
+    windows = [text[max(0, pos - 150):pos + 150] for pos in positions]
+    model_valences = _model_window_valences(windows)
+    counts = Counter()
+    model_hits = 0
+    for window, mval in zip(windows, model_valences):
+        if mval is not None:
+            counts[_nearest_emotion_by_valence(mval)] += 1
+            model_hits += 1
+            continue
         for emotion, kws in EMOTION_KEYWORDS.items():
             for kw in kws:
                 if kw in window:
                     counts[emotion] += 1
                     break  # 每个 emotion 在一个 window 只算 1 次
-    return counts
+    lexicon_hits = len(windows) - model_hits
+    if model_hits == len(windows):
+        source = "model_vad"
+    elif model_hits == 0:
+        source = "lexicon_fallback"
+    else:
+        source = "mixed"
+    return {"counts": counts, "source": source,
+            "model_window_count": model_hits, "lexicon_window_count": lexicon_hits}
+
+
+def detect_emotions_for_char(text: str, char_name: str) -> Counter:
+    """近似算法：扫角色名附近 ±150 字内的情绪(兼容旧调用签名·cluster_summary_builder.py 消费)。"""
+    return detect_emotions_for_char_detail(text, char_name)["counts"]
 
 
 def main():
@@ -83,6 +164,9 @@ def main():
     char_emotion_log = defaultdict(list)  # char -> [(ch, emotion_dict)]
     recent: list[int] = []
     chars: list[str] = []
+    # 🔴 2026-07-01 emotion_vad 模型集成：source 归因计数(仅非 ledger 磁盘扫描路径会累积)
+    vad_model_windows = 0
+    vad_lexicon_windows = 0
 
     # ===== 2026-05-29 cluster 化分支：账本有 char_emotion_counts → 取预算逐章情绪计数 =====
     # --last-n 在 cluster 模式语义为「最后 N 个 cluster 的章」；不再逐章扫文本
@@ -151,8 +235,25 @@ def main():
         for ch in recent:
             text = load_chapter_text(project_root, ch)
             for c in chars:
-                counts = detect_emotions_for_char(text, c)
-                char_emotion_log[c].append((ch, dict(counts)))
+                detail = detect_emotions_for_char_detail(text, c)
+                char_emotion_log[c].append((ch, dict(detail["counts"])))
+                vad_model_windows += detail["model_window_count"]
+                vad_lexicon_windows += detail["lexicon_window_count"]
+
+    # 🔴 2026-07-01 emotion_vad 模型集成：整轮 source 归因(供训练数据溯源)。
+    # ledger 路径不做文本扫描(账本已有预算好的计数)→ 与 model/lexicon 归因无关，单独标记。
+    if use_ledger:
+        vad_source = "not_applicable_ledger_mode"
+    else:
+        vad_total = vad_model_windows + vad_lexicon_windows
+        if vad_total == 0:
+            vad_source = "none"
+        elif vad_model_windows == vad_total:
+            vad_source = "model_vad"
+        elif vad_model_windows == 0:
+            vad_source = "lexicon_fallback"
+        else:
+            vad_source = "mixed"
 
     # 分析模式
     findings = []
@@ -213,6 +314,11 @@ def main():
         "characters_scanned": chars,
         "char_emotion_log": {c: log for c, log in char_emotion_log.items()},
         "findings": findings,
+        # 🔴 2026-07-01 emotion_vad 模型集成：source 归因(model_vad/lexicon_fallback/mixed/
+        # not_applicable_ledger_mode)供训练数据溯源
+        "vad_source": vad_source,
+        "vad_model_window_count": vad_model_windows,
+        "vad_lexicon_window_count": vad_lexicon_windows,
     }
     out_path = out_dir / f"emotion_pattern_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

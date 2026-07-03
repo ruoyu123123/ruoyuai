@@ -40,6 +40,10 @@ import re
 import sys
 from pathlib import Path
 
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
 ISSUE_CODE = "DEUS_EX_SOLUTION"   # ⚠️ advisory · 绝不进 HARD_GATE_CODES
 
 # Resolution 模式锚词
@@ -64,11 +68,91 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 MIN_CJK = 500
 TAIL_RATIO = 0.3   # finale 草稿末段 30% 为 resolution 区
 ANCHOR_FLOOR = 2   # < 2 个前置 anchors → 报
+SEMANTIC_ANCHOR_SIM_THRESHOLD = 0.68   # element+tail 上下文 vs 历史段落余弦阈值 · 待金标准校准
+ANCHOR_CONTEXT_WINDOW = 80   # element 在 tail 中出现位置前后各取 N 字符当语境（同 macguffin_entanglement_scanner 模式）
 
 
 def _mode() -> str:
     m = (os.environ.get("DEUS_EX_AUDIT_MODE") or "shadow").strip().lower()
     return m if m in ("off", "shadow", "active") else "shadow"
+
+
+# ── 🔴 2026-07-02 真语义 embedding 可选路径（照抄 topic_drift_scanner 已验证的模式）───────
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+
+    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
+    embedding 的文件自带一份，不互相 import）。也检查 .env 的 GEN_EMBED__* API 配置。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+def _split_history_paragraphs(history_text: str) -> list:
+    """history_text 按换行/句号切段（比整段拼接更细粒度·适合语义扫描）。"""
+    return [p.strip() for p in re.split(r"[\n。]", history_text or "") if len(p.strip()) >= 6]
+
+
+def _embed_history_once(history_text: str) -> "list[tuple[str, list]] | None":
+    """真后端就绪时把历史段落编码一次，供本次 audit_deus_ex() 内所有 resolution
+    element 复用（避免 O(元素 × 段落) 重复编码·2026-07-02）。
+
+    未配真后端 / 无历史段落 / 编码异常 → None（调用方逐元素回退纯字面子串计数）。
+    """
+    if not _has_real_embedding_backend():
+        return None
+    paras = _split_history_paragraphs(history_text)
+    if not paras:
+        return None
+    try:
+        from embedding_store import compute_embedding
+        out = []
+        for p in paras:
+            pe = compute_embedding(p)
+            if pe:
+                out.append((p, pe))
+        return out or None
+    except Exception:
+        return None
+
+
+def _semantic_anchor_hit(element: str, tail_context: str, history_embs) -> bool:
+    """真后端下：element（+tail 语境窗口）与历史段落语义扫描 —— 命中 → 视为已有语义铺垫
+    （意译/概念性铺垫 · 字面子串扫不出）。
+
+    语境窗口取 element 在 tail_context 中实际出现位置前后 ANCHOR_CONTEXT_WINDOW 字符
+    （而非整段 tail 头部截断——tail 可能长达数千字，resolution 短语可能出现在任意位置，
+    头部截断会把它截没）；element 定位不到 → 退回 tail_context 头部截断兜底。
+
+    history_embs 为 None（无真后端/无历史）/ element 空 / 计算异常 → False
+    （调用方回退字面子串计数 · _count_anchors_for_element 仍是兜底）。
+    """
+    if not history_embs or not element:
+        return False
+    try:
+        from embedding_store import compute_embedding, cosine_similarity
+        idx = tail_context.find(element)
+        if idx >= 0:
+            lo = max(0, idx - ANCHOR_CONTEXT_WINDOW)
+            hi = min(len(tail_context), idx + len(element) + ANCHOR_CONTEXT_WINDOW)
+            window = tail_context[lo:hi]
+        else:
+            window = tail_context[:200]
+        query = f"{element} {window}".strip()
+        qe = compute_embedding(query)
+        if not qe:
+            return False
+        for _p, pe in history_embs:
+            if len(pe) == len(qe) and cosine_similarity(qe, pe) >= SEMANTIC_ANCHOR_SIM_THRESHOLD:
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _strip_changes(text: str) -> str:
@@ -166,8 +250,14 @@ def _count_anchors_for_element(element: str, body_text: str, history_text: str) 
 def audit_deus_ex(text: str, history_text: str = "") -> dict:
     """Deus Ex Solution Audit。
 
-    返回 {resolution_elements, anchors_per_element,
+    返回 {resolution_elements, anchors_per_element, anchor_source_per_element,
           underbacked_count, deus_ex_risk, external_deus_hits_count}。
+
+    anchors_per_element 计数：字面子串是兜底（_count_anchors_for_element·原逻辑不变）。
+    真后端就绪时叠加语义扫描历史摘要（tail resolution 段 vs 历史 cluster 摘要余弦）——
+    字面不足 ANCHOR_FLOOR 但语义命中 → 视为已达标铺垫（意译/概念性铺垫漏检）。
+    anchor_source_per_element 标注每个 element 最终判定用的是 "literal_substring" 还是
+    "embedding_cosine"。
     """
     text = _strip_changes(text)
     n = len(text)
@@ -179,14 +269,27 @@ def audit_deus_ex(text: str, history_text: str = "") -> dict:
     elements = _extract_resolution_elements(tail)
     all_elements = (elements["char_names"] + elements["item_names"] +
                     elements["power_hits"])
+    history_embs = _embed_history_once(history_text)
     anchors = {}
+    anchor_source = {}
     for el in all_elements:
-        anchors[el] = _count_anchors_for_element(el, body, history_text)
+        lit = _count_anchors_for_element(el, body, history_text)
+        if lit >= ANCHOR_FLOOR:
+            anchors[el] = lit
+            anchor_source[el] = "literal_substring"
+            continue
+        if _semantic_anchor_hit(el, tail, history_embs):
+            anchors[el] = ANCHOR_FLOOR   # 语义命中 → 视为已达标铺垫（不虚报精确计数）
+            anchor_source[el] = "embedding_cosine"
+        else:
+            anchors[el] = lit
+            anchor_source[el] = "literal_substring"
     underbacked = [el for el, c in anchors.items() if c < ANCHOR_FLOOR]
     external_count = len(elements["external_deus_hits"])
     return {
         "resolution_elements": elements,
         "anchors_per_element": anchors,
+        "anchor_source_per_element": anchor_source,
         "underbacked_count": len(underbacked),
         "underbacked": underbacked[:6],
         "external_deus_hits_count": external_count,
@@ -227,6 +330,7 @@ def scan(draft_path, project_root=None, manifest_path=None) -> dict:
 
     out["resolution_elements"] = result["resolution_elements"]
     out["anchors_per_element"] = result["anchors_per_element"]
+    out["anchor_source_per_element"] = result.get("anchor_source_per_element", {})
     out["underbacked"] = result["underbacked"]
     out["external_deus_hits_count"] = result["external_deus_hits_count"]
 

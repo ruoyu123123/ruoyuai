@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # 🔴 2026-06-29 NN角色网络/共指集成
+# 🔴 2026-07-02 对话归属代词发言人接入 nn_coref_bridge（正则显式归属最优先不动·零回归）
 """character_network_extractor.py — 角色关系网络提取器（cluster 草稿 → 共现/对话关系图）。
 
 【目标】从 cluster 草稿中自动提取角色共现/对话关系网络，辅助 archivist agent。
@@ -10,12 +11,22 @@
   · 纯规则实现（jieba + 正则 + 统计）→ 已够用·默认
   · 极简兜底（正则 + known_characters 列表）→ jieba 也没装时
 
+【对话归属 · 代词发言人 coref 兜底（2026-07-02）】
+  正则（前向/后向 X说/道 + 引号前 30 字回扫最近角色名）对代词发言人（"他说"/
+  "她道"）完全抓不到——正则捕到的 X 是代词而非已知角色名时会被判定失败，仍走
+  30 字回扫，回扫也找不到 / 找到的不是真实发言人时以往只能 speaker=None。
+  现在：正则显式归属（含 30 字回扫）仍是最优先、逻辑不动；仅对上述仍未归属、且
+  正则曾捕到"X说"结构中 X 是代词的对话段，RUOYU_NN_COREF 门控开时调
+  nn_coref_bridge.resolve_coreferences() 把该代词消解回具体角色名再归属（标
+  attribution_method: "coref"）。桥返回空 / 门控关 / 消解结果不在已知角色列表
+  → speaker 维持 None，与现状完全一致（零回归）。
+
 【默认安全铁律（北极星⑤·零回归）】
   · RUOYU_CHARACTER_NETWORK != "1"（默认 off·门控未开）→ 返回空结果
   · Renard / jieba 缺 → 降级规则·绝不崩
   · 任何异常 → 返回空结果·不崩主流水线
 
-Env 门控: RUOYU_CHARACTER_NETWORK（默认 off）
+Env 门控: RUOYU_CHARACTER_NETWORK（默认 off）· 代词发言人 coref 兜底另受 RUOYU_NN_COREF（默认 off）门控
 
 用法：python character_network_extractor.py <draft_path> [--project <root>] [--characters 张三,李四]
 """
@@ -159,40 +170,91 @@ def _split_scenes(text: str) -> list[str]:
 
 # ── 对话归属 ────────────────────────────────────────────────
 
+def _coref_speaker_map(text: str, characters: list[str],
+                       pronoun_spans: list[tuple[int, int]]) -> dict:
+    """代词发言人 coref 兜底：调 nn_coref_bridge 批量消解 → {(代词start,代词end): 角色名}。
+
+    只在 pronoun_spans 非空时才调用（避免无谓 subprocess 开销·HanLP 后端单次
+    超时上限 180s）。RUOYU_NN_COREF 门控关闭（默认）/ 桥异常 / 消解结果不在
+    已知角色列表内 → 对应位置不出现在返回 dict 中，调用方保持 speaker=None，
+    与现状完全一致（零回归）。
+    """
+    if not pronoun_spans:
+        return {}
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        from nn_coref_bridge import resolve_coreferences
+        results = resolve_coreferences(text, characters)
+    except Exception as e:  # noqa: BLE001 — 桥失败绝不影响对话归属主流程
+        print(f"[character_network_extractor] 共指消解失败·代词发言人回退 None："
+              f"{type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
+        return {}
+    char_set = set(characters)
+    out = {}
+    for r in (results or []):
+        span = r.get("span")
+        resolved = r.get("resolved_to")
+        if not span or len(span) != 2 or not resolved or resolved not in char_set:
+            continue
+        out[(span[0], span[1])] = resolved
+    return out
+
+
 def _attribute_dialogue(text: str, characters: list[str]) -> list[dict]:
     """提取对话段 + 归属说话者。
 
     归属策略：
-    1. 前向/后向正则匹配（X说/道/喊："..."）
+    1. 前向/后向正则匹配（X说/道/喊："..."），X 命中已知角色名 → 直接归属
     2. 引号前最近的角色名（回扫 30 字）
-    3. 无法归属 → speaker=None
+    3. 上两步仍未归属、且 1/2 步正则捕到的 X 是代词而非已知角色名
+       （"他说"/"她道"等）→ RUOYU_NN_COREF 门控开时调 nn_coref_bridge.
+       resolve_coreferences() 把该代词消解回具体角色名再归属
+       （标 attribution_method: "coref"）。桥返回空 / 门控关 / 消解结果不在
+       已知角色列表 → speaker 维持 None，行为与现状完全一致（零回归）。
     """
-    attributed = []  # {speaker, content, start, end}
+    attributed = []  # {speaker, content, start, end, attribution_method}
     claimed_spans = set()  # 已归属的 (start, end) 避免重复
+    # 正则捕到"X说/道"但 X 非已知角色名（疑似代词发言人）→ 记录待 coref 兜底消解
+    # 不标 claimed（还没真正归属），让下面第 3 步照常处理该对话段
+    pronoun_cues = []  # [{"content_span": (s,e), "pronoun_span": (s,e)}, ...]
 
     # 1. 前向归属
     for m in _ATTR_FWD_RE.finditer(text):
         name, content = m.group(1), m.group(2)
-        if name in characters and content.strip():
-            key = (m.start(2), m.end(2))
+        if not content.strip():
+            continue
+        key = (m.start(2), m.end(2))
+        if name in characters:
             if key not in claimed_spans:
                 attributed.append({
                     "speaker": name, "content": content.strip(),
                     "start": m.start(2), "end": m.end(2),
+                    "attribution_method": "regex",
                 })
                 claimed_spans.add(key)
+        elif key not in claimed_spans:
+            pronoun_cues.append({"content_span": key,
+                                  "pronoun_span": (m.start(1), m.end(1))})
 
     # 2. 后向归属
     for m in _ATTR_POST_RE.finditer(text):
         content, name = m.group(1), m.group(2)
-        if name in characters and content.strip():
-            key = (m.start(1), m.end(1))
+        if not content.strip():
+            continue
+        key = (m.start(1), m.end(1))
+        if name in characters:
             if key not in claimed_spans:
                 attributed.append({
                     "speaker": name, "content": content.strip(),
                     "start": m.start(1), "end": m.end(1),
+                    "attribution_method": "regex",
                 })
                 claimed_spans.add(key)
+        elif key not in claimed_spans:
+            pronoun_cues.append({"content_span": key,
+                                  "pronoun_span": (m.start(2), m.end(2))})
 
     # 3. 引号前最近角色名
     for m in _DIALOGUE_RE.finditer(text):
@@ -214,8 +276,24 @@ def _attribute_dialogue(text: str, characters: list[str]) -> list[dict]:
         attributed.append({
             "speaker": speaker, "content": content,
             "start": m.start(1), "end": m.end(1),
+            "attribution_method": "regex_lookback" if speaker else None,
         })
         claimed_spans.add(key)
+
+    # 4. 代词发言人 coref 兜底（正则显式归属仍最优先不动·只补 speaker 仍为 None 的条目）
+    if pronoun_cues:
+        coref_map = _coref_speaker_map(
+            text, characters, [c["pronoun_span"] for c in pronoun_cues])
+        if coref_map:
+            by_span = {(a["start"], a["end"]): a for a in attributed}
+            for cue in pronoun_cues:
+                entry = by_span.get(cue["content_span"])
+                if entry is None or entry["speaker"] is not None:
+                    continue
+                resolved = coref_map.get(cue["pronoun_span"])
+                if resolved:
+                    entry["speaker"] = resolved
+                    entry["attribution_method"] = "coref"
 
     attributed.sort(key=lambda x: x["start"])
     return attributed

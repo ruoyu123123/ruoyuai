@@ -194,3 +194,224 @@ def test_empty_open_triggers():
         assert mod.EMPTY_OPEN_CODE in codes, rep
     finally:
         _restore(old)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-01 语义覆盖率补齐（仅规则① hook 覆盖率：embedding cosine 替代 2-gram
+# 字面重叠·规则②③是精确集合运算/固定 regex 锚词格式匹配，本次不改）
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_has_real_embedding_backend_false_by_default():
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_has_real_embedding_backend_true_when_set():
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "local"
+        assert mod._has_real_embedding_backend() is True
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_default_close_hook_match_method_is_bigram():
+    """🔴 零回归锁：未配置 EMBED_BACKEND（默认）→ close_hook_match_method 报字面
+    bigram（与改动前行为逐字节一致）。复用 test_hook_miss_triggers 同款数据。"""
+    old_mode = _set_mode("active")
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        proj = _mk_project(shijianji={
+            "clusters": [
+                {"cluster_id": "c1", "volume": 1, "status": "done",
+                 "chapter_range": [1, 3], "cast": ["林尘", "王虎"],
+                 "scope_summary": "林尘大战王虎",
+                 "volume_transition_hooks": {
+                     "close": {"hook_text": "黑龙将在北境苏醒，吞噬星辰"}
+                 }},
+                {"cluster_id": "c2", "volume": 2,
+                 "cast": ["林尘"],
+                 "scope_summary": "他在山间打坐修炼",
+                 "scene_storyboard": [{"summary": "他在山间打坐修炼"}]},
+            ]})
+        rep = mod.scan(proj)
+        assert rep.get("close_hook_match_method") == "bigram_keyword_overlap", rep
+        assert mod.HOOK_MISS_CODE in [i["code"] for i in rep["issues"]], rep
+    finally:
+        _restore(old_mode)
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_hook_miss_semantic_path_recognizes_synonym():
+    """真 embedding 后端 mock：上卷末钩「巨龙即将苏醒」下卷首写「黑龙睁开双眼」字面
+    2-gram 零重叠（literal 会误判钩零命中），embedding 余弦相似度应识别为同义 → 不
+    误报 HOOK_MISS。验证语义路径被正确使用（close_hook_match_method=embedding_cosine）。"""
+    old_mode = _set_mode("active")
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        last_finale = {"cluster_id": "c1", "volume": 1, "status": "done",
+                       "chapter_range": [1, 3], "cast": ["林尘"],
+                       "scope_summary": "林尘对峙巨龙",
+                       "volume_transition_hooks": {
+                           "close": {"hook_text": "巨龙即将苏醒"}
+                       }}
+        next_first = {"cluster_id": "c2", "volume": 2,
+                     "cast": ["林尘"],
+                     "scope_summary": "黑龙睁开双眼",
+                     "scene_storyboard": [{"summary": "黑龙睁开双眼"}]}
+        proj = _mk_project(shijianji={"clusters": [last_finale, next_first]})
+        # 前置断言：用模块自身的抽取函数还原真实 open_text，确认字面 2-gram 确实零重叠
+        # （同义改写零容错场景：literal 会误判钩零命中）
+        _close_hook_text = mod._close_hook(last_finale)
+        _open_text = mod._scene1_text(next_first) + " " + str(next_first.get("scope_summary") or "")
+        assert not (mod._kw(_close_hook_text) & mod._kw(_open_text)), \
+            (mod._kw(_close_hook_text), mod._kw(_open_text))
+
+        os.environ["EMBED_BACKEND"] = "mock"
+        import embedding_store
+        orig = embedding_store.compute_embedding
+
+        def _mock_embed(text):
+            return [1.0, 0.0] if "龙" in text else [0.0, 1.0]
+
+        embedding_store.compute_embedding = _mock_embed
+        try:
+            rep = mod.scan(proj)
+        finally:
+            embedding_store.compute_embedding = orig
+
+        assert rep["close_hook_match_method"] == "embedding_cosine", rep
+        assert rep["close_hook_coverage"] == 1.0, rep
+        assert mod.HOOK_MISS_CODE not in [i["code"] for i in rep["issues"]], rep
+    finally:
+        _restore(old_mode)
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_hook_semantic_path_falls_back_when_encode_fails():
+    """真后端配置但 embedding 编码异常 → 回退字面 bigram（不崩·不误判为语义路径）。"""
+    old_mode = _set_mode("active")
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        proj = _mk_project(shijianji={
+            "clusters": [
+                {"cluster_id": "c1", "volume": 1, "status": "done",
+                 "chapter_range": [1, 3], "cast": ["林尘", "王虎"],
+                 "scope_summary": "林尘大战王虎",
+                 "volume_transition_hooks": {
+                     "close": {"hook_text": "黑龙将在北境苏醒，吞噬星辰"}
+                 }},
+                {"cluster_id": "c2", "volume": 2,
+                 "cast": ["林尘"],
+                 "scope_summary": "他在山间打坐修炼",
+                 "scene_storyboard": [{"summary": "他在山间打坐修炼"}]},
+            ]})
+        os.environ["EMBED_BACKEND"] = "mock"
+        import embedding_store
+        orig = embedding_store.compute_embedding
+
+        def _boom(text):
+            raise RuntimeError("模拟真后端编码失败")
+
+        embedding_store.compute_embedding = _boom
+        try:
+            rep = mod.scan(proj)
+        finally:
+            embedding_store.compute_embedding = orig
+
+        assert rep.get("close_hook_match_method") == "bigram_keyword_overlap", rep
+        assert mod.HOOK_MISS_CODE in [i["code"] for i in rep["issues"]], rep
+    finally:
+        _restore(old_mode)
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_rule_2_hard_reset_untouched_by_semantic_backend():
+    """规则②(cast硬重置=精确集合运算) 即便真 embedding 后端就绪也不该被语义化
+    （本任务范围只改规则①）。复用 test_hard_reset_triggers 同款数据 + mock 后端。"""
+    old_mode = _set_mode("active")
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        proj = _mk_project(shijianji={
+            "clusters": [
+                {"cluster_id": "c1", "volume": 1, "status": "done",
+                 "chapter_range": [1, 3], "cast": ["林尘", "王虎"],
+                 "scope_summary": "决战古城"},
+                {"cluster_id": "c2", "volume": 2,
+                 "cast": ["陌生甲", "陌生乙"],   # 完全不重叠 → 应仍触发②
+                 "scope_summary": "新地点新人物",
+                 "scene_storyboard": [{"summary": "陌生甲来到新的城里寻人"}]},
+            ]})
+        os.environ["EMBED_BACKEND"] = "mock"
+        import embedding_store
+        orig = embedding_store.compute_embedding
+        embedding_store.compute_embedding = lambda text: [1.0, 0.0]
+        try:
+            rep = mod.scan(proj)
+        finally:
+            embedding_store.compute_embedding = orig
+        codes = [i["code"] for i in rep["issues"]]
+        assert mod.HARD_RESET_CODE in codes, rep
+        assert rep["cast_overlap_ratio"] == 0, rep
+    finally:
+        _restore(old_mode)
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_rule_3_empty_open_untouched_by_semantic_backend():
+    """规则③(scene1 缺新钩=固定 regex 锚词匹配) 即便真 embedding 后端就绪也不该被
+    语义化（本任务范围只改规则①）。复用 test_empty_open_triggers 同款数据 + mock 后端
+    （注：规则③要求 cast 无新增，天然与规则②「cast 全无重叠」互斥，故与②分开测）。"""
+    old_mode = _set_mode("active")
+    old_eb = os.environ.get("EMBED_BACKEND")
+    try:
+        proj = _mk_project(shijianji={
+            "clusters": [
+                {"cluster_id": "c1", "volume": 1, "status": "done",
+                 "chapter_range": [1, 3], "cast": ["林尘"]},
+                {"cluster_id": "c2", "volume": 2,
+                 "cast": ["林尘"],  # 与上卷完全重合 → 无新 cast
+                 "scope_summary": "林尘睡了一觉醒来吃了饭",
+                 "scene_storyboard": [{"summary": "林尘睡了一觉醒来吃了饭"}]},  # 无锚词
+            ]})
+        os.environ["EMBED_BACKEND"] = "mock"
+        import embedding_store
+        orig = embedding_store.compute_embedding
+        embedding_store.compute_embedding = lambda text: [1.0, 0.0]
+        try:
+            rep = mod.scan(proj)
+        finally:
+            embedding_store.compute_embedding = orig
+        codes = [i["code"] for i in rep["issues"]]
+        assert mod.EMPTY_OPEN_CODE in codes, rep
+    finally:
+        _restore(old_mode)
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)

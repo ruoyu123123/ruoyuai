@@ -6,12 +6,14 @@
 插入一段他者断流弧（旁人/旁线/旁观视角），让读者注意力短暂离主线，
 回主线时张力反弹更强。当前 cluster 长主线无 POV 切换路由 → 单一主线疲劳。
 
-【做法 · 确定性 · 零 LLM/零联网】
+【做法 · 确定性规则 + 模型优先证据】
   · 触发条件全部满足：
     (1) cluster 主线 arc 占比 > 60%（manifest.event_cluster_context.scope_summary 命中度）
-    (2) 连续 ≥4 场景 同一主角 POV（启发：scene_break_re 切片 · 段首主语恒同）
-    (3) 情感强度 > 0.7（启发：情绪标点密度 + 短句独行率 z 联合分）
-    (4) 无 POV 切换（启发：段首人名出现单一）
+    (2) 连续 ≥4 场景 同一主角 POV（段首主语：nn_coref_bridge 优先解析指代到具体角色名·
+        RUOYU_NN_COREF 门控·门控关闭/无结果 → 回退段首前 120 字最频繁 2-4 字 token 正则）
+    (3) 情感强度 > 0.7（VAD arousal 模型优先·段落窗口批量均值·RUOYU_NN_VAD 门控·
+        不可用 → 回退情绪标点密度 + 短句独行率 z 联合分启发式）
+    (4) 无 POV 切换（同 (2) 的场景主语来源）
   · → 建议中段 35-55% 插 200-500 CJK 他者断流弧
   · 写入下 cluster brief pacing_suggestions（占位 · cluster-save-state 接管时回写）
 
@@ -123,8 +125,58 @@ def _split_scenes(text: str) -> list[str]:
     return [p.strip() for p in parts if p and p.strip()]
 
 
-def _scene_lead_subject(scene_text: str) -> str:
-    """启发：scene 段首前 20 CJK 取最频繁人名 surface"""
+def _load_cast_names(project_root) -> list[str]:
+    """人物卡.json 读全部命名实体（含 aliases），供 nn_coref_bridge known_characters 用。"""
+    if not project_root:
+        return []
+    p = Path(project_root) / "_数据库" / "人物卡.json"
+    if not p.exists():
+        return []
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    names = []
+    for c in (obj.get("characters", []) if isinstance(obj, dict) else []):
+        if not isinstance(c, dict):
+            continue
+        nm = c.get("name")
+        if nm:
+            names.append(nm)
+        for a in (c.get("aliases") or []):
+            if a:
+                names.append(a)
+    return names
+
+
+def _coref_scene_lead(scene_text: str, cast_names) -> "str | None":
+    """nn_coref_bridge 解析 scene 段首前 120 字的代词/非命名指代 → 首个解析出的具体角色名。
+    RUOYU_NN_COREF 门控关闭（桥内部默认返回 []）/ 无结果 / 任何异常 → None
+    （调用方回退原正则 most-common 逻辑·消费方式参考 centering_theory_focus_scanner.py）。"""
+    if not scene_text:
+        return None
+    head = scene_text[:120]
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        from nn_coref_bridge import resolve_coreferences
+        results = resolve_coreferences(head, cast_names or None)
+    except Exception:
+        return None
+    for r in results or []:
+        resolved = r.get("resolved_to") if isinstance(r, dict) else None
+        if resolved:
+            return resolved
+    return None
+
+
+def _scene_lead_subject(scene_text: str, cast_names=None) -> str:
+    """场景主角 surface：nn_coref_bridge 优先解析段首指代到具体角色名；
+    门控关闭/无结果/异常 → 回退启发式（段首前 120 字最频繁 2-4 字 token）。"""
+    coref_hit = _coref_scene_lead(scene_text, cast_names)
+    if coref_hit:
+        return coref_hit
     head = scene_text[:120]
     counts: Counter = Counter()
     for m in re.finditer(r"[一-鿿]{2,4}", head):
@@ -152,8 +204,43 @@ def _arc_occupancy(text: str, scope_summary: str, protagonist: str) -> float:
     return min(1.0, hits / (cjk / 100))
 
 
+def _model_emotion_intensity(text: str) -> "float | None":
+    """VAD 模型算情感强度：按段落切样本批量算 arousal 均值直接当强度分（[0,1]·语义与
+    原启发式归一分一致）。模型未启用(RUOYU_NN_VAD!=1)/不可用/异常 → None
+    （调用方回退标点密度+短句独行率启发式·零回归）。"""
+    if not text or os.environ.get("RUOYU_NN_VAD") != "1":
+        return None
+    samples = [p for p in re.split(r"\n\s*\n+", text) if p.strip()] or [text]
+    try:
+        preds = None
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(samples) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(samples)
+    except Exception:
+        return None
+    vals = []
+    for p in preds or []:
+        if p and p.get("arousal") is not None:
+            try:
+                vals.append(float(p["arousal"]))
+            except (TypeError, ValueError):
+                pass
+    if not vals:
+        return None
+    return round(sum(vals) / len(vals), 3)
+
+
 def _emotion_intensity(text: str) -> float:
-    """归一启发：情绪标点密度 + 短句独行率 联合分"""
+    """情感强度[0,1]：VAD arousal 模型优先；不可用 → 回退情绪标点密度 + 短句独行率联合分启发式。"""
+    model_score = _model_emotion_intensity(text)
+    if model_score is not None:
+        return model_score
     cjk = _cjk_count(text)
     if cjk == 0:
         return 0.0
@@ -189,7 +276,8 @@ def scan(draft_path, project_root=None, manifest_path=None) -> dict:
     scope_summary = _read_scope_summary(manifest_path)
     protagonist = _read_protagonist(project_root, manifest_path)
     scenes = _split_scenes(text)
-    scene_subjects = [_scene_lead_subject(s) for s in scenes] if scenes else []
+    cast_names = _load_cast_names(project_root)
+    scene_subjects = [_scene_lead_subject(s, cast_names) for s in scenes] if scenes else []
 
     # (1) arc 占比
     arc_occ = _arc_occupancy(text, scope_summary, protagonist)

@@ -5,14 +5,19 @@
 【缺口】陈望道 38 格之「拈连」(同一动词跨主语/宾语·V+O1 正常但 V+O2 违反常识=幽默/反讽签名)
 搞笑流/讽刺向网文核心修辞·全系统零检测·rhetorical_balance 只查四类分布·不查单格细节。
 
-【做法 · 确定性 · 零 LLM/零联网】
+【做法 · 词典主判断确定性 · 零联网】
   · 句对级扫 V+O1 ... V+O2 结构(相邻或同段 ≤80 字内)
   · V ∈ core/data/verb_object_collocation_freq.json 8 个动词
   · O1 命中该动词 common_objects(后接 ≤4 字 CJK 宾语切片) + O2 命中 unusual_objects → 拈连候选
   · 按 cluster 草稿统计 zeugma_per_kcj 密度
   · 作者档 zeugma_per_kcj 第一权威(搞笑流 > 0·严肃 ≈ 0)·无 → 兜底 thresh=0.5/kCJK
 
-【三 advisory】
+【2026-07-01 补充证据(附加·不覆盖主判断)】每条候选额外算 surprisal_evidence：
+  V+O2 搭配窗口 vs 句子其余部分的 surprisal_gpt2 困惑度基线比值·显著尖峰(ratio>1.3)
+  可佐证"搭配违反"但绝不覆盖/替换上面词典判断的主结论·RUOYU_NN_SURPRISAL 未开启/
+  模型不可用 → surprisal_evidence=None(词典主判断逐字节不变)。
+
+【三 advisory(仍只读词典判断·不受 surprisal_evidence 影响)】
   · ZEUGMA_DETECTED          — 命中 ≥ N 个拈连候选(便于回看)
   · ZEUGMA_OVER_BASELINE     — 密度 > 作者档 + 1σ·堆叠 zeugma 影响节奏
   · ZEUGMA_UNDER_BASELINE    — 搞笑流作者(baseline>0.3)但本 cluster 0 命中=喜剧基底丢失
@@ -189,6 +194,118 @@ def detect_zeugma_pairs(text: str, lexicon: dict) -> list[dict]:
     return deduped
 
 
+# ============ 补充证据：surprisal_gpt2 局部困惑度尖峰(附加·绝不覆盖上面词典主判断) ============
+# 用法：V+O2(unusual 命中)搭配窗口 vs 句子其余部分的困惑度基线比较·尖峰可作"搭配违反"的
+# 补充信号一起输出——只加字段·不改 detect_zeugma_pairs/zeugma_count/flags 任何主判断逻辑。
+
+_SURPRISAL_SPIKE_RATIO = 1.3        # 搭配窗口 mean_surprisal / 句子其余部分基线 > 此倍数 → 记为显著尖峰
+_SURPRISAL_WINDOW_CTX = 6           # 搭配窗口左右各扩 6 字上下文喂模型(避免命中片段过短不稳定)
+_SURPRISAL_MIN_BASELINE_CHARS = 4   # 基线(句子挖掉搭配窗口后剩余部分)最少字数·太短不可靠故跳过
+
+
+def _predict_surprisal_batch(texts: list[str]) -> list[dict | None]:
+    """优先 FeatureStore(带缓存)→ 回退 nn_surprisal_bridge 直连·与 surprisal_scanner 同构。
+    只作补充证据用·模型不可用 → 全 None(绝不影响上面词典判断的主结论)。"""
+    if not texts:
+        return []
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            return FeatureStore.get().compute_surprisal_batch(texts)
+    except Exception:  # noqa: BLE001 FeatureStore 故障 → 退 bridge，绝不影响主判断
+        pass
+    try:
+        import nn_surprisal_bridge as bridge
+    except ImportError:
+        return [None] * len(texts)
+    return bridge.predict_batch(texts)
+
+
+def _collocation_span(sentence: str, verb: str, obj: str, max_obj_chars: int) -> tuple[int, int] | None:
+    """定位 verb 紧邻 obj 命中的字符区间[start,end)·判定规则与 _find_verb_obj_hits 同构。
+    只取第一个命中(供补充证据取窗口用·独立于上面 detect_zeugma_pairs 的主判断)。"""
+    if not verb or not sentence or not obj:
+        return None
+    idx = 0
+    while True:
+        i = sentence.find(verb, idx)
+        if i < 0:
+            return None
+        tail = sentence[i + len(verb): i + len(verb) + max_obj_chars + 4]
+        if tail.startswith(obj):
+            return i, i + len(verb) + len(obj)
+        m = re.match(r"^[了着过]" + re.escape(obj), tail)
+        if m:
+            return i, i + len(verb) + m.end()
+        idx = i + len(verb)
+
+
+def _attach_surprisal_evidence(pairs: list[dict], policy: dict) -> list[dict]:
+    """给每条拈连候选原地附加『搭配窗口 vs 句子其余部分』困惑度补充证据(surprisal_evidence)。
+    只附加不覆盖：zeugma_count/per_kcjk/flags 全部继续只读 detect_zeugma_pairs 的原始结果·
+    本函数只给每个 pair dict 多加一个 key。模型不可用/窗口不合法 → surprisal_evidence=None。"""
+    if not pairs:
+        return pairs
+    max_obj = int((policy or {}).get("max_obj_chars") or 4)
+
+    windows: list[str | None] = []
+    baselines: list[str | None] = []
+    for pair in pairs:
+        span = _collocation_span(pair["sent2"], pair["verb"], pair["obj2"], max_obj)
+        if span is None:
+            windows.append(None)
+            baselines.append(None)
+            continue
+        start, end = span
+        sent2 = pair["sent2"]
+        w_start = max(0, start - _SURPRISAL_WINDOW_CTX)
+        w_end = min(len(sent2), end + _SURPRISAL_WINDOW_CTX)
+        window_text = sent2[w_start:w_end]
+        rest_text = (sent2[:w_start] + sent2[w_end:]).strip()
+        windows.append(window_text if len(window_text.strip()) >= 2 else None)
+        baselines.append(rest_text if len(rest_text) >= _SURPRISAL_MIN_BASELINE_CHARS else None)
+
+    valid_idx = [i for i in range(len(pairs)) if windows[i] and baselines[i]]
+    if not valid_idx:
+        for pair in pairs:
+            pair["surprisal_evidence"] = None
+        return pairs
+
+    batch_texts = [windows[i] for i in valid_idx] + [baselines[i] for i in valid_idx]
+    preds = _predict_surprisal_batch(batch_texts)
+    if len(preds) != len(batch_texts):
+        for pair in pairs:
+            pair["surprisal_evidence"] = None
+        return pairs
+
+    n_valid = len(valid_idx)
+    window_preds, baseline_preds = preds[:n_valid], preds[n_valid:]
+
+    evidence_by_idx: dict = {}
+    for k, i in enumerate(valid_idx):
+        wp, bp = window_preds[k], baseline_preds[k]
+        if not (wp and bp and wp.get("mean_surprisal") is not None
+                and bp.get("mean_surprisal") is not None):
+            continue
+        window_s = float(wp["mean_surprisal"])
+        baseline_s = float(bp["mean_surprisal"])
+        if baseline_s <= 0:
+            continue
+        ratio = window_s / baseline_s
+        evidence_by_idx[i] = {
+            "window_surprisal": round(window_s, 4),
+            "baseline_surprisal": round(baseline_s, 4),
+            "ratio": round(ratio, 4),
+            "is_spike": bool(ratio > _SURPRISAL_SPIKE_RATIO),
+            "source": "model",
+        }
+
+    for i, pair in enumerate(pairs):
+        pair["surprisal_evidence"] = evidence_by_idx.get(i)
+    return pairs
+
+
 def scan(draft_path, project_root=None) -> dict:
     mode = _mode()
     out = {"scanner": "zeugma", "schema_version": "1.0",
@@ -209,6 +326,7 @@ def scan(draft_path, project_root=None) -> dict:
 
     lexicon = load_lexicon()
     pairs = detect_zeugma_pairs(text, lexicon)
+    pairs = _attach_surprisal_evidence(pairs, lexicon.get("_match_policy"))
     count = len(pairs)
     per_kcjk = round(count / (cjk / 1000.0), 3) if cjk else 0.0
 

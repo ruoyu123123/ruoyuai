@@ -13,7 +13,7 @@ memory_layer.py — 三层记忆系统（移植自Mem0/Letta概念）
   python memory_layer.py <项目路径> <章节号> --action stats
 """
 from __future__ import annotations
-import json, re, sys, math
+import json, os, re, sys, math
 from collections import Counter
 from pathlib import Path
 
@@ -48,6 +48,71 @@ def _tfidf_vec(text: str, idf: dict) -> dict:
     tf = Counter(tokens)
     total = max(len(tokens), 1)
     return {t: (c/total) * idf.get(t, 1.0) for t, c in tf.items()}
+
+
+# 🔴 2026-07-02: 真 embedding 后端接线（本仓约定：每个消费 embedding 的脚本自带一份门控副本）。
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+    原样复制自 topic_drift_scanner.py（不 import 跨脚本依赖）。也检查 .env 的
+    GEN_EMBED__* API 配置（由 embedding_store._load_embed_profile 消费）。"""
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+# 🔬 待金标准校准：语义检索相关性下限（低于此值视为不相关·不并入结果·比 TF-IDF 的 0.01
+# 阈值高是因为余弦相似度尺度不同，不能直接沿用字面法的阈值）。env 可覆盖。
+DEFAULT_SEMANTIC_SEARCH_FLOOR = 0.35
+
+
+def _semantic_search_floor() -> float:
+    raw = os.environ.get("MEMORY_LAYER_SEMANTIC_FLOOR")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return DEFAULT_SEMANTIC_SEARCH_FLOOR
+
+
+def _search_semantic(query: str, memories: list[dict], top_k: int) -> "list[dict] | None":
+    """embedding 余弦排序检索（真后端时取代 TF-IDF·能查到「许遥的父亲」命中「许遥爹被人害死」
+    这类同义改写）。query 编码失败 / embedding_store 不可用 → None（调用方回退 TF-IDF）。
+
+    单条记忆编码失败 / 维度不一致 → 跳过该条（不是整体失败）；全部记忆都编码失败才判定
+    为后端不可用（返回 None 触发 TF-IDF 兜底），否则返回真实语义结果（哪怕过滤后为空 ——
+    真后端「查不到相关的」和「后端跑不起来」是两回事，不该混为一谈静默假装退回 TF-IDF）。
+    """
+    try:
+        from embedding_store import compute_embedding, cosine_similarity
+        q_emb = compute_embedding(query)
+    except Exception:
+        return None
+    if not q_emb:
+        return None
+    floor = _semantic_search_floor()
+    encoded_any = False
+    scored = []
+    for mem in memories:
+        try:
+            emb = compute_embedding(mem["content"])
+        except Exception:
+            continue
+        if not emb or len(emb) != len(q_emb):
+            continue
+        encoded_any = True
+        sim = cosine_similarity(emb, q_emb)
+        if sim > floor:
+            scored.append({**mem, "score": round(sim, 4),
+                          "content": mem["content"][:200], "method": "semantic"})
+    if not encoded_any:
+        return None  # 一条都编不出来 → 后端大概率不可用 → 回退 TF-IDF
+    scored.sort(key=lambda x: -x["score"])
+    return scored[:top_k]
 
 
 class MemoryLayer:
@@ -114,11 +179,16 @@ class MemoryLayer:
                 "archive_count": len(arc_mem), "total": len(ch_mem)+len(sum_mem)+len(arc_mem)}
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
-        """跨三层检索最相关的记忆"""
+        """跨三层检索最相关的记忆。真后端(EMBED_BACKEND)时用 embedding 余弦排序，
+        否则 TF-IDF 词袋余弦（同义改写查不到·占位法）。"""
         all_memories = (self._load_chapter_memory() +
                        self._load_summary_memory() +
                        self._load_archive_memory())
         if not all_memories: return []
+        if _has_real_embedding_backend():
+            sem = _search_semantic(query, all_memories, top_k)
+            if sem is not None:
+                return sem
         docs = [m["content"] for m in all_memories]
         docs.append(query)
         n = len(docs)

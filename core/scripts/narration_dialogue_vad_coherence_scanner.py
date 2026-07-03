@@ -14,6 +14,11 @@ LLM 写作时旁白和对话情感同步过紧(VAD per 维度 |r|>0.50) → 失�
   4. 按场景(双换行段 + 1500 CJK 兜底)切·两通道分别算 (V, A, D) 序列
   5. Pearson per V/A/D · |r|>0.50 → NARR_DIAL_VAD_OVERCOUPLED advisory
 
+【VAD 打分 · 模型优先证据 + 占位词典保底 · 2026-07-01】
+  每场景两通道优先用 emotion_vad 模型(RoBERTa 微调·held-out meanCCC 0.80)批量打分 V/A，
+  D 轴模型诚实无标注·走词典兜底；模型未启用(RUOYU_NN_VAD!=1)/不可用 → 全走占位词典
+  (与旧版逐字节一致)。metrics.vad_source 标 model_vad/lexicon_fallback/mixed 供训练归因。
+
 【作者档 override】
   quantitative.dial_narr_vad_target_corr = {"V": 0.40, "A": 0.50, "D": 0.30}
   作者档值 > 默认时放宽阈值(只在 |r|>author_corr+0.15 时报)。
@@ -125,6 +130,46 @@ def _score_vad(text):
     return (_mean(vs), _mean(as_), _mean(ds) if ds else 0.5)
 
 
+# ============ VAD 模型优先(emotion_vad RoBERTa 微调·held-out meanCCC 0.80) ============
+# env 未开(RUOYU_NN_VAD!=1)/任何失败 → 全 None，调用方 100% 回退占位词典逻辑(零回归)。
+# 模型只出 V/A(诚实·中文无 D 真标注)，D 轴永远走词典/默认 0.5 兜底。
+
+def _model_vad_batch(texts: list) -> list:
+    """批量走 FeatureStore(缓存优先)→nn_vad_bridge 拿模型 VAD，一次性摊薄 subprocess 开销。"""
+    n = len(texts)
+    if n == 0 or os.environ.get("RUOYU_NN_VAD") != "1":
+        return [None] * n
+    try:
+        sys.path.insert(0, str(_SCRIPT_DIR))
+        try:
+            sys.path.insert(0, str(_SCRIPT_DIR.parent / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(texts) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(texts)
+    except Exception:
+        return [None] * n
+    if not preds or len(preds) != n:
+        return [None] * n
+    return preds
+
+
+def _score_vad_hybrid(text, model_pred=None):
+    """优先模型 V/A + 词典 D 兜底；模型未命中 → 纯词典(与旧版 _score_vad 完全一致·零回归)。
+    返回 (vad_tuple|None, source)。"""
+    lex = _score_vad(text)
+    if model_pred and model_pred.get("valence") is not None and model_pred.get("arousal") is not None:
+        d = model_pred.get("dominance")
+        d_val = float(d) if d is not None else (lex[2] if lex else 0.5)
+        return (float(model_pred["valence"]), float(model_pred["arousal"]), d_val), "model_vad"
+    if lex is not None:
+        return lex, "lexicon_fallback"
+    return None, "none"
+
+
 # ============ 两通道切分 ============
 
 def _split_narration_dialogue(text):
@@ -221,19 +266,40 @@ def scan(draft_path, project_root=None, style_path=None) -> dict:
         out["note"] = f"场景数 {len(scenes)} < {MIN_SCENES_FOR_PEARSON}·跳过"
         return out
 
-    narr_series = []
-    dial_series = []
+    narr_texts, dial_texts = [], []
     for sc in scenes:
         narr, dial = _split_narration_dialogue(sc)
-        n_vad = _score_vad(narr)
-        d_vad = _score_vad(dial)
+        narr_texts.append(narr)
+        dial_texts.append(dial)
+
+    # 一次性批量模型调用(narr+dial 合批减少 subprocess 次数)；env 未开时直接全 None(零回归)
+    model_preds = _model_vad_batch(narr_texts + dial_texts)
+    narr_preds = model_preds[:len(narr_texts)]
+    dial_preds = model_preds[len(narr_texts):]
+
+    narr_series = []
+    dial_series = []
+    vad_sources = set()
+    for i in range(len(scenes)):
+        n_vad, n_src = _score_vad_hybrid(narr_texts[i], narr_preds[i])
+        d_vad, d_src = _score_vad_hybrid(dial_texts[i], dial_preds[i])
         if n_vad is not None and d_vad is not None:
             narr_series.append(n_vad)
             dial_series.append(d_vad)
+            vad_sources.add(n_src)
+            vad_sources.add(d_src)
+
+    if "model_vad" in vad_sources and "lexicon_fallback" in vad_sources:
+        vad_source = "mixed"
+    elif "model_vad" in vad_sources:
+        vad_source = "model_vad"
+    else:
+        vad_source = "lexicon_fallback"
 
     out["metrics"] = {
         "total_scenes": len(scenes),
         "paired_scenes": len(narr_series),
+        "vad_source": vad_source,
     }
 
     if len(narr_series) < MIN_SCENES_FOR_PEARSON:

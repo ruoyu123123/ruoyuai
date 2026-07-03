@@ -300,3 +300,74 @@ def test_main_cli_thin_fail_minor():
     assert r.returncode == 1, r.stderr
     rep = json.loads(r.stdout)
     assert rep["warning"] is not None
+
+
+# ── 🔴 2026-07-03 zero_shot_prototype 模型优先路径测试(W3) ──────────────────
+import math  # noqa: E402
+
+
+def _char_freq_embedding(text, dim=32):
+    """确定性 mock embedding（字符频率向量·同 test_macguffin_entanglement_scanner 手法）。"""
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _run_with_mock_embedding(fn):
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    import zero_shot_prototype
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _char_freq_embedding
+    zero_shot_prototype.clear_cache()
+    try:
+        return fn()
+    finally:
+        embedding_store.compute_embedding = orig
+        zero_shot_prototype.clear_cache()
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_classify_plant_mode_gate_off_uses_fallback():
+    mode, csrc = mod._classify_plant_mode("案上摆着一只玉匣", "objects")
+    assert mode == "objects"
+    assert csrc == "lexicon"
+
+
+def test_classify_plant_mode_model_overrides_when_backend_available():
+    """fallback 故意传错(overt)·真后端下模型应正确判 objects 并覆盖 fallback。"""
+    def _do():
+        mode, csrc = mod._classify_plant_mode("案上摆着一枚不起眼的旧玉佩", "overt")
+        assert mode == "objects"
+        assert csrc == "zero_shot_embedding"
+    _run_with_mock_embedding(_do)
+
+
+def test_scan_active_with_mock_backend_smoke():
+    """mock 真后端下 scan() 端到端仍正常产出（不因接线而崩/挂）。"""
+    bak = os.environ.get("COVERT_FORESHADOWING_MODE")
+    try:
+        _set_mode("active")
+
+        def _do():
+            out = mod.scan(_write(_COVERT_DRAFT), project_root=_mk_project())
+            assert out["plant_total"] > 0
+            assert 0.0 <= out["covert_ratio"] <= 1.0
+            assert out["verdict"] in ("PASS", "FAIL_MINOR")
+
+        _run_with_mock_embedding(_do)
+    finally:
+        _set_mode(bak)
+
+
+def test_delivery_mode_prototypes_cover_all_buckets():
+    assert set(mod._DELIVERY_MODE_PROTOTYPES.keys()) == set(mod._DELIVERY_LEXICON.keys())

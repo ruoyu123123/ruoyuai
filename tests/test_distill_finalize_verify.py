@@ -17,6 +17,7 @@ voice_pack(5) 一致。2026-06-01 修 #6 再移出 arc(0)（金标准三重 FAIL
 只测确定性纯函数 strict_gate_decision，不碰 LLM/subprocess/agent。
 """
 import sys
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
@@ -181,3 +182,48 @@ def test_reasoning_scene_fail_still_blocks():
     strict_ok, _ = dfv.strict_gate_decision(
         report, estimable_idx=dfv.STRICT_ESTIMABLE_IDX_REASONING)
     assert strict_ok is False
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 🔴 VAD 模型接线回归：_estimate_emotion 优先用 VAD valence 模型（与
+# antagonist_valence_trajectory._model_window_valence 完全同构），模型未启用/不可用
+# → 回退正向-负向关键词占比（粗暴版·零回归）。
+# ══════════════════════════════════════════════════════════════════════════
+def test_estimate_emotion_model_hit(monkeypatch):
+    """RUOYU_NN_VAD=1 + 假模型高 valence → 直接取模型读数(即便文本全是负向关键词)。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts: [
+            {"valence": 0.82, "arousal": 0.5, "dominance": None, "source": "model"}
+            for _ in texts
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    # 全是 NEGATIVE_EMOTIONS 词·纯词典法会给接近 0 的负向 ratio·模型给 0.82 证明模型路径生效
+    text = "怒怕颤崩绝望痛悔恨悲冷寒\n" * 5
+    v = dfv._estimate_emotion(text)
+    assert v == 0.82
+
+
+def test_estimate_emotion_model_unavailable_matches_lexicon_fallback(monkeypatch):
+    """RUOYU_NN_VAD=1 但模型返回 None(不可用) → 与门控完全关闭时词典 ratio 逐一致（零回归）。"""
+    text = "笑喜兴奋释然得意畅快胜利成功踏实\n" * 3 + "怒怕颤崩\n"
+    expected_ratio = (sum(text.count(k) for k in dfv.POSITIVE_EMOTIONS)
+                       / (sum(text.count(k) for k in dfv.POSITIVE_EMOTIONS)
+                          + sum(text.count(k) for k in dfv.NEGATIVE_EMOTIONS)))
+
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    v_model_unavailable = dfv._estimate_emotion(text)
+
+    monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+    v_off = dfv._estimate_emotion(text)
+
+    assert v_model_unavailable == v_off == expected_ratio
+
+
+def test_estimate_emotion_empty_text_returns_neutral():
+    """空文本：模型侧 _model_window_valence([]) 立即返回 (None,0)（不 not-windows 提前退出）·
+    回退词典 total=0 → 0.5 中性（原逻辑零回归）。"""
+    assert dfv._estimate_emotion("") == 0.5

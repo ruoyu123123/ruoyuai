@@ -5,17 +5,17 @@
 【缺口】fanfic 群体生态：反派被 LLM 隐性「情感重充电」(逐 cluster 越写越正向 / 同情)
 最终偏离 outline 原始反派定位 (未授权 redemption_arc) → 主线反派塌方。系统零检测。
 
-【做法 · 纯确定性 · 零 LLM/零联网】
+【做法 · 模型优先证据 + 确定性词典保底】
   · outline 阶段 user 标反派 list (人物卡 role∈{反派/antagonist/BBEG/主反} 自动识别) +
     redemption_arc_authorized:bool (默认 false · 走 _数据库/用户偏好.json 或人物卡字段)
-  · 每 cluster 算反派 valence：占位 lexicon-based sentiment (positive_lex - negative_lex) /
-    周围 ±80 CJK 窗口·句级聚合·占位词典 `_placeholder=true`
+  · 每 cluster 算反派 valence：优先用 emotion_vad 模型读取反派 ±80 CJK 窗口 valence；
+    模型未启用/不可用时走 lexicon-based sentiment (positive_lex - negative_lex) / 窗口个数。
   · 未授权但单调正向 5 cluster 连涨 > +0.3 → ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED advisory
   · 已授权 → 跳过
 
 【北极星 ②④⑤】
   · cluster 单位 · 作者授权可豁免 · advisory · 绝不 hard_gate
-  · 占位 lexicon `_placeholder=true` · 真版需要 Riveter power score + NRC-VAD 中文版
+  · lexicon 是 VAD 不可用时的弱标签来源；真版可继续叠加 Riveter power score / NRC-VAD 中文词表
 
 用法: python antagonist_valence_trajectory.py <project_root> [--out <json_path>]
 """
@@ -30,7 +30,7 @@ from pathlib import Path
 
 ISSUE_DRIFT = "ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED"
 
-# 占位 lexicon (真版 = NRC-VAD-CN / Riveter power score)
+# 弱标签 lexicon：VAD 不可用时的训练/扫描证据；后续可替换为 NRC-VAD-CN / Riveter power score
 # [G2 P2] 外部化到 core/data/antagonist_valence_lexicon.json (lexicon_path 字段)·内嵌为 fallback 向后兼容
 _LEXICON_PATH = Path(__file__).resolve().parent.parent / "data" / "antagonist_valence_lexicon.json"
 
@@ -108,11 +108,11 @@ def is_redemption_authorized(project_root: Path, char_entries) -> bool:
     return False
 
 
-def compute_cluster_valence(text: str, antagonist_names) -> float:
-    """对每个反派名提取 ±80 CJK 窗口 · 算 (pos - neg) / window 个数。"""
+def _antagonist_windows(text: str, antagonist_names) -> list[str]:
+    """提取每个反派名周围窗口，统一供词典和 VAD 模型消费。"""
     if not antagonist_names or not text:
-        return 0.0
-    scores = []
+        return []
+    windows: list[str] = []
     for name in antagonist_names:
         i = 0
         while True:
@@ -121,14 +121,74 @@ def compute_cluster_valence(text: str, antagonist_names) -> float:
                 break
             start = max(0, j - VALENCE_WINDOW)
             end = min(len(text), j + len(name) + VALENCE_WINDOW)
-            window = text[start:end]
-            pos = sum(window.count(w) for w in POSITIVE_LEX)
-            neg = sum(window.count(w) for w in NEGATIVE_LEX)
-            scores.append(pos - neg)
+            windows.append(text[start:end])
             i = j + len(name)
+    return windows
+
+
+def _lexicon_window_valence(windows: list[str]) -> float:
+    scores = []
+    for window in windows:
+        pos = sum(window.count(w) for w in POSITIVE_LEX)
+        neg = sum(window.count(w) for w in NEGATIVE_LEX)
+        scores.append(pos - neg)
     if not scores:
         return 0.0
     return round(sum(scores) / len(scores), 3)
+
+
+def _model_window_valence(windows: list[str]) -> tuple[float | None, int]:
+    """用现有 VAD 模型算反派窗口 valence；失败只返回 None，不改变 advisory 主链。"""
+    if not windows or os.environ.get("RUOYU_NN_VAD") != "1":
+        return None, 0
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(windows) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(windows)
+    except Exception:
+        return None, 0
+    vals = []
+    for p in preds or []:
+        if p and p.get("valence") is not None:
+            try:
+                vals.append(float(p["valence"]))
+            except (TypeError, ValueError):
+                pass
+    if not vals:
+        return None, 0
+    return round(sum(vals) / len(vals), 3), len(vals)
+
+
+def compute_cluster_valence_detail(text: str, antagonist_names) -> dict:
+    """返回 valence + source，便于训练池区分模型证据和词典证据。"""
+    windows = _antagonist_windows(text, antagonist_names)
+    if not windows:
+        return {"valence": 0.0, "source": "none", "window_count": 0}
+    model_valence, model_count = _model_window_valence(windows)
+    if model_valence is not None:
+        return {
+            "valence": model_valence,
+            "source": "model_vad",
+            "window_count": len(windows),
+            "model_window_count": model_count,
+        }
+    return {
+        "valence": _lexicon_window_valence(windows),
+        "source": "lexicon_fallback",
+        "window_count": len(windows),
+    }
+
+
+def compute_cluster_valence(text: str, antagonist_names) -> float:
+    """对每个反派名提取 ±80 CJK 窗口，返回平均 valence（兼容旧测试/调用）。"""
+    return float(compute_cluster_valence_detail(text, antagonist_names)["valence"])
 
 
 def _collect_cluster_drafts(project_root: Path):
@@ -169,7 +229,7 @@ def scan(project_root) -> dict:
         "schema_version": "1.0",
         "scanner": "antagonist_valence_trajectory",
         "gate_level": "advisory",
-        "_doc": "反派情感重充电监控·R23 W11·_placeholder=true·绝不 hard_gate",
+        "_doc": "反派情感重充电监控·R23 W11·model_vad|lexicon_fallback·绝不 hard_gate",
         "antagonists": [],
         "valence_per_cluster": [],
         "advisories": [],
@@ -188,8 +248,8 @@ def scan(project_root) -> dict:
     drafts = _collect_cluster_drafts(project_root)
     series = []
     for cid in sorted(drafts):
-        v = compute_cluster_valence(drafts[cid], antag_names)
-        series.append({"cluster_id": cid, "valence": v})
+        detail = compute_cluster_valence_detail(drafts[cid], antag_names)
+        series.append({"cluster_id": cid, **detail})
     out["valence_per_cluster"] = series
 
     valence_only = [r["valence"] for r in series]

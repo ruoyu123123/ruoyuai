@@ -246,3 +246,70 @@ def test_main_exit_1_on_drift():
                        prev_regulation={"张三": {"dominant": "intrinsic"}})
     r = _run_cli(_write(_EXTERNAL_DRAFT), proj)
     assert r.returncode == 1, r.stderr
+
+
+# ── 🔴 2026-07-03 zero_shot_prototype 模型优先路径测试(W3) ──────────────────
+import math  # noqa: E402
+
+
+def _char_freq_embedding(text, dim=32):
+    """确定性 mock embedding（字符频率向量·同 test_macguffin_entanglement_scanner 手法）。"""
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _run_with_mock_embedding(fn):
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    import zero_shot_prototype
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _char_freq_embedding
+    zero_shot_prototype.clear_cache()
+    try:
+        return fn()
+    finally:
+        embedding_store.compute_embedding = orig
+        zero_shot_prototype.clear_cache()
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_classify_sdt_window_gate_off_returns_none():
+    assert mod._classify_sdt_window("他觉得很有趣") is None
+
+
+def test_classify_sdt_window_model_hit():
+    def _do():
+        result = mod._classify_sdt_window("他觉得这件事很有趣，忍不住想多做一会儿")
+        assert result == "intrinsic"
+    _run_with_mock_embedding(_do)
+
+
+def test_dominant_regulation_no_model_no_source_key():
+    """默认无真后端 → distribution dict 不含 _source（零回归契约）。"""
+    dom, dist = mod._dominant_regulation(_INTRINSIC_DRAFT, "张三")
+    assert dom == "intrinsic"
+    assert "_source" not in dist
+
+
+def test_dominant_regulation_with_model_injects_source():
+    def _do():
+        text = "张三" + ("他觉得这件事很有趣，忍不住想多做一会儿" * 3)
+        dom, dist = mod._dominant_regulation(text, "张三", window=40)
+        assert dom == "intrinsic"
+        assert dist.get("_source") == "zero_shot_embedding"
+    _run_with_mock_embedding(_do)
+
+
+def test_sdt_prototypes_cover_all_six_levels():
+    assert (set(mod._SDT_REGULATION_PROTOTYPES.keys())
+            == set(mod.SDT_LEXICON_PLACEHOLDER["regulation_order"]))

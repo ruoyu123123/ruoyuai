@@ -23,6 +23,10 @@ PE 路径同一调子。
   - sharpness=sharp 期望 score >= SHARP_THRESHOLD
   - sharpness=dull 期望 score <= DULL_THRESHOLD
 
+【2026-07-02 接入真模型】末段锐度分数优先混入已训练部署的 surprisal_gpt2（经 nn_surprisal_bridge /
+feature_cache 二选一）算末段 mean/max surprisal 归一后按 0.4 权重混进词典拼分（词典基线分保留
+0.6 权重·`source` 标注切换）；RUOYU_NN_SURPRISAL 未开启/模型未命中时 100% 走词典拼分（不变）。
+
 【三 advisory】
   · EVENT_BOUNDARY_TOO_DULL    — sharp 期望但末段锐度不足
   · EVENT_BOUNDARY_TOO_SHARP   — dull 期望但末段过尖锐
@@ -124,7 +128,37 @@ def _read_sharpness(manifest_path) -> tuple[str | None, bool]:
     return None, finale
 
 
+def _predict_surprisal_batch(texts: list[str]) -> "list[dict | None]":
+    """批量取完整 surprisal 统计量(经 FeatureStore 缓存优先→退 nn_surprisal_bridge 直连)。
+    全不可用 → 全 None(调用方整体回退词典拼分·不变)。"""
+    if not texts:
+        return []
+    preds = None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            preds = FeatureStore.get().compute_surprisal_batch(texts)
+    except Exception:  # noqa: BLE001 FeatureStore 故障 → 退 bridge，绝不影响 scanner
+        preds = None
+    if preds is None:
+        try:
+            import nn_surprisal_bridge as bridge
+        except ImportError:
+            return [None] * len(texts)
+        preds = bridge.predict_batch(texts)
+    if len(preds) != len(texts):
+        return [None] * len(texts)
+    return preds
+
+
+def _predict_surprisal_one(text: str) -> "dict | None":
+    return _predict_surprisal_batch([text])[0]
+
+
 def _signal_score(tail: str) -> dict:
+    """末段锐度：词典/标点/主语切换拼分(始终计算) + 真模型 surprisal 归一分(可用时按 0.4 权重混入)。
+    模型不可用 → score 与词典基线完全一致(零回归)。"""
     cjk = _cjk_count(tail) or 1
     pe_hits = sum(tail.count(w) for w in _PE_LEX)
     punct_hits = len(_EMOTION_PUNCT_RE.findall(tail))
@@ -141,18 +175,37 @@ def _signal_score(tail: str) -> dict:
 
     pe_per_1k = pe_hits / (cjk / 1000)
     punct_per_1k = punct_hits / (cjk / 1000)
-    # 综合分数：sharp 要重 PE + 标点突变
-    score = min(1.0,
+    # 词典基线分数：sharp 要重 PE + 标点突变（始终计算·模型不可用时即最终 score）
+    lexicon_score = min(1.0,
                 0.5 * min(1.0, pe_per_1k / 8.0) +
                 0.3 * min(1.0, punct_per_1k / 15.0) +
                 0.2 * subj_switch)
+
+    source = "heuristic"
+    surprisal_norm = None
+    score = lexicon_score
+    model_stat = _predict_surprisal_one(tail)
+    if model_stat is not None:
+        mean_s = model_stat.get("mean_surprisal")
+        max_s = model_stat.get("max_surprisal")
+        if mean_s is not None and max_s is not None:
+            # base-2 bits 量纲(surprisal_infer.py base_two=True)·mean/max 各半归一(启发式上限)
+            surprisal_norm = round(min(1.0,
+                        0.6 * min(1.0, mean_s / 10.0) +
+                        0.4 * min(1.0, max_s / 18.0)), 4)
+            score = round(0.6 * lexicon_score + 0.4 * surprisal_norm, 4)
+            source = "model"
+
     return {
         "pe_hits": pe_hits,
         "punct_hits": punct_hits,
         "subject_switch": subj_switch,
         "pe_per_1k": round(pe_per_1k, 3),
         "punct_per_1k": round(punct_per_1k, 3),
+        "lexicon_score": round(lexicon_score, 3),
+        "surprisal_norm": surprisal_norm,
         "score": round(score, 3),
+        "source": source,
     }
 
 

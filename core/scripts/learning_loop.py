@@ -1018,10 +1018,73 @@ def _parse_skill_sections(skill_text: str) -> list:
     return sections
 
 
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+    原样复制自 topic_drift_scanner.py（本仓约定：每个消费 embedding 的脚本自带一份·
+    不 import 跨脚本依赖）。也检查 .env 的 GEN_EMBED__* API 配置。"""
+    import os
+    v = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if v and v != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+# 🔬 待金标准校准：语义归因最小相似度下限（低于此值视为「没有真正相关的段落」，回退关键词
+# 计数法而非强行归因到一个弱相关段落）。
+SEMANTIC_ATTRIB_FLOOR = 0.30
+
+
+def _semantic_attribute_to_skill_section(sections: list, keywords) -> "dict | None":
+    """真后端时的语义归因：keywords 拼成查询文本，对每段 heading+body 做 embedding 余弦
+    排序，取最相关段（能抓「对话要简短」vs「台词不宜过长」这类零字面重叠的同义表述）。
+    embedding_store 不可用 / 查询为空 / 无段落越过 floor → None（调用方回退关键词计数法）。"""
+    query = " ".join(str(k) for k in keywords if k).strip()
+    if not query:
+        return None
+    try:
+        from embedding_store import compute_embedding, cosine_similarity
+        q_emb = compute_embedding(query)
+    except Exception:
+        return None
+    if not q_emb:
+        return None
+    best, best_sim = None, 0.0
+    for sec in sections:
+        blob = (sec.get("heading", "") + " " + sec.get("body", "")).strip()
+        if not blob:
+            continue
+        try:
+            s_emb = compute_embedding(blob)
+        except Exception:
+            continue
+        if not s_emb or len(s_emb) != len(q_emb):
+            continue
+        sim = cosine_similarity(q_emb, s_emb)
+        if sim > best_sim:
+            best, best_sim = sec, sim
+    if best is None or best_sim < SEMANTIC_ATTRIB_FLOOR:
+        return None
+    return {"heading": best["heading"], "level": best["level"],
+            "line": best["line"], "score": round(best_sim, 4),
+            "excerpt": best["body"].strip()[:200], "method": "semantic"}
+
+
 def _attribute_to_skill_section(sections: list, keywords) -> "dict | None":
     """反射归因核心：在 skill 段落里找与失败维度关键词**最相关**的标题段。
-    打分：标题命中关键词 ×3（标题最能代表段落主旨）+ 正文命中 ×1。无任何命中 → None
-    （不强行归因·宁可标「无定位」也不乱指·北极星⑤不干涉）。"""
+
+    真后端（embedding_store 配置）时：优先走语义相似度排序（见
+    _semantic_attribute_to_skill_section）；embedding 不可用 / 无段落越过相似度下限 →
+    回退关键词计数：标题命中关键词 ×3（标题最能代表段落主旨）+ 正文命中 ×1。
+    无任何命中 → None（不强行归因·宁可标「无定位」也不乱指·北极星⑤不干涉）。"""
+    if not sections:
+        return None
+    if _has_real_embedding_backend():
+        sem = _semantic_attribute_to_skill_section(sections, keywords)
+        if sem is not None:
+            return sem
     best, best_score = None, 0
     for sec in sections:
         heading = sec.get("heading", "")

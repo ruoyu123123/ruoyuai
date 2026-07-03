@@ -18,9 +18,11 @@ arc_aggregator，仅在 docstring 提及本脚本 bug 但未真 import/调用它
   断言退出码 / 输出文件内容。
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +31,26 @@ sys.path.insert(0, str(_SCRIPTS))
 import character_arc_aggregator as mod  # noqa: E402
 
 _TARGET = _SCRIPTS / "character_arc_aggregator.py"
+
+
+def _fake_vad(predict_batch_fn):
+    """临时装 RUOYU_NN_VAD=1 + 假 nn_vad_bridge 模块，返回还原函数。
+    不用 monkeypatch fixture（本文件有零依赖 __main__ 直跑入口，需零参兼容）。"""
+    old_env = os.environ.get("RUOYU_NN_VAD")
+    old_mod = sys.modules.get("nn_vad_bridge")
+    os.environ["RUOYU_NN_VAD"] = "1"
+    sys.modules["nn_vad_bridge"] = types.SimpleNamespace(predict_batch=predict_batch_fn)
+
+    def _restore():
+        if old_env is None:
+            os.environ.pop("RUOYU_NN_VAD", None)
+        else:
+            os.environ["RUOYU_NN_VAD"] = old_env
+        if old_mod is None:
+            sys.modules.pop("nn_vad_bridge", None)
+        else:
+            sys.modules["nn_vad_bridge"] = old_mod
+    return _restore
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -74,6 +96,48 @@ def test_estimate_from_arc_progress():
     a_c1, _ = mod.estimate_from_arc_progress("推进", chapter=1)
     a_c2, _ = mod.estimate_from_arc_progress("推进", chapter=2)
     assert a_c1 != a_c2, "不同章号 actor 抖动不同（防恒定相关）"
+
+
+def test_estimate_from_arc_progress_model_hit_uses_valence_arousal():
+    """RUOYU_NN_VAD=1 + 假模型命中 → actor/experiencer 由 valence*arousal 拆分（不再走关键词表）。
+    假模型按文本内容区分（含'突破'→高valence高arousal，含'崩溃'→低valence高arousal），
+    验证两路数值确实不同（防同源 corr=1.0）且与模型输出吻合，证明真走了模型路径。"""
+    def _fake(items):
+        out = []
+        for t in items:
+            if "突破" in t:
+                out.append({"valence": 0.9, "arousal": 0.8, "dominance": None, "source": "model"})
+            else:
+                out.append({"valence": 0.1, "arousal": 0.8, "dominance": None, "source": "model"})
+        return out
+    restore = _fake_vad(_fake)
+    try:
+        a, e = mod.estimate_from_arc_progress("他完成了突破", chapter=0)
+        # actor = arousal*valence = 0.8*0.9 = 0.72; experiencer = arousal*(1-valence) = 0.8*0.1 = 0.08
+        assert abs(a - 0.72) < 1e-6, f"actor 应=arousal*valence=0.72，得 {a}"
+        assert abs(e - 0.08) < 1e-6, f"experiencer 应=arousal*(1-valence)=0.08，得 {e}"
+        assert a != e, "actor/experiencer 不应同源相等（防 corr=1.0）"
+
+        a2, e2 = mod.estimate_from_arc_progress("他陷入崩溃", chapter=0)
+        # valence=0.1 → actor=0.8*0.1=0.08; experiencer=0.8*0.9=0.72（与上例正好互换，证明真读了内容）
+        assert abs(a2 - 0.08) < 1e-6, f"got {a2}"
+        assert abs(e2 - 0.72) < 1e-6, f"got {e2}"
+    finally:
+        restore()
+
+
+def test_estimate_from_arc_progress_model_unavailable_zero_regression():
+    """RUOYU_NN_VAD=1 但 predict_batch 全 None（模型不可用）→ 与默认(env off)关键词路径逐位一致。"""
+    text = "他完成了突破，目睹了致命一击"
+    baseline = mod.estimate_from_arc_progress(text, chapter=0)
+    assert baseline == (0.75, 0.8)  # 对齐既有 test_estimate_from_arc_progress 断言
+
+    restore = _fake_vad(lambda items: [None for _ in items])
+    try:
+        got = mod.estimate_from_arc_progress(text, chapter=0)
+        assert got == baseline, "模型不可用应与默认关键词路径逐位一致（零回归）"
+    finally:
+        restore()
 
 
 # ──────────────────────────────────────────────────────────────────────────

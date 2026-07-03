@@ -9,8 +9,14 @@
   · shadow/off/active 三态
   · 永远 advisory · 不在 HARD_GATE_CODES
   · snapshot 写入 .cross_chapter_scan/
+
+2026-07-01 追加：真语义 embedding 可选路径回归(mock 后端·完全照抄 topic_drift_scanner
+测试手法·直接调用 compute_entanglement 不走 subprocess，便于 monkeypatch)——钉死
+(a) 无真后端时 match_method="lexicon"(零回归·关键词共现不变) (b) mock 真后端时
+match_method="semantic" 且语义路径(语境句 vs goal-pursuit 原型语句)被正确使用。
 """
 import json
+import math
 import os
 import subprocess
 import sys
@@ -302,3 +308,202 @@ def test_emit_findings_threshold():
     assert "MACGUFFIN_ORNAMENTAL" in codes
     # A 算·B 高于阈值不算·C 单 cluster 不算
     assert findings[0]["count"] == 1
+
+
+# ── 🔴 2026-07-01 真语义 embedding 可选路径（完全照抄 topic_drift_scanner 测试手法）──────
+# 以下测试直接调用 compute_entanglement（不走 subprocess），便于 monkeypatch
+# embedding_store.compute_embedding 注入确定性 mock。
+
+def _char_freq_embedding(text: str, dim: int = 32) -> list:
+    """确定性 mock embedding（字符频率向量·同 test_topic_drift_scanner 手法）。"""
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _run_with_mock_embedding(fn, *args, **kwargs):
+    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding 后跑 fn。"""
+    bak = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mock"
+    import embedding_store
+    orig = embedding_store.compute_embedding
+    embedding_store.compute_embedding = _char_freq_embedding
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        embedding_store.compute_embedding = orig
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def _real_cosine_similarity():
+    """辅助：拿 embedding_store 的真 cosine_similarity（纯 dot product·不需要 mock）。"""
+    import embedding_store
+    return embedding_store.cosine_similarity
+
+
+def test_has_real_embedding_backend_false_by_default():
+    bak = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mac._has_real_embedding_backend() is False
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_has_real_embedding_backend_true_with_mstyle():
+    bak = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "mstyle"
+        assert mac._has_real_embedding_backend() is True
+    finally:
+        if bak is not None:
+            os.environ["EMBED_BACKEND"] = bak
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_goal_pursuit_prototype_text_nonempty():
+    text = mac._goal_pursuit_prototype_text()
+    assert text
+    assert "追查" in text and "夺回" in text
+
+
+def test_mention_context_windows_basic():
+    text = "他今天擦拭古剑很久了" + "无关内容占位字符" * 10 + "他为了夺回古剑追查敌人"
+    windows = mac._mention_context_windows(text, "古剑", window=10)
+    assert len(windows) == 2
+
+
+def test_mention_context_windows_no_match():
+    assert mac._mention_context_windows("完全不相关的文字", "古剑") == []
+
+
+def test_semantic_goal_entangled_positive_case():
+    """语境句 embedding 与 goal-pursuit 原型高度相似(cos=1 ≥ 阈值 0.5) → True。"""
+    def _embed(text):
+        return [1.0, 0.0]   # 所有输入都映射到同一方向 → 相似度恒为 1
+    goal_proto_emb = [1.0, 0.0]
+    text = "他为了夺回古剑追查敌人"
+    result = mac._semantic_goal_entangled(
+        text, "古剑", _embed, _real_cosine_similarity(), goal_proto_emb)
+    assert result is True
+
+
+def test_semantic_goal_entangled_negative_case():
+    """语境句 embedding 与 goal-pursuit 原型完全正交(cos=0 < 阈值) → False。"""
+    def _embed(text):
+        return [0.0, 1.0]   # 与原型正交
+    goal_proto_emb = [1.0, 0.0]
+    text = "他擦拭古剑放在架子上"
+    result = mac._semantic_goal_entangled(
+        text, "古剑", _embed, _real_cosine_similarity(), goal_proto_emb)
+    assert result is False
+
+
+def test_semantic_goal_entangled_no_mentions_returns_false():
+    """物件在文本中根本没出现(语境窗口为空) → False（不是 None，不需要兜底）。"""
+    result = mac._semantic_goal_entangled(
+        "完全不相关的文字", "古剑", lambda t: [1.0], _real_cosine_similarity(), [1.0])
+    assert result is False
+
+
+def test_semantic_goal_entangled_dimension_mismatch_returns_none():
+    """embedding 维度不一致 → None（调用方兜底关键词共现）。"""
+    def _bad_embed(text):
+        return [0.1] * 4
+    result = mac._semantic_goal_entangled(
+        "他擦拭古剑", "古剑", _bad_embed, _real_cosine_similarity(), [1.0] * 8)
+    assert result is None
+
+
+def test_semantic_goal_entangled_compute_exception_returns_none():
+    """compute_embedding 抛异常 → None（调用方兜底关键词共现·不崩）。"""
+    def _boom(text):
+        raise RuntimeError("模拟异常")
+    result = mac._semantic_goal_entangled(
+        "他擦拭古剑", "古剑", _boom, _real_cosine_similarity(), [1.0])
+    assert result is None
+
+
+def test_compute_entanglement_direct_default_lexicon():
+    """无真后端(默认)·match_method="lexicon"（零回归基线·与 test_compute_entanglement_direct 同一组数据）。"""
+    proj = Path(tempfile.mkdtemp())
+    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
+    macguffins = [{"name": "古剑", "id": "i1"}]
+    clusters = [
+        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
+        {"cluster_id": "cluster_002", "scope_summary": "他追查古剑去向。"},
+        {"cluster_id": "cluster_003", "scope_summary": "无关内容。"},
+    ]
+    per = mac.compute_entanglement(macguffins, clusters, proj)
+    assert per["古剑"]["match_method"] == "lexicon"
+    assert per["古剑"]["appearance_clusters"] == 2
+    assert per["古剑"]["entanglement_ratio"] == 0.5
+
+
+def test_compute_entanglement_semantic_match_method():
+    """真后端(mock)可用 → match_method="semantic"。"""
+    proj = Path(tempfile.mkdtemp())
+    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
+    macguffins = [{"name": "古剑", "id": "i1"}]
+    clusters = [
+        {"cluster_id": "cluster_001", "scope_summary": "他为了夺回古剑追查敌人。", "chapter_range": [1, 5]},
+        {"cluster_id": "cluster_002", "scope_summary": "古剑挂在墙上落灰。"},
+        {"cluster_id": "cluster_003", "scope_summary": "无关内容。"},
+    ]
+    per = _run_with_mock_embedding(mac.compute_entanglement, macguffins, clusters, proj)
+    assert per["古剑"]["match_method"] == "semantic"
+    assert per["古剑"]["appearance_clusters"] == 2
+
+
+def test_compute_entanglement_import_error_falls_back_to_lexicon():
+    """embedding_store 不可导入(mock ImportError) → 全程退回关键词共现·match_method="lexicon"。"""
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    saved = sys.modules.get("embedding_store")
+    proj = Path(tempfile.mkdtemp())
+    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
+    macguffins = [{"name": "古剑", "id": "i1"}]
+    clusters = [
+        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
+        {"cluster_id": "cluster_002", "scope_summary": "他追查古剑去向。"},
+    ]
+    try:
+        os.environ["EMBED_BACKEND"] = "mock"
+        sys.modules["embedding_store"] = None  # type: ignore[assignment]
+        per = mac.compute_entanglement(macguffins, clusters, proj)
+        assert per["古剑"]["match_method"] == "lexicon"
+        assert per["古剑"]["entanglement_ratio"] == 0.5
+    finally:
+        if saved is not None:
+            sys.modules["embedding_store"] = saved
+        else:
+            sys.modules.pop("embedding_store", None)
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_main_top_level_match_method_lexicon_by_default():
+    """subprocess 端到端(无真后端) → 顶层 out["match_method"] == "lexicon"。"""
+    items = [{"id": "i1", "name": "古剑", "is_macguffin": True}]
+    clusters = [
+        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
+        {"cluster_id": "cluster_002", "scope_summary": "他追查古剑去向。", "chapter_range": [6, 10]},
+    ]
+    proj = _mk_project(items=items, clusters=clusters)
+    proc = _run(proj, mode="active")
+    rep = _parse(proc.stdout)
+    assert rep["match_method"] == "lexicon"
+    assert rep["per_macguffin"]["古剑"]["match_method"] == "lexicon"

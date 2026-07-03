@@ -56,7 +56,7 @@ STEP: <当前步骤号>
 7.  novel-summarizer MODE=cluster (cluster 级摘要 + 场景级 Appraisal Beat chain-of-emotion)
 8.  novel-foreshadower MODE=cluster (整 cluster 伏笔评估)
 9.  novel-reflector MODE=cluster (经验沉淀)
-10. wal-merge + learning_loop + judge_reports_archive + build-cluster-summary + apply-appraisal-beats
+10. wal-merge + learning_loop + judge_reports_archive + build-cluster-summary + apply-appraisal-beats + data-flywheel
 11. cluster-scan + state + drift + evolution (wrapper 脚本 + 自学习闭环)
 12. git-commit-cluster (1 cluster 1 commit)
 13. cluster-emergence + novel-outline-planner (涌现下个 cluster brief)
@@ -111,7 +111,11 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
 python core/scripts/save_state.py "<项目路径>" --apply-cluster-changes <key>
 ```
 
-> 🔴 **NN 模型自动接入（2026-06-30）**：save_state `main()` 默认开启 NN 门控（同 audit_hub·经 `nn_runtime_defaults`·无需手动 export）。其中 **VAD 情绪模型**在 `--apply-appraisal-beats` 步对 appraisal beat 的 valence/arousal 真模型重算（CCC 0.80·advisory·`vad_bin._source=model_va+summarizer_d`·能力不足退 summarizer 启发式不阻断）。
+> 🔴 **模型/可成长闭环自动接入（2026-06-30）**：save_state `main()` 默认开启模型与可成长门控（同 audit_hub·经 `nn_runtime_defaults`·无需手动 export）：
+> - **FeatureStore**：NN scanner / save_state 复用 VAD、surprisal、coherence 特征缓存，减少重复推理，统一训练/服务特征口径。
+> - **ModelRegistry**：入口同步当前 active/shadow 模型版本与指标，保留运行时治理账本。
+> - **DataFlywheel**：第 10 步 auto-post-reflect 后自动收集 paragraph / weak label / waiver / legacy fixer pair / checker brief / gen_fixer report / style repair report / judge report reliability / reading reflection / audit metadata 训练样本。
+> - **VAD 情绪模型**：`--apply-appraisal-beats` 步对 appraisal beat 的 valence/arousal 真模型重算（CCC 0.80·advisory·`vad_bin._source=model_va+summarizer_d`·能力不足退 summarizer 启发式不阻断）。
 
 > 🔴 **2026-06-28 审计清理C类**：cluster 级 factual 状态（角色 / 道具 / 关系 / locked_facts / 伏笔）**不再从 writer changes.factual 回库**——这些由第 5/6 步 novel-archivist 读正文产 archive.json → `apply_archive.py` 确定性回库，伏笔由 foreshadower + outline brief 回库。本步 apply 只落地**无替代 producer 的非 archive 域**项（time_advance 时间线 / location_changes 地点 status）+ 跑 writer_truth_check。
 
@@ -282,7 +286,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 9 --skip-output
 
 ---
 
-# 第 10 步：wal-merge + learning_loop + judge-archive + build-cluster-summary
+# 第 10 步：wal-merge + learning_loop + judge-archive + build-cluster-summary + data-flywheel
 
 ```bash
 # learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ WAL 合并

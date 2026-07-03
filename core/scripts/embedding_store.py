@@ -100,7 +100,12 @@ def _api_embed(profile: dict, text: str) -> list[float]:
     if profile.get("dim"):
         kwargs["dimensions"] = profile["dim"]   # 通义 text-embedding-v4 支持自定义维度
     resp = client.embeddings.create(**kwargs)
-    return list(resp.data[0].embedding)
+    vec = list(resp.data[0].embedding)
+    # L2 归一化：cosine_similarity 是假设输入已归一的纯点积，其余后端均已归一，API 后端必须对齐
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
 
 
 def _local_embed(text: str) -> list[float]:

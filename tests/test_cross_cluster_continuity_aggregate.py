@@ -14,12 +14,27 @@ _build_aliases / scan_object_continuity（去硬编码主角名+物件名）。�
 
 main() 含 sys.exit，走 subprocess 跑真 CLI（参照 test_cross_cluster_fate_drift_aggregate）。
 铁律：真 import 真调用被测函数，绝不 mock 被测逻辑。
+
+【2026-07-01 追加：NN 连贯性模型接入（scanner-NN 升级批）】见文末新增区块：
+- 维度 1/2 新增 model_result 参数的函数级测试——直接传字典做依赖注入，不 mock 任何逻辑
+  （model_result 本身就是显式设计的注入点，None=零回归回退路径）
+- 维度 3（物件持续性）评估后不模型化，只加 source="heuristic" 字段，补一条回归锁
+- _load_coherence_bridge / _predict_pairs_safe / _valid_pair_result / _batch_model_results
+  桥接管道单测
+- main() 批量预算完整链路：用 mock.patch("nn_coherence_bridge.enabled"/"predict_pairs", ...)
+  替换外部 NN 模型后端（与 test_coherence_scanner.py 同款既有范式）——这不是 mock 被测逻辑本身，
+  是替换被测逻辑的外部依赖（真实模型 subprocess），因 main() 含 sys.exit 且需要控制模型返回值，
+  只能 in-process 调用（父进程 monkeypatch 对 subprocess 子进程无效，与上方 _run_cli 的纯
+  subprocess 路径互补而非取代）
 """
 import json
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
+
+import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
@@ -326,12 +341,405 @@ def test_cli_object_continuity_warning_exits_1():
         assert p.returncode == 1, f"stdout={p.stdout}"
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-07-01 NN 连贯性模型接入（scanner-NN 升级批）
+#
+# 维度 1（cliffhanger）+ 维度 2（时间跳跃过渡）新增 model_result 参数：优先模型分/判定，
+# None（模型未启用/不可用）→ 逐字节回退上面已钉死的确定性逻辑（零回归）。model_result 是
+# 显式依赖注入点，下面大多数测试直接传字典构造，不需要 mock 任何模块。
+# 维度 3（物件持续性）评估结论：本质是「实体是否被提及」的存在性核对，非「衔接自然度」，
+# coherence 模型不适配，保留确定性别名匹配，只补 source="heuristic" 字段。
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_cliffhanger_resonance_model_result_overrides_keyword_overlap():
+    """model_result 命中 → 直接用模型分，跳过关键词重叠计算；overlap_keywords 清空。"""
+    with tempfile.TemporaryDirectory() as d:
+        ch_dir = _write_chapter(_mk_project(Path(d)), 2, "占位")
+        prev = {"self_eval": {"applied_style": {"ending_type": "钩子", "ending_line": "建木枝，深渊"}}}
+        r = cc.scan_cliffhanger_resonance(
+            prev, "任意后章文本（有无重叠都不影响，因为走模型分支）", ch_dir,
+            model_result={"coherence_score": 0.81, "is_coherent": True, "source": "model"})
+        assert r["score"] == 0.81
+        assert r["source"] == "model"
+        assert r["overlap_keywords"] == []
+
+
+def test_cliffhanger_resonance_model_result_none_matches_keyword_path():
+    """model_result=None（显式或省略）必须与 test_cliffhanger_resonance_overlap_score 已钉死
+    的关键词重叠回归测试逐字节同分（零回归·复用同一组 ending_line/next_text 避免另造场景引入偏差）。"""
+    with tempfile.TemporaryDirectory() as d:
+        ch_dir = _write_chapter(_mk_project(Path(d)), 2, "占位")
+        prev = {"self_eval": {"applied_style": {"ending_type": "钩子", "ending_line": "建木枝，深渊"}}}
+        next_text = "建木枝，又一次断裂。深渊，仍在脚下张开。"
+        r_default = cc.scan_cliffhanger_resonance(prev, next_text, ch_dir)
+        r_explicit_none = cc.scan_cliffhanger_resonance(prev, next_text, ch_dir, model_result=None)
+        assert r_default == r_explicit_none
+        assert r_default["source"] == "heuristic"
+        assert r_default["score"] > 0.0
+
+
+def test_cliffhanger_resonance_exempt_ignores_model_result():
+    """悬念断章 exempt 分支不消费 model_result（物理承接天然 OK，无需模型判断）。"""
+    with tempfile.TemporaryDirectory() as d:
+        ch_dir = _write_chapter(_mk_project(Path(d)), 3, "y")
+        prev = {"self_eval": {"applied_style": {"ending_type": "悬念断章", "ending_line": "x"}}}
+        r = cc.scan_cliffhanger_resonance(
+            prev, "无关", ch_dir,
+            model_result={"coherence_score": 0.02, "is_coherent": False, "source": "model"})
+        assert r["exempt"] is True
+        assert r["score"] == 1.0
+        assert r["source"] == "heuristic"
+
+
+def test_cliffhanger_resonance_missing_fields_ignore_model_result():
+    """缺 prev_changes / 缺 ending_line 两个哨兵分支都先于 model_result 判断短路（不消费模型）。"""
+    with tempfile.TemporaryDirectory() as d:
+        ch_dir = _write_chapter(_mk_project(Path(d)), 3, "y")
+        fake_model = {"coherence_score": 0.9, "is_coherent": True, "source": "model"}
+        assert cc.scan_cliffhanger_resonance({}, "任意", ch_dir, model_result=fake_model)["score"] == -1
+        prev = {"self_eval": {"applied_style": {"ending_type": "钩子", "ending_line": ""}}}
+        r = cc.scan_cliffhanger_resonance(prev, "任意", ch_dir, model_result=fake_model)
+        assert r["score"] == -1
+        assert r["source"] == "heuristic"
+
+
+def test_cliffhanger_resonance_ledger_model_result_overrides():
+    """ledger 路径 model_result 命中 → 覆盖账本预算分。"""
+    with tempfile.TemporaryDirectory() as d:
+        plain_dir = _write_chapter(_mk_project(Path(d)), 2, "x")
+        rec = {"cliffhanger_resonance_next": 0.05, "ending_type": "钩子", "ending_line": "断木"}
+        r = cc.scan_cliffhanger_resonance_ledger(
+            rec, plain_dir,
+            model_result={"coherence_score": 0.93, "is_coherent": True, "source": "model"})
+        assert r["score"] == 0.93
+        assert r["source"] == "model"
+
+
+def test_cliffhanger_resonance_ledger_model_result_none_matches_original():
+    """ledger 路径 model_result=None 必须与 test_cliffhanger_resonance_ledger_path 已钉死的
+    账本预算分回归测试逐字节同分（零回归）。"""
+    with tempfile.TemporaryDirectory() as d:
+        plain_dir = _write_chapter(_mk_project(Path(d)), 2, "x")
+        rec = {"cliffhanger_resonance_next": 0.876, "ending_type": "钩子", "ending_line": "断木"}
+        r_default = cc.scan_cliffhanger_resonance_ledger(rec, plain_dir)
+        r_explicit_none = cc.scan_cliffhanger_resonance_ledger(rec, plain_dir, model_result=None)
+        assert r_default == r_explicit_none
+        assert r_default["score"] == 0.88
+        assert r_default["source"] == "heuristic"
+
+
+def test_cliffhanger_resonance_ledger_exempt_ignores_model_result():
+    with tempfile.TemporaryDirectory() as d:
+        plain_dir = _write_chapter(_mk_project(Path(d)), 2, "x")
+        rec2 = {"ending_type": "悬念断章"}
+        r = cc.scan_cliffhanger_resonance_ledger(
+            rec2, plain_dir,
+            model_result={"coherence_score": 0.01, "is_coherent": False, "source": "model"})
+        assert r["score"] == 1.0
+        assert r["source"] == "heuristic"
+
+
+def test_check_time_transition_heuristic_matches_original_inline_logic():
+    """model_result=None → 与改前 main() 内联关键词判断逻辑（["过渡","周末","回忆","醒来","睡了"]）
+    完全一致（零回归）。"""
+    assert cc.check_time_transition(["普通剧情推进，没有任何说明"]) == \
+        {"has_transition": False, "source": "heuristic"}
+    assert cc.check_time_transition(["周末他去看海"]) == {"has_transition": True, "source": "heuristic"}
+    assert cc.check_time_transition(["回忆起过去种种"]) == {"has_transition": True, "source": "heuristic"}
+    assert cc.check_time_transition([]) == {"has_transition": False, "source": "heuristic"}
+
+
+def test_check_time_transition_model_result_overrides_keyword_logic():
+    """model_result 命中 → 用模型 is_coherent 判定，不再看 plot_nodes 关键词命中。"""
+    # 无关键词但模型判连贯 → True（纠正 heuristic 会漏判的同义过渡表述）
+    r1 = cc.check_time_transition(
+        ["普通剧情推进，没有任何说明"],
+        model_result={"coherence_score": 0.9, "is_coherent": True, "source": "model"})
+    assert r1 == {"has_transition": True, "source": "model"}
+    # 有关键词但模型判不连贯 → False
+    r2 = cc.check_time_transition(
+        ["周末他去看海"],
+        model_result={"coherence_score": 0.1, "is_coherent": False, "source": "model"})
+    assert r2 == {"has_transition": False, "source": "model"}
+
+
+def test_check_time_transition_model_result_missing_is_coherent_falls_back_to_score():
+    """model_result 缺 is_coherent 字段（上游产出不完整）→ 按 coherence_score≥0.5 兜底判定。"""
+    hi = cc.check_time_transition(["无关内容"], model_result={"coherence_score": 0.7})
+    lo = cc.check_time_transition(["无关内容"], model_result={"coherence_score": 0.3})
+    assert hi["has_transition"] is True
+    assert lo["has_transition"] is False
+
+
+def test_object_continuity_source_field_always_heuristic():
+    """2026-07-01 评估结论：物件持续性存在性核对不适配 coherence 模型，不模型化——恒 source=heuristic。"""
+    all_changes = {1: {"factual": {"item_transfers": [{"item": "青龙剑"}]}}, 2: {}, 3: {}, 4: {}}
+    all_texts = {1: "他获得了青龙剑", 2: "今天天气不错", 3: "他去了集市", 4: "他继续赶路"}
+    findings = cc.scan_object_continuity(all_changes, all_texts, 4)
+    assert len(findings) == 1
+    assert findings[0]["item"] == "青龙剑"
+    assert findings[0]["gap"] == 3
+    assert findings[0]["source"] == "heuristic"
+
+
+def test_object_continuity_source_heuristic_even_with_nn_env_on(monkeypatch):
+    """即使全局开了 RUOYU_NN_COHERENCE，本维度也不应被模型接管（评估结论：不适配子任务·不强套）。"""
+    monkeypatch.setenv("RUOYU_NN_COHERENCE", "1")
+    all_changes = {1: {"factual": {"item_transfers": [{"item": "青龙剑"}]}}, 2: {}, 3: {}, 4: {}}
+    all_texts = {1: "他获得了青龙剑", 2: "今天天气不错", 3: "他去了集市", 4: "他继续赶路"}
+    findings = cc.scan_object_continuity(all_changes, all_texts, 4)
+    assert len(findings) == 1
+    assert findings[0]["source"] == "heuristic"
+
+
+def test_codes_not_in_hard_gate():
+    """本文件 3 个 finding code 必须恒 advisory（不可硬闸）——与 audit_hub 单一来源对齐。"""
+    import audit_hub  # noqa: E402（sys.path 已在文件顶部注入 _SCRIPTS）
+    for code in ("CLIFFHANGER_NOT_RESONATED", "TIME_JUMP_UNEXPLAINED", "OBJECT_CONTINUITY_BROKEN"):
+        assert code not in audit_hub.HARD_GATE_CODES
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# NN 桥接管道（_load_coherence_bridge / _predict_pairs_safe / _valid_pair_result /
+# _batch_model_results）。前两组测试直传纯函数元组做依赖注入（零 mock）；
+# _load_coherence_bridge 的两个分支测试真实模块可用性（真实场景验证，非 mock 被测逻辑）。
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_load_coherence_bridge_real_module_disabled_by_default():
+    """真实 nn_coherence_bridge 模块可正常导入；RUOYU_NN_COHERENCE 未设 → enabled()=False。"""
+    bridge = cc._load_coherence_bridge()
+    assert bridge is not None
+    predict_pairs, enabled = bridge
+    assert callable(predict_pairs) and callable(enabled)
+    assert enabled() is False
+
+
+def test_load_coherence_bridge_none_when_unimportable(monkeypatch):
+    """nn_coherence_bridge 不可导入（模块缺失/被禁）→ None（调用方回退确定性逻辑）。"""
+    monkeypatch.setitem(sys.modules, "nn_coherence_bridge", None)
+    assert cc._load_coherence_bridge() is None
+
+
+def test_predict_pairs_safe_handles_exception():
+    def boom(pairs):
+        raise RuntimeError("boom")
+    assert cc._predict_pairs_safe((boom, lambda: True), [("a", "b")]) == [None]
+
+
+def test_predict_pairs_safe_handles_length_mismatch():
+    bridge = (lambda pairs: [None], lambda: True)  # 只回 1 个但传 2 个
+    assert cc._predict_pairs_safe(bridge, [("a", "b"), ("c", "d")]) == [None, None]
+
+
+def test_predict_pairs_safe_empty_pairs_no_call():
+    calls = []
+    def predict_pairs(pairs):
+        calls.append(pairs)
+        return []
+    assert cc._predict_pairs_safe((predict_pairs, lambda: True), []) == []
+    assert calls == []
+
+
+def test_valid_pair_result_rejects_malformed():
+    assert cc._valid_pair_result(None) is None
+    assert cc._valid_pair_result("not a dict") is None
+    assert cc._valid_pair_result({"coherence_score": "not a number"}) is None
+    assert cc._valid_pair_result({"coherence_score": True}) is None  # bool 排除
+    good = {"coherence_score": 0.5, "is_coherent": True, "source": "model"}
+    assert cc._valid_pair_result(good) == good
+
+
+def test_batch_model_results_maps_back_correctly():
+    bridge = (lambda pairs: [{"coherence_score": 0.9, "is_coherent": True, "source": "model"}
+                             for _ in pairs],
+              lambda: True)
+    results = cc._batch_model_results(bridge, [None, ("a", "b"), None, ("c", "d")])
+    assert results[0] is None and results[2] is None
+    assert results[1]["coherence_score"] == 0.9 and results[3]["coherence_score"] == 0.9
+
+
+def test_batch_model_results_none_bridge():
+    assert cc._batch_model_results(None, [("a", "b")]) == [None]
+
+
+def test_batch_model_results_no_candidates_skips_call():
+    """全 None 候选 → 不应发起任何 predict_pairs 调用（摊薄 subprocess 开销的核心保证）。"""
+    calls = []
+    def predict_pairs(pairs):
+        calls.append(pairs)
+        return []
+    results = cc._batch_model_results((predict_pairs, lambda: True), [None, None])
+    assert results == [None, None]
+    assert calls == []
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# main() 批量预算完整链路——用 mock.patch("nn_coherence_bridge.enabled"/"predict_pairs", ...)
+# 替换外部 NN 模型后端（与 test_coherence_scanner.py::TestScanner 同款既有范式）。main() 含
+# sys.exit 且需要控制模型返回值 → 只能 in-process 调用（父进程 monkeypatch 对 _run_cli 的
+# subprocess 子进程无效），与上方纯 subprocess 路径的 baseline 测试互补。
+# ──────────────────────────────────────────────────────────────────────────
+
+def _run_main_inprocess(proj: Path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["prog", str(proj)])
+    with pytest.raises(SystemExit):
+        cc.main()
+
+
+def test_main_inprocess_model_suppresses_cliffhanger_false_positive(tmp_path, monkeypatch):
+    """raw 路径：关键词零重叠本应触发 CLIFFHANGER_NOT_RESONATED，模型判连贯 → 抑制假阳性。"""
+    monkeypatch.delenv("CLUSTER_MODE", raising=False)
+    monkeypatch.setenv("RUOYU_NN_COHERENCE", "1")
+    proj = _mk_project(tmp_path)
+    _write_chapter(proj, 1, "建木枝，在他手中断裂。深渊，在脚下张开。" * 3,
+                   changes={"self_eval": {"applied_style": {
+                       "ending_type": "钩子", "ending_line": "建木枝，深渊"}}})
+    _write_chapter(proj, 2, "完全无关的内容，没有任何字面重叠。" * 3, changes={})
+    with mock.patch("nn_coherence_bridge.enabled", return_value=True), \
+         mock.patch("nn_coherence_bridge.predict_pairs",
+                    return_value=[{"coherence_score": 0.9, "is_coherent": True, "source": "model"}]):
+        _run_main_inprocess(proj, monkeypatch)
+    report = _latest_report(proj)
+    codes = {f["code"] for f in report["findings"]}
+    assert "CLIFFHANGER_NOT_RESONATED" not in codes
+    assert report["pairwise"][0]["cliffhanger_source"] == "model"
+    assert report["pairwise"][0]["cliffhanger_score"] == 0.9
+
+
+def test_main_inprocess_model_enabled_but_none_matches_disabled_baseline(tmp_path, monkeypatch):
+    """模型 enabled 但 predict_pairs 全返回 None（真实场景：subprocess 失败/ckpt 缺）→
+    必须与完全不设 NN 环境变量的 baseline 逐字节一致（零回归的核心断言）。"""
+    def _build(root):
+        proj = _mk_project(root)
+        _write_chapter(proj, 1, "建木枝，在他手中断裂。深渊，在脚下张开。" * 3,
+                       changes={"self_eval": {"applied_style": {
+                           "ending_type": "钩子", "ending_line": "建木枝，深渊"}},
+                           "factual": {"time_advance": {"key_events": ["周一出发"]}}})
+        _write_chapter(proj, 2, "完全无关的内容，没有任何字面重叠。" * 3,
+                       changes={"self_eval": {"applied_style": {}},
+                                "factual": {"time_advance": {"key_events": ["周四抵达"],
+                                                              "plot_nodes": []}}})
+        return proj
+
+    monkeypatch.delenv("CLUSTER_MODE", raising=False)
+    monkeypatch.setenv("RUOYU_NN_COHERENCE", "1")
+    proj_with_env = _build(tmp_path / "with_env")
+    with mock.patch("nn_coherence_bridge.enabled", return_value=True), \
+         mock.patch("nn_coherence_bridge.predict_pairs", return_value=[None]):
+        _run_main_inprocess(proj_with_env, monkeypatch)
+    report_with_env = _latest_report(proj_with_env)
+
+    monkeypatch.delenv("RUOYU_NN_COHERENCE", raising=False)
+    proj_baseline = _build(tmp_path / "baseline")
+    _run_main_inprocess(proj_baseline, monkeypatch)
+    report_baseline = _latest_report(proj_baseline)
+
+    def _strip_ts(r):
+        r = dict(r)
+        r.pop("scan_ts", None)
+        return r
+    assert _strip_ts(report_with_env) == _strip_ts(report_baseline)
+
+
+def test_main_inprocess_time_gap_model_suppresses(tmp_path, monkeypatch):
+    """时间跳跃维度：plot_nodes 无过渡关键词本应触发 TIME_JUMP_UNEXPLAINED，模型判连贯 → 抑制。
+    ending_type 设悬念断章隔离掉 cliffhanger 维度，纯测时间跳跃这一维。"""
+    monkeypatch.delenv("CLUSTER_MODE", raising=False)
+    monkeypatch.setenv("RUOYU_NN_COHERENCE", "1")
+    proj = _mk_project(tmp_path)
+    _write_chapter(proj, 1, "第一章正文内容" * 20,
+                   changes={"self_eval": {"applied_style": {"ending_type": "悬念断章", "ending_line": "x"}},
+                            "factual": {"time_advance": {"key_events": ["周一出发"]}}})
+    _write_chapter(proj, 2, "第二章正文内容" * 20,
+                   changes={"self_eval": {"applied_style": {}},
+                            "factual": {"time_advance": {"key_events": ["周四抵达"], "plot_nodes": []}}})
+    with mock.patch("nn_coherence_bridge.enabled", return_value=True), \
+         mock.patch("nn_coherence_bridge.predict_pairs",
+                    return_value=[{"coherence_score": 0.9, "is_coherent": True, "source": "model"}]):
+        _run_main_inprocess(proj, monkeypatch)
+    report = _latest_report(proj)
+    codes = {f["code"] for f in report["findings"]}
+    assert "TIME_JUMP_UNEXPLAINED" not in codes
+    assert report["pairwise"][0]["time_transition_source"] == "model"
+
+
+def _mk_ledger_project(tmp_path, resonance_next: float = 0.0) -> Path:
+    proj = _mk_project(tmp_path)
+    _write_chapter(proj, 1, "第一章正文" * 30)
+    _write_chapter(proj, 2, "第二章正文" * 30)
+    ledger = {
+        "schema_version": "v2.cluster",
+        "clusters": [{
+            "cluster_id": "cluster_001",
+            "title": "测试 cluster",
+            "chapter_range": [1, 2],
+            "chapters": {
+                "1": {"ending_type": "钩子", "ending_line": "他望着深渊陷入沉默",
+                      "cliffhanger_resonance_next": resonance_next},
+                "2": {},
+            },
+        }],
+    }
+    (proj / "_数据库" / "故事块摘要.json").write_text(
+        json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
+    return proj
+
+
+def test_main_inprocess_ledger_baseline_uses_precomputed_score(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLUSTER_MODE", "1")
+    monkeypatch.delenv("RUOYU_NN_COHERENCE", raising=False)
+    proj = _mk_ledger_project(tmp_path, resonance_next=0.0)
+    _run_main_inprocess(proj, monkeypatch)
+    report = _latest_report(proj)
+    assert report["pairwise"][0]["cliffhanger_source"] == "heuristic"
+    assert report["pairwise"][0]["cliffhanger_score"] == 0.0
+    codes = {f["code"] for f in report["findings"]}
+    assert "CLIFFHANGER_NOT_RESONATED" in codes
+
+
+def test_main_inprocess_ledger_model_overrides_precomputed_score(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLUSTER_MODE", "1")
+    monkeypatch.setenv("RUOYU_NN_COHERENCE", "1")
+    proj = _mk_ledger_project(tmp_path, resonance_next=0.0)
+    with mock.patch("nn_coherence_bridge.enabled", return_value=True), \
+         mock.patch("nn_coherence_bridge.predict_pairs",
+                    return_value=[{"coherence_score": 0.95, "is_coherent": True, "source": "model"}]):
+        _run_main_inprocess(proj, monkeypatch)
+    report = _latest_report(proj)
+    assert report["pairwise"][0]["cliffhanger_source"] == "model"
+    assert report["pairwise"][0]["cliffhanger_score"] == 0.95
+    codes = {f["code"] for f in report["findings"]}
+    assert "CLIFFHANGER_NOT_RESONATED" not in codes
+
+
 if __name__ == "__main__":
+    import inspect
+
+    def _needs_pytest_fixture(fn) -> bool:
+        """裸跑（非 pytest）只能无参调用；需要 monkeypatch/tmp_path 等 fixture 的用例跳过
+        （与 tests/run_tests.py 同款判定逻辑，避免误报"假失败"）。"""
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return False
+        for p in sig.parameters.values():
+            if p.default is inspect.Parameter.empty and p.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                return True
+        return False
+
     fails = 0
     for nm in sorted(dir()):
         if nm.startswith("test_"):
+            fn = globals()[nm]
+            if _needs_pytest_fixture(fn):
+                print(f"  [SKIP] {nm}（需 pytest fixture，跑 pytest 覆盖）")
+                continue
             try:
-                globals()[nm]()
+                fn()
                 print(f"  [OK] {nm}")
             except Exception as e:
                 fails += 1

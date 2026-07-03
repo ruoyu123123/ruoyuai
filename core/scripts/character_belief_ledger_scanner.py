@@ -26,6 +26,15 @@
     fact content → CHARACTER_KNOWLEDGE_LEAK。ledger 不存在 → 退回占位词典逻辑(向后兼容·零行为变化)。
   生成层注入(build_manifest._sanitize_character_belief + gen_writer H7)是重心·本 scanner 是检测兜底。
 
+【🔴 2026-07-01 语义匹配路径升级（style_embed AP 0.887·经 embedding_store.compute_embedding 消费）】
+  持久化 ledger 路径原本靠「fact 短语精确子串命中窗口」判定穿帮，抓不住同义改写
+  （ledger 记「父亲被杀」·正文写「爹被人害死」→ 字面不重叠·实际同一事实·漏检）。
+  真 embedding 后端就绪时（EMBED_BACKEND 非空非 hash，或配了 GEN_EMBED__* API），
+  字面子串未命中的窗口再补一次 compute_embedding+cosine_similarity 语义比对
+  （facts.content 原文 vs 正文窗口），相似度达阈值同样判定 leak；leak 条目标
+  match_method=literal|semantic 区分命中来源。默认（无真后端·即 hash 袋）→ 只走原字面
+  子串匹配逻辑，逐字节零回归（绝不拿 hash 袋子冒充语义判穿帮·防制造比现在更差的假阳性/假阴性）。
+
 【与既有 scanner 显式去重】
   - focalizer_perception_bounds：narrator 层 (focalizer 自体不可见/他人内心/空间不在场)
     本 scanner = character 层跨场景信念传播（同一 narrator 不变也会翻）·正交
@@ -57,6 +66,12 @@ import os
 import re
 import sys
 from pathlib import Path
+
+# 🔴 2026-07-01 语义匹配路径升级：sys.path 自举·保证 embedding_store 可 import
+# （与 topic_drift_scanner.py 同款 bootstrap·本仓既有约定）。
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
 ISSUE_CODE = "CHARACTER_KNOWLEDGE_LEAK"
 
@@ -212,6 +227,39 @@ def _detect_leaks(scenes, all_names, fact_refs):
 _LEDGER_VERB_WINDOW = 40  # ledger fact content 可能较长·窗口比占位版(30)略宽
 
 
+# ── 🔴 2026-07-01 语义匹配路径（真 embedding 后端才跑·范式抄 topic_drift_scanner）──────
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+
+    原样复制自 topic_drift_scanner.py（本仓既有约定：每个 scanner 自带一份小 helper 副本，
+    不 import 跨 scanner 依赖）。也检查 .env 的 GEN_EMBED__* API 配置
+    （由 embedding_store._load_embed_profile 消费）。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+# 🔬 待金标准校准：ledger fact 短语 vs 正文窗口 embedding 余弦相似度 ≥ 此值 → 判定语义同指
+# （能抓「父亲被杀」vs「爹被人害死」这类字面不重叠但同一事实的改写）。env 可覆盖。
+DEFAULT_SEMANTIC_LEAK_FLOOR = 0.55
+
+
+def _semantic_leak_floor() -> float:
+    """env CHARACTER_BELIEF_SEMANTIC_FLOOR 覆盖 > 默认值。非法值回退默认。"""
+    raw = os.environ.get("CHARACTER_BELIEF_SEMANTIC_FLOOR")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return DEFAULT_SEMANTIC_LEAK_FLOOR
+
+
 def _load_belief_ledger(project_root):
     """读持久化 character_belief_ledger.json。无文件 / 破损 / 无 characters → None（退回占位·向后兼容）。"""
     if not project_root:
@@ -281,10 +329,36 @@ def _detect_leaks_from_ledger(scenes, ledger, charid_names):
     """接真 ledger 检测：对每个 ledger 角色，构造其【不可引用】短语集——
        ① unaware_of 的 fact（不知情）② known_facts 中 can_speak=false 的（知道但不能说出口）。
        在该角色出场的场景里，角色名 + KNOWLEDGE_VERB 窗口内出现不可引用短语 → leak。
-       角色自己 known_facts 里 can_speak!=false 的短语永不算违规（先扣除）。"""
+       角色自己 known_facts 里 can_speak!=false 的短语永不算违规（先扣除）。
+
+    🔴 2026-07-01 语义匹配路径：真 embedding 后端可用时，字面子串未命中的窗口再补一次
+    compute_embedding+cosine_similarity 语义比对（forbidden 短语 vs 正文窗口），抓字面不
+    重叠但语义同指的改写。真后端不可用/未装/编码异常 → 只走原有字面子串匹配，
+    与升级前逐字节零回归（绝不拿 hash 袋子冒充语义）。"""
     chars_ledger = ledger.get("characters") or {}
     facts_index = ledger.get("facts") if isinstance(ledger.get("facts"), dict) else {}
     leaks = []
+
+    # 语义路径预备：只有真后端就绪才 import + 建缓存，默认(hash)完全不进这段
+    use_semantic = _has_real_embedding_backend()
+    _embed_fn, _cos_fn = None, None
+    if use_semantic:
+        try:
+            from embedding_store import compute_embedding, cosine_similarity
+            _embed_fn, _cos_fn = compute_embedding, cosine_similarity
+        except ImportError:
+            use_semantic = False
+    _floor = _semantic_leak_floor() if use_semantic else None
+    _phrase_embed_cache: dict = {}   # 短语 → embedding（跨角色/场景复用·省重复编码）
+
+    def _phrase_embedding(ph):
+        if ph not in _phrase_embed_cache:
+            try:
+                _phrase_embed_cache[ph] = _embed_fn(ph)
+            except Exception:
+                _phrase_embed_cache[ph] = None
+        return _phrase_embed_cache[ph]
+
     for char_id, cl in chars_ledger.items():
         if not isinstance(cl, dict):
             continue
@@ -314,19 +388,40 @@ def _detect_leaks_from_ledger(scenes, ledger, charid_names):
                     window = scene[mt.end(): mt.end() + _LEDGER_VERB_WINDOW]
                     if not any(v in window for v in KNOWLEDGE_VERBS):
                         continue
+                    window_embed = None
+                    if use_semantic:
+                        try:
+                            window_embed = _embed_fn(window)
+                        except Exception:
+                            window_embed = None
                     for ph in forbidden:
-                        if ph and ph in window:
-                            leaks.append({
-                                "scene_idx": idx,
-                                "character": char_id,
-                                "fact_ref": ph,
-                                "reason": ("known_but_cannot_speak" if ph in cannot_speak
-                                           else "unaware_of"),
-                                "context": (scene[max(0, mt.start() - 10):
-                                                  mt.end() + _LEDGER_VERB_WINDOW]
-                                            ).replace("\n", " ")[:60],
-                                "_source": "ledger",
-                            })
+                        if not ph:
+                            continue
+                        hit, method = False, None
+                        if ph in window:
+                            hit, method = True, "literal"
+                        elif use_semantic and window_embed:
+                            ph_embed = _phrase_embedding(ph)
+                            if ph_embed and len(ph_embed) == len(window_embed):
+                                sim = _cos_fn(ph_embed, window_embed)
+                                if sim >= _floor:
+                                    hit, method = True, "semantic"
+                        if not hit:
+                            continue
+                        entry = {
+                            "scene_idx": idx,
+                            "character": char_id,
+                            "fact_ref": ph,
+                            "reason": ("known_but_cannot_speak" if ph in cannot_speak
+                                       else "unaware_of"),
+                            "context": (scene[max(0, mt.start() - 10):
+                                              mt.end() + _LEDGER_VERB_WINDOW]
+                                        ).replace("\n", " ")[:60],
+                            "_source": "ledger",
+                        }
+                        if use_semantic:
+                            entry["match_method"] = method
+                        leaks.append(entry)
     return leaks
 
 
@@ -366,6 +461,9 @@ def scan(draft_path, project_root=None) -> dict:
         out["ledger_character_count"] = len(ledger.get("characters") or {})
         charid_names = _build_charid_name_map(project_root)
         leaks = _detect_leaks_from_ledger(scenes, ledger, charid_names)
+        # 🔴 2026-07-01：真 embedding 后端就绪时才透出该字段（默认 hash 袋·逐字节零回归）
+        if _has_real_embedding_backend():
+            out["semantic_matching_active"] = True
     else:
         out["ledger_source"] = "placeholder"
         fact_refs = _load_fact_refs(project_root)

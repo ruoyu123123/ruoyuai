@@ -15,6 +15,12 @@
     - 越界（< p5 或 > p95） → AUTHOR_BRAND_PERPLEXITY_DRIFT advisory
   · 单本档跳过（多书蒸馏才有 band）：band.book_count < 2 → skip
 
+【2026-07-02 接入真模型】窗口指标优先调用已训练部署的 surprisal_gpt2（经 nn_surprisal_bridge /
+feature_cache 二选一）算窗口 mean_surprisal 代替 char Shannon entropy（`metric_used` 标注切换为
+"gpt2_mean_surprisal"）；RUOYU_NN_SURPRISAL 未开启/模型未完整命中该 cluster 全部窗口时整体回退
+char Shannon entropy（`metric_used="char_shannon_entropy"`·不变）。两者同为 base-2 bits 量纲
+（surprisal_infer.py 用 base_two=True），窗口切法/阈值判定逻辑不变。
+
 【三 advisory】
   · AUTHOR_BRAND_PERPLEXITY_DRIFT_LOW   — 窗口熵 < p5（过度 boilerplate / 模板化）
   · AUTHOR_BRAND_PERPLEXITY_DRIFT_HIGH  — 窗口熵 > p95（过度生僻 / 风格脱锚）
@@ -86,6 +92,68 @@ def _windowed_entropies(cjk_text: str,
         out.append(_shannon_entropy(cjk_text[i:i + window]))
         i += step
     return out
+
+
+def _predict_surprisal_batch(texts: list[str]) -> list[float | None]:
+    """批量取 GPT-2 mean_surprisal(经 FeatureStore 缓存优先→退 nn_surprisal_bridge 直连)。
+    全不可用 → 全 None(调用方整体回退 char Shannon entropy·不变)。"""
+    if not texts:
+        return []
+    preds = None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            preds = FeatureStore.get().compute_surprisal_batch(texts)
+    except Exception:  # noqa: BLE001 FeatureStore 故障 → 退 bridge，绝不影响 scanner
+        preds = None
+    if preds is None:
+        try:
+            import nn_surprisal_bridge as bridge
+        except ImportError:
+            return [None] * len(texts)
+        preds = bridge.predict_batch(texts)
+    if len(preds) != len(texts):
+        return [None] * len(texts)
+    return [(p.get("mean_surprisal") if p else None) for p in preds]
+
+
+def _window_slices(cjk_text: str, window: int = WINDOW_CJK,
+                   step: int = WINDOW_STEP_CJK) -> list[str]:
+    """与 _windowed_entropies 同构的窗口切片(供模型路径复用同一组窗口边界)。"""
+    out = []
+    n = len(cjk_text)
+    if n < window:
+        if n >= window // 4:
+            out.append(cjk_text)
+        return out
+    i = 0
+    while i + window <= n:
+        out.append(cjk_text[i:i + window])
+        i += step
+    return out
+
+
+def _windowed_surprisals_model(cjk_text: str, window: int = WINDOW_CJK,
+                               step: int = WINDOW_STEP_CJK) -> list[float] | None:
+    """真模型版：同窗口切片批量算 GPT-2 mean_surprisal 代替字符熵。
+    任一窗口未命中 → None(整体回退 _windowed_entropies·避免部分 None 破坏 ecdf 比较语义)。"""
+    slices = _window_slices(cjk_text, window, step)
+    if not slices:
+        return None
+    scores = _predict_surprisal_batch(slices)
+    if len(scores) != len(slices) or any(v is None for v in scores):
+        return None
+    return scores
+
+
+def _windowed_metric(cjk_text: str) -> "tuple[list[float], str]":
+    """优先真模型(GPT-2 surprisal)窗口值·不可用/未完整命中 → 回退 char Shannon entropy(不变)。
+    返回 (窗口值列表, metric 标注)。"""
+    model_vals = _windowed_surprisals_model(cjk_text, WINDOW_CJK, WINDOW_STEP_CJK)
+    if model_vals is not None:
+        return model_vals, "gpt2_mean_surprisal"
+    return _windowed_entropies(cjk_text, WINDOW_CJK, WINDOW_STEP_CJK), "char_shannon_entropy"
 
 
 def _load_band(project_root, band_path) -> dict | None:
@@ -204,7 +272,7 @@ def scan(draft_path, project_root=None, band_path=None) -> dict:
         out["note"] = "band 缺 p5/p95·跳过"
         return out
 
-    entropies = _windowed_entropies(cjk_text, WINDOW_CJK, WINDOW_STEP_CJK)
+    entropies, metric_used = _windowed_metric(cjk_text)
     if not entropies:
         out["note"] = "窗口不足·跳过"
         return out
@@ -219,6 +287,7 @@ def scan(draft_path, project_root=None, band_path=None) -> dict:
         "cjk": len(cjk_text),
         "windows": total,
         "window_cjk": WINDOW_CJK,
+        "metric_used": metric_used,
         "p5": p5,
         "p95": p95,
         "below_p5_ratio": round(below_ratio, 3),

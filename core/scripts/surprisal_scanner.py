@@ -239,6 +239,27 @@ def _detect_climax_imbalance(para_stats: list[dict],
     return []
 
 
+def _predict_surprisal_batch(paragraphs: list[str], ids: list[str]) -> list[dict | None]:
+    """经 FeatureStore 取 surprisal；缓存未开时退回 bridge 批量推理。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            return FeatureStore.get().compute_surprisal_batch(paragraphs, ids=ids)
+    except Exception:  # noqa: BLE001 feature store 失败 → 退 bridge，绝不影响 scanner
+        pass
+    try:
+        import nn_surprisal_bridge as bridge
+    except ImportError:
+        try:
+            # fallback: 相对路径
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import nn_surprisal_bridge as bridge
+        except ImportError:
+            return [None] * len(paragraphs)
+    return bridge.predict_batch(paragraphs, ids=ids)
+
+
 # ============ 公开 API ============
 
 def scan_cluster_surprisal(draft_text: str,
@@ -247,27 +268,15 @@ def scan_cluster_surprisal(draft_text: str,
 
     返回 issue 列表（全部 advisory）。bridge 不可用 → 返回空列表（静默降级）。
     """
-    # 导入 bridge（延迟·避免循环 / 早期 import 报错）
-    try:
-        import nn_surprisal_bridge as bridge
-    except ImportError:
-        try:
-            # fallback: 相对路径
-            from pathlib import Path as _P
-            sys.path.insert(0, str(_P(__file__).resolve().parent))
-            import nn_surprisal_bridge as bridge
-        except ImportError:
-            return []
-
     # 去 CHANGES 区块 + 切段
     clean_text = _strip_changes(draft_text)
     paragraphs = _split_paragraphs(clean_text)
     if len(paragraphs) < 3:
         return []  # 太短·无统计意义
 
-    # 调 bridge 批量推理
+    # 经 FeatureStore/bridge 批量推理
     ids = [f"para_{i:04d}" for i in range(len(paragraphs))]
-    results = bridge.predict_batch(paragraphs, ids=ids)
+    results = _predict_surprisal_batch(paragraphs, ids)
 
     # bridge 全部返回 None → 静默降级
     if all(r is None for r in results):

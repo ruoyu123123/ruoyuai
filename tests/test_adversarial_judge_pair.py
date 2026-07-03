@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -212,3 +213,79 @@ def test_main_cli_runs_off():
     assert r.returncode == 0, r.stderr
     rep = json.loads(r.stdout)
     assert rep["scanner"] == "adversarial_judge_pair"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 🔴 VAD 模型接线回归：A2 情感对位优先用 VAD 做真实情感检测（expected_emotion 经
+# EMOTION_LABEL_VAD 映射 pole/arousal 再与末段模型读数比对），模型未启用/不可用 →
+# 回退字面关键词匹配（本文件默认 off 的 scaffold 行为逐字节不变）。
+# ══════════════════════════════════════════════════════════════════════════
+def test_a2_emotion_mismatch_model_hit(monkeypatch):
+    """expected_emotion="喜悦"(EMOTION_LABEL_VAD: pos/high)，模型读数说 neg/low——
+    即便末段字面确实含"喜悦"(字面匹配老逻辑不会报)，新逻辑仍应判定情感对位失败，
+    证明真的走了模型比对而非字面命中。"""
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts: [
+                {"valence": 0.1, "arousal": 0.2, "dominance": None, "source": "model"}
+                for _ in texts
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        text = ("填字凑数" * 250) + "\n\n" + "他心中涌起一阵喜悦。"
+        assert "喜悦" in mod._last_paragraph(text)  # 前置确认：字面确实命中(字面匹配老逻辑不会报)
+        brief = _mk_brief(expected_emotion="喜悦")
+        r = mod.scan(_write(text), cluster_brief_path=brief)
+        a2_list = [a for a in r["attacks"] if a["id"] == "A2"]
+        assert len(a2_list) == 1
+        assert a2_list[0].get("source") == "model_vad"
+    finally:
+        _set_mode(bak)
+
+
+def test_a2_emotion_mismatch_literal_fallback_when_model_unavailable():
+    """RUOYU_NN_VAD 未设置(默认) → A2 仍是纯字面匹配，与模型接入前的行为逐字节一致（零回归）。"""
+    bak = os.environ.get(_ENV)
+    bak_vad = os.environ.get("RUOYU_NN_VAD")
+    try:
+        _set_mode("active")
+        os.environ.pop("RUOYU_NN_VAD", None)
+        exp_emo = "狂喜"
+        assert exp_emo not in mod._last_paragraph(_TEXT)
+        brief = _mk_brief(expected_emotion=exp_emo)
+        r = mod.scan(_write(_TEXT), cluster_brief_path=brief)
+        a2_list = [a for a in r["attacks"] if a["id"] == "A2"]
+        assert len(a2_list) == 1
+        assert a2_list[0].get("source") == "literal_fallback"
+        assert a2_list[0]["claim"] == f"brief.expected_emotion={exp_emo!r} 未在末段出现"
+    finally:
+        _set_mode(bak)
+        if bak_vad is not None:
+            os.environ["RUOYU_NN_VAD"] = bak_vad
+        else:
+            os.environ.pop("RUOYU_NN_VAD", None)
+
+
+def test_a2_no_attack_when_model_hit_matches_expected(monkeypatch):
+    """模型读数与期望极性/强度一致 → 不产生 A2 attack。"""
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts: [
+                {"valence": 0.9, "arousal": 0.9, "dominance": None, "source": "model"}
+                for _ in texts
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        text = ("填字凑数" * 250) + "\n\n" + "他心中涌起一阵狂喜。"
+        brief = _mk_brief(expected_emotion="狂喜")  # 狂喜 → pos/high · 模型读数 pos/high 一致
+        r = mod.scan(_write(text), cluster_brief_path=brief)
+        a2_list = [a for a in r["attacks"] if a["id"] == "A2"]
+        assert a2_list == []
+    finally:
+        _set_mode(bak)

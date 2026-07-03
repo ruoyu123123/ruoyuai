@@ -104,7 +104,14 @@ def test_merge_reports_happy_consensus_no_escalate():
     assert out["reports_with_evidence"] == 3
     assert out["grades_distribution"] == {"A": 3}
     assert out["dissent"] == []
-    assert out["schema_version"] == "1.2"
+    assert out["schema_version"] == "1.3"
+    cf = out["calibration_features"]
+    assert cf["feature_schema"] == "judge_reliability_calibration_v1"
+    assert cf["model_status"] == "shadow_features_only"
+    assert cf["gate_level"] == "advisory"
+    assert cf["n_reports"] == 3
+    assert cf["mean_evidence_quotes"] == 2.0
+    assert cf["escalate_to_user"] is False
 
 
 def test_merge_reports_d_grade_forces_escalate_and_dissent():
@@ -175,6 +182,14 @@ def test_merge_reports_persona_dissent_escalates_and_findings_merge():
     assert any("persona 间分歧" in r for r in out["escalate_reasons"])
     # findings 同 key 聚成 list（保留两个 judge 的值）
     assert out["majority_findings_merged"]["voice_match"] == [True, False]
+
+
+def test_calibration_features_empty_reports():
+    cf = jc.calibration_features([])
+    assert cf["feature_schema"] == "judge_reliability_calibration_v1"
+    assert cf["n_reports"] == 0
+    assert cf["grade_range"] == 0
+    assert cf["gate_level"] == "advisory"
 
 
 def test_main_cli_roundtrip(capsys=None):

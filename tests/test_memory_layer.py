@@ -10,6 +10,7 @@ memory_layer 整体是确定性的（TF-IDF 余弦检索 / 正则实体提取 / 
 零依赖：只用标准库 + tempfile 临时目录。
 """
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -250,6 +251,110 @@ def test_build_counts_layers():
         assert info["archive_count"] == 1
         assert info["chapter_count"] == 0  # 无正文文件
         assert info["total"] == info["chapter_count"] + info["summary_count"] + info["archive_count"]
+
+
+# ============ embedding 接线（2026-07-02 · 真后端门控 + TF-IDF fallback）============
+
+def test_has_real_embedding_backend_false_by_default():
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_has_real_embedding_backend_true_when_set():
+    old = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "local"
+        assert mod._has_real_embedding_backend() is True
+    finally:
+        if old is not None:
+            os.environ["EMBED_BACKEND"] = old
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_search_semantic_finds_paraphrase_literal_tfidf_misses(monkeypatch):
+    """真后端：query 与记忆内容零字面重叠的同义改写（"阿光他爹没"↔"许遥的父亲失踪了"）
+    TF-IDF 查不到（cosine 必为 0·前置断言验证零重叠），embedding 语义路径应命中。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        db = _mk_db(tmp)
+        _write_json(db / "故事块摘要.json", {"chapters": [
+            {"ch": 1, "summary": "许遥的父亲失踪了"},
+            {"ch": 2, "summary": "云霄宗弟子御剑飞行修炼"},
+        ]})
+        ml = mod.MemoryLayer(tmp, current_ch=5)
+
+        # 前置断言：门控关时字面 TF-IDF 完全查不到（"阿光他爹没" 与记忆库零字符重叠）
+        assert ml.search("阿光他爹没") == []
+
+        monkeypatch.setenv("EMBED_BACKEND", "mock")
+        import embedding_store
+
+        def _mock_embed(text):
+            if "许遥的父亲失踪了" in text or "阿光他爹没" in text:
+                return [1.0, 0.0]
+            return [0.0, 1.0]
+        monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+        res = ml.search("阿光他爹没")
+        assert len(res) >= 1, "语义路径应命中同义改写"
+        assert "许遥的父亲失踪了" in res[0]["content"]
+        assert res[0]["method"] == "semantic"
+
+
+def test_search_semantic_falls_back_on_embedding_error(monkeypatch):
+    """真后端配置但 query 编码异常 → 回退 TF-IDF（不崩·不误标 semantic）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        db = _mk_db(tmp)
+        _write_json(db / "故事块摘要.json", {"chapters": [
+            {"ch": 1, "summary": "许遥的父亲在码头失踪了"},
+        ]})
+        ml = mod.MemoryLayer(tmp, current_ch=5)
+
+        monkeypatch.setenv("EMBED_BACKEND", "mock")
+        import embedding_store
+
+        def _boom(text):
+            raise RuntimeError("模拟真后端编码失败")
+        monkeypatch.setattr(embedding_store, "compute_embedding", _boom)
+
+        res = ml.search("许遥的父亲")
+        assert len(res) >= 1
+        assert all("method" not in r for r in res)  # 回退 TF-IDF（不带 semantic 标记）
+
+
+def test_search_default_no_backend_unaffected():
+    """🔴 零回归锁：无 EMBED_BACKEND（默认）→ search 结果保持纯 TF-IDF 路径（无 semantic 标记）。"""
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            db = _mk_db(tmp)
+            _write_json(db / "故事块摘要.json", {"chapters": [
+                {"ch": 1, "summary": "许遥的父亲在码头失踪了"},
+                {"ch": 2, "summary": "云霄宗弟子御剑飞行修炼"},
+                {"ch": 3, "summary": "许遥决心去码头寻找父亲下落"},
+            ]})
+            ml = mod.MemoryLayer(tmp, current_ch=5)
+            res = ml.search("许遥的父亲", top_k=5)
+            assert len(res) >= 1
+            assert all("method" not in r for r in res)
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
 
 
 def test_stats_forgotten_elements_threshold():

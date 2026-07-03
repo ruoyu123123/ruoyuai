@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -124,8 +125,39 @@ def infer_outcome_from_changes(changes: dict) -> tuple[str, int]:
     return _infer_outcome_heuristic(factual)
 
 
+def _model_full_text_valence(full_text: str) -> "float | None":
+    """VAD 模型对 locked_facts/relationships 拼接文本判 valence；env 未开/模型不可用/未命中
+    → None（调用方回退关键词计数）。"""
+    if not full_text.strip() or os.environ.get("RUOYU_NN_VAD") != "1":
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch([full_text]) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch([full_text])
+    except Exception:
+        return None
+    if not preds or not preds[0] or preds[0].get("valence") is None:
+        return None
+    try:
+        return float(preds[0]["valence"])
+    except (TypeError, ValueError):
+        return None
+
+
 def _infer_outcome_heuristic(factual: dict) -> tuple[str, int]:
-    """启发式推断 outcome + intensity（writer 未申报 actual_outcome 时的回退）。"""
+    """启发式推断 outcome + intensity（writer 未申报 actual_outcome 时的回退）。
+
+    负面判定优先走 VAD 模型 valence（locked_facts/relationships 拼接文本·<0.5 视为负面主导）；
+    模型未启用/不可用/未命中 → 回退关键词计数（原逻辑不变）。intensity 仍按关键词命中数计
+    （模型只接管"是否负面"的判断，强度量级维持关键词口径，下游 min(8, 3+hits) 契约不变）。
+    """
     fate_count = len(factual.get("fate_events_triggered", []) or [])
     foreshadow_paid = len(factual.get("foreshadowing_paid", []) or [])
 
@@ -136,7 +168,10 @@ def _infer_outcome_heuristic(factual: dict) -> tuple[str, int]:
     full_text = locked_text + " " + relations_text
     negative_hits = sum(1 for kw in negative_kw if kw in full_text)
 
-    if negative_hits >= 2:
+    model_valence = _model_full_text_valence(full_text)
+    is_negative = (model_valence < 0.5) if model_valence is not None else (negative_hits >= 2)
+
+    if is_negative:
         return ("setback", min(8, 3 + negative_hits))
     if fate_count >= 1 or foreshadow_paid >= 2:
         return ("win", min(7, 3 + fate_count + foreshadow_paid))

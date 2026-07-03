@@ -159,6 +159,41 @@ def _token_jaccard(a: set, b: set) -> float:
     return inter / union if union else 0.0
 
 
+# 🔴 2026-07-02: 真 embedding 后端接线（本仓约定：每个消费 embedding 的脚本自带一份门控副本）。
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+    原样复制自 topic_drift_scanner.py（不 import 跨脚本依赖）。也检查 .env 的
+    GEN_EMBED__* API 配置（由 embedding_store._load_embed_profile 消费）。"""
+    v = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if v and v != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+# 🔬 待金标准校准：语义合并相似度下限（embedding 余弦 ≥ 此值才判「该合并」·保守起步，
+# 避免真后端刚接入就比字面 token jaccard>0.6 更激进地误并经验）。
+SEMANTIC_MERGE_THRESHOLD = 0.75
+
+
+def _semantic_similarity(blob_a: str, blob_b: str, embed_fn, cos_fn) -> "float | None":
+    """两条经验相似度 blob 的 embedding 余弦相似度。任一 blob 空 / 编码失败 / 维度不一致
+    → None（调用方回退 token jaccard·绝不拿默认 hash 假语义冒充·空 blob 判断沿用调用方
+    既有的 C12 空 token 集合闸，这里只负责有内容时的语义打分）。"""
+    if not blob_a or not blob_b:
+        return None
+    try:
+        ea = embed_fn(blob_a)
+        eb = embed_fn(blob_b)
+    except Exception:
+        return None
+    if not ea or not eb or len(ea) != len(eb):
+        return None
+    return cos_fn(ea, eb)
+
+
 def evolve(project_root: Path, current_ch: int) -> dict:
     """合并相似 patterns + 提炼共性 + version+1"""
     exp_path = project_root / "_数据库" / "写作经验.json"
@@ -175,17 +210,43 @@ def evolve(project_root: Path, current_ch: int) -> dict:
         upgraded = [upgrade_to_versioned(p, current_ch) if isinstance(p, dict) else p for p in patterns]
         results["upgraded_count"] += sum(1 for p in upgraded if p.get("version") == 1 and len(p.get("evolution_history", [])) == 1)
 
-        # Step 2: 找相似 pattern pair（token 级 jaccard > 0.6）
+        # Step 2: 找相似 pattern pair（真后端：embedding 余弦 ≥ SEMANTIC_MERGE_THRESHOLD ·
+        # 否则 token 级 jaccard > 0.6）
         # 🔴 2026-06-27 C12: producer 真填字段并集 + token 分词替代 char-set jaccard。
         # 空 blob 显式不参与合并（根除旧 description+name 双空 → jaccard(" "," ")=1.0 误并）。
         merged_indices = set()
         new_patterns = []
         _tok_cache: dict[int, set] = {}
+        _blob_cache: dict[int, str] = {}
 
         def _tokens_for(idx, pat):
             if idx not in _tok_cache:
                 _tok_cache[idx] = _tokenize(_similarity_blob(pat)) if isinstance(pat, dict) else set()
             return _tok_cache[idx]
+
+        def _blob_for(idx, pat):
+            if idx not in _blob_cache:
+                _blob_cache[idx] = _similarity_blob(pat) if isinstance(pat, dict) else ""
+            return _blob_cache[idx]
+
+        # 🔴 2026-07-02: 真后端时优先语义相似度（能抓「对话要简短」vs「台词不宜过长」这类
+        # 零 token 重叠的同义表述）；不可用/单条编码失败 → 回退 token jaccard（原逻辑不变）。
+        _use_semantic = _has_real_embedding_backend()
+        _embed_fn = _cos_fn = None
+        if _use_semantic:
+            try:
+                from embedding_store import compute_embedding, cosine_similarity
+                _embed_fn, _cos_fn = compute_embedding, cosine_similarity
+            except ImportError:
+                _use_semantic = False
+
+        def _is_similar(i_idx, p, p_tok, j_idx, q, q_tok) -> bool:
+            if _use_semantic:
+                sim = _semantic_similarity(_blob_for(i_idx, p), _blob_for(j_idx, q),
+                                           _embed_fn, _cos_fn)
+                if sim is not None:
+                    return sim >= SEMANTIC_MERGE_THRESHOLD
+            return _token_jaccard(p_tok, q_tok) > 0.6
 
         for i, p in enumerate(upgraded):
             if i in merged_indices:
@@ -200,7 +261,7 @@ def evolve(project_root: Path, current_ch: int) -> dict:
                     q_tokens = _tokens_for(j, q)
                     if not q_tokens:  # 🔴 C12: 空 blob 不被并入
                         continue
-                    if _token_jaccard(p_tokens, q_tokens) > 0.6:
+                    if _is_similar(i, p, p_tokens, j, q, q_tokens):
                         similar.append((j, q))
             if similar:
                 # 合并：取最高 confidence + 累积 usage + 升 version

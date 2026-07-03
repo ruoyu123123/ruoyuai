@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -134,6 +135,59 @@ def test_scan_cluster_compute():
     assert r is not None
     assert "delta_para" in r
     assert "tokens" in r
+
+
+# ============ 🔴 2026-07-01 真模型(surprisal_gpt2) 接入回归 ============
+
+# _BODY 的场景切块(\n{3,} 分隔)全部 < 100 CJK(被 _compute_scene_deltas 的过滤条件挡掉)·
+# 场景级模型路径需要真正过滤后仍 ≥2 个的"场景"·故用专用大文本(每场景 270 CJK)单独测 scene 维度。
+_BIG_SCENE_BODY = (
+    (("这是一段测试内容用来填充字数达到最低门槛不多不少刚刚好。\n\n") * 10)
+    + ("\n" * 3)
+    + (("这是一段测试内容用来填充字数达到最低门槛不多不少刚刚好。\n\n") * 10)
+    + ("\n" * 3)
+    + (("这是一段测试内容用来填充字数达到最低门槛不多不少刚刚好。\n\n") * 10)
+)
+
+
+def test_model_source_used_when_enabled(monkeypatch):
+    """RUOYU_NN_SURPRISAL=1 且 bridge 命中 → 三类 ΔS 都标 source=model(用场景边界合规的大文本)。"""
+    monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts, ids=None: [
+            {"mean_surprisal": 3.0 + i * 0.5, "source": "model"} for i, _ in enumerate(texts)
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+    r = mod._scan_cluster(_BIG_SCENE_BODY)
+    assert r is not None
+    assert r["source"]["delta_para"] == "model"
+    assert r["source"]["delta_scene"] == "model"
+    assert r["source"]["delta_cluster_end"] == "model"
+
+
+def test_model_unavailable_keeps_heuristic_unchanged(monkeypatch):
+    """bridge enabled 但返回全 None → 三类 ΔS 都回退 heuristic·数值与不开模型时逐位相等(零回归)。"""
+    baseline = mod._scan_cluster(_BODY)  # 未碰模型 env 的现有频次代理基线
+    monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts, ids=None: [None for _ in texts]
+    )
+    monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+    r = mod._scan_cluster(_BODY)
+    assert r["source"]["delta_para"] == "heuristic"
+    assert r["source"]["delta_scene"] == "heuristic"
+    assert r["source"]["delta_cluster_end"] == "heuristic"
+    assert r["delta_para"] == baseline["delta_para"]
+    assert r["delta_scene"] == baseline["delta_scene"]
+    assert r["delta_cluster_end"] == baseline["delta_cluster_end"]
+    assert r["tokens"] == baseline["tokens"]
+
+
+def test_model_disabled_by_default_no_env(monkeypatch):
+    """默认(env 不开) → _predict_surprisal_batch 直接全 None·不触碰任何 sys.modules 假桥。"""
+    monkeypatch.delenv("RUOYU_NN_SURPRISAL", raising=False)
+    assert mod._predict_surprisal_batch(["测试文本"]) == [None]
 
 
 def test_code_not_in_hard_gate():

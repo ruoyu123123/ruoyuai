@@ -19,6 +19,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,25 @@ sys.path.insert(0, str(_SCRIPTS))
 import narrator_calibrate as nc  # noqa: E402
 
 _TARGET = _SCRIPTS / "narrator_calibrate.py"
+
+
+def _fake_vad(predict_batch_fn):
+    """临时装 RUOYU_NN_VAD=1 + 假 nn_vad_bridge 模块，返回还原函数（无 monkeypatch 依赖）。"""
+    old_env = os.environ.get("RUOYU_NN_VAD")
+    old_mod = sys.modules.get("nn_vad_bridge")
+    os.environ["RUOYU_NN_VAD"] = "1"
+    sys.modules["nn_vad_bridge"] = types.SimpleNamespace(predict_batch=predict_batch_fn)
+
+    def _restore():
+        if old_env is None:
+            os.environ.pop("RUOYU_NN_VAD", None)
+        else:
+            os.environ["RUOYU_NN_VAD"] = old_env
+        if old_mod is None:
+            sys.modules.pop("nn_vad_bridge", None)
+        else:
+            sys.modules["nn_vad_bridge"] = old_mod
+    return _restore
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -125,6 +145,48 @@ def test_heuristic_empty_factual_neutral():
     outcome, intensity = nc._infer_outcome_heuristic({})
     assert outcome == "neutral"
     assert intensity == 3  # foreshadow_paid>=1 假；fate_count>=0 真 → 3
+
+
+def test_heuristic_model_hit_flags_setback_below_keyword_threshold():
+    """RUOYU_NN_VAD=1 + 假模型命中负面 valence → setback，即便关键词命中数<2（纯词典判不出）。
+    假模型按内容区分（含'困境'→低valence，其余→高valence），证明真走了模型路径。"""
+    def _fake(items):
+        return [{"valence": 0.15, "arousal": 0.6, "dominance": None, "source": "model"}
+                if "困境" in t else
+                {"valence": 0.85, "arousal": 0.3, "dominance": None, "source": "model"}
+                for t in items]
+    restore = _fake_vad(_fake)
+    try:
+        factual = {"locked_facts": ["主角遭遇了困境"]}  # 0 个原关键词命中
+        outcome, intensity = nc._infer_outcome_heuristic(factual)
+        assert outcome == "setback", f"模型 valence<0.5 应判 setback，得 {outcome}"
+        assert intensity == 3, f"negative_hits=0 → min(8,3+0)=3，得 {intensity}"
+
+        # 对照：换一段模型判正向文本 → 不应被误判 setback（走 win/neutral 分支）
+        factual2 = {"foreshadowing_paid": ["伏笔A", "伏笔B"]}
+        outcome2, _ = nc._infer_outcome_heuristic(factual2)
+        assert outcome2 == "win", f"正向 valence 不该被强判 setback，得 {outcome2}"
+    finally:
+        restore()
+
+
+def test_heuristic_model_unavailable_zero_regression():
+    """RUOYU_NN_VAD=1 但 predict_batch 全 None（模型不可用）→ 与默认(env off)关键词路径逐位一致。"""
+    cases = [
+        {"locked_facts": ["主角受伤被发现", "盟友死亡"]},
+        {"fate_events_triggered": [{"id": "V1_ME_001"}]},
+        {"foreshadowing_paid": ["伏笔A"]},
+        {},
+    ]
+    baselines = [nc._infer_outcome_heuristic(f) for f in cases]
+
+    restore = _fake_vad(lambda items: [None for _ in items])
+    try:
+        for factual, baseline in zip(cases, baselines):
+            got = nc._infer_outcome_heuristic(factual)
+            assert got == baseline, f"模型不可用应与默认路径一致：{factual} → {got} != {baseline}"
+    finally:
+        restore()
 
 
 # ──────────────────────────────────────────────────────────────────────────

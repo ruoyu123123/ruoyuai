@@ -28,11 +28,31 @@ import sys
 import json
 import importlib
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import snippet_seed as ss  # noqa: E402
+
+
+def _fake_vad(predict_batch_fn):
+    """临时装 RUOYU_NN_VAD=1 + 假 nn_vad_bridge 模块，返回还原函数（无 monkeypatch 依赖）。"""
+    old_env = os.environ.get("RUOYU_NN_VAD")
+    old_mod = sys.modules.get("nn_vad_bridge")
+    os.environ["RUOYU_NN_VAD"] = "1"
+    sys.modules["nn_vad_bridge"] = types.SimpleNamespace(predict_batch=predict_batch_fn)
+
+    def _restore():
+        if old_env is None:
+            os.environ.pop("RUOYU_NN_VAD", None)
+        else:
+            os.environ["RUOYU_NN_VAD"] = old_env
+        if old_mod is None:
+            sys.modules.pop("nn_vad_bridge", None)
+        else:
+            sys.modules["nn_vad_bridge"] = old_mod
+    return _restore
 
 
 def _reload_ss(mode):
@@ -205,6 +225,92 @@ def test_D_select_deterministic():
         a = ss.select_snippets(odir, target, n=2)
         b = ss.select_snippets(odir, target, n=2)
         assert a == b
+
+
+def test_D_emotion_register_model_hit_uses_valence_arousal():
+    """RUOYU_NN_VAD=1 + 假模型命中 → _emotion_register 用 valence/arousal 派生，非词频计数。
+    假模型按内容区分（含'血'→低valence高arousal(紧张)，含'暖'→高valence低arousal(平静)）。"""
+    def _fake(items):
+        out = []
+        for t in items:
+            if "血" in t:
+                out.append({"valence": 0.1, "arousal": 0.9, "dominance": None, "source": "model"})
+            else:
+                out.append({"valence": 0.9, "arousal": 0.1, "dominance": None, "source": "model"})
+        return out
+    restore = _fake_vad(_fake)
+    try:
+        reg_tense = ss._emotion_register(_TENSE_SNIPPET)  # 含"血"
+        reg_calm = ss._emotion_register(_CALM_SNIPPET)    # 不含"血"
+        # 手算：紧张 reg = 0.6*(2*0.9-1) + 0.4*(1-2*0.1) = 0.6*0.8 + 0.4*0.8 = 0.8
+        assert abs(reg_tense - 0.8) < 1e-6, f"应按模型公式算出 0.8，得 {reg_tense}"
+        # 平静 reg = 0.6*(2*0.1-1) + 0.4*(1-2*0.9) = 0.6*(-0.8) + 0.4*(-0.8) = -0.8
+        assert abs(reg_calm - (-0.8)) < 1e-6, f"应按模型公式算出 -0.8，得 {reg_calm}"
+        assert reg_tense > reg_calm, "紧张端应大于平静端（方向正确）"
+    finally:
+        restore()
+
+
+def test_D_select_snippets_batches_single_model_call():
+    """select_snippets 对多个候选片段只应发起 1 次 predict_batch 调用（整批·非逐条 N 次），
+    摊薄模型子进程加载开销——这是本次接线的核心效率约束。"""
+    calls = []
+
+    def _fake(items):
+        calls.append(list(items))
+        return [{"valence": 0.5, "arousal": 0.5, "dominance": None, "source": "model"}
+                for _ in items]
+    restore = _fake_vad(_fake)
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            odir = Path(td) / "原文"
+            odir.mkdir()
+            for i in range(1, 6):
+                (odir / f"第{i:03d}章.txt").write_text(
+                    "\n\n".join([f"第{i}章的场景，他怒吼挥砍，血溅当场，敌人嘶吼扑来撕裂衣袖。"] * 4),
+                    encoding="utf-8")
+            target = ss.profile_text(_CALM_SNIPPET)  # 目标 profile 自身也会触发 1 次 predict_batch
+            ss.select_snippets(odir, target, n=2)
+        # 目标 profile 1 次 + select_snippets 内部候选批量 1 次 = 2 次；候选数无论多少都不应线性增长调用次数
+        assert len(calls) == 2, f"应恰好 2 次批量调用（target 1 + candidates 1 批），得 {len(calls)}: {calls}"
+        # 候选批量那次应包含全部候选（不是逐条拆开的单元素调用）
+        cand_calls = [c for c in calls if len(c) > 1]
+        assert cand_calls, "应存在一次包含多个候选片段的整批调用"
+    finally:
+        restore()
+
+
+def test_D_emotion_register_model_unavailable_zero_regression():
+    """RUOYU_NN_VAD=1 但 predict_batch 返回 None（模型不可用）→ 与默认(env off)词频路径一致。"""
+    baseline_tense = ss._emotion_register(_TENSE_SNIPPET)
+    baseline_calm = ss._emotion_register(_CALM_SNIPPET)
+
+    restore = _fake_vad(lambda items: None)
+    try:
+        assert ss._emotion_register(_TENSE_SNIPPET) == baseline_tense
+        assert ss._emotion_register(_CALM_SNIPPET) == baseline_calm
+    finally:
+        restore()
+
+    # select_snippets 端到端同样零回归：模型不可用时选样结果与 env off 完全一致
+    with tempfile.TemporaryDirectory() as td:
+        odir = Path(td) / "原文"
+        odir.mkdir()
+        (odir / "第001章.txt").write_text(
+            "\n\n".join(["他怒吼挥砍，血溅当场，敌人嘶吼扑来撕裂衣袖，急退猛冲。"] * 4),
+            encoding="utf-8")
+        (odir / "第002章.txt").write_text(
+            "\n\n".join(["他静坐窗前，缓缓品着茶，暖光柔和地铺在书页上，默默想着旧事。"] * 4),
+            encoding="utf-8")
+        target = ss.profile_text(_CALM_SNIPPET)
+        baseline_pick = ss.select_snippets(odir, target, n=1)
+
+        restore = _fake_vad(lambda items: None)
+        try:
+            got_pick = ss.select_snippets(odir, target, n=1)
+            assert got_pick == baseline_pick, "模型不可用时选样应与默认路径完全一致（零回归）"
+        finally:
+            restore()
 
 
 # ════════════════════════════════════════════════════════════════

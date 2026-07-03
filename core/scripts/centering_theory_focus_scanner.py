@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# 🔴 2026-07 entity/共指提取接入 nn_coref_bridge（Cb/Cf 分类算法本身不变）
 """centering_theory_focus_scanner.py — Grosz Centering Theory 4 转移类型 · 读者注意焦点
 
 【缺口 · R18 W7 Batch-T·P1 · 2026-06-21】Grosz/Joshi/Weinstein 1995
@@ -29,6 +30,9 @@
 【两探针 · 确定性纯规则】
   ① rough_shift_density（per 1k CJK）
      - 每句抽 Cf 候选 = 主语前置名词 + 配角名命中（人物卡 + 占位代词他/她/它）
+       · entity/共指提取优先问 nn_coref_bridge.resolve_coreferences()（RUOYU_NN_COREF
+         门控关闭默认返回 []）→ 有结果则用桥解析出的具体角色名替代裸代词/补非命名
+         指代候选，无结果 100% 回退本文件原有字符串匹配 + 固定代词表
      - Cp = 句首位置 NP（启发：本句开头第一个出现的 Cf 候选）
      - Cb = 上一句 Cf ∩ 本句 Cf 中显著度最高者
      - 4 转移分类 + rough_shift_density
@@ -145,10 +149,18 @@ def _load_baseline(project_root):
     return out
 
 
-def _extract_cf(sentence: str, cast_names):
+def _extract_cf(sentence: str, cast_names, coref_map: dict | None = None):
     """Cf = 本句实体列表（按出现顺序·首位是 Cp）。
     实体 = cast_names ∪ PRONOUNS · 不去对话内容（CT 含 turn 主语）。
+
+    coref_map（可选·2026-07 NN 共指桥集成）：{句内局部字符位置: nn_coref_bridge
+    解析出的角色名}。命中固定代词位置 → 用解析出的具体角色名替代裸代词「他/她」，
+    让跨句 Cb 延续判断能匹配到真实姓名而非停留在代词字面；桥还能覆盖固定 PRONOUNS
+    表之外的非命名指代（"那个女人"/"这位大人"）→ 补一个新 Cf 候选。
+    coref_map 为空（RUOYU_NN_COREF 门控关闭默认状态·或桥无结果）→ 逐字节回退到
+    原有纯正则 + 固定代词表逻辑，不受影响。
     返回 [entity_str, ...] 按首次出现位置升序。"""
+    coref_map = coref_map or {}
     hits = []  # [(pos, entity)]
     for nm in cast_names:
         idx = sentence.find(nm)
@@ -160,7 +172,14 @@ def _extract_cf(sentence: str, cast_names):
         if idx >= 0:
             # 防嵌入式『其他』『她家』等多义 → 简化保留高频代词独立出现
             # 但 PRONOUNS 已是常见单字代词·这里宽松保留
-            hits.append((idx, pn))
+            # coref_map 命中该位置 → 用桥解析出的具体角色名替代裸代词
+            hits.append((idx, coref_map.get(idx, pn)))
+    # 🔴 NN 共指桥补充：桥能识别到本地 PRONOUNS 表覆盖不到的非命名指代
+    # （"那个女人"/"这位大人"等）·只在该位置尚未被上面两步命中时补充，避免重复计数
+    covered_positions = {pos for pos, _ in hits}
+    for pos, resolved_name in coref_map.items():
+        if pos not in covered_positions:
+            hits.append((pos, resolved_name))
     # 同 entity 出现多次只算第一次
     seen = set()
     cf = []
@@ -170,6 +189,51 @@ def _extract_cf(sentence: str, cast_names):
         seen.add(ent)
         cf.append(ent)
     return cf
+
+
+def _split_sentences_with_offsets(body: str) -> list[tuple[str, int]]:
+    """按句末符号切句 · 返回 [(去空白句, 该句在 body 中的绝对起始偏移), ...]。
+
+    SENTENCE_SPLIT_RE 是零宽 lookbehind 切分·各 piece 首尾相接精确重建 body·
+    故可用累积 offset 定位每句在 body 中的绝对位置（供 nn_coref_bridge 坐标映射用）。
+    过滤规则与旧版 `[s.strip() for s in ... if s.strip()]` 完全一致，纯附加 offset。
+    """
+    pieces = SENTENCE_SPLIT_RE.split(body)
+    out = []
+    offset = 0
+    for piece in pieces:
+        stripped = piece.strip()
+        if stripped:
+            local_lead = piece.find(stripped)
+            out.append((stripped, offset + local_lead))
+        offset += len(piece)
+    return out
+
+
+def _coref_positions(body: str, cast_names) -> dict:
+    """调用 nn_coref_bridge 解析 body 中的代词/非命名指代 → {绝对位置: 解析出的角色名}。
+
+    RUOYU_NN_COREF 门控关闭（默认）/ 无结果 / 任何异常 → 返回空 dict，
+    上层 _scan_centering/_extract_cf 100% 回退现有纯正则 + 固定代词表逻辑。
+    """
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        from nn_coref_bridge import resolve_coreferences
+        results = resolve_coreferences(body, sorted(cast_names) if cast_names else None)
+    except Exception as e:  # noqa: BLE001 — 桥失败绝不影响本 scanner 主流程
+        print(f"[centering_theory_focus_scanner] 共指消解失败·回退正则："
+              f"{type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
+        return {}
+    out = {}
+    for r in (results or []):
+        span = r.get("span")
+        resolved = r.get("resolved_to")
+        if not span or not resolved:
+            continue
+        out[span[0]] = resolved
+    return out
 
 
 def _classify_transition(prev_cf, cur_cf):
@@ -202,15 +266,24 @@ def _classify_transition(prev_cf, cur_cf):
 
 
 def _scan_centering(text: str, cast_names):
-    """切句 + 4 转移类型计数。返回 (transitions_dict, sentences_scanned)"""
+    """切句 + 4 转移类型计数。返回 (transitions_dict, sentences_scanned, coref_resolved_count)"""
     # 去对话内容降噪
     body = DIALOGUE_SPAN.sub("", text)
-    sents = [s.strip() for s in SENTENCE_SPLIT_RE.split(body) if s.strip()]
+    sent_offsets = _split_sentences_with_offsets(body)
+    # 🔴 NN 共指桥（2026-07）：整段调一次·门控关闭(默认)/无结果/异常 → 空 dict
+    #    下面逐句从中裁出局部映射喂给 _extract_cf·为空时 _extract_cf 逐字节回退旧逻辑
+    coref_by_pos = _coref_positions(body, cast_names)
     transitions = {"continue": 0, "retain": 0, "smooth": 0, "rough": 0, "none": 0}
     prev_cf = None
     scanned = 0
-    for s in sents:
-        cur_cf = _extract_cf(s, cast_names)
+    coref_used = 0
+    for s, abs_start in sent_offsets:
+        local_map = None
+        if coref_by_pos:
+            local_map = {pos - abs_start: name for pos, name in coref_by_pos.items()
+                         if abs_start <= pos < abs_start + len(s)}
+            coref_used += len(local_map)
+        cur_cf = _extract_cf(s, cast_names, local_map)
         if prev_cf is None:
             prev_cf = cur_cf if cur_cf else None
             continue
@@ -220,7 +293,7 @@ def _scan_centering(text: str, cast_names):
         if cur_cf:
             prev_cf = cur_cf
         # cur_cf 空时 prev_cf 不变（保留焦点）
-    return transitions, scanned
+    return transitions, scanned, coref_used
 
 
 def scan(draft_path, project_root=None) -> dict:
@@ -243,7 +316,7 @@ def scan(draft_path, project_root=None) -> dict:
 
     cast = _load_cast(project_root)
     baseline = _load_baseline(project_root)
-    transitions, scanned = _scan_centering(text, cast)
+    transitions, scanned, coref_used = _scan_centering(text, cast)
     rough = transitions["rough"]
     rough_density = round(rough / cjk * 1000.0, 3)
     out["metrics"] = {
@@ -252,6 +325,9 @@ def scan(draft_path, project_root=None) -> dict:
         "sentences_scanned": scanned,
         "cast_size": len(cast),
         "total_cjk": cjk,
+        # 🔴 NN 共指桥集成（2026-07）：source 区分本次 Cf 抽取是否用到桥解析结果
+        "coref_resolution_source": "nn_coref_bridge" if coref_used > 0 else "regex_fallback",
+        "coref_resolved_mentions": coref_used,
     }
     out["author_baseline"] = {
         "from_author_profile": baseline["from_author_profile"],

@@ -44,6 +44,67 @@ try:
 except Exception:  # 防御：缺模块退回原 dict 守卫
     cluster_lookup = None
 
+
+# 🔴 2026-07-02: 真 embedding 后端接线（本仓约定：每个消费 embedding 的脚本自带一份门控副本）。
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+    原样复制自 topic_drift_scanner.py（不 import 跨脚本依赖）。也检查 .env 的
+    GEN_EMBED__* API 配置（由 embedding_store._load_embed_profile 消费）。"""
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+# 🔬 待金标准校准：章末文本 vs anchor 描述池的余弦相似度 ≥ 此值 → 判定语义锚定（抓字面
+# 0 重叠但同一剧情点的改写，如伏笔写「铭文」章末写「刻在石壁上的古老符文」）。env 可覆盖。
+DEFAULT_SEMANTIC_ANCHOR_FLOOR = 0.35
+
+
+def _semantic_anchor_floor() -> float:
+    raw = os.environ.get("CHAPTER_END_SEMANTIC_ANCHOR_FLOOR")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return DEFAULT_SEMANTIC_ANCHOR_FLOOR
+
+
+def _semantic_anchor_match(tail_text: str, anchor_texts: list[str]) -> "dict | None":
+    """章末文本 vs anchor_texts 池（伏笔/scope_summary 原始描述）逐条算余弦相似度。
+    最高分 >= floor → 返回 {anchor_text, similarity}（语义锚定命中）；embedding_store 不可用 /
+    池空 / 编码失败 / 维度不一致 → None（调用方保留字面法判定的 issue）。"""
+    if not anchor_texts:
+        return None
+    try:
+        from embedding_store import compute_embedding, cosine_similarity
+        tail_emb = compute_embedding(tail_text)
+    except Exception:
+        return None
+    if not tail_emb:
+        return None
+    floor = _semantic_anchor_floor()
+    best_text, best_sim = None, 0.0
+    for t in dict.fromkeys(anchor_texts):  # 去重·保序
+        if not t:
+            continue
+        try:
+            emb = compute_embedding(t)
+        except Exception:
+            continue
+        if not emb or len(emb) != len(tail_emb):
+            continue
+        sim = cosine_similarity(tail_emb, emb)
+        if sim > best_sim:
+            best_text, best_sim = t, sim
+    if best_text is None or best_sim < floor:
+        return None
+    return {"anchor_text": best_text[:120], "similarity": round(best_sim, 4)}
+
 # ============ banned patterns（与 pretooluse_chapter_edit_gate.py 同源）============
 
 SCREENPLAY_PATTERNS = [
@@ -199,15 +260,63 @@ def collect_anchors(db_dir: Path) -> set[str]:
     return {a for a in anchors if a and len(a) >= 2}
 
 
+def collect_anchor_texts(db_dir: Path) -> list[str]:
+    """收集「已存在剧情」的原始描述文本池（未经 extract_keywords 切词·供语义锚定比对用）。
+
+    来源同 collect_anchors 的事件簇.json / 伏笔表.json 描述字段——人物卡/道具/地图只是
+    短名词，embedding 语义比对意义不大，不纳入此池（字面法仍覆盖它们）。"""
+    texts: list[str] = []
+
+    def add(v):
+        if isinstance(v, str) and v.strip():
+            texts.append(v.strip())
+
+    ec_path = db_dir / "事件簇.json"
+    if ec_path.exists():
+        try:
+            ec = json.loads(ec_path.read_text(encoding="utf-8"))
+            for c in ec.get("clusters", []):
+                for fld in ("title", "scope_summary", "_emergence_seed"):
+                    add(c.get(fld))
+                for sb in c.get("scene_storyboard", []) or []:
+                    add(sb.get("summary", ""))
+                for fs in c.get("foreshadowing_to_plant", []) or []:
+                    add(fs.get("description", ""))
+        except Exception:
+            pass
+
+    fb_path = db_dir / "伏笔表.json"
+    if fb_path.exists():
+        try:
+            fb = json.loads(fb_path.read_text(encoding="utf-8"))
+            for p in fb.get("promises", []):
+                add(p.get("description", ""))
+                tc = p.get("trigger_condition", {})
+                if isinstance(tc, dict):
+                    add(tc.get("physical_evidence", ""))
+            for s in fb.get("secrets", []):
+                add(s.get("secret", ""))
+        except Exception:
+            pass
+
+    return texts
+
+
 # ============ 检测主逻辑 ============
 
-def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool = False) -> dict:
+def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool = False,
+                      anchor_texts: "list[str] | None" = None) -> dict:
     """扫一章末段，返回 issues。
 
     🔴 2026-06-27 C06：hard_gate_only=True（--hard-gate-only）只跑 SCREENPLAY + SEPARATOR
     两族 hard_gate（供切章后复扫·与 audit_hub step3 整段 SCREENPLAY 扫互补：此处补 SEPARATOR
     须锚定章末的位置敏感检测），跳过 closure / anchor / POV advisory（避免 advisory 噪声干扰
     复扫纯阻断语义）。北极星⑤：语义收束/弱锚永不在此升格 hard_gate。
+
+    🔴 2026-07-02：anchor_texts（collect_anchor_texts 产出的原始描述文本池）为可选参数。
+    真 embedding 后端就绪 + 字面锚定判定 NO_ANCHOR/WEAK_ANCHOR 时，补一次语义 rescue——
+    章末与池中某条描述语义同指（哪怕零字面重叠）则不再误报。不传此参数（默认 None）时
+    与升级前行为逐字节一致（仅 advisory 锚定维度·不碰 hard_gate SCREENPLAY/TRANSITION）。
     """
     text = chapter_path.read_text(encoding="utf-8")
     tail_paras = get_chapter_tail_paragraphs(text, n=5)
@@ -259,12 +368,19 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool
                 "fix_hint": "章末倾向钩子而非收束（建议非强制）· 末句留悬念更佳 · 若本场景确需收束可豁免",
             })
 
-    # B. 锚定 scan
+    # B. 锚定 scan（字面 token 交集为准 · 真 embedding 后端时对字面判定的 NO_ANCHOR/WEAK_ANCHOR
+    # 补一次语义 rescue·2026-07-02）
     tail_keywords = extract_keywords(tail_text)
     hit_anchors = tail_keywords & anchors
     anchor_ratio = len(hit_anchors) / max(len(tail_keywords), 1)
 
-    if not hit_anchors:
+    no_anchor = not hit_anchors
+    weak_anchor = bool(hit_anchors) and anchor_ratio < _WEAK_ANCHOR_RATIO
+    semantic_rescue = None
+    if (no_anchor or weak_anchor) and anchor_texts and _has_real_embedding_backend():
+        semantic_rescue = _semantic_anchor_match(tail_text, anchor_texts)
+
+    if no_anchor and semantic_rescue is None:
         issues.append({
             "code": "CHAPTER_END_NO_ANCHOR",
             "gate_level": "advisory",
@@ -273,7 +389,7 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool
             "reason": "章末 5 段 0 关键词命中 cluster_blueprint / 伏笔表 / 事件簇 brief — 可能装神弄鬼无锚 cliffhanger",
             "fix_hint": "重写章末，锚定到下一 cluster brief 的具体伏笔 / 角色 / 物件 / 事件",
         })
-    elif anchor_ratio < _WEAK_ANCHOR_RATIO:
+    elif weak_anchor and semantic_rescue is None:
         issues.append({
             "code": "CHAPTER_END_WEAK_ANCHOR",
             "gate_level": "advisory",
@@ -283,7 +399,7 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool
             "fix_hint": "增加章末与下一 cluster 伏笔/角色/物件的具体绑定",
         })
 
-    return {
+    result = {
         "chapter_path": str(chapter_path),
         "tail_text_preview": tail_text[:200] + ("..." if len(tail_text) > 200 else ""),
         "tail_keywords_count": len(tail_keywords),
@@ -291,6 +407,9 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool
         "anchor_ratio": round(anchor_ratio, 3),
         "issues": issues,
     }
+    if semantic_rescue is not None:
+        result["semantic_anchor_rescue"] = semantic_rescue
+    return result
 
 
 # ============ CLI ============
@@ -331,6 +450,7 @@ def main():
         sys.exit(2)
 
     anchors = collect_anchors(db)
+    anchor_texts = collect_anchor_texts(db)  # 语义 rescue 池（真后端未配置时无副作用）
     if not anchors:
         print(f"[WARN] 没采集到 anchors（_数据库 可能为空）", file=sys.stderr)
 
@@ -343,7 +463,8 @@ def main():
         if not ch_path.exists():
             print(f"[SKIP] 第{ch:03d}章 正文未找到", file=sys.stderr)
             continue
-        r = scan_chapter_end(ch_path, anchors, hard_gate_only=args.hard_gate_only)
+        r = scan_chapter_end(ch_path, anchors, hard_gate_only=args.hard_gate_only,
+                              anchor_texts=anchor_texts)
         results.append(r)
         for iss in r["issues"]:
             if iss["gate_level"] == "hard_gate":

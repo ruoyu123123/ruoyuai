@@ -14,13 +14,18 @@
 ## ⚠️ 质量AI腔判别为何不可部署（诚实）
 val AUC=1.0 是**捷径学习铁证**：负样本仅 637 个 gemini 复刻样本(单生成器·都模仿这 10 作者)→ 模型完美分开但学的是「gemini 指纹+特定分布」非「通用 AI 腔」。换 DeepSeek/豆包/Qwen 必崩(arXiv:2509.00731 跨生成器塌到 76%)。**真泛化路径**：`gen_negatives.py` 多生成器(需加 DeepSeek/Qwen profile)补负样本到数千 + 拉 C-ReD 辅助迁移。当前模型当 held-out 对抗硬集种子·不上线。
 
-## 🔴 集成架构关键问题（待决）
-若渝主流水线跑在**系统 Python 3.14（无 torch）**，模型在 **venv Python 3.10（torch CUDA）**——两进程隔离。集成需 **subprocess 推理桥**：若渝 scanner 批量调 `core/ml/.venv/Scripts/python.exe <infer>.py --in jsonl --out jsonl`（cluster 级批量·非实时·可接受）。env 门控 + 启发式兜底(无 venv/模型时若渝照常跑·默认安全)。
+## 🔴 集成架构现状（2026-06-30 已接入）
+若渝主流水线跑在**系统 Python 3.14（无 torch）**，模型在 **venv Python 3.10（torch CUDA）**——两进程隔离。集成采用 **subprocess 推理桥**：若渝 scanner 批量调 `core/ml/.venv/Scripts/python.exe <infer>.py --batch in.jsonl --out out.jsonl`（cluster 级批量·非实时·可接受）。创作入口 `audit_hub.main()` / `save_state.main()` 经 `nn_runtime_defaults.enable_creative_nn_defaults()` 默认开启模型/可成长门控：NN 推理桥 + `FeatureStore` + `DataFlywheel` + `ModelRegistry`。
 
-## 集成落点（设计就绪·待实施·全 advisory）
-- **emotion_vad**（最高价值）→ `vad_infer.py` 桥 → Appraisal `vad_bin`(save_state) + `character_vad_ued_scanner` + `emotion_curve_rescan` + Phase-0 替换 `core/data/*_placeholder.json`(40词→真7762词)
-- **style**（author+char）→ `embedding_store.EMBED_BACKEND=ruoyu_style` → SFS(`style_evaluator`/skill_opt reward) + 千人千面(`character_distinctiveness_scanner` CROSS_CHARACTER_VOICE_COLLISION)
-- **quality_clf** → 不集成(待多生成器数据)
+## 集成落点（全 advisory·不进 hard_gate）
+- **emotion_vad** → `nn_vad_bridge.py` → `save_state --apply-appraisal-beats` 的 `vad_bin` V/A 重算 + `character_vad_ued_scanner` + `emotion_curve_rescan` 等 VAD 消费点。
+- **coherence_binary** → `nn_coherence_bridge.py` → `coherence_scanner.py` 相邻段/滑窗连贯性。
+- **surprisal_gpt2** → `nn_surprisal_bridge.py` → `surprisal_scanner.py` 信息密度/断崖/高潮失衡。
+- **style / char voice embedding** → `embedding_store.EMBED_BACKEND=ruoyu_style` opt-in/shadow → SFS / 角色声纹相关 scanner。
+- **FeatureStore** → `core/ml/feature_store/feature_cache.py`：VAD / surprisal / coherence 批量缓存，供 scanner/save_state 复用，统一训练/服务特征口径。
+- **ModelRegistry** → `core/ml/registry/model_registry.py`：入口同步 active/shadow 模型版本、路径、指标。
+- **DataFlywheel** → `core/ml/flywheel/data_collector.py`：cluster-save-state auto-post-reflect 后收集 paragraph / weak label / waiver / legacy fixer pair / checker brief / gen_fixer report / style repair report / judge report reliability / reading reflection / audit metadata 训练样本。
+- **quality_clf** → 不集成(待多生成器数据)。
 
 ## 复现
 ```

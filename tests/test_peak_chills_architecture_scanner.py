@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -222,3 +223,100 @@ def test_main_cli_returns_json():
     assert r.returncode in (0, 1), r.stderr
     rep = json.loads(r.stdout)
     assert rep["scanner"] == "peak_chills_architecture"
+
+
+# ============ 模型优先(emotion_vad)：连续 VAD 峰值定位 + 窗口强度梯度 ============
+
+def test_model_locate_peaks_picks_extremes_and_dedups():
+    """按连续 valence 定位峰值(替代二元关键词命中)：极值排序 + 同 100 内去重 + 按位置输出。"""
+    series = [
+        {"pos": 0, "text": "平淡的一句话", "valence": 0.5, "arousal": 0.5},
+        {"pos": 50, "text": "强正峰值句子", "valence": 0.9, "arousal": 0.8},
+        {"pos": 300, "text": "强负峰值句子", "valence": 0.05, "arousal": 0.7},
+        {"pos": 305, "text": "强负峰值近邻应去重", "valence": 0.04, "arousal": 0.7},
+        {"pos": 600, "text": "又一句平淡", "valence": 0.5, "arousal": 0.5},
+    ]
+    peaks = mod._model_locate_peaks(series, top_k=3, pos_thr=0.75, neg_thr=0.25)
+    assert len(peaks) == 2  # pos=300/305 同 100 CJK 内只留 1 个
+    assert {p["valence"] for p in peaks} == {"pos", "neg"}
+    positions = [p["pos"] for p in peaks]
+    assert positions == sorted(positions)
+
+
+def test_model_window_arousal_basic():
+    """窗口内平均 arousal + 命中句数(连续强度·替代关键词计数)。"""
+    series = [{"pos": 10, "arousal": 0.8}, {"pos": 50, "arousal": 0.6}, {"pos": 200, "arousal": 0.2}]
+    mean, n = mod._model_window_arousal(series, 0, 100)
+    assert n == 2 and abs(mean - 0.7) < 1e-6
+    mean2, n2 = mod._model_window_arousal(series, 150, 250)
+    assert n2 == 1 and mean2 == 0.2
+    mean3, n3 = mod._model_window_arousal(series, 1000, 2000)
+    assert n3 == 0 and mean3 is None
+
+
+def _chills_model_draft():
+    """构造一段前向 arousal 爬升(屏息)→ 峰值(狂喜)→ 后向 arousal 回落(长舒)的双相完整草稿。
+    参数经脚本实测校准，确保落在默认 anticipation/release 窗口内且梯度过阈值。"""
+    ant = "他屏息以待心跳如鼓。" * 25
+    mid_gap = "楼下传来说话声。" * 25
+    peak = "她狂喜地跳了起来。"
+    post_gap = "他缓了缓神。" * 12
+    rel = "她长舒一口气慢慢坐下。" * 2
+    tail = "窗外月色很美。" * 20
+    return ant + mid_gap + peak + post_gap + rel + tail
+
+
+def _fake_predict_batch_gradient(texts):
+    out = []
+    for t in texts:
+        if "屏息" in t:
+            out.append({"valence": 0.5, "arousal": 0.95, "dominance": None, "source": "model"})
+        elif "狂喜" in t:
+            out.append({"valence": 0.92, "arousal": 0.9, "dominance": None, "source": "model"})
+        elif "长舒" in t:
+            out.append({"valence": 0.6, "arousal": 0.05, "dominance": None, "source": "model"})
+        else:
+            out.append({"valence": 0.5, "arousal": 0.5, "dominance": None, "source": "model"})
+    return out
+
+
+def test_model_vad_peak_source_and_complete_gradient(monkeypatch):
+    """模型有效：连续 VAD 定位真峰值 + 前后窗口 arousal 梯度证实双相完整 → 无 violation。"""
+    bak = os.environ.get("PEAK_CHILLS_ARCH_MODE")
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(predict_batch=_fake_predict_batch_gradient)
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+
+        out = mod.scan(_write(_chills_model_draft()), _mk_project())
+        assert out["peak_source"] == "model_vad"
+        assert out["peak_count"] >= 1
+        peak = out["peaks"][0]
+        assert peak["source"] == "model_vad"
+        assert peak["anticipation_ok"] is True
+        assert peak["release_ok"] is True
+        assert peak["complete"] is True
+        assert out["violations"] == []
+    finally:
+        _set_mode(bak)
+
+
+def test_model_vad_unavailable_matches_lexicon_parity(monkeypatch):
+    """模型 enabled 但每条都返回 None(未部署/加载失败)→ 与不开模型时逐字节一致(零回归)。"""
+    bak = os.environ.get("PEAK_CHILLS_ARCH_MODE")
+    draft = _write(_COMPLETE_CHILLS)
+    try:
+        _set_mode("active")
+        baseline = mod.scan(draft, _mk_project())
+
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        with_env = mod.scan(draft, _mk_project())
+
+        assert with_env["peak_source"] == "lexicon_fallback" == baseline["peak_source"]
+        assert with_env["peak_count"] == baseline["peak_count"]
+        assert with_env["peaks"] == baseline["peaks"]
+    finally:
+        _set_mode(bak)

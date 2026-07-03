@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # 🔴 2026-06-29 NN角色网络/共指集成
 """nn_coref_bridge 回归：默认安全（env off → []）·规则后端（最近先行词 + 性别匹配）·
-HanLP 降级·边界情况·异常安全。
+边界情况·异常安全·hanlp 死路径不复活锁（2026-07-03 拆除·上游从未提供本地共指模型）。
 
-确定性·零网络·零外部依赖（mock HanLP）。"""
+确定性·零网络·零外部依赖。"""
 import json
 import os
 import sys
@@ -42,7 +42,6 @@ def test_no_known_characters(monkeypatch):
 def test_rule_basic_resolution(monkeypatch):
     """基本规则消解：代词「他」→ 最近先行词「张三」。"""
     monkeypatch.setenv("RUOYU_NN_COREF", "1")
-    monkeypatch.setenv("COREF_BACKEND", "rule")
     text = "张三走到窗前。他叹了口气。"
     result = mod.resolve_coreferences(text, ["张三"])
     assert len(result) >= 1
@@ -54,7 +53,6 @@ def test_rule_basic_resolution(monkeypatch):
 def test_rule_gender_matching(monkeypatch):
     """性别匹配：「她」→ 女性角色。"""
     monkeypatch.setenv("RUOYU_NN_COREF", "1")
-    monkeypatch.setenv("COREF_BACKEND", "rule")
     text = "张三和王小姐一起走着。她笑了笑。"
     result = mod.resolve_coreferences(text, ["张三", "王小姐"])
     she_results = [r for r in result if r["mention"] == "她"]
@@ -65,7 +63,6 @@ def test_rule_gender_matching(monkeypatch):
 def test_rule_nearest_antecedent(monkeypatch):
     """最近先行词：距离近的优先。"""
     monkeypatch.setenv("RUOYU_NN_COREF", "1")
-    monkeypatch.setenv("COREF_BACKEND", "rule")
     text = "张三说了句话。李四点了点头。他笑了。"
     result = mod.resolve_coreferences(text, ["张三", "李四"])
     he_results = [r for r in result if r["mention"] == "他"]
@@ -77,7 +74,6 @@ def test_rule_nearest_antecedent(monkeypatch):
 def test_rule_confidence_distance_decay(monkeypatch):
     """置信度随距离衰减。"""
     monkeypatch.setenv("RUOYU_NN_COREF", "1")
-    monkeypatch.setenv("COREF_BACKEND", "rule")
     # 近距离
     text_near = "张三走来。他笑了。"
     res_near = mod.resolve_coreferences(text_near, ["张三"])
@@ -93,7 +89,6 @@ def test_rule_confidence_distance_decay(monkeypatch):
 def test_rule_ambiguous_flag(monkeypatch):
     """多个候选距离相近 → ambiguous=True。"""
     monkeypatch.setenv("RUOYU_NN_COREF", "1")
-    monkeypatch.setenv("COREF_BACKEND", "rule")
     text = "张三李四站在一起。他说了句话。"
     result = mod.resolve_coreferences(text, ["张三", "李四"])
     he_results = [r for r in result if r["mention"] == "他"]
@@ -105,7 +100,6 @@ def test_rule_ambiguous_flag(monkeypatch):
 def test_rule_no_antecedent(monkeypatch):
     """代词出现在角色名之前 → 不消解。"""
     monkeypatch.setenv("RUOYU_NN_COREF", "1")
-    monkeypatch.setenv("COREF_BACKEND", "rule")
     text = "他走了进来。张三看着门口。"
     result = mod.resolve_coreferences(text, ["张三"])
     he_results = [r for r in result if r["mention"] == "他"]
@@ -116,7 +110,6 @@ def test_rule_no_antecedent(monkeypatch):
 def test_rule_multiple_pronouns(monkeypatch):
     """多个代词各自消解。"""
     monkeypatch.setenv("RUOYU_NN_COREF", "1")
-    monkeypatch.setenv("COREF_BACKEND", "rule")
     text = "张三走来。他笑了。李四也来了。他点头。"
     result = mod.resolve_coreferences(text, ["张三", "李四"])
     # 第一个「他」→ 张三，第二个「他」→ 李四
@@ -126,18 +119,19 @@ def test_rule_multiple_pronouns(monkeypatch):
     assert he_results[1]["resolved_to"] == "李四"
 
 
-# ── HanLP 降级 ────────────────────────────────────────────
+# ── hanlp 死路径不复活锁（2026-07-03 拆除）──────────────────
 
-def test_hanlp_import_failure_fallback(monkeypatch):
-    """HanLP 未安装 → 降级到 rule 后端。"""
+def test_hanlp_path_removed_stays_removed(monkeypatch):
+    """hanlp 后端已整体拆除（上游从未提供本地共指模型·实证见桥 docstring）。
+    回归锁：①桥内不得再出现 _resolve_hanlp/_backend 死路径；②旧 COREF_BACKEND env
+    设成任何值都只走 rule 且不崩——防止有人不查上游就把假后端加回来。"""
+    assert not hasattr(mod, "_resolve_hanlp")
+    assert not hasattr(mod, "_backend")
+    assert not hasattr(mod, "_hanlp_subprocess_available")
     monkeypatch.setenv("RUOYU_NN_COREF", "1")
-    monkeypatch.setenv("COREF_BACKEND", "hanlp")
-    # 确保 hanlp 不可用（大概率没装）
-    text = "张三走来。他笑了。"
-    result = mod.resolve_coreferences(text, ["张三"])
-    # 不管 HanLP 装没装，都应该返回有效结果（降级到 rule）
-    if result:
-        assert result[0]["backend"] in ("hanlp", "rule")
+    monkeypatch.setenv("COREF_BACKEND", "hanlp")   # 遗留 env·应被无视
+    result = mod.resolve_coreferences("张三走来。他笑了。", ["张三"])
+    assert result and result[0]["backend"] == "rule"
 
 
 # ── 性别推断 ────────────────────────────────────────────────
@@ -198,7 +192,6 @@ def test_find_pronoun_no_overlap():
 def test_exception_safety(monkeypatch):
     """任何异常 → 返回空列表（不崩）。"""
     monkeypatch.setenv("RUOYU_NN_COREF", "1")
-    monkeypatch.setenv("COREF_BACKEND", "rule")
     # 强制 _resolve_rule 抛异常
     orig = mod._resolve_rule
     def boom(*a, **kw):
@@ -206,23 +199,6 @@ def test_exception_safety(monkeypatch):
     monkeypatch.setattr(mod, "_resolve_rule", boom)
     result = mod.resolve_coreferences("张三走了。他叹气。", ["张三"])
     assert result == []
-
-
-# ── 后端选择 ────────────────────────────────────────────────
-
-def test_backend_default_is_rule(monkeypatch):
-    monkeypatch.delenv("COREF_BACKEND", raising=False)
-    assert mod._backend() == "rule"
-
-
-def test_backend_hanlp(monkeypatch):
-    monkeypatch.setenv("COREF_BACKEND", "hanlp")
-    assert mod._backend() == "hanlp"
-
-
-def test_backend_invalid_falls_to_rule(monkeypatch):
-    monkeypatch.setenv("COREF_BACKEND", "nonexistent")
-    assert mod._backend() == "rule"
 
 
 # ── changes 剥离 ────────────────────────────────────────────

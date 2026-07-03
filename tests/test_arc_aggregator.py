@@ -23,9 +23,11 @@ urllib/requests/gen_model_loader/llm_transport）。它是纯确定性聚合器�
 """
 
 import json
+import os
 import sys
 import tempfile
 import shutil
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -33,6 +35,26 @@ _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
 import arc_aggregator as mod  # noqa: E402
+
+
+def _fake_vad(predict_batch_fn):
+    """临时装 RUOYU_NN_VAD=1 + 假 nn_vad_bridge 模块，返回 (还原函数)。
+    不用 monkeypatch fixture（本文件有零依赖 __main__ 直跑入口，需零参兼容）。"""
+    old_env = os.environ.get("RUOYU_NN_VAD")
+    old_mod = sys.modules.get("nn_vad_bridge")
+    os.environ["RUOYU_NN_VAD"] = "1"
+    sys.modules["nn_vad_bridge"] = types.SimpleNamespace(predict_batch=predict_batch_fn)
+
+    def _restore():
+        if old_env is None:
+            os.environ.pop("RUOYU_NN_VAD", None)
+        else:
+            os.environ["RUOYU_NN_VAD"] = old_env
+        if old_mod is None:
+            sys.modules.pop("nn_vad_bridge", None)
+        else:
+            sys.modules["nn_vad_bridge"] = old_mod
+    return _restore
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +144,52 @@ def test_extract_chapter_emotion_intensity_empty_returns_floor():
     """无任何情绪线索 → 回 fallback 地板 0.3（humor/sat 都 0）。"""
     v = mod.extract_chapter_emotion_intensity({})
     assert abs(v - 0.3) < 1e-9, f"空章应回 0.3 地板，得 {v}"
+
+
+def test_extract_chapter_emotion_intensity_model_hit_uses_arousal():
+    """RUOYU_NN_VAD=1 + 假模型命中 → 用 direction 词条 arousal 近似强度（非词典 max）。
+    假模型按内容区分（'崩溃'→高 arousal，'平静'→低 arousal），验证真走了模型路径而非常量。"""
+    restore = _fake_vad(lambda items: [
+        {"valence": 0.2, "arousal": 0.9, "dominance": None, "source": "model"}
+        if "崩溃" in t else
+        {"valence": 0.6, "arousal": 0.15, "dominance": None, "source": "model"}
+        for t in items
+    ])
+    try:
+        ch = {"B4_narrative_craft": {"dim33_emotion_beats": [
+            {"pct": 10, "direction": "平静"},
+            {"pct": 80, "direction": "崩溃"},
+        ]}}
+        detail = mod.extract_chapter_emotion_intensity_detail(ch)
+        assert detail["source"] == "model_vad"
+        assert abs(detail["intensity"] - 0.9) < 1e-9, f"应取两条中最大 arousal 0.9，得 {detail}"
+        # 兼容包装函数仍返回 float（旧调用不受影响）
+        v = mod.extract_chapter_emotion_intensity(ch)
+        assert abs(v - 0.9) < 1e-9
+    finally:
+        restore()
+
+
+def test_extract_chapter_emotion_intensity_model_unavailable_zero_regression():
+    """RUOYU_NN_VAD=1 但 predict_batch 返回全 None（模型不可用）→ 结果与默认(env off)词典路径逐位一致。"""
+    ch = {
+        "B4_narrative_craft": {
+            "dim33_emotion_beats": [
+                {"pct": 10, "direction": "平静"},
+                {"pct": 80, "direction": "崩溃"},
+            ]
+        }
+    }
+    baseline = mod.extract_chapter_emotion_intensity_detail(ch)
+    assert baseline["source"] == "lexicon_fallback"
+
+    restore = _fake_vad(lambda items: [None for _ in items])
+    try:
+        got = mod.extract_chapter_emotion_intensity_detail(ch)
+        assert got["source"] == "lexicon_fallback"
+        assert got["intensity"] == baseline["intensity"], "模型不可用应与默认词典路径逐位一致（零回归）"
+    finally:
+        restore()
 
 
 # ===========================================================================

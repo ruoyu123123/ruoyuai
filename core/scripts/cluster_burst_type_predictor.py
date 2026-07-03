@@ -16,6 +16,11 @@ laughter / shock / grief / anticipation / shipping / awe / critique / callback /
   · 缺面（intended_type 命中分 == 0）→ BURST_TYPE_NOT_DELIVERED advisory
   · 命中其他面更高 → BURST_TYPE_MISMATCH advisory（top1 ≠ intended）
 
+【🔴 2026-07-03 zero_shot_prototype 模型优先路径】真 embedding 后端可用（EMBED_BACKEND≠hash）
+  时，尾部窗口额外走 zero_shot_prototype.classify() 做 nearest-centroid 语义分类；置信达标
+  （score≥0.5）→ 覆盖词典 top1（top1.source=zero_shot_embedding）；否则/无真后端 → 100%
+  沿用词典 top1（top1.source=lexicon，默认零回归）。NOT_DELIVERED 判定仍固定读词典命中分。
+
 【build_manifest 注入 intended_burst_type 字段·event_cluster_context 回灌】
   - mode=active 时给 writer prompt 注入 directive：尾部 80-200 CJK 收束到目标爆点类。
 
@@ -91,6 +96,38 @@ _BURST_LEXICONS = {
         "你们", "诸君",
     ],
 }
+
+# 🔴 2026-07-03 zero_shot_prototype 模型优先路径·9 类爆点 embedding 原型例句
+# （占位·3-5 条/类·待金标准校准·真后端不可用时 100% 走 _BURST_LEXICONS 词典兜底）
+_BURST_TYPE_PROTOTYPES = {
+    "laughter": ["她扑哧一声笑了出来，太逗了", "他忍俊不禁，捂嘴直笑",
+                 "满堂哄笑，气氛一下子轻松起来"],
+    "shock": ["他瞳孔一缩，整个人僵在原地", "心头猛地一震，怎么会是这样",
+              "众人倒吸一口冷气，不敢置信"],
+    "grief": ["她再也忍不住，泪水夺眶而出", "他跪在地上，哭得撕心裂肺",
+              "一句话让全场陷入悲伤，无人说话"],
+    "anticipation": ["他望着远方，不知下一步会发生什么", "谁也不知道明天等着他们的是什么",
+                      "悬念留在这里，答案要等下次揭晓"],
+    "shipping": ["两人对视一眼，脸颊微微发烫", "他轻轻握住她的手，心跳漏了一拍",
+                 "她靠在他肩头，满心甜蜜"],
+    "awe": ["他一剑劈出，气势镇压全场", "那股锋芒让所有人都低下了头",
+            "霸道的气场笼罩四周，无人敢直视"],
+    "critique": ["他冷笑一声，满是讽刺", "看你还能装到几时，众人窃笑",
+                 "这话说得可笑，谁都看得出破绽"],
+    "callback": ["原来一切早有伏笔，他终于想起当年的约定", "多年前的那句话，此刻终于应验",
+                 "果然如传闻所说，一切都对上了"],
+    "meta": ["诸位看官，且听我细细道来", "读者们，这段故事还没完呢",
+             "话说到这里，各位应该猜到结局了"],
+}
+
+
+def _classify_burst_type_model(tail: str) -> "dict | None":
+    """真后端优先用 zero_shot_prototype 分类尾部窗口·否则 None（调用方 100% 走词典 top1）。"""
+    try:
+        import zero_shot_prototype
+        return zero_shot_prototype.classify(tail, _BURST_TYPE_PROTOTYPES, floor=0.5)
+    except Exception:
+        return None
 
 
 def _mode() -> str:
@@ -198,15 +235,21 @@ def scan(draft_path, project_root=None, cluster_key=None, cli_intended=None) -> 
     intended = _resolve_intended(project_root, cluster_key, cli_intended)
     tail = _take_tail(text)
     scores = _score_burst_types(tail)
-    # top1 / top3
+    # top1 / top3（词典兜底）
     sorted_pairs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     top1_type, top1_score = sorted_pairs[0] if sorted_pairs else (None, 0.0)
+    top1_source = "lexicon"
+    # 🔴 2026-07-03 模型优先：真后端且分类置信达标 → 用模型 label 覆盖词典 top1
+    model_result = _classify_burst_type_model(tail)
+    if model_result is not None:
+        top1_type, top1_score = model_result["label"], model_result["score"]
+        top1_source = model_result["source"]
     out.update({
         "cjk": cjk,
         "tail_cjk": _cjk_count(tail),
         "intended_burst_type": intended,
         "scores": scores,
-        "top1": {"type": top1_type, "score": top1_score},
+        "top1": {"type": top1_type, "score": top1_score, "source": top1_source},
     })
 
     flags = []

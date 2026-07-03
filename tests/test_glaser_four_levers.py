@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -177,3 +178,54 @@ def test_build_manifest_injects_glaser_directive():
     src = (_SCRIPTS / "build_manifest.py").read_text(encoding="utf-8")
     assert "glaser_four_levers_directive" in src
     assert "GLASER_LEVERS_MODE" in src
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 🔴 VAD 模型接线回归：emotionalize 杠杆优先用 arousal H/VH bin(>=0.6) 判定，
+# 模型未启用/不可用 → 回退原关键词词典（零回归）。
+# ══════════════════════════════════════════════════════════════════════════
+def test_emotionalize_model_hit(monkeypatch):
+    """RUOYU_NN_VAD=1 + 假模型 arousal 高 → emotionalize 走模型路径命中 1（即便词典无关键词命中）。"""
+    bak = os.environ.get("GLASER_LEVERS_MODE")
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts: [
+                {"valence": 0.5, "arousal": 0.9, "dominance": None, "source": "model"}
+                for _ in texts
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        out = mod.scan(_write(_DUMP_RAW * 3 + _NORMAL_TEXT))
+        assert out["dump_count"] >= 1
+        seg = out["dump_segments"][0]
+        # _DUMP_RAW 全是抽象概念词·不含任何 emotionalize 词典词·词典路径必为 0
+        assert mod._hit_lever(seg["preview"], mod._LEXICONS["emotionalize"]) == 0
+        assert seg["scored"]["emotionalize"] == 1
+        assert seg["emotionalize_source"] == "model_vad"
+    finally:
+        _set_mode(bak)
+
+
+def test_emotionalize_model_unavailable_matches_lexicon_fallback(monkeypatch):
+    """RUOYU_NN_VAD=1 但模型返回 None(不可用) → 结果与门控完全关闭时逐字节一致（零回归）。"""
+    bak = os.environ.get("GLASER_LEVERS_MODE")
+    try:
+        _set_mode("active")
+        draft = _write(_DUMP_RAW * 3 + _NORMAL_TEXT)
+
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        out_model_unavailable = mod.scan(draft)
+
+        monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+        out_off = mod.scan(draft)
+
+        assert out_model_unavailable["dump_count"] >= 1
+        seg = out_model_unavailable["dump_segments"][0]
+        assert seg["emotionalize_source"] == "lexicon_fallback"
+        assert out_model_unavailable["dump_segments"] == out_off["dump_segments"]
+    finally:
+        _set_mode(bak)

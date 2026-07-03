@@ -125,6 +125,59 @@ def test_batch_compute_default_features():
     assert results[0]["vad"] is None
 
 
+def test_surprisal_batch_caches_and_preserves_request_ids(monkeypatch):
+    fs = FeatureStore.get()
+    calls = []
+
+    def fake_predict(texts, ids=None):
+        calls.append((list(texts), list(ids)))
+        return [{"id": item_id, "mean_surprisal": 1.5 + i, "source": "model"}
+                for i, item_id in enumerate(ids)]
+
+    monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", type("B", (), {"predict_batch": fake_predict}))
+    first = fs.compute_surprisal_batch(["甲文本", "乙文本"], ids=["a", "b"])
+    second = fs.compute_surprisal_batch(["甲文本", "乙文本"], ids=["x", "y"])
+
+    assert len(calls) == 1
+    assert [r["id"] for r in first] == ["a", "b"]
+    assert [r["id"] for r in second] == ["x", "y"]
+    assert second[0]["mean_surprisal"] == 1.5
+
+
+def test_vad_batch_caches_misses_only(monkeypatch):
+    fs = FeatureStore.get()
+    calls = []
+
+    def fake_predict(texts):
+        calls.append(list(texts))
+        return [{"valence": 0.2 + i * 0.1, "arousal": 0.7, "source": "model"}
+                for i, _ in enumerate(texts)]
+
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", type("B", (), {"predict_batch": fake_predict}))
+    first = fs.compute_vad_batch(["甲文本", "乙文本"])
+    second = fs.compute_vad_batch(["甲文本", "丙文本"])
+
+    assert calls == [["甲文本", "乙文本"], ["丙文本"]]
+    assert second[0] == first[0]
+    assert second[1]["valence"] == 0.2
+
+
+def test_coherence_pair_batch_caches(monkeypatch):
+    fs = FeatureStore.get()
+    calls = []
+
+    def fake_predict(pairs):
+        calls.append(list(pairs))
+        return [{"coherence_score": 0.91, "is_coherent": True, "source": "model"}
+                for _ in pairs]
+
+    monkeypatch.setitem(sys.modules, "nn_coherence_bridge", type("B", (), {"predict_pairs": fake_predict}))
+    pairs = [("上一段", "下一段")]
+    assert fs.compute_coherence_pairs(pairs)[0]["coherence_score"] == 0.91
+    assert fs.compute_coherence_pairs(pairs)[0]["coherence_score"] == 0.91
+    assert len(calls) == 1
+
+
 def test_enforce_size_limit(tmp_path):
     fs = FeatureStore.get()
     fs._cache_dir = tmp_path / "cache"

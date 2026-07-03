@@ -9,10 +9,12 @@ Glaser 教学设计：info-dump 段救援 4 杠杆 → 任一 ≥1 即可激活�
   · personalize   — 具名角色介入（角色名 + 动作/对话）
   · fictionalize  — 具体物件 / 五感（桌/灯/光/气味/...）
 
-【做法 · 确定性 · 零 LLM/零联网】
+【做法 · 确定性规则 + emotionalize 模型优先】
   · 识别 info-dump 段：长段（CJK ≥ 120）+ 对话密度低（无引号）
     + 抽象名词密度高（规则/制度/原理/系统/...）
-  · 对每个 dump 段算 4 杠杆 0/1
+  · 对每个 dump 段算 4 杠杆 0/1：dramatize/personalize/fictionalize 保持关键词词典判定；
+    emotionalize 优先用 VAD 模型读 arousal（H/VH bin·>=0.6 视为「情绪已具象化」·RUOYU_NN_VAD
+    门控·FeatureStore 优先→nn_vad_bridge 兜底），模型未启用/不可用 → 回退原关键词词典（零回归）
   · 0/4 dump 段 → GLASER_LEVER_MISSING advisory + 建议补哪个最便宜
   · 1-2/4 dump 段 → GLASER_LEVER_THIN（info）
   · cluster 汇总 lever_coverage = 命中 ≥1 杠杆的 dump 段 / 总 dump 段
@@ -125,6 +127,43 @@ def _hit_lever(paragraph: str, lever_words: list[str]) -> int:
     return 0
 
 
+# emotionalize 杠杆判定：VAD arousal H/VH bin 下限（复用 nn_vad_bridge.to_vad_bin 的
+# (0.2,0.4,0.6,0.8) 分箱边界，arousal>=0.6 视为「情绪已具象化」）
+EMOTIONALIZE_AROUSAL_HIGH = 0.6
+
+
+def _model_emotionalize_hits(paragraphs: list[str]) -> list:
+    """批量 VAD 模型判 emotionalize 杠杆命中：arousal>=0.6(H/VH) → 1，否则 0。
+    模型未启用(RUOYU_NN_VAD!=1)/不可用/异常 → 对应位置 None（调用方回退关键词词典·零回归）。"""
+    if not paragraphs or os.environ.get("RUOYU_NN_VAD") != "1":
+        return [None] * len(paragraphs)
+    try:
+        preds = None
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(paragraphs) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(paragraphs)
+    except Exception:
+        return [None] * len(paragraphs)
+    out = []
+    for p in preds or []:
+        if p and p.get("arousal") is not None:
+            try:
+                out.append(1 if float(p["arousal"]) >= EMOTIONALIZE_AROUSAL_HIGH else 0)
+            except (TypeError, ValueError):
+                out.append(None)
+        else:
+            out.append(None)
+    if len(out) != len(paragraphs):
+        return [None] * len(paragraphs)
+    return out
+
+
 def _is_info_dump(paragraph: str) -> bool:
     cjk = _cjk_count(paragraph)
     if cjk < DUMP_CJK_MIN:
@@ -171,13 +210,19 @@ def scan(draft_path, project_root=None) -> dict:
     personalize_words = list(char_names) + _LEXICONS["_personal_fallback"]
 
     paragraphs = _split_paragraphs(text)
+    dump_indices = [idx for idx, p in enumerate(paragraphs) if _is_info_dump(p)]
+    dump_paragraphs = [paragraphs[idx] for idx in dump_indices]
+    emo_model_hits = _model_emotionalize_hits(dump_paragraphs)
+
     dump_segments = []
-    for idx, p in enumerate(paragraphs):
-        if not _is_info_dump(p):
-            continue
+    for idx, p, emo_hit in zip(dump_indices, dump_paragraphs, emo_model_hits):
+        if emo_hit is not None:
+            emotionalize_score, emo_source = emo_hit, "model_vad"
+        else:
+            emotionalize_score, emo_source = _hit_lever(p, _LEXICONS["emotionalize"]), "lexicon_fallback"
         scored = {
             "dramatize": _hit_lever(p, _LEXICONS["dramatize"]),
-            "emotionalize": _hit_lever(p, _LEXICONS["emotionalize"]),
+            "emotionalize": emotionalize_score,
             "personalize": _hit_lever(p, personalize_words),
             "fictionalize": _hit_lever(p, _LEXICONS["fictionalize"]),
         }
@@ -186,6 +231,7 @@ def scan(draft_path, project_root=None) -> dict:
             "paragraph_idx": idx,
             "cjk": _cjk_count(p),
             "scored": scored,
+            "emotionalize_source": emo_source,
             "total_levers": total,
             "cheapest_missing": _cheapest_missing_lever(scored) if total < 4 else None,
             "preview": p[:60],

@@ -80,6 +80,19 @@ def _bp_items(prog):
     return {}
 
 
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+    跟 topic_drift_scanner._has_real_embedding_backend 判断逻辑完全一致（各文件各自留一份）。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
 def load_json(path: Path, default=None):
     if not path.exists():
         return default
@@ -865,14 +878,38 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
     if not all_patterns:
         return {"mode": "on", "total_patterns": 0, "retrieved": []}
 
-    # 打分：context 关键词重叠 + confidence + usage_count log
+    # 打分：context 关键词重叠 + confidence + usage_count log。
+    # 🔴 2026-07-02 接线 embedding_store：真后端（_has_real_embedding_backend）时 kw_hits 换成
+    # 「context 拼接文本 vs 经验条目 desc」embedding 余弦（同 _collect_selective_history 用法）；
+    # 无真后端 → kw_hits 保持原关键词重叠计数，逐字节零回归。
     import math
+    _query_emb = None
+    _embed_mod = None
+    if _has_real_embedding_backend():
+        _ctx_text = " ".join(sorted(ctx_kws)) or turning
+        if _ctx_text.strip():
+            try:
+                import embedding_store as _embed_mod
+                _query_emb = _embed_mod.compute_embedding(_ctx_text)
+            except Exception:
+                _query_emb = None
+                _embed_mod = None
+
     def score(p):
         desc = (p.get("description", "") + " " + p.get("name", "") + " "
                 + " ".join(p.get("keywords", []) or []))
-        kw_hits = sum(1 for kw in ctx_kws if kw in desc)
         confidence = p.get("confidence", 0.5)
         usage = p.get("usage_count", 0)
+        if _query_emb is not None and desc.strip():
+            try:
+                p_emb = _embed_mod.compute_embedding(desc)
+                sim = _embed_mod.cosine_similarity(_query_emb, p_emb) if p_emb else 0.0
+                # 余弦 [-1,1] → 与原 kw_hits(整数计数)量纲对齐的保守缩放·待金标准校准
+                kw_hits = sim * 5.0
+            except Exception:
+                kw_hits = sum(1 for kw in ctx_kws if kw in desc)
+        else:
+            kw_hits = sum(1 for kw in ctx_kws if kw in desc)
         # 综合分：context match 主导 + confidence 加成 + usage log 加成
         return kw_hits * 2 + confidence + math.log(usage + 1)
 
@@ -903,6 +940,7 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
 
     return {
         "mode": "on",
+        "match_method": "embedding" if _query_emb is not None else "keyword",
         "context_kws": list(ctx_kws)[:10],
         "total_patterns": len(all_patterns),
         "retrieved_count": len(top),
@@ -3442,6 +3480,14 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
         import embedding_store
     except ImportError:
         return {"retrieved": [], "reason": "embedding_store 不可用"}
+
+    # 🔴 2026-07-02 bug fix：此前本函数裸用 compute_embedding/cosine_similarity 且无门控——
+    # 默认 EMBED_BACKEND（hash md5 ngram 袋）算出的"相似度"是纯噪声，却会静默冒充语义检索结果
+    # 喂给 writer。本函数无非语义回退路径，无真后端时直接跳过整段语义检索、诚实返回空
+    # （同 topic_drift_scanner「无真语义就不伪装语义」纪律）。
+    if not _has_real_embedding_backend():
+        return {"retrieved": [], "reason": "无真 embedding 后端（EMBED_BACKEND 未设/=hash）"
+                                            "·hash 假嵌入不可当语义检索用·跳过"}
 
     query_emb = embedding_store.compute_embedding(query)
 

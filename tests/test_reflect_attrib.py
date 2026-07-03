@@ -406,3 +406,79 @@ def test_attribute_no_match_returns_none():
     """关键词全不命中 → 返回 None（不强行乱归因·北极星⑤）。"""
     secs = ll._parse_skill_sections(_SKILL_MD)
     assert ll._attribute_to_skill_section(secs, ("根本不存在的词xyz",)) is None
+
+
+# ═══════════════════ 10. embedding 接线（2026-07-02 · 真后端门控 + 关键词计数 fallback）═══════════
+
+def test_has_real_embedding_backend_false_by_default():
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert ll._has_real_embedding_backend() is False
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_semantic_attribution_matches_synonym_with_zero_literal_overlap(monkeypatch):
+    """真后端：查询关键词与目标段落零字面重叠的同义表述（"对话要简短" 与标题
+    「铁律 1：对话占比按章型」无共享字符）仍应被余弦相似度正确归因——字面计数法在这种
+    场景下会返回 None（无法定位）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    secs = ll._parse_skill_sections(_SKILL_MD)
+
+    # 前置断言：字面计数法确实找不到（关键词与该段标题/正文零字面重叠）
+    assert ll._attribute_to_skill_section(secs, ("对话要简短",)) is None
+
+    import embedding_store
+
+    def _mock_embed(text):
+        if "对话要简短" in text or "对话占比" in text:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+    hit = ll._attribute_to_skill_section(secs, ("对话要简短",))
+    assert hit is not None, "语义路径应命中同义表述"
+    assert "对话占比" in hit["heading"]
+    assert hit["method"] == "semantic"
+
+
+def test_semantic_attribution_falls_back_on_embedding_error(monkeypatch):
+    """真后端配置但编码异常 → 回退关键词计数法（不崩·结果与门控关时一致）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    secs = ll._parse_skill_sections(_SKILL_MD)
+
+    import embedding_store
+
+    def _boom(text):
+        raise RuntimeError("模拟真后端编码失败")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _boom)
+
+    hit = ll._attribute_to_skill_section(secs, ("拟声", "拟声词独段", "拟声段", "战斗描写"))
+    assert hit is not None
+    assert "拟声" in hit["heading"]
+    assert "method" not in hit  # 走的是关键词计数 fallback，不带 semantic 标记
+
+
+def test_attribute_default_no_backend_matches_pre_upgrade_behavior():
+    """🔴 零回归锁：门控关（默认）→ _attribute_to_skill_section 与升级前关键词计数法
+    结果逐字段一致（本用例复用既有 test_attribute_scoring_prefers_heading_match 场景）。"""
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        secs = ll._parse_skill_sections(_SKILL_MD)
+        hit = ll._attribute_to_skill_section(secs, ("拟声", "拟声词独段", "拟声段", "战斗描写"))
+        assert hit is not None
+        assert "拟声" in hit["heading"]
+        assert "method" not in hit
+        assert isinstance(hit["score"], int)  # 关键词计数法 score 恒为 int（语义路径是 float）
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v

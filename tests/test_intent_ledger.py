@@ -262,3 +262,80 @@ def test_no_mutation_of_cluster_brief():
                                    cluster_key="001", actual=None))
     post = (proj / "_数据库" / "事件簇.json").read_text(encoding="utf-8")
     assert pre == post
+
+
+# ═══════════════════ embedding 接线（2026-07-02 · 真后端门控 + 字面 fallback）═══════════════════
+
+def test_has_real_embedding_backend_false_by_default():
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_has_real_embedding_backend_false_when_hash():
+    old = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ["EMBED_BACKEND"] = "hash"
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if old is not None:
+            os.environ["EMBED_BACKEND"] = old
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_drift_score_semantic_catches_zero_overlap_synonym(monkeypatch):
+    """真后端：字面零重叠的同义改写（「殊死搏杀」vs「决一死战」无共享 2-gram）应被余弦相似度
+    识别为低漂移——字面 2-gram Jaccard 会误判成完全偏离（drift 必为 1.0）。"""
+    # 前置断言：确认字面法确实判为完全偏离（两词各 4 字·3 个 2-gram 全不相交）
+    assert mod._drift_score("殊死搏杀", "决一死战") == 1.0
+
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    import embedding_store
+
+    def _mock_embed(text):
+        if "殊死搏杀" in text or "决一死战" in text:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+    drift = mod._drift_score("殊死搏杀", "决一死战")
+    assert drift == 0.0, f"语义路径应识别为同义（drift=0）：{drift}"
+
+
+def test_drift_score_semantic_falls_back_on_embedding_error(monkeypatch):
+    """真后端配置但编码异常 → 回退字面 2-gram Jaccard（不崩·结果与门控关时一致）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    import embedding_store
+
+    def _boom(text):
+        raise RuntimeError("模拟真后端编码失败")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _boom)
+
+    drift = mod._drift_score("主角调查院子", "副反派现身")
+    assert drift > 0.5  # 与 test_drift_score_disjoint 门控关时的字面结果一致
+
+
+def test_drift_score_default_matches_literal_jaccard_exactly():
+    """🔴 零回归锁：门控关（默认）→ _drift_score 与直接手算字面 Jaccard 逐位一致。"""
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        want, framing = "主角调查院子里的怪声", "主角进入旧屋寻找线索"
+        a = mod._extract_keys(want)
+        b = mod._extract_keys(framing)
+        expected = round(1.0 - len(a & b) / len(a | b), 4) if (a and b and (a | b)) else 0.0
+        assert mod._drift_score(want, framing) == expected
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v

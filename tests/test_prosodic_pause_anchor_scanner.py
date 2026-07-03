@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -154,6 +155,73 @@ def test_read_failure():
 
 def test_strip_changes():
     assert mod._strip_changes("正文。\n---CHANGES---\n{}") == "正文。"
+
+
+# ============ 🔴 2026-07-01 真模型(surprisal_gpt2) 接入回归 ============
+
+def test_model_source_used_when_enabled(monkeypatch):
+    """RUOYU_NN_SURPRISAL=1 且 bridge 全命中 → metrics.source == model。"""
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts, ids=None: [
+                {"mean_surprisal": 5.0, "source": "model"} for _ in texts
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        text = "他想了想，慢慢抬头，看着远方，叹了口气。" * 80
+        r = mod.scan(_write(text))
+        assert r["metrics"]["source"] == "model"
+        assert r["source"] == "model"
+    finally:
+        _set_mode(bak)
+
+
+def test_model_unavailable_keeps_heuristic_unchanged(monkeypatch):
+    """bridge enabled 但返回全 None → 整体回退启发式·结果与不开模型时完全一致(零回归)。"""
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("active")
+        path = _write("他想了想，慢慢抬头，看着远方，叹了口气。" * 80)
+        baseline = mod.scan(path)  # 未碰模型 env 的现有 marker 计数代理基线
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        fake_bridge = types.SimpleNamespace(
+            predict_batch=lambda texts, ids=None: [None for _ in texts])
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        r = mod.scan(path)
+        assert r["metrics"]["source"] == "heuristic"
+        assert r["metrics"] == baseline["metrics"]
+        assert r["verdict"] == baseline["verdict"]
+        assert r["warning"] == baseline["warning"]
+    finally:
+        _set_mode(bak)
+
+
+def test_model_partial_none_falls_back_to_heuristic(monkeypatch):
+    """bridge 部分命中/部分 None(混合) → 整体仍回退启发式(避免部分 None 破坏均值语义)。"""
+    bak = os.environ.get(_ENV)
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+        counter = {"n": 0}
+
+        def fake_predict(texts, ids=None):
+            out = []
+            for _ in texts:
+                counter["n"] += 1
+                out.append(None if counter["n"] % 5 == 0 else
+                           {"mean_surprisal": 4.0, "source": "model"})
+            return out
+
+        fake_bridge = types.SimpleNamespace(predict_batch=fake_predict)
+        monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+        text = "他想了想，慢慢抬头，看着远方，叹了口气。" * 80
+        r = mod.scan(_write(text))
+        assert r["metrics"]["source"] == "heuristic"
+    finally:
+        _set_mode(bak)
 
 
 def test_code_not_in_hard_gate():

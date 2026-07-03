@@ -353,3 +353,123 @@ def test_default_mode_still_emits_closure_advisory():
         r = mod.scan_chapter_end(ch, anchors=set())
         codes = {i["code"] for i in r["issues"]}
         assert "CHAPTER_END_CLOSURE_ADVISORY" in codes
+
+
+# ---------- collect_anchor_texts（2026-07-02 · 语义 rescue 原始文本池）----------
+
+def test_collect_anchor_texts_from_event_cluster_and_foreshadowing():
+    with tempfile.TemporaryDirectory() as d:
+        db = _mk_db(Path(d))
+        _write(db, "事件簇.json", {
+            "clusters": [{
+                "scope_summary": "主角发现古老的封印正在松动",
+                "foreshadowing_to_plant": [{"description": "石壁上的符文会发光"}],
+            }],
+        })
+        _write(db, "伏笔表.json", {
+            "promises": [{"description": "钥匙将开启地下密室",
+                          "trigger_condition": {"physical_evidence": "锈迹斑斑的铜钥匙"}}],
+            "secrets": [{"secret": "管家是内奸"}],
+        })
+        texts = mod.collect_anchor_texts(db)
+        assert "主角发现古老的封印正在松动" in texts
+        assert "石壁上的符文会发光" in texts
+        assert "钥匙将开启地下密室" in texts
+        assert "锈迹斑斑的铜钥匙" in texts
+        assert "管家是内奸" in texts
+
+
+def test_collect_anchor_texts_empty_db_returns_empty_list():
+    with tempfile.TemporaryDirectory() as d:
+        db = _mk_db(Path(d))
+        assert mod.collect_anchor_texts(db) == []
+
+
+# ---------- 语义 rescue（2026-07-02 · 真后端门控 + 字面法 fallback）----------
+
+def test_has_real_embedding_backend_false_by_default():
+    import os
+    old_eb = os.environ.pop("EMBED_BACKEND", None)
+    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
+    saved = {k: os.environ.pop(k) for k in gen_keys}
+    try:
+        assert mod._has_real_embedding_backend() is False
+    finally:
+        if old_eb is not None:
+            os.environ["EMBED_BACKEND"] = old_eb
+        for k, v in saved.items():
+            os.environ[k] = v
+
+
+def test_anchor_texts_ignored_without_real_backend():
+    """anchor_texts 传了但无真后端 → 纯字面法（不会悄悄启用语义 rescue）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ch = _write_chapter(tmp, "他望向远方的雪山，沉默不语，雾气弥漫。")
+        r = mod.scan_chapter_end(ch, anchors={"黑刀", "祭坛"},
+                                  anchor_texts=["冰封的巨兽正在苏醒"])
+        codes = {i["code"] for i in r["issues"]}
+        assert "CHAPTER_END_NO_ANCHOR" in codes  # 无真后端 → 字面法照常报
+        assert "semantic_anchor_rescue" not in r
+
+
+def test_semantic_rescue_suppresses_no_anchor_for_paraphrase(monkeypatch):
+    """字面 0 命中但 anchor_texts 池里有语义同指条目 → 真后端下不再误报 CHAPTER_END_NO_ANCHOR。"""
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    import embedding_store
+
+    def _mock_embed(text):
+        if "雪山" in text or "冰封的巨兽" in text:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ch = _write_chapter(tmp, "他望向远方的雪山，沉默不语，雾气弥漫。")
+        # 前置断言：字面法本该报 NO_ANCHOR（复用既有用例的原句）
+        r_literal = mod.scan_chapter_end(ch, anchors={"黑刀", "祭坛"})
+        assert "CHAPTER_END_NO_ANCHOR" in {i["code"] for i in r_literal["issues"]}
+
+        r = mod.scan_chapter_end(ch, anchors={"黑刀", "祭坛"},
+                                  anchor_texts=["冰封的巨兽正在苏醒"])
+        codes = {i["code"] for i in r["issues"]}
+        assert "CHAPTER_END_NO_ANCHOR" not in codes
+        assert r["semantic_anchor_rescue"]["anchor_text"] == "冰封的巨兽正在苏醒"
+
+
+def test_semantic_rescue_falls_back_on_embedding_error(monkeypatch):
+    """真后端配置但编码异常 → 回退字面法（不崩·NO_ANCHOR 照常报）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    import embedding_store
+
+    def _boom(text):
+        raise RuntimeError("模拟真后端编码失败")
+    monkeypatch.setattr(embedding_store, "compute_embedding", _boom)
+
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ch = _write_chapter(tmp, "他望向远方的雪山，沉默不语，雾气弥漫。")
+        r = mod.scan_chapter_end(ch, anchors={"黑刀", "祭坛"},
+                                  anchor_texts=["冰封的巨兽正在苏醒"])
+        codes = {i["code"] for i in r["issues"]}
+        assert "CHAPTER_END_NO_ANCHOR" in codes
+        assert "semantic_anchor_rescue" not in r
+
+
+def test_semantic_rescue_below_floor_does_not_suppress(monkeypatch):
+    """语义相似度低于 floor（无真正相关的 anchor_text）→ 不 rescue，字面判定原样保留。"""
+    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    import embedding_store
+    # 每条文本编码各不相同且互相正交 → 余弦相似度恒 0，永远低于 floor
+    _dim = {"雪山章末": [1.0, 0.0, 0.0], "无关的伏笔": [0.0, 1.0, 0.0]}
+    monkeypatch.setattr(embedding_store, "compute_embedding",
+                         lambda text: _dim.get(text, [0.0, 0.0, 1.0]))
+
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ch = _write_chapter(tmp, "雪山章末")
+        r = mod.scan_chapter_end(ch, anchors={"黑刀"}, anchor_texts=["无关的伏笔"])
+        codes = {i["code"] for i in r["issues"]}
+        assert "CHAPTER_END_NO_ANCHOR" in codes
+        assert "semantic_anchor_rescue" not in r

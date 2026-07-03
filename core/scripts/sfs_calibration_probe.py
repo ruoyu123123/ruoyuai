@@ -11,7 +11,8 @@ av_judge / SFS 指标在 shadow→active 升级前缺少 same-author vs cross-au
   输入：
     --same-dir   同作者文本对池（≥30 对·dir/<pair>/{a.txt,b.txt}）
     --cross-dir  跨作者文本对池（≥30 对·dir/<pair>/{a.txt,b.txt}）
-    --scorer     SFS 评分函数路径（占位 = 确定性 surface 相似度·_placeholder=true）
+    --scorer     SFS 评分函数路径（缺省时：真后端→embedding 余弦 / 无真后端→占位
+                 char-3gram Jaccard·_placeholder=true）
   指标：
     1) Δ_means      = mean(same_scores) - mean(cross_scores)
     2) IQR_overlap  = same Q1-Q3 与 cross Q1-Q3 区间交集长度 / 联合长度
@@ -23,10 +24,11 @@ av_judge / SFS 指标在 shadow→active 升级前缺少 same-author vs cross-au
 【北极星⑤】顾问非法官·全 advisory·env SFS_CALIBRATION_PROBE_MODE 默认 shadow·
   SFS_POORLY_CALIBRATED_FOR_AUTHOR 绝不 hard_gate（探针自身噪声 = 检测无能）。
 
-【占位声明 _placeholder=true】
-  真 SFS scorer 应调 av_judge / distill_replicate 的同栈打分函数（OpenAI 兼容
-  gen-model）。本探针保持确定性 surface 相似度兜底，让 CI 可跑；带 --scorer
-  python_module:func 时切换到真实评分。
+【默认 scorer · 2026-07-02 接线 embedding_store】
+  未传 --scorer 时的默认 scorer：真后端（EMBED_BACKEND≠hash 或配了 GEN_EMBED__*）→
+  embedding_store 余弦（source 非 placeholder）；无真后端 → 现有 char-3gram Jaccard
+  （_placeholder=true·让 CI 可跑）。--scorer python_module:func 覆盖通道不受影响，
+  优先级最高（显式指定 > 真后端自动升级 > 占位兜底）。
 
 用法:
   python sfs_calibration_probe.py \\
@@ -52,13 +54,23 @@ DELTA_MEANS_THRESHOLD = 5.0  # 蓝图阈值
 ROC_AUC_THRESHOLD = 0.65      # 蓝图阈值
 ROC_AUC_ACTIVE_GATE = 0.75    # av_judge shadow→active 升级门
 
-# 占位 scorer 标记
-_DEFAULT_SCORER_PLACEHOLDER = True
-
 
 def _mode() -> str:
     m = (os.environ.get("SFS_CALIBRATION_PROBE_MODE") or "shadow").strip().lower()
     return m if m in ("off", "shadow", "active") else "shadow"
+
+
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+    跟 topic_drift_scanner._has_real_embedding_backend 判断逻辑完全一致（各文件各自留一份）。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
 
 
 def _cjk_count(text: str) -> int:
@@ -89,9 +101,37 @@ def _placeholder_sfs_score(text_a: str, text_b: str) -> float:
     return 100.0 * inter / union
 
 
+# ============ 真后端默认 scorer（2026-07-02 接线 embedding_store）============
+# 未传 --scorer 时：真后端 → 本函数（embedding 余弦·非 placeholder）；无真后端 → 上面的
+# _placeholder_sfs_score（char-3gram Jaccard·不变）。任何失败（embedding_store 不可用/
+# 维度不一致等）静默回退占位（默认安全）。
+
+def _embedding_sfs_score(text_a: str, text_b: str) -> float:
+    """真后端默认 SFS scorer：embedding 余弦线性映射到 0-100（同量纲 · 非 placeholder）。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embedding_store import compute_embedding, cosine_similarity
+        ea = compute_embedding(text_a)
+        eb = compute_embedding(text_b)
+        if not ea or not eb or len(ea) != len(eb):
+            return _placeholder_sfs_score(text_a, text_b)
+        cos = cosine_similarity(ea, eb)
+        # cos ∈ [-1,1] → 0-100 线性映射（-1→0 / 0→50 / 1→100）· 待金标准校准
+        # （同 sfs_axis_decomposer._real_embedding_axis_scores 换算公式）
+        return round(max(0.0, min(100.0, (cos + 1.0) / 2.0 * 100.0)), 4)
+    except Exception:
+        return _placeholder_sfs_score(text_a, text_b)
+
+
 def _load_scorer(scorer_spec: Optional[str]) -> Tuple[Callable[[str, str], float], bool]:
-    """加载 scorer。spec 形如 'module:func'，缺则用占位。返回 (callable, is_placeholder)。"""
+    """加载 scorer。spec 形如 'module:func'，显式指定优先级最高。
+
+    未传 spec 时的默认 scorer：真后端 → _embedding_sfs_score（is_placeholder=False）；
+    无真后端 → _placeholder_sfs_score（is_placeholder=True，零回归·跟此前行为一致）。
+    返回 (callable, is_placeholder)。"""
     if not scorer_spec:
+        if _has_real_embedding_backend():
+            return _embedding_sfs_score, False
         return _placeholder_sfs_score, True
     try:
         mod_name, func_name = scorer_spec.split(":", 1)

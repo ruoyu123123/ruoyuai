@@ -10,6 +10,7 @@
 import json
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
@@ -190,3 +191,92 @@ def test_main_missing_manifest_exits_2():
         code = _run_main(proj, 99)
         assert code == 2
         assert not (proj / "_数据库" / ".manifest" / "ch_099_compressed.json").exists()
+
+
+# ============ 🔴 2026-07-02 真模型(surprisal_gpt2) 信息量优选截断接入回归 ============
+
+_FILLER_SENT = "这是平淡无奇的陈述内容。"
+_MARKER_SENT = "这里出现了极其罕见的关键转折信息。"
+# 前缀 filler 已超 200 字预算·标记句排在第 240+ 字之后·盲切前 200 字必然切不到它
+_LONG_FIELD = (_FILLER_SENT * 20) + _MARKER_SENT + (_FILLER_SENT * 5)
+
+
+def test_gate_off_byte_identical_to_pre_change_behavior(monkeypatch):
+    """门控关（未设置 RUOYU_NN_SURPRISAL，默认状态）→ compress() 对同一输入输出
+    逐字节等于改动前的盲切前缀行为（零回归基线）。"""
+    monkeypatch.delenv("RUOYU_NN_SURPRISAL", raising=False)
+    out = mc.compress({"long_field": _LONG_FIELD, "n": [1, 2, 3], "short": "ok"})
+    assert out["long_field"] == (
+        _LONG_FIELD[:mc.MAX_STR_LEN] + f"...(+{len(_LONG_FIELD) - mc.MAX_STR_LEN} chars)")
+    assert out["n"] == [1, 2, 3]
+    assert out["short"] == "ok"
+
+
+def test_model_selects_high_surprisal_sentences_over_blind_prefix(monkeypatch):
+    """门控开 + 桥命中(content-aware：含"罕见"标记词的句子得高分) → 高信息量句优先保留·
+    与盲切前 200 字（必然切不到晚于第 240 字才出现的标记句）结果不同。"""
+    assert len(_LONG_FIELD) > mc.MAX_STR_LEN
+    blind = _LONG_FIELD[:mc.MAX_STR_LEN]
+    assert _MARKER_SENT not in blind  # 前提校验：标记句确实在盲切范围之外
+
+    monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts, ids=None: [
+            {"mean_surprisal": 9.0 if "罕见" in t else 1.0} for t in texts
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+
+    out = mc.compress({"long_field": _LONG_FIELD, "short": "ok"})
+    compressed = out["long_field"]
+    assert "罕见" in compressed
+    assert compressed != blind + f"...(+{len(_LONG_FIELD) - mc.MAX_STR_LEN} chars)"
+    assert "surprisal精选" in compressed
+    assert out["short"] == "ok"
+
+
+def test_model_gate_on_but_bridge_none_keeps_blind_truncation(monkeypatch):
+    """门控开但桥返回全 None → 该字符串回退盲切前缀·与门控关时逐字节一致(零回归)。"""
+    baseline = mc.compress({"long_field": _LONG_FIELD})
+    monkeypatch.setenv("RUOYU_NN_SURPRISAL", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts, ids=None: [None for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_surprisal_bridge", fake_bridge)
+    out = mc.compress({"long_field": _LONG_FIELD})
+    assert out == baseline
+    assert out["long_field"] == (
+        _LONG_FIELD[:mc.MAX_STR_LEN] + f"...(+{len(_LONG_FIELD) - mc.MAX_STR_LEN} chars)")
+
+
+def test_collect_long_strings_skips_dropped_fields():
+    """_collect_long_strings 与 compress() 过滤逻辑同构·不为会被丢弃的字段(_doc 等)
+    内的超限字符串浪费模型调用。"""
+    long_doc = "x" * 300
+    long_keep = "y" * 300
+    collected = mc._collect_long_strings({"_doc": long_doc, "keep": long_keep})
+    assert long_keep in collected
+    assert long_doc not in collected
+
+
+def test_select_high_surprisal_picks_highest_scores_within_budget():
+    """_select_high_surprisal 按分数降序挑句填满预算·未入选句不出现在结果中。"""
+    sentences = ["A" * 50 + "。", "B" * 50 + "。", "C" * 50 + "。",
+                 "D" * 50 + "。", "E" * 50 + "。"]
+    scores = [1.0, 5.0, 2.0, 9.0, 3.0]
+    original = "".join(sentences)
+    result = mc._select_high_surprisal(original, sentences, scores)
+    assert "D" * 50 in result  # 最高分(9.0)
+    assert "B" * 50 in result  # 次高分(5.0)
+    assert "C" * 50 not in result
+    assert "A" * 50 not in result
+    assert "surprisal精选" in result
+
+
+def test_predict_surprisal_batch_empty_input():
+    assert mc._predict_surprisal_batch([]) == []
+
+
+def test_split_sentences_keeps_punctuation():
+    parts = mc._split_sentences("第一句。第二句！第三句？")
+    assert len(parts) == 3
+    assert parts[0] == "第一句。"

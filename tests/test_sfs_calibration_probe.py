@@ -302,3 +302,102 @@ def test_registry_entry():
     assert s.get("_new") is True
     hgs = set(reg.get("hard_gate_codes", []))
     assert mod.ISSUE_CODE not in hgs
+
+
+# ───── 16 🔴 2026-07-02 embedding_store 真接线（默认 scorer 真后端升级）──────────────
+
+def _char_freq_embedding(text: str, dim: int = 32) -> list:
+    """确定性、内容感知的假 embedding（字符频率向量）。"""
+    import math as _math
+    vec = [0.0] * dim
+    for ch in text:
+        vec[ord(ch) % dim] += 1.0
+    norm = _math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def test_has_real_embedding_backend_gate():
+    old = os.environ.get("EMBED_BACKEND")
+    try:
+        os.environ.pop("EMBED_BACKEND", None)
+        assert mod._has_real_embedding_backend() is False
+        os.environ["EMBED_BACKEND"] = "hash"
+        assert mod._has_real_embedding_backend() is False
+        os.environ["EMBED_BACKEND"] = "mstyle"
+        assert mod._has_real_embedding_backend() is True
+    finally:
+        if old is not None:
+            os.environ["EMBED_BACKEND"] = old
+        else:
+            os.environ.pop("EMBED_BACKEND", None)
+
+
+def test_load_scorer_default_gate_off_stays_placeholder(monkeypatch):
+    """零回归证明：无真后端（默认环境）→ _load_scorer(None) 逐字节保持原行为
+    （_placeholder_sfs_score, True）。"""
+    monkeypatch.delenv("EMBED_BACKEND", raising=False)
+    for k in [k for k in os.environ if k.startswith("GEN_EMBED__")]:
+        monkeypatch.delenv(k, raising=False)
+    fn, is_placeholder = mod._load_scorer(None)
+    assert fn is mod._placeholder_sfs_score
+    assert is_placeholder is True
+
+
+def test_load_scorer_default_real_backend_upgrades_to_embedding(monkeypatch):
+    """真后端命中：_load_scorer(None) 默认 scorer 升级为 _embedding_sfs_score
+    （is_placeholder=False），不再是 char-3gram Jaccard。"""
+    monkeypatch.setenv("EMBED_BACKEND", "fake-real")
+    fn, is_placeholder = mod._load_scorer(None)
+    assert fn is mod._embedding_sfs_score
+    assert is_placeholder is False
+
+
+def test_load_scorer_explicit_spec_overrides_real_backend(monkeypatch):
+    """--scorer 显式覆盖通道优先级最高，即便真后端已配置也不受影响。"""
+    monkeypatch.setenv("EMBED_BACKEND", "fake-real")
+    fn, is_placeholder = mod._load_scorer("sfs_calibration_probe:_placeholder_sfs_score")
+    assert fn is mod._placeholder_sfs_score
+    assert is_placeholder is False   # 显式加载成功 → is_placeholder 标 False（沿用既有语义）
+
+
+def test_embedding_sfs_score_reflects_similarity(monkeypatch):
+    """_embedding_sfs_score：内容感知假向量下，相同文本得分应显著高于完全不同文本。"""
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "compute_embedding", _char_freq_embedding)
+    same = mod._embedding_sfs_score(_TEMPLATE_A, _TEMPLATE_A)
+    different = mod._embedding_sfs_score(_TEMPLATE_A, _TEMPLATE_B)
+    assert same == 100.0          # 余弦=1.0 → 线性映射满分
+    assert same > different
+
+
+def test_embedding_sfs_score_dimension_mismatch_falls_back(monkeypatch):
+    """embedding 维度不一致 → 静默回退 _placeholder_sfs_score（不冒充语义）。"""
+    import embedding_store
+
+    def _mismatched(text):
+        return [0.1] * (8 if "阳光洒满" in text else 32)   # 只让 B 模板降维·制造维度不一致
+
+    monkeypatch.setattr(embedding_store, "compute_embedding", _mismatched)
+    score = mod._embedding_sfs_score(_TEMPLATE_A, _TEMPLATE_B)
+    assert score == mod._placeholder_sfs_score(_TEMPLATE_A, _TEMPLATE_B)
+
+
+def test_probe_uses_real_embedding_scorer_end_to_end(monkeypatch):
+    """probe() 端到端：真后端 + 不传 --scorer → _placeholder_scorer=False（用了 embedding 默认
+    scorer），且分辨力判定仍走同一套统计管线（same/cross 分数分布够开时 PASS）。"""
+    monkeypatch.setenv("EMBED_BACKEND", "fake-real")
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "compute_embedding", _char_freq_embedding)
+    bak = os.environ.get("SFS_CALIBRATION_PROBE_MODE")
+    try:
+        _set_mode("active")
+        same = _mk_pair_dir(12, lambda i: _TEMPLATE_A + str(i),
+                            lambda i: _TEMPLATE_A2 + str(i))
+        cross = _mk_pair_dir(12, lambda i: _TEMPLATE_A + str(i),
+                             lambda i: _TEMPLATE_B + str(i))
+        out = mod.probe(same, cross)
+        assert out["_placeholder_scorer"] is False
+    finally:
+        _set_mode(bak)

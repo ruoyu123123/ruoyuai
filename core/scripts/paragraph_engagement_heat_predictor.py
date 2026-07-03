@@ -79,6 +79,8 @@ def _split_paragraphs(text: str):
 
 
 def _valence(p: str) -> int:
+    """单段 valence(-1/0/1)：纯词典计数差（VAD 模型批量路径见 _compute_valences，
+    scan() 走批量优先；本函数保留作单段直接调用 / 批量未命中时的逐段 fallback）。"""
     pos = len(POSITIVE_KW.findall(p))
     neg = len(NEGATIVE_KW.findall(p))
     if pos > neg + 1:
@@ -86,6 +88,57 @@ def _valence(p: str) -> int:
     if neg > pos + 1:
         return -1
     return 0
+
+
+def _model_valence_batch(paragraphs: list) -> "list | None":
+    """批量取段落 VAD valence；env 未开/模型不可用/批量失配 → None（调用方整批回退词典逐段判定）。"""
+    if not paragraphs or os.environ.get("RUOYU_NN_VAD") != "1":
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(paragraphs) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(paragraphs)
+    except Exception:
+        return None
+    if not preds or len(preds) != len(paragraphs):
+        return None
+    return [p.get("valence") if p else None for p in preds]
+
+
+def _valence_from_model_value(v: float) -> int:
+    """模型 valence(0-1) → 离散 -1/0/1（>0.6 正 / <0.4 负 / 其余中性，明显偏向才判）。"""
+    if v > 0.6:
+        return 1
+    if v < 0.4:
+        return -1
+    return 0
+
+
+def _compute_valences(paragraphs: list) -> "tuple[list, str]":
+    """批量算每段 valence(-1/0/1) + source：VAD 模型整批优先(一次调用摊薄模型加载开销)，
+    未启用/不可用/单段未命中 → 逐段回退词典判定（_valence）。"""
+    model_vals = _model_valence_batch(paragraphs)
+    if model_vals is None:
+        return [_valence(p) for p in paragraphs], "lexicon_fallback"
+    out = []
+    any_model_hit = False
+    for v, p in zip(model_vals, paragraphs):
+        if v is not None:
+            try:
+                out.append(_valence_from_model_value(float(v)))
+                any_model_hit = True
+                continue
+            except (TypeError, ValueError):
+                pass
+        out.append(_valence(p))
+    return out, ("model_vad" if any_model_hit else "lexicon_fallback")
 
 
 def _heat(p: str) -> dict:
@@ -123,8 +176,8 @@ def scan(draft_path, project_root=None) -> dict:
         return out
 
     heats = [_heat(p) for p in paragraphs]
-    # valence_jump：相邻段极性翻转计数
-    valences = [_valence(p) for p in paragraphs]
+    # valence_jump：相邻段极性翻转计数（VAD 模型整批优先·未启用/不可用回退词典）
+    valences, valence_source = _compute_valences(paragraphs)
     valence_jumps = sum(1 for a, b in zip(valences, valences[1:])
                         if a != 0 and b != 0 and a != b)
     for h, p in zip(heats, paragraphs):
@@ -159,6 +212,7 @@ def scan(draft_path, project_root=None) -> dict:
         "cold_paragraph_ratio": round(cold_ratio, 3),
         "valence_jumps": valence_jumps,
         "valence_jump_rate": round(valence_jumps / max(1, len(paragraphs) - 1), 3),
+        "valence_source": valence_source,
         # R20 W9 Batch-CC P2 扩展字段
         "comment_triggered_density": comment_triggered_density,
         "comment_triggered_count": triggered_count,

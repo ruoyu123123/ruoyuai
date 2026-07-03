@@ -16,9 +16,12 @@ PASS 漏掉 subtle 弱攻击面. 借鉴 Constitutional AI / debate (Irving et al
 
 【触发条件】cluster_brief.is_volume_finale == True (其他 cluster 直接 skip).
 
-【attacker 模板(确定性·无 LLM·占位)】
+【attacker 模板(确定性启发式·占位)】
   - A1 "钩子结尾"      : 末段 CJK<60 但既有钩子词 / 末段无悬念词 → 弱钩子
-  - A2 "情感对位"      : 末段情感 marker 与 brief.expected_emotion 不匹配
+  - A2 "情感对位"      : VAD 模型优先做真实情感检测——brief.expected_emotion 映射到
+                         valence 极性(pos/neg/neutral)/arousal 高低(high/low)（EMOTION_LABEL_VAD
+                         表·RUOYU_NN_VAD 门控）再与末段模型读数比对；expected_emotion 未命中
+                         已知标签 / 模型未启用或不可用 → 回退字面关键词匹配（末段是否含该词）
   - A3 "副线收束缺失"  : brief.foreshadowing 在草稿末段未提及
   - A4 "权力转移失败"  : brief.power_shift 标的角色在末段无主语动作
   - A5 "代价签收缺失"  : brief.stakes 中关键代价词在草稿全文未现
@@ -53,6 +56,30 @@ HOOK_WORDS = ("可", "却", "竟", "突", "原来", "再", "又", "然而", "悬
               "等等", "下一", "未完", "戛然")
 SUSPENSE_WORDS = ("?", "？", "...", "……", "！", "!", "莫非", "难道")
 STAKE_WORDS = ("代价", "牺牲", "失去", "断", "死", "毁", "崩")
+
+# A2 情感对位：expected_emotion 关键词 → (valence 极性, arousal 高低) 粗分类映射。
+# 真实 NLU 需更细粒度词表，本表与文件其余部分同为占位 scaffold（真正攻击面用 LLM debate）。
+EMOTION_LABEL_VAD = {
+    "狂喜": ("pos", "high"), "喜悦": ("pos", "high"), "开心": ("pos", "high"),
+    "欢喜": ("pos", "high"), "兴奋": ("pos", "high"), "激动": ("pos", "high"),
+    "欣慰": ("pos", "low"), "释然": ("pos", "low"), "温暖": ("pos", "low"),
+    "感动": ("pos", "low"), "亲密": ("pos", "low"), "满足": ("pos", "low"),
+    "平静": ("neutral", "low"), "淡然": ("neutral", "low"), "冷漠": ("neutral", "low"),
+    "震惊": ("neutral", "high"), "惊讶": ("neutral", "high"), "诧异": ("neutral", "high"),
+    "愤怒": ("neg", "high"), "愤慨": ("neg", "high"), "暴怒": ("neg", "high"),
+    "狂怒": ("neg", "high"), "敌意": ("neg", "high"), "杀意": ("neg", "high"),
+    "憎恨": ("neg", "high"), "怨恨": ("neg", "high"), "厌恶": ("neg", "high"),
+    "恐惧": ("neg", "high"), "害怕": ("neg", "high"), "惊恐": ("neg", "high"),
+    "绝望": ("neg", "high"), "悲伤": ("neg", "low"), "哀伤": ("neg", "low"),
+    "伤心": ("neg", "low"), "难过": ("neg", "low"),
+}
+
+# VAD pos/neg/neutral 极性 + high/low 强度分箱阈值：复用 nn_vad_bridge.to_vad_bin 的
+# (0.2,0.4,0.6,0.8) 分箱边界。valence>=0.6(H/VH)→pos·<=0.4(L/VL)→neg·其余 neutral；
+# arousal>=0.6(H/VH)→high·否则 low。
+_POLE_POS_FLOOR = 0.6
+_POLE_NEG_CEIL = 0.4
+_AROUSAL_HIGH_FLOOR = 0.6
 
 
 def _mode() -> str:
@@ -96,6 +123,52 @@ def _last_paragraph(text):
     return paras[-1] if paras else ""
 
 
+def _expected_emotion_vad(exp_emo: str) -> tuple:
+    """expected_emotion 字符串 → (valence_pole, arousal_level) 期望值（查 EMOTION_LABEL_VAD·
+    子串匹配）。未命中已知标签 → (None, None)（调用方回退字面匹配）。纯查表·不受任何 env 门控。"""
+    for label, (pole, level) in EMOTION_LABEL_VAD.items():
+        if label in exp_emo:
+            return pole, level
+    return None, None
+
+
+def _model_emotion_pole_arousal(text: str) -> tuple:
+    """VAD 模型读 text 的 valence 极性(pos/neg/neutral) + arousal 高低(high/low)。
+    模型未启用(RUOYU_NN_VAD!=1)/不可用/异常 → (None, None)（调用方回退字面关键词匹配·零回归）。"""
+    if not text or os.environ.get("RUOYU_NN_VAD") != "1":
+        return None, None
+    try:
+        preds = None
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch([text]) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch([text])
+    except Exception:
+        return None, None
+    if not preds or preds[0] is None:
+        return None, None
+    p = preds[0]
+    pole = None
+    if p.get("valence") is not None:
+        try:
+            v = float(p["valence"])
+            pole = "pos" if v >= _POLE_POS_FLOOR else ("neg" if v <= _POLE_NEG_CEIL else "neutral")
+        except (TypeError, ValueError):
+            pole = None
+    level = None
+    if p.get("arousal") is not None:
+        try:
+            level = "high" if float(p["arousal"]) >= _AROUSAL_HIGH_FLOOR else "low"
+        except (TypeError, ValueError):
+            level = None
+    return pole, level
+
+
 def attack(text: str, brief: dict) -> list:
     """5 个启发式 attack point. brief 缺字段 → 该 attack 跳过."""
     last_para = _last_paragraph(text)
@@ -110,12 +183,28 @@ def attack(text: str, brief: dict) -> list:
                             "claim": f"末段 CJK<{_cjk_count(last_para)}<60 且钩子词/悬念词不全",
                             "target": last_para[:200]})
 
-    # A2 情感对位
+    # A2 情感对位：VAD 模型优先做真实情感检测（expected_emotion 映射极性/强度再与模型
+    # 读数比对）；expected_emotion 未命中已知标签 / 模型未启用或不可用 → 回退字面匹配（零回归）。
     exp_emo = brief.get("expected_emotion") or brief.get("emotion_target")
-    if isinstance(exp_emo, str) and last_para and exp_emo not in last_para:
-        attacks.append({"id": "A2", "name": "emotion_mismatch",
-                        "claim": f"brief.expected_emotion={exp_emo!r} 未在末段出现",
-                        "target": last_para[:200]})
+    if isinstance(exp_emo, str) and last_para:
+        exp_pole, exp_level = _expected_emotion_vad(exp_emo)
+        model_pole, model_level = (
+            _model_emotion_pole_arousal(last_para)
+            if (exp_pole is not None or exp_level is not None) else (None, None)
+        )
+        if model_pole is not None or model_level is not None:
+            mismatch = ((exp_pole is not None and model_pole is not None and exp_pole != model_pole)
+                        or (exp_level is not None and model_level is not None and exp_level != model_level))
+            if mismatch:
+                attacks.append({"id": "A2", "name": "emotion_mismatch",
+                                "claim": (f"brief.expected_emotion={exp_emo!r}"
+                                          f"(期望 pole={exp_pole}/arousal={exp_level}) "
+                                          f"与模型读数 pole={model_pole}/arousal={model_level} 不符"),
+                                "target": last_para[:200], "source": "model_vad"})
+        elif exp_emo not in last_para:
+            attacks.append({"id": "A2", "name": "emotion_mismatch",
+                            "claim": f"brief.expected_emotion={exp_emo!r} 未在末段出现",
+                            "target": last_para[:200], "source": "literal_fallback"})
 
     # A3 副线收束
     fores = brief.get("foreshadowing") or brief.get("foreshadowing_to_plant") or []

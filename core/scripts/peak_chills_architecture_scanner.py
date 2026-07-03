@@ -14,6 +14,12 @@ delayed release 双相架构。LLM 通病：emotion peak 突现/突消·缺前�
   · 两项任缺 → CHILLS_ARCH_INCOMPLETE
   · 作者档 chills_arch_baseline 旁路
 
+【峰值定位 · 模型优先证据 + 二元关键词保底 · 2026-07-01】
+  优先用 emotion_vad 模型(RoBERTa 微调·held-out meanCCC 0.80)按句给连续 valence/arousal，
+  定位真实峰值(|V-0.5| 极值) + 前后窗口 arousal 强度梯度(前向须高于全文基线·后向须比峰值回落)；
+  模型未启用(RUOYU_NN_VAD!=1)/不可用 → 100% 回退 HIGH_VALENCE_POS/NEG 二元关键词命中(原样保留·零回归)。
+  每个 peak 记录 source 字段(model_vad/lexicon_fallback)供训练数据归因。
+
 【单 issue】
   · CHILLS_ARCH_INCOMPLETE — peak 前向铺垫/后向结晶缺失
 
@@ -33,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -67,6 +74,14 @@ DEFAULT_ANTICIPATION_MIN_HITS = 2
 DEFAULT_RELEASE_WINDOW_LOW = 50
 DEFAULT_RELEASE_WINDOW_HIGH = 150
 DEFAULT_RELEASE_MIN_HITS = 1
+
+# emotion_vad 模型连续 valence 阈值(对齐 nrc_vad 词典刻度·"喜"=0.86/"怒"=0.10 级别的强烈度)·
+# 及前后窗口 arousal 梯度余量(可被作者档 chills_arch_baseline 覆盖)
+DEFAULT_MODEL_VALENCE_POS_THRESHOLD = 0.75
+DEFAULT_MODEL_VALENCE_NEG_THRESHOLD = 0.25
+DEFAULT_MODEL_GRADIENT_MARGIN = 0.05
+
+_SENT_SPLIT_PAT = re.compile(r"[^。！？\n]+[。！？…]?")
 
 
 def _mode() -> str:
@@ -121,6 +136,61 @@ def _count_in_window(text: str, terms: list[str], start: int, end: int) -> tuple
             total += c
             matched.append(t)
     return total, matched
+
+
+# ============ VAD 模型优先(替代二元关键词定位峰值 + 窗口强度梯度) ============
+# env 未开(RUOYU_NN_VAD!=1)/任何失败 → None，调用方 100% 回退 _find_peaks/_count_in_window(零回归)。
+
+def _model_vad_sentence_series(text: str) -> list | None:
+    """按句切分后一次性批量调 emotion_vad 模型拿 (pos, valence, arousal)；失败 → None。"""
+    if os.environ.get("RUOYU_NN_VAD") != "1":
+        return None
+    sentences = [(m.start(), m.group(0)) for m in _SENT_SPLIT_PAT.finditer(text) if m.group(0).strip()]
+    if not sentences:
+        return None
+    texts = [s for _, s in sentences]
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+            from feature_cache import FeatureStore, enabled as feature_store_enabled
+            preds = FeatureStore.get().compute_vad_batch(texts) if feature_store_enabled() else None
+        except Exception:
+            preds = None
+        if preds is None:
+            import nn_vad_bridge
+            preds = nn_vad_bridge.predict_batch(texts)
+    except Exception:
+        return None
+    if not preds or len(preds) != len(sentences):
+        return None
+    series = [{"pos": pos, "text": sent, "valence": float(pr["valence"]),
+              "arousal": float(pr["arousal"]) if pr.get("arousal") is not None else 0.5}
+             for (pos, sent), pr in zip(sentences, preds) if pr and pr.get("valence") is not None]
+    return series or None
+
+
+def _model_locate_peaks(series: list, top_k: int, pos_thr: float, neg_thr: float) -> list:
+    """按模型 valence 连续值定位真实情绪峰值(替代 HIGH_VALENCE_POS/NEG 二元命中)：
+    |V-0.5| 越大越靠前排序去重(同 100 CJK 内只留最强)·再按位置输出。"""
+    cands = sorted((s for s in series if s["valence"] >= pos_thr or s["valence"] <= neg_thr),
+                  key=lambda s: -abs(s["valence"] - 0.5))
+    seen, dedup = [], []
+    for c in cands:
+        if any(abs(c["pos"] - p) < 100 for p in seen):
+            continue
+        seen.append(c["pos"])
+        dedup.append({"pos": c["pos"], "word": c["text"][:16],
+                      "valence": "pos" if c["valence"] >= pos_thr else "neg",
+                      "arousal": c["arousal"]})
+    dedup.sort(key=lambda c: c["pos"])
+    return dedup[:top_k]
+
+
+def _model_window_arousal(series: list, start: int, end: int) -> tuple:
+    """窗口(字符位置)内平均 arousal + 命中句数(连续强度梯度·替代关键词计数)。"""
+    vals = [s["arousal"] for s in series if start <= s["pos"] <= end]
+    return (round(sum(vals) / len(vals), 3), len(vals)) if vals else (None, 0)
 
 
 def _read_author_baseline(project_root) -> dict | None:
@@ -178,32 +248,71 @@ def scan(draft_path, project_root=None) -> dict:
         if isinstance(baseline.get("top_k"), int):
             top_k = baseline["top_k"]
 
+    # 模型优先定位真实情绪峰值(连续 VAD) + 前后窗口 arousal 强度梯度；
+    # env 未开/模型不可用 → peaks/peak_source 保持二元关键词命中(零回归默认路径)。
     peaks = _find_peaks(text, top_k=top_k)
+    peak_source = "lexicon_fallback"
+    model_series = _model_vad_sentence_series(text)
+    baseline_arousal = None
+    grad_margin = DEFAULT_MODEL_GRADIENT_MARGIN
+    if model_series:
+        pos_thr = DEFAULT_MODEL_VALENCE_POS_THRESHOLD
+        neg_thr = DEFAULT_MODEL_VALENCE_NEG_THRESHOLD
+        if isinstance(baseline, dict):
+            if isinstance(baseline.get("model_valence_pos_threshold"), (int, float)):
+                pos_thr = float(baseline["model_valence_pos_threshold"])
+            if isinstance(baseline.get("model_valence_neg_threshold"), (int, float)):
+                neg_thr = float(baseline["model_valence_neg_threshold"])
+            if isinstance(baseline.get("model_gradient_margin"), (int, float)):
+                grad_margin = float(baseline["model_gradient_margin"])
+        model_peaks = _model_locate_peaks(model_series, top_k, pos_thr, neg_thr)
+        if model_peaks:
+            peaks = model_peaks
+            peak_source = "model_vad"
+            arousals = [s["arousal"] for s in model_series]
+            baseline_arousal = sum(arousals) / len(arousals)
+
     peak_reports = []
     incomplete = 0
     for p in peaks:
         pos = p["pos"]
-        a_hits, a_matched = _count_in_window(text, ANTICIPATION_LEX,
-                                             pos - ant_high, pos - ant_low + 1)
-        # 缩短窗口：使用更近的前向 200CJK 作为底线确认
-        a_hits_near, a_matched_near = _count_in_window(text, ANTICIPATION_LEX,
-                                                      pos - ant_low, pos)
-        anticipation_total = a_hits + a_hits_near
-        r_hits, r_matched = _count_in_window(text, RELEASE_CRYSTALLIZATION,
-                                             pos + rel_low, pos + rel_high)
-        anticipation_ok = anticipation_total >= ant_min
-        release_ok = r_hits >= rel_min
+        if peak_source == "model_vad":
+            ant_mean, ant_n = _model_window_arousal(model_series, pos - ant_high, pos - ant_low)
+            rel_mean, rel_n = _model_window_arousal(model_series, pos + rel_low, pos + rel_high)
+            peak_arousal = p.get("arousal")
+            anticipation_total = ant_n
+            anticipation_matched = [f"arousal_mean={ant_mean}"] if ant_n else []
+            anticipation_ok = bool(ant_n and ant_mean is not None
+                                   and ant_mean >= baseline_arousal + grad_margin)
+            release_hits = rel_n
+            release_matched = ([f"arousal_drop={round(peak_arousal - rel_mean, 3)}"]
+                               if rel_n and rel_mean is not None and peak_arousal is not None else [])
+            release_ok = bool(rel_n and rel_mean is not None and peak_arousal is not None
+                              and (peak_arousal - rel_mean) >= grad_margin)
+        else:
+            a_hits, a_matched = _count_in_window(text, ANTICIPATION_LEX,
+                                                 pos - ant_high, pos - ant_low + 1)
+            # 缩短窗口：使用更近的前向 200CJK 作为底线确认
+            a_hits_near, a_matched_near = _count_in_window(text, ANTICIPATION_LEX,
+                                                          pos - ant_low, pos)
+            anticipation_total = a_hits + a_hits_near
+            anticipation_matched = list(set(a_matched + a_matched_near))
+            anticipation_ok = anticipation_total >= ant_min
+            release_hits, release_matched = _count_in_window(text, RELEASE_CRYSTALLIZATION,
+                                                             pos + rel_low, pos + rel_high)
+            release_ok = release_hits >= rel_min
         report = {
             "pos": pos,
             "word": p["word"],
             "valence": p["valence"],
             "anticipation_hits": anticipation_total,
-            "anticipation_matched": list(set(a_matched + a_matched_near)),
+            "anticipation_matched": anticipation_matched,
             "anticipation_ok": anticipation_ok,
-            "release_hits": r_hits,
-            "release_matched": r_matched,
+            "release_hits": release_hits,
+            "release_matched": release_matched,
             "release_ok": release_ok,
             "complete": bool(anticipation_ok and release_ok),
+            "source": peak_source,
         }
         if not report["complete"]:
             incomplete += 1
@@ -215,6 +324,7 @@ def scan(draft_path, project_root=None) -> dict:
         "incomplete_count": incomplete,
         "peaks": peak_reports,
         "baseline_source": baseline_source,
+        "peak_source": peak_source,
         "thresholds": {
             "anticipation_window_cjk": [ant_low, ant_high],
             "anticipation_min_hits": ant_min,
@@ -228,10 +338,13 @@ def scan(draft_path, project_root=None) -> dict:
     for r in peak_reports:
         if not r["complete"]:
             missing = []
+            is_model = r.get("source") == "model_vad"
             if not r["anticipation_ok"]:
-                missing.append(f"anticipation hits={r['anticipation_hits']}<{ant_min}")
+                missing.append(f"anticipation arousal 未见前向爬升(样本={r['anticipation_hits']})"
+                               if is_model else f"anticipation hits={r['anticipation_hits']}<{ant_min}")
             if not r["release_ok"]:
-                missing.append(f"release hits={r['release_hits']}<{rel_min}")
+                missing.append(f"release arousal 未见回落(样本={r['release_hits']})"
+                               if is_model else f"release hits={r['release_hits']}<{rel_min}")
             flags.append({"code": ISSUE_CODE_INCOMPLETE,
                           "msg": (f"peak@{r['pos']}({r['word']})·"
                                   + "·".join(missing) + "·双相架构缺失")})

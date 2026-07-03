@@ -61,6 +61,10 @@ import re
 import sys
 from pathlib import Path
 
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
 ISSUE_CODE_STARVING = "CHOICE_CONSEQUENCE_STARVING"
 ISSUE_CODE_VISIBLE = "CHOICE_CONSEQUENCE_VISIBLE"
 ISSUE_CODE_PENDING = "CHOICE_CONSEQUENCE_PENDING"
@@ -69,10 +73,77 @@ _LEDGER_FILE = "选择账本.json"
 _NAMESPACE = "choice_consequence"
 _STAKES_TIERS = ("life", "faction", "moral", "preference")
 
+SEMANTIC_RESONANCE_SIM_THRESHOLD = 0.70   # choice 摘要/关键词 vs 正文段落余弦阈值 · 待金标准校准
+
 
 def _mode() -> str:
     m = (os.environ.get("CHOICE_CONSEQUENCE_MODE") or "shadow").strip().lower()
     return m if m in ("off", "shadow", "active") else "shadow"
+
+
+# ── 🔴 2026-07-02 真语义 embedding 可选路径（照抄 topic_drift_scanner 已验证的模式）───────
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+
+    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
+    embedding 的文件自带一份，不互相 import）。也检查 .env 的 GEN_EMBED__* API 配置。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+def _build_semantic_context(text: str) -> "dict | None":
+    """真后端就绪时把正文预切段 + 批量编码一次，供本次 scan() 内所有 ledger entry
+    复用（避免每条 entry 都重复编码同一正文·2026-07-02）。
+
+    未配真后端 / 无有效段落 / 编码异常 → None（调用方逐条回退字面 keyword-in-text）。
+    """
+    if not _has_real_embedding_backend():
+        return None
+    paras = [p.strip() for p in text.split("\n") if len(p.strip()) >= 10]
+    if not paras:
+        return None
+    try:
+        from embedding_store import compute_embedding
+        embs = [compute_embedding(p) for p in paras]
+        return {"paragraphs": paras, "embeddings": embs}
+    except Exception:
+        return None
+
+
+def _semantic_resonance(choice_summary: str, keywords: list, ctx) -> "dict | None":
+    """真后端下：choice 摘要/关键词 vs 正文段落 embedding 余弦补充判定（意译呼应漏检）。
+
+    命中最相似段落 → {"paragraph_index", "similarity"}；ctx 为 None（无真后端/无段落）
+    / 查询文本为空 / 计算异常 → None（调用方回退字面 keyword-in-text · _check_resonance
+    仍是兜底 · 字面命中永远优先）。
+    """
+    if not ctx:
+        return None
+    query = " ".join([choice_summary or ""] + list(keywords or [])).strip()
+    if not query:
+        return None
+    try:
+        from embedding_store import compute_embedding, cosine_similarity
+        qe = compute_embedding(query)
+        if not qe:
+            return None
+        best_idx, best_sim = -1, -1.0
+        for i, pe in enumerate(ctx["embeddings"]):
+            if pe and len(pe) == len(qe):
+                sim = cosine_similarity(qe, pe)
+                if sim > best_sim:
+                    best_idx, best_sim = i, sim
+        if best_idx >= 0 and best_sim >= SEMANTIC_RESONANCE_SIM_THRESHOLD:
+            return {"paragraph_index": best_idx, "similarity": round(best_sim, 4)}
+    except Exception:
+        return None
+    return None
 
 
 def _ledger_path(project_root) -> Path:
@@ -162,6 +233,9 @@ def scan(project_root, cluster_id, draft_path) -> dict:
     starving, visible, pending = [], [], []
     updated = False
 
+    # 真后端就绪时正文只切段编码一次（本次 scan() 内所有 entry 复用·2026-07-02）
+    semantic_ctx = _build_semantic_context(text)
+
     for e in entries:
         if e.get("status") in ("visible", "expired"):
             continue
@@ -173,16 +247,28 @@ def scan(project_root, cluster_id, draft_path) -> dict:
             e["status"] = "visible"
             e["visible_at_cluster"] = cluster_id
             e["matched_keywords"] = hits
+            e["match_method"] = "literal_substring"
             visible.append(e)
             updated = True
         else:
-            expires = e.get("expires_at_cluster_idx", cur_idx + 1)
-            if cur_idx >= expires:
-                e["status"] = "starving"
-                starving.append(e)
+            # 字面命中优先·未中时真后端补语义（意译呼应漏检）
+            semantic = _semantic_resonance(e.get("choice_summary", ""), kw, semantic_ctx)
+            if semantic is not None:
+                e["status"] = "visible"
+                e["visible_at_cluster"] = cluster_id
+                e["matched_keywords"] = []
+                e["match_method"] = "embedding_cosine"
+                e["semantic_similarity"] = semantic["similarity"]
+                visible.append(e)
                 updated = True
             else:
-                pending.append(e)
+                expires = e.get("expires_at_cluster_idx", cur_idx + 1)
+                if cur_idx >= expires:
+                    e["status"] = "starving"
+                    starving.append(e)
+                    updated = True
+                else:
+                    pending.append(e)
 
     if updated:
         _save_ledger(project_root, data)

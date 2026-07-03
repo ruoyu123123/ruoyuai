@@ -13,12 +13,17 @@ volume_arc_drift 已查【卷内大势漂移】·本 scanner 与之正交查【�
   · 数据源：事件簇.json（cluster.volume / scope_summary / scene_storyboard / volume_transition_hooks）
        + 故事块摘要.json（已写 cluster 的 cast / setting 摘要）
   · 规则 ①：检测最近一次 vol N→N+1 过渡·上卷末 cluster 若有 volume_transition_hooks.close.hook_text
-       而下卷首 cluster scope_summary + scene_storyboard.scene1 关键词集对 hook_text 关键词覆盖率
-       < 30% → advisory「下卷钩零命中」
+       而下卷首 cluster scope_summary + scene_storyboard.scene1 覆盖率 < 30% → advisory「下卷钩零命中」。
+       默认（无真 embedding 后端）关键词 2-gram 字面重叠算覆盖率；_has_real_embedding_backend()
+       真语义后端就绪时改用 hook_text vs 下卷首开篇文本 embedding 余弦相似度替代字面重叠（同义改写
+       零容错：hook 写「黑龙将苏醒」下卷首写「巨龙睁开眼」字面零重叠但语义一致），embedding 不可用
+       /维度不一致/未配后端 → 回退字面重叠，逐字节零回归。close_hook_match_method 字段标注来源。
   · 规则 ②：cast overlap = |last_vol_cast ∩ next_vol_cast| / |last_vol_cast|
-       overlap == 0 → advisory「卷间 cast 硬重置」（卷=阶段触发但角色不该全清空）
+       overlap == 0 → advisory「卷间 cast 硬重置」（卷=阶段触发但角色不该全清空）——精确集合运算，
+       非语义模糊判断，不模型化。
   · 规则 ③：next_vol_first_cluster.scene_storyboard.scene1 中：未在上卷出现的新 cast 数 = 0
-       且 setting 描述不引入新元素 → advisory「卷首 scene1 缺新钩」
+       且 setting 描述不引入新元素 → advisory「卷首 scene1 缺新钩」——固定 regex 锚词格式匹配，
+       非语义模糊判断，不模型化。
 
 【北极星⑤ 顾问非法官】卷间过渡是创作选择（time-skip / 全新副本 / 全新身份合法）·writer 有理由
   可豁免 → 永远 advisory，code VOLUME_TRANSITION_*  **绝不进 audit_hub.HARD_GATE_CODES**。
@@ -47,6 +52,46 @@ HARD_RESET_FLOOR = 0.0       # cast overlap == 0 = 硬重置
 def _mode() -> str:
     m = (os.environ.get("VOLUME_TRANSITION_MODE") or "shadow").strip().lower()
     return m if m in ("off", "shadow", "active") else "shadow"
+
+
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+
+    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
+    embedding 的 scanner 自带一份，不互相 import）。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+def _embed_or_none(text: str):
+    """真语义 embedding；embedding_store 不可用/编码异常/空文本 → None（调用方回退字面 bigram）。"""
+    if not text or not str(text).strip():
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embedding_store import compute_embedding
+        emb = compute_embedding(text)
+        return emb if emb else None
+    except Exception:
+        return None
+
+
+def _cosine_or_none(v1, v2) -> "float | None":
+    """维度不一致/任一为 None → None（调用方回退字面 bigram，不误判）。"""
+    if v1 is None or v2 is None or len(v1) != len(v2):
+        return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embedding_store import cosine_similarity
+        return cosine_similarity(v1, v2)
+    except Exception:
+        return None
 
 
 def _load(p: Path, default=None):
@@ -197,15 +242,27 @@ def scan(project_root: Path) -> dict:
     # 规则 ①：下卷钩零命中
     close_hook = _close_hook(last_finale)
     if close_hook:
-        hook_kw = _kw(close_hook)
         open_text = _scene1_text(next_first) + " " + str(next_first.get("scope_summary") or "")
-        open_kw = _kw(open_text)
-        coverage = (len(hook_kw & open_kw) / len(hook_kw)) if hook_kw else 1.0
+        # 真语义后端就绪 → hook_text vs 下卷首开篇文本 embedding 余弦相似度替代字面重叠；
+        # 否则（默认）保留关键词 2-gram 重叠原样不动
+        close_hook_match_method = "bigram_keyword_overlap"
+        coverage = None
+        if _has_real_embedding_backend():
+            sim = _cosine_or_none(_embed_or_none(close_hook), _embed_or_none(open_text))
+            if sim is not None:
+                coverage = sim
+                close_hook_match_method = "embedding_cosine"
+        if coverage is None:   # 语义路径不可用（未配后端/编码失败/维度不一致）→ 回退字面重叠
+            hook_kw = _kw(close_hook)
+            open_kw = _kw(open_text)
+            coverage = (len(hook_kw & open_kw) / len(hook_kw)) if hook_kw else 1.0
         out["close_hook_coverage"] = round(coverage, 2)
+        out["close_hook_match_method"] = close_hook_match_method
         if coverage < HOOK_COVERAGE_FLOOR:
             issues.append({
                 "code": HOOK_MISS_CODE, "gate_level": "advisory", "severity": "minor",
                 "coverage": round(coverage, 2),
+                "match_method": close_hook_match_method,
                 "msg": (f"⚠️ vol{last_v}→vol{next_v} 过渡：上卷末钩 close.hook_text 覆盖率 "
                         f"{coverage:.0%} < {HOOK_COVERAGE_FLOOR:.0%}·下卷首零兑现·建议下卷首"
                         f" scene1 回应上卷末钩 keywords"),

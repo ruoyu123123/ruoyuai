@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # 🔴 2026-06-29 NN角色网络/共指集成
-"""nn_coref_bridge.py — 共指消解桥（HanLP 后端 · 多后端选择 · 中文代词→角色解析）。
+"""nn_coref_bridge.py — 共指消解桥（纯规则后端 · 中文代词→角色解析）。
 
 【目标】将代词（他/她/那个人/少年）解析到具体角色，辅助角色关系提取和一致性检测。
 
-【后端选择（参照 embedding_store 多后端模式）】
-  · COREF_BACKEND=hanlp  → HanLP 共指消解管线（pip install hanlp）
-  · COREF_BACKEND=rule   → 纯规则（最近先行词 + 性别匹配）
-  · 默认: rule（不需要额外依赖）
+【🔴 2026-07-03 HanLP 后端路径整体拆除（清旧码·实证支撑）】
+  历史上本桥曾设 COREF_BACKEND=hanlp 后端（先系统 py 直接 import、后改 venv subprocess 桥），
+  但 2026-07-03 真装 hanlp==2.1.3 后实锤：**HanLP 开源版从未提供过任何本地共指消解模型**
+  （`hanlp.pretrained` 无 coref 子模块·全部 99 个预训练 key 零命中·GitHub 历史里
+  `pretrained/coref.py` 从未存在过；唯一的共指能力在其付费云端 RESTful API，与本桥离线
+  subprocess 架构不符）。该路径永远点不亮，按「不兼容不降级/清旧码」原则整体删除
+  （连同 core/ml/coref/coref_infer.py）。真中文共指模型是独立 Tier A 调研项
+  （见 core/ml/LEARNABLE_BACKLOG.md），若落地将另起新后端名，不复用 hanlp。
 
 【默认安全铁律（北极星⑤·零回归）】
   · RUOYU_NN_COREF != "1"（默认 off·门控未开）→ 返回 []
-  · HanLP 不可用 → 降级 rule·绝不崩
   · 任何异常 → 返回 []·不崩主流水线
+  · 旧 COREF_BACKEND env 已无意义（设成任何值都走 rule·不读取）
 
 Env 门控: RUOYU_NN_COREF（默认 off）
 
@@ -26,7 +30,6 @@ import json
 import os
 import re
 import sys
-from pathlib import Path
 
 # ── 常量 ────────────────────────────────────────────────────
 
@@ -63,12 +66,6 @@ def _strip_changes(text: str) -> str:
 def enabled() -> bool:
     """门控总开关：RUOYU_NN_COREF=1。"""
     return os.environ.get("RUOYU_NN_COREF") == "1"
-
-
-def _backend() -> str:
-    """当前后端：COREF_BACKEND env（默认 rule）。"""
-    b = (os.environ.get("COREF_BACKEND") or "rule").strip().lower()
-    return b if b in ("hanlp", "rule") else "rule"
 
 
 # ── 性别推断 ────────────────────────────────────────────────
@@ -207,79 +204,6 @@ def _resolve_rule(text: str, known: list[str] | None) -> list[dict]:
     return results
 
 
-# ── HanLP 后端 ────────────────────────────────────────────
-
-def _resolve_hanlp(text: str, known: list[str] | None) -> list[dict]:
-    """HanLP 共指消解管线。失败 → [] + 降级提示。"""
-    try:
-        import hanlp
-    except ImportError:
-        print("[nn_coref_bridge] HanLP 未安装·降级 rule 后端", file=sys.stderr)
-        return _resolve_rule(text, known)
-
-    text = _strip_changes(text)
-    try:
-        # 加载共指消解模型
-        coref_model = os.environ.get("COREF_HANLP_MODEL",
-                                     hanlp.pretrained.coref.COREF_ELECTRA_SMALL_ZH)
-        pipe = hanlp.load(coref_model)
-        clusters = pipe(text)
-    except Exception as e:
-        print(f"[nn_coref_bridge] HanLP 推理失败·降级 rule：{type(e).__name__}: {str(e)[:120]}",
-              file=sys.stderr)
-        return _resolve_rule(text, known)
-
-    if not clusters:
-        return []
-
-    # 将 HanLP 输出转换为统一格式
-    # HanLP coref 输出：list of clusters，每个 cluster 是 list of mentions
-    # 每个 mention 可能是 (text, start, end) 或类似结构
-    results = []
-    known_set = set(known) if known else set()
-
-    try:
-        for cluster in clusters:
-            if not isinstance(cluster, (list, tuple)) or len(cluster) < 2:
-                continue
-            # 找到 cluster 中的命名实体（角色名）
-            named_entity = None
-            for mention in cluster:
-                mention_text = mention[0] if isinstance(mention, (list, tuple)) else str(mention)
-                if mention_text in known_set:
-                    named_entity = mention_text
-                    break
-            if not named_entity:
-                # 取最长的 mention 作为实体名
-                sorted_mentions = sorted(cluster, key=lambda m: len(m[0] if isinstance(m, (list, tuple)) else str(m)), reverse=True)
-                named_entity = sorted_mentions[0][0] if isinstance(sorted_mentions[0], (list, tuple)) else str(sorted_mentions[0])
-
-            for mention in cluster:
-                if isinstance(mention, (list, tuple)):
-                    m_text, m_start, m_end = mention[0], mention[1], mention[2] if len(mention) > 2 else mention[1] + len(mention[0])
-                else:
-                    m_text = str(mention)
-                    m_start, m_end = 0, len(m_text)
-
-                if m_text == named_entity:
-                    continue  # 跳过实体本身
-                if m_text in _ALL_PRONOUNS or len(m_text) <= 2:
-                    results.append({
-                        "mention": m_text,
-                        "span": [m_start, m_end],
-                        "resolved_to": named_entity,
-                        "confidence": 0.8,
-                        "backend": "hanlp",
-                        "ambiguous": False,
-                    })
-    except Exception as e:
-        print(f"[nn_coref_bridge] HanLP 输出解析失败·降级 rule："
-              f"{type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
-        return _resolve_rule(text, known)
-
-    return results
-
-
 # ── 主函数 ────────────────────────────────────────────────
 
 def resolve_coreferences(
@@ -289,7 +213,7 @@ def resolve_coreferences(
     """共指消解：将代词解析到具体角色。
 
     返回: [{"mention": "他", "span": [45, 46], "resolved_to": "张三",
-            "confidence": 0.8, "backend": "rule|hanlp", "ambiguous": bool}, ...]
+            "confidence": 0.8, "backend": "rule", "ambiguous": bool}, ...]
 
     门控关闭 / 任何失败 → 返回 []·不崩。
     """
@@ -297,9 +221,6 @@ def resolve_coreferences(
         return []
 
     try:
-        backend = _backend()
-        if backend == "hanlp":
-            return _resolve_hanlp(text, known_characters)
         return _resolve_rule(text, known_characters)
     except Exception as e:  # noqa: BLE001 — 绝不崩主流水线
         print(f"[nn_coref_bridge] 异常·返回空列表："
@@ -313,7 +234,7 @@ def main():
     """CLI 自测：python nn_coref_bridge.py "文本" [--characters 张三,李四]"""
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="共指消解桥（HanLP/rule 后端）")
+    ap = argparse.ArgumentParser(description="共指消解桥（rule 后端）")
     ap.add_argument("text", nargs="?",
                     default="张三走到窗前。他叹了口气。李四看着她，那个人似乎很疲惫。",
                     help="输入文本")
@@ -322,7 +243,7 @@ def main():
     args = ap.parse_args()
 
     known = args.characters.split(",") if args.characters else None
-    print(f"enabled={enabled()}  backend={_backend()}")
+    print(f"enabled={enabled()}  backend=rule")
     results = resolve_coreferences(args.text, known)
     for r in results:
         print(json.dumps(r, ensure_ascii=False))

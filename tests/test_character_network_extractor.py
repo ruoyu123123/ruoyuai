@@ -6,8 +6,10 @@
 确定性·零网络·零外部依赖（mock jieba/renard）。"""
 import json
 import os
+import re
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -134,6 +136,85 @@ def test_orphan_dialogue_count(monkeypatch):
     result = mod.extract_character_network(text, ["张三"])
     # 引号对话但无明确归属 → orphan
     assert result.get("orphan_dialogues", 0) >= 0  # 不崩即可
+
+
+# ── 代词发言人 coref 兜底（2026-07-02）────────────────────────
+# "张三" 距引号开头超过 30 字·30 字回扫必然找不到角色名·逼出 coref 兜底路径
+_PRONOUN_SPEAKER_TEXT = (
+    "张三独自坐在酒楼靠窗的位置，窗外的雨已经下了整整一个下午都没有停过，"
+    "街道上几乎看不见什么行人，气氛安静得让人心里发闷。"
+    '他说："你来得真早。"'
+)
+
+
+def _fake_resolve_pronoun_to_zhangsan(text, known_characters=None):
+    """content-aware 假共指消解（测试专用）：把文本里所有"他"消解到张三。"""
+    results = []
+    for m in re.finditer("他", text):
+        results.append({
+            "mention": "他", "span": [m.start(), m.end()],
+            "resolved_to": "张三", "confidence": 0.9,
+            "backend": "fake", "ambiguous": False,
+        })
+    return results
+
+
+def test_pronoun_dialogue_resolved_via_coref_bridge(monkeypatch):
+    """门控开 + mock 桥 → 代词发言人（"他说"）被正确归属为具体角色名，
+    attribution_method 标 "coref"。"""
+    monkeypatch.setenv("RUOYU_NN_COREF", "1")
+    fake_bridge = types.SimpleNamespace(
+        resolve_coreferences=_fake_resolve_pronoun_to_zhangsan)
+    monkeypatch.setitem(sys.modules, "nn_coref_bridge", fake_bridge)
+
+    dialogues = mod._attribute_dialogue(_PRONOUN_SPEAKER_TEXT, ["张三", "李四"])
+    target = next(d for d in dialogues if d["content"] == "你来得真早。")
+    assert target["speaker"] == "张三"
+    assert target["attribution_method"] == "coref"
+
+
+def test_pronoun_dialogue_coref_empty_bridge_zero_regression(monkeypatch):
+    """门控开但桥返回 [] → 输出与门控关（默认）完全一致（零回归证明）。"""
+    monkeypatch.delenv("RUOYU_NN_COREF", raising=False)
+    baseline = mod._attribute_dialogue(_PRONOUN_SPEAKER_TEXT, ["张三", "李四"])
+
+    monkeypatch.setenv("RUOYU_NN_COREF", "1")
+    empty_bridge = types.SimpleNamespace(
+        resolve_coreferences=lambda text, known_characters=None: [])
+    monkeypatch.setitem(sys.modules, "nn_coref_bridge", empty_bridge)
+    with_empty_bridge = mod._attribute_dialogue(_PRONOUN_SPEAKER_TEXT, ["张三", "李四"])
+
+    assert with_empty_bridge == baseline
+    target = next(d for d in baseline if d["content"] == "你来得真早。")
+    assert target["speaker"] is None  # 正则+回扫都抓不到、桥无结果 → 仍是 None
+
+
+def test_regex_attribution_not_overridden_by_coref(monkeypatch):
+    """正则能直接归属的对话（发言人是已知角色名）→ 不进入 coref 候选路径，
+    即使门控开 + 桥对该角色名给出"消解"结果，speaker 仍是正则归属结果、
+    attribution_method 仍是 "regex"（优先级验证：正则显式归属最优先不动）。"""
+    monkeypatch.setenv("RUOYU_NN_COREF", "1")
+
+    def _wrong_resolver(text, known_characters=None):
+        # 故意对已知角色名"张三"也给出消解结果·验证正则路径根本不会查询它
+        results = []
+        for m in re.finditer("张三", text):
+            results.append({
+                "mention": "张三", "span": [m.start(), m.end()],
+                "resolved_to": "李四", "confidence": 0.9,
+                "backend": "fake", "ambiguous": False,
+            })
+        return results
+
+    monkeypatch.setitem(
+        sys.modules, "nn_coref_bridge",
+        types.SimpleNamespace(resolve_coreferences=_wrong_resolver))
+
+    text = '张三说："你来得真早。"'
+    dialogues = mod._attribute_dialogue(text, ["张三", "李四"])
+    target = next(d for d in dialogues if d["content"] == "你来得真早。")
+    assert target["speaker"] == "张三"
+    assert target["attribution_method"] == "regex"
 
 
 # ── 中心性 ────────────────────────────────────────────────

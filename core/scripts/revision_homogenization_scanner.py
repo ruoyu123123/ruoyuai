@@ -36,6 +36,16 @@
 REVISION_REDUCED_AUTHOR_FIDELITY 绝不进 audit_hub.HARD_GATE_CODES。
 env REVISION_HOMOGENIZATION_MODE: off / shadow(默认) / active。
 
+【🔴 2026-07-01 语义路径升级（style_embed AP 0.887·经 embedding_store.compute_embedding 消费）】
+  上面三维指纹本就自认「PCA-ECDF SFS 完整版未实装的占位 fallback」（字面统计·非语义）。
+  真 embedding 后端就绪时（EMBED_BACKEND 非空非 hash，或配了 GEN_EMBED__* API），额外算
+  pre_fix/post_fix 的语义/风格 centroid 余弦距离——pre_fix（gen_fixer 修订前的原始产出）
+  天然是本 scanner 范围内可得的风格保真参照（呼应既有 pair_fallback「无作者档时两稿互比」
+  范式，只是把 3 维字面统计换成真语义向量），post_fix 与其的距离即修订造成的语义/风格漂移。
+  信号与数值指纹取「任一触发即报」（范式同 cross_scene_voice_drift_scanner 嵌入距离与统计
+  指纹取 max）。默认（无真后端·即 hash 袋）→ 只走原三维指纹逻辑，逐字节零回归（绝不拿
+  hash 袋子冒充语义·防制造比现在更差的假阳性/假阴性）。
+
 用法：python revision_homogenization_scanner.py <pre_fix> <post_fix> [--project <root>] [--blind-subset N]
 """
 from __future__ import annotations
@@ -49,6 +59,12 @@ import statistics
 import sys
 from pathlib import Path
 
+# 🔴 2026-07-01 语义路径升级：sys.path 自举·保证 embedding_store 可 import
+# （与 topic_drift_scanner.py 同款 bootstrap·本仓既有约定）。
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
 ISSUE_CODE = "REVISION_REDUCED_AUTHOR_FIDELITY"
 
 # function_word_fingerprint 同款 15 词 (与 style_analyzer.FUNCTION_WORDS 对齐 · 单一真理源)
@@ -61,6 +77,85 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 MIN_CJK = 500
 DELTA_SFS_FLOOR = 2.0  # advisory 触发阈
+
+
+# ── 🔴 2026-07-01 语义路径（真 embedding 后端才跑·范式抄 topic_drift_scanner）──────────
+def _has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+
+    原样复制自 topic_drift_scanner.py（本仓既有约定：每个 scanner 自带一份小 helper 副本，
+    不 import 跨 scanner 依赖）。也检查 .env 的 GEN_EMBED__* API 配置
+    （由 embedding_store._load_embed_profile 消费）。
+    """
+    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    if eb and eb != "hash":
+        return True
+    for k in os.environ:
+        if k.startswith("GEN_EMBED__"):
+            return True
+    return False
+
+
+# 🔬 待金标准校准：pre_fix→post_fix 语义/风格 centroid 余弦距离 ≥ 此值 → advisory 触发阈
+# （量纲是 cosine 距离 0-2·与上面 L1 z-distance 的 DELTA_SFS_FLOOR 不同标尺·各自独立阈值）。
+# env 可覆盖。
+DEFAULT_DELTA_SFS_SEMANTIC_FLOOR = 0.08
+
+
+def _semantic_floor() -> float:
+    """env REVISION_HOMOGENIZATION_EMBED_FLOOR 覆盖 > 默认值。非法值回退默认。"""
+    raw = os.environ.get("REVISION_HOMOGENIZATION_EMBED_FLOOR")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return DEFAULT_DELTA_SFS_SEMANTIC_FLOOR
+
+
+def _embedding_centroid(text: str, chunk: int = 500) -> "list[float] | None":
+    """按 chunk 切分求 embedding 均值并 L2 归一 → 该文本的语义/风格 centroid。
+    范式同 embedding_store.store_character_baseline / style_similarity_scanner._text_centroid
+    （chunk + 均值 + 归一·本仓既有 idiom）。无内容/编码异常/维度不一致 → None。"""
+    from embedding_store import compute_embedding
+    text = (text or "").strip()
+    if not text:
+        return None
+    chunks = [text[i:i + chunk] for i in range(0, len(text), chunk)]
+    embs = [compute_embedding(c) for c in chunks if c.strip()]
+    embs = [e for e in embs if e]
+    if not embs:
+        return None
+    dim = len(embs[0])
+    if any(len(e) != dim for e in embs):
+        return None
+    vec = [sum(e[i] for e in embs) / len(embs) for i in range(dim)]
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _semantic_pre_post_distance(pre_text: str, post_text: str) -> "dict | None":
+    """语义路径核心（真 embedding 后端才跑）：pre_fix 是 gen_fixer 修订前的原始产出，
+    天然是本 scanner 范围内可得的『风格保真』参照（无需另建作者语料 centroid，呼应既有
+    pair_fallback「无作者档 baseline 时两稿互比」范式，只是把 3 维字面指纹换成真语义向量）。
+    post_fix 与其的余弦距离即修订造成的语义/风格漂移量·越大同质化风险越高。
+    真后端不可用 / 编码失败 / 维度不符 → None（调用方回退数值指纹路径·绝不崩·
+    绝不拿 hash 袋子冒充语义）。"""
+    if not _has_real_embedding_backend():
+        return None
+    try:
+        from embedding_store import cosine_similarity, embedding_method
+        pre_c = _embedding_centroid(pre_text)
+        post_c = _embedding_centroid(post_text)
+    except Exception:
+        return None
+    if not pre_c or not post_c or len(pre_c) != len(post_c):
+        return None
+    sim = cosine_similarity(pre_c, post_c)
+    return {"distance": round(1.0 - sim, 4), "similarity": round(sim, 4),
+            "method": embedding_method(), "source": "embedding_semantic"}
 
 
 def _mode() -> str:
@@ -239,27 +334,60 @@ def scan(pre_fix_path, post_fix_path, project_root=None, blind_subset=None) -> d
     delta_sfs = post_sfs - pre_sfs
     out["delta_sfs"] = round(delta_sfs, 3)
 
+    # 🔴 2026-07-01 语义路径（真 embedding 后端才跑·加在数值指纹之后·绝不改上面任何一行）。
+    # pre_fix 是本 scanner 范围内天然可得的风格保真参照，post_fix 与其的语义/风格余弦距离
+    # 即修订造成的漂移量。真后端不可用（默认 hash 袋）→ sem=None，下面判定退化为纯数值
+    # 路径，逐字节零回归。
+    sem = _semantic_pre_post_distance(_strip_changes(pre_text), _strip_changes(post_text))
+    if sem is not None:
+        out["embedding_backend_active"] = True
+        out["embedding_method"] = sem["method"]
+        out["pre_fix_sfs_semantic"] = 0.0
+        out["post_fix_sfs_semantic"] = sem["distance"]
+        out["delta_sfs_semantic"] = sem["distance"]
+        out["semantic_floor"] = _semantic_floor()
+
     msg = None
     if delta_sfs >= DELTA_SFS_FLOOR:
         msg = (f"gen_fixer 修订后 SFS_distance({round(post_sfs,2)}) 比修订前"
                f"({round(pre_sfs,2)}) 增大 Δ={round(delta_sfs,2)} (>= {DELTA_SFS_FLOOR})·"
                f"修订把作者签名风格压扁 (revision_homogenization)")
-    if msg:
+
+    # 🔴 2026-07-01 语义信号追加判定：任一信号触发即报（范式同 cross_scene_voice_drift_scanner
+    # 「嵌入 cosine 距离与统计指纹取 max」）。sem=None（默认无真后端）时 sem_msg 恒 None，
+    # combined_msg 恒等于 msg 本身（下面 join 单元素列表不改变内容）——逐字节零回归。
+    sem_msg = None
+    if sem is not None and sem["distance"] >= out["semantic_floor"]:
+        sem_msg = (f"embedding 语义距离(pre→post)={sem['distance']} "
+                   f"(>= {out['semantic_floor']}·后端={sem['method']})·"
+                   f"修订把作者语义/风格压扁 (revision_homogenization)")
+
+    combined_msg = "；".join(m for m in (msg, sem_msg) if m) or None
+    if combined_msg:
+        match_method = None
+        if sem is not None:
+            match_method = ("numeric_fingerprint+embedding_semantic" if (msg and sem_msg)
+                            else "embedding_semantic" if sem_msg else "numeric_fingerprint")
         if mode == "active":
-            out["violations"].append({
+            v = {
                 "code": ISSUE_CODE,
                 "kind": "revision_homogenization",
                 "severity": "minor",
-                "message": msg,
+                "message": combined_msg,
                 "delta_sfs": round(delta_sfs, 3),
                 "pre_fix_sfs": round(pre_sfs, 3),
                 "post_fix_sfs": round(post_sfs, 3),
                 "_doc": "F2 revision SFS 反向下跌·建议放回 pre_fix 风格 + 重审 fixer prompt·绝不 hard_gate",
-            })
+            }
+            if match_method:
+                v["match_method"] = match_method
+            out["violations"].append(v)
             out["verdict"] = "FAIL_MINOR"
-            out["warning"] = msg
+            out["warning"] = combined_msg
         else:
-            print(f"[SHADOW] revision_homogenization: {msg} — 不上报", file=sys.stderr)
+            print(f"[SHADOW] revision_homogenization: {combined_msg} — 不上报", file=sys.stderr)
+        if match_method:
+            out["match_method"] = match_method
     out["violations_count"] = len(out["violations"])
     return out
 

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -190,3 +191,66 @@ def test_scene_lead_subject_basic():
     s = mod._scene_lead_subject("陆衍走到了门前。\n他看了看四周。")
     # 取得 head 中最频繁 surface
     assert isinstance(s, str)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 🔴 VAD/coref 模型接线回归
+#   (1) _emotion_intensity：VAD arousal 模型优先，不可用 → 回退标点密度+短句独行率启发式
+#   (2) _scene_lead_subject：nn_coref_bridge 优先解析段首指代，不可用 → 回退正则最频繁 token
+# ══════════════════════════════════════════════════════════════════════════
+def test_emotion_intensity_model_hit(monkeypatch):
+    """RUOYU_NN_VAD=1 + 假模型 arousal 高 → 情感强度取模型均值(不再走标点/短句启发式)。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts: [
+            {"valence": 0.5, "arousal": 0.95, "dominance": None, "source": "model"}
+            for _ in texts
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    # 无情绪标点(！？…)、无短句独行 → 旧启发式必为 0，模型给 0.95 证明模型路径生效
+    text = "他走进房间，坐下，翻开桌上那本厚厚的书，慢慢读了起来，没有说话。" * 5
+    e = mod._emotion_intensity(text)
+    assert e == 0.95
+
+
+def test_emotion_intensity_model_unavailable_matches_heuristic_fallback(monkeypatch):
+    """RUOYU_NN_VAD=1 但模型返回 None(不可用) → 与门控完全关闭时启发式结果逐字节一致（零回归）。"""
+    text = "怒吼！冲过来！斩出！" * 30
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    e_model_unavailable = mod._emotion_intensity(text)
+
+    monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+    e_off = mod._emotion_intensity(text)
+    assert e_model_unavailable == e_off > 0
+
+
+def test_scene_lead_subject_coref_model_hit(monkeypatch):
+    """RUOYU_NN_COREF=1 + 假桥把"他"解析到具体角色名 → 优先于正则最频繁 token 回退。"""
+    monkeypatch.setenv("RUOYU_NN_COREF", "1")
+    fake_bridge = types.SimpleNamespace(
+        resolve_coreferences=lambda text, known=None: [
+            {"mention": "他", "span": [0, 1], "resolved_to": "陆衍",
+             "confidence": 0.9, "backend": "hanlp", "ambiguous": False}
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_coref_bridge", fake_bridge)
+    s = mod._scene_lead_subject("他走进来，四下张望。", ["陆衍"])
+    assert s == "陆衍"
+
+
+def test_scene_lead_subject_coref_empty_result_matches_default(monkeypatch):
+    """RUOYU_NN_COREF=1 但桥返回空列表(无解析结果) → 与门控完全关闭时输出逐字节一致（零回归）。"""
+    text = "陆衍走到了门前。\n他看了看四周。"
+    cast = ["陆衍"]
+
+    s_default = mod._scene_lead_subject(text, cast)  # 门控未设置·真实桥内部 gate off → []
+
+    monkeypatch.setenv("RUOYU_NN_COREF", "1")
+    fake_bridge = types.SimpleNamespace(resolve_coreferences=lambda t, known=None: [])
+    monkeypatch.setitem(sys.modules, "nn_coref_bridge", fake_bridge)
+    s_empty_result = mod._scene_lead_subject(text, cast)
+
+    assert s_default == s_empty_result

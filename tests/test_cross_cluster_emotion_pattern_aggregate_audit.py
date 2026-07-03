@@ -18,6 +18,8 @@ import json
 import os
 import sys
 import tempfile
+import types
+from collections import Counter
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -182,6 +184,122 @@ def test_ledger_path_active_no_crash_empty_findings_possible():
     findings, report = _run_with_ledger(chapters, "陆衍")
     assert report["scan_type"] == "emotion_pattern"
     assert isinstance(findings, list)
+
+
+# ============================================================
+# 🔴 2026-07-01 emotion_vad 模型集成测试(source=model_vad|lexicon_fallback|mixed·零回归)
+# ============================================================
+
+def test_model_valence_classifies_to_nearest_emotion(monkeypatch):
+    """RUOYU_NN_VAD=1 + 桥命中 valence → 最近邻分类到 EMOTION_KEYWORDS 7 类之一·source=model_vad。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts: [
+            {"valence": 0.95, "arousal": 0.6, "dominance": None, "source": "model"}
+            for _ in texts
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    detail = epa.detect_emotions_for_char_detail("陆衍笑了笑，转身离开。" * 3, "陆衍")
+    assert detail["source"] == "model_vad"
+    assert detail["model_window_count"] > 0
+    assert detail["lexicon_window_count"] == 0
+    # valence=0.95 离 joyful(1.0)最近 → 应全部分到 joyful
+    assert detail["counts"]["joyful"] == detail["model_window_count"]
+
+
+def test_model_unavailable_matches_default_keyword_counts_exactly(monkeypatch):
+    """零回归契约：RUOYU_NN_VAD=1 但桥返回全 None(模型不可用) → counts 必须与默认(不开模型)
+    逐字节一致(dict 全等，不只是 top emotion 一致)。"""
+    text = "陆衍紧张地咬紧牙关，手心全是汗。" * 3
+    baseline = dict(epa.detect_emotions_for_char(text, "陆衍"))  # 默认(env 未设)行为
+
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    detail = epa.detect_emotions_for_char_detail(text, "陆衍")
+    assert dict(detail["counts"]) == baseline
+    assert detail["source"] == "lexicon_fallback"
+    assert baseline.get("anxious", 0) > 0  # 确认真的走了关键词命中(非空对比无意义)
+
+
+def test_no_mentions_returns_none_source():
+    """角色名未出现 → 无窗口可扫，source=none(既不是模型也不是词典)。"""
+    detail = epa.detect_emotions_for_char_detail("平淡无奇的一段话，没有主角登场。", "陆衍")
+    assert detail["source"] == "none"
+    assert detail["counts"] == Counter()
+    assert detail["model_window_count"] == 0
+    assert detail["lexicon_window_count"] == 0
+
+
+def test_detect_emotions_for_char_still_returns_counter_backward_compat():
+    """向后兼容：detect_emotions_for_char 签名/返回类型不变(cluster_summary_builder.py 直接消费)。"""
+    counts = epa.detect_emotions_for_char("陆衍紧张地咬紧牙关，手心全是汗。" * 3, "陆衍")
+    assert isinstance(counts, Counter)
+    assert counts["anxious"] > 0
+
+
+def test_nearest_emotion_by_valence_boundaries():
+    """最近邻分类锚点(与 emotion_curve_rescan_scanner.EMOTION_VALENCE 同源数值)边界正确。"""
+    assert epa._nearest_emotion_by_valence(1.0) == "joyful"
+    assert epa._nearest_emotion_by_valence(0.0) == "sad"
+
+
+def _mk_raw_project(chapters: dict):
+    """非 ledger 路径：写原始 第NNN章/第NNN章.txt 磁盘结构(不设 CLUSTER_MODE·驱动 main() 直扫文本)。"""
+    td = tempfile.mkdtemp()
+    proj = Path(td)
+    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
+    for ch, text in chapters.items():
+        chdir = proj / "章节" / f"第{ch:03d}章"
+        chdir.mkdir(parents=True, exist_ok=True)
+        (chdir / f"第{ch:03d}章.txt").write_text(text, encoding="utf-8")
+    return proj
+
+
+def _run_main_raw(proj, char="陆衍", last_n=10):
+    bak_argv = sys.argv[:]
+    bak_mode = os.environ.get("CLUSTER_MODE")
+    try:
+        os.environ.pop("CLUSTER_MODE", None)  # 强制非 cluster 模式 → 走原始磁盘扫描分支
+        sys.argv = ["epa", str(proj), "--characters", char, "--last-n", str(last_n)]
+        try:
+            epa.main()
+        except SystemExit:
+            pass
+    finally:
+        sys.argv = bak_argv
+        if bak_mode is None:
+            os.environ.pop("CLUSTER_MODE", None)
+        else:
+            os.environ["CLUSTER_MODE"] = bak_mode
+    scan_dir = proj / "_数据库" / ".cross_chapter_scan"
+    reports = sorted(scan_dir.glob("emotion_pattern_*.json"))
+    assert reports, "未产出 emotion_pattern 报告"
+    return json.loads(reports[-1].read_text(encoding="utf-8"))
+
+
+def test_main_raw_disk_path_reports_vad_source_lexicon_by_default():
+    """非 cluster 模式(原始磁盘扫描路径)默认(env 不开 RUOYU_NN_VAD)：
+    report.vad_source=lexicon_fallback·model_window_count=0(零回归)。"""
+    proj = _mk_raw_project({
+        1: "陆衍紧张地咬紧牙关，手心全是汗。" * 3,
+        2: "陆衍笑了笑，很高兴地转身离开。" * 3,
+    })
+    report = _run_main_raw(proj)
+    assert report["vad_source"] == "lexicon_fallback"
+    assert report["vad_model_window_count"] == 0
+    assert report["vad_lexicon_window_count"] > 0
+
+
+def test_main_ledger_path_reports_not_applicable_ledger_mode():
+    """ledger 路径(cluster 模式)不做文本扫描 → vad_source 应标 not_applicable_ledger_mode
+    (与 model/lexicon 归因无关·避免误读为「用了词典」)。"""
+    chapters = {1: {"calm": 2}, 2: {"anxious": 2}}
+    _, report = _run_with_ledger(chapters, "陆衍")
+    assert report["vad_source"] == "not_applicable_ledger_mode"
+    assert report["vad_model_window_count"] == 0
+    assert report["vad_lexicon_window_count"] == 0
 
 
 if __name__ == "__main__":

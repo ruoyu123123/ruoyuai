@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
-"""cn_emotion_vad_drift_scanner R24 W12 Batch-KK · P1"""
+"""cn_emotion_vad_drift_scanner R24 W12 Batch-KK · P1
+
+🔴 2026-07-01 NN情绪VAD集成回归：signal A(_signal_a_drift/_model_va_for_words) 的 source
+归因·核心断言=NN 开启但桥未命中时输出必须与 NN 完全关闭时逐字节一致(零回归)。
+"""
 import json
 import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -200,3 +205,139 @@ def test_audit_hub_integrates_scanner():
     src = (_SCRIPTS / "audit_hub.py").read_text(encoding="utf-8")
     assert "cn_emotion_vad_drift_scanner" in src
     assert "CN_EMOTION_ANGLO_DRIFT" in src
+
+
+# ═══════════════ 🔴 2026-07-01 NN情绪VAD集成回归(signal A) ═══════════════
+
+_ANGLO_DRIFT_TEXT = ("他悲愤地看着窘迫的对方，只剩惆怅。\n\n") * 80
+
+
+def test_model_va_for_words_off_by_default(monkeypatch):
+    """env 未开(默认) → _model_va_for_words 空 dict·不碰 FeatureStore/nn_vad_bridge。"""
+    monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+    assert mod._model_va_for_words("他悲愤地看着窘迫的对方。", ["悲愤", "窘迫"]) == {}
+
+
+def test_model_va_for_words_empty_words_list():
+    assert mod._model_va_for_words("随便文本", []) == {}
+
+
+def test_model_va_for_words_model_source_when_enabled(monkeypatch):
+    """env 开 + 桥命中模型 → 每个命中词返回窗口平均 (v, a)。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [
+        {"valence": 0.42, "arousal": 0.24, "dominance": None, "source": "model"} for _ in texts
+    ])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    out = mod._model_va_for_words("他悲愤地看着窘迫的对方，只剩惆怅。", ["悲愤", "窘迫", "惆怅"])
+    assert set(out.keys()) == {"悲愤", "窘迫", "惆怅"}
+    for w in out:
+        assert abs(out[w][0] - 0.42) < 1e-9
+        assert abs(out[w][1] - 0.24) < 1e-9
+
+
+def test_model_va_for_words_bridge_miss_returns_empty(monkeypatch):
+    """env 开但桥未命中(全 None) → 空 dict(调用方回退占位坐标)。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    assert mod._model_va_for_words("他悲愤地看着窘迫的对方。", ["悲愤", "窘迫"]) == {}
+
+
+def test_model_va_for_words_no_hit_skips_model_call(monkeypatch):
+    """词典词未在文中出现 → 窗口为空 → 根本不调模型(省一次 subprocess)。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    calls = []
+
+    def fake_predict(texts, timeout=None):
+        calls.append(texts)
+        return [{"valence": 0.5, "arousal": 0.5, "dominance": None, "source": "model"} for _ in texts]
+
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", types.SimpleNamespace(predict_batch=fake_predict))
+    out = mod._model_va_for_words("天气真好，风和日丽。", ["悲愤"])
+    assert out == {}
+    assert calls == []
+
+
+def test_signal_a_drift_model_unavailable_matches_lexicon_baseline(monkeypatch):
+    """🔴 零回归核心断言：NN 开启但桥返回 None → _signal_a_drift 须与 NN 完全关闭时逐字节一致。"""
+    monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+    baseline = mod._signal_a_drift(_ANGLO_DRIFT_TEXT)
+    assert baseline["drift_words"], "fixture 应至少命中词典(否则本测试无意义)"
+    assert baseline["source"] == "lexicon_fallback"
+
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    r_none = mod._signal_a_drift(_ANGLO_DRIFT_TEXT)
+    assert r_none == baseline
+
+
+def test_signal_a_drift_model_source_when_enabled(monkeypatch):
+    """env 开 + 桥命中模型 → CVAW 占位坐标一侧被模型读数取代·NRC 一侧不变·source 标 model_vad。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [
+        {"valence": 0.9, "arousal": 0.9, "dominance": None, "source": "model"} for _ in texts
+    ])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    r = mod._signal_a_drift(_ANGLO_DRIFT_TEXT)
+    assert r["source"] == "model_vad"
+    assert r["drift_words"]
+    assert all(h["source"] == "model_vad" for h in r["drift_words"])
+    # 按「模型读数替换 CVAW 一侧·NRC 一侧不变」口径重算期望的加权 avg_dv/avg_da 自洽校验
+    nrc = mod._NRC_VAD_CN["_words"]
+    counts = [h["count"] for h in r["drift_words"]]
+    total = sum(counts)
+    expect_dv = round(sum((0.9 - nrc[h["word"]][0]) * h["count"] for h in r["drift_words"]) / total, 4)
+    expect_da = round(sum((0.9 - nrc[h["word"]][1]) * h["count"] for h in r["drift_words"]) / total, 4)
+    assert r["avg_dv"] == expect_dv
+    assert r["avg_da"] == expect_da
+
+
+def test_signal_a_drift_no_match_returns_none_source():
+    """无命中词 → source='none'(与原 avg_dv/avg_da=0.0 行为一致，新增字段不影响该分支)。"""
+    r = mod._signal_a_drift("天气真好，风和日丽。")
+    assert r == {"avg_dv": 0.0, "avg_da": 0.0, "drift_words": [], "source": "none"}
+
+
+def test_scan_signal_a_source_surfaces_model_vad(monkeypatch):
+    """scan() 顶层 signal_a_anglo_drift 透传 source 字段(供训练数据归因)。"""
+    bak = os.environ.get("CN_EMOTION_VAD_MODE")
+    try:
+        _set_mode("active")
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [
+            {"valence": 0.9, "arousal": 0.9, "dominance": None, "source": "model"} for _ in texts
+        ])
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        out = mod.scan(_write(_ANGLO_DRIFT_TEXT))
+        assert out["signal_a_anglo_drift"]["source"] == "model_vad"
+    finally:
+        _set_mode(bak)
+
+
+def test_scan_model_unavailable_matches_lexicon_baseline(monkeypatch):
+    """🔴 零回归核心断言：NN 开启但桥返回 None → scan() 完整输出须与 NN 完全关闭时逐字节一致。"""
+    bak = os.environ.get("CN_EMOTION_VAD_MODE")
+    try:
+        _set_mode("active")
+        draft = _write(_ANGLO_DRIFT_TEXT)
+        monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+        baseline = mod.scan(draft)
+        assert baseline["signal_a_anglo_drift"]["drift_words"]
+
+        monkeypatch.setenv("RUOYU_NN_VAD", "1")
+        fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+        monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+        with_model_unavailable = mod.scan(draft)
+        assert with_model_unavailable == baseline
+    finally:
+        _set_mode(bak)
+
+
+def test_code_not_in_hard_gate_after_nn_integration():
+    """确认 NN 集成后 5 个 issue code 仍不在 hard_gate 清单(北极星⑤守卫·与已有守卫测试重复保险)。"""
+    rg = _ROOT / "core" / "scripts" / "scanner_registry.json"
+    reg = json.loads(rg.read_text(encoding="utf-8"))
+    hgs = set(reg.get("hard_gate_codes", []))
+    assert mod.ISSUE_CODE_ANGLO_DRIFT not in hgs

@@ -18,8 +18,9 @@ for p in (str(_ROOT), str(_ROOT / "core" / "scripts")):
 # 无论测试用 monkeypatch 还是裸 os.environ·都杜绝跨测试残留（finally 兜底清理）。
 _NN_GATES = (
     "RUOYU_NN_SURPRISAL", "RUOYU_NN_COHERENCE", "RUOYU_NN_VAD",
-    "RUOYU_NN_COREF", "RUOYU_CHARACTER_NETWORK",
+    "RUOYU_NN_COREF", "RUOYU_CHARACTER_NETWORK", "RUOYU_NN_NLI",
     "RUOYU_FEATURE_STORE", "RUOYU_DATA_FLYWHEEL", "RUOYU_MODEL_REGISTRY",
+    "RUOYU_PREF_RANKER",
 )
 
 

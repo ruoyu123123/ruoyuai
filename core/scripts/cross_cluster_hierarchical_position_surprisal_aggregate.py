@@ -9,7 +9,12 @@ IUH grounding】
 
 SCH (Surprisal at Chunk Hierarchies)：边界位置(段落 PARA / 场景 SCENE /
 cluster 末 CLUSTER_END)前后的『信息惊异度』应有阶层分布——边界级别越高·
-惊异度跃升越显著。用 frequency-rank surprise 作 LM-free 替身：
+惊异度跃升越显著。
+
+【2026-07-01 接入真模型】边界左右窗口的『惊异度』优先调用已训练部署的
+surprisal_gpt2(经 nn_surprisal_bridge / feature_cache 二选一取 mean_surprisal)
+算真实差值；RUOYU_NN_SURPRISAL 未开启 / 模型不可用时逐条回退下面这套
+frequency-rank 代理(LM-free·零回归兜底)：
   surprisal(token) = -log( freq(token) / N )
 
 【三类边界 + KL 散度】
@@ -27,7 +32,7 @@ cluster 末 CLUSTER_END)前后的『信息惊异度』应有阶层分布——�
 【北极星⑤】顾问非法官·全 advisory·env HIERARCHICAL_POSITION_SURPRISAL_MODE
   shadow 默认·SCH_HIERARCHY_INVERTED 绝不 hard_gate。
   作者档 quantitative.sch_baseline{delta_para/delta_scene/delta_cluster_end}
-  可旁路·零依赖纯 token freq surprise。
+  可旁路·RUOYU_NN_SURPRISAL 不开时零依赖(纯 token freq surprise·无需模型/联网)。
 
 用法: python cross_cluster_hierarchical_position_surprisal_aggregate.py <project> [--last-n 10]
 """
@@ -112,6 +117,106 @@ def _avg_around(surps, idx, w=20):
     return (sum(right) / len(right)) - (sum(left) / len(left))
 
 
+# ============ 真模型 GPT-2 surprisal（优先·2026-07-01）============
+# 边界左右窗口喂 surprisal_gpt2(nn_surprisal_bridge)算真实差值；不可用时下方各
+# _compute_*_deltas（frequency-rank 代理）保持逐字节不变（零回归兜底）。
+
+_MODEL_WINDOW_CHARS = 30      # 边界前后各取多少字符窗口喂模型(GPT-2 需要一定上下文才稳定)
+_MODEL_MIN_WINDOW_CHARS = 6   # 窗口过短(贴段首/段尾)跳过模型·交给频次代理
+
+
+def _predict_surprisal_batch(texts: list[str]) -> list[dict | None]:
+    """优先 FeatureStore(带缓存)→ 回退 nn_surprisal_bridge 直连·与 surprisal_scanner 同构。
+    RUOYU_NN_SURPRISAL 未开启/模型不可用 → 全 None(调用方回退频次代理·不变)。"""
+    if not texts:
+        return []
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
+        from feature_cache import FeatureStore, enabled as feature_store_enabled
+        if feature_store_enabled():
+            return FeatureStore.get().compute_surprisal_batch(texts)
+    except Exception:  # noqa: BLE001 FeatureStore 故障 → 退 bridge，绝不影响 scanner
+        pass
+    try:
+        import nn_surprisal_bridge as bridge
+    except ImportError:
+        return [None] * len(texts)
+    return bridge.predict_batch(texts)
+
+
+def _model_boundary_deltas(left_windows: list[str], right_windows: list[str]) -> list[float | None]:
+    """对一批边界的『左窗口/右窗口』文本各自算 GPT-2 mean_surprisal·返回逐边界(右-左)差值。
+    任一侧模型未命中 → 该边界位 None(不进入均值·跟 antagonist_valence_trajectory
+    ._model_window_valence 一样只对命中项取平均)。"""
+    n = len(left_windows)
+    if n == 0 or n != len(right_windows):
+        return []
+    preds = _predict_surprisal_batch(left_windows + right_windows)
+    if len(preds) != 2 * n:
+        return [None] * n
+    left_preds, right_preds = preds[:n], preds[n:]
+    out: list[float | None] = []
+    for lp, rp in zip(left_preds, right_preds):
+        if (lp and rp and lp.get("mean_surprisal") is not None
+                and rp.get("mean_surprisal") is not None):
+            out.append(float(rp["mean_surprisal"]) - float(lp["mean_surprisal"]))
+        else:
+            out.append(None)
+    return out
+
+
+def _windowed_model_delta(spans: list[str]) -> float | None:
+    """对一组已切好的文本片段(paras/scenes)相邻边界取左右窗口·跑真模型算平均 ΔS。
+    片段不足 2 个 / 窗口太短 / 模型全未命中 → None(调用方回退频次代理)。"""
+    if len(spans) < 2:
+        return None
+    left_windows, right_windows = [], []
+    for i in range(len(spans) - 1):
+        left = spans[i][-_MODEL_WINDOW_CHARS:]
+        right = spans[i + 1][:_MODEL_WINDOW_CHARS]
+        if len(left) < _MODEL_MIN_WINDOW_CHARS or len(right) < _MODEL_MIN_WINDOW_CHARS:
+            continue
+        left_windows.append(left)
+        right_windows.append(right)
+    if not left_windows:
+        return None
+    deltas = _model_boundary_deltas(left_windows, right_windows)
+    valid = [d for d in deltas if d is not None]
+    if not valid:
+        return None
+    return sum(valid) / len(valid)
+
+
+def _compute_para_deltas_model(text: str) -> float | None:
+    """段间边界 ΔS·真模型版(GPT-2 surprisal)。无有效边界/模型不可用 → None。"""
+    paras = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(paras) < 3:
+        return None
+    return _windowed_model_delta(paras)
+
+
+def _compute_scene_deltas_model(text: str) -> float | None:
+    """场景间边界 ΔS·真模型版(GPT-2 surprisal)。无有效边界/模型不可用 → None。"""
+    scenes = re.split(r"\n{3,}|^#+\s*scene[^\n]*\n", text, flags=re.M | re.I)
+    scenes = [s for s in scenes if s and _cjk_count(s) > 100]
+    if len(scenes) < 2:
+        return None
+    return _windowed_model_delta(scenes)
+
+
+def _compute_cluster_end_delta_model(text: str) -> float | None:
+    """末段(后 15%) vs 前段边界 ΔS·真模型版(GPT-2 surprisal)。太短/模型不可用 → None。"""
+    if len(text) < 100:
+        return None
+    tail_start = int(len(text) * 0.85)
+    head_window = text[max(0, tail_start - _MODEL_WINDOW_CHARS):tail_start]
+    tail_window = text[tail_start:tail_start + _MODEL_WINDOW_CHARS]
+    if len(head_window) < _MODEL_MIN_WINDOW_CHARS or len(tail_window) < _MODEL_MIN_WINDOW_CHARS:
+        return None
+    deltas = _model_boundary_deltas([head_window], [tail_window])
+    return deltas[0] if deltas else None
+
+
 def _compute_para_deltas(text, freqs, total):
     """段间边界 ΔS。"""
     paras = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
@@ -164,17 +269,31 @@ def _compute_cluster_end_delta(text, freqs, total):
 
 
 def _scan_cluster(text):
-    """对单 cluster/章 文本计算三类 ΔS。"""
+    """对单 cluster/章 文本计算三类 ΔS。优先真模型(GPT-2 surprisal)·逐项不可用回退频次代理(不变)。"""
     tokens = _tokenize(text)
     if len(tokens) < 100:
         return None
     freqs = Counter(tokens)
     total = sum(freqs.values())
+
+    para_model = _compute_para_deltas_model(text)
+    scene_model = _compute_scene_deltas_model(text)
+    cend_model = _compute_cluster_end_delta_model(text)
+
+    delta_para = para_model if para_model is not None else _compute_para_deltas(text, freqs, total)
+    delta_scene = scene_model if scene_model is not None else _compute_scene_deltas(text, freqs, total)
+    delta_cend = cend_model if cend_model is not None else _compute_cluster_end_delta(text, freqs, total)
+
     return {
-        "delta_para": round(_compute_para_deltas(text, freqs, total), 4),
-        "delta_scene": round(_compute_scene_deltas(text, freqs, total), 4),
-        "delta_cluster_end": round(_compute_cluster_end_delta(text, freqs, total), 4),
+        "delta_para": round(delta_para, 4),
+        "delta_scene": round(delta_scene, 4),
+        "delta_cluster_end": round(delta_cend, 4),
         "tokens": len(tokens),
+        "source": {
+            "delta_para": "model" if para_model is not None else "heuristic",
+            "delta_scene": "model" if scene_model is not None else "heuristic",
+            "delta_cluster_end": "model" if cend_model is not None else "heuristic",
+        },
     }
 
 

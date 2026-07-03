@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -129,6 +130,40 @@ def test_emotion_context_window():
     text = "震惊! 久久没有回应。"
     n = mod._emotion_context_match(text)
     assert n == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 🔴 VAD 模型接线回归：silence_emotional_context_match 优先用 VAD 窗口强度
+# (arousal H/VH bin 或 valence 偏离中性)，模型未启用/不可用 → 回退固定情绪词表（零回归）。
+# ══════════════════════════════════════════════════════════════════════════
+def test_emotion_context_match_model_hit(monkeypatch):
+    """RUOYU_NN_VAD=1 + 假模型高强度 → 窗口命中(即便窗口内无 EMOTION_CONTEXT 关键词)。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts: [
+            {"valence": 0.5, "arousal": 0.9, "dominance": None, "source": "model"}
+            for _ in texts
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    # "沉默片刻"触发 GAP_MARKERS·窗口内无 EMOTION_CONTEXT 词表任何关键词·旧词典路径必为 0
+    text = "他沉默片刻，然后转身离开，走进厨房，拿起水杯喝了一口水。"
+    assert mod.EMOTION_CONTEXT.search(text) is None  # 前置确认：窗口内确无关键词
+    n = mod._emotion_context_match(text)
+    assert n == 1
+
+
+def test_emotion_context_match_model_unavailable_matches_lexicon_fallback(monkeypatch):
+    """RUOYU_NN_VAD=1 但模型返回 None(不可用) → 与门控完全关闭时命中数逐一致（零回归）。"""
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    n_model_unavailable = mod._emotion_context_match(_RICH_SILENCE_TEXT)
+
+    monkeypatch.delenv("RUOYU_NN_VAD", raising=False)
+    n_off = mod._emotion_context_match(_RICH_SILENCE_TEXT)
+    assert n_model_unavailable == n_off
+    assert n_off > 0
 
 
 def test_read_failure_returns_note():

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -117,6 +118,32 @@ def test_valence_series_recorded():
     proj = _mk_project(antagonists=[{"name": "黑老大"}], drafts=drafts)
     rep = mod.scan(proj)
     assert len(rep["valence_per_cluster"]) == 2
+    assert rep["valence_per_cluster"][0]["source"] == "lexicon_fallback"
+    assert rep["valence_per_cluster"][0]["window_count"] > 0
+
+
+def test_vad_model_source_when_enabled(monkeypatch):
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(
+        predict_batch=lambda texts: [
+            {"valence": 0.73, "arousal": 0.5, "dominance": None, "source": "model"}
+            for _ in texts
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    detail = mod.compute_cluster_valence_detail("黑老大残忍残忍残忍" * 3, ["黑老大"])
+    assert detail["source"] == "model_vad"
+    assert detail["valence"] == 0.73
+    assert detail["model_window_count"] == detail["window_count"]
+
+
+def test_vad_model_unavailable_keeps_lexicon(monkeypatch):
+    monkeypatch.setenv("RUOYU_NN_VAD", "1")
+    fake_bridge = types.SimpleNamespace(predict_batch=lambda texts: [None for _ in texts])
+    monkeypatch.setitem(sys.modules, "nn_vad_bridge", fake_bridge)
+    detail = mod.compute_cluster_valence_detail("黑老大残忍冷血" * 3, ["黑老大"])
+    assert detail["source"] == "lexicon_fallback"
+    assert detail["valence"] < 0
 
 
 def test_gate_level_advisory():
