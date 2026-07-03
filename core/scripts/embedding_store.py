@@ -333,16 +333,188 @@ def embedding_method() -> str:
     return _detect_backend()[0]
 
 
+# ── 🔴 2026-07-03 Wave-4 性能层：embedding 缓存 + 批量 API ──────────────────────
+# 背景实测：ruoyu_style 后端每次调用=新起 venv 子进程加载模型（暖机 ~23s/次），但 16 条
+# batch 边际成本仅 1.6s/条——单条 compute_embedding 模式下 scanner 逐段调用完全不可用。
+# 根治：①(method, sha256(text)) 键内存+磁盘缓存（仅真后端·稳定语料如 prototype/锚点/skill
+# 段落一次编码终身命中）；②compute_embeddings_batch 把 misses 合并成一次后端批调用
+# （ruoyu_style 走既有 encode_batch 单子进程·API 走 list input）；③scanner 侧 scan() 开头
+# prefetch_embeddings(全部待编码文本)，其后既有的逐条 compute_embedding 调用全部命中缓存。
+# 纪律：失败绝不缓存（防 hash 兜底向量污染真后端键）；hash 后端不缓存（本身零成本）。
+
+_EMBED_MEM_CACHE: "dict[tuple[str, str], list[float]]" = {}
+_EMBED_CACHE_MAX_FILES = int(os.environ.get("RUOYU_EMBED_CACHE_MAX_FILES", "20000"))
+
+
+def _embed_cache_enabled() -> bool:
+    """磁盘+内存缓存开关（默认开·RUOYU_EMBED_CACHE=0 显式关）。"""
+    return os.environ.get("RUOYU_EMBED_CACHE", "1") != "0"
+
+
+def _embed_text_key(text: str) -> str:
+    """缓存键：sha256(text[:8000])[:24]——与各后端一致的 8000 截断口径。"""
+    return hashlib.sha256(((text or "")[:8000]).encode("utf-8")).hexdigest()[:24]
+
+
+def _embed_cache_dir(method: str) -> Path:
+    base = os.environ.get("RUOYU_EMBED_CACHE_DIR")
+    root = Path(base) if base else (_embed_repo_root() / "core" / "ml" / ".cache" / "embeddings")
+    safe = re.sub(r"[^0-9A-Za-z._-]", "_", method)
+    p = root / safe
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _embed_cache_get(method: str, key: str) -> "list[float] | None":
+    hit = _EMBED_MEM_CACHE.get((method, key))
+    if hit is not None:
+        return hit
+    fp = _embed_cache_dir(method) / f"{key}.json"
+    if not fp.exists():
+        return None
+    try:
+        vec = json.loads(fp.read_text(encoding="utf-8"))
+        if isinstance(vec, list) and vec:
+            _EMBED_MEM_CACHE[(method, key)] = vec
+            return vec
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def _embed_cache_put(method: str, key: str, vec: list) -> None:
+    _EMBED_MEM_CACHE[(method, key)] = vec
+    d = _embed_cache_dir(method)
+    try:
+        # 轻量容量护栏：超上限只留内存缓存，不再落盘（防无界增长）
+        if sum(1 for _ in d.glob("*.json")) >= _EMBED_CACHE_MAX_FILES:
+            return
+        tmp = d / f".{key}.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps(vec), encoding="utf-8")
+        os.replace(tmp, d / f"{key}.json")   # 原子替换·并行 scanner 安全
+    except OSError:
+        pass   # 磁盘缓存尽力而为·失败不影响主流程
+
+
 def compute_embedding(text: str) -> list[float]:
-    """真语义 embedding（降级链）。任何后端失败 → hash 兜底（永不崩，呼应 MAPE-K「失败记录降级」）。"""
+    """真语义 embedding（降级链）。任何后端失败 → hash 兜底（永不崩，呼应 MAPE-K「失败记录降级」）。
+
+    🔴 2026-07-03 Wave-4：真后端结果过 (method, text-hash) 缓存——先 prefetch_embeddings()
+    批量灌缓存，其后逐条调用零成本命中（hash 后端不缓存·失败兜底不缓存）。"""
     method, _dim, fn = _detect_backend()
+    use_cache = method != "hash" and _embed_cache_enabled()
+    key = _embed_text_key(text) if use_cache else ""
+    if use_cache:
+        hit = _embed_cache_get(method, key)
+        if hit is not None:
+            return hit
     try:
         v = fn(text)
         if v and len(v) > 0:
+            if use_cache:
+                _embed_cache_put(method, key, v)
             return v
     except Exception as e:
         print(f"[embedding_store] {method} 失败降级 hash: {str(e)[:120]}", file=sys.stderr)
     return _stable_hash_embedding(text, dim=384)
+
+
+def _backend_batch_compute(method: str, fn, texts: "list[str]") -> "list[list[float] | None]":
+    """按后端类型做一次真批量计算。返回与 texts 等长（失败条目 None·绝不抛）。"""
+    if method.startswith("ruoyu_style:"):
+        embs = ruoyu_style_encode_batch(texts, model="author")
+        return list(embs) if embs else [None] * len(texts)
+    if method.startswith("api:"):
+        prof = _load_embed_profile()
+        if prof:
+            try:
+                return _api_embed_batch(prof, texts)
+            except Exception as e:  # noqa: BLE001 — API 批量失败整批 None（调用方 hash 兜底）
+                print(f"[embedding_store] API 批量失败: {str(e)[:120]}", file=sys.stderr)
+                return [None] * len(texts)
+    # mstyle/local：模型已常驻进程内，逐条即批量（sentence-transformers 内部自带 batch）
+    out: "list[list[float] | None]" = []
+    for t in texts:
+        try:
+            v = fn(t)
+            out.append(v if v else None)
+        except Exception:  # noqa: BLE001
+            out.append(None)
+    return out
+
+
+def _api_embed_batch(profile: dict, texts: "list[str]") -> "list[list[float] | None]":
+    """OpenAI 兼容 embeddings API 原生支持 list input——一次请求编整批。逐条 L2 归一。"""
+    from openai import OpenAI
+    client = OpenAI(api_key=profile["api_key"], base_url=profile["base_url"])
+    kwargs = {"model": profile["model"], "input": [(t or "")[:8000] for t in texts]}
+    if profile.get("dim"):
+        kwargs["dimensions"] = profile["dim"]
+    resp = client.embeddings.create(**kwargs)
+    by_index: "dict[int, list[float]]" = {d.index: list(d.embedding) for d in resp.data}
+    out: "list[list[float] | None]" = []
+    for i in range(len(texts)):
+        vec = by_index.get(i)
+        if vec:
+            norm = math.sqrt(sum(v * v for v in vec))
+            if norm > 0:
+                vec = [v / norm for v in vec]
+        out.append(vec)
+    return out
+
+
+def compute_embeddings_batch(texts: "list[str]") -> "list[list[float]]":
+    """批量真语义 embedding（Wave-4 核心 API）。与 texts 等长·条目失败走 hash 兜底（不缓存）。
+
+    dedupe → 缓存命中 → misses 一次后端批调用（ruoyu_style=单 venv 子进程编整批）→ 回填缓存。
+    """
+    if not texts:
+        return []
+    method, _dim, fn = _detect_backend()
+    if method == "hash":
+        return [_stable_hash_embedding(t or "", dim=384) for t in texts]
+    use_cache = _embed_cache_enabled()
+    keys = [_embed_text_key(t) for t in texts]
+    results: "list[list[float] | None]" = [None] * len(texts)
+    miss_key_order: "list[str]" = []
+    miss_text_by_key: "dict[str, str]" = {}
+    for i, (t, k) in enumerate(zip(texts, keys)):
+        hit = _embed_cache_get(method, k) if use_cache else None
+        if hit is not None:
+            results[i] = hit
+        elif k not in miss_text_by_key:
+            miss_key_order.append(k)
+            miss_text_by_key[k] = t or ""
+    if miss_key_order:
+        computed = _backend_batch_compute(method, fn, [miss_text_by_key[k] for k in miss_key_order])
+        vec_by_key: "dict[str, list[float] | None]" = dict(zip(miss_key_order, computed))
+        for k, v in vec_by_key.items():
+            if v and use_cache:
+                _embed_cache_put(method, k, v)
+        for i, k in enumerate(keys):
+            if results[i] is None:
+                results[i] = vec_by_key.get(k)
+    return [r if r else _stable_hash_embedding(texts[i] or "", dim=384)
+            for i, r in enumerate(results)]
+
+
+def prefetch_embeddings(texts: "list[str]") -> dict:
+    """scanner 入口批量预热：一次后端批调用灌缓存，其后逐条 compute_embedding 零成本命中。
+
+    返回统计 {total, unique, cache_hits, computed}（供日志/测试断言）。hash 后端直接 no-op。"""
+    if not texts:
+        return {"total": 0, "unique": 0, "cache_hits": 0, "computed": 0}
+    method, _dim, _fn = _detect_backend()
+    if method == "hash" or not _embed_cache_enabled():
+        return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0,
+                "skipped": "hash 后端/缓存关闭"}
+    unique_keys = {}
+    for t in texts:
+        unique_keys.setdefault(_embed_text_key(t), t)
+    hits_before = sum(1 for k in unique_keys if _embed_cache_get(method, k) is not None)
+    compute_embeddings_batch(list(unique_keys.values()))
+    return {"total": len(texts), "unique": len(unique_keys),
+            "cache_hits": hits_before, "computed": len(unique_keys) - hits_before}
 
 
 def _emb_dir(project_root: Path) -> Path:
