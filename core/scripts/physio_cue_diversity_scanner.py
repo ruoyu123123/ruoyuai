@@ -16,7 +16,7 @@ facial_ratio > 阈值 → advisory「建议多用手/呼吸/肠胃/姿态等非�
 【北极星⑤ 顾问非法官】情绪躯体化是创作选择·writer 有理由偏面部（特写镜头/POV 贴脸） → 永远
   advisory，code PHYSIO_CUE_FACIAL_BIAS **绝不进 audit_hub.HARD_GATE_CODES**。
   env PHYSIO_CUE_DIVERSITY_MODE: off / shadow(默认·只记不判·零回归) / active。
-  🔬 阈值 FACIAL_RATIO_FLOOR 为保守占位·待金标准校准（真作者原文喂自身 PASS·防矫枉过正）。
+  🔬 阈值 FACIAL_RATIO_FLOOR 已金标准校准（2026-07-04 statbase 155章×3书·真作者 facial_ratio p95=0.75→floor 0.78）。
 
 用法：python physio_cue_diversity_scanner.py <draft_path> [--manifest m.json] [--project <root>]
 """
@@ -31,9 +31,9 @@ from pathlib import Path
 
 ISSUE_CODE = "PHYSIO_CUE_FACIAL_BIAS"   # ⚠️ advisory 专用 · 绝不进 HARD_GATE_CODES
 
-# 🔬 待金标准校准（真作者原文喂自身）：占位阈值保守（宁可漏报不误报）。
+# 🔬 2026-07-04 金标准校准（statbase 155章×3书 facial_ratio 分布）：面部占比超此 = facial bias。
 # 面部生理线索占比超此 = facial bias（面部区域堆砌·缺非面部躯体信号）。
-FACIAL_RATIO_FLOOR = 0.65   # 2026-06-20 金标准校准:5真作者facial_ratio 0.245-0.566(将夜最高0.566)·0.55误报将夜→抬0.65(>真作者max·仍catch>65%极端面部偏置)
+FACIAL_RATIO_FLOOR = 0.78   # 2026-07-04 金标准校准(statbase 155章×3书·seed20260704):p50=0.445/p95=0.75/max=0.857·旧0.65误伤30%真作者章(2026-06-20手工5样本max=0.566漏尾部)→抬0.78(p95上方·仅catch最极端3-5%面部偏置)
 MIN_CUE_SAMPLES = 8   # facial+nonfacial 命中总数低于此 = 样本不足·不判（防小样本噪声）
 
 # 🆕 R7 W2 升级：三桶分类（facial / observable-body / interoceptive）
