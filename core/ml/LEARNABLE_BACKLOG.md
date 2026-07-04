@@ -235,3 +235,16 @@
 - **两个未标记盲区**（记于 known_blind_spots）：①`zero_shot_prototype` 默认参 `floor=0.5` 被 4 文件 6+ 调用点复用、影响面广；②`belief_update_alignment` 的 0.6/0.4 混合权重与词典分量权重。
 - **已有历史实测数据的 10 常量**（dramatic_irony/emotion_granularity/group_dialogue 等注释带"真作者实测区间"）——校准时先挖历史数据，别当白纸重测；其中 `cross_scene_voice_drift.DEFAULT_EMBED_DRIFT_FLOOR=0.3` 已有定量反例（同角色声纹距实测 0.1062 < 0.3 地板）最该优先。
 - **应用前置工程**：5 个 embedding 阈值（choice_consequence/deus_ex/subplot/trope/skill_evolver）无数值 env 覆盖需补包装；26/58 被测试钉值（改值须同步测试）；同名异值常量 MIN_SCENES(2 vs 3) 禁按名批处理；sfs 两文件重复 `(cos+1)/2*100` 公式改一处须同步另一处。
+
+**W6-C 落地完成（2026-07-04·commit 992981c + 2e06c47·8267 测试零回归）**：
+- **content_embed daemon task + bge 后端**：`core/ml/content_embed/content_infer.py`（BAAI/bge-small-zh-v1.5·CLS pooling·L2 归一·懒加载）+ `model_daemon.py` 挂 content_embed handler。同 harness 同 seed 复测**达标**：AUC(相邻 vs 跨书)=**0.859** / 内容敏感度=**0.763** / content_echo=**0.808**（vs ruoyu_style 全随机 0.51-0.69）。报告 `content_embed_separability_20260704.md`。
+- **embedding_store 内容 API**：`content_backend_available()`（文件存在性门控）/ `compute_content_embedding(s)(_batch)`（不可用返 None·**无 hash 兜底**·hash 不是语义）/ `prefetch_content_embeddings()`。
+- **13 content 族文件迁移 + 阈值重标**（风格→内容双轨）：content_echo 7（0.68-0.72→0.49-0.52·bge 值域低）、content_dedup 6（memory 0.42/skill_evolver 0.55/trope 0.55/rag `_EMBED_MIN_RELEVANCE` 0.30/build_manifest kw_hits 双点拉伸 `(sim-0.4)/(0.65-0.4)*5`/intent_ledger 新增 `HIGH_DRIFT_THRESHOLD=0.53`）。topic_drift 是 z-score 形态不改数值只换调用面。
+- **zero_shot_prototype 切内容后端**（分类本是内容任务）+ 4 消费方零本体改动。
+- **conftest 根治**（举一反三·系统性）：`content_backend_available()` 是文件存在性判定非环境变量·本机 bge 俱在时测试默认 True 会真触发子进程（263x 变慢+非确定性）→ `_isolate_nn_gates` 用 `RUOYU_CONTENT_EMBED_CKPT` 哨兵路径默认关闭·单点根治全仓。
+- **2 真 bug**：rag_retriever + topic_drift 的 `compute_content_embedding` 返 None → `len(None)` 崩溃守卫（旧 hash 后端恒返向量掩盖了这个）。
+- **physio_cue_diversity 统计族校准**（commit 2e06c47）：statbase 155章×3书 + 主线程独立复算证实 `FACIAL_RATIO_FLOOR=0.65` 误伤 **30%** 真作者章节（2026-06-20 手工 5 样本 max=0.566 漏尾部·真实 p95=0.75/max=0.857）→ **0.65→0.78**（p95 上方·仅 catch 最极端 3-5%）。⚠️ statbase 报告表格 `p95=0.6492` 是错的（与其 30.56% 误伤率自相矛盾·真 p95=0.75·验收时揪出）。
+- **statistical_threshold_baseline harness**（`core/ml/calibration/statistical_threshold_baseline.py`）：37 条 other 族统计阈值的作者语料分位数基线方法论（与 embedding 族正交）·首批 6 scanner·仅 physio 判"过严"其余过松有余量。
+- **注册表 reconcile**：迁移解决 12 处标记（"待金标准校准"→"金标准校准 2026-07-04"）+ physio 2 处 → marker_total 47→33·删 12 已解决 entry·`test_threshold_registry.py` 8 断言回归锁全绿。**教训**：多 entry 可共享同一块注释标记行（如 cross_cluster_character_presence 5 个 Gini 常量共享 [33]）·reconcile 时"删 0-live 文件 entry + 保留 entry 赋该文件全部 live 标记"，别拆成独占。
+
+**Wave-6 未尽（下一步）**：① `ruoyu_style` 分布外根因（训练 512-768 CJK vs 生产单段 30-150 CJK）——可试"比较双方扩窗到几百字再算余弦"或用 content 后端替代风格族；② style_drift 族 4 条 + zero_shot floor=0.5 盲区仍待专门校准；③ 现成中文模型军火库（`workspace/_temp_research/现成中文模型军火库_2026-07-04.md`）：HanLP 2.1.3 已装 venv·MTL 一体模型一次前向吃满 4 scanner（classify_speakers/zero_pronoun/lish/couplet）·零训练零依赖·是下一波 Tier A 最高 ROI。
