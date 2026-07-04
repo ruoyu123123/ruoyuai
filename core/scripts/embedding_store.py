@@ -511,6 +511,130 @@ def compute_embeddings_batch(texts: "list[str]") -> "list[list[float]]":
             for i, r in enumerate(results)]
 
 
+# ── 🔴 2026-07-04 W6-C：内容语义嵌入 API（风格/内容双轨·bge-small-zh） ──────────────
+# 动机（真机测量·core/ml/calibration/reports/*_separability_20260704.md）：ruoyu_style 是作者
+# 判别模型，对内容关系在单段粒度 AUC≈随机（0.51-0.56）；bge 内容模型三条达标线全过
+# （0.859/0.763/0.808）。内容语义任务（呼应/触及/去重检索）走本 API；风格任务继续走
+# compute_embedding（EMBED_BACKEND=ruoyu_style）。
+# 纪律：不可用 → 返回 None（调用方回退字面逻辑）——内容语义**没有 hash 兜底**，hash 不是语义。
+
+_CONTENT_METHOD = "content:bge-small-zh-v1.5"
+
+
+def _content_infer_paths() -> "tuple[Path, Path] | None":
+    venv_py = _embed_repo_root() / "core" / "ml" / ".venv" / "Scripts" / "python.exe"
+    infer = _embed_repo_root() / "core" / "ml" / "content_embed" / "content_infer.py"
+    if venv_py.exists() and infer.exists():
+        return venv_py, infer
+    return None
+
+
+def content_backend_available() -> bool:
+    """内容嵌入后端可用性（venv+infer 脚本+模型目录三者俱在·便宜检查不 spawn）。"""
+    if _content_infer_paths() is None:
+        return False
+    ckpt = os.environ.get("RUOYU_CONTENT_EMBED_CKPT")
+    if ckpt:
+        return Path(ckpt).exists()
+    return (_embed_repo_root() / "core" / "ml" / "models" / "content_embed" / "bge-small-zh-v1.5").exists()
+
+
+def _content_embed_backend_batch(texts: "list[str]") -> "list[list[float] | None] | None":
+    """真批量计算：daemon task=content_embed 优先（热 ~0.05s）→ venv subprocess 兜底（~10s 冷）。
+    整体不可用 → None（不逐条假装）。"""
+    try:
+        import nn_daemon_client
+        if nn_daemon_client.enabled() and nn_daemon_client.ensure_daemon():
+            res = nn_daemon_client.infer("content_embed", texts, timeout=600)
+            if res is not None and len(res) == len(texts):
+                embs = [r.get("embedding") if isinstance(r, dict) else None for r in res]
+                if all(e for e in embs):
+                    return embs
+    except Exception:  # noqa: BLE001 — daemon 任何问题落 subprocess
+        pass
+    paths = _content_infer_paths()
+    if paths is None:
+        return None
+    venv_py, infer = paths
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            inp, outp = Path(td) / "in.jsonl", Path(td) / "out.jsonl"
+            with inp.open("w", encoding="utf-8") as fh:
+                for t in texts:
+                    fh.write(json.dumps({"text": (t or "")[:8000]}, ensure_ascii=False) + "\n")
+            kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+            proc = subprocess.run([str(venv_py), str(infer), "--batch", str(inp), "--out", str(outp)],
+                                  capture_output=True, timeout=1800, **kwargs)
+            if proc.returncode != 0 or not outp.exists():
+                return None
+            embs = []
+            for line in outp.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    obj = json.loads(line)
+                    embs.append(obj.get("embedding"))
+            if len(embs) != len(texts) or any(not e for e in embs):
+                return None
+            return embs
+    except Exception as e:  # noqa: BLE001 — 桥失败诚实返 None
+        print(f"[embedding_store] content_embed subprocess 失败: {str(e)[:120]}", file=sys.stderr)
+        return None
+
+
+def compute_content_embeddings_batch(texts: "list[str]") -> "list[list[float]] | None":
+    """内容语义批量编码（缓存复用 Wave-4 机制·method 键隔离于风格后端）。
+    整体不可用 → None；可用则与 texts 等长（编码经 L2 归一·cosine=点积）。"""
+    if not texts:
+        return []
+    if not content_backend_available():
+        return None
+    use_cache = _embed_cache_enabled()
+    keys = [_embed_text_key(t) for t in texts]
+    results: "list[list[float] | None]" = [None] * len(texts)
+    miss_key_order: "list[str]" = []
+    miss_text_by_key: "dict[str, str]" = {}
+    for i, (t, k) in enumerate(zip(texts, keys)):
+        hit = _embed_cache_get(_CONTENT_METHOD, k) if use_cache else None
+        if hit is not None:
+            results[i] = hit
+        elif k not in miss_key_order:
+            miss_key_order.append(k)
+            miss_text_by_key[k] = t or ""
+    if miss_key_order:
+        computed = _content_embed_backend_batch([miss_text_by_key[k] for k in miss_key_order])
+        if computed is None:
+            return None   # 后端整体不可用 → 诚实 None（调用方回退字面逻辑）
+        vec_by_key = dict(zip(miss_key_order, computed))
+        for k, v in vec_by_key.items():
+            if v and use_cache:
+                _embed_cache_put(_CONTENT_METHOD, k, v)
+        for i, k in enumerate(keys):
+            if results[i] is None:
+                results[i] = vec_by_key.get(k)
+    if any(r is None for r in results):
+        return None
+    return results
+
+
+def compute_content_embedding(text: str) -> "list[float] | None":
+    """单条内容语义编码（批量的单元素路径·同缓存）。不可用 → None。"""
+    out = compute_content_embeddings_batch([text])
+    return out[0] if out else None
+
+
+def prefetch_content_embeddings(texts: "list[str]") -> dict:
+    """内容嵌入预热（与 prefetch_embeddings 同约定·供 scanner 语义分支开头调用）。"""
+    if not texts:
+        return {"total": 0, "unique": 0, "computed": 0}
+    unique = {}
+    for t in texts:
+        unique.setdefault(_embed_text_key(t), t)
+    hits = sum(1 for k in unique if _embed_cache_get(_CONTENT_METHOD, k) is not None)
+    out = compute_content_embeddings_batch(list(unique.values()))
+    return {"total": len(texts), "unique": len(unique), "cache_hits": hits,
+            "computed": (len(unique) - hits) if out is not None else 0,
+            "available": out is not None}
+
+
 def prefetch_embeddings(texts: "list[str]") -> dict:
     """scanner 入口批量预热：一次后端批调用灌缓存，其后逐条 compute_embedding 零成本命中。
 

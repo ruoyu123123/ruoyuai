@@ -26,13 +26,14 @@
     fact content → CHARACTER_KNOWLEDGE_LEAK。ledger 不存在 → 退回占位词典逻辑(向后兼容·零行为变化)。
   生成层注入(build_manifest._sanitize_character_belief + gen_writer H7)是重心·本 scanner 是检测兜底。
 
-【🔴 2026-07-01 语义匹配路径升级（style_embed AP 0.887·经 embedding_store.compute_embedding 消费）】
+【🔴 2026-07-01 语义匹配路径升级 · 2026-07-04 迁移内容嵌入（bge 内容模型·
+  经 embedding_store.compute_content_embedding 消费）】
   持久化 ledger 路径原本靠「fact 短语精确子串命中窗口」判定穿帮，抓不住同义改写
   （ledger 记「父亲被杀」·正文写「爹被人害死」→ 字面不重叠·实际同一事实·漏检）。
-  真 embedding 后端就绪时（EMBED_BACKEND 非空非 hash，或配了 GEN_EMBED__* API），
-  字面子串未命中的窗口再补一次 compute_embedding+cosine_similarity 语义比对
+  内容语义后端就绪时（content_backend_available()：venv+infer 脚本+模型目录俱在），
+  字面子串未命中的窗口再补一次 compute_content_embedding+cosine_similarity 语义比对
   （facts.content 原文 vs 正文窗口），相似度达阈值同样判定 leak；leak 条目标
-  match_method=literal|semantic 区分命中来源。默认（无真后端·即 hash 袋）→ 只走原字面
+  match_method=literal|semantic 区分命中来源。内容后端不可用 → 只走原字面
   子串匹配逻辑，逐字节零回归（绝不拿 hash 袋子冒充语义判穿帮·防制造比现在更差的假阳性/假阴性）。
 
 【与既有 scanner 显式去重】
@@ -227,26 +228,24 @@ def _detect_leaks(scenes, all_names, fact_refs):
 _LEDGER_VERB_WINDOW = 40  # ledger fact content 可能较长·窗口比占位版(30)略宽
 
 
-# ── 🔴 2026-07-01 语义匹配路径（真 embedding 后端才跑·范式抄 topic_drift_scanner）──────
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+# ── 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）──────
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
 
-    原样复制自 topic_drift_scanner.py（本仓既有约定：每个 scanner 自带一份小 helper 副本，
-    不 import 跨 scanner 依赖）。也检查 .env 的 GEN_EMBED__* API 配置
-    （由 embedding_store._load_embed_profile 消费）。
+    import 失败 → False（调用方只走原字面子串匹配）。
     """
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
-# 🔬 待金标准校准：ledger fact 短语 vs 正文窗口 embedding 余弦相似度 ≥ 此值 → 判定语义同指
+# ledger fact 短语 vs 正文窗口 embedding 余弦相似度 ≥ 此值 → 判定语义同指
 # （能抓「父亲被杀」vs「爹被人害死」这类字面不重叠但同一事实的改写）。env 可覆盖。
-DEFAULT_SEMANTIC_LEAK_FLOOR = 0.55
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
+DEFAULT_SEMANTIC_LEAK_FLOOR = 0.52
 
 
 def _semantic_leak_floor() -> float:
@@ -331,26 +330,26 @@ def _detect_leaks_from_ledger(scenes, ledger, charid_names):
        在该角色出场的场景里，角色名 + KNOWLEDGE_VERB 窗口内出现不可引用短语 → leak。
        角色自己 known_facts 里 can_speak!=false 的短语永不算违规（先扣除）。
 
-    🔴 2026-07-01 语义匹配路径：真 embedding 后端可用时，字面子串未命中的窗口再补一次
-    compute_embedding+cosine_similarity 语义比对（forbidden 短语 vs 正文窗口），抓字面不
-    重叠但语义同指的改写。真后端不可用/未装/编码异常 → 只走原有字面子串匹配，
+    🔴 2026-07-01 语义匹配路径：内容后端可用时，字面子串未命中的窗口再补一次
+    compute_content_embedding+cosine_similarity 语义比对（forbidden 短语 vs 正文窗口），抓字面不
+    重叠但语义同指的改写。内容后端不可用/未装/编码异常 → 只走原有字面子串匹配，
     与升级前逐字节零回归（绝不拿 hash 袋子冒充语义）。
 
     🔴 2026-07-03 Wave-4：语义路径先两遍扫描——第一遍只算各角色 forbidden 短语集
     （不编码），据此收集本次会真正碰到的全部待 embed 文本（forbidden 短语 + 命中
-    知识动词的窗口）一次性 prefetch 灌缓存；第二遍走原检测逻辑，逐条 compute_embedding
+    知识动词的窗口）一次性 prefetch 灌缓存；第二遍走原检测逻辑，逐条 compute_content_embedding
     全部命中缓存（取代每个窗口/短语首次出现各自触发一次后端 subprocess 调用）。"""
     chars_ledger = ledger.get("characters") or {}
     facts_index = ledger.get("facts") if isinstance(ledger.get("facts"), dict) else {}
     leaks = []
 
-    # 语义路径预备：只有真后端就绪才 import + 建缓存，默认(hash)完全不进这段
-    use_semantic = _has_real_embedding_backend()
+    # 语义路径预备：只有内容后端就绪才 import + 建缓存，默认完全不进这段
+    use_semantic = _content_backend_ready()
     _embed_fn, _cos_fn, _prefetch_fn = None, None, None
     if use_semantic:
         try:
-            from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
-            _embed_fn, _cos_fn, _prefetch_fn = compute_embedding, cosine_similarity, prefetch_embeddings
+            from embedding_store import compute_content_embedding, cosine_similarity, prefetch_content_embeddings
+            _embed_fn, _cos_fn, _prefetch_fn = compute_content_embedding, cosine_similarity, prefetch_content_embeddings
         except ImportError:
             use_semantic = False
     _floor = _semantic_leak_floor() if use_semantic else None
@@ -490,8 +489,8 @@ def scan(draft_path, project_root=None) -> dict:
         out["ledger_character_count"] = len(ledger.get("characters") or {})
         charid_names = _build_charid_name_map(project_root)
         leaks = _detect_leaks_from_ledger(scenes, ledger, charid_names)
-        # 🔴 2026-07-01：真 embedding 后端就绪时才透出该字段（默认 hash 袋·逐字节零回归）
-        if _has_real_embedding_backend():
+        # 🔴 2026-07-01：内容后端就绪时才透出该字段（不可用时逐字节零回归）
+        if _content_backend_ready():
             out["semantic_matching_active"] = True
     else:
         out["ledger_source"] = "placeholder"

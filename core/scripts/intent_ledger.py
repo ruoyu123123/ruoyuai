@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -135,32 +134,33 @@ def _extract_keys(text: str, top_k=8) -> set:
     return {bg for bg, _ in top}
 
 
-# 🔴 2026-07-02: 真 embedding 后端接线（本仓约定：每个消费 embedding 的脚本自带一份门控副本）。
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
-    原样复制自 topic_drift_scanner.py（不 import 跨脚本依赖）。也检查 .env 的
-    GEN_EMBED__* API 配置（由 embedding_store._load_embed_profile 消费）。"""
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+# 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+
+    import 失败 → False（调用方回退 2-gram Jaccard）。
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
 def _semantic_drift(want_text: str, next_framing: str) -> "float | None":
-    """真后端时：want_text vs next_framing 的 embedding 余弦距离当漂移度。
+    """内容后端就绪时：want_text vs next_framing 的内容语义嵌入余弦距离当漂移度。
 
-    embedding_store 不可用 / 任一侧为空 / 编码失败 / 维度不一致 → None
+    内容后端不可用 / 任一侧为空 / 编码失败 / 维度不一致 → None
     （调用方回退 2-gram Jaccard·绝不拿默认 hash 假语义冒充）。"""
     if not want_text.strip() or not next_framing.strip():
         return None
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from embedding_store import compute_embedding, cosine_similarity
-        a = compute_embedding(want_text)
-        b = compute_embedding(next_framing)
+        from embedding_store import compute_content_embedding, cosine_similarity
+        a = compute_content_embedding(want_text)
+        b = compute_content_embedding(next_framing)
     except Exception:
         return None
     if not a or not b or len(a) != len(b):
@@ -168,12 +168,20 @@ def _semantic_drift(want_text: str, next_framing: str) -> "float | None":
     return round(1.0 - cosine_similarity(a, b), 4)
 
 
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告——高漂移判定阈值。
+# want_text(本 cluster 意图+scope) vs next_framing(下一 cluster brief) 的语义关系近似
+# content_relatedness 族 pos_adjacent(应对齐/低漂移) vs probe_same_book_diff_chapter
+# (应判漂移) 的分界：Youden 最优点 cosine=0.4708 → drift=1-0.4708=0.5292≈0.53（与 bge
+# 值域下「相关≈0.48 漂移 / 无关≈0.59 漂移」两簇中点吻合·比原 0.5 占位值更贴合真实分布）。
+HIGH_DRIFT_THRESHOLD = 0.53
+
+
 def _drift_score(want_text: str, next_framing: str) -> float:
-    """want_text vs next_cluster framing 的漂移度：真后端时用 embedding 余弦距离（能抓
+    """want_text vs next_cluster framing 的漂移度：内容后端就绪时用嵌入余弦距离（能抓
     「殊死搏杀」vs「决一死战」这类零字面 2-gram 重叠的同义改写——字面 Jaccard 会误判成
     drift=1.0 完全偏离），否则回退 2-gram Jaccard 反相似度（占位·零依赖）。
     返回 0-1·0=完全对齐·1=完全偏离。"""
-    if _has_real_embedding_backend():
+    if _content_backend_ready():
         sem = _semantic_drift(want_text, next_framing)
         if sem is not None:
             return sem
@@ -294,7 +302,7 @@ def cmd_summary(args) -> int:
     p = _ledger_path(Path(args.project))
     summary = {"ok": True, "exists": p.exists(),
                "rows": 0, "mean_drift": 0.0,
-               "high_drift_count": 0, "_threshold": 0.5}
+               "high_drift_count": 0, "_threshold": HIGH_DRIFT_THRESHOLD}
     if not p.exists():
         print(json.dumps(summary, ensure_ascii=False))
         return 0
@@ -318,7 +326,7 @@ def cmd_summary(args) -> int:
     if drifts:
         summary["rows"] = len(drifts)
         summary["mean_drift"] = round(sum(drifts) / len(drifts), 4)
-        summary["high_drift_count"] = sum(1 for d in drifts if d > 0.5)
+        summary["high_drift_count"] = sum(1 for d in drifts if d > HIGH_DRIFT_THRESHOLD)
     print(json.dumps(summary, ensure_ascii=False))
     return 0
 

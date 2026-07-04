@@ -68,7 +68,8 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 MIN_CJK = 500
 TAIL_RATIO = 0.3   # finale 草稿末段 30% 为 resolution 区
 ANCHOR_FLOOR = 2   # < 2 个前置 anchors → 报
-SEMANTIC_ANCHOR_SIM_THRESHOLD = 0.68   # element+tail 上下文 vs 历史段落余弦阈值 · 待金标准校准
+SEMANTIC_ANCHOR_SIM_THRESHOLD = 0.52   # element+tail 上下文 vs 历史段落余弦阈值
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
 ANCHOR_CONTEXT_WINDOW = 80   # element 在 tail 中出现位置前后各取 N 字符当语境（同 macguffin_entanglement_scanner 模式）
 
 
@@ -77,20 +78,18 @@ def _mode() -> str:
     return m if m in ("off", "shadow", "active") else "shadow"
 
 
-# ── 🔴 2026-07-02 真语义 embedding 可选路径（照抄 topic_drift_scanner 已验证的模式）───────
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+# ── 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）───────
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
 
-    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
-    embedding 的文件自带一份，不互相 import）。也检查 .env 的 GEN_EMBED__* API 配置。
+    import 失败 → False（调用方回退纯字面子串计数）。
     """
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
 def _split_history_paragraphs(history_text: str) -> list:
@@ -99,21 +98,21 @@ def _split_history_paragraphs(history_text: str) -> list:
 
 
 def _embed_history_once(history_text: str) -> "list[tuple[str, list]] | None":
-    """真后端就绪时把历史段落编码一次，供本次 audit_deus_ex() 内所有 resolution
+    """内容后端就绪时把历史段落编码一次，供本次 audit_deus_ex() 内所有 resolution
     element 复用（避免 O(元素 × 段落) 重复编码·2026-07-02）。
 
-    未配真后端 / 无历史段落 / 编码异常 → None（调用方逐元素回退纯字面子串计数）。
+    内容后端不可用 / 无历史段落 / 编码异常 → None（调用方逐元素回退纯字面子串计数）。
     """
-    if not _has_real_embedding_backend():
+    if not _content_backend_ready():
         return None
     paras = _split_history_paragraphs(history_text)
     if not paras:
         return None
     try:
-        from embedding_store import compute_embedding
+        from embedding_store import compute_content_embedding
         out = []
         for p in paras:
-            pe = compute_embedding(p)
+            pe = compute_content_embedding(p)
             if pe:
                 out.append((p, pe))
         return out or None
@@ -140,18 +139,18 @@ def _anchor_query_text(element: str, tail_context: str) -> str:
 
 
 def _semantic_anchor_hit(element: str, tail_context: str, history_embs) -> bool:
-    """真后端下：element（+tail 语境窗口）与历史段落语义扫描 —— 命中 → 视为已有语义铺垫
+    """内容后端下：element（+tail 语境窗口）与历史段落语义扫描 —— 命中 → 视为已有语义铺垫
     （意译/概念性铺垫 · 字面子串扫不出）。
 
-    history_embs 为 None（无真后端/无历史）/ element 空 / 计算异常 → False
+    history_embs 为 None（无内容后端/无历史）/ element 空 / 计算异常 → False
     （调用方回退字面子串计数 · _count_anchors_for_element 仍是兜底）。
     """
     if not history_embs or not element:
         return False
     try:
-        from embedding_store import compute_embedding, cosine_similarity
+        from embedding_store import compute_content_embedding, cosine_similarity
         query = _anchor_query_text(element, tail_context)
-        qe = compute_embedding(query)
+        qe = compute_content_embedding(query)
         if not qe:
             return False
         for _p, pe in history_embs:
@@ -261,7 +260,7 @@ def audit_deus_ex(text: str, history_text: str = "") -> dict:
           underbacked_count, deus_ex_risk, external_deus_hits_count}。
 
     anchors_per_element 计数：字面子串是兜底（_count_anchors_for_element·原逻辑不变）。
-    真后端就绪时叠加语义扫描历史摘要（tail resolution 段 vs 历史 cluster 摘要余弦）——
+    内容后端就绪时叠加语义扫描历史摘要（tail resolution 段 vs 历史 cluster 摘要余弦）——
     字面不足 ANCHOR_FLOOR 但语义命中 → 视为已达标铺垫（意译/概念性铺垫漏检）。
     anchor_source_per_element 标注每个 element 最终判定用的是 "literal_substring" 还是
     "embedding_cosine"。
@@ -278,12 +277,12 @@ def audit_deus_ex(text: str, history_text: str = "") -> dict:
                     elements["power_hits"])
 
     # 🔴 2026-07-03 Wave-4：历史段落 + 每个 resolution 元素的语境窗口查询——两侧文本
-    # 集合一次性 prefetch（真后端子进程按条调用极贵·合并成一次批调用），下面
-    # _embed_history_once / _semantic_anchor_hit 内的逐条 compute_embedding 全部命中缓存。
-    if _has_real_embedding_backend():
+    # 集合一次性 prefetch（内容后端子进程按条调用极贵·合并成一次批调用），下面
+    # _embed_history_once / _semantic_anchor_hit 内的逐条 compute_content_embedding 全部命中缓存。
+    if _content_backend_ready():
         try:
-            from embedding_store import prefetch_embeddings
-            prefetch_embeddings(
+            from embedding_store import prefetch_content_embeddings
+            prefetch_content_embeddings(
                 _split_history_paragraphs(history_text) +
                 [_anchor_query_text(el, tail) for el in all_elements])
         except Exception:

@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
-"""zero_shot_prototype.py 专属回归测试(2026-07-03·W3 零样本原型分类工具)。
+"""zero_shot_prototype.py 专属回归测试(2026-07-04·W6 内容后端切轨·零样本原型分类工具)。
 
 确定性 mock embedding(字符频率向量·同 test_topic_drift_scanner/
 test_macguffin_entanglement_scanner 手法)·不依赖真模型/网络。
+
+🔴 2026-07-04：本工具从风格侧 EMBED_BACKEND + compute_embeddings_batch 切到内容侧
+embedding_store.content_backend_available() + compute_content_embeddings_batch()（零样本
+分类判断"这段文本属于哪类内容语义"是内容任务不是风格任务，见 core/ml/calibration/reports/
+content_embed_separability_20260704.md）。mock 面同步换成 monkeypatch 这两个新入口，不再
+靠 EMBED_BACKEND 环境变量控制门控——本机若真实装了 core/ml/models/content_embed/
+bge-small-zh-v1.5（Wave-6 已落地），content_backend_available() 在"环境变量不设"时也会
+返回 True，所以每个门控测试都显式 monkeypatch 该函数，不依赖本机磁盘状态的不确定性。
 """
 import math
 import os
@@ -26,35 +34,26 @@ def _char_freq_embedding(text: str, dim: int = 32) -> list:
 
 
 def _char_freq_embedding_batch(texts, dim: int = 32) -> list:
-    """_char_freq_embedding 的批量版（逐条同一算法·无跨文本交互，供 mock compute_embeddings_batch）。"""
+    """_char_freq_embedding 的批量版（逐条同一算法·无跨文本交互，供 mock compute_content_embeddings_batch）。"""
     return [_char_freq_embedding(t, dim) for t in texts]
 
 
 def _run_with_mock_embedding(fn, *args, **kwargs):
-    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding(_batch) 后跑 fn。
-
-    🔴 2026-07-03 Wave-4：zero_shot_prototype 内部改走 compute_embeddings_batch，
-    两个 mock 都要打（单条路径 classify() 也委托 classify_batch，实际只会用到 _batch 版，
-    保留 compute_embedding mock 是为了兼容任何仍直接调用它的调用点/未来用途）。
+    """monkeypatch embedding_store.content_backend_available()→True + compute_content_embeddings_batch
+    后跑 fn（内容后端 mock·2026-07-04 起 zero_shot_prototype 走内容语义后端，不再是风格 EMBED_BACKEND）。
     """
-    bak = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "mock"
     import embedding_store
-    orig = embedding_store.compute_embedding
-    orig_batch = embedding_store.compute_embeddings_batch
-    embedding_store.compute_embedding = _char_freq_embedding
-    embedding_store.compute_embeddings_batch = _char_freq_embedding_batch
+    orig_avail = embedding_store.content_backend_available
+    orig_batch = embedding_store.compute_content_embeddings_batch
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embeddings_batch = _char_freq_embedding_batch
     mod.clear_cache()
     try:
         return fn(*args, **kwargs)
     finally:
-        embedding_store.compute_embedding = orig
-        embedding_store.compute_embeddings_batch = orig_batch
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embeddings_batch = orig_batch
         mod.clear_cache()
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
 
 
 # 刻意选高辨识度、类间零字符重叠的例句，避免 32 维 hash bucket 偶然碰撞导致误判
@@ -64,52 +63,39 @@ _PROTOTYPES = {
 }
 
 
-# ── 门控 ─────────────────────────────────────────────
-def test_gate_off_returns_none_by_default():
-    bak = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
+# ── 门控（2026-07-04：风格 EMBED_BACKEND → 内容 content_backend_available 切轨）─────
+def test_gate_off_when_content_backend_unavailable():
+    """content_backend_available() 为 False → classify()/classify_batch() 直接全 None（无 hash 兜底）。"""
+    import embedding_store
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
     try:
-        assert mod._has_real_embedding_backend() is False
         assert mod.classify("她笑了", _PROTOTYPES) is None
+        assert mod.classify_batch(["她笑了", "他哭了"], _PROTOTYPES) == [None, None]
     finally:
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        for k, v in saved.items():
-            os.environ[k] = v
+        embedding_store.content_backend_available = orig
 
 
-def test_gate_hash_explicit_still_false():
-    bak = os.environ.get("EMBED_BACKEND")
-    try:
-        os.environ["EMBED_BACKEND"] = "hash"
-        assert mod._has_real_embedding_backend() is False
-    finally:
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
-
-
-def test_gate_true_with_gen_embed_env():
-    bak = os.environ.pop("EMBED_BACKEND", None)
+def test_embed_backend_env_var_no_longer_gates_classify():
+    """回归锁：迁移后 EMBED_BACKEND / GEN_EMBED__* 环境变量对本工具门控不再有任何作用——
+    唯一门控是 embedding_store.content_backend_available()。故意把旧风格门控会打开的
+    环境变量全设上，同时显式把内容后端强制关闭，断言 classify() 仍然 None：证明起作用的
+    是 content_backend_available() 而不是环境变量（防止有人把风格门控逻辑悄悄挪回来）。
+    """
+    import embedding_store
+    bak_eb = os.environ.get("EMBED_BACKEND")
+    os.environ["EMBED_BACKEND"] = "mstyle"
     os.environ["GEN_EMBED__X__API_KEY"] = "k"
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
     try:
-        assert mod._has_real_embedding_backend() is True
+        assert mod.classify("她笑了", _PROTOTYPES) is None
+        assert mod.classify_batch(["她笑了"], _PROTOTYPES) == [None]
     finally:
+        embedding_store.content_backend_available = orig
         os.environ.pop("GEN_EMBED__X__API_KEY", None)
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-
-
-def test_gate_true_with_non_hash_backend():
-    bak = os.environ.get("EMBED_BACKEND")
-    try:
-        os.environ["EMBED_BACKEND"] = "mstyle"
-        assert mod._has_real_embedding_backend() is True
-    finally:
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
+        if bak_eb is not None:
+            os.environ["EMBED_BACKEND"] = bak_eb
         else:
             os.environ.pop("EMBED_BACKEND", None)
 
@@ -154,7 +140,7 @@ def test_floor_default_allows_high_confidence_self_match():
 
 # ── 质心缓存 ─────────────────────────────────────────
 def test_centroid_cache_reused_for_same_prototypes():
-    """🔴 2026-07-03 Wave-4：classify() 内部改走 compute_embeddings_batch，改为按批调用计数。"""
+    """🔴 2026-07-03 Wave-4：classify() 内部改走批量 embed，改为按批调用计数。"""
     calls = []
 
     def _counting_batch(texts):
@@ -163,7 +149,7 @@ def test_centroid_cache_reused_for_same_prototypes():
 
     def _do():
         import embedding_store
-        embedding_store.compute_embeddings_batch = _counting_batch
+        embedding_store.compute_content_embeddings_batch = _counting_batch
         mod.classify("哈哈哈真好笑", _PROTOTYPES, floor=0.0)
         prototype_example_count = sum(len(v) for v in _PROTOTYPES.values())
         # 首次：例句 + 1 条待分类文本合成一次批调用（Wave-4 冷启动只占一次后端往返）
@@ -198,7 +184,7 @@ def test_clear_cache_forces_rebuild():
 
     def _do():
         import embedding_store
-        embedding_store.compute_embeddings_batch = _counting_batch
+        embedding_store.compute_content_embeddings_batch = _counting_batch
         mod.classify("哈哈哈真好笑", _PROTOTYPES, floor=0.0)
         n1 = sum(len(c) for c in calls)
         mod.clear_cache()
@@ -224,13 +210,13 @@ def test_empty_prototypes_returns_none():
 
 
 def test_compute_embedding_exception_returns_none():
-    """🔴 2026-07-03 Wave-4：classify() 内部改走 compute_embeddings_batch，异常源随之改。"""
+    """🔴 2026-07-04：classify() 内部现走 compute_content_embeddings_batch，异常源随之改。"""
     def _boom(texts):
         raise RuntimeError("embed fail")
 
     def _do():
         import embedding_store
-        embedding_store.compute_embeddings_batch = _boom
+        embedding_store.compute_content_embeddings_batch = _boom
         assert mod.classify("文本", _PROTOTYPES) is None
 
     _run_with_mock_embedding(_do)
@@ -257,17 +243,14 @@ def test_label_with_no_examples_skipped():
 
 # ── 🔴 2026-07-03 Wave-4 性能层：classify_batch 专属回归 ─────────────────────
 def test_classify_batch_gate_off_returns_all_none():
-    bak = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
+    import embedding_store
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
     try:
         results = mod.classify_batch(["她笑了", "他哭了", "真震惊"], _PROTOTYPES)
         assert results == [None, None, None]
     finally:
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        for k, v in saved.items():
-            os.environ[k] = v
+        embedding_store.content_backend_available = orig
 
 
 def test_classify_batch_empty_texts_returns_empty_list():
@@ -313,7 +296,7 @@ def test_classify_batch_single_backend_call_for_cold_start():
 
     def _do():
         import embedding_store
-        embedding_store.compute_embeddings_batch = _counting_batch
+        embedding_store.compute_content_embeddings_batch = _counting_batch
         texts = ["哈哈哈笑得停不下来", "震惊愕然呆住了", "扑哧一声笑出声"]
         results = mod.classify_batch(texts, _PROTOTYPES, floor=0.0)
         assert all(r is not None for r in results)
@@ -336,7 +319,7 @@ def test_classify_batch_single_backend_call_when_centroid_warm():
 
     def _do():
         import embedding_store
-        embedding_store.compute_embeddings_batch = _counting_batch
+        embedding_store.compute_content_embeddings_batch = _counting_batch
         mod.classify_batch(["先热身一条"], _PROTOTYPES, floor=0.0)  # 建质心
         calls.clear()
         texts = ["哈哈哈笑得停不下来", "震惊愕然呆住了", "扑哧一声笑出声", "还有一条"]
@@ -354,7 +337,7 @@ def test_classify_batch_exception_returns_all_none():
 
     def _do():
         import embedding_store
-        embedding_store.compute_embeddings_batch = _boom
+        embedding_store.compute_content_embeddings_batch = _boom
         results = mod.classify_batch(["文本1", "文本2"], _PROTOTYPES)
         assert results == [None, None]
 

@@ -1,0 +1,758 @@
+{
+  "meta": {
+    "generated_at": "2026-07-04T11:18:42.683362+00:00",
+    "books": [
+      "主神大道",
+      "诡秘之主",
+      "轮回乐园"
+    ],
+    "chapters_per_book": 60,
+    "chapters_sampled": {
+      "主神大道": [
+        39,
+        52,
+        54,
+        55,
+        65,
+        128,
+        137,
+        138,
+        153,
+        163,
+        189,
+        190,
+        199,
+        201,
+        222,
+        270,
+        288,
+        302,
+        314,
+        352,
+        354,
+        363,
+        419,
+        441,
+        458,
+        518,
+        524,
+        551,
+        572,
+        599,
+        648,
+        663,
+        679,
+        716,
+        761,
+        844,
+        871,
+        901,
+        914,
+        933,
+        934,
+        967,
+        1002,
+        1011,
+        1016,
+        1046,
+        1060,
+        1116,
+        1126,
+        1206,
+        1246,
+        1279,
+        1379,
+        1430,
+        1446,
+        1450,
+        1454,
+        1459,
+        1471,
+        1474
+      ],
+      "诡秘之主": [
+        18,
+        76,
+        87,
+        109,
+        144,
+        155,
+        176,
+        214,
+        292,
+        320,
+        342,
+        362,
+        364,
+        449,
+        451,
+        475,
+        499,
+        538,
+        541,
+        581,
+        585,
+        591,
+        596,
+        609,
+        628,
+        655,
+        661,
+        672,
+        688,
+        703,
+        705,
+        760,
+        767,
+        776,
+        807,
+        809,
+        810,
+        861,
+        887,
+        924,
+        954,
+        959,
+        977,
+        993,
+        1005,
+        1047,
+        1067,
+        1077,
+        1117,
+        1171,
+        1199,
+        1267,
+        1270,
+        1312,
+        1325,
+        1333,
+        1339,
+        1344,
+        1355,
+        1361
+      ],
+      "轮回乐园": [
+        2,
+        8,
+        22,
+        31,
+        40,
+        45,
+        63,
+        65,
+        76,
+        81,
+        89,
+        98,
+        100,
+        103,
+        109,
+        123,
+        162,
+        164,
+        166,
+        171,
+        210,
+        215,
+        225,
+        229,
+        234,
+        236,
+        260,
+        262,
+        273,
+        279,
+        302,
+        325,
+        340,
+        346,
+        348,
+        356,
+        361,
+        364,
+        375,
+        376,
+        389,
+        412,
+        417,
+        419,
+        430,
+        432,
+        437,
+        438,
+        439,
+        443,
+        444,
+        449,
+        452,
+        462,
+        466,
+        474,
+        475,
+        479,
+        493,
+        496
+      ]
+    },
+    "seed": 20260704,
+    "scanners": [
+      "dramatic_irony",
+      "group_dialogue_balance",
+      "physio_cue_diversity",
+      "interiority_mode_balance",
+      "synesthesia_density",
+      "subtext_rescan"
+    ],
+    "registry_path": "D:\\Desktop\\ruoyuai\\core\\ml\\calibration\\threshold_registry.json",
+    "extractor": "real_scanner_scan"
+  },
+  "scanners": {
+    "dramatic_irony": {
+      "module": "dramatic_irony_scanner",
+      "constant": "IRONY_TELL_FLOOR",
+      "metric_key": "per_1k",
+      "desc": "dramatic irony 显式标志词密度/千字（殊不知/浑然不知等·tell 过多）",
+      "registry_id": "dramatic_irony_scanner.py::IRONY_TELL_FLOOR",
+      "current_floor_runtime": 0.8,
+      "registry_current_value": 0.8,
+      "registry_runtime_consistent": true,
+      "registry_note": "异常：文档标记原文写 阈值 LOW/HIGH_FLOOR 待金标准校准 ，但代码里 LOW_FLOOR/HIGH_FLOOR 这两个常量已不存在。原双向对账设计已废弃（文件内注释：原双向对账reader_adv逻辑已废），现在只有单向的 IRONY_TELL_FLOOR 一个常量。文档描述与代码现状不一致，本条以实际存在的 IRONY_TELL_FLOOR 登记。已有真实数据：6 真作者原文实测密度最大 0.11-0.37/千字（不同批注释给出的数字不同，可能是不同轮次样本），floor=0.8 留了 2x-7x 余量，2026-06-16 已放量 active。",
+      "per_book": {
+        "主神大道": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 59,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 59,
+            "mean": 0.0,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "max": 0.0
+          }
+        },
+        "诡秘之主": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 60,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 60,
+            "mean": 0.0125,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "max": 0.75
+          }
+        },
+        "轮回乐园": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 60,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 60,
+            "mean": 0.0248,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+            "p95": 0.021,
+            "max": 0.56
+          }
+        }
+      },
+      "merged": {
+        "chapters_scanned": 180,
+        "chapters_eligible": 179,
+        "chapters_flagged": 0,
+        "errors": 0,
+        "dist": {
+          "n": 179,
+          "mean": 0.0125,
+          "p5": 0.0,
+          "p25": 0.0,
+          "p50": 0.0,
+          "p75": 0.0,
+          "p90": 0.0,
+          "p95": 0.0,
+          "max": 0.75
+        }
+      },
+      "advice": {
+        "verdict": "过松/无信息量",
+        "flag_rate_scanned": 0.0,
+        "flag_rate_eligible": 0.0,
+        "floor_percentile_in_author_dist": 1.0,
+        "candidate_p90": 0.0,
+        "candidate_p95": 0.0,
+        "observed_max": 0.75,
+        "text": "现行 IRONY_TELL_FLOOR=0.8 落在作者分布 p100（真作者章误伤率 0.0%<1%）。对单向 anti-pattern 哨兵这是设计预期（真作者零触发=安全）；若想收紧到贴作者分布上沿，候选值 p90=0.0 / p95=0.0（观测 max=0.75）。"
+      }
+    },
+    "group_dialogue_balance": {
+      "module": "group_dialogue_balance_scanner",
+      "constant": "RATIO_FLOOR",
+      "metric_key": "explicit_name_attrib_ratio",
+      "desc": "群戏显式点名归属占比（专名+说/道 行 / 对话行·仅群戏规模章计入分布）",
+      "registry_id": "group_dialogue_balance_scanner.py::RATIO_FLOOR",
+      "current_floor_runtime": 0.85,
+      "registry_current_value": 0.85,
+      "registry_runtime_consistent": true,
+      "registry_note": "已有真实数据：2026-06-20 记录 5 真作者实测 0.165-0.765（剑来0.765/将夜0.72，中文网文点名本就高频常态），原定 0.6 严重误报后抬到 0.85，但仍保持 shadow 不放量（信号弱，点名非缺陷）。这是本次盘点里已实测但主动选择不放量的典型案例，文档头部仍写待金标准校准是准确的，因为最终阈值/放量决定仍悬而未决，不是遗留的过时标记。",
+      "per_book": {
+        "主神大道": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 49,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 49,
+            "mean": 0.2935,
+            "p5": 0.077,
+            "p25": 0.182,
+            "p50": 0.267,
+            "p75": 0.379,
+            "p90": 0.5,
+            "p95": 0.5704,
+            "max": 0.778
+          }
+        },
+        "诡秘之主": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 60,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 60,
+            "mean": 0.2562,
+            "p5": 0.1027,
+            "p25": 0.1735,
+            "p50": 0.25,
+            "p75": 0.321,
+            "p90": 0.3942,
+            "p95": 0.4365,
+            "max": 0.52
+          }
+        },
+        "轮回乐园": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 51,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 51,
+            "mean": 0.0603,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.054,
+            "p75": 0.101,
+            "p90": 0.143,
+            "p95": 0.154,
+            "max": 0.22
+          }
+        }
+      },
+      "merged": {
+        "chapters_scanned": 180,
+        "chapters_eligible": 160,
+        "chapters_flagged": 0,
+        "errors": 0,
+        "dist": {
+          "n": 160,
+          "mean": 0.2052,
+          "p5": 0.0,
+          "p25": 0.086,
+          "p50": 0.184,
+          "p75": 0.3087,
+          "p90": 0.4029,
+          "p95": 0.476,
+          "max": 0.778
+        }
+      },
+      "advice": {
+        "verdict": "过松/无信息量",
+        "flag_rate_scanned": 0.0,
+        "flag_rate_eligible": 0.0,
+        "floor_percentile_in_author_dist": 1.0,
+        "candidate_p90": 0.4029,
+        "candidate_p95": 0.476,
+        "observed_max": 0.778,
+        "text": "现行 RATIO_FLOOR=0.85 落在作者分布 p100（真作者章误伤率 0.0%<1%）。对单向 anti-pattern 哨兵这是设计预期（真作者零触发=安全）；若想收紧到贴作者分布上沿，候选值 p90=0.4029 / p95=0.476（观测 max=0.778）。"
+      }
+    },
+    "physio_cue_diversity": {
+      "module": "physio_cue_diversity_scanner",
+      "constant": "FACIAL_RATIO_FLOOR",
+      "metric_key": "facial_ratio",
+      "desc": "生理情绪线索面部占比 facial/(facial+nonfacial)（样本<8 的章指标为 None 不计入）",
+      "registry_id": "physio_cue_diversity_scanner.py::FACIAL_RATIO_FLOOR",
+      "current_floor_runtime": 0.65,
+      "registry_current_value": 0.65,
+      "registry_runtime_consistent": true,
+      "registry_note": "已有真实数据：5 真作者实测 facial_ratio 0.245-0.566（将夜最高0.566），原定 0.55 误报将夜后抬到 0.65，2026-06-20 已放量 active。同文件 ANY_BUCKET_FLOOR=0.65（三桶通用版）与 MIN_CUE_SAMPLES=8 未被 doc 点名，未单独登记。",
+      "per_book": {
+        "主神大道": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 52,
+          "chapters_flagged": 18,
+          "errors": 0,
+          "dist": {
+            "n": 52,
+            "mean": 0.4458,
+            "p5": 0.1955,
+            "p25": 0.333,
+            "p50": 0.444,
+            "p75": 0.5458,
+            "p90": 0.6603,
+            "p95": 0.7585,
+            "max": 0.846
+          }
+        },
+        "诡秘之主": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 56,
+          "chapters_flagged": 9,
+          "errors": 0,
+          "dist": {
+            "n": 56,
+            "mean": 0.4489,
+            "p5": 0.222,
+            "p25": 0.3622,
+            "p50": 0.4495,
+            "p75": 0.5425,
+            "p90": 0.625,
+            "p95": 0.644,
+            "max": 0.706
+          }
+        },
+        "轮回乐园": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 58,
+          "chapters_flagged": 28,
+          "errors": 0,
+          "dist": {
+            "n": 58,
+            "mean": 0.3462,
+            "p5": 0.1094,
+            "p25": 0.232,
+            "p50": 0.333,
+            "p75": 0.4425,
+            "p90": 0.556,
+            "p95": 0.583,
+            "max": 0.846
+          }
+        }
+      },
+      "merged": {
+        "chapters_scanned": 180,
+        "chapters_eligible": 166,
+        "chapters_flagged": 55,
+        "errors": 0,
+        "dist": {
+          "n": 166,
+          "mean": 0.412,
+          "p5": 0.143,
+          "p25": 0.302,
+          "p50": 0.4145,
+          "p75": 0.524,
+          "p90": 0.6095,
+          "p95": 0.6492,
+          "max": 0.846
+        }
+      },
+      "advice": {
+        "verdict": "过严",
+        "flag_rate_scanned": 0.3056,
+        "flag_rate_eligible": 0.3313,
+        "floor_percentile_in_author_dist": 0.9518,
+        "candidate_p90": 0.6095,
+        "candidate_p95": 0.6492,
+        "observed_max": 0.846,
+        "text": "现行 FACIAL_RATIO_FLOOR=0.65 会把 30.6% 真作者章判违规（>30%）——建议抬到作者分布 p95=0.6492 以上（max=0.846）再留余量。"
+      }
+    },
+    "interiority_mode_balance": {
+      "module": "interiority_mode_balance_scanner",
+      "constant": "MARKED_MONOLOGUE_FLOOR",
+      "metric_key": "marked_monologue_per_1k",
+      "desc": "带标记直接独白密度/千字（他想/心中暗道等·三态坍缩检测）",
+      "registry_id": "interiority_mode_balance_scanner.py::MARKED_MONOLOGUE_FLOOR",
+      "current_floor_runtime": 2.5,
+      "registry_current_value": 2.5,
+      "registry_runtime_consistent": true,
+      "registry_note": "已有真实数据：5 真作者实测密度 0-0.51/千字，floor=2.5 留 5x+ 余量，2026-06-20 已放量 active。同文件另有 FID_SHARE_FLOOR=0.15 常量，doc 标记未点名它，本次未单独登记，但校准时应一并处理（同一批次占位值）。",
+      "per_book": {
+        "主神大道": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 59,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 59,
+            "mean": 0.0431,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.05,
+            "p95": 0.443,
+            "max": 0.53
+          }
+        },
+        "诡秘之主": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 60,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 60,
+            "mean": 0.179,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.3625,
+            "p90": 0.38,
+            "p95": 0.6835,
+            "max": 1.55
+          }
+        },
+        "轮回乐园": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 60,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 60,
+            "mean": 0.0897,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.472,
+            "p95": 0.5105,
+            "max": 1.04
+          }
+        }
+      },
+      "merged": {
+        "chapters_scanned": 180,
+        "chapters_eligible": 179,
+        "chapters_flagged": 0,
+        "errors": 0,
+        "dist": {
+          "n": 179,
+          "mean": 0.1042,
+          "p5": 0.0,
+          "p25": 0.0,
+          "p50": 0.0,
+          "p75": 0.0,
+          "p90": 0.396,
+          "p95": 0.501,
+          "max": 1.55
+        }
+      },
+      "advice": {
+        "verdict": "过松/无信息量",
+        "flag_rate_scanned": 0.0,
+        "flag_rate_eligible": 0.0,
+        "floor_percentile_in_author_dist": 1.0,
+        "candidate_p90": 0.396,
+        "candidate_p95": 0.501,
+        "observed_max": 1.55,
+        "text": "现行 MARKED_MONOLOGUE_FLOOR=2.5 落在作者分布 p100（真作者章误伤率 0.0%<1%）。对单向 anti-pattern 哨兵这是设计预期（真作者零触发=安全）；若想收紧到贴作者分布上沿，候选值 p90=0.396 / p95=0.501（观测 max=1.55）。"
+      }
+    },
+    "synesthesia_density": {
+      "module": "synesthesia_density_scanner",
+      "constant": "SYN_PER_1K_FLOOR",
+      "metric_key": "per_1k",
+      "desc": "明显跨感官通感短语密度/千字（响亮的光/冰冷的声音等）",
+      "registry_id": "synesthesia_density_scanner.py::SYN_PER_1K_FLOOR",
+      "current_floor_runtime": 1.5,
+      "registry_current_value": 1.5,
+      "registry_runtime_consistent": true,
+      "registry_note": "已有真实数据：5 真作者实测 synesthesia per_1k 全 0.0（正则只抓明显通感），2026-06-20 已放量 active。",
+      "per_book": {
+        "主神大道": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 59,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 59,
+            "mean": 0.0,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "max": 0.0
+          }
+        },
+        "诡秘之主": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 60,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 60,
+            "mean": 0.0,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "max": 0.0
+          }
+        },
+        "轮回乐园": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 60,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 60,
+            "mean": 0.0,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "max": 0.0
+          }
+        }
+      },
+      "merged": {
+        "chapters_scanned": 180,
+        "chapters_eligible": 179,
+        "chapters_flagged": 0,
+        "errors": 0,
+        "dist": {
+          "n": 179,
+          "mean": 0.0,
+          "p5": 0.0,
+          "p25": 0.0,
+          "p50": 0.0,
+          "p75": 0.0,
+          "p90": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        }
+      },
+      "advice": {
+        "verdict": "过松/无信息量",
+        "flag_rate_scanned": 0.0,
+        "flag_rate_eligible": 0.0,
+        "floor_percentile_in_author_dist": 1.0,
+        "candidate_p90": 0.0,
+        "candidate_p95": 0.0,
+        "observed_max": 0.0,
+        "text": "现行 SYN_PER_1K_FLOOR=1.5 落在作者分布 p100（真作者章误伤率 0.0%<1%）。对单向 anti-pattern 哨兵这是设计预期（真作者零触发=安全）；若想收紧到贴作者分布上沿，候选值 p90=0.0 / p95=0.0（观测 max=0.0）。"
+      }
+    },
+    "subtext_rescan": {
+      "module": "subtext_rescan_scanner",
+      "constant": "ON_THE_NOSE_PER_1K_FLOOR",
+      "metric_key": "on_the_nose_per_1k",
+      "desc": "on-the-nose 情绪直陈密度/千字（感到+愤怒 类引导词紧邻情绪名词）",
+      "registry_id": "subtext_rescan_scanner.py::ON_THE_NOSE_PER_1K_FLOOR",
+      "current_floor_runtime": 3.0,
+      "registry_current_value": 3.0,
+      "registry_runtime_consistent": true,
+      "registry_note": "已有真实数据：2026-06-16 批注记录 6 作者最大 0.06/千（50x 余量，切 active），本条内联注释另给出真作者最大1.14/千字[惊悚乐园0.36/遮天1.14]，留2.6x余量--两条注释数字差异较大（0.06 vs 1.14），可能是不同批次/不同统计口径，Wave-6 校准时应先核实这两个历史数字的口径差异再定基线。",
+      "per_book": {
+        "主神大道": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 59,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 59,
+            "mean": 0.0285,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+            "p95": 0.242,
+            "max": 0.53
+          }
+        },
+        "诡秘之主": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 60,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 60,
+            "mean": 0.0312,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+            "p95": 0.37,
+            "max": 0.38
+          }
+        },
+        "轮回乐园": {
+          "chapters_scanned": 60,
+          "chapters_eligible": 60,
+          "chapters_flagged": 0,
+          "errors": 0,
+          "dist": {
+            "n": 60,
+            "mean": 0.042,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+            "p95": 0.4905,
+            "max": 0.52
+          }
+        }
+      },
+      "merged": {
+        "chapters_scanned": 180,
+        "chapters_eligible": 179,
+        "chapters_flagged": 0,
+        "errors": 0,
+        "dist": {
+          "n": 179,
+          "mean": 0.0339,
+          "p5": 0.0,
+          "p25": 0.0,
+          "p50": 0.0,
+          "p75": 0.0,
+          "p90": 0.0,
+          "p95": 0.38,
+          "max": 0.53
+        }
+      },
+      "advice": {
+        "verdict": "过松/无信息量",
+        "flag_rate_scanned": 0.0,
+        "flag_rate_eligible": 0.0,
+        "floor_percentile_in_author_dist": 1.0,
+        "candidate_p90": 0.0,
+        "candidate_p95": 0.38,
+        "observed_max": 0.53,
+        "text": "现行 ON_THE_NOSE_PER_1K_FLOOR=3.0 落在作者分布 p100（真作者章误伤率 0.0%<1%）。对单向 anti-pattern 哨兵这是设计预期（真作者零触发=安全）；若想收紧到贴作者分布上沿，候选值 p90=0.0 / p95=0.38（观测 max=0.53）。"
+      }
+    }
+  }
+}

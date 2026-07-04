@@ -820,6 +820,20 @@ def _collect_active_fate_events(scanner, chapter: int) -> dict:
         return {"mode": "error", "error": str(e)[:120]}
 
 
+# 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型·仅供
+# _collect_relevant_heuristics 用——_collect_selective_history 消费磁盘预计算向量库、与生成
+# 时的后端绑定，迁移属未来独立项，继续沿用上面 _has_real_embedding_backend，不在本次改动）。
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available）。
+    import 失败 → False（调用方回退关键词重叠计分）。
+    """
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
+
+
 def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
     """v22 SE2 ERL Heuristics 检索：按本章 context 检索 top-N 写作经验，
     避免全量塞导致 context rot。
@@ -879,18 +893,18 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         return {"mode": "on", "total_patterns": 0, "retrieved": []}
 
     # 打分：context 关键词重叠 + confidence + usage_count log。
-    # 🔴 2026-07-02 接线 embedding_store：真后端（_has_real_embedding_backend）时 kw_hits 换成
-    # 「context 拼接文本 vs 经验条目 desc」embedding 余弦（同 _collect_selective_history 用法）；
-    # 无真后端 → kw_hits 保持原关键词重叠计数，逐字节零回归。
+    # 🔴 2026-07-04 换轨内容语义嵌入 API：内容后端就绪（_content_backend_ready）时 kw_hits 换成
+    # 「context 拼接文本 vs 经验条目 desc」内容语义余弦（同 _collect_selective_history 用法，
+    # 但走内容而非风格后端）；不可用 → kw_hits 保持原关键词重叠计数，逐字节零回归。
     import math
     _query_emb = None
     _embed_mod = None
-    if _has_real_embedding_backend():
+    if _content_backend_ready():
         _ctx_text = " ".join(sorted(ctx_kws)) or turning
         if _ctx_text.strip():
             try:
                 import embedding_store as _embed_mod
-                _query_emb = _embed_mod.compute_embedding(_ctx_text)
+                _query_emb = _embed_mod.compute_content_embedding(_ctx_text)
             except Exception:
                 _query_emb = None
                 _embed_mod = None
@@ -902,10 +916,17 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         usage = p.get("usage_count", 0)
         if _query_emb is not None and desc.strip():
             try:
-                p_emb = _embed_mod.compute_embedding(desc)
+                p_emb = _embed_mod.compute_content_embedding(desc)
                 sim = _embed_mod.cosine_similarity(_query_emb, p_emb) if p_emb else 0.0
-                # 余弦 [-1,1] → 与原 kw_hits(整数计数)量纲对齐的保守缩放·待金标准校准
-                kw_hits = sim * 5.0
+                # 金标准校准 2026-07-04：content_embed_separability_20260704 报告——bge 内容
+                # 余弦值域远比原「风格后端 [-1,1] 假设」窄（content_relatedness 族相关≈0.52 /
+                # 无关≈0.41，五类分布 p5-p95 落在约 0.30-0.68）。原 sim*5.0 直接缩放会把整个
+                # 有效范围压缩到 kw_hits≈[1.5,3.4]——无论真相关还是真无关都是「中等分数」，
+                # 反而丢了原关键词计数「不相关=0/强相关=高」的区分度。改用 [0.40, 0.65] 双点
+                # 拉伸映射：0.40 锚 neg_cross_book p50(0.4136) 一带的「明显无关」→ 拉到 kw_hits≈0；
+                # 0.65 锚 pos_adjacent p75-p95(0.5974-0.6836) 一带的「强相关」→ 拉到 kw_hits=5
+                # （与原关键词命中计数上限对齐）；区间外钳位，不外推。
+                kw_hits = max(0.0, min(1.0, (sim - 0.40) / (0.65 - 0.40))) * 5.0
             except Exception:
                 kw_hits = sum(1 for kw in ctx_kws if kw in desc)
         else:
@@ -914,8 +935,9 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         return kw_hits * 2 + confidence + math.log(usage + 1)
 
     # 🔴 2026-07-03 Wave-4：sort(key=score) 对 all_patterns 每项各调一次 score()，真后端下
-    # 逐条 compute_embedding(desc) = N 次子进程调用。排序前一次性 prefetch 全部 desc 灌缓存，
-    # 其后 score() 内逐条 compute_embedding 全部命中缓存（query embed 已在循环外算过不重复）。
+    # 逐条 compute_content_embedding(desc) = N 次子进程调用。排序前一次性 prefetch 全部 desc
+    # 灌缓存，其后 score() 内逐条 compute_content_embedding 全部命中缓存（query embed 已在
+    # 循环外算过不重复）。
     if _query_emb is not None:
         _all_descs = [
             p.get("description", "") + " " + p.get("name", "") + " "
@@ -923,7 +945,7 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
             for p in all_patterns
         ]
         try:
-            _embed_mod.prefetch_embeddings(_all_descs)
+            _embed_mod.prefetch_content_embeddings(_all_descs)
         except Exception:
             pass
 

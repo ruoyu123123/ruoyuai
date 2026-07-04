@@ -15,11 +15,12 @@
 - 事件簇.json clusters[]（vol 归属 + status + scope_summary）
 - 故事块摘要.json clusters[]（已写 cluster 的摘要，判断「实际写了什么」）
 
-【2026-07-01 语义覆盖率补齐】milestone「是否已触及」默认判据是关键词 2-gram 字面
-重叠——同义改写零容错（如milestone写「夺取王座」，已写内容写「登上帝位」，字面零
-重叠会误判「未触及」→ 假阳性 VOLUME_ARC_DRIFT）。_has_real_embedding_backend() 真
-语义后端就绪时，改用 milestone 文本 vs 已写内容（cluster scope_summary + 账本章
-summary 聚合）embedding 的余弦相似度，≥ 阈值（占位 0.5，待金标准校准，env
+【2026-07-01 语义覆盖率补齐 · 2026-07-04 迁移内容嵌入】milestone「是否已触及」默认判据是
+关键词 2-gram 字面重叠——同义改写零容错（如milestone写「夺取王座」，已写内容写「登上
+帝位」，字面零重叠会误判「未触及」→ 假阳性 VOLUME_ARC_DRIFT）。内容语义后端（bge）
+就绪时（content_backend_available()），改用 milestone 文本 vs 已写内容（cluster
+scope_summary + 账本章 summary 聚合）embedding 的余弦相似度，≥ 阈值（0.49·
+content_embed_separability_20260704 报告 Youden 点·召回优先·env
 VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 可覆盖）才算「已触及」；embedding 不可用/维度不
 一致/未配后端 → 回退关键词重叠，逐字节零回归。返回值 match_method 字段标注本次
 实际用的是 "embedding_cosine" 还是 "bigram_keyword_overlap"。
@@ -38,25 +39,24 @@ import sys
 from pathlib import Path
 
 
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
 
-    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
-    embedding 的 scanner 自带一份，不互相 import）。
+    import 失败 → False（调用方回退关键词 2-gram 重叠）。
     """
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
-# 🔬 阈值占位待金标准校准：milestone embedding 与已写内容聚合 embedding 余弦相似度
-# ≥ 此值才视为「已触及」。默认 0.5（无校准数据前的中间值·呼应 emotion_curve_rescan_scanner
-# 的 COSINE_FLOOR=0.55 同数量级）。env VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 可覆盖。
-MILESTONE_SEMANTIC_TOUCH_FLOOR = 0.5
+# milestone embedding 与已写内容聚合 embedding 余弦相似度 ≥ 此值才视为「已触及」。
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
+# （advisory 漂移哨兵取 Youden 点召回优先·宁可多提醒不漏报）。env VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 可覆盖。
+MILESTONE_SEMANTIC_TOUCH_FLOOR = 0.49
 
 
 def _semantic_touch_floor() -> float:
@@ -70,13 +70,13 @@ def _semantic_touch_floor() -> float:
 
 
 def _embed_or_none(text: str):
-    """真语义 embedding；embedding_store 不可用/编码异常/空文本 → None（调用方回退字面 bigram）。"""
+    """内容语义 embedding；内容后端不可用/编码异常/空文本 → None（调用方回退字面 bigram）。"""
     if not text or not str(text).strip():
         return None
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from embedding_store import compute_embedding
-        emb = compute_embedding(text)
+        from embedding_store import compute_content_embedding
+        emb = compute_content_embedding(text)
         return emb if emb else None
     except Exception:
         return None
@@ -220,20 +220,20 @@ def scan(project_root: Path) -> dict:
                     written_text += " " + str(rec["summary"])
     written_kw = _kw(written_text)
 
-    # 真语义后端就绪 → 已写内容整体只编码一次（milestone 逐条复用比余弦相似度）；
+    # 内容语义后端就绪 → 已写内容整体只编码一次（milestone 逐条复用比余弦相似度）；
     # 否则（默认）保留关键词 2-gram 重叠原样不动
     match_method = "bigram_keyword_overlap"
     written_embedding = None
     semantic_floor = None
-    if _has_real_embedding_backend():
+    if _content_backend_ready():
         # 🔴 2026-07-03 Wave-4：先收集本次要 embed 的全部文本（已写内容聚合 + 每条
         # milestone）一次性 prefetch 灌缓存——下面 written_embedding + 逐条 milestone
         # 的 _embed_or_none 全部命中缓存（取代已写内容 1 次 + 每个 milestone 各自
         # 触发一次后端 subprocess 调用）。
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent))
-            from embedding_store import prefetch_embeddings
-            prefetch_embeddings([written_text] + [_milestone_text(ms) for ms in milestones])
+            from embedding_store import prefetch_content_embeddings
+            prefetch_content_embeddings([written_text] + [_milestone_text(ms) for ms in milestones])
         except Exception:
             pass
         written_embedding = _embed_or_none(written_text)
@@ -241,7 +241,7 @@ def scan(project_root: Path) -> dict:
             match_method = "embedding_cosine"
             semantic_floor = _semantic_touch_floor()
 
-    # milestone 覆盖率：真语义就绪 → 余弦相似度 ≥ floor 视为「已触及」；
+    # milestone 覆盖率：内容语义就绪 → 余弦相似度 ≥ floor 视为「已触及」；
     # 否则 → 与已写内容关键词有重叠即视为「已触及」（原逻辑不动）
     touched = 0
     untouched = []

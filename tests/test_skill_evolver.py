@@ -352,32 +352,34 @@ def test_cli_evolve_exit_zero_and_json():
         shutil.rmtree(td, ignore_errors=True)
 
 
-# ── embedding 接线（2026-07-02 · 真后端门控 + token jaccard fallback）────────────────
+# ── 内容语义 embedding 接线（2026-07-04 · content_backend_available 门控 + token jaccard fallback）────────────────
 
-def test_has_real_embedding_backend_false_by_default():
-    old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
-    try:
-        assert mod._has_real_embedding_backend() is False
-    finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
+def test_content_backend_ready_false_by_default(monkeypatch):
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: False)
+    assert mod._content_backend_ready() is False
+
+
+def test_content_backend_ready_true_when_available(monkeypatch):
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    assert mod._content_backend_ready() is True
 
 
 def test_semantic_merge_catches_zero_token_overlap_synonym(monkeypatch):
-    """真后端：两条经验 token 完全不重叠的同义改写（"对话要简短" vs "台词不宜过长"）
-    仍应被 embedding 余弦判定该合并——字面 token jaccard 会判不相关（跳过合并）。"""
-    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    """内容后端就绪：两条经验 token 完全不重叠的同义改写（"对话要简短" vs "台词不宜过长"）
+    仍应被内容语义余弦判定该合并——字面 token jaccard 会判不相关（跳过合并）。"""
     import embedding_store
 
     def _mock_embed(text):
         if "对话要简短" in text or "台词不宜过长" in text:
             return [1.0, 0.0]
         return [0.0, 1.0]
-    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _mock_embed)
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings",
+                        lambda texts: {"total": len(texts), "unique": 0,
+                                      "cache_hits": 0, "computed": 0})
 
     payload = {
         "success_patterns": [
@@ -407,24 +409,23 @@ def test_semantic_merge_catches_zero_token_overlap_synonym(monkeypatch):
 
 def test_semantic_merge_prefetches_all_pattern_blobs_once(monkeypatch):
     """🔴 2026-07-03 Wave-4 批量改造回归锁：evolve() 语义分支开头应对本 category 全部
-    pattern blob 调用**一次** prefetch_embeddings（而非 O(N^2) 两两比对时逐条各自触发
-    后端·ruoyu_style 等真后端下 N 条各起一次子进程暖机不可用）。"""
-    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    pattern blob 调用**一次** prefetch_content_embeddings（而非 O(N^2) 两两比对时逐条各自
+    触发后端·真后端下 N 条各起一次子进程暖机不可用）。"""
     import embedding_store
-    embedding_store._BACKEND = None  # 重探测后端（隔离跨测试残留缓存）
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
 
     calls = []
 
     def _record_prefetch(texts):
         calls.append(list(texts))
         return {"total": len(texts), "unique": len(set(texts)), "cache_hits": 0, "computed": len(texts)}
-    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _record_prefetch)
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings", _record_prefetch)
 
     def _mock_embed(text):
         if "对话要简短" in text or "台词不宜过长" in text:
             return [1.0, 0.0]
         return [0.0, 1.0]
-    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _mock_embed)
 
     payload = {
         "success_patterns": [
@@ -450,12 +451,11 @@ def test_semantic_merge_prefetches_all_pattern_blobs_once(monkeypatch):
         shutil.rmtree(td, ignore_errors=True)
 
 
-def test_semantic_merge_off_by_default_matches_old_behavior():
-    """🔴 零回归锁：无真后端（默认）→ evolve 合并判定仍是纯字面 token jaccard（不合并两条
-    token 零重叠的经验）。"""
-    old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
+def test_semantic_merge_off_by_default_matches_old_behavior(monkeypatch):
+    """🔴 零回归锁：内容后端不可用（默认）→ evolve 合并判定仍是纯字面 token jaccard（不合并
+    两条 token 零重叠的经验）。"""
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: False)
     payload = {
         "success_patterns": [
             {"id": "a", "trigger": "对话要简短", "technique": "短促应答", "why_works": "节奏快"},
@@ -466,24 +466,23 @@ def test_semantic_merge_off_by_default_matches_old_behavior():
     td, root = _mk_project(payload)
     try:
         r = mod.evolve(root, current_ch=10)
-        assert r["merged"] == [], "默认（无真后端）应保持字面 token jaccard 判不合并"
+        assert r["merged"] == [], "默认（无内容后端）应保持字面 token jaccard 判不合并"
     finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
         import shutil
         shutil.rmtree(td, ignore_errors=True)
 
 
 def test_semantic_merge_falls_back_on_embedding_error(monkeypatch):
-    """真后端配置但编码异常 → 回退 token jaccard（不崩·不误合并）。"""
-    monkeypatch.setenv("EMBED_BACKEND", "mock")
+    """内容后端配置但编码异常 → 回退 token jaccard（不崩·不误合并）。"""
     import embedding_store
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings",
+                        lambda texts: {"total": len(texts), "unique": 0,
+                                      "cache_hits": 0, "computed": 0})
 
     def _boom(text):
         raise RuntimeError("模拟真后端编码失败")
-    monkeypatch.setattr(embedding_store, "compute_embedding", _boom)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _boom)
 
     payload = {
         "success_patterns": [
@@ -502,11 +501,14 @@ def test_semantic_merge_falls_back_on_embedding_error(monkeypatch):
 
 
 def test_semantic_merge_empty_blob_still_never_merges(monkeypatch):
-    """🔴 C12 回归锁延伸：真后端下空 blob 经验仍绝不误合并（token 空集合闸先于语义判断，
+    """🔴 C12 回归锁延伸：内容后端下空 blob 经验仍绝不误合并（token 空集合闸先于语义判断，
     即便 mock embedding 让"万物相似"也拦得住）。"""
-    monkeypatch.setenv("EMBED_BACKEND", "mock")
     import embedding_store
-    monkeypatch.setattr(embedding_store, "compute_embedding", lambda t: [1.0, 0.0])
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", lambda t: [1.0, 0.0])
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings",
+                        lambda texts: {"total": len(texts), "unique": 0,
+                                      "cache_hits": 0, "computed": 0})
 
     payload = {
         "success_patterns": [

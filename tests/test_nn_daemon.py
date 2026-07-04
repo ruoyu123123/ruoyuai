@@ -58,7 +58,25 @@ def test_daemon_module_importable_without_torch():
     assert hasattr(daemon_mod, "serve_forever")
     assert hasattr(daemon_mod, "IdleWatchdog")
     assert hasattr(daemon_mod, "dispatch_request")
-    assert set(daemon_mod._TASK_HANDLERS) == {"style_embed", "vad", "coherence", "surprisal", "nli"}
+    assert set(daemon_mod._TASK_HANDLERS) == {
+        "style_embed", "vad", "coherence", "surprisal", "nli",
+        "content_embed",   # 🔴 2026-07-04 W6-C：bge 内容嵌入（风格/内容双轨）
+    }
+
+
+def test_dispatch_content_embed_task(monkeypatch):
+    """content_embed task 经 dispatch_request 全链路（mock handler·零模型加载）。"""
+    monkeypatch.setitem(daemon_mod._TASK_HANDLERS, "content_embed",
+                        lambda items, model=None: [
+                            {"embedding": [float(len(t))] * 3, "source": "content_embed"}
+                            for t in items])
+    monkeypatch.setattr(daemon_mod, "_STATE", daemon_mod._DaemonState("tok-ce"))
+    status, payload = daemon_mod.dispatch_request(
+        "POST", "/infer", {"X-Ruoyu-Token": "tok-ce"},
+        json.dumps({"task": "content_embed", "items": ["甲甲", "乙乙乙"]}).encode("utf-8"))
+    assert status == 200 and payload["ok"] is True
+    assert payload["results"][0]["embedding"] == [2.0, 2.0, 2.0]
+    assert payload["results"][1]["source"] == "content_embed"
 
 
 def test_client_module_importable_and_disabled_by_default(monkeypatch):

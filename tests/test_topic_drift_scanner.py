@@ -2,7 +2,7 @@
 """test_topic_drift_scanner — 主题漂移检测 scanner 测试
 
 钉死：
-  · embedding 不可用（EMBED_BACKEND 未设）→ 静默返回空列表
+  · 内容语义后端不可用（content_backend_available()==False）→ 静默返回空列表
   · 段落太少 → 返回空
   · mock 数据测试检测逻辑
   · 所有 issue 都是 advisory
@@ -11,13 +11,28 @@
   · 后端检测逻辑正确
 """
 import math
-import os
 import sys
 from pathlib import Path
-from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import topic_drift_scanner as tds  # noqa: E402
+import embedding_store  # noqa: E402
+
+
+# 🔴 2026-07-04 本地 autouse 隔离（不碰全局 conftest.py）：content_backend_available() 查真
+# 文件系统（venv/infer 脚本/模型目录），本机若已备好 bge 模型会恒真——不像旧 EMBED_BACKEND
+# 有 conftest._isolate_nn_gates 兜底清零，会让本文件里不测 embedding 的"素"用例跨机器非确定
+# 污染（真机上真的会去跑一次真实编码）。默认关闭·内容路径专项测试自行 monkeypatch 覆盖。
+@pytest.fixture(autouse=True)
+def _content_backend_off_by_default():
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
+    try:
+        yield
+    finally:
+        embedding_store.content_backend_available = orig
 
 
 # ── helper: 确定性 mock embedding（字符频率向量·有意义的余弦距离）──────────────
@@ -60,109 +75,33 @@ _OFF_TOPIC_PARAS = [
 
 # ── 后端检测 ─────────────────────────────────────────────────────────────────
 
-class TestHasRealBackend:
-    """_has_real_embedding_backend 检测逻辑。"""
+class TestContentBackendReady:
+    """_content_backend_ready 检测逻辑（委托 embedding_store.content_backend_available·
+    纯布尔文件系统检查·不再有 EMBED_BACKEND 字符串取值的分支细节）。"""
 
-    def test_no_env_returns_false(self):
-        """无配置 → False。"""
-        old_eb = os.environ.pop("EMBED_BACKEND", None)
-        gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-        saved = {k: os.environ.pop(k) for k in gen_keys}
-        try:
-            assert tds._has_real_embedding_backend() is False
-        finally:
-            if old_eb is not None:
-                os.environ["EMBED_BACKEND"] = old_eb
-            for k, v in saved.items():
-                os.environ[k] = v
+    def test_false_by_default(self, monkeypatch):
+        monkeypatch.setattr(embedding_store, "content_backend_available", lambda: False)
+        assert tds._content_backend_ready() is False
 
-    def test_mstyle_returns_true(self):
-        """EMBED_BACKEND=mstyle → True。"""
-        old = os.environ.get("EMBED_BACKEND")
-        try:
-            os.environ["EMBED_BACKEND"] = "mstyle"
-            assert tds._has_real_embedding_backend() is True
-        finally:
-            if old is not None:
-                os.environ["EMBED_BACKEND"] = old
-            else:
-                os.environ.pop("EMBED_BACKEND", None)
+    def test_true_when_available(self, monkeypatch):
+        monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+        assert tds._content_backend_ready() is True
 
-    def test_hash_returns_false(self):
-        """EMBED_BACKEND=hash → False（md5 袋·无真语义）。"""
-        old = os.environ.get("EMBED_BACKEND")
-        try:
-            os.environ["EMBED_BACKEND"] = "hash"
-            assert tds._has_real_embedding_backend() is False
-        finally:
-            if old is not None:
-                os.environ["EMBED_BACKEND"] = old
-            else:
-                os.environ.pop("EMBED_BACKEND", None)
-
-    def test_empty_string_returns_false(self):
-        """EMBED_BACKEND="" → False。"""
-        old = os.environ.get("EMBED_BACKEND")
-        try:
-            os.environ["EMBED_BACKEND"] = ""
-            assert tds._has_real_embedding_backend() is False
-        finally:
-            if old is not None:
-                os.environ["EMBED_BACKEND"] = old
-            else:
-                os.environ.pop("EMBED_BACKEND", None)
-
-    def test_gen_embed_env_returns_true(self):
-        """GEN_EMBED__* 环境变量存在 → True。"""
-        old_eb = os.environ.pop("EMBED_BACKEND", None)
-        try:
-            os.environ["GEN_EMBED__test__API_KEY"] = "fake"
-            assert tds._has_real_embedding_backend() is True
-        finally:
-            os.environ.pop("GEN_EMBED__test__API_KEY", None)
-            if old_eb is not None:
-                os.environ["EMBED_BACKEND"] = old_eb
-
-    def test_local_returns_true(self):
-        """EMBED_BACKEND=local → True。"""
-        old = os.environ.get("EMBED_BACKEND")
-        try:
-            os.environ["EMBED_BACKEND"] = "local"
-            assert tds._has_real_embedding_backend() is True
-        finally:
-            if old is not None:
-                os.environ["EMBED_BACKEND"] = old
-            else:
-                os.environ.pop("EMBED_BACKEND", None)
-
-    def test_ruoyu_style_returns_true(self):
-        """EMBED_BACKEND=ruoyu_style → True。"""
-        old = os.environ.get("EMBED_BACKEND")
-        try:
-            os.environ["EMBED_BACKEND"] = "ruoyu_style"
-            assert tds._has_real_embedding_backend() is True
-        finally:
-            if old is not None:
-                os.environ["EMBED_BACKEND"] = old
-            else:
-                os.environ.pop("EMBED_BACKEND", None)
+    def test_exception_returns_false(self, monkeypatch):
+        """content_backend_available 探测异常 → _content_backend_ready 吞异常返回 False
+        （不崩·调用方静默返回空列表）。"""
+        def _boom():
+            raise RuntimeError("模拟内容后端探测异常")
+        monkeypatch.setattr(embedding_store, "content_backend_available", _boom)
+        assert tds._content_backend_ready() is False
 
 
 # ── 静默降级 ─────────────────────────────────────────────────────────────────
 
-def test_no_backend_returns_empty():
-    """EMBED_BACKEND 未设 → 返回空列表（静默降级）。"""
-    old = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
-    try:
-        result = tds.scan_topic_drift("一段很长的文字\n" * 10, "主题")
-        assert result == []
-    finally:
-        if old is not None:
-            os.environ["EMBED_BACKEND"] = old
-        for k, v in saved.items():
-            os.environ[k] = v
+def test_no_content_backend_returns_empty():
+    """内容后端不可用（默认·autouse fixture）→ 返回空列表（静默降级）。"""
+    result = tds.scan_topic_drift("一段很长的文字\n" * 10, "主题")
+    assert result == []
 
 
 def test_empty_text_returns_empty():
@@ -185,34 +124,31 @@ def test_none_scope_returns_empty():
     assert tds.scan_topic_drift("文字", None) == []
 
 
-def test_too_few_paragraphs_returns_empty():
+def test_too_few_paragraphs_returns_empty(monkeypatch):
     """段落太少（< 6）→ 返回空。"""
-    with patch.dict(os.environ, {"EMBED_BACKEND": "mock"}):
-        import embedding_store
-        orig = embedding_store.compute_embedding
-        embedding_store.compute_embedding = _char_freq_embedding
-        try:
-            result = tds.scan_topic_drift("第一段\n第二段\n第三段", "主题")
-            assert result == []
-        finally:
-            embedding_store.compute_embedding = orig
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _char_freq_embedding)
+    result = tds.scan_topic_drift("第一段\n第二段\n第三段", "主题")
+    assert result == []
 
 
-def test_import_error_graceful():
-    """embedding_store 导入失败 → 返回空列表（不崩）。"""
-    with patch.dict(os.environ, {"EMBED_BACKEND": "mock"}):
-        # 临时让 import 失败
-        saved = sys.modules.get("embedding_store")
-        sys.modules["embedding_store"] = None  # type: ignore[assignment]
-        try:
-            result = tds.scan_topic_drift(
-                "\n".join(["段落" + str(i) * 10 for i in range(10)]), "主题")
-            assert result == []
-        finally:
-            if saved is not None:
-                sys.modules["embedding_store"] = saved
-            else:
-                sys.modules.pop("embedding_store", None)
+def test_import_error_graceful(monkeypatch):
+    """内容后端门控判定就绪（mock _content_backend_ready 直接放行，绕开门控自身的 import），
+    但 scan_topic_drift 内部第二处 `from embedding_store import ...` 因模块被顶掉而失败
+    → 返回空列表（不崩）。"""
+    monkeypatch.setattr(tds, "_content_backend_ready", lambda: True)
+    # 临时让 import 失败
+    saved = sys.modules.get("embedding_store")
+    sys.modules["embedding_store"] = None  # type: ignore[assignment]
+    try:
+        result = tds.scan_topic_drift(
+            "\n".join(["段落" + str(i) * 10 for i in range(10)]), "主题")
+        assert result == []
+    finally:
+        if saved is not None:
+            sys.modules["embedding_store"] = saved
+        else:
+            sys.modules.pop("embedding_store", None)
 
 
 # ── 段落切分 ─────────────────────────────────────────────────────────────────
@@ -275,14 +211,23 @@ class TestSlidingWindowMean:
 
 def _run_with_mock_embedding(draft_text: str, scope: str):
     """用 mock embedding 跑 scan_topic_drift。"""
-    with patch.dict(os.environ, {"EMBED_BACKEND": "mock"}):
-        import embedding_store
-        orig = embedding_store.compute_embedding
-        embedding_store.compute_embedding = _char_freq_embedding
-        try:
-            return tds.scan_topic_drift(draft_text, scope)
-        finally:
-            embedding_store.compute_embedding = orig
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_batch = embedding_store.compute_content_embeddings_batch
+    orig_prefetch = embedding_store.prefetch_content_embeddings
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embedding = _char_freq_embedding
+    embedding_store.compute_content_embeddings_batch = (
+        lambda texts: [_char_freq_embedding(t) for t in texts])
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
+    try:
+        return tds.scan_topic_drift(draft_text, scope)
+    finally:
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.compute_content_embeddings_batch = orig_batch
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
 
 def test_all_issues_advisory():
@@ -399,22 +344,32 @@ def test_strips_changes_block():
     assert tds._strip_changes(body) == body
 
 
-def test_dim_mismatch_returns_empty():
-    """某段 embedding 维度与 scope 不一致（模拟单条降级 hash）→ 返回空，不产假漂移。"""
+def test_dim_mismatch_returns_empty(monkeypatch):
+    """某段 embedding 维度与 scope 不一致 → 返回空，不产假漂移。"""
     def _mixed(text, dim=32):
         if "MISMATCH" in text:
             return [0.1] * 16   # 维度不同
         return _char_freq_embedding(text, dim)
-    with patch.dict(os.environ, {"EMBED_BACKEND": "mock"}):
-        import embedding_store
-        orig = embedding_store.compute_embedding
-        embedding_store.compute_embedding = _mixed
-        try:
-            paras = ["正常段落武功剑法内容充足"] * 7 + ["MISMATCH 这段维度不同"]
-            result = tds.scan_topic_drift("\n".join(paras), "武功剑法主题")
-            assert result == []
-        finally:
-            embedding_store.compute_embedding = orig
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _mixed)
+    paras = ["正常段落武功剑法内容充足"] * 7 + ["MISMATCH 这段维度不同"]
+    result = tds.scan_topic_drift("\n".join(paras), "武功剑法主题")
+    assert result == []
+
+
+def test_partial_embedding_failure_returns_empty(monkeypatch):
+    """🔴 2026-07-04 迁移回归锁：compute_content_embedding 单条编码失败返回 None（内容语义
+    无 hash 兜底冒充·与旧 compute_embedding 必兜底 hash(384) 不同语义），维度守卫须先挡
+    None 再比长度，不然 len(None) 会直接崩——不产假漂移，也不该抛异常。"""
+    def _partial(text):
+        if "FAIL" in text:
+            return None
+        return _char_freq_embedding(text)
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _partial)
+    paras = ["正常段落武功剑法内容充足"] * 7 + ["FAIL 这段编码失败"]
+    result = tds.scan_topic_drift("\n".join(paras), "武功剑法主题")
+    assert result == []
 
 
 def test_sustained_has_spec_common_fields():
@@ -447,8 +402,8 @@ def test_issues_have_local_window_mean():
 
 # ── 🔴 2026-07-03 Wave-4 性能层：prefetch 批量预热回归锁（范式源头） ─────────────────
 
-def test_prefetch_called_once_with_scope_and_paragraphs():
-    """scan_topic_drift 语义路径开头一次性 prefetch_embeddings(scope+全部段落)，
+def test_prefetch_called_once_with_scope_and_paragraphs(monkeypatch):
+    """scan_topic_drift 语义路径开头一次性 prefetch_content_embeddings(scope+全部段落)，
     而不是逐段各自触发后端计算——断言只调一次且文本集合符合预期。"""
     paras = _ON_TOPIC_PARAS[:4] + _OFF_TOPIC_PARAS + _ON_TOPIC_PARAS[4:8]
     text = "\n".join(paras)
@@ -459,24 +414,17 @@ def test_prefetch_called_once_with_scope_and_paragraphs():
         return {"total": len(texts), "unique": len(set(texts)),
                 "cache_hits": 0, "computed": len(set(texts))}
 
-    with patch.dict(os.environ, {"EMBED_BACKEND": "mock"}):
-        import embedding_store
-        orig_compute = embedding_store.compute_embedding
-        orig_prefetch = embedding_store.prefetch_embeddings
-        embedding_store.compute_embedding = _char_freq_embedding
-        embedding_store.prefetch_embeddings = _rec_prefetch
-        try:
-            tds.scan_topic_drift(text, _SCOPE)
-        finally:
-            embedding_store.compute_embedding = orig_compute
-            embedding_store.prefetch_embeddings = orig_prefetch
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _char_freq_embedding)
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings", _rec_prefetch)
+    tds.scan_topic_drift(text, _SCOPE)
 
     assert len(calls) == 1, f"prefetch 应只调一次，实际 {len(calls)}"
     expected = [_SCOPE] + tds._split_paragraphs(text)
     assert calls[0] == expected
 
 
-def test_prefetch_not_called_when_too_few_paragraphs():
+def test_prefetch_not_called_when_too_few_paragraphs(monkeypatch):
     """段落太少（< 6）提前返回·prefetch 不该被触发（零浪费）。"""
     calls = []
 
@@ -484,17 +432,10 @@ def test_prefetch_not_called_when_too_few_paragraphs():
         calls.append(list(texts))
         return {}
 
-    with patch.dict(os.environ, {"EMBED_BACKEND": "mock"}):
-        import embedding_store
-        orig_compute = embedding_store.compute_embedding
-        orig_prefetch = embedding_store.prefetch_embeddings
-        embedding_store.compute_embedding = _char_freq_embedding
-        embedding_store.prefetch_embeddings = _rec_prefetch
-        try:
-            result = tds.scan_topic_drift("第一段\n第二段\n第三段", "主题")
-        finally:
-            embedding_store.compute_embedding = orig_compute
-            embedding_store.prefetch_embeddings = orig_prefetch
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _char_freq_embedding)
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings", _rec_prefetch)
+    result = tds.scan_topic_drift("第一段\n第二段\n第三段", "主题")
 
     assert result == []
     assert calls == [], "段落不足 6 段时不该跑到 prefetch"

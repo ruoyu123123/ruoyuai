@@ -72,46 +72,49 @@ def test_mixed_list_schema_no_crash():
 
 
 # ════════════════════════════════════════════════════════════════════
-# 🔴 2026-07-02 embedding 语义补漏接线（真后端命中 + 门控关零回归）
-# 参考范式：topic_drift_scanner._has_real_embedding_backend（本仓约定每文件自留一份）
-# 沿用本仓既有测试惯例：手工 os.environ 存/复 + 直接换 embedding_store.compute_embedding
-# 属性（不用 pytest monkeypatch fixture · 兼容本文件的 __main__ 自跑器）。
+# 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）
+# mock 面：直接换 embedding_store.content_backend_available /
+# compute_content_embedding(_batch) / prefetch_content_embeddings 属性（不用
+# pytest monkeypatch fixture · 兼容本文件的 __main__ 自跑器）。content_backend_available
+# 查真文件系统（venv/infer 脚本/模型目录）不像旧 EMBED_BACKEND 是环境变量，本机若已备好
+# bge 模型会恒真——_mkproj() 里顺带把它重置为 False（每个测试的第一行都会调 _mkproj，
+# 早于各测试自己的显式覆盖·防跨测试非确定性污染又不依赖 pytest fixture）。
 # ════════════════════════════════════════════════════════════════════
-def _clear_embed_env():
-    bak_eb = os.environ.pop("EMBED_BACKEND", None)
-    bak_gen = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("GEN_EMBED__")}
-    return bak_eb, bak_gen
+def _reset_content_backend_gate():
+    import embedding_store
+    embedding_store.content_backend_available = lambda: False
 
 
-def _restore_embed_env(bak_eb, bak_gen):
-    if bak_eb is not None:
-        os.environ["EMBED_BACKEND"] = bak_eb
-    for k, v in bak_gen.items():
-        os.environ[k] = v
+_orig_mkproj = _mkproj
 
 
-def test_has_real_embedding_backend_false_by_default():
-    bak_eb, bak_gen = _clear_embed_env()
+def _mkproj(throughlines, threads):
+    _reset_content_backend_gate()
+    return _orig_mkproj(throughlines, threads)
+
+
+def test_content_backend_ready_false_by_default():
+    import embedding_store
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
     try:
-        assert m._has_real_embedding_backend() is False
+        assert m._content_backend_ready() is False
     finally:
-        _restore_embed_env(bak_eb, bak_gen)
+        embedding_store.content_backend_available = orig
 
 
-def test_has_real_embedding_backend_true_when_set():
-    bak = os.environ.get("EMBED_BACKEND")
+def test_content_backend_ready_true_when_available():
+    import embedding_store
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: True
     try:
-        os.environ["EMBED_BACKEND"] = "fake-real"
-        assert m._has_real_embedding_backend() is True
+        assert m._content_backend_ready() is True
     finally:
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig
 
 
 def test_semantic_hit_catches_paraphrased_thread_name():
-    """字面 substring 未命中（摘要用同义改写描述同一件事），真后端语义余弦应补上命中——
+    """字面 substring 未命中（摘要用同义改写描述同一件事），内容后端语义余弦应补上命中——
     不误标 dormant（这正是本次升级要根治的漏检）。"""
     d = _mkproj(throughlines=[],
                threads=[{"id": "t1", "name": "复仇之路", "description": "对仇人的执念"}])
@@ -123,17 +126,22 @@ def test_semantic_hit_catches_paraphrased_thread_name():
         json.loads((d / "_数据库" / "故事块摘要.json").read_text(encoding="utf-8")),
         ensure_ascii=False), "前置条件：字面 substring 必须不命中"
 
-    bak = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "fake-real"
     import embedding_store
-    orig = embedding_store.compute_embedding
+    orig_avail = embedding_store.content_backend_available
+    orig_batch = embedding_store.compute_content_embeddings_batch
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
 
     def _content_aware_embed(text):
         if ("复仇" in text) or ("仇人" in text) or ("寻仇" in text) or ("执念" in text):
             return [1.0, 0.0]
         return [0.0, 1.0]
 
-    embedding_store.compute_embedding = _content_aware_embed
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embeddings_batch = lambda texts: [_content_aware_embed(t) for t in texts]
+    embedding_store.compute_content_embedding = _content_aware_embed
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
     try:
         r = m.update(d, "001")
         assert r["subplot_updated"] == 1
@@ -141,11 +149,10 @@ def test_semantic_hit_catches_paraphrased_thread_name():
         assert sub["threads"][0]["match_method"] == "embedding_cosine"
         assert sub["threads"][0]["last_cluster"] == "001"
     finally:
-        embedding_store.compute_embedding = orig
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embeddings_batch = orig_batch
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
 
 def test_semantic_hit_catches_paraphrased_throughline_str_schema():
@@ -156,30 +163,31 @@ def test_semantic_hit_catches_paraphrased_throughline_str_schema():
             {"cluster_id": "001", "summary": "他终于向杀父仇人寻仇"}]},
             ensure_ascii=False), encoding="utf-8")
 
-    bak = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "fake-real"
     import embedding_store
-    orig = embedding_store.compute_embedding
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
 
     def _content_aware_embed(text):
         if ("复仇" in text) or ("仇人" in text) or ("寻仇" in text):
             return [1.0, 0.0]
         return [0.0, 1.0]
 
-    embedding_store.compute_embedding = _content_aware_embed
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embedding = _content_aware_embed
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
     try:
         r = m.update(d, "001")
         assert r["throughline_updated"] == 1
     finally:
-        embedding_store.compute_embedding = orig
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
 
 def test_semantic_below_threshold_no_false_hit():
-    """真后端就绪但相似度 < 阈值 → 不误判命中（不是随便配了后端就无脑判中一切）。"""
+    """内容后端就绪但相似度 < 阈值 → 不误判命中（不是随便配了后端就无脑判中一切）。"""
     d = _mkproj(throughlines=[],
                threads=[{"id": "t1", "name": "复仇之路", "description": "执念"}])
     (d / "_数据库" / "故事块摘要.json").write_text(
@@ -187,10 +195,10 @@ def test_semantic_below_threshold_no_false_hit():
             {"cluster_id": "001", "summary": "今天天气很好大家去郊游"}]},
             ensure_ascii=False), encoding="utf-8")
 
-    bak = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "fake-real"
     import embedding_store
-    orig = embedding_store.compute_embedding
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
 
     def _orthogonal_embed(text):
         # 名字/描述 embedding 与摘要 embedding 正交 → 相似度 0 < 阈值
@@ -198,30 +206,32 @@ def test_semantic_below_threshold_no_false_hit():
             return [1.0, 0.0]
         return [0.0, 1.0]
 
-    embedding_store.compute_embedding = _orthogonal_embed
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embedding = _orthogonal_embed
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
     try:
         r = m.update(d, "001")
         assert r["subplot_updated"] == 0
     finally:
-        embedding_store.compute_embedding = orig
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
 
-def test_update_gate_off_matches_original_literal_logic():
-    """🔴 零回归锁：门控关（无 EMBED_BACKEND / 无 GEN_EMBED__*）→ update() 判定结果与原字面
-    substring 逻辑一致，且 embedding_store.compute_embedding 即便被换成任意值也绝不会被调用
+def test_update_content_backend_off_matches_original_literal_logic():
+    """🔴 零回归锁：内容后端不可用 → update() 判定结果与原字面 substring 逻辑一致，且
+    embedding_store.compute_content_embedding 即便被换成任意值也绝不会被调用
     （_embed_corpus_once 在最前面短路返回 None）。"""
-    bak_eb, bak_gen = _clear_embed_env()
     import embedding_store
-    orig = embedding_store.compute_embedding
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
 
     def _boom(text):
-        raise AssertionError("门控关时绝不应调用 compute_embedding")
+        raise AssertionError("内容后端不可用时绝不应调用 compute_content_embedding")
 
-    embedding_store.compute_embedding = _boom
+    embedding_store.content_backend_available = lambda: False
+    embedding_store.compute_content_embedding = _boom
     try:
         d = _mkproj(
             throughlines=[{"name": "主线复仇"}, {"name": "无关线"}],
@@ -235,16 +245,16 @@ def test_update_gate_off_matches_original_literal_logic():
         assert by_id["t1"].get("match_method") == "literal_substring"
         assert "last_cluster" not in by_id["t2"]
     finally:
-        embedding_store.compute_embedding = orig
-        _restore_embed_env(bak_eb, bak_gen)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
 
 
 # ════════════════════════════════════════════════════════════════════
 # 🔴 2026-07-03 Wave-4 性能层：update() 批量 prefetch（corpus + 所有 thread/
 # throughline query 一次性预热，其后 _embed_corpus_once / _thread_appears 内的
-# 逐条 compute_embedding 全部命中缓存·真后端子进程按条调用极贵）
+# 逐条 compute_content_embedding 全部命中缓存·内容后端子进程按条调用极贵）
 # ════════════════════════════════════════════════════════════════════
-def test_update_prefetches_all_queries_once_when_real_backend():
+def test_update_prefetches_all_queries_once_when_content_backend_ready():
     d = _mkproj(
         throughlines=[{"name": "复仇之路", "description": "对仇人的执念"}, "支线甲"],
         threads=[{"id": "t1", "name": "主线复仇", "description": "复仇进度"}, "配角线"])
@@ -253,17 +263,19 @@ def test_update_prefetches_all_queries_once_when_real_backend():
             {"cluster_id": "001", "summary": "他终于向杀父仇人寻仇"}]},
             ensure_ascii=False), encoding="utf-8")
 
-    bak = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "fake-real"
     import embedding_store
-    orig_prefetch = embedding_store.prefetch_embeddings
+    orig_avail = embedding_store.content_backend_available
+    orig_prefetch = embedding_store.prefetch_content_embeddings
+    orig_single = embedding_store.compute_content_embedding
     calls = []
 
     def _rec_prefetch(texts):
         calls.append(list(texts))
         return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
 
-    embedding_store.prefetch_embeddings = _rec_prefetch
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.prefetch_content_embeddings = _rec_prefetch
+    embedding_store.compute_content_embedding = lambda t: [0.0, 0.0]
     try:
         m.update(d, "001")
         assert len(calls) == 1, f"应恰好一次批量 prefetch·实际 {len(calls)} 次"
@@ -280,31 +292,31 @@ def test_update_prefetches_all_queries_once_when_real_backend():
         assert "支线甲" in texts
         assert len(texts) == 5
     finally:
-        embedding_store.prefetch_embeddings = orig_prefetch
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.prefetch_content_embeddings = orig_prefetch
+        embedding_store.compute_content_embedding = orig_single
 
 
-def test_update_gate_off_never_calls_prefetch():
-    """🔴 零回归锁：门控关 → prefetch_embeddings 完全不被调用（与既有字面逻辑零回归锁互补）。"""
-    bak_eb, bak_gen = _clear_embed_env()
+def test_update_content_backend_off_never_calls_prefetch():
+    """🔴 零回归锁：内容后端不可用 → prefetch_content_embeddings 完全不被调用
+    （与既有字面逻辑零回归锁互补）。"""
     import embedding_store
-    orig_prefetch = embedding_store.prefetch_embeddings
+    orig_avail = embedding_store.content_backend_available
+    orig_prefetch = embedding_store.prefetch_content_embeddings
 
     def _boom(texts):
-        raise AssertionError("门控关时绝不应调用 prefetch_embeddings")
+        raise AssertionError("内容后端不可用时绝不应调用 prefetch_content_embeddings")
 
-    embedding_store.prefetch_embeddings = _boom
+    embedding_store.content_backend_available = lambda: False
+    embedding_store.prefetch_content_embeddings = _boom
     try:
         d = _mkproj(throughlines=[{"name": "主线复仇"}],
                    threads=[{"id": "t1", "name": "主线复仇"}])
         r = m.update(d, "001")
         assert "subplot_updated" in r
     finally:
-        embedding_store.prefetch_embeddings = orig_prefetch
-        _restore_embed_env(bak_eb, bak_gen)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
 
 if __name__ == "__main__":

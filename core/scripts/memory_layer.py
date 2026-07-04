@@ -50,23 +50,24 @@ def _tfidf_vec(text: str, idf: dict) -> dict:
     return {t: (c/total) * idf.get(t, 1.0) for t, c in tf.items()}
 
 
-# 🔴 2026-07-02: 真 embedding 后端接线（本仓约定：每个消费 embedding 的脚本自带一份门控副本）。
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
-    原样复制自 topic_drift_scanner.py（不 import 跨脚本依赖）。也检查 .env 的
-    GEN_EMBED__* API 配置（由 embedding_store._load_embed_profile 消费）。"""
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+# 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+
+    import 失败 → False（调用方回退 TF-IDF）。
+    """
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
-# 🔬 待金标准校准：语义检索相关性下限（低于此值视为不相关·不并入结果·比 TF-IDF 的 0.01
-# 阈值高是因为余弦相似度尺度不同，不能直接沿用字面法的阈值）。env 可覆盖。
-DEFAULT_SEMANTIC_SEARCH_FLOOR = 0.35
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告——语义检索相关性下限。
+# content_relatedness 族 neg_cross_book p50=0.4136 / probe_same_book_diff_chapter p50=0.4422
+# 之间取值：只滤掉明显不相关的噪声、不压检索召回（检索排序类地板取宽松位）。env 可覆盖。
+DEFAULT_SEMANTIC_SEARCH_FLOOR = 0.42
 
 
 def _semantic_search_floor() -> float:
@@ -80,19 +81,20 @@ def _semantic_search_floor() -> float:
 
 
 def _search_semantic(query: str, memories: list[dict], top_k: int) -> "list[dict] | None":
-    """embedding 余弦排序检索（真后端时取代 TF-IDF·能查到「许遥的父亲」命中「许遥爹被人害死」
-    这类同义改写）。query 编码失败 / embedding_store 不可用 → None（调用方回退 TF-IDF）。
+    """内容语义嵌入余弦排序检索（取代 TF-IDF·能查到「许遥的父亲」命中「许遥爹被人害死」
+    这类同义改写）。query 编码失败 / 内容后端不可用 → None（调用方回退 TF-IDF）。
 
     单条记忆编码失败 / 维度不一致 → 跳过该条（不是整体失败）；全部记忆都编码失败才判定
     为后端不可用（返回 None 触发 TF-IDF 兜底），否则返回真实语义结果（哪怕过滤后为空 ——
     真后端「查不到相关的」和「后端跑不起来」是两回事，不该混为一谈静默假装退回 TF-IDF）。
     """
     try:
-        from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
-        # 2026-07-03 Wave-4：query + 全部记忆内容一次性预热缓存，其后逐条 compute_embedding 命中缓存
-        # （否则 ruoyu_style 等真后端下每条记忆各起一次子进程，N 条记忆 N 次暖机不可用）。
-        prefetch_embeddings([query] + [m.get("content", "") for m in memories])
-        q_emb = compute_embedding(query)
+        from embedding_store import (compute_content_embedding, cosine_similarity,
+                                      prefetch_content_embeddings)
+        # 2026-07-03 Wave-4：query + 全部记忆内容一次性预热缓存，其后逐条 compute_content_embedding
+        # 命中缓存（否则真后端下每条记忆各起一次子进程，N 条记忆 N 次暖机不可用）。
+        prefetch_content_embeddings([query] + [m.get("content", "") for m in memories])
+        q_emb = compute_content_embedding(query)
     except Exception:
         return None
     if not q_emb:
@@ -102,7 +104,7 @@ def _search_semantic(query: str, memories: list[dict], top_k: int) -> "list[dict
     scored = []
     for mem in memories:
         try:
-            emb = compute_embedding(mem["content"])
+            emb = compute_content_embedding(mem["content"])
         except Exception:
             continue
         if not emb or len(emb) != len(q_emb):
@@ -182,13 +184,13 @@ class MemoryLayer:
                 "archive_count": len(arc_mem), "total": len(ch_mem)+len(sum_mem)+len(arc_mem)}
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
-        """跨三层检索最相关的记忆。真后端(EMBED_BACKEND)时用 embedding 余弦排序，
+        """跨三层检索最相关的记忆。内容嵌入后端就绪时用余弦排序，
         否则 TF-IDF 词袋余弦（同义改写查不到·占位法）。"""
         all_memories = (self._load_chapter_memory() +
                        self._load_summary_memory() +
                        self._load_archive_memory())
         if not all_memories: return []
-        if _has_real_embedding_backend():
+        if _content_backend_ready():
             sem = _search_semantic(query, all_memories, top_k)
             if sem is not None:
                 return sem

@@ -187,52 +187,39 @@ def test_registry_registered_with_new_flag():
 
 
 # ════════════════════════════════════════════════════════════════════
-# 🔴 2026-07-02 embedding 最近邻 canonical 建议接线（真后端命中 + 门控关字段缺省）
-# 参考范式：topic_drift_scanner._has_real_embedding_backend（本仓约定每文件自留一份）
+# 🔴 2026-07-04 内容语义 embedding 最近邻 canonical 建议接线（内容后端命中 + 门控关字段缺省）
+# 参考范式：choice_consequence_ledger._content_backend_ready（本仓约定每文件自留一份）
 # ════════════════════════════════════════════════════════════════════
-def _clear_embed_env():
-    bak_eb = os.environ.pop("EMBED_BACKEND", None)
-    bak_gen = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("GEN_EMBED__")}
-    return bak_eb, bak_gen
-
-
-def _restore_embed_env(bak_eb, bak_gen):
-    if bak_eb is not None:
-        os.environ["EMBED_BACKEND"] = bak_eb
-    for k, v in bak_gen.items():
-        os.environ[k] = v
-
-
-def test_has_real_embedding_backend_false_by_default():
-    bak_eb, bak_gen = _clear_embed_env()
+def test_content_backend_ready_false_by_default():
+    import embedding_store
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
     try:
-        assert mod._has_real_embedding_backend() is False
+        assert mod._content_backend_ready() is False
     finally:
-        _restore_embed_env(bak_eb, bak_gen)
+        embedding_store.content_backend_available = orig
 
 
-def test_has_real_embedding_backend_true_when_set():
-    bak = os.environ.get("EMBED_BACKEND")
+def test_content_backend_ready_true_when_available():
+    import embedding_store
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: True
     try:
-        os.environ["EMBED_BACKEND"] = "fake-real"
-        assert mod._has_real_embedding_backend() is True
+        assert mod._content_backend_ready() is True
     finally:
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig
 
 
 def test_promotion_candidate_gets_embedding_suggestion_when_real_backend():
-    """真后端命中：新 surface 语义上贴近某已有 canonical 值 → 加建议字段（仍要求人审·
+    """内容后端命中：新 surface 语义上贴近某已有 canonical 值 → 加建议字段（仍要求人审·
     绝不自动改 trope_canon.json）。"""
     bak_mode = os.environ.get("TROPE_CANON_MODE")
-    bak_eb = os.environ.get("EMBED_BACKEND")
+    import embedding_store
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
     try:
         _set_mode("active")
-        os.environ["EMBED_BACKEND"] = "fake-real"
-        import embedding_store
-        orig = embedding_store.compute_embedding
 
         def _content_aware_embed(text):
             # "死而复生"语义上贴近 canonical「重生」；其余目标给正交向量
@@ -240,7 +227,10 @@ def test_promotion_candidate_gets_embedding_suggestion_when_real_backend():
                 return [1.0, 0.0]
             return [0.0, 1.0]
 
-        embedding_store.compute_embedding = _content_aware_embed
+        embedding_store.content_backend_available = lambda: True
+        embedding_store.compute_content_embedding = _content_aware_embed
+        embedding_store.prefetch_content_embeddings = lambda texts: {
+            "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
         try:
             clusters = [
                 {"trope_tags": ["死而复生", "重生", "穿越"]},
@@ -254,29 +244,30 @@ def test_promotion_candidate_gets_embedding_suggestion_when_real_backend():
             assert cands["死而复生"].get("embedding_nearest_canonical") == "重生"
             assert cands["死而复生"].get("embedding_similarity") == 1.0
         finally:
-            embedding_store.compute_embedding = orig
+            embedding_store.content_backend_available = orig_avail
+            embedding_store.compute_content_embedding = orig_single
+            embedding_store.prefetch_content_embeddings = orig_prefetch
     finally:
         _set_mode(bak_mode)
-        if bak_eb is not None:
-            os.environ["EMBED_BACKEND"] = bak_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
 
 
 def test_promotion_candidate_no_suggestion_below_threshold():
-    """真后端就绪但相似度 < 阈值 → 不加建议字段（不是随便配了后端就无脑建议）。"""
+    """内容后端就绪但相似度 < 阈值 → 不加建议字段（不是随便配了后端就无脑建议）。"""
     bak_mode = os.environ.get("TROPE_CANON_MODE")
-    bak_eb = os.environ.get("EMBED_BACKEND")
+    import embedding_store
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
     try:
         _set_mode("active")
-        os.environ["EMBED_BACKEND"] = "fake-real"
-        import embedding_store
-        orig = embedding_store.compute_embedding
 
         def _orthogonal_embed(text):
             return [1.0, 0.0] if text == "新型 trope X" else [0.0, 1.0]
 
-        embedding_store.compute_embedding = _orthogonal_embed
+        embedding_store.content_backend_available = lambda: True
+        embedding_store.compute_content_embedding = _orthogonal_embed
+        embedding_store.prefetch_content_embeddings = lambda texts: {
+            "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
         try:
             clusters = [
                 {"trope_tags": ["新型 trope X", "重生", "穿越"]},
@@ -289,27 +280,26 @@ def test_promotion_candidate_no_suggestion_below_threshold():
             assert "新型 trope X" in cands
             assert "embedding_nearest_canonical" not in cands["新型 trope X"]
         finally:
-            embedding_store.compute_embedding = orig
+            embedding_store.content_backend_available = orig_avail
+            embedding_store.compute_content_embedding = orig_single
+            embedding_store.prefetch_content_embeddings = orig_prefetch
     finally:
         _set_mode(bak_mode)
-        if bak_eb is not None:
-            os.environ["EMBED_BACKEND"] = bak_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
 
 
 def test_promotion_candidate_field_absent_when_gate_off():
-    """🔴 零回归锁：门控关（无 EMBED_BACKEND）→ promotion_candidates 不带 embedding 建议
-    字段（字段缺省·不是给默认值），且 compute_embedding 换成任意值也绝不会被调用。"""
+    """🔴 零回归锁：门控关（内容后端不可用）→ promotion_candidates 不带 embedding 建议
+    字段（字段缺省·不是给默认值），且 compute_content_embedding 换成任意值也绝不会被调用。"""
     bak_mode = os.environ.get("TROPE_CANON_MODE")
-    bak_eb, bak_gen = _clear_embed_env()
     import embedding_store
-    orig = embedding_store.compute_embedding
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
 
     def _boom(text):
-        raise AssertionError("门控关时绝不应调用 compute_embedding")
+        raise AssertionError("门控关时绝不应调用 compute_content_embedding")
 
-    embedding_store.compute_embedding = _boom
+    embedding_store.content_backend_available = lambda: False
+    embedding_store.compute_content_embedding = _boom
     try:
         _set_mode("active")
         clusters = [
@@ -323,28 +313,28 @@ def test_promotion_candidate_field_absent_when_gate_off():
         assert "新型 trope X" in cands
         assert set(cands["新型 trope X"].keys()) == {"surface", "count"}   # 逐字段零回归
     finally:
-        embedding_store.compute_embedding = orig
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
         _set_mode(bak_mode)
-        _restore_embed_env(bak_eb, bak_gen)
 
 
 def test_scan_prefetches_targets_and_surfaces_once():
     """🔴 2026-07-03 Wave-4：canonical 目标值 + 候选 surface 应恰好一次批量 prefetch
     （真后端子进程按条调用极贵·不应逐候选/逐目标各自触发一次）。"""
     bak_mode = os.environ.get("TROPE_CANON_MODE")
-    bak_eb = os.environ.get("EMBED_BACKEND")
+    import embedding_store
+    orig_avail = embedding_store.content_backend_available
+    orig_prefetch = embedding_store.prefetch_content_embeddings
     try:
         _set_mode("active")
-        os.environ["EMBED_BACKEND"] = "fake-real"
-        import embedding_store
-        orig_prefetch = embedding_store.prefetch_embeddings
         calls = []
 
         def _rec_prefetch(texts):
             calls.append(list(texts))
             return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
 
-        embedding_store.prefetch_embeddings = _rec_prefetch
+        embedding_store.content_backend_available = lambda: True
+        embedding_store.prefetch_content_embeddings = _rec_prefetch
         try:
             clusters = [
                 {"trope_tags": ["死而复生", "重生", "穿越"]},
@@ -363,26 +353,24 @@ def test_scan_prefetches_targets_and_surfaces_once():
             assert cand_surfaces.issubset(texts)
             assert "死而复生" in cand_surfaces
         finally:
-            embedding_store.prefetch_embeddings = orig_prefetch
+            embedding_store.content_backend_available = orig_avail
+            embedding_store.prefetch_content_embeddings = orig_prefetch
     finally:
         _set_mode(bak_mode)
-        if bak_eb is not None:
-            os.environ["EMBED_BACKEND"] = bak_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
 
 
 def test_scan_gate_off_never_calls_prefetch():
-    """🔴 零回归锁：门控关 → prefetch_embeddings 完全不被调用。"""
+    """🔴 零回归锁：门控关 → prefetch_content_embeddings 完全不被调用。"""
     bak_mode = os.environ.get("TROPE_CANON_MODE")
-    bak_eb, bak_gen = _clear_embed_env()
     import embedding_store
-    orig_prefetch = embedding_store.prefetch_embeddings
+    orig_avail = embedding_store.content_backend_available
+    orig_prefetch = embedding_store.prefetch_content_embeddings
 
     def _boom(texts):
-        raise AssertionError("门控关时绝不应调用 prefetch_embeddings")
+        raise AssertionError("门控关时绝不应调用 prefetch_content_embeddings")
 
-    embedding_store.prefetch_embeddings = _boom
+    embedding_store.content_backend_available = lambda: False
+    embedding_store.prefetch_content_embeddings = _boom
     try:
         _set_mode("active")
         clusters = [
@@ -394,32 +382,29 @@ def test_scan_gate_off_never_calls_prefetch():
         out = mod.scan_for_promotions(proj)
         assert out["promotion_candidates"]
     finally:
-        embedding_store.prefetch_embeddings = orig_prefetch
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.prefetch_content_embeddings = orig_prefetch
         _set_mode(bak_mode)
-        _restore_embed_env(bak_eb, bak_gen)
 
 
 def test_canonicalize_tag_never_touches_embedding():
-    """canonicalize_tag 本体不动：真后端就绪时也绝不调用 compute_embedding（纯字典精确匹配·
-    只有 scan_for_promotions 的晋升候选队列才叠加 embedding 建议）。"""
+    """canonicalize_tag 本体不动：内容后端就绪时也绝不调用 compute_content_embedding（纯字典
+    精确匹配·只有 scan_for_promotions 的晋升候选队列才叠加 embedding 建议）。"""
     bak_mode = os.environ.get("TROPE_CANON_MODE")
-    bak_eb = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "fake-real"
     import embedding_store
-    orig = embedding_store.compute_embedding
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
 
     def _boom(text):
         raise AssertionError("canonicalize_tag 不该碰 embedding")
 
-    embedding_store.compute_embedding = _boom
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embedding = _boom
     try:
         _set_mode("shadow")
         assert mod.canonicalize_tag("重生归来") == "重生"
         assert mod.canonicalize_tag("某新概念") == "某新概念"
     finally:
-        embedding_store.compute_embedding = orig
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
         _set_mode(bak_mode)
-        if bak_eb is not None:
-            os.environ["EMBED_BACKEND"] = bak_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)

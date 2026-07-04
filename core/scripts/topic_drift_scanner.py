@@ -3,20 +3,26 @@
 # -*- coding: utf-8 -*-
 """topic_drift_scanner.py — 主题漂移检测 scanner（advisory · embedding-based · 2026-06-29）
 
-用已有的 embedding_store.compute_embedding() 计算每段与 cluster scope_summary 的余弦距离，
-距离突然增大 = 跑题。三种 advisory issue:
+用内容语义 embedding_store.compute_content_embedding() 计算每段与 cluster scope_summary 的
+余弦距离，距离突然增大 = 跑题。三种 advisory issue:
   · TOPIC_DRIFT_DETECTED  — 某段余弦距离 > 全文均值 + 2σ（单点偏离）
   · TOPIC_DRIFT_SUSTAINED — 连续 3+ 段距离持续偏大（持续跑题）
   · TOPIC_RETURN_ABRUPT   — 跑题后突然回归（距离骤降）→ 转场生硬
 
-【依赖】embedding_store.compute_embedding() + cosine_similarity()。
-  EMBED_BACKEND 未设（默认 hash = md5 n-gram 袋·无真语义距离意义）→ 静默返回空列表。
-  只有配了真后端（mstyle / local / ruoyu_style / api）才运行。
+【依赖】embedding_store.compute_content_embedding() + cosine_similarity()。
+  内容语义后端不可用（content_backend_available()==False：venv/infer 脚本/模型目录任一
+  缺失）→ 静默返回空列表。
 
-【🔴 2026-07-03 Wave-4 性能层】编码前先调 embedding_store.prefetch_embeddings(scope+全部
-  段落) 一次性批量预热缓存（真后端单批子进程/API 调用），随后逐条 compute_embedding 全部
-  命中缓存零成本——本仓其余消费 embedding_store 的 scanner（agenda_drift / genre_dominance /
-  genre_pack_clash / revision_homogenization 等）复用同一范式，本文件是范式源头。
+【🔴 2026-07-04 W6-C 迁移：风格模型→bge 内容模型】本 scanner 判据是【文档内部距离分布的
+  z-score】（mean±Nσ·相对统计量），不是固定余弦下限——故本次迁移不涉及阈值数值改动，只换
+  embedding 后端调用面（原 EMBED_BACKEND 风格模型 → content_backend_available() 门控的 bge
+  内容模型·经 compute_content_embedding 消费）。
+
+【🔴 2026-07-03 Wave-4 性能层】编码前先调 embedding_store.prefetch_content_embeddings(scope+
+  全部段落) 一次性批量预热缓存（后端单批子进程/API 调用），随后逐条 compute_content_embedding
+  全部命中缓存零成本——本文件是该批量 prefetch-then-consume 范式的源头（本仓其余消费
+  embedding_store 的 scanner 各自按任务性质独立选择走风格 compute_embedding 还是内容
+  compute_content_embedding，不强求全仓同一后端）。
 
 【北极星⑤】所有 issue 永远 advisory，绝不进 HARD_GATE_CODES。
 """
@@ -25,7 +31,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import sys
 from pathlib import Path
 
@@ -36,18 +41,17 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 # ── 后端检测 ──────────────────────────────────────────────────────────────────
 
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
 
-    也检查 .env 的 GEN_EMBED__* API 配置（由 embedding_store._load_embed_profile 消费）。
+    import 失败 → False（调用方静默返回空列表）。
     """
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
 # ── 段落切分 ─────────────────────────────────────────────────────────────────
@@ -106,19 +110,19 @@ def scan_topic_drift(draft_text: str, scope_summary: str,
                      project_dir: str = None) -> list[dict]:
     """主题漂移检测。返回 advisory issue 列表。
 
-    embedding_store 不可用（EMBED_BACKEND 未设 = 默认 hash）→ 返回空列表（静默降级）。
+    内容语义后端不可用（content_backend_available()==False）→ 返回空列表（静默降级）。
     段落太少（< 6）→ 返回空列表。所有 issue: gate_level = "advisory"。
     """
     # ── 前置守卫 ──
     if not draft_text or not scope_summary:
         return []
     draft_text = _strip_changes(draft_text)   # 防 CHANGES 元数据污染段落分布
-    if not _has_real_embedding_backend():
+    if not _content_backend_ready():
         return []
 
     # ── 动态导入 embedding_store（系统 py 一定有·但 import 异常也兜底）──
     try:
-        from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
+        from embedding_store import compute_content_embedding, cosine_similarity, prefetch_content_embeddings
     except (ImportError, TypeError):
         return []
 
@@ -126,17 +130,19 @@ def scan_topic_drift(draft_text: str, scope_summary: str,
     if len(paras) < 6:
         return []
 
-    # ── 编码（Wave-4 2026-07-03：先一次性批量预热缓存·下面逐条 compute_embedding 全部命中）──
+    # ── 编码（Wave-4 2026-07-03：先一次性批量预热缓存·下面逐条 compute_content_embedding 全部命中）──
     try:
-        prefetch_embeddings([scope_summary] + paras)
-        scope_emb = compute_embedding(scope_summary)
-        para_embs = [compute_embedding(p) for p in paras]
+        prefetch_content_embeddings([scope_summary] + paras)
+        scope_emb = compute_content_embedding(scope_summary)
+        para_embs = [compute_content_embedding(p) for p in paras]
     except Exception:
         return []
 
-    # 维度一致性守卫：compute_embedding 单条失败会兜底 hash(384)，与真后端维度不一致 →
-    # cosine 退化为 0（假漂移）。维度混用直接跳过（北极星「不拿降级 hash 冒充真语义」）。
-    if not scope_emb or any(len(e) != len(scope_emb) for e in para_embs):
+    # 维度一致性守卫：🔴 2026-07-04 迁移后 compute_content_embedding 单条失败直接返回 None
+    # （内容语义无 hash 兜底冒充·与旧 compute_embedding 必兜底 hash(384) 语义不同）——
+    # 先挡 None 再比长度，防 len(None) 崩溃；维度不一致同样跳过
+    # （北极星「不拿降级/不可信编码冒充真语义」）。
+    if not scope_emb or any(e is None or len(e) != len(scope_emb) for e in para_embs):
         return []
 
     # ── 余弦距离 ──

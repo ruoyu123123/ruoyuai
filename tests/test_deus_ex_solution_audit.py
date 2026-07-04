@@ -5,8 +5,25 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import deus_ex_solution_audit as des  # noqa: E402
+import embedding_store  # noqa: E402
+
+
+# 🔴 2026-07-04 本地 autouse 隔离（不碰全局 conftest.py）：content_backend_available() 查真
+# 文件系统（venv/infer 脚本/模型目录），本机若已备好 bge 模型会恒真——不像旧 EMBED_BACKEND
+# 有 conftest._isolate_nn_gates 兜底清零，会让本文件里不测 embedding 的"素"用例跨机器非确定
+# 污染（真机上真的算出高于阈值的相似度）。默认关闭·内容路径专项测试自行在测试体内覆盖。
+@pytest.fixture(autouse=True)
+def _content_backend_off_by_default():
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
+    try:
+        yield
+    finally:
+        embedding_store.content_backend_available = orig
 
 
 def _filler(n=25):
@@ -297,63 +314,55 @@ def test_read_failure():
 
 
 # ════════════════════════════════════════════════════════════════════
-# 🔴 2026-07-02 embedding 语义铺垫扫描接线（真后端命中 + 门控关零回归）
-# 参考范式：topic_drift_scanner._has_real_embedding_backend（本仓约定每文件自留一份）
+# 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）
+# mock 面：直接 monkeypatch embedding_store.content_backend_available /
+# compute_content_embedding(_batch) / prefetch_content_embeddings（内容后端可用性
+# 由 venv+infer 脚本+模型目录决定，不再是 EMBED_BACKEND 环境变量能摆弄的）
 # ════════════════════════════════════════════════════════════════════
-def _clear_embed_env():
-    bak_eb = os.environ.pop("EMBED_BACKEND", None)
-    bak_gen = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("GEN_EMBED__")}
-    return bak_eb, bak_gen
-
-
-def _restore_embed_env(bak_eb, bak_gen):
-    if bak_eb is not None:
-        os.environ["EMBED_BACKEND"] = bak_eb
-    for k, v in bak_gen.items():
-        os.environ[k] = v
-
-
-def test_has_real_embedding_backend_false_by_default():
-    bak_eb, bak_gen = _clear_embed_env()
+def test_content_backend_ready_false_by_default():
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
     try:
-        assert des._has_real_embedding_backend() is False
+        assert des._content_backend_ready() is False
     finally:
-        _restore_embed_env(bak_eb, bak_gen)
+        embedding_store.content_backend_available = orig
 
 
-def test_has_real_embedding_backend_true_when_set():
-    bak = os.environ.get("EMBED_BACKEND")
+def test_content_backend_ready_true_when_available():
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: True
     try:
-        os.environ["EMBED_BACKEND"] = "fake-real"
-        assert des._has_real_embedding_backend() is True
+        assert des._content_backend_ready() is True
     finally:
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig
 
 
 def test_semantic_anchor_hit_resolves_underbacked_via_history():
-    """字面子串扫不出的意译铺垫（history 提到"神剑"但不是字面元素名"上古神"），真后端
+    """字面子串扫不出的意译铺垫（history 提到"神剑"但不是字面元素名"上古神"），内容后端
     语义扫描应能补上——这正是本次升级要根治的漏检（前置断言：字面法确实测不出）。"""
     body = _filler(30)
     tail = "我取出上古神剑一剑斩了敌首。"
     history = "很久以前一柄神剑现世无人可挡。" * 3
     text = body + "\n" + tail
 
-    bak_eb, bak_gen = _clear_embed_env()
-    try:
-        pre = des.audit_deus_ex(text, history_text=history)
-        assert "上古神" in pre["underbacked"], "前置条件：字面法必须测不出这个意译铺垫"
-        assert pre["anchor_source_per_element"]["上古神"] == "literal_substring"
-    finally:
-        _restore_embed_env(bak_eb, bak_gen)
+    # 前置：默认门控关（autouse fixture）→ 字面法必须测不出这个意译铺垫
+    pre = des.audit_deus_ex(text, history_text=history)
+    assert "上古神" in pre["underbacked"], "前置条件：字面法必须测不出这个意译铺垫"
+    assert pre["anchor_source_per_element"]["上古神"] == "literal_substring"
 
-    bak = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "fake-real"
-    import embedding_store
-    orig = embedding_store.compute_embedding
-    embedding_store.compute_embedding = lambda t: [1.0, 0.0] if "神剑" in t else [0.0, 1.0]
+    orig_avail = embedding_store.content_backend_available
+    orig_batch = embedding_store.compute_content_embeddings_batch
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
+
+    def _fake(t):
+        return [1.0, 0.0] if "神剑" in t else [0.0, 1.0]
+
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embeddings_batch = lambda texts: [_fake(t) for t in texts]
+    embedding_store.compute_content_embedding = _fake
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
     try:
         r = des.audit_deus_ex(text, history_text=history)
         assert "上古神" not in r["underbacked"]
@@ -362,65 +371,64 @@ def test_semantic_anchor_hit_resolves_underbacked_via_history():
         assert r["anchors_per_element"]["上古神"] == des.ANCHOR_FLOOR
         assert r["deus_ex_risk"] is False
     finally:
-        embedding_store.compute_embedding = orig
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embeddings_batch = orig_batch
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
 
 def test_literal_sufficient_anchor_source_stays_literal():
-    """字面 anchors_count 已达标（≥ ANCHOR_FLOOR）→ 即便真后端就绪也不该被语义"升级"，
+    """字面 anchors_count 已达标（≥ ANCHOR_FLOOR）→ 即便内容后端就绪也不该被语义"升级"，
     anchor_source 仍是 literal_substring（字面子串永远是兜底优先判定）。"""
     body = ("林师兄递给我玄铁剑。" * 3) + _filler(20)
     tail = "我取出玄铁剑挡在身前林师兄出手击败了魔王。"
     text = body + "\n" + tail
 
-    bak = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "fake-real"
-    import embedding_store
-    orig = embedding_store.compute_embedding
-    embedding_store.compute_embedding = lambda t: [1.0, 0.0]   # 随便返回什么都不该被采用
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embedding = lambda t: [1.0, 0.0]   # 随便返回什么都不该被采用
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
     try:
         r = des.audit_deus_ex(text)
         assert r["underbacked_count"] == 0
         for el, src in r["anchor_source_per_element"].items():
             assert src == "literal_substring", f"{el} 不该被语义路径覆盖"
     finally:
-        embedding_store.compute_embedding = orig
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
 
 def test_semantic_below_threshold_stays_underbacked():
-    """真后端就绪但相似度 < 阈值（history 与 resolution 元素完全无关）→ 不误判为已铺垫，
+    """内容后端就绪但相似度 < 阈值（history 与 resolution 元素完全无关）→ 不误判为已铺垫，
     仍报 underbacked（不是随便配了后端就无脑判定已铺垫）。"""
     body = _filler(30)
     tail = "我取出上古神剑一剑斩了敌首。"
     history = "完全不相关的历史段落内容在这里展开描写风景。" * 3
     text = body + "\n" + tail
 
-    bak = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "fake-real"
-    import embedding_store
-    orig = embedding_store.compute_embedding
-    embedding_store.compute_embedding = lambda t: [1.0, 0.0] if "神剑" in t else [0.0, 1.0]
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embedding = lambda t: [1.0, 0.0] if "神剑" in t else [0.0, 1.0]
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
     try:
         r = des.audit_deus_ex(text, history_text=history)
         assert "上古神" in r["underbacked"]
         assert r["anchor_source_per_element"]["上古神"] == "literal_substring"
     finally:
-        embedding_store.compute_embedding = orig
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
 
 def test_scan_active_propagates_anchor_source_and_resolves_via_semantic():
-    """scan() 全链路：真后端命中语义铺垫 → underbacked 清空 → verdict 从 FAIL_MINOR 变 PASS，
+    """scan() 全链路：内容后端命中语义铺垫 → underbacked 清空 → verdict 从 FAIL_MINOR 变 PASS，
     anchor_source_per_element 正确透传到顶层输出。"""
     body = _filler(30)
     tail = "我取出上古神剑一剑斩了敌首。"
@@ -432,42 +440,41 @@ def test_scan_active_propagates_anchor_source_and_resolves_via_semantic():
     })
 
     bak_mode = os.environ.get("DEUS_EX_AUDIT_MODE")
-    bak_eb = os.environ.get("EMBED_BACKEND")
     os.environ["DEUS_EX_AUDIT_MODE"] = "active"
-    os.environ["EMBED_BACKEND"] = "fake-real"
-    import embedding_store
-    orig = embedding_store.compute_embedding
-    embedding_store.compute_embedding = lambda t: [1.0, 0.0] if "神剑" in t else [0.0, 1.0]
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embedding = lambda t: [1.0, 0.0] if "神剑" in t else [0.0, 1.0]
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
     try:
         r = des.scan(str(p), project_root=proj, manifest_path=str(m))
         assert r["verdict"] == "PASS"
         assert r["anchor_source_per_element"].get("上古神") == "embedding_cosine"
     finally:
-        embedding_store.compute_embedding = orig
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
         if bak_mode is not None:
             os.environ["DEUS_EX_AUDIT_MODE"] = bak_mode
         else:
             os.environ.pop("DEUS_EX_AUDIT_MODE", None)
-        if bak_eb is not None:
-            os.environ["EMBED_BACKEND"] = bak_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
         p.unlink(missing_ok=True)
 
 
-def test_audit_deus_ex_gate_off_matches_original_logic():
-    """🔴 零回归锁：门控关（无 EMBED_BACKEND / 无 GEN_EMBED__*）→ audit_deus_ex 结果与原
-    纯字面子串逻辑逐项一致（anchors_per_element / underbacked / deus_ex_risk），且
-    embedding_store.compute_embedding 即便被换成任意值也绝不会被调用
-    （_embed_history_once 在最前面短路返回 None）。"""
-    bak_eb, bak_gen = _clear_embed_env()
-    import embedding_store
-    orig = embedding_store.compute_embedding
+def test_audit_deus_ex_content_backend_off_matches_original_logic():
+    """🔴 零回归锁：内容后端不可用 → audit_deus_ex 结果与原纯字面子串逻辑逐项一致
+    （anchors_per_element / underbacked / deus_ex_risk），且 compute_content_embedding
+    即便被换成任意值也绝不会被调用（_embed_history_once 在最前面短路返回 None）。"""
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
 
     def _boom(t):
-        raise AssertionError("门控关时绝不应调用 compute_embedding")
+        raise AssertionError("内容后端不可用时绝不应调用 compute_content_embedding")
 
-    embedding_store.compute_embedding = _boom
+    embedding_store.content_backend_available = lambda: False
+    embedding_store.compute_content_embedding = _boom
     try:
         body = _filler(30)
         tail = "我取出上古神剑一剑斩了敌首。"
@@ -480,15 +487,15 @@ def test_audit_deus_ex_gate_off_matches_original_logic():
         assert r["anchor_source_per_element"] == {"上古神": "literal_substring"}
         assert r["deus_ex_risk"] is True
     finally:
-        embedding_store.compute_embedding = orig
-        _restore_embed_env(bak_eb, bak_gen)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
 
 
 # ════════════════════════════════════════════════════════════════════
 # 🔴 2026-07-03 Wave-4 性能层：audit_deus_ex 批量 prefetch（历史段落 + 每个
 # resolution 元素语境窗口 query 两侧文本一次性预热，其后 _embed_history_once /
-# _semantic_anchor_hit 内的逐条 compute_embedding 全部命中缓存·真后端子进程按条
-# 调用极贵）
+# _semantic_anchor_hit 内的逐条 compute_content_embedding 全部命中缓存·内容后端
+# 子进程按条调用极贵）
 # ════════════════════════════════════════════════════════════════════
 def test_audit_deus_ex_prefetches_history_and_element_queries_once():
     body = _filler(30)
@@ -496,17 +503,18 @@ def test_audit_deus_ex_prefetches_history_and_element_queries_once():
     history = "玄铁剑传说流传已久。\n林师兄曾经历此劫。"
     text = body + "\n" + tail_text
 
-    bak = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "fake-real"
-    import embedding_store
-    orig_prefetch = embedding_store.prefetch_embeddings
+    orig_avail = embedding_store.content_backend_available
+    orig_prefetch = embedding_store.prefetch_content_embeddings
+    orig_single = embedding_store.compute_content_embedding
     calls = []
 
     def _rec_prefetch(texts):
         calls.append(list(texts))
         return {"total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0}
 
-    embedding_store.prefetch_embeddings = _rec_prefetch
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.prefetch_content_embeddings = _rec_prefetch
+    embedding_store.compute_content_embedding = lambda t: [0.0, 0.0]
     try:
         des.audit_deus_ex(text, history_text=history)
         assert len(calls) == 1, f"应恰好一次批量 prefetch·实际 {len(calls)} 次"
@@ -525,23 +533,21 @@ def test_audit_deus_ex_prefetches_history_and_element_queries_once():
         for el in all_elements:
             assert des._anchor_query_text(el, tail) in prefetched
     finally:
-        embedding_store.prefetch_embeddings = orig_prefetch
-        if bak is not None:
-            os.environ["EMBED_BACKEND"] = bak
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.prefetch_content_embeddings = orig_prefetch
+        embedding_store.compute_content_embedding = orig_single
 
 
-def test_audit_deus_ex_gate_off_never_calls_prefetch():
-    """🔴 零回归锁：门控关 → prefetch_embeddings 完全不被调用。"""
-    bak_eb, bak_gen = _clear_embed_env()
-    import embedding_store
-    orig_prefetch = embedding_store.prefetch_embeddings
+def test_audit_deus_ex_content_backend_off_never_calls_prefetch():
+    """🔴 零回归锁：内容后端不可用 → prefetch_content_embeddings 完全不被调用。"""
+    orig_avail = embedding_store.content_backend_available
+    orig_prefetch = embedding_store.prefetch_content_embeddings
 
     def _boom(texts):
-        raise AssertionError("门控关时绝不应调用 prefetch_embeddings")
+        raise AssertionError("内容后端不可用时绝不应调用 prefetch_content_embeddings")
 
-    embedding_store.prefetch_embeddings = _boom
+    embedding_store.content_backend_available = lambda: False
+    embedding_store.prefetch_content_embeddings = _boom
     try:
         body = _filler(30)
         tail = "我取出上古神剑一剑斩了敌首。"
@@ -550,5 +556,5 @@ def test_audit_deus_ex_gate_off_never_calls_prefetch():
         r = des.audit_deus_ex(text, history_text=history)
         assert "underbacked" in r
     finally:
-        embedding_store.prefetch_embeddings = orig_prefetch
-        _restore_embed_env(bak_eb, bak_gen)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.prefetch_content_embeddings = orig_prefetch

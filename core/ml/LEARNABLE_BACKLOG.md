@@ -216,3 +216,22 @@
 **已翻创作默认**（`nn_runtime_defaults`·setdefault 不破测试·显式设置不覆盖）：`RUOYU_NN_DAEMON=1` + `RUOYU_NN_NLI=1` + **`EMBED_BACKEND=ruoyu_style`**（新增字符串值型 `_CREATIVE_ENV_DEFAULTS` 机制）——全仓 20+ embedding 语义接线、NLI 蕴含补判、5 类 NN 桥在创作流程真实点亮。conftest 隔离同步（`EMBED_BACKEND` 进 `_NN_GATES` 防测试泄漏）。
 
 **Wave-6 候选**：① 语义阈值金标准校准（真后端已默认点亮·用 workspace/styles 作者语料标定 0.5-0.75 一批初值——现在是解锁状态）；② daemon 生产观测（首次真实 /cluster-write 全流程下的 daemon 命中率/延迟分布·MAPE-K incidents 有无新指纹）；③ Tier A 剩余（A1 叙事句级分类/A2 ToM/A5 话语标记）；④ 真中文共指模型调研。
+
+---
+
+## 2026-07-04 Wave-6 校准首轮：🔴 重大否定性发现——ruoyu_style 对内容关系在单段粒度下致盲
+
+**测量**（`core/ml/calibration/semantic_threshold_calibrator.py`·3 本书各 150 对×5 类·seed=20260704·daemon 真机·报告 `core/ml/calibration/reports/ruoyu_style_separability_20260704.md`）：
+- 内容敏感度探针 AUC(**相邻段 vs 同书跨章≥50**)=**0.5088（纯随机）**——模型分不清"内容真相关"与"同作者但内容无关"；基础可分性 AUC(相邻 vs 跨书)=0.5632；风格信号本身在单段粒度也只有 0.5582。
+- **各向异性严重**：跨书完全无关段落对的余弦中位数 0.80、p95=0.99——整个空间挤在高余弦区。
+- 唯一边际可用：content_echo 族（300 字摘要代理 vs 正文）AUC=0.6887，但 Youden 点 0.716 的 FPR 仍 0.513。
+- **🔴 实务后果**：现有 5 个 content_echo 常量（choice_consequence 0.70 / deus_ex 0.68 / subplot 0.72 / milestone 0.5 / topic_drift）**全部 ≤ 负样本分布中位数 0.73**——真后端默认点亮后这些语义判断"见谁都说相关"，当前形同虚设（advisory 定位所以无实害，但零信息量）。
+- 根因假设（有证据）：ruoyu_style 训练粒度 512-768 CJK 累积 chunk，生产 scanner 用 30-150 CJK 单段调用属分布外；content_echo 恰是较长文本侧表现最好，佐证长度假设。
+
+**W6-C 决策（数据支撑·不在坏信号上调参）**：风格任务留 ruoyu_style（本职）；内容任务加 **daemon `content_embed` task（BAAI/bge-small-zh-v1.5·中文检索/相似度专训）**，先用同一 harness 同 seed 复测可分性（达标线 AUC≥0.80/0.70/0.80），达标后 embedding_store 增 `compute_content_embedding` 系 API 并迁移内容族消费方，再按内容后端分布应用阈值。单一全局 EMBED_BACKEND 服不了风格+内容两种语义，架构上拆开。（进行中）
+
+**W6-A 注册表盘点（`core/ml/calibration/threshold_registry.json`·58 entries·回归锁 test_threshold_registry.py）关键修正与盲区**：
+- **范围修正**：58 条中 **37 条是关键词密度/统计类阈值（other 族·与 embedding 余弦无关）**——需要"真作者语料统计基线"方法论（分位数带），与 embedding 正负样本对校准分开设计；embedding 余弦族仅 21 条（content_echo 6/content_dedup 6/style_drift 4/zero_shot 5）。
+- **两个未标记盲区**（记于 known_blind_spots）：①`zero_shot_prototype` 默认参 `floor=0.5` 被 4 文件 6+ 调用点复用、影响面广；②`belief_update_alignment` 的 0.6/0.4 混合权重与词典分量权重。
+- **已有历史实测数据的 10 常量**（dramatic_irony/emotion_granularity/group_dialogue 等注释带"真作者实测区间"）——校准时先挖历史数据，别当白纸重测；其中 `cross_scene_voice_drift.DEFAULT_EMBED_DRIFT_FLOOR=0.3` 已有定量反例（同角色声纹距实测 0.1062 < 0.3 地板）最该优先。
+- **应用前置工程**：5 个 embedding 阈值（choice_consequence/deus_ex/subplot/trope/skill_evolver）无数值 env 覆盖需补包装；26/58 被测试钉值（改值须同步测试）；同名异值常量 MIN_SCENES(2 vs 3) 禁按名批处理；sfs 两文件重复 `(cos+1)/2*100` 公式改一处须同步另一处。

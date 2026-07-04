@@ -318,35 +318,49 @@ def _char_freq_embedding(text, dim=32):
 
 
 def _char_freq_embedding_batch(texts, dim=32):
-    """_char_freq_embedding 的批量版（供 mock embedding_store.compute_embeddings_batch）。"""
+    """_char_freq_embedding 的批量版（供 mock embedding_store.compute_content_embeddings_batch）。"""
     return [_char_freq_embedding(t, dim) for t in texts]
 
 
 def _run_with_mock_embedding(fn):
-    """EMBED_BACKEND=mock + monkeypatch embedding_store.compute_embedding(_batch) 后跑 fn。
-
-    🔴 2026-07-03 Wave-4：zero_shot_prototype 内部改走 compute_embeddings_batch，两个
-    mock 都打（single-item 路径也委托 batch，实际只会用到 _batch 版）。
+    """monkeypatch embedding_store.content_backend_available()→True + compute_content_embeddings_batch
+    后跑 fn（2026-07-04：zero_shot_prototype 从风格 EMBED_BACKEND 切到内容后端，mock 面同步换轨）。
     """
-    bak_eb = os.environ.get("EMBED_BACKEND")
-    os.environ["EMBED_BACKEND"] = "mock"
     import embedding_store
     import zero_shot_prototype
-    orig = embedding_store.compute_embedding
-    orig_batch = embedding_store.compute_embeddings_batch
-    embedding_store.compute_embedding = _char_freq_embedding
-    embedding_store.compute_embeddings_batch = _char_freq_embedding_batch
+    orig_avail = embedding_store.content_backend_available
+    orig_batch = embedding_store.compute_content_embeddings_batch
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embeddings_batch = _char_freq_embedding_batch
     zero_shot_prototype.clear_cache()
     try:
         return fn()
     finally:
-        embedding_store.compute_embedding = orig
-        embedding_store.compute_embeddings_batch = orig_batch
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embeddings_batch = orig_batch
         zero_shot_prototype.clear_cache()
-        if bak_eb is not None:
-            os.environ["EMBED_BACKEND"] = bak_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_content_backend_off():
+    """🔴 2026-07-04：content_backend_available() 是文件存在性判定（venv+推理脚本+模型
+    目录），不是环境变量——本机若真装了 core/ml/models/content_embed/bge-small-zh-v1.5，
+    "不设 EMBED_BACKEND" 不再等于"门控关闭"，本文件几乎每条 active-mode scan() 测试都会
+    经 _classify_plant_mode/_classify_plants_batch 顺带触发一次真实分类。本 fixture 把它
+    按文件级默认关闭（同 conftest._isolate_nn_gates 的思路，只是这个门控是函数不是环境
+    变量，只能靠 monkeypatch 不能靠 os.environ.pop），_run_with_mock_embedding 内会临时
+    覆盖成 True。
+    """
+    import embedding_store
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
+    try:
+        yield
+    finally:
+        embedding_store.content_backend_available = orig
 
 
 def test_classify_plant_mode_gate_off_uses_fallback():

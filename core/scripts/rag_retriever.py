@@ -15,7 +15,7 @@ build_manifest.py 调用本模块检索与当前章节最相关的历史内容�
 输出：JSON列表，每项含 {chapter, score, snippet}
 """
 from __future__ import annotations
-import json, math, os, re, sys
+import json, math, re, sys
 from collections import Counter
 from pathlib import Path
 
@@ -27,17 +27,17 @@ except Exception:  # 防御：缺模块时不影响主检索路径
     cluster_lookup = None
 
 
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
-    跟 topic_drift_scanner._has_real_embedding_backend 判断逻辑完全一致（各文件各自留一份）。
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+
+    import 失败 → False（调用方回退 TF-IDF）。
     """
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
 def _chinese_tokens(text: str) -> list[str]:
@@ -278,19 +278,23 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3,
     return results
 
 
-_EMBED_MIN_RELEVANCE = 0.01  # 真后端候选相关性下限·先复用 TF-IDF 同阈值·待金标准校准调优
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告——候选相关性下限。
+# 检索排序类地板取宽松位：bge 值域下五类分布 p5 普遍落在 0.30-0.33（如
+# neg_cross_book p5=0.324 / summary_vs_body_neg p5=0.3001），0.30 只滤掉最极端的不相关
+# 尾部、把排序留给 MMR 重排，不在地板上压召回（原 0.01 在 bge 值域下等于不过滤）。
+_EMBED_MIN_RELEVANCE = 0.30
 
 
 def retrieve_embedding(project_root, current_ch: int, top_k: int = 3,
                        use_mmr: bool = True, mmr_alpha: float = 0.7) -> list[dict]:
-    """v17.6 D2 → 2026-07-02 接线 embedding_store：真语义 embedding 检索模式
+    """v17.6 D2 → 2026-07-04 换轨内容语义嵌入 API：内容语义检索模式
     （SCORE 框架 hybrid retrieval 第二轮）。
 
-    门控 = _has_real_embedding_backend()（EMBED_BACKEND 非空非 hash，或配了 GEN_EMBED__* /
-    通义等 API·统一走 embedding_store，不再自行探测 OPENAI_API_KEY/openai 包）。
-    无真后端 → 退 TF-IDF（与此前行为、fallback 标签一致·零回归）。
-    真后端 → prefetch_embeddings 一次批量预热历史章文本 + 当前章 plan(query)，随后
-    compute_embedding 逐条命中缓存，cosine_similarity 排序，MMR 重排复用 mmr_rerank
+    门控 = content_backend_available()（venv+infer 脚本+模型目录三者俱在·统一走
+    embedding_store，不再按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测）。
+    无内容后端 → 退 TF-IDF（与此前行为、fallback 标签一致·零回归）。
+    真后端 → prefetch_content_embeddings 一次批量预热历史章文本 + 当前章 plan(query)，随后
+    compute_content_embedding 逐条命中缓存，cosine_similarity 排序，MMR 重排复用 mmr_rerank
     （sim_fn 换成 embedding 余弦）。
 
     实测：SCORE 测试 TF-IDF + 语义 = 23.6% coherence 提升 vs 纯 TF-IDF。
@@ -301,13 +305,13 @@ def retrieve_embedding(project_root, current_ch: int, top_k: int = 3,
             r["mode"] = "tfidf_fallback (embedding not implemented yet)"
         return results
 
-    if not _has_real_embedding_backend():
-        print("[INFO] 无真 embedding 后端（EMBED_BACKEND 未设/=hash 且无 GEN_EMBED__* 配置），"
-              "降级 TF-IDF 模式", file=sys.stderr)
+    if not _content_backend_ready():
+        print("[INFO] 无内容语义后端（venv/模型目录未就绪），降级 TF-IDF 模式", file=sys.stderr)
         return _fallback()
 
     try:
-        from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
+        from embedding_store import (compute_content_embedding, cosine_similarity,
+                                      prefetch_content_embeddings)
     except (ImportError, TypeError):
         print("[INFO] embedding_store 不可用，降级 TF-IDF 模式", file=sys.stderr)
         return _fallback()
@@ -318,14 +322,15 @@ def retrieve_embedding(project_root, current_ch: int, top_k: int = 3,
     ch_nums, docs, chapters, summaries = corpus
 
     # 🔴 2026-07-03 Wave-4：docs=历史章语料+当前章 query，一次批量预热缓存（真后端子进程/API
-    # 只付一次成本），随后逐条 compute_embedding 全部命中缓存（hash 后端 prefetch 本来就是 no-op）。
-    prefetch_embeddings(docs)
-    embs = [compute_embedding(d) for d in docs]
+    # 只付一次成本），随后逐条 compute_content_embedding 全部命中缓存。
+    prefetch_content_embeddings(docs)
+    embs = [compute_content_embedding(d) for d in docs]
     query_emb = embs[-1]
-    # 维度一致性守卫（同 topic_drift_scanner）：单条失败会兜底 hash(384)，与真后端维度不一致
-    # → cosine 静默退化为 0（假不相关）。维度混用直接跳过语义检索、退 TF-IDF（不冒充语义）。
-    if not query_emb or any(len(e) != len(query_emb) for e in embs):
-        print("[INFO] embedding 维度不一致（部分条目降级 hash），降级 TF-IDF 模式", file=sys.stderr)
+    # 维度一致性守卫：内容 API 编码失败返回 None（不像旧 compute_embedding 有 hash 兜底
+    # 保证恒为某维度向量）——先判 None 再比长度，维度混用/编码失败直接跳过语义检索退 TF-IDF
+    # （不冒充语义）。
+    if not query_emb or any((e is None) or len(e) != len(query_emb) for e in embs):
+        print("[INFO] embedding 编码失败或维度不一致，降级 TF-IDF 模式", file=sys.stderr)
         return _fallback()
 
     rel = {i: cosine_similarity(embs[i], query_emb) for i in range(len(ch_nums))}

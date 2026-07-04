@@ -193,6 +193,42 @@ def test_batch_backend_failure_falls_back_hash_uncached(_isolated_embed_cache, m
     assert not es._EMBED_MEM_CACHE                # 兜底不入缓存
 
 
+# ── 🔴 2026-07-04 W6-C：内容语义嵌入 API ────────────────────────────────────
+
+def test_content_embedding_unavailable_returns_none(_isolated_embed_cache, monkeypatch):
+    """后端不可用 → None（诚实·绝无 hash 兜底冒充内容语义）。"""
+    monkeypatch.setattr(es, "content_backend_available", lambda: False)
+    assert es.compute_content_embedding("文本") is None
+    assert es.compute_content_embeddings_batch(["a", "b"]) is None
+    stats = es.prefetch_content_embeddings(["a"])
+    assert stats["available"] is False
+
+
+def test_content_embedding_batch_dedupe_and_cache(_isolated_embed_cache, monkeypatch):
+    calls = {"n": 0, "sizes": []}
+    def fake_backend(texts):
+        calls["n"] += 1
+        calls["sizes"].append(len(texts))
+        return [[float(len(t))] * 4 for t in texts]
+    monkeypatch.setattr(es, "content_backend_available", lambda: True)
+    monkeypatch.setattr(es, "_content_embed_backend_batch", fake_backend)
+    out = es.compute_content_embeddings_batch(["甲甲", "乙乙乙", "甲甲"])
+    assert len(out) == 3 and out[0] == out[2]
+    assert calls == {"n": 1, "sizes": [2]}   # 去重后单批
+    # 第二轮全命中缓存 → 后端零调用
+    out2 = es.compute_content_embeddings_batch(["甲甲", "乙乙乙"])
+    assert calls["n"] == 1 and out2[0] == out[0]
+    # method 键与风格后端隔离
+    assert any(k[0] == es._CONTENT_METHOD for k in es._EMBED_MEM_CACHE)
+
+
+def test_content_embedding_backend_failure_returns_none_uncached(_isolated_embed_cache, monkeypatch):
+    monkeypatch.setattr(es, "content_backend_available", lambda: True)
+    monkeypatch.setattr(es, "_content_embed_backend_batch", lambda texts: None)
+    assert es.compute_content_embeddings_batch(["文本"]) is None
+    assert not es._EMBED_MEM_CACHE   # 失败不入缓存
+
+
 def test_api_embed_l2_normalized(monkeypatch):
     """API 后端返回裸向量必须 L2 归一 —— cosine_similarity 是纯点积，未归一会越界（2026-07-02 修）。"""
     class _FakeResp:

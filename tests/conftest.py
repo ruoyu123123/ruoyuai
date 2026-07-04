@@ -26,13 +26,28 @@ _NN_GATES = (
     "EMBED_BACKEND",
 )
 
+# 🔴 2026-07-04 W6-C 举一反三：content_backend_available() 是**文件存在性判定**（venv+infer
+# 脚本+bge 模型目录三者俱在即 True），不是环境变量门控——本机三者俱在时它在测试环境不设任何
+# 变量也返回 True，会让走内容后端的 active 测试真触发 venv 子进程（实测 263x 变慢 + 非确定性·
+# w6s-zeroshot 发现①）。_NN_GATES 的清空机制对这种函数型门控完全不知情。根治：用其公开的 ckpt
+# 覆盖钩子 RUOYU_CONTENT_EMBED_CKPT 指向不存在路径 → 函数体内 Path(ckpt).exists()=False → 内容
+# 后端在测试里默认关闭（同 NN 门控「默认关·要用显式开」语义）。想测内容路径的测试自行
+# monkeypatch content_backend_available→True + compute_content_embeddings_batch(假向量)（函数
+# 替换优先于本 env）；真机测试自行 setenv 正确 ckpt 覆盖 sentinel。作用在函数体内部·不管消费方
+# 怎么 import content_backend_available 都生效（比逐文件 monkeypatch 鲁棒·单点根治）。
+_CONTENT_CKPT_ENV = "RUOYU_CONTENT_EMBED_CKPT"
+_CONTENT_BACKEND_OFF_SENTINEL = str(_ROOT / ".nonexistent_content_ckpt_for_tests")
+
 
 @pytest.fixture(autouse=True)
 def _isolate_nn_gates():
-    """每个测试前清空 NN 门控·测试后恢复进入时的值——杜绝裸 os.environ 跨测试残留污染。"""
+    """每个测试前清空 NN 门控 + 关闭内容后端·测试后恢复进入时的值——杜绝跨测试残留污染 +
+    杜绝函数型内容门控在测试里真触发子进程。"""
     saved = {g: os.environ.get(g) for g in _NN_GATES}
+    saved_ckpt = os.environ.get(_CONTENT_CKPT_ENV)
     for g in _NN_GATES:
         os.environ.pop(g, None)
+    os.environ[_CONTENT_CKPT_ENV] = _CONTENT_BACKEND_OFF_SENTINEL   # 内容后端默认关（见上）
     try:
         yield
     finally:
@@ -41,3 +56,7 @@ def _isolate_nn_gates():
                 os.environ.pop(g, None)
             else:
                 os.environ[g] = v
+        if saved_ckpt is None:
+            os.environ.pop(_CONTENT_CKPT_ENV, None)
+        else:
+            os.environ[_CONTENT_CKPT_ENV] = saved_ckpt

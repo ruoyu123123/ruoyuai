@@ -45,23 +45,24 @@ except Exception:  # 防御：缺模块退回原 dict 守卫
     cluster_lookup = None
 
 
-# 🔴 2026-07-02: 真 embedding 后端接线（本仓约定：每个消费 embedding 的脚本自带一份门控副本）。
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
-    原样复制自 topic_drift_scanner.py（不 import 跨脚本依赖）。也检查 .env 的
-    GEN_EMBED__* API 配置（由 embedding_store._load_embed_profile 消费）。"""
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+# 🔴 2026-07-04: 内容语义 embedding 后端接线（W6-C 迁移：风格模型→bge 内容模型·
+# 本仓约定：每个消费 embedding 的脚本自带一份门控副本）。
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+
+    import 失败 → False（调用方保留字面法判定的 issue）。"""
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
-# 🔬 待金标准校准：章末文本 vs anchor 描述池的余弦相似度 ≥ 此值 → 判定语义锚定（抓字面
-# 0 重叠但同一剧情点的改写，如伏笔写「铭文」章末写「刻在石壁上的古老符文」）。env 可覆盖。
-DEFAULT_SEMANTIC_ANCHOR_FLOOR = 0.35
+# 章末文本 vs anchor 描述池的余弦相似度 ≥ 此值 → 判定语义锚定（抓字面 0 重叠但同一剧情点的
+# 改写，如伏笔写「铭文」章末写「刻在石壁上的古老符文」）。env 可覆盖。
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
+DEFAULT_SEMANTIC_ANCHOR_FLOOR = 0.49
 
 
 def _semantic_anchor_floor() -> float:
@@ -76,16 +77,16 @@ def _semantic_anchor_floor() -> float:
 
 def _semantic_anchor_match(tail_text: str, anchor_texts: list[str]) -> "dict | None":
     """章末文本 vs anchor_texts 池（伏笔/scope_summary 原始描述）逐条算余弦相似度。
-    最高分 >= floor → 返回 {anchor_text, similarity}（语义锚定命中）；embedding_store 不可用 /
+    最高分 >= floor → 返回 {anchor_text, similarity}（语义锚定命中）；内容后端不可用 /
     池空 / 编码失败 / 维度不一致 → None（调用方保留字面法判定的 issue）。"""
     if not anchor_texts:
         return None
     try:
-        from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
-        # 2026-07-03 Wave-4：章末文本 + 全部 anchor 池一次性预热缓存，其后逐条 compute_embedding
-        # 命中缓存（否则 ruoyu_style 等真后端下每条 anchor 各起一次子进程暖机不可用）。
-        prefetch_embeddings([tail_text] + [t for t in dict.fromkeys(anchor_texts) if t])
-        tail_emb = compute_embedding(tail_text)
+        from embedding_store import compute_content_embedding, cosine_similarity, prefetch_content_embeddings
+        # 2026-07-03 Wave-4：章末文本 + 全部 anchor 池一次性预热缓存，其后逐条
+        # compute_content_embedding 命中缓存（否则真后端下每条 anchor 各起一次子进程暖机不可用）。
+        prefetch_content_embeddings([tail_text] + [t for t in dict.fromkeys(anchor_texts) if t])
+        tail_emb = compute_content_embedding(tail_text)
     except Exception:
         return None
     if not tail_emb:
@@ -96,7 +97,7 @@ def _semantic_anchor_match(tail_text: str, anchor_texts: list[str]) -> "dict | N
         if not t:
             continue
         try:
-            emb = compute_embedding(t)
+            emb = compute_content_embedding(t)
         except Exception:
             continue
         if not emb or len(emb) != len(tail_emb):
@@ -317,7 +318,7 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool
     复扫纯阻断语义）。北极星⑤：语义收束/弱锚永不在此升格 hard_gate。
 
     🔴 2026-07-02：anchor_texts（collect_anchor_texts 产出的原始描述文本池）为可选参数。
-    真 embedding 后端就绪 + 字面锚定判定 NO_ANCHOR/WEAK_ANCHOR 时，补一次语义 rescue——
+    内容语义后端就绪 + 字面锚定判定 NO_ANCHOR/WEAK_ANCHOR 时，补一次语义 rescue——
     章末与池中某条描述语义同指（哪怕零字面重叠）则不再误报。不传此参数（默认 None）时
     与升级前行为逐字节一致（仅 advisory 锚定维度·不碰 hard_gate SCREENPLAY/TRANSITION）。
     """
@@ -371,7 +372,7 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool
                 "fix_hint": "章末倾向钩子而非收束（建议非强制）· 末句留悬念更佳 · 若本场景确需收束可豁免",
             })
 
-    # B. 锚定 scan（字面 token 交集为准 · 真 embedding 后端时对字面判定的 NO_ANCHOR/WEAK_ANCHOR
+    # B. 锚定 scan（字面 token 交集为准 · 内容后端就绪时对字面判定的 NO_ANCHOR/WEAK_ANCHOR
     # 补一次语义 rescue·2026-07-02）
     tail_keywords = extract_keywords(tail_text)
     hit_anchors = tail_keywords & anchors
@@ -380,7 +381,7 @@ def scan_chapter_end(chapter_path: Path, anchors: set[str], hard_gate_only: bool
     no_anchor = not hit_anchors
     weak_anchor = bool(hit_anchors) and anchor_ratio < _WEAK_ANCHOR_RATIO
     semantic_rescue = None
-    if (no_anchor or weak_anchor) and anchor_texts and _has_real_embedding_backend():
+    if (no_anchor or weak_anchor) and anchor_texts and _content_backend_ready():
         semantic_rescue = _semantic_anchor_match(tail_text, anchor_texts)
 
     if no_anchor and semantic_rescue is None:
@@ -453,7 +454,7 @@ def main():
         sys.exit(2)
 
     anchors = collect_anchors(db)
-    anchor_texts = collect_anchor_texts(db)  # 语义 rescue 池（真后端未配置时无副作用）
+    anchor_texts = collect_anchor_texts(db)  # 语义 rescue 池（内容后端未就绪时无副作用）
     if not anchors:
         print(f"[WARN] 没采集到 anchors（_数据库 可能为空）", file=sys.stderr)
 

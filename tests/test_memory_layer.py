@@ -253,36 +253,23 @@ def test_build_counts_layers():
         assert info["total"] == info["chapter_count"] + info["summary_count"] + info["archive_count"]
 
 
-# ============ embedding 接线（2026-07-02 · 真后端门控 + TF-IDF fallback）============
+# ============ 内容语义 embedding 接线（2026-07-04 · content_backend_available 门控 + TF-IDF fallback）============
 
-def test_has_real_embedding_backend_false_by_default():
-    old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
-    try:
-        assert mod._has_real_embedding_backend() is False
-    finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
+def test_content_backend_ready_false_by_default(monkeypatch):
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: False)
+    assert mod._content_backend_ready() is False
 
 
-def test_has_real_embedding_backend_true_when_set():
-    old = os.environ.get("EMBED_BACKEND")
-    try:
-        os.environ["EMBED_BACKEND"] = "local"
-        assert mod._has_real_embedding_backend() is True
-    finally:
-        if old is not None:
-            os.environ["EMBED_BACKEND"] = old
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+def test_content_backend_ready_true_when_available(monkeypatch):
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    assert mod._content_backend_ready() is True
 
 
 def test_search_semantic_finds_paraphrase_literal_tfidf_misses(monkeypatch):
-    """真后端：query 与记忆内容零字面重叠的同义改写（"阿光他爹没"↔"许遥的父亲失踪了"）
-    TF-IDF 查不到（cosine 必为 0·前置断言验证零重叠），embedding 语义路径应命中。"""
+    """内容后端就绪：query 与记忆内容零字面重叠的同义改写（"阿光他爹没"↔"许遥的父亲失踪了"）
+    TF-IDF 查不到（cosine 必为 0·前置断言验证零重叠），内容语义路径应命中。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         db = _mk_db(tmp)
@@ -292,17 +279,23 @@ def test_search_semantic_finds_paraphrase_literal_tfidf_misses(monkeypatch):
         ]})
         ml = mod.MemoryLayer(tmp, current_ch=5)
 
-        # 前置断言：门控关时字面 TF-IDF 完全查不到（"阿光他爹没" 与记忆库零字符重叠）
-        assert ml.search("阿光他爹没") == []
-
-        monkeypatch.setenv("EMBED_BACKEND", "mock")
         import embedding_store
+
+        # 前置断言：门控关时字面 TF-IDF 完全查不到（"阿光他爹没" 与记忆库零字符重叠）
+        # 🔴 显式 mock 成 False——content_backend_available 查真实磁盘（venv+模型目录），
+        # 本机若真装了内容后端会让这条"默认关"假设落空，不能靠"不设环境变量"隐式达成。
+        monkeypatch.setattr(embedding_store, "content_backend_available", lambda: False)
+        assert ml.search("阿光他爹没") == []
 
         def _mock_embed(text):
             if "许遥的父亲失踪了" in text or "阿光他爹没" in text:
                 return [1.0, 0.0]
             return [0.0, 1.0]
-        monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+        monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+        monkeypatch.setattr(embedding_store, "compute_content_embedding", _mock_embed)
+        monkeypatch.setattr(embedding_store, "prefetch_content_embeddings",
+                            lambda texts: {"total": len(texts), "unique": 0,
+                                          "cache_hits": 0, "computed": 0})
 
         res = ml.search("阿光他爹没")
         assert len(res) >= 1, "语义路径应命中同义改写"
@@ -312,8 +305,8 @@ def test_search_semantic_finds_paraphrase_literal_tfidf_misses(monkeypatch):
 
 def test_search_semantic_prefetches_query_and_all_memories_once(monkeypatch):
     """🔴 2026-07-03 Wave-4 批量改造回归锁：_search_semantic 开头应对
-    [query]+全部记忆内容调用**一次** prefetch_embeddings（而非每条记忆各自触发后端·
-    ruoyu_style 等真后端下逐条各起一次子进程暖机不可用）。"""
+    [query]+全部记忆内容调用**一次** prefetch_content_embeddings（而非每条记忆各自触发后端·
+    真后端下逐条各起一次子进程暖机不可用）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         db = _mk_db(tmp)
@@ -323,24 +316,23 @@ def test_search_semantic_prefetches_query_and_all_memories_once(monkeypatch):
         ]})
         ml = mod.MemoryLayer(tmp, current_ch=5)
 
-        monkeypatch.setenv("EMBED_BACKEND", "mock")
         import embedding_store
-        embedding_store._BACKEND = None  # 重探测后端（隔离跨测试残留缓存）
+        monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
 
         calls = []
 
         def _record_prefetch(texts):
             calls.append(list(texts))
             return {"total": len(texts), "unique": len(set(texts)), "cache_hits": 0, "computed": len(texts)}
-        monkeypatch.setattr(embedding_store, "prefetch_embeddings", _record_prefetch)
+        monkeypatch.setattr(embedding_store, "prefetch_content_embeddings", _record_prefetch)
 
         def _mock_embed(text):
             return [1.0, 0.0] if "许遥" in text else [0.0, 1.0]
-        monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+        monkeypatch.setattr(embedding_store, "compute_content_embedding", _mock_embed)
 
         res = ml.search("许遥的父亲", top_k=5)
 
-        assert len(calls) == 1, f"应且只应调用一次 prefetch_embeddings，实际 {len(calls)} 次"
+        assert len(calls) == 1, f"应且只应调用一次 prefetch_content_embeddings，实际 {len(calls)} 次"
         got = set(calls[0])
         assert "许遥的父亲" in got  # query
         assert "许遥的父亲失踪了" in got  # ch1 记忆
@@ -350,7 +342,7 @@ def test_search_semantic_prefetches_query_and_all_memories_once(monkeypatch):
 
 
 def test_search_semantic_falls_back_on_embedding_error(monkeypatch):
-    """真后端配置但 query 编码异常 → 回退 TF-IDF（不崩·不误标 semantic）。"""
+    """内容后端就绪但 query 编码异常 → 回退 TF-IDF（不崩·不误标 semantic）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         db = _mk_db(tmp)
@@ -359,41 +351,37 @@ def test_search_semantic_falls_back_on_embedding_error(monkeypatch):
         ]})
         ml = mod.MemoryLayer(tmp, current_ch=5)
 
-        monkeypatch.setenv("EMBED_BACKEND", "mock")
         import embedding_store
+        monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
 
         def _boom(text):
             raise RuntimeError("模拟真后端编码失败")
-        monkeypatch.setattr(embedding_store, "compute_embedding", _boom)
+        monkeypatch.setattr(embedding_store, "compute_content_embedding", _boom)
+        monkeypatch.setattr(embedding_store, "prefetch_content_embeddings",
+                            lambda texts: {"total": len(texts), "unique": 0,
+                                          "cache_hits": 0, "computed": 0})
 
         res = ml.search("许遥的父亲")
         assert len(res) >= 1
         assert all("method" not in r for r in res)  # 回退 TF-IDF（不带 semantic 标记）
 
 
-def test_search_default_no_backend_unaffected():
-    """🔴 零回归锁：无 EMBED_BACKEND（默认）→ search 结果保持纯 TF-IDF 路径（无 semantic 标记）。"""
-    old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
-    try:
-        with tempfile.TemporaryDirectory() as d:
-            tmp = Path(d)
-            db = _mk_db(tmp)
-            _write_json(db / "故事块摘要.json", {"chapters": [
-                {"ch": 1, "summary": "许遥的父亲在码头失踪了"},
-                {"ch": 2, "summary": "云霄宗弟子御剑飞行修炼"},
-                {"ch": 3, "summary": "许遥决心去码头寻找父亲下落"},
-            ]})
-            ml = mod.MemoryLayer(tmp, current_ch=5)
-            res = ml.search("许遥的父亲", top_k=5)
-            assert len(res) >= 1
-            assert all("method" not in r for r in res)
-    finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
+def test_search_default_no_backend_unaffected(monkeypatch):
+    """🔴 零回归锁：内容后端不可用（默认）→ search 结果保持纯 TF-IDF 路径（无 semantic 标记）。"""
+    import embedding_store
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: False)
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        db = _mk_db(tmp)
+        _write_json(db / "故事块摘要.json", {"chapters": [
+            {"ch": 1, "summary": "许遥的父亲在码头失踪了"},
+            {"ch": 2, "summary": "云霄宗弟子御剑飞行修炼"},
+            {"ch": 3, "summary": "许遥决心去码头寻找父亲下落"},
+        ]})
+        ml = mod.MemoryLayer(tmp, current_ch=5)
+        res = ml.search("许遥的父亲", top_k=5)
+        assert len(res) >= 1
+        assert all("method" not in r for r in res)
 
 
 def test_stats_forgotten_elements_threshold():

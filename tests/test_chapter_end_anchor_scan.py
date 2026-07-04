@@ -10,8 +10,25 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import chapter_end_anchor_scan as mod  # noqa: E402
+import embedding_store  # noqa: E402
+
+
+# 🔴 2026-07-04 本地 autouse 隔离（不碰全局 conftest.py）：content_backend_available() 查真
+# 文件系统（venv/infer 脚本/模型目录），本机若已备好 bge 模型会恒真——不像旧 EMBED_BACKEND
+# 有 conftest._isolate_nn_gates 兜底清零，会让本文件里不测 embedding 的"素"用例跨机器非确定
+# 污染（真机上真的算出高于阈值的相似度）。默认关闭·内容路径专项测试自行 monkeypatch 覆盖。
+@pytest.fixture(autouse=True)
+def _content_backend_off_by_default():
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
+    try:
+        yield
+    finally:
+        embedding_store.content_backend_available = orig
 
 
 # ---------- parse_chapter_range ----------
@@ -385,49 +402,51 @@ def test_collect_anchor_texts_empty_db_returns_empty_list():
         assert mod.collect_anchor_texts(db) == []
 
 
-# ---------- 语义 rescue（2026-07-02 · 真后端门控 + 字面法 fallback）----------
+# ---------- 语义 rescue（2026-07-04 · 内容后端门控 + 字面法 fallback）----------
 
-def test_has_real_embedding_backend_false_by_default():
-    import os
-    old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
-    try:
-        assert mod._has_real_embedding_backend() is False
-    finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
+def test_content_backend_ready_false_by_default(monkeypatch):
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: False)
+    assert mod._content_backend_ready() is False
 
 
-def test_anchor_texts_ignored_without_real_backend():
-    """anchor_texts 传了但无真后端 → 纯字面法（不会悄悄启用语义 rescue）。"""
+def test_content_backend_ready_true_when_available(monkeypatch):
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    assert mod._content_backend_ready() is True
+
+
+def test_anchor_texts_ignored_without_content_backend():
+    """anchor_texts 传了但内容后端不可用（默认·autouse fixture）→ 纯字面法（不会悄悄
+    启用语义 rescue）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         ch = _write_chapter(tmp, "他望向远方的雪山，沉默不语，雾气弥漫。")
         r = mod.scan_chapter_end(ch, anchors={"黑刀", "祭坛"},
                                   anchor_texts=["冰封的巨兽正在苏醒"])
         codes = {i["code"] for i in r["issues"]}
-        assert "CHAPTER_END_NO_ANCHOR" in codes  # 无真后端 → 字面法照常报
+        assert "CHAPTER_END_NO_ANCHOR" in codes  # 无内容后端 → 字面法照常报
         assert "semantic_anchor_rescue" not in r
 
 
 def test_semantic_rescue_suppresses_no_anchor_for_paraphrase(monkeypatch):
-    """字面 0 命中但 anchor_texts 池里有语义同指条目 → 真后端下不再误报 CHAPTER_END_NO_ANCHOR。"""
-    monkeypatch.setenv("EMBED_BACKEND", "mock")
-    import embedding_store
-
+    """字面 0 命中但 anchor_texts 池里有语义同指条目 → 内容后端下不再误报 CHAPTER_END_NO_ANCHOR。"""
     def _mock_embed(text):
         if "雪山" in text or "冰封的巨兽" in text:
             return [1.0, 0.0]
         return [0.0, 1.0]
-    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _mock_embed)
+    monkeypatch.setattr(embedding_store, "compute_content_embeddings_batch",
+                         lambda texts: [_mock_embed(t) for t in texts])
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings",
+                         lambda texts: {"total": len(texts), "unique": 0, "cache_hits": 0,
+                                        "computed": 0, "available": True})
 
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         ch = _write_chapter(tmp, "他望向远方的雪山，沉默不语，雾气弥漫。")
-        # 前置断言：字面法本该报 NO_ANCHOR（复用既有用例的原句）
+        # 前置断言：字面法本该报 NO_ANCHOR（复用既有用例的原句·不传 anchor_texts 时
+        # 语义分支的 `... and anchor_texts and ...` 门槛本身就短路，与内容后端是否就绪无关）
         r_literal = mod.scan_chapter_end(ch, anchors={"黑刀", "祭坛"})
         assert "CHAPTER_END_NO_ANCHOR" in {i["code"] for i in r_literal["issues"]}
 
@@ -439,13 +458,15 @@ def test_semantic_rescue_suppresses_no_anchor_for_paraphrase(monkeypatch):
 
 
 def test_semantic_rescue_falls_back_on_embedding_error(monkeypatch):
-    """真后端配置但编码异常 → 回退字面法（不崩·NO_ANCHOR 照常报）。"""
-    monkeypatch.setenv("EMBED_BACKEND", "mock")
-    import embedding_store
-
+    """内容后端就绪但编码异常 → 回退字面法（不崩·NO_ANCHOR 照常报）。"""
     def _boom(text):
-        raise RuntimeError("模拟真后端编码失败")
-    monkeypatch.setattr(embedding_store, "compute_embedding", _boom)
+        raise RuntimeError("模拟内容后端编码失败")
+
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _boom)
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings",
+                         lambda texts: {"total": len(texts), "unique": 0, "cache_hits": 0,
+                                        "computed": 0, "available": True})
 
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
@@ -459,24 +480,22 @@ def test_semantic_rescue_falls_back_on_embedding_error(monkeypatch):
 
 def test_semantic_rescue_prefetches_tail_and_anchor_pool_once(monkeypatch):
     """🔴 2026-07-03 Wave-4 批量改造回归锁：_semantic_anchor_match 开头应对
-    [tail_text]+去重后的 anchor_texts 池调用**一次** prefetch_embeddings（而非每条 anchor
-    各自触发后端·ruoyu_style 等真后端下逐条各起一次子进程暖机不可用）。"""
-    monkeypatch.setenv("EMBED_BACKEND", "mock")
-    import embedding_store
-    embedding_store._BACKEND = None  # 重探测后端（隔离跨测试残留缓存）
-
+    [tail_text]+去重后的 anchor_texts 池调用**一次** prefetch_content_embeddings（而非每条
+    anchor 各自触发后端·内容后端下逐条各起一次子进程暖机不可用）。"""
     calls = []
 
     def _record_prefetch(texts):
         calls.append(list(texts))
         return {"total": len(texts), "unique": len(set(texts)), "cache_hits": 0, "computed": len(texts)}
-    monkeypatch.setattr(embedding_store, "prefetch_embeddings", _record_prefetch)
 
     def _mock_embed(text):
         if "雪山" in text or "冰封的巨兽" in text:
             return [1.0, 0.0]
         return [0.0, 1.0]
-    monkeypatch.setattr(embedding_store, "compute_embedding", _mock_embed)
+
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings", _record_prefetch)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _mock_embed)
 
     # 池含 1 条重复（"冰封的巨兽正在苏醒"）—— 验证 prefetch 传入的是去重后的集合
     pool = ["冰封的巨兽正在苏醒", "无关的伏笔A", "无关的伏笔B", "冰封的巨兽正在苏醒"]
@@ -486,7 +505,7 @@ def test_semantic_rescue_prefetches_tail_and_anchor_pool_once(monkeypatch):
         r = mod.scan_chapter_end(ch, anchors={"黑刀", "祭坛"}, anchor_texts=pool)
         assert "semantic_anchor_rescue" in r  # 确认真走到了语义分支
 
-    assert len(calls) == 1, f"应且只应调用一次 prefetch_embeddings，实际 {len(calls)} 次"
+    assert len(calls) == 1, f"应且只应调用一次 prefetch_content_embeddings，实际 {len(calls)} 次"
     got = calls[0]
     assert got[0] == "他望向远方的雪山，沉默不语，雾气弥漫。"  # tail_text 在第一位
     assert set(got[1:]) == {"冰封的巨兽正在苏醒", "无关的伏笔A", "无关的伏笔B"}
@@ -495,12 +514,19 @@ def test_semantic_rescue_prefetches_tail_and_anchor_pool_once(monkeypatch):
 
 def test_semantic_rescue_below_floor_does_not_suppress(monkeypatch):
     """语义相似度低于 floor（无真正相关的 anchor_text）→ 不 rescue，字面判定原样保留。"""
-    monkeypatch.setenv("EMBED_BACKEND", "mock")
-    import embedding_store
     # 每条文本编码各不相同且互相正交 → 余弦相似度恒 0，永远低于 floor
     _dim = {"雪山章末": [1.0, 0.0, 0.0], "无关的伏笔": [0.0, 1.0, 0.0]}
-    monkeypatch.setattr(embedding_store, "compute_embedding",
-                         lambda text: _dim.get(text, [0.0, 0.0, 1.0]))
+
+    def _mock_embed(text):
+        return _dim.get(text, [0.0, 0.0, 1.0])
+
+    monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
+    monkeypatch.setattr(embedding_store, "compute_content_embedding", _mock_embed)
+    monkeypatch.setattr(embedding_store, "compute_content_embeddings_batch",
+                         lambda texts: [_mock_embed(t) for t in texts])
+    monkeypatch.setattr(embedding_store, "prefetch_content_embeddings",
+                         lambda texts: {"total": len(texts), "unique": 0, "cache_hits": 0,
+                                        "computed": 0, "available": True})
 
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)

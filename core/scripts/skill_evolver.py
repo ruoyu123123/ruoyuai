@@ -159,23 +159,24 @@ def _token_jaccard(a: set, b: set) -> float:
     return inter / union if union else 0.0
 
 
-# 🔴 2026-07-02: 真 embedding 后端接线（本仓约定：每个消费 embedding 的脚本自带一份门控副本）。
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
-    原样复制自 topic_drift_scanner.py（不 import 跨脚本依赖）。也检查 .env 的
-    GEN_EMBED__* API 配置（由 embedding_store._load_embed_profile 消费）。"""
-    v = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if v and v != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+# 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+
+    import 失败 → False（调用方回退 token jaccard）。
+    """
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
-# 🔬 待金标准校准：语义合并相似度下限（embedding 余弦 ≥ 此值才判「该合并」·保守起步，
-# 避免真后端刚接入就比字面 token jaccard>0.6 更激进地误并经验）。
-SEMANTIC_MERGE_THRESHOLD = 0.75
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告——语义合并相似度下限。
+# 合并判定误并代价高（取严格位）：content_vs_style_confound 族 neg_p95=0.5495≈0.55
+# （相邻强相关内容 vs 同书同风格但内容无关的远章节·95 分位低误报候选）。
+SEMANTIC_MERGE_THRESHOLD = 0.55
 
 
 def _semantic_similarity(blob_a: str, blob_b: str, embed_fn, cos_fn) -> "float | None":
@@ -229,18 +230,19 @@ def evolve(project_root: Path, current_ch: int) -> dict:
                 _blob_cache[idx] = _similarity_blob(pat) if isinstance(pat, dict) else ""
             return _blob_cache[idx]
 
-        # 🔴 2026-07-02: 真后端时优先语义相似度（能抓「对话要简短」vs「台词不宜过长」这类
+        # 🔴 2026-07-04: 内容后端就绪时优先语义相似度（能抓「对话要简短」vs「台词不宜过长」这类
         # 零 token 重叠的同义表述）；不可用/单条编码失败 → 回退 token jaccard（原逻辑不变）。
-        _use_semantic = _has_real_embedding_backend()
+        _use_semantic = _content_backend_ready()
         _embed_fn = _cos_fn = None
         if _use_semantic:
             try:
-                from embedding_store import compute_embedding, cosine_similarity, prefetch_embeddings
-                _embed_fn, _cos_fn = compute_embedding, cosine_similarity
+                from embedding_store import (compute_content_embedding, cosine_similarity,
+                                              prefetch_content_embeddings)
+                _embed_fn, _cos_fn = compute_content_embedding, cosine_similarity
                 # 2026-07-03 Wave-4：本 category 全部 pattern blob 一次性预热缓存，其后 O(N^2)
-                # 两两比对的逐条 compute_embedding 命中缓存（否则真后端下 N 条各起一次子进程）。
+                # 两两比对的逐条 compute_content_embedding 命中缓存（否则真后端下 N 条各起一次子进程）。
                 all_blobs = [_blob_for(i, p) for i, p in enumerate(upgraded)]
-                prefetch_embeddings([b for b in all_blobs if b])
+                prefetch_content_embeddings([b for b in all_blobs if b])
             except ImportError:
                 _use_semantic = False
 

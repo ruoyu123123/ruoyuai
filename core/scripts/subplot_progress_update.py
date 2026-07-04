@@ -16,7 +16,6 @@ exit 0: advisory · 不阻断
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -26,36 +25,35 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 
-# ── 🔴 2026-07-02 真语义 embedding 可选路径（照抄 topic_drift_scanner 已验证的模式）───────
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+# ── 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）───────
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
 
-    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
-    embedding 的文件自带一份，不互相 import）。也检查 .env 的 GEN_EMBED__* API 配置。
+    import 失败 → False（调用方回退字面 substring）。
     """
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
-SEMANTIC_THREAD_MATCH_THRESHOLD = 0.72   # thread 名+描述 vs cluster 摘要余弦阈值 · 待金标准校准
+SEMANTIC_THREAD_MATCH_THRESHOLD = 0.52   # thread 名+描述 vs cluster 摘要余弦阈值
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
 
 
 def _embed_corpus_once(corpus_text: str) -> "list | None":
-    """真后端就绪时把 cluster_summary_text 编码一次，供本次 update() 内所有
+    """内容后端就绪时把 cluster_summary_text 编码一次，供本次 update() 内所有
     thread/throughline 复用（避免每条都重复编码同一段落·2026-07-02）。
 
-    未配真后端 / 空文本 / 编码异常 → None（调用方逐条回退字面 substring）。
+    内容后端不可用 / 空文本 / 编码异常 → None（调用方逐条回退字面 substring）。
     """
-    if not _has_real_embedding_backend() or not corpus_text.strip():
+    if not _content_backend_ready() or not corpus_text.strip():
         return None
     try:
-        from embedding_store import compute_embedding
-        emb = compute_embedding(corpus_text)
+        from embedding_store import compute_content_embedding
+        emb = compute_content_embedding(corpus_text)
         return emb if emb else None
     except Exception:
         return None
@@ -64,7 +62,7 @@ def _embed_corpus_once(corpus_text: str) -> "list | None":
 def _thread_appears(name: str, desc: str, corpus_text: str, corpus_emb) -> "tuple[bool, str]":
     """判定 thread/throughline 是否在本 cluster 摘要中出现。
 
-    字面 substring 命中优先；真后端下字面未中时补语义余弦（摘要换说法不误标 dormant）。
+    字面 substring 命中优先；内容后端下字面未中时补语义余弦（摘要换说法不误标 dormant）。
     返回 (是否命中, match_method)。match_method ∈ {"literal_substring", "embedding_cosine"}。
     """
     if name and name in corpus_text:
@@ -72,8 +70,8 @@ def _thread_appears(name: str, desc: str, corpus_text: str, corpus_emb) -> "tupl
     if corpus_emb is not None and name:
         query = f"{name} {desc}".strip()
         try:
-            from embedding_store import compute_embedding, cosine_similarity
-            qe = compute_embedding(query)
+            from embedding_store import compute_content_embedding, cosine_similarity
+            qe = compute_content_embedding(query)
             if qe and len(qe) == len(corpus_emb) and cosine_similarity(qe, corpus_emb) >= SEMANTIC_THREAD_MATCH_THRESHOLD:
                 return True, "embedding_cosine"
         except Exception:
@@ -122,12 +120,12 @@ def update(project_root: Path, cluster_id: str) -> dict:
     tl = _load(throughline_path)
 
     # 🔴 2026-07-03 Wave-4：本次 update() 会用到的全部待编码文本（corpus 摘要 +
-    # 所有 thread/throughline query）一次性 prefetch（真后端子进程按条调用极贵·
+    # 所有 thread/throughline query）一次性 prefetch（内容后端子进程按条调用极贵·
     # 合并成一次批调用），后续 _embed_corpus_once / _thread_appears 内的逐条
-    # compute_embedding 全部命中缓存。
-    if _has_real_embedding_backend():
+    # compute_content_embedding 全部命中缓存。
+    if _content_backend_ready():
         try:
-            from embedding_store import prefetch_embeddings
+            from embedding_store import prefetch_content_embeddings
             queries = [cluster_summary_text] if cluster_summary_text else []
             for thread in sub.get("threads", []):
                 if isinstance(thread, str):
@@ -148,11 +146,11 @@ def update(project_root: Path, cluster_id: str) -> dict:
                         desc = line.get("description") or line.get("desc") or ""
                         queries.append(f"{name} {desc}".strip())
             if queries:
-                prefetch_embeddings(queries)
+                prefetch_content_embeddings(queries)
         except Exception:
             pass
 
-    # 真后端就绪时 cluster 摘要只编码一次（本函数下面两个循环复用·2026-07-02）
+    # 内容后端就绪时 cluster 摘要只编码一次（本函数下面两个循环复用·2026-07-02）
     corpus_emb = _embed_corpus_once(cluster_summary_text)
 
     for thread in sub.get("threads", []):
@@ -168,7 +166,7 @@ def update(project_root: Path, cluster_id: str) -> dict:
         thread_id = thread.get("id", "")
         thread_name = thread.get("name", thread_id)
         thread_desc = thread.get("description") or thread.get("desc") or ""
-        # 字面 substring 命中优先；真后端下字面未中再补语义（摘要换说法不误标 dormant）
+        # 字面 substring 命中优先；内容后端下字面未中再补语义（摘要换说法不误标 dormant）
         if thread_name:
             hit, method = _thread_appears(thread_name, thread_desc, cluster_summary_text, corpus_emb)
             if hit:

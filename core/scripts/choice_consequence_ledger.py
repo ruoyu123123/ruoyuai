@@ -73,7 +73,8 @@ _LEDGER_FILE = "选择账本.json"
 _NAMESPACE = "choice_consequence"
 _STAKES_TIERS = ("life", "faction", "moral", "preference")
 
-SEMANTIC_RESONANCE_SIM_THRESHOLD = 0.70   # choice 摘要/关键词 vs 正文段落余弦阈值 · 待金标准校准
+SEMANTIC_RESONANCE_SIM_THRESHOLD = 0.52   # choice 摘要/关键词 vs 正文段落余弦阈值
+# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
 
 
 def _mode() -> str:
@@ -81,45 +82,43 @@ def _mode() -> str:
     return m if m in ("off", "shadow", "active") else "shadow"
 
 
-# ── 🔴 2026-07-02 真语义 embedding 可选路径（照抄 topic_drift_scanner 已验证的模式）───────
-def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
+# ── 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）───────
+def _content_backend_ready() -> bool:
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
+    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
 
-    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
-    embedding 的文件自带一份，不互相 import）。也检查 .env 的 GEN_EMBED__* API 配置。
+    import 失败 → False（调用方回退字面 keyword-in-text）。
     """
-    eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    try:
+        from embedding_store import content_backend_available
+        return content_backend_available()
+    except Exception:
+        return False
 
 
 def _build_semantic_context(text: str) -> "dict | None":
-    """真后端就绪时把正文预切段 + 批量编码一次，供本次 scan() 内所有 ledger entry
+    """内容后端就绪时把正文预切段 + 批量编码一次，供本次 scan() 内所有 ledger entry
     复用（避免每条 entry 都重复编码同一正文·2026-07-02）。
 
-    未配真后端 / 无有效段落 / 编码异常 → None（调用方逐条回退字面 keyword-in-text）。
+    内容后端不可用 / 无有效段落 / 编码异常 → None（调用方逐条回退字面 keyword-in-text）。
     """
-    if not _has_real_embedding_backend():
+    if not _content_backend_ready():
         return None
     paras = [p.strip() for p in text.split("\n") if len(p.strip()) >= 10]
     if not paras:
         return None
     try:
-        from embedding_store import compute_embedding
-        embs = [compute_embedding(p) for p in paras]
+        from embedding_store import compute_content_embedding
+        embs = [compute_content_embedding(p) for p in paras]
         return {"paragraphs": paras, "embeddings": embs}
     except Exception:
         return None
 
 
 def _semantic_resonance(choice_summary: str, keywords: list, ctx) -> "dict | None":
-    """真后端下：choice 摘要/关键词 vs 正文段落 embedding 余弦补充判定（意译呼应漏检）。
+    """内容后端下：choice 摘要/关键词 vs 正文段落 embedding 余弦补充判定（意译呼应漏检）。
 
-    命中最相似段落 → {"paragraph_index", "similarity"}；ctx 为 None（无真后端/无段落）
+    命中最相似段落 → {"paragraph_index", "similarity"}；ctx 为 None（无内容后端/无段落）
     / 查询文本为空 / 计算异常 → None（调用方回退字面 keyword-in-text · _check_resonance
     仍是兜底 · 字面命中永远优先）。
     """
@@ -129,8 +128,8 @@ def _semantic_resonance(choice_summary: str, keywords: list, ctx) -> "dict | Non
     if not query:
         return None
     try:
-        from embedding_store import compute_embedding, cosine_similarity
-        qe = compute_embedding(query)
+        from embedding_store import compute_content_embedding, cosine_similarity
+        qe = compute_content_embedding(query)
         if not qe:
             return None
         best_idx, best_sim = -1, -1.0
@@ -235,17 +234,17 @@ def scan(project_root, cluster_id, draft_path) -> dict:
 
     # 🔴 2026-07-03 Wave-4：正文段落 + 全部待判定 entry 的 choice 摘要/关键词查询
     # 两侧文本一次性 prefetch（真后端子进程按条调用极贵·合并成一次批调用）——
-    # 下面 _build_semantic_context / _semantic_resonance 内逐条 compute_embedding 命中缓存。
-    if _has_real_embedding_backend():
+    # 下面 _build_semantic_context / _semantic_resonance 内逐条 compute_content_embedding 命中缓存。
+    if _content_backend_ready():
         try:
-            from embedding_store import prefetch_embeddings
+            from embedding_store import prefetch_content_embeddings
             paras = [p.strip() for p in text.split("\n") if len(p.strip()) >= 10]
             queries = [
                 " ".join([e.get("choice_summary", "")] +
                         list(e.get("expected_resonance_keywords") or [])).strip()
                 for e in entries if e.get("status") not in ("visible", "expired")
             ]
-            prefetch_embeddings(paras + [q for q in queries if q])
+            prefetch_content_embeddings(paras + [q for q in queries if q])
         except Exception:
             pass
 

@@ -277,12 +277,40 @@ def _infer_nli(items: list, model: "str | None" = None) -> list:
     return predictor.predict_batch(pairs)
 
 
+# ---------- content_embed（🔴 2026-07-04 W6-C：内容语义嵌入·bge-small-zh） ----------
+# 动机：ruoyu_style 是作者判别模型，真机测量证实其对内容关系在单段粒度下 AUC≈随机
+# （core/ml/calibration/reports/ruoyu_style_separability_20260704.md）——内容语义任务
+# （呼应/触及/去重检索）需要专门的内容嵌入模型，风格/内容双轨分开。
+
+def _resolve_content_embed_ckpt() -> "str | None":
+    return _resolve_ckpt("RUOYU_CONTENT_EMBED_CKPT",
+                         _ML_DIR / "models" / "content_embed" / "bge-small-zh-v1.5")
+
+
+def _get_content_embed_predictor():
+    key = "content_embed"
+    if key in _TASK_CACHE:
+        return _TASK_CACHE[key]
+    content_infer = _import_sibling("content_embed", "content_infer", "content_infer")
+    predictor = content_infer.get_predictor(_resolve_content_embed_ckpt())
+    _ = predictor.mode  # 触发懒加载
+    _pop_generic_model_module()  # content_embed 目录无同名 model.py·防御性照抄（零成本）
+    _TASK_CACHE[key] = predictor
+    return predictor
+
+
+def _infer_content_embed(items: list, model: "str | None" = None) -> list:
+    predictor = _get_content_embed_predictor()
+    return predictor.predict_batch([str(t) for t in items])
+
+
 _TASK_HANDLERS = {
     "style_embed": _infer_style_embed,
     "vad": _infer_vad,
     "coherence": _infer_coherence,
     "surprisal": _infer_surprisal,
     "nli": _infer_nli,
+    "content_embed": _infer_content_embed,
 }
 
 

@@ -1,0 +1,848 @@
+{
+  "_doc": "语义阈值全集注册表（Wave-6 金标准校准地基）。人工逐处 Read 47 处 待金标准校准 grep 标记上下文后结构化整理产出，只读盘点不改动任何 scanner。entries 按 relation_family 分组（content_echo/content_dedup/style_drift/zero_shot_class/other），组内按 file/constant 排序。",
+  "generated_at": "2026-07-04",
+  "marker_total": 35,
+  "marker_source_cmd": "grep -rn \"待金标准校准\" core/scripts/*.py",
+  "entry_count": 47,
+  "kind_counts": {
+    "threshold": 50,
+    "scale": 3,
+    "prototype": 5
+  },
+  "relation_family_counts": {
+    "content_echo": 6,
+    "content_dedup": 6,
+    "style_drift": 4,
+    "zero_shot_class": 5,
+    "other": 37
+  },
+  "env_override_count": 6,
+  "pinned_by_tests_count": 26,
+  "known_blind_spots": [
+    {
+      "what": "zero_shot_prototype.py 的 classify()/classify_batch() 默认参数 floor=0.5",
+      "why": "被 cluster_burst_type_predictor.py / covert_foreshadowing_audit.py / dialogue_sequence_expansion.py / sdt_motivation_regulation_advisory.py 等至少 4 个文件的 6+ 处调用点共享复用（各调用点都硬编码字面 floor=0.5 传参，或干脆不传吃函数默认值），是一个真实存在、影响面很广的分类决策阈值，但从未被 待金标准校准 标记覆盖，本次 grep 扫描 100% 漏检。",
+      "recommendation": "Wave-6 registry 之外单独跟踪，建议提取成 zero_shot_prototype.DEFAULT_FLOOR 具名常量并补标记。"
+    },
+    {
+      "what": "belief_update_alignment.py 的启发式混合权重（0.4/0.3/0.2/0.1 词典分量权重 + 0.6/0.4 model/lexicon 混合权重，出现两处）",
+      "why": "这正是任务描述里提到的 belief_update 的 0.6/0.4 混合权重 例子本身，文件和代码都真实存在（约 line 173-177 和 line 188-191），但实地核实后该文件里没有任何一行 待金标准校准 字面标记，grep 扫描同样 100% 漏检。",
+      "recommendation": "属于 kind=weight 范畴，但 0/58 个已登记条目是 weight kind，这个类别在当前标记体系里完全没有代表，值得补标记后纳入下一轮盘点。"
+    }
+  ],
+  "entries": [
+    {
+      "id": "learning_loop.py::SEMANTIC_ATTRIB_FLOOR",
+      "file": "core/scripts/learning_loop.py",
+      "constant": "SEMANTIC_ATTRIB_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.3,
+      "env_override": null,
+      "relation_family": "content_dedup",
+      "consumer": "_semantic_attribute_to_skill_section",
+      "compares": "反思关键词查询文本 vs skill 段落（heading+body）--语义归因到具体 skill 段落的相关性下限",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        1035
+      ],
+      "note": "无数值 env 覆盖钩子；tests/test_learning_loop.py 存在但未按常量名或字面值钉住。"
+    },
+    {
+      "id": "cross_scene_voice_drift_scanner.py::DEFAULT_EMBED_DRIFT_FLOOR",
+      "file": "core/scripts/cross_scene_voice_drift_scanner.py",
+      "constant": "DEFAULT_EMBED_DRIFT_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.3,
+      "env_override": "CROSS_SCENE_EMBED_DRIFT_FLOOR",
+      "relation_family": "style_drift",
+      "consumer": "_embedding_voice_drift",
+      "compares": "同角色跨场景对话 embedding cosine 距离--超过此值判定 voice 漂移",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        227
+      ],
+      "note": "已有真实反例实测（2026-06-29，ruoyu_style 模型）：同一草稿冷硬短句 vs 热络长句同角色对白 cosine 距离仅 0.1062，远低于 0.3 floor。作者风格 embedding 本身把同作者文本映射得偏近，当前 floor 对该后端明显偏保守（宁可漏报）。这是本次盘点里唯一带定量反例证明 floor 可能测不出真漂移 的条目，Wave-6 校准应优先处理。"
+    },
+    {
+      "id": "revision_homogenization_scanner.py::DEFAULT_DELTA_SFS_SEMANTIC_FLOOR",
+      "file": "core/scripts/revision_homogenization_scanner.py",
+      "constant": "DEFAULT_DELTA_SFS_SEMANTIC_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.08,
+      "env_override": "REVISION_HOMOGENIZATION_EMBED_FLOOR",
+      "relation_family": "style_drift",
+      "consumer": "_semantic_pre_post_distance",
+      "compares": "gen_fixer 修订前(pre_fix) vs 修订后(post_fix) 文本 centroid--风格同质化（跨修订漂移）触发阈",
+      "pinned_by_tests": [
+        "tests/test_revision_homogenization_scanner.py"
+      ],
+      "marker_lines": [
+        99
+      ],
+      "note": "量纲是 cosine 距离 0-2，与同文件另一 L1 z-distance 的 DELTA_SFS_FLOOR=2.0 不同标尺，二者独立，勿混淆。"
+    },
+    {
+      "id": "sfs_axis_decomposer.py::(cos + 1.0) / 2.0 * 100.0",
+      "file": "core/scripts/sfs_axis_decomposer.py",
+      "constant": "(cos + 1.0) / 2.0 * 100.0",
+      "kind": "scale",
+      "current_value": "线性映射 cos∈[-1,1] → 0-100 分制",
+      "env_override": null,
+      "relation_family": "style_drift",
+      "consumer": "_real_embedding_axis_scores",
+      "compares": "蒸馏复刻校验：作者原文全文 vs 复刻 replica 全文--cosine 相似度换算成 SFS 0-100 分制的线性公式",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        100
+      ],
+      "note": "与 sfs_calibration_probe.py 里完全相同的公式重复一份（未提取共享函数）；线性映射未必是最佳映射（业界常用 sigmoid/百分位映射），Wave-6 校准应统一处理，改一处两处都要改。"
+    },
+    {
+      "id": "sfs_calibration_probe.py::(cos + 1.0) / 2.0 * 100.0",
+      "file": "core/scripts/sfs_calibration_probe.py",
+      "constant": "(cos + 1.0) / 2.0 * 100.0",
+      "kind": "scale",
+      "current_value": "线性映射 cos∈[-1,1] → 0-100 分制",
+      "env_override": null,
+      "relation_family": "style_drift",
+      "consumer": "_embedding_sfs_score",
+      "compares": "SFS 校准探针：text_a vs text_b（同作者/跨作者样本对）--cosine 相似度换算成 0-100 分制的线性公式，供 same/cross 分布可分性验证",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        119
+      ],
+      "note": "与 sfs_axis_decomposer.py 公式重复（见该条 note）。本文件是唯一直接服务于 same-author vs cross-author 可分性测量 的探针脚本，是 W6-B 校准 harness 最可能复用的现成基座。"
+    },
+    {
+      "id": "cluster_burst_type_predictor.py::_BURST_TYPE_PROTOTYPES",
+      "file": "core/scripts/cluster_burst_type_predictor.py",
+      "constant": "_BURST_TYPE_PROTOTYPES",
+      "kind": "prototype",
+      "current_value": "9 类爆点(laughter/shock/grief/anticipation/shipping/awe/critique/callback/meta) x 3 条例句/类",
+      "env_override": null,
+      "relation_family": "zero_shot_class",
+      "consumer": "_classify_burst_type_model",
+      "compares": "章末尾部窗口文本 vs 9 类爆点原型例句--zero-shot 分类到具体爆点类型，真后端不可用时 100% 走 _BURST_LEXICONS 词典兜底",
+      "pinned_by_tests": [
+        "tests/test_cluster_burst_type_predictor.py"
+      ],
+      "marker_lines": [
+        101
+      ],
+      "note": "调用处硬编码 floor=0.5（zero_shot_prototype.classify 的默认参数，非本文件具名常量，见总报告 zero_shot floor=0.5 盲区）。"
+    },
+    {
+      "id": "covert_foreshadowing_audit.py::_DELIVERY_LEXICON",
+      "file": "core/scripts/covert_foreshadowing_audit.py",
+      "constant": "_DELIVERY_LEXICON",
+      "kind": "prototype",
+      "current_value": "5 类伏笔隐蔽度(overt/buried/passing/objects/parallel) 正则锚词字典（非 embedding 例句，是规则词典）",
+      "env_override": null,
+      "relation_family": "zero_shot_class",
+      "consumer": "_classify_plant_mode / _classify_plants_batch（词典兜底路径）",
+      "compares": "伏笔 plant_text 内容--按锚词字典匹配桶位（delivery_mode 分类），是 zero-shot 路径失败时的唯一真理源 fallback",
+      "pinned_by_tests": [
+        "tests/test_covert_foreshadowing_audit.py"
+      ],
+      "marker_lines": [
+        54,
+        69
+      ],
+      "note": "与同文件的 _DELIVERY_MODE_PROTOTYPES 是同一分类问题的两套实现（词典规则 vs embedding 原型），kind 归类为 prototype 是因为它和例句一样本质是分类器的参照锚点，但形式是正则不是例句。校准时两者需一起验证一致性。"
+    },
+    {
+      "id": "covert_foreshadowing_audit.py::_DELIVERY_MODE_PROTOTYPES",
+      "file": "core/scripts/covert_foreshadowing_audit.py",
+      "constant": "_DELIVERY_MODE_PROTOTYPES",
+      "kind": "prototype",
+      "current_value": "5 类伏笔隐蔽度 x 3 条 embedding 原型例句/类",
+      "env_override": null,
+      "relation_family": "zero_shot_class",
+      "consumer": "_classify_plant_mode / _classify_plants_batch（zero_shot_prototype 路径）",
+      "compares": "伏笔 plant_text 内容 vs 5 类隐蔽度原型例句--真 embedding 后端可用时的精化分类路径",
+      "pinned_by_tests": [
+        "tests/test_covert_foreshadowing_audit.py"
+      ],
+      "marker_lines": [
+        54,
+        69
+      ],
+      "note": "调用处硬编码 floor=0.5，同 cluster_burst_type_predictor。"
+    },
+    {
+      "id": "dialogue_sequence_expansion.py::_SEQ_KIND_PROTOTYPES",
+      "file": "core/scripts/dialogue_sequence_expansion.py",
+      "constant": "_SEQ_KIND_PROTOTYPES",
+      "kind": "prototype",
+      "current_value": "3 类 CA sequence(pre/insert/post) x 3 条例句/类",
+      "env_override": null,
+      "relation_family": "zero_shot_class",
+      "consumer": "_classify_turn_kind / _classify_turns_batch",
+      "compares": "对话 turn 文本 vs pre/insert/post-sequence 原型例句--语义分类补召回（并集不取代固定触发词表）",
+      "pinned_by_tests": [
+        "tests/test_dialogue_sequence_expansion.py"
+      ],
+      "marker_lines": [
+        64
+      ],
+      "note": "调用处硬编码 floor=0.5，同上两条。"
+    },
+    {
+      "id": "sdt_motivation_regulation_advisory.py::_SDT_REGULATION_PROTOTYPES",
+      "file": "core/scripts/sdt_motivation_regulation_advisory.py",
+      "constant": "_SDT_REGULATION_PROTOTYPES",
+      "kind": "prototype",
+      "current_value": "SDT 六级调节(intrinsic/integrated/identified/introjected/external/amotivation) x 3 条例句/类",
+      "env_override": null,
+      "relation_family": "zero_shot_class",
+      "consumer": "_classify_sdt_window",
+      "compares": "角色动机窗口文本 vs SDT 六级调节原型例句--真后端不可用时 100% 走词典逐词累加兜底",
+      "pinned_by_tests": [
+        "tests/test_sdt_motivation_regulation_advisory.py"
+      ],
+      "marker_lines": [
+        92
+      ],
+      "note": "调用处硬编码 floor=0.5，同上。本文件 + 上面 3 个文件的 floor=0.5 全部来自 zero_shot_prototype.classify()/classify_batch() 的默认参数，是同一个真实可调参数被 4+ 处调用点隐式复用，但从未被任何 待金标准校准 标记覆盖，见总报告盲区一。"
+    },
+    {
+      "id": "antagonist_fidelity_scanner.py::FLAT_FLOOR_PER_1K",
+      "file": "core/scripts/antagonist_fidelity_scanner.py",
+      "constant": "FLAT_FLOOR_PER_1K",
+      "kind": "threshold",
+      "current_value": 1.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "反派扁平化 anti-pattern 词典命中密度(per_1k)--超此判定 safety-alignment 替代扁平化嫌疑",
+      "pinned_by_tests": [
+        "tests/test_antagonist_fidelity_scanner.py"
+      ],
+      "marker_lines": [
+        21,
+        45
+      ]
+    },
+    {
+      "id": "antagonist_fidelity_scanner.py::MIN_FLAT_HITS",
+      "file": "core/scripts/antagonist_fidelity_scanner.py",
+      "constant": "MIN_FLAT_HITS",
+      "kind": "threshold",
+      "current_value": 4,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "反派扁平化词命中总数下限--低于此不判（样本太少）",
+      "pinned_by_tests": [
+        "tests/test_antagonist_fidelity_scanner.py"
+      ],
+      "marker_lines": [
+        21,
+        45
+      ]
+    },
+    {
+      "id": "cross_cluster_character_presence_balance_aggregate.py::GINI_DEFAULT_BASELINE",
+      "file": "core/scripts/cross_cluster_character_presence_balance_aggregate.py",
+      "constant": "GINI_DEFAULT_BASELINE",
+      "kind": "threshold",
+      "current_value": 0.55,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "compute_presence_stats",
+      "compares": "无作者档时 Gini 系数的通用兜底基线值",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        33
+      ],
+      "note": "无专属测试文件覆盖。"
+    },
+    {
+      "id": "cross_cluster_character_presence_balance_aggregate.py::GINI_DEFAULT_SIGMA",
+      "file": "core/scripts/cross_cluster_character_presence_balance_aggregate.py",
+      "constant": "GINI_DEFAULT_SIGMA",
+      "kind": "threshold",
+      "current_value": 0.1,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "compute_presence_stats",
+      "compares": "无作者档时 Gini 系数通用兜底标准差",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        33
+      ],
+      "note": "无专属测试文件覆盖。"
+    },
+    {
+      "id": "cross_cluster_character_presence_balance_aggregate.py::GINI_DEVIATION_K",
+      "file": "core/scripts/cross_cluster_character_presence_balance_aggregate.py",
+      "constant": "GINI_DEVIATION_K",
+      "kind": "threshold",
+      "current_value": 1.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "compute_presence_stats",
+      "compares": "本书角色出场 Gini 系数对比作者基线--偏离超过 k·sigma 才报（k=1.0）",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        33
+      ],
+      "note": "无专属测试文件覆盖（全仓无 tests/test_cross_cluster_character_presence_balance_aggregate.py）。"
+    },
+    {
+      "id": "cross_cluster_character_presence_balance_aggregate.py::LONG_TAIL_ABSENCE_CLUSTERS",
+      "file": "core/scripts/cross_cluster_character_presence_balance_aggregate.py",
+      "constant": "LONG_TAIL_ABSENCE_CLUSTERS",
+      "kind": "threshold",
+      "current_value": 3,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_long_tail_forgotten",
+      "compares": "曾出场角色连续缺席 cluster 数--达到此数判定长尾遗忘",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        33
+      ],
+      "note": "无专属测试文件覆盖。"
+    },
+    {
+      "id": "cross_cluster_character_presence_balance_aggregate.py::LONG_TAIL_COUNT_FLOOR",
+      "file": "core/scripts/cross_cluster_character_presence_balance_aggregate.py",
+      "constant": "LONG_TAIL_COUNT_FLOOR",
+      "kind": "threshold",
+      "current_value": 3,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_long_tail_forgotten",
+      "compares": "长尾遗忘角色数量下限--达到此数才整体上报 advisory",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        33
+      ],
+      "note": "无专属测试文件覆盖；本文件 6 个常量共享同一处标记（line 33 的块注释），是全仓一条标记覆盖多常量密度最高的文件。"
+    },
+    {
+      "id": "cross_cluster_character_presence_balance_aggregate.py::LONG_TAIL_MIN_APPEAR",
+      "file": "core/scripts/cross_cluster_character_presence_balance_aggregate.py",
+      "constant": "LONG_TAIL_MIN_APPEAR",
+      "kind": "threshold",
+      "current_value": 3,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_long_tail_forgotten",
+      "compares": "角色累计出现次数下限--达到此数才算曾出场角色，纳入长尾遗忘检测池",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        33
+      ],
+      "note": "无专属测试文件覆盖。"
+    },
+    {
+      "id": "cross_cluster_narrative_debt_ledger_aggregate.py::BOOK_MORTGAGE_HEAD_PCT",
+      "file": "core/scripts/cross_cluster_narrative_debt_ledger_aggregate.py",
+      "constant": "BOOK_MORTGAGE_HEAD_PCT",
+      "kind": "threshold",
+      "current_value": 0.3,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "compute_book_ledger",
+      "compares": "全书前 N% cluster 窗口--该窗口内累计 planted=0 判定开篇没借债(Book Mortgage Absent)",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        53
+      ],
+      "note": "无专属测试文件覆盖。"
+    },
+    {
+      "id": "cross_cluster_narrative_debt_ledger_aggregate.py::VOL_OVERSHOOT_OPEN_RATIO",
+      "file": "core/scripts/cross_cluster_narrative_debt_ledger_aggregate.py",
+      "constant": "VOL_OVERSHOOT_OPEN_RATIO",
+      "kind": "threshold",
+      "current_value": 0.6,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_findings",
+      "compares": "卷末 open_debt / planted 占比--超过此比例判定卷末烂尾(Volume Overshoot)",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        53
+      ],
+      "note": "无专属测试文件覆盖；本文件 4 个常量共享同一处标记。"
+    },
+    {
+      "id": "cross_cluster_narrative_debt_ledger_aggregate.py::VOL_RUNAWAY_RISE_STREAK",
+      "file": "core/scripts/cross_cluster_narrative_debt_ledger_aggregate.py",
+      "constant": "VOL_RUNAWAY_RISE_STREAK",
+      "kind": "threshold",
+      "current_value": 2,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_findings",
+      "compares": "卷尾窗口内 open_ratio 连续上升的 cluster 数--达到此数判定烂尾风险(Tail Runaway)",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        53
+      ],
+      "note": "无专属测试文件覆盖。"
+    },
+    {
+      "id": "cross_cluster_narrative_debt_ledger_aggregate.py::VOL_TAIL_THRESHOLD_PCT",
+      "file": "core/scripts/cross_cluster_narrative_debt_ledger_aggregate.py",
+      "constant": "VOL_TAIL_THRESHOLD_PCT",
+      "kind": "threshold",
+      "current_value": 0.6,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "compute_volume_ledger",
+      "compares": "卷内后 N% 区段定义--超过此比例进入卷尾窗口参与烂尾风险判定",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        53
+      ],
+      "note": "无专属测试文件覆盖。"
+    },
+    {
+      "id": "dispreferred_turn_shape_scanner.py::BARE_RATIO_FLOOR",
+      "file": "core/scripts/dispreferred_turn_shape_scanner.py",
+      "constant": "BARE_RATIO_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.8,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_bare_dispreferred",
+      "compares": "非偏好回应（拒绝类对话）中裸拒绝（无缓冲词）占比--超此判定缺语用缓冲",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        25,
+        57
+      ],
+      "note": "已有真实反例：2026-06-20 记录 5 真作者中主神/剑来 bare_ratio 实测=1.0，只因样本量守卫 dispref_total<4 未触发才没被误报。说明 0.8 这个 floor 一旦样本守卫失效就会误伤真作者的正常裸拒绝，保持 shadow 未放量是刻意的，校准时必须把这条样本量边界情况纳入正负样本对。"
+    },
+    {
+      "id": "dispreferred_turn_shape_scanner.py::MIN_DISPREF",
+      "file": "core/scripts/dispreferred_turn_shape_scanner.py",
+      "constant": "MIN_DISPREF",
+      "kind": "threshold",
+      "current_value": 4,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_bare_dispreferred",
+      "compares": "非偏好回应样本数下限--低于此不判（防小样本噪声）",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        25,
+        57
+      ],
+      "note": "字面 4 在 tests/test_dispreferred_turn_shape_scanner.py 中出现，但为通用数字，判定为巧合而非真实钉值，未列入 pinned_by_tests。"
+    },
+    {
+      "id": "dramatic_irony_scanner.py::IRONY_TELL_FLOOR",
+      "file": "core/scripts/dramatic_irony_scanner.py",
+      "constant": "IRONY_TELL_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.8,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "dramatic irony 显式标志词（殊不知/浑然不知等）密度(per_1k)--超此判定靠 tell 而非 show",
+      "pinned_by_tests": [
+        "tests/test_dramatic_irony.py",
+        "tests/test_dramatic_irony_scanner.py"
+      ],
+      "marker_lines": [
+        18
+      ],
+      "note": "异常：文档标记原文写 阈值 LOW/HIGH_FLOOR 待金标准校准 ，但代码里 LOW_FLOOR/HIGH_FLOOR 这两个常量已不存在。原双向对账设计已废弃（文件内注释：原双向对账reader_adv逻辑已废），现在只有单向的 IRONY_TELL_FLOOR 一个常量。文档描述与代码现状不一致，本条以实际存在的 IRONY_TELL_FLOOR 登记。已有真实数据：6 真作者原文实测密度最大 0.11-0.37/千字（不同批注释给出的数字不同，可能是不同轮次样本），floor=0.8 留了 2x-7x 余量，2026-06-16 已放量 active。"
+    },
+    {
+      "id": "emotion_granularity_scanner.py::COARSE_EMOTION_PER_1K_FLOOR",
+      "file": "core/scripts/emotion_granularity_scanner.py",
+      "constant": "COARSE_EMOTION_PER_1K_FLOOR",
+      "kind": "threshold",
+      "current_value": 3.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "粗情绪大词（愤怒/悲伤/高兴/害怕等）裸词频密度(per_1k)--超此判定情绪颗粒度偏粗",
+      "pinned_by_tests": [
+        "tests/test_emotion_granularity_scanner.py"
+      ],
+      "marker_lines": [
+        25,
+        51,
+        118
+      ],
+      "note": "已有真实数据：5 真作者实测密度 0.07-1.32/千字，floor=3.0 留 2.3x 余量，2026-06-20 已放量 active。"
+    },
+    {
+      "id": "emotion_granularity_scanner.py::VAD_VARIANCE_FLOOR",
+      "file": "core/scripts/emotion_granularity_scanner.py",
+      "constant": "VAD_VARIANCE_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.02,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "_nn_vad_granularity",
+      "compares": "段级 VAD (valence/arousal/dominance) 各轴方差之和--低于此判定情绪平铺（颗粒度粗），NN 路径独有 env RUOYU_NN_VAD=1 门控",
+      "pinned_by_tests": [
+        "tests/test_emotion_granularity_scanner.py"
+      ],
+      "marker_lines": [
+        25,
+        51,
+        118
+      ],
+      "note": "与同文件 COARSE_EMOTION_PER_1K_FLOOR 是两条独立路径（关键词 vs 真 NN VAD），后者是全新维度，目前只有估算值（健康文本 2-3 轴和约 0.04-0.13），尚无真实作者 VAD 实测数据，校准优先级应低于已有实测基础的关键词路径。"
+    },
+    {
+      "id": "excess_vocab_corpus_zscan.py::AUTHOR_MAX_SIGMA",
+      "file": "core/scripts/excess_vocab_corpus_zscan.py",
+      "constant": "AUTHOR_MAX_SIGMA",
+      "kind": "threshold",
+      "current_value": 1.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "author 该 token 频次距 human 均值的 sigma 上限--低于此才计入 hit（防止误伤作者本就爱用的词）",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        48
+      ],
+      "note": "同上；本文件 3 个常量共享同一处标记，且依赖的两个语料词典本身是 _placeholder=true 占位文件，真正校准需先有真实语料而非只调这 3 个数字。"
+    },
+    {
+      "id": "excess_vocab_corpus_zscan.py::Z_LLM_BIAS_THRESHOLD",
+      "file": "core/scripts/excess_vocab_corpus_zscan.py",
+      "constant": "Z_LLM_BIAS_THRESHOLD",
+      "kind": "threshold",
+      "current_value": 2.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "token 的 z(LLM_freq vs Human_freq)--超此判定该 token 有 LLM 训练偏置",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        48
+      ],
+      "note": "无专属测试文件按常量名/字面值钉值（tests/test_excess_vocab_corpus_zscan.py 存在但只测行为）。"
+    },
+    {
+      "id": "excess_vocab_corpus_zscan.py::Z_TEXT_THRESHOLD",
+      "file": "core/scripts/excess_vocab_corpus_zscan.py",
+      "constant": "Z_TEXT_THRESHOLD",
+      "kind": "threshold",
+      "current_value": 1.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "token 的 z'(this_text_freq vs Human_freq)--超此判定当前草稿在该 token 上 LLM 化",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        48
+      ],
+      "note": "同上。"
+    },
+    {
+      "id": "focalizer_perception_bounds_scanner.py::OTHERS_INNER_FLOOR_PER_1K",
+      "file": "core/scripts/focalizer_perception_bounds_scanner.py",
+      "constant": "OTHERS_INNER_FLOOR_PER_1K",
+      "kind": "threshold",
+      "current_value": 1.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "他人名+内心动词 命中密度(per_1k)--超此判定 head-hopping 倾向",
+      "pinned_by_tests": [
+        "tests/test_focalizer_perception_bounds_scanner.py"
+      ],
+      "marker_lines": [
+        32,
+        68
+      ]
+    },
+    {
+      "id": "focalizer_perception_bounds_scanner.py::SELF_INVISIBLE_FLOOR_PER_1K",
+      "file": "core/scripts/focalizer_perception_bounds_scanner.py",
+      "constant": "SELF_INVISIBLE_FLOOR_PER_1K",
+      "kind": "threshold",
+      "current_value": 0.5,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "自己的+面部自体词（自己的眼神/脸色等）命中密度(per_1k)--超此判定 focalizer 频繁看见自己看不见的部位",
+      "pinned_by_tests": [
+        "tests/test_focalizer_perception_bounds_scanner.py"
+      ],
+      "marker_lines": [
+        32,
+        68
+      ]
+    },
+    {
+      "id": "focalizer_perception_bounds_scanner.py::SPATIAL_ABSENCE_HIT_FLOOR",
+      "file": "core/scripts/focalizer_perception_bounds_scanner.py",
+      "constant": "SPATIAL_ABSENCE_HIT_FLOOR",
+      "kind": "threshold",
+      "current_value": 2,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "与此同时+远处 类空间不在场标志命中数--达到此数判定焦点空间漂移",
+      "pinned_by_tests": [
+        "tests/test_focalizer_perception_bounds_scanner.py"
+      ],
+      "marker_lines": [
+        32,
+        68
+      ],
+      "note": "本文件 3 个常量共享同一处标记（line 32 doc + line 68 block 注释）。"
+    },
+    {
+      "id": "group_dialogue_balance_scanner.py::MIN_DIALOGUE_LINES",
+      "file": "core/scripts/group_dialogue_balance_scanner.py",
+      "constant": "MIN_DIALOGUE_LINES",
+      "kind": "threshold",
+      "current_value": 8,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_group_dialogue_balance",
+      "compares": "对话行数下限--低于此不判（非群戏规模，避免双人小对话误伤）",
+      "pinned_by_tests": [
+        "tests/test_group_dialogue_balance_scanner.py"
+      ],
+      "marker_lines": [
+        20
+      ]
+    },
+    {
+      "id": "group_dialogue_balance_scanner.py::RATIO_FLOOR",
+      "file": "core/scripts/group_dialogue_balance_scanner.py",
+      "constant": "RATIO_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.85,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_group_dialogue_balance",
+      "compares": "群戏对话里显式点名归属（张三说/李四道类）占比--超此判定点名过密（点名拐杖）",
+      "pinned_by_tests": [
+        "tests/test_group_dialogue_balance_scanner.py"
+      ],
+      "marker_lines": [
+        20
+      ],
+      "note": "已有真实数据：2026-06-20 记录 5 真作者实测 0.165-0.765（剑来0.765/将夜0.72，中文网文点名本就高频常态），原定 0.6 严重误报后抬到 0.85，但仍保持 shadow 不放量（信号弱，点名非缺陷）。这是本次盘点里已实测但主动选择不放量的典型案例，文档头部仍写待金标准校准是准确的，因为最终阈值/放量决定仍悬而未决，不是遗留的过时标记。"
+    },
+    {
+      "id": "interiority_mode_balance_scanner.py::MARKED_MONOLOGUE_FLOOR",
+      "file": "core/scripts/interiority_mode_balance_scanner.py",
+      "constant": "MARKED_MONOLOGUE_FLOOR",
+      "kind": "threshold",
+      "current_value": 2.5,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "带引导标记的直接独白（他想/心说等）密度(per_1k)--超此判定三态坍缩成单态",
+      "pinned_by_tests": [
+        "tests/test_interiority_mode_balance_scanner.py"
+      ],
+      "marker_lines": [
+        20
+      ],
+      "note": "已有真实数据：5 真作者实测密度 0-0.51/千字，floor=2.5 留 5x+ 余量，2026-06-20 已放量 active。同文件另有 FID_SHARE_FLOOR=0.15 常量，doc 标记未点名它，本次未单独登记，但校准时应一并处理（同一批次占位值）。"
+    },
+    {
+      "id": "litrpg_structure_scanner.py::STAT_FLOOR",
+      "file": "core/scripts/litrpg_structure_scanner.py",
+      "constant": "STAT_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.5,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "系统提示/面板标记（【】/属性/等级等）密度(per_1k)--低于此判定游戏文面板呈现不足",
+      "pinned_by_tests": [
+        "tests/test_litrpg_structure_scanner.py"
+      ],
+      "marker_lines": [
+        62
+      ],
+      "note": "题材层 scanner（仅 genre=litrpg 激活）；文档明说暂无 LitRPG 金标准样本校准，待真游戏向书产出后校准。是本次盘点里唯一连一本参考样本书都还没有的条目，校准前提比其它条目更弱。"
+    },
+    {
+      "id": "physio_cue_diversity_scanner.py::FACIAL_RATIO_FLOOR",
+      "file": "core/scripts/physio_cue_diversity_scanner.py",
+      "constant": "FACIAL_RATIO_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.65,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "面部生理线索（眉/眼/嘴角等）占（面部+非面部）命中的比例--超此判定面部偏置(facial bias)",
+      "pinned_by_tests": [
+        "tests/test_physio_cue_diversity_scanner.py"
+      ],
+      "marker_lines": [
+        19,
+        34
+      ],
+      "note": "已有真实数据：5 真作者实测 facial_ratio 0.245-0.566（将夜最高0.566），原定 0.55 误报将夜后抬到 0.65，2026-06-20 已放量 active。同文件 ANY_BUCKET_FLOOR=0.65（三桶通用版）与 MIN_CUE_SAMPLES=8 未被 doc 点名，未单独登记。"
+    },
+    {
+      "id": "romance_pacing_scanner.py::DIALOGUE_FLOOR",
+      "file": "core/scripts/romance_pacing_scanner.py",
+      "constant": "DIALOGUE_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.18,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "言情题材对话占比--低于此判定叙述过多、对话驱动不足",
+      "pinned_by_tests": [
+        "tests/test_romance_pacing_scanner_audit.py"
+      ],
+      "marker_lines": [
+        107
+      ]
+    },
+    {
+      "id": "romance_pacing_scanner.py::EMOTION_PUNCT_FLOOR",
+      "file": "core/scripts/romance_pacing_scanner.py",
+      "constant": "EMOTION_PUNCT_FLOOR",
+      "kind": "threshold",
+      "current_value": 2.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "情绪标点（问号/省略号）密度(per_1k)--低于此判定言情节奏缺羞涩矛盾的省略号/心理停顿",
+      "pinned_by_tests": [
+        "tests/test_romance_pacing_scanner_audit.py"
+      ],
+      "marker_lines": [
+        107
+      ]
+    },
+    {
+      "id": "romance_pacing_scanner.py::SENSORY_FLOOR",
+      "file": "core/scripts/romance_pacing_scanner.py",
+      "constant": "SENSORY_FLOOR",
+      "kind": "threshold",
+      "current_value": 3.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "五感/感受词密度(per_1k)--低于此判定情感流缺慢镜头铺陈",
+      "pinned_by_tests": [
+        "tests/test_romance_pacing_scanner_audit.py"
+      ],
+      "marker_lines": [
+        107
+      ],
+      "note": "题材层 scanner（仅 genre=romance 激活），与 litrpg_structure_scanner 同批次，文档同样明说暂无甜宠金标准样本校准，待真甜宠书产出后校准；本文件 3 个常量共享同一处标记（line 107 的 _doc 返回值字符串）。"
+    },
+    {
+      "id": "scene_grounding_scanner.py::MIN_SCENES",
+      "file": "core/scripts/scene_grounding_scanner.py",
+      "constant": "MIN_SCENES",
+      "kind": "threshold",
+      "current_value": 2,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan（经 detect_white_rooms）",
+      "compares": "总场景数下限--低于此不判（样本太少）",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        23,
+        58
+      ],
+      "note": "命名提醒：temporal_grounding_scanner.py 也有一个同名但取值不同（=3）的 MIN_SCENES，两者是各自模块内独立常量，无继承关系，校准时勿混淆；grep 常量名做法可能误把两处当一处，须按 file+line 区分。"
+    },
+    {
+      "id": "scene_grounding_scanner.py::UNGROUNDED_RATIO_FLOOR",
+      "file": "core/scripts/scene_grounding_scanner.py",
+      "constant": "UNGROUNDED_RATIO_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.5,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan（经 detect_white_rooms）",
+      "compares": "白房间场景（无接地锚点）占总场景比例--超此判定欠写偏多",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        23,
+        58
+      ],
+      "note": "已有真实数据：2026-06-20 记录 5 真作者（诡秘/主神/惊悚/剑来/将夜）实测 ungrounded_ratio 全为 0.0，2026-06-20 已放量 active。字面 0.5 未在 tests/test_scene_grounding_scanner.py 中被确认为钉值（过于通用未采信）。"
+    },
+    {
+      "id": "subtext_rescan_scanner.py::ON_THE_NOSE_PER_1K_FLOOR",
+      "file": "core/scripts/subtext_rescan_scanner.py",
+      "constant": "ON_THE_NOSE_PER_1K_FLOOR",
+      "kind": "threshold",
+      "current_value": 3.0,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "detect_on_the_nose / scan",
+      "compares": "on-the-nose 情绪直陈（情绪引导词+情绪名词紧邻）密度(per_1k)--超此判定说透过多、潜台词不足",
+      "pinned_by_tests": [
+        "tests/test_subtext_rescan.py",
+        "tests/test_subtext_rescan_scanner.py"
+      ],
+      "marker_lines": [
+        20
+      ],
+      "note": "已有真实数据：2026-06-16 批注记录 6 作者最大 0.06/千（50x 余量，切 active），本条内联注释另给出真作者最大1.14/千字[惊悚乐园0.36/遮天1.14]，留2.6x余量--两条注释数字差异较大（0.06 vs 1.14），可能是不同批次/不同统计口径，Wave-6 校准时应先核实这两个历史数字的口径差异再定基线。"
+    },
+    {
+      "id": "synesthesia_density_scanner.py::SYN_PER_1K_FLOOR",
+      "file": "core/scripts/synesthesia_density_scanner.py",
+      "constant": "SYN_PER_1K_FLOOR",
+      "kind": "threshold",
+      "current_value": 1.5,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan",
+      "compares": "明显跨感官通感短语（响亮的光/冰冷的声音等）密度(per_1k)--超此判定通感过用",
+      "pinned_by_tests": [
+        "tests/test_synesthesia_density_scanner.py"
+      ],
+      "marker_lines": [
+        18
+      ],
+      "note": "已有真实数据：5 真作者实测 synesthesia per_1k 全 0.0（正则只抓明显通感），2026-06-20 已放量 active。"
+    },
+    {
+      "id": "temporal_grounding_scanner.py::MIN_SCENES",
+      "file": "core/scripts/temporal_grounding_scanner.py",
+      "constant": "MIN_SCENES",
+      "kind": "threshold",
+      "current_value": 3,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan（经 detect_temporal_flatness）",
+      "compares": "总场景数下限--低于此不判（够长才判时间感）",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        23,
+        54
+      ],
+      "note": "与 scene_grounding_scanner.MIN_SCENES 同名不同值（=2），见该条 note。"
+    },
+    {
+      "id": "temporal_grounding_scanner.py::THIN_RATIO_FLOOR",
+      "file": "core/scripts/temporal_grounding_scanner.py",
+      "constant": "THIN_RATIO_FLOOR",
+      "kind": "threshold",
+      "current_value": 0.7,
+      "env_override": null,
+      "relation_family": "other",
+      "consumer": "scan（经 detect_temporal_flatness）",
+      "compares": "缺时间推进锚点场景占总场景比例--超此判定时间流逝感弱",
+      "pinned_by_tests": [],
+      "marker_lines": [
+        23,
+        54
+      ],
+      "note": "已有真实数据：5 真作者（诡秘/主神/惊悚/剑来/将夜）实测 thin_ratio 全 0.0，2026-06-20 已放量 active。字面 0.7 在 tests/test_temporal_grounding_scanner.py 中出现但较通用，未采信为确定钉值，建议人工复核。"
+    }
+  ]
+}

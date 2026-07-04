@@ -37,6 +37,12 @@ import volume_arc_drift_scanner as mod  # noqa: E402
 # 工具：造项目目录 + 写三个数据源
 # ──────────────────────────────────────────────────────────────────────────
 def _mk_project() -> Path:
+    # 🔴 2026-07-04：content_backend_available() 查真文件系统（venv/infer 脚本/模型目录），
+    # 本机若已备好 bge 模型会恒真——不像旧 EMBED_BACKEND 是环境变量、每测试后手工清。这里
+    # 顺带把它重置为 False（每个测试的第一行都会调 _mk_project，早于各测试自己的显式覆盖·
+    # 防跨测试非确定性污染又不依赖 pytest fixture——本文件底部 __main__ 自跑器不过 pytest）。
+    import embedding_store
+    embedding_store.content_backend_available = lambda: False
     proj = Path(tempfile.mkdtemp()) / "测试书"
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     return proj
@@ -337,46 +343,30 @@ def test_main_exits_0_when_no_drift():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 🔴 2026-07-01 语义覆盖率补齐（embedding cosine 替代 2-gram 字面重叠 · 同义改写零容错）
+# 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）
 # 北极星③「大势已定」核心哨兵，语义路径不能引入回归——下面锁死默认路径与旧行为逐字节
-# 一致，再单独验证 mock 真后端时语义路径被正确使用。
+# 一致，再单独验证 mock 内容后端时语义路径被正确使用。手写 save/restore（不用 pytest
+# monkeypatch fixture）——本文件底部 __main__ 直接零参调用 globals() 里的 test_*，需与之兼容。
 # ══════════════════════════════════════════════════════════════════════════
 
-def test_has_real_embedding_backend_false_by_default():
-    old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
+def test_content_backend_ready_false_by_default():
+    import embedding_store
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: False
     try:
-        assert mod._has_real_embedding_backend() is False
+        assert mod._content_backend_ready() is False
     finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
+        embedding_store.content_backend_available = orig
 
 
-def test_has_real_embedding_backend_false_when_hash():
-    old_eb = os.environ.get("EMBED_BACKEND")
+def test_content_backend_ready_true_when_available():
+    import embedding_store
+    orig = embedding_store.content_backend_available
+    embedding_store.content_backend_available = lambda: True
     try:
-        os.environ["EMBED_BACKEND"] = "hash"
-        assert mod._has_real_embedding_backend() is False
+        assert mod._content_backend_ready() is True
     finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
-
-
-def test_has_real_embedding_backend_true_when_set():
-    old_eb = os.environ.get("EMBED_BACKEND")
-    try:
-        os.environ["EMBED_BACKEND"] = "local"
-        assert mod._has_real_embedding_backend() is True
-    finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig
 
 
 def _mk_synonym_project() -> Path:
@@ -394,60 +384,53 @@ def _mk_synonym_project() -> Path:
 
 
 def test_default_bigram_path_reports_drift_for_synonym_case():
-    """🔴 零回归锁：无真 embedding 后端（默认）→ match_method=bigram_keyword_overlap，
-    milestone「夺取王座」与已写内容「登上帝位」字面 2-gram 零重叠 → 报 VOLUME_ARC_DRIFT
-    （对照组：证明默认路径与改动前行为逐字节一致）。"""
-    old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
-    try:
-        proj = _mk_synonym_project()
-        # 前置断言：证明这确实是「字面零重叠但语义相同」的场景
-        assert not (mod._kw("夺取王座") & mod._kw("主角登上帝位统治天下"))
-        r = mod.scan(proj)
-        assert r["match_method"] == "bigram_keyword_overlap", r
-        assert r["milestone_coverage"] == 0.0, r
-        assert len(r["issues"]) == 1 and r["issues"][0]["code"] == "VOLUME_ARC_DRIFT", r
-    finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
+    """🔴 零回归锁：内容后端不可用（默认，_mk_project 已重置）→ match_method=
+    bigram_keyword_overlap，milestone「夺取王座」与已写内容「登上帝位」字面 2-gram 零重叠
+    → 报 VOLUME_ARC_DRIFT（对照组：证明默认路径与改动前行为逐字节一致）。"""
+    proj = _mk_synonym_project()
+    # 前置断言：证明这确实是「字面零重叠但语义相同」的场景
+    assert not (mod._kw("夺取王座") & mod._kw("主角登上帝位统治天下"))
+    r = mod.scan(proj)
+    assert r["match_method"] == "bigram_keyword_overlap", r
+    assert r["milestone_coverage"] == 0.0, r
+    assert len(r["issues"]) == 1 and r["issues"][0]["code"] == "VOLUME_ARC_DRIFT", r
 
 
 def test_semantic_path_used_when_backend_mocked_no_false_drift():
-    """真 embedding 后端 mock：同一同义改写场景下，余弦相似度应正确识别「夺取王座」≈
+    """内容后端 mock：同一同义改写场景下，余弦相似度应正确识别「夺取王座」≈
     「登上帝位」→ 不误报漂移。验证语义路径被正确使用（match_method=embedding_cosine）。"""
-    old_eb = os.environ.get("EMBED_BACKEND")
+    proj = _mk_synonym_project()
+
+    import embedding_store
+    orig_avail = embedding_store.content_backend_available
+    orig_batch = embedding_store.compute_content_embeddings_batch
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
+
+    def _mock_embed(text):
+        # 语义分组：「帝位」/「王座」同指「统治地位」这一概念 → 同向量
+        return [1.0, 0.0] if ("帝位" in text or "王座" in text) else [0.0, 1.0]
+
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embeddings_batch = lambda texts: [_mock_embed(t) for t in texts]
+    embedding_store.compute_content_embedding = _mock_embed
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
     try:
-        proj = _mk_synonym_project()
-        os.environ["EMBED_BACKEND"] = "mock"
-
-        import embedding_store
-        orig = embedding_store.compute_embedding
-
-        def _mock_embed(text):
-            # 语义分组：「帝位」/「王座」同指「统治地位」这一概念 → 同向量
-            return [1.0, 0.0] if ("帝位" in text or "王座" in text) else [0.0, 1.0]
-
-        embedding_store.compute_embedding = _mock_embed
-        try:
-            r = mod.scan(proj)
-        finally:
-            embedding_store.compute_embedding = orig
-
-        assert r["match_method"] == "embedding_cosine", r
-        assert r["milestone_coverage"] == 1.0, r   # 语义识别为已触及
-        assert r["issues"] == [], r                 # 不误报漂移
+        r = mod.scan(proj)
     finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embeddings_batch = orig_batch
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
+
+    assert r["match_method"] == "embedding_cosine", r
+    assert r["milestone_coverage"] == 1.0, r   # 语义识别为已触及
+    assert r["issues"] == [], r                 # 不误报漂移
 
 
 def test_semantic_touch_floor_env_override():
-    """VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 覆盖默认 0.5·非法值回退默认。"""
+    """VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 覆盖默认值·非法值回退默认。"""
     old = os.environ.get("VOLUME_ARC_SEMANTIC_TOUCH_FLOOR")
     try:
         os.environ["VOLUME_ARC_SEMANTIC_TOUCH_FLOOR"] = "0.8"
@@ -462,31 +445,30 @@ def test_semantic_touch_floor_env_override():
 
 
 def test_semantic_path_falls_back_when_encode_fails():
-    """真后端配置但 embedding 编码异常 → 回退字面 bigram（不崩·不误判为语义路径）。"""
-    old_eb = os.environ.get("EMBED_BACKEND")
+    """内容后端就绪但 embedding 编码异常 → 回退字面 bigram（不崩·不误判为语义路径）。"""
+    proj = _mk_synonym_project()
+
+    import embedding_store
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
+
+    def _boom(text):
+        raise RuntimeError("模拟内容后端编码失败")
+
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embedding = _boom
+    embedding_store.prefetch_content_embeddings = lambda texts: {
+        "total": len(texts), "unique": 0, "cache_hits": 0, "computed": 0, "available": True}
     try:
-        proj = _mk_synonym_project()
-        os.environ["EMBED_BACKEND"] = "mock"
-
-        import embedding_store
-        orig = embedding_store.compute_embedding
-
-        def _boom(text):
-            raise RuntimeError("模拟真后端编码失败")
-
-        embedding_store.compute_embedding = _boom
-        try:
-            r = mod.scan(proj)
-        finally:
-            embedding_store.compute_embedding = orig
-
-        assert r["match_method"] == "bigram_keyword_overlap", r
-        assert r["milestone_coverage"] == 0.0, r
+        r = mod.scan(proj)
     finally:
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
+
+    assert r["match_method"] == "bigram_keyword_overlap", r
+    assert r["milestone_coverage"] == 0.0, r
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -511,10 +493,10 @@ def test_prefetch_called_once_with_written_text_and_milestones():
                    {"volume": 1, "chapter_range": [1, 9], "status": "已完成",
                     "scope_summary": "主角登上帝位统治天下"}]})
 
-    old_eb = os.environ.get("EMBED_BACKEND")
     import embedding_store
-    orig_embed = embedding_store.compute_embedding
-    orig_prefetch = embedding_store.prefetch_embeddings
+    orig_avail = embedding_store.content_backend_available
+    orig_single = embedding_store.compute_content_embedding
+    orig_prefetch = embedding_store.prefetch_content_embeddings
     calls = []
 
     def fake_prefetch(texts):
@@ -522,19 +504,16 @@ def test_prefetch_called_once_with_written_text_and_milestones():
         return {"total": len(texts), "unique": len(set(texts)),
                 "cache_hits": 0, "computed": len(set(texts))}
 
-    embedding_store.compute_embedding = lambda t: (
+    embedding_store.content_backend_available = lambda: True
+    embedding_store.compute_content_embedding = lambda t: (
         [1.0, 0.0] if ("帝位" in t or "王座" in t) else [0.0, 1.0])
-    embedding_store.prefetch_embeddings = fake_prefetch
+    embedding_store.prefetch_content_embeddings = fake_prefetch
     try:
-        os.environ["EMBED_BACKEND"] = "mock"
         r = mod.scan(proj)
     finally:
-        embedding_store.compute_embedding = orig_embed
-        embedding_store.prefetch_embeddings = orig_prefetch
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        else:
-            os.environ.pop("EMBED_BACKEND", None)
+        embedding_store.content_backend_available = orig_avail
+        embedding_store.compute_content_embedding = orig_single
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
     assert len(calls) == 1, calls
     expected = {"主角登上帝位统治天下", "夺取王座", "击败魔王", "寻回圣物"}
@@ -542,29 +521,23 @@ def test_prefetch_called_once_with_written_text_and_milestones():
     assert r["match_method"] == "embedding_cosine", r
 
 
-def test_prefetch_not_called_without_real_backend():
-    """默认（无真后端）→ 整段语义分支不执行 → prefetch_embeddings 零调用（零回归）。"""
+def test_prefetch_not_called_without_content_backend():
+    """默认（内容后端不可用）→ 整段语义分支不执行 → prefetch_content_embeddings 零调用
+    （零回归）。"""
     proj = _mk_synonym_project()
-    old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
     import embedding_store
-    orig_prefetch = embedding_store.prefetch_embeddings
+    orig_prefetch = embedding_store.prefetch_content_embeddings
     calls = []
 
     def fake_prefetch(texts):
         calls.append(list(texts))
         return {}
 
-    embedding_store.prefetch_embeddings = fake_prefetch
+    embedding_store.prefetch_content_embeddings = fake_prefetch
     try:
         r = mod.scan(proj)
     finally:
-        embedding_store.prefetch_embeddings = orig_prefetch
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
+        embedding_store.prefetch_content_embeddings = orig_prefetch
 
     assert calls == []
     assert r["match_method"] == "bigram_keyword_overlap"
