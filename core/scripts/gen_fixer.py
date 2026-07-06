@@ -2,16 +2,15 @@
 """
 gen_fixer.py — Gen-Model 修复/优化工具（OpenAI 兼容 /v1/chat/completions）
 
-用当前 active gen-model profile 修复 reflector 发现的 issue / 微调主代理标记的问题段 / 字数扩写 /
-checker 输出的违规精修。
+用当前 active gen-model profile 修复 reflector 发现的 issue / 微调主代理标记的问题段 /
+checker 输出的违规精修。正文问题必须回到 cluster 草稿层修复——gen_fixer 只在 cluster 草稿层工作
+（字数补写由 v27 splitter pending_tail 机制在 cluster 草稿层承担，不存在章级扩写入口）。
 
-六种模式：
+四种模式：
   --mode comprehensive       综合修 reading-reflector R1/R2 报告里所有 issue
   --mode polish              主代理亲读后小幅微调（接受 --instructions 自由文本）
-  --mode word-count          单章字数 < 2500 时扩写（保 ≥ 2500）
   --mode validator-repair    按 novel-validator-checker 输出 brief.json 精修违规段落
   --mode voice-fix           按 novel-voice-checker 输出 brief.json 修对话 voice 漂移
-  --mode chapter-end-rewrite 按 brief.json 重写命中的物理章末段（切章后格式修复 · 2026-05-29）
 
 用法示例：
 
@@ -20,21 +19,14 @@ checker 输出的违规精修。
     --project "workspace/novels/<book>" \\
     --mode comprehensive \\
     --report-file <path-to-reflector-R1.json> \\
-    --files 章节/第006章/第006章.txt 章节/第007章/第007章.txt
+    --files 章节/cluster_001_draft/cluster_001_draft.txt
 
   # 主代理亲读后微调
   python core/scripts/gen_fixer.py \\
     --project "workspace/novels/<book>" \\
     --mode polish \\
-    --files 章节/第010章/第010章.txt \\
+    --files 章节/cluster_001_draft/cluster_001_draft.txt \\
     --instructions "段 145-157 妈妈名字念第N遍 poetry-mode 模板感重，合并成散文长句"
-
-  # 字数扩写
-  python core/scripts/gen_fixer.py \\
-    --project "workspace/novels/<book>" \\
-    --mode word-count \\
-    --files 章节/第008章/第008章.txt \\
-    --target-min 2500
 
   # validator brief 精修（Agent 拆分后新流程）
   python core/scripts/gen_fixer.py \\
@@ -134,7 +126,7 @@ COMMON_HARD_RULES = """# 修复约束
 2. **不引入 AI 结构套话**：与此同时 / 值得一提的是 / 不仅如此 / 事实上（结构性机器腔，任何作者都不用）
 3. **不引入真实世界时间**：禁 20XX / 公元 / 月份名 / 星期几（除非作者世界观明确是现实题材）
 4. **保留原文已有的强段不动**（情感顶峰 / 关键对话 / 标志性细节）
-5. **整体字数不大幅波动**（除非 mode=word-count 显式扩写）
+5. **整体字数不大幅波动**（gen_fixer 只修不扩·字数补写走 splitter pending_tail）
 6. **不引入章末抒情收束模板**（「他不再是 X 的那个 X 了」类 · 章末倾向钩子）
 
 ## 二、风格工艺默认基线（作者风格档规定了对应维度 → 让位以作者为准；否则按此兜底）
@@ -242,69 +234,6 @@ def build_polish_prompt(files: list, instructions: str, files_content: dict) -> 
 {files_blob}
 
 按指令精准修复，不破坏其他段落，不引入新 anti-slop。
-"""
-    return system, user
-
-
-def build_word_count_prompt(files: list, files_content: dict, target_min: int, target_max: int) -> tuple:
-    """字数扩写：用户硬约束单章 2500-5000，低于下限 → 扩写"""
-    files_section = []
-    file_stats = []
-    for fp in files:
-        content = files_content[fp]
-        cjk = cio.count_cjk(content)  # v27 修复：统一 CJK 口径（覆盖扩展 CJK）
-        files_section.append(f"## {fp} (当前 {cjk} CJK)\n\n```\n{content}\n```")
-        file_stats.append(f"- {fp}: {cjk} CJK, 缺 {target_min - cjk if cjk < target_min else 0} 字")
-    files_blob = '\n\n'.join(files_section)
-    stats_blob = '\n'.join(file_stats)
-
-    system = f"""你是长篇小说的字数扩写引擎。
-
-**任务**：把低于下限的章节扩写到 [{target_min}, {target_max}] CJK。
-
-**绝对禁令**：
-- 禁止注水（重复同一意思 / 加无关风景描写 / 堆形容词）
-- 禁止扩写到 reflector 已标记的强项段
-- 扩写必须是**真实信息密度**：新增的内容必须承担 事件 / 角色 / 设定 / 伏笔 / 内化思考 之一
-
-# 推荐扩写方向
-- 角色内化思考
-- 场景物理细节（光影 / 触感 / 气味 / 物件状态）
-- 三方观察（A 看 B 看 C 的视角链）
-- 伏笔种子
-- 时间推进的实感
-
-{COMMON_HARD_RULES}
-
-# 输出格式
-
-```
-===FILE: <相对路径>===
-<完整正文>
-===END===
-```
-末尾 JSON 总结：
-```json
-{{
-  "files_expanded": [
-    {{"path": "...", "before_cjk": 1500, "after_cjk": 2600, "added_sections": ["...", "..."]}}
-  ]
-}}
-```
-"""
-
-    user = f"""# 当前字数状态
-
-{stats_blob}
-
-# 目标
-所有章节扩写到 [{target_min}, {target_max}] CJK 范围。
-
-# 待扩写章节
-
-{files_blob}
-
-扩写后请输出完整章节（保留章节标题第一行）。
 """
     return system, user
 
@@ -441,81 +370,6 @@ novel-voice-checker agent 已审查所有对话，定位 voice 漂移 / tone 不
 ```
 
 按违规清单精修对话，保持角色音域，不动情节，输出完整修复后正文 + JSON 总结。
-"""
-    return system, user
-
-
-def build_chapter_end_rewrite_prompt(brief: dict, chapter_content: str) -> tuple:
-    """章末 anchor 修复（2026-05-29 流程贯通 · 断点 4）。
-
-    cluster-write.md:420 step6.4 — splitter 切章后，novel-validator-checker 发现某物理章
-    章末翻车（剧本体过渡 / 文学过渡 / 无锚 cliffhanger / 抒情收束），出 brief 交给本 mode 重写。
-    这是切章后的物理章格式修复（合法 · 不碰 cluster_draft 正文走向，只修章末段落）。
-
-    brief schema 复用 validator-repair（version=1 / chapter_path / violations[]），
-    violations 描述章末问题（issue + fix_hint + original 章末段）。
-    """
-    chapter_path = brief.get('chapter_path', '')
-    violations = brief.get('violations', [])
-    violations_table = render_violations_table(violations)
-    # brief 可带 cluster 级章末守则提示（可选）
-    end_guidance = brief.get('end_rules') or (
-        "章末是钩子不是收束。禁剧本体「（镜头XX）」/ 文学过渡符（*、※）/ 听觉淡出 / "
-        "收束抒情句（「他不再是…的那个…了」）。章末须留具体悬念锚点（角色 + 目标/截止/筹码 ≥2 项）。"
-    )
-
-    system = f"""你是长篇小说的章末修复引擎（chapter-end-rewrite）。
-
-splitter 已把 cluster 草稿切成物理章，novel-validator-checker 发现某些物理章的**章末段落**翻车
-（剧本体过渡 / 文学过渡符 / 听觉淡出 / 无锚 cliffhanger / 抒情收束）。
-你的任务：**只重写章末命中段落**，把收束改成留悬念的钩子，不动章节主体情节。
-
-# 章末守则（最高优先级）
-{end_guidance}
-
-{COMMON_HARD_RULES}
-
-# 修复原则
-- 只改 violations 指向的章末段落，章节前面主体一字不动
-- 不改情节走向 / 不删信息 / 不引入下一章才该出现的内容
-- 重写后章末是**悬念钩子**：留具体未决事项（谁要做什么 / 截止 / 筹码），不抒情不总结
-- 长度大致守恒（章末段 ± 30%）
-
-# 输出格式
-
-输出**完整修复后正文**（保留章节标题第一行），用以下格式包裹：
-
-```
-===FILE: <章节相对路径>===
-<完整正文>
-===END===
-```
-
-末尾 JSON 总结：
-```json
-{{
-  "violations_addressed": [1, 2],
-  "chapter_end_before": "...",
-  "chapter_end_after": "..."
-}}
-```
-"""
-
-    user = f"""# 章末违规清单（novel-validator-checker 输出）
-
-共 {len(violations)} 条违规（均指向物理章章末段落）：
-
-{violations_table}
-
-# 待修复章节
-
-`{chapter_path}`
-
-```
-{chapter_content}
-```
-
-按违规清单只重写章末段落，改成留悬念的钩子，不动章节主体，不引入新 anti-slop，输出完整修复后正文 + JSON 总结。
 """
     return system, user
 
@@ -665,14 +519,13 @@ CJK_CONSERVATION_TOLERANCE = 0.30  # 修复后整章 CJK 相对原文 ±30%
 
 
 def parse_and_apply(reply: str, project_root: Path,
-                    before_content_by_path: dict | None = None,
-                    enforce_cjk_conservation: bool = True) -> tuple:
+                    before_content_by_path: dict | None = None) -> tuple:
     """从返回提取 ===FILE: ... === 块，写到对应路径。
 
     2026-05-30 加固：
       · before_content_by_path: {相对路径: 原文} —— 用于 CJK 守恒校验（main 传 files_content）。
-      · enforce_cjk_conservation: True 时整章 CJK 偏离原文 > ±30% 则**拒绝覆写**（保留原文），
-        防截断/退化输出销毁已发布章节。word-count 扩写模式应传 False（合法大幅增字）。
+      · CJK 守恒**恒开**：整章 CJK 偏离原文 > ±30% 则拒绝覆写（保留原文），
+        防截断/退化输出销毁已发布正文。所有模式都是修不是扩，无豁免口。
 
     返回 (files_written, summary, rejected)：rejected 是被守恒校验挡下的块列表。
     """
@@ -720,7 +573,7 @@ def parse_and_apply(reply: str, project_root: Path,
 
         # CJK 守恒校验：修复后整章字数相对原文偏离 > ±30% → 拒绝覆写（保护已发布章节）
         before_cjk = before_cjk_by_abs.get(str(target_resolved))
-        if enforce_cjk_conservation and before_cjk:
+        if before_cjk:
             lo = before_cjk * (1 - CJK_CONSERVATION_TOLERANCE)
             hi = before_cjk * (1 + CJK_CONSERVATION_TOLERANCE)
             if cjk < lo or cjk > hi:
@@ -780,15 +633,12 @@ def main():
     parser = argparse.ArgumentParser(description='Gen-Model 修复/优化工具（OpenAI 兼容协议）')
     parser.add_argument('--project', required=True)
     parser.add_argument('--mode', required=True,
-                        choices=['comprehensive', 'polish', 'word-count',
-                                 'validator-repair', 'voice-fix',
-                                 'chapter-end-rewrite'])
+                        choices=['comprehensive', 'polish',
+                                 'validator-repair', 'voice-fix'])
     parser.add_argument('--files', nargs='+',
-                        help='[comprehensive/polish/word-count] 待修章节文件路径')
+                        help='[comprehensive/polish] 待修 cluster 草稿文件路径')
     parser.add_argument('--report-file', help='[comprehensive] reading-reflector R*.json 路径')
     parser.add_argument('--instructions', help='[polish] 主代理自由文本指令')
-    parser.add_argument('--target-min', type=int, default=2500, help='[word-count] 单章下限')
-    parser.add_argument('--target-max', type=int, default=5000, help='[word-count] 单章上限')
     parser.add_argument('--brief',
                         help='[validator-repair/voice-fix] checker agent 输出的 brief JSON 路径')
     parser.add_argument('--dry-run', action='store_true', help='只输出 prompt 不调 API')
@@ -800,8 +650,7 @@ def main():
         sys.exit(2)
 
     # 根据 mode 准备输入
-    # 2026-05-29 流程贯通（断点 4）：chapter-end-rewrite 与 validator-repair/voice-fix 同走 --brief 通道
-    if args.mode in ('validator-repair', 'voice-fix', 'chapter-end-rewrite'):
+    if args.mode in ('validator-repair', 'voice-fix'):
         if not args.brief:
             logger.error(f" --mode {args.mode} 需要 --brief <path>")
             sys.exit(2)
@@ -832,12 +681,10 @@ def main():
 
         if args.mode == 'validator-repair':
             system, user = build_validator_repair_prompt(brief, chapter_content)
-        elif args.mode == 'chapter-end-rewrite':
-            system, user = build_chapter_end_rewrite_prompt(brief, chapter_content)
         else:  # voice-fix
             system, user = build_voice_fix_prompt(brief, chapter_content)
     else:
-        # comprehensive / polish / word-count 走原 --files
+        # comprehensive / polish 走原 --files
         if not args.files:
             logger.error(f" --mode {args.mode} 需要 --files")
             sys.exit(2)
@@ -857,14 +704,11 @@ def main():
                 sys.exit(2)
             report = json.loads(Path(args.report_file).read_text(encoding='utf-8'))
             system, user = build_comprehensive_prompt(args.files, report, files_content)
-        elif args.mode == 'polish':
+        else:  # polish
             if not args.instructions:
                 sys.stderr.write("[ERROR gen_fixer] --mode polish 需要 --instructions\n"); sys.stderr.flush()
                 sys.exit(2)
             system, user = build_polish_prompt(args.files, args.instructions, files_content)
-        elif args.mode == 'word-count':
-            system, user = build_word_count_prompt(args.files, files_content,
-                                                   args.target_min, args.target_max)
 
     if args.dry_run:
         logger.info("=== SYSTEM ===")
@@ -903,12 +747,9 @@ def main():
         sys.exit(3)
 
     logger.info(f"\n[gen_fixer] 解析并应用修改...")
-    # word-count 模式是合法的大幅扩写 → 关掉 CJK 守恒校验；其余模式（修复/微调/精修）
-    # 字数应守恒，开启守恒兜底防截断输出覆写销毁已发布章节。
-    enforce_cjk = args.mode != 'word-count'
+    # 所有模式（修复/微调/精修）字数应守恒，守恒兜底恒开防截断输出覆写销毁已发布正文。
     files_written, summary, rejected = parse_and_apply(
-        reply, project_root, before_content_by_path=files_content,
-        enforce_cjk_conservation=enforce_cjk)
+        reply, project_root, before_content_by_path=files_content)
     if rejected:
         logger.warning(f" {len(rejected)} 个修复块因 CJK 守恒校验被拒绝覆写（保留原文）")
     if not files_written:

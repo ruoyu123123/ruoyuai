@@ -4,7 +4,7 @@
 缺漏报告结论：plan 模板 scripts[] 引用的 core/scripts/*.py 一旦改名/删除，
 orchestrator 跑到该步才报错（git_snapshot 曾悬空引用 18 天没人发现）。
 本测试静态遍历 core/claude-home/plans/*.json 全部脚本行：
-  剥「? 」advisory 前缀 / 「python 」解释器前缀 / adaptive_runner 包装
+  剥条件脚本前缀 / 「python 」解释器前缀 / adaptive_runner 包装
   （取 -- 后的真实目标命令）→ 提取 core/scripts/xxx.py 路径 → 断言文件存在。
 
 零依赖范式：文件尾 __main__ 循环跑 test_* 打 [OK]/[FAIL]。
@@ -23,7 +23,7 @@ _SCRIPT_REF_RE = re.compile(r"core[/\\]scripts[/\\][A-Za-z0-9_]+\.py")
 
 
 def _strip_prefixes(line: str) -> str:
-    """剥「? 」advisory 前缀 + 「python/python3/py 」解释器前缀。"""
+    """剥条件脚本前缀 + 「python/python3/py 」解释器前缀。"""
     line = line.strip()
     if line.startswith("? "):
         line = line[2:].strip()
@@ -87,9 +87,9 @@ def test_extractor_plain_python_line():
     assert got == ["core/scripts/save_state.py"], got
 
 
-def test_extractor_strips_advisory_prefix():
-    got = extract_script_paths("? python core/scripts/audit_dashboard.py {project_root}")
-    assert got == ["core/scripts/audit_dashboard.py"], got
+def test_extractor_strips_conditional_prefix():
+    got = extract_script_paths("? python core/scripts/style_injector.py {project_root} <cluster_start_ch>")
+    assert got == ["core/scripts/style_injector.py"], got
 
 
 def test_extractor_unwraps_adaptive_runner():
@@ -146,6 +146,157 @@ def test_extraction_not_vacuous():
                 for plan in plans.values()
                 for _, line in iter_script_lines(plan))
     assert total >= 20, f"提取到的脚本引用过少（{total} 条）——提取器疑似失效"
+
+
+def test_cluster_main_chain_has_no_observer_sidecars():
+    """创作主链不得挂离线观察/学习建议 sidecar。"""
+    # W4 死码清扫（2026-07-05）：audit_dashboard / causal_verifier /
+    # skill_rewrite_advisor / user_edit_learner 已物理删除（生产面零引用），
+    # 条目随之清空；未来出现新的离线观察/学习 sidecar 时在此登记。
+    forbidden: set[str] = set()
+    offenders = []
+    for fname in ("cluster-write.plan.json", "cluster-save-state.plan.json"):
+        plan = _load_plans()[fname]
+        for n, line in iter_script_lines(plan):
+            for rel in extract_script_paths(line):
+                if Path(rel).name in forbidden:
+                    offenders.append(f"{fname} step {n}: {rel}")
+    assert not offenders, "主链仍挂离线 sidecar:\n  " + "\n  ".join(offenders)
+
+
+def test_main_chain_required_steps_have_verifiable_outputs():
+    """创作主链 required steps 不允许空产物假完成。"""
+    offenders = []
+    for fname in ("outline.plan.json", "cluster-write.plan.json", "cluster-save-state.plan.json"):
+        plan = _load_plans()[fname]
+        for step in plan.get("steps", []):
+            if step.get("required") and not (step.get("expected_outputs") or []):
+                offenders.append(f"{fname} step {step.get('n')} {step.get('name')}")
+            if step.get("required") and step.get("skip_output_allowed") is True:
+                offenders.append(f"{fname} step {step.get('n')} {step.get('name')} skip_output_allowed=true")
+    assert not offenders, "required 主链步骤缺少可验证产物或允许跳过输出:\n  " + "\n  ".join(offenders)
+
+
+def test_main_chain_adaptive_runner_is_strict():
+    """主链 adaptive_runner 只负责记录 incident，不允许作为降级放行 wrapper。"""
+    offenders = []
+    for fname in ("cluster-write.plan.json", "cluster-save-state.plan.json"):
+        plan = _load_plans()[fname]
+        for n, line in iter_script_lines(plan):
+            if "core/scripts/adaptive_runner.py" in line and " --strict " not in f" {line} ":
+                offenders.append(f"{fname} step {n}: {line}")
+    assert not offenders, "主链 adaptive_runner 缺 --strict:\n  " + "\n  ".join(offenders)
+
+
+def test_main_chain_templates_have_no_encoding_damage():
+    """锁住 PowerShell 管道写中文造成的 ??? / _??? 路径损坏。"""
+    offenders = []
+    for fname in ("cluster-write.plan.json", "cluster-save-state.plan.json"):
+        text = (PLANS_DIR / fname).read_text(encoding="utf-8")
+        for bad in ("???", "_???"):
+            if bad in text:
+                offenders.append(f"{fname}: contains {bad}")
+    assert not offenders, "主链 plan 存在编码损坏标记:\n  " + "\n  ".join(offenders)
+
+
+def test_main_chain_command_docs_do_not_use_skip_output():
+    """主链命令文档不得指示 plan_tracker --skip-output。"""
+    offenders = []
+    for rel in (
+        ".claude/commands/write.md",
+        ".claude/commands/outline.md",
+        ".claude/commands/cluster-write.md",
+        ".claude/commands/cluster-save-state.md",
+        ".claude/commands/export.md",
+        ".claude/commands/continue.md",
+    ):
+        text = (_ROOT / rel).read_text(encoding="utf-8")
+        if "--skip-output" in text or "skip_output_allowed" in text:
+            offenders.append(rel)
+    assert not offenders, "主链命令文档仍包含 skip-output 口径:\n  " + "\n  ".join(offenders)
+
+
+def test_hooks_do_not_expose_subsystems_bypass():
+    """主链 hook 不得保留 .subsystems_bypass.json 或轻量旁路放行口径。"""
+    offenders = []
+    for rel in (
+        "core/scripts/plan_step_gates.py",
+        "core/claude-home/hooks/pretooluse_subsystems_gate.py",
+        "core/claude-home/hooks/pretooluse_plan_step_anti_skip.py",
+        "core/claude-home/hooks/pretooluse_step_research.py",
+        "core/scripts/scaffold_subsystems.py",
+    ):
+        text = (_ROOT / rel).read_text(encoding="utf-8")
+        for bad in (".subsystems_bypass.json", "轻量模式旁路", "旁路: touch", "bypass_active"):
+            if bad in text:
+                offenders.append(f"{rel}: {bad}")
+    assert not offenders, "主链门禁仍暴露旁路口径:\n  " + "\n  ".join(offenders)
+
+
+def test_retired_side_commands_are_not_registered():
+    """章级质检/历史修正文入口已退役，不得继续注册为 slash command 或 plan 命令。"""
+    check_quality = "check-" + "quality"
+    retired_reconcile = "recon" + "cile"
+    offenders = []
+    for rel in (
+        f".claude/commands/{check_quality}.md",
+        f".claude/commands/{retired_reconcile}.md",
+        f"core/claude-home/plans/{check_quality}.plan.json",
+        f"core/claude-home/plans/{retired_reconcile}.plan.json",
+    ):
+        if (_ROOT / rel).exists():
+            offenders.append(rel)
+    assert not offenders, "退役命令/plan 仍存在:\n  " + "\n  ".join(offenders)
+
+
+def test_user_docs_do_not_recommend_retired_or_direct_db_write_flows():
+    """用户可见文档不得推荐退役命令或直接写库修改流程。"""
+    docs = [
+        "README.md",
+        "CLAUDE.md",
+        "使用说明.md",
+        "workspace/novels/README.md",
+        ".claude/commands/README.md",
+        ".claude/commands/QUICK_REFERENCE.md",
+        ".claude/commands/db.md",
+        ".claude/commands/session-start.md",
+    ]
+    forbidden = (
+        "/" + "recon" + "cile",
+        "/" + "check-" + "quality",
+        "/write-chapter",
+        "`/save-state`",
+        "/db update",
+        "/db 修复",
+        "/db 重建",
+        "手动微调",
+        "手动改了任何一个 `_数据库/*.json`",
+    )
+    offenders = []
+    for rel in docs:
+        path = _ROOT / rel
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for bad in forbidden:
+            if bad in text:
+                offenders.append(f"{rel}: {bad}")
+    assert not offenders, "用户文档仍推荐退役或直接写库流程:\n  " + "\n  ".join(offenders)
+
+
+def test_export_contract_has_no_format_or_flush_ghosts():
+    """正式 /export 只支持 TXT 全书导出；不得保留 flush/range/Markdown/EPUB 已实现口径。"""
+    text = (_ROOT / ".claude/commands/export.md").read_text(encoding="utf-8")
+    forbidden = ("--flush", "append/split", "Markdown 导出已实现", "EPUB 导出已实现", "范围导出已实现")
+    hits = [s for s in forbidden if s in text]
+    assert not hits, f"/export 文档仍包含旧导出口径: {hits}"
+
+
+def test_write_command_never_writes_fulltext_directly():
+    """/write 不得直接写 全文.txt；成品只从 /export 产生。"""
+    text = (_ROOT / ".claude/commands/write.md").read_text(encoding="utf-8")
+    assert "Write `全文.txt`" not in text
+    assert "直接 Write" not in text
 
 
 if __name__ == "__main__":

@@ -139,6 +139,12 @@ workspace/novels/*/_数据库/triage_band_report.json
 # 🔴 2026-06-29 本地GPU神经网络训练(core/ml/)：venv已被.venv/忽略·数据集+模型权重大二进制不入库(训练脚本入库)
 # ============================================================
 外部/
+
+# 🔴 2026-07-05 网搜调研克隆的外部开源写作系统（只作概念借鉴·零代码接线·不入库；自产调研综述 research/ 正常入库）
+moyin-creator/
+PlotPilot/
+external_repos/
+
 core/ml/**/data/
 core/ml/**/datasets/
 core/ml/**/checkpoints/

@@ -9,7 +9,7 @@
 但当前是**单向链**：Proposer → Solver → Judge
 缺：Judge 反馈 → 反向校准 Proposer + Solver
 
-本 orchestrator 每 10 章触发：
+本 orchestrator 每 N 个 cluster 触发（cluster-only · 由 cluster-save-state plan step 调用）：
 1. 三角分析：Proposer 卡质量 / Solver 章节质量 / Judge 一致性
 2. 反向校准信号：
    - Judge 评分连续低 → outline-planner 卡设计有问题 → 调用 meta-prompt-optimizer
@@ -17,7 +17,7 @@
    - judge 间分歧大 → meta-judge 校准
 3. 输出 evolution_report.json + 触发 skill_evolver / meta-prompt-optimizer
 
-用法：python evolution_orchestrator.py <project> [--ch N] [--cycle 10]
+用法：python evolution_orchestrator.py <project> --cluster <key> [--cluster-cycle 3]
 退出码: 0 ok / 1 需人工审查 / 2 致命
 """
 
@@ -99,32 +99,82 @@ def save_json(p: Path, data: dict):
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _extract_cluster_brief(payload) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("answer"), dict):
+        return payload["answer"]
+    if isinstance(payload.get("cluster_brief"), dict):
+        return payload["cluster_brief"]
+    if any(k in payload for k in ("scope_summary", "scene_storyboard", "ripple_match")):
+        return payload
+    return None
+
+
+def _candidate_rank(raw_cluster_id) -> str:
+    text = str(raw_cluster_id or "")
+    m = re.search(r"candidate[_-]?(\d+)", text)
+    return f"candidate_{m.group(1)}" if m else "chosen"
+
+
 def analyze_proposer(project_root: Path, recent_chs: list[int]) -> dict:
-    """分析 outline-planner 出卡质量：fate_cards_compliance + user 选择分布"""
+    """Analyze cluster candidate briefs and user choice artifacts.
+
+    recent_chs is kept for the existing caller contract, but proposer analysis is
+    now cluster-scoped and does not read per-chapter fate card files.
+    """
+    del recent_chs
     wal_dir = project_root / "_数据库" / ".wal"
     if not wal_dir.exists():
         return {"signal": "no_data"}
-    findings = []
-    cards_with_violation = 0
-    label_dist = Counter()
-    for ch in recent_chs:
-        cards_path = wal_dir / f"第{ch:03d}章_fate_cards.json"
-        if not cards_path.exists():
-            continue
-        cards = load_json(cards_path, {})
-        for c in cards.get("cards", []) or []:
-            cd = c.get("character_driven", {})
-            if not cd or not cd.get("aspect_compatibility_check", True):
-                cards_with_violation += 1
-            label_dist[c.get("label", "?")] += 1
 
-    if cards_with_violation > len(recent_chs) * 0.3:
+    findings = []
+    candidate_count = 0
+    candidate_violations = 0
+    choice_dist = Counter()
+
+    for path in sorted(wal_dir.glob("cluster_*_brief_candidates.json")):
+        payload = load_json(path, {}) or {}
+        candidates = payload.get("candidates") if isinstance(payload, dict) else None
+        if candidates is None and isinstance(payload, list):
+            candidates = payload
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                candidate_violations += 1
+                candidate_count += 1
+                continue
+            candidate_count += 1
+            if not candidate.get("scope_summary"):
+                candidate_violations += 1
+            storyboard = candidate.get("scene_storyboard")
+            if not isinstance(storyboard, list) or not storyboard:
+                candidate_violations += 1
+
+    for path in sorted(wal_dir.glob("cluster_*_user_choice.json")):
+        payload = load_json(path, {}) or {}
+        brief = _extract_cluster_brief(payload)
+        if isinstance(brief, dict):
+            choice_dist[_candidate_rank(brief.get("cluster_id"))] += 1
+
+    if candidate_count == 0 and not choice_dist:
+        return {"signal": "no_data"}
+
+    threshold = max(1, candidate_count) * 0.3
+    if candidate_violations > threshold:
         findings.append({
             "signal": "PROPOSER_LOW_QUALITY",
-            "evidence": f"{cards_with_violation} 张卡含 character_driven 缺失/违反",
-            "suggestion": "调用 meta-prompt-optimizer 改进 outline-planner prompt",
+            "evidence": f"{candidate_violations} cluster candidate briefs are incomplete",
+            "suggestion": "Run meta-prompt-optimizer against novel-outline-planner cluster candidate brief contract",
         })
-    return {"signal": "ok" if not findings else "low_quality", "findings": findings, "label_distribution": dict(label_dist)}
+    return {
+        "signal": "ok" if not findings else "low_quality",
+        "findings": findings,
+        "candidate_count": candidate_count,
+        "candidate_violations": candidate_violations,
+        "choice_distribution": dict(choice_dist),
+    }
 
 
 def analyze_solver(project_root: Path, recent_chs: list[int]) -> dict:
@@ -201,7 +251,7 @@ def analyze_judge(project_root: Path, recent_chs: list[int]) -> dict:
 def analyze_judge_cluster(project_root: Path, recent_clusters: list[dict]) -> dict:
     """2026-05-29 cluster 化：cluster 视野的 Judge 分析 —— 用 cluster 账本 judge_grade
     取代逐章 changes.waivers 重扫。grade 连续偏低（C/D）→ 一致性/质量信号。
-    账本无 judge_grade（builder 未填）→ 回退逐章 analyze_judge（向后兼容）。
+    账本无 judge_grade（builder 未填）→ 回退逐章 analyze_judge（账本数据兜底·非章级入口）。
     """
     findings = []
     grade_rank = {"A": 4, "B": 3, "C": 2, "D": 1}
@@ -229,12 +279,11 @@ def analyze_judge_cluster(project_root: Path, recent_clusters: list[dict]) -> di
             "findings": findings, "cluster_grades": graded}
 
 
-def trigger_cascade(project_root: Path, signals: list[str], cluster_key: str | None = None) -> dict:
+def trigger_cascade(project_root: Path, signals: list[str], cluster_key: str) -> dict:
     """根据信号触发对应工具。
 
-    2026-05-29 cluster 化：cluster 模式（cluster_key 非空）下把级联的 skill_evolver
-    evolve/retire 也按 cluster 调（`--cluster {key}`），与 skill_evolver 的 cluster 阈值配套；
-    chapter 模式保持 `--ch {cur_ch}` 不变。
+    2026-07-05 cluster-only：级联的 skill_evolver evolve/retire 一律按 cluster 调
+    （`--cluster {key}`），与 skill_evolver 的 cluster 阈值配套。
     """
     triggered = []
     if "SOLVER_REPEATED_ERRORS" in signals or "SOLVER_QUALITY_DECLINE" in signals \
@@ -245,14 +294,7 @@ def trigger_cascade(project_root: Path, signals: list[str], cluster_key: str | N
     # 自动跑 skill_evolver evolve
     script_dir = scripts_dir()
     try:
-        if cluster_key:
-            unit_args = ["--cluster", cluster_key.replace("cluster_", "")]
-        else:
-            chs = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                         for d in (project_root / "章节").glob("第*章")
-                         if re.match(r"第(\d+)章", d.name))
-            cur_ch = chs[-1] if chs else 0
-            unit_args = ["--ch", str(cur_ch)]
+        unit_args = ["--cluster", cluster_key.replace("cluster_", "")]
         subprocess.run([child_python(), str(script_dir / "skill_evolver.py"),
                        str(project_root), "evolve"] + unit_args,
                        capture_output=True, timeout=60, encoding="utf-8")
@@ -275,7 +317,8 @@ def _run_cluster(project_root: Path, cluster_key: str, cluster_cycle: int) -> in
 
     分析窗口 = cluster_summary_reader 取最近 N 个 cluster；把这些 cluster 的章拍平给
     Proposer/Solver 逐章分析器复用，Judge 走 cluster 级 judge_grade 分析。
-    plan cluster-save-state.plan.json:126 以 `--cluster {key} || true` 调用，故绝不能崩。
+    plan cluster-save-state.plan.json 经 adaptive_runner 以 `--cluster {key}` 调用，
+    分析数据缺失走 [SKIP] 而非崩（失败由 adaptive_runner 记录学习）。
     """
     if _csr is None:
         print("[SKIP] cluster_summary_reader 不可用，cluster 模式无法分析")
@@ -332,72 +375,20 @@ def _run_cluster(project_root: Path, cluster_key: str, cluster_cycle: int) -> in
 
 
 def main():
+    # 2026-07-05 cluster-only（W3 旁路移除）：章级双形入口（--ch/--cycle）已删——系统
+    # cluster-only，plan step 只以 `--cluster {key}` 调用，--cluster 为必填。
     ap = argparse.ArgumentParser(
-        description="evolution_orchestrator · cluster 模式（--cluster）为 v26 主路径 / --ch 向后兼容"
+        description="evolution_orchestrator · 三角共演化（cluster-only · 每 N 个 cluster 触发）"
     )
     ap.add_argument("project")
-    ap.add_argument("--ch", type=int, default=None)
-    ap.add_argument("--cycle", type=int, default=10, help="chapter 模式：每 N 章窗口")
-    # 2026-05-29 cluster 化：plan cluster-save-state.plan.json:126 以 `--cluster {key} || true`
-    # 调用。argparse 不认 --cluster 会被吞 → 三角共演化静默不跑。
-    ap.add_argument("--cluster", type=str, default=None,
-                    help="cluster key（'001' / 'cluster_001'）· 主路径：每 N 个 cluster 触发")
+    ap.add_argument("--cluster", type=str, required=True,
+                    help="cluster key（'001' / 'cluster_001'）")
     ap.add_argument("--cluster-cycle", type=int, default=3,
-                    help="cluster 模式：最近 N 个 cluster 作分析窗口（默认 3）")
+                    help="最近 N 个 cluster 作分析窗口（默认 3）")
     args = ap.parse_args()
 
     project_root = Path(args.project).resolve()
-
-    # cluster 模式优先（plan 主路径）
-    if args.cluster:
-        sys.exit(_run_cluster(project_root, args.cluster, args.cluster_cycle))
-
-    # chapter 兼容模式
-    chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                      for d in (project_root / "章节").glob("第*章")
-                      if re.match(r"第(\d+)章", d.name))
-    if not chapters:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
-    cur_ch = args.ch or chapters[-1]
-    recent = [c for c in chapters if c <= cur_ch][-args.cycle:]
-
-    proposer_r = analyze_proposer(project_root, recent)
-    solver_r = analyze_solver(project_root, recent)
-    judge_r = analyze_judge(project_root, recent)
-
-    # 触发 cascade
-    all_signals = []
-    for r in [proposer_r, solver_r, judge_r]:
-        for f in r.get("findings", []):
-            all_signals.append(f.get("signal"))
-    cascade = trigger_cascade(project_root, all_signals)
-
-    # 输出
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report = {
-        "scan_type": "evolution_orchestrator",
-        "scan_ts": ts,
-        "current_ch": cur_ch,
-        "cycle_window": recent,
-        "proposer": proposer_r,
-        "solver": solver_r,
-        "judge": judge_r,
-        "cascade_triggered": cascade,
-        "signals_summary": all_signals,
-    }
-    out_dir = project_root / "_数据库" / ".evolution"
-    out_path = out_dir / f"orchestrator_{ts}.json"
-    save_json(out_path, report)
-    print(f"[evolution_orchestrator] ch{cur_ch} cycle={len(recent)}")
-    print(f"  Proposer: {proposer_r.get('signal')} ({len(proposer_r.get('findings', []))} findings)")
-    print(f"  Solver:   {solver_r.get('signal')} ({len(solver_r.get('findings', []))} findings)")
-    print(f"  Judge:    {judge_r.get('signal')} ({len(judge_r.get('findings', []))} findings)")
-    print(f"  Cascade triggered: {len(cascade.get('triggered', []))} 项")
-    for t in cascade.get("triggered", [])[:5]:
-        print(f"    - {t}")
-    print(f"  报告: {out_path}")
-    sys.exit(1 if all_signals else 0)
+    sys.exit(_run_cluster(project_root, args.cluster, args.cluster_cycle))
 
 
 if __name__ == "__main__":

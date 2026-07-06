@@ -181,53 +181,9 @@ def test_evolve_logs_and_caps_at_50():
         shutil.rmtree(td, ignore_errors=True)
 
 
-# ── retire（chapter 语义）────────────────────────────────────────────────────
-
-def test_retire_marks_long_unused():
-    """current_ch - last_validated_at_ch > threshold → status=retired；近期的不动。"""
-    payload = {
-        "success_patterns": [
-            {"id": "stale", "last_validated_at_ch": 5},   # 50-5=45 > 30 → retire
-            {"id": "fresh", "last_validated_at_ch": 40},  # 50-40=10 <= 30 → keep
-        ],
-        "failure_patterns": [
-            {"id": "stale_f", "last_validated_at_ch": 1},  # retire
-        ],
-    }
-    td, root = _mk_project(payload)
-    try:
-        r = mod.retire(root, current_ch=50, threshold_ch=30)
-        assert r["retired_count"] == 2
-        assert set(r["retired_ids"]) == {"stale", "stale_f"}
-        exp = _read_exp(root)
-        by_id = {p["id"]: p for p in exp["success_patterns"] + exp["failure_patterns"]}
-        assert by_id["stale"]["status"] == "retired"
-        assert by_id["stale"]["retired_at_ch"] == 50
-        assert by_id["fresh"].get("status") != "retired"
-    finally:
-        import shutil
-        shutil.rmtree(td, ignore_errors=True)
-
-
-def test_retire_skips_already_retired():
-    """已 retired 的 pattern 不再被计入（不重标）。"""
-    payload = {
-        "success_patterns": [
-            {"id": "done", "last_validated_at_ch": 1, "status": "retired"},
-        ],
-        "failure_patterns": [],
-    }
-    td, root = _mk_project(payload)
-    try:
-        r = mod.retire(root, current_ch=100, threshold_ch=30)
-        assert r["retired_count"] == 0
-        assert r["retired_ids"] == []
-    finally:
-        import shutil
-        shutil.rmtree(td, ignore_errors=True)
-
-
 # ── retire_by_cluster（cluster 序号阈值）─────────────────────────────────────
+# 2026-07-05 cluster-only：chapter 语义 retire() 已随 --ch 双形入口一并清除，
+# 淘汰逻辑唯一形态 = retire_by_cluster（下方用例覆盖）。
 
 def test_retire_by_cluster_explicit_source_field():
     """pattern 自带 last_validated_at_cluster → 当前序号 - last > 阈值 → retire。"""
@@ -526,20 +482,39 @@ def test_semantic_merge_empty_blob_still_never_merges(monkeypatch):
         shutil.rmtree(td, ignore_errors=True)
 
 
-def test_cli_dashboard_chapter_mode_exit_zero():
-    """chapter 兼容模式 dashboard（无 --cluster，用 --ch）→ exit 0 + 合法 JSON stats。"""
+def test_cli_dashboard_no_cluster_needed_exit_zero():
+    """dashboard 无需 --cluster → exit 0 + 合法 JSON stats（只读统计不涉及 cluster 定位）。"""
     td, root = _mk_project({
         "success_patterns": [{"id": "a", "version": 1, "status": "active"}],
         "failure_patterns": [],
     })
     try:
         proc = subprocess.run(
-            [sys.executable, str(_TARGET), str(root), "dashboard", "--ch", "5"],
+            [sys.executable, str(_TARGET), str(root), "dashboard"],
             capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert proc.returncode == 0, f"rc={proc.returncode} stderr={proc.stderr}"
         stats = json.loads(proc.stdout)
         assert stats["active"] == 1
         assert "by_category" in stats
+    finally:
+        import shutil
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def test_cli_is_cluster_only_no_ch_entry():
+    """回归锁：--ch 章级双形入口已清除（2026-07-05 与 evolution_orchestrator 同根因）；
+    evolve/retire 缺 --cluster 必须 exit 非 0，不得静默走章级默认。"""
+    src = _TARGET.read_text(encoding="utf-8")
+    assert '"--ch"' not in src and "'--ch'" not in src
+    assert "--retire-threshold" not in src
+    assert "def retire(" not in src, "chapter 语义 retire() 应已删除（唯一形态 retire_by_cluster）"
+    td, root = _mk_project({"success_patterns": [], "failure_patterns": []})
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(_TARGET), str(root), "evolve"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert proc.returncode != 0, "evolve 缺 --cluster 必须失败"
+        assert "--cluster" in (proc.stderr or "")
     finally:
         import shutil
         shutil.rmtree(td, ignore_errors=True)

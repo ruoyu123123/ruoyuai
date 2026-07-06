@@ -332,25 +332,6 @@ def _cluster_to_end_ch(project_root: Path, cluster_key: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def retire(project_root: Path, current_ch: int, threshold_ch: int = 30) -> dict:
-    """long-unused patterns 标 retired（chapter 语义：current_ch - last > threshold_ch 章）"""
-    exp_path = project_root / "_数据库" / "写作经验.json"
-    exp = load_json(exp_path, {})
-    retired_ids = []
-    for category in ["success_patterns", "failure_patterns"]:
-        for p in exp.get(category, []) or []:
-            if not isinstance(p, dict):
-                continue
-            last = p.get("last_validated_at_ch", 0)
-            if current_ch - last > threshold_ch and p.get("status") != "retired":
-                p["status"] = "retired"
-                p["retired_at_ch"] = current_ch
-                retired_ids.append(p.get("id") or p.get("name", "?"))
-    if retired_ids:
-        save_json(exp_path, exp)
-    return {"retired_count": len(retired_ids), "retired_ids": retired_ids}
-
-
 def retire_by_cluster(project_root: Path, cluster_key: str, threshold_clusters: int = 3) -> dict:
     """2026-05-29 cluster 化：按「N 个 cluster 未验证」淘汰，取代「30 章未验证」。
 
@@ -548,46 +529,35 @@ def dashboard(project_root: Path) -> dict:
 
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:  # pragma: no cover - 非常规流对象（如被测试替换）时跳过
+        pass
     ap = argparse.ArgumentParser(
-        description="skill_evolver · cluster 模式（--cluster）为 v26 主路径 / --ch 向后兼容"
+        description="skill_evolver · cluster-only（evolve/retire 必传 --cluster；2026-07-05 章级 --ch 双形入口已清除）"
     )
     ap.add_argument("project")
     ap.add_argument("action", choices=["evolve", "promote", "retire", "dashboard"])
-    ap.add_argument("--ch", type=int, default=0, help="当前章号（chapter 兼容模式）")
-    # 2026-05-29 cluster 化：plan cluster-save-state.plan.json:124 以 `evolve --cluster {key}`
-    # 调用。argparse 不认 --cluster 会非 0 退出被 `|| true` 吞掉 → skill 演化静默不跑。
     ap.add_argument("--cluster", type=str, default=None,
-                    help="cluster key（'001' / 'cluster_001'）· 主路径：章阈值换成 cluster 序号阈值")
-    ap.add_argument("--retire-threshold", type=int, default=30,
-                    help="chapter 模式：N 章未验证 retire（默认 30）")
+                    help="cluster key（'001' / 'cluster_001'）· evolve/retire 必传")
     ap.add_argument("--retire-cluster-threshold", type=int, default=3,
-                    help="cluster 模式：N 个 cluster 未验证 retire（默认 3）")
+                    help="N 个 cluster 未验证 retire（默认 3）")
     args = ap.parse_args()
 
     project_root = Path(args.project).resolve()
 
-    # cluster 模式：把 cluster key 解析成等价末章号，evolve 沿用按章逻辑（last_validated_at_ch=末章）；
-    # retire 切到 cluster 序号阈值。
-    if args.cluster:
-        end_ch = _cluster_to_end_ch(project_root, args.cluster)
-        if args.action == "evolve":
-            r = evolve(project_root, end_ch)
-        elif args.action == "promote":
-            r = promote(project_root)
-        elif args.action == "retire":
-            r = retire_by_cluster(project_root, args.cluster, args.retire_cluster_threshold)
-        else:
-            r = dashboard(project_root)
-        print(json.dumps(r, ensure_ascii=False, indent=2))
-        sys.exit(0)
+    if args.action in ("evolve", "retire") and not args.cluster:
+        ap.error(f"action={args.action} 必须传 --cluster（系统 cluster-only，无章级入口）")
 
-    # chapter 兼容模式
+    # evolve 内部沿用按章逻辑（last_validated_at_ch=末章），末章号由 cluster key 权威解析；
+    # retire 按 cluster 序号阈值。
     if args.action == "evolve":
-        r = evolve(project_root, args.ch)
+        r = evolve(project_root, _cluster_to_end_ch(project_root, args.cluster))
     elif args.action == "promote":
         r = promote(project_root)
     elif args.action == "retire":
-        r = retire(project_root, args.ch, args.retire_threshold)
+        r = retire_by_cluster(project_root, args.cluster, args.retire_cluster_threshold)
     else:
         r = dashboard(project_root)
     print(json.dumps(r, ensure_ascii=False, indent=2))

@@ -309,20 +309,15 @@ def test_parse_and_apply_rejects_runaway_expansion():
         assert (root / rel).read_text(encoding="utf-8") == original
 
 
-def test_parse_and_apply_word_count_mode_bypasses_conservation():
-    """⑤ word-count 扩写模式（enforce=False）→ 合法大幅增字不被守恒挡下。"""
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        rel = "章节/第001章/第001章.txt"
-        original = "短章" * 5  # 10 CJK
-        _make_chapter(root, rel, original)
-        expanded = "扩写后的丰满正文内容" * 30  # 300 CJK
-        reply = _reply_with_file(rel, expanded)
-        written, summary, rejected = gf.parse_and_apply(
-            reply, root, before_content_by_path={rel: original},
-            enforce_cjk_conservation=False)
-        assert len(written) == 1, "word-count 扩写应放行"
-        assert not rejected
+def test_word_count_mode_removed_and_conservation_has_no_bypass():
+    """⑤ 回归锁（W3 旁路移除 2026-07-05）：--mode word-count 章级扩写旁路已删
+    （v27 pending_tail 取代短章补字），parse_and_apply 的 CJK 守恒恒开、无豁免参数。"""
+    import inspect
+    src = inspect.getsource(gf)
+    assert "word-count" not in src, "word-count 扩写模式不得复活（v27 pending_tail 取代）"
+    assert not hasattr(gf, "build_word_count_prompt"), "build_word_count_prompt 应已删除"
+    sig = inspect.signature(gf.parse_and_apply)
+    assert "enforce_cjk_conservation" not in sig.parameters, "CJK 守恒不得留旁路开关"
 
 
 def test_parse_and_apply_recovers_dropped_path_segment():

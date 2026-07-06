@@ -25,11 +25,18 @@ def _mk_project(tmp: Path) -> Path:
     return tmp
 
 
-def _write_fate_cards(root: Path, ch: int, cards: list):
+def _write_brief_candidates(root: Path, key: str, candidates: list):
     wal = root / "_数据库" / ".wal"
     wal.mkdir(parents=True, exist_ok=True)
-    (wal / f"第{ch:03d}章_fate_cards.json").write_text(
-        json.dumps({"cards": cards}, ensure_ascii=False), encoding="utf-8")
+    (wal / f"cluster_{key}_brief_candidates.json").write_text(
+        json.dumps({"candidates": candidates}, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_user_choice(root: Path, key: str, brief: dict):
+    wal = root / "_数据库" / ".wal"
+    wal.mkdir(parents=True, exist_ok=True)
+    (wal / f"cluster_{key}_user_choice.json").write_text(
+        json.dumps({"answer": brief}, ensure_ascii=False), encoding="utf-8")
 
 
 def _write_judge_report(root: Path, ch: int, data: dict):
@@ -117,28 +124,48 @@ def test_analyze_proposer_no_wal_dir():
 def test_analyze_proposer_flags_low_quality():
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d))
-        # 3 章每章一张违反卡 → violation=3 > 3*0.3=0.9 → 触发 PROPOSER_LOW_QUALITY
-        for ch in (1, 2, 3):
-            _write_fate_cards(root, ch, [
-                {"label": "L", "character_driven": {"aspect_compatibility_check": False}},
-            ])
+        _write_brief_candidates(root, "002", [
+            {"cluster_id": "cluster_002_candidate_1", "scope_summary": "has no scenes"},
+            {"cluster_id": "cluster_002_candidate_2", "scene_storyboard": [{"scene_idx": 0}]},
+            "not a dict",
+        ])
         r = eo.analyze_proposer(root, [1, 2, 3])
         assert r["signal"] == "low_quality"
         assert any(f["signal"] == "PROPOSER_LOW_QUALITY" for f in r["findings"])
-        assert r["label_distribution"]["L"] == 3
+        assert r["candidate_count"] == 3
+        assert r["candidate_violations"] >= 3
 
 
-def test_analyze_proposer_clean_cards_ok():
+def test_analyze_proposer_clean_candidates_ok():
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d))
-        for ch in (1, 2, 3):
-            _write_fate_cards(root, ch, [
-                {"label": "G", "character_driven": {"aspect_compatibility_check": True}},
-            ])
+        _write_brief_candidates(root, "002", [
+            {
+                "cluster_id": "cluster_002_candidate_1",
+                "scope_summary": "first path",
+                "scene_storyboard": [{"scene_idx": 0, "summary": "start"}],
+            },
+            {
+                "cluster_id": "cluster_002_candidate_2",
+                "scope_summary": "second path",
+                "scene_storyboard": [{"scene_idx": 0, "summary": "start"}],
+            },
+            {
+                "cluster_id": "cluster_002_candidate_3",
+                "scope_summary": "third path",
+                "scene_storyboard": [{"scene_idx": 0, "summary": "start"}],
+            },
+        ])
+        _write_user_choice(root, "002", {
+            "cluster_id": "cluster_002_candidate_2",
+            "scope_summary": "second path",
+            "scene_storyboard": [{"scene_idx": 0, "summary": "start"}],
+        })
         r = eo.analyze_proposer(root, [1, 2, 3])
         assert r["signal"] == "ok"
         assert r["findings"] == []
-        assert r["label_distribution"]["G"] == 3
+        assert r["candidate_count"] == 3
+        assert r["choice_distribution"]["candidate_2"] == 1
 
 
 # ---------------------------------------------------------------- analyze_solver
@@ -232,7 +259,7 @@ def test_analyze_judge_cluster_low_grade():
 
 
 def test_analyze_judge_cluster_falls_back_to_per_chapter():
-    """无 judge_grade → 把 cluster 的章拍平走逐章 waiver 分析（向后兼容）。"""
+    """无 judge_grade → 把 cluster 的章拍平走逐章 waiver 分析（账本数据兜底·非章级入口）。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d))
         # cluster 无 judge_grade，靠 chapter_range 展开后查 waiver
@@ -251,6 +278,22 @@ def test_analyze_judge_cluster_no_data():
         r = eo.analyze_judge_cluster(root, [{"cluster_id": "cluster_001"}])
         assert r["signal"] == "no_data"
         assert r["cluster_grades"] == []
+
+
+# ---------------------------------------------------------------- CLI cluster-only 回归锁
+
+def test_cli_is_cluster_only_no_ch_entry():
+    """回归锁（W3 旁路移除 2026-07-05）：--ch 章级双形入口已删——系统 cluster-only，
+    plan step 只用 --cluster。锁 CLI 面：源码不得再出现 --ch / --cycle 章级参数。"""
+    import inspect
+    src = inspect.getsource(eo)
+    assert '"--ch"' not in src and "'--ch'" not in src, "--ch 章级入口不得复活"
+    assert '"--cycle"' not in src and "'--cycle'" not in src, "--cycle 章级窗口参数不得复活"
+    assert '"--cluster"' in src, "--cluster 必须是唯一分析入口"
+    # trigger_cascade 不再有 chapter 分支：cluster_key 为必填位置签名（无 None 默认）
+    sig = inspect.signature(eo.trigger_cascade)
+    assert sig.parameters["cluster_key"].default is inspect.Parameter.empty, \
+        "trigger_cascade 的 cluster_key 必填，不得留章级默认分支"
 
 
 # ---------------------------------------------------------------- 自跑入口
