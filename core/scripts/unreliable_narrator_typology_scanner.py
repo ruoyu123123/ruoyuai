@@ -82,6 +82,67 @@ VERBAL_TIC_CATEGORIES = {
     ),
 }
 
+# 🔬 2026-07-04 zero_shot_prototype 语义补召回原型例句（军火库 3.3 节·复用已上线基建）
+# 每类 4 条典型例句·措辞刻意区别于上面的正则词表→抓正则漏掉的同义改写。
+# 内容后端不可用（content_backend_available False·测试默认）→ classify_batch 返 all-None
+# → 无补召回·纯正则·逐字节零回归。命中标 source="zero_shot" 可追溯（与正则命中并集非替换）。
+_VERBAL_TIC_PROTOTYPES = {
+    "hedge": ["这事儿我也拿不太准", "谁知道是不是真会那样呢", "兴许吧，我也说不好", "八成是这么回事，但也难讲"],
+    "fault_admission": ["好吧这次确实是我判断失误", "我得认之前那话说得太满", "回头想想是我理解偏了", "算我看走眼了"],
+    "defensive": ["你可别往那上头想", "我压根没那个心思", "这话传到你耳朵里就变味了", "我说这些不是要跟你争"],
+    "digression": ["哎扯哪儿去了接着说正事", "这个先搁一边回到刚才", "咱不聊这个了说回主线", "岔了岔了说到哪儿了"],
+    "inner_inconsistency": ["不对我刚才那么说不准确", "等一下应该反过来才对", "唔好像也不全是这样", "让我重新捋一遍"],
+    "selective_memory": ["年头太久细节记不真切了", "那天具体怎么着我印象很淡", "大半都忘干净了", "只记得个大概别的想不起来"],
+    "disbelief": ["这话你信几分自己掂量", "真真假假谁分得清", "反正我是半信半疑", "当个乐子听听就好别当真"],
+    "picaro_cunning": ["嘿这点便宜不占白不占", "我可没那么实在", "这笔账怎么算我都不亏", "傻子才吃这个亏"],
+    # 中性对照类：nearest-centroid 必须有负类·否则中性句被强分到最近 tic 类（floor=0.5 过火）。
+    # "other" 不在 hits 键里·augment 的 `cat not in hits: continue` 自动跳过（不计入任何 tic）。
+    "other": ["他走进房间坐下", "外面下起了小雨", "桌上摆着一杯凉茶", "她翻开手里的书", "夜色渐渐深了"],
+}
+
+_SENT_SPLIT_RE = re.compile(r"[^。！？!?\n]+[。！？!?\n]?")
+
+
+def _split_sentences_with_offsets(text: str) -> "list[tuple[str, int]]":
+    """切句 + 记录每句起始字符偏移（供语义命中定位·dedup 用）。"""
+    out = []
+    for m in _SENT_SPLIT_RE.finditer(text):
+        s = m.group(0).strip()
+        if len(s) >= 4:
+            out.append((s, m.start()))
+    return out
+
+
+def _augment_verbal_tics_semantic(text: str, hits: dict) -> int:
+    """zero_shot 语义补召回：对 hits 就地并集补入正则漏掉的同义表达（标 source=zero_shot）。
+    返回补入条数。内容后端不可用/异常 → classify_batch 返 all-None → 补 0（零回归）。"""
+    sents = _split_sentences_with_offsets(text)
+    if not sents:
+        return 0
+    try:
+        import zero_shot_prototype
+        results = zero_shot_prototype.classify_batch(
+            [s for s, _ in sents], _VERBAL_TIC_PROTOTYPES, floor=0.5)
+    except Exception:
+        return 0
+    if not results:
+        return 0
+    added = 0
+    for (sent, off), res in zip(sents, results):
+        if not res:
+            continue
+        cat = res.get("label")
+        if cat not in hits:
+            continue
+        span_end = off + len(sent)
+        # dedup：该句区间内该类已有正则命中 → 跳过（并集去重）
+        if any(off <= h["pos"] < span_end for h in hits[cat]):
+            continue
+        hits[cat].append({"term": sent[:24], "pos": off, "source": "zero_shot"})
+        added += 1
+    return added
+
+
 # Phelan 6 轴
 PHELAN_AXES = {
     "knowledge", "perception", "value", "ethics", "narration_reliability", "intent",
@@ -202,6 +263,8 @@ def scan(draft_path, project_root=None) -> dict:
     out["signal_intensity_floor"] = floor
 
     hits = detect_verbal_tics(draft)
+    semantic_added = _augment_verbal_tics_semantic(draft, hits)  # zero_shot 补召回·并集·标 source
+    out["semantic_augmented_hits"] = semantic_added
     category_counts = {cat: len(v) for cat, v in hits.items()}
     total_hits = sum(category_counts.values())
     per_1k = round(total_hits / (cjk / 1000.0), 3) if cjk > 0 else 0.0

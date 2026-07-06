@@ -3,7 +3,7 @@
 """作者金标准对比闸（量化层）· 2026-06-04
 
 把生成正文的可量化风格指纹（句长/段长/单句独行/标点密度）跟本项目作者风格档基线对比，
-标出偏离大的维度。北极星：顾问制 advisory · 永不阻断（exit 0）· 真作者档=第一权威。
+标出偏离大的维度。默认作为离线分析输出 report；主链路通过 --strict 启用硬闸。
 
 动机（cluster_001 翻车）：原有质检全过(audit/reflector/voice)却没抓到「调性跑偏成惊悚」，
 因为它们查机械维不拿真作者基线比。情绪标点(感叹/问号/省略)缺口最离谱(实测 24x/3.7x/5x↓)
@@ -12,6 +12,7 @@
 用法：
   python core/scripts/replication_fidelity_check.py --project <项目> --cluster 1
   python core/scripts/replication_fidelity_check.py --project <项目> --chapters 1-4
+  python core/scripts/replication_fidelity_check.py --project <项目> --cluster 1 --strict
 """
 import argparse
 import glob
@@ -338,10 +339,12 @@ _COMEDY_PUNCT = {"excl_k", "ellipsis_k", "ques_k"}
 
 
 def main():
-    ap = argparse.ArgumentParser(description="作者金标准对比闸(量化层·advisory)")
+    ap = argparse.ArgumentParser(description="作者金标准对比闸(量化层)")
     ap.add_argument("--project", required=True)
     ap.add_argument("--cluster", type=int, default=None)
     ap.add_argument("--chapters", default=None, help="如 1-4")
+    ap.add_argument("--strict", action="store_true",
+                    help="主链路硬闸：无正文/无作者基线 exit2；存在偏离 exit1；无偏离 exit0")
     args = ap.parse_args()
     root = Path(args.project).resolve()
 
@@ -361,12 +364,12 @@ def main():
                 text += io.open(f, encoding="utf-8").read() + "\n\n"
     if not text.strip():
         print("[replication_fidelity] 无生成正文可比", file=sys.stderr)
-        sys.exit(0)
+        sys.exit(2 if args.strict else 0)
 
     base = _author_baseline(root)
     if not base:
-        print("[replication_fidelity] 无作者风格档基线 → 跳过(放行)", file=sys.stderr)
-        sys.exit(0)
+        print("[replication_fidelity] 无作者风格档基线", file=sys.stderr)
+        sys.exit(2 if args.strict else 0)
 
     gen = _metrics(text)
     issues = []
@@ -381,8 +384,10 @@ def main():
             issues.append({"dim": _LABEL[k], "key": k, "gen": g, "author": round(a, 1),
                            "ratio": round(ratio, 2), "band": [lo, hi], "tag": sev})
 
-    report = {"verdict": "advisory" if issues else "pass", "gen": gen, "author": base, "issues": issues,
-              "_doc": "作者金标准量化对比·顾问制·情绪标点(感叹/问号/省略)偏低=喜剧引擎未落地代理信号"}
+    report = {"verdict": "fail" if (args.strict and issues) else ("advisory" if issues else "pass"),
+              "strict": bool(args.strict),
+              "gen": gen, "author": base, "issues": issues,
+              "_doc": "作者金标准量化对比·情绪标点(感叹/问号/省略)偏低=喜剧引擎未落地代理信号；--strict 下偏离阻断主链路"}
     report["mstyle_cosine"] = _mstyle_cosine_subscore(root, text)   # C2 advisory 附加·永不影响 verdict/exit
     if report["mstyle_cosine"].get("status") == "invalid":
         print(f"  [mstyle余弦] invalid（{report['mstyle_cosine'].get('reason', '')[:60]}）· 不参与判定", file=sys.stderr)
@@ -402,7 +407,7 @@ def main():
     for i in issues:
         if i["tag"] != "comedy_engine":
             print(f"  · {i['dim']}: 生成 {i['gen']} vs 作者 {i['author']}（{i['ratio']}x）")
-    sys.exit(0)
+    sys.exit(1 if (args.strict and issues) else 0)
 
 
 if __name__ == "__main__":

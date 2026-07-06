@@ -121,6 +121,12 @@ def test_auto_post_reflect_cluster_collects_data_flywheel(monkeypatch, tmp_path)
         "scanner_results": {draft_abs: {"narrative_short_sentence_scanner.py": {"verdict": "PASS", "violations_count": 0}}},
         "timestamp": "2026-07-01T12:00:00",
     }, ensure_ascii=False), encoding="utf-8")
+    (wal_dir / "cluster_001_reflection.json").write_text(json.dumps({
+        "entries": [
+            {"category": "success", "id": "s1", "pattern": "有效的场景压力回收"},
+            {"category": "failure", "id": "f1", "pattern": "避免空泛情绪词"},
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
 
     fake_learning_loop = tmp_path / "learning_loop.py"
     fake_learning_loop.write_text("import sys; sys.exit(0)\n", encoding="utf-8")

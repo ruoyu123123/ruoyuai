@@ -375,3 +375,43 @@ def test_main_exit_0_when_skip():
     assert r.returncode == 0, r.stderr
     rep = json.loads(r.stdout)
     assert rep["warning"] is None
+
+
+# ── zero_shot 语义补召回（2026-07-04 军火库 3.3·复用已上线基建）─────────────
+import types  # noqa: E402
+
+
+def test_semantic_augment_adds_zero_shot_hits(monkeypatch):
+    """内容后端命中时·正则漏掉的同义表达被 zero_shot 补入·标 source=zero_shot。"""
+    fake = types.SimpleNamespace(
+        classify_batch=lambda texts, protos, floor=0.5: [
+            {"label": "hedge", "score": 0.8, "margin": 0.2, "source": "zero_shot_embedding"}
+            if "拿不准" in t else None for t in texts])
+    monkeypatch.setitem(sys.modules, "zero_shot_prototype", fake)
+    hits = {c: [] for c in mod.VERBAL_TIC_CATEGORIES}
+    added = mod._augment_verbal_tics_semantic("这事儿我也拿不准啊。天气不错呢。", hits)
+    assert added == 1
+    assert len(hits["hedge"]) == 1 and hits["hedge"][0]["source"] == "zero_shot"
+
+
+def test_semantic_augment_dedup_with_regex(monkeypatch):
+    """同句已有正则命中该类 → zero_shot 不重复补入（并集去重）。"""
+    fake = types.SimpleNamespace(
+        classify_batch=lambda texts, protos, floor=0.5: [
+            {"label": "hedge", "score": 0.9, "margin": 0.3, "source": "x"} for _ in texts])
+    monkeypatch.setitem(sys.modules, "zero_shot_prototype", fake)
+    text = "也许是这样吧。"  # 正则已命中 hedge(也许)
+    hits = mod.detect_verbal_tics(text)
+    before = len(hits["hedge"])
+    added = mod._augment_verbal_tics_semantic(text, hits)
+    assert added == 0 and len(hits["hedge"]) == before
+
+
+def test_semantic_augment_backend_off_no_op(monkeypatch):
+    """内容后端不可用（classify_batch 返 all-None）→ 补 0·零回归。"""
+    fake = types.SimpleNamespace(
+        classify_batch=lambda texts, protos, floor=0.5: [None] * len(texts))
+    monkeypatch.setitem(sys.modules, "zero_shot_prototype", fake)
+    hits = {c: [] for c in mod.VERBAL_TIC_CATEGORIES}
+    added = mod._augment_verbal_tics_semantic("这事儿我也拿不准啊。", hits)
+    assert added == 0

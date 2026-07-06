@@ -4,7 +4,7 @@
 🔴 金标准防矫枉过正（核心闸）：真作者原文喂自身基线 active → 零误报（综合避单类误报·
    FLOOR_RATIO 0.3 < 真作者各 cluster 最小 0.44）。覆盖：真作者不误报 / 压平 FAIL / 偏高不报
    （北极星③）/ 无作者档 skip（北极星②）/ code 不进 hard_gate（北极星⑤）/ 默认 shadow。
-零依赖·run_tests.py / pytest 双跑。真作者档本地无（CI）→ 金标准跳过不阻塞。
+零依赖·仓库根 pytest 入口。真作者档本地无（CI）→ 金标准跳过不阻塞。
 """
 import glob
 import io

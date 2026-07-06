@@ -276,7 +276,9 @@ def build_report(cfgs: list, results: dict, floors: dict, registry: dict, meta: 
             "registry_id": cfg["registry_id"],
             "current_floor_runtime": floor,
             "registry_current_value": reg_value,
-            "registry_runtime_consistent": (reg_value == floor),
+            # entry is None = 该 scanner 已金标准校准并从注册表 drop（注册表只追踪"待校准"·
+            # 无记录则无从漂移·视为一致）；有 entry 才校验 current_value == 运行时（防文档漂移）。
+            "registry_runtime_consistent": (entry is None) or (reg_value == floor),
             "registry_note": (entry or {}).get("note"),
             "per_book": {b: {k: v for k, v in agg.items() if k != "_metrics"}
                          for b, agg in per_book.items()},

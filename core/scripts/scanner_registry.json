@@ -4,7 +4,7 @@
   "_principle": "整个系统为 cluster 服务 · 章节是输出格式 · scanner 全部 cluster 视野",
   "_layers": {
     "cluster": "默认主轴 · 在 cluster 草稿层跑（10k-25k CJK · 多场景）",
-    "cross-cluster": "正交独立 · 卷级 / 全书级聚合扫描 · 由 cluster-save-state step 9 触发"
+    "cross-cluster": "正交独立 · 卷级 / 全书级聚合扫描 · 由 cluster-save-state step 11 触发（run_cross_cluster_aggregates.py·以 cluster-save-state.plan.json 为准）"
   },
 
   "scanners": {
@@ -80,9 +80,9 @@
     "foreshadowing_handoff": {
       "layer": "cluster",
       "script": "foreshadowing_handoff_scanner.py",
-      "doc": "[Phase 3 新增] cluster 内伏笔埋设 + 回收配对",
+      "doc": "[Phase 3 新增] cluster 内伏笔埋设 + 回收配对 · [2026-07-06 P1 三态生命周期] 检测 3=payoff 指向非 open 条目（重复回收/状态漂移嫌疑·advisory）",
       "_new": true,
-      "issues_emitted": ["FORESHADOWING_HANDOFF_*"]
+      "issues_emitted": ["FORESHADOWING_HANDOFF_*", "FORESHADOWING_PAYOFF_TARGET_NOT_OPEN"]
     },
     "locked_fact_cross_scene": {
       "layer": "cluster",
@@ -1304,7 +1304,7 @@
     "frisson_lead_window": {
       "layer": "cluster",
       "script": "frisson_lead_window_scanner.py + build_manifest.frisson_lead_window directive",
-      "doc": "[2026-06-22 R23 W11 Batch-HH·P1·neural frisson 时序前置 Salimpoor 2011]climax beat 前 1-2 段(200-400 CJK)=frisson lead window·测 lead vs climax 标点密度 + 单句独行占比·期望 lead/climax ≥1.2x·writer prompt active 模式注入 lead window directive(短句独行+标点高潮+感官聚焦) climax 句相对略钝·三 advisory(LEAD_FLAT/CLIMAX_OVERLOAD/NO_CLIMAX_FOUND)·env FRISSON_LEAD_MODE 默认 shadow·绝不 hard_gate",
+      "doc": "[2026-06-22 R23 W11 Batch-HH·P1·neural frisson 时序前置 Salimpoor 2011][2026-07-05 接线 audit_hub cluster-mode tasks·此前 registry 注册但从不被调]climax beat 前 1-2 段(200-400 CJK)=frisson lead window·测 lead vs climax 标点密度 + 单句独行占比·期望 lead/climax ≥1.2x·writer prompt active 模式注入 lead window directive(短句独行+标点高潮+感官聚焦) climax 句相对略钝·三 advisory(LEAD_FLAT/CLIMAX_OVERLOAD/NO_CLIMAX_FOUND)·env FRISSON_LEAD_MODE 默认 shadow·绝不 hard_gate·CLI 只收 draft(无 --project)",
       "_new": true,
       "issues_emitted": ["FRISSON_LEAD_FLAT", "FRISSON_CLIMAX_OVERLOAD", "FRISSON_NO_CLIMAX_FOUND"]
     },
@@ -1416,12 +1416,75 @@
       "doc": "[2026-06-22 R25 W13 Batch-MM·P1·BG3 reactivity + Emily Short delayed-consequence + WHAT-IF arxiv 2412.10582]cluster-save-state 用户选某走向后 ledger entry{cluster_id,choice_key,choice_summary,stakes_tier(life/faction/moral/preference),expected_visibility_window 1-5 cluster,expected_resonance_keywords}·每 cluster 完成跑 visibility scanner 检查窗口内文本是否含 resonance keywords·窗口未到不报·过期未呼应 → STARVING advisory + outline-planner callback 钩子·与 foreshadowing_handoff(author_planted) 命名空间分立·env CHOICE_CONSEQUENCE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
       "_new": true,
       "issues_emitted": ["CHOICE_CONSEQUENCE_STARVING", "CHOICE_CONSEQUENCE_VISIBLE", "CHOICE_CONSEQUENCE_PENDING"]
+    },
+    "character_identity_anchor_scanner": {
+      "layer": "cluster",
+      "script": "character_identity_anchor_scanner.py",
+      "doc": "[2026-07-05 孤儿接线 audit_hub cluster-mode]borrowed from moyin-creator 身份锚点（视觉连续性概念移植到散文连续性）·人物卡 characters[].identity_anchors（发色/瞳色/疤痕 mark）近旁叙述不得漂移·appearance/locked_facts 可兜底播种锚点·否定句（『不是金发』）不误报·env CHARACTER_IDENTITY_ANCHOR_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CHARACTER_IDENTITY_ANCHOR_DRIFT"]
+    },
+    "scene_receipts_scanner": {
+      "layer": "cluster",
+      "script": "scene_receipts_scanner.py",
+      "doc": "[2026-07-06 P1移植·LongWriter/AgentWrite plan-then-write 回执 + moyin-creator 场景校准·research/open_source_writing_systems.md]writer freestyle 写完整块草稿后确定性后置扫描：storyboard 每场景抽锚点（角色名/地点/道具/goal 2-gram）→ 草稿空行段落双段窗口定位首个强命中 = 覆盖证据·产回执 artifact _数据库/.audit/cluster_<key>_scene_receipts.json·场景数≥2 且 coverage_ratio<0.6 才报（保守防误报·freestyle 合并/改编是创作自由·北极星⑤）·空 storyboard=合法 fluid 优雅 skip·env SCENE_RECEIPTS_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SCENE_RECEIPT_COVERAGE_GAP"]
+    },
+    "cluster_length_band_scanner": {
+      "layer": "cluster",
+      "script": "cluster_length_band_scanner.py",
+      "doc": "[2026-07-06 P2移植·LongWriter 长输出长度评估·research/open_source_writing_systems.md]cluster 草稿 CJK 长度带体检：chapter_io.count_cjk 唯一权威口径数草稿·对照健康带 [12000,25000]（CLAUDE.md v27）·低于下限 UNDER / 高于上限 OVER·env CLUSTER_LENGTH_BAND_OVERRIDE=\"min,max\" 可调·兑现「纯 freestyle 后短稿风险由 step3 质检下游承接」架构承诺（expand 软下限已清除·检测端此前无人查 cluster 长度）·🔴北极星⑤：下游体检非写作约束·结果绝不回流 writer prompt/manifest·绝不参与择稿·env CLUSTER_LENGTH_BAND_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["CLUSTER_LENGTH_UNDER_BAND", "CLUSTER_LENGTH_OVER_BAND"]
+    },
+    "butler_yearning_4layer_scanner": {
+      "layer": "cluster",
+      "script": "butler_yearning_4layer_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-BB·P2·Butler《From Where You Dream》fiction=yearning][2026-07-05 休眠接线 audit_hub cluster-mode]四层 yearning（self/identity/place/connection）词典桶·总密度过低 ABSENT / 单层垄断 MONOTONE·作者档 author_yearning_baseline.dominant_layer 明示风格时 MONOTONE 让位·env BUTLER_YEARNING_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SCENE_YEARNING_ABSENT", "YEARNING_LAYER_MONOTONE"]
+    },
+    "failure_segment_prose_density_scanner": {
+      "layer": "cluster",
+      "script": "failure_segment_prose_density_scanner.py",
+      "doc": "[2026-06-21 R22 W10 Batch-EE·P1·failure prose enrichment][2026-07-05 休眠接线 audit_hub cluster-mode]try-fail 失败段工艺密度（五感/心理转折/段长方差/对话比）应 ≥ 同 cluster 成功段（读者要从失败读出代价感）·z<-0.5 → DENSITY_GAP·作者档 _failure_segment_density_off=true 可关·env FAILURE_SEGMENT_DENSITY_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["FAILURE_SEGMENT_DENSITY_GAP"]
+    },
+    "soundscape_trinity_scanner": {
+      "layer": "cluster",
+      "script": "soundscape_trinity_scanner.py",
+      "doc": "[2026-06-21 R20 W9 Batch-BB·P2·Schafer《The Soundscape》声景三分类][2026-07-05 休眠接线 audit_hub cluster-mode]keynote/signal/soundmark 三桶句级扫描·总声学密度过低 THIN / 熵<0.8 单声道 MONOTONE / 地标声缺位 SOUNDMARK_ABSENT·env SOUNDSCAPE_TRINITY_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SOUNDSCAPE_THIN", "SOUNDSCAPE_MONOTONE", "SOUNDMARK_ABSENT"]
+    },
+    "premature_reader_reveal_scanner": {
+      "layer": "cluster",
+      "script": "premature_reader_reveal_scanner.py",
+      "doc": "[2026-06-21 R22 W10 Batch-EE·P1·reader belief ledger 反向穿帮][2026-07-05 休眠接线 audit_hub cluster-mode]角色把读者从未被 show 的 fact 当公知使用（『众所周知』类信号词 ±30 CJK 命中未公开 fact_ref）·读者信念源 = character_belief_ledger.json reader_knows==true 并集·与 character_knowledge_leak（角色侧越权）互补·env PREMATURE_READER_REVEAL_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["PREMATURE_READER_REVEAL"]
+    },
+    "trajectory_moral_slope_scanner": {
+      "layer": "cluster",
+      "script": "trajectory_moral_slope_scanner.py",
+      "doc": "[2026-06-21 R22 W10 Batch-EE·P1·Cronon 1992 叙事道德斜率][2026-07-05 休眠接线 audit_hub cluster-mode]cluster 首尾各 600 CJK 采样 4 维（power/status/relation/threat）境况净值·Σ|Δ|<3 = 扁平 cluster（读者无 arc 体验）才报·clear progressivist/declensionist 是创作选择不报警·env TRAJECTORY_MORAL_SLOPE_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["AMBIGUOUS_FLAT_TRAJECTORY"]
+    },
+    "check_acr_frustration_consistency": {
+      "layer": "cluster",
+      "script": "check_acr_frustration_consistency.py",
+      "doc": "[2026-06-21 R22 W10 Batch-EE·P1·BPNSFS Chen et al. 2015][2026-07-05 休眠接线 audit_hub cluster-mode]autonomy/competence/relatedness 需求受挫 → 典型反应映射（反抗僵化/虚张退缩/攻击讨好）一致性·主要角色 ±50 CJK 窗受挫词命中但反应类目不在映射表 → 动机错位·作者反类型 _acr_frustration_override=true 可豁免·env ACR_FRUSTRATION_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["ACR_FRUSTRATION_MISMATCH"]
     }
   },
 
   "anchored_advisory_contract": {
     "_schema_version": "1.0",
-    "_doc": "[2026-06-22 R24 W12 Batch-KK·P1·span-anchored 升级]audit_hub issue.anchor_spans[] schema 加 anchor_window(≤40CJK)+recursive_widen_level(0..3)·advisory 必填(judge_runner system prompt ANCHORED_ADVISORY_CONTRACT 注入)·hard_gate 选填(已有 code+dim 安全裕度)·13 scanner 不强制改·选填_supports_anchor 字段标 capability·向后兼容",
+    "_doc": "[2026-06-22 R24 W12 Batch-KK·P1·span-anchored 升级][2026-07-05 更新消费方口径·judge_runner 已于 2026-06-28 删除]audit_hub issue.anchor_spans[] schema 加 anchor_window(≤40CJK)+recursive_widen_level(0..3)·现存链路：scanner violation.anchor_span → audit_hub._collect_anchor_spans 透传 issue.anchor_spans[] → consistency_error_triage_band.py 消费·hard_gate 选填(已有 code+dim 安全裕度)·scanner 不强制改·选填_supports_anchor 字段标 capability",
     "anchor_window_max_cjk": 40,
     "recursive_widen_level_range": [0, 3],
     "scanners_marked_capability": ["narrator_commentary_scanner", "author_signature_preservation"],
@@ -1440,7 +1503,14 @@
     "ITEM_HOLDER_ABSENT",
     "ITEM_NOT_YET_INTRODUCED",
     "PROPAGATION_DEBT_CREATED",
-    "STYLE_单段超长"
+    "STYLE_单段超长",
+    "CHAPTER_END_FORBIDDEN_SCREENPLAY",
+    "CHAPTER_END_FORBIDDEN_TRANSITION",
+    "LOCKED_FACT_CROSS_SCENE_CONFLICT",
+    "RIPPLE_RULES_EMPTY",
+    "GRAND_TREND_ME_POOL_EMPTY",
+    "CLUSTER001_STORYBOARD_EMPTY",
+    "SPLIT_WORD_NOT_CONSERVED"
   ],
 
   "cluster_001_tolerance": {

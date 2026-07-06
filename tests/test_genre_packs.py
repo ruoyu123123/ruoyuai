@@ -47,11 +47,45 @@ def test_get_pack_routing():
 
 
 def test_get_scanner_and_directives():
+    # 🔴 契约锁（2026-07-05）：get_scanner 返回裸脚本名（无 .py）·
+    # 路径规范化统一收口在消费端 audit_hub 题材路由（补 .py 后缀）。
     assert gp.get_scanner("romance") == "romance_pacing_scanner"
     assert gp.get_scanner("horror_game") == "litrpg_structure_scanner"
     assert gp.get_scanner("unknown") is None
     assert gp.get_writer_directives("romance")
     assert gp.get_writer_directives("unknown") == []
+
+
+# ---------- 🔴 2026-07-05 题材 scanner 路由 bug 回归锁 ----------
+# 病史：get_scanner 返回裸名（无 .py），audit_hub 直接 _SCRIPT_DIR/裸名 → 路径永不存在
+# → romance_pacing/litrpg_structure/dwell_progression 等题材 scanner 从未执行且静默 skip。
+
+def _normalize_scanner_filename(name: str) -> str:
+    """镜像 audit_hub 题材路由的规范化（裸名 → 补 .py）。"""
+    return name if name.endswith(".py") else f"{name}.py"
+
+
+def test_every_pack_scanner_script_exists():
+    """genre_dimension_packs.json 每个 scanner 字段按消费端规范化后必须真实存在于 core/scripts。"""
+    scripts_dir = _ROOT / "core" / "scripts"
+    data = gp._load()
+    checked = 0
+    for genre, pack in data.get("packs", {}).items():
+        scanner = pack.get("scanner")
+        if not scanner:
+            continue
+        path = scripts_dir / _normalize_scanner_filename(scanner)
+        assert path.exists(), f"题材 {genre} 的 scanner 路径不存在: {path}"
+        checked += 1
+    assert checked >= 3, f"应至少有 3 个题材包声明 scanner（实际 {checked}）"
+
+
+def test_audit_hub_genre_routing_normalizes_and_reports_missing():
+    """audit_hub 题材路由源码锁：①补 .py 规范化在场（防回归到裸名拼路径）；
+    ②脚本缺失走 stderr 显式报（不吞·防回归到静默 skip）。"""
+    src = (_ROOT / "core" / "scripts" / "audit_hub.py").read_text(encoding="utf-8")
+    assert 'f"{_gscanner}.py"' in src, "audit_hub 题材路由缺 .py 规范化（裸名拼路径 bug 回归）"
+    assert "题材 scanner 脚本缺失" in src, "audit_hub 题材路由缺脚本缺失 stderr 显式报"
 
 
 # ---------- scanner advisory 边界（hard_gate 不随题材变） ----------

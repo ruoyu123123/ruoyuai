@@ -4,7 +4,7 @@
 三端闭环：consolidate.aggregate_narrative_seq（读原文调 score_narrative_function_sequence·非空才写
 作者档）→ build_manifest._collect_narrative_function_sequence（shadow/active/off·从作者档读转 directive）
 → gen_writer._build_narrative_seq_section（读 manifest 字段拼 prompt 段·None/空零回归）。
-默认 shadow（结构骨注入效果需 gen-model A/B·先影子）。零依赖·run_tests.py / pytest 双跑。
+默认 shadow（结构骨注入效果需 gen-model A/B·先影子）。零依赖·仓库根 pytest 入口。
 """
 import glob
 import json

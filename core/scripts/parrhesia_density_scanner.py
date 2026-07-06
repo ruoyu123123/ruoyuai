@@ -87,6 +87,28 @@ def _load_lexicons() -> dict:
 
 _LEXICONS = _load_lexicons()
 
+# 🔬 2026-07-04 zero_shot_prototype 语义补召回（军火库 3.3·B 信号 truth_claim）
+# 二分类判别原型：truth_claim 正类 + other 中性对照类（nearest-centroid 需负类才有判别力·
+# 否则任何输入都归唯一质心）。措辞刻意区别于 lexicon 词表→抓"恕我直言"说成"把话挑明"的漏检。
+# 内容后端不可用（测试默认）→ classify 返 None → 无补召回·纯 lexicon·零回归。
+_TRUTH_CLAIM_PROTOTYPES = {
+    "truth_claim": ["我把话挑明了说吧", "恕我直言这里头有猫腻", "今天当着大家的面我把实话撂这儿",
+                    "别怪我说得难听事实就是如此", "我今天就把这层窗户纸捅破"],
+    "other": ["外面下起了小雨", "他走进房间坐下", "桌上摆着一杯凉茶", "天色渐渐暗了下来", "她翻开手里的书"],
+}
+
+
+def _truth_claim_semantic(para: str) -> bool:
+    """zero_shot 判 para 是否语义上是 truth_claim（郑重直言/挑明真相）。
+    内容后端不可用/异常/归 other/低置信 → False（调用方回退 lexicon·零回归）。"""
+    try:
+        import zero_shot_prototype
+        res = zero_shot_prototype.classify(para, _TRUTH_CLAIM_PROTOTYPES, floor=0.5)
+    except Exception:
+        return False
+    return bool(res) and res.get("label") == "truth_claim"
+
+
 PARRHESIA_BASELINE_MEAN_DEFAULT = 2.0   # hits / 10k CJK · 占位
 PARRHESIA_BASELINE_SIGMA_DEFAULT = 1.5  # σ · 占位
 
@@ -146,8 +168,10 @@ def _detect_parrhesia(para: str) -> dict:
     a_ok = a_low and a_up  # 权力反差 = 同段含弱+权
     # truth-claim 必须出现在引号段内（占位：仅检查段内含引号且 truth_claim 词命中）
     b_quoted = _is_quoted_paragraph(para)
-    b_ok, b_hits = _has_any(para, _LEXICONS["truth_claim"])
-    b_ok = b_ok and b_quoted
+    b_lex, b_hits = _has_any(para, _LEXICONS["truth_claim"])
+    # zero_shot 补召回：lexicon 漏检时语义判 truth_claim（仍需引号段·并集非替换·2026-07-04 军火库 3.3）
+    b_semantic = (not b_lex) and _truth_claim_semantic(para)
+    b_ok = (b_lex or b_semantic) and b_quoted
     c_ok, c_hits = _has_any(para, _LEXICONS["risk_posture"])
     hit = a_ok and b_ok and c_ok
     return {
@@ -157,6 +181,7 @@ def _detect_parrhesia(para: str) -> dict:
         "C_risk_posture": c_ok,
         "_A_hits": a_low_hits + a_up_hits,
         "_B_hits": b_hits if b_ok else [],
+        "_B_semantic": b_semantic,
         "_C_hits": c_hits if c_ok else [],
     }
 

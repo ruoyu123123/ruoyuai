@@ -4,7 +4,7 @@
 探针7 补盲区：探针1 看句长 mean（偏短报），但「mean 达标却句长恒定（方差塌缩·匀速碎句）」探针1
 抓不到——cluster 句长 std vs 作者 std·r<0.5 minor/<0.4 major 单边偏均匀（偏高永不报·北极星③）。
 金标准校准真作者 cluster_std/作者 std 最小 0.61→阈值 0.5/0.4 留余量（6 作者自验 active 零误报 0.67-1.01）。
-默认 shadow（检测力待 gen-model 草稿验证再 active）。与探针1解耦防双计数。零依赖·run_tests.py/pytest 双跑。
+默认 shadow（检测力待 gen-model 草稿验证再 active）。与探针1解耦防双计数。零依赖·仓库根 pytest 入口。
 """
 import json
 import os

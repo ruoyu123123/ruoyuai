@@ -12,9 +12,9 @@
   4. coherence_scanner（mock bridge·3 类 advisory issue）
        COHERENCE_BREAK / COHERENCE_LOW_OVERALL / COHERENCE_UNSTABLE；关闭→空；全 advisory
 
-确定性·零网络（mock subprocess / bridge·微型离线模型）。测试类形式：零依赖 run_tests.py 只调
+确定性·零网络（mock subprocess / bridge·微型离线模型）。测试类形式：根 pytest 只调
 模块级 test_* 函数·不实例化测试类 → fixture 用例仅在 pytest 下跑（与 test_surprisal_scanner 同范式）。
-跑法：pytest tests/test_coherence_scanner.py -v
+跑法：py -m pytest -q
 """
 from __future__ import annotations
 

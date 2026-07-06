@@ -137,7 +137,7 @@ def test_gate_level_default_mapping():
 # ════════════════════════════════════════════════════════════════
 
 def test_load_scanner_registry_missing_or_corrupt_returns_empty():
-    """registry 缺失 / JSON 损坏 → {}（fallback 硬编码 scanner 集合，不崩）。"""
+    """registry 缺失 / JSON 损坏 → {}（不崩；registry 是元数据/一致性契约源，调度由 audit_hub tasks 硬编码）。"""
     with tempfile.TemporaryDirectory() as td:
         scan = Path(td)
         with _patched_script_dir(scan):

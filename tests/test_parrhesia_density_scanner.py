@@ -212,3 +212,44 @@ def test_read_failure_returns_note():
         assert "草稿读取失败" in out.get("note", "")
     finally:
         _set_mode(bak)
+
+
+# ── zero_shot truth_claim 语义补召回（2026-07-04 军火库 3.3）─────────────
+import types  # noqa: E402
+
+
+def test_truth_claim_semantic_true(monkeypatch):
+    fake = types.SimpleNamespace(
+        classify=lambda text, protos, floor=0.5: {"label": "truth_claim", "score": 0.8})
+    monkeypatch.setitem(sys.modules, "zero_shot_prototype", fake)
+    assert mod._truth_claim_semantic("我把话挑明了") is True
+
+
+def test_truth_claim_semantic_other_or_none(monkeypatch):
+    fake = types.SimpleNamespace(
+        classify=lambda text, protos, floor=0.5: {"label": "other", "score": 0.7})
+    monkeypatch.setitem(sys.modules, "zero_shot_prototype", fake)
+    assert mod._truth_claim_semantic("外面下雨了") is False
+    fake2 = types.SimpleNamespace(classify=lambda text, protos, floor=0.5: None)
+    monkeypatch.setitem(sys.modules, "zero_shot_prototype", fake2)
+    assert mod._truth_claim_semantic("我把话挑明了") is False
+
+
+def test_detect_parrhesia_b_semantic_union(monkeypatch):
+    """引号段·lexicon 漏检 truth_claim·但 zero_shot 语义命中 → B_ok True·b_semantic 标记。"""
+    fake = types.SimpleNamespace(
+        classify=lambda text, protos, floor=0.5: {"label": "truth_claim", "score": 0.9})
+    monkeypatch.setitem(sys.modules, "zero_shot_prototype", fake)
+    # 引号段·含权力反差+风险姿态但 truth_claim 用 lexicon 外的说法
+    para = "“我把这层窗户纸捅破，大人您也别装了。”小卒梗着脖子。"
+    r = mod._detect_parrhesia(para)
+    assert r["_B_semantic"] is True and r["B_truth_claim_quoted"] is True
+
+
+def test_detect_parrhesia_backend_off_lexicon_only(monkeypatch):
+    """内容后端不可用（classify None）→ b_semantic False·纯 lexicon·零回归。"""
+    fake = types.SimpleNamespace(classify=lambda text, protos, floor=0.5: None)
+    monkeypatch.setitem(sys.modules, "zero_shot_prototype", fake)
+    para = "“我把这层窗户纸捅破。”"
+    r = mod._detect_parrhesia(para)
+    assert r["_B_semantic"] is False

@@ -17,9 +17,10 @@
 【覆盖 7 类不变量】
   ① 禁 f"cluster_{ch:03d}" 章号当 cluster 号机械拼接（cluster_lookup.py = 唯一权威反查）。
   ② chapter_splitter.py 不 import 任何 *_scanner / audit_hub（北极星④章节仅格式）。
-  ③ 三方一致：audit_hub.HARD_GATE_CODES == STRUCTURE§11.2 == CLAUDE.md 清单（防各自另立）。
+  ③ 四方一致：audit_hub.HARD_GATE_CODES == STRUCTURE§12.2 == CLAUDE.md 清单
+     == scanner_registry.json hard_gate_codes（防各自另立·2026-07-05 registry 入锁）。
   ④ _gate_level_for 只对 HARD_GATE_CODES 判 hard_gate + scanner 升格双闸守卫。
-  ⑤ 自动豁免 / 降档路径对 hard_gate 为 no-op（锁现状·守北极星⑤）。
+  ⑤ 自动豁免 / 降档路径必须强制忽略 hard_gate（锁现状·守北极星⑤）。
   ⑥ P0 风格链：audit_hub --style 透传 + gen_writer 无 [:8000] 截断 / 无写死默认风。
   ⑦ 清旧码：带『死线』的 DEPRECATED/旧码标记未过期（过期未删=红灯·北极星⑥）。
 
@@ -53,15 +54,6 @@ def _read(p: Path) -> str:
 _ANTIPATTERN = re.compile(r"""f(['"])cluster_\{ch:03d\}\1""")
 # 描述「禁令」本身的 doc/注释行标记（这些行引用反模式只为说明它被禁，非真实使用）。
 _BAN_DOC_MARKERS = ("禁", "取代", "旧残留", "机械拼接", "反查", "章号拼接", "消灭")
-# grandfathered guarded fallback：这两处都**先咨询 cluster_lookup**（ch_to_cluster_id /
-# normalize_cluster_id / infer_cluster_id_by_chapter），仅在反查彻底失败 / import 缺失时
-# 退回字面量。与北极星①真正禁的「不咨询权威直接 ch→cluster 机械拼接」材质不同。其余一律禁。
-_GUARDED_FALLBACK_FILES = {
-    "clock_engine.py",   # _since_cluster：ch_to_cluster_id → infer_cluster_id_by_chapter → 字面兜底
-    "save_state.py",     # normalize_cluster_id(ch) or 字面兜底（标 _cluster_inferred=True）
-}
-
-
 def _real_antipattern_files() -> dict:
     """返回 {文件名: [(行号, 行文本)]} —— 仅真实代码使用（排除注释 / 禁令描述行）。"""
     hits: dict = {}
@@ -80,15 +72,12 @@ def _real_antipattern_files() -> dict:
 
 def test_no_mechanical_chapter_to_cluster_construction():
     """北极星①：禁 f"cluster_{ch:03d}" 章号当 cluster 号机械拼接。
-    cluster_lookup.py = 唯一权威反查出处；clock_engine/save_state 是先咨询 cluster_lookup
-    的 guarded fallback（已复核）。任何其它文件出现该字面量 = 未授权机械拼接 → 红灯。"""
+    cluster_lookup.py = 唯一权威反查出处；任何其它文件出现该字面量 = 未授权机械拼接 → 红灯。"""
     hits = _real_antipattern_files()
     offenders = {}
     for fname, occ in hits.items():
         if fname == "cluster_lookup.py":
             continue  # 唯一权威反查 + 唯一合法字面兜底出处
-        if fname in _GUARDED_FALLBACK_FILES and "cluster_lookup" in _read(_SCRIPTS / fname):
-            continue  # grandfathered guarded fallback（复核：确实咨询了 cluster_lookup）
         offenders[fname] = occ
     assert not offenders, (
         "发现未授权 ch→cluster 机械拼接 f\"cluster_{ch:03d}\"（违北极星①）：\n"
@@ -116,14 +105,14 @@ def test_chapter_splitter_imports_no_scanner_or_audit_hub():
     assert not bad, f"chapter_splitter.py 不应 import 质检模块（北极星④章节仅格式）：{bad}"
 
 
-# ============ ③ 三方一致：hard_gate 清单单一真理源（北极星⑤防各自另立） ============
+# ============ ③ 四方一致：hard_gate 清单单一真理源（北极星⑤防各自另立） ============
 
 def _structure_hard_gate_codes() -> set:
-    """从 STRUCTURE.md §11.2 主表格首列 backtick code 抽取（仅 §11.2→§11.3 切片内）。"""
+    """从 STRUCTURE.md hard_gate 主表格首列 backtick code 抽取（仅权威清单小节切片内）。"""
     text = _read(_STRUCTURE)
-    start = text.find("### 11.2")
-    end = text.find("### 11.3")
-    assert start >= 0 and end > start, "STRUCTURE.md §11.2/§11.3 段落标记缺失"
+    start = text.find("### 12.2 hard_gate 不可豁免清单")
+    end = text.find("### 12.3", start)
+    assert start >= 0 and end > start, "STRUCTURE.md hard_gate 权威清单段落标记缺失"
     section = text[start:end]
     codes = set()
     for line in section.splitlines():
@@ -149,21 +138,35 @@ def _claudemd_hard_gate_codes() -> set:
     return codes
 
 
-def test_hard_gate_codes_three_way_consistent():
-    """北极星⑤单一真理源：audit_hub.HARD_GATE_CODES == STRUCTURE§11.2 == CLAUDE.md 清单。
+def _registry_hard_gate_codes() -> set:
+    """从 scanner_registry.json 顶层 hard_gate_codes[] 抽取（2026-07-05 四方一致新增）。"""
+    import json
+    reg = json.loads(_read(_SCRIPTS / "scanner_registry.json"))
+    codes = reg.get("hard_gate_codes")
+    assert isinstance(codes, list) and codes, "scanner_registry.json 缺 hard_gate_codes[]"
+    return set(codes)
+
+
+def test_hard_gate_codes_four_way_consistent():
+    """北极星⑤单一真理源：audit_hub.HARD_GATE_CODES == STRUCTURE§12.2 == CLAUDE.md 清单
+    == scanner_registry.json hard_gate_codes（2026-07-05 registry 曾漂移到 12 码 → 入锁变四方）。
     任一漂移 = 各自另立 → 断言暴露（不硬改任一方凑绿）。"""
     code_set = set(audit_hub.HARD_GATE_CODES)
     struct_set = _structure_hard_gate_codes()
     claude_set = _claudemd_hard_gate_codes()
+    registry_set = _registry_hard_gate_codes()
     assert code_set == struct_set, (
-        f"audit_hub vs STRUCTURE§11.2 漂移 · 只在 audit_hub={code_set - struct_set} · "
+        f"audit_hub vs STRUCTURE§12.2 漂移 · 只在 audit_hub={code_set - struct_set} · "
         f"只在 STRUCTURE={struct_set - code_set}")
     assert code_set == claude_set, (
         f"audit_hub vs CLAUDE.md 漂移 · 只在 audit_hub={code_set - claude_set} · "
         f"只在 CLAUDE.md={claude_set - code_set}")
+    assert code_set == registry_set, (
+        f"audit_hub vs scanner_registry.json 漂移 · 只在 audit_hub={code_set - registry_set} · "
+        f"只在 registry={registry_set - code_set}")
     # 数量哨兵（现状 19 · C03 2026-06-27 子系统载荷点火 3 码 · C18 2026-06-27 splitter 字数守恒 1 码入列）
-    # ——数量变动时强制人工复核三方同步
-    assert len(code_set) == 19, f"HARD_GATE_CODES 数量={len(code_set)}（预期 19）·变动须三方同改"
+    # ——数量变动时强制人工复核四方同步
+    assert len(code_set) == 19, f"HARD_GATE_CODES 数量={len(code_set)}（预期 19）·变动须四方同改"
 
 
 # ============ ④ _gate_level_for 是 hard_gate 唯一裁决口 + scanner 升格双闸（北极星⑤） ============
@@ -193,7 +196,7 @@ def test_scanner_gate_upgrade_guarded_by_hard_gate_codes():
     assert guards >= 2, f"scanner gate 升格双闸守卫数={guards} < 2（清单外越权升 hard_gate 风险）"
 
 
-# ============ ⑤ 自动豁免 / 降档对 hard_gate 为 no-op（锁现状·守北极星⑤） ============
+# ============ ⑤ 自动豁免 / 降档必须强制忽略 hard_gate（锁现状·守北极星⑤） ============
 
 def test_apply_waivers_never_waives_hard_gate():
     """北极星⑤：_apply_waivers 对 hard_gate 强制忽略豁免（即便传了理由）·advisory 才 waived。"""

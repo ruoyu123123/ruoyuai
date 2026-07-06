@@ -539,6 +539,7 @@ def test_code_to_model_coverage():
     assert CODE_TO_MODEL["PERSONA_DRIFT"] == "character_trajectory"
     assert CODE_TO_MODEL["ACTANT_DRIFT_NO_PIVOT"] == "character_trajectory"
     assert CODE_TO_MODEL["ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED"] == "character_trajectory"
+    assert CODE_TO_MODEL["CHARACTER_IDENTITY_ANCHOR_DRIFT"] == "character_trajectory"
     assert CODE_TO_MODEL["ACTION_MENTAL_RATIO_DRIFT"] == "action_mentalizing"
     assert CODE_TO_MODEL["COGNITIVE_OVERLOAD"] == "cognitive_load"
 

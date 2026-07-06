@@ -119,6 +119,7 @@ CODE_TO_MODEL: dict[str, str] = {
     "FORESHADOWING_NOT_PLANTED": "promise_payoff",
     "FORESHADOWING_NOT_REINFORCED": "promise_payoff",
     "FORESHADOWING_HANDOFF_WEAK": "promise_payoff",
+    "FORESHADOWING_PAYOFF_TARGET_NOT_OPEN": "promise_payoff",  # 2026-07-06 P1 伏笔三态生命周期：payoff 指向非 open 条目
     "REVEAL_FAIRNESS_LOW": "promise_payoff",
     "RED_HERRING_RECALL_WEAK": "promise_payoff",
     "MACGUFFIN_ENTANGLEMENT_LOW": "promise_payoff",
@@ -291,6 +292,8 @@ CODE_TO_MODEL: dict[str, str] = {
     "PROSE_AXIS_OK": "coherence",
     "PROSE_AXIS_TRIPLE_EMPTY": "coherence",
     "RULE_TEXT_AMBIGUITY_LOW": "coherence",
+    # [2026-07-06 P1移植 scene_receipts] 文本-storyboard 对齐是连贯性信号
+    "SCENE_RECEIPT_COVERAGE_GAP": "coherence",
     "SCENE_TYPE_LOW_DIVERSITY": "coherence",
     "SCENE_TYPE_RUN": "coherence",
     "TEMPORAL_BOOTSTRAP_LOOP": "coherence",
@@ -502,6 +505,7 @@ CODE_TO_MODEL: dict[str, str] = {
     "CHARACTER_MISSING": "character_trajectory",
     "CHARACTER_ORPHAN_DIALOGUE": "character_trajectory",
     "CHARACTER_ROTATION_BREAK": "character_trajectory",
+    "CHARACTER_IDENTITY_ANCHOR_DRIFT": "character_trajectory",
     "CHARACTER_STATE_DRIFT_DETECTED": "character_trajectory",
     "CHARACTER_SUDDEN_APPEAR": "character_trajectory",
     "CHARACTER_THROUGH_LINE_BROKEN": "character_trajectory",
@@ -602,6 +606,8 @@ EXCLUDED_FROM_FLYWHEEL: dict[str, str] = {
     "CHANGES_MISSING": "文件/流水线契约核对（客观存在性检查·非创作判断，同 validate_chapter.py 既有 hard_gate 契约族）",
     "FILE_NOT_FOUND": "文件/流水线契约核对（客观存在性检查·非创作判断，同 validate_chapter.py 既有 hard_gate 契约族）",
     "MANIFEST_MISSING": "文件/流水线契约核对（客观存在性检查·非创作判断，同 validate_chapter.py 既有 hard_gate 契约族）",
+    "USER_CHOICE_CLUSTER_ID_MISMATCH": "文件/流水线契约核对（客观存在性检查·非创作判断，同 validate_chapter.py 既有 hard_gate 契约族）",
+    "USER_CHOICE_LANDED_MISMATCH": "文件/流水线契约核对（客观存在性检查·非创作判断，同 validate_chapter.py 既有 hard_gate 契约族）",
     # 一致性硬核对（锁定事实/物件持有客观冲突·非主观工艺判断，性质同 hard_gate 契约）
     "ITEM_HOLDER_ABSENT": "一致性硬核对（锁定事实/物件持有客观冲突·非主观工艺判断，性质同 hard_gate 契约）",
     "ITEM_NOT_YET_INTRODUCED": "一致性硬核对（锁定事实/物件持有客观冲突·非主观工艺判断，性质同 hard_gate 契约）",
@@ -609,12 +615,21 @@ EXCLUDED_FROM_FLYWHEEL: dict[str, str] = {
     "LOCKED_FACT_CROSS_SCENE_CONFLICT": "一致性硬核对（锁定事实/物件持有客观冲突·非主观工艺判断，性质同 hard_gate 契约）",
     "PROPAGATION_DEBT_CREATED": "一致性硬核对（锁定事实/物件持有客观冲突·非主观工艺判断，性质同 hard_gate 契约）",
     # 导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）
+    "CHAPTER_BODY_FILE_MISSING": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
     "CHAPTER_DUPLICATE": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
+    "CHAPTER_READ_OR_CONTRACT_ERROR": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
+    "CHAPTER_SOURCE_MISSING": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
+    "PENDING_TAIL_PRESENT": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
+    "PENDING_TAIL_SILENT_LOSS_OVER_THRESHOLD": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
     "CHAPTER_MISSING": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
     "CHAPTER_OUT_OF_ORDER": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
     "CLUSTER_RANGE_UNCOVERED": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
     "SPLIT_WORD_NOT_CONSERVED": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
     "WORD_CONSERVATION_DRIFT": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
+    # cluster 长度带遥测（LongWriter 长输出长度体检·下游 advisory 遥测非可学习正文质量信号·
+    # 北极星⑤字数自然涌现是 v27 纯 freestyle 已定调，长度带外≠文本工艺差，混入会稀释训练池质量）
+    "CLUSTER_LENGTH_UNDER_BAND": "cluster 长度带遥测（LongWriter 长输出长度体检·下游 advisory 遥测非可学习正文质量信号·北极星⑤字数自然涌现，长度带外≠文本工艺差）",
+    "CLUSTER_LENGTH_OVER_BAND": "cluster 长度带遥测（LongWriter 长输出长度体检·下游 advisory 遥测非可学习正文质量信号·北极星⑤字数自然涌现，长度带外≠文本工艺差）",
     # 蒸馏管线自身校验（验证蒸馏产物结构完整性·不评判正文文本本身）
     "BANNED_PHRASES_MALFORMED": "蒸馏管线自身校验（验证蒸馏产物结构完整性·不评判正文文本本身）",
     "HOLDOUT_SFS_GAP_OVERFIT": "蒸馏管线自身校验（验证蒸馏产物结构完整性·不评判正文文本本身）",

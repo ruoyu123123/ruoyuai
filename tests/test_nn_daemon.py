@@ -16,7 +16,7 @@
 🔴 为什么不起真实 socket：tests/test_gen_model.py 在模块导入时把 `urllib.request.urlopen` 和
 `socket.socket.connect` 永久 monkeypatch 成"调用即 raise"（session 全程生效的网络兜底安全闸·
 防任何测试意外出网真花钱），这是本仓既有的、刻意不可撤销的安全设计。真实 ThreadingHTTPServer
-方案在单文件跑时不受影响，但在 `pytest tests/`（收集到 test_gen_model.py）时会撞上这道闸——
+方案在单文件跑时不受影响，但在 `py -m pytest`（收集到 test_gen_model.py）时会撞上这道闸——
 client 侧的 urlopen 调用会被拦成 AssertionError。修法是彻底不依赖真实 socket：daemon 协议
 逻辑本身是纯函数（`dispatch_request`），client 侧测试改用假 urlopen 直接路由给这个纯函数，
 两者都不经过真实 OS socket，天然对这道全局闸免疫，同时仍然端到端验证真实的协议/契约逻辑

@@ -98,8 +98,8 @@ PLOT_DIM = {
 }
 # semantic_slop_scanner 检测器 -> 维度（v19 B+ 文笔语义层 8 检测器）
 # 全部归「风格」，tag_synonym_cycle 归「对话」。codes 形如 SEMANTIC_metaphor_explain，
-# 不在 HARD_GATE_CODES 内 -> _gate_level_for() 自动判 advisory（与 STRUCTURE.md §11.3
-# 「新增检测器默认 advisory」一致）。
+# 不在 HARD_GATE_CODES 内 -> _gate_level_for() 自动判 advisory（与 STRUCTURE.md §12.3
+# 「新增检测器显式定级·风格/工艺/体验类 advisory」一致）。
 SEMANTIC_DIM = {
     "metaphor_explain": "风格", "aphorism": "风格", "neg_parallel": "风格",
     "copula_avoid": "风格", "fake_range": "风格", "over_hedge": "风格",
@@ -171,7 +171,7 @@ AGENT_ROUTING = {
 # 也是测探针噪声不是测改动。这类 code 即便其 scanner 自报 gate_level='hard_gate'，
 # 也被 _gate_level_for()（见下）+ 两条 _parse_*_scanner 双闸拦回 advisory（不在白名单即降档）。
 # 升 active 靠跨栈/金标准抽样（replication_fidelity_check / distill_holdout），不靠门禁；
-# judge 同源高一致只证「稳定」不证「准确」。增改本清单 = 同步改 STRUCTURE.md §11.2
+# judge 同源高一致只证「稳定」不证「准确」。增改本清单 = 同步改 STRUCTURE.md §12.2
 # （单一来源），且新 code 必须先过 tests/test_thinking_probe_advisory.py 的断言。
 HARD_GATE_CODES = {
     "LOCKED_FACT_CONFLICT",        # 正文与已锁定事实冲突 = 设定矛盾
@@ -309,8 +309,12 @@ def _resolve_chapter_end_weak_anchor_ratio(project_root: Path):
 
 
 def load_scanner_registry() -> dict:
-    """v2 cluster 化：读 scanner_registry.json 决定跑哪些 scanner。
-    缺失则 fallback 到硬编码 7 scanner（向后兼容）。"""
+    """读 scanner_registry.json —— 元数据 / 一致性契约源（供测试与文档对账）。
+
+    🔴 2026-07-05 说真话：registry **不是运行时调度源**。生产要跑哪些 scanner
+    由本文件的 tasks 列表硬编码决定（audit_chapter cluster-mode tasks.extend），
+    本函数只把 registry 读出来给对账类消费方（tests/test_audit_hub_aggregation.py /
+    test_north_star_invariants.py 的 hard_gate 四方一致锁等）。缺失/损坏返回 {}。"""
     reg_path = _SCRIPT_DIR / "scanner_registry.json"
     if not reg_path.exists():
         return {}
@@ -404,7 +408,7 @@ def _parse_chapter_end_anchor(stdout: str, exit_code: int) -> list:
 
 
 # 🔴 2026-06-27 C06：章末物理污染 hard_gate 真阻断（治 v27 freestyle 无真阻断点）。
-# 病灶：CHAPTER_END_FORBIDDEN_SCREENPLAY 在 STRUCTURE§11 钉死不可豁免，但 freestyle 链路无真阻断——
+# 病灶：CHAPTER_END_FORBIDDEN_SCREENPLAY 在 STRUCTURE§12 钉死不可豁免，但 freestyle 链路无真阻断——
 #   step3 audit 时草稿【尚未切章】（chapter_end_anchor_scan 依赖 第NNN章 文件，在 step6 切章后才跑且只
 #   advisory 不 exit2）→ 剧本体污染溜过最该拦的点。修：step3 对【整段 cluster_draft】跑 SCREENPLAY_PATTERNS。
 # 北极星⑤边界：只硬毙【位置无关】的 SCREENPLAY（剧本体镜头/旁白/音效指令 = 排版/格式契约破损·任何风格、
@@ -772,6 +776,50 @@ def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: st
     if anchor_spans:
         issue["anchor_spans"] = anchor_spans
     issues.append(issue)
+    return issues
+
+
+def _parse_multi_code_violations_scanner(stdout: str, source: str, default_code: str,
+                                         dimension: str) -> list:
+    """[2026-07-05 休眠 scanner 接线] violations[] 且 per-item 自带 code 的 scanner
+    （frisson_lead_window / butler_yearning_4layer / soundscape_trinity 等一 scanner 多 code）。
+    与 _parse_violations_scanner 的区别：不把所有 violation 压成单一聚合 code，而是按
+    violation.code 分组、每组合成 1 条聚合 issue——保持 code 与 scanner 真实 emit 一致
+    （数据飞轮 CODE_TO_MODEL 按真实 code 注册，伞形自造 code 会被静默丢弃）。
+    gate_level 以 HARD_GATE_CODES 为唯一权威（这些 scanner 全 advisory·北极星⑤）。"""
+    issues = []
+    report = _load_scanner_json(stdout)
+    if not report:
+        return issues
+    violations = report.get("violations", []) or []
+    if not violations:
+        return issues
+    groups: dict = {}
+    for v in violations:
+        if not isinstance(v, dict):
+            continue
+        groups.setdefault(v.get("code") or default_code, []).append(v)
+    top_gl = report.get("gate_level", "advisory")
+    for code, vs in groups.items():
+        severity = "error" if any(v.get("severity") == "major" for v in vs) else "warning"
+        gl = _gate_level_for(code, severity)
+        # 顶层升格双闸（与 _parse_violations_scanner 对称）：清单外 scanner 不得自立 hard_gate
+        if gl != "hard_gate" and top_gl == "hard_gate" and code in HARD_GATE_CODES:
+            gl = "hard_gate"
+        desc = f"{report.get('scanner', source)}: {len(vs)} 处违规（verdict={report.get('verdict', '?')}）"
+        first_msg = str(vs[0].get("message", "") or vs[0].get("msg", "")).strip()
+        if first_msg:
+            desc = f"{desc} {first_msg[:120]}"
+        issue = {
+            "dimension": dimension, "severity": severity,
+            "gate_level": gl, "code": code, "desc": desc,
+            "source": source, "fix_hint": "",
+            "waived": False, "waive_reason": "",
+        }
+        anchor_spans = _collect_anchor_spans(vs)
+        if anchor_spans:
+            issue["anchor_spans"] = anchor_spans
+        issues.append(issue)
     return issues
 
 
@@ -2819,25 +2867,136 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_issues_list_scanner(
                      out, "character_consistency_scanner", "角色"),
                  300),
+                # [2026-07-05 孤儿接线] 身份锚点漂移 · 人物卡 identity_anchors（发色/瞳色/疤痕）
+                # 近旁叙述不得漂移（borrowed from moyin-creator 身份锚点·散文连续性版）
+                # · CHARACTER_IDENTITY_ANCHOR_MODE 默认 shadow · advisory
+                ("character_identity_anchor",
+                 [child_python(), str(_SCRIPT_DIR / "character_identity_anchor_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "character_identity_anchor_scanner",
+                     "CHARACTER_IDENTITY_ANCHOR_DRIFT", "剧情")),
+                # [2026-07-05 休眠接线·R23 HH] frisson 战栗导入窗 · climax 前 1-2 段 vs climax
+                # 标点/独行率前置锐化（Salimpoor 2011）· FRISSON_LEAD_MODE 默认 shadow · advisory
+                # （CLI 只收 draft·无 --project）
+                ("frisson_lead_window",
+                 [child_python(), str(_SCRIPT_DIR / "frisson_lead_window_scanner.py"),
+                  str(cluster_draft)],
+                 {0, 1},
+                 lambda out, code: _parse_multi_code_violations_scanner(
+                     out, "frisson_lead_window_scanner", "FRISSON_LEAD_FLAT", "节奏")),
+                # [2026-07-05 休眠接线·R20 BB] Butler 4 层 yearning（self/identity/place/connection）
+                # 缺位/单层垄断 · BUTLER_YEARNING_MODE 默认 shadow · advisory
+                ("butler_yearning_4layer",
+                 [child_python(), str(_SCRIPT_DIR / "butler_yearning_4layer_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_multi_code_violations_scanner(
+                     out, "butler_yearning_4layer_scanner", "SCENE_YEARNING_ABSENT", "角色")),
+                # [2026-07-05 休眠接线·R22 EE] 失败段散文密度 ≥ 成功段（try-fail 代价感）
+                # · FAILURE_SEGMENT_DENSITY_MODE 默认 shadow · advisory
+                ("failure_segment_prose_density",
+                 [child_python(), str(_SCRIPT_DIR / "failure_segment_prose_density_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "failure_segment_prose_density_scanner",
+                     "FAILURE_SEGMENT_DENSITY_GAP", "风格")),
+                # [2026-07-05 休眠接线·R20 BB] Schafer 声景三分类（keynote/signal/soundmark）
+                # 单声道/地标声缺位 · SOUNDSCAPE_TRINITY_MODE 默认 shadow · advisory
+                ("soundscape_trinity",
+                 [child_python(), str(_SCRIPT_DIR / "soundscape_trinity_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_multi_code_violations_scanner(
+                     out, "soundscape_trinity_scanner", "SOUNDSCAPE_THIN", "风格")),
+                # [2026-07-05 休眠接线·R22 EE] 读者未被 show 的 fact 被角色当公知使用（反向越权）
+                # · PREMATURE_READER_REVEAL_MODE 默认 shadow · advisory
+                ("premature_reader_reveal",
+                 [child_python(), str(_SCRIPT_DIR / "premature_reader_reveal_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "premature_reader_reveal_scanner",
+                     "PREMATURE_READER_REVEAL", "剧情")),
+                # [2026-07-05 休眠接线·R22 EE] Cronon 首尾境况斜率 · 4 维 Σ|Δ|<3 = 扁平 cluster
+                # · TRAJECTORY_MORAL_SLOPE_MODE 默认 shadow · advisory
+                ("trajectory_moral_slope",
+                 [child_python(), str(_SCRIPT_DIR / "trajectory_moral_slope_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_id_full],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "trajectory_moral_slope_scanner",
+                     "AMBIGUOUS_FLAT_TRAJECTORY", "剧情")),
+                # [2026-07-05 休眠接线·R22 EE] BPNSFS A/C/R 需求受挫 → 反应类目一致性
+                # · ACR_FRUSTRATION_MODE 默认 shadow · advisory
+                ("acr_frustration_consistency",
+                 [child_python(), str(_SCRIPT_DIR / "check_acr_frustration_consistency.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "check_acr_frustration_consistency",
+                     "ACR_FRUSTRATION_MISMATCH", "角色")),
+                # [2026-07-06 P1移植] 场景回执 · storyboard→草稿覆盖证据（borrowed from
+                # LongWriter/AgentWrite plan-then-write 回执 + moyin-creator 场景校准 ·
+                # research/open_source_writing_systems.md）· SCENE_RECEIPTS_MODE 默认 shadow
+                # · advisory（freestyle 合并/改编场景是创作自由·北极星⑤·绝不 hard_gate）
+                ("scene_receipts",
+                 [child_python(), str(_SCRIPT_DIR / "scene_receipts_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_id_full],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "scene_receipts_scanner",
+                     "SCENE_RECEIPT_COVERAGE_GAP", "剧情")),
+                # [2026-07-06 P2移植] cluster 草稿长度带体检（borrowed from LongWriter 长输出
+                # 长度评估 · research/open_source_writing_systems.md）· 纯 freestyle 后短稿/超长稿
+                # 风险由 step3 质检下游承接（expand 软下限已清除·此处补检测端缺口）·
+                # CLUSTER_LENGTH_BAND_MODE 默认 shadow · advisory（字数自然涌现是 v27 已定调·
+                # 北极星⑤·绝不回流 writer/manifest·绝不 hard_gate）
+                ("cluster_length_band",
+                 [child_python(), str(_SCRIPT_DIR / "cluster_length_band_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_multi_code_violations_scanner(
+                     out, "cluster_length_band_scanner",
+                     "CLUSTER_LENGTH_UNDER_BAND", "节奏")),
             ])
-            # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg)·全 advisory·
+            # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg/...)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
+            # 🔴 2026-07-05 修路由 bug：get_scanner() 返回裸脚本名（genre_dimension_packs.json 存
+            # 「romance_pacing_scanner」无 .py），旧代码直接拼 _SCRIPT_DIR/裸名 → 路径永不存在 →
+            # 题材 scanner 从未执行且静默 skip。规范化收口在此唯一路径消费端：统一补 .py 后缀；
+            # 脚本缺失从静默 skip 改 stderr 显式报（不吞）。
             try:
                 import scaffold_genre_packs as _gp
                 _genre = _resolve_audit_genre(project_root)
                 _gscanner = _gp.get_scanner(_genre)
                 if _gscanner:
-                    _gpath = _SCRIPT_DIR / _gscanner
-                    if _gpath.exists():
-                        _code = _gscanner.replace("_scanner.py", "").upper()
+                    _gname = _gscanner if _gscanner.endswith(".py") else f"{_gscanner}.py"
+                    _gpath = _SCRIPT_DIR / _gname
+                    if not _gpath.exists():
+                        print(f"[audit_hub] 题材 scanner 脚本缺失: {_gpath}"
+                              f"（genre={_genre}）→ 本 cluster 题材层扫描未执行",
+                              file=sys.stderr)
+                    else:
+                        _gbase = _gname[:-3].replace("_scanner", "")
+                        _code = _gbase.upper()
+                        _gcmd = [child_python(), str(_gpath), str(cluster_draft),
+                                 "--project", str(project_root)]
+                        # --style 只传给声明支持的脚本（episode_bilateral_bridge / dwell_progression
+                        # 的 argparse 未收 --style·硬传会 exit 2）；作者档第一权威·支持即传。
+                        if _style_args and "--style" in _gpath.read_text(
+                                encoding="utf-8", errors="replace"):
+                            _gcmd += _style_args
                         tasks.append((
-                            _gscanner.replace("_scanner.py", ""),
-                            [child_python(), str(_gpath), str(cluster_draft),
-                             "--project", str(project_root)] + _style_args, {0, 1},
-                            lambda out, code, _c=_code: _parse_violations_scanner(
-                                out, _gscanner, _c, "风格")))
+                            _gbase, _gcmd, {0, 1},
+                            lambda out, code, _c=_code, _s=_gname: _parse_violations_scanner(
+                                out, _s, _c, "风格")))
             except Exception as _e:
-                print(f"[audit_hub] 题材 scanner 路由跳过: {_e}", file=sys.stderr)
+                print(f"[audit_hub] 题材 scanner 路由异常: {_e}", file=sys.stderr)
             # 🔴 2026-06-27 C06：整段草稿扫剧本体 SCREENPLAY 标记（位置无关 hard_gate · step3 真阻断点）。
             # 此处草稿尚未切章 → chapter_end_anchor_scan（依赖 第NNN章 文件）跑不到，整段硬扫补上这个缺口。
             _screenplay_issues = _scan_cluster_draft_screenplay(cluster_draft)
@@ -3394,7 +3553,7 @@ def main():
             sys.exit(1)
         sys.exit(0)
 
-    # chapter mode (v23 兼容)
+    # ad-hoc physical chapter quality scan（非创作入口；创作主链路只走 --mode cluster）
     try:
         ch = int(args[1])
     except ValueError:

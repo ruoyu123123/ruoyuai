@@ -10,7 +10,7 @@ Workflow + 主代理自验金标准（6 作者原文实测 subtext≤0.06/irony�
   3. 3 code 绝不进 HARD_GATE_CODES（制度锁·北极星⑤·转 active 仍 advisory 可豁免）；
   4. env 未设 → 默认 active（本增量主交付）。
 
-零依赖·run_tests.py / pytest 双跑。真作者原文本地无（CI 干净环境）→ 金标准跳过不阻塞。
+零依赖·仓库根 pytest 入口。真作者原文本地无（CI 干净环境）→ 金标准跳过不阻塞。
 """
 import glob
 import io

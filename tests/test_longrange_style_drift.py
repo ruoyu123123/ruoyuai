@@ -117,7 +117,7 @@ def test_C_style_similarity_distinguishes_styles():
 def test_C_style_similarity_sfs_exception_tolerant():
     """SFS 子项抛异常时兜底（任一可用取可用者 · 都不可用 → 0.0 · 不崩）。
 
-    手动 save/restore（不用 monkeypatch · 兼容零依赖 run_tests.py 无 args 调用）。"""
+    手动 save/restore（不用 monkeypatch · 保持无参调用便于单文件调试）。"""
     import style_evaluator as se
     orig_so = se.compute_style_only_sfs
     orig_cg = se.compute_charngram_sfs

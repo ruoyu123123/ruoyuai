@@ -453,7 +453,7 @@ def test_J_mstyle_embedding_768_normalized():
 #     EMBED_BACKEND=mstyle**。绝不为 SOTA 而 SOTA 硬切。
 #   → 复跑实测：见本仓 commit 说明 / 临时脚本（baseline 20 章 + in/ood 各 10 章，CPU ~50 分钟）。
 #
-# 下面只保留**快速确定性**校验（不在 run_tests.py 里重跑 50 分钟 mstyle 推理）：
+# 下面只保留**快速确定性**校验（不在默认 pytest 里重跑 50 分钟 mstyle 推理）：
 #   · hash pipeline 在金标准上确实可分（证明金标准 + pipeline 本身有效）。
 #   · mstyle 重推理实测留作 opt-in 手测（_mstyle_available 时才跑·默认 run_tests 不触发）。
 

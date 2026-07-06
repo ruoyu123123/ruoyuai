@@ -57,7 +57,12 @@ def get_judge_dims(genre: str | None) -> dict:
 
 
 def get_scanner(genre: str | None) -> str | None:
-    """题材专属 advisory scanner 脚本名（无则 None）。"""
+    """题材专属 advisory scanner 脚本名（无则 None）。
+
+    🔴 契约（2026-07-05 修题材路由 bug 后钉死）：返回值 = genre_dimension_packs.json
+    的裸脚本名（如 "romance_pacing_scanner"，**不含 .py**）。路径规范化收口在唯一
+    路径消费端 audit_hub 题材路由（统一补 .py 后缀 + 缺失 stderr 显式报）——
+    新消费端拼路径必须走同样的补后缀规范，不得直接 _SCRIPT_DIR / 裸名。"""
     return get_pack(genre).get("scanner")
 
 
