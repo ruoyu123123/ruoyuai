@@ -93,8 +93,9 @@ def _load_foreshadow_table_fallback(project_root: Path) -> dict:
 
     返回 {normalized_cluster_id: {"planted": set[fid], "paid": set[fid]}}。
     · planted = 该 cluster 埋下的所有 promises/deadlines/pledges/secrets 的 id（authoring 即确定·可靠）。
-    · paid = 其中 resolved/revealed 为真者（伏笔表是权威结算账·消除 cluster 摘要 foreshadow 流水缺失
-      导致的恒 0 → 误报 DEBT_BOOK_MORTGAGE_ABSENT）。
+    · paid = 其中已结清者——promises 按三态生命周期 status=="consumed"（open/suspended=未回收），
+      secrets/deadlines/pledges 沿用各自 revealed/paid 语义（伏笔表是权威结算账·消除 cluster
+      摘要 foreshadow 流水缺失导致的恒 0 → 误报 DEBT_BOOK_MORTGAGE_ABSENT）。
     无表/损坏/空 → {}（调用方据此判定是否回退·零回归）。
     """
     db = project_root if project_root.name == "_数据库" else project_root / "_数据库"
@@ -120,7 +121,9 @@ def _load_foreshadow_table_fallback(project_root: Path) -> dict:
                 continue
             entry = out.setdefault(cid, {"planted": set(), "paid": set()})
             entry["planted"].add(str(fid))
-            if item.get("resolved") or item.get("revealed") or item.get("paid"):
+            # 2026-07-06 P1 三态生命周期：promises 用 status=="consumed"（open/suspended=未回收）；
+            # secrets/deadlines/pledges 沿用各自 revealed/paid 语义。
+            if item.get("status") == "consumed" or item.get("revealed") or item.get("paid"):
                 entry["paid"].add(str(fid))
     return out
 

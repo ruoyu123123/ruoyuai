@@ -1,6 +1,6 @@
-"""world_evolution_apply_chapter.py — save-state 用 wrapper（v20.1 W6 新增）
+"""world_evolution_apply_chapter.py — /cluster-save-state 内部 per-chapter tick wrapper（v20.1 W6 新增）
 
-每章 save-state 调一次。串行执行：
+由 /cluster-save-state 按 cluster 的章范围逐章调用。串行执行：
 1. auto_tick(ch)：推进世界一格 + RR_AUTO_TICK 涟漪 + 评估超期 NPC threads
 2. apply_fate_event(ch, ME_id)：对 _changes.json.fate_events_triggered[] 中每个 event 触发 fate_event 类涟漪
 3. 消费 emergent_opportunities：把 _changes.json.world_state_consumption.emergent_opportunities_consumed[] 中的 EO 标 consumed_by_writer=true
@@ -10,7 +10,7 @@
 
 输出：保存到 _数据库/.world_evolution/ch{ch}_apply.json（汇总日志）
 
-用法：python world_evolution_apply_chapter.py <project> <ch>
+用法：python world_evolution_apply_chapter.py <project> --cluster <key>
 
 退出码：
   0 - 成功
@@ -282,12 +282,9 @@ def apply_one_chapter(project_root: Path, ch: int) -> tuple[dict, bool]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
-    # 2026-05-29 流程贯通（断点 2）：ch 改可选位置参 + 新增 --cluster <key>。
-    # plan cluster-save-state.plan.json:123 调 `--cluster {key}`，旧版只收位置参 int
-    # → argparse exit 2。现两入口并存：位置参章级（向后兼容）+ --cluster 整 cluster。
     ap.add_argument("ch", type=int, nargs="?", default=None)
     ap.add_argument("--cluster", metavar="CLUSTER_KEY", default=None,
-                    help="对整 cluster 章范围逐章 tick（取代位置参 ch）")
+                    help="对整 cluster 章范围逐章 tick")
     args = ap.parse_args()
 
     project_root = Path(args.project)
@@ -296,8 +293,9 @@ def main():
     world_path = project_root / "_数据库" / "世界状态.json"
     rules_path = project_root / "_数据库" / "涟漪规则.json"
     if not world_path.exists() or not rules_path.exists():
-        print("[SKIP] 世界状态.json 或 涟漪规则.json 不存在 — 项目未启用世界演化")
-        sys.exit(0)
+        print("[FATAL] 世界状态.json 或 涟漪规则.json 不存在；世界演化是 cluster-save-state required 状态推进步骤",
+              file=sys.stderr)
+        sys.exit(2)
 
     # --cluster：解析章范围，逐章 tick（tick 语义 = 推进世界一格/章，故每章各 tick 一次）
     if args.cluster:
@@ -316,16 +314,12 @@ def main():
             sys.exit(1)
         sys.exit(0)
 
-    if args.ch is None:
-        print("[ERROR] 需要位置参 <ch> 或 --cluster <key>", file=sys.stderr)
+    if args.ch is not None:
+        print("[FATAL] 单章 world evolution CLI 已关闭；请通过 /cluster-save-state --cluster 调用。", file=sys.stderr)
         sys.exit(2)
 
-    _, half_apply = apply_one_chapter(project_root, args.ch)
-    # 异常退出码：fate_events_triggered 中存在但 apply 后 matched_rules 为空
-    if half_apply:
-        print("[WARN] 部分 fate_event 没匹配涟漪规则 → 涟漪规则.json 可能缺定义")
-        sys.exit(1)
-    sys.exit(0)
+    print("[ERROR] 需要 --cluster <key>", file=sys.stderr)
+    sys.exit(2)
 
 
 if __name__ == "__main__":

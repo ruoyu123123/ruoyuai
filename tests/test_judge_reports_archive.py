@@ -306,3 +306,28 @@ def test_archive_one_chapter_writes_files_when_not_dry_run():
         # error=5 (>2, fatal=0) → C
         assert rep["overall_grade"] == "C"
         assert r["grade"] == "C"
+
+
+def test_main_rejects_deprecated_positional_chapter_cli():
+    """公开 CLI 只允许 --cluster；位置参单章归档必须 hard fail。"""
+    old_argv = sys.argv[:]
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            sys.argv = ["judge_reports_archive.py", d, "1", "--dry-run"]
+            assert mod.main() == 2
+    finally:
+        sys.argv = old_argv
+
+
+def test_main_cluster_dry_run_still_public_path():
+    """--cluster 是唯一公开路径；dry-run 下即使无 judge 信号也能完成展开。"""
+    old_argv = sys.argv[:]
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            root = _mk_project_with_clusters(Path(d), [
+                {"cluster_id": "cluster_001", "chapter_range": [1, 2]},
+            ])
+            sys.argv = ["judge_reports_archive.py", str(root), "--cluster", "001", "--dry-run"]
+            assert mod.main() == 0
+    finally:
+        sys.argv = old_argv

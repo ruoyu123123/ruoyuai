@@ -195,18 +195,18 @@ def apply_choice(project_root: Path, next_key: str, choice_path: Path) -> dict:
                        encoding="utf-8")
         tmp.replace(sj_path)
     _write_blueprint(project_root, brief, clusters)
-    # 🔴 2026-06-29 beat_map接通producer：据刚落库的 brief.scene_storyboard 确定性派生
-    # 起承转合 cluster_beats 回写 beat_map.json，让 plot_structure_scanner（CLUSTER_MODE）
-    # 读到真数据（此前 cluster_beats 零 producer=死码）。零创作判断·全 advisory·只为当前
-    # active cluster 派生（守 C03 fluid）·失败不阻断管线（性质同 git 快照·advisory 侧产物）。
-    try:
-        import beat_map_update
-        bm_res = beat_map_update.update(project_root, brief["cluster_id"])
-        if bm_res.get("beats"):
-            print(f"[cluster_choice_apply] beat_map.cluster_beats[{brief['cluster_id']}] "
-                  f"派生 {bm_res['beats']} beat（起承转合·advisory）", file=sys.stderr)
-    except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"[cluster_choice_apply][beat_map] 派生跳过（不阻断）: {e}\n")
+    # beat_map 是 cluster brief 的确定性派生产物。正式链路不能在这里静默丢掉结构
+    # producer；旧书无 storyboard 时由 beat_map_update 返回 skipped，导入/写盘异常则暴露。
+    import beat_map_update
+    bm_res = beat_map_update.update(project_root, brief["cluster_id"])
+    if bm_res.get("beats"):
+        print(f"[cluster_choice_apply] beat_map.cluster_beats[{brief['cluster_id']}] "
+              f"派生 {bm_res['beats']} beat（起承转合）", file=sys.stderr)
+    elif brief.get("scene_storyboard"):
+        raise RuntimeError(
+            f"beat_map 派生失败：{brief['cluster_id']} 有 scene_storyboard 但未产 beats "
+            f"({bm_res.get('skipped', 'unknown')})"
+        )
     return {"cluster_id": brief["cluster_id"], "replaced": replaced,
             "status": brief["status"]}
 

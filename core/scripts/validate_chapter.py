@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-validate_chapter.py — 章节硬性校验器
+validate_chapter.py — cluster 内物理章硬性校验器
 
 用法：
-  python validate_chapter.py <项目路径> <章节号>          # 人类可读报告
-  python validate_chapter.py <项目路径> <章节号> --json   # 结构化 JSON 报告
-  例: python validate_chapter.py "示例书名" 2
+  python validate_chapter.py <项目路径> --cluster <cluster_key> [--json]
 
 流程：
-  1. 定位章节 txt
-  2. 加载对应 manifest（必须已由 build_manifest.py 生成）
+  1. 根据 cluster key 反查物理章范围
+  2. 对 cluster 内每个物理章加载对应 manifest
   3. 机械扫描 7 类硬约束
-  4. 输出结构化错误（stdout）+ 非零退出码
+  4. 汇总输出结构化错误（stdout）+ 非零退出码
 
 设计原则：
   - 绝不依赖 LLM 判断
   - 错误信息必须指向具体段落/行号（子代理能直接 Edit）
   - 通过 = exit 0, 有错 = exit 1, 致命 = exit 2
+  - CLI 只暴露 cluster 入口；单章 validate() 仅供 audit_hub 的 cluster 流水线内部调用
 
 【v18 --json 输出契约】（audit_hub 等下游靠这个结构化读，不再正则解析人类可读报告）
   {
@@ -32,7 +31,7 @@ validate_chapter.py — 章节硬性校验器
   BANNED_WORD / FORESHADOWING_NOT_PAID / LOCKED_FACT_CONFLICT /
   FUTURE_KNOWLEDGE_LEAK / POV_HEAD_HOPPING / SECRET_NOT_REVEALED /
   CHARACTER_MISSING / FILE_NOT_FOUND / MANIFEST_MISSING / ...）——下游按 code
-  路由即可，无需正则。人类可读输出（不带 --json）零回退。
+  路由即可，无需正则。
 """
 from __future__ import annotations
 import json
@@ -165,7 +164,8 @@ def check_tier1_foreshadowing(body: str, changes: dict, manifest: dict,
         promise = fs_by_id[fid]
         if promise.get("tier") != 1:
             continue
-        if promise.get("resolved"):
+        # 2026-07-06 P1 三态生命周期：consumed=已回收跳过（open/suspended 均视为未回收）
+        if promise.get("status") == "consumed":
             continue
         # 出现在 CHANGES 中且对应 promise 描述的关键词在正文里出现 → 视为 payoff
         desc = promise.get("description", "")
@@ -542,7 +542,7 @@ def check_propagation_debt_generation(changes: dict, project_root: Path) -> list
                 "code": "PROPAGATION_DEBT_CREATED",
                 "severity": "info",
                 "msg": f"自动生成 {len(truly_new)} 条传播负债（去重后 / 共 {len(new_debts)} 条候选）",
-                "fix_hint": "在下次 save-state 深度维护时清偿，或运行 /reconcile",
+                "fix_hint": "回到当前 cluster 草稿层修复事实传播，再按 /cluster-write 与 /cluster-save-state 主链闭环",
             })
     return errs
 
@@ -900,46 +900,24 @@ def main():
     args = sys.argv[1:]
     want_json = "--json" in args
 
-    # 2026-05-29 流程贯通（断点 1）：--cluster <key> 整 cluster 视野校验入口
-    # 与原位置参章级入口（向后兼容）并存。
+    # CLI 只暴露 --cluster；单章 validate() 仅供 audit_hub cluster 流水线内部调用。
     cluster_key = None
     if "--cluster" in args:
         ci = args.index("--cluster")
         if ci + 1 < len(args):
             cluster_key = args[ci + 1]
-    if cluster_key:
-        project_root = Path(import_cluster_project_arg(args)).resolve()
-        result = validate_cluster(project_root, cluster_key)
-        if want_json:
-            # cluster 模式 chapter 字段用 -1 占位（聚合非单章）
-            print(format_json(result, -1))
-        else:
-            print(format_report(result))
-        if result.get("fatal_count", 0) > 0:
-            sys.exit(2)
-        if not result["passed"]:
-            sys.exit(1)
-        sys.exit(0)
-
-    positional = [a for a in args if not a.startswith("--")]
-    if len(positional) < 2:
-        print("用法: python validate_chapter.py <项目路径> <章节号> [--json]")
-        print("  或: python validate_chapter.py <项目路径> --cluster <cluster_key> [--json]")
+    if not cluster_key:
+        print("用法: python validate_chapter.py <项目路径> --cluster <cluster_key> [--json]")
+        print("错误: validate_chapter.py CLI 不再接受单章位置参；请走 cluster 质量链路。")
         sys.exit(2)
-    project_root = Path(positional[0]).resolve()
-    try:
-        chapter = int(positional[1])
-    except ValueError:
-        print(f"章节号必须是整数: {positional[1]}", file=sys.stderr)
-        sys.exit(2)
-    result = validate(project_root, chapter)
 
-    # --json：结构化输出（下游解析）；不带：人类可读报告（零回退）
+    project_root = Path(import_cluster_project_arg(args)).resolve()
+    result = validate_cluster(project_root, cluster_key)
     if want_json:
-        print(format_json(result, chapter))
+        # cluster 模式 chapter 字段用 -1 占位（聚合非单章）
+        print(format_json(result, -1))
     else:
         print(format_report(result))
-
     if result.get("fatal_count", 0) > 0:
         sys.exit(2)
     if not result["passed"]:
@@ -965,4 +943,10 @@ def import_cluster_project_arg(args: list[str]) -> str:
 
 
 if __name__ == "__main__":
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
     main()

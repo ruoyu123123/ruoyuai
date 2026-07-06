@@ -289,8 +289,7 @@ def cmd_verify(args):
                   f"{[f'{n}:{c}' for n, c in inert]}", file=sys.stderr)
             print("     涟漪规则空=引擎零触发 / 当前卷 ME 池空=大势无方向 / "
                   "cluster_001 storyboard 空=首块未详化", file=sys.stderr)
-            print("     修复: 让 outline 真正填充载荷内容（非仅建空骨架）·或轻量模式旁路 "
-                  ".subsystems_bypass.json", file=sys.stderr)
+            print("     修复: 让 outline 真正填充载荷内容（非仅建空骨架）", file=sys.stderr)
         else:
             print("  ✅ --content: 所有载荷文件非空（机器可点火）")
     # 🔴 2026-06-27 C17: --shallow-drift 高级 21(此处 16)子系统浅漂移哨兵（advisory·永不 exit 非0·永不写文件）

@@ -1,4 +1,4 @@
-"""judge_reports_archive.py — JudgeReport 归档脚本（v19.2 新增）
+"""judge_reports_archive.py — JudgeReport 归档脚本（cluster-only public CLI）
 
 从多个来源汇集 judge 信号，组装成统一 JudgeReport schema 存盘：
 1. `_数据库/.audit/ch_{ch:03d}_audit.json`     ← validator + 4 scanner 程序化分数
@@ -16,9 +16,8 @@
 用法：python judge_reports_archive.py <项目路径> --cluster <key> [--dry-run]
 退出码：0 成功 / 1 部分缺失 / 2 致命
 
-2026-05-29 cluster 化：v26 chapter mode 已废，plan 只用 `--cluster`（cluster-save-state
-.plan.json:105）。原 `if args.chapter is None` 的 chapter-mode 向后兼容分支无任何调用方
-（grep 确认），已删。位置参 chapter 仍保留供 ad-hoc 单章调试（走 _archive_one_chapter）。
+2026-07-05 链路收敛：公开 CLI 只允许 `--cluster`，禁止位置参单章归档。
+`_archive_one_chapter` 仅供 cluster 展开和单元测试内部复用，不作为创作入口。
 """
 
 from __future__ import annotations
@@ -265,9 +264,9 @@ def _resolve_chapter_range(project_root: Path, cluster_key: str) -> list[int]:
 def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool, cluster_id: str | None = None) -> dict:
     """对单章跑归档。返回 {ch, written, judges, grade, score, waivers}.
 
-    2026-05-29 cluster 化：传入 cluster_id（cluster 模式）时，额外把本章
-    judge_score/waivers 通过 cluster_summary_store.patch_chapter 写进
-    chapters[ch]（v2 cluster 账本契约）。chapter 模式不传 → 行为不变。
+    公开 CLI 不支持单章入口；本函数只供 cluster 展开和测试复用。传入 cluster_id
+    时，额外把本章 judge_score/waivers 通过 cluster_summary_store.patch_chapter
+    写进 chapters[ch]（v2 cluster 账本契约）。
     """
     db = project_root / "_数据库"
 
@@ -353,11 +352,10 @@ def _archive_one_chapter(project_root: Path, ch: int, dry_run: bool, cluster_id:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="judge_reports_archive · v26 双模式 (chapter or cluster)")
+    ap = argparse.ArgumentParser(description="judge_reports_archive · cluster-only public CLI")
     ap.add_argument("project")
-    # v26: chapter 改 optional · 加 --cluster 互斥模式
-    ap.add_argument("chapter", type=int, nargs="?", default=None,
-                    help="单章号 (chapter mode) · 与 --cluster 互斥")
+    # 保留隐藏位置参只用于给旧调用返回清晰错误；不再作为公开入口执行。
+    ap.add_argument("_deprecated_chapter", nargs="?", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--cluster", type=str, default=None,
                     help="cluster key (e.g. '001' 或 'cluster_001') · 自动展开本 cluster 全部章节归档")
     ap.add_argument("--dry-run", action="store_true")
@@ -365,49 +363,39 @@ def main():
 
     project_root = Path(args.project)
 
-    # v26: cluster mode 优先
-    if args.cluster:
-        chapters = _resolve_chapter_range(project_root, args.cluster)
-        if not chapters:
-            print(f"[FATAL] cluster {args.cluster} 未在 事件簇.json 找到 chapter_range", file=sys.stderr)
-            return 2
-        cluster_id = "cluster_" + args.cluster.replace("cluster_", "")
-        print(f"[judge_reports_archive · cluster mode] {cluster_id} 展开 {len(chapters)} 章: {chapters}")
-        # 2026-05-29 cluster 化：逐章归档 + 把 judge 信号聚合写进 cluster 账本
-        results = [_archive_one_chapter(project_root, ch, args.dry_run, cluster_id=cluster_id) for ch in chapters]
-
-        # 算 cluster 级综合 judge_grade（各章 grade 众数/中位）→ upsert_cluster 写顶层
-        chapter_grades = [r.get("grade") for r in results if r.get("grade")]
-        cluster_grade = _aggregate_cluster_grade(chapter_grades)
-        if not args.dry_run and _css is not None and cluster_grade is not None:
-            try:
-                _css.upsert_cluster(project_root, cluster_id, {"judge_grade": cluster_grade})
-                print(f"[OK] cluster 账本 {cluster_id}.judge_grade = {cluster_grade}"
-                      f"（来自 {len(chapter_grades)} 章 grades: {chapter_grades}）")
-            except Exception as e:  # pragma: no cover - 防御性
-                print(f"[WARN] cluster 账本 judge_grade 写入失败（跳过不崩）: {e}")
-        elif cluster_grade is None:
-            print(f"[WARN] cluster {cluster_id} 无有效 judge grade（各章 judge 信号缺失），跳过 judge_grade 写入")
-
-        print(f"\n[OK] cluster {args.cluster} judge_reports 归档完成 {len(chapters)} 章")
-        return 0
-
-    if args.chapter is None:
-        print("[FATAL] 必须指定 --cluster <key>（cluster 主路径）或位置参 <章节号>（ad-hoc 单章调试）")
+    if args._deprecated_chapter is not None:
+        print("[FATAL] 位置参单章归档已废弃；必须指定 --cluster <key> 走 cluster-save-state 主链路", file=sys.stderr)
         return 2
 
-    # 2026-05-29 cluster 化：原 chapter-mode 向后兼容大分支（重复 _archive_one_chapter 逻辑）
-    # 无任何调用方（plan/命令只用 --cluster），已删。位置参单章调试改走唯一的
-    # _archive_one_chapter（不传 cluster_id → 不写 cluster 账本，行为等价旧逻辑）。
-    r = _archive_one_chapter(project_root, args.chapter, args.dry_run, cluster_id=None)
-    if r.get("judges"):
-        return 0
-    print("[WARN] 0 个 judge 信号，章节可能未完成 save-state 前 8 步")
-    return 1
+    if not args.cluster:
+        print("[FATAL] 必须指定 --cluster <key> 走 cluster-save-state 主链路", file=sys.stderr)
+        return 2
+
+    chapters = _resolve_chapter_range(project_root, args.cluster)
+    if not chapters:
+        print(f"[FATAL] cluster {args.cluster} 未在 事件簇.json 找到 chapter_range", file=sys.stderr)
+        return 2
+    cluster_id = "cluster_" + args.cluster.replace("cluster_", "")
+    print(f"[judge_reports_archive · cluster mode] {cluster_id} 展开 {len(chapters)} 章: {chapters}")
+    results = [_archive_one_chapter(project_root, ch, args.dry_run, cluster_id=cluster_id) for ch in chapters]
+
+    # 算 cluster 级综合 judge_grade（各章 grade 众数/中位）→ upsert_cluster 写顶层
+    chapter_grades = [r.get("grade") for r in results if r.get("grade")]
+    cluster_grade = _aggregate_cluster_grade(chapter_grades)
+    if not args.dry_run and _css is not None and cluster_grade is not None:
+        try:
+            _css.upsert_cluster(project_root, cluster_id, {"judge_grade": cluster_grade})
+            print(f"[OK] cluster 账本 {cluster_id}.judge_grade = {cluster_grade}"
+                  f"（来自 {len(chapter_grades)} 章 grades: {chapter_grades}）")
+        except Exception as e:  # pragma: no cover - 防御性
+            print(f"[WARN] cluster 账本 judge_grade 写入失败（跳过不崩）: {e}")
+    elif cluster_grade is None:
+        print(f"[WARN] cluster {cluster_id} 无有效 judge grade（各章 judge 信号缺失），跳过 judge_grade 写入")
+
+    print(f"\n[OK] cluster {args.cluster} judge_reports 归档完成 {len(chapters)} 章")
+    return 0
 
 
 if __name__ == "__main__":
-    # 2026-05-29 cluster 化：cluster mode 分支用 return <code> 返回退出码（FATAL=2），
-    # 但原 __main__ 未 sys.exit 传播 → cluster 失败仍 exit 0。这里把 main() 返回码透传。
-    # chapter mode 分支内部已自行 sys.exit，返回 None → exit 0，行为不变。
+    # 公开 CLI 的所有失败码由 main() 返回，__main__ 负责透传给 shell。
     sys.exit(main())

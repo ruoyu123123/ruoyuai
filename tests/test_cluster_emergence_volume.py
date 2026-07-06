@@ -5,7 +5,7 @@
   2. me_to_cluster_brief —— 卷末 finale ME → brief 标 is_volume_finale + scope_summary
      追加卷末转折指令 + 透传 volume/stakes_delta（build_manifest 据此给 writer 注入）。
   3. emerge_next_cluster 硬过滤 —— 核心任务(本卷)未解前只在【当前卷】内涌现小走向，
-     绝不跳到下一卷/新副本；本卷只剩 volume_finale → 置 volume_transition_advisory（advisory·不硬切）。
+     绝不跳到下一卷/新副本；本卷只剩 volume_finale → 置 volume_transition_hint（提示·不硬切）。
 
 北极星边界：仍是顾问——advisory 是建议非硬锁，无 volume 标记的旧项目 ME 不参与过滤（向后兼容）。
 """
@@ -105,12 +105,12 @@ def test_emerge_filters_to_current_volume():
         assert parent_mes  # 至少一个候选
         assert "ME-V2-01" not in parent_mes        # 🔴 卷 2 被硬过滤
         assert parent_mes <= {"ME-V1-01", "ME-V1-02"}
-        # 本卷还有非 finale（ME-V1-01）→ 不该提前置换卷 advisory
-        assert em["volume_transition_advisory"] is None
+        # 本卷还有非 finale（ME-V1-01）→ 不该提前置换卷 hint
+        assert em["volume_transition_hint"] is None
 
 
-def test_emerge_sets_transition_advisory_when_only_finale_left():
-    """V1 非 finale 全完成、只剩 volume_finale → 置换卷 advisory + 仍不跳卷 2。"""
+def test_emerge_sets_transition_hint_when_only_finale_left():
+    """V1 非 finale 全完成、只剩 volume_finale → 置换卷 hint + 仍不跳卷 2。"""
     with tempfile.TemporaryDirectory() as d:
         # ME-V1-01 已被某 cluster 完成
         clusters = [{"cluster_id": "cluster_001", "status": "done", "ME_to_advance": ["ME-V1-01"]}]
@@ -119,8 +119,8 @@ def test_emerge_sets_transition_advisory_when_only_finale_left():
         assert r["ok"] is True
         em = _read_emergence(r)
         assert em["current_volume"] == 1
-        assert em["volume_transition_advisory"] is not None
-        assert "阶段触发点" in em["volume_transition_advisory"]
+        assert em["volume_transition_hint"] is not None
+        assert "阶段触发点" in em["volume_transition_hint"]
         parent_mes = {c["parent_me"] for c in em["candidates"]}
         assert parent_mes == {"ME-V1-02"}          # 只剩本卷 finale
         assert "ME-V2-01" not in parent_mes         # 仍不硬切到卷 2
@@ -138,6 +138,6 @@ def test_emerge_legacy_no_volume_marker_not_filtered():
         assert r["ok"] is True
         em = _read_emergence(r)
         assert em["current_volume"] is None
-        assert em["volume_transition_advisory"] is None
+        assert em["volume_transition_hint"] is None
         parent_mes = {c["parent_me"] for c in em["candidates"]}
         assert parent_mes <= {"ME_001", "ME_002"}   # 两个旧 ME 都可候选

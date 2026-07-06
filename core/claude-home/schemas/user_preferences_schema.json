@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ruoyuai.user_preferences.v21",
   "title": "用户偏好.json schema（v21 完整版）",
-  "description": "v21 扩展 — 把所有『系统之前擅自决定』的字段交给用户决定。开新书时 /wizard 命令一次性问完，写入此文件。",
+  "description": "用户偏好契约。当前创作链路固定为 cluster-first：/write -> /outline -> /cluster-write -> /cluster-save-state -> 走向卡 -> /export；本 schema 只保留用户偏好，章节只由 splitter 在输出层生成。",
   "type": "object",
   "properties": {
     "_meta": {
@@ -23,29 +23,8 @@
     },
     "project_basics": {
       "type": "object",
-      "description": "Phase 1: 项目基础（之前系统擅自决定）。2026-05-29 cluster 化：章数死锁字段全部解锁为 v27 fluid（章数由 ME 触发节奏 + 涟漪选择 + writer 自由发挥 + splitter 按字数切自然涌现）。",
+      "description": "项目基础。规划层只记录系统运行档；叙事长度由 ME 触发节奏、用户涟漪选择、writer 自由发挥和 splitter 输出层自然形成。",
       "properties": {
-        "total_chapters": {
-          "type": "integer",
-          "minimum": 5,
-          "maximum": 5000,
-          "deprecated": true,
-          "description": "DEPRECATED（2026-05-29 v27 fluid）：禁止预设总章数。章数由 cluster + 涟漪 + splitter 字数切自然涌现，不再死锁。保留为 optional 仅兼容旧项目读取。"
-        },
-        "target_words_per_chapter": {
-          "type": "integer",
-          "minimum": 1000,
-          "maximum": 15000,
-          "default": 3000,
-          "deprecated": true,
-          "description": "DEPRECATED（2026-05-29 v27 fluid）：writer freestyle 不暴露目标字数，splitter 按 3000-4500 CJK 硬范围切。保留为 optional 仅兼容旧项目读取。"
-        },
-        "dcas_dual_chapter_mode": {
-          "type": "boolean",
-          "default": true,
-          "deprecated": true,
-          "description": "DEPRECATED（2026-05-29 v27 fluid · chapter mode 已废）：DCAS 双章合一是 chapter mode 概念，cluster mode 下无意义。保留仅兼容旧项目。"
-        },
         "writer_mode": {
           "type": "string",
           "enum": [
@@ -53,44 +32,14 @@
             "轻量模式"
           ],
           "default": "完整模式",
-          "description": "系统运行档（完整/轻量），与 v27 writer freestyle 模式不是同一字段 —— v27 freestyle/locked 写在 workflow_preferences[key=writer_mode]，见 $defs.workflow_preference_entry。"
-        },
-        "volume_count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 30,
-          "default": 10,
-          "deprecated": true,
-          "description": "DEPRECATED（2026-05-29 v27 fluid）：禁止死锁卷数/章数。改用 workflow_preferences[key=cluster_count_per_volume]（每卷 cluster 数，outline step 1.7 AskUser）。保留仅兼容旧项目。"
-        },
-        "volume_distribution": {
-          "type": "string",
-          "enum": [
-            "均分",
-            "前重后轻",
-            "前轻后重",
-            "金字塔",
-            "自定义"
-          ],
-          "default": "均分",
-          "deprecated": true,
-          "description": "DEPRECATED（2026-05-29 v27 fluid）：章数浮动后按卷分配章数无意义。保留仅兼容旧项目。"
-        },
-        "volume_custom_ratios": {
-          "type": "array",
-          "items": {
-            "type": "number",
-            "minimum": 0.01,
-            "maximum": 1.0
-          },
-          "deprecated": true,
-          "description": "DEPRECATED（2026-05-29 v27 fluid · 随 volume_distribution 废弃）：如选自定义，给每卷比例数组（总和=1.0）。"
+          "description": "系统运行档（完整/轻量），与正文 writer 模式不是同一字段。正文 writer 固定 freestyle，见 workflow_preferences[key=writer_mode]。"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "workflow_preferences": {
       "type": "array",
-      "description": "2026-05-29 cluster 化新增：扁平 key/value 偏好条目数组（outline step 1.7 等写入）。承载 v27 fluid 字段 cluster_count_per_volume / writer_mode(freestyle) / rhythm_profile，取代 project_basics 已废弃的章数死锁字段。",
+      "description": "扁平 key/value 偏好条目数组。承载 cluster_density_profile / writer_mode(freestyle) / rhythm_profile，不承载章节或卷内配额。",
       "items": {
         "$ref": "#/$defs/workflow_preference_entry"
       }
@@ -109,23 +58,23 @@
           "default": "cassandra",
           "description": "cassandra=标准升压（传统长篇）/ phoebe=长间歇爽文 / randy=随机展开（脑洞）"
         },
-        "expected_setback_per_n_ch": {
+        "setback_interval_clusters": {
           "type": "integer",
           "minimum": 2,
           "maximum": 15,
           "default": 4,
-          "description": "主角每 N 章吃一次大亏。爽文=8-12 / 标准=4-6 / 黑深残=2-3"
+          "description": "主角受挫间隔，以 cluster 节奏估计。爽文=8-12 / 标准=4-6 / 黑深残=2-3"
         },
         "happy_vs_dark_ratio": {
           "type": "number",
           "minimum": 0.0,
           "maximum": 1.0,
           "default": 0.6,
-          "description": "win 章节占比目标（0.8=爽文 / 0.5=平衡 / 0.3=悲剧）"
+          "description": "win 场景/事件占比目标（0.8=爽文 / 0.5=平衡 / 0.3=悲剧）"
         },
         "hub_rhythm_targets": {
           "type": "object",
-          "description": "Hub 章节角色分布",
+          "description": "Hub 节奏角色分布",
           "properties": {
             "depart": {
               "type": "number",
@@ -149,24 +98,22 @@
     },
     "narrative_structure": {
       "type": "object",
-      "description": "v20 涌现叙事 + v21 R2 IF/PbtA 借鉴的结构选择",
+      "description": "叙事结构偏好。当前唯一 outline 模式是 cluster-first。",
       "properties": {
         "outline_mode": {
           "type": "string",
           "enum": [
-            "strict",
-            "fluid",
-            "hybrid"
+            "cluster-first"
           ],
-          "default": "fluid",
-          "description": "strict=逐章死定（短篇）/ fluid=大势池涌现（长篇网文）/ hybrid=卷一 strict 其余 fluid"
+          "default": "cluster-first",
+          "description": "唯一大纲模式：卷级阶段 + ME/cluster 池 + 只详化当前 active cluster。禁止 strict/hybrid 逐章分支。"
         },
         "major_events_count": {
           "type": "integer",
           "minimum": 5,
           "maximum": 50,
           "default": 13,
-          "description": "大势卡 major_events 数量（500 章建议 13-20）"
+          "description": "大势卡 major_events 数量（长篇建议 13-20）"
         },
         "use_position_effect_judgment": {
           "type": "boolean",
@@ -237,22 +184,22 @@
       "type": "object",
       "description": "Phase 3: 走向卡 / 全自动模式",
       "properties": {
-        "use_fate_cards": {
-          "type": "boolean",
-          "default": true,
-          "description": "每章末是否生成走向卡让用户选"
-        },
-        "fate_cards_count": {
-          "type": "integer",
-          "minimum": 2,
-          "maximum": 4,
-          "default": 3,
-          "description": "每次生成几张（默认 A/B/C 三张）"
-        },
         "fully_auto": {
           "type": "boolean",
           "default": false,
           "description": "全自动模式：跳过走向卡 + 系统按 narrator 推荐自动选"
+        },
+        "use_direction_cards": {
+          "type": "boolean",
+          "default": true,
+          "description": "每个 cluster 完成后是否生成/展示走向卡让用户选择下一 cluster brief"
+        },
+        "direction_cards_count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4,
+          "default": 3,
+          "description": "每次生成几张 cluster 走向候选 brief（默认 3 张）"
         }
       }
     },
@@ -279,15 +226,15 @@
         "judge_consensus_frequency": {
           "type": "string",
           "enum": [
-            "每章",
-            "关键章",
-            "每 5 章",
-            "每 10 章",
+            "每簇",
+            "关键簇",
+            "每 5 簇",
+            "每 10 簇",
             "关闭"
           ],
-          "default": "每 10 章"
+          "default": "每 10 簇"
         },
-        "cross_chapter_scan_intensity": {
+        "cross_cluster_scan_intensity": {
           "type": "string",
           "enum": [
             "full_18",
@@ -296,7 +243,7 @@
             "off"
           ],
           "default": "full_18",
-          "description": "跨章 scanner 跑多少。短篇可减"
+          "description": "跨 cluster scanner 跑多少。短篇可减"
         }
       }
     },
@@ -375,13 +322,8 @@
     },
     "ecas_config": {
       "type": "object",
-      "description": "v23 ECAS 配置 (Event Cluster Auto Split)",
+      "description": "Event Cluster Auto Split 配置。当前链路固定启用 cluster-first，不提供关闭开关或旁路开关。",
       "properties": {
-        "ecas_enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "true=用 ECAS 事件簇生成 / false=fallback 到 v22 DCAS 双章"
-        },
         "cluster_word_range": {
           "type": "object",
           "properties": {
@@ -429,17 +371,16 @@
         "max_checkpoint_failures": {
           "type": "integer",
           "default": 3,
-          "description": "累计失败 N 次后 fallback Opus + Extended Thinking 重写整簇"
+          "description": "累计失败 N 次后升级为 Opus + Extended Thinking 重写整簇"
         },
         "cluster_stop_frequency": {
           "type": "string",
           "enum": [
-            "per_cluster",
-            "per_chapter",
-            "critical_only"
+            "after_each_cluster",
+            "after_turning_point"
           ],
-          "default": "per_cluster",
-          "description": "走向卡停顿粒度: 每事件簇 / 每章 / 关键章只"
+          "default": "after_each_cluster",
+          "description": "走向卡停顿粒度：每事件簇 / 重大转折后。禁止 cluster 内按章节停顿。"
         },
         "sub_summary_enabled": {
           "type": "boolean",
@@ -451,7 +392,8 @@
           "default": true,
           "description": "true=StoryBox 自适应 (model 自决字数) / false=按 cluster_word_range fixed"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "narrative_style": {
       "type": "object",
@@ -500,7 +442,7 @@
   "$defs": {
     "workflow_preference_entry": {
       "type": "object",
-      "description": "2026-05-29 cluster 化新增：workflow_preferences[] 的单条目（key/value 偏好）。outline step 1.7 写入 v27 fluid 字段。",
+      "description": "workflow_preferences[] 的单条目（key/value 偏好）。outline 写入 cluster-first 链路所需的 cluster_density_profile / writer_mode / rhythm_profile。",
       "required": [
         "key",
         "value"
@@ -508,7 +450,12 @@
       "properties": {
         "key": {
           "type": "string",
-          "description": "偏好键。v27 fluid 已知键：cluster_count_per_volume / writer_mode / rhythm_profile。"
+          "enum": [
+            "cluster_density_profile",
+            "writer_mode",
+            "rhythm_profile"
+          ],
+          "description": "偏好键。当前已知键：cluster_density_profile / writer_mode / rhythm_profile。"
         },
         "value": {
           "description": "偏好值（类型随 key 而定，见下方说明）。"
@@ -522,34 +469,28 @@
           "description": "true=用户明确决定 / false=系统默认"
         }
       },
+      "additionalProperties": false,
       "allOf": [
         {
           "if": {
             "properties": {
               "key": {
-                "const": "cluster_count_per_volume"
+                "const": "cluster_density_profile"
               }
             }
           },
           "then": {
             "properties": {
               "value": {
-                "description": "v27 fluid：每卷 cluster 数（= ME 大势事件数）。可为整数（全卷统一），或 object 映射 卷号→cluster 数（如 {\"V1\": 5, \"V2\": 4}）。outline step 1.7 AskUser 得到。",
-                "anyOf": [
-                  {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 50
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 50
-                    }
-                  }
-                ]
+                "type": "string",
+                "enum": [
+                  "稀疏",
+                  "标准",
+                  "密集",
+                  "混合"
+                ],
+                "default": "标准",
+                "description": "cluster 触发密度偏好，只影响 ME/cluster 池的节奏倾向，不分配章节或卷内配额。"
               }
             }
           }
@@ -567,11 +508,10 @@
               "value": {
                 "type": "string",
                 "enum": [
-                  "freestyle",
-                  "locked"
+                  "freestyle"
                 ],
                 "default": "freestyle",
-                "description": "v27 writer 写作模式（与 project_basics.writer_mode 完整/轻量 档不同）。freestyle=不暴露目标章数+字数·writer 自由发挥·splitter 按字数切（v27 默认推荐）；locked=按预定章数+字数硬约束（v26 兼容旧）。"
+                "description": "正文 writer 固定 freestyle：不暴露目标章节或目标字数，writer 按 cluster brief 自由发挥，splitter 事后输出章节文件。"
               }
             }
           }
@@ -595,7 +535,7 @@
                   "混合"
                 ],
                 "default": "标准",
-                "description": "v27 节奏档软提示：splitter 按字数切时微调每章区间（紧凑 3000-4000 / 标准 3000-4500 / 厚重 3500-5000 / 混合 卷内混用）。不死锁章数。"
+                "description": "v27 节奏档软提示：splitter 输出层按字数微调章节文件长度（紧凑 3000-4000 / 标准 3000-4500 / 厚重 3500-5000 / 混合）。不参与规划层锁定。"
               }
             }
           }

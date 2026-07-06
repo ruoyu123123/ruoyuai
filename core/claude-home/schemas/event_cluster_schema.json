@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Event Cluster Schema (ECAS v23)",
-  "description": "事件簇 (Event Cluster) — ECAS v23 生成单位。1 簇 = 1 个 ME 大势事件 = 8000-16000 字 = N 章 (2-5)。借鉴 StoryWriter (arxiv 2506.16445) + StoryBox (arxiv 2510.11618)。",
+  "description": "事件簇 (Event Cluster) — ECAS v23 生成单位。1 簇 = 1 个 ME 大势事件，规划层只表达 cluster 与 scene，章节只由 splitter 在输出层生成。",
   "type": "object",
   "required": [
     "schema_version",
@@ -31,7 +31,6 @@
           "mid_checkpoints",
           "research_ref"
         ],
-        "_v27_required_change": "v27: expected_word_range 从 required 移除（freestyle 模式下 writer 不用字数硬约束）· schema 验证向后兼容旧 brief",
         "properties": {
           "cluster_id": {
             "type": "string",
@@ -61,47 +60,17 @@
           },
           "_writer_mode": {
             "type": "string",
-            "enum": ["freestyle", "locked"],
-            "default": "freestyle",
-            "description": "v27: writer 写作模式。freestyle（默认）= writer 不知章数/字数 · splitter 按字数切；locked（v26 兼容）= writer 按 expected_word_range + chapter_range 硬约束写"
-          },
-          "expected_word_range": {
-            "type": "object",
-            "_v27_status": "optional · advisory hint only · freestyle 模式下不注入 writer prompt",
-            "required": [
-              "unit",
-              "max",
-              "min"
+            "enum": [
+              "freestyle"
             ],
-            "properties": {
-              "min": {
-                "type": "integer",
-                "minimum": 4000,
-                "maximum": 20000
-              },
-              "max": {
-                "type": "integer",
-                "minimum": 4000,
-                "maximum": 20000
-              },
-              "unit": {
-                "type": "string",
-                "enum": [
-                  "CJK_chars",
-                  "chars_no_whitespace",
-                  "total_chars"
-                ],
-                "default": "CJK_chars",
-                "description": "v23.2: 字数单位 - writer/researcher/outline-planner 必须一致 CJK_chars 防三义并存"
-              }
-            },
-            "description": "writer 自适应字数窗。常见 [9000, 11000] 中事件 / [13000, 16000] 关键事件 / [4500, 5500] 短事件"
+            "default": "freestyle",
+            "description": "writer 写作模式。当前创作链路固定使用 freestyle：writer 不接收章节或字数规划，splitter 在输出层切分。"
           },
           "scenes_estimated": {
             "type": "integer",
             "minimum": 2,
             "maximum": 8,
-            "description": "预估场景数（splitter 切章数参考: chapters ≈ scenes/1.5）"
+            "description": "预估场景数（规划层只使用 scene 粒度）"
           },
           "anchor_props": {
             "type": "array",
@@ -204,22 +173,25 @@
             },
             "description": "本簇覆盖的 hub (HUB_001/002/003)"
           },
-          "estimated_chapters": {
-            "type": "integer",
-            "minimum": 2,
-            "maximum": 12,
-            "_v27_status": "deprecated · outline 阶段不生成 · splitter 切完后自动回填实际章数",
-            "description": "[v27 deprecated · outline 不写] splitter 预计切几章 (chapters_target = round(words / 3500))"
-          },
-          "chapter_range": {
+          "output_segments": {
             "type": "array",
             "items": {
-              "type": "integer"
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
             },
-            "minItems": 2,
-            "maxItems": 2,
-            "_v27_status": "v27: outline 阶段禁止写 · 由 splitter 切完后自动填",
-            "description": "splitter 切完后填充 [start_ch, end_ch]（v27: outline 不允许写）"
+            "_v27_status": "v27: outline 阶段禁止写 · 由 splitter 输出层写回",
+            "description": "splitter 输出层生成的章节文件记录；规划层不写章节区间或章节数量。"
           },
           "status": {
             "enum": [
@@ -237,7 +209,7 @@
               "未涌现",
               "已完成"
             ],
-            "_v2_status_note": "2026-05-29 复审修复（M16/SC-6）：实际 事件簇.json 同时存在中文（进行中/已规划/未涌现/已完成）与英文（done/in_progress/pending）状态词。enum 扩为全集（中英文并存），消费侧用 SC-6 状态词表归一：已完成|done|进行中且有 chapter_range 视为「已落账 cluster」。",
+            "_v2_status_note": "2026-05-29 复审修复（M16/SC-6）：实际 事件簇.json 同时存在中文（进行中/已规划/未涌现/已完成）与英文（done/in_progress/pending）状态词。enum 扩为全集（中英文并存），消费侧用 SC-6 状态词表归一。",
             "description": "当前阶段（中英文状态词全集 · 见 _v2_status_note）"
           },
           "narrative_mode": {
@@ -261,23 +233,68 @@
           },
           "scene_storyboard": {
             "type": "array",
-            "_v_r20bb_note": "R20 W9 Batch-BB · P2 (2026-06-21): 三件 storyboard 扩展（gap_designer / scene_sequel / value_polarity）字段全 optional · 向后兼容旧 brief · 真校验由对应 probe 模块（scene_gap_probe / sequel_drought_advisory / value_polarity_probe）shadow 验证 · 绝不 hard_gate。",
+            "_v_r20bb_note": "R20 W9 Batch-BB · P2 (2026-06-21): 三件 storyboard 扩展（gap_designer / scene_sequel / value_polarity）字段全 optional · 真校验由对应 probe 模块（scene_gap_probe / sequel_drought_advisory / value_polarity_probe）shadow 验证 · 绝不 hard_gate。",
             "items": {
               "type": "object",
               "properties": {
-                "scene_index": {"type": "integer", "minimum": 0},
-                "scene_id": {"type": "string"},
-                "summary": {"type": "string"},
+                "scene_index": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "scene_id": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string",
+                  "_doc": "2026-07-05 prose_scene_cards optional title: 场景短标题，用于 build_manifest._collect_prose_scene_cards 生成小说场景执行卡；不影响旧 storyboard。"
+                },
+                "scene_title": {
+                  "type": "string",
+                  "_doc": "2026-07-05 prose_scene_cards optional title alias: 与 title 等价，用于不同 outline 产物统一到小说场景执行卡。"
+                },
+                "dramatic_question": {
+                  "type": "string",
+                  "_doc": "2026-07-05 prose_scene_cards optional: 本场读者追问/戏剧问题；缺省时 build_manifest 可由 scene_goal + conflict 推导。"
+                },
+                "sensory_anchors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "_doc": "2026-07-05 prose_scene_cards optional: 本场 1-4 个感官落点，供 writer 把场景写成可感知 prose；advisory，非 hard gate。"
+                },
+                "sensory_anchor": {
+                  "type": "string",
+                  "_doc": "2026-07-05 prose_scene_cards optional single anchor: sensory_anchors 的单值便捷写法。"
+                },
                 "scene_goal": {
                   "type": "string",
-                  "_doc": "🔴 2026-06-29 scene_goal动机(心理 P0·Stanislavski scene-objective·逐场景动机·补 arc-want 到 scene 的桥): 本场 POV 角色动作化临场目标(『此刻我想要什么』·动作化·如『让老周松口交出名单』『不被发现地溜出去』) · outline-planner 每 scene 产 · build_manifest._collect_scene_causal_skeleton 透传 writer(治场景漂移·每场有目标驱动·目标受阻即冲突) · 与 Swain scene_type/disaster/dilemma 正交并存(Swain 主体已由事件 P0 建·本字段不重复) · 全 optional 向后兼容(旧 scene 无则下游不约束)"
+                  "_doc": "🔴 2026-06-29 scene_goal动机(心理 P0·Stanislavski scene-objective·逐场景动机·补 arc-want 到 scene 的桥): 本场 POV 角色动作化临场目标(『此刻我想要什么』·动作化·如『让老周松口交出名单』『不被发现地溜出去』) · outline-planner 每 scene 产 · build_manifest._collect_scene_causal_skeleton 透传 writer(治场景漂移·每场有目标驱动·目标受阻即冲突) · 与 Swain scene_type/disaster/dilemma 正交并存(Swain 主体已由事件 P0 建·本字段不重复) · 全 optional，缺省时不生成该场景动机卡"
                 },
-                "characters": {"type": "array", "items": {"type": "string"}},
-                "location": {"type": "string"},
+                "characters": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "location": {
+                  "type": "string"
+                },
                 "paragraph_function": {
                   "type": "string",
-                  "enum": ["scene_setting", "action", "dialogue", "reflection", "transition",
-                           "exposition", "summary", "flashback"],
+                  "enum": [
+                    "scene_setting",
+                    "action",
+                    "dialogue",
+                    "reflection",
+                    "transition",
+                    "exposition",
+                    "summary",
+                    "flashback"
+                  ],
                   "_doc": "R20 STRONG (NKW Q3-Q4 id 19): 每 beat 的功能 tag · stable_identity / dynamic_state 时态分离辅助标记"
                 },
                 "expectation": {
@@ -292,12 +309,22 @@
                 },
                 "gap_type": {
                   "type": "string",
-                  "enum": ["reversal", "escalation", "revelation", "deflection", "ironic", "no_gap"],
+                  "enum": [
+                    "reversal",
+                    "escalation",
+                    "revelation",
+                    "deflection",
+                    "ironic",
+                    "no_gap"
+                  ],
                   "_doc": "R20 P2 (McKee GAP id 6): expectation 与 actual_outcome 的差类型 · av_judge scene_gap_probe 验证"
                 },
                 "unit_type": {
                   "type": "string",
-                  "enum": ["scene", "sequel"],
+                  "enum": [
+                    "scene",
+                    "sequel"
+                  ],
                   "_doc": "R20 P2 (Swain Scene/Sequel id 7): scene 单元(目标→冲突→灾难) 或 sequel 单元(反应→困境→决定)"
                 },
                 "sequel_goal": {
@@ -318,18 +345,32 @@
                 },
                 "start_polarity": {
                   "type": "string",
-                  "enum": ["strongly_positive", "positive", "neutral", "negative", "strongly_negative"],
+                  "enum": [
+                    "strongly_positive",
+                    "positive",
+                    "neutral",
+                    "negative",
+                    "strongly_negative"
+                  ],
                   "_doc": "R20 P2: 场景起始极性 5 档"
                 },
                 "end_polarity": {
                   "type": "string",
-                  "enum": ["strongly_positive", "positive", "neutral", "negative", "strongly_negative"],
+                  "enum": [
+                    "strongly_positive",
+                    "positive",
+                    "neutral",
+                    "negative",
+                    "strongly_negative"
+                  ],
                   "_doc": "R20 P2: 场景结束极性 5 档 · 强制 start ≠ end (no_turn 例外 by_design)"
                 },
                 "participants": {
                   "type": "array",
-                  "items": {"type": "string"},
-                  "_doc": "🔴 2026-06-29 角色信息差(per-character belief): 本场在场角色 char_id · witness 检测命门(信念只沿在场传播·SymbolicToM arXiv:2306.00924) · 下游 character_belief_ledger witness 回写 + build_manifest per-scene 信念投射据此判定『谁 witness 到本场 reveal 的 fact』 · 默认安全:缺则 fallback 全员视角不漏报(向后兼容) · 通常 = characters(出场角色)"
+                  "items": {
+                    "type": "string"
+                  },
+                  "_doc": "🔴 2026-06-29 角色信息差(per-character belief): 本场在场角色 char_id · witness 检测命门(信念只沿在场传播·SymbolicToM arXiv:2306.00924) · 下游 character_belief_ledger witness 回写 + build_manifest per-scene 信念投射据此判定『谁 witness 到本场 reveal 的 fact』 · 通常 = characters(出场角色)"
                 },
                 "focal_character": {
                   "type": "string",
@@ -337,18 +378,33 @@
                 },
                 "focalization_mode": {
                   "type": "string",
-                  "enum": ["zero", "internal", "external"],
+                  "enum": [
+                    "zero",
+                    "internal",
+                    "external"
+                  ],
                   "_doc": "🔴 2026-06-29 角色信息差: Genette 聚焦 · zero=全知 / internal=限知某角色内心 / external=只外部观察"
                 },
                 "knowledge_gap_mode": {
-                  "type": ["string", "null"],
-                  "enum": ["mystery", "suspense", "dramatic_irony", null],
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "mystery",
+                    "suspense",
+                    "dramatic_irony",
+                    null
+                  ],
                   "_doc": "🔴 2026-06-29 角色信息差: advisory 创作提示(不锁剧情·北极星⑤) · McKee 三知识缺口 · 读者知角色不知=dramatic_irony(桌下炸弹) · 设计悬念/反转/戏剧反讽时标 · 否则 null"
                 },
                 "scene_type": {
                   "type": "string",
-                  "enum": ["proactive_scene", "reactive_sequel"],
-                  "_doc": "🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架: Swain 场景单元类型 · proactive_scene(行动场: goal→conflict→disaster) / reactive_sequel(反应场: reaction→dilemma→decision) · 复用既有 goal/conflict(proactive 场) · build_manifest(B agent) + causal_connector_scanner 读 · ⚠️ 与 chapter-plan 层 scene_type(category 开场/战斗/悬疑·golden_passages 选取用) 是不同对象层(本字段在 scene_storyboard.items 内·不冲突) · 与既有 R20 unit_type(scene/sequel·sequel_drought_advisory 消费) 同概念更细版·并存向后兼容"
+                  "enum": [
+                    "proactive_scene",
+                    "reactive_sequel"
+                  ],
+                  "_doc": "🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架: Swain 场景单元类型 · proactive_scene(行动场: goal→conflict→disaster) / reactive_sequel(反应场: reaction→dilemma→decision) · 复用既有 goal/conflict(proactive 场) · build_manifest(B agent) + causal_connector_scanner 读 · 本字段在 scene_storyboard.items 内，属于场景对象层"
                 },
                 "disaster": {
                   "type": "string",
@@ -360,44 +416,76 @@
                 },
                 "dilemma": {
                   "type": "string",
-                  "_doc": "🔴 2026-06-29 But-Therefore+Swain: reactive_sequel 的两难(Swain Sequel 的 Dilemma·无好选项) · 仅 reactive_sequel 填 · 与既有 sequel_dilemma 同义·并存向后兼容"
+                  "_doc": "🔴 2026-06-29 But-Therefore+Swain: reactive_sequel 的两难(Swain Sequel 的 Dilemma·无好选项) · 仅 reactive_sequel 填"
                 },
                 "decision": {
                   "type": "string",
-                  "_doc": "🔴 2026-06-29 But-Therefore+Swain: reactive_sequel 的新目标决定(Swain Sequel 的 Decision·下个 proactive_scene 的 goal 种子) · 仅 reactive_sequel 填 · 与既有 sequel_decision 同义·并存向后兼容"
+                  "_doc": "🔴 2026-06-29 But-Therefore+Swain: reactive_sequel 的新目标决定(Swain Sequel 的 Decision·下个 proactive_scene 的 goal 种子) · 仅 reactive_sequel 填"
                 },
                 "link_to_prev": {
                   "type": "string",
-                  "enum": ["but", "therefore", "and_then"],
+                  "enum": [
+                    "but",
+                    "therefore",
+                    "and_then"
+                  ],
                   "_doc": "🔴 2026-06-29 But-Therefore因果连接器(South Park 法则·微观涟漪·因果+信息触发非预设): 与上一 scene 的衔接类型 · but=冲突转折 / therefore=因果后果 / and_then=平铺(流水账根因·要避免) · causal_connector_scanner(B agent) 扫相邻 scene 命中 and_then 平铺则 emit WEAK_CAUSAL_LINK(advisory) · 只查是否 and_then 平铺·不卡 but/therefore 比例(70/30 是英美影视经验值非跨题材硬指标·北极星⑤)"
                 },
                 "result_type": {
                   "type": "string",
-                  "enum": ["yes_but", "no_and", "yes_and"],
+                  "enum": [
+                    "yes_but",
+                    "no_and",
+                    "yes_and"
+                  ],
                   "_doc": "🔴 2026-06-29 But-Therefore+Try-Fail(Butcher): 本场结果 · yes_but=达成但带来新麻烦 / no_and=失败且更糟 / yes_and=达成且顺势(慎用) · 禁纯 yes 顺风局(try-fail 递增) · advisory 参考模板·writer 有理由可豁免(北极星⑤)"
                 },
                 "dialogue_objectives": {
                   "type": "array",
-                  "_doc": "🔴 2026-06-29 对白即行动dialogue_objectives(McKee《Dialogue: The Art of Verbal Action》每句台词=verbal action·角色为达成未说出口 objective 采取 tactic·on-the-nose=说透目标=零潜台词；CoSER arXiv:2502.09082 三通道 Speech/Action/Thought·去 inner-thought 一致性显著下降；dialogue_act 骨架): 本场对话密集时每个说话角色的言语策略意图 · outline-planner(A agent) 详化/涌现时产 · build_manifest._collect_dialogue_objectives(B agent) 透传 writer · 与 scene_causal_skeleton/scene_goal 平级并存 · 🔴 全 advisory 场景级建议非逐句锁 · 非每场必填(纯叙述/独白场可空·过度结构化→对话变机械任务清单是 pitfall) · Claude 只标意图(what·角色想干嘛)·措辞(how·具体台词)永远交 gemini freestyle(北极星④规划管意图/创作管表达) · what_unsaid 是隐藏 Thought 通道·只驱动潜台词·绝不写进正文·涉未到期 hidden 伏笔须走 reveal 隔离绝不剧透(对齐 _sanitize_character_belief) · 默认安全:旧 scene 无此字段→下游 fallback 不注入·向后兼容 · 作者档第一权威(爽文直球对喷不强加 subtext) · 绝不 hard_gate",
+                  "_doc": "🔴 2026-06-29 对白即行动dialogue_objectives(McKee《Dialogue: The Art of Verbal Action》每句台词=verbal action·角色为达成未说出口 objective 采取 tactic·on-the-nose=说透目标=零潜台词；CoSER arXiv:2502.09082 三通道 Speech/Action/Thought·去 inner-thought 一致性显著下降；dialogue_act 骨架): 本场对话密集时每个说话角色的言语策略意图 · outline-planner(A agent) 详化/涌现时产 · build_manifest._collect_dialogue_objectives(B agent) 透传 writer · 与 scene_causal_skeleton/scene_goal 平级并存 · 🔴 全 advisory 场景级建议非逐句锁 · 非每场必填(纯叙述/独白场可空·过度结构化→对话变机械任务清单是 pitfall) · Claude 只标意图(what·角色想干嘛)·措辞(how·具体台词)永远交 gemini freestyle(北极星④规划管意图/创作管表达) · what_unsaid 是隐藏 Thought 通道·只驱动潜台词·绝不写进正文·涉未到期 hidden 伏笔须走 reveal 隔离绝不剧透(对齐 _sanitize_character_belief) · 作者档第一权威(爽文直球对喷不强加 subtext) · 绝不 hard_gate",
                   "items": {
                     "type": "object",
                     "properties": {
-                      "character": {"type": "string", "_doc": "说话角色 char_id(对齐人物卡 id)"},
-                      "wants": {"type": "string", "_doc": "本场该角色想从对方拿到什么(未说出口的 objective·Stanislavski scene-objective 的对白侧)"},
-                      "tactic": {"type": "string", "_doc": "active verb 言语策略(试探/施压/回避/示弱/反问/讨好)·达成 wants 的手段·how 留给 gemini"},
-                      "obstacle": {"type": "string", "_doc": "被谁/什么阻挠(对手的反 objective / 外部障碍)"},
+                      "character": {
+                        "type": "string",
+                        "_doc": "说话角色 char_id(对齐人物卡 id)"
+                      },
+                      "wants": {
+                        "type": "string",
+                        "_doc": "本场该角色想从对方拿到什么(未说出口的 objective·Stanislavski scene-objective 的对白侧)"
+                      },
+                      "tactic": {
+                        "type": "string",
+                        "_doc": "active verb 言语策略(试探/施压/回避/示弱/反问/讨好)·达成 wants 的手段·how 留给 gemini"
+                      },
+                      "obstacle": {
+                        "type": "string",
+                        "_doc": "被谁/什么阻挠(对手的反 objective / 外部障碍)"
+                      },
                       "dialogue_act": {
                         "type": "string",
-                        "enum": ["试探", "回避", "威胁", "让步", "反讽", "求证", "施压", "示弱"],
+                        "enum": [
+                          "试探",
+                          "回避",
+                          "威胁",
+                          "让步",
+                          "反讽",
+                          "求证",
+                          "施压",
+                          "示弱"
+                        ],
                         "_doc": "dialogue_act 骨架·本土校准枚举·Claude 标意图(what) gemini 填措辞(how)"
                       },
-                      "what_unsaid": {"type": "string", "_doc": "压着不说的潜文本(隐藏 Thought 通道·CoSER)·只驱动潜台词不写进正文·涉未到期 hidden 伏笔走 reveal 隔离绝不剧透"}
+                      "what_unsaid": {
+                        "type": "string",
+                        "_doc": "压着不说的潜文本(隐藏 Thought 通道·CoSER)·只驱动潜台词不写进正文·涉未到期 hidden 伏笔走 reveal 隔离绝不剧透"
+                      }
                     }
                   }
                 }
               }
             },
-            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe / causal_connector_scanner 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief) · 🔴 2026-06-29 scene_type/disaster/reaction/dilemma/decision/link_to_prev/result_type 给 But-Therefore因果连接器+Swain场景骨架(治流水账) · 🔴 2026-06-29 scene_goal 给逐场景动机(Stanislavski scene-objective·心理 P0·治场景漂移) · 🔴 2026-06-29 dialogue_objectives 给对白即行动(McKee Verbal Action·对话密集 scene 标言语策略意图·advisory·what_unsaid 隐藏 Thought 通道驱动潜台词) · 全 optional 向后兼容"
+            "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe / causal_connector_scanner 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief) · 🔴 2026-06-29 scene_type/disaster/reaction/dilemma/decision/link_to_prev/result_type 给 But-Therefore因果连接器+Swain场景骨架(治流水账) · 🔴 2026-06-29 scene_goal 给逐场景动机(Stanislavski scene-objective·心理 P0·治场景漂移) · 🔴 2026-06-29 dialogue_objectives 给对白即行动(McKee Verbal Action·对话密集 scene 标言语策略意图·advisory·what_unsaid 隐藏 Thought 通道驱动潜台词)"
           },
           "writer_model_used": {
             "type": "string",
@@ -479,7 +567,8 @@
               }
             }
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "_consumption_chain": {
@@ -493,10 +582,6 @@
       "cluster_id": "cluster_002",
       "parent_me": "ME_002",
       "scope_summary": "老周观察陈默后递红色档案盒（31 临时工死亡名单）+ 首次提「先生」 → 陈默看完独自调查 → 决定继续",
-      "expected_word_range": {
-        "min": 9000,
-        "max": 11000
-      },
       "scenes_estimated": 4,
       "anchor_props": [
         "红色档案盒 ITM_003",
@@ -521,7 +606,7 @@
         }
       ],
       "foreshadowing_to_callback": [
-        "FS_011 ch2 → ch3 强化"
+        "FS_011 scene_002 → scene_003 强化"
       ],
       "mid_checkpoints": [
         3000,
@@ -543,17 +628,12 @@
       "hub_locations": [
         "HUB_001"
       ],
-      "estimated_chapters": 4,
       "status": "pending"
     },
     "ME_010_先生现身_关键": {
       "cluster_id": "cluster_010",
       "parent_me": "ME_010",
       "scope_summary": "Midpoint - 「先生」首次现身 + 三选一招揽 + 陈默拒绝 + 「先生」明面反击启动",
-      "expected_word_range": {
-        "min": 13000,
-        "max": 16000
-      },
       "scenes_estimated": 6,
       "opus_recommended": true,
       "extended_thinking": true,
@@ -564,8 +644,7 @@
         9000,
         11000,
         13000
-      ],
-      "estimated_chapters": 5
+      ]
     }
   }
 }

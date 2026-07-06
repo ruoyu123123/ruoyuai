@@ -16,6 +16,8 @@ G3 调研发现: knowledge_graph.json 全程空→穿帮检测形同虚设。
 - cluster 为单位(北极星①)
 - 只追加不删旧(append-only)
 
+退出码: 0 成功 / 2 输入缺失、JSON 损坏或 schema 错误
+
 用法:
   python core/scripts/knowledge_graph_update.py <project_root> --cluster <cluster_id>
 """
@@ -33,8 +35,8 @@ def _load_json(p: Path) -> dict:
         return {}
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{p} JSON 解析失败: {exc}") from exc
 
 
 def _save_json(p: Path, data: dict) -> None:
@@ -67,6 +69,8 @@ def update_from_changes(
         kg["nodes"] = []
     if "edges" not in kg:
         kg["edges"] = []
+    if not isinstance(kg["nodes"], list) or not isinstance(kg["edges"], list):
+        raise RuntimeError("knowledge_graph.json 的 nodes/edges 必须是列表")
     if "schema_version" not in kg:
         kg["schema_version"] = "v1"
 
@@ -80,9 +84,11 @@ def update_from_changes(
     ]
     changes_path = next((p for p in changes_candidates if p.exists()), None)
     if changes_path is None:
-        return {"added_nodes": 0, "added_edges": 0, "skipped_dups": 0, "error": "changes not found"}
+        raise FileNotFoundError(f"找不到 cluster changes: {cluster_id}")
 
     changes = _load_json(changes_path)
+    if not isinstance(changes, dict):
+        raise RuntimeError(f"{changes_path} 顶层必须是对象")
     added_nodes = 0
     added_edges = 0
     skipped = 0
@@ -182,10 +188,12 @@ def main() -> int:
     print(f"[knowledge_graph] +{result['added_nodes']} nodes, "
           f"+{result['added_edges']} edges, "
           f"{result['skipped_dups']} dups skipped")
-    if result.get("error"):
-        print(f"  ⚠️ {result['error']}", file=sys.stderr)
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # noqa: BLE001 - CLI boundary
+        print(f"[knowledge_graph] FATAL: {exc}", file=sys.stderr)
+        raise SystemExit(2)

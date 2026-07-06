@@ -3,7 +3,7 @@
 核心理念：
 - 世界状态.json 是世界活体快照（factions/NPC threads/emergent opportunities/consequences）
 - 涟漪规则.json 定「事件 → 世界变化」的因果映射
-- 每章 save-state 自动 tick：NPC threads 推进、超时 thread 触发完成事件、time roll
+- /cluster-save-state 按 cluster 章范围自动 tick：NPC threads 推进、超时 thread 触发完成事件、time roll
 - 用户选定走向卡 → apply_minor_event：匹配 ripple_rule → 数值变化 + 新 thread spawn
 - 大事件触发 → apply_fate_event：与 fate_engine 协同，触发更大涟漪
 

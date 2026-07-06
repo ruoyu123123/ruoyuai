@@ -3,8 +3,8 @@
 
 G3 真 API e2e 抓出：subplot_threads.json / 四线脉络.json 的线条目可能是**字符串列表**
 （走向线 schema 存成 str），脚本却假设全是 dict 列表 → `line.get("name")` 抛
-`'str' object has no attribute 'get'`。advisory 性质虽不阻断主链，但脏报错污染日志。
-修后必须对 str / dict 两种 schema 都跑通且不抛异常。
+`'str' object has no attribute 'get'`。现在该脚本是 cluster-save-state 正式状态推进：
+未启用账本可以 no-op，账本损坏必须硬失败。修后必须对 str / dict 两种 schema 都跑通且不抛异常。
 """
 import json
 import os
@@ -317,6 +317,27 @@ def test_update_content_backend_off_never_calls_prefetch():
     finally:
         embedding_store.content_backend_available = orig_avail
         embedding_store.prefetch_content_embeddings = orig_prefetch
+
+
+def test_bad_summary_json_is_hard_error():
+    d = _mkproj(throughlines=[], threads=[])
+    (d / "_数据库" / "故事块摘要.json").write_text("{bad", encoding="utf-8")
+    try:
+        m.update(d, "001")
+        assert False, "故事块摘要损坏必须硬失败"
+    except RuntimeError as exc:
+        assert "JSON" in str(exc)
+
+
+def test_bad_threads_schema_is_hard_error():
+    d = _mkproj(throughlines=[], threads=[])
+    (d / "_数据库" / "subplot_threads.json").write_text(
+        json.dumps({"threads": {"bad": True}}, ensure_ascii=False), encoding="utf-8")
+    try:
+        m.update(d, "001")
+        assert False, "threads 非列表必须硬失败"
+    except RuntimeError as exc:
+        assert "threads" in str(exc)
 
 
 if __name__ == "__main__":

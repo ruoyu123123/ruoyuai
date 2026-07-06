@@ -9,7 +9,7 @@
   2. consume_opportunities —— EO 标 consumed_by_writer + consumed_at_ch / missing / 无世界状态 / 空入参
   3. apply_one_chapter 的 half_apply（H14 幂等跳过修复）—— fate_event 没匹配规则=half / 匹配=非 half /
      幂等跳过不算 half（核心确定性判定：matched_rules 空 且 非 skipped_idempotent）
-  4. main() CLI 退出码 —— 预检缺文件 SKIP(0) / 缺 ch 且缺 --cluster → 2 / 正常 → 0 /
+  4. main() CLI 退出码 —— 预检缺文件 FATAL(2) / 缺 ch 且缺 --cluster → 2 / 正常 → 0 /
      half_apply → 1 / --cluster 展开章范围逐章 tick / --cluster 范围未回填 → 2
 
 零依赖：仅标准库；test_* 无参数；失败 raise AssertionError；tempfile.mkdtemp + utf-8。
@@ -237,14 +237,14 @@ def test_apply_one_chapter_writes_log_and_runs_all_ops():
 
 # ═══════════════════════ 4. main() CLI 退出码 ═══════════════════════
 
-def test_cli_skip_when_world_files_missing():
-    """预检：世界状态/涟漪规则缺 → SKIP 退出 0（项目未启用世界演化）。"""
+def test_cli_fatal_when_world_files_missing():
+    """--cluster 路径预检：世界状态/涟漪规则缺 → FATAL 退出 2。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         _db(tmp)  # 仅建库目录，不建两个文件
-        rc, out, err = _run_cli(str(tmp), "5")
-        assert rc == 0, err
-        assert "SKIP" in out
+        rc, out, err = _run_cli(str(tmp), "--cluster", "cluster_001")
+        assert rc == 2, out + err
+        assert "FATAL" in err
 
 
 def test_cli_exit2_when_no_ch_and_no_cluster():
@@ -255,22 +255,25 @@ def test_cli_exit2_when_no_ch_and_no_cluster():
         assert rc == 2, out + err
 
 
-def test_cli_exit0_clean_chapter():
-    """位置参章级 · 无未匹配 fate_event → 正常退出 0。"""
+def test_cli_rejects_direct_chapter_arg():
+    """直接位置参章级入口已关闭，必须走 --cluster。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_world_project(Path(d))
         _write_changes(tmp, 5, {"factual": {}, "self_eval": {}})
         rc, out, err = _run_cli(str(tmp), "5")
-        assert rc == 0, out + err
-        assert (tmp / "_数据库" / ".world_evolution" / "ch005_apply.json").exists()
+        assert rc == 2, out + err
+        assert "cluster-save-state" in err
+        assert not (tmp / "_数据库" / ".world_evolution" / "ch005_apply.json").exists()
 
 
 def test_cli_exit1_on_unmatched_fate_event():
-    """有 fate_event 但涟漪规则缺定义 → half_apply → 退出 1 + WARN。"""
+    """--cluster 有 fate_event 但涟漪规则缺定义 → half_apply → 退出 1 + WARN。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_world_project(Path(d), rules={"ripple_rules": []})
+        _write_json(tmp / "_数据库" / "事件簇.json", {
+            "clusters": [{"cluster_id": "cluster_001", "chapter_range": [5, 5]}]})
         _write_changes(tmp, 5, _fate_changes("V1_ME_001"))
-        rc, out, err = _run_cli(str(tmp), "5")
+        rc, out, err = _run_cli(str(tmp), "--cluster", "cluster_001")
         assert rc == 1, out + err
         assert "WARN" in out
 

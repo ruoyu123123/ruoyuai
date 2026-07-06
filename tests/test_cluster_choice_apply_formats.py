@@ -11,7 +11,11 @@ sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import cluster_choice_apply as cca  # noqa: E402
 
 _BRIEF = {"cluster_id": "cluster_001", "scope_summary": "首块",
-          "scene_storyboard": [{"scene": 0, "summary": "灾难开场"}]}
+          "scene_storyboard": [{"scene": 0, "summary": "灾难开场"}],
+          "research_ref": {
+              "cache_path": "_数据库/.research_cache/inspiration_cluster_001_test.md",
+              "anchors_used": ["anchor_A"],
+          }}
 
 
 def _proj():
@@ -52,6 +56,8 @@ def test_direct_brief_format():
     """③ brief dict 本身（有 scope_summary/scene_storyboard）。"""
     r, ev = _run(_BRIEF)
     assert ev["clusters"][0]["status"] == "in_progress"
+    assert ev["clusters"][0]["research_ref"]["cache_path"].endswith("inspiration_cluster_001_test.md")
+    assert ev["clusters"][0]["research_ref"]["anchors_used"] == ["anchor_A"]
 
 
 def test_blueprint_written_for_build_manifest_preflight():

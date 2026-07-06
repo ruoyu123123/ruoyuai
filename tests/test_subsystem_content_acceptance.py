@@ -9,7 +9,7 @@
     · 填好载荷 → exit0·gates ok=True。
     · 🔴 回归锁：cluster_002+ ME/storyboard 空必须显式豁免（永不命中 hard）。
     · content_check 默认 False（orchestrator 既有调用零回归）。
-    · 旁路 / bare advisory。
+    · 历史旁路标记不生效 / bare advisory。
   C17 --shallow-drift:
     · MISSING_LIVE_KEY / UNKNOWN_TOP_KEY / 非 live 跳过 / 永不 exit 非0 / 永不写文件。
 """
@@ -172,14 +172,15 @@ def test_gate_content_check_true_filled_ok():
         assert gates.check_subsystems(db, content_check=True)["ok"]
 
 
-def test_gate_content_check_bypass_overrides_inert():
-    """轻量模式旁路优先：即便载荷空也 ok=True（北极星 opt-out）。"""
+def test_gate_content_check_bypass_marker_does_not_override_inert():
+    """历史 .subsystems_bypass.json 标记不得覆盖载荷 hard_gate。"""
     with tempfile.TemporaryDirectory() as d:
         db = Path(d) / "_数据库"
         _emit(db)
-        (db / gates.SUBSYSTEMS_BYPASS_FILE).write_text("{}", encoding="utf-8")
+        (db / ".subsystems_bypass.json").write_text("{}", encoding="utf-8")
         r = gates.check_subsystems(db, content_check=True)
-        assert r["ok"] and r.get("bypass")
+        assert not r["ok"]
+        assert r["gate_level"] == gates.GATE_HARD
 
 
 def test_gate_content_check_missing_takes_priority():

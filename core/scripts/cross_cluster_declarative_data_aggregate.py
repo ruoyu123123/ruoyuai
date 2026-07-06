@@ -147,7 +147,7 @@ def main():
             "code": "TRIGGERED_EVENTS_EMPTY",
             "metric": {"overdue_pending": len(overdue_pending), "triggered_total": len(triggered), "samples": [p.get("id") for p in overdue_pending[:5]]},
             "message": f"{len(overdue_pending)} 条 pending_events 已到期但 triggered_events 全空",
-            "suggestion": "writer 应在 _changes.json 写 event_triggers，save-state 自动转移",
+            "suggestion": "writer 应在 _changes.json 写 event_triggers，cluster-save-state 自动转移",
         })
     elif overdue_pending and triggered:
         # 部分情况
@@ -174,7 +174,7 @@ def main():
                 "code": "TRAVEL_LOG_BARREN",
                 "metric": {"travel_log_size": len(travel_log), "total_movements_in_changes": total_movements, "current_ch": last_ch},
                 "message": f"travel_log 仅 {len(travel_log)} 条，但 _changes character_movements 累计 {total_movements} 次（断层）",
-                "suggestion": "writer 写 travel_log_added 字段或 save-state 自动从 character_movements 派生",
+                "suggestion": "writer 写 travel_log_added 字段或 cluster-save-state 自动从 character_movements 派生",
             })
 
     # ===== 5. SECRET_OVERDUE =====
@@ -224,7 +224,7 @@ def main():
             "code": "WILL_LEARN_NOT_TRIGGERED",
             "metric": {"count": len(overdue_wl), "samples": overdue_wl[:3]},
             "message": f"{len(overdue_wl)} 条 will_learn 已过 learn_at_ch 但未移入 knows",
-            "suggestion": "writer 在对应章节写 knowledge_gained，save-state 自动从 will_learn 移到 knows",
+            "suggestion": "writer 在对应章节写 knowledge_gained，cluster-save-state 自动从 will_learn 移到 knows",
         })
 
     # ===== 输出 =====

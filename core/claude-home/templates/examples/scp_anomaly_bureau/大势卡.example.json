@@ -27,7 +27,7 @@
     {"id": "ME_018", "title": "Final Image - 注销编号 + 收尾", "stage": "Final Image", "prerequisites": ["ME_017"], "expected_window_after": {"event": "ME_017", "max_chapters": 20}, "physical_evidence": ["主角注销主体临时工编号", "7 个分身依然存活 - 各自在 7 个城市过普通生活", "异常局某窗户后反派转身走向新雇员桌前"], "trigger_when": "全书收束 - 主题闭环", "downstream_unlocks": [], "status": "pending"}
   ],
   "_consumption_chain": {
-    "produced_by": "/outline --mode fluid 初始化 + writer/save-state 更新 status",
+    "produced_by": "/outline --mode fluid 初始化 + cluster-write/cluster-save-state 更新 status",
     "consumed_by": [
       "fate_engine.evaluate 每章计算 active fate_events",
       "build_manifest 注入 active_fate_events 给 writer",

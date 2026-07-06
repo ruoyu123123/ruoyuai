@@ -6,7 +6,7 @@ None → orchestrator 退化成裸书名相对路径 → scaffold/data_flow/事�
 
 做三件确定性的事（无 gen-model·纯文件操作）：
   1. 建 workspace/novels/<书名>/_数据库/ + .wal/（GUI 已先 mkdir·此处幂等兜底）
-  2. git init（本地·不碰全局 config·失败不阻断）
+  2. git init（本地·不碰全局 config·失败即返回非 0）
   3. --emit-style-options：扫 workspace/styles/* 出 style_options.json 供 pause 选择
   4. --style <风格库名>：拷该风格的 skill 双文件(作者风格.json + skill_FINAL.md→作者风格_skill.md)
      进项目 _数据库/（作者档第一权威·judge/writer 读·feedback_author_goldstandard_comparison_gate）
@@ -115,20 +115,29 @@ def scaffold_subsystems_emit(project_root: Path) -> int:
         import scaffold_subsystems as _scaf
         return _scaf.cmd_emit([str(project_root)])
     except Exception as e:  # scaffold 失败不静默吞·返非 0 让调用方知
-        print(f"[init_project][WARN] scaffold 34 子系统失败: {e}", file=sys.stderr)
+        print(f"[init_project][FATAL] scaffold 34 子系统失败: {e}", file=sys.stderr)
         return 1
 
 
-def git_init(project_root: Path) -> None:
-    """本地 git init（不碰全局 config·失败不阻断·路径含中文加引号由 subprocess list 规避）。"""
+def git_init(project_root: Path) -> int:
+    """本地 git init（不碰全局 config·失败返回非 0·路径含中文加引号由 subprocess list 规避）。"""
     if (project_root / ".git").exists():
-        return
+        return 0
+    if shutil.which("git") is None:
+        print("[init_project][FATAL] git 不在 PATH，无法初始化项目仓库", file=sys.stderr)
+        return 2
     try:
-        if shutil.which("git"):
-            subprocess.run(["git", "init"], cwd=str(project_root),
-                           capture_output=True, timeout=30)
-    except Exception:
-        pass  # git 失败不阻断初始化
+        r = subprocess.run(["git", "init"], cwd=str(project_root),
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=30)
+    except Exception as e:
+        print(f"[init_project][FATAL] git init 异常: {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
+    if r.returncode != 0:
+        msg = (r.stderr or r.stdout or "").strip()[:200]
+        print(f"[init_project][FATAL] git init 失败: {msg}", file=sys.stderr)
+        return 2
+    return 0
 
 
 def main() -> int:
@@ -147,7 +156,9 @@ def main() -> int:
         project_root = _REPO / args.project
     (project_root / "_数据库" / ".wal").mkdir(parents=True, exist_ok=True)
     if not args.no_git:
-        git_init(project_root)
+        rc = git_init(project_root)
+        if rc != 0:
+            return rc
 
     if args.scaffold:
         rc = scaffold_subsystems_emit(project_root)

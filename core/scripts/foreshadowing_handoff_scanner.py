@@ -7,8 +7,11 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
 + 检测 伏笔表.promises 中标记 setup_cluster = 本 cluster 的伏笔是否有物理证据。
 
 输出 issue code:
-  · FORESHADOWING_NOT_PLANTED (hard_gate? 看 brief 要求)
+  · FORESHADOWING_NOT_PLANTED (advisory)
   · FORESHADOWING_PHYSICAL_EVIDENCE_MISSING (advisory)
+  · FORESHADOWING_PAYOFF_TARGET_NOT_OPEN (advisory · 2026-07-06 P1 三态生命周期)
+    —— changes 声明的 payoff 指向的 promise 非 open（suspended/consumed）→ 可能是重复回收
+    或状态漂移；只提示不拦（绝不新增 hard_gate·北极星⑤）
 
 用法：python foreshadowing_handoff_scanner.py <project> <cluster_id>
      例：python foreshadowing_handoff_scanner.py 项目 cluster_001
@@ -113,8 +116,37 @@ def scan(project_root: Path, cluster_id: str) -> dict:
         else:
             promises_no_evidence.append({"id": p.get("id"), "physical_evidence_expected": ev[:60]})
 
+    # 检测 3（2026-07-06 P1 三态生命周期）: payoff 必须引用 open 项
+    # changes 声明的 payoff（factual.foreshadowing_actions type=payoff）指向的 promise 若已
+    # suspended/consumed → 可能是重复回收或状态漂移（advisory·可豁免·绝不 hard_gate）。
+    # 目标 id 不在伏笔表 → 跳过不报（brief 注册发生在 save-state 阶段·scanner 时点常未注册）。
+    payoff_not_open = []
+    changes = load(draft_path.parent / f"cluster_{cluster_key}_changes.json")
+    fs_actions = ((changes.get("factual") or {}).get("foreshadowing_actions")
+                  if isinstance(changes.get("factual"), dict) else None) or []
+    promises_by_id = {p.get("id"): p for p in promises if isinstance(p, dict) and p.get("id")}
+    for a in fs_actions:
+        if not isinstance(a, dict) or a.get("type") != "payoff":
+            continue
+        target = promises_by_id.get(a.get("id"))
+        if target is None:
+            continue
+        st = target.get("status")
+        if st != "open":
+            payoff_not_open.append({"id": a.get("id"), "status": st})
+
     # 汇总
     issues = []
+    if payoff_not_open:
+        issues.append({
+            "code": "FORESHADOWING_PAYOFF_TARGET_NOT_OPEN",
+            "gate_level": "advisory",
+            "severity": "warning",
+            "count": len(payoff_not_open),
+            "items": payoff_not_open[:5],
+            "msg": (f"⚠️ {len(payoff_not_open)} 条 payoff 指向非 open 伏笔"
+                    "（suspended/consumed·可能是重复回收或状态漂移）"),
+        })
     if not_planted:
         issues.append({
             "code": "FORESHADOWING_NOT_PLANTED",

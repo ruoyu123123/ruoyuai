@@ -1,6 +1,6 @@
 """validate_chapter.py 专属确定性回归测试（零 LLM / 零联网）。
 
-被测脚本 = core/scripts/validate_chapter.py（章节硬性校验器·机械扫描 7 类硬约束）。
+被测脚本 = core/scripts/validate_chapter.py（cluster 内物理章硬性校验器·机械扫描 7 类硬约束）。
 
 【已有间接覆盖】（不重复）：
   tests/test_audit_hub_aggregation.py 与 tests/test_cross_cluster_will_learn_aggregate_audit.py
@@ -17,7 +17,7 @@
   · check_secret_reveal —— manifest 要求揭露但 changes 缺 → SECRET_NOT_REVEALED
   · check_locked_facts —— 左右手对抗 / 年龄数字冲突 → LOCKED_FACT_CONFLICT
   · format_json       —— v18 --json 输出契约（summary 计数 / errors 字段透传）
-  · CLI 退出码        —— FILE_NOT_FOUND→exit2 / 用法不全→exit2（真 subprocess）
+  · CLI 退出码        —— 旧单章位置参硬拒 / cluster FILE_NOT_FOUND→exit2（真 subprocess）
 
 约定：零依赖（只用标准库）· test_* 无参数 · Windows · tempfile.mkdtemp + utf-8。
 含 sys.exit 的 main() 走真 subprocess（参照 test_cross_cluster_fate_drift_aggregate）。
@@ -284,30 +284,29 @@ def test_format_json_contract_shape_and_counts():
 # ══════════════════════════════════════════════════════════════════════════
 # CLI 退出码 —— 真 subprocess（含 sys.exit）
 # ══════════════════════════════════════════════════════════════════════════
-def test_cli_file_not_found_exits_2():
-    """章节 txt 不存在 → FILE_NOT_FOUND(fatal) → exit 2。"""
+def test_cli_single_chapter_entry_removed_exits_2():
+    """旧单章位置参入口不再公开：必须走 --cluster。"""
     tmp = Path(tempfile.mkdtemp())
     (tmp / "_数据库").mkdir(parents=True, exist_ok=True)
     p = _run_cli(str(tmp), "1", "--json")
     assert p.returncode == 2, f"期望 exit 2，实得 {p.returncode}; stderr={p.stderr}"
-    out = json.loads(p.stdout)
-    codes = [e["code"] for e in out["errors"]]
-    assert "FILE_NOT_FOUND" in codes
-    assert out["passed"] is False
+    assert "--cluster" in p.stdout
+    assert "不再接受单章位置参" in p.stdout
 
 
 def test_cli_insufficient_args_exits_2():
-    """位置参不足（只给项目路径，缺章节号）→ 用法提示 → exit 2。"""
+    """位置参不足 → 用法提示 → exit 2。"""
     tmp = Path(tempfile.mkdtemp())
     p = _run_cli(str(tmp))
     assert p.returncode == 2, f"期望 exit 2，实得 {p.returncode}"
 
 
 def test_cli_non_integer_chapter_exits_2():
-    """章节号非整数 → exit 2（参数校验拒绝，不进 validate）。"""
+    """旧单章章节号位置参无论是否整数都硬拒。"""
     tmp = Path(tempfile.mkdtemp())
     p = _run_cli(str(tmp), "abc")
     assert p.returncode == 2, f"期望 exit 2，实得 {p.returncode}"
+    assert "不再接受单章位置参" in p.stdout
 
 
 def test_cli_cluster_range_not_found_exits_2():

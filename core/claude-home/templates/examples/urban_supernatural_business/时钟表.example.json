@@ -72,7 +72,7 @@
   ],
 
   "_consumption_chain": {
-    "produced_by": "/outline 初始化（按大势/伏笔自动生成 base clock）+ writer/save-state 滚动 tick + 手动 spawn",
+    "produced_by": "/outline 初始化（按大势/伏笔自动生成 base clock）+ cluster-write/cluster-save-state 滚动 tick + 手动 spawn",
     "consumed_by": [
       "build_manifest._collect_active_clocks() 注入 manifest",
       "writer step 0r：clock 感知 + 自然把'还差多少'埋进环境暗示",

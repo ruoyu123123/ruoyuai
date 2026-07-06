@@ -1,16 +1,18 @@
 """save_state 伏笔回库新契约回归测试 — 🔴 2026-06-28 审计清理B类。
 
-【契约变更】原本组测「writer 自报 foreshadowing_planted/paid → 伏笔表 promises/resolved 桥接」
+【契约变更】原本组测「writer 自报 foreshadowing_planted/paid → 伏笔表 promises 生命周期桥接」
 （A-1 / [#6] / SYS-2 / fs_auto 那一整套）。审计判该桥接为 B 类违规——消费侧读 writer 自报
 factual 当权威状态源。**已从 save_state.apply_changes 整段移除**。
 
 新契约（本文件钉死）：
   1. writer 的 changes.foreshadowing_planted / foreshadowing_paid / foreshadowing_actions
-     **不再触碰伏笔表**（apply_changes 跑通但 promises/secrets/resolved 一概不动）。
+     **不再触碰伏笔表**（apply_changes 跑通但 promises/secrets 的 status 一概不动）。
   2. 伏笔注册走 Claude 权威路径 `_register_brief_foreshadowings`：读
      事件簇.clusters[].foreshadowing_to_plant（outline-planner 规划·带 fs_id）→ 注册 promises。
   3. 伏笔兑现走 Claude 权威路径 `_apply_foreshadower_payoffs`：读 foreshadower JudgeReport 的
-     payoff_scores（terminal→resolved / progressive→payoff_progress / score==0 门控不 resolved）。
+     payoff_scores（terminal→status=consumed / progressive→payoff_progress / score==0 门控不 consumed）。
+  4. 2026-07-06 P1 三态生命周期：promises 只有 status ∈ {open, suspended, consumed}（resolved bool 已废除），
+     新条目带 owner + payoff_scope。
 
 北极星边界：save_state 不再当 writer 自报状态的回库者；factual 状态由 archive（apply_archive.py）
 与 foreshadower/brief（Claude 读正文/读规划）回库。
@@ -33,6 +35,10 @@ def _mk_project(tmp: Path, fs: dict, clusters: dict | None = None) -> Path:
     db = tmp / "_数据库"
     (db / ".wal").mkdir(parents=True, exist_ok=True)
     (db / "伏笔表.json").write_text(json.dumps(fs, ensure_ascii=False), encoding="utf-8")
+    (db / "进度.json").write_text(
+        json.dumps({"completed": 0, "current": 1}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     if clusters is None:
         clusters = {"clusters": [{"cluster_id": "cluster_001", "chapter_range": [1, 3]}]}
     (db / "事件簇.json").write_text(json.dumps(clusters, ensure_ascii=False), encoding="utf-8")
@@ -68,10 +74,10 @@ def _empty_fs() -> dict:
 
 def test_writer_paid_does_not_resolve_promise():
     """writer changes.foreshadowing_paid（即便带 id + kind:terminal）→ apply_changes 不再把
-    对应 promise 标 resolved（writer 自报 factual 不回库）。"""
+    对应 promise 标 consumed（writer 自报 factual 不回库）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), {
-            "promises": [{"id": "fs_018", "setup_cluster": "cluster_001", "resolved": False}],
+            "promises": [{"id": "fs_018", "setup_cluster": "cluster_001", "status": "open"}],
             "deadlines": [], "pledges": [], "secrets": [],
         })
         _write_parsed(tmp, 2, {
@@ -79,8 +85,8 @@ def test_writer_paid_does_not_resolve_promise():
         })
         rc = ss.apply_changes(tmp, 2)
         assert rc == 0
-        # 新契约：writer 自报 paid 不再触碰伏笔表 → 仍 unresolved
-        assert _read_fs(tmp)["promises"][0]["resolved"] is False
+        # 新契约：writer 自报 paid 不再触碰伏笔表 → 仍 open
+        assert _read_fs(tmp)["promises"][0]["status"] == "open"
 
 
 def test_writer_planted_does_not_create_promise():
@@ -121,7 +127,7 @@ def test_apply_changes_still_runs_kept_paths():
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), _empty_fs())
         (tmp / "_数据库" / "时间线.json").write_text(
-            json.dumps({"current_time": {"period": "黎明", "chapter": 1}, "time_log": []},
+            json.dumps({"current_time": {"period": "黎明", "cluster": "cluster_001"}, "time_log": []},
                        ensure_ascii=False), encoding="utf-8")
         _write_parsed(tmp, 2, {
             "time_advance": {"period": "正午", "elapsed": "半日", "key_events": ["渡江"]},
@@ -131,6 +137,7 @@ def test_apply_changes_still_runs_kept_paths():
         assert rc == 0
         tl = json.loads((tmp / "_数据库" / "时间线.json").read_text(encoding="utf-8"))
         assert tl["time_log"][-1]["ch"] == 2
+        assert "chapter" not in tl["current_time"]
         assert (tmp / "_数据库" / ".wal" / "第2章_applied.json").is_file()
 
 
@@ -150,15 +157,18 @@ def test_register_brief_foreshadowings_from_cluster_brief():
         pmap = {p["id"]: p for p in _read_fs(tmp)["promises"]}
         assert "FS_014" in pmap and "FS_015" in pmap
         assert pmap["FS_014"]["_source"] == "brief"
-        assert pmap["FS_014"]["resolved"] is False
+        # 2026-07-06 P1 三态生命周期：新条目 status=open + owner + payoff_scope
+        assert pmap["FS_014"]["status"] == "open"
+        assert pmap["FS_014"]["owner"] == "writer"
+        assert "payoff_scope" in pmap["FS_014"]
         assert pmap["FS_014"]["setup_cluster"] == "cluster_001"
 
 
 def test_register_brief_idempotent_and_no_overwrite():
-    """重复注册不重复建；已存在（含已 resolved）的 fs_id 不被覆盖。"""
+    """重复注册不重复建；已存在（含已 consumed）的 fs_id 不被覆盖。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), {
-            "promises": [{"id": "FS_014", "resolved": True, "_source": "manual"}],
+            "promises": [{"id": "FS_014", "status": "consumed", "_source": "manual"}],
             "deadlines": [], "pledges": [], "secrets": [],
         }, clusters={"clusters": [
             {"cluster_id": "cluster_001", "chapter_range": [1, 3],
@@ -169,18 +179,18 @@ def test_register_brief_idempotent_and_no_overwrite():
         promises = _read_fs(tmp)["promises"]
         ids = [p["id"] for p in promises]
         assert ids.count("FS_014") == 1 and ids.count("FS_016") == 1
-        # 已存在的 FS_014 未被覆盖（仍 resolved=True·_source=manual）
+        # 已存在的 FS_014 未被覆盖（仍 consumed·_source=manual）
         fs014 = next(p for p in promises if p["id"] == "FS_014")
-        assert fs014["resolved"] is True and fs014["_source"] == "manual"
+        assert fs014["status"] == "consumed" and fs014["_source"] == "manual"
 
 
 # ═══════════ 3. Claude 权威路径：_apply_foreshadower_payoffs（读 foreshadower JudgeReport） ═══════════
 
 def test_foreshadower_terminal_resolves_promise():
-    """foreshadower payoff_scores: terminal:true + score>0 → promise 标 resolved（_resolved_by=foreshadower）。"""
+    """foreshadower payoff_scores: terminal:true + score>0 → promise status=consumed（_consumed_by=foreshadower）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), {
-            "promises": [{"id": "fs_006", "setup_cluster": "cluster_001", "resolved": False}],
+            "promises": [{"id": "fs_006", "setup_cluster": "cluster_001", "status": "open"}],
             "deadlines": [], "pledges": [], "secrets": [],
         })
         _write_foreshadower(tmp, "cluster_001", [
@@ -188,16 +198,16 @@ def test_foreshadower_terminal_resolves_promise():
              "reason": "登记册正式成立"}])
         ss._apply_foreshadower_payoffs(tmp, "cluster_001")
         p = _read_fs(tmp)["promises"][0]
-        assert p["resolved"] is True
-        assert p["_resolved_by"] == "foreshadower"
-        assert p["resolved_at_ch"] == 3  # cluster_001 末章
+        assert p["status"] == "consumed"
+        assert p["_consumed_by"] == "foreshadower"
+        assert p["consumed_at_ch"] == 3  # cluster_001 末章
 
 
 def test_foreshadower_progressive_keeps_open():
-    """foreshadower verdict=paid_progressive / terminal:false → 不 resolved，记 payoff_progress(cid)。"""
+    """foreshadower verdict=paid_progressive / terminal:false → status 仍 open，记 payoff_progress(cid)。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), {
-            "promises": [{"id": "fs_007", "setup_cluster": "cluster_001", "resolved": False, "tier": 1}],
+            "promises": [{"id": "fs_007", "setup_cluster": "cluster_001", "status": "open", "tier": 1}],
             "deadlines": [], "pledges": [], "secrets": [],
         })
         _write_foreshadower(tmp, "cluster_001", [
@@ -205,7 +215,7 @@ def test_foreshadower_progressive_keeps_open():
              "reason": "关联标的扩散 ×5→×7"}])
         ss._apply_foreshadower_payoffs(tmp, "cluster_001")
         p = _read_fs(tmp)["promises"][0]
-        assert p["resolved"] is False
+        assert p["status"] == "open"
         assert "cluster_001" in p.get("payoff_progress", [])
         # 幂等：再跑不重复 append
         ss._apply_foreshadower_payoffs(tmp, "cluster_001")
@@ -214,28 +224,33 @@ def test_foreshadower_progressive_keeps_open():
 
 
 def test_foreshadower_score_zero_does_not_resolve():
-    """score==0（声明 paid 但正文 0 痕迹/谎报）→ 即便 terminal 也不 resolved（门控）。"""
+    """score==0（声明 paid 但正文 0 痕迹/谎报）→ 即便 terminal 也不 consumed（门控）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), {
-            "promises": [{"id": "fs_004", "setup_cluster": "cluster_001", "resolved": False}],
+            "promises": [{"id": "fs_004", "setup_cluster": "cluster_001", "status": "open"}],
             "deadlines": [], "pledges": [], "secrets": [],
         })
         _write_foreshadower(tmp, "cluster_001", [
             {"fs_id": "fs_004", "score": 0, "terminal": True, "verdict": "paid_terminal",
              "reason": "声明兑现但正文 0 痕迹"}])
         ss._apply_foreshadower_payoffs(tmp, "cluster_001")
-        assert _read_fs(tmp)["promises"][0]["resolved"] is False
+        assert _read_fs(tmp)["promises"][0]["status"] == "open"
 
 
-def test_foreshadower_report_missing_is_noop():
-    """foreshadower 报告不存在（apply 前调用是常态）→ 静默跳过·不崩·不改伏笔表。"""
+def test_foreshadower_report_missing_hard_fails():
+    """foreshadower 报告不存在 → required payoff 桥接必须硬失败。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), {
-            "promises": [{"id": "fs_009", "resolved": False}],
+            "promises": [{"id": "fs_009", "status": "open"}],
             "deadlines": [], "pledges": [], "secrets": [],
         })
-        ss._apply_foreshadower_payoffs(tmp, "cluster_001")  # 无报告
-        assert _read_fs(tmp)["promises"][0]["resolved"] is False
+        raised = False
+        try:
+            ss._apply_foreshadower_payoffs(tmp, "cluster_001")  # 无报告
+        except RuntimeError:
+            raised = True
+        assert raised
+        assert _read_fs(tmp)["promises"][0]["status"] == "open"
 
 
 if __name__ == "__main__":

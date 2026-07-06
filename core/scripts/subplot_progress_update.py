@@ -7,8 +7,10 @@ G3 调研发现: subplot_threads.json + 四线脉络.json 只在 outline 写一�
 - 如果摘要提及 subplot thread → 标 thread.last_cluster / thread.status
 - 如果超过 5 cluster 没提及某 thread → 标 thread.status = "dormant"
 
-接入点: save-state step9
-exit 0: advisory · 不阻断
+接入点: cluster-save-state step11
+退出码:
+- 0: 状态推进完成，或项目尚未启用 subplot/四线账本的确定性 no-op
+- 2: 输入 JSON 损坏、schema 错误或写回失败
 
 用法:
   python core/scripts/subplot_progress_update.py <project_root> --cluster <cluster_id>
@@ -30,7 +32,7 @@ def _content_backend_ready() -> bool:
     """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
     替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
 
-    import 失败 → False（调用方回退字面 substring）。
+    import 失败 → False（调用方使用字面 substring）。
     """
     try:
         from embedding_store import content_backend_available
@@ -47,16 +49,18 @@ def _embed_corpus_once(corpus_text: str) -> "list | None":
     """内容后端就绪时把 cluster_summary_text 编码一次，供本次 update() 内所有
     thread/throughline 复用（避免每条都重复编码同一段落·2026-07-02）。
 
-    内容后端不可用 / 空文本 / 编码异常 → None（调用方逐条回退字面 substring）。
+    内容后端不可用 / 空文本 → None（调用方逐条使用字面 substring）。
+    已声明可用的内容后端编码失败 → 抛错，避免状态推进链路静默缺信号。
     """
-    if not _content_backend_ready() or not corpus_text.strip():
+    backend_ready = _content_backend_ready()
+    if not backend_ready or not corpus_text.strip():
         return None
     try:
         from embedding_store import compute_content_embedding
         emb = compute_content_embedding(corpus_text)
         return emb if emb else None
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f"cluster 摘要内容 embedding 失败: {exc}") from exc
 
 
 def _thread_appears(name: str, desc: str, corpus_text: str, corpus_emb) -> "tuple[bool, str]":
@@ -69,23 +73,29 @@ def _thread_appears(name: str, desc: str, corpus_text: str, corpus_emb) -> "tupl
         return True, "literal_substring"
     if corpus_emb is not None and name:
         query = f"{name} {desc}".strip()
-        try:
-            from embedding_store import compute_content_embedding, cosine_similarity
-            qe = compute_content_embedding(query)
-            if qe and len(qe) == len(corpus_emb) and cosine_similarity(qe, corpus_emb) >= SEMANTIC_THREAD_MATCH_THRESHOLD:
-                return True, "embedding_cosine"
-        except Exception:
-            pass
+        from embedding_store import compute_content_embedding, cosine_similarity
+        qe = compute_content_embedding(query)
+        if qe and len(qe) == len(corpus_emb) and cosine_similarity(qe, corpus_emb) >= SEMANTIC_THREAD_MATCH_THRESHOLD:
+            return True, "embedding_cosine"
     return False, "literal_substring"
 
 
-def _load(p: Path) -> dict:
+def _load_required(p: Path) -> dict:
+    if not p.exists():
+        raise FileNotFoundError(str(p))
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{p} JSON 解析失败: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{p} 顶层必须是对象")
+    return data
+
+
+def _load_optional(p: Path) -> dict:
     if not p.exists():
         return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return _load_required(p)
 
 
 def _save(p: Path, d: dict) -> None:
@@ -100,11 +110,21 @@ def update(project_root: Path, cluster_id: str) -> dict:
     summary_path = db / "故事块摘要.json"
     throughline_path = db / "四线脉络.json"
 
-    sub = _load(sub_path)
-    summary = _load(summary_path)
+    if not summary_path.exists():
+        return {
+            "subplot_updated": 0,
+            "throughline_updated": 0,
+            "status": "no_action",
+            "reason": "故事块摘要.json 不存在",
+        }
+
+    summary = _load_required(summary_path)
+    sub = _load_optional(sub_path)
 
     if not sub.get("threads"):
         sub.setdefault("threads", [])
+    if not isinstance(sub.get("threads"), list):
+        raise RuntimeError("subplot_threads.json 的 threads 必须是列表")
 
     # 拿当前 cluster 摘要文本
     cluster_summary_text = ""
@@ -117,38 +137,41 @@ def update(project_root: Path, cluster_id: str) -> dict:
     ts = datetime.now().isoformat(timespec="seconds")
 
     # 四线脉络提前读取（供下面 prefetch 收集 query 文本 + 后面判定循环复用·不重复 _load）
-    tl = _load(throughline_path)
+    tl = _load_optional(throughline_path)
+    if tl and not isinstance(tl.get("throughlines", []), list):
+        raise RuntimeError("四线脉络.json 的 throughlines 必须是列表")
 
     # 🔴 2026-07-03 Wave-4：本次 update() 会用到的全部待编码文本（corpus 摘要 +
     # 所有 thread/throughline query）一次性 prefetch（内容后端子进程按条调用极贵·
     # 合并成一次批调用），后续 _embed_corpus_once / _thread_appears 内的逐条
     # compute_content_embedding 全部命中缓存。
     if _content_backend_ready():
-        try:
-            from embedding_store import prefetch_content_embeddings
-            queries = [cluster_summary_text] if cluster_summary_text else []
-            for thread in sub.get("threads", []):
-                if isinstance(thread, str):
-                    if thread:
-                        queries.append(thread)
-                elif isinstance(thread, dict):
-                    name = thread.get("name", thread.get("id", ""))
-                    if name:
-                        desc = thread.get("description") or thread.get("desc") or ""
-                        queries.append(f"{name} {desc}".strip())
-            for line in tl.get("throughlines", []):
-                if isinstance(line, str):
-                    if line:
-                        queries.append(line)
-                elif isinstance(line, dict):
-                    name = line.get("name", "")
-                    if name:
-                        desc = line.get("description") or line.get("desc") or ""
-                        queries.append(f"{name} {desc}".strip())
-            if queries:
-                prefetch_content_embeddings(queries)
-        except Exception:
-            pass
+        from embedding_store import prefetch_content_embeddings
+        queries = [cluster_summary_text] if cluster_summary_text else []
+        for thread in sub.get("threads", []):
+            if isinstance(thread, str):
+                if thread:
+                    queries.append(thread)
+            elif isinstance(thread, dict):
+                name = thread.get("name", thread.get("id", ""))
+                if name:
+                    desc = thread.get("description") or thread.get("desc") or ""
+                    queries.append(f"{name} {desc}".strip())
+            else:
+                raise RuntimeError("subplot_threads.json 的 threads 只能包含字符串或对象")
+        for line in tl.get("throughlines", []):
+            if isinstance(line, str):
+                if line:
+                    queries.append(line)
+            elif isinstance(line, dict):
+                name = line.get("name", "")
+                if name:
+                    desc = line.get("description") or line.get("desc") or ""
+                    queries.append(f"{name} {desc}".strip())
+            else:
+                raise RuntimeError("四线脉络.json 的 throughlines 只能包含字符串或对象")
+        if queries:
+            prefetch_content_embeddings(queries)
 
     # 内容后端就绪时 cluster 摘要只编码一次（本函数下面两个循环复用·2026-07-02）
     corpus_emb = _embed_corpus_once(cluster_summary_text)
@@ -192,7 +215,7 @@ def update(project_root: Path, cluster_id: str) -> dict:
                     thread["dormant_since"] = ts
                     updated += 1
 
-    if updated > 0:
+    if updated > 0 or not sub_path.exists():
         _save(sub_path, sub)
 
     # 四线脉络同理（同一 cluster_summary_text·同一 corpus_emb·同一 _thread_appears 判定·
@@ -238,8 +261,14 @@ def main() -> int:
     total = r["subplot_updated"] + r["throughline_updated"]
     if total:
         print(f"[subplot_progress] 更新 {r['subplot_updated']} threads + {r['throughline_updated']} throughlines")
+    elif r.get("status") == "no_action":
+        print(f"[subplot_progress] no-op: {r.get('reason', '')}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # noqa: BLE001 - CLI boundary
+        print(f"[subplot_progress] FATAL: {exc}", file=sys.stderr)
+        raise SystemExit(2)

@@ -1,22 +1,76 @@
 {
   "_doc": "34 个核心子系统 JSON 的【确定性骨架】——单一真理源（框架）。scaffold_subsystems.py 据此为新书生成 schema 正确的空骨架，弱模型只需填内容、不碰 schema（照顾弱模型 + 根治契约债）。每个骨架满足 db_schema_validate.py（schema_version + 必需顶层键 + 正确 collection 类型）。保留通用默认（场景规则 5 类 / ecas 标志 / Save the Cat 框架名）。占位用 <...> 或空集合，由 /outline 填创意。🔴 容差约定：部分子系统（时间线 / character_arc_state / 伏笔表 / 故事块摘要 emotion 等）由 build_manifest 容差读取多种真实项目 schema 变体（多字段别名 + dict/list/标量并存），骨架给的是 canonical 形态；db_schema_validate 只深校验前 13 个核心件，其余 21 件由 scaffold_subsystems verify 查存在 + 合法 JSON + schema_version。🔴 2026-06-27 P0-05：每件 _doc 增 `consumption` 字段（direct_inject=被 build_manifest._collect_* 直接注入 / via_scanner=被某 scanner 扫描器消费 / via_engine=被某引擎消费 / deferred=保留待启用 / DEAD=零消费可清），scaffold_subsystems --consumption 模式据此交叉自检；build_manifest 末尾 _subsystem_consumption_audit 字段据此输出消费层级审计。",
   "_version": "v27",
-  "_canonical_34": ["人物卡","世界观","关系","地图","道具","进度","故事块摘要","大势卡","事件簇","事件表","时间线","伏笔表","作者风格","场景规则","写作经验","用户偏好","世界状态","涟漪规则","枢纽场景","时钟表","叙事节拍器","主角压力档","character_arc_state","角色行动表","群像档","事件池","行动判定模板","角色池","角色烙印","knowledge_graph","subplot_threads","beat_map","四线脉络","webnovel_bench_mapping"],
+  "_canonical_34": [
+    "人物卡",
+    "世界观",
+    "关系",
+    "地图",
+    "道具",
+    "进度",
+    "故事块摘要",
+    "大势卡",
+    "事件簇",
+    "事件表",
+    "时间线",
+    "伏笔表",
+    "作者风格",
+    "场景规则",
+    "写作经验",
+    "用户偏好",
+    "世界状态",
+    "涟漪规则",
+    "枢纽场景",
+    "时钟表",
+    "叙事节拍器",
+    "主角压力档",
+    "character_arc_state",
+    "角色行动表",
+    "群像档",
+    "事件池",
+    "行动判定模板",
+    "角色池",
+    "角色烙印",
+    "knowledge_graph",
+    "subplot_threads",
+    "beat_map",
+    "四线脉络",
+    "webnovel_bench_mapping"
+  ],
   "_belief_ledger_schema": {
     "_doc": "🔴 2026-06-29 角色信息差(per-character belief)·辅助态文件 _数据库/character_belief_ledger.json 的 schema 单一真理源(三 agent:outline-planner producer / build_manifest._sanitize_character_belief consumer / character_belief_ledger_scanner validator 照此对齐)。⚠️ 非 34 核心子系统·不在 _canonical_34·不计入 scaffold 34 count·同 locked_fact.json(辅助态文件·像它那样在 outline 阶段由 world_seed_init 播空骨架·后续由 cluster-save-state witness 回写步维护·不进 scaffold canonical 循环)。每角色独立信念图(SymbolicToM ACL2023 arXiv:2306.00924 每角色 belief 图+witness 检测 / OmniToM arXiv:2605.26322 证 LLM ToM 脆弱必须外置不能靠 gemini 隐式推理)。维护范式照搬 archivist/foreshadower 读正文:本块新增 fact 只 append 进【该 fact 发生 scene 的 participants】的 ledger·缺席角色不更新(自动 false belief)·apply_archive 风格确定性回库·绝不全局广播。build_manifest 按 scene 的 focal+participants 投射各角色认知给写手(只注入 known_facts 中 learned_at_cluster<=current 子集·对 unaware 角色注负向指令『角色 X 不知道 fact_Y·prose 中 X 不得提及/不得基于 Y 行动』)。与人物卡 knowledge 三态(knows_now/will_learn/doesnt_know_yet·主角时间线·防 FUTURE_KNOWLEDGE_LEAK)互补正交:三态=单轴主角时间线·本账本=多角色 per-character 信念分区。",
-    "_skeleton": {"schema_version": 1, "characters": {}, "facts": {}},
+    "_skeleton": {
+      "schema_version": 1,
+      "characters": {},
+      "facts": {}
+    },
     "_example": {
       "schema_version": 1,
       "characters": {
         "C_005": {
           "known_facts": [
-            {"fact_id": "F_祭台真相", "content": "祭台用师生记忆供养某种存在", "learned_at_cluster": "cluster_007", "learned_at_scene": 2, "source": "witnessed", "can_speak": true, "reader_knows": true, "is_red_herring": false}
+            {
+              "fact_id": "F_祭台真相",
+              "content": "祭台用师生记忆供养某种存在",
+              "learned_at_cluster": "cluster_007",
+              "learned_at_scene": 2,
+              "source": "witnessed",
+              "can_speak": true,
+              "reader_knows": true,
+              "is_red_herring": false
+            }
           ],
-          "unaware_of": ["F_主角身世"]
+          "unaware_of": [
+            "F_主角身世"
+          ]
         }
       },
       "facts": {
-        "F_祭台真相": {"content": "祭台用师生记忆供养某种存在", "first_revealed_cluster": "cluster_007", "subject": "C_005"}
+        "F_祭台真相": {
+          "content": "祭台用师生记忆供养某种存在",
+          "first_revealed_cluster": "cluster_007",
+          "subject": "C_005"
+        }
       }
     },
     "_field_semantics": {
@@ -34,26 +88,39 @@
       "facts.<fact_id>.first_revealed_cluster": "该 fact 首次在故事中揭示的 cluster",
       "facts.<fact_id>.subject": "该 fact 的主体角色 char_id(这条 fact 是关于谁的)"
     },
-    "_default_safety": "默认安全·向后兼容:文件不存在 / 某角色无 entry / scene 无 participants → 下游一律 fallback『全员视角』(不漏报·不假阳)。schema 无 additionalProperties:false(可向后兼容加字段)。北极星⑤:本账本是顾问·CHARACTER_KNOWLEDGE_LEAK 绝不进 HARD_GATE_CODES(梦境/通灵/补叙可豁免)。"
+    "_default_safety": "默认安全:文件不存在 / 某角色无 entry / scene 无 participants → 下游按当前 cluster 可见事实处理，不漏报、不假阳。schema 采用显式字段口径。北极星⑤:本账本是顾问·CHARACTER_KNOWLEDGE_LEAK 绝不进 HARD_GATE_CODES(梦境/通灵/补叙可豁免)。"
   },
   "_dramatic_question_ledger_schema": {
-    "_doc": "🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)·辅助态文件 _数据库/戏剧问题账本.json 的 schema 单一真理源(三方对齐:novel-foreshadower producer 读正文登记本块 raised/answered 戏剧问题 / save_state.cmd_apply_dramatic_questions consumer 确定性回库 / dramatic_question_lifecycle_scanner + build_manifest validator/软注入 照此对齐)。⚠️ 非 34 核心子系统·不在 _canonical_34·不计入 scaffold 34 count·同 character_belief_ledger.json / locked_fact.json(辅助态文件·在 outline 阶段由 world_seed_init 播空骨架{schema_version:1,clusters:{}}·后续由 cluster-save-state foreshadower 登记步维护·不进 scaffold canonical 循环)。读者粘性唯一宏观结构缺口:读者追读=想知道某个核心二元问题的答案(Cambridge 2026 PITQ·suspense 与潜在可终结追问的二元问题数强相关 / McKee Major Dramatic Question·激励事件抛核心问句→高潮回答·对答案的饥渴=追读引擎 / Loewenstein 1994 信息缺口·意识到的具体问题才打开缺口·模糊氛围不算 / Zeigarnik 未完成张力·旧问题闭合同时开新但须给足闭合避免 frustration 弃读)。伏笔是 PITQ 的特例(promise/question)·account 同构·qid 可与伏笔表 promise id 交叉引用。🔴 只登记 active cluster 实际提出/回答的问题(fluid·绝不预设 cluster_002+ 的问题)。🔴 必须同时查闭合率(answered/raised)不能只奖励开新坑——防 Zeigarnik 反面/虚假悬念毒点(由 B 的 dramatic_question_lifecycle_scanner 查闭合率/烂尾/章末无 open·本账本只存 STATE 不判决)。🔴 2026-06-29 Sternberg读者知识缺口三态(《Poetics of Biblical Narrative》/Neohelicon 2018):每个 raised 加 gap_type∈{suspense(未来未披露缺口)|curiosity(过去未解缺口)|surprise(未预期揭示·最强推进)}·三态混合是张力工具(此前散落:PITQ≈curiosity / dramatic_irony≈suspense / reveal_show/premature_resolution≈surprise·无统一账本确保混合)·统一进本账本不另立口径。整 cluster 只用一种缺口=单调(SINGLE_GAP_TYPE_MONOTONE advisory 提示缺三态混合·绝不替 writer 选缺口类型·北极星⑤)。",
-    "_skeleton": {"schema_version": 1, "clusters": {}},
+    "_doc": "🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)·辅助态文件 _数据库/戏剧问题账本.json 的 schema 单一真理源(三方对齐:novel-foreshadower producer 读正文登记本块 raised/answered 戏剧问题 / save_state.cmd_apply_dramatic_questions consumer 确定性回库 / dramatic_question_lifecycle_scanner + build_manifest validator/软注入 照此对齐)。⚠️ 非 34 核心子系统·不在 _canonical_34·不计入 scaffold 34 count·同 character_belief_ledger.json / locked_fact.json(辅助态文件·在 outline 阶段由 world_seed_init 播空骨架{schema_version:1,clusters:{}}·后续由 cluster-save-state foreshadower 登记步维护·不进 scaffold canonical 循环)。读者粘性唯一宏观结构缺口:读者追读=想知道某个核心二元问题的答案(Cambridge 2026 PITQ·suspense 与潜在可终结追问的二元问题数强相关 / McKee Major Dramatic Question·激励事件抛核心问句→高潮回答·对答案的饥渴=追读引擎 / Loewenstein 1994 信息缺口·意识到的具体问题才打开缺口·模糊氛围不算 / Zeigarnik 未完成张力·旧问题闭合同时开新但须给足闭合避免 frustration 弃读)。伏笔是 PITQ 的特例(promise/question)·account 同构·qid 可与伏笔表 promise id 交叉引用。🔴 只登记 active cluster 实际提出/回答的问题(fluid·绝不预设 cluster_002+ 的问题)。🔴 必须同时查闭合率(answered/raised)不能只奖励开新坑——防 Zeigarnik 反面/虚假悬念毒点(由 B 的 dramatic_question_lifecycle_scanner 查闭合率/烂尾/cluster 末无 open·本账本只存 STATE 不判决)。🔴 2026-06-29 Sternberg读者知识缺口三态(《Poetics of Biblical Narrative》/Neohelicon 2018):每个 raised 加 gap_type∈{suspense(未来未披露缺口)|curiosity(过去未解缺口)|surprise(未预期揭示·最强推进)}·三态混合是张力工具(此前散落:PITQ≈curiosity / dramatic_irony≈suspense / reveal_show/premature_resolution≈surprise·无统一账本确保混合)·统一进本账本不另立口径。整 cluster 只用一种缺口=单调(SINGLE_GAP_TYPE_MONOTONE advisory 提示缺三态混合·绝不替 writer 选缺口类型·北极星⑤)。",
+    "_skeleton": {
+      "schema_version": 1,
+      "clusters": {}
+    },
     "_example": {
       "schema_version": 1,
       "clusters": {
         "cluster_003": {
           "raised": [
-            {"qid": "DQ_祭台献祭真相", "question": "主角能否在第三次月圆前查清育新中学祭台献祭的幕后主使", "scope": "volume", "raised_at_scene": 1, "expected_payoff_window": "3-5 cluster", "gap_type": "suspense"}
+            {
+              "qid": "DQ_祭台献祭真相",
+              "question": "主角能否在第三次月圆前查清育新中学祭台献祭的幕后主使",
+              "scope": "volume",
+              "raised_at_scene": 1,
+              "expected_payoff_window": "3-5 cluster",
+              "gap_type": "suspense"
+            }
           ],
           "answered": [
-            {"qid": "DQ_诡秘信件寄主", "answered_at_scene": 4}
+            {
+              "qid": "DQ_诡秘信件寄主",
+              "answered_at_scene": 4
+            }
           ]
         }
       }
     },
     "_field_semantics": {
-      "clusters.<cluster_id>": "该 cluster 的戏剧问题账目(键=cluster_id·cluster_lookup.py 反查·禁 cluster_{ch:03d} 机械拼接)",
+      "clusters.<cluster_id>": "该 cluster 的戏剧问题账目(键=cluster_id·cluster_lookup.py 反查·禁按输出段序号机械拼接)",
       "clusters.<cluster_id>.raised[].qid": "全局唯一问题 id(跨 cluster 唯一·answered 据此标对应问题闭合·可与伏笔表 promise id 交叉引用)",
       "clusters.<cluster_id>.raised[].question": "具体二元 PITQ(『他能否在三天内找到解药』有明确 yes/no 终结追问·非『气氛诡异』这种模糊悬念)",
       "clusters.<cluster_id>.raised[].scope": "cluster|volume|series·问题量级(cluster=本块小问题/volume=卷核心 MDQ/series=全书贯穿)",
@@ -63,43 +130,836 @@
       "clusters.<cluster_id>.answered[].qid": "本块回答的问题 id(指向某 raised.qid·可跨 cluster·标该 PITQ 闭合)",
       "clusters.<cluster_id>.answered[].answered_at_scene": "本块回答该问题的 scene_idx(0-based)"
     },
-    "_default_safety": "默认安全·向后兼容:文件不存在(旧书/轻量) / 无 dramatic_questions / 某 cluster 无 entry / raised 缺 gap_type(旧账本/慢热单一缺口合法) → save_state 回库 no-op 不报错·下游 scanner fallback 不漏报不假阳。schema 无 additionalProperties:false(可向后兼容加字段)。北极星④:账本在 cluster 状态层·splitter 不感知。北极星⑤:本账本是顾问·open question 数量+知识缺口三态混合都是创作工艺(慢热文学可少钩/单一缺口·作者档第一权威)·gap_type/SINGLE_GAP_TYPE_MONOTONE 绝不进 HARD_GATE_CODES。"
+    "_default_safety": "默认安全:文件不存在 / 无 dramatic_questions / 某 cluster 无 entry / raised 缺 gap_type → save_state 不写入该项；下游 scanner 按已登记问题判断，不漏报、不假阳。schema 采用显式字段口径。北极星④:账本在 cluster 状态层·splitter 不感知。北极星⑤:本账本是顾问·open question 数量+知识缺口三态混合都是创作工艺(慢热文学可少钩/单一缺口·作者档第一权威)·gap_type/SINGLE_GAP_TYPE_MONOTONE 绝不进 HARD_GATE_CODES。"
   },
   "skeletons": {
-    "人物卡": {"schema_version": "v27", "_doc": "角色卡 · build_manifest 按 scene_storyboard[].characters 加载 · item 必需 id/name/role · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema", "consumption": {"layer": "direct_inject", "by": ["build_manifest._char_id_map", "build_manifest.active_characters"], "status": "live"}, "characters": [], "_writer_isolation_schema": {"_doc": "🔴 2026-06-28 写手信息隔离·照抄伏笔 surface_clue/hidden_payoff/trigger_cluster 明暗线范式·默认安全:不标 hidden 字段=普通角色明线原样透传(向后兼容·build_manifest._sanitize_character_card 安全闸)·隐藏身份到 concealed_until_cluster 才解锁 true_role+reveal_directive", "hidden_identity": {"surface_role": "明面叙事位·写手只见(如 ally/mentor·替换 role)", "true_role": "隐藏真实角色(false_hero/伪装者/最终Boss·concealed 前剥离)", "concealed_until_cluster": "cluster_007·揭晓块(>= 此块解锁 true_role)", "surface_propp_function": "表面 propp(可选·缺则 false_hero→ally 自动映射)"}, "ghost": {"surface_driver": "创伤外显·写手可见(留)", "wound": "镜像身份/隐藏动机·reveal(surface_driver 存在时剥·_GHOST_REVEAL_KEYS=wound/wound_reveal/reveal/true_wound/hidden_payoff)"}, "knowledge": {"doesnt_know_yet": ["主角当前未知项·留(防 FUTURE_KNOWLEDGE_LEAK)"], "will_learn": [{"fact": "未来才知的事实", "learn_at_cluster": "cluster_005·学到块(未到则剥·到才注入)"}]}, "voice_pack": {"anti_patterns": ["纯工艺口癖/句式禁忌·字符串(留)", {"pattern": "含未揭晓秘密措辞的护栏", "reveals_secret": true, "hidden_until_cluster": "cluster_007(未到则剥)"}]}, "_writer_hint": "结构化写手提示·含『终卷揭密/false_hero/不可早暴露/灰色合作』reveal 标记整条会被剥(防粉红大象)·普通提示原样留"}},
-    "世界观": {"schema_version": "v27", "_doc": "世界设定 · entries 关键词触发注入 · item 必需 id/title/keywords · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema", "consumption": {"layer": "direct_inject", "by": ["build_manifest.world_keyword_hits"], "status": "live"}, "era": "", "location": "", "rules": [], "factions": [], "entries": [], "_writer_isolation_schema": {"_doc": "🔴 2026-06-28 写手信息隔离·世界真相明暗线(同伏笔三元组范式)·默认安全:无 hidden_truth/hidden_rules/hidden = 公开设定原样(build_manifest._resolve_world_entry/_sanitize_faction_focus 安全闸)·公开设定+数值(涟漪 surface·北极星②)always 留", "entry": {"hidden_truth": "条目隐藏真相(reveal_cluster 未到则剥·堵写手直读绕过)", "hidden_rules": "条目隐藏规则(同上)", "reveal_cluster": "cluster_012·揭晓块(>= 此块 merge hidden_truth/hidden_rules+reveal_directive)"}, "faction": {"hidden": true, "surface_focus": "明面动向·写手只见(替换真 current_focus)", "current_focus": "真实当前动向(hidden 时剥·surface_focus 顶替)"}}},
-    "关系": {"schema_version": "v27", "_doc": "角色关系数值 · item 必需 id/from/to/type · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_active_relationships", "build_manifest._collect_faction_standings"], "status": "live"}, "relationships": [], "faction_standings": {}, "_writer_isolation_schema": {"_doc": "🔴 2026-06-28 写手信息隔离·关系明暗线拆分(同伏笔三元组范式)·默认安全:无 hidden_* = 明线原样(build_manifest._sanitize_relationship 安全闸)·明面 type/数值 always 留·秘密议程到 reveal_cluster 才暴露+reveal_directive", "type": "明面关系·写手只见(留·如 mentor/ally)", "hidden_intent": "秘密议程/暗议程(reveal_cluster 未到则剥)", "reveal_cluster": "cluster_009·hidden_intent 揭晓块(>= 此块解锁)", "surface_note": "明面备注(留)", "hidden_note": "暗线备注(到 hidden_note_reveal_cluster 才暴露)", "hidden_note_reveal_cluster": "cluster_009·hidden_note 揭晓块"}},
-    "地图": {"schema_version": "v27", "_doc": "世界地图 · locations 是 list · 消费方读 character_positions(dict)/travel_log", "consumption": {"layer": "direct_inject", "by": ["build_manifest.character_positions", "build_manifest.relevant_items"], "status": "live"}, "locations": [], "character_positions": {}, "travel_log": []},
-    "道具": {"schema_version": "v27", "_doc": "道具系统 · item 必需 id/name · 与伏笔联动（契诃夫之枪）", "consumption": {"layer": "direct_inject", "by": ["build_manifest.relevant_items"], "status": "live"}, "items": [], "item_locations": {}, "crafting_recipes": []},
-    "进度": {"schema_version": "v27", "_doc": "进度 · v27 freestyle 章数 fluid（total_chapters 不死锁）· cluster_blueprint 必须 dict（[H5]）· 只详化 cluster_001", "consumption": {"layer": "direct_inject", "by": ["build_manifest.current_scene", "build_manifest.volume_info", "_bp_items"], "status": "live"}, "book_title": "<书名>", "current_cluster": "cluster_001", "total_chapters": 0, "completed": 0, "current": 1, "words_per_chapter": 3500, "writer_mode": "freestyle", "rhythm_profile": "混合", "volumes": [], "cluster_blueprint": {}, "propagation_debt": [], "started_at": "", "last_updated": ""},
-    "故事块摘要": {"schema_version": "v2.cluster", "_doc": "cluster 账本主存储 · cluster-save-state 经 cluster_summary_builder 落库 · item 必需 cluster_id/title", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_event_cluster_context", "cross_cluster_summary_reader"], "status": "live"}, "clusters": []},
-    "大势卡": {"_schema": "major_events_v21_phase", "schema_version": "v27", "_doc": "🆕2026-06-03 卷=阶段触发点：每卷=1个阶段(副本/大故事方向)·有 volume_core_conflict(卷核心任务)+volume_thread(卷线索串本卷cluster)·ME池=本卷内『小故事走向』候选(每 ME=1 cluster=1 小走向·携 stakes_delta 相对前块强度增量·🔴禁单 cluster 覆盖整阶段/整副本)·每 ME 标 volume:N·本卷末 ME 标 is_volume_finale:true·换卷=核心任务解决+跃迁信号任一(①主角力量/身份跃迁 ②舞台/地理转移 ③核心反派/矛盾解决或新反派)·卷长 fluid 不锁章·卷间软边界(涟漪/伏笔/角色跨卷延续)·调研接地见 _temp_research/卷阶段结构调研/·🔴 2026-06-29 story_destiny.controlling_idea=主控思想主题脊柱(全书唯一主题真理源·Egri/McKee/Truby·见 story_destiny._doc·全 advisory 软牵引·爽文可空)", "consumption": {"layer": "via_engine", "by": ["cluster_emergence_engine", "fate_engine", "build_manifest._collect_active_fate_events"], "status": "live"}, "_load_bearing_nonempty": {"code": "GRAND_TREND_ME_POOL_EMPTY", "any_of": ["major_events"], "_doc": "🔴 2026-06-27 C03 载荷非空标记：当前卷 ME 池(major_events)空 → cluster_emergence_engine 大势无方向（机器永不点火·北极星③大势已定·hard）·cluster_002+ 未涌现 ME 属 fluid 合法（仅查池非空非逐 cluster）"}, "_metadata": {"rhythm_profile": "混合", "narrative_framework": "save_the_cat", "cluster_count_per_volume": 0}, "story_destiny": {"final_image": "", "thematic_resolution": "", "controlling_idea": {"_doc": "🔴 2026-06-29 controlling_idea主控思想主题脊柱（全书唯一主题真理源·P0）·Egri premise(价值→冲突→结局因果论断)→McKee controlling_idea(if/when/because条件化·结局绑角色行动+value正负电荷+cause)→Truby moral_argument(行动论证非台词说教)+designing_principle(贯穿全书组织隐喻/主母题)三层递增精度。作者档第一权威：爽文/无限流可极简(controlling_idea=弱者逆袭爽即合法·premise一句即可)甚至全空(纯类型驱动不强加主题)·通用主题理论仅作者档未规定该维度时兜底·严肃/现实向可更深贯穿(防惊悚乐园流水账覆辙·通用工艺勿压作者档)。final_image对齐value电荷落定·thematic_resolution对齐cause/synthesis。🔴moral_argument复用thematic_argument_pairs结构(position_A/symbols_A/position_B/symbols_B·与thematic_argument_motif_balance.py消费的thematic_argument_pairs每对字段一一对齐·避免两处各立schema·契约债教训)·symbols_*绑motif_recurrence_ledger母题·designing_principle绑motif_recurrence_ledger seed。默认安全·向后兼容：种子可空·旧大势卡无controlling_idea/字段全空→下游(build_manifest软注入)不注入·零行为变化。北极星③：主题骑build_manifest._soften_convergence_anchor同轨软牵引(早期cluster软方向·越近卷末越显化)·绝不把大势收敛从软变硬。北极星④：plan层结构化节点非prose指令。北极星⑤：绝不向writer下『本章必须论证主题X』硬指令(gemini freestyle·主题是advisory软牵引卡)·绝不进audit_hub.HARD_GATE_CODES。", "premise": "", "controlling_idea": "", "moral_argument": {"position_A": "", "symbols_A": [], "position_B": "", "symbols_B": []}, "designing_principle": ""}}, "volumes": [], "_volume_schema": {"vol": 1, "title": "<阶段/副本名>", "volume_core_conflict": "<本阶段核心任务/冲突·解决即可收卷>", "volume_thread": "<卷线索:串起本卷所有小走向 cluster 的那根线>", "volume_finale_signal": "<换卷触发:核心任务解决 + (力量跃迁/舞台转移/反派更迭) 任一>"}, "_me_schema": {"id": "ME-V<卷号>-<序>", "volume": 1, "title": "<小故事走向>", "is_volume_finale": false, "stakes_delta": "<相对前一小走向的强度/筹码增量·try-fail 递增>", "prerequisites": [], "physical_evidence": [], "status": "pending"}, "major_events": []},
-    "事件簇": {"schema_version": "v2.cluster", "_doc": "ECAS 事件簇=writer 工单 · v27 freestyle 不写 word_range/estimated_chapters/chapter_range · 只详化 clusters[0]，余 status=未涌现 · clusters[0].narrative_mode=in_medias_res · 🆕 R19 W8 Batch-W cluster 可选填 bibliotherapy_arc={identification:[scene_idx],catharsis:[scene_idx],insight:[scene_idx]} 三相 scene 索引 advisory 给 bibliotherapy_arc_scanner 校验 · 🆕 R22 W10 Batch-FF cluster 可选填 premise_blend_card={blend_type/input_space_A/B/generic_space/emergent_structure≥3/vital_relations_compressed} CBT(Fauconnier&Turner 概念整合)显式登记 conceit·premise_blend_card_scanner 落地度校验·vital_relations_probe 7 类标记密度", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_event_cluster_context", "cluster_choice_apply", "cluster_emergence_engine"], "status": "live"}, "_load_bearing_nonempty": {"code": "CLUSTER001_STORYBOARD_EMPTY", "any_of": ["clusters.0.scene_storyboard"], "_doc": "🔴 2026-06-27 C03 载荷非空标记：cluster_001(clusters[0]) scene_storyboard 空 → 首块未详化（机器永不点火·黄金三章必详化·hard）·只查 clusters[0]·cluster_002+ 空 storyboard 属 fluid 涌现合法（回归锁·显式豁免）"}, "ecas_enabled": true, "v2_cluster_enabled": true, "clusters": [], "_cluster_brief_schema_hint": {"bibliotherapy_arc": {"_doc": "Shrodes 1949 三阶段读者转化·scene 索引(0-based 对应 scene_storyboard)", "identification": [], "catharsis": [], "insight": []}, "premise_blend_card": {"_doc": "Fauconnier&Turner CBT 概念整合卡·R22 W10 Batch-FF·outline step 9.5 AskUser+outline-planner 填·cluster_emergence_engine 涌现 candidate 自动留空骨架待详化·blend_type∈{single_scope|double_scope|mirror|simplex}·emergent_structure≥3 条 emergent_meaning·vital_relations_compressed 列 CBT 7 类标记中本 blend 主压缩关系", "blend_type": "", "input_space_A": {"frame": "", "signature_lexemes": []}, "input_space_B": {"frame": "", "signature_lexemes": []}, "generic_space": "", "emergent_structure": [], "vital_relations_compressed": []}, "scene_belief_fields": {"_doc": "🔴 2026-06-29 角色信息差·scene_storyboard[] 每 scene 加这 4 字段(outline-planner 详化/涌现时产·权威 schema 见 schemas/event_cluster_schema.json 的 scene_storyboard.items)·participants/focal_character/focalization_mode=结构事实(谁在场=客观·北极星⑤)·knowledge_gap_mode=advisory 创作提示(不锁剧情)·默认安全:旧 scene 缺这些字段→下游 fallback 全员视角不漏报", "participants": ["char_id·本场在场角色·witness 检测命门(信念只沿在场传播·下游 witness 回写据此判定谁 witness 到本场 reveal 的 fact·build_manifest 据此 per-scene 投射各角色认知给写手)·通常 = 本场 characters(出场角色)"], "focal_character": "char_id·本场 POV/聚焦者", "focalization_mode": "zero|internal|external·Genette 聚焦(zero=全知/internal=限知某角色内心/external=只外部观察)", "knowledge_gap_mode": "mystery|suspense|dramatic_irony|null·advisory·McKee 三知识缺口(读者知角色不知=dramatic_irony 桌下炸弹)·设计悬念/反转/戏剧反讽时标·否则 null"}, "scene_causal_fields": {"_doc": "🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架·scene_storyboard[] 每 scene 加这组字段(outline-planner 详化/涌现时产·权威 schema 见 schemas/event_cluster_schema.json 的 scene_storyboard.items)·治流水账(SOTA=South Park But/Therefore法则+Swain Scene-Sequel+Butcher Try-Fail)·复用既有 goal/conflict(proactive 场)·通用 3 字段 scene_type/link_to_prev/result_type + proactive 填 disaster / reactive 填 reaction/dilemma/decision·全 advisory 参考模板非硬模具(writer 有理由可豁免·北极星⑤)·默认安全:旧 scene 缺这些字段→下游 fallback 不约束·向后兼容·消费方=build_manifest + causal_connector_scanner(B agent)·与既有 R20 unit_type/sequel_*(sequel_drought_advisory 消费) 同概念更细版并存", "scene_type": "proactive_scene|reactive_sequel·Swain 场景单元类型(proactive=行动场 goal→conflict→disaster / reactive=反应场 reaction→dilemma→decision)·⚠️不同于 chapter-plan 层 scene_type(开场/战斗 category)", "disaster": "proactive_scene 结尾的挫败/恶化(目标受挫·推动下一 reactive)·仅 proactive 填", "reaction": "reactive_sequel 的情绪反应·仅 reactive 填", "dilemma": "reactive_sequel 的两难(无好选项)·仅 reactive 填", "decision": "reactive_sequel 的新目标决定(下个 proactive 的 goal 种子)·仅 reactive 填", "link_to_prev": "but|therefore|and_then·与上一 scene 衔接(but=冲突转折/therefore=因果后果/and_then=平铺·流水账根因要避免)·只查是否 and_then 平铺·不卡 but/therefore 比例(70/30 经验值非硬指标)", "result_type": "yes_but|no_and|yes_and·本场结果(yes_but=达成但带来新麻烦/no_and=失败且更糟/yes_and=达成且顺势)·禁纯 yes 顺风局·try-fail 递增·advisory"}, "scene_dialogue_objectives": {"_doc": "🔴 2026-06-29 对白即行动dialogue_objectives·scene_storyboard[] 对话密集 scene 加 dialogue_objectives 数组(每个说话角色一项·outline-planner 详化/涌现时产·权威 schema 见 schemas/event_cluster_schema.json 的 scene_storyboard.items)·SOTA=McKee《Dialogue: The Art of Verbal Action》每句台词=verbal action·角色为达成未说出口 objective 采取 tactic(active verb)·on-the-nose=说透目标=零潜台词 + CoSER arXiv:2502.09082 三通道 Speech/Action/Thought(what_unsaid=隐藏 Thought 通道驱动潜台词·去 inner-thought 一致性显著下降) + dialogue_act 骨架·全 advisory 场景级建议非逐句锁·非每场必填(纯叙述/独白场可空·过度结构化→对话变机械任务清单是 pitfall)·Claude 只标意图(what·角色想干嘛)·措辞(how·具体台词)永远交 gemini freestyle(北极星④规划管意图/创作管表达)·what_unsaid 只驱动潜台词不写进正文·涉未到期 hidden 伏笔走 reveal 隔离绝不剧透·默认安全:旧 scene 缺则下游 fallback 不注入·向后兼容·作者档第一权威(爽文直球对喷不强加 subtext)·消费方=build_manifest._collect_dialogue_objectives(B agent)·绝不 hard_gate", "character": "char_id·说话角色(对齐人物卡 id)", "wants": "本场该角色想从对方拿到什么(未说出口的 objective·Stanislavski scene-objective 的对白侧)", "tactic": "active verb 言语策略(试探/施压/回避/示弱/反问/讨好)·达成 wants 的手段·how 留给 gemini", "obstacle": "被谁/什么阻挠(对手的反 objective / 外部障碍)", "dialogue_act": "试探|回避|威胁|让步|反讽|求证|施压|示弱·dialogue_act 骨架枚举", "what_unsaid": "压着不说的潜文本(隐藏 Thought 通道·CoSER)·只驱动潜台词不写进正文·涉未到期 hidden 伏笔走 reveal 隔离绝不剧透"}}},
-    "事件表": {"schema_version": "v27", "_doc": "事件触发器 · pending_events item 必需 id/name", "consumption": {"layer": "direct_inject", "by": ["build_manifest.triggerable_events"], "status": "live"}, "pending_events": [], "triggered_events": [], "recurring_events": []},
-    "时间线": {"schema_version": "v27", "_doc": "时间系统 · world_clock_events item 必需 event", "consumption": {"layer": "direct_inject", "by": ["build_manifest.time_state"], "status": "live"}, "current_time": {"day": 1, "period": "morning", "chapter": 1, "season": ""}, "time_per_chapter": "约半天", "npc_schedules": {}, "world_clock_events": [], "time_log": []},
-    "伏笔表": {"schema_version": "v27", "_doc": "伏笔系统 · promises(Tier分级) item 必需 id/description/setup_cluster/tier · deadlines/pledges/secrets(密级)", "consumption": {"layer": "direct_inject", "by": ["build_manifest.due_foreshadowing", "build_manifest._collect_secrets_to_reveal", "build_manifest._collect_will_learn_due"], "status": "live"}, "promises": [], "deadlines": [], "pledges": [], "secrets": []},
-    "作者风格": {"schema_version": "v27", "_placeholder": true, "_doc": "★占位：必须由 /distill-style 蒸馏或从 workspace/styles/<书名>/作者风格_FINAL.json 复制替换。空占位会让 build_manifest 风格注入失效——scaffold 仅保证文件存在过门禁，正式写作前务必替换。", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_author_style_fingerprint", "build_manifest._collect_author_rhythm_signature", "build_manifest._collect_author_decision_principles", "build_manifest._collect_genre_pack_directives", "validate_style"], "status": "live"}, "author": "<待定>", "core_style_signature": {}, "quantitative": {}, "narrative_fingerprint": {}, "narrative_craft": {}},
-    "场景规则": {"schema_version": "v27", "_doc": "场景类型写作规则 · build_manifest 按 scene_type 注入", "consumption": {"layer": "direct_inject", "by": ["build_manifest.scene_rule_for_chapter"], "status": "live"}, "scene_types": {"战斗": {"style": "短句为主，动作描写>心理描写，节奏紧凑，每段不超过3行", "dialogue_ratio": "20-30%", "focus": "动作、速度感、力量对比"}, "日常": {"style": "对话为主，轻松语气，可有内心吐槽和幽默", "dialogue_ratio": "50-70%", "focus": "角色互动、性格展现、生活细节"}, "情感": {"style": "细腻描写，内心独白多，节奏放慢", "dialogue_ratio": "30-50%", "focus": "情绪变化、微表情、环境烘托"}, "悬疑": {"style": "暗示>明说，信息碎片化，制造不安感", "dialogue_ratio": "40-60%", "focus": "线索铺设、氛围营造、读者能看出但角色看不出"}, "转折": {"style": "前半平缓后半急转，反差感强烈", "dialogue_ratio": "30-50%", "focus": "铺垫与反转、情绪落差、关键信息揭露"}}},
-    "写作经验": {"schema_version": "v27", "_doc": "写作经验库（Learning Loop）· 权威结构=success_patterns/failure_patterns/preferences（entries 是 reflector 输入格式非本文件结构）· save-state 自动积累", "consumption": {"layer": "direct_inject", "by": ["build_manifest.experience_entries", "build_manifest._collect_relevant_heuristics", "learning_loop"], "status": "live"}, "success_patterns": [], "failure_patterns": [], "preferences": []},
-    "用户偏好": {"schema_version": "v27", "_doc": "用户偏好 · ecas_config.ecas_enabled/v2_cluster_enabled 必为 true · v27 writer_mode=freestyle · 正文走 gen-model", "consumption": {"layer": "direct_inject", "by": ["build_manifest.user_preferences", "build_manifest._collect_user_preferences_v21", "build_manifest._collect_reader_preferences"], "status": "live"}, "style_preferences": [], "content_preferences": [], "workflow_preferences": [], "narrative_style": {"pov": "third_person", "pov_anchor_character": "", "tense": "past", "narrator_voice": "neutral"}, "ecas_config": {"ecas_enabled": true, "v2_cluster_enabled": true}, "last_updated": ""},
-    "世界状态": {"_schema": "world_state_v20_1", "schema_version": "v27", "_doc": "客观世界数值 · world_evolution_engine 按涟漪规则确定性算 delta · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema", "consumption": {"layer": "via_engine", "by": ["world_evolution_engine", "build_manifest._collect_world_state_snapshot", "cluster_emergence_engine"], "status": "live"}, "current_world_time": {"ch": 1, "cluster": "cluster_001", "day": 1}, "protagonist_state": {}, "factions_state": {}, "active_npc_threads": [], "emergent_opportunities": [], "consequence_tracker": [], "_writer_isolation_schema": {"_doc": "🔴 2026-06-28 写手信息隔离·factions_state 阵营暗议程 + active_npc_threads 幕后真实意图·默认安全:无 hidden/surface_focus = 公开动向原样(build_manifest._sanitize_faction_focus 安全闸)·数值(power/stability/wealth)+current_action(公开动向·涟漪 surface·北极星②)always 留", "faction": {"hidden": true, "surface_focus": "明面动向·写手只见", "current_focus": "真 current_focus(hidden 时剥·surface_focus 顶替)", "hidden_focus": "幕后真焦点(剥)"}, "active_npc_thread": {"current_action": "公开动向(留·涟漪 surface)", "outcome_if_complete": "幕后完成后的未来结果(剥·写手不预知结局)"}}},
-    "涟漪规则": {"_schema": "ripple_rules_v20_1", "schema_version": "v27", "_doc": "小势→世界状态变化的因果规则（北极星②涟漪核心）· world_evolution_engine 消费 · rule 含 trigger_type(minor_event/fate_event/auto_tick)/trigger_match/ripples", "consumption": {"layer": "via_engine", "by": ["world_evolution_engine"], "status": "live"}, "_load_bearing_nonempty": {"code": "RIPPLE_RULES_EMPTY", "any_of": ["ripple_rules", "rules"], "_doc": "🔴 2026-06-27 C03 载荷非空标记：涟漪规则空 → world_evolution_engine 零触发（机器永不点火·北极星②涟漪核心·hard）"}, "ripple_rules": []},
-    "枢纽场景": {"_schema": "hub_scenes_v21", "schema_version": "v27", "_doc": "枢纽场景 HUB · 与 事件簇 cluster.hub_locations 对齐 · 每 HUB 含氛围/常驻角色/可发生事件", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_hub_directive"], "status": "live"}, "hubs": [], "rhythm_targets": {"depart": 0.2, "quest": 0.55, "return": 0.18, "idle": 0.07}, "cluster_hub_log": []},
-    "时钟表": {"_schema": "clocks_v21", "schema_version": "v27", "_doc": "剧情时钟（倒计时压力）· clock 含 name/current/max/trigger_on_full · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_active_clocks", "clock_engine"], "status": "live"}, "clocks": [], "_inactive_pool": [], "_writer_isolation_schema": {"_doc": "🔴 2026-06-28 写手信息隔离·暗线时钟·默认安全:visible_to_writer 缺省=true(向后兼容·build_manifest._sanitize_clock_to_writer 安全闸·clock_engine.list_active 补此字段)", "clock": {"visible_to_writer": true, "is_surprise": false, "trigger_on_max": "满格触发后果·暗线时钟(is_surprise=true 须同设 visible_to_writer=false·后者是 build_manifest 读的门控字段·未满格且不可见时剥 trigger_on_max·写手不预知爆点)"}}},
-    "叙事节拍器": {"schema_version": "v27", "_doc": "pacing metronome · 情绪节奏目标 + 章末必留钩子 + 爽点分布 · 🔴 2026-06-29 加 appraisal_beats[]（场景级 Appraisal Beat·chain-of-emotion·见 _appraisal_beats_schema）", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_storyteller_directive", "narrator_calibrate"], "status": "live"}, "rhythm_profile": "混合", "beat_targets": [], "default_beat_policy": {"chapter_end_hook_required": true, "no_consecutive_negative_beats": 2}, "appraisal_beats": [], "_appraisal_beats_schema": {"_doc": "🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion 两步法·SOTA arXiv:2309.05076 实证情绪自然度提升 + CAPE arXiv:2410.14145）：把情绪从『prose 一句提示』升维为『结构化可追踪 STATE』。链路：novel-summarizer 读整 cluster 正文（梳理非创作·禁占位词典浅扫）按 Scherer CPM/OCC 评价链推理产 summary.appraisal_beats → save_state.py --apply-appraisal-beats 确定性回填本数组（append·幂等·按 cluster_id+scene_idx+focal_character 去重）→ build_manifest 读取注入下一 active cluster『这一拍情绪应往哪走+为何+如何外化』advisory 卡。🔴 只填 active cluster（fluid·绝不预设/回填别的 cluster）。🔴 derived_emotion 必须是自然语言情绪推理（为何会这样感受）·禁『愤怒/心中一凛』等情绪词标签（否则退化成反 AI 腔堆砌·撞禁用词）。behavior_externalization 外化成动作/细节·非情绪词。复用：emotion_curve_normalized 当情绪历史链 · character_belief_ledger 当 CAPE 个人侧输入 · vad_bin 6 维确定性反推供 character_vad_ued_scanner 复用。全 advisory STATE（非判决·不进 audit_hub.HARD_GATE_CODES）。", "item": {"cluster_id": "cluster_NNN", "scene_idx": 0, "focal_character": "C_xxx（真角色 id·非名字）", "trigger_event": "触发该情绪 beat 的事件", "appraisal": {"relevance": "目标相关度", "congruence": "+（目标一致）|-（受阻）", "certainty": "确定性", "coping_potential": "应对潜力", "accountability": "self|other|circumstance", "norm_compat": "符合/违背规范"}, "prospect": {"type": "hope|fear|null", "resolved_to": "satisfaction|disappointment|relief|fears_confirmed|null"}, "derived_emotion": "自然语言推理·非情绪词标签（如『被最信任的人背叛后那种发冷的难以置信』）", "behavior_externalization": "外化成什么动作/细节（非情绪词）", "vad_bin": {"valence": "VL|L|M|H|VH", "arousal": "VL|L|M|H|VH", "dominance": "VL|L|M|H|VH"}}}},
-    "主角压力档": {"_schema": "protagonist_stress_v21", "schema_version": "v27", "_doc": "主角压力档 · stress 数值 + 崩溃阈值 + 压力回归方式 · build_manifest 注入 persona", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_protagonist_stress", "stress_evaluator"], "status": "live"}, "protagonist": "", "stress_level": 0, "stress_max": 12, "stress_threshold_break": 10, "stress_log": [], "persona_violations_tracked": {}, "mental_break_pool": [], "coping_mechanisms": {}},
-    "character_arc_state": {"schema_version": "2.0", "_doc": "McKee7步+Truby精华角色弧线 · v27 用 stages_by_cluster 不锁章号 · build_manifest._collect_character_arc_state 注入 · writer step0 消费 ghost/moral_argument/weakness_need vs desire", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_main_character_arc_stage", "build_manifest._collect_main_character_arcs"], "status": "live"}, "characters": {}, "_story_world": {"literal": "", "metaphorical": "", "thematic_critique": ""}},
-    "角色行动表": {"_schema": "offstage_actions_v21", "schema_version": "v27", "_doc": "NPC 幕后行动表 · offstage_threads 记重要配角/反派的幕后目标+行动", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_offscreen_actions", "build_manifest._collect_character_moves"], "status": "live"}, "characters": {}, "offstage_threads": {}},
-    "群像档": {"_schema": "ensemble_v21", "schema_version": "v27", "_doc": "群像配角档 · 功能定位+与主角关系+戏份节奏", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_ensemble_layer", "relationship_evaluator"], "status": "live"}, "characters": {}, "background_ensemble": {}},
-    "事件池": {"_schema": "event_pool_v22", "schema_version": "v27", "_doc": "fluid 事件池（涌现素材）· 不锁章号 · 由涟漪+arc 触发的候选事件", "consumption": {"layer": "via_engine", "by": ["build_manifest._collect_active_fate_events", "fate_engine", "auto_fate_draw"], "status": "live"}, "events": [], "drawn_events_log": []},
-    "行动判定模板": {"schema_version": "v27", "_doc": "行动判定（类掷骰/属性判定）模板 · 判定维度 + 结果带", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_position_effect_template"], "status": "live"}, "templates": [], "dimension_registry": {}, "outcome_band_schema": {}},
-    "角色池": {"schema_version": "v27", "_doc": "fluid 角色池 · core(永久) + emerged(涌现) + extras(一次性)", "consumption": {"layer": "via_engine", "by": ["cluster_emergence_engine", "fate_engine"], "status": "live"}, "core": [], "emerged": [], "extras": []},
-    "角色烙印": {"schema_version": "v27", "_doc": "角色烙印（distill-character 深度蒸馏产物占位）· 由 /distill-character 填 voice DNA 5 层", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_active_aspects", "build_manifest._collect_distill_voice_refs"], "status": "live"}, "imprints": [], "_imprint_schema": {}},
-    "knowledge_graph": {"schema_version": "v27", "_doc": "知识图谱 · 角色↔事实↔密级 · nodes/edges", "consumption": {"layer": "via_scanner", "by": ["locked_fact_cross_scene_scanner", "knowledge_gap_scanner"], "status": "live"}, "nodes": [], "edges": []},
-    "subplot_threads": {"schema_version": "v27", "_doc": "副线脉络 · thread 含 id/name/status/related_chars", "consumption": {"layer": "via_scanner", "by": ["subplot_thread_scanner", "throughline_balance_scanner"], "status": "live"}, "threads": []},
-    "beat_map": {"schema_version": "v27", "_doc": "叙事框架节拍映射（Save the Cat 15 拍 / 三幕 等）↦ 卷落点 · scanner 专用不注入 writer · cluster_beats[cluster_id]=本 cluster 起承转合结构功能 beat 序列（🔴 2026-06-29 beat_map_update.py 据 scene_storyboard 确定性派生·plot_structure_scanner CLUSTER_MODE 消费·advisory·C03 fluid 只填 active cluster）", "consumption": {"layer": "via_scanner", "by": ["beat_map_scanner", "plot_structure_scanner"], "status": "live"}, "framework": "save_the_cat", "volume": 1, "_metadata": {}, "beats": [], "cluster_beats": {}},
-    "四线脉络": {"schema_version": "v27", "_doc": "Dramatica 四贯穿线(Overall/Main/Influence/Relationship)", "consumption": {"layer": "direct_inject", "by": ["build_manifest._collect_throughlines"], "status": "live"}, "throughlines": {"overall": {}, "main": {}, "influence": {}, "relationship": {}}},
-    "webnovel_bench_mapping": {"schema_version": "v27", "_doc": "网文 benchmark 维度映射（黄金三章/钩子/爽点/反套路 等评估维度→本书落点）", "consumption": {"layer": "deferred", "by": [], "status": "deferred", "reason": "G13 WebNovelBench 评估器未启用 · 占位骨架供未来集成（保留入库避免回归）"}, "dimensions": []},
-    "event_relation_graph": {"schema_version": 1, "_doc": "[2026-06-21 R19 W8 Batch-W·P1·StoryWriter arxiv 2506.16445] outline 跨 cluster 因果 + 角色 throughline 有向图·outline step 3.5 builder 产出·validator 4 issue (NODE_ORPHAN / EDGE_CYCLE / PAYOFF_UNREACHABLE / CHARACTER_THROUGH_LINE_BROKEN) 全 advisory·非核心 13 件·容差校验只查 schema_version 合法 JSON·env EVENT_RELATION_GRAPH_MODE 默认 shadow", "consumption": {"layer": "via_scanner", "by": ["event_relation_graph_validator"], "status": "live"}, "nodes": [], "edges": [], "character_throughlines": {}}
+    "人物卡": {
+      "schema_version": "v27",
+      "_doc": "角色卡 · build_manifest 按 scene_storyboard[].characters 加载 · item 必需 id/name/role · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._char_id_map",
+          "build_manifest.active_characters"
+        ],
+        "status": "live"
+      },
+      "characters": [],
+      "_writer_isolation_schema": {
+        "_doc": "🔴 2026-06-28 写手信息隔离·照抄伏笔 surface_clue/hidden_payoff/trigger_cluster 明暗线范式·默认安全:不标 hidden 字段=普通角色明线原样透传·隐藏身份到 concealed_until_cluster 才解锁 true_role+reveal_directive",
+        "hidden_identity": {
+          "surface_role": "明面叙事位·写手只见(如 ally/mentor·替换 role)",
+          "true_role": "隐藏真实角色(false_hero/伪装者/最终Boss·concealed 前剥离)",
+          "concealed_until_cluster": "cluster_007·揭晓块(>= 此块解锁 true_role)",
+          "surface_propp_function": "表面 propp(可选·缺则 false_hero→ally 自动映射)"
+        },
+        "ghost": {
+          "surface_driver": "创伤外显·写手可见(留)",
+          "wound": "镜像身份/隐藏动机·reveal(surface_driver 存在时剥·_GHOST_REVEAL_KEYS=wound/wound_reveal/reveal/true_wound/hidden_payoff)"
+        },
+        "knowledge": {
+          "doesnt_know_yet": [
+            "主角当前未知项·留(防 FUTURE_KNOWLEDGE_LEAK)"
+          ],
+          "will_learn": [
+            {
+              "fact": "未来才知的事实",
+              "learn_at_cluster": "cluster_005·学到块(未到则剥·到才注入)"
+            }
+          ]
+        },
+        "voice_pack": {
+          "anti_patterns": [
+            "纯工艺口癖/句式禁忌·字符串(留)",
+            {
+              "pattern": "含未揭晓秘密措辞的护栏",
+              "reveals_secret": true,
+              "hidden_until_cluster": "cluster_007(未到则剥)"
+            }
+          ]
+        },
+        "_writer_hint": "结构化写手提示·含『终卷揭密/false_hero/不可早暴露/灰色合作』reveal 标记整条会被剥(防粉红大象)·普通提示原样留"
+      }
+    },
+    "世界观": {
+      "schema_version": "v27",
+      "_doc": "世界设定 · entries 关键词触发注入 · item 必需 id/title/keywords · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.world_keyword_hits"
+        ],
+        "status": "live"
+      },
+      "era": "",
+      "location": "",
+      "rules": [],
+      "factions": [],
+      "entries": [],
+      "_writer_isolation_schema": {
+        "_doc": "🔴 2026-06-28 写手信息隔离·世界真相明暗线(同伏笔三元组范式)·默认安全:无 hidden_truth/hidden_rules/hidden = 公开设定原样(build_manifest._resolve_world_entry/_sanitize_faction_focus 安全闸)·公开设定+数值(涟漪 surface·北极星②)always 留",
+        "entry": {
+          "hidden_truth": "条目隐藏真相(reveal_cluster 未到则剥·堵写手直读绕过)",
+          "hidden_rules": "条目隐藏规则(同上)",
+          "reveal_cluster": "cluster_012·揭晓块(>= 此块 merge hidden_truth/hidden_rules+reveal_directive)"
+        },
+        "faction": {
+          "hidden": true,
+          "surface_focus": "明面动向·写手只见(替换真 current_focus)",
+          "current_focus": "真实当前动向(hidden 时剥·surface_focus 顶替)"
+        }
+      }
+    },
+    "关系": {
+      "schema_version": "v27",
+      "_doc": "角色关系数值 · item 必需 id/from/to/type · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_active_relationships",
+          "build_manifest._collect_faction_standings"
+        ],
+        "status": "live"
+      },
+      "relationships": [],
+      "faction_standings": {},
+      "_writer_isolation_schema": {
+        "_doc": "🔴 2026-06-28 写手信息隔离·关系明暗线拆分(同伏笔三元组范式)·默认安全:无 hidden_* = 明线原样(build_manifest._sanitize_relationship 安全闸)·明面 type/数值 always 留·秘密议程到 reveal_cluster 才暴露+reveal_directive",
+        "type": "明面关系·写手只见(留·如 mentor/ally)",
+        "hidden_intent": "秘密议程/暗议程(reveal_cluster 未到则剥)",
+        "reveal_cluster": "cluster_009·hidden_intent 揭晓块(>= 此块解锁)",
+        "surface_note": "明面备注(留)",
+        "hidden_note": "暗线备注(到 hidden_note_reveal_cluster 才暴露)",
+        "hidden_note_reveal_cluster": "cluster_009·hidden_note 揭晓块"
+      }
+    },
+    "地图": {
+      "schema_version": "v27",
+      "_doc": "世界地图 · locations 是 list · 消费方读 character_positions(dict)/travel_log",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.character_positions",
+          "build_manifest.relevant_items"
+        ],
+        "status": "live"
+      },
+      "locations": [],
+      "character_positions": {},
+      "travel_log": []
+    },
+    "道具": {
+      "schema_version": "v27",
+      "_doc": "道具系统 · item 必需 id/name · 与伏笔联动（契诃夫之枪）",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.relevant_items"
+        ],
+        "status": "live"
+      },
+      "items": [],
+      "item_locations": {},
+      "crafting_recipes": []
+    },
+    "进度": {
+      "schema_version": "v27",
+      "_doc": "进度 · cluster-first freestyle · 规划层只跟踪 cluster/ME/scene，章节只属于 splitter 输出层 · cluster_blueprint 必须 dict（[H5]）· 只详化 cluster_001",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.current_scene",
+          "build_manifest.volume_info",
+          "_bp_items"
+        ],
+        "status": "live"
+      },
+      "book_title": "<书名>",
+      "current_cluster": "cluster_001",
+      "completed": 0,
+      "current": 1,
+      "writer_mode": "freestyle",
+      "rhythm_profile": "混合",
+      "volumes": [],
+      "cluster_blueprint": {},
+      "propagation_debt": [],
+      "started_at": "",
+      "last_updated": ""
+    },
+    "故事块摘要": {
+      "schema_version": "v2.cluster",
+      "_doc": "cluster 账本主存储 · cluster-save-state 经 cluster_summary_builder 落库 · item 必需 cluster_id/title",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_event_cluster_context",
+          "cross_cluster_summary_reader"
+        ],
+        "status": "live"
+      },
+      "clusters": []
+    },
+    "大势卡": {
+      "_schema": "major_events_v21_phase",
+      "schema_version": "v27",
+      "_doc": "🆕2026-06-03 卷=阶段触发点：每卷=1个阶段(副本/大故事方向)·有 volume_core_conflict(卷核心任务)+volume_thread(卷线索串本卷cluster)·ME池=本卷内『小故事走向』候选(每 ME=1 cluster=1 小走向·携 stakes_delta 相对前块强度增量·🔴禁单 cluster 覆盖整阶段/整副本)·每 ME 标 volume:N·本卷末 ME 标 is_volume_finale:true·换卷=核心任务解决+跃迁信号任一(①主角力量/身份跃迁 ②舞台/地理转移 ③核心反派/矛盾解决或新反派)·卷长 fluid 不锁章·卷间软边界(涟漪/伏笔/角色跨卷延续)·调研接地见 _temp_research/卷阶段结构调研/·🔴 2026-06-29 story_destiny.controlling_idea=主控思想主题脊柱(全书唯一主题真理源·Egri/McKee/Truby·见 story_destiny._doc·全 advisory 软牵引·爽文可空)",
+      "consumption": {
+        "layer": "via_engine",
+        "by": [
+          "cluster_emergence_engine",
+          "fate_engine",
+          "build_manifest._collect_active_fate_events"
+        ],
+        "status": "live"
+      },
+      "_load_bearing_nonempty": {
+        "code": "GRAND_TREND_ME_POOL_EMPTY",
+        "any_of": [
+          "major_events"
+        ],
+        "_doc": "🔴 2026-06-27 C03 载荷非空标记：当前卷 ME 池(major_events)空 → cluster_emergence_engine 大势无方向（机器永不点火·北极星③大势已定·hard）·cluster_002+ 未涌现 ME 属 fluid 合法（仅查池非空非逐 cluster）"
+      },
+      "_metadata": {
+        "rhythm_profile": "混合",
+        "narrative_framework": "save_the_cat",
+        "cluster_density_profile": "标准"
+      },
+      "story_destiny": {
+        "final_image": "",
+        "thematic_resolution": "",
+        "controlling_idea": {
+          "_doc": "🔴 2026-06-29 controlling_idea主控思想主题脊柱（全书唯一主题真理源·P0）·Egri premise(价值→冲突→结局因果论断)→McKee controlling_idea(if/when/because条件化·结局绑角色行动+value正负电荷+cause)→Truby moral_argument(行动论证非台词说教)+designing_principle(贯穿全书组织隐喻/主母题)三层递增精度。作者档第一权威：爽文/无限流可极简(controlling_idea=弱者逆袭爽即合法·premise一句即可)甚至全空(纯类型驱动不强加主题)·通用主题理论仅作者档未规定该维度时兜底·严肃/现实向可更深贯穿(防惊悚乐园流水账覆辙·通用工艺勿压作者档)。final_image对齐value电荷落定·thematic_resolution对齐cause/synthesis。🔴moral_argument复用thematic_argument_pairs结构(position_A/symbols_A/position_B/symbols_B·与thematic_argument_motif_balance.py消费的thematic_argument_pairs每对字段一一对齐·避免两处各立schema·契约债教训)·symbols_*绑motif_recurrence_ledger母题·designing_principle绑motif_recurrence_ledger seed。默认安全：种子可空；大势卡无 controlling_idea/字段全空时不注入主题软牵引。北极星③：主题骑build_manifest._soften_convergence_anchor同轨软牵引(早期cluster软方向·越近卷末越显化)·绝不把大势收敛从软变硬。北极星④：plan层结构化节点非prose指令。北极星⑤：绝不向writer下『本章必须论证主题X』硬指令(gemini freestyle·主题是advisory软牵引卡)·绝不进audit_hub.HARD_GATE_CODES。",
+          "premise": "",
+          "controlling_idea": "",
+          "moral_argument": {
+            "position_A": "",
+            "symbols_A": [],
+            "position_B": "",
+            "symbols_B": []
+          },
+          "designing_principle": ""
+        }
+      },
+      "volumes": [],
+      "_volume_schema": {
+        "vol": 1,
+        "title": "<阶段/副本名>",
+        "volume_core_conflict": "<本阶段核心任务/冲突·解决即可收卷>",
+        "volume_thread": "<卷线索:串起本卷所有小走向 cluster 的那根线>",
+        "volume_finale_signal": "<换卷触发:核心任务解决 + (力量跃迁/舞台转移/反派更迭) 任一>"
+      },
+      "_me_schema": {
+        "id": "ME-V<卷号>-<序>",
+        "volume": 1,
+        "title": "<小故事走向>",
+        "is_volume_finale": false,
+        "stakes_delta": "<相对前一小走向的强度/筹码增量·try-fail 递增>",
+        "prerequisites": [],
+        "physical_evidence": [],
+        "status": "pending"
+      },
+      "major_events": []
+    },
+    "事件簇": {
+      "schema_version": "v2.cluster",
+      "_doc": "ECAS 事件簇=writer 工单 · v27 freestyle 只规划 cluster/scene，章节记录只由 splitter 输出层写回 · 只详化 clusters[0]，余 status=未涌现 · clusters[0].narrative_mode=in_medias_res · 🆕 R19 W8 Batch-W cluster 可选填 bibliotherapy_arc={identification:[scene_idx],catharsis:[scene_idx],insight:[scene_idx]} 三相 scene 索引 advisory 给 bibliotherapy_arc_scanner 校验 · 🆕 R22 W10 Batch-FF cluster 可选填 premise_blend_card={blend_type/input_space_A/B/generic_space/emergent_structure≥3/vital_relations_compressed} CBT(Fauconnier&Turner 概念整合)显式登记 conceit·premise_blend_card_scanner 落地度校验·vital_relations_probe 7 类标记密度 · 🆕 2026-07-05 prose_scene_cards 可选 scene_storyboard[] title/scene_title/dramatic_question/sensory_anchors/sensory_anchor；build_manifest._collect_prose_scene_cards 组装小说场景执行卡，只服务正文写作，禁止 camera/shot/visualPrompt 等影视分镜字段",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_event_cluster_context",
+          "cluster_choice_apply",
+          "cluster_emergence_engine"
+        ],
+        "status": "live"
+      },
+      "_load_bearing_nonempty": {
+        "code": "CLUSTER001_STORYBOARD_EMPTY",
+        "any_of": [
+          "clusters.0.scene_storyboard"
+        ],
+        "_doc": "🔴 2026-06-27 C03 载荷非空标记：cluster_001(clusters[0]) scene_storyboard 空 → 首块未详化（机器永不点火·黄金三章必详化·hard）·只查 clusters[0]·cluster_002+ 空 storyboard 属 fluid 涌现合法（回归锁·显式豁免）"
+      },
+      "clusters": [],
+      "_cluster_brief_schema_hint": {
+        "bibliotherapy_arc": {
+          "_doc": "Shrodes 1949 三阶段读者转化·scene 索引(0-based 对应 scene_storyboard)",
+          "identification": [],
+          "catharsis": [],
+          "insight": []
+        },
+        "premise_blend_card": {
+          "_doc": "Fauconnier&Turner CBT 概念整合卡·R22 W10 Batch-FF·outline step 9.5 AskUser+outline-planner 填·cluster_emergence_engine 涌现 candidate 自动留空骨架待详化·blend_type∈{single_scope|double_scope|mirror|simplex}·emergent_structure≥3 条 emergent_meaning·vital_relations_compressed 列 CBT 7 类标记中本 blend 主压缩关系",
+          "blend_type": "",
+          "input_space_A": {
+            "frame": "",
+            "signature_lexemes": []
+          },
+          "input_space_B": {
+            "frame": "",
+            "signature_lexemes": []
+          },
+          "generic_space": "",
+          "emergent_structure": [],
+          "vital_relations_compressed": []
+        },
+        "scene_belief_fields": {
+          "_doc": "🔴 2026-06-29 角色信息差·scene_storyboard[] 每 scene 加这 4 字段(outline-planner 详化/涌现时产·权威 schema 见 schemas/event_cluster_schema.json 的 scene_storyboard.items)·participants/focal_character/focalization_mode=结构事实(谁在场=客观·北极星⑤)·knowledge_gap_mode=advisory 创作提示(不锁剧情)",
+          "participants": [
+            "char_id·本场在场角色·witness 检测命门(信念只沿在场传播·下游 witness 回写据此判定谁 witness 到本场 reveal 的 fact·build_manifest 据此 per-scene 投射各角色认知给写手)·通常 = 本场 characters(出场角色)"
+          ],
+          "focal_character": "char_id·本场 POV/聚焦者",
+          "focalization_mode": "zero|internal|external·Genette 聚焦(zero=全知/internal=限知某角色内心/external=只外部观察)",
+          "knowledge_gap_mode": "mystery|suspense|dramatic_irony|null·advisory·McKee 三知识缺口(读者知角色不知=dramatic_irony 桌下炸弹)·设计悬念/反转/戏剧反讽时标·否则 null"
+        },
+        "scene_causal_fields": {
+          "_doc": "🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架·scene_storyboard[] 每 scene 加这组字段(outline-planner 详化/涌现时产·权威 schema 见 schemas/event_cluster_schema.json 的 scene_storyboard.items)·治流水账(SOTA=South Park But/Therefore法则+Swain Scene-Sequel+Butcher Try-Fail)·复用既有 goal/conflict(proactive 场)·通用 3 字段 scene_type/link_to_prev/result_type + proactive 填 disaster / reactive 填 reaction/dilemma/decision·全 advisory 参考模板非硬模具(writer 有理由可豁免·北极星⑤)·消费方=build_manifest + causal_connector_scanner(B agent)·与既有 R20 unit_type/sequel_*(sequel_drought_advisory 消费) 同概念更细版并存",
+          "scene_type": "proactive_scene|reactive_sequel·Swain 场景单元类型(proactive=行动场 goal→conflict→disaster / reactive=反应场 reaction→dilemma→decision)·场景对象层字段",
+          "disaster": "proactive_scene 结尾的挫败/恶化(目标受挫·推动下一 reactive)·仅 proactive 填",
+          "reaction": "reactive_sequel 的情绪反应·仅 reactive 填",
+          "dilemma": "reactive_sequel 的两难(无好选项)·仅 reactive 填",
+          "decision": "reactive_sequel 的新目标决定(下个 proactive 的 goal 种子)·仅 reactive 填",
+          "link_to_prev": "but|therefore|and_then·与上一 scene 衔接(but=冲突转折/therefore=因果后果/and_then=平铺·流水账根因要避免)·只查是否 and_then 平铺·不卡 but/therefore 比例(70/30 经验值非硬指标)",
+          "result_type": "yes_but|no_and|yes_and·本场结果(yes_but=达成但带来新麻烦/no_and=失败且更糟/yes_and=达成且顺势)·禁纯 yes 顺风局·try-fail 递增·advisory"
+        },
+        "scene_dialogue_objectives": {
+          "_doc": "🔴 2026-06-29 对白即行动dialogue_objectives·scene_storyboard[] 对话密集 scene 加 dialogue_objectives 数组(每个说话角色一项·outline-planner 详化/涌现时产·权威 schema 见 schemas/event_cluster_schema.json 的 scene_storyboard.items)·SOTA=McKee《Dialogue: The Art of Verbal Action》每句台词=verbal action·角色为达成未说出口 objective 采取 tactic(active verb)·on-the-nose=说透目标=零潜台词 + CoSER arXiv:2502.09082 三通道 Speech/Action/Thought(what_unsaid=隐藏 Thought 通道驱动潜台词·去 inner-thought 一致性显著下降) + dialogue_act 骨架·全 advisory 场景级建议非逐句锁·非每场必填(纯叙述/独白场可空·过度结构化→对话变机械任务清单是 pitfall)·Claude 只标意图(what·角色想干嘛)·措辞(how·具体台词)永远交 gemini freestyle(北极星④规划管意图/创作管表达)·what_unsaid 只驱动潜台词不写进正文·涉未到期 hidden 伏笔走 reveal 隔离绝不剧透·作者档第一权威(爽文直球对喷不强加 subtext)·消费方=build_manifest._collect_dialogue_objectives(B agent)·绝不 hard_gate",
+          "character": "char_id·说话角色(对齐人物卡 id)",
+          "wants": "本场该角色想从对方拿到什么(未说出口的 objective·Stanislavski scene-objective 的对白侧)",
+          "tactic": "active verb 言语策略(试探/施压/回避/示弱/反问/讨好)·达成 wants 的手段·how 留给 gemini",
+          "obstacle": "被谁/什么阻挠(对手的反 objective / 外部障碍)",
+          "dialogue_act": "试探|回避|威胁|让步|反讽|求证|施压|示弱·dialogue_act 骨架枚举",
+          "what_unsaid": "压着不说的潜文本(隐藏 Thought 通道·CoSER)·只驱动潜台词不写进正文·涉未到期 hidden 伏笔走 reveal 隔离绝不剧透"
+        },
+        "prose_scene_card_fields": {
+          "_doc": "🔴 2026-07-05 prose_scene_cards·scene_storyboard[] 可选小说场景执行卡字段·借鉴 moyin-creator storyboard/scene card 的结构化执行卡，但在 ruoyuai 中只保留 prose-first 写作信息：场景标题、戏剧问题、感官锚点。消费方=build_manifest._collect_prose_scene_cards，注入 event_cluster_context.prose_scene_cards。默认安全：旧 scene 缺这些字段时不约束；若上游混入 camera/shot/visualPrompt 等影视分镜字段，下游白名单忽略，禁止透传给 writer。",
+          "title": "场景短标题·给 writer 快速识别本场功能；可选",
+          "scene_title": "title 的等价别名·用于统一不同 outline 产物；可选",
+          "dramatic_question": "本场读者追问/戏剧问题·缺省时 build_manifest 可由 scene_goal + conflict 推导；可选",
+          "sensory_anchors": [
+            "本场 1-4 个感官落点·用于把目标/阻力写成可感知 prose；可选"
+          ],
+          "sensory_anchor": "sensory_anchors 的单值便捷写法；可选",
+          "_forbidden_visual_fields": [
+            "camera",
+            "shot",
+            "visualPrompt",
+            "镜头"
+          ]
+        }
+      }
+    },
+    "事件表": {
+      "schema_version": "v27",
+      "_doc": "事件触发器 · pending_events item 必需 id/name",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.triggerable_events"
+        ],
+        "status": "live"
+      },
+      "pending_events": [],
+      "triggered_events": [],
+      "recurring_events": []
+    },
+    "时间线": {
+      "schema_version": "v27",
+      "_doc": "时间系统 · world_clock_events item 必需 event",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.time_state"
+        ],
+        "status": "live"
+      },
+      "current_time": {
+        "day": 1,
+        "period": "morning",
+        "season": "",
+        "cluster": 1
+      },
+      "npc_schedules": {},
+      "world_clock_events": [],
+      "time_log": [],
+      "time_per_cluster": "约半天"
+    },
+    "伏笔表": {
+      "schema_version": "v27",
+      "_doc": "伏笔系统 · promises(Tier分级) item 必需 id/description/setup_cluster/tier · 三态生命周期 status∈{open,suspended,consumed}(open=已埋未收/suspended=显式挂起延后/consumed=已回收) + owner(回收归属·缺省writer) + payoff_scope(预期回收范围·可空串) · deadlines/pledges/secrets(密级·secrets 的 hidden/revealed 语义独立于本枚举)",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.due_foreshadowing",
+          "build_manifest._collect_secrets_to_reveal",
+          "build_manifest._collect_will_learn_due"
+        ],
+        "status": "live"
+      },
+      "promises": [],
+      "deadlines": [],
+      "pledges": [],
+      "secrets": []
+    },
+    "作者风格": {
+      "schema_version": "v27",
+      "_placeholder": true,
+      "_doc": "★占位：必须由 /distill-style 蒸馏或从 workspace/styles/<书名>/作者风格_FINAL.json 复制替换。空占位会让 build_manifest 风格注入失效——scaffold 仅保证文件存在过门禁，正式写作前务必替换。",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_author_style_fingerprint",
+          "build_manifest._collect_author_rhythm_signature",
+          "build_manifest._collect_author_decision_principles",
+          "build_manifest._collect_genre_pack_directives",
+          "validate_style"
+        ],
+        "status": "live"
+      },
+      "author": "<待定>",
+      "core_style_signature": {},
+      "quantitative": {},
+      "narrative_fingerprint": {},
+      "narrative_craft": {}
+    },
+    "场景规则": {
+      "schema_version": "v27",
+      "_doc": "场景类型写作规则 · build_manifest 按 scene_type 注入",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.scene_rule_for_cluster"
+        ],
+        "status": "live"
+      },
+      "scene_types": {
+        "战斗": {
+          "style": "短句为主，动作描写>心理描写，节奏紧凑，每段不超过3行",
+          "dialogue_ratio": "20-30%",
+          "focus": "动作、速度感、力量对比"
+        },
+        "日常": {
+          "style": "对话为主，轻松语气，可有内心吐槽和幽默",
+          "dialogue_ratio": "50-70%",
+          "focus": "角色互动、性格展现、生活细节"
+        },
+        "情感": {
+          "style": "细腻描写，内心独白多，节奏放慢",
+          "dialogue_ratio": "30-50%",
+          "focus": "情绪变化、微表情、环境烘托"
+        },
+        "悬疑": {
+          "style": "暗示>明说，信息碎片化，制造不安感",
+          "dialogue_ratio": "40-60%",
+          "focus": "线索铺设、氛围营造、读者能看出但角色看不出"
+        },
+        "转折": {
+          "style": "前半平缓后半急转，反差感强烈",
+          "dialogue_ratio": "30-50%",
+          "focus": "铺垫与反转、情绪落差、关键信息揭露"
+        }
+      }
+    },
+    "写作经验": {
+      "schema_version": "v27",
+      "_doc": "写作经验库（Learning Loop）· 权威结构=success_patterns/failure_patterns/preferences（entries 是 reflector 输入格式非本文件结构）· cluster-save-state 自动积累",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.experience_entries",
+          "build_manifest._collect_relevant_heuristics",
+          "learning_loop"
+        ],
+        "status": "live"
+      },
+      "success_patterns": [],
+      "failure_patterns": [],
+      "preferences": []
+    },
+    "用户偏好": {
+      "schema_version": "v27",
+      "_doc": "用户偏好 · cluster-first 固定启用 · writer_mode=freestyle · 正文走 gen-model",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest.user_preferences",
+          "build_manifest._collect_user_preferences_v21",
+          "build_manifest._collect_reader_preferences"
+        ],
+        "status": "live"
+      },
+      "style_preferences": [],
+      "content_preferences": [],
+      "workflow_preferences": [],
+      "narrative_style": {
+        "pov": "third_person",
+        "pov_anchor_character": "",
+        "tense": "past",
+        "narrator_voice": "neutral"
+      },
+      "ecas_config": {},
+      "last_updated": ""
+    },
+    "世界状态": {
+      "_schema": "world_state_v20_1",
+      "schema_version": "v27",
+      "_doc": "客观世界数值 · world_evolution_engine 按涟漪规则确定性算 delta · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema",
+      "consumption": {
+        "layer": "via_engine",
+        "by": [
+          "world_evolution_engine",
+          "build_manifest._collect_world_state_snapshot",
+          "cluster_emergence_engine"
+        ],
+        "status": "live"
+      },
+      "current_world_time": {
+        "ch": 1,
+        "cluster": "cluster_001",
+        "day": 1
+      },
+      "protagonist_state": {},
+      "factions_state": {},
+      "active_npc_threads": [],
+      "emergent_opportunities": [],
+      "consequence_tracker": [],
+      "_writer_isolation_schema": {
+        "_doc": "🔴 2026-06-28 写手信息隔离·factions_state 阵营暗议程 + active_npc_threads 幕后真实意图·默认安全:无 hidden/surface_focus = 公开动向原样(build_manifest._sanitize_faction_focus 安全闸)·数值(power/stability/wealth)+current_action(公开动向·涟漪 surface·北极星②)always 留",
+        "faction": {
+          "hidden": true,
+          "surface_focus": "明面动向·写手只见",
+          "current_focus": "真 current_focus(hidden 时剥·surface_focus 顶替)",
+          "hidden_focus": "幕后真焦点(剥)"
+        },
+        "active_npc_thread": {
+          "current_action": "公开动向(留·涟漪 surface)",
+          "outcome_if_complete": "幕后完成后的未来结果(剥·写手不预知结局)"
+        }
+      }
+    },
+    "涟漪规则": {
+      "_schema": "ripple_rules_v20_1",
+      "schema_version": "v27",
+      "_doc": "小势→世界状态变化的因果规则（北极星②涟漪核心）· world_evolution_engine 消费 · rule 含 trigger_type(minor_event/fate_event/auto_tick)/trigger_match/ripples",
+      "consumption": {
+        "layer": "via_engine",
+        "by": [
+          "world_evolution_engine"
+        ],
+        "status": "live"
+      },
+      "_load_bearing_nonempty": {
+        "code": "RIPPLE_RULES_EMPTY",
+        "any_of": [
+          "ripple_rules",
+          "rules"
+        ],
+        "_doc": "🔴 2026-06-27 C03 载荷非空标记：涟漪规则空 → world_evolution_engine 零触发（机器永不点火·北极星②涟漪核心·hard）"
+      },
+      "ripple_rules": []
+    },
+    "枢纽场景": {
+      "_schema": "hub_scenes_v21",
+      "schema_version": "v27",
+      "_doc": "枢纽场景 HUB · 与 事件簇 cluster.hub_locations 对齐 · 每 HUB 含氛围/常驻角色/可发生事件",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_hub_directive"
+        ],
+        "status": "live"
+      },
+      "hubs": [],
+      "rhythm_targets": {
+        "depart": 0.2,
+        "quest": 0.55,
+        "return": 0.18,
+        "idle": 0.07
+      },
+      "cluster_hub_log": []
+    },
+    "时钟表": {
+      "_schema": "clocks_v21",
+      "schema_version": "v27",
+      "_doc": "剧情时钟（倒计时压力）· clock 含 name/current/max/trigger_on_full · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_active_clocks",
+          "clock_engine"
+        ],
+        "status": "live"
+      },
+      "clocks": [],
+      "_inactive_pool": [],
+      "_writer_isolation_schema": {
+        "_doc": "🔴 2026-06-28 写手信息隔离·暗线时钟·默认安全:visible_to_writer 缺省=true·build_manifest._sanitize_clock_to_writer 安全闸·clock_engine.list_active 补此字段",
+        "clock": {
+          "visible_to_writer": true,
+          "is_surprise": false,
+          "trigger_on_max": "满格触发后果·暗线时钟(is_surprise=true 须同设 visible_to_writer=false·后者是 build_manifest 读的门控字段·未满格且不可见时剥 trigger_on_max·写手不预知爆点)"
+        }
+      }
+    },
+    "叙事节拍器": {
+      "schema_version": "v27",
+      "_doc": "pacing metronome · 情绪节奏目标 + cluster 输出钩子 + 爽点分布 · 🔴 2026-06-29 加 appraisal_beats[]（场景级 Appraisal Beat·chain-of-emotion·见 _appraisal_beats_schema）",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_storyteller_directive",
+          "narrator_calibrate"
+        ],
+        "status": "live"
+      },
+      "rhythm_profile": "混合",
+      "beat_targets": [],
+      "default_beat_policy": {
+        "cluster_output_hook_required": true,
+        "no_consecutive_negative_beats": 2
+      },
+      "appraisal_beats": [],
+      "_appraisal_beats_schema": {
+        "_doc": "🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion 两步法·SOTA arXiv:2309.05076 实证情绪自然度提升 + CAPE arXiv:2410.14145）：把情绪从『prose 一句提示』升维为『结构化可追踪 STATE』。链路：novel-summarizer 读整 cluster 正文（梳理非创作·禁占位词典浅扫）按 Scherer CPM/OCC 评价链推理产 summary.appraisal_beats → save_state.py --apply-appraisal-beats 确定性回填本数组（append·幂等·按 cluster_id+scene_idx+focal_character 去重）→ build_manifest 读取注入下一 active cluster『这一拍情绪应往哪走+为何+如何外化』advisory 卡。🔴 只填 active cluster（fluid·绝不预设/回填别的 cluster）。🔴 derived_emotion 必须是自然语言情绪推理（为何会这样感受）·禁『愤怒/心中一凛』等情绪词标签（否则退化成反 AI 腔堆砌·撞禁用词）。behavior_externalization 外化成动作/细节·非情绪词。复用：emotion_curve_normalized 当情绪历史链 · character_belief_ledger 当 CAPE 个人侧输入 · vad_bin 6 维确定性反推供 character_vad_ued_scanner 复用。全 advisory STATE（非判决·不进 audit_hub.HARD_GATE_CODES）。",
+        "item": {
+          "cluster_id": "cluster_NNN",
+          "scene_idx": 0,
+          "focal_character": "C_xxx（真角色 id·非名字）",
+          "trigger_event": "触发该情绪 beat 的事件",
+          "appraisal": {
+            "relevance": "目标相关度",
+            "congruence": "+（目标一致）|-（受阻）",
+            "certainty": "确定性",
+            "coping_potential": "应对潜力",
+            "accountability": "self|other|circumstance",
+            "norm_compat": "符合/违背规范"
+          },
+          "prospect": {
+            "type": "hope|fear|null",
+            "resolved_to": "satisfaction|disappointment|relief|fears_confirmed|null"
+          },
+          "derived_emotion": "自然语言推理·非情绪词标签（如『被最信任的人背叛后那种发冷的难以置信』）",
+          "behavior_externalization": "外化成什么动作/细节（非情绪词）",
+          "vad_bin": {
+            "valence": "VL|L|M|H|VH",
+            "arousal": "VL|L|M|H|VH",
+            "dominance": "VL|L|M|H|VH"
+          }
+        }
+      }
+    },
+    "主角压力档": {
+      "_schema": "protagonist_stress_v21",
+      "schema_version": "v27",
+      "_doc": "主角压力档 · stress 数值 + 崩溃阈值 + 压力回归方式 · build_manifest 注入 persona",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_protagonist_stress",
+          "stress_evaluator"
+        ],
+        "status": "live"
+      },
+      "protagonist": "",
+      "stress_level": 0,
+      "stress_max": 12,
+      "stress_threshold_break": 10,
+      "stress_log": [],
+      "persona_violations_tracked": {},
+      "mental_break_pool": [],
+      "coping_mechanisms": {}
+    },
+    "character_arc_state": {
+      "schema_version": "2.0",
+      "_doc": "McKee7步+Truby精华角色弧线 · v27 用 stages_by_cluster 不锁章号 · build_manifest._collect_character_arc_state 注入 · writer step0 消费 ghost/moral_argument/weakness_need vs desire",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_main_character_arc_stage",
+          "build_manifest._collect_main_character_arcs"
+        ],
+        "status": "live"
+      },
+      "characters": {},
+      "_story_world": {
+        "literal": "",
+        "metaphorical": "",
+        "thematic_critique": ""
+      }
+    },
+    "角色行动表": {
+      "_schema": "offstage_actions_v21",
+      "schema_version": "v27",
+      "_doc": "NPC 幕后行动表 · offstage_threads 记重要配角/反派的幕后目标+行动",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_offscreen_actions",
+          "build_manifest._collect_character_moves"
+        ],
+        "status": "live"
+      },
+      "characters": {},
+      "offstage_threads": {}
+    },
+    "群像档": {
+      "_schema": "ensemble_v21",
+      "schema_version": "v27",
+      "_doc": "群像配角档 · 功能定位+与主角关系+戏份节奏",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_ensemble_layer",
+          "relationship_evaluator"
+        ],
+        "status": "live"
+      },
+      "characters": {},
+      "background_ensemble": {}
+    },
+    "事件池": {
+      "_schema": "event_pool_v22",
+      "schema_version": "v27",
+      "_doc": "fluid 事件池（涌现素材）· 不锁章号 · 由涟漪+arc 触发的候选事件",
+      "consumption": {
+        "layer": "via_engine",
+        "by": [
+          "build_manifest._collect_active_fate_events",
+          "fate_engine",
+          "auto_fate_draw"
+        ],
+        "status": "live"
+      },
+      "events": [],
+      "drawn_events_log": []
+    },
+    "行动判定模板": {
+      "schema_version": "v27",
+      "_doc": "行动判定（类掷骰/属性判定）模板 · 判定维度 + 结果带",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_position_effect_template"
+        ],
+        "status": "live"
+      },
+      "templates": [],
+      "dimension_registry": {},
+      "outcome_band_schema": {}
+    },
+    "角色池": {
+      "schema_version": "v27",
+      "_doc": "fluid 角色池 · core(永久) + emerged(涌现) + extras(一次性)",
+      "consumption": {
+        "layer": "via_engine",
+        "by": [
+          "cluster_emergence_engine",
+          "fate_engine"
+        ],
+        "status": "live"
+      },
+      "core": [],
+      "emerged": [],
+      "extras": []
+    },
+    "角色烙印": {
+      "schema_version": "v27",
+      "_doc": "角色烙印（distill-character 深度蒸馏产物占位）· 由 /distill-character 填 voice DNA 5 层",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_active_aspects",
+          "build_manifest._collect_distill_voice_refs"
+        ],
+        "status": "live"
+      },
+      "imprints": [],
+      "_imprint_schema": {}
+    },
+    "knowledge_graph": {
+      "schema_version": "v27",
+      "_doc": "知识图谱 · 角色↔事实↔密级 · nodes/edges",
+      "consumption": {
+        "layer": "via_scanner",
+        "by": [
+          "locked_fact_cross_scene_scanner",
+          "knowledge_gap_scanner"
+        ],
+        "status": "live"
+      },
+      "nodes": [],
+      "edges": []
+    },
+    "subplot_threads": {
+      "schema_version": "v27",
+      "_doc": "副线脉络 · thread 含 id/name/status/related_chars",
+      "consumption": {
+        "layer": "via_scanner",
+        "by": [
+          "subplot_thread_scanner",
+          "throughline_balance_scanner"
+        ],
+        "status": "live"
+      },
+      "threads": []
+    },
+    "beat_map": {
+      "schema_version": "v27",
+      "_doc": "叙事框架节拍映射（Save the Cat 15 拍 / 三幕 等）↦ 卷落点 · scanner 专用不注入 writer · cluster_beats[cluster_id]=本 cluster 起承转合结构功能 beat 序列（🔴 2026-06-29 beat_map_update.py 据 scene_storyboard 确定性派生·plot_structure_scanner CLUSTER_MODE 消费·advisory·C03 fluid 只填 active cluster）",
+      "consumption": {
+        "layer": "via_scanner",
+        "by": [
+          "beat_map_scanner",
+          "plot_structure_scanner"
+        ],
+        "status": "live"
+      },
+      "framework": "save_the_cat",
+      "volume": 1,
+      "_metadata": {},
+      "beats": [],
+      "cluster_beats": {}
+    },
+    "四线脉络": {
+      "schema_version": "v27",
+      "_doc": "Dramatica 四贯穿线(Overall/Main/Influence/Relationship)",
+      "consumption": {
+        "layer": "direct_inject",
+        "by": [
+          "build_manifest._collect_throughlines"
+        ],
+        "status": "live"
+      },
+      "throughlines": {
+        "overall": {},
+        "main": {},
+        "influence": {},
+        "relationship": {}
+      }
+    },
+    "webnovel_bench_mapping": {
+      "schema_version": "v27",
+      "_doc": "网文 benchmark 维度映射（黄金三章/钩子/爽点/反套路 等评估维度→本书落点）",
+      "consumption": {
+        "layer": "deferred",
+        "by": [],
+        "status": "deferred",
+        "reason": "G13 WebNovelBench 评估器未启用 · 占位骨架供未来集成（保留入库避免回归）"
+      },
+      "dimensions": []
+    },
+    "event_relation_graph": {
+      "schema_version": 1,
+      "_doc": "[2026-06-21 R19 W8 Batch-W·P1·StoryWriter arxiv 2506.16445] outline 跨 cluster 因果 + 角色 throughline 有向图·outline step 3.5 builder 产出·validator 4 issue (NODE_ORPHAN / EDGE_CYCLE / PAYOFF_UNREACHABLE / CHARACTER_THROUGH_LINE_BROKEN) 全 advisory·非核心 13 件·容差校验只查 schema_version 合法 JSON·env EVENT_RELATION_GRAPH_MODE 默认 shadow",
+      "consumption": {
+        "layer": "via_scanner",
+        "by": [
+          "event_relation_graph_validator"
+        ],
+        "status": "live"
+      },
+      "nodes": [],
+      "edges": [],
+      "character_throughlines": {}
+    }
   }
 }

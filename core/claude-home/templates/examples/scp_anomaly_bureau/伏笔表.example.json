@@ -10,10 +10,16 @@
       "due_by": 30,
       "tier": "A",
       "description": "ch1 主角第一视角『醒来』在出租屋 + 镜中是别人脸。原身份怎么死的、谁知道，这条线 30 章前必须揭一半",
-      "physical_evidence": ["镜中陌生脸", "余额与记忆有差距", "床头柜抽屉里原身份的笔迹（笔迹同源伏笔）"],
+      "physical_evidence": [
+        "镜中陌生脸",
+        "余额与记忆有差距",
+        "床头柜抽屉里原身份的笔迹（笔迹同源伏笔）"
+      ],
       "payoff_planned_ch": 30,
-      "status": "planted",
-      "associated_clock": "CK_005"
+      "status": "open",
+      "associated_clock": "CK_005",
+      "owner": "writer",
+      "payoff_scope": "预期在第 30 章前回收"
     },
     {
       "id": "FS_002",
@@ -22,10 +28,15 @@
       "due_by": 25,
       "tier": "A",
       "description": "ch1-3 主角『感觉到』自己不止一个（脑内多线程感）。首次启用 2 分身后，一个分身死亡时主体『位置感丧失』数十秒",
-      "physical_evidence": ["ch1 摸脖子时『双重触感』", "首启 2 分身时眼前白屏 0.3 秒"],
+      "physical_evidence": [
+        "ch1 摸脖子时『双重触感』",
+        "首启 2 分身时眼前白屏 0.3 秒"
+      ],
       "payoff_planned_ch": 25,
-      "status": "planted",
-      "associated_clock": "CK_004"
+      "status": "open",
+      "associated_clock": "CK_004",
+      "owner": "writer",
+      "payoff_scope": "预期在第 25 章前回收"
     },
     {
       "id": "FS_003",
@@ -34,10 +45,15 @@
       "due_by": 10,
       "tier": "A",
       "description": "ch3 MENTOR_NPC 递主角一份『历史临时工花名册』全打红叉。主角须在 10 章内做出『继续 / 离开 / 调查』选择",
-      "physical_evidence": ["纸质花名册红叉", "MENTOR_NPC 第一次提反派名字"],
+      "physical_evidence": [
+        "纸质花名册红叉",
+        "MENTOR_NPC 第一次提反派名字"
+      ],
       "payoff_planned_ch": 10,
-      "status": "planted",
-      "associated_event": "E_003"
+      "status": "open",
+      "associated_event": "E_003",
+      "owner": "writer",
+      "payoff_scope": "预期在第 10 章前回收"
     },
     {
       "id": "FS_004",
@@ -46,10 +62,15 @@
       "due_by": 55,
       "tier": "A",
       "description": "ch3 MENTOR_NPC 第一次提反派名字但不解释。后续偶尔出现 NPC 暗示。中点 ME 正面现身",
-      "physical_evidence": ["不同 NPC 偶尔提的同一个名字", "异常局深处一份手写档案"],
+      "physical_evidence": [
+        "不同 NPC 偶尔提的同一个名字",
+        "异常局深处一份手写档案"
+      ],
       "payoff_planned_ch": 55,
-      "status": "planted",
-      "associated_event": "E_006"
+      "status": "open",
+      "associated_event": "E_006",
+      "owner": "writer",
+      "payoff_scope": "预期在第 55 章前回收"
     },
     {
       "id": "FS_005",
@@ -58,10 +79,15 @@
       "due_by": 20,
       "tier": "A",
       "description": "ch5 主角通勤车窗反射里看见一个『多出来的影子』（影残伏笔）。后续实体二次现身正式袭击",
-      "physical_evidence": ["车窗反射多出的影子", "出租屋墙缝渗黑色液体"],
+      "physical_evidence": [
+        "车窗反射多出的影子",
+        "出租屋墙缝渗黑色液体"
+      ],
       "payoff_planned_ch": 20,
-      "status": "planted",
-      "associated_event": "E_004"
+      "status": "open",
+      "associated_event": "E_004",
+      "owner": "writer",
+      "payoff_scope": "预期在第 20 章前回收"
     },
     {
       "id": "FS_006",
@@ -70,10 +96,15 @@
       "due_by": 999,
       "tier": "A",
       "description": "ch8 主角触发 ghost，想起创伤事件那天『现场有个穿西装的男人』。终卷揭密：这是反派上一代实验",
-      "physical_evidence": ["主角回忆创伤现场细节", "终卷找到当年档案"],
+      "physical_evidence": [
+        "主角回忆创伤现场细节",
+        "终卷找到当年档案"
+      ],
       "payoff_planned_ch": 750,
-      "status": "planted",
-      "associated_event": null
+      "status": "open",
+      "associated_event": null,
+      "owner": "writer",
+      "payoff_scope": "预期在第 999 章前回收"
     },
     {
       "id": "FS_007",
@@ -82,9 +113,14 @@
       "due_by": 999,
       "tier": "B",
       "description": "DEUTERAGONIST 手腕的银色圆环（ch1 第一次出现但没解释）。ch15 主角问起只说『家人遗物』。后续揭密亲人被异常吞噬，终卷揭真凶是反派势力下属",
-      "physical_evidence": ["银色圆环（物件锚定）", "档案室深处的旧 C 级事件档案"],
+      "physical_evidence": [
+        "银色圆环（物件锚定）",
+        "档案室深处的旧 C 级事件档案"
+      ],
       "payoff_planned_ch": 750,
-      "status": "planted"
+      "status": "open",
+      "owner": "writer",
+      "payoff_scope": "预期在第 999 章前回收"
     },
     {
       "id": "FS_008",
@@ -93,9 +129,14 @@
       "due_by": 150,
       "tier": "B",
       "description": "ch4 主角观察到 MENTOR_NPC 身体残缺（如左手少一节小指）。中后期 MENTOR_NPC 酒后讲古揭密多年前惨剧",
-      "physical_evidence": ["MENTOR_NPC 身体残缺处", "MENTOR_NPC 去逝者墓的描写"],
+      "physical_evidence": [
+        "MENTOR_NPC 身体残缺处",
+        "MENTOR_NPC 去逝者墓的描写"
+      ],
       "payoff_planned_ch": 150,
-      "status": "planted"
+      "status": "open",
+      "owner": "writer",
+      "payoff_scope": "预期在第 150 章前回收"
     },
     {
       "id": "FS_009",
@@ -104,9 +145,14 @@
       "due_by": 120,
       "tier": "B",
       "description": "ch12 主角走廊撞见 AUTHORITY_NPC 接加密电话，对方看到主角后脸色微变。中后期揭密与反派势力有灰色合作",
-      "physical_evidence": ["加密电话场景", "AUTHORITY_NPC 周末『去上面开会』实际地点"],
+      "physical_evidence": [
+        "加密电话场景",
+        "AUTHORITY_NPC 周末『去上面开会』实际地点"
+      ],
       "payoff_planned_ch": 120,
-      "status": "planted"
+      "status": "open",
+      "owner": "writer",
+      "payoff_scope": "预期在第 120 章前回收"
     },
     {
       "id": "FS_010",
@@ -115,9 +161,14 @@
       "due_by": 999,
       "tier": "C",
       "description": "某事件触发后主角账户多出一笔钱（暗示反派势力悄悄补偿/记账）。主角不知 - 一直用这笔钱给至亲治病",
-      "physical_evidence": ["事件后账户截图", "后续每隔约 20 章累计一次的来路不明款项"],
+      "physical_evidence": [
+        "事件后账户截图",
+        "后续每隔约 20 章累计一次的来路不明款项"
+      ],
       "payoff_planned_ch": 200,
-      "status": "planted"
+      "status": "open",
+      "owner": "writer",
+      "payoff_scope": "预期在第 999 章前回收"
     },
     {
       "id": "FS_011",
@@ -126,9 +177,14 @@
       "due_by": 80,
       "tier": "C",
       "description": "ch2 主角打卡时机器轻微发热 / 显示一闪而过乱码（电子设备凉度/异常伏笔）。每章累积一点。后期揭密：异常局本身就是『伪装的异常装置』",
-      "physical_evidence": ["指纹机偶尔异常发热", "电梯偶尔『多出一层』楼层按钮"],
+      "physical_evidence": [
+        "指纹机偶尔异常发热",
+        "电梯偶尔『多出一层』楼层按钮"
+      ],
       "payoff_planned_ch": 80,
-      "status": "planted"
+      "status": "open",
+      "owner": "writer",
+      "payoff_scope": "预期在第 80 章前回收"
     },
     {
       "id": "FS_012",
@@ -137,13 +193,19 @@
       "due_by": 999,
       "tier": "A",
       "description": "中点 ME 反派首次现身一句『你看到的东西，我都看到过』。终卷揭密反派是上一代『同类金手指持有者』，走过主角的路但选了相反方向",
-      "physical_evidence": ["反派的怀表与主角 ghost 物件是同一品牌（物件同源伏笔）", "终卷揭反派也有 ghost：失去和自己同行的人"],
+      "physical_evidence": [
+        "反派的怀表与主角 ghost 物件是同一品牌（物件同源伏笔）",
+        "终卷揭反派也有 ghost：失去和自己同行的人"
+      ],
       "payoff_planned_ch": 750,
-      "status": "planted"
+      "status": "open",
+      "owner": "writer",
+      "payoff_scope": "预期在第 999 章前回收"
     }
   ],
   "_design_notes": {
     "物件锚定原则": "每条 promise 的 physical_evidence 必须是『可触摸的具象物件』而非抽象暗示——笔迹/影残/凉度/圆环/电子设备异常。writer 写正文 plant 时必落地这个物件，judge 检测 payoff 时核对物件是否回收（FORESHADOWING_NOT_PAID 是 hard_gate）",
-    "tier 与 due_by": "A=主线（30-55 章兑现）/ B=副线（120-150）/ C=道具（80）；due_by=999 表示终卷长线伏笔（payoff_planned_ch 约 750）"
+    "tier 与 due_by": "A=主线（30-55 章兑现）/ B=副线（120-150）/ C=道具（80）；due_by=999 表示终卷长线伏笔（payoff_planned_ch 约 750）",
+    "三态生命周期": "status ∈ open/suspended/consumed（open=已埋未收 / suspended=显式挂起延后·不催收 / consumed=已回收）+ owner（回收归属·缺省 writer）+ payoff_scope（预期回收范围文本·可空串）。枚举权威 db_schema_validate.FORESHADOW_STATUS_ENUM，旧 resolved bool 已废除"
   }
 }

@@ -76,7 +76,7 @@
 - `offset_years` = 公历年 - 异常历年（固定差值），save-state 时间线双轨都记
 
 ### ECAS 事件簇要点
-- `expected_word_range` 须 ≤ researcher 推荐 ±10%（防字数放大复发，历史 22% 缺口教训）
+- 禁止 `expected_word_range` / `word_budget`：writer 自由产整块 cluster，splitter 后续按 3000-4500 CJK/章切分
 - `research_ref` v23.1 起 4 处阻断点严格 enforce，不能复用 wizard 单次调研
 
 ## 来源致谢

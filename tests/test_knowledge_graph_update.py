@@ -107,13 +107,15 @@ def test_co_established_edges():
         assert len(kg["edges"]) == 3  # C(3,2) = 3
 
 
-def test_missing_changes_returns_error():
+def test_missing_changes_is_hard_error():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         (root / "_数据库").mkdir(parents=True)
         (root / "_数据库" / "knowledge_graph.json").write_text(
             '{"nodes":[],"edges":[]}', encoding="utf-8"
         )
-        result = update_from_changes(root, "cluster_999")
-        assert result["added_nodes"] == 0
-        assert "error" in result
+        try:
+            update_from_changes(root, "cluster_999")
+            assert False, "缺少 cluster changes 应硬失败"
+        except FileNotFoundError as exc:
+            assert "cluster_999" in str(exc)

@@ -19,7 +19,7 @@
   当「系统生成」喂 scanner → 必须 conflicts_count==0（不误判作者真实风格为穿帮）。
   两极验证对齐 design：高方差/低方差作者都不被误伤。
 
-零依赖 · 既可 `python tests/run_tests.py` 发现 test_* 函数，也可 pytest 直接跑。
+零依赖 · 通过仓库根 `py -m pytest` 发现 test_* 函数。
 跑：PYTHONIOENCODING=utf-8 python tests/test_consistency_19_subtypes_blindspot.py
 """
 import glob

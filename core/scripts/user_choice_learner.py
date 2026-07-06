@@ -3,15 +3,15 @@
 G2 调研发现: 用户选走向卡(3选1)的偏好信号被丢弃。被否决的 2 个候选
 含 stakes_delta/scope_summary/ME 维度 = 隐式偏好金矿。
 
-机制(零 LLM · 确定性 · 软累积):
+机制(零 LLM · 确定性 · 正式状态账本):
 - 读 emergence 输出的 candidates[] + 用户 choice
 - 对比选中 vs 被否决: 选中的维度 +权重, 被否决的不扣分(防负样本陷阱)
 - 累积写 用户偏好.json.inferred_behavior (带 confidence + 来源 cluster)
 
-北极星⑤纪律: 纯 advisory · 只记偏好不改约束 · 用户可 /db 查看/否决
+边界: 只记偏好不改约束，不自动替用户选择；后续走向卡只可把它作为排序/解释依据。
 
-接入点: cluster-save-state step11 (cluster_choice_apply 之后跑)
-exit 0: 不阻断
+接入点: cluster-save-state step13 after_pause (cluster_choice_apply 之后跑)
+退出码: 0 写入成功 / 2 输入缺失、候选为空或 JSON 损坏
 
 🆕 pairwise 偏好排序(BPR·core/ml/LEARNABLE_BACKLOG.md A4)：上面的逐维标量均值只看单维度
 方向，丢了候选间的组合信号。RUOYU_PREF_RANKER=1 时(默认 off)，本文件额外把每次 choice 的
@@ -38,11 +38,17 @@ if str(_SCRIPTS) not in sys.path:
 
 def _load(p: Path) -> dict:
     if not p.exists():
-        return {}
+        raise FileNotFoundError(str(p))
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{p} JSON 解析失败: {exc}") from exc
+
+
+def _load_optional(p: Path) -> dict:
+    if not p.exists():
         return {}
+    return _load(p)
 
 
 def _save(p: Path, d: dict) -> None:
@@ -87,7 +93,7 @@ def learn_from_choice(
         {"updated_dims": N, "new_signals": [...]}
     """
     pref_path = project_root / "_数据库" / "用户偏好.json"
-    pref = _load(pref_path)
+    pref = _load_optional(pref_path)
     pref.setdefault("inferred_behavior", {})
     ib = pref["inferred_behavior"]
 
@@ -193,8 +199,9 @@ def main() -> int:
     cands_data = _load(Path(args.candidates))
     candidates = cands_data.get("candidates", [])
     if not candidates:
-        print("[user_choice_learner] 无 candidates,跳过")
-        return 0
+        raise RuntimeError("brief_candidates 缺少 candidates，无法记录走向卡偏好")
+    if not isinstance(candidates, list):
+        raise RuntimeError("brief_candidates.candidates 必须是列表")
 
     result = learn_from_choice(
         Path(args.project_root), chosen, candidates,
@@ -210,4 +217,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # noqa: BLE001 - CLI boundary
+        print(f"[user_choice_learner] FATAL: {exc}", file=sys.stderr)
+        raise SystemExit(2)

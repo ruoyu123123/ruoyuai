@@ -221,6 +221,23 @@ def test_cli_main_smoke_explicit_zero_stays_off():
     assert "pairwise" not in r.stdout  # 显式关 → 不捕获不打印
 
 
+def test_cli_empty_candidates_is_hard_error():
+    root = _new_project()
+    chosen_path = root / "choice.json"
+    candidates_path = root / "candidates.json"
+    chosen_path.write_text(json.dumps({"answer": _CHOSEN}, ensure_ascii=False), encoding="utf-8")
+    candidates_path.write_text(json.dumps({"candidates": []}, ensure_ascii=False), encoding="utf-8")
+
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    r = subprocess.run(
+        [sys.executable, str(_SCRIPTS / "user_choice_learner.py"), str(root),
+         "--chosen", str(chosen_path), "--candidates", str(candidates_path),
+         "--source-cluster", "cluster_001"],
+        capture_output=True, text=True, timeout=30, encoding="utf-8", env=env)
+    assert r.returncode == 2
+    assert "FATAL" in r.stderr
+
+
 # ───────────────────── 零依赖 runner（与仓库其余 test_*_audit.py 同范式） ─────────────────────
 
 def _run_all():

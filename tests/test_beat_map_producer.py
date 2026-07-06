@@ -226,6 +226,33 @@ def test_cluster_choice_apply_end_to_end_produces_beats():
         assert len(cb["cluster_001"]) == 4, cb
 
 
+def test_cluster_choice_apply_raises_when_beat_update_breaks():
+    """有 storyboard 却产不出 beat_map 时必须暴露，不能让主链继续带坏状态前进。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = Path(d)
+        (proj / "_数据库").mkdir(parents=True)
+        brief = {
+            "cluster_id": "cluster_001",
+            "scope_summary": "测试簇",
+            "scene_storyboard": _storyboard(2),
+        }
+        choice = _write_choice(proj, "001", brief)
+        original_update = bmu.update
+        bmu.update = lambda *_args: {
+            "cluster_id": "cluster_001",
+            "beats": 0,
+            "skipped": "forced_failure",
+        }
+        try:
+            try:
+                cca.apply_choice(proj, "001", choice)
+                raise AssertionError("beat_map 派生失败应抛出")
+            except RuntimeError as e:
+                assert "beat_map 派生失败" in str(e)
+        finally:
+            bmu.update = original_update
+
+
 # ============================================================
 # 7. 🔴 scanner 端到端不跳过：plot_structure_scanner 读到真 beat
 # ============================================================

@@ -717,7 +717,7 @@ if __name__ == "__main__":
 
     def _needs_pytest_fixture(fn) -> bool:
         """裸跑（非 pytest）只能无参调用；需要 monkeypatch/tmp_path 等 fixture 的用例跳过
-        （与 tests/run_tests.py 同款判定逻辑，避免误报"假失败"）。"""
+        （与本文件单测同款判定逻辑，避免误报"假失败"）。"""
         try:
             sig = inspect.signature(fn)
         except (TypeError, ValueError):

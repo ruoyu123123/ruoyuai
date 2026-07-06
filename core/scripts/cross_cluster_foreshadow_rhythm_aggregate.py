@@ -113,9 +113,10 @@ def main():
                     _rng = _cl.cluster_id_to_range(project_root, _sc)
                 if _rng:
                     initiated = int(_rng[0])
-        # v27 resolved(bool) 取代 paid_at_ch；兼容旧字段 + 账本兜底
-        paid = fs.get("paid_at_ch") or fs.get("resolved_at_ch")
-        if not paid and fs.get("resolved") is True:
+        # 2026-07-06 P1 三态生命周期：promises 用 status=="consumed"（consumed_at_ch 记回收章·
+        # open/suspended=未回收）。paid_at_ch 仅为旧 foreshadowings/items 集合的字段形态。
+        paid = fs.get("consumed_at_ch") or fs.get("paid_at_ch")
+        if not paid and fs.get("status") == "consumed":
             paid = cur_ch
         # 账本已记录该伏笔回收（增量补强，伏笔表漏标时兜底）
         if not paid and fid in ledger_paid:

@@ -149,13 +149,13 @@ def test_load_foreshadow_table_fallback_groups_by_setup_cluster():
         db = root / "_数据库"
         db.mkdir(parents=True)
         _write_foreshadow_table(db, [
-            {"id": "fs_001", "setup_cluster": "cluster_001", "resolved": True},
-            {"id": "fs_002", "setup_cluster": "cluster_001", "resolved": False},
-            {"id": "fs_003", "setup_cluster": "2", "resolved": False},  # 归一 → cluster_002
+            {"id": "fs_001", "setup_cluster": "cluster_001", "status": "consumed"},
+            {"id": "fs_002", "setup_cluster": "cluster_001", "status": "open"},
+            {"id": "fs_003", "setup_cluster": "2", "status": "suspended"},  # 归一 → cluster_002·suspended=未回收
         ])
         idx = debt._load_foreshadow_table_fallback(root)
         assert idx["cluster_001"]["planted"] == {"fs_001", "fs_002"}
-        assert idx["cluster_001"]["paid"] == {"fs_001"}        # 仅 resolved
+        assert idx["cluster_001"]["paid"] == {"fs_001"}        # 仅 status==consumed（open/suspended=未回收）
         assert "cluster_002" in idx and idx["cluster_002"]["planted"] == {"fs_003"}
 
 
@@ -201,9 +201,9 @@ def test_cli_fallback_clears_book_mortgage_false_positive():
             {"schema_version": "v2.cluster", "clusters": clusters},
             ensure_ascii=False), encoding="utf-8")
         _write_foreshadow_table(db, [
-            {"id": "fs_001", "setup_cluster": "cluster_001", "resolved": True},
-            {"id": "fs_002", "setup_cluster": "cluster_001", "resolved": False},
-            {"id": "fs_003", "setup_cluster": "cluster_003", "resolved": False},
+            {"id": "fs_001", "setup_cluster": "cluster_001", "status": "consumed"},
+            {"id": "fs_002", "setup_cluster": "cluster_001", "status": "open"},
+            {"id": "fs_003", "setup_cluster": "cluster_003", "status": "open"},
         ])
         env = _utf8_env(NARRATIVE_DEBT_MODE="shadow", CLUSTER_MODE="1")
         r = subprocess.run([sys.executable, str(_DEBT_TARGET), str(root)],

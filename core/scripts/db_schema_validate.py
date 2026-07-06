@@ -5,7 +5,7 @@
 - 故事块摘要 dict→list
 - 进度.cluster_blueprint 字段补全
 
-每次 save-state 前跑一次。schema 不符合 → 自动 migrate（备份后改）或报错。
+每次 /outline 初始化和 /cluster-save-state 前跑一次。schema 不符合 → 自动 migrate（备份后改）或报错。
 
 用法：
     python db_schema_validate.py <项目路径> [--auto-migrate] [--strict]
@@ -172,6 +172,120 @@ def migrate_dict_to_list(data: dict, collection_key: str) -> tuple[dict, bool]:
         pass
     data[collection_key] = new_list
     return data, True
+
+
+# 🔴 2026-07-06 P1 伏笔生命周期三态枚举（借鉴 PlotPilot foreshadow registry ·
+# research/open_source_writing_systems.md）。伏笔表.promises 从「resolved: bool」升级为：
+#   status ∈ {open, suspended, consumed}（open=已埋未收 / suspended=显式挂起延后 / consumed=已回收）
+#   owner（负责回收的角色/线索归属·缺省 "writer"）
+#   payoff_scope（预期回收范围描述·从 due_by/due_by_cluster 派生·允许空串）
+# 不兼容不降级：迁移后消费方只读 status，resolved 字段删除（true→consumed / false→open）；
+# resolved_at_ch/_resolved_by 同步更名 consumed_at_ch/_consumed_by（单口径·零 resolved 残留）。
+# secrets[] 的 status 语义（hidden/revealed·明暗线隔离机制）不在本枚举内，绝不混改。
+FORESHADOW_STATUS_ENUM = ("open", "suspended", "consumed")
+
+# 历史 status 字符串形态归一（旧 example/项目实测存在 "planted" 等）——一次性迁移进三态。
+_FORESHADOW_LEGACY_STATUS_MAP = {
+    "planted": "open", "active": "open", "pending": "open",
+    "declared": "open", "initiated": "open",
+    "paid": "consumed", "resolved": "consumed", "done": "consumed", "回收": "consumed",
+    "挂起": "suspended",
+}
+
+
+def derive_payoff_scope(p: dict) -> str:
+    """从 promise 现有到期字段派生 payoff_scope 文本（无到期信息 → 空串·允许）。"""
+    dbc = p.get("due_by_cluster")
+    if isinstance(dbc, str) and dbc.strip():
+        return f"预期在 {dbc.strip()} 内回收"
+    dby = p.get("due_by")
+    if isinstance(dby, int) and not isinstance(dby, bool):
+        return f"预期在第 {dby} 章前回收"
+    if p.get("due_by_pending_resolution"):
+        off = p.get("due_by_ch_offset", 20)
+        setc = p.get("setup_cluster")
+        anchor = setc if setc else "setup"
+        return f"预期自 {anchor} 起始章 {off} 章内回收"
+    return ""
+
+
+def migrate_promise_lifecycle(p: dict) -> bool:
+    """单条 promise 迁移到三态生命周期。返回是否有改动（幂等：已迁移条目再跑返回 False）。
+
+    规则：
+      1. status 缺失/空 → 按 resolved 派生（truthy→consumed / 否则→open）；
+         历史 status 字符串（planted/paid/...）→ 归一进三态枚举。
+      2. resolved 字段删除（不留兼容读）；resolved_at_ch→consumed_at_ch、_resolved_by→_consumed_by。
+      3. owner 缺失/空 → "writer"；payoff_scope 缺失 → 从 due_by 族派生（可为空串）。
+    """
+    changed = False
+    status = p.get("status")
+    if isinstance(status, str) and status.strip():
+        raw = status.strip()
+        norm = _FORESHADOW_LEGACY_STATUS_MAP.get(raw.lower(), _FORESHADOW_LEGACY_STATUS_MAP.get(raw, raw))
+        if norm != status:
+            p["status"] = norm
+            changed = True
+    else:
+        p["status"] = "consumed" if p.get("resolved") else "open"
+        changed = True
+    if "resolved" in p:
+        del p["resolved"]
+        changed = True
+    if "resolved_at_ch" in p:
+        p["consumed_at_ch"] = p.pop("resolved_at_ch")
+        changed = True
+    if "_resolved_by" in p:
+        p["_consumed_by"] = p.pop("_resolved_by")
+        changed = True
+    owner = p.get("owner")
+    if not (isinstance(owner, str) and owner.strip()):
+        p["owner"] = "writer"
+        changed = True
+    if "payoff_scope" not in p:
+        p["payoff_scope"] = derive_payoff_scope(p)
+        changed = True
+    return changed
+
+
+def check_foreshadow_lifecycle(db_root: Path, auto_migrate: bool) -> tuple[list[str], list[str], bool]:
+    """伏笔表.promises 三态生命周期迁移 + status 枚举白名单校验。
+
+    返回 (errors, warnings, migrated)。auto_migrate=True 时先迁移（备份后落盘·幂等），
+    再校验；非法/缺失 status（不在 FORESHADOW_STATUS_ENUM）→ error（枚举硬白名单）。
+    只处理 promises 族——secrets/deadlines/pledges 有各自 status 语义，不碰。
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    path = db_root / "伏笔表.json"
+    if not path.exists():
+        return errors, warnings, False
+    data = _safe_load(path)
+    if not isinstance(data, dict):
+        return errors, warnings, False  # JSON_BROKEN 由 validate_file 报，不重复
+    promises = data.get("promises")
+    if not isinstance(promises, list):
+        return errors, warnings, False  # TYPE_MISMATCH 由 SCHEMA_RULES 报，不重复
+    changed_count = 0
+    for i, item in enumerate(promises):
+        if not isinstance(item, dict):
+            continue
+        if auto_migrate and migrate_promise_lifecycle(item):
+            changed_count += 1
+        st = item.get("status")
+        if st not in FORESHADOW_STATUS_ENUM:
+            errors.append(
+                f"[FORESHADOW_STATUS_INVALID] 伏笔表.promises[{i}]({item.get('id')}) "
+                f"status={st!r} 非法（合法枚举 {list(FORESHADOW_STATUS_ENUM)}·"
+                f"旧 resolved/planted 形态跑 --auto-migrate 一次性迁移）")
+    migrated = False
+    if changed_count:
+        backup_then_save(path, data)
+        migrated = True
+        warnings.append(
+            f"[MIGRATED] 伏笔表.json.promises: {changed_count} 条迁移到三态生命周期 "
+            f"status/owner/payoff_scope（resolved 已删除·已备份）")
+    return errors, warnings, migrated
 
 
 def validate_file(path: Path, rules: dict, auto_migrate: bool) -> tuple[list[str], list[str], bool]:
@@ -546,6 +660,12 @@ def revalidate_after_manual(file_path: Path) -> int:
         errors.extend(gt_errs)
         warnings.extend(gt_warns)
 
+    # 2.5) 伏笔表：promises 三态 status 枚举白名单（2026-07-06 P1·手改不静默迁移·非法即报）
+    if stem == "伏笔表":
+        fs_errs, fs_warns, _ = check_foreshadow_lifecycle(file_path.parent, auto_migrate=False)
+        errors.extend(fs_errs)
+        warnings.extend(fs_warns)
+
     # 3) C03 载荷非空（涟漪规则/事件簇·大势卡已由 step2 覆盖不重复）
     if stem not in _LOAD_BEARING_DEDICATED:
         lb = _eval_single_load_bearing(stem, obj)
@@ -570,6 +690,7 @@ def revalidate_after_manual(file_path: Path) -> int:
         print("\n[修复 hint]")
         print("  · TYPE_MISMATCH → collection 字段（characters/locations/...）须是数组而非对象")
         print("  · GRAND_TREND_* → ME 池每条带 id+volume·每卷 ≥1 is_volume_finale·prereq 指向存在 ME")
+        print("  · FORESHADOW_STATUS_INVALID → promises[].status 只能是 open/suspended/consumed")
         print("  · LOAD_BEARING_EMPTY → 涟漪规则 rules / 事件簇 clusters[0].scene_storyboard 不可清空")
         print("  · 还原：从 _backup/db_schema/ 取最近备份·或撤销本次手改")
         return 2
@@ -621,6 +742,13 @@ def main():
         total_warnings.extend(warns)
         if mig:
             migrated_files.append(name)
+
+    # 🔴 2026-07-06 P1 伏笔生命周期：promises 三态迁移（--auto-migrate 时）+ status 枚举白名单
+    fs_errs, fs_warns, fs_mig = check_foreshadow_lifecycle(db_root, auto_migrate)
+    total_errors.extend(fs_errs)
+    total_warnings.extend(fs_warns)
+    if fs_mig:
+        migrated_files.append("伏笔表")
 
     # 🔴 2026-06-27 C11：cluster 级幂等不变量（advisory · 并入 warnings · 不计 errors）
     total_warnings.extend(check_idempotency_invariants(db_root))

@@ -102,7 +102,7 @@ def test_v27_promises_key_is_read():
         _write_summary(db, [
             {"cluster_id": "cluster_001", "status": "done", "chapter_range": [1, 7]}])
         _write_fs(db, {"schema_version": "v27", "promises": [
-            {"id": "fs_a", "setup_cluster": 1, "resolved": False, "due_by": None},
+            {"id": "fs_a", "setup_cluster": 1, "status": "open", "due_by": None},
         ], "deadlines": [], "pledges": [], "secrets": []})
         r = _run(proj)
         assert "[SKIP]" not in r.stdout, f"仍走 [SKIP]（promises 未被读到）：\n{r.stdout[-400:]}"
@@ -128,7 +128,7 @@ def test_setup_cluster_int_resolves_to_abs_chapter():
             {"cluster_id": "cluster_001", "status": "done", "chapter_range": [1, 3]},
             {"cluster_id": "cluster_002", "status": "done", "chapter_range": [4, 10]}])
         _write_fs(db, {"promises": [
-            {"id": "fs_b", "setup_cluster": 2, "resolved": False, "due_by": None}]})
+            {"id": "fs_b", "setup_cluster": 2, "status": "open", "due_by": None}]})
         r = _run(proj)
         rep = _last_report(db)
         f = next((x for x in rep["findings"] if x["id"] == "fs_b"), None)
@@ -149,7 +149,7 @@ def test_setup_cluster_string_form_resolves():
         _write_summary(db, [
             {"cluster_id": "cluster_001", "status": "done", "chapter_range": [1, 7]}])
         _write_fs(db, {"promises": [
-            {"id": "fs_c", "setup_cluster": "cluster_001", "resolved": False,
+            {"id": "fs_c", "setup_cluster": "cluster_001", "status": "open",
              "due_by": None}]})
         r = _run(proj)
         rep = _last_report(db)
@@ -160,9 +160,9 @@ def test_setup_cluster_string_form_resolves():
         td.cleanup()
 
 
-# ============ ④ resolved=true 被跳过 ============
+# ============ ④ status=consumed 被跳过 ============
 def test_resolved_promise_skipped():
-    """resolved=true（v27 取代 paid_at_ch）→ 视为已回收，跳过，不报 NO_REINFORCEMENT。"""
+    """status=consumed（2026-07-06 P1 三态生命周期）→ 视为已回收，跳过，不报 NO_REINFORCEMENT。"""
     proj, db, td = _new_proj()
     try:
         _write_event_clusters(db, [
@@ -170,18 +170,18 @@ def test_resolved_promise_skipped():
         _write_summary(db, [
             {"cluster_id": "cluster_001", "status": "done", "chapter_range": [1, 7]}])
         _write_fs(db, {"promises": [
-            {"id": "fs_done", "setup_cluster": 1, "resolved": True, "due_by": None}]})
+            {"id": "fs_done", "setup_cluster": 1, "status": "consumed", "due_by": None}]})
         r = _run(proj)
         rep = _last_report(db)
         assert not any(x["id"] == "fs_done" for x in rep["findings"]), \
-            f"resolved=true 的伏笔不应产 finding：{rep['findings']}"
+            f"status=consumed 的伏笔不应产 finding：{rep['findings']}"
     finally:
         td.cleanup()
 
 
 # ============ ⑤ due_by 作【绝对章号】触发 OVERDUE（L126 核心修复） ============
 def test_due_by_is_absolute_chapter_overdue():
-    """initiated=ch1、due_by=3（绝对章号『第3章前回收』）、cur_ch=7、未 resolved
+    """initiated=ch1、due_by=3（绝对章号『第3章前回收』）、cur_ch=7、status=open
     → 超期 7-3=4 章 → OVERDUE。
     旧『相对』语义会算成 cur_ch>1+3=4 才报且 overdue=3，章号与超期量都错。
     本断言锁绝对语义：overdue_by == cur_ch - due_by == 4。"""
@@ -192,7 +192,7 @@ def test_due_by_is_absolute_chapter_overdue():
         _write_summary(db, [
             {"cluster_id": "cluster_001", "status": "done", "chapter_range": [1, 7]}])
         _write_fs(db, {"promises": [
-            {"id": "fs_due", "setup_cluster": 1, "resolved": False, "due_by": 3}]})
+            {"id": "fs_due", "setup_cluster": 1, "status": "open", "due_by": 3}]})
         r = _run(proj)
         rep = _last_report(db)
         f = next((x for x in rep["findings"]
@@ -215,7 +215,7 @@ def test_due_by_ch_offset_normalizes_then_overdue():
         _write_summary(db, [
             {"cluster_id": "cluster_001", "status": "done", "chapter_range": [1, 7]}])
         _write_fs(db, {"promises": [
-            {"id": "fs_off", "setup_cluster": 1, "resolved": False,
+            {"id": "fs_off", "setup_cluster": 1, "status": "open",
              "due_by": None, "due_by_cluster": None, "due_by_ch_offset": 2}]})
         r = _run(proj)
         rep = _last_report(db)
@@ -241,8 +241,8 @@ def test_ledger_reinforced_suppresses_no_reinforcement():
             {"cluster_id": "cluster_001", "status": "done", "chapter_range": [1, 7],
              "foreshadow_reinforced": {"fs_reinf": [3, 5]}}])
         _write_fs(db, {"promises": [
-            {"id": "fs_reinf", "setup_cluster": 1, "resolved": False, "due_by": None},
-            {"id": "fs_silent", "setup_cluster": 1, "resolved": False, "due_by": None}]})
+            {"id": "fs_reinf", "setup_cluster": 1, "status": "open", "due_by": None},
+            {"id": "fs_silent", "setup_cluster": 1, "status": "open", "due_by": None}]})
         r = _run(proj)
         rep = _last_report(db)
         codes_reinf = [x["code"] for x in rep["findings"] if x["id"] == "fs_reinf"]
@@ -265,7 +265,7 @@ def test_legacy_foreshadowings_key_still_works():
         for ch in range(1, 8):
             (proj / "章节" / f"第{ch}章").mkdir(parents=True, exist_ok=True)
         _write_fs(db, {"foreshadowings": [
-            {"id": "old_fs", "initiated_at_ch": 1, "due_by": 3, "resolved_at_ch": None}]})
+            {"id": "old_fs", "initiated_at_ch": 1, "due_by": 3, "paid_at_ch": None}]})
         r = _run(proj, cluster_mode=False)
         assert "[SKIP]" not in r.stdout, f"旧 foreshadowings 键应被读到：\n{r.stdout[-400:]}"
         rep = _last_report(db)
