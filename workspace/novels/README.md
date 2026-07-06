@@ -20,13 +20,16 @@ workspace/novels/{书名}/
 ├── .gitignore
 ├── 大纲.md
 ├── 章节/
-│   ├── 第001章.txt         # 章节正文
-│   ├── 第001章_changes.json  # writer 产出的 self_eval / waivers
+│   ├── cluster_001_draft/  # 故事块草稿 + cluster_changes.json + pending_tail.txt
+│   ├── 第001章/            # splitter 切完后的章节输出
+│   ├── 第002章/
 │   └── ...
 ├── _数据库/                 # 34 个核心子系统 JSON
-│   ├── 进度.json            # 卷级大纲 + 章级规划 + 传播债务
+│   ├── 进度.json            # 卷级大纲 + cluster 进度 + 传播债务
+│   ├── 事件簇.json          # cluster brief + 走向承接
 │   ├── 人物卡.json          # 5 层 Voice DNA + 声音包
 │   ├── 世界观.json
+│   ├── 世界状态.json
 │   ├── 伏笔表.json
 │   ├── 故事块摘要.json
 │   ├── 地图.json
@@ -53,5 +56,6 @@ workspace/novels/{书名}/
 ## 注意
 
 - 每本小说都是独立 Git 仓库，**不**会被本仓库追踪（`.gitignore` 已排除）
-- `_数据库/` 下的 JSON 别手动改（除非你知道在干嘛），错了会污染下游
-- 想改设定请用 `/reconcile`，想回滚请用 Git tag
+- `_数据库/` 下的 JSON 不作为手动编辑入口，事实状态统一由 `/cluster-save-state` 回库
+- `/db` 只用于只读查看、搜索、导出和定位
+- 想改设定：当前未保存的 cluster 回草稿层修正后重跑 `/cluster-write`；已保存状态通过后续 cluster 承接变化。想回滚请用 Git tag

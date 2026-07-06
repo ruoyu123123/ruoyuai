@@ -1,107 +1,56 @@
 ---
-description: 若渝AI 命令系统总览（文档非命令）
+description: 若渝AI 命令索引（文档非命令）
 ---
 
-# 若渝AI 命令系统
+# 若渝AI 命令索引
 
-## 系统概览
+本目录只定义 slash command 的职责边界。**唯一创作链路以仓库根 README 为准**：`/write -> /outline -> /cluster-write -> /cluster-save-state -> 走向卡 -> /export`。
 
-若渝AI 是一个以**故事块（cluster）为单位**的 AI 小说写作系统，包含 13 个命令（+2 索引文档）、34 个核心子系统 JSON。
-v26 起写作单位从「章节」升级为「故事块（cluster）」，v27 起 writer 自由发挥 + splitter 按字数切。
+成熟功能、模型或论文/开源机制可以进入创作系统，但必须落成这条链路里的 required plan step 或 required 子步骤，并同步命令文档、agent 合约和验收口径。
 
-> 🔴 **2026-05-29 精简（只保证故事块流程）**：命令文件 44→15（13 命令 + 2 索引文档）。短剧 /script、孤儿命令、自进化层全删；
-> world/叙事/深度独立命令（map/events/timeline/relationships/power-system/narrator/fate-system/
-> ensemble/legacy/persona-depth/reaction-engine/foreshadowing/anti-slop/brainstorm/template/
-> review-book）**折叠进 cluster-save-state（自动维护对应子系统 JSON）+ outline（初始化）**——
-> 子系统 JSON 全保留、由 writer 经 build_manifest 消费、流水线自动维护，手动微调走 `/db`。
+## 核心链路
 
-## 快速开始
+| 命令 | 职责 |
+|---|---|
+| `/write` | 端到端创作入口：风格、灵感、大纲、故事块循环 |
+| `/outline` | 初始化项目和 34 个核心子系统，生成卷级大势，只详化首个 cluster |
+| `/cluster-write` | 写一个故事块：manifest、整块草稿、cluster 级审核、切章、标题 |
+| `/cluster-save-state` | 保存故事块状态，回写账本，涌现下一 cluster 候选 |
+| `/continue` | 从 WAL / plan / 文件产物恢复中断步骤 |
+| `/export` | 拼接并导出全文 |
 
-1. 启动后选择菜单项，或直接说你想做什么
-2. 选择/蒸馏作者风格
-3. AI 生成灵感 → 你选择
-4. 自动写作（每个故事块后展示走向卡片）
-5. 写完后 `/export` 导出全文
+## 蒸馏与校准
 
-## 命令分类
+| 命令 | 职责 |
+|---|---|
+| `/distill-style` | 蒸馏作者风格，生成作者风格档和 skill |
+| `/distill-character` | 蒸馏角色 voice、行为模式和反应倾向 |
 
-### 核心流程
-| 命令 | 功能 |
-|------|------|
-| `/write` | 写小说完整流程（端到端引导） |
-| `/cluster-write` | 写一个故事块（7 步 · v27 freestyle 默认） |
-| `/cluster-save-state` | 故事块状态保存（12 步 · 自动维护所有子系统 JSON + 涌现下一 cluster） |
-| `/outline` | 生成大纲+初始化 34 子系统数据库（含 AskUser 每卷 cluster 数） |
-| `/continue` | 续写/断点恢复 |
-| `/export` | 导出全文 |
+## 维护
 
-> 🔴 **v26 起 `/write-chapter` / `/save-state` 单章命令彻底废弃**——cluster mode 是唯一形态。
+| 命令 | 职责 |
+|---|---|
+| `/db` | 只读查看、搜索、定位或导出数据库状态 |
+| `/session-start` | 恢复写作会话上下文 |
+| `/plan-status` | 查看 plan_tracker 状态 |
 
-### 蒸馏系统
-| 命令 | 功能 |
-|------|------|
-| `/distill-style` | 蒸馏作者风格（writer 第一权威 · 生成 Skill 文件） |
-| `/distill-character` | 深度角色蒸馏（Voice DNA · 产 voice_pack） |
+质量审计和状态一致性职责属于主链路 required step：写作中由 `/cluster-write` 的 cluster 审计和 `/cluster-save-state` 的状态回库承担，成品前由 `/export` 硬校验承担。
 
-### 质量保障
-| 命令 | 功能 |
-|------|------|
-| `/check-quality` | 质量+正典+风格三重校验 |
-| `/reconcile` | 一致性调和 |
+## 子系统归属
 
-### 工具
-| 命令 | 功能 |
-|------|------|
-| `/db` | 数据库管理（查看/搜索/修复 · 世界/叙事/深度子系统手动微调入口） |
-| `/session-start` | 恢复写作会话 |
-| `/plan-status` | 查看 plan 强制规划状态 |
+世界、叙事、深度角色、伏笔、时间线、关系、地图、命运、反应引擎等子系统不再有独立创作命令。它们由：
 
-> **世界/叙事/深度子系统去哪了？** map/relationships/events/timeline/power-system/narrator/
-> fate-system/ensemble/legacy/persona-depth/reaction-engine 等独立命令已删——它们维护的 JSON
-> （地图/关系/事件表/时间线/大势卡/角色弧线…）由 `/outline` 初始化、`/cluster-save-state`
-> 在每个故事块自动更新、writer 经 build_manifest 自动消费。需手动微调时走 `/db`。
+- `/outline` 初始化骨架；
+- `/cluster-write` 通过 manifest 注入给 writer 和 scanner；
+- `/cluster-save-state` 在每个故事块后统一回写；
+- `/db` 提供只读观察、搜索、定位和导出入口。
 
-## 核心子系统 JSON（34 个 · 分 9 大类）
+## 验证入口
 
-### 基础（18 个）
+在仓库根目录执行：
 
-| 类别 | 文件 |
-|------|------|
-| 人物世界（5） | 人物卡.json · 世界观.json · 世界状态.json · 涟漪规则.json · 角色池.json |
-| 叙事（7） | 进度.json · 事件簇.json · 大势卡.json · 故事块摘要.json · 伏笔表.json · 事件表.json · 时间线.json |
-| 风格质控（4） | 作者风格.json · 场景规则.json · 写作经验.json · 用户偏好.json |
-| 世界演化（2） | 地图.json · 关系.json · 道具.json |
-
-### 高级（16 个 · 允许最小骨架占位但文件必须存在）
-
-Hub/Clock/Storyteller/Stress（4）+ 角色弧线/NPC（3）+ 事件池（2）+ 蒸馏（2）+ 长篇工具（5）
-
-完整字段定义见 `core/claude-home/STRUCTURE.md` · hook `pretooluse_subsystems_gate.py` 强制门禁拦截缺失。
-
-## 项目模板
-
-| 模板 | 适合 | 备注 |
-|------|------|------|
-| 🗡️ 玄幻修仙 | 修仙/玄幻/仙侠 | 全 34 子系统启用 |
-| 💕 都市言情 | 言情/甜宠/虐恋 | 全 34 子系统启用 |
-| 🔍 悬疑推理 | 推理/悬疑/惊悚 | 全 34 子系统启用 |
-| ⚔️ 战争史诗 | 军事/历史/权谋 | 全 34 子系统启用 |
-| 🌟 轻量模式 | 短篇/快速出稿 | `_数据库/.subsystems_bypass.json` 旁路高级 16 |
-| 🎭 自定义 | 手动选择 | 自由组合 |
-
-## 写作流程（v26 cluster mode · v27 freestyle 升级）
-
+```bash
+py -m pytest
 ```
-选择风格 → AI生成灵感 → 用户选择
-       ↓
-/outline (4 步 · 含 AskUser 每卷 cluster 数 · 仅详化 cluster_001)
-       ↓
-逐故事块循环：
-  /cluster-write (7 步 · writer 自由发挥整块 → 双轨质检 → ★最后才 splitter 按字数切)
-       ↓
-  /cluster-save-state (12 步 · 状态保存 + 涌现下个 cluster brief)
-       ↓
-  走向卡 (用户选择) → 下一个故事块
-       ↓
-全书完成 → /export 导出全文
-```
+
+不要把 `tests/` 子目录配置或旧 runner 当成官方验证入口。

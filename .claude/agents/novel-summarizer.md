@@ -28,7 +28,7 @@ MODE: cluster
 CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt 路径>
 ```
 
-> 🔴 v26 起 chapter mode 已彻底废弃。所有摘要单位是 cluster · per-chapter 摘要由 splitter 切完后从 cluster 摘要派生。
+> 所有摘要单位是 cluster；per-chapter 摘要由 splitter 切完后从 cluster 摘要派生。
 
 ## 文件载体
 
@@ -172,7 +172,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt 路径>
 }
 ```
 
-> `appraisal_beats` 取本 cluster 2-5 个关键情绪拐点（详见上「场景级 Appraisal Beat 规范」）。**无明显情绪拐点的轻量 cluster 可输出空数组 `[]`**（回库脚本 no-op·不报错）。
+> `appraisal_beats` 取本 cluster 2-5 个关键情绪拐点（详见上「场景级 Appraisal Beat 规范」）。**无明显情绪拐点的轻量 cluster 可输出空数组 `[]`**（显式空结果·无状态变更）。
 
 ## 字段硬性规则
 

@@ -16,7 +16,7 @@
       "scripts": [
         "python core/scripts/ingest_author_text.py {project_root} --source 蒸馏进度/.wal/raw_author_text.txt",
         "python core/scripts/distill_chapter_metrics.py {project_root}",
-        "? python core/scripts/cluster_segmenter.py --project {project_root}"
+        "python core/scripts/cluster_segmenter.py --project {project_root}"
       ],
       "expected_outputs": ["cluster_index.json"]
     },
@@ -29,7 +29,7 @@
       "_doc_c14": "🔴 2026-06-27 C14：作者档数值契约（治作者档静默退通用基线）。expected_outputs 从『文件存在』升级为『键存在性契约』：consolidate_author_profile 末尾自断言（total>0 却缺核心 consumer 键 sentence_length/paragraph_length(_chars)/dialogue_ratio(_pct)/single_sentence_para_ratio → [FATAL] exit2·生产端门）+ 末尾 db_schema_validate --require-quantitative-keys 二道闸（plan 层再确认产出的 作者风格.json 契约键齐全·消费端门）。只断言键 PRESENCE·绝不断言数值区间（高方差作者句长 31 防误杀·北极星④⑤）。",
       "scripts": [
         "python core/scripts/distill_surface_runner.py {project_root}",
-        "? python core/scripts/arc_aggregator.py --project {project_root} --all-clusters",
+        "python core/scripts/arc_aggregator.py --project {project_root} --all-clusters",
         "python core/scripts/consolidate_author_profile.py --project {project_root}",
         "python core/scripts/db_schema_validate.py {project_root} --require-quantitative-keys {project_root}/作者风格.json"
       ],
@@ -86,18 +86,18 @@
     {
       "n": 5.5,
       "name": "phase-4b-v1-reverify-converge",
-      "description": "🔴 2026-06-27 C01·v1 再复刻+再 SFS+收敛闸（落实命令文档 L194『连续2轮无新差距 + cluster SFS≥80』的 bounded 单轮）：① distill_replicate(skill_v1) 复刻同 cluster（? 失败容忍）；② style_evaluator multi-ref 测 v1 SFS → eval_v1.json（? 失败容忍）；③ distill_convergence_gate 复用 skill_opt.validation_gate.decide(rewards_before=[v0],rewards_after=[v1],floor=v0×0.97)·v1 严格优于才采纳否则回退 v0·选中 skill 写 skill_v2.md(finalize 出货最新版即它)+选中 eval 写 eval_ship.json。北极星①复用 binary/连续 SFS 不引新 hard_gate·②floor 相对锚 v0×0.97·③收敛闸只选 skill 不阻断 plan(永远 exit0·真出货拦截在 step7 SFS 灾难闸)·④SFS 必 multi-ref。skip_output_allowed=false：①②即便 ?-失败(gen-model 崩)，③收敛闸仍 required 运行并必落 skill_v2.md（infra 失败走 infra_skip 出货 v1·skill_v1 由 step5 保证存在）→ skill_v2.md 是可强制契约。",
+      "description": "🔴 2026-06-27 C01·v1 再复刻+再 SFS+收敛闸（落实命令文档 L194『连续2轮无新差距 + cluster SFS≥80』的 bounded 单轮）：① distill_replicate(skill_v1) 复刻同 cluster；② style_evaluator multi-ref 测 v1 SFS → eval_v1.json；③ distill_convergence_gate 复用 skill_opt.validation_gate.decide(rewards_before=[v0],rewards_after=[v1],floor=v0×0.97)·v1 严格优于才采纳否则回退 v0·选中 skill 写 skill_v2.md(finalize 出货最新版即它)+选中 eval 写 eval_ship.json。SFS 必 multi-ref；skill_v2.md 与 eval_ship.json 是强制契约，任一上游失败都停在本 step。",
       "required": true,
       "skip_output_allowed": false,
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
       "scripts": [
-        "? python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v1.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --output {project_root}/复刻测试/v1/replica.txt",
-        "? python core/scripts/style_evaluator.py --gen {project_root}/复刻测试/v1/replica.txt --multi-ref-from-dir {project_root}/原文 --multi-ref-count 5 --output {project_root}/对比报告/eval_v1.json",
+        "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v1.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --output {project_root}/复刻测试/v1/replica.txt",
+        "python core/scripts/style_evaluator.py --gen {project_root}/复刻测试/v1/replica.txt --multi-ref-from-dir {project_root}/原文 --multi-ref-count 5 --output {project_root}/对比报告/eval_v1.json",
         "python core/scripts/distill_convergence_gate.py --before-eval {project_root}/对比报告/eval_v0.json --after-eval {project_root}/对比报告/eval_v1.json --skill-before {project_root}/skill_v0.md --skill-after {project_root}/skill_v1.md --ship-out {project_root}/skill_v2.md --ship-sfs-out {project_root}/对比报告/eval_ship.json"
       ],
-      "expected_outputs": ["skill_v2.md"]
+      "expected_outputs": ["复刻测试/v1/replica.txt", "对比报告/eval_v1.json", "skill_v2.md", "对比报告/eval_ship.json"]
     },
     {
       "n": 6,
@@ -105,17 +105,17 @@
       "description": "定稿：最新 skill_v{N}（C01 后 = step5.5 收敛选中的 skill_v2）→ skill_FINAL.md（出货）+ 作者风格→FINAL + distillation_log（含 SFS）+ git。",
       "required": true,
       "skip_output_allowed": false,
-      "_doc_c01": "🔴 2026-06-27 C01：--sfs 从 eval_v0.json 改为 eval_ship.json（step5.5 收敛选中 skill 对应的 SFS·对齐出货 skill 的真实分数·修『出货 v 但 log 写 v0 SFS』错配）。eval_ship.json 缺失（infra/收敛 skip）时 finalize 优雅降级不写 SFS 行。",
+      "_doc_c01": "🔴 2026-06-27 C01：--sfs 从 eval_v0.json 改为 eval_ship.json（step5.5 收敛选中 skill 对应的 SFS·对齐出货 skill 的真实分数·修『出货 v 但 log 写 v0 SFS』错配）。eval_ship.json 是 step5.5 required 产物，缺失时 finalize 不得继续。",
       "scripts": [
         "python core/scripts/finalize_distill.py {project_root} --sfs {project_root}/对比报告/eval_ship.json",
-        "? python core/scripts/git_snapshot.py {project_root} --message 蒸馏作者风格"
+        "python core/scripts/git_snapshot.py {project_root} --message 蒸馏作者风格 --marker _数据库/.wal/distill_style_git_snapshot.json"
       ],
-      "expected_outputs": ["skill_FINAL.md", "作者风格_FINAL.json"]
+      "expected_outputs": ["skill_FINAL.md", "作者风格_FINAL.json", "_数据库/.wal/distill_style_git_snapshot.json"]
     },
     {
       "n": 6.5,
       "name": "pid-state-bootstrap",
-      "description": "🔴 2026-06-27 C20·PID 阈值 state 自动初始化（根治 PID 装饰性 active 无 Δ 生效）：用作者原文 + 作者风格.json 离线回测 FPR 收敛曲线，**收敛才**落 pid_threshold_state.json 的 theta_delta（active 真生效唯一稳定来源·发散绝不持久 Δ 红线由 save_backtest_state 守）。经 adaptive_runner 包裹取代旧 `|| true` 静默吞错——失败记 incident 供 self_heal 学习、degrade 放行不阻断 distill；state 可能因发散/全落死区不落盘，故 skip_output_allowed=true + expected_outputs 空。北极星⑤：PID 只动 5 个 advisory 阈值·绝不碰 HARD_GATE_CODES。",
+      "description": "🔴 2026-06-27 C20·PID 阈值 state 自动初始化：用作者原文 + 作者风格.json 离线回测 FPR 收敛曲线，收敛才落 pid_threshold_state.json 的 theta_delta；发散不持久 Δ。该步只调 advisory 阈值，不参与出货硬闸，运行事件由 adaptive_runner 记录。",
       "required": true,
       "skip_output_allowed": true,
       "scripts": [
@@ -126,17 +126,17 @@
     {
       "n": 7,
       "name": "phase-6-writer-feedback-verify",
-      "description": "写作端回灌验证闸（Article 6·不通过不出货）：用 skill_FINAL 灌 gen_writer 写同 cluster → 与原 cluster_arc 比 → 不过 exit 2 拦。must_fix#4：exit_codes 只 {0:ok, 2:fail}。",
+      "description": "写作端回灌验证闸（Article 6·不通过不出货）：用 skill_FINAL 灌 gen_writer 写同 cluster → 与原 cluster_arc 比 → 不过 exit 2 拦。verify.json 是出货 required 产物。",
       "required": true,
-      "skip_output_allowed": true,
+      "skip_output_allowed": false,
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
       "scripts": [
-        "? python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --output {project_root}/对比报告/verify.json"
+        "python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --output {project_root}/对比报告/verify.json --strict"
       ],
       "control_flow": {"exit_codes": {"0": "ok", "2": "fail"}},
-      "expected_outputs": []
+      "expected_outputs": ["对比报告/verify.json"]
     }
   ],
   "_v2_principle": "整个系统为故事块服务·蒸馏以 cluster 为单位·48 维 judge 全章全文注入·复刻先于 SFS。",

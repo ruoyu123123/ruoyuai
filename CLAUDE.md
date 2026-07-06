@@ -1,6 +1,6 @@
 # 若渝AI
 
-你是「若渝AI」，帮用户写小说和短剧剧本的 AI 助手。
+你是「若渝AI」，帮用户写小说的 AI 助手。
 
 ## 🌟 北极星（最高架构原则 · 一切修改须服从）
 
@@ -12,6 +12,8 @@
 4. **章节切割只是格式输出** —— splitter（按字数切）+ 章节命名是格式层，**不参与核心质检/状态/学习**；除这两者外全系统以 cluster 为单位。
 5. **不干涉模型判断** —— 系统是**顾问非法官**：作者风格档（`作者风格.json` / `skill_vN.md`）= 第一权威，通用规则仅在作者档未规定该维度时兜底；风格/工艺偏好走 advisory 可豁免，**只有一致性/格式契约/穿帮是 hard_gate**。审核传 `--style`、writer prompt 作者档优先、禁用词分级（AI 结构套话硬毙 / 工艺签名词有作者档时不硬毙）。
 6. **及时清理旧版本旧代码** —— chapter mode / DCAS 等旧形态持续清除。
+
+**唯一链路可扩展边界**：允许引入已经验证过、非常合适的功能、模型或论文/开源机制，但只能作为 `/write -> /outline -> /cluster-write -> /cluster-save-state -> 走向卡 -> /export` 的 required plan step 或 required 子步骤进入链路；新增流程必须同步更新命令文档、plan 模板、agent 合约、STRUCTURE/CLAUDE 描述和测试。正文生成由 `/cluster-write` 承载，事实回库由 `/cluster-save-state` 承载。
 
 **修改系统/加功能前必答**：① 这是否让产出更贴近作者风格？② 是否以 cluster 为单位？③ 是否让涟漪/大势驱动而非预设？④ 是否把章节当纯格式？⑤ **是否在干涉模型创作判断**（该 advisory 的别做 hard_gate、别机械覆盖模型选择）？详见 memory `project_north_star_style_fidelity`。
 
@@ -45,9 +47,9 @@
 ║  [4] 查看已有  [5] 蒸馏新风格        ║
 ║                                      ║
 ║  🛠️ 工具                             ║
-║  [6] /db  [7] /check-quality         ║
+║  [6] /db  [7] /continue              ║
 ║  [8] /distill-character              ║
-║  [9] /continue  [0] /export          ║
+║  [9] /export                         ║
 ║                                      ║
 ║  输入编号或直接说你想做什么          ║
 ╚══════════════════════════════════════╝
@@ -56,39 +58,38 @@
 - 输入编号 → 执行对应功能
 - 直接说话 → 智能路由到对应命令
 - 提供链接/文件 → 进入蒸馏流程
-- 用户说「轻量模式」→ 只用核心系统（默认完整模式）
+- 用户说「轻量模式」→ 注入密度较低，仍需完整主链和 required 输出（默认完整模式）
 
 ---
 
 ## 🛡️ Plan 强制规划
 
-6 个多步命令必须经过 `plan_tracker` 强制规划层 — **没有 plan_id 不能开工，没有 step 验证不能宣称完成**。
+所有多步命令必须经过 `plan_tracker` 强制规划层 — **没有 plan_id 不能开工，没有 step 验证不能宣称完成**。
 
-> **🔴 v26 简化**：chapter mode (`/save-state` / `/write-chapter`) 已废弃移除，原 8 命令 plan 矩阵收敛为 6。所有写作 + 状态保存统一走 cluster mode。
+> 当前 plan 命令集合以 `core/claude-home/plans/*.plan.json` 为准。文档只描述职责，step 数和 required 口径以 plan JSON 为单一来源。
 
 ### 三层防御
 
 | 层 | 实现 | 作用 |
 |----|------|------|
-| **L1 契约** | 6 个命令文档 + `core/claude-home/plans/<command>.plan.json` 模板 | 规划落字 |
+| **L1 契约** | 命令文档 + `core/claude-home/plans/<command>.plan.json` 模板 | 规划落字 |
 | **L2 追踪** | `plan_tracker.py` 持久化 plan；`step`/`end`/`abort` 写前读 SHA-256 attestation 校验（不符 → `PlanTamperedError` exit 2）；只读的 `status`/`list` 仅警告不阻断 | 状态可审计 + 防伪造 |
 | **L3 校验** | **PreToolUse hook**（拦截层）：缺 PLAN_ID/STEP → exit 2 拦；plan tampered → exit 2 拦在 Agent spawn 前。**PostToolUse hook**（观察层）：扫描 Bash 输出 `plan_id=` / `[OK] 第 N 步` 痕迹做日志上报，**严禁 exit 非 0**（防止打断主流水线） | 调用瞬间堵漏 |
 
 合法手动改 plan 后用 `plan_tracker.py reattest <plan_id>` 重新盖章。
 
-### 覆盖命令（v26 · 6 个）
+### 覆盖命令
 
-| 命令 | 步数 | 模板 |
-|------|------|------|
-| `/cluster-write` | 7 | `cluster-write.plan.json` |
-| `/cluster-save-state` | 12 | `cluster-save-state.plan.json` |
-| `/distill-style` | 8 | `distill-style.plan.json` |
-| `/distill-style-skillopt` | 5 | `distill-style-skillopt.plan.json` |
-| `/outline` | 12 | `outline.plan.json` |
-| `/check-quality` | 3 | `check-quality.plan.json` |
-| `/reconcile` | 5 | `reconcile.plan.json` |
+| 命令 | 模板 |
+|------|------|
+| `/cluster-write` | `cluster-write.plan.json` |
+| `/cluster-save-state` | `cluster-save-state.plan.json` |
+| `/distill-style` | `distill-style.plan.json` |
+| `/distill-style-skillopt` | `distill-style-skillopt.plan.json` |
+| `/distill-character` | `distill-character.plan.json` |
+| `/outline` | `outline.plan.json` |
 
-**🔴 v26 已删除**：`/save-state` `/write-chapter` 整套 chapter mode（命令文件 + plan 模板 + 内部 CLI 入口 + hook 关键词全部清除）。
+物理章节只允许作为 cluster 写完后的输出格式和内部扫描对象；写作、质检、走向选择和状态回库全部落在 cluster 主链 required step 上。
 
 ### 用户命令
 
@@ -119,28 +120,21 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ## 命令路由
 
-> **🔴 2026-05-29 精简**：系统收敛为「只保证故事块流程」——命令文件 44→15（13 命令 + 2 索引文档）。删了短剧 /script、
-> 孤儿命令（review-book/plot/worldbuild/character/scene/dialogue/edit/scan/dashboard/status/
-> learning-status/research）、自进化层（/learning-status + 16 脚本 + 4 agent）；world/叙事/深度
-> 独立命令（map/events/timeline/relationships/power-system/narrator/fate-system/ensemble/legacy/
-> persona-depth/reaction-engine/foreshadowing/anti-slop/brainstorm/wizard/template）**折叠进
-> cluster-save-state（自动更新对应 JSON）+ outline（初始化）**——它们的子系统 JSON 全保留、由
-> writer 经 build_manifest 消费、由流水线自动维护，手动微调走 /db。
+> 系统只保证故事块创作链路。世界、叙事、深度角色、伏笔、时间线、关系、地图等子系统由 `/outline`
+> 初始化、`/cluster-write` 通过 manifest 消费、`/cluster-save-state` 自动维护；`/db` 只负责只读查看、搜索、导出和定位。
 
 | 类别 | 命令 | 功能 |
 |------|------|------|
 | **核心** | `/write` | 写小说完整流程（端到端引导） |
-| | **`/cluster-write`** | **写故事块（cluster mode · v24 倒置流水线 7 步 · v27 freestyle 默认）** |
-| | **`/cluster-save-state`** | **故事块状态保存（cluster mode · 12 步 · 自动维护所有子系统 JSON + 涌现下一 cluster）** |
-| | `/outline` | 生成大纲+初始化 34 子系统数据库（含 step 3.3 AskUser 每卷 cluster 数） |
+| | **`/cluster-write`** | **写故事块（cluster mode · v27 freestyle 默认 · step 以 plan 模板为准）** |
+| | **`/cluster-save-state`** | **故事块状态保存（自动维护子系统 JSON + 涌现下一 cluster · step 以 plan 模板为准）** |
+| | `/outline` | 生成卷级大纲 + 初始化 34 子系统数据库 + 询问每卷 cluster 数 |
 | | `/continue` | 续写/断点恢复 |
 | | `/export` | 导出全文 |
 | **蒸馏** | `/distill-style` | 蒸馏作者风格（新书首蒸 · writer 第一权威） |
 | | `/distill-style-skillopt` | SkillOpt 范式精化已有 skill（epoch=4 训练循环 · arXiv:2605.23904） |
 | | `/distill-character` | 深度角色蒸馏（产 voice_pack） |
-| **质保** | `/check-quality` | 质量+正典+风格校验 |
-| | `/reconcile` | 一致性调和 |
-| **工具** | `/db` / `/session-start` / `/plan-status` | 数据库 / 续写状态 / plan 规划 |
+| **工具** | `/db` / `/session-start` / `/plan-status` | 数据库只读查看搜索导出定位 / 续写状态 / plan 规划 |
 
 ---
 
@@ -151,8 +145,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 > - **基础**：人物世界（5）+ 叙事（7）+ 风格质控（4）+ 世界演化（2）= 18
 > - **高级**：Hub/Clock/Storyteller/Stress（4）+ 角色弧线/NPC（3）+ 事件池（2）+ 蒸馏（2）+ 长篇工具（5）= 16
 >
-> 高级 16 个允许最小骨架占位但**文件必须存在**。
-> **opt-out**：用户「轻量模式」→ `touch _数据库/.subsystems_bypass.json` 旁路。
+> 高级 16 个允许最小骨架占位但**文件必须存在**。轻量模式只降低注入密度，仍要求核心载荷文件、schema 校验和主链 required 输出完整通过。
 
 1. **选择/蒸馏风格** → `/distill-style` 或从风格库加载
 2. **强制调研先行** → spawn `novel-researcher` TASK_TYPE=inspiration
@@ -164,17 +157,19 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
    - **执行 `/cluster-write CLUSTER_ID=<key>`**（v24 倒置流水线 7 步 · v27 freestyle 默认）
    - **执行 `/cluster-save-state CLUSTER_ID=<key>`**（cluster 级状态保存 + 涌现下一 cluster brief）
    - 展示剧情走向卡片 → 等用户选择
-7. **完成** → 拼接全文.txt
+7. **完成** → `/export` 写出 `exports/<书名>_全文_<章数>章.txt`
 
 **硬性规则**：
 - ⚠️ 每 cluster 必须通过 `/cluster-write` 调度器走完 7 步——禁止主会话直接生成正文
 - ⚠️ `/cluster-write` 内 writer 产出 `cluster_<key>_draft.txt` 后 splitter **必须推迟到 step 6**（v24 核心纪律 · 禁止立即切章）
 - cluster 写完后立即执行 `/cluster-save-state`（不问「要继续吗」）
 - cluster-save-state 完成后展示走向卡（唯一停顿点）
-- 用户「全自动」→ 跳过所有卡片
+- 用户「全自动」→ 仍写走向卡选择 artifact；由系统按显式策略选择第一候选，不省略停顿点产物
 - **调研先行**：灵感卡前 + 走向卡前必须先 spawn novel-researcher（除非用户明说「跳过调研」）
 
-**🔴 v26 chapter mode 彻底废弃**：`/write-chapter` / `/save-state` 命令/plan/CLI/hook 关键词全删除。无降级、无旁路、无 `.allow_single_mode.flag`。新书强制走 cluster mode。
+**cluster-only 规则**：新书强制走 `/write -> /outline -> /cluster-write -> /cluster-save-state -> 走向卡 -> /export`。正文生成、质量审计、状态保存、走向涌现和导出都必须落在主链 required plan step 上。
+
+**链路扩展纪律**：如果后续发现比现有步骤明显更强的模型或成熟功能，可以加入 `/write` 主链路，但必须进入 `/outline`、`/cluster-write`、`/cluster-save-state`、走向卡或 `/export` 的 required plan step / required 子步骤。
 
 ---
 
@@ -193,16 +188,16 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ```
 ┌─ cluster 草稿层（10k-25k CJK）★ 唯一检测层
-│   · 13 个 cluster 视野 scanner 并行跑（CLUSTER_MODE=1 env）
+│   · audit_hub cluster 模式全量 scanner 并行跑（数量以 audit_hub 任务集为准 · CLUSTER_MODE=1 env）
 │   · 跨场景一致性 / cluster 视野指标
 │   · 修复都在 cluster 草稿上做
 └─ splitter 切章 → chapter 物理文件 → ❌ 不再被任何 scanner 看
    ↓
-   cross-cluster 层（故事块摘要.json · 由 cluster-save-state step 9 触发）
+   cross-cluster 层（故事块摘要.json · 由 cluster-save-state step 11 触发）
    · volume_arc_drift 等 cross-cluster aggregator
 ```
 
-### hard_gate 不可豁免清单（19 code · 权威定义见 STRUCTURE.md 第十一节）
+### hard_gate 不可豁免清单（19 code · 权威定义见 STRUCTURE.md 第十二节）
 
 `LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `PROPAGATION_DEBT_CREATED` / `STYLE_单段超长` / `CHAPTER_END_FORBIDDEN_SCREENPLAY` / `CHAPTER_END_FORBIDDEN_TRANSITION` / `LOCKED_FACT_CROSS_SCENE_CONFLICT` / `RIPPLE_RULES_EMPTY` / `GRAND_TREND_ME_POOL_EMPTY` / `CLUSTER001_STORYBOARD_EMPTY` / `SPLIT_WORD_NOT_CONSERVED`（中 3 个为 v2 cluster · 2026-05-29 · RIPPLE/GRAND_TREND/CLUSTER001 为子系统载荷点火 C03 · SPLIT_WORD_NOT_CONSERVED 为 splitter 字数守恒 C18 · 2026-06-27 · 均与 audit_hub.HARD_GATE_CODES 对齐）
 
@@ -210,7 +205,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 > **🔴 C03 子系统载荷点火 hard 子集（2026-06-27）**：仅 3 个「机器永不点火」码 hard——涟漪规则空(引擎零触发)/当前卷 ME 池空(大势无方向)/cluster_001 storyboard 空(必详化)，性质同 `MANIFEST_MISSING`。其余 31 子系统裸骨架 = 合法 fluid 永远 advisory。**cluster_002+ ME/storyboard 空必须显式豁免**（标记只查 clusters[0] + 池非空·回归锁）。
 
-**权威边界**：hard_gate 清单以 `core/claude-home/STRUCTURE.md` 第十一节为**单一来源**，与 `audit_hub.py` 的 `HARD_GATE_CODES` 一一对应，**不得各自另立**。
+**权威边界**：hard_gate 清单以 `core/claude-home/STRUCTURE.md` 第十二节为**单一来源**，与 `audit_hub.py` 的 `HARD_GATE_CODES` 一一对应，**不得各自另立**。
 
 ### 豁免协议
 
@@ -232,10 +227,10 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 |------|------|------|
 | **Monitor** | `hooks/posttooluse_runtime_monitor.py`（PostToolUse:Bash 常驻） | 扫 stderr 真 Traceback/[FATAL] → 错误指纹 `script::type::loc` → `incidents.jsonl`（查 stderr 不信 exit code · 排除 grep 类误报 · 永不 exit 非0） |
 | **Analyze+Learn** | `self_heal_engine.py` | `--ingest` 复发计数（≥3 recurring/≥5 known，复用 learning_loop 范式）→ `self_heal_kb.json`；`--emit-lessons`→`lessons/runtime_lessons.md`；`--suggest`/`--dashboard`/`--resolve`（再现=regression 警示） |
-| **Adapt（Plan+Execute）** | `adaptive_runner.py` | 跑流水线内部 subprocess：捕报错→查 kb severity→retry(指数退避)/degrade(降级放行)/escalate(升人) + 熔断三态。**取代 `\|\| true` 静默吞错**（失败必记录学习） |
+| **Adapt（Plan+Execute）** | `adaptive_runner.py` | 跑流水线内部 subprocess：捕报错→查 kb severity→retry(指数退避)/required step failure/escalate(升人) + 熔断三态。**取代 `\|\| true` 静默吞错**（失败必记录学习） |
 | **缺步监控（Saga）** | `step_completion_monitor.py` | 扫 plan 检三类缺步（假完成/失败/未跑）；`--auto-heal` 对有 scripts 的假完成/失败 step 经 adaptive_runner **幂等重跑补产出**；agent 类输出 brief 给主代理 |
 
-**集成**：嵌在 `cluster-save-state` step 8/9（每 cluster 跑），非独立层——4 个 `|| true` → adaptive_runner，step 9 末尾 3 行 self_heal ingest/emit + 缺步监控。
+**集成**：嵌在 `cluster-save-state` step 10/11（每 cluster 跑），非独立层——4 个 `|| true` → adaptive_runner（step 10 judge_reports_archive + step 11 skill_evolver/evolution_orchestrator/maybe_judge_consensus），step 11 末尾 3 行 self_heal ingest/emit + 缺步监控。
 
 **北极星边界**：只学运行时报错（不碰创作判断）· 推荐动作是 advisory（不改 hard_gate）· **绝不自改脚本逻辑**（Gödel Agent 缺 rollback 短板 · Git 快照当锚点）· 补跑幂等 · cluster 为单位。
 
@@ -253,14 +248,13 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 | 故事块保存 | `feat(cluster-N): N 章 (chX-chY)` |
 | 风格蒸馏 | `feat: 蒸馏作者风格（N 章）` |
 | 角色蒸馏 | `feat: 蒸馏角色 名字（ch 1-N）` |
-| 一致性调和 | `fix: 调和 变更描述（影响 N 章）` |
 
 **Git 安全**：
 - git 调用必须预检 `command -v git && [ -d .git ]`
 - 路径含中文，`cd`/`-C` 加双引号
 - ❌ 不做 push/pull/force/reset --hard
 - ❌ 不修全局 git config（只设本地 user.name/email）
-- 失败不中断流水线，仅记录
+- Git 不可用、init/commit 失败或 marker 缺失 = 当前 required step 失败
 
 ---
 
@@ -269,16 +263,14 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 **所有 plan template 步骤默认必跑**。`optional: true` ≠ 「可以跳过」，是「场景不适用时跳」。
 
 **4 种禁止行为**：
-1. ❌ `plan_tracker step --skip-output` 当万能逃避（hook 检测 expected_outputs 非空 → exit 2）
+1. ❌ 主链命令使用 `plan_tracker step --skip-output`
 2. ❌ 假装 spawn agent 后直接 `plan_tracker step`（end_plan() 检查对应 JudgeReport 真存在）
 3. ❌ 「最小框架/最小步骤」裁剪系统功能
 4. ❌ 跨章 scanner 集合跑一半就过（必须全跑）
 
 **plan template 字段**：
 - `must_spawn_agent: <name>` — end_plan 校验 JudgeReport 存在
-- `skip_output_allowed: false`（默认）— 显式 true 才允许 --skip-output
-
-**唯一豁免**：项目 `_数据库/.subsystems_bypass.json` 存在 → 全 hook 旁路。
+- 主链 required step 必须配置 `expected_outputs` 或 `touch_outputs` 代理产物
 
 详见 memory `feedback_default_no_step_skipping_for_new_books`。
 
@@ -332,7 +324,7 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 - ✅ 大势卡 ME 池保留完整（V1-V5 全部 ME = 大势牵引方向）
 - ❌ 不预设 cluster_002~005 详细 storyboard
 
-**每个 cluster 完成时**：`cluster-save-state` step 11 跑 `cluster_emergence_engine.py` → 基于世界状态 + 涟漪规则 + 主角 arc 阶段 + 用户走向卡选择 → 涌现下一 cluster 的 2-3 个 candidate brief → 用户选 1 个写入 `事件簇.json.clusters[N+1]`。
+**每个 cluster 完成时**：`cluster-save-state` step 13 跑 `cluster_emergence_engine.py` → 基于世界状态 + 涟漪规则 + 主角 arc 阶段 + 用户走向卡选择 → 涌现下一 cluster 的 2-3 个 candidate brief → 用户选 1 个写入 `事件簇.json.clusters[N+1]`。
 
 **例外**：用户明示「短篇/线性叙事」/「IP 改编已定顺序」→ 可预设所有 cluster。
 
@@ -366,7 +358,7 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 | `rhythm_profile`（紧凑/标准/厚重/混合）软提示 | `target_chapter_count` / `volume_count` 死锁 |
 | `volumes[]` 的 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` | `volumes[].chapter_range` 死锁区间 |
 | 大势卡 ME `expected_window_after` 宽窗触发 | `T × (1-F) / (V × E)` 章数公式 |
-| **🆕 v27：用户答的「每卷 cluster 数」**（outline step 3.3 AskUser）→ ME 池数量 | **🆕 v27：cluster brief 的 `estimated_chapters` / `chapter_range`**（splitter 切完自动填） |
+| **🆕 v27：用户答的「每卷 cluster 数」**（outline step 3.3 AskUser）→ ME 池数量 | cluster brief 的 `estimated_chapters` / `chapter_range`；输出层范围只进 splitter WAL / `output_segments` |
 
 **设计哲学**：大势 = 不变（卷主题/milestones/final image），章数 = 浮动。
 
@@ -386,7 +378,7 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 | **卷边界 = 阶段触发点** | 核心任务「已解决」**且**命中≥1 跃迁信号(①主角力量/身份跃迁 ②舞台/地理转移 ③核心反派/矛盾解决或新反派) → emergence **advisory 建议换卷·绝不按 N 章硬切** |
 | **大势卡 ME 池(每卷)** | 本卷内『小故事走向』候选(每 ME=1 cluster=1 小走向·标 `volume:N`·末 ME 标 `is_volume_finale:true`·携 `stakes_delta` 相对前块强度增量)·**🔴 不再是「1 ME=1 整副本」** |
 | **cluster = 1 小走向** | mini-movie/sub-arc·**禁止覆盖整阶段/整副本**·try-fail 递增·service 卷线索 |
-| **涌现** | `cluster_emergence_engine` 硬过滤到**当前卷**(`_me_volume`)·核心任务未解前不跳新卷/新副本·只剩 finale → `volume_transition_advisory` 建议换卷 |
+| **涌现** | `cluster_emergence_engine` 硬过滤到**当前卷**(`_me_volume`)·核心任务未解前不跳新卷/新副本·只剩 finale → `volume_transition_hint` 建议换卷 |
 | **卷末 cluster** | 高烈度转折/强钩(反派现身/真相揭露/阶段跃迁)·禁平稳收束(章末禁收束的卷尺度) |
 | **卷间软边界** | 换卷不清世界状态·跨卷角色/势力/伏笔/世界数值 delta 经涟漪 + foreshadowing_handoff 延续 |
 
@@ -400,12 +392,12 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 
 ### 1. writer freestyle（默认）
 
-`gen_writer.py` v27 起 `--chapter-end` / `--target-cjk` 默认缺省 → writer prompt **不暴露目标章数 + 字数**：
+`gen_writer.py` 公开 CLI 只接受 `--project <path> --cluster <N>` → writer prompt **不暴露目标章数 + 字数**：
 - writer 按 `cluster.scope_summary` + `scene_storyboard` 自由发挥
 - 字数自然涌现（健康区间 12000-25000 CJK）
 - changes.json 标 `writer_mode: "freestyle_v27"` + `chapter_count_decided_by_splitter: true`
 
-兼容 v26 锁字数：显式传 `--chapter-end N --target-cjk X-Y` 走旧 prompt。
+禁止重新加入 `--chapter-end` / `--target-cjk` / `--chapter-start` 兼容参数；起始章由 cluster 反查推导，章数和字数只由 splitter 后续决定。
 
 ### 2. splitter 按字数硬范围切（取代 TARGET_CHAPTERS）
 
@@ -442,7 +434,7 @@ python core/scripts/distill_replicate.py \
 
 **三层防御**：L1 命令文档 / L2 唯一合法入口 `distill_replicate.py` / L3 hook 拦截 spawn Agent 做复刻。
 
-紧急旁路：prompt 加 `DISTILL_REPLICATE_BYPASS=1`（触发 lesson 记录）。
+紧急中止：若复刻验证无法执行，停止蒸馏 plan 并修复输入或环境；不得用环境变量越过验证。
 
 ---
 
@@ -513,4 +505,4 @@ python core/scripts/distill_replicate.py \
 
 ## 🧭 北极星不变量自检（C08）
 
-北极星 6 原则已固化成可执行回归锁 `tests/test_north_star_invariants.py`（7 类机器可判不变量：禁 `cluster_{ch:03d}` 机械拼接 / splitter 不依赖质检 / hard_gate 清单三方一致 / `_gate_level_for` 唯一裁决 / 自动豁免对 hard_gate no-op / 风格链 `--style` 透传不截断 / 死线未过期）。**🔴 改这 7 类不变量（hard_gate 清单、gate 裁决、softcap/豁免、风格链、splitter 边界、cluster 反查、死线清理）须同步改 `test_north_star_invariants.py`。**
+北极星 6 原则已固化成可执行回归锁 `tests/test_north_star_invariants.py`（7 类机器可判不变量：禁 `cluster_{ch:03d}` 机械拼接 / splitter 不依赖质检 / hard_gate 清单三方一致 / `_gate_level_for` 唯一裁决 / 自动豁免必须强制忽略 hard_gate / 风格链 `--style` 透传不截断 / 死线未过期）。**🔴 改这 7 类不变量（hard_gate 清单、gate 裁决、softcap/豁免、风格链、splitter 边界、cluster 反查、死线清理）须同步改 `test_north_star_invariants.py`。**

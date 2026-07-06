@@ -248,18 +248,18 @@ echo "PLAN_ID=$PLAN_ID"
 
 | 阶段编号 | 对应文档章节 | plan step n | expected_outputs |
 |---|---|---|---|
-| 阶段 0 | 读经验库 / 预处理（**必读 cluster_index.json**）| `--n 1` | 无（用 `--skip-output`） |
+| 阶段 0 | 读经验库 / 预处理（**必读 cluster_index.json**）| `--n 1` | `workspace/styles/<书名>/.plan_markers/stage0_preflight.json` |
 | 阶段 1 | 表层蒸馏（cluster agent + cluster 衔接 + arc 聚合 + skill v0）| `--n 2` | `workspace/styles/<书名>/作者风格.json` |
 | 阶段 2 | 复刻中检（`distill_replicate.py --mode cluster` · chapter 模式已删）| `--n 3` | `复刻测试/.../cluster_<id>_replica.txt` |
 | 阶段 3 | 多维度对比扫描 + SFS 评分（chapter SFS / cluster mode 6 维）| `--n 4` | `对比报告/distillation_compare_v{N}.json` |
-| 阶段 4 | 修正反思 → skill v{N+1} | `--n 5` | 无（用 `--skip-output`，skill 升级是 Edit/Write） |
+| 阶段 4 | 修正反思 → skill v{N+1} | `--n 5` | `workspace/styles/<书名>/.plan_markers/stage4_reflection.json` + `skill_v{N+1}.md` |
 | 阶段 5 | cluster 终验复刻（`distill_replicate.py --mode cluster`）| `--n 6` | `复刻测试/.../cluster_<id>_replica.txt` |
 | 阶段 6 | 出货（_FINAL 四件套 + git commit）·**出货前必先过阶段 7 回灌门槛** | `--n 7` | `作者风格_FINAL.json` + `skill_FINAL.md` + `distillation_log.md` |
 | 阶段 7 | 写作端回灌严闭环（`distill_finalize_verify.py --strict`）·**并入 step 7 出货门槛，不单独占 plan step**（plan 仅 7 步） | 含于 `--n 7`（回灌 exit 0 才落 step 7） | `对比报告/writer_feedback_verify.json` |
 
 每阶段尾必须执行：
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n <阶段号> [--output <文件>|--skip-output]
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n <阶段号> --output <required_output>
 ```
 
 ### plan-end 兜底检查（出货前最后一道闸 · v2 阶段 7 是真闸）
@@ -345,8 +345,9 @@ Hook 已强制要求所有蒸馏 Agent 子代理 prompt 必须含 `PLAN_ID` 字�
 ### 阶段 0 完成标记（plan-step 1）
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
-# 阶段 0 无具体产出文件（只是预处理），用 --skip-output 跳过文件校验
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 \
+  --output "workspace/styles/<书名>/.plan_markers/stage0_preflight.json"
+# 阶段 0 必须写入 marker，记录 lessons 已读、cluster_index 状态和批次范围；不允许跳过文件校验
 ```
 
 ---

@@ -21,7 +21,7 @@ distill-character 现走 **plan 强制规划层**（与 cluster-write / distill-
 | 3 | **voice-sample-gen** | **gen-model（同栈）** | `_数据库/.distill_character/{角色}_voice_samples.json`（style/anti_samples 候选） |
 | 4 | merge-voice-pack | Claude 确定性合并 | 更新 `_数据库/人物卡.json` voice_pack |
 | 5 | **process-integrity-verify** | `distill_character_verify.py` | `对比报告/voice_verify_{角色}.json`（PROCESS-INTEGRITY 硬 + fidelity advisory） |
-| 6 | git-snapshot（optional） | git | commit |
+| 6 | git-snapshot（required） | `git_snapshot.py --marker` | commit + `_数据库/.wal/distill_character_{key}_git_snapshot.json` marker |
 
 ## Gen-Model 抽象层（🔴 C13：语音样本走 gen_creative.py --mode voice_sample · 同栈 gen-model）
 
@@ -276,20 +276,15 @@ $ARGUMENTS
 
 ---
 
-## 第六步：Git 自动提交
+## 第六步：Git 自动提交（required）
 
-角色蒸馏完成后（人物卡.json 已更新），提交快照：
+角色蒸馏完成后（人物卡.json 已更新），经唯一入口 `git_snapshot.py` 提交快照并落 marker（与 plan step 6 一致）：
 
 ```bash
-if command -v git >/dev/null 2>&1 && [ -d "小说_书名/.git" ]; then
-  git -C "小说_书名" add _数据库/人物卡.json
-  # 从 distill_history[-1] 读取 version 和 chapters_analyzed
-  CHAR_NAME="李若渝"       # 角色名
-  VERSION="v2"             # 从 last_distill_version 读取
-  CH_RANGE="1-12"          # 从 last_distill_chapters 读取
-  git -C "小说_书名" commit -m "feat: 蒸馏角色 ${CHAR_NAME} ${VERSION}（ch ${CH_RANGE}）" 2>&1 | tail -1
-fi
+python core/scripts/git_snapshot.py {project_root} --message 蒸馏角色 --marker _数据库/.wal/distill_character_{key}_git_snapshot.json
 ```
+
+commit 失败或 marker 缺失 = 本 required step 失败（CLAUDE.md Git 纪律，不静默放行）。
 
 commit 信息示例：
 - 初次蒸馏：`feat: 蒸馏角色 李若渝 v1（ch 1-5）`

@@ -73,7 +73,8 @@ python <REPO_ROOT>/core/scripts/plan_tracker.py status "<plan_id>"
 | plan_id (尾段) | 去掉 `project_key_command_` 前缀，仅显示时间戳 | `20260513T214530123` |
 | command | 命令名 | `cluster-save-state` |
 | project | 项目/风格名 | `BookB` |
-| chapter | 章节号（无则 `-`） | `42` |
+| key | cluster key（无则 `-`） | `002` |
+| cluster | cluster id（无则 `-`） | `cluster_002` |
 | age | 距 `started_at` 的分钟数 | `12 min` |
 
 **`age` 计算**：读取 `runtime_plans_dir` 下的 plan.json，取 `started_at`，与当前时间差。
@@ -87,10 +88,10 @@ python <REPO_ROOT>/core/scripts/plan_tracker.py status "<plan_id>"
 ```
 📋 活跃 Plan 列表（共 2 个）
 
-| 状态 | plan_id 尾段     | command      | project          | chapter | age      |
-|------|------------------|--------------|------------------|---------|----------|
-| 🟢   | T214530123       | cluster-save-state| BookB   | 42      | 3 min    |
-| 🟢⚠️ | T203012001       | distill-style| 某书             | -       | 78 min   |
+| 状态 | plan_id 尾段     | command      | project          | key | cluster     | age      |
+|------|------------------|--------------|------------------|-----|-------------|----------|
+| 🟢   | T214530123       | cluster-save-state| BookB   | 002 | cluster_002 | 3 min    |
+| 🟢⚠️ | T203012001       | distill-style| 某书             | -   | -           | 78 min   |
 
 ⚠️ STALE plan 检测到：T203012001 已 78 分钟未结束。
    操作建议：python plan_tracker.py status <完整id>  /  abort <完整id> --reason "..."
@@ -105,10 +106,12 @@ python <REPO_ROOT>/core/scripts/plan_tracker.py status "<plan_id>"
 ```
 🧭 Plan 详情
 
-ID       : BookB_ch42_cluster-save-state_20260513T214530123
+ID       : BookB_002_cluster-save-state_20260513T214530123
 Command  : cluster-save-state
 Project  : BookB
-Chapter  : 42
+Key      : 002
+Cluster  : cluster_002
+Range    : 5-7
 Progress : 8/12 (66%)
 Started  : 2026-05-13 21:45:30
 Age      : 12 min
@@ -117,8 +120,8 @@ Age      : 12 min
 ┌──┬──────────────────────────────┬────────────┬─────────────────────────┐
 │ #│ 步骤名                       │ 状态       │ verified_outputs        │
 ├──┼──────────────────────────────┼────────────┼─────────────────────────┤
-│ 1│ load_context                 │ ✅ 完成    │ (skip-output)           │
-│ 2│ extract_voice_dna            │ ✅ 完成    │ voice_dna_ch42.json     │
+│ 1│ load_context                 │ ✅ 完成    │ (无输出校验)            │
+│ 2│ summarize_cluster            │ ✅ 完成    │ cluster_002_summary.json│
 │ 3│ lock_facts                   │ ✅ 完成    │ 人物卡.json (锁定+1)    │
 │ ...                                                                   │
 │ 9│ git_snapshot                 │ ⏳ 进行中  │ -                       │
@@ -142,7 +145,7 @@ Age      : 12 min
 - `[ ]` → `⏸ 待执行`
 
 **输出验证显示**：
-- 步骤 `verified_outputs` 为空 → 显示 `-`（待完成）或 `(skip-output)`（已跳过校验）
+- 步骤 `verified_outputs` 为空 → 显示 `-`（待完成）或 `(无输出校验)`（该 step 无文件产物）
 - 多个输出 → 用 `;` 分隔，超过 2 个时显示 `<首项> 等 N 个`
 
 ---

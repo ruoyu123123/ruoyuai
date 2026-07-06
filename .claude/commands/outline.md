@@ -1,24 +1,22 @@
 ---
-description: 生成章节大纲
+description: 生成卷级大纲与首个故事块 brief
 ---
 
 ## Gen-Model 抽象层
 
-**关键变化**：大纲中**含创意笔触的字段**（卷 arc 描述 / 大事件 description / hook / cliffhanger 等）应走 gen-model；**结构性字段**（卷骨架 / 章节范围 / 事件 ID / prerequisites 关系 / 角色 ID）仍由 Claude 主代理列。
+**关键变化**：大纲中**含创意笔触的字段**（卷 arc 描述 / 大事件 description / hook / cliffhanger 等）走 gen-model；**结构性字段**（卷骨架 / cluster 数 / 事件 ID / prerequisites 关系 / 角色 ID）仍由 Claude 主代理列。
 
 **新工作流（Step 2 卷级大纲生成）**：
-1. 主代理（Claude）按原流程列**结构性骨架**（卷数 / 卷标题 / 章节范围 / key_milestones 事件 ID 列表 / 角色 anchor）
+1. 主代理（Claude）按原流程列**结构性骨架**（卷数 / 卷标题 / 每卷 cluster 数 / key_milestones 事件 ID 列表 / 角色 anchor）
 2. 含创意笔触的字段（如 `volume_arc` 段落描述、`major_events[].description` 等）由主代理准备**结构 brief JSON**
-3. 调 `gen_creative.py --mode volume_arc`（placeholder，未完整实现；当前可暂用主代理直出 + 后续 fixer 润色作为兜底）
+3. 调 `gen_creative.py --mode volume_arc`
 4. 主代理把 gen-model 输出合并回大纲结构，写入 `_数据库/进度.json` 的 volumes 段 + `大纲.md` 的卷描述段
 
 **当前实施状态**：
-- `gen_creative.py --mode volume_arc` 是 v2 placeholder（NotImplementedError）
-- 临时方案：主代理用 brainstorm mode 间接达成（把卷骨架作为 topic 输入）
-- 完整实现待后续迭代
+- `gen_creative.py --mode volume_arc` 已实现，作为卷级创意文字生成入口。
 
 **保持 Claude 处理的部分**：
-- 卷骨架结构（卷数 / 章节范围 / event prerequisites 关系）
+- 卷骨架结构（卷数 / 每卷 cluster 数 / event prerequisites 关系）
 - cluster_blueprint 的 anchors / try_fail / info_gain / threads_advance 等结构字段
 - 34 个核心子系统 JSON 初始化（plan_tracker step 3）
 
@@ -26,7 +24,7 @@ description: 生成章节大纲
 
 ---
 
-你是一位小说大纲规划专家。请帮我制定章节大纲：
+你是一位小说创作链路规划专家。请制定卷级阶段大纲、ME/cluster 池和首个故事块 brief：
 
 $ARGUMENTS
 
@@ -34,7 +32,7 @@ $ARGUMENTS
 
 ## 🛡️ Plan 强制规划
 
-大纲流程 4 步全部挂在 plan 上——start 前必须 `plan-create` 拿 PLAN_ID，每步完成 `plan-step --n N`，末尾 `plan-end`。Hook 已强制本命令的 PLAN_ID。
+大纲流程全部挂在 plan 上——start 前必须 `plan-create` 拿 PLAN_ID，每步完成 `plan-step --n N`，末尾 `plan-end`。具体 step 数与 required 输出以 `core/claude-home/plans/outline.plan.json` 为准。
 
 ```bash
 # 框架选择 / 灵感讨论开始前先建 plan
@@ -65,7 +63,7 @@ STEP: <当前步骤号>
 | **三幕式**（默认）| 通用 | 建立→对抗→解决 |
 | **Save the Cat** | 商业网文/电影化 | Opening Image→Theme Stated→Catalyst→Midpoint→All Is Lost→Finale |
 | **英雄之旅** | 玄幻/冒险/成长 | 日常→冒险召唤→跨越门槛→试炼→深渊→回归 |
-| **雪花法** | 从零构思 | 一句话→一段话→角色摘要→扩展为1页→扩展为4页→逐章展开 |
+| **雪花法** | 从零构思 | 一句话→一段话→角色摘要→扩展为1页→扩展为4页→首块详化 |
 | **自定义** | 用户自己定 | 用户提供框架描述 |
 
 **用户没选时默认三幕式。用户说"Save the Cat"或"雪花法"时切换。**
@@ -99,14 +97,14 @@ STEP: <当前步骤号>
 | 3 | 角色摘要 | 每个主角的：名字/目标/动机/冲突/顿悟/一段话概要 |
 | 4 | 一页大纲 | 每段话扩展为一段，约1页 |
 | 5 | 四页大纲 | 每段扩展为一页，约4页 |
-| 6 | 逐章展开 | 每章一行概要→完整cluster_blueprint |
+| 6 | 首块详化 | `cluster_001` scene storyboard + 后续 ME/cluster 池 |
 
 **用户选"雪花法"时，引导用户从第1步开始逐步扩展，不一次性生成完整大纲。**
 
-**plan-step 1**（框架选择属于讨论步骤，无文件型 expected_outputs）：
+**plan-step 3.2**（框架选择会写 `_数据库/.wal/outline_choice_framework.json`）：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3.2
 ```
 
 ---
@@ -147,18 +145,18 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 ### plan-step 1.5
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3.4
 ```
 
 ---
 
-## 🆕 第 1.7 步：卷级 cluster 数 + writer freestyle 模式（v27）
+## 卷级 cluster 数 + writer freestyle 模式（v27）
 
 用户原话：「每卷的故事块数量应该问询用户，然后故事块能切多少章我发现你一开始已经间接限制死了，这是不对的，应该让ai自由发挥」。
 
-本步**必跑** — 决定每卷有多少 cluster（=多少 ME 大势事件）+ writer 是否走 freestyle（默认 true）。
+本段是 outline plan 内的必跑动作之一 — 决定每卷有多少 cluster（=多少 ME 大势事件），并写入 writer freestyle 偏好。
 
-### 1.7.1 询问每卷 cluster 数
+### 询问每卷 cluster 数
 
 **AskUserQuestion 1**：「《<书名>》第 1 卷你想要几个故事块（cluster）？」
 - **选项**（推荐区间 4-12）：
@@ -173,15 +171,9 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 **多卷书**：若大纲含 2+ 卷，依次问每卷 cluster 数；用户可一次性给所有卷数字。
 
-### 1.7.2 writer freestyle 模式确认
+### writer freestyle 固定启用
 
-**默认开启**（推荐）：writer 不知道目标章数 + 字数 · 按 cluster.scope_summary 自由发挥 · splitter 后期按字数切。
-
-可选问询（用户首次新书时确认 1 次，之后存入用户偏好不再问）：
-
-**AskUserQuestion 2**：「writer 写作模式 · 推荐 v27 freestyle」
-- `freestyle（v27 默认 · 推荐）` — writer 自由发挥 · splitter 按字数 3000-4500/章切 · 末章不够字数从下个 cluster 补料
-- `locked（v26 兼容 · 旧）` — writer 按预定章数 + 字数硬约束写
+writer 固定走 freestyle：不接收目标章数 + 字数，按 `cluster.scope_summary` 和 `scene_storyboard` 自由发挥；splitter 后期按字数切，末章不够字数从下个 cluster 补料。
 
 写入 `_数据库/用户偏好.json.workflow_preferences[]`：
 ```json
@@ -215,13 +207,13 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 
 **禁止**：
 - ❌ **把 1 个 ME 写成「一整个副本/阶段」**（=单 cluster 塌缩整阶段·本次系统根治的 bug）
-- ❌ 在 cluster brief 写 `chapter_count_estimate` / `chapter_range` / `expected_word_range`（v27 deprecate · splitter 切完填）
+- ❌ 在 cluster brief 写 `chapter_count_estimate` / `chapter_range` / `expected_word_range` / `word_budget`（cluster-first 硬禁 · splitter 切完只回填实际章号）
 - ❌ 在 ME 池写「expected_chapters」（章数由 writer + splitter 涌现）
 
 ### plan-step 1.7
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3.3
 ```
 
 ---
@@ -238,17 +230,16 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 --skip-output
 | 每卷 `volume_arc` / `key_milestones` / `ending_state` | 「本卷预计 N 章」类预测 |
 | major_events 池：每 ME=1 小走向·标 `volume:N`·末个 `is_volume_finale`·`stakes_delta` 递增 | events_per_volume 反推章数 / 把整副本写成 1 个 ME |
 
-章数由 ME 触发 + 用户涟漪选择**自然涌现**，writer/save-state 累积；**卷数 = 阶段数**（每换一个大故事方向/副本就 +1 卷）。
+章数由 writer + splitter 自然涌现，cluster 走向由 ME 触发 + 用户涟漪选择 + `/cluster-save-state` 累积决定；**卷数 = 阶段数**（每换一个大故事方向/副本就 +1 卷）。
 
 请提供：
-1. 各章节的核心事件和情节点
-2. 每章的人物关系变化
-3. 章节之间的承接和铺垫
-4. 节奏控制（高潮、过渡、转折的分布）
-5. 伏笔和线索的埋设时机
-6. 预估字数和篇幅分配建议
+1. 各卷的阶段目标：`volume_core_conflict`、`volume_thread`、`volume_finale_signal`。
+2. `major_events[]`：每个 ME 对应一个小故事走向 cluster，标 `volume`、`stakes_delta`、`prerequisites`、`is_volume_finale`。
+3. `cluster_001` 的 `scope_summary`、`scene_storyboard`、`foreshadowing_to_plant`、`research_ref`。
+4. 伏笔和线索的埋设/回收时机，以 cluster 或 scene 为单位标注。
+5. 节奏控制以卷、cluster、scene 三级描述；禁止生成逐章大纲、预计章数、预计字数或章号范围。
 
-可以使用表格或列表形式，清晰展示整体结构。
+可以使用表格或列表形式，清晰展示阶段、ME 和首块 storyboard。
 
 **Agent 调度规范**：如启动 `novel-outline-planner` 一类 sub-agent 生成大纲，prompt 顶部必须含：
 
@@ -415,7 +406,7 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
 }
 ```
    - `entries`：关键词触发条目（借鉴 SillyTavern World Info 机制）
-   - 每个条目包含触发词列表，当章节大纲中出现匹配关键词时，自动注入对应 content
+   - 每个条目包含触发词列表，当 cluster brief / scene storyboard 中出现匹配关键词时，自动注入对应 content
    - `priority`：优先级（1-10），数值越高越优先注入
    - `category`：条目分类，便于管理和筛选
 4. Write `_数据库/伏笔表.json` — 初始化升级版伏笔系统
@@ -432,7 +423,8 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
      {
        "id": "fs_001", "setup_cluster": 3,
        "description": "主角腰间的玉佩",
-       "tier": 1, "due_by": 15, "resolved": false,
+       "tier": 1, "due_by": 15,
+       "status": "open", "owner": "writer", "payoff_scope": "预期在第 15 章前回收",
        "trigger_condition": {
          "_doc": "因果谓词形式化（CFPG arxiv 2601.07033）",
          "location": "any | <地点ID>",
@@ -445,6 +437,7 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
      - Tier-1：核心伏笔（主线级，必须回收，高优先级注入）
      - Tier-2：支线伏笔（影响剧情走向，建议回收）
      - Tier-3：氛围伏笔（细节装饰，可以不回收）
+     - **三态生命周期**：`status` ∈ `open`（已埋未收）/ `suspended`（显式挂起延后·不催收）/ `consumed`（已回收）；`owner` = 负责回收的角色/线索归属（缺省 `writer`）；`payoff_scope` = 预期回收范围描述（可从 due_by 派生·允许空串）。枚举权威 `db_schema_validate.FORESHADOW_STATUS_ENUM`，非法值校验报错
    - **deadlines**（截止期约束）：剧情中出现的时间承诺
      ```json
      {"id": "dl_001", "raised_ch": 5, "description": "三天后比武大会", "deadline_ch": 8, "status": "pending"}
@@ -472,15 +465,17 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
 6. Write `_数据库/进度.json` — 初始化进度，结构如下：
 ```json
 {
-  "total_chapters": 10,
-  "completed": 0,
-  "current": 1,
-  "words_per_chapter": 3000,
+  "schema_version": "v2.cluster",
+  "current_cluster": "cluster_001",
+  "completed_clusters": [],
+  "writer_mode": "freestyle",
   "volumes": [
     {
       "vol": 1,
       "title": "第一卷：破局",
       "core_conflict": "本卷核心冲突",
+      "volume_thread": "串起本卷所有 cluster 的卷线索",
+      "volume_finale_signal": "换卷触发信号",
       "volume_arc": "本卷人物弧线（起→承→转）",
       "key_milestones": ["里程碑事件1", "里程碑事件2"],
       "ending_state": "本卷末尾的故事状态"
@@ -489,6 +484,8 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
       "vol": 2,
       "title": "第二卷：觉醒",
       "core_conflict": "本卷核心冲突",
+      "volume_thread": "串起本卷所有 cluster 的卷线索",
+      "volume_finale_signal": "换卷触发信号",
       "volume_arc": "本卷人物弧线",
       "key_milestones": ["里程碑事件"],
       "ending_state": "本卷末尾状态"
@@ -512,11 +509,11 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
 }
 ```
    - 🔴 **2026-05-29 复审修复[H5]**：`cluster_blueprint` **必须是 dict**（`cluster_id` → cluster 数据），**禁止初始化为 list**。SC-1 规范形态 + `cluster_lookup._iter_blueprint_ranges` 用 `.items()` 遍历 `cluster_blueprint` 取每个 cluster 的 `chapter_range` / `scene_storyboard[].ch`；写成 list 会让反查整体瘫痪（城南项目实测 list(25) 即此 bug）。
-   - 🔴 **fluid 涌现纪律**：outline 阶段**只详化 `cluster_001`**（含完整 `scene_storyboard` + `scope_summary` + `foreshadowing_to_plant`）。`cluster_002+` 不预设——由 cluster-save-state step 11 涌现。
+   - 🔴 **cluster-first 涌现纪律**：outline 阶段**只详化 `cluster_001`**（含完整 `scene_storyboard` + `scope_summary` + `foreshadowing_to_plant`）。`cluster_002+` 不预设——由 `/cluster-save-state` 末尾涌现。
    - 🔴 **v27 freestyle 不写 `chapter_range`**：cluster 的 `chapter_range` 由 splitter 切完后回填（事件簇.json 为权威源），outline 阶段不预设。`scene_storyboard[].ch` 是 writer 蓝图序号（场景顺序），非物理章号。
    - `narrative_mode`：仅首个 cluster 默认 `"in_medias_res"`（黄金三章倒叙），后续 cluster 默认 `"linear"`。
-   - `volumes`：分卷层（仅在预估 >= 20 章时生成，短篇直接跳过 volumes 字段）
-   - `volume_arc`：每卷的人物成长弧线（起承转），写作时注入到章节prompt，确保章节服务于卷级目标
+   - `volumes`：卷/阶段层；每卷都要有 `volume_core_conflict` / `volume_thread` / `volume_finale_signal`
+   - `volume_arc`：每卷的人物成长弧线（起承转），写作时由 manifest 注入给 writer，确保 cluster 服务于卷级目标
    - `key_milestones`：卷级关键事件，用于长距召回
    - 每个 cluster 关联到所属卷（`vol` 字段），用于卷级一致性检查
    - `scene_type` 标注本场景主要类型（可多选），用于场景规则注入
@@ -577,7 +574,7 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
 ```
    - `style_preferences`：用户的写作风格偏好（如"喜欢快节奏"、"对话比例要高"）
    - `content_preferences`：内容偏好（如"不要无脑打脸"、"虐点要克制"）
-   - `workflow_preferences`：工作流偏好（如"每章2000字就够"、"不需要质量检查"）
+   - `workflow_preferences`：工作流偏好（如"节奏偏紧"、"走向卡自动选择"、"导出格式偏好"）
    - 从用户的反馈和修正中自动积累，不需要用户手动填写
 
 10. Write `_数据库/地图.json` — 初始化世界地图
@@ -616,8 +613,8 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
 14. Write `_数据库/道具.json` — 初始化道具/物品系统（`{"items": []}`）
 ```json
 {
-  "current_time": {"day": 1, "period": "morning", "chapter": 1, "season": ""},
-  "time_per_chapter": "约半天",
+  "current_time": {"day": 1, "period": "morning", "cluster": 1, "season": ""},
+  "time_per_cluster": "约半天",
   "npc_schedules": {},
   "world_clock_events": [],
   "time_log": []
@@ -657,68 +654,32 @@ Thumbs.db
 _数据库/蒸馏进度/
 ```
 
-16. 初始化 Git 仓库并提交首次快照：
-```bash
-# 进入项目目录（路径可能含中文，必须加引号）
-cd "小说_书名"
-
-# 检查 git 是否可用（不可用则静默跳过，不阻塞主流程）
-if command -v git >/dev/null 2>&1; then
-  # 如已存在 .git 目录则跳过 init
-  if [ ! -d ".git" ]; then
-    git init -b main 2>/dev/null || git init
-    # 设置本地身份（避免 commit 失败；不污染全局 config）
-    git config user.name "若渝AI" 2>/dev/null
-    git config user.email "ruoyuai@local" 2>/dev/null
-  fi
-  git add .gitignore _数据库/
-  git commit -m "chore: 初始化项目 + 34 个数据库文件" 2>&1 | tail -1
-fi
-```
+16. Git 仓库由 `init_project.py` 初始化，快照由 plan-end 的 `git_snapshot.py --marker _数据库/.wal/outline_git_snapshot.json` 写入。
 
 **Git 集成硬性规则：**
-- ⚠️ 所有 git 命令必须用 `command -v git` 预检，无 git 时静默跳过，不阻塞主流程
-- ⚠️ 路径含中文，所有 `cd` 必须加双引号
-- ⚠️ 只在项目目录内操作（`git -C "小说_书名"` 或 `cd` 后再执行）
-- ⚠️ 只设置本地 user.name/email（不污染用户的全局 git config）
-- ⚠️ 不做 push/pull/force/reset --hard 等破坏性操作
-- ⚠️ 提交失败（如 hook 失败）时在日志记录，但不中断流水线
+- Git 不可用、`git init` 失败或 commit 失败都是当前 plan 的硬失败。
+- 路径含中文时所有脚本参数必须传路径字符串，不手写未加引号的 `cd`。
+- 只在项目目录内操作，不做 push/pull/force/reset --hard 等破坏性操作。
+- 只设置本地 user.name/email，不污染用户的全局 git config。
 
 终端输出：「✅ 数据库已初始化（34 个核心子系统 JSON），Git 仓库已建立」
 
-**plan-step 3**（34 子系统 JSON + Git 初始化为一步；模板已配 3 个核心 JSON 校验，缺任意一个 hook `pretooluse_subsystems_gate` 拦截）：
+**plan-step 4**（34 子系统 JSON 初始化；模板校验 34 个核心 JSON，缺任意一个即 FAIL）：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4
 ```
 
 模板 expected_outputs 含 `_数据库/人物卡.json`、`_数据库/世界观.json`、`_数据库/进度.json`，缺失自动 FAIL。
 
 ---
 
-## 第 4 步：plan-end + 大纲完成 Git 提交
+## plan-end + 大纲完成 Git 快照
 
-# 大纲完成后的 Git 提交
-
-当大纲生成完成（进度.json 的 volumes 和 cluster_blueprint 已写入）后，立即提交：
+当大纲生成完成（大势卡、事件簇、进度和 cluster_001 brief 已写入）后，由 plan step 7 执行 schema 校验和 Git 快照：
 
 ```bash
-if command -v git >/dev/null 2>&1 && [ -d "小说_书名/.git" ]; then
-  git -C "小说_书名" add _数据库/进度.json _数据库/故事块摘要.json _数据库/伏笔表.json _数据库/人物卡.json _数据库/世界观.json _数据库/地图.json _数据库/关系.json _数据库/事件表.json _数据库/时间线.json _数据库/道具.json _数据库/场景规则.json _数据库/写作经验.json _数据库/用户偏好.json
-  # 如有作者风格文件，也一起纳入
-  [ -f "小说_书名/_数据库/作者风格.json" ] && git -C "小说_书名" add _数据库/作者风格.json
-  git -C "小说_书名" commit -m "feat: 生成大纲（N 章 / X 卷）" 2>&1 | tail -1
-fi
-```
-
-commit 信息格式参考：
-- 短篇（无分卷）：`feat: 生成大纲（10 章）`
-- 长篇（有分卷）：`feat: 生成大纲（50 章 / 3 卷）`
-
-**plan-step 4 + plan-end**（收尾校验本身）：
-
-```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --skip-output
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 7
 python core/scripts/plan_tracker.py end "$PLAN_ID"
 ```
 
@@ -730,56 +691,45 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 向用户报告"大纲完成"前必须自验：
 
-- [ ] `plan_tracker.py status $PLAN_ID` 显示 4 个 required 步骤全部 `[x] completed`
+- [ ] `plan_tracker.py status $PLAN_ID` 显示 13 个 required 步骤全部 `[x] completed`
 - [ ] `plan_tracker.py end $PLAN_ID` 返回 exit 0
-- [ ] `大纲.md` 落地（卷级大势文档）
-- [ ] `_数据库/人物卡.json` / `_数据库/世界观.json` / `_数据库/进度.json` 三件套全部落地
-- [ ] Git 初始化 commit + 大纲 commit 均已提交（git 不可用时本项免）
+- [ ] `_数据库/大势卡.json` / `_数据库/事件簇.json` / `_数据库/进度.json` 三件套全部落地
+- [ ] `_数据库/.wal/outline_git_snapshot.json` 已写入
 
 任何一项不达 → 不允许声称"大纲完成"。
 
 ---
 
-# 🌊 模式选择（v20 涌现叙事 新增）
+# 🌊 唯一大纲模式（cluster-first）
 
-`/outline` 接受 `--mode` 参数控制 cluster_blueprint 的预定程度：
+`/outline` 不再提供逐章 strict / hybrid 分支。唯一模式是 cluster-first：
 
-| mode | cluster_blueprint 粒度 | 适合 |
-|---|---|---|
-| `strict`（默认 · v19）| 全 N 章逐章 title/turning_point/key_events | 短篇/已完整构思/不会跑偏的故事 |
-| **`fluid`（v20 新增）** | 仅卷级大势 + 大事件池 | 长篇/会被剧情涌现影响/需抗偏离 |
-| `hybrid` | 第一卷 strict + 后续卷 fluid | 长篇但要保证开局质量 |
-
-## 🌊 fluid 模式产物
-
-启用 `--mode fluid` 时：
-
-1. **不生成** 逐章 cluster_blueprint（`cluster_blueprint = {}` — 🔴 复审修复[H5]：空 dict 而非空 list，与 SC-1 规范形态一致）
-2. **生成 `_数据库/大势卡.json`**——大事件池（major_events[]）
+1. **只详化 `cluster_001`**：写 `scope_summary`、scene storyboard、首块 `research_ref` 和必要伏笔。
+2. **生成 `_数据库/大势卡.json`**——大事件池（major_events[]），每个 ME 对应一个后续 cluster 候选方向。
    - 每个大事件含 `prerequisites` + `expected_window_after` + `physical_evidence`
-   - 不指定章号，由 fate_engine.py 按条件涌现触发
+   - 不指定章号，由 `/cluster-save-state` / cluster_emergence_engine 按条件涌现触发
 3. **生成 `_数据库/角色池.json`**——分 core（永久）+ emerged（涌现）+ extras（一次性）
    - 仅 outline 阶段定 core 3-4 人；其他角色由 writer 即兴 spawn
 
-## 🌊 fluid 模式工作流
+## 🌊 cluster-first 工作流
 
 ```
-ch_N 写作前：
-  build_manifest 调 fate_engine evaluate ch_N
-  → 输出 active_fate_events（满足 prerequisites + 在 expected_window 内的事件）
+cluster_N 写作前：
+  build_manifest 调 fate_engine / cluster_emergence evaluate cluster_N
+  → 输出 active_fate_events（满足 prerequisites + 在 expected_window 内的事件/ME）
   → 注入 manifest.active_fate_events 给 writer
-  → writer 选 1-2 个事件本章推进，写入 _changes.json.fate_events_triggered
+  → writer 在整块草稿中推进 1-2 个事件，写入 cluster_changes.self_eval/waivers
 
-ch_N 写作后（cluster-save-state step 9）：
-  fate_engine update ch_N
-  → 把 triggered 事件标 completed_at_ch=N
-  fate_engine drift ch_N
-  → 检测超 expected_window 未触发事件 → 告警「下章必须推进」
+cluster_N 写作后（/cluster-save-state）：
+  cluster_summary_builder + archivist + foreshadower 回写账本
+  → 把 triggered 事件标 completed_at_cluster=N
+  cluster_emergence_engine 基于剩余 ME、用户走向和当前状态涌现 cluster_N+1
+  → 检测超 expected_window 未触发事件 → 告警「下个 cluster 必须推进」
 ```
 
 ## 🌊 抗剧情跑偏
 
-fluid 模式核心好处：
+cluster-first 核心好处：
 - **没有 ch_NNN 死定**——剧情走向影响"何时触发"，不需要改大纲
 - **大势仍稳**——final_image / prerequisites 链不变
 - **drift 检测**——超 window 未触发自动告警，防忘
@@ -811,7 +761,7 @@ fluid 模式核心好处：
    - 人物抉择出人意料
    - 人物关系、行为逻辑、规则的反转
 
-## 章节节奏分布
+## Cluster 节奏分布
 
 - **虐点密集区**（前30%）：快速建立价值洼地
 - **转折觉醒区**（30-50%）：情绪缓冲与能力获取
@@ -822,21 +772,21 @@ fluid 模式核心好处：
 
 制作伏笔时间表，标注：
 - 伏笔内容
-- 埋设章节
-- 回收章节
+- 埋设 cluster / scene
+- 回收 cluster / scene
 - 回收方式
 
-## 每章出场角色标注
+## 每个 scene 出场角色标注
 
-每章大纲必须标注本章出场角色列表，格式如下：
-- **出场角色**：列出本章所有出场角色（含主角、配角、新登场角色）
-- **关键事件**：本章核心事件摘要（2-3个关键词）
-- **场景类型**：标注本章主要场景类型（可多选：战斗/日常/情感/悬疑/转折）
+`cluster_001.scene_storyboard[]` 必须标注每个 scene 的出场角色列表，格式如下：
+- **出场角色**：列出本 scene 所有出场角色（含主角、配角、新登场角色）
+- **关键事件**：本 scene 核心事件摘要（2-3个关键词）
+- **场景类型**：标注本 scene 主要场景类型（可多选：战斗/日常/情感/悬疑/转折）
 - 此标注用于后续 cluster-write（build_manifest）按需加载对应人物卡和场景规则，避免全量加载
 
 ## 情绪节奏标注
 
-每章大纲必须标注情绪走向和四锚点：
+每个 scene 必须标注情绪走向和四锚点：
 
 - **情绪值**：-10 到 +10（负值=虐/压抑，正值=爽/高潮，0=平缓）
 - **情绪趋势**：↗上升 / ↘下降 / ↗↘先扬后抑 / ↘↗先抑后扬
@@ -844,18 +794,18 @@ fluid 模式核心好处：
   - 🪝 开头钩子：3秒抓住读者的开场（悬念/冲突/反差）
   - ⚔️ 中段冲突：推动情节的核心矛盾
   - 💥 小高潮/反转：本章情绪峰值
-  - 🔗 章末悬念：让读者翻下一章的钩子
+  - 🔗 场景钩子：让读者进入下一 scene / 下一章切点的钩子
 
 ### 情绪节奏规则（硬性约束）
-- 不允许连续2章以上情绪值为负（虐后必须给希望）
-- 大爽点（情绪值≥8）放在 30%、60%、90% 位置
-- 每章必须有至少一个情绪波动（不能全程平淡）
-- 章末悬念不能缺失（每章必须有）
+- 不允许连续 2 个核心 scene 以上情绪值为负（虐后必须给希望）
+- 大爽点（情绪值≥8）按卷/cluster 节奏布置在 30%、60%、90% 附近
+- 每个 scene 必须有至少一个情绪波动（不能全程平淡）
+- scene 结尾必须有承接力；物理章节切点由 splitter 之后决定
 
 
 ## 人物关系变化
 
-每章标注核心人物关系的变化轨迹：
+按 cluster / scene 标注核心人物关系的变化轨迹：
 - 主角 vs 施虐者
 - 主角 vs 自我认知
 - 主角 vs 世界观

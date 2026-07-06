@@ -48,7 +48,7 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
      - `MC`（Main Character·主角内心线）：主角的内在挣扎/价值观/成长是否推进。
      - `IC`（Influence Character·影响者线）：与主角对照/施压的关键角色线是否推进。
      - `RS`（Relationship Story·关系线）：主角与影响者之间关系本身是否变化。
-     - 每条给 `true`（本块有实质推进）/ `false`（本块未触及）。**没把握/正文没体现 = false**（宁缺毋滥，advisory 遥测漏判好过脑补）。
+     - 每条给 `true`（本块有实质推进）/ `false`（本块未触及）。**没把握/正文没体现 = false**（宁缺毋滥，软遥测漏判好过脑补）。
 4. Write `_数据库/.wal/cluster_<key>_archive.json`。
 
 ## id 规范（稳定主键 · 幂等关键）
@@ -87,10 +87,10 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
 
 只有当正文**明确**让某个 fact 的 subject 相关核心角色**缺席**且该缺席在剧情上是张力点（桌下炸弹/蒙在鼓里）时，才在顶层 `belief_unaware` 里标 `{char_id, fact_id}`。**保守优先：不确定就不标**（缺席角色不 learn 已自动构成 false belief，无需画蛇添足）。
 
-### 默认安全（向后兼容）
+### 默认安全
 
 - scene 无 `participants`（旧大纲/未填）→ **无法可靠区分谁在场**：要么对该 fact 不产 belief_update（跳过·宁缺毋滥），要么只对正文明确点名在场的角色产——**绝不脑补在场**。
-- 本块没有任何被揭示的新 fact → `belief_updates` 给空数组 `[]`（回库 no-op·不报错）。
+- 本块没有任何被揭示的新 fact → `belief_updates` 给空数组 `[]`（显式空结果·无状态变更）。
 
 ## 🔴 2026-06-29 反派轮替（antagonist_rotation · 长篇反派梯度 ledger）
 
@@ -99,7 +99,7 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
 ### 何时产一条（避免误报的关键纪律）
 
 - **只认正文实际出场的反派**：本块有戏份的对抗性角色（boss/幕后黑手/拦路者/反派阵营成员）。正文没出现 = 不抽（不从 brief 脑补）。
-- **非每 cluster 必有反派**：很多 cluster 无反派轮替（铺垫/日常/主角线）→ `antagonist_rotation` **整段省略**（C03 fluid·回库 no-op 不报错）。
+- **非每 cluster 必有反派**：很多 cluster 无反派轮替（铺垫/日常/主角线）→ `antagonist_rotation` **整段省略**（C03 fluid·显式空结果·无状态变更）。
 - **引入即报，不逐块重复**：一个反派**首次登场成为本块对抗者**时报一条（`cluster_id` = 当前块）。该反派**后续 cluster 仅延续登场**时**不再重复报**（否则 scanner 会把同一反派连块误判成「动机/能力同类」假阳性）。
 - **击败时补 defeat**：某个**之前 cluster 引入的反派**在本块被击败 → 再报一条，`cluster_id` **复用它在 `反派轮替.json` 里的引入 cluster_id**（对齐既有条目键·让脚本就地补 `defeat_cluster` 不另起重复条目）+ `defeat_cluster` = 当前块。
 - **本块引入又本块击败**（一次性 boss）→ 单条·`cluster_id` = `defeat_cluster` = 当前块。
@@ -116,8 +116,8 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
 
 ### 默认安全
 
-- 本块无反派出场 → `antagonist_rotation` 整段省略（回库 no-op）。
-- 拿不准是否构成「反派」（如尚未挑明立场的灰色角色）→ **宁可不抽**（北极星②宁缺毋滥·advisory 漏报好过脑补）。
+- 本块无反派出场 → `antagonist_rotation` 整段省略（显式空结果·无状态变更）。
+- 拿不准是否构成「反派」（如尚未挑明立场的灰色角色）→ **宁可不抽**（北极星②宁缺毋滥·显式空结果好过脑补）。
 
 ## 🔴 2026-06-29 主角力量 tier（protagonist_power_tier · 升级流力量梯度）
 
@@ -138,7 +138,7 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
 
 ### 默认安全
 
-- 本块主角力量无变化 / 非升级流题材 → `protagonist_power_tier_update` 整段省略（回库 no-op·不建 角色弧线.json 文件）。
+- 本块主角力量无变化 / 非升级流题材 → `protagonist_power_tier_update` 整段省略（显式空结果·无状态变更·不建 角色弧线.json 文件）。
 - 主角 tier **倒退**但本块正文确有重伤/跌境情节 → 照实产（notes 写明「重伤·丹田碎」等），scanner 据 notes 不误判为穿帮倒退。
 - 拿不准本块算不算「力量变化」（如只是熟练度提升、未跨阶）→ **宁可不产**（北极星②宁缺毋滥）。
 
@@ -160,11 +160,11 @@ Greimas《Sémantique structurale》六 actant 模型是「谁推动故事、围
 - 🔴 **只认正文本块实际发生的功能**：谁这一块真在帮、真在挡——不从 brief 脑补、不预填未出场角色。
 - 🔴 **id 复用人物卡**（与 `characters` 段同一 id·防双 id 撕裂）；object 若是道具用 `I_*` id，若是抽象目标用一句话描述。
 - 🔴 **同一角色可占多位**（主角常 subject+receiver）——照实填，scanner 自有 `multi_role_hero` 豁免，不是你判。
-- 拿不准某位由谁担任（如无明确派遣者）→ 该位留 `null`（单值位）或 `[]`（helper/opponent）·**绝不硬塞**（北极星②宁缺毋滥·空位是合法的 advisory 信号）。
+- 拿不准某位由谁担任（如无明确派遣者）→ 该位留 `null`（单值位）或 `[]`（helper/opponent）·**绝不硬塞**（北极星②宁缺毋滥·空位是合法的显式空结果）。
 
 ### 默认安全
 
-- 本块结构太简单/铺垫块判不出清晰 actant → `cluster_actant_state` **整段省略**（回库 no-op·不建 ledger 文件·C03 fluid 合法跳过）。
+- 本块结构太简单/铺垫块判不出清晰 actant → `cluster_actant_state` **整段省略**（显式空结果·无状态变更·不建 ledger 文件·C03 fluid 合法跳过）。
 - subject/opponent 至少能判出一位即可产（部分位 null 合法）；六位全判不出 = 整段省略。
 
 ## 输出 schema
@@ -222,10 +222,10 @@ Greimas《Sémantique structurale》六 actant 模型是「谁推动故事、围
 - `status`：alive / dead / missing / unknown。
 - `belief_updates`：本块每个被揭示 fact 的 witness 记录（per-character 信息差·见上节三规则）。无新 fact → 空数组 `[]`。**只产在场角色 learned 的记录·缺席角色不写**。
 - `belief_unaware`：可选·保守·只在确信某 subject 相关核心角色缺席且构成张力点时标 `{char_id, fact_id}`（不确定就省略整段）。
-- `antagonist_rotation`：可选·本块**实际出场反派**的轮替条目（见上节专章·`antagonist_id` 复用人物卡 id·`tier` 数值梯度·引入即报不逐块重复·击败补 `defeat_cluster`）。无反派 = 整段省略（C03 fluid·回库 no-op）。
-- `protagonist_power_tier_update`：可选·单条 dict（或多条 list）·本块**主角力量 tier 变化**（见上节专章·`char_id` 复用人物卡 id·`tier` int 本书叙事梯度·`notes` 标突破/跌境）。无力量变化 / 非升级流 = 整段省略（C03 fluid·回库 no-op）。tier 仅 scanner 内部用·**绝不暴露 writer**。
-- `cluster_actant_state`：可选·本块六位 Greimas actant 派分（见上节专章·`subject/object/sender/receiver` 单值=角色 id 或 null·`helper/opponent` = 角色 id list）。`actant_drift_scanner` + `cast_economy_scanner` 消费（advisory shadow·绝不 hard_gate）。判不出清晰 actant = 整段省略（C03 fluid·回库 no-op）。
-- `throughline_progress`：固定 4 键 `{OS, MC, IC, RS}` 的 bool，标本块**实际**推进了哪几条叙事线（客观读正文判定·没把握=false）。可整段省略（缺失=四线 DORMANT·advisory 遥测不报错）。
+- `antagonist_rotation`：可选·本块**实际出场反派**的轮替条目（见上节专章·`antagonist_id` 复用人物卡 id·`tier` 数值梯度·引入即报不逐块重复·击败补 `defeat_cluster`）。无反派 = 整段省略（C03 fluid·显式空结果·无状态变更）。
+- `protagonist_power_tier_update`：可选·单条 dict（或多条 list）·本块**主角力量 tier 变化**（见上节专章·`char_id` 复用人物卡 id·`tier` int 本书叙事梯度·`notes` 标突破/跌境）。无力量变化 / 非升级流 = 整段省略（C03 fluid·显式空结果·无状态变更）。tier 仅 scanner 内部用·**绝不暴露 writer**。
+- `cluster_actant_state`：可选·本块六位 Greimas actant 派分（见上节专章·`subject/object/sender/receiver` 单值=角色 id 或 null·`helper/opponent` = 角色 id list）。`actant_drift_scanner` + `cast_economy_scanner` 消费（软遥测·不进入 hard_gate）。判不出清晰 actant = 整段省略（C03 fluid·显式空结果·无状态变更）。
+- `throughline_progress`：固定 4 键 `{OS, MC, IC, RS}` 的 bool，标本块**实际**推进了哪几条叙事线（客观读正文判定·没把握=false）。可整段省略（缺失=四线 DORMANT·软遥测不报错）。
 
 ## 硬纪律
 

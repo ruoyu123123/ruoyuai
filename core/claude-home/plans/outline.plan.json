@@ -30,17 +30,16 @@
     {
       "n": 2,
       "name": "research-inspiration",
-      "description": "强制调研先行（novel-researcher·soft·无网降级不阻断·灵感卡引用调研来源）。",
+      "description": "强制调研先行（novel-researcher 必产 inspiration_synthesis.json；灵感卡引用调研来源）。",
       "required": true,
-      "skip_output_allowed": true,
+      "skip_output_allowed": false,
       "must_spawn_agent": "novel-researcher",
       "data_flow": {
         "<topic>": {"source_json": "_数据库/.wal/book_meta.json", "field": "topic", "optional": true, "default": "网络小说"}
       },
       "agent_input": {"TASK_TYPE": "inspiration", "PROJECT": "{project_root}", "TOPIC": "<topic>"},
       "judge_report_path": "_数据库/.research_cache/inspiration_synthesis.json",
-      "touch_outputs": ["_数据库/.research_cache/.placeholder"],
-      "expected_outputs": ["_数据库/.research_cache/.placeholder"]
+      "expected_outputs": ["_数据库/.research_cache/inspiration_synthesis.json"]
     },
     {
       "n": 3,
@@ -48,7 +47,7 @@
       "description": "基于调研生成 3 灵感卡（gen_creative brainstorm·每卡引用调研来源）。",
       "required": true,
       "skip_output_allowed": false,
-      "_doc_c16": "🔴 2026-06-27 C16：灵感卡=决策前置步·加 research_ref（调研先行门·主代理 advisory 可豁免/hook 硬校验·指 step2 产的 inspiration_synthesis.json·该文件由 novel-researcher 必写·无网降级亦由 gen-model 写出·不会误阻断）。",
+      "_doc_c16": "🔴 2026-06-27 C16：灵感卡=决策前置步·加 research_ref（调研先行门；指 step2 产的 inspiration_synthesis.json·该文件由 novel-researcher 必写）。",
       "research_ref": "_数据库/.research_cache/inspiration_synthesis.json",
       "data_flow": {
         "<topic>": {"source_json": "_数据库/.wal/book_meta.json", "field": "topic", "optional": true, "default": "网络小说"}
@@ -61,7 +60,7 @@
       "name": "pause-pick-card",
       "description": "用户选 1 张灵感卡。",
       "required": true,
-      "skip_output_allowed": true,
+      "skip_output_allowed": false,
       "pause_for_user": {
         "type": "choice",
         "prompt": "选一张灵感卡（每张引用了调研来源）",
@@ -76,7 +75,7 @@
       "name": "pause-framework",
       "description": "选叙事框架（字面枚举·inline_options）。",
       "required": true,
-      "skip_output_allowed": true,
+      "skip_output_allowed": false,
       "pause_for_user": {
         "type": "choice",
         "prompt": "选叙事框架",
@@ -91,7 +90,7 @@
       "name": "pause-cluster-count",
       "description": "每卷大概几个故事块（软提示·integer）。",
       "required": true,
-      "skip_output_allowed": true,
+      "skip_output_allowed": false,
       "pause_for_user": {
         "type": "integer",
         "prompt": "每卷大概几个故事块?(默认10·后续可动态加)",
@@ -105,7 +104,7 @@
       "name": "pause-rhythm",
       "description": "选节奏档（字面枚举·inline_options）。",
       "required": true,
-      "skip_output_allowed": true,
+      "skip_output_allowed": false,
       "pause_for_user": {
         "type": "choice",
         "prompt": "选节奏档",
@@ -156,7 +155,7 @@
       "description": "世界演化初始条件幂等播种（SYS-1·让 world_evolution_engine 复活）：从大势卡 ME 池 + 群像档 + character_arc_state 派生 ① 基线 auto_tick 规则 ② per-ME fate_event 规则 ③ per-势力 minor_event 规则 + factions/protagonist/NPC-thread 基线，写回 涟漪规则.json + 世界状态.json。与 step5 的 world_seed 投影互补（_emit 优先·本步补没覆盖的·非空不覆盖）。",
       "required": true,
       "skip_output_allowed": false,
-      "_doc_sys1": "🔴 2026-06-27 SYS-1：根因=scaffold 把涟漪规则/世界状态建空骨架 → tick 每章 0 规则触发 → 世界永不演化（北极星②/③ 静默失效）。本步播最小起始集让引擎复活。北极星：只播初始条件非预设剧情·cluster_002+ 留 emergence 涌现·全 advisory。",
+      "_doc_sys1": "🔴 2026-06-27 SYS-1：根因=scaffold 把涟漪规则/世界状态建空骨架 → tick 每章 0 规则触发 → 世界永不演化（北极星②/③ 静默失效）。本步播最小起始集让引擎复活。北极星：只播初始条件非预设剧情·cluster_002+ 留 emergence 涌现。",
       "scripts": ["python core/scripts/world_seed_init.py {project_root}"],
       "expected_outputs": ["_数据库/涟漪规则.json", "_数据库/世界状态.json"]
     },
@@ -166,7 +165,7 @@
       "description": "outline-planner 精排 cluster_001 倒叙 storyboard（needs_author_profile·block）。judge_report_path 用 _emergence.json 对齐 plan_tracker._verify_agent_report 校验。",
       "required": true,
       "skip_output_allowed": false,
-      "_doc_c16": "🔴 2026-06-27 C16：cluster_001 storyboard=走向决策步·加 research_ref（调研先行门·advisory·指 inspiration_synthesis.json·走向决策应有调研背书）。agent_gate 规则 10 强制 ecas_cluster_brief 含 RESEARCH_REF·此处补 plan 侧声明。",
+      "_doc_c16": "🔴 2026-06-27 C16：cluster_001 storyboard=走向决策步·加 research_ref（调研先行门·指 inspiration_synthesis.json·走向决策应有调研背书）。agent_gate 规则 10 强制 ecas_cluster_brief 含 RESEARCH_REF·此处补 plan 侧声明。",
       "research_ref": "_数据库/.research_cache/inspiration_synthesis.json",
       "must_spawn_agent": "novel-outline-planner",
       "agent_input": {"PROJECT": "{project_root}", "MODE": "ecas_cluster_brief", "CLUSTER_ID": "cluster_001", "PARENT_ME": "ME-V1-01"},
@@ -176,24 +175,28 @@
     {
       "n": 6.5,
       "name": "apply-cluster_001-brief",
-      "description": "cluster_choice_apply 把 outline-planner 的 brief 写回 事件簇.json·status=in_progress（根治 build_manifest 注入-gate 的 active 白名单坑·feedback_build_manifest_cluster_brief_injection_gate）。🔴 2026-06-29 同步据 brief.scene_storyboard 确定性派生 起承转合 cluster_beats 回写 beat_map.json（beat_map_update.py·plot_structure_scanner CLUSTER_MODE 消费·全 advisory·只产当前 active cluster 守 C03 fluid·失败不阻断）。",
+      "description": "cluster_choice_apply 把 outline-planner 的 brief 写回 事件簇.json·status=in_progress（根治 build_manifest 注入-gate 的 active 白名单坑·feedback_build_manifest_cluster_brief_injection_gate）。同步据 brief.scene_storyboard 确定性派生 起承转合 cluster_beats 回写 beat_map.json（beat_map_update.py·plot_structure_scanner CLUSTER_MODE 消费·只产当前 active cluster 守 C03 fluid）。",
       "required": true,
       "skip_output_allowed": false,
-      "scripts": ["python core/scripts/cluster_choice_apply.py {project_root} --next-key 001 --choice _数据库/.wal/cluster_001_emergence.json"],
-      "expected_outputs": ["_数据库/事件簇.json"]
+      "scripts": [
+        "python -c \"import json, pathlib; p=pathlib.Path(r'{project_root}'); wal=p/'_数据库'/'.wal'; src=wal/'cluster_001_emergence.json'; dst=wal/'cluster_001_user_choice.json'; data=json.loads(src.read_text(encoding='utf-8')); dst.write_text(json.dumps({'answer': data}, ensure_ascii=False, indent=2), encoding='utf-8')\"",
+        "python core/scripts/cluster_choice_apply.py {project_root} --next-key 001 --choice _数据库/.wal/cluster_001_user_choice.json"
+      ],
+      "expected_outputs": ["_数据库/.wal/cluster_001_user_choice.json", "_数据库/事件簇.json"]
     },
     {
       "n": 7,
       "name": "plan-end",
       "description": "scaffold verify + db_schema_validate（含 C19 大势卡 ME 池结构契约·消费）+ git commit（初始化项目 + 生成大纲）。",
       "required": true,
-      "skip_output_allowed": true,
-      "_doc_c19": "🔴 2026-06-27 接线 W2 / C19：db_schema_validate.py --auto-migrate --strict（**消费**·非 advisory）——check_grand_trend_structure 校验大势卡 ME 池结构契约（major_events 非空·每 ME 有 id+volume·每卷≥1 is_volume_finale·prerequisites 引用可解析）·破损 → exit 1 → 停 plan-end（写作开工前堵 ME 池结构债·北极星③大势已定）。--auto-migrate 先归一可迁移 schema 漂移避免误阻断·真错才 --strict 阻断。C03 content_check（plan-end existence+content hard）已并行兜「ME 池空」（GRAND_TREND_ME_POOL_EMPTY），此处补「结构破损/引用不完整」。",
+      "skip_output_allowed": false,
+      "_doc_c19": "🔴 2026-06-27 接线 W2 / C19：db_schema_validate.py --auto-migrate --strict（消费校验）——check_grand_trend_structure 校验大势卡 ME 池结构契约（major_events 非空·每 ME 有 id+volume·每卷≥1 is_volume_finale·prerequisites 引用可解析）·破损 → exit 1 → 停 plan-end（写作开工前堵 ME 池结构债·北极星③大势已定）。--auto-migrate 先归一可迁移 schema 漂移，真错才 --strict 阻断。C03 content_check（plan-end existence+content hard）已并行处理「ME 池空」（GRAND_TREND_ME_POOL_EMPTY），此处补「结构破损/引用不完整」。",
       "scripts": [
-        "python core/scripts/scaffold_subsystems.py verify {project_root}",
-        "python core/scripts/db_schema_validate.py {project_root} --auto-migrate --strict"
+        "python core/scripts/scaffold_subsystems.py verify {project_root} --content",
+        "python core/scripts/db_schema_validate.py {project_root} --auto-migrate --strict",
+        "python core/scripts/git_snapshot.py {project_root} --message 生成大纲 --marker _数据库/.wal/outline_git_snapshot.json"
       ],
-      "expected_outputs": []
+      "expected_outputs": ["_数据库/.wal/outline_git_snapshot.json", "_数据库/大势卡.json", "_数据库/事件簇.json", "_数据库/进度.json"]
     }
   ],
   "_v2_principle": "整个系统为故事块服务·outline 产卷级大势卡 + cluster_001 详化·事件簇 fluid 涌现（只详化 cluster_001）·黄金三章倒叙默认·卷=阶段触发点章数 fluid 不锁。",

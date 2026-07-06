@@ -32,7 +32,6 @@
   - description 含「复刻测试 / v{N} 复刻 / phase-2 复刻 / phase-5 复刻」
   - description 含「复刻」+ prompt 含 `skill_v` 或 `复刻测试/v` 或 `test_*_replica`
 - 提示用 `distill_replicate.py` 正确入口
-- 紧急旁路：prompt 加 `DISTILL_REPLICATE_BYPASS=1`（救火用）
 
 ## 用法示例
 

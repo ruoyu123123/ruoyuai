@@ -1,21 +1,21 @@
 ---
-description: 当用户从零开始想写一部小说，且需要主代理引导走完从风格基线到逐章产出的端到端流程时使用
+description: 当用户从零开始想写一部小说，且需要主代理引导走完从风格基线到逐故事块产出的端到端流程时使用
 ---
 
 ## Gen-Model 抽象层
 
-**关键变化**：本流程中所有**含创意笔触的生成步骤**改走 gen-model（不再由 Claude 主代理直接对话级输出）：
+本流程中所有**含创意笔触的生成步骤**走 gen-model，Claude 主代理只做编排、检查、梳理和裁决。
 
-| 步骤 | 旧（Claude 主代理直出） | 新（gen-model） |
-|---|---|---|
-| AI 生成 3 个灵感卡 | 主代理在对话里写卡片正文 | `python core/scripts/gen_creative.py --mode brainstorm --topic <题材> --count 3 --research <调研缓存>` |
-| 写章节正文 | spawn novel-writer agent | `python core/scripts/gen_writer.py --project <path> --cluster N --chapter-start X --chapter-end Y --target-cjk 13000-20000` |
-| 修违规段落 | spawn novel-validator-repair〔已删〕 | `spawn novel-validator-checker` 拿 brief → `gen_fixer.py --mode validator-repair --brief <path>` |
-| 修对话 voice | spawn novel-voice-keeper〔已删〕 | `spawn novel-voice-checker` 拿 brief → `gen_fixer.py --mode voice-fix --brief <path>` |
-| 微调（亲读后） | spawn novel-writer 修复 | `gen_fixer.py --mode polish --instructions "<自由文本>"` |
-| 字数扩写 | spawn novel-writer 扩写 | `gen_fixer.py --mode word-count --target-min 2500` |
+| 步骤 | 唯一执行方式 |
+|---|---|
+| 灵感卡 | `gen_creative.py --mode brainstorm`，基于调研缓存生成 |
+| 正文 | `/cluster-write` step 2 spawn `novel-writer`，再由 `gen_writer.py --project <path> --cluster N` 产整块草稿 |
+| 违规修复 | checker 生成 brief，`gen_fixer.py` 按 brief 改 cluster 草稿 |
+| 对话 voice 修复 | `novel-voice-checker` 生成 brief，`gen_fixer.py --mode voice-fix` 修 |
+| 亲读后微调 | `gen_fixer.py --mode polish --instructions "<自由文本>"` |
+| 字数补写 | 回到 cluster 草稿层补写，再由 splitter 重新切章 |
 
-**主代理仍负责**：调研（researcher）/ 摘要（summarizer）/ 反思（reflector）/ 阅读反思（reading-reflector）/ 切章（splitter）/ judge / save-state 状态整理 / 用户对话 / 决策。
+**主代理仍负责**：调研（researcher）/ 摘要（summarizer）/ 反思（reflector）/ 阅读反思（reading-reflector）/ splitter 调度 / judge / save-state 状态整理 / 用户对话 / 决策。
 
 **当前 active gen-model**：`python core/scripts/gen_model.py show`；切换：`gen_model.py switch <name>`。
 
@@ -77,7 +77,7 @@ $ARGUMENTS
 **用户确认后输出：**
 ```
 好嘞！
-📖 [类型] · 10章 · 每章3000字
+📖 [类型] · cluster-only · 字数随 splitter 自然切分
 风格参考：[参考小说名] 的写作风格
 推荐用 claude-opus-4-6 写作，效果最好～
 马上开写！
@@ -99,115 +99,36 @@ $ARGUMENTS
 0. 如有 `_数据库/作者风格.json`，所有后续写作必须遵循该风格档案
 1. 生成卷级大纲（每卷的大势/核心悬念/主题），不细化到逐章
 2. 初始化 34 个核心子系统 JSON
-3. 终端展示卷级结构后，**直接开写第一章**
+3. 终端展示卷级结构后，**直接开写第一个故事块**
 
-**⚠️ 硬性规则：大纲完成后不要问用户"要不要细化每章"——直接开写！**
+**⚠️ 硬性规则：大纲完成后不要追加章级细化步骤——直接进入 `/cluster-write`！**
 
 理由：
-- 剧情是动态的，每章走向由小势卡片决定
+- 剧情是动态的，每个故事块走向由走向卡片决定
 - 提前细化逐章剧情没有意义（会被用户选择改变）
-- 大纲只定"大势"（卷级结局），"小势"（章级走向）逐章生成
+- 大纲只定"大势"（卷级结局），"小势"（cluster 走向）逐块生成
 - 章节数量可能与预期不同（这是正常的，由剧情自然决定）
 
 ---
 
-## 黄金三章规则（前三章特殊处理）
+## 首块开场规则（cluster_001 特殊处理）
 
-前三章是"生死线"——决定读者是否继续阅读。必须遵循以下规则：
+cluster_001 是读者留存生死线。它仍由 `/cluster-write` 生成整块草稿，但开场和前几次切点必须满足：
 
-### 第一章：3秒抓住读者
-
-- **第一句话**：必须是冲突/悬念/反差/冲击——禁止从日常/环境/背景开始
-- **前100字**：必须让读者产生"发生了什么？"的好奇心
-- **本章任务**：建立核心冲突 + 主角人设（通过行动展现，不是描述）+ 世界观一角
-- **章末**：必须有强钩子（让读者必须翻到第二章）
-
-**禁止：**
-- ❌ 从起床/上学/上班等日常开始
-- ❌ 大段环境描写/世界观介绍
-- ❌ 角色外貌的详细描述
-- ❌ "我叫XXX，今年XX岁"式自我介绍
-
-**必须：**
-- ✅ 冲突前置（第一段就有事发生）
-- ✅ 主角在行动中出场（不是被介绍出场）
-- ✅ 信息差/悬念（读者想知道"为什么"）
-
-### 第二章：推进+展现+埋钩
-
-- **推进冲突**：第一章的冲突必须升级或有新发展
-- **展现主角**：通过应对冲突展现主角的能力/性格/困境
-- **埋设伏笔**：至少埋1个读者会记住的细节（契诃夫之枪）
-- **章末**：新的悬念或更大的危机出现
-
-### 第三章：第一个爽点/反转
-
-- **小高潮**：前两章积累的张力在这里释放（或反转）
-- **读者上瘾**：让读者感到"这本书有意思"
-- **确立节奏**：前三章的节奏就是全书的节奏承诺
-- **章末**：更大的格局展开（让读者意识到故事比想象的大）
-
-### Agent 子任务写前三章时的额外注入
-
-```
-🔥 黄金三章模式（第1-3章特殊严规，违反=重写）：
-当前是第N章（黄金三章之一）
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-第一章硬性要求（违反任一项直接重写）：
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ 第一句话必须是：冲突/悬念/反差/冲击（禁止环境/背景/日常/自我介绍开头）
-✅ 前100字必须让读者产生"发生了什么？"的好奇心
-✅ 主角必须在"行动中"出场，不是被介绍出场
-✅ 本章末必须有强钩子（读者必须翻下一章的冲动）
-✅ 信息差必须明确（读者知道某些事，或角色不知某些事）
-
-❌ 禁止列表（出现即重写）：
-- 从起床/上学/上班/吃饭等日常开始
-- 连续超过3句的环境描写
-- 角色外貌的详细描述（身高体重五官发色等）
-- "我叫XXX，今年XX岁"式自我介绍
-- "天气很好"等无意义开场
-- 用"在一个XX的日子里"这种翻译腔开场
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-第二章硬性要求：
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ 第一章建立的冲突必须升级或发生新变化
-✅ 主角的能力/性格/困境必须通过"做事"展现（不是描述）
-✅ 必须埋下至少1个具体细节的伏笔（名词级具体，不是"主角有秘密"这种模糊伏笔）
-✅ 章末必须有新的、更具体的悬念或危机
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-第三章硬性要求：
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ 前两章积累的张力必须在本章有明确释放（爽点或反转）
-✅ 释放后必须立即建立更大的危机/冲突
-✅ 读者读完第三章，必须意识到"故事比想象的大"
-✅ 章末格局展开（让读者看到故事的"真正体量"）
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-字数要求（黄金三章）：
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-第1章：2500-3500字（可稍长）
-第2章：2500-3500字
-第3章：3000-4000字（高潮章可适当加长）
-```
-
-**黄金三章生成后的额外校验：**
-写完第1章后，强制自检：
-1. 第一句话是冲突/悬念吗？不是 → 重写前100字
-2. 前100字有明确的"发生了什么"吗？没有 → 重写前100字
-3. 主角是在行动中出场的吗？不是 → 重写开头
-4. 章末有强钩子吗？没有 → 重写结尾
-
-任一项不通过，在主代理层重新启动 Agent 子任务写该章（最多重试2次）。
+- **第一句话**：冲突 / 悬念 / 反差 / 冲击，禁止日常流水账、天气、背景介绍或自我介绍开头。
+- **前 100 字**：让读者明确感到“发生了什么？”。
+- **主角出场**：必须在行动中出场，用选择和反应展示人设。
+- **首个冲突**：在 cluster_001 前段建立，并在本块内至少升级一次。
+- **伏笔**：本块至少有一个具体可回收细节，不能只是“主角有秘密”这种抽象描述。
+- **切章后检查**：splitter 切出的前几个物理章节必须保留强钩子；若开场或切点不合格，回到 cluster 草稿层修复，正文修复只在 cluster 草稿层执行。
 
 ## 第五步：逐故事块写作循环（v26 · cluster-only）
 
-**⚠️ 硬性规则：写完一个 cluster 后不要问"要继续吗"——直接执行 cluster-save-state，然后直接写下个 cluster！**
+**⚠️ 硬性规则：写完一个 cluster 后不要问"要继续吗"——直接执行 cluster-save-state，然后停在走向卡选择；用户选择落盘后才写下个 cluster。**
 
-每 cluster 的完整循环（全自动，不停顿）：
+**链路可扩展规则**：允许把验证过、明显适合的功能、模型或成熟开源/论文机制加入本流程，但必须作为 `/outline`、`/cluster-write`、`/cluster-save-state` 或走向卡阶段的 required plan step / required 子步骤落地，并同步 plan、agent 合约、命令文档和测试。
+
+每 cluster 的完整循环（自动推进到走向卡；走向卡是唯一停顿点）：
 
 ```
 ┌─ 走向卡前调研（cluster_002+ 必跑）─────────────┐
@@ -229,7 +150,7 @@ $ARGUMENTS
 └────────────────────────────────────────────────┘
          ↓ 不停顿，直接执行
 ┌─ 执行 /cluster-save-state CLUSTER_ID=<key>───┐
-│ 12 步 cluster 级 save-state 流水线             │
+│ cluster 级 save-state 流水线（step 以 plan 为准）│
 │ → 应用 cluster_changes → cluster Git commit    │
 │ → cluster 级 evaluator/updater → 涌现下个 brief│
 │ ★ 必须执行，不能跳过！                         │
@@ -237,7 +158,7 @@ $ARGUMENTS
          ↓ 展示卡片，等待用户选择
 ┌─ 走向卡（唯一停顿点）─────────────────────────┐
 │ 展示 2-3 张下个 cluster 候选 brief             │
-│ 等待用户选择（或「自动」跳过）                  │
+│ 等待用户选择；必须记录显式选择 artifact         │
 └────────────────────────────────────────────────┘
          ↓ 用户选择后，直接进入下个 cluster 循环
 ```
@@ -245,29 +166,29 @@ $ARGUMENTS
 **绝对不要做的事：**
 - ❌ 写完一个 cluster 后问"要继续写下一个吗？"
 - ❌ 展示走向卡后问"确认这个方向吗？"
-- ❌ 跳过 cluster-save-state 流水线
-- ❌ 跳过数据库初始化就开始写
+- ❌ cluster-save-state 流水线未完整完成就进入后续动作
+- ❌ 未展示走向卡、替用户选择或缺少选择 artifact
+- ❌ 数据库初始化未完成就开始写
 - ❌ 把正文贴到终端
-- ❌ 🔴 v26 强禁：不再降级到 chapter mode（write-chapter / save-state 已整套删除）
+- ❌ 🔴 强禁：离开 cluster-only 创作与状态链路
 
 **必须做的事：**
-- ✅ 每 cluster 写完后立即执行完整的 cluster-save-state 12 步流水线
+- ✅ 每 cluster 写完后立即执行完整的 cluster-save-state plan
 - ✅ cluster-save-state 完成后展示走向卡
-- ✅ 用户选择后直接写下个 cluster（不再确认）
+- ✅ 用户选择写入 artifact 后直接写下个 cluster（不再二次确认）
 - ✅ 第一 cluster 之前必须先完成数据库初始化（/outline）
 - ✅ cluster 内章数由 splitter 在 step 6 切定，不预锁
 
 ---
 
-## 顾问制（检测工具是顾问，不是法官）
+## Cluster 审计纪律
 
-cluster-write / cluster-save-state 内部有一套质检工具（查禁用词、对话占比、伏笔回收、情节结构、章末钩子等）。起这些工具的定位是**顾问**——它给的是「待裁决项」，不是「判决」：
+cluster-write / cluster-save-state 内部的质检只服务唯一 cluster 链路：
 
-- **风格 / 文笔 / 工艺 / 读者体验类的提醒（advisory）**：写作 agent 如果有充分理由（比如「本章是纯心理独白章，不适合加拟声词」「卷尾章故意用总结式收束」），**可以驳回这条提醒**——驳回必须写明具体理由。理由不充分就不算驳回，仍按问题处理。
-- **设定矛盾 / 逻辑错误 / 伏笔断裂 / 文件损坏类的错误（hard_gate）**：这些是客观错误，不是风格选择，**不可驳回**，必须修。完整清单见 `core/claude-home/STRUCTURE.md` 第十一节。
-- 被反复合理驳回的同类提醒，系统会自动校准工具阈值（learning_loop），而不是反复打扰写作 agent。
-
-作为主流程，你不用关心裁决细节——cluster-write / cluster-save-state 内部已串通顾问制。你只需知道：质检不再是「工具说有问题就一定有问题」，写作 agent 有判断空间，但客观错误零容忍。
+- cluster 草稿阶段统一走 `audit_hub.py --mode cluster --cluster-id <key>` 和相关 cluster 级 scanner。
+- 修复 brief 指向 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`，由 `gen_fixer.py` 在 cluster 草稿层修；修完再由 splitter 切章。
+- hard_gate 是硬错误，必须修复后才能继续；风格/工艺类 issue 可记录 waiver，但必须在 cluster brief / JudgeReport 中有具体理由。
+- required step 产物缺失或不合格时必须停在当前 plan；不得把缺失能力写成空实现或标记为成功。
 
 ---
 
@@ -280,10 +201,9 @@ cluster-write / cluster-save-state 内部有一套质检工具（查禁用词、
 |----------|-------------|--------------|
 | 项目初始化（/outline 末步） | chore | `chore: 初始化项目 + 34 个数据库文件` |
 | 大纲生成完成（/outline 末尾） | feat | `feat: 生成大纲（3 卷）` |
-| 故事块保存完成（cluster-save-state 第10步） | feat(cluster-N) | `feat(cluster-001): 5 章 (ch1-ch5)` |
+| 故事块 Git 快照完成（cluster-save-state 的 git-commit-cluster required step） | feat(cluster-N) | `feat(cluster-001): 5 章 (ch1-ch5)` |
 | 风格蒸馏完成（/distill-style） | feat | `feat: 蒸馏作者风格（v3 / 2033 章）` |
 | 角色深度蒸馏（/distill-character） | feat | `feat: 蒸馏角色 李若渝 (v2 / ch 1-12)` |
-| 一致性调和（/reconcile） | fix | `fix: 调和瞳色设定 (影响 3 章)` |
 
 **好处：**
 - 用户可以回溯任意章节的历史版本（`git log` / `git checkout`）
@@ -294,7 +214,7 @@ cluster-write / cluster-save-state 内部有一套质检工具（查禁用词、
 **硬性规则：**
 - ❌ 不做 push/pull/force/reset --hard 等破坏性操作
 - ❌ 不修改用户的全局 git config
-- ❌ 无 git 环境时静默跳过，不阻塞写作流程
+- ❌ 无 git 环境时继续写作并假装已提交；git commit 是 cluster-save-state 的 required step，失败必须停在当前 plan
 - ✅ 所有 commit 仅在项目目录内操作（`git -C "小说_书名"`）
 
 ---
@@ -313,8 +233,10 @@ cluster-write / cluster-save-state 内部有一套质检工具（查禁用词、
 
 ## 第六步：完成
 
-1. Write `小说_书名/全文.txt` — 拼接所有章节
-2. 终端说：「写完了！X章 Y万字 📁 文件在 小说_书名/」
+1. 确认 `/cluster-save-state` 所有 required steps + plan-end 已完成，走向卡选择 artifact 已落盘。
+2. 若用户要求成品文件，执行 `/export`，由 `core/scripts/export_book.py` 生成 `exports/<书名>_全文_<章数>章.txt`。
+   `/write` 不生成成品全文、不追加导出文件；成品文件只由 `/export` 的导出脚本生成。
+3. 汇报：「已完成到 cluster <key>，状态已保存；导出文件见 <path>」（未执行 `/export` 时只汇报状态完成，不声称已有全文）。
 
 ---
 
@@ -337,8 +259,9 @@ cluster-write / cluster-save-state 内部有一套质检工具（查禁用词、
 
 **不要做的事：**
 - ❌ 把正文贴到终端
-- ❌ 每章停下来问要不要继续（剧情走向卡片除外）
-- ❌ 展示大纲/设定/世界观
+- ❌ 每个 cluster 后问要不要继续（唯一停顿点是 cluster 走向卡选择）
+- ❌ 展示大纲/设定/世界观长文
 - ❌ 在主会话中直接生成正文
-- ✅ 一口气写完，只显示进度
-- ✅ 每章写完后子任务释放，主会话保持轻量
+- ❌ 暴露或启用章级创作入口
+- ✅ 按 cluster 自动推进，只显示进度、走向卡和最终导出位置
+- ✅ 每个 cluster 写完立即释放子任务，主会话保持轻量

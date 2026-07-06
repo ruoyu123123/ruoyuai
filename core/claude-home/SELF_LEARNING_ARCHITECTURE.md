@@ -82,8 +82,8 @@ Orchestrator 横贯保证不漏步、可补、可断点续跑。
 ## 四、集成点（嵌入 cluster 主流程，非独立层）
 
 `cluster-save-state.plan.json`（每 cluster 跑一次）：
-- **step 8 / 9 的 4 个 `|| true`** → `adaptive_runner` 包裹（judge_reports_archive / skill_evolver evolve+promote / evolution_orchestrator / maybe_judge_consensus）。
-- **step 9 末尾追加**：`self_heal_engine --ingest` + `--emit-lessons` + `step_completion_monitor --scan-latest`。
+- **step 10 / 11 的 4 个 `|| true`** → `adaptive_runner` 包裹（step 10 judge_reports_archive / step 11 skill_evolver evolve+promote / evolution_orchestrator / maybe_judge_consensus）。
+- **step 11 末尾追加**：`self_heal_engine --ingest` + `--emit-lessons` + `step_completion_monitor --scan-latest`。
 - Monitor hook 在 `.claude/settings.json` 的 `PostToolUse:Bash` 常驻（全程捕获）。
 
 ---

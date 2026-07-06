@@ -181,21 +181,19 @@ cat .claude/settings.json
 
 `.claude/` 只放 Claude Code 配置（agents/commands/settings.json），别往里写产出。
 
-### Q5：第一次写章节卡很久？
+### Q5：第一次写故事块很久？
 
 **完全正常**。新手最容易在这里恐慌。
 
-**首章预期耗时 3-8 分钟**，涉及完整流水线：
+**首个故事块预期耗时 3-8 分钟**，涉及完整 cluster 流水线：
 
 ```
 1. 调研先行（联网搜热点）     ~30s
-2. outline-planner（拟走向卡）  ~30s
-3. gen-writer（写正文）         60-180s（按 gen-model 速度）
-4. chapter-splitter（切自然截断点）  ~10s
-5. validator + voice-checker      ~30s
-6. cross-chapter scanner 30+ 项   ~30s
-7. reading-reflector（8 维度阅读）  ~60s
-8. save-state（11 步流水线）      ~30s
+2. outline-planner（拟首块走向骨架） ~30s
+3. gen-writer（写整块正文草稿）     60-180s（按 gen-model 速度）
+4. cluster 级审核/阅读/声纹/伏笔/摘要 60-120s
+5. chapter-splitter（审核后切自然截断点） ~10s
+6. /cluster-save-state（状态回库与下块涌现） ~30s
 ```
 
 只要终端有输出滚动就是在跑。**别打断、别按 Ctrl+C**。
@@ -203,7 +201,7 @@ cat .claude/settings.json
 ### Q6：写到一半 API 报 `RateLimitError` / `429` / 网络超时？
 
 - 系统会自动按 `.env` 里 `GEN_MODEL_FALLBACK_CHAIN` 切到备用 profile（如果配了）
-- 没配 fallback 的话流水线会停下，**用 `/continue` 断点续写**，从上次 save-state 恢复
+- 没配 fallback 的话流水线会停下，**用 `/continue` 断点续写**，从 `plan_tracker` / WAL 记录的 `/cluster-write` 或 `/cluster-save-state` 中断点恢复
 - 反复 429 = 该供应商限流，换一个或加备用 profile
 
 ### Q7：报错信息看不懂（`openai.AuthenticationError` 之类）？
