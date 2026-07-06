@@ -129,49 +129,45 @@ def test_legacy_sha256_is_keyless_stable():
 # 占位符替换 _substitute / _walk_substitute
 # ════════════════════════════════════════════════════════════════
 def test_substitute_basic_placeholders():
-    r = pt._substitute("{project}/第{ch:03d}章/{key}", "书名", 7, "001")
-    assert r == "书名/第007章/001"
-    assert pt._substitute("{ch}", "p", 12, None) == "12"
+    r = pt._substitute("{project}/{cluster_id}/{key}", "书名", "001")
+    assert r == "书名/cluster_001/001"
+    assert pt._substitute("{cluster_id}", "p", "cluster_012") == "cluster_012"
 
 
-def test_substitute_arithmetic():
-    assert pt._substitute("{ch+1:03d}", "p", 5, None) == "006"
-    assert pt._substitute("{ch-2}", "p", 5, None) == "3"
-    assert pt._substitute("{ch+10:03d}", "p", 95, None) == "105"
+def test_substitute_rejects_legacy_ch_placeholders():
+    for text in ("{ch}", "{ch:03d}", "{ch+1:03d}", "{ch-2}"):
+        try:
+            pt._substitute(text, "p", "001")
+        except ValueError as exc:
+            assert "旧章号占位符" in str(exc)
+        else:
+            raise AssertionError(f"旧章号占位符应被硬拒: {text}")
 
 
 def test_substitute_next_key():
-    assert pt._substitute("cluster_{next_key}_x", "p", None, "001") == "cluster_002_x"
+    assert pt._substitute("cluster_{next_key}_x", "p", "001") == "cluster_002_x"
     # key 含前缀数字 → 取数字段递增 + 强制 03d
-    assert pt._substitute("{next_key}", "p", None, "cluster_009") == "010"
+    assert pt._substitute("{next_key}", "p", "cluster_009") == "010"
     # key 无数字 → 保守 fallback
-    assert pt._substitute("{next_key}", "p", None, "abc") == "abc_next"
-
-
-def test_substitute_chapter_none_strips_ch():
-    assert pt._substitute("第{ch:03d}章", "p", None, None) == "第章"
-    assert pt._substitute("{ch+1:03d}", "p", None, None) == ""
+    assert pt._substitute("{next_key}", "p", "abc") == "abc_next"
 
 
 def test_walk_substitute_nested():
-    node = {"a": "{project}", "b": ["第{ch}章", {"c": "{key}"}], "n": 5}
-    r = pt._walk_substitute(node, "书", 3, "k")
-    assert r == {"a": "书", "b": ["第3章", {"c": "k"}], "n": 5}
+    node = {"a": "{project}", "b": ["{cluster_id}", {"c": "{key}"}], "n": 5}
+    r = pt._walk_substitute(node, "书", "007")
+    assert r == {"a": "书", "b": ["cluster_007", {"c": "007"}], "n": 5}
 
 
 # ════════════════════════════════════════════════════════════════
 # make_plan_id
 # ════════════════════════════════════════════════════════════════
 def test_make_plan_id_format_and_uniqueness():
-    a = pt.make_plan_id("cluster-write", "书", None, "001")
-    b = pt.make_plan_id("cluster-write", "书", None, "001")
+    a = pt.make_plan_id("cluster-write", "书", "001")
+    b = pt.make_plan_id("cluster-write", "书", "001")
     assert a.startswith("书_001_cluster-write_")
     assert a != b, "随机后缀应保证同参连续 create 不碰撞"
-    # chapter 优先于 key 进 keypart
-    c = pt.make_plan_id("outline", "书", 5, "001")
-    assert "_ch5_" in c
     # 无 project/key → noproject/main
-    d = pt.make_plan_id("outline", "", None, None)
+    d = pt.make_plan_id("outline", "", None)
     assert d.startswith("noproject_main_outline_")
 
 
@@ -206,6 +202,8 @@ def test_create_get_roundtrip_and_verify_ok():
         plan = pt.get_plan(pid)
         assert plan["command"] == "cluster-write"
         assert plan["key"] == "001"
+        assert plan["cluster_key"] == "001"
+        assert plan["cluster_id"] == "cluster_001"
         assert len(plan.get("steps", [])) >= 1
         # 运行时字段补全
         assert all(s.get("status") == pt.STATUS_PENDING for s in plan["steps"])

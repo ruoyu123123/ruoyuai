@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """adaptive_runner MAPE-K 语义锁测试（P2 工程债批次1 · 2026-06-12）
 
-缺漏报告结论：adaptive_runner 是 save-state step 8/9 取代 `|| true` 的韧性执行器，
-但 run_with_resilience 的核心语义（ok 路径 / transient retry / 失败默认 degrade /
+缺漏报告结论：adaptive_runner 是 save-state 主链取代 `|| true` 的韧性执行器，
+但 run_with_resilience 的核心语义（ok 路径 / transient retry / 失败默认 fail-fast /
 stderr Traceback 不信 exit code / 熔断三态 / list+str 双形态命令）此前零测试锁定
-——任何回归都会让「失败被记录学习」退化回静默吞错。
+——任何回归都会让「失败被记录学习且阻断」退化回静默吞错。
 
 全部用假命令（sys.executable -c ...）+ tmp project_root 隔离 runtime/
 （incidents.jsonl / circuit_state.json 落 tmp，不污染系统 core/claude-home/runtime/）。
@@ -54,15 +54,15 @@ def test_ok_path_no_incident_no_degrade():
         assert not (_runtime(tmp) / "incidents.jsonl").exists()  # 成功零记录
 
 
-# ============ 2) 失败默认 degrade（取代 || true 但必须记录学习） ============
-def test_fail_default_degrade_records_incident_and_circuit():
-    """崩溃命令：ok=False 但默认 degraded=True 放行（北极星：失败必记录不静默）。
+# ============ 2) 失败默认 fail-fast（取代 || true 且必须记录学习） ============
+def test_fail_default_blocks_records_incident_and_circuit():
+    """崩溃命令：ok=False 且默认 degraded=False 阻断（北极星：失败必记录不静默）。
     incidents.jsonl 落 tmp（指纹含 error_type）+ circuit fail_count 累计。"""
     with tempfile.TemporaryDirectory() as tmp:
         r = ar.run_with_resilience(
             [PY, "-c", "raise ValueError('boom')"],
             label="fail_case", project_root=tmp, max_retries=0)
-        assert r["ok"] is False and r["degraded"] is True
+        assert r["ok"] is False and r["degraded"] is False
         assert r["exit_code"] == 1 and r["signature"]
         # incident 已落盘（Analyze 层喂 self_heal_engine 的学习原料）
         lines = (_runtime(tmp) / "incidents.jsonl").read_text(
@@ -75,7 +75,7 @@ def test_fail_default_degrade_records_incident_and_circuit():
                         .read_text(encoding="utf-8"))
         assert cs["fail_case"]["fail_count"] == 1
         assert cs["fail_case"]["state"] == "closed"
-        # --strict 语义：allow_degrade=False → 不降级放行
+        # allow_degrade 是内部遗留参数；主链 CLI 不使用它。
         r2 = ar.run_with_resilience(
             [PY, "-c", "raise ValueError('boom')"],
             label="fail_case_strict", project_root=tmp,
@@ -132,7 +132,7 @@ def test_exit0_with_stderr_traceback_counts_as_crash():
 # ============ 5) 熔断三态：阈值 Open → 跳过执行 → reset 恢复 ============
 def test_circuit_opens_at_threshold_blocks_then_reset():
     """同 label 连续失败 CIRCUIT_THRESHOLD 次 → Open；下一次调用不执行子进程直接
-    降级返回 circuit=open / exit_code=None；cmd_reset 后恢复可跑。"""
+    失败返回 circuit=open / exit_code=None；cmd_reset 后恢复可跑。"""
     with tempfile.TemporaryDirectory() as tmp:
         marker = Path(tmp) / "ran.txt"
         fail_code = f"open(r'{marker}','a').write('x'); raise RuntimeError('x')"
@@ -148,7 +148,7 @@ def test_circuit_opens_at_threshold_blocks_then_reset():
         r = ar.run_with_resilience([PY, "-c", fail_code], label="cb_case",
                                    project_root=tmp, max_retries=0)
         assert r.get("circuit") == "open" and r["exit_code"] is None
-        assert r["ok"] is False and r["degraded"] is True
+        assert r["ok"] is False and r["degraded"] is False
         assert len(marker.read_text()) == ran_before, "Open 态不得真跑子进程"
         # 人工 reset → closed → 成功跑通并保持 closed
         ar.cmd_reset(Path(tmp), "cb_case")

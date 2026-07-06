@@ -15,6 +15,11 @@ apply_archive.py 写 人物卡/state_log。本文件原 3 个 growth_arc 幂等�
 现为 no-op」的新契约用例；time_log（save_state 仍保留 time_advance）/ respond_threads /
 撒谎检测 / db_schema_validate 不变量不受影响（growth_arc 不变量仍校验 archive 写入的数据）。
 
+🔴 2026-07 加固批：save_state.apply_changes 对 进度.json 从「缺失静默建新/损坏跳过」改为
+RuntimeError 硬停（不兼容不降级）；current_time 记 cluster/chapter_in_cluster 不再记 chapter；
+_resolve_cluster 反查不到直接抛错（禁按章号推断）。脚手架相应建 进度.json，新硬契约由
+test_apply_changes_requires_progress_json 钉死。
+
 修复后不变量（本文件钉死）：
   1. writer changes.character_changes → 人物卡 不再写 growth_arc（B 类清理·archive 接管）
   2. N 章 apply 后 time_log 累积条目数 == 逻辑时间推进数
@@ -58,12 +63,19 @@ def _setup_cluster_project(root: Path, ch_range, cluster_id="cluster_001"):
     """建一个最小项目：事件簇.json 含 chapter_range（让 ch_to_cluster_id 把 N 章归一到同 cluster）。
 
     chapter_range 必须是 [lo, hi] 两元（ch_to_cluster_id 用 rng[0]<=ch<=rng[1] 判定）。
+
+    🔴 2026-07 加固批新契约：save_state.apply_changes 对 进度.json 不再「缺失即静默建新/
+    损坏即跳过」——缺失或损坏直接 RuntimeError 硬停（不降级：required 就是 required）。
+    因此最小脚手架必须建 进度.json，否则 apply_changes 抛错（该硬契约由
+    test_apply_changes_requires_progress_json 单独钉死）。
     """
     chs = list(ch_range)
     db = root / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
     _wj(db / "事件簇.json", {"clusters": [
         {"cluster_id": cluster_id, "chapter_range": [chs[0], chs[-1]]}]})
+    _wj(db / "进度.json", {"schema_version": "v2", "completed": 0, "current": 1,
+                           "cluster_blueprint": {}})
     return root
 
 
@@ -112,13 +124,36 @@ def test_writer_new_entities_no_longer_registers_character():
         assert _load(root, "人物卡.json")["characters"] == [], "new_entities 不应再注册新角色"
 
 
+def test_apply_changes_requires_progress_json():
+    """🔴 2026-07 加固批回归锁：进度.json 缺失 → apply_changes RuntimeError 硬停。
+
+    历史：旧实现「不存在则 progress = {} 静默建新 / 损坏则跳过进度更新」，属降级容忍——
+    已按「不兼容不降级」整体清除。本用例钉死新契约防复活：缺 进度.json 不允许静默建新库。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        db = root / "_数据库"
+        db.mkdir(parents=True, exist_ok=True)
+        _wj(db / "事件簇.json", {"clusters": [
+            {"cluster_id": "cluster_001", "chapter_range": [1, 4]}]})
+        # 故意不建 进度.json
+        _write_parsed(root, 1, {"time_advance": {"elapsed": "一日", "key_events": ["启程"]}})
+        try:
+            ss.apply_changes(root, 1)
+        except RuntimeError as e:
+            assert "进度.json" in str(e), f"报错应指明 进度.json，实得 {e}"
+        else:
+            raise AssertionError("进度.json 缺失时 apply_changes 应 RuntimeError 硬停（禁静默建新）")
+        assert not (db / "进度.json").exists(), "硬停路径不得顺手创建 进度.json（防降级复活）"
+
+
 # ═══════════════════════ 2. time_log 幂等去重 ═══════════════════════
 
 def test_time_log_no_n_fold_pollution():
     """同 cluster 4 章重放同一份 time_advance → time_log 只留 1 条。"""
     with tempfile.TemporaryDirectory() as d:
         root = _setup_cluster_project(Path(d), range(1, 5))
-        _wj(root / "_数据库" / "时间线.json", {"current_time": {"period": "黎明", "chapter": 1}, "time_log": []})
+        _wj(root / "_数据库" / "时间线.json", {"current_time": {"period": "黎明", "cluster": "cluster_001"}, "time_log": []})
         ta = {"elapsed": "三日", "key_events": ["渡江", "夜袭"], "period": "深夜"}
         for ch in (1, 2, 3, 4):
             _write_parsed(root, ch, {"time_advance": ta})
@@ -127,13 +162,16 @@ def test_time_log_no_n_fold_pollution():
         assert len(tl) == 1, f"time_log 期望 1 条，实得 {len(tl)} 条 → N 倍污染未修"
         assert tl[0]["_source_cluster"] == "cluster_001"
         assert tl[0]["key_events"] == ["渡江", "夜袭"]
+        cur = _load(root, "时间线.json")["current_time"]
+        assert cur["cluster"] == "cluster_001"
+        assert "chapter" not in cur
 
 
 def test_time_log_distinct_advances_both_kept():
     """同 cluster 内两次不同时间推进（elapsed 不同）→ 两条都留。"""
     with tempfile.TemporaryDirectory() as d:
         root = _setup_cluster_project(Path(d), range(1, 5))
-        _wj(root / "_数据库" / "时间线.json", {"current_time": {"period": "黎明", "chapter": 1}, "time_log": []})
+        _wj(root / "_数据库" / "时间线.json", {"current_time": {"period": "黎明", "cluster": "cluster_001"}, "time_log": []})
         _write_parsed(root, 1, {"time_advance": {"elapsed": "一日", "key_events": ["启程"]}})
         ss.apply_changes(root, 1)
         _write_parsed(root, 2, {"time_advance": {"elapsed": "三日", "key_events": ["抵达"]}})

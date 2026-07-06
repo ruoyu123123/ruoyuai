@@ -91,7 +91,7 @@ def test_completed_prefix_resumes_from_next_step():
 
 
 def test_resume_step_matches_done_count_plus_one_for_all_prefixes():
-    """连续完成 k 步（k=0..11，12 步 plan）→ 续跑 step k+1（前缀完成 == done_count+1 不回归）。"""
+    """连续完成 k 步 → 续跑 step k+1（前缀完成 == done_count+1 不回归）。"""
     for k in range(0, 12):
         with _wal_sandbox() as (proj, plans_dir):
             statuses = ["completed"] * k + ["pending"] * (12 - k)

@@ -22,6 +22,7 @@ import sys
 from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
 import cluster_lookup  # 章号⇄cluster_id 唯一权威反查（北极星①）
 from pathlib import Path
+import state_cli_guard
 
 SCRIPT_DIR = scripts_dir()
 
@@ -50,7 +51,8 @@ def run_one_module(module_name: str, script_name: str, args_spec: list, project:
     try:
         r = subprocess.run(
             [child_python(), str(script_path), *cli_args],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+            env=state_cli_guard.internal_env(),
         )
         # evaluator 退出码 1/2 通常是「触发 mental break / clock 满格」等业务事件，不算失败
         if r.returncode > 2:

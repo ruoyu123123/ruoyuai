@@ -11,6 +11,23 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python core/claude-home/hooks/pretooluse_step_research.py"
+          },
+          {
+            "type": "command",
+            "command": "python core/claude-home/hooks/pretooluse_subsystems_gate.py"
+          },
+          {
+            "type": "command",
+            "command": "python core/claude-home/hooks/pretooluse_plan_step_anti_skip.py"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {

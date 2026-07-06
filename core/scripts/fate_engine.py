@@ -31,6 +31,7 @@ from pathlib import Path
 # 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
+import state_cli_guard
 
 
 def load_json(p: Path, default=None):
@@ -156,7 +157,7 @@ def update(project_root: Path, ch: int) -> dict:
     for trig in triggered:
         # 🔴 2026-06-17 bug-hunt 修：守卫畸形 fate_events_triggered 元素（裸字符串 / evidence=None）。
         # 原 trig.get 在 str 上 AttributeError·trig.get("evidence","")[:120] 在 None 上 TypeError →
-        # fate_engine CLI 子进程 exit1 → save-state step9 假失败卡死流水线。对齐 world_evolution
+        # fate_engine CLI 子进程 exit1 → cluster-save-state step9 假失败卡死流水线。对齐 world_evolution
         # _apply_chapter 的 isinstance 守卫。
         if not isinstance(trig, dict):
             continue
@@ -233,6 +234,7 @@ def dashboard(project_root: Path) -> dict:
 
 
 def main():
+    state_cli_guard.require_internal("fate_engine.py")
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("action", choices=["evaluate", "update", "drift", "dashboard"])

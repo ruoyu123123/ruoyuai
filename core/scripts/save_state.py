@@ -19,7 +19,7 @@ import json
 import re
 import subprocess
 import sys
-from frozen_util import child_python, scripts_dir  # frozen-aware（M4·dev=no-op）
+from frozen_util import child_python, scripts_dir  # frozen-aware path helpers
 from datetime import datetime
 from pathlib import Path
 
@@ -28,18 +28,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 import chapter_io as cio
 # 2026-05-29 修 章号当cluster号：章号 ⇄ cluster_id 反查走单一权威工具
 import cluster_lookup
+# 2026-07-06 P1 伏笔三态生命周期：status 枚举 + payoff_scope 派生的单一真理源
+import db_schema_validate as _dbsv
 from log_util import get_logger
 
 logger = get_logger(__name__)
 # 2026-06-12 缺漏修复批次1 任务C【原子写改造·P1-1 数据损坏防护】：
 # 写 _数据库/*.json 统一走 atomic_json.atomic_write_json（tmp 唯一名 + fsync + os.replace
 # 原子语义——进程写一半被杀只残留 .tmp、绝不毁掉原文件）。此前 save_json 裸 write_text：
-# 半截写 → 下个读者 json.JSONDecodeError → load_json 兜底成 default → 伏笔表/人物卡/
-# 进度/地图/时间线/道具 整库静默清空。ImportError 兜底见 save_json
-# （照 cluster_choice_apply.py:89-96 范式手写 tmp + replace）。
+# 半截写 → 下个读者 json.JSONDecodeError → load_json 返回 default → 伏笔表/人物卡/
+# 进度/地图/时间线/道具 整库静默清空。ImportError 时 save_json 使用同等 tmp+replace 写盘
+# （照 cluster_choice_apply.py:89-96 范式）。
 try:
     import atomic_json
-except ImportError:  # 极端环境（脚本被单独拷走执行）缺 atomic_json → save_json 内降级
+except ImportError:  # 极端单文件执行环境缺 atomic_json；save_json 内执行同等 tmp+replace 写盘
     atomic_json = None
 
 
@@ -48,13 +50,20 @@ def _resolve_cluster(root: Path, ch: int) -> tuple[str, bool]:
 
     返回 (cluster_id, inferred)：
       - 反查命中 → (真实 cluster_id, False)
-      - 反查不到 → (normalize_cluster_id(ch) fallback, True)，调用方应给记录标
-        `_cluster_inferred = True`（表示是按章号推断、不可信）。
+      - 反查不到 → 抛 RuntimeError，禁止按章号推断旧 cluster id。
     """
     cid = cluster_lookup.ch_to_cluster_id(root, ch)
     if cid:
         return cid, False
-    return cluster_lookup.normalize_cluster_id(ch) or f"cluster_{ch:03d}", True
+    raise RuntimeError(f"第{ch}章无法从事件簇/blueprint 反查 cluster_id")
+
+
+def _require_cluster_id(cluster_key) -> str:
+    """归一化外部传入的 cluster_key；非法值直接硬失败。"""
+    cid = cluster_lookup.normalize_cluster_id(cluster_key)
+    if not cid:
+        raise RuntimeError(f"非法 cluster_key: {cluster_key!r}")
+    return cid
 
 
 # 🔴 2026-06-28 审计清理B类：伏笔 payoff terminal/progressive 分流助手已删除
@@ -63,7 +72,7 @@ def _resolve_cluster(root: Path, ch: int) -> tuple[str, bool]:
 # paid → 伏笔表」桥接——该桥接判为 B 类违规（消费侧读 writer 自报 factual 当权威状态源），已移除。
 # 伏笔注册/兑现改走两条 Claude 权威路径：_register_brief_foreshadowings（读 outline brief 的
 # foreshadowing_to_plant）+ _apply_foreshadower_payoffs（读 foreshadower JudgeReport·自带
-# terminal→resolved / progressive→payoff_progress 分流 + score>0 门控）。
+# terminal→consumed / progressive→payoff_progress 分流 + score>0 门控）。
 
 
 # ============ IO ============
@@ -83,7 +92,7 @@ def save_json(p: Path, data):
     走 atomic_json.atomic_write_json：tmp 唯一名（pid+uuid）+ fsync + os.replace 原子替换。
     进程被杀只留 tmp 不毁原文件——本函数是伏笔表/人物卡/进度/地图/时间线/道具 等
     _数据库 JSON 的唯一写出口，半截写防护在此一处闭环。
-    atomic_json 不可导入时兜底手写 tmp + os.replace（照 cluster_choice_apply.py:89-96 范式，
+    atomic_json 不可导入时手写 tmp + os.replace（照 cluster_choice_apply.py:89-96 范式，
     tmp 名加 pid+uuid 防并发交错——不沿用固定 .json.tmp 反模式）。
     """
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +112,44 @@ def save_json(p: Path, data):
                     tmp.unlink()
             except OSError:
                 pass
+
+
+def _wal_dir(root: Path) -> Path:
+    d = root / "_数据库" / ".wal"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _run_required(args: list[str], *, cwd: Path | None = None, timeout: int = 180) -> subprocess.CompletedProcess:
+    """运行 required 子命令；任何非 0、超时或启动异常都抛错。"""
+    try:
+        r = subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"required command timeout after {timeout}s: {' '.join(args)}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"required command failed to start: {' '.join(args)} :: {exc}") from exc
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout or "")[-500:]
+        raise RuntimeError(f"required command rc={r.returncode}: {' '.join(args)} :: {tail}")
+    return r
+
+
+def _git_commit_marker_payload(norm_cid: str, chapters: list[int], msg: str) -> dict:
+    return {
+        "schema_version": 1,
+        "cluster_id": norm_cid,
+        "chapters": chapters,
+        "commit_message": msg,
+        "committed": True,
+    }
 
 
 def find_chapter_file(root: Path, ch: int) -> Path | None:
@@ -144,18 +191,18 @@ def parse_changes(root: Path, ch: int) -> tuple[dict | None, str]:
 
 
 def cmd_parse(root: Path, ch: int) -> int:
-    """解析单章 CHANGES → .wal/第N章_parsed.json。返回状态码（0 成功 / 1 软失败 / 2 文件缺失）。
+    """解析单章 CHANGES → .wal/第N章_parsed.json。返回状态码（0 成功 / 2 失败）。
 
     2026-05-29 复审修复 [M3]：原用 sys.exit 直接退进程，被 cluster 循环调用时单章失败
-    会整 cluster 中断。改为返回状态码，由 cmd_apply_cluster_changes 累计、单章失败不中断整 cluster。
+    会丢失汇总诊断。现返回状态码，由 cmd_apply_cluster_changes 汇总后统一硬停。
     """
     if not find_chapter_file(root, ch) and not cio.changes_path(root, ch).is_file():
         logger.error(f" 第{ch}章 正文/CHANGES 均未找到")
         return 2
     changes, strategy = parse_changes(root, ch)
     if changes is None:
-        logger.info(f"[PARSE] CHANGES 解析失败（无 _changes.json 且旧稿无 CHANGES 段），需要 AI agent 兜底")
-        return 1
+        logger.info(f"[PARSE] CHANGES 解析失败（无 _changes.json 且旧稿无 CHANGES 段），需要回到 cluster 草稿层重跑")
+        return 2
     out = root / "_数据库" / ".wal" / f"第{ch}章_parsed.json"
     save_json(out, {"strategy": strategy, "changes": changes})
     logger.info(f"[PARSE] 策略 {strategy} 成功 → {out.relative_to(root)}")
@@ -192,16 +239,16 @@ def apply_changes(root: Path, ch: int) -> int:
     v16: 先生成声明式Patch文件（可审计/可回放），再执行实际修改。
 
     2026-05-29 复审修复 [M3]：原用 sys.exit(1) 直接退进程，被 cluster 循环调用时单章
-    无 parsed 会整 cluster 中断。改为返回状态码（0 成功 / 1 无 parsed 跳过），
-    由 cmd_apply_cluster_changes 累计、单章失败不中断整 cluster。
+    无 parsed 会丢失汇总诊断。现返回状态码（0 成功 / 2 无 parsed），
+    由 cmd_apply_cluster_changes 汇总后统一硬停。
     """
     db = root / "_数据库"
     parsed_path = db / ".wal" / f"第{ch}章_parsed.json"
     parsed = load_json(parsed_path, {})
     changes = parsed.get("changes", {})
     if not changes:
-        logger.info(f"[APPLY] 无 parsed CHANGES，跳过")
-        return 1
+        logger.info(f"[APPLY] 无 parsed CHANGES")
+        return 2
 
     # v16: 生成并保存声明式Patch
     patches = _generate_patch(changes, ch)
@@ -213,7 +260,7 @@ def apply_changes(root: Path, ch: int) -> int:
     summary = {"applied": [], "warnings": [], "patch_file": str(patch_path.name)}
 
     # 🔴 2026-06-28 审计清理B类：删除 writer 自报 factual → 伏笔表 / 人物卡 的回库路径。
-    #   · 伏笔表（promises/secrets/deadlines/pledges resolved/status）：原读 writer 的
+    #   · 伏笔表（promises/secrets/deadlines/pledges 各 status 生命周期）：原读 writer 的
     #     foreshadowing_actions / foreshadowing_planted / foreshadowing_paid（含 fs_auto_<hash>
     #     自动派 id）桥接——属 B 类违规（消费 writer 自报 factual 当权威状态源），全部移除。
     #     伏笔注册/兑现改走两条 Claude 权威路径（cmd_apply_cluster_changes 调度·读 outline brief +
@@ -224,23 +271,22 @@ def apply_changes(root: Path, ch: int) -> int:
     # 它们非 archive 域、无替代 producer，且不属「角色/道具/关系/伏笔/locked_facts」factual 状态。
 
     # --- 进度（completed+1, current+1）---
-    # 2026-05-30 北极星复审：进度.json 损坏时 load_json 静默返回 {}，下方覆写会清空 cluster_blueprint/
-    # volumes/completed 等全部字段（进度库被静默清空）。损坏即跳过进度更新不覆写（文件不存在才合理建新）。
+    # 2026-05-30 北极星复审：进度.json 损坏时禁止覆写，直接抛错让 cluster apply 硬停。
     prog_path = db / "进度.json"
     progress = None
     if prog_path.exists():
         try:
             progress = json.loads(prog_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            logger.info("[ERROR] 进度.json 损坏，跳过进度更新避免清空进度库（请修复 JSON 后重试）")
-            summary["warnings"].append("进度.json 损坏，进度未更新")
+            raise RuntimeError("进度.json 损坏，请修复 JSON 后重试")
     else:
-        progress = {}
-    if isinstance(progress, dict):
-        progress["completed"] = max(progress.get("completed", 0), ch)
-        progress["current"] = progress["completed"] + 1
-        save_json(prog_path, progress)
-        summary["applied"].append(f"进度: completed={progress['completed']}")
+        raise RuntimeError("进度.json 不存在，请先初始化项目状态库")
+    if not isinstance(progress, dict):
+        raise RuntimeError("进度.json 顶层不是 object")
+    progress["completed"] = max(progress.get("completed", 0), ch)
+    progress["current"] = progress["completed"] + 1
+    save_json(prog_path, progress)
+    summary["applied"].append(f"进度: completed={progress['completed']}")
 
     # --- 地图（新地点状态）---
     # 🔴 2026-06-28 审计清理B类：删除 character_movements → 地图.character_positions 回库
@@ -260,13 +306,15 @@ def apply_changes(root: Path, ch: int) -> int:
     ta = changes.get("time_advance") or {}
     if ta:
         tl = load_json(db / "时间线.json", {})
+        src_cid, _src_inferred = _resolve_cluster(root, ch)
         if isinstance(tl.get("current_time"), dict) and ta.get("period"):
             tl["current_time"]["period"] = ta["period"]
-            tl["current_time"]["chapter"] = ch
+            tl["current_time"].pop("chapter", None)
+            tl["current_time"]["cluster"] = src_cid
+            tl["current_time"]["chapter_in_cluster"] = ch
         # 🔴 2026-06-27 C11（cluster 级幂等去重）：time_advance 同样被 split_cluster_changes
         # 平铺进每章，逐章 apply 让 time_log 同一 elapsed/key_events 累积 N 条。按
         # (elapsed,key_events,_source_cluster) 去重——同 cluster 内同一时间推进只记一次。
-        src_cid, _src_inferred = _resolve_cluster(root, ch)
         elapsed = ta.get("elapsed", "")
         key_events = ta.get("key_events", [])
         log = tl.setdefault("time_log", [])
@@ -302,147 +350,10 @@ def apply_changes(root: Path, ch: int) -> int:
     return 0
 
 
-# ============ Git commit ============
-
-def cmd_git_commit(root: Path, ch: int):
-    try:
-        subprocess.run(["git", "--version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        logger.info("[GIT] git 不可用，跳过")
-        return
-    if not (root / ".git").exists():
-        logger.info("[GIT] 非 git 仓库，跳过")
-        return
-
-    f = find_chapter_file(root, ch)
-    if not f:
-        logger.info(f"[GIT] 第{ch}章 txt 未找到")
-        return
-
-    # v18：正文经 cio 剥离 CHANGES，字数用统一口径
-    body = cio.read_body(root, ch)
-    words = cio.count_words(body)
-    title_match = re.search(r"第\d+章[_·]?(.+?)\.txt", f.name)
-    title = title_match.group(1) if title_match else ""
-    # v27 修复：缩进/作用域 bug —— 原代码 prog/scenes 只在 if 块里定义，下面 for 循环
-    # 在 if 块外引用导致 title 非空分支会 NameError。重构为 if 块内闭环。
-    if not title:
-        prog = load_json(root / "_数据库" / "进度.json", {})
-        _all_scenes_save_state = []
-        # 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测），
-        # 裸 .items() 会 AttributeError 崩。先 normalize_blueprint 归一成 dict 再迭代。
-        for cid, cdata in cluster_lookup.normalize_blueprint(prog).items():
-            _all_scenes_save_state.extend(cdata.get("scene_storyboard", []))
-        for cp in _all_scenes_save_state:
-            if cp.get("ch") == ch:
-                title = cp.get("title", "")
-                break
-
-    try:
-        # 把正文 txt + 同目录 _changes.json（若存在）一并纳入快照
-        add_paths = [str(f.relative_to(root)), "_数据库/"]
-        cp_file = cio.changes_path(root, ch)
-        if cp_file.is_file():
-            add_paths.insert(1, str(cp_file.relative_to(root)))
-        # v27 修复：git 操作加 timeout=30 防 session 阻塞（feedback: 大仓库 git add 可能卡几分钟）
-        subprocess.run(["git", "add", *add_paths], cwd=root, check=True, timeout=30)
-        msg = f"feat(ch-{ch}): {title} ({words}字)"
-        subprocess.run(["git", "commit", "-m", msg], cwd=root, check=True,
-                       capture_output=True, timeout=30)
-        result = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                                cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=10)
-        logger.info(f"[GIT] 快照 {result.stdout.strip()}: {msg}")
-    except subprocess.TimeoutExpired:
-        logger.info(f"[GIT] commit 超时 (>30s)·跳过本次快照·不阻断流水线")
-    except subprocess.CalledProcessError as e:
-        err = (e.stderr or b"").decode("utf-8", errors="ignore")[:200]
-        logger.info(f"[GIT] commit 失败: {err}")
-
-
 # ============ 报告（第10步）============
 # 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：cmd_report（章级报告）已删除。
 # 与 cmd_report_cluster（见 CLI 段说明）一起下线 —— grep 确认无任何 plan/命令文档
 # 调 save_state.py --report / --report-cluster（cluster-save-state 报告由其他步骤产出）。
-
-
-# ============ v22.6 自动 post-reflect 链 ============
-
-def cmd_auto_post_reflect(root: Path, ch: int) -> None:
-    """v22.6: save-state plan step 8 的 learning-loop 三步链自动化。
-
-    解决断层：reflector agent 写报告 → 之前需主代理手动调 learning_loop --merge-reflection。
-    主代理常忘 → 写作经验.json success_patterns/failure_patterns 一直 0。
-
-    本命令自动跑：
-    1. learning_loop --merge-reflection <reflector json>
-    2. learning_loop --ingest <audit json>
-    3. learning_loop --scan-recurring
-    """
-    import subprocess
-
-    project_str = str(root)
-    script_root = scripts_dir()   # frozen-aware（狩猎修·__file__在PYZ顶层）
-    learning_loop = script_root / "learning_loop.py"
-
-    reflector_json = root / "_数据库" / ".judge_reports" / f"ch_{ch:03d}_reflector.json"
-    audit_json = root / "_数据库" / ".audit" / f"ch_{ch:03d}_audit.json"
-
-    steps_ran = 0
-    steps_skipped = 0
-
-    # Step 1: merge reflector → 写作经验.success/failure_patterns
-    if reflector_json.is_file():
-        rel_path = reflector_json.relative_to(root).as_posix()
-        r = subprocess.run(
-            [child_python(), str(learning_loop), project_str, "--merge-reflection", rel_path],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
-        )
-        if r.returncode == 0:
-            logger.info(f"[auto-post-reflect] step 1/3 merge-reflection OK")
-            for line in (r.stdout or "").splitlines()[-3:]:
-                logger.info(f"  {line}")
-            steps_ran += 1
-        else:
-            logger.info(f"[auto-post-reflect] step 1/3 merge-reflection FAIL: {r.stderr[:200]}")
-            steps_skipped += 1
-    else:
-        logger.info(f"[auto-post-reflect] step 1/3 跳过：reflector 报告不存在 ({reflector_json.name})")
-        steps_skipped += 1
-
-    # Step 2: ingest audit → _recurrence_tracker / _waiver_tracker
-    if audit_json.is_file():
-        rel_path = audit_json.relative_to(root).as_posix()
-        r = subprocess.run(
-            [child_python(), str(learning_loop), project_str, "--ingest", rel_path],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180  # 2026-05-30 北极星：补 timeout 纪律（防 learning_loop 异常慢卡死流水线）
-        )
-        if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
-            logger.info(f"[auto-post-reflect] step 2/3 ingest OK (rc={r.returncode})")
-            for line in (r.stdout or "").splitlines()[-3:]:
-                logger.info(f"  {line}")
-            steps_ran += 1
-        else:
-            logger.info(f"[auto-post-reflect] step 2/3 ingest FAIL: {r.stderr[:200]}")
-            steps_skipped += 1
-    else:
-        logger.info(f"[auto-post-reflect] step 2/3 跳过：audit 报告不存在 ({audit_json.name})")
-        steps_skipped += 1
-
-    # Step 3: scan-recurring → 跨章复发追踪 + tool_calibration_suggestions
-    r = subprocess.run(
-        [child_python(), str(learning_loop), project_str, "--scan-recurring"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180  # 2026-05-30 北极星：补 timeout 纪律
-    )
-    if r.returncode in (0, 1):
-        logger.info(f"[auto-post-reflect] step 3/3 scan-recurring OK (rc={r.returncode})")
-        for line in (r.stdout or "").splitlines()[-3:]:
-            logger.info(f"  {line}")
-        steps_ran += 1
-    else:
-        logger.info(f"[auto-post-reflect] step 3/3 scan-recurring FAIL: {r.stderr[:200]}")
-        steps_skipped += 1
-
-    logger.info(f"\n[auto-post-reflect] 完成 {steps_ran}/3 步（跳过 {steps_skipped}）")
 
 
 # ============ v23 ECAS checkpoint ============
@@ -451,7 +362,7 @@ def _read_ecas_metadata(chg: dict) -> dict:
     """2026-05-29 复审修复 [M17]：ecas_metadata 三方位置不一致——
     schema 声明顶层 / gen_writer 写在 self_eval.ecas_metadata（见 gen_writer.py:587）/
     旧 reader 只读顶层 → 永远拿空 dict → checkpoint_data 永远空。
-    本 helper 统一读：优先 self_eval.ecas_metadata（writer 实际位置），兜底顶层（schema 位置），
+    本 helper 统一读：优先 self_eval.ecas_metadata（writer 实际位置），兼容读取顶层（schema 位置），
     两处都有则浅合并（self_eval 优先，反映 writer 真实输出）。读不到返回 {}。
     """
     if not isinstance(chg, dict):
@@ -466,18 +377,17 @@ def _read_ecas_metadata(chg: dict) -> dict:
 
 
 def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> int:
-    """v23 ECAS: 验证 cluster_draft 完整性 (字数 / sub_summaries / mid_checkpoint_results)。
+    """验证 cluster_draft 完整性 (存在性 / CJK 计数 / mid_checkpoint_results)。
 
     输入: cluster_id (如 cluster_002)
     检查项:
-    1. 读 章节/cluster_<id>_draft/cluster_<id>_draft.txt 验字数 in expected_word_range
+    1. 读 章节/cluster_<id>_draft/cluster_<id>_draft.txt 并记录 CJK 字数
     2. 读 章节/cluster_<id>_draft/cluster_<id>_changes.json.ecas_metadata.checkpoint_data
     3. 验所有 mid_checkpoint_results 字段完整 + passed
     4. 写 _数据库/.ecas_checkpoints/cluster_<id>_final.json (汇总)
 
-    2026-05-29 复审修复 [L12]：freestyle（writer_mode=freestyle_v27 / chapter_count_decided_by_splitter）
-    时字数由 writer 自由发挥、splitter 后期按字数切——硬卡 expected_word_range 与 freestyle 设计冲突，
-    故 freestyle 时 [4000,20000] 等硬范围降级为 advisory（仅 warn 不 FAIL）。
+    cluster-first freestyle 下字数由 writer 自由发挥、splitter 后期按字数切；本 checkpoint
+    不读取/检查 expected_word_range，避免把旧字数预算重新变成隐性约束。
     2026-05-29 复审修复 [H3/M20]：返回状态码（0 PASS / 1 FAIL）替代 sys.exit，供 main() 传播。
     """
     import json as _json
@@ -485,7 +395,6 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> int:
     cluster_dir = root / "章节" / f"{cluster_id}_draft"
     draft_path = cluster_dir / f"{cluster_id}_draft.txt"
     changes_path = cluster_dir / f"{cluster_id}_changes.json"
-    clusters_path = root / "_数据库" / "事件簇.json"
     checkpoint_dir = root / "_数据库" / ".ecas_checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -507,8 +416,6 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> int:
             ecas_meta = _read_ecas_metadata(chg)
         except Exception:
             chg = None  # Check 2 会重新尝试并记录具体错误
-    is_freestyle = (ecas_meta.get("writer_mode") == "freestyle_v27"
-                    or bool(ecas_meta.get("chapter_count_decided_by_splitter")))
     result["checks"]["writer_mode"] = ecas_meta.get("writer_mode", "unknown")
 
     # Check 1: draft 存在 + 字数
@@ -524,38 +431,6 @@ def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> int:
         result["checks"]["draft_exists"] = True
         result["checks"]["word_count"] = words
         result["checks"]["word_count_method"] = "CJK_chars_only_v23_1"
-
-        # v23.2 L5: 字数 vs expected_word_range — JSON 读失败/字数不达标 = FAIL（不再 warn 静默通过）
-        if clusters_path.is_file():
-            try:
-                cdata = _json.loads(clusters_path.read_text(encoding="utf-8"))
-                cluster = next((c for c in cdata.get("clusters", []) if c.get("cluster_id") == cluster_id), None)
-                if cluster:
-                    wr = cluster.get("expected_word_range") or {}
-                    wmin, wmax = wr.get("min", 4000), wr.get("max", 20000)
-                    result["checks"]["expected_word_range"] = [wmin, wmax]
-                    if words < wmin or words > wmax:
-                        # 2026-05-29 复审修复 [L12]：freestyle 时字数硬卡降级为 advisory（不 FAIL）
-                        if is_freestyle:
-                            result["warnings"].append(
-                                f"ADVISORY(freestyle): CJK 字数 {words} 在 expected_word_range "
-                                f"[{wmin}, {wmax}] 之外——freestyle 由 splitter 按字数切，仅提示不卡")
-                        else:
-                            result["passed"] = False  # v23.2: 非 freestyle 仍 FAIL
-                            result["warnings"].append(f"FAIL: CJK 字数 {words} 超出 expected_word_range [{wmin}, {wmax}]")
-                    else:
-                        result["checks"]["word_count_in_range"] = True
-                else:
-                    # cluster 找不到 = FAIL（防 brief 缺失静默通过）
-                    result["passed"] = False
-                    result["warnings"].append(f"FAIL: cluster_id {cluster_id} 在 事件簇.json 找不到")
-            except Exception as e:
-                # v23.2: JSON 读失败 = FAIL（不再静默通过）
-                result["passed"] = False
-                result["warnings"].append(f"FAIL: 读 事件簇.json 失败（fail-loud v23.2）: {e}")
-        else:
-            result["passed"] = False
-            result["warnings"].append("FAIL: 事件簇.json 不存在 - ECAS cluster brief 缺失")
 
     # Check 2: changes.json + checkpoint_data
     if not changes_path.is_file():
@@ -608,19 +483,14 @@ def _get_cluster_chapter_range(project_root, cluster_key):
     """拿 cluster 的 chapter_range，展开 [ch1,...,chN]。
 
     🔴 2026-06-17 bug-hunt 修：改走 `cluster_lookup.cluster_id_to_range`（唯一权威反查·北极星①·
-    享 blueprint 兜底）。原实现只读 事件簇.json 无兜底 → blueprint-only 状态（事件簇缺 chapter_range·
+    可读 splitter 写回前的 blueprint 范围）。原实现只读 事件簇.json → blueprint-only 状态（事件簇缺 chapter_range·
     进度.json.cluster_blueprint 有）返 [] → cmd_apply_cluster_changes / cmd_git_commit_cluster
     FATAL exit2 卡死整条 cluster-save-state 管线（而兄弟脚本 evaluators 走 cluster_lookup 正常推进·
     三脚本权威源不一致）。对齐 evaluators。"""
-    try:
-        import cluster_lookup as _cl
-        cid = _cl.normalize_cluster_id(cluster_key) or \
-            f"cluster_{str(cluster_key).replace('cluster_', '')}"
-        cr = _cl.cluster_id_to_range(project_root, cid)
-        if cr and len(cr) == 2:
-            return list(range(int(cr[0]), int(cr[1]) + 1))
-    except Exception:
-        pass
+    cid = _require_cluster_id(cluster_key)
+    cr = cluster_lookup.cluster_id_to_range(project_root, cid)
+    if cr and len(cr) == 2:
+        return list(range(int(cr[0]), int(cr[1]) + 1))
     return []
 
 
@@ -635,7 +505,7 @@ def _run_writer_truth_check(root: Path, chapters: list[int]) -> dict:
     anchors_hit 是 cluster 级一次性申报）平铺进每章 → 逐章验时 chapters[1..N] 的章首/章末
     各异、anchor 散落各章 → 海量假 opening_line/ending_line 不匹配 + 假 missing anchor。
     cluster 级：opening 只验首章 / ending 只验末章 / anchors 验全拼接 body（见 writer_truth_check
-    .truth_check_cluster）。失败不中断流水线（记录即可），结果并入返回 summary。
+    .truth_check_cluster）。本命令属于 required 状态验证：撒谎或检测异常都会阻断。
     """
     wtc = scripts_dir() / "writer_truth_check.py"  # frozen: __file__在PYZ顶层·parent指_internal根（狩猎修）
     result = {"ran": 0, "lies_total": 0, "per_chapter": [], "errors": []}
@@ -659,6 +529,8 @@ def _run_writer_truth_check(root: Path, chapters: list[int]) -> dict:
             result["lies_total"] = int(m.group(1)) if m else 1
         elif r.returncode == 2:
             result["errors"].append((r.stderr or "")[:160])
+        elif r.returncode != 0:
+            result["errors"].append((r.stderr or r.stdout or f"rc={r.returncode}")[:160])
         # 🔴 2026-06-27 SYS-3/C10（shadow）：从 stdout 抓声明-vs-正文 advisory 计数 → 列主代理待裁决。
         # SHADOW 决策：C10 corroboration/quarantine 先以 advisory 跑（只 surface 不延迟写账本），确认
         # 无假阳再 active（届时把 corroborated!=true 的 factual 项 defer-write 防脏账本）。
@@ -667,7 +539,6 @@ def _run_writer_truth_check(root: Path, chapters: list[int]) -> dict:
         result["foreshadowing_no_trace"] = int(_nt.group(1)) if _nt else 0
         result["factual_uncorroborated"] = int(_uc.group(1)) if _uc else 0
     except Exception as e:
-        # 失败不中断（记录即可）
         result["errors"].append(f"cluster truth-check: {type(e).__name__}: {str(e)[:120]}")
     return result
 
@@ -682,22 +553,17 @@ def _writeback_cluster_progress(root, cluster_key, chapters):
     try:
         prog_path = root / "_数据库" / "进度.json"
         if not prog_path.exists():
-            return
+            raise RuntimeError("进度.json 不存在")
         prog = json.loads(prog_path.read_text(encoding="utf-8"))
         if not isinstance(prog, dict):
-            return
-        # current_cluster：规范化 id
-        try:
-            import cluster_lookup as _cl
-            cid = _cl.normalize_cluster_id(cluster_key) or f"cluster_{str(cluster_key).replace('cluster_', '')}"
-        except Exception:
-            cid = f"cluster_{str(cluster_key).replace('cluster_', '')}"
+            raise RuntimeError("进度.json 顶层不是 object")
+        cid = _require_cluster_id(cluster_key)
         prog["current_cluster"] = cid
         # completed：取 max(现值, cluster 末章)
         if chapters:
             prog["completed"] = max(int(prog.get("completed", 0) or 0), max(chapters))
             prog["current"] = prog["completed"] + 1
-        # book_title：仍占位则用项目目录名兜底
+        # book_title：占位时从项目目录名派生
         bt = str(prog.get("book_title") or "")
         if (not bt) or bt.startswith("<") or bt == "<书名>":
             prog["book_title"] = Path(root).name
@@ -705,7 +571,7 @@ def _writeback_cluster_progress(root, cluster_key, chapters):
         save_json(prog_path, prog)
         logger.info(f"[进度回写] current_cluster={cid} completed={prog.get('completed')} book_title={prog['book_title']}")
     except Exception as e:
-        logger.info(f"[进度回写] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+        raise RuntimeError(f"进度回写失败: {type(e).__name__}: {str(e)[:120]}") from e
 
 
 def _mark_cluster_me_completed(root, cluster_key):
@@ -720,36 +586,52 @@ def _mark_cluster_me_completed(root, cluster_key):
         db = root / "_数据库"
         ec_path = db / "事件簇.json"
         ds_path = db / "大势卡.json"
-        if not ec_path.exists() or not ds_path.exists():
-            return
-        import cluster_lookup as _cl
-        cid = _cl.normalize_cluster_id(cluster_key) or str(cluster_key)
-        ec = load_json(ec_path, {})
+        if not ec_path.exists():
+            raise RuntimeError("事件簇.json 不存在")
+        if not ds_path.exists():
+            raise RuntimeError("大势卡.json 不存在")
+        cid = _require_cluster_id(cluster_key)
+        ec = load_json(ec_path, None)
+        if not isinstance(ec, dict):
+            raise RuntimeError("事件簇.json 缺失或损坏")
         cluster = next((c for c in ec.get("clusters", [])
-                        if _cl.normalize_cluster_id(c.get("cluster_id")) == cid
+                        if cluster_lookup.normalize_cluster_id(c.get("cluster_id")) == cid
                         or str(c.get("cluster_id")) == cid), None)
         if not cluster:
-            return
+            raise RuntimeError(f"事件簇.json 找不到 {cid}")
         me_id = cluster.get("parent_me") or cluster.get("me_id")
         if not me_id:
-            return
+            raise RuntimeError(f"{cid} 缺 parent_me/me_id")
         adv = list(cluster.get("ME_to_advance") or [])
         if me_id not in adv:
             cluster["ME_to_advance"] = adv + [me_id]
             save_json(ec_path, ec)
-        ds = load_json(ds_path, {})
+        ds = load_json(ds_path, None)
+        if not isinstance(ds, dict):
+            raise RuntimeError("大势卡.json 缺失或损坏")
+        major_events = ds.get("major_events")
+        if not isinstance(major_events, list):
+            major_events = ds.get("major_events_pool")
+        if not isinstance(major_events, list):
+            raise RuntimeError("大势卡.json 缺 major_events/major_events_pool list")
         changed = False
-        for m in ds.get("major_events", []):
+        found = False
+        for m in major_events:
             mid = m.get("id") or m.get("me_id")
             if mid == me_id and m.get("status") != "completed":
+                found = True
                 m["status"] = "completed"
                 m["completed_by_cluster"] = cid
                 changed = True
+            elif mid == me_id:
+                found = True
+        if not found:
+            raise RuntimeError(f"大势卡.json 找不到 ME {me_id}")
         if changed:
             save_json(ds_path, ds)
             logger.info(f"[ME完成] {me_id} status=completed (by {cid})")
     except Exception as e:
-        logger.info(f"[ME完成] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+        raise RuntimeError(f"ME完成标记失败: {type(e).__name__}: {str(e)[:120]}") from e
 
 
 # 🔴 2026-06-28 审计清理B类：_persist_cluster_locked_facts 已删除。
@@ -762,26 +644,33 @@ def _mark_cluster_me_completed(root, cluster_key):
 def _register_brief_foreshadowings(root, cluster_key):
     """🔴 2026-06-28：把 事件簇.clusters[].foreshadowing_to_plant（outline-planner 规划·带 fs_id）
     注册进伏笔表.promises。治：writer 常漏报 brief 计划的伏笔（FS_014-017 实测不在伏笔表）→ 孤儿 payoff
-    （foreshadower 判 terminal 却无对应 promise 可标 resolved）。brief 是 fs_id 权威来源（同 locked_facts
-    哲学）。dedup by fs_id·不覆盖已存在（含已 resolved）。排在 foreshadower 桥接前，使新注册可被立即 resolve。
+    （foreshadower 判 terminal 却无对应 promise 可标 consumed）。brief 是 fs_id 权威来源（同 locked_facts
+    哲学）。dedup by fs_id·不覆盖已存在（含已 consumed）。排在 foreshadower 桥接前，使新注册可被立即回收。
+    2026-07-06 P1 三态生命周期：新条目写 status="open" + owner + payoff_scope（枚举权威见
+    db_schema_validate.FORESHADOW_STATUS_ENUM·不再写 resolved bool）。
     """
     try:
         db = root / "_数据库"
         ec_path = db / "事件簇.json"
         if not ec_path.exists():
-            return
-        import cluster_lookup as _cl
-        cid = _cl.normalize_cluster_id(cluster_key) or str(cluster_key)
-        ec = load_json(ec_path, {})
+            raise RuntimeError("事件簇.json 不存在")
+        cid = _require_cluster_id(cluster_key)
+        ec = load_json(ec_path, None)
+        if not isinstance(ec, dict):
+            raise RuntimeError("事件簇.json 缺失或损坏")
         cluster = next((c for c in ec.get("clusters", [])
-                        if _cl.normalize_cluster_id(c.get("cluster_id")) == cid
+                        if cluster_lookup.normalize_cluster_id(c.get("cluster_id")) == cid
                         or str(c.get("cluster_id")) == cid), None)
         if not cluster:
-            return
+            raise RuntimeError(f"事件簇.json 找不到 {cid}")
         ftp = cluster.get("foreshadowing_to_plant", []) or []
         fs_path = db / "伏笔表.json"
-        fs = load_json(fs_path, {})
+        fs = load_json(fs_path, None)
+        if not isinstance(fs, dict):
+            raise RuntimeError("伏笔表.json 缺失或损坏")
         promises = fs.setdefault("promises", [])
+        if not isinstance(promises, list):
+            raise RuntimeError("伏笔表.json.promises 不是 list")
         existing = {p.get("id") for p in promises if isinstance(p, dict)}
         added = 0
         for f in ftp:
@@ -790,46 +679,59 @@ def _register_brief_foreshadowings(root, cluster_key):
             fid = f.get("id") or f.get("fs_id")
             if not fid or fid in existing:
                 continue
-            promises.append({
+            entry = {
                 "id": fid, "setup_cluster": cid, "tier": f.get("tier", 3),
                 "description": f.get("desc") or f.get("description") or "",
-                "due_by_cluster": None, "resolved": False,
+                "due_by_cluster": None, "status": "open", "owner": "writer",
                 "due_by_pending_resolution": True, "_source": "brief",
-            })
+            }
+            entry["payoff_scope"] = _dbsv.derive_payoff_scope(entry)
+            promises.append(entry)
             existing.add(fid)
             added += 1
         if added:
             save_json(fs_path, fs)
-            logger.info(f"[brief-foreshadow] {cid} 注册 {added} 条 brief 规划伏笔 → 伏笔表（writer 漏报兜底）")
+            logger.info(f"[brief-foreshadow] {cid} 注册 {added} 条 brief 规划伏笔 → 伏笔表")
     except Exception as e:
-        logger.info(f"[brief-foreshadow] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+        raise RuntimeError(f"brief 规划伏笔注册失败: {type(e).__name__}: {str(e)[:120]}") from e
 
 
 def _apply_foreshadower_payoffs(root, cluster_key):
-    """🔴 2026-06-28：foreshadower JudgeReport 的 payoff 检测桥接到伏笔表 resolution。
+    """🔴 2026-06-28：foreshadower JudgeReport 的 payoff 检测桥接到伏笔表回收落账。
 
     根因：apply 只处理 writer changes.foreshadowing_paid（模型常漏报·cluster_006 实测 paid=0），
-    foreshadower 从正文检测到的 payoff（FS_012 paid_terminal）流不进伏笔表 → 伏笔恒不 resolved、
+    foreshadower 从正文检测到的 payoff（FS_012 paid_terminal）流不进伏笔表 → 伏笔恒不回收、
     foreshadow_rhythm 失衡。foreshadower 是正文 payoff 的权威检测器（比 writer 自报可靠）。
-    桥接：读 cluster_<key>_foreshadower.json 的 payoff_scores —— verdict=paid_terminal+score>0 →
-    resolved=True；paid_progressive → 记 payoff_progress（不 resolved）。幂等：已 resolved 不后移。
-    报告缺失（foreshadower 未跑）→ 静默跳过（apply 前调用是常态·foreshadower 跑完需再调本桥）。
+    桥接（2026-07-06 P1 三态生命周期）：读 cluster_<key>_foreshadower.json 的 payoff_scores ——
+    verdict=paid_terminal+score>0 → status="consumed"（记 consumed_at_ch/_consumed_by）；
+    paid_progressive → 记 payoff_progress（status 不变）。幂等：已 consumed 不后移。
+    回收动作指向非 open 条目（suspended）→ logger 警示（可能是状态漂移·advisory·照常落账，
+    scanner 侧对偶检查见 foreshadowing_handoff_scanner FORESHADOWING_PAYOFF_TARGET_NOT_OPEN）。
+    本桥消费 cluster-save-state required foreshadower 报告；缺报告必须硬失败。
     """
     try:
         db = root / "_数据库"
-        import cluster_lookup as _cl
-        cid = _cl.normalize_cluster_id(cluster_key) or str(cluster_key)
+        cid = _require_cluster_id(cluster_key)
         rpt = db / ".judge_reports" / f"{cid}_foreshadower.json"
         if not rpt.is_file():
-            return
-        scores = (load_json(rpt, {}).get("specific_findings") or {}).get("payoff_scores", []) or []
+            raise RuntimeError(f"{rpt.name} 不存在")
+        report = load_json(rpt, None)
+        if not isinstance(report, dict):
+            raise RuntimeError(f"{rpt.name} 缺失或损坏")
+        scores = (report.get("specific_findings") or {}).get("payoff_scores", []) or []
+        if not isinstance(scores, list):
+            raise RuntimeError("foreshadower payoff_scores 不是 list")
         if not scores:
             return
         fs_path = db / "伏笔表.json"
-        fs = load_json(fs_path, {})
+        fs = load_json(fs_path, None)
+        if not isinstance(fs, dict):
+            raise RuntimeError("伏笔表.json 缺失或损坏")
         by_id = {p.get("id"): p for p in fs.get("promises", []) if isinstance(p, dict)}
-        chapters = _get_cluster_chapter_range(root, cluster_key) or []
-        last_ch = max(chapters) if chapters else None
+        chapters = _get_cluster_chapter_range(root, cluster_key)
+        if not chapters:
+            raise RuntimeError(f"{cid} 未找到 chapter_range")
+        last_ch = max(chapters)
         changed = 0
         for it in scores:
             if not isinstance(it, dict):
@@ -843,10 +745,14 @@ def _apply_foreshadower_payoffs(root, cluster_key):
                 continue
             verdict = str(it.get("verdict", ""))
             if it.get("terminal") is True or verdict == "paid_terminal":
-                if not p.get("resolved"):
-                    p["resolved"] = True
-                    p["resolved_at_ch"] = last_ch
-                    p["_resolved_by"] = "foreshadower"
+                if p.get("status") != "consumed":
+                    if p.get("status") == "suspended":
+                        logger.warning(
+                            f"[foreshadower-payoff] {p.get('id')} 处于 suspended 却被 terminal 回收"
+                            "（回收动作指向非 open 条目·可能是状态漂移·advisory·照常落账）")
+                    p["status"] = "consumed"
+                    p["consumed_at_ch"] = last_ch
+                    p["_consumed_by"] = "foreshadower"
                     changed += 1
             elif "progressive" in verdict or it.get("terminal") is False:
                 prog = p.setdefault("payoff_progress", [])
@@ -856,9 +762,9 @@ def _apply_foreshadower_payoffs(root, cluster_key):
         if changed:
             save_json(fs_path, fs)
             logger.info(f"[foreshadower-payoff] {cid} 桥接 {changed} 条 payoff → 伏笔表"
-                        "（terminal→resolved / progressive→progress）")
+                        "（terminal→consumed / progressive→progress）")
     except Exception as e:
-        logger.info(f"[foreshadower-payoff] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
+        raise RuntimeError(f"foreshadower payoff 回库失败: {type(e).__name__}: {str(e)[:120]}") from e
 
 
 # 🔴 2026-06-29 场景级Appraisal Beat(chain-of-emotion)
@@ -878,32 +784,29 @@ def cmd_apply_appraisal_beats(root, cluster_key):
     故去重键在 cluster_id+scene_idx 之外补 focal_character（防同 scene 多角色 beat 被误并）。re-apply 同
     summary 不重复 append、不写盘 churn。
 
-    默认安全·向后兼容：summary 无 appraisal_beats（旧书 / summarizer 未产）或 叙事节拍器.json 缺/坏 →
-    no-op 不报错。全 advisory STATE（非判决·不进 HARD_GATE_CODES）。永不阻断（STATE 回库失败仅记录·return 0）。
+    summary、appraisal_beats 字段、叙事节拍器.json 都是本链路 required 产物。缺失/损坏即 return 2，
+    防止 summarizer 漏产或状态库损坏被吞掉。空数组表示生产者明确判断本 cluster 无情绪拍，
+    幂等通过。
     """
     try:
         db = root / "_数据库"
-        cid = cluster_lookup.normalize_cluster_id(cluster_key) or str(cluster_key)
-        raw = str(cluster_key).replace("cluster_", "")
-        # summarizer 输出候选（cluster_<norm>_summary.json 主路径 + raw key 兜底·与 cluster_summary_builder 同源）
-        cand = [
-            db / ".wal" / f"{cid}_summary.json",
-            db / ".wal" / f"cluster_{raw}_summary.json",
-            db / ".wal" / f"{cluster_key}_summary.json",
-        ]
-        summary_path = next((p for p in cand if p.is_file()), None)
-        if not summary_path:
-            logger.info(f"[appraisal-beats] {cid} summary.json 不存在·no-op（summarizer 未产）")
-            return 0
+        cid = _require_cluster_id(cluster_key)
+        summary_path = db / ".wal" / f"{cid}_summary.json"
+        if not summary_path.is_file():
+            logger.info(f"[appraisal-beats] {cid} summary.json 不存在（summarizer required 产物缺失）")
+            return 2
         summ = load_json(summary_path, {})
         beats = summ.get("appraisal_beats") if isinstance(summ, dict) else None
-        if not isinstance(beats, list) or not beats:
-            logger.info(f"[appraisal-beats] {cid} 无 appraisal_beats·no-op（向后兼容）")
+        if not isinstance(beats, list):
+            logger.info(f"[appraisal-beats] {cid} summary 缺 appraisal_beats list（required 字段缺失）")
+            return 2
+        if not beats:
+            logger.info(f"[appraisal-beats] {cid} appraisal_beats=[]（生产者明确无情绪拍·幂等通过）")
             return 0
 
-        # 🔴 2026-06-29 NN情绪VAD集成 — vad_bin 的 V/A 真模型重算（advisory·env RUOYU_NN_VAD 门控·
-        # 默认 off·零行为变化）。批量一次性推理（摊薄模型加载开销）；D 维保留 summarizer 判断；
-        # 任何失败/未启用 → nn_vad_by_id 空 → 保留 summarizer 手判 vad_bin（兜底·不崩）。
+        # 🔴 2026-06-29 NN情绪VAD集成 — vad_bin 的 V/A 真模型重算（env RUOYU_NN_VAD 门控）。
+        # 未启用时不参与；启用后即为 required enrichment，模型/feature store 失败直接 return 2。
+        # D 维保留 summarizer 判断。
         nn_vad_by_id, _vad_bridge = {}, None
         import os as _os_vad
         if _os_vad.environ.get("RUOYU_NN_VAD") == "1":
@@ -924,16 +827,16 @@ def cmd_apply_appraisal_beats(root, cluster_key):
                         nn_vad_by_id[id(b)] = pr
                 if nn_vad_by_id:
                     logger.info(f"[appraisal-beats] {cid} NN VAD 重算 {len(nn_vad_by_id)}/{len(_bd)} 拍 "
-                                "vad_bin.V/A（D 保留 summarizer·advisory）")
-            except Exception as e:  # noqa: BLE001 NN 失败 → 退 summarizer（不阻断）
-                logger.info(f"[appraisal-beats] NN VAD 跳过(不阻断): {type(e).__name__}: {str(e)[:80]}")
-                nn_vad_by_id = {}
+                                "vad_bin.V/A（D 保留 summarizer）")
+            except Exception as e:  # noqa: BLE001
+                logger.info(f"[appraisal-beats] NN VAD FATAL: {type(e).__name__}: {str(e)[:80]}")
+                return 2
 
         pacer_path = db / "叙事节拍器.json"
         pacer = load_json(pacer_path, None)
         if not isinstance(pacer, dict):
-            logger.info(f"[appraisal-beats] {cid} 叙事节拍器.json 缺/坏·跳过（不新建·不阻断）")
-            return 0
+            logger.info(f"[appraisal-beats] {cid} 叙事节拍器.json 缺/坏（required 状态库不可用）")
+            return 2
         existing = pacer.get("appraisal_beats")
         if not isinstance(existing, list):
             existing = pacer["appraisal_beats"] = []
@@ -946,7 +849,7 @@ def cmd_apply_appraisal_beats(root, cluster_key):
             # 只填 active cluster：显式标了别的 cluster → 跳过（fluid·不回填非本 cluster）
             b_cid_raw = b.get("cluster_id")
             if b_cid_raw:
-                b_cid = cluster_lookup.normalize_cluster_id(b_cid_raw) or str(b_cid_raw)
+                b_cid = _require_cluster_id(b_cid_raw)
                 if b_cid != cid:
                     continue
             rec = dict(b)
@@ -975,13 +878,13 @@ def cmd_apply_appraisal_beats(root, cluster_key):
         if added:
             save_json(pacer_path, pacer)
             logger.info(f"[appraisal-beats] {cid} 回填 {added} 拍 → 叙事节拍器.appraisal_beats"
-                        "（chain-of-emotion·结构化 STATE·advisory）")
+                        "（chain-of-emotion·结构化 STATE）")
         else:
             logger.info(f"[appraisal-beats] {cid} 无新增（全已存在或非本 cluster·幂等）")
         return 0
     except Exception as e:
-        logger.info(f"[appraisal-beats] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
-        return 0
+        logger.info(f"[appraisal-beats] FATAL: {type(e).__name__}: {str(e)[:120]}")
+        return 2
 
 
 # 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)
@@ -1000,26 +903,35 @@ def cmd_apply_dramatic_questions(root, cluster_key):
     范围·account 归到本 cid。
     幂等·去重：raised 按 qid 去重（qid 全局唯一）·answered 按 qid 去重（标对应 qid 闭合）。re-apply 同
     JudgeReport 不重复 append、不写盘 churn。
-    默认安全·向后兼容：JudgeReport 无 dramatic_questions（旧书/轻量/foreshadower 未扩产）/ 缺报告 →
-    no-op 不报错·return 0。账本缺/坏 → 从空骨架重建（辅助态文件·我方拥有·world_seed_init 已播种）。
-    全 advisory STATE（账本不进 HARD_GATE_CODES·闭合率防只开坑由 B 的 scanner 查）·永不阻断。
+    foreshadower JudgeReport 与 dramatic_questions 字段是 required 产物。缺报告/缺字段/格式错即 return 2，
+    防止 foreshadower 漏产被吞掉。raised/answered 均空表示生产者明确判断本 cluster 无戏剧问题变更，
+    幂等通过。账本缺/坏仍从空骨架重建，因为这是本脚本拥有的辅助态文件。
     """
     try:
         db = root / "_数据库"
-        cid = cluster_lookup.normalize_cluster_id(cluster_key) or str(cluster_key)
+        cid = _require_cluster_id(cluster_key)
         rpt = db / ".judge_reports" / f"{cid}_foreshadower.json"
         if not rpt.is_file():
-            logger.info(f"[dramatic-questions] {cid} foreshadower JudgeReport 不存在·no-op")
-            return 0
+            logger.info(f"[dramatic-questions] {cid} foreshadower JudgeReport 不存在（required 产物缺失）")
+            return 2
         sf = (load_json(rpt, {}) or {}).get("specific_findings") or {}
         dq = sf.get("dramatic_questions")
         if not isinstance(dq, dict):
-            logger.info(f"[dramatic-questions] {cid} 无 dramatic_questions·no-op（向后兼容）")
-            return 0
+            logger.info(f"[dramatic-questions] {cid} 缺 dramatic_questions dict（required 字段缺失）")
+            return 2
         raised = dq.get("raised") if isinstance(dq.get("raised"), list) else []
         answered = dq.get("answered") if isinstance(dq.get("answered"), list) else []
         if not raised and not answered:
-            logger.info(f"[dramatic-questions] {cid} raised/answered 均空·no-op")
+            ledger_path = db / "戏剧问题账本.json"
+            ledger = load_json(ledger_path, None)
+            if not isinstance(ledger, dict):
+                ledger = {"schema_version": 1, "clusters": {}}
+            clusters = ledger.get("clusters")
+            if not isinstance(clusters, dict):
+                clusters = ledger["clusters"] = {}
+            clusters.setdefault(cid, {"raised": [], "answered": []})
+            save_json(ledger_path, ledger)
+            logger.info(f"[dramatic-questions] {cid} raised/answered 均空（生产者明确无戏剧问题变更·幂等通过）")
             return 0
 
         ledger_path = db / "戏剧问题账本.json"
@@ -1084,22 +996,21 @@ def cmd_apply_dramatic_questions(root, cluster_key):
             ledger.setdefault("schema_version", 1)
             save_json(ledger_path, ledger)
             logger.info(f"[dramatic-questions] {cid} 回库 raised+{added_r} / answered+{added_a}"
-                        " → 戏剧问题账本（PITQ/MDQ·读者粘性·advisory STATE）")
+                        " → 戏剧问题账本（PITQ/MDQ·读者粘性 STATE）")
         else:
             logger.info(f"[dramatic-questions] {cid} 无新增（全已存在·幂等）")
         return 0
     except Exception as e:
-        logger.info(f"[dramatic-questions] 跳过(不阻断): {type(e).__name__}: {str(e)[:120]}")
-        return 0
+        logger.info(f"[dramatic-questions] FATAL: {type(e).__name__}: {str(e)[:120]}")
+        return 2
 
 
 def cmd_apply_cluster_changes(root, cluster_key):
     """v24 cluster 级 apply-changes：展开 cluster chapter_range，for each ch 调 apply_changes。
 
     2026-05-29 流程贯通（断点 5）：apply 后跑 writer_truth_check（撒谎检测）并入 summary。
-    2026-05-29 复审修复 [M3]：单章 parse/apply 失败不再 sys.exit 中断整 cluster——
-    cmd_parse/apply_changes 改返回状态码，本函数逐章累计 per_chapter_status；truth-check + 写盘
-    放 finally 保证任何单章异常后仍落地 summary。返回 0 成功 / 2 整 cluster 失败（无章）。
+    2026-07-05 收敛：本命令是 required 状态落库步骤，任一章 parse/apply 失败、truth-check
+    撒谎或异常都必须阻断；summary 仍落盘用于诊断和断点恢复。
     """
     chapters = _get_cluster_chapter_range(root, cluster_key)
     if not chapters:
@@ -1110,52 +1021,62 @@ def cmd_apply_cluster_changes(root, cluster_key):
 
     per_chapter_status = []
     failed_chapters = []
+    fatal_error = None
     try:
         logger.info(f"[cluster {cluster_key}] 展开 {len(chapters)} 章 → 逐章 apply-changes")
         for ch in chapters:
             logger.info(f"  → ch{ch}")
-            # 单章失败（含未捕获异常）记录后继续下一章，不中断整 cluster
+            # 单章失败（含未捕获异常）立即停止；禁止半截 cluster 继续做状态投影。
             try:
                 prc = cmd_parse(root, ch)
                 arc = apply_changes(root, ch) if prc == 0 else None
                 status = {"ch": ch, "parse_rc": prc, "apply_rc": arc}
                 if prc != 0 or (arc is not None and arc != 0):
                     failed_chapters.append(ch)
+                    per_chapter_status.append(status)
+                    logger.info(f"  🔴 ch{ch} parse/apply 失败（立即阻断）: {status}")
+                    break
             except Exception as e:
                 status = {"ch": ch, "error": f"{type(e).__name__}: {str(e)[:160]}"}
                 failed_chapters.append(ch)
-                logger.info(f"  ⚠️ ch{ch} apply 异常（已记录·不中断）: {status['error']}")
+                per_chapter_status.append(status)
+                logger.info(f"  🔴 ch{ch} apply 异常（立即阻断）: {status['error']}")
+                break
             per_chapter_status.append(status)
         ok_count = len(chapters) - len(failed_chapters)
         logger.info(f"[OK] cluster {cluster_key} apply-changes 完成 {ok_count}/{len(chapters)} 章"
               + (f"（{len(failed_chapters)} 章失败: {failed_chapters}）" if failed_chapters else ""))
 
-        # 🔴 2026-06-27 P0：cluster 级回写 进度.json 元数据（current_cluster/book_title/completed）
-        _writeback_cluster_progress(root, cluster_key, chapters)
-        # 🔴 2026-06-28：标记 parent_me status=completed + 补 ME_to_advance（内容状态一致性）
-        _mark_cluster_me_completed(root, cluster_key)
-        # 🔴 2026-06-28 审计清理B类：原 _persist_cluster_locked_facts（读 writer factual 写
-        #   事件簇.locked_facts）已删除——locked_facts 由 apply_archive.py 从 archive 写（Claude 权威）。
-        # 🔴 2026-06-28：brief 规划伏笔注册伏笔表（writer 漏报兜底·排桥接前使可立即 resolve）
-        _register_brief_foreshadowings(root, cluster_key)
-        # 🔴 2026-06-28：foreshadower payoff 桥接伏笔表 resolution（foreshadower 跑完后 re-apply 生效）
-        _apply_foreshadower_payoffs(root, cluster_key)
+        if not failed_chapters:
+            # 🔴 2026-06-27 P0：cluster 级回写 进度.json 元数据（current_cluster/book_title/completed）
+            _writeback_cluster_progress(root, cluster_key, chapters)
+            # 🔴 2026-06-28：标记 parent_me status=completed + 补 ME_to_advance（内容状态一致性）
+            _mark_cluster_me_completed(root, cluster_key)
+            # 🔴 2026-06-28 审计清理B类：原 _persist_cluster_locked_facts（读 writer factual 写
+            #   事件簇.locked_facts）已删除——locked_facts 由 apply_archive.py 从 archive 写（Claude 权威）。
+            # 🔴 2026-06-28：brief 规划伏笔注册伏笔表（排桥接前使可立即 resolve）
+            _register_brief_foreshadowings(root, cluster_key)
+            # 🔴 2026-06-28：foreshadower payoff 桥接伏笔表 resolution（foreshadower 跑完后 re-apply 生效）
+            _apply_foreshadower_payoffs(root, cluster_key)
 
-        # writer 撒谎检测（apply 落地后跑 · 失败不中断 · 结果并入 summary 写盘）
-        # 🔴 2026-06-27 C11：cluster 级一次检测（opening 验首章 / ending 验末章 / anchors 验全拼接）
-        truth = _run_writer_truth_check(root, chapters)
-        if truth["lies_total"] > 0:
-            logger.info(f"[truth-check] 🔴 检测到 {truth['lies_total']} 条撒谎"
-                  f"（writer 声明与正文不符 · cluster 级）")
-        else:
-            logger.info(f"[truth-check] ✅ cluster {len(chapters)} 章无撒谎"
-                  + (f" · 检测异常（已记录·{truth['errors']}）" if truth["errors"] else ""))
-        # 🔴 2026-06-27 SYS-3/C10（shadow）：声明-vs-正文 advisory 列主代理待裁决（不延迟写账本）
-        _nt = truth.get("foreshadowing_no_trace", 0)
-        _uc = truth.get("factual_uncorroborated", 0)
-        if _nt or _uc:
-            logger.info(f"[声明-vs-正文 · shadow] 🟡 待裁决：申报兑现但正文 0 痕迹 {_nt} 条 / "
-                        f"factual 弱信号未印证 {_uc} 条（advisory·账本未延迟写·详见 故事块摘要.factual_corroboration）")
+            # writer 撒谎检测（apply 落地后跑；撒谎/异常即阻断）
+            # 🔴 2026-06-27 C11：cluster 级一次检测（opening 验首章 / ending 验末章 / anchors 验全拼接）
+            truth = _run_writer_truth_check(root, chapters)
+            if truth["lies_total"] > 0:
+                logger.info(f"[truth-check] 🔴 检测到 {truth['lies_total']} 条撒谎"
+                      f"（writer 声明与正文不符 · cluster 级）")
+            else:
+                logger.info(f"[truth-check] ✅ cluster {len(chapters)} 章无撒谎"
+                      + (f" · 检测异常（已记录·{truth['errors']}）" if truth["errors"] else ""))
+            # 🔴 2026-06-27 SYS-3/C10：声明-vs-正文弱信号列主代理待裁决（不写权威账本）
+            _nt = truth.get("foreshadowing_no_trace", 0)
+            _uc = truth.get("factual_uncorroborated", 0)
+            if _nt or _uc:
+                logger.info(f"[声明-vs-正文] 🟡 诊断信号：申报兑现但正文 0 痕迹 {_nt} 条 / "
+                            f"factual 弱信号未印证 {_uc} 条（账本未写入·详见 故事块摘要.factual_corroboration）")
+    except Exception as e:
+        fatal_error = f"{type(e).__name__}: {str(e)[:160]}"
+        logger.info(f"[apply-cluster] FATAL: 状态投影失败: {fatal_error}")
     finally:
         # 2026-05-29 复审修复 [M3]：truth-check + 写盘放 finally——任何异常后都落地 summary
         summary = {
@@ -1165,44 +1086,94 @@ def cmd_apply_cluster_changes(root, cluster_key):
             "per_chapter_status": per_chapter_status,
             "failed_chapters": failed_chapters,
             "writer_truth_check": locals().get("truth"),
+            "fatal_error": fatal_error,
         }
         out = root / "_数据库" / ".wal" / f"{cluster_key}_apply_cluster.json"
         save_json(out, summary)
         logger.info(f"[apply-cluster] summary → {out.name}")
-    # 全部章失败 = 严重（exit 2），否则成功（单章失败已记录·不影响 cluster 流水线推进）
-    return 2 if (failed_chapters and len(failed_chapters) == len(chapters)) else 0
+    if failed_chapters:
+        logger.info(f"[apply-cluster] FATAL: {len(failed_chapters)} 章 parse/apply 失败: {failed_chapters}")
+        return 2
+    if fatal_error:
+        return 2
+    truth_result = locals().get("truth")
+    if not isinstance(truth_result, dict):
+        logger.info("[apply-cluster] FATAL: writer_truth_check 未执行")
+        return 2
+    if truth_result.get("errors"):
+        logger.info(f"[apply-cluster] FATAL: writer_truth_check 异常: {truth_result['errors']}")
+        return 2
+    if truth_result.get("lies_total", 0) > 0:
+        logger.info(f"[apply-cluster] FATAL: writer_truth_check 命中 {truth_result['lies_total']} 条撒谎")
+        return 2
+    return 0
 
 
 def cmd_git_commit_cluster(root, cluster_key):
     """v24 cluster 级 git commit：1 个 cluster 1 个 commit"""
+    norm_cid = _require_cluster_id(cluster_key)
     chapters = _get_cluster_chapter_range(root, cluster_key)
     if not chapters:
         # 🔴 2026-06-26 fail-fast 走 stderr+flush（同 gen_writer/gen_fixer 修法）
         sys.stderr.write(f"[FATAL save_state] cluster {cluster_key} 未找到 chapter_range\n")
         sys.stderr.flush()
         return 2
-    # 复用 cmd_git_commit 但 commit msg 改 cluster 级
-    # v27 修复：cluster 级 git 也加 timeout 防 session 阻塞
+    marker = _wal_dir(root) / f"{norm_cid}_git_commit.json"
     import subprocess as _sp
+    _cnum = f"{cluster_lookup.cluster_num(norm_cid):03d}"
+    msg = f"feat(cluster-{_cnum}): {len(chapters)} 章 (ch{chapters[0]}-{chapters[-1]})"
+    marker_payload = _git_commit_marker_payload(norm_cid, chapters, msg)
     try:
         _sp.run(["git", "-C", str(root), "add", "."], check=True, capture_output=True, timeout=30)
-        # 2026-05-30 北极星复审：cluster_key 含 cluster_ 前缀 → 原 feat(cluster-{cluster_key}) 产
-        # feat(cluster-cluster_002) 双前缀。抽纯数字对齐规范 feat(cluster-NNN)。
-        _cnum = "".join(ch for ch in str(cluster_key) if ch.isdigit()) or str(cluster_key)
-        msg = f"feat(cluster-{_cnum}): {len(chapters)} 章 (ch{chapters[0]}-{chapters[-1]})"
         r = _sp.run(["git", "-C", str(root), "commit", "-m", msg],
                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         if r.returncode == 0:
-            sha = r.stdout.split()[1].strip("]")[:7] if r.stdout else "?"
+            sha_r = _sp.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            check=True, timeout=10)
+            sha = (sha_r.stdout or "").strip()
+            save_json(marker, marker_payload)
+            _sp.run(["git", "-C", str(root), "add", str(marker)], check=True, capture_output=True, timeout=30)
+            amend = _sp.run(["git", "-C", str(root), "commit", "--amend", "--no-edit"],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+            if amend.returncode != 0:
+                raise RuntimeError((amend.stderr or amend.stdout or "")[:300])
+            sha2 = _sp.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           check=True, timeout=10).stdout.strip()
             logger.info(f"[GIT] cluster_{cluster_key} 快照 {sha}: {msg}")
+            logger.info(f"[GIT] marker → {marker.name} · amended HEAD {sha2}")
         else:
-            logger.info(f"[GIT] {r.stderr[:200] or r.stdout[:200]}")
+            combined = (r.stderr or r.stdout or "")
+            if "nothing to commit" in combined.lower() or "working tree clean" in combined.lower():
+                head_msg = _sp.run(["git", "-C", str(root), "log", "-1", "--pretty=%s"],
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                   check=True, timeout=10).stdout.strip()
+                if msg not in head_msg and f"cluster-{_cnum}" not in head_msg:
+                    raise RuntimeError(f"无可提交内容，但 HEAD 不是本 cluster 提交: {head_msg}")
+                sha = _sp.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              check=True, timeout=10).stdout.strip()
+                existing_marker = load_json(marker, None)
+                if existing_marker != marker_payload:
+                    save_json(marker, marker_payload)
+                    _sp.run(["git", "-C", str(root), "add", str(marker)], check=True, capture_output=True, timeout=30)
+                    amend = _sp.run(["git", "-C", str(root), "commit", "--amend", "--no-edit"],
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                    if amend.returncode != 0:
+                        raise RuntimeError((amend.stderr or amend.stdout or "")[:300])
+                    sha = _sp.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  check=True, timeout=10).stdout.strip()
+                logger.info(f"[GIT] {norm_cid} 已提交且工作区干净，幂等通过: {sha}")
+            else:
+                raise RuntimeError(combined[:300])
     except _sp.TimeoutExpired:
-        logger.info(f"[GIT] cluster_{cluster_key} commit 超时 (>30s)·跳过本次快照·不阻断流水线")
+        logger.info(f"[GIT] cluster_{cluster_key} commit 超时 (>30s)")
+        return 2
     except Exception as e:
         logger.info(f"[GIT] {e}")
-    # 2026-05-29 复审修复 [H3/M20]：git 失败不中断流水线（项目规则「失败不中断，仅记录」），
-    # 故成功/记录后均返回 0（唯一 fatal 是缺 chapter_range，已 return 2）。
+        return 2
     return 0
 
 
@@ -1219,95 +1190,87 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
       1. learning_loop --merge-reflection .wal/<cluster_key>_reflection.json
       2. learning_loop --ingest .audit/cluster_<key>_audit.json（见 audit_hub.py:1399）
       3. learning_loop --scan-recurring
-    退出码语义（SC-2）：返回 0 成功；reflection/audit 缺失只是软跳过（不算崩溃）。
+    退出码语义：返回 0 成功；reflection/audit/learning_loop/data_flywheel 是主链必需步骤，
+    缺失或失败返回 2。
     """
     db = root / "_数据库"
-    # cluster_key 可能带或不带 cluster_ 前缀，归一化用于文件名匹配
-    norm_cid = cluster_lookup.normalize_cluster_id(cluster_key) or cluster_key
-    raw = cluster_key.replace("cluster_", "") if str(cluster_key).startswith("cluster_") else cluster_key
+    norm_cid = _require_cluster_id(cluster_key)
 
     learning_loop = scripts_dir() / "learning_loop.py"  # frozen-aware（狩猎修·exe下学习闭环静默不跑）
     if not learning_loop.is_file():
-        logger.info(f"[auto-post-reflect-cluster] learning_loop.py 不存在·跳过")
-        return 0
+        logger.info(f"[auto-post-reflect-cluster] learning_loop.py 不存在")
+        return 2
 
-    # cluster reflection 文件候选（plan_tracker novel-reflector 用 cstr_variants 命名）
-    refl_candidates = [
-        db / ".wal" / f"{norm_cid}_reflection.json",
-        db / ".wal" / f"cluster_{raw}_reflection.json",
-        db / ".wal" / f"{cluster_key}_reflection.json",
-        db / ".wal" / f"ch_cluster_{raw}_reflection.json",
-    ]
-    refl_path = next((p for p in refl_candidates if p.is_file()), None)
-
-    # cluster audit 文件候选（audit_hub.py:1399 写 cluster_<key>_audit.json）
-    audit_candidates = [
-        db / ".audit" / f"cluster_{raw}_audit.json",
-        db / ".audit" / f"{norm_cid}_audit.json",
-        db / ".audit" / f"{cluster_key}_audit.json",
-    ]
-    audit_path = next((p for p in audit_candidates if p.is_file()), None)
+    refl_path = db / ".wal" / f"{norm_cid}_reflection.json"
+    audit_path = db / ".audit" / f"{norm_cid}_audit.json"
 
     project_str = str(root)
     steps_ran = 0
-    steps_skipped = 0
+    failures: list[str] = []
 
     # Step 1: merge cluster reflection → 写作经验.success/failure_patterns
-    if refl_path:
-        r = subprocess.run(
-            [child_python(), str(learning_loop), project_str, "--merge-reflection",
-             refl_path.relative_to(root).as_posix()],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
-        )
-        if r.returncode == 0:
+    if refl_path.is_file():
+        try:
+            _run_required(
+                [child_python(), str(learning_loop), project_str, "--merge-reflection",
+                 refl_path.relative_to(root).as_posix()],
+                timeout=180,
+            )
             logger.info(f"[auto-post-reflect-cluster] step 1/3 merge-reflection OK ({refl_path.name})")
             steps_ran += 1
-        else:
-            logger.info(f"[auto-post-reflect-cluster] step 1/3 merge-reflection FAIL: {(r.stderr or '')[:200]}")
-            steps_skipped += 1
+        except Exception as e:
+            failures.append(f"merge-reflection: {e}")
+            logger.info(f"[auto-post-reflect-cluster] step 1/3 merge-reflection FAIL: {e}")
     else:
-        logger.info(f"[auto-post-reflect-cluster] step 1/3 跳过：cluster reflection 报告不存在"
+        failures.append("cluster reflection 报告不存在")
+        logger.info(f"[auto-post-reflect-cluster] step 1/3 缺失：cluster reflection 报告不存在"
               f"（找过 {norm_cid}_reflection.json 等）")
-        steps_skipped += 1
 
     # Step 2: ingest cluster audit → _recurrence_tracker / _waiver_tracker
-    if audit_path:
-        r = subprocess.run(
-            [child_python(), str(learning_loop), project_str, "--ingest",
-             audit_path.relative_to(root).as_posix()],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
-        )
-        if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
-            logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest OK ({audit_path.name}, rc={r.returncode})")
-            steps_ran += 1
-        else:
-            logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest FAIL: {(r.stderr or '')[:200]}")
-            steps_skipped += 1
+    if audit_path.is_file():
+        try:
+            r = subprocess.run(
+                [child_python(), str(learning_loop), project_str, "--ingest",
+                 audit_path.relative_to(root).as_posix()],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
+            )
+            if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
+                logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest OK ({audit_path.name}, rc={r.returncode})")
+                steps_ran += 1
+            else:
+                raise RuntimeError((r.stderr or r.stdout or "")[:300])
+        except Exception as e:
+            failures.append(f"ingest: {e}")
+            logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest FAIL: {e}")
     else:
-        logger.info(f"[auto-post-reflect-cluster] step 2/3 跳过：cluster audit 报告不存在"
-              f"（找过 cluster_{raw}_audit.json 等）")
-        steps_skipped += 1
+        failures.append("cluster audit 报告不存在")
+        logger.info(f"[auto-post-reflect-cluster] step 2/3 缺失：cluster audit 报告不存在"
+              f"（找过 {norm_cid}_audit.json 等）")
 
     # Step 3: scan-recurring → 跨 cluster 复发追踪 + tool_calibration_suggestions
-    r = subprocess.run(
-        [child_python(), str(learning_loop), project_str, "--scan-recurring"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,  # 2026-05-30 北极星：补 timeout 纪律
-    )
-    if r.returncode in (0, 1):
-        logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring OK (rc={r.returncode})")
-        steps_ran += 1
-    else:
-        logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring FAIL: {(r.stderr or '')[:200]}")
-        steps_skipped += 1
+    try:
+        r = subprocess.run(
+            [child_python(), str(learning_loop), project_str, "--scan-recurring"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
+        )
+        if r.returncode in (0, 1):
+            logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring OK (rc={r.returncode})")
+            steps_ran += 1
+        else:
+            raise RuntimeError((r.stderr or r.stdout or "")[:300])
+    except Exception as e:
+        logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring FAIL: {e}")
+        failures.append(f"scan-recurring: {e}")
 
     # Step 4: DataFlywheel → cluster 训练样本池（paragraph/fix_pair/weak/strong/judge/checker/fixer/repair/reading/audit-meta labels）。
-    # 创作入口默认打开 RUOYU_DATA_FLYWHEEL；函数 import 调用仍保持门控，测试/单独 import 不污染。
+    # 创作入口默认打开 RUOYU_DATA_FLYWHEEL；主链里关闭即失败，避免 required 学习链变空跑。
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "flywheel"))
         import data_collector as _data_collector
         fly = _data_collector.ClusterDataCollector(project_str, norm_cid).collect()
         if fly.get("skipped"):
-            logger.info(f"[data-flywheel] {norm_cid} 跳过：{fly.get('reason')}")
+            failures.append(f"data-flywheel skipped: {fly.get('reason')}")
+            logger.info(f"[data-flywheel] {norm_cid} 缺失：{fly.get('reason')}")
         else:
             logger.info(f"[data-flywheel] {norm_cid} 训练样本收集 total={fly.get('total', 0)} "
                         f"paragraphs={fly.get('paragraphs', 0)} weak={fly.get('weak_labels', 0)} "
@@ -1319,11 +1282,22 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
                         f"reading_reflections={fly.get('reading_reflections', 0)} "
                         f"audit_metadata={fly.get('audit_metadata', 0)}")
             steps_ran += 1
-    except Exception as e:  # noqa: BLE001 数据飞轮故障不吞：记录，但不阻断状态保存
-        logger.info(f"[data-flywheel] {norm_cid} 收集失败(不阻断): {type(e).__name__}: {str(e)[:160]}")
-        steps_skipped += 1
+    except Exception as e:  # noqa: BLE001
+        logger.info(f"[data-flywheel] {norm_cid} 收集失败: {type(e).__name__}: {str(e)[:160]}")
+        failures.append(f"data-flywheel: {type(e).__name__}: {str(e)[:160]}")
 
-    logger.info(f"[auto-post-reflect-cluster] {cluster_key} 完成 {steps_ran}/4 步（跳过 {steps_skipped}）")
+    marker = _wal_dir(root) / f"{norm_cid}_post_reflect.json"
+    save_json(marker, {
+        "cluster_id": norm_cid,
+        "steps_ran": steps_ran,
+        "required_steps": 4,
+        "failures": failures,
+        "completed": not failures and steps_ran == 4,
+    })
+    if failures or steps_ran != 4:
+        logger.info(f"[auto-post-reflect-cluster] FATAL {cluster_key}: 完成 {steps_ran}/4，失败 {failures}")
+        return 2
+    logger.info(f"[auto-post-reflect-cluster] {cluster_key} 完成 {steps_ran}/4 步 → {marker.name}")
     return 0
 
 
@@ -1335,11 +1309,11 @@ def main():
     # 🔴 v26: chapter-level CLI 已彻底废弃移除（--wal-start/-step/-end/--parse/--apply-changes/
     # --git-commit/--report/--auto-post-reflect 全部下线）。
     # 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：cmd_wal_* / cmd_report / cmd_report_cluster
-    # 函数本体已删除（无调用方）。仍保留的章级函数（cmd_parse / apply_changes / cmd_git_commit /
-    # cmd_auto_post_reflect）是被 cluster 函数内部按章迭代复用的底层组件，不是公共 CLI。
+    # 函数本体已删除（无调用方）。仍保留的章级底层组件只有 cmd_parse / apply_changes，
+    # 由 cmd_apply_cluster_changes 内部按章迭代复用，不是公共 CLI。
     # 外部一律走 --apply-cluster-changes / --git-commit-cluster / --auto-post-reflect-cluster /
     # --build-cluster-summary / --ecas-checkpoint。
-    # 🔴 2026-06-30 创作流程 NN 默认接入（命令行入口·main only·测试 import 不触发·能力不足各桥自动回退）
+    # 🔴 2026-06-30 创作流程 NN 默认接入（命令行入口·main only·测试 import 不触发）
     import sys as _sys_nn
     import nn_runtime_defaults
     _nn_on = nn_runtime_defaults.enable_creative_nn_defaults()
@@ -1351,8 +1325,9 @@ def main():
         _reg = _model_registry.sync_runtime_models()
         if _reg.get("count"):
             print(f"[model-registry] 同步运行模型 { _reg['count'] } 个", file=_sys_nn.stderr)
-    except Exception as _e:  # noqa: BLE001 registry 失败不阻断 save_state，但必须留痕
-        print(f"[model-registry] 同步跳过: {type(_e).__name__}: {str(_e)[:120]}", file=_sys_nn.stderr)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[model-registry] FATAL: {type(_e).__name__}: {str(_e)[:120]}", file=_sys_nn.stderr)
+        sys.exit(2)
     ap = argparse.ArgumentParser(
         description="save_state.py · v26 cluster-only CLI"
     )
@@ -1372,12 +1347,12 @@ def main():
     # 🔴 2026-06-29 场景级Appraisal Beat(chain-of-emotion)
     ap.add_argument("--apply-appraisal-beats", type=str, metavar="CLUSTER_KEY",
                     help="🔴 2026-06-29: summarizer 产的 appraisal_beats 确定性回填 叙事节拍器.json"
-                         "（chain-of-emotion·只 active cluster·幂等·全 advisory STATE·未产则 no-op）")
+                         "（chain-of-emotion·只 active cluster·幂等·required STATE·未产则 exit2）")
     # 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)
     ap.add_argument("--apply-dramatic-questions", type=str, metavar="CLUSTER_KEY",
                     help="🔴 2026-06-29: foreshadower JudgeReport 的 dramatic_questions 确定性回库"
                          " 戏剧问题账本.json（PITQ/MDQ·读者粘性·只 active cluster·按 qid 幂等去重·"
-                         "全 advisory STATE·未产则 no-op）")
+                         "required STATE·未产则 exit2）")
     args = ap.parse_args()
 
     root = Path(args.project).resolve()

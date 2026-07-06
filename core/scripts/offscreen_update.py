@@ -25,6 +25,7 @@ from pathlib import Path
 # 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
+import state_cli_guard
 
 
 def load_json(p: Path, default=None):
@@ -37,6 +38,7 @@ def load_json(p: Path, default=None):
 
 
 def main():
+    state_cli_guard.require_internal("offscreen_update.py")
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("chapter", type=int)

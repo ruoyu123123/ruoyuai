@@ -5,9 +5,9 @@ plan_tracker.py — 多步命令的强制规划与执行追踪系统（Phase 1�
 设计目标
 --------
 让小说系统的多步命令（cluster-save-state / cluster-write / distill-style /
-check-quality / outline / reconcile）在 Agent 或命令执行时**无法跳步**：
+outline）在 Agent 或命令执行时**无法跳步**：
 
-🔴 v26: chapter mode (save-state / write-chapter) 已彻底废弃移除，仅留 cluster mode。
+🔴 v26+: 创作主链只接受 cluster mode；plan key 表示 cluster key / cluster id。
 
 - 命令开始前必须 create 一个 plan，拿到 plan_id；
 - 每完成一步必须 step <plan_id> --n N，脚本校验 expected_outputs；
@@ -31,7 +31,7 @@ plan_tracker 是 plan JSON 的【唯一合法写入者】。每次合法写盘�
 
 CLI 子命令
 ----------
-- create   --command <cmd> --project <name> [--chapter <n>] [--key <k>]
+- create   --command <cmd> --project <name> [--key <cluster-key-or-id>]
 - step     <plan_id> --n <step_num> [--output <file>] [--skip-output]
                      [--tokens N] [--duration-ms N]   # P2-8：subagent 成本追踪
 - end      <plan_id>
@@ -64,7 +64,8 @@ Python API
 plan_id 格式
 -----------
 {project}_{key}_{command}_{YYYYMMDDTHHMMSS}
-其中 key 优先取 chapter（chN），否则取 --key 参数，否则取 'main'。
+其中 cluster-write / cluster-save-state 必须传 cluster key 或 cluster id；
+数字 key 会规范为三位 cluster key（如 `1` / `cluster_001` → `001`）。
 """
 from __future__ import annotations
 
@@ -128,11 +129,9 @@ STATUS_ABORTED = "aborted"
 KNOWN_COMMANDS = (
     "distill-style",
     "distill-character",  # 🔴 2026-06-27 C13：角色蒸馏纳入 plan 强制规划层（6 步·PLAN_ID/STEP/attestation）
-    "check-quality",
     "outline",
-    "reconcile",
-    "cluster-write",  # v24 cluster 级写作流水线 7 步（v26 唯一推荐 · 替代废弃的 write-chapter/write-event-cluster）
-    "cluster-save-state",  # v24 cluster 级 save-state（v26 唯一推荐 · 替代废弃的 save-state）
+    "cluster-write",  # cluster 级写作流水线 7 步
+    "cluster-save-state",  # cluster 级 save-state
 )
 
 
@@ -337,8 +336,8 @@ def resolve_project_root(project: str) -> Path | None:
         return None
     # 🔴 真机 e2e 抓修(2026-06-15)：project 本身是有效路径(完整/相对·非仅书名)→ 直接用。
     # 原仅查 PROJECTS_DIR/书名 → orchestrator CLI --project 传完整路径(workspace/novels/X)时
-    # 返回 None → _verify_outputs project_root=None → expected_outputs 相对 cwd 误判缺失
-    # (run_command L646 有 fallback 故 build_manifest 跑对·_verify_outputs 无 fallback 故校验炸·两边不一致)。
+    # 返回 None → _verify_outputs project_root=None → expected_outputs 相对 cwd 误判缺失；
+    # run_command 与 _verify_outputs 的项目根解析必须一致。
     direct = Path(project)
     if direct.exists():
         return direct
@@ -383,29 +382,47 @@ def load_template(command: str) -> dict:
         raise RuntimeError(f"[plan_tracker] 模板 JSON 损坏：{p} — {exc}") from exc
 
 
-def _substitute(text: str, project: str, chapter: int | None, key: str | None) -> str:
-    """替换 {project} / {ch} / {ch:03d} / {ch+N:03d} / {ch-N:03d} / {key} / {next_key} 占位符。
+def normalize_cluster_key(key: str | None, *, required: bool = False) -> str | None:
+    """把 cluster key / cluster id 规范成三位 key。
 
-    v23 加算术支持。v26 加 {next_key} 替换（cluster 流水线 step 11 emergence 用）：
-    - 若 key = "001" / "cluster_001" → next_key = "002" / "cluster_002"
-    - 若 key 不含数字段 → next_key = key + "_next"（保守 fallback）
+    允许输入 `001`、`1`、`cluster_001`。非数字业务 key 保留原样；主线 cluster
+    命令由 create_plan 在 required=True 时强制必须有 key。
+    """
+    if key is None:
+        if required:
+            raise ValueError("[plan_tracker] cluster-only 命令必须传 --key <cluster-key-or-id>")
+        return None
+    raw = str(key).strip()
+    if not raw:
+        if required:
+            raise ValueError("[plan_tracker] cluster-only 命令必须传非空 --key <cluster-key-or-id>")
+        return None
+    m = re.fullmatch(r"(?:cluster_)?0*(\d+)", raw, re.IGNORECASE)
+    if m:
+        return f"{int(m.group(1)):03d}"
+    return raw
+
+
+def cluster_id_from_key(key: str | None) -> str | None:
+    """由规范 key 得到 cluster id；非数字 key 也统一加 cluster_ 前缀。"""
+    norm = normalize_cluster_key(key)
+    if not norm:
+        return None
+    return norm if str(norm).startswith("cluster_") else f"cluster_{norm}"
+
+
+def _substitute(text: str, project: str, key: str | None) -> str:
+    """替换 {project} / {key} / {cluster_id} / {next_key} 占位符。
+
+    cluster-only 契约下，plan 模板不再使用章号占位符。若模板仍含 `{ch...}`，
+    创建 plan 直接失败，避免把旧单章路径静默替换为空。
     """
     import re
     if not isinstance(text, str):
         return text
     out = text.replace("{project}", project or "")
-    if chapter is not None:
-        def _arith(m):
-            op = m.group(1); n = int(m.group(2)); fmt = m.group(3)
-            target = chapter + n if op == '+' else chapter - n
-            return f"{target:03d}" if fmt else str(target)
-        out = re.sub(r"\{ch([+\-])(\d+)(:03d)?\}", _arith, out)
-        out = out.replace("{ch:03d}", f"{chapter:03d}")
-        out = out.replace("{ch}", str(chapter))
-    else:
-        out = re.sub(r"\{ch[+\-]\d+(:03d)?\}", "", out)
-        out = out.replace("{ch:03d}", "")
-        out = out.replace("{ch}", "")
+    if re.search(r"\{ch(?:[+\-]\d+)?(?::03d)?\}", out):
+        raise ValueError(f"[plan_tracker] 模板仍含旧章号占位符，cluster-only 禁止使用：{text}")
 
     # v26: {next_key} 替换 (NNN → NNN+1 · 输出纯数字段 · 适配 cluster_{next_key}_xxx 模板)
     # 设计契约: plan template 写 `cluster_{next_key}_xxx` 时 key="001" → next_key="002"
@@ -424,32 +441,31 @@ def _substitute(text: str, project: str, chapter: int | None, key: str | None) -
                 next_key = key + "_next"
         out = out.replace("{next_key}", next_key)
 
+    out = out.replace("{cluster_id}", cluster_id_from_key(key) or "")
     out = out.replace("{key}", key or "")
     return out
 
 
-def _walk_substitute(node: Any, project: str, chapter: int | None, key: str | None) -> Any:
+def _walk_substitute(node: Any, project: str, key: str | None) -> Any:
     if isinstance(node, str):
-        return _substitute(node, project, chapter, key)
+        return _substitute(node, project, key)
     if isinstance(node, list):
-        return [_walk_substitute(x, project, chapter, key) for x in node]
+        return [_walk_substitute(x, project, key) for x in node]
     if isinstance(node, dict):
-        return {k: _walk_substitute(v, project, chapter, key) for k, v in node.items()}
+        return {k: _walk_substitute(v, project, key) for k, v in node.items()}
     return node
 
 
 # ============ plan_id ============
 
-def make_plan_id(command: str, project: str, chapter: int | None, key: str | None) -> str:
+def make_plan_id(command: str, project: str, key: str | None) -> str:
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     # 微秒后缀确保同秒多次创建不冲突
     micro = datetime.now().strftime("%f")[:3]
     # 2026-05-29 修【可靠性】：同毫秒内连续 create 会产生相同 id 并覆盖前一个 plan。
     # 追加 secrets.token_hex(3) 随机后缀（6 hex 字符）彻底消除碰撞。
     rand = secrets.token_hex(3)
-    if chapter is not None:
-        keypart = f"ch{chapter}"
-    elif key:
+    if key:
         keypart = key
     else:
         keypart = "main"
@@ -462,32 +478,32 @@ def make_plan_id(command: str, project: str, chapter: int | None, key: str | Non
 def create_plan(
     command: str,
     project: str,
-    chapter: int | None = None,
     key: str | None = None,
 ) -> str:
-    """创建一个 plan，返回 plan_id。"""
+    """创建一个 plan，返回 plan_id。
+
+    cluster-write / cluster-save-state 为 cluster-only 命令，必须传
+    --key，且会写入 cluster_key / cluster_id 运行时字段。
+    """
     if command not in KNOWN_COMMANDS:
         # 不强制，但给出提示——允许未来扩展新命令
         print(f"[plan_tracker] 警告：未知命令 '{command}'，已知：{KNOWN_COMMANDS}")
 
-    # v17.5 修复：若 chapter 未指定但 key 形如 'ch001' / 'ch1' / 'ch_001'，自动解析
-    if chapter is None and key:
-        import re
-        m = re.match(r"^ch_?0*(\d+)$", key.strip(), re.IGNORECASE)
-        if m:
-            chapter = int(m.group(1))
+    cluster_key_required = command in {"cluster-write", "cluster-save-state"}
+    key = normalize_cluster_key(key, required=cluster_key_required)
 
     template = load_template(command)
-    plan = _walk_substitute(deepcopy(template), project, chapter, key)
+    plan = _walk_substitute(deepcopy(template), project, key)
 
-    plan_id = make_plan_id(command, project, chapter, key)
+    plan_id = make_plan_id(command, project, key)
     now = datetime.now().isoformat(timespec="seconds")
 
     plan["id"] = plan_id
     plan["command"] = command
     plan["project"] = project
-    plan["chapter"] = chapter
     plan["key"] = key
+    plan["cluster_key"] = key if cluster_key_required else None
+    plan["cluster_id"] = cluster_id_from_key(key) if cluster_key_required else None
     plan["created_at"] = now
     plan["started_at"] = now
     plan["completed_at"] = None
@@ -584,11 +600,11 @@ def _verify_declared_report(project: str, declared: str) -> bool:
     路径推算**外移到模板字段**（内嵌命名变体是回归高发区·v27 已修过失配）。
 
     支持 <round> 等角括号占位 → 文件名通配（reading-reflector 多轮任一存在即过）。
-    相对路径以 project_root 为基准；项目找不到 → 防御性放行（与旧逻辑一致）。
+    相对路径以 project_root 为基准；项目找不到 → False，required 产物不能降级。
     """
     project_root = resolve_project_root(project) if project else None
     if not project_root:
-        return True
+        return False
     raw = declared.replace("{project_root}", str(project_root))
     raw = re.sub(r"<[a-z][a-z0-9_]*>", "*", raw)
     p = Path(raw)
@@ -599,102 +615,52 @@ def _verify_declared_report(project: str, declared: str) -> bool:
     return p.exists()
 
 
-def _verify_agent_report(project: str, agent_name: str, chapter: int | None, cluster_id: str | None) -> bool:
+def _verify_agent_report(project: str, agent_name: str, cluster_id: str | None) -> bool:
     """v24 anti-skip: 校验 must_spawn_agent 字段对应的 JudgeReport 文件真实存在。
 
-    按 agent_name 推算 JudgeReport 路径规范：
-    - novel-summarizer → _数据库/.wal/第NNN章_summary.json 或 cluster_<id>_summary.json
-    - novel-foreshadower → _数据库/.judge_reports/ch_NNN_foreshadower.json 或 cluster_<id>_foreshadower.json
-    - novel-reflector → 同上 reflector
-    - novel-reading-reflector → _数据库/.reading_reflection/ch_NNN_round_*.json 或 cluster_<id>_round_*.json
-    - novel-voice-checker → _数据库/.judge_reports/ch_NNN_voice-checker.json
-    - novel-outline-planner → _数据库/.wal/第NNN章_planner_context.md 或 _数据库/.wal/cluster_<id>_emergence.json
+    cluster-only 路径规范：
+    - novel-summarizer → _数据库/.wal/cluster_<key>_summary.json
+    - novel-foreshadower → _数据库/.judge_reports/cluster_<key>_foreshadower.json
+    - novel-reflector → _数据库/.wal/cluster_<key>_reflection.json
+    - novel-reading-reflector → _数据库/.reading_reflection/cluster_<key>_round_*.json
+    - novel-voice-checker → _数据库/.judge_reports/cluster_<key>_voice-checker.json
+    - novel-outline-planner → _数据库/.wal/cluster_<key>_emergence.json
+    - novel-writer → 章节/cluster_<key>_draft/cluster_<key>_draft.txt
+    - novel-chapter-splitter → _数据库/.wal/splitter_cluster_<key>_decisions.json
     """
     project_root = resolve_project_root(project) if project else None
     if not project_root:
-        return True  # 项目找不到 → 防御性放行
+        return False
+    if not cluster_id:
+        return False
 
     db = project_root / "_数据库"
 
-    # 路径规范映射
     candidates = []
-    if chapter is not None:
-        ch_str = f"{chapter:03d}"
-        n_str = str(chapter)
-        if agent_name == "novel-summarizer":
-            candidates += [db / ".wal" / f"第{ch_str}章_summary.json", db / ".wal" / f"第{n_str}章_summary.json"]
-        elif agent_name == "novel-foreshadower":
-            candidates += [db / ".judge_reports" / f"ch_{ch_str}_foreshadower.json"]
-        elif agent_name == "novel-reflector":
-            candidates += [db / ".wal" / f"第{ch_str}章_reflection.json", db / ".wal" / f"第{n_str}章_reflection.json"]
-        elif agent_name == "novel-reading-reflector":
-            # round_N 任意一个存在即可
-            rr_dir = db / ".reading_reflection"
-            if rr_dir.exists():
-                if list(rr_dir.glob(f"ch_{ch_str}_round_*.json")) or list(rr_dir.glob(f"ch{ch_str}_round_*.json")):
-                    return True
-        elif agent_name == "novel-voice-checker":
-            candidates += [db / ".judge_reports" / f"ch_{ch_str}_voice-checker.json"]
-        elif agent_name == "novel-outline-planner":
-            candidates += [db / ".wal" / f"第{ch_str}章_planner_context.md"]
-        elif agent_name == "novel-writer":
-            # writer 不产 JudgeReport 但产章节正文文件 — 用正文文件存在判定 spawn 真实
-            candidates += [
-                project_root / "章节" / f"第{ch_str}章" / f"第{ch_str}章.txt",
-                project_root / "章节" / f"cluster_{ch_str}_draft" / f"cluster_{ch_str}_draft.txt",
-            ]
-        elif agent_name == "novel-chapter-splitter":
-            # splitter 产 splitter_cluster_<key>_decisions.json WAL
-            candidates += [
-                db / ".judge_reports" / f"ch_{ch_str}_chapter-splitter.json",
-                db / ".wal" / f"splitter_ch_{ch_str}_decisions.json",
-            ]
+    canonical_cluster_id = cluster_id_from_key(cluster_id) or str(cluster_id)
+    key = canonical_cluster_id.replace("cluster_", "", 1)
 
-    if cluster_id:
-        # cluster 级 agent JudgeReport
-        # v27 修复（全局原则：以故事块为单位）：扩 cstr 变体涵盖实战见过的 4 种命名：
-        #   - cluster_002          （cluster_id 原值）
-        #   - cluster_002          （加 cluster_ 前缀；若已带则同 cluster_id）
-        #   - ch_cluster_002       （voice-checker 实战命名 · 加 ch_ 前缀）
-        #   - ch_002               （chapter 序号别名 · plan 含 chapter 时实战 cp 来的）
-        cid = cluster_id.replace("cluster_", "") if cluster_id.startswith("cluster_") else cluster_id
-        cstr_variants = [cluster_id, f"cluster_{cid}", f"ch_cluster_{cid}"]
-        if chapter is not None:
-            cstr_variants.append(f"ch_{chapter:03d}")
-        for cstr in cstr_variants:
-            if agent_name == "novel-summarizer":
-                candidates += [db / ".wal" / f"{cstr}_summary.json"]
-            elif agent_name == "novel-foreshadower":
-                candidates += [db / ".judge_reports" / f"{cstr}_foreshadower.json"]
-            elif agent_name == "novel-reflector":
-                candidates += [db / ".wal" / f"{cstr}_reflection.json"]
-            elif agent_name == "novel-reading-reflector":
-                rr_dir = db / ".reading_reflection"
-                if rr_dir.exists() and list(rr_dir.glob(f"{cstr}_round_*.json")):
-                    return True
-            elif agent_name == "novel-voice-checker":
-                candidates += [db / ".judge_reports" / f"{cstr}_voice-checker.json"]
-            elif agent_name == "novel-outline-planner":
-                candidates += [
-                    db / ".wal" / f"{cstr}_emergence.json",
-                    db / ".wal" / f"第{chapter:03d}章_planner_context.md" if chapter is not None else db / ".wal" / "no_chapter_ctx",
-                ]
-                # 2026-05-30 北极星复审：cluster_emergence 模式（cluster-save-state step11）涌现的是
-                # 【下一个】cluster → emerge 产 cluster_{N+1}_emergence.json，不是当前 cstr。补 next 候选，
-                # 否则正确走完 12 步也因 missing_agent_reports 被 end_plan 误判 exit 2。
-                _nm = re.search(r"(\d+)", cid)
-                if _nm:
-                    _nxt = int(_nm.group(1)) + 1
-                    candidates += [db / ".wal" / f"cluster_{_nxt:03d}_emergence.json"]
-            elif agent_name == "novel-writer":
-                candidates += [
-                    project_root / "章节" / f"{cstr}_draft" / f"{cstr}_draft.txt",
-                ]
-            elif agent_name == "novel-chapter-splitter":
-                candidates += [
-                    db / ".wal" / f"splitter_{cstr}_decisions.json",
-                    db / ".judge_reports" / f"{cstr}_chapter-splitter.json",
-                ]
+    if agent_name == "novel-summarizer":
+        candidates += [db / ".wal" / f"{canonical_cluster_id}_summary.json"]
+    elif agent_name == "novel-foreshadower":
+        candidates += [db / ".judge_reports" / f"{canonical_cluster_id}_foreshadower.json"]
+    elif agent_name == "novel-reflector":
+        candidates += [db / ".wal" / f"{canonical_cluster_id}_reflection.json"]
+    elif agent_name == "novel-reading-reflector":
+        rr_dir = db / ".reading_reflection"
+        return rr_dir.exists() and bool(list(rr_dir.glob(f"{canonical_cluster_id}_round_*.json")))
+    elif agent_name == "novel-voice-checker":
+        candidates += [db / ".judge_reports" / f"{canonical_cluster_id}_voice-checker.json"]
+    elif agent_name == "novel-outline-planner":
+        candidates += [db / ".wal" / f"{canonical_cluster_id}_emergence.json"]
+        _nm = re.search(r"(\d+)", key)
+        if _nm:
+            _nxt = int(_nm.group(1)) + 1
+            candidates += [db / ".wal" / f"cluster_{_nxt:03d}_emergence.json"]
+    elif agent_name == "novel-writer":
+        candidates += [project_root / "章节" / f"{canonical_cluster_id}_draft" / f"{canonical_cluster_id}_draft.txt"]
+    elif agent_name == "novel-chapter-splitter":
+        candidates += [db / ".wal" / f"splitter_{canonical_cluster_id}_decisions.json"]
 
     return any(c.exists() for c in candidates)
 
@@ -802,7 +768,7 @@ def step_complete(
             _save_plan(path, plan)
             raise FileNotFoundError(
                 f"[plan_tracker] 第 {n} 步 expected_outputs 缺失：{missing}\n"
-                f"如确实无需此输出，使用 --skip-output"
+                f"主链 required step 必须补齐产物或修正 plan 模板，不得跳过输出校验"
             )
         step["verified_outputs"] = verified
 
@@ -858,26 +824,15 @@ def end_plan(plan_id: str) -> dict:
             if must_agents:
                 if isinstance(must_agents, str):
                     must_agents = [must_agents]
-                ch = plan.get("chapter")
                 proj = plan.get("project", "")
-                # v26 fix: cluster-write / cluster-save-state 命令的 key 即为 cluster_id
-                # 旧逻辑要求 key 含 "cluster_" 前缀才识别 → 创建时传 --key 001（无前缀）会失配
-                # 现兼容两种形式: "cluster_001" or "001"
-                _cmd = plan.get("command", "")
-                _key = plan.get("key", "")
-                if "cluster_" in str(_key):
-                    cluster_id = _key
-                elif _cmd in ("cluster-write", "cluster-save-state") and _key:
-                    cluster_id = f"cluster_{_key}" if not _key.startswith("cluster_") else _key
-                else:
-                    cluster_id = None
+                cluster_id = plan.get("cluster_id") or cluster_id_from_key(plan.get("key"))
                 # v28 程序驱动：模板显式声明 judge_report_path（str 或 {agent: path} dict）
                 # → 优先验声明路径（命名学外移）；未声明的 agent 回落旧路径推算。
                 jrp = step.get("judge_report_path")
-                # 🔴 2026-06-26 加 secondary fallback（cluster_001 翻车 sediment）：
+                # 🔴 2026-06-26 加 secondary declared report path（cluster_001 翻车 sediment）：
                 # voice-checker 无违规时不写 primary brief（.checker_briefs/cluster_*_voice.json），
                 # 但 secondary judge_report（.judge_reports/cluster_*_voice-checker.json）总有。
-                # 之前 primary 缺就 fail-end，逼用户手补 placeholder JSON。现在让 secondary 兜底。
+                # primary/secondary 都是显式正式产物路径，不做未声明路径猜测。
                 jrp_sec = step.get("judge_report_path_secondary")
                 for agent_name in must_agents:
                     declared = None
@@ -895,7 +850,7 @@ def end_plan(plan_id: str) -> dict:
                         if not found and declared_sec:
                             found = _verify_declared_report(proj, declared_sec)
                     else:
-                        found = _verify_agent_report(proj, agent_name, ch, cluster_id)
+                        found = _verify_agent_report(proj, agent_name, cluster_id)
                     if not found:
                         missing_agent_reports.append({
                             "step": n, "agent": agent_name,
@@ -1053,7 +1008,9 @@ def list_plans(active_only: bool = False) -> list[dict]:
             "id": d.get("id"),
             "command": d.get("command"),
             "project": d.get("project"),
-            "chapter": d.get("chapter"),
+            "key": d.get("key"),
+            "cluster_key": d.get("cluster_key"),
+            "cluster_id": d.get("cluster_id") or cluster_id_from_key(d.get("key")),
             "active": is_active,
             "completed": is_done,
             "aborted": is_aborted,
@@ -1069,7 +1026,6 @@ def _cli_create(args: argparse.Namespace) -> int:
     plan_id = create_plan(
         command=args.command,
         project=args.project,
-        chapter=args.chapter,
         key=args.key,
     )
     print(plan_id)
@@ -1145,7 +1101,8 @@ def _cli_status(args: argparse.Namespace) -> int:
     print(f"[plan_tracker] {args.plan_id}")
     print(f"  command : {plan.get('command')}")
     print(f"  project : {plan.get('project')}")
-    print(f"  chapter : {plan.get('chapter')}")
+    print(f"  key     : {plan.get('key')}")
+    print(f"  cluster : {plan.get('cluster_id') or cluster_id_from_key(plan.get('key')) or '-'}")
     print(f"  防篡改  : {att_label}")
     print(f"  progress: {done}/{total}")
     for s in plan.get("steps", []):
@@ -1188,7 +1145,8 @@ def _cli_list(args: argparse.Namespace) -> int:
         flag = "ACTIVE" if p["active"] else ("DONE" if p["completed"] else "ABORT")
         tamper = "  ⚠️ TAMPERED" if p.get("tampered") else ""  # P1-1
         print(f"  [{flag:6}] {p['id']}  cmd={p['command']}  "
-              f"project={p['project']}  chapter={p['chapter']}{tamper}")
+              f"project={p['project']}  key={p.get('key') or '-'}  "
+              f"cluster={p.get('cluster_id') or '-'}{tamper}")
     return 0
 
 
@@ -1242,8 +1200,8 @@ def build_parser() -> argparse.ArgumentParser:
     pc = sub.add_parser("create", help="创建 plan")
     pc.add_argument("--command", required=True, choices=list(KNOWN_COMMANDS))
     pc.add_argument("--project", required=True)
-    pc.add_argument("--chapter", type=int, default=None)
-    pc.add_argument("--key", default=None)
+    pc.add_argument("--key", default=None,
+                    help="cluster-only 主线命令必填：cluster key 或 cluster id，如 001 / cluster_001")
     pc.set_defaults(func=_cli_create)
 
     ps = sub.add_parser("step", help="标记某步完成")
@@ -1252,7 +1210,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--output", default=None,
                     help="可选：额外要校验存在的文件")
     ps.add_argument("--skip-output", action="store_true",
-                    help="跳过 expected_outputs 校验（agent/LLM 步骤用）")
+                    help="跳过 expected_outputs 校验；主链 required step 禁用，仅保留给非主链无固定产物维护任务")
     ps.add_argument("--tokens", type=int, default=None,
                     help="P2-8：本步消耗 token 数（subagent 成本追踪，可选）")
     ps.add_argument("--duration-ms", type=int, default=None,

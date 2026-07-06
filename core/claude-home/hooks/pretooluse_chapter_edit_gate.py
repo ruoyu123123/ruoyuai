@@ -11,7 +11,6 @@
 - 检查 content / new_string 含 banned_patterns:
   · 剧本体（（镜头XX）/（旁白）/（音效）等）→ exit 2 hard_gate
   · 章末文学过渡 * 分隔符 / 收束句 → exit 2 hard_gate（仅检测靠近文末的）
-- 旁路: 项目 _数据库/.chapter_edit_bypass.flag 存在 → 全放行
 
 权威来源:
 - core/claude-home/lessons/feedback_no_screenplay_stage_directions_in_novels.md
@@ -61,15 +60,6 @@ def extract_content(tool_name: str, tool_input: dict) -> str:
     return ""
 
 
-def has_bypass(project_root: str | None) -> bool:
-    # 🔴 opt-out 持久性是设计如此·非 bug：.chapter_edit_bypass.flag 存在即旁路·刻意无自动过期
-    # （本地单用户工具·用户显式建/删·自动失效会在编辑中途突然重新拦截）。重启拦截=删该 flag。
-    if not project_root:
-        return False
-    flag = Path(project_root) / "_数据库" / ".chapter_edit_bypass.flag"
-    return flag.exists()
-
-
 def main():
     try:
         payload = json.loads(sys.stdin.read())
@@ -91,8 +81,8 @@ def main():
     if not content:
         sys.exit(0)
 
-    # 🔴 C16：判定下沉到 check_chapter_edit（含 .chapter_edit_bypass.flag 旁路 + 扫描）。
-    result = check_chapter_edit(content, bypass_active=has_bypass(project_root))
+    # 🔴 C16：判定下沉到 check_chapter_edit（共享库唯一真相源）。
+    result = check_chapter_edit(content)
     if result["ok"]:
         sys.exit(0)
 

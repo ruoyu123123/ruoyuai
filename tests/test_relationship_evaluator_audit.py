@@ -31,6 +31,7 @@ sys.path.insert(0, str(_SCRIPTS))
 import relationship_evaluator as re_eval  # noqa: E402
 
 _MODULE_PATH = _SCRIPTS / "relationship_evaluator.py"
+_INTERNAL_ENV_NAME = "RUOYUAI_CLUSTER_STATE_INTERNAL"
 
 
 # ============================================================
@@ -114,7 +115,11 @@ def _write_project(d: str, ensemble: dict, rels: dict, cards: dict) -> Path:
 def _run_eval(proj: Path, ch: int):
     """跑 relationship_evaluator <项目> --ch N，返回 (returncode, stderr, stdout_json)。
     子进程驱动 = 复刻 save_state_evaluators.py:69 真实调用路径。"""
-    env = {**_os_environ(), "PYTHONIOENCODING": "utf-8"}
+    env = {
+        **_os_environ(),
+        "PYTHONIOENCODING": "utf-8",
+        _INTERNAL_ENV_NAME: "1",
+    }
     cp = subprocess.run(
         [sys.executable, str(_MODULE_PATH), str(proj), "--ch", str(ch)],
         capture_output=True, text=True, encoding="utf-8", env=env,

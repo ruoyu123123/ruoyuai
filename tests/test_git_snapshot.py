@@ -2,10 +2,10 @@
 """git_snapshot.py 确定性回归测试（零 LLM / 零联网 · 仅标准库 + 真 git）。
 
 被测脚本是 CLAUDE.md「Git 版本快照（自动）」的程序驱动实现，安全纪律强：
-预检 git+.git / 不 push/pull/force/reset / **不动全局 config**（只设 --local 兜底）/
-失败不中断流水线（尽量 exit 0）。本测试在 tempfile 隔离仓库里真跑 git，钉死核心不变量：
+预检 git+.git / 不 push/pull/force/reset / **不动全局 config**（只设 --local）/
+失败返回非 0，由 plan_tracker 阻断当前 plan。本测试在 tempfile 隔离仓库里真跑 git，钉死核心不变量：
 
-- 安全跳过：项目无 .git → 安静 `git init` 后继续；项目目录不存在 → main exit 0。
+- required 前置：项目无 .git → `git init` 后继续；项目目录不存在 → main exit 2。
 - 无变更短路：`git diff --cached --quiet` 退出码 0 → 跳过且**不产生新 commit**（return 0）。
 - 真快照：有变更 → 产生带指定 message 的 commit，return 0。
 - 身份兜底的边界：只写 --local（绝不污染 global）·已有 local 身份则**不覆盖**。
@@ -201,10 +201,10 @@ def test_run_returns_completed_process_normally():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# main / CLI —— 退出码 + 安全跳过 + 端到端真 commit
+# main / CLI —— 退出码 + required 前置 + 端到端真 commit
 # ──────────────────────────────────────────────────────────────────────────
-def test_main_missing_project_dir_exits_zero():
-    """项目目录不存在 → main 安全跳过 exit 0（advisory 不阻断流水线）。"""
+def test_main_missing_project_dir_exits_two():
+    """项目目录不存在 → main exit 2；required 快照不得伪装成功。"""
     ghost = pathlib.Path(tempfile.mkdtemp()) / "不存在的书"
     assert not ghost.is_dir()
     old_argv = sys.argv
@@ -216,7 +216,7 @@ def test_main_missing_project_dir_exits_zero():
         except SystemExit as e:
             raised = e
         assert raised is not None, "main 应调用 sys.exit"
-        assert raised.code == 0, f"目录不存在应 exit 0，实得 {raised.code}"
+        assert raised.code == 2, f"目录不存在应 exit 2，实得 {raised.code}"
     finally:
         sys.argv = old_argv
 

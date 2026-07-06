@@ -100,7 +100,7 @@ def test_crash_mid_write_preserves_original():
     with tempfile.TemporaryDirectory() as td:
         db = Path(td) / "_数据库"
         p = db / "伏笔表.json"
-        original = {"promises": [{"id": "fs_001", "resolved": False}]}
+        original = {"promises": [{"id": "fs_001", "status": "open"}]}
         save_state.save_json(p, original)
 
         orig_fn = atomic_json.atomic_write_json

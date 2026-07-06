@@ -3,7 +3,7 @@
 
 统一跑流水线内部子进程：捕获 stderr Traceback / exit → 提取错误指纹 append incidents.jsonl
 （喂 self_heal_engine 学习）→ 查 self_heal_kb 的 severity → 按策略 Plan：
-  retry(指数退避·仅 transient) / degrade(降级放行) / adapt(记录续跑) / escalate(升人警告) / missing_step(标缺步)
+  retry(指数退避·仅 transient) / adapt(记录续跑) / escalate(升人警告) / missing_step(标缺步)
 + 熔断器三态（Closed→Open→Half-Open）防同一脚本连续崩还盲跑。
 
 **核心价值**：取代流水线里 `|| true` 的静默吞错——失败不再消失，而是**记录 + 学习 + 熔断**
@@ -12,10 +12,10 @@
 
 用法：
   CLI:    python adaptive_runner.py --label build_manifest -- python core/scripts/build_manifest.py ...
-          （失败默认 degrade 放行 exit 0 但已记录；加 --strict 则失败 exit 1 中断）
+          （失败默认 exit 1 中断；仍记录 incident 并更新熔断）
   Module: from adaptive_runner import run_with_resilience; r = run_with_resilience([...], label="x")
 
-北极星边界：自适应只做「重试 / 降级 / 记录 / 升人 / 标缺步」，**绝不自改脚本逻辑、绝不绕过 hard_gate**。
+北极星边界：自适应只做「重试 / 记录 / 升人 / 标缺步」，**绝不自改脚本逻辑、绝不绕过 hard_gate**。
 """
 import argparse
 import json
@@ -170,7 +170,7 @@ def _normalize_interpreter(cmd):
 
 
 def run_with_resilience(cmd, label, project_root=None, max_retries=None,
-                        allow_degrade=True, timeout=600):
+                        allow_degrade=False, timeout=600):
     """跑子命令并自适应。返回 dict: {ok, degraded, exit_code, action, signature, label, ...}。
     project_root 仅决定 runtime/（incidents/circuit）落盘根，默认系统根；子命令自身的工作目录不受影响。"""
     root = Path(project_root).resolve() if project_root else REPO_ROOT
@@ -179,15 +179,15 @@ def run_with_resilience(cmd, label, project_root=None, max_retries=None,
     eff = _eval_circuit(cs)
     if eff == "open":
         print(f"⚡ [circuit OPEN] {label} 熔断中（连续失败 {cs.get('fail_count')} 次，冷却未到）"
-              f"→ 跳过执行并降级（请先人工修复后 reset）", file=sys.stderr)
-        return {"ok": False, "degraded": True, "circuit": "open", "action": "degrade",
+              f"→ 跳过执行并失败返回（请先修复后 reset）", file=sys.stderr)
+        return {"ok": False, "degraded": False, "circuit": "open", "action": "circuit_open",
                 "label": label, "exit_code": None}
 
     # cmd 可为 list（subprocess 直跑）或 str（shell 命令串，用于跑 plan template 的 scripts 行）
     # 🔴 frozen 归一（对抗审查 finding·M4）：内层 'python' 字面量（来自 plan 的
     # `adaptive_runner --label X -- python core/scripts/Y.py` REMAINDER，或 auto_heal 的
     # str cmd）必须换 child_python()——onedir 里 PATH 上无 python，否则这些间接 fan-out
-    # 静默 degrade（整条自学习/演化/consensus 链在 frozen 包里失效·dev 测不出）。
+    # 间接 fan-out 失败必须显式失败；adaptive_runner 只负责记录和熔断，不负责放行。
     cmd = _normalize_interpreter(cmd)
     is_shell = isinstance(cmd, str)
     if is_shell:
@@ -250,7 +250,7 @@ def run_with_resilience(cmd, label, project_root=None, max_retries=None,
         mark = "🔴" if severity == "escalate" else "⚠️"
         print(f"{mark} [adaptive] {label} 失败 (rc={rc}, {inc.get('error_type')}, severity={severity})"
               f" · 指纹 {inc['signature']} 已记录学习 · stderr尾: {stderr.strip()[-200:]}", file=sys.stderr)
-        degraded = allow_degrade   # 默认降级放行（已记录学习，取代静默 || true）
+        degraded = allow_degrade
         last = {"ok": False, "degraded": degraded, "exit_code": rc, "action": severity,
                 "signature": inc["signature"], "label": label, "stderr_tail": stderr[-500:]}
         return last
@@ -272,7 +272,7 @@ def main():
     ap.add_argument("--label", required=True, help="脚本标识（熔断器按此累计）")
     ap.add_argument("--project-root", default=None, help="runtime 根（默认系统根 REPO_ROOT · 仅测试 override）")
     ap.add_argument("--max-retries", type=int, default=None)
-    ap.add_argument("--strict", action="store_true", help="失败 exit 1 中断（默认降级放行 exit 0）")
+    ap.add_argument("--strict", action="store_true", help="保留兼容参数；失败始终 exit 1")
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--reset-circuit", action="store_true", help="重置 --label 的熔断器（* 全部）后退出")
     ap.add_argument("cmd", nargs=argparse.REMAINDER, help="-- 后接要跑的命令")
@@ -290,13 +290,11 @@ def main():
         return 2
 
     r = run_with_resilience(cmd, args.label, str(root), args.max_retries,
-                            allow_degrade=not args.strict, timeout=args.timeout)
+                            allow_degrade=False, timeout=args.timeout)
     print(json.dumps(r, ensure_ascii=False))
     if r["ok"]:
         return 0
-    if args.strict:
-        return 1
-    return 0   # 降级放行（已记录学习），取代 `|| true` 的静默吞错
+    return 1
 
 
 if __name__ == "__main__":

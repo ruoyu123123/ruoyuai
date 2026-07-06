@@ -2,7 +2,7 @@
 
 借鉴 RimWorld 的三种 Storyteller（Cassandra 升压 / Phoebe 长间歇 / Randy 随机）+ Adaptation Factor。
 
-每章 save-state 末尾跑：
+在 /cluster-save-state 的 cluster 章范围内运行：
 1. 取本章 outcome（win/setback/neutral）：优先消费 writer 申报的
    _changes.json.self_eval.storyteller_alignment.actual_outcome（#7 孤儿契约修复 · 北极星⑤
    作者申报第一权威），未申报才回退 heuristic 推断；intensity 仍 heuristic 估算
@@ -36,6 +36,7 @@ from pathlib import Path
 # 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
+import state_cli_guard
 
 
 def load_json(p: Path, default=None):
@@ -339,6 +340,7 @@ def calibrate(project_root: Path, ch: int) -> dict:
 
 
 def main():
+    state_cli_guard.require_internal("narrator_calibrate.py")
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("--ch", type=int, default=None)

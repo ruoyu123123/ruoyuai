@@ -15,6 +15,7 @@
 零依赖标准库测试约定：无参数 test_*，断言失败 raise AssertionError。
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,28 @@ sys.path.insert(0, str(_SCRIPTS))
 import clock_engine as ce  # noqa: E402
 
 _SCRIPT_PATH = str(_SCRIPTS / "clock_engine.py")
+_INTERNAL_ENV_NAME = "RUOYUAI_CLUSTER_STATE_INTERNAL"
+
+
+def _cli_env(*, internal: bool = True) -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    if internal:
+        env[_INTERNAL_ENV_NAME] = "1"
+    else:
+        env.pop(_INTERNAL_ENV_NAME, None)
+    return env
+
+
+def _run_cli(*args: str, internal: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, _SCRIPT_PATH, *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_cli_env(internal=internal),
+    )
 
 
 def _mk_project(tmp: Path, data: dict | None) -> Path:
@@ -291,20 +314,16 @@ def test_cli_exit_code_triggered_is_1():
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), data)
         # tick 让 1→2 满格 → 退出码 1
-        p = subprocess.run([sys.executable, _SCRIPT_PATH, str(root), "tick", "1"],
-                           capture_output=True, text=True)
+        p = _run_cli(str(root), "tick", "1")
         assert p.returncode == 1, p.stderr
         # dashboard → 退出码 0
-        p = subprocess.run([sys.executable, _SCRIPT_PATH, str(root), "dashboard"],
-                           capture_output=True, text=True)
+        p = _run_cli(str(root), "dashboard")
         assert p.returncode == 0
         # tick 缺 ch → 退出码 2
-        p = subprocess.run([sys.executable, _SCRIPT_PATH, str(root), "tick"],
-                           capture_output=True, text=True)
+        p = _run_cli(str(root), "tick")
         assert p.returncode == 2
         # spawn 缺 --json → 退出码 2
-        p = subprocess.run([sys.executable, _SCRIPT_PATH, str(root), "spawn", "1"],
-                           capture_output=True, text=True)
+        p = _run_cli(str(root), "spawn", "1")
         assert p.returncode == 2
 
 
@@ -316,9 +335,17 @@ def test_cli_exit_code_healthy_is_0():
     }]}
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), data)
-        p = subprocess.run([sys.executable, _SCRIPT_PATH, str(root), "tick", "1"],
-                           capture_output=True, text=True)
+        p = _run_cli(str(root), "tick", "1")
         assert p.returncode == 0, p.stderr
-        p = subprocess.run([sys.executable, _SCRIPT_PATH, str(root), "list", "1"],
-                           capture_output=True, text=True)
+        p = _run_cli(str(root), "list", "1")
         assert p.returncode == 0
+
+
+def test_cli_rejects_direct_without_internal_env():
+    """底层状态脚本缺少内部 env 时拒绝作为公开 CLI 入口直接运行。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = _mk_project(Path(d), {"clocks": []})
+        p = _run_cli(str(root), "dashboard", internal=False)
+        assert p.returncode == 2
+        assert "clock_engine.py" in p.stderr
+        assert "Traceback" not in p.stderr

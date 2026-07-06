@@ -30,6 +30,8 @@ _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import stress_evaluator as se  # noqa: E402
 
+_INTERNAL_ENV_NAME = "RUOYUAI_CLUSTER_STATE_INTERNAL"
+
 
 def _mk_db(tmp: Path) -> Path:
     db = tmp / "_数据库"
@@ -306,7 +308,7 @@ def _run_cli(project: Path, ch: int):
     注：Windows 控制台默认 GBK，child print(json) 走控制台编码 → 父进程 utf-8 解码会撞非法字节。
     强制 PYTHONIOENCODING=utf-8 让 child stdout 以 utf-8 落字节，再容错解码确保 json.loads 干净。
     """
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", **{_INTERNAL_ENV_NAME: "1"})
     p = subprocess.run(
         [sys.executable, str(_SCRIPTS / "stress_evaluator.py"), str(project), "--ch", str(ch)],
         capture_output=True, cwd=str(_ROOT), env=env,

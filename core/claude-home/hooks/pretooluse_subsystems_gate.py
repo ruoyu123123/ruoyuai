@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """PreToolUse Hook: 新书项目全系统强制开启门禁（v23.13 用户硬规则 2026-05-25）
 
-🔴 opt-out 持久性是【设计如此·非 bug】：项目 `_数据库/.subsystems_bypass.json` 存在即旁路（轻量
-模式）。**刻意无自动过期**——本地单用户工具·opt-out 由用户显式创建/删除·若按 mtime 自动失效会在
-用户写书中途突然重新拦截（更糟）。要重新启用全系统校验，删该文件即可。
-
 v2 cluster 化（2026-05-28）：本 hook 校验的 34 个 JSON 文件包含 v2 schema 字段
-（cluster_blueprint / 故事块摘要 等），逻辑不变·仅文件存在性校验，schema 不挑剔。
+（cluster_blueprint / 故事块摘要 等）。outline 早期 scaffold 步只查存在性，最终
+plan-end/end 追加 --content 等价载荷验收，防止空货架进入写作主链。
 hook 不感知 cluster vs chapter——它只看「文件是否存在」。
 
 触发条件：Bash 工具调用，命令含 `plan_tracker.py` 且关联 outline plan（命令名=outline 或 plan_id 含 outline）
@@ -15,8 +12,8 @@ hook 不感知 cluster vs chapter——它只看「文件是否存在」。
 1. 解析 plan_id（end / step --n 4 / 任何 outline plan 操作）
 2. 从 plan JSON 取 project_root
 3. 检查 `<project>/_数据库/` 是否含全部 34 个必建 JSON
-4. 全齐 → exit 0 放行
-5. 缺 → exit 2 阻断 + 列出缺哪些 + 提示怎么补
+4. outline plan-end/end 追加 content_check=True，载荷空也 exit 2
+5. 全齐且内容合格 → exit 0；否则 exit 2 阻断 + 列出修复建议
 
 **新书默认全系统开启规则**（feedback-default-all-subsystems-enabled-for-new-books）：
 ECAS / 世界演化 / Hub / Clock / Storyteller / Stress / character_arc / 群像 / 事件池 / NPC 行动表 / 角色池烙印 /
@@ -25,8 +22,7 @@ knowledge_graph / subplot / beat_map / 四线脉络 / webnovel_bench —— 全�
 【约束】
 - exit 0 = 放行 / exit 2 = 拒绝
 - 只在 outline plan 关联命令拦（cluster-write / cluster-save-state 不拦——那些时点 manifest 已经判过）
-- plan 找不到 / 解析失败 → 放行（防御性）
-- 用户显式说"轻量模式" → 通过 `_数据库/.subsystems_bypass.json` 单文件存在即放行
+- outline 相关 plan 找不到 / 解析失败 / 项目数据库目录不存在 → exit 2
 """
 import json
 import os
@@ -69,15 +65,18 @@ def main():
     if "_outline_" not in plan_id:
         sys.exit(0)
 
-    # 只对 end / step --n 3 (init-13-databases) / step --n 4 (plan-end) 拦
-    # cluster-save-state / cluster-write / reconcile 等其他命令 plan 完全放行
+    # 只对 end / scaffold 步 / plan-end 步拦。旧 4 步 outline 用 3/4，新 13 步 outline
+    # 用 4(scaffold) / 7(plan-end)。content check 只在最终校验阶段启用，避免 step4
+    # 刚建空骨架时误拦。
+    # cluster-save-state / cluster-write 等其他命令 plan 完全放行
+    step_n = None
+    content_check = (op == "end")
     if op == "step":
         n_match = re.search(r"--n\s+(\d+)", command)
         if not n_match:
             sys.exit(0)
-        n = int(n_match.group(1))
-        # step 3 init-13-databases / step 4 plan-end
-        if n not in (3, 4):
+        step_n = int(n_match.group(1))
+        if step_n not in (3, 4, 7):
             sys.exit(0)
 
     # 找 plan JSON 取 project
@@ -91,16 +90,24 @@ def main():
     ]
     plan_file = next((c for c in candidates if c.exists()), None)
     if not plan_file:
-        sys.exit(0)  # 找不到 plan → 放行
+        print(f"❌ [subsystems_gate] 找不到 outline plan: {plan_id}", file=sys.stderr)
+        sys.exit(2)
 
     try:
         plan = json.loads(plan_file.read_text(encoding="utf-8"))
-    except Exception:
-        sys.exit(0)
+    except Exception as exc:
+        print(f"❌ [subsystems_gate] outline plan 解析失败: {plan_file}: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     project_name = plan.get("project", "")
     if not project_name:
-        sys.exit(0)
+        print(f"❌ [subsystems_gate] outline plan 缺 project 字段: {plan_file}", file=sys.stderr)
+        sys.exit(2)
+
+    if op == "step" and step_n is not None:
+        target_step = next((s for s in plan.get("steps", []) if s.get("n") == step_n), {})
+        step_name = str(target_step.get("name", "")).lower()
+        content_check = "plan-end" in step_name or step_n == 7
 
     # 推算 project _数据库/ 路径
     db_candidates = [
@@ -110,10 +117,11 @@ def main():
     ]
     db_dir = next((d for d in db_candidates if d.exists() and d.is_dir()), None)
     if not db_dir:
-        sys.exit(0)
+        print(f"❌ [subsystems_gate] 找不到项目数据库目录: {project_name}", file=sys.stderr)
+        sys.exit(2)
 
-    # 🔴 C16：判定下沉到 check_subsystems（含 .subsystems_bypass.json 旁路 + 34 文件清单）。
-    result = check_subsystems(db_dir)
+    # 🔴 C16/C03：判定下沉到 check_subsystems（34 文件清单 + plan-end 载荷内容）。
+    result = check_subsystems(db_dir, content_check=content_check)
     if result["ok"]:
         sys.exit(0)
 

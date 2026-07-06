@@ -1,4 +1,4 @@
-"""declarative_data_update.py — 6 类声明式数据 save-state 自动更新（v19.2 新增）
+"""declarative_data_update.py — 6 类声明式数据 /cluster-save-state 自动更新（v19.2 新增）
 
 读 _changes.json factual 段的 6 个字段，自动更新对应数据库：
 1. relationship_changes      → 关系.json relationships[*].{affinity/trust/fear/respect} 增量
@@ -30,6 +30,7 @@ from pathlib import Path
 # 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
+import state_cli_guard
 
 
 # 2026-05-29 复审修复 [H4]：声明式增量幂等账本。
@@ -204,6 +205,7 @@ def update_knowledge(cards_data: dict, gains: list[dict], ch: int) -> list[str]:
 
 
 def main():
+    state_cli_guard.require_internal("declarative_data_update.py")
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("chapter", type=int)

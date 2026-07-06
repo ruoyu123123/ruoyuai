@@ -7,8 +7,8 @@
   · 只填 active cluster（fluid·显式标了别的 cluster 的 beat 跳过·缺/本 cluster 强制归本 cluster_id）
   · 幂等·去重：按 (cluster_id, scene_idx, focal_character)·同 scene 多 focal 各保一条
   · scene_idx 归一为 int·focal_character 必填（缺则跳）
-  · 默认安全/向后兼容：summary 无 appraisal_beats / 缺 summary / 叙事节拍器 缺坏 → no-op 不报错·return 0
-  · 全 advisory STATE（不进 HARD_GATE_CODES）·永不阻断
+  · 硬失败：缺 summary / summary 无 appraisal_beats / 叙事节拍器缺坏 → return 2
+  · 空 appraisal_beats=[] 表示 producer 明确无情绪拍，幂等 return 0
 """
 import json
 import sys
@@ -19,6 +19,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import save_state as ss  # noqa: E402
+import cluster_lookup  # noqa: E402
 
 
 # ═══════════════════════ 脚手架 ═══════════════════════
@@ -33,7 +34,8 @@ def _mk_project(tmp: Path, *, pacer=None, summary=None, key="001") -> Path:
     if pacer is not None:
         (db / "叙事节拍器.json").write_text(json.dumps(pacer, ensure_ascii=False), encoding="utf-8")
     if summary is not None:
-        (db / ".wal" / f"cluster_{key}_summary.json").write_text(
+        cid = cluster_lookup.normalize_cluster_id(key)
+        (db / ".wal" / f"{cid}_summary.json").write_text(
             json.dumps(summary, ensure_ascii=False), encoding="utf-8")
     return tmp
 
@@ -158,12 +160,12 @@ def test_appends_to_existing_beats_no_overwrite():
 
 # ═══════════════════════ 默认安全 / 向后兼容 ═══════════════════════
 
-def test_no_appraisal_beats_in_summary_noop():
-    """summary 无 appraisal_beats（旧书/未产）→ no-op·叙事节拍器 不变。"""
+def test_no_appraisal_beats_in_summary_hard_fails():
+    """summary 无 appraisal_beats → required 字段缺失，return 2。"""
     with tempfile.TemporaryDirectory() as d:
         pacer = dict(_SKELETON_PACER)
         root = _mk_project(Path(d), pacer=pacer, summary={"summary": "只有摘要没情绪拍"})
-        assert ss.cmd_apply_appraisal_beats(root, "001") == 0
+        assert ss.cmd_apply_appraisal_beats(root, "001") == 2
         assert _pacer(root)["appraisal_beats"] == []
 
 
@@ -175,30 +177,30 @@ def test_empty_appraisal_beats_list_noop():
         assert _pacer(root)["appraisal_beats"] == []
 
 
-def test_missing_summary_file_noop():
-    """summary.json 不存在（summarizer 未跑）→ no-op·return 0。"""
+def test_missing_summary_file_hard_fails():
+    """summary.json 不存在（summarizer 未跑）→ return 2。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), pacer=dict(_SKELETON_PACER), summary=None)
-        assert ss.cmd_apply_appraisal_beats(root, "001") == 0
+        assert ss.cmd_apply_appraisal_beats(root, "001") == 2
         assert _pacer(root)["appraisal_beats"] == []
 
 
-def test_missing_pacer_file_noop():
-    """叙事节拍器.json 缺 → 不新建·不报错·return 0。"""
+def test_missing_pacer_file_hard_fails():
+    """叙事节拍器.json 缺 → required 状态库不可用，return 2。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), pacer=None,
                            summary={"appraisal_beats": [_beat(0, "C_PROT")]})
-        assert ss.cmd_apply_appraisal_beats(root, "001") == 0
+        assert ss.cmd_apply_appraisal_beats(root, "001") == 2
         assert not (Path(root) / "_数据库" / "叙事节拍器.json").exists()
 
 
-def test_broken_pacer_file_noop():
-    """叙事节拍器.json 损坏 → load_json 返 None → 跳过·return 0（不阻断）。"""
+def test_broken_pacer_file_hard_fails():
+    """叙事节拍器.json 损坏 → return 2。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), pacer=dict(_SKELETON_PACER),
                            summary={"appraisal_beats": [_beat(0, "C_PROT")]})
         (Path(root) / "_数据库" / "叙事节拍器.json").write_text("{ broken", encoding="utf-8")
-        assert ss.cmd_apply_appraisal_beats(root, "001") == 0
+        assert ss.cmd_apply_appraisal_beats(root, "001") == 2
 
 
 def test_pacer_without_appraisal_beats_key_initializes():

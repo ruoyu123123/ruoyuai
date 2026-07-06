@@ -3,11 +3,9 @@
 被测脚本 = cluster-save-state step 9 的 5-in-1 update wrapper。它本身**不打 LLM**，
 确定性逻辑有四块，本组全部真 import 真调用钉死：
 
-1. `get_cluster_chapter_range`：从 事件簇.json 解析 cluster 的 chapter_range
-   —— list 形态 [a,b] / str 形态 "a-b" / cluster_key 归一化命中 / 文件缺失 /
-   查不到 → 返回 []。
-   ⚠️ 注意：本脚本是**本地手写解析**（区别于 save_state_evaluators.py 那份委托
-   cluster_lookup 的同名函数），故无 blueprint 兜底——这正是要钉死的真实行为。
+1. `get_cluster_chapter_range`：委托 cluster_lookup 解析 cluster 的 chapter_range
+   —— list 形态 [a,b] / str 形态 "a-b" / cluster_key 归一化命中 / blueprint 范围 /
+   查不到 → 返回 []；非法 cluster_key → 抛 RuntimeError。
 
 2. `run_one_module`：脚本不存在 → (False, "脚本不存在...")；存在 → subprocess 跑真
    子脚本、按 returncode 判成败、args_spec 按 args_map 正确展开。
@@ -118,7 +116,7 @@ def test_chapter_range_normalized_key_matching():
 
 
 def test_chapter_range_not_found_and_missing_file():
-    """查不到的 cluster → []；事件簇.json 缺失 → []（不抛异常）。"""
+    """查不到的 cluster → []；事件簇.json 缺失 → []。"""
     with tempfile.TemporaryDirectory() as d:
         proj = _mk_project(Path(d), {"clusters": [
             {"cluster_id": "cluster_001", "chapter_range": [1, 3]},
@@ -127,6 +125,18 @@ def test_chapter_range_not_found_and_missing_file():
         # 删掉文件 → 缺失分支返回 []
         (proj / "_数据库" / "事件簇.json").unlink()
         assert mod.get_cluster_chapter_range(proj, "cluster_001") == []
+
+
+def test_chapter_range_invalid_cluster_key_hard_fails():
+    """非法 cluster_key 不能被拼成旧 cluster id 继续执行。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d), {"clusters": []})
+        raised = False
+        try:
+            mod.get_cluster_chapter_range(proj, "not-a-cluster")
+        except RuntimeError:
+            raised = True
+        assert raised
 
 
 def test_chapter_range_blueprint_fallback():

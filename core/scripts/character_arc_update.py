@@ -1,6 +1,6 @@
 """character_arc_update.py — character_arc_state 自动滚动（v19.4 新增）
 
-每章 save-state 时按 stages_by_chapter 映射，更新角色的 current_stage_at_ch。
+cluster-save-state 时按当前 cluster / 章范围映射 stages_by_chapter，更新角色的 current_stage_at_ch。
 
 举例：陆衍 stages_by_chapter={1:"lie", 8:"lie_cracking", 14:"want_threatened"}
 - ch5 时 → current_stage="lie"（最近一个 ≤5 的 key 是 1）
@@ -16,6 +16,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+import state_cli_guard
 
 
 def load_json(p: Path, default=None):
@@ -37,6 +39,7 @@ def find_current_stage(stages_by_chapter: dict, ch: int) -> str:
 
 
 def main():
+    state_cli_guard.require_internal("character_arc_update.py")
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("chapter", type=int)

@@ -32,12 +32,35 @@ def _load_plan() -> dict:
 # ════════════ plan 结构 ════════════
 
 def test_plan_exists_6_steps():
+    """6 步全 required（2026-07 收口：step6 git-snapshot 从 optional 升 required）。
+
+    历史契约 required=[1..5] / optional=[6]（git 失败仅记录不阻断）已废——
+    对齐 CLAUDE.md Git 快照纪律「init/commit 失败或 marker 缺失 = 当前
+    required step 失败」+ 不降级规则（必需步骤设 required 不留 advisory 兜底）。
+    """
     plan = _load_plan()
     assert plan["command"] == "distill-character"
     assert plan["total_steps"] == 6
     assert len(plan["steps"]) == 6
-    assert plan["required_steps"] == [1, 2, 3, 4, 5]
-    assert plan["optional_steps"] == [6]
+    assert plan["required_steps"] == [1, 2, 3, 4, 5, 6]
+    assert plan["optional_steps"] == []
+
+
+def test_step6_git_snapshot_required_with_marker():
+    """回归锁：step6 git-snapshot 必须 required + marker 产物（禁回退 optional/`? ` 前缀）。"""
+    plan = _load_plan()
+    step6 = next(s for s in plan["steps"] if s["n"] == 6)
+    assert step6["required"] is True
+    assert step6["optional"] is False
+    assert step6["skip_output_allowed"] is False
+    scripts = step6.get("scripts", [])
+    assert scripts and not any(s.lstrip().startswith("?") for s in scripts), \
+        "git-snapshot 脚本禁用 `? ` 容错前缀（失败必须暴露）"
+    blob = " ".join(scripts)
+    assert "git_snapshot.py" in blob and "--marker" in blob
+    outs = " ".join(step6["expected_outputs"])
+    assert "distill_character_{key}_git_snapshot.json" in outs, \
+        "marker 文件 = required step 的可验证产物（缺失 = step 失败）"
 
 
 def test_step3_voice_sample_is_genmodel_same_stack():
@@ -88,12 +111,22 @@ def test_registered_in_known_commands():
 
 
 def test_load_template_and_key_substitution():
+    """cluster-only 契约（2026-07 收口）：_substitute(text, project, key) 三参。
+
+    历史签名 _substitute(text, project, chapter, key) 的章号参数已随
+    cluster-only 架构整体拆除（plan 模板禁用 {ch...} 占位符·遇到即抛错，
+    防止旧单章路径被静默替换为空）。
+    """
     tpl = pt.load_template("distill-character")
     assert len(tpl["steps"]) == 6
     # {key} 替换：角色 id 注入 expected_outputs / scripts
     out = pt._substitute("_数据库/.distill_character/{key}_material.json",
-                         "书名", None, "李若渝")
+                         "书名", "李若渝")
     assert out == "_数据库/.distill_character/李若渝_material.json"
+    # 回归锁：模板残留旧章号占位符 = 直接报错（禁静默替空）
+    import pytest
+    with pytest.raises(ValueError):
+        pt._substitute("章节/ch_{ch:03d}.txt", "书名", "李若渝")
 
 
 def test_create_plan_substitutes_character_key():

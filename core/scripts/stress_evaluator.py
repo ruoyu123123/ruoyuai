@@ -2,7 +2,7 @@
 
 借鉴 CK3：违背性格 → stress 累积 → 满 stress_threshold_break 抽 mental_break_card → 永久改写 persona。
 
-每章 save-state 末尾跑：
+在 /cluster-save-state 的 cluster 章范围内运行：
 1. 读 第NNN章.txt 正文
 2. 对比 persona_violations_tracked 中每条 trait 的 violation/align 关键词
 3. 计算本章 stress delta（+违背 / -符合 / +事件冲击）
@@ -30,6 +30,7 @@ from pathlib import Path
 # 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
+import state_cli_guard
 
 
 def load_json(p: Path, default=None):
@@ -354,6 +355,7 @@ def evaluate(project_root: Path, ch: int) -> dict:
 
 
 def main():
+    state_cli_guard.require_internal("stress_evaluator.py")
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("--ch", type=int, default=None)

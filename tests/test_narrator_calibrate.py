@@ -28,6 +28,7 @@ sys.path.insert(0, str(_SCRIPTS))
 import narrator_calibrate as nc  # noqa: E402
 
 _TARGET = _SCRIPTS / "narrator_calibrate.py"
+_INTERNAL_ENV_NAME = "RUOYUAI_CLUSTER_STATE_INTERNAL"
 
 
 def _fake_vad(predict_batch_fn):
@@ -354,7 +355,12 @@ def test_calibrate_missing_pacer_returns_error():
 def _run_cli(project: Path, ch: int):
     # Windows 控制台默认 cp936 → 子进程打印中文 JSON 必须强制 UTF-8 stdout，
     # 否则父进程按 utf-8 解码 gbk 字节会崩（res.stdout=None）。捕字节自解码兜底。
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    env = dict(
+        os.environ,
+        PYTHONIOENCODING="utf-8",
+        PYTHONUTF8="1",
+        **{_INTERNAL_ENV_NAME: "1"},
+    )
     res = subprocess.run(
         [sys.executable, str(_TARGET), str(project), "--ch", str(ch)],
         capture_output=True, env=env)

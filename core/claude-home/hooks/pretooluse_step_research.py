@@ -9,13 +9,13 @@
 3. 若有 research_ref：
    - 文件存在 → exit 0 放行
    - 文件不存在 → exit 2 拦截 + 提示「请先 spawn novel-researcher 写 <path>」
-4. 若 plan JSON 没 research_ref 字段（旧 plan）→ exit 0 放行（向后兼容）
-5. plan_tracker 不可用 / plan 找不到 → exit 0 放行（不破坏）
+4. 若该 step 没 research_ref 字段 → exit 0（非调研前置步骤）
+5. plan 找不到 / 解析失败 / step 不存在 → exit 2
 
 【约束】
 - exit 0 = 放行 / exit 2 = 拒绝
 - 只检查含 `plan_tracker.py step` 的 Bash 命令，其他 Bash 直接放行
-- 任何异常 → 放行（防御性，不能因为 hook 自身 bug 破坏主流程）
+- 相关 plan 状态不可验证时 exit 2，避免主链在未知状态继续执行
 """
 import json
 import os
@@ -25,8 +25,7 @@ from pathlib import Path
 
 # 🔴 2026-06-27 C16：判定逻辑抽到共享库 plan_step_gates（北极星⑥消重复）。本 hook 改薄
 # wrapper：解析 stdin → 找 step → 调 check_research_ref → ok?exit0:exit2。
-# 🔴 北极星护栏：research 门是 advisory（gate_level=advisory·plan 层软放行），
-# 但 hook 路径**保持原行为不变**（缺失 → exit 2），由 wrapper 一律 fail→exit2 实现。
+# research 门是 required gate：决策前置 step 必须有可核验 research artifact。
 _SCRIPTS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
 if _SCRIPTS not in sys.path:
@@ -63,19 +62,20 @@ def main():
         project_dir / "core" / "claude-home" / ".plans" / f"{plan_id}.json",  # GLOBAL_PLANS_DIR
         project_dir / "_数据库" / ".plans" / f"{plan_id}.json",                # 小说项目
         project_dir / ".plans" / f"{plan_id}.json",                            # 风格库
-        # 兼容 workspace 多项目
+        # workspace 多项目候选路径
         *list(project_dir.glob(f"workspace/**/_数据库/.plans/{plan_id}.json")),
         *list(project_dir.glob(f"workspace/**/.plans/{plan_id}.json")),
     ]
     plan_file = next((c for c in candidates if c.exists()), None)
     if not plan_file:
-        # plan 找不到 → 放行（plan_tracker 自己会报错）
-        sys.exit(0)
+        print(f"❌ [hook step-research] 找不到 plan: {plan_id}", file=sys.stderr)
+        sys.exit(2)
 
     try:
         plan = json.loads(plan_file.read_text(encoding="utf-8"))
-    except Exception:
-        sys.exit(0)
+    except Exception as exc:
+        print(f"❌ [hook step-research] plan 解析失败: {plan_file}: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     # 找 step n 的 research_ref
     step_info = None
@@ -84,11 +84,11 @@ def main():
             step_info = s
             break
     if not step_info:
-        sys.exit(0)
+        print(f"❌ [hook step-research] plan {plan_id} 不存在 step {n}", file=sys.stderr)
+        sys.exit(2)
 
     # 🔴 C16：判定下沉到 check_research_ref。hook 路径不传 auto_pilot/research_skipped
-    # → 与原 hook 行为等价（缺 research_ref 文件 → ok=False → exit 2）。advisory 软放行
-    # 仅在脚本路径传 auto_pilot/research_skipped 时生效（北极星⑤：research 永不在写作主轨硬锁）。
+    # → 缺 research_ref 文件时 exit 2。
     result = check_research_ref(step_info, project_dir=project_dir,
                                auto_pilot=False, research_skipped=False)
     if result["ok"]:
@@ -100,9 +100,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        # 防御性：任何异常都放行
-        print(f"[hook step-research] internal error (放行): {e}", file=sys.stderr)
-        sys.exit(0)
+    main()

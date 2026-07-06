@@ -9,10 +9,10 @@ orchestrator 随 exe/程序驱动方向整体删除，本模块回到**单一消
 本模块把 5 门的**纯判定逻辑**抽成可被 hook 共享的函数：
   · check_subsystems()      — 34 子系统 JSON 存在性（hard_gate）·🔴 C03 content_check=True
                               追加载荷非空验收（inert→hard·裸骨架→advisory）
-  · check_agent_injection() — Agent prompt 契约/注入/篡改（hard_gate）
-  · check_anti_skip()       — --skip-output vs expected_outputs（hard_gate）
+  · check_agent_injection() — Agent prompt 契约/PLAN_ID 绑定/注入/篡改（hard_gate）
+  · check_anti_skip()       — 输出完整性 vs expected_outputs（hard_gate）
   · check_chapter_edit()    — 章节正文剧本体/章末过渡（hard_gate）
-  · check_research_ref()    — 决策前置 step 的调研缓存（advisory · 可豁免）
+  · check_research_ref()    — 决策前置 step 的调研缓存（hard_gate）
 
 消费路径：5 个 pretooluse_*.py 薄 wrapper 读 stdin → 抽参 → 调对应 check →
   ok ? exit 0 : exit 2（hook 一律 fail→exit2；gate_level 字段标注硬/软语义供消费方区分）。
@@ -22,8 +22,8 @@ orchestrator 随 exe/程序驱动方向整体删除，本模块回到**单一消
      "waivable": bool, ...extra}
 
 北极星护栏：hard_gate-class 只认 STRUCTURE§11 / audit_hub.HARD_GATE_CODES 既有
-语义（子系统缺失 / anti-skip / agent 注入），**不新增创作类硬约束**；research 门
-强制 advisory + 可豁免 + 尊重 auto_pilot/旁路 + 无网/无 key 降级不阻断。
+语义（子系统缺失 / anti-skip / agent 注入 / 决策前置调研缺失）；research 门
+不再允许 auto_pilot/无网/跳过调研自动豁免。
 """
 from __future__ import annotations
 
@@ -82,15 +82,11 @@ ALL_REQUIRED: list[str] = []
 for _cat, _files in REQUIRED_DB_FILES.items():
     ALL_REQUIRED.extend(_files)
 
-SUBSYSTEMS_BYPASS_FILE = ".subsystems_bypass.json"
-
-
-def check_subsystems(db_dir, *, required=None, bypass_active=None,
-                     content_check=False) -> dict:
+def check_subsystems(db_dir, *, required=None, content_check=False) -> dict:
     """34 子系统 JSON 存在性（hard_gate · 不可豁免）。
 
-    db_dir 不存在 / None → ok=True（防御性·与原 hook「找不到 → 放行」一致）。
-    旁路 .subsystems_bypass.json 存在 → ok=True（北极星 opt-out·沿用）。
+    db_dir 不存在 / None → hard_gate。子系统目录是 outline 后续点火前置，不存在就不能
+    让主链继续。
 
     🔴 2026-06-27 C03：content_check=True 时，**全齐后追加载荷白名单非空检查**——
     3 个「机器永不点火」载荷文件(涟漪规则/大势卡当前卷 ME 池/cluster_001 storyboard)空
@@ -100,14 +96,12 @@ def check_subsystems(db_dir, *, required=None, bypass_active=None,
     """
     required = required or ALL_REQUIRED
     if db_dir is None:
-        return _verdict(True, gate_level=GATE_HARD, msg="db_dir 未知·放行")
+        return _verdict(False, gate_level=GATE_HARD, waivable=False,
+                        msg="db_dir 未知：无法验证 34 子系统")
     db_dir = Path(db_dir)
     if not db_dir.is_dir():
-        return _verdict(True, gate_level=GATE_HARD, msg="db_dir 不存在·放行")
-    if bypass_active is None:
-        bypass_active = (db_dir / SUBSYSTEMS_BYPASS_FILE).exists()
-    if bypass_active:
-        return _verdict(True, gate_level=GATE_HARD, msg="轻量模式旁路", bypass=True)
+        return _verdict(False, gate_level=GATE_HARD, waivable=False,
+                        msg=f"db_dir 不存在：{db_dir}")
     missing = [f for f in required if not (db_dir / f).exists()]
     if not missing:
         if content_check:
@@ -119,15 +113,13 @@ def check_subsystems(db_dir, *, required=None, bypass_active=None,
     return _verdict(
         False, gate_level=GATE_HARD, waivable=False, missing=missing,
         msg=(f"缺 {len(missing)}/{len(required)} 个子系统 JSON: {head}\n"
-             f"   修复: python core/scripts/scaffold_subsystems.py emit <项目>\n"
-             f"   旁路: touch <项目>/_数据库/{SUBSYSTEMS_BYPASS_FILE}"))
+             f"   修复: python core/scripts/scaffold_subsystems.py emit <项目>"))
 
 
 def _check_load_bearing(db_dir: Path):
     """🔴 2026-06-27 C03：全齐后载荷白名单非空检查（单一真理源复用 scaffold_subsystems）。
 
     返回：
-      · None —— 无法加载骨架（防御性·与 existence「找不到 → 放行」同向）。
       · verdict(ok=False·hard_gate) —— 有 inert（载荷文件载荷路径空·机器永不点火·不可豁免）。
       · verdict(ok=True·gate_level=advisory) —— 无 inert（含仅非载荷裸骨架 bare·advisory·不阻断）。
 
@@ -142,8 +134,10 @@ def _check_load_bearing(db_dir: Path):
             _sys.path.insert(0, sd)
         import scaffold_subsystems as _scaf
         canonical, skeletons = _scaf._load_skeletons()
-    except Exception:
-        return None  # 骨架不可达 → 防御性放行（不因辅助检查阻断主轨）
+    except Exception as exc:
+        return _verdict(
+            False, gate_level=GATE_HARD, waivable=False,
+            msg=f"无法加载子系统骨架，不能执行 content_check: {type(exc).__name__}: {exc}")
     inert, bare = [], []
     db_dir = Path(db_dir)
     for name in canonical:
@@ -169,8 +163,7 @@ def _check_load_bearing(db_dir: Path):
             msg=(f"载荷子系统空货架（inert·hard·机器永不点火·不可豁免）: {head}\n"
                  f"   涟漪规则空=引擎零触发 / 当前卷 ME 池空=大势无方向 / "
                  f"cluster_001 storyboard 空=首块未详化\n"
-                 f"   修复: 让 outline 真正填充载荷内容（非仅建空骨架）\n"
-                 f"   旁路: touch <项目>/_数据库/{SUBSYSTEMS_BYPASS_FILE}"))
+                 f"   修复: 让 outline 真正填充载荷内容（非仅建空骨架）"))
     return _verdict(True, gate_level=GATE_ADVISORY, bare=bare,
                     msg=(f"{len(bare)} 个非载荷裸骨架（advisory·fluid 合法）"
                          if bare else "载荷全非空·无裸骨架"))
@@ -179,18 +172,14 @@ def _check_load_bearing(db_dir: Path):
 # ════════════════════════════════════════════════════════════════════
 # 门 2：禁跳步门（hard_gate）——来源 pretooluse_plan_step_anti_skip.py
 # ════════════════════════════════════════════════════════════════════
-def check_anti_skip(step_def: dict, *, skip_output_requested: bool = True,
-                    bypass_active: bool = False) -> dict:
-    """--skip-output 万能逃避防御（hard_gate）。
+def check_anti_skip(step_def: dict, *, skip_output_requested: bool = True) -> dict:
+    """输出跳过逃避防御（hard_gate）。
 
     仅在「请求 --skip-output」时判定（hook 只钩同时含 step + --skip-output 的命令）。
     expected_outputs 非空 且 step.skip_output_allowed != true → block。
-    bypass_active（.subsystems_bypass.json）→ ok=True。
     """
     if not skip_output_requested:
         return _verdict(True, gate_level=GATE_HARD)
-    if bypass_active:
-        return _verdict(True, gate_level=GATE_HARD, msg="轻量模式旁路", bypass=True)
     expected = step_def.get("expected_outputs") or []
     skip_allowed = bool(step_def.get("skip_output_allowed", False))
     if expected and not skip_allowed:
@@ -199,8 +188,7 @@ def check_anti_skip(step_def: dict, *, skip_output_requested: bool = True,
             msg=(f"step {step_def.get('n')} ({step_def.get('name', '?')}) 模板要求 "
                  f"expected_outputs（{len(expected)} 个）·--skip-output 被拒\n"
                  f"   A. 真跑 step 产出后用正常 step（不带 --skip-output）\n"
-                 f"   B. 轻量模式 → touch <项目>/_数据库/{SUBSYSTEMS_BYPASS_FILE}\n"
-                 f"   C. 模板该 step 改 skip_output_allowed: true（仅确无输出时合法）"))
+                 f"   B. 模板该 step 改 skip_output_allowed: true（仅确无输出时合法）"))
     return _verdict(True, gate_level=GATE_HARD)
 
 
@@ -245,12 +233,10 @@ def scan_chapter_end(content: str) -> list[tuple[str, str]]:
     return hits
 
 
-def check_chapter_edit(content: str, *, bypass_active: bool = False) -> dict:
+def check_chapter_edit(content: str) -> dict:
     """章节正文剧本体 + 章末物理分隔符（hard_gate）。
-
-    .chapter_edit_bypass.flag → bypass_active=True → ok=True（沿用 opt-out）。
     """
-    if bypass_active or not content:
+    if not content:
         return _verdict(True, gate_level=GATE_HARD)
     hits = scan_screenplay(content) + scan_chapter_end(content)
     if not hits:
@@ -263,30 +249,24 @@ def check_chapter_edit(content: str, *, bypass_active: bool = False) -> dict:
         False, gate_level=GATE_HARD, waivable=False, hits=hits,
         msg=("章节正文检测到禁用 pattern（剧本体 / 章末物理分隔符）:\n"
              + "\n".join(lines)
-             + "\n   剧本体 → 删，POV 不切；章末过渡 → 删，末句=心理悬念峰值"
-             + "\n   旁路（仅紧急）：touch <项目>/_数据库/.chapter_edit_bypass.flag"))
+             + "\n   剧本体 → 删，POV 不切；章末过渡 → 删，末句=心理悬念峰值"))
 
 
 # ════════════════════════════════════════════════════════════════════
-# 门 5：调研先行门（advisory · 可豁免）——来源 pretooluse_step_research.py
-# 🔴 北极星⑤：只接「决策前置 step」·advisory·绝不硬锁大势 fluid 涌现。
+# 门 5：调研先行门（hard_gate）——来源 pretooluse_step_research.py
+# 决策前置 step 必须有可核验 research artifact，禁止纯模型记忆降级。
 # ════════════════════════════════════════════════════════════════════
 def check_research_ref(step_def: dict, *, project_dir, auto_pilot: bool = False,
                        research_skipped: bool = False) -> dict:
-    """决策前置 step 的 research_ref（.research_cache/*）存在性（advisory）。
+    """决策前置 step 的 research_ref（.research_cache/*）存在性（hard_gate）。
 
     无 research_ref 字段（旧 plan / 非决策步）→ ok=True。
-    auto_pilot / research_skipped（用户跳过调研 or 旁路）→ 自动豁免（ok=True·waived）。
-    文件缺失 → ok=False · gate_level=advisory · waivable=True
-      （hook 路径硬 exit 2；advisory gate_level 字段供消费方区分软语义）。
+    auto_pilot / research_skipped 参数保留旧调用签名，但不再豁免。
+    文件缺失 → ok=False · gate_level=hard_gate · waivable=False。
     """
     research_ref = step_def.get("research_ref")
     if not research_ref:
-        return _verdict(True, gate_level=GATE_ADVISORY)
-    if auto_pilot or research_skipped:
-        return _verdict(True, gate_level=GATE_ADVISORY, waivable=True,
-                        auto_waived=True,
-                        msg="auto_pilot/跳过调研/旁路 → research 门自动豁免")
+        return _verdict(True, gate_level=GATE_HARD)
     refs = [research_ref] if isinstance(research_ref, str) else research_ref
     if not isinstance(refs, list):
         return _verdict(True, gate_level=GATE_ADVISORY)
@@ -302,12 +282,11 @@ def check_research_ref(step_def: dict, *, project_dir, auto_pilot: bool = False,
             missing.append(ref)
     if missing:
         return _verdict(
-            False, gate_level=GATE_ADVISORY, waivable=True, missing=missing,
-            msg=("调研先行：research_ref 文件缺失（advisory·可豁免）:\n"
+            False, gate_level=GATE_HARD, waivable=False, missing=missing,
+            msg=("调研先行：research_ref 文件缺失（hard_gate）:\n"
                  + "\n".join(f"     - {m}" for m in missing)
-                 + "\n   建议先 spawn novel-researcher 写 .research_cache/*（北极星「没调查没发言权」）"
-                 + "\n   豁免：全自动/无网/无 key 自动放行·不阻断写作主轨"))
-    return _verdict(True, gate_level=GATE_ADVISORY)
+                 + "\n   必须先 spawn novel-researcher 写 .research_cache/*，不得用纯模型记忆继续"))
+    return _verdict(True, gate_level=GATE_HARD)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -317,12 +296,12 @@ def check_research_ref(step_def: dict, *, project_dir, auto_pilot: bool = False,
 NOVEL_NAME_KEYWORDS = [
     "Writer", "writer", "Validator", "validator",
     "Voice", "voice", "novel-writer", "novel-validator", "novel-voice",
+    "Archivist", "archivist", "novel-archivist", "归档", "档案",
     "写第", "审第", "修第", "写作", "正文", "写章节", "蒸馏",
 ]
 MULTISTEP_KEYWORDS_DESC = [
     "cluster-save-state", "cluster save state", "cluster-write", "cluster write",
-    "distill-style", "distill style", "outline", "reconcile",
-    "check-quality", "check quality",
+    "distill-style", "distill style", "outline",
     # 🔴 2026-06-27 C13：distill-character 纳入 plan 强制规划层 → 多步流水线 Agent 须含 PLAN_ID/STEP（L3 hook 规则 5）
     "distill-character", "distill character",
 ]
@@ -334,12 +313,12 @@ NOVEL_SUBAGENT_TYPES = {
     "novel-writer", "novel-validator-checker", "novel-voice-checker",
     "novel-foreshadower", "novel-reflector", "novel-summarizer",
     "novel-outline-planner", "novel-chapter-splitter",
-    "novel-reading-reflector", "novel-researcher",
+    "novel-reading-reflector", "novel-researcher", "novel-archivist",
 }
 _AUX_TYPES = {
     "novel-validator-checker", "novel-voice-checker", "novel-foreshadower",
     "novel-summarizer", "novel-reflector", "novel-outline-planner",
-    "novel-reading-reflector",
+    "novel-reading-reflector", "novel-researcher", "novel-archivist",
 }
 INJECTION_PATTERNS = [
     (r"ignore\s+(?:the\s+)?(?:previous|all|above|prior)\s+instruction",
@@ -377,8 +356,8 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
     与原 hook 同序判定（rule1→2→3→4warn→5→8→10→11→9warn），首个硬命中即 block；
     warn-only（rule4/9）收进 warnings（不影响 ok·wrapper 打印不退出）。
 
-    plan_state：调用方（hook）传 plan_tracker.verify_plan(PLAN_ID) 结果；"tampered"
-    → block（rule8）。测试可直接传。
+    plan_state：调用方（hook）传 plan_tracker.verify_plan(PLAN_ID) 结果。novel 主链
+    必须为 "ok"；PLAN_ID 缺失 / not_found / tampered / unattested / error 均 fail closed。
     """
     prompt = prompt or ""
     desc = desc or ""
@@ -392,13 +371,18 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
         is_novel_agent = subagent_type in NOVEL_SUBAGENT_TYPES
     else:
         is_novel_agent = any(kw in desc for kw in NOVEL_NAME_KEYWORDS)
-    has_plan_id = "PLAN_ID:" in prompt
+    plan_id_match = re.search(r"PLAN_ID:\s*(\S+)", prompt)
+    has_plan_id = bool(plan_id_match)
 
-    # ---- 规则 1：写作 Agent 契约字段（PLAN_ID 豁免）----
-    if is_novel_agent and not has_plan_id:
+    # ---- 规则 1：novel Agent 契约字段（PLAN_ID 只做绑定，不豁免业务字段）----
+    if is_novel_agent:
+        if not has_plan_id:
+            return _block("novel Agent 缺少 PLAN_ID（plan 绑定必需）", warnings)
+        if plan_state != "ok":
+            state = plan_state or "missing"
+            return _block(f"novel Agent PLAN_ID 校验失败: {state}", warnings)
         has_project = "PROJECT:" in prompt
-        has_chapter = "CHAPTER:" in prompt or "CURRENT_CHAPTER:" in prompt
-        has_manifest = "MANIFEST:" in prompt
+        has_cluster = "CLUSTER_ID:" in prompt
         has_mode = "MODE:" in prompt
         if subagent_type:
             is_writer = (subagent_type == "novel-writer")
@@ -408,21 +392,23 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
             is_aux = any(kw in desc.lower() for kw in
                          ["validator", "voice", "修第", "审第", "摘要", "伏笔", "经验", "规划"])
         if is_writer:
-            if not (has_project and has_chapter and has_manifest):
+            if not (has_project and has_cluster and has_mode):
                 miss = [m for m, ok in (("PROJECT", has_project),
-                                        ("CHAPTER", has_chapter),
-                                        ("MANIFEST", has_manifest)) if not ok]
+                                         ("CLUSTER_ID", has_cluster),
+                                         ("MODE", has_mode)) if not ok]
                 return _block(f"Writer Agent 缺少必填字段: {', '.join(miss)}", warnings)
         elif is_aux:
-            if not (has_project and has_chapter and has_mode):
+            if not (has_project and has_cluster and has_mode):
                 miss = [m for m, ok in (("PROJECT", has_project),
-                                        ("CHAPTER/CURRENT_CHAPTER", has_chapter),
-                                        ("MODE", has_mode)) if not ok]
+                                        ("CLUSTER_ID", has_cluster),
+                                         ("MODE", has_mode)) if not ok]
                 return _block(f"Agent 缺少必填字段: {', '.join(miss)}", warnings)
         else:
-            if not (has_project or has_chapter or has_manifest or has_mode):
-                return _block("写作 Agent 调用缺少契约字段（PROJECT/CHAPTER/MANIFEST/MODE）",
-                              warnings)
+            if not (has_project and has_cluster and has_mode):
+                miss = [m for m, ok in (("PROJECT", has_project),
+                                        ("CLUSTER_ID", has_cluster),
+                                        ("MODE", has_mode)) if not ok]
+                return _block(f"novel Agent 缺少必填字段: {', '.join(miss)}", warnings)
 
     # ---- 规则 2：prompt 长度门禁 ----
     prompt_len = len(prompt)
@@ -448,13 +434,12 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
             return _block("多步流水线 Agent 缺 PLAN_ID/STEP 字段", warnings)
 
     # ---- 规则 8：PLAN_ID 引用的 plan 防篡改（plan_state 由 caller 传）----
-    if re.search(r"PLAN_ID:\s*(\S+)", prompt) and plan_state == "tampered":
+    if has_plan_id and plan_state == "tampered":
         return _block("PLAN_ID 指向的 plan 防篡改校验失败（tampered）·疑似伪造 step 状态", warnings)
 
     # ---- 规则 10：ECAS agent 必须含 RESEARCH_REF ----
     is_ecas_mode = (
         ("MODE: ecas" in prompt) or ("MODE: ecas_cluster_brief" in prompt)
-        or ("MODE: ecas_multi_chapter" in prompt)
         or ("CLUSTER_ID:" in prompt and is_novel_agent))
     if is_ecas_mode:
         has_research_ref = ("RESEARCH_REF:" in prompt
@@ -483,7 +468,7 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
                             or "test_battle_replica" in prompt
                             or "test_psychology_replica" in prompt):
         is_replicate = True
-    if is_replicate and "DISTILL_REPLICATE_BYPASS=1" not in prompt:
+    if is_replicate:
         return _block("蒸馏复刻测试禁用 Agent 工具（须走 gen-model · distill_replicate.py）",
                       warnings)
 

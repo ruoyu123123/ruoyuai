@@ -91,5 +91,5 @@
       }
     ]
   },
-  "_doc": "Claude Code 项目级 hooks 注册。v23.13 新增：PreToolUse:Bash → pretooluse_subsystems_gate（新书全系统强制开启 / outline plan end 前检测 34 个必建 JSON，缺即 exit 2）。v22.gov：PreToolUse:Bash → pretooluse_step_research（强制 plan-step 前查 research_cache）+ PostToolUse:Bash → posttooluse_step_reflection（步骤后强制反思）。原有：PreToolUse:Agent gate / Write|Edit plan_check / SessionStart recall / Stop session_memory。hook 命令用 $CLAUDE_PROJECT_DIR 自适应项目根。所有新 hook 防御性 exit 0（异常放行，不破坏主流程）。"
+  "_doc": "Claude Code 项目级 hooks 注册。PreToolUse:Bash 注册 step_research / subsystems_gate / plan_step_anti_skip 三门硬闸；命中契约缺失、plan 不可验证或 outline 内容载荷空货架时 exit 2。PreToolUse:Agent gate 校验 PLAN_ID 绑定与 novel agent PROJECT/CLUSTER_ID/MODE 契约。hook 命令用 $CLAUDE_PROJECT_DIR 自适应项目根。"
 }

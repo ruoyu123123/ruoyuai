@@ -12,8 +12,7 @@
 【约束】
 - exit 0 = 放行 / exit 2 = 拒绝
 - 只钩 plan_tracker step + --skip-output 同时出现
-- 任何异常 → 放行（防御性）
-- 用户「轻量模式」旁路：`_数据库/.subsystems_bypass.json` 存在即放行
+- plan 解析失败、step 不存在或 required 输出被跳过 → exit 2
 """
 import json
 import os
@@ -68,33 +67,23 @@ def main():
     ]
     plan_file = next((c for c in candidates if c.exists()), None)
     if not plan_file:
-        sys.exit(0)
+        print(f"❌ [Hook anti_skip] 找不到 plan: {plan_id}", file=sys.stderr)
+        sys.exit(2)
 
     try:
         plan = json.loads(plan_file.read_text(encoding="utf-8"))
-    except Exception:
-        sys.exit(0)
-
-    # 用户轻量模式旁路：项目 _数据库/.subsystems_bypass.json 存在即放行
-    # 🔴 2026-06-17 移除 allow_skip_steps 全局旁路：无任何 plan 模板使用·是潜在 footgun
-    # （单字段整盘绕过「禁止跳步」最高元规则）。合法 opt-out 走项目级 .subsystems_bypass.json。
-    project_name = plan.get("project", "")
-    bypass_active = False
-    if project_name:
-        bypass_candidates = [
-            project_dir / "workspace" / "novels" / project_name / "_数据库" / ".subsystems_bypass.json",
-            project_dir / "workspace" / "styles" / project_name / "_数据库" / ".subsystems_bypass.json",
-        ]
-        bypass_active = any(b.exists() for b in bypass_candidates)
+    except Exception as exc:
+        print(f"❌ [Hook anti_skip] plan 解析失败: {plan_file}: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     # 找 step n 的模板定义
     target_step = next((s for s in plan.get("steps", []) if s.get("n") == n), None)
     if not target_step:
-        sys.exit(0)
+        print(f"❌ [Hook anti_skip] plan {plan_id} 不存在 step {n}", file=sys.stderr)
+        sys.exit(2)
 
     # 🔴 C16：核心校验下沉到 check_anti_skip（命中即此处含 --skip-output → requested=True）。
-    result = check_anti_skip(target_step, skip_output_requested=True,
-                             bypass_active=bypass_active)
+    result = check_anti_skip(target_step, skip_output_requested=True)
     if result["ok"]:
         sys.exit(0)
 

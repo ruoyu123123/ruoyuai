@@ -29,6 +29,7 @@ sys.path.insert(0, str(_SCRIPTS))
 import character_arc_update as cau  # noqa: E402
 
 _MODULE_PATH = _SCRIPTS / "character_arc_update.py"
+_INTERNAL_ENV_NAME = "RUOYUAI_CLUSTER_STATE_INTERNAL"
 
 
 # ============================================================
@@ -87,7 +88,11 @@ def _run_on(arc_obj, ch: int):
         db.mkdir(parents=True, exist_ok=True)
         arc_path = db / "character_arc_state.json"
         arc_path.write_text(json.dumps(arc_obj, ensure_ascii=False), encoding="utf-8")
-        env = {**_os_environ(), "PYTHONIOENCODING": "utf-8"}
+        env = {
+            **_os_environ(),
+            "PYTHONIOENCODING": "utf-8",
+            _INTERNAL_ENV_NAME: "1",
+        }
         cp = subprocess.run(
             [sys.executable, str(_MODULE_PATH), str(proj), str(ch)],
             capture_output=True, text=True, encoding="utf-8", env=env,

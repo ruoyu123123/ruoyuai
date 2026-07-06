@@ -25,6 +25,7 @@ import subprocess
 import sys
 from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
 from pathlib import Path
+import state_cli_guard
 
 SCRIPT_DIR = scripts_dir()
 
@@ -56,17 +57,15 @@ def get_cluster_chapter_range(project_root: Path, cluster_key: str) -> list[int]
     """拿 cluster 的 chapter_range，返回 [ch_start, ..., ch_end]。
 
     🔴 2026-06-17 bug-hunt 修：改走 `cluster_lookup.cluster_id_to_range`（唯一权威反查·北极星①·
-    享 blueprint 兜底）。原只读 事件簇.json 无兜底 → blueprint-only 状态返 [] → main FATAL exit2
-    卡死 save-state step9（与 save_state.py / evaluators 权威源不一致·三脚本对齐 cluster_lookup）。"""
-    try:
-        import cluster_lookup as _cl
-        cid = _cl.normalize_cluster_id(cluster_key) or \
-            f"cluster_{str(cluster_key).replace('cluster_', '')}"
-        cr = _cl.cluster_id_to_range(project_root, cid)
-        if cr and len(cr) == 2:
-            return list(range(int(cr[0]), int(cr[1]) + 1))
-    except Exception:
-        pass
+    可读 splitter 写回前的 blueprint 范围）。原只读 事件簇.json → blueprint-only 状态返 [] → main FATAL exit2
+    卡死 cluster-save-state step9（与 save_state.py / evaluators 权威源不一致·三脚本对齐 cluster_lookup）。"""
+    import cluster_lookup as _cl
+    cid = _cl.normalize_cluster_id(cluster_key)
+    if not cid:
+        raise RuntimeError(f"非法 cluster_key: {cluster_key!r}")
+    cr = _cl.cluster_id_to_range(project_root, cid)
+    if cr and len(cr) == 2:
+        return list(range(int(cr[0]), int(cr[1]) + 1))
     return []
 
 
@@ -82,7 +81,8 @@ def run_one_module(module_name: str, script_name: str, args_spec: list, project:
     try:
         r = subprocess.run(
             [child_python(), str(script_path), *cli_args],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+            env=state_cli_guard.internal_env(),
         )
         if r.returncode != 0:
             return False, f"rc={r.returncode}: {(r.stderr or r.stdout)[:200]}"

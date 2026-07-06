@@ -29,6 +29,7 @@ from pathlib import Path
 # 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
+import state_cli_guard
 try:
     import cluster_lookup  # 2026-05-30 北极星：since_cluster 反查真实 cluster_id（防御 import）
 except Exception:
@@ -261,7 +262,7 @@ def list_active(project_root: Path, ch: int) -> dict:
 
 
 def _since_cluster(project_root: Path, ch: int) -> str:
-    """反查 ch 所属 cluster_id（北极星铁律：禁用 f"cluster_{ch:03d}" 章号拼接）。反查失败兜底。"""
+    """反查 ch 所属 cluster_id（北极星铁律：禁用章号拼接）。"""
     if cluster_lookup is not None:
         try:
             cid = cluster_lookup.ch_to_cluster_id(project_root, ch)
@@ -269,10 +270,9 @@ def _since_cluster(project_root: Path, ch: int) -> str:
                 return cid
         except Exception:
             pass
-    # 反查失败兜底（dormant 功能；未来启用前应确保 cluster 已涌现）。北极星①：机械拼接集中到 cluster_lookup 唯一出处
     if cluster_lookup is not None:
         return cluster_lookup.infer_cluster_id_by_chapter(ch)
-    return f"cluster_{ch:03d}"
+    raise RuntimeError("cluster_lookup 不可用，无法反查 clock 所属 cluster")
 
 
 def spawn(project_root: Path, ch: int, clock_def: dict) -> dict:
@@ -349,6 +349,7 @@ def dashboard(project_root: Path) -> dict:
 
 
 def main():
+    state_cli_guard.require_internal("clock_engine.py")
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("action", choices=["tick", "tick_event", "list", "spawn", "dashboard"])

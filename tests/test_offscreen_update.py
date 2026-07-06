@@ -11,12 +11,15 @@
 零依赖：仅标准库；临时目录隔离，绝不碰真项目。
 """
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import offscreen_update as ou  # noqa: E402
+
+_INTERNAL_ENV_NAME = "RUOYUAI_CLUSTER_STATE_INTERNAL"
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +62,9 @@ def _run(project, ch, dry_run=False):
     if dry_run:
         argv.append("--dry-run")
     old = sys.argv
+    old_internal = os.environ.get(_INTERNAL_ENV_NAME)
     sys.argv = ["offscreen_update.py"] + argv
+    os.environ[_INTERNAL_ENV_NAME] = "1"
     try:
         ou.main()
         return 0  # main 必 sys.exit，理论上到不了
@@ -67,6 +72,10 @@ def _run(project, ch, dry_run=False):
         return e.code if e.code is not None else 0
     finally:
         sys.argv = old
+        if old_internal is None:
+            os.environ.pop(_INTERNAL_ENV_NAME, None)
+        else:
+            os.environ[_INTERNAL_ENV_NAME] = old_internal
 
 
 def _load_cards(cards_path: Path):

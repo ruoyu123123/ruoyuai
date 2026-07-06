@@ -11,16 +11,16 @@ exit 0 = 放行, exit 2 = 拒绝
 11 蒸馏复刻禁 Agent）连同关键词常量已抽到共享库
 `plan_step_gates.check_agent_injection`（北极星⑥消重复·单一真相源）。
 本 hook 现为薄 wrapper：解析 stdin → 抽 prompt/desc/subagent_type → 算
-plan_state(tampered) → 调 check → 打印 warnings → ok ? exit 0 : exit 2。
+plan_state(ok/not_found/tampered/...) → 调 check → 打印 warnings → ok ? exit 0 : exit 2。
 
 与原 hook **exit 语义完全等价**：所有硬规则命中 → exit 2；warn-only（规则 4/9）
 只打印不退出。
 
 历史背景（保留供追溯）：
-- 规则 5/6：多步流水线 Agent 必须含 PLAN_ID/STEP；含 PLAN_ID 视为契约完整跳过
-  PROJECT/CHAPTER/MANIFEST 强制。
+- 规则 5/6：多步流水线 Agent 必须含 PLAN_ID/STEP；novel 主链 PLAN_ID 只用于 plan
+  绑定/防篡改，不豁免 PROJECT/CLUSTER_ID/MODE。
 - 规则 8（P1-1）：PLAN_ID 引用的 plan 防篡改——plan JSON 被旁路篡改（伪造 step 状态
-  绕过跳步防御）→ 在 Agent spawn 前拦下。增值项，校验自身出错一律放行。
+  绕过跳步防御）→ 在 Agent spawn 前拦下。novel 主链校验缺失/异常 fail closed。
 - 规则 9（P2-10）：内容级注入模式检测（warn-only，不拦截）。
 - v26 清理：删除原规则 12（novel-writer single 模式废弃门禁 + .allow_single_mode.flag）。
 """
@@ -39,8 +39,8 @@ from plan_step_gates import check_agent_injection  # noqa: E402
 def _compute_plan_state(prompt: str):
     """规则 8 防篡改：prompt 含 PLAN_ID → plan_tracker.verify_plan 结果（"tampered"/...）。
 
-    【增值】项：plan_tracker 不可导入 / plan 找不到 / 校验出错——一律 None（放行），
-    绝不让防篡改校验本身成为新故障点（与原 hook 一致）。
+    PLAN_ID 是 novel 主链绑定字段：找不到 / 校验出错 / attestation 非 ok 都交给
+    check_agent_injection fail closed。无 PLAN_ID 返回 None，由门库判定是否必需。
     """
     import re
     m = re.search(r"PLAN_ID:\s*(\S+)", prompt or "")
@@ -50,7 +50,7 @@ def _compute_plan_state(prompt: str):
         import plan_tracker  # _SCRIPTS 已在 sys.path
         return plan_tracker.verify_plan(m.group(1).strip())
     except Exception:
-        return None
+        return "error"
 
 
 def main():

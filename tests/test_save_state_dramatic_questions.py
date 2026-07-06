@@ -8,9 +8,10 @@ PITQ + McKee MDQ + Loewenstein 信息缺口 + Zeigarnik）：
   · 只填 active cluster（JudgeReport 已是本 cluster 范围·account 归本 cid）
   · 幂等·去重：raised 按 qid·answered 按 qid（qid 全局唯一·标对应 qid 闭合）
   · raised_at_scene/answered_at_scene 归一为 int·scope 钳到 cluster|volume|series
-  · 默认安全/向后兼容：JudgeReport 无 dramatic_questions / 缺报告 / raised+answered 全空 → no-op·return 0
+  · 硬失败：JudgeReport 缺失 / 无 dramatic_questions 字段 → return 2
+  · raised+answered 全空表示 producer 明确无戏剧问题变更，幂等 return 0
   · 账本缺/坏 → 从空骨架重建（辅助态文件·我方拥有·world_seed_init 已播种）
-  · 全 advisory STATE（账本不进 HARD_GATE_CODES）·永不阻断
+  · required STATE：producer 缺产物不允许静默吞掉
 """
 import json
 import sys
@@ -21,6 +22,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import save_state as ss  # noqa: E402
+import cluster_lookup  # noqa: E402
 
 
 # ═══════════════════════ 脚手架 ═══════════════════════
@@ -34,11 +36,12 @@ def _mk_project(tmp: Path, *, dq=None, ledger=None, key="001",
         {"clusters": [{"cluster_id": "cluster_001", "chapter_range": [1, 3]}]},
         ensure_ascii=False), encoding="utf-8")
     if report_present:
+        cid = cluster_lookup.normalize_cluster_id(key)
         sf = {"payoff_scores": [], "chekhov_candidates": [], "health_warnings": []}
         if dq is not None:
             sf["dramatic_questions"] = dq
-        (db / ".judge_reports" / f"cluster_{key}_foreshadower.json").write_text(
-            json.dumps({"judge_id": "foreshadower", "cluster_id": f"cluster_{key}",
+        (db / ".judge_reports" / f"{cid}_foreshadower.json").write_text(
+            json.dumps({"judge_id": "foreshadower", "cluster_id": cid,
                         "specific_findings": sf}, ensure_ascii=False), encoding="utf-8")
     if ledger is not None:
         (db / "戏剧问题账本.json").write_text(json.dumps(ledger, ensure_ascii=False),
@@ -186,27 +189,27 @@ def test_broken_ledger_rebuilt():
 
 # ═══════════════════════ 默认安全 / 向后兼容 ═══════════════════════
 
-def test_no_dramatic_questions_in_report_noop():
-    """JudgeReport 无 dramatic_questions（foreshadower 未扩产/旧书）→ no-op·账本不变。"""
+def test_no_dramatic_questions_in_report_hard_fails():
+    """JudgeReport 无 dramatic_questions → required 字段缺失，return 2。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER), dq=None)
-        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 2
         assert _ledger(root)["clusters"] == {}
 
 
-def test_empty_raised_and_answered_noop():
+def test_empty_raised_and_answered_writes_structured_empty_result():
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
                            dq={"raised": [], "answered": []})
         assert ss.cmd_apply_dramatic_questions(root, "001") == 0
-        assert _ledger(root)["clusters"] == {}
+        assert _ledger(root)["clusters"] == {"cluster_001": {"raised": [], "answered": []}}
 
 
-def test_missing_report_noop():
-    """foreshadower JudgeReport 不存在（未跑）→ no-op·不创建账本条目·return 0。"""
+def test_missing_report_hard_fails():
+    """foreshadower JudgeReport 不存在（未跑）→ return 2。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER), report_present=False)
-        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 2
         assert _ledger(root)["clusters"] == {}
 
 

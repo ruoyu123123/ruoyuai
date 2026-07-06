@@ -1,12 +1,12 @@
 """relationship_evaluator.py — 关系档位强制揭密评估器（v21 R1.5 新增）
 
-借鉴 Stardew Valley 的 heart events：每核心配角有档位事件清单。每章 save-state 检查
+借鉴 Stardew Valley 的 heart events：每核心配角有档位事件清单。/cluster-save-state 按 cluster 章范围检查
 当前 关系.json 数值是否到了某个 trigger_at → 满足且 consumed=false → 标 next_chapter_must_reveal[]
 让主代理在下章 outline-planner 阶段把 reveal 安排进走向卡。
 
 2026-05-30 修（#5 状态机闭环）：补「写回端」。本脚本是 heart_event consumed 字段的**唯一读处**
 （line ~110 `he.get("consumed")` 跳过已揭密），但全仓此前**无任何脚本写 consumed=true**——
-关系数值单调累积，trigger_at 一旦满足永久满足 → 每章 save-state 把同一 heart_event 反复重写进
+关系数值单调累积，trigger_at 一旦满足永久满足 → /cluster-save-state 可能把同一 heart_event 反复重写进
 .ensemble_pending_reveals.json → build_manifest 反复要求 writer 重揭已揭的秘密；且
 cross_cluster_data_consumption_aggregate.scan_heart_event_consistency 只处理 consumed==true
 变成死代码。修：evaluate() 先据 writer 实际产出（_changes.json factual.heart_events_revealed，
@@ -26,6 +26,8 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import state_cli_guard
 
 # 2026-05-30 修：用原子写持久化 群像档.json 的 consumed 写回（与 declarative_data_update 一致）。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -211,6 +213,7 @@ def evaluate(project_root: Path, ch: int) -> dict:
 
 
 def main():
+    state_cli_guard.require_internal("relationship_evaluator.py")
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("--ch", type=int, default=None)
