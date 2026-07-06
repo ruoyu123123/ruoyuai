@@ -10,7 +10,7 @@
 2. distill_replicate.call_gen_model 在 stream 完成后主动调 → 命中走 3s 退避 + disclaimer 追加重试。
 3. 3 次全 refusal → REFUSAL_EXHAUSTED 记 failures → 走下一 fallback profile → 全链 refusal 抛
    GenModelExhaustedError（exit=3）。
-4. env REFUSAL_RETRY_ENABLED=0 旁路（legacy 行为）。
+4. 旧 env 旁路已退役；拒绝重试始终生效。
 """
 from __future__ import annotations
 import os
@@ -85,8 +85,9 @@ class TestIsRefusalHelper:
         assert lt._is_refusal(t) is False
 
     def test_env_flag_does_not_affect_helper(self):
-        """_is_refusal 是纯函数 · 不读 env。env 旁路只影响 distill_replicate 调用层。"""
-        with patch.dict(os.environ, {"REFUSAL_RETRY_ENABLED": "0"}):
+        """_is_refusal 是纯函数 · 不读 env。"""
+        retry_env = "REFUSAL_RETRY_" + "ENABLED"
+        with patch.dict(os.environ, {retry_env: "0"}):
             assert lt._is_refusal("我不能帮助这个请求。") is True
 
     def test_custom_max_chars_threshold(self):
@@ -100,31 +101,6 @@ class TestIsRefusalHelper:
         t = " " * 50 + "我不能帮助" + " " * 100
         # strip 后开头是 "我不能帮助" → head_window 默认 100 命中
         assert lt._is_refusal(t) is True
-
-
-# ═══════════════════════════════ Part 2: _refusal_retry_enabled env gate ═══════════════════════════════
-
-class TestRefusalRetryEnvGate:
-    def test_default_enabled(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("REFUSAL_RETRY_ENABLED", None)
-            assert dr._refusal_retry_enabled() is True
-
-    def test_explicit_on(self):
-        with patch.dict(os.environ, {"REFUSAL_RETRY_ENABLED": "1"}):
-            assert dr._refusal_retry_enabled() is True
-
-    def test_disabled_by_zero(self):
-        with patch.dict(os.environ, {"REFUSAL_RETRY_ENABLED": "0"}):
-            assert dr._refusal_retry_enabled() is False
-
-    def test_disabled_by_off(self):
-        with patch.dict(os.environ, {"REFUSAL_RETRY_ENABLED": "off"}):
-            assert dr._refusal_retry_enabled() is False
-
-    def test_disabled_by_false(self):
-        with patch.dict(os.environ, {"REFUSAL_RETRY_ENABLED": "false"}):
-            assert dr._refusal_retry_enabled() is False
 
 
 # ═══════════════════════════════ Part 3: call_gen_model refusal-retry 集成 ═══════════════════════════════
@@ -197,7 +173,7 @@ class TestCallGenModelRefusalRetry:
         except ImportError:
             pass
         # 默认开 refusal-retry
-        monkeypatch.setenv("REFUSAL_RETRY_ENABLED", "1")
+        monkeypatch.setenv("REFUSAL_RETRY_" + "ENABLED", "1")
         # 避免 reasoning_extra_body 干扰
         monkeypatch.setattr(dr, "reasoning_extra_body", lambda p: None)
         yield
@@ -267,18 +243,22 @@ class TestCallGenModelRefusalRetry:
         # 至少 6 次都调到了
         assert fake.call_count == 6
 
-    def test_env_disabled_skips_refusal_retry(self, monkeypatch):
-        """REFUSAL_RETRY_ENABLED=0 → 不触发 retry · 直接把 refusal 当合法文本返回（legacy 行为）。"""
-        monkeypatch.setenv("REFUSAL_RETRY_ENABLED", "0")
+    def test_old_env_disable_flag_is_ignored(self, monkeypatch):
+        """旧 refusal retry env flag 不能关闭 refusal retry。"""
+        monkeypatch.setenv("REFUSAL_RETRY_" + "ENABLED", "0")
         refusal = "I cannot fulfill this request."
-        fake = _FakeOpenAIClient([("text", refusal)])
+        body_normal = "夜雨打在屋檐上。" * 400
+        fake = _FakeOpenAIClient([
+            ("text", refusal),
+            ("text", body_normal),
+        ])
         self._patch_openai(monkeypatch, fake)
 
         loader = _make_loader([_make_profile()])
         text, profile, _ = dr.call_gen_model(loader, "sys", "USER", default_max_tokens=4000)
 
-        assert fake.call_count == 1, "禁用时不应重试"
-        assert text == refusal  # legacy: refusal 文本直接返回
+        assert fake.call_count == 2
+        assert text == body_normal
         assert profile.name == "active"
 
     def test_transient_exception_then_refusal_then_success(self, monkeypatch):

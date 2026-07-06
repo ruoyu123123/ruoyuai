@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 """adaptation_kit.py — 改编资料包生成器（一人公司·喂 IP 后端·纯确定性投影·2026-06-15）
 
-【缺口】若渝AI 产物链 export_book.py L193 止于「拼接全文.txt」·全套结构化设定只喂 writer 自己
-消费·零对外投影出口（一人公司调研 IP 端最高价值 P0·distill-character L272 已写「为续集/番外
-准备角色档案」use-case 却无实现）。本模块补这个投影层：把现有子系统 JSON 投影成影视/有声/漫改
-方要的资料·把若渝AI 从「写正文工具」变「喂 IP 后端工具」。
+【定位】/export 链内投影层：export_book.py 在 with_adaptation_kit 时消费本模块，
+把现有子系统 JSON 投影成影视/有声/漫改方要的资料（一人公司调研 IP 端最高价值 P0），
+让若渝AI 从「写正文工具」兼任「喂 IP 后端工具」。正文导出本体是 exports/<书名>_全文_<章数>章.txt（硬完整性闸）。
 
 【做法 · 纯确定性零 LLM 零封号风险】读子系统 JSON → 拼 markdown·产 4 份：
   1. 人物小传（人物卡 → name/role/外貌/性格/声纹/弧线/锁定事实）

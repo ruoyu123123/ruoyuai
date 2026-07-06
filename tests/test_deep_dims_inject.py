@@ -3,7 +3,7 @@
 
 仿 #3/#7 升格族。守护：active 注入位置正确（manifest 后·生成点前）+ shadow（默认）/off 零回归 +
 无字段/空 tip 不注入。默认 shadow（tip 大段创作提示·升格价值 + context 成本需 gen-model A/B）。
-零依赖·run_tests.py / pytest 双跑。
+零依赖·仓库根 pytest 入口。
 """
 import json
 import os

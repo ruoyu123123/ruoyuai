@@ -4,14 +4,13 @@
 城南火葬场夜班/时间线.json + db_schema_validate.py 只 require `event` · 注释明写
 「world clock event 用 day/cluster 颗粒」）—— 全仓无 producer 写 `ch` 字段。
 
-旧实现按废弃的 `e.get("ch") == self.ch` 过滤 → clock_events_this_ch 恒空 →
+旧实现按废弃的 `e.get("ch") == self.ch` 过滤 → clock_events_this_cluster 恒空 →
 时钟事件浮现机制死掉、时间线 must_read 永停 P1。
 
 守护点：
   · cluster 颗粒：event.cluster | event.cluster_revealed == 本章所属 cluster_id（经 cluster_lookup 归一）
   · date 颗粒：event.date | event.absolute_time == current_time.date | current_time.absolute_time
   · day 颗粒：event.day == current_time.day（纵尸司整数日计数）
-  · ch 颗粒：兼容仍带 ch 字段的旧数据
   · vol（卷）过粗 → 故意不命中（防整卷每章误标）
   · 真实城南 schema（无 ch、有 date/cluster）必须能浮现，不再恒空
   · build_manifest() 时间线 must_read 命中时升 P0（北极星⑤顾问层注入·非 hard_gate）
@@ -57,7 +56,7 @@ _CARDS = [{"id": "lin_qi", "name": "林七", "role": "主角"}]
 
 # 城南火葬场夜班真实结构（无 ch · 有 date/vol · event 文本提 cluster_001）
 _CITYNAN_TIMELINE = {
-    "current_time": {"day": 87, "period": "夜", "chapter": 1,
+    "current_time": {"day": 87, "period": "夜", "cluster": "cluster_001",
                      "season": "夏", "date": "2031-08-12"},
     "npc_schedules": {"xie_banjia": "...", "bai_sang": "..."},
     "world_clock_events": [
@@ -139,32 +138,11 @@ def test_cluster_takes_priority_over_date():
         assert r["clock_events_this_ch"][0]["_matched_by"] == "cluster"
 
 
-# ---------- ch 颗粒（旧数据兼容） ----------
-
-def test_legacy_ch_field_still_matches():
-    """仍带 `ch` 字段的旧项目数据 → 兼容命中（不破坏既有项目）。"""
-    tl = {
-        "current_time": {"date": "no-date"},
-        "world_clock_events": [
-            {"ch": 3, "event": "旧 ch 颗粒事件"},
-            {"ch": 9, "event": "别的章"},
-        ],
-    }
-    with tempfile.TemporaryDirectory() as d:
-        tmp = _mk_project(Path(d), timeline=tl, clusters=_CLUSTERS)
-        s = bm.DatabaseScanner(tmp, 3)
-        r = s.time_state()
-        hits = r["clock_events_this_ch"]
-        assert len(hits) == 1
-        assert hits[0]["_matched_by"] == "ch"
-        assert hits[0]["event"] == "旧 ch 颗粒事件"
-
-
 # ---------- 真实 3 schema 补全（batch6 #3）：day / cluster_revealed / absolute_time ----------
 
 # 纵尸司真实结构：{day(整数日计数), event, impact} · current_time 也用 day
 _ZOMBIE_TIMELINE = {
-    "current_time": {"day": 45, "period": "夜", "chapter": 1,
+    "current_time": {"day": 45, "period": "夜", "cluster": "cluster_001",
                      "season": "暮春", "lunar": "大昭 327 年 三月初九"},
     "npc_schedules": {"钟离阙": "..."},
     "world_clock_events": [

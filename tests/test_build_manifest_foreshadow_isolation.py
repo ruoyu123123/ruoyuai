@@ -41,6 +41,19 @@ def _make_project(tmp: Path) -> Path:
     assert rc == 0, "scaffold emit 应成功"
     db = proj / "_数据库"
 
+    # 2026-07：auto_fate_draw 收编为 cluster-write step1 required 生产者后，
+    # build_manifest 硬要求 .manifest/ch_<NNN>_fate_draw_decision.json（缺失即 RuntimeError）。
+    # 写 not_required 模拟 step1 已按正式链路执行（本文件只测伏笔明暗线隔离，不测抽签本身）。
+    manifest_dir = db / ".manifest"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    (manifest_dir / "ch_001_fate_draw_decision.json").write_text(json.dumps({
+        "_schema": "fate_draw_decision_v1",
+        "producer": "auto_fate_draw.py",
+        "chapter": 1,
+        "status": "not_required",
+        "reason": "测试夹具：事件池为骨架空池，无可抽事件",
+    }, ensure_ascii=False), encoding="utf-8")
+
     # 事件簇：cluster_001 active 非空 brief，带明暗线拆分的 plant + callback
     (db / "事件簇.json").write_text(json.dumps({
         "clusters": [{

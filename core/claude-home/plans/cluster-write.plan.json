@@ -4,27 +4,37 @@
   "description": "cluster 级写作流水线 7 步 · v2 cluster 化方案（2026-05-28）：cluster 单层 + scanner 全员升维 + 切章是纯格式输出 0 质检",
   "_v2_principle": "整个系统为故事块服务 · 章节是输出格式 · scanner 全部 cluster 视野 · 切章后不再有任何质检",
   "total_steps": 7,
-  "required_steps": [1, 2, 3, 4, 5, 6, 7],
+  "required_steps": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
   "optional_steps": [],
   "_doc_v24": "流水线倒置：cluster_draft → cluster 级所有改进 → 全 clean 后才 splitter → gen_chapter_titles → per-chapter changes 拆分。审查 agent 全 cluster mode。1 个 cluster = 1 次 cluster-write plan",
   "steps": [
     {
       "n": 1,
       "name": "build-manifest+style-directive",
-      "description": "build_manifest.py 生成 cluster 起首章 manifest（注入 cluster brief + 全 25+ 子系统状态）+ style_injector 注入风格指令",
+      "description": "cluster_002+ 先消费用户选择 artifact 应用世界涟漪，再由 build_manifest.py 生成 cluster 起首章 manifest（注入 cluster brief + 全 25+ 子系统状态）+ style_injector 注入风格指令。cluster_001 无前置选择，不执行 world_evolution_apply_card。",
       "required": true,
       "skip_output_allowed": false,
-      "_doc_h7_fix": "2026-05-29 复审修复（H7）：plan_tracker create 只传 --key（纯数字）不传 --chapter → {ch:03d} 被替换成空 → 旧 expected_outputs 变成不存在的 ch_.json 路径 → step1 死锁。改目录级检查：.manifest 目录必由 build_manifest save_json mkdir 落地（起首章号 START_CH 在 create 时尚未 resolve，故不能用 {ch:03d}）。.style_directive 仅在项目有 style_profile 时才写（条件产物），从 hard expected_output 移除避免误 FAIL。",
-      "_doc_pipeline": "主代理 Claude Code 执行 scripts。<cluster_start_ch> 用 cluster_lookup 权威算出（上一 cluster 范围 hi+1）·主代理跑脚本前解析填实。行首 '? ' = 条件脚本（style_injector 无风格档 exit 1 是条件不适用非错误）。",
-      "_doc_c16": "🔴 2026-06-27 C16：build-manifest=cluster 开写前/走向卡前步·加 research_ref（调研先行门·**advisory 永不硬锁写作主轨**·北极星⑤）。⚠️ 刻意指 .research_cache **目录**而非定值文件：① novel-researcher 输出是时间戳变名（{task_type}_{slug}_{ts}）·定值文件名必误报 ② 目录在 outline step2 即建（.placeholder）→ cluster-write 时恒存在 → 门恒过·零噪声 ③ 真研究全无的 book 才 advisory 提示（主代理软放行+记 waiver·绝不像「没调研缓存就不让写」那样硬锁 fluid 涌现）。绝不接 writer 正文步（step2）。",
+      "_doc_h7_fix": "2026-05-29 复审修复（H7）：plan_tracker create 只传 cluster key；模板不得使用旧章号占位。step1 改目录级检查：.manifest 目录必由 build_manifest save_json mkdir 落地（起首章号 START_CH 由 cluster range 运行时解析，不属于 plan_id key）。.style_directive 仅在项目有 style_profile 时才写（条件产物），从 hard expected_output 移除避免误 FAIL。",
+      "_doc_pipeline": "主代理 Claude Code 执行 scripts。<cluster_start_ch> 用 cluster_lookup 权威算出（上一 cluster 范围 hi+1），主代理跑脚本前解析填实。cluster_002+ 正式走向卡应用必须成功；cluster_001 不调用 world_evolution_apply_card。auto_fate_draw 是正式状态生产者：无事件池、无可用事件或已有绑定时必须写结构化 decision artifact；抽签失败或产物损坏必须阻断。行首 ? 仅保留给 style_injector 这类有明确“项目未启用风格库”条件的产物脚本。",
+      "_doc_c16": "🔴 2026-06-27 C16：build-manifest=cluster 开写前/走向卡前步·加 research_ref（调研先行门·走向决策证据）。刻意指 .research_cache 目录而非定值文件：① novel-researcher 输出是时间戳变名（{task_type}_{slug}_{ts}）② 目录在 outline step2 创建 ③ 主代理据此记录研究证据，不接 writer 正文步（step2）。",
       "research_ref": "_数据库/.research_cache",
       "scripts": [
-        "? python core/scripts/auto_fate_draw.py {project_root} <cluster_start_ch>",
+        "python core/scripts/world_evolution_apply_card.py {project_root} --next-key {key} --choice _数据库/.wal/cluster_{key}_user_choice.json",
+        "python core/scripts/auto_fate_draw.py {project_root} <cluster_start_ch> --cluster-id cluster_{key}",
         "python core/scripts/build_manifest.py {project_root} <cluster_start_ch>",
         "? python core/scripts/style_injector.py {project_root} <cluster_start_ch>"
       ],
       "expected_outputs": [
-        "_数据库/.manifest"
+        "_数据库/.manifest",
+        "_数据库/.manifest/cluster_{key}_fate_draw_decision.json"
       ]
     },
     {
@@ -48,11 +58,11 @@
     {
       "n": 3,
       "name": "cluster-quality-full-stack",
-      "description": "v2 cluster 全面质检（2026-05-28）· 13 个 cluster 视野 scanner 并行跑：9 个升维 scanner（validate_chapter/validate_style/narrative/plot_structure/hook_strength_拟切点节奏/golden_three_仅cluster_001/semantic_slop/short_sentence/repeat_noun_density）+ 4 个新 cluster-only scanner（cross_scene_voice_drift/foreshadowing_handoff/locked_fact_cross_scene/pov_consistency）· 机械轨：audit_hub.py --mode cluster --cluster-id {key} · 阅读轨：spawn novel-reading-reflector MODE=ecas ROUND=1 → fix → ROUND=2 → ... 连续 3 轮 0 issue 才放行",
+      "description": "v2 cluster 全面质检（2026-05-28）· 13 个 cluster 视野 scanner 并行跑：内部物理章 hard_gate 扫描器 + style/narrative/plot_structure/hook_strength_拟切点节奏/golden_three_仅cluster_001/semantic_slop/short_sentence/repeat_noun_density + 4 个 cluster-only scanner（cross_scene_voice_drift/foreshadowing_handoff/locked_fact_cross_scene/pov_consistency）· 机械轨：audit_hub.py --mode cluster --cluster-id {key} · 作者金标准：replication_fidelity_check --strict · 阅读轨：spawn novel-reading-reflector MODE=ecas ROUND=1 → fix → ROUND=2 → ... 连续 3 轮 0 issue 才放行",
       "required": true,
       "must_spawn_agent": "novel-reading-reflector",
       "skip_output_allowed": false,
-      "_doc_pipeline": "① audit_hub 退出码语义上移成 control_flow.exit_codes（0=pass/1=auto_fixed 均继续·2=needs_agent→主代理派单 validator-checker·3=fatal 停）② reading-reflector ROUND 循环上移成 control_flow.round_loop（连续 3 轮 0 issue 放行·超 5 轮软预算放行·advisory 非门禁）③ judge_report_path 的 <round> 由 end_plan 通配校验（任一轮存在即过）④ touch_outputs 落 .placeholder（多轮产物文件名可变的存在性代理）。control_flow 只表达控制流不编码创作决策（北极星⑤）。",
+      "_doc_pipeline": "① audit_hub 退出码语义上移成 control_flow.exit_codes（0=pass/1=auto_fixed 均继续·2=needs_agent→主代理派单 validator-checker·3=fatal 停）② 作者金标准 strict 模式有偏离即 exit1，必须修复重跑，不再顾问放行 ③ reading-reflector ROUND 循环上移成 control_flow.round_loop（连续 3 轮 0 issue 通过·超 6 轮 hard_stop）④ judge_report_path 的 <round> 由 end_plan 通配校验（任一轮存在即过）⑤ touch_outputs 落 .placeholder（多轮产物文件名可变的存在性代理）。control_flow 只表达控制流不编码创作决策。",
       "agent_input": {
         "PROJECT": "{project_root}",
         "CLUSTER_ID": "cluster_{key}",
@@ -70,12 +80,13 @@
         },
         "round_loop": {
           "agent": "novel-reading-reflector",
-          "max_rounds": 5,
+          "max_rounds": 6,
           "consecutive_clean": 3,
           "pass_field": "verdict",
-          "pass_value": "pass"
+          "pass_value": "pass",
+          "on_exhausted": "hard_stop"
         },
-        "_doc_c04_c05": "🔴 2026-06-27 C04/C05：hard_gate 质量地板 + 修复重验闭环（治①round_loop 软放行后带病草稿原封切章 ②audit 命中 hard_gate 只派单一次不重验）。主代理读 audit_report·residual=[未豁免 hard_gate]（**只认 audit_hub.HARD_GATE_CODES**·阅读轨/prose_rhythm/hook/voice 的 advisory 残留绝不触发 FAIL·北极星护栏命门）·非空→有界 dispatch fix_agent + 重跑 reaudit_script(--auto-fix) ≤max_fix_rounds 轮·用尽仍残留 raise 停 step3 不进切章 step6（可 --resume）。",
+        "_doc_c04_c05": "🔴 2026-06-27 C04/C05：hard_gate 质量地板 + 修复重验闭环（治①round_loop 结束后带病草稿原封切章 ②audit 命中 hard_gate 只派单一次不重验）。主代理读 audit_report·residual=[未豁免 hard_gate]（只认 audit_hub.HARD_GATE_CODES；阅读轨/prose_rhythm/hook/voice 的非 hard_gate 残留不触发 FAIL）·非空→有界 dispatch fix_agent + 重跑 reaudit_script(--auto-fix) ≤max_fix_rounds 轮·用尽仍残留 raise 停 step3 不进切章 step6（可 --resume）。",
         "hard_gate_reverify": {
           "audit_report": "_数据库/.audit/cluster_{key}_audit.json",
           "reaudit_script": "python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id {key} --auto-fix --waivers '{project_root}/章节/cluster_{key}_draft/cluster_{key}_changes.json'",
@@ -88,10 +99,12 @@
       ],
       "expected_outputs": [
         "_数据库/.audit/cluster_{key}_audit.json",
+        "_数据库/.audit/replication_fidelity_cluster_{key}.json",
         "_数据库/.reading_reflection/.placeholder"
       ],
       "scripts": [
-        "python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id {key} --auto-fix --waivers '{project_root}/章节/cluster_{key}_draft/cluster_{key}_changes.json'"
+        "python core/scripts/audit_hub.py {project_root} --mode cluster --cluster-id {key} --auto-fix --waivers '{project_root}/章节/cluster_{key}_draft/cluster_{key}_changes.json'",
+        "python core/scripts/replication_fidelity_check.py --project {project_root} --cluster {key} --strict"
       ]
     },
     {
@@ -108,8 +121,10 @@
       },
       "judge_report_path": "_数据库/.checker_briefs/cluster_{key}_voice.json",
       "judge_report_path_secondary": "_数据库/.judge_reports/cluster_{key}_voice-checker.json",
-      "skip_output_allowed": true,
-      "expected_outputs": [],
+      "skip_output_allowed": false,
+      "expected_outputs": [
+        "_数据库/.checker_briefs/cluster_{key}_voice.json"
+      ],
       "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_voice-checker.json（brief 的 secondary 落盘·主载体 brief 供 gen_fixer --mode voice-fix 消费）"
     },
     {
@@ -117,7 +132,11 @@
       "name": "cluster-foreshadower+reflector+summarizer",
       "description": "cluster 级三 agent 串行：foreshadower（整 cluster 伏笔评估）+ reflector（整 cluster 经验提取）+ summarizer（cluster 级摘要）",
       "required": true,
-      "must_spawn_agent": ["novel-foreshadower", "novel-reflector", "novel-summarizer"],
+      "must_spawn_agent": [
+        "novel-foreshadower",
+        "novel-reflector",
+        "novel-summarizer"
+      ],
       "agent_input": {
         "PROJECT": "{project_root}",
         "CLUSTER_ID": "cluster_{key}",
@@ -129,15 +148,17 @@
         "novel-reflector": "_数据库/.wal/cluster_{key}_reflection.json",
         "novel-summarizer": "_数据库/.wal/cluster_{key}_summary.json"
       },
-      "skip_output_allowed": true,
+      "skip_output_allowed": false,
       "expected_outputs": [
+        "_数据库/.judge_reports/cluster_{key}_foreshadower.json",
+        "_数据库/.wal/cluster_{key}_reflection.json",
         "_数据库/.wal/cluster_{key}_summary.json"
       ]
     },
     {
       "n": 6,
       "name": "splitter+chapter-titles+per-chapter-changes-zero-audit",
-      "description": "v2 cluster 化方案 · 纯格式输出步骤 · 0 质检（章节是输出格式，不是检测单位）· v27 freestyle 默认：调度器先检测上 cluster 的 章节/cluster_<prev>_draft/cluster_<prev>_pending_tail.txt 是否存在，存在则透传 PREVIOUS_PENDING_TAIL_PATH（splitter prepend 到本 cluster 草稿头联合切）· spawn novel-chapter-splitter MODE=ecas_freestyle（按字数硬范围 3000-4500/章自动算 N · 末章<3000 退回 cluster_<key>_pending_tail.txt 不强切）或 ecas_multi_chapter（_writer_mode=locked 兼容 · cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ gen_chapter_titles.py --chapters <range>（normal/mid/high 三档）→ split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json · ★ 切章后 0 audit/0 scanner/0 质检 · 直接进 step 7 plan-end",
+      "description": "v2 cluster 化方案 · 纯格式输出步骤 · 0 质检（章节是输出格式，不是检测单位）· v27 freestyle 默认：调度器先检测上 cluster 的 章节/cluster_<prev>_draft/cluster_<prev>_pending_tail.txt 是否存在，存在则透传 PREVIOUS_PENDING_TAIL_PATH（splitter prepend 到本 cluster 草稿头联合切）· spawn novel-chapter-splitter MODE=ecas_freestyle（按字数硬范围 3000-4500/章自动算 N · 末章<3000 退回 cluster_<key>_pending_tail.txt 不强切 · cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ gen_chapter_titles.py --chapters <range>（normal/mid/high 三档）→ split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json → chapter_end_anchor_scan.py 做章末锚定复扫 · 直接进 step 7 plan-end",
       "required": true,
       "must_spawn_agent": "novel-chapter-splitter",
       "agent_executor": "script",
@@ -164,7 +185,8 @@
         "# v27 跨 cluster 补料: <prev_pending_tail> 为空时 --previous-pending-tail 整对被主代理丢弃",
         "python core/scripts/chapter_splitter.py {project_root} --mode ecas_freestyle --cluster-id cluster_{key} --cluster-start-ch <cluster_start_ch> --draft {project_root}/章节/cluster_{key}_draft/cluster_{key}_draft.txt --rhythm <rhythm> --previous-pending-tail <prev_pending_tail>",
         "python core/scripts/gen_chapter_titles.py --project {project_root} --chapters <chapter_range_dash>",
-        "python core/scripts/split_cluster_changes.py {project_root} --cluster {key}"
+        "python core/scripts/split_cluster_changes.py {project_root} --cluster {key}",
+        "python core/scripts/chapter_end_anchor_scan.py {project_root} --chapters <chapter_range_dash> --strict"
       ]
     },
     {
@@ -172,8 +194,10 @@
       "name": "plan-end",
       "description": "报告 cluster_write 完成 + plan 最终校验 + 准备进入 cluster-save-state",
       "required": true,
-      "skip_output_allowed": true,
-      "expected_outputs": []
+      "skip_output_allowed": false,
+      "expected_outputs": [
+        "_数据库/.wal"
+      ]
     }
   ]
 }

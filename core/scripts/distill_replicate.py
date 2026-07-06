@@ -64,11 +64,6 @@ class RefusalExhausted(Exception):
     """
 
 
-def _refusal_retry_enabled() -> bool:
-    """env REFUSAL_RETRY_ENABLED 控制（默认 '1' 开 · '0' 关旁路 legacy 行为）。"""
-    return (os.environ.get("REFUSAL_RETRY_ENABLED") or "1").strip().lower() not in ("0", "off", "false", "")
-
-
 def check_deps():
     missing = []
     try:
@@ -435,11 +430,10 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         # （HTTP200 + finish=stop + 非空 · 绕过 TransportEmpty 守卫）。命中 _is_refusal →
         # 3s 退避 + user 追加「文学复刻无害」disclaimer 再试。瞬时失败/refusal 两套 retry
         # 共享 attempt 计数（≤2 次重试·共 3 次尝试）但互不串扰（exception → 指数退避·
-        # refusal → 固定 3s + disclaimer）。env REFUSAL_RETRY_ENABLED=0 旁路。
+        # refusal → 固定 3s + disclaimer）。
         full_text = None
         t0 = time.time()
         user_now = user                              # refusal retry 时可追加 disclaimer
-        refusal_retry_on = _refusal_retry_enabled()
         refusal_exhausted = False                    # 标记 refusal 3 次耗尽（跳过下方空内容守卫的重复 append）
         for attempt in range(3):
             try:
@@ -465,7 +459,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                         sys.stderr.write(piece)
                         sys.stderr.flush()
                 # 🛡️ refusal 检测（在标记成功前）·命中 → 退避 + disclaimer 再试
-                if refusal_retry_on and _is_refusal(buf):
+                if _is_refusal(buf):
                     if attempt < 2:
                         backoff = 3
                         snippet = buf.strip().replace("\n", " ")[:80]

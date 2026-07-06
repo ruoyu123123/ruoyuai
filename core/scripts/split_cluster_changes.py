@@ -286,9 +286,8 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
                     chapters = list(range(cr[0], cr[1] + 1))
                 break
         if not chapters:
-            # 最后兜底（cluster_001 特殊 · 但拒绝盲写 ch1-4 给非 cluster_001）
-            # 注：start_ch_raw 已兼容 cluster_start_ch / ch_start 两种字段名
-            target_chapters = splitter_decisions.get("target_chapters")
+            # 最后只允许 splitter 显式给出 chapters_split。禁止 target_chapters / 默认 4 章兜底，
+            # 否则会恢复旧“目标章数”链路并污染 事件簇.json.chapter_range。
             if start_ch_raw is None:
                 # [H1] fresh fluid cluster：chapters_split==0（全 pending_tail）或纯缺字段
                 #  → 本 cluster 本轮未切出任何章，正常返回 ok:True 空 written（不视为失败）
@@ -303,12 +302,16 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
                         "_note": "splitter 本轮 0 切（pending_tail 等下 cluster 拼接），跳过拆分",
                     }
                 return {"ok": False, "error": f"无法确定 cluster_{cluster_key} chapter_range · splitter_decisions 缺 chapter_range/chapters_split/cluster_start_ch · 事件簇.json fallback 失败"}
-            _tc = int(target_chapters or 4)
-            if not target_chapters:
-                print(f"[split_changes] WARN cluster_{cluster_key} 末级兜底：splitter_decisions 缺 "
-                      f"target_chapters/chapter_range/chapters_split·按 cluster_start_ch={start_ch_raw} "
-                      f"猜测 {_tc} 章（无章数上限源·可能越界·建议核 splitter 产出）", file=sys.stderr)
-            chapters = list(range(int(start_ch_raw), int(start_ch_raw) + _tc))
+            if not (isinstance(chapters_split, int) and not isinstance(chapters_split, bool)
+                    and chapters_split > 0):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"无法确定 cluster_{cluster_key} chapter_range · splitter_decisions 有 "
+                        f"cluster_start_ch={start_ch_raw} 但缺合法 chapters_split；禁止使用 target_chapters/default 4 章兜底"
+                    ),
+                }
+            chapters = list(range(int(start_ch_raw), int(start_ch_raw) + int(chapters_split)))
 
     # [H2] 写盘前重叠检测（前移 · 不再先覆盖后 warn）
     overlap = detect_other_cluster_overlap(project_root, cluster_key, chapters)

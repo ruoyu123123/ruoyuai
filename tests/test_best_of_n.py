@@ -266,10 +266,10 @@ def test_D_pairwise_drift_count_gen_model_fail_degrades():
 # ════════════════════════════════════════════════════════════════
 
 def _scored(idx, sfs=None, av_drift=None, composite="__auto__", body_cjk=18000):
-    """造一个已打分候选（composite 默认按公式自动算 · body_cjk 默认达标 18000）。
+    """造一个已打分候选（composite 默认按公式自动算）。
 
-    🔴 2026-06-27 P1-06 同批：FREESTYLE_MIN_CJK 12000→16000 之后，默认 body_cjk
-    需 ≥ 16000 才"达标"·原 13000 已不达标导致 test_E 走偏短分支报错。
+    body_cjk 仅作候选元数据留痕——纯 freestyle 契约下择优绝不按 CJK 长短选稿
+    （见 test_E_no_signal_never_selects_by_cjk）。
     """
     if composite == "__auto__":
         if sfs is not None:
@@ -328,34 +328,30 @@ def test_E_fallback_av_only_when_no_sfs():
 
 
 def test_E_no_signal_falls_back_first():
-    """无任何打分信号（SFS/AV 全缺）+ 候选字数都达标 → 退回第一稿（零回归保底）。"""
-    scored = [_scored(0, sfs=None, av_drift=None),   # body_cjk 默认 13000 达标
+    """无任何打分信号（SFS/AV 全缺）→ 退回第一稿（零回归保底）。"""
+    scored = [_scored(0, sfs=None, av_drift=None),
               _scored(1, sfs=None, av_drift=None)]
     best, reason = gw.select_best_draft(scored)
     assert best == 0
-    assert "第一稿" in reason or "零回归" in reason
+    assert "第一稿" in reason
 
 
-def test_E_no_signal_word_count_fallback():
-    """无打分信号 + 第一稿偏短 + 后稿达标 → 字数兜底选首个达标候选。
+def test_E_no_signal_never_selects_by_cjk():
+    """🔴 2026-07-05 纯 freestyle 契约：无打分信号时绝不按 CJK 长短择稿（北极星⑤）。
 
-    回归测试：治 best-of-N 在「无作者池→无打分信号」时机械退 idx=0、把 expand 后达标稿
-    丢掉落地短稿的 bug（实测 idx=0=4399短 / idx=1=13606达标 却落地了 4399）。
+    历史：expand 软下限时代曾有「字数兜底」分支（治短稿丢达标稿 bug 的补丁）；本轮
+    expand/FREESTYLE_MIN_CJK 机制整体清除（纯 freestyle·字数自然涌现）后，长短不再是
+    择稿信号——短稿风险由 cluster-write step3 质检与 splitter pending_tail 在下游承接，
+    不在候选选择时机械覆盖模型产出。
     """
+    src = (_ROOT / "core" / "scripts" / "gen_writer.py").read_text(encoding="utf-8")
+    assert "FREESTYLE_MIN_CJK" not in src, "expand 软下限机制应已整体清除（纯 freestyle）"
+    assert "字数兜底" not in src, "按 CJK 择稿的兜底分支不得复活"
     scored = [_scored(0, sfs=None, av_drift=None, body_cjk=4399),
               _scored(1, sfs=None, av_drift=None, body_cjk=13606)]
     best, reason = gw.select_best_draft(scored)
-    assert best == 1
-    assert "字数兜底" in reason
-
-
-def test_E_no_signal_all_short_picks_longest():
-    """无打分信号 + 全候选偏短 → 选 CJK 最大者（最接近健康区间·总比退更短的第一稿强）。"""
-    scored = [_scored(0, sfs=None, av_drift=None, body_cjk=4000),
-              _scored(1, sfs=None, av_drift=None, body_cjk=8000)]
-    best, reason = gw.select_best_draft(scored)
-    assert best == 1
-    assert "字数兜底" in reason
+    assert best == 0, (best, reason)
+    assert "不按 CJK" in reason or "第一稿" in reason
 
 
 def test_E_single_candidate():
@@ -519,7 +515,7 @@ def test_G_save_output_records_best_of_n_trace():
         root = Path(td)
         trace = {"best_of_n": 3, "selected_idx": 1, "selection_reason": "composite 最高"}
         draft_path, cjk = g.save_output(
-            root, 7, "这是一段真正的正文。", {}, 11, None, _P(name="winner"),
+            root, 7, "这是一段真正的正文。", {}, 11, _P(name="winner"),
             best_of_n_trace=trace)
         changes = json.loads(
             (root / "章节" / "cluster_007_draft" / "cluster_007_changes.json").read_text(encoding="utf-8"))
@@ -535,7 +531,7 @@ def test_G_save_output_default_single_draft_trace():
     g = _reload_gw(None)
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        g.save_output(root, 8, "正文内容。", {}, 1, None, _P())
+        g.save_output(root, 8, "正文内容。", {}, 1, _P())
         changes = json.loads(
             (root / "章节" / "cluster_008_draft" / "cluster_008_changes.json").read_text(encoding="utf-8"))
     _reload_gw(None)

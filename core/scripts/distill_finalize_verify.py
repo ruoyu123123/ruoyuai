@@ -224,24 +224,22 @@ def strict_idx_for_thinking_level(thinking_level: str | None) -> tuple[tuple[int
 def resolve_strict_estimable_idx() -> tuple[tuple[int, ...], bool, str]:
     """读 active gen-model profile 的 thinking_level → strict 可估算维 + 人读说明。
 
-    profile 加载失败（无 .env / GEN_MODEL_ACTIVE 未设）时退默认（含 kicker），不阻断 verify。
+    profile 加载失败直接抛出配置错误。出货回灌必须知道当前 gen-model profile，
+    不能靠默认策略继续跑。
     返回 (estimable_idx, is_reasoning, note)。
     """
-    try:
-        from gen_model_loader import get_default_loader
-        profile = get_default_loader().get_active_profile()
-        _re = profile.thinking_level or getattr(profile, "reasoning_effort", None)
-        idx, is_reasoning = strict_idx_for_thinking_level(_re)
-        if is_reasoning:
-            note = (f"reasoning 模型 {profile.name}(reasoning={_re}) · "
-                    f"kicker(3) 浓缩复刻失真移出 strict · 仅 scene(4) · "
-                    f"arc/kicker 真实验证 defer 到 gen_writer 写作端")
-        else:
-            note = (f"非 reasoning 模型 {profile.name}(无 thinking/effort) · "
-                    f"默认 strict 含 kicker(3)+scene(4)")
-        return idx, is_reasoning, note
-    except Exception as e:  # noqa: BLE001 — profile 加载失败不阻断 verify
-        return STRICT_ESTIMABLE_IDX, False, f"gen-model profile 加载失败({e}) · 退默认 strict 含 kicker"
+    from gen_model_loader import get_default_loader
+    profile = get_default_loader().get_active_profile()
+    _re = profile.thinking_level or getattr(profile, "reasoning_effort", None)
+    idx, is_reasoning = strict_idx_for_thinking_level(_re)
+    if is_reasoning:
+        note = (f"reasoning 模型 {profile.name}(reasoning={_re}) · "
+                f"kicker(3) 浓缩复刻失真移出 strict · 仅 scene(4) · "
+                f"arc/kicker 真实验证 defer 到 gen_writer 写作端")
+    else:
+        note = (f"非 reasoning 模型 {profile.name}(无 thinking/effort) · "
+                f"默认 strict 含 kicker(3)+scene(4)")
+    return idx, is_reasoning, note
 
 
 def strict_gate_decision(report: dict | None,
@@ -554,8 +552,13 @@ def main():
         strict=False,
     )
 
-    # 解析 strict 闸门策略（reasoning 模型移出 kicker · 修#7）——先解析以便写入 metadata
-    strict_idx, is_reasoning, strict_note = resolve_strict_estimable_idx()
+    # 解析 strict 闸门策略（reasoning 模型移出 kicker · 修#7）——先解析以便写入 metadata。
+    # profile 不可读即配置破损；strict 出货不能退默认。
+    try:
+        strict_idx, is_reasoning, strict_note = resolve_strict_estimable_idx()
+    except Exception as e:  # noqa: BLE001
+        print(f"[ERROR] gen-model profile 加载失败，无法判定 strict 策略: {e}", file=sys.stderr)
+        sys.exit(3)
 
     # ===== 步骤 4：扩展 report 加 verify metadata =====
     if report:

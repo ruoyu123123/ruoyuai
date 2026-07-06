@@ -7,7 +7,10 @@
 - Bug2(北极星⑤c)：对话占比 max(0.3,..) 地板把低对话作者(描写型 mean=0.1)强行抬到 30%·覆盖作者基线。
   → relax-only max(0.0,..)。
 - Bug3(北极星④)：freestyle_v27 仍注入每章字数目标硬约束(与 dcas_word_target=None 矛盾·间接锁字数)。
-  → 标 advisory(splitter 按字数切·仅参考)。
+  → 历史修法=标 advisory；🔴 2026-07-05 纯 freestyle 契约升级：机械「字数目标 N 字」
+  (源=进度.words_per_chapter 默认 3500)整体清除不再注入(连 advisory 都不给·与 gen_writer
+  expand/FREESTYLE_MIN_CJK 清除同批·北极星⑤ 不按机械长度覆盖模型判断)。唯一幸存的字数
+  信号=作者档 quantitative.chapter_words 的「章节字数 low-high」advisory 区间(作者档第一权威)。
 """
 import sys
 from pathlib import Path
@@ -65,12 +68,27 @@ def test_style_quant_marked_advisory():
 
 
 def test_word_target_advisory_freestyle():
-    """🔴 Bug3：字数目标/章节字数标 advisory(freestyle splitter 按字数切)·非硬锁。"""
+    """🔴 2026-07-05 纯 freestyle 契约：机械「字数目标」整体清除·作者档章节字数仅 advisory。
+
+    历史：Bug3 修法曾把「字数目标 {words_per_chapter} 字」标 advisory 保留注入；本轮
+    纯 freestyle 升级（与 gen_writer expand/FREESTYLE_MIN_CJK 清除同批）把该机械目标
+    从 hard_constraints 整体删除——字数由内容密度自然涌现，splitter 按字数切在下游承接
+    （北极星④⑤）。防复活锁：任何来源的「字数目标」字样不得回到 hard_constraints；
+    作者档 chapter_words 派生的「章节字数 low-high」区间是唯一字数信号且必标 advisory。
+    """
     hc = _hc({"quantitative": {"chapter_words": {"mean": 3500}}})
     wt = [x for x in hc if "字数目标" in x]
+    assert not wt, f"机械字数目标已整体清除(纯 freestyle)·不得复活: {wt}"
     cw = [x for x in hc if "章节字数" in x]
-    assert wt and "advisory" in wt[0], f"字数目标应标 advisory: {wt}"
-    assert cw and "advisory" in cw[0], f"章节字数应标 advisory: {cw}"
+    assert cw and "advisory" in cw[0], f"作者档章节字数应存在且标 advisory: {cw}"
+    assert "3000-4000" in cw[0], f"章节字数区间应为 mean±500: {cw[0]}"
+    # 无作者档 → 不注入任何字数项（不回退到 words_per_chapter 机械默认）
+    hc0 = _hc({})
+    assert not [x for x in hc0 if "字数" in x], f"无作者档不得注入任何字数约束: {hc0}"
+    # 源码级防复活锁：build_manifest 不得再引用 进度.words_per_chapter 机械目标
+    src = (_ROOT / "core" / "scripts" / "build_manifest.py").read_text(encoding="utf-8")
+    assert "words_per_chapter" not in src, "words_per_chapter 机械字数目标不得复活"
+    assert "字数目标" not in src, "「字数目标」注入不得复活"
 
 
 def test_plot_constraints_stay_hard():

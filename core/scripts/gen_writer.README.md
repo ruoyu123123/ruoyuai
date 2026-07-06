@@ -1,110 +1,93 @@
-# gen_writer.py · Gen-Model 正文生成器
+# gen_writer.py · 故事块正文生成器
 
-让小说正文生成由**当前选择的生成模型**（gen-model · 用户可一行切换 DeepSeek/Kimi/GLM/Qwen/...）完成，其他流程（调研/校验/反思/save-state）保留 Claude。
+`gen_writer.py` 是 `/cluster-write` 第 2 步的内部脚本。它只负责调用当前 active gen-model 写出**整块 cluster 草稿**和 writer 创作期自评；切章、标题、事实回写、伏笔回写和状态保存都不在本脚本内完成。
 
-## 一次性配置
+## 所属链路
 
-### 1. 安装依赖（已就绪）
-```bash
-pip install openai python-dotenv
+```
+/cluster-write
+  1. build_manifest.py 生成 manifest 和 style_directive
+  2. gen_writer.py 写 cluster_<key>_draft.txt
+  3. audit_hub / reading / voice / foreshadow / reflect / summarize
+  4. splitter 和 titles 在审核完成后执行
 ```
 
-### 2. 编辑 `.env`（多 profile schema）
+`gen_writer.py` 不是用户入口，也不是单章写作入口。
+
+## 配置
+
+```bash
+python core/scripts/gen_model.py add <profile_name>
+python core/scripts/gen_model.py switch <profile_name>
+python core/scripts/gen_model.py show
+```
+
+`.env` 使用 OpenAI 兼容 profile：
 
 ```env
-# 当前激活的 profile 名
-GEN_MODEL_ACTIVE=deepseek_kxaug
-
-# Fallback 链（主 profile 429/timeout 时按序尝试）
+GEN_MODEL_ACTIVE=deepseek_example
 GEN_MODEL_FALLBACK_CHAIN=
 
-# Profile（按需复制模板新增）
-GEN__deepseek_kxaug__MODEL=deepseek-v4-pro
-GEN__deepseek_kxaug__BASE_URL=https://pay.kxaug.xyz/v1
-GEN__deepseek_kxaug__API_KEY=sk-...
-GEN__deepseek_kxaug__TEMPERATURE=0.8
-GEN__deepseek_kxaug__MAX_TOKENS=
+GEN__deepseek_example__MODEL=deepseek-v4-pro
+GEN__deepseek_example__BASE_URL=https://example.com/v1
+GEN__deepseek_example__API_KEY=sk-...
+GEN__deepseek_example__TEMPERATURE=0.8
+GEN__deepseek_example__MAX_TOKENS=
 ```
 
-模板复制：
-```bash
-python core/scripts/gen_model.py add <my_profile_name>
-# 编辑 .env 填 model/base_url/key
-python core/scripts/gen_model.py switch <my_profile_name>
-```
+模型能力探测：
 
-### 3. 跑模型能力探测
 ```bash
 python core/scripts/model_probe.py
 ```
-缓存到 `.claude/.model_capabilities.json`，供 `gen_writer.py` / `gen_fixer.py` / `gen_creative.py` 自动读取 max_tokens。
 
-## 用法
+## 内部调试调用
+
+正式写作入口只有 `/cluster-write` step 2。下面命令只用于开发者复现 prompt、排查 profile 或跑 dry-run，不作为用户写作入口。
 
 ```bash
 python core/scripts/gen_writer.py \
   --project "workspace/novels/<book>" \
-  --cluster 1 \
-  --chapter-start 1 --chapter-end 4 \
-  --target-cjk 13000-20000
+  --cluster 1
 ```
 
 参数：
-- `--project`：项目根路径
-- `--cluster`：cluster id（整数）
-- `--chapter-start / --chapter-end`：本 cluster 覆盖章号范围
-- `--target-cjk`：目标 CJK 字数（如 `13000-20000`）
-- `--dry-run`：只输出 prompt，不调 API
+
+| 参数 | 说明 |
+|---|---|
+| `--project` | 小说项目根目录 |
+| `--cluster` | cluster 序号 |
+| `--dry-run` | 只输出 prompt，不调用 API |
+
+默认是 v27 freestyle：writer 不接收目标章数，也不接收目标字数；它按 `cluster.scope_summary`、`scene_storyboard`、作者风格档、manifest 和调研 cache 写完整故事块。章节数由后续 splitter 按字数决定。
 
 ## 输出
 
-- 正文：`<project>/章节/cluster_NNN_draft/cluster_NNN_draft.txt`
-- CHANGES JSON：同目录 `cluster_NNN_changes.json`
-- 含 `ecas_metadata.generated_by_profile` / `generated_by_model` 字段记录哪个 profile 生成
-
-## Fallback 链
-
-当 active profile 调用失败（429 / 5xx / timeout）时，自动按 `GEN_MODEL_FALLBACK_CHAIN` 顺序尝试下一个 profile（跳过 active 自身、跳过 API_KEY 空的）。
-
-stderr 强制打印 `[FALLBACK] <from> -> <to> reason=<...>`，方便审计。
-
-全链失败 → 抛 `GenModelExhaustedError` + 列出每个 profile 失败原因 + exit 3。
-
-## Scanner 校验（写完自动跑）
-
-- `narrative_short_sentence_scanner.py`
-- `repeat_noun_density_scanner.py`
-
-输出 verdict + violations_count。
-
-## 调用流程（cluster 故事块 · 与 reflector / save-state 协作）
-
-```
-1. 调研先行                            spawn novel-researcher → .research_cache/inspiration_*.md
-2. plan_tracker create write-chapter   Bash + plan_tracker.py
-3. build_manifest                       Bash + build_manifest.py
-4. ★ 写正文（cluster 故事块）           **gen_writer.py**（本脚本）
-5. 切章                                 spawn novel-chapter-splitter（Claude）
-6. Scanner 全量校验                     Bash + python scanner
-7. reader-first reflector 1 轮          spawn novel-reading-reflector（Claude）
-8. ★ 修复 issue                       **gen_fixer.py --mode comprehensive**
-9. 主代理亲读关键段                    主代理（Claude）
-10. ★ 主代理亲读后微调（如需）         **gen_fixer.py --mode polish --instructions ...**
-11. ★ 字数扩写（如有章 < 2500）        **gen_fixer.py --mode word-count**
-12. voice-check                         spawn novel-voice-checker（Claude）→ gen_fixer.py --mode voice-fix
-13. save-state 流水线                   Bash + save_state.py
+```text
+<project>/章节/cluster_<key>_draft/cluster_<key>_draft.txt
+<project>/章节/cluster_<key>_draft/cluster_<key>_changes.json
 ```
 
-★ = gen-model 接管的步骤；其他由 Claude / 本地脚本。
+`cluster_<key>_changes.json` 只承载：
+
+- writer 创作期自评；
+- waivers；
+- 确定性遥测；
+- 使用的 gen-model profile / model。
+
+角色、道具、关系、locked facts、伏笔等 factual 状态由 Claude agent 在 `/cluster-save-state` 阶段读正文梳理并回库，writer 不自报事实。
+
+## Fallback
+
+active profile 调用失败时，脚本按 `GEN_MODEL_FALLBACK_CHAIN` 顺序尝试可用 profile。全链失败时抛 `GenModelExhaustedError` 并返回非零退出码。
 
 ## 故障排查
 
-| 报错 | 原因 | 修复 |
-|---|---|---|
-| `GEN_MODEL_ACTIVE 字段未设置` | .env 缺关键字段 | 跑 `gen_model.py list` 看 profile，`switch <name>` 激活 |
-| `active profile '<name>' 不存在` | 名字写错 | `gen_model.py list` 看可用 profile |
-| `active profile '<name>' 缺 API_KEY` | .env 中 GEN__<name>__API_KEY 为空 | 编辑 .env 填入 |
-| `API 调用失败: 429` | 中转站限流 | 配 fallback 链 `GEN_MODEL_FALLBACK_CHAIN=<另一 profile>` 自动切换 |
-| `API 调用失败: 401` | API key 错 | 核对 key |
-| `字数 < 目标下限` | 模型截断或写不够 | 跑 `gen_fixer.py --mode word-count --target-min 2500` 扩写 |
-| `CHANGES JSON 解析失败` | 模型未按格式返回 | 临时降 GEN__<name>__TEMPERATURE=0.5 |
+| 报错 | 处理 |
+|---|---|
+| `GEN_MODEL_ACTIVE 字段未设置` | 运行 `gen_model.py list`，再 `gen_model.py switch <name>` |
+| active profile 不存在 | 检查 `.env` profile 名 |
+| API key 为空或错误 | 更新 `GEN__<name>__API_KEY` |
+| API 429 / timeout | 配置 fallback profile |
+| 输出缺 changes JSON | 由脚本续写兜底；仍失败则交 `/cluster-write` 停止并报告 |
+| 正文过短 | 脚本会触发 expand 续写；仍不足则由 `/cluster-write` 进入修复流程 |

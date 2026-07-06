@@ -189,6 +189,29 @@ def test_split_cannot_determine_range():
         assert out["ok"] is False
 
 
+def test_split_rejects_target_chapters_fallback():
+    """只有 cluster_start_ch + target_chapters 时必须失败，禁止恢复目标章数兜底。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = _mk_split_fixture(td, "002", {"cluster_start_ch": 5, "target_chapters": 4})
+        out = scc.split_changes(root, "002")
+        assert out["ok"] is False
+        assert "禁止使用 target_chapters" in out["error"]
+
+
+def test_split_uses_chapters_split_with_start_ch():
+    """合法 fallback 只能来自 splitter 明确产出的 chapters_split。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = _mk_split_fixture(td, "002", {"cluster_start_ch": 5, "chapters_split": 2},
+                                 clusters=[{"cluster_id": "cluster_002", "chapter_range": None}])
+        for n in (5, 6):
+            ch_dir = root / "章节" / f"第{n:03d}章"
+            ch_dir.mkdir(parents=True, exist_ok=True)
+        out = scc.split_changes(root, "002")
+        assert out["ok"] is True
+        assert out["chapter_range"] == [5, 6]
+        assert out["written_count"] == 2
+
+
 def test_split_hard_overlap_abort():
     """拟切章全被他 cluster 占 → hard_overlap 中止 ok False（防覆盖别 cluster 的 _changes）。"""
     with tempfile.TemporaryDirectory() as td:

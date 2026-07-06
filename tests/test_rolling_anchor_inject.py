@@ -7,7 +7,7 @@ writer 难识别为写作目标。本批 gen_writer 显式解析升格到生成�
 
 守护：active 注入且位置正确（manifest 后·生成点前·风格锚区）；shadow（默认）/off 零回归；
 缺字段/snippet 全空不注入。默认 shadow（位置升格的文风改善效果需 gen-model A/B 定论·先影子）。
-零依赖·run_tests.py / pytest 双跑。
+零依赖·仓库根 pytest 入口。
 """
 import json
 import os

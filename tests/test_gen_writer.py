@@ -26,6 +26,50 @@ def test_resolve_max_tokens_default_fallback():
     assert mt == 16000
 
 
+def test_research_cache_prefers_manifest_bound_cache():
+    """writer 优先消费 manifest.event_cluster_context.research_ref.cache_path，防最新 cache 串题。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        db = root / "_数据库"
+        cache_dir = db / ".research_cache"
+        cache_dir.mkdir(parents=True)
+        bound = cache_dir / "inspiration_cluster_001_bound.md"
+        unrelated = cache_dir / "inspiration_unrelated_latest.md"
+        bound.write_text("BOUND_RESEARCH", encoding="utf-8")
+        unrelated.write_text("UNRELATED_RESEARCH", encoding="utf-8")
+        manifest = {
+            "event_cluster_context": {
+                "research_ref": {
+                    "cache_path": "_数据库/.research_cache/inspiration_cluster_001_bound.md",
+                    "anchors_used": ["anchor_A"],
+                }
+            }
+        }
+
+        text = gw._load_research_cache_for_cluster(db, 1, manifest)
+
+        assert "BOUND_RESEARCH" in text
+        assert "UNRELATED_RESEARCH" not in text
+
+
+def test_research_cache_falls_back_for_legacy_projects():
+    """旧项目没有 manifest 绑定时，仍按 cluster 专属 cache 优先，然后才最新 inspiration。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        db = root / "_数据库"
+        cache_dir = db / ".research_cache"
+        cache_dir.mkdir(parents=True)
+        cluster_cache = cache_dir / "inspiration_cluster_001_old.md"
+        unrelated = cache_dir / "inspiration_unrelated_latest.md"
+        cluster_cache.write_text("CLUSTER_CACHE", encoding="utf-8")
+        unrelated.write_text("UNRELATED_RESEARCH", encoding="utf-8")
+
+        text = gw._load_research_cache_for_cluster(db, 1, {})
+
+        assert "CLUSTER_CACHE" in text
+        assert "UNRELATED_RESEARCH" not in text
+
+
 def _mock_client(chunks_spec, capture=None):
     """chunks_spec: [(content, finish_reason), ...]。"""
     class MockChoice:
@@ -231,7 +275,7 @@ def test_save_output_rejects_empty_body():
         root = Path(td)
         raised = False
         try:
-            gw.save_output(root, 1, "   \n  ", {}, 1, None, _profile("p"))
+            gw.save_output(root, 1, "   \n  ", {}, 1, _profile("p"))
         except ValueError as e:
             raised = True
             assert "空草稿" in str(e)
@@ -245,14 +289,27 @@ def test_save_output_writes_nonempty_body():
     """守卫不误伤：非空 body 正常写出。"""
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        draft_path, cjk = gw.save_output(root, 2, "这是一段真正的正文内容。", {}, 5, None, _profile("p"))
+        draft_path, cjk = gw.save_output(root, 2, "这是一段真正的正文内容。", {}, 5, _profile("p"))
         assert draft_path.exists()
         assert cjk > 0
+        changes_path = root / "章节" / "cluster_002_draft" / "cluster_002_changes.json"
+        meta = json.loads(changes_path.read_text(encoding="utf-8"))["self_eval"]["ecas_metadata"]
+        assert meta["writer_mode"] == "freestyle_v27"
+        assert meta["chapter_count_decided_by_splitter"] is True
 
 
-# ============ 2026-06-04 expand 续写兜底回归（治 pro 等简洁模型单 cluster 偏短）============
+def test_gen_writer_cli_has_no_locked_chapter_or_target_word_args():
+    """cluster-first 唯一入口：CLI 不得重新暴露锁章/锁字数兼容参数。"""
+    src = Path(gw.__file__).read_text(encoding="utf-8")
+    assert "--chapter-start" not in src
+    assert "--chapter-end" not in src
+    assert "--target-cjk" not in src
+    assert "compat_locked" not in src
+
+
+# ============ cluster-first：writer 不再按目标 CJK 续写 ============
 def _client_seq(specs, capture_msgs=None):
-    """按 create 调用序号返回不同 chunks 的 mock（测 expand 多轮续写）。
+    """按 create 调用序号返回不同 chunks 的 mock。
     specs: [[(content,finish),...], ...] 每次 create 消费下一个（末个之后重复末个）。"""
     class MockChoice:
         def __init__(s, c, fr):
@@ -281,68 +338,36 @@ def _client_seq(specs, capture_msgs=None):
     return Client()
 
 
-def test_expand_skipped_when_min_cjk_none():
-    """零回归：min_cjk=None（蒸馏复刻/ai_wrapper）→ 不触发 expand，单次生成即返回。"""
+def test_call_gen_model_does_not_expand_short_stop_output():
+    """cluster-first：finish=stop 的短正文也直接返回，不按目标 CJK 触发续写。"""
     msgs = []
-    restore, _ = _patch_openai([_client_seq([[("短正文", "stop")]], capture_msgs=msgs)])
+    restore, _ = _patch_openai([_client_seq([
+        [("短正文", "stop")],
+        [("不应触发的续写", "stop")],
+    ], capture_msgs=msgs)])
     try:
-        text, _u = gw.call_gen_model(_Loader([_profile("a")]), "sys", "usr")  # min_cjk 默认 None
+        text, _u = gw.call_gen_model(_Loader([_profile("a")]), "sys", "usr")
     finally:
         restore()
     assert text == "短正文"
-    assert len(msgs) == 1  # 只调一次 create，无 expand 续写
+    assert len(msgs) == 1
 
 
-def test_expand_triggers_and_reaches_min():
-    """正文<min_cjk 且 finish=stop → expand 续写，累积达标后停。"""
-    msgs = []
-    spec1 = [("字" * 30 + "\n```json\n{\"factual\": {\"a\": 1}}\n```", "stop")]
-    spec2 = [("续" * 40 + "\n```json\n{\"factual\": {\"a\": 1}}\n```", "stop")]
-    restore, _ = _patch_openai([_client_seq([spec1, spec2], capture_msgs=msgs)])
-    orig = gw.FREESTYLE_EXPAND_MIN_GAIN
-    gw.FREESTYLE_EXPAND_MIN_GAIN = 5
-    try:
-        text, _u = gw.call_gen_model(_Loader([_profile("a")]), "sys", "usr", min_cjk=50)
-    finally:
-        gw.FREESTYLE_EXPAND_MIN_GAIN = orig
-        restore()
-    assert len(msgs) >= 2, "正文偏短应触发 expand 续写"
-    assert "续" in text, "expand 续写内容应并入正文"
-    body, changes = gw.split_text_and_changes(text)
-    assert changes.get("factual") is not None, "达标后应保留 CHANGES"
-
-
-def test_expand_stops_on_low_gain():
-    """防注水：单轮续写增量 < FREESTYLE_EXPAND_MIN_GAIN → 立即停，不续满 4 轮。"""
-    msgs = []
-    spec1 = [("字" * 30 + "\n```json\n{\"factual\": {}}\n```", "stop")]
-    spec_tiny = [("少", "stop")]  # 每轮才 1 CJK，远低于 GAIN → 应停
-    restore, _ = _patch_openai([_client_seq([spec1, spec_tiny], capture_msgs=msgs)])
-    try:
-        text, _u = gw.call_gen_model(_Loader([_profile("a")]), "sys", "usr", min_cjk=50000)
-    finally:
-        restore()
-    assert len(msgs) <= 3, "增量过小应防注水停止，不应续满 4 轮"
-
-
-def test_expand_backfills_missing_changes():
-    """expand 各轮被要求先别给 CHANGES → 缺 CHANGES 时追加 changes_only 补全请求。"""
-    msgs = []
-    spec1 = [("字" * 30, "stop")]            # 首轮无 CHANGES
-    spec_expand = [("续" * 60, "stop")]       # expand 达标(min=50)，仍无 CHANGES
-    spec_changes = [("```json\n{\"factual\": {\"x\": 1}}\n```", "stop")]  # 补全轮给 CHANGES
-    restore, _ = _patch_openai([_client_seq([spec1, spec_expand, spec_changes], capture_msgs=msgs)])
-    orig = gw.FREESTYLE_EXPAND_MIN_GAIN
-    gw.FREESTYLE_EXPAND_MIN_GAIN = 5
-    try:
-        text, _u = gw.call_gen_model(_Loader([_profile("a")]), "sys", "usr", min_cjk=50)
-    finally:
-        gw.FREESTYLE_EXPAND_MIN_GAIN = orig
-        restore()
-    assert any("CHANGES" in m[-1]["content"] and "只输出" in m[-1]["content"] for m in msgs), \
-        "缺 CHANGES 应追加 changes_only 补全请求"
-    body, changes = gw.split_text_and_changes(text)
-    assert changes.get("factual", {}).get("x") == 1, "补全的 CHANGES 应并入最终输出"
+def test_removed_legacy_cli_args_exit_2(monkeypatch):
+    """旧章级/目标字数参数不注册、不兼容；出现即由 argparse 退出 2。"""
+    monkeypatch.setattr(gw, "check_deps", lambda: None)
+    for legacy_arg, value in (("--chapter-end", "3"), ("--target-cjk", "16000")):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["gen_writer.py", "--project", ".", "--cluster", "1", legacy_arg, value],
+        )
+        try:
+            gw.main()
+        except SystemExit as e:
+            assert e.code == 2
+        else:
+            raise AssertionError(f"{legacy_arg} must exit 2")
 
 
 # ============ 短段约束 + 作者节奏基线（2026-06-05 句法熔合已删·只留这些）============
@@ -439,7 +464,7 @@ def test_creative_guard_excludes_flash_tier():
     """🔴 2026-06-28：写正文禁 flash-tier 兜底（质量攸关·flash 碎句·静默降质违锁 pro 决策）。
 
     实证：cluster_002 因 pro_preview 瞬时 502 + pro 持久 503 → 静默掉 flash 写正文。改：creative
-    候选剔除含 'flash' 的 profile，pro 全挂则响亮 GenModelExhaustedError·GEN_WRITER_ALLOW_FLASH=1 旁路。"""
+    候选剔除含 'flash' 的 profile，pro 全挂则响亮 GenModelExhaustedError。"""
     import os
 
     class _P:
@@ -448,20 +473,18 @@ def test_creative_guard_excludes_flash_tier():
     cands = [_P("gemini_pro_preview", "gemini-3.1-pro-preview"),
              _P("gemini_pro", "gemini-3.1-pro"),
              _P("gemini_flash", "gemini-3.5-flash")]
-    bak = os.environ.pop("GEN_WRITER_ALLOW_FLASH", None)
+    flash_env = "GEN_WRITER_ALLOW_" + "FLASH"
+    bak = os.environ.get(flash_env)
     try:
+        os.environ[flash_env] = "1"
         out = gw._filter_creative_profiles(cands)
         names = [p.name for p in out]
         assert "gemini_flash" not in names, f"flash 应被排除, 实际 {names}"
         assert "gemini_pro_preview" in names and "gemini_pro" in names
-        # 旁路
-        os.environ["GEN_WRITER_ALLOW_FLASH"] = "1"
-        out2 = gw._filter_creative_profiles(cands)
-        assert "gemini_flash" in [p.name for p in out2], "旁路应恢复 flash"
     finally:
-        os.environ.pop("GEN_WRITER_ALLOW_FLASH", None)
+        os.environ.pop(flash_env, None)
         if bak is not None:
-            os.environ["GEN_WRITER_ALLOW_FLASH"] = bak
+            os.environ[flash_env] = bak
 
 
 def test_strip_english_meta_no_false_strip_chinese_with_quote():

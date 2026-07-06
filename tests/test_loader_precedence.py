@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """gen_model_loader api_key 三级优先级测试（BYOK·keyring > environ > .env）。
 
-零依赖顶层（run_tests.py glob 得到）·内存 keyring·临时 .env·try/finally 清环境。
+零依赖顶层 pytest 用例·内存 keyring·临时 .env·try/finally 清环境。
 核心：① dev 零回归基线（现状逐字节）② keyring 赢 ③ environ 注入（.env 未定义时）
 ④ override=True 现实锁定（.env 定义时 environ 不覆盖）⑤ 全空抛错 ⑥ 缓存失效链。
 """

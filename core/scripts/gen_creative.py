@@ -5,14 +5,12 @@ gen_creative.py — Gen-Model 创意卡 / 角色样本 / 卷描述生成工具
 把「含创意笔触」的输出从 Claude 主代理迁到当前 active gen-model profile。
 Claude 主代理负责准备 brief（题材/调研缓存/角色骨架），调本工具生成正文段，再接收 JSON 展示给用户。
 
-六种 mode（已实现 5 个，world_entry 仍为 v2 placeholder）：
+当前公开 CLI mode：
 
   --mode brainstorm    生成 N 张灵感卡（开书用，配合 /write 命令）                    [✓]
-  --mode outline_card  生成下一章 N 张走向卡（每 save-state 后展示）                 [✓]
   --mode volume_arc    生成卷的 arc / 大事件创意描述（配合 /outline·阶段2 建书）       [✓]
   --mode distill_reflect  蒸馏 phase-3 修正反思·产 skill markdown（配合 /distill-style） [✓]
   --mode voice_sample  生成角色 voice_pack.style_samples/anti_samples（配合 /distill-character·🔴 C13 同栈 gen-model）  [✓]
-  --mode world_entry   生成世界观条目 content（世界观子系统，经 /db 或 cluster-save-state） [v2 TODO]
 
 用法示例：
 
@@ -21,12 +19,6 @@ Claude 主代理负责准备 brief（题材/调研缓存/角色骨架），调�
     --topic "末世/沙盒/山海经" --count 3 \\
     --research <调研缓存 md 路径> \\
     --style-ref <风格 skill md 路径>
-
-  # 走向卡（每 save-state 后）
-  python core/scripts/gen_creative.py --mode outline_card \\
-    --project "workspace/novels/<book>" \\
-    --next-chapter 5 --count 2 \\
-    --skeleton <Claude 主代理列好的卡片骨架 JSON 路径>
 
 输出：JSON 到 stdout（默认）或 --out <path>。
 
@@ -175,80 +167,7 @@ def parse_brainstorm_output(reply: str) -> dict:
     return _parse_json_loose(reply, fallback={"version": 1, "cards": [], "_raw": reply[:2000]})
 
 
-# ============ MODE: outline_card（走向卡）============
-def build_outline_card_prompt(skeleton: dict, count: int, hint: str,
-                              project_context: str) -> tuple[str, str]:
-    """主代理列好卡片骨架 JSON（结构性字段），gen-model 填正文段"""
-    skeleton_text = json.dumps(skeleton, ensure_ascii=False, indent=2)[:8000]
-
-    system = """你是长篇小说的走向卡正文填充引擎。
-
-主代理（Claude）已根据当前章节状态列出 N 张走向卡的**结构性骨架**（path_id / 前置事件 / 解锁体系 / 关键角色 等），
-但**含创意笔触的字段（hook / scene_anchor / cliffhanger / emotion_anchor / description）留空**给你填。
-
-你的任务：为每张走向卡填充创意笔触字段，输出完整卡片 JSON。
-
-# 走向卡硬约束
-
-1. **保留骨架所有结构字段**（path_id / prerequisites / unlocks / characters 等），不要改
-2. **只填创意字段**（hook / scene_anchor / cliffhanger / emotion_anchor / description / one_liner_summary）
-3. **创意字段必须紧扣骨架**（hook 反映 path_id 选择的差异点，cliffhanger 暗示 unlocks 的解锁）
-4. **每张卡差异化**（不同 path_id = 不同立意，不要写成同一卡的措辞变种）
-5. **冷峻观察者 voice**（默认基线 · 示例参考《饲养全人类》；项目蒸馏后由 manifest 注入对应 voice 覆盖）
-6. **字数控制**：hook ≤ 40 字，scene_anchor ≤ 80 字，cliffhanger ≤ 30 字，description ≤ 150 字
-
-# 输出格式
-
-严格输出 JSON：
-
-{
-  "version": 1,
-  "for_chapter": <next_chapter_number>,
-  "cards": [
-    {
-      "card_id": "A",
-      "...所有骨架字段（原样保留）...": "...",
-      "hook": "开篇钩子（紧扣 path 差异点）",
-      "scene_anchor": "本章核心场景描述",
-      "cliffhanger": "章末悬念（暗示 unlocks）",
-      "emotion_anchor": "情绪锚点",
-      "description": "整卡的整体描述（≤150字）",
-      "one_liner_summary": "一句话总结（≤30字，用户选卡用）"
-    },
-    ...
-  ]
-}
-
-不要写解释，直接输出 JSON。
-"""
-
-    user = f"""# 项目上下文
-
-{project_context[:4000]}
-
-# 卡片骨架（主代理已列结构，你只填创意字段）
-
-```json
-{skeleton_text}
-```
-
-# 用户/主代理指令（可选 hint）
-
-{hint or '（无）'}
-
-# 任务
-
-为 **{count}** 张卡填充 hook / scene_anchor / cliffhanger / emotion_anchor / description / one_liner_summary 字段。
-保留所有骨架结构字段不动，输出完整卡片 JSON。
-"""
-    return system, user
-
-
-def parse_outline_card_output(reply: str) -> dict:
-    return _parse_json_loose(reply, fallback={"version": 1, "cards": [], "_raw": reply[:2000]})
-
-
-# ============ MODE: voice_sample（🔴 2026-06-27 C13 实现·world_entry 仍 v2 placeholder）============
+# ============ MODE: voice_sample（🔴 2026-06-27 C13 实现）============
 def build_voice_sample_prompt(character_id: str, character_name: str,
                               history_quotes: str, voice_dna_text: str,
                               count: int) -> tuple[str, str]:
@@ -408,7 +327,11 @@ def build_volume_arc_prompt(*, selected_card: dict, cluster_count: int,
     "scope_summary": 这个故事块讲什么,
     "scene_storyboard": [4-5 个场景。倒叙排列：scene0=强冲突/灾难开场（200字内丢出核心悬念）、
       scene1=反转/揭底、scene2+=时间序回溯、最后接回开篇。每个场景 {{"scene": 序, "summary": 场景概要}}],
-    "foreshadowing_to_plant": [本块要埋的伏笔]}}
+    "foreshadowing_to_plant": [本块要埋的伏笔],
+    "research_ref": {{"cache_path": "_数据库/.research_cache/<本次灵感调研>.md",
+      "anchors_used": ["本块实际采用的调研 anchor"],
+      "research_topics": ["支撑本块的调研主题"],
+      "researcher_confidence": 0.0-1.0}}}}
 - 可选 `free_notes`: 字符串，表达作者风格档独有、上面字段装不下的卷级判断（如惯用卷间钩子手法）。
 - 可选 `world_seed`: 世界演化的**最小初始条件**（只播 cluster_001 开场已存在的·后续留涌现，绝不预生成全书人物表）：
   {{"protagonist_state": {{"name": 主角名, "arc_stage": 开场阶段, "status": "alive"}},
@@ -437,15 +360,6 @@ def build_volume_arc_prompt(*, selected_card: dict, cluster_count: int,
     user += (f"\n# 参数\n叙事框架：{framework}\n节奏档：{rhythm}\n"
              f"每卷故事块数（软提示）：{cluster_count}\n\n现在设计全卷大势骨架。")
     return system, user
-
-
-def build_world_entry_prompt(entry_id: str, keywords: list,
-                             project_context: str) -> tuple[str, str]:
-    """v2 TODO: 生成世界观条目 content"""
-    raise NotImplementedError(
-        "mode 'world_entry' 待实现 (v2)；"
-        "目前请用主代理在 /worldbuild 流程中手动起"
-    )
 
 
 # ============ 共享：JSON 解析 ============
@@ -766,6 +680,15 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
               f"·见 _数据库/.wal/volume_arc_block_debug.txt", file=sys.stderr)
     # 事件簇.json：只详化 clusters[0]=cluster_001（其余留涌现）
     c1 = data.get("cluster_001") or {}
+    research_ref = c1.get("research_ref") if isinstance(c1, dict) else None
+    if not isinstance(research_ref, dict):
+        research_ref = {
+            "cache_path": "_数据库/.research_cache",
+            "anchors_used": [],
+            "research_topics": [],
+            "researcher_confidence": 0,
+            "_note": "cluster_001 未返回具体调研 cache；保留调研引用骨架，后续 outline/novel-researcher 可覆盖。",
+        }
     cluster = {
         "_schema": "event_clusters", "schema_version": "v2.cluster",
         "_doc": "只详化 cluster_001(黄金三章倒叙)·后续 cluster 留 cluster_emergence_engine 涌现。",
@@ -777,6 +700,7 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
             "scene_storyboard": c1.get("scene_storyboard", []),
             "foreshadowing_to_plant": c1.get("foreshadowing_to_plant", []),
             "parent_me": c1.get("parent_me", "ME-V1-01"),
+            "research_ref": research_ref,
         }],
     }
     p_major = db / "大势卡.json"
@@ -1001,33 +925,24 @@ def main():
         description='Gen-Model 创意卡 / 角色样本 / 卷描述生成工具'
     )
     parser.add_argument('--mode', required=True,
-                        choices=['brainstorm', 'outline_card', 'voice_sample',
-                                 'volume_arc', 'world_entry', 'distill_reflect'])
-    parser.add_argument('--project', help='项目根路径（outline_card/voice_sample/'
-                                          'volume_arc/world_entry 需要）')
+                        choices=['brainstorm', 'voice_sample',
+                                 'volume_arc', 'distill_reflect'])
+    parser.add_argument('--project', help='项目根路径（voice_sample/'
+                                          'volume_arc 需要）')
     parser.add_argument('--out', help='输出 JSON 文件路径（默认 stdout）')
     parser.add_argument('--dry-run', action='store_true', help='只输出 prompt 不调 API')
 
     # brainstorm 参数
     parser.add_argument('--topic', help='[brainstorm] 题材方向')
     parser.add_argument('--count', type=int, default=3, help='生成卡数（默认 3）')
-    parser.add_argument('--research', help='[brainstorm/outline_card] 调研缓存 md 路径')
+    parser.add_argument('--research', help='[brainstorm] 调研缓存 md 路径')
     parser.add_argument('--style-ref', help='[brainstorm] 风格基线 skill.md 路径')
 
-    # outline_card 参数
-    parser.add_argument('--next-chapter', type=int, help='[outline_card] 下一章号')
-    parser.add_argument('--skeleton', help='[outline_card] 卡片骨架 JSON 路径')
-    parser.add_argument('--hint', help='[outline_card] 用户/主代理可选指令')
-
-    # voice_sample / volume_arc / world_entry 参数（v2）
+    # voice_sample / volume_arc 参数（v2）
     parser.add_argument('--character', help='[voice_sample] 角色 id')
     # 🔴 2026-06-27 C13 voice_sample 参数
     parser.add_argument('--history', help='[voice_sample] 角色历史真实对白素材 JSON 路径（few-shot）')
     parser.add_argument('--voice-dna', help='[voice_sample] 5 层 persona 分析 voice_dna JSON 路径')
-    parser.add_argument('--volume', type=int, help='[volume_arc] 卷号（旧·未用）')
-    parser.add_argument('--structure', help='[volume_arc] 卷骨架 JSON 路径（旧·未用）')
-    parser.add_argument('--entry-id', help='[world_entry] 世界观条目 id')
-    parser.add_argument('--keywords', help='[world_entry] 触发词逗号分隔')
     # volume_arc 卷级大纲生成（阶段2 创建书籍）
     parser.add_argument('--selected-card', help='[volume_arc] 选中灵感卡 JSON 路径')
     parser.add_argument('--cluster-count', type=int, help='[volume_arc] 每卷故事块数（软提示）')
@@ -1054,24 +969,6 @@ def main():
                                                research_text, style_text)
         parser_fn = parse_brainstorm_output
 
-    elif args.mode == 'outline_card':
-        if not args.skeleton or not Path(args.skeleton).exists():
-            print("[ERROR] --mode outline_card 需要 --skeleton（文件须存在）", file=sys.stderr)
-            sys.exit(2)
-        try:
-            skeleton = json.loads(Path(args.skeleton).read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"[ERROR] --skeleton 读取/解析失败: {e}", file=sys.stderr)
-            sys.exit(2)
-        project_context = ""
-        if args.project:
-            pr = Path(args.project)
-            if (pr / "大纲.md").exists():
-                project_context = read_text(pr / "大纲.md", 8000)
-        system, user = build_outline_card_prompt(skeleton, args.count,
-                                                 args.hint or "", project_context)
-        parser_fn = parse_outline_card_output
-
     elif args.mode == 'volume_arc':
         # 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约·自带 emit/dry-run）
         sys.exit(_run_volume_arc(args))
@@ -1096,11 +993,6 @@ def main():
             history_quotes=history_text, voice_dna_text=voice_dna_text,
             count=args.count)
         parser_fn = parse_voice_sample_output
-
-    elif args.mode == 'world_entry':
-        print(f"[ERROR] mode '{args.mode}' 是 v2 placeholder，待实现", file=sys.stderr)
-        print(f"  当前请用 Claude sub-agent 流程替代（worldbuild）")
-        sys.exit(2)
 
     if args.dry_run:
         print("=== SYSTEM ===")

@@ -1,26 +1,9 @@
-"""gen_creative 健壮性回归（2026-06-16 · triage worth_fixing 2 修）。
+"""gen_creative deterministic regression tests.
 
-triage 抓出 gen_creative.py 两处确定性 IO/结构契约缺口（均不碰创作判断·北极星⑤）：
-
-  · L749-752 outline_card 分支：只校验 `--skeleton` 非空，随后裸
-    `json.loads(Path(args.skeleton).read_text())`——文件缺失→FileNotFoundError
-    裸 traceback exit 1；内容非合法 JSON→JSONDecodeError 裸 traceback。
-    姊妹 volume_arc(L495-501) 早有 Path.exists()+try/except OSError/JSONDecodeError
-    优雅降级。修复 = 加存在性检查 + try/except，破损输入 → 干净 exit 2（不抛裸
-    traceback·对 GUI 非技术用户友好），与 volume_arc 范式对齐。
-
-  · L459-460 _emit_volume_arc_to_db：`[{**me, "status": me.get(...)} for me in
-    data.get("major_events", [])]` 对每个元素无条件 `{**me}`/`me.get(...)`。
-    gen-model 软约束（仅 responseMimeType·无 responseSchema）下可合法吐出
-    ['ME1','ME2'] 或含 null → `{**'str'}`/`{**None}` → TypeError: object is not
-    a mapping，且该 emit 在 3 次 parse 重试循环之后无 try/except 调用 → 直接崩
-    建书单点调用。下游 cluster_emergence_engine.py:349 对同一非 dict ME 已有
-    `if not isinstance(me, dict): continue` 守卫（2026-05-29 复审修复 L8）——证明
-    此失败模式已知、消费端已补而生产端漏。修复 = 加 isinstance(me, dict) 过滤。
-
-测试零依赖：tempfile 建临时目录 + 直接调 main()（捕 SystemExit）/直接调
-_emit_volume_arc_to_db 纯函数。outline_card happy-path 走 --dry-run 不碰网络。
-__main__ 跑全部 test_*。
+The old outline_card mode has been removed from the public CLI. Direction cards
+must flow through cluster_emergence_engine + novel-outline-planner + cluster
+user_choice artifacts. This test keeps that removal locked while preserving the
+volume_arc structural guards.
 """
 import json
 import sys
@@ -33,15 +16,11 @@ import gen_creative as gc  # noqa: E402
 
 
 # ════════════════════════════════════════════════════════════════
-# 沙箱 helper：跑 main() 捕 SystemExit / 非 SystemExit 异常向上抛（= bug 未修）
+# Helper
 # ════════════════════════════════════════════════════════════════
 
 def _run_main(argv: list[str]) -> int | None:
-    """以给定 argv 跑 main()，捕 SystemExit 返回退出码；正常返回返 None。
-
-    若 main() 抛非 SystemExit（FileNotFoundError/JSONDecodeError/TypeError 等）
-    = 未优雅降级 = bug 未修，异常向上抛由调用测试 fail。
-    """
+    """Run main() with argv and return SystemExit code; normal return is None."""
     old_argv = sys.argv[:]
     sys.argv = argv
     try:
@@ -54,52 +33,13 @@ def _run_main(argv: list[str]) -> int | None:
 
 
 # ════════════════════════════════════════════════════════════════
-# Bug 1（L749-752）：outline_card --skeleton IO 健壮性
+# Old entry hard rejection: outline_card is no longer public CLI
 # ════════════════════════════════════════════════════════════════
 
-def test_outline_card_missing_skeleton_flag_exit2():
-    """不传 --skeleton → 干净 exit 2（前置契约·确认守卫仍在）。"""
+def test_outline_card_mode_removed_exit2():
+    """旧单章走向卡入口必须被 argparse 硬拒，不能绕过 cluster 选择链路。"""
     code = _run_main(["gen_creative.py", "--mode", "outline_card", "--count", "2"])
-    assert code == 2, f"缺 --skeleton 应 exit 2，实得 {code}"
-
-
-def test_outline_card_nonexistent_file_exit2_no_crash():
-    """--skeleton 指向不存在的文件 → 修前 FileNotFoundError 裸 traceback exit 1；
-    修后 Path.exists() 拦截 → 干净 exit 2，不抛 FileNotFoundError。"""
-    with tempfile.TemporaryDirectory() as td:
-        ghost = str(Path(td) / "不存在的骨架.json")
-        # 若修未生效 → main() 在 json.loads(...read_text()) 抛 FileNotFoundError（非 SystemExit）
-        # → _run_main 不捕 → 本测试因未捕异常而 fail（正是回归保护点）
-        code = _run_main(["gen_creative.py", "--mode", "outline_card",
-                          "--skeleton", ghost, "--count", "2"])
-        assert code == 2, f"骨架文件不存在应 exit 2，实得 {code}"
-
-
-def test_outline_card_malformed_json_exit2_no_crash():
-    """--skeleton 文件内容非合法 JSON → 修前 json.JSONDecodeError 裸 traceback；
-    修后 try/except 捕 → 干净 exit 2。"""
-    with tempfile.TemporaryDirectory() as td:
-        bad = Path(td) / "坏骨架.json"
-        bad.write_text("{ 这不是合法 JSON ,,, ", encoding="utf-8")
-        code = _run_main(["gen_creative.py", "--mode", "outline_card",
-                          "--skeleton", str(bad), "--count", "2"])
-        assert code == 2, f"骨架 JSON 破损应 exit 2，实得 {code}"
-
-
-def test_outline_card_valid_skeleton_dry_run_ok():
-    """合法骨架 + --dry-run → main() 正常返回（不抛异常·不调网络），
-    确认修复未改坏 happy-path。dry-run 末尾 bare return → 退出码 None。"""
-    with tempfile.TemporaryDirectory() as td:
-        good = Path(td) / "骨架.json"
-        good.write_text(json.dumps(
-            {"cards": [{"card_id": "A", "path_id": "p1"},
-                       {"card_id": "B", "path_id": "p2"}]},
-            ensure_ascii=False), encoding="utf-8")
-        # --dry-run：解析骨架 → 组 prompt → 打印 → bare return（不调 gen-model）
-        code = _run_main(["gen_creative.py", "--mode", "outline_card",
-                          "--skeleton", str(good), "--count", "2", "--dry-run"])
-        # dry-run 分支以 bare `return` 结束 main()（非 sys.exit）→ None
-        assert code is None, f"合法骨架 dry-run 应正常返回(None)，实得 {code}"
+    assert code == 2, f"outline_card 旧入口应被硬拒 exit 2，实得 {code}"
 
 
 # ════════════════════════════════════════════════════════════════

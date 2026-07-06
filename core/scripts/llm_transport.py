@@ -86,7 +86,6 @@ class TransportEmpty(TransportError):
 # 北极星边界：纯检测 helper（零副作用 · 零行为变更）。
 # - llm_transport.generate() 不主动调（避免污染 gen_writer 等正常路径）
 # - 仅 distill_replicate.call_gen_model 在 stream 完成后主动调 → 命中走 3s 退避 + disclaimer 重试
-# - env REFUSAL_RETRY_ENABLED='0' 全局旁路（默认 '1'）
 #
 # 启发式（保守 · 宁漏不误杀）：
 #   - 总长 < max_chars（默认 200 CJK）AND 头窗 head_window（默认 100）含 refusal 关键词

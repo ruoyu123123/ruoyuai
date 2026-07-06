@@ -44,7 +44,7 @@ from atomic_json import atomic_write_text
 class SplitterIntegrityError(Exception):
     """splitter 字数守恒被破坏（丢字 / 重复 / 空块落盘 / 切片计数失配）= 北极星④纯格式层契约破损。
 
-    code=SPLIT_WORD_NOT_CONSERVED（与 audit_hub.HARD_GATE_CODES / STRUCTURE§11.2 / CLAUDE.md 三方一致）·
+    code=SPLIT_WORD_NOT_CONSERVED（与 audit_hub.HARD_GATE_CODES / STRUCTURE§12.2 / CLAUDE.md / scanner_registry 四方一致）·
     携 delta(accounted - draft_cjk)。main / _main_freestyle 捕获 → stderr [FATAL] → sys.exit(2)，
     使 cluster-write step6 fail-fast（坏章节零落盘）。
     """
@@ -337,9 +337,9 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
                   narrative_mode="linear", climax_hint=None):
     """v27 ecas_freestyle 切割。返回 report dict。
 
-    2026-05-29 复审修复（M5）：新增 narrative_mode + climax_hint。
-    narrative_mode == "in_medias_res"（cluster_001 黄金三章倒叙默认）时，切章前先把
-    climax 段提前到草稿头部（in_medias_res 开场钩子），再按字数硬范围切。linear 不动。
+    2026-06-07 根治「双重倒叙」（用户定调）：splitter 只按字数 linear 切（北极星④纯格式层），
+    **不做任何倒叙重排**。倒叙由 outline 排 scene_storyboard + writer 按序写负责。
+    narrative_mode / climax_hint 仅写入决策日志留痕，不触发重排（历史 M5 reorder 已删除）。
     """
     cluster_key = str(cluster_id).replace("cluster_", "")
     global CHAR_NAMES
@@ -384,7 +384,7 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
         "N_max": math.floor(draft_cjk / lo) if draft_cjk >= lo else 0,
         "N_recommend": max(1, round(draft_cjk / target)) if draft_cjk >= lo else 0,
         "N_final": N,
-        # M5：倒叙重组决策痕迹
+        # 倒叙参数仅留痕（2026-06-07 起不触发任何重排）
         "narrative_mode": (narrative_mode or "linear").strip(),
         "climax_hint": climax_hint,
         "climax_para_idx_detected": climax_idx_detected,
@@ -592,8 +592,8 @@ def _main_freestyle(args):
             [--previous-pending-tail <上 cluster pending_tail.txt>] \\
             [--dry-run]
 
-    2026-05-29 复审修复（M5）：新增 --narrative-mode / --climax-hint。
-    in_medias_res（cluster_001 黄金三章倒叙默认）时先把 climax 段提前再切。
+    2026-06-07 根治「双重倒叙」（用户定调）：--narrative-mode / --climax-hint 仅作
+    决策日志痕迹保留，**不触发任何倒叙重排**（splitter 只按字数 linear 切 · 北极星④）。
     build_manifest.inject_event_cluster_context 注入的 narrative_mode +
     climax_hint_scene_index 由 novel-chapter-splitter agent 透传到这两个参数。
     """

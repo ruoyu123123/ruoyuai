@@ -184,6 +184,21 @@ def test_reasoning_scene_fail_still_blocks():
     assert strict_ok is False
 
 
+def test_resolve_strict_estimable_idx_profile_failure_is_hard(monkeypatch):
+    """出货回灌不能在 gen-model profile 不可读时退默认策略。"""
+    class BrokenLoader:
+        def get_active_profile(self):
+            raise RuntimeError("profile missing")
+
+    fake_loader = types.SimpleNamespace(get_default_loader=lambda: BrokenLoader())
+    monkeypatch.setitem(sys.modules, "gen_model_loader", fake_loader)
+    try:
+        dfv.resolve_strict_estimable_idx()
+        raise AssertionError("profile 加载失败应抛出")
+    except RuntimeError as e:
+        assert "profile missing" in str(e)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # 🔴 VAD 模型接线回归：_estimate_emotion 优先用 VAD valence 模型（与
 # antagonist_valence_trajectory._model_window_valence 完全同构），模型未启用/不可用

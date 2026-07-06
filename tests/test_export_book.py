@@ -1,12 +1,7 @@
-"""export_book 回归测试（缺漏修复批次1 · P0-1）— 零依赖范式。
+"""Regression tests for the hard book exporter."""
 
-守护点（对应缺漏报告结论）：
-  1. 基本拼接：章号升序 + 「第N章 标题」行（title 读 _changes.json·空只写「第N章」）+ 章间空行
-  2. 缺章跳过：目录在 txt 缺 → WARN 跳过不中断，其余章正常导出
-  3. CHANGES 剥离：正文混入 ---CHANGES--- 标记段 → 导出文件里绝不出现
-  4. 无章节：exit 1（main）/ export_book 返回 None
-  5. P1-2 接线：孤儿 pending_tail 存在 → stderr 醒目警告但仍继续导出
-"""
+from __future__ import annotations
+
 import io
 import json
 import sys
@@ -15,283 +10,302 @@ from contextlib import redirect_stderr
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
-import export_book as eb
-import chapter_io as cio
+import chapter_io as cio  # noqa: E402
+import export_book as eb  # noqa: E402
+
+CHAPTER_DIR = "\u7ae0\u8282"
+DB_DIR = "_\u6570\u636e\u5e93"
+COMPLIANCE_FILENAME = "\u53d1\u5e03\u524d\u5408\u89c4\u81ea\u67e5.md"
 
 
-# ============ 夹具 ============
-
-def _mk_chapter(root: Path, ch: int, body: str, title: str = None):
-    """写 章节/第NNN章/第NNN章.txt（+ 可选 _changes.json 带 title 顶层字段）。"""
+def _mk_chapter(root: Path, ch: int, body: str, title: str | None = None) -> None:
     cio.write_body(root, ch, body)
     if title is not None:
-        cp = cio.changes_path(root, ch)
-        cp.parent.mkdir(parents=True, exist_ok=True)
-        cp.write_text(json.dumps(
-            {"schema_version": "v2.cluster", "chapter": ch, "title": title,
-             "factual": {}, "self_eval": {}},
-            ensure_ascii=False), encoding="utf-8")
+        changes = cio.changes_path(root, ch)
+        changes.parent.mkdir(parents=True, exist_ok=True)
+        changes.write_text(
+            json.dumps({"schema_version": "v2.cluster", "chapter": ch, "title": title}, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
 
-def _mk_pending_tail(root: Path, key: str, body: str):
-    d = root / "章节" / f"cluster_{key}_draft"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"cluster_{key}_pending_tail.txt").write_text(body, encoding="utf-8")
+def _mk_pending_tail(root: Path, key: str, body: str) -> None:
+    draft_dir = root / CHAPTER_DIR / f"cluster_{key}_draft"
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    (draft_dir / f"cluster_{key}_pending_tail.txt").write_text(body, encoding="utf-8")
 
 
 def _read_export(report: dict) -> str:
     return Path(report["out_path"]).read_text(encoding="utf-8")
 
 
-# ============ 1. 基本拼接 + 标题 ============
-
-def test_basic_concat_titles_and_order():
-    """章号升序拼接·有 title 写「第N章 标题」·无 title 只写「第N章」·章间空行·默认输出路径。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "测试书"
+def test_basic_concat_titles_and_order() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u6d4b\u8bd5\u4e66"
         root.mkdir()
-        # 故意乱序建章（3 → 1 → 2），导出必须按章号升序
-        _mk_chapter(root, 3, "第三章正文甲。\n\n第三章正文乙。")           # 无 changes → 只写「第3章」
-        _mk_chapter(root, 1, "第一章正文。", title="开局一座山")
-        _mk_chapter(root, 2, "第二章正文。", title="")                    # title 空串 → 只写「第2章」
-        report = eb.export_book(root)
+        _mk_chapter(root, 3, "\u7b2c\u4e09\u7ae0\u6b63\u6587\u3002", title="\u4e09")
+        _mk_chapter(root, 1, "\u7b2c\u4e00\u7ae0\u6b63\u6587\u3002", title="\u5f00\u5c40\u4e00\u5ea7\u5c71")
+        _mk_chapter(root, 2, "\u7b2c\u4e8c\u7ae0\u6b63\u6587\u3002", title="\u4e8c")
+
+        report = eb.export_book(root, with_compliance_checklist=False)
         assert report is not None
         assert report["chapters"] == 3
         assert report["chapter_list"] == [1, 2, 3]
-        # 默认输出路径：<项目>/exports/<书名>_全文_<章数>章.txt
-        out = Path(report["out_path"])
-        assert out.parent.name == "exports"
-        assert out.name == "测试书_全文_3章.txt"
+        assert report["integrity"]["verdict"] == "ok"
+        assert Path(report["out_path"]).name == "\u6d4b\u8bd5\u4e66_\u5168\u6587_3\u7ae0.txt"
+
         text = _read_export(report)
-        # 标题行格式
-        assert "第1章 开局一座山\n\n第一章正文。" in text
-        assert "第2章\n\n第二章正文。" in text
-        assert "第3章\n\n第三章正文甲。" in text
-        # 升序：第1章 在 第2章 前，第2章 在 第3章 前
-        assert text.index("第1章 ") < text.index("第2章\n") < text.index("第3章\n")
-        # 章间空行（上一章末 + 空行 + 下一章标题）
-        assert "第一章正文。\n\n第2章" in text
+        assert "\u7b2c1\u7ae0 \u5f00\u5c40\u4e00\u5ea7\u5c71" in text
+        assert text.index("\u7b2c1\u7ae0") < text.index("\u7b2c2\u7ae0") < text.index("\u7b2c3\u7ae0")
 
 
-def test_body_own_title_line_deduped():
-    """正文自带「第N章 …」标题行 → 摘出不双写；changes 无 title 时用正文行标题兜底。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "书"
+def test_missing_title_metadata_is_hard_and_no_output_written() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
         root.mkdir()
-        # splitter 历史布局：正文首行就是标题行
-        _mk_chapter(root, 1, "第001章 雪夜来客\n\n门被推开了。")
-        report = eb.export_book(root)
-        text = _read_export(report)
-        assert "第1章 雪夜来客\n\n门被推开了。" in text
-        # 原 zero-pad 标题行不应残留（双标题）
-        assert "第001章 雪夜来客" not in text
+        _mk_chapter(root, 1, "\u6b63\u6587\u3002")
+
+        try:
+            eb.export_book(root)
+            raise AssertionError("missing title metadata should block export")
+        except eb.ExportIntegrityError as exc:
+            report = exc.report
+        assert report["out_path"] is None
+        assert report["integrity"]["verdict"] == "hard"
+        assert not (root / "exports").exists()
+        assert any(issue["code"] == "CHAPTER_READ_OR_CONTRACT_ERROR" for issue in report["integrity"]["issues"])
 
 
-# ============ 2. 缺章跳过 ============
-
-def test_missing_chapter_skipped_with_warn():
-    """第2章 目录在但 txt 缺 → stderr WARN + 跳过，第1/3章 正常导出不中断。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "书"
+def test_body_title_line_is_hard_contract_error() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
         root.mkdir()
-        _mk_chapter(root, 1, "一章正文。", title="一")
-        _mk_chapter(root, 3, "三章正文。", title="三")
-        # 第2章 只有目录没有 txt（splitter 中断 / 人工误删场景）
-        (root / "章节" / "第002章").mkdir(parents=True, exist_ok=True)
-        buf = io.StringIO()
-        with redirect_stderr(buf):
-            report = eb.export_book(root)
-        assert report is not None
-        assert report["chapters"] == 2
-        assert report["chapter_list"] == [1, 3]
-        err = buf.getvalue()
-        assert "[WARN]" in err and "第2章" in err, f"应有缺章 WARN，实际 stderr: {err!r}"
-        text = _read_export(report)
-        assert "第1章 一" in text and "第3章 三" in text
-        assert "第2章" not in text
+        _mk_chapter(root, 1, "\u7b2c001\u7ae0 \u96ea\u591c\u6765\u5ba2\n\n\u95e8\u88ab\u63a8\u5f00\u3002", title="\u96ea\u591c")
+
+        try:
+            eb.export_book(root)
+            raise AssertionError("title line in chapter body should block export")
+        except eb.ExportIntegrityError as exc:
+            errors = [
+                detail
+                for issue in exc.report["integrity"]["issues"]
+                if issue["code"] == "CHAPTER_READ_OR_CONTRACT_ERROR"
+                for detail in issue["detail"]
+            ]
+        assert any("title line" in item["error"] for item in errors)
+        assert not (root / "exports").exists()
 
 
-# ============ 3. CHANGES 剥离 ============
-
-def test_changes_markers_stripped():
-    """正文混入 ---CHANGES--- / ---CHANGES_FACTUAL--- 标记段 → 导出绝不含机器数据。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "书"
+def test_changes_markers_in_body_are_hard_contract_error() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
         root.mkdir()
-        _mk_chapter(root, 1, '正文一。\n\n---CHANGES---\n{"facts_locked": ["秘密A"]}', title="一")
-        _mk_chapter(root, 2, '正文二。\n\n---CHANGES_FACTUAL---\n{"x": 1}\n---CHANGES_SELF_EVAL---\n{"y": 2}')
-        report = eb.export_book(root)
-        text = _read_export(report)
-        assert "正文一。" in text and "正文二。" in text
-        assert "---CHANGES" not in text
-        assert "facts_locked" not in text and "秘密A" not in text
+        _mk_chapter(root, 1, "\u6b63\u6587\u4e00\u3002\n\n---CHANGES---\n{}", title="\u4e00")
+
+        try:
+            eb.export_book(root)
+            raise AssertionError("machine marker in chapter body should block export")
+        except eb.ExportIntegrityError as exc:
+            assert exc.report["out_path"] is None
+            assert not (root / "exports").exists()
+            assert any(issue["code"] == "CHAPTER_READ_OR_CONTRACT_ERROR" for issue in exc.report["integrity"]["issues"])
 
 
-# ============ 改编资料包集成（一人公司·喂 IP 后端·2026-06-15） ============
-
-def test_adaptation_kit_default_off():
-    """默认 with_adaptation_kit=False → 不产改编资料包（零回归）+ report.adaptation_kit=None。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "测试书"
+def test_missing_chapter_file_blocks_export() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
         root.mkdir()
-        _mk_chapter(root, 1, "正文。")
-        report = eb.export_book(root)
-        assert report["adaptation_kit"] is None
-        assert not (root / "改编资料包").exists()
+        _mk_chapter(root, 1, "\u4e00\u7ae0\u6b63\u6587\u3002", title="\u4e00")
+        _mk_chapter(root, 3, "\u4e09\u7ae0\u6b63\u6587\u3002", title="\u4e09")
+        (root / CHAPTER_DIR / "\u7b2c002\u7ae0").mkdir(parents=True, exist_ok=True)
+
+        try:
+            eb.export_book(root)
+            raise AssertionError("missing chapter body should block export")
+        except eb.ExportIntegrityError as exc:
+            integrity = exc.report["integrity"]
+        assert integrity["verdict"] == "hard"
+        assert any(issue["code"] == "CHAPTER_BODY_FILE_MISSING" for issue in integrity["issues"])
+        assert any(issue["code"] == "CHAPTER_MISSING" for issue in integrity["issues"])
+        assert not (root / "exports").exists()
 
 
-def test_adaptation_kit_flag_produces_kit():
-    """with_adaptation_kit=True + 有人物卡 → 产改编资料包 + report.adaptation_kit 含产出。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "测试书"
+def test_no_chapters_exit_2_and_no_output_written() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u7a7a\u4e66"
         root.mkdir()
-        _mk_chapter(root, 1, "正文。")
-        dbdir = root / "_数据库"
-        dbdir.mkdir(parents=True, exist_ok=True)
-        (dbdir / "人物卡.json").write_text(json.dumps(
-            {"characters": [{"id": "A", "name": "甲", "role": "主角", "arc": "成长"}]},
-            ensure_ascii=False), encoding="utf-8")
-        report = eb.export_book(root, with_adaptation_kit=True)
-        assert report["adaptation_kit"] is not None
-        assert "人物小传.md" in report["adaptation_kit"]["written"]
-        assert (root / "改编资料包" / "人物小传.md").exists()
+        try:
+            with redirect_stderr(io.StringIO()):
+                eb.export_book(root)
+            raise AssertionError("no chapters should block export")
+        except eb.ExportIntegrityError as exc:
+            assert exc.report["integrity"]["verdict"] == "hard"
+            assert any(issue["code"] == "CHAPTER_SOURCE_MISSING" for issue in exc.report["integrity"]["issues"])
+        assert not (root / "exports").exists()
+
+        out = Path(temp) / "custom" / "book.txt"
+        with redirect_stderr(io.StringIO()):
+            try:
+                eb.main([str(root), "--out", str(out)])
+                raise AssertionError("main should exit")
+            except SystemExit as exc:
+                assert exc.code == 2
+        assert not out.exists()
+        assert not out.parent.exists()
+
+        try:
+            with redirect_stderr(io.StringIO()):
+                eb.main([str(Path(temp) / "missing")])
+            raise AssertionError("main should exit")
+        except SystemExit as exc:
+            assert exc.code == 2
 
 
-# ============ 发布前合规自查清单集成（一人公司·D2 合规护城河·2026-06-15） ============
+def test_missing_project_exit_2() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        try:
+            with redirect_stderr(io.StringIO()):
+                eb.main([str(Path(temp) / "missing")])
+            raise AssertionError("main should exit")
+        except SystemExit as exc:
+            assert exc.code == 2
 
-def test_compliance_checklist_default_produced():
-    """默认 with_compliance_checklist=True → 产 发布前合规自查.md + report 字段。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "测试书"
+
+def test_main_success_exit_0_and_out_override() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
         root.mkdir()
-        _mk_chapter(root, 1, "正文。")
-        report = eb.export_book(root)
-        cp = report["compliance_checklist"]
-        assert cp is not None
-        assert Path(cp).name == "发布前合规自查.md"
-        assert (Path(report["out_path"]).parent / "发布前合规自查.md").exists()
+        _mk_chapter(root, 1, "\u6b63\u6587\u3002", title="\u4e00")
+        out = Path(temp) / "custom" / "book.txt"
+
+        try:
+            eb.main([str(root), "--out", str(out)])
+            raise AssertionError("main should exit")
+        except SystemExit as exc:
+            assert exc.code == 0
+        assert out.is_file()
+        assert "\u7b2c1\u7ae0 \u4e00" in out.read_text(encoding="utf-8")
 
 
-def test_compliance_checklist_can_disable():
-    """with_compliance_checklist=False → 不产（report 字段 None）。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "测试书"
+def test_pending_tail_blocks_and_does_not_write_export() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
         root.mkdir()
-        _mk_chapter(root, 1, "正文。")
-        report = eb.export_book(root, with_compliance_checklist=False)
-        assert report["compliance_checklist"] is None
-        assert not (root / "exports" / "发布前合规自查.md").exists()
+        _mk_chapter(root, 1, "\u4e00\u7ae0\u6b63\u6587\u3002", title="\u4e00")
+        _mk_pending_tail(root, "001", "\u5c3e\u6bb5\u672a\u5165\u7ae0\u3002" * 80)
+
+        try:
+            eb.export_book(root)
+            raise AssertionError("pending_tail should block export")
+        except eb.ExportIntegrityError as exc:
+            report = exc.report
+        assert report["pending_tails"] == 1
+        assert report["out_path"] is None
+        assert any(issue["code"] == "PENDING_TAIL_PRESENT" for issue in report["integrity"]["issues"])
+        assert not (root / "exports").exists()
 
 
-def test_compliance_checklist_content_d2_points():
-    """合规清单含 D2 核心要点（严打 AI 铺量/单本精写/不替上传/红线·守北极星合规护城河）。"""
-    md = eb.build_compliance_checklist()
-    assert "AI 铺量" in md                 # 平台严打
-    assert "单本精写" in md                # 北极星定位
-    assert "不替你上传" in md              # 机器产草稿人做发布决策
-    assert "一键自动发布" in md            # 红线
-    assert "AI 创作披露" in md             # 平台 AI 政策
-
-
-# ============ 4. 无章节 exit 1 ============
-
-def test_no_chapters_exit_1():
-    """无任何章节：export_book 返回 None，main exit 1；路径不存在 exit 2。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "空书"
+def test_cli_pending_tail_exit2() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
         root.mkdir()
-        buf = io.StringIO()
-        with redirect_stderr(buf):
-            assert eb.export_book(root) is None
-        assert "[FATAL]" in buf.getvalue()
-        # main 退出码：1 无章节
+        _mk_chapter(root, 1, "\u4e00\u7ae0\u6b63\u6587\u3002", title="\u4e00")
+        _mk_pending_tail(root, "001", "\u5c3e\u6bb5\u672a\u5165\u7ae0\u3002" * 40)
+
         try:
             with redirect_stderr(io.StringIO()):
                 eb.main([str(root)])
-            raise AssertionError("main 应 sys.exit")
-        except SystemExit as e:
-            assert e.code == 1
-        # main 退出码：2 路径不存在
+            raise AssertionError("main should exit")
+        except SystemExit as exc:
+            assert exc.code == 2
+        assert not (root / "exports").exists()
+
+
+def test_failure_does_not_write_custom_out_or_side_outputs() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
+        root.mkdir()
+        _mk_chapter(root, 1, "\u6b63\u6587\u3002", title="\u4e00")
+        _mk_pending_tail(root, "001", "\u5c3e\u6bb5\u672a\u5165\u7ae0\u3002" * 40)
+        db_dir = root / DB_DIR
+        db_dir.mkdir(parents=True, exist_ok=True)
+        (db_dir / "\u4eba\u7269\u5361.json").write_text(
+            json.dumps({"characters": [{"id": "A", "name": "\u7532", "role": "\u4e3b\u89d2"}]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        out = Path(temp) / "custom" / "book.txt"
+
         try:
-            with redirect_stderr(io.StringIO()):
-                eb.main([str(Path(d) / "不存在")])
-            raise AssertionError("main 应 sys.exit")
-        except SystemExit as e:
-            assert e.code == 2
+            eb.export_book(root, out, with_adaptation_kit=True, with_compliance_checklist=True)
+            raise AssertionError("pending_tail should block export")
+        except eb.ExportIntegrityError:
+            pass
+
+        assert not out.exists()
+        assert not out.parent.exists()
+        assert not (root / "\u6539\u7f16\u8d44\u6599\u5305").exists()
 
 
-def test_main_exit_0_and_out_override():
-    """main 成功 exit 0 · --out 自定义输出路径（父目录自动建）。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "书"
+def test_archived_and_draft_dirs_excluded() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
         root.mkdir()
-        _mk_chapter(root, 1, "正文。", title="一")
-        out = Path(d) / "自定义" / "全文.txt"
-        try:
-            eb.main([str(root), "--out", str(out)])
-            raise AssertionError("main 应 sys.exit")
-        except SystemExit as e:
-            assert e.code == 0
-        assert out.is_file()
-        assert "第1章 一" in out.read_text(encoding="utf-8")
+        _mk_chapter(root, 1, "\u6b63\u5178\u6b63\u6587\u3002", title="\u4e00")
 
+        archived = root / CHAPTER_DIR / "_archived_v1" / "\u7b2c002\u7ae0"
+        archived.mkdir(parents=True, exist_ok=True)
+        (archived / "\u7b2c002\u7ae0.txt").write_text("\u5f52\u6863\u65e7\u7a3f\u3002", encoding="utf-8")
 
-# ============ 5. P1-2 孤儿 pending_tail 警告但仍导出 ============
+        draft = root / CHAPTER_DIR / "cluster_001_draft"
+        draft.mkdir(parents=True, exist_ok=True)
+        (draft / "\u7b2c003\u7ae0.txt").write_text("\u8349\u7a3f\u4e2d\u95f4\u4ea7\u7269\u3002", encoding="utf-8")
 
-def test_orphan_pending_tail_warns_but_export_continues():
-    """全书最后 cluster 残留 pending_tail 孤儿 → stderr 醒目警告（含字数）但导出照常完成。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "书"
-        root.mkdir()
-        _mk_chapter(root, 1, "一章正文。", title="一")
-        _mk_chapter(root, 2, "二章正文。", title="二")
-        # 末 cluster 的 pending_tail 无后继可拼 → 孤儿（finalize_book #3/#4 核心场景）
-        tail = "她拿起牛皮纸信封。\n\n" + ("照片边缘已经发黄。" * 60)
-        _mk_pending_tail(root, "001", tail)
-        buf = io.StringIO()
-        with redirect_stderr(buf):
-            report = eb.export_book(root)
-        assert report is not None and report["chapters"] == 2  # 仍继续导出
-        assert report["orphan_pending_tails"] == 1
-        err = buf.getvalue()
-        assert "pending_tail" in err and "未入章" in err, f"应有孤儿警告，实际: {err!r}"
-        assert "cluster_001" in err
-        # draft 目录的中间产物绝不能混进导出
-        text = _read_export(report)
-        assert "牛皮纸信封" not in text
-
-
-def test_archived_and_draft_dirs_excluded():
-    """_archived_v1 归档章 / cluster_*_draft 草稿不参与导出（凿窍纪实地布局）。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d) / "书"
-        root.mkdir()
-        _mk_chapter(root, 1, "正典正文。", title="一")
-        # 归档区同章号旧稿（实地验证：凿窍纪 章节/_archived_v1/第001章/…）
-        arch = root / "章节" / "_archived_v1" / "第002章"
-        arch.mkdir(parents=True, exist_ok=True)
-        (arch / "第002章.txt").write_text("归档旧稿不该出现。", encoding="utf-8")
-        # draft 目录里的同名文件
-        dr = root / "章节" / "cluster_001_draft"
-        dr.mkdir(parents=True, exist_ok=True)
-        (dr / "第003章.txt").write_text("草稿中间产物不该出现。", encoding="utf-8")
-        report = eb.export_book(root)
+        report = eb.export_book(root, with_compliance_checklist=False)
         assert report["chapters"] == 1
         text = _read_export(report)
-        assert "正典正文。" in text
-        assert "归档旧稿" not in text and "草稿中间产物" not in text
+        assert "\u6b63\u5178\u6b63\u6587" in text
+        assert "\u5f52\u6863\u65e7\u7a3f" not in text
+        assert "\u8349\u7a3f\u4e2d\u95f4\u4ea7\u7269" not in text
 
 
-if __name__ == "__main__":
-    fails = 0
-    for nm in sorted(dir()):
-        if nm.startswith("test_"):
-            try:
-                globals()[nm]()
-                print(f"  [OK] {nm}")
-            except Exception as e:
-                fails += 1
-                import traceback
-                print(f"  [FAIL] {nm}: {e}")
-                traceback.print_exc()
-    sys.exit(1 if fails else 0)
+def test_compliance_checklist_default_produced_after_clean_export() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
+        root.mkdir()
+        _mk_chapter(root, 1, "\u6b63\u6587\u3002", title="\u4e00")
+
+        report = eb.export_book(root)
+        compliance = Path(report["compliance_checklist"])
+        assert compliance.name == COMPLIANCE_FILENAME
+        assert compliance.exists()
+        assert "\u53d1\u5e03\u524d\u5408\u89c4\u81ea\u67e5" in compliance.read_text(encoding="utf-8")
+
+
+def test_compliance_checklist_can_disable() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
+        root.mkdir()
+        _mk_chapter(root, 1, "\u6b63\u6587\u3002", title="\u4e00")
+
+        report = eb.export_book(root, with_compliance_checklist=False)
+        assert report["compliance_checklist"] is None
+        assert not (root / "exports" / COMPLIANCE_FILENAME).exists()
+
+
+def test_adaptation_kit_flag_produces_kit_after_clean_export() -> None:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "\u4e66"
+        root.mkdir()
+        _mk_chapter(root, 1, "\u6b63\u6587\u3002", title="\u4e00")
+        db_dir = root / DB_DIR
+        db_dir.mkdir(parents=True, exist_ok=True)
+        (db_dir / "\u4eba\u7269\u5361.json").write_text(
+            json.dumps(
+                {"characters": [{"id": "A", "name": "\u7532", "role": "\u4e3b\u89d2", "arc": "\u6210\u957f"}]},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        report = eb.export_book(root, with_adaptation_kit=True, with_compliance_checklist=False)
+        assert report["adaptation_kit"] is not None

@@ -7,14 +7,7 @@ v27 freestyle 模式（默认）：
     --project "workspace/novels/<book>" \
     --cluster 6
   → writer 不知道目标章数 · 按 cluster.scope_summary + scene_storyboard 自由发挥
-  → 字数自然涌现（splitter 后期按 3000-4500/章 切，章数由内容决定）
-
-v26 兼容模式（显式锁字数 · 仅用于回归测试）：
-  python gen_writer.py \
-    --project "workspace/novels/<book>" \
-    --cluster 3 \
-    --chapter-start 11 --chapter-end 15 \
-    --target-cjk 13000-22000
+  → 字数自然涌现（splitter 后期依据 draft 自然切分）
 
 gen_writer 核心职责 = 产正文 draft（配置的写作模型只产正文）。
 读取 manifest + 风格 skill + 调研 cache + cluster_brief + 7 项硬约束，
@@ -140,14 +133,6 @@ def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
 BEST_OF_N_DEFAULT = 2
 BEST_OF_N_MAX = 5  # 上限防 token 失控（用户质量优先但不无限）
 
-# [2026-06-04] freestyle 正文长度软下限（CJK）：低于此值且模型 finish=stop（写完但偏短）→ call_gen_model
-# 触发 expand 续写兜底（展开剩余场景）。治 pro 等简洁倾向 reasoning 模型单 cluster 仅 ~3650 CJK 偏短问题。
-# 软托底非硬锁（北极星⑤）：防注水——单轮续写增量 < FREESTYLE_EXPAND_MIN_GAIN 即停（模型没料别硬凑）。
-# 🔴 2026-06-27 P1-06：12000→16000·治 cluster 字数偏低(5 cluster 17 章·应 22-25 章)。
-# env FREESTYLE_MIN_CJK_OVERRIDE 允许短篇例外回退。健康区间 15000-22000·目标中段 ~18000。
-FREESTYLE_MIN_CJK = int(os.environ.get("FREESTYLE_MIN_CJK_OVERRIDE", "16000"))
-FREESTYLE_EXPAND_MAX_ROUNDS = 6    # expand 续写最多轮数（2026-06-06 4→6·治 pro 等简洁 reasoning 模型偏短·多续几轮逐场景写透）
-FREESTYLE_EXPAND_MIN_GAIN = 400    # 单轮增量低于此 CJK → 停止兜底（2026-06-06 800→400·pro 单轮加得少但累积有效·别过早停）
 # 综合分：每个走味维度的惩罚（满分 100 的 SFS 尺度上扣多少 · 4 维全走味最多扣 40）。
 AV_DRIFT_PENALTY_PER_DIM = 10.0
 
@@ -192,10 +177,9 @@ def _infer_cluster_start_ch(project_root: Path, cluster_id: int) -> int:
     """v27 freestyle：从事件簇.json + 已写章节推导 cluster 起始章号
 
     优先级：
-    1. 事件簇.json.clusters[N].chapter_range[0]（v26 schema · 向后兼容）
-    2. 事件簇.json.clusters[N].ch_start（v27 新 schema）
-    3. 上一 cluster 末章 + 1（从 章节/ 目录扫）
-    4. cluster_001 = 1 兜底
+    1. 事件簇.json.clusters[N].ch_start（cluster-first schema）
+    2. 上一 cluster 末章 + 1（从 章节/ 目录扫）
+    3. cluster_001 = 1 兜底
     """
     db = project_root / '_数据库'
     ec_path = db / '事件簇.json'
@@ -208,9 +192,6 @@ def _infer_cluster_start_ch(project_root: Path, cluster_id: int) -> int:
                 if m and int(m.group(1)) == cluster_id:
                     if c.get('ch_start'):
                         return int(c['ch_start'])
-                    cr = c.get('chapter_range') or []
-                    if cr and len(cr) >= 1:
-                        return int(cr[0])
         except (json.JSONDecodeError, OSError, ValueError):
             pass
 
@@ -225,6 +206,75 @@ def _infer_cluster_start_ch(project_root: Path, cluster_id: int) -> int:
     if cluster_id == 1:
         return 1
     return max_ch + 1 if max_ch > 0 else 1
+
+
+def _resolve_manifest_research_cache_path(db: Path, manifest_dict: dict) -> Path | None:
+    """Resolve event_cluster_context.research_ref.cache_path inside the project DB.
+
+    The path may be absolute, project-relative ("_数据库/.research_cache/x.md"),
+    DB-relative (".research_cache/x.md"), or a legacy bare filename. Directories
+    are advisory only and do not identify a single bound research cache.
+    """
+    if not isinstance(manifest_dict, dict):
+        return None
+    ctx = manifest_dict.get("event_cluster_context")
+    if not isinstance(ctx, dict):
+        return None
+    ref = ctx.get("research_ref")
+    if not isinstance(ref, dict):
+        return None
+    raw = ref.get("cache_path")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+
+    raw_path = Path(raw.strip())
+    project_root = db.parent.resolve()
+    candidates = []
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        candidates.extend([
+            project_root / raw_path,
+            db / raw_path,
+            db / ".research_cache" / raw_path.name,
+        ])
+
+    for cand in candidates:
+        try:
+            resolved = cand.resolve()
+        except (OSError, RuntimeError):
+            continue
+        try:
+            resolved.relative_to(project_root)
+        except ValueError:
+            continue
+        if resolved.exists() and resolved.is_file():
+            return resolved
+    return None
+
+
+def _load_research_cache_for_cluster(db: Path, cluster_id: int, manifest_dict: dict) -> str:
+    """Load cluster-bound research cache first, then legacy fallbacks.
+
+    This keeps the creative chain single-source: novel-researcher writes a cache,
+    the chosen cluster stores research_ref, build_manifest exposes it, and writer
+    consumes that exact file. The old latest-file fallback remains only for
+    historical projects without manifest-bound references.
+    """
+    bound = _resolve_manifest_research_cache_path(db, manifest_dict)
+    if bound:
+        return read_text(bound)
+
+    cache_dir = db / ".research_cache"
+    if not cache_dir.exists():
+        return ""
+
+    caches = sorted(cache_dir.glob(f"inspiration_cluster_{cluster_id:03d}_*.md"),
+                    key=lambda p: p.stat().st_mtime, reverse=True)
+    if not caches:
+        caches = sorted(cache_dir.glob("inspiration_*.md"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+    return read_text(caches[0]) if caches else ""
 
 
 # ============ Prompt 组装 ============
@@ -1046,7 +1096,7 @@ def _sanitize_cluster_brief_foreshadowing(brief: dict, current_cluster_id) -> di
         剥 what_unsaid（与 build_manifest._collect_dialogue_objectives 同口径·单一真理源）·防 gemini 提前剧透。
         默认安全闸：objective 无 reveal_cluster 标记 → 原样透传（零行为变化）。
 
-    返回浅拷贝（不改原 brief·原 dict 仍供 scope_summary/expected_word_range/hard_constraints 等非密字段消费）。
+    返回浅拷贝（不改原 brief·原 dict 仍供 scope_summary/hard_constraints 等非密字段消费）。
     复用 build_manifest 纯函数为单一真理源（schema 演进读容错：旧格式纯字符串伏笔当 surface_clue·
     见其 docstring·非降级·北极星⑥）。
     """
@@ -1111,17 +1161,13 @@ def _sanitize_character_cards_for_writer(cards_path: Path, current_cluster_id) -
     return json.dumps(safe, ensure_ascii=False, indent=2)
 
 
-def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
-                 ch_end: int = None, target_cjk: str = None) -> tuple:
+def build_prompt(project_root: Path, cluster_id: int, ch_start: int) -> tuple:
     """组装 system + user prompt
 
-    v27 freestyle：ch_end/target_cjk 可缺省。
-    - ch_end 缺 → user prompt 不暴露目标章数（writer 不知道目标章数）
-    - target_cjk 缺 → 不注入「目标字数」段（让 AI 按 scope_summary 自由产出 · 自然涌现）
-    - 每章字数硬范围（3000-4500）由 splitter 按字数切时执行；writer 不预设章数/每章字数（v27 freestyle · 原 system prompt 铁律 #4 已删）
+    cluster-first 唯一模式：writer 不暴露目标章数/目标字数，只按 cluster brief
+    产一整块连续叙事；具体章数与每章篇幅由 splitter 后续决定。
     """
     db = project_root / '_数据库'
-    freestyle = (ch_end is None)
 
     # 读取核心资料
     # 2026-05-29 北极星复审 L2：去 load-time 截断（原 30000/25000 仍砍大文件，与
@@ -1161,17 +1207,9 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
               "极易跑偏成通用爽文（cluster_001 翻车根因）。请把风格库 skill_FINAL.md 复制为 "
               "<项目>/_数据库/作者风格_skill.md（/outline 漏拷的已知 bug）。")
 
-    # 调研 cache（找最新的）
-    cache_dir = db / '.research_cache'
-    cache_text = ""
-    if cache_dir.exists():
-        caches = sorted(cache_dir.glob(f'inspiration_cluster_{cluster_id:03d}_*.md'),
-                        key=lambda p: p.stat().st_mtime, reverse=True)
-        if not caches:
-            caches = sorted(cache_dir.glob('inspiration_*.md'),
-                            key=lambda p: p.stat().st_mtime, reverse=True)
-        if caches:
-            cache_text = read_text(caches[0])  # 2026-05-30 北极星：去截断，全量传 LLM（feedback_no_token_saving）
+    # 调研 cache：优先读取 manifest.event_cluster_context.research_ref.cache_path 绑定文件。
+    # 只有旧项目缺 research_ref 时，才退回 cluster 专属文件 / 最新 inspiration 兼容路径。
+    cache_text = _load_research_cache_for_cluster(db, cluster_id, _manifest_dict)
 
     # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
     progress = json.loads((db / '进度.json').read_text(encoding='utf-8'))
@@ -1187,10 +1225,7 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
             if cluster_lookup.normalize_cluster_id(_bp_key) == _norm_cid:
                 plans = _bp_val.get('scene_storyboard', [])
                 break
-    if freestyle:
-        relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_start + 30]
-    else:
-        relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_end]
+    relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_start + 30]
     plan_text = json.dumps(relevant_plans, ensure_ascii=False, indent=2) if relevant_plans else "[]（v27 freestyle · 完全按 cluster_brief.scene_storyboard 自由发挥）"
 
     # 人物卡（全量，不截断——含 voice_pack 是声纹复刻第一依据，截断 = 后登场角色声纹丢失）
@@ -1219,13 +1254,12 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                 # 🔴 2026-06-28 伏笔明暗线隔离：dump 进 writer prompt 前先过滤——埋设侧只留 surface_clue
                 # （剥 hidden_payoff）·揭晓侧仅 trigger_cluster 才暴露。绝不把整 cluster dict（含未到触发
                 # 的 foreshadowing_to_plant.hidden_payoff）原样 json.dumps 给写手（原泄露口）。
-                # 用 _safe_brief 只供「注入文本」；下面 scope_summary/expected_word_range/hard_constraints
+                # 用 _safe_brief 只供「注入文本」；下面 scope_summary/hard_constraints
                 # 等非密字段仍读原 cluster_brief（不受过滤影响）。
                 _safe_brief = _sanitize_cluster_brief_foreshadowing(cluster_brief, cluster_id)
                 cluster_brief_text = json.dumps(_safe_brief, ensure_ascii=False, indent=2)
                 # 从 scope_summary 提取硬约束（≥/≤/百分比/角色数等）
                 scope = cluster_brief.get('scope_summary', '')
-                ewr = cluster_brief.get('expected_word_range', {})
                 constraints = []
                 if scope:
                     # 简单提硬约束关键词：「≥ N」「≤ N」「占比」「至少」「不少于」「角色」
@@ -1240,10 +1274,6 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                         constraints.append(f"- 比例 ≥ {m.group(1)}%（出自 scope_summary）")
                     for m in _re.finditer(r'(?:占比|比例)\s*[≤<]\s*(\d+)\s*%?', scope):
                         constraints.append(f"- 比例 ≤ {m.group(1)}%（出自 scope_summary）")
-                # v27：freestyle 时跳过 cluster.expected_word_range（让 AI 自由发挥）
-                # v26 兼容：显式传 ch_end + cluster.expected_word_range 存在时仍注入字数硬约束
-                if (not freestyle) and ewr and ewr.get('min') and ewr.get('max'):
-                    constraints.append(f"- 字数硬约束：{ewr['min']}-{ewr['max']} {ewr.get('unit', 'CJK_chars')}（cluster.expected_word_range · 必遵守，写完自查不达标即重写）")
                 # 额外读 cluster_brief 的 hard_constraints 字段（v22.gov.align.fix 新 schema）
                 for hc in cluster_brief.get('hard_constraints', []) or []:
                     if isinstance(hc, dict):
@@ -1281,7 +1311,7 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
     # 故 system prompt 第一权威是「作者风格档(下方风格 skill)」，不是写死的通用爽文工艺。
     # 铁律分两层：① 常驻硬铁律(格式/世界观/穿帮防护·任何风格都不可破·不可被 skill 覆盖)；
     # ② 风格工艺默认基线(仅当作者 skill 未规定该维度时兜底·skill 规定了则以 skill 为准)。
-    # 删除原写死「冷峻俯瞰」默认风 + 原 rule4「单章字数 2500-5000」(违反 freestyle「writer 不知章数」)。
+    # 删除原写死「冷峻俯瞰」默认风 + 原 rule4「单章字数 2500-5000」(违反 cluster-first)。
     system = (feedback_rules_text + "\n\n") if feedback_rules_text else ""
     system += """你是长篇小说的写作引擎。**最高准则：复刻下方「风格 skill / 作者风格档」描述的那位作者的写法**——句式节奏、用词偏好、signature 笔法、情绪处理、对话风格都要像那位作者。你的任务是写一个故事块（cluster）的完整正文，覆盖多章。
 
@@ -1587,7 +1617,7 @@ cluster_brief 完整内容：
 {cluster_brief_text}
 ```
 
-### 🎯 必遵守硬指标清单（从 cluster.scope_summary + expected_word_range + hard_constraints 提取）
+### 🎯 必遵守硬指标清单（从 cluster.scope_summary + hard_constraints 提取）
 
 {cluster_hard_constraints_text if cluster_hard_constraints_text else '（本 cluster 无硬约束 · 按一般指南）'}
 
@@ -1598,26 +1628,15 @@ cluster_brief 完整内容：
 
 """
 
-    # v27 freestyle vs v26 兼容：章数 + 目标字数描述
-    if freestyle:
-        task_intro = f"""# 写作任务
+    task_intro = f"""# 写作任务
 
 为本项目 cluster_{cluster_id:03d} 写**一整块连续叙事**。
 
 **🎯 v27 自由发挥模式**：
-- 你**不知道**目标章数（章数由 splitter 后期按 3000-4500 CJK/章 自然切，章数由你写的内容多少决定）
+- 你**不知道**目标章数（章数与每章篇幅由 splitter 后期根据 draft 自然切分）
 - 不锁精确字数，但**这是一个完整的故事块（cluster），不是单章**——它由 scene_storyboard 里的**多个场景**构成，**每个场景都要充分展开**（动作 / 对话 / 环境 / 内心 / 冲突推进逐一到位，切忌一笔带过、切忌只写梗概或跳着叙述）。
-- **健康篇幅 12000-25000 CJK 是软下限**：一个把所有场景都写透的多场景故事块，自然就落在这个体量。**如果你写到三五千字就觉得"讲完了"，几乎一定是场景展开得太简略**——回头逐个场景写够细节再继续，不要急着收尾。
+- 不接受任何预设字数目标；篇幅只由 cluster_brief + scene_storyboard 的内容密度自然决定。**如果你觉得"讲完了"，用 scene_storyboard 核对是否每个场景都已经落到动作、对话、环境、内心和冲突推进，而不是用字数判断是否完成。**
 - **专注做对的事**：把 cluster_brief.scope_summary + scene_storyboard 描述的**每一个场景**都充分展开（逐拍据 beat 的 goal/conflict/turn 补写）+ **自然埋设** foreshadowing_to_plant 的 surface_clue（当普通细节埋·只埋不解释·见 H6），全部写透后再自然收尾。
-
-⚠️ **重要提醒**：你输出的是**一整块叙事**，不是分好章的成品。**严禁**写「第 N 章 标题」/「——」分章符。把整个故事块当一篇长散文写，场景之间自然过渡。
-"""
-    else:
-        task_intro = f"""# 写作任务
-
-为本项目 cluster_{cluster_id:03d} 写**一整块连续叙事**（预计后续 splitter 切成 ch{ch_start}-ch{ch_end} 共 {ch_end - ch_start + 1} 章，但**你不要预先分章**）。
-
-**目标字数**: {target_cjk} CJK（整块总字数；splitter 后每章自然落在 2500-5000）
 
 ⚠️ **重要提醒**：你输出的是**一整块叙事**，不是分好章的成品。**严禁**写「第 N 章 标题」/「——」分章符。把整个故事块当一篇长散文写，场景之间自然过渡。
 """
@@ -1748,7 +1767,7 @@ cluster_brief 完整内容：
     # 那些由 Claude（novel-archivist/foreshadower）读正文梳理 → apply_archive 回库，writer 不自报 factual。
     gen_point_tail = f"""
 
-{"按 7 项硬铁律 + 元 anti-slop 防御 · 完整覆盖 cluster_brief 的所有 scene_storyboard 自由发挥（章数由 splitter 后期切，你不必管）。" if freestyle else f"按 7 项硬铁律 + 元 anti-slop 防御，写 {ch_end - ch_start + 1} 章完整故事块。"}
+按 7 项硬铁律 + 元 anti-slop 防御 · 完整覆盖 cluster_brief 的所有 scene_storyboard 自由发挥（章数由 splitter 后期切，你不必管）。
 
 **🧬 据 scene_storyboard 的 beat 骨架补写（走向是骨·你补创作 · advisory）**：scene_storyboard 的每个 beat 带 `goal`（这一拍要达成什么）/ `conflict`（阻力）/ `turn`（转折）/ `emotional_tone`（情绪基调）/ `key_beats`（关键节拍）。**逐拍据 beat 的目标/冲突/转折把 prose 补写出来**——你负责创作层（具体动作、你来我往的对话、五感细节、内心、句子节奏），骨架负责「这一拍发生什么、往哪走」。**别脱离 beat 骨架自由发挥**（给了 conflict 就别跳过冲突直接和解、给了 turn 就写到那个转折），防剧情漂移跑偏大势；但**不锁文笔/字数/分句**——怎么写、写多细由作者风格定。
 
@@ -1781,20 +1800,7 @@ def _build_cont_msg(cont_reason: str) -> str:
     那条 user（被推到中段 U 型最低注意力区），续写生成点近邻没风格约束 → recency 漂移。这里补一行
     精简风格锚（句长 / 对话格式 / 禁结构套话）贴生成点 RoPE 高位重申，防长草稿尾段风格崩塌（advisory）。
     """
-    if cont_reason == "expand":
-        cont_msg = ("【硬指标·你是写作引擎不是摘要器】这个故事块的健康篇幅是 12000-25000 字，你目前**写得远远不够**——"
-                    "scene_storyboard 里一定还有场景没写到、或被一两句话草草带过。"
-                    "请接着上文最后一个字继续往下写：**逐个对照 scene_storyboard 的每一幕，把还没写透的场景充分展开**——"
-                    "每一幕都要落地完整的：具体动作细节、成段你来我往的对话（不是一句带过）、环境与五感描写、人物内心活动、"
-                    "冲突的层层推进与小高潮。宁可把一幕写细写满、也绝不跳过或一笔带过任何一幕。"
-                    "**不要重复已写内容、不要重新开头、不要提前收尾、不要写任何总结或概述**。"
-                    # 🔴 2026-06-28：pro-preview 等模型常对 expand 回一段英文自评（『The narrative chunk is
-                    # written coherently...』）当作「我写完了」搪塞 → 续写增量 0 CJK 兜底失效。明确堵死。
-                    "\n🔴 严禁用任何形式声称『已写完 / 已写透 / 已充分展开』来搪塞——你还没写完。"
-                    "严禁输出任何英文、任何对自己产出的评价/说明（如『The narrative chunk...』『All checks...』）、"
-                    "任何元叙述。你这一轮的输出必须是**纯中文小说正文**，直接从上文最后一个字接着写下一个场景。"
-                    "**先别写 CHANGES JSON**——等正文真正累积到 12000 字以上、scene_storyboard 每一幕都写透了，我再让你补。")
-    elif cont_reason == "changes_only":
+    if cont_reason == "changes_only":
         # 🔴 2026-06-28 审计清理A类：changes_only 兜底不再列举 factual（locked_facts/伏笔/出场角色），
         # 只补创作期自评 self_eval/waivers + 确定性遥测；factual 状态由 Claude 读正文梳理 → apply_archive 回库。
         cont_msg = ("正文已经写完。现在请**只输出**这个故事块结尾的 CHANGES JSON 块"
@@ -1821,7 +1827,7 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
     2026-06-05 协议分发：profile.protocol == 'gemini' → 走原生 streamGenerateContent（隐式前缀缓存）；
     否则走 OpenAI /v1/chat/completions（client 已建好）。
     2026-05-30：捕获 finish_reason（命中 max_tokens 的截断别静默吞）。prior_assistant 非空 → 续写模式。
-    cont_reason：'length'=截断续写；'expand'=写完但太短续写；'changes_only'=只补 CHANGES。
+    cont_reason：'length'=截断续写；'changes_only'=只补 CHANGES。
     """
     # 2026-06-19：prompt 大小预检——超过 profile.max_prompt_chars 直接跳 fallback，不等 100s 超时
     _max_pc = getattr(profile, "max_prompt_chars", None)
@@ -1876,7 +1882,7 @@ def _stream_once_gemini(profile, system: str, user: str, max_tokens: int,
     """gemini 原生协议 streamGenerateContent（SSE）· 稳定 system 放 systemInstruction → 隐式前缀缓存命中。
 
     返回 (text, finish_reason)，finish_reason 归一到 openai 口径（MAX_TOKENS→'length' 触发续写·其余→'stop'），
-    上层截断续写 / expand 逻辑零改动复用。缓存命中 cachedContentTokenCount 打到 stderr 可见。
+    上层截断续写逻辑零改动复用。缓存命中 cachedContentTokenCount 打到 stderr 可见。
     """
     import urllib.request
 
@@ -1963,29 +1969,23 @@ def _filter_creative_profiles(candidates):
     pro_preview 一旦瞬时 502 就直接掉到 flash → 静默用 flash(碎句·被淘汰差模型)写正文，
     违背「gen-model 锁定 pro」决策(memory project_genmodel_flash_locked)。实测 cluster_002 被 flash 写。
     改：写作候选剔除 model/name 含 'flash' 的 profile → pro 全挂则响亮 GenModelExhaustedError
-    (主代理重试·等中转站恢复)，绝不静默降质。紧急旁路 GEN_WRITER_ALLOW_FLASH=1。
+    (主代理重试·等中转站恢复)，绝不静默降质。
     """
-    if os.environ.get("GEN_WRITER_ALLOW_FLASH") == "1":
-        return candidates
     filtered = [p for p in candidates
                 if "flash" not in (getattr(p, "model", "") or "").lower()
                 and "flash" not in (getattr(p, "name", "") or "").lower()]
     dropped = [getattr(p, "name", "?") for p in candidates if p not in filtered]
     if dropped:
         logger.info(f" [creative-guard] 写正文禁 flash 兜底 → 排除 {dropped}"
-                    "（质量攸关·pro 全挂则响亮失败让主代理重试·GEN_WRITER_ALLOW_FLASH=1 可旁路）")
+                    "（质量攸关·pro 全挂则响亮失败让主代理重试）")
     return filtered
 
 
 def call_gen_model(loader: GenModelLoader, system: str, user: str,
-                   min_cjk: int | None = None, creative: bool = False) -> tuple[str, Profile]:
+                   creative: bool = False) -> tuple[str, Profile]:
     """调当前 active profile；失败时按 fallback 链尝试。
 
     creative=True（写正文）→ 剔除 flash-tier 兜底，pro 全挂响亮失败（不静默降质 · 北极星：质量优先）。
-
-    min_cjk：freestyle 正文长度软下限。设了 → 生成完（finish=stop）但正文 CJK < min_cjk 时，
-    追加 expand 续写（展开剩余场景）兜底，治 pro 等简洁模型单 cluster 偏短。蒸馏复刻路径
-    不传 → 行为零回归。
 
     返回 (full_text, used_profile)。
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
@@ -2012,7 +2012,7 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         if not candidates:
             raise GenModelExhaustedError(
                 [("<creative-guard>", "pro-tier 全不可用且 flash 被禁(写正文质量攸关)·"
-                  "疑中转站 502/503 故障·稍后重试(GEN_WRITER_ALLOW_FLASH=1 可紧急旁路用 flash)")])
+                  "疑中转站 502/503 故障·稍后重试")])
     failures: list[tuple[str, str]] = []
 
     for i, profile in enumerate(candidates):
@@ -2071,58 +2071,6 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
             failures.append((profile.name, reason))
             continue  # 切下一个 profile
 
-        # [2026-06-04] 内容偏短兜底：pro 等简洁倾向 reasoning 模型常 finish=stop 但正文远不够 cluster
-        # 体量（实测 pro 单 cluster 仅 3650 CJK vs 健康 12000-25000）。length 续写只管截断，这里对
-        # 「写完了但太短」追加 expand 续写——把 scene_storyboard 没展开的场景写透。
-        # 防注水：单轮增量 < FREESTYLE_EXPAND_MIN_GAIN 即停（模型没料别硬凑）· 最多 N 轮 · 软托底非硬锁。
-        if min_cjk and full_text.strip():
-            def _raw_split(rep):
-                ms = list(re.finditer(r'```json\s*\n.*?\n```', rep, re.DOTALL))
-                if ms:
-                    return rep[:ms[-1].start()].rstrip(), rep[ms[-1].start():]
-                return rep.strip(), ""
-            accum_body, last_changes = _raw_split(full_text)
-            rounds = 0
-            while rounds < FREESTYLE_EXPAND_MAX_ROUNDS:
-                body_cjk = cio.count_cjk(accum_body)
-                if body_cjk >= min_cjk:
-                    break
-                rounds += 1
-                logger.info(f"\n[gen_writer] ⚠️ 正文 {body_cjk} CJK < 软下限 {min_cjk}，"
-                      f"内容续写第 {rounds}/{FREESTYLE_EXPAND_MAX_ROUNDS} 轮（展开剩余场景·非截断）…")
-                try:
-                    cont_text, _fr = _stream_once(client, profile, system, user, max_tokens,
-                                                  prior_assistant=accum_body, cont_reason="expand")
-                except Exception as e:
-                    logger.info(f" expand 续写第 {rounds} 轮失败（保留已有正文）: {str(e)[:150]}")
-                    break
-                cont_body, cont_changes = _raw_split(cont_text)
-                inc = cio.count_cjk(cont_body)
-                if cont_body.strip():
-                    accum_body += "\n\n" + cont_body
-                if cont_changes:
-                    last_changes = cont_changes
-                if inc < FREESTYLE_EXPAND_MIN_GAIN:
-                    logger.info(f" 续写增量仅 {inc} CJK（模型已无更多内容）→ 停止兜底，避免注水")
-                    break
-            # expand 各轮被要求"先别写 CHANGES" → 收尾时若仍缺 CHANGES，追加一次"只补 CHANGES"请求
-            # （否则下游 CHANGES_MISSING hard_gate）。仅在确实发生过 expand 续写时才补。
-            if rounds > 0 and not last_changes:
-                logger.info(" expand 后缺 CHANGES JSON，追加一次补全请求…")
-                try:
-                    chg_text, _cf = _stream_once(client, profile, system, user, max_tokens,
-                                                 prior_assistant=accum_body, cont_reason="changes_only")
-                    _, cc = _raw_split(chg_text)
-                    if cc:
-                        last_changes = cc
-                    elif "{" in chg_text:
-                        last_changes = "```json\n" + chg_text.strip() + "\n```"
-                except Exception as e:
-                    logger.info(f" 补 CHANGES 失败（下游 normalize 兜底）: {str(e)[:120]}")
-            full_text = accum_body + ("\n\n" + last_changes if last_changes else "")
-            logger.info(f"\n[gen_writer] 内容兜底完成：正文 {cio.count_cjk(accum_body)} CJK（expand {rounds} 轮）"
-                  f"· CHANGES={'有' if last_changes else '无'}")
-
         # 成功
         logger.info(f"\n[gen_writer] 接收完毕 ({len(full_text)} chars) via {profile.name}")
         return full_text, profile
@@ -2163,7 +2111,7 @@ def gather_author_ref_text(project_root: Path, max_chars: int = 6000) -> str:
 
 
 def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
-                      n: int, min_cjk: int | None = None, creative: bool = False) -> list[dict]:
+                      n: int, creative: bool = False) -> list[dict]:
     """生成 N 个候选稿（temperature 阶梯抖动 · 非迭代 · 规避 self-refine 同质化）。
 
     每个候选独立调一次 call_gen_model（active→fallback 链复用 · 不另起调用栈）。
@@ -2185,7 +2133,7 @@ def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
         active0.temperature = temp
         logger.info(f"\n[gen_writer][best-of-N] 生成候选 {i+1}/{n} (temperature={temp})")
         try:
-            reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk, creative=creative)
+            reply, used_profile = call_gen_model(loader, system, user, creative=creative)
             drafts.append({"idx": i, "reply": reply, "profile": used_profile,
                            "temperature": temp, "error": None})
         except GenModelExhaustedError as e:
@@ -2248,9 +2196,8 @@ def select_best_draft(scored: list[dict]) -> tuple[int, str]:
     scored: [{idx, body, score: {composite, sfs, av_drift_count, ...}, error}]（已过滤生成失败的）。
     排序键（全候选可比 · 缺项一致降级）：
       1. composite 有值 → 用 composite 降序（最像作者排最前）。
-      2. 全候选都没 composite（无 author_ref / SFS 全挂）→ 按 av_drift_count 升序（走味越少越好），
-         av 也没有 → 字数兜底：优先 CJK 达标(>=FREESTYLE_MIN_CJK)候选里 idx 最小者（保留零回归：
-         第一稿达标就退第一稿），全不达标退 CJK 最大者。治 best-of-N 丢 expand 达标稿落短稿的 bug。
+      2. 全候选都没 composite（无 author_ref / SFS 全挂）→ 按 av_drift_count 升序（走味越少越好）。
+      3. 没有任何打分信号 → 退回第一稿，绝不按 CJK 长短择稿。
     返回 (best_idx_in_list, reason)。reason 解释凭什么选（不黑箱 · 北极星⑤）。
     """
     if not scored:
@@ -2277,29 +2224,12 @@ def select_best_draft(scored: list[dict]) -> tuple[int, str]:
                                   else 99))
         return best, (f"无 SFS 锚 · 按 AV-judge 走味数升序选 "
                       f"(走味={scored[best]['score'].get('av_drift_count')})")
-    # 全无打分信号（新书无作者池/SFS全挂）→ 字数兜底，不机械退 idx=0。
-    # 根因：freestyle 各候选独立生成，有的触发 expand 补到达标、有的偏短；机械退 idx=0
-    #   会把 expand 后的达标稿丢掉、落地短稿（实测 idx=0=4399 短 vs idx=1=15316 达标却选了 4399）。
-    # 修：优先 CJK 达标(>=FREESTYLE_MIN_CJK)的候选里 idx 最小者（达标 + 保留零回归精神：
-    #   第一稿达标就仍退第一稿）；全不达标 → 退 CJK 最大者（最接近健康区间）。
-    qualified = [i for i in range(len(scored))
-                 if scored[i].get("body_cjk", 0) >= FREESTYLE_MIN_CJK]
-    if qualified:
-        best = min(qualified)
-        cjk0 = scored[0].get("body_cjk", 0)
-        if best == 0:
-            return 0, (f"无 SFS/AV 打分信号 · 第一稿 CJK={cjk0} 达标 · 退回第一稿（零回归保底）")
-        return best, (f"无 SFS/AV 打分信号 · 第一稿 CJK={cjk0} 偏短(<{FREESTYLE_MIN_CJK}) · "
-                      f"选首个达标候选 idx={scored[best]['idx']} CJK={scored[best].get('body_cjk')}（字数兜底）")
-    # 全候选均偏短 → CJK 最大者（最接近健康区间 · 总比退 idx=0 的更短稿强）
-    best = max(range(len(scored)), key=lambda i: scored[i].get("body_cjk", 0))
-    return best, (f"无 SFS/AV 打分信号 · 全候选均偏短 · 选 CJK 最大 idx={scored[best]['idx']} "
-                  f"CJK={scored[best].get('body_cjk')}（字数兜底）")
+    return 0, "无 SFS/AV 打分信号 · 退回第一稿（不按 CJK 长短择稿）"
 
 
 def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
                        project_root: Path, n: int,
-                       min_cjk: int | None = None, creative: bool = False) -> tuple[str, "Profile", dict]:
+                       creative: bool = False) -> tuple[str, "Profile", dict]:
     """best-of-N 主流程：生成 N 稿 → 各自打分 → 综合择优 → 返回最佳稿。
 
     返回 (best_reply, best_profile, selection_trace)。
@@ -2312,7 +2242,7 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
         logger.info("[best-of-N] 未找到作者原文池 · 跳过 SFS/AV-judge 打分 "
               "（仍生成 N 稿但退回第一稿 · 优雅降级）")
 
-    drafts = generate_n_drafts(loader, system, user, n, min_cjk=min_cjk, creative=creative)
+    drafts = generate_n_drafts(loader, system, user, n, creative=creative)
     ok_drafts = [d for d in drafts if d.get("error") is None and d.get("reply")]
     if not ok_drafts:
         # 全部候选生成失败 → 汇总 raise（与单稿全失败行为一致）
@@ -2515,11 +2445,11 @@ def enforce_short_paragraphs(body: str, author_para_mean: float = None, author_s
 
 
 def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
-                ch_start: int, ch_end: int, used_profile: Profile,
+                ch_start: int, used_profile: Profile,
                 seed_trace: dict = None, best_of_n_trace: dict = None):
     """写 draft + changes.json
 
-    v27 freestyle：ch_end=None 时 ch_range 写 'TBD_by_splitter'（splitter 后期填）。
+    cluster-first freestyle：ch_range 写 'TBD_by_splitter'（splitter 后期填）。
     seed_trace：snippet_seed 播种痕迹（用了几段 / 哪个模式）· 留 changes 不黑箱（北极星⑤）。
     best_of_n_trace：best-of-N 择优痕迹（N 稿各自分数 + 选中理由）· 留 changes 透明可审（北极星⑤）。
     """
@@ -2532,7 +2462,7 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         )
 
     # 2026-06-07 根治：草稿落地前确定性清洗 gen-model 原始输出的机械格式病
-    # ① 整块逐字复制（freestyle expand 复制事故 RR_001）② 成对符号腰斩
+    # ① 整块逐字复制 ② 成对符号腰斩
     # （引号“”/【】/《》/（）被句末标点+换行劈开，质检长期只查引号没查【】，靠人读逐个逮）。
     # 纯文本、幂等、不调模型（draft_sanitizer.py）；失败仅告警不阻断落地。
     try:
@@ -2554,8 +2484,7 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
 
     # 补全 changes 元数据
     cjk = cio.count_cjk(body)  # v27 修复：统一 CJK 口径走 chapter_io（覆盖扩展 CJK）
-    freestyle = (ch_end is None)
-    ch_range_str = f'{ch_start}-TBD_by_splitter' if freestyle else f'{ch_start}-{ch_end}'
+    ch_range_str = f'{ch_start}-TBD_by_splitter'
 
     # v27 P0 修复（schema 统一）：先把 LLM 输出的 changes 经 normalize_changes 归一·
     # 兼容三种布局（顶层 factual / 顶层 CHANGES / 顶层裸字段）·全部转 {factual, self_eval}·
@@ -2567,13 +2496,13 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         'cluster_id': f'cluster_{cluster_id:03d}',
         'ch_start': ch_start,
         'ch_range': ch_range_str,
-        'chapter_count_decided_by_splitter': freestyle,
+        'chapter_count_decided_by_splitter': True,
         'generated_by': 'gen_writer.py',
         'generated_by_profile': used_profile.name,
         'generated_by_model': used_profile.model,
         'generated_at': datetime.now().isoformat(),
         'cjk_actual': cjk,
-        'writer_mode': 'freestyle_v27' if freestyle else 'locked_v26',
+        'writer_mode': 'freestyle_v27',
         'snippet_seed': seed_trace or {'snippet_seed_mode': 'on', 'injected': False},
         'best_of_n': best_of_n_trace or {'best_of_n': 1, 'note': '单稿直生（BEST_OF_N=1 或未启用）'},
     })
@@ -2623,12 +2552,6 @@ def main():
     parser = argparse.ArgumentParser(description='Gen-Model 正文生成器（OpenAI 兼容协议）')
     parser.add_argument('--project', required=True, help='项目根路径')
     parser.add_argument('--cluster', type=int, required=True, help='cluster id（整数）')
-    parser.add_argument('--chapter-start', type=int, default=None,
-                        help='[v27 optional] cluster 起始章号 · 缺省时从事件簇.json 推导（cluster_001=1 / 后续=上 cluster 末章+1）')
-    parser.add_argument('--chapter-end', type=int, default=None,
-                        help='[v27 deprecated optional] cluster 结束章号 · 缺省 = freestyle 模式（writer 不知章数 · splitter 按字数切）')
-    parser.add_argument('--target-cjk', default=None,
-                        help='[v27 optional] 整 cluster 目标字数 · 缺省 = freestyle（按 scope_summary 自然涌现）')
     parser.add_argument('--dry-run', action='store_true', help='只输出 prompt，不调 API')
     parser.add_argument('--dialogue-orchestrator-mode', default='off',
                         choices=['off', 'shadow', 'active'],
@@ -2652,22 +2575,13 @@ def main():
         logger.error(f" 项目路径不存在: {project_root}")
         sys.exit(2)
 
-    # v27：ch_start 缺省 → 从事件簇.json + 已写章节推导
-    ch_start = args.chapter_start
-    if ch_start is None:
-        ch_start = _infer_cluster_start_ch(project_root, args.cluster)
-        logger.info(f" [v27 freestyle] 推导 ch_start={ch_start} (cluster_{args.cluster:03d})")
-
-    # 模式判断 + 提示
-    if args.chapter_end is None:
-        logger.info(f" [v27 freestyle 模式] writer 不知目标章数 · splitter 按字数切 · 章数自然涌现")
-    else:
-        logger.info(f" [v26 兼容模式] ch_start={ch_start} ch_end={args.chapter_end} target_cjk={args.target_cjk}")
+    ch_start = _infer_cluster_start_ch(project_root, args.cluster)
+    logger.info(f" [cluster-first freestyle] 推导 ch_start={ch_start} (cluster_{args.cluster:03d})")
+    logger.info(" [cluster-first freestyle] writer 不知目标章数/目标字数 · splitter 后续决定章数与每章篇幅")
 
     # dry-run 模式不需要 active profile
     if args.dry_run:
-        system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start,
-                                                args.chapter_end, args.target_cjk)
+        system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start)
         logger.info("=== SYSTEM PROMPT ===")
         logger.debug(system)  # OK: print - dry-run 模式调试输出
         logger.info("\n=== USER PROMPT ===")
@@ -2701,28 +2615,22 @@ def main():
     if chain:
         logger.info(f" fallback chain = {','.join(chain)}")
 
-    system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start,
-                                            args.chapter_end, args.target_cjk)
+    system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start)
 
     # best-of-N（默认 active · N≥2 真生效 · BEST_OF_N=1 退回单稿直生 · 2026-05-31）：
     # N 稿并行生成（temperature 阶梯抖动）→ SFS + AV-judge 配对判别打分 → 综合择优。
     # selection（择优）≠ refine（迭代）→ 天然规避 self-refine 同质化（arxiv 实证）。
     n = _best_of_n()
-    # [2026-06-04] freestyle 才启用正文长度软下限兜底（locked v26 模式由 target_cjk 自己管）。
-    # 治 pro 等简洁倾向模型单 cluster 偏短（实测 3650 vs 健康 12000-25000）。
-    min_cjk = FREESTYLE_MIN_CJK if args.chapter_end is None else None
-    if min_cjk:
-        logger.info(f" [v27 freestyle] 正文长度软下限 min_cjk={min_cjk}（偏短→expand 续写兜底）")
     best_of_n_trace = None
     try:
         if n >= 2:
             logger.info(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优")
             reply, used_profile, best_of_n_trace = best_of_n_pipeline(
-                loader, system, user, project_root, n, min_cjk=min_cjk, creative=True)
+                loader, system, user, project_root, n, creative=True)
         else:
             logger.info(f"[best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）")
             # 🔴 2026-06-28：creative=True → 写正文禁 flash 兜底（pro 全挂响亮失败让主代理重试·不静默降质）
-            reply, used_profile = call_gen_model(loader, system, user, min_cjk=min_cjk, creative=True)
+            reply, used_profile = call_gen_model(loader, system, user, creative=True)
     except GenModelExhaustedError as e:
         # 🔴 2026-06-26 fail-fast 走 stderr + flush（log_util INFO 级 logger.info 走 stdout，
         # ERROR 字样混在 stdout 里会让 wrapper agent 把 exit 3 误读成 exit 0；feedback_verify_stderr_not_exitcode
@@ -2736,12 +2644,11 @@ def main():
     # [2026-06-05] 句法熔合已删（盲目拉长句长的 gen-model 编辑 pass·分不清流水账碎句 vs 反高潮 ！？ 短句·
     # 会削掉搞笑流命根子·实测 flash 裸输出感叹~29/千→熔合后 0.9·拖后腿）。只留短段约束（按作者段长切过长
     # 非对话段·格式层·不动 ！？）。流水账靠模型自身 + prose_rhythm / reading-reflector advisory 兜。
-    if min_cjk is not None:
-        _auth_sent, _auth_para, _auth_single = _read_author_rhythm(project_root)
-        logger.info(f" 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}")
-        body = enforce_short_paragraphs(body, author_para_mean=_auth_para, author_single=_auth_single)
+    _auth_sent, _auth_para, _auth_single = _read_author_rhythm(project_root)
+    logger.info(f" 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}")
+    body = enforce_short_paragraphs(body, author_para_mean=_auth_para, author_single=_auth_single)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
-                                  ch_start, args.chapter_end, used_profile,
+                                  ch_start, used_profile,
                                   seed_trace=seed_trace, best_of_n_trace=best_of_n_trace)
 
     logger.info(f"\n[gen_writer] 跑 scanner...")
@@ -2757,26 +2664,7 @@ def main():
     except Exception:
         pass  # 知识库异常不影响主流程
 
-    # 字数检查（v27 freestyle 无硬下限 · v26 兼容才校验目标）
-    if args.target_cjk:
-        try:
-            target_min, target_max = map(int, args.target_cjk.split('-'))
-            if cjk < target_min:
-                logger.info(f"\n[WARN] 字数 {cjk} < 目标下限 {target_min}")
-            elif cjk > target_max:
-                logger.info(f"\n[WARN] 字数 {cjk} > 目标上限 {target_max}")
-            else:
-                logger.info(f"\n[OK] 字数 {cjk} 在目标范围 [{target_min}, {target_max}]")
-        except (ValueError, AttributeError):
-            logger.info(f"\n[gen_writer] target_cjk 解析失败，跳过字数校验: {args.target_cjk}")
-    else:
-        # v27 freestyle：软提示（splitter 健康区间）
-        if cjk < 8000:
-            logger.info(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏短 · 切 3 章可能不够（splitter 可能从下个 cluster 补料）")
-        elif cjk > 30000:
-            logger.info(f"\n[v27 freestyle] [HINT] cjk={cjk} 偏长 · splitter 会切成 7+ 章")
-        else:
-            logger.info(f"\n[v27 freestyle] [OK] cjk={cjk} 健康区间 8000-30000")
+    logger.info(f"\n[cluster-first freestyle] draft CJK={cjk} · splitter 后续决定章数与每章篇幅")
 
 
 if __name__ == '__main__':

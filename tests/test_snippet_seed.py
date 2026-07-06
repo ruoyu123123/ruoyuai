@@ -488,7 +488,7 @@ def test_G_gen_writer_save_output_accepts_seed_trace():
         root = Path(td)
         trace = {"snippet_seed_mode": "on", "injected": True, "snippets_used": 2}
         draft_path, cjk = gw.save_output(
-            root, 7, "这是一段真正的正文内容。", {}, 1, None, _P(), seed_trace=trace)
+            root, 7, "这是一段真正的正文内容。", {}, 1, _P(), seed_trace=trace)
         changes = json.loads(
             (root / "章节" / "cluster_007_draft" / "cluster_007_changes.json").read_text(encoding="utf-8"))
         meta = changes["self_eval"]["ecas_metadata"]
@@ -505,7 +505,7 @@ def test_G_gen_writer_save_output_default_seed_trace_not_injected():
         model = "m"
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        gw.save_output(root, 8, "正文内容在此。", {}, 1, None, _P())
+        gw.save_output(root, 8, "正文内容在此。", {}, 1, _P())
         changes = json.loads(
             (root / "章节" / "cluster_008_draft" / "cluster_008_changes.json").read_text(encoding="utf-8"))
         meta = changes["self_eval"]["ecas_metadata"]

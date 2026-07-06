@@ -5,7 +5,7 @@
 按 scene_type 选的原作金句段）此前只 raw JSON 躺 manifest dump dead-zone·gen_writer 0 解析。本批升格到
 生成点近邻 few-shot 段（仿 #3 rolling_anchor·每类 1-2 段防爆量）。默认 shadow（文风改善需 gen-model A/B）。
 守护：active 注入位置正确 + shadow/off 零回归（解析段 heading 不出现）+ 无字段/空不注入 + 每类限 2 段。
-零依赖·run_tests.py / pytest 双跑。
+零依赖·仓库根 pytest 入口。
 """
 import json
 import os

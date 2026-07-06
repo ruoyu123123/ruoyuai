@@ -4,7 +4,7 @@
 不触网络**（依赖注入是为了可单测）。真跑留给主代理（experiment_gate · 需 gen-model API）。
 
 🔴 零依赖纪律（与 test_ablation_stats.py 同款 idiom）：
-  · 不用 pytest fixture（tmp_path/monkeypatch）—— run_tests.py 零依赖 runner 以无参调用
+  · 不用 pytest fixture（tmp_path/monkeypatch）—— 保持无参调用，便于单文件调试
     test_ 函数。改用 tempfile.TemporaryDirectory() + monkeypatch=None 默认参数手动兜底。
 
 覆盖：

@@ -35,7 +35,13 @@ _VALID = {
                       "is_volume_finale": False, "stakes_delta": "起点"}],
     "cluster_001": {"narrative_mode": "in_medias_res", "scope_summary": "首块",
                     "scene_storyboard": [{"scene": 0, "summary": "灾难开场"}],
-                    "foreshadowing_to_plant": ["伏笔A"]},
+                    "foreshadowing_to_plant": ["伏笔A"],
+                    "research_ref": {
+                        "cache_path": "_数据库/.research_cache/inspiration_cluster_001_test.md",
+                        "anchors_used": ["anchor_A"],
+                        "research_topics": ["开场节奏"],
+                        "researcher_confidence": 0.91,
+                    }},
 }
 
 
@@ -51,7 +57,7 @@ def test_volume_arc_prompt_no_schema_coercion():
         selected_card={"title": "卡", "logline": "梗概"}, cluster_count=8,
         framework="三幕", rhythm="标准", author_block="（作者档）", research_text="")
     for kw in ("story_destiny", "volumes", "major_events", "cluster_001",
-               "in_medias_res", "第一权威", "free_notes"):
+               "in_medias_res", "research_ref", "第一权威", "free_notes"):
         assert kw in system, f"脚手架缺 {kw}"
     assert "绝不写" in system and "target_chapter" in system  # 不锁章铁律
     for bad in ("phase 必须从", "finale_signal 必须含", "ME 数量必须"):
@@ -99,6 +105,8 @@ def test_volume_arc_emit_splits_two_files():
         assert c0["cluster_id"] == "cluster_001" and c0["narrative_mode"] == "in_medias_res"
         assert c0["status"] == "pending"  # step6 cluster_choice_apply 才改 in_progress
         assert len(c0["scene_storyboard"]) == 1
+        assert c0["research_ref"]["cache_path"].endswith("inspiration_cluster_001_test.md")
+        assert c0["research_ref"]["anchors_used"] == ["anchor_A"]
 
 
 def test_volume_arc_broken_json_block_nonzero():

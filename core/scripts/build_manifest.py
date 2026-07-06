@@ -243,9 +243,18 @@ class DatabaseScanner:
             # 但绝不把 secret/hidden_payoff 注入 manifest。
             "pending_secret_count": 0,
             "reveal_this_ch": [],
+            # 🔴 2026-07-06 P1 三态生命周期：suspended（显式挂起延后）条目不催收——不进 tier due
+            # 列表，只计数让写手知道存在被挂起的伏笔（防误删）。
+            "promises_suspended_count": 0,
         }
+        # 🔴 2026-07-06 P1 三态生命周期（status ∈ open/suspended/consumed·枚举权威
+        # db_schema_validate.FORESHADOW_STATUS_ENUM）：consumed=已回收跳过；suspended=显式
+        # 挂起延后·不催收只计数；open 走到期判定。resolved bool 已迁移删除（不留兼容读）。
         for p in data.get("promises", []):
-            if p.get("resolved"):
+            if p.get("status") == "consumed":
+                continue
+            if p.get("status") == "suspended":
+                result["promises_suspended_count"] += 1
                 continue
             # 2026-05-29 复审复修 [M4]：到期判定消费三种来源（根治「永久 pending 永不到期」）：
             #  ① 旧 schema due_by（章号）；② due_by_cluster（归一 cluster → 起始章）；
@@ -509,8 +518,7 @@ class DatabaseScanner:
           · 纵尸司：{day(整数日计数), event, impact} → day 颗粒（current_time.day）
           · 诡异：{absolute_time, cluster_revealed(="cluster_001 …"), event}
                   → cluster 颗粒（cluster_revealed）+ date 颗粒（absolute_time）
-        改为 **tolerant 多 schema 字段别名兼容**（应对 AI 自由生成 schema 的通用策略 ·
-        北极星②cluster 单位 · ③涟漪/大势驱动 · ⑤顾问层注入不碰 hard_gate 不干涉模型）：
+        改为 cluster/date/day 三种正式颗粒：
           1. cluster 颗粒：event.cluster | event.cluster_revealed（诡异）
              经 cluster_lookup.normalize_cluster_id 归一（容忍 "cluster_001 (影印件…)"
              这类带后缀文本——regex 抽首个数字）比 本章所属 cluster_id
@@ -518,8 +526,7 @@ class DatabaseScanner:
           2. date 颗粒：event.date | event.absolute_time（诡异）
              比 current_time.date | current_time.absolute_time
           3. day 颗粒：event.day（纵尸司整数日计数）比 current_time.day
-          4. ch 颗粒：兼容仍带 `ch` 字段的旧数据（不破坏既有项目）
-        颗粒优先级 cluster > date > day > ch（精准颗粒优先）。
+        颗粒优先级 cluster > date > day（精准颗粒优先）。
         vol（卷）颗粒过粗——会把整卷每章都标命中——故意不用作 this_ch 命中。
         """
         data = self.load("时间线", {})
@@ -550,8 +557,6 @@ class DatabaseScanner:
                 matched_by = "date"
             elif cur_day is not None and ev_day is not None and ev_day == cur_day:
                 matched_by = "day"
-            elif e.get("ch") is not None and e.get("ch") == self.ch:
-                matched_by = "ch"
             if matched_by:
                 hit = dict(e)
                 hit["_matched_by"] = matched_by
@@ -794,30 +799,114 @@ class DatabaseScanner:
 
 # ============ Manifest 生成 ============
 
+def _load_fate_draw_overlay(scanner, chapter: int) -> dict | None:
+    """Read the step1 fate-dice overlay produced before build_manifest.
+
+    A malformed overlay is a pipeline contract error: auto_fate_draw is a formal
+    producer in cluster-write step1, so build_manifest must not silently ignore a
+    corrupt handoff.
+    """
+    overlay_path = scanner.root / "_数据库" / ".manifest" / f"ch_{chapter:03d}_fate_draw.json"
+    if not overlay_path.exists():
+        return None
+    overlay = load_json(overlay_path, None)
+    if not isinstance(overlay, dict):
+        raise RuntimeError(f"{overlay_path} 顶层必须是对象")
+    event = overlay.get("event")
+    if not isinstance(event, dict) or not (event.get("event_id") or event.get("id")):
+        raise RuntimeError(f"{overlay_path} 缺少有效 event.event_id")
+    event = dict(event)
+    event.setdefault("id", event.get("event_id"))
+    event.setdefault("event_id", event.get("id"))
+    event.setdefault("source", "fate_dice")
+    return event
+
+
+def _load_fate_draw_decision(scanner, chapter: int) -> dict | None:
+    """Read auto_fate_draw's required decision artifact for step1 traceability."""
+    path = scanner.root / "_数据库" / ".manifest" / f"ch_{chapter:03d}_fate_draw_decision.json"
+    if not path.exists():
+        return None
+    decision = load_json(path, None)
+    if not isinstance(decision, dict):
+        raise RuntimeError(f"{path} 顶层必须是对象")
+    if decision.get("_schema") != "fate_draw_decision_v1":
+        raise RuntimeError(f"{path} _schema 必须是 fate_draw_decision_v1")
+    status = decision.get("status")
+    if status not in {"not_required", "drawn", "no_candidate"}:
+        raise RuntimeError(f"{path} status 非法: {status!r}")
+    reason = decision.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise RuntimeError(f"{path} 缺少 reason")
+    return decision
+
+
+def _dedupe_fate_events(events: list[dict]) -> list[dict]:
+    seen = set()
+    out = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        eid = str(event.get("id") or event.get("event_id") or "")
+        if not eid or eid in seen:
+            continue
+        seen.add(eid)
+        out.append(event)
+    return out
+
+
 def _collect_active_fate_events(scanner, chapter: int) -> dict:
-    """v20 F5: 调 fate_engine evaluate 取本章应推进的大势事件。
-    优先级 > cluster_blueprint（涌现式模式下 cluster_blueprint 可能为空）。
+    """Collect all fate events the writer must see for this chapter.
+
+    The deterministic order is:
+    1. fate_engine active major-event guidance, when 大势卡 exists.
+    2. auto_fate_draw step1 overlay, when 事件池 has produced one.
+
+    Both enter the same manifest field so writer only consumes one state path.
     """
     fate_path = scanner.root / "_数据库" / "大势卡.json"
-    if not fate_path.exists():
-        return {"mode": "strict", "active": [], "_note": "无大势卡，走传统 cluster_blueprint 模式"}
+    active = []
+    overdue = []
+    total_scheduled = None
+    total_completed = None
+    mode = "strict"
+    note_parts = []
     try:
-        sys.path.insert(0, str(Path(__file__).parent))
-        import fate_engine
-        result = fate_engine.evaluate(scanner.root, chapter)
-        drift_result = fate_engine.drift(scanner.root, chapter)
-        # 🔴 2026-06-28 写手信息隔离（item 5·纯删非延迟）：剥每个 fate event 的 downstream_unlocks
-        # （前向 ME 链·写手永不需要·下游 ME 进 active 时自然注入）。default-safe：无此字段原样。
+        if fate_path.exists():
+            sys.path.insert(0, str(Path(__file__).parent))
+            import fate_engine
+            result = fate_engine.evaluate(scanner.root, chapter)
+            if result.get("error"):
+                raise RuntimeError(result["error"])
+            drift_result = fate_engine.drift(scanner.root, chapter)
+            if drift_result.get("error"):
+                raise RuntimeError(drift_result["error"])
+            active.extend(_strip_fate_downstream(e) for e in result.get("active_fate_events", [])[:5])
+            overdue.extend(_strip_fate_downstream(e) for e in drift_result.get("overdue_events", []))
+            total_scheduled = result.get("total_scheduled")
+            total_completed = result.get("total_completed")
+            mode = "fluid"
+            note_parts.append("大势卡 active_fate_events 已注入")
+        else:
+            note_parts.append("无大势卡")
+
+        overlay_event = _load_fate_draw_overlay(scanner, chapter)
+        if overlay_event:
+            active.append(_strip_fate_downstream(overlay_event))
+            mode = "fluid"
+            note_parts.append("命运抽签 overlay 已注入")
+
+        active = _dedupe_fate_events(active)
         return {
-            "mode": "fluid",
-            "active": [_strip_fate_downstream(e) for e in result.get("active_fate_events", [])[:5]],
-            "overdue": [_strip_fate_downstream(e) for e in drift_result.get("overdue_events", [])],
-            "total_scheduled": result.get("total_scheduled"),
-            "total_completed": result.get("total_completed"),
-            "_note": "鬼谷八荒式涌现叙事 - 本章应推进 active 中的 1-2 个事件",
+            "mode": mode,
+            "active": active,
+            "overdue": overdue,
+            "total_scheduled": total_scheduled,
+            "total_completed": total_completed,
+            "_note": "；".join(note_parts) + "；writer 应推进 active 中的 1-2 个事件" if active else "；".join(note_parts),
         }
     except Exception as e:
-        return {"mode": "error", "error": str(e)[:120]}
+        raise RuntimeError(f"active_fate_events 生成失败: {e}") from e
 
 
 # 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型·仅供
@@ -952,10 +1041,9 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
     all_patterns.sort(key=score, reverse=True)
     top = all_patterns[:top_k]
 
-    # 🔴 2026-06-27 C12: usage_count producer —— 检索命中即对原对象 +1 写回 写作经验.json
-    # （原子写复用 atomic_json）。此前全系统无 producer 写 usage_count → skill_evolver.promote
-    # 门槛 usage_count>=5 永远到不了 → 升 universal_skill_pool 结构性空转。北极星⑤：只沉淀
-    # 「被检索=被参考」的数据流事实，不碰创作判断；失败仅 advisory（degrade），永不阻断 manifest。
+    # usage_count producer：检索命中即对原对象 +1 写回 写作经验.json。
+    # 这是学习闭环状态更新，不是可静默丢弃的旁路；写回失败必须暴露，避免
+    # skill_evolver.promote 长期因 usage_count 无 producer 而空转。
     usage_dirty = False
     for t in top:
         t["_retrieved_at_ch"] = chapter
@@ -971,8 +1059,8 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         try:
             import atomic_json as _aj
             _aj.atomic_write_json(exp_path, exp)
-        except Exception:
-            pass  # advisory：写回失败不阻断 build_manifest（degrade）
+        except ImportError:
+            save_json(exp_path, exp)
 
     return {
         "mode": "on",
@@ -1009,8 +1097,6 @@ def _collect_user_preferences_v21(scanner) -> dict:
     summary = {}
     pb = prefs.get("project_basics", {}) or {}
     if pb:
-        summary["chapter_target_words"] = pb.get("target_words_per_chapter")
-        summary["dcas_mode"] = pb.get("dcas_dual_chapter_mode")
         summary["writer_mode"] = pb.get("writer_mode")
     np_ = prefs.get("narrative_pacing", {}) or {}
     if np_:
@@ -1023,7 +1109,7 @@ def _collect_user_preferences_v21(scanner) -> dict:
         summary["allowed_break_cards"] = cp.get("allowed_mental_break_cards")
     im = prefs.get("interactive_mode", {}) or {}
     if im:
-        summary["use_fate_cards"] = im.get("use_fate_cards")
+        summary["use_direction_cards"] = im.get("use_direction_cards")
         summary["fully_auto"] = im.get("fully_auto")
     qc = prefs.get("quality_control", {}) or {}
     if qc:
@@ -1050,7 +1136,6 @@ def _collect_user_preferences_v21(scanner) -> dict:
     # v23 ecas_config 直通
     ec = prefs.get("ecas_config", {}) or {}
     if ec:
-        summary["ecas_enabled"] = ec.get("ecas_enabled", False)
         summary["ecas_critical_events_use_opus"] = ec.get("critical_events_use_opus", [])
     return {
         "mode": "on",
@@ -1240,15 +1325,34 @@ def _collect_active_aspects(scanner, chapter: int) -> dict:
 
 
 def _collect_fate_dice_hint(scanner, chapter: int) -> dict:
-    """v21 R1.4: 标记本章是否应该用命运抽签（emergent_opportunities 触发时）。
-    主代理在 outline-planner 后决定是否调 fate_dice.py draw → 抽中事件写入此字段。"""
+    """Report fate-dice step1 status for traceability.
+
+    The draw itself is handled by auto_fate_draw before build_manifest.  This
+    field is only a manifest trace, not a manual instruction to the main agent.
+    """
     pool_path = scanner.root / "_数据库" / "事件池.json"
     if not pool_path.exists():
         return {"mode": "off", "_note": "无事件池.json，未启用命运抽签"}
+    overlay_path = scanner.root / "_数据库" / ".manifest" / f"ch_{chapter:03d}_fate_draw.json"
+    decision = _load_fate_draw_decision(scanner, chapter)
+    if decision is None:
+        raise RuntimeError(
+            "事件池.json 存在，但缺少 auto_fate_draw decision artifact；"
+            "cluster-write step1 未完成或未按正式链路执行")
+    if overlay_path.exists():
+        if decision.get("status") != "drawn":
+            raise RuntimeError(
+                f"{overlay_path} 存在，但 fate_draw_decision status={decision.get('status')!r}")
+        return {
+            "mode": "applied",
+            "overlay": str(overlay_path),
+            "decision": decision,
+            "_note": "cluster-write step1 已自动抽签并通过 active_fate_events 注入 writer",
+        }
     return {
-        "mode": "available",
-        "_note": "writer step 0u-2：如本章 active_fate_events 为空且想埋铺垫钩子，主代理可调 fate_dice.py draw 从事件池抽 1，narrative_seed 写入本章一个具体场景",
-        "draw_command": f"python core/scripts/fate_dice.py <project> draw {chapter} --scene-type <type> --pov <pov>",
+        "mode": str(decision.get("status")),
+        "decision": decision,
+        "_note": "cluster-write step1 已执行 auto_fate_draw，当前章没有新增 active fate 事件",
     }
 
 
@@ -2420,6 +2524,134 @@ def _collect_dialogue_objectives(cluster: dict, current_cluster_id=None) -> dict
     }
 
 
+def _collect_prose_scene_cards(cluster: dict) -> dict | None:
+    """🔴 2026-07-05 prose_scene_cards 场景执行卡（借鉴分镜卡片，但转为小说写作读模型）。
+
+    从 scene_storyboard 构建轻量 prose-first 场景卡，给 writer 一眼看到：
+      · 本场标题/章节/角色焦点/场所；
+      · 临场目标、阻力、转折压力；
+      · 关键事件、感官锚点、dramatic_question。
+
+    只读取小说表达层字段。即使上游 storyboard 混入 camera/shot/visual prompt 一类影视字段，
+    本函数也不透传，避免写手把正文写成分镜或剧本体。无 scene_storyboard 时返回 None。
+    """
+    if not isinstance(cluster, dict):
+        return None
+    storyboard = cluster.get("scene_storyboard")
+    if not isinstance(storyboard, list) or not storyboard:
+        return None
+
+    def text_from(obj: dict, keys: tuple[str, ...], limit: int = 180) -> str | None:
+        for key in keys:
+            value = obj.get(key)
+            if isinstance(value, str) and value.strip():
+                return " ".join(value.strip().split())[:limit]
+        return None
+
+    def list_from(value, limit: int = 6, item_limit: int = 120) -> list[str]:
+        if isinstance(value, str) and value.strip():
+            return [" ".join(value.strip().split())[:item_limit]]
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        for item in value:
+            text = None
+            if isinstance(item, str):
+                text = item
+            elif isinstance(item, dict):
+                for key in ("name", "title", "event", "text", "summary", "surface_clue"):
+                    if isinstance(item.get(key), str) and item.get(key).strip():
+                        text = item.get(key)
+                        break
+            if isinstance(text, str) and text.strip():
+                out.append(" ".join(text.strip().split())[:item_limit])
+            if len(out) >= limit:
+                break
+        return out
+
+    def sensory_from(scene: dict) -> list[str]:
+        direct = list_from(
+            scene.get("sensory_anchors")
+            or scene.get("sensory_anchor")
+            or scene.get("sensory_detail")
+            or scene.get("atmosphere"),
+            limit=4,
+            item_limit=100,
+        )
+        if direct:
+            return direct
+        anchors = []
+        for key in ("olfactory_anchor", "sound_anchor", "tactile_anchor", "visual_anchor"):
+            value = text_from(scene, (key,), 100)
+            if value:
+                anchors.append(value)
+        return anchors[:4]
+
+    cards: list[dict] = []
+    for idx, scene in enumerate(storyboard):
+        if not isinstance(scene, dict):
+            continue
+
+        goal = text_from(scene, ("scene_goal", "goal", "objective"), 160)
+        conflict = text_from(scene, ("conflict", "obstacle", "dilemma"), 160)
+        turn = text_from(scene, ("disaster", "decision", "outcome", "result", "turning_point"), 160)
+        question = text_from(scene, ("dramatic_question", "question"), 180)
+        if not question and (goal or conflict):
+            if goal and conflict:
+                question = f"能否在{conflict}之下完成：{goal}？"
+            elif goal:
+                question = f"本场如何推进：{goal}？"
+            else:
+                question = f"本场阻力如何改变局面：{conflict}？"
+
+        card: dict = {"scene_index": idx}
+        title = text_from(scene, ("title", "scene_title", "name"), 100)
+        if title:
+            card["title"] = title
+        if scene.get("ch") is not None:
+            card["ch"] = scene.get("ch")
+        focal = text_from(scene, ("focal_character", "pov_character", "viewpoint_character", "pov"), 80)
+        if focal:
+            card["focal_character"] = focal
+        characters = list_from(scene.get("characters") or scene.get("character_focus"), limit=8, item_limit=60)
+        if characters:
+            card["characters"] = characters
+        setting = text_from(scene, ("location", "setting", "place", "space"), 100)
+        if setting:
+            card["setting"] = setting
+        if goal:
+            card["scene_goal"] = goal
+        if conflict:
+            card["pressure"] = conflict
+        if turn:
+            card["turn"] = turn
+        if question:
+            card["dramatic_question"] = question
+        events = list_from(scene.get("key_events") or scene.get("beats"), limit=6, item_limit=120)
+        if events:
+            card["key_events"] = events
+        sensory = sensory_from(scene)
+        if sensory:
+            card["sensory_anchors"] = sensory
+
+        if len(card) > 1:
+            cards.append(card)
+
+    if not cards:
+        return None
+
+    return {
+        "cards": cards,
+        "directive": (
+            "🟢 Prose Scene Cards(小说场景执行卡·借鉴 storyboard 卡片但只服务正文写作)：\n"
+            "  · 每张卡回答：谁在场、此刻想要什么、被什么阻挡、局面如何转向、读者要追问什么。\n"
+            "  · 先写人物行动和因果压力，再让环境/感官锚点落地；不要把卡片字段机械写成段落标题。\n"
+            "  · 这是写作读模型，不是影视分镜；只取 prose-first 字段，规划层给意图，表达层由 writer 自由完成。"
+        ),
+        "_doc": "🔴 2026-07-05 prose_scene_cards·storyboard卡片化借鉴·小说写作读模型·advisory",
+    }
+
+
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
     """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
     writer 在 MODE=ecas 时必读此字段。
@@ -2553,9 +2785,9 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                     return {
                         "mode": "on",
                         "cluster_id": cluster_id_val,
+                        "research_ref": c.get("research_ref") if isinstance(c.get("research_ref"), dict) else None,
                         "parent_me": c.get("parent_me"),
                         "scope_summary": c.get("scope_summary"),
-                        "expected_word_range": c.get("expected_word_range"),
                         "scenes_estimated": c.get("scenes_estimated"),
                         "anchor_props": c.get("anchor_props") or [],
                         # R7 W2 P1：Proust 嗅觉/味觉触发非自愿记忆/闪回锚（与 foreshadowing 槽并列·advisory）
@@ -2575,7 +2807,6 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "throughline_focus": c.get("throughline_focus") or [],
                         "characters_focus": c.get("characters_focus") or [],
                         "hub_locations": c.get("hub_locations") or [],
-                        "estimated_chapters": c.get("estimated_chapters", 4),
                         "cluster_position_hint": _infer_cluster_position(chapter, cr) if cr else "head",
                         "narrative_mode": narrative_mode,
                         "narrative_pov_mode": narrative_pov_mode,
@@ -2705,6 +2936,9 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         # 数据源=motif_advisory_snapshot.json.dormant_motifs（top-5），由 motif_recurrence_ledger 落盘。
                         # advisory · 永不 hard_gate · 不存在时为空 list（守北极星⑤顾问非法官）。
                         "motif_callback_hints": _collect_motif_callback_hints_for_cluster(scanner),
+                        # 🔴 2026-07-05 prose_scene_cards：借鉴 moyin-creator 的 storyboard/scene card 思路，
+                        # 但转换为小说正文执行卡；白名单提取 prose 字段，忽略 camera/shot/visual prompt，防剧本体污染。
+                        "prose_scene_cards": _collect_prose_scene_cards(c),
                         # 🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架（事件 P0·治流水账·涟漪微观可执行化）：
                         # 透传 outline-planner 在 scene_storyboard 标注的 scene_type/proactive/reactive/link_to_prev/result_type，
                         # 并注入『相邻 scene 须 but/therefore 衔接·避免 and_then 平铺·结果禁纯 yes』指令给 writer。
@@ -2904,7 +3138,7 @@ def _stage_for_cluster_v2(arc_data: dict, cluster_id: str | None) -> dict | None
 def _collect_main_character_arc_stage(scanner, chapter: int) -> dict:
     """北极星①[#7]：注入「当前主角的弧线 current_stage + 简短上下文」给 writer。
 
-    背景：character_arc_state.json 由 character_arc_update.py 每章 save-state 滚动写、
+    背景：character_arc_state.json 由 character_arc_update.py 在 cluster-save-state 中滚动写、
     cluster_emergence_engine 读它驱动下个 cluster 涌现——但 writer manifest 此前从不注入它，
     writer 写正文时看不到主角当前弧线阶段（贴合作者风格的角色塑造需要这个信息）。
 
@@ -4429,7 +4663,6 @@ def _build_hard_constraints(
         f"Tier-1 伏笔 {foreshadow_summary['tier1_due_count']} 条本章必须回收",
         f"secrets 本章必须揭露 {foreshadow_summary['must_reveal_this_ch']} 条",
         "locked_facts 零容忍（读人物卡.json 时请完整保留）",
-        f"（advisory·freestyle_v27 由 splitter 按字数切·仅参考非硬锁）字数目标 {s.load('进度', {}).get('words_per_chapter', 3500)} 字",
         "章节开头反重复：检查 manifest.recent_openings，本章开头类型和焦点元素必须与前 2-3 章完全不同",
     ]
 
@@ -5726,11 +5959,11 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         except Exception as e:
             print(f"[WARN] style_injector 失败: {e}", file=sys.stderr)
 
-    # v15: 写后校验指令
+    # v15: 写后校验指令（cluster-only）
     post_write_checks: list[dict] = [
         {
-            "tool": "validate_chapter.py",
-            "args": f'"{project_root}" {chapter}',
+            "tool": "audit_hub.py",
+            "args": f'"{project_root}" --mode cluster --cluster-id {current_cluster_id or ""}',
             "required": True,
         },
     ]
@@ -5863,16 +6096,16 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "hard_constraints": _build_hard_constraints(s, foreshadow_summary),
         "post_write_checks": post_write_checks,
         "instructions_for_subagent": (
-            "你是第 {ch} 章写作子代理。开写前严格按以下步骤操作：\n"
+            "你是 cluster 写作子代理，物理章号仅用于切章定位。开写前严格按以下步骤操作：\n"
             "1. 逐项 Read must_read 中 priority=P0 的文件\n"
             "2. 再 Read priority=P1 的文件\n"
             "3. priority=P2 的按需读取（字数/注意力紧张时可跳过）\n"
             "4. **主动补读权**：写作中若发现 manifest 未覆盖但必要的信息"
             "（例如某个角色未列入出场但对话里被提及），主动 Read 对应 JSON\n"
-            "5. 写初稿 → Bash 调用 validate_chapter.py 第{ch}章.txt\n"
-            "6. 读 validate 报错 → Edit 修正 → 再 validate\n"
-            "7. validate 通过才算完成，最多循环 3 轮"
-        ).format(ch=chapter),
+            "5. 写完整 cluster 草稿 → 运行 post_write_checks 中的 cluster 质量检查\n"
+            "6. 读检查报告 → Edit 修正 → 再运行 cluster 质量检查\n"
+            "7. cluster 质量检查通过才算完成，最多循环 3 轮"
+        ),
         # v21 P1 cache layout 分层（agent prompt 按此顺序展示可最大化 Anthropic prompt caching 命中）
         "_cache_layout": _build_cache_layout(),
         # v21 P2-3 LiM 缓解：关键约束在末尾再次摘要（头部 P0 详细 + 尾部 critical_summary 强调）

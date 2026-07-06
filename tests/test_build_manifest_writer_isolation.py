@@ -18,6 +18,13 @@
 
 默认安全闸：无 hidden_*/reveal_cluster/true_role 等显式标记的旧条目一律原样透传零行为变化。
 
+契约更新（2026-07 · auto_fate_draw 收编为 required step1）：事件池.json 存在时
+build_manifest 硬性要求 `.manifest/ch_<NNN>_fate_draw_decision.json`
+（_schema=fate_draw_decision_v1 · status ∈ {not_required, drawn, no_candidate} · 非空 reason），
+缺失即 RuntimeError——抽签不再是主代理的 advisory 手动动作（旧 draw_command 提示已删）。
+本文件的 _make_project 据此写入 not_required decision 模拟正式链路 step1 已执行；
+硬失败路径本身由 test_build_manifest_fate_draw_overlay.py 回归锁覆盖。
+
 纯确定性（0 gen-model 调用）。
 """
 import json
@@ -66,6 +73,19 @@ def _make_project(tmp: Path) -> Path:
     rc = scaf.cmd_emit([str(proj)])
     assert rc == 0, "scaffold emit 应成功"
     db = proj / "_数据库"
+
+    # auto_fate_draw required step1 contract（2026-07）：事件池.json 存在（scaffold 建骨架）
+    # → build_manifest 硬要求 decision artifact，缺失即 RuntimeError。
+    # 这里写 not_required 模拟 step1 已按正式链路执行（本文件只测写手隔离，不测抽签本身）。
+    manifest_dir = db / ".manifest"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    (manifest_dir / "ch_001_fate_draw_decision.json").write_text(json.dumps({
+        "_schema": "fate_draw_decision_v1",
+        "producer": "auto_fate_draw.py",
+        "chapter": 1,
+        "status": "not_required",
+        "reason": "测试夹具：事件池为骨架空池，无可抽事件",
+    }, ensure_ascii=False), encoding="utf-8")
 
     # 事件簇：cluster_001 active 非空 brief（scene chars 含隐藏角色 周校长）+ 2 个 candidate（total=3 触发降精）
     (db / "事件簇.json").write_text(json.dumps({
