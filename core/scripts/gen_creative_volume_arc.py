@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from gen_model_loader import GenModelLoader  # noqa: E402
 from gen_creative import read_text  # noqa: E402  共享文件读取工具（多 mode 共用·留在 gen_creative）
+from reference_pattern_extract import build_reference_patterns_block  # noqa: E402  P3 参考语料结构模式（条件注入）
 
 
 # ═══════ MODE: volume_arc（卷级大纲·P2 分卷 chunk + WAL 断点续跑·2026-07-07）═══════
@@ -42,7 +43,8 @@ def volume_arc_wal_name(vol_no: int) -> str:
 
 def build_volume_arc_skeleton_prompt(*, selected_card: dict, cluster_count: int,
                                      framework: str, rhythm: str,
-                                     author_block: str, research_text: str) -> tuple[str, str]:
+                                     author_block: str, research_text: str,
+                                     reference_patterns_block: str = "") -> tuple[str, str]:
     """卷级大纲**全书骨架**生成 prompt（阶段A·分卷 chunk 第一步·解「一把梭失败=全部重来」）。
 
     🔴 北极星⑤铁律：system 只给**脚手架 + 字段语义 + 非约束示例 + 作者档优先**，
@@ -51,7 +53,19 @@ def build_volume_arc_skeleton_prompt(*, selected_card: dict, cluster_count: int,
     🔴 P2 分卷纪律：本次只产骨架——每卷 ME 池（major_events）由 build_volume_me_pool_prompt
     逐卷另行生成（WAL 断点续跑）；骨架输出里的 major_events 会被确定性丢弃
     （单一来源 = 卷 chunk WAL）。cluster_count 是**软提示**，不是硬锁。
+    🔴 P3 参考语料结构基线（2026-07-07·借鉴 Ex3-NovelWriter Extracting）：
+    reference_patterns_block 非空时注入一段「参考作品结构基线（advisory·可偏离）」——
+    纯数字化结构参照（genre_storyline_patterns.json·不含任何原文句子），**非硬约束**
+    （北极星⑤：大势/情节内容仍由模型按灵感卡自由创作，只给结构参照）。
     """
+    ref_section = ""
+    if reference_patterns_block:
+        ref_section = (
+            "\n# 参考作品结构基线（advisory·可偏离·非硬约束）\n"
+            "下面是选定风格的参考作品的**纯统计结构指纹**（只有数字，不含任何原文内容）。"
+            "它只是结构参照——卷怎么分、情节写什么仍由你按灵感卡自由创作，"
+            "与本书题材不适配时尽管偏离：\n"
+            f"{reference_patterns_block}\n")
     system = f"""你是顶尖网文大纲架构师。基于给定的灵感卡，设计一本长篇网文的**卷级大势骨架**。
 
 🔴🔴 故事内容 vs 笔法 的权威分离（2026-06-28 W6 揪出污染 bug·必读）🔴🔴
@@ -62,7 +76,7 @@ def build_volume_arc_skeleton_prompt(*, selected_card: dict, cluster_count: int,
   （实证翻车：诡秘风格档含「沙盒天道/燧明部/天道」示例·模型偷懒直接抄成大纲·完全无视了「钟楼守夜人」灵感卡。）
 
 {author_block}
-
+{ref_section}
 # 输出一个 JSON 对象，顶层字段（这是脚手架，不是创作约束——字段怎么填由你按作者风格+故事逻辑自由决定）：
 
 - `story_destiny`: {{"final_image": 全书终局定格画面, "thematic_resolution": 主题落点}}
@@ -681,12 +695,15 @@ def _run_volume_arc(args) -> int:
     cluster_count = args.cluster_count or 10
     framework = args.framework or "自定义"
     rhythm = args.rhythm or "标准"
+    # P3：参考语料结构基线（artifact 存在才注入·advisory 可偏离·纯数字无原文）
+    reference_patterns_block = build_reference_patterns_block(project_root)
 
     if args.dry_run:
         system, user = build_volume_arc_skeleton_prompt(
             selected_card=selected_card, cluster_count=cluster_count,
             framework=framework, rhythm=rhythm,
-            author_block=author_block, research_text=research_text)
+            author_block=author_block, research_text=research_text,
+            reference_patterns_block=reference_patterns_block)
         print("=== SYSTEM (skeleton) ===\n" + system + "\n\n=== USER (skeleton) ===\n" + user)
         print(f"\n[dry-run] volume_arc skeleton system={len(system)}/user={len(user)} chars"
               f"·ME 池逐卷 chunk 另行生成（WAL: _数据库/.wal/volume_arc_v<N>.json）")
@@ -709,7 +726,8 @@ def _run_volume_arc(args) -> int:
         system, user = build_volume_arc_skeleton_prompt(
             selected_card=selected_card, cluster_count=cluster_count,
             framework=framework, rhythm=rhythm,
-            author_block=author_block, research_text=research_text)
+            author_block=author_block, research_text=research_text,
+            reference_patterns_block=reference_patterns_block)
         skeleton = _gen_volume_arc_unit(lt, project_root, unit="skeleton",
                                         system=system, user=user,
                                         normalize=_normalize_skeleton, max_tokens=24000)

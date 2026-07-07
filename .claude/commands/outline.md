@@ -15,6 +15,7 @@ description: 生成卷级大纲与首个故事块 brief
 **当前实施状态**：
 - `gen_creative.py --mode volume_arc` 已实现，作为卷级创意文字生成入口。
 - **P2 分卷 chunk + WAL 断点续跑（2026-07-07·借鉴 AI_NovelGenerator chunked blueprint resume）**：`--mode volume_arc` 内部先产全书骨架（`_数据库/.wal/volume_arc_skeleton.json`·story_destiny/volumes/cluster_001/world_seed），再**逐卷**生成 ME 池（`_数据库/.wal/volume_arc_v<N>.json`·schema 合法的部分产物），全部卷完成后**确定性合并**落 `大势卡.json + 事件簇.json`（与一把梭结构等价）。中断重跑：已存在且校验合法的 WAL 直接跳过（幂等续跑），损坏的重生成；合并时 ME id 跨卷去重校验——重复 id **硬报错不静默覆盖**（撞 id 卷 WAL 隔离为 `.dup_broken` 供重跑重生成）；单卷失败 = 整 step 失败（required 不降级），已完成卷 WAL 保留供续跑。CLI 入口不变（`--volumes N-M` 仅内部调试参数·plan 不用）。
+- **P3 参考语料结构模式抽取（2026-07-07·借鉴 Ex3-NovelWriter Extracting 阶段·确定性零 LLM）**：plan step 5 在 volume_arc 之前有一行**条件脚本**（行首 `? `·口径同 cluster-write 的 style_injector）：`? python core/scripts/reference_pattern_extract.py {project_root}`。当项目选定的风格库存在参考原文（`workspace/styles/<风格名>/原文/*.txt`·与蒸馏链同一路径口径）时，用**纯统计/正则**抽取结构模式落 `workspace/styles/<风格名>/genre_storyline_patterns.json`：章均 CJK 分布、对话占比曲线、场景切换密度（分隔线+转场标志词/千字）、冲突节奏（冲突标志词/千字·章序列）、新专名引入速率（人名启发式·只记数量）、卷级前/中/后三段 pacing 形状；`作者风格.json` 已有的量化指纹**复用不重算**（仅拷数值）。🔴 **版权纪律**：artifact 只含数字和短标签 + `source_ids`（章文件名）+ 每维 `provenance`，**绝不包含任何原文句子**。风格库无原文 → 优雅 skip（exit 0·条件产物不进 expected_outputs）；语料签名未变时幂等复用不重算。**消费端**：`gen_creative --mode volume_arc` 的骨架 prompt 在 artifact 存在时注入一段「参考作品结构基线（advisory·可偏离）」数字化参照——**非硬约束**（北极星⑤：大势卡内容仍由模型按灵感卡自由创作，只给结构参照）。
 
 **保持 Claude 处理的部分**：
 - 卷骨架结构（卷数 / 每卷 cluster 数 / event prerequisites 关系）

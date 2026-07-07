@@ -139,6 +139,7 @@
       "name": "volume-arc-generation",
       "description": "卷级大纲生成（gen_creative volume_arc·P2 分卷 chunk + WAL 断点续跑：全书骨架落 _数据库/.wal/volume_arc_skeleton.json → 逐卷 ME 池落 _数据库/.wal/volume_arc_v<N>.json → 全部卷完成后确定性合并（ME id 跨卷重复硬报错）→ emit·中断重跑时合法 WAL 直接跳过/损坏重生成·单卷失败=整步失败但已完成卷 WAL 保留续跑·走 llm_transport·四硬契约·守北极星⑤不规训·覆盖 scaffold 的大势卡/事件簇空骨架）。",
       "_doc_p2": "🔴 2026-07-07 P2（借鉴 AI_NovelGenerator chunked blueprint resume·research/open_source_writing_systems.md）：step5 内部分卷粒度断点续跑（plan 级 resume 之下的细颗粒）。CLI 入口不变仍是 --mode volume_arc（--volumes N-M 仅内部调试参数·plan 不用）；最终合并产物与旧一把梭结构等价·expected_outputs 不变。",
+      "_doc_p3": "🔴 2026-07-07 P3（借鉴 Ex3-NovelWriter Extracting 阶段·research/open_source_writing_systems.md）：行首 ? 条件脚本（口径同 cluster-write step1 的 style_injector）——选定风格库存在参考原文（workspace/styles/<风格>/原文/*.txt·与蒸馏链同一路径口径）才做确定性零 LLM 结构模式抽取（章均CJK分布/对话占比曲线/场景切换密度/冲突节奏/新专名引入速率/卷级前中后 pacing 形状·作者风格.json 已有量化指纹复用不重算），落 workspace/styles/<风格>/genre_storyline_patterns.json（🔴 版权纪律：只含数字和短标签+source_ids+每维 provenance·绝不含原文句子）；无语料优雅 skip exit 0（条件产物·不进 expected_outputs）。消费端：gen_creative volume_arc 骨架 prompt 检测到 artifact 时注入「参考作品结构基线（advisory·可偏离）」数字化参照——非硬约束（北极星⑤：大势卡内容仍由模型按灵感卡自由创作，只给结构参照）。",
       "required": true,
       "skip_output_allowed": false,
       "data_flow": {
@@ -146,7 +147,10 @@
         "<framework>": {"source_json": "_数据库/.wal/outline_choice_framework.json", "field": "answer", "optional": true, "default": "三幕"},
         "<rhythm>": {"source_json": "_数据库/.wal/outline_choice_rhythm.json", "field": "answer", "optional": true, "default": "标准"}
       },
-      "scripts": ["python core/scripts/gen_creative.py --mode volume_arc --project {project_root} --selected-card {project_root}/_数据库/.wal/outline_choice_card.json --cluster-count <cluster_count> --framework <framework> --rhythm <rhythm> --style-ref {project_root}/_数据库/作者风格_skill.md --emit-to-db"],
+      "scripts": [
+        "? python core/scripts/reference_pattern_extract.py {project_root}",
+        "python core/scripts/gen_creative.py --mode volume_arc --project {project_root} --selected-card {project_root}/_数据库/.wal/outline_choice_card.json --cluster-count <cluster_count> --framework <framework> --rhythm <rhythm> --style-ref {project_root}/_数据库/作者风格_skill.md --emit-to-db"
+      ],
       "_doc_c02": "🔴 2026-06-27 C02：emit 同时把模型 world_seed 创意投影确定性 reshape 落 涟漪规则/世界状态/人物卡/关系（仅当为空·幂等·模型未产则留 step5.5 通用兜底补）→ 四文件入 expected_outputs（scaffold step4 已建骨架·此处确保存在）。",
       "expected_outputs": ["_数据库/大势卡.json", "_数据库/事件簇.json", "_数据库/涟漪规则.json", "_数据库/世界状态.json", "_数据库/人物卡.json", "_数据库/关系.json"]
     },
