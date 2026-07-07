@@ -114,6 +114,32 @@
             },
             "description": "本簇要呼应的历史伏笔 ID"
           },
+          "gate_waivers": {
+            "type": "array",
+            "_doc": "🔴 2026-07-07 A2 写前 Evolution Gate 声明式豁免（PlotPilot gate_service [TimeSkip][AmbiguousFate] bypass 范式）：豁免是创作声明权（北极星⑤），gate 只拦「未声明的意外穿帮」。brief 声明叙事手法（闪回/模糊生死/时间跳跃…）后 pre_write_gate.py 对应命中放行并留痕 _数据库/.wal/cluster_<key>_pre_write_gate.json 的 waived[]。blocking 类（dead_character/destroyed_item/locked_fact_conflict）豁免必须点名 target（禁整类空白支票）；duplicate_event 可只声明 type。全 optional·历史产物无此字段合法。",
+            "items": {
+              "type": "object",
+              "required": [
+                "type",
+                "reason"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "_doc": "检查项名（dead_character/destroyed_item/locked_fact_conflict/duplicate_event）或叙事手法别名（flashback/闪回/回忆/梦境/ambiguous_fate/模糊生死/time_skip/时间跳跃/retcon 等·pre_write_gate._WAIVER_ALIASES 归一）"
+                },
+                "target": {
+                  "type": "string",
+                  "_doc": "豁免对象（角色名/道具名/事实主体·如「沈铖」）·blocking 类必填"
+                },
+                "reason": {
+                  "type": "string",
+                  "_doc": "创作理由（如「闪回场景」「主角声称目击但生死未定」）·必填落字"
+                }
+              }
+            },
+            "description": "写前 gate 声明式豁免（如 [{\"type\":\"dead_character\",\"target\":\"沈铖\",\"reason\":\"闪回场景\"}]）·pre_write_gate.py 消费"
+          },
           "mid_checkpoints": {
             "type": "array",
             "items": {

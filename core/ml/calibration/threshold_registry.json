@@ -839,7 +839,7 @@
         "tests/test_best_of_n.py"
       ],
       "marker_lines": [
-        2130
+        2177
       ],
       "note": "0.02 为保守占位·待真机 N 候选 deviation 分布测量后收紧(风格轨 EMBED_BACKEND 声纹尺度)。"
     }

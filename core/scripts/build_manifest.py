@@ -5505,6 +5505,200 @@ def _collect_volume_summaries_digest(s: "DatabaseScanner") -> list | None:
     return out or None
 
 
+# ============ A3 前块结尾偏重注入 + A14 近期活跃实体 LRU（2026-07-07 二轮移植 A 批） ============
+
+_PREV_TAIL_CJK_CHAR_RE = re.compile(r"[一-鿿㐀-䶿]")  # 与 chapter_io.count_cjk 同字符类
+
+
+def _prev_tail_target_cjk() -> int:
+    """A3 末尾截取目标 CJK 字数（默认 800·env PREV_TAIL_CJK 可调·非法值回默认）。"""
+    raw = (os.environ.get("PREV_TAIL_CJK") or "").strip()
+    try:
+        v = int(raw) if raw else 800
+    except ValueError:
+        v = 800
+    return max(v, 1)
+
+
+def _tail_by_cjk(text: str, target_cjk: int) -> str:
+    """取 text 末尾约 target_cjk 个 CJK 字的原文（只多不少·对齐到段首防半句起头）。
+
+    从末尾向前数 CJK 字到 target 后，再向前对齐到最近换行（整段保留——PlotPilot
+    「章末完整保留提升连贯」的段落粒度实现）。全文不足 target → 全量返回。
+    """
+    cnt = 0
+    pos = 0
+    for i in range(len(text) - 1, -1, -1):
+        if _PREV_TAIL_CJK_CHAR_RE.match(text[i]):
+            cnt += 1
+            if cnt >= target_cjk:
+                pos = i
+                break
+    if cnt < target_cjk:
+        return text.strip()
+    nl = text.rfind("\n", 0, pos)
+    return text[nl + 1:].strip() if nl != -1 else text.strip()
+
+
+def _resolve_prev_cluster_id(s: "DatabaseScanner", current_cluster_id) -> str | None:
+    """cluster_lookup 权威反查前块 cluster_id（禁机械拼接·北极星①）。
+
+    ① 主路径：当前 cluster 章区间起点的前一章 → ch_to_cluster_id 权威归属
+      （cluster_lookup 双向 roundtrip·容忍编号不连续/重排）。
+    ② 兜底：事件簇.json.clusters 列表序取当前项的前一项（fluid 涌现顺序权威·
+      新 cluster 尚未回填 chapter_range 时 range 反查必空的常态路径）。
+    cluster_001 / 解析失败 → None（无前块·键不注入）。
+    """
+    cur_norm = cluster_lookup.normalize_cluster_id(current_cluster_id)
+    if cur_norm is None:
+        return None
+    if (cluster_lookup.cluster_num(cur_norm) or 0) <= 1:
+        return None  # cluster_001 无前块
+    prev = None
+    rng = cluster_lookup.cluster_id_to_range(s.root, cur_norm)
+    if (isinstance(rng, (list, tuple)) and len(rng) == 2
+            and isinstance(rng[0], int) and rng[0] > 1):
+        prev = cluster_lookup.ch_to_cluster_id(s.root, rng[0] - 1)
+    if not prev:
+        clusters = (s.load("事件簇", {}) or {}).get("clusters") or []
+        for i, c in enumerate(clusters):
+            if (isinstance(c, dict)
+                    and cluster_lookup.normalize_cluster_id(c.get("cluster_id")) == cur_norm):
+                if i > 0 and isinstance(clusters[i - 1], dict):
+                    prev = cluster_lookup.normalize_cluster_id(clusters[i - 1].get("cluster_id"))
+                break
+    prev = cluster_lookup.normalize_cluster_id(prev)
+    if prev is None or prev == cur_norm:
+        return None
+    return prev
+
+
+def _collect_prev_cluster_tail(s: "DatabaseScanner", current_cluster_id) -> dict | None:
+    """A3 前块结尾偏重注入（2026-07-07·PlotPilot recent_chapter_context.py:7-73 移植）。
+
+    cluster_002+ 时读上一 cluster 草稿（章节/cluster_<prev>_draft/cluster_<prev>_draft.txt）
+    末尾 N 字原文（默认 800 CJK·env PREV_TAIL_CJK 可调）。PlotPilot 实证「章末完整保留
+    提升连贯」——跨 cluster 断裂感的真实痛点在开篇丢失前块结尾的悬念钩子/情感余韵/场景状态。
+    writer 侧回响指令见 gen_writer._build_prev_tail_echo_section（advisory·北极星⑤不硬锁）。
+    cluster_001 无前块 / 前块草稿不存在（断点恢复异态）→ None（键不注入·零变化）。
+    """
+    prev_cid = _resolve_prev_cluster_id(s, current_cluster_id)
+    if not prev_cid:
+        return None
+    draft_path = s.root / "章节" / f"{prev_cid}_draft" / f"{prev_cid}_draft.txt"
+    if not draft_path.is_file():
+        return None
+    try:
+        text = draft_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not text.strip():
+        return None
+    tail = _tail_by_cjk(text, _prev_tail_target_cjk())
+    if not tail:
+        return None
+    return {
+        "_doc": ("A3 前块结尾偏重注入（PlotPilot recent_chapter_context 移植）：上一 cluster "
+                 "草稿末尾原文完整保留——本块开篇应对其悬念钩子/情感余韵/场景状态有所回响"
+                 "（advisory·回响方式 writer 自由决定·不必逐句衔接）。"),
+        "source_cluster": prev_cid,
+        "tail_text": tail,
+        "tail_cjk": cio.count_cjk(tail),
+    }
+
+
+def _collect_recently_active_entities(s: "DatabaseScanner", active_chars,
+                                      current_cluster_id, lookback: int = 3,
+                                      cap: int = 15) -> dict | None:
+    """A14 近期活跃实体 LRU 兜底（2026-07-07·Ex3 Entity_info Recent_Visit 移植）。
+
+    从 故事块摘要.json 最近 lookback 个历史 cluster 条目**确定性**抽取出场实体简表
+    （账本已有字段 characters/char_mention_counts/summary·零 LLM 调用）：每实体一行
+    = 名字 + 最后出场 cluster + 一句话状态（最后出场章的账本摘要截断）。与 scene_storyboard
+    白名单角色去重（白名单已注入全卡·不重复列）；上限 cap 行防膨胀（最近出场优先保留）。
+    用途：freestyle 带出计划外配角时的前置防漂移参考（advisory·非出场名单硬锁——此前只能
+    靠 UNKNOWN_CHARACTER 事后拦）。无数据 → None（键不注入·零变化）。
+    """
+    doc = s.load("故事块摘要", {}) or {}
+    clusters = doc.get("clusters")
+    if not isinstance(clusters, list) or not clusters:
+        return None
+    cur_num = cluster_lookup.cluster_num(current_cluster_id) if current_cluster_id else None
+    recs = []
+    for c in clusters:
+        if not isinstance(c, dict):
+            continue
+        n = cluster_lookup.cluster_num(c.get("cluster_id"))
+        if n is None:
+            continue
+        if cur_num is not None and n >= cur_num:
+            continue  # 只看当前块之前的历史条目
+        recs.append((n, c))
+    recs.sort(key=lambda t: t[0])
+    recs = recs[-lookback:]
+    if not recs:
+        return None
+    id2name = s._char_id_map()
+    # 白名单 = 已注入全卡的不重复列：active_chars + 当前 cluster 全 storyboard 出场角色
+    whitelist: set[str] = set()
+    for nm in active_chars or []:
+        if isinstance(nm, str) and nm.strip():
+            whitelist.add(nm.strip())
+    cur_cluster = s._event_cluster_by_id(current_cluster_id) if current_cluster_id else None
+    if isinstance(cur_cluster, dict):
+        for scene in cur_cluster.get("scene_storyboard") or []:
+            if not isinstance(scene, dict):
+                continue
+            for nm in scene.get("characters") or []:
+                if isinstance(nm, str) and nm.strip():
+                    whitelist.add(nm.strip())
+    whitelist |= {id2name[w] for w in list(whitelist) if w in id2name}
+
+    def _ch_num(k) -> int:
+        try:
+            return int(k)
+        except (TypeError, ValueError):
+            return 0
+
+    # LRU：按 (cluster, ch) 升序遍历·同名后出现覆盖 = 最后出场为准（确定性）
+    seen: dict[str, dict] = {}
+    for n, c in recs:
+        cid = cluster_lookup.normalize_cluster_id(c.get("cluster_id"))
+        chapters = c.get("chapters") if isinstance(c.get("chapters"), dict) else {}
+        for ch_key, rec in sorted(chapters.items(), key=lambda kv: _ch_num(kv[0])):
+            if not isinstance(rec, dict):
+                continue
+            names = rec.get("characters")
+            if not isinstance(names, list) or not names:
+                names = list((rec.get("char_mention_counts") or {}).keys())
+            hint = (rec.get("summary") or "").strip().replace("\n", " ")
+            if len(hint) > 60:
+                hint = hint[:60] + "…"
+            for nm in names:
+                if not isinstance(nm, str) or not nm.strip():
+                    continue
+                canon = id2name.get(nm.strip(), nm.strip())
+                entry = {"name": canon, "last_seen_cluster": cid,
+                         "_rank": (n, _ch_num(ch_key))}
+                if hint:
+                    entry["status_hint"] = hint
+                seen[canon] = entry
+    rows = [v for k, v in seen.items() if k not in whitelist]
+    if not rows:
+        return None
+    rows.sort(key=lambda r: r["_rank"], reverse=True)  # 最近出场优先保留
+    rows = rows[:cap]
+    for r in rows:
+        r.pop("_rank", None)
+    return {
+        "_doc": (f"A14 近期活跃实体 LRU 兜底（Ex3 Recent_Visit 移植）：最近 {lookback} 个历史 "
+                 "cluster 出场实体简表（摘要账本确定性抽取·零 LLM）。已与 storyboard 白名单"
+                 "角色去重（那些已注入全卡）。计划外配角写前防漂移参考——若正文自然带出这些"
+                 "实体，保持其最后已知状态一致（advisory·非出场名单硬锁）。"),
+        "entities": rows,
+    }
+
+
 def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
     """G6 P0：注入作者风格相对通用兜底基线的方向描述（更短/更留白）·advisory·三态。
 
@@ -6218,6 +6412,17 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # 🔴 2026-06-27 P0-05：子系统消费层级 audit（骨架 _doc.consumption 单一真理源·遍历 KNOWN_DBS·writer/judge 一眼看清 live/deferred/unknown）。
         "_subsystem_consumption_audit": _collect_subsystem_consumption_audit(s),
     }
+    # A3 前块结尾偏重注入（2026-07-07·PlotPilot recent_chapter_context）：cluster_002+ 注入
+    # 上一 cluster 草稿末尾原文（默认 800 CJK·env PREV_TAIL_CJK 可调·T1 创作载荷）。
+    # cluster_001 / 前块草稿缺失（断点恢复异态）→ 键不注入（零变化）。
+    _prev_tail = _collect_prev_cluster_tail(s, current_cluster_id)
+    if _prev_tail:
+        manifest["prev_cluster_tail"] = _prev_tail
+    # A14 近期活跃实体 LRU 兜底（2026-07-07·Ex3 Recent_Visit）：最近 3 个历史 cluster 出场
+    # 实体简表（账本确定性抽取·白名单去重·上限 15 行·T2 状态库）。无数据 → 键不注入。
+    _recent_ents = _collect_recently_active_entities(s, active_chars, current_cluster_id)
+    if _recent_ents:
+        manifest["recently_active_entities"] = _recent_ents
     # S1 分层 token 预算（2026-07-07·PlotPilot context_budget_allocator 移植）：
     # 记账（budget_report 元数据）始终附加；分层裁剪（T3 留 5% 地板 → T2 → T1·T0 自身 40% 硬上限）
     # 仅在体积 >= 既有 v19.4 硬守卫（BUDGET_HARD_KB·env MANIFEST_BUDGET_* 可覆盖）时生效——

@@ -128,6 +128,7 @@ $ARGUMENTS
 | **style_analyzer.py** | `core/scripts/style_analyzer.py` | 精确统计句长/段落/标点/功能词/对话占比 | 阶段1每章分析、阶段3量化对比 |
 | **style_evaluator.py** | `core/scripts/style_evaluator.py` | 原文 vs 复刻的 SFS 评分（0-100） | 阶段3对比、收敛判定 |
 | **validate_style.py** | `core/scripts/validate_style.py` | 风格合规校验（PASS/WARN/FAIL） | 阶段2复刻后校验 |
+| **distill_rubric.py** | `core/scripts/distill_rubric.py` | A12 LongBench-Write 六维质量 rubric（Relevance/Accuracy/Coherence/Clarity/Breadth&Depth/ReadingExperience 各 1-5 · 聚合 (mean-1)×25 归一 0-100 · **长度剥离**：judge 明示不考虑字数达标） | 阶段 2/5 复刻时经 `distill_replicate.py` 自动触发（env `DISTILL_RUBRIC_MODE=on` 才跑 · 默认 off）· 结果写 replica `.meta.json["rubric_sixdim"]` 与 SFS 并列 · **advisory 旁证观测，不改任何闸门判据（SFS 仍是唯一出货闸）**；judge JSON 缺任一维 → 整体作废重试 ≤3 次，全失败诚实记 `rubric_unavailable` 不伪造分 |
 
 **调用示例**：
 ```bash
@@ -191,7 +192,8 @@ python core/scripts/validate_style.py "风格库/复刻测试/v0/test1_opening.t
    ↓ 输出：skill v1 + lessons_learned
 [阶段 5] cluster 终验复刻（v2 新增 · 主推）—— 用 distill_replicate.py --mode cluster 复刻 1-2 个完整故事块
    ↓ 输出：cluster 复刻样本（4000-20000 字 · sub-call 拆分防 timeout）
-   ↓ 终止条件：连续 2 轮无新差距 + cluster SFS ≥ 80
+   ↓ 旁证（可选）：env DISTILL_RUBRIC_MODE=on 时 meta.json 附 LongBench-Write 六维 rubric（advisory · 长度剥离 · 不进判据）
+   ↓ 终止条件：连续 2 轮无新差距 + cluster SFS ≥ 80（SFS 是唯一出货闸 · 六维 rubric 不参与）
 [阶段 6] 出货 —— _FINAL 四件套 + git commit
    ↓ 输出：作者风格_FINAL.json + skill_FINAL.md + distillation_log.md
 [阶段 7] 写作端回灌严闭环（v2 新增 · 严 · Article 6）—— skill_FINAL 灌 gen_writer.py 写同 cluster → arc/SFS 对比

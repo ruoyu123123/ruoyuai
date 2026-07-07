@@ -44,6 +44,7 @@ from gen_model_loader import (  # noqa: E402
     reasoning_extra_body,
 )
 import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
+import distill_rubric  # noqa: E402 · A12 LongBench-Write 六维质量 rubric（env DISTILL_RUBRIC_MODE 默认 off · advisory 旁证）
 from llm_transport import _is_refusal  # noqa: E402 · gen-model 间歇性安全拒绝检测（2026-06-20）
 
 
@@ -1437,6 +1438,22 @@ def main():
 
     output_path.write_text(full_text, encoding='utf-8')
 
+    # ========== A12 · LongBench-Write 六维质量 rubric（env DISTILL_RUBRIC_MODE 默认 off） ==========
+    # 复刻评估现状=纯统计 SFS（style_evaluator 确定性）→ rubric 按门控可选落地：开启时复用
+    # 既有 call_gen_model 通道发 1 次 judge 调用（同栈 gen-model·不新增独立链路步骤），六维各
+    # 1-5 分聚合 (mean-1)*25 归一 0-100，judge prompt 明示不考虑长度（质量与长度双轨分离）。
+    # 缺任一维 → 整体作废重试（≤3）· 全失败诚实记 rubric_unavailable 不伪造分。
+    # 🔴 北极星⑤：恒 advisory 旁证——写 meta.json 与 SFS 并列，不改任何闸门判据/verdict/exit。
+    def _rubric_call(system: str, user: str) -> str:
+        reply, _prof, _el = call_gen_model(
+            loader, system, user, default_max_tokens=2000, tag="rubric六维")
+        return reply
+
+    rubric_report = distill_rubric.run_rubric_judge_gated(
+        _rubric_call, full_text,
+        task_brief=(f"按源作者风格 skill 复刻故事块 {args.cluster_ref}"
+                    "（自创角色与场景·整块连续叙事·风格指纹对照用）"))
+
     meta = {
         "mode": "cluster",
         "cluster_id": args.cluster_ref,
@@ -1462,8 +1479,11 @@ def main():
         "snippet_seed": seed_trace,
         # L3d · draft-level critic-refine + knockout 痕迹（PerFine 式 · critic feedback + 每轮 SFS · 不黑箱）
         "draft_refine": refine_trace,
+        # A12 · LongBench-Write 六维质量 rubric（advisory 旁证 · 与 SFS 并列 · 不改闸门判据）
+        "rubric_sixdim": rubric_report,
         "produced_by": "distill_replicate.py v3 · cluster mode · A' 半 cluster timeout 防御 · "
-                       "L3b CoT-first 自解释 · 🎴 snippet-seed 播种 · L3d draft critic-refine+knockout",
+                       "L3b CoT-first 自解释 · 🎴 snippet-seed 播种 · L3d draft critic-refine+knockout · "
+                       "A12 LongBench-Write 六维 rubric（DISTILL_RUBRIC_MODE 门控·advisory）",
     }
     output_path.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -1476,6 +1496,13 @@ def main():
         print(f"     draft-refine: {refine_trace.get('rounds_run')} 轮 · "
               f"SFS {refine_trace.get('initial_score')} → {refine_trace.get('final_best_score')}"
               f"（knockout 保最优）", file=sys.stderr)
+    if rubric_report.get("status") == "ok":
+        print(f"     rubric六维: {rubric_report['aggregate_0_100']}/100 "
+              f"{rubric_report['scores']}（advisory 旁证·长度已剥离·SFS 仍唯一出货闸）",
+              file=sys.stderr)
+    elif rubric_report.get("status") == "rubric_unavailable":
+        print(f"     rubric六维: rubric_unavailable（judge {rubric_report.get('attempts')} 次"
+              f"缺维/非法·诚实记不伪造分）", file=sys.stderr)
     print(f"     总耗时: {total_elapsed:.1f}s", file=sys.stderr)
 
 

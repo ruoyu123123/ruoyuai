@@ -82,7 +82,7 @@
     {
       "n": 5,
       "name": "novel-archivist-cluster",
-      "description": "🔴 2026-06-28 架构纠正：spawn novel-archivist MODE=cluster · 读整 cluster 正文 + 当前库，客观抽取本块新增/变更的角色/道具/关系/硬事实（+ throughline_progress 本块推进的叙事线 OS/MC/IC/RS），产 _数据库/.wal/cluster_{key}_archive.json（权威状态源·非 writer 自报）。只抽取不创作、不评判。配套 step6 apply_archive.py 确定性回库。failure_policy=block：archive 是 factual 回库唯一权威路径，archivist 失败=状态梳理链断，必须硬停。",
+      "description": "🔴 2026-06-28 架构纠正：spawn novel-archivist MODE=cluster · 读整 cluster 正文 + 当前库，客观抽取本块新增/变更的角色/道具/关系/硬事实（+ throughline_progress 本块推进的叙事线 OS/MC/IC/RS），产 _数据库/.wal/cluster_{key}_archive.json（权威状态源·非 writer 自报）。只抽取不创作、不评判。配套 step6 apply_archive.py 确定性回库。failure_policy=block：archive 是 factual 回库唯一权威路径，archivist 失败=状态梳理链断，必须硬停。🔴 2026-07-07 A15：spawn 前 scripts 先跑 cluster_entity_stats.py（moyin collectCharacterStats 范式·零 LLM）产确定性实体统计（出场次数/对白归属估计/首现位置/新专名候选 频次≥3），经 ENTITY_STATS_PATH 注入 archivist 当证据基线——统计里高频实体在 archive 缺失=漏抽信号（压漏报）。",
       "required": true,
       "must_spawn_agent": "novel-archivist",
       "agent_input": {
@@ -93,14 +93,19 @@
         "CHARACTER_CARDS_PATH": "_数据库/人物卡.json",
         "ROLE_POOL_PATH": "_数据库/角色池.json",
         "ITEMS_PATH": "_数据库/道具.json",
-        "RELATIONSHIPS_PATH": "_数据库/关系.json"
+        "RELATIONSHIPS_PATH": "_数据库/关系.json",
+        "ENTITY_STATS_PATH": "_数据库/.wal/cluster_{key}_entity_stats.json"
       },
       "judge_report_path": "_数据库/.wal/cluster_{key}_archive.json",
       "skip_output_allowed": false,
       "expected_outputs": [
-        "_数据库/.wal/cluster_{key}_archive.json"
+        "_数据库/.wal/cluster_{key}_archive.json",
+        "_数据库/.wal/cluster_{key}_entity_stats.json"
       ],
-      "_doc_archivist": "agent_input 的 *_PATH 键由主代理代读注入 context（judge agent 无 Read 工具）：CLUSTER_DRAFT_PATH=整块正文·人物卡/角色池/道具/关系=已存在基准供 id 复用（防同角色双 id）。judge_report_path=archive.json（apply_archive 默认读路径）。"
+      "scripts": [
+        "python core/scripts/cluster_entity_stats.py {project_root} --cluster {key}"
+      ],
+      "_doc_archivist": "执行顺序：① scripts 跑 cluster_entity_stats.py（确定性统计·A15·spawn 之前）② spawn archivist。agent_input 的 *_PATH 键由主代理代读注入 context（judge agent 无 Read 工具）：CLUSTER_DRAFT_PATH=整块正文·人物卡/角色池/道具/关系=已存在基准供 id 复用（防同角色双 id）·ENTITY_STATS_PATH=确定性实体统计（证据基线·统计高频实体在 archive.characters 缺失=漏抽信号）。judge_report_path=archive.json（apply_archive 默认读路径）。"
     },
     {
       "n": 6,

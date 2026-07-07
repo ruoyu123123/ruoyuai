@@ -171,6 +171,199 @@ def test_code_never_in_hard_gate_codes():
     assert audit_hub._gate_level_for("CHARACTER_IDENTITY_ANCHOR_DRIFT", "error") == "advisory"
 
 
+# ═══════════════ A7 辨识锚点分层 + 角色负面事实清单（2026-07-07 二轮移植） ═══════════════
+
+
+def test_skeleton_defines_recognition_anchors_and_negative_facts():
+    """人物卡 skeleton 的 _recognition_schema 是 A7 两字段的 schema 单一真理源。"""
+    skel = json.loads(
+        (_ROOT / "core" / "claude-home" / "templates" / "subsystem_skeletons.json")
+        .read_text(encoding="utf-8"))
+    card = skel["skeletons"]["人物卡"]
+    rec = card["_recognition_schema"]
+    assert "recognition_anchors" in rec
+    assert "negative_facts" in rec
+    assert isinstance(rec["recognition_anchors"], list)
+    assert "anchor" in rec["recognition_anchors"][0]
+    assert "position_or_scene" in rec["recognition_anchors"][0]
+    # advisory 软建议·fluid 不硬锁（北极星⑤）
+    assert "advisory" in rec["_doc"]
+    assert "不硬锁" in rec["_doc"] or "绝不硬锁" in rec["_doc"]
+    assert "_recognition_schema" in card["_doc"]
+
+
+def test_negative_fact_violation_detected_active():
+    bak = os.environ.get("CHARACTER_IDENTITY_ANCHOR_MODE")
+    try:
+        _set_mode("active")
+        project = _mk_project([
+            {"name": "池迟", "negative_facts": ["不会武功"]},
+        ])
+        draft = _write_draft("众人惊呼，池迟竟会武功，一脚踹翻了三个壮汉。")
+        out = mod.scan(draft, project)
+        assert out["verdict"] == "FAIL_MINOR"
+        assert out["negative_fact_violation_count"] == 1
+        v = out["violations"][0]
+        assert v["code"] == "CHARACTER_IDENTITY_ANCHOR_DRIFT"
+        assert v["kind"] == "negative_fact_violation"
+        assert v["gate_level"] == "advisory"
+        assert v["negative_fact"] == "不会武功"
+        assert v["observed"] == "会武功"
+    finally:
+        _set_mode(bak)
+
+
+def test_negative_fact_negated_mention_not_reported():
+    bak = os.environ.get("CHARACTER_IDENTITY_ANCHOR_MODE")
+    try:
+        _set_mode("active")
+        project = _mk_project([
+            {"name": "池迟", "negative_facts": ["不会武功"]},
+        ])
+        draft = _write_draft("池迟不会武功，只能抱着头往桌子底下钻。")
+        out = mod.scan(draft, project)
+        assert out["verdict"] == "PASS"
+        assert out["negative_fact_violation_count"] == 0
+    finally:
+        _set_mode(bak)
+
+
+def test_negative_fact_quoted_dialogue_exempt():
+    """引号内对话提及豁免：说起这能力 ≠ 角色展现这能力（交给 voice-checker 语境判）。"""
+    bak = os.environ.get("CHARACTER_IDENTITY_ANCHOR_MODE")
+    try:
+        _set_mode("active")
+        project = _mk_project([
+            {"name": "池迟", "negative_facts": ["不会武功"]},
+        ])
+        draft = _write_draft("「我会武功。」小乞丐冲池迟喊，比划了两下。")
+        out = mod.scan(draft, project)
+        assert out["verdict"] == "PASS"
+        assert out["negative_fact_violation_count"] == 0
+    finally:
+        _set_mode(bak)
+
+
+def test_negative_fact_hypothetical_prefix_exempt():
+    bak = os.environ.get("CHARACTER_IDENTITY_ANCHOR_MODE")
+    try:
+        _set_mode("active")
+        project = _mk_project([
+            {"name": "池迟", "negative_facts": ["不会武功"]},
+        ])
+        draft = _write_draft("池迟要是会武功就好了，可惜他连鸡都追不上。")
+        out = mod.scan(draft, project)
+        assert out["verdict"] == "PASS"
+        assert out["negative_fact_violation_count"] == 0
+    finally:
+        _set_mode(bak)
+
+
+def test_negative_fact_disability_run_detected():
+    """「左腿旧伤不能跑」类反向锚：正文出现「能跑」→ 违背。"""
+    bak = os.environ.get("CHARACTER_IDENTITY_ANCHOR_MODE")
+    try:
+        _set_mode("active")
+        project = _mk_project([
+            {"name": "池迟", "negative_facts": ["左腿旧伤不能跑"]},
+        ])
+        draft = _write_draft("池迟撒腿狂奔，巷子里数他最能跑。")
+        out = mod.scan(draft, project)
+        assert out["verdict"] == "FAIL_MINOR"
+        assert out["violations"][0]["kind"] == "negative_fact_violation"
+        assert out["violations"][0]["observed"] == "能跑"
+    finally:
+        _set_mode(bak)
+
+
+def test_old_project_without_new_fields_zero_behavior_change():
+    """老项目人物卡无 recognition_anchors/negative_facts → 行为与从前完全一致。"""
+    bak = os.environ.get("CHARACTER_IDENTITY_ANCHOR_MODE")
+    try:
+        _set_mode("active")
+        project = _mk_project([
+            {"name": "池迟", "identity_anchors": {"hair_color": "黑发"}},
+        ])
+        draft = _write_draft("池迟竟会武功，黑发被汗水浸透。")
+        out = mod.scan(draft, project)
+        assert out["verdict"] == "PASS"
+        assert out["negative_fact_count"] == 0
+        assert out["negative_fact_violation_count"] == 0
+        assert not any(v.get("kind") == "negative_fact_violation"
+                       for v in out["violations"])
+    finally:
+        _set_mode(bak)
+
+
+def test_recognition_anchor_seeds_drift_detection():
+    """recognition_anchors 的 anchor 短语可解析为 hair/eye/mark 时进漂移检测。"""
+    bak = os.environ.get("CHARACTER_IDENTITY_ANCHOR_MODE")
+    try:
+        _set_mode("active")
+        project = _mk_project([
+            {"name": "池迟",
+             "recognition_anchors": [
+                 {"anchor": "白发", "position_or_scene": "开场·满头"},
+                 {"anchor": "摩挲扳指", "position_or_scene": "紧张时"},
+             ]},
+        ])
+        draft = _write_draft("池迟拨了拨额前的黑发，指节没有停。")
+        out = mod.scan(draft, project)
+        assert out["verdict"] == "FAIL_MINOR"
+        v = out["violations"][0]
+        assert v["kind"] == "stable_identity_anchor_drift"
+        assert v["source"] == "recognition_anchors"
+        assert v["expected"] == "白发"
+        assert v["observed"] == "黑发"
+    finally:
+        _set_mode(bak)
+
+
+def test_apply_archive_passes_new_fields_only_on_new_card():
+    """apply_archive 新建卡透传两字段；老卡绝不改（终态契约·冲突只走 warnings）。"""
+    import apply_archive
+    db = Path(tempfile.mkdtemp()) / "_数据库"
+    db.mkdir(parents=True, exist_ok=True)
+    new_char = {
+        "id": "C_MAN", "name": "小蛮", "tier": "core", "first_ch": 1, "new": True,
+        "recognition_anchors": [{"anchor": "左脸刀疤", "position_or_scene": "左脸颧骨"}],
+        "negative_facts": ["不会武功"],
+        "state_changes": [],
+    }
+    apply_archive.apply_characters(db, [new_char], {}, dry=False)
+    pc = json.loads((db / "人物卡.json").read_text(encoding="utf-8"))
+    card = pc["characters"][0]
+    assert card["recognition_anchors"] == [
+        {"anchor": "左脸刀疤", "position_or_scene": "左脸颧骨"}]
+    assert card["negative_facts"] == ["不会武功"]
+    # 老卡：同 id 再来一份不同的 negative_facts → 不覆盖不追加
+    again = dict(new_char)
+    again["negative_facts"] = ["其实会武功"]
+    again["recognition_anchors"] = [{"anchor": "右脸黑痣", "position_or_scene": "右脸"}]
+    apply_archive.apply_characters(db, [again], {}, dry=False)
+    pc2 = json.loads((db / "人物卡.json").read_text(encoding="utf-8"))
+    assert len(pc2["characters"]) == 1
+    assert pc2["characters"][0]["negative_facts"] == ["不会武功"]
+    assert pc2["characters"][0]["recognition_anchors"] == [
+        {"anchor": "左脸刀疤", "position_or_scene": "左脸颧骨"}]
+
+
+def test_agent_contracts_mention_a7_fields():
+    """合约 grep 锁：archivist/voice-checker/distill-character 文档与代码现实一致。"""
+    archivist = (_ROOT / ".claude" / "agents" / "novel-archivist.md").read_text(encoding="utf-8")
+    assert "recognition_anchors" in archivist
+    assert "negative_facts" in archivist
+    assert "negative_fact_conflict" in archivist
+    assert "warnings" in archivist
+    assert "只报告" in archivist  # 终态契约：不改卡
+    voice = (_ROOT / ".claude" / "agents" / "novel-voice-checker.md").read_text(encoding="utf-8")
+    assert "negative_facts" in voice
+    assert "pov_violation" in voice
+    distill = (_ROOT / ".claude" / "commands" / "distill-character.md").read_text(encoding="utf-8")
+    assert "recognition_anchors" in distill
+    assert "negative_facts" in distill
+
+
 def test_cli_exits_one_when_active_warning():
     bak = os.environ.get("CHARACTER_IDENTITY_ANCHOR_MODE")
     try:

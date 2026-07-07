@@ -23,7 +23,10 @@ PROJECT: <项目路径>
 CLUSTER_ID: <cluster_001>
 CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
+ENTITY_STATS_PATH: <_数据库/.wal/cluster_NNN_entity_stats.json>（A15 确定性实体统计·证据基线）
 ```
+
+**ENTITY_STATS_PATH（A15·2026-07-07）**：spawn 前由 `cluster_entity_stats.py` 纯代码算好的客观统计（每实体出场次数 / 对白条数估计 / 首现位置 + 未登记新专名候选·频次≥3）。**统计是证据基线，不是判决**——抽取前先对账：统计里频次高的已知实体或新专名候选，你的 `characters` 段若没有对应条目 = **漏抽信号**，必须回正文核对后补上；`dialogue_count_estimate` / `first_offset` 用于交叉核对 state_changes 与 first_ch。新专名候选是启发式（允许误报），是否立卡仍由你按正文裁决——误报直接忽略，不立卡。
 
 ## 流程
 
@@ -38,6 +41,8 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
    - `_数据库/反派轮替.json`（若存在）→ 已登记的反派轮替条目（复用 antagonist_id + 其引入 `cluster_id`·标 defeat 时对齐既有条目键·见下节）。
 3. 通读正文，分辨：
    - **出场角色**：本块出现的每个有名有姓/有明确身份的角色。已存在 → 复用其 id + 记 state_changes；新角色 → 派稳定 id。
+   - **辨识锚点/负面事实（仅新角色首次建卡）**：新角色提炼 `recognition_anchors`（辨识锚点·身体标记/习惯动作/标志性道具）与 `negative_facts`（角色事实负面清单·「不会武功/不识字」类反向锚）——**正文有据才写·无据留空**（见下节专章）。
+   - **负面事实冲突（老角色）**：本块正文出现与人物卡已有 `negative_facts` 冲突的行为 → 记入顶层 `warnings` 段（**只报告·不改卡**·见下节专章）。
    - **关键道具**：信物/凶器/线索物/有剧情功能的物件（路人杂物不抽）。
    - **关系变化**：角色间关系的建立或改变。
    - **硬事实（locked_facts）**：本块确立、后续不可推翻的客观设定（身份/能力规则/物件性质/世界设定）。
@@ -91,6 +96,21 @@ CLUSTER_CHAPTER_RANGE: <如 1-3>（用于标 first_ch / state_changes.ch）
 
 - scene 无 `participants`（旧大纲/未填）→ **无法可靠区分谁在场**：要么对该 fact 不产 belief_update（跳过·宁缺毋滥），要么只对正文明确点名在场的角色产——**绝不脑补在场**。
 - 本块没有任何被揭示的新 fact → `belief_updates` 给空数组 `[]`（显式空结果·无状态变更）。
+
+## 🔴 2026-07-07 辨识锚点+负面事实（A7 · recognition_anchors / negative_facts / warnings）
+
+moyin 6 层身份锚点思想的文字化（schema 单一真理源见 `subsystem_skeletons.json` 人物卡 `_recognition_schema`·消费方 `character_identity_anchor_scanner` + `novel-voice-checker`·全 advisory）。
+
+### 新角色首次建卡时提炼（正文有据才写·无据留空）
+
+- `recognition_anchors`：每条 `{"anchor": "...", "position_or_scene": "..."}`——**只写正文实际描写过的**身体标记（刀疤/胎记/白发）、习惯动作（摩挲扳指/咬指节）、标志性道具（黄铜怀表/断剑）。anchor 是特征本体，position_or_scene 是精确位置或惯常出现场景。主角/核心角色建议 ≥2 条（**advisory 软建议·fluid 不硬锁**·正文没写够就留少/留空，绝不脑补）。
+- `negative_facts`：纯字符串列表——正文**明确确立**的「该角色绝不应展现的能力/特征」反向锚（「不会武功」「不识字」「左腿旧伤不能跑」）。只认正文明写/明确可推定的否定事实，人设猜测不写。
+
+### 后续 cluster 的负面事实冲突（只报告·不改卡）
+
+- 老角色本块正文出现与人物卡已有 `negative_facts` **冲突的行为**（清单写「不识字」、正文却让他流利读信）→ 记入 archive 顶层 `warnings` 段，每条 `{"type": "negative_fact_conflict", "char_id": "...", "negative_fact": "...", "evidence": "正文摘录", "ch": N}`。
+- 🔴 **终态契约纪律：你只报告，绝不修改/删除人物卡已有的 negative_facts/recognition_anchors**（也许是剧情设计的合法成长——是否成立由主代理/scanner advisory 链路裁决，不是你判）。
+- 引号内对话的假设性提及（「他要是会武功就好了」）不算冲突。无冲突 → `warnings` 整段省略（C03 fluid·显式空结果）。
 
 ## 🔴 2026-06-29 反派轮替（antagonist_rotation · 长篇反派梯度 ledger）
 
@@ -178,7 +198,9 @@ Greimas《Sémantique structurale》六 actant 模型是「谁推动故事、围
      "tier": "core", "first_ch": 1, "new": false,
      "state_changes": [{"ch": 3, "change": "确认遗嘱来自未来的自己"}]},
     {"id": "C_MARTHA", "name": "玛莎修女", "role": "孤儿院修女", "status": "alive",
-     "tier": "extra", "first_ch": 2, "new": true, "state_changes": []}
+     "tier": "extra", "first_ch": 2, "new": true, "state_changes": [],
+     "recognition_anchors": [{"anchor": "指节的冻疮疤", "position_or_scene": "右手·分面包时"}],
+     "negative_facts": ["不识字"]}
   ],
   "items": [
     {"id": "I_WILL", "name": "羊皮纸遗嘱", "desc": "无邮戳、沾血、来自明日的绝笔",
@@ -211,7 +233,11 @@ Greimas《Sémantique structurale》六 actant 模型是「谁推动故事、围
      "tier": 1, "notes": "觉醒守夜人血脉·初入炼气"},
   "cluster_actant_state": {"subject": "C_PROT", "object": "I_WILL", "sender": "C_MARTHA",
      "receiver": "C_PROT", "helper": ["C_AMY"], "opponent": ["C_GREEN"]},
-  "throughline_progress": {"OS": true, "MC": true, "IC": false, "RS": false}
+  "throughline_progress": {"OS": true, "MC": true, "IC": false, "RS": false},
+  "warnings": [
+    {"type": "negative_fact_conflict", "char_id": "C_PROT", "negative_fact": "不会武功",
+     "evidence": "伊莱一记手刀劈晕了守门人", "ch": 3}
+  ]
 }
 ```
 
@@ -226,6 +252,8 @@ Greimas《Sémantique structurale》六 actant 模型是「谁推动故事、围
 - `protagonist_power_tier_update`：可选·单条 dict（或多条 list）·本块**主角力量 tier 变化**（见上节专章·`char_id` 复用人物卡 id·`tier` int 本书叙事梯度·`notes` 标突破/跌境）。无力量变化 / 非升级流 = 整段省略（C03 fluid·显式空结果·无状态变更）。tier 仅 scanner 内部用·**绝不暴露 writer**。
 - `cluster_actant_state`：可选·本块六位 Greimas actant 派分（见上节专章·`subject/object/sender/receiver` 单值=角色 id 或 null·`helper/opponent` = 角色 id list）。`actant_drift_scanner` + `cast_economy_scanner` 消费（软遥测·不进入 hard_gate）。判不出清晰 actant = 整段省略（C03 fluid·显式空结果·无状态变更）。
 - `throughline_progress`：固定 4 键 `{OS, MC, IC, RS}` 的 bool，标本块**实际**推进了哪几条叙事线（客观读正文判定·没把握=false）。可整段省略（缺失=四线 DORMANT·软遥测不报错）。
+- `recognition_anchors` / `negative_facts`：可选·**仅新角色（new: true）首次建卡时**提炼（见上节专章·正文有据才写·无据留空/省略·advisory 不硬锁）。
+- `warnings`：可选·本块正文与老角色已有 `negative_facts` 冲突的行为记录（见上节专章·**只报告不改卡**·无冲突整段省略）。
 
 ## 硬纪律
 
@@ -234,3 +262,4 @@ Greimas《Sémantique structurale》六 actant 模型是「谁推动故事、围
 - 🔴 只产 archive.json，**不直接改任何库文件**（回库由 apply_archive.py 确定性脚本做·含 character_belief_ledger.json）。
 - 🔴 路人/群众/无名氏不单列角色卡（除非有剧情功能且有称谓）。
 - 🔴 **belief_updates 只认正文 + participants 实际在场**：缺席角色绝不脑补在场 learned·没把握的 witness 宁可不产（false belief 由缺席自动表达·北极星②宁缺毋滥）。同一 fact 复用已登记 fact_id。
+- 🔴 **recognition_anchors/negative_facts 正文有据才写**（无据留空）；老角色 negative_facts 冲突**只进 warnings 不改卡**（终态契约·是否合法成长不是你判）。

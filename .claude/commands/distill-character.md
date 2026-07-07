@@ -230,12 +230,16 @@ $ARGUMENTS
    - `banned_phrases`：与角色明确人设冲突的禁说词；首次明确即可入列（这是底线，
      和正向 pattern 不同）
    - `rhythm`、`style` 等字段同步更新
-4. **更新 decision_patterns**（追加新模式，保留旧模式）
-5. **整理 growth_arc**：
+4. **增量维护 recognition_anchors / negative_facts**（A7 辨识锚点分层 · schema 见 `subsystem_skeletons.json` 人物卡 `_recognition_schema`）：
+   - `recognition_anchors`：从素材正文提炼身体标记/习惯动作/标志性道具，每条 `{"anchor": "...", "position_or_scene": "..."}`，去重追加；**正文有据才写**。主角/核心角色建议 ≥2 条（advisory 软建议·不硬锁）
+   - `negative_facts`：纯字符串列表·「绝不应展现的能力/特征」反向锚（「不会武功」「不识字」）；Layer 0 `never_do` 中属**客观能力边界**的条目可同步沉淀进来（态度/价值观类不算）
+   - 消费方：`character_identity_anchor_scanner`（漂移+违背检测·advisory）+ `novel-voice-checker`（对话口径）
+5. **更新 decision_patterns**（追加新模式，保留旧模式）
+6. **整理 growth_arc**：
    - 追加本次蒸馏发现的新转折点
    - 合并相似条目，保留关键节点
    - 更新 `voice_dna.growth_summary`
-6. **版本标记**：
+7. **版本标记**：
    ```json
    {
      "distill_history": [
@@ -246,7 +250,7 @@ $ARGUMENTS
      "last_distill_chapters": "1-12"
    }
    ```
-7. Write 更新后的人物卡
+8. Write 更新后的人物卡
 
 **合并规则：**
 - 数组字段（never_say, trigger_responses 等）：去重追加

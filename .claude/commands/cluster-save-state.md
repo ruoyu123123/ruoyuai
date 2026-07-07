@@ -56,7 +56,7 @@ STEP: <当前步骤号>
 2.  parse cluster_changes.json (self_eval/waivers · 创作自评 · 不含 factual 自报)
 3.  apply-cluster-changes + writer_truth_check (非 archive 域 time_advance/location + 撒谎检测)
 4.  audit_hub cluster pre-save audit (统一 cluster 审计入口 · hard_gate 校验)
-5.  novel-archivist MODE=cluster (读正文产 archive.json · factual 权威源 · failure_policy=block · 含 belief_updates witness)
+5.  cluster_entity_stats.py 前置确定性统计 (A15 证据基线) → novel-archivist MODE=cluster (读正文产 archive.json · factual 权威源 · failure_policy=block · 含 belief_updates witness)
 6.  apply_archive.py (角色/道具/关系/locked_facts/throughline + 角色信念 belief_ledger 确定性回库 · 失败硬停)
 7.  novel-summarizer MODE=cluster (cluster 级摘要 + 场景级 Appraisal Beat chain-of-emotion) + 🆕 S10 卷边界条件子任务 (detect-volume-boundary → MODE=volume 卷级递归摘要 → apply-volume-summary)
 8.  novel-foreshadower MODE=cluster (整 cluster 伏笔评估)
@@ -165,7 +165,15 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --output "<项目路�
 > - **写作自评（writer）**：cluster_changes.json 的 self_eval / waivers → 喂 audit（创作自评 / 豁免），**不作 factual 回库权威源**。
 > - **状态梳理（Claude archivist）**：读 cluster_draft.txt 正文客观抽取 → archive.json → apply_archive.py 确定性回库角色 / 道具 / 关系 / locked_facts / throughline / 角色信念(belief_ledger) / 反派轮替(反派轮替.json) / 主角力量 tier(角色弧线.json) / 六位 actant 派分(cluster_actant_ledger.json)。
 
-spawn novel-archivist（读整 cluster 正文，客观抽取本块新增/变更状态，产 archive.json）：
+**5a · 前置确定性统计（A15 · spawn 之前跑）**：
+
+```bash
+python core/scripts/cluster_entity_stats.py "<项目路径>" --cluster <key>
+```
+
+产 `_数据库/.wal/cluster_<key>_entity_stats.json`（moyin collectCharacterStats 范式·零 LLM）：每实体出场次数 / 对白条数估计（引号邻域归属）/ 首现位置 + 未登记新专名候选（2-4 字·频次≥3 防噪）。**代码算客观统计·archivist 只裁决主观归类**——统计是证据基线，统计里频次高的实体在 archive.characters 缺失 = 漏抽信号（压漏报·钟楼弃儿 writer 漏报教训）。
+
+**5b · spawn novel-archivist**（读整 cluster 正文 + 统计证据基线，客观抽取本块新增/变更状态，产 archive.json）：
 
 ```
 Agent 启动 novel-archivist:
@@ -176,6 +184,7 @@ CLUSTER_ID: cluster_<key>
 MODE: cluster
 CLUSTER_DRAFT_PATH: <项目路径>/章节/cluster_<key>_draft/cluster_<key>_draft.txt
 CLUSTER_CHAPTER_RANGE: <START_CH>-<END_CH>
+ENTITY_STATS_PATH: <项目路径>/_数据库/.wal/cluster_<key>_entity_stats.json
 ```
 
 产出：`_数据库/.wal/cluster_<key>_archive.json`（characters / items / relationships / locked_facts / throughline_progress / belief_updates / belief_unaware / antagonist_rotation / protagonist_power_tier_update / cluster_actant_state）。
@@ -459,6 +468,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - [ ] `plan_tracker.py end $PLAN_ID` 返回 exit 0
 - [ ] `_数据库/.wal/cluster_<key>_save_state.json` 存在
 - [ ] `_数据库/.wal/<key>_apply_cluster.json` 存在（step3 apply-cluster-changes 汇总 · 含 writer_truth_check）+ 本 cluster 各章 `第<N>章_parsed.json` 已落地（per-chapter）
+- [ ] `_数据库/.wal/cluster_<key>_entity_stats.json` 存在（step 5 前置 cluster_entity_stats.py 确定性统计 · A15 证据基线）
 - [ ] `_数据库/.wal/cluster_<key>_archive.json` 存在（step 5 archivist 产出）+ apply_archive 已回库角色/道具/关系/locked_facts/throughline/角色信念(belief_ledger)（step 6）
 - [ ] `_数据库/.wal/cluster_<key>_summary.json` 存在（summarizer 产出 · 含 appraisal_beats list）+ apply-appraisal-beats 已回填 叙事节拍器.appraisal_beats（空 list 只表示本块无新增）
 - [ ] `_数据库/.wal/cluster_<key>_volume_boundary.json` 存在（step 7 detect 产出）；`boundary=true` 时 `故事块摘要.volume_summaries` 已含该卷条目（`--apply-volume-summary` 回库·source 覆盖本卷全部 cluster_ids）

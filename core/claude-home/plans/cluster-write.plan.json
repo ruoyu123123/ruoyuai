@@ -19,7 +19,7 @@
     {
       "n": 1,
       "name": "build-manifest+style-directive",
-      "description": "cluster_002+ 先消费用户选择 artifact 应用世界涟漪，再由 build_manifest.py 生成 cluster 起首章 manifest（注入 cluster brief + 全 25+ 子系统状态）+ style_injector 注入风格指令。cluster_001 无前置选择，不执行 world_evolution_apply_card。",
+      "description": "cluster_002+ 先消费用户选择 artifact 应用世界涟漪，接着 pre_write_gate.py 写前校验「世界状态/人物卡 × 选中 brief」（死亡角色上台/销毁道具/锁定事实恒定数值冲突=blocking exit 2 硬停·重复事件嫌疑=warning 只记·brief.gate_waivers 声明式豁免放行留痕），再由 build_manifest.py 生成 cluster 起首章 manifest（注入 cluster brief + 全 25+ 子系统状态）+ style_injector 注入风格指令。cluster_001 无前置选择，不执行 world_evolution_apply_card；pre_write_gate 检测到 cluster_001 优雅 skip（报告仍落盘）。",
       "required": true,
       "skip_output_allowed": false,
       "_doc_h7_fix": "2026-05-29 复审修复（H7）：plan_tracker create 只传 cluster key；模板不得使用旧章号占位。step1 改目录级检查：.manifest 目录必由 build_manifest save_json mkdir 落地（起首章号 START_CH 由 cluster range 运行时解析，不属于 plan_id key）。.style_directive 仅在项目有 style_profile 时才写（条件产物），从 hard expected_output 移除避免误 FAIL。",
@@ -28,13 +28,16 @@
       "research_ref": "_数据库/.research_cache",
       "scripts": [
         "python core/scripts/world_evolution_apply_card.py {project_root} --next-key {key} --choice _数据库/.wal/cluster_{key}_user_choice.json",
+        "python core/scripts/pre_write_gate.py {project_root} --next-key {key}",
         "python core/scripts/auto_fate_draw.py {project_root} <cluster_start_ch> --cluster-id cluster_{key}",
         "python core/scripts/build_manifest.py {project_root} <cluster_start_ch>",
         "? python core/scripts/style_injector.py {project_root} <cluster_start_ch>"
       ],
+      "_doc_a2_gate": "🔴 2026-07-07 A2 写前 Evolution Gate（PlotPilot gate_service 移植）：pre_write_gate.py 位于 world_evolution_apply_card（brief 落库）之后、auto_fate_draw/build_manifest 之前——穿帮从「写完 20k 字再修」提前到「写前拦」。blocking=写前拒绝非审计 issue（不新增 hard_gate code·19 码清单零变动）；brief.gate_waivers 是创作声明权（北极星⑤·gate 只拦未声明的意外穿帮）；cluster_001 脚本内部检测优雅 skip exit 0 且报告仍落盘（expected_outputs 恒满足）。",
       "expected_outputs": [
         "_数据库/.manifest",
-        "_数据库/.manifest/cluster_{key}_fate_draw_decision.json"
+        "_数据库/.manifest/cluster_{key}_fate_draw_decision.json",
+        "_数据库/.wal/cluster_{key}_pre_write_gate.json"
       ]
     },
     {

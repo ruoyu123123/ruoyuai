@@ -6,9 +6,19 @@ Borrowed concept: moyin-creator keeps character identity anchors for visual
 continuity. In ruoyuai this scanner turns that idea into prose continuity:
 stable hair/eye/mark anchors must not drift in nearby narration.
 
+2026-07-07 A7 (round2 porting, moyin 6-layer identity anchors as text):
+  - characters[].recognition_anchors ([{anchor, position_or_scene}]) feed the
+    same drift detection (anchor phrase -> hair/eye/mark anchor when parsable).
+  - characters[].negative_facts (["不会武功", "不识字", ...]) get a reverse
+    check: positive-capability terms near the character name are advisory
+    violations (kind="negative_fact_violation", same top-level issue code -
+    no new code, no registry chain). Quoted dialogue mentions are exempt
+    (「他要是会武功就好了」 is not a violation).
+
 Input:
   - draft text
   - _数据库/人物卡.json characters[].identity_anchors
+      + characters[].recognition_anchors / characters[].negative_facts (A7)
   - optional fallback from appearance / locked_facts
 
 Output is advisory only. The code must never be added to HARD_GATE_CODES.
@@ -66,6 +76,28 @@ _TYPE_ALIASES = {
     "胎记": "mark",
     "标记": "mark",
 }
+
+# ── A7 negative_facts (2026-07-07) ──────────────────────────────────────────
+# A negative fact is a negated capability statement ("不会武功"). We derive the
+# positive-assertion terms whose appearance near the character name flags an
+# advisory violation ("会武功" / "精通武功" ...). Marker order matters: longer
+# markers first so "不能" is not shadowed by a shorter prefix.
+_NEGATIVE_FACT_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("没学过", ("学过{a}", "会{a}")),
+    ("不擅长", ("擅长{a}", "精通{a}")),
+    ("不会", ("会{a}", "精通{a}", "擅长{a}")),
+    ("不能", ("能{a}", "可以{a}")),
+    ("无法", ("能{a}", "可以{a}")),
+    ("不懂", ("懂{a}", "精通{a}")),
+    ("不识", ("识{a}", "认得{a}")),
+)
+_ABILITY_STOP_CHARS = "，。；、！？：…—,.;!? \n\t“”「」『』"
+_MAX_ABILITY_LEN = 8
+# Prefix tokens that make a positive-term hit non-violating (negation or
+# hypothetical framing right before the match).
+_NEG_PREFIX_TOKENS = ("不", "没", "未", "别", "并非", "无法", "难以",
+                      "要是", "如果", "若是", "假如", "除非")
+_QUOTE_PAIRS = (("“", "”"), ("「", "」"), ("『", "』"))
 
 
 def _mode() -> str:
@@ -224,8 +256,77 @@ def _parse_identity_anchors(raw) -> list[dict]:
     return anchors
 
 
+def _recognition_anchor_phrases(raw) -> list[str]:
+    """A7: characters[].recognition_anchors -> anchor phrase strings."""
+    phrases: list[str] = []
+    if not isinstance(raw, list):
+        return phrases
+    for item in raw:
+        if isinstance(item, dict):
+            text = str(item.get("anchor") or "").strip()
+        else:
+            text = str(item or "").strip()
+        if text:
+            phrases.append(text)
+    return phrases
+
+
+def _parse_negative_facts(raw) -> list[dict]:
+    """A7: negated-capability strings -> {fact, positive_terms[]} entries.
+
+    "不会武功" -> positive terms 会武功/精通武功/擅长武功; facts whose ability
+    part cannot be derived produce no entry (conservative: no false alarms).
+    """
+    entries: list[dict] = []
+    for fact in _as_text_list(raw):
+        terms: list[str] = []
+        for marker, templates in _NEGATIVE_FACT_MARKERS:
+            start = 0
+            while True:
+                pos = fact.find(marker, start)
+                if pos < 0:
+                    break
+                tail = fact[pos + len(marker):]
+                ability = ""
+                for chch in tail:
+                    if chch in _ABILITY_STOP_CHARS:
+                        break
+                    ability += chch
+                ability = ability.strip()
+                if ability and len(ability) <= _MAX_ABILITY_LEN:
+                    terms.extend(t.format(a=ability) for t in templates)
+                start = pos + len(marker)
+        terms = list(dict.fromkeys(t for t in terms if t))
+        if terms:
+            entries.append({"fact": fact, "positive_terms": terms})
+    return entries
+
+
+def _quote_spans(text: str) -> list[tuple[int, int]]:
+    """Absolute [start, end) spans of quoted dialogue (A7 quote exemption)."""
+    spans: list[tuple[int, int]] = []
+    for open_q, close_q in _QUOTE_PAIRS:
+        open_at = None
+        for idx, chch in enumerate(text):
+            if chch == open_q and open_at is None:
+                open_at = idx
+            elif chch == close_q and open_at is not None:
+                spans.append((open_at, idx + 1))
+                open_at = None
+    return spans
+
+
+def _in_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in spans)
+
+
 def _character_anchors(card: dict) -> list[dict]:
     anchors = _parse_identity_anchors(card.get("identity_anchors"))
+    # A7: recognition_anchors feed the same drift detection when the anchor
+    # phrase is parsable into a hair/eye/mark anchor (habit/prop anchors are
+    # descriptive-only and yield no drift anchor - conservative).
+    for phrase in _recognition_anchor_phrases(card.get("recognition_anchors")):
+        anchors.extend(_anchors_from_phrase(phrase, "recognition_anchors"))
     appearance = card.get("appearance")
     if isinstance(appearance, dict):
         for key in ("hair_color", "eye_color", "scar", "mark", "birthmark"):
@@ -273,6 +374,7 @@ def _load_characters(project_root) -> list[dict]:
             "name": name,
             "aliases": aliases,
             "anchors": anchors,
+            "negative_facts": _parse_negative_facts(card.get("negative_facts")),
         })
     return characters
 
@@ -327,6 +429,54 @@ def _detect_drifts(text: str, characters: list[dict]) -> list[dict]:
     return drifts
 
 
+def _is_prefix_exempt(window: str, pos: int) -> bool:
+    """Negation/hypothetical framing right before a positive-term hit."""
+    prefix = window[max(0, pos - 6):pos]
+    return any(token in prefix for token in _NEG_PREFIX_TOKENS)
+
+
+def _detect_negative_fact_violations(text: str, characters: list[dict]) -> list[dict]:
+    """A7: positive-capability term near a character whose card negates it.
+
+    Quoted dialogue mentions are exempt (a character talking about the
+    ability is not the character demonstrating it - judged by voice-checker
+    with narrative context, not by this mechanical scanner).
+    """
+    spans = _quote_spans(text)
+    violations: list[dict] = []
+    for character in characters:
+        facts = character.get("negative_facts") or []
+        if not facts:
+            continue
+        windows = _windows_for_character(text, character)
+        if not windows:
+            continue
+        for entry in facts:
+            for window in windows:
+                for term in entry["positive_terms"]:
+                    pos = window["text"].find(term)
+                    if pos < 0:
+                        continue
+                    if _in_spans(window["start"] + pos, spans):
+                        continue
+                    if _is_prefix_exempt(window["text"], pos):
+                        continue
+                    violations.append({
+                        "code": ISSUE_CODE,
+                        "kind": "negative_fact_violation",
+                        "severity": "minor",
+                        "gate_level": "advisory",
+                        "character": character["name"],
+                        "matched_alias": window["alias"],
+                        "negative_fact": entry["fact"],
+                        "observed": term,
+                        "source": "negative_facts",
+                        "evidence": window["text"].strip()[:160],
+                    })
+                    break
+    return violations
+
+
 def scan(draft_path, project_root=None) -> dict:
     mode = _mode()
     out = {
@@ -352,20 +502,30 @@ def scan(draft_path, project_root=None) -> dict:
     characters = _load_characters(project_root)
     out["character_count"] = len(characters)
     out["anchor_count"] = sum(len(c.get("anchors", [])) for c in characters)
+    out["negative_fact_count"] = sum(len(c.get("negative_facts", [])) for c in characters)
     if not characters:
         out["note"] = "no character cards; skipped"
         return out
-    if out["anchor_count"] == 0:
-        out["note"] = "no identity anchors; skipped"
+    if out["anchor_count"] == 0 and out["negative_fact_count"] == 0:
+        out["note"] = "no identity anchors / negative facts; skipped"
         return out
 
     drifts = _detect_drifts(text, characters)
+    negative_hits = _detect_negative_fact_violations(text, characters)
     out["drift_count"] = len(drifts)
     out["drift_samples"] = drifts[:5]
-    if drifts:
-        msg = f"stable identity anchor drift detected: {len(drifts)}"
+    out["negative_fact_violation_count"] = len(negative_hits)
+    out["negative_fact_samples"] = negative_hits[:5]
+    found = drifts + negative_hits
+    if found:
+        parts = []
+        if drifts:
+            parts.append(f"stable identity anchor drift detected: {len(drifts)}")
+        if negative_hits:
+            parts.append(f"negative fact violation detected: {len(negative_hits)}")
+        msg = "; ".join(parts)
         if mode == "active":
-            out["violations"] = drifts
+            out["violations"] = found
             out["verdict"] = "FAIL_MINOR"
             out["warning"] = msg
         else:

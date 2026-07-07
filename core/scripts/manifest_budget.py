@@ -124,6 +124,9 @@ SECTION_TIERS: dict[str, str] = {
     "position_effect_template": TIER_T1,
     "genre_baseline_diff": TIER_T1,
     "motif_recurrence_directive": TIER_T1,
+    # A3 前块结尾偏重注入（2026-07-07·PlotPilot recent_chapter_context）：上一 cluster 草稿
+    # 末尾原文 = 开篇回响的创作载荷（跨 cluster 衔接的直接写作素材·非状态库）。
+    "prev_cluster_tail": TIER_T1,
     # --- T2：状态库（人物/世界/关系/道具/阵营/时间线快照） ---
     "active_cast": TIER_T2,
     "cluster_actant_state": TIER_T2,
@@ -148,6 +151,9 @@ SECTION_TIERS: dict[str, str] = {
     "character_positions": TIER_T2,
     "debt_ledger_snapshot": TIER_T2,
     "sagging_middle_snapshot": TIER_T2,
+    # A14 近期活跃实体 LRU 兜底（2026-07-07·Ex3 Recent_Visit）：近 3 cluster 出场实体简表
+    #（摘要账本确定性抽取·防计划外配角漂移的状态参考）。
+    "recently_active_entities": TIER_T2,
     # --- T3：长程记忆（RAG/memory/历史选择性召回·牺牲位但有 5% 地板） ---
     "rag_relevant_chapters": TIER_T3,
     "memory_search_results": TIER_T3,

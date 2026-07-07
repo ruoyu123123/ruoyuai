@@ -25,8 +25,9 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
       · **教科书级**直接矛盾（「他已死」vs「他还活着」/数量互斥/天气互斥）contradiction 0.99+ 稳判 ✓
       · **含蓄改写型**不可依赖（S5 反向校准实证：锁定「妻亡」vs「妻子站在门口等他」被判
         entailment 0.229——非阈值问题是能力翻车·direct_rewrite 召回仅 1/3）✗
-      · 配对窗覆盖面有限（默认 64 对按序≈只盖长稿前段主角句·S4 surprisal 排序开启时按高熵段
-        优先可改善·全稿分段轮询待后续批次）
+      · 配对窗预算有限（64 对）——S5 反向校准后默认=三区间均衡轮询（草稿按段落三等分
+        前/中/后·晚位句子进得了配对窗）；S4 surprisal 排序开启时按高熵段优先（优先级最高·
+        跨区间生效）
       · **多跳实体推理型矛盾**（「满门尽灭只剩沈昭一人」vs「兄长沈铖推门而入」——需推断
         沈铖∈家人且活着）实测 entailment(contradiction 仅 0.166) ✗——110M 模型能力边界，
         阈值 0.80 下此类恒漏（勿降阈值硬凑：0.166 档放行=误报洪水）。ConStory 盲区3 测试
@@ -64,10 +65,15 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
 
 Env 门控：LOCKED_FACT_DESCRIPTIVE_MODE = off / shadow(默认) / active；
   NLI 后端另受 RUOYU_NN_NLI=1 门控（见 nn_nli_bridge.py·daemon-first 三层降级）。
-  S4 高熵段优先粗筛（2026-07-07·ConStory arXiv:2603.05890「一致性错误集中在高熵段」）：
-  RUOYU_NN_SURPRISAL=1 且 nn_surprisal_bridge 全段命中时，描述类候选配对按所在段
-  GPT-2 surprisal 降序重排后再截断 64 对上限（高熵段优先送 NLI）；surprisal 不可用
-  （默认）→ 文档序逐字节不变。留痕 descriptive.pair_selection。
+  配对窗选择策略（留痕 descriptive.pair_selection: surprisal_ranked | balanced_rotation）：
+  · S4 高熵段优先（2026-07-07·ConStory arXiv:2603.05890「一致性错误集中在高熵段」）：
+    RUOYU_NN_SURPRISAL=1 且 nn_surprisal_bridge 全段命中时，描述类候选配对按所在段
+    GPT-2 surprisal 降序重排后再截断 64 对上限（高熵段优先送 NLI·优先级最高·跨区间生效）。
+  · S5 三区间均衡轮询（2026-07-07·FlawedFictions arXiv:2504.11900 反向校准实证：
+    旧「文档序前 64」只盖 22.5k 字草稿前 12% 的主角句·晚位注入恒漏）：surprisal 不可用
+    （默认环境即此态）→ 草稿按段落三等分（前/中/后），64 对预算按 fact × 区间轮询均衡
+    分配（单 fact 16 句上限内先各区间取样再补齐）——取代纯文档序，保证晚位句子进得了
+    配对窗。确定性重排不增删：上限/阈值/判定逻辑/数值 hard 通路零变动。
 
 用法：python locked_fact_cross_scene_scanner.py <project> <cluster_draft_path>
 """
@@ -239,14 +245,19 @@ def extract_ages_near(text: str, keyword: str, window: int = 50) -> list:
 # 🔴 纪律：本通路 code 永远 advisory（NLI 概率判定 · 北极星⑤只有确定性一致性才 hard）；
 #         NLI 后端不可用 → 诚实 skip（note 说明），绝不用关键词匹配假冒语义判定。
 #
-# S4 高熵段优先粗筛（2026-07-07 二轮移植·ConStory-Checker arXiv:2603.05890 实证
-# 「一致性错误集中在 token 熵高的文本段」）：
-#   · surprisal 可用（nn_surprisal_bridge.enabled()=RUOYU_NN_SURPRISAL=1 + venv/checkpoint 齐备·
+# 配对窗选择策略（报告 `descriptive.pair_selection` 留痕："surprisal_ranked" | "balanced_rotation"）：
+#   · S4 高熵段优先（2026-07-07 二轮移植·ConStory-Checker arXiv:2603.05890 实证
+#     「一致性错误集中在 token 熵高的文本段」）：surprisal 可用
+#     （nn_surprisal_bridge.enabled()=RUOYU_NN_SURPRISAL=1 + venv/checkpoint 齐备·
 #     桥内部 daemon-first ~0.1s / 回退 subprocess）且候选句所在段**全部**拿到 mean_surprisal
-#     → 候选配对按所在段 surprisal 降序重排后再截断 _MAX_NLI_PAIRS（高熵段优先送 NLI）。
-#   · 任一条件不满足（默认环境即此态）→ 保持既有文档序**逐字节不变**（诚实降级不伪装）。
-#   报告 `descriptive.pair_selection` 留痕："surprisal_ranked" | "document_order"。
-#   零新模型·纯接线：只改「64 对上限内选哪些」的优先级，阈值/上限/判定逻辑零变动。
+#     → 候选配对按所在段 surprisal 降序重排后再截断 _MAX_NLI_PAIRS（高熵段优先送 NLI·
+#     优先级最高·跨区间生效）。
+#   · S5 三区间均衡轮询（2026-07-07 二轮移植·FlawedFictions arXiv:2504.11900 反向校准
+#     实证：旧「文档序前 64」只盖 22.5k 字草稿前 12% 的主角句·晚位注入恒漏）：
+#     surprisal 不可用（默认环境即此态）→ 草稿按段落三等分（前/中/后），候选按
+#     fact × 区间轮询交错（单 fact 16 上限内先各区间取样再补齐·全局 64 预算按 fact 轮询
+#     公平分配）——晚位句子进得了配对窗。
+#   零新模型·纯选序：两策略都只改「64 对上限内选哪些/什么序」，阈值/上限/判定逻辑零变动。
 
 DESCRIPTIVE_CODE = "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION"
 _NLI_CONTRA_THRESHOLD = 0.80     # contradiction 概率高置信地板（低于此不报·宁漏勿误）
@@ -314,7 +325,7 @@ def _surprisal_rank_candidates(text: str, candidates: list) -> "tuple[list, bool
     （高熵段优先送 NLI），返回 (排序后候选, True)。
 
     🔴 诚实降级铁律：以下任一情况 → 返回 (原候选列表**原对象·零改动**, False)，
-    调用方保持文档序逐字节不变（不伪装成 surprisal_ranked）：
+    调用方退 S5 三区间均衡轮询（不伪装成 surprisal_ranked）：
       · nn_surprisal_bridge import 失败 / enabled()=False（RUOYU_NN_SURPRISAL 默认 off）
       · 候选定位不到所在段 / 任一所在段未拿到 mean_surprisal（对齐
         entropy_hotspot_consistency_probe「任一 block 未命中 → 整体回退」纪律）
@@ -357,6 +368,67 @@ def _surprisal_rank_candidates(text: str, candidates: list) -> "tuple[list, bool
     return [candidates[k] for k in order], True
 
 
+def _region_of(pos: int, spans: list, text_len: int) -> int:
+    """候选句所在三区间（0=前 / 1=中 / 2=后）：按段落列表三等分定区
+    （段落序 idx*3//段落总数）。定位不到所在段（防御）→ 按字符偏移三等分兜底。"""
+    n = len(spans)
+    if n:
+        for i, (s, e) in enumerate(spans):
+            if s <= pos < e:
+                return min(2, i * 3 // n)
+    return min(2, pos * 3 // max(1, text_len))
+
+
+def _balanced_rotation_order(text: str, candidates: list) -> list:
+    """S5 三区间均衡轮询（FlawedFictions arXiv:2504.11900 反向校准·2026-07-07）：
+    旧「文档序前 64」配对窗实证只盖 22.5k 字草稿前 12% 的主角句——晚位注入恒漏。
+
+    重排规则（确定性·同输入恒同输出·纯选序不增删）：
+      1. 草稿按段落（非空行）三等分成前/中/后三区间，候选按所在段定区；
+      2. 每 fact 内部按区间轮询（前→中→后循环取，某区间耗尽自动跳过
+         ＝「先各区间取样再补齐」）——单 fact 16 句上限内三区间均衡；
+      3. fact 间再轮询交错成全局序——全局 64 对预算对各 fact 公平分配。
+    截断（全局 _MAX_NLI_PAIRS + 单 fact _MAX_SENTS_PER_FACT）仍由调用方统一执行。"""
+    if not candidates:
+        return candidates
+    spans = _line_paragraph_spans(text)
+    text_len = len(text)
+    # 1) 按 fact 分组（保持 desc_facts 主序），组内按区间 0/1/2 分桶（桶内保持文档序）
+    fact_keys = []
+    buckets = {}   # fact_i -> (region0[], region1[], region2[])
+    for c in candidates:
+        fkey = c["_fact_i"]
+        if fkey not in buckets:
+            fact_keys.append(fkey)
+            buckets[fkey] = ([], [], [])
+        buckets[fkey][_region_of(c["position"], spans, text_len)].append(c)
+    # 2) 每 fact：区间轮询（round-robin·耗尽区间自动跳过）
+    per_fact_seq = {}
+    for fkey in fact_keys:
+        regions = [list(b) for b in buckets[fkey]]
+        cursors = [0, 0, 0]
+        seq = []
+        while any(cursors[i] < len(regions[i]) for i in range(3)):
+            for i in range(3):
+                if cursors[i] < len(regions[i]):
+                    seq.append(regions[i][cursors[i]])
+                    cursors[i] += 1
+        per_fact_seq[fkey] = seq
+    # 3) fact 间轮询交错成全局序
+    out = []
+    idx = {k: 0 for k in fact_keys}
+    remaining = True
+    while remaining:
+        remaining = False
+        for fkey in fact_keys:
+            i = idx[fkey]
+            if i < len(per_fact_seq[fkey]):
+                out.append(per_fact_seq[fkey][i])
+                idx[fkey] = i + 1
+                remaining = True
+    return out
+
+
 def _scan_descriptive(text: str, desc_facts: list) -> dict:
     """描述类锁定事实 × 人名共现句 → NLI contradiction 高置信 → advisory violation。
 
@@ -375,8 +447,9 @@ def _scan_descriptive(text: str, desc_facts: list) -> dict:
         "facts_checked": len(desc_facts),
         "pairs_sent": 0,
         "nli_threshold": _NLI_CONTRA_THRESHOLD,
-        # S4 留痕：候选配对选择策略（surprisal_ranked=高熵段优先 / document_order=文档序）
-        "pair_selection": "document_order",
+        # 留痕：候选配对选择策略（surprisal_ranked=S4 高熵段优先 /
+        # balanced_rotation=S5 三区间均衡轮询·surprisal 不可用时的默认策略）
+        "pair_selection": "balanced_rotation",
         "violations": [],
         "shadow_observations": [],
     }
@@ -397,8 +470,10 @@ def _scan_descriptive(text: str, desc_facts: list) -> dict:
     # 候选配对粗筛：只有 fact 所属角色名与句子共现才成为候选（控制调用量）。
     # premise = 锁定事实（权威陈述），hypothesis = 正文句 → contradiction = 正文违背锁定事实。
     # 先全量收集（fact 主序 + 文档序），再决定截断顺序：
-    #   S4：surprisal 可用 → 按所在段 surprisal 降序（高熵段优先·ConStory arXiv:2603.05890）；
-    #       不可用 → 保持本收集序（与历史嵌套循环截断结果逐字节一致·诚实降级）。
+    #   S4：surprisal 可用 → 按所在段 surprisal 降序（高熵段优先·ConStory arXiv:2603.05890·
+    #       优先级最高·跨区间生效）；
+    #   S5：不可用（默认）→ 三区间均衡轮询（前/中/后按 fact 轮询交错·晚位句进得了配对窗·
+    #       FlawedFictions arXiv:2504.11900 反向校准根治「文档序前 64 恒漏晚位注入」）。
     candidates = []
     sentences = _split_sentences(text)
     for fact_i, (name, fact) in enumerate(desc_facts):
@@ -410,11 +485,13 @@ def _scan_descriptive(text: str, desc_facts: list) -> dict:
             candidates.append({"character": name, "fact": fact,
                                "sentence": sent, "position": pos, "_fact_i": fact_i})
     ranked, surprisal_used = _surprisal_rank_candidates(text, candidates)
-    block["pair_selection"] = "surprisal_ranked" if surprisal_used else "document_order"
+    if not surprisal_used:
+        ranked = _balanced_rotation_order(text, candidates)
+    block["pair_selection"] = "surprisal_ranked" if surprisal_used else "balanced_rotation"
 
     # 截断：全局上限 _MAX_NLI_PAIRS + 单 fact 上限 _MAX_SENTS_PER_FACT（阈值零变动）。
-    # document_order 时 candidates 按 fact 分组连续，本循环与历史嵌套循环选出的
-    # pairs/meta 逐字节相同；surprisal_ranked 时同两上限按高熵优先序生效。
+    # balanced_rotation 时 ranked 已按 fact × 区间轮询交错（单 fact 前 16 项内三区间均衡）；
+    # surprisal_ranked 时同两上限按高熵优先序生效。
     pairs, meta = [], []
     per_fact_count = {}
     for c in ranked:

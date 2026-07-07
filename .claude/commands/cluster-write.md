@@ -57,6 +57,8 @@ STEP: <当前步骤号>
 ```
 0.   world_evolution_apply_card.py   （用户选定走向卡 → 触发世界涟漪 → 世界先动一格）
      ↓
+0.5  pre_write_gate.py              （写前 Evolution Gate · 世界状态/人物卡 × brief 校验 · 死角色/销毁道具/锁定事实=blocking · gate_waivers 声明豁免 · cluster_001 skip）
+     ↓
 1.   build_manifest.py              （cluster 起首章 manifest · 注入 cluster brief + 全 25+ 子系统状态）
      ↓
 2.   novel-writer MODE=ecas         （写整 cluster 正文草稿 + self_eval/waivers 自评 · 不自报 factual · ★禁止 splitter）
@@ -103,6 +105,35 @@ python core/scripts/world_evolution_apply_card.py "<项目路径>" \
 - cluster_002+ 缺 `_数据库/.wal/cluster_<key>_user_choice.json` → 停止，不进入 build_manifest。
 - `ripple_match` 为空、`世界状态.json` / `涟漪规则.json` 缺失、规则无匹配 → 停止。
 - 不允许使用旧 `--cluster` 或 `<chapter> <label>` 入口。
+
+## 第 1 步前置子步骤 2：写前 Evolution Gate（A2 · 2026-07-07）
+
+world_evolution_apply_card 落库 brief 之后、auto_fate_draw / build_manifest 之前，必跑写前 gate——把穿帮从「写完 20k 字再修」提前到「写前拦」：
+
+```bash
+python core/scripts/pre_write_gate.py "<项目路径>" --next-key <key>
+```
+
+校验「当前世界状态/人物卡 × 选中 brief」四项：
+
+| 检查 | 级别 | 说明 |
+|---|---|---|
+| 死亡角色上台 | blocking | brief 结构化出场名单（characters_focus / storyboard characters/participants/focal_character）含 人物卡 status=dead 或 character_arc_state 已死角色；文本**提及**死角色只 warning（回忆/动机合法） |
+| 销毁道具 | blocking | anchor_props 引用 道具.json status ∈ destroyed/lost/已销毁/丢失 的道具 |
+| 锁定事实冲突 | blocking | brief 文本与 locked_facts 恒定数值直接冲突（同 locked_fact_cross_scene 单位集·只抓恒定量不碰品级成长） |
+| 重复事件嫌疑 | warning 只记 | scope_summary 与已 completed ME / 已完成 cluster 高词面重叠 |
+
+- 产物：`_数据库/.wal/cluster_<key>_pre_write_gate.json`（含 skip 场景恒落盘）
+- blocking 非空 → `[FATAL]` 走 stderr + exit 2 硬停，不进 build_manifest。这是**写前拒绝不是审计 issue**——不新增 hard_gate code。
+- cluster_001 首块无 brief 选择场景 → 脚本内部检测优雅 skip exit 0。
+
+**声明式豁免（北极星⑤ 创作声明权）**：brief 可选字段 `gate_waivers`（schema 见 `event_cluster_schema.json`），如：
+
+```json
+"gate_waivers": [{"type": "dead_character", "target": "沈铖", "reason": "闪回场景"}]
+```
+
+type 支持叙事手法别名（flashback/闪回/ambiguous_fate/模糊生死/time_skip/时间跳跃…）。gate 命中且有对应豁免 → 放行并留痕报告 `waived[]`。blocking 类豁免必须点名 target；gate 只拦「未声明的意外穿帮」，不对声明做二次裁决。命中拦截时的处置：修正 brief（换角色/换道具/改设定表述）或补 `gate_waivers` 声明后重跑本脚本。
 
 ---
 
@@ -206,8 +237,8 @@ MODE: ecas
 ROUND: 1
 ```
 
-reflector 9 维扫整 cluster：
-- 段首单调含全主语词 / voice 漂移 / POV 一致 / 信息密度 / 节奏 / 对话工艺 / 互动质感 / 塑料感 / 锁定事实语义冲突（多跳推理·补机械层与 110M NLI 都够不着的间接矛盾·2026-07-07）
+reflector 10 维扫整 cluster：
+- 段首单调含全主语词 / voice 漂移 / POV 一致 / 信息密度 / 节奏 / 对话工艺 / 互动质感 / 塑料感 / 锁定事实语义冲突（多跳推理·补机械层与 110M NLI 都够不着的间接矛盾·2026-07-07）/ 悬置线推进性（subplot_threads 活跃线 + 当前卷未消费 ME 连续多块零触碰·advisory 提示可豁免·2026-07-07）
 
 verdict 处理：
 | verdict | 处理 |
@@ -496,7 +527,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - 🔴 **质检全程 `--mode cluster` / `MODE=ecas`** — 不允许在单章视野下做评估
 
 你唯一能做的是：
-1. Bash 调用 build_manifest / world_evolution_apply_card / audit_hub --mode cluster / gen_chapter_titles / split_cluster_changes / plan_tracker 等脚本
+1. Bash 调用 build_manifest / world_evolution_apply_card / pre_write_gate / audit_hub --mode cluster / gen_chapter_titles / split_cluster_changes / plan_tracker 等脚本
 2. Agent 工具启动专精 agent（含 audit_hub exit 2 时按 pending_agent 清单派单）
 3. 根据返回决定下一步
 4. 向用户汇报

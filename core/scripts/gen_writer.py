@@ -863,6 +863,49 @@ def _build_debt_ledger_section(manifest_path: Path, _preloaded: dict | None = No
     return "\n".join(lines).rstrip()
 
 
+def _build_prev_tail_echo_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
+    """A3 前块结尾回响指令（2026-07-07·PlotPilot recent_chapter_context + 回响模板 advisory 化）。
+
+    数据源 manifest.prev_cluster_tail（build_manifest cluster_002+ 注入·上一 cluster 草稿
+    末尾原文）。存在时注入回响指令 + 结尾原文引文；缺失（cluster_001 / 前块草稿不存在）→ ""
+    （不注入·零回归）。
+
+    引文优先取全量：compressed manifest 会把 >200 字符字符串盲切（manifest_compress
+    MAX_STR_LEN）——A3 核心主张=「章末完整保留提升连贯」，截断即失效，故检测到截断标记时
+    回未压缩 manifest 取全量 tail_text。advisory：回响方式 writer 自由决定，不必逐句衔接
+    （北极星⑤不硬锁）。
+    """
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
+        return ""
+    pt = m.get('prev_cluster_tail')
+    if not isinstance(pt, dict):
+        return ""
+    tail = (pt.get('tail_text') or '').strip()
+    if not tail:
+        return ""
+    if '...(+' in tail or 'surprisal精选' in tail:
+        try:
+            full = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
+            full_tail = ((full.get('prev_cluster_tail') or {}).get('tail_text') or '').strip()
+            if full_tail:
+                tail = full_tail
+        except (OSError, json.JSONDecodeError):
+            pass
+    src = pt.get('source_cluster') or '上一故事块'
+    return "\n".join([
+        "## 🔗 上一故事块结尾回响（advisory · 开篇衔接）",
+        "",
+        f"上一故事块结尾原文见 manifest.prev_cluster_tail（{src}·引文如下）——"
+        "**本块开篇应对其悬念钩子/情感余韵/场景状态有所回响**"
+        "（自由决定回响方式：直接接续 / 时间跳跃后呼应 / 场景残留物 / 情绪延续……"
+        "不必逐句衔接·不硬锁写法）。",
+        "",
+        f"【{src} 结尾原文】",
+        tail,
+    ])
+
+
 def _build_decision_principles_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """阶段2：从 manifest.author_decision_principles 拼作者思维/人物刻画骨段。
 
@@ -1199,6 +1242,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int) -> tuple:
     rolling_anchor_section = _build_rolling_anchor_section(manifest_path, _manifest_dict)
     # R7 Batch-D（2026-06-20）：D7 叙事债务状态卡（advisory · 北极星⑤不硬锁）
     debt_ledger_section = _build_debt_ledger_section(manifest_path, _manifest_dict)
+    # A3 前块结尾回响（2026-07-07·PlotPilot 移植）：manifest 有 prev_cluster_tail 才非空（advisory）
+    prev_tail_echo_section = _build_prev_tail_echo_section(manifest_path, _manifest_dict)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
@@ -1666,6 +1711,8 @@ cluster_brief 完整内容：
     rolling_anchor_block = (rolling_anchor_section + "\n\n") if rolling_anchor_section else ""
     # R7 Batch-D：D7 叙事债务状态卡 block（advisory · 空则零回归）
     debt_ledger_block = (debt_ledger_section + "\n\n") if debt_ledger_section else ""
+    # A3 前块结尾回响 block（cluster_001 / 无前块草稿 → 空 → 不注入 · 零回归）
+    prev_tail_echo_block = (prev_tail_echo_section + "\n\n") if prev_tail_echo_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
     primacy_section = _build_hard_constraint_primacy_block(
@@ -1696,7 +1743,7 @@ cluster_brief 完整内容：
         #   prev_ch → seed → 风格 skill → 量化指纹 → 硬约束 primacy → 生成点。
         prev_then_anchor = f"""{prev_ch_section}
 
-{seed_block}{style_skill_section}
+{prev_tail_echo_block}{seed_block}{style_skill_section}
 
 {style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{appraisal_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{primacy_block}"""
         user = f"""{task_intro}
@@ -1760,7 +1807,7 @@ cluster_brief 完整内容：
 
 {prev_ch_section}
 
-{primacy_block}---
+{prev_tail_echo_block}{primacy_block}---
 
 # 现在请写正文"""
 

@@ -101,6 +101,16 @@ def apply_characters(db: Path, chars: list, summary: dict, dry: bool):
             card = {"id": cid, "name": name, "role": ch.get("role", ""),
                     "status": ch.get("status", "alive"),
                     "first_appearance_ch": ch.get("first_ch"), "state_log": _sl}
+            # 🔴 2026-07-07 A7 辨识锚点分层+负面事实清单：仅新建卡透传（archivist 正文有据才提炼·
+            # 老卡绝不改——冲突只走 archive.warnings 报告·schema 见 subsystem_skeletons._recognition_schema）。
+            _ra = [a for a in (ch.get("recognition_anchors") or [])
+                   if isinstance(a, dict) and str(a.get("anchor") or "").strip()]
+            if _ra:
+                card["recognition_anchors"] = _ra
+            _nf = [str(f).strip() for f in (ch.get("negative_facts") or [])
+                   if isinstance(f, str) and str(f).strip()]
+            if _nf:
+                card["negative_facts"] = _nf
             pc["characters"].append(card)
             by_id[cid] = card
             by_name[name] = cid

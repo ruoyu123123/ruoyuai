@@ -135,7 +135,7 @@
   "skeletons": {
     "人物卡": {
       "schema_version": "v27",
-      "_doc": "角色卡 · build_manifest 按 scene_storyboard[].characters 加载 · item 必需 id/name/role · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema",
+      "_doc": "角色卡 · build_manifest 按 scene_storyboard[].characters 加载 · item 必需 id/name/role · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema · 🔴 2026-07-07 A7 辨识锚点分层+负面事实清单见 _recognition_schema",
       "consumption": {
         "layer": "direct_inject",
         "by": [
@@ -179,6 +179,18 @@
           ]
         },
         "_writer_hint": "结构化写手提示·含『终卷揭密/false_hero/不可早暴露/灰色合作』reveal 标记整条会被剥(防粉红大象)·普通提示原样留"
+      },
+      "_recognition_schema": {
+        "_doc": "🔴 2026-07-07 A7 辨识锚点分层+角色负面事实清单(moyin 6 层身份锚点思想的文字化·出处 research/open_source_writing_systems_round2.md A7)·角色对象两个可选字段(明线·非隐藏·不参与写手信息隔离剥离)·主角/核心角色建议 recognition_anchors ≥2 条(advisory 软建议·fluid 纪律不设 required·绝不硬锁)·producer: novel-archivist(新角色首次建卡时正文有据才提炼·无据留空)+distill-character(增量合并去重追加)·consumer: character_identity_anchor_scanner(锚点漂移+negative_facts 违背检测·CHARACTER_IDENTITY_ANCHOR_DRIFT advisory·引号内对话提及豁免)+novel-voice-checker(对话不得让角色展现负面清单否定的能力)",
+        "recognition_anchors": [
+          {
+            "anchor": "辨识锚点·身体标记/习惯动作/标志性道具(如 左脸刀疤/摩挲扳指/黄铜怀表)",
+            "position_or_scene": "精确位置或惯常出现场景(如 左脸颧骨/紧张时/贴身衣袋)"
+          }
+        ],
+        "negative_facts": [
+          "角色事实负面清单·纯字符串列表·该角色绝不应展现的能力/特征反向锚(如 不会武功/不识字/左腿旧伤不能跑)·跨块漂移防线·后续正文违背由 archivist 记 warnings 只报告不改卡(终态契约)"
+        ]
       }
     },
     "世界观": {
