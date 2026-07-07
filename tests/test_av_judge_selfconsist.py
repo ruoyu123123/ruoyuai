@@ -423,8 +423,13 @@ def test_D_uses_env_when_n_none():
 # ════════════════════════════════════════════════════════════════
 
 def test_E_pairwise_uses_self_consistency():
-    """pairwise_drift_count 内部走 N 次重采样聚合（best-of-N 拿稳过方差的走味计数）。"""
+    """pairwise_drift_count 内部走 N 次重采样聚合（best-of-N 拿稳过方差的走味计数）。
+
+    本测锚定**自一致性重采样管线**本身，故设 AV_JUDGE_ORDER_SWAP=0 取单跑腿
+    （S7 换序双跑协议默认 on 会 2× 调用 · 双跑面归 test_av_judge_order_swap.py 专测）。
+    """
     g = _reload(None)  # 默认 3 次
+    os.environ["AV_JUDGE_ORDER_SWAP"] = "0"
     try:
         # 3 次里 2 次判 词汇 走味 → 聚合判走味
         replies = [_reply({"词汇选择": av.DRIFT_VERDICT}),
@@ -443,20 +448,27 @@ def test_E_pairwise_uses_self_consistency():
         # 方差透明字段透出给调用方
         assert out["n_valid_samples"] == 3
         assert 0.0 < out["mean_agreement"] <= 1.0
+        # S7 留痕：单跑腿标 single_run
+        assert out["order_consistency"] == "single_run"
     finally:
+        os.environ.pop("AV_JUDGE_ORDER_SWAP", None)
         _reload(None)
 
 
 def test_E_pairwise_all_fail_degrades():
-    """全失败 → drift_count=None + error（gen_writer 据此退化到纯 SFS 排序 · 不阻断）。"""
+    """全失败 → drift_count=None + error（gen_writer 据此退化到纯 SFS 排序 · 不阻断）。
+
+    S7 双跑默认 on 下：正向整跑（N=3）全失败即短路——反向不再烧调用，3 个 boom 恰好耗尽。
+    """
     boom = av.GenModelExhaustedError([("p", "x")])
-    mock, _ = _mock_replies([boom, boom, boom])
+    mock, state = _mock_replies([boom, boom, boom])
     orig = av.call_gen_model
     av.call_gen_model = mock
     try:
         out = av.pairwise_drift_count(_Loader([_P()]), "A", "B")
     finally:
         av.call_gen_model = orig
+    assert state["i"] == 3  # 正向失败短路 · 反向 0 调用
     assert out["drift_count"] is None
     assert out["error"]
 

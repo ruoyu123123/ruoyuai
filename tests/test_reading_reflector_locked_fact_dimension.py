@@ -64,3 +64,22 @@ def test_scanner_capability_boundary_names_reflector_as_multihop_owner():
     防止未来读到「110M 恒漏多跳」却找不到承接方，或误以为描述类通路全覆盖。"""
     assert "novel-reading-reflector" in _read(_SCANNER)
     assert "reading-reflector" in _read(_REGISTRY)
+
+
+def test_reflector_dimension_9_surprisal_priority_hint_is_advisory():
+    """S4 高熵段优先深查提示（2026-07-07 二轮移植·ConStory arXiv:2603.05890）合约锁：
+      · 写明确切报告文件（cluster_<key>_audit.json 的 surprisal_scanner issue /
+        _临时/probe/hotspot_<cluster_id>.json 熵探针）——不许含糊「某报告」
+      · 无报告（surprisal 默认 off）→ 全量核查如常
+      · 表述必须是 advisory 排查顺序提示，不改「9 维全量检查」硬性要求。"""
+    src = _read(_REFLECTOR_MD)
+    assert "高熵段优先深查" in src
+    assert "arXiv:2603.05890" in src
+    # 确切文件名（摸底实证：audit_hub 写 cluster_<key>_audit.json·熵探针写 hotspot_*.json）
+    assert "cluster_<key>_audit.json" in src
+    assert "surprisal_scanner" in src
+    assert "hotspot_<cluster_id>.json" in src
+    assert "entropy_hotspot_consistency_probe" in src
+    # 诚实降级口径 + advisory 边界（不动硬性要求）
+    assert "全量核查如常" in src
+    assert "不改变「9 维全量检查」" in src

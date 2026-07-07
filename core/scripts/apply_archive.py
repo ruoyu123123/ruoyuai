@@ -13,6 +13,12 @@
 出场角色——archive 缺 characters = archivist 失败 = 错误，**exit 非0 让 plan 硬停**（不再
 "空 archive → exit 1 当 no-op"静默降级）。幂等去重保留（re-apply 全已存在→exit 0 成功·非降级）。
 
+🔴 2026-07-07 S3 类级契约（PlotPilot reducer 范式·LLM 禁直接闭合终态）：archivist 是抽取 agent，
+只许报 progress 级观察——archive 携带伏笔/戏剧问题的 consumed/resolved/answered/terminal 终态声明
+→ 本入库层剥离 + stderr 显式警告 + WAL 留痕（terminal_state_stripped·不静默接受）。终态唯一通路 =
+save_state._apply_foreshadower_payoffs / cmd_apply_dramatic_questions（写入层校验后落账）。
+契约单一实现见 save_state.strip_terminal_state_payload / record_terminal_contract（不另立口径）。
+
 用法:
     python apply_archive.py <项目路径> --cluster <key>
         [--archive <archive.json 路径，默认 _数据库/.wal/cluster_<key>_archive.json>]
@@ -27,6 +33,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from atomic_json import atomic_write_text  # noqa: E402
+# 🔴 2026-07-07 S3 类级契约：终态剥离/审计的单一实现（save_state 为权威·此处只消费不复刻）
+from save_state import record_terminal_contract, strip_terminal_state_payload  # noqa: E402
 
 try:
     import cluster_lookup
@@ -657,7 +665,21 @@ def main(argv=None):
         sys.stderr.flush()
         return 2
 
-    summary = {"cluster_id": cid}
+    # 🔴 2026-07-07 S3 类级契约：抽取载荷禁携终态（角色 alive/dead、secrets hidden/revealed
+    # 不在剥离集·不受影响·详见 save_state.strip_terminal_state_payload docstring）。
+    ts_stripped, ts_details = strip_terminal_state_payload(archive)
+    if ts_stripped:
+        sys.stderr.write(
+            f"[apply_archive] WARNING: {cid} archive 携带 {ts_stripped} 处伏笔/戏剧问题终态声明"
+            f"（consumed/resolved/answered/terminal）——入库层已剥离"
+            f"（terminal_state_stripped={ts_stripped}·抽取 agent 只许报 progress 级观察·"
+            f"终态唯一通路=save_state payoff/DQ 校验落账）\n")
+        sys.stderr.flush()
+        if not args.dry_run:
+            record_terminal_contract(db, cid, "archive_strip",
+                                     {"terminal_state_stripped": ts_stripped, "details": ts_details})
+
+    summary = {"cluster_id": cid, "terminal_state_stripped": ts_stripped}
     try:
         apply_characters(db, archive.get("characters", []), summary, args.dry_run)
         apply_items(db, archive.get("items", []), summary, args.dry_run)

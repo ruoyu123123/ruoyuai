@@ -536,3 +536,127 @@ def test_G_save_output_default_single_draft_trace():
             (root / "章节" / "cluster_008_draft" / "cluster_008_changes.json").read_text(encoding="utf-8"))
     _reload_gw(None)
     assert changes["self_eval"]["ecas_metadata"]["best_of_n"]["best_of_n"] == 1
+
+
+# ════════════════════════════════════════════════════════════════
+# [H] S9 非对称长度遥测分（LongWriter evaluation/eval_length.py 公式 ·
+#     research/open_source_writing_systems_round2.md S9 · 2026-07-07）
+# 🔴 落点纪律：只做遥测（selection_trace + changes 遥测字段供 learning_loop/BPR
+#     当 reward 特征）——绝不参与 select_best_draft 择稿（纯 freestyle 契约·北极星⑤）。
+# ════════════════════════════════════════════════════════════════
+
+_BAND = (12000, 25000)
+
+
+def _clear_band_env():
+    os.environ.pop("CLUSTER_LENGTH_BAND_OVERRIDE", None)
+
+
+def test_H_in_band_scores_100():
+    """带内（含双边界）= 100。"""
+    for y in (12000, 18000, 25000):
+        assert gw.length_telemetry_score(y, _BAND) == 100.0, y
+
+
+def test_H_under_band_steep_slope():
+    """偏短罚陡（斜率 /2）：8000 → min/y-1=0.5 → 75；6000 → 1.0 → 50。"""
+    assert gw.length_telemetry_score(8000, _BAND) == 75.0
+    assert gw.length_telemetry_score(6000, _BAND) == 50.0
+
+
+def test_H_over_band_gentle_slope():
+    """超长罚缓（斜率 /3）：50000 → y/max-1=1.0 → 66.67。"""
+    assert gw.length_telemetry_score(50000, _BAND) == 66.67
+
+
+def test_H_asymmetry_under_penalized_harder():
+    """同等相对偏差偏短罚更狠（LongWriter 非对称 · 治 gemini 偏短顽疾的方向性）。"""
+    under = gw.length_telemetry_score(8000, _BAND)    # min/y-1=0.5 → 75
+    over = gw.length_telemetry_score(37500, _BAND)    # y/max-1=0.5 → 83.33
+    assert under == 75.0 and over == 83.33
+    assert under < over
+
+
+def test_H_extremes_clamp_zero():
+    """极端偏差归零 + 空稿守卫（max(0, ·) 钳位 · 不出负分）。"""
+    assert gw.length_telemetry_score(4000, _BAND) == 0.0     # min/y-1=2 → 恰好归零
+    assert gw.length_telemetry_score(1000, _BAND) == 0.0     # 更短仍 0
+    assert gw.length_telemetry_score(100000, _BAND) == 0.0   # y/max-1=3 → 恰好归零
+    assert gw.length_telemetry_score(0, _BAND) == 0.0        # 空稿（除零守卫）
+    assert gw.length_telemetry_score(-5, _BAND) == 0.0
+
+
+def test_H_band_aligned_with_scanner():
+    """带宽与 cluster_length_band_scanner 同源同口径：默认带一致 + env 覆盖一致。"""
+    import cluster_length_band_scanner as clbs
+    _clear_band_env()
+    try:
+        assert gw.length_telemetry_band() == clbs.DEFAULT_BAND == (12000, 25000)
+        os.environ["CLUSTER_LENGTH_BAND_OVERRIDE"] = "8000,20000"
+        assert gw.length_telemetry_band() == (8000, 20000)
+        assert gw.length_telemetry_score(9000) == 100.0    # 覆盖带内
+        assert gw.length_telemetry_score(25000) < 100.0    # 覆盖带外偏长
+    finally:
+        _clear_band_env()
+
+
+def test_H_trace_contains_length_telemetry():
+    """pipeline selection_trace：每候选带 length_telemetry_score + 顶层带宽（遥测入 trace）。"""
+    g = _reload_gw(None)
+    _clear_band_env()
+    proj = _ROOT / "tests" / "__nonexistent_proj_lt__"
+    loader = _Loader([_P()])
+    restore, _ = _patch_call_gen_model(g, ["稿0。", "稿1。"])
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: ""
+    try:
+        _reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        restore()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert trace["length_telemetry_band"] == [12000, 25000]
+    assert len(trace["candidates"]) == 2
+    for c in trace["candidates"]:
+        assert "length_telemetry_score" in c
+        assert c["length_telemetry_score"] == 0.0  # 「稿N。」2 CJK 极短 → 归零（真遥测非占位）
+
+
+def test_H_never_participates_in_selection():
+    """🔴 落点纪律：长度遥测分绝不参与择稿——完美长度分翻不了 composite 排序，
+    无信号时也不当 tiebreaker（select_best_draft 行为零变化 · 北极星⑤）。"""
+    # ① composite 更高者胜出，即使其长度分为 0
+    scored = [_scored(0, sfs=80.0, av_drift=0, body_cjk=4000),     # composite 80 · 长度分 0
+              _scored(1, sfs=60.0, av_drift=0, body_cjk=18000)]   # composite 60 · 长度分 100
+    for s in scored:
+        s["length_telemetry_score"] = gw.length_telemetry_score(s["body_cjk"], _BAND)
+    best, _reason = gw.select_best_draft(scored)
+    assert best == 0, "composite 排序不受长度遥测影响"
+    # ② 无打分信号 → 仍退回第一稿（长度分不当 tiebreaker）
+    scored2 = [_scored(0, sfs=None, av_drift=None, body_cjk=4000),
+               _scored(1, sfs=None, av_drift=None, body_cjk=18000)]
+    for s in scored2:
+        s["length_telemetry_score"] = gw.length_telemetry_score(s["body_cjk"], _BAND)
+    best2, reason2 = gw.select_best_draft(scored2)
+    assert best2 == 0, (best2, reason2)
+    # ③ 源码锁：select_best_draft 函数体不引用 length_telemetry（择稿逻辑物理隔离）
+    import inspect
+    assert "length_telemetry" not in inspect.getsource(gw.select_best_draft)
+
+
+def test_H_save_output_records_length_telemetry():
+    """save_output 把 length_telemetry 写进 changes.ecas_metadata（供 learning_loop/BPR 的
+    reward 特征 · 透明可审 · 北极星⑤）。"""
+    import tempfile
+    g = _reload_gw(None)
+    _clear_band_env()
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        g.save_output(root, 9, "这是一段正文。", {}, 1, _P())
+        changes = json.loads(
+            (root / "章节" / "cluster_009_draft" / "cluster_009_changes.json").read_text(encoding="utf-8"))
+    _reload_gw(None)
+    lt = changes["self_eval"]["ecas_metadata"]["length_telemetry"]
+    assert lt["band"] == [12000, 25000]
+    assert lt["score"] == 0.0  # 6 CJK 极短 → 归零（真实带外遥测非占位值）
+    assert lt["formula"] == "longwriter_asymmetric(under/2, over/3)"

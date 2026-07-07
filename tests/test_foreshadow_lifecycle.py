@@ -12,6 +12,11 @@
   5. payoff 必须引用 open 项：foreshadowing_handoff_scanner 对 changes 声明的 payoff 指向非 open
      条目产 FORESHADOWING_PAYOFF_TARGET_NOT_OPEN（advisory·绝不 hard_gate）。
   6. secrets[] 的 hidden/revealed 语义（明暗线隔离）不受本枚举影响。
+  7. 🔴 2026-07-07 S3 类级契约（PlotPilot reducer 范式）：终态唯一通路 =
+     save_state._apply_foreshadower_payoffs 写入层硬校验——terminal 转移须目标 status ∈
+     {open, suspended} 且携正文证据（evidence/span/reason 非空），不合格逐条拒绝进 WAL；
+     suspended 被 terminal 回收仍为警示后照常落账（本文件第 5 节钉死）。
+     专项测试见 tests/test_terminal_state_contract.py。
 
 纯确定性（0 gen-model 调用）。
 """
@@ -288,7 +293,9 @@ def test_suspended_terminal_payoff_transitions_to_consumed():
         (db / ".judge_reports" / "cluster_001_foreshadower.json").write_text(json.dumps({
             "judge_id": "foreshadower", "cluster_id": "cluster_001",
             "specific_findings": {"payoff_scores": [
-                {"fs_id": "fs_s", "score": 5, "terminal": True, "verdict": "paid_terminal"}]},
+                {"fs_id": "fs_s", "score": 5, "terminal": True, "verdict": "paid_terminal",
+                 # S3 契约：终态转移须携正文证据（reason=foreshadower schema 的正文凭证字段）
+                 "reason": "尸检报告正面点破旧伤来源·核心承诺兑现"}]},
         }, ensure_ascii=False), encoding="utf-8")
         ss._apply_foreshadower_payoffs(proj, "cluster_001")
         p = _read_fs(db)["promises"][0]

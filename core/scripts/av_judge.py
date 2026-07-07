@@ -616,7 +616,8 @@ def aggregate_verdicts(samples: list[dict]) -> dict:
 def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_text: str,
                            sample_limit: int = 3000, n_samples: int | None = None,
                            tag: str = "av_judge", swap_on: bool | None = None,
-                           include_intent_dim: bool = False) -> dict:
+                           include_intent_dim: bool = False,
+                           force_swap: bool | None = None) -> dict:
     """同 judge model 跑 N 次重采样（temperature 微抖 + 半数 position-swap）→ 多数票聚合（Rating Roulette）。
 
     这是 av_judge 的**自一致性核心**：稳住单次 LLM-judge 的方差。N=1 时退化为单次单采样
@@ -632,6 +633,12 @@ def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_t
     include_intent_dim（intent_recovery · experiment · 默认 False）：透传给 build_av_judge_prompt
       追加「作者思维」第 5 维（仅 advisory 文本 · 不进 parse 聚合 · 真判决交 mstyle 余弦）。
 
+    force_swap（S7 换序双跑协议 · 2026-07-07 · 默认 None=零回归）：非 None 时**整跑锁定一个呈现方向**
+      （False=全正向 / True=全反向），覆盖 swap_on 半 swap 分配——供 pairwise_drift_count 的换序双跑
+      一致性协议分别跑「正向整跑」和「反向整跑」再比对结论。None（默认）走既有 _swap_assignment
+      半 swap 逻辑，行为与改造前逐字节一致。判定 prompt 本身零改动（复用 build_av_judge_prompt
+      既有 swap 参数 · 身份标签不变只换呈现顺序）。
+
     实现（薄复用 · 北极星⑥）：
       · build_av_judge_prompt 按 swap 方向构（swap-off / swap-on 各构一次 · 缓存复用 · 省 token）。
       · 复用 call_gen_model（签名不变 → 既有 mock 兼容）；temperature 抖动通过临时改写候选
@@ -643,8 +650,13 @@ def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_t
     """
     n = n_samples if n_samples is not None else _n_samples()
     n = max(1, n)
-    swap_on = _position_swap_on() if swap_on is None else swap_on
-    swaps = _swap_assignment(n, swap_on)
+    if force_swap is None:
+        swap_on = _position_swap_on() if swap_on is None else swap_on
+        swaps = _swap_assignment(n, swap_on)
+    else:
+        # S7 换序双跑：整跑锁定一个呈现方向（正向跑全 False / 反向跑全 True）。
+        # 不与半 swap 分配混用——双跑本身就是位置对称采样的更强形态（跑级对称 > 样本级对称）。
+        swaps = [bool(force_swap)] * n
 
     # prompt 按 swap 方向构（最多两种 · 缓存复用省 token）
     _prompt_cache: dict[bool, str] = {}
@@ -777,15 +789,68 @@ def _read_text(p: Path) -> str:
 # best-of-N 复用接口（薄 · gen_writer 配对重排择优用 · 不另起调用栈 · 北极星⑥）
 # ════════════════════════════════════════════════════════════════
 
+# ── S7 换序双跑一致性协议（LongJudgeBench arXiv:2606.01629 · 2026-07-07）─────────────
+# 实证：长文本配对评判的位置偏差严重——同一配对换序重判，不一致率可高达 78.7%。单向单判的
+#   配对结论里混着大量「换个呈现顺序就翻转」的假信号。治法 = 换序双跑一致性协议：
+#   · 双跑：同一配对跑两遍——正向整跑（作者真迹在前）+ 反向整跑（仿写在前 · 复用
+#     build_av_judge_prompt 既有 swap 参数 · 身份标签不变只换呈现顺序 · **判定 prompt 零改动**），
+#     各自走完整 self_consistency_judge N 采样多数票聚合。
+#   · 一致才采纳：两跑 drift_dims 集合完全一致 → 采纳（取正向跑结果 · 两跑同结论无折中之说）；
+#     不一致 → **弃票 = 无信号**（drift_count=None · 绝不折中平均/并集/交集造假信号污染飞轮），
+#     消费方（gen_writer.score_candidate）对 av_drift_count=None 走既有「缺 AV 信号」降级路径。
+#   · 留痕：order_consistency ∈ consistent|inconsistent|single_run + order_runs 两跑明细 +
+#     order_swap_stats 进程内不一致率累计（进 trace 供飞轮观察 judge 可靠性）。
+#   · env AV_JUDGE_ORDER_SWAP 默认 **on**（协议级可靠性加固该默认开 · 双跑=2× judge 调用 ·
+#     不抠 token 质量优先）；0/off/false/no → 单跑，判定行为与旧实现逐字节一致
+#     （调试/对照用 · 仅多一个 order_consistency="single_run" 留痕字段）。
+#   ⚠️ 仍 advisory：协议只提升配对信号可靠性，不改判定逻辑、不产 hard_gate、不否决任何稿。
+ORDER_CONSISTENT = "consistent"
+ORDER_INCONSISTENT = "inconsistent"
+ORDER_SINGLE_RUN = "single_run"
+
+# 进程内不一致率累计（只计完成双跑的配对 · 出错的配对不计入——未完成判定≠不一致）
+_ORDER_SWAP_STATS = {"pairs_total": 0, "pairs_consistent": 0, "pairs_inconsistent": 0}
+
+
+def _order_swap_on() -> bool:
+    """读 env AV_JUDGE_ORDER_SWAP：默认 **on**（S7 换序双跑 · 协议级可靠性加固该默认开）。
+
+    仅 0 / off / false / no（大小写不敏感）为关 → 单跑保持旧行为（调试/对照用途）；
+    其余（含空 / 未设 / 非法）一律 on。
+    """
+    v = (os.environ.get("AV_JUDGE_ORDER_SWAP") or "").strip().lower()
+    return v not in ("0", "off", "false", "no")
+
+
+def order_swap_stats() -> dict:
+    """进程内换序双跑不一致率统计快照（留痕进 trace · 飞轮观察 judge 可靠性）。
+
+    返回 {pairs_total, pairs_consistent, pairs_inconsistent, inconsistency_rate}。
+    inconsistency_rate = pairs_inconsistent / pairs_total（无完成配对时 None · 不臆造 0）。
+    """
+    total = _ORDER_SWAP_STATS["pairs_total"]
+    return {
+        **_ORDER_SWAP_STATS,
+        "inconsistency_rate": (round(_ORDER_SWAP_STATS["pairs_inconsistent"] / total, 3)
+                               if total else None),
+    }
+
+
+def reset_order_swap_stats() -> None:
+    """清零进程内不一致率统计（测试 / 新批次隔离用）。"""
+    for k in _ORDER_SWAP_STATS:
+        _ORDER_SWAP_STATS[k] = 0
+
+
 def pairwise_drift_count(loader: GenModelLoader, author_text: str, replica_text: str,
                          sample_limit: int = 3000) -> dict:
     """配对判别一段仿写 vs 作者真迹，返回走味维度计数（best-of-N 择优用 · advisory）。
 
     这是 av_judge 给写作端 best-of-N 重排的**薄复用接口**——不走 CLI / 不读写文件，
-    直接拿 loader + 两段文本做一次 4 维配对判别，返回结构化结果给调用方做候选排序。
+    直接拿 loader + 两段文本做 4 维配对判别，返回结构化结果给调用方做候选排序。
 
-    返回 {drift_count: int, drift_dims: [...], dimensions: {...}, parse_ok: bool,
-          error: str|None}。
+    返回 {drift_count: int|None, drift_dims: [...], dimensions: {...}, parse_ok: bool,
+          error: str|None, order_consistency: str|None, ...}。
       · drift_count = 走味维度数（0=四维全命中，最像作者；越大越不像 → best-of-N 越靠后）。
       · 任何 gen-model 失败 → error 非空 + drift_count=None（调用方据此降级到纯 SFS 排序，
         不阻断 · advisory 永不抛错中断写作流水线 · 北极星⑤）。
@@ -795,22 +860,91 @@ def pairwise_drift_count(loader: GenModelLoader, author_text: str, replica_text:
 
     自一致性（2026-05-31）：内部走 self_consistency_judge（AV_JUDGE_N_SAMPLES 默认 3 次重采样 ·
       4 维多数票聚合），稳住单次方差再交 best-of-N 排序。N=1（env 设）退化为单次（零回归）。
+
+    S7 换序双跑一致性协议（2026-07-07 · LongJudgeBench arXiv:2606.01629 · env AV_JUDGE_ORDER_SWAP
+      默认 on）：正向 + 反向各整跑一遍，两跑 drift_dims 一致才采纳（order_consistency=
+      "consistent"）；不一致 = 弃票（drift_count=None + error=None → 走调用方既有「缺 AV 信号」
+      降级路径 · order_consistency="inconsistent" · 绝不折中平均）。AV_JUDGE_ORDER_SWAP=0 →
+      单跑，判定行为与旧实现逐字节一致（order_consistency="single_run" 仅留痕）。
+      order_swap_stats 字段携带进程内不一致率累计（供 trace / 飞轮观察 judge 可靠性）。
     """
-    agg = self_consistency_judge(loader, author_text, replica_text, sample_limit,
-                                 tag="av_judge_bestofn")
-    if agg.get("error"):
+    # ── 单跑（AV_JUDGE_ORDER_SWAP=0 · 调试/对照）：与旧行为逐字节一致，仅加留痕字段 ──
+    if not _order_swap_on():
+        agg = self_consistency_judge(loader, author_text, replica_text, sample_limit,
+                                     tag="av_judge_bestofn")
+        if agg.get("error"):
+            return {"drift_count": None, "drift_dims": [], "dimensions": {},
+                    "parse_ok": False, "error": agg["error"][:200],
+                    "order_consistency": ORDER_SINGLE_RUN}
+        return {
+            "drift_count": len(agg["drift_dims"]),
+            "drift_dims": agg["drift_dims"],
+            "dimensions": agg["dimensions"],
+            "parse_ok": agg["parse_ok"],
+            "error": None,
+            # 方差透明（调用方可据 mean_agreement 判这次排序信号稳不稳）
+            "n_valid_samples": agg.get("n_valid_samples"),
+            "mean_agreement": agg.get("mean_agreement"),
+            "unstable_dims": agg.get("unstable_dims", []),
+            "order_consistency": ORDER_SINGLE_RUN,
+        }
+
+    # ── S7 双跑：正向整跑（作者真迹在前）→ 反向整跑（仿写在前 · 身份标签不变）──
+    fwd = self_consistency_judge(loader, author_text, replica_text, sample_limit,
+                                 tag="av_judge_bestofn_fwd", force_swap=False)
+    if fwd.get("error"):
+        # 正向已无信号 → 短路不烧反向调用（缺任一跑都凑不齐双跑一致 · 出错配对不计入不一致率）
         return {"drift_count": None, "drift_dims": [], "dimensions": {},
-                "parse_ok": False, "error": agg["error"][:200]}
+                "parse_ok": False, "error": fwd["error"][:200],
+                "order_consistency": None,
+                "order_swap_stats": order_swap_stats()}
+    rev = self_consistency_judge(loader, author_text, replica_text, sample_limit,
+                                 tag="av_judge_bestofn_rev", force_swap=True)
+    if rev.get("error"):
+        return {"drift_count": None, "drift_dims": [], "dimensions": {},
+                "parse_ok": False, "error": rev["error"][:200],
+                "order_consistency": None,
+                "order_swap_stats": order_swap_stats()}
+
+    # 一致性判据：两跑走味维度**集合**完全一致（维度级结论 · 比 count 相等更严——
+    # 「数相同但维不同」是巧合不是一致）。
+    consistent = set(fwd["drift_dims"]) == set(rev["drift_dims"])
+    _ORDER_SWAP_STATS["pairs_total"] += 1
+    _ORDER_SWAP_STATS["pairs_consistent" if consistent else "pairs_inconsistent"] += 1
+
+    # 两跑明细留痕（复盘可核 · 不黑箱）
+    order_runs = {
+        "forward": {"drift_dims": fwd["drift_dims"],
+                    "n_valid_samples": fwd.get("n_valid_samples"),
+                    "mean_agreement": fwd.get("mean_agreement")},
+        "reversed": {"drift_dims": rev["drift_dims"],
+                     "n_valid_samples": rev.get("n_valid_samples"),
+                     "mean_agreement": rev.get("mean_agreement")},
+    }
+
+    if not consistent:
+        # 弃票：不一致 = 无信号。绝不折中平均 / 并集 / 交集造假信号污染飞轮——
+        # error=None + drift_count=None → gen_writer.score_candidate 既有降级路径（纯 SFS 排序）。
+        return {"drift_count": None, "drift_dims": [], "dimensions": {},
+                "parse_ok": bool(fwd.get("parse_ok") and rev.get("parse_ok")),
+                "error": None,
+                "order_consistency": ORDER_INCONSISTENT,
+                "order_runs": order_runs,
+                "order_swap_stats": order_swap_stats()}
+
+    # 一致：采纳正向跑结果（两跑同结论 · 正向 = 历史规范朝向 · 维度明细取正向）
     return {
-        "drift_count": len(agg["drift_dims"]),
-        "drift_dims": agg["drift_dims"],
-        "dimensions": agg["dimensions"],
-        "parse_ok": agg["parse_ok"],
+        "drift_count": len(fwd["drift_dims"]),
+        "drift_dims": fwd["drift_dims"],
+        "dimensions": fwd["dimensions"],
+        "parse_ok": fwd["parse_ok"],
         "error": None,
-        # 方差透明（调用方可据 mean_agreement 判这次排序信号稳不稳）
-        "n_valid_samples": agg.get("n_valid_samples"),
-        "mean_agreement": agg.get("mean_agreement"),
-        "unstable_dims": agg.get("unstable_dims", []),
+        "n_valid_samples": fwd.get("n_valid_samples"),
+        "mean_agreement": fwd.get("mean_agreement"),
+        "unstable_dims": fwd.get("unstable_dims", []),
+        "order_consistency": ORDER_CONSISTENT,
+        "order_runs": order_runs,
+        "order_swap_stats": order_swap_stats(),
     }
 
 

@@ -66,6 +66,104 @@ def _require_cluster_id(cluster_key) -> str:
     return cid
 
 
+# ═══════ 🔴 2026-07-07 S3 类级契约：LLM 抽取类载荷禁直接闭合终态 ═══════
+# 借鉴 PlotPilot domain/evolution/reducer.py:97-108（ValueError("LLM cannot directly close
+# narrative debts")·research/open_source_writing_systems_round2.md S3）。类级不变量：
+#   · 伏笔/戏剧问题/债务类的「终态」（consumed/resolved/answered）只能由确定性入库层校验后写入。
+#   · 抽取类载荷（writer changes.json / archivist archive.json）只许报 progress 级观察——携带
+#     终态声明 → 入库层剥离 + stderr 显式警告 + WAL 留痕（terminal_state_stripped·不静默接受）。
+#   · 终态唯一通路 = _apply_foreshadower_payoffs（伏笔 consumed）+ cmd_apply_dramatic_questions
+#     （戏剧问题 answered），写入前校验目标状态 + 正文证据，不合格逐条拒绝（不整体崩），
+#     拒绝明细进 WAL（record_terminal_contract）。
+# 纪律：全部是写入层硬校验 + WAL 审计，不新增 hard_gate code（19 码三方一致不动）；
+# suspended 被 terminal 回收仍为 logger 警示后照常落账（2026-07-06 三态迁移决定不变）。
+TERMINAL_STATE_VALUES = frozenset({"consumed", "resolved", "answered"})
+# 终态伴生字段（终态声明被剥离时一并剥·防残留半截终态）
+_TERMINAL_COMPANION_KEYS = ("consumed_at_ch", "resolved_at_ch", "answered_at_ch",
+                            "_consumed_by", "_resolved_by")
+
+
+def strip_terminal_state_payload(payload, _path="$"):
+    """递归剥离抽取类载荷（writer changes / archivist archive.json）中的终态声明。
+
+    就地修改 payload，返回 (stripped_count, details)。只降级为 progress 级观察，不丢整条目：
+      · dict["status"] ∈ TERMINAL_STATE_VALUES → 删 status（+伴生字段）
+      · dict["resolved"] is True → 删 resolved（+伴生字段）
+      · dict["terminal"] is True → 删 terminal
+      · dict["kind"] / dict["type"] == "terminal" → 删该键（writer foreshadowing_paid 旧口径）
+      · dict["answered"] 为非空 list（戏剧问题终态声明）→ 置 []
+    不受影响（值不在剥离集）：角色 status(alive/dead)、ME status(completed)、
+    secrets(hidden/revealed·明暗线隔离)、地点 status。
+    """
+    stripped = 0
+    details = []
+    if isinstance(payload, dict):
+        st = payload.get("status")
+        if isinstance(st, str) and st.strip().lower() in TERMINAL_STATE_VALUES:
+            payload.pop("status", None)
+            for k in _TERMINAL_COMPANION_KEYS:
+                payload.pop(k, None)
+            stripped += 1
+            details.append({"path": _path, "field": "status", "value": st})
+        if payload.get("resolved") is True:
+            payload.pop("resolved", None)
+            for k in _TERMINAL_COMPANION_KEYS:
+                payload.pop(k, None)
+            stripped += 1
+            details.append({"path": _path, "field": "resolved", "value": True})
+        if payload.get("terminal") is True:
+            payload.pop("terminal", None)
+            stripped += 1
+            details.append({"path": _path, "field": "terminal", "value": True})
+        for tk in ("kind", "type"):
+            if payload.get(tk) == "terminal":
+                payload.pop(tk, None)
+                stripped += 1
+                details.append({"path": _path, "field": tk, "value": "terminal"})
+        ans = payload.get("answered")
+        if isinstance(ans, list) and ans:
+            payload["answered"] = []
+            stripped += len(ans)
+            details.append({"path": _path, "field": "answered",
+                            "value": [a.get("qid") if isinstance(a, dict) else a for a in ans]})
+        for k, v in list(payload.items()):
+            s, d = strip_terminal_state_payload(v, f"{_path}.{k}")
+            stripped += s
+            details.extend(d)
+    elif isinstance(payload, list):
+        for i, v in enumerate(payload):
+            s, d = strip_terminal_state_payload(v, f"{_path}[{i}]")
+            stripped += s
+            details.extend(d)
+    return stripped, details
+
+
+def record_terminal_contract(db, cid, section, payload, subkey=None):
+    """S3 契约 WAL 审计留痕：.wal/<cid>_terminal_contract.json 按 section 记最新一次运行。
+
+    sections: archive_strip（apply_archive 剥离计数）/ writer_changes_strip（按章 subkey）/
+    foreshadower_payoff（终态转移 + 拒绝明细）/ dramatic_questions（answered 拒绝明细）。
+    覆盖式写（同 section 反映最新运行·幂等 re-apply 不累积陈旧拒绝）。
+    """
+    p = Path(db) / ".wal" / f"{cid}_terminal_contract.json"
+    doc = load_json(p, None)
+    if not isinstance(doc, dict):
+        doc = {"schema_version": 1, "cluster_id": cid, "sections": {}}
+    sections = doc.setdefault("sections", {})
+    if not isinstance(sections, dict):
+        sections = doc["sections"] = {}
+    payload = dict(payload)
+    payload["at"] = datetime.now().isoformat(timespec="seconds")
+    if subkey is not None:
+        sec = sections.get(section)
+        if not isinstance(sec, dict):
+            sec = sections[section] = {}
+        sec[str(subkey)] = payload
+    else:
+        sections[section] = payload
+    save_json(p, doc)
+
+
 # 🔴 2026-06-28 审计清理B类：伏笔 payoff terminal/progressive 分流助手已删除
 # （原 _PAYOFF_*_WORDS / _word_surface_terminal / _classify_payoff_terminal /
 # _load_foreshadower_maps）。它们只服务于 apply_changes 里「writer 自报 foreshadowing_planted/
@@ -250,6 +348,21 @@ def apply_changes(root: Path, ch: int) -> int:
         logger.info(f"[APPLY] 无 parsed CHANGES")
         return 2
 
+    # 🔴 2026-07-07 S3 类级契约：writer 抽取类载荷禁携终态（详见 strip_terminal_state_payload）。
+    # writer 只许报 progress 级观察——changes 携带伏笔/戏剧问题 consumed/resolved/answered/terminal
+    # 终态声明 → 入库层剥离 + stderr 显式警告 + WAL 留痕（不静默接受）。
+    ts_stripped, ts_details = strip_terminal_state_payload(changes)
+    if ts_stripped:
+        sys.stderr.write(
+            f"[terminal-contract] WARNING: 第{ch}章 writer changes 携带 {ts_stripped} 处终态声明"
+            f"（consumed/resolved/answered/terminal）——入库层已剥离降为 progress 级观察·"
+            f"终态唯一通路=_apply_foreshadower_payoffs/cmd_apply_dramatic_questions\n")
+        sys.stderr.flush()
+        _cid_ch, _ = _resolve_cluster(root, ch)
+        record_terminal_contract(db, _cid_ch, "writer_changes_strip",
+                                 {"terminal_state_stripped": ts_stripped, "details": ts_details},
+                                 subkey=f"ch{ch}")
+
     # v16: 生成并保存声明式Patch
     patches = _generate_patch(changes, ch)
     patch_path = db / ".wal" / f"第{ch}章_patch.json"
@@ -257,7 +370,9 @@ def apply_changes(root: Path, ch: int) -> int:
                            "generated_at": datetime.now().isoformat(timespec="seconds")})
     logger.info(f"[PATCH] 生成 {len(patches)} 条声明式补丁 → {patch_path.name}")
 
-    summary = {"applied": [], "warnings": [], "patch_file": str(patch_path.name)}
+    summary = {"applied": [], "warnings": [], "patch_file": str(patch_path.name),
+               # 🔴 S3 契约审计：本章 writer 载荷被剥离的终态声明计数（0=干净）
+               "terminal_state_stripped": ts_stripped}
 
     # 🔴 2026-06-28 审计清理B类：删除 writer 自报 factual → 伏笔表 / 人物卡 的回库路径。
     #   · 伏笔表（promises/secrets/deadlines/pledges 各 status 生命周期）：原读 writer 的
@@ -708,6 +823,16 @@ def _apply_foreshadower_payoffs(root, cluster_key):
     回收动作指向非 open 条目（suspended）→ logger 警示（可能是状态漂移·advisory·照常落账，
     scanner 侧对偶检查见 foreshadowing_handoff_scanner FORESHADOWING_PAYOFF_TARGET_NOT_OPEN）。
     本桥消费 cluster-save-state required foreshadower 报告；缺报告必须硬失败。
+
+    🔴 2026-07-07 S3 类级契约（本函数 = 伏笔终态唯一通路·写入层硬校验·详见模块头契约段）：
+      ① 终态转移目标必须存在且 status ∈ {open, suspended}——目标缺失（孤儿 payoff）或
+        status 非法（未迁移三态/状态漂移）→ 拒绝该条转移 + stderr 警告（与
+        FORESHADOWING_PAYOFF_TARGET_NOT_OPEN advisory 口径呼应·这里是写入层硬拒）；
+        suspended 仍为警示后照常落账（2026-07-06 决定不变）；已 consumed = 幂等静默跳过（非拒绝）。
+      ② 终态转移必须携正文证据：evidence/span/reason 至少一个非空（reason 即 foreshadower
+        schema 的正文凭证字段）——缺证据 → 拒绝该条 + 警告。
+      拒绝 = 该条不落库但不整体崩（其余条目照常）；拒绝明细进 WAL
+      （.wal/<cid>_terminal_contract.json sections.foreshadower_payoff）。不新增 hard_gate code。
     """
     try:
         db = root / "_数据库"
@@ -733,36 +858,71 @@ def _apply_foreshadower_payoffs(root, cluster_key):
             raise RuntimeError(f"{cid} 未找到 chapter_range")
         last_ch = max(chapters)
         changed = 0
+        terminal_applied = 0
+        progressive_recorded = 0
+        rejections = []
+
+        def _reject(fs_id, code, note):
+            """🔴 S3 契约：拒绝单条终态转移（不落库·不整体崩）+ stderr 显式警告 + WAL 明细。"""
+            rejections.append({"fs_id": fs_id, "code": code, "note": note})
+            sys.stderr.write(f"[terminal-contract] WARNING: {cid} payoff→{fs_id} 拒绝终态转移"
+                             f"（{code}·{note}·该条不落库·其余条目照常）\n")
+            sys.stderr.flush()
+
         for it in scores:
             if not isinstance(it, dict):
                 continue
-            p = by_id.get(it.get("fs_id"))
+            fs_id = it.get("fs_id")
+            p = by_id.get(fs_id)
             try:
                 score = int(it.get("score", 0))
             except (TypeError, ValueError):
                 score = 0
-            if not p or score <= 0:
-                continue
+            if score <= 0:
+                continue  # 谎报门控：声明 paid 但正文 0 痕迹 → 不落账（现行为不变·先于契约检查）
             verdict = str(it.get("verdict", ""))
             if it.get("terminal") is True or verdict == "paid_terminal":
-                if p.get("status") != "consumed":
-                    if p.get("status") == "suspended":
-                        logger.warning(
-                            f"[foreshadower-payoff] {p.get('id')} 处于 suspended 却被 terminal 回收"
-                            "（回收动作指向非 open 条目·可能是状态漂移·advisory·照常落账）")
-                    p["status"] = "consumed"
-                    p["consumed_at_ch"] = last_ch
-                    p["_consumed_by"] = "foreshadower"
-                    changed += 1
+                # 🔴 2026-07-07 S3 类级契约：终态唯一通路写入层硬校验（见 docstring ①②）
+                if p is None:
+                    _reject(fs_id, "target_missing", "伏笔表不存在该条目（孤儿 payoff）")
+                    continue
+                if p.get("status") == "consumed":
+                    continue  # 幂等：已 consumed 不后移（re-apply 常态·非拒绝）
+                status = p.get("status")
+                if status not in ("open", "suspended"):
+                    _reject(fs_id, "target_not_open",
+                            f"status={status!r} 非 open/suspended（未迁移三态或状态漂移）")
+                    continue
+                evidence = str(it.get("evidence") or it.get("span") or it.get("reason") or "").strip()
+                if not evidence:
+                    _reject(fs_id, "evidence_missing", "缺 evidence/span/reason 正文证据")
+                    continue
+                if status == "suspended":
+                    logger.warning(
+                        f"[foreshadower-payoff] {p.get('id')} 处于 suspended 却被 terminal 回收"
+                        "（回收动作指向非 open 条目·可能是状态漂移·advisory·照常落账）")
+                p["status"] = "consumed"
+                p["consumed_at_ch"] = last_ch
+                p["_consumed_by"] = "foreshadower"
+                changed += 1
+                terminal_applied += 1
             elif "progressive" in verdict or it.get("terminal") is False:
+                if p is None:
+                    continue  # progressive 观察指向未注册 id → 注册时点常态·静默跳过（现行为不变）
                 prog = p.setdefault("payoff_progress", [])
                 if cid not in prog:
                     prog.append(cid)
                     changed += 1
+                    progressive_recorded += 1
         if changed:
             save_json(fs_path, fs)
             logger.info(f"[foreshadower-payoff] {cid} 桥接 {changed} 条 payoff → 伏笔表"
                         "（terminal→consumed / progressive→progress）")
+        # 🔴 S3 契约 WAL 审计留痕（每次运行覆盖最新·含空 rejections 便于核对）
+        record_terminal_contract(db, cid, "foreshadower_payoff",
+                                 {"checked": len(scores), "terminal_applied": terminal_applied,
+                                  "progressive_recorded": progressive_recorded,
+                                  "rejections": rejections})
     except Exception as e:
         raise RuntimeError(f"foreshadower payoff 回库失败: {type(e).__name__}: {str(e)[:120]}") from e
 
@@ -906,6 +1066,15 @@ def cmd_apply_dramatic_questions(root, cluster_key):
     foreshadower JudgeReport 与 dramatic_questions 字段是 required 产物。缺报告/缺字段/格式错即 return 2，
     防止 foreshadower 漏产被吞掉。raised/answered 均空表示生产者明确判断本 cluster 无戏剧问题变更，
     幂等通过。账本缺/坏仍从空骨架重建，因为这是本脚本拥有的辅助态文件。
+
+    🔴 2026-07-07 S3 类级契约（answered = 戏剧问题终态转移·写入层硬校验·详见模块头契约段）：
+      ① 已在其他 cluster 闭合的 qid → 拒绝重复终态转移 + stderr 警告（本 cluster 内重复走
+        seen_answered 幂等静默跳过·不算拒绝）。qid 不在任何 raised ≠ 非法——跨 cluster 闭合/
+        账本重建后 raised 可缺失（test_answered_cross_cluster_qid_registered 钉死该口径），
+        只堵可确证的「非 open」。
+      ② answered_at_scene（正文位置证据）必须可解析为 int——缺证据 → 拒绝该条 + 警告。
+      拒绝 = 该条不落库但不整体崩；明细进 WAL（.wal/<cid>_terminal_contract.json
+      sections.dramatic_questions）。不新增 hard_gate code。
     """
     try:
         db = root / "_数据库"
@@ -953,6 +1122,15 @@ def cmd_apply_dramatic_questions(root, cluster_key):
 
         seen_raised = {r.get("qid") for r in e_raised if isinstance(r, dict)}
         seen_answered = {a.get("qid") for a in e_answered if isinstance(a, dict)}
+        # 🔴 S3 契约：其他 cluster 已闭合的 qid 索引（qid → 闭合处 cluster·重复闭合硬拒依据）
+        answered_elsewhere = {}
+        for _ocid, _oent in clusters.items():
+            if _ocid == cid or not isinstance(_oent, dict):
+                continue
+            for _a in _oent.get("answered") or []:
+                if isinstance(_a, dict) and _a.get("qid"):
+                    answered_elsewhere.setdefault(_a["qid"], _ocid)
+        dq_rejections = []
         added_r = added_a = 0
         for r in raised:
             if not isinstance(r, dict):
@@ -984,13 +1162,33 @@ def cmd_apply_dramatic_questions(root, cluster_key):
             qid = a.get("qid")
             if not qid or qid in seen_answered:
                 continue  # 标对应 qid 闭合·幂等去重
+            # 🔴 2026-07-07 S3 类级契约：answered 终态转移写入层硬校验（见 docstring ①②）
+            if qid in answered_elsewhere:
+                dq_rejections.append({"qid": qid, "code": "target_not_open",
+                                      "note": f"已在 {answered_elsewhere[qid]} 闭合·拒绝重复终态转移"})
+                sys.stderr.write(f"[terminal-contract] WARNING: {cid} 戏剧问题 {qid} 已在 "
+                                 f"{answered_elsewhere[qid]} 闭合——拒绝重复 answered（该条不落库·其余照常）\n")
+                sys.stderr.flush()
+                continue
             try:
                 aas = int(a.get("answered_at_scene")) if a.get("answered_at_scene") is not None else None
             except (TypeError, ValueError):
                 aas = None
+            if aas is None:
+                dq_rejections.append({"qid": qid, "code": "evidence_missing",
+                                      "note": "缺 answered_at_scene 正文位置证据"})
+                sys.stderr.write(f"[terminal-contract] WARNING: {cid} 戏剧问题 {qid} answered 缺 "
+                                 f"answered_at_scene 正文证据——拒绝终态转移（该条不落库·其余照常）\n")
+                sys.stderr.flush()
+                continue
             e_answered.append({"qid": qid, "answered_at_scene": aas})
             seen_answered.add(qid)
             added_a += 1
+
+        # 🔴 S3 契约 WAL 审计留痕（每次运行覆盖最新·含空 rejections 便于核对）
+        record_terminal_contract(db, cid, "dramatic_questions",
+                                 {"raised_applied": added_r, "answered_applied": added_a,
+                                  "rejections": dq_rejections})
 
         if added_r or added_a:
             ledger.setdefault("schema_version", 1)

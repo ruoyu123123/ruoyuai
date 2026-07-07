@@ -714,3 +714,83 @@ def test_build_appraisal_section_default_safe_no_directive():
         Path("x.json"), {"appraisal_directive": {"mode": "off"}}) == ""
     assert gw._build_appraisal_section(
         Path("x.json"), {"appraisal_directive": {"mode": "on", "directive": ""}}) == ""
+
+
+# ============ 🔴 2026-07-07 S2 禁令→正向行为协议回归锁 ============
+# 出处 research/open_source_writing_systems_round2.md S2（借鉴 PlotPilot positive_framing_rules）：
+# 否定指令在 Self-Attention 中激活被禁 token——生成端通用兜底段改正向行为协议（每类 1 正 1 反），
+# 禁用词全量枚举只留检测端（validate_style / semantic_slop 负向词表不动）。检测负向 / 生成正向分工。
+# 北极星⑤：作者风格档仍第一权威——协议只是兜底，作者档 signature 惯用词按作者档写。
+
+# 原负向段（C5 枚举 192 + H3 注 57 + primacy 禁用词行 107 = 356 字）× 1.3 = 改写预算上限。
+_S2_ORIGINAL_SEGMENT_CHARS = 356
+_S2_TOKEN_BUDGET = int(_S2_ORIGINAL_SEGMENT_CHARS * 1.3)  # 462
+
+
+def _build_minimal_prompts():
+    """建最小项目跑 build_prompt 取 (system模板部分, user)（确定性 · 种子注入关闭）。
+
+    system = feedback_rules（随开发机 memory 内容浮动）+ 固定模板——断言只锚模板部分，
+    从「你是长篇小说的写作引擎」起切，避免 memory 内容干扰词表断言。
+    """
+    _bak = os.environ.get("SNIPPET_SEED_MODE")
+    os.environ["SNIPPET_SEED_MODE"] = "off"
+    try:
+        with _tf.TemporaryDirectory() as td:
+            root = Path(td)
+            db = root / "_数据库"
+            db.mkdir(parents=True)
+            (db / "进度.json").write_text(json.dumps({"cluster_blueprint": {}}, ensure_ascii=False),
+                                          encoding="utf-8")
+            system, user, _seed = gw.build_prompt(root, 1, 1)
+        tpl = system[system.index("你是长篇小说的写作引擎"):]
+        return tpl, user
+    finally:
+        if _bak is None:
+            os.environ.pop("SNIPPET_SEED_MODE", None)
+        else:
+            os.environ["SNIPPET_SEED_MODE"] = _bak
+
+
+def test_s2_positive_protocol_present():
+    """兜底段=正向行为协议：关键表述在场 + 作者档第一权威让位逻辑保留（北极星⑤）。"""
+    tpl, user = _build_minimal_prompts()
+    assert "工艺词正向行为协议" in tpl, "C5 兜底段应为正向行为协议"
+    assert "情绪落身体与动作" in tpl, "情绪类禁令应转成正向行为指令（情绪走身体和动作）"
+    assert "强情绪降一档" in tpl, "情绪降级档思想应在协议内（暴怒→说话变慢变清楚一类）"
+    assert "神态写整体姿态" in tpl
+    assert "作者签名笔法，按作者档写" in tpl, "作者档第一权威让位逻辑必须保留"
+    assert "复刻作者优先" in tpl
+    # 生成点近邻 primacy 重述同步为正向口径（默认 SKILL_PRIMACY_MODE=active → 落 user prompt）
+    assert "套话防线" in user, "primacy 重述应改为正向口径「套话防线」"
+    assert "工艺词按 C5 正向协议写" in user
+
+
+def test_s2_no_banned_word_enumeration():
+    """大段禁用词枚举已从 writer prompt 移除（每类最多 1 反例·不再全量罗列激活被禁 token）。"""
+    tpl, user = _build_minimal_prompts()
+    full = tpl + "\n" + user
+    assert "默认避免：" not in full, "负向枚举清单引导语不得复活"
+    assert "顿时 / 紧锁" not in full, "12 词工艺禁用词连排枚举不得复活"
+    assert "- **禁用词**" not in full, "primacy 禁用词负向 bullet 不得复活"
+    # 未用作反例的枚举词彻底移除（反例每类最多 1 个：心中一凛/嘴角勾起一抹冷笑/缓缓地说/显然）
+    for w in ("顿时", "紧锁", "沉吟片刻", "微微挑眉", "淡淡"):
+        assert w not in tpl, f"未作反例的原枚举词「{w}」应从 writer 模板移除"
+
+
+def test_s2_token_discipline_within_budget():
+    """🔴 prompt 膨胀纪律：正向协议改写合计 ≤ 原负向段 1.3 倍（356→462 字 · 67k 撑爆翻车史）。"""
+    tpl, user = _build_minimal_prompts()
+    c5_seg = "## C5." + tpl.split("## C5.")[1].split("\n# ")[0].rstrip()
+    h3_note = next(l for l in tpl.splitlines() if l.startswith("（注：工艺/签名词类"))
+    prim_line = next(l for l in user.splitlines() if "套话防线" in l)
+    total = len(c5_seg) + len(h3_note) + len(prim_line)
+    assert total <= _S2_TOKEN_BUDGET, (
+        f"正向协议段合计 {total} 字 > 预算 {_S2_TOKEN_BUDGET}（原段 356 × 1.3）——prompt 膨胀纪律")
+
+
+def test_s2_detection_side_wordlists_untouched():
+    """检测负向 / 生成正向分工：validate_style 检测端工艺词负向词表保持原样（不随生成端移除）。"""
+    vs = (Path(__file__).resolve().parents[1] / "core" / "scripts" / "validate_style.py").read_text(
+        encoding="utf-8")
+    assert "顿时" in vs, "检测端 validate_style 的负向词表必须保留（分工：检测负向/生成正向）"

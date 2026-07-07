@@ -166,6 +166,13 @@ Schema：
 - 北极星⑤纪律：你的判定是**待裁决项非判决**——正文可能是刻意伏笔（假死/冒名/幻象）。若草稿
   上下文已有此类标记（伏笔表 hidden_payoff / 明示的疑点铺垫），降为 low 并在 description 注明
   「疑似刻意设计」，交修复轮的 writer 用豁免理由裁决，不要强令改写。
+- 高熵段优先深查（advisory 排查顺序提示 · ConStory-Checker arXiv:2603.05890 实证一致性错误
+  集中在 token 熵高的文本段）：若 `<PROJECT>/_数据库/.audit/cluster_<key>_audit.json` 存在且
+  含 `surprisal_scanner` 的 issue（details 带段级 `mean_surprisals`），或存在
+  `<PROJECT>/_临时/probe/hotspot_<cluster_id>.json`（entropy_hotspot_consistency_probe 产出的
+  段级 surprisal/熵 hotspot 区间），则先对这些高熵段做锁定事实一致性深查，再覆盖其余部分；
+  两份报告都不存在（surprisal 门控默认 off）→ 全量核查如常。此提示只调整排查**顺序**，
+  不改变「9 维全量检查」和本维度全量核查的硬性要求。
 
 ```text
 任一轮 total_issues > 0:

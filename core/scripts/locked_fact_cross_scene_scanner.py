@@ -60,6 +60,10 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
 
 Env 门控：LOCKED_FACT_DESCRIPTIVE_MODE = off / shadow(默认) / active；
   NLI 后端另受 RUOYU_NN_NLI=1 门控（见 nn_nli_bridge.py·daemon-first 三层降级）。
+  S4 高熵段优先粗筛（2026-07-07·ConStory arXiv:2603.05890「一致性错误集中在高熵段」）：
+  RUOYU_NN_SURPRISAL=1 且 nn_surprisal_bridge 全段命中时，描述类候选配对按所在段
+  GPT-2 surprisal 降序重排后再截断 64 对上限（高熵段优先送 NLI）；surprisal 不可用
+  （默认）→ 文档序逐字节不变。留痕 descriptive.pair_selection。
 
 用法：python locked_fact_cross_scene_scanner.py <project> <cluster_draft_path>
 """
@@ -230,6 +234,15 @@ def extract_ages_near(text: str, keyword: str, window: int = 50) -> list:
 # ══════════════════ 描述类通路（NLI 语义·advisory·2026-07-07）══════════════════
 # 🔴 纪律：本通路 code 永远 advisory（NLI 概率判定 · 北极星⑤只有确定性一致性才 hard）；
 #         NLI 后端不可用 → 诚实 skip（note 说明），绝不用关键词匹配假冒语义判定。
+#
+# S4 高熵段优先粗筛（2026-07-07 二轮移植·ConStory-Checker arXiv:2603.05890 实证
+# 「一致性错误集中在 token 熵高的文本段」）：
+#   · surprisal 可用（nn_surprisal_bridge.enabled()=RUOYU_NN_SURPRISAL=1 + venv/checkpoint 齐备·
+#     桥内部 daemon-first ~0.1s / 回退 subprocess）且候选句所在段**全部**拿到 mean_surprisal
+#     → 候选配对按所在段 surprisal 降序重排后再截断 _MAX_NLI_PAIRS（高熵段优先送 NLI）。
+#   · 任一条件不满足（默认环境即此态）→ 保持既有文档序**逐字节不变**（诚实降级不伪装）。
+#   报告 `descriptive.pair_selection` 留痕："surprisal_ranked" | "document_order"。
+#   零新模型·纯接线：只改「64 对上限内选哪些」的优先级，阈值/上限/判定逻辑零变动。
 
 DESCRIPTIVE_CODE = "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION"
 _NLI_CONTRA_THRESHOLD = 0.80     # contradiction 概率高置信地板（低于此不报·宁漏勿误）
@@ -269,6 +282,75 @@ def _split_sentences(text: str) -> list:
     return out
 
 
+def _surprisal_bridge():
+    """惰性取 nn_surprisal_bridge 模块（同目录·复用不重造）。import 失败 → None（诚实降级）。"""
+    try:
+        import nn_surprisal_bridge
+        return nn_surprisal_bridge
+    except Exception:
+        return None
+
+
+def _line_paragraph_spans(text: str) -> list:
+    """非空行 = 段（网文一行一段惯例·_SENT_SEP 含 \\n 故句子绝不跨行）。
+    返回 [(start, end)] 绝对区间（升序）。"""
+    spans = []
+    pos = 0
+    for line in text.split("\n"):
+        if line.strip():
+            spans.append((pos, pos + len(line)))
+        pos += len(line) + 1
+    return spans
+
+
+def _surprisal_rank_candidates(text: str, candidates: list) -> "tuple[list, bool]":
+    """S4（ConStory arXiv:2603.05890）：候选配对按所在段 GPT-2 surprisal 降序重排
+    （高熵段优先送 NLI），返回 (排序后候选, True)。
+
+    🔴 诚实降级铁律：以下任一情况 → 返回 (原候选列表**原对象·零改动**, False)，
+    调用方保持文档序逐字节不变（不伪装成 surprisal_ranked）：
+      · nn_surprisal_bridge import 失败 / enabled()=False（RUOYU_NN_SURPRISAL 默认 off）
+      · 候选定位不到所在段 / 任一所在段未拿到 mean_surprisal（对齐
+        entropy_hotspot_consistency_probe「任一 block 未命中 → 整体回退」纪律）
+    排序稳定（同段/同分保持文档序）。只重排不增删——上限/阈值零变动。"""
+    if not candidates:
+        return candidates, False
+    bridge = _surprisal_bridge()
+    try:
+        if bridge is None or not bridge.enabled():
+            return candidates, False
+    except Exception:
+        return candidates, False
+    spans = _line_paragraph_spans(text)
+    if not spans:
+        return candidates, False
+
+    def _span_idx(pos: int):
+        for i, (s, e) in enumerate(spans):
+            if s <= pos < e:
+                return i
+        return None
+
+    idxs = [_span_idx(c["position"]) for c in candidates]
+    if any(i is None for i in idxs):
+        return candidates, False
+    needed = sorted({i for i in idxs})
+    texts = [text[spans[i][0]:spans[i][1]].strip() for i in needed]
+    try:
+        results = bridge.predict_batch(texts, ids=[f"lf_seg_{i:04d}" for i in needed])
+    except Exception:
+        return candidates, False
+    if not isinstance(results, list) or len(results) != len(texts):
+        return candidates, False
+    scores = {}
+    for i, r in zip(needed, results):
+        if not isinstance(r, dict) or r.get("mean_surprisal") is None:
+            return candidates, False   # 任一段未命中 → 整体诚实回退（不产半吊子排序）
+        scores[i] = float(r["mean_surprisal"])
+    order = sorted(range(len(candidates)), key=lambda k: -scores[idxs[k]])  # 稳定·降序
+    return [candidates[k] for k in order], True
+
+
 def _scan_descriptive(text: str, desc_facts: list) -> dict:
     """描述类锁定事实 × 人名共现句 → NLI contradiction 高置信 → advisory violation。
 
@@ -287,6 +369,8 @@ def _scan_descriptive(text: str, desc_facts: list) -> dict:
         "facts_checked": len(desc_facts),
         "pairs_sent": 0,
         "nli_threshold": _NLI_CONTRA_THRESHOLD,
+        # S4 留痕：候选配对选择策略（surprisal_ranked=高熵段优先 / document_order=文档序）
+        "pair_selection": "document_order",
         "violations": [],
         "shadow_observations": [],
     }
@@ -304,22 +388,39 @@ def _scan_descriptive(text: str, desc_facts: list) -> dict:
         return block
     block["nli_available"] = True
 
-    # 候选配对粗筛：只有 fact 所属角色名与句子共现才送 NLI（控制调用量）。
+    # 候选配对粗筛：只有 fact 所属角色名与句子共现才成为候选（控制调用量）。
     # premise = 锁定事实（权威陈述），hypothesis = 正文句 → contradiction = 正文违背锁定事实。
-    pairs, meta = [], []
+    # 先全量收集（fact 主序 + 文档序），再决定截断顺序：
+    #   S4：surprisal 可用 → 按所在段 surprisal 降序（高熵段优先·ConStory arXiv:2603.05890）；
+    #       不可用 → 保持本收集序（与历史嵌套循环截断结果逐字节一致·诚实降级）。
+    candidates = []
     sentences = _split_sentences(text)
-    for name, fact in desc_facts:
-        if len(pairs) >= _MAX_NLI_PAIRS:
-            break
-        n_for_fact = 0
+    for fact_i, (name, fact) in enumerate(desc_facts):
         for pos, sent in sentences:
-            if len(pairs) >= _MAX_NLI_PAIRS or n_for_fact >= _MAX_SENTS_PER_FACT:
-                break
             if name not in sent or len(sent) < _MIN_SENT_CJK:
                 continue
-            pairs.append({"premise": fact, "hypothesis": sent})
-            meta.append({"character": name, "fact": fact, "sentence": sent, "position": pos})
-            n_for_fact += 1
+            # _fact_i = 内部截断记账键（按 desc_facts 条目而非值去重·防同值 fact 串账），
+            # 落 meta/报告前剥除。
+            candidates.append({"character": name, "fact": fact,
+                               "sentence": sent, "position": pos, "_fact_i": fact_i})
+    ranked, surprisal_used = _surprisal_rank_candidates(text, candidates)
+    block["pair_selection"] = "surprisal_ranked" if surprisal_used else "document_order"
+
+    # 截断：全局上限 _MAX_NLI_PAIRS + 单 fact 上限 _MAX_SENTS_PER_FACT（阈值零变动）。
+    # document_order 时 candidates 按 fact 分组连续，本循环与历史嵌套循环选出的
+    # pairs/meta 逐字节相同；surprisal_ranked 时同两上限按高熵优先序生效。
+    pairs, meta = [], []
+    per_fact_count = {}
+    for c in ranked:
+        if len(pairs) >= _MAX_NLI_PAIRS:
+            break
+        fkey = c["_fact_i"]
+        if per_fact_count.get(fkey, 0) >= _MAX_SENTS_PER_FACT:
+            continue
+        per_fact_count[fkey] = per_fact_count.get(fkey, 0) + 1
+        pairs.append({"premise": c["fact"], "hypothesis": c["sentence"]})
+        meta.append({"character": c["character"], "fact": c["fact"],
+                     "sentence": c["sentence"], "position": c["position"]})
     block["pairs_sent"] = len(pairs)
     if not pairs:
         block["executed"] = True

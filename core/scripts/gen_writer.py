@@ -937,13 +937,13 @@ def _ctx_reorder_mode() -> str:
 def _skill_primacy_mode() -> str:
     """skill 硬约束 primacy 重排开关（env SKILL_PRIMACY_MODE · 默认 active · 第8轮同族补完）。
 
-    IFScale 实证：长指令文档里的硬约束维（段长契约 / 禁用词 / 对话格式）在 skill **中段衰减**
+    IFScale 实证：长指令文档里的硬约束维（段长契约 / 套话防线 / 对话格式）在 skill **中段衰减**
     （指令越多、文档越长，中段那几条越容易被模型"读过即忘"）。现状第8轮 ctx 重排把整个风格 skill
     下沉到生成点近邻，但 skill 内部仍是一大段连续文本——里面的硬约束维没有被 **primacy 强调**，
     长 skill 中段那几条照样衰减。
 
     active（默认）：在生成点近邻（风格锚区）补一段**精简硬约束 primacy 重述**——只点名 3 个最易
-                    衰减的硬约束维（段长契约 / 禁用词 / 对话格式），轻量重述非整 prompt 复制
+                    衰减的硬约束维（段长契约 / 套话防线 / 对话格式），轻量重述非整 prompt 复制
                     （黑箱零成本），把硬约束维 primacy 提到显著位置。
     off / shadow：不注入该段（零回归回退路径）。
     """
@@ -1036,7 +1036,7 @@ def _build_hard_constraint_primacy_block(author_punct: dict = None,
     """生成点近邻的「硬约束维 primacy 重述」段（SKILL_PRIMACY_MODE · 默认 active）。
 
     轻量重述（非整 prompt / 整 skill 复制 · 黑箱零成本）：点名 skill 中段最易衰减的硬约束维——
-    段长契约 / 禁用词 / 对话格式 / 段首多样 / 情绪标点（作者基线感知）——贴生成点 RoPE 高位强调，
+    段长契约 / 套话防线 / 对话格式 / 段首多样 / 情绪标点（作者基线感知）——贴生成点 RoPE 高位强调，
     对抗 IFScale 中段衰减。advisory 措辞（北极星⑤不硬锁 · 以作者风格档为第一权威，本段只是把
     "已在 skill 里写过的硬约束维"提到显著位置重申，不新增规则、不覆盖 skill）。
 
@@ -1051,8 +1051,8 @@ def _build_hard_constraint_primacy_block(author_punct: dict = None,
         "**以上方作者风格 skill 的具体规定为准**，本段只是把它们提到显著位置重申，不新增规则：\n"
         "\n"
         + _para_contract_line(author_para)
-        + "- **禁用词**：结构性 AI 套话（与此同时 / 值得一提的是 / 不仅如此 / 事实上）零容忍；"
-        "工艺签名词以作者风格 skill 的 signature 为准（skill 列了就是作者笔法，没列就默认避免）。\n"
+        + "- **套话防线（结构性禁用词）**：结构性 AI 套话（与此同时 / 值得一提的是 / 不仅如此 / 事实上）零容忍；"
+        "工艺词按 C5 正向协议写，作者 skill signature 列了的是作者笔法、以 skill 为准。\n"
         "- **对话格式**：引号样式按作者风格档 golden_passages 的实际 codepoint——**默认中文弯引号 “…”"
         "（U+201C/U+201D）· 🔴 禁止默认直角引号「」（U+300C/U+300D·gen-model 常错误默认）**，除非作者档"
         "golden 明确用「」才用「」；对话独行、口癖停顿沿用 voice_pack，全篇统一不漂移。\n"
@@ -1331,7 +1331,7 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int) -> tuple:
 ## H3. AI 结构套话零容忍（结构性机器腔 · 与作者签名词无关）
 禁用：与此同时 / 值得一提的是 / 不仅如此 / 事实上。这 4 个是结构性 AI 腔，任何作者都不会用，skill 不能放行。
 另：「然而」高频转折 = 机器腔（偶用可，避免每段用「然而」起转折——与 CLAUDE.md 反 AI 腔基线一致）。
-（注：顿时/淡淡/仿佛/似乎/缓缓地说 等是「工艺/签名词」，归第二层——若作者风格档把它们列为签名笔法则允许。）
+（注：工艺/签名词类归第二层 C5 正向协议——作者风格档列为签名笔法的以作者档为准。）
 
 ## H4. cluster 契约（user prompt 顶部「CLUSTER 硬约束」段如有）
 scope_summary 描述的场景类型/角色构成是**剧情硬契约**（如"对白场景"应有足够角色 + 对话为主），不可跑偏成别的场景。这是「写对剧情」不是「写某种文风」。
@@ -1379,9 +1379,12 @@ cluster_brief / manifest 给你的 `foreshadowing_to_plant`（要埋的伏笔）
 ## C4. 破折号节制（默认 · 作者档可豁免）
 破折号 ≤ 8/千字（除非 skill 偏好高频破折号）；**若作者档破折号基线极低（几乎不用），更要克制**——破折号过载会把节奏砸成单一的「短促—强调」循环，用句号断句/逗号连缀替代。
 
-## C5. 工艺/签名禁用词（默认 · 作者档可豁免）
-默认避免：顿时 / 紧锁 / 显然 / 淡淡 / 此刻 / 仿佛 / 似乎 / 缓缓地说 / 沉吟片刻 / 心中一凛 / 微微挑眉 / 嘴角勾起一抹。
-**但若作者风格档的 signature / golden_passages 表明该作者惯用其中某些词，则它们是作者签名笔法，不在此限**——复刻作者优先于通用反 AI 腔。
+## C5. 工艺词正向行为协议（默认兜底 · 作者档可豁免）
+- 情绪落身体与动作、强情绪降一档写（反例「心中一凛」→正写「端着的杯子停在半空」）。
+- 神态写整体姿态或不写，让对白传情绪（反例「嘴角勾起一抹冷笑」→正写「他往后靠了靠」）。
+- 语气靠断句与动作节拍（反例「他缓缓地说」→正写「他说得很慢，每个字都咬得清楚」）。
+- 推进转折直接断句；判断换可观察证据（反例「显然他在撒谎」→正写「他答得太快了」）。
+**作者档 signature / golden_passages 惯用的工艺词是作者签名笔法，按作者档写**——复刻作者优先于通用协议。
 
 # 元 anti-slop 防御（已知重犯模式 · 默认基线）
 
@@ -2080,6 +2083,40 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
 
 
 # ============ best-of-N：生成 N 稿 + 配对重排 + 综合择优 ============
+
+# ── S9 非对称长度遥测分（LongWriter evaluation/eval_length.py 公式 · research round2 S9 · 2026-07-07）──
+# 🔴 落点纪律：本分**只做遥测**——写进 best-of-N selection_trace 与 changes.json 遥测字段
+# （供 learning_loop / BPR 训练当 reward 特征），绝不参与 select_best_draft 的择稿逻辑
+# （纯 freestyle 契约 · 北极星⑤ · 回归锁 tests/test_best_of_n.py::test_E_no_signal_never_selects_by_cjk）。
+
+
+def length_telemetry_band() -> tuple:
+    """遥测带宽：与 cluster_length_band_scanner._band() 同源同口径（默认 [12000, 25000] ·
+    env CLUSTER_LENGTH_BAND_OVERRIDE="min,max" 覆盖 · 单一真理源不各算各的）。"""
+    import cluster_length_band_scanner as clbs
+    lo, hi, _note = clbs._band()
+    return lo, hi
+
+
+def length_telemetry_score(cjk: int, band: tuple = None) -> float:
+    """cluster 长度连续遥测分 0-100（LongWriter 非对称公式：偏短罚陡 /2 · 超长罚缓 /3）。
+
+    带内 = 100；y < min → 100 * max(0, 1 - (min/y - 1)/2)；
+    y > max → 100 * max(0, 1 - (y/max - 1)/3)；y <= 0 → 0。
+    长度带 scanner 只能二值拒绝，本分把带外偏差量化成连续 reward 特征（gemini 偏短顽疾
+    的训练信号）。仅遥测——不进择稿、不 hard_gate、不回流 writer prompt。
+    """
+    lo, hi = band if band else length_telemetry_band()
+    y = float(cjk)
+    if y <= 0:
+        return 0.0
+    if y < lo:
+        return round(100.0 * max(0.0, 1.0 - (lo / y - 1.0) / 2.0), 2)
+    if y > hi:
+        return round(100.0 * max(0.0, 1.0 - (y / hi - 1.0) / 3.0), 2)
+    return 100.0
+
+
 def gather_author_ref_text(project_root: Path, max_chars: int = 6000) -> str:
     """定位作者真实原文当 SFS / AV-judge 的锚（best-of-N 择优用 · 找不到则空）。
 
@@ -2160,6 +2197,7 @@ def score_candidate(body: str, author_ref: str, loader: GenModelLoader,
     """
     result: dict = {"sfs": None, "sfs_subscores": None,
                     "av_drift_count": None, "av_drift_dims": [],
+                    "av_order_consistency": None,
                     "composite": None, "errors": []}
     # ① SFS 统计指纹（透明裁判）
     if author_ref and author_ref.strip():
@@ -2175,6 +2213,9 @@ def score_candidate(body: str, author_ref: str, loader: GenModelLoader,
         try:
             import av_judge as avj
             av = avj.pairwise_drift_count(loader, author_ref, body)
+            # S7 换序双跑留痕（consistent/inconsistent/single_run·供飞轮观察 judge 可靠性）；
+            # 换序不一致=弃票（drift_count=None 且 error=None）→ 走既有「缺 AV 信号」降级路径。
+            result["av_order_consistency"] = av.get("order_consistency")
             if av.get("error") is None and av.get("drift_count") is not None:
                 result["av_drift_count"] = av["drift_count"]
                 result["av_drift_dims"] = av.get("drift_dims", [])
@@ -2249,16 +2290,20 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
         raise GenModelExhaustedError(
             [("best_of_n", "; ".join(d.get("error", "?") for d in drafts) or "all empty")])
 
+    lt_band = length_telemetry_band()  # S9 遥测带（仅遥测 · 不进择稿）
     scored: list[dict] = []
     for d in ok_drafts:
         body, _changes = split_text_and_changes(d["reply"])
         sc = score_candidate(body, author_ref, loader, use_av_judge=use_av_judge)
+        body_cjk = cio.count_cjk(body)
+        lt_score = length_telemetry_score(body_cjk, lt_band)
         scored.append({"idx": d["idx"], "reply": d["reply"], "profile": d["profile"],
-                       "temperature": d["temperature"], "body_cjk": cio.count_cjk(body),
+                       "temperature": d["temperature"], "body_cjk": body_cjk,
+                       "length_telemetry_score": lt_score,
                        "score": sc, "error": None})
         logger.info(f"[best-of-N] 候选 idx={d['idx']} temp={d['temperature']}: "
               f"SFS={sc['sfs']} AV走味={sc['av_drift_count']} composite={sc['composite']} "
-              f"cjk={cio.count_cjk(body)}")
+              f"cjk={body_cjk} length_telemetry={lt_score}")
 
     best_i, reason = select_best_draft(scored)
     best = scored[best_i]
@@ -2272,10 +2317,14 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
         "author_ref_found": use_av_judge,
         "selected_idx": best["idx"],
         "selection_reason": reason,
+        # S9 遥测带（LongWriter 非对称 · 仅 reward 特征 · 不参与 selection_reason）
+        "length_telemetry_band": list(lt_band),
         "candidates": [
             {"idx": s["idx"], "temperature": s["temperature"], "cjk": s["body_cjk"],
+             "length_telemetry_score": s["length_telemetry_score"],
              "sfs": s["score"]["sfs"], "av_drift_count": s["score"]["av_drift_count"],
              "av_drift_dims": s["score"]["av_drift_dims"],
+             "av_order_consistency": s["score"].get("av_order_consistency"),
              "composite": s["score"]["composite"], "errors": s["score"]["errors"]}
             for s in scored
         ],
@@ -2484,6 +2533,7 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
 
     # 补全 changes 元数据
     cjk = cio.count_cjk(body)  # v27 修复：统一 CJK 口径走 chapter_io（覆盖扩展 CJK）
+    _lt_band = length_telemetry_band()  # S9 遥测带（与 cluster_length_band_scanner 同口径）
     ch_range_str = f'{ch_start}-TBD_by_splitter'
 
     # v27 P0 修复（schema 统一）：先把 LLM 输出的 changes 经 normalize_changes 归一·
@@ -2505,6 +2555,13 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         'writer_mode': 'freestyle_v27',
         'snippet_seed': seed_trace or {'snippet_seed_mode': 'on', 'injected': False},
         'best_of_n': best_of_n_trace or {'best_of_n': 1, 'note': '单稿直生（BEST_OF_N=1 或未启用）'},
+        # S9 非对称长度遥测分（LongWriter · 偏短/2 超长/3 · research round2 S9）：
+        # 仅遥测字段供 learning_loop/BPR 当 reward 特征——不参与择稿/重写决策、不回流 writer prompt。
+        'length_telemetry': {
+            'score': length_telemetry_score(cjk, _lt_band),
+            'band': list(_lt_band),
+            'formula': 'longwriter_asymmetric(under/2, over/3)',
+        },
     })
     se.setdefault('waivers', [])
     se.setdefault('uncertainty_flags', [])
