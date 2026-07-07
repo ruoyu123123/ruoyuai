@@ -87,7 +87,7 @@
     "locked_fact_cross_scene": {
       "layer": "cluster",
       "script": "locked_fact_cross_scene_scanner.py",
-      "doc": "[Phase 3 新增] 锁定事实跨场景引用一致性（数值通路·hard）· [2026-07-07 ConStory盲区③] 补描述类 NLI 通路：非数值描述 fact × 正文句粗筛配对送 nn_nli_bridge（Erlangshen·daemon-first）判 contradiction≥0.80 · NLI 不可用诚实 skip 绝不用关键词假冒语义 · env LOCKED_FACT_DESCRIPTIVE_MODE 默认 shadow · 描述类码恒 advisory（NLI 概率判定非确定性硬核对·北极星⑤）· 🔴真机能力边界(110M 实测 2026-07-07)：直接改写型矛盾 0.99+ 稳判✓·多跳实体推理型（满门尽灭vs兄长登门）contradiction 仅 0.166 恒漏✗·补齐需更大NLI或gen-model judge·勿降阈硬凑",
+      "doc": "[Phase 3 新增] 锁定事实跨场景引用一致性（数值通路·hard）· [2026-07-07 ConStory盲区③] 补描述类 NLI 通路：非数值描述 fact × 正文句粗筛配对送 nn_nli_bridge（Erlangshen·daemon-first）判 contradiction≥0.80 · NLI 不可用诚实 skip 绝不用关键词假冒语义 · env LOCKED_FACT_DESCRIPTIVE_MODE 默认 shadow · 描述类码恒 advisory（NLI 概率判定非确定性硬核对·北极星⑤）· 🔴真机能力边界(110M 实测 2026-07-07)：直接改写型矛盾 0.99+ 稳判✓·多跳实体推理型（满门尽灭vs兄长登门）contradiction 仅 0.166 恒漏✗·勿降阈硬凑·多跳类由 novel-reading-reflector 维度9(锁定事实语义一致性·cluster-write step3 每cluster必跑Claude judge)承接——三层互补：数值=scanner hard/直接改写=NLI advisory/多跳=reflector维度9",
       "_new": true,
       "issues_emitted": ["LOCKED_FACT_CROSS_SCENE_CONFLICT", "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION"]
     },

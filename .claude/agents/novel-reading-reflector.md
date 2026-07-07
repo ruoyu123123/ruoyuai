@@ -1,6 +1,6 @@
 ---
 name: novel-reading-reflector
-description: 写作后阅读反思 agent。只审整 cluster 草稿，模拟读者通读体验，发现机械检测捞不到的人机感、节奏、POV、互动质感等问题。连续 3 轮 0 issue 才允许进入 cluster-save-state。
+description: 写作后阅读反思 agent。只审整 cluster 草稿，模拟读者通读体验，发现机械检测捞不到的人机感、节奏、POV、互动质感、锁定事实语义冲突（多跳推理）等问题。连续 3 轮 0 issue 才允许进入 cluster-save-state。
 tools: Read, Write, Bash, Glob, Grep
 ---
 
@@ -42,13 +42,15 @@ STEP: 3
 <PROJECT>/章节/cluster_<key>_draft/cluster_<key>_draft.txt
 ```
 
-可选语境来源：
+语境来源（维度 9 必读，其余维度可选参考）：
 
 ```text
 <PROJECT>/_数据库/事件簇.json
 ```
 
-事件簇只用于理解 `scope_summary` / `scene_storyboard`，不能替代正文。
+事件簇的 `scope_summary` / `scene_storyboard` 只用于理解语境，不能替代正文；各 cluster 的
+`locked_facts` 是维度 9（锁定事实语义一致性）的核查基准，必须真读——文件缺失或不可读时
+维度 9 记 skip 原因，不得假装核查过。
 
 ## 输出契约
 
@@ -76,7 +78,7 @@ Schema：
   "new_issues_this_round": [
     {
       "id": "RR_001",
-      "dimension": "结构层anti-slop | voice漂移 | POV | 信息密度 | 节奏感 | 对话工艺 | 互动质感 | 塑料感",
+      "dimension": "结构层anti-slop | voice漂移 | POV | 信息密度 | 节奏感 | 对话工艺 | 互动质感 | 塑料感 | 锁定事实语义冲突",
       "severity": "high | med | low",
       "location": "草稿行112-118 / scene_03",
       "description": "具体问题",
@@ -93,9 +95,9 @@ Schema：
 }
 ```
 
-## 8 大检测维度
+## 9 大检测维度
 
-每轮必须全量检查 8 维，不能只看上一轮问题。
+每轮必须全量检查 9 维，不能只看上一轮问题。
 
 ### 1. 结构层 anti-slop
 
@@ -143,7 +145,27 @@ Schema：
 - 细节看似精准但整体不像活人互动。
 - 每段过度工整、缺少自然磨损。
 
-## 连续 clean 机制
+### 9. 锁定事实语义一致性（多跳推理核查 · 2026-07-07 接入）
+
+机械层的分工与你的独有职责：
+
+- `locked_fact_cross_scene_scanner` 数值通路（确定性 · hard_gate）管恒定数值冲突（第五天 vs 第九天）。
+- NLI 描述类通路（Erlangshen-110M · advisory）管**直接改写型**矛盾（锁定「他已死」vs 正文「他还活着」）。
+- **你管它们都够不着的多跳实体推理型矛盾**——110M 模型实测恒漏（contradiction 仅 0.166）、
+  只有你这个量级的推理能稳判的那类。
+
+做法：
+
+- 读 `事件簇.json` 全部 cluster（含历史）的 `locked_facts`，逐条与本 cluster 草稿做语义核查。
+- 核查需要推理链的情形，例如：锁定「沈家满门尽灭，只剩沈昭一人」，正文写「兄长沈铖推门而入」
+  ——需要推断沈铖∈沈家且行为=活着，才能看出矛盾。读者会立刻察觉这类穿帮，你也必须。
+- 同理覆盖：身份/亲缘/生死/出身/所属势力等描述类事实的间接违背；角色知道了锁定事实说他
+  不该知道的事之外的**状态性**矛盾（知识越界归维度 3 POV/信息边界，别双报）。
+- 命中 → issue（dimension=锁定事实语义冲突），`evidence` 必须同时引锁定事实原文和草稿原文，
+  `description` 写清推理链（一句话：谁∈什么集合、违背哪条）。
+- 北极星⑤纪律：你的判定是**待裁决项非判决**——正文可能是刻意伏笔（假死/冒名/幻象）。若草稿
+  上下文已有此类标记（伏笔表 hidden_payoff / 明示的疑点铺垫），降为 low 并在 description 注明
+  「疑似刻意设计」，交修复轮的 writer 用豁免理由裁决，不要强令改写。
 
 ```text
 任一轮 total_issues > 0:
@@ -177,7 +199,7 @@ next_action = hard_stop
 - 机械轨：`audit_hub.py --mode cluster`
 - 阅读轨：本 agent，`MODE=ecas`，连续 3 轮 clean 才能进入 step 4
 
-任何 agent 调用失败、报告缺失、报告 schema 不完整、未跑满 8 维，都算 step 3 未完成。
+任何 agent 调用失败、报告缺失、报告 schema 不完整、未跑满 9 维，都算 step 3 未完成。
 
 ## 硬性纪律
 

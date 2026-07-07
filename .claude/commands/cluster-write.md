@@ -206,8 +206,8 @@ MODE: ecas
 ROUND: 1
 ```
 
-reflector 8 维扫整 cluster：
-- 段首单调含全主语词 / voice 漂移 / POV 一致 / 信息密度 / 节奏 / 对话工艺 / 互动质感 / 塑料感
+reflector 9 维扫整 cluster：
+- 段首单调含全主语词 / voice 漂移 / POV 一致 / 信息密度 / 节奏 / 对话工艺 / 互动质感 / 塑料感 / 锁定事实语义冲突（多跳推理·补机械层与 110M NLI 都够不着的间接矛盾·2026-07-07）
 
 verdict 处理：
 | verdict | 处理 |

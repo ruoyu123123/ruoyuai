@@ -25,8 +25,12 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
       · 直接改写型矛盾（「他已死」vs「他还活着」/数量互斥/天气互斥）contradiction 0.99+ 稳判 ✓
       · **多跳实体推理型矛盾**（「满门尽灭只剩沈昭一人」vs「兄长沈铖推门而入」——需推断
         沈铖∈家人且活着）实测 entailment(contradiction 仅 0.166) ✗——110M 模型能力边界，
-        阈值 0.80 下此类恒漏。补齐需更大 NLI 模型或 gen-model judge 路线（勿降阈值硬凑：
-        0.166 档放行=误报洪水）。ConStory 盲区3 测试用 mock NLI 锁的是**接线契约**非真模型召回。
+        阈值 0.80 下此类恒漏（勿降阈值硬凑：0.166 档放行=误报洪水）。ConStory 盲区3 测试
+        用 mock NLI 锁的是**接线契约**非真模型召回。
+      · 多跳类承接方（2026-07-07 接入）：novel-reading-reflector 维度 9「锁定事实语义一致性」
+        ——cluster-write step3 每 cluster 必跑的 Claude 系 judge 读 locked_facts 做多跳核查，
+        issue 驱动修复轮（advisory 待裁决项·刻意伏笔可豁免）。三层互补：数值确定性=scanner
+        hard / 直接改写型=NLI advisory / 多跳推理型=reflector 维度 9。
 
 ────────────────────────────────────────────────────────────────────────
 2026-06-16 盲区落地（consistency_19_subtypes · B 件 · ConStory 时间线&因果一致性）：
