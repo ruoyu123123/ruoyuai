@@ -27,6 +27,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
 import cluster_lookup  # noqa: E402  2026-05-29 修：obtained_cluster 是 cluster_id 不是章号
+import manifest_budget  # noqa: E402  S1 分层 token 预算（记账始终开·裁剪仅触发既有硬守卫时）
 
 # style_injector：从蒸馏库提取 cross_chapter_diversity / golden_passages
 # 修复 v17.3 之前"蒸馏精细但写作粗糙"断层
@@ -5479,6 +5480,31 @@ def _collect_motif_advisory(s: "DatabaseScanner") -> dict | None:
     return payload
 
 
+def _collect_volume_summaries_digest(s: "DatabaseScanner") -> list | None:
+    """S10 消费端（2026-07-07·Ex3 摘要金字塔）：已闭合卷的卷级摘要内联注入（T3 长程记忆）。
+
+    数据源=故事块摘要.volume_summaries[]（生产端 save_state --apply-volume-summary·apply 硬校验
+    保证只有真闭合卷入账，故这里无需判当前卷——有条目即历史卷）。金字塔语义：writer 对历史卷
+    读这一条 300-500 字卷摘要（换粒度），对当前卷仍走逐 cluster 摘要/manifest 既有通道（细粒度）。
+    volume_summaries 缺失/空 = 老项目常态 → 返回 None 键不注入（零行为变化）。
+    """
+    doc = s.load("故事块摘要", {})
+    vols = doc.get("volume_summaries")
+    if not isinstance(vols, list) or not vols:
+        return None
+    out = []
+    for v in vols:
+        if not isinstance(v, dict) or not v.get("summary"):
+            continue
+        src = v.get("source") or []
+        out.append({
+            "volume": v.get("volume"),
+            "summary": v.get("summary"),
+            "clusters": f"{src[0]}~{src[-1]}" if src else "",
+        })
+    return out or None
+
+
 def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
     """G6 P0：注入作者风格相对通用兜底基线的方向描述（更短/更留白）·advisory·三态。
 
@@ -6052,7 +6078,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         })
 
     # ============ 最终 manifest ============
-    return {
+    manifest = {
         "chapter": chapter,
         "project": project_root.name,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -6165,6 +6191,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # 🔴 2026-06-27 P1-08: motif advisory snapshot 注入 manifest（payoff_due/dormant/over_saturated 三态 top-3）。
         "motif_recurrence_directive": _collect_motif_advisory(s),
         "genre_baseline_diff": _collect_genre_baseline_diff(s),
+        "volume_summaries_digest": _collect_volume_summaries_digest(s),
         "writer_mode": "freestyle_v27",
         "rag_relevant_chapters": rag_hits,
         "memory_search_results": memory_hits,
@@ -6191,6 +6218,11 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # 🔴 2026-06-27 P0-05：子系统消费层级 audit（骨架 _doc.consumption 单一真理源·遍历 KNOWN_DBS·writer/judge 一眼看清 live/deferred/unknown）。
         "_subsystem_consumption_audit": _collect_subsystem_consumption_audit(s),
     }
+    # S1 分层 token 预算（2026-07-07·PlotPilot context_budget_allocator 移植）：
+    # 记账（budget_report 元数据）始终附加；分层裁剪（T3 留 5% 地板 → T2 → T1·T0 自身 40% 硬上限）
+    # 仅在体积 >= 既有 v19.4 硬守卫（BUDGET_HARD_KB·env MANIFEST_BUDGET_* 可覆盖）时生效——
+    # 不触发守卫 = 所有注入段逐字节不变（不新增任何截断触发条件）。
+    return manifest_budget.apply_budget(manifest)
 
 
 def _build_cache_layout() -> dict:
@@ -6375,10 +6407,23 @@ def main():
     BUDGET_SOFT_KB = 50
     BUDGET_HARD_KB = 100
     if manifest_kb >= BUDGET_HARD_KB:
-        print(f"[BUDGET-ERROR] manifest 体积 {manifest_kb:.1f}KB 超硬上限 {BUDGET_HARD_KB}KB", file=sys.stderr)
-        print(f"  分级裁剪建议：①砍 P2 must_read 项 ②digest/focus 字段截短 ③recent_openings 仅保 1 章", file=sys.stderr)
+        print(f"[BUDGET-ERROR] manifest 体积 {manifest_kb:.1f}KB 超硬上限 {BUDGET_HARD_KB}KB"
+              "（S1 分层裁剪已尽力·T0/META 底座仍超限，检查 hard_constraints/must_read 是否失控膨胀）",
+              file=sys.stderr)
     elif manifest_kb >= BUDGET_SOFT_KB:
         print(f"[BUDGET-WARN] manifest 体积 {manifest_kb:.1f}KB 接近软上限 {BUDGET_SOFT_KB}KB", file=sys.stderr)
+
+    # S1 分层预算观测（budget_report 由 build_manifest 内 apply_budget 附加）
+    _br = manifest.get("budget_report") or {}
+    _clog = _br.get("compression_log") or []
+    if _clog:
+        print(f"[BUDGET-TRIM] S1 分层裁剪生效：{len(_clog)} 条（T3→T2→T1·T0 上限 "
+              f"{(_br.get('budget') or {}).get('t0_max_ratio', 0.4):.0%}），详见 budget_report.compression_log")
+        for _e in _clog[:10]:
+            print(f"  - [{_e.get('tier')}] {_e.get('section')} {_e.get('action')} "
+                  f"{_e.get('before_bytes')}→{_e.get('after_bytes')}B")
+    if _br.get("constraint_share_warning"):
+        print(f"[BUDGET-ADVISORY] {_br['constraint_share_warning']}")
 
     print(f"[OK] manifest 已生成: {out_path} ({manifest_kb:.1f}KB)")
 

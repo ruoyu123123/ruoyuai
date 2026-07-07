@@ -58,7 +58,7 @@ STEP: <当前步骤号>
 4.  audit_hub cluster pre-save audit (统一 cluster 审计入口 · hard_gate 校验)
 5.  novel-archivist MODE=cluster (读正文产 archive.json · factual 权威源 · failure_policy=block · 含 belief_updates witness)
 6.  apply_archive.py (角色/道具/关系/locked_facts/throughline + 角色信念 belief_ledger 确定性回库 · 失败硬停)
-7.  novel-summarizer MODE=cluster (cluster 级摘要 + 场景级 Appraisal Beat chain-of-emotion)
+7.  novel-summarizer MODE=cluster (cluster 级摘要 + 场景级 Appraisal Beat chain-of-emotion) + 🆕 S10 卷边界条件子任务 (detect-volume-boundary → MODE=volume 卷级递归摘要 → apply-volume-summary)
 8.  novel-foreshadower MODE=cluster (整 cluster 伏笔评估)
 9.  novel-reflector MODE=cluster (经验沉淀)
 10. wal-merge + learning_loop + judge_reports_archive + build-cluster-summary + apply-appraisal-beats + data-flywheel
@@ -234,6 +234,39 @@ MODE: cluster
 cluster 级摘要（不是单章摘要 · 单章摘要由 splitter 切完后从 cluster 摘要派生）。
 
 > 🔴 **2026-06-29 场景级 Appraisal Beat（chain-of-emotion）**：summarizer 同时扩产 `appraisal_beats[]`（读整 cluster 正文 + scene_storyboard 按 Scherer CPM/OCC 评价链把关键情绪拐点反推成结构化 STATE：trigger → appraisal 6 维 → derived_emotion 自然语言 → behavior_externalization + vad_bin）。它**梳理非创作**（禁占位词典浅扫·禁情绪词标签），与 archivist 同属 Claude 读正文梳理段。回填由第 10 步 `--apply-appraisal-beats` 确定性落 `叙事节拍器.json.appraisal_beats`（全 advisory STATE·不进 HARD_GATE_CODES）。
+
+## 🔴 2026-07-07 S10 卷边界条件子任务（递归卷级层级摘要 · Ex3 摘要金字塔 + source 回溯）
+
+本步 scripts 先跑卷边界确定性检测（report-only · 恒 exit 0）：
+
+```bash
+python core/scripts/save_state.py "<项目路径>" --detect-volume-boundary <key>
+```
+
+只用**既有信号**判定（不另立）：某卷的大势卡 ME 池非空且全部 `status=completed`（status 由 step 3 `_mark_cluster_me_completed` 唯一维护·`completed_by_cluster` 给出本卷 cluster_ids）＝ 卷已完结；且 `故事块摘要.volume_summaries` 尚无该卷条目 → `boundary=true`。产物：`_数据库/.wal/cluster_<key>_volume_boundary.json`。
+
+- **`boundary=false`（绝大多数 cluster）→ 零行为变化**，本子任务到此结束。
+- **`boundary=true`** → 追加两个条件子步骤（在 MODE=cluster summarizer 完成后执行）：
+
+```
+Agent 启动 novel-summarizer:
+PLAN_ID: $PLAN_ID
+STEP: 7
+PROJECT: <项目路径>
+CLUSTER_ID: <key>
+MODE: volume
+VOLUME_N: <detect 产物 volumes_pending[].volume>
+VOLUME_CLUSTER_IDS: <detect 产物 volumes_pending[].cluster_ids · 逗号分隔 · 不得增删>
+CLUSTER_SUMMARIES_PATH: _数据库/故事块摘要.json
+```
+
+产出 `_数据库/.wal/volume_<N>_summary.json`（聚合本卷 cluster 摘要成 300-500 字卷级摘要；账本缺的 cluster——典型是本卷末块——读 `.wal/<cid>_summary.json` 兜底；**不重读正文**·金字塔纪律），然后确定性回库：
+
+```bash
+python core/scripts/save_state.py "<项目路径>" --apply-volume-summary <N>
+```
+
+回库唯一入口校验：结构键钉死（volume/summary/source/generated_at_cluster 缺即拒）+ **source 必须恰好覆盖本卷全部 cluster_ids**（缺=漏源·多=幻觉源·都 exit 2 零写入）+ 卷真闭合 + 幂等 upsert（同内容 re-apply 零写盘）。字数 300-500 仅 advisory。漏跑自愈：本次漏掉，下个 cluster 的 detect 会重新亮起该卷。
 
 **plan-step 7**：
 
@@ -428,6 +461,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - [ ] `_数据库/.wal/<key>_apply_cluster.json` 存在（step3 apply-cluster-changes 汇总 · 含 writer_truth_check）+ 本 cluster 各章 `第<N>章_parsed.json` 已落地（per-chapter）
 - [ ] `_数据库/.wal/cluster_<key>_archive.json` 存在（step 5 archivist 产出）+ apply_archive 已回库角色/道具/关系/locked_facts/throughline/角色信念(belief_ledger)（step 6）
 - [ ] `_数据库/.wal/cluster_<key>_summary.json` 存在（summarizer 产出 · 含 appraisal_beats list）+ apply-appraisal-beats 已回填 叙事节拍器.appraisal_beats（空 list 只表示本块无新增）
+- [ ] `_数据库/.wal/cluster_<key>_volume_boundary.json` 存在（step 7 detect 产出）；`boundary=true` 时 `故事块摘要.volume_summaries` 已含该卷条目（`--apply-volume-summary` 回库·source 覆盖本卷全部 cluster_ids）
 - [ ] `_数据库/.judge_reports/cluster_<key>_foreshadower.json` 存在（含 specific_findings.dramatic_questions）+ apply-dramatic-questions 已回库 戏剧问题账本.json（空 raised/answered 只表示本块无新增）
 - [ ] Git commit `feat(cluster-NNN): N 章 (chX-chY)` 已落地
 - [ ] `_数据库/.wal/cluster_<next_key>_emergence.json` 存在（emergence 产出）

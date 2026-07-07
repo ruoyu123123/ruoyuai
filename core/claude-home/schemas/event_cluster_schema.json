@@ -274,6 +274,30 @@
                   "type": "string",
                   "_doc": "🔴 2026-06-29 scene_goal动机(心理 P0·Stanislavski scene-objective·逐场景动机·补 arc-want 到 scene 的桥): 本场 POV 角色动作化临场目标(『此刻我想要什么』·动作化·如『让老周松口交出名单』『不被发现地溜出去』) · outline-planner 每 scene 产 · build_manifest._collect_scene_causal_skeleton 透传 writer(治场景漂移·每场有目标驱动·目标受阻即冲突) · 与 Swain scene_type/disaster/dilemma 正交并存(Swain 主体已由事件 P0 建·本字段不重复) · 全 optional，缺省时不生成该场景动机卡"
                 },
+                "conflict_stage": {
+                  "type": "string",
+                  "enum": [
+                    "铺垫",
+                    "升级",
+                    "高潮",
+                    "转折",
+                    "尾声"
+                  ],
+                  "_doc": "🔴 2026-07-07 S11 scene级大势对齐三问(借鉴 moyin shot-calibration-stages.ts 叙事一致性三问): 本场景在卷冲突弧的位置 · outline-planner 详化/涌现 storyboard 时自答三问后标 · 全 optional advisory·fluid 纪律不设 required 不硬锁(北极星⑤) · 历史产物无此字段合法"
+                },
+                "scene_purpose": {
+                  "type": "string",
+                  "_doc": "🔴 2026-07-07 S11: 一句话——本场景如何 service 卷核心冲突(volume_core_conflict/卷核心任务)·必须体现与卷核心任务的关系·不能只描述画面 · optional advisory·planner 自评透明化非外部裁决"
+                },
+                "alignment": {
+                  "type": "string",
+                  "enum": [
+                    "aligned",
+                    "minor-deviation",
+                    "needs-review"
+                  ],
+                  "_doc": "🔴 2026-07-07 S11: planner 自评本场景与大势(卷核心冲突+卷线索)的对齐度 · needs-review=诚实标记不是失败(北极星⑤·自评透明化非外部裁决) · volume_arc_drift_scanner 汇总本卷 needs-review 计数/清单进 alignment_review 报告(只报告不裁决·不生成 issue·不改退出码) · optional advisory"
+                },
                 "characters": {
                   "type": "array",
                   "items": {

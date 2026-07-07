@@ -25,6 +25,13 @@ VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 可覆盖）才算「已触及」；embedding �
 一致/未配后端 → 回退关键词重叠，逐字节零回归。返回值 match_method 字段标注本次
 实际用的是 "embedding_cosine" 还是 "bigram_keyword_overlap"。
 
+【2026-07-07 S11 scene 级大势对齐自评汇总】outline-planner 详化/涌现 storyboard 时
+每 scene 自答大势对齐三问，自评落 scene 的 alignment 字段（aligned / minor-deviation /
+needs-review·全 optional advisory·权威 schema = event_cluster_schema.json
+scene_storyboard.items）。本哨兵把当前卷 scene 里 alignment=needs-review 的计数/清单
+汇总进报告 alignment_review 段——**只报告不裁决**：不生成 issue、不改退出码
+（needs-review 是 planner 的诚实标记不是失败·北极星⑤）。
+
 CLI: python volume_arc_drift_scanner.py <project> [--last-n N]
 退出码：0=无漂移/数据不足 · 1=advisory 漂移告警（SC-2）
 """
@@ -137,6 +144,33 @@ def _cluster_vol(c: dict) -> int | None:
         return int(v.strip())
     m = re.search(r"V?(\d+)", str(c.get("parent_me") or ""))
     return int(m.group(1)) if m else None
+
+
+def _collect_alignment_review(vol_clusters: list) -> dict:
+    """🔴 2026-07-07 S11：汇总本卷 scene_storyboard 里 alignment=needs-review 的
+    scene 计数/清单（planner 大势对齐三问自评·advisory）。**只报告不裁决**：
+    返回值只并入报告 alignment_review 段，绝不生成 issue / 不影响退出码
+    （needs-review 是诚实标记不是失败·北极星⑤）。字段全 optional——历史产物
+    无 alignment 字段时清单为空即合法（fluid）。"""
+    needs_review = []
+    for c in vol_clusters:
+        sb = c.get("scene_storyboard")
+        if not isinstance(sb, list):
+            continue
+        for i, sc in enumerate(sb):
+            if isinstance(sc, dict) and sc.get("alignment") == "needs-review":
+                needs_review.append({
+                    "cluster_id": str(c.get("cluster_id") or ""),
+                    "scene_idx": sc.get("scene_idx", sc.get("scene_index", i)),
+                    "scene": str(sc.get("scene") or sc.get("summary") or "")[:40],
+                    "scene_purpose": str(sc.get("scene_purpose") or "")[:60],
+                    "conflict_stage": str(sc.get("conflict_stage") or ""),
+                })
+    return {
+        "needs_review_count": len(needs_review),
+        "needs_review_scenes": needs_review[:10],
+        "_note": "planner 大势对齐三问自评汇总（S11）·advisory 只报告不裁决·不生成 issue",
+    }
 
 
 def _current_vol(shijianji: dict) -> int | None:
@@ -278,6 +312,9 @@ def scan(project_root: Path) -> dict:
     return {"scanner": "volume_arc_drift", "vol": cur_vol,
             "progress": round(progress, 2), "milestone_coverage": round(coverage, 2),
             "match_method": match_method,
+            # 🔴 2026-07-07 S11：本卷 scene alignment=needs-review 自评汇总（advisory·
+            # 只报告不裁决——不进 issues、不影响退出码·北极星⑤）
+            "alignment_review": _collect_alignment_review(vol_clusters),
             "issues": issues}
 
 

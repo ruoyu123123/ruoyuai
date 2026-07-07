@@ -21,8 +21,12 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
     结果写在报告**独立字段 `descriptive`**：顶层数值通路字段（code/gate_level/conflicts/
     warning/exit code）逐字节不变，audit_hub._parse_locked_fact_cross_scene 现有解析零影响，
     描述类 violations 由主代理另行接线消费。
-    🔴 真机能力边界（2026-07-07 Erlangshen-110M 实测·勿高估检出面）：
-      · 直接改写型矛盾（「他已死」vs「他还活着」/数量互斥/天气互斥）contradiction 0.99+ 稳判 ✓
+    🔴 真机能力边界（2026-07-07 Erlangshen-110M 实测 + flawed_fiction 反向校准·勿高估检出面）：
+      · **教科书级**直接矛盾（「他已死」vs「他还活着」/数量互斥/天气互斥）contradiction 0.99+ 稳判 ✓
+      · **含蓄改写型**不可依赖（S5 反向校准实证：锁定「妻亡」vs「妻子站在门口等他」被判
+        entailment 0.229——非阈值问题是能力翻车·direct_rewrite 召回仅 1/3）✗
+      · 配对窗覆盖面有限（默认 64 对按序≈只盖长稿前段主角句·S4 surprisal 排序开启时按高熵段
+        优先可改善·全稿分段轮询待后续批次）
       · **多跳实体推理型矛盾**（「满门尽灭只剩沈昭一人」vs「兄长沈铖推门而入」——需推断
         沈铖∈家人且活着）实测 entailment(contradiction 仅 0.166) ✗——110M 模型能力边界，
         阈值 0.80 下此类恒漏（勿降阈值硬凑：0.166 档放行=误报洪水）。ConStory 盲区3 测试
@@ -248,7 +252,9 @@ DESCRIPTIVE_CODE = "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION"
 _NLI_CONTRA_THRESHOLD = 0.80     # contradiction 概率高置信地板（低于此不报·宁漏勿误）
 _MAX_NLI_PAIRS = 64              # 单次 scan 送 NLI 的配对总量上限（控制调用量）
 _MAX_SENTS_PER_FACT = 16         # 单条 fact 最多配对的句子数
-_MIN_SENT_CJK = 6                # 过短句子不送 NLI（无判定价值）
+_MIN_SENT_CJK = 10               # 过短句子不送 NLI（S5 反向校准实证：6 字短句「秦烬冷笑一声」对
+                                 # 无关 fact 打出 contradiction≥0.97 · 4 条基线误报全源于此 · 6→10
+                                 # 消 3/4 · 2026-07-07 flawed_fiction 校准报告 §5.1）
 
 
 def _descriptive_mode() -> str:

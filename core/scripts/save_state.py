@@ -9,6 +9,8 @@ v26 cluster-only CLI 子命令（章级 --wal-* / --parse / --apply-changes / --
   --auto-post-reflect-cluster <key> cluster 级 learning_loop 三步链
   --build-cluster-summary <key>     富摘要预算写入 故事块摘要.json
   --ecas-checkpoint <key>           验证 cluster_draft 完整性 + checkpoint_data
+  --detect-volume-boundary <key>    🔴 S10 卷边界确定性检测（既有 ME 信号·report-only）
+  --apply-volume-summary <N>        🔴 S10 卷级摘要回库唯一入口（source 回溯校验+幂等 upsert）
 
 所有子命令都幂等（重复执行不产生副作用或破坏数据）。
 确定性逻辑集中在此，AI 只负责：故事块摘要/写作反思/走向卡片。
@@ -927,6 +929,242 @@ def _apply_foreshadower_payoffs(root, cluster_key):
         raise RuntimeError(f"foreshadower payoff 回库失败: {type(e).__name__}: {str(e)[:120]}") from e
 
 
+# ═══════ 🔴 2026-07-07 S10 递归卷级层级摘要（Ex3 摘要金字塔 + source 回溯）═══════
+# 出处 research/open_source_writing_systems_round2.md S10：借鉴 Ex3-NovelWriter 的层级摘要
+# 金字塔（para_group_sum → chapter_sum → chapter_group_sum → novel_summary·见
+# external_repos/Ex3-NovelWriter/Extracting/get_summary.py）+ source 回溯（每级摘要必须
+# 可追溯到聚合来源）。本系统落地为 cluster 摘要（既有）→ 卷级摘要（本段新增）：
+#   · 卷边界检测只用既有信号（不另立）：大势卡 ME.volume（口径=_me_volume_of·与
+#     cluster_emergence_engine._me_volume 一致）+ ME.status=="completed"（唯一维护者
+#     = _mark_cluster_me_completed·step3）+ ME.completed_by_cluster（本卷 cluster 归属
+#     权威登记）。卷闭合 = 该卷 ME 池非空且全部 completed。emergence 的
+#     volume_transition_hint 是「临近」advisory（finale 未写完就亮），本段用的是
+#     「已跨越」事实（finale ME completed ⊆ 全 completed），同源同口径不另立。
+#   · 聚合归 Claude 系 agent（架构分工）：novel-summarizer MODE=volume 读本卷全部
+#     cluster 摘要产 .wal/volume_<N>_summary.json（梳理非创作）。
+#   · 回库唯一入口 = cmd_apply_volume_summary：结构键钉死（judge_required_keys 精神）
+#     + source 必须恰好覆盖本卷全部 cluster_ids（缺=漏源·多=幻觉源·都拒）+ 幂等 upsert。
+#   · 无卷边界 = 零行为变化；漏检自愈：pending 依据=闭合卷缺 volume_summaries 条目，
+#     下个 cluster 的 detect 会重新亮起（不预设卷数·fluid）。
+
+# apply 白名单可选键（结构键钉死之外允许透传的 agent 产物字段·类型不符即丢弃）
+_VOLUME_SUMMARY_OPTIONAL_KEYS = (("emotional_peak", str), ("key_turning_points", list))
+
+
+def _me_volume_of(me: dict):
+    """ME 所属卷/阶段号。🔴 口径与 cluster_emergence_engine._me_volume 完全一致
+    （回归锁 test_save_state_volume_summary.test_me_volume_parity_with_emergence_engine
+    钉死双实现不漂移）：优先显式 `volume` 字段（int / 数字 str），否则从 id
+    （ME-V<N>-xx）解析。不 import 引擎——避免把 emergence_transparency →
+    world_evolution_engine 依赖链拖进每次 save_state 进程。"""
+    v = me.get("volume")
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    m = re.search(r"[Vv](\d+)", str(me.get("id") or me.get("me_id") or ""))
+    return int(m.group(1)) if m else None
+
+
+def _load_major_events(root: Path) -> list:
+    """读大势卡 ME 池（与 _mark_cluster_me_completed 同优先序：major_events 先）。缺/坏硬失败。"""
+    ds = load_json(root / "_数据库" / "大势卡.json", None)
+    if not isinstance(ds, dict):
+        raise RuntimeError("大势卡.json 缺失或损坏")
+    pool = ds.get("major_events")
+    if not isinstance(pool, list):
+        pool = ds.get("major_events_pool")
+    if not isinstance(pool, list):
+        raise RuntimeError("大势卡.json 缺 major_events/major_events_pool list")
+    return pool
+
+
+def _closed_volumes(root: Path) -> dict:
+    """从大势卡 ME 池算「已完结卷」→ {卷号: [本卷 cluster_ids 升序]}。
+
+    卷闭合（既有信号·不另立）= 该卷 ME 池非空且全部 status=="completed"。本卷
+    cluster_ids 取各 ME 的 completed_by_cluster（_mark_cluster_me_completed 写入的
+    权威登记）。completed 却缺 completed_by_cluster（旧库/手改）→ 该卷源头不全、
+    不可聚合，warning 后跳过（不误触发）。
+    """
+    by_vol: dict = {}
+    for me in _load_major_events(root):
+        if not isinstance(me, dict):
+            continue
+        v = _me_volume_of(me)
+        if v is None:
+            continue
+        by_vol.setdefault(v, []).append(me)
+    closed = {}
+    for v, mes in sorted(by_vol.items()):
+        if not mes or any(m.get("status") != "completed" for m in mes):
+            continue
+        cids = []
+        incomplete = False
+        for m in mes:
+            cid = cluster_lookup.normalize_cluster_id(m.get("completed_by_cluster"))
+            if not cid:
+                incomplete = True
+                logger.warning(f"[volume-boundary] 卷{v} ME {m.get('id') or m.get('me_id')} "
+                               "status=completed 却缺 completed_by_cluster——该卷源头不全·不可聚合")
+                break
+            if cid not in cids:
+                cids.append(cid)
+        if incomplete:
+            continue
+        cids.sort(key=lambda c: cluster_lookup.cluster_num(c) or 0)
+        closed[v] = cids
+    return closed
+
+
+def cmd_detect_volume_boundary(root: Path, cluster_key) -> int:
+    """S10：卷边界确定性检测（report-only·无边界=零状态变化·恒 exit 0 除非状态库缺坏）。
+
+    pending 卷 = 闭合卷（_closed_volumes）中 故事块摘要.volume_summaries 尚无条目的卷。
+    产 .wal/<cid>_volume_boundary.json 供主代理决策：boundary=true → 追加 spawn
+    novel-summarizer MODE=volume → --apply-volume-summary <N>；boundary=false → 本步结束。
+    """
+    try:
+        cid = _require_cluster_id(cluster_key)
+        doc = load_json(root / "_数据库" / "故事块摘要.json", None)
+        if not isinstance(doc, dict):
+            raise RuntimeError("故事块摘要.json 缺失或损坏")
+        vs = doc.get("volume_summaries")
+        have = set()
+        if isinstance(vs, list):
+            for e in vs:
+                if isinstance(e, dict) and isinstance(e.get("volume"), int):
+                    have.add(e["volume"])
+        closed = _closed_volumes(root)
+        pending = [{"volume": v, "cluster_ids": ids}
+                   for v, ids in sorted(closed.items()) if v not in have]
+        payload = {
+            "schema_version": 1,
+            "cluster_id": cid,
+            "boundary": bool(pending),
+            "volumes_pending": pending,
+            "closed_volumes": sorted(closed),
+            "volumes_summarized": sorted(have),
+            "detected_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        save_json(_wal_dir(root) / f"{cid}_volume_boundary.json", payload)
+        if pending:
+            for p in pending:
+                logger.info(f"[volume-boundary] 卷{p['volume']} 已完结（{len(p['cluster_ids'])} 个 "
+                            f"cluster: {','.join(p['cluster_ids'])}）→ 条件子任务：spawn "
+                            f"novel-summarizer MODE=volume → --apply-volume-summary {p['volume']}")
+        else:
+            logger.info(f"[volume-boundary] {cid} 无卷边界（零行为变化）")
+        return 0
+    except Exception as e:
+        sys.stderr.write(f"[FATAL save_state] detect-volume-boundary: "
+                         f"{type(e).__name__}: {str(e)[:160]}\n")
+        sys.stderr.flush()
+        return 2
+
+
+def cmd_apply_volume_summary(root: Path, volume_n) -> int:
+    """S10：卷级摘要确定性回库唯一入口（.wal/volume_<N>_summary.json → 故事块摘要.volume_summaries[]）。
+
+    校验（拒即 exit 2·账本零写入）：
+      ① 结构键钉死（judge_required_keys 精神）：volume(int·须==N) / summary(非空 str) /
+        source(非空 list·逐一可归一化) / generated_at_cluster(可归一化 cluster id)。
+      ② 卷必须真闭合（_closed_volumes 既有 ME 信号）——未完结卷拒绝回库（防误触发）。
+      ③ source 回溯完整性：必须恰好覆盖本卷全部 cluster_ids（缺=漏源·多=幻觉源·都拒）。
+      ④ 字数 300-500 CJK 仅 advisory warning（北极星⑤：结构 hard·内容不规训）。
+    幂等 upsert：按 volume 唯一；同内容 re-apply 零写盘 churn；内容变化则替换条目。
+    可选透传键白名单见 _VOLUME_SUMMARY_OPTIONAL_KEYS（类型不符即丢弃·未知键不入库）。
+    """
+    try:
+        vol = int(volume_n)
+        db = root / "_数据库"
+        wal = db / ".wal" / f"volume_{vol}_summary.json"
+        if not wal.is_file():
+            raise RuntimeError(f"{wal.name} 不存在（须先 spawn novel-summarizer MODE=volume 产出）")
+        prod = load_json(wal, None)
+        if not isinstance(prod, dict):
+            raise RuntimeError(f"{wal.name} 损坏（非 JSON object）")
+        # ① 结构键钉死
+        try:
+            p_vol = int(prod.get("volume"))
+        except (TypeError, ValueError):
+            raise RuntimeError("产物缺合法 volume 整数键") from None
+        if p_vol != vol:
+            raise RuntimeError(f"产物 volume={p_vol} 与 --apply-volume-summary {vol} 不一致")
+        summary_text = prod.get("summary")
+        if not isinstance(summary_text, str) or not summary_text.strip():
+            raise RuntimeError("产物缺非空 summary")
+        raw_source = prod.get("source")
+        if not isinstance(raw_source, list) or not raw_source:
+            raise RuntimeError("产物缺非空 source list")
+        gac = cluster_lookup.normalize_cluster_id(prod.get("generated_at_cluster"))
+        if not gac:
+            raise RuntimeError("产物缺合法 generated_at_cluster")
+        source = []
+        for s in raw_source:
+            n = cluster_lookup.normalize_cluster_id(s)
+            if not n:
+                raise RuntimeError(f"source 含非法 cluster id: {s!r}")
+            if n not in source:
+                source.append(n)
+        # ② 卷必须真闭合
+        expected = _closed_volumes(root).get(vol)
+        if not expected:
+            raise RuntimeError(f"卷{vol} 未完结（该卷 ME 池非空且全部 status=completed 才是卷边界）"
+                               "——拒绝回库")
+        # ③ source 回溯完整性（恰好覆盖·缺/多都拒）
+        missing = [c for c in expected if c not in source]
+        extra = [c for c in source if c not in expected]
+        if missing or extra:
+            raise RuntimeError(f"source 与卷{vol} 实际 cluster 集不符："
+                               f"missing={missing} extra={extra}")
+        # ④ 字数 advisory
+        cjk = sum(1 for c in summary_text if '一' <= c <= '鿿' or '㐀' <= c <= '䶿')
+        if not (300 <= cjk <= 500):
+            logger.warning(f"[volume-summary] 卷{vol} summary CJK={cjk} 越出 300-500 契约"
+                           "（advisory·照常落库）")
+        entry = {
+            "volume": vol,
+            "summary": summary_text.strip(),
+            "source": sorted(source, key=lambda c: cluster_lookup.cluster_num(c) or 0),
+            "generated_at_cluster": gac,
+        }
+        for k, typ in _VOLUME_SUMMARY_OPTIONAL_KEYS:
+            v_opt = prod.get(k)
+            if isinstance(v_opt, typ) and v_opt:
+                entry[k] = v_opt
+        # ⑤ 幂等 upsert
+        sum_path = db / "故事块摘要.json"
+        doc = load_json(sum_path, None)
+        if not isinstance(doc, dict):
+            raise RuntimeError("故事块摘要.json 缺失或损坏")
+        vs = doc.get("volume_summaries")
+        if not isinstance(vs, list):
+            vs = doc["volume_summaries"] = []
+        idx = next((i for i, e in enumerate(vs)
+                    if isinstance(e, dict) and e.get("volume") == vol), None)
+        if idx is not None and {k: v for k, v in vs[idx].items() if k != "applied_at"} == entry:
+            logger.info(f"[volume-summary] 卷{vol} 已存在同内容条目（幂等·零写盘）")
+            return 0
+        entry["applied_at"] = datetime.now().isoformat(timespec="seconds")
+        if idx is not None:
+            vs[idx] = entry
+            logger.info(f"[volume-summary] 卷{vol} 条目已更新（upsert 替换·source {len(source)} "
+                        f"cluster·CJK {cjk}）")
+        else:
+            vs.append(entry)
+            vs.sort(key=lambda e: e.get("volume") if isinstance(e.get("volume"), int) else 0)
+            logger.info(f"[volume-summary] 卷{vol} 卷级摘要回库 → 故事块摘要.volume_summaries"
+                        f"（source {len(source)} cluster·CJK {cjk}）")
+        save_json(sum_path, doc)
+        return 0
+    except Exception as e:
+        sys.stderr.write(f"[FATAL save_state] apply-volume-summary: "
+                         f"{type(e).__name__}: {str(e)[:200]}\n")
+        sys.stderr.flush()
+        return 2
+
+
 # 🔴 2026-06-29 场景级Appraisal Beat(chain-of-emotion)
 def cmd_apply_appraisal_beats(root, cluster_key):
     """🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion）·summarizer 梳理产物确定性回库（零模型·幂等）。
@@ -1551,6 +1789,15 @@ def main():
                     help="🔴 2026-06-29: foreshadower JudgeReport 的 dramatic_questions 确定性回库"
                          " 戏剧问题账本.json（PITQ/MDQ·读者粘性·只 active cluster·按 qid 幂等去重·"
                          "required STATE·未产则 exit2）")
+    # 🔴 2026-07-07 S10 递归卷级层级摘要（Ex3 摘要金字塔 + source 回溯）
+    ap.add_argument("--detect-volume-boundary", type=str, metavar="CLUSTER_KEY",
+                    help="🔴 S10: 卷边界确定性检测（既有信号：某卷 ME 池非空且全部 status=completed"
+                         " 且 故事块摘要.volume_summaries 尚无该卷）→ 写 .wal/<cid>_volume_boundary"
+                         ".json 供主代理条件 spawn novel-summarizer MODE=volume·无边界=零行为变化")
+    ap.add_argument("--apply-volume-summary", type=str, metavar="VOLUME_N",
+                    help="🔴 S10: 卷级摘要回库唯一入口——读 .wal/volume_<N>_summary.json 校验"
+                         "（结构键钉死 + source 必须恰好覆盖本卷全部 cluster_ids + 卷真闭合）"
+                         "→ 幂等 upsert 故事块摘要.volume_summaries[]·不合格 exit2 零写入")
     args = ap.parse_args()
 
     root = Path(args.project).resolve()
@@ -1575,6 +1822,10 @@ def main():
         rc = cmd_apply_appraisal_beats(root, args.apply_appraisal_beats)
     elif args.apply_dramatic_questions:
         rc = cmd_apply_dramatic_questions(root, args.apply_dramatic_questions)
+    elif args.detect_volume_boundary:
+        rc = cmd_detect_volume_boundary(root, args.detect_volume_boundary)
+    elif args.apply_volume_summary:
+        rc = cmd_apply_volume_summary(root, args.apply_volume_summary)
     elif args.build_cluster_summary:
         import cluster_summary_builder
         _res = cluster_summary_builder.build_cluster_summary(root, args.build_cluster_summary)

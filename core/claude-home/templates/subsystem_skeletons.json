@@ -288,7 +288,7 @@
     },
     "故事块摘要": {
       "schema_version": "v2.cluster",
-      "_doc": "cluster 账本主存储 · cluster-save-state 经 cluster_summary_builder 落库 · item 必需 cluster_id/title",
+      "_doc": "cluster 账本主存储 · cluster-save-state 经 cluster_summary_builder 落库 · item 必需 cluster_id/title · 🆕 2026-07-07 S10 递归卷级层级摘要（Ex3 摘要金字塔+source 回溯）：volume_summaries[] 每卷一条 {volume:int, summary:300-500字卷级摘要, source:[本卷全部 cluster_ids·回库校验恰好覆盖], generated_at_cluster, 可选 emotional_peak/key_turning_points, applied_at}·卷边界（大势卡该卷 ME 池非空全 completed·save_state --detect-volume-boundary 检测）时 novel-summarizer MODE=volume 聚合本卷 cluster 摘要产出·save_state --apply-volume-summary <N> 唯一回库入口（幂等 upsert）·消费端 build_manifest 历史注入后补",
       "consumption": {
         "layer": "direct_inject",
         "by": [
@@ -297,7 +297,8 @@
         ],
         "status": "live"
       },
-      "clusters": []
+      "clusters": [],
+      "volume_summaries": []
     },
     "大势卡": {
       "_schema": "major_events_v21_phase",

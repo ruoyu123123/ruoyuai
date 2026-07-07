@@ -500,7 +500,7 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
       "scope_summary": "本故事块核心矛盾 + 起承转合一句话",
       "foreshadowing_to_plant": ["fs_001"],
       "scene_storyboard": [
-        {"ch": 1, "title": "场景标题", "characters": ["角色A", "角色B"], "key_events": ["事件1", "事件2"], "scene_type": ["日常", "悬疑"], "emotion": {"value": 6, "trend": "↘↗", "anchors": {"hook": "开头钩子描述", "conflict": "中段冲突描述", "climax": "高潮/反转描述", "cliffhanger": "章末悬念描述"}}, "goal": "本场景核心目标", "turning_point": "关键转折", "threads_advance": ["线索ID"], "try_fail": "尝试X→失败Y→适应Z", "info_gain": "向读者释放的新信息", "payoff": "兑现的伏笔(可选)", "time_hint": "故事时间"},
+        {"ch": 1, "title": "场景标题", "characters": ["角色A", "角色B"], "key_events": ["事件1", "事件2"], "scene_type": ["日常", "悬疑"], "emotion": {"value": 6, "trend": "↘↗", "anchors": {"hook": "开头钩子描述", "conflict": "中段冲突描述", "climax": "高潮/反转描述", "cliffhanger": "章末悬念描述"}}, "goal": "本场景核心目标", "turning_point": "关键转折", "threads_advance": ["线索ID"], "try_fail": "尝试X→失败Y→适应Z", "info_gain": "向读者释放的新信息", "payoff": "兑现的伏笔(可选)", "time_hint": "故事时间", "conflict_stage": "铺垫", "scene_purpose": "本场如何 service 卷核心冲突(一句话·不能只描述画面)", "alignment": "aligned"},
         {"ch": 2, "title": "场景标题", "characters": ["角色A", "角色C"], "key_events": ["事件3", "事件4"], "scene_type": ["战斗", "转折"], "emotion": {"value": -3, "trend": "↘", "anchors": {"hook": "开头钩子描述", "conflict": "中段冲突描述", "climax": "高潮/反转描述", "cliffhanger": "章末悬念描述"}}, "goal": "本场景核心目标", "turning_point": "关键转折", "threads_advance": ["线索ID"], "try_fail": "尝试-失败-适应", "info_gain": "新信息释放", "payoff": null, "time_hint": "故事时间"}
       ]
     }
@@ -513,6 +513,7 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
    - 🔴 **2026-05-29 复审修复[H5]**：`cluster_blueprint` **必须是 dict**（`cluster_id` → cluster 数据），**禁止初始化为 list**。SC-1 规范形态 + `cluster_lookup._iter_blueprint_ranges` 用 `.items()` 遍历 `cluster_blueprint` 取每个 cluster 的 `chapter_range` / `scene_storyboard[].ch`；写成 list 会让反查整体瘫痪（城南项目实测 list(25) 即此 bug）。
    - 🔴 **cluster-first 涌现纪律**：outline 阶段**只详化 `cluster_001`**（含完整 `scene_storyboard` + `scope_summary` + `foreshadowing_to_plant`）。`cluster_002+` 不预设——由 `/cluster-save-state` 末尾涌现。
    - 🔴 **v27 freestyle 不写 `chapter_range`**：cluster 的 `chapter_range` 由 splitter 切完后回填（事件簇.json 为权威源），outline 阶段不预设。`scene_storyboard[].ch` 是 writer 蓝图序号（场景顺序），非物理章号。
+   - 🔴 **S11 scene 级大势对齐三问自评（2026-07-07 · advisory）**：outline-planner 详化 storyboard（cluster_001 与涌现 brief 两个场合）时每 scene 必答三问（①此场景如何推动卷核心冲突 ②是否违反世界观/locked_facts ③`scene_purpose` 必须体现与卷核心任务的关系·不能只描述画面），自评落 `conflict_stage`（铺垫|升级|高潮|转折|尾声）/ `scene_purpose` / `alignment`（aligned|minor-deviation|needs-review）三个**可选** advisory 字段（fluid 纪律·schema 不设 required 不硬锁）。`needs-review` 是 planner 的诚实标记不是失败（北极星⑤ 自评透明化非外部裁决）；`volume_arc_drift_scanner` 把本卷 needs-review 计数/清单汇总进其报告 `alignment_review` 段（只报告不裁决）。权威 schema = `event_cluster_schema.json` 的 `scene_storyboard.items`，合约详见 `.claude/agents/novel-outline-planner.md` ⑧。
    - `narrative_mode`：仅首个 cluster 默认 `"in_medias_res"`（黄金三章倒叙），后续 cluster 默认 `"linear"`。
    - `volumes`：卷/阶段层；每卷都要有 `volume_core_conflict` / `volume_thread` / `volume_finale_signal`
    - `volume_arc`：每卷的人物成长弧线（起承转），写作时由 manifest 注入给 writer，确保 cluster 服务于卷级目标

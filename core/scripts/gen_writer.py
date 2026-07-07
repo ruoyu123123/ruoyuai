@@ -2117,6 +2117,121 @@ def length_telemetry_score(cjk: int, band: tuple = None) -> float:
     return 100.0
 
 
+# ── S8 deviation 双嵌入多样性遥测分（DDPO arXiv:2503.17126 的 deviation 度量 ·
+#     research/open_source_writing_systems_round2.md S8 · 2026-07-07 · 只抄度量不抄训练）──
+# 🔴 落点纪律（与 S9 同款）：本分**只做遥测**——每候选 {style_deviation, content_deviation}
+# 写进 selection_trace + changes 遥测（供 learning_loop / BPR 当 reward 特征），顶层
+# diversity_collapse_hint 只提示「N 候选已坍缩同一模式，选择是假选择」——只记录绝不改择稿
+# （select_best_draft 零感知 · 北极星⑤ · 源码锁 tests/test_best_of_n.py::
+# test_I_deviation_never_participates_in_selection）。
+# 双轨 W6-C：风格轨 = EMBED_BACKEND 声纹（compute_embeddings_batch·daemon 热路径）；
+# 内容轨 = bge-small-zh（compute_content_embeddings_batch·不可用诚实 None 无 hash 兜底）。
+
+# 保守经验地板（cosine 距离尺度）· 待金标准校准（真机 N 候选 deviation 分布测量后收紧·
+# 已登记 threshold_registry：gen_writer.py::DEVIATION_COLLAPSE_FLOOR_DEFAULT）。
+DEVIATION_COLLAPSE_FLOOR_DEFAULT = 0.02
+
+
+def _deviation_collapse_floor() -> float:
+    """读 env DEVIATION_COLLAPSE_FLOOR（默认 0.02 保守 · 空/非法/负值回退默认）。"""
+    raw = (os.environ.get("DEVIATION_COLLAPSE_FLOOR") or "").strip()
+    if not raw:
+        return DEVIATION_COLLAPSE_FLOOR_DEFAULT
+    try:
+        v = float(raw)
+    except (ValueError, TypeError):
+        return DEVIATION_COLLAPSE_FLOOR_DEFAULT
+    return v if v >= 0 else DEVIATION_COLLAPSE_FLOOR_DEFAULT
+
+
+def _style_embeddings_for_deviation(bodies: list) -> "list | None":
+    """风格轨嵌入（EMBED_BACKEND 声纹 · embedding_store 批 API · daemon/venv 桥）。
+
+    返回与 bodies 等长的 list[vec|None]；整轨不可用 → None：
+    · 后端=hash（默认零配置）→ 整轨 None——hash 不是风格语义，拿它算 deviation 是伪装信号；
+    · 真后端下单候选桥失败会被 compute_embeddings_batch 兜底成 hash 384 维 → 按「维度
+      与后端 dim 不符」识别出来置 None（该候选诚实标失败 · 不让 hash 向量污染 pairwise）。
+    """
+    try:
+        import embedding_store as es
+        method, dim, _fn = es._detect_backend()
+        if method == "hash":
+            return None
+        vecs = es.compute_embeddings_batch(bodies)
+        return [v if (v and len(v) == dim) else None for v in vecs]
+    except Exception:  # noqa: BLE001 — 遥测层绝不阻断写作
+        return None
+
+
+def _content_embeddings_for_deviation(bodies: list) -> "list | None":
+    """内容轨嵌入（bge-small-zh · W6-C 双轨）。整轨不可用 → None（无 hash 兜底 · 诚实 skip）。
+
+    compute_content_embeddings_batch 契约 = 全有或全无（部分失败 → None），故内容轨
+    没有「单候选 None」形态——要么全轨可算，要么整轨 skip。
+    """
+    try:
+        import embedding_store as es
+        return es.compute_content_embeddings_batch(bodies)
+    except Exception:  # noqa: BLE001 — 遥测层绝不阻断写作
+        return None
+
+
+def _pairwise_mean_distances(vecs: list) -> list:
+    """每向量与其余向量的平均余弦距离（1 - cosine · 值越低越同质）。
+
+    vec=None（该候选嵌入失败）或无可比对象（其余全 None）→ 该位 None。
+    """
+    import embedding_store as es
+    n = len(vecs)
+    out: list = [None] * n
+    for i in range(n):
+        if not vecs[i]:
+            continue
+        ds = [1.0 - es.cosine_similarity(vecs[i], vecs[j])
+              for j in range(n) if j != i and vecs[j]]
+        if ds:
+            out[i] = round(sum(ds) / len(ds), 4)
+    return out
+
+
+def candidate_deviation_scores(bodies: list) -> "list[dict] | None":
+    """N 候选双嵌入 deviation 遥测分（风格/内容分开算 · DDPO deviation 度量）。
+
+    每候选 = {style_deviation, content_deviation}：与其余候选的平均 pairwise 余弦距离。
+    · N<2 → None（deviation 无定义 · 诚实 skip 不伪装）；
+    · 两轨全不可用 → None；单轨不可用 → 该轨全 None；
+    · 真后端下单候选嵌入失败 → 该候选风格轨 None（其余候选照算 · 不崩）。
+    成本：每轨一次批调用（N 条 · daemon 热路径便宜）。仅遥测——不进择稿、不 hard_gate。
+    """
+    if not bodies or len(bodies) < 2:
+        return None
+    style_vecs = _style_embeddings_for_deviation(bodies)
+    content_vecs = _content_embeddings_for_deviation(bodies)
+    if style_vecs is None and content_vecs is None:
+        return None
+    n = len(bodies)
+    style_dev = _pairwise_mean_distances(style_vecs) if style_vecs is not None else [None] * n
+    content_dev = _pairwise_mean_distances(content_vecs) if content_vecs is not None else [None] * n
+    return [{"style_deviation": s, "content_deviation": c}
+            for s, c in zip(style_dev, content_dev)]
+
+
+def diversity_collapse_hint(deviations: "list | None", floor: float = None) -> "bool | None":
+    """全体 style_deviation 均值 < 地板 → True（N 候选坍缩同一模式 · 选择是假选择）。
+
+    只记录绝不改择稿（北极星⑤）。风格轨无任何有效值 → None（未知 ≠ 健康 · 不假装 False）。
+    地板默认 _deviation_collapse_floor()（env DEVIATION_COLLAPSE_FLOOR · 保守值待金标准标定）。
+    """
+    if not deviations:
+        return None
+    vals = [d.get("style_deviation") for d in deviations
+            if d.get("style_deviation") is not None]
+    if not vals:
+        return None
+    f = _deviation_collapse_floor() if floor is None else floor
+    return (sum(vals) / len(vals)) < f
+
+
 def gather_author_ref_text(project_root: Path, max_chars: int = 6000) -> str:
     """定位作者真实原文当 SFS / AV-judge 的锚（best-of-N 择优用 · 找不到则空）。
 
@@ -2292,8 +2407,10 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
 
     lt_band = length_telemetry_band()  # S9 遥测带（仅遥测 · 不进择稿）
     scored: list[dict] = []
+    bodies: list[str] = []  # S8 deviation 遥测用（与 scored 同序）
     for d in ok_drafts:
         body, _changes = split_text_and_changes(d["reply"])
+        bodies.append(body)
         sc = score_candidate(body, author_ref, loader, use_av_judge=use_av_judge)
         body_cjk = cio.count_cjk(body)
         lt_score = length_telemetry_score(body_cjk, lt_band)
@@ -2304,6 +2421,18 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
         logger.info(f"[best-of-N] 候选 idx={d['idx']} temp={d['temperature']}: "
               f"SFS={sc['sfs']} AV走味={sc['av_drift_count']} composite={sc['composite']} "
               f"cjk={body_cjk} length_telemetry={lt_score}")
+
+    # S8 deviation 双嵌入多样性遥测（仅遥测 · select_best_draft 零感知 · 北极星⑤）
+    dev_floor = _deviation_collapse_floor()
+    try:
+        deviations = candidate_deviation_scores(bodies)
+    except Exception as e:  # noqa: BLE001 — 遥测层绝不阻断写作
+        logger.info(f"[best-of-N] deviation 遥测失败（跳过）: {str(e)[:120]}")
+        deviations = None
+    collapse_hint = diversity_collapse_hint(deviations, dev_floor)
+    if collapse_hint:
+        logger.info(f"[best-of-N] ⚠️ diversity_collapse_hint: 全体 style_deviation 均值低于地板 "
+                    f"{dev_floor} — N 候选已坍缩同一模式，选择是假选择（仅记录 · 不改择稿）")
 
     best_i, reason = select_best_draft(scored)
     best = scored[best_i]
@@ -2319,14 +2448,19 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
         "selection_reason": reason,
         # S9 遥测带（LongWriter 非对称 · 仅 reward 特征 · 不参与 selection_reason）
         "length_telemetry_band": list(lt_band),
+        # S8 deviation 遥测（DDPO 度量 · 仅记录 · None=嵌入不可用/N<2 诚实 skip）
+        "deviation_collapse_floor": dev_floor,
+        "diversity_collapse_hint": collapse_hint,
         "candidates": [
             {"idx": s["idx"], "temperature": s["temperature"], "cjk": s["body_cjk"],
              "length_telemetry_score": s["length_telemetry_score"],
+             "style_deviation": (deviations[k]["style_deviation"] if deviations else None),
+             "content_deviation": (deviations[k]["content_deviation"] if deviations else None),
              "sfs": s["score"]["sfs"], "av_drift_count": s["score"]["av_drift_count"],
              "av_drift_dims": s["score"]["av_drift_dims"],
              "av_order_consistency": s["score"].get("av_order_consistency"),
              "composite": s["score"]["composite"], "errors": s["score"]["errors"]}
-            for s in scored
+            for k, s in enumerate(scored)
         ],
     }
     return best["reply"], best["profile"], trace

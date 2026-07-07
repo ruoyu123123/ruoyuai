@@ -4,7 +4,7 @@
       "versions": [
         {
           "version": "v1",
-          "path": "core/ml/coherence/runs/coherence_v1",
+          "path": "core\\ml\\coherence\\runs\\coherence_v1",
           "metrics": {
             "accuracy": 0.604,
             "precision": 0.8634,
@@ -15,7 +15,8 @@
           "data_size": 25000,
           "env_gate": "RUOYU_NN_COHERENCE",
           "status": "shadow",
-          "registered_at": "2026-06-29T14:46:20Z"
+          "registered_at": "2026-06-29T14:46:20Z",
+          "updated_at": "2026-07-07T14:13:33Z"
         }
       ],
       "active_version": null,
@@ -25,14 +26,15 @@
       "versions": [
         {
           "version": "v1",
-          "path": "core/ml/emotion_vad/checkpoints/va_base",
+          "path": "core\\ml\\emotion_vad\\checkpoints\\va_base",
           "metrics": {
             "mean_ccc": 0.8
           },
           "data_size": 12000,
           "env_gate": "RUOYU_NN_VAD",
           "status": "active",
-          "registered_at": "2026-06-29T14:46:20Z"
+          "registered_at": "2026-06-29T14:46:20Z",
+          "updated_at": "2026-07-07T14:13:33Z"
         }
       ],
       "active_version": "v1",
@@ -42,15 +44,32 @@
       "versions": [
         {
           "version": "v1",
-          "path": "core/ml/style_embed/runs/style_embed_char_v1/final",
+          "path": "core\\ml\\style_embed\\runs\\style_embed_char_v1\\final",
           "metrics": {},
           "data_size": 0,
           "env_gate": "EMBED_BACKEND",
           "status": "active",
-          "registered_at": "2026-06-29T14:46:20Z"
+          "registered_at": "2026-06-29T14:46:20Z",
+          "updated_at": "2026-07-07T14:13:33Z"
         }
       ],
       "active_version": "v1",
+      "shadow_version": null
+    },
+    "surprisal_gpt2": {
+      "versions": [
+        {
+          "version": "uer-gpt2-chinese-cluecorpussmall",
+          "path": "hf://uer/gpt2-chinese-cluecorpussmall",
+          "metrics": {},
+          "data_size": 0,
+          "env_gate": "RUOYU_NN_SURPRISAL",
+          "status": "active",
+          "registered_at": "2026-07-07T14:13:31Z",
+          "updated_at": "2026-07-07T14:13:33Z"
+        }
+      ],
+      "active_version": "uer-gpt2-chinese-cluecorpussmall",
       "shadow_version": null
     }
   }

@@ -1,23 +1,23 @@
 {
   "_doc": "语义阈值全集注册表（Wave-6 金标准校准地基）。人工逐处 Read 47 处 待金标准校准 grep 标记上下文后结构化整理产出，只读盘点不改动任何 scanner。entries 按 relation_family 分组（content_echo/content_dedup/style_drift/zero_shot_class/other），组内按 file/constant 排序。",
   "generated_at": "2026-07-04",
-  "marker_total": 33,
+  "marker_total": 34,
   "marker_source_cmd": "grep -rn \"待金标准校准\" core/scripts/*.py",
-  "entry_count": 46,
+  "entry_count": 47,
   "kind_counts": {
-    "threshold": 50,
+    "threshold": 51,
     "scale": 3,
     "prototype": 5
   },
   "relation_family_counts": {
     "content_echo": 6,
     "content_dedup": 6,
-    "style_drift": 4,
+    "style_drift": 5,
     "zero_shot_class": 5,
     "other": 37
   },
-  "env_override_count": 6,
-  "pinned_by_tests_count": 26,
+  "env_override_count": 7,
+  "pinned_by_tests_count": 27,
   "known_blind_spots": [
     {
       "what": "zero_shot_prototype.py 的 classify()/classify_batch() 默认参数 floor=0.5",
@@ -824,6 +824,24 @@
         54
       ],
       "note": "已有真实数据：5 真作者（诡秘/主神/惊悚/剑来/将夜）实测 thin_ratio 全 0.0，2026-06-20 已放量 active。字面 0.7 在 tests/test_temporal_grounding_scanner.py 中出现但较通用，未采信为确定钉值，建议人工复核。"
+    },
+    {
+      "id": "gen_writer.py::DEVIATION_COLLAPSE_FLOOR_DEFAULT",
+      "file": "core/scripts/gen_writer.py",
+      "constant": "DEVIATION_COLLAPSE_FLOOR_DEFAULT",
+      "kind": "threshold",
+      "current_value": 0.02,
+      "env_override": "DEVIATION_COLLAPSE_FLOOR",
+      "relation_family": "style_drift",
+      "consumer": "diversity_collapse_hint",
+      "compares": "best-of-N 候选间风格嵌入 pairwise 余弦距离均值 vs 坍缩地板——低于地板=N 候选已坍缩同一模式(选择是假选择)·S8 DDPO deviation 遥测(arXiv:2503.17126)·只记录绝不参与择稿",
+      "pinned_by_tests": [
+        "tests/test_best_of_n.py"
+      ],
+      "marker_lines": [
+        2130
+      ],
+      "note": "0.02 为保守占位·待真机 N 候选 deviation 分布测量后收紧(风格轨 EMBED_BACKEND 声纹尺度)。"
     }
   ]
 }

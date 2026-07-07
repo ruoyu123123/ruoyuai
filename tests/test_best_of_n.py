@@ -660,3 +660,245 @@ def test_H_save_output_records_length_telemetry():
     assert lt["band"] == [12000, 25000]
     assert lt["score"] == 0.0  # 6 CJK 极短 → 归零（真实带外遥测非占位值）
     assert lt["formula"] == "longwriter_asymmetric(under/2, over/3)"
+
+
+# ════════════════════════════════════════════════════════════════
+# [I] S8 deviation 双嵌入多样性遥测分（DDPO arXiv:2503.17126 的 deviation 度量 ·
+#     research/open_source_writing_systems_round2.md S8 · 2026-07-07 · 只抄度量不抄训练）
+# 🔴 落点纪律：只做遥测（selection_trace 每候选 style/content deviation + 顶层
+#     diversity_collapse_hint）——绝不参与 select_best_draft 择稿（北极星⑤ · 源码锁）。
+# 嵌入桥全 mock（embedding_store daemon/venv 桥不实跑 · 需模型环境）。
+# ════════════════════════════════════════════════════════════════
+
+
+def _patch_embed(style_backend=("mock_style", 3, None),
+                 style_vecs="__unset__", content_vecs="__unset__"):
+    """把 embedding_store 双轨桩掉：_detect_backend / compute_embeddings_batch /
+    compute_content_embeddings_batch（gen_writer 内部 import 同一 sys.modules 实例）。
+    返回 restore_fn。"""
+    import embedding_store as es
+    orig = (es._detect_backend, es.compute_embeddings_batch,
+            es.compute_content_embeddings_batch)
+    es._detect_backend = lambda: style_backend
+    if style_vecs != "__unset__":
+        es.compute_embeddings_batch = lambda texts: style_vecs
+    if content_vecs != "__unset__":
+        es.compute_content_embeddings_batch = lambda texts: content_vecs
+
+    def restore():
+        (es._detect_backend, es.compute_embeddings_batch,
+         es.compute_content_embeddings_batch) = orig
+    return restore
+
+
+def test_I_pairwise_math_hand_computed():
+    """pairwise 平均余弦距离手算 fixture：风格/内容双轨各自独立算 · 数值精确匹配。
+
+    风格轨（dim=3 单位向量·cosine=点积）：v0=[1,0,0] v1=[0,1,0] v2=[1,0,0]
+      d(0,1)=1 d(0,2)=0 d(1,2)=1 → dev = [0.5, 1.0, 0.5]
+    内容轨：c0=[1,0] c1=[1,0] c2=[0,1] → dev = [0.5, 0.5, 1.0]
+    """
+    restore = _patch_embed(
+        style_backend=("mock_style", 3, None),
+        style_vecs=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+        content_vecs=[[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    try:
+        out = gw.candidate_deviation_scores(["甲", "乙", "丙"])
+    finally:
+        restore()
+    assert out == [
+        {"style_deviation": 0.5, "content_deviation": 0.5},
+        {"style_deviation": 1.0, "content_deviation": 0.5},
+        {"style_deviation": 0.5, "content_deviation": 1.0},
+    ]
+
+
+def test_I_style_content_tracks_independent():
+    """风格/内容分轨独立：单轨不可用 → 该轨全 None，另一轨照算（不互相拖垮）。"""
+    # ① 内容轨不可用（bge 后端缺 → compute_content_embeddings_batch=None）→ 只有风格轨
+    restore = _patch_embed(
+        style_backend=("mock_style", 2, None),
+        style_vecs=[[1.0, 0.0], [0.0, 1.0]], content_vecs=None)
+    try:
+        out = gw.candidate_deviation_scores(["甲", "乙"])
+    finally:
+        restore()
+    assert out == [{"style_deviation": 1.0, "content_deviation": None},
+                   {"style_deviation": 1.0, "content_deviation": None}]
+    # ② 风格轨后端=hash（默认零配置·hash 不是风格语义）→ 风格轨诚实 None · 内容轨照算
+    restore = _patch_embed(
+        style_backend=("hash", 384, None),
+        style_vecs=[[9.9], [9.9]],  # 即使被错误调用也不该用到（hash 短路在前）
+        content_vecs=[[1.0, 0.0], [0.0, 1.0]])
+    try:
+        out = gw.candidate_deviation_scores(["甲", "乙"])
+    finally:
+        restore()
+    assert out == [{"style_deviation": None, "content_deviation": 1.0},
+                   {"style_deviation": None, "content_deviation": 1.0}]
+
+
+def test_I_both_tracks_unavailable_skips_honest():
+    """两轨全不可用（hash 后端 + 内容后端缺）→ 返回 None（诚实 skip 不伪装信号）。"""
+    restore = _patch_embed(style_backend=("hash", 384, None), content_vecs=None)
+    try:
+        assert gw.candidate_deviation_scores(["甲", "乙"]) is None
+    finally:
+        restore()
+
+
+def test_I_n_lt_2_skips():
+    """N<2 → None（deviation 对单候选无定义 · 不管嵌入是否可用）。"""
+    restore = _patch_embed(
+        style_backend=("mock_style", 2, None),
+        style_vecs=[[1.0, 0.0]], content_vecs=[[1.0, 0.0]])
+    try:
+        assert gw.candidate_deviation_scores(["单稿"]) is None
+        assert gw.candidate_deviation_scores([]) is None
+    finally:
+        restore()
+
+
+def test_I_single_candidate_embed_failure_not_fatal():
+    """真后端下单候选桥失败（被 compute_embeddings_batch 兜底成 hash 384 维·与后端 dim
+    不符）→ 该候选 style_deviation=None，其余候选照算（不崩 · 不让 hash 向量污染 pairwise）。"""
+    restore = _patch_embed(
+        style_backend=("mock_style", 3, None),
+        style_vecs=[[1.0, 0.0, 0.0], [0.5] * 384, [0.0, 0.0, 1.0]],  # idx=1 维度不符=失败
+        content_vecs=None)
+    try:
+        out = gw.candidate_deviation_scores(["甲", "乙", "丙"])
+    finally:
+        restore()
+    assert out[0]["style_deviation"] == 1.0   # 只与 idx=2 可比 → d=1.0
+    assert out[1]["style_deviation"] is None  # 失败候选诚实 None
+    assert out[2]["style_deviation"] == 1.0
+
+
+def test_I_collapse_hint_positive_negative():
+    """diversity_collapse_hint 正反例 + env 地板可调 + 无风格信号=None（未知≠健康）。"""
+    os.environ.pop("DEVIATION_COLLAPSE_FLOOR", None)
+    # ① 正例：全体 style_deviation 均值 0.003 < 默认地板 0.02 → True（坍缩·假选择）
+    low = [{"style_deviation": 0.001, "content_deviation": 0.5},
+           {"style_deviation": 0.005, "content_deviation": 0.5}]
+    assert gw.diversity_collapse_hint(low) is True
+    # ② 反例：均值 0.35 >= 0.02 → False（多样性健康）
+    high = [{"style_deviation": 0.3, "content_deviation": None},
+            {"style_deviation": 0.4, "content_deviation": None}]
+    assert gw.diversity_collapse_hint(high) is False
+    # ③ deviation 整体 skip / 风格轨全 None → None（不假装 False）
+    assert gw.diversity_collapse_hint(None) is None
+    assert gw.diversity_collapse_hint(
+        [{"style_deviation": None, "content_deviation": 0.5}] * 2) is None
+    # ④ env 地板可调：DEVIATION_COLLAPSE_FLOOR=0.5 → 均值 0.35 也算坍缩
+    try:
+        os.environ["DEVIATION_COLLAPSE_FLOOR"] = "0.5"
+        assert gw.diversity_collapse_hint(high) is True
+        # 非法/负值回退默认 0.02
+        os.environ["DEVIATION_COLLAPSE_FLOOR"] = "abc"
+        assert gw._deviation_collapse_floor() == gw.DEVIATION_COLLAPSE_FLOOR_DEFAULT
+        os.environ["DEVIATION_COLLAPSE_FLOOR"] = "-1"
+        assert gw._deviation_collapse_floor() == gw.DEVIATION_COLLAPSE_FLOOR_DEFAULT
+    finally:
+        os.environ.pop("DEVIATION_COLLAPSE_FLOOR", None)
+
+
+def test_I_trace_contains_deviation():
+    """pipeline selection_trace：每候选带 style/content deviation + 顶层 collapse_hint/
+    地板值（遥测入 trace → 随 best_of_n_trace 进 changes.ecas_metadata · 透明可审）。"""
+    g = _reload_gw(None)
+    os.environ.pop("DEVIATION_COLLAPSE_FLOOR", None)
+    proj = _ROOT / "tests" / "__nonexistent_proj_dev__"
+    loader = _Loader([_P()])
+    restore_gen, _ = _patch_call_gen_model(g, ["稿0。", "稿1。"])
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: ""
+    restore_embed = _patch_embed(
+        style_backend=("mock_style", 2, None),
+        style_vecs=[[1.0, 0.0], [0.0, 1.0]],   # 正交 → dev=1.0（健康多样）
+        content_vecs=None)                      # 内容轨不可用 → None
+    try:
+        _reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        restore_gen()
+        restore_embed()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert trace["deviation_collapse_floor"] == 0.02
+    assert trace["diversity_collapse_hint"] is False  # 均值 1.0 远高于地板
+    assert len(trace["candidates"]) == 2
+    for c in trace["candidates"]:
+        assert c["style_deviation"] == 1.0
+        assert c["content_deviation"] is None
+
+
+def test_I_trace_collapse_hint_true_when_identical():
+    """N 候选风格向量完全相同（deviation=0）→ diversity_collapse_hint=True（坍缩记录 ·
+    选择照旧走 select_best_draft 不受影响）。"""
+    g = _reload_gw(None)
+    os.environ.pop("DEVIATION_COLLAPSE_FLOOR", None)
+    proj = _ROOT / "tests" / "__nonexistent_proj_dev2__"
+    loader = _Loader([_P()])
+    restore_gen, _ = _patch_call_gen_model(g, ["稿0。", "稿1。"])
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: ""
+    restore_embed = _patch_embed(
+        style_backend=("mock_style", 2, None),
+        style_vecs=[[1.0, 0.0], [1.0, 0.0]],   # 同一向量 → dev=0.0 坍缩
+        content_vecs=None)
+    try:
+        reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        restore_gen()
+        restore_embed()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert trace["diversity_collapse_hint"] is True
+    assert reply == "稿0。"                       # 择稿不受 collapse_hint 影响（无信号退第一稿）
+    assert trace["selected_idx"] == 0
+
+
+def test_I_embed_unavailable_trace_honest_none():
+    """嵌入两轨全不可用 → trace 里 deviation 全 None + collapse_hint=None（诚实 skip ·
+    pipeline 不崩不阻断写作）。"""
+    g = _reload_gw(None)
+    proj = _ROOT / "tests" / "__nonexistent_proj_dev3__"
+    loader = _Loader([_P()])
+    restore_gen, _ = _patch_call_gen_model(g, ["稿0。", "稿1。"])
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: ""
+    restore_embed = _patch_embed(style_backend=("hash", 384, None), content_vecs=None)
+    try:
+        reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        restore_gen()
+        restore_embed()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert reply == "稿0。"
+    assert trace["diversity_collapse_hint"] is None
+    for c in trace["candidates"]:
+        assert c["style_deviation"] is None
+        assert c["content_deviation"] is None
+
+
+def test_I_deviation_never_participates_in_selection():
+    """🔴 落点纪律：deviation 遥测绝不参与择稿——deviation 高低翻不了 composite 排序，
+    无信号时也不当 tiebreaker（select_best_draft 行为零变化 · 北极星⑤）。"""
+    # ① composite 更高者胜出，即使其 deviation=0（坍缩候选照样按 composite 选）
+    scored = [_scored(0, sfs=80.0, av_drift=0), _scored(1, sfs=60.0, av_drift=0)]
+    for s, dv in zip(scored, (0.0, 0.9)):
+        s["style_deviation"] = dv
+        s["content_deviation"] = dv
+    best, _reason = gw.select_best_draft(scored)
+    assert best == 0, "composite 排序不受 deviation 遥测影响"
+    # ② 无打分信号 → 仍退回第一稿（deviation 不当 tiebreaker）
+    scored2 = [_scored(0, sfs=None, av_drift=None), _scored(1, sfs=None, av_drift=None)]
+    scored2[0]["style_deviation"], scored2[1]["style_deviation"] = 0.01, 0.95
+    best2, reason2 = gw.select_best_draft(scored2)
+    assert best2 == 0, (best2, reason2)
+    # ③ 源码锁：select_best_draft 函数体不引用 deviation/collapse（择稿逻辑物理隔离 ·
+    #    复用 test_H 同款 inspect 锁模式）
+    import inspect
+    src = inspect.getsource(gw.select_best_draft)
+    assert "deviation" not in src and "collapse" not in src

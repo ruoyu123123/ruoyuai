@@ -53,6 +53,9 @@ tools: Read, Write
   "link_to_prev": "therefore",          // 🔴 But-Therefore·与上一 scene 衔接·but(冲突转折)/therefore(因果后果)/and_then(平铺·流水账根因·要避免)·scene_idx>0 必产
   "result_type": "no_and",              // 🔴 try-fail·本场结果·yes_but(达成但有新麻烦)/no_and(失败且更糟)/yes_and(达成且顺势·慎用)·禁纯 yes 顺风局·必产
   "disaster": "停电后门反锁·学生开始失踪",  // 🔴 Swain·proactive 场结尾的挫败/恶化·仅 proactive_scene 填（reactive_sequel 则改填 reaction/dilemma/decision）
+  "conflict_stage": "铺垫",             // 🔴 S11 大势对齐三问①·本场在卷冲突弧的位置·铺垫/升级/高潮/转折/尾声·见下 ⑧·advisory
+  "scene_purpose": "首次让主角撞上封锁规则·卷核心冲突『规则还价』第一次具象化",  // 🔴 S11 三问③·本场如何 service 卷核心冲突·不能只描述画面·advisory
+  "alignment": "aligned",               // 🔴 S11 三问综合自评·aligned/minor-deviation/needs-review·needs-review=诚实标记不是失败·advisory
   "characters": ["陈默", "老院长"],     // 本场出场角色
   "participants": ["陈默", "老院长"],   // 🔴 角色信息差·本场在场角色（witness 命门·见下 ④）·必产·通常 = characters
   "focal_character": "陈默",            // 🔴 角色信息差·本场 POV/聚焦者·必产
@@ -74,7 +77,7 @@ tools: Read, Write
 
 > R20 探针字段：scene 可带 schema 既有的 `expectation` / `actual_outcome` / `gap_type` / `unit_type` / `value_axis` / `start_polarity` / `end_polarity`，这些字段与 goal/conflict/turn 正交；新产物不依赖它们完成核心合同。
 
-> **下游消费一致性确认**：`build_manifest` 读 `surface_clue` + 剥 `hidden_payoff`（plant）/ 到 `trigger_cluster` 暴露 `hidden_payoff` + reveal_directive（callback）；`gen_writer` 把整个 `scene_storyboard`（含 goal/conflict/turn/emotional_tone/plant_foreshadowing_surface + 🔴 participants/focal_character/focalization_mode/knowledge_gap_mode + 🔴 scene_type/link_to_prev/result_type/disaster/reaction/dilemma/decision + 🔴 scene_goal + 🔴 dialogue_objectives）原样注入 writer prompt 作走向骨架；`build_manifest._collect_scene_causal_skeleton` 另把 `scene_goal` 结构化透传 writer（治场景漂移·每场有目标驱动）；`build_manifest._collect_dialogue_objectives`（B agent）把对话密集 scene 的 `dialogue_objectives` 结构化透传 writer（对白即行动·见下 ⑥·what_unsaid 涉未到期 hidden 伏笔走 reveal 隔离）；`build_manifest` 据 `participants`/`focal_character` 做 per-scene 角色认知投射（见下 ④）；`build_manifest` + `causal_connector_scanner`（B agent）读 `scene_type`/`link_to_prev`/`result_type` 做 But-Therefore 因果连接器 + Swain 场景骨架（见下 ⑤）；`cluster_choice_apply._normalize_storyboard_ch` 透传所有 beat 字段（只补 scene_idx/ch）。三方对历史落库产物只读容忍；本 agent 新产的 cluster brief 必须带 beat / belief / causal 字段，缺失即合同错误，不作为可继续创作的成功产物。
+> **下游消费一致性确认**：`build_manifest` 读 `surface_clue` + 剥 `hidden_payoff`（plant）/ 到 `trigger_cluster` 暴露 `hidden_payoff` + reveal_directive（callback）；`gen_writer` 把整个 `scene_storyboard`（含 goal/conflict/turn/emotional_tone/plant_foreshadowing_surface + 🔴 participants/focal_character/focalization_mode/knowledge_gap_mode + 🔴 scene_type/link_to_prev/result_type/disaster/reaction/dilemma/decision + 🔴 scene_goal + 🔴 dialogue_objectives + 🔴 conflict_stage/scene_purpose/alignment（S11 大势对齐三问自评·见下 ⑧·`volume_arc_drift_scanner` 另汇总本卷 needs-review 计数/清单进报告·只报告不裁决））原样注入 writer prompt 作走向骨架；`build_manifest._collect_scene_causal_skeleton` 另把 `scene_goal` 结构化透传 writer（治场景漂移·每场有目标驱动）；`build_manifest._collect_dialogue_objectives`（B agent）把对话密集 scene 的 `dialogue_objectives` 结构化透传 writer（对白即行动·见下 ⑥·what_unsaid 涉未到期 hidden 伏笔走 reveal 隔离）；`build_manifest` 据 `participants`/`focal_character` 做 per-scene 角色认知投射（见下 ④）；`build_manifest` + `causal_connector_scanner`（B agent）读 `scene_type`/`link_to_prev`/`result_type` 做 But-Therefore 因果连接器 + Swain 场景骨架（见下 ⑤）；`cluster_choice_apply._normalize_storyboard_ch` 透传所有 beat 字段（只补 scene_idx/ch）。三方对历史落库产物只读容忍；本 agent 新产的 cluster brief 必须带 beat / belief / causal 字段，缺失即合同错误，不作为可继续创作的成功产物。
 
 > **2026-07-05 prose_scene_cards**：`scene_storyboard` 可选补 `title` / `scene_title`、`dramatic_question`、`sensory_anchors` / `sensory_anchor`。`build_manifest._collect_prose_scene_cards` 会把这些 prose-first 字段连同 `scene_goal`、`conflict`、`disaster/decision/outcome`、`characters/location/focal_character` 组装成小说场景执行卡；只服务正文写作，禁止写 camera/shot/visualPrompt 等影视分镜字段。
 
@@ -265,6 +268,26 @@ tools: Read, Write
 - ✅ **作者档第一权威**：慢热文学 / 单一缺口合法（不强求三态混合）。拿不准就不设计特定缺口类型，让走向自然展开；`SINGLE_GAP_TYPE_MONOTONE` 永远 advisory，绝不进 `HARD_GATE_CODES`。
 - 🔴 字段权威 schema 单一真理源 = `core/claude-home/templates/subsystem_skeletons.json` 的 `_dramatic_question_ledger_schema`（`raised[].gap_type ∈ {suspense, curiosity, surprise}`）。
 
+## ⑧ 🔴 2026-07-07 scene 级大势对齐三问 + 自评（S11 · 借鉴 moyin shot-calibration-stages.ts:188-202 叙事一致性三问）
+
+> **统一原则（与 ①-⑦ 同范式·作用在「scene ↔ 卷大势」的对齐透明层）**：**你详化 storyboard（`ecas_cluster_brief` 的 cluster_001 与 `cluster_emergence` 的涌现 brief 两个场合）时，每个 scene 必答大势对齐三问，答案落 3 个 advisory 字段**——这是**你（planner）的自评透明化，不是外部裁决**（北极星⑤）。SOTA 接地：moyin shot-calibration-stages 在逐 shot 校准阶段强制回答叙事一致性三问，防单元级产物悄悄漂离整体叙事。
+
+**三问（每 scene 必答·答案落字段）**：
+
+| 三问 | 落字段 | 枚举/要求 |
+|---|---|---|
+| ① 此场景**如何推动卷核心冲突**（`volume_core_conflict`/卷核心任务）？它处在冲突弧的什么位置？ | `conflict_stage` | `铺垫` / `升级` / `高潮` / `转折` / `尾声` |
+| ② 此场景**是否违反世界观 / locked_facts**（对照 `_数据库/世界观`、locked facts、已落库设定）？ | 违反 → 修正走向或标 `alignment: "needs-review"` 说明 | —— |
+| ③ `scene_purpose` 是否**体现了与卷核心任务的关系**？ | `scene_purpose` | 一句话·**必须写「本场如何 service 卷核心冲突」·不能只描述画面**（「主角走进废弃教学楼」❌ →「用教学楼封锁线首次让主角意识到规则可以被交易——卷核心冲突『规则还价』第一次具象化」✅） |
+| （①+②+③ 综合自评） | `alignment` | `aligned`（对齐）/ `minor-deviation`（小偏·有意为之或可接受）/ `needs-review`（拿不准·如实标出） |
+
+**北极星⑤ 边界（自评透明化·非裁决）**：
+- ✅ **`needs-review` 是诚实标记不是失败**——拿不准本场与大势的关系时如实标 needs-review，比硬编一个 aligned 更有价值；绝不因此重写走向讨好指标。
+- ✅ 3 字段**全 advisory·schema 层 optional 不设 required 不硬锁**（fluid 纪律）：历史落库产物无这些字段时下游只读容忍；本 agent 新详化的 storyboard 每 scene 应带齐（自评三问是你的工作纪律，不是 hard_gate）。
+- ✅ **消费端只报告不裁决**：`volume_arc_drift_scanner` 把本卷 scene 里 `alignment=needs-review` 的计数/清单汇总进其报告 `alignment_review` 段——不生成 issue、不改退出码，供人/主代理复核参考。
+- ❌ 不因三问改写 prose 层任何东西（同 ①-⑦：不写 prose、不锁文笔/字数/章数）。
+- 🔴 字段权威 schema = `core/claude-home/schemas/event_cluster_schema.json` 的 `scene_storyboard.items`（`conflict_stage` / `scene_purpose` / `alignment` 枚举与本节一一对应）。
+
 ---
 
 ## 输入契约
@@ -344,6 +367,7 @@ RESEARCH_REF: <_数据库/.research_cache/outline_<topic>_<time>.md>      # 可�
    - 每个 scene 使用 `scene_idx` 表示顺序；禁止写全局 `ch`、`chapter`、`chapter_no`。
    - 每个 scene 必含 `goal`、`conflict`、`turn`、`scene_goal`、`participants`、`focal_character`、`focalization_mode`、`scene_type`、`link_to_prev`、`result_type`。
    - proactive 场补 `disaster`；reactive 场补 `reaction`、`dilemma`、`decision`。
+   - 每个 scene 必答大势对齐三问（见上 ⑧），自评落 `conflict_stage`、`scene_purpose`、`alignment`（advisory·needs-review 是诚实标记）。
    - 对话密集 scene 才补 `dialogue_objectives`，只写意图与潜台词，不写台词原文。
    - 伏笔、隐藏身份、幕后关系、世界真相必须拆成 surface / hidden / trigger 三层；写入 `scene_storyboard` 的只能是 surface 侧。
    - 补 `ripple_match`，确保用户选择后 `world_evolution_apply_card.py --next-key <key> --choice <cluster_user_choice.json>` 可消费。
@@ -433,6 +457,9 @@ RESEARCH_REF: <_数据库/.research_cache/outline_<topic>_<time>.md>      # 可�
           "link_to_prev": null,
           "result_type": "yes_but",
           "disaster": "行动场结尾的挫败或恶化",
+          "conflict_stage": "铺垫",
+          "scene_purpose": "本场如何 service 卷核心冲突（不能只描述画面）",
+          "alignment": "aligned",
           "emotional_tone": "压抑→爆裂",
           "plant_foreshadowing_surface": [],
           "key_beats": ["beat 1", "beat 2"]

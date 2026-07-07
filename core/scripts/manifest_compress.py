@@ -50,9 +50,11 @@ DROP_FIELDS_DEEP = {
 }
 
 # 顶层仅 Claude agent 用的元数据字段（gen-model 无法执行 Read/Bash）
+# budget_report：S1 分层 token 预算记账/压缩日志（manifest_budget.py 产·人看的元数据非创作载荷）
 DROP_TOP_LEVEL_KEYS = {
     "must_read", "_cache_layout", "_critical_summary",
     "instructions_for_subagent", "post_write_checks", "database_coverage",
+    "budget_report",
 }
 
 MAX_LIST_LEN = 10

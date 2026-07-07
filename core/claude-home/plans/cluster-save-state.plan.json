@@ -1,7 +1,7 @@
 {
   "command": "cluster-save-state",
-  "version": 4,
-  "description": "cluster 级状态保存 14 步流水线 · 替代 chapter-level save-state · 1 个 cluster = 1 次完整流水线。🔴 2026-06-28 架构纠正：factual 客观状态（角色/道具/关系/locked_facts）由 novel-archivist 读正文产 archive.json + apply_archive.py 确定性回库（非 writer 自报）·新增 step5(archivist judge)+step6(apply-archive)·原 12 步顺延为 14",
+  "version": 5,
+  "description": "cluster 级状态保存 14 步流水线 · 替代 chapter-level save-state · 1 个 cluster = 1 次完整流水线。🔴 2026-06-28 架构纠正：factual 客观状态（角色/道具/关系/locked_facts）由 novel-archivist 读正文产 archive.json + apply_archive.py 确定性回库（非 writer 自报）·新增 step5(archivist judge)+step6(apply-archive)·原 12 步顺延为 14。🔴 2026-07-07 S10：step7 增卷边界条件子任务（detect-volume-boundary + MODE=volume 卷级递归摘要 + apply-volume-summary·无边界零行为变化）",
   "total_steps": 14,
   "required_steps": [
     1,
@@ -122,7 +122,7 @@
     {
       "n": 7,
       "name": "novel-summarizer-cluster",
-      "description": "spawn novel-summarizer MODE=cluster · 生成 cluster 级摘要（不是单章摘要 · 单章摘要由 splitter 切完后从 cluster 摘要派生）",
+      "description": "spawn novel-summarizer MODE=cluster · 生成 cluster 级摘要（不是单章摘要 · 单章摘要由 splitter 切完后从 cluster 摘要派生）。🔴 2026-07-07 S10 卷边界条件子任务（递归卷级层级摘要·Ex3 摘要金字塔+source 回溯）：scripts 跑 save_state --detect-volume-boundary（既有信号：某卷 ME 池非空且全部 status=completed=卷已完结·status 由 step3 _mark_cluster_me_completed 唯一维护·且 故事块摘要.volume_summaries 尚无该卷）→ boundary=true 时主代理追加 spawn novel-summarizer MODE=volume（VOLUME_N/VOLUME_CLUSTER_IDS 取 detect 产物）产 .wal/volume_<N>_summary.json → 跑 save_state --apply-volume-summary <N> 确定性回库 故事块摘要.volume_summaries[]（结构键钉死 + source 必须恰好覆盖本卷全部 cluster_ids 缺/多都拒 + 幂等 upsert）。无卷边界=零行为变化；漏跑自愈=下个 cluster 的 detect 重新亮起该卷。",
       "required": true,
       "must_spawn_agent": "novel-summarizer",
       "agent_input": {
@@ -133,8 +133,13 @@
       },
       "judge_report_path": "_数据库/.wal/cluster_{key}_summary.json",
       "skip_output_allowed": false,
+      "_doc_volume_summary": "执行顺序：① scripts 跑 detect（report-only·恒 exit0·写 .wal/cluster_{key}_volume_boundary.json）② spawn MODE=cluster summarizer（本步主产物）③ detect 产物 boundary=true 时条件子任务：spawn novel-summarizer MODE=volume（agent 契约见 .claude/agents/novel-summarizer.md 文末）→ python core/scripts/save_state.py {project_root} --apply-volume-summary <N>。MODE=volume 聚合本卷 cluster 摘要（账本缺的读 .wal/<cid>_summary.json 兜底·典型=本卷末块），不重读正文（金字塔纪律）。不预设卷数（fluid·哪卷闭合聚哪卷）。",
       "expected_outputs": [
-        "_数据库/.wal/cluster_{key}_summary.json"
+        "_数据库/.wal/cluster_{key}_summary.json",
+        "_数据库/.wal/cluster_{key}_volume_boundary.json"
+      ],
+      "scripts": [
+        "python core/scripts/save_state.py {project_root} --detect-volume-boundary {key}"
       ]
     },
     {
