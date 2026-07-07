@@ -135,6 +135,8 @@ python core/scripts/pre_write_gate.py "<项目路径>" --next-key <key>
 
 type 支持叙事手法别名（flashback/闪回/ambiguous_fate/模糊生死/time_skip/时间跳跃…）。gate 命中且有对应豁免 → 放行并留痕报告 `waived[]`。blocking 类豁免必须点名 target；gate 只拦「未声明的意外穿帮」，不对声明做二次裁决。命中拦截时的处置：修正 brief（换角色/换道具/改设定表述）或补 `gate_waivers` 声明后重跑本脚本。
 
+报告的 `waived[]`/`warnings[]` 非空时，下一步 build_manifest 会自动注入 `pre_write_gate_digest` 段（T0 契约类·2026-07-08 A2 闭环）——writer 借此把已声明豁免当叙事手法有意识落笔（如亡者只以幻觉/回忆登场），warnings 提示避免复写已完成事件。
+
 ---
 
 # 第 1 步：build_manifest + style_directive
@@ -149,6 +151,8 @@ python core/scripts/build_manifest.py "<项目路径>" "$START_CH"
 
 - exit 0 → 继续
 - exit 2（预检失败）→ 把 fatal 列表展示给用户，停止调度
+- 检索三段式（2026-07-08 A6·确定性零 LLM）：RAG/selective_history 的 query 自动带 cluster brief「实体×属性」扩展词组；每条检索命中带 `usage_hint`（块距防复读标签 [NEAR_ECHO_RISK]≤1块/[PARAPHRASE]2-3块/[OK]>3块 + 用途分类）——writer 按标签决定引用方式（advisory）
+- scene 维度门控（2026-07-08 A11·env `MANIFEST_SCENE_GATING` 默认 on）：世界观词条点名了与本块出场角色/地点零交集的实体 → 不注入（被滤词条留痕 manifest `_scene_gating` META 段；匹配不到场景信息=不过滤零变化）
 
 **plan-step 1**（manifest + style_directive 都是必须落地的文件）：
 
@@ -238,7 +242,7 @@ ROUND: 1
 ```
 
 reflector 10 维扫整 cluster：
-- 段首单调含全主语词 / voice 漂移 / POV 一致 / 信息密度 / 节奏 / 对话工艺 / 互动质感 / 塑料感 / 锁定事实语义冲突（多跳推理·补机械层与 110M NLI 都够不着的间接矛盾·2026-07-07）/ 悬置线推进性（subplot_threads 活跃线 + 当前卷未消费 ME 连续多块零触碰·advisory 提示可豁免·2026-07-07）
+- 段首单调含全主语词 / voice 漂移 / POV 一致 / 信息密度 / 节奏 / 对话工艺 / 互动质感 / 塑料感（含 StoryScope 结构层 AI tell 子清单：场景末主题宣讲/关键人物全员道德单义/收束过净/零时间复杂度·金标准基线校准·体裁常态与作者档优先可让位·2026-07-07）/ 锁定事实语义冲突（多跳推理·补机械层与 110M NLI 都够不着的间接矛盾·2026-07-07）/ 悬置线推进性（subplot_threads 活跃线 + 当前卷未消费 ME 连续多块零触碰·advisory 提示可豁免·2026-07-07）
 
 verdict 处理：
 | verdict | 处理 |

@@ -496,6 +496,14 @@
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["SAGGING_MIDDLE_REVERSAL_VOID", "SAGGING_MIDDLE_STAKES_FLAT", "SAGGING_MIDDLE_PURPOSE_VOID", "SAGGING_MIDDLE_NEEDS_MIDPOINT_BOMB"]
     },
+    "cross_cluster_entity_state_graph": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_entity_state_graph_aggregate.py",
+      "doc": "[2026-07-07 A10·Magnet/Atlas arXiv:2607.00918] 实体状态时间线图矛盾聚合·确定性零LLM·从既有结构化账本(cluster_*_archive.json characters/items/relationships + 事件簇locked_facts)按cluster序重建实体状态图·三类图矛盾①dead_reappeared死亡后以alive再出场(brief gate_waivers dead_character类闪回声明→豁免·复用pre_write_gate归一表)②item_dual_holder道具同cluster双持有者③relationship_regressed关系type回跳无note事件支撑·全书史无窗口(死cluster_001复活cluster_009也抓)·字段缺失=该检查诚实skip留痕·与pre_write_gate分工:gate拦写前brief/本聚合器查写后账本时间线·恒advisory(图推断近似性+复活/闪回合法叙事·北极星⑤只报告不裁决)·env ENTITY_STATE_GRAPH_MODE默认shadow·绝不hard_gate",
+      "_new": true,
+      "trigger_by": "cross-cluster 层（手动 CLI·待验证后接线 run_cross_cluster_aggregates full_18_extra）",
+      "issues_emitted": ["ENTITY_STATE_GRAPH_CONFLICT"]
+    },
     "cross_cluster_engagement_metrics": {
       "layer": "cross-cluster",
       "script": "cross_cluster_engagement_metrics_aggregate.py",

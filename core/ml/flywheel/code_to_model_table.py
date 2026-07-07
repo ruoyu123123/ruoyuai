@@ -281,6 +281,8 @@ CODE_TO_MODEL: dict[str, str] = {
     "CONSISTENCY_HOTSPOT_COOCCURRENCE": "coherence",
     "CROSS_BOOK_INVARIANT_BREACH": "coherence",
     "EDGE_CYCLE": "coherence",
+    # 2026-07-07 A10 实体状态时间线图矛盾（Magnet/Atlas·cross_cluster_entity_state_graph_aggregate）
+    "ENTITY_STATE_GRAPH_CONFLICT": "coherence",
     "FIRSTPERSON_RETRO_HINDSIGHT_THIN": "coherence",
     "FOCALIZER_PERCEPTION_OUT_OF_BOUNDS": "coherence",
     "FRAME_TALE_DRIFT": "coherence",

@@ -9,10 +9,14 @@ build_manifest.py 调用本模块检索与当前章节最相关的历史内容�
   1. TF-IDF模式（默认，纯Python，无外部依赖）
   2. Embedding模式（需配置.env，调用外部API，精度更高）
 
+A6 检索三段式（2026-07-08 二轮移植·AI_NovelGenerator）：query 扩展（brief 实体×属性组合词组）
+→ 时间距离防复读（块距 [NEAR_ECHO_RISK]/[PARAPHRASE]/[OK]）→ 用途标注（对话/冲突/世界观/前情
+启发式）。后两段合成每条结果的 usage_hint（advisory）。
+
 用法：
   python rag_retriever.py <项目路径> <章节号> [--top-k 3] [--mode tfidf|embedding]
-  
-输出：JSON列表，每项含 {chapter, score, snippet}
+
+输出：JSON列表，每项含 {chapter, score, snippet, usage_hint}
 """
 from __future__ import annotations
 import json, math, re, sys
@@ -158,12 +162,189 @@ def _snippet(text: str, length: int = 200) -> str:
     return '\n'.join(result) if result else text[:length]
 
 
+# ============ A6 检索三段式（2026-07-08 二轮移植 · AI_NovelGenerator
+# prompt_definitions.py:61-158 + chapter.py:176-216 · research/open_source_writing_systems_round2.md A6）
+#
+# 1) query 扩展（确定性）：检索 query 从「当前章 plan 上下文」升级为「cluster brief
+#    实体×属性组合词组」（characters/props/location × scope_summary 关键词 · 3-5 组 · 零 LLM）。
+# 2) 时间距离防复读（确定性）：命中按块距分级——距当前 cluster ≤1 块 [NEAR_ECHO_RISK]（近块
+#    内容禁直接复用·仅作连贯参考）/ 2-3 块 [PARAPHRASE]（需换写）/ >3 块 [OK]。
+# 3) 用途标注（确定性启发式）：命中文本特征粗分类（含对话→对话风格参考 / 冲突词密→冲突节奏
+#    参考 / 设定名词密→世界观碎片 / 兜底→前情事实参考）。
+# 2+3 合成每条结果的 usage_hint 字段。全部 advisory（提示 writer 怎么用检索结果·不硬锁）。
+# ============
+
+NEAR_ECHO_NOTE = "近块内容禁直接复用·仅作连贯参考"
+PARAPHRASE_NOTE = "需换写（勿沿用原句式原词面）"
+
+_DIALOGUE_MARKS = ("“", "”", "「", "」")  # 中文左右双引号 + 直角引号
+_CONFLICT_RE = re.compile(r"[打杀砍劈斩轰撞吼嘶逃追爆战怒拳刀枪血]|冲突|对峙|厮杀|搏斗|威胁")
+_WORLDBUILDING_RE = re.compile(
+    r"[界域族宗殿庙城国朝盟阵符箓丹窍]|规则|禁忌|设定|体系|等级|品阶|位格|血脉|功法|秘境|结界")
+
+
+def classify_usage(text) -> str:
+    """A6-3 用途粗分类（启发式·确定性·零 LLM）。优先级：对话 > 冲突 > 世界观 > 前情兜底。"""
+    t = str(text or "")
+    if any(m in t for m in _DIALOGUE_MARKS):
+        return "对话风格参考"
+    if len(_CONFLICT_RE.findall(t)) >= 2:
+        return "冲突节奏参考"
+    if len(_WORLDBUILDING_RE.findall(t)) >= 2:
+        return "世界观碎片"
+    return "前情事实参考"
+
+
+def echo_tag(cluster_distance) -> "str | None":
+    """A6-2 块距 → 防复读标签。块距不可知（cluster 反查失败）→ None（诚实不臆造）。"""
+    if cluster_distance is None:
+        return None
+    d = abs(int(cluster_distance))
+    if d <= 1:
+        return "[NEAR_ECHO_RISK]"
+    if d <= 3:
+        return "[PARAPHRASE]"
+    return "[OK]"
+
+
+def build_usage_hint(cluster_distance, text) -> str:
+    """块距标签 + 用途分类 合成 usage_hint（advisory）。"""
+    usage = classify_usage(text)
+    tag = echo_tag(cluster_distance)
+    if tag == "[NEAR_ECHO_RISK]":
+        return f"{tag}·{usage}·{NEAR_ECHO_NOTE}"
+    if tag == "[PARAPHRASE]":
+        return f"{tag}·{usage}·{PARAPHRASE_NOTE}"
+    if tag == "[OK]":
+        return f"{tag}·{usage}"
+    return usage
+
+
+def annotate_usage_hints(project_root, current_ch: int, results: list) -> list:
+    """给检索命中批量打 usage_hint（原地修改并返回）。
+
+    块距经 cluster_lookup 权威反查（章→cluster·禁机械拼接）；反查不可用/失败 → 只打
+    用途分类不带距离标签。条目兼容 chapter（rag）/ ch（selective_history）两种键。
+    """
+    cur_num = None
+    if cluster_lookup is not None:
+        try:
+            cur_num = cluster_lookup.cluster_num(
+                cluster_lookup.ch_to_cluster_id(project_root, current_ch))
+        except Exception:
+            cur_num = None
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        text = r.get("snippet") or r.get("text_preview") or ""
+        dist = None
+        src_ch = r.get("chapter", r.get("ch"))
+        if cur_num is not None and isinstance(src_ch, int):
+            try:
+                src_num = cluster_lookup.cluster_num(
+                    cluster_lookup.ch_to_cluster_id(project_root, src_ch))
+            except Exception:
+                src_num = None
+            if src_num is not None:
+                dist = cur_num - src_num
+        r["usage_hint"] = build_usage_hint(dist, text)
+    return results
+
+
+def _find_brief_for_ch(project_root, current_ch: int) -> "dict | None":
+    """定位当前章所属 cluster 的 brief（事件簇.json）。优先 cluster_lookup 权威反查，
+    退 chapter_range 扫描。找不到 → None（调用方零变化）。"""
+    root = Path(project_root)
+    db = root if root.name == "_数据库" else root / "_数据库"
+    path = db / "事件簇.json"
+    if not path.exists():
+        return None
+    try:
+        clusters = (json.loads(path.read_text(encoding="utf-8")) or {}).get("clusters") or []
+    except (OSError, json.JSONDecodeError, ValueError, AttributeError):
+        return None
+    target = None
+    if cluster_lookup is not None:
+        try:
+            target = cluster_lookup.ch_to_cluster_id(project_root, current_ch)
+        except Exception:
+            target = None
+    if target is not None and cluster_lookup is not None:
+        for c in clusters:
+            if (isinstance(c, dict)
+                    and cluster_lookup.normalize_cluster_id(c.get("cluster_id")) == target):
+                return c
+    for c in clusters:
+        if not isinstance(c, dict):
+            continue
+        cr = c.get("chapter_range") or []
+        if isinstance(cr, list) and len(cr) == 2 and cr[0] <= current_ch <= cr[1]:
+            return c
+    return None
+
+
+def expand_query_from_brief(project_root, current_ch: int, max_groups: int = 5) -> list[str]:
+    """A6-1 query 扩展：cluster brief 实体×属性组合词组（3-5 组·纯确定性拼装·零 LLM）。
+
+    实体 = characters_focus + storyboard characters/focal_character/location + anchor_props
+    + hub_locations（保序去重）；属性 = scope_summary 的 CJK 词串关键词（截 4 字·剔除与
+    实体重叠项）。每组 = 实体 + 2 个属性关键词轮转配对。
+    无 brief / 无实体 / 无 scope 关键词 → []（调用方 query 零变化）。
+    """
+    brief = _find_brief_for_ch(project_root, current_ch)
+    if not isinstance(brief, dict):
+        return []
+    entities: list[str] = []
+
+    def _add(v):
+        if isinstance(v, str):
+            v = v.strip()
+            if v and v not in entities:
+                entities.append(v)
+
+    for v in brief.get("characters_focus") or []:
+        _add(v)
+    for sc in brief.get("scene_storyboard") or []:
+        if not isinstance(sc, dict):
+            continue
+        for v in sc.get("characters") or []:
+            _add(v)
+        _add(sc.get("focal_character"))
+        _add(sc.get("location"))
+    for v in brief.get("anchor_props") or []:
+        if isinstance(v, dict):
+            _add(v.get("name") or v.get("prop") or v.get("id"))
+        else:
+            _add(v)
+    for v in brief.get("hub_locations") or []:
+        _add(v)
+    scope = str(brief.get("scope_summary") or "")
+    if not entities or not scope.strip():
+        return []
+    kws: list[str] = []
+    for run in re.findall(r"[一-鿿]{2,}", scope):
+        kw = run[:4]
+        if kw in kws:
+            continue
+        if any(kw in e or e in kw for e in entities):
+            continue
+        kws.append(kw)
+    if not kws:
+        return []
+    groups: list[str] = []
+    for i, ent in enumerate(entities[:max_groups]):
+        attrs = list(dict.fromkeys([kws[(2 * i) % len(kws)], kws[(2 * i + 1) % len(kws)]]))
+        groups.append(" ".join([ent] + attrs))
+    return groups
+
+
 def _load_retrieval_corpus(project_root, current_ch: int):
     """章节正文 + 摘要 + 当前章 plan(query) 统一装载 —— TF-IDF / embedding 两种检索模式共用。
 
     返回 None（无可检索历史章 或 当前章无 plan 信号）或 (ch_nums, docs, chapters, summaries)：
       - ch_nums: 排序后的历史章号列表
-      - docs: 与 ch_nums 一一对应的候选文本 + 末项是当前章 query（current_plan）
+      - docs: 与 ch_nums 一一对应的候选文本 + 末项是当前章 query
+        （A6-1：brief 实体×属性扩展词组 + current_plan；无 brief 信号时纯 current_plan）
       - chapters/summaries: 供结果 snippet 回填用
     """
     # v17.5 修复：接受 str 或 Path
@@ -231,12 +412,17 @@ def _load_retrieval_corpus(project_root, current_ch: int):
     if not current_plan:
         return None
 
+    # A6-1 query 扩展（2026-07-08）：brief 实体×属性组合词组前置拼入 query（entity-anchored
+    # 检索更贴本块出场角色/道具/地点）。无 brief 信号 → 纯 current_plan（零变化）。
+    expansion = expand_query_from_brief(project_root, current_ch)
+    query_doc = ("\n".join(expansion) + "\n" + current_plan) if expansion else current_plan
+
     ch_nums = sorted(chapters.keys())
     docs = []
     for ch in ch_nums:
         text = summaries.get(ch, '') or chapters[ch][:500]
         docs.append(text)
-    docs.append(current_plan)
+    docs.append(query_doc)
     return ch_nums, docs, chapters, summaries
 
 
@@ -275,7 +461,8 @@ def retrieve_tfidf(project_root, current_ch: int, top_k: int = 3,
             'score': round(rel[i], 4),
             'snippet': _snippet(summaries.get(ch, '') or chapters.get(ch, '')[:300]),
         })
-    return results
+    # A6-2/3：块距防复读标签 + 用途标注 → usage_hint（advisory）
+    return annotate_usage_hints(project_root, current_ch, results)
 
 
 # 金标准校准 2026-07-04：content_embed_separability_20260704 报告——候选相关性下限。
@@ -355,7 +542,8 @@ def retrieve_embedding(project_root, current_ch: int, top_k: int = 3,
             'snippet': _snippet(summaries.get(ch, '') or chapters.get(ch, '')[:300]),
             'mode': 'embedding',
         })
-    return results
+    # A6-2/3：块距防复读标签 + 用途标注 → usage_hint（advisory）
+    return annotate_usage_hints(project_root, current_ch, results)
 
 
 def main():

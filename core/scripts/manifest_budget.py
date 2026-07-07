@@ -74,6 +74,9 @@ SECTION_TIERS: dict[str, str] = {
     "database_coverage": TIER_META,
     "_cache_layout": TIER_META,
     "_subsystem_consumption_audit": TIER_META,
+    # A11 DeepLore scene 维度门控审计元数据（2026-07-08）：world_keyword_hits 被滤词条留痕
+    #（真有过滤才注入·人看的审计非创作载荷·不参与预算与裁剪）。
+    "_scene_gating": TIER_META,
     # --- T0：硬约束/契约类 ---
     "preflight": TIER_T0,
     "must_read": TIER_T0,
@@ -87,6 +90,9 @@ SECTION_TIERS: dict[str, str] = {
     "will_learn_due_this_ch": TIER_T0,
     "pending_secrets_to_reveal": TIER_T0,
     "scene_character_knowledge": TIER_T0,  # per-character 负向 masking（防穿帮契约）
+    # A2 遗留清偿（2026-07-08）：写前 Evolution Gate 报告摘要（waived 豁免声明 + warnings 留痕
+    # ·契约类——豁免是 brief 落字的创作声明，writer 必须看到才能把豁免当叙事手法落笔）。
+    "pre_write_gate_digest": TIER_T0,
     # --- T1：当前 cluster 创作载荷（brief/storyboard/场景卡/作者风格骨） ---
     "volume": TIER_T1,
     "active_characters": TIER_T1,
@@ -127,6 +133,9 @@ SECTION_TIERS: dict[str, str] = {
     # A3 前块结尾偏重注入（2026-07-07·PlotPilot recent_chapter_context）：上一 cluster 草稿
     # 末尾原文 = 开篇回响的创作载荷（跨 cluster 衔接的直接写作素材·非状态库）。
     "prev_cluster_tail": TIER_T1,
+    # A4 编辑手记（2026-07-08·PlotPilot 结构槽坍缩为自然语言）：结构块确定性拼装的
+    # 200-400 字人话软建议汇总（双视图·writer 创作载荷·advisory 可自由取舍）。
+    "editor_note": TIER_T1,
     # --- T2：状态库（人物/世界/关系/道具/阵营/时间线快照） ---
     "active_cast": TIER_T2,
     "cluster_actant_state": TIER_T2,

@@ -902,3 +902,328 @@ def test_I_deviation_never_participates_in_selection():
     import inspect
     src = inspect.getsource(gw.select_best_draft)
     assert "deviation" not in src and "collapse" not in src
+
+
+# ════════════════════════════════════════════════════════════════
+# [J] A9 盲审 N 修 N 选 1（LLM Review arXiv:2601.08003 ·
+#     research/open_source_writing_systems_round2.md A9 · 2026-07-07）
+# 🔴 纪律：env BEST_OF_N_BLIND_REVISE 默认 off（off 时 pipeline 行为逐字节不变）；
+#     修订 prompt 绝不含其他候选的任何信息（盲修=防同质化核心）；
+#     修订稿与原稿 2N 进池 · 择稿逻辑（select_best_draft）零改动。
+# gen-model / 打分器全 mock（不实跑 · 需 API）。
+# ════════════════════════════════════════════════════════════════
+
+
+def _clear_blind_env():
+    os.environ.pop("BEST_OF_N_BLIND_REVISE", None)
+
+
+def _mk_score(sfs=None, av_drift=None, drift_dims=None, subscores=None):
+    """造 score_candidate 同形返回（composite 按公式自动算 · trace 所需 key 齐全）。"""
+    composite = None
+    if sfs is not None:
+        composite = round(sfs - gw.AV_DRIFT_PENALTY_PER_DIM * (av_drift or 0), 2)
+    return {"sfs": sfs, "sfs_subscores": subscores,
+            "av_drift_count": av_drift, "av_drift_dims": (drift_dims or []),
+            "av_order_consistency": None, "composite": composite, "errors": []}
+
+
+def _patch_blind_pipeline(g, gen_replies, revise_replies=None, revise_fail=(),
+                          scores_by_body=None):
+    """盲修测试通用桩：call_gen_model 区分生成/修订调用（修订 prompt 含盲修标记），
+    score_candidate 按正文内容查表打分。返回 (restore_fn, calls)。
+
+    calls = {"gen": [user...], "revise": [(system, user)...]}。
+    revise_fail：第 k 次修订调用抛 GenModelExhaustedError（按修订调用序）。
+    """
+    calls = {"gen": [], "revise": []}
+    seq_rev = list(revise_replies or [])
+    orig_call = g.call_gen_model
+    orig_score = g.score_candidate
+
+    def fake_call(loader, system, user, min_cjk=None, creative=False, **kw):
+        if "【盲修 · 定向修订】" in user:
+            k = len(calls["revise"])
+            calls["revise"].append((system, user))
+            if k in revise_fail:
+                raise gml.GenModelExhaustedError([(f"rev{k}", "mock revise fail")])
+            return seq_rev[k], _P(name=f"reviser{k}", temperature=0.8)
+        i = len(calls["gen"])
+        calls["gen"].append(user)
+        return gen_replies[i], _P(name=f"gen{i}")
+
+    def fake_score(body, ref, loader_, use_av_judge=True):
+        return dict(scores_by_body[body])
+
+    g.call_gen_model = fake_call
+    if scores_by_body is not None:
+        g.score_candidate = fake_score
+
+    def restore():
+        g.call_gen_model = orig_call
+        g.score_candidate = orig_score
+    return restore, calls
+
+
+# 有 critique 靶点的通用弱分（AV 走味 1 维 + 标点短板）——盲修会为它发修订调用
+def _weak(sfs=60.0):
+    return _mk_score(sfs=sfs, av_drift=1, drift_dims=["词汇选择"],
+                     subscores={"punctuation_cosine": 45.0})
+
+
+def test_J_env_default_off_and_illegal_fallback():
+    """env 解析：默认 off · 仅 on/1/true（不分大小写）开 · 非法值回退 off（保守）。"""
+    _clear_blind_env()
+    assert gw._blind_revise_enabled() is False
+    try:
+        for v in ("on", "1", "true", "TRUE", "On"):
+            os.environ["BEST_OF_N_BLIND_REVISE"] = v
+            assert gw._blind_revise_enabled() is True, v
+        for v in ("off", "0", "false", "", "yes", "2", "active", "abc"):
+            os.environ["BEST_OF_N_BLIND_REVISE"] = v
+            assert gw._blind_revise_enabled() is False, v
+    finally:
+        _clear_blind_env()
+
+
+def test_J_off_no_revision_calls_and_no_trace_key():
+    """🔴 off = 逐字节不变：零修订调用 · trace 无 blind_revise 段 · 候选数=N ·
+    候选条目无 revised_from key（不是值为 None，是 key 根本不存在）。"""
+    g = _reload_gw(None)
+    _clear_blind_env()
+    proj = _ROOT / "tests" / "__nonexistent_proj_blind_off__"
+    loader = _Loader([_P()])
+    restore, calls = _patch_blind_pipeline(
+        g, ["甲甲甲。", "乙乙乙。"],
+        scores_by_body={"甲甲甲。": _weak(80.0), "乙乙乙。": _weak(60.0)})
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: "作者锚"
+    try:
+        reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        restore()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert calls["revise"] == []                      # 零修订调用
+    assert "blind_revise" not in trace                # trace 无盲修段
+    assert len(trace["candidates"]) == 2              # 池不膨胀
+    for c in trace["candidates"]:
+        assert "revised_from" not in c                # key 根本不存在
+    assert reply == "甲甲甲。"                          # 择稿行为不变（composite 高者胜）
+
+
+def test_J_on_isolated_revision_prompts():
+    """🔴 盲修隔离：on 时每候选各发一次修订调用；每个修订 prompt 只含自己的正文，
+    绝不含其他候选正文（双向断言）；含「只修 critique 点不重写」指令；system 复用写作原 system。"""
+    g = _reload_gw(None)
+    proj = _ROOT / "tests" / "__nonexistent_proj_blind_iso__"
+    loader = _Loader([_P()])
+    bodies = ["甲甲甲独有句。", "乙乙乙独有句。", "丙丙丙独有句。"]
+    scores = {b: _weak(60.0) for b in bodies}
+    scores.update({"修甲。": _weak(50.0), "修乙。": _weak(50.0), "修丙。": _weak(50.0)})
+    restore, calls = _patch_blind_pipeline(
+        g, list(bodies), revise_replies=["修甲。", "修乙。", "修丙。"],
+        scores_by_body=scores)
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: "作者锚"
+    os.environ["BEST_OF_N_BLIND_REVISE"] = "on"
+    try:
+        g.best_of_n_pipeline(loader, "写作SYSTEM", "usr", proj, 3)
+    finally:
+        _clear_blind_env()
+        restore()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert len(calls["revise"]) == 3                  # N 次独立修订调用
+    for i, (system, user) in enumerate(calls["revise"]):
+        assert system == "写作SYSTEM"                  # 作者档第一权威的原 system 不换
+        assert bodies[i] in user                       # 含自己的正文
+        for j, other in enumerate(bodies):             # 🔴 绝不含其他候选任何内容
+            if j != i:
+                assert other not in user, (i, j)
+        assert "只修 critique 点不重写" in user          # 定向修订指令
+        assert "词汇选择" in user                       # critique 真组装进 prompt
+        assert "标点指纹" in user
+
+
+def test_J_2n_pool_and_trace():
+    """修订稿与原稿 2N 进池：trace 候选=2N · 修订稿 idx=N+src 无碰撞 · 带 revised_from ·
+    blind_revise 段记每候选 critique 摘要 + 修订前后 composite。"""
+    g = _reload_gw(None)
+    proj = _ROOT / "tests" / "__nonexistent_proj_blind_2n__"
+    loader = _Loader([_P()])
+    scores = {"甲稿。": _weak(60.0), "乙稿。": _weak(55.0),
+              "修甲。": _weak(58.0), "修乙。": _weak(52.0)}
+    restore, calls = _patch_blind_pipeline(
+        g, ["甲稿。", "乙稿。"], revise_replies=["修甲。", "修乙。"],
+        scores_by_body=scores)
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: "作者锚"
+    os.environ["BEST_OF_N_BLIND_REVISE"] = "on"
+    try:
+        _reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        _clear_blind_env()
+        restore()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert trace["candidates_scored"] == 4            # 2N 进池
+    assert len(trace["candidates"]) == 4
+    revised = [c for c in trace["candidates"] if "revised_from" in c]
+    assert sorted(c["idx"] for c in revised) == [2, 3]           # idx = N + src 无碰撞
+    assert sorted(c["revised_from"] for c in revised) == [0, 1]  # 溯源
+    bt = trace["blind_revise"]
+    assert bt["enabled"] is True and bt["revised"] == 2
+    assert len(bt["entries"]) == 2
+    for e in bt["entries"]:
+        assert e["critique_summary"]                   # critique 摘要留痕
+        assert e["orig_composite"] is not None
+        assert e["revised_composite"] is not None
+        assert e["error"] is None
+
+
+def test_J_revision_worse_original_wins():
+    """修坏兜底：修订稿分低 → 原稿仍在池里胜出（reply=原稿全文 · selected_idx<N）。"""
+    g = _reload_gw(None)
+    proj = _ROOT / "tests" / "__nonexistent_proj_blind_worse__"
+    loader = _Loader([_P()])
+    scores = {"甲稿。": _weak(80.0), "乙稿。": _weak(60.0),
+              "修甲坏。": _weak(30.0), "修乙坏。": _weak(20.0)}
+    restore, _calls = _patch_blind_pipeline(
+        g, ["甲稿。", "乙稿。"], revise_replies=["修甲坏。", "修乙坏。"],
+        scores_by_body=scores)
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: "作者锚"
+    os.environ["BEST_OF_N_BLIND_REVISE"] = "on"
+    try:
+        reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        _clear_blind_env()
+        restore()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert reply == "甲稿。"                           # 原稿兜底胜出
+    assert trace["selected_idx"] == 0                  # < N（不是修订稿）
+
+
+def test_J_revision_better_wins_and_changes_preserved():
+    """修订稿更好 → 胜出（selected_idx>=N），且最终 reply = 修订正文 + **原稿的**
+    CHANGES 块重组（下游 split_text_and_changes 可解 · CHANGES 契约不因盲修破损）。"""
+    g = _reload_gw(None)
+    proj = _ROOT / "tests" / "__nonexistent_proj_blind_better__"
+    loader = _Loader([_P()])
+    orig_reply = ('甲稿正文。\n\n```json\n{"factual": {"新事实": "v0标记"}}\n```')
+    scores = {"甲稿正文。": _weak(60.0), "乙稿。": _weak(55.0),
+              "修甲更好。": _weak(90.0), "修乙。": _weak(40.0)}
+    restore, _calls = _patch_blind_pipeline(
+        g, [orig_reply, "乙稿。"], revise_replies=["修甲更好。", "修乙。"],
+        scores_by_body=scores)
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: "作者锚"
+    os.environ["BEST_OF_N_BLIND_REVISE"] = "on"
+    try:
+        reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        _clear_blind_env()
+        restore()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert trace["selected_idx"] == 2                  # N + src_idx=0
+    body, changes = g.split_text_and_changes(reply)    # 重组后仍可解
+    assert body == "修甲更好。"
+    assert changes == {"factual": {"新事实": "v0标记"}}  # 原稿 CHANGES 原样保留
+
+
+def test_J_critique_assembly():
+    """critique 组装：走味维 + 短板维点名 · 短板最多 2 个取最低 · 非白名单 key 不进 ·
+    无靶点 → None。"""
+    # ① 双路齐全
+    c = gw.assemble_blind_critique(_mk_score(
+        sfs=60.0, av_drift=2, drift_dims=["词汇选择", "话语连接词"],
+        subscores={"punctuation_cosine": 45.2, "sentence_rhythm_jsd": 51.0}))
+    assert "词汇选择" in c and "话语连接词" in c
+    assert "标点指纹 45.2/100" in c and "句长节奏 51.0/100" in c
+    # ② 短板维只点最低 2 个（3 个低分 → 最高的那个不点名）
+    c2 = gw.assemble_blind_critique(_mk_score(sfs=60.0, subscores={
+        "punctuation_cosine": 30.0, "sentence_rhythm_jsd": 40.0,
+        "function_word_cosine": 65.0}))
+    assert "标点指纹" in c2 and "句长节奏" in c2
+    assert "虚词指纹" not in c2                        # 第 3 低的不点（MAX_WEAK_DIMS=2）
+    # ③ 非白名单 key（raw/内部量）低分也不进 critique
+    c3 = gw.assemble_blind_critique(_mk_score(sfs=60.0, subscores={
+        "char_3gram_cosine_raw": 5.0, "some_internal": 1.0}))
+    assert c3 is None
+    # ④ 无靶点（零走味 + 全维健康 / 全 None）→ None
+    assert gw.assemble_blind_critique(_mk_score(
+        sfs=90.0, av_drift=0, subscores={"punctuation_cosine": 88.0})) is None
+    assert gw.assemble_blind_critique(_mk_score()) is None
+
+
+def test_J_no_critique_skips_revision():
+    """无 critique 靶点的候选不发修订调用（不白烧 token）：健康候选跳过 · 弱候选照修 ·
+    池 = N + 实修数。"""
+    g = _reload_gw(None)
+    proj = _ROOT / "tests" / "__nonexistent_proj_blind_skip__"
+    loader = _Loader([_P()])
+    healthy = _mk_score(sfs=95.0, av_drift=0, subscores={"punctuation_cosine": 90.0})
+    scores = {"健康稿。": healthy, "弱稿。": _weak(50.0), "修弱。": _weak(55.0)}
+    restore, calls = _patch_blind_pipeline(
+        g, ["健康稿。", "弱稿。"], revise_replies=["修弱。"],
+        scores_by_body=scores)
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: "作者锚"
+    os.environ["BEST_OF_N_BLIND_REVISE"] = "on"
+    try:
+        _reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        _clear_blind_env()
+        restore()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert len(calls["revise"]) == 1                   # 只有弱稿发了修订调用
+    assert "弱稿。" in calls["revise"][0][1]
+    assert len(trace["candidates"]) == 3               # 2 原稿 + 1 修订稿
+    bt = trace["blind_revise"]
+    skipped = [e for e in bt["entries"] if e["error"] == "skipped_no_critique"]
+    assert len(skipped) == 1 and skipped[0]["src_idx"] == 0
+    assert bt["revised"] == 1 and bt["skipped_or_failed"] == 1
+
+
+def test_J_revision_failure_and_empty_not_fatal():
+    """单候选修订失败（gen-model 挂）/ 空修订回复 → 跳过该候选（原稿兜底在池）·
+    pipeline 不崩 · trace 记 error。"""
+    g = _reload_gw(None)
+    proj = _ROOT / "tests" / "__nonexistent_proj_blind_fail__"
+    loader = _Loader([_P()])
+    scores = {"甲稿。": _weak(70.0), "乙稿。": _weak(60.0)}
+    # 修订调用 0 抛 Exhausted；修订调用 1 返回空正文
+    restore, calls = _patch_blind_pipeline(
+        g, ["甲稿。", "乙稿。"], revise_replies=[None, "   "], revise_fail=(0,),
+        scores_by_body=scores)
+    orig_ref = g.gather_author_ref_text
+    g.gather_author_ref_text = lambda root, **k: "作者锚"
+    os.environ["BEST_OF_N_BLIND_REVISE"] = "on"
+    try:
+        reply, _profile, trace = g.best_of_n_pipeline(loader, "sys", "usr", proj, 2)
+    finally:
+        _clear_blind_env()
+        restore()
+        g.gather_author_ref_text = orig_ref
+        _reload_gw(None)
+    assert reply == "甲稿。"                           # 原稿照常胜出 · 不崩
+    assert len(trace["candidates"]) == 2               # 修订全失败 → 池不膨胀
+    bt = trace["blind_revise"]
+    assert bt["revised"] == 0 and bt["skipped_or_failed"] == 2
+    errs = sorted(e["error"] for e in bt["entries"])
+    assert any("gen_model" in e for e in errs)
+    assert "empty_revision" in errs
+
+
+def test_J_selection_logic_untouched():
+    """🔴 择稿逻辑零改动源码锁：select_best_draft 函数体不含 blind/revise 任何引用
+    （修订稿进池后纯凭 composite 与原稿同台竞争 · 北极星⑤）。"""
+    import inspect
+    src = inspect.getsource(gw.select_best_draft)
+    assert "blind" not in src.lower()
+    assert "revise" not in src.lower()
+    assert "revised_from" not in src

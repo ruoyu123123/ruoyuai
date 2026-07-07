@@ -902,6 +902,16 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     except ImportError:
         pass
 
+    # 🆕 A10 目标停滞检测（Magnet arXiv:2607.00918 · 2026-07-07）：卷核心任务相关 ME 连续
+    # N 个 cluster（默认 3·env RUOYU_GOAL_STAGNATION_WINDOW）零推进且候选卡也无推进项 →
+    # advisory 信号段。逻辑在 emergence_transparency.goal_stagnation（本文件超 1000 行软上限，
+    # 判断力不下沉进这里）。只加输出字段——绝不改打分/绝不换目标/绝不增删候选（北极星③⑤）。
+    goal_stagnation = emergence_transparency.goal_stagnation(
+        shijianji, dashishi, current_volume, candidate_mes,
+        get_me_id=_get_me_id, me_text=_me_text, keyword_set=_keyword_set, me_volume=_me_volume)
+    if goal_stagnation.get("detected"):
+        print(f"[emergence][goal_stagnation] {goal_stagnation['advisory']}")
+
     # 写入 emergence.json WAL
     emergence_path = db / ".wal" / f"{next_cluster_id}_emergence.json"
     emergence_path.parent.mkdir(parents=True, exist_ok=True)
@@ -915,6 +925,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         "current_volume": current_volume,
         "volume_transition_hint": volume_transition_hint,
         "dag_health": dag_health,
+        "goal_stagnation": goal_stagnation,
         "candidates": candidates_briefs,
         "world_state_snapshot": {
             "factions_state": world_state.get("factions_state", {}),
@@ -942,6 +953,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         "candidates_count": len(candidates_briefs),
         "emergence_path": str(emergence_path),
         "dag_health": dag_health,
+        "goal_stagnation": goal_stagnation,
         "summary": [f"{c['cluster_id']}: ME {c['parent_me']} → {c['scope_summary'][:60]}" for c in candidates_briefs]
     }
 

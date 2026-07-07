@@ -130,6 +130,7 @@ def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
 #   ② AV-judge 配对判别（av_judge.pairwise_drift_count）= 读者视角 4 维走味计数（越少越像）。
 #   综合分 = SFS 归一 - 走味维度惩罚 → 排序取最高（SFS 当裁判透明 · AV-judge 只 select 不强判）。
 # env BEST_OF_N：默认 2（active · N≥2 真生效）· 设 1 = 关（退回单稿直生 · 零回归逃生口）。
+# env BEST_OF_N_BLIND_REVISE：默认 off（A9 盲修轮 · 见 blind_revise_round 段注释）。
 BEST_OF_N_DEFAULT = 2
 BEST_OF_N_MAX = 5  # 上限防 token 失控（用户质量优先但不无限）
 
@@ -863,6 +864,33 @@ def _build_debt_ledger_section(manifest_path: Path, _preloaded: dict | None = No
     return "\n".join(lines).rstrip()
 
 
+def _build_editor_note_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
+    """A4 编辑手记消费指令（2026-07-08·PlotPilot「自然语言比结构分隔符更易融入创作」）。
+
+    数据源 manifest.editor_note（build_manifest 把伏笔/悬置问题/主角状态/涟漪后果/卷方向
+    等结构块确定性坍缩成的一段人话手记）。存在时注入手记正文 + 消费指令（软建议汇总·
+    可自由取舍）；缺失（素材全空/旧 manifest）→ ""（不注入·零回归）。advisory（北极星⑤）。
+    """
+    m = _load_manifest_once(manifest_path, _preloaded)
+    if m is None:
+        return ""
+    en = m.get("editor_note")
+    if not isinstance(en, dict):
+        return ""
+    note = (en.get("note") or "").strip()
+    if not note:
+        return ""
+    return "\n".join([
+        "## 📝 编辑手记（advisory · 软建议汇总）",
+        "",
+        "manifest.editor_note 是编辑手记式的**软建议汇总**（把到期伏笔/悬置问题/主角状态/"
+        "世界余波/本卷方向拢成一段人话）——**可自由取舍**：如果合适可以推进，不必强求，"
+        "与你的创作判断或作者风格档冲突时以后者为准。",
+        "",
+        note,
+    ])
+
+
 def _build_prev_tail_echo_section(manifest_path: Path, _preloaded: dict | None = None) -> str:
     """A3 前块结尾回响指令（2026-07-07·PlotPilot recent_chapter_context + 回响模板 advisory 化）。
 
@@ -1244,6 +1272,8 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int) -> tuple:
     debt_ledger_section = _build_debt_ledger_section(manifest_path, _manifest_dict)
     # A3 前块结尾回响（2026-07-07·PlotPilot 移植）：manifest 有 prev_cluster_tail 才非空（advisory）
     prev_tail_echo_section = _build_prev_tail_echo_section(manifest_path, _manifest_dict)
+    # A4 编辑手记（2026-07-08·PlotPilot 移植）：manifest 有 editor_note 才非空（advisory·可自由取舍）
+    editor_note_section = _build_editor_note_section(manifest_path, _manifest_dict)
 
     # 风格 skill（全量，不截断）
     style_skill = read_text(db / '作者风格_skill.md')
@@ -1713,6 +1743,8 @@ cluster_brief 完整内容：
     debt_ledger_block = (debt_ledger_section + "\n\n") if debt_ledger_section else ""
     # A3 前块结尾回响 block（cluster_001 / 无前块草稿 → 空 → 不注入 · 零回归）
     prev_tail_echo_block = (prev_tail_echo_section + "\n\n") if prev_tail_echo_section else ""
+    # A4 编辑手记 block（manifest 无 editor_note → 空 → 不注入 · 零回归）
+    editor_note_block = (editor_note_section + "\n\n") if editor_note_section else ""
     # 硬约束维 primacy 重述段（SKILL_PRIMACY_MODE=off/shadow 时为空 → 不注入 · 零回归）
     # 传作者情绪标点基线 → 情绪标点密的作者(搞笑流)在生成点近邻强调 ！？…（治 flash 全量 prompt 下写成叙述向）
     primacy_section = _build_hard_constraint_primacy_block(
@@ -1745,7 +1777,7 @@ cluster_brief 完整内容：
 
 {prev_tail_echo_block}{seed_block}{style_skill_section}
 
-{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{appraisal_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{primacy_block}"""
+{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{appraisal_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{editor_note_block}{primacy_block}"""
         user = f"""{task_intro}
 {cluster_constraints_section}## cluster_blueprint（必落 anchors）
 
@@ -1779,7 +1811,7 @@ cluster_brief 完整内容：
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
-{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{appraisal_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{seed_block}## cluster_blueprint（必落 anchors）
+{cluster_constraints_section}{style_fp_block}{rhythm_block}{decision_block}{genre_block}{knowledge_gap_block}{belief_block}{appraisal_block}{narr_seq_block}{rolling_anchor_block}{golden_fewshot_block}{deep_dims_block}{debt_ledger_block}{editor_note_block}{seed_block}## cluster_blueprint（必落 anchors）
 
 ```json
 {plan_text}
@@ -2430,6 +2462,176 @@ def select_best_draft(scored: list[dict]) -> tuple[int, str]:
     return 0, "无 SFS/AV 打分信号 · 退回第一稿（不按 CJK 长短择稿）"
 
 
+# ── A9 盲审 N 修 N 选 1（LLM Review arXiv:2601.08003 · research/open_source_writing_systems
+#     _round2.md A9 · 2026-07-07）──
+# 同质化根因 = 「修订者看到收敛信号」：self-refine 让模型把（自己或彼此的）输出当锚反复收敛。
+# 盲修 = critique 具体化 + 修订隔离——N 候选各自只拿**自己的**诊断（该候选的 av_judge
+# drift_dims + sfs_subscores 短板维组装成定向修订指令），候选间互不可见，各发一次独立修订
+# 调用（复用 call_gen_model）；修订稿重打分后与原稿一起进 select_best_draft（2N 候选选优 ·
+# 修坏了原稿仍在池里兜底）。这是若渝弃 self-refine 用 best-of-N 之后带证据的回归路径。
+# 🔴 纪律：
+#   · env BEST_OF_N_BLIND_REVISE 默认 **off**（成本 N 倍 gen-model 调用 + 未经真机验证；
+#     off 时 best_of_n_pipeline 行为逐字节不变 · 非法值回退 off ·
+#     回归锁 tests/test_best_of_n.py::test_J_off_no_revision_calls_and_no_trace_key）；
+#   · 修订 prompt 绝不含其他候选的任何信息（盲修 = 防同质化核心 ·
+#     回归锁 test_J_on_isolated_revision_prompts）；
+#   · 择稿逻辑零改动（select_best_draft 不感知盲修 · 源码锁 test_J_selection_logic_untouched）。
+
+BLIND_REVISE_ENV = "BEST_OF_N_BLIND_REVISE"
+# sfs 子分短板地板（0-100 · 低于此值的维度点名进 critique）+ 最多点名维数（critique 必须
+# 具体化——点名太多等于「全部重写」，修订隔离就失去意义）。保守经验值 · 待真机金标准校准。
+BLIND_REVISE_SUBSCORE_FLOOR = 70.0
+BLIND_REVISE_MAX_WEAK_DIMS = 2
+
+# 只点名可读的顶层风格维（raw/校准中间量不进 critique · 修订指令要人话可执行）。
+_SFS_SUBSCORE_LABELS = {
+    "function_word_cosine": "虚词指纹",
+    "punctuation_cosine": "标点指纹",
+    "sentence_rhythm_jsd": "句长节奏",
+    "detopic_pos_cosine": "去题材词性分布",
+    "charngram_sfs": "字符n-gram指纹",
+    "rhythm_cn_sfs": "修辞节奏谱",
+}
+
+
+def _blind_revise_enabled() -> bool:
+    """读 env BEST_OF_N_BLIND_REVISE：仅 on/1/true（不分大小写）= 开 · 其余一律 off。
+
+    默认 off（保守：成本 N 倍 gen-model 调用 + 未经真机验证）；非法值回退 off 不猜。
+    """
+    raw = (os.environ.get(BLIND_REVISE_ENV) or "").strip().lower()
+    return raw in ("on", "1", "true")
+
+
+def assemble_blind_critique(score: dict) -> "str | None":
+    """把单候选**自己的**打分诊断组装成定向修订指令（critique 具体化 · A9 核心之一）。
+
+    来源两路（都只看本候选 · 不含任何其他候选信息）：
+      ① av_drift_dims：AV-judge 配对判别判「走味」的维度名（读者视角）；
+      ② sfs_subscores 短板维：低于 BLIND_REVISE_SUBSCORE_FLOOR 的可读风格维，
+        按分升序最多点名 BLIND_REVISE_MAX_WEAK_DIMS 个（点太多=变相全文重写）。
+    两路全空 → None（无靶点 · 调用方跳过该候选的修订调用不白烧 token）。
+    """
+    lines: list = []
+    drift_dims = [str(d) for d in (score.get("av_drift_dims") or []) if d]
+    if drift_dims:
+        lines.append("· AV 配对判别走味维度：" + "、".join(drift_dims)
+                     + "——这些维度与作者原文对照被判「走味」，请贴回作者档口径。")
+    subs = score.get("sfs_subscores") or {}
+    weak: list = []
+    for key, label in _SFS_SUBSCORE_LABELS.items():
+        v = subs.get(key)
+        if isinstance(v, (int, float)) and float(v) < BLIND_REVISE_SUBSCORE_FLOOR:
+            weak.append((float(v), label))
+    weak.sort()
+    weak = weak[:BLIND_REVISE_MAX_WEAK_DIMS]
+    if weak:
+        lines.append("· 风格统计短板：" + "、".join(f"{label} {v:.1f}/100" for v, label in weak)
+                     + "——请向作者原文基线靠拢。")
+    return "\n".join(lines) if lines else None
+
+
+def _blind_revise_user_prompt(body: str, critique: str) -> str:
+    """盲修修订调用的 user prompt：原稿 + 定向 critique + 「只修 critique 点不重写」。
+
+    🔴 隔离契约：本 prompt 只含该候选自己的正文与自己的诊断——绝不掺入其他候选
+    的任何内容（盲修 = 防同质化核心 · 回归锁断言互不包含）。system 侧复用写作原
+    system prompt（作者档第一权威不变）。
+    """
+    return (
+        "【盲修 · 定向修订】下面是一份小说草稿正文，以及只针对这份草稿本身的独立诊断"
+        "（与任何其他草稿无关）。\n\n"
+        "== 定向 critique（只修这些点）==\n"
+        f"{critique}\n\n"
+        "== 修订要求 ==\n"
+        "1. 只修 critique 点不重写：除 critique 点名的问题外，情节、事实、人物、场景顺序、"
+        "篇幅一律保持原样。\n"
+        "2. 不新增/删除情节，不改变任何既有事实。\n"
+        "3. 只输出修订后的完整正文——不要解释、不要前言、不要输出 CHANGES JSON。\n\n"
+        "== 原稿正文 ==\n"
+        f"{body}"
+    )
+
+
+def _rebuild_reply_with_changes(revised_body: str, changes_obj: dict) -> str:
+    """把修订后正文与**原稿的** CHANGES 块重组成完整 reply（下游 split_text_and_changes 可解）。
+
+    修订调用只让模型改正文不产 CHANGES（防它顺手改坏 JSON 契约）；critique 只点风格维、
+    禁改事实，故原稿 CHANGES 对修订稿仍成立。原稿本就没有 CHANGES 块（changes_obj 空）→
+    只返回正文（与原稿形态一致 · 下游同样兜底）。
+    """
+    if changes_obj:
+        return (revised_body.rstrip() + "\n\n```json\n"
+                + json.dumps(changes_obj, ensure_ascii=False, indent=2) + "\n```")
+    return revised_body
+
+
+def blind_revise_round(loader: GenModelLoader, system: str, scored: list,
+                       author_ref: str, use_av_judge: bool,
+                       n_requested: int, lt_band: tuple) -> tuple:
+    """A9 盲修轮：每个原稿候选各拿自己的 critique 独立修一轮（候选间互不可见）。
+
+    返回 (revised_scored, blind_trace)：
+      · revised_scored 条目形状与原稿 scored 一致（idx = n_requested + 原稿 idx 无碰撞 ·
+        带 revised_from 溯源），由调用方并入池 → select_best_draft 2N 选优（择稿零改动）；
+      · blind_trace 每候选记 critique 摘要 + 修订前后 composite（透明可审 · 北极星⑤）。
+    任何单候选修订失败（无 critique / gen-model 挂 / 空回复）→ 跳过该候选（原稿在池里
+    兜底），绝不阻断写作（advisory 层）。
+    """
+    revised: list = []
+    entries: list = []
+    for s in scored:
+        src_idx = s["idx"]
+        critique = assemble_blind_critique(s["score"])
+        entry = {"src_idx": src_idx,
+                 "critique_summary": (critique[:200] if critique else None),
+                 "orig_composite": s["score"].get("composite"),
+                 "revised_composite": None, "revised_idx": None, "error": None}
+        if not critique:
+            entry["error"] = "skipped_no_critique"
+            entries.append(entry)
+            logger.info(f"[best-of-N][blind-revise] 候选 idx={src_idx} 无 critique 靶点 · "
+                        f"跳过修订（原稿直接留池）")
+            continue
+        user_prompt = _blind_revise_user_prompt(s["body"], critique)
+        logger.info(f"[best-of-N][blind-revise] 候选 idx={src_idx} 独立盲修（定向 critique "
+                    f"{len(critique)} chars · 互不可见）")
+        try:
+            reply, used_profile = call_gen_model(loader, system, user_prompt, creative=True)
+        except GenModelExhaustedError as e:
+            entry["error"] = f"gen_model: {str(e)[:150]}"
+            entries.append(entry)
+            continue
+        # 剥掉模型违令误产的 CHANGES 块（split 取最后一个 json 块之前的正文）· 空修订=失败跳过
+        revised_body, _spurious = split_text_and_changes(reply)
+        if not revised_body.strip():
+            entry["error"] = "empty_revision"
+            entries.append(entry)
+            continue
+        sc = score_candidate(revised_body, author_ref, loader, use_av_judge=use_av_judge)
+        body_cjk = cio.count_cjk(revised_body)
+        r_idx = n_requested + src_idx
+        revised.append({"idx": r_idx, "revised_from": src_idx,
+                        "reply": _rebuild_reply_with_changes(
+                            revised_body, s.get("changes_obj") or {}),
+                        "profile": used_profile,
+                        "temperature": getattr(used_profile, "temperature", None),
+                        "body_cjk": body_cjk,
+                        "length_telemetry_score": length_telemetry_score(body_cjk, lt_band),
+                        "score": sc, "error": None,
+                        "body": revised_body,
+                        "changes_obj": s.get("changes_obj") or {}})
+        entry["revised_composite"] = sc.get("composite")
+        entry["revised_idx"] = r_idx
+        entries.append(entry)
+        logger.info(f"[best-of-N][blind-revise] idx={src_idx} → 修订稿 idx={r_idx}: "
+                    f"composite {entry['orig_composite']} → {entry['revised_composite']}")
+    blind_trace = {"enabled": True, "revised": len(revised),
+                   "skipped_or_failed": len(entries) - len(revised),
+                   "entries": entries}
+    return revised, blind_trace
+
+
 def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
                        project_root: Path, n: int,
                        creative: bool = False) -> tuple[str, "Profile", dict]:
@@ -2456,7 +2658,7 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
     scored: list[dict] = []
     bodies: list[str] = []  # S8 deviation 遥测用（与 scored 同序）
     for d in ok_drafts:
-        body, _changes = split_text_and_changes(d["reply"])
+        body, changes_obj = split_text_and_changes(d["reply"])
         bodies.append(body)
         sc = score_candidate(body, author_ref, loader, use_av_judge=use_av_judge)
         body_cjk = cio.count_cjk(body)
@@ -2464,10 +2666,25 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
         scored.append({"idx": d["idx"], "reply": d["reply"], "profile": d["profile"],
                        "temperature": d["temperature"], "body_cjk": body_cjk,
                        "length_telemetry_score": lt_score,
-                       "score": sc, "error": None})
+                       "score": sc, "error": None,
+                       # A9 盲修轮消费（body=打分同款正文 · changes_obj=原稿 CHANGES ·
+                       # off 时无人读取 · 不进 trace）
+                       "body": body, "changes_obj": changes_obj})
         logger.info(f"[best-of-N] 候选 idx={d['idx']} temp={d['temperature']}: "
               f"SFS={sc['sfs']} AV走味={sc['av_drift_count']} composite={sc['composite']} "
               f"cjk={body_cjk} length_telemetry={lt_score}")
+
+    # A9 盲审 N 修 N 选 1（env BEST_OF_N_BLIND_REVISE 默认 off · off 时本段零执行 ·
+    # 逐字节不变）：N 候选各拿各的 critique 隔离盲修 → 修订稿重打分并入池 → 2N 选优。
+    blind_trace = None
+    if _blind_revise_enabled():
+        logger.info(f"[best-of-N][blind-revise] {BLIND_REVISE_ENV}=on · "
+                    f"{len(scored)} 候选各自隔离盲修一轮（修订稿与原稿 2N 进池选优）")
+        revised_scored, blind_trace = blind_revise_round(
+            loader, system, scored, author_ref, use_av_judge, n, lt_band)
+        for r in revised_scored:
+            bodies.append(r["body"])   # S8 deviation 遥测覆盖 2N 池（与 scored 同序）
+            scored.append(r)
 
     # S8 deviation 双嵌入多样性遥测（仅遥测 · select_best_draft 零感知 · 北极星⑤）
     dev_floor = _deviation_collapse_floor()
@@ -2506,10 +2723,15 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
              "sfs": s["score"]["sfs"], "av_drift_count": s["score"]["av_drift_count"],
              "av_drift_dims": s["score"]["av_drift_dims"],
              "av_order_consistency": s["score"].get("av_order_consistency"),
-             "composite": s["score"]["composite"], "errors": s["score"]["errors"]}
+             "composite": s["score"]["composite"], "errors": s["score"]["errors"],
+             # A9：仅修订稿带 revised_from（溯源到原稿 idx）· off 时 key 不存在（trace 逐字节不变）
+             **({"revised_from": s["revised_from"]} if "revised_from" in s else {})}
             for k, s in enumerate(scored)
         ],
     }
+    # A9 盲修轮留痕（每候选 critique 摘要 + 修订前后分数 · 仅开启时写 · off 时无此段）
+    if blind_trace is not None:
+        trace["blind_revise"] = blind_trace
     return best["reply"], best["profile"], trace
 
 

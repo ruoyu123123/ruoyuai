@@ -10,6 +10,10 @@ v18 之前，章末钩子只被「反模式查杀」覆盖（validate_chapter �
   - 定位钩子位置：开头钩（前 ~10%）/ 中段钩 / 章末钩（后 ~10%）
   - 章末钩子强度分（0-10），综合形式信号 + 钩子类型 + 反模式扣分
   - 纯过渡章/总结章不误判（识别 transition 模式 → 降级为 advisory-info）
+  - [A13] 切点前瞻熵观测列（arXiv:2604.09854 · 2026-07-07）：CLUSTER_MODE 下对每个拟切点
+    经 nn_forecast_entropy_bridge 算「切点后真实下文的条件 surprisal」代理指标，
+    env HOOK_FORECAST_ENTROPY_MODE 默认 shadow（off 可关）——只进报告观测列，
+    不参与切点评分/weak 判定/退出码；通路不可用时诚实 None。
 
 【v19 顾问制】本检测器输出 advisory（gate_level=advisory）——
 工具只提醒，writer/validator 有充分理由可豁免（如本章是卷尾故意收束式结尾）。
@@ -23,12 +27,20 @@ gate_level=advisory 单字段即表达「可豁免」，无需额外字段。
 """
 
 import sys
+import os
 import re
 import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
+
+# 🆕 A13 切点前瞻熵（arXiv:2604.09854 · 2026-07-07）：surprisal 通路代理桥。
+# 导入失败（环境残缺）→ None → 特征列诚实 None，绝不影响本 scanner 主逻辑。
+try:
+    import nn_forecast_entropy_bridge as _forecast_bridge  # noqa: E402
+except Exception:  # noqa: BLE001
+    _forecast_bridge = None
 
 
 # ============ 辅助 ============
@@ -273,7 +285,8 @@ def scan_cluster_hook_pacing(paragraphs, n_pseudo_cuts=4):
     splitter 按字数 3500/章硬切 cluster (11k-25k)，故 cluster 内有 N-1 个候选切点。
     每个切点前 3 段算钩子强度。返回均值 + 最弱点。"""
     if len(paragraphs) < 5:
-        return {"pseudo_cuts": 0, "scores": [], "mean_score": 0, "min_score": 0}
+        return {"pseudo_cuts": 0, "scores": [], "mean_score": 0, "min_score": 0,
+                "cut_indices": []}
     # 按段数等距取 N 个拟切点（避免依赖具体字数，因为段长不均）
     cuts = []
     for i in range(1, n_pseudo_cuts + 1):
@@ -292,7 +305,51 @@ def scan_cluster_hook_pacing(paragraphs, n_pseudo_cuts=4):
         "scores": scores,
         "mean_score": round(mean, 1),
         "min_score": min(scores) if scores else 0,
+        # A13：切点段索引（供前瞻熵观测列对位·additive 不动既有评分口径）
+        "cut_indices": cuts,
     }
+
+
+# ============ A13 切点前瞻熵（advisory 观测列 · arXiv:2604.09854） ============
+
+# 切点两侧取窗字符数：前文尾当条件上下文、下文头当被测续写。
+# 402 tokens 内（GPT-2 ctx 1024 富余）·纯观测特征无阈值·窗宽待真机标定。
+_FORECAST_TAIL_CHARS = 400
+_FORECAST_HEAD_CHARS = 400
+
+
+def _forecast_entropy_mode() -> str:
+    """env HOOK_FORECAST_ENTROPY_MODE：off=完全关闭；其余一律按 shadow（默认）。
+    shadow = 只计算并写进报告观测列，绝不参与切点评分/weak 判定/退出码。
+    本批不存在 active 档——进权重前提是金标准真机标定（届时登记 threshold_registry）。"""
+    v = os.environ.get("HOOK_FORECAST_ENTROPY_MODE", "shadow").strip().lower()
+    return "off" if v == "off" else "shadow"
+
+
+def compute_cut_forecast_entropy(paragraphs, cut_indices):
+    """对每个拟切点算前瞻熵代理（切点后真实下文在给定前文条件下的每 token 信息量·bits）。
+
+    通路不可用/单点失败 → 该位 None（诚实缺失·不伪装）。绝不抛异常。
+    返回 list 与 cut_indices 一一对应。
+    """
+    n = len(cut_indices)
+    if n == 0:
+        return []
+    if _forecast_bridge is None:
+        return [None] * n
+    try:
+        if not _forecast_bridge.enabled():
+            return [None] * n
+        pre_tails, post_heads = [], []
+        for idx in cut_indices:
+            pre_tails.append("\n".join(paragraphs[:idx])[-_FORECAST_TAIL_CHARS:])
+            post_heads.append("\n".join(paragraphs[idx:])[:_FORECAST_HEAD_CHARS])
+        res = _forecast_bridge.forecast_entropy_batch(pre_tails, post_heads)
+        if not isinstance(res, list) or len(res) != n:
+            return [None] * n
+        return res
+    except Exception:  # noqa: BLE001 观测列绝不拖垮主 scanner
+        return [None] * n
 
 
 def _detect_kishotenketsu_cluster(project_root: Path, ch: int) -> bool:
@@ -327,8 +384,7 @@ def scan(project_root: Path, ch: int):
     wc = cio.count_words(body)
 
     # v2 cluster 化：CLUSTER_MODE 下跑拟切点节奏（不跑单章末段）
-    import os as _os
-    _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
+    _cluster_mode = os.environ.get("CLUSTER_MODE") == "1"
 
     ending = score_ending_hook(paragraphs)
     positions = scan_hook_positions(paragraphs)
@@ -365,6 +421,24 @@ def scan(project_root: Path, ch: int):
             severity = "info"
             suppressed_reason = "kishotenketsu_4act 治愈/起承转结无冲突模式·末段不必强钩"
 
+    # 🆕 A13 切点前瞻熵（arXiv:2604.09854 · shadow 默认）：纯观测列，
+    # 绝不参与 weak 判定 / severity / 退出码 / 既有 7 维切点评分（进权重前提=金标准真机标定）。
+    _forecast_mode = _forecast_entropy_mode()
+    forecast_entropy = {
+        "mode": _forecast_mode,
+        "gate_level": "advisory",
+        "proxy": "post_cut_conditional_surprisal",
+        "note": ("A13 观测列（代理指标：切点后真实下文的条件 surprisal·非真前瞻熵）"
+                 "·不参与切点评分与 weak 判定·阈值待真机标定后再登记 threshold_registry"),
+        "per_cut": [],
+        "available": False,
+    }
+    if _forecast_mode != "off" and _cluster_mode and cluster_pacing:
+        per_cut = compute_cut_forecast_entropy(
+            paragraphs, cluster_pacing.get("cut_indices") or [])
+        forecast_entropy["per_cut"] = per_cut
+        forecast_entropy["available"] = any(x is not None for x in per_cut)
+
     # R18 W7 Batch-U·P2 · mid-sentence cliffhanger primitive (Loewenstein)
     mid_cut_count = count_mid_sentence_cuts(body)
     mid_sentence_cut_rate = (
@@ -385,6 +459,8 @@ def scan(project_root: Path, ch: int):
         "ending_hook": ending,
         "hook_positions": positions,
         "cluster_pacing": cluster_pacing,  # v2 cluster 视野拟切点节奏
+        # A13 切点前瞻熵观测列（shadow·advisory·与 cluster_pacing.cut_indices 对位）
+        "forecast_entropy": forecast_entropy,
         "is_kishotenketsu_cluster": is_kishotenketsu,
         "pass_threshold": PASS_THRESHOLD,
         "severity": severity,

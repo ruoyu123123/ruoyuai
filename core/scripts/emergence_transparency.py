@@ -14,8 +14,16 @@
 3. me_dag_health —— ME prerequisites 依赖图环检测 + 悬挂引用检测（环 = 环上 ME 互为前置
    永不可触发；悬挂 = 前置指向池中不存在的 ME id → 被打分层 -100 硬剔成死链）。
    advisory：只报告不裁决——大势卡是用户/outline 的创作产物。
+4. goal_stagnation —— 卷核心任务停滞检测（A10 · Magnet arXiv:2607.00918 · 2026-07-07）：
+   当前卷 volume_core_conflict 相关 ME 连续 N 个 cluster（默认 3 · env
+   RUOYU_GOAL_STAGNATION_WINDOW 可调）零推进、且本轮候选卡也无推进项 → advisory 信号。
+   与 Magnet「15 步无进展自动换目标」的刻意差异：我们**只提示人**——绝不改打分、
+   绝不换目标、绝不剔候选（北极星③软牵引 ⑤不裁决）。
 """
 from __future__ import annotations
+
+import os
+import re
 
 import world_evolution_engine as _wee
 
@@ -178,3 +186,126 @@ def me_dag_health(pool: list, *, get_id, get_parents) -> dict:
             _dfs(mid)
     cycles.sort()
     return {"cycles": cycles, "dangling": dangling}
+
+
+# ───────────────── goal_stagnation（卷核心任务停滞·advisory 只提示不干涉） ─────────────────
+
+_STAGNATION_WINDOW_ENV = "RUOYU_GOAL_STAGNATION_WINDOW"
+_STAGNATION_WINDOW_DEFAULT = 3
+# 「核心任务相关」判定阈：ME 文本与 volume_core_conflict/volume_thread 关键词重叠 ≥2 个
+# （关键词是中文 2-gram，单个重叠噪声高——收敛打分维度用 ≥1 因为只影响排序软分，
+#   停滞是明面 advisory 断言，判定门槛更保守）
+_CORE_OVERLAP_MIN = 2
+
+# 「已落章」cluster 状态词表（与 cluster_emergence_engine._LANDED_STATUSES 语义对齐，
+# candidate 是未选中的涌现候选，绝不算写作进度）
+_STAGNATION_LANDED = {"done", "已完成", "in_progress", "进行中", "writer_done",
+                      "splitter_done", "writer_v2_rewriting", "done_writer_drafted"}
+
+
+def stagnation_window() -> int:
+    """连续零推进的判定窗口（cluster 个数）。env 非法/缺失 → 默认 3；下限 1。"""
+    raw = os.environ.get(_STAGNATION_WINDOW_ENV)
+    try:
+        v = int(str(raw).strip())
+        return v if v >= 1 else _STAGNATION_WINDOW_DEFAULT
+    except (TypeError, ValueError):
+        return _STAGNATION_WINDOW_DEFAULT
+
+
+def goal_stagnation(shijianji: dict, dashishi: dict, current_volume, candidate_mes: list,
+                    *, get_me_id, me_text, keyword_set, me_volume, window: int | None = None) -> dict:
+    """卷核心任务停滞检测（确定性只读·advisory）。
+
+    detected=True 需同时满足：
+      ① 当前卷已落章 cluster ≥ window 个（不足 = 证据不够，不妄断）；
+      ② 窗口内（最近 window 个已落章 cluster）推进的 ME 里**没有一个**与本卷
+         volume_core_conflict/volume_thread 核心关键词重叠 ≥ _CORE_OVERLAP_MIN；
+      ③ 本轮候选卡的 parent ME 也全部不相关（有推进项在候选里 = 用户下一步就能选，不算滞）。
+    数据缺失（无卷标记 / 本卷缺 volume_core_conflict / 关键词为空）→ 诚实 skip。
+    get_me_id/me_text/keyword_set/me_volume 由 cluster_emergence_engine 注入（口径同打分层）。
+    北极星铁律：本函数只产报告字段——绝不改打分、绝不换目标、绝不增删候选。
+    """
+    win = window if isinstance(window, int) and window >= 1 else stagnation_window()
+    out = {
+        "detected": False,
+        "window": win,
+        "volume": current_volume,
+        "_doc": ("A10 Magnet 目标停滞检测的若渝形态：只提示人·绝不自动换目标"
+                 "（北极星③软牵引 ⑤不裁决）·env RUOYU_GOAL_STAGNATION_WINDOW 调窗口"),
+    }
+    if current_volume is None:
+        out["skipped"] = "ME 无卷标记（volume）·无法定位卷核心任务·跳过"
+        return out
+
+    vol_entry = None
+    for v in (dashishi.get("volumes") or []):
+        if isinstance(v, dict) and v.get("vol") == current_volume:
+            vol_entry = v
+            break
+    core_text = " ".join(str(vol_entry.get(k) or "") for k in
+                         ("volume_core_conflict", "volume_thread")) if vol_entry else ""
+    if not core_text.strip():
+        out["skipped"] = f"卷{current_volume} 缺 volume_core_conflict/volume_thread（outline 合约字段）·跳过"
+        return out
+    core_kw = keyword_set(core_text)
+    if not core_kw:
+        out["skipped"] = "卷核心任务文本无可比对关键词·跳过"
+        return out
+
+    pool = [m for m in (dashishi.get("major_events_pool") or dashishi.get("major_events") or [])
+            if isinstance(m, dict)]
+    me_by_id = {get_me_id(m): m for m in pool if get_me_id(m)}
+
+    def _core_related(me: dict) -> bool:
+        return len(keyword_set(me_text(me)) & core_kw) >= _CORE_OVERLAP_MIN
+
+    # 当前卷已落章 cluster（按 cluster 号时间序）
+    landed = []  # (num, cluster_id, [advanced core-related me ids])
+    for c in (shijianji.get("clusters") or []):
+        if not isinstance(c, dict) or str(c.get("status") or "") not in _STAGNATION_LANDED:
+            continue
+        m = re.search(r"(\d+)", str(c.get("cluster_id") or ""))
+        if not m:
+            continue
+        num = int(m.group(1))
+        # 卷归属：显式 vol 字段，否则经 parent_me / ME_to_advance 的 ME volume 解析
+        vol = c.get("vol")
+        if vol is None:
+            parent = me_by_id.get(str(c.get("parent_me") or ""))
+            vol = me_volume(parent) if parent else None
+        if vol is None:
+            advanced_vols = [me_volume(me_by_id[mid]) for mid in (c.get("ME_to_advance") or [])
+                             if mid in me_by_id]
+            advanced_vols = [v for v in advanced_vols if v is not None]
+            vol = advanced_vols[0] if advanced_vols else None
+        if vol != current_volume:
+            continue
+        core_hits = [mid for mid in (c.get("ME_to_advance") or [])
+                     if mid in me_by_id and _core_related(me_by_id[mid])]
+        landed.append((num, c.get("cluster_id"), core_hits))
+    landed.sort(key=lambda t: t[0])
+
+    recent = landed[-win:]
+    out["volume_landed_clusters"] = len(landed)
+    out["checked_clusters"] = [cid for _, cid, _ in recent]
+    if len(recent) < win:
+        out["skipped"] = (f"卷{current_volume} 已落章 cluster 仅 {len(landed)} 个 < 窗口 {win}"
+                          f"·证据不足不妄断")
+        return out
+
+    core_progress = {cid: hits for _, cid, hits in recent if hits}
+    out["core_progress_in_window"] = core_progress
+    candidates_core = [get_me_id(me) for me in (candidate_mes or [])
+                       if isinstance(me, dict) and _core_related(me)]
+    out["candidates_core_related"] = candidates_core
+    if core_progress or candidates_core:
+        return out
+
+    out["detected"] = True
+    out["advisory"] = (
+        f"⚠️ 卷{current_volume} 核心任务疑似停滞：与 volume_core_conflict 相关的 ME 已连续 "
+        f"{win} 个 cluster 零推进，且本轮候选卡也无推进项。建议候选卡向核心任务倾斜，"
+        f"或在走向卡显式声明蓄势（铺垫期是合法节奏）。本信号仅提示——"
+        f"绝不改打分、绝不换目标（北极星③软牵引 ⑤不裁决）。")
+    return out

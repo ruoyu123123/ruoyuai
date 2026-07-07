@@ -3791,6 +3791,16 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
     if not query:
         return {"retrieved": [], "reason": "本章 cluster_blueprint 无 query 信号"}
 
+    # A6-1 query 扩展（2026-07-08·检索三段式·rag_retriever 单一实现）：brief 实体×属性
+    # 组合词组前置拼入 query（确定性拼装零 LLM）。无 brief 信号 → 零变化。
+    try:
+        import rag_retriever as _rag_a6
+        _expansion = _rag_a6.expand_query_from_brief(scanner.root, chapter)
+    except Exception:
+        _expansion = []
+    if _expansion:
+        query = " ".join(_expansion) + " " + query
+
     # 加载 embedding 模块
     try:
         sys.path.insert(0, str(Path(__file__).parent))
@@ -3855,9 +3865,17 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
             "chunk_idx": _idx,
             "text_preview": item["text_preview"],
         })
+    # A6-2/3（2026-07-08·检索三段式）：块距防复读标签 + 用途启发式分类 → 每条 usage_hint
+    # （advisory·rag_retriever 单一实现·cluster 反查失败时只打用途分类不臆造块距）。
+    try:
+        import rag_retriever as _rag_a6h
+        _rag_a6h.annotate_usage_hints(scanner.root, chapter, typed_top)
+    except Exception:
+        pass
     _actual_chars = sum(len(str(t["text_preview"])) for t in typed_top)
     return {
-        "_note": "按本章 turning_point + threads_advance 作 query 做语义检索，找前 N 章语义相近的片段。比固定 recent 摘要更智能。"
+        "_note": "按本章 turning_point + threads_advance（+A6 brief 实体×属性扩展词组）作 query 做语义检索，找前 N 章语义相近的片段。比固定 recent 摘要更智能。"
+                 "每条 usage_hint=块距防复读标签（NEAR_ECHO_RISK/PARAPHRASE/OK）+用途分类（advisory）。"
                  "anti_copy=reference-not-copy：检索片段只作前情事实/连贯性参照，禁止照抄近邻正文原句进本章（advisory）。",
         "source_type": "selective_history",
         "match_method": _match_method,
@@ -5699,6 +5717,346 @@ def _collect_recently_active_entities(s: "DatabaseScanner", active_chars,
     }
 
 
+def _scene_gate_context(s: "DatabaseScanner", current_cluster_id) -> dict | None:
+    """A11 DeepLore 多维门控上下文（2026-07-08·sillytavern-DeepLore 移植·
+    research/open_source_writing_systems_round2.md A11）。
+
+    当前 cluster brief 的 scene_storyboard + characters_focus + hub_locations 聚合出
+    「本块出场角色集合 + 地点集合」（角色 id↔name 双形态都认）。聚合不到任何场景信息
+    → None = 调用方不过滤零变化（保守闸：宁多注入不误删）。
+    """
+    cluster = s._event_cluster_by_id(current_cluster_id) if current_cluster_id else None
+    if not isinstance(cluster, dict):
+        return None
+    chars: set[str] = set()
+    locs: set[str] = set()
+
+    def _add(pool: set, v):
+        if isinstance(v, str) and v.strip():
+            pool.add(v.strip())
+
+    for v in cluster.get("characters_focus") or []:
+        _add(chars, v)
+    for sc in cluster.get("scene_storyboard") or []:
+        if not isinstance(sc, dict):
+            continue
+        for v in sc.get("characters") or []:
+            _add(chars, v)
+        for v in sc.get("participants") or []:
+            _add(chars, v)
+        _add(chars, sc.get("focal_character"))
+        _add(locs, sc.get("location"))
+    for v in cluster.get("hub_locations") or []:
+        _add(locs, v)
+    id2name = s._char_id_map()
+    chars |= {id2name[c] for c in list(chars) if c in id2name}
+    if not chars and not locs:
+        return None
+    return {"characters": chars, "locations": locs}
+
+
+def _scene_gate_world_hits(s: "DatabaseScanner", world_hits, current_cluster_id):
+    """A11 DeepLore scene 维度门控过滤：世界观词条清单（world_keyword_hits）按「本块出场
+    角色/地点」维度门控——词条明确点名了已知角色/地点、却与本块角色/地点零交集 → 不注入
+    （确定性 substring 匹配·零 LLM）。34 子系统越写越厚时的注入密度解法。
+
+    词条清单型注入段现状摸底（2026-07-08）：world_keyword_hits 是唯一未按场景门控的词条
+    清单段（keyword 命中 plan 即注入·词条可点名与本块无关的角色/地点）；location_atmosphere
+    天生已按 scene 候选地点三路匹配（_collect_location_atmosphere）；triggerable_events /
+    relevant_items / relevant_relationships 已分别按 plan 关键词 / 出场角色门控——均无需二次门控。
+
+    保守闸（零变化路径）：env MANIFEST_SCENE_GATING=off / 无场景信息（_scene_gate_context
+    返回 None）/ 词条不点名任何已知实体（通用设定条目）→ 不过滤。
+    只判有上下文的维度：本块无地点信息时不按地点裁、无角色信息时不按角色裁。
+    返回 (kept_hits, gating_report|None)；report 只在真有过滤时产（META 元数据·可审计）。
+    """
+    mode = (os.environ.get("MANIFEST_SCENE_GATING") or "on").strip().lower()
+    if mode in ("off", "0", "false") or not world_hits:
+        return world_hits, None
+    ctx = _scene_gate_context(s, current_cluster_id)
+    if ctx is None:
+        return world_hits, None
+    universe_chars = {k for k in s._char_id_map() if isinstance(k, str) and len(k) >= 2}
+    universe_locs: set[str] = set()
+    map_data = s.load("地图", {}) or {}
+    for v in (map_data.get("character_positions") or {}).values():
+        if isinstance(v, str) and len(v.strip()) >= 2:
+            universe_locs.add(v.strip())
+    for loc in map_data.get("locations") or []:
+        if isinstance(loc, str):
+            nm = loc
+        elif isinstance(loc, dict):
+            nm = loc.get("name") or loc.get("id") or ""
+        else:
+            continue
+        if isinstance(nm, str) and len(nm.strip()) >= 2:
+            universe_locs.add(nm.strip())
+    reg = s.load("location_atmosphere_registry", {}) or {}
+    if isinstance(reg, dict):
+        universe_locs |= {k.strip() for k in reg if isinstance(k, str) and len(k.strip()) >= 2}
+    # 本块自己的角色/地点不当「无关证据」（词条点名本块实体=直接相关）
+    kept, dropped = [], []
+    for h in world_hits:
+        blob = json.dumps(h, ensure_ascii=False)
+        ref_chars = {n for n in universe_chars if n in blob}
+        ref_locs = {n for n in universe_locs if n in blob}
+        judged = False
+        keep = False
+        if ref_chars and ctx["characters"]:
+            judged = True
+            keep = bool(ref_chars & ctx["characters"])
+        if not keep and ref_locs and ctx["locations"]:
+            judged = True
+            keep = any(rl == c or rl in c or c in rl
+                       for rl in ref_locs for c in ctx["locations"])
+        if judged and not keep:
+            dropped.append(h.get("id"))
+        else:
+            kept.append(h)  # 未点名实体的通用词条 / 未判定维度 → 保守保留
+    if not dropped:
+        return world_hits, None
+    report = {
+        "_doc": ("A11 DeepLore scene 维度门控：世界观词条点名了已知角色/地点但与本块出场"
+                 "角色/地点零交集 → 不注入（确定性匹配·env MANIFEST_SCENE_GATING=off 可关·"
+                 "被滤词条以 世界观.json 原文件为准·META 审计元数据）。"),
+        "gated_section": "world_keyword_hits",
+        "dropped_entry_ids": dropped,
+        "kept_count": len(kept),
+        "scene_characters": sorted(ctx["characters"]),
+        "scene_locations": sorted(ctx["locations"]),
+    }
+    return kept, report
+
+
+def _collect_pre_write_gate_digest(s: "DatabaseScanner", current_cluster_id) -> dict | None:
+    """A2 遗留清偿（2026-07-08·写前 Evolution Gate 报告摘要注入）。
+
+    读 .wal/cluster_<key>_pre_write_gate.json 的 waived[]/warnings[]——有内容才注入。
+    让 writer 看到「已声明豁免的叙事手法」上下文（死人以回忆/幻觉登场、毁物以残片再现等
+    创作声明），写作时有意识把豁免当叙事手法落笔，而非当穿帮回避；warnings（重复事件嫌疑等）
+    提示避免复写。manifest_budget 归 T0（契约类）。
+    无报告 / waived+warnings 双空 → None（键不注入·零变化）。
+    """
+    if not current_cluster_id:
+        return None
+    path = s.db / ".wal" / f"{current_cluster_id}_pre_write_gate.json"
+    if not path.is_file():
+        return None
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(report, dict):
+        return None
+
+    def _slim(items, with_waiver: bool) -> list[dict]:
+        out = []
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            row = {"type": it.get("type"), "target": it.get("target"),
+                   "detail": str(it.get("detail") or "")[:200]}
+            if with_waiver:
+                wb = it.get("waived_by") or {}
+                if isinstance(wb, dict):
+                    row["waiver_reason"] = str(wb.get("reason") or "")[:300]
+            out.append(row)
+        return out
+
+    waived = _slim(report.get("waived"), True)
+    warnings = _slim(report.get("warnings"), False)
+    if not waived and not warnings:
+        return None
+    return {
+        "_doc": ("A2 写前 Evolution Gate 摘要（pre_write_gate.py 产·完整报告见 "
+                 f"_数据库/.wal/{current_cluster_id}_pre_write_gate.json）："
+                 "waived=brief 已声明豁免放行的写前拦截项——writer 应把 waiver_reason 当"
+                 "叙事手法有意识落笔（如亡者只以回忆/幻觉出场）；warnings=写前留痕注意项"
+                 "（如与已完成事件高词面重叠·避免复写）。advisory·非 hard_gate。"),
+        "cluster_id": report.get("cluster_id") or current_cluster_id,
+        "verdict": report.get("verdict"),
+        "waived": waived,
+        "warnings": warnings,
+    }
+
+
+# ============ A4 编辑手记（2026-07-08·二轮移植·PlotPilot 结构槽坍缩为自然语言） ============
+# 业界源 PlotPilot context_budget_allocator.py:475-489：「一段自然语言比 8 个 === 分隔符
+# 更容易被 LLM 融入创作」。双视图纪律：原始结构块**全部保留**（scanner/审计仍消费结构化
+# 数据），editor_note 只是给 writer 的人话视图。零 LLM 纯模板填充·同输入同字节（确定性）。
+
+_EDITOR_NOTE_MIN_CHARS = 200
+_EDITOR_NOTE_MAX_CHARS = 400
+
+_EDITOR_NOTE_OPENING = "【编辑手记】开写前把案头的材料翻了一遍，几句闲话放在这里，供你顺手参考："
+
+# 软措辞收尾池：首条恒在场（「不必强求”是 A4 的灵魂措辞）；其余按长度下限依序补足。
+_EDITOR_NOTE_CLOSERS = (
+    "以上都是软建议——本块如果顺手可以推进，如果合适可以呼应，不必强求，更不必逐条完成。",
+    "要是这些线头和你正在写的场景相互别扭，以你的场景和作者风格档为准，手记让路。",
+    "这份手记只是把散在各库里的线头拢到一起，省得你来回翻找；写作的判断权始终在你手里。",
+    "祝本块写得顺，收尾时留个让人想追下去的钩子就更好了——当然，这也只是顺口一提。",
+)
+
+
+def _en_snip(text, limit: int) -> str:
+    """手记素材片段清洗：折叠空白 + 定长截断（截断补省略号·确定性）。"""
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(t) > limit:
+        t = t[:limit].rstrip() + "…"
+    return t
+
+
+def _editor_note_materials(manifest: dict) -> tuple[list[str], list[str]]:
+    """从已组装 manifest 的结构块确定性提炼手记素材句（人话软措辞）。
+
+    素材源（与结构块一一对应·块缺席/off/error/空 → 该句不产）：
+      foreshadowing_summary（到期伏笔计数）/ open_dramatic_questions（悬置戏剧问题）/
+      protagonist_stress（主角承压）/ main_character_arc_stage（弧线阶段）/
+      world_state_snapshot（近期涟漪后果）/ event_cluster_context.volume_convergence_anchor（卷收敛锚）。
+    返回 (sentences, sources)——两列表同序（sources 供审计追溯素材来源）。
+    """
+    sentences: list[str] = []
+    sources: list[str] = []
+
+    # ① 到期伏笔（foreshadowing_summary 计数——内容级契约仍走 hard_constraints，这里只是提醒）
+    fs = manifest.get("foreshadowing_summary")
+    if isinstance(fs, dict):
+        parts = []
+        t1 = fs.get("tier1_due_count")
+        if isinstance(t1, int) and t1 > 0:
+            parts.append(f"{t1} 处伏笔到了该收的窗口")
+        rv = fs.get("must_reveal_this_ch")
+        if isinstance(rv, int) and rv > 0:
+            parts.append(f"{rv} 个秘密等着揭晓")
+        dl = fs.get("deadlines_due")
+        if isinstance(dl, int) and dl > 0:
+            parts.append(f"{dl} 条期限正在逼近")
+        if parts:
+            sentences.append("翻了下伏笔账：" + "、".join(parts) +
+                             "——如果剧情顺手可以兑现一两处，收不完也别硬塞。")
+            sources.append("foreshadowing_summary")
+
+    # ② 悬置戏剧问题（open_dramatic_questions 首问）
+    odq = manifest.get("open_dramatic_questions")
+    if isinstance(odq, dict):
+        qs = odq.get("open_questions")
+        q0 = qs[0] if isinstance(qs, list) and qs and isinstance(qs[0], dict) else None
+        q_text = _en_snip((q0 or {}).get("question"), 40)
+        if q_text:
+            cnt = odq.get("open_count")
+            extra = (f"（悬着的问题一共 {cnt} 个）"
+                     if isinstance(cnt, int) and cnt > 1 else "")
+            sentences.append(f"读者眼下最想知道的是「{q_text}」{extra}，"
+                             "写到相关处如果能顺手给一点新线索就更好，不给也行。")
+            sources.append("open_dramatic_questions")
+
+    # ③ 主角承压（protagonist_stress·只在真高压时说一嘴，不替模型渲染）
+    ps = manifest.get("protagonist_stress")
+    if isinstance(ps, dict) and ps.get("mode") == "on" and ps.get("is_high_stress"):
+        level = ps.get("stress_level")
+        threshold = ps.get("stress_threshold_break")
+        num = (f"（压力已到 {level}/{threshold}）"
+               if isinstance(level, (int, float)) and isinstance(threshold, (int, float))
+               else "")
+        sentences.append(f"主角这会儿承压不轻{num}，写到位时让这份紧绷自然露出来一点就好，不用刻意渲染。")
+        sources.append("protagonist_stress")
+
+    # ④ 主角弧线阶段（main_character_arc_stage 首个主角）
+    arc = manifest.get("main_character_arc_stage")
+    if isinstance(arc, dict) and arc.get("mode") == "on":
+        mcs = arc.get("main_characters")
+        mc = mcs[0] if isinstance(mcs, list) and mcs and isinstance(mcs[0], dict) else None
+        if mc:
+            name = _en_snip(mc.get("character"), 12)
+            stage = _en_snip(mc.get("current_stage_name") or mc.get("current_stage_id"), 20)
+            if name and stage:
+                desc = _en_snip(mc.get("stage_description"), 40)
+                mid = f"（{desc}）" if desc else ""
+                sentences.append(f"{name}的成长线正走到「{stage}」这一段{mid}，"
+                                 "台词和选择贴着这个阶段来，自然就对。")
+                sources.append("main_character_arc_stage")
+
+    # ⑤ 近期涟漪后果（world_state_snapshot.ripple_narrative_consequences 最新一条）
+    ws = manifest.get("world_state_snapshot")
+    if isinstance(ws, dict) and ws.get("mode") not in (None, "off", "error"):
+        ncs = ws.get("ripple_narrative_consequences")
+        last = ncs[-1] if isinstance(ncs, list) and ncs and isinstance(ncs[-1], dict) else None
+        nc_text = _en_snip((last or {}).get("text"), 50)
+        if nc_text:
+            sentences.append(f"世界那头还有前文的因果在发酵——{nc_text}。"
+                             "如果合适可以让它的余波在本块露个影，不合适就先放着。")
+            sources.append("world_state_snapshot")
+
+    # ⑥ 卷收敛锚（event_cluster_context.volume_convergence_anchor·大势方向收尾）
+    ecc = manifest.get("event_cluster_context")
+    if isinstance(ecc, dict):
+        anchor = ecc.get("volume_convergence_anchor")
+        if isinstance(anchor, dict):
+            direction = None
+            for k in ("core_conflict", "volume_arc"):
+                v = anchor.get(k)
+                if isinstance(v, str) and v.strip():
+                    direction = _en_snip(v, 40)
+                    break
+            if direction:
+                sentences.append(f"最后提一句本卷的大方向：「{direction}」。"
+                                 "小势怎么折腾随你，方向别丢就行。")
+                sources.append("volume_convergence_anchor")
+
+    return sentences, sources
+
+
+def _build_editor_note(manifest: dict) -> dict | None:
+    """A4 编辑手记：把分散结构槽确定性坍缩成一段 200-400 字自然语言手记（advisory）。
+
+    · 双视图：只读 manifest 已组装结构块（不动原块）——scanner/审计消费结构块，
+      writer 多得一份人话视图（PlotPilot「一段自然语言比 8 个分隔符更易融入创作」）。
+    · 软措辞：「如果合适可以推进，不必强求」恒在场（北极星⑤·顾问非法官）。
+    · 长度带 [200, 400]：不足 → 依序补软措辞收尾句；超出 → 从尾部整句裁素材
+      （至少保 1 句·单句仍超带则带内硬裁）。
+    · 素材全空 / 拼装异常 → None（键不注入·零变化）。零 LLM 纯模板填充·同输入同字节。
+    """
+    try:
+        sentences, sources = _editor_note_materials(manifest)
+    except Exception:
+        return None  # 手记生成失败 → 键不注入（不阻断 manifest）
+    if not sentences:
+        return None  # 素材全空 → 键不注入
+    kept = list(sentences)
+    closers = [_EDITOR_NOTE_CLOSERS[0]]  # 「不必强求」软措辞恒在场
+
+    def _compose() -> str:
+        return _EDITOR_NOTE_OPENING + "".join(kept) + "".join(closers)
+
+    note = _compose()
+    # 超上限 → 从尾部整句裁素材（至少保 1 句）
+    while len(note) > _EDITOR_NOTE_MAX_CHARS and len(kept) > 1:
+        kept.pop()
+        sources = sources[:len(kept)]
+        note = _compose()
+    if len(note) > _EDITOR_NOTE_MAX_CHARS:
+        budget = _EDITOR_NOTE_MAX_CHARS - len(_EDITOR_NOTE_OPENING) - len(closers[0]) - 1
+        kept = [kept[0][:max(budget, 1)].rstrip() + "…"]
+        note = _compose()
+    # 不足下限 → 依序补收尾句（收尾池设计上保证 ≥1 素材句时可达下限）
+    for closer in _EDITOR_NOTE_CLOSERS[1:]:
+        if len(note) >= _EDITOR_NOTE_MIN_CHARS:
+            break
+        closers.append(closer)
+        note = _compose()
+    return {
+        "_doc": ("A4 编辑手记（PlotPilot 结构槽坍缩为自然语言·2026-07-08）：把到期伏笔/"
+                 "悬置戏剧问题/主角压力与弧线阶段/近期涟漪后果/卷收敛锚等结构块，确定性模板"
+                 "拼装成一段 200-400 字人话手记给 writer。双视图：原始结构块全部保留给 "
+                 "scanner/审计，本段只是人话视图。全 advisory·软措辞·可自由取舍·绝不 hard_gate。"),
+        "gate_level": "advisory",
+        "note": note,
+        "note_chars": len(note),
+        "sources": sources,
+    }
+
+
 def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
     """G6 P0：注入作者风格相对通用兜底基线的方向描述（更短/更留白）·advisory·三态。
 
@@ -5923,6 +6281,10 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     active_chars = s.active_characters()
     # 🔴 2026-06-28 写手信息隔离：当前章所属 cluster_id（写手注入门控的 reveal/trigger 判定基准·唯一权威反查）。
     current_cluster_id = s._current_cluster_id()
+    # A11 DeepLore scene 维度门控（2026-07-08）：世界观词条清单按本块出场角色/地点过滤
+    # （must_read 与 manifest 段同源同过滤·env MANIFEST_SCENE_GATING 默认 on·匹配不到
+    # 场景信息 = 不过滤零变化）。
+    world_hits, _scene_gating_report = _scene_gate_world_hits(s, world_hits, current_cluster_id)
     prev_file = s.previous_chapter_file()
     recent_openings = s.recent_chapter_openings(lookback=3)
     rag_hits = s.rag_relevant_chapters(top_k=3)
@@ -6423,6 +6785,21 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     _recent_ents = _collect_recently_active_entities(s, active_chars, current_cluster_id)
     if _recent_ents:
         manifest["recently_active_entities"] = _recent_ents
+    # A2 遗留清偿（2026-07-08）：写前 Evolution Gate 报告摘要（.wal/<key>_pre_write_gate.json
+    # 的 waived/warnings·有内容才注入·T0 契约类）——writer 看到「已声明豁免的叙事手法」上下文。
+    _gate_digest = _collect_pre_write_gate_digest(s, current_cluster_id)
+    if _gate_digest:
+        manifest["pre_write_gate_digest"] = _gate_digest
+    # A11 门控审计元数据（2026-07-08）：真有词条被滤才注入（META·不参与预算与裁剪）。
+    if _scene_gating_report:
+        manifest["_scene_gating"] = _scene_gating_report
+    # A4 编辑手记（2026-07-08·PlotPilot「一段自然语言比 8 个分隔符更易融入创作」）：
+    # 把已组装 manifest 的结构块（伏笔计数/悬置问题/主角压力与弧线/涟漪后果/卷收敛锚）
+    # 确定性坍缩成一段 200-400 字人话手记（双视图·结构块原样保留给 scanner/审计·T1）。
+    # 素材全空 / 拼装异常 → 键不注入（零变化）。零 LLM 纯模板填充·同输入同字节。
+    _editor_note = _build_editor_note(manifest)
+    if _editor_note:
+        manifest["editor_note"] = _editor_note
     # S1 分层 token 预算（2026-07-07·PlotPilot context_budget_allocator 移植）：
     # 记账（budget_report 元数据）始终附加；分层裁剪（T3 留 5% 地板 → T2 → T1·T0 自身 40% 硬上限）
     # 仅在体积 >= 既有 v19.4 硬守卫（BUDGET_HARD_KB·env MANIFEST_BUDGET_* 可覆盖）时生效——

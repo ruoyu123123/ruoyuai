@@ -11,6 +11,8 @@
 3. 删值为 null / [] / {} 的空字段
 4. 数组截断：列表 > 10 时截到 10，加 "_truncated_at": original_count
 5. 字符串截断：默认 > 200 字符盲切前缀 200 + "...(N truncated)"（LLMLingua 风格却零模型调用的占位版）
+   —— A3 例外（2026-07-08）：LONG_TEXT_KEY_WHITELIST 键子树（tail_text/snippet/passages_by_type/
+   scope_summary 等创作载荷长文本）永不截断，见常量注释
 
 【2026-07-02 接入真模型·信息量优选截断】RUOYU_NN_SURPRISAL=1 时超限字符串改走真 LLMLingua 路数：
 按句切分 → 经 nn_surprisal_bridge/feature_cache 批量算句级 GPT-2 surprisal → 保留高信息量句子
@@ -51,14 +53,27 @@ DROP_FIELDS_DEEP = {
 
 # 顶层仅 Claude agent 用的元数据字段（gen-model 无法执行 Read/Bash）
 # budget_report：S1 分层 token 预算记账/压缩日志（manifest_budget.py 产·人看的元数据非创作载荷）
+# _scene_gating：A11 scene 维度门控审计留痕（build_manifest 产·同为人看的元数据）
 DROP_TOP_LEVEL_KEYS = {
     "must_read", "_cache_layout", "_critical_summary",
     "instructions_for_subagent", "post_write_checks", "database_coverage",
-    "budget_report",
+    "budget_report", "_scene_gating",
 }
 
 MAX_LIST_LEN = 10
 MAX_STR_LEN = 200
+
+# A3 遗留根治（2026-07-08·长字符串键白名单）：这些键（含其整个子树）的字符串是「必须完整
+# 原文」的创作载荷，MAX_STR_LEN 盲切会直接破坏其功能，故豁免【字符串截断】（删开发者注释/
+# 空值清理/列表截断不受影响）：
+#   tail_text          prev_cluster_tail 上一块结尾原文（A3 回响契约·默认 800 CJK·截 200=契约失效）
+#   snippet            rolling_style_anchor.anchors[].snippet 动态风格锚（~600 CJK·截断=锚不住文风；
+#                      rag 检索 snippet 同键但索引期已 ≤200 字·天然不触发截断）
+#   passages_by_type   distill_golden_few_shot 蒸馏金句 few-shot（单段 ≤800 字·自带 6000 字总预算·
+#                      截 200=风格锚定失效）
+#   scope_summary      cluster brief 核心事件范围（writer 的写作蓝图正文·截断=写偏）
+# gen_writer 侧「检测到截断标记回未压缩 manifest 取全量」的回源逻辑保留当双保险。
+LONG_TEXT_KEY_WHITELIST = {"tail_text", "snippet", "passages_by_type", "scope_summary"}
 
 _SENT_SPLIT_RE = re.compile(r"[^。！？!?;；\n]+[。！？!?;；\n]*")
 
@@ -97,9 +112,11 @@ def _predict_surprisal_batch(texts: list[str]) -> list[float | None]:
     return [(p.get("mean_surprisal") if p else None) for p in preds]
 
 
-def _collect_long_strings(obj, depth: int = 0, out: list[str] | None = None) -> list[str]:
+def _collect_long_strings(obj, depth: int = 0, out: list[str] | None = None,
+                          _protected: bool = False) -> list[str]:
     """与 compress() 完全同构的过滤遍历·只收集『确实会走到盲切分支』的超限字符串
-    (避免为会被丢弃的字段(_doc/_note 等)浪费模型调用)。"""
+    (避免为会被丢弃的字段(_doc/_note 等)浪费模型调用)。
+    A3：LONG_TEXT_KEY_WHITELIST 子树内字符串不会被截断 → 同样跳过收集（不浪费模型调用）。"""
     if out is None:
         out = []
     if isinstance(obj, dict):
@@ -110,12 +127,13 @@ def _collect_long_strings(obj, depth: int = 0, out: list[str] | None = None) -> 
                 continue
             if v is None or v == [] or v == {} or v == "":
                 continue
-            _collect_long_strings(v, depth + 1, out)
+            _collect_long_strings(v, depth + 1, out,
+                                  _protected or (k in LONG_TEXT_KEY_WHITELIST))
     elif isinstance(obj, list):
         items = obj[:MAX_LIST_LEN] if len(obj) > MAX_LIST_LEN else obj
         for item in items:
-            _collect_long_strings(item, depth + 1, out)
-    elif isinstance(obj, str) and len(obj) > MAX_STR_LEN:
+            _collect_long_strings(item, depth + 1, out, _protected)
+    elif isinstance(obj, str) and len(obj) > MAX_STR_LEN and not _protected:
         out.append(obj)
     return out
 
@@ -167,10 +185,13 @@ def _build_surprisal_cache(obj) -> dict:
     return cache
 
 
-def compress(obj, depth: int = 0, _surprisal_cache: "dict | None" = None):
+def compress(obj, depth: int = 0, _surprisal_cache: "dict | None" = None,
+             _protected: bool = False):
     """递归压缩 JSON 对象。字符串超限截断：门控 RUOYU_NN_SURPRISAL=1 时优先按句 surprisal 精选
     高信息量句子(_build_surprisal_cache 一次性批量算好)；门控关/桥不可用/该字符串未完整命中
-    → 盲切前缀(逐字节不变·默认行为)。"""
+    → 盲切前缀(逐字节不变·默认行为)。
+    A3（2026-07-08）：键 ∈ LONG_TEXT_KEY_WHITELIST 的子树 _protected=True → 字符串永不截断
+    （创作载荷长文本必须完整原文·删注释/空值/列表截断照常）。"""
     if depth == 0 and _surprisal_cache is None:
         _surprisal_cache = _build_surprisal_cache(obj) if _surprisal_gate_on() else {}
     if isinstance(obj, dict):
@@ -186,7 +207,8 @@ def compress(obj, depth: int = 0, _surprisal_cache: "dict | None" = None):
             if v is None or v == [] or v == {} or v == "":
                 continue
             # 递归压缩
-            compressed_v = compress(v, depth + 1, _surprisal_cache)
+            compressed_v = compress(v, depth + 1, _surprisal_cache,
+                                    _protected or (k in LONG_TEXT_KEY_WHITELIST))
             # 二次过滤：压缩后变空也删
             if compressed_v is None or compressed_v == {} or compressed_v == []:
                 continue
@@ -194,11 +216,14 @@ def compress(obj, depth: int = 0, _surprisal_cache: "dict | None" = None):
         return out
     if isinstance(obj, list):
         if len(obj) > MAX_LIST_LEN:
-            out = [compress(item, depth + 1, _surprisal_cache) for item in obj[:MAX_LIST_LEN]]
+            out = [compress(item, depth + 1, _surprisal_cache, _protected)
+                   for item in obj[:MAX_LIST_LEN]]
             out.append({"_truncated_at": len(obj), "_kept": MAX_LIST_LEN})
             return out
-        return [compress(item, depth + 1, _surprisal_cache) for item in obj]
+        return [compress(item, depth + 1, _surprisal_cache, _protected) for item in obj]
     if isinstance(obj, str) and len(obj) > MAX_STR_LEN:
+        if _protected:
+            return obj  # A3 创作载荷长文本白名单：完整原文不切
         cached = _surprisal_cache.get(obj)
         if cached is not None:
             return cached
