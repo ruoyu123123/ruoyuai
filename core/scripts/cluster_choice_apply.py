@@ -135,10 +135,16 @@ def apply_choice(project_root: Path, next_key: str, choice_path: Path) -> dict:
     #  ② outline-planner judge：{mode, cluster_id, ..., cluster_brief: <brief>, free_notes}
     #     （emergence.json·真 brief 在 cluster_brief 键下·顶层是 judge 元数据）
     #  ③ brief dict 本身（有 scope_summary/scene_storyboard）
+    # 🔴 2026-07-08 修（验证书 e2e 抓出）：①×② 组合态——outline plan step6.5 把 judge 整体
+    # 包进 answer（{"answer": <emergence.json>}），原逻辑取 answer 后不再解 cluster_brief →
+    # judge 元数据被当 brief 落库（真 brief 困在嵌套键·storyboard 丢失·blueprint 只写 1 占位
+    # scene）。answer 解包后若仍是 judge 包装（含 cluster_brief dict），继续下钻取真 brief。
     brief = None
     if isinstance(payload, dict):
         if isinstance(payload.get("answer"), dict):
             brief = payload["answer"]
+            if isinstance(brief.get("cluster_brief"), dict):
+                brief = brief["cluster_brief"]
         elif isinstance(payload.get("cluster_brief"), dict):
             brief = payload["cluster_brief"]
         elif any(k in payload for k in ("scope_summary", "scene_storyboard")):

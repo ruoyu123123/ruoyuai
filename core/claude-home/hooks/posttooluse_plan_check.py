@@ -159,12 +159,14 @@ def _next_step_hint(plan: dict, just_completed_n) -> str:
 
 
 def main():
-    raw = sys.stdin.read(32768)
+    # 2026-07-08 修（Windows 编码根因）：stdin 按 bytes 读 + json.loads 自动 UTF-8 解码，
+    # 文本模式在 GBK 控制台会把 UTF-8 载荷读花（与 pretooluse_agent_gate 同根因同修法）。
+    raw = sys.stdin.buffer.read()
     if not raw.strip():
         sys.exit(0)
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         sys.exit(0)
 
     tool = data.get("tool_name", "")

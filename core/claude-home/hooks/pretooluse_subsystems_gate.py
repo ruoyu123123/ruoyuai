@@ -41,7 +41,8 @@ from plan_step_gates import check_subsystems, ALL_REQUIRED  # noqa: E402,F401
 
 def main():
     try:
-        payload = json.loads(sys.stdin.read())
+        # 2026-07-08 修（Windows 编码根因）：bytes 读 stdin·json 自动 UTF-8（GBK 控制台文本读会花）
+        payload = json.loads(sys.stdin.buffer.read())
     except Exception:
         sys.exit(0)
 

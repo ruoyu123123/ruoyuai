@@ -52,6 +52,21 @@ def test_judge_cluster_brief_format():
     assert c0.get("scene_storyboard"), "judge brief 的 storyboard 丢了"
 
 
+def test_answer_wrapped_judge_format():
+    """🔴 2026-07-08 回归（验证书 e2e 抓出）：①×② 组合态——outline plan step6.5 把 judge
+    整体包进 answer（{"answer": <emergence.json>}）。原逻辑取 answer 后不再解 cluster_brief
+    → judge 元数据被当 brief 落库（真 brief 困在嵌套键·storyboard 丢失·blueprint 只写 1
+    占位 scene）。修后 answer 内含 cluster_brief dict 时必须继续下钻取真 brief。"""
+    r, ev = _run({"answer": {"mode": "ecas_cluster_brief", "cluster_id": "cluster_001",
+                             "default_choice_label": "A", "free_notes": "x",
+                             "cluster_brief": _BRIEF}})
+    c0 = ev["clusters"][0]
+    assert c0["status"] == "in_progress"
+    assert c0.get("scene_storyboard"), "answer 包装 judge 的 storyboard 丢了"
+    assert "cluster_brief" not in c0, "judge 元数据被当 brief 落库（嵌套 cluster_brief 泄漏进主表）"
+    assert c0.get("scope_summary") == "首块"
+
+
 def test_direct_brief_format():
     """③ brief dict 本身（有 scope_summary/scene_storyboard）。"""
     r, ev = _run(_BRIEF)

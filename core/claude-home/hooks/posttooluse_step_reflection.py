@@ -41,7 +41,8 @@ REFLECTION_TEMPLATE = """# Step {n} 反思 · plan_id={plan_id}
 
 def main():
     try:
-        payload = json.loads(sys.stdin.read())
+        # 2026-07-08 修（Windows 编码根因）：bytes 读 stdin·json 自动 UTF-8（GBK 控制台文本读会花）
+        payload = json.loads(sys.stdin.buffer.read())
     except Exception:
         sys.exit(0)
 

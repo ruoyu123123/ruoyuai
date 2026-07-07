@@ -1508,13 +1508,21 @@ def _build_volume_convergence_anchor(scanner, cluster: dict) -> dict | None:
     for src in (ds, prog):
         for v in (src.get("volumes") or []):
             if isinstance(v, dict) and v.get("vol") == vol:
+                # 🔴 2026-07-08 修（验证书 e2e 抓出）：v28 卷=阶段 schema 的卷层字段是
+                # volume_core_conflict / volume_thread / volume_finale_signal
+                # （gen_creative_volume_arc emit 实写），原键表只认旧名 → 新书（大势卡
+                # 只有 v28 字段·进度.volumes 空）收敛锚静默 None（北极星③软牵引失效）。
                 for k in ("ending_state", "key_milestones", "final_image",
-                          "ending_image", "volume_arc", "core_conflict"):
+                          "ending_image", "volume_arc", "core_conflict",
+                          "volume_core_conflict", "volume_thread",
+                          "volume_finale_signal"):
                     if v.get(k) and k not in anchor:
                         anchor[k] = v[k]
                 break
     if anchor.get("ending_image") and "final_image" not in anchor:
         anchor["final_image"] = anchor["ending_image"]
+    if anchor.get("volume_core_conflict") and "core_conflict" not in anchor:
+        anchor["core_conflict"] = anchor["volume_core_conflict"]
     if not anchor:
         return None
     anchor["_doc"] = ("大势已定：本卷无论小势（走向卡选择/涟漪）怎么折腾，最后都要收束到这里。"
