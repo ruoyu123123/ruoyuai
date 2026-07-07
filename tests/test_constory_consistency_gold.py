@@ -8,22 +8,21 @@
 已有先例：tests/test_consistency_19_subtypes_blindspot.py（绝对时间/恒定数值 →
 locked_fact_cross_scene_scanner）。本文件仿该模式扩其余类别。
 
-五类覆盖结论（每类 ≥1 fixture · 捞不到的显式 skip 记录盲区，不硬造假绿）：
+五类覆盖结论（每类 ≥1 fixture · 三个历史盲区已于 2026-07-07 补齐并升级为真阳性断言）：
   1. entity（实体一致性）   → character_identity_anchor_scanner（active 模式）真检出
   2. temporal（时间一致性） → locked_fact_cross_scene_scanner 恒定单位「天」opt-in 真检出；
-                              草稿内部时序倒错（无锁定事实锚）= 盲区 skip
+                              草稿内部时序倒错 → draft_temporal_order_scanner 真检出（盲区已补齐）
   3. causality（事件因果）  → validate_chapter.check_knowledge_leak → FUTURE_KNOWLEDGE_LEAK 真检出
   4. location（地点连续性） → focalizer_perception_bounds_scanner 规则③空间不在场标志词子集真检出；
-                              无标志词的同场景位置瞬移矛盾 = 盲区 skip
-  5. contradiction（明文互斥陈述）→ 描述类互斥（生死/亲缘）确定性层无覆盖 = 盲区 skip
-                              （locked_fact_cross_scene 只做恒定数值对账；docstring 里的
-                              「描述类」承诺代码从未落地——盲区锁钉死现状，将来补上会跑红提醒更新）
+                              无标志词的同场景位置瞬移 → spatial_continuity_scanner 真检出（盲区已补齐）
+  5. contradiction（明文互斥陈述）→ 描述类互斥（生死/亲缘）→ locked_fact_cross_scene_scanner
+                              描述类 NLI 通路（LOCKED_FACT_DESCRIPTIVE_CONTRADICTION）真检出（盲区已补齐）
 
 北极星纪律：
-  · 不新增任何 hard_gate code（制度锁 test_hard_gate_membership_unchanged）
+  · 不新增任何 hard_gate code（制度锁 test_hard_gate_membership_unchanged·3 个新 code 全 advisory）
   · advisory scanner 只用 env 三态开关切 active 测检出，不改默认档位
-  · 盲区测试 = 先 assert「现有检测器确实 0 检出」再 skip —— 假如将来有人补了覆盖，
-    assert 跑红逼着把盲区锁升级成真阳性断言（诚实缺口清单 > 假绿）
+  · 原盲区测试已升级为真阳性断言，同时保留「旧检测器仍 0 检出」的双向断言
+    （历史盲区记录价值：证明补口来自新 scanner，不是旧检测器悄悄扩权）
 
 跑：py -m pytest tests/test_constory_consistency_gold.py -q
 """
@@ -41,8 +40,11 @@ sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 
 import audit_hub  # noqa: E402
 import character_identity_anchor_scanner as cia  # noqa: E402
+import draft_temporal_order_scanner as dto  # noqa: E402
 import focalizer_perception_bounds_scanner as fpb  # noqa: E402
 import locked_fact_cross_scene_scanner as lf  # noqa: E402
+import nn_nli_bridge  # noqa: E402
+import spatial_continuity_scanner as sc  # noqa: E402
 import validate_chapter as vc  # noqa: E402
 
 
@@ -116,7 +118,11 @@ def test_hard_gate_membership_unchanged():
                  "FOCALIZER_PERCEPTION_OUT_OF_BOUNDS",
                  "TEMPORAL_GROUNDING_THIN",
                  "ANACHRONY_ORDER_THIN",
-                 "POV_HEAD_HOPPING"):
+                 "POV_HEAD_HOPPING",
+                 # 2026-07-07 盲区补口三件套（永远 advisory·北极星⑤）
+                 "DRAFT_TEMPORAL_ORDER_REVERSED",
+                 "SPATIAL_CONTINUITY_TELEPORT",
+                 "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION"):
         assert code not in hg, f"{code} 误入 HARD_GATE_CODES"
         assert audit_hub._gate_level_for(code, "error") == "advisory", code
 
@@ -200,23 +206,37 @@ def test_temporal_anchor_consistent_no_report():
 
 
 def test_temporal_order_reversal_blindspot():
-    """盲区：草稿**内部**时序倒错（scene1=第九天、scene2=第五天，人物卡无数值锚）——
-    locked_fact_cross_scene 只做「锁定事实 vs 正文」对账，草稿内部两处时间锚互相打架
-    且无锁定事实基准时，确定性层无人捞。语义时序推理已明文交 LLM 判官（scanner docstring）。"""
+    """盲区已于 2026-07-07 补齐：草稿**内部**时序倒错（第九天场景后接第五天场景，
+    人物卡无数值锚、无闪回标志）→ draft_temporal_order_scanner（active）真检出
+    DRAFT_TEMPORAL_ORDER_REVERSED（advisory·时序自由是叙事手法，永不 hard_gate）。
+    fixture 铺第 3 个时间锚场景过「锚点<3不判」稀疏豁免，并在 事件簇.json 显式声明
+    narrative_mode="linear"（clusters[0] 未声明时默认 in_medias_res 整体 skip）。"""
     proj = _mk_project(
         characters=[{"name": "阿禾",
                      "locked_facts": [{"fact": "阿禾是猎户之女"}]}],  # 无数值 → 数值通路不点火
+        clusters=[{"cluster_id": "cluster_001", "narrative_mode": "linear"}],
         units=["天"])
     draft = _write_draft(proj, (
-        "阿禾在谷中已经熬到第九天，溪水开始发苦。\n\n\n"
+        "阿禾入谷的第三天，她在崖壁下搭起了窝棚。\n\n"      # 第 3 锚点场景（不参与倒错对）
+        "阿禾在谷中已经熬到第九天，溪水开始发苦。\n\n"      # 原盲区倒错对保持不变 ↓
         "阿禾被困在山谷里，这才是第五天，干粮还剩半块。\n"
     ))
-    r = lf.scan(proj, draft)
-    assert r["conflicts_count"] == 0, ("盲区已被补上？请把本测试升级成真阳性断言", r)
-    pytest.skip("现有检测器无此类覆盖: 草稿内部时序倒错（无锁定事实数值锚）确定性层 0 检出；"
-                "locked_fact_cross_scene 仅做 fact↔正文恒定数值对账，跨场景时间推算/顺序矛盾"
-                "按其 docstring 明文交 LLM 判官（timeline_causality_consistency），"
-                "anachrony_order/temporal_grounding 只测锚词密度非矛盾")
+    # 旧检测器 locked_fact_cross_scene 数值通路仍捞不到该类（只做 fact↔正文恒定数值对账）——历史盲区记录
+    r_lf = lf.scan(proj, draft)
+    assert r_lf["conflicts_count"] == 0, r_lf
+    # 新 scanner 真阳性检出
+    with _env(DRAFT_TEMPORAL_ORDER_MODE="active"):
+        r = dto.scan(draft, proj, "cluster_001")
+    assert r["mode"] == "active", r
+    assert r["narrative_mode"] == "linear", r
+    assert r["anchored_scene_count"] == 3, r
+    assert r["reversal_count"] == 1, r
+    assert r["verdict"] == "FAIL_MINOR", r
+    v = r["violations"][0]
+    assert v["code"] == "DRAFT_TEMPORAL_ORDER_REVERSED", v
+    assert v["kind"] == "absolute_day_reversal", v
+    assert v["anchor_pair"] == ["第九天", "第五天"], v
+    assert v["gate_level"] == "advisory", v  # 北极星⑤：时序自由是叙事手法·永不 hard_gate
 
 
 # ═══════════════ 3. causality 事件因果：果先于因（未来知识泄露）═══════════════
@@ -301,38 +321,71 @@ def test_location_spatial_markers_absent_pass():
 
 
 def test_location_teleport_blindspot():
-    """盲区：同场景内**无标志词**的位置瞬移矛盾（地窖深处 → 下一段已在北境城墙，零过渡）——
-    focalizer 规则③只认「与此同时/同一时刻/此刻+远方」语言标志；locked_fact 只对恒定数值；
-    pov_consistency 只看 POV 信号归属。三族对纯空间瞬移矛盾均 0 检出。"""
+    """盲区已于 2026-07-07 补齐：同场景内**无标志词**的位置瞬移（地窖 → 北境城墙零过渡）
+    → spatial_continuity_scanner（active·角色↔地点绑定跨句对账）真检出
+    SPATIAL_CONTINUITY_TELEPORT（advisory·空间跳切可以是叙事省略，永不 hard_gate）。
+    fixture 铺第二对瞬移（天牢 → 皇城）过「候选<2不报」噪声地板。"""
     text = (
         "顾长风盘膝坐在地窖最深处，四壁是湿冷的岩石，头顶只有一线天光。\n\n"
         "下一句话还没说完，顾长风已经站在北境城墙的垛口上，朔风灌进衣领。\n\n"
+        "沈青梧披着单衣守在天牢最里侧的栅栏前，指尖掐着一枚冷透的铜钱。\n\n"
+        "沈青梧的下一口气已经呼在皇城白玉阶的寒气里，宫灯次第亮着。\n\n"
         + _FILLER + _FILLER
     )
     assert fpb._cjk_count(text) >= 500
     proj = _mk_project(
         characters=[{"name": "顾长风", "role": "主角",
-                     "locked_facts": [{"fact": "顾长风身在地窖"}]}])
+                     "locked_facts": [{"fact": "顾长风身在地窖"}]},
+                    {"name": "沈青梧", "role": "配角"}])
     draft = _write_draft(proj, text)
+    # 旧检测器 focalizer 规则③（只认「与此同时/同一时刻」标志词）+ locked_fact 数值通路仍 0 检出——历史盲区记录
     with _env(FOCALIZER_PERCEPTION_BOUNDS_MODE="active"):
         r_f = fpb.scan(draft, proj)
     r_lf = lf.scan(proj, draft)
-    assert r_f["spatial_absence_count"] == 0, ("盲区已被补上？请升级成真阳性断言", r_f)
+    assert r_f["spatial_absence_count"] == 0, r_f
     assert r_f["verdict"] == "PASS", r_f
-    assert r_lf["conflicts_count"] == 0, ("盲区已被补上？请升级成真阳性断言", r_lf)
-    pytest.skip("现有检测器无此类覆盖: 同场景内无标志词的位置瞬移矛盾（地窖→城墙零过渡）"
-                "focalizer/locked_fact/pov 三族均 0 检出；需要空间状态跟踪（角色↔地点绑定"
-                "跨句对账），确定性层现无此通路，语义空间连续性留 LLM 判官")
+    assert r_lf["conflicts_count"] == 0, r_lf
+    # 新 scanner 真阳性检出（两对瞬移全捞到）
+    with _env(SPATIAL_CONTINUITY_MODE="active"):
+        r = sc.scan(draft, proj)
+    assert r["mode"] == "active", r
+    assert r["teleport_candidate_count"] == 2, r
+    assert r["verdict"] == "FAIL_MINOR", r
+    assert len(r["violations"]) == 2, r
+    v0, v1 = r["violations"]
+    assert v0["code"] == "SPATIAL_CONTINUITY_TELEPORT", v0
+    assert v0["gate_level"] == "advisory", v0  # 北极星⑤：顾问非法官
+    assert v0["character"] == "顾长风", v0
+    assert v0["from_location"] == "地窖", v0
+    assert v0["to_location"] == "北境城墙", v0
+    assert v1["character"] == "沈青梧", v1
+    assert v1["from_location"] == "天牢", v1
+    assert v1["to_location"] == "皇城", v1
 
 
 # ═══════════════ 5. contradiction 未解决矛盾：明文互斥陈述 ═══════════════
 
-def test_contradiction_descriptive_mutex_blindspot():
-    """盲区：描述类明文互斥（锁定事实「满门尽灭只剩一人」 vs 正文「兄长推门而入」）——
-    locked_fact_cross_scene_scanner docstring 承诺『描述类（外貌/出身）矛盾陈述』，
-    但 scan() 代码只实现了恒定数值通路，描述类互斥从未落地 → 0 检出。
-    （外貌子集由 character_identity_anchor 另行覆盖，见 entity 类；生死/亲缘/身份类互斥
-    需要语义蕴含判断，确定性层无覆盖。）"""
+def test_contradiction_descriptive_mutex_blindspot(monkeypatch):
+    """盲区已于 2026-07-07 补齐：描述类明文互斥（锁定事实「满门尽灭只剩一人」 vs
+    正文「兄长推门而入」）→ locked_fact_cross_scene_scanner 描述类 NLI 通路
+    （LOCKED_FACT_DESCRIPTIVE_MODE=active + nn_nli_bridge 判 contradiction 高置信）
+    真检出 LOCKED_FACT_DESCRIPTIVE_CONTRADICTION（advisory·独立 `descriptive` 字段，
+    不污染顶层 hard 码口径）。mock 写法照抄 tests/test_locked_fact_descriptive_nli.py。"""
+    monkeypatch.delenv("RUOYU_NN_NLI", raising=False)
+    monkeypatch.setenv("LOCKED_FACT_DESCRIPTIVE_MODE", "active")
+
+    def fake_predict_batch(pairs, timeout=None):
+        out = []
+        for p in pairs:
+            label, prob = (("contradiction", 0.95) if "兄长" in p["hypothesis"]
+                           else ("neutral", 0.90))
+            probs = {"entailment": 0.0, "neutral": 0.0, "contradiction": 0.0}
+            probs[label] = prob
+            out.append({"label": label, "probs": probs, "source": "nli"})
+        return out
+
+    monkeypatch.setattr(nn_nli_bridge, "enabled", lambda: True)
+    monkeypatch.setattr(nn_nli_bridge, "predict_batch", fake_predict_batch)
     proj = _mk_project(
         characters=[{"name": "沈昭",
                      "locked_facts": [{"fact": "沈家满门尽灭，只剩沈昭一人"}]}])
@@ -341,8 +394,20 @@ def test_contradiction_descriptive_mutex_blindspot():
         "沈昭的兄长沈铖推门而入，掸了掸肩上的雪：家里一切安好。\n"
     ))
     r = lf.scan(proj, draft)
-    assert r["facts_checked"] == 1, r  # fact 确实被检了——不是没跑，是通路不存在
-    assert r["conflicts_count"] == 0, ("盲区已被补上？请升级成真阳性断言", r)
-    pytest.skip("现有检测器无此类覆盖: 描述类明文互斥陈述（生死/亲缘/身份）0 检出；"
-                "locked_fact_cross_scene 仅有恒定数值对账通路（docstring 的『描述类』"
-                "承诺未落地），互斥语义蕴含（只剩一人 ⊥ 兄长在世）需 NLI/LLM 判官")
+    # 旧恒定数值通路仍捞不到该类（无数值锚 → 0 冲突，顶层 hard 码口径零变化）——历史盲区记录
+    assert r["facts_checked"] == 1, r
+    assert r["conflicts_count"] == 0, r
+    assert r["code"] is None, r
+    # 新描述类 NLI 通路真阳性检出
+    d = r["descriptive"]
+    assert d["executed"] is True, d
+    assert d["facts_checked"] == 1, d
+    assert len(d["violations"]) == 1, d
+    v = d["violations"][0]
+    assert v["character"] == "沈昭", v
+    assert v["fact"] == "沈家满门尽灭，只剩沈昭一人", v
+    assert "兄长沈铖" in v["sentence"], v
+    assert v["contradiction_prob"] == pytest.approx(0.95), v
+    assert d["code"] == "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION", d
+    assert d["gate_level"] == "advisory", d  # 北极星⑤：NLI 概率判定·永不 hard_gate
+    assert d["code"] not in audit_hub.HARD_GATE_CODES, d

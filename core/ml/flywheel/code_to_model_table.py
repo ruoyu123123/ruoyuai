@@ -73,6 +73,10 @@ CODE_TO_MODEL: dict[str, str] = {
     "EPISODE_BRIDGE_WEAK": "coherence",
     "SCENE_GROUNDING_THIN": "coherence",
     "TEMPORAL_GROUNDING_THIN": "coherence",
+    # 2026-07-07 ConStory 盲区三件套：时序倒错/空间瞬移/描述类 NLI 矛盾（语义连贯信号·全 advisory）
+    "DRAFT_TEMPORAL_ORDER_REVERSED": "coherence",
+    "SPATIAL_CONTINUITY_TELEPORT": "coherence",
+    "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION": "coherence",
     "FUTURE_KNOWLEDGE_LEAK": "coherence",
     "POV_HEAD_HOPPING": "coherence",
     "POV_VIOLATION": "coherence",

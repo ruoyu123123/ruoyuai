@@ -87,9 +87,9 @@
     "locked_fact_cross_scene": {
       "layer": "cluster",
       "script": "locked_fact_cross_scene_scanner.py",
-      "doc": "[Phase 3 新增] 锁定事实跨场景引用一致性",
+      "doc": "[Phase 3 新增] 锁定事实跨场景引用一致性（数值通路·hard）· [2026-07-07 ConStory盲区③] 补描述类 NLI 通路：非数值描述 fact × 正文句粗筛配对送 nn_nli_bridge（Erlangshen·daemon-first）判 contradiction≥0.80 · NLI 不可用诚实 skip 绝不用关键词假冒语义 · env LOCKED_FACT_DESCRIPTIVE_MODE 默认 shadow · 描述类码恒 advisory（NLI 概率判定非确定性硬核对·北极星⑤）",
       "_new": true,
-      "issues_emitted": ["LOCKED_FACT_CROSS_SCENE_CONFLICT"]
+      "issues_emitted": ["LOCKED_FACT_CROSS_SCENE_CONFLICT", "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION"]
     },
     "pov_consistency": {
       "layer": "cluster",
@@ -1437,6 +1437,20 @@
       "doc": "[2026-07-06 P2移植·LongWriter 长输出长度评估·research/open_source_writing_systems.md]cluster 草稿 CJK 长度带体检：chapter_io.count_cjk 唯一权威口径数草稿·对照健康带 [12000,25000]（CLAUDE.md v27）·低于下限 UNDER / 高于上限 OVER·env CLUSTER_LENGTH_BAND_OVERRIDE=\"min,max\" 可调·兑现「纯 freestyle 后短稿风险由 step3 质检下游承接」架构承诺（expand 软下限已清除·检测端此前无人查 cluster 长度）·🔴北极星⑤：下游体检非写作约束·结果绝不回流 writer prompt/manifest·绝不参与择稿·env CLUSTER_LENGTH_BAND_MODE 默认 shadow·advisory·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["CLUSTER_LENGTH_UNDER_BAND", "CLUSTER_LENGTH_OVER_BAND"]
+    },
+    "draft_temporal_order_scanner": {
+      "layer": "cluster",
+      "script": "draft_temporal_order_scanner.py",
+      "doc": "[2026-07-07 ConStory盲区①·一致性金fixture套件实证捞不到] 草稿内部时序倒错：场景块抽可排序时间锚（第N天绝对序数/翌日次日相对推进/清晨→深夜时段序）构建偏序·后场景早于前场景=倒错候选·三重防误报：narrative_mode=in_medias_res 整体skip（cluster_001默认倒叙·clusters[0]未声明按默认in_medias_res）+闪回标志场景豁免+锚点场景<3不判·时段序仅同日链内可比且深夜→晨视为隐式跨日翻页·env DRAFT_TEMPORAL_ORDER_MODE 默认 shadow·advisory（时序自由是叙事手法·只捞无标记意外倒错）·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["DRAFT_TEMPORAL_ORDER_REVERSED"]
+    },
+    "spatial_continuity_scanner": {
+      "layer": "cluster",
+      "script": "spatial_continuity_scanner.py",
+      "doc": "[2026-07-07 ConStory盲区②·一致性金fixture套件实证捞不到] 同场景内角色位置瞬移：角色名×地点共现绑定追踪（地点词典优先 世界观.json locations/地图.json·无则后缀启发式）·同场景块内 A地→B地之间无移动动词且无切换标志=瞬移候选·防误报：子空间/同词根包含豁免+引号提及/回忆段不绑定+传送阵瞬移等超能力词豁免+候选<2不报·env SPATIAL_CONTINUITY_MODE 默认 shadow·advisory（空间跳切可以是叙事省略·只捞明显矛盾）·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SPATIAL_CONTINUITY_TELEPORT"]
     },
     "butler_yearning_4layer_scanner": {
       "layer": "cluster",

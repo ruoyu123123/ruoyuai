@@ -615,7 +615,8 @@ def _parse_locked_fact_cross_scene(stdout: str) -> list:
         return issues
     code = report.get("code")
     if not code:
-        return issues  # 无冲突
+        # 数值通路无冲突；描述类 NLI 通路（advisory·独立块）仍可能有命中
+        return _parse_locked_fact_descriptive(report)
     severity = _norm_severity(report.get("severity", "error"))
     desc = report.get("warning") or ""
     conflicts = report.get("conflicts", []) or []
@@ -629,6 +630,27 @@ def _parse_locked_fact_cross_scene(stdout: str) -> list:
         "source": "locked_fact_cross_scene_scanner", "fix_hint": "",
         "waived": False, "waive_reason": "",
     })
+    issues.extend(_parse_locked_fact_descriptive(report))
+    return issues
+
+
+def _parse_locked_fact_descriptive(report: dict) -> list:
+    """[2026-07-07 ConStory盲区③] locked_fact 描述类 NLI 通路（report.descriptive 独立块）：
+    LOCKED_FACT_DESCRIPTIVE_CONTRADICTION 恒 advisory（NLI 概率判定非确定性硬核对·北极星⑤），
+    与顶层数值通路的 hard 码 LOCKED_FACT_CROSS_SCENE_CONFLICT 严格分离。"""
+    issues = []
+    desc_block = report.get("descriptive") or {}
+    for v in (desc_block.get("violations") or []):
+        issues.append({
+            "dimension": "剧情", "severity": "minor",
+            "gate_level": "advisory",
+            "code": "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION",
+            "desc": (f"{v.get('character','?')}: 锁定事实「{str(v.get('fact',''))[:40]}」"
+                     f"疑与正文「{str(v.get('sentence',''))[:40]}」语义矛盾"
+                     f"(NLI p={v.get('contradiction_prob')})"),
+            "source": "locked_fact_cross_scene_scanner", "fix_hint": "",
+            "waived": False, "waive_reason": "",
+        })
     return issues
 
 
@@ -2963,6 +2985,28 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_multi_code_violations_scanner(
                      out, "cluster_length_band_scanner",
                      "CLUSTER_LENGTH_UNDER_BAND", "节奏")),
+                # [2026-07-07 ConStory盲区①] 草稿内部时序倒错（无锁定数值锚的跨场景时间矛盾）·
+                # narrative_mode=in_medias_res 整体豁免 + 闪回豁免 + 锚点<3不判 ·
+                # DRAFT_TEMPORAL_ORDER_MODE 默认 shadow · advisory（时序自由是叙事手法·绝不 hard_gate）
+                ("draft_temporal_order",
+                 [child_python(), str(_SCRIPT_DIR / "draft_temporal_order_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_id_full],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "draft_temporal_order_scanner",
+                     "DRAFT_TEMPORAL_ORDER_REVERSED", "结构")),
+                # [2026-07-07 ConStory盲区②] 同场景内角色位置瞬移（无移动动词/切换标志的地点跳变）·
+                # 子空间/引号提及/传送词豁免 + 候选<2不报 · SPATIAL_CONTINUITY_MODE 默认 shadow ·
+                # advisory（空间跳切可以是叙事省略·绝不 hard_gate）
+                ("spatial_continuity",
+                 [child_python(), str(_SCRIPT_DIR / "spatial_continuity_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root),
+                  "--cluster", cluster_id_full],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "spatial_continuity_scanner",
+                     "SPATIAL_CONTINUITY_TELEPORT", "结构")),
             ])
             # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg/...)·全 advisory·
             # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。

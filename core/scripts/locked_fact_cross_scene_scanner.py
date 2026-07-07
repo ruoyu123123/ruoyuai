@@ -3,11 +3,24 @@
 """locked_fact_cross_scene_scanner.py — 锁定事实跨场景引用一致性检测
 
 v2 cluster 化方案 Phase 3（2026-05-28）·
-检测 人物卡.locked_facts 中的事实在 cluster 不同场景的引用是否一致：
-  · 数值类（年龄/时长/年份等**恒定量**）：所有场景引用必须一致
-  · 描述类（外貌/出身）：cluster 内不能出现矛盾陈述
+检测 人物卡.locked_facts 中的事实在 cluster 不同场景的引用是否一致，两条通路：
 
-输出 issue code: LOCKED_FACT_CROSS_SCENE_CONFLICT (hard_gate)
+  · 恒定数值通路（确定性·始终执行·历史行为零变动）：fact 显式声明「N<恒定单位>」（如 N 岁）
+    时，正文同角色同句的同单位数值必须一致 → LOCKED_FACT_CROSS_SCENE_CONFLICT (hard_gate)。
+
+  · 描述类通路（NLI 语义·门控执行·2026-07-07 落地，此前 docstring 曾承诺「描述类矛盾陈述」
+    但代码未实现——ConStory 金 fixture 盲区5 实证）：**非数值描述类 fact**（生死/亲缘/出身/
+    身份等明文互斥，如锁定「满门尽灭只剩一人」vs 正文「兄长推门而入」）× 正文中**与人名同句
+    共现**的句子做候选配对（粗筛控制调用量），经 nn_nli_bridge（Erlangshen-110M 中文 NLI·
+    Wave-3 落地·Wave-5 daemon-first）判 contradiction 高置信（≥ _NLI_CONTRA_THRESHOLD）→
+    LOCKED_FACT_DESCRIPTIVE_CONTRADICTION（**advisory·永不 hard_gate**——北极星⑤：NLI 是
+    概率判定，只有确定性一致性才配 hard；绝不复用/升格 hard 码）。
+    执行前提（缺一即**诚实 skip**·note 写明原因·绝不用关键词匹配假冒语义判定）：
+      1. LOCKED_FACT_DESCRIPTIVE_MODE ∈ {shadow(默认·只记不判·violations 恒空), active}；off 关闭
+      2. nn_nli_bridge.enabled()（RUOYU_NN_NLI=1 + venv/checkpoint 齐备·默认 off）
+    结果写在报告**独立字段 `descriptive`**：顶层数值通路字段（code/gate_level/conflicts/
+    warning/exit code）逐字节不变，audit_hub._parse_locked_fact_cross_scene 现有解析零影响，
+    描述类 violations 由主代理另行接线消费。
 
 ────────────────────────────────────────────────────────────────────────
 2026-06-16 盲区落地（consistency_19_subtypes · B 件 · ConStory 时间线&因果一致性）：
@@ -30,13 +43,19 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
 跨场景的时间**推算**（第3天+5天=第8天对不对）不在确定性层——交给 A 件判官（语义）。
 ────────────────────────────────────────────────────────────────────────
 
-输出 code（沿用既有·不新增 hard_gate code·不动 audit_hub.HARD_GATE_CODES / STRUCTURE.md §11）：
-  LOCKED_FACT_CROSS_SCENE_CONFLICT (hard_gate)
+输出 code（不动 audit_hub.HARD_GATE_CODES / STRUCTURE.md §11 的 19 码清单）：
+  LOCKED_FACT_CROSS_SCENE_CONFLICT (hard_gate·恒定数值通路·报告顶层)
+  LOCKED_FACT_DESCRIPTIVE_CONTRADICTION (advisory·描述类 NLI 通路·报告 `descriptive` 字段·
+    绝不进 HARD_GATE_CODES)
+
+Env 门控：LOCKED_FACT_DESCRIPTIVE_MODE = off / shadow(默认) / active；
+  NLI 后端另受 RUOYU_NN_NLI=1 门控（见 nn_nli_bridge.py·daemon-first 三层降级）。
 
 用法：python locked_fact_cross_scene_scanner.py <project> <cluster_draft_path>
 """
 from __future__ import annotations
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -198,6 +217,133 @@ def extract_ages_near(text: str, keyword: str, window: int = 50) -> list:
             extract_numeric_facts_near(text, keyword, _AGE_UNIT_RE, window=window)]
 
 
+# ══════════════════ 描述类通路（NLI 语义·advisory·2026-07-07）══════════════════
+# 🔴 纪律：本通路 code 永远 advisory（NLI 概率判定 · 北极星⑤只有确定性一致性才 hard）；
+#         NLI 后端不可用 → 诚实 skip（note 说明），绝不用关键词匹配假冒语义判定。
+
+DESCRIPTIVE_CODE = "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION"
+_NLI_CONTRA_THRESHOLD = 0.80     # contradiction 概率高置信地板（低于此不报·宁漏勿误）
+_MAX_NLI_PAIRS = 64              # 单次 scan 送 NLI 的配对总量上限（控制调用量）
+_MAX_SENTS_PER_FACT = 16         # 单条 fact 最多配对的句子数
+_MIN_SENT_CJK = 6                # 过短句子不送 NLI（无判定价值）
+
+
+def _descriptive_mode() -> str:
+    """LOCKED_FACT_DESCRIPTIVE_MODE：off / shadow(默认·只记不判) / active。非法值退 shadow。"""
+    m = (os.environ.get("LOCKED_FACT_DESCRIPTIVE_MODE") or "shadow").strip().lower()
+    return m if m in ("off", "shadow", "active") else "shadow"
+
+
+def _nli_bridge():
+    """惰性取 nn_nli_bridge 模块（同目录·复用不重造）。import 失败 → None（诚实 skip）。"""
+    try:
+        import nn_nli_bridge
+        return nn_nli_bridge
+    except Exception:
+        return None
+
+
+def _split_sentences(text: str) -> list:
+    """按句末符（_SENT_SEP）切句，返回 [(绝对起始位置, 句子)]。空段丢弃。"""
+    out = []
+    start = 0
+    for i, ch in enumerate(text):
+        if ch in _SENT_SEP:
+            seg = text[start:i].strip()
+            if seg:
+                out.append((start, seg))
+            start = i + 1
+    seg = text[start:].strip()
+    if seg:
+        out.append((start, seg))
+    return out
+
+
+def _scan_descriptive(text: str, desc_facts: list) -> dict:
+    """描述类锁定事实 × 人名共现句 → NLI contradiction 高置信 → advisory violation。
+
+    desc_facts: [(name, fact)]（scan() 分流出的非数值描述类锁定事实）。
+    返回独立 `descriptive` 报告块——不触碰顶层数值通路任何字段。
+    shadow 模式：命中只进 shadow_observations，violations 恒空（只记不判）。
+    """
+    mode = _descriptive_mode()
+    block = {
+        "mode": mode,
+        "code": DESCRIPTIVE_CODE,
+        "gate_level": "advisory",          # 🔴 永不 hard_gate（北极星⑤·概率判定）
+        "nli_available": False,
+        "executed": False,
+        "note": None,
+        "facts_checked": len(desc_facts),
+        "pairs_sent": 0,
+        "nli_threshold": _NLI_CONTRA_THRESHOLD,
+        "violations": [],
+        "shadow_observations": [],
+    }
+    if mode == "off":
+        block["note"] = "描述类通路关闭（LOCKED_FACT_DESCRIPTIVE_MODE=off）"
+        return block
+    if not desc_facts:
+        block["note"] = "无描述类锁定事实（人物卡为空或锁定事实全为恒定数值类）"
+        return block
+    bridge = _nli_bridge()
+    if bridge is None or not bridge.enabled():
+        block["note"] = ("NLI 后端未启用·描述类通路未执行"
+                         "（需 RUOYU_NN_NLI=1 且 venv/checkpoint 齐备·见 nn_nli_bridge.py；"
+                         "绝不用关键词匹配假冒语义判定）")
+        return block
+    block["nli_available"] = True
+
+    # 候选配对粗筛：只有 fact 所属角色名与句子共现才送 NLI（控制调用量）。
+    # premise = 锁定事实（权威陈述），hypothesis = 正文句 → contradiction = 正文违背锁定事实。
+    pairs, meta = [], []
+    sentences = _split_sentences(text)
+    for name, fact in desc_facts:
+        if len(pairs) >= _MAX_NLI_PAIRS:
+            break
+        n_for_fact = 0
+        for pos, sent in sentences:
+            if len(pairs) >= _MAX_NLI_PAIRS or n_for_fact >= _MAX_SENTS_PER_FACT:
+                break
+            if name not in sent or len(sent) < _MIN_SENT_CJK:
+                continue
+            pairs.append({"premise": fact, "hypothesis": sent})
+            meta.append({"character": name, "fact": fact, "sentence": sent, "position": pos})
+            n_for_fact += 1
+    block["pairs_sent"] = len(pairs)
+    if not pairs:
+        block["executed"] = True
+        block["note"] = "粗筛后无候选配对（角色名与正文句子无共现）"
+        return block
+
+    results = bridge.predict_batch(pairs)
+    hits = []
+    got_any = False
+    for res, m in zip(results, meta):
+        if res is None:          # 单条不可用 → 跳过（桥契约：None ≠ 判定）
+            continue
+        got_any = True
+        prob = float((res.get("probs") or {}).get("contradiction", 0.0))
+        if res.get("label") == "contradiction" and prob >= _NLI_CONTRA_THRESHOLD:
+            hits.append({**m, "contradiction_prob": round(prob, 4)})
+    if not got_any:
+        # enabled() 过了但推理全失败（daemon/subprocess 均挂）→ 仍是诚实 skip，不产半吊子判定
+        block["note"] = "NLI 推理未产出判定（daemon/subprocess 均失败）·描述类通路未执行"
+        return block
+
+    block["executed"] = True
+    if mode == "shadow":
+        block["shadow_observations"] = hits[:10]
+        block["note"] = ("shadow 模式·只记不判（violations 恒空）"
+                         + (f"·观察到 {len(hits)} 处疑似矛盾" if hits else ""))
+    else:  # active
+        block["violations"] = hits[:10]
+        if hits:
+            block["note"] = (f"⚠️ {len(hits)} 处描述类锁定事实疑似矛盾"
+                             f"（NLI contradiction ≥ {_NLI_CONTRA_THRESHOLD}·advisory 可豁免）")
+    return block
+
+
 def scan(project_root: Path, draft_path: Path) -> dict:
     if not draft_path.exists():
         return {"_fatal": f"draft 不存在: {draft_path}"}
@@ -209,6 +355,7 @@ def scan(project_root: Path, draft_path: Path) -> dict:
 
     conflicts = []
     checked_count = 0
+    descriptive_facts = []   # (name, fact)·非数值描述类 → 描述类 NLI 通路（advisory·门控）
     for c in cards:
         name = c.get("name", "")
         if not name or name not in text:
@@ -230,11 +377,13 @@ def scan(project_root: Path, draft_path: Path) -> dict:
             fact_body = fact[len(name):] if fact.startswith(name) else fact
             # fact 可能含多个恒定数值（少见，但稳妥支持）→ 逐单位独立比对，单位必须相同才算矛盾。
             matched = False
+            numeric_engaged = False   # fact 是否进入了恒定数值通路（含可解析「N<单位>」）
             for fact_m in unit_re.finditer(fact_body):
                 fact_unit = fact_m.group(2)
                 fact_val = _cn_to_int(fact_m.group(1))
                 if fact_val is None:
                     continue
+                numeric_engaged = True
                 ctx_nums = extract_numeric_facts_near(text, name, unit_re, window=50)
                 for pos, ctx_num, ctx_unit in ctx_nums:
                     if ctx_unit != fact_unit:
@@ -253,9 +402,12 @@ def scan(project_root: Path, draft_path: Path) -> dict:
                         break
                 if matched:
                     break  # 该 fact 已找到一处矛盾，不重复报同一 fact
+            if not numeric_engaged:
+                # 非数值描述类（无可解析「N<恒定单位>」）→ 分流描述类 NLI 通路
+                descriptive_facts.append((name, fact))
 
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "scanner": "locked_fact_cross_scene_scanner",
         "cluster_mode": True,
         "gate_level": "hard_gate" if conflicts else "advisory",
@@ -269,6 +421,9 @@ def scan(project_root: Path, draft_path: Path) -> dict:
         ),
         "severity": "error" if conflicts else "info",
         "code": "LOCKED_FACT_CROSS_SCENE_CONFLICT" if conflicts else None,
+        # 描述类 NLI 通路（advisory·独立字段·不进顶层 code/warning/exit code——
+        # audit_hub._parse_locked_fact_cross_scene 只读顶层，主代理另行接线消费）
+        "descriptive": _scan_descriptive(text, descriptive_facts),
     }
 
 
