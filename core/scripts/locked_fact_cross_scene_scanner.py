@@ -21,6 +21,12 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
     结果写在报告**独立字段 `descriptive`**：顶层数值通路字段（code/gate_level/conflicts/
     warning/exit code）逐字节不变，audit_hub._parse_locked_fact_cross_scene 现有解析零影响，
     描述类 violations 由主代理另行接线消费。
+    🔴 真机能力边界（2026-07-07 Erlangshen-110M 实测·勿高估检出面）：
+      · 直接改写型矛盾（「他已死」vs「他还活着」/数量互斥/天气互斥）contradiction 0.99+ 稳判 ✓
+      · **多跳实体推理型矛盾**（「满门尽灭只剩沈昭一人」vs「兄长沈铖推门而入」——需推断
+        沈铖∈家人且活着）实测 entailment(contradiction 仅 0.166) ✗——110M 模型能力边界，
+        阈值 0.80 下此类恒漏。补齐需更大 NLI 模型或 gen-model judge 路线（勿降阈值硬凑：
+        0.166 档放行=误报洪水）。ConStory 盲区3 测试用 mock NLI 锁的是**接线契约**非真模型召回。
 
 ────────────────────────────────────────────────────────────────────────
 2026-06-16 盲区落地（consistency_19_subtypes · B 件 · ConStory 时间线&因果一致性）：
