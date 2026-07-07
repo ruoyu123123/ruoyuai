@@ -25,7 +25,7 @@ reshape 出**最小起始集**写回 涟漪规则.json + 世界状态.json：
 - 播「初始条件」非「预设剧情」：只播最小起始集（主角1张 + 1-3阵营 + seed涟漪 + 已见关系）。
   cluster_002+ 的人物/事件一律留 cluster_emergence 涌现，绝不预生成全书人物表/规则书。
 - fate_event / minor_event 都是 narrative 型交模型解读，全 advisory，不新增 hard_gate。
-- 与 gen_creative._emit_volume_arc_to_db（outline 创意投影）互补：_emit 优先，本器只补 _emit
+- 与 gen_creative_volume_arc._emit_volume_arc_to_db（outline 创意投影）互补：_emit 优先，本器只补 _emit
   没覆盖的（按 rule-id / faction-name / npc-id 增量合并，非空不覆盖）。
 - day 推进是机械时间（北极星③：不硬锁，只让世界自然往前走）。
 

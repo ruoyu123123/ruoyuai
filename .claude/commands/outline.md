@@ -14,6 +14,7 @@ description: 生成卷级大纲与首个故事块 brief
 
 **当前实施状态**：
 - `gen_creative.py --mode volume_arc` 已实现，作为卷级创意文字生成入口。
+- **P2 分卷 chunk + WAL 断点续跑（2026-07-07·借鉴 AI_NovelGenerator chunked blueprint resume）**：`--mode volume_arc` 内部先产全书骨架（`_数据库/.wal/volume_arc_skeleton.json`·story_destiny/volumes/cluster_001/world_seed），再**逐卷**生成 ME 池（`_数据库/.wal/volume_arc_v<N>.json`·schema 合法的部分产物），全部卷完成后**确定性合并**落 `大势卡.json + 事件簇.json`（与一把梭结构等价）。中断重跑：已存在且校验合法的 WAL 直接跳过（幂等续跑），损坏的重生成；合并时 ME id 跨卷去重校验——重复 id **硬报错不静默覆盖**（撞 id 卷 WAL 隔离为 `.dup_broken` 供重跑重生成）；单卷失败 = 整 step 失败（required 不降级），已完成卷 WAL 保留供续跑。CLI 入口不变（`--volumes N-M` 仅内部调试参数·plan 不用）。
 
 **保持 Claude 处理的部分**：
 - 卷骨架结构（卷数 / 每卷 cluster 数 / event prerequisites 关系）

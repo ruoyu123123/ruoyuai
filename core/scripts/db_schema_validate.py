@@ -424,7 +424,7 @@ def _safe_load(p: Path):
 # 🔴 2026-06-27 C19：大势卡（major_events ME 池）结构契约（确定性·引用完整性·hard）。
 # 【接线】outline.plan.json step7 跑 `db_schema_validate.py {project_root}` 消费本校验（C19 接线点·
 #   该步在 step5 volume_arc 填完大势卡之后跑）；cluster-save-state step1 的 --auto-migrate 也会带跑。
-# 【协调】W2-A 在 gen_creative._normalize_me_pool 做**生产端归一**（产出标准 ME 池·别的 agent·别的文件）·
+# 【协调】W2-A 在 gen_creative_volume_arc._normalize_me_pool 做**生产端归一**（产出标准 ME 池·别的 agent·别的文件）·
 #   本函数在**消费端**校验结构破损 + 引用完整性·两者互补不冲突。
 # 【北极星②③④】只校验确定性结构/引用完整性——绝不校验 ME 内容质量/数量/叙事顺序·绝不增删/重排 ME·
 #   绝不预设 cluster_002+（fluid 涌现归 emergence）。bare scaffold 空骨架按 advisory 处理（不当破损）。

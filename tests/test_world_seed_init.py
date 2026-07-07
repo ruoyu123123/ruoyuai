@@ -5,7 +5,7 @@
          + world_seed_init 播种让 tick 从「0 规则触发」复活成「N>0 规则触发」
          + 死角色 NPC thread 经 evaluate_completion 把牺牲落进 consequence_tracker
   C02:  world_seed_init 幂等（非空不覆盖·--force 重播）+ consequence_tracker list→dict 归一
-  C19:  gen_creative._normalize_me_pool（volume 回填 / 悬空 prereq 过滤 / finale 兜底 / 完整性）
+  C19:  gen_creative_volume_arc._normalize_me_pool（volume 回填 / 悬空 prereq 过滤 / finale 兜底 / 完整性）
 
 零依赖：仅标准库；test_* 无参数；失败 raise AssertionError；tempfile + utf-8。
 """
@@ -20,7 +20,7 @@ sys.path.insert(0, str(_SCRIPTS))
 
 import world_seed_init as wsi  # noqa: E402
 import world_evolution_engine as wee  # noqa: E402
-import gen_creative as gc  # noqa: E402
+import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现（2026-07-07 从 gen_creative 拆出）
 
 
 # ═══════════════════════ 脚手架 ═══════════════════════
@@ -206,7 +206,7 @@ def test_force_resseeds_seeded_only():
 def test_normalize_backfills_volume_from_id():
     """ME 无 volume → 从 id 反推 ME-V3- → volume=3。"""
     mes = [{"id": "ME-V3-02", "title": "x"}]
-    rep = gc._normalize_me_pool(mes)
+    rep = gva._normalize_me_pool(mes)
     assert mes[0]["volume"] == 3
     assert "ME-V3-02" in rep["volume_backfilled"]
 
@@ -218,7 +218,7 @@ def test_normalize_drops_dangling_prereqs():
         {"id": "ME-V1-02", "volume": 1, "is_volume_finale": True,
          "prerequisites": ["ME-V1-01", "ME-V9-99"]},  # 后者悬空
     ]
-    rep = gc._normalize_me_pool(mes)
+    rep = gva._normalize_me_pool(mes)
     assert mes[1]["prerequisites"] == ["ME-V1-01"]
     assert rep["dangling_prereqs_dropped"][0]["dropped"] == ["ME-V9-99"]
 
@@ -230,7 +230,7 @@ def test_normalize_finale_fallback():
         {"id": "ME-V1-03", "volume": 1, "is_volume_finale": False},
         {"id": "ME-V1-02", "volume": 1, "is_volume_finale": False},
     ]
-    rep = gc._normalize_me_pool(mes)
+    rep = gva._normalize_me_pool(mes)
     anchor = next(m for m in mes if m["id"] == "ME-V1-03")  # 序号最大
     assert anchor["is_volume_finale"] is True
     assert anchor["_finale_inferred"] is True
@@ -240,7 +240,7 @@ def test_normalize_finale_fallback():
 def test_normalize_integrity_violation_no_volume():
     """ME 无 volume 且 id 无法反推 → 记 integrity_violations。"""
     mes = [{"id": "BADID", "title": "x"}]
-    rep = gc._normalize_me_pool(mes)
+    rep = gva._normalize_me_pool(mes)
     assert rep["integrity_violations"]
     assert rep["integrity_violations"][0]["me"] == "BADID"
 
@@ -251,7 +251,7 @@ def test_normalize_clean_pool_no_changes():
         {"id": "ME-V1-01", "volume": 1, "is_volume_finale": False, "prerequisites": []},
         {"id": "ME-V1-02", "volume": 1, "is_volume_finale": True, "prerequisites": ["ME-V1-01"]},
     ]
-    rep = gc._normalize_me_pool(mes)
+    rep = gva._normalize_me_pool(mes)
     assert rep == {"volume_backfilled": [], "dangling_prereqs_dropped": [],
                    "finale_fallback": [], "integrity_violations": []}
 

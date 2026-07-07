@@ -979,7 +979,11 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
             all_patterns.append({**p, "_category": category, "_orig": p})
 
     if not all_patterns:
-        return {"mode": "on", "total_patterns": 0, "retrieved": []}
+        return {"mode": "on", "total_patterns": 0, "retrieved": [],
+                # P2 typed 检索契约（2026-07-07）：零候选也保持段级 typed 字段齐全（消费方按契约读）。
+                "source_type": "relevant_heuristics", "match_method": "none",
+                "token_budget": {"budget_chars": 0, "actual_chars": 0, "truncated": False},
+                "anti_copy": "reference-not-copy"}
 
     # 打分：context 关键词重叠 + confidence + usage_count log。
     # 🔴 2026-07-04 换轨内容语义嵌入 API：内容后端就绪（_content_backend_ready）时 kw_hits 换成
@@ -1038,7 +1042,11 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         except Exception:
             pass
 
-    all_patterns.sort(key=score, reverse=True)
+    # P2 typed 检索契约（2026-07-07）：score 每条只算一次并缓存——sort 用缓存值（稳定排序 +
+    # reverse=True 平手保序，与原 sort(key=score) 逐字节同序），检索分随 typed item 一起下发
+    # （item.similarity = 该条检索综合分·非余弦，语义由 match_method 标注）。
+    _scores = {id(p): score(p) for p in all_patterns}
+    all_patterns.sort(key=lambda p: _scores[id(p)], reverse=True)
     top = all_patterns[:top_k]
 
     # usage_count producer：检索命中即对原对象 +1 写回 写作经验.json。
@@ -1062,24 +1070,51 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         except ImportError:
             save_json(exp_path, exp)
 
+    # P2 typed 检索契约（2026-07-07·借鉴 AI_NovelGenerator/PlotPilot 向量检索溯源，见
+    # research/open_source_writing_systems.md「Vector retrieval provenance」）：
+    # 每条检索结果带 source_type / source_id（category#id 确定性派生）/ similarity / match_method；
+    # 段级带 token_budget（把既有 name[:60]/description[:120] 截断行为显式化——非新增截断，
+    # 超上限时 truncated:true）+ anti_copy 指令（advisory·防 writer 照抄条目原句）。
+    _seg_match_method = "embedding" if _query_emb is not None else "keyword"
+    _name_cap, _desc_cap = 60, 120
+    _actual_chars = sum(
+        min(len(p.get("name", "")), _name_cap) + min(len(p.get("description", "")), _desc_cap)
+        for p in top)
+    _truncated = any(
+        len(p.get("name", "")) > _name_cap or len(p.get("description", "")) > _desc_cap
+        for p in top)
     return {
         "mode": "on",
-        "match_method": "embedding" if _query_emb is not None else "keyword",
+        "source_type": "relevant_heuristics",
+        "match_method": _seg_match_method,
         "context_kws": list(ctx_kws)[:10],
         "total_patterns": len(all_patterns),
         "retrieved_count": len(top),
         "retrieved": [
             {
+                "source_type": "relevant_heuristics",
+                "source_id": f"{p.get('_category', '?')}#{p.get('id') or p.get('name', '?')}",
+                "similarity": round(float(_scores[id(p)]), 3),
+                "match_method": _seg_match_method,
                 "category": p.get("_category"),
                 "id": p.get("id") or p.get("name", "?"),
-                "name": p.get("name", "")[:60],
-                "description": p.get("description", "")[:120],
+                "name": p.get("name", "")[:_name_cap],
+                "description": p.get("description", "")[:_desc_cap],
                 "confidence": p.get("confidence", 0.5),
                 "version": p.get("version", 1),
             }
             for p in top
         ],
-        "_note": "ERL heuristics：按本章 context 检索的 top-N 写作经验。writer 应优先消费此清单，而非读全量 写作经验.json",
+        "token_budget": {
+            "budget_chars": len(top) * (_name_cap + _desc_cap),
+            "actual_chars": _actual_chars,
+            "truncated": _truncated,
+            "_note": "既有注入行为显式化：name 截 60 / description 截 120（原有截断上限·非新增截断）",
+        },
+        "anti_copy": "reference-not-copy",
+        "_note": "ERL heuristics：按本章 context 检索的 top-N 写作经验。writer 应优先消费此清单，而非读全量 写作经验.json。"
+                 "similarity=检索综合分（match_method=embedding 时由内容余弦拉伸驱动·keyword 时由关键词重叠驱动·非原始余弦）。"
+                 "anti_copy=reference-not-copy：经验条目是写法参照，禁止照抄条目原句进正文（advisory）。",
     }
 
 
@@ -3718,6 +3753,17 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
     从 .embeddings/chapter_*.json 做语义检索取 top_k 历史 chunk 给 writer。
 
     比固定 recent 5 章摘要更智能——本章是觉醒章，应该回忆爷爷纸条章节而不是吃饭章。
+
+    P2 typed 检索契约（2026-07-07·借鉴 AI_NovelGenerator/PlotPilot 向量检索溯源，见
+    research/open_source_writing_systems.md「Vector retrieval provenance」）——命中路径返回：
+      段级：source_type="selective_history" / match_method="embedding:<EMBED_BACKEND 名>" /
+            token_budget（本段无段级截断→budget=text_preview 索引期既有 80 字上限×条数、
+            actual=实际字符数、truncated:false）/ anti_copy="reference-not-copy"（advisory·
+            防 writer 照抄近邻正文原句）。
+      条级：source_id="chNNN#idx"（ch+chunk_idx 确定性派生）/ similarity（余弦）/
+            match_method / recency_distance（当前章−来源章）+ 原 ch/chunk_idx/text_preview。
+    skip 路径（首章/无 query 信号/无真后端/无索引）返回 {"retrieved": [], "reason": ...}
+    形态**逐字节不变**——「无真语义就不伪装语义」纪律保持。
     """
     if chapter <= 1:
         return {"retrieved": [], "reason": "首章无历史"}
@@ -3790,11 +3836,42 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
     # 取 top_k
     candidates.sort(key=lambda x: x["similarity"], reverse=True)
     top = candidates[:top_k]
+
+    # P2 typed 检索契约：match_method 记真实后端名（EMBED_BACKEND；未设但有 GEN_EMBED__ profile
+    # 时门控已放行 → 记 gen_embed_profile）；source_id 由 ch+chunk_idx 确定性派生。
+    _backend = os.environ.get("EMBED_BACKEND", "").strip().lower()
+    _match_method = f"embedding:{_backend or 'gen_embed_profile'}"
+    typed_top = []
+    for item in top:
+        _idx = item.get("chunk_idx")
+        typed_top.append({
+            "source_type": "selective_history",
+            "source_id": f"ch{item['ch']:03d}#{_idx if _idx is not None else '?'}",
+            "similarity": item["similarity"],
+            "match_method": _match_method,
+            "recency_distance": chapter - item["ch"],
+            "ch": item["ch"],
+            "chunk_idx": _idx,
+            "text_preview": item["text_preview"],
+        })
+    _actual_chars = sum(len(str(t["text_preview"])) for t in typed_top)
     return {
-        "_note": "按本章 turning_point + threads_advance 作 query 做语义检索，找前 N 章语义相近的片段。比固定 recent 摘要更智能。",
+        "_note": "按本章 turning_point + threads_advance 作 query 做语义检索，找前 N 章语义相近的片段。比固定 recent 摘要更智能。"
+                 "anti_copy=reference-not-copy：检索片段只作前情事实/连贯性参照，禁止照抄近邻正文原句进本章（advisory）。",
+        "source_type": "selective_history",
+        "match_method": _match_method,
         "query": query[:100],
-        "retrieved": top,
+        "retrieved": typed_top,
         "total_candidates": len(candidates),
+        "token_budget": {
+            "budget_chars": len(typed_top) * 80,
+            "actual_chars": _actual_chars,
+            "truncated": False,
+            "_note": "本段无段级截断（truncated 恒 false）；80=embedding_store 索引构建期 "
+                     "text_preview 既有上限（上游行为显式化·非本段新增截断）。query 回显截前 "
+                     "100 字仅为显示，检索用完整 query。",
+        },
+        "anti_copy": "reference-not-copy",
     }
 
 

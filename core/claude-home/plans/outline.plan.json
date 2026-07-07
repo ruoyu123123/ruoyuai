@@ -137,7 +137,8 @@
     {
       "n": 5,
       "name": "volume-arc-generation",
-      "description": "卷级大纲生成（gen_creative volume_arc·走 llm_transport·四硬契约·守北极星⑤不规训·覆盖 scaffold 的大势卡/事件簇空骨架）。",
+      "description": "卷级大纲生成（gen_creative volume_arc·P2 分卷 chunk + WAL 断点续跑：全书骨架落 _数据库/.wal/volume_arc_skeleton.json → 逐卷 ME 池落 _数据库/.wal/volume_arc_v<N>.json → 全部卷完成后确定性合并（ME id 跨卷重复硬报错）→ emit·中断重跑时合法 WAL 直接跳过/损坏重生成·单卷失败=整步失败但已完成卷 WAL 保留续跑·走 llm_transport·四硬契约·守北极星⑤不规训·覆盖 scaffold 的大势卡/事件簇空骨架）。",
+      "_doc_p2": "🔴 2026-07-07 P2（借鉴 AI_NovelGenerator chunked blueprint resume·research/open_source_writing_systems.md）：step5 内部分卷粒度断点续跑（plan 级 resume 之下的细颗粒）。CLI 入口不变仍是 --mode volume_arc（--volumes N-M 仅内部调试参数·plan 不用）；最终合并产物与旧一把梭结构等价·expected_outputs 不变。",
       "required": true,
       "skip_output_allowed": false,
       "data_flow": {

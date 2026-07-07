@@ -13,6 +13,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import gen_creative as gc  # noqa: E402
+import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现（2026-07-07 从 gen_creative 拆出）
 
 
 # ════════════════════════════════════════════════════════════════
@@ -50,7 +51,7 @@ def _emit(tmp: Path, data: dict) -> dict:
     """调 _emit_volume_arc_to_db 落盘并读回 大势卡.json（断言不崩 + 内容正确）。"""
     proj = tmp / "proj"
     proj.mkdir(parents=True, exist_ok=True)
-    p_major, p_cluster = gc._emit_volume_arc_to_db(proj, data, rhythm="", framework="")
+    p_major, p_cluster = gva._emit_volume_arc_to_db(proj, data, rhythm="", framework="")
     assert p_major.exists() and p_cluster.exists(), "大势卡/事件簇 未落盘"
     return json.loads(p_major.read_text(encoding="utf-8"))
 
@@ -121,7 +122,7 @@ def test_emit_volume_arc_empty_and_missing_major_events():
 def test_module_imports():
     """模块可 import（2 修后无语法/引用错）。"""
     assert hasattr(gc, "main")
-    assert hasattr(gc, "_emit_volume_arc_to_db")
+    assert hasattr(gva, "_emit_volume_arc_to_db")
 
 
 if __name__ == "__main__":

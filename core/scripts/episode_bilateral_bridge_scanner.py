@@ -228,6 +228,7 @@ def main():
     ap.add_argument("draft_path")
     ap.add_argument("--project", default=None)
     ap.add_argument("--manifest", default=None)
+    ap.add_argument("--style", default=None, help="兼容 audit_hub 传参")
     args, _ = ap.parse_known_args()
     rep = scan(args.draft_path, args.project)
     print(json.dumps(rep, ensure_ascii=False, indent=2))
