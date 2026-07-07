@@ -20,12 +20,34 @@ test_location_teleport_blindspot 记录的缺口）：角色上一段还在地�
 
 防误报豁免（全部内建）：
   ① 地点从属/同词根：B 是 A 的子空间或同词根（北境城墙 vs 城墙·字符串包含即豁免）；
-  ② 对话/回忆提及不算「身处」：引号（U+201C/U+201D、「」、『』）内的地点 +
-     含回忆标志（想起/回忆/梦见/当年…）的段落整段不参与绑定；
+  ② 对话/回忆/作品名提及不算「身处」：引号（U+201C/U+201D、「」、『』）与
+     书名号（《》〈〉）内的地点 + 含回忆/追述标志（想起/回忆/梦见/当年/当时/先前…）
+     的段落整段不参与绑定；
   ③ 传送/闪现类超能力词（传送阵/瞬移/挪移/遁术…）在两绑定之间或所在段落命中即豁免
      （玄幻常态）；
   ④ 场景切换/时间跳跃标志（次日/半个时辰后/与此同时…）命中即重置绑定；
-  ⑤ 噪声地板：全稿瞬移候选 < 2 对不报（单例噪声）。
+  ⑤ 噪声地板：全稿瞬移候选 < 2 对不报（单例噪声）；
+  ⑥ 远观/传闻/意图/比喻标志（望向/对面/听说/想去/就像/仿佛…）段落整段不参与绑定
+     （提及≠身处）；
+  ⑦ 同段多地点共现只更新绑定不报（从属地点链「兜率宫→主殿→丹房」/路线地理
+     「泥瓶巷在小镇西边」/群像归属列举是空间铺陈常态；真瞬移错误的形态是
+     「上段在 A、下段在 B」——只报跨段绑定冲突）；
+  ⑧ 绑定就近性：地点提及与角色名间隔 ≤50 字才算身处证据（远距同段共现多为
+     环境铺陈/他人行程）；
+  ⑨ 角色名重叠排除：地点匹配与人物卡角色名/别名区间重叠即弃
+     （莫山山≠山山、周青+海外≠周青海）。
+
+📊 金标准校准（2026-07-07·10 作者 100 chunk·连续 4 章拼接·全书均匀取样·
+   启发式词典路径·SPATIAL_CONTINUITY_MODE=active）：
+  校准前 51/100 chunk 误报（399 violations）→ 三轮根因收紧后 0/100 零误报放量：
+  · R1 抽象词撞单字后缀 → 剔除 关/台/海 后缀 + 黑名单改子串语义并扩充；
+  · R2 词根左扩跨词边界（离开→"开明斯克街"）→ 边界集扩充动词/量词/代词 +
+    单字移动动词全量入边界集 + 叠词/右邻复合词（镇定/庄严/洞开/山峰）闸；
+  · R3 提及≠身处（望向华山/听说骑龙巷/大夫府对面）→ 豁免⑥⑦⑧；
+  · R5 人名撞地点后缀（莫山山 17 次）→ 豁免⑨。
+  残留 3 个单例候选（人名残留/远观无标志/宗门迁移叙述）均被噪声地板⑤正确压制。
+  默认档 shadow→active 放量；校准脚本与明细见
+  scratchpad/spatial_calibration/（run_calibration.py 可复跑）。
 
 🔴 北极星⑤纪律（advisory 永不 hard_gate）：
   空间跳切本身可以是合法的叙事省略/蒙太奇——跨场景块的位置跳跃一律不报，
@@ -37,7 +59,8 @@ test_location_teleport_blindspot 记录的缺口）：角色上一段还在地�
 CLI:
   py spatial_continuity_scanner.py <draft_path> --project <root> [--cluster]
 
-三态开关: env SPATIAL_CONTINUITY_MODE = off / shadow(默认) / active
+三态开关: env SPATIAL_CONTINUITY_MODE = off / shadow / active(默认·金标准
+  10 作者 100 chunk 零误报放量·2026-07-07)
 输出形态: violations[] / warning（照抄 character_identity_anchor_scanner.py）
 """
 from __future__ import annotations
@@ -53,6 +76,7 @@ ISSUE_CODE = "SPATIAL_CONTINUITY_TELEPORT"
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 _MIN_CANDIDATE_PAIRS = 2   # 噪声地板：瞬移候选 < 2 对不报（单例噪声）
 _MIN_TERM_LEN = 2          # 启发式地名至少 2 字（裸后缀单字太泛不算地名）
+_BINDING_PROXIMITY = 50    # 绑定就近性：地点提及与角色名间隔 ≤50 字才算身处证据
 
 # ── 移动动词（两绑定之间命中任一 = 合法位移·豁免）──
 _MOVEMENT_MULTI = (
@@ -72,6 +96,18 @@ _TELEPORT_ABILITY = (
 _RECALL_MARKERS = (
     "想起", "忆起", "回忆", "记得", "回想", "梦见", "梦里", "梦中", "梦回",
     "当年", "那时", "那年", "曾经", "往昔", "犹记", "脑海里", "脑海中", "浮现",
+    "当时", "先前", "此前", "早前",
+)
+
+# ── 远观/传闻/意图标志（段落命中 = 提及非身处·整段不参与绑定）──
+# 金标准校准实证（2026-07-07·10 作者）：望向华山/听说骑龙巷/大夫府对面
+# 这类「远眺·转述·方位参照·打算前往」是真作者原文最大宗误报源之一。
+_NON_PRESENCE_MARKERS = (
+    "望向", "望去", "眺望", "遥望", "远望", "远眺", "远处", "远方", "方向",
+    "对面", "隔壁", "听说", "据说", "传闻", "传言", "提起", "说起", "谈起",
+    "聊起", "打听", "所谓", "叫做", "名为", "想去", "要去", "打算", "准备去",
+    "就像", "好像", "好似", "像是", "仿佛", "如同", "犹如", "宛如", "恍如",
+    "恍若",
 )
 
 # ── 场景切换/时间跳跃标志（段落命中 = 重置本场景绑定·不算瞬移）──
@@ -87,26 +123,47 @@ _LOC_SUFFIX_MULTI = (
     "城墙", "大厅", "房间", "广场", "客栈", "酒楼", "书房", "密室", "庭院",
     "长廊", "大殿", "宫殿", "祠堂", "地牢", "天牢", "水牢",
 )
-_LOC_SUFFIX_SINGLE = "城镇村殿阁楼院窖牢山谷林宫府寺庙塔桥街巷湖河海岛洞窟关寨营堡坊斋堂台庄园馆房厅"
-# 向左扩词根时的边界字（虚词/方位/动词·撞到即停）
+# 金标准校准（2026-07-07·10 作者 100 chunk）后剔除 关/台/海：抽象词性压倒地名性
+# （通关/闭关/无关/牙关 53 次 · 平台/柜台/灵台 29 次 · 虚海/烟海/人名+海 20 次），
+# 真地名（陈塘关/东海）漏报可接受——本 scanner 偏置宁漏勿误。
+_LOC_SUFFIX_SINGLE = "城镇村殿阁楼院窖牢山谷林宫府寺庙塔桥街巷湖河岛洞窟寨营堡坊斋堂庄园馆房厅"
+# 向左扩词根时的边界字（虚词/方位/动词/量词/代词·撞到即停）
+# 金标准校准扩充：开明斯克街(离开)/达杠杆教堂(抵达)/听说几条街/多年不种庄 等
+# 词根跨词边界误抽全部来自动词/量词/代词未入边界集。
 _EXTEND_STOPSET = set(
     "在的了着是于到往从与和把被向离过出进回去来又已就还再那这此其某"
     "一二两三处身入个座间栋幢所有朝沿经越穿遍满守望立坐站躺跪靠倚上下"
+    "开听说看瞧见闻问聊谈讲登临近旁给扔丢拿抓搬翻种买卖购租付聚汇载"
+    "点排套层条堆位片名令期待知想认以作干做能强如同比跟且得没无何么"
+    "你我他她它们要才刚正终竟仍皆均亦眼心不但即而或若径途俯漫直"
 )
-# 启发式常见假地名（词根撞常用抽象词）
+# 移动动词字绝不进词根（金标准实证「直奔交易广场」把 奔 吞进地名，
+# 导致两绑定 between 段丢失移动证据）——单字移动动词全量并入边界集。
+_EXTEND_STOPSET |= set(_MOVEMENT_SINGLE)
+# 启发式常见假地名（词根撞常用抽象词·【子串】命中即弃——金标准校准改为子串语义：
+# 江湖 的扩展变体「位江湖/些江湖/聊江湖」全部覆盖）
 _TERM_BLACKLIST = {
     "脑海", "人海", "火海", "血海", "苦海", "云海", "武林", "绿林", "难关",
     "年关", "开关", "机关", "内阁", "阵营", "经营", "钻营", "名堂", "江山",
-    "靠山", "漏洞",
+    "靠山", "漏洞", "江湖", "心湖", "山河", "河山", "乐园", "脑洞", "课堂",
+    "庙堂",
+}
+# 单字后缀右邻复合词（后缀+右邻字构成常用非地点词 = 中词命中·弃）
+# 金标准实证：强作镇定/庄严/大门洞开/颇有城府/山山水水。
+_RIGHT_COMPOUND_BLACKLIST = {
+    "镇定", "镇静", "庄严", "庄稼", "洞开", "洞察", "洞悉", "城府", "街坊",
+    "山水", "山川", "山脉", "山摇", "山峰", "院袍", "营业",
 }
 
-_QUOTE_PAIRS = (("“", "”"), ("「", "」"), ("『", "』"))
+# 书名号也入豁免区间：《搜山图》这类作品名里的地点词是提及非身处（金标准实证）
+_QUOTE_PAIRS = (("“", "”"), ("「", "」"), ("『", "』"), ("《", "》"), ("〈", "〉"))
 _CJK_RE = re.compile(r"[一-鿿]")
 
 
 def _mode() -> str:
-    mode = (os.environ.get("SPATIAL_CONTINUITY_MODE") or "shadow").strip().lower()
-    return mode if mode in {"off", "shadow", "active"} else "shadow"
+    # 默认 active：金标准 10 作者 100 chunk 零误报放量（2026-07-07·校准明细见 docstring）
+    mode = (os.environ.get("SPATIAL_CONTINUITY_MODE") or "active").strip().lower()
+    return mode if mode in {"off", "shadow", "active"} else "active"
 
 
 def _strip_changes(text: str) -> str:
@@ -181,11 +238,19 @@ def _heuristic_locations(text: str) -> list[str]:
     for m in re.finditer(f"[{_LOC_SUFFIX_SINGLE}]", text):
         if any(s <= m.start() < e for s, e in consumed):
             continue
+        ch = m.group(0)
+        nxt = text[m.end():m.end() + 1]
+        prv = text[m.start() - 1:m.start()]
+        if nxt == ch or prv == ch:
+            continue  # 叠词（山山水水/牢牢/楼楼）非地名
+        if ch + nxt in _RIGHT_COMPOUND_BLACKLIST:
+            continue  # 中词命中（镇定/庄严/洞开/城府）
         begin = _extend_left(text, m.start())
         term = text[begin:m.end()]
         if len(term) >= _MIN_TERM_LEN:
             terms.append(term)
-    terms = [t for t in dict.fromkeys(terms) if t not in _TERM_BLACKLIST]
+    terms = [t for t in dict.fromkeys(terms)
+             if not any(b in t for b in _TERM_BLACKLIST)]
     return terms
 
 
@@ -238,14 +303,18 @@ def _quote_spans(para: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _location_mentions(para: str, terms: list[str]) -> list[tuple[int, str]]:
-    """段内地点提及（长词优先·跳过引号内=对话提及非身处）·按出现位置排序。"""
+def _location_mentions(para: str, terms: list[str],
+                       exclude_spans: list[tuple[int, int]] | None = None,
+                       ) -> list[tuple[int, str]]:
+    """段内地点提及（长词优先·跳过引号内=对话提及非身处·跳过角色名重叠区间：
+    金标准实证 莫山山/周青+海外 这类人名撞地点后缀）·按出现位置排序。"""
     qspans = _quote_spans(para)
+    banned = list(qspans) + list(exclude_spans or [])
     taken: list[tuple[int, int]] = []
     mentions: list[tuple[int, str]] = []
     for term in sorted(terms, key=len, reverse=True):
         for m in re.finditer(re.escape(term), para):
-            if any(s <= m.start() < e for s, e in qspans):
+            if any(not (m.end() <= s or m.start() >= e) for s, e in banned):
                 continue
             if any(not (m.end() <= s or m.start() >= e) for s, e in taken):
                 continue
@@ -270,6 +339,23 @@ def _matched_alias(para: str, character: dict) -> str | None:
     return None
 
 
+def _alias_spans(para: str, character: dict) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for alias in [character["name"], *character.get("aliases", [])]:
+        if not alias:
+            continue
+        for m in re.finditer(re.escape(alias), para):
+            spans.append((m.start(), m.end()))
+    return spans
+
+
+def _near(pos: int, length: int, spans: list[tuple[int, int]]) -> bool:
+    """地点提及与角色名就近（间隔 ≤ _BINDING_PROXIMITY 字）才算「身处」证据。
+    金标准实证：远距同段共现绝大多数是环境铺陈/他人行程（提及≠身处）。"""
+    end = pos + length
+    return any(max(0, pos - e, s - end) <= _BINDING_PROXIMITY for s, e in spans)
+
+
 def _detect(text: str, characters: list[dict], terms: list[str]) -> dict:
     """角色↔地点绑定追踪主循环。返回 candidates/waived/binding/scene 计数。"""
     candidates: list[dict] = []
@@ -283,15 +369,26 @@ def _detect(text: str, characters: list[dict], terms: list[str]) -> dict:
                 bindings.clear()  # 场景/时间切换标志：绑定重置（跳切合法）
             if any(t in para for t in _RECALL_MARKERS):
                 continue  # 回忆/梦境段：提及≠身处
-            mentions = _location_mentions(para, terms)
+            if any(t in para for t in _NON_PRESENCE_MARKERS):
+                continue  # 远观/传闻/意图段：提及≠身处
+            spans_by_char = {c["name"]: (c, _alias_spans(para, c))
+                             for c in characters}
+            all_spans = [s for _, sp in spans_by_char.values() for s in sp]
+            if not all_spans:
+                continue
+            mentions = _location_mentions(para, terms, exclude_spans=all_spans)
             if not mentions:
                 continue
-            present = [c for c in characters if _matched_alias(para, c)]
+            present = [c for c, sp in spans_by_char.values() if sp]
             for character in present:
                 name = character["name"]
+                char_spans = spans_by_char[name][1]
                 for pos, term in mentions:
+                    if not _near(pos, len(term), char_spans):
+                        continue  # 距角色名过远：环境铺陈非身处证据
                     abs_pos = para_off + pos
-                    new_binding = {"loc": term, "end": abs_pos + len(term), "para": para}
+                    new_binding = {"loc": term, "end": abs_pos + len(term),
+                                   "para": para, "para_off": para_off}
                     prev = bindings.get(name)
                     binding_count += 1
                     if prev is None or prev["loc"] == term:
@@ -299,6 +396,13 @@ def _detect(text: str, characters: list[dict], terms: list[str]) -> dict:
                         continue
                     if term in prev["loc"] or prev["loc"] in term:
                         waived += 1  # ① 子空间/同词根豁免
+                        bindings[name] = new_binding
+                        continue
+                    if prev.get("para_off") == para_off:
+                        # ⑥ 同段多地点共现 = 空间铺陈常态（从属地点链/路线地理/
+                        # 群像归属），金标准实证同段对几乎全是误报——真瞬移错误
+                        # 的形态是「上段在 A、下段在 B」。同段只更新绑定不报。
+                        waived += 1
                         bindings[name] = new_binding
                         continue
                     between = scene[prev["end"]:abs_pos]

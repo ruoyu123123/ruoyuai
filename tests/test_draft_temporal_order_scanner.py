@@ -3,8 +3,12 @@
 
 盲区出处：tests/test_constory_consistency_gold.py::test_temporal_order_reversal_blindspot
 （ConStory temporal 类·scene1=第九天、scene2=第五天 互相打架·确定性层此前 0 检出）。
-本套件用同款金 fixture 句子验证新 scanner 真能捞到，并锁死三重防误报豁免
-（narrative_mode 门控 / 闪回豁免 / 锚点稀疏不判 + 时段序仅同日）。
+本套件用同款金 fixture 句子验证新 scanner 真能捞到，并锁死六重防误报豁免
+（narrative_mode 门控 / 闪回豁免 / 锚点稀疏不判 + 时段序仅同日 / 引语掩蔽 /
+时段复合词+时长量词 / 时段链场景跨度上限）。
+
+2026-07-07 金标准校准放量：10 作者 × 10 chunk（连续4章·均匀取样·linear 声明）
+首轮 6/100 误报 → 加豁免④⑤⑥ → 复跑 0/100 零误报 → 默认 shadow→active。
 
 北极星⑤纪律：DRAFT_TEMPORAL_ORDER_REVERSED 永远 advisory（时序自由是叙事手法，
 scanner 只捞无标记的意外倒错）——本套件不断言 audit_hub 接线（由主代理统一做）。
@@ -199,14 +203,121 @@ def test_implicit_midnight_rollover_no_false_positive(tmp_path, monkeypatch):
     assert r["violations"] == [], r
 
 
-# ═══════════ 7. 三态 env 门：shadow 不产 violations / active 产 / off 不扫 ═══════════
+# ═══════════ 6b. 豁免④⑤⑥：金标准校准新增（2026-07-07·真作者误报根因回归锁）═══════════
 
-def test_shadow_mode_no_violations_but_counts(tmp_path, monkeypatch, capsys):
-    """shadow（含未设 env 的默认档）：检出只进 reversal_count + stderr，不产 violations。"""
+def test_quoted_speech_time_words_exempt(tmp_path, monkeypatch):
+    """豁免④：引语内时间词不进时钟——问候「晚上好」/对话内计划「第五天」
+    是话语谈论的时间非叙事时钟（金标准：诡秘/人生长恨误报主根因）。"""
+    monkeypatch.setenv("DRAFT_TEMPORAL_ORDER_MODE", "active")
+    draft = _write_draft(
+        tmp_path,
+        _S_DAY3, _S_DAY9,
+        "“晚上好，到了第五天你就去谷口等我。”她把石刀塞进阿禾手里。",
+        _S_DAY10)
+    r = dto.scan(draft)
+    assert r["reversal_count"] == 0, r
+    assert r["violations"] == [], r
+
+
+def test_unclosed_quote_masked_to_line_end(tmp_path, monkeypatch):
+    """豁免④：网文多段引语只有开引号无闭引号 → 掩到行尾（第五天不进时钟）。"""
+    monkeypatch.setenv("DRAFT_TEMPORAL_ORDER_MODE", "active")
+    draft = _write_draft(
+        tmp_path,
+        _S_DAY3, _S_DAY9,
+        "“你听我说，第五天的时候谷口就该有人来了。\n她顿了顿，没再说下去。",
+        _S_DAY10)
+    r = dto.scan(draft)
+    assert r["reversal_count"] == 0, r
+
+
+def test_tod_compound_word_exempt(tmp_path, monkeypatch):
+    """豁免⑤：「黄昏隐士会」（专名）/「下午茶」（名词）后邻汉字不在白名单 →
+    不算时点锚（金标准：诡秘之主 ch618/ch1390 误报根因）。"""
+    monkeypatch.setenv("DRAFT_TEMPORAL_ORDER_MODE", "active")
+    # 抽取级断言：专名/复合词直接不产锚
+    assert dto._extract_tod("黄昏隐士会的人堵住了谷口。") is None
+    assert dto._extract_tod("到了下午茶点的时辰，她数着剩下的干粮。") is None
+    # 白名单尾字仍是合法锚（黄昏时分/深夜里）
+    assert dto._extract_tod("黄昏时分，她把窝棚塞满干草。")["text"] == "黄昏"
+    # 整链回归：正午场景里混入「黄昏隐士会」不该把链推到 rank4 造成后续误报
+    draft = _write_draft(
+        tmp_path,
+        _S_MORNING,
+        "正午，黄昏隐士会的人堵住了谷口。",  # 合法锚=正午(2)·专名黄昏不算
+        _S_DUSK)  # 黄昏(4)：清晨→正午→黄昏 正序 0 检出
+    r = dto.scan(draft)
+    assert r["anchored_scene_count"] == 3, r
+    assert r["reversal_count"] == 0, r
+
+
+def test_tod_duration_prefix_exempt(tmp_path, monkeypatch):
+    """豁免⑤：「一上午/半晌午」时长量词非时点（金标准：人生长恨 ch12 误报根因）。"""
+    monkeypatch.setenv("DRAFT_TEMPORAL_ORDER_MODE", "active")
+    draft = _write_draft(
+        tmp_path,
+        _S_MORNING,
+        "到了中午，她才直起腰。",
+        "这一顿她忙活了一上午，胳膊都抬不起来。",  # 「一上午」时长·非回到上午
+        _S_DUSK)
+    r = dto.scan(draft)
+    assert r["reversal_count"] == 0, r
+
+
+def test_tod_chain_scene_gap_reset(tmp_path, monkeypatch):
+    """豁免⑥：两时段锚相隔场景数 > MAX_TOD_SCENE_GAP → 链过远重置不判
+    （金标准：人生长恨相隔 29/30 场景的时段词被强行同日比较）。"""
+    monkeypatch.setenv("DRAFT_TEMPORAL_ORDER_MODE", "active")
+    fillers = [f"她数到第{'一二三四五'[i]}块石头，又把它放回了原处（场景无锚）。"
+               for i in range(4)]
+    draft = _write_draft(tmp_path, _S_MORNING, _S_DUSK, *fillers, _S_FORENOON)
+    r = dto.scan(draft)  # 黄昏→(隔4个无锚场景)→上午：gap=5>3 重置不判
+    assert r["anchored_scene_count"] >= 3, r
+    assert r["reversal_count"] == 0, r
+    assert r["violations"] == [], r
+
+
+def test_tod_chain_gap_within_limit_still_judged(tmp_path, monkeypatch):
+    """gap ≤ MAX_TOD_SCENE_GAP 的同日回退仍要检出（豁免⑥不误伤近距倒错）。"""
+    monkeypatch.setenv("DRAFT_TEMPORAL_ORDER_MODE", "active")
+    filler = "她数着剩下的干粮，把石刀在掌心翻了个面（场景无锚）。"
+    draft = _write_draft(tmp_path, _S_MORNING, _S_DUSK, filler, filler, _S_FORENOON)
+    r = dto.scan(draft)  # 黄昏→(隔2个无锚场景)→上午：gap=3≤3 仍判
+    assert r["reversal_count"] == 1, r
+    assert r["violations"][0]["anchor_pair"] == ["黄昏", "上午"], r
+
+
+# ═══════════ 6c. 金标准校准证据锁（2026-07-07 放量记载不许被清掉）═══════════
+
+def test_calibration_evidence_recorded_in_source():
+    """默认 active 的依据=金标准校准零误报。锁死源码 docstring 记载：
+    改默认档/删记载都必须先重做校准。"""
+    src = (_ROOT / "core" / "scripts" / "draft_temporal_order_scanner.py").read_text(
+        encoding="utf-8")
+    assert "金标准10作者100chunk零误报放量·2026-07-07" in src
+    assert "默认 active" in src
+
+
+# ═══════════ 7. 三态 env 门：默认 active 产 violations / shadow 不产 / off 不扫 ═══════════
+
+def test_default_mode_is_active(tmp_path, monkeypatch):
+    """未设 env 的默认档 = active（金标准10作者100chunk零误报放量·2026-07-07）。"""
     monkeypatch.delenv("DRAFT_TEMPORAL_ORDER_MODE", raising=False)
     draft = _write_draft(tmp_path, _S_DAY3, _S_DAY9, _S_DAY5)
     r = dto.scan(draft)
-    assert r["mode"] == "shadow", r  # 默认档 = shadow
+    assert r["mode"] == "active", r  # 默认档 = active
+    assert r["reversal_count"] == 1, r
+    assert r["violations"] != [], r
+    assert r["verdict"] == "FAIL_MINOR", r
+    assert r["gate_level"] == "advisory", r  # 放量不改性质：永远 advisory
+
+
+def test_shadow_mode_no_violations_but_counts(tmp_path, monkeypatch, capsys):
+    """shadow（显式设 env）：检出只进 reversal_count + stderr，不产 violations。"""
+    monkeypatch.setenv("DRAFT_TEMPORAL_ORDER_MODE", "shadow")
+    draft = _write_draft(tmp_path, _S_DAY3, _S_DAY9, _S_DAY5)
+    r = dto.scan(draft)
+    assert r["mode"] == "shadow", r
     assert r["reversal_count"] == 1, r
     assert r["violations"] == [], r
     assert r["verdict"] == "PASS", r

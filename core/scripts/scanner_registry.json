@@ -1441,14 +1441,14 @@
     "draft_temporal_order_scanner": {
       "layer": "cluster",
       "script": "draft_temporal_order_scanner.py",
-      "doc": "[2026-07-07 ConStory盲区①·一致性金fixture套件实证捞不到] 草稿内部时序倒错：场景块抽可排序时间锚（第N天绝对序数/翌日次日相对推进/清晨→深夜时段序）构建偏序·后场景早于前场景=倒错候选·三重防误报：narrative_mode=in_medias_res 整体skip（cluster_001默认倒叙·clusters[0]未声明按默认in_medias_res）+闪回标志场景豁免+锚点场景<3不判·时段序仅同日链内可比且深夜→晨视为隐式跨日翻页·env DRAFT_TEMPORAL_ORDER_MODE 默认 shadow·advisory（时序自由是叙事手法·只捞无标记意外倒错）·绝不 hard_gate",
+      "doc": "[2026-07-07 ConStory盲区①·一致性金fixture套件实证捞不到] 草稿内部时序倒错：场景块抽可排序时间锚（第N天绝对序数/翌日次日相对推进/清晨→深夜时段序）构建偏序·后场景早于前场景=倒错候选·六重防误报：narrative_mode=in_medias_res 整体skip（cluster_001默认倒叙）+闪回标志场景豁免+锚点场景<3不判+引语掩蔽（话语谈论的时间≠叙事时钟·未闭合引号掩到行尾）+时段词邻域闸（下午茶/一上午/黄昏隐士会等复合词不算锚）+时段链场景gap>3重置（密集分段隐式跨日）·深夜→晨视为隐式跨日翻页·env DRAFT_TEMPORAL_ORDER_MODE 默认 active（🔴金标准10作者100chunk校准：首轮6误报全为scanner误判·收紧后零误报放量 2026-07-07）·advisory（时序自由是叙事手法·只捞无标记意外倒错）·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["DRAFT_TEMPORAL_ORDER_REVERSED"]
     },
     "spatial_continuity_scanner": {
       "layer": "cluster",
       "script": "spatial_continuity_scanner.py",
-      "doc": "[2026-07-07 ConStory盲区②·一致性金fixture套件实证捞不到] 同场景内角色位置瞬移：角色名×地点共现绑定追踪（地点词典优先 世界观.json locations/地图.json·无则后缀启发式）·同场景块内 A地→B地之间无移动动词且无切换标志=瞬移候选·防误报：子空间/同词根包含豁免+引号提及/回忆段不绑定+传送阵瞬移等超能力词豁免+候选<2不报·env SPATIAL_CONTINUITY_MODE 默认 shadow·advisory（空间跳切可以是叙事省略·只捞明显矛盾）·绝不 hard_gate",
+      "doc": "[2026-07-07 ConStory盲区②·一致性金fixture套件实证捞不到] 同场景内角色位置瞬移：角色名×地点共现绑定追踪（地点词典优先 世界观.json locations/地图.json·无则后缀启发式）·同场景块内 A地→B地之间无移动动词且无切换标志=瞬移候选·九重防误报：子空间/同词根包含豁免+引号（含书名号）提及/回忆追述段不绑定+传送阵瞬移等超能力词豁免+候选<2不报+远观/传闻/意图/明喻标志段豁免+同段多地点只更新绑定不报（从属地点链/路线铺陈常态）+绑定就近性≤50字+地点匹配与角色名区间重叠即弃+词根左扩边界闸（移动动词入停用集防吞证据）·env SPATIAL_CONTINUITY_MODE 默认 active（🔴金标准10作者100chunk校准：基线399误报三轮根因根治→零误报放量 2026-07-07·根因分类见scanner docstring）·advisory（空间跳切可以是叙事省略·只捞明显矛盾）·绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["SPATIAL_CONTINUITY_TELEPORT"]
     },

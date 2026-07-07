@@ -84,6 +84,21 @@ def test_code_is_advisory_never_hard_gate():
     assert audit_hub._gate_level_for(sc.ISSUE_CODE, "error") == "advisory"
 
 
+def test_default_mode_is_active_gold_calibrated():
+    """校准证据锁：金标准 10 作者 100 chunk 零误报放量（2026-07-07）→ 默认 active。
+
+    校准明细：51/100 误报(399 violations) → 三轮根因收紧(剔关/台/海后缀、
+    词根边界集扩充、同段铺陈豁免、就近绑定、人名重叠排除等) → 0/100。
+    回退到 shadow 须重跑 scratchpad 校准脚本给出新证据。
+    """
+    old = os.environ.pop("SPATIAL_CONTINUITY_MODE", None)
+    try:
+        assert sc._mode() == "active"
+    finally:
+        if old is not None:
+            os.environ["SPATIAL_CONTINUITY_MODE"] = old
+
+
 # ═══════════ 1. 正例：ConStory 盲区同款瞬移（2 对）→ active 检出 ═══════════
 
 def test_teleport_two_pairs_detected_active():
@@ -194,7 +209,7 @@ def test_single_candidate_noise_floor_suppressed():
 # ═══════════ 7. 三态开关：shadow 不产 violations / off 直接返回 ═══════════
 
 def test_shadow_mode_no_violations(capsys):
-    """shadow（默认档）：候选照算，但 violations 不产、verdict PASS、走 stderr。"""
+    """shadow 档：候选照算，但 violations 不产、verdict PASS、走 stderr。"""
     proj = _mk_project(characters=_CHARS)
     draft = _write_draft(proj, _TELEPORT_2PAIRS)
     with _env(SPATIAL_CONTINUITY_MODE="shadow"):
@@ -265,6 +280,90 @@ def test_transition_marker_resets_no_report():
         r = sc.scan(draft, proj)
     assert r["teleport_candidate_count"] == 0, r
     assert r["violations"] == [], r
+
+
+# ═══════════ 9.5 金标准校准新增豁免（2026-07-07·10 作者 100 chunk 实证）═══════════
+
+def test_same_paragraph_multi_location_only_rebinds():
+    """豁免⑦：同段多地点共现（从属地点链/路线地理）只更新绑定不报。"""
+    proj = _mk_project(characters=_CHARS)
+    draft = _write_draft(proj, (
+        "顾长风蹲在地窖最深处，指腹擦过皇城舆图上的朱砂标记，地窖的霉味呛得他直皱鼻。\n\n"
+        "顾长风把舆图卷好塞回怀里。\n"
+    ))
+    with _env(SPATIAL_CONTINUITY_MODE="active"):
+        r = sc.scan(draft, proj)
+    assert r["teleport_candidate_count"] == 0, r
+    assert r["waived_count"] >= 1, r  # 走到了同段豁免通路
+    assert r["violations"] == [], r
+
+
+def test_non_presence_marker_paragraph_skipped():
+    """豁免⑥：远观/传闻段（望向/听说）提及≠身处，整段不参与绑定。"""
+    proj = _mk_project(characters=_CHARS)
+    draft = _write_draft(proj, (
+        "顾长风蹲在地窖最深处，数着最后几枚铜钱。\n\n"
+        "顾长风望向北境城墙的轮廓，听说皇城的宫灯昨夜全灭了。\n"
+    ))
+    with _env(SPATIAL_CONTINUITY_MODE="active"):
+        r = sc.scan(draft, proj)
+    assert r["binding_count"] == 1, r  # 只有地窖真绑定
+    assert r["teleport_candidate_count"] == 0, r
+
+
+def test_binding_proximity_far_mention_not_bound():
+    """豁免⑧：地点提及距角色名 >50 字 = 环境铺陈非身处证据，不绑定。"""
+    proj = _mk_project(characters=_CHARS)
+    filler = "檐下雨水断了又续，" * 8  # 72 字垫距
+    draft = _write_draft(proj, (
+        f"顾长风低着头一言不发。{filler}远山尽头的皇城只剩一线灰影。\n"
+    ))
+    with _env(SPATIAL_CONTINUITY_MODE="active"):
+        r = sc.scan(draft, proj)
+    assert r["binding_count"] == 0, r
+    assert r["teleport_candidate_count"] == 0, r
+
+
+def test_character_name_overlap_not_a_location():
+    """豁免⑨：地点匹配与角色名区间重叠即弃（人名撞地点后缀·金标准莫山山实证）。"""
+    proj = _mk_project(characters=[{"name": "白远城", "role": "主角"}])
+    draft = _write_draft(proj, (
+        "白远城蹲在地窖最深处数铜钱。\n\n"
+        "白远城又把铜钱数了一遍，还是不够。\n"
+    ))
+    with _env(SPATIAL_CONTINUITY_MODE="active"):
+        r = sc.scan(draft, proj)
+    # 若人名「白远城」被当地点，会产生 地窖→白远城 的跨段瞬移候选
+    assert r["teleport_candidate_count"] == 0, r
+    assert r["binding_count"] == 1, r  # 只有地窖
+
+
+def test_heuristic_lexicon_junk_guards():
+    """词典构建闸：叠词/右邻复合词/子串黑名单/移动动词不进词根（金标准根因锁）。"""
+    text = ("他强作镇定，跑遍了山山水水，闯荡江湖多年，只在《搜山图》里见过仙家气象，"
+            "此刻正直奔交易广场。")
+    terms = sc._heuristic_locations(text)
+    assert "山山" not in terms and not any("山水" in t for t in terms), terms
+    assert not any("江湖" in t for t in terms), terms
+    assert not any(t.endswith("镇") for t in terms), terms  # 镇定右邻复合词闸
+    assert "交易广场" in terms, terms          # 移动动词「奔」不吞进词根
+    assert "直奔交易广场" not in terms, terms
+    # 剔除的高危单字后缀不再产词：通关/平台/人海
+    junk = sc._heuristic_locations("他连闯三关终于通关，站上平台望向人海。")
+    assert not any(t.endswith(("关", "台", "海")) for t in junk), junk
+
+
+def test_recall_marker_dangshi_xianqian():
+    """追述标志（当时/先前）段落整段不参与绑定（金标准剑来实证）。"""
+    proj = _mk_project(characters=_CHARS)
+    draft = _write_draft(proj, (
+        "顾长风蹲在地窖最深处，数着最后几枚铜钱。\n\n"
+        "先前顾长风在皇城丢了半袋铜钱，当时北境城墙的风雪大得睁不开眼。\n"
+    ))
+    with _env(SPATIAL_CONTINUITY_MODE="active"):
+        r = sc.scan(draft, proj)
+    assert r["binding_count"] == 1, r
+    assert r["teleport_candidate_count"] == 0, r
 
 
 # ═══════════ 10. 无数据安全闸 ═══════════

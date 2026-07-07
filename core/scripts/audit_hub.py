@@ -2986,8 +2986,9 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                      out, "cluster_length_band_scanner",
                      "CLUSTER_LENGTH_UNDER_BAND", "节奏")),
                 # [2026-07-07 ConStory盲区①] 草稿内部时序倒错（无锁定数值锚的跨场景时间矛盾）·
-                # narrative_mode=in_medias_res 整体豁免 + 闪回豁免 + 锚点<3不判 ·
-                # DRAFT_TEMPORAL_ORDER_MODE 默认 shadow · advisory（时序自由是叙事手法·绝不 hard_gate）
+                # 六重防误报（in_medias_res 整体豁免/闪回/锚点<3不判/引语掩蔽/时段词邻域闸/链 gap>3 重置）·
+                # DRAFT_TEMPORAL_ORDER_MODE 默认 active（金标准10作者100chunk零误报放量 2026-07-07）·
+                # advisory（时序自由是叙事手法·绝不 hard_gate）
                 ("draft_temporal_order",
                  [child_python(), str(_SCRIPT_DIR / "draft_temporal_order_scanner.py"),
                   str(cluster_draft), "--project", str(project_root),
@@ -2997,7 +2998,9 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                      out, "draft_temporal_order_scanner",
                      "DRAFT_TEMPORAL_ORDER_REVERSED", "结构")),
                 # [2026-07-07 ConStory盲区②] 同场景内角色位置瞬移（无移动动词/切换标志的地点跳变）·
-                # 子空间/引号提及/传送词豁免 + 候选<2不报 · SPATIAL_CONTINUITY_MODE 默认 shadow ·
+                # 九重防误报（子空间/引号提及/传送词/候选<2不报/远观传闻意图明喻/同段多地点只更新绑定/
+                # 绑定就近≤50字/角色名重叠排除等）· SPATIAL_CONTINUITY_MODE 默认 active
+                # （金标准10作者100chunk三轮根治399→0误报放量 2026-07-07）·
                 # advisory（空间跳切可以是叙事省略·绝不 hard_gate）
                 ("spatial_continuity",
                  [child_python(), str(_SCRIPT_DIR / "spatial_continuity_scanner.py"),

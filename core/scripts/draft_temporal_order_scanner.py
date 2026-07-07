@@ -17,19 +17,36 @@ anachrony_order / temporal_grounding 只测锚词密度非矛盾。本 scanner �
        仅在明确同日（两锚之间无任何跨日锚介入）时参与排序。
   3. 构建场景序列时间戳偏序 → 后场景时间早于前场景 = 倒错候选。
 
-【防误报三重豁免（全做）】
+【防误报六重豁免（全做）】
   ① narrative_mode 门控：从 事件簇.json 反查该 cluster 的 narrative_mode，
      "in_medias_res"（黄金三章倒叙·cluster_001 未声明时默认）整体 skip；
   ② 闪回豁免：场景内命中回忆标志（回忆/想起/那时/当年/N年前/记忆里）→
      该场景整体不参与排序；
   ③ 锚点稀疏不判：可排序锚点场景数 < 3 不判；时段序只在无跨日锚介入的
      同日链内比较，任何天数锚出现即重置时段链。
+  ④ 引语掩蔽：引号内（“” 「」 『』 ‘’·未闭合引语掩到行尾）的时间词不参与
+     时钟——话语谈论的时间（问候「晚上好」/计划「等傍晚再返回」/医嘱
+     「连服三日之后」）不是叙事时钟（金标准：诡秘/人生长恨误报主根因）；
+  ⑤ 时段复合词豁免：时段词前邻「一半整两几/数字」（时长量词「一上午」）或
+     后邻非「时分的里」的汉字（专名「黄昏隐士会」/名词「下午茶」/问候
+     「晚上好」）→ 不算时点锚；
+  ⑥ 时段链场景跨度上限：两时段锚相隔场景数 > 3 → 链过远重置不判
+     （真作者密集分段下相隔数十段的两个时段词几乎必然隐式跨日）。
 
 【北极星⑤ · 绝不 hard_gate】时序自由（倒叙/插叙/多线）是叙事手法，本 scanner
 只捞**无标记的意外倒错**（无闪回标志、非倒叙模式下时间线倒退）。
 DRAFT_TEMPORAL_ORDER_REVERSED 永远 advisory，绝不得加入 HARD_GATE_CODES。
-env DRAFT_TEMPORAL_ORDER_MODE 三态（off/shadow/active·默认 shadow·
+env DRAFT_TEMPORAL_ORDER_MODE 三态（off/shadow/active·默认 active·
 shadow 只 stderr 不产 violations）。
+
+【金标准校准放量】金标准10作者100chunk零误报放量·2026-07-07：
+主神大道/惊悚乐园/诡秘之主/遮天/剑来/将夜/佛本是道/轮回乐园/小世界其乐无穷/
+人生长恨水长东 各 10 个连续 4 章 chunk（全书均匀取样·linear 显式声明·active）。
+首轮 6/100 chunk 误报（8 violations·全为 scanner 误判非作者笔误），根因四类：
+引语内时间词当叙事时钟（问候「晚上好」/对话计划「等傍晚再返回」「连服三日
+之后」）、时段复合词（「黄昏隐士会」「下午茶」）、时长量词（「一上午」）、
+时段链跨数十场景强行同日比较。据此加豁免④⑤⑥后复跑 0/100 零误报 →
+默认 shadow→active。校准脚本/报告见 scratchpad temporal_calibration。
 
 用法: python draft_temporal_order_scanner.py <draft> --project <root> [--cluster cluster_<key>]
 """
@@ -77,13 +94,29 @@ _TOD_RANKS: tuple[tuple[int, tuple[str, ...]], ...] = (
 _ROLLOVER_FROM_RANK = 6
 _ROLLOVER_TO_RANK_MAX = 2
 
+# 豁免⑥：时段同日链场景跨度上限（超过即视为隐式跨日·重置链不判）
+MAX_TOD_SCENE_GAP = 3
+
+# 豁免④：引语掩蔽（成对引号 + 网文多段引语「开引号无闭引号」掩到行尾）
+_QUOTE_RES = (
+    re.compile(r"“[^”\n]*”"), re.compile(r"“[^”\n]*$", re.MULTILINE),
+    re.compile(r"「[^」\n]*」"), re.compile(r"「[^」\n]*$", re.MULTILINE),
+    re.compile(r"『[^』\n]*』"), re.compile(r"『[^』\n]*$", re.MULTILINE),
+    re.compile(r"‘[^’\n]*’"),
+)
+
+# 豁免⑤：时段词前邻时长量词字 / 后邻允许尾字白名单
+_TOD_PREFIX_BLOCK = set("一半整两几0123456789０１２３４５６７８９")
+_TOD_SUFFIX_ALLOW = set("时分的里")
+
 _CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
               "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 
 
 def _mode() -> str:
-    m = (os.environ.get("DRAFT_TEMPORAL_ORDER_MODE") or "shadow").strip().lower()
-    return m if m in ("off", "shadow", "active") else "shadow"
+    """默认 active（金标准10作者100chunk零误报放量·2026-07-07）。"""
+    m = (os.environ.get("DRAFT_TEMPORAL_ORDER_MODE") or "active").strip().lower()
+    return m if m in ("off", "shadow", "active") else "active"
 
 
 def _strip_changes(text: str) -> str:
@@ -123,6 +156,17 @@ def _split_scenes(text: str) -> list[str]:
     return [chunk.strip() for chunk in re.split(r"\n\s*\n", text) if chunk.strip()]
 
 
+def _mask_quoted(text: str) -> str:
+    """豁免④：掩蔽引号内话语（等长替换保 pos 稳定）。话语谈论的时间不是叙事时钟。"""
+    for rx in _QUOTE_RES:
+        text = rx.sub(lambda m: "＊" * len(m.group(0)), text)
+    return text
+
+
+def _is_cjk(ch: str) -> bool:
+    return bool(ch) and "一" <= ch <= "鿿"
+
+
 def _extract_day_events(scene_text: str) -> list[dict]:
     """按出现顺序抽取天数锚：先掩蔽相对推进词，再扫绝对序数（防「第二天」误判绝对）。"""
     events: list[dict] = []
@@ -143,13 +187,28 @@ def _extract_day_events(scene_text: str) -> list[dict]:
 
 
 def _extract_tod(scene_text: str) -> dict | None:
-    """场景内最先出现的时段词（场景开场时段）。"""
+    """场景内最先出现的**合法**时段词（场景开场时段）。
+
+    豁免⑤：前邻时长量词字（「一上午」「半晌午」是时长非时点）或后邻不在
+    白名单的汉字（「黄昏隐士会」「下午茶」「晚上好」是复合词/专名/问候）→ 跳过。"""
     best: dict | None = None
     for rank, terms in _TOD_RANKS:
         for term in terms:
-            pos = scene_text.find(term)
-            if pos >= 0 and (best is None or pos < best["pos"]):
-                best = {"rank": rank, "text": term, "pos": pos}
+            start = 0
+            while True:
+                pos = scene_text.find(term, start)
+                if pos < 0:
+                    break
+                start = pos + 1
+                prev_ch = scene_text[pos - 1] if pos > 0 else ""
+                next_ch = scene_text[pos + len(term)] if pos + len(term) < len(scene_text) else ""
+                if prev_ch in _TOD_PREFIX_BLOCK:
+                    continue
+                if _is_cjk(next_ch) and next_ch not in _TOD_SUFFIX_ALLOW:
+                    continue
+                if best is None or pos < best["pos"]:
+                    best = {"rank": rank, "text": term, "pos": pos}
+                break
     return best
 
 
@@ -210,8 +269,9 @@ def _detect_reversals(scenes: list[str]) -> tuple[list[dict], int, int]:
             flashbacks += 1
             continue  # 豁免②：闪回场景整体退出排序（不重置时间线，链对闪回透明）
 
-        day_events = _extract_day_events(scene_text)
-        tod = _extract_tod(scene_text)
+        masked_scene = _mask_quoted(scene_text)  # 豁免④：引语内时间词不进时钟
+        day_events = _extract_day_events(masked_scene)
+        tod = _extract_tod(masked_scene)
         if day_events or tod:
             anchored += 1
 
@@ -243,6 +303,9 @@ def _detect_reversals(scenes: list[str]) -> tuple[list[dict], int, int]:
                         if tod else None)
         elif tod is not None:
             if (last_tod is not None
+                    and idx - last_tod["scene_index"] > MAX_TOD_SCENE_GAP):
+                pass  # 豁免⑥：时段链跨度过大 → 几乎必然隐式跨日，重置链不判
+            elif (last_tod is not None
                     and last_tod["rank"] == _ROLLOVER_FROM_RANK
                     and tod["rank"] <= _ROLLOVER_TO_RANK_MAX):
                 pass  # 深夜→清晨类隐式跨日翻页：重置链不判（防「漏写翌日」误报）
@@ -329,7 +392,7 @@ def main() -> None:
     except Exception:
         pass
     ap = argparse.ArgumentParser(
-        description="草稿内部时序倒错扫描（确定性·advisory·shadow 默认）")
+        description="草稿内部时序倒错扫描（确定性·advisory·active 默认·金标准零误报放量）")
     ap.add_argument("draft_path")
     ap.add_argument("--project", default=None)
     ap.add_argument("--cluster", default=None)
