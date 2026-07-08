@@ -50,8 +50,12 @@ def main():
     # 改为解耦提取：先确认是 plan_tracker.py step 子命令，再独立提取 plan_id / --n。
     if not re.search(r"plan_tracker\.py\s+step\b", command):
         sys.exit(0)
-    # plan_id：step 后第一个非 flag token（不以 - 开头），跳过 --skip-output 等任意顺序的旗标
-    pid_m = re.search(r"\bstep\s+(?:-\S+\s+)*[\"']?([A-Za-z0-9_][\w\-]*)[\"']?", command)
+    # plan_id：step 后第一个非 flag token（不以 - 开头），跳过 --skip-output 等任意顺序的旗标。
+    # 🔴 2026-07-08 修【安全·CJK fail-open】：首字符类原为 [A-Za-z0-9_] 不含 CJK → 中文书名
+    # plan_id（如「验证书_大天尊…」首字『验』）匹配不上 → pid_m=None → exit 0 放行 --skip-output，
+    # 防跳步守卫对所有中文项目形同虚设。改用 \w（Python re unicode 感知·匹配 CJK·且排除首字 -
+    # 不误吞 flag）。真机验证 2026-07-08 抓出。
+    pid_m = re.search(r"\bstep\s+(?:-\S+\s+)*[\"']?(\w[\w\-]*)[\"']?", command)
     n_m = re.search(r"--n\s+(\d+)", command)
     if not pid_m or not n_m:
         sys.exit(0)

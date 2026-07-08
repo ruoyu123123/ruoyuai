@@ -51,7 +51,10 @@ def main():
     # 再紧跟 --n（否则把旗标插在中间就能让位置耦合正则 miss 而绕过）。
     if not re.search(r"plan_tracker\.py\s+step\b", command):
         sys.exit(0)
-    pid_m = re.search(r"\bstep\s+(?:-\S+\s+)*[\"']?([A-Za-z0-9_][\w\-]*)[\"']?", command)
+    # 🔴 2026-07-08 修【安全·CJK fail-open】：首字符类 [A-Za-z0-9_] 不含 CJK → 中文书名
+    # plan_id 匹配不上 → pid_m=None → exit 0 静默放行调研门。改 \w（unicode 感知·匹配 CJK·
+    # 排除首字 - 不误吞 flag）。与 anti_skip 同批修。
+    pid_m = re.search(r"\bstep\s+(?:-\S+\s+)*[\"']?(\w[\w\-]*)[\"']?", command)
     n_m = re.search(r"--n\s+(\d+)", command)
     if not pid_m or not n_m:
         sys.exit(0)
@@ -88,9 +91,19 @@ def main():
         print(f"❌ [hook step-research] plan {plan_id} 不存在 step {n}", file=sys.stderr)
         sys.exit(2)
 
+    # 🔴 2026-07-08 修【协同·相对路径基准】：research_ref（如「_数据库/.research_cache」）是
+    # 相对**小说项目目录**的，而 CLAUDE_PROJECT_DIR 是仓库根。plan_file 已定位到真实 plan JSON，
+    # 从它反推小说项目根（含 _数据库 的目录），否则 check_research_ref 把相对 ref 解析到仓库根下
+    # 必不存在 → 误拦合法 step（CJK regex 修好后暴露的下游 bug·须协同修）。
+    if plan_file.parent.name == ".plans" and plan_file.parent.parent.name == "_数据库":
+        research_base = plan_file.parent.parent.parent   # 小说项目根
+    elif plan_file.parent.name == ".plans":
+        research_base = plan_file.parent.parent          # 风格库 / 项目根直挂 .plans
+    else:
+        research_base = project_dir                      # 全局 plan 兜底仓库根
     # 🔴 C16：判定下沉到 check_research_ref。hook 路径不传 auto_pilot/research_skipped
     # → 缺 research_ref 文件时 exit 2。
-    result = check_research_ref(step_info, project_dir=project_dir,
+    result = check_research_ref(step_info, project_dir=research_base,
                                auto_pilot=False, research_skipped=False)
     if result["ok"]:
         sys.exit(0)

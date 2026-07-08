@@ -157,3 +157,39 @@ def test_subsystems_wrapper_step4_scaffold_exists_only_but_step7_content_blocks(
     )
     assert step7.returncode == 2, step7.stderr
     assert "载荷子系统空货架" in step7.stderr or "inert" in step7.stderr
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 🔴 2026-07-08 CJK plan_id fail-open 修复回归锁（真机验证抓出）
+# ════════════════════════════════════════════════════════════════════════
+
+def test_anti_skip_not_fail_open_for_cjk_plan_id(tmp_path):
+    """中文书名 plan_id + --skip-output：hook 必须提取到 plan_id 并（因 plan 缺失）exit 2，
+    绝不因首字符类不含 CJK 而 pid_m=None → exit 0 静默放行（防跳步守卫对中文项目形同虚设）。"""
+    cmd = ('python core/scripts/plan_tracker.py step '
+           '"验证书_大天尊破产结算中心_001_cluster-write_XYZ" --n 3 --skip-output')
+    r = _run_hook("pretooluse_plan_step_anti_skip.py", _bash_payload(cmd), cwd=tmp_path)
+    assert r.returncode == 2, f"CJK plan_id 应被拦截(找不到 plan)，实际 rc={r.returncode} · {r.stderr}"
+    assert "找不到 plan" in r.stderr
+
+
+def test_step_research_resolves_ref_against_novel_project_dir(tmp_path):
+    """research_ref（相对小说项目目录）须以 plan_file 反推的项目根解析·非仓库根。
+    plan 在 <tmp>/_数据库/.plans/ → 项目根=<tmp> → research_ref「_数据库/.research_cache」
+    解析到 <tmp>/_数据库/.research_cache。CJK plan_id 同时验 regex 修复。"""
+    plan_id = "验证书_测试书_001_cluster-write_ABC"
+    db_plans = tmp_path / "_数据库" / ".plans"
+    db_plans.mkdir(parents=True)
+    plan = {"steps": [{"n": 1, "research_ref": "_数据库/.research_cache"}]}
+    (db_plans / f"{plan_id}.json").write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+    cmd = f'python core/scripts/plan_tracker.py step "{plan_id}" --n 1'
+    env = {"CLAUDE_PROJECT_DIR": str(tmp_path)}
+
+    # research_cache 缺失 → exit 2（正确拦截·证明基准解析到了项目根下的真实路径）
+    r_missing = _run_hook("pretooluse_step_research.py", _bash_payload(cmd), cwd=tmp_path, env=env)
+    assert r_missing.returncode == 2, f"缺 research_cache 应拦截·rc={r_missing.returncode}"
+
+    # research_cache 存在 → exit 0（证明基准是项目根·非仓库根·否则永远误拦）
+    (tmp_path / "_数据库" / ".research_cache").mkdir(parents=True)
+    r_ok = _run_hook("pretooluse_step_research.py", _bash_payload(cmd), cwd=tmp_path, env=env)
+    assert r_ok.returncode == 0, f"有 research_cache 应放行·rc={r_ok.returncode} · {r_ok.stderr}"
