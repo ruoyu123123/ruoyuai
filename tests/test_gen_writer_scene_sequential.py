@@ -114,13 +114,24 @@ class _Profile:
 
 
 def _install_mocks(monkeypatch, scene_bodies, changes_reply='```json\n{"factual": {}}\n```',
-                   empty_scene=None):
+                   empty_scene=None, fail_then_succeed=None):
     """打桩 build_prompt / call_gen_model / best_of_n_pipeline / split_text_and_changes。
 
     返回 call_log 记录每次调用的类型与 scene_view / prompt。
-    scene_bodies: 每场景正文（按序）；empty_scene: 令某场景返回空正文（测响亮失败）。
+    scene_bodies: 每场景正文（按序）；empty_scene: 令某场景**永远**返回空正文（测响亮失败）；
+    fail_then_succeed: {scene_idx: fail_times} 令该场景前 fail_times 次空、之后成功（测有界重试）。
     """
-    log = {"build_prompt": [], "call_gen_model": [], "best_of_n": [], "changes_calls": 0}
+    log = {"build_prompt": [], "call_gen_model": [], "best_of_n": [], "changes_calls": 0,
+           "scene_attempts": {}}
+    fts = dict(fail_then_succeed or {})
+
+    def _body_for(idx):
+        if empty_scene is not None and idx == empty_scene:
+            return ""
+        log["scene_attempts"][idx] = log["scene_attempts"].get(idx, 0) + 1
+        if idx in fts and log["scene_attempts"][idx] <= fts[idx]:
+            return ""  # 前 N 次空
+        return scene_bodies[idx]
 
     def fake_build_prompt(project_root, cluster_id, ch_start, scene_view=None):
         log["build_prompt"].append(dict(scene_view) if scene_view else None)
@@ -139,7 +150,7 @@ def _install_mocks(monkeypatch, scene_bodies, changes_reply='```json\n{"factual"
         m = re.search(r"idx=(-?\d+)", user)
         idx = int(m.group(1)) if m else 0
         log["call_gen_model"].append(("scene", idx))
-        body = "" if (empty_scene is not None and idx == empty_scene) else scene_bodies[idx]
+        body = _body_for(idx)
         return (body, _Profile(), "stop") if return_finish else (body, _Profile())
 
     def fake_best_of_n(loader, system, user, project_root, n, creative=False,
@@ -147,8 +158,7 @@ def _install_mocks(monkeypatch, scene_bodies, changes_reply='```json\n{"factual"
         m = re.search(r"idx=(-?\d+)", user)
         idx = int(m.group(1)) if m else 0
         log["best_of_n"].append({"idx": idx, "n": n, "blind_off": force_blind_revise_off})
-        body = "" if (empty_scene is not None and idx == empty_scene) else scene_bodies[idx]
-        return (body, _Profile(), {"best_of_n": n, "selected": 0})
+        return (_body_for(idx), _Profile(), {"best_of_n": n, "selected": 0})
 
     monkeypatch.setattr(gw, "build_prompt", fake_build_prompt)
     monkeypatch.setattr(gw, "call_gen_model", fake_call_gen_model)
@@ -214,13 +224,29 @@ def test_pipeline_subsequent_scene_prompt_has_prev_tail(monkeypatch):
     assert v1["consumed_lines"] == ["场景 1：开场"]
 
 
-def test_pipeline_empty_scene_body_raises(monkeypatch):
-    """任一场景正文为空 → 响亮 RuntimeError（不注水不跳过）。"""
-    _install_mocks(monkeypatch, ["甲", "", "丙"], empty_scene=1)
+def test_pipeline_empty_scene_body_raises_after_retries(monkeypatch):
+    """某场景永远返回空 → 重试用尽（SCENE_MAX_RETRIES+1 次）后响亮 RuntimeError。"""
+    log = _install_mocks(monkeypatch, ["甲", "", "丙"], empty_scene=1)
     cards = [{"summary": "A"}, {"summary": "B"}, {"summary": "C"}]
     import pytest
-    with pytest.raises(RuntimeError, match="scene-sequential"):
+    with pytest.raises(RuntimeError, match="连续"):
         gws.scene_sequential_pipeline(object(), "/proj", 1, 1, cards, n=1)
+    # 场景 1（idx=1）被调用了 SCENE_MAX_RETRIES+1 次（重试全空才放弃）
+    idx1_calls = [c for c in log["call_gen_model"] if c == ("scene", 1)]
+    assert len(idx1_calls) == gws.SCENE_MAX_RETRIES + 1
+
+
+def test_pipeline_scene_retry_then_succeed(monkeypatch):
+    """场景 1 首次空（模型偶发只回元评论）→ 重试成功（不注水·不掐整块）。"""
+    log = _install_mocks(monkeypatch, ["甲正文", "乙正文", "丙正文"],
+                         fail_then_succeed={1: 1})  # idx=1 前 1 次空
+    cards = [{"summary": "A"}, {"summary": "B"}, {"summary": "C"}]
+    reply, _, _, scene_trace = gws.scene_sequential_pipeline(
+        object(), "/proj", 1, 1, cards, n=1)
+    body, _ = gw.split_text_and_changes(reply)
+    assert body.strip() == "甲正文\n\n乙正文\n\n丙正文"  # 拼接完整·重试稿落位
+    # 场景 1 被调 2 次（1 空 + 1 成功）
+    assert len([c for c in log["call_gen_model"] if c == ("scene", 1)]) == 2
 
 
 def test_pipeline_scene_trace_structure(monkeypatch):

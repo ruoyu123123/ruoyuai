@@ -47,6 +47,11 @@ TAIL_ANCHOR_CHARS = 2000
 SYNOPSIS_MAX_CHARS = 100
 # 逐场景模式的最小场景数（<2 场景没有「逐场景」可言 → 回退一把梭）
 MIN_SCENES_FOR_SEQUENTIAL = 2
+# 单场景空/元评论响应的有界重试次数（2026-07-08 真机实证：pro-preview 偶发对续写场景只回
+# ~98 字英文元评论「The narrative.../All quantitative...」→ strip 后正文为空。隔离复跑即产
+# 完整正文=瞬时失败非系统缺陷。重试是「重跑失败的生成」（同一把梭 fallback 链精神）·不是注水
+# ——不改 prompt 不降健康带·仅对「解析后正文为空」重发；用尽仍空才响亮 RuntimeError。
+SCENE_MAX_RETRIES = 4
 
 
 def use_scene_sequential(scene_cards) -> bool:
@@ -147,6 +152,7 @@ def scene_gen_point_tail(scene_view: dict) -> str:
     card = scene_view.get("scene_card") or {}
     consumed = scene_view.get("consumed_lines") or []
     prev_tail = (scene_view.get("prev_tail") or "").strip()
+    meta_retry = bool(scene_view.get("meta_retry"))  # 上次只回英文元评论 → 本次追加纠正
 
     parts = ["\n\n---\n\n# 逐场景生成模式（本次调用只写一个场景）\n\n"]
     parts.append(
@@ -173,8 +179,19 @@ def scene_gen_point_tail(scene_view: dict) -> str:
     if idx > 0:
         directives.insert(1, "- 从「已写正文末尾」的最后一个字直接衔接续写：不要重复已写内容、"
                              "不要重新开头、不要复述前情。")
-    parts.append("\n【本次调用的硬指令】\n" + "\n".join(directives)
-                 + "\n\n现在开始写当前场景的正文。")
+    parts.append("\n【本次调用的硬指令】\n" + "\n".join(directives))
+    # 🔴 生成点末尾反元评论硬约束（真机实证：pro-preview 对续写场景偶发只回一段英文自评
+    # 「The narrative chunk is written... / All quantitative requirements...」而不写正文）：
+    parts.append(
+        "\n\n🔴【输出格式绝对要求】你的回复**必须以中文小说正文的第一个字开头**，"
+        "整段回复只能是中文叙事正文本身。严禁任何英文句子、严禁任何「The narrative/quantitative」"
+        "式的英文自评或合规确认、严禁任何评估/总结/元说明/JSON——写完场景正文即停，不要在正文后"
+        "追加任何说明。")
+    if meta_retry:
+        parts.append(
+            "\n\n⚠️【重试纠正】上一次调用你没有写正文、只回了一段英文说明，本次作废重来："
+            "直接从当前场景的中文正文第一个字写起。")
+    parts.append("\n\n现在开始写当前场景的正文。")
     return "".join(parts)
 
 
@@ -226,31 +243,43 @@ def scene_sequential_pipeline(loader, project_root, cluster_id: int, ch_start: i
         prev_tail = ""
         if scene_bodies:
             prev_tail = "\n\n".join(scene_bodies)[-TAIL_ANCHOR_CHARS:]
-        view = {"idx": i, "total": total, "scene_card": card,
-                "consumed_lines": list(consumed_lines), "prev_tail": prev_tail}
-        system, user, _seed = gw.build_prompt(project_root, cluster_id, ch_start,
-                                              scene_view=view)
-        if i == 0 and n >= 2:
-            # 首场景 N 选 1：开篇定调最关键 · SFS+AV 择优；blind_revise 强制 off（成本纪律）
-            logger.info(f"\n[scene-sequential] 场景 1/{total} · 首场景 best-of-{n} 择优"
-                        f"（开篇定调 · blind_revise 强制 off）")
-            reply, used_profile, bon_trace = gw.best_of_n_pipeline(
-                loader, system, user, Path(project_root), n, creative=True,
-                force_blind_revise_off=True)
-            finish = None  # 择优层抽象掉单次 finish（诚实 None · 不伪装）
-            bon_trace = dict(bon_trace or {})
-            bon_trace["scope"] = "first_scene_only"
-            bon_trace["mode"] = "scene_sequential_first_scene_n_pick_1"
-        else:
-            logger.info(f"\n[scene-sequential] 场景 {i + 1}/{total} · 单发生成")
-            reply, used_profile, finish = gw.call_gen_model(
-                loader, system, user, creative=True, return_finish=True)
-        body, _spurious = gw.split_text_and_changes(reply)  # 剥模型违令误产的 CHANGES 块
-        body = (body or "").strip()
+        # 有界重试：解析后正文为空（模型偶发只回英文元评论/空）→ 重发同场景（不降健康带·
+        # 不注水）；重试时 prompt 追加反元评论纠正提示；用尽 SCENE_MAX_RETRIES+1 次仍空才响亮 RuntimeError。
+        body = ""
+        finish = None
+        for attempt in range(SCENE_MAX_RETRIES + 1):
+            view = {"idx": i, "total": total, "scene_card": card,
+                    "consumed_lines": list(consumed_lines), "prev_tail": prev_tail,
+                    "meta_retry": attempt > 0}
+            system, user, _seed = gw.build_prompt(project_root, cluster_id, ch_start,
+                                                  scene_view=view)
+            if i == 0 and n >= 2 and attempt == 0:
+                # 首场景首次尝试 N 选 1：开篇定调最关键 · SFS+AV 择优；blind_revise 强制 off
+                logger.info(f"\n[scene-sequential] 场景 1/{total} · 首场景 best-of-{n} 择优"
+                            f"（开篇定调 · blind_revise 强制 off）")
+                reply, used_profile, bon_trace = gw.best_of_n_pipeline(
+                    loader, system, user, Path(project_root), n, creative=True,
+                    force_blind_revise_off=True)
+                finish = None  # 择优层抽象掉单次 finish（诚实 None · 不伪装）
+                bon_trace = dict(bon_trace or {})
+                bon_trace["scope"] = "first_scene_only"
+                bon_trace["mode"] = "scene_sequential_first_scene_n_pick_1"
+            else:
+                _tag = "单发生成" if attempt == 0 else f"空响应重试 {attempt}/{SCENE_MAX_RETRIES}"
+                logger.info(f"\n[scene-sequential] 场景 {i + 1}/{total} · {_tag}")
+                reply, used_profile, finish = gw.call_gen_model(
+                    loader, system, user, creative=True, return_finish=True)
+            body, _spurious = gw.split_text_and_changes(reply)  # 剥模型违令误产的 CHANGES 块
+            body = (body or "").strip()
+            if body:
+                break
+            logger.warning(f"[scene-sequential] 场景 {i + 1}/{total} 第 {attempt + 1} 次"
+                           f"解析后正文为空（疑似模型只回元评论）·剩余重试 "
+                           f"{SCENE_MAX_RETRIES - attempt}")
         if not body:
             raise RuntimeError(
-                f"[FATAL scene-sequential] 场景 {i + 1}/{total} 解析后正文为空——响亮失败"
-                f"（不注水不跳过 · 检查 gen-model 输出）")
+                f"[FATAL scene-sequential] 场景 {i + 1}/{total} 连续 {SCENE_MAX_RETRIES + 1} 次"
+                f"解析后正文均为空——响亮失败（不注水不跳过 · 检查 gen-model 输出）")
         scene_bodies.append(body)
         consumed_lines.append(synopsis_line(i, card))
         per_scene.append({"scene_idx": i, "cjk": cio.count_cjk(body), "finish": finish,
