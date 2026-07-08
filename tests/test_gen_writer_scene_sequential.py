@@ -225,15 +225,41 @@ def test_pipeline_subsequent_scene_prompt_has_prev_tail(monkeypatch):
 
 
 def test_pipeline_empty_scene_body_raises_after_retries(monkeypatch):
-    """某场景永远返回空 → 重试用尽（SCENE_MAX_RETRIES+1 次）后响亮 RuntimeError。"""
+    """某场景永远返回纯空（模型真空正文·非 stub）→ SCENE_MAX_RETRIES 预算用尽后响亮 RuntimeError。"""
     log = _install_mocks(monkeypatch, ["甲", "", "丙"], empty_scene=1)
     cards = [{"summary": "A"}, {"summary": "B"}, {"summary": "C"}]
     import pytest
-    with pytest.raises(RuntimeError, match="连续"):
+    with pytest.raises(RuntimeError, match="重试用尽仍无正文"):
         gws.scene_sequential_pipeline(object(), "/proj", 1, 1, cards, n=1)
-    # 场景 1（idx=1）被调用了 SCENE_MAX_RETRIES+1 次（重试全空才放弃）
+    # 纯空 = empty 通道：调 SCENE_MAX_RETRIES+1 次（第 5 次 empty_fails=5>4 才 raise）
     idx1_calls = [c for c in log["call_gen_model"] if c == ("scene", 1)]
     assert len(idx1_calls) == gws.SCENE_MAX_RETRIES + 1
+
+
+def test_pipeline_channel_stub_gets_higher_retry_budget(monkeypatch):
+    """渠道 stub（横幅·非空但被 is_channel_stub 识别）不被误收为正文 → 走 STUB_MAX_RETRIES
+    高预算·而非 SCENE_MAX_RETRIES。持续 stub → 调 STUB_MAX_RETRIES+1 次才 raise。"""
+    stub = "This version of Antigravity is no longer supported. Please upgrade to receive features."
+    assert gws.STUB_MAX_RETRIES > gws.SCENE_MAX_RETRIES  # stub 预算更高
+    log = _install_mocks(monkeypatch, ["甲正文", stub, "丙正文"])  # idx=1 每次返回 stub
+    cards = [{"summary": "A"}, {"summary": "B"}, {"summary": "C"}]
+    import pytest
+    with pytest.raises(RuntimeError, match="上游渠道故障"):
+        gws.scene_sequential_pipeline(object(), "/proj", 1, 1, cards, n=1)
+    # stub 非空但不被误收 → 走 stub 预算：调 STUB_MAX_RETRIES+1 次
+    idx1_calls = [c for c in log["call_gen_model"] if c == ("scene", 1)]
+    assert len(idx1_calls) == gws.STUB_MAX_RETRIES + 1
+
+
+def test_is_channel_stub_detection():
+    """渠道 stub 识别：横幅/短全英文=True；中文正文/纯空=False（不误伤）。"""
+    assert gws.is_channel_stub("This version of Antigravity is no longer supported.") is True
+    assert gws.is_channel_stub("Upstream quota exhausted, please retry") is True
+    assert gws.is_channel_stub("The narrative chunk is coherent. All quantitative met.") is True
+    # 中文正文（长·CJK 主导）不误判
+    assert gws.is_channel_stub("夜雨细密地敲打青石板，昏黄路灯在水洼中揉碎，狭长深巷尽是潮湿的清冷。" * 3) is False
+    assert gws.is_channel_stub("") is False  # 纯空走真空通道
+    assert gws.is_channel_stub("陈谋冷笑一声。") is False  # 短中文=正文不误伤
 
 
 def test_pipeline_scene_retry_then_succeed(monkeypatch):

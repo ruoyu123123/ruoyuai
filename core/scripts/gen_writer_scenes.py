@@ -47,11 +47,32 @@ TAIL_ANCHOR_CHARS = 2000
 SYNOPSIS_MAX_CHARS = 100
 # 逐场景模式的最小场景数（<2 场景没有「逐场景」可言 → 回退一把梭）
 MIN_SCENES_FOR_SEQUENTIAL = 2
-# 单场景空/元评论响应的有界重试次数（2026-07-08 真机实证：pro-preview 偶发对续写场景只回
-# ~98 字英文元评论「The narrative.../All quantitative...」→ strip 后正文为空。隔离复跑即产
-# 完整正文=瞬时失败非系统缺陷。重试是「重跑失败的生成」（同一把梭 fallback 链精神）·不是注水
-# ——不改 prompt 不降健康带·仅对「解析后正文为空」重发；用尽仍空才响亮 RuntimeError。
+# 单场景「模型真空正文」的有界重试次数（模型偶发写不出东西 → 重发·不注水）。
 SCENE_MAX_RETRIES = 4
+# 「渠道 stub」的有界重试次数（更高·因 stub 是廉价快速的渠道级故障非模型问题）。
+# 2026-07-08 真机实证：superapi.buzz 约 50% 概率注入 ~98 字英文横幅
+#「This version of Antigravity is no longer supported...」替代真正补全 → strip 后正文为空。
+# 这是上游渠道故障（与 prompt 无关·反元评论指令无效），值得更高重试预算穿透闪断；
+# 与「模型真的写不出」区分——后者重试意义有限（用 SCENE_MAX_RETRIES）。
+STUB_MAX_RETRIES = 9
+# 渠道 stub 识别：短（< 该字数）且几乎全 ASCII（中文正文场景绝不会这样）。
+_STUB_MAX_CHARS = 200
+_STUB_MARKERS = ("Antigravity", "no longer supported", "Please upgrade",
+                 "quota", "not supported")
+
+
+def is_channel_stub(reply: str) -> bool:
+    """判定回复是否为渠道级 stub（横幅/占位）而非中文正文：短 + 高 ASCII 占比，
+    或命中已知渠道 stub 标志词。中文小说正文绝不会短且全英文 → 安全不误伤。"""
+    s = (reply or "").strip()
+    if not s:
+        return False  # 纯空走「模型真空」路径
+    if any(mk in s for mk in _STUB_MARKERS):
+        return True
+    if len(s) <= _STUB_MAX_CHARS:
+        ascii_ct = sum(1 for c in s if ord(c) < 128)
+        return ascii_ct / max(len(s), 1) > 0.8
+    return False
 
 
 def use_scene_sequential(scene_cards) -> bool:
@@ -243,11 +264,16 @@ def scene_sequential_pipeline(loader, project_root, cluster_id: int, ch_start: i
         prev_tail = ""
         if scene_bodies:
             prev_tail = "\n\n".join(scene_bodies)[-TAIL_ANCHOR_CHARS:]
-        # 有界重试：解析后正文为空（模型偶发只回英文元评论/空）→ 重发同场景（不降健康带·
-        # 不注水）；重试时 prompt 追加反元评论纠正提示；用尽 SCENE_MAX_RETRIES+1 次仍空才响亮 RuntimeError。
+        # 有界重试（不注水不降健康带）：两类失败分开计预算——
+        #   · 渠道 stub（横幅/短英文占位·上游故障非模型问题）→ STUB_MAX_RETRIES（高·穿透闪断）；
+        #   · 模型真空正文（写不出·极短或纯空）→ SCENE_MAX_RETRIES（低·重试意义有限）。
+        # 任一预算用尽仍无正文 → 响亮 RuntimeError。重试时 prompt 追加反元评论纠正提示。
         body = ""
         finish = None
-        for attempt in range(SCENE_MAX_RETRIES + 1):
+        attempt = 0
+        stub_fails = 0
+        empty_fails = 0
+        while True:
             view = {"idx": i, "total": total, "scene_card": card,
                     "consumed_lines": list(consumed_lines), "prev_tail": prev_tail,
                     "meta_retry": attempt > 0}
@@ -265,21 +291,32 @@ def scene_sequential_pipeline(loader, project_root, cluster_id: int, ch_start: i
                 bon_trace["scope"] = "first_scene_only"
                 bon_trace["mode"] = "scene_sequential_first_scene_n_pick_1"
             else:
-                _tag = "单发生成" if attempt == 0 else f"空响应重试 {attempt}/{SCENE_MAX_RETRIES}"
+                _tag = "单发生成" if attempt == 0 else f"重试 {attempt}"
                 logger.info(f"\n[scene-sequential] 场景 {i + 1}/{total} · {_tag}")
                 reply, used_profile, finish = gw.call_gen_model(
                     loader, system, user, creative=True, return_finish=True)
             body, _spurious = gw.split_text_and_changes(reply)  # 剥模型违令误产的 CHANGES 块
             body = (body or "").strip()
-            if body:
+            # 接受条件：正文非空【且】原始回复不是渠道 stub（防 stub 未被现有 strip 清空时误收当正文）。
+            if body and not is_channel_stub(reply):
                 break
-            logger.warning(f"[scene-sequential] 场景 {i + 1}/{total} 第 {attempt + 1} 次"
-                           f"解析后正文为空（疑似模型只回元评论）·剩余重试 "
-                           f"{SCENE_MAX_RETRIES - attempt}")
-        if not body:
-            raise RuntimeError(
-                f"[FATAL scene-sequential] 场景 {i + 1}/{total} 连续 {SCENE_MAX_RETRIES + 1} 次"
-                f"解析后正文均为空——响亮失败（不注水不跳过 · 检查 gen-model 输出）")
+            attempt += 1
+            if is_channel_stub(reply):
+                stub_fails += 1
+                logger.warning(f"[scene-sequential] 场景 {i + 1}/{total} 第 {attempt} 次收到"
+                               f"渠道 stub（横幅/占位·上游故障非正文·"
+                               f"stub {stub_fails}/{STUB_MAX_RETRIES}）→ 重发穿透闪断")
+            else:
+                empty_fails += 1
+                logger.warning(f"[scene-sequential] 场景 {i + 1}/{total} 第 {attempt} 次"
+                               f"模型真空正文（empty {empty_fails}/{SCENE_MAX_RETRIES}）→ 重发")
+            if stub_fails > STUB_MAX_RETRIES or empty_fails > SCENE_MAX_RETRIES:
+                _kind = ("渠道持续返回 stub（横幅/占位）——上游渠道故障，非若渝AI 代码问题，"
+                         "换可用 gen-model 渠道" if stub_fails > STUB_MAX_RETRIES
+                         else "模型持续写不出正文——检查 prompt / 换 profile")
+                raise RuntimeError(
+                    f"[FATAL scene-sequential] 场景 {i + 1}/{total} 重试用尽仍无正文"
+                    f"（stub {stub_fails} · empty {empty_fails}）：{_kind}")
         scene_bodies.append(body)
         consumed_lines.append(synopsis_line(i, card))
         per_scene.append({"scene_idx": i, "cjk": cio.count_cjk(body), "finish": finish,
