@@ -138,8 +138,17 @@ def update(project_root: Path, cluster_id: str) -> dict:
 
     # 四线脉络提前读取（供下面 prefetch 收集 query 文本 + 后面判定循环复用·不重复 _load）
     tl = _load_optional(throughline_path)
-    if tl and not isinstance(tl.get("throughlines", []), list):
-        raise RuntimeError("四线脉络.json 的 throughlines 必须是列表")
+    # 四线脉络 canonical schema（subsystem_skeletons + build_manifest._collect_throughlines）=
+    # dict {overall/main/influence/relationship: {label, current_arc, ...}}。历史遗留可能存成
+    # str/dict 列表。两种都归一成「线对象/线名」列表 _tl_lines 统一处理：dict 取 values（mutate
+    # 原值对象即回写原结构·label 作线名·空线跳过），list 原样迭代。
+    _tl_raw = tl.get("throughlines", {}) if tl else {}
+    if isinstance(_tl_raw, dict):
+        _tl_lines = list(_tl_raw.values())
+    elif isinstance(_tl_raw, list):
+        _tl_lines = _tl_raw
+    else:
+        raise RuntimeError("四线脉络.json 的 throughlines 必须是对象（四线 dict）或列表")
 
     # 🔴 2026-07-03 Wave-4：本次 update() 会用到的全部待编码文本（corpus 摘要 +
     # 所有 thread/throughline query）一次性 prefetch（内容后端子进程按条调用极贵·
@@ -159,14 +168,15 @@ def update(project_root: Path, cluster_id: str) -> dict:
                     queries.append(f"{name} {desc}".strip())
             else:
                 raise RuntimeError("subplot_threads.json 的 threads 只能包含字符串或对象")
-        for line in tl.get("throughlines", []):
+        for line in _tl_lines:
             if isinstance(line, str):
                 if line:
                     queries.append(line)
             elif isinstance(line, dict):
-                name = line.get("name", "")
+                name = line.get("name") or line.get("label") or ""
                 if name:
-                    desc = line.get("description") or line.get("desc") or ""
+                    desc = (line.get("description") or line.get("desc")
+                            or line.get("current_arc") or "")
                     queries.append(f"{name} {desc}".strip())
             else:
                 raise RuntimeError("四线脉络.json 的 throughlines 只能包含字符串或对象")
@@ -222,10 +232,9 @@ def update(project_root: Path, cluster_id: str) -> dict:
     # 2026-07-02 举一反三：与上面 subplot_threads 同函数同 bug 模式一起升级语义补漏）
     # tl 已在函数开头为 prefetch 收集提前读取（见上），此处复用不重复 _load
     tl_updated = 0
-    for line in tl.get("throughlines", []):
-        # 🔴 G3 e2e 修：四线脉络 schema 可能存成字符串列表（走向线 = str），
-        # 也可能是 dict 列表。line 是 str 时直接当线名；是 dict 时取 name。
-        # 原 line.get(...) 对 str 抛 'str' object has no attribute 'get'。
+    for line in _tl_lines:
+        # 四线脉络归一后 _tl_lines 可能含 str（历史遗留 走向线=str）或 dict（canonical 四线值
+        # 对象 {label, current_arc, ...}）。str 只读计数不回写；dict 命中回写 last_cluster。
         if isinstance(line, str):
             line_name = line
             if line_name:
@@ -235,8 +244,9 @@ def update(project_root: Path, cluster_id: str) -> dict:
             continue
         if not isinstance(line, dict):
             continue
-        line_name = line.get("name", "")
-        line_desc = line.get("description") or line.get("desc") or ""
+        line_name = line.get("name") or line.get("label") or ""
+        line_desc = (line.get("description") or line.get("desc")
+                     or line.get("current_arc") or "")
         if line_name:
             hit, method = _thread_appears(line_name, line_desc, cluster_summary_text, corpus_emb)
             if hit:
@@ -267,6 +277,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8", errors="replace")
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001 - CLI boundary

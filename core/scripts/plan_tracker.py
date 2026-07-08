@@ -1314,4 +1314,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # 🔴 2026-07-08 验证书 e2e 抓出：status/end 等命令打印 ✓ 等非 ASCII 字符，Windows
+    # GBK 控制台下无 reconfigure 直接 UnicodeEncodeError 崩溃（与本session已修的
+    # hooks stdin/cluster_choice_apply 同根因·同批补齐·参照 cluster_choice_apply.py
+    # 既有写法）。
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

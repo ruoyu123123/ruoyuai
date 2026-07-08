@@ -233,6 +233,24 @@ def test_check_agent_injection_novel_archivist_requires_aux_contract():
     assert r["ok"]
 
 
+def test_check_agent_injection_researcher_requires_task_type_not_cluster():
+    # 2026-07-08 验证书 e2e 抓出：novel-researcher 真实契约是 PROJECT+TASK_TYPE，
+    # 不是 CLUSTER_ID+MODE（TASK_TYPE=inspiration 发生在首个 cluster 建立之前）。
+    r = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 1\nPROJECT: p\nCONTEXT: xxx\nQUERIES: a,b,c\nSCOPE: [hot_topic]\n"
+        "调研灵感这是一段足够长的提示文字用于通过长度下限五十字校验",
+        "调研灵感", "novel-researcher", plan_state="ok")
+    assert not r["ok"]
+    assert "TASK_TYPE" in r["msg"] and "CLUSTER_ID" not in r["msg"]
+
+    r2 = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 13\nPROJECT: p\nTASK_TYPE: outline\nCONTEXT: xxx\n"
+        "QUERIES: a,b,c\nSCOPE: [hot_topic]\n"
+        "调研走向卡这是一段足够长的提示文字用于通过长度下限，无 CLUSTER_ID 也应放行。",
+        "调研走向卡", "novel-researcher", plan_state="ok")
+    assert r2["ok"]
+
+
 def test_check_agent_injection_too_long_blocks():
     r = gates.check_agent_injection("x" * 16000, "task", "claude")
     assert not r["ok"] and "过长" in r["msg"]

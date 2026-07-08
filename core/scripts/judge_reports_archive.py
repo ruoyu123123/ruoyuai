@@ -397,5 +397,8 @@ def main():
 
 
 if __name__ == "__main__":
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8", errors="replace")
     # 公开 CLI 的所有失败码由 main() 返回，__main__ 负责透传给 shell。
     sys.exit(main())

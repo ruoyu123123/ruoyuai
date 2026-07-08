@@ -192,11 +192,26 @@ def main() -> int:
     ap.add_argument("--source-cluster", default="", help="来源 cluster_id")
     args = ap.parse_args()
 
-    chosen = _load(Path(args.chosen))
+    # 🔴 2026-07-08 验证书 e2e 抓出：plan 模板 after_pause_scripts 的调用形式是
+    # project-relative 路径（如 `_数据库/.wal/cluster_002_user_choice.json`），
+    # 与同一 after_pause_scripts 里 cluster_choice_apply.py 的 --choice 同款约定。
+    # 此前本脚本把 --chosen/--candidates 当字面路径（相对 CWD 非相对 project_root）
+    # 直接 _load，模板给的相对路径必炸 FileNotFoundError——每本书 save-state 走到
+    # step13 都会命中，只是此前从未有 cluster 真正端到端跑到这一步（无测试覆盖，
+    # 既有测试全传绝对路径）。与 cluster_choice_apply.py 同规则补 join。
+    project_root = Path(args.project_root)
+    chosen_path = Path(args.chosen)
+    if not chosen_path.is_absolute():
+        chosen_path = project_root / chosen_path
+    candidates_path = Path(args.candidates)
+    if not candidates_path.is_absolute():
+        candidates_path = project_root / candidates_path
+
+    chosen = _load(chosen_path)
     if "answer" in chosen:
         chosen = chosen["answer"]
 
-    cands_data = _load(Path(args.candidates))
+    cands_data = _load(candidates_path)
     candidates = cands_data.get("candidates", [])
     if not candidates:
         raise RuntimeError("brief_candidates 缺少 candidates，无法记录走向卡偏好")
@@ -204,7 +219,7 @@ def main() -> int:
         raise RuntimeError("brief_candidates.candidates 必须是列表")
 
     result = learn_from_choice(
-        Path(args.project_root), chosen, candidates,
+        project_root, chosen, candidates,
         source_cluster=args.source_cluster,
     )
     print(f"[user_choice_learner] 学到 {result['updated_dims']} 个偏好维度")
@@ -217,6 +232,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8", errors="replace")
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001 - CLI boundary

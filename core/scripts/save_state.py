@@ -1569,7 +1569,10 @@ def cmd_git_commit_cluster(root, cluster_key):
                             check=True, timeout=10)
             sha = (sha_r.stdout or "").strip()
             save_json(marker, marker_payload)
-            _sp.run(["git", "-C", str(root), "add", str(marker)], check=True, capture_output=True, timeout=30)
+            # marker 落在 .wal/（项目 .gitignore 惯例忽略 WAL 目录），但它是本 cluster 提交的
+            # provenance 记录·代码本意就是要 amend 进提交 → 必须 -f 强制越过 gitignore（否则
+            # 凡 .gitignore 含 _数据库/.wal/ 的书首次 cluster 提交必崩·数据提交已成功却 exit 2）。
+            _sp.run(["git", "-C", str(root), "add", "-f", str(marker)], check=True, capture_output=True, timeout=30)
             amend = _sp.run(["git", "-C", str(root), "commit", "--amend", "--no-edit"],
                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             if amend.returncode != 0:
@@ -1593,7 +1596,8 @@ def cmd_git_commit_cluster(root, cluster_key):
                 existing_marker = load_json(marker, None)
                 if existing_marker != marker_payload:
                     save_json(marker, marker_payload)
-                    _sp.run(["git", "-C", str(root), "add", str(marker)], check=True, capture_output=True, timeout=30)
+                    # 同上：.wal/ 被 gitignore，provenance marker 须 -f 强制入库
+                    _sp.run(["git", "-C", str(root), "add", "-f", str(marker)], check=True, capture_output=True, timeout=30)
                     amend = _sp.run(["git", "-C", str(root), "commit", "--amend", "--no-edit"],
                                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
                     if amend.returncode != 0:
@@ -1841,4 +1845,7 @@ def main():
 
 
 if __name__ == "__main__":
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8", errors="replace")
     main()

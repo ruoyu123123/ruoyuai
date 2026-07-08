@@ -221,6 +221,32 @@ def test_cli_main_smoke_explicit_zero_stays_off():
     assert "pairwise" not in r.stdout  # 显式关 → 不捕获不打印
 
 
+def test_cli_main_smoke_project_relative_paths():
+    """🔴 2026-07-08 验证书 e2e 抓出：cluster-save-state.plan.json 的
+    after_pause_scripts 用 project-relative 路径调用本脚本（与同一 after_pause_scripts
+    里 cluster_choice_apply.py 的 --choice 同款约定），而非既有测试全用的绝对路径。
+    此前 --chosen/--candidates 未做 project_root join，模板给的相对路径必
+    FileNotFoundError（每本书 save-state 走到 step13 都会命中）。"""
+    root = _new_project()
+    (root / "_数据库" / ".wal").mkdir(parents=True, exist_ok=True)
+    chosen_path = root / "_数据库" / ".wal" / "cluster_002_user_choice.json"
+    candidates_path = root / "_数据库" / ".wal" / "cluster_002_brief_candidates.json"
+    chosen_path.write_text(json.dumps({"answer": _CHOSEN}, ensure_ascii=False), encoding="utf-8")
+    candidates_path.write_text(json.dumps({"candidates": _ALL_CANDIDATES}, ensure_ascii=False),
+                               encoding="utf-8")
+
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    r = subprocess.run(
+        [sys.executable, str(_SCRIPTS / "user_choice_learner.py"), str(root),
+         "--chosen", "_数据库/.wal/cluster_002_user_choice.json",
+         "--candidates", "_数据库/.wal/cluster_002_brief_candidates.json",
+         "--source-cluster", "cluster_001"],
+        capture_output=True, text=True, timeout=30, encoding="utf-8", env=env,
+        cwd=str(_ROOT))
+    assert r.returncode == 0, r.stderr
+    assert "学到" in r.stdout
+
+
 def test_cli_empty_candidates_is_hard_error():
     root = _new_project()
     chosen_path = root / "choice.json"

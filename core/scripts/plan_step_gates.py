@@ -384,12 +384,15 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
         has_project = "PROJECT:" in prompt
         has_cluster = "CLUSTER_ID:" in prompt
         has_mode = "MODE:" in prompt
+        has_task_type = "TASK_TYPE:" in prompt
         if subagent_type:
             is_writer = (subagent_type == "novel-writer")
-            is_aux = (subagent_type in _AUX_TYPES)
+            is_researcher = (subagent_type == "novel-researcher")
+            is_aux = (subagent_type in _AUX_TYPES) and not is_researcher
         else:
             is_writer = ("writer" in desc.lower() or "写第" in desc)
-            is_aux = any(kw in desc.lower() for kw in
+            is_researcher = ("researcher" in desc.lower() or "调研" in desc)
+            is_aux = (not is_researcher) and any(kw in desc.lower() for kw in
                          ["validator", "voice", "修第", "审第", "摘要", "伏笔", "经验", "规划"])
         if is_writer:
             if not (has_project and has_cluster and has_mode):
@@ -397,6 +400,16 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
                                          ("CLUSTER_ID", has_cluster),
                                          ("MODE", has_mode)) if not ok]
                 return _block(f"Writer Agent 缺少必填字段: {', '.join(miss)}", warnings)
+        elif is_researcher:
+            # novel-researcher.md 权威契约：PROJECT + TASK_TYPE（inspiration/outline/
+            # cluster_brief/character/fact_check/implementation_reference）——不是
+            # CLUSTER_ID + MODE（TASK_TYPE=inspiration 发生在 /outline 建 cluster_001
+            # 之前，此时根本没有 CLUSTER_ID，套用 aux 通用契约会让首次调研 spawn 永久
+            # 无法通过 · 2026-07-08 验证书 e2e 抓出）。
+            if not (has_project and has_task_type):
+                miss = [m for m, ok in (("PROJECT", has_project),
+                                        ("TASK_TYPE", has_task_type)) if not ok]
+                return _block(f"Researcher Agent 缺少必填字段: {', '.join(miss)}", warnings)
         elif is_aux:
             if not (has_project and has_cluster and has_mode):
                 miss = [m for m, ok in (("PROJECT", has_project),

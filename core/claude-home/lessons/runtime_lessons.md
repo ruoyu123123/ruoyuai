@@ -1,6 +1,6 @@
 # 运行时报错自学习 lessons（self_heal_engine 自动沉淀）
 
-> 自动生成于 2026-06-28T18:37:51+08:00 · 数据源 runtime/self_heal_kb.json · 仅 known/regression 级
+> 自动生成于 2026-07-08T22:23:39+08:00 · 数据源 runtime/self_heal_kb.json · 仅 known/regression 级
 > 这是 advisory 经验（怎么避免重复运行时报错），不是 hard_gate。
 
 ## ::UnknownError::proactor_events.py:162（6x · known）
