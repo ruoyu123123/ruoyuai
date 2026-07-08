@@ -277,3 +277,57 @@ def test_main_chapters_entry_and_report_tag():
     assert "gen" in rep and rep["gen"]["cjk"] > 0
     one = rf._metrics(body)["cjk"]
     assert rep["gen"]["cjk"] == one * 2, rep["gen"]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 5. 近零基线护栏（2026-07-08）—— per-1000 密度维基线 < _NEARZERO_K 时走绝对口径
+#    真机 catch-22 实证：主神大道 dash_k=0.048 → 生成 0 次 = 0.0x 假偏离；
+#    3k 短稿 1 次命中 = 6.3x 假偏离 → strict 下数学上不可能通过。
+# ══════════════════════════════════════════════════════════════════════════
+def _nearzero_baseline(gen: dict, dash_mean: float) -> dict:
+    """其余维度照搬生成值（ratio=1 落 band 内），只造近零 dash 基线。"""
+    return {
+        "sentence_length": {"mean": gen["sentence_mean"]},
+        "paragraph_length_chars": {"mean": gen["para_mean"]},
+        "single_sentence_para_ratio": gen["single_para_ratio"],
+        "punctuation_density_per_1000": {
+            "comma": {"mean": gen["comma_k"]},
+            "period": {"mean": gen["period_k"]},
+            "dash": {"mean": dash_mean},
+            "ellipsis": {"mean": gen["ellipsis_k"]},
+            "exclamation": {"mean": gen["excl_k"]},
+            "question": {"mean": gen["ques_k"]},
+        },
+    }
+
+
+def test_nearzero_baseline_zero_gen_passes_strict():
+    """作者 dash≈0.05/千 · 生成 0 破折号 → 不再报 0.0x 假偏离 · strict exit 0。"""
+    proj = _mk_project(_tmp())
+    text = "\n\n".join(["他缓步走进那扇半掩的木门后头停下来打量四周的陈设。"] * 8)
+    _write_cluster_draft(proj, 1, text)
+    gen = rf._metrics(text)
+    assert gen["dash_k"] == 0.0
+    _write_baseline(proj, _nearzero_baseline(gen, dash_mean=0.0479))
+    r = _run_cli(proj, "--cluster", "1", "--strict")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    rep = _report_for(proj, "cluster_001")
+    assert rep["verdict"] == "pass", rep
+    assert rep["issues"] == []
+
+
+def test_nearzero_baseline_real_usage_still_flagged():
+    """作者 dash≈0.05/千 · 生成真在用（> _NEARZERO_K/千）→ 仍按偏离报（绝对口径）。"""
+    proj = _mk_project(_tmp())
+    para = "他缓步走进那扇半掩的木门——后头停下来打量四周的陈设。"
+    text = "\n\n".join([para] * 8)  # 每段 1 处破折号 · 密度远超 0.5/千
+    _write_cluster_draft(proj, 1, text)
+    gen = rf._metrics(text)
+    assert gen["dash_k"] > rf._NEARZERO_K
+    _write_baseline(proj, _nearzero_baseline(gen, dash_mean=0.0479))
+    r = _run_cli(proj, "--cluster", "1", "--strict")
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    rep = _report_for(proj, "cluster_001")
+    keys = {i["key"] for i in rep["issues"]}
+    assert keys == {"dash_k"}, rep["issues"]
+    assert rep["issues"][0].get("note", "").startswith("近零基线绝对口径")

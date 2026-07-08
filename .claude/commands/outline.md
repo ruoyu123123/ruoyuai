@@ -279,7 +279,10 @@ python core/scripts/scaffold_subsystems.py emit "<书名>"
 - 🔴 **作者风格必须从风格库复制「两个」文件**（gen_writer 写作时两个都读·**漏 skill = writer 只有量化数字、缺作者笔法+golden 范例 → 跑偏成通用爽文**·2026-06-04 cluster_001 实证根因）：
   - ① `workspace/styles/<风格名>/作者风格_FINAL.json` → `_数据库/作者风格.json`（量化基线）
   - ② `workspace/styles/<风格名>/skill_FINAL.md` → `_数据库/作者风格_skill.md`（**笔法 + golden 范例·必拷·别漏**）
-  - 或走 `/distill-style` 蒸馏替换占位（蒸馏会同时产这两件）。
+  - ③ 🔴 拷完必须在 `_数据库/作者风格.json` 顶层写 `"style_source": "workspace/styles/<风格名>/skill_FINAL.md"`
+    （相对仓库根·learning_loop/snippet_seed/audit_hub/best-of-N 原文池与 SFS/AV 打分全靠它反查——缺失=
+    语感种子+择优打分双退化成「退回第一稿」·2026-07-08 验证书真机实证根因·db_schema_validate 硬校验）
+  - 或走 `/distill-style` 蒸馏替换占位（蒸馏会同时产这两件并写 style_source）。
 
 完成填充后、跑 plan-step 3 前，**强制核对**（流程缺步补全，防 Workflow 名义返回掩盖漏文件）：
 

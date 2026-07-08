@@ -181,6 +181,7 @@ writer 行为：
 - 产出 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`（整 cluster 正文草稿 · 13000-22000 CJK）
 - 产出 `章节/cluster_<key>_draft/cluster_<key>_changes.json`（只 cluster 级 `self_eval` / `waivers` 创作自评 + 确定性遥测 · **writer 不自报 factual**）
 - 🔴 **禁止自行调 splitter**（v24 流水线：splitter 推迟到 step 6）
+- **逐场景顺序生成（scene-sequential · 2026-07-08 修正轮）**：storyboard ≥2 场景时 gen_writer.py 自动逐场景循环——每场景一次独立 gen-model 调用写透（真机 A/B 证伪一把梭：gemini-3.1-pro 在 ~107k prompt 下自发 stop 于 2-3.5k CJK·每场景压成 ~500 字），场景稿按 storyboard 顺序拼接成单一 draft，CHANGES 尾部单独一次调用产出；首场景 best-of-N 择优、后续单发（blind_revise 强制 off·per-scene 遥测记 changes `scene_sequential` 段）。<2 场景保留一把梭。调度器/审计/splitter 零改动（消费的仍是单一 `cluster_draft.txt`）。🔴 勿复活 expand/字数兜底红线原样保留——scene-sequential 是结构化逐场景生成（写透即止·无「不够长再补」逻辑），≠ 完稿后注水 expand。
 
 > 🔴 **2026-06-28 审计清理C类**：writer（gen-model）只产正文 + 创作自评（self_eval/waivers），**不产任何 factual 状态自报**。cluster 级 factual（角色/道具/关系/locked_facts/伏笔）由 Claude agent 事后读正文梳理回库（archivist→apply_archive / foreshadower / outline brief），见 `/cluster-save-state`。
 

@@ -248,6 +248,36 @@ def migrate_promise_lifecycle(p: dict) -> bool:
     return changed
 
 
+def check_style_source(db_root: Path) -> list[str]:
+    """[2026-07-08 验证书真机实证] 作者风格.json 有量化载荷但缺 style_source → error。
+
+    style_source（相对仓库根·如 workspace/styles/主神大道/skill_FINAL.md）是
+    learning_loop/snippet_seed/audit_hub/best-of-N 反查原文池的唯一通路——缺失时语感种子
+    与 SFS/AV 择优打分**静默双退化**成「退回第一稿」（无报错·真机抓出）。骨架占位
+    （无 quantitative 实载荷）不要求；有实载荷即必须有合法 style_source 字符串。
+    无法自动推导风格库路径 → 只报 error 不迁移（修法：outline.md 拷贝三步 ③）。"""
+    errors: list[str] = []
+    fp = db_root / "作者风格.json"
+    if not fp.exists():
+        return errors
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8"))
+    except Exception:
+        return errors  # JSON 坏损由通用校验报，不双报
+    if not isinstance(data, dict):
+        return errors
+    quant = data.get("quantitative")
+    has_payload = isinstance(quant, dict) and any(
+        not str(k).startswith("_") for k in quant.keys())
+    src = data.get("style_source")
+    if has_payload and not (isinstance(src, str) and src.strip()):
+        errors.append(
+            "作者风格.json: 有 quantitative 实载荷但缺 style_source（原文池反查唯一通路·"
+            "缺失=SFS/AV 打分静默双退化）——按 outline.md 作者风格拷贝三步的第③步补写"
+            "（如 workspace/styles/<风格名>/skill_FINAL.md）")
+    return errors
+
+
 def check_foreshadow_lifecycle(db_root: Path, auto_migrate: bool) -> tuple[list[str], list[str], bool]:
     """伏笔表.promises 三态生命周期迁移 + status 枚举白名单校验。
 
@@ -749,6 +779,9 @@ def main():
     total_warnings.extend(fs_warns)
     if fs_mig:
         migrated_files.append("伏笔表")
+
+    # 🔴 2026-07-08 验证书实证：作者风格实载荷必须带 style_source（原文池反查·缺=打分静默双退化）
+    total_errors.extend(check_style_source(db_root))
 
     # 🔴 2026-06-27 C11：cluster 级幂等不变量（advisory · 并入 warnings · 不计 errors）
     total_warnings.extend(check_idempotency_invariants(db_root))

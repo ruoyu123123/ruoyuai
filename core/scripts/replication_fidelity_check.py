@@ -336,6 +336,9 @@ _LABEL = {
     "ellipsis_k": "省略号/千", "excl_k": "感叹号/千", "ques_k": "问号/千",
 }
 _COMEDY_PUNCT = {"excl_k", "ellipsis_k", "ques_k"}
+# 近零基线绝对阈值（每千字）：基线低于此值的 _k 密度维走绝对口径而非 ratio 带
+#（ratio 对近零基线数学失效 · 见 main 内注释 · 2026-07-08）
+_NEARZERO_K = 0.5
 
 
 def main():
@@ -377,6 +380,17 @@ def main():
         a = base.get(k)
         g = gen.get(k)
         if a is None or g is None or a == 0:
+            continue
+        # 🔴 近零基线护栏（2026-07-08 真机验证抓出的 catch-22）：per-1000 密度维
+        # 基线 < 0.5/千 时 ratio 口径失效——生成 0 次 → 0.0x 假偏离；短稿哪怕 1 次
+        # 命中密度也 >2.2x 假偏离，数学上无法通过（主神大道 dash_k=0.048 实证）。
+        # 改绝对口径：两边都「几乎不用」（生成 ≤ 0.5/千）= 贴合跳过；
+        # 生成 > 0.5/千 才按偏离报（作者不用而生成在用，仍是真信号）。
+        if k.endswith("_k") and a < _NEARZERO_K:
+            if g > _NEARZERO_K:
+                issues.append({"dim": _LABEL[k], "key": k, "gen": g, "author": round(a, 2),
+                               "ratio": round(g / a, 2), "band": [lo, hi], "tag": "advisory",
+                               "note": f"近零基线绝对口径：作者 {a}/千 < {_NEARZERO_K} 而生成 {g}/千 超阈"})
             continue
         ratio = g / a
         if not (lo <= ratio <= hi):

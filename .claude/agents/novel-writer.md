@@ -53,6 +53,10 @@ python core/scripts/gen_writer.py \
 
 默认 v27 freestyle：不传目标章数、不传目标字数。writer 根据 cluster brief、scene storyboard、作者风格档、manifest 和调研 cache 写整块故事。
 
+**逐场景顺序生成（scene-sequential · 2026-07-08 修正轮 · gen_writer 内部自动路由）**：真机 A/B 证伪了「一把梭自然涌现 12-25k」假设——gemini-3.1-pro 在 ~107k writer prompt 下自发 finish=stop 于 2-3.5k CJK（storyboard 场景全覆盖但每场景压成 ~500 字梗概体）。因此 storyboard ≥2 场景时，gen_writer.py 自动改为逐场景循环：每场景一次独立 gen-model 调用把该场景写透（场景内自然 stop 即完结·不续写不注水），场景稿按 storyboard 顺序拼接成单一 cluster_draft（含 in_medias_res：场景顺序 = storyboard 顺序，倒叙已由 outline 排好），CHANGES 在全部场景写完后单独一次调用产出；首场景 best-of-N 择优、后续场景单发跟随（blind_revise 强制 off）。storyboard <2 场景或缺失则保留一把梭路径。本 agent 无需传任何额外参数——路由在 gen_writer.py 内部完成，产物契约不变（仍是单一 draft + changes 两文件）。
+
+🔴 **勿复活 expand / 字数兜底红线（原样保留）**：禁止任何「写完后注水续写」（expand）或「按长度择稿」（字数兜底）形态复活。scene-sequential 与 expand 本质不同——它是**结构化的逐场景生成**（每次调用写一个场景、写透即止），没有任何「不够长再补」逻辑；prompt 全链路不出现数字字数目标，字数仍自然涌现，健康带只存在于遥测/检测端。
+
 ### 3. 校验输出
 
 必须同时存在：

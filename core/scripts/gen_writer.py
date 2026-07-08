@@ -48,6 +48,11 @@ import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化�
 import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster_006" ↔ "6"）
 from atomic_json import atomic_write_text  # noqa: E402 · 2026-06-13 草稿/CHANGES 产物原子落盘（崩溃不留半截）
 import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
+# 🔴 2026-07-08 修正轮：逐场景顺序生成（scene-sequential freestyle）——真机 A/B 证伪 v27
+# 「一把梭自然涌现 12-25k」（gemini-3.1-pro 在 ~107k prompt 下自发 stop 于 2-3.5k CJK · 每场景
+# 压成 ~500 字梗概体）。storyboard ≥2 场景 → 每场景一次独立调用写透；<2 场景保留一把梭。
+# 与 expand（完稿后注水续写 · 已定调红线勿复活）本质不同：无任何「不够长再补」逻辑。
+import gen_writer_scenes  # noqa: E402
 from log_util import get_logger, info, debug, warning, error  # noqa: E402
 # 🔴 2026-06-28 伏笔明暗线隔离：复用 build_manifest 的明暗线过滤为单一真理源——
 #   埋设侧 _sanitize_foreshadowing_to_plant 剥 hidden_payoff（写手只见 surface_clue·当普通细节埋）；
@@ -1232,11 +1237,17 @@ def _sanitize_character_cards_for_writer(cards_path: Path, current_cluster_id) -
     return json.dumps(safe, ensure_ascii=False, indent=2)
 
 
-def build_prompt(project_root: Path, cluster_id: int, ch_start: int) -> tuple:
+def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
+                 scene_view: dict | None = None) -> tuple:
     """组装 system + user prompt
 
     cluster-first 唯一模式：writer 不暴露目标章数/目标字数，只按 cluster brief
     产一整块连续叙事；具体章数与每章篇幅由 splitter 后续决定。
+
+    scene_view（2026-07-08 修正轮 · 逐场景顺序生成）：None = 一把梭原行为（逐字节零回归）。
+    非 None（{idx, total, scene_card, consumed_lines, prev_tail}）= scene-sequential 单场景调用：
+      · idx≥1 时 brief 的 scene_storyboard 压缩（已消费卡→前情梗概行 · 防线性膨胀）；
+      · 生成点尾部换成「当前场景卡 + 逐场景硬指令」（本次调用不产 CHANGES）。
     """
     db = project_root / '_数据库'
 
@@ -1302,6 +1313,10 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int) -> tuple:
                 break
     relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_start + 30]
     plan_text = json.dumps(relevant_plans, ensure_ascii=False, indent=2) if relevant_plans else "[]（v27 freestyle · 完全按 cluster_brief.scene_storyboard 自由发挥）"
+    if scene_view and int(scene_view.get("idx", 0)) >= 1:
+        # scene-sequential 膨胀控制：blueprint storyboard 与 brief 同源 · 后续场景不再全量注入
+        plan_text = ("[]（scene-sequential · 已消费场景见前情梗概 · "
+                     "本次要写的场景见 prompt 末尾「当前场景卡」段）")
 
     # 人物卡（全量，不截断——含 voice_pack 是声纹复刻第一依据，截断 = 后登场角色声纹丢失）
     # 🔴 2026-06-28 写手信息隔离：注入前对每张卡跑 _sanitize_character_card 字段级脱敏（单一真理源·
@@ -1332,6 +1347,11 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int) -> tuple:
                 # 用 _safe_brief 只供「注入文本」；下面 scope_summary/hard_constraints
                 # 等非密字段仍读原 cluster_brief（不受过滤影响）。
                 _safe_brief = _sanitize_cluster_brief_foreshadowing(cluster_brief, cluster_id)
+                if scene_view and int(scene_view.get("idx", 0)) >= 1:
+                    # scene-sequential 膨胀控制（idx≥1）：已消费场景卡→前情梗概行 ·
+                    # 当前场景→指路占位（全量卡在生成点尾部）· 未写场景→一行预告。
+                    # 首场景（idx=0）全量 brief 原样注入（任务口径：首场景全量）。
+                    _safe_brief = gen_writer_scenes.compact_brief_for_scene(_safe_brief, scene_view)
                 cluster_brief_text = json.dumps(_safe_brief, ensure_ascii=False, indent=2)
                 # 从 scope_summary 提取硬约束（≥/≤/百分比/角色数等）
                 scope = cluster_brief.get('scope_summary', '')
@@ -1847,6 +1867,12 @@ cluster_brief 完整内容：
     # 🔴 2026-06-28 审计清理A类：自查项只留创作期自评 + 确定性遥测；factual 状态簇
     # （facts_locked/出场角色/new_items/foreshadowing_planted·paid/throughline_progress）已删——
     # 那些由 Claude（novel-archivist/foreshadower）读正文梳理 → apply_archive 回库，writer 不自报 factual。
+    # 🔴 2026-07-08 修正轮：scene_view 非 None（逐场景模式）→ 生成点尾部换成
+    # 「当前场景卡 + 逐场景硬指令」（本次调用只写一个场景 · 不产 CHANGES）。
+    if scene_view:
+        user += gen_writer_scenes.scene_gen_point_tail(scene_view)
+        return system, user, seed_trace
+
     gen_point_tail = f"""
 
 按 7 项硬铁律 + 元 anti-slop 防御 · 完整覆盖 cluster_brief 的所有 scene_storyboard 自由发挥（章数由 splitter 后期切，你不必管）。
@@ -2064,12 +2090,17 @@ def _filter_creative_profiles(candidates):
 
 
 def call_gen_model(loader: GenModelLoader, system: str, user: str,
-                   creative: bool = False) -> tuple[str, Profile]:
+                   creative: bool = False, prior_assistant: str | None = None,
+                   cont_reason: str = "length", return_finish: bool = False) -> tuple:
     """调当前 active profile；失败时按 fallback 链尝试。
 
     creative=True（写正文）→ 剔除 flash-tier 兜底，pro 全挂响亮失败（不静默降质 · 北极星：质量优先）。
+    prior_assistant / cont_reason（2026-07-08 修正轮）：透传 _stream_once 的续写机制——
+      scene-sequential 的 CHANGES 尾部单独调用走 prior_assistant=<拼接正文> + cont_reason=
+      'changes_only'（复用既有 changes_only 指令文案 · 不另起调用栈）。缺省 = 原行为零回归。
+    return_finish=True → 返回 (full_text, used_profile, finish_reason)（per-scene 遥测用）；
+      缺省 False 返回 (full_text, used_profile)（既有调用方零改动）。
 
-    返回 (full_text, used_profile)。
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
 
     2026-05-30 加固：
@@ -2117,7 +2148,9 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
             attempt = 0
             while True:
                 try:
-                    full_text, finish_reason = _stream_once(client, profile, system, user, max_tokens)
+                    full_text, finish_reason = _stream_once(
+                        client, profile, system, user, max_tokens,
+                        prior_assistant=prior_assistant, cont_reason=cont_reason)
                     break
                 except (RateLimitError, APITimeoutError) as re_err:
                     attempt += 1
@@ -2134,7 +2167,8 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
                 cont_rounds += 1
                 logger.info(f"\n[gen_writer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…")
                 cont_text, finish_reason = _stream_once(
-                    client, profile, system, user, max_tokens, prior_assistant=full_text)
+                    client, profile, system, user, max_tokens,
+                    prior_assistant=(prior_assistant or "") + full_text)
                 full_text += cont_text
             if finish_reason == "length":
                 logger.info(f"\n[gen_writer] ⚠️ WARN 续写 {cont_rounds} 轮后仍可能未写完"
@@ -2155,6 +2189,8 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
 
         # 成功
         logger.info(f"\n[gen_writer] 接收完毕 ({len(full_text)} chars) via {profile.name}")
+        if return_finish:
+            return full_text, profile, finish_reason
         return full_text, profile
 
     # 全链失败
@@ -2634,12 +2670,16 @@ def blind_revise_round(loader: GenModelLoader, system: str, scored: list,
 
 def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
                        project_root: Path, n: int,
-                       creative: bool = False) -> tuple[str, "Profile", dict]:
+                       creative: bool = False,
+                       force_blind_revise_off: bool = False) -> tuple[str, "Profile", dict]:
     """best-of-N 主流程：生成 N 稿 → 各自打分 → 综合择优 → 返回最佳稿。
 
     返回 (best_reply, best_profile, selection_trace)。
     selection_trace 记录每个候选的分数 + 选中理由（写进 changes 不黑箱 · 北极星⑤）。
     优雅降级：无 author_ref → 跳 SFS/AV-judge，仍生成 N 稿但按 idx 选第一稿（等价单稿 · 不报错）。
+    force_blind_revise_off=True（2026-07-08 修正轮 · scene-sequential 首场景 N 选 1 专用）：
+      无视 env BEST_OF_N_BLIND_REVISE 强制关闭 A9 盲修轮（成本纪律 · trace 记 mode）；
+      缺省 False = 原行为零回归（env off 时 trace 仍无 blind_revise 段）。
     """
     author_ref = gather_author_ref_text(project_root)
     use_av_judge = bool(author_ref.strip())
@@ -2677,7 +2717,10 @@ def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
     # A9 盲审 N 修 N 选 1（env BEST_OF_N_BLIND_REVISE 默认 off · off 时本段零执行 ·
     # 逐字节不变）：N 候选各拿各的 critique 隔离盲修 → 修订稿重打分并入池 → 2N 选优。
     blind_trace = None
-    if _blind_revise_enabled():
+    if force_blind_revise_off:
+        # scene-sequential 首场景 N 选 1：盲修强制 off（无视 env · 成本纪律 · trace 记 mode）
+        blind_trace = {"enabled": False, "mode": "forced_off_scene_sequential"}
+    elif _blind_revise_enabled():
         logger.info(f"[best-of-N][blind-revise] {BLIND_REVISE_ENV}=on · "
                     f"{len(scored)} 候选各自隔离盲修一轮（修订稿与原稿 2N 进池选优）")
         revised_scored, blind_trace = blind_revise_round(
@@ -2898,12 +2941,15 @@ def enforce_short_paragraphs(body: str, author_para_mean: float = None, author_s
 
 def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
                 ch_start: int, used_profile: Profile,
-                seed_trace: dict = None, best_of_n_trace: dict = None):
+                seed_trace: dict = None, best_of_n_trace: dict = None,
+                scene_trace: dict = None):
     """写 draft + changes.json
 
     cluster-first freestyle：ch_range 写 'TBD_by_splitter'（splitter 后期填）。
     seed_trace：snippet_seed 播种痕迹（用了几段 / 哪个模式）· 留 changes 不黑箱（北极星⑤）。
     best_of_n_trace：best-of-N 择优痕迹（N 稿各自分数 + 选中理由）· 留 changes 透明可审（北极星⑤）。
+    scene_trace（2026-07-08 修正轮）：scene-sequential per-scene 遥测（scene_idx/cjk/finish）·
+      None = 一把梭路径（changes 无该段 · 零回归）。S8/S9 遥测对最终拼接稿照常在本函数计算。
     """
     # 空 body 守卫（2026-05-30 加固）：拒写空草稿并报错，避免 cjk=0 草稿入库还报成功。
     # 上游 call_gen_model 已对空响应切 fallback，此处是最后一道防线（含解析后正文为空的情况）。
@@ -2966,6 +3012,9 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
             'formula': 'longwriter_asymmetric(under/2, over/3)',
         },
     })
+    # scene-sequential 留痕（per-scene 遥测 + blind_revise 强制 off 记载 · 北极星⑤透明可审）
+    if scene_trace:
+        se['ecas_metadata']['scene_sequential'] = scene_trace
     se.setdefault('waivers', [])
     se.setdefault('uncertainty_flags', [])
     changes.setdefault('schema_version', 'v2.cluster')
@@ -3082,8 +3131,23 @@ def main():
     # selection（择优）≠ refine（迭代）→ 天然规避 self-refine 同质化（arxiv 实证）。
     n = _best_of_n()
     best_of_n_trace = None
+    scene_trace = None
+    # 🔴 2026-07-08 修正轮（真机 A/B 证伪 v27「一把梭自然涌现 12-25k」）：gemini-3.1-pro 在
+    # ~107k writer prompt 下自发 finish=stop 于 2-3.5k CJK（storyboard 场景全覆盖但每场景压成
+    # ~500 字梗概体），自然 stop 短稿无恢复路径。根因修复 = storyboard ≥2 场景时逐场景顺序生成
+    # （每场景一次独立调用写透 · 场景内自然 stop 即完结 · 不续写不注水 ≠ expand 红线勿复活）。
+    # <2 场景 / 缺 storyboard → 保留一把梭原路径（该形态没有「逐场景」可言）。
+    scene_cards = gen_writer_scenes.load_scene_cards(project_root, args.cluster)
     try:
-        if n >= 2:
+        if gen_writer_scenes.use_scene_sequential(scene_cards):
+            logger.info(f"\n[gen_writer][scene-sequential] storyboard {len(scene_cards)} 场景 · "
+                        f"逐场景顺序生成（首场景 best-of-{n} 择优 · 后续单发跟随 · "
+                        f"CHANGES 尾部单独产出）")
+            reply, used_profile, best_of_n_trace, scene_trace = \
+                gen_writer_scenes.scene_sequential_pipeline(
+                    loader, project_root, args.cluster, ch_start, scene_cards, n,
+                    base_system=system, base_user=user)
+        elif n >= 2:
             logger.info(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优")
             reply, used_profile, best_of_n_trace = best_of_n_pipeline(
                 loader, system, user, project_root, n, creative=True)
@@ -3109,7 +3173,8 @@ def main():
     body = enforce_short_paragraphs(body, author_para_mean=_auth_para, author_single=_auth_single)
     draft_path, cjk = save_output(project_root, args.cluster, body, changes,
                                   ch_start, used_profile,
-                                  seed_trace=seed_trace, best_of_n_trace=best_of_n_trace)
+                                  seed_trace=seed_trace, best_of_n_trace=best_of_n_trace,
+                                  scene_trace=scene_trace)
 
     logger.info(f"\n[gen_writer] 跑 scanner...")
     scan_results = run_scanners(draft_path)
