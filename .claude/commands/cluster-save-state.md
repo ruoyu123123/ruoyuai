@@ -339,7 +339,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 9 --output "_数据库/.
 # learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ WAL 合并
 python core/scripts/save_state.py "<项目路径>" --auto-post-reflect-cluster <key>
 
-# 把本 cluster 所有 JudgeReport 存入 故事块摘要[ch_range].judge_reports[]
+# 把本 cluster 所有 JudgeReport 存入 故事块摘要[cluster].judge_reports[]（按 chapter_range 定位 cluster）
 # 经 adaptive_runner：失败记录 incident 后硬停，供 self_heal_engine 学习；缺失状态不得继续。
 python core/scripts/adaptive_runner.py --label judge_reports_archive --strict -- python core/scripts/judge_reports_archive.py "<项目路径>" --cluster <key>
 

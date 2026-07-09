@@ -681,7 +681,7 @@
     "plot_armor_tracker": {
       "layer": "cluster",
       "script": "plot_armor_tracker.py",
-      "doc": "[2026-06-20 R9 W5 Batch-N P1·plot armor stakes erosion] 跨 3 cluster 滚动窗口跟踪 stakes_credibility=cost_events/threat_count·威胁三档词典(轻伤/重伤/濒死·中文高确定性·剔除虚指比喻)+持久化代价 (factual.character_state_changes/deaths/items_lost + facts_locked 含 COST_PERSISTENT 标志词)·threat≥3 且 credibility<0.2 → advisory PLOT_ARMOR_INFLATION·题材门控(轻喜剧/slice_of_life/fluff skip)·作者档 plot_armor_profile.allow_high_armor=True 豁免无敌流·snapshot 写 _数据库/.cross_chapter_scan/plot_armor_snapshot.json 供 build_manifest 下卷注入·与 R7 debt_ledger(查叙事承诺) + R7 sagging_middle(查事件烈度)正交·advisory · env PLOT_ARMOR_MODE 默认 shadow · 🔬阈值占位待金标准校准 · PLOT_ARMOR_INFLATION 绝不 hard_gate",
+      "doc": "[2026-06-20 R9 W5 Batch-N P1·plot armor stakes erosion·2026-07-09 精简 facts_locked 死分支后同步] 跨 3 cluster 滚动窗口跟踪 stakes_credibility=cost_events/threat_count·威胁三档词典(轻伤/重伤/濒死·中文高确定性·剔除虚指比喻)+持久化代价(factual.character_state_changes/deaths/injuries/items_lost/relations_broken)·threat≥3 且 credibility<0.2 → advisory PLOT_ARMOR_INFLATION·题材门控(轻喜剧/slice_of_life/fluff skip)·作者档 plot_armor_profile.allow_high_armor=True 豁免无敌流·snapshot 写 _数据库/.cross_chapter_scan/plot_armor_snapshot.json 供 build_manifest 下卷注入·与 R7 debt_ledger(查叙事承诺) + R7 sagging_middle(查事件烈度)正交·advisory · env PLOT_ARMOR_MODE 默认 shadow · 🔬阈值占位待金标准校准 · PLOT_ARMOR_INFLATION 绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["PLOT_ARMOR_INFLATION"]
     },
