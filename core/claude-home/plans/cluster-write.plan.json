@@ -112,7 +112,7 @@
     },
     {
       "n": 4,
-      "name": "cluster-voice-keeper",
+      "name": "cluster-voice-checker",
       "description": "spawn novel-voice-checker MODE=cluster · 整 cluster 对话声纹审查（所有角色 voice_pack 校验 + 跨场景 voice 漂移检测）",
       "required": true,
       "must_spawn_agent": "novel-voice-checker",

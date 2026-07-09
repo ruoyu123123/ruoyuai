@@ -34,7 +34,7 @@ def _manifest_all_sources() -> dict:
         "generated_at": "2026-07-08T00:00:00",
         "foreshadowing_summary": {
             "tier1_due_count": 2, "tier2_due_count": 0, "deadlines_due": 1,
-            "active_pledges": 0, "hidden_secrets": 3, "pending_secret_count": 3,
+            "active_pledges": 0, "pending_secret_count": 3,
             "must_reveal_this_ch": 1,
         },
         "open_dramatic_questions": {

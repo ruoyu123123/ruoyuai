@@ -64,7 +64,7 @@
 - 金手指放量绑剧情节点（每个分身觉醒 = 一个 ME 转折），不是随意刷数值
 
 ### voice_pack 5 层设计要点
-- catchphrase 必须 `{phrase, scene, frequency}` 三字段——纯数组会被 writer 锁第一个 + voice-keeper 只查命中不查分布（catchphrase 单一化陷阱）
+- catchphrase 必须 `{phrase, scene, frequency}` 三字段——纯数组会被 writer 锁第一个 + novel-voice-checker 只查命中不查分布（catchphrase 单一化陷阱）
 - 每角色配 anti_patterns（禁哪些违背 persona 的写法）
 
 ### 伏笔物件锚定要点

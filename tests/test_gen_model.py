@@ -10,8 +10,7 @@
   - set_active dev 无 ACTIVE 行时追加分支
   - main() argparse 分发
 
-已有覆盖（不重复造）：tests/test_config_split.py 已测 set_active 的 dev 改写 + dist
-override 两条主路径（test ⑤⑥）→ 本文件只补 CLI 处理器 / mask_key / 名校验 / 追加分支。
+本文件补 CLI 处理器 / mask_key / 名校验 / 追加分支。
 
 零依赖：只用标准库 + 假 loader（不碰真 .env / keyring / 网络）。test_* 无参数。
 兜底安全：模块顶层把 urllib/socket 真出网点 monkeypatch 成「调用即 raise」，
@@ -51,12 +50,11 @@ class FakeLoader:
     """最小假 GenModelLoader——只实现 cmd_* 用到的方法，绝不读真 .env / keyring / 网络。"""
 
     def __init__(self, profiles=None, active="", chain=None,
-                 env_path=None, dist_mode=False):
+                 env_path=None):
         self._profiles = {p.name: p for p in (profiles or [])}
         self._active = active
         self._chain = chain or []
         self.env_path = env_path
-        self._dist_mode = dist_mode
 
     def list_profiles(self):
         return list(self._profiles.values())
@@ -256,7 +254,7 @@ def test_set_active_dev_appends_when_no_active_line():
     tmp = Path(tempfile.mkdtemp())
     env_file = tmp / ".env"
     env_file.write_text("GEN__a__MODEL=m\n", encoding="utf-8")  # 故意无 ACTIVE 行
-    ld = FakeLoader(env_path=env_file, dist_mode=False)
+    ld = FakeLoader(env_path=env_file)
     mod.set_active(ld, "a")
     text = env_file.read_text(encoding="utf-8")
     assert "GEN__a__MODEL=m" in text          # 原内容保留
@@ -269,7 +267,7 @@ def test_set_active_dev_replaces_existing_line_once():
     tmp = Path(tempfile.mkdtemp())
     env_file = tmp / ".env"
     env_file.write_text("GEN_MODEL_ACTIVE=old\nGEN__b__MODEL=m\n", encoding="utf-8")
-    ld = FakeLoader(env_path=env_file, dist_mode=False)
+    ld = FakeLoader(env_path=env_file)
     mod.set_active(ld, "newone")
     text = env_file.read_text(encoding="utf-8")
     assert "GEN_MODEL_ACTIVE=newone" in text

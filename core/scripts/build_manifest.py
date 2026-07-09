@@ -649,8 +649,6 @@ class DatabaseScanner:
     def memory_search(self, query: str = "", top_k: int = 5) -> list[dict]:
         """三层记忆检索（v16·移植自Mem0/Letta概念）。"""
         try:
-            # frozen-aware（狩猎修）：__file__ 在 PYZ 顶层·文件路径落空 → exe 下
-            # 记忆层静默丢失（伤北极星）。模块已被 spec hiddenimports 收进 PYZ → 直接 import。
             import importlib
             try:
                 ml = importlib.import_module("memory_layer")
@@ -667,7 +665,6 @@ class DatabaseScanner:
     def rag_relevant_chapters(self, top_k: int = 3) -> list[dict]:
         """RAG检索：找到与当前章节最相关的历史章节片段。"""
         try:
-            # frozen-aware（狩猎修·同 memory_layer）：PYZ 已收 → 直接 import。
             import importlib
             try:
                 rag = importlib.import_module("rag_retriever")
@@ -6106,11 +6103,8 @@ def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
 # 哪些是 deferred（如 webnovel_bench_mapping 等 G13 评估器未启用）。骨架 _doc.consumption 是
 # 单一真理源（subsystem_skeletons.json）；本函数兼容缺 consumption（旧骨架）→ status=unknown。
 def _collect_subsystem_consumption_audit(s: "DatabaseScanner") -> dict:
-    try:
-        from frozen_util import bundle_root as _bundle_root
-        skel_path = _bundle_root() / "core" / "claude-home" / "templates" / "subsystem_skeletons.json"
-    except Exception:
-        skel_path = Path(__file__).resolve().parent.parent / "claude-home" / "templates" / "subsystem_skeletons.json"
+    from frozen_util import bundle_root as _bundle_root
+    skel_path = _bundle_root() / "core" / "claude-home" / "templates" / "subsystem_skeletons.json"
     skeletons = {}
     try:
         if skel_path.is_file():
@@ -6153,10 +6147,10 @@ def _collect_global_feedback_must_read() -> dict | None:
     （Claude Code user data）。harness_dir = cwd 的 dirname 化形式
     （如 X:\\path\\to\\project → X--path-to-project）。
 
-    🔴 frozen fallback（2026-06-13）：exe 用户机上开发机 memory 路径不存在 → 本注入
-    此前整层静默为空。home miss/为空时改读随 exe 出货的汇编
-    lessons/global_feedback_rules.md（frozen_util.resource_path 定位·dev=仓库根·
-    汇编由 assemble_global_feedback_rules.py 产出）。home 路径优先（开发机行为不变）。
+    🔴 home memory 兜底（2026-06-13）：本机 ~/.claude/projects/.../memory/ 不存在或为空
+    （全新机器/尚无历史 memory）→ 本注入此前整层静默为空。miss/无 description 可抽时改读
+    仓库自带的汇编 lessons/global_feedback_rules.md（frozen_util.resource_path 定位·
+    汇编由 assemble_global_feedback_rules.py 产出）。home 路径优先（有历史 memory 时行为不变）。
     """
     import os as _os
     user_home = Path(_os.path.expanduser("~"))
@@ -6260,7 +6254,7 @@ def _collect_global_feedback_must_read() -> dict | None:
             "path": "core/claude-home/lessons/global_feedback_rules.md (bundle 汇编 fallback)",
             "priority": "P1",
             "focus": f"审查 {len(digest)} 条元教训摘要 + 命中本场景的展开细节（全文见汇编文件）",
-            "reason": f"开发机 memory 不可达（frozen exe 用户机）→ 读随 exe 出货的汇编·含 {len(digest)} 条跨项目元失败模式",
+            "reason": f"本机 ~/.claude/projects/.../memory/ 不可达或为空 → 读仓库自带的汇编·含 {len(digest)} 条跨项目元失败模式",
             "digest": digest,
             "files": [str(gfr)],
         }
@@ -6332,9 +6326,6 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "tier2_due_count": len(due["promises_tier2_due"]),
         "deadlines_due": len(due["deadlines_due"]),
         "active_pledges": len(due["active_pledges"]),
-        # 🔴 2026-06-28 伏笔明暗线隔离：hidden_secrets 现仅为「未揭晓伏笔数量」计数（不含内容），
-        # 与 pending_secret_count 同义（向后兼容旧消费方的键名 + 显式新键名并存）。
-        "hidden_secrets": due.get("pending_secret_count", 0),
         "pending_secret_count": due.get("pending_secret_count", 0),
         "must_reveal_this_ch": len(due["reveal_this_ch"]),
     }
@@ -6558,25 +6549,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
                     print(f"[WARN] {style_sync_warning}", file=sys.stderr)
 
     # v17.5 P3.2: lessons 注入（跨项目教训） · v19.3 升级
-    # 🔴 frozen-aware（对抗审查 must_fix）：lessons 是只读系统资源，应从 bundle_root() 取
-    # （frozen=_MEIPASS·dev=仓库根）——而非 project_root.parent.parent.parent（frozen 下项目
-    # 在用户工作区不在 bundle，旧推算指错 → lessons 静默丢失 → 削弱北极星「风格一致」）。
-    try:
-        from frozen_util import bundle_root as _bundle_root
-        _repo_root = _bundle_root()
-    except Exception:
-        _repo_root = project_root.parent.parent.parent
-    # P1-8 缺漏修（2026-06-12）：frozen 下 MAPE-K 闭环断裂——self_heal_engine 把
-    # runtime_lessons.md 写 user_data_dir()（%APPDATA%）·此处只读 bundle → exe 运行时
-    # 学到的教训永远不被 writer/judge 看到。双根合并：bundle（出厂教训）+ 用户态（运行时学的）。
+    from frozen_util import bundle_root as _bundle_root
+    _repo_root = _bundle_root()
     lessons_roots = [_repo_root / "core" / "claude-home" / "lessons"]
-    try:
-        from frozen_util import user_data_dir as _udd
-        _user_lessons = _udd() / "core" / "claude-home" / "lessons"
-        if _user_lessons != lessons_roots[0]:
-            lessons_roots.append(_user_lessons)
-    except Exception:
-        pass
     lessons_files = []
     _seen_lesson_names = set()
     for _lr in lessons_roots:

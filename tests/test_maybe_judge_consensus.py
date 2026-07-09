@@ -2,12 +2,10 @@
 
 钉死该脚本的纯确定性核心逻辑（绝不打 LLM、绝不联网）：
 - `load_json`：缺文件给 default / 坏 JSON 给 default / 正常解析。
-- `_is_cluster_mode`：CLUSTER_MODE=1 / CLUSTER_ID env 命中即 cluster 模式（无 env 默认 False）。
 - `_emotion_value`：emotion.value 取数 / 非 dict / value 非数值 → 0。
 - `_cluster_trigger_chapters`：核心算法 —— 每 cluster 取「末章 + climax 章」触发；
   climax 靠 turning_point 关键词（强度 100+emo）/ |emotion|≥7 取最强一章；事件簇兜底末章。
 - `_resolve_cluster_chapters`：cluster key（'001'/'cluster_001'）→ 章号列表；range 缺失 → []。
-- `is_key_chapter`：cluster 模式触发章命中 / 卷起始卷末 / ending_type 关键收尾 → 返回 reasons。
 - `trigger_consensus`：.judge_reports 不存在 / report<2 的 [SKIP] 早退分支（返回 0 不崩）。
 - `run_cluster`：range 缺失 → 优雅 [SKIP] 返回 0（plan 主路径绝不能崩）。
 
@@ -15,7 +13,6 @@
 的分支只测「不满足触发条件时的早退」，不实际起子进程（也就不打 LLM）。
 """
 import json
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -73,38 +70,6 @@ def test_load_json_valid_parses():
     got = mod.load_json(p, None)
     if got != {"k": [1, 2, 3]}:
         raise AssertionError(f"合法 JSON 解析错，得 {got!r}")
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# _is_cluster_mode（env 控制）
-# ──────────────────────────────────────────────────────────────────────────
-def test_is_cluster_mode_env_flags():
-    proj = _mk_project()
-    saved = {k: os.environ.get(k) for k in ("CLUSTER_MODE", "CLUSTER_ID")}
-    try:
-        # 清空两个 env → 默认 False（reader 未必判 cluster）
-        os.environ.pop("CLUSTER_MODE", None)
-        os.environ.pop("CLUSTER_ID", None)
-        base = mod._is_cluster_mode(proj)
-        if base is not False:
-            raise AssertionError(f"无 env 时 _is_cluster_mode 应 False，得 {base!r}")
-
-        # CLUSTER_MODE=1 → True
-        os.environ["CLUSTER_MODE"] = "1"
-        if mod._is_cluster_mode(proj) is not True:
-            raise AssertionError("CLUSTER_MODE=1 应判 cluster 模式")
-        os.environ.pop("CLUSTER_MODE", None)
-
-        # CLUSTER_ID 非空 → True
-        os.environ["CLUSTER_ID"] = "cluster_001"
-        if mod._is_cluster_mode(proj) is not True:
-            raise AssertionError("CLUSTER_ID 非空应判 cluster 模式")
-    finally:
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -215,51 +180,6 @@ def test_resolve_cluster_chapters_missing_range_returns_empty():
     # 不存在的 cluster
     if mod._resolve_cluster_chapters(proj, "999") != []:
         raise AssertionError("不存在 cluster 应返回 []")
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# is_key_chapter
-# ──────────────────────────────────────────────────────────────────────────
-def test_is_key_chapter_volume_and_ending_type():
-    """非 cluster 模式：卷起始/卷末 + ending_type 关键收尾命中。"""
-    proj = _mk_project()
-    saved = {k: os.environ.get(k) for k in ("CLUSTER_MODE", "CLUSTER_ID")}
-    try:
-        os.environ.pop("CLUSTER_MODE", None)
-        os.environ.pop("CLUSTER_ID", None)
-        _write_progress(proj, {
-            "volumes": [{"vol": 1, "chapter_range": [1, 20]}],
-        })
-        # 写 ch20 的 changes，ending_type 命中 KEY_ENDING_TYPES（悬念断章）
-        ch_dir = proj / "章节" / "第020章"
-        ch_dir.mkdir(parents=True, exist_ok=True)
-        (ch_dir / "第020章_changes.json").write_text(
-            json.dumps({"self_eval": {"applied_style": {"ending_type": "悬念断章"}}},
-                       ensure_ascii=False), encoding="utf-8")
-
-        is_key, reasons = mod.is_key_chapter(proj, 20)
-        if not is_key:
-            raise AssertionError(f"ch20 应判关键章，reasons={reasons!r}")
-        if not any("卷末" in r for r in reasons):
-            raise AssertionError(f"应含'卷末'原因：{reasons!r}")
-        if not any("ending_type=悬念断章" in r for r in reasons):
-            raise AssertionError(f"应含 ending_type 原因：{reasons!r}")
-
-        # 卷起始 ch1
-        is_key1, reasons1 = mod.is_key_chapter(proj, 1)
-        if not is_key1 or not any("卷起始" in r for r in reasons1):
-            raise AssertionError(f"ch1 应判卷起始，reasons={reasons1!r}")
-
-        # 普通章 ch7：无任何触发 → 非关键
-        is_key7, reasons7 = mod.is_key_chapter(proj, 7)
-        if is_key7:
-            raise AssertionError(f"ch7 不该判关键，reasons={reasons7!r}")
-    finally:
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
 
 
 # ──────────────────────────────────────────────────────────────────────────

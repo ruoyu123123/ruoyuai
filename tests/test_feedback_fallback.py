@@ -1,9 +1,9 @@
-"""feedback 全局规则 frozen 断裂修复回归测试（2026-06-13）。
+"""feedback 全局规则 home-miss 兜底回归测试（2026-06-13）。
 
 钉死：gen_writer._collect_feedback_rules / build_manifest._collect_global_feedback_must_read
-读开发机 ~/.claude/projects/D--Desktop-ruoyuai/memory/feedback_*.md —— frozen exe 用户机
-该路径不存在 → writer 防御层此前整层静默为空。修复 = home miss/为空时 fallback 读随 exe
-出货的汇编 core/claude-home/lessons/global_feedback_rules.md（frozen_util 定位）。
+读本机 ~/.claude/projects/D--Desktop-ruoyuai/memory/feedback_*.md —— 全新机器/该路径不存在
+时 writer 防御层此前整层静默为空。修复 = home miss/为空时 fallback 读仓库自带的汇编
+core/claude-home/lessons/global_feedback_rules.md（frozen_util 定位）。
 
 守护点：
   · home 路径 miss → fallback 装载汇编文件内容（防御层不再为空）
@@ -62,18 +62,19 @@ def _mk_home_memory(home: Path, fname: str, body: str, desc: str = "测试规则
 # ---------- 汇编文件完整性 ----------
 
 def test_bundle_file_exists_with_rule_markers():
-    """汇编文件必须存在·≥12 条规则节（降噪后 13 条）·header 注明随 exe 出货·无 frontmatter 残留。"""
+    """汇编文件必须存在·≥12 条规则节（降噪后 13 条）·header 注明兜底用途·无 frontmatter 残留。"""
     assert _BUNDLE_FILE.exists(), f"汇编文件缺失: {_BUNDLE_FILE}"
     text = _BUNDLE_FILE.read_text(encoding="utf-8")
     # 降噪后（2026-06-18）每条规则 = "## feedback-<slug>" 节头（去掉了机器锚噪音）
     import re as _re
     n_sections = len(_re.findall(r"(?m)^##\s+feedback[-_]", text))
     assert n_sections >= 12, f"规则节仅 {n_sections} 条（应 ≥12·降噪后源 13 条）"
-    assert "全局 feedback 规则汇编" in text and "随 exe 出货" in text, "header 缺「随 exe 出货」说明"
+    assert "全局 feedback 规则汇编" in text and "本机" in text and "不存在或为空" in text, \
+        "header 缺兜底用途说明"
     assert "originSessionId" not in text, "frontmatter 套话框架未剥干净"
     # 抽查一条已知规则实质内容（no-token-saving·用户定稿原文）
     assert "feedback-no-token-saving" in text
-    assert "全量传 LLM" in text
+    assert "全量传递" in text
 
 
 # ---------- gen_writer fallback ----------
@@ -91,7 +92,7 @@ def test_gen_writer_fallback_loads_bundle_when_home_miss():
     assert "全局 feedback 规则汇编" in rules, "fallback 没装载汇编文件 header"
     # 写作工艺节保留
     assert "feedback-no-screenplay-stage-directions-in-novels" in rules, "craft 节被误删"
-    assert "章末 = 钩子不是收束" in rules, "craft 节实质内容丢失"
+    assert "章末是钩子不是收束" in rules, "craft 节实质内容丢失"
     # 流程节过滤掉（writer prompt 不该再被流程 lesson 撑大）
     assert "全量传 LLM" not in rules, "流程节 no-token-saving 未被过滤（G4 瘦身失效）"
     assert "feedback-verify-stderr-not-exitcode" not in rules, "测试类节未被过滤"

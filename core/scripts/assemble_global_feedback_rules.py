@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """机械汇编开发机 memory/feedback_*.md → core/claude-home/lessons/global_feedback_rules.md。
 
-背景（2026-06-13 frozen 断裂修复）：gen_writer._collect_feedback_rules 与 build_manifest
-的 v19.3 全局 MEMORY feedback 注入都读开发机
+背景（2026-06-13）：gen_writer._collect_feedback_rules 与 build_manifest
+的 v19.3 全局 MEMORY feedback 注入都读本机
 ~/.claude/projects/D--Desktop-ruoyuai/memory/feedback_*.md ——
-frozen exe 用户机上该路径不存在 → writer 防御层整层静默为空。
-本脚本把全部 feedback 规则机械汇编成单文件随仓库出货（lessons/*.md 整目录），
+全新机器/尚无历史 memory 时该路径不存在 → writer 防御层整层静默为空。
+本脚本把全部 feedback 规则机械汇编成单文件随仓库带走（lessons/*.md 整目录），
 gen_writer/build_manifest 在 home 路径 miss/为空时 fallback 读它。
 
 🔴 纪律：只做格式搬运 —— 剥 frontmatter 框架（name/metadata/originSessionId 行），
@@ -75,10 +75,10 @@ def assemble(memory_dir: Path, output: Path) -> int:
         sections.append("\n".join(chunk))
 
     header = (
-        "# 🔴 全局 feedback 规则汇编（随 exe 出货）\n\n"
+        "# 🔴 全局 feedback 规则汇编（仓库自带兜底）\n\n"
         f"> 机械汇编自开发机 memory（~/.claude/projects/D--Desktop-ruoyuai/memory/"
         f"feedback_*.md · 共 {len(files)} 条）。\n"
-        "> 随 exe 出货：frozen 环境无开发机 memory 路径时，"
+        "> 本机 ~/.claude/projects/.../memory/ 不存在或为空时，"
         "gen_writer/build_manifest fallback 读本文件。\n"
         "> 更新方式 = 重跑汇编：`python core/scripts/assemble_global_feedback_rules.py`"
         "（🔴 不要手改本文件——改源 memory 后重新汇编）。\n"

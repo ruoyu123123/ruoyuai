@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 import re
-import sys
 
 try:
     import secrets_store  # keyring 薄抽象 [BYOK 用户入口 removed commit 2a4d7ce·keyring 路径仍保留作向下兼容]
@@ -102,48 +101,19 @@ class GenModelLoader:
     """
 
     def __init__(self, env_path: str | Path | None = None):
-        # 🔴 frozen-aware 定位（对抗审查 FATAL）：PyInstaller 扁平收模块使
-        # __file__.parent.parent 在 frozen 下指错 → 用 frozen_util.bundle_root()（frozen=
-        # _MEIPASS·dev=仓库根）当基准。secrets_store 缺失同款软兜底，frozen_util 一定在。
-        try:
-            from frozen_util import bundle_root as _bundle_root
-            builtin_cfg = _bundle_root() / "core" / "config" / "gen_profiles.default.env"
-        except Exception:
-            builtin_cfg = (Path(__file__).resolve().parent.parent
-                           / "config" / "gen_profiles.default.env")
         if env_path is None:
-            # 优先 cwd/.env（用户可在 exe 同级放 .env 覆盖），其次 dev 仓库根 .env，
-            # 最后内置非密 config（分发模式）。frozen 下跳过 repo_env——它是 dev 概念且
-            # __file__ 在 frozen 被扁平收录后指错（对抗审查 FATAL 同源）。
+            # 优先 cwd/.env，其次仓库根 .env。
             cwd_env = Path(".env")
-            try:
-                from frozen_util import is_frozen as _is_frozen
-                _frozen = _is_frozen()
-            except Exception:
-                _frozen = bool(getattr(sys, "frozen", False))
             repo_env = Path(__file__).resolve().parent.parent.parent / ".env"
             if cwd_env.exists():
-                env_path = cwd_env                      # ① dev cwd / exe 同级（逐字节不变）
-            elif (not _frozen) and repo_env.exists():
-                env_path = repo_env                     # ② dev 仓库根（frozen 跳过）
+                env_path = cwd_env
             else:
-                env_path = builtin_cfg                  # ③ 内置非密 config（分发模式）
+                env_path = repo_env
         self.env_path = Path(env_path)
-        # _dist_mode 按「最终解析出的 env_path == 内置 config」判定（must_fix#2）——
-        # 显式传 builtin_cfg 路径也正确进入分发态，测试与生产口径统一。
-        try:
-            self._dist_mode = self.env_path.resolve() == builtin_cfg.resolve()
-        except OSError:
-            self._dist_mode = False
         # 显式加载 config 到 os.environ（GEN_MODEL_ACTIVE/FALLBACK 经此进 environ）
         try:
             from dotenv import load_dotenv
             load_dotenv(self.env_path, override=True)
-            # 分发模式：叠加用户态 active 覆盖（仅 GEN_MODEL_ACTIVE/FALLBACK_CHAIN 两键）
-            if self._dist_mode:
-                _ovr = _user_override_path()
-                if _ovr.exists():
-                    load_dotenv(_ovr, override=True)    # 用户选的 active 赢
         except ImportError:
             pass  # 没有 dotenv 也行（loader 直接读文件解析）
         self._profiles_cache: dict[str, Profile] | None = None
@@ -329,16 +299,6 @@ def reasoning_extra_body(profile) -> dict:
     if getattr(profile, "reasoning_effort", None):
         e["reasoning_effort"] = profile.reasoning_effort
     return e
-
-
-def _user_override_path() -> Path:
-    """分发版用户态可写 active 覆盖文件（%APPDATA%/ruoyuai/user_overrides.env）。
-
-    切 active 模型时写这里（仅 GEN_MODEL_ACTIVE/FALLBACK_CHAIN 两键），绝不碰只读的
-    内置 config（_internal/core/config/）。dev 模式不用此文件（改 .env）。
-    """
-    base = os.environ.get("APPDATA") or str(Path.home() / ".ruoyuai")
-    return Path(base) / "ruoyuai" / "user_overrides.env"
 
 
 _default_loader: GenModelLoader | None = None

@@ -138,7 +138,7 @@
   "_field_doc": {
     "heart_events": "档位事件清单 — relationship_evaluator 检查 trigger_at 是否满足 → 满足且 consumed=false 强制下章触发",
     "schedule": "NPC 日常时间表 — 主角主动找时按这个决定地点和状态",
-    "tier_unlocks": "档位语义说明 — voice-keeper 据此判断本档可不可解锁的对话深度",
+    "tier_unlocks": "档位语义说明 — novel-voice-checker 据此判断本档可不可解锁的对话深度",
     "consumed": "状态机标记 — 初始 false；writer 实际揭密后在 _changes.json factual.heart_events_revealed 报告对应 event_id → relationship_evaluator 写回 consumed=true（触发一次即消费，避免反复重揭）",
     "consumed_at_ch": "写回字段 — consumed=true 时记录实际揭密的章号（cross_cluster_data_consumption_aggregate 据此检查揭密后角色保持感）"
   },

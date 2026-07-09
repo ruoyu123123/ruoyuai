@@ -142,7 +142,7 @@ cluster_001 是读者留存生死线。它仍由 `/cluster-write` 生成整块�
 │   1. build_manifest                            │
 │   2. novel-writer ECAS（产 cluster 整块草稿）  │
 │   3. 双轨质检（audit + reflector 全 cluster）  │
-│   4. voice-keeper（全 cluster）                │
+│   4. novel-voice-checker（全 cluster）         │
 │   5. foreshadower + reflector + summarizer     │
 │   6. ★最后才 splitter + titles + 平铺 changes │
 │   7. plan-end                                  │

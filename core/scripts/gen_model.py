@@ -76,22 +76,10 @@ def cmd_show(args, loader: GenModelLoader) -> int:
 
 
 def set_active(loader: GenModelLoader, name: str) -> None:
-    """切 active profile：dev → 原子改写 .env 的 GEN_MODEL_ACTIVE；
-    dist（_dist_mode）→ 写 %APPDATA%/ruoyuai/user_overrides.env（绝不碰只读内置 config）。
+    """切 active profile：原子改写 .env 的 GEN_MODEL_ACTIVE。
 
-    GUI runner 复用本函数。抛 ValueError/RuntimeError 由调用方处理。
+    抛 ValueError/RuntimeError 由调用方处理。
     """
-    from gen_model_loader import _user_override_path
-    if getattr(loader, "_dist_mode", False):
-        ovr = _user_override_path()
-        ovr.parent.mkdir(parents=True, exist_ok=True)
-        chain = ",".join(loader.get_fallback_chain())
-        lines = [f"GEN_MODEL_ACTIVE={name}"]
-        if chain:
-            lines.append(f"GEN_MODEL_FALLBACK_CHAIN={chain}")
-        ovr.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return
-    # dev：原子改写 .env 文本
     env_path = loader.env_path
     text = env_path.read_text(encoding="utf-8")
     new_text, n = re.subn(r"^GEN_MODEL_ACTIVE\s*=.*$",

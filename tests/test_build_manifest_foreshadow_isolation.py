@@ -125,7 +125,6 @@ def test_manifest_excludes_pending_secret_and_plant_payoff():
 
         fsum = m["foreshadowing_summary"]
         assert fsum["pending_secret_count"] == 1, f"pending_secret_count 应为 1，得 {fsum}"
-        assert fsum["hidden_secrets"] == 1, "hidden_secrets 计数应与 pending 同步（兼容键名）"
         assert fsum["must_reveal_this_ch"] == 1, "cluster_001 到期揭晓应计入 must_reveal_this_ch"
 
 

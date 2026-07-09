@@ -223,7 +223,7 @@ $ARGUMENTS
 3. **更新 voice_pack**（⚠️ P2-7 反 over-generalize 守则）：
    - `style_samples`：替换为最新最具代表性的 3-5 条（标注来源章节）。
      **每条必须有 ≥2 个章节来源**才可入 samples；单次出现的「特色用法」当弱信号，
-     不入 samples（避免 voice-keeper 后续按错误 pattern 改写其他对话）
+     不入 samples（避免 novel-voice-checker 后续按错误 pattern 改写其他对话）
    - `anti_samples`：追加新发现的反面例子，同样要求 ≥2 章节出现才硬列
    - `catchphrases`：**频次门槛 ≥3 次**才升级为 catchphrase；1-2 次只放在
      `tone_particles` 的「低频」桶。判断口诀：「频次 ≥3 才算 pattern」

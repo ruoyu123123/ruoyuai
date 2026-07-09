@@ -101,16 +101,16 @@ def test_fate_engine_update_guards_none_evidence():
         assert me["status"] == "completed" and me["completion_evidence"] == ""
 
 
-# ── #5 maybe_judge_consensus.is_key_chapter 守卫 emotion 标量（非 dict）──
+# ── #5 maybe_judge_consensus._cluster_trigger_chapters 守卫 emotion 标量（非 dict）──
 def test_maybe_judge_scalar_emotion_no_crash():
     with tempfile.TemporaryDirectory() as d:
         proj = Path(d)
         _db(proj).joinpath("进度.json").write_text(json.dumps({
-            "cluster_blueprint": {"cluster_001": {"scene_storyboard": [
+            "cluster_blueprint": {"cluster_001": {"chapter_range": [1, 5], "scene_storyboard": [
                 {"ch": 3, "emotion": 7}]}}}, ensure_ascii=False), encoding="utf-8")  # emotion 裸 int
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            r = maybe_judge_consensus.is_key_chapter(proj, 3)  # 原 .get("value") 在 int 上崩
-        # 不崩即可（强情绪 7 → 应判 key·但核心是不抛 AttributeError）
+            r = maybe_judge_consensus._cluster_trigger_chapters(proj)  # 原 .get("value") 在 int 上崩
+        # 不崩即可（emotion 裸标量被 _emotion_value 归零，不当 climax 信号，但绝不抛 AttributeError）
         assert r is not None
 
 

@@ -24,7 +24,7 @@ v18 起：正文 → 第NNN章.txt（纯正文），CHANGES → 第NNN章_change
         {"code": "STYLE_拟声格式", "reason": "本章纯心理独白章，拟声不适配"}
       ],
       "uncertainty_flags": [  # P2-13：writer 主动标的「自评不确定」项
-        {"aspect": "POV_consistency", "detail": "...", "suggest_judge": "voice-keeper"}
+        {"aspect": "POV_consistency", "detail": "...", "suggest_judge": "novel-voice-checker"}
       ]
     }
   }
@@ -153,6 +153,9 @@ def normalize_changes(data: dict) -> dict:
                           "knowledge_gained", "secret_status_changes", "travel_log_added")
             recovered = {k: data[k] for k in _fact_keys if data.get(k)}
             if recovered:
+                # facts_locked 归一到规范名 locked_facts（唯一权威名·消费方只认这个）
+                if "facts_locked" in recovered:
+                    recovered.setdefault("locked_facts", recovered.pop("facts_locked"))
                 data["factual"] = recovered
         return data
     # 弹出元字段

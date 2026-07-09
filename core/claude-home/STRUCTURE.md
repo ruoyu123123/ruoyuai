@@ -22,8 +22,7 @@
 │   │   ├── templates/                          # 通用模板
 │   │   ├── lessons/                            # 蒸馏经验库
 │   │   └── STRUCTURE.md                        # 【本文档】
-│   ├── scripts/                                # Python 工具脚本
-│   └── config/                                 # 内置非密 config（gen_profiles.default.env）
+│   └── scripts/                                # Python 工具脚本
 ├── workspace/                                  # 【用户产出区】
 │   ├── styles/{书名}/                          # 全局风格库（见第二节）
 │   └── novels/{书名}/                          # 小说项目（见第三节）
@@ -446,7 +445,7 @@ cluster 级客观状态变更的权威源是 Claude 梳理 + 确定性回库：
 cluster 草稿阶段统一以 `audit_hub.py --mode cluster --cluster-id <key>` 为审计入口；`validate_style`、`narrative_scanner`、`plot_structure_scanner`、`semantic_slop_scanner`、`hook_strength_scanner`、`golden_three_scanner` 等 scanner 作为 cluster 审计的组成部分。
 
 - 每条 issue 带 `gate_level` 字段，取值 `"hard_gate"` 或 `"advisory"`。
-- **advisory 项**：风格 / 文笔 / 叙事工艺 / 情节结构 / 读者体验层的检测项。AI（writer / validator / voice-keeper / foreshadower）有充分理由可以豁免；豁免必带具体理由（< 100 字、具体到 cluster 场景），理由不充分则豁免无效。
+- **advisory 项**：风格 / 文笔 / 叙事工艺 / 情节结构 / 读者体验层的检测项。AI（writer / validator / novel-voice-checker / foreshadower）有充分理由可以豁免；豁免必带具体理由（< 100 字、具体到 cluster 场景），理由不充分则豁免无效。
 - **hard_gate 项**：E 层一致性 + 文件契约破损。这是**客观错误**，不是风格选择，**AI 不可豁免**——即便在 `--waivers` 里传了豁免理由，audit_hub 也强制忽略豁免，仍按问题处理。
 - 豁免理由的载体：writer 写在 `cluster_<key>_changes.json` 的 `self_eval.waivers: [{code, reason}]`；judge agent 写在 JudgeReport 的 `waivers` 段。
 - `audit_hub.py` 通过 `--waivers <json路径>` 入参收集豁免；对 advisory 项命中豁免 → 转 `waived`（记 `waive_reason`），不计入 `needs_agent`；剩余 issue 全是被合理豁免的 advisory 且无 hard_gate 残留 → verdict = `waived`，并把理由写入审计报告供后续校准。

@@ -99,14 +99,7 @@ def _mstyle_cosine_subscore(root, gen_text):
     sp = str(Path(__file__).resolve().parent)
     if sp not in sys.path:
         sys.path.insert(0, sp)
-    # ① frozen 写作态不跑（无 torch 依赖·标 N/A 而非崩写作流水线）
-    try:
-        from frozen_util import is_frozen
-        if is_frozen():
-            return {"status": "skip", "reason": "frozen 写作态无 mstyle 依赖·余弦子分 N/A"}
-    except Exception:
-        pass
-    # ② 硬断言后端（C1）·失败→标 invalid 不参与判定（护栏·绝不 hash 冒充）
+    # ① 硬断言后端（C1）·失败→标 invalid 不参与判定（护栏·绝不 hash 冒充）
     try:
         import embedding_store as es
         es.assert_mstyle_backend()
@@ -144,10 +137,9 @@ def _mstyle_cosine_subscore(root, gen_text):
 #   仿写在『价值取舍/情绪处理/信息释放』上的决策走向，但**判决权不交弱模型 verdict**——交确定性
 #   mstyle 余弦：把 judge 反推文本 与 consolidate 聚合的 author_decision_principles（B1-B3 去重观察 ·
 #   consolidate L617 写入）算 StyleDistance 余弦。
-# 🔴 三条护栏（绝不 hash 冒充语义 · 北极星⑤⑥）：
-#   ① frozen 写作态无 torch → skip（不崩写作流水线）。
-#   ② 硬断言 embedding_store.assert_mstyle_backend()——hash 后端标 invalid 不出余弦（绝不假语义信号）。
-#   ③ author_decision_principles 序列化用 sort_keys 固定键序（同输入同输出 · 余弦可复现 · 复用
+# 🔴 两条护栏（绝不 hash 冒充语义 · 北极星⑤⑥）：
+#   ① 硬断言 embedding_store.assert_mstyle_backend()——hash 后端标 invalid 不出余弦（绝不假语义信号）。
+#   ② author_decision_principles 序列化用 sort_keys 固定键序（同输入同输出 · 余弦可复现 · 复用
 #      consolidate._merge_observations._key 的 json.dumps(sort_keys=True) 范式）。
 # 全 advisory/experiment · 永不进 audit_hub.HARD_GATE_CODES · 永不阻断（exit 0）。
 
@@ -190,22 +182,13 @@ def intent_recovery_cosine(judge_reconstructed_text: str, author_b_principles) -
     决定·此函数只产余弦不下判决（advisory）。
 
     🔴 护栏：
-      · frozen 写作态（无 torch）→ valid=False + status=skip（不崩流水线）。
       · 后端非 mstyle（含默认 hash）→ valid=False + reason 含「≠mstyle」（绝不返回假余弦 · 防 hash 冒充）。
       · 空文本 / 空 principles → valid=False（无可比内容）。
     """
     sp = str(Path(__file__).resolve().parent)
     if sp not in sys.path:
         sys.path.insert(0, sp)
-    # ① frozen 写作态不跑（无 torch 依赖·标 skip 而非崩）
-    try:
-        from frozen_util import is_frozen
-        if is_frozen():
-            return {"cosine": None, "valid": False, "status": "skip",
-                    "reason": "frozen 写作态无 mstyle 依赖·intent_recovery 余弦 N/A"}
-    except Exception:
-        pass
-    # ② 硬断言后端=mstyle（绝不 hash 冒充·R3 P0-IR-2 护栏）
+    # ① 硬断言后端=mstyle（绝不 hash 冒充·R3 P0-IR-2 护栏）
     try:
         import embedding_store as es
         es.assert_mstyle_backend()
@@ -247,12 +230,6 @@ def _intent_recovery_band(author_texts: list, k: float = 2.0) -> dict:
     texts = [t for t in (author_texts or []) if isinstance(t, str) and t.strip()]
     if len(texts) < 2:
         return {"valid": False, "reason": f"multi-ref 变异带需 ≥2 段作者原文，当前 {len(texts)} 段"}
-    try:
-        from frozen_util import is_frozen
-        if is_frozen():
-            return {"valid": False, "reason": "frozen 写作态无 mstyle·变异带 N/A"}
-    except Exception:
-        pass
     try:
         import embedding_store as es
         es.assert_mstyle_backend()
@@ -321,7 +298,7 @@ def intent_recovery_probe(judge_text: str, author_principles, author_ref_texts: 
         "method": cos.get("method"),
         "_doc": ("intent_recovery=av_judge 第5维(作者思维)反推 + 确定性 mstyle 余弦判决 · "
                  "真作者落带内防误报/偏离稿落带外证可分辨/跨栈双落带内防单模型自偏 · "
-                 "全 advisory experiment · frozen/hash 后端自动 skip 不假语义"),
+                 "全 advisory experiment · hash 后端自动 skip 不假语义"),
     }
 
 

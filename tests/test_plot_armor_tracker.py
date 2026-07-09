@@ -163,16 +163,6 @@ def test_cost_events_from_factual():
     assert mod._cost_events_from_changes(ch) == 3
 
 
-def test_cost_events_from_facts_locked_persistent():
-    ch = {"facts_locked": [
-        {"description": "他失去了右臂"},
-        {"description": "茶杯打碎了"},
-        {"description": "信任破裂"},
-    ]}
-    # 「失去」「信任破裂」 命中持久化关键词 → 2
-    assert mod._cost_events_from_changes(ch) == 2
-
-
 def test_cost_events_explicit_field():
     ch = {"cost_events": ["x", "y", "z"]}
     assert mod._cost_events_from_changes(ch) == 3

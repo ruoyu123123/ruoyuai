@@ -329,7 +329,7 @@
     "consumed_by": [
       "build_manifest._collect_character_card() 注入 manifest（仅本章相关角色）",
       "writer step 0：消费 voice_pack 5 层 + knowledge.will_learn（防 FUTURE_KNOWLEDGE_LEAK）+ offscreen",
-      "voice-keeper：catchphrase scene+frequency 分布检测（防单一化锁第一个）",
+      "novel-voice-checker：catchphrase scene+frequency 分布检测（防单一化锁第一个）",
       "save-state：更新 knowledge.knows_now / offscreen consequence"
     ]
   }

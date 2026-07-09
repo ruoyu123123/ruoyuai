@@ -47,10 +47,6 @@ THREAT_LETHAL = re.compile(
     r"(濒死|垂死|断气|没了呼吸|心脉断绝|当场毙命|身亡|阵亡|殒命|魂飞魄散|"
     r"必死无疑|九死一生|险些丧命|与死神擦肩)")
 
-# Cost-persistence 关键词（描述代价持续存在的标志·读 changes.json 用）
-COST_PERSISTENT = re.compile(
-    r"(失去|永久|残疾|不可逆|留下后遗症|失踪|身亡|阵亡|殒命|"
-    r"信任破裂|关系破裂|永远.{0,3}回不去|被.{0,3}夺走|遗失|散落)")
 
 # 轻喜剧/日常题材门控（这些类型本就不该有真伤亡感·skip）
 COMEDY_GENRES = {"comedy_light", "slice_of_life", "fluff", "daily_comedy",
@@ -142,13 +138,6 @@ def _cost_events_from_changes(changes: dict) -> int:
                 cnt += len(v)
             elif isinstance(v, dict):
                 cnt += len(v)
-    # 退化用文本扫 facts_locked 字符串描述
-    facts = changes.get("facts_locked")
-    if isinstance(facts, list):
-        for f in facts:
-            desc = f.get("description") if isinstance(f, dict) else str(f or "")
-            if isinstance(desc, str) and COST_PERSISTENT.search(desc):
-                cnt += 1
     return cnt
 
 

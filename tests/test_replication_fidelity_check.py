@@ -3,7 +3,7 @@
 
 已有间接覆盖（不重复）：
   · test_replication_fidelity.py        —— _metrics 基本 / _author_baseline 读取+缺失 / comedy band
-  · test_mstyle_cosine_subscore.py      —— _mstyle_cosine_subscore hash-invalid / frozen-skip / never-raises
+  · test_mstyle_cosine_subscore.py      —— _mstyle_cosine_subscore hash-invalid / never-raises
   · test_av_judge_swap.py               —— _flatten_principles / intent_recovery_* 全套护栏
   · test_genre_baseline.py              —— _BANDS 键集 superset
 

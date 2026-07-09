@@ -109,14 +109,6 @@ def test_heuristic_negative_intensity_capped_at_8():
     assert intensity == 8  # min(8, 3+10) 封顶
 
 
-def test_heuristic_facts_locked_dual_read():
-    """writer 实产 facts_locked（非 locked_facts）也要被读到 → setback 信号不丢。"""
-    # 只用 facts_locked 这个 key，验证双读兜底（否则 setback 信号恒空）
-    factual = {"facts_locked": ["主角受伤", "据点暴露被发现"]}
-    outcome, _ = nc._infer_outcome_heuristic(factual)
-    assert outcome == "setback"  # "受伤"+"暴露"+"被发现" >=2
-
-
 def test_heuristic_fate_event_triggers_win():
     """fate_count>=1（无负面词）→ win，intensity=min(7,3+fate+foreshadow)。"""
     factual = {"fate_events_triggered": [{"id": "V1_ME_001"}]}

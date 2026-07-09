@@ -89,7 +89,9 @@ def test_normalize_hybrid_empty_factual_recovers_top_level_facts():
         "无关字段": "不应被回填",
     }
     out = cio.normalize_changes(src)
-    assert out["factual"]["facts_locked"] == ["A"]
+    # facts_locked 归一到规范名 locked_facts（唯一权威名·消费方只认这个）
+    assert out["factual"]["locked_facts"] == ["A"]
+    assert "facts_locked" not in out["factual"]
     assert out["factual"]["foreshadowing_planted"] == ["伏笔"]
     assert out["factual"]["secrets_touched"] == ["秘密"]
     # 只回填已知事实键，非白名单顶层键不进 factual

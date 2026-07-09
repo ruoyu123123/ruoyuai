@@ -1,10 +1,9 @@
-"""maybe_judge_consensus.py — 关键章节判定 + judge_consensus 条件触发（v19.3 新增）"""
+"""maybe_judge_consensus.py — cluster 触发章判定 + judge_consensus 条件触发"""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,12 +16,6 @@ except Exception:  # pragma: no cover
     def child_python():
         return sys.executable
 
-# 2026-05-29 cluster 化：cluster 模式下关键章触发改为「每个 cluster 的末章 + climax 章」，
-# 取代失准的硬编码章号集合。reader 缺失不影响 chapter 模式（向后兼容）。
-try:
-    import cluster_summary_reader as _csr  # noqa: E402
-except Exception:  # pragma: no cover - 防御性
-    _csr = None
 try:
     import cluster_lookup  # noqa: E402  2026-05-29 复审修复：SC-1 blueprint list 归一守卫
 except Exception:  # pragma: no cover - 防御性
@@ -39,26 +32,6 @@ def load_json(p: Path, default=None):
 
 
 KEY_TURNING_POINT_KW = ["高潮", "反转", "触发", "觉醒", "崩溃", "牺牲", "宣战", "复仇", "终局"]
-KEY_ENDING_TYPES = {"信息炸弹", "POV切换收尾", "悬念断章"}
-# 2026-05-29 复审修复 [L14]：以下硬编码关键章号在 v27 cluster+freestyle fluid 章数下
-# 已彻底失准（总章数由 ME 触发节奏 + 涟漪选择 + splitter 按字数切自然涌现，无法预先确定）。
-# 生产路径全部走 `--cluster`（run_cluster → _cluster_trigger_chapters，按 cluster 末章/climax
-# 触发），永不触及此集合。仅在「无 CLUSTER_MODE 的 chapter 兼容位置参」分支被 is_key_chapter
-# 读取，属向后兼容死路。保留空壳兼容引用而不再维护具体章号——避免对老项目误判关键章。
-STC_KEY_CHAPTERS: set[int] = set()  # 生产已弃用（cluster 边界触发取代）；置空避免失准误判
-
-
-def _is_cluster_mode(project_root: Path) -> bool:
-    """2026-05-29 cluster 化：CLUSTER_MODE=1 / CLUSTER_ID env / reader 判定任一命中即 cluster 模式。"""
-    if os.environ.get("CLUSTER_MODE") == "1" or os.environ.get("CLUSTER_ID"):
-        return True
-    if _csr is not None:
-        try:
-            if _csr.is_cluster_mode():
-                return True
-        except Exception:  # pragma: no cover - 防御性
-            pass
-    return False
 
 
 def _emotion_value(scene: dict) -> int:
@@ -129,67 +102,6 @@ def _cluster_trigger_chapters(project_root: Path) -> dict[int, list[str]]:
                 triggers.setdefault(end, []).append(f"{cid} 末章")
 
     return triggers
-
-
-def is_key_chapter(project_root: Path, ch: int) -> tuple[bool, list[str]]:
-    reasons = []
-    progress = load_json(project_root / "_数据库" / "进度.json", {})
-
-    # 2026-05-29 cluster 化：cluster 模式下用 cluster 末章/climax 取代硬编码 STC 章号；
-    # 非 cluster 模式保留原硬编码集合（零回归）。
-    if _is_cluster_mode(project_root):
-        cluster_triggers = _cluster_trigger_chapters(project_root)
-        if ch in cluster_triggers:
-            reasons.extend(cluster_triggers[ch])
-    else:
-        if ch in STC_KEY_CHAPTERS:
-            reasons.append(f"STC 节点 ch{ch}")
-
-    for v in progress.get("volumes", []):
-        ch_range = v.get("chapter_range", [])
-        if len(ch_range) == 2:
-            if ch == ch_range[0]:
-                reasons.append(f"卷起始 vol{v.get('vol')}")
-            elif ch == ch_range[1]:
-                reasons.append(f"卷末 vol{v.get('vol')}")
-
-    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-    # 2026-05-29 复审修复：SC-1 — cluster_blueprint 可能是 list，normalize 归一成 dict。
-    if cluster_lookup is not None:
-        _bp = cluster_lookup.normalize_blueprint(progress)
-    else:
-        _bp = progress.get("cluster_blueprint", {}) or {}
-        if not isinstance(_bp, dict):
-            _bp = {}
-    all_scenes = []
-    for cid, cdata in _bp.items():
-        if not isinstance(cdata, dict):
-            continue
-        all_scenes.extend(cdata.get("scene_storyboard", []) or [])
-    for cp in all_scenes:
-        if not isinstance(cp, dict) or cp.get("ch") != ch:
-            continue
-        tp = cp.get("turning_point", "") or ""
-        for kw in KEY_TURNING_POINT_KW:
-            if kw in tp:
-                reasons.append(f"turning_point 含'{kw}'")
-                break
-        # 🔴 2026-06-17 bug-hunt 修：emotion 可能是裸标量（int/float）非 dict → 原 .get 链
-        # AttributeError 崩。守卫两种形态（dict.value / 裸数值），其余→0。
-        _emo = cp.get("emotion", {})
-        emo = (_emo.get("value", 0) if isinstance(_emo, dict)
-               else _emo if isinstance(_emo, (int, float)) and not isinstance(_emo, bool)
-               else 0)
-        if abs(emo) >= 7:
-            reasons.append(f"强情绪 emotion={emo}")
-        break
-
-    changes = load_json(project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json", {})
-    et = changes.get("self_eval", {}).get("applied_style", {}).get("ending_type", "")
-    if et in KEY_ENDING_TYPES:
-        reasons.append(f"ending_type={et}")
-
-    return (len(reasons) > 0, reasons)
 
 
 def trigger_consensus(project_root: Path, ch: int) -> int:
@@ -274,36 +186,13 @@ def run_cluster(project_root: Path, cluster_key: str) -> int:
 
 
 def main():
-    ap = argparse.ArgumentParser(
-        description="maybe_judge_consensus · cluster 模式为主路径 / chapter 位置参向后兼容"
-    )
+    ap = argparse.ArgumentParser(description="maybe_judge_consensus · cluster 触发章 judge_consensus 派发")
     ap.add_argument("project")
-    # 2026-05-29 cluster 化：chapter 改 optional，新增 --cluster（主路径）。
-    # v26 chapter mode 已废，STC_KEY_CHAPTERS 硬编码无来源，仅为零回归保留位置参兼容。
-    ap.add_argument("chapter", type=int, nargs="?", default=None,
-                    help="单章号（chapter 兼容模式）· 与 --cluster 互斥")
-    ap.add_argument("--cluster", type=str, default=None,
-                    help="cluster key（'001' 或 'cluster_001'）· 展开本 cluster 触发章跑 consensus（主路径）")
+    ap.add_argument("--cluster", type=str, required=True,
+                    help="cluster key（'001' 或 'cluster_001'）· 展开本 cluster 触发章跑 consensus")
     args = ap.parse_args()
     project_root = Path(args.project)
-
-    # cluster 模式优先（plan 主路径）
-    if args.cluster:
-        sys.exit(run_cluster(project_root, args.cluster))
-
-    if args.chapter is None:
-        print("[SKIP] 未指定 chapter 章号 或 --cluster <key>")
-        sys.exit(0)
-
-    # chapter 兼容模式
-    ch = args.chapter
-    is_key, reasons = is_key_chapter(project_root, ch)
-    if not is_key:
-        print(f"[SKIP] ch{ch} 非关键章节")
-        sys.exit(0)
-    print(f"[KEY] ch{ch} 关键章节: {reasons}")
-    trigger_consensus(project_root, ch)
-    sys.exit(0)
+    sys.exit(run_cluster(project_root, args.cluster))
 
 
 if __name__ == "__main__":

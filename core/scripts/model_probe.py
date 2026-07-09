@@ -98,17 +98,12 @@ KNOWN_MODELS = {
 
 
 def get_cache_path() -> Path:
-    """缓存文件路径：.claude/.model_capabilities.json。
-    🔴 frozen 可写数据修复：用 user_data_dir()（dev=仓库根·frozen=%APPDATA%/ruoyuai 可写）——
-    否则 frozen 下 cache_dir.mkdir 写只读 bundle 必失败。与 gen_* 读端一致。"""
-    try:
-        import sys as _s
-        if str(Path(__file__).resolve().parent) not in _s.path:
-            _s.path.insert(0, str(Path(__file__).resolve().parent))
-        from frozen_util import user_data_dir as _udd
-        repo_root = _udd()
-    except Exception:
-        repo_root = Path(__file__).parent.parent.parent
+    """缓存文件路径：.claude/.model_capabilities.json。"""
+    import sys as _s
+    if str(Path(__file__).resolve().parent) not in _s.path:
+        _s.path.insert(0, str(Path(__file__).resolve().parent))
+    from frozen_util import user_data_dir as _udd
+    repo_root = _udd()
     cache_dir = repo_root / '.claude'
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / '.model_capabilities.json'

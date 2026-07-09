@@ -27,20 +27,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
-except Exception:  # pragma: no cover
-    def child_python():
-        return sys.executable
+from frozen_util import child_python, user_data_dir as _udd  # noqa: E402
 
-# 系统根：incidents/circuit 是跨项目**可写**系统数据。🔴 frozen 可写数据修复：用
-# user_data_dir()（dev=仓库根逐字节一致·frozen=%APPDATA%/ruoyuai 可写）——否则 frozen 下
-# adaptive_runner 写只读 bundle 的 incidents.jsonl/circuit_state.json 必失败。
-try:
-    from frozen_util import user_data_dir as _udd
-    REPO_ROOT = _udd()
-except Exception:  # pragma: no cover
-    REPO_ROOT = Path(__file__).resolve().parents[2]
+# 系统根：incidents/circuit 是跨项目**可写**系统数据。
+REPO_ROOT = _udd()
 CIRCUIT_THRESHOLD = 5      # 同一 label 累计失败 N 次 → Open（熔断）
 CIRCUIT_COOLDOWN = 300     # Open 冷却秒数 → Half-Open 放一次试探
 DEFAULT_MAX_RETRIES = 2    # retry severity（transient）的重试次数

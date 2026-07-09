@@ -24,7 +24,7 @@ $ARGUMENTS
 
 **核心原则**：
 - 🔴 writer 产出 `cluster_draft.txt` 后**禁止立即切章**（splitter 推迟到 step 6）
-- 🔴 audit_hub / reading-reflector / voice-keeper / foreshadower 全部走 `--mode cluster` / `MODE=ecas`
+- 🔴 audit_hub / reading-reflector / novel-voice-checker / foreshadower 全部走 `--mode cluster` / `MODE=ecas`
 - 🔴 1 个 cluster = 1 次 cluster-write plan
 - 🔴 title 在 step 6 末尾 splitter 后再生成（chapter 内容已 clean）
 
@@ -265,7 +265,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3
 
 ---
 
-# 第 4 步：cluster 级 voice-keeper
+# 第 4 步：cluster 级 novel-voice-checker
 
 ```
 Agent 启动 novel-voice-checker:
@@ -546,7 +546,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - Writer 失败 → 停止当前 plan，修复后从 plan_tracker 下一步续跑。
 - audit_hub --mode cluster 致命错误（exit 3）→ 停止。
 - reading-reflector 失败 → 停止；阅读轨是 cluster 进入切章前的 required 条件之一。
-- voice-keeper 失败 → 停止；声纹审查是 cluster 质量链的 required 步骤。
+- novel-voice-checker 失败 → 停止；声纹审查是 cluster 质量链的 required 步骤。
 - foreshadower/reflector/summarizer 失败 → 停止；不得切章产出一个缺反馈账本的 cluster。
 - splitter 失败 → 停止（章节产物缺失 = 整 cluster 无法消费）。
 

@@ -29,13 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json  # noqa: E402  原子写 + with_file_lock 读-改-写
 
 # 系统根：runtime/(incidents/kb/circuit) + lessons/runtime_lessons.md 是跨项目**可写**系统数据。
-# 🔴 frozen 可写数据修复：用 user_data_dir()（dev=仓库根逐字节一致·frozen=%APPDATA%/ruoyuai
-# 可写）——否则 frozen 下写只读 bundle 的 _internal 必失败（cluster-save-state step8/9 触达）。
-try:
-    from frozen_util import user_data_dir as _udd
-    REPO_ROOT = _udd()
-except Exception:
-    REPO_ROOT = Path(__file__).resolve().parents[2]
+from frozen_util import user_data_dir as _udd  # noqa: E402
+REPO_ROOT = _udd()
 RECURRING_THRESHOLD = 3   # 与 learning_loop 升级阈值一致
 KNOWN_THRESHOLD = 5
 MAX_RAW_SAMPLES = 3

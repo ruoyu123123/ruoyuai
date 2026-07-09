@@ -451,14 +451,8 @@ def promote(project_root: Path) -> dict:
     """
     exp_path = project_root / "_数据库" / "写作经验.json"
     exp = load_json(exp_path, {})
-    # 🔴 frozen 可写数据修复：universal_skill_pool 是**可写**跨项目学习产物（promote 写入），
-    # 用 user_data_dir()（dev=仓库根逐字节一致·frozen=%APPDATA%/ruoyuai 可写·读写同根）——
-    # 非 bundle_root()（那是只读资源·pool 要写）。对抗验证 sound 收口项。
-    try:
-        from frozen_util import user_data_dir as _udd
-        pool_path = _udd() / "core" / "claude-home" / "universal_skill_pool.json"
-    except Exception:
-        pool_path = Path(__file__).parent.parent / "claude-home" / "universal_skill_pool.json"
+    from frozen_util import user_data_dir as _udd
+    pool_path = _udd() / "core" / "claude-home" / "universal_skill_pool.json"
     pool = load_json(pool_path, {"universal_patterns": [], "_meta": {"created_at": datetime.now().isoformat(timespec="seconds")}})
 
     filter_active = _transfer_scope_filter_active()

@@ -208,20 +208,12 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
     splitter_decisions = load_json(splitter_decisions_path)
 
     # 取 chapter_range —— 统一识别两套 WAL schema（2026-05-29 复审修复 [H1]）
-    #  schema A (chapter_splitter.run_freestyle 真实产出 / LLM splitter agent)：
+    #  schema A (chapter_splitter.run_freestyle 唯一 producer)：
     #    chapters_split=int（章数）+ cluster_start_ch=int（起始章）+ chapter_range=[lo,hi]
     #  schema B (历史/列表形态)：chapters_split=[章号列表] 或 chapter_range="lo-hi"
-    # v26 修复: splitter 实际输出字段名兼容（ch_range / chapter_range / cluster_range）
-    chapter_range = (
-        splitter_decisions.get("chapter_range")
-        or splitter_decisions.get("cluster_range")
-        or splitter_decisions.get("ch_range")
-    )
+    chapter_range = splitter_decisions.get("chapter_range")
     chapters_split = splitter_decisions.get("chapters_split")
-    # 起始章兼容两种字段名：消费侧历史只认 ch_start，producer 实际写 cluster_start_ch
     start_ch_raw = splitter_decisions.get("cluster_start_ch")
-    if start_ch_raw is None:
-        start_ch_raw = splitter_decisions.get("ch_start")
 
     chapters = []
     if isinstance(chapters_split, bool):

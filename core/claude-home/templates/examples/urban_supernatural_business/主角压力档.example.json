@@ -165,7 +165,7 @@
       "build_manifest._collect_protagonist_stress() 注入 manifest",
       "writer step 0t：感知当前 stress + 高压时倾向 coping_mechanisms",
       "save-state.step9 stress_evaluator.py：扫本章正文 → 更新 stress_log + 满阈值抽 mental_break_card",
-      "voice-keeper：检测违背 persona 时同步 stress 计数"
+      "novel-voice-checker：检测违背 persona 时同步 stress 计数"
     ]
   }
 }
