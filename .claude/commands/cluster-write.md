@@ -286,7 +286,7 @@ voice-checker 跨整 cluster 跑：
 **plan-step 4**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --output "<项目路径>/_数据库/.checker_briefs/cluster_<key>_voice.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --output "_数据库/.checker_briefs/cluster_<key>_voice.json"
 ```
 
 ---
@@ -493,7 +493,7 @@ python core/scripts/chapter_end_anchor_scan.py "<项目路径>" \
 ```
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 7 --output "<项目路径>/_数据库/.wal"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 7 --output "_数据库/.wal"
 python core/scripts/plan_tracker.py end "$PLAN_ID"
 ```
 

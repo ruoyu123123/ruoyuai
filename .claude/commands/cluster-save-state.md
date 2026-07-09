@@ -135,7 +135,7 @@ python core/scripts/save_state.py "<项目路径>" --apply-cluster-changes <key>
 **plan-step 3**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3 --output "<项目路径>/_数据库/.wal/<key>_apply_cluster.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3 --output "_数据库/.wal/<key>_apply_cluster.json"
 ```
 
 ---
@@ -154,7 +154,7 @@ python core/scripts/scaffold_subsystems.py verify "<项目路径>" --shallow-dri
 **plan-step 4**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --output "<项目路径>/_数据库/.audit/cluster_<key>_audit.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --output "_数据库/.audit/cluster_<key>_audit.json"
 ```
 
 ---
@@ -305,7 +305,7 @@ JudgeReport: `_数据库/.judge_reports/cluster_<key>_foreshadower.json`
 **plan-step 8**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 8 --output "<项目路径>/_数据库/.judge_reports/cluster_<key>_foreshadower.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 8 --output "_数据库/.judge_reports/cluster_<key>_foreshadower.json"
 ```
 
 ---
@@ -328,7 +328,7 @@ JudgeReport: `_数据库/.wal/cluster_<key>_reflection.json`
 **plan-step 9**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 9 --output "<项目路径>/_数据库/.wal/cluster_<key>_reflection.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 9 --output "_数据库/.wal/cluster_<key>_reflection.json"
 ```
 
 ---
@@ -358,7 +358,7 @@ python core/scripts/save_state.py "<项目路径>" --apply-dramatic-questions <k
 **plan-step 10**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 10 --output "<项目路径>/_数据库/.wal/cluster_<key>_post_reflect.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 10 --output "_数据库/.wal/cluster_<key>_post_reflect.json"
 ```
 
 ---
@@ -394,7 +394,7 @@ python core/scripts/step_completion_monitor.py --scan-latest --command cluster-s
 **plan-step 11**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 11 --output "<项目路径>/_数据库/knowledge_graph.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 11 --output "_数据库/knowledge_graph.json"
 ```
 
 ---
@@ -410,7 +410,7 @@ commit msg: `feat(cluster-NNN): N 章 (chX-chY)`
 **plan-step 12**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 12 --output "<项目路径>/_数据库/.wal/cluster_<key>_git_commit.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 12 --output "_数据库/.wal/cluster_<key>_git_commit.json"
 ```
 
 ---
@@ -452,7 +452,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 13
 # 关闭 WAL
 WAL_PATH="<项目路径>/_数据库/.wal/cluster_<key>_save_state.json"
 # 由 save_state.py 内部自动收尾，主代理可手动 mark 完成
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 14 --output "<项目路径>/_数据库/.wal"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 14 --output "_数据库/.wal"
 python core/scripts/plan_tracker.py end "$PLAN_ID"
 ```
 

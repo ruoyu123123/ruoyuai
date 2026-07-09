@@ -227,6 +227,69 @@ def test_reattest_after_manual_edit_recovers():
         assert pt.verify_plan(pid) == "ok", "reattest 后应恢复 ok"
 
 
+# ════════════════════════════════════════════════════════════════
+# --output 路径解析（2026-07-09 真机 cluster_002 save-state 抓修）
+# ════════════════════════════════════════════════════════════════
+# 根因：step() 对非绝对 --output 值按「project_root 相对路径」拼接（与 expected_outputs
+# 同口径，见 resolve_project_root() 用途一致）；但 cluster-save-state.md/cluster-write.md
+# 里给的示例是 --output "<项目路径>/_数据库/..."——<项目路径> 本身在文档里就等于
+# workspace/novels/<书名>，照抄示例会把 project_root 拼两遍产出
+# ".../workspace/novels/<书名>/workspace/novels/<书名>/_数据库/..." 这种双重路径，
+# 导致 --output 校验假报「文件不存在」（文件其实已经在正确单层路径上生成）。
+# 修复 = 文档统一改成 --output "_数据库/..."（不含 <项目路径>/ 前缀），与
+# expected_outputs 的既有约定一致。本节钉死两件事：文档不再犯 + 代码本身按正确口径工作。
+
+def test_command_docs_no_doubled_project_path_in_output_flag():
+    """cluster-write.md / cluster-save-state.md 的 --output 值不得再带 <项目路径>/ 前缀。"""
+    _repo = Path(__file__).resolve().parent.parent
+    docs = [
+        _repo / ".claude" / "commands" / "cluster-write.md",
+        _repo / ".claude" / "commands" / "cluster-save-state.md",
+    ]
+    offenders = []
+    for doc in docs:
+        text = doc.read_text(encoding="utf-8")
+        for i, line in enumerate(text.splitlines(), 1):
+            if "--output" in line and "<项目路径>/" in line:
+                offenders.append(f"{doc.name}:{i} {line.strip()}")
+    assert not offenders, (
+        "plan_tracker.py step --output 按 project_root 相对路径拼接（同 expected_outputs "
+        "口径），示例里再带 <项目路径>/ 前缀会拼出双重路径导致假『文件不存在』：\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_step_output_resolves_relative_to_project_root_without_doubling():
+    """--output 传 project-root 相对路径（不含项目本身路径前缀）→ 正确单层拼接，不重复。
+
+    skip_output=True 只为绕开本测试无关的模板 expected_outputs 校验（沙盒项目没有那些
+    骨架文件）；--output 自身的存在性判定不受 skip_output 影响（op.exists() 无条件跑），
+    本测试真正锁住的是 --output 路径解析逻辑本身。
+    """
+    with _sandbox():
+        proj_tmp = Path(tempfile.mkdtemp())
+        (proj_tmp / "_数据库" / ".wal").mkdir(parents=True)
+        out_file = proj_tmp / "_数据库" / ".wal" / "002_apply_cluster.json"
+        out_file.write_text("{}", encoding="utf-8")
+
+        pid = pt.create_plan("cluster-write", str(proj_tmp), key="001")
+        plan = pt.get_plan(pid)
+        assert plan["project"] == str(proj_tmp)
+
+        # 正确用法：project-root 相对路径，不带项目自身路径前缀
+        pt.step_complete(pid, 1, output="_数据库/.wal/002_apply_cluster.json", skip_output=True)
+        plan = pt.get_plan(pid)
+        step1 = next(s for s in plan["steps"] if s["n"] == 1)
+        assert step1["status"] == pt.STATUS_COMPLETED
+        verified = step1.get("verified_outputs", [])
+        assert any(str(out_file).replace("\\", "/") in v for v in verified), (
+            f"verified_outputs 应含单层拼接路径，得 {verified}"
+        )
+        # 双重前缀（模拟旧文档误用）不该恰好也存在，否则测试本身失去意义
+        doubled = proj_tmp / proj_tmp.name / "_数据库" / ".wal" / "002_apply_cluster.json"
+        assert not doubled.exists()
+
+
 if __name__ == "__main__":
     fails = 0
     for _n in sorted(k for k in dict(globals()) if k.startswith("test_")):
