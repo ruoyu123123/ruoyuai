@@ -317,6 +317,19 @@ def _normalize_rule(rule: dict) -> dict:
     if "ripples" in rule and ("trigger_match" in rule or "trigger_type" in rule):
         out = dict(rule)
         out["id"] = rid
+        # ripples 契约要求 list[dict]；LLM 自由生成偶发写成裸字符串（无 producer 强约束），
+        # 消费侧兜底纠正为叙事 ripple，不因数据形状崩溃（同 _apply_ripple 处理 narrative 的路径）
+        raw_ripples = out.get("ripples")
+        if isinstance(raw_ripples, str):
+            out["ripples"] = [{"narrative": raw_ripples.strip()}] if raw_ripples.strip() else []
+        elif isinstance(raw_ripples, list):
+            out["ripples"] = [
+                {"narrative": r.strip()} if isinstance(r, str) else r
+                for r in raw_ripples
+                if (isinstance(r, str) and r.strip()) or isinstance(r, dict)
+            ]
+        else:
+            out["ripples"] = []
         return out
     # 历史散文格式（effect: str/list 或 propagate: [{path,op,value}]）
     trigger_match = rule.get("trigger_match") or rule.get("trigger") or ""

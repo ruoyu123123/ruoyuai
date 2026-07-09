@@ -151,6 +151,55 @@ def test_narrative_dedup_same_ch_appends_new_ch():
         assert [e["ch"] for e in nc] == [5, 6]
 
 
+# ---------- ripples 契约容错：LLM 自由生成偶发把 ripples 写成裸字符串（无 producer 强约束） ----------
+
+def test_normalize_rule_coerces_bare_string_ripples_to_narrative():
+    """规范格式规则（含 trigger_match/trigger_type）若 ripples 是裸字符串 → 归一成 [{narrative}]，不保留裸串。
+
+    实证取自真机验证撞见的生产数据形状（涟漪规则.json 的 contract_enforcement/faith_currency_spill
+    两条规则曾被写成 "ripples": "纯文本后果描述"，触发时 for ripple in "字符串" 逐字符崩 'str'.get）。
+    """
+    rule = {"id": "RR_STR", "trigger_type": "minor_event", "trigger_match": "contract_enforcement",
+            "ripples": "无限游戏系统底层逻辑被强行调用，佛门因果律化作实质的天罚劫雷。"}
+    out = wee._normalize_rule(rule)
+    assert isinstance(out["ripples"], list)
+    assert out["ripples"] == [{"narrative": "无限游戏系统底层逻辑被强行调用，佛门因果律化作实质的天罚劫雷。"}]
+
+
+def test_normalize_rule_coerces_bare_string_ripples_empty_string():
+    """空/纯空白裸字符串 ripples → 归一成空列表（不产出空 narrative 条目）。"""
+    rule = {"id": "RR_EMPTY", "trigger_type": "minor_event", "trigger_match": "x", "ripples": "   "}
+    assert wee._normalize_rule(rule)["ripples"] == []
+
+
+def test_normalize_rule_coerces_mixed_list_ripples():
+    """ripples 是 list 但元素混杂裸字符串 → 逐个归一成 {narrative}，已结构化的 dict 条目原样保留。"""
+    rule = {"id": "RR_MIXED", "trigger_type": "minor_event", "trigger_match": "x",
+            "ripples": ["纯文本后果", {"target": "factions_state.巡夜司.power", "delta": -1}]}
+    out = wee._normalize_rule(rule)
+    assert out["ripples"] == [
+        {"narrative": "纯文本后果"},
+        {"target": "factions_state.巡夜司.power", "delta": -1},
+    ]
+
+
+def test_apply_minor_event_survives_bare_string_ripples_rule():
+    """端到端：规则库里混入 ripples=裸字符串 的规则，命中该规则不再崩 'str'.get，落成 narrative 后果。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = _mk_project(Path(d))
+        rules_path = root / "_数据库" / "涟漪规则.json"
+        rules = json.loads(rules_path.read_text(encoding="utf-8"))
+        rules["ripple_rules"].append({
+            "id": "RR_BARE_STR", "trigger_type": "minor_event", "trigger_match": "contract_enforcement",
+            "ripples": "佛门因果律化作实质的天罚劫雷，无视境界直接剥夺核心力量填补负债。",
+        })
+        rules_path.write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
+        r = wee.apply_minor_event(root, 5, "contract_enforcement")
+        assert r["matched_rules"] == ["RR_BARE_STR"]
+        nc = _disk_world(root)["narrative_consequences"]
+        assert nc[0]["text"] == "佛门因果律化作实质的天罚劫雷，无视境界直接剥夺核心力量填补负债。"
+
+
 # ---------- 重复应用语义：minor_event 累加（无账本）vs fate_event/tick 幂等（有账本） ----------
 
 def test_minor_event_reapply_accumulates_by_design():
