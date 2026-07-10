@@ -1172,30 +1172,24 @@ reading-reflector 在《全城公测，就我开了双号》cluster_001 抓到�
 <!-- FEEDBACK_RULE: feedback_real_api_tests_no_economize.md -->
 ## feedback-real-api-tests-no-economize
 
-> description: 🔑 用户定调(2026-06-17)：需要API的测试就老老实实真调API·不节省·max_tokens拉到最大·省这个没必要
+> description: 🔑 需要API的验证就真调API、不mock不省token；当前只允许走真实slash-command+plan主链，旧tests/real_api旁路已退役
 
 🔑 **用户原话（2026-06-17）**：「有需要api的测试就老老实实用api来调用，不用节省，并且maxtoken也拉到最大，省这个没必要」。
 
-**Why**：fake-LLM 测试（[[project-fake-llm-cli-e2e-harness]] P0/P1）能验确定性骨架（DAG 串接/产物落盘），但**验不了真模型行为**——reasoning 模型截断率、schema 合规、gen_throttle/520 限流、judge「Claude 过 ≠ gen-model 过」金标准（PROGRAM_DRIVEN.md「上线前必验」§1 M2 里程碑·一直没跑因怕花钱）。怕花钱 = 关键验证缺位。
+## 当前执行纪律（2026-07-10 权威）
 
-**How to apply**：
-- fake-LLM 夹具**保留**（快/免费/确定性·进默认 zero-dep 套件 + CI），但**另加真 API 测试**覆盖模型行为缺口。
-- 真 API 测试**必须 env 门控**（如 `RUOYU_RUN_REAL_API=1`）·**不进默认 `tests/run_tests.py` 快速套件**（否则 CI 慢+花钱+非确定性）·单独跑。
-- **max_tokens 拉满**：用 active profile 的最大值（gemini_pro_preview/elysiver = 65536·见 [[project-genmodel-flash-locked]]）·绝不为省钱传小 --target-cjk/--max-tokens。reasoning 模型记得 thinking_level=LOW（否则 thinking 吃光输出预算·见 genmodel memory）。
-- 优先真 API 落点：① judge 金标准对比(M2·真作者原文喂 8 judge 比字段完整性+作者档维度引用) ② 真 gen-model 跑通 cluster-write/save-state 全管线(抓 fake 掩盖的真集成 bug) ③ 深 schema judge(validator-checker 16 维/outline-planner 3 模式)截断率实测。
-- dev 环境有真 .env（GEN__* 多 profile + 真 sk- key·GEN_MODEL_ACTIVE 见 .env）→ 真 API 可达。**测完别把真 key 泄漏进 git/日志**（[[project-byok-keyring]] redact）。
+- 需要验证模型行为时必须调用真实 API，禁止 mock、假 LLM 或缩小 token 预算冒充验证；设置 `RUOYU_RUN_REAL_API=1`，使用 active profile 的最大 `max_tokens`，reasoning 模型沿既有 profile 使用 `thinking_level=LOW`。
+- 调用前先跑 `py -X utf8 core/scripts/gen_model_loader.py diag`，确认 active profile、keyring/.env 一致；不得打印、写盘或提交完整 key。
+- commit `0c94750` 已随 program-driven/orchestrator 架构物理删除 `tests/real_api/*.py`；commit `a3061e5` 又删除残留 README。**这些旧路径和命令不是当前入口，禁止继续引用或复活。**
+- 当前唯一合格的真实 API e2e 是实际创作主链：通过 `/outline` 新建一次性验证书并完成 13/13 required，再跑 `/cluster-write` 7/7、`/cluster-save-state` 14/14，确认走向卡产生 2-3 个候选并完成用户选择。不得另建孤立 harness、旁路命令或程序驱动器。
+- 任何 agent 声称完成后，Leader 必须独立执行 `py -X utf8 core/scripts/plan_tracker.py list --active` 和 `py -X utf8 core/scripts/plan_tracker.py status "<plan_id>"`，用它们核对 plan 身份、required 进度、防篡改 attestation 和步骤 error。随后必须另查 plan JSON、真实 expected artifacts、audit reports 与运行日志，核对 expected outputs 实体、stderr/FATAL、hard_gate 残留和真实产物 provenance；`list/status` 不覆盖这些证据，不能只信 exit code 或 agent 汇总。
+- 只有“候选通过北极星闸+独立怀疑者并完成集成”才触发一次性新书真 API 验证。本轮无候选通过，因此不调用 API 是条件未触发，不是用 mock 降级。
 
-## 已落地 + 实测结果（2026-06-17）
-- `tests/real_api/test_real_cluster_write_e2e.py`（子目录隔离 + RUOYU_RUN_REAL_API 门控 + `RUOYU_REAL_API_PROFILE` 覆盖[测试内 patch GenModelLoader 选 profile·不改全局 .env]）。运行：`RUOYU_RUN_REAL_API=1 RUOYU_REAL_API_PROFILE=gemini_pro_preview python tests/real_api/test_real_cluster_write_e2e.py`。
-- **真 gen-model(gemini_pro_preview @ pie-xian) 实测通过**：真正文 14655 CJK（健康）· writer expand 兜底真工作（5933→expand 1 轮→14655）· max_tokens=65536 拉满 · splitter 切 4 章 · **reading-reflector judge 真截断(finish=length)→transport 续写 1/3 正确兜住**（确认深 schema judge 在 reasoning 模型截断·fake 掩盖不了·PROGRAM_DRIVEN.md「上线前必验」§3 缺口实测闭合）。
-- ✅ **judge 金标准 M2 闭合**（`tests/real_api/test_real_judge_golden.py`·真作者原文[惊悚乐园原文] + 真作者档 44K + 真 gen-model）：summarizer/foreshadower/voice-checker/validator-checker/reading-reflector 5 judge **全 ok=True**（字段完整性满足 required_keys）·3 个 needs_author_profile judge **author_profile_missing=False**（作者档第一权威真注入·非退回通用规则）·retries=0 无截断（短输入 2739 CJK）。**对照**：cluster-write 长输入(14655 CJK)上 reading-reflector 截断(finish=length)→续写——judge 截断**总 prompt 大小相关**(非 draft 长度)。
-- ✅ **§3 深 schema judge 截断率闭合**（`tests/real_api/test_real_judge_truncation.py`·凿窍纪 10669 CJK 长 draft 喂 validator-checker/voice-checker/reading-reflector）：长输入上**全 ok=True·retries=0·无截断**。截断只在**完整 cluster-write 管线**(manifest 注入撑大总 prompt 到 60k+)才触发·standalone judge 调用(draft+作者档)不触发·transport 续写在真触发时兜住。→ 当前 max_tokens=65536 配置截断率低且被处理·§3「需拆分多次调用」暂不必要。
-- **三个文档「上线前必验」缺口全有真 API 测试**：§1 M2 judge 金标准 ✓ · §3 深 schema 截断 ✓ · §2 frozen 打包(非测试缺口·已完成)。
-- 🔴🔴 **真 API 全循环 e2e 抓到真生产 bug 并修复**（`tests/real_api/test_real_write_save_loop.py`）：真模型偶发产**短稿**（整稿 2580 CJK < 单章下限 3000·temp=1.0 非确定性·空风格档种子更易触发「模型已无更多内容」）→ splitter 切 **0 章·全退 pending_tail**（v27 合法流程）→ 但 step6 崩：① `gen_chapter_titles --chapters []` 的 `parse_chapters` int("[]") 崩 rc=3 ② `split_cluster_changes` 0 切的「无 range 可回填」误判 advisory → exit 1 → **整条 cluster-write 管线卡死**。**fake 永远产 8000 CJK 掩盖了它·真 gen-model 短稿才暴露**——真 API 测试核心价值。修：两脚本 0 切优雅 no-op exit 0（gen_chapter_titles strip"[]"为空跳过·split_cluster_changes 0切非advisory）+ 确定性回归测试 `test_cluster_write_short_draft_goes_to_pending_tail`（fake 短稿·进默认套件防回归·7步全过+pending_tail）。这是 v27 pending_tail「0 章 cluster」设计的真实管线落地缺口。**✅ 根因厘清（2026-06-17 用户定调）**：用户「0 章 cluster 设计上不可能·每块最少 13000 字」。核查 `gen_writer.py:116-121`：是**软下限非硬锁**（`FREESTYLE_MIN_CJK=12000`·expand 续写最多 6 轮兜底·单轮增量 <`FREESTYLE_EXPAND_MIN_GAIN=400` 即停「模型没料别硬凑」·北极星⑤防注水）。**那 2580 短稿是测试种子不真实造的假象**（_seed_min_subsystems 空脚手架风格档→manifest 薄→模型无料→2552→expand 仅+28 放弃）。**修法=测试种真风格档**（`test_real_write_save_loop._seed_real_style` 拷惊悚乐园 44K 作者档+skill）→ **真 API 实测 writer 产 12246 CJK 健康稿·切 3 章·根本不碰 0 章**·完整 write→save→emerge 真循环跑通·**outline-planner 真模型生成走向卡 cluster_002 3 候选**（M2 没测的第 9 judge 现已验证）。结论：① 0 章是测试假象非生产 bug（真风格档下模型有料自然达标）② cluster-write 防御守卫留作 defense-in-depth（北极星⑥可后续清）③ 没加硬约束（保北极星⑤防注水）。
-**🔴 残留（save-state 0 章·未修·设计上不该到达故低优先）**：跟进检查发现 0 章 cluster 在 **cluster-save-state 多处也崩**（`save_state.cmd_apply_cluster_changes` step3 / `cmd_git_commit_cluster` step10 都 `_get_cluster_chapter_range` 空→`[FATAL]未找到 chapter_range` return 2·很可能 summary/aggregates 也假设 ≥1 章）——systemic「0 章 cluster 完整支持」是带设计含义的 feature·**未盲修**（部分修让流程半路崩更糟）。**0 章 cluster 是罕见极端边缘**（真风格档下模型产 12000-25000 CJK 多章·只有空种子/病态短生成才触发）→ 低优先。设计决策：① 让 save-state 全链支持 0 章 cluster(pending_tail 携 changes) vs ② 保证 cluster 始终 ≥1 章(短稿也强切/合并)——待用户定。cluster-write 修复独立有效(真 API 实际撞点)。
-- 🔴 **真 API 测试抓到真运营 bug**：.env `GEN_MODEL_ACTIVE=elysiver`（gemini-3.1-pro @ elysiver.h-e.top）2026-06-17 **端点故障**（500 upstream_stream_error「received 0 chars」/ 挂死 90s+）→ 真实写小说会失败。`call_gen_model` 单 500 不重试只 fallback（链里只 elysiver）→ exhausted。**用户需决定切回 pie-xian 或确认 elysiver 状态**（改 .env 是用户配置权·见 [[project-genmodel-flash-locked]] 锁定良好配置就是 pie-xian gemini_pro_preview·与当前 active=elysiver 矛盾）。
+## 历史证据（入口已退役，结论仍有效）
 
-对标 [[feedback-verify-stderr-not-exitcode]]（验证要动真格）+ [[feedback-no-token-saving]]（不主动截断喂 LLM）——这条是「测试也不为省钱缩水」。
+2026-06-17 的旧 `tests/real_api` 套件曾用真模型抓到 fake 测不到的截断、schema、短稿/pending-tail 和端点故障，证明“真 API 不可省”这条纪律正确；但这些脚本依赖后来被删除的 orchestrator/judge_runner 架构，只保留为历史证据，不能当当前运行说明。
+
+对标 [[feedback-verify-stderr-not-exitcode]]、[[feedback-no-token-saving]]、[[project-genmodel-flash-locked]]。当前验证书基线见 [[project_realapi_validation_loop_2026_07_07]]。
 
 ---
 
