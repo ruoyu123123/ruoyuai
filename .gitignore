@@ -140,10 +140,13 @@ workspace/novels/*/_数据库/triage_band_report.json
 # ============================================================
 外部/
 
-# 🔴 2026-07-05 网搜调研克隆的外部开源写作系统（只作概念借鉴·零代码接线·不入库；自产调研综述 research/ 正常入库）
+# 🔴 2026-07-05 网搜调研克隆的外部开源写作系统（只作概念借鉴·零代码接线·不入库）
 moyin-creator/
 PlotPilot/
 external_repos/
+
+# 🔴 2026-07-11 用户定调「research内容不入库」：自产调研报告本地物理保留（代码注释以 research/xxx.md 出处路径引用·文件在位不移动），git 不追踪
+research/
 
 core/ml/**/data/
 core/ml/**/datasets/
