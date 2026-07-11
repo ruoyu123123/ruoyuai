@@ -1,7 +1,8 @@
 {
-  "_schema": "ensemble_layer_v21",
-  "_doc": "Stardew Valley + Hades II 借鉴：每核心配角的『关系档位强制揭密 heart_events』+『日常 schedule』。让群像配角真的活着、且揭密节奏不靠 AI 凭感觉。",
-  "generated_at": "2026-05-16",
+  "_schema": "ensemble_v21",
+  "schema_version": "v27",
+  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。Stardew Valley + Hades II 借鉴：每核心配角的『关系档位强制揭密 heart_events』+『日常 schedule』+『tier_unlocks 档位语义』，让群像配角真的活着、揭密节奏不靠 AI 凭感觉。characters=核心配角，background_ensemble=背景群像（本例暂空）。占位符：陆爸=至亲 / 老周=情报盟友 / 林晚秋=卧底副线 / 顾沉=招安派反派。",
+  "generated_at": "<生成日期>",
 
   "characters": {
     "陆爸": {
@@ -13,7 +14,7 @@
           "reveal": "陆爸在某个夜晚醉酒后，第一次说出'你不是我亲生的'——但醒来又否认",
           "physical_evidence": ["醉态描写", "夜晚时间", "次日不肯承认"],
           "consumed": false,
-          "_note": "ch 10-15 之间触发，trust 已是 9"
+          "_note": "trust 达 9 时触发（约卷一中段）"
         },
         {
           "event_id": "HE_lubobo_02",
@@ -52,7 +53,7 @@
           "reveal": "老周在午夜便利店外抽烟时，告诉陆衍'吴启鸣本来不该死'——但说完不肯展开",
           "physical_evidence": ["午夜时间", "便利店光线", "抽烟动作"],
           "consumed": false,
-          "_note": "ch 6-10 之间，开启吴启鸣死因调查"
+          "_note": "开启吴启鸣死因调查（约卷一前中段）"
         },
         {
           "event_id": "HE_laozhou_02",
@@ -61,7 +62,7 @@
           "reveal": "老周告知自己其实是十年前神性股权制黑名单的逃亡者，吴启鸣是他师父",
           "physical_evidence": ["证据材料", "他自己的伤疤", "改名前的真名"],
           "consumed": false,
-          "_note": "对应 ME_005 老周身份揭穿"
+          "_note": "对应老周向陆衍揭露自己是神性股权制黑名单逃亡者、吴启鸣是其师父的走向"
         }
       ],
       "schedule": {
@@ -88,7 +89,7 @@
           "reveal": "林晚秋在加班深夜独自靠在窗边喝水时，破天荒地说出一句关于自己童年的事——但立刻找借口岔开",
           "physical_evidence": ["加班场景", "玻璃窗倒影", "她的具体那句话"],
           "consumed": false,
-          "_note": "ch 8-15 之间，给反转线埋情感线"
+          "_note": "给林晚秋反转线埋情感线（约卷一中段）"
         }
       ],
       "schedule": {
@@ -115,7 +116,7 @@
           "reveal": "顾沉在董事会前主动私下约陆衍，承认'当年我也是被这样招进来的'",
           "physical_evidence": ["私下场所（不是 38 楼）", "顾沉态度变化", "他说的那句话"],
           "consumed": false,
-          "_note": "ch 50+ 招安线推进时，反派人格化"
+          "_note": "招安线推进时（约卷二起），反派人格化"
         }
       ],
       "schedule": {
@@ -134,6 +135,8 @@
       }
     }
   },
+
+  "background_ensemble": {},
 
   "_field_doc": {
     "heart_events": "档位事件清单 — relationship_evaluator 检查 trigger_at 是否满足 → 满足且 consumed=false 强制下章触发",

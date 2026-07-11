@@ -112,23 +112,23 @@ Project  : BookB
 Key      : 002
 Cluster  : cluster_002
 Range    : 5-7
-Progress : 8/12 (66%)
+Progress : 10/14 (71%)
 Started  : 2026-05-13 21:45:30
 Age      : 12 min
 
 步骤清单：
-┌──┬──────────────────────────────┬────────────┬─────────────────────────┐
-│ #│ 步骤名                       │ 状态       │ verified_outputs        │
-├──┼──────────────────────────────┼────────────┼─────────────────────────┤
-│ 1│ load_context                 │ ✅ 完成    │ (无输出校验)            │
-│ 2│ summarize_cluster            │ ✅ 完成    │ cluster_002_summary.json│
-│ 3│ lock_facts                   │ ✅ 完成    │ 人物卡.json (锁定+1)    │
-│ ...                                                                   │
-│ 9│ git_snapshot                 │ ⏳ 进行中  │ -                       │
-│10│ render_card                  │ ⏸ 待执行  │ -                       │
-│11│ wal_finalize                 │ ⏸ 待执行  │ -                       │
-│12│ end_plan                     │ ⏸ 待执行  │ -                       │
-└──┴──────────────────────────────┴────────────┴─────────────────────────┘
+┌──┬────────────────────────────────────────────────┬────────────┬─────────────────────────┐
+│ #│ 步骤名                                          │ 状态       │ verified_outputs        │
+├──┼────────────────────────────────────────────────┼────────────┼─────────────────────────┤
+│ 1│ wal-start+schema-validate                       │ ✅ 完成    │ (无输出校验)            │
+│ 2│ parse-cluster-changes                           │ ✅ 完成    │ cluster_002_changes.json│
+│ 3│ apply-cluster-changes+writer-truth-check         │ ✅ 完成    │ 人物卡.json (锁定+1)    │
+│ ...                                                                                      │
+│11│ cluster-scan+state+drift+evolution              │ ⏳ 进行中  │ -                       │
+│12│ git-commit-cluster                              │ ⏸ 待执行  │ -                       │
+│13│ cluster-emergence+report-and-card                │ ⏸ 待执行  │ -                       │
+│14│ wal-end                                         │ ⏸ 待执行  │ -                       │
+└──┴────────────────────────────────────────────────┴────────────┴─────────────────────────┘
 
 状态图标：✅ completed | ⏳ in_progress | ⏸ pending | ❌ failed | ⏭ skipped | 🚫 aborted
 

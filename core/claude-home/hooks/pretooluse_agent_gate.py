@@ -8,12 +8,12 @@ exit 0 = 放行, exit 2 = 拒绝
 -------------------------------------------
 全部判定逻辑（规则 1 契约字段 / 2 长度 / 3 frontmatter / 4 规则文本 warn /
 5 多步 PLAN_ID / 8 plan 防篡改 / 9 注入模板 warn / 10 ECAS RESEARCH_REF /
-11 蒸馏复刻禁 Agent）连同关键词常量已抽到共享库
+11 蒸馏复刻同栈提示 warn）连同关键词常量已抽到共享库
 `plan_step_gates.check_agent_injection`（北极星⑥消重复·单一真相源）。
 本 hook 现为薄 wrapper：解析 stdin → 抽 prompt/desc/subagent_type → 算
 plan_state(ok/not_found/tampered/...) → 调 check → 打印 warnings → ok ? exit 0 : exit 2。
 
-与原 hook **exit 语义完全等价**：所有硬规则命中 → exit 2；warn-only（规则 4/9）
+与原 hook **exit 语义完全等价**：所有硬规则命中 → exit 2；warn-only（规则 4/9/11）
 只打印不退出。
 
 历史背景（保留供追溯）：
@@ -23,6 +23,8 @@ plan_state(ok/not_found/tampered/...) → 调 check → 打印 warnings → ok ?
   绕过跳步防御）→ 在 Agent spawn 前拦下。novel 主链校验缺失/异常 fail closed。
 - 规则 9（P2-10）：内容级注入模式检测（warn-only，不拦截）。
 - v26 清理：删除原规则 12（novel-writer single 模式废弃门禁 + .allow_single_mode.flag）。
+- 规则 11：复刻须先 spawn Claude agent 写场景稿，终稿只能由 distill_replicate.py
+  --claude-scenes-dir 经 gemini 分段润色落盘；不合此纪律时 warn 提示，不拦截。
 """
 import json
 import os

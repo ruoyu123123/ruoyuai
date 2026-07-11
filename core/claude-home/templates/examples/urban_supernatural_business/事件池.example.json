@@ -1,7 +1,8 @@
 {
-  "_schema": "event_pool_v21",
-  "_doc": "Wildermyth 借鉴：事件命运抽签机制。emergent_opportunities 触发时不让 AI 编故事，从池子按情境过滤后随机抽 1，AI 只负责把抽到的事件写好。",
-  "generated_at": "2026-05-16",
+  "_schema": "event_pool_v22",
+  "schema_version": "v27",
+  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。Wildermyth 借鉴：事件命运抽签机制。emergent_opportunities 触发时不让 AI 编故事，从池子按 context_filter 过滤后加权随机抽 1，AI 只负责把抽到的 narrative_seed 写好。占位符：陆衍=主角 / 南海资本=博弈财团。",
+  "generated_at": "<生成日期>",
   "events": [
     {
       "event_id": "EV_001",
@@ -161,7 +162,8 @@
   "_consumption_chain": {
     "produced_by": "/outline 时根据题材生成基础事件池 + 用户/researcher 自由扩展",
     "consumed_by": [
-      "fate_dice.py：按当前 manifest 上下文过滤 + 加权随机抽 1",
+      "auto_fate_draw.py → fate_dice.draw：按当前 manifest 上下文（context_filter）过滤 + 加权随机抽 1",
+      "build_manifest._collect_fate_dice_hint：注入本章抽签状态给 writer",
       "writer：把抽中的 narrative_seed 写成本章场景"
     ]
   }

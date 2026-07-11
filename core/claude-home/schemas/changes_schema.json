@@ -11,7 +11,7 @@
   "properties": {
     "factual": {
       "type": "object",
-      "description": "本章/本 cluster 对世界状态的客观变更，会被 save-state apply 到 34 个数据库 JSON（2026-05-29 cluster 化：原文 13 个为旧表述，现核心子系统为 34 个）",
+      "description": "遗留字段形状：world_evolution_apply_chapter.py 仍按此形状读取 fate_events_triggered / world_state_consumption / chapter_hub。writer 链（gen_writer）不产出此字段，只产 self_eval/waivers；角色/道具/关系/locked_facts 等客观状态改由 novel-archivist 读正文产 archive.json，经 apply_archive.py 回库 34 个数据库 JSON。",
       "properties": {
         "locked_facts": {
           "type": "array",

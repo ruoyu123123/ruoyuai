@@ -1,7 +1,8 @@
 {
-  "_schema": "character_moves_v21_round2",
-  "_doc": "PbtA 借鉴：每个角色有有限的『行动 move』清单，每个 move 含触发条件 + 后果。writer 让角色行动时优先从 Moves 抽，避免凭空发明导致角色行为同质化。",
-  "generated_at": "2026-05-16",
+  "_schema": "offstage_actions_v21",
+  "schema_version": "v27",
+  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。本文件是 PbtA Moves + 声明式行动数据范式——每角色一组 move：trigger（触发时机）+ narrative_template（writer 用这个『框』写，避免公式化但保持识别度）+ consequence（执行后果）+ frequency_per_chapter（单 move 单章使用上限，防公式化）。writer 让角色行动时优先从 moves 抽 narrative_template，避免凭空发明导致角色行为同质化。占位符：陆衍=主角 / 顾沉=招安派反派 / 老周=情报盟友。",
+  "generated_at": "<生成日期>",
 
   "characters": {
     "陆衍": {
@@ -100,6 +101,8 @@
       ]
     }
   },
+
+  "offstage_threads": {},
 
   "_field_doc": {
     "trigger": "什么情境下这个 move 会被采用",

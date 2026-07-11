@@ -1,7 +1,19 @@
 {
-  "schema_version": "v22.5",
+  "schema_version": "v27",
   "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。本文件是『SCP 风隐秘部门世界观范式』——异常分级 + 收容体系 + 编制内 vs 编外临时工体制 + 序列力量体系 + 隐世势力地图。占位符：BUREAU=异常处置局 / PROTAGONIST=主角 / MENTOR_NPC=导师型老资格 NPC / DEUTERAGONIST=主角直属上级 / PRIME_ANTAGONIST=幕后大反派势力。套用方法：替换占位符 + 改具体年代/城市/途径名，保留『异常分级 / 编制双轨 / 序列代价 / 派系隐藏』四大结构。",
   "generated_at": "<异常历纪年示例：异常历 N 年 M 月 D 日>",
+  "era": "现代都市·异常历纪年（架空当代）",
+  "location": "国家异常事件应急处置局总局（首都某商业大厦楼层，公开身份是某咨询公司）+ 各分局",
+  "rules": [
+    "序列 9（最弱）到序列 0（最强），每晋升一阶须完成对应『禁忌』代价（扭曲心智或身体）",
+    "编制内正式特工 vs 编外临时工双轨用工：临时工死亡=注销编号，案卷封存，无抚恤",
+    "异常事件按 A/B/C/D 四级分类，级别决定派遣特工的等级与规模"
+  ],
+  "factions": [
+    {"name": "PRIME_ANTAGONIST 势力", "alignment": "antagonist", "scale": "数百到上千精英成员（非大众）", "specialty": "操控高位序列 / 跨国布网 / 长线观察天赋非凡者", "leader": "<幕后大反派，序列 0 之一>"},
+    {"name": "跨国异常机构联盟", "alignment": "ambiguous", "scale": "多国异常机构松散联盟", "specialty": "技术情报共享 / 对抗隐世势力"},
+    {"name": "散户互助会", "alignment": "neutral_to_ally", "scale": "数百名非任何组织正式成员的非凡者", "specialty": "底层互助 / 信息黑市 / 卖序列突破物资"}
+  ],
   "entries": [
     {
       "id": "WV_001_BUREAU",

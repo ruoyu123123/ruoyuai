@@ -1,5 +1,5 @@
 {
-  "schema_version": "v22.5",
+  "schema_version": "v27",
   "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。本文件是全套最有价值的范式——① 多身体同步主角 schema（能力/记忆共享但每个身体体验独立，业界少见）② voice_pack 5 层 persona 结构（core_traits / speech / body_language / catchphrase 带 scene+frequency / habits + anti_patterns）③ MENTOR_NPC 体制内话术 catchphrase（讲古即暗喻）④ knowledge.will_learn 认识论时间线 ⑤ offscreen 声明式行动。占位符：PROTAGONIST=主角 / DEUTERAGONIST=主角直属上级兼后期盟友 / MENTOR_NPC=老资格导师 / AUTHORITY_NPC=体制内复杂上级 / PRIME_ANTAGONIST=幕后大反派。",
   "generated_at": "<生成日期>",
   "characters": [
@@ -63,7 +63,7 @@
         ]
       },
       "knowledge": {
-        "_doc": "★ knowledge 认识论时间线：knows_now / doesnt_know_yet（标 ME 解锁点）/ will_learn（标 ch + what）",
+        "_doc": "★ knowledge 认识论时间线：knows_now / doesnt_know_yet（标 ME 解锁点）/ will_learn（标 learn_at_cluster + what）",
         "knows_now": ["异常局编制规则", "<前职业技能>", "日常生活信息"],
         "doesnt_know_yet": [
           "PRIME_ANTAGONIST 势力存在（中期 ME 后）",
@@ -73,12 +73,12 @@
           "历史上 N 个临时工全部死亡（早期通过 MENTOR_NPC）"
         ],
         "will_learn": [
-          {"ch": 1, "what": "原身份已死 + 自己穿入/顶包"},
-          {"ch": 2, "what": "异常局基本流程 + T-7 编号"},
-          {"ch": 8, "what": "历史临时工全死 + 反派名字（通过 MENTOR_NPC）"},
-          {"ch": 18, "what": "影类实体存在 + 多身体首次启动 2 分身"},
-          {"ch": 30, "what": "DEUTERAGONIST 真实序列身份"},
-          {"ch": 55, "what": "PRIME_ANTAGONIST 真实身份"}
+          {"learn_at_cluster": "cluster_001", "what": "原身份已死 + 自己穿入/顶包"},
+          {"learn_at_cluster": "cluster_001", "what": "异常局基本流程 + T-7 编号"},
+          {"learn_at_cluster": "cluster_002", "what": "历史临时工全死 + 反派名字（通过 MENTOR_NPC）"},
+          {"learn_at_cluster": "cluster_005", "what": "影类实体存在 + 多身体首次启动 2 分身"},
+          {"learn_at_cluster": "cluster_008", "what": "DEUTERAGONIST 真实序列身份"},
+          {"learn_at_cluster": "cluster_014", "what": "PRIME_ANTAGONIST 真实身份"}
         ]
       },
       "offscreen": {
@@ -141,9 +141,9 @@
           "PRIME_ANTAGONIST 存在（中期 ME 后）"
         ],
         "will_learn": [
-          {"ch": 30, "what": "主角会多身体（救援事件触发）"},
-          {"ch": 55, "what": "主角拒绝反派招揽"},
-          {"ch": 80, "what": "PRIME_ANTAGONIST 明面身份"}
+          {"learn_at_cluster": "cluster_008", "what": "主角会多身体（救援事件触发）"},
+          {"learn_at_cluster": "cluster_014", "what": "主角拒绝反派招揽"},
+          {"learn_at_cluster": "cluster_020", "what": "PRIME_ANTAGONIST 明面身份"}
         ]
       },
       "offscreen": {
@@ -201,8 +201,8 @@
         "knows_now": ["异常局完整档案（含 N 个历史临时工全死）", "PRIME_ANTAGONIST 名字 + 部分目击档案", "原身份死因细节（但不主动说）", "体制高层与外部的灰色交集"],
         "doesnt_know_yet": ["主角会多身体（中期 ME 后）", "PRIME_ANTAGONIST 真实身份（终卷）"],
         "will_learn": [
-          {"ch": 30, "what": "主角会多身体"},
-          {"ch": 65, "what": "PRIME_ANTAGONIST 主动接触主角"}
+          {"learn_at_cluster": "cluster_008", "what": "主角会多身体"},
+          {"learn_at_cluster": "cluster_017", "what": "PRIME_ANTAGONIST 主动接触主角"}
         ]
       },
       "offscreen": {
@@ -258,8 +258,8 @@
         "knows_now": ["全部正式编制档案", "历史临时工死亡的官方解释（与 MENTOR_NPC 私下版不同）", "PRIME_ANTAGONIST 势力存在（但不知主角是目标）", "主角简历可疑（早期起暗中调阅）"],
         "doesnt_know_yet": ["主角会多身体（中期通过反派得知）", "主角不是原身份（中期才确认）"],
         "will_learn": [
-          {"ch": 22, "what": "主角确实不正常（怀疑 clock 满后）"},
-          {"ch": 55, "what": "反派对主角的兴趣"}
+          {"learn_at_cluster": "cluster_006", "what": "主角确实不正常（怀疑 clock 满后）"},
+          {"learn_at_cluster": "cluster_014", "what": "反派对主角的兴趣"}
         ]
       },
       "offscreen": {
@@ -314,7 +314,7 @@
       "knowledge": {
         "knows_now": ["全部 - 全书最知情角色之一", "主角是上一代失败实验后的天然『多身体者』"],
         "doesnt_know_yet": ["主角拒绝招揽后真能撑到终局（他低估了）"],
-        "will_learn": [{"ch": 200, "what": "主角与他的根本差异（信念）"}]
+        "will_learn": [{"learn_at_cluster": "cluster_050", "what": "主角与他的根本差异（信念）"}]
       },
       "offscreen": {
         "actions": [

@@ -1,6 +1,6 @@
 {
-  "schema_version": "v22.5",
-  "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。重点范式：① narrative_style 段（third_person_limited POV 贴主角 + tense + narrator_voice，wizard 必问的叙事基础三件）② calendar 段（异常历双轨纪年——对外公历对内异常历，OFFSET 换算，writer 写日期用异常历）③ ecas_config（cluster-first 固定启用，critical events 用 opus + extended thinking）。占位符见 人物卡.example.json。",
+  "schema_version": "v27",
+  "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。重点范式：① narrative_style 段（third_person_limited POV 贴主角 + tense + narrator_voice，叙事基础三件）② calendar 段（异常历双轨纪年——对外公历对内异常历，OFFSET 换算，writer 写日期用异常历）③ ecas_config（cluster-first 固定启用）。占位符见 人物卡.example.json。",
   "preferences": [
     {
       "id": "pref_001",
@@ -36,21 +36,11 @@
       "id": "pref_007",
       "key": "audit_mode",
       "value": "advisory"
-    },
-    {
-      "id": "pref_008",
-      "key": "writer_model",
-      "value": "claude-sonnet-4-6"
-    },
-    {
-      "id": "pref_009",
-      "key": "writer_critical_model",
-      "value": "claude-opus-4-7"
     }
   ],
   "_meta": {
     "wizard_completed_at": "<ISO 时间戳>",
-    "schema_version": "v22.5",
+    "schema_version": "v27",
     "project_name": "<书名占位>"
   },
   "project_basics": {
@@ -119,12 +109,6 @@
     "user_preferred_phrases": [],
     "voice_strictness": "standard"
   },
-  "agent_model_routing": {
-    "writer_model": "claude-sonnet-4-6",
-    "writer_critical_model": "claude-opus-4-7",
-    "summarizer_model": "claude-haiku-4-5-20251001",
-    "use_extended_thinking_on_critical": true
-  },
   "advanced": {
     "git_auto_commit": true,
     "manifest_compression": true,
@@ -146,24 +130,11 @@
     "core_setting": "都市现代隐秘超自然，类 SCP/MIB 风格的应急部门"
   },
   "ecas_config": {
-    "cluster_word_range": {
-      "default_min": 8000,
-      "default_max": 12000,
-      "critical_event_min": 13000,
-      "critical_event_max": 16000
-    },
-    "critical_events_use_opus": [
-      "ME_010",
-      "ME_015",
-      "ME_017"
-    ],
-    "extended_thinking_critical": true,
     "mid_checkpoint_interval": 3000,
     "max_checkpoint_failures": 3,
     "cluster_stop_frequency": "after_each_cluster",
     "sub_summary_enabled": true,
-    "auto_cluster_size_estimation": true,
-    "_doc": "cluster-first 固定启用；critical events 用 opus + extended thinking。writer 不接收规划层硬字数，splitter 在输出层生成章节文件。"
+    "_doc": "cluster-first 固定启用。writer 不接收规划层硬字数/硬 ME 数量，splitter 在输出层按字数生成章节文件。"
   },
   "narrative_style": {
     "_doc": "★ wizard 必问的叙事基础三件（POV/tense/narrator_voice），voice_pack 中性 ≠ 系统可擅自定，必须用户决定",

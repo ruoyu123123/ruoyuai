@@ -148,7 +148,7 @@ python core/scripts/chapter_splitter.py "<PROJECT>" --mode ecas_freestyle \
 ```
 /cluster-write 调度器
  │
- ├── spawn novel-writer            （gen_writer.py 产整块草稿 cluster_<key>_draft.txt）
+ ├── spawn novel-writer            （Claude 亲笔逐场景写 claude_scenes/ → gen_writer.py 调 gemini 分段润色出整块草稿 cluster_<key>_draft.txt）
  │      ↓
  ├── 跑 audit_hub cluster 模式全量 scanner + 修复（整块草稿层 · 修完才切）
  │      ↓ step 6.1

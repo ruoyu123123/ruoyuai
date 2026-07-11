@@ -1,6 +1,7 @@
 {
   "_schema": "ripple_rules_v20_1",
-  "_doc": "小势完成 → 世界状态变化的因果规则。每个 rule 含 trigger 条件 + ripples（数值变化/NPC 动作 spawn/事件 spawn）",
+  "schema_version": "v27",
+  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。小势完成 → 世界状态变化的因果规则（北极星②涟漪核心）。每个 rule 含 trigger_type（minor_event/fate_event/auto_tick）+ trigger_match + ripples（数值变化 / NPC 动作 spawn / 事件 spawn）。fate_event 的 trigger_match 引用大势卡 ME id。占位符：陆衍=主角 / 顾沉=招安派反派 / 南海资本、北殷财团=博弈财团。",
 
   "ripple_rules": [
     {
@@ -36,7 +37,7 @@
     {
       "id": "RR_004",
       "trigger_type": "fate_event",
-      "trigger_match": "ME_003",
+      "trigger_match": "ME-V1-03",
       "_doc": "金手指首激活后的世界涟漪",
       "ripples": [
         {"target": "factions_state.南海资本.power", "delta": -5, "reason": "陆衍正式被识别为'觉醒者'"},
@@ -48,7 +49,7 @@
     {
       "id": "RR_005",
       "trigger_type": "fate_event",
-      "trigger_match": "ME_004",
+      "trigger_match": "ME-V1-04",
       "_doc": "假亲人事件后的世界涟漪",
       "ripples": [
         {"target": "factions_state.南海资本.stability", "delta": -10, "reason": "暗杀/掉包暴露 → 信任崩塌"},
@@ -58,7 +59,7 @@
     {
       "id": "RR_006",
       "trigger_type": "fate_event",
-      "trigger_match": "ME_006",
+      "trigger_match": "ME-V1-06",
       "_doc": "卷一末·主动宣战的世界级涟漪",
       "ripples": [
         {"target": "factions_state.南海资本.stability", "delta": -15, "reason": "公开对抗"},

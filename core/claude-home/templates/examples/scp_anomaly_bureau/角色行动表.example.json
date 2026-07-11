@@ -1,199 +1,154 @@
 {
-  "_schema": "character_moves_v21_pbta",
-  "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。本文件是 PbtA Moves + 声明式行动数据范式——每角色 N 个 move：trigger_condition + narrative_template（writer 必须用这个『框』写，避免公式化但保持识别度）+ _writer_anti_template（禁哪些干写法）+ consequence 三档（success/partial/fail）+ frequency_cap + 过用/失声警报阈值。重点范式：MV_001 多身体分流（金手指招牌 move）。占位符见 人物卡.example.json。",
+  "_schema": "offstage_actions_v21",
+  "schema_version": "v27",
+  "_doc": "此 example 来自《我在异常局当临时工》退役提取，适用题材：SCP/异常局/多身体同步/隐秘组织。本文件是 PbtA Moves + 声明式行动数据范式——每角色 N 个 move：trigger_condition + narrative_template（writer 必须用这个『框』写，避免公式化但保持识别度）+ _writer_anti_template（禁哪些干写法）+ consequence 三档（success/partial/fail）+ frequency_per_chapter（单章使用上限）。重点范式：MV_001 多身体分流（金手指招牌 move）。占位符见 人物卡.example.json。",
   "generated_at": "<生成日期>",
   "_field_doc": {
     "move_id": "唯一编号",
-    "owner": "角色名（必须与人物卡/character_arc 对齐）",
     "trigger_condition": "触发条件描述（writer 判断时机）",
     "narrative_template": "动作描述模板 - writer 必须用这个『框』写，避免公式化但保持识别度",
     "_writer_anti_template": "禁哪些干巴/出戏写法",
     "consequence": {"success": "成功后状态变化", "partial": "部分成功", "fail": "失败"},
-    "frequency_cap": {"per_chapter": "本章最多用几次", "per_arc": "本卷最多用几次"},
-    "usage_count_total": "总使用计数",
-    "usage_count_recent_10ch": "近 10 章用了几次",
-    "overuse_warning_threshold": "近 10 章超过几次警报（公式化）",
-    "underuse_warning_threshold": "近 20 章少于几次警报（失声）"
+    "frequency_per_chapter": "本章最多用几次——cross_cluster_character_dynamics_aggregate.py 按此判 MOVE_OVERUSE（单章实际使用次数 > 本值）"
   },
-  "moves": [
-    {
-      "move_id": "MV_001",
-      "owner": "PROTAGONIST",
-      "label": "多身体分流（金手指招牌）",
-      "trigger_condition": "面对超出单人处理能力的复合事件（≥2 个相距 >1km 的目标 / 时间紧迫 <30 分钟）",
-      "narrative_template": "PROTAGONIST 深吸一口气，意识在颅内分裂。一个分身留在原地完成 X，另一个分身瞬移到 Y 处理 Z。两侧视角同时在他脑中并行——像戴着两副耳机，每只耳朵在听不同的歌。",
-      "_writer_anti_template": "禁：『他启动了多身体』（太干）；『复制了自己』（科幻味重）",
-      "consequence": {
-        "success": "两个目标同时完成 / 主体记忆+技能同步增长",
-        "partial": "一个完成另一个搁置 / stress +1",
-        "fail": "意识同步延迟 / 一个分身死亡（记忆传回）/ stress +5 + CD 3 章"
-      },
-      "frequency_cap": {"per_chapter": 2, "per_arc": 8},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 6,
-      "underuse_warning_threshold": 2,
-      "_writer_special": "卷三前最多用 2 分身（设定限制）/ 卷三起 ≤4 / 卷五解锁 7 全部——金手指放量绑剧情节点，不是随意刷"
+  "characters": {
+    "PROTAGONIST": {
+      "moves": [
+        {
+          "move_id": "MV_001",
+          "label": "多身体分流（金手指招牌）",
+          "trigger_condition": "面对超出单人处理能力的复合事件（≥2 个相距 >1km 的目标 / 时间紧迫 <30 分钟）",
+          "narrative_template": "PROTAGONIST 深吸一口气，意识在颅内分裂。一个分身留在原地完成 X，另一个分身瞬移到 Y 处理 Z。两侧视角同时在他脑中并行——像戴着两副耳机，每只耳朵在听不同的歌。",
+          "_writer_anti_template": "禁：『他启动了多身体』（太干）；『复制了自己』（科幻味重）",
+          "consequence": {
+            "success": "两个目标同时完成 / 主体记忆+技能同步增长",
+            "partial": "一个完成另一个搁置 / stress +1",
+            "fail": "意识同步延迟 / 一个分身死亡（记忆传回）/ stress +5 + CD 3 个 cluster"
+          },
+          "frequency_per_chapter": 1,
+          "_writer_special": "卷三前最多用 2 分身（设定限制）/ 卷三起 ≤4 / 卷五解锁 7 全部——金手指放量绑剧情节点，不是随意刷"
+        },
+        {
+          "move_id": "MV_002",
+          "label": "谨慎试探（HeroC式）",
+          "trigger_condition": "面对未知 NPC / 新异常事件 / 上位者询问",
+          "narrative_template": "PROTAGONIST 没有立刻回答。他先垂了一下视线（假装在想 / 实际在重组语言），然后用比平时慢半拍的语气说出一个模糊但可解释为多种意思的回答。",
+          "_writer_anti_template": "禁：『他谨慎地说』（词汇直白）；『他想了想』（太通用）",
+          "consequence": {
+            "success": "对方接受答案 / 关系平稳 / stress -1",
+            "partial": "对方半信半疑 / hidden_loyalty 微变",
+            "fail": "对方追问 / 怀疑 clock +2 ticks"
+          },
+          "frequency_per_chapter": 2
+        },
+        {
+          "move_id": "MV_003",
+          "label": "引导别人开口（信息倒手）",
+          "trigger_condition": "需要从 NPC 身上挖信息但不能直接问",
+          "narrative_template": "PROTAGONIST 主动提供一个对方关心的小情报（买的咖啡 / 知道的小八卦 / 帮的小忙），然后在对方放松后顺着话题切到他真正想问的事，语气保持随意。",
+          "_writer_anti_template": "禁：『他套话』/『他旁敲侧击』",
+          "consequence": {"success": "拿到关键信息 / affinity 微升", "partial": "拿到部分信息", "fail": "对方察觉 / affinity 微降 / stress +1"},
+          "frequency_per_chapter": 1
+        },
+        {
+          "move_id": "MV_004",
+          "label": "扛压硬撑（高 stress 应对）",
+          "trigger_condition": "stress ≥7 但场景不允许 break / 必须立刻完成任务",
+          "narrative_template": "PROTAGONIST 手指在裤缝边缘抠了一下（留下小白印）。他知道现在不能倒。把注意力强行压到当前具体动作上——抓住门把手，开门，走出去。一个动作接一个动作，像清单。",
+          "_writer_anti_template": "禁：『他咬牙坚持』（老套）；『硬撑着』（太干）",
+          "consequence": {"success": "完成任务 / stress 不溢出", "partial": "完成但心理留疤（后续可能触发 MB）", "fail": "MB 卡触发（按当前 stress 阈值）"},
+          "frequency_per_chapter": 1,
+          "_writer_special": "卷一-卷三常用 / 卷四起减少（转 MV_005）"
+        },
+        {
+          "move_id": "MV_005",
+          "label": "自我牺牲（关键 NPC 救援）",
+          "trigger_condition": "核心 NPC 性命危险 + 必须用代价救（牺牲分身 / 暴露身份 / 失去资源）",
+          "narrative_template": "PROTAGONIST 没有犹豫——但他的『没有犹豫』其实是 0.3 秒里的快速核算。他选了那个让对方活下来、自己付出最大代价的方案。执行完，他会假装这是本能反应。",
+          "_writer_anti_template": "禁：『不假思索』（违背 persona 谨慎）；『冲上去』（太热血）",
+          "consequence": {"success": "NPC 救活 / affinity 大升 / stress +3 / 关键资源减损", "partial": "NPC 救活但留后遗症 / stress +5", "fail": "NPC 死亡 / 精神创伤 / 触发 MB_004_封心"},
+          "frequency_per_chapter": 1,
+          "_writer_special": "通常每卷 1 次。卷四前别用，太早用会冲淡 All Is Lost（失 2 分身换盟友）的冲击力"
+        },
+        {
+          "move_id": "MV_006",
+          "label": "撕标签反抗（晚期 Break Into Three 风格）",
+          "trigger_condition": "All Is Lost 之后 - 体系压力达临界 + 选『不再做工具人』",
+          "narrative_template": "PROTAGONIST 从内兜掏出那张『临时工编号 T-7』胸卡。他看了一眼，然后用拇指把塑封一点点抠开。等抠到中间那个钢印时，他停了一下，然后把整张卡塞进碎纸机。",
+          "_writer_anti_template": "禁：大喊『我不再是临时工』（违背 persona 内敛）；撕得很激烈（太戏剧）",
+          "consequence": {"success": "心理切断『编制执念』/ unlock_aspect: 体系外行动者 / fate_trigger: RR_006", "partial": "动作完成但心理还在挣扎 / 后续可能反复", "fail": "撕到一半停下 - 把卡缝起来 / stress +5 + MB_002_酗酒 风险"},
+          "frequency_per_chapter": 1,
+          "_writer_special": "全书最多用 1 次。仅在 Break Into Three ME 触发"
+        }
+      ]
     },
-    {
-      "move_id": "MV_002",
-      "owner": "PROTAGONIST",
-      "label": "谨慎试探（HeroC式）",
-      "trigger_condition": "面对未知 NPC / 新异常事件 / 上位者询问",
-      "narrative_template": "PROTAGONIST 没有立刻回答。他先垂了一下视线（假装在想 / 实际在重组语言），然后用比平时慢半拍的语气说出一个模糊但可解释为多种意思的回答。",
-      "_writer_anti_template": "禁：『他谨慎地说』（词汇直白）；『他想了想』（太通用）",
-      "consequence": {
-        "success": "对方接受答案 / 关系平稳 / stress -1",
-        "partial": "对方半信半疑 / hidden_loyalty 微变",
-        "fail": "对方追问 / 怀疑 clock +2 ticks"
-      },
-      "frequency_cap": {"per_chapter": 4, "per_arc": 30},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 12,
-      "underuse_warning_threshold": 4
+    "DEUTERAGONIST": {
+      "moves": [
+        {
+          "move_id": "MV_101",
+          "label": "冷淡式关心",
+          "trigger_condition": "PROTAGONIST stress 高 / DEUTERAGONIST affinity ≥30",
+          "narrative_template": "DEUTERAGONIST 把一杯咖啡放在主角桌上（不看他），丢一句『下次别熬』，然后转身就走。主角知道她在意，但她绝不会承认。",
+          "_writer_anti_template": "禁：『她温柔地说』（违背她 voice）",
+          "consequence": {"success": "主角 stress -1 / 双方 affinity +1", "partial": "主角接住但不知怎么回应", "fail": "主角太累没注意到 / 她有点失望"},
+          "frequency_per_chapter": 1
+        },
+        {
+          "move_id": "MV_102",
+          "label": "暗中调查",
+          "trigger_condition": "怀疑主角不对劲 + 周末时段",
+          "narrative_template": "周末她不接电话。主角事后从同事处听说，她在档案室通宵翻了一晚上原身份的档案。",
+          "consequence": {"success": "调查 clock +3 ticks", "partial": "+1 tick", "fail": "无进展 / 她自我怀疑"},
+          "frequency_per_chapter": 1
+        },
+        {
+          "move_id": "MV_103",
+          "label": "强硬掩护主角",
+          "trigger_condition": "上级对主角起疑 + DEUTERAGONIST affinity ≥50",
+          "narrative_template": "DEUTERAGONIST 走进上级办公室，板着脸说『他是我观察过的，没问题』，然后不等回应就走。她不擅长说谎，但她擅长用『确信』压人。",
+          "consequence": {"success": "怀疑 clock -3 ticks / 她自身被上级记一笔", "partial": "怀疑 clock -1 / 她自己被上级 affinity -5", "fail": "上级更怀疑 + 怀疑她同伙"},
+          "frequency_per_chapter": 1
+        }
+      ]
     },
-    {
-      "move_id": "MV_003",
-      "owner": "PROTAGONIST",
-      "label": "引导别人开口（信息倒手）",
-      "trigger_condition": "需要从 NPC 身上挖信息但不能直接问",
-      "narrative_template": "PROTAGONIST 主动提供一个对方关心的小情报（买的咖啡 / 知道的小八卦 / 帮的小忙），然后在对方放松后顺着话题切到他真正想问的事，语气保持随意。",
-      "_writer_anti_template": "禁：『他套话』/『他旁敲侧击』",
-      "consequence": {"success": "拿到关键信息 / affinity 微升", "partial": "拿到部分信息", "fail": "对方察觉 / affinity 微降 / stress +1"},
-      "frequency_cap": {"per_chapter": 2, "per_arc": 12},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 5,
-      "underuse_warning_threshold": 1
-    },
-    {
-      "move_id": "MV_004",
-      "owner": "PROTAGONIST",
-      "label": "扛压硬撑（高 stress 应对）",
-      "trigger_condition": "stress ≥7 但场景不允许 break / 必须立刻完成任务",
-      "narrative_template": "PROTAGONIST 手指在裤缝边缘抠了一下（留下小白印）。他知道现在不能倒。把注意力强行压到当前具体动作上——抓住门把手，开门，走出去。一个动作接一个动作，像清单。",
-      "_writer_anti_template": "禁：『他咬牙坚持』（老套）；『硬撑着』（太干）",
-      "consequence": {"success": "完成任务 / stress 不溢出", "partial": "完成但心理留疤（后续可能触发 MB）", "fail": "MB 卡触发（按当前 stress 阈值）"},
-      "frequency_cap": {"per_chapter": 2, "per_arc": 6},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 4,
-      "underuse_warning_threshold": 0,
-      "_writer_special": "卷一-卷三常用 / 卷四起减少（转 MV_005）"
-    },
-    {
-      "move_id": "MV_005",
-      "owner": "PROTAGONIST",
-      "label": "自我牺牲（关键 NPC 救援）",
-      "trigger_condition": "核心 NPC 性命危险 + 必须用代价救（牺牲分身 / 暴露身份 / 失去资源）",
-      "narrative_template": "PROTAGONIST 没有犹豫——但他的『没有犹豫』其实是 0.3 秒里的快速核算。他选了那个让对方活下来、自己付出最大代价的方案。执行完，他会假装这是本能反应。",
-      "_writer_anti_template": "禁：『不假思索』（违背 persona 谨慎）；『冲上去』（太热血）",
-      "consequence": {"success": "NPC 救活 / affinity 大升 / stress +3 / 关键资源减损", "partial": "NPC 救活但留后遗症 / stress +5", "fail": "NPC 死亡 / 精神创伤 / 触发 MB_004_封心"},
-      "frequency_cap": {"per_chapter": 1, "per_arc": 2},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 2,
-      "underuse_warning_threshold": 0,
-      "_writer_special": "通常每卷 1 次。卷四前别用，太早用会冲淡 All Is Lost（失 2 分身换盟友）的冲击力"
-    },
-    {
-      "move_id": "MV_006",
-      "owner": "PROTAGONIST",
-      "label": "撕标签反抗（晚期 Break Into Three 风格）",
-      "trigger_condition": "All Is Lost 之后 - 体系压力达临界 + 选『不再做工具人』",
-      "narrative_template": "PROTAGONIST 从内兜掏出那张『临时工编号 T-7』胸卡。他看了一眼，然后用拇指把塑封一点点抠开。等抠到中间那个钢印时，他停了一下，然后把整张卡塞进碎纸机。",
-      "_writer_anti_template": "禁：大喊『我不再是临时工』（违背 persona 内敛）；撕得很激烈（太戏剧）",
-      "consequence": {"success": "心理切断『编制执念』/ unlock_aspect: 体系外行动者 / fate_trigger: RR_006", "partial": "动作完成但心理还在挣扎 / 后续可能反复", "fail": "撕到一半停下 - 把卡缝起来 / stress +5 + MB_002_酗酒 风险"},
-      "frequency_cap": {"per_chapter": 1, "per_arc": 1},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 1,
-      "underuse_warning_threshold": 0,
-      "_writer_special": "全书最多用 1 次。仅在 Break Into Three ME 触发"
-    },
-    {
-      "move_id": "MV_101",
-      "owner": "DEUTERAGONIST",
-      "label": "冷淡式关心",
-      "trigger_condition": "PROTAGONIST stress 高 / DEUTERAGONIST affinity ≥30",
-      "narrative_template": "DEUTERAGONIST 把一杯咖啡放在主角桌上（不看他），丢一句『下次别熬』，然后转身就走。主角知道她在意，但她绝不会承认。",
-      "_writer_anti_template": "禁：『她温柔地说』（违背她 voice）",
-      "consequence": {"success": "主角 stress -1 / 双方 affinity +1", "partial": "主角接住但不知怎么回应", "fail": "主角太累没注意到 / 她有点失望"},
-      "frequency_cap": {"per_chapter": 1, "per_arc": 4},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 3,
-      "underuse_warning_threshold": 0
-    },
-    {
-      "move_id": "MV_102",
-      "owner": "DEUTERAGONIST",
-      "label": "暗中调查",
-      "trigger_condition": "怀疑主角不对劲 + 周末时段",
-      "narrative_template": "周末她不接电话。主角事后从同事处听说，她在档案室通宵翻了一晚上原身份的档案。",
-      "consequence": {"success": "调查 clock +3 ticks", "partial": "+1 tick", "fail": "无进展 / 她自我怀疑"},
-      "frequency_cap": {"per_chapter": 1, "per_arc": 3},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 2,
-      "underuse_warning_threshold": 0
-    },
-    {
-      "move_id": "MV_103",
-      "owner": "DEUTERAGONIST",
-      "label": "强硬掩护主角",
-      "trigger_condition": "上级对主角起疑 + DEUTERAGONIST affinity ≥50",
-      "narrative_template": "DEUTERAGONIST 走进上级办公室，板着脸说『他是我观察过的，没问题』，然后不等回应就走。她不擅长说谎，但她擅长用『确信』压人。",
-      "consequence": {"success": "怀疑 clock -3 ticks / 她自身被上级记一笔", "partial": "怀疑 clock -1 / 她自己被上级 affinity -5", "fail": "上级更怀疑 + 怀疑她同伙"},
-      "frequency_cap": {"per_chapter": 1, "per_arc": 2},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 2,
-      "underuse_warning_threshold": 0
-    },
-    {
-      "move_id": "MV_201",
-      "owner": "MENTOR_NPC",
-      "label": "递档案（无声传情报）",
-      "trigger_condition": "MENTOR_NPC 认为主角该知道某事 + 主角主动来档案室",
-      "narrative_template": "MENTOR_NPC 从某排档案盒里抽出一张纸，叠好塞主角口袋。『拿回去自己看，看完烧了』。然后回头继续做活，不看主角。",
-      "consequence": {"success": "主角拿到关键文档 / MENTOR_NPC affinity +5", "partial": "拿到但部分模糊", "fail": "主角看完情绪崩了 / MENTOR_NPC 后悔递"},
-      "frequency_cap": {"per_chapter": 1, "per_arc": 3},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 2,
-      "underuse_warning_threshold": 0
-    },
-    {
-      "move_id": "MV_202",
-      "owner": "MENTOR_NPC",
-      "label": "回忆讲古（暗喻教学）",
-      "trigger_condition": "主角向 MENTOR_NPC 抱怨体系不公 + MENTOR_NPC 喝了酒",
-      "narrative_template": "MENTOR_NPC 不直接回应。他扯起多年前某个临时工的故事，讲那人怎么活下来、又怎么没死、又怎么离开。讲完点根烟，不评论。",
-      "consequence": {"success": "主角 stress -1 / 隐性学到一个生存技能", "partial": "听懂了但不知怎么用", "fail": "听完更绝望"},
-      "frequency_cap": {"per_chapter": 1, "per_arc": 3},
-      "usage_count_total": 0,
-      "usage_count_recent_10ch": 0,
-      "overuse_warning_threshold": 2,
-      "underuse_warning_threshold": 0
+    "MENTOR_NPC": {
+      "moves": [
+        {
+          "move_id": "MV_201",
+          "label": "递档案（无声传情报）",
+          "trigger_condition": "MENTOR_NPC 认为主角该知道某事 + 主角主动来档案室",
+          "narrative_template": "MENTOR_NPC 从某排档案盒里抽出一张纸，叠好塞主角口袋。『拿回去自己看，看完烧了』。然后回头继续做活，不看主角。",
+          "consequence": {"success": "主角拿到关键文档 / MENTOR_NPC affinity +5", "partial": "拿到但部分模糊", "fail": "主角看完情绪崩了 / MENTOR_NPC 后悔递"},
+          "frequency_per_chapter": 1
+        },
+        {
+          "move_id": "MV_202",
+          "label": "回忆讲古（暗喻教学）",
+          "trigger_condition": "主角向 MENTOR_NPC 抱怨体系不公 + MENTOR_NPC 喝了酒",
+          "narrative_template": "MENTOR_NPC 不直接回应。他扯起多年前某个临时工的故事，讲那人怎么活下来、又怎么没死、又怎么离开。讲完点根烟，不评论。",
+          "consequence": {"success": "主角 stress -1 / 隐性学到一个生存技能", "partial": "听懂了但不知怎么用", "fail": "听完更绝望"},
+          "frequency_per_chapter": 1
+        }
+      ]
     }
-  ],
+  },
+  "offstage_threads": {},
   "_balance_check": {
-    "_doc": "save-state.character_moves_usage_scan 检查",
-    "overuse_pattern": "近 10 章某 move > overuse_warning_threshold → 公式化警报",
-    "underuse_pattern": "近 20 章某角色 0 move → 角色『失声』警报"
+    "_doc": "cross_cluster_character_dynamics_aggregate.py MOVES_USAGE 扫描——从 changes.self_eval.moves_used[] 逐章历史动态统计，不读本文件里的存量计数字段",
+    "overuse_pattern": "某 move 单章实际使用次数 > 其 frequency_per_chapter → MOVE_OVERUSE（公式化警报）",
+    "underuse_pattern": "core 角色出场 ≥3 章但 moves_used 全 0 → CHARACTER_VOICELESS；半数以上 move 近期 0 次 → MOVES_UNDERUSED（角色失声）"
   },
   "_consumption_chain": {
-    "produced_by": "/distill-character 蒸馏每个角色时初始化 + writer 章内自评追加",
+    "produced_by": "/distill-character 蒸馏每个角色时初始化 + writer cluster 内自评追加",
     "consumed_by": [
-      "build_manifest._collect_character_moves() 注入 manifest",
-      "writer step 0：写到角色行动时优先用 narrative_template，避免公式化",
-      "save-state.character_moves_usage_scan：更新 usage_count + 平衡度警报"
+      "build_manifest._collect_character_moves() 注入 manifest（仅本章涉及角色，透传整个 move 对象供 writer 参考）",
+      "writer：写到角色行动时优先用 narrative_template，避免公式化",
+      "cross_cluster_character_dynamics_aggregate.py：按 frequency_per_chapter 判 MOVE_OVERUSE + 按零使用判失声警报"
     ]
   },
   "_design_notes": {
-    "声明式行动断层防范": "move 数据填了下游必须消费（manifest 注入→writer 用 narrative_template→save-state 回写 usage_count），否则=断层。MV_001 多身体分流是金手指招牌，writer 每次写分身必查 _writer_special 卷数限制",
-    "narrative_template 用占位符": "用 X/Y/Z 占位而非具体句子，writer 抽取时填充——保持识别度但不公式化"
+    "声明式行动断层防范": "move 数据填了下游必须消费（manifest 注入→writer 用 narrative_template→changes.self_eval.moves_used 回报→aggregator 统计），否则=断层。MV_001 多身体分流是金手指招牌，writer 每次写分身必查 _writer_special 卷数限制",
+    "narrative_template 用占位符": "用 X/Y/Z 占位而非具体句子，writer 抽取时填充——保持识别度但不公式化",
+    "frequency_per_chapter 是章级细粒度字段": "与本包其他 schema 的 cluster 级字段（stages_by_cluster / setup_cluster 等）不同——moves 过用检测由 cross_cluster_character_dynamics_aggregate.py 按实际章号统计，不按 cluster 聚合，故意保留章级颗粒度，不要误改成 cluster 字段"
   }
 }

@@ -4,17 +4,19 @@
 v2 章程的最后一道闸：阶段 6 _FINAL 文件齐全后，跑本脚本验证「skill 能让目标 gen-model 真正写出来」。
 不通过 → exit 2 → plan_tracker end 拦截 → 禁止声称蒸馏完成。
 
-链路：
-  1. 用 skill_FINAL 调 distill_replicate.py --mode cluster 实打 gen-model 复刻 cluster
-  2. 对复刻 txt 估算简化 cluster_arc（emotion_curve / kicker_count / scene_summary_ratio）
-  3. 调 cluster_evaluator.py 用原 cluster_arc 对比 6 维
-  4. verdict ≠ PASS（--strict）/ ≠ PASS+WARN（默认）→ exit 2
+链路（v29 同栈）：
+  1. 先 spawn Claude agent 按 skill_FINAL 写复刻场景稿到 --claude-scenes-dir/scene_*.txt
+  2. 调 distill_replicate.py --mode cluster --claude-scenes-dir 做 gemini 分段润色复刻 cluster
+  3. 对复刻 txt 估算简化 cluster_arc（emotion_curve / kicker_count / scene_summary_ratio）
+  4. 调 cluster_evaluator.py 用原 cluster_arc 对比 6 维
+  5. verdict ≠ PASS（--strict）/ ≠ PASS+WARN（默认）→ exit 2
 
 用法：
   python core/scripts/distill_finalize_verify.py \\
     --project workspace/styles/<书名> \\
     --skill workspace/styles/<书名>/skill_FINAL.md \\
     --cluster-id cluster_001 \\
+    --claude-scenes-dir workspace/styles/<书名>/复刻测试/writer_feedback_verify/claude_scenes \\
     --output workspace/styles/<书名>/对比报告/writer_feedback_verify.json \\
     [--strict]
 
@@ -360,14 +362,16 @@ def parse_sfs_eval(path: Path) -> tuple[float | None, str | None]:
 
 # ============ 主流程 ============
 
-def run_distill_replicate(skill: Path, project: Path, cluster_id: str, output: Path) -> bool:
-    """调 distill_replicate.py --mode cluster 实打 gen-model 复刻"""
+def run_distill_replicate(skill: Path, project: Path, cluster_id: str, output: Path,
+                          claude_scenes_dir: Path) -> bool:
+    """调 distill_replicate.py --mode cluster 复刻（v29 同栈：Claude 场景稿 + gemini 分段润色）"""
     cmd = [
         child_python(), str(DISTILL_REPLICATE),
         "--style-skill", str(skill),
         "--mode", "cluster",
         "--cluster-ref", cluster_id,
         "--project", str(project),
+        "--claude-scenes-dir", str(claude_scenes_dir),
         "--output", str(output),
     ]
     print(f"[verify] 调 distill_replicate.py --mode cluster ...", file=sys.stderr)
@@ -467,10 +471,13 @@ def main():
                         help="要 verify 的 cluster_id（如 cluster_001）")
     parser.add_argument("--output", required=True, type=Path,
                         help="最终 verify 报告路径（writer_feedback_verify.json）")
+    parser.add_argument("--claude-scenes-dir", type=Path,
+                        help="Claude 复刻场景稿目录，含 scene_*.txt（v29 同栈必需·除非 "
+                             "--skip-distill-replicate）")
     parser.add_argument("--strict", action="store_true",
                         help="verdict != PASS 时 exit 2（用于 plan_tracker step 8 闸门）")
     parser.add_argument("--skip-distill-replicate", action="store_true",
-                        help="跳过实打 gen-model（假设复刻文件已存在 · debug 用）")
+                        help="跳过实打复刻（假设复刻文件已存在 · debug 用）")
     parser.add_argument("--replica-path",
                         help="[--skip-distill-replicate] 已有复刻 txt 路径")
     args = parser.parse_args()
@@ -483,6 +490,10 @@ def main():
         sys.exit(2)
     if not skill.exists():
         print(f"[ERROR] skill 文件不存在: {skill}", file=sys.stderr)
+        sys.exit(2)
+    if not args.skip_distill_replicate and not args.claude_scenes_dir:
+        print("[ERROR] 缺 --claude-scenes-dir（v29 同栈必需·除非 --skip-distill-replicate）",
+              file=sys.stderr)
         sys.exit(2)
 
     cluster_index_path = project / "cluster_index.json"
@@ -524,7 +535,8 @@ def main():
             sys.exit(2)
         print(f"[verify] 跳过 distill_replicate (debug) · 使用已有 {replica_path}")
     else:
-        ok = run_distill_replicate(skill, project, args.cluster_id, replica_path)
+        ok = run_distill_replicate(skill, project, args.cluster_id, replica_path,
+                                   args.claude_scenes_dir)
         if not ok or not replica_path.exists():
             print(f"[ERROR] distill_replicate.py 复刻失败 · 终止 verify", file=sys.stderr)
             sys.exit(3)

@@ -18,8 +18,7 @@
   "_consumption_chain": {
     "produced_by": "skill_evolver.promote()（usage>=5+confidence>=0.8 自动 · transfer_scope=universal 才升）",
     "consumed_by": [
-      "新项目 /outline 启动时 retrieve 相似题材 patterns 注入初始 writer prompt",
-      "/wizard 命令推荐时引用 universal patterns 提示题材选择"
+      "新项目 /outline 启动时 retrieve 相似题材 patterns 注入初始 writer prompt"
     ]
   }
 }

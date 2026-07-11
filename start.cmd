@@ -23,6 +23,8 @@ if not defined CLAUDE_CODE_GIT_BASH_PATH (
 )
 
 rem -- Sync CLAUDE.md + commands to current project directory --
+rem 在仓库根目录内启动时跳过同步：agent 入口桩（23 行）绝不能覆盖仓库根的完整 CLAUDE.md
+if /i "%PROJECT_DIR%\"=="%~dp0" goto skip_sync
 if exist "%SD%claude-home\CLAUDE.md" (
     copy /y "%SD%claude-home\CLAUDE.md" "%PROJECT_DIR%\CLAUDE.md" >nul 2>nul
 )
@@ -30,6 +32,7 @@ if not exist "%PROJECT_DIR%\.claude\commands" mkdir "%PROJECT_DIR%\.claude\comma
 if exist "%~dp0.claude\commands" (
     copy /y "%~dp0.claude\commands\*.md" "%PROJECT_DIR%\.claude\commands\" >nul 2>nul
 )
+:skip_sync
 
 rem -- Launch claude CLI (interactive mode) --
 rem User types anything to trigger the main menu (CLAUDE.md handles the rest)

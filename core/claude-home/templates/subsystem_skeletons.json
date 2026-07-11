@@ -962,7 +962,7 @@
     },
     "event_relation_graph": {
       "schema_version": 1,
-      "_doc": "[2026-06-21 R19 W8 Batch-W·P1·StoryWriter arxiv 2506.16445] outline 跨 cluster 因果 + 角色 throughline 有向图·outline step 3.5 builder 产出·validator 4 issue (NODE_ORPHAN / EDGE_CYCLE / PAYOFF_UNREACHABLE / CHARACTER_THROUGH_LINE_BROKEN) 全 advisory·非核心 13 件·容差校验只查 schema_version 合法 JSON·env EVENT_RELATION_GRAPH_MODE 默认 shadow",
+      "_doc": "⚠️ 非 34 核心子系统·不在 _canonical_34·不计入 scaffold 34 count（同 character_belief_ledger/戏剧问题账本）。outline 跨 cluster 因果 + 角色 throughline 有向图·outline step 3.5 builder 产出·validator 4 issue (NODE_ORPHAN / EDGE_CYCLE / PAYOFF_UNREACHABLE / CHARACTER_THROUGH_LINE_BROKEN) 全 advisory·容差校验只查 schema_version 合法 JSON·env EVENT_RELATION_GRAPH_MODE 默认 shadow",
       "consumption": {
         "layer": "via_scanner",
         "by": [

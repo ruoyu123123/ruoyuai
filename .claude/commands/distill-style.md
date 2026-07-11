@@ -196,7 +196,7 @@ python core/scripts/validate_style.py "风格库/复刻测试/v0/test1_opening.t
    ↓ 终止条件：连续 2 轮无新差距 + cluster SFS ≥ 80（SFS 是唯一出货闸 · 六维 rubric 不参与）
 [阶段 6] 出货 —— _FINAL 四件套 + git commit
    ↓ 输出：作者风格_FINAL.json + skill_FINAL.md + distillation_log.md
-[阶段 7] 写作端回灌严闭环（v2 新增 · 严 · Article 6）—— skill_FINAL 灌 gen_writer.py 写同 cluster → arc/SFS 对比
+[阶段 7] 写作端回灌严闭环（v2 新增 · 严 · Article 6 · v29 同栈）—— 先 spawn Claude agent 按 skill_FINAL 写复刻场景稿，distill_finalize_verify.py 内部调 distill_replicate.py --claude-scenes-dir 润色复刻同 cluster → arc/SFS 对比
    ↓ 不通过 → distill_finalize_verify.py exit 2 → plan end 拦截
    ↓ 输出：writer_feedback_verify.json
 ```
@@ -257,7 +257,7 @@ echo "PLAN_ID=$PLAN_ID"
 | 阶段 4 | 修正反思 → skill v{N+1} | `--n 5` | `workspace/styles/<书名>/.plan_markers/stage4_reflection.json` + `skill_v{N+1}.md` |
 | 阶段 5 | cluster 终验复刻（v29 同栈：Claude 场景稿 + `distill_replicate.py --mode cluster --claude-scenes-dir`）| `--n 6` | `复刻测试/.../cluster_<id>_replica.txt` |
 | 阶段 6 | 出货（_FINAL 四件套 + git commit）·**出货前必先过阶段 7 回灌门槛** | `--n 7` | `作者风格_FINAL.json` + `skill_FINAL.md` + `distillation_log.md` |
-| 阶段 7 | 写作端回灌严闭环（`distill_finalize_verify.py --strict`）·**并入 step 7 出货门槛，不单独占 plan step**（plan 仅 7 步） | 含于 `--n 7`（回灌 exit 0 才落 step 7） | `对比报告/writer_feedback_verify.json` |
+| 阶段 7 | 写作端回灌严闭环（v29 同栈：Claude 场景稿 + `distill_finalize_verify.py --claude-scenes-dir --strict`）·**并入 step 7 出货门槛，不单独占 plan step**（plan 仅 7 步） | 含于 `--n 7`（回灌 exit 0 才落 step 7） | `对比报告/writer_feedback_verify.json` |
 
 每阶段尾必须执行：
 ```bash

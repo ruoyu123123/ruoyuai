@@ -15,7 +15,7 @@
   循环：
     /cluster-write
       build_manifest 生成注入清单
-      novel-writer 调 gen_writer.py 写整块草稿
+      novel-writer（Claude）亲笔逐场景写草稿 → gen_writer.py 调 gemini 分段润色出终稿
       audit_hub + reading/voice/foreshadow/reflect/summarize 做 cluster 级检查
       通过后 splitter 按字数切章并生成标题
     /cluster-save-state
@@ -44,7 +44,7 @@
 
 - 作者风格蒸馏：从参考文本提取风格档案和可注入 skill。
 - 卷级大纲：生成阶段、事件池、cluster 规划和首块 scene storyboard。
-- 故事块写作：`gen_writer.py` 只产整块正文草稿和创作期自评。
+- 故事块写作：Claude 亲笔逐场景写草稿（novel-writer agent · 含创作自评）→ `gen_writer.py` 调 gemini 分段等体量润色出终稿。
 - Cluster 级审核：机械 scanner、阅读反思、声纹检查、伏笔评估和经验沉淀都看整块文本。
 - 状态保存：`/cluster-save-state` 统一回写人物、世界、关系、伏笔、摘要、评价和下块候选。
 - 断点恢复：WAL、plan_tracker 和 Git 快照共同保证可续跑。

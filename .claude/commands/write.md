@@ -2,18 +2,18 @@
 description: 当用户从零开始想写一部小说，且需要主代理引导走完从风格基线到逐故事块产出的端到端流程时使用
 ---
 
-## Gen-Model 抽象层
+## 创作与 Gen-Model 分工层（v29）
 
-本流程中所有**含创意笔触的生成步骤**走 gen-model，Claude 主代理只做编排、检查、梳理和裁决。
+正文创作笔触由 **Claude 亲笔**承载（v29 · novel-writer agent 逐场景写），gen-model（gemini）负责**分段等体量润色**与修复类步骤；Claude 主代理负责编排、检查、梳理和裁决。
 
 | 步骤 | 唯一执行方式 |
 |---|---|
 | 灵感卡 | `gen_creative.py --mode brainstorm`，基于调研缓存生成 |
-| 正文 | `/cluster-write` step 2 spawn `novel-writer`，再由 `gen_writer.py --project <path> --cluster N` 产整块草稿 |
+| 正文 | `/cluster-write` step 2 spawn `novel-writer`：Claude 亲笔逐场景写 `claude_scenes/` → `gen_writer.py --project <path> --cluster N` 调 gemini 分段等体量润色出终稿 |
 | 违规修复 | checker 生成 brief，`gen_fixer.py` 按 brief 改 cluster 草稿 |
 | 对话 voice 修复 | `novel-voice-checker` 生成 brief，`gen_fixer.py --mode voice-fix` 修 |
 | 亲读后微调 | `gen_fixer.py --mode polish --instructions "<自由文本>"` |
-| 字数补写 | 回到 cluster 草稿层补写，再由 splitter 重新切章 |
+| 字数补写 | 回到 cluster 草稿层把场景写透，再由 splitter 重新切章 |
 
 **主代理仍负责**：调研（researcher）/ 摘要（summarizer）/ 反思（reflector）/ 阅读反思（reading-reflector）/ splitter 调度 / judge / save-state 状态整理 / 用户对话 / 决策。
 
@@ -79,16 +79,16 @@ $ARGUMENTS
 好嘞！
 📖 [类型] · cluster-only · 字数随 splitter 自然切分
 风格参考：[参考小说名] 的写作风格
-推荐用 claude-opus-4-6 写作，效果最好～
+正文由 Claude 亲笔创作（继承当前会话模型），建议用最强的 Claude 模型写作，效果最好～
 马上开写！
 ```
 
 **模型切换提示：**
 ```
-准备开写了！写作推荐切换到更好的模型：
-  [1] claude-opus-4-6（创作大师Pro）
-  [2] claude-sonnet-4-6（快+好）
-  [3] 就用当前模型
+准备开写了！正文由 Claude 亲笔创作（novel-writer agent 继承当前会话模型），
+用 /model 切到当前会话可用的最强 Claude 模型，创作质量最好：
+  · /model → 选最新最强的 Claude 模型
+  · 或直接用当前模型开写
 ```
 
 ---
@@ -250,9 +250,8 @@ cluster-write / cluster-save-state 内部的质检只服务唯一 cluster 链路
 
 连续失败时提示：
 ```
-这个模型好像不太顺，试试切换一个？
-  /model claude-opus-4-6
-  /model claude-sonnet-4-6
+这个模型好像不太顺，用 /model 切到当前会话可用的最强 Claude 模型试试？
+（若是 gemini 润色反复失败，改用 `gen_model.py switch <name>` 切换 gen-model）
 ```
 
 ---

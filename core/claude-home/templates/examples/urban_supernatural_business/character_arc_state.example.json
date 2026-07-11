@@ -1,14 +1,15 @@
 {
   "schema_version": "2.0",
-  "_doc": "v21 R3.1 扩展：McKee 7 步（weakness/need/desire/opponent/plan/battle/self_revelation/new_equilibrium）+ Truby 22 步精华（ghost/moral_argument/story_world）整合到 character_arc_state。兼容 v1.0 的 lie/want/need/truth 字段。",
+  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。本文件是 McKee 7 步 + Truby 22 步精华 + Save the Cat 4 元的实战填充范式——重点看 _story_world.thematic_critique（南海资本=把人的'天命/神性'金融化的极致系统，不是中性世界观）+ moral_argument 的 thesis vs antithesis 双立场辩论结构。stage 锚定用 stages_by_cluster（cluster 为单位，不锁章号）。占位符：陆衍=主角 / 顾沉=招安派反派（thesis 的对手方）。",
   "_field_doc": {
-    "lie / want / need / truth": "Save the Cat 原版四元（兼容 v1.0）",
-    "weakness_need": "McKee：主角真正缺什么（深层）— 不一定他自己知道",
-    "desire": "McKee：主角以为自己想要什么（表层）— 与 need 经常冲突",
-    "opponent_and_plan": "McKee：主要对手是谁 + 主角的初始 plan",
+    "lie / want / need / truth": "Save the Cat 原版四元",
+    "weakness_need": "McKee：主角真正缺什么（深层）",
+    "desire": "McKee：主角以为自己想要什么（表层）",
+    "opponent_and_plan": "McKee：主要对手 + 初始 plan",
     "battle_and_self_revelation": "McKee：高潮 battle 触发 self_revelation",
-    "ghost": "Truby：主角过去的创伤/未解决事件，潜在驱动当下行为",
-    "moral_argument": "Truby：故事在讨论的道德论点（如『复仇值不值』『顺从 vs 反抗』）"
+    "ghost": "Truby：主角过去的创伤/未解决事件",
+    "moral_argument": "Truby：故事在讨论的道德论点（thesis vs antithesis）",
+    "stages_by_cluster": "各 cluster 对应的弧线阶段（cluster 为单位，不锁章号）"
   },
   "characters": {
     "陆衍": {
@@ -22,41 +23,43 @@
         "primary_opponent": "顾沉（南海资本招安代表）",
         "secondary_opponents": ["林晚秋（北殷卧底）", "神性股权制本身（系统层对手）"],
         "initial_plan": "假装没看见神性股权 → 蒙混过签字事件 → 回到正常工作",
-        "plan_failure_at_ch": 14
+        "plan_failure_at_cluster": "cluster_015"
       },
       "battle_and_self_revelation": {
-        "final_battle_ch": 475,
+        "final_battle_at_cluster": "cluster_190",
         "battle_form": "陆衍带散户互助会反向收购南海资本",
         "self_revelation": "他要的从来不是'安全'，是'有人记得自己'——而被资本异化的'天命'才是最大的孤独"
       },
       "ghost": {
         "core_ghost": "8 岁那年母亲早逝，父亲沉默寡言地把所有积蓄都给他读书——这种'被亏欠'的负担感塑造了他的退缩",
-        "ghost_resolved_at_ch": 485,
+        "ghost_resolved_at_cluster": "cluster_195",
         "_writer_hint": "每当陆衍要做'欠父亲一笔'类决定时（如关心父亲健康/不愿让父亲担心），ghost 在驱动"
       },
       "moral_argument": {
         "central_question": "在被异化的世界里，个体的『普通生活权』是不是奢侈品？",
         "thesis_position": "拒绝'天命叙事' → 普通生活本身就是反抗",
         "antithesis_position": "顾沉代表的：接受现实/适配规则 → 才有真正自由",
-        "synthesis_at_ch": 475,
+        "synthesis_at_cluster": "cluster_190",
         "_writer_hint": "writer 写'陆衍 vs 顾沉'对话时，本质是这两种道德观的辩论"
       },
-      "stages_by_chapter": {
-        "1": "lie", "2": "lie", "3": "lie", "4": "lie", "5": "lie",
-        "8": "lie_cracking", "14": "want_threatened", "30": "debate",
-        "50": "break_into_two", "100": "fun_and_games", "175": "false_victory",
-        "250": "midpoint_revelation", "375": "all_is_lost", "395": "dark_night",
-        "420": "break_into_three", "485": "truth_realized", "500": "final_image"
+      "stages_by_cluster": {
+        "cluster_001": "lie", "cluster_003": "lie",
+        "cluster_008": "lie_cracking", "cluster_015": "want_threatened",
+        "cluster_025": "debate", "cluster_038": "break_into_two",
+        "cluster_055": "fun_and_games", "cluster_080": "false_victory",
+        "cluster_105": "midpoint_revelation", "cluster_155": "all_is_lost",
+        "cluster_170": "dark_night", "cluster_180": "break_into_three",
+        "cluster_195": "truth_realized", "cluster_200": "final_image"
       },
       "key_milestones": {
-        "lie_to_cracking": "ch8 废票首次激活，听见'是你'",
-        "cracking_to_want_threatened": "ch14 假父亲事件，原 want（普通生活）已不可得",
-        "midpoint_revelation": "ch250 顾沉透露'你是诱饵'，原 want 完全破灭",
-        "all_is_lost_to_dark_night": "ch395 老乞丐讲述拆神真相，旧 lie 彻底被击穿",
-        "break_into_three_to_truth": "ch420 带散户互助会反向收购，主动选择 need 而非 want"
+        "lie_to_cracking": "废票首次激活，听见'是你'",
+        "cracking_to_want_threatened": "假父亲事件，原 want（普通生活）已不可得",
+        "midpoint_revelation": "顾沉透露'你是诱饵'，原 want 完全破灭",
+        "all_is_lost_to_dark_night": "老乞丐讲述拆神真相，旧 lie 彻底被击穿",
+        "break_into_three_to_truth": "带散户互助会反向收购，主动选择 need 而非 want"
       },
-      "current_stage_at_ch": "5:lie",
-      "_last_updated_at_ch": 5
+      "current_stage_at_cluster": "cluster_001:lie",
+      "_last_updated_at_cluster": "cluster_001"
     },
     "顾沉": {
       "lie": "执行任务/接近真相是我能做的最大正义，家族复仇必须冷血",
@@ -69,10 +72,10 @@
         "primary_opponent": "陆衍（招安/利用对象，后转盟友/竞争者）",
         "secondary_opponents": ["北殷财团", "其他七大本土财团"],
         "initial_plan": "招安陆衍当代理 → 用他获得董事会席位",
-        "plan_failure_at_ch": 250
+        "plan_failure_at_cluster": "cluster_105"
       },
       "battle_and_self_revelation": {
-        "final_battle_ch": 475,
+        "final_battle_at_cluster": "cluster_190",
         "battle_form": "顾沉在董事会大议上反水站陆衍这边",
         "self_revelation": "他终于明白：用神性反神性 = 还在神性的逻辑里"
       },
@@ -83,28 +86,28 @@
       "moral_argument": {
         "_doc": "顾沉持 antithesis position（适配规则才有自由）— 全书与陆衍辩论的对手方"
       },
-      "stages_by_chapter": {
-        "2": "lie", "7": "lie", "100": "lie",
-        "245": "lie_cracking", "300": "want_threatened", "395": "dark_night",
-        "485": "truth_realized"
+      "stages_by_cluster": {
+        "cluster_001": "lie", "cluster_055": "lie", "cluster_105": "lie_cracking",
+        "cluster_130": "want_threatened", "cluster_170": "dark_night", "cluster_195": "truth_realized"
       },
-      "current_stage_at_ch": "5:lie",
-      "_last_updated_at_ch": 5
+      "current_stage_at_cluster": "cluster_001:lie",
+      "_last_updated_at_cluster": "cluster_001"
     }
   },
   "_story_world": {
-    "_doc": "Truby story_world：设定本身的隐喻意义 — 整部小说的「世界观批判」",
+    "_doc": "★ Truby story_world：南海资本体系本身是『把人的天命金融化』的隐秘批判（本范式最有题材价值的部分）",
     "literal": "南海市是中国南方一线城市，本土七大资本 vs 跨国财团",
     "metaphorical": "南海资本 = 把人的'天命/神性'金融化的极致系统 — 你的灵格也能被分股/转让/做空",
     "thematic_critique": "资本的终极形式不是控制物质，而是控制『意义』本身——『你是不是天选之子』成了可以被董事会决议的事",
     "_writer_hint": "每章涉及'神性股权制'机制时，必带出这层隐喻——不是中性世界观，是批判性世界观"
   },
   "_consumption_chain": {
-    "produced_by": "/distill-character + outline 时初始化 + writer/judge 每章更新 current_stage_at_ch",
+    "produced_by": "/distill-character + outline 初始化 + writer/judge 每 cluster 更新 current_stage_at_cluster",
     "consumed_by": [
-      "build_manifest._collect_character_arc_state() 注入 manifest（现有）",
-      "writer step 0y：消费 ghost / moral_argument / weakness_need vs desire 写出深度",
-      "judge consensus：检查本章是否在 moral_argument 维度有推进"
+      "build_manifest._collect_character_arc_state() 注入 manifest",
+      "writer step 0：消费 ghost / moral_argument / weakness_need vs desire",
+      "judge consensus：检查本 cluster 是否在 moral_argument 维度有推进",
+      "skill_evolver：识别 stage 推进作为 success_pattern"
     ]
   }
 }

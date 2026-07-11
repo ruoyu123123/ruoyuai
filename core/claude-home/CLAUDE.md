@@ -10,8 +10,8 @@
 3. **cluster 为单位**：章节只是格式输出，所有质检/状态/学习以 cluster 为单位。
 4. **作者风格档 = 第一权威**：通用规则仅在作者档未规定时兜底。
 5. **advisory vs hard_gate**：风格/工艺走 advisory 可豁免（理由<300字），一致性/穿帮/格式契约 = hard_gate 不可豁免。
-6. **gen-model 复刻强制**：蒸馏复刻走 `distill_replicate.py`（gen-model），禁 Claude sub-agent 复刻。
-7. **freestyle 默认**：writer 不传章数+字数，splitter 按 3000-4500 CJK/章切。
+6. **蒸馏复刻同栈（v29）**：先 spawn Claude agent 按 skill 写复刻场景稿（claude_scenes/），终稿只能由 `distill_replicate.py --claude-scenes-dir` 经 gemini 分段润色落盘。禁纯 gemini 从零直写复刻，也禁 Claude agent 直产复刻终稿（绕过润色=自评自证）。
+7. **正文两阶段（v29）**：novel-writer（Claude 亲笔）逐场景写 `claude_scenes/`，`gen_writer.py` 只做 gemini 分段润色出终稿；写作链不预设章数，splitter 后期按 3000-4500 CJK/章切。
 8. **倒叙由 outline 排 storyboard + writer 按序写**：splitter 不重排。
 
 ## 路径权威

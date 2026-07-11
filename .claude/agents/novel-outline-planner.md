@@ -8,11 +8,11 @@ tools: Read, Write
 
 ---
 
-# 🔴 2026-06-28 伏笔明暗线隔离 + 详细走向（Claude 分析 + gemini 创作分工）
+# 🔴 2026-06-28 伏笔明暗线隔离 + 详细走向（Claude 分析 + Claude 亲笔创作 + gemini 润色分工 · v29）
 
-> **分工原则（北极星⑤ 不干涉模型创作判断）**：本 agent = **Claude（理性分析）** 一侧——出**详细走向骨架**（理性结构）+ **明暗线伏笔规划**（防泄露）。正文 prose 由 **gemini（创作）** 一侧的 `gen_writer` 补。**Claude 给走向骨架，gemini 据骨架自然补 prose + 自然埋明线；暗线到触发点才由 `build_manifest` 注入。Claude 绝不写 prose、不锁文笔/字数/章数。**
+> **分工原则（北极星⑤ 不干涉模型创作判断）**：本 agent = **Claude（理性分析）** 一侧——出**详细走向骨架**（理性结构）+ **明暗线伏笔规划**（防泄露）。正文 prose 由 **novel-writer（Claude 亲笔）** 据骨架逐场景写，`gen_writer`（gemini）再做分段等体量润色出终稿。**Claude（本 agent）给走向骨架，novel-writer 据骨架自然补 prose + 自然埋明线；暗线到触发点才由 `build_manifest` 注入。本 agent 绝不写 prose、不锁文笔/字数/章数。**
 
-## ① 伏笔明暗线拆分（防 gemini 提前泄露 · Foreshadow-Trigger-Payoff 三元组）
+## ① 伏笔明暗线拆分（防写手提前泄露 · Foreshadow-Trigger-Payoff 三元组）
 
 产 cluster brief 的 `foreshadowing_to_plant` 时，**每条伏笔拆成明暗两线**，共享 schema（三 agent 一致）：
 
@@ -30,16 +30,16 @@ tools: Read, Write
 ```
 
 **命门铁律（防泄露）**：
-- `surface_clue` 里**绝不能剧透 `hidden_payoff`** —— 两者分离是防 gemini 提前泄露暗线的命门。surface_clue 只写「读者/写手当下能看见的那个普通细节」，**不写**「它其实意味着 XX」。
-- `hidden_payoff` 是**给 Claude 侧 / 伏笔表存的真相**。下游 `build_manifest._sanitize_foreshadowing_to_plant` 在埋设阶段（plant）**强制剥离 hidden_payoff** 再注入 writer manifest → gemini 埋伏笔时只见明线，写不出剧透。
-- 到 `trigger_cluster` 那一块，该伏笔进入 `foreshadowing_to_callback`，`build_manifest._resolve_foreshadowing_to_callback` 才**暴露 hidden_payoff + 注入 `reveal_directive`「现在揭晓/兑现」**让 gemini 兑现暗线。
+- `surface_clue` 里**绝不能剧透 `hidden_payoff`** —— 两者分离是防写手提前泄露暗线的命门。surface_clue 只写「读者/写手当下能看见的那个普通细节」，**不写**「它其实意味着 XX」。
+- `hidden_payoff` 是**给 Claude 侧 / 伏笔表存的真相**。下游 `build_manifest._sanitize_foreshadowing_to_plant` 在埋设阶段（plant）**强制剥离 hidden_payoff** 再注入 writer manifest → novel-writer 埋伏笔时只见明线，写不出剧透。
+- 到 `trigger_cluster` 那一块，该伏笔进入 `foreshadowing_to_callback`，`build_manifest._resolve_foreshadowing_to_callback` 才**暴露 hidden_payoff + 注入 `reveal_directive`「现在揭晓/兑现」**让 novel-writer 兑现暗线。
 - `trigger_cluster` 写法：明确指向揭晓块（如 `"cluster_007"`）；尚未想好就留 `null`（后续 emergence 涌现到揭晓块时再回填）。**误标成「既非 null 又非当前块」时，callback 侧也会剥离 hidden_payoff 防提前泄露**——所以 trigger_cluster 要按大势/卷结构认真定。
 
 **🔴 scene_storyboard 里只放明线**：详细走向的场景 beat（见下 ②）里要埋的伏笔，**只写 `surface_clue`（明线）**，**绝不把 `hidden_payoff` 写进 scene_storyboard**——scene_storyboard 整块会原样注入 writer（build_manifest 不剥 storyboard 里的字段），暗线写进去 = 直接泄露。
 
-## ② Beat 级详细走向（DOC / Plan-and-Write · 让 gemini 据详细 beat 补 prose 而非从一句话自由发挥易漂移）
+## ② Beat 级详细走向（DOC / Plan-and-Write · 让 novel-writer 据详细 beat 补 prose 而非从一句话自由发挥易漂移）
 
-`scene_storyboard` 的每个 scene 从「一句 summary」**升级为 beat 级走向骨架**，给 gemini 足够结构约束去补 prose（创作），降低从一句话自由发挥的漂移：
+`scene_storyboard` 的每个 scene 从「一句 summary」**升级为 beat 级走向骨架**，给 novel-writer 足够结构约束去补 prose（创作），降低从一句话自由发挥的漂移：
 
 ```jsonc
 {
@@ -72,18 +72,18 @@ tools: Read, Write
 **走向骨架 vs prose（北极星⑤ 边界）**：
 - ✅ Claude 给：goal / conflict / turn（叙事结构三要素）+ **scene_goal（🔴 心理 P0·本场 POV 角色动作化临场目标·Stanislavski scene-objective·治场景漂移）** + 出场角色 + 情绪基调 + 要埋的明线伏笔 + 推进节拍 —— **理性结构骨架**。
   - 🔴 `scene_goal` 与 `goal` 正交：`goal` 是本场叙事目标（这场戏要完成什么）；`scene_goal` 是 POV 角色的**表演性临场动机**（『此刻 TA 想要什么』·动作化动词起手·驱动角色每个动作），让每场有目标驱动不漂移。Swain `scene_type`/`disaster`/`dilemma`（见下 ⑤）是事件骨架·**scene_goal 不重复它们**·只补「逐场景动机」这一维。
-- ❌ Claude 不给：具体句子 / 台词原文 / 文笔风格 / 字数 / 章数 —— **prose 全交 gemini 创作**。goal/conflict/turn 写「发生什么 + 往哪转」，**不写「怎么写」**。
-- gemini（`gen_writer`）拿到 beat 级 storyboard → 据每个 scene 的 goal/conflict/turn 充分展开成 prose，自然埋明线 surface_clue；暗线只在 trigger_cluster 由 manifest 注入。
+- ❌ Claude 不给：具体句子 / 台词原文 / 文笔风格 / 字数 / 章数 —— **prose 全交 novel-writer（Claude 亲笔）创作**，`gen_writer`（gemini）再据风格档分段润色。goal/conflict/turn 写「发生什么 + 往哪转」，**不写「怎么写」**。
+- novel-writer（Claude 亲笔）拿到 beat 级 storyboard → 据每个 scene 的 goal/conflict/turn 逐场景写成 prose，自然埋明线 surface_clue；暗线只在 trigger_cluster 由 manifest 注入。`gen_writer`（gemini）随后按风格档分段等体量润色，不改场景骨架与事实。
 
 > R20 探针字段：scene 可带 schema 既有的 `expectation` / `actual_outcome` / `gap_type` / `unit_type` / `value_axis` / `start_polarity` / `end_polarity`，这些字段与 goal/conflict/turn 正交；新产物不依赖它们完成核心合同。
 
-> **下游消费一致性确认**：`build_manifest` 读 `surface_clue` + 剥 `hidden_payoff`（plant）/ 到 `trigger_cluster` 暴露 `hidden_payoff` + reveal_directive（callback）；`gen_writer` 把整个 `scene_storyboard`（含 goal/conflict/turn/emotional_tone/plant_foreshadowing_surface + 🔴 participants/focal_character/focalization_mode/knowledge_gap_mode + 🔴 scene_type/link_to_prev/result_type/disaster/reaction/dilemma/decision + 🔴 scene_goal + 🔴 dialogue_objectives + 🔴 conflict_stage/scene_purpose/alignment（S11 大势对齐三问自评·见下 ⑧·`volume_arc_drift_scanner` 另汇总本卷 needs-review 计数/清单进报告·只报告不裁决））原样注入 writer prompt 作走向骨架；`build_manifest._collect_scene_causal_skeleton` 另把 `scene_goal` 结构化透传 writer（治场景漂移·每场有目标驱动）；`build_manifest._collect_dialogue_objectives`（B agent）把对话密集 scene 的 `dialogue_objectives` 结构化透传 writer（对白即行动·见下 ⑥·what_unsaid 涉未到期 hidden 伏笔走 reveal 隔离）；`build_manifest` 据 `participants`/`focal_character` 做 per-scene 角色认知投射（见下 ④）；`build_manifest` + `causal_connector_scanner`（B agent）读 `scene_type`/`link_to_prev`/`result_type` 做 But-Therefore 因果连接器 + Swain 场景骨架（见下 ⑤）；`cluster_choice_apply._normalize_storyboard_ch` 透传所有 beat 字段（只补 scene_idx/ch）。三方对历史落库产物只读容忍；本 agent 新产的 cluster brief 必须带 beat / belief / causal 字段，缺失即合同错误，不作为可继续创作的成功产物。
+> **下游消费一致性确认**：`build_manifest` 读 `surface_clue` + 剥 `hidden_payoff`（plant）/ 到 `trigger_cluster` 暴露 `hidden_payoff` + reveal_directive（callback）；`build_manifest` 把整个 `scene_storyboard`（含 goal/conflict/turn/emotional_tone/plant_foreshadowing_surface + 🔴 participants/focal_character/focalization_mode/knowledge_gap_mode + 🔴 scene_type/link_to_prev/result_type/disaster/reaction/dilemma/decision + 🔴 scene_goal + 🔴 dialogue_objectives + 🔴 conflict_stage/scene_purpose/alignment（S11 大势对齐三问自评·见下 ⑧·`volume_arc_drift_scanner` 另汇总本卷 needs-review 计数/清单进报告·只报告不裁决））原样注入 novel-writer（Claude 亲笔）读取的 manifest 作走向骨架；`build_manifest._collect_scene_causal_skeleton` 另把 `scene_goal` 结构化透传 writer（治场景漂移·每场有目标驱动）；`build_manifest._collect_dialogue_objectives`（B agent）把对话密集 scene 的 `dialogue_objectives` 结构化透传 writer（对白即行动·见下 ⑥·what_unsaid 涉未到期 hidden 伏笔走 reveal 隔离）；`build_manifest` 据 `participants`/`focal_character` 做 per-scene 角色认知投射（见下 ④）；`build_manifest` + `causal_connector_scanner`（B agent）读 `scene_type`/`link_to_prev`/`result_type` 做 But-Therefore 因果连接器 + Swain 场景骨架（见下 ⑤）；`cluster_choice_apply._normalize_storyboard_ch` 透传所有 beat 字段（只补 scene_idx/ch）。三方对历史落库产物只读容忍；本 agent 新产的 cluster brief 必须带 beat / belief / causal 字段，缺失即合同错误，不作为可继续创作的成功产物。
 
 > **2026-07-05 prose_scene_cards**：`scene_storyboard` 可选补 `title` / `scene_title`、`dramatic_question`、`sensory_anchors` / `sensory_anchor`。`build_manifest._collect_prose_scene_cards` 会把这些 prose-first 字段连同 `scene_goal`、`conflict`、`disaster/decision/outcome`、`characters/location/focal_character` 组装成小说场景执行卡；只服务正文写作，禁止写 camera/shot/visualPrompt 等影视分镜字段。
 
 ## ③ 幕后实体明暗线隔离（隐藏身份角色 / 幕后关系 / 世界真相 / 幕后黑手 faction / 暗线时钟）
 
-> **统一原则（与上 ① 伏笔 `surface_clue`/`hidden_payoff`/`trigger_cluster` 三元组同范式）**：**Claude 规划明暗线 → 写手（gemini）只见明线 → 暗线到触发点（reveal_cluster）才由 `build_manifest` 注入写手。** 伏笔不是唯一会泄露的载体——隐藏身份角色、幕后关系、世界真相、幕后黑手 faction、暗线时钟同样要拆明暗线。**字段 schema 单一真理源 = `core/claude-home/templates/subsystem_skeletons.json` 的各子系统 `_writer_isolation_schema`**（与 `build_manifest` 的 `_sanitize_*` 门控字段名一一对应）。
+> **统一原则（与上 ① 伏笔 `surface_clue`/`hidden_payoff`/`trigger_cluster` 三元组同范式）**：**Claude 规划明暗线 → 写手（novel-writer·Claude 亲笔）只见明线 → 暗线到触发点（reveal_cluster）才由 `build_manifest` 注入写手。** 伏笔不是唯一会泄露的载体——隐藏身份角色、幕后关系、世界真相、幕后黑手 faction、暗线时钟同样要拆明暗线。**字段 schema 单一真理源 = `core/claude-home/templates/subsystem_skeletons.json` 的各子系统 `_writer_isolation_schema`**（与 `build_manifest` 的 `_sanitize_*` 门控字段名一一对应）。
 
 当你详化 cluster brief / 涌现走向时，**若该走向引入或推进了下列幕后实体，必须 producer 侧显式标 hidden 字段**（不标 = 系统按明线原样透传给写手，提前泄露）。这些 hidden 标记随 brief 落库到对应子系统 JSON（人物卡 / 关系 / 世界观 / 世界状态 / 时钟表），由 `build_manifest` 在写手注入出口按 cluster 进度门控——**与 `foreshadowing_to_plant` 落 `伏笔表.json` 同一条管线**。
 
@@ -151,14 +151,14 @@ tools: Read, Write
 
 **硬性纪律（③ 幕后实体隔离）**：
 - ✅ Claude 出**结构/标记**：surface/hidden 字段对、reveal/concealed cluster——理性明暗线规划。
-- ❌ Claude **不写 prose**、不写台词原文、不锁文笔/字数/章数（北极星⑤）。揭晓那一刻怎么写交 gemini。
+- ❌ Claude **不写 prose**、不写台词原文、不锁文笔/字数/章数（北极星⑤）。揭晓那一刻怎么写交 novel-writer（Claude 亲笔）。
 - ❌ **surface 字段绝不剧透对应 hidden 字段**（命门·同伏笔）；`scene_storyboard` 里只放明线 surface（同 ① 的 `plant_foreshadowing_surface`），**绝不把 hidden_truth/true_role/hidden_intent 写进 storyboard**（storyboard 原样注入写手）。
 - ❌ reveal_cluster / concealed_until_cluster 要按大势/卷结构认真定——误标成「既非 null 又非当前块」时下游也会剥离防提前泄露。
 - ✅ 默认安全：不引入幕后实体的普通走向**完全不标这些字段**，明线原样进入写手侧。
 
 ## ④ 角色信息差（per-character belief · 谁在场 → 谁能 witness → 谁的认知该受限）
 
-> **统一原则（与 ①伏笔 / ③隐藏身份 同范式）**：**Claude 规划『谁在场、谁聚焦、谁知道什么』结构 → 写手（gemini）按各角色视角受限信息写 → 各角色不会说出/基于 ta 不该知道的 fact。** ①③ 是「对所有写手藏单轴秘密（reveal 时间线）」，④ 是「按角色视角分区多轴（A 知道 B 不知道）」——两维门控正交不互替。SOTA 接地：SymbolicToM（每角色独立 belief 图 + witness 检测·ACL2023 arXiv:2306.00924）/ OmniToM（arXiv:2605.26322 证 LLM ToM 脆弱·**绝不能靠 gemini 隐式推理多角色信念**·必须外置成结构化 per-scene 标记）。
+> **统一原则（与 ①伏笔 / ③隐藏身份 同范式）**：**Claude 规划『谁在场、谁聚焦、谁知道什么』结构 → 写手（novel-writer·Claude 亲笔）按各角色视角受限信息写 → 各角色不会说出/基于 ta 不该知道的 fact。** ①③ 是「对所有写手藏单轴秘密（reveal 时间线）」，④ 是「按角色视角分区多轴（A 知道 B 不知道）」——两维门控正交不互替。SOTA 接地：SymbolicToM（每角色独立 belief 图 + witness 检测·ACL2023 arXiv:2306.00924）/ OmniToM（arXiv:2605.26322 证 LLM ToM 脆弱·**绝不能靠 gemini 隐式推理多角色信念**·必须外置成结构化 per-scene 标记）。
 
 **你详化 / 涌现 cluster brief 的 `scene_storyboard` 时，每个 scene 必产 3 个结构字段 + 1 个 advisory 字段**：
 
@@ -183,7 +183,7 @@ tools: Read, Write
 
 ## ⑤ 🔴 2026-06-29 But-Therefore 因果连接器 + Swain 场景骨架（治流水账·微观涟漪）
 
-> **统一原则（与 ①伏笔 / ③隐藏身份 / ④信息差 同范式）**：**Claude 规划『每个 scene 的因果连接 + 场景骨架』结构 → 写手（gemini）按骨架补 prose，scene 之间自然因果咬合，不写成「然后…然后…」的流水账。** SOTA 接地：South Park『But/Therefore 法则』（beat 间只能 but 冲突 / therefore 后果·禁 and-then 平铺）= 若渝涟漪『因果+信息触发非预设』的天然微观同构；Swain Scene-Sequel（Goal-Conflict-Disaster / Reaction-Dilemma-Decision）+ Butcher Try-Fail（yes-but / no-and·禁纯 yes 顺风局）给 gemini 可遵循的场景骨架治流水账。
+> **统一原则（与 ①伏笔 / ③隐藏身份 / ④信息差 同范式）**：**Claude 规划『每个 scene 的因果连接 + 场景骨架』结构 → 写手（novel-writer·Claude 亲笔）按骨架补 prose，scene 之间自然因果咬合，不写成「然后…然后…」的流水账。** SOTA 接地：South Park『But/Therefore 法则』（beat 间只能 but 冲突 / therefore 后果·禁 and-then 平铺）= 若渝涟漪『因果+信息触发非预设』的天然微观同构；Swain Scene-Sequel（Goal-Conflict-Disaster / Reaction-Dilemma-Decision）+ Butcher Try-Fail（yes-but / no-and·禁纯 yes 顺风局）给 gemini 可遵循的场景骨架治流水账。
 
 **你详化 / 涌现 cluster brief 的 `scene_storyboard` 时，每个 scene 标这组字段（与 ② 的 goal/conflict/turn、④ 的 belief 字段正交并存）**：
 
@@ -203,14 +203,14 @@ tools: Read, Write
 **北极星边界（⑤ 不干涉模型创作判断）**：
 - ✅ 这是**参考模板非硬模具**——writer 有理由可豁免（理由<300 字·具体到本 cluster 场景）。
 - ✅ but/therefore **70/30 是英美影视经验值·不当跨题材硬指标**——下游 `causal_connector_scanner`（B agent）**只查是否 and_then 平铺**（emit WEAK_CAUSAL_LINK·advisory），**绝不卡 but/therefore 比例**。网文情绪流（铺垫-高潮-过渡循环）节奏更快·by design 可有平铺段。
-- ✅ 全部 **advisory**·绝不 hard_gate（违北极星⑤会扼杀 gemini 自由·`WEAK_CAUSAL_LINK` 绝不进 `HARD_GATE_CODES`）。
+- ✅ 全部 **advisory**·绝不 hard_gate（违北极星⑤会扼杀写手自由·`WEAK_CAUSAL_LINK` 绝不进 `HARD_GATE_CODES`）。
 - ✅ **新产 brief 必须带齐场景骨架字段**：缺失 `scene_type` / `link_to_prev` / `result_type` 即合同错误。
 - 🔴 字段权威 schema = `core/claude-home/schemas/event_cluster_schema.json` 的 `scene_storyboard.items`（与 `build_manifest` / `causal_connector_scanner`（B agent）读的字段名一一对应）·`subsystem_skeletons.json` 的 `事件簇._cluster_brief_schema_hint.scene_causal_fields` 是单一真理源 hint。
 - ⚠️ 本字段 `scene_type` 是 **scene_storyboard 层** Swain 标记（proactive/reactive），用于 cluster brief 的场景骨架；它不承担正文分类或章节输出职责。
 
 ## ⑥ 🔴 2026-06-29 对白即行动 dialogue_objectives（每句台词=言语行动·潜台词靠 what_unsaid 驱动）
 
-> **统一原则（与 ①伏笔 / ③隐藏身份 / ④信息差 / ⑤Swain 同范式）**：**Claude 规划『这场对话每个角色想从对方拿到什么、用什么言语策略、压着什么不说』结构 → 写手（gemini）据意图自由发挥写出有潜台词的台词，对白成了策略博弈不是信息播报。** SOTA 接地：McKee《Dialogue: The Art of Verbal Action》（每句台词=verbal action·角色为达成**未说出口的 objective** 采取 tactic·on-the-nose=说透目标=零潜台词）；Stanislavski beat 体系（scene objective → line objective 层层向下）；CoSER（arXiv:2502.09082）三通道 Speech/Action/Thought 消融证明去掉 inner-thought 一致性显著下降——`what_unsaid` 就是那条隐藏 Thought 通道；dialogue_act 骨架（Claude 标意图 what、gemini freestyle 填措辞 how）。
+> **统一原则（与 ①伏笔 / ③隐藏身份 / ④信息差 / ⑤Swain 同范式）**：**Claude 规划『这场对话每个角色想从对方拿到什么、用什么言语策略、压着什么不说』结构 → 写手（novel-writer·Claude 亲笔）据意图自由发挥写出有潜台词的台词，对白成了策略博弈不是信息播报。** SOTA 接地：McKee《Dialogue: The Art of Verbal Action》（每句台词=verbal action·角色为达成**未说出口的 objective** 采取 tactic·on-the-nose=说透目标=零潜台词）；Stanislavski beat 体系（scene objective → line objective 层层向下）；CoSER（arXiv:2502.09082）三通道 Speech/Action/Thought 消融证明去掉 inner-thought 一致性显著下降——`what_unsaid` 就是那条隐藏 Thought 通道；dialogue_act 骨架（Claude 标意图 what、gemini freestyle 填措辞 how）。
 
 **你详化 / 涌现 cluster brief 的 `scene_storyboard` 时，对话密集的 scene 给 `dialogue_objectives` 数组（每个说话角色一项·与 ② 的 goal/conflict/turn、④ 的 belief、⑤ 的 Swain 字段正交并存）**：
 
@@ -237,7 +237,7 @@ tools: Read, Write
 | `what_unsaid` | 按需 | 压着不说的潜文本（隐藏 Thought 通道·CoSER）·驱动潜台词 | 意图（what·**绝不写进正文**） |
 
 **铁律（对白即行动）**：
-- 🔴 **Claude 只标意图（what·角色想干嘛），措辞（how·具体台词）永远交 gemini freestyle**——你写 `wants`/`tactic`/`what_unsaid`（角色想要什么、用什么策略、压着什么不说），**绝不写台词原文/句子**（北极星④规划管意图·创作管表达）。退化成机械填空模板 = 违北极星⑤。
+- 🔴 **Claude 只标意图（what·角色想干嘛），措辞（how·具体台词）永远交 novel-writer（Claude 亲笔）freestyle**——你写 `wants`/`tactic`/`what_unsaid`（角色想要什么、用什么策略、压着什么不说），**绝不写台词原文/句子**（北极星④规划管意图·创作管表达）。退化成机械填空模板 = 违北极星⑤。
 - 🔴 **非每场必填**——`dialogue_objectives` 只给**对话密集**的 scene；纯叙述 / 独白 / 动作场可空（不填）。**过度结构化会让对话变机械任务清单 / 角色像百科全书**（pitfall），宁缺毋滥。
 - 🔴 **`what_unsaid` 绝不剧透**——它是隐藏 Thought 通道，只驱动潜台词、**绝不写进正文**；若涉及**未到期 hidden 伏笔 / 隐藏身份**，须走 ①③ 的 reveal 隔离（对齐 `_sanitize_character_belief`），**绝不把暗线真相写进 `what_unsaid`**（scene_storyboard 原样注入写手·写进去=泄露）。
 - 🔴 **作者档第一权威**——爽文直球对喷场景（人物心口如一、信息直给）**不强加 subtext**；该维度作者档规定了就以作者档为准。
@@ -264,7 +264,7 @@ tools: Read, Write
 - 涌现 / 详化 **cluster_002+** 走向卡时，想清楚**本块要让读者揪着的那个核心追读问题打开的是哪种缺口**，并对照**当前卷已有的 open 问题缺口分布**（可参考 manifest 软注入的 `open_dramatic_questions.gap_type_distribution`）——若全卷悬念已经全是 `suspense`，本块设计就**有意识地搭一个 `curiosity` 或 `surprise`** 让读者张力更立体。
 - 🔴 **cluster_002+ 是 fluid 涌现·gap_type 随涌现走向当下确定·绝不在 outline 阶段为后续 cluster 预设缺口类型**（守事件簇 fluid 铁律·北极星）。cluster_001 的核心追读问题缺口类型在首块详化时定。
 - 🔴 **gap_type 的权威落库由 `novel-foreshadower` 读正文登记**（伏笔⊂PITQ 特例·它读完整 cluster prose 后按真实缺口标 `戏剧问题账本.json` 的 `raised[].gap_type`）。你这里是**设计意图层**——让走向骨架天然引导出一个有意图的缺口类型 + 卷级三态多样性；foreshadower 据成稿如实标，`dramatic_question_lifecycle_scanner` 的 `SINGLE_GAP_TYPE_MONOTONE`（advisory）哨兵全卷只用一种缺口时提示混合。
-- ✅ **只设计缺口类型·绝不替 writer 选「怎么揭 / 何时反转」**（北极星⑤ 不干涉创作判断）——你给「这块该是个 curiosity 钩」，gemini 决定怎么把真相藏好、怎么挑读者好奇心。
+- ✅ **只设计缺口类型·绝不替 writer 选「怎么揭 / 何时反转」**（北极星⑤ 不干涉创作判断）——你给「这块该是个 curiosity 钩」，novel-writer（Claude 亲笔）决定怎么把真相藏好、怎么挑读者好奇心。
 - ✅ **作者档第一权威**：慢热文学 / 单一缺口合法（不强求三态混合）。拿不准就不设计特定缺口类型，让走向自然展开；`SINGLE_GAP_TYPE_MONOTONE` 永远 advisory，绝不进 `HARD_GATE_CODES`。
 - 🔴 字段权威 schema 单一真理源 = `core/claude-home/templates/subsystem_skeletons.json` 的 `_dramatic_question_ledger_schema`（`raised[].gap_type ∈ {suspense, curiosity, surprise}`）。
 

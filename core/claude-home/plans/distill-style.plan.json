@@ -49,16 +49,16 @@
     {
       "n": 3,
       "name": "phase-4-cluster-replica",
-      "description": "复刻（提前·复刻先于 SFS）：distill_replicate gen-model 复刻首个 cluster（唯一合法入口·强制 gen-model）。data_flow 取 first_cluster_id。",
+      "description": "复刻（提前·复刻先于 SFS）：v29 同栈——主代理先 spawn Claude agent 按 skill_v0.md 写复刻场景稿到 {project_root}/复刻测试/v0/claude_scenes/scene_*.txt，再跑 distill_replicate.py 做 gemini 分段润色复刻首个 cluster（唯一合法终稿入口·缺 --claude-scenes-dir 即 FATAL）。data_flow 取 first_cluster_id。",
       "required": true,
       "skip_output_allowed": false,
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
       "scripts": [
-        "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v0.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --output {project_root}/复刻测试/v0/replica.txt"
+        "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v0.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --claude-scenes-dir {project_root}/复刻测试/v0/claude_scenes --output {project_root}/复刻测试/v0/replica.txt"
       ],
-      "expected_outputs": ["复刻测试/v0/replica.txt"]
+      "expected_outputs": ["复刻测试/v0/claude_scenes/", "复刻测试/v0/replica.txt"]
     },
     {
       "n": 4,
@@ -86,18 +86,18 @@
     {
       "n": 5.5,
       "name": "phase-4b-v1-reverify-converge",
-      "description": "🔴 2026-06-27 C01·v1 再复刻+再 SFS+收敛闸（落实命令文档 L194『连续2轮无新差距 + cluster SFS≥80』的 bounded 单轮）：① distill_replicate(skill_v1) 复刻同 cluster；② style_evaluator multi-ref 测 v1 SFS → eval_v1.json；③ distill_convergence_gate 复用 skill_opt.validation_gate.decide(rewards_before=[v0],rewards_after=[v1],floor=v0×0.97)·v1 严格优于才采纳否则回退 v0·选中 skill 写 skill_v2.md(finalize 出货最新版即它)+选中 eval 写 eval_ship.json。SFS 必 multi-ref；skill_v2.md 与 eval_ship.json 是强制契约，任一上游失败都停在本 step。",
+      "description": "🔴 2026-06-27 C01·v1 再复刻+再 SFS+收敛闸（落实命令文档 L194『连续2轮无新差距 + cluster SFS≥80』的 bounded 单轮）：① v29 同栈——主代理先 spawn Claude agent 按 skill_v1.md 写复刻场景稿到 claude_scenes/，再 distill_replicate(skill_v1) 润色复刻同 cluster；② style_evaluator multi-ref 测 v1 SFS → eval_v1.json；③ distill_convergence_gate 复用 skill_opt.validation_gate.decide(rewards_before=[v0],rewards_after=[v1],floor=v0×0.97)·v1 严格优于才采纳否则回退 v0·选中 skill 写 skill_v2.md(finalize 出货最新版即它)+选中 eval 写 eval_ship.json。SFS 必 multi-ref；skill_v2.md 与 eval_ship.json 是强制契约，任一上游失败都停在本 step。",
       "required": true,
       "skip_output_allowed": false,
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
       "scripts": [
-        "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v1.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --output {project_root}/复刻测试/v1/replica.txt",
+        "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v1.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --claude-scenes-dir {project_root}/复刻测试/v1/claude_scenes --output {project_root}/复刻测试/v1/replica.txt",
         "python core/scripts/style_evaluator.py --gen {project_root}/复刻测试/v1/replica.txt --multi-ref-from-dir {project_root}/原文 --multi-ref-count 5 --output {project_root}/对比报告/eval_v1.json",
         "python core/scripts/distill_convergence_gate.py --before-eval {project_root}/对比报告/eval_v0.json --after-eval {project_root}/对比报告/eval_v1.json --skill-before {project_root}/skill_v0.md --skill-after {project_root}/skill_v1.md --ship-out {project_root}/skill_v2.md --ship-sfs-out {project_root}/对比报告/eval_ship.json"
       ],
-      "expected_outputs": ["复刻测试/v1/replica.txt", "对比报告/eval_v1.json", "skill_v2.md", "对比报告/eval_ship.json"]
+      "expected_outputs": ["复刻测试/v1/claude_scenes/", "复刻测试/v1/replica.txt", "对比报告/eval_v1.json", "skill_v2.md", "对比报告/eval_ship.json"]
     },
     {
       "n": 6,
@@ -126,19 +126,19 @@
     {
       "n": 7,
       "name": "phase-6-writer-feedback-verify",
-      "description": "写作端回灌验证闸（Article 6·不通过不出货）：用 skill_FINAL 灌 gen_writer 写同 cluster → 与原 cluster_arc 比 → 不过 exit 2 拦。verify.json 是出货 required 产物。",
+      "description": "写作端回灌验证闸（Article 6·不通过不出货）：v29 同栈——主代理先 spawn Claude agent 按 skill_FINAL 写复刻场景稿到 claude_scenes/，distill_finalize_verify.py 内部再调 distill_replicate 做 gemini 分段润色复刻同 cluster → 与原 cluster_arc 比 → 不过 exit 2 拦。verify.json 是出货 required 产物。",
       "required": true,
       "skip_output_allowed": false,
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
       "scripts": [
-        "python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --output {project_root}/对比报告/verify.json --strict"
+        "python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --claude-scenes-dir {project_root}/复刻测试/writer_feedback_verify/claude_scenes --output {project_root}/对比报告/verify.json --strict"
       ],
       "control_flow": {"exit_codes": {"0": "ok", "2": "fail"}},
       "expected_outputs": ["对比报告/verify.json"]
     }
   ],
   "_v2_principle": "整个系统为故事块服务·蒸馏以 cluster 为单位·48 维 judge 全章全文注入·复刻先于 SFS。",
-  "_north_star_5": "复刻强制 gen-model（唯一入口 distill_replicate）·SFS 必 multi-ref·48 维 judge 绝不裁维度规训·回灌严闭环不通过不出货。"
+  "_north_star_5": "复刻同栈（v29·Claude 亲笔场景稿 + gemini 分段润色·唯一终稿入口 distill_replicate --claude-scenes-dir）·SFS 必 multi-ref·48 维 judge 绝不裁维度规训·回灌严闭环不通过不出货。"
 }

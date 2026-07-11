@@ -22,5 +22,27 @@
     "light_event_pacing": "紧凑·快推进多吐槽",
     "punchline_distribution_hint": "毒舌吐槽/元叙事解构/ACG 梗按场景轻重穿插，重事件克制",
     "_doc": "未在 beat_targets 中显式列出的 cluster 采用此默认节拍策略；后续 cluster 节拍目标随涟漪涌现，在 cluster-save-state 阶段追加，不在此预设。"
-  }
+  },
+  "appraisal_beats": [
+    {
+      "cluster_id": "cluster_001",
+      "scene_idx": 4,
+      "focal_character": "池迟",
+      "trigger_event": "校规判定池迟当日操行不达标，面部模糊度首次上升",
+      "appraisal": {
+        "relevance": "高——第一次真实代价落在自己脸上，不再是云玩家旁观",
+        "congruence": "违背目标——他以为自己能全程置身事外",
+        "certainty": "确定已发生·不可逆",
+        "coping_potential": "低——第一次遇到，尚无应对经验",
+        "accountability": "系统判定非他人可控，但选择围观的心态间接促成",
+        "norm_compat": "违反他自己'松弛不当真'的处世准则"
+      },
+      "prospect": {"type": "已实现的负面结果", "resolved_to": "从抽离旁观者转为局内当事人"},
+      "derived_emotion": "被拽入局内的错愕，混着一丝不服气的清醒",
+      "behavior_externalization": "他摸了摸自己的脸，手指在镜子前停顿了半秒，才收回来继续嘴硬吐槽",
+      "vad_bin": "negative_high_arousal_low_dominance",
+      "_doc": "对应 beat_map.example.json 第 4 拍 Catalyst。scene_idx 对齐 scene_storyboard 场景序号。"
+    }
+  ],
+  "_appraisal_beats_doc": "🔴 2026-06-29 心理 P0：由 A agent 读正文回填，build_manifest._collect_appraisal_directive 注入 writer 情绪方向卡（余烬+本块方向）；derived_emotion/behavior_externalization 必须是自然语言/动作外化，禁贴情绪词标签；缺此字段时安全闸 None 不注入，向后兼容旧书；不预设 cluster_002+ beat，随写作进度追加。"
 }

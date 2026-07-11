@@ -87,23 +87,22 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt>
 - 评价文笔、风格、对话（Voice-Checker 的事）
 - 判断剧情合理性（超出你的职责）
 
-## 文件载体（v26 cluster-only）
+## 文件载体（v29 · cluster-only）
 
-- 正文：`CLUSTER_DRAFT_PATH`（`章节/cluster_<key>_draft/cluster_<key>_draft.txt`）—— **整 cluster 纯正文**，看回收情节是否真的写进正文，读这个
-- 数据：`章节/cluster_<key>_draft/cluster_<key>_changes.json` —— `{"factual": {...}, "self_eval": {...}}`，看整 cluster 声明的 9 类变更（含 `foreshadowing_actions`），读 `factual` 段
+- 正文：`CLUSTER_DRAFT_PATH`（`章节/cluster_<key>_draft/cluster_<key>_draft.txt`）—— **整 cluster 纯正文**，看回收情节是否真的写进正文，读这个（唯一的客观回收证据来源）
 - cluster brief：`_数据库/事件簇.json` 当前 cluster 的 `foreshadowing_to_plant` / `foreshadowing_to_callback`
-- `self_eval` 段是 writer 自评，按分权纪律**默认不读**（你的职责是评估伏笔，不需要 writer 的风格自评）
+- `_数据库/伏笔表.json`：已登记伏笔的原始描述与 Tier/due_by
+- `cluster_<key>_changes.json` 只承载 `self_eval`/`waivers`（Claude 创作自评 + gemini 润色遥测），本 agent 不读它；回收是否落地只认「正文实际写了什么」，与 `foreshadowing_to_callback` 逐条比对判定
 
 ## 执行流程（整 cluster · 不按单章）
 
 1. **Read** `CLUSTER_DRAFT_PATH` 整 cluster 草稿（纯正文，直接读全文）
-2. **Read** `章节/cluster_<key>_draft/cluster_<key>_changes.json`，取 `factual` 段（整 cluster 声明的变更）
-3. **Read** `_数据库/伏笔表.json` + `_数据库/事件簇.json` 当前 cluster brief（`foreshadowing_to_plant` / `foreshadowing_to_callback`）
-4. **评估 + 分析**（不写文件）：
-   - A. 回收质量评分：对 `factual.foreshadowing_actions` 中每条 payoff，对照伏笔原描述，评估「自然度」+「完整度」
+2. **Read** `_数据库/伏笔表.json` + `_数据库/事件簇.json` 当前 cluster brief（`foreshadowing_to_plant` / `foreshadowing_to_callback`）
+3. **评估 + 分析**（不写文件）：
+   - A. 回收质量评分：对 `foreshadowing_to_callback` 中每条计划回收的伏笔，直接对照正文是否真的写出对应情节，评估「自然度」+「完整度」——正文找不到对应描写即 0 分，不接受任何自报声明
    - B. 契诃夫之枪候选：扫描整 cluster 正文中**反复出现 ≥2 次**的具体物件/细节，如未登记为伏笔，列为候选
    - C. 健康度检查：未来到期但还没铺垫痕迹的伏笔（回收压力预警）；校验 cluster_brief.foreshadowing_to_plant 是否落地
-5. **输出建议**给主代理
+4. **输出建议**给主代理
 
 ## 评分标准
 
@@ -203,7 +202,7 @@ Sternberg《Poetics of Biblical Narrative》：读者追读的张力源自三种
   "overall_grade": "A | B | C | D",
   "confidence": 0.85,
   "reasoning_trace": [
-    "step1: 读 _changes.json 的 factual.foreshadowing_actions，发现 3 条 payoff",
+    "step1: 读整 cluster 正文比对 foreshadowing_to_callback，发现 3 条已回收",
     "step2: 逐条对照伏笔表原描述 → 平均 4.0 分",
     "step3: 扫描正文反复出现物件 → 候选 1 件 chekhov",
     "step4: 检查未来 5 章到期 → 1 条 warning",

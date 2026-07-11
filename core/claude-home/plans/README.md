@@ -5,9 +5,10 @@
 > spawn 对应 agent、跑确定性脚本、在停顿点弹卡给用户，并经 `plan_tracker.py`
 > 盖 attestation 章逐步推进。
 >
-> 创意/梳理/判断由 **Claude 主代理 spawn Agent** 完成（gen-model 只负责正文创作）；
-> 确定性活由 `scripts[]` 列出的 `python core/scripts/*.py` 完成。本文档是 plan JSON
-> 里各字段的语义参考——**改字段语义须同步本表**。
+> 创意/梳理/判断由 **Claude 主代理 spawn Agent** 完成（v29：正文由 novel-writer agent
+> Claude 亲笔逐场景创作，gen-model/gemini 只做分段等体量润色）；确定性活由 `scripts[]`
+> 列出的 `python core/scripts/*.py` 完成。本文档是 plan JSON 里各字段的语义参考——
+> **改字段语义须同步本表**。
 
 ## 字段词表
 

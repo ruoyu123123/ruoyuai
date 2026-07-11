@@ -7,12 +7,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(pwd)"
 
 # -- Sync CLAUDE.md + commands to current working dir --
-if [ -f "$SCRIPT_DIR/core/claude-home/CLAUDE.md" ]; then
-    cp -f "$SCRIPT_DIR/core/claude-home/CLAUDE.md" "$PROJECT_DIR/CLAUDE.md"
-fi
-mkdir -p "$PROJECT_DIR/.claude/commands"
-if [ -d "$SCRIPT_DIR/.claude/commands" ]; then
-    cp -rf "$SCRIPT_DIR/.claude/commands/"*.md "$PROJECT_DIR/.claude/commands/" 2>/dev/null || true
+# 在仓库根目录内启动时跳过同步：agent 入口桩（23 行）绝不能覆盖仓库根的完整 CLAUDE.md
+if [ "$PROJECT_DIR" != "$SCRIPT_DIR" ]; then
+    if [ -f "$SCRIPT_DIR/core/claude-home/CLAUDE.md" ]; then
+        cp -f "$SCRIPT_DIR/core/claude-home/CLAUDE.md" "$PROJECT_DIR/CLAUDE.md"
+    fi
+    mkdir -p "$PROJECT_DIR/.claude/commands"
+    if [ -d "$SCRIPT_DIR/.claude/commands" ]; then
+        cp -rf "$SCRIPT_DIR/.claude/commands/"*.md "$PROJECT_DIR/.claude/commands/" 2>/dev/null || true
+    fi
 fi
 
 # -- Launch Claude Code (interactive) --

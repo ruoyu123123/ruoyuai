@@ -1,7 +1,8 @@
 {
-  "_schema": "hubs_v21_round2",
-  "_doc": "Twine/Ink/ChoiceScript IF 借鉴：每个项目定义 1-2 个枢纽场景（家/办公室/常去的地方），主角活动有出发→冒险→返回→闲置→出发的节奏循环。避免每章场景全飘在外。",
-  "generated_at": "2026-05-16",
+  "_schema": "hub_scenes_v21",
+  "schema_version": "v27",
+  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。Twine/Ink/ChoiceScript IF 借鉴：每个项目定义 1-3 个枢纽场景（家/办公室/常去的地方），主角活动有出发→冒险→返回→闲置→出发的节奏循环，避免每章场景全飘在外。每 HUB 含 anchor_props/anchor_routines，回 hub 时 writer 必带至少 1 个。占位符：陆衍=主角 / 老周=情报盟友 / 南海资本、林晚秋、顾沉=职场关系人。",
+  "generated_at": "<生成日期>",
 
   "hubs": [
     {
@@ -70,15 +71,13 @@
   ],
 
   "rhythm_targets": {
-    "_doc": "推荐的章节节奏分布（按近 10 章统计）",
-    "depart_pct_target": 0.20,
-    "quest_pct_target": 0.50,
-    "return_pct_target": 0.20,
-    "idle_pct_target": 0.10,
-    "tolerance": 0.15
+    "depart": 0.20,
+    "quest": 0.50,
+    "return": 0.20,
+    "idle": 0.10
   },
 
-  "_chapter_role_doc": {
+  "_role_doc": {
     "depart": "从枢纽出发去冒险（场景在枢纽内+离开过程）",
     "quest": "完全在外冒险（场景与枢纽无关）",
     "return": "从冒险返回枢纽（场景含进枢纽过程）",
@@ -86,16 +85,14 @@
   },
 
   "chapter_hub_log": [
-    {"ch": 1, "hub_id": "HUB_office", "role": "quest", "_note": "周五凌晨办公室签字事件（虽在 office 但是 quest 性质：高强度异常事件）"},
-    {"ch": 2, "hub_id": "HUB_home", "role": "return", "_note": "夜回家+消化"},
-    {"ch": 3, "hub_id": "HUB_office", "role": "depart", "_note": "周一回公司开始任务"},
-    {"ch": 4, "hub_id": "HUB_home", "role": "return", "_note": "周二回老家拿铁皮盒，虽外出但属返回家庭枢纽"}
+    {"ch": 1, "hub_id": "HUB_office", "role": "quest", "_note": "开篇 in_medias_res：凌晨办公室签字事件（虽在 office 但 quest 性质：高强度异常事件）"},
+    {"ch": 2, "hub_id": "HUB_home", "role": "return", "_note": "事件后回家消化 + 回老家拿铁皮盒（返回家庭枢纽）"}
   ],
 
   "_consumption_chain": {
-    "produced_by": "/outline 时根据题材定义 hubs + 用户后续 spawn",
+    "produced_by": "/outline 时根据题材定义 hubs + 用户后续 spawn；world_evolution_apply_chapter.append_hub_log() 按章回写",
     "consumed_by": [
-      "build_manifest._collect_hubs_directive() 注入 manifest",
+      "build_manifest._collect_hubs_directive() 注入 manifest（chapter_hub_log 按 ch 记录，非 cluster 级字段——枢纽节奏是章级细粒度信号）",
       "writer step 0w：感知本章应是 depart/quest/return/idle，回 hub 时必带 anchor_props 或 anchor_routines 至少 1 个",
       "cluster-save-state 世界更新 + cluster 级节奏 advisory：检查 role 分布是否偏离 rhythm_targets"
     ]

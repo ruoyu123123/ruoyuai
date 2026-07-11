@@ -106,5 +106,7 @@
       "position": "100%",
       "volume1_landing": "走出被标记 Final Image：与第 1 拍呼应的收束钩子——池迟操行清零、被广播点名标记为『问题学生 0721』（fs_002），带着一张不肯准时达标的脸走出 / 通关副本，却发现乐园不止一所学校（fs_003）。强钩子章末，引向 ME-V1-02。"
     }
-  ]
+  ],
+  "cluster_beats": {},
+  "_cluster_beats_doc": "🔴 2026-06-29 beat_map_update.py 确定性 producer：据 scene_storyboard 派生本 cluster 的起承转合功能 beat 序列，写入 cluster_beats[cluster_id]。此处为空——outline 阶段仅详化 cluster_001 storyboard，cluster_beats 由 cluster-write 流水线在正文写完后回填，不预设。plot_structure_scanner CLUSTER_MODE 据此判 beat 合规，advisory。"
 }

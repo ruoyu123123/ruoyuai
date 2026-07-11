@@ -26,42 +26,42 @@
           "异常局体系本身 — 系统层对手，全书贯穿"
         ],
         "initial_plan": "假装是原身份 → 蒙混过审 → 工作满 3 年自动转正 → 拿钱走人 → 关掉多身体能力假装从没存在过",
-        "plan_failure_at_ch": 60,
-        "_note": "plan 失败时机：ch60 上级私下询问异常 → 主角意识到藏不住"
+        "plan_failure_at_cluster": "cluster_015",
+        "_note": "plan 失败时机：上级私下询问异常 → 主角意识到藏不住"
       },
       "battle_and_self_revelation": {
-        "final_battle_ch": 780,
+        "final_battle_at_cluster": "cluster_195",
         "battle_form": "主角主动注销临时工编号 → 用 7 个分身在 7 个序列途径同时冲击序列 0 → 与反派在异常本源接触点最终对决",
         "self_revelation": "他不需要『被体系认可』才有价值——他是体系的反例本身，被异常本源选中不是诅咒是赦免；7 个分身不是 7 个备份是 7 种活法，活下来的从来不需要被定义"
       },
       "ghost": {
         "core_ghost": "主角青年时至亲在事故中重伤，被告知『他是临时工，没工伤保险，按合同一次性了结』；从此他对『临时工/编外/不被体系认可』的身份有深层恐惧 + 对『稳定编制』的执念",
-        "ghost_resolved_at_ch": 720,
+        "ghost_resolved_at_cluster": "cluster_180",
         "_writer_hint": "每当主角面对『要不要拿编制保险』类选择时，他下意识看 ghost 身体关联位置；每章涉及『临时工身份』，ghost 在驱动他的过度谨慎"
       },
       "moral_argument": {
         "central_question": "在一个把人当资源消耗品的隐秘体系里，『保住自己』是合理的还是是共谋？",
         "thesis_position": "PROTAGONIST 立场：在体系不公的前提下，先活下去再说；活到能改变规则的位置才有发言权",
         "antithesis_position": "PRIME_ANTAGONIST 立场：体系是为多数人安全设计的，少数人牺牲是必然代价；『保住自己』本身就是对体系的不忠",
-        "synthesis_at_ch": 760,
+        "synthesis_at_cluster": "cluster_190",
         "_writer_hint": "主角与反派的每次见面都是这两种道德观的辩论；主角早期偏 thesis，中期摇摆，结尾 synthesis = 『让规则改变到不需要任何人牺牲』"
       },
-      "stages_by_chapter": {
-        "1": "lie", "3": "lie", "10": "lie", "30": "lie_cracking",
-        "60": "want_threatened", "100": "debate", "150": "break_into_two",
-        "220": "fun_and_games", "320": "false_victory", "420": "midpoint_revelation",
-        "520": "bad_guys_close_in", "620": "all_is_lost", "680": "dark_night",
-        "720": "break_into_three", "780": "truth_realized", "800": "final_image"
+      "stages_by_cluster": {
+        "cluster_001": "lie", "cluster_003": "lie", "cluster_008": "lie_cracking",
+        "cluster_015": "want_threatened", "cluster_025": "debate", "cluster_038": "break_into_two",
+        "cluster_055": "fun_and_games", "cluster_080": "false_victory", "cluster_105": "midpoint_revelation",
+        "cluster_130": "bad_guys_close_in", "cluster_155": "all_is_lost", "cluster_170": "dark_night",
+        "cluster_180": "break_into_three", "cluster_195": "truth_realized", "cluster_200": "final_image"
       },
       "key_milestones": {
-        "lie_to_cracking": "ch30 第一次任务失败，发现『多身体』消耗的不是体力是命数，2 个分身死了 1 个",
-        "cracking_to_want_threatened": "ch60 上级私下问『你最近的判断越来越不像 T-7』，主角意识到『假装』藏不住",
-        "midpoint_revelation": "ch420 反派首次现身告诉他『你不是顶包，你是被预选的』——多身体不是巧合，是异常本源出生时植入",
-        "all_is_lost_to_dark_night": "ch620 主角选择『放弃 3 个分身』换取保住 DEUTERAGONIST，从此心理破碎",
-        "break_into_three_to_truth": "ch720 至亲意外死亡（被反派利用），主角放下编制执念，决定撕碎临时工身份"
+        "lie_to_cracking": "第一次任务失败，发现『多身体』消耗的不是体力是命数，2 个分身死了 1 个",
+        "cracking_to_want_threatened": "上级私下问『你最近的判断越来越不像 T-7』，主角意识到『假装』藏不住",
+        "midpoint_revelation": "反派首次现身告诉他『你不是顶包，你是被预选的』——多身体不是巧合，是异常本源出生时植入",
+        "all_is_lost_to_dark_night": "主角选择『放弃 3 个分身』换取保住 DEUTERAGONIST，从此心理破碎",
+        "break_into_three_to_truth": "至亲意外死亡（被反派利用），主角放下编制执念，决定撕碎临时工身份"
       },
-      "current_stage_at_ch": "1:lie",
-      "_last_updated_at_ch": 1
+      "current_stage_at_cluster": "cluster_001:lie",
+      "_last_updated_at_cluster": "cluster_001"
     },
     "DEUTERAGONIST": {
       "lie": "我是异常局协调员，原身份的搭档；我对所有『特工死亡』必须保持职业冷漠，否则做不下去这份工",
@@ -75,7 +75,7 @@
         "initial_plan": "用工作流程暗中调查主角破绽 → 抓到顶替证据 → 上报"
       },
       "battle_and_self_revelation": {
-        "final_battle_ch": 740,
+        "final_battle_at_cluster": "cluster_185",
         "battle_form": "为救主角挡下一次精神冲击，陷入半昏迷",
         "self_revelation": "原身份和现主角是同一个人，只是被分成了两次相遇"
       },
@@ -84,9 +84,9 @@
         "_writer_hint": "主角某些动作会让她想起至亲，这是她对主角逐渐放下戒备的暗线触发"
       },
       "moral_argument": {"_doc": "DEUTERAGONIST 持中间立场，是主角 vs 反派道德辩论的『读者代理人』"},
-      "stages_by_chapter": {"1": "lie", "50": "lie_cracking", "150": "want_threatened", "300": "debate", "500": "truth_glimpsed", "740": "truth_realized"},
-      "current_stage_at_ch": "1:lie",
-      "_last_updated_at_ch": 1
+      "stages_by_cluster": {"cluster_001": "lie", "cluster_013": "lie_cracking", "cluster_038": "want_threatened", "cluster_075": "debate", "cluster_125": "truth_glimpsed", "cluster_185": "truth_realized"},
+      "current_stage_at_cluster": "cluster_001:lie",
+      "_last_updated_at_cluster": "cluster_001"
     },
     "PRIME_ANTAGONIST": {
       "lie": "我是异常局的设计者，为了保护人类世界稳定，少数人牺牲是必要代价；我对所有特工一视同仁、不偏不倚",
@@ -100,15 +100,15 @@
         "initial_plan": "暗中观察主角数年 → 中点现身招揽 → 给三选一（编制特工/继任副局/直接转正核心）→ 任一接受都进圈套"
       },
       "battle_and_self_revelation": {
-        "final_battle_ch": 780,
+        "final_battle_at_cluster": "cluster_195",
         "battle_form": "异常本源接触点对决",
         "self_revelation": "他也是被『设计者』神话规训的另一种『主角』，只是被规训得更彻底"
       },
       "ghost": {"core_ghost": "『设计者』身份是数十年前一次本源接触留下的强迫记忆——他根本不记得真名"},
       "moral_argument": {"_doc": "antithesis position：体系秩序高于个体生命 / 少数人牺牲是必然 / 想『保住自己』是不忠"},
-      "stages_by_chapter": {"1": "lie", "420": "lie", "620": "lie_cracking", "780": "truth_realized"},
-      "current_stage_at_ch": "1:lie",
-      "_last_updated_at_ch": 1
+      "stages_by_cluster": {"cluster_001": "lie", "cluster_105": "lie", "cluster_155": "lie_cracking", "cluster_195": "truth_realized"},
+      "current_stage_at_cluster": "cluster_001:lie",
+      "_last_updated_at_cluster": "cluster_001"
     }
   },
   "_story_world": {

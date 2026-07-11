@@ -18,11 +18,11 @@
 |---|---|
 | `世界观.example.json` | SCP 风隐秘部门世界观范式——异常分级(A/B/C/D) + 收容体系 + 编制内 vs 编外临时工双轨体制 + 序列力量阶梯 + 隐世势力地图 + 内部派系隐藏 |
 | `人物卡.example.json` | **全套最有价值**——多身体同步主角 schema（能力/记忆共享但每身体体验独立，业界少见）+ voice_pack 5 层 persona 完整结构 + MENTOR_NPC 体制内话术 catchphrase（讲古即暗喻）+ knowledge.will_learn 认识论时间线 |
-| `大势卡.example.json` | 影类异常事变 + 多身体觉醒主线大势池——18 ME 涌现叙事，每个分身觉醒绑定一个剧情转折（金手指放量=剧情代价非数值刷），Save the Cat 15 拍贴合 |
+| `大势卡.example.json` | 影类异常事变 + 多身体觉醒主线大势池——4 卷（阶段触发点）× 18 ME 涌现叙事，每个分身觉醒绑定一个剧情转折（金手指放量=剧情代价非数值刷），Save the Cat 15 拍贴合 |
 | `伏笔表.example.json` | 物件锚定伏笔（Chekhov gun）范式——每条 promise 必带可触摸具象物件（笔迹同源/影残/电子表凉度/银圆环/指纹机异常），而非抽象暗示 |
 | `character_arc_state.example.json` | McKee 7 步 + Truby 22 步 + Save the Cat 4 元实战填充——重点是 `_story_world.thematic_critique`（异常局=把"员工是耗材"赤裸化的隐秘批判）+ moral_argument 双立场辩论 |
-| `用户偏好.example.json` | narrative_style 段（third_person_limited POV 贴主角，wizard 必问三件）+ calendar 段（异常历双轨纪年，对外公历对内异常历 OFFSET 换算）+ ECAS v23 config |
-| `事件簇.example.json` | ECAS v23 cluster brief 范式——只留 1 个完整 cluster 结构 + 全字段说明（原 70KB 不全量），含 scene_storyboard 分镜 + research_ref 严格 enforce |
+| `用户偏好.example.json` | narrative_style 段（third_person_limited POV 贴主角，叙事基础三件）+ calendar 段（异常历双轨纪年，对外公历对内异常历 OFFSET 换算）+ ECAS config |
+| `事件簇.example.json` | ECAS cluster brief 范式——只留 1 个完整 cluster 结构 + 全字段说明（原 70KB 不全量），含 scene_storyboard 分镜 + research_ref 强制 enforce |
 | `角色行动表.example.json` | offscreen / PbtA Moves 声明式行动数据范式——narrative_template 框 + anti_template 禁写法 + 三档 consequence + 过用/失声警报；招牌 move = 多身体分流 |
 
 ## 与 `urban_supernatural_business` 的区别
@@ -76,8 +76,8 @@
 - `offset_years` = 公历年 - 异常历年（固定差值），save-state 时间线双轨都记
 
 ### ECAS 事件簇要点
-- 禁止 `expected_word_range` / `word_budget`：writer 自由产整块 cluster，splitter 后续按 3000-4500 CJK/章切分
-- `research_ref` v23.1 起 4 处阻断点严格 enforce，不能复用 wizard 单次调研
+- 禁止 `expected_word_range` / `word_budget`：novel-writer（Claude 亲笔）逐场景写整块 cluster，gemini 分段润色出终稿，splitter 后续按 3000-4500 CJK/章切分
+- `research_ref` 4 处阻断点强制 enforce（hook/schema/plan/manifest），每 cluster 单独调研，不能复用早期单次调研
 
 ## 来源致谢
 

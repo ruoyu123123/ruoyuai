@@ -1,7 +1,8 @@
 {
   "_schema": "protagonist_stress_v21",
-  "_doc": "CK3 借鉴：违背性格 +stress；满 → mental_break 抽卡 → 永久改写 persona。把'道德/情感选择'变成有复利代价的系统。",
-  "generated_at": "2026-05-16",
+  "schema_version": "v27",
+  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。CK3 借鉴：违背性格 +stress；满 → mental_break 抽卡 → 永久改写 persona，把'道德/情感选择'变成有复利代价的系统。5 张 mental_break 卡覆盖 5 个心理出口（黑化/酗酒/出家/封心/嗜杀）。占位符：陆衍=主角 / 老周=情报盟友。",
+  "generated_at": "<生成日期>",
   "protagonist": "陆衍",
   "stress_level": 0,
   "stress_max": 10,

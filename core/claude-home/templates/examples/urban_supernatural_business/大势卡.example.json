@@ -1,172 +1,47 @@
 {
-  "_schema": "fate_card_v20_emergent",
-  "_doc": "鬼谷八荒式涌现叙事——大事件池+条件触发+柔性时间。不预定章号，由 fate_engine 按 prerequisites 涌现",
-  "generated_at": "2026-05-16",
-  "project": "示例项目（都市超自然商业版）",
-
+  "_schema": "major_events_v21_phase",
+  "schema_version": "v27",
+  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋（神性股权 / 资本暗战 / 隐秘董事会博弈）。本文件是『神性股权战主线大势池』范式——13 ME 分 4 卷（每卷=1 个阶段触发点）涌现叙事，不锁章号。每卷有 volume_core_conflict（卷核心任务）+ volume_thread（串起本卷所有 cluster 的线索）+ volume_finale_signal（换卷触发）；ME 池=本卷内『小故事走向』候选，每 ME=1 cluster=1 小走向，携 stakes_delta（相对前一小走向的筹码增量）+ physical_evidence（writer 必落地）+ downstream_unlocks 形成 DAG。Save the Cat 15 拍贴合金手指觉醒与商战升级节点。占位符：陆衍=主角 / 顾沉=招安派反派 / 林晚秋=卧底副线 / 老周=情报盟友 / 南海资本=本土大反派财团。",
+  "generated_at": "<生成日期>",
   "story_destiny": {
-    "_doc": "全书终极大势——必须达到的结局，路径可变",
-    "final_image": "陆衍把神性股权回流给散户，自己不成神，与卷一凌晨写字楼形成时间环",
-    "rhythm_profile": "混合",
-    "_v27_note": "v27 章数 fluid：已删除 estimated_total_chapters_range（章数死锁）。章数由 cluster 涌现 + writer freestyle + splitter 按字数切自然涌现。",
-    "premise": "普通职员陆衍因废票卷入神性股权战，最终把神性还给众生"
+    "final_image": "陆衍把神性股权回流给散户，自己拒绝接管、不成神，与卷一凌晨写字楼签字场景形成时间环。",
+    "thematic_resolution": "神性本就来自普通人——所谓'天选之子'是被资本化的虚假叙事；把神性还给众生，普通人的普通生活本身就是对异化的反抗。"
   },
-
-  "major_events": [
-    {
-      "id": "ME_001",
-      "title": "陆衍代签董事会触发反模因",
-      "stage": "卷一·入局",
-      "prerequisites": [],
-      "trigger_when": "ch >= 1",
-      "expected_window_after": null,
-      "physical_evidence": "陆衍以非董事身份出现在 38 楼董事会，被七位董事「目击」",
-      "status": "completed",
-      "completed_at_ch": 2,
-      "downstream_unlocks": ["ME_002", "ME_003"]
-    },
-    {
-      "id": "ME_002",
-      "title": "导火索事件（同事消失/上司坠落）",
-      "stage": "卷一·入局",
-      "prerequisites": ["ME_001"],
-      "trigger_when": "ME_001 后 2-5 章内",
-      "expected_window_after": {"event": "ME_001", "max_chapters": 5},
-      "physical_evidence": "至少 1 个相关角色非正常消失，陆衍意识到自己被盯",
-      "status": "completed",
-      "completed_at_ch": 3,
-      "_note": "ch3 通过吴启鸣记忆擦除 + 0.001% 邮件实现"
-    },
-    {
-      "id": "ME_003",
-      "title": "金手指首激活",
-      "stage": "卷一·觉醒",
-      "prerequisites": ["ME_002"],
-      "trigger_when": "陆衍获得传承物件后 1-3 章内",
-      "expected_window_after": {"event": "ME_002", "max_chapters": 8},
-      "physical_evidence": "废票/铁皮盒物件产生异象 + 陆衍听见/看见非物理现象",
-      "status": "scheduled",
-      "scheduled_estimate_ch": "5-8",
-      "downstream_unlocks": ["ME_004", "ME_005"]
-    },
-    {
-      "id": "ME_004",
-      "title": "假亲人事件（被掉包）",
-      "stage": "卷一·破局",
-      "prerequisites": ["ME_003"],
-      "trigger_when": "灵格激活后接近 30 岁生日时",
-      "expected_window_after": {"event": "ME_003", "max_chapters": 10},
-      "physical_evidence": "陆衍发现某亲近角色被替换（身体细节出错）",
-      "status": "scheduled",
-      "scheduled_estimate_ch": "10-18"
-    },
-    {
-      "id": "ME_005",
-      "title": "顾沉三选一招安",
-      "stage": "卷一·选择",
-      "prerequisites": ["ME_003"],
-      "trigger_when": "灵格觉醒后顾沉判定可招安时",
-      "expected_window_after": {"event": "ME_003", "max_chapters": 12},
-      "physical_evidence": "顾沉与陆衍正面对话提出三选一",
-      "status": "scheduled",
-      "scheduled_estimate_ch": "12-22"
-    },
-    {
-      "id": "ME_006",
-      "title": "卷一末·主动宣战",
-      "stage": "卷一·终局",
-      "prerequisites": ["ME_004", "ME_005"],
-      "trigger_when": "陆衍掌握废票用法 + 选择拒绝招安后",
-      "expected_window_after": {"event": "ME_005", "max_chapters": 30},
-      "physical_evidence": "陆衍主动出手对抗南海资本，从被动转主动",
-      "status": "scheduled",
-      "scheduled_estimate_ch": "35-55",
-      "_volume_end": 1
-    },
-    {
-      "id": "ME_007",
-      "title": "卷二·学会股权运作=修炼",
-      "stage": "卷二·操盘",
-      "prerequisites": ["ME_006"],
-      "trigger_when": "卷一结束后",
-      "expected_window_after": {"event": "ME_006", "max_chapters": 5},
-      "physical_evidence": "陆衍完成第一次反向并购，获得第二缕灵格",
-      "status": "scheduled",
-      "_volume_start": 2
-    },
-    {
-      "id": "ME_008",
-      "title": "副线·林晚秋身份反转",
-      "stage": "卷三·副线",
-      "prerequisites": ["ME_006"],
-      "trigger_when": "陆衍组建非正式团队过程中",
-      "expected_window_after": {"event": "ME_006", "max_chapters": 60},
-      "physical_evidence": "林晚秋被陆衍发现是卧底，做出选择",
-      "status": "scheduled"
-    },
-    {
-      "id": "ME_009",
-      "title": "Midpoint·假胜利 + 全网通缉",
-      "stage": "卷五·暗礁",
-      "prerequisites": ["ME_007"],
-      "trigger_when": "陆衍连续操盘成功后暴露身份",
-      "expected_window_after": {"event": "ME_007", "max_chapters": 150},
-      "physical_evidence": "陆衍跨财团并购成功 → 七大联手通缉",
-      "status": "scheduled",
-      "_volume_end": 5
-    },
-    {
-      "id": "ME_010",
-      "title": "All Is Lost·废票被夺/父亲身亡",
-      "stage": "卷八·崩盘",
-      "prerequisites": ["ME_009"],
-      "trigger_when": "董事会大议召开",
-      "expected_window_after": {"event": "ME_009", "max_chapters": 130},
-      "physical_evidence": "陆衍失去废票灵格，至亲牺牲",
-      "status": "scheduled"
-    },
-    {
-      "id": "ME_011",
-      "title": "Dark Night·拆神真相揭露",
-      "stage": "卷八·觉醒",
-      "prerequisites": ["ME_010"],
-      "trigger_when": "陆衍触底后遇老乞丐",
-      "expected_window_after": {"event": "ME_010", "max_chapters": 20},
-      "physical_evidence": "老乞丐说出'神是从普通人提炼的'",
-      "status": "scheduled"
-    },
-    {
-      "id": "ME_012",
-      "title": "Break into Three·反向收购联合散户",
-      "stage": "卷九·反击",
-      "prerequisites": ["ME_011"],
-      "trigger_when": "陆衍觉醒后组建散户互助会",
-      "expected_window_after": {"event": "ME_011", "max_chapters": 25},
-      "physical_evidence": "陆衍带反向收购计划重新登场",
-      "status": "scheduled"
-    },
-    {
-      "id": "ME_013",
-      "title": "Final Image·神性回归众生",
-      "stage": "卷十·终局",
-      "prerequisites": ["ME_012"],
-      "trigger_when": "终极董事会大议召开",
-      "expected_window_after": {"event": "ME_012", "max_chapters": 80},
-      "physical_evidence": "神性股份回流到所有散户 + 陆衍拒绝接管 + 与卷一开场形成时间环",
-      "status": "scheduled",
-      "_book_end": true
-    }
+  "volumes": [
+    {"vol": 1, "title": "入局·觉醒", "volume_core_conflict": "在看清神性股权战真相前活下来，并掌握废票灵格的用法", "volume_thread": "顾沉步步招安 vs 陆衍本能抗拒的持续拉扯", "volume_finale_signal": "陆衍掌握废票用法、从被动求生转为主动宣战——力量/身份跃迁信号"},
+    {"vol": 2, "title": "操盘·进阶", "volume_core_conflict": "用废票灵格学会股权运作站稳脚跟，组建非正式团队摸清七大格局", "volume_thread": "组队扩张 + 林晚秋卧底副线的信任裂变", "volume_finale_signal": "跨财团并购成功导致身份暴露、七大联手通缉——舞台/格局跃迁信号"},
+    {"vol": 3, "title": "暗礁·崩盘", "volume_core_conflict": "在七大围剿下守住反攻筹码，撑过失去废票与至亲的至暗时刻", "volume_thread": "反派步步紧逼，每一次抵抗都换来更大的牺牲", "volume_finale_signal": "触底后拆神真相击穿旧信念、真正的对手（神性股权制本身）浮出水面——核心矛盾重新定义信号"},
+    {"vol": 4, "title": "反击·终局", "volume_core_conflict": "带散户互助会反向收购神性股权制，完成神性回归众生", "volume_thread": "从散户互助到终极董事会大议，主题闭环", "volume_finale_signal": "神性股权制被反向收购瓦解、核心矛盾解决——全书 Final Image 终局信号"}
   ],
-
-  "fate_drift_log": [],
-
+  "major_events": [
+    {"id": "ME-V1-01", "volume": 1, "title": "陆衍代签董事会触发反模因", "is_volume_finale": false, "stakes_delta": "起点：一个普通职员因一次代签被卷入神性股权战，从此被七位董事'目击'记名", "stage": "Opening Image + Catalyst", "prerequisites": [], "expected_window_after": null, "physical_evidence": ["陆衍以非董事身份出现在 38 楼董事会", "被七位董事集体'目击'并记名"], "trigger_when": "开篇", "downstream_unlocks": ["ME-V1-02", "ME-V1-03"], "status": "pending", "_note": "全书起点。一次代签把主角从旁观者变成被记名的当事人"},
+    {"id": "ME-V1-02", "volume": 1, "title": "导火索事件（同事消失 / 上司坠落）", "is_volume_finale": false, "stakes_delta": "威胁从'被记名'升级到'身边人非正常消失'，陆衍意识到自己被盯上", "stage": "Set-Up", "prerequisites": ["ME-V1-01"], "expected_window_after": {"event": "ME-V1-01", "max_chapters": 5}, "physical_evidence": ["至少 1 个相关角色非正常消失", "一封 0.001% 异常邮件 / 记忆被擦除的痕迹"], "trigger_when": "陆衍代签后最先接触的同事或上司出事", "downstream_unlocks": ["ME-V1-03"], "status": "pending"},
+    {"id": "ME-V1-03", "volume": 1, "title": "金手指首激活（废票灵格觉醒）", "is_volume_finale": false, "stakes_delta": "从'被动挨打'升级到'手里有了不明底牌'，但也被正式识别为'觉醒者'", "stage": "Catalyst_resolved", "prerequisites": ["ME-V1-02"], "expected_window_after": {"event": "ME-V1-02", "max_chapters": 8}, "physical_evidence": ["废票 / 铁皮盒物件产生异象", "陆衍听见或看见非物理现象（一句'是你'）"], "trigger_when": "陆衍获得父辈传承物件后", "downstream_unlocks": ["ME-V1-04", "ME-V1-05"], "status": "pending"},
+    {"id": "ME-V1-04", "volume": 1, "title": "假亲人事件（至亲被掉包）", "is_volume_finale": false, "stakes_delta": "代价从'自身'转向'至亲'，陆衍对身边所有人的信任第一次崩塌", "stage": "Debate", "prerequisites": ["ME-V1-03"], "expected_window_after": {"event": "ME-V1-03", "max_chapters": 10}, "physical_evidence": ["某亲近角色身体细节出错（被替换）", "陆衍发现掉包的具体证据"], "trigger_when": "灵格激活后接近 30 岁生日时", "downstream_unlocks": ["ME-V1-06"], "status": "pending"},
+    {"id": "ME-V1-05", "volume": 1, "title": "顾沉三选一招安", "is_volume_finale": false, "stakes_delta": "反派正面登场给出'加入/合作/退出'三选一，陆衍从暗处被拽到台面", "stage": "Debate_late", "prerequisites": ["ME-V1-03"], "expected_window_after": {"event": "ME-V1-03", "max_chapters": 12}, "physical_evidence": ["顾沉与陆衍正面对话提出三选一", "三个隐喻式选项的凭据（三张名片 / 三份合约）"], "trigger_when": "灵格觉醒后顾沉判定可招安时", "downstream_unlocks": ["ME-V1-06"], "status": "pending"},
+    {"id": "ME-V1-06", "volume": 1, "title": "卷一末·主动宣战", "is_volume_finale": true, "stakes_delta": "本卷跃迁信号：陆衍掌握废票用法后拒绝招安，从被动求生转为主动向南海资本宣战——力量/身份跃迁", "stage": "Break into Two", "prerequisites": ["ME-V1-04", "ME-V1-05"], "expected_window_after": {"event": "ME-V1-05", "max_chapters": 30}, "physical_evidence": ["陆衍主动出手对抗南海资本的第一次操盘", "从被动转主动的姿态标志（公开做空 / 反收购动作）"], "trigger_when": "陆衍掌握废票用法 + 拒绝招安后", "downstream_unlocks": ["ME-V2-01"], "status": "pending"},
+    {"id": "ME-V2-01", "volume": 2, "title": "学会股权运作=修炼（获第二缕灵格）", "is_volume_finale": false, "stakes_delta": "把'金手指'变成'可复用的能力'，从'会用一次'升级到'能主动操盘'", "stage": "Fun and Games", "prerequisites": ["ME-V1-06"], "expected_window_after": {"event": "ME-V1-06", "max_chapters": 40}, "physical_evidence": ["陆衍完成第一次反向并购", "并购完成瞬间获得第二缕灵格"], "trigger_when": "卷二开局陆衍主动下场操盘", "downstream_unlocks": ["ME-V2-02", "ME-V2-03"], "status": "pending"},
+    {"id": "ME-V2-02", "volume": 2, "title": "副线·林晚秋身份反转", "is_volume_finale": false, "stakes_delta": "最近的盟友暴露为卧底，信任危机从'外部敌人'渗入'内部团队'", "stage": "B Story", "prerequisites": ["ME-V2-01"], "expected_window_after": {"event": "ME-V2-01", "max_chapters": 60}, "physical_evidence": ["林晚秋被陆衍发现是北殷卧底", "她在暴露后做出的选择（倒戈 / 牺牲）"], "trigger_when": "陆衍组建非正式团队过程中", "downstream_unlocks": ["ME-V2-03"], "status": "pending"},
+    {"id": "ME-V2-03", "volume": 2, "title": "Midpoint·假胜利 + 全网通缉", "is_volume_finale": true, "stakes_delta": "本卷跃迁信号：跨财团并购成功但身份暴露，战场从隐秘操盘扩大到七大联手通缉——舞台/格局跃迁", "stage": "Midpoint", "prerequisites": ["ME-V2-01"], "expected_window_after": {"event": "ME-V2-01", "max_chapters": 100}, "physical_evidence": ["陆衍跨财团并购成功的战报", "七大本土财团联手通缉令"], "trigger_when": "陆衍连续操盘成功后暴露身份", "downstream_unlocks": ["ME-V3-01"], "status": "pending", "_critical": true, "_note": "中点假胜利——最高光时刻紧接最大反转"},
+    {"id": "ME-V3-01", "volume": 3, "title": "All Is Lost·废票被夺 / 父亲身亡", "is_volume_finale": false, "stakes_delta": "同时失去金手指与至亲，陆衍被打回比开局更低的谷底", "stage": "All Is Lost", "prerequisites": ["ME-V2-03"], "expected_window_after": {"event": "ME-V2-03", "max_chapters": 130}, "physical_evidence": ["陆衍失去废票灵格", "父亲为掩护他牺牲"], "trigger_when": "董事会大议召开、南海资本总反扑", "downstream_unlocks": ["ME-V3-02"], "status": "pending"},
+    {"id": "ME-V3-02", "volume": 3, "title": "Dark Night·拆神真相揭露", "is_volume_finale": true, "stakes_delta": "本卷跃迁信号：触底后老乞丐揭出'神是从普通人提炼的'，真正的对手（神性股权制本身）浮出水面——核心矛盾重新定义", "stage": "Dark Night of the Soul", "prerequisites": ["ME-V3-01"], "expected_window_after": {"event": "ME-V3-01", "max_chapters": 20}, "physical_evidence": ["老乞丐说出'神是从普通人提炼的'", "陆衍旧信念（天选叙事）被击穿的瞬间"], "trigger_when": "陆衍触底后偶遇老乞丐", "downstream_unlocks": ["ME-V4-01"], "status": "pending", "_critical": true, "_note": "至暗时刻紧接主题反转——真正的敌人不是某个财团，是把人神性金融化的制度本身"},
+    {"id": "ME-V4-01", "volume": 4, "title": "Break into Three·反向收购联合散户", "is_volume_finale": false, "stakes_delta": "从'孤身逆袭'转为'组织散户互助'，反抗方式从个人升级为集体", "stage": "Break into Three", "prerequisites": ["ME-V3-02"], "expected_window_after": {"event": "ME-V3-02", "max_chapters": 25}, "physical_evidence": ["陆衍带反向收购计划重新登场", "散户互助会成立"], "trigger_when": "陆衍觉醒后组建散户互助会", "downstream_unlocks": ["ME-V4-02"], "status": "pending"},
+    {"id": "ME-V4-02", "volume": 4, "title": "Final Image·神性回归众生", "is_volume_finale": true, "stakes_delta": "本卷/全书终局：神性股权制被反向收购瓦解，核心矛盾解决，主题闭环——神性回归众生", "stage": "Final Image", "prerequisites": ["ME-V4-01"], "expected_window_after": {"event": "ME-V4-01", "max_chapters": 80}, "physical_evidence": ["神性股份回流到所有散户", "陆衍拒绝接管、不成神", "与卷一凌晨写字楼签字场景形成时间环"], "trigger_when": "终极董事会大议召开", "downstream_unlocks": [], "status": "pending", "_critical": true}
+  ],
   "_consumption_chain": {
-    "produced_by": "/outline --mode fluid",
+    "produced_by": "/outline --mode fluid 初始化 + cluster-write/cluster-save-state 更新 status",
     "consumed_by": [
-      "build_manifest._collect_active_fate_events()",
-      "fate_engine.py evaluate/update",
-      "cross_chapter_fate_drift_scan.py"
-    ],
-    "updated_by": ["save-state step 9 fate_engine update"]
+      "cluster_emergence_engine 按当前卷 ME 池涌现下一 cluster",
+      "fate_engine.evaluate 计算 active fate_events",
+      "build_manifest._collect_active_fate_events 注入 writer",
+      "outline-planner 走向卡按 active fate_events 设计"
+    ]
+  },
+  "_design_notes": {
+    "卷=阶段触发点": "4 卷对应 4 次跃迁：V1 力量/身份跃迁（掌握废票转主动）· V2 舞台/格局跃迁（身份暴露全网通缉）· V3 核心矛盾重新定义（拆神真相、真正反派浮现）· V4 全书终局（矛盾解决 Final Image），每卷末 ME 标 is_volume_finale:true",
+    "Save the Cat 15 拍贴合": "13 ME 覆盖 Opening/Catalyst → Break into Two → Fun and Games → Midpoint → All Is Lost → Dark Night → Break into Three → Final Image",
+    "stakes_delta 递增": "每卷内 ME 的筹码/强度相对前一小走向递增（try-fail），单 ME=1 cluster=1 小走向，禁单 cluster 覆盖整卷/整阶段",
+    "expected_window_after": "宽窗软触发（涌现式不锁死章号），_critical ME 标记中点/至暗/终局",
+    "DAG 完整性": "每 ME downstream_unlocks 形成有向无环图，防孤立 ME"
   }
 }
