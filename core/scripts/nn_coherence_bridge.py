@@ -191,9 +191,12 @@ def predict_batch(texts: "list[str]", timeout: "float | None" = None) -> "list[d
 
 
 def predict_pairs(pairs: "list[tuple[str, str]]", timeout: "float | None" = None) -> "list[dict | None]":
-    """批量文本对衔接连贯性（--mode pairs）。任何不可用/失败 → 全 None（不崩）。保序一一对应。"""
+    """批量文本对衔接连贯性。coherence_infer._parse_items 按 record 是否含 text_a/text_b 自动分流，
+    不需要显式 --mode（该 flag 在 coherence_infer.py argparse 里从未定义，曾被 allow_abbrev 误前缀匹配到
+    --model，导致 checkpoint 路径变成不存在的 "pairs" 目录、静默 all-None 退化启发式）。
+    任何不可用/失败 → 全 None（不崩）。保序一一对应。"""
     records = [{"text_a": str(a), "text_b": str(b)} for (a, b) in pairs]
-    return _run_infer(records, ["--mode", "pairs"], timeout, daemon_items=records)
+    return _run_infer(records, [], timeout, daemon_items=records)
 
 
 def predict_one(text: str, timeout: "float | None" = None) -> "dict | None":
