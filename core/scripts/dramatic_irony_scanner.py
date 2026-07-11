@@ -81,7 +81,7 @@ def _author_reader_adv(project_root):
 
 
 def scan(draft_path, project_root=None) -> dict:
-    """dramatic irony 信号 vs 作者 reader_adv 双向对账。永远 advisory（北极星⑤）。"""
+    """dramatic irony 显式标志词 tell 密度单向检测（tell 过多 → 建议改 show）。永远 advisory（北极星⑤）。"""
     mode = _mode()
     out = {"scanner": "dramatic_irony", "schema_version": "1.0", "mode": mode,
            "code": ISSUE_CODE, "gate_level": "advisory", "warning": None,
@@ -129,7 +129,7 @@ def scan(draft_path, project_root=None) -> dict:
 def main():
     ap = argparse.ArgumentParser(description="W4 dramatic irony 信号回查(advisory)")
     ap.add_argument("draft_path")
-    ap.add_argument("--project", default=None, help="读作者 reader_adv 基线对账")
+    ap.add_argument("--project", default=None, help="读作者 reader_adv 作 report 参考（不作判据）")
     ap.add_argument("--manifest", default=None, help="兼容 audit_hub 传参")
     args = ap.parse_args()
     report = scan(args.draft_path, args.project)

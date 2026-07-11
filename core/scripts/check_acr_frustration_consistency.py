@@ -109,7 +109,7 @@ def _load_characters(project_root) -> list:
 def _override_flag(project_root) -> bool:
     if not project_root:
         return False
-    p = Path(project_root) / "作者风格.json"
+    p = Path(project_root) / "_数据库" / "作者风格.json"
     if not p.exists():
         return False
     try:

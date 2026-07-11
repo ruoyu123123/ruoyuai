@@ -1,4 +1,4 @@
-"""arc_aggregator.py — v22.cluster 故事块 arc 聚合器（双轨主轨）
+"""arc_aggregator.py — v22.cluster 故事块 arc 聚合器（cluster 主轨）
 
 把已蒸馏的 continuity JSON + 单章 metrics + 单章 JSON **按 cluster 颗粒度**聚合成 arc。
 对齐写作端 ECAS 故事块模式（gen_writer.py --cluster N），避免"蒸馏 3 章固定 / 写作 cluster 可变"颗粒度错位。
@@ -10,18 +10,15 @@
 - Reagan 2016 (EPJ Data Science) — 6 基本情感弧形（保留作 shape classifier）
 
 输入：
-    # cluster 模式（推荐 · 主轨）：按 cluster_index.json 聚合
+    # cluster 模式（主轨）：按 cluster_index.json 聚合
     python arc_aggregator.py --project workspace/styles/<书名> --cluster auto_002
     python arc_aggregator.py --project workspace/styles/<书名> --all-clusters
-    # fixed10 模式（章节副轨 · 保留兼容）：每 10 章一段
-    python arc_aggregator.py --project workspace/styles/<书名> --arc-end-chapter <N>
     # summary 模式：聚合全部 arc 出 6 形状分布
     python arc_aggregator.py --project workspace/styles/<书名> --mode summary
 
 输出：
-    workspace/styles/<书名>/arc_templates/cluster_arc_<cluster_id>.json   # 主轨（cluster 颗粒度）
-    workspace/styles/<书名>/arc_templates/arc_<NNN>.json                  # 副轨（固定 10 章）
-    workspace/styles/<书名>/arc_templates/arc_summary.json                # summary（覆盖两轨）
+    workspace/styles/<书名>/arc_templates/cluster_arc_<cluster_id>.json   # cluster 颗粒度 arc
+    workspace/styles/<书名>/arc_templates/arc_summary.json                # summary 分布
 
 调用时机：
     distill-style.md 阶段 1.5（每个 cluster 蒸馏完后触发 cluster 模式 + 全书蒸馏完后跑 --all-clusters）
@@ -447,16 +444,8 @@ def compute_mid_checkpoint_tensions(
     return checkpoints
 
 
-def aggregate_arc(project: Path, arc_end: int, arc_size: int = 10) -> dict:
-    """副轨（固定 10 章）模式 · 保留向后兼容。"""
-    arc_start = arc_end - arc_size + 1
-    data = _aggregate_chapter_range(project, arc_start, arc_end, arc_size)
-    data["mode"] = "fixed10"
-    return data
-
-
 def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_size: int) -> dict:
-    """核心聚合逻辑（cluster / fixed10 共用）。"""
+    """核心聚合逻辑（cluster arc 聚合）。"""
     arc_id_num = f"{arc_end:03d}"
 
     # 收集 chapter JSON
@@ -676,12 +665,10 @@ def aggregate_summary(project: Path) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="arc_aggregator v22.cluster · 双轨 arc 聚合（cluster 主 + fixed10 副）")
+    parser = argparse.ArgumentParser(description="arc_aggregator v22.cluster · cluster arc 聚合（cluster 主轨）")
     parser.add_argument("--project", required=True, help="风格库项目路径，如 workspace/styles/BookC")
     parser.add_argument("--cluster", help="cluster_id（如 auto_002），cluster 主轨模式")
     parser.add_argument("--all-clusters", action="store_true", help="聚合 cluster_index.json 中的全部 cluster")
-    parser.add_argument("--arc-end-chapter", type=int, help="fixed10 副轨：arc 末章号（如 10）")
-    parser.add_argument("--arc-size", type=int, default=10, help="fixed10 副轨 arc 大小，默认 10 章")
     parser.add_argument("--mode", choices=["single", "summary"], default="single")
     args = parser.parse_args()
 
@@ -732,18 +719,9 @@ def main():
         print(f"      shape: {result['matched_reagan_shape']} (conf={result['matched_reagan_shape_confidence']})")
         return
 
-    # fixed10 副轨（保留向后兼容）
-    if args.arc_end_chapter is None:
-        print("[error] 必须指定 --cluster / --all-clusters / --arc-end-chapter / --mode summary 之一", file=sys.stderr)
-        sys.exit(2)
-
-    result = aggregate_arc(project, args.arc_end_chapter, args.arc_size)
-    out = arc_dir / f"arc_{args.arc_end_chapter:03d}.json"
-    out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[OK] arc written: {out}")
-    print(f"      emotion_curve: {result['emotion_curve_normalized']}")
-    print(f"      shape: {result['matched_reagan_shape']} (conf={result['matched_reagan_shape_confidence']})")
-    print(f"      climax: ch{result['climax_chapter_number']}")
+    # 未指定任何有效模式
+    print("[error] 必须指定 --cluster / --all-clusters / --mode summary 之一", file=sys.stderr)
+    sys.exit(2)
 
 
 if __name__ == "__main__":

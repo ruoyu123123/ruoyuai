@@ -275,7 +275,7 @@ def check_item_consistency(body: str, changes: dict, project_root: Path,
 def check_knowledge_leak(body: str, project_root: Path,
                         manifest: dict, chapter: int) -> list[dict]:
     """未来知识泄露检查：
-    出场角色的 knowledge.will_learn 条目中，learn_at_ch > 本章的事实，
+    出场角色的 knowledge.will_learn 条目中，learn_at_cluster > 本章的事实，
     不应在正文中被该角色说出/表现出知道。
     """
     errs = []
@@ -323,7 +323,7 @@ def check_knowledge_leak(body: str, project_root: Path,
                         "severity": "error",
                         "msg": f"角色「{name}」在第{chapter}章疑似提前知道 {lac}（起始第{learn_lo}章）才学到的事实:「{fact}」"
                                f"（bigram 命中 {len(hits)}/{len(fact_bigrams)}）",
-                        "fix_hint": f"修改该段落避免「{name}」表露对此事的认知；或将大纲 learn_at_ch 提前",
+                        "fix_hint": f"修改该段落避免「{name}」表露对此事的认知；或将大纲 learn_at_cluster 提前",
                     })
                     break
     return errs

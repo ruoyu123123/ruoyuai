@@ -45,7 +45,7 @@ def is_available() -> bool:
     """真实探测后端可用（非仅 import 成功）。frozen 退化成 fail/null backend 时返 False。
 
     用 isinstance 判定（对抗审查 must_fix#4：fail/null 后端 __name__ 都是 'Keyring'，
-    类名/模块路径字符串匹配脆弱）。loader 降级与 GUI「密钥库不可用」提示共用此判据。
+    类名/模块路径字符串匹配脆弱）。loader 降级到 .env 的判据。
     """
     if _keyring is None:
         return False
@@ -103,7 +103,7 @@ def delete_api_key(profile_name: str) -> bool:
     try:
         _keyring.delete_password(SERVICE, profile_name)
         return True
-    except _PwDelErr:                    # 本就不存在 → 无可删·返 False（GUI 清除按钮不当错误显示）
+    except _PwDelErr:                    # 本就不存在 → 无可删·返 False（清除操作不当错误显示）
         return False
     except Exception:
         return False
@@ -133,8 +133,8 @@ def redact(text: str) -> str:
     """把任意文本里的 API key 脱敏（key=*** / sk-***）。
 
     gemini 原生协议把 key 放 URL（gen_writer/llm_transport），HTTPError/URLError 的 str()
-    会带整条 URL → 经 stderr → GUI LogBuffer → 界面。任何可能含 key 的 err/URL 字符串
-    在打到 stderr / 回显 GUI 前必须过本函数。
+    会带整条 URL → 经 stderr 输出到日志。任何可能含 key 的 err/URL 字符串
+    在打到 stderr / 日志前必须过本函数。
     """
     if not text:
         return text
@@ -217,7 +217,7 @@ def _sync_from_env(dry_run: bool = False) -> dict:
 
 
 def main(argv=None) -> int:
-    """CLI 入口（frozen multi-call dispatch 经 orchestrator.run_script_in_process 调 main()）。"""
+    """CLI 入口（可被外部脚本/子进程直接调用）。"""
     import argparse
     import json
     import sys

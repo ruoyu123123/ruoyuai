@@ -2,8 +2,8 @@
 """log_util.py — 统一日志接口（2026-06-17）
 
 四级日志标准：
-- SILENT: orchestrator 默认，只输出结果 JSON（程序驱动模式）
-- INFO: GUI 进度条用，关键 milestone（如 "✓ 第 3 步完成"）
+- SILENT: 程序驱动模式默认，只输出结果 JSON
+- INFO: 关键 milestone 进度（如 "✓ 第 3 步完成"）
 - DEBUG: 开发调试，需 RUOYU_DEBUG=1 环境变量
 - ERROR: 异常，走 stderr（Traceback 自动捕获）
 
@@ -21,7 +21,7 @@ from typing import Literal
 
 LogLevel = Literal["SILENT", "INFO", "DEBUG", "ERROR"]
 
-# 全局开关：orchestrator 驱动时设为 SILENT，开发调试时用 DEBUG
+# 全局开关：程序驱动模式设为 SILENT，开发调试时用 DEBUG
 _DEFAULT_LEVEL = os.environ.get("RUOYU_LOG_LEVEL", "INFO").upper()
 _DEBUG_MODE = os.environ.get("RUOYU_DEBUG", "0") == "1"
 
@@ -80,7 +80,7 @@ def get_logger(name: str, level: LogLevel | None = None) -> logging.Logger:
 
 
 def print_result_json(data: dict, **kwargs):
-    """打印结构化结果（即使 SILENT 模式也输出，供 orchestrator/GUI 解析）。
+    """打印结构化结果（即使 SILENT 模式也输出，供外部程序/子进程解析）。
 
     Args:
         data: 要输出的字典（自动 JSON 序列化）
@@ -91,7 +91,7 @@ def print_result_json(data: dict, **kwargs):
 
 
 def print_progress(step: int, total: int, message: str):
-    """打印进度信息（GUI 友好格式）。
+    """打印进度信息。
 
     Args:
         step: 当前步骤号

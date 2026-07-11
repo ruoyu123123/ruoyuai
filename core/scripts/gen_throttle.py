@@ -2,7 +2,7 @@
 """gen_throttle.py — 全局 gen-model 调用限速（限速端点/中转站支持·真 e2e 暴露）。
 
 某些中转站对 gen-model 请求限速（如 < 15 rpm），超速返 Cloudflare 520（Web server returning
-unknown error）。完整 cluster-write 快速连发 writer best-of-N/expand 续写 + 多 judge → 超速 520。
+unknown error）。完整 cluster-write 快速连发 gemini 逐场景分段润色 + 多 judge → 超速 520。
 
 env `GEN_MIN_INTERVAL_S`：两次 gen-model 请求最小间隔秒数。默认 0=不限速（零回归）。
   15 rpm 端点设 4.5（→ ~13 rpm 安全余量）。

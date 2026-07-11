@@ -43,6 +43,9 @@ from pathlib import Path
 
 # ============ 已知模型表（不需联网即可用的 hardcoded knowledge）============
 # 来源：官方文档 + OpenRouter + 联网搜索 2026-05
+# 注意：本表未覆盖当前锁定的 gen-model gemini-3.1-pro-preview（已知 max_output_tokens=65536，
+#       context_window 未经核实故未填）——未收录模型走 get_capabilities 的 default_conservative
+#       保守默认，需要精确能力时手动补充条目。
 KNOWN_MODELS = {
     # DeepSeek 系列
     "deepseek-v4-pro": {
@@ -220,14 +223,6 @@ def main():
         print(f"[probe] {e}", file=sys.stderr)
         print("  跑 python core/scripts/gen_model.py list / switch 修复", file=sys.stderr)
         sys.exit(2)
-    except ImportError:
-        # Fallback：gen_model_loader 缺失时回落老字段（兼容期）
-        api_key = os.getenv('DEEPSEEK_API_KEY')
-        base_url = os.getenv('DEEPSEEK_BASE_URL')
-        model_id = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')
-        if not api_key or not base_url:
-            print("[probe] active profile 加载失败 + .env 缺 legacy DEEPSEEK_*", file=sys.stderr)
-            sys.exit(2)
 
     print(f"[probe] base_url={base_url}")
     print(f"[probe] target_model={model_id}")

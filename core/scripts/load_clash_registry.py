@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""load_clash_registry.py — 题材包冲突 registry loader + build_manifest 注入器
+"""load_clash_registry.py — 题材包冲突解析库（被 genre_pack_clash_scanner.py 消费·resolve_clashes() 是核心接口）
 (R11 W6 MODEST · advisory · 2026-06-20)
 
 【用法】
@@ -69,18 +69,6 @@ def resolve_clashes(author_genre_packs: list, author_fusion_override: dict | Non
                 })
                 break
     return hints
-
-
-def inject_into_manifest(manifest: dict, author_genre_packs: list,
-                         author_fusion_override: dict | None = None) -> dict:
-    """build_manifest 注入入口·不修改原 dict (返回新 dict)"""
-    if not isinstance(manifest, dict):
-        return manifest
-    hints = resolve_clashes(author_genre_packs, author_fusion_override)
-    if hints:
-        manifest = dict(manifest)
-        manifest["fusion_resolution_hints"] = hints
-    return manifest
 
 
 if __name__ == "__main__":

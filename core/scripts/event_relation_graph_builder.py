@@ -31,7 +31,7 @@
   }
 
 【北极星】
-  - cluster 单位·outline.plan.json step 3.5 optional 调度
+  - cluster 单位·注册于 scanner_registry.json，未被 outline.plan.json 或任何 plan/orchestrator 调度
   - builder 只读 outline 产物·不改写任何子系统·只写新文件
   - env EVENT_RELATION_GRAPH_MODE 默认 shadow(不写文件) / build(实际产 JSON)
 
@@ -68,7 +68,7 @@ def _collect_majors(da_shi_ka):
     edges = []
     if not isinstance(da_shi_ka, dict):
         return nodes, edges
-    mes = da_shi_ka.get("major_events") or []
+    mes = da_shi_ka.get("major_events_pool") or da_shi_ka.get("major_events") or []
     for me in mes:
         if not isinstance(me, dict):
             continue

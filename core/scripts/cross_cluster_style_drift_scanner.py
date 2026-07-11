@@ -25,8 +25,8 @@ ConStory-Bench 实证：风格漂移与事实/时序一致性近零相关（独�
     不新起 embedding/系统。
   · 作者档第一权威：作者原文池是「贴不贴作者」的唯一参照系；缺池 → 退化为「自漂移」单轨（不臆造）。
   · 影子并行（共同纪律 2）env LONGRANGE_DRIFT_MODE：
-      shadow（默认）：算全量曲线挂 report · 顶层 issues=[] · 不改 exit code（零回归）。
-      active：把漂移升 advisory issue 进顶层（仍 advisory · 绝不 hard_gate）。
+      active（默认，2026-05-31 放量）：把漂移升 advisory issue 进顶层（仍 advisory · 绝不 hard_gate）。
+      shadow：算全量曲线挂 report · 顶层 issues=[] · 不改 exit code（零回归）。
       off：完全跳过（连 SFS 都不算）。
 
 用法：python cross_cluster_style_drift_scanner.py <project> [--last-n N] [--author-pool <dir>]

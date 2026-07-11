@@ -35,7 +35,7 @@ def _mk_project(profile=None):
     db = proj / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
     if profile is not None:
-        (proj / "作者风格.json").write_text(
+        (db / "作者风格.json").write_text(
             json.dumps(profile, ensure_ascii=False), encoding="utf-8")
     return proj
 

@@ -1,15 +1,21 @@
-# gen_writer.py · 故事块正文生成器
+# gen_writer.py · 故事块 gemini 分段润色引擎（v29）
 
-`gen_writer.py` 是 `/cluster-write` 第 2 步的内部脚本。它只负责调用当前 active gen-model 写出**整块 cluster 草稿**和 writer 创作期自评；切章、标题、事实回写、伏笔回写和状态保存都不在本脚本内完成。
+`gen_writer.py` 是 `/cluster-write` 第 2b 步的内部脚本。v29 正文生成分两阶段，本脚本只承载**第二阶段的 gemini 分段润色**：
+
+1. **step 2a（Claude 亲笔）**：`novel-writer` agent 读 manifest / 风格 skill / brief / research 后**逐场景亲笔写作**，分场景落盘到 `<project>/章节/cluster_<key>_draft/claude_scenes/scene_*.txt`，并产 `changes_claude.json`。
+2. **step 2b（gemini 润色）· 本脚本**：`gen_writer.py` 自动发现 `claude_scenes/` 里的场景稿，逐场景段调当前 active gen-model（gemini）按作者风格档**等体量重写润色**（段级字数守恒带 `[0.85, 1.30]`，超界带字数指令重试 1 次），拼接出终稿 `cluster_<key>_draft.txt`。
+
+本脚本**只做 gemini 分段润色**——不从零生成正文（v29 已删除从零生成路径），不切章、不写标题、不回写事实/伏笔、不做状态保存。缺 `claude_scenes/` 目录直接 `[FATAL]` 响亮失败退出（不兼容不降级：没有亲笔场景稿就不回退到从零生成）。
 
 ## 所属链路
 
 ```
 /cluster-write
-  1. build_manifest.py 生成 manifest 和 style_directive
-  2. gen_writer.py 写 cluster_<key>_draft.txt
-  3. audit_hub / reading / voice / foreshadow / reflect / summarize
-  4. splitter 和 titles 在审核完成后执行
+  1.  build_manifest.py 生成 manifest 和 style_directive
+  2a. novel-writer agent 逐场景亲笔写 claude_scenes/scene_*.txt
+  2b. gen_writer.py 分段 gemini 润色 → cluster_<key>_draft.txt
+  3.  audit_hub / reading / voice / foreshadow / reflect / summarize
+  4.  splitter 和 titles 在审核完成后执行
 ```
 
 `gen_writer.py` 不是用户入口，也不是单章写作入口。
@@ -25,57 +31,48 @@ python core/scripts/gen_model.py show
 `.env` 使用 OpenAI 兼容 profile：
 
 ```env
-GEN_MODEL_ACTIVE=deepseek_example
+GEN_MODEL_ACTIVE=gemini_example
 GEN_MODEL_FALLBACK_CHAIN=
 
-GEN__deepseek_example__MODEL=deepseek-v4-pro
-GEN__deepseek_example__BASE_URL=https://example.com/v1
-GEN__deepseek_example__API_KEY=sk-...
-GEN__deepseek_example__TEMPERATURE=0.8
-GEN__deepseek_example__MAX_TOKENS=
+GEN__gemini_example__MODEL=gemini-3.1-pro-preview
+GEN__gemini_example__BASE_URL=https://example.com/v1
+GEN__gemini_example__API_KEY=sk-...
+GEN__gemini_example__TEMPERATURE=1.0
+GEN__gemini_example__MAX_TOKENS=
 ```
 
-模型能力探测：
+## 调用
 
-```bash
-python core/scripts/model_probe.py
-```
-
-## 内部调试调用
-
-正式写作入口只有 `/cluster-write` step 2。下面命令只用于开发者复现 prompt、排查 profile 或跑 dry-run，不作为用户写作入口。
+正式写作入口只有 `/cluster-write`。本脚本核心 CLI 参数只有两个：
 
 ```bash
 python core/scripts/gen_writer.py \
   --project "workspace/novels/<book>" \
-  --cluster 1
+  --cluster 6
 ```
-
-参数：
 
 | 参数 | 说明 |
 |---|---|
-| `--project` | 小说项目根目录 |
-| `--cluster` | cluster 序号 |
-| `--dry-run` | 只输出 prompt，不调用 API |
+| `--project` | 小说项目根目录（required） |
+| `--cluster` | cluster 序号，整数（required） |
+| `--dry-run` | 开发用：只输出首段润色 prompt，不调 API |
 
-默认是 v27 freestyle：writer 不接收目标章数，也不接收目标字数；它按 `cluster.scope_summary`、`scene_storyboard`、作者风格档、manifest 和调研 cache 写完整故事块。章节数由后续 splitter 按字数决定。
+脚本据 `--project` / `--cluster` 反查 cluster key 与起始章号，自动定位 `claude_scenes/` 场景稿；**不接收**目标章数、目标字数或章首/章末参数（旧的 `--chapter-end` / `--target-cjk` / `--chapter-start` 已随 v29 删除，章节数由后续 splitter 按字数决定）。
 
 ## 输出
 
 ```text
-<project>/章节/cluster_<key>_draft/cluster_<key>_draft.txt
-<project>/章节/cluster_<key>_draft/cluster_<key>_changes.json
+<project>/章节/cluster_<key>_draft/cluster_<key>_draft.txt          # gemini 润色终稿
+<project>/章节/cluster_<key>_draft/cluster_<key>_changes.json       # 自评 + 遥测
 ```
 
-`cluster_<key>_changes.json` 只承载：
+`cluster_<key>_changes.json` 合并：
 
-- writer 创作期自评；
-- waivers；
-- 确定性遥测；
-- 使用的 gen-model profile / model。
+- `novel-writer` agent 的创作期自评 / waivers（`self_eval`，step 2a 产）；
+- 本脚本的确定性润色遥测（`word_count_cjk` / `length_telemetry` / 段级守恒留痕、使用的 gen-model profile / model）；
+- 标记 `writer_mode: "claude_draft_gemini_polish_v29"`。
 
-角色、道具、关系、locked facts、伏笔等 factual 状态由 Claude agent 在 `/cluster-save-state` 阶段读正文梳理并回库，writer 不自报事实。
+角色、道具、关系、locked facts、伏笔等 factual 状态由 Claude agent（novel-archivist / foreshadower）在 `/cluster-save-state` 阶段读正文梳理 → `apply_archive.py` 确定性回库，本脚本不自报任何 factual 状态。
 
 ## Fallback
 
@@ -85,9 +82,9 @@ active profile 调用失败时，脚本按 `GEN_MODEL_FALLBACK_CHAIN` 顺序尝�
 
 | 报错 | 处理 |
 |---|---|
+| `缺 claude_scenes/ 目录`（`[FATAL]`） | 先跑 step 2a 让 `novel-writer` agent 亲笔逐场景写作落盘 `claude_scenes/scene_*.txt`，再跑本脚本 |
 | `GEN_MODEL_ACTIVE 字段未设置` | 运行 `gen_model.py list`，再 `gen_model.py switch <name>` |
 | active profile 不存在 | 检查 `.env` profile 名 |
 | API key 为空或错误 | 更新 `GEN__<name>__API_KEY` |
 | API 429 / timeout | 配置 fallback profile |
-| 输出缺 changes JSON | 由脚本续写兜底；仍失败则交 `/cluster-write` 停止并报告 |
-| 正文过短 | 脚本会触发 expand 续写；仍不足则由 `/cluster-write` 进入修复流程 |
+| 某段守恒比超 `[0.85, 1.30]` | 脚本带字数指令重试 1 次；仍超界交 `/cluster-write` 修复流程处理 |

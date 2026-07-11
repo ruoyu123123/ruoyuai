@@ -5,8 +5,8 @@
 2. FACTION_STANDINGS_FROZEN    - 势力数值卷级里程碑章未变
 3. TRIGGERED_EVENTS_EMPTY      - pending_events 有但 triggered_events 全空
 4. TRAVEL_LOG_BARREN           - 角色 character_movements 多次但 travel_log 没记录
-5. SECRET_OVERDUE              - secret.reveal_at_ch <= 当章但 status 还是 hidden
-6. WILL_LEARN_NOT_TRIGGERED    - will_learn.learn_at_ch <= 当章但 knows 没新增
+5. SECRET_OVERDUE              - secret.reveal_at_cluster <= 当章但 status 还是 hidden
+6. WILL_LEARN_NOT_TRIGGERED    - will_learn.learn_at_cluster <= 当章但 knows 没新增
 
 用法：python cross_cluster_declarative_data_aggregate.py <项目路径> [--last-n 10]
 退出码：0 健康 / 1 advisory / 2 warning
@@ -23,12 +23,6 @@ from pathlib import Path
 
 
 
-# ============================================================
-# v2 cluster 化方案 Phase 3 PX（2026-05-28）：
-# 本 scanner 标记为「待升维 cross_cluster_aggregate」
-# CLUSTER_MODE env=1 时已感知 cluster 视野（具体阈值逐步迁移）
-# 计划：下个版本（v4）正式 git mv → cross_cluster_<X>_aggregate.py
-# ============================================================
 import os as _os
 IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
@@ -223,7 +217,7 @@ def main():
             "severity": "advisory",
             "code": "WILL_LEARN_NOT_TRIGGERED",
             "metric": {"count": len(overdue_wl), "samples": overdue_wl[:3]},
-            "message": f"{len(overdue_wl)} 条 will_learn 已过 learn_at_ch 但未移入 knows",
+            "message": f"{len(overdue_wl)} 条 will_learn 已过 learn_at_cluster 但未移入 knows",
             "suggestion": "writer 在对应章节写 knowledge_gained，cluster-save-state 自动从 will_learn 移到 knows",
         })
 

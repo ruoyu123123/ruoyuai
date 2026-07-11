@@ -72,24 +72,6 @@ def test_resolve_multi_pair():
     assert ("horror_game", "slice_of_life") in pairs
 
 
-def test_inject_into_manifest_noop_when_no_packs():
-    m = {"foo": "bar"}
-    out = lcr.inject_into_manifest(m, [])
-    assert out is m  # 无 hint 返回原对象
-
-
-def test_inject_into_manifest_with_hints():
-    m = {"foo": "bar"}
-    out = lcr.inject_into_manifest(m, ["apocalypse_survival", "romance"])
-    assert "fusion_resolution_hints" in out
-    assert out["foo"] == "bar"
-
-
-def test_inject_non_dict_returns_input():
-    out = lcr.inject_into_manifest("notdict", ["a", "b"])
-    assert out == "notdict"
-
-
 def test_main_cli_runs():
     import subprocess
     r = subprocess.run(

@@ -233,17 +233,10 @@ def migrate_characters(project: Path, dry_run: bool):
                 ks["since_cluster"] = cid
                 if inferred:
                     ks["_cluster_inferred"] = True
-        # offscreen.actions
-        off = c.get("offscreen", {})
-        for act in off.get("actions", []) if isinstance(off, dict) else []:
-            if isinstance(act, dict) and "ch_range" in act:
-                rng = act.pop("ch_range")
-                if isinstance(rng, list) and len(rng) == 2:
-                    lo_cid, lo_inf = _ch_to_cluster(project, rng[0], _WARN_LOG)
-                    hi_cid, hi_inf = _ch_to_cluster(project, rng[1], _WARN_LOG)
-                    act["cluster_range"] = [lo_cid, hi_cid]
-                    if lo_inf or hi_inf:
-                        act["_cluster_inferred"] = True
+        # offscreen.actions[].ch_range 故意不迁移：build_manifest._collect_offscreen_actions
+        # (build_manifest.py:3717-3718) 仍按 act.get("ch_range", []) 读取真实章号，从未读
+        # cluster_range。迁移成 cluster_range 会让消费方读不到默认空列表，offscreen 动作注入
+        # 静默永久失效。这是代码现实尚未迁移到 cluster 的真实遗留机制，保留 ch_range 原样。
         # growth_arc
         for ga in c.get("growth_arc", []):
             if isinstance(ga, dict) and "ch" in ga:

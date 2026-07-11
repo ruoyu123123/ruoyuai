@@ -38,7 +38,7 @@ def _mk_project(characters=None, profile=None):
         (db / "人物卡.json").write_text(
             json.dumps({"characters": characters}, ensure_ascii=False), encoding="utf-8")
     if profile is not None:
-        (proj / "作者风格.json").write_text(
+        (db / "作者风格.json").write_text(
             json.dumps(profile, ensure_ascii=False), encoding="utf-8")
     return proj
 
