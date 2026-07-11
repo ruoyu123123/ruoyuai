@@ -2,8 +2,8 @@
 """cross_family_judge_check inline-only 守门测试（2026-06-20 A 方案）。
 
 模式：主代理 Claude Code spawn Agent(claude) 复审 finale subcluster
-后 save_inline_verdict_for_main_agent 写 .wal·orchestrator default_judge_dispatch
-末端 maybe_run 自动捡用 → outcome.data['cross_family_check']。
+后 save_inline_verdict_for_main_agent 写 .wal·cluster-save-state 流程内
+maybe_run 自动捡用 → outcome.data['cross_family_check']。
 
 守门维度：
   - 6 个 gate（off / 非 eligible / 非 finale / 无 draft / 无 inline / mode 默认）

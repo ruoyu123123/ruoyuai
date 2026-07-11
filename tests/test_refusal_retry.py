@@ -6,7 +6,7 @@
 当前 distill_replicate 把短拒绝当合法复刻返回 → SFS 评分归零 → 看不出是 refusal 还是 skill 失败。
 
 修法（北极星·零污染正常路径）：
-1. llm_transport._is_refusal 纯检测 helper（gen_writer/judge_runner 等正常路径不调）。
+1. llm_transport._is_refusal 纯检测 helper（gen_writer/av_judge 等正常路径不调）。
 2. distill_replicate.call_gen_model 在 stream 完成后主动调 → 命中走 3s 退避 + disclaimer 追加重试。
 3. 3 次全 refusal → REFUSAL_EXHAUSTED 记 failures → 走下一 fallback profile → 全链 refusal 抛
    GenModelExhaustedError（exit=3）。
@@ -315,7 +315,7 @@ class TestCallGenModelRefusalRetry:
         assert text == body_normal
 
 
-# ═══════════════════════════════ Part 4: 正常路径不污染保护（gen_writer / judge / orchestrator） ═══════════════════════════════
+# ═══════════════════════════════ Part 4: 正常路径不污染保护（gen_writer / av_judge / gen_creative） ═══════════════════════════════
 
 class TestNormalPathsUntouched:
     """确认 llm_transport.generate 等正常路径不调 _is_refusal · 行为零变更。"""

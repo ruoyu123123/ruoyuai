@@ -1,6 +1,6 @@
 """assemble_global_feedback_rules 回归测试 — 钉死 feedback_*.md 机械汇编契约。
 
-被测脚本把开发机 memory/feedback_*.md 汇编成单文件随 exe 出货。
+被测脚本把开发机 memory/feedback_*.md 汇编成单文件，供 gen_writer/build_manifest 注入 writer prompt。
 纯确定性逻辑（文件读写 + frontmatter 剥离 + markdown 拼接），零 LLM / 零联网。
 这组测试锁定：frontmatter 剥离规则 / 空目录返回 1 / 排序 / name 回退 /
 RULE_MARKER 锚点 / description 注入 / 正文逐字保留。

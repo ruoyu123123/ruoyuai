@@ -3,7 +3,7 @@
 被测：已蒸馏书 retroactive cluster 切分器的**确定性核心算法**。
 
 已有间接覆盖（test_distill_plan_e2e.py）只在 fake_runner 里**桩掉** segmenter 命令
-（手写一份 cluster_index.json 喂 orchestrator data_flow），**从未真 import / 真调用过**
+（手写一份 cluster_index.json 喂下游数据流），**从未真 import / 真调用过**
 任何 classify_boundary / segment_clusters / collect_transitions /
 load_chapter_wordcounts / detect_total_chapters / _infer_genre_from_naming / main()。
 本测试聚焦这些尚未被覆盖的真实逻辑，钉死：

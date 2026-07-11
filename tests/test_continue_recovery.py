@@ -8,7 +8,7 @@
   ③ 非连续完成（中途步 pending、后续步 completed）→ 恢复点 = **第一个未完成步**，
      而非 completed 计数+1（修真 bug：count+1 会跳过中间 pending 步 = 漏步）
 
-「不重放已完成步」由 orchestrator 逐步跳过保证（test_continue_resume_e2e 已锁）；本网锁
+「不重放已完成步」由主代理据 wal_recovery 恢复点跳过已完成步保证（test_continue_resume_e2e 已锁）；本网锁
 wal_recovery 给主代理的「续跑 --n N」指令正确性。零依赖范式（__main__ 自跑 + pytest 均可）·零 API。
 """
 import io

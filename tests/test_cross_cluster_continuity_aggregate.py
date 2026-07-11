@@ -5,7 +5,7 @@
 _build_aliases / scan_object_continuity（去硬编码主角名+物件名）。本文件钉**尚未覆盖**的
 4 维衔接核心算法 + 主流程退出码：
 
-- scan_cliffhanger_resonance        —— 维度 1 正文路径（关键词重叠分 / DCAS exempt / 缺字段哨兵）
+- scan_cliffhanger_resonance        —— 维度 1 正文路径（关键词重叠分 / exempt / 缺字段哨兵）
 - scan_cliffhanger_resonance_ledger —— 维度 1 账本路径（取预算分 / exempt / 缺字段）
 - scan_time_gap                     —— 维度 2 周日期跳跃（≥2 天才报 / 缺 changes）
 - read_emotion / scan_emotion_gap   —— 维度 4 情绪断层（diff≥5 才 detected / 账本优先 WAL 回退）
