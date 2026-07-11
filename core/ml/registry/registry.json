@@ -16,7 +16,7 @@
           "env_gate": "RUOYU_NN_COHERENCE",
           "status": "shadow",
           "registered_at": "2026-06-29T14:46:20Z",
-          "updated_at": "2026-07-08T14:29:33Z"
+          "updated_at": "2026-07-11T09:23:34Z"
         }
       ],
       "active_version": null,
@@ -34,7 +34,7 @@
           "env_gate": "RUOYU_NN_VAD",
           "status": "active",
           "registered_at": "2026-06-29T14:46:20Z",
-          "updated_at": "2026-07-08T14:29:33Z"
+          "updated_at": "2026-07-11T09:23:34Z"
         }
       ],
       "active_version": "v1",
@@ -50,7 +50,7 @@
           "env_gate": "EMBED_BACKEND",
           "status": "active",
           "registered_at": "2026-06-29T14:46:20Z",
-          "updated_at": "2026-07-08T14:29:33Z"
+          "updated_at": "2026-07-11T09:23:34Z"
         }
       ],
       "active_version": "v1",
@@ -66,7 +66,7 @@
           "env_gate": "RUOYU_NN_SURPRISAL",
           "status": "active",
           "registered_at": "2026-07-07T14:13:31Z",
-          "updated_at": "2026-07-08T14:29:33Z"
+          "updated_at": "2026-07-11T09:23:34Z"
         }
       ],
       "active_version": "uer-gpt2-chinese-cluecorpussmall",

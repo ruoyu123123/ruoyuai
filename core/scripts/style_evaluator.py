@@ -735,88 +735,118 @@ def generate_alerts(ref_profile: dict, gen_profile: dict,
 # 基线映射
 # ============================================================
 
+def _stat_number(value, *keys: str) -> float | None:
+    """从裸数值或统计对象中取有限数值；schema 不符时返回 None。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, dict):
+        return None
+    for key in keys or ("mean", "value"):
+        item = value.get(key)
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, (int, float)):
+            return float(item)
+    return None
+
+
 def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
     """将风格 JSON 的 quantitative 字段映射到 analyze_text 输出格式。"""
+    if not isinstance(baseline, dict):
+        return ref_profile
     q = baseline.get("quantitative", {})
-    if not q:
+    if not isinstance(q, dict) or not q:
         return ref_profile
 
-    sl = q.get("sentence_length", {})
-    if sl.get("mean"):
+    sl = q.get("sentence_length")
+    sl_mean = _stat_number(sl, "mean")
+    if sl_mean is not None:
+        existing = ref_profile.get("sentence_stats", {})
+        if not isinstance(existing, dict):
+            existing = {}
         ref_profile["sentence_stats"] = {
-            "mean": sl.get("mean", ref_profile.get("sentence_stats", {}).get("mean", 0)),
-            "std": sl.get("std", ref_profile.get("sentence_stats", {}).get("std", 0)),
-            "min": sl.get("min", 2),
-            "max": sl.get("max", 90),
-            "median": sl.get("mean", 15),
-            "count": ref_profile.get("sentence_stats", {}).get("count", 100),
+            "mean": sl_mean,
+            "std": _stat_number(sl, "std") or _stat_number(existing.get("std")) or 0.0,
+            "min": _stat_number(sl, "min") or 2.0,
+            "max": _stat_number(sl, "max") or 90.0,
+            "median": _stat_number(sl, "median", "mean") or sl_mean,
+            "count": int(_stat_number(existing.get("count")) or 100),
         }
 
-    dr = q.get("dialogue_ratio", {})
-    if isinstance(dr, dict):
-        val = dr.get("mean") or dr.get("overall") or dr.get("early")
-        if val is not None:
-            ref_profile["dialogue_ratio"] = val
-    elif isinstance(dr, (int, float)):
-        ref_profile["dialogue_ratio"] = dr
+    dialogue_ratio = _stat_number(q.get("dialogue_ratio"), "mean", "overall", "early")
+    if dialogue_ratio is not None:
+        ref_profile["dialogue_ratio"] = dialogue_ratio
 
-    cw = q.get("chapter_words", {})
-    if cw.get("mean"):
-        ref_profile["total_chinese_chars"] = int(cw["mean"])
+    chapter_words = _stat_number(q.get("chapter_words"), "mean")
+    if chapter_words is not None:
+        ref_profile["total_chinese_chars"] = int(chapter_words)
 
-    pl = q.get("paragraph_length", {})
-    if pl.get("mean_sentences"):
+    pl = q.get("paragraph_length")
+    mean_sentences = _stat_number(pl, "mean_sentences")
+    if mean_sentences is not None:
+        para_count = _stat_number(ref_profile.get("paragraph_count")) or 100
         ref_profile["para_sentence_stats"] = {
-            "mean": pl["mean_sentences"],
-            "std": pl.get("std", 2),
-            "min": 1, "max": 10, "median": pl["mean_sentences"],
-            "count": ref_profile.get("paragraph_count", 100),
+            "mean": mean_sentences,
+            "std": _stat_number(pl, "std") or 2.0,
+            "min": 1, "max": 10, "median": mean_sentences,
+            "count": int(para_count),
         }
 
-    # 工具：把 baseline 中 {"mean": x, "std": y} 形态压平为 float（取 mean）
-    def _flatten_mean(v):
-        if isinstance(v, dict):
-            return v.get("mean", v.get("value", 0.0))
-        return v
-
-    punc = q.get("punctuation_density_per_1000", {})
-    if punc:
+    punc = q.get("punctuation_density_per_1000")
+    if isinstance(punc, dict) and punc:
         rp = ref_profile.get("punctuation_density_per_1000", {})
+        if not isinstance(rp, dict):
+            rp = {}
         for k in ["comma", "period", "comma_period_ratio", "ellipsis",
                   "exclamation", "question", "dash"]:
-            if k in punc:
-                rp[k] = _flatten_mean(punc[k])
+            value = _stat_number(punc.get(k), "mean", "value")
+            if value is not None:
+                rp[k] = value
         ref_profile["punctuation_density_per_1000"] = rp
 
-    fw = q.get("function_word_fingerprint_per_1000", {})
-    if fw:
-        ref_profile["function_word_fingerprint_per_1000"] = {
-            k: _flatten_mean(v) for k, v in fw.items()
-        }
+    fw = q.get("function_word_fingerprint_per_1000")
+    if isinstance(fw, dict) and fw:
+        flattened = {}
+        for key, raw in fw.items():
+            value = _stat_number(raw, "mean", "value")
+            if value is not None:
+                flattened[key] = value
+        if flattened:
+            ref_profile["function_word_fingerprint_per_1000"] = flattened
 
     # 从 style_profile 中提取额外约束
     sp = baseline.get("style_profile", {})
-    desc = sp.get("description", {})
+    desc = sp.get("description", {}) if isinstance(sp, dict) else {}
+    if not isinstance(desc, dict):
+        desc = {}
     if desc.get("psychology_ratio") is not None:
         pass  # reserved for future use
 
     # 从 must_have 中提取极短段目标
     mh = baseline.get("must_have_per_chapter", {})
     if isinstance(mh, dict):
-        ultra = mh.get("ultra_short_para_ratio_max")
+        ultra = _stat_number(mh.get("ultra_short_para_ratio_max"), "mean", "value", "max")
         if ultra is not None:
             ref_profile["ultra_short_para_ratio"] = ultra
-        single = mh.get("single_sentence_para_ratio_max")
+        single = _stat_number(mh.get("single_sentence_para_ratio_max"), "mean", "value", "max")
         if single is not None:
             ref_profile["single_sentence_para_ratio"] = single
 
-    # 用 writing_rules 中的量化目标覆盖（如有）
-    pl_data = q.get("paragraph_length", {})
-    if isinstance(pl_data, dict) and "single_sentence_ratio" in pl_data:
-        ref_profile["single_sentence_para_ratio"] = pl_data["single_sentence_ratio"]
+    # 不同蒸馏批次的单句成段率可能在 quantitative 顶层或 paragraph_length 内。
+    single_ratio = _stat_number(q.get("single_sentence_para_ratio"), "mean", "value")
+    if single_ratio is None and isinstance(pl, dict):
+        single_ratio = _stat_number(
+            pl.get("single_sentence_para_ratio_mean", pl.get("single_sentence_ratio")),
+            "mean", "value",
+        )
+    if single_ratio is not None:
+        ref_profile["single_sentence_para_ratio"] = single_ratio
 
     # 设定合理的极短段基线（原作者约 12-22%）
-    if ref_profile.get("ultra_short_para_ratio", 0) > 0.40:
+    ultra_current = _stat_number(ref_profile.get("ultra_short_para_ratio"), "mean", "value") or 0.0
+    if ultra_current > 0.40:
         ref_profile["ultra_short_para_ratio"] = 0.17
 
     return ref_profile
