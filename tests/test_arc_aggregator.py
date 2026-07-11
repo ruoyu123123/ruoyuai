@@ -10,11 +10,8 @@ urllib/requests/gen_model_loader/llm_transport）。它是纯确定性聚合器�
 而是钉死它的确定性周边逻辑。
 
 现有间接覆盖：
-- tests/test_audit_batch2_remaining.py 真 import arc_aggregator，但只测 parse_pacing_curve_to_values
-  的 longest-first pacing 修复（5 个 assert），且 docstring 明确把 aggregate_summary / climax
-  位置逻辑 defer 给 e2e test_cross_cluster_contract。其余确定性函数（情绪强度抽取 / dim 抽取 /
-  Reagan 拟合 / arc 结构描述 / mid_checkpoint 张力 / aggregate_cluster / aggregate_summary）
-  此前无专属单测 → 本文件补齐，避开与 batch2 重复（不重测 parse_pacing_curve_to_values）。
+覆盖情绪强度抽取、dim 抽取、Reagan 拟合、arc 结构描述、aggregate_cluster 与
+aggregate_summary；`parse_pacing_curve_to_values` 由 test_audit_batch2_remaining.py 覆盖。
 
 零依赖约定：只用标准库 · test_* 无参数 · 断言失败 raise AssertionError · tempfile + utf-8 · Windows。
 
@@ -250,34 +247,8 @@ def test_describe_arc_structure_labels():
 
 
 # ===========================================================================
-# 4. mid_checkpoint 张力（v22.4dim N3 · 纯数学）
-# ===========================================================================
-def test_compute_mid_checkpoint_tensions_empty_guard():
-    """空输入 / 0 总字数 → 返回空 list（不崩）。"""
-    assert mod.compute_mid_checkpoint_tensions([], [], 0) == []
-    assert mod.compute_mid_checkpoint_tensions([0.5], [3000], 0) == []
+# 4. 集成：aggregate_cluster（读 cluster_index + 章 JSON + continuity）
 
-
-def test_compute_mid_checkpoint_tensions_positions():
-    """两章各 6000 字、interval=3000 → checkpoint 落在 3000/6000/9000 字。
-    验证 at_word 步进 + in_chapter_relative 章号 + expected_tension 在 [0,1]。"""
-    cps = mod.compute_mid_checkpoint_tensions(
-        emotion_curve=[0.4, 0.9],
-        chapter_words=[6000, 6000],
-        cluster_total_words=12000,
-        checkpoint_interval=3000,
-    )
-    assert len(cps) > 0, "应产出至少一个 checkpoint"
-    at_words = [c["at_word"] for c in cps]
-    assert at_words == sorted(at_words), "at_word 应递增"
-    assert at_words[0] == 3000, f"首 checkpoint 应在 3000 字，得 {at_words[0]}"
-    for c in cps:
-        assert 0.0 <= c["expected_tension"] <= 1.0, f"张力越界 {c}"
-        assert c["in_chapter_relative"] >= 1, "章号 1-based"
-
-
-# ===========================================================================
-# 5. 集成：aggregate_cluster（读 cluster_index + 章 JSON + continuity）
 # ===========================================================================
 def test_aggregate_cluster_missing_index_returns_error():
     """无 cluster_index.json → 返回 error dict（不抛异常）。"""
@@ -351,8 +322,6 @@ def test_aggregate_cluster_full_pipeline_shape():
         # 伏笔计数
         assert res["foreshadowing_planted_in_arc"] == 2, f"应 2 个伏笔，得 {res['foreshadowing_planted_in_arc']}"
         assert res["foreshadowing_resolved_in_arc"] == 1
-        # mid_checkpoint 张力字段存在
-        assert "mid_checkpoint_target_tensions" in res
         # Reagan 形状字段存在且合法
         assert res["matched_reagan_shape"] in (list(mod.REAGAN_SHAPES) + ["Unknown"])
         assert 0.0 <= res["matched_reagan_shape_confidence"] <= 1.0
@@ -388,7 +357,7 @@ def test_aggregate_cluster_tolerant_to_malformed_foreshadowing():
 
 
 # ===========================================================================
-# 6. 集成：aggregate_summary（读 arc_templates 目录聚合）
+# 5. 集成：aggregate_summary（读 arc_templates 目录聚合）
 # ===========================================================================
 def test_aggregate_summary_no_dir_errors():
     """无 arc_templates 目录 → error dict。"""

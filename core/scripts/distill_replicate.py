@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""
-distill_replicate.py — 蒸馏 phase-4 cluster 终验复刻（v29 · Claude 亲笔草稿 + gemini 分段润色 · 2026-07-11）
+"""蒸馏 phase-4 cluster 终验复刻。
 
-v29 架构（用户定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）：蒸馏复刻验证必须
-与正式写作栈**同栈**——复刻 = Claude agent 按 skill 亲笔写复刻场景稿（脚本外部产出）→
+复刻与正式写作使用同一栈：Claude agent 按 skill 亲笔写复刻场景稿（脚本外部产出）→
 本脚本用 gemini 按 skill **分段润色** → 拼接落盘评分。正式写作栈（gen_writer.py）已同款改造。
 
   step 复刻-a  蒸馏 plan 的复刻 step spawn Claude agent（按 skill 亲笔逐场景写复刻草稿）
@@ -11,11 +9,7 @@ v29 架构（用户定调「所有创作路线转向 Claude 自身创作内容 +
   step 复刻-b  本脚本：逐场景段调 gemini 按风格档等体量重写润色（段级字数守恒带 [0.85, 1.30]·
                超界带字数指令重试 1 次）→ 拼接 → 落盘 + SFS 评分对照
 
-实验依据（workspace/_temp_research/四组生成对比_20260711 · memory
-project_4group_generation_comparison_2026_07_11）：cluster 级 Claude 草稿 + gemini 分段润色
-双通道最优（嵌入 SFS 第一 / 零禁用词 / 事实链零漂移）；万字整体润色三连败、分段守恒一次成功；
-gen-model 从零生成 + 多轮扩写 = 套话 + 设定漂移 → 从零生成路径已整体清除（不兼容不降级 ·
-缺 Claude 场景稿即 [ERROR] exit 2）。
+缺 Claude 场景稿时 exit 2，不提供从零生成或扩写路径。
 
 用法：
 
@@ -854,7 +848,6 @@ def _make_real_ablation_runner(project_root: Path, cluster_id: int,
     env 传法（subprocess 隔离·不污染父进程 os.environ）：
       · ABLATE_DIMENSIONS = ablate_dims（"" = baseline 全注入 / "<dim>" = 抹该维）
       · ABLATE_RANDOM_FIELD = "1" if random_field else ""（负对照注入随机 directive）
-      · BEST_OF_N = "1"（控变量·关 best-of-N 多稿择优·消融只比单稿 SFS）
 
     鲁棒：subprocess 非 0 / 草稿读不到 / SFS None → 返回 None（该 seed 跳过·不崩整实验）。
     草稿目录备份/恢复由外层 run_dimension_ablation 的 finally 统一负责（避免污染正式草稿）。
@@ -876,7 +869,6 @@ def _make_real_ablation_runner(project_root: Path, cluster_id: int,
         env = dict(os.environ)
         env["ABLATE_DIMENSIONS"] = ablate_dims or ""
         env["ABLATE_RANDOM_FIELD"] = "1" if random_field else ""
-        env["BEST_OF_N"] = "1"  # 控变量：关 best-of-N（消融比单稿 SFS）
         py = child_python()
         try:
             # ① build_manifest（positional：项目路径 + 章节号）—— ABLATE_* env 在此生效
@@ -1156,8 +1148,7 @@ def main():
         print(f"[ERROR] cluster 元信息加载失败: {e}", file=sys.stderr)
         sys.exit(2)
 
-    # 🔴 v29 required 前置：枚举 Claude 亲笔复刻场景稿（缺目录 / 无稿 / 单稿 <200 CJK → [ERROR]
-    # exit 2 · 绝不回退 gen-model 从零生成 · 不兼容不降级 · 语义同 gen_writer.discover_claude_scenes）。
+    # 枚举 Claude 亲笔复刻场景稿；缺目录、无稿或单稿过短时 exit 2。
     scenes_dir = Path(args.claude_scenes_dir)
     scene_files = discover_claude_scenes_dir(scenes_dir)
 

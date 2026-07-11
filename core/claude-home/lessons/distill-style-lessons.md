@@ -1,4 +1,4 @@
-<!-- 2026-06-18 精简：从1337行→约390行。DCAS/chapter mode/write-chapter/save-state/single_mode废料已清。plan强制规划层细节移交CLAUDE.md。 -->
+<!-- 当前文件只保留 cluster 风格蒸馏的可执行教训；plan 契约以 plans/*.plan.json 为准。 -->
 
 # 蒸馏系统经验库（自学习追加式）
 
@@ -221,10 +221,10 @@
 
 ---
 
-## 18. v22.cluster.3 闭环实证（惊悚乐园 250 章）
+## 18. cluster 复刻闭环
 
-### L18.1 ⛔ 复刻必须走 gen-model
-- Claude 理解 != gen-model 执行；唯一入口 distill_replicate.py
+### L18.1 ⛔ 复刻必须与正式写作同栈
+- Claude agent 按 skill 写场景稿，`distill_replicate.py` 调 gemini 分段润色并落终稿
 
 ### L18.2 ⛔ SFS 非单调收敛 = 选峰值版本
 - 连续 2 轮下降即停；新增约束不动已有约束
@@ -258,4 +258,4 @@
 
 ---
 
-**最后更新**：2026-06-18（精简重构：清除 DCAS/chapter mode 废料，保留 cluster 蒸馏实操教训）
+**范围**：cluster 风格蒸馏、同栈复刻、SFS 收敛与出货验证。

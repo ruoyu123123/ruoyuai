@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-"""save_state_updates.py — cluster-save-state step 9 章节级数据库更新统一入口（合并 5 个 update 脚本 · v26 cluster-only）
+"""cluster-save-state step 9 的数据库更新统一入口。
 
-合并源：
+入口接收 `--cluster <key>`，反查物理章节范围后调用：
 - offscreen_update.py（offscreen_actions_executed 字段处理）
 - declarative_data_update.py（6 类声明式字段更新）
 - character_arc_update.py（character_arc_state.json stage_log 更新）
 - fate_engine.py update <ch>（fate event 应用）
 
-🔴 2026-06-28 不降级收尾：character_lazy_spawn.py 已删除（孤儿码）——它读 writer
-changes.factual.new_entities 自动入档新角色，但 writer 已不自报 factual（A 类清理删除），
-其输入恒空=永远 no-op。新角色入档的唯一权威路径 = novel-archivist 读正文产 archive →
-apply_archive.py 回库人物卡/角色池（cluster-save-state step5/6·archive 单一来源）。
+新角色由 novel-archivist 读取正文生成 archive，再由 apply_archive.py 回库。
 
-调用方式（v26 唯一入口）：
+调用方式：
 - python save_state_updates.py <project> --cluster <key> [--all | --only offscreen,declarative,...]
   （自动展开 cluster 的 chapter_range，for each ch 调子模块）
-  🔴 v26: chapter mode --ch 已废弃移除
 
 退出码：0 成功 / 1 部分失败 / 2 fatal
 """
@@ -29,36 +25,26 @@ import state_cli_guard
 
 SCRIPT_DIR = scripts_dir()
 
-# 5 个子模块（每个仍是独立 .py，本 wrapper 用 subprocess 调用 · 简单不重写）
+# 子模块保持独立，本 wrapper 通过 subprocess 调用。
 SUB_MODULES = [
     ("offscreen", "offscreen_update.py", ["project", "chapter"]),
     ("declarative", "declarative_data_update.py", ["project", "chapter"]),
     ("character_arc", "character_arc_update.py", ["project", "chapter"]),
-    # 🔴 2026-06-28 不降级收尾：character_lazy_spawn 已删（孤儿·输入 writer new_entities 已删）
-    #   —— 新角色入档走 archivist → apply_archive（step5/6·archive 单一权威路径）。
     ("fate_engine_update", "fate_engine.py", ["project", "update", "chapter"]),  # 三段式 CLI
 ]
 
-# 2026-05-29 复审修复 [H4]：split_cluster_changes.py 把整 cluster 的 factual/self_eval
-# 段「平铺」到每章 _changes.json（每章内容完全相同）。declarative_data_update 读 factual
-# 里的 relationship_changes / faction_standing_changes / travel_log_added 等「增量」字段——
-# 逐章 apply N 次 → 关系/阵营 delta 被乘 N 倍、travel_log 被复制 N 条（正典污染）。
-# 修：declarative 是 cluster 级整份增量，只在「代表章」（cluster 首章）apply 一次，
-# 不逐章重放。其余模块按需逐章跑：
+# `split_cluster_changes.py` 会把 cluster 级 changes 平铺到物理章节。
+# 读取整块增量的模块只在代表章执行一次，避免重复应用：
 #   - offscreen：self_eval.offscreen_actions_executed 也是 cluster 级整份（平铺相同），
 #     且 offscreen_update 本身幂等（done=true 不反向），但同样只跑首章避免无谓 N 次。
 #   - character_arc：按 ch 映射 stage（每章语义不同，幂等 set 不累加）→ 逐章跑。
 #   - fate_engine_update：按 status!=completed 守卫幂等 → 逐章跑（真正应用在世界演化层另有幂等）。
-# 「只跑首章」的模块（读 cluster 级整份增量，逐章会乘倍）：
+# 只跑代表章的模块：
 CLUSTER_ONCE_MODULES = {"offscreen", "declarative"}
 
 
 def get_cluster_chapter_range(project_root: Path, cluster_key: str) -> list[int]:
-    """拿 cluster 的 chapter_range，返回 [ch_start, ..., ch_end]。
-
-    🔴 2026-06-17 bug-hunt 修：改走 `cluster_lookup.cluster_id_to_range`（唯一权威反查·北极星①·
-    可读 splitter 写回前的 blueprint 范围）。原只读 事件簇.json → blueprint-only 状态返 [] → main FATAL exit2
-    卡死 cluster-save-state step9（与 save_state.py / evaluators 权威源不一致·三脚本对齐 cluster_lookup）。"""
+    """通过 cluster_lookup 返回 `[ch_start, ..., ch_end]`。"""
     import cluster_lookup as _cl
     cid = _cl.normalize_cluster_id(cluster_key)
     if not cid:
@@ -95,12 +81,7 @@ def run_one_module(module_name: str, script_name: str, args_spec: list, project:
 
 def run_updates_for_chapter(project: str, chapter: int, only: set[str] | None,
                             is_representative_ch: bool = True) -> dict:
-    """对单章跑各子模块。
-
-    2026-05-29 复审修复 [H4]：is_representative_ch=False 时跳过 CLUSTER_ONCE_MODULES
-    （declarative/offscreen 这类读 cluster 级整份增量的模块），只让它们在 cluster 首章
-    跑一次，避免 relationship/faction delta 被乘 N 倍、travel_log 被复制 N 条。
-    """
+    """对单章运行子模块；非代表章跳过 cluster 级整份增量模块。"""
     results = {}
     for name, script, args_spec in SUB_MODULES:
         if only is not None and name not in only:
@@ -118,10 +99,9 @@ def run_updates_for_chapter(project: str, chapter: int, only: set[str] | None,
 
 
 def main():
-    # 🔴 v26: chapter mode --ch 已废弃移除，仅留 --cluster <key>。
-    parser = argparse.ArgumentParser(description="cluster-save-state step 9 章节级数据库更新（5 in 1 · v26 cluster-only）")
+    parser = argparse.ArgumentParser(description="cluster-save-state step 9 章节级数据库更新（5 in 1）")
     parser.add_argument("project")
-    parser.add_argument("--cluster", required=True, help="v26: 必填 cluster_key（chapter mode --ch 已删）")
+    parser.add_argument("--cluster", required=True, help="必填 cluster_key")
     parser.add_argument("--only", help="只跑特定模块，逗号分隔（offscreen,declarative,...）")
     parser.add_argument("--all", action="store_true", help="跑全部 5 个模块（默认）")
     args = parser.parse_args()
@@ -141,7 +121,7 @@ def main():
 
     all_results = {}
     fail_count = 0
-    # 2026-05-29 复审修复 [H4]：cluster 首章 = 代表章，cluster 级整份增量模块只在此跑一次。
+    # cluster 首章是代表章，cluster 级整份增量模块只在此执行。
     representative_ch = chapters[0]
     for ch in chapters:
         r = run_updates_for_chapter(str(project_root), ch, only_set,

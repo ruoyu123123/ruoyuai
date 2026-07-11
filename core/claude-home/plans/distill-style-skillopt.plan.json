@@ -1,11 +1,11 @@
 {
   "command": "distill-style-skillopt",
   "version": 1,
-  "description": "SkillOpt 范式蒸馏精化(Microsoft Research arXiv:2605.23904)。把 skill.md 当可训练'权重',epoch=4 训练循环,bounded edit + held-out validation gate + reject buffer。适合已有 skill_FINAL.md 的精化场景(新书首蒸仍走 distill-style.plan.json)。",
+  "description": "SkillOpt 风格精化 5 步流水线：压缩 skill、切分训练集、epoch=4 有界编辑训练、held-out 验证、提升最佳 skill 并回灌。",
   "total_steps": 5,
   "required_steps": [1, 2, 3, 4, 5],
   "optional_steps": [],
-  "_pipeline_status": "主代理 Claude Code 按 plan steps 跑确定性脚本驱动管线 · 全程不 spawn Claude judge/创意 sub-agent · optimizer 走 gen-model (同 active profile)",
+  "_pipeline_status": "主代理按 plan steps 运行确定性脚本；optimizer 使用 active gen-model profile。",
   "_skillopt_paper": "arXiv:2605.23904 + microsoft/SkillOpt · 论文超参 epoch=4 rollout=40 minibatch=8 L_t=4→2",
   "steps": [
     {
@@ -70,5 +70,5 @@
       "expected_outputs": []
     }
   ],
-  "_north_star_alignment": "①更贴近作者风格(trajectory-driven 优于一次性蒸馏) ②cluster 单位(每 rollout=1 cluster) ③涟漪驱动(reward 来自真实写作链路 judge,非预设) ④章节纯格式(rollout 在 cluster 层) ⑤不干涉模型判断(reward 只读现有 binary 信号,不引入新 hard_gate) ⑥清旧码(替代 dimension_evolver)"
+  "_north_star_alignment": "①更贴近作者风格 ②每 rollout 以 cluster 为单位 ③reward 来自真实写作链路 ④章节只作输出格式 ⑤只读现有 binary 信号且不新增 hard_gate ⑥SkillOpt 是唯一风格 skill 训练入口"
 }

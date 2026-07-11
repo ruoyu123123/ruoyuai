@@ -1,20 +1,10 @@
 #!/usr/bin/env python3
-"""secrets_store.py — keyring 薄抽象（2026-06-10 · GUI 删档后 2026-06-20 收窄 · 2026-06-21 BYOK 入口 DEPRECATED commit 2a4d7ce）
+"""gen-model profile 的 keyring 薄抽象与敏感信息脱敏工具。
 
-# 🔴 2026-06-28 移除exe/gen-model梳理方向：删 trial token / probe / search-key 三段 exe 分发专属逻辑。
-# 保留 api-key 主体 + redact + is_available（gen_model_loader 创作链读 key 命脉·不可动）。
+`gen_model_loader` 按 keyring → environ → `.env` 解析 API key；本模块提供 keyring
+CRUD、profile 列表、`.env` 同步和错误文本脱敏。
 
-主代理（Claude Code CLI）唯一入口形态下，本模块功能收窄为：
-- `redact()`：gemini key URL 脱敏（仍由 llm_transport / gen_writer 调用·硬功能保留）。
-- gen-model BYOK key keyring 路径：仅 gen_model_loader._resolve_api_key 仍按三级优先级查
-  keyring → environ → .env 文本，保留作向下兼容；实际 dev 走仓库根 .env。
-
-安全不变量（仍生效）：
-- 绝不 print/log key 明文（debug 也只打 service/username + bool）。
-- 绝不把 key 写回 .env / 任何文件——keyring 是唯一持久化路径。
-- 任何 keyring 异常吞成 None/False，绝不冒泡到 loader（让 loader 优雅降级到 .env）。
-
-安全不变量（违反即 BYOK 泄漏）：
+安全不变量：
 - 绝不 print/log key 明文（debug 也只打 service/username + bool）。
 - 绝不把 key 写回 .env / 任何文件——唯一持久化路径是 keyring。
 - 任何 keyring 异常吞成 None/False，绝不冒泡到 loader（让 loader 优雅降级到 .env）。
@@ -113,14 +103,7 @@ def has_api_key(profile_name: str) -> bool:
     return bool(get_api_key(profile_name))
 
 
-# 🔴 已删除（2026-06-20·A 方案回滚）：跨家族 judge Claude BYOK key（SERVICE_CLAUDE /
-# get_claude_key / set_claude_key / has_claude_key / delete_claude_key）。主代理 Claude
-# Code CLI 唯一入口后，跨家族 judge 复审改走主代理 inline 文件协议，不再走 keyring 存 Anthropic API key。
-# 🔴 2026-06-28 移除exe/gen-model梳理方向：删 search-key 段（SERVICE_SEARCH / get-set-delete-has_search_key·
-# web_search_client 已删·此段已死）+ trial token 段（_TRIAL_USERNAME / get-set_trial_token·exe 试用分发专属）。
-
-
-# ============ key 脱敏（对抗审查 must_fix#3：gemini key 在 URL·err 字符串泄漏面）============
+# ============ key 脱敏 ============
 import re as _re
 
 _KEY_PATTERNS = [
@@ -142,10 +125,6 @@ def redact(text: str) -> str:
     out = _KEY_PATTERNS[0].sub(r"\1***", out)
     out = _KEY_PATTERNS[1].sub(r"\1***", out)
     return out
-
-
-# 🔴 2026-06-28 移除exe/gen-model梳理方向：删 probe()（BYOK exe 出货验证 gate · _PROBE_USERNAME）
-# + main 里 probe 子命令 / --probe alias（属 exe 分发专属·主代理 CLI 入口形态不需要）。
 
 
 def _list_profiles() -> list[dict]:
@@ -176,11 +155,7 @@ def _list_profiles() -> list[dict]:
 
 
 def _sync_from_env(dry_run: bool = False) -> dict:
-    """把 .env 里所有 GEN__<name>__API_KEY 写入 keyring（覆盖 keyring 里旧值）。
-
-    用于 cluster_001 写作翻车场景：用户改了 .env 的 key 但 keyring 旧 key 静默覆盖。
-    sync-from-env 一键把 .env 的真相回灌到 keyring。
-    """
+    """把 `.env` 中的 GEN__<name>__API_KEY 同步到 keyring。"""
     from pathlib import Path
     import re as _r
     env_path = Path(__file__).resolve().parents[2] / ".env"

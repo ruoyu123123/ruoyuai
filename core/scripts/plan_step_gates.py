@@ -1,29 +1,21 @@
 #!/usr/bin/env python3
-"""plan_step_gates.py — 5 门「纯判定逻辑」共享库（C16 · 2026-06-27）
+"""PreToolUse hooks 共用的五类纯判定逻辑。
 
-# 🔴 2026-06-28 移除exe/gen-model梳理方向
-原 C16 设计有「两条消费路径」（PreToolUse hooks + 程序驱动 orchestrator._run_step_gates）。
-orchestrator 随 exe/程序驱动方向整体删除，本模块回到**单一消费路径 = PreToolUse hooks**
-（拦的是 Claude 主代理工具调用）；本体纯判定函数不变，audit_hub / scaffold_subsystems 仍复用。
-
-本模块把 5 门的**纯判定逻辑**抽成可被 hook 共享的函数：
-  · check_subsystems()      — 34 子系统 JSON 存在性（hard_gate）·🔴 C03 content_check=True
-                              追加载荷非空验收（inert→hard·裸骨架→advisory）
+  · check_subsystems()      — 34 子系统 JSON 存在性与必需载荷验收
   · check_agent_injection() — Agent prompt 契约/PLAN_ID 绑定/注入/篡改（hard_gate）
   · check_anti_skip()       — 输出完整性 vs expected_outputs（hard_gate）
   · check_chapter_edit()    — 章节正文剧本体/章末过渡（hard_gate）
   · check_research_ref()    — 决策前置 step 的调研缓存（hard_gate）
 
-消费路径：5 个 pretooluse_*.py 薄 wrapper 读 stdin → 抽参 → 调对应 check →
-  ok ? exit 0 : exit 2（hook 一律 fail→exit2；gate_level 字段标注硬/软语义供消费方区分）。
+五个 `pretooluse_*.py` wrapper 从 stdin 抽取参数并调用对应 check；通过时 exit 0，
+失败时 exit 2。`audit_hub` 与 `scaffold_subsystems` 复用同一判定函数。
 
-每个 check 返回统一形状（北极星⑥消重复·单一真相源）：
+每个 check 返回统一形状：
     {"ok": bool, "gate_level": "hard_gate"|"advisory", "msg": str,
      "waivable": bool, ...extra}
 
-北极星护栏：hard_gate-class 只认 STRUCTURE§11 / audit_hub.HARD_GATE_CODES 既有
-语义（子系统缺失 / anti-skip / agent 注入 / 决策前置调研缺失）；research 门
-不再允许 auto_pilot/无网/跳过调研自动豁免。
+hard_gate 语义以 STRUCTURE§11 和 `audit_hub.HARD_GATE_CODES` 为准；调研门不允许
+auto_pilot、无网或跳过调研自动豁免。
 """
 from __future__ import annotations
 
@@ -460,12 +452,10 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
                             or ".research_cache/" in prompt)
         is_splitter = ("novel-chapter-splitter" in desc
                        or "splitter" in subagent_type.lower())
-        is_checkpoint = ("ecas-checkpoint" in desc.lower()
-                         or "checkpoint" in desc.lower())
         is_distill = ("蒸馏" in desc or "distill-style" in desc.lower()
                       or "distill style" in desc.lower()
                       or ("PLAN_ID:" in prompt and "distill-style" in prompt))
-        if not (has_research_ref or is_splitter or is_checkpoint or is_distill):
+        if not (has_research_ref or is_splitter or is_distill):
             return _block("ECAS agent spawn 缺 RESEARCH_REF 字段", warnings)
 
     # ---- 规则 11（v29 语义反转 · 2026-07-11）：蒸馏复刻必须同栈 ----

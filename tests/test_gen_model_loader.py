@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """gen_model_loader.py 测试（多 profile 解析 + active/fallback 链 + reasoning_extra_body）。
 
-🔴 critical infra（所有生成脚本 gen_writer/gen_fixer/gen_creative 依赖）此前 0 专属测试。
-零依赖顶层·临时 .env·**严格 os.environ 快照恢复**——GenModelLoader.__init__ 的 load_dotenv(override=True)
+覆盖所有生成脚本依赖的 profile 解析与 fallback。使用临时 `.env` 并严格恢复
+`os.environ` 快照；GenModelLoader.__init__ 的 load_dotenv(override=True)
 会把 env 注入 os.environ，测完必还原防污染真 .env / 其他测试（见 memory project_fake_llm_cli_e2e_harness）。
 profile 名用 utgml_ 前缀避免与真实 keyring 条目碰撞（_resolve_api_key 会查 keyring）。
 """

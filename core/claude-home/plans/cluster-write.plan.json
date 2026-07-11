@@ -1,8 +1,8 @@
 {
   "command": "cluster-write",
   "version": 2,
-  "description": "cluster 级写作流水线 7 步 · v2 cluster 化方案（2026-05-28）：cluster 单层 + scanner 全员升维 + 切章是纯格式输出 0 质检",
-  "_v2_principle": "整个系统为故事块服务 · 章节是输出格式 · scanner 全部 cluster 视野 · 切章后不再有任何质检",
+  "description": "cluster 级写作 7 步流水线：构建 manifest、Claude 逐场景创作、gemini 分段润色、cluster 质检与修复、最后切章并保存快照。",
+  "_principle": "故事块是写作与质检单位；章节仅是 splitter 生成的输出格式。",
   "total_steps": 7,
   "required_steps": [
     1,
@@ -14,7 +14,7 @@
     7
   ],
   "optional_steps": [],
-  "_doc_v24": "流水线倒置：cluster_draft → cluster 级所有改进 → 全 clean 后才 splitter → gen_chapter_titles → per-chapter changes 拆分。审查 agent 全 cluster mode。1 个 cluster = 1 次 cluster-write plan",
+  "_doc": "cluster 草稿完成全部改进后才执行 splitter、章节命名与 per-chapter changes 平铺。",
   "steps": [
     {
       "n": 1,
@@ -130,7 +130,7 @@
       "expected_outputs": [
         "_数据库/.checker_briefs/cluster_{key}_voice.json"
       ],
-      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_voice-checker.json（brief 的 secondary 落盘·主载体 brief 供 gen_fixer --mode voice-fix 消费）"
+      "_doc": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_voice-checker.json；brief 供 gen_fixer --mode voice-fix 消费。"
     },
     {
       "n": 5,

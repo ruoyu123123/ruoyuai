@@ -210,7 +210,7 @@ def main():
 
     load_dotenv_safely(args.env_file)
 
-    # v2 改造（2026-05-19）：从 active gen-model profile 读，不再读 DEEPSEEK_*
+    # 从 active gen-model profile 读取探测配置。
     try:
         sys.path.insert(0, str(Path(__file__).parent))
         from gen_model_loader import GenModelLoader, GenModelConfigError

@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""cross_family_judge_check.py — 跨家族 judge ensemble 抑制 self-preference / family bias
-(advisory · shadow · inline 文件协议·吃 Claude Code 订阅零月费)
+"""跨家族 judge ensemble 的 advisory inline 文件协议。
 
-# 🔴 2026-06-28 移除exe/gen-model梳理方向
-原 maybe_run 由已删除的 orchestrator.default_judge_dispatch 末端调用。管线回到「主代理
-spawn Claude agent + 跑确定性脚本」后，跨家族复审天然由**主代理**驱动：主代理 spawn
-Agent(claude) 复审 finale subcluster → 调 save_inline_verdict_for_main_agent 落 .wal →
-后续 cluster-save-state step 7 audit/voice 综合时由主代理读 .wal verdict（maybe_run 保留
-为纯函数助手·CLI 兼容入口仍可用·无 judge_runner / orchestrator 依赖）。
+主代理 spawn Claude agent 复审 finale subcluster，调用
+`save_inline_verdict_for_main_agent` 写入 `.wal`；`maybe_run` 负责读取并校验结果。
 
 【背景】R10 联网调研(arXiv 2604.23178 Judging the Judges May 2026 — Claude
 self-preference +11.2pp · Gemini +4.6pp + NeurIPS 2026 Self-Preference Bias +

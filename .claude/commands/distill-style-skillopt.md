@@ -73,7 +73,7 @@ L_t cosine decay 4 → 2
 | ③ 涟漪驱动非预设 | reward 来自真实写作链路 binary 信号 |
 | ④ 章节纯格式 | rollout 在 cluster 层 |
 | ⑤ 不干涉模型判断 | reward 只读现有 judge/scanner binary,不引入新 hard_gate |
-| ⑥ 清旧码 | 替代 dimension_evolver |
+| ⑥ 单一入口 | SkillOpt 是风格 skill 的唯一训练入口 |
 
 ## Plan 强制规划
 ```bash

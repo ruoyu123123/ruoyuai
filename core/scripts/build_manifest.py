@@ -429,10 +429,8 @@ class DatabaseScanner:
         v21_keys = [
             "_meta", "project_basics", "narrative_pacing", "narrative_structure",
             "character_psychology", "interactive_mode", "quality_control",
-            "anti_slop_personal", "agent_model_routing", "advanced",
-            # v23 扩展
+            "anti_slop_personal", "advanced",
             "narrative_style",  # POV / 时态 / narrator_voice (writer 第一硬约束)
-            "ecas_config",      # ECAS 配置 (cluster_word_range / critical_events_use_opus 等)
         ]
         return {k: prefs[k] for k in v21_keys if k in prefs}
 
@@ -1166,10 +1164,6 @@ def _collect_user_preferences_v21(scanner) -> dict:
             "pov": None,
             "_warning": "narrative_style 未配置 - writer 不准写，先报错让主代理补 wizard (v23 第一硬约束)"
         }
-    # v23 ecas_config 直通
-    ec = prefs.get("ecas_config", {}) or {}
-    if ec:
-        summary["ecas_critical_events_use_opus"] = ec.get("critical_events_use_opus", [])
     return {
         "mode": "on",
         "wizard_completed_at": (prefs.get("_meta") or {}).get("wizard_completed_at"),
@@ -2694,7 +2688,7 @@ def _collect_prose_scene_cards(cluster: dict) -> dict | None:
 
 
 def _collect_event_cluster_context(scanner, chapter: int) -> dict:
-    """v23 ECAS: 注入本章所属事件簇的 context (cluster_id / brief / mid_checkpoints / foreshadowing)。
+    """注入本章所属事件簇的 context（cluster_id、brief、scene 与 foreshadowing）。
     writer 在 MODE=ecas 时必读此字段。
     决策树:
     1. 读 _数据库/事件簇.json 找 status in (active 词表 · 中英文都认) 且 chapter_range 包含 chapter 的 cluster
@@ -2840,10 +2834,6 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "foreshadowing_to_plant": _sanitize_foreshadowing_to_plant(c.get("foreshadowing_to_plant")),
                         "foreshadowing_to_callback": _resolve_foreshadowing_to_callback(
                             c.get("foreshadowing_to_callback"), cluster_id_val),
-                        "mid_checkpoints": c.get("mid_checkpoints") or [3000, 6000, 9000],
-                        "sub_summary_template": c.get("sub_summary_template") or "[场景 N] 关键事件 + 角色行动 + 伏笔进度（100 字内）",
-                        "opus_recommended": c.get("opus_recommended", False),
-                        "extended_thinking": c.get("extended_thinking", False),
                         "ME_to_advance": c.get("ME_to_advance") or [],
                         "throughline_focus": c.get("throughline_focus") or [],
                         "characters_focus": c.get("characters_focus") or [],

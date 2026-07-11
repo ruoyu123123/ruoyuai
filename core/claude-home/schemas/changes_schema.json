@@ -1,17 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ruoyuai.changes.v21",
-  "title": "cluster_changes.json 与 per-chapter 第NNN章_changes.json 共用 schema（2026-05-29 cluster 化：writer 产 cluster 级 changes，splitter 平铺为 per-chapter 第NNN章_changes.json）",
-  "description": "v21 writer 输出 _changes.json 的强制 schema。2026-05-29 cluster 化：writer 在 cluster 级产出 cluster_changes.json，splitter 切章时平铺成各章 per-chapter 第NNN章_changes.json，两者结构同源共用本 schema。可对接 Anthropic constrained decoding GA（2026）保证 100% 字段合规。",
+  "title": "cluster changes 与 per-chapter changes 共用 schema",
+  "description": "writer 在 cluster 级产出 changes，splitter 按物理章节平铺；两者共用本 schema。",
   "type": "object",
   "required": [
-    "factual",
     "self_eval"
   ],
   "properties": {
     "factual": {
       "type": "object",
-      "description": "遗留字段形状：world_evolution_apply_chapter.py 仍按此形状读取 fate_events_triggered / world_state_consumption / chapter_hub。writer 链（gen_writer）不产出此字段，只产 self_eval/waivers；角色/道具/关系/locked_facts 等客观状态改由 novel-archivist 读正文产 archive.json，经 apply_archive.py 回库 34 个数据库 JSON。",
+      "description": "可选的确定性状态增量。writer 不填写；客观状态以 novel-archivist 生成的 archive.json 和 apply_archive.py 回库结果为权威。",
       "properties": {
         "locked_facts": {
           "type": "array",
@@ -620,53 +619,28 @@
     },
     "ecas_metadata": {
       "type": "object",
-      "description": "v23 ECAS 元数据 (v22 章节此字段缺失/null 仍 valid)",
+      "description": "cluster 与物理章节映射元数据",
       "properties": {
         "cluster_id": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^(cluster_[0-9]{3}[a-z]?|null)?$",
-          "description": "本章所属事件簇 ID (v22 章节为 null)"
+          "type": "string",
+          "pattern": "^cluster_[0-9]{3}[a-z]?$",
+          "description": "本章所属 cluster ID"
         },
         "cluster_position": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": "string",
           "enum": [
             "head",
             "mid",
             "tail",
-            "solo",
-            null
+            "solo"
           ],
           "description": "本章在 cluster 内的位置 (head=首章/mid=中间/tail=末章/solo=单章 cluster)"
         },
         "cluster_total_chapters": {
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "cluster_word_total": {
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "writer_model_used": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "checkpoint_data": {
-          "type": [
-            "object",
-            "null"
-          ]
+          "type": "integer"
         }
       }
     }

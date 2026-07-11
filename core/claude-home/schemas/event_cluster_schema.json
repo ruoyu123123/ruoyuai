@@ -28,7 +28,6 @@
           "scope_summary",
           "scenes_estimated",
           "status",
-          "mid_checkpoints",
           "research_ref"
         ],
         "properties": {
@@ -140,25 +139,6 @@
             },
             "description": "写前 gate 声明式豁免（如 [{\"type\":\"dead_character\",\"target\":\"沈铖\",\"reason\":\"闪回场景\"}]）·pre_write_gate.py 消费"
           },
-          "mid_checkpoints": {
-            "type": "array",
-            "items": {
-              "type": "integer"
-            },
-            "description": "writer 内 self-audit 触发点 (如 [3000, 6000, 9000])。默认每 3000 字一次。关键事件加密到每 2000 字"
-          },
-          "sub_summary_template": {
-            "type": "string",
-            "description": "writer 每场景后的 100 字摘要模板 (LiM 缓解 - 注入下段头部)"
-          },
-          "opus_recommended": {
-            "type": "boolean",
-            "description": "true = 用 Opus 4.7 (128K output, 关键事件) / false = Sonnet 4.6 (64K output)"
-          },
-          "extended_thinking": {
-            "type": "boolean",
-            "description": "true = Anthropic Extended Thinking 启用（增加推理预算）"
-          },
           "ME_to_advance": {
             "type": "array",
             "items": {
@@ -235,8 +215,7 @@
               "未涌现",
               "已完成"
             ],
-            "_v2_status_note": "2026-05-29 复审修复（M16/SC-6）：实际 事件簇.json 同时存在中文（进行中/已规划/未涌现/已完成）与英文（done/in_progress/pending）状态词。enum 扩为全集（中英文并存），消费侧用 SC-6 状态词表归一。",
-            "description": "当前阶段（中英文状态词全集 · 见 _v2_status_note）"
+            "description": "当前阶段；消费方统一归一中英文状态词"
           },
           "narrative_mode": {
             "type": "string",
@@ -245,8 +224,7 @@
               "linear"
             ],
             "default": "linear",
-            "_v2_note": "2026-05-29 复审修复（M5）：黄金三章倒叙模式。cluster_001 默认 in_medias_res（强冲突放最前），后续 cluster 默认 linear。build_manifest.inject_event_cluster_context 注入给 writer + splitter，chapter_splitter.run_freestyle in_medias_res 时先把 climax 段提前再切。",
-            "description": "叙事顺序：in_medias_res（倒叙·黄金三章）/ linear（时间序）"
+            "description": "叙事顺序：cluster_001 可用 in_medias_res，由 outline 排列 storyboard；其余默认 linear"
           },
           "climax_hint_scene_index": {
             "type": [
@@ -254,8 +232,7 @@
               "null"
             ],
             "minimum": 0,
-            "_v2_note": "2026-05-29 复审修复（M5）：outline-planner 标注本 cluster climax 场景在 scene_storyboard 的下标，供 splitter in_medias_res 重组定位 climax 段。缺省时 splitter 自行扫描 climax。",
-            "description": "climax 场景在 scene_storyboard 的下标（in_medias_res 倒叙重组用 · 可缺省）"
+            "description": "climax 场景在 scene_storyboard 的下标；splitter 仅记录该提示，不重排正文"
           },
           "scene_storyboard": {
             "type": "array",
@@ -537,37 +514,9 @@
             },
             "_doc": "outline-planner 写 · build_manifest 注入 writer · scene_gap_probe / sequel_drought_advisory / value_polarity_probe / causal_connector_scanner 消费 · 🔴 2026-06-29 participants/focal_character/focalization_mode/knowledge_gap_mode 给角色信息差(per-character belief) · 🔴 2026-06-29 scene_type/disaster/reaction/dilemma/decision/link_to_prev/result_type 给 But-Therefore因果连接器+Swain场景骨架(治流水账) · 🔴 2026-06-29 scene_goal 给逐场景动机(Stanislavski scene-objective·心理 P0·治场景漂移) · 🔴 2026-06-29 dialogue_objectives 给对白即行动(McKee Verbal Action·对话密集 scene 标言语策略意图·advisory·what_unsaid 隐藏 Thought 通道驱动潜台词)"
           },
-          "writer_model_used": {
-            "type": "string",
-            "description": "实际用的 model (写入后只读, 供后续分析)"
-          },
           "draft_path": {
             "type": "string",
             "description": "writer 写的完整 cluster 草稿路径 (splitter 切前)"
-          },
-          "checkpoint_results": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "checkpoint_n": {
-                  "type": "integer"
-                },
-                "words_at_checkpoint": {
-                  "type": "integer"
-                },
-                "voice_match": {
-                  "type": "number"
-                },
-                "passed": {
-                  "type": "boolean"
-                },
-                "rollback_triggered": {
-                  "type": "boolean"
-                }
-              }
-            },
-            "description": "writer mid-checkpoint 实际结果 (供 reflector 分析)"
           },
           "spawned_at": {
             "type": "string",
@@ -582,7 +531,7 @@
           },
           "research_ref": {
             "type": "object",
-            "description": "v23 ECAS 调研引用（v17.7 调研先行规则硬约束）— cluster brief 必须含此字段，否则 schema 验证失败",
+            "description": "cluster brief 的调研引用；缺失时 schema 验证失败",
             "required": [
               "cache_path",
               "anchors_used"
@@ -658,13 +607,6 @@
       "foreshadowing_to_callback": [
         "FS_011 scene_002 → scene_003 强化"
       ],
-      "mid_checkpoints": [
-        3000,
-        6000,
-        9000
-      ],
-      "opus_recommended": false,
-      "extended_thinking": false,
       "ME_to_advance": [
         "ME_002"
       ],
@@ -685,16 +627,7 @@
       "parent_me": "ME_010",
       "scope_summary": "Midpoint - 「先生」首次现身 + 三选一招揽 + 陈默拒绝 + 「先生」明面反击启动",
       "scenes_estimated": 6,
-      "opus_recommended": true,
-      "extended_thinking": true,
-      "mid_checkpoints": [
-        3000,
-        5000,
-        7000,
-        9000,
-        11000,
-        13000
-      ]
+      "status": "pending"
     }
   }
 }

@@ -23,7 +23,7 @@ import math
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -507,7 +507,7 @@ def build_character_arc(name: str, entries: list[dict], total_book_chapters: int
         "emotion_rhythm_pattern_actor": pattern_actor,
         "emotion_rhythm_pattern_experiencer": pattern_experiencer,
         "_metadata": {
-            "distill_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "distill_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "aggregator_version": "v22.4dim.1",
             "marcus_paradigm": True,
             "stanford_6component": True,

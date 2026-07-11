@@ -409,7 +409,7 @@ def main():
 if __name__ == "__main__":
     # 🔴 2026-06-17 bug-hunt 修：直接 CLI 调用时 Windows GBK 控制台编码不了 print 里的
     # ⚠(U+26A0)/↩(U+21A9) → UnicodeEncodeError 崩（orchestrator 路径有 PYTHONIOENCODING=utf-8
-    # 或 frozen reconfigure 掩盖·直接调用裸崩）。入口强制 UTF-8 输出（对齐 judge_runner __main__）。
+    # 或 frozen reconfigure 掩盖而直接崩溃）。入口强制 UTF-8 输出。
     for _s in (sys.stdout, sys.stderr):
         try:
             _s.reconfigure(encoding="utf-8", errors="replace")

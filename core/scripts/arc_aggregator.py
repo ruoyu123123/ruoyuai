@@ -32,7 +32,7 @@ import math
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -362,86 +362,7 @@ def aggregate_cluster(project: Path, cluster_id: str) -> dict:
     # 替换 arc_id 为 cluster 命名
     data["arc_id"] = f"cluster_arc_{cluster_id}"
 
-    # v22.4dim N3：mid_checkpoint 期望张力（writer 每 3000 字 checkpoint 时对照）
-    data["mid_checkpoint_target_tensions"] = compute_mid_checkpoint_tensions(
-        emotion_curve=data["emotion_curve_normalized"],
-        chapter_words=load_chapter_wordcounts_for_range(project, arc_start, arc_end),
-        cluster_total_words=target["estimated_words"],
-        checkpoint_interval=3000,
-    )
     return data
-
-
-def load_chapter_wordcounts_for_range(project: Path, arc_start: int, arc_end: int) -> list[int]:
-    """快速从 蒸馏进度 单章 JSON 读字数（按 ch 顺序）。"""
-    out = []
-    chapter_dir = project / "蒸馏进度"
-    for ch in range(arc_start, arc_end + 1):
-        wc = 3000  # 默认兜底
-        for pat in (f"第{ch}章.json", f"ch{ch}.json"):
-            f = chapter_dir / pat
-            if not f.exists():
-                continue
-            try:
-                d = json.loads(f.read_text(encoding="utf-8"))
-                cand = d.get("word_count") or _walk_nested(d, "total_chars") or _walk_nested(d, "cjk_chars")
-                if isinstance(cand, (int, float)) and cand > 0:
-                    wc = int(cand)
-                    break
-            except (json.JSONDecodeError, OSError):
-                continue
-        out.append(wc)
-    return out
-
-
-def compute_mid_checkpoint_tensions(
-    emotion_curve: list[float],
-    chapter_words: list[int],
-    cluster_total_words: int,
-    checkpoint_interval: int = 3000,
-) -> list[dict]:
-    """v22.4dim N3：cluster 字数轴上每 checkpoint_interval 字一个张力期望点。
-
-    使用：writer 在每个 mid_checkpoint 处 self-audit 时对照本字数点的期望张力。
-    业界依据：ECAS schema 已含 mid_checkpoints 字段（默认每 3000 字一个），本字段
-    给每个 checkpoint 配上期望张力，让 writer 知道"写到 6000 字时情绪应该有多激烈"。
-    """
-    if not emotion_curve or not chapter_words or cluster_total_words <= 0:
-        return []
-
-    # 累积字数：cumulative[i] = 前 i+1 章总字数
-    cumulative = []
-    s = 0
-    for w in chapter_words:
-        s += w
-        cumulative.append(s)
-
-    actual_total = cumulative[-1] if cumulative else cluster_total_words
-    checkpoints = []
-    pos = checkpoint_interval
-    while pos < actual_total:
-        # 找 pos 所在章
-        ch_idx = next((i for i, c in enumerate(cumulative) if c >= pos), len(cumulative) - 1)
-        # 在该章内的位置百分比
-        ch_start_words = cumulative[ch_idx - 1] if ch_idx > 0 else 0
-        ch_len = chapter_words[ch_idx] if ch_idx < len(chapter_words) else 1
-        in_chapter_pct = (pos - ch_start_words) / max(ch_len, 1)
-        # 取当前章张力（如果不是第一章，与上一章插值过渡）
-        cur_tension = emotion_curve[ch_idx] if ch_idx < len(emotion_curve) else emotion_curve[-1]
-        if ch_idx > 0 and in_chapter_pct < 0.3:
-            # 接近章首：用上一章末与本章首插值（平滑过渡）
-            prev_tension = emotion_curve[ch_idx - 1]
-            t = prev_tension * (0.3 - in_chapter_pct) / 0.3 + cur_tension * in_chapter_pct / 0.3
-            cur_tension = round(t, 3)
-        checkpoints.append({
-            "at_word": pos,
-            "in_chapter_relative": ch_idx + 1,    # 本 cluster 第几章（1-based）
-            "in_chapter_pct": round(in_chapter_pct, 2),
-            "expected_tension": round(cur_tension, 3),
-        })
-        pos += checkpoint_interval
-
-    return checkpoints
 
 
 def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_size: int) -> dict:
@@ -588,7 +509,7 @@ def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_si
         "foreshadowing_resolved_in_arc": fs_resolved,
         "character_arc_summary_in_arc": character_arc,
         "_metadata": {
-            "distill_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "distill_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "source_continuity_files": [f.name for f in continuity_files],
             "source_chapter_jsons_count": len(chapter_jsons),
             "aggregator_version": "v22.4dim.1",
@@ -657,7 +578,7 @@ def aggregate_summary(project: Path) -> dict:
             sum(a.get("foreshadowing_resolved_in_arc", 0) for a in arcs) / len(arcs), 2
         ),
         "_metadata": {
-            "summary_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "summary_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "aggregator_version": "v22.cluster.1",
             "_doc": "primary_track=cluster 表示已用 cluster_segmenter 切分。两轨并存时优先 cluster。",
         },

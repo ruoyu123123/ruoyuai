@@ -1,13 +1,13 @@
 {
   "command": "distill-character",
   "version": 1,
-  "description": "🔴 2026-06-27 C13：深度角色蒸馏（Voice DNA · 产 voice_pack）纳入 plan 强制规划层（此前整条命令脱离 6 命令矩阵·无 PLAN_ID/STEP/plan_tracker/L3 hook·6 步全靠主代理自觉）。6 步：收集素材→5层persona分析→voice_sample 同栈 gen-model 生成→确定性合并人物卡(带 provenance)→PROCESS-INTEGRITY 硬闸 + 回灌 voice-fidelity advisory→git。唯一 hard 项 = PROCESS-INTEGRITY（voice_sample 须来自同栈 gen-model + style/anti_sample 须带 ≥2 章 provenance · banned_phrases 首次明确即可入列不要求 ≥2 源）；fidelity 永 advisory（voice 是采集非预设·随角色成长 fluid 演化·绝不 hard-lock 对白 match·中途反复跑校准忌重量级 per-character SFS 循环）。",
+  "description": "深度角色蒸馏 6 步流水线：收集素材、分析 5 层 persona、生成 voice_sample、合并 voice_pack、执行 PROCESS-INTEGRITY 与 voice-fidelity 验证、提交 Git 快照。PROCESS-INTEGRITY 是唯一 hard 项，voice-fidelity 永远 advisory。",
   "total_steps": 6,
   "required_steps": [1, 2, 3, 4, 5, 6],
   "optional_steps": [],
-  "_pipeline_status": "Claude 主代理驱动命令（分析/合并步 = Claude 判断·北极星⑤不干涉模型创作判断）：step1/2 收集素材 + 5 层 persona 分析 = Claude（分析非生成），step3 voice_sample = gen-model（含创意笔触·同栈契约），step4 合并 = Claude 确定性增量合并，step5 回灌 verify = distill_character_verify.py 闸。scripts 行内 {project_root} 由主代理替换为真实项目路径；{key} = 角色 id（plan create --key <角色>），由 plan_tracker 在 create 时替换。",
+  "_pipeline_status": "step1/2 由 Claude 收集素材并分析 persona；step3 由 gen_creative.py --mode voice_sample 生成样本；step4 合并 voice_pack；step5 由 distill_character_verify.py 验证。{project_root} 是项目路径，{key} 是角色 id。",
   "_north_star_alignment": "①更贴近作者风格(voice_sample 喂角色历史真实对白 few-shot·gen-model 同栈复刻实战 voice·非 Claude 凭印象编) ②cluster 单位(素材按角色出场 cluster 收集·章号经 cluster_lookup 反查) ③涟漪驱动(voice 随剧情/角色 arc 演化采集·非预设) ④章节纯格式(provenance 标章号只为溯源·不参与质检) ⑤不干涉模型判断(fidelity 永 advisory·绝不 hard-lock 对白 match·唯一硬=PROCESS-INTEGRITY 同栈/provenance 契约) ⑥清旧码(消除 gen_creative voice_sample 的 NotImplementedError/polish hack)",
-  "_c13": "🔴 2026-06-27 C13-DISTILL-CHARACTER-PLAN-REPLICATE：voice_sample 走 gen_creative.py --mode voice_sample（gen-model·OpenAI 兼容·同栈·守『蒸馏复刻必须同栈 gen-model』）。回灌 verify advisory（exit0 默认·exit2 仅 PROCESS-INTEGRITY 契约/provenance 破损·非 fidelity delta）——强制完美 voice 复制会(a)干涉模型创作(b)冻结本应随角色成长 fluid 演化的 voice。",
+  "_voice_sample_contract": "voice_sample 由 gen_creative.py --mode voice_sample 生成；distill_character_verify.py 仅在 PROCESS-INTEGRITY 或 provenance 破损时 exit 2，voice-fidelity 偏差保持 advisory。",
   "steps": [
     {
       "n": 1,

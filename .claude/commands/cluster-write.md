@@ -355,9 +355,9 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 5
 
 # 第 6 步：★最后才切章（splitter → titles → per-chapter changes）
 
-## v27 freestyle 模式（唯一）
+## 按字数切章
 
-v27 splitter 不要 TARGET_CHAPTERS · 按字数硬范围 3000-4500/章 自动算 N · 末章 < 3000 字时退回 pending_tail.txt 等下 cluster 拼。
+splitter 按每章 3000-4500 CJK 的范围自动计算 N；末章不足 3000 CJK 时写入 `pending_tail.txt`，留给下个 cluster 拼接。
 
 **读取 cluster brief 的 `_writer_mode`** 只用于契约校验；当前唯一合法值是 `freestyle`：
 
@@ -368,7 +368,7 @@ ec = json.load(open('<项目路径>/_数据库/事件簇.json', encoding='utf-8'
 for c in ec.get('clusters', []):
     cid = str(c.get('cluster_id', ''))
     if '<key>' in cid:
-        print(c.get('_writer_mode', 'freestyle'))  # v27 默认 freestyle
+        print(c.get('_writer_mode', 'freestyle'))
         break
 " 2>/dev/null)
 WRITER_MODE=${WRITER_MODE:-freestyle}
@@ -377,11 +377,11 @@ if [ "$WRITER_MODE" != "freestyle" ]; then
   exit 2
 fi
 
-# 检测上 cluster pending_tail（v27 跨 cluster 字数补料）
+# 检测上 cluster pending_tail
 PREV_KEY=<上 cluster key · 如 "005" 当本 cluster=006>
 PREV_PENDING_TAIL="<项目路径>/章节/cluster_${PREV_KEY}_draft/cluster_${PREV_KEY}_pending_tail.txt"
 if [ -f "$PREV_PENDING_TAIL" ]; then
-  echo "[v27 backfill] 检测到上 cluster pending_tail: $PREV_PENDING_TAIL"
+  echo "[pending_tail] 检测到上 cluster 尾段: $PREV_PENDING_TAIL"
   PENDING_ARG="PREVIOUS_PENDING_TAIL_PATH: $PREV_PENDING_TAIL"
 else
   PENDING_ARG=""
@@ -390,7 +390,7 @@ fi
 
 ## 6.1 spawn novel-chapter-splitter
 
-### v27 freestyle 模式
+### 输入契约
 
 ```
 Agent 启动 novel-chapter-splitter:
@@ -407,8 +407,8 @@ CLIMAX_HINT_SCENE_INDEX: <从 事件簇.json 取>
 $PENDING_ARG   # 上 cluster pending_tail 路径（如有）
 ```
 
-splitter v27 行为：
-- 不要 TARGET_CHAPTERS · 按字数自动算 N（3000-4500/章硬范围）
+splitter 行为：
+- 按字数自动计算 N（每章 3000-4500 CJK）
 - 末章 < 3000 → 写 `cluster_<key>_pending_tail.txt`（不切章 · 下个 cluster 时 prepend）
 - 末章 ≥ 3000 → 正常 N 章切完
 - 输出 splitter_wal 含 `pending_tail.exists` + `pending_tail.cjk` + `chapter_range` 字段
@@ -417,7 +417,7 @@ splitter v27 行为：
 - `章节/第<NNN>章/第<NNN>章.txt` × N（纯正文 · N 由 splitter 按字数算）
 - `章节/第<NNN>章/第<NNN>章_changes.json` × N（占位 · 待 6.3 平铺）
 - `_数据库/.wal/splitter_cluster_<key>_decisions.json`（切点 WAL · 记录每章范围 + pending_tail meta）
-- **v27 freestyle 额外**：`章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt`（如末章不够）
+- `章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt`（末章不足时）
 
 ## 6.2 gen_chapter_titles（normal/mid/high 三档）
 

@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """cross_cluster_continuity_aggregate.py 专属确定性回归测试（零 LLM / 零联网）。
 
-补 test_continuity_protagonist.py 的盲区——后者只钉 extract_keywords / get_protagonist /
-_build_aliases / scan_object_continuity（去硬编码主角名+物件名）。本文件钉**尚未覆盖**的
-4 维衔接核心算法 + 主流程退出码：
+覆盖 4 维衔接核心算法、NN bridge 和主流程退出码：
 
 - scan_cliffhanger_resonance        —— 维度 1 正文路径（关键词重叠分 / exempt / 缺字段哨兵）
 - scan_cliffhanger_resonance_ledger —— 维度 1 账本路径（取预算分 / exempt / 缺字段）
@@ -15,17 +13,14 @@ _build_aliases / scan_object_continuity（去硬编码主角名+物件名）。�
 main() 含 sys.exit，走 subprocess 跑真 CLI（参照 test_cross_cluster_fate_drift_aggregate）。
 铁律：真 import 真调用被测函数，绝不 mock 被测逻辑。
 
-【2026-07-01 追加：NN 连贯性模型接入（scanner-NN 升级批）】见文末新增区块：
+NN 连贯性模型覆盖：
 - 维度 1/2 新增 model_result 参数的函数级测试——直接传字典做依赖注入，不 mock 任何逻辑
   （model_result 本身就是显式设计的注入点，None=零回归回退路径）
 - 维度 3（物件持续性）评估后不模型化，只加 source="heuristic" 字段，补一条回归锁
 - _load_coherence_bridge / _predict_pairs_safe / _valid_pair_result / _batch_model_results
   桥接管道单测
 - main() 批量预算完整链路：用 mock.patch("nn_coherence_bridge.enabled"/"predict_pairs", ...)
-  替换外部 NN 模型后端（与 test_coherence_scanner.py 同款既有范式）——这不是 mock 被测逻辑本身，
-  是替换被测逻辑的外部依赖（真实模型 subprocess），因 main() 含 sys.exit 且需要控制模型返回值，
-  只能 in-process 调用（父进程 monkeypatch 对 subprocess 子进程无效，与上方 _run_cli 的纯
-  subprocess 路径互补而非取代）
+  替换外部 NN 模型后端；被测逻辑本身保持真实调用
 """
 import json
 import subprocess

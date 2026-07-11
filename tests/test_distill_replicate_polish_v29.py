@@ -1,15 +1,9 @@
-"""distill_replicate v29 同栈契约锁（Claude 亲笔草稿 + gemini 分段润色 · 2026-07-11）。
+"""distill_replicate 同栈契约锁。
 
-v29 架构转向（用户定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）：蒸馏复刻验证
-必须与正式写作栈**同栈**——复刻 = Claude agent 按 skill 亲笔写复刻场景稿（--claude-scenes-dir）
+复刻 = Claude agent 按 skill 亲笔写复刻场景稿（--claude-scenes-dir）
 → 本脚本用 gemini 按 skill 分段润色（段级字数守恒带 [0.85, 1.30]）→ 拼接落盘评分。
 
-从零生成路径（CoT-first 自解释 / subcall 计划 / build_cluster_subcall_prompt）已整体清除
-（不兼容不降级）。本文件锁 v29 契约 + 回归锁死旧机制不复活。
-
-纪律：只测**确定性的 prompt 构造 / 常量 / discover 纯函数 / argparse required**（不实跑 gen-model）。
-实验依据：workspace/_temp_research/四组生成对比_20260711 · memory
-project_4group_generation_comparison_2026_07_11。
+本文件只测确定性的 prompt、常量、场景发现、argparse required 与单一同栈入口。
 """
 import sys
 import tempfile
@@ -193,12 +187,11 @@ def test_E_claude_scenes_dir_required(monkeypatch):
 
 
 # ════════════════════════════════════════════════════════════════
-# [F] 回归锁：从零生成 / CoT / subcall 机制永不复活（不兼容不降级）
+# [F] 公共接口只保留同栈复刻
 # ════════════════════════════════════════════════════════════════
 
 def test_F_from_zero_and_cot_symbols_removed():
-    """🔴 回归锁：CoT-first / subcall 计划 / build_cluster_subcall_prompt 已物理删除，
-    禁止以任何形式复活从零生成路径（v29 只走 Claude 草稿 + gemini 润色）。"""
+    """同栈入口不暴露从零生成或 subcall 规划符号。"""
     for sym in ("build_cluster_subcall_prompt", "plan_cluster_subcalls",
                 "subcall_max_tokens", "estimate_words_per_chapter",
                 "strip_cot_analysis", "_l3b_cot_first_mode",

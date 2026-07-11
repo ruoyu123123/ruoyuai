@@ -1,14 +1,7 @@
-"""save_state.py 原子写回归测试 — 守护缺漏报告 P1-1「_数据库 JSON 裸 write_text 半截损坏」。
+"""save_state.py 的数据库 JSON 原子写契约测试。
 
-save_state.py 的 save_json 是伏笔表/人物卡/进度/地图/时间线/道具 等 _数据库 JSON 的
-唯一写出口。旧实现裸 write_text：进程写一半被杀 → 留半截 JSON → 下个读者
-json.JSONDecodeError → load_json 兜底成 default → 整库静默清空（数据损坏面最大的一处）。
-
-修复（2026-06-12 缺漏修复批次1 任务C）：
-  - save_json 改走 atomic_json.atomic_write_json（tmp 唯一名 pid+uuid + fsync + os.replace 原子替换）。
-  - ImportError 兜底手写唯一名 tmp + os.replace（照 cluster_choice_apply.py:89-96 范式·
-    不沿用固定 .json.tmp 反模式）。
-  - cmd_ecas_checkpoint 的 final.json（也在 _数据库 下）裸 write_text 同步改走 save_json。
+`save_json` 必须走 `atomic_json.atomic_write_json`；替换失败时原文件保持完整，临时文件名
+保持唯一，重复写入后仍能解析为合法 UTF-8 JSON。
 
 这组测试钉死「写盘走原子路径、目标永不残留半截、崩溃不毁原文件」，**不碰任何状态保存业务逻辑**。
 零依赖范式：文件尾 __main__ 循环跑 test_* 打 [OK]/[FAIL]。
@@ -135,38 +128,8 @@ def test_no_bare_db_write_text_regression():
     # 裸子串 "p.write_text" 会误匹配 "tmp.write_text" 尾部 → 用 \b 钉死变量名恰为 p。
     assert not re.search(r"(?<![\w.])p\.write_text\(json\.dumps", src), \
         "save_json 回归成裸 write_text"
-    # 旧反模式 2：cmd_ecas_checkpoint 的 final.json 裸 write_text（原 :754）
-    assert "final_path.write_text" not in src, "ecas final.json 回归成裸 write_text"
-    # 旧反模式 3：固定 .json.tmp 名（并发交错损坏·见 test_self_heal_atomic 同款断言）
+    # 固定 .json.tmp 名会在并发写入时交错损坏。
     assert 'with_suffix(".json.tmp")' not in src, "回归成固定 tmp 名（并发会交错损坏）"
-
-
-def test_ecas_checkpoint_final_json_via_save_json():
-    """cmd_ecas_checkpoint 的 final.json 必须经 save_json（原子路径）落盘。"""
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        called = []
-        orig = save_state.save_json
-
-        def _spy(p, data):
-            called.append(Path(p))
-            return orig(p, data)
-
-        save_state.save_json = _spy
-        try:
-            rc = save_state.cmd_ecas_checkpoint(root, "cluster_001")
-        finally:
-            save_state.save_json = orig
-        # 空项目必 FAIL（draft/事件簇缺失）→ rc=1，但 final.json 仍要写出（汇总落盘不豁免）
-        assert rc == 1
-        final = root / "_数据库" / ".ecas_checkpoints" / "cluster_001_final.json"
-        assert final.is_file(), "final.json 未写出"
-        assert final in called, "final.json 未走 save_json 原子路径"
-        _no_stray_tmp_or_corrupt(final.parent, final)
-        # 内容可解析且结构正确
-        result = json.loads(final.read_text(encoding="utf-8"))
-        assert result["cluster_id"] == "cluster_001"
-        assert result["passed"] is False
 
 
 if __name__ == "__main__":

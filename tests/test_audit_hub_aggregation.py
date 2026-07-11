@@ -33,7 +33,7 @@ import audit_hub as ah  # noqa: E402
 # 沙箱工具：假项目 + 假 scanner 脚本（输出全 ASCII，杜绝子进程编码歧义）
 # ════════════════════════════════════════════════════════════════
 
-# chapter mode（非 cluster）下 audit_chapter 调度的 9 个 scanner 文件名
+# audit_chapter 直接调用时调度的 9 个基础 scanner 文件名
 _ALL_SCANNER_NAMES = [
     "validate_chapter.py", "validate_style.py", "narrative_scanner.py",
     "plot_structure_scanner.py", "hook_strength_scanner.py",

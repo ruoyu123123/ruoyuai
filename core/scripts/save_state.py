@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""
-save_state.py — 状态保存流水线的确定性部分
+"""状态保存流水线的确定性入口。
 
-v26 cluster-only CLI 子命令（章级 --wal-* / --parse / --apply-changes / --git-commit /
---report 已随 chapter mode 废弃下线，章级函数仅作 cluster 函数内部组件复用）：
+CLI 子命令：
   --apply-cluster-changes <key>     整 cluster 落地 13 JSON + writer_truth_check 撒谎检测
   --git-commit-cluster <key>        1 cluster 1 commit
   --auto-post-reflect-cluster <key> cluster 级 learning_loop 三步链
   --build-cluster-summary <key>     富摘要预算写入 故事块摘要.json
-  --ecas-checkpoint <key>           验证 cluster_draft 完整性 + checkpoint_data
-  --detect-volume-boundary <key>    🔴 S10 卷边界确定性检测（既有 ME 信号·report-only）
-  --apply-volume-summary <N>        🔴 S10 卷级摘要回库唯一入口（source 回溯校验+幂等 upsert）
+  --detect-volume-boundary <key>    卷边界确定性检测（基于 ME 信号，仅报告）
+  --apply-volume-summary <N>        卷级摘要回库（校验 source，幂等 upsert）
 
 所有子命令都幂等（重复执行不产生副作用或破坏数据）。
 确定性逻辑集中在此，AI 只负责：故事块摘要/写作反思/走向卡片。
@@ -25,12 +22,12 @@ from frozen_util import child_python, scripts_dir  # frozen-aware path helpers
 from datetime import datetime
 from pathlib import Path
 
-# v18：统一章节读写走 chapter_io，杜绝各脚本各自 split
+# 章节读写统一走 chapter_io。
 sys.path.insert(0, str(Path(__file__).parent))
 import chapter_io as cio
-# 2026-05-29 修 章号当cluster号：章号 ⇄ cluster_id 反查走单一权威工具
+# 章号与 cluster_id 的反查统一走 cluster_lookup。
 import cluster_lookup
-# 2026-07-06 P1 伏笔三态生命周期：status 枚举 + payoff_scope 派生的单一真理源
+# 伏笔状态与 payoff_scope 派生统一走 db_schema_validate。
 import db_schema_validate as _dbsv
 from log_util import get_logger
 
@@ -258,12 +255,7 @@ def find_chapter_file(root: Path, ch: int) -> Path | None:
 
 
 # ============ WAL ============
-# 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：章级 WAL 函数
-# wal_path / cmd_wal_start / cmd_wal_step / cmd_wal_end 已删除。
-# 依据：v26 chapter mode 废弃后 main() 无 --wal-* 入口（grep 确认无外部调用方），
-# 章级 WAL 函数互相引用、无其他调用者。cluster WAL 由调度器 shell 直建（不走本脚本）。
-# apply_changes / cmd_parse 写的 .wal/第N章_*.json 是中间产物文件，用直接路径，
-# 与已删的 wal_path()（保存 _save_state.json）无关，不受影响。
+# cluster WAL 由调度器创建；apply_changes/cmd_parse 直接写每章中间产物。
 
 
 # ============ 解析 CHANGES ============
@@ -471,127 +463,6 @@ def apply_changes(root: Path, ch: int) -> int:
 # 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：cmd_report（章级报告）已删除。
 # 与 cmd_report_cluster（见 CLI 段说明）一起下线 —— grep 确认无任何 plan/命令文档
 # 调 save_state.py --report / --report-cluster（cluster-save-state 报告由其他步骤产出）。
-
-
-# ============ v23 ECAS checkpoint ============
-
-def _read_ecas_metadata(chg: dict) -> dict:
-    """2026-05-29 复审修复 [M17]：ecas_metadata 三方位置不一致——
-    schema 声明顶层 / gen_writer 写在 self_eval.ecas_metadata（见 gen_writer.py:587）/
-    旧 reader 只读顶层 → 永远拿空 dict → checkpoint_data 永远空。
-    本 helper 统一读：优先 self_eval.ecas_metadata（writer 实际位置），兼容读取顶层（schema 位置），
-    两处都有则浅合并（self_eval 优先，反映 writer 真实输出）。读不到返回 {}。
-    """
-    if not isinstance(chg, dict):
-        return {}
-    top = chg.get("ecas_metadata") if isinstance(chg.get("ecas_metadata"), dict) else {}
-    se = chg.get("self_eval") if isinstance(chg.get("self_eval"), dict) else {}
-    nested = se.get("ecas_metadata") if isinstance(se.get("ecas_metadata"), dict) else {}
-    # 顶层做底、self_eval 覆盖（writer 真实写入位置优先）
-    merged = dict(top)
-    merged.update(nested)
-    return merged
-
-
-def cmd_ecas_checkpoint(root: Path, cluster_id: str) -> int:
-    """验证 cluster_draft 完整性 (存在性 / CJK 计数 / mid_checkpoint_results)。
-
-    输入: cluster_id (如 cluster_002)
-    检查项:
-    1. 读 章节/cluster_<id>_draft/cluster_<id>_draft.txt 并记录 CJK 字数
-    2. 读 章节/cluster_<id>_draft/cluster_<id>_changes.json.ecas_metadata.checkpoint_data
-    3. 验所有 mid_checkpoint_results 字段完整 + passed
-    4. 写 _数据库/.ecas_checkpoints/cluster_<id>_final.json (汇总)
-
-    cluster-first freestyle 下字数由 writer 自由发挥、splitter 后期按字数切；本 checkpoint
-    不读取/检查 expected_word_range，避免把旧字数预算重新变成隐性约束。
-    2026-05-29 复审修复 [H3/M20]：返回状态码（0 PASS / 1 FAIL）替代 sys.exit，供 main() 传播。
-    """
-    import json as _json
-
-    cluster_dir = root / "章节" / f"{cluster_id}_draft"
-    draft_path = cluster_dir / f"{cluster_id}_draft.txt"
-    changes_path = cluster_dir / f"{cluster_id}_changes.json"
-    checkpoint_dir = root / "_数据库" / ".ecas_checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-    result = {
-        "cluster_id": cluster_id,
-        "validated_at": datetime.now().isoformat(),
-        "checks": {},
-        "passed": True,
-        "warnings": []
-    }
-
-    # 2026-05-29 复审修复 [M17/L12]：先读 changes.json 一次——既供 freestyle 判定（L12），
-    # 也复用给 Check 2（避免二次读盘）。ecas_metadata 经 _read_ecas_metadata 兼容三方位置。
-    chg = None
-    ecas_meta = {}
-    if changes_path.is_file():
-        try:
-            chg = _json.loads(changes_path.read_text(encoding="utf-8"))
-            ecas_meta = _read_ecas_metadata(chg)
-        except Exception:
-            chg = None  # Check 2 会重新尝试并记录具体错误
-    result["checks"]["writer_mode"] = ecas_meta.get("writer_mode", "unknown")
-
-    # Check 1: draft 存在 + 字数
-    if not draft_path.is_file():
-        result["passed"] = False
-        result["checks"]["draft_exists"] = False
-        result["warnings"].append(f"draft 文件不存在: {draft_path}")
-    else:
-        text = draft_path.read_text(encoding="utf-8")
-        # v23.1: 中文字符数（CJK 统一汉字 + 扩展 A）— 与 writer / 用户偏好.target_words 一致
-        # 旧算法 len(text 去 \n 空格) 把标点/英文也算进去导致虚高 20%+
-        words = sum(1 for c in text if '一' <= c <= '鿿' or '㐀' <= c <= '䶿')
-        result["checks"]["draft_exists"] = True
-        result["checks"]["word_count"] = words
-        result["checks"]["word_count_method"] = "CJK_chars_only_v23_1"
-
-    # Check 2: changes.json + checkpoint_data
-    if not changes_path.is_file():
-        result["passed"] = False
-        result["checks"]["changes_exists"] = False
-        result["warnings"].append(f"changes.json 不存在: {changes_path}")
-    else:
-        try:
-            if chg is None:
-                chg = _json.loads(changes_path.read_text(encoding="utf-8"))
-            # 2026-05-29 复审修复 [M17]：经 _read_ecas_metadata 兼容 self_eval/顶层两种位置
-            ecas_meta = _read_ecas_metadata(chg)
-            ckp_data = ecas_meta.get("checkpoint_data") or {}
-            ckp_results = ckp_data.get("mid_checkpoint_results") or []
-            result["checks"]["changes_exists"] = True
-            result["checks"]["checkpoint_count"] = len(ckp_results)
-            failed_ckp = [c for c in ckp_results if not c.get("passed")]
-            result["checks"]["all_checkpoints_passed"] = len(failed_ckp) == 0
-            if failed_ckp:
-                result["warnings"].append(f"{len(failed_ckp)} 个 checkpoint 失败")
-            # cluster_word_total vs ecas_meta
-            cluster_wt = ecas_meta.get("cluster_word_total")
-            if cluster_wt and "word_count" in result["checks"]:
-                if abs(cluster_wt - result["checks"]["word_count"]) > 100:
-                    result["warnings"].append(f"changes.cluster_word_total ({cluster_wt}) 与正文字数 ({result['checks']['word_count']}) 偏差 > 100")
-        except Exception as e:
-            result["passed"] = False
-            result["warnings"].append(f"读 changes.json 失败: {e}")
-
-    # Write final checkpoint summary
-    # 2026-06-12 任务C：_数据库/.ecas_checkpoints/*.json 也是数据库 JSON，
-    # 裸 write_text → 统一改走 save_json（原子写·格式与原 ensure_ascii=False/indent=2 一致）
-    final_path = checkpoint_dir / f"{cluster_id}_final.json"
-    save_json(final_path, result)
-    logger.info(f"[ecas-checkpoint] {cluster_id}: {'PASS' if result['passed'] else 'FAIL'}")
-    for k, v in result["checks"].items():
-        logger.info(f"  {k}: {v}")
-    if result["warnings"]:
-        logger.info(f"  warnings: {len(result['warnings'])}")
-        for w in result["warnings"]:
-            logger.info(f"    - {w}")
-    logger.info(f"  summary: {final_path.relative_to(root)}")
-    # 2026-05-29 复审修复 [H3/M20]：返回状态码（1 FAIL / 0 PASS）替代 sys.exit，供 main() 传播
-    return 1 if not result["passed"] else 0
 
 
 # ============ CLI ============
@@ -1618,15 +1489,7 @@ def cmd_git_commit_cluster(root, cluster_key):
 
 
 def cmd_auto_post_reflect_cluster(root, cluster_key):
-    """v24 cluster 级 auto-post-reflect：跑 learning_loop 三步链（merge-reflection / ingest / scan-recurring）。
-
-    2026-05-29 复审修复 [H12]：旧实现逐章调 cmd_auto_post_reflect，找
-    `.judge_reports/ch_NNN_reflector.json`——但该文件无 producer（章级 reflector 已随
-    chapter mode 废弃），cluster reflector 实际写 `.wal/<cluster_key>_reflection.json`
-    （见 plan_tracker.py:594 novel-reflector cluster 分支）。链路断裂导致
-    写作经验.json success/failure_patterns 永远 0。
-
-    改为 cluster 级直连：
+    """运行 cluster 级 learning_loop 三步链：
       1. learning_loop --merge-reflection .wal/<cluster_key>_reflection.json
       2. learning_loop --ingest .audit/cluster_<key>_audit.json（见 audit_hub.py:1399）
       3. learning_loop --scan-recurring
@@ -1746,14 +1609,7 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
 
 
 def main():
-    # 🔴 v26: chapter-level CLI 已彻底废弃移除（--wal-start/-step/-end/--parse/--apply-changes/
-    # --git-commit/--report/--auto-post-reflect 全部下线）。
-    # 🔴 2026-05-29 流程贯通（断点 5 死代码清理）：cmd_wal_* / cmd_report / cmd_report_cluster
-    # 函数本体已删除（无调用方）。仍保留的章级底层组件只有 cmd_parse / apply_changes，
-    # 由 cmd_apply_cluster_changes 内部按章迭代复用，不是公共 CLI。
-    # 外部一律走 --apply-cluster-changes / --git-commit-cluster / --auto-post-reflect-cluster /
-    # --build-cluster-summary / --ecas-checkpoint。
-    # 🔴 2026-06-30 创作流程 NN 默认接入（命令行入口·main only·测试 import 不触发）
+    # 公共 CLI 只暴露 cluster 级子命令；章级函数由 cluster 命令内部复用。
     import sys as _sys_nn
     import nn_runtime_defaults
     _nn_on = nn_runtime_defaults.enable_creative_nn_defaults()
@@ -1768,38 +1624,30 @@ def main():
     except Exception as _e:  # noqa: BLE001
         print(f"[model-registry] FATAL: {type(_e).__name__}: {str(_e)[:120]}", file=_sys_nn.stderr)
         sys.exit(2)
-    ap = argparse.ArgumentParser(
-        description="save_state.py · v26 cluster-only CLI"
-    )
+    ap = argparse.ArgumentParser(description="save_state.py · cluster-only CLI")
     ap.add_argument("project", help="项目路径")
-    # v24 cluster-level subcommands（唯一 CLI 入口）
-    ap.add_argument("--ecas-checkpoint", type=str, metavar="CLUSTER_ID",
-                    help="验证 cluster_draft 完整性 + checkpoint_data")
+    # cluster-level subcommands（唯一 CLI 入口）
     ap.add_argument("--apply-cluster-changes", type=str, metavar="CLUSTER_KEY",
-                    help="v24: 一次性应用整 cluster 的 changes（内部展开 ch_range for each ch apply）")
+                    help="一次性应用整 cluster 的 changes（内部展开 ch_range）")
     ap.add_argument("--git-commit-cluster", type=str, metavar="CLUSTER_KEY",
-                    help="v24: 1 cluster 1 commit · msg = feat(cluster-NNN): N 章 (chX-chY)")
+                    help="1 cluster 1 commit · msg = feat(cluster-NNN): N 章 (chX-chY)")
     ap.add_argument("--auto-post-reflect-cluster", type=str, metavar="CLUSTER_KEY",
-                    help="v24: cluster 级 learning_loop")
-    # 🔴 2026-05-29 流程贯通（断点 5）：--report-cluster 已删（无 plan/命令调用方）
+                    help="cluster 级 learning_loop")
     ap.add_argument("--build-cluster-summary", type=str, metavar="CLUSTER_KEY",
-                    help="v2 账本: 把整 cluster 的富摘要预算写入 故事块摘要.json（走 cluster_summary_builder）")
-    # 🔴 2026-06-29 场景级Appraisal Beat(chain-of-emotion)
+                    help="把整 cluster 的富摘要预算写入 故事块摘要.json")
     ap.add_argument("--apply-appraisal-beats", type=str, metavar="CLUSTER_KEY",
-                    help="🔴 2026-06-29: summarizer 产的 appraisal_beats 确定性回填 叙事节拍器.json"
+                    help="把 summarizer 产出的 appraisal_beats 确定性回填 叙事节拍器.json"
                          "（chain-of-emotion·只 active cluster·幂等·required STATE·未产则 exit2）")
-    # 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)
     ap.add_argument("--apply-dramatic-questions", type=str, metavar="CLUSTER_KEY",
-                    help="🔴 2026-06-29: foreshadower JudgeReport 的 dramatic_questions 确定性回库"
+                    help="把 foreshadower JudgeReport 的 dramatic_questions 确定性回库"
                          " 戏剧问题账本.json（PITQ/MDQ·读者粘性·只 active cluster·按 qid 幂等去重·"
                          "required STATE·未产则 exit2）")
-    # 🔴 2026-07-07 S10 递归卷级层级摘要（Ex3 摘要金字塔 + source 回溯）
     ap.add_argument("--detect-volume-boundary", type=str, metavar="CLUSTER_KEY",
-                    help="🔴 S10: 卷边界确定性检测（既有信号：某卷 ME 池非空且全部 status=completed"
+                    help="卷边界确定性检测（某卷 ME 池非空且全部 status=completed"
                          " 且 故事块摘要.volume_summaries 尚无该卷）→ 写 .wal/<cid>_volume_boundary"
                          ".json 供主代理条件 spawn novel-summarizer MODE=volume·无边界=零行为变化")
     ap.add_argument("--apply-volume-summary", type=str, metavar="VOLUME_N",
-                    help="🔴 S10: 卷级摘要回库唯一入口——读 .wal/volume_<N>_summary.json 校验"
+                    help="卷级摘要回库入口——读 .wal/volume_<N>_summary.json 校验"
                          "（结构键钉死 + source 必须恰好覆盖本卷全部 cluster_ids + 卷真闭合）"
                          "→ 幂等 upsert 故事块摘要.volume_summaries[]·不合格 exit2 零写入")
     args = ap.parse_args()
@@ -1809,14 +1657,9 @@ def main():
         logger.info(f"项目路径不存在: {root}")
         sys.exit(2)
 
-    # 2026-05-29 复审修复 [H3/M20]：原 dispatch 裸调用 cmd_*_cluster 丢弃返回码——
-    # cmd_apply_cluster_changes/cmd_ecas_checkpoint 返回 2(FATAL)/1(FAIL) 时进程仍 exit 0
-    # （谎报成功）。改为 rc = cmd_xxx(...); sys.exit(rc if isinstance(rc, int) else 0)，
-    # 覆盖 ecas-checkpoint / apply / git_commit / auto_post_reflect / build-summary 全分支。
+    # 子命令返回码原样传播给调用方。
     rc = 0
-    if args.ecas_checkpoint:
-        rc = cmd_ecas_checkpoint(root, args.ecas_checkpoint)
-    elif args.apply_cluster_changes:
+    if args.apply_cluster_changes:
         rc = cmd_apply_cluster_changes(root, args.apply_cluster_changes)
     elif args.git_commit_cluster:
         rc = cmd_git_commit_cluster(root, args.git_commit_cluster)

@@ -276,28 +276,6 @@
         }
       }
     },
-    "agent_model_routing": {
-      "type": "object",
-      "description": "v21 P7.1 model routing 用户层覆盖",
-      "properties": {
-        "writer_model": {
-          "type": "string",
-          "default": "claude-sonnet-4-6"
-        },
-        "writer_critical_model": {
-          "type": "string",
-          "default": "claude-opus-4-7"
-        },
-        "summarizer_model": {
-          "type": "string",
-          "default": "claude-haiku-4-5-20251001"
-        },
-        "use_extended_thinking_on_critical": {
-          "type": "boolean",
-          "default": true
-        }
-      }
-    },
     "advanced": {
       "type": "object",
       "description": "高级用户字段（向导跳过，default 通常 OK）",
@@ -320,84 +298,9 @@
         }
       }
     },
-    "ecas_config": {
-      "type": "object",
-      "description": "Event Cluster Auto Split 配置。当前链路固定启用 cluster-first，不提供关闭开关或旁路开关。",
-      "properties": {
-        "cluster_word_range": {
-          "type": "object",
-          "properties": {
-            "default_min": {
-              "type": "integer",
-              "default": 8000
-            },
-            "default_max": {
-              "type": "integer",
-              "default": 12000
-            },
-            "critical_event_min": {
-              "type": "integer",
-              "default": 13000
-            },
-            "critical_event_max": {
-              "type": "integer",
-              "default": 16000
-            }
-          }
-        },
-        "critical_events_use_opus": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^ME_[0-9]{3}$"
-          },
-          "default": [
-            "ME_010",
-            "ME_015",
-            "ME_017"
-          ],
-          "description": "用 Opus 4.7 (128K output + Extended Thinking) 的关键事件 ME ID 列表"
-        },
-        "extended_thinking_critical": {
-          "type": "boolean",
-          "default": true,
-          "description": "关键 ME 启用 Anthropic Extended Thinking"
-        },
-        "mid_checkpoint_interval": {
-          "type": "integer",
-          "default": 3000,
-          "description": "writer 每 N 字触发 self-audit checkpoint"
-        },
-        "max_checkpoint_failures": {
-          "type": "integer",
-          "default": 3,
-          "description": "累计失败 N 次后升级为 Opus + Extended Thinking 重写整簇"
-        },
-        "cluster_stop_frequency": {
-          "type": "string",
-          "enum": [
-            "after_each_cluster",
-            "after_turning_point"
-          ],
-          "default": "after_each_cluster",
-          "description": "走向卡停顿粒度：每事件簇 / 重大转折后。禁止 cluster 内按章节停顿。"
-        },
-        "sub_summary_enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "writer 每场景生成 100 字摘要注入下段头部 (LiM 缓解)"
-        },
-        "auto_cluster_size_estimation": {
-          "type": "boolean",
-          "default": true,
-          "description": "true=StoryBox 自适应 (model 自决字数) / false=按 cluster_word_range fixed"
-        }
-      },
-      "additionalProperties": false
-    },
     "narrative_style": {
       "type": "object",
-      "description": "v23+ 必问 - 叙事风格基础（wizard 前期必问，否则系统不能擅自决定）",
+      "description": "叙事风格基础；outline 开工前必须由用户确认",
       "required": [
         "pov"
       ],

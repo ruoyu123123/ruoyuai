@@ -780,7 +780,7 @@ def main():
 if __name__ == "__main__":
     # 🔴 2026-06-27：直接 CLI 调用时 Windows GBK 控制台编码不了 print 里的 ✅/🔴/🟡 emoji →
     # UnicodeEncodeError 崩（orchestrator 路径有 PYTHONIOENCODING=utf-8 掩盖·裸调用崩）。
-    # 入口强制 UTF-8 输出（对齐 split_cluster_changes / judge_runner __main__）。
+    # 入口强制 UTF-8 输出。
     for _s in (sys.stdout, sys.stderr):
         try:
             _s.reconfigure(encoding="utf-8", errors="replace")

@@ -18,7 +18,7 @@ held-out validation 严格优于才升级,bounded edit 控破坏,reject buffer �
 北极星纪律:
 - ① 优化对象=作者风格档(skill.md),不引入新硬约束
 - ⑤ reward 只看 binary 现有信号,不干涉模型创作判断
-- ⑥ 替换 dimension_evolver/lesson_extractor(蒸馏端)
+- ⑥ SkillOpt 是风格 skill 的唯一训练入口
 """
 
 __version__ = "0.1.0-stage0"

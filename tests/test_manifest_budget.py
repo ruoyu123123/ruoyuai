@@ -350,7 +350,7 @@ def test_meta_sections_never_trimmed():
     """META（身份/机器元数据）永不进裁剪队列。"""
     with _budget_env(HARD_KB="2"):
         m = _synthetic_manifest(
-            writer_mode="freestyle_v27",
+            writer_mode="claude_draft_gemini_polish_v29",
             _cache_layout={"STATIC_99_cacheable": ["deep_writing_dims"], "_doc": _cjk_str(100)},
             world_state_snapshot={"desc": _cjk_str(2000)},
         )

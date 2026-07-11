@@ -96,7 +96,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1
 
 读 `章节/cluster_<key>_draft/cluster_<key>_changes.json` 的 `self_eval` / `waivers` 段（writer 整块产出的**创作期自评 / 豁免** + 确定性遥测 · **不含 factual 状态自报**——cluster 级 factual 由第 5 步 archivist 读正文梳理回库，喂 audit 的是创作自评不是 factual）。
 
-> **2026-05-29 复审修复[L18]**：实现真相 —— `save_state.cmd_apply_cluster_changes` 会**展开本 cluster 的 chapter_range，逐章调 `cmd_parse`**，每章落地 `_数据库/.wal/第<N>章_parsed.json`（per-chapter，非单文件）+ 一份 cluster 级 `_数据库/.wal/<key>_apply_cluster.json` 汇总。**不存在** `cluster_<key>_parsed.json` 这个文件（旧文档幻影命名，已删）。
+`save_state.cmd_apply_cluster_changes` 展开本 cluster 的 `chapter_range`，逐章调用 `cmd_parse`，每章落地 `_数据库/.wal/第<N>章_parsed.json`，并写一份 cluster 级 `_数据库/.wal/<key>_apply_cluster.json` 汇总。
 >
 > 解析无独立 CLI 命令——第 3 步 `--apply-cluster-changes` 内部一并完成（apply 前必先 parse）。本步只做 plan 记账。
 
@@ -215,7 +215,7 @@ python core/scripts/apply_archive.py "<项目路径>" --cluster <key>
 
 把 archive.json 落到 人物卡 / 角色池 / 道具 / 关系 / 事件簇.clusters[].locked_facts + 事件簇.clusters[].throughline_progress + character_belief_ledger.json + 反派轮替.json + 角色弧线.json + cluster_actant_ledger.json（复用已有 id，绝不为同一角色造第二个 id）。
 
-> 🔴 这是 factual 回库的**唯一权威路径**：writer 已不自报 factual（gen_writer 已删 factual 自报 · save_state 已停读 writer factual）——角色/道具/关系/locked_facts/throughline/角色信念(belief_ledger)/反派轮替(反派轮替.json)/主角力量 tier(角色弧线.json)/六位 actant(cluster_actant_ledger.json) 的权威源 = archivist 读正文，非 writer changes。`apply_antagonist_rotation` + `apply_protagonist_power_tier` + `apply_actant_state` 确定性 append（前者按 cluster_id+antagonist_id 去重、中者按 pid 的 series cluster_id 去重、后者按 cluster_id 去重替换·幂等；无对应变化时由 archive 的合法空结构证明）。
+这是 factual 回库的**唯一权威路径**：角色、道具、关系、locked_facts、throughline、角色信念、反派轮替、主角力量 tier 和六位 actant 都以 archivist 读取正文生成的 archive 为源。`apply_antagonist_rotation`、`apply_protagonist_power_tier`、`apply_actant_state` 以 cluster_id 和实体 id 幂等写入。
 >
 > 🔴 **硬停**：archive 缺出场角色 = archivist 失败 = 错误 → apply_archive exit 2 → plan 硬停。幂等去重保留（re-apply 全已存在 → exit 0 成功）。
 

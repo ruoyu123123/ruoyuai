@@ -109,7 +109,7 @@ emergence + outline-planner 产的走向卡，outline-planner 自评常全 PASS 
 
 ## cluster 复刻 timeout 防御
 
-沿用 `cluster_segmenter` A' 半 cluster 教训（6 章 100% 502 EOF / 3 章 100% 成功）：cluster 复刻拆 **3 段 sub-call**（前半 / 后半 / 衔接段落），单 call ≤ 5000 字 / wall-clock ≤ 10 min。
+复刻由 Claude agent 按 skill 写 `claude_scenes/scene_*.txt`，`distill_replicate.py` 再逐场景调用 gemini 等体量润色并拼接终稿。
 
 ## cluster 评分维度（style_evaluator --mode cluster）
 
@@ -123,8 +123,8 @@ emergence + outline-planner 产的走向卡，outline-planner 自评常全 PASS 
 
 ## Article 6 写作端回灌（严闭环 · 不通过不出货）
 
-阶段 9（新增 plan step）：
-- 复刻产物 cluster txt → 灌 gen_writer.py --cluster 用 skill_FINAL 写同 cluster
+阶段 9：
+- 复刻产物 cluster txt → 用正式同栈写作链验证 skill_FINAL
 - 重跑 cluster_arc_aggregator → 与原 cluster_arc 比
 - 通过标准：reagan_shape ≤ 1 等价类偏差 / SFS 差 ≤ 5
 - 不通过 → distill_finalize_verify.py exit 2 → plan_tracker end 拦截
@@ -132,15 +132,9 @@ emergence + outline-planner 产的走向卡，outline-planner 自评常全 PASS 
 ## 红线
 
 1. ❌ 跳过 chapter / cluster 档直接 plan_tracker end → hook L3 拦
-2. ❌ cluster 复刻用 Claude sub-agent 而非 gen-model（沿用 v22.cluster.3 规则 11）
+2. ❌ Claude agent 直接写复刻终稿、绕过 `distill_replicate.py` 的 gemini 润色
 3. ❌ 已蒸馏书做 cluster 重测时改动 v1.x skill 原版（必须 fork 出 skill_FINAL_v2.md）
-4. ❌ 章程定型后 drill 模式不可复活（紧急救火走 --legacy-segment-only 一次性 flag + 留 lesson）
-
-## 实施阶段
-
-- **P0** 接口改造：distill_replicate.py + plan template + distill-style.md
-- **P1** 评分 + 回灌：style_evaluator.py cluster mode + distill_finalize_verify.py
-- **P2** 已蒸馏书升级：惊悚乐园 runbook 命令清单（用户手动跑）
+4. ❌ 复活单段 drill 旁路；复刻只接受 cluster 同栈入口
 
 ---
 
@@ -201,53 +195,19 @@ emergence + outline-planner 产的走向卡，outline-planner 自评常全 PASS 
 <!-- FEEDBACK_RULE: feedback_default_ecas_for_new_books.md -->
 ## feedback-default-ecas-for-new-books
 
-> description: 全局：新书项目默认启用 ECAS 故事块写作模式（事件簇.json + 用户偏好.ecas_config），不询问，不默认 single
+> description: 新书固定使用 cluster 主链，章节只由 splitter 在输出层生成
 
-新书项目默认启用 **ECAS 故事块写作模式**。`/outline` 时必须同时建：
-- `_数据库/事件簇.json`（schema v23.1，至少 cluster_001 含 scene_storyboard）
-- `_数据库/用户偏好.json` 顶层 `ecas_config: {ecas_enabled: true, cluster_word_range: {default_min: 16000, default_max: 22000}, mid_checkpoint_interval: 4500, ...}`
-
-**Why**：用户 2026-05-25 在《赖活》项目明确反馈"我不是强制要求走故事块生成吗，这里为什么又是按章节走了"——/outline 没问 ECAS 偏好默认走 single，是隐性违反用户意图的失误。事后用户实测 ECAS（18000 字一次性产出 + splitter 切多章）比 single（3000 字单章）章节节奏更连贯、伏笔铺设密度更高、writer 自由度更大。
-
-**How to apply**：
-- `/outline` 第 3 步 init-13-databases 必须建 事件簇.json（至少占位）+ 用户偏好.json.ecas_config
-- 不问"要不要 ECAS"，直接默认开
-- 用户明确说"按单章写"或"single 模式" → 才不开
-- cluster_001 默认覆盖 ch1-3/4/5 黄金三章一簇（具体几章看 ME 推进节奏）
-- ecas_config 默认值：
-  ```json
-  {
-    "ecas_enabled": true,
-    "cluster_word_range": {"default_min": 16000, "default_max": 22000, "critical_event_min": 20000, "critical_event_max": 26000},
-    "extended_thinking_critical": true,
-    "mid_checkpoint_interval": 4500,
-    "max_checkpoint_failures": 3,
-    "cluster_stop_frequency": "per_cluster",
-    "sub_summary_enabled": true,
-    "auto_cluster_size_estimation": true
-  }
-  ```
-- 模板见 `core/claude-home/templates/examples/scp_anomaly_bureau/事件簇.example.json` + `用户偏好.example.json`
+新书固定走 `/write → /outline → /cluster-write → /cluster-save-state → 走向卡 → /export`。
+`/outline` 必须初始化 `_数据库/事件簇.json`，只详化 `cluster_001`；writer 不接收目标章数，
+splitter 在 cluster 完成质检后按字数生成物理章节。用户偏好只控制叙事与节奏，不提供关闭
+cluster 主链、固定 cluster 字数或 writer checkpoint 的开关。
 
 **相关规则**：
 - [[feedback-default-world-evolution-for-new-books]] 新书默认启用世界演化
 - [[feedback-no-investigation-no-voice-universal]] 没调查没发言权（/outline 时该问 ECAS 偏好就问）
-- [[feedback-one-sentence-per-paragraph]] 一段一句末结束符（ECAS 写作时强制）
+- [[feedback-one-sentence-per-paragraph]] 一段一句末结束符
 
 **翻车实例**：《赖活》v1 single 模式（4 轮 polish 才放行）→ 用户拒收 → 切 ECAS v2（1 次 polish 通过 + 自然涌现 2 个有戏 NPC + 节奏更克苏鲁）→ 用户认可 ECAS 是正解。
-
----
-
-<!-- FEEDBACK_RULE: feedback_default_model_opus46_1m.md -->
-## feedback-default-model-opus46-1m
-
-> description: "子代理/并行任务/工作流统一继承会话当前模型，不做省钱降级；具体型号随会话变化不要硬编码"
-
-子代理/并行任务/工作流统一跟随**当前会话的默认模型**，不做 sonnet/haiku"省钱降级"。
-
-**Why:** 用户 2026-06-18 明确指定过子代理不要降级到更便宜的模型（当时会话默认是 opus-4-6）。但具体型号会随 Anthropic 发布新模型而变（2026-07-01 观测到环境模型列表已变为 Fable 5 / Opus 4.8 / Sonnet 5 / Haiku 4.5，不再有 opus-4-6），硬编码旧型号名会很快过期、且可能在新环境里根本不存在。规则的本质是"不要降级"，不是"锁定某个具体版本号"。
-
-**How to apply:** spawn Agent / Workflow 时默认**不传 model 参数**（自动继承会话当前模型，这也是工具本身的默认行为）。仅当任务明确需要更强或更快的档位时才显式传 `model` 覆盖（如高难度判断用更强档、机械性批量任务用更快档），且随时以系统提示里当次列出的最新型号为准，不要照抄本memory或历史对话里出现过的旧型号字符串。
 
 ---
 
@@ -723,63 +683,6 @@ python core/scripts/migrate_data_model_v2.py <project> --rollback _数据库.bak
 
 ---
 
-<!-- FEEDBACK_RULE: feedback_gui_removed_streamlined_2026_06_20.md -->
-## feedback-gui-removed-streamlined-2026-06-20
-
-> description: "🔴 2026-06-20 用户决策 A 方案：GUI 整层删除·主代理 Claude Code CLI 唯一入口·同批回滚 BYOK Claude / Anthropic 协议·收回 OpenAI/gemini 双协议主体不动"
-
-**用户决策**：A 方案 — 砍 GUI 程序驱动层，回归主代理（Claude Code CLI）唯一入口形态。
-
-**Step 1 commit 清单（本批落地）**：
-
-1. **整文件删除**
-   - `core/gui/`（__init__/app/runner/state/widgets/theme/single_instance·7 文件）
-   - `ruoyu_gui.py`（GUI 启动器）
-   - `packaging/`（ruoyu_gui.spec / frozen_smoke.spec / build_all.py / validate_gui_exe.py / frozen_smoke.py / _smoke_inproc_target.py / 使用说明.md·8 文件）
-   - `tests/gui/`（test_gui_dashboard / db_viewer / distill / newbook / settings / single_instance / user·7 测试）
-   - `tests/test_gui_state.py` / `test_gui_logging.py` / `test_gui_concurrency_stress.py`
-   - `tests/test_packaging_frozen_smoke.py`
-   - `tests/test_llm_transport_anthropic.py`
-   - `tests/test_plan_corrupt_visibility.py`（GUI Plan 页专属·主代理直接读 plan_tracker JSON 无需）
-
-2. **BYOK Claude / Anthropic 协议回滚**
-   - `secrets_store.py` 删 `SERVICE_CLAUDE`/`_CLAUDE_USERNAME`/`get_claude_key`/`set_claude_key`/`has_claude_key`/`delete_claude_key`。保留 `SERVICE='ruoyuai-gen-model'` 主 key + `SERVICE_SEARCH='ruoyuai-search'` 联网调研 key。
-   - `llm_transport.py` 删 `build_anthropic_body` + `_stream_once_anthropic` + dispatch elif anthropic 分支 + `_record_token_usage` anthropic 字段映射。OpenAI / gemini 双协议主体完全保留。
-   - `cross_family_judge_check.py` 降级 stub：所有路径返回 `status='skipped'` + reason 含「BYOK Claude path removed — awaiting inline file protocol (phase 2)」。删 `_resolve_claude_key`/`_has_claude_key`/`_build_claude_profile`/`_call_claude_judge`/`_build_system_for_judge`/`_build_user_for_judge`/`ELIGIBLE_JUDGES` 留作 gate 用·`maybe_run` 入口契约不变（orchestrator hook 零改）。
-
-3. **测试 / 配置同步**
-   - `tests/test_secrets_store.py` 删 `test_claude_key_roundtrip_isolated_namespace` + `test_claude_key_empty_set_is_delete`。
-   - `tests/test_cross_family_judge_check.py` 重写为 7 守门测试（off/ineligible/non-finale/no-draft/默认 shadow / active 触发 stub / shadow 触发 stub）。
-   - `tests/test_book_complete.py` 删 `from core.gui import state as gs` + `test_scan_project_detects_book_complete` + `test_scan_project_normal_book_not_flagged`。完本契约本身保留。
-   - `tests/test_feedback_fallback.py` 删 `test_spec_collects_lessons_md_dir`（依赖已删的 packaging/ruoyu_gui.spec）。
-   - `tests/conftest.py` 删 `pytest_plugins=['nicegui.testing.user_plugin']`。
-   - `tests/run_tests.py` 删 `RUOYUAI_GUI_LOG_DISABLE` env 注入 + tests/gui pytest 委托段。
-   - `requirements.txt` 删 nicegui>=3.13.0 + pywebview 行。
-
-4. **memory 同步**
-   - `project_gui_layer_nicegui` 头部加 DEPRECATED 标记 + A 方案回滚说明。
-   - `project_byok_keyring` 头部加 A 方案回滚段（删 SERVICE_CLAUDE/Anthropic 协议）。
-
-**北极星贴合**：① 不破坏 gen_writer / cluster_write / distill-style 主流程（grep `import core.gui` 主流程零命中）·② llm_transport 双协议（OpenAI / gemini）完全保留 token_ledger 主轨不动·③ secrets_store 主 key 部分完全保留·④ 旧码清理（北极星⑥）。
-
-**保留 hook 占位（下一 phase 改造）**：
-- `orchestrator.py` `default_judge_dispatch` 末尾对 `cross_family_judge_check.maybe_run` 调用契约保留（永远拿到 skipped）·下一 phase Simplify 改写为 inline 文件协议（主代理 Claude Code 自身读 draft + judge prompt 后写 `_数据库/.wal/claude_verdict_<sha>_<name>.json`）。
-- `core/scripts/frozen_util.py` 暂保留（被 32 个脚本 import 当 child_python 抽象层·dev path no-op 等价 sys.executable·遗漏整删风险高·后续 /clean 批清扫）。
-- `orchestrator.py` 行 247/337/355/361/366/644/697/737 GUI 字样代码注释（行为注释·不影响功能）暂留·后续 /clean 批一并清理。
-
-**测试基线**：pytest 5307 passed 0 failed（与回滚前同步）。
-
-**残留 / 后续 phase**：
-- inline 文件协议设计（cross_family_judge_check 真正接入 · orchestrator hook 读 claude_verdict_*.json 做 agree/disagree 比对）
-- frozen_util 整删 + 把 32 处 child_python 调用回退到 `[sys.executable, ...]`
-- 清理 orchestrator GUI 行为注释 + cluster_choice_apply / cluster_emergence_engine / gen_writer / gen_model / log_util / ingest_author_text 等 GUI 字样注释
-- 删 `STRUCTURE.md` 第十节 + `PROGRAM_DRIVEN.md` GUI / 打包章节
-- 清理项目根 build/ + dist/（已删未跟踪目录）
-
-关联 [[project-gui-layer-nicegui]] [[project-byok-keyring]] [[project-program-driven-layer-v28]] [[project-packaging-ruoyuai-standalone-exe]]
-
----
-
 <!-- FEEDBACK_RULE: feedback_inverted_modifier_sentence_mold_overuse.md -->
 ## feedback-inverted-modifier-sentence-mold-overuse
 
@@ -1176,18 +1079,13 @@ reading-reflector 在《全城公测，就我开了双号》cluster_001 抓到�
 
 🔑 **用户原话（2026-06-17）**：「有需要api的测试就老老实实用api来调用，不用节省，并且maxtoken也拉到最大，省这个没必要」。
 
-## 当前执行纪律（2026-07-10 权威）
+## 当前执行纪律
 
 - 需要验证模型行为时必须调用真实 API，禁止 mock、假 LLM 或缩小 token 预算冒充验证；设置 `RUOYU_RUN_REAL_API=1`，使用 active profile 的最大 `max_tokens`，reasoning 模型沿既有 profile 使用 `thinking_level=LOW`。
 - 调用前先跑 `py -X utf8 core/scripts/gen_model_loader.py diag`，确认 active profile、keyring/.env 一致；不得打印、写盘或提交完整 key。
-- commit `0c94750` 已随 program-driven/orchestrator 架构物理删除 `tests/real_api/*.py`；commit `a3061e5` 又删除残留 README。**这些旧路径和命令不是当前入口，禁止继续引用或复活。**
 - 当前唯一合格的真实 API e2e 是实际创作主链：通过 `/outline` 新建一次性验证书并完成 13/13 required，再跑 `/cluster-write` 7/7、`/cluster-save-state` 14/14，确认走向卡产生 2-3 个候选并完成用户选择。不得另建孤立 harness、旁路命令或程序驱动器。
 - 任何 agent 声称完成后，Leader 必须独立执行 `py -X utf8 core/scripts/plan_tracker.py list --active` 和 `py -X utf8 core/scripts/plan_tracker.py status "<plan_id>"`，用它们核对 plan 身份、required 进度、防篡改 attestation 和步骤 error。随后必须另查 plan JSON、真实 expected artifacts、audit reports 与运行日志，核对 expected outputs 实体、stderr/FATAL、hard_gate 残留和真实产物 provenance；`list/status` 不覆盖这些证据，不能只信 exit code 或 agent 汇总。
 - 只有“候选通过北极星闸+独立怀疑者并完成集成”才触发一次性新书真 API 验证。本轮无候选通过，因此不调用 API 是条件未触发，不是用 mock 降级。
-
-## 历史证据（入口已退役，结论仍有效）
-
-2026-06-17 的旧 `tests/real_api` 套件曾用真模型抓到 fake 测不到的截断、schema、短稿/pending-tail 和端点故障，证明“真 API 不可省”这条纪律正确；但这些脚本依赖后来被删除的 orchestrator/judge_runner 架构，只保留为历史证据，不能当当前运行说明。
 
 对标 [[feedback-verify-stderr-not-exitcode]]、[[feedback-no-token-saving]]、[[project-genmodel-flash-locked]]。当前验证书基线见 [[project_realapi_validation_loop_2026_07_07]]。
 
@@ -1264,39 +1162,6 @@ reading-reflector 在《全城公测，就我开了双号》cluster_001 抓到�
 
 ---
 
-<!-- FEEDBACK_RULE: feedback_single_mode_deprecated.md -->
-## feedback-single-mode-deprecated
-
-> description: 全局写作硬规则——novel-writer 不允许走 single 模式（v25+），必须 ECAS（≥4章故事块）或 DCAS（双章）；outline 必须把 cluster_001 的 ch1-N 全部填到 chapter_plan
-
-# Single 模式废弃 · 强制 ECAS 默认
-
-**用户原话**（2026-05-26）：「我要的是故事块模式，系统中哪里触发的单章模式，全给我修成故事块的」「我要清理掉单章生成的模式，让单章生成没有生存空间」
-
-**Why**：
-- single 模式（单章直写）会绕过 cluster 级伏笔/voice/anchor/scene_storyboard 完整性校验
-- 之前翻车：cluster_001 user 选了 ECAS，但 outline 阶段 chapter_plan 只填了 ch1 单条 → novel-writer wrapper agent 按文档第 52 行"chapter_plan 单条→single"判定走 single → 产出绕过 cluster 级倒叙重组（in_medias_res），ch1 字数被压到 2500-5000 范围（应是 13000-22000 cluster 范围）
-- 根因 3 处：
-  1. **novel-writer.md** 给了 single 模式生存空间（已删 v25+）
-  2. **outline plan-step 3** 没强制初始化 cluster_001 的 ch1-N 全占位（已加约束 v25+）
-  3. **用户偏好.json** 缺 `ecas_config.ecas_enabled=true` 默认（已修 schema 默认 true）
-
-**How to apply**：
-1. **outline 阶段**：初始化 cluster_001 时**必须**同时在 `进度.json.chapter_plan` 写入 ch1-ch_N 全部占位条目（N=`事件簇.clusters[0].chapter_count_estimate`，默认 4）；每条 cluster 字段 == "cluster_001"
-2. **novel-writer wrapper**：spawn 前 Step 1 强制 enforce — `len(cluster_chapters) == 1` 且无 `.allow_single_mode.flag` → **fail-fast**，主代理必须先补占位再 retry
-3. **用户偏好.json** 必须含 `ecas_config.ecas_enabled = true`（v23 默认；旧项目升级时补）
-4. **写章节时**用 `/cluster-write`（cluster mode 推荐）而非 `/write-chapter`（兼容用，单 cluster 单写）
-5. **紧急旁路**（罕用）：`touch <PROJECT>/_数据库/.allow_single_mode.flag` 才允许降级，仍强制 DCAS（≥2 章），从不允许真正 single
-
-**禁令**：
-- ❌ 不再 spawn novel-writer 仅传 1 章 chapter_plan
-- ❌ 不在 outline plan-step 3 完成时只填 ch1 单条
-- ❌ 不在 chapter_plan 中放孤立的不带 cluster 字段的 ch 条目
-
-**实证**：本次 cluster_001 ch1 用 single 模式产出 5942 字（target 2500-5000），错过整 cluster 倒叙重组机会，绕过 4 个关键伏笔（fs_003 / fs_005 / fs_006 / fs_008）的 cluster 级埋点；reading-reflector 报 8 issue（包括 RR_006 SAN 锁定伏笔被淹没），就是 cluster 级 context 缺失症状。
-
----
-
 <!-- FEEDBACK_RULE: feedback_smart_side_characters_no_dumbing_down.md -->
 ## feedback-smart-side-characters-no-dumbing-down
 
@@ -1330,48 +1195,6 @@ reading-reflector 在《全城公测，就我开了双号》cluster_001 抓到�
 - 遇到这种情况优先用 SendMessage **resume** 该agent（不是重新spawn，可以省一点已经做的分析工作）：message 里要明确点破"你没有队友/team-lead——这些都不存在，你是唯一独立处理这些文件的agent"，重申完整文件清单和输出格式要求，并明确说"不要再提等待/核实/批次/队友，直接给出最终结果"。
 - 若 resume 后仍不理想（比如只交付了分配文件的一部分、或又开始扯团队协作），更干脆的做法是**放弃修救这个agent，直接对同一批文件重新spawn一个全新agent**，prompt 里加一句"之前处理同样任务的agent错误地虚构了一个协作团队并只完成了一小部分，这次必须你自己独立、直接、完整地做完"——实测这样反而比反复 resume 更快更干净。
 - 两种应对方式（本次分别各用了一次）都在几分钟到十几分钟内成功拿到了完整、高质量的交付，不算严重故障，只是需要留意每个背景agent的交付内容是不是"真报告"而不是"元协作噪音"——不能只看到 task-notification 的 status=completed 就假设内容有效，要读一遍确认它真的产出了要求的东西。
-
----
-
-<!-- FEEDBACK_RULE: feedback_v27_writer_freestyle_splitter_word_cut.md -->
-## feedback-v27-writer-freestyle-splitter-word-cut
-
-> description: 🔴 v27 全局：writer 不知章数+字数自由发挥 / splitter 按字数硬范围 3000-4500/章切 / 末章<3000 退回 pending_tail 等下 cluster 拼
-
-# v27 三件套：writer freestyle + splitter 字数切 + pending_tail 补料
-
-**用户原话（2026-05-27）**：
-> 「故事块能切多少章我发现你一开始已经间接限制死了，这是不对的，应该让ai自由发挥，只要不脱离既有事实和大势，然后根据生成内容的字数，按照固定范围字数进行切割（一定程度上要参考最佳切割点），最后一章切出来字数不够就拿下一个故事块生成后的内容来补一些，这个补也是要放在切割的过程中」
-
-**Why**：cluster_001-005 锁死 expected_word_range + estimated_chapters → writer 硬凑/硬塞字数 → cluster_005 round 1 cascade 排比末段拒 final_pass。让 AI 按 scope_summary 自由发挥 + splitter 按字数硬范围切 = 章节边界更自然。
-
-**How to apply**：
-1. **writer 默认 freestyle**：`gen_writer.py` 不传 `--chapter-end` / `--target-cjk` → prompt 不暴露目标章数 + 字数（writer 按 scope_summary 自由发挥）
-2. **splitter MODE=ecas_freestyle**：按字数硬范围 3000-4500/章自动算 N · 不接受 TARGET_CHAPTERS
-3. **末章 pending_tail**：末章 < 3000 退回 `cluster_<key>_pending_tail.txt` · 不切章 · 下 cluster 写完后 prepend 联合切
-4. **outline step 1.7 AskUser**：每卷 cluster 数由用户决定（不预设） · 反推 ME 池数量
-5. **schema 字段降级**：`expected_word_range` 移出 required（保留 advisory hint） · `estimated_chapters` / `chapter_range` 标 deprecated（splitter 切完自动填）
-6. **向后兼容 v26**：`_writer_mode: "locked"` 走旧锁字数路径（显式选才走 · 默认 freestyle）
-
-**实施清单（v27 已改文件）**：
-- `core/scripts/gen_writer.py`（CLI optional + build_prompt freestyle 分支 + _infer_cluster_start_ch）
-- `core/claude-home/schemas/event_cluster_schema.json`（required 移 ewr + 加 _writer_mode）
-- `.claude/commands/outline.md`（step 1.7 AskUser 卷级 cluster 数）
-- `.claude/agents/novel-outline-planner.md`（cluster brief 模板加 _writer_mode 默认 freestyle + 删字数预算硬约束段）
-- `.claude/agents/novel-chapter-splitter.md`（加 ecas_freestyle 模式 + Step F pending_tail）
-- `.claude/commands/cluster-write.md`（step 6 加 v27 freestyle 分支 + pending_tail 检测）
-- `CLAUDE.md`（大纲章数 fluid 段升级 + v27 三件套段）
-
-**禁令**：
-- ❌ 在 cluster brief 写 `chapter_count_estimate` / `chapter_range` / `expected_word_range` 硬约束字段（v27 已 deprecate）
-- ❌ writer 写时预设章数（writer 不应知道目标章数）
-- ❌ pending_tail.txt 当独立章节文件（不写 章节/第NNN章/ 目录）
-- ❌ splitter 跳过 pending_tail 机制硬切末章（末章 < 3000 必须退回）
-
-**例外**：
-- 短篇 / IP 改编已定顺序 / 用户明示 `_writer_mode: "locked"` → 走 v26 兼容模式
-
-详见 lesson [[v27-writer-freestyle-splitter-word-cut-pending-tail]]。
 
 ---
 
@@ -1419,17 +1242,13 @@ reading-reflector 在《全城公测，就我开了双号》cluster_001 抓到�
 <!-- FEEDBACK_RULE: feedback_writer_forbid_flash_fallback.md -->
 ## feedback-writer-forbid-flash-fallback
 
-> description: 🔴 写正文绝不能静默降级到 flash(碎句差模型)·pro 全挂宁可响亮失败让主代理重试·creative-guard 已加
+> description: 正文与复刻润色只使用 pro 级模型；可用候选耗尽时立即失败，不静默降级到 flash。
 
-**用户原话**（2026-06-28 钟楼弃儿 cluster_002）：「不对，这是调用了flash，不是说flash的性能要差吗」——用户发现 cluster_002 是 flash 写的，质量不可信。
-
-**Why**：写正文是质量攸关环节，gen-model 锁定 gemini-3.1-pro-preview 正因为 flash 碎句、性能差（见 [[project-genmodel-flash-locked]]）。fallback 链 `gemini_pro_preview→gemini_pro→gemini_flash` 有两个坑：① pro_preview 瞬时 502(中转站网关) 就掉链；② 中间 `gemini_pro` 渠道**持久 503 model_not_found**（该 distributor 组没这模型）→ 等于 pro_preview 一闪断就**直接静默掉到 flash 写正文**。实测 cluster_002 的 changes `generated_by_model: gemini-3.5-flash`。silent fallback 降质 = 违背锁 pro 的整个决策。
-
-**How to apply**：
-- **写正文(gen_writer)绝不静默用 flash**。已加 `_filter_creative_profiles`：写作候选剔除 model/name 含 'flash' 的 profile（`call_gen_model`/`best_of_n_pipeline`/`generate_n_drafts` 全传 `creative=True`）。pro-tier 全挂 → 响亮 `GenModelExhaustedError`（主代理看到 FATAL→等中转站恢复后重试），**绝不静默降质**。紧急旁路 `GEN_WRITER_ALLOW_FLASH=1`。回归锁 `tests/test_gen_writer.py::test_creative_guard_excludes_flash_tier`。commit 6555345。
-- **撞到 flash 写的稿必须重写**：删 draft + 切出的章 → 用 pro 重跑（apply 前发现的话 state 没被污染）。验证用 `grep generated_by_model changes.json`。
-- **诊断**：撞写作偏短/质量差先查 `changes.json` 的 `generated_by_model`——若是 flash 说明 pro 当时挂了 fallback 了。`gemini_pro`(中间档)持久 503 是中转站配置问题（该 profile 形同虚设·只剩 pro_preview→flash 两跳）。
-- **非创作任务**（judge/scanner 走 gen-model）flash 兜底可接受（更机械）·只有写正文/复刻这种创意生成禁 flash。
+**当前规则**：
+- `gen_writer` 和复刻润色调用必须传 `creative=True`，由 `_filter_creative_profiles` 排除 model/name 含 `flash` 的候选。
+- pro 级候选全部失败时抛出 `GenModelExhaustedError`，由主流程记录失败并重试，不产出降质正文。
+- `changes.json.generated_by_model` 保存实际使用模型，供运行时审计。
+- judge、scanner 等非创作任务可按各自合同使用低成本模型；不得把该策略扩展到正文或复刻润色。
 
 ---
 

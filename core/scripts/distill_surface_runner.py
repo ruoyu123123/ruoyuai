@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""distill_surface_runner.py — phase-1 表层蒸馏综合器（synthesize-only）。
+"""phase-1 表层蒸馏的确定性综合器。
 
-# 🔴 2026-06-28 移除exe/gen-model梳理方向
-原本本脚本"自主把 novel-distill-analyzer 派 gen-model(judge_runner.run_judge)"逐 cluster
-产 48 维 surface JSON。新架构下 48 维分析（梳理/判断）由**主代理 spawn Claude agent**
-(novel-distill-analyzer) 完成并把 surface JSON 落盘，本脚本只做确定性综合：
+novel-distill-analyzer 负责生成每个 cluster 的 48 维 surface JSON；本脚本负责：
 
-  ① （主代理已完成）每 cluster surface JSON 落盘 蒸馏进度/cluster_{key}_surface.json
-  ② 读盘取 surface（生产路径 judge_fn=None）；测试/旧注入路径可传 judge_fn 回调自产
+  ① 读取 蒸馏进度/cluster_{key}_surface.json
+  ② 测试可通过 judge_fn 注入 surface 数据
   ③ 从 surface 的 continuity 段写 衔接分析/cluster_{key}_continuity.json（arc_aggregator 消费）
   ④ 逐章投影 蒸馏进度/ch{N}.json（word_count 从 chN_metrics·dims 引 cluster 级·arc_aggregator 读）
   ⑤ _aggregate_author_profile 确定性聚合全部 surface → 作者风格.json 初版
@@ -30,19 +27,14 @@ if str(_SCRIPTS) not in sys.path:
 import distill_prep_cluster_text as prep  # noqa: E402
 
 
-# 阶段0 修复（聚合通路·已核实 bug）：judge 的 qualitative_dims 是**扁平** dim 键，而
-# consolidate_author_profile.aggregate_narrative 读的是**嵌套** cross_chapter /
-# narrative_craft / narrative_fingerprint。程序驱动管线只写扁平 qualitative_dims →
-# consolidate 读空 → narrative_craft/narrative_fingerprint/cross_chapter_diversity 全空
-# （实测《人生长恨》三段皆空）。下面确定性把扁平 dim 归位成消费者期望的嵌套结构
-# （纯映射·弱模型不参与·键名与 judge schema 完全一致只是层级不同）。
+# 将扁平 qualitative_dims 映射为消费者要求的 cross_chapter、narrative_craft 和
+# narrative_fingerprint 嵌套结构。
 _CONSUMER_DIM_NEST = {
     "cross_chapter": ("dim16_开头类型", "dim18_章末类型"),
     "narrative_craft": ("dim33_情绪节拍图", "dim34_叙事距离变化", "dim30_留白潜台词"),
     "narrative_fingerprint": ("dim42_叙事技巧指纹", "dim43_角色行为循环",
                               "dim46_场景结构质量", "dim47_人物丰满度"),
-    # 阶段1 注：A1-A5 节奏组(dim49-53)是 cluster 级序列，逐章投影会重复污染聚合，
-    # 由 consolidate.aggregate_rhythm 直接读 cluster_*_surface.json 聚合，不在此投影。
+    # A1-A5 节奏组是 cluster 级序列，由 consolidate.aggregate_rhythm 直接聚合。
 }
 
 

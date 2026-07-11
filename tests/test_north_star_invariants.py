@@ -1,28 +1,17 @@
-"""北极星 6 原则的可执行不变量自检（🔴 2026-06-27 C08 · doc_contract 回归锁）。
+"""北极星 6 原则的结构级回归锁。
 
-【为什么有这个文件】北极星 6 原则此前只活在 CLAUDE.md 文档 + 散落注释里，
-全库 grep `north_star` 全是注释，无任何整体可执行自检。本文件把「接线是否存在 /
-单一真理源三方一致 / 已知反模式缺席」固化成机器可判的断言，让北极星从「口号」
-变「回归锁」。
+本文件只读源码和文档并调用纯函数，不接入创作运行时，不评价正文，不新增
+hard_gate，也不锁定 fluid 章数。断言失败时直接暴露契约漂移。
 
-【边界 · C08 北极星护栏】
-  · 只断言**结构/代码级不变量**（接线存在 · 单一真理源三方一致 · 已知反模式缺席）；
-    永不触碰创作内容，永不把 advisory 升 hard_gate，永不锁 fluid——它**执行**北极星⑤
-    （顾问非法官）而非违反⑤。
-  · 纯 dev/test-time 静态：只读源码 / 文档 + 调纯函数。绝不接 creative runtime /
-    PreToolUse hook，绝不对 diff 自动评「北极星合规分」。
-  · 某断言现实暂不成立（如三方清单已漂移）→ 标 assert 暴露真问题 / xfail，
-    **不硬改清单凑绿**。
-
-【覆盖 7 类不变量】
+覆盖 7 类不变量：
   ① 禁 f"cluster_{ch:03d}" 章号当 cluster 号机械拼接（cluster_lookup.py = 唯一权威反查）。
   ② chapter_splitter.py 不 import 任何 *_scanner / audit_hub（北极星④章节仅格式）。
   ③ 四方一致：audit_hub.HARD_GATE_CODES == STRUCTURE§12.2 == CLAUDE.md 清单
-     == scanner_registry.json hard_gate_codes（防各自另立·2026-07-05 registry 入锁）。
+     == scanner_registry.json hard_gate_codes，防止多处清单漂移。
   ④ _gate_level_for 只对 HARD_GATE_CODES 判 hard_gate + scanner 升格双闸守卫。
   ⑤ 自动豁免 / 降档路径必须强制忽略 hard_gate（锁现状·守北极星⑤）。
   ⑥ P0 风格链：audit_hub --style 透传 + gen_writer 无 [:8000] 截断 / 无写死默认风。
-  ⑦ 清旧码：带『死线』的 DEPRECATED/旧码标记未过期（过期未删=红灯·北极星⑥）。
+  ⑦ 带清理死线的 DEPRECATED 标记不得过期。
 
 🔴 改这 7 类不变量须同步改 test_north_star_invariants.py（CLAUDE.md 末尾亦有此提示）。
 """
@@ -52,7 +41,7 @@ def _read(p: Path) -> str:
 # f"cluster_{cluster_id:03d}" / f"cluster_{next_num:03d}" / f"cluster_{i+1:03d}" 等
 # 是合法的「cluster 号 → id 格式化」，不在禁列——只禁 ch（章号）当 cluster 号。
 _ANTIPATTERN = re.compile(r"""f(['"])cluster_\{ch:03d\}\1""")
-# 描述「禁令」本身的 doc/注释行标记（这些行引用反模式只为说明它被禁，非真实使用）。
+# 描述禁令的 doc/注释行只用于说明反模式，不算真实使用。
 _BAN_DOC_MARKERS = ("禁", "取代", "旧残留", "机械拼接", "反查", "章号拼接", "消灭")
 def _real_antipattern_files() -> dict:
     """返回 {文件名: [(行号, 行文本)]} —— 仅真实代码使用（排除注释 / 禁令描述行）。"""
@@ -139,7 +128,7 @@ def _claudemd_hard_gate_codes() -> set:
 
 
 def _registry_hard_gate_codes() -> set:
-    """从 scanner_registry.json 顶层 hard_gate_codes[] 抽取（2026-07-05 四方一致新增）。"""
+    """从 scanner_registry.json 顶层 hard_gate_codes[] 抽取。"""
     import json
     reg = json.loads(_read(_SCRIPTS / "scanner_registry.json"))
     codes = reg.get("hard_gate_codes")
@@ -149,8 +138,7 @@ def _registry_hard_gate_codes() -> set:
 
 def test_hard_gate_codes_four_way_consistent():
     """北极星⑤单一真理源：audit_hub.HARD_GATE_CODES == STRUCTURE§12.2 == CLAUDE.md 清单
-    == scanner_registry.json hard_gate_codes（2026-07-05 registry 曾漂移到 12 码 → 入锁变四方）。
-    任一漂移 = 各自另立 → 断言暴露（不硬改任一方凑绿）。"""
+    == scanner_registry.json hard_gate_codes。任一漂移都由断言暴露。"""
     code_set = set(audit_hub.HARD_GATE_CODES)
     struct_set = _structure_hard_gate_codes()
     claude_set = _claudemd_hard_gate_codes()
@@ -164,8 +152,7 @@ def test_hard_gate_codes_four_way_consistent():
     assert code_set == registry_set, (
         f"audit_hub vs scanner_registry.json 漂移 · 只在 audit_hub={code_set - registry_set} · "
         f"只在 registry={registry_set - code_set}")
-    # 数量哨兵（现状 19 · C03 2026-06-27 子系统载荷点火 3 码 · C18 2026-06-27 splitter 字数守恒 1 码入列）
-    # ——数量变动时强制人工复核四方同步
+    # 数量变动时强制人工复核四方是否同步。
     assert len(code_set) == 19, f"HARD_GATE_CODES 数量={len(code_set)}（预期 19）·变动须四方同改"
 
 
@@ -190,7 +177,7 @@ def test_gate_level_for_hard_gate_only_for_hard_gate_codes():
 def test_scanner_gate_upgrade_guarded_by_hard_gate_codes():
     """北极星⑤：两处 scanner 顶层 gate_level 升格双闸（_parse_issues_list_scanner +
     _parse_violations_scanner）都以 `code in HARD_GATE_CODES` 把关——防任意 scanner 在
-    清单外自立 hard_gate（locked_fact / foreshadowing_handoff 曾越权 sediment）。"""
+    清单外自立 hard_gate。"""
     src = _read(_SCRIPTS / "audit_hub.py")
     guards = src.count("and code in HARD_GATE_CODES")
     assert guards >= 2, f"scanner gate 升格双闸守卫数={guards} < 2（清单外越权升 hard_gate 风险）"
@@ -240,7 +227,7 @@ def test_gen_writer_no_prompt_truncation_no_hardcoded_default_style():
     assert "[:8000]" not in src, "gen_writer 不得对 prompt/作者档做 [:8000] 硬截断"
     for i, line in enumerate(src.splitlines(), 1):
         if "冷峻俯瞰" in line:
-            # 只允许出现在「删除/移除」记录性注释里，不得作为活的默认风字符串
+            # 只允许出现在否定性说明里，不得作为活的默认风字符串。
             assert ("删除" in line or "删" in line or "移除" in line), (
                 f"gen_writer.py:{i} 出现疑似活的『冷峻俯瞰』写死默认风：{line.strip()}")
 
@@ -249,7 +236,7 @@ def test_gen_writer_no_prompt_truncation_no_hardcoded_default_style():
 
 def test_deprecated_deadlines_not_expired():
     """北极星⑥及时清旧码：带『死线 YYYY-MM-DD』的标记不得过期（过期未删=红灯）。
-    现状仅 audit_hub.py 一条 stub 死线（未来日期）→ 绿；到期未清 → 此测试转红提醒清理。"""
+    到期未清理时测试转红。"""
     today = datetime.date.today()
     deadline_re = re.compile(r"死线\s*[:：]?\s*(\d{4})-(\d{2})-(\d{2})")
     expired = []

@@ -83,7 +83,7 @@ SCHEMA_RULES = {
         "item_required_fields": [],
     },
     # 2026-05-29 复审修复（L15）：实际 用户偏好.json 顶层是分组键
-    # （workflow_preferences / style_preferences / content_preferences / ecas_config），
+    # （workflow_preferences / style_preferences / content_preferences），
     # 多数项目无 preferences[] 数组，旧规则要求 preferences[] + item {id,key,value} 产生
     # 大量误报 advisory。改为：顶层不强制 preferences；preferences[] 存在时才校验为 list，
     # 不再要求 id/key/value（不同项目 schema 形态不一）。

@@ -29,10 +29,9 @@ PASS 漏掉 subtle 弱攻击面. 借鉴 Constitutional AI / debate (Irving et al
 【北极星⑤】顾问非法官·占位 scaffolding(真 LLM debate defer)·env ADVERSARIAL_JUDGE_PAIR_MODE
   默认 off·全 advisory·ADVERSARIAL_JUDGE_DEGRADED 绝不 hard_gate.
 
-【与既有 scanner 严格正交】
+【与其他 scanner 的边界】
   - meta_critic_audit        : 元批评单视角·正交
   - cluster_evaluator        : 单稿评估·正交
-  - parallel_rollout_arbiter : K 稿排序·正交
   - chapter_end_anchor_scan  : 章末钩子·正交(本=cluster finale 三角)
 
 用法: python adversarial_judge_pair.py <draft> --judge-report <path> [--cluster-brief <p>]

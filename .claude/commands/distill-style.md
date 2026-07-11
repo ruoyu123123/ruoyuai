@@ -76,7 +76,7 @@ $ARGUMENTS
   "character_continuity": [{"character": "", "first_appear_in": "", "arc_progress": ""}],
   "G_dimension_proposals": [
     {
-      "_doc": "自学习升级字段：agent 觉得现有 35+ 维度没覆盖但本章观察到的现象，结构化提议。由 SkillOpt 训练循环消费（替代已删除的 dimension_evolver）",
+      "_doc": "agent 对现有维度未覆盖现象的结构化提议，由 SkillOpt 训练循环消费",
       "proposed_dim_name": "<提议的 dim 名，如 dim50_metaphor_compression_ratio>",
       "observation": "<本章观察的具体现象 < 100 字>",
       "current_dims_missing": "<现有哪些维度本应覆盖但没覆盖到 / 与已有 dim 的区别>",
@@ -627,11 +627,6 @@ EvolveR (arxiv 2510.16079) offline self-distillation 闭环。
 | 5 cluster终验 | v29 同栈（Claude 场景稿 + `distill_replicate.py --claude-scenes-dir`） | `cluster_<id>_replica.txt` |
 | 6 出货+回灌 | `distill_finalize_verify.py --strict` | `作者风格_FINAL.json` + `skill_FINAL.md` |
 | 6.5 教训沉淀 | 主代理直接总结沉淀到 `distill-style-lessons.md` | 更新经验库 |
-| ~~6.7~~ | ~~已删除·SkillOpt 收编~~ | — |
 
 **详细维度说明**已程序化到 `core/scripts/style_profile_extractor.py` / `consolidate_author_profile.py`。
-**版本比较**（v10/v14/v16）属历史设计记录，不影响当前流程。
-
 ---
-
-<!-- 2026-06-18 系统整改：从2656行精简至~640行，删除历史设计废料（arc聚合详细实现/维度自演化设计/版本比较表/skill模板/增量更新设计），这些已下沉到脚本层 -->

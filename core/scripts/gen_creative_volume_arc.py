@@ -667,7 +667,7 @@ def _run_volume_arc(args) -> int:
     """
     import llm_transport as lt
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    # 🔴 2026-06-28 移除exe/gen-model梳理方向：从共享小模块取，解除创作链对 judge_runner 的依赖
+    # 作者风格档注入统一走共享模块。
     from author_profile_util import build_author_profile_block, AUTHOR_PROFILE_MISSING_GUARD
 
     project_root = Path(args.project) if args.project else None

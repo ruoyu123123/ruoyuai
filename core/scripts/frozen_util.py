@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
-"""frozen_util.py — 子解释器 / 资源路径解析（dev-only 单源）
+"""开发环境的子解释器与资源路径解析工具。
 
-# 🔴 2026-06-28 移除exe/gen-model梳理方向
-原 frozen exe（PyInstaller onedir）打包基础设施随 exe/程序驱动方向整体下线：
-- `is_script_dispatch()` / `dispatch_or_none()` 删除（后者曾 `import orchestrator` 做
-  frozen multi-call 进程内再分派；orchestrator 已删 → 该耦合一并清除）。
-- `child_python()` 直接返回 `sys.executable`（管线回到 Claude 主代理 spawn agent +
-  跑确定性脚本·子进程一律用当前真 python.exe）。
-- `bundle_root` / `scripts_dir` / `resource_path` / `user_data_dir` /
-  `user_workspace_dir` 去 frozen/_MEIPASS/APPDATA 分支，只留 dev 返回。
-
-**6 helper 签名保持不变**（30+ import 方零改动·dev 路径逐字节与历史一致）。
-`is_frozen()` 保留（外部模块仍按它判定·dev 恒 False）。
+`child_python()` 返回当前 Python；目录 helper 返回仓库内的脚本、资源、数据和工作区路径。
+`is_frozen()` 在当前运行形态下恒为 False。
 """
 from __future__ import annotations
 

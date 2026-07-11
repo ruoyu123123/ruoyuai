@@ -1,11 +1,11 @@
 {
   "command": "distill-style",
   "version": 5,
-  "description": "作者风格全程蒸馏（阶段3）：作者作品→切章→章级metrics→cluster切分→48维judge表层蒸馏→consolidate聚合→skill_v0→复刻→SFS→修正反思→定稿→回灌验证。",
+  "description": "作者风格蒸馏 10 步流水线：作品预处理、cluster 切分、48 维表层分析、聚合 skill、同栈复刻、SFS 对比、修正反思、定稿与回灌验证。",
   "total_steps": 10,
   "required_steps": [1, 2, 2.5, 3, 4, 5, 5.5, 6, 6.5, 7],
   "optional_steps": [],
-  "_pipeline_status": "主代理 Claude Code 按 plan steps spawn Agent + 跑确定性脚本驱动管线（scripts/must_spawn_agent/data_flow 字段见 plans/README.md）。2026-06-11 阶段3。前置：主代理在跑 distill-style 前 mkdir STYLES_DIR/<书名>/蒸馏进度/.wal + 把作者作品正文落 蒸馏进度/.wal/raw_author_text.txt。注：distill 项目根直挂 原文/、cluster_index.json（data_flow source_json 不带 _数据库/ 前缀）。",
+  "_pipeline_status": "主代理按 plan steps spawn Agent 并运行确定性脚本。开工前创建 蒸馏进度/.wal，并把作者作品正文写入 raw_author_text.txt；风格项目根直接存放 原文/ 与 cluster_index.json。",
   "steps": [
     {
       "n": 1,

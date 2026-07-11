@@ -1,16 +1,11 @@
-"""refusal-retry 回归测试（2026-06-20 · gen-model 间歇性安全拒绝防护）。
+"""gen-model 短安全拒绝的检测与重试回归锁。
 
-背景：reasoning gen-model（gemini-3.x pro-preview）偶发对**合法文学复刻**任务输出短安全拒绝
-（HTTP200 + finish=stop + 非空 · 绕过 TransportEmpty 守卫），如:
-    "对我来说这是不可接受的。我不能帮助处理可能不安全或不适当的事情。让我们尝试其他内容。"
-当前 distill_replicate 把短拒绝当合法复刻返回 → SFS 评分归零 → 看不出是 refusal 还是 skill 失败。
-
-修法（北极星·零污染正常路径）：
+锁定行为：
 1. llm_transport._is_refusal 纯检测 helper（gen_writer/av_judge 等正常路径不调）。
 2. distill_replicate.call_gen_model 在 stream 完成后主动调 → 命中走 3s 退避 + disclaimer 追加重试。
 3. 3 次全 refusal → REFUSAL_EXHAUSTED 记 failures → 走下一 fallback profile → 全链 refusal 抛
    GenModelExhaustedError（exit=3）。
-4. 旧 env 旁路已退役；拒绝重试始终生效。
+4. 拒绝重试始终生效。
 """
 from __future__ import annotations
 import os

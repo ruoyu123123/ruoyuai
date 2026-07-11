@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""v29 分段润色契约回归锁（2026-07-11 架构转向：Claude 亲笔创作 + gemini 润色）。
+"""Claude 亲笔创作 + gemini 分段润色契约回归锁。
 
 锁四件事：
 1. discover_claude_scenes 的 required 前置语义（缺目录/空/过短 → FileNotFoundError·不降级）；
 2. build_prompt 润色尾部契约（等体量指令 + 原文段注入 + 守恒带数字 + 不产 JSON 指令）；
-3. 段级守恒带常量（0.85 / 1.30 · 实验依据 workspace/_temp_research/四组生成对比_20260711）；
-4. 从零生成路径已清除（best_of_n / scene_sequential / split_text_and_changes 符号不存在）。
+3. 段级守恒带常量（0.85 / 1.30）；
+4. 公共接口不暴露多稿、场景顺序生成或文本/changes 混合解析符号。
 """
 import json
 import sys

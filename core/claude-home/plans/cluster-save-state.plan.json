@@ -1,7 +1,7 @@
 {
   "command": "cluster-save-state",
   "version": 5,
-  "description": "cluster 级状态保存 14 步流水线 · 替代 chapter-level save-state · 1 个 cluster = 1 次完整流水线。🔴 2026-06-28 架构纠正：factual 客观状态（角色/道具/关系/locked_facts）由 novel-archivist 读正文产 archive.json + apply_archive.py 确定性回库（非 writer 自报）·新增 step5(archivist judge)+step6(apply-archive)·原 12 步顺延为 14。🔴 2026-07-07 S10：step7 增卷边界条件子任务（detect-volume-boundary + MODE=volume 卷级递归摘要 + apply-volume-summary·无边界零行为变化）",
+  "description": "cluster 级状态保存 14 步流水线：解析 changes、archivist 读取正文、apply_archive 回库、卷边界摘要、各子系统更新、反思学习、涌现下一 cluster，并提交 Git 快照。",
   "total_steps": 14,
   "required_steps": [
     1,
@@ -20,7 +20,7 @@
     14
   ],
   "optional_steps": [],
-  "_doc_v24": "状态同步单位 cluster 级。章节只是输出层，cluster 才是数据库更新单位。所有 agent (summarizer/foreshadower/reflector/reading-reflector/voice-checker/outline-planner) 走 cluster mode。git commit per cluster (不再 per chapter)",
+  "_doc": "状态同步和 Git 快照都以 cluster 为单位；物理章节只作为正文读取范围。",
   "steps": [
     {
       "n": 1,
@@ -165,7 +165,7 @@
       "expected_outputs": [
         "_数据库/.judge_reports/cluster_{key}_foreshadower.json"
       ],
-      "_doc_v24": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_foreshadower.json（build_manifest 下章抽 health_warnings·必写盘否则反馈链断·failure_policy=block）"
+      "_doc": "JudgeReport 路径 _数据库/.judge_reports/cluster_{key}_foreshadower.json；缺失时阻断反馈链。"
     },
     {
       "n": 9,
@@ -184,7 +184,7 @@
       "expected_outputs": [
         "_数据库/.wal/cluster_{key}_reflection.json"
       ],
-      "_doc_v24": "JudgeReport 路径 _数据库/.wal/cluster_{key}_reflection.json"
+      "_doc": "JudgeReport 路径 _数据库/.wal/cluster_{key}_reflection.json"
     },
     {
       "n": 10,

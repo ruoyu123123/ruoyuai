@@ -123,26 +123,24 @@ desktop.ini
 安装包/
 ruoyu.7z
 
-# 🔴 2026-06-28 移除exe/gen-model梳理方向：删 PyInstaller 打包产物忽略段（/build/ /dist/ *.spec.bak）
-
-# 历史运行日志(dev=repo/logs·实测产物·不入库)
+# 运行日志与运行时状态
 logs/
 /data_version.json
 
-# 🔴 2026-06-27 P2-12: triage band 运行时报告（band 自校准·不入库·避免 scaffold KNOWN_EXTRAS 网开）
+# triage band 运行时报告
 workspace/novels/*/_数据库/triage_band_report.json
 
 # ============================================================
-# 🔴 2026-06-29 本地GPU神经网络训练(core/ml/)：venv已被.venv/忽略·数据集+模型权重大二进制不入库(训练脚本入库)
+# 本地训练产物与外部参考仓库
 # ============================================================
 外部/
 
-# 🔴 2026-07-05 网搜调研克隆的外部开源写作系统（只作概念借鉴·零代码接线·不入库）
+# 外部开源写作系统克隆
 moyin-creator/
 PlotPilot/
 external_repos/
 
-# 🔴 2026-07-11 用户定调「research内容不入库」：自产调研报告本地物理保留（代码注释以 research/xxx.md 出处路径引用·文件在位不移动），git 不追踪
+# 本地调研报告区：物理保留，不纳入版本库
 research/
 
 core/ml/**/data/

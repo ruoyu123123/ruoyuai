@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 🔴 2026-06-29 NN连贯性评分集成
 """nn_coherence_bridge.py — 系统 py(3.14·无 torch) → venv py(3.10·torch) 的连贯性推理 subprocess 桥。
 
 【为什么是桥】若渝主流水线跑系统 Python（无 torch）；连贯性评分模型跑 core/ml/.venv（torch）。
@@ -10,7 +9,7 @@
 
 【两种调用形态】
   · predict_batch(texts)        — 单文本窗口连贯性（每行 {"text": ...}）
-  · predict_pairs(pairs)        — 文本对衔接连贯性（每行 {"text_a": ..., "text_b": ...}·加 --mode pairs）
+  · predict_pairs(pairs)        — 文本对衔接连贯性（每行 {"text_a": ..., "text_b": ...}）
 
 【默认安全铁律（北极星⑤·零回归）】以下任一情况 → 返回 None（逐条）→ **调用方回退启发式**，绝不崩：
   · RUOYU_NN_COHERENCE != "1"（默认 off·门控未开）
@@ -191,10 +190,11 @@ def predict_batch(texts: "list[str]", timeout: "float | None" = None) -> "list[d
 
 
 def predict_pairs(pairs: "list[tuple[str, str]]", timeout: "float | None" = None) -> "list[dict | None]":
-    """批量文本对衔接连贯性。coherence_infer._parse_items 按 record 是否含 text_a/text_b 自动分流，
-    不需要显式 --mode（该 flag 在 coherence_infer.py argparse 里从未定义，曾被 allow_abbrev 误前缀匹配到
-    --model，导致 checkpoint 路径变成不存在的 "pairs" 目录、静默 all-None 退化启发式）。
-    任何不可用/失败 → 全 None（不崩）。保序一一对应。"""
+    """批量文本对衔接连贯性。
+
+    `coherence_infer._parse_items` 按 `text_a/text_b` 字段自动分流。任何不可用或失败
+    都返回全 None；输出顺序与输入一致。
+    """
     records = [{"text_a": str(a), "text_b": str(b)} for (a, b) in pairs]
     return _run_infer(records, [], timeout, daemon_items=records)
 

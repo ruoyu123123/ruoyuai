@@ -46,7 +46,7 @@
   · 纯 prompt + 薄 Python，gen-model 调用复用 gen_model_loader 同款 fallback 管线
     （与 distill_replicate.call_gen_model 一致的 active→fallback 链 · 不另起调用栈）。
   · 零新依赖（stdlib + openai/​dotenv 已是 gen_model 栈既有）· 零 GPU。
-  · 独立文件——**不挂 distill_replicate**（避与 L3b CoT-first / snippet_seed 等并行件冲突）。
+  · 独立诊断工具，不挂入 distill_replicate 主链。
 
 用法：
   shadow:  AV_JUDGE_MODE=shadow python av_judge.py \\

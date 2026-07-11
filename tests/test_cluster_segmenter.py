@@ -1,12 +1,6 @@
 """cluster_segmenter.py 专属回归测试（零依赖 · 零 LLM · 零联网）。
 
-被测：已蒸馏书 retroactive cluster 切分器的**确定性核心算法**。
-
-已有间接覆盖（test_distill_plan_e2e.py）只在 fake_runner 里**桩掉** segmenter 命令
-（手写一份 cluster_index.json 喂下游数据流），**从未真 import / 真调用过**
-任何 classify_boundary / segment_clusters / collect_transitions /
-load_chapter_wordcounts / detect_total_chapters / _infer_genre_from_naming / main()。
-本测试聚焦这些尚未被覆盖的真实逻辑，钉死：
+被测：已蒸馏书 retroactive cluster 切分器的确定性核心算法，覆盖：
 
   · classify_boundary：strong/weak/unknown 三分类 + 「直接承接（情绪落差子类）」
     必须被 continue 排除回退到 weak（脚本里那个易回退的 if 分支）；

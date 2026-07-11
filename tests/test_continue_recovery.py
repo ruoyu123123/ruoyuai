@@ -1,15 +1,15 @@
-"""/continue 断点恢复·恢复点回归锁（🔴 2026-06-27 W5 · completeness critic 揪出的裸奔环节）。
+"""`/continue` 断点恢复点回归锁。
 
 /continue 续写靠 wal_recovery 算「从哪一步续跑」。恢复点算错会**重放已完成步**或
-**漏跑未完成步**——此前无回归锁，恢复语义可静默漂移。本网钉死 wal_recovery 的恢复点计算：
+**漏跑未完成步**。本测试锁定：
 
   ① completed_steps=[1,2,3] → 恢复从 step4（done+1·连续完成正常路径·不漏 4）
   ② WAL/plan JSON 损坏 → wal_recovery 降级不崩（坏文件跳过·好 plan 照常报）
   ③ 非连续完成（中途步 pending、后续步 completed）→ 恢复点 = **第一个未完成步**，
-     而非 completed 计数+1（修真 bug：count+1 会跳过中间 pending 步 = 漏步）
+     而非 completed 计数+1
 
-「不重放已完成步」由主代理据 wal_recovery 恢复点跳过已完成步保证（test_continue_resume_e2e 已锁）；本网锁
-wal_recovery 给主代理的「续跑 --n N」指令正确性。零依赖范式（__main__ 自跑 + pytest 均可）·零 API。
+「不重放已完成步」由主代理按 wal_recovery 恢复点保证；本测试锁定「续跑 --n N」
+指令的正确性。零依赖、零 API。
 """
 import io
 import json

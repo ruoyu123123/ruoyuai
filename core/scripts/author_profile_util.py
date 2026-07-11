@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-# 🔴 2026-06-28 移除exe/gen-model梳理方向
 """author_profile_util.py — 作者风格档注入共享小模块
 
-从 judge_runner.py 原样迁出 build_author_profile_block() + AUTHOR_PROFILE_MISSING_GUARD，
-解除「创作链 gen_creative_volume_arc._run_volume_arc / gen_creative._run_distill_reflect 依赖 judge_runner」的耦合，
-为后续删除 judge_runner（梳理 agent 自主派 gen-model 的整套移除）铺路。
-
-本模块仅依赖 json / pathlib，自包含、无副作用——创作链可直接 import 而不拉起判断层。
+提供 `build_author_profile_block()` 和作者档缺失护栏。模块仅依赖 json/pathlib，
+可由创作链直接导入，不加载判断层。
 """
 from __future__ import annotations
 

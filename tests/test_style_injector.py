@@ -8,7 +8,7 @@ _text_cosine / _passage_text / _tag_relevance。
   - get_applied_type_history   —— 历史 applied_*_type 抽取
   - pick_type_weighted_avoiding—— avoid 过滤 / 空分布 / fallback 退路
   - _char_bigrams              —— 字符 bigram 向量化（MMR 底座·边界）
-  - build_directive            —— 端到端：分布优先级/反重复 avoid/DCAS 继承/确定性 seed/cluster 摘要
+  - build_directive            —— 端到端：分布优先级/反重复 avoid/确定性 seed/cluster 摘要
   - main()                     —— CLI 退出码（argc / 项目缺失 / style 缺失 / 成功落盘）
 
 零依赖纯标准库·确定性·真 import 真调用。
@@ -222,9 +222,7 @@ def test_build_directive_full_assembly():
     # writer 必报字段 schema 存在
     assert "opening_type" in directive["applied_style_schema"]
     assert "ending_type" in directive["applied_style_schema"]
-    # 非 DCAS → strict
     assert directive["opening_type_enforcement"] == "strict"
-    assert directive["inherits_opening_from_prev_dcas"] is False
 
 
 def test_build_directive_deterministic_same_seed():
@@ -317,15 +315,11 @@ def test_build_directive_legacy_top_level_chapters():
     assert directive["opening_type"] == "白描"
 
 
-def test_build_directive_no_dcas_inheritance():
-    # v27+: DCAS 继承已废弃, .pre_opening.txt 不再产生, inherits_opening 恒 False
+def test_build_directive_uses_strict_opening_contract():
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), _FULL_STYLE)
         directive = si.build_directive(tmp, 2)
-    assert directive["inherits_opening_from_prev_dcas"] is False
-    assert directive["opening_type"] != "inherit_from_dcas"
     assert directive["opening_type_enforcement"] == "strict"
-    assert directive["pre_opening_path"] is None
 
 
 def test_build_directive_cluster_blueprint_summary():

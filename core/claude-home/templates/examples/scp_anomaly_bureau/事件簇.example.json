@@ -10,8 +10,6 @@
     "anchor_props": "本簇必须落地的物件锚定清单（与伏笔表 physical_evidence 呼应）",
     "foreshadowing_to_plant": "本簇要 plant 的伏笔（id + type: setup/subtle_setup + tier + _note）",
     "foreshadowing_to_callback": "本簇要回收的伏笔（早期簇通常空）",
-    "mid_checkpoints": "长文生成自检检查点位置（不构成目标字数）",
-    "sub_summary_template": "每场景写完的小结模板（喂下游簇）",
     "ME_to_advance": "本簇结束应推进的 ME 列表",
     "throughline_focus / throughlines_secondary": "Dramatica 四贯穿线主/次焦点",
     "characters_focus": "本簇出场核心角色（须与人物卡对齐）",
@@ -68,12 +66,6 @@
         }
       ],
       "foreshadowing_to_callback": [],
-      "mid_checkpoints": [
-        3000,
-        6000,
-        9000
-      ],
-      "sub_summary_template": "[场景 N] 时间/地点 + 关键事件（核心角色动作）+ 本场景埋的伏笔 ID + 末尾情绪 tag（100 字内）",
       "ME_to_advance": [
         "ME-V1-01"
       ],
@@ -148,7 +140,6 @@
     "produced_by": "/outline ECAS 模式按大势卡 ME 拆簇 + novel-researcher 每簇调研后填 research_ref",
     "consumed_by": [
       "ECAS writer：按 scene_storyboard 逐场景写，嵌 foreshadowing_to_plant + anchor_props",
-      "mid_checkpoint：在 mid_checkpoints 字数处 fail-loud 检查（字数缺口/伏笔缺失）",
       "save-state：更新 status + foreshadowing_to_callback 回收记录"
     ]
   },

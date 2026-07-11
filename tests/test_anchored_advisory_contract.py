@@ -1,18 +1,16 @@
 # -*- coding: utf-8 -*-
-"""anchored_advisory_contract R24 W12 Batch-KK · P1
+"""anchored advisory schema 与 hard_gate 契约测试。
 
 新 schema 升级：
   · anchor_window ≤ 40 CJK 字符
   · recursive_widen_level int(0..3)
-向后兼容：
-  · 老 violation 只填 char_start/char_end/surface_text 不影响
+基础 violation 可只填 char_start/char_end/surface_text。
 """
 import json
 import sys
 from pathlib import Path
 
-# 🔴 2026-06-28 移除exe/gen-model梳理方向：judge_runner 已删除，本件去掉对其
-# system-prompt 装配的两条断言；audit_hub anchor schema + 19 码 hard_gate 锁全保留。
+# 锁定 audit_hub anchor schema 与 hard_gate 清单。
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import audit_hub  # noqa: E402

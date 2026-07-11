@@ -242,10 +242,10 @@ def score_split_point(paras, idx, target, tolerance):
     }
 
 
-# ============ v27 ecas_freestyle 模式 ============
+# ============ ecas_freestyle 模式 ============
 #
-# 切割规则（详见 novel-chapter-splitter.md §v27）：
-#   - 章数不由外部传 TARGET_CHAPTERS，splitter 按整 cluster 草稿字数自动算
+# 切割规则（详见 novel-chapter-splitter.md）：
+#   - splitter 按整 cluster 草稿字数自动计算章数
 #     N = round(draft_cjk / 3500)，钳到 [ceil(draft_cjk/4500), floor(draft_cjk/3000)]
 #   - 每章硬范围 3000-4500 CJK（rhythm_profile 微调）
 #   - 末章 < 下限 → 不强切，末段退回 cluster_<key>_pending_tail.txt，本 cluster 只切 N-1 章
@@ -571,16 +571,16 @@ def main():
         print(__doc__)
         sys.exit(0)
 
-    # ---- v27 ecas_freestyle 分发 ----
+    # ---- ecas_freestyle 分发 ----
     if "--mode" in args and args[args.index("--mode") + 1:args.index("--mode") + 2] == ["ecas_freestyle"]:
         return _main_freestyle(args)
 
-    print("[FATAL] DCAS双章模式已废弃(v27+)，请使用 --mode ecas_freestyle", file=sys.stderr)
+    print("[FATAL] 必须使用 --mode ecas_freestyle", file=sys.stderr)
     sys.exit(2)
 
 
 def _main_freestyle(args):
-    """v27 ecas_freestyle CLI 入口。
+    """ecas_freestyle CLI 入口。
 
     用法:
         python chapter_splitter.py <项目路径> --mode ecas_freestyle \\

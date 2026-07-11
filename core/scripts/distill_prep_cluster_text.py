@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""distill_prep_cluster_text.py — 拼某 cluster 全章全文（蒸馏 phase-1 judge 的 context 代读）。
+"""把指定 cluster 的全部物理章节拼成表层蒸馏输入文件。
 
-🔴 为什么新建（真 distill 设计 code-verified）：phase-1 的 48 维表层蒸馏 judge 要读**整 cluster
-全文**做分析，但 distill_replicate.gather_cluster_ref_text 每章只取**首 600 字**、总封顶 4000
-（那是复刻参考用·不是分析输入）。故新建本脚本：按 cluster_index.json 的 chapter_range 把本 cluster
-**所有章全文**拼成一个文件，给 surface judge 的 context_files（judge_runner 全量注入·不截断·
-feedback_no_token_saving）。
+脚本按 `cluster_index.json` 的 `chapter_range` 读取完整正文，不截断；复刻参考文本的
+采样逻辑不用于本入口。
 
 设计纪律：纯确定性·零 LLM。
 

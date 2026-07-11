@@ -1,4 +1,4 @@
-# 若渝AI · 文件目录与命名规范（v1.0）
+# 若渝AI · 文件目录与命名规范
 
 > 整个小说系统的目录框架和命名规范。所有命令产出文件必须遵守本规范。
 > 本文档优先级：**高于各命令文档**。命令文档应反向引用本文档。
@@ -10,23 +10,24 @@
 ```
 <REPO_ROOT>/                          # 项目根（Claude Code working directory）
 ├── .claude/                                   # Claude Code 配置层
-│   ├── commands/                              # 用户级命令定义（14 个）
-│   ├── agents/                                # Subagent 定义（12 个 novel-*.md · judge prompt 单一真理源）
+│   ├── commands/                              # 用户级命令定义
+│   ├── agents/                                # Subagent 定义与 judge prompt 单一真理源
 │   └── settings.json                          # 项目设置
 ├── core/                                       # 系统核心代码
 │   ├── claude-home/                            # 系统主目录（见第四节）
-│   ├── scripts/                                # Python 确定性工具脚本 + scanner（424 个）
-│   ├── ml/                                     # 神经网络模型训练/推理（53 个，见第四-ter 节）
-│   └── data/                                   # scanner/模型消费的词典数据（15 个 JSON）
-├── tests/                                       # pytest 回归测试（563 个，与 core/scripts、core/ml 命名基本一一对应）
-├── research/                                    # 【本地调研报告区 · 不入 git】自产调研综述物理保留原位，
-│                                                 # 2026-07-11 起退出 git 追踪（见 .gitignore；多条 memory 仍按文字路径引用）
+│   ├── scripts/                                # Python 确定性工具、scanner 与运行编排（见第四-ter 节）
+│   ├── ml/                                     # 神经网络模型训练/推理（见第四-ter 节）
+│   └── data/                                   # scanner/模型消费的词典数据
+├── tests/                                       # pytest 回归测试
+├── research/                                    # 【本地调研报告区 · 不入 git】物理保留原位
 ├── workspace/                                  # 【用户产出区】
 │   ├── styles/{书名}/                          # 全局风格库（见第二节）
 │   ├── novels/{书名}/                          # 小说项目（见第三节）
-│   └── _temp_research/                         # 实验证据链暂存区，默认不入 git（个别历史文件例外遗留）
+│   └── _temp_research/                         # 实验证据链暂存区，默认不入 git
 ├── start.sh / start.cmd                         # 跨平台启动入口（同步根 CLAUDE.md 到 core/claude-home/CLAUDE.md）
+├── .env.example / .gitattributes / .gitignore   # 环境示例、文本属性与追踪边界
 ├── pytest.ini / requirements.txt                # 测试与依赖配置
+├── LICENSE                                      # 许可证
 ├── README.md / INSTALL.md / 使用说明.md         # 用户文档
 └── CLAUDE.md                                   # 项目级 AI 指令
 ```
@@ -52,7 +53,6 @@ workspace/styles/{书名}/                         # 风格项目根
 ├── skill_FINAL.md                             # 终版写作指导（人读）
 ├── distillation_log.md                        # 蒸馏迭代日志
 ├── chapter_ranges.json                        # 章节索引（行号映射表）
-├── agent_brief_3ch.md                         # 本项目的 3 章 agent 模板
 ├── lessons_learned_v{N}.md                    # 各版本反思日志
 │
 ├── 蒸馏进度/                                   # 单章蒸馏 JSON
@@ -64,18 +64,16 @@ workspace/styles/{书名}/                         # 风格项目根
 │   ├── ch{N}_{N+2}_continuity.json            # 3 章窗口衔接分析
 │   └── ...
 │
-├── 复刻测试/                                   # 闭环阶段 2 产物
-│   ├── v{X}/                                  # 第 X 版 round 1
-│   │   ├── {type}_replica.txt                 # type ∈ {opening, battle, psychology}
-│   │   ├── {type}_replica_meta.json
-│   │   ├── {type}_replica_metrics.json
-│   │   └── {type}_replica_eval.json
-│   └── v{X}_round{Y}/                         # 第 X 版第 Y 轮
+├── 复刻测试/                                   # 同栈复刻产物
+│   └── v{X}_round{Y}/
+│       ├── claude_scenes/scene_*.txt          # Claude agent 按 skill 写的场景稿
+│       ├── cluster_{key}_replica.txt          # gemini 分段润色后的复刻终稿
+│       └── cluster_{key}_replica_meta.json    # 润色遥测与评分元数据
 │
 ├── 对比报告/                                   # 闭环阶段 3 产物
-│   ├── eval_v{X}_{type}.json                  # SFS 量化报告
-│   ├── diff_v{X}_{type}.md                    # 多维度差距报告
-│   ├── ref_ch{N}_{type}.txt                   # 对照原文片段
+│   ├── eval_v{X}_cluster_{key}.json           # SFS 量化报告
+│   ├── diff_v{X}_cluster_{key}.md             # 多维度差距报告
+│   ├── ref_cluster_{key}.txt                  # 对照原文片段
 │   └── ...
 │
 ├── 原文/                                       # 【可选】原文备份
@@ -84,7 +82,7 @@ workspace/styles/{书名}/                         # 风格项目根
 ├── _tmp/                                       # 临时文件（agent 中间产物）
 │   └── ch{N}.txt                              # 章节正文临时副本
 │
-└── _archive_v{X}/                              # 旧版本归档（升级时移入）
+└── _archive_v{X}/                              # 版本归档
     └── ...
 ```
 
@@ -127,9 +125,12 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 │
 ├── 章节/                                       # cluster 草稿 + splitter 后章节产物
 │   ├── cluster_{key}_draft/
-│   │   ├── cluster_{key}_draft.txt             # 整块正文草稿（writer 产物）
+│   │   ├── claude_scenes/scene_*.txt           # Claude 逐场景亲笔稿
+│   │   ├── cluster_{key}_draft_claude.txt      # 场景稿拼接审计基线
+│   │   ├── changes_claude.json                 # Claude self_eval/waivers 草稿
+│   │   ├── cluster_{key}_draft.txt             # gemini 分段润色后的整块终稿
 │   │   ├── cluster_{key}_changes.json          # writer 创作期自评 + waivers + 确定性遥测
-│   │   └── cluster_{key}_pending_tail.txt      # 【v27】末章不足 3000 CJK 退回的尾段（等下 cluster 拼）
+│   │   └── cluster_{key}_pending_tail.txt      # 末章不足下限时留给下个 cluster 拼接的尾段
 │   └── 第{N}章/
 │       ├── 第{N}章.txt                        # splitter 切出的纯正文（用户可读）
 │       └── 第{N}章_changes.json               # 从 cluster changes 平铺的章节级数据
@@ -143,13 +144,13 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 - 章节文件：`第{N}章{后缀}` 用户可见，中文化
 - 数据库 JSON：中文命名（人物卡 / 世界观 / 伏笔表...）
 
-**【v18 正文/数据分离】**：
+**正文/数据分离**：
 - `第{N}章.txt` = **纯正文**，`第{N}章_changes.json` = **结构化数据**，两者是两个物理文件，不再混在一个 txt 里靠 `---CHANGES---` 分隔符切。
 - `第{N}章_changes.json` 由 `novel-chapter-splitter`（cluster mode · splitter 在 step 6 从 `cluster_<key>_changes.json` 按切点平铺成 per-chapter）产出，不再由 save-state 产出。
 - 所有读写章节正文 / CHANGES 的脚本必须走 `core/scripts/chapter_io.py` 统一模块（`read_body` / `read_changes` / `write_body` / `write_changes`），禁止各自 split。
-- `第{N}章_changes.json` 顶层两键：`self_eval`（writer 创作自评 applied_style / `waivers` 等，judge 默认不读，v17.4 分权纪律）+ `factual`（确定性遥测如字数 + archivist 回库后的客观状态派生镜像，**非 writer 自报权威源**）。
-- **🔴 v29 正文生成两阶段（2026-07-11 用户定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）**：step 2a `novel-writer` agent（Claude 亲笔）逐场景写作落 `claude_scenes/scene_*.txt` + `cluster_<key>_draft_claude.txt`（审计基线）+ `changes_claude.json`（self_eval 草稿）；step 2b `gen_writer.py` 逐场景段调 gemini 按风格档等体量润色（守恒带 [0.85,1.30]）拼接出终稿。gen-model 从零生成路径已清除（缺 claude_scenes 即 FATAL）。实验依据 `workspace/_temp_research/四组生成对比_20260711`。
-- **🔴 2026-06-28 架构纠正（北极星⑥不留双口径·v29 沿用）**：writer 链（Claude 亲笔 + gemini 润色）**只产正文 + 创作自评**、**不自报"改了什么"**。cluster 级客观状态（角色 / 道具 / 关系 / `locked_facts` / 伏笔）的**权威源**由 Claude 梳理、确定性脚本回库——**不再以 writer 的 `changes.factual` 自报为准**：
+- `第{N}章_changes.json` 保存 `self_eval`、`waivers` 和确定性遥测；客观状态不由 writer 自报。
+- **正文生成两阶段**：step 2a `novel-writer` 逐场景写作；step 2b `gen_writer.py` 调 gemini 分段等体量润色并拼接终稿。缺 `claude_scenes` 时立即失败。
+- writer 链只产正文与创作自评。cluster 级客观状态由 Claude 梳理、确定性脚本回库：
   - **角色 / 道具 / 关系 / `locked_facts`**：`novel-archivist` 读整 cluster 正文客观抽取 → `_数据库/.wal/cluster_<key>_archive.json` → `apply_archive.py <项目> --cluster <key>` 确定性回库（幂等·按 id 去重）。
   - **伏笔**：`novel-foreshadower` 的 JudgeReport + `outline` brief（plant / payoff 由 Claude 梳理，非 writer 自报）。
   - `save_state` 已停读 writer factual；`time_advance` / `location` 等**非 archive 域**仍由 `save_state --apply-cluster-changes` 落地。
@@ -187,7 +188,6 @@ core/claude-home/
 ├── skills/                                     # 【预留】当前仅占位，无实质内容
 ├── lessons/                                    # 经验库（自学习）
 │   ├── distill-style-lessons.md               # 蒸馏教训
-│   ├── EXTRACTOR_PROMPT.md                    # 自动提取 prompt
 │   └── ...
 ├── CLAUDE.md                                   # Agent 入口补充约束（sub-agent 读取，不重复根 CLAUDE.md）
 ├── SELF_LEARNING_ARCHITECTURE.md               # MAPE-K 运行时自学习层权威设计文档
@@ -197,7 +197,7 @@ core/claude-home/
 
 > 命令文档的**唯一权威**位置是 `.claude/commands/`。`core/claude-home/` 不设 commands 副本；改命令文档只改 `.claude/commands/`，系统运行时也只加载这里。
 >
-> **Agent 定义的唯一权威**位置是 `.claude/agents/`。`core/claude-home/` 不设 agents 副本（历史上曾有 `core/claude-home/agents/`，2026-07-11 全仓文件盘点确认零流程引用后清空）；`core/claude-home/CLAUDE.md` 只是 sub-agent 读取的补充约束文件，不是 agent 定义本体。
+> **Agent 定义的唯一权威**位置是 `.claude/agents/`。`core/claude-home/CLAUDE.md` 只是 sub-agent 读取的补充约束文件，不是 agent 定义本体。
 
 ---
 
@@ -215,10 +215,18 @@ core/claude-home/
 
 ---
 
-## 四-ter、模型层与测试层（`core/ml/`、`core/data/`、`tests/`）
+## 四-ter、脚本、模型、数据与测试层
 
 ```
-core/ml/                                        # 神经网络模型训练/推理（53 个文件）
+core/scripts/                                   # 运行时确定性代码
+├── gen_*.py / distill_*.py                     # 生成模型调用、润色与蒸馏
+├── cluster_*.py / save_state*.py               # cluster 编排、涌现与状态回库
+├── *_scanner.py / cross_cluster_*.py            # cluster 与跨 cluster 顾问扫描
+├── plan_*.py / adaptive_runner.py               # plan、门禁、恢复与自学习运行时
+├── skill_opt/                                   # SkillOpt 训练循环
+└── lexicons/                                    # 脚本消费的文本词表
+
+core/ml/                                        # 神经网络模型训练/推理
 ├── emotion_vad/ · style_embed/ · quality_clf/   # 训练 pipeline 三件套（各含 data_prep/train/eval/infer + README/INTEGRATION.md）
 ├── coherence/ · content_embed/ · nli/ · surprisal/  # 推理侧（*_infer.py，daemon 懒加载调用）
 ├── daemon/model_daemon.py                       # 常驻推理服务（5 类模型驻内存·热路径 0.04-0.13s）
@@ -229,9 +237,9 @@ core/ml/                                        # 神经网络模型训练/推�
 ├── LEARNABLE_BACKLOG.md                         # 可成长模型化 backlog（滚动更新的权威进度记录）
 └── TRAINING_RESULTS.md                          # 各模型训练结果记录
 
-core/data/                                       # 15 个词典 JSON，被 core/scripts 的 scanner/core/ml 推理侧消费
+core/data/                                       # scanner/core/ml 消费的系统词典 JSON
 
-tests/                                           # 563 个 pytest 文件，命名与 core/scripts / core/ml 一一对应（test_<module>.py）
+tests/                                           # pytest 回归测试，按 test_<module>.py 对应系统模块
 ```
 
 `core/ml/` 消费方式：`core/scripts/nn_*_bridge.py`（vad/coherence/nli/surprisal）+ `embedding_store.py`（style_embed/content_embed）经 subprocess 或 daemon HTTP 调用 `core/ml/` 侧推理脚本，系统主 Python（无 torch）与 `core/ml/.venv`（torch CUDA）进程隔离。

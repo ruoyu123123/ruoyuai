@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-# 🔴 2026-06-28 移除exe/gen-model梳理方向
-"""author_profile_util.py 测试——承接原 test_judge_runner.py 对 build_author_profile_block
-的覆盖（None 分支 / 损坏档当缺失 / 两布局 / skill 注入 / GUARD 常量），随符号迁出而迁移。
-"""
+"""author_profile_util.py 的作者档读取、skill 注入与缺失护栏测试。"""
 import json
 import sys
 import tempfile
@@ -84,8 +81,3 @@ def test_missing_guard_constant_content():
     """缺失守卫常量含「不得输出风格 finding」核心约束 + _author_profile_missing 标记。"""
     assert "不得输出任何风格/文笔/节奏类 finding" in apu.AUTHOR_PROFILE_MISSING_GUARD
     assert "_author_profile_missing" in apu.AUTHOR_PROFILE_MISSING_GUARD
-
-
-# 🔴 2026-06-28 移除exe/gen-model梳理方向：原 test_parity_with_judge_runner（断言
-# author_profile_util 与迁出源 judge_runner 双份一致）已删——judge_runner 整模块删除，
-# author_profile_util 成为 AUTHOR_PROFILE_MISSING_GUARD / build_author_profile_block 唯一权威。

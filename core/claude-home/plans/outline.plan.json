@@ -1,11 +1,11 @@
 {
   "command": "outline",
   "version": 4,
-  "description": "创建书籍（阶段2）：风格选择→调研→3灵感卡→框架/节奏/cluster数→34子系统→卷级大纲→cluster_001详化。主代理 Claude Code spawn Agent + 跑确定性脚本驱动管线·按 plan steps 走。",
+  "description": "创建书籍 13 步流水线：选择风格、调研、生成灵感卡、确定框架与每卷 cluster 数、初始化 34 子系统、生成卷级大纲并只详化 cluster_001。",
   "total_steps": 13,
   "required_steps": [1, 2, 3, 3.1, 3.2, 3.3, 3.4, 4, 5, 5.5, 6, 6.5, 7],
   "optional_steps": [],
-  "_pipeline_status": "主代理 Claude Code 按 plan steps spawn Agent + 跑确定性脚本驱动管线（scripts/must_spawn_agent/pause_for_user/data_flow 字段见 plans/README.md）。2026-06-11 阶段2 创建书籍。前置：主代理在跑 outline 前已 mkdir 项目目录 + 写 _数据库/.wal/book_meta.json={topic}（init_project.py --scaffold 一键骨架）。",
+  "_pipeline_status": "主代理按 plan steps spawn Agent 并运行确定性脚本。开工前创建项目目录，并由 init_project.py --scaffold 写入 _数据库/.wal/book_meta.json。",
   "steps": [
     {
       "n": 1,

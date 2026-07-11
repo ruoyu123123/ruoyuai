@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""save_state_evaluators.py — cluster-save-state step 9 章节级 evaluator 统一入口（合并 4 个 evaluator）
+"""cluster-save-state step 9 的 evaluator 统一入口。
 
-🔴 v26: chapter mode CLI (--ch) 已废弃移除，仅留 cluster mode (--cluster <key>)。
-内部仍按章迭代调用底层脚本（clock/narrator/stress/relationship 是按章发生的事件 → 按章 ingest）。
-
-合并源：
+入口接收 `--cluster <key>`，反查物理章节范围后按章调用：
 - clock_engine.py tick <ch>（Clock 系统满格触发）
 - narrator_calibrate.py --ch <ch>（Storyteller 节拍器校准）
 - stress_evaluator.py --ch <ch>（主角 Stress 评估 + Mental Break 抽卡）
 - relationship_evaluator.py --ch <ch>（关系 heart_event 评估）
 
-调用方式（v26 唯一入口）：
+调用方式：
 - python save_state_evaluators.py <project> --cluster <key> [--all | --only clock,narrator,...]
 
 退出码：0 成功 / 1 部分失败（部分系统未启用算 OK，不算失败）/ 2 fatal
@@ -81,10 +78,9 @@ def run_evaluators_for_chapter(project: str, chapter: int, only: set[str] | None
 
 
 def main():
-    # 🔴 v26: chapter mode --ch 已废弃移除，仅留 --cluster <key>。
-    parser = argparse.ArgumentParser(description="cluster-save-state step 9 章节级 evaluator 统一入口（4 in 1 · v26 cluster-only）")
+    parser = argparse.ArgumentParser(description="cluster-save-state step 9 章节级 evaluator 统一入口（4 in 1）")
     parser.add_argument("project")
-    parser.add_argument("--cluster", required=True, help="v26: 必填 cluster_key（chapter mode --ch 已删）")
+    parser.add_argument("--cluster", required=True, help="必填 cluster_key")
     parser.add_argument("--only")
     parser.add_argument("--all", action="store_true")
     args = parser.parse_args()

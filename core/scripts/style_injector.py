@@ -4,8 +4,6 @@
 env_anchor_high_risk_elements / narrative_craft 提取为本章可执行的
 style_directive，注入到 writer prompt。
 
-修复 v17.3 之前的"蒸馏精细但写作粗糙"断层。
-
 输入：
     python style_injector.py <项目路径> <章节号>
 
@@ -394,8 +392,6 @@ def build_directive(project_root: Path, chapter: int) -> dict:
         "chapter": chapter,
         "title": this_plan.get("title", ""),
         "scene_type": this_plan.get("scene_type", []),
-        "inherits_opening_from_prev_dcas": False,
-        "pre_opening_path": None,
         "opening_type_enforcement": "strict",
         "opening_type": chosen_opening,
         "opening_pick_reason": op_reason,

@@ -1026,17 +1026,10 @@
       "_new": true,
       "issues_emitted": ["SANDBOX_EMERGENCE_ABNORMAL"]
     },
-    "parallel_rollout_arbiter": {
-      "layer": "cluster",
-      "script": "parallel_rollout_arbiter.py",
-      "doc": "[2026-06-21 R19 W8 Batch-Y·P2·K=2 并行 rollout listwise rank 仲裁器] 高歧义 cluster(opening/volume_finale/重大转折)启用·读 K 个 (draft, judge_report) candidate · 4 维 listwise score(scanner_pass_rate 0.4 + length_band_fit 0.2 + lexical_diversity 0.2 + verdict_penalty 0.2) 排序 winner_index·top-1 与 top-2 差距 <0.02 触发 PARALLEL_ROLLOUT_ARBITER_DEGRADED advisory·gen_writer 加 --parallel-rollout-mode=off env 透传·与 cluster_evaluator(单稿)/adversarial_judge_pair(三角)/meta_critic_audit(元批评)严格正交·env PARALLEL_ROLLOUT_ARBITER_MODE 默认 off·绝不 hard_gate",
-      "_new": true,
-      "issues_emitted": ["PARALLEL_ROLLOUT_ARBITER_DEGRADED"]
-    },
     "adversarial_judge_pair": {
       "layer": "cluster",
       "script": "adversarial_judge_pair.py",
-      "doc": "[2026-06-21 R19 W8 Batch-Y·P2·attacker-defender-arbiter 三角 scaffolding·Constitutional AI / Irving 2018 debate] cluster_brief.is_volume_finale 触发·attacker 5 个启发式 attack(A1 弱钩子/A2 情感对位/A3 副线收束/A4 权力转移/A5 代价签收)·defender 在草稿原文找 ±200 字证据反驳·arbiter tally unanswered≥3 → ADVERSARIAL_JUDGE_DEGRADED advisory·占位 scaffolding 真 LLM debate defer·与 meta_critic_audit/cluster_evaluator/parallel_rollout_arbiter/chapter_end_anchor_scan 严格正交·env ADVERSARIAL_JUDGE_PAIR_MODE 默认 off·绝不 hard_gate",
+      "doc": "卷末 cluster 的 attacker-defender-arbiter 三角审查：attacker 生成结构/情感/钩子攻击点，defender 从草稿取证，arbiter 统计未回答攻击。unanswered 达阈值时输出 ADVERSARIAL_JUDGE_DEGRADED advisory；默认 off，绝不 hard_gate。",
       "_new": true,
       "issues_emitted": ["ADVERSARIAL_JUDGE_DEGRADED"]
     },
@@ -1506,7 +1499,7 @@
 
   "anchored_advisory_contract": {
     "_schema_version": "1.0",
-    "_doc": "[2026-06-22 R24 W12 Batch-KK·P1·span-anchored 升级][2026-07-05 更新消费方口径·judge_runner 已于 2026-06-28 删除]audit_hub issue.anchor_spans[] schema 加 anchor_window(≤40CJK)+recursive_widen_level(0..3)·现存链路：scanner violation.anchor_span → audit_hub._collect_anchor_spans 透传 issue.anchor_spans[] → consistency_error_triage_band.py 消费·hard_gate 选填(已有 code+dim 安全裕度)·scanner 不强制改·选填_supports_anchor 字段标 capability",
+    "_doc": "audit_hub issue.anchor_spans[] 支持 anchor_window(≤40CJK) 与 recursive_widen_level(0..3)。链路：scanner violation.anchor_span → audit_hub._collect_anchor_spans → consistency_error_triage_band.py；hard_gate 可选填，_supports_anchor 标记能力。",
     "anchor_window_max_cjk": 40,
     "recursive_widen_level_range": [0, 3],
     "scanners_marked_capability": ["narrator_commentary_scanner", "author_signature_preservation"],

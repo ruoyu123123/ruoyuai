@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
-"""
-gen_writer.py — Gen-Model 分段润色引擎（v29 · OpenAI 兼容协议 /v1/chat/completions）
+"""Gen-Model 分段润色引擎（OpenAI 兼容协议 `/v1/chat/completions`）。
 
-v29 架构（2026-07-11 用户定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）：
+当前写作栈：
   step 2a  novel-writer agent（Claude 亲笔）逐场景写作 →
            章节/cluster_<key>_draft/claude_scenes/scene_*.txt + changes_claude.json
   step 2b  本脚本：
              python gen_writer.py --project "workspace/novels/<book>" --cluster 6
            → 发现 claude_scenes/ → 逐场景段调 gemini 按风格档等体量重写润色
              （段级字数守恒带 [0.85, 1.30] · 超界带字数指令重试 1 次）
-           → 拼接出终稿 cluster_<key>_draft.txt（文件名不变 · 下游 step3-7 零改动）
+           → 拼接出终稿 cluster_<key>_draft.txt
            → changes.json = Claude self_eval/waivers + 本脚本确定性遥测合并
 
-实验依据（workspace/_temp_research/四组生成对比_20260711 · memory
-project_4group_generation_comparison_2026_07_11）：cluster 级 Claude 草稿+gemini 分段润色
-双通道最优；万字整体润色三连败、分段守恒一次成功；gen-model 从零生成+多轮扩写=套话
-+设定漂移 → 从零生成路径已整体清除（不兼容不降级 · 缺 Claude 草稿即 [FATAL]）。
+缺 Claude 场景稿时立即失败，不提供从零生成或扩写路径。
 
-🔴 changes.json 仅承载创作期自评（self_eval / waivers · Claude step 2a 产）
+changes.json 仅承载创作期自评（self_eval / waivers · Claude step 2a 产）
 + 确定性遥测（word_count_cjk / length_telemetry / polish 守恒留痕）；cluster 级 factual 状态
 （角色 / 道具 / 关系 / locked_facts / 伏笔）由 Claude（novel-archivist / foreshadower）
 读正文梳理 → apply_archive.py 确定性回库，writer 链不自报任何 factual 状态。
@@ -2123,12 +2119,8 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
     raise GenModelExhaustedError(failures)
 
 
-# ============ best-of-N：生成 N 稿 + 配对重排 + 综合择优 ============
-
-# ── S9 非对称长度遥测分（LongWriter evaluation/eval_length.py 公式 · research round2 S9 · 2026-07-07）──
-# 🔴 落点纪律：本分**只做遥测**——写进 best-of-N selection_trace 与 changes.json 遥测字段
-# （供 learning_loop / BPR 训练当 reward 特征），绝不参与 select_best_draft 的择稿逻辑
-# （纯 freestyle 契约 · 北极星⑤ · 回归锁 tests/test_best_of_n.py::test_E_no_signal_never_selects_by_cjk）。
+# ============ 长度遥测 ============
+# 仅写入 changes.json 供学习链消费，不参与润色结果选择，也不构成 hard_gate。
 
 
 def length_telemetry_band() -> tuple:
@@ -2158,18 +2150,14 @@ def length_telemetry_score(cjk: int, band: tuple = None) -> float:
     return 100.0
 
 
-# ============ v29 Claude 草稿发现与分段润色 ============
-# （S8 deviation 多样性遥测随 best-of-N 家族一并清除 · v29 润色为确定性单发无 N 候选；
-#   throughline_progress 自 2026-06-28 起由 novel-archivist 抽取回库 · writer 链不自报 ·
-#   v29 创作自评 ending_type/ending_line 由 novel-writer agent 在 changes_claude.json 承载。）
+# ============ Claude 草稿发现与分段润色 ============
+# throughline_progress 由 novel-archivist 抽取回库；ending_type/ending_line 由
+# novel-writer 写入 changes_claude.json。
 #
-# 架构（2026-07-11 用户定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）：
+# 流程：
 #   step 2a  novel-writer agent（Claude 亲笔）逐场景写作 → claude_scenes/scene_*.txt
 #            + cluster_<key>_draft_claude.txt（拼接审计基线）+ changes_claude.json（self_eval 草稿）
 #   step 2b  本脚本：逐场景段调 gemini 按风格档等体量重写润色 → 拼接出终稿 cluster_<key>_draft.txt
-# 实验依据（workspace/_temp_research/四组生成对比_20260711）：cluster 级 Claude 草稿+gemini 润色
-# 双通道最优（嵌入 SFS 0.5625 第一/零禁用词/事实链零漂移）；万字整体润色三连败、分段 ±3% 守恒
-# 一次成功 → 分段是万字润色唯一可行形态；多轮自我扩写=套话×10+设定漂移 → 从零生成路径已清除。
 
 POLISH_CJK_LOW = 0.85   # 段级字数守恒带下限（压缩省略红线）
 POLISH_CJK_HIGH = 1.30  # 上限（注水扩写红线·实验 gemini scene 级曾 +72% 超标）
@@ -2179,14 +2167,13 @@ def discover_claude_scenes(project_root: Path, cluster_id: int):
     """发现 novel-writer（step 2a）落盘的 Claude 亲笔场景稿 + self_eval 草稿。
 
     返回 ([(scene_filename, text), ...] 按文件名序, claude_changes_dict)。
-    缺目录 / 无场景稿 / 场景稿过短 → FileNotFoundError（v29 required 前置 ·
-    绝不回退 gen-model 从零生成 · 不兼容不降级）。
+    缺目录、无场景稿或场景稿过短时抛出 FileNotFoundError。
     """
     draft_dir = project_root / '章节' / f'cluster_{cluster_id:03d}_draft'
     scenes_dir = draft_dir / 'claude_scenes'
     if not scenes_dir.is_dir():
         raise FileNotFoundError(
-            f"Claude 亲笔场景稿目录不存在: {scenes_dir} — v29 流程要求 novel-writer agent"
+            f"Claude 亲笔场景稿目录不存在: {scenes_dir} — novel-writer agent"
             f"（step 2a）先亲笔逐场景写作落盘 claude_scenes/scene_*.txt，再由本脚本分段润色。")
     files = sorted(scenes_dir.glob('scene_*.txt'))
     if not files:
@@ -2264,9 +2251,8 @@ def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
 def clean_polished_body(reply: str) -> str:
     """清洗 gemini 润色回复为纯正文。
 
-    v29：润色回复不再携带 CHANGES JSON（self_eval 由 Claude step 2a 产、遥测由
-    save_output 确定性补），但 reasoning 模型的元前言/尾注/英文自评漏出问题不变，
-    原 split_text_and_changes 的全部剥离逻辑原样保留。误带的 ```json``` 块整块剥除。
+    润色回复不承载 CHANGES JSON；self_eval 由 Claude 场景稿阶段提供，遥测由
+    save_output 确定性补全。这里剥离误带的 JSON、元标题、说明和尾注。
     """
     # 误带 json 块防御：润色任务不要求 CHANGES，模型惯性输出的 json 块按元产物剥掉。
     json_matches = list(re.finditer(r'```json\s*\n(.*?)\n```', reply, re.DOTALL))

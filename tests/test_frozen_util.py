@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""frozen_util 解析逻辑测试（dev-only）。
-
-# 🔴 2026-06-28 移除exe/gen-model梳理方向
-exe/程序驱动方向下线后 frozen_util 退化为 dev-only：child_python()=sys.executable，
-bundle_root/user_data_dir/scripts_dir/user_workspace_dir 只返 dev 值，is_script_dispatch/
-dispatch_or_none 删除。原 frozen 专属测试（设 sys.frozen=True 断言 _MEIPASS/APPDATA 迁移、
-multi-call dispatcher、judge_runner.AGENTS_DIR frozen 路径）一并删除。
-
-保留：dev-return 断言 + fan-out 子进程解释器一致性 guard（绝不裸用 sys.executable / "python"）。
-"""
+"""frozen_util 的开发环境路径与子解释器一致性测试。"""
 import re
 import sys
 from pathlib import Path

@@ -1,7 +1,6 @@
-"""narrative_scanner.py — 段/场景级别叙事质感扫描器（v17.9 G1-G6 + P2-14 G7 + P2-16 G8）
+"""段落与场景级叙事质感扫描器。
 
-业界 2026 共识：scene/段级别的"微观结构"决定剧情质感。
-本脚本集成 8 个检测器：
+集成 8 个检测器：
 
   G1 gmc                — 场景 Goal-Motivation-Conflict-Disaster 完整性
   G2 mru                — 段落动机-反应顺序（Swain MRU）
@@ -19,11 +18,8 @@
 
 输出: JSON 报告。退出 0 = 通过；1 = 警告；2 = 严重问题
 
-【v19 顾问制】本扫描器 6 检测器输出的均为「质感建议」，非「客观错误」。
-每个有 warning 的 check block 统一带 gate_level="advisory"
-—— advisory 即「AI 有充分理由可豁免」（hard_gate 才不可豁免），一个字段说清。
-原 suppressed_warnings（工具按章节模式自适配豁免）保留，与 AI 主动豁免并存
-（工具自适配 + AI 主动豁免双层）。
+所有 warning 都是 `advisory`。工具可按文本特征写入 `suppressed_reason`，写作 agent
+也可按豁免协议提供理由；本扫描器不产生 hard_gate。
 """
 
 import sys
@@ -613,18 +609,13 @@ def main():
     if "perspective_shift" in checks:
         report["perspective_shift"] = scan_perspective_shift(paragraphs)
 
-    # v17.11 豁免分流：单人氛围章对 gmc/mru/microten/orphan 降级为 info（不触发 exit 1）
-    # ch4 validator 实测：这 4 个检测器对单人独处章规则不适配（orphan 含中文分词碎片）
+    # 单人氛围文本对 gmc/mru/microten/orphan 降级为 info。
     SUPPRESSED_IN_SOLO = {"gmc", "mru", "microten", "orphan"}
     warnings = []
     suppressed = []
     for k, v in report.items():
         if isinstance(v, dict) and v.get("warning"):
-            # v19 顾问制：narrative_scanner 6 检测器全是「质感建议」非「客观错误」，
-            # 每条 warning 统一标 gate_level="advisory" —— advisory 即「AI 有充分理由可豁免」。
-            # 与下方 suppressed_warnings（工具按章节模式自适配豁免）并存形成双层：
-            #   gate_level=advisory = AI 主动豁免的「权限标签」（顾问制）
-            #   suppressed_reason   = 工具自适配的「已豁免标记」（工具自设限）
+            # 质感建议统一标 advisory；suppressed_reason 记录工具自适配豁免。
             v["gate_level"] = "advisory"
             if chapter_mode == "solo_atmospheric" and k in SUPPRESSED_IN_SOLO:
                 suppressed.append(f"  [{k}] {v['warning']}  (单人氛围章豁免 → info)")
@@ -646,15 +637,12 @@ def main():
 
 
 def detect_chapter_mode(project_root, ch, body, paragraphs) -> str:
-    """v17.11：判断章节模式。solo_atmospheric = 单人/低对话氛围章。
+    """判断文本特征模式。solo_atmospheric = 单人/低对话氛围章。
 
     判定：cluster_blueprint.characters ≤ 1 人 OR 对话占比 < 5%
 
-    【单一来源约定】（P1-4 起）：本函数是「章节模式」判定的**唯一权威**。
-    其他 scanner（如 plot_structure_scanner 的 Kishōtenketsu）必须从此处导入，
-    严禁各自复制实现 —— 避免参差。"""
-    # 1) cluster_blueprint 角色数（prog 在下方 try 块读取；原 `load_json if 'load_json' in dir()`
-    #    死代码已删——本模块无 load_json，dir() 恒不含，该行恒 None 且被 640 行覆盖）
+    其他 scanner 复用本函数，避免重复实现。"""
+    # 1) cluster_blueprint 角色数
     char_count = None
     try:
         import json as _json

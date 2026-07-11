@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""build_manifest._build_hard_constraints 北极星⑤/④ 修复测试（2026-06-15 Workflow 审计 confirmed）。
+"""build_manifest hard constraints 的北极星④/⑤契约测试。
 
-修 3 个 confirmed bug：
-- Bug1(北极星⑤)：风格量化项(对话占比/句长/逗句比/字数)原无 advisory 标记混进字面 hard_constraints·
-  被 critical_summary 框「必满足」=把 advisory 当 hard_gate。→ 全标 advisory 前缀。
-- Bug2(北极星⑤c)：对话占比 max(0.3,..) 地板把低对话作者(描写型 mean=0.1)强行抬到 30%·覆盖作者基线。
-  → relax-only max(0.0,..)。
-- Bug3(北极星④)：freestyle_v27 仍注入每章字数目标硬约束(与 dcas_word_target=None 矛盾·间接锁字数)。
-  → 历史修法=标 advisory；🔴 2026-07-05 纯 freestyle 契约升级：机械「字数目标 N 字」
-  (源=进度.words_per_chapter 默认 3500)整体清除不再注入(连 advisory 都不给·与 gen_writer
-  expand/FREESTYLE_MIN_CJK 清除同批·北极星⑤ 不按机械长度覆盖模型判断)。唯一幸存的字数
-  信号=作者档 quantitative.chapter_words 的「章节字数 low-high」advisory 区间(作者档第一权威)。
+风格量化项保持 advisory；低对话作者基线不被通用地板抬高；机械章节字数目标不注入
+writer，只有作者档定义的字数区间可作为 advisory。
 """
 import sys
 from pathlib import Path

@@ -1,27 +1,16 @@
-"""wal_recovery.py — save-state 崩溃恢复检测（v19.2 升级版）
-
-v19.2 设计修正：
-- 原 WAL JSON 文件被 save-state step 1 创建后再没人更新（断层）
-- 实际上 plan_tracker.py 已经追踪每步状态（plans/*.json with completed_steps）
-- 所以 wal_recovery 直接读 plan_tracker 状态作为"WAL 真实视图"
-- WAL JSON 文件保留为"传统兼容字段"但不再作为权威源
+"""基于 plan_tracker 的流水线中断恢复检测。
 
 职责：
-- 扫所有 plan_tracker 中 status != DONE/ABORT 的 plan（v26 后主力是 cluster-write /
-  cluster-save-state；chapter mode 的 write-chapter/save-state 已废弃，仅历史 plan 仍兼容显示）
+- 扫描所有 status != DONE/ABORT 的 plan
 - 报告中断点（已完成 step 数 / 总 step 数）
 - 给主代理"从 step N+1 续跑"的明确指令
 
 用法：
     python wal_recovery.py <项目名|项目路径>              # 扫该项目所有未完成 plan
     python wal_recovery.py <项目名|项目路径> --ch <N>     # 查特定章（按 plan.chapter 过滤）
-    python wal_recovery.py <项目名|项目路径> --cluster 001 # 查特定 cluster（v26 cluster mode）
+    python wal_recovery.py <项目名|项目路径> --cluster 001 # 查特定 cluster
 
 退出码: 0 健康 / 1 有未完成 plan / 2 致命
-
-2026-05-29 复审修复[M21]：补 --cluster <key> 入口（cluster-save-state.md 失败逃生舱
-已引用但旧版未实现）。用 cluster_lookup 把 cluster_id 展开成章范围，再按
-「plan.key 同 cluster_id」或「plan.chapter 落在该 cluster 章范围内」双判据过滤 plan。
 """
 
 from __future__ import annotations
@@ -33,10 +22,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-# 2026-05-29 复审修复[M21]：复用 cluster_lookup 做 cluster_id → 章范围展开
 try:
     import cluster_lookup  # 同目录脚本
-except Exception:  # pragma: no cover - 兜底（不阻塞章级路径）
+except Exception:  # pragma: no cover - cluster 过滤不可用时仍允许扫描全部 plan
     cluster_lookup = None
 
 try:

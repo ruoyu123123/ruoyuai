@@ -569,7 +569,6 @@ CODE_TO_MODEL: dict[str, str] = {
     "JUDGE_SCORE_DECLINE": "judge_reliability",
     "JUDGE_SCORE_PLATEAU": "judge_reliability",
     "JUDGE_SCORE_VOLATILITY": "judge_reliability",
-    "PARALLEL_ROLLOUT_ARBITER_DEGRADED": "judge_reliability",
     "PREV_FINDINGS_IGNORED": "judge_reliability",
     # ---- waiver_calibration（豁免行为校准——沿用 _collect_audit_metadata 既有池名） ----
     "WAIVER_PERSISTENT_CODE": "waiver_calibration",

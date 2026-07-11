@@ -25,7 +25,7 @@ import argparse
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -400,7 +400,7 @@ def main():
             "weak_boundary_patterns": WEAK_BOUNDARY_PATTERNS,
         },
         "_metadata": {
-            "segmented_at": datetime.utcnow().strftime("%Y-%m-%d"),
+            "segmented_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "segmenter_version": "v22.cluster.1",
             "notes": "已蒸馏书 retroactive 切分（作者写时无 cluster 概念）。新书写时直接用 ECAS schema 的 cluster_id。",
         },
