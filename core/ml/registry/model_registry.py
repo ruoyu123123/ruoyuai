@@ -69,6 +69,19 @@ def sync_runtime_models(registry_path: str | Path | None = None) -> dict:
         "surprisal_gpt2", "uer-gpt2-chinese-cluecorpussmall",
         "hf://uer/gpt2-chinese-cluecorpussmall", {},
         data_size=0, env_gate="RUOYU_NN_SURPRISAL", status="active"))
+
+    nli_path = root / "core" / "ml" / "models" / "nli" / "erlangshen-roberta-110m-nli"
+    if nli_path.exists():
+        registered.append(mr.register(
+            "nli", "IDEA-CCNL-Erlangshen-Roberta-110M-NLI", _rel(nli_path), {},
+            data_size=0, env_gate="RUOYU_NN_NLI", status="active"))
+
+    content_embed_path = root / "core" / "ml" / "models" / "content_embed" / "bge-small-zh-v1.5"
+    if content_embed_path.exists():
+        registered.append(mr.register(
+            "content_embed", "BAAI-bge-small-zh-v1.5", _rel(content_embed_path),
+            {"auc_adjacent_vs_cross_book": 0.859, "auc_content_sensitivity": 0.763},
+            data_size=0, env_gate="RUOYU_CONTENT_EMBED_CKPT", status="active"))
     return {"registered": registered, "count": len(registered)}
 
 
