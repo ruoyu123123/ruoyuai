@@ -221,41 +221,8 @@ def test_C_dim_set_mismatch_is_inconsistent_even_same_count():
     assert out["order_consistency"] == av.ORDER_INCONSISTENT
 
 
-def test_C_abstain_flows_gen_writer_existing_none_path():
-    """弃票结果流经 gen_writer.score_candidate 既有「缺 AV 信号」降级路径：av_drift_count=None ·
-    composite=sfs（无走味惩罚）· 不当 error 记 · select_best_draft 不崩仍按 SFS 选。"""
-    import gen_writer as gw
-    import style_evaluator as se
-    fwd = _reply({"词汇选择": av.DRIFT_VERDICT})
-    rev = _reply({})
-    mock, _calls = _mock_by_direction(fwd, rev)
-    orig_call = av.call_gen_model
-    orig_sfs = se.compute_style_only_sfs
-    av.call_gen_model = mock
-    se.compute_style_only_sfs = lambda ref, gen, **k: {"style_only_sfs": 71.0, "subscores": {}}
-    try:
-        with _pin_defaults(order_swap=None):  # 默认 on
-            sc = gw.score_candidate("仿写正文。", "作者锚原文。", _Loader([_P()]),
-                                    use_av_judge=True)
-    finally:
-        av.call_gen_model = orig_call
-        se.compute_style_only_sfs = orig_sfs
-    assert sc["av_drift_count"] is None                       # 弃票 = 缺 AV 信号
-    assert sc["composite"] == 71.0                            # 无走味惩罚 · 纯 SFS
-    assert not any("av_judge" in e for e in sc["errors"])     # 弃票不是错误
-    # select_best_draft 对 av=None 候选不崩 · 仍按 composite(SFS) 选
-    scored = [{"idx": 0, "reply": "A", "profile": _P(), "temperature": 0.7, "body_cjk": 1,
-               "score": {"sfs": 60.0, "av_drift_count": None, "av_drift_dims": [],
-                         "composite": 60.0, "errors": []}, "error": None},
-              {"idx": 1, "reply": "B", "profile": _P(), "temperature": 0.8, "body_cjk": 1,
-               "score": dict(sc), "error": None}]
-    best, reason = gw.select_best_draft(scored)
-    assert best == 1, (best, reason)
-
-
-# ════════════════════════════════════════════════════════════════
-# [D] env=0 单跑：与旧实现行为逐字节一致（调试/对照 · 仅加 single_run 留痕）
-# ════════════════════════════════════════════════════════════════
+# （v29：score_candidate 随 best-of-N 家族删除 · 原 test_C_abstain_flows_gen_writer_existing_none_path
+#   测的 gen_writer 择优集成路径已不存在 · av_judge 本体弃票行为由本文件其余测试覆盖。）
 
 def test_D_env0_single_run_byte_identical_old_behavior():
     """AV_JUDGE_ORDER_SWAP=0 → 单跑：3 次调用 · 旧 tag av_judge_bestofn · prompt 逐字节同旧构造 ·

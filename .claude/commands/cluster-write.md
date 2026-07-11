@@ -61,7 +61,7 @@ STEP: <当前步骤号>
      ↓
 1.   build_manifest.py              （cluster 起首章 manifest · 注入 cluster brief + 全 25+ 子系统状态）
      ↓
-2.   novel-writer MODE=ecas         （写整 cluster 正文草稿 + self_eval/waivers 自评 · 不自报 factual · ★禁止 splitter）
+2.   novel-writer MODE=ecas         （v29 两阶段：2a Claude 亲笔逐场景写 claude_scenes/ → 2b gen_writer.py 调 gemini 分段等体量润色出终稿 · self_eval/waivers 自评 · 不自报 factual · ★禁止 splitter · ★禁止 gen-model 从零生成）
      ↓
 3.   cluster 级双轨质检（强制）
      ├─ 机械: audit_hub.py --mode cluster --cluster-id <key> --auto-fix --waivers
@@ -164,7 +164,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1
 
 ---
 
-# 第 2 步：novel-writer ECAS 模式（★禁止 splitter）
+# 第 2 步：novel-writer v29（Claude 亲笔创作 + gemini 分段润色 · ★禁止 splitter）
 
 用 Agent 工具启动 `novel-writer`，prompt 只含 cluster 契约字段：
 
@@ -177,15 +177,25 @@ MODE: ecas
 RESEARCH_REF: <项目路径>/_数据库/.research_cache/<本 cluster 调研文件或 synthesis>
 ```
 
-writer 行为：
-- 产出 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`（整 cluster 正文草稿 · 13000-22000 CJK）
-- 产出 `章节/cluster_<key>_draft/cluster_<key>_changes.json`（只 cluster 级 `self_eval` / `waivers` 创作自评 + 确定性遥测 · **writer 不自报 factual**）
-- 🔴 **禁止自行调 splitter**（v24 流水线：splitter 推迟到 step 6）
-- **逐场景顺序生成（scene-sequential · 2026-07-08 修正轮）**：storyboard ≥2 场景时 gen_writer.py 自动逐场景循环——每场景一次独立 gen-model 调用写透（真机 A/B 证伪一把梭：gemini-3.1-pro 在 ~107k prompt 下自发 stop 于 2-3.5k CJK·每场景压成 ~500 字），场景稿按 storyboard 顺序拼接成单一 draft，CHANGES 尾部单独一次调用产出；首场景 best-of-N 择优、后续单发（blind_revise 强制 off·per-scene 遥测记 changes `scene_sequential` 段）。<2 场景保留一把梭。调度器/审计/splitter 零改动（消费的仍是单一 `cluster_draft.txt`）。🔴 勿复活 expand/字数兜底红线原样保留——scene-sequential 是结构化逐场景生成（写透即止·无「不够长再补」逻辑），≠ 完稿后注水 expand。
+writer 行为（v29 两阶段 · 用户 2026-07-11 定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）：
+- **step 2a Claude 亲笔创作**：agent 读 manifest/风格 skill/brief/research 后逐场景亲笔写作，落盘
+  `章节/cluster_<key>_draft/claude_scenes/scene_*.txt`（每场景写透·分场景落盘规避单响应上限）+
+  拼接审计基线 `cluster_<key>_draft_claude.txt` + 自评草稿 `cluster_<key>_changes_claude.json`
+- **step 2b gemini 分段润色**：agent 调 `gen_writer.py --project <root> --cluster <N>`——自动发现
+  claude_scenes/，逐场景段调 gemini 按风格档**等体量重写润色**（守恒带 [0.85,1.30]·超界带字数指令
+  重试 1 次·万字整体润色已实测三连败必须分段），拼接出终稿
+- 产出 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`（终稿 · 整 cluster ≥10000 CJK）
+- 产出 `章节/cluster_<key>_draft/cluster_<key>_changes.json`（Claude self_eval/waivers + gen_writer
+  确定性遥测合并 · `writer_mode: claude_draft_gemini_polish_v29` · **writer 链不自报 factual**）
+- 🔴 **禁止自行调 splitter**（流水线纪律：splitter 推迟到 step 6）
+- 🔴 **禁止 gen-model 从零生成**：gen_writer.py 已无该路径（缺 claude_scenes/ 即 [FATAL]·不兼容不降级）
+- 🔴 勿复活 expand/字数兜底红线原样保留——Claude 每场景写透即止，字数不够=回头把场景写透而非尾部注水
+- 实验依据：`workspace/_temp_research/四组生成对比_20260711`（cluster 级 Claude 草稿+gemini 润色
+  双通道最优：嵌入 SFS 第一/零禁用词/事实链零漂移；gen-model 直写+多轮扩写=套话×10+设定漂移）
 
-> 🔴 **2026-06-28 审计清理C类**：writer（gen-model）只产正文 + 创作自评（self_eval/waivers），**不产任何 factual 状态自报**。cluster 级 factual（角色/道具/关系/locked_facts/伏笔）由 Claude agent 事后读正文梳理回库（archivist→apply_archive / foreshadower / outline brief），见 `/cluster-save-state`。
+> 🔴 **factual 边界（沿用）**：writer 链只产正文 + 创作自评（self_eval/waivers），**不产任何 factual 状态自报**。cluster 级 factual（角色/道具/关系/locked_facts/伏笔）由 Claude agent 事后读正文梳理回库（archivist→apply_archive / foreshadower / outline brief），见 `/cluster-save-state`。
 
-writer 返回后，检查两文件落地。任一缺失 → 停止，向用户报告（writer 契约违规）。
+writer 返回后，检查四产物落地（claude_scenes/ + draft_claude.txt + draft.txt + changes.json）。任一缺失 → 停止，向用户报告（writer 契约违规）。
 
 **plan-step 2**：
 

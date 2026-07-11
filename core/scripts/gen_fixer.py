@@ -623,7 +623,7 @@ def run_scanners(file_paths: list) -> dict:
             except Exception as e:
                 # v27 修复：静默 except 加日志（debug 友好）
                 logger.info(f"  [gen_fixer] scanner {sc} 输出解析失败 ({e})·exit={r.returncode}")
-                results[fp][sc] = {'verdict': 'ERROR', 'stdout': r.stdout[:200]}
+                results[fp][sc] = {'verdict': 'ERROR', 'stdout': (r.stdout or '')[:200]}
     return results
 
 

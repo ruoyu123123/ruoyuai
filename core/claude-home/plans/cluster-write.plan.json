@@ -42,18 +42,20 @@
     },
     {
       "n": 2,
-      "name": "novel-writer-ecas-only",
-      "description": "spawn novel-writer MODE=ecas · writer 只产 cluster_draft.txt + cluster_changes.json · **禁止调 splitter**（splitter 推迟到 step 6）。🔴 2026-06-28 架构纠正：cluster_changes.json 只承载 writer 创作自评 self_eval/waivers + 确定性遥测（字数等）·**writer 不自报 factual 客观状态**（角色/道具/关系/locked_facts/伏笔 由 cluster-save-state 的 novel-archivist 读正文产 archive.json + apply_archive 确定性回库·非 writer 自报权威）",
+      "name": "novel-writer-claude-draft-gemini-polish",
+      "description": "spawn novel-writer（v29 · Claude 亲笔创作 + gemini 分段润色）· step 2a agent 亲笔逐场景写作落盘 claude_scenes/scene_*.txt + cluster_<key>_draft_claude.txt + changes_claude.json（self_eval 草稿）· step 2b agent 调 gen_writer.py 做 gemini 分段等体量润色（守恒带 [0.85,1.30]·万字整体润色已证伪须分段）出终稿 cluster_draft.txt + changes.json · **禁止调 splitter**（推迟到 step 6）· **禁止 gen-model 从零生成**（gen_writer 已无该路径·缺 claude_scenes 即 FATAL·不兼容不降级）。🔴 changes.json 只承载 Claude 创作自评 self_eval/waivers + gen_writer 确定性遥测·writer 链不自报 factual 客观状态（角色/道具/关系/locked_facts/伏笔由 cluster-save-state 的 novel-archivist 读正文产 archive.json + apply_archive 确定性回库）。实验依据：workspace/_temp_research/四组生成对比_20260711（cluster 级双通道最优）。",
       "required": true,
       "must_spawn_agent": "novel-writer",
-      "agent_executor": "script",
-      "_doc_pipeline": "novel-writer 是创意 wrapper 非 judge——agent_executor=script 表示工作由 scripts[] 的 gen_writer.py 完成，主代理不另派 judge。must_spawn_agent 供 end_plan 校验（判存在走 judge_report_path 声明的 draft 文件）。",
+      "agent_executor": "hybrid",
+      "_doc_pipeline": "novel-writer 是创作 agent（v29 起亲笔写作非 wrapper）——step 2a 由 agent 本体完成（Claude 亲笔），step 2b 由 scripts[] 的 gen_writer.py 完成（gemini 润色）。must_spawn_agent 供 end_plan 校验（判存在走 judge_report_path 声明的终稿文件）。agent_executor=hybrid 表示 agent 亲笔产出中间产物后再跑脚本出终稿。",
       "scripts": [
         "python core/scripts/gen_writer.py --project {project_root} --cluster <cluster_num>"
       ],
       "judge_report_path": "章节/cluster_{key}_draft/cluster_{key}_draft.txt",
       "skip_output_allowed": false,
       "expected_outputs": [
+        "章节/cluster_{key}_draft/claude_scenes/",
+        "章节/cluster_{key}_draft/cluster_{key}_draft_claude.txt",
         "章节/cluster_{key}_draft/cluster_{key}_draft.txt",
         "章节/cluster_{key}_draft/cluster_{key}_changes.json"
       ]

@@ -16,7 +16,7 @@ import gen_writer as gw  # noqa: E402
 
 _DD_HEADING = "深层创作维度"
 _DD_TIP = "【深层维度内容_DD_5151】先生理本能反应再认知最后命名情绪。"
-_GEN_POINT = "# 现在请写正文"
+_GEN_POINT = "# 现在执行润色"
 
 
 def _make_project(tmp, with_dd=True, empty_tip=False):
@@ -49,7 +49,7 @@ def _build(root, dd_mode="active", ctx_mode="active"):
     os.environ["DEEP_DIMS_INJECT_MODE"] = dd_mode
     os.environ["CTX_REORDER_MODE"] = ctx_mode
     try:
-        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=1)
+        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=1, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
     finally:
         for k, v in saved.items():
             if v is None:

@@ -184,14 +184,14 @@ python core/scripts/validate_style.py "风格库/复刻测试/v0/test1_opening.t
 ```
 [阶段 1] 表层蒸馏（cluster 主轨 · 不变）
    ↓ 输出：skill v0 + cluster 单章 JSON + 衔接分析
-[阶段 2] 复刻中检（v3 cluster 单轨 · chapter 模式已删）—— 用 distill_replicate.py --mode cluster 抽样复刻中检
+[阶段 2] 复刻中检（v29 同栈：先 spawn Claude agent 按 skill 写复刻场景稿 → distill_replicate.py --mode cluster --claude-scenes-dir <scenes> 做 gemini 分段润色落盘）
    ↓ 输出：cluster 抽样复刻样本（中检 · 阶段 5 做完整终验）
 [阶段 3] 多维度对比扫描 —— 抽 2-3 章原文 + style_evaluator SFS 评分
    ↓ 输出：差距报告
 [阶段 4] 修正反思 —— 差距维度生成新约束 → skill v1
    ↓ 输出：skill v1 + lessons_learned
-[阶段 5] cluster 终验复刻（v2 新增 · 主推）—— 用 distill_replicate.py --mode cluster 复刻 1-2 个完整故事块
-   ↓ 输出：cluster 复刻样本（4000-20000 字 · sub-call 拆分防 timeout）
+[阶段 5] cluster 终验复刻（主推 · v29 同栈）—— 先 spawn Claude agent 写复刻场景稿，再 distill_replicate.py --mode cluster --claude-scenes-dir <scenes> 润色复刻 1-2 个完整故事块
+   ↓ 输出：cluster 复刻样本（4000-20000 字 · 按 Claude 场景稿分段润色 · 段级守恒带 [0.85,1.30]）
    ↓ 旁证（可选）：env DISTILL_RUBRIC_MODE=on 时 meta.json 附 LongBench-Write 六维 rubric（advisory · 长度剥离 · 不进判据）
    ↓ 终止条件：连续 2 轮无新差距 + cluster SFS ≥ 80（SFS 是唯一出货闸 · 六维 rubric 不参与）
 [阶段 6] 出货 —— _FINAL 四件套 + git commit
@@ -252,10 +252,10 @@ echo "PLAN_ID=$PLAN_ID"
 |---|---|---|---|
 | 阶段 0 | 读经验库 / 预处理（**必读 cluster_index.json**）| `--n 1` | `workspace/styles/<书名>/.plan_markers/stage0_preflight.json` |
 | 阶段 1 | 表层蒸馏（cluster agent + cluster 衔接 + arc 聚合 + skill v0）| `--n 2` | `workspace/styles/<书名>/作者风格.json` |
-| 阶段 2 | 复刻中检（`distill_replicate.py --mode cluster` · chapter 模式已删）| `--n 3` | `复刻测试/.../cluster_<id>_replica.txt` |
+| 阶段 2 | 复刻中检（v29 同栈：Claude 场景稿 + `distill_replicate.py --mode cluster --claude-scenes-dir`）| `--n 3` | `复刻测试/.../cluster_<id>_replica.txt` |
 | 阶段 3 | 多维度对比扫描 + SFS 评分（chapter SFS / cluster mode 6 维）| `--n 4` | `对比报告/distillation_compare_v{N}.json` |
 | 阶段 4 | 修正反思 → skill v{N+1} | `--n 5` | `workspace/styles/<书名>/.plan_markers/stage4_reflection.json` + `skill_v{N+1}.md` |
-| 阶段 5 | cluster 终验复刻（`distill_replicate.py --mode cluster`）| `--n 6` | `复刻测试/.../cluster_<id>_replica.txt` |
+| 阶段 5 | cluster 终验复刻（v29 同栈：Claude 场景稿 + `distill_replicate.py --mode cluster --claude-scenes-dir`）| `--n 6` | `复刻测试/.../cluster_<id>_replica.txt` |
 | 阶段 6 | 出货（_FINAL 四件套 + git commit）·**出货前必先过阶段 7 回灌门槛** | `--n 7` | `作者风格_FINAL.json` + `skill_FINAL.md` + `distillation_log.md` |
 | 阶段 7 | 写作端回灌严闭环（`distill_finalize_verify.py --strict`）·**并入 step 7 出货门槛，不单独占 plan step**（plan 仅 7 步） | 含于 `--n 7`（回灌 exit 0 才落 step 7） | `对比报告/writer_feedback_verify.json` |
 
@@ -621,10 +621,10 @@ EvolveR (arxiv 2510.16079) offline self-distillation 闭环。
 | 阶段 | 脚本 | 产出 |
 |---|---|---|
 | 1.5 arc聚合 | `cluster_segmenter.py` + `arc_aggregator.py` | `cluster_index.json` / `arc_templates/` |
-| 2 chapter复刻 | `distill_replicate.py --mode chapter` | `复刻测试/vN_roundM/` |
+| 2 cluster复刻中检 | v29 同栈（Claude 场景稿 + `distill_replicate.py --claude-scenes-dir`） | `复刻测试/vN_roundM/` |
 | 3 SFS对比 | `distill_replicate.py` + `style_evaluator.py --multi-ref-from-dir` | SFS score + 对比报告 |
 | 4 修正 | 主代理 Edit skill | `skill_vN+1.md` |
-| 5 cluster终验 | `distill_replicate.py --mode cluster` | `cluster_<id>_replica.txt` |
+| 5 cluster终验 | v29 同栈（Claude 场景稿 + `distill_replicate.py --claude-scenes-dir`） | `cluster_<id>_replica.txt` |
 | 6 出货+回灌 | `distill_finalize_verify.py --strict` | `作者风格_FINAL.json` + `skill_FINAL.md` |
 | 6.5 教训沉淀 | 主代理直接总结沉淀到 `distill-style-lessons.md` | 更新经验库 |
 | ~~6.7~~ | ~~已删除·SkillOpt 收编~~ | — |

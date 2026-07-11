@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
 """
-distill_replicate.py — 蒸馏 phase-4 cluster 终验复刻（v3: cluster 单轨 · 2026-05-28）
+distill_replicate.py — 蒸馏 phase-4 cluster 终验复刻（v29 · Claude 亲笔草稿 + gemini 分段润色 · 2026-07-11）
 
-强制走 gen-model（OpenAI 兼容协议外部模型），不走 Claude Code sub-agent。
-v22.cluster.3 起的硬约束 —— 蒸馏闭环复刻必须用最终写作要用的 gen-model 来测。
+v29 架构（用户定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）：蒸馏复刻验证必须
+与正式写作栈**同栈**——复刻 = Claude agent 按 skill 亲笔写复刻场景稿（脚本外部产出）→
+本脚本用 gemini 按 skill **分段润色** → 拼接落盘评分。正式写作栈（gen_writer.py）已同款改造。
 
-v3 改动（2026-05-28 全系统 cluster 化方案 · memory feedback_full_system_cluster_centric）：
-- ❌ 删除 chapter 模式（v3 cluster 单轨化 · chapter 中检违背 cluster 单轨原则）
-- ❌ 删除单段 drill 模式（早已废弃）
-- ✅ --mode cluster（故事块 4000-20000 字）：唯一终验路径
-- ✅ cluster 模式拆 sub-call 防 timeout（沿用 cluster_segmenter A' 半 cluster 教训）
+  step 复刻-a  蒸馏 plan 的复刻 step spawn Claude agent（按 skill 亲笔逐场景写复刻草稿）
+               → --claude-scenes-dir 下 scene_*.txt（per-scene 文件 = 天然润色分段）
+  step 复刻-b  本脚本：逐场景段调 gemini 按风格档等体量重写润色（段级字数守恒带 [0.85, 1.30]·
+               超界带字数指令重试 1 次）→ 拼接 → 落盘 + SFS 评分对照
+
+实验依据（workspace/_temp_research/四组生成对比_20260711 · memory
+project_4group_generation_comparison_2026_07_11）：cluster 级 Claude 草稿 + gemini 分段润色
+双通道最优（嵌入 SFS 第一 / 零禁用词 / 事实链零漂移）；万字整体润色三连败、分段守恒一次成功；
+gen-model 从零生成 + 多轮扩写 = 套话 + 设定漂移 → 从零生成路径已整体清除（不兼容不降级 ·
+缺 Claude 场景稿即 [ERROR] exit 2）。
 
 用法：
 
   python core/scripts/distill_replicate.py \\
     --style-skill workspace/styles/<书名>/skill_v<N>.md \\
-    --mode cluster \\
-    --cluster-ref cluster_001 \\
-    --project workspace/styles/<书名> \\
+    --mode cluster --cluster-ref cluster_001 --project workspace/styles/<书名> \\
+    --claude-scenes-dir workspace/styles/<书名>/复刻测试/v<N>_round<M>/claude_scenes \\
     --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/cluster_001_replica.txt
 
 输出：
-- 复刻文本（纯 txt UTF-8 无 markdown 标记）
-- meta.json sidecar（调用 profile / sub-calls 数 / 字数 / 耗时）
+- 复刻终稿（纯 txt UTF-8 无 markdown 标记）
+- meta.json sidecar（polish_metas per-scene 守恒遥测 / 字数 / 耗时 / draft-refine / rubric）
 
 配置：参见 .env GEN__<name>__* + GEN_MODEL_ACTIVE
 """
@@ -170,207 +175,71 @@ def clean_output(text: str) -> str:
     return text.strip()
 
 
-# ============ L3b · CoT-first 自解释（CoTeX + Register Analysis · 2026-05-31）============
-#
-# 根因：复刻是「得分→盲改 skill→再测」乏力循环 · LLM 直接写长文易段长崩塌（cluster 级 D 级）。
-# 升级（CoTeX 自解释 + Register Analysis）：让 gen-model **先逐条点名「本段命中 skill 哪几条
-# 量化坐标（句长/段长/单句独行/标点密度/虚词）」再写正文** · 用受控语言学坐标
-# （不是「冷峻/华丽」感性词 · 后者改意泄漏内容）。CoTeX 实证 1K 样本 BLEU 68 vs 55。
-#
-# 北极星纪律：只改 prompt 构造（确定性可测）· 不改「复刻走 gen-model」的事实 ·
-# 保留旧 prompt 路径对照（env L3B_COT_FIRST_MODE=off）· CoT 是思考脚手架，落盘正文不含分析段
-# （strip 掉 · 但 meta.json 留 CoT 痕迹 · 不黑箱）。
-
-# CoT 段与正文段的分隔标记（既给 LLM 看也供 strip_cot_analysis 解析）
-COT_ANALYSIS_MARKER = "[本段量化坐标分析]"
-COT_BODY_MARKER = "[正文]"
-
-# 受控语言学坐标自解释指令（Register Analysis · 全部可量化坐标 · 严禁感性词）
-COT_FIRST_DIRECTIVE = f"""# 🔬 先分析后写（CoT-first 自解释 · 必须两段式输出）
-
-在写正文**之前**，先输出一段「量化坐标分析」，逐条点名本段将命中 skill 的哪几条**受控语言学坐标**。
-只准用可量化坐标，**严禁**用「冷峻 / 华丽 / 大气 / 有张力」等感性形容词（感性词会泄漏改意、无法核对）。
-
-## 第一段：{COT_ANALYSIS_MARKER}
-
-逐条写明本段的目标量化坐标（引用 skill 中的具体数值 / 区间）：
-
-1. **句长**：目标 mean ≈ ?（skill 区间）· std 是否高方差（长短句交错）
-2. **段长**：平均段长 ? 字 · 单段是否 ≤ 上限 · 极短段（独句成段）占比 ?%
-3. **单句独行占比**：目标 ?%（非对话段只 1 个句末结束符）
-4. **标点密度**：逗号/句号比 ?（长句加逗号节奏）· 拟声独段 ? 处 · 引号独白 ? 处
-5. **虚词/功能词节奏**：本段倚重哪些功能词做节奏（的/了/着/而/便/竟 等）· 避开哪些 AI 套话虚词
-6. **签名特征落点**：本段命中 skill「作者签名特征」哪 ≥3 条（点名 + 一句话说怎么落到本段场景）
-
-每条 1-2 行，**对准本段具体场景**（不是泛泛复述 skill）。
-
-## 第二段：{COT_BODY_MARKER}
-
-紧接着输出复刻正文，让正文**真实落到上面点名的坐标上**。
-正文段从 {COT_BODY_MARKER} 标记后开始 · 纯文本无 markdown · 无章节标题 · 无解释。
-
-⚠️ 必须严格按 {COT_ANALYSIS_MARKER} → {COT_BODY_MARKER} 两段顺序输出 · 不可只写正文跳过分析。
-"""
-
-
-def _l3b_cot_first_mode() -> str:
-    """读 env L3B_COT_FIRST_MODE 决定复刻 prompt 是否走 CoT-first 自解释。
-
-    值（大小写不敏感）：
-      · active（默认 / 空 / 非法值 · 2026-05-31 放量）：CoT-first 自解释升级开启——
-        prompt 含「先分析后写」两段式指令，gen-model 先输出受控量化坐标分析再写正文；
-        落盘正文 strip 掉分析段、meta 留 CoT 痕迹。token 预算阻碍已修（CoT ceiling 上调
-        8000→12000 · 分析段额外预算 · 正文保底不被挤截断）。
-      · off：旧 prompt 路径——直接出正文、无自解释段（显式关闭做 A/B 对照）。
-      · on/1/true/cot → 归一为 active。
-
-    只改 prompt 构造（确定性可测）· 不改复刻走 gen-model 的事实。
-    """
-    v = (os.environ.get("L3B_COT_FIRST_MODE") or "").strip().lower()
-    if v == "off":
-        return "off"
-    return "active"  # 默认 active（2026-05-31 放量·空/非法值退默认开·只有显式 off 才关）
-
-
-def strip_cot_analysis(text: str) -> tuple[str, str]:
-    """从 gen-model 回复里剥离 CoT 量化坐标分析段，只保留正文供落盘/SFS。
-
-    返回 (正文, cot_analysis_trace)：
-      · 命中 COT_BODY_MARKER → 正文 = marker 之后；cot = marker 之前（含分析段，留痕）。
-      · 未命中 marker（旧 prompt 路径 / 模型没遵守两段式）→ 正文 = 原文，cot = ""（不误删）。
-
-    设计：CoT 是思考脚手架（CoTeX），不进 SFS 评分 / 不污染复刻产出，但 meta.json 留痕不黑箱。
-    宽容解析（防模型把 marker 写成全角括号 / 加序号）：按出现的最后一个 body marker 切分。
-    """
-    # 容错全角/半角 body marker（gen-model 不稳定输出 [正文] 或 【正文】）
-    for bm in (COT_BODY_MARKER, "【正文】"):
-        idx = text.rfind(bm)
-        if idx >= 0:
-            cot = text[:idx].strip()
-            body = text[idx + len(bm):].lstrip(" \t\r\n:：")
-            return body, cot
-    # 无 body marker 但有 analysis marker（全/半角）→ 按其后第一个独行 --- 分隔剥离
-    # （refine 轮 gen-model 常写「【本段量化坐标分析】…---…正文」而漏 [正文] marker）
-    for am in (COT_ANALYSIS_MARKER, "【本段量化坐标分析】"):
-        aidx = text.find(am)
-        if aidx >= 0:
-            m = re.search(r"\n\s*-{3,}\s*\n", text[aidx:])
-            if m:
-                split = aidx + m.end()
-                return text[split:].lstrip(" \t\r\n:："), text[:split].strip()
-    return text, ""
-
-
 # ============ Prompt 模板 ============
 
-REPLICATE_SYSTEM_PROMPT = """你是一位极擅长复刻特定作者风格的写作引擎。
+REPLICATE_SYSTEM_PROMPT = """你就是这位源作者本人，用你自己的手笔把一段草稿等体量重写润色。
 
-主代理（Claude）已蒸馏了源作者的完整 skill（含 48 维度量化基线 / 反模式 / 黄金段落 / 衔接套路）。
-你的任务：严格按 skill 复刻指定颗粒度的文本，用于 SFS（Style Fingerprint Similarity）评分对照。
+主代理（Claude）已蒸馏了你的完整 skill（含量化基线 / 反模式 / 黄金段落 / 衔接套路），
+并按你的 skill 亲笔写了一段复刻草稿。你的任务：把这段草稿**等体量重写润色**，让它的语言、
+节奏、句式、腔调彻底变成你本人的笔法，用于 SFS（Style Fingerprint Similarity）评分对照。
 
-# 复刻硬约束
+# 润色硬约束
 
-1. **量化基线必须命中**（句长 / 段长 / 单句独行占比 / TTR / 标点密度 等）
-2. **反模式必须 0 命中**（禁用词 / 禁用过渡 / 禁用对话标签 一律不出现）
-3. **签名特征至少命中 3 条**（skill 第 1 节"作者签名特征"中任选 3 条以上落到文中）
-4. **黄金段落示例只参考语感，不照抄**（不复刻原文情节 / 角色名 / 专有设定）
+1. **只改笔法，不改故事骨架**：情节走向 / 事件顺序 / 关键事实 / 对话信息量完全不变
+   （等体量重写 · 字数守恒带以 user prompt 为准 · 不许压缩省略、不许注水扩写）
+2. **量化基线必须命中**（句长 / 段长 / 单句独行占比 / TTR / 标点密度 以数值契约表为准）
+3. **反模式必须 0 命中**（禁用词 / 禁用过渡 / 禁用对话标签 一律不出现）
+4. **签名特征落地**（skill「作者签名特征」的手笔真实体现在润色稿里）
 5. **不写章节标题**，不加 markdown 标记
-6. **直接输出正文**，不要"以下是"等引言，不要解释写作选择
-
-# 创作要求
-
-- 自创角色（不复刻 skill 中提及的任何原文角色名）
-- 自创场景（不复刻原文情节）
-- 必须有明确的开头 → 中段 → 收笔三拍
-- 字数严格按要求（±10% 容忍）
+6. **直接输出润色后的正文**，不要"以下是"等引言，不要解释，不要输出任何 JSON
 """
 
 
-# L3b CoT-first 变体 system prompt：把第 6 条「直接输出正文」改为「先分析后写」两段式。
-# 其余硬约束（量化基线 / 反模式 / 签名特征 / 不照抄 / 不写标题）原样保留——只追加自解释纪律。
-REPLICATE_SYSTEM_PROMPT_COT = """你是一位极擅长复刻特定作者风格的写作引擎。
-
-主代理（Claude）已蒸馏了源作者的完整 skill（含 48 维度量化基线 / 反模式 / 黄金段落 / 衔接套路）。
-你的任务：严格按 skill 复刻指定颗粒度的文本，用于 SFS（Style Fingerprint Similarity）评分对照。
-
-# 复刻硬约束
-
-1. **量化基线必须命中**（句长 / 段长 / 单句独行占比 / TTR / 标点密度 等）
-2. **反模式必须 0 命中**（禁用词 / 禁用过渡 / 禁用对话标签 一律不出现）
-3. **签名特征至少命中 3 条**（skill 第 1 节"作者签名特征"中任选 3 条以上落到文中）
-4. **黄金段落示例只参考语感，不照抄**（不复刻原文情节 / 角色名 / 专有设定）
-5. **不写章节标题**，正文段不加 markdown 标记
-
-# 🔬 CoT-first 自解释（本次复刻强制两段式 · 不是直接出正文）
-
-6. **先分析后写**：先逐条点名本段命中 skill 哪几条**受控量化坐标**（句长 / 段长 / 单句独行 / 标点密度 / 虚词），
-   再写正文。坐标必须可量化，**严禁**「冷峻 / 华丽」等感性词（感性词改意泄漏内容）。
-   两段式输出格式详见 user prompt「先分析后写」节，按 [本段量化坐标分析] → [正文] 顺序输出。
-
-# 创作要求
-
-- 自创角色（不复刻 skill 中提及的任何原文角色名）
-- 自创场景（不复刻原文情节）
-- 必须有明确的开头 → 中段 → 收笔三拍
-- 字数严格按要求（±10% 容忍）
-"""
+# 段级字数守恒带（与 gen_writer.POLISH_CJK_LOW/HIGH 同栈同款 · v29 · 2026-07-11）
+POLISH_CJK_LOW = 0.85   # 守恒带下限（压缩省略红线）
+POLISH_CJK_HIGH = 1.30  # 守恒带上限（注水扩写红线）
 
 
-def build_cluster_subcall_prompt(
+def build_polish_subcall_prompt(
     style_skill_md: str,
     ref_text: str,
-    cluster_meta: dict,
-    subcall_index: int,
-    subcall_total: int,
-    prev_tail: str,
-    chapters_in_this_call: int,
-    target_words: int,
-    cot_first: bool = False,
+    scene_text: str,
+    idx: int,
+    total: int,
     seed_section: str = "",
 ) -> str:
-    """cluster 模式的 sub-call prompt（每段都要看见 skill + 上一段尾部 anchor）。
+    """v29 复刻润色 prompt：把 Claude 亲笔复刻场景稿按风格档**等体量重写润色**。
 
-    cot_first=True（L3b · env L3B_COT_FIRST_MODE=active 显式开启）：输出节换成「先分析后写」
-    两段式（CoT-first 自解释 + 受控量化坐标）· 直击 cluster 级段长崩塌。
-    cot_first=False（=off · 默认）：旧的「直接输出正文」节，零回归（影子纪律·待实跑验证后放量）。
+    与 gen_writer.build_prompt 的 polish_point_tail 同栈同款守恒纪律——注入 skill 全文 +
+    同源 ref_text 风格参照 + snippet_seed 语感锚点，让 gemini 只调风格坐标不改情节骨架。
 
-    seed_section（P0 · env SNIPPET_SEED_MODE=on 才非空 · 默认 off）：真实原文「语感种子」段
-    （含避坑指令）· 注在 skill 后做语感起手势锚点 · 防长文退化（北极星①·纯 prompt 注入）。
+    守恒带 [POLISH_CJK_LOW, POLISH_CJK_HIGH]：输出汉字数必须落在
+    [int(src×0.85), int(src×1.30)]，不许压缩省略、不许注水扩写（调用方超界带字数指令重试 1 次）。
+
+    seed_section（env SNIPPET_SEED_MODE=on 才非空 · 默认 off）：真实原文「语感种子」段
+    （含避坑指令）· 注在 skill 后做语感起手势锚点（北极星① · 纯 prompt 注入）。
     """
+    src_cjk = cjk_count(scene_text)
+    lo = int(src_cjk * POLISH_CJK_LOW)
+    hi = int(src_cjk * POLISH_CJK_HIGH)
     parts = ["# 源作者风格 skill（必须严格遵循）\n\n" + style_skill_md]
     if seed_section:
         parts.append(seed_section)
     if ref_text:
         parts.append("# 参考原文（仅作语感参考 · 不照抄情节/角色/设定）\n\n" + ref_text[:4000])
     parts.append(
-        f"# 故事块复刻任务（第 {subcall_index}/{subcall_total} 段）\n\n"
-        f"**颗粒度**：故事块（cluster），整块连续叙事\n"
-        f"**cluster 元信息**：{cluster_meta.get('cluster_id', 'unknown')} · "
-        f"原 cluster 总章数 {cluster_chapters_count(cluster_meta) or '?'} · "
-        f"边界原因 {cluster_meta.get('boundary_reason', '?')}\n"
-        f"**本段任务**：写 {chapters_in_this_call} 章份内容（约 {target_words} CJK 字 ±10%）\n"
+        f"# 润色任务（第 {idx + 1}/{total} 段）\n\n"
+        f"下面是这个复刻故事块**第 {idx + 1} 段（共 {total} 段）**的 Claude 亲笔初稿。"
+        f"请你以上述作者风格档的手笔，把这一段**整体重写润色**：\n\n"
+        f"- **情节走向、事件顺序、关键事实、对话信息量完全不变**——一个字都不许改动语义。\n"
+        f"- 语言、节奏、段落切分、对话腔调全面向风格档靠拢"
+        f"（句长/段长/单句独行/标点分布以数值契约表为准）。\n"
+        f"- **等体量重写**：这一段初稿约 {src_cjk} 个汉字，你的输出必须落在 "
+        f"{lo}-{hi} 个汉字之间——不许压缩省略情节，也不许注水扩写铺陈。\n"
+        f"- 严禁 AI 套话与禁用词；对话用中文弯引号；非对话段一段只一个句末结束符。\n"
+        f"- 只润色这一段；直接输出润色后的这一段正文全文，不要标题、不要解释、不要输出任何 JSON。"
     )
-    if subcall_index > 1 and prev_tail:
-        parts.append(
-            f"# 上一段尾部（必须自然承接，不复述）\n\n{prev_tail[-800:]}"
-        )
-    if subcall_index == 1:
-        parts.append("**段位置**：cluster 开头 · 自创角色与初始矛盾 · 含 1-2 个早期钩子")
-    elif subcall_index == subcall_total:
-        parts.append("**段位置**：cluster 收尾 · 推进到本块情节解决/转折 · 章末留 cliffhanger 或情绪余韵")
-    else:
-        parts.append("**段位置**：cluster 中段 · 推进矛盾 · 至少 1 次场景切换 · 至少 1 个新钩子")
-
-    parts.append(
-        "# 衔接要求\n\n"
-        "- 整个 cluster N 段拼起来必须是**连贯**叙事（同角色、同场景线、同时间线）\n"
-        "- 不分章节标题（splitter 端会处理）\n"
-        "- 段内可有自然空行做场景过渡，但不要插入「***」分隔符"
-    )
-    if cot_first:
-        parts.append(COT_FIRST_DIRECTIVE)
-    else:
-        parts.append("# 输出\n\n直接输出复刻正文（纯文本，无任何 markdown 标记，无章节标题，无解释）。")
+    parts.append(f"# 第 {idx + 1} 段初稿\n\n" + scene_text)
     return "\n\n".join(parts)
 
 
@@ -513,6 +382,33 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
 
 # ============ cluster 模式辅助 ============
 
+def discover_claude_scenes_dir(scenes_dir: Path) -> list[tuple[str, str]]:
+    """枚举 Claude 亲笔复刻场景稿目录（--claude-scenes-dir）下的 scene_*.txt。
+
+    v29 required 前置 · 语义对齐 gen_writer.discover_claude_scenes：目录缺失 / 无场景稿 /
+    单场景稿 <200 CJK → stderr [ERROR] + exit 2（绝不回退 gen-model 从零生成 · 不兼容不降级）。
+    返回 [(scene_filename, text), ...] 按文件名排序（per-scene 文件 = 天然润色分段）。
+    """
+    if not scenes_dir.is_dir():
+        print(f"[ERROR] Claude 复刻场景稿目录不存在: {scenes_dir} — v29 复刻要求先由蒸馏 plan 的"
+              f"复刻 step spawn Claude agent 按 skill 亲笔逐场景写复刻草稿落盘 scene_*.txt，"
+              f"再由本脚本分段润色。", file=sys.stderr)
+        sys.exit(2)
+    files = sorted(scenes_dir.glob("scene_*.txt"))
+    if not files:
+        print(f"[ERROR] {scenes_dir} 下无 scene_*.txt 复刻场景稿", file=sys.stderr)
+        sys.exit(2)
+    scenes: list[tuple[str, str]] = []
+    for f in files:
+        t = f.read_text(encoding="utf-8").strip()
+        if cjk_count(t) < 200:
+            print(f"[ERROR] 复刻场景稿过短(<200 CJK): {f.name} — Claude 复刻草稿必须每场景写透，"
+                  f"禁止梗概占位", file=sys.stderr)
+            sys.exit(2)
+        scenes.append((f.name, t))
+    return scenes
+
+
 def load_cluster_meta(project_root: Path, cluster_id: str) -> dict:
     """从 cluster_index.json 读指定 cluster 元信息"""
     idx_path = project_root / "cluster_index.json"
@@ -557,7 +453,7 @@ def cluster_total_words(cluster_meta: dict) -> int:
     """容忍多 schema 读 cluster 总字数。
 
     契约不符根因：cluster_index.json 实际 key 是 estimated_words，但旧码只读
-    total_words/word_count → estimate_words_per_chapter 永远回退默认 3500。
+    total_words/word_count → meta.json 的 total_words_original 永远回退空。
 
     兼容顺序：estimated_words → total_words → word_count → words。
     """
@@ -611,46 +507,6 @@ def gather_cluster_ref_text(project_root: Path, cluster_meta: dict, max_chars: i
         if total >= max_chars:
             break
     return "\n\n".join(pieces)[:max_chars]
-
-
-def plan_cluster_subcalls(chapters_count: int, max_chapters_per_call: int = 3) -> list[int]:
-    """把 cluster 拆成 sub-call 列表，每个 sub-call 写 N 章。
-    沿用 cluster_segmenter A' 半 cluster 教训：每 call ≤ 3 章 / ≤ 5000 字 / wall-clock ≤ 10 min。
-    返回每个 sub-call 写多少章的列表（和为 chapters_count）。
-    """
-    if chapters_count <= max_chapters_per_call:
-        return [chapters_count]  # 单 call
-    n_calls = (chapters_count + max_chapters_per_call - 1) // max_chapters_per_call
-    base = chapters_count // n_calls
-    rem = chapters_count % n_calls
-    plan = [base + (1 if i < rem else 0) for i in range(n_calls)]
-    return plan
-
-
-def estimate_words_per_chapter(cluster_meta: dict) -> int:
-    """估算每章字数（cluster 总字数 / 章数），默认 3500"""
-    total_words = cluster_total_words(cluster_meta)
-    n = cluster_chapters_count(cluster_meta)
-    if total_words and n:
-        return max(2500, min(5000, total_words // n))
-    return 3500
-
-
-def subcall_max_tokens(target_words: int, cot_first: bool) -> int:
-    """单 sub-call max_tokens 预算（CJK 字 ~1.5 tokens/字 + buffer）。
-
-    🔴 2026-05-31 修阻碍（CoT-first 放量前置）：CoT-first 的「量化坐标分析段」与正文**共享**
-    max_tokens 预算。旧码 cot 用 token_factor 2.6 但被 min(8000) 钳回 8000（与 legacy 同顶）→
-    分析段一占，正文被挤截断（cluster 级长草稿尾部 + 收笔常缺）。修法：CoT 模式给分析段
-    **额外预算**——ceiling 上调 ×1.5（8000→12000），保证正文落字空间 ≥ legacy。
-
-    不变式（测试钉死）：相同 target_words 下 CoT 预算 ≥ legacy 预算（正文不被分析段挤截断）。
-    """
-    if cot_first:
-        token_factor, ceiling = 2.6, 12000   # 分析段额外预算
-    else:
-        token_factor, ceiling = 2.0, 8000
-    return min(ceiling, max(4000, int(target_words * token_factor)))
 
 
 # ============ L3d · draft-level critic-refine + knockout（PerFine 式 · 2026-05-31）============
@@ -884,7 +740,6 @@ def draft_refine_loop(
         try:
             candidate = clean_output(
                 call_fn(system_prompt, refine_user, tag=f"refine r{r}"))
-            candidate, _cot = strip_cot_analysis(candidate)  # 兼容模型误带 CoT 标记
         except GenModelExhaustedError as e:
             print(f"[L3d · refine r{r}] WARN refine 调用失败，保留当前最优稿: {e}")
             rounds_trace.append({"round": r, "stage": "refine", "error": str(e)[:160]})
@@ -1238,33 +1093,28 @@ def run_dimension_ablation(*, project, cluster_ref, skill_version, dimension,
 def main():
     check_deps()
     parser = argparse.ArgumentParser(
-        description="蒸馏 phase-4 cluster 终验复刻（v3 cluster 单轨化 · 2026-05-28 · chapter 模式 deprecated · 强制 gen-model）",
+        description="蒸馏 phase-4 cluster 终验复刻（v29 · Claude 亲笔草稿 + gemini 分段润色 · 2026-07-11）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--style-skill", required=True,
                         help="作者风格 skill .md 路径（v0/v1/v2/...）")
     parser.add_argument("--mode", choices=["cluster"], default="cluster",
-                        help="复刻颗粒度（v3 cluster 化方案 2026-05-28 · chapter 模式已删除 · 唯 cluster）")
+                        help="复刻颗粒度（cluster 单轨 · chapter 模式早已删除）")
     parser.add_argument("--output", required=True,
-                        help="输出 txt 路径")
-
-    # 2026-05-29 修：删除残留的 chapter 模式参数 --chapter-ref / --target-words
-    # （v3 已删 chapter 模式，--mode choices 只剩 cluster，这两个参数无人读取 = 死代码）
+                        help="输出 txt 路径（复刻润色终稿）")
+    parser.add_argument("--claude-scenes-dir", required=True,
+                        help="Claude 复刻场景稿目录，含 scene_*.txt（由蒸馏 plan 的复刻 step "
+                             "spawn Claude agent 先按 skill 亲笔逐场景写复刻草稿落盘）· v29 required 前置")
 
     # cluster 模式参数
     parser.add_argument("--cluster-ref",
-                        help="[cluster 模式] cluster_id（如 cluster_001 / auto_003）")
+                        help="[cluster 模式] cluster_id（如 cluster_001 / auto_003）· 供同源 ref_text + meta")
     parser.add_argument("--project",
-                        help="[cluster 模式] 项目路径（含 cluster_index.json）")
-    parser.add_argument("--max-chapters-per-call", type=int, default=3,
-                        help="[cluster 模式] 每 sub-call 最多写多少章（防 timeout · 默认 3）")
+                        help="[cluster 模式] 项目路径（含 cluster_index.json · 供同源 ref_text / snippet_seed）")
 
     # 通用
     parser.add_argument("--profile",
                         help="覆盖 active profile（默认用 .env GEN_MODEL_ACTIVE）")
-    parser.add_argument("--cot-first", choices=["active", "off"], default=None,
-                        help="[L3b] CoT-first 自解释复刻 prompt：active=先分析后写两段式，"
-                             "off=旧直接出正文路径（默认）。缺省读 env L3B_COT_FIRST_MODE（默认 off）。")
     parser.add_argument("--draft-refine", choices=["active", "off"], default=None,
                         help="[L3d] draft-level critic-refine + knockout：active=出稿后 critic 出"
                              "结构化 feedback 直接改稿 · SFS 当裁判 · 跨轮保最优（3-5 轮 · 默认 active）；"
@@ -1278,12 +1128,8 @@ def main():
 
     style_skill_md = read_text(style_skill, limit=40000)
 
-    # L3b · CoT-first 模式解析：CLI --cot-first 优先，缺省读 env L3B_COT_FIRST_MODE（默认 off·影子纪律）
-    cot_mode = args.cot_first if args.cot_first is not None else _l3b_cot_first_mode()
-    cot_first = (cot_mode == "active")
-    system_prompt = REPLICATE_SYSTEM_PROMPT_COT if cot_first else REPLICATE_SYSTEM_PROMPT
-    print(f"[L3b] CoT-first 自解释复刻 = {cot_mode}"
-          f"（{'先分析后写两段式 · 受控量化坐标' if cot_first else '旧直接出正文路径 · 对照'}）")
+    # v29：复刻 = Claude 亲笔草稿 + gemini 分段润色（同栈）· 唯一 system prompt = 润色语义。
+    system_prompt = REPLICATE_SYSTEM_PROMPT
 
     loader = GenModelLoader()
     if args.profile:
@@ -1295,25 +1141,10 @@ def main():
         print(f"[ERROR] gen-model 配置错误: {e}", file=sys.stderr)
         sys.exit(2)
 
-    # 2026-06-07 适配：reasoning 模型（profile 设 thinking_level）自带内部思考，外加 CoT-first
-    # 「先分析后写」两段式会让它输出「量化坐标分析」元前言（不遵守 COT_BODY_MARKER → strip_cot_analysis
-    # 剥不掉 → 泄漏进正文）+ 挤占正文 token 预算（pro-preview 实证：泄漏+字数崩 1895/18000）。
-    # 故 reasoning 模型自动关 CoT-first，除非用户显式 --cot-first active。
-    _active_reasoning = getattr(active, "thinking_level", None) or getattr(active, "reasoning_effort", None)
-    if cot_first and args.cot_first is None and _active_reasoning:
-        cot_first = False
-        cot_mode = f"off(reasoning-auto·{_active_reasoning})"
-        system_prompt = REPLICATE_SYSTEM_PROMPT
-        print(f"[L3b] 检测到 reasoning 模型({active.model})·自动关 CoT-first "
-              f"→ {cot_mode}（防元前言泄漏+正文预算被挤·2026-06-07 适配）", file=sys.stderr)
-
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 2026-05-29 修：删除不可达的 `if args.mode == "chapter"` 死分支
-    # （--mode choices=["cluster"]，argparse 已在解析阶段拒绝 chapter，此分支永不可达）
-
-    # ========== cluster 模式（v3 唯一形态） ==========
+    # ========== cluster 模式（v29 · Claude 草稿 + gemini 分段润色） ==========
     if not args.cluster_ref or not args.project:
         print("[ERROR] --mode cluster 需要 --cluster-ref + --project", file=sys.stderr)
         sys.exit(2)
@@ -1325,18 +1156,15 @@ def main():
         print(f"[ERROR] cluster 元信息加载失败: {e}", file=sys.stderr)
         sys.exit(2)
 
-    chapters_count = cluster_chapters_count(cluster_meta)
-    if chapters_count <= 0:
-        print(f"[ERROR] cluster {args.cluster_ref} 章数无效: {chapters_count}", file=sys.stderr)
-        sys.exit(2)
+    # 🔴 v29 required 前置：枚举 Claude 亲笔复刻场景稿（缺目录 / 无稿 / 单稿 <200 CJK → [ERROR]
+    # exit 2 · 绝不回退 gen-model 从零生成 · 不兼容不降级 · 语义同 gen_writer.discover_claude_scenes）。
+    scenes_dir = Path(args.claude_scenes_dir)
+    scene_files = discover_claude_scenes_dir(scenes_dir)
 
-    words_per_chapter = estimate_words_per_chapter(cluster_meta)
-    subcall_plan = plan_cluster_subcalls(chapters_count, args.max_chapters_per_call)
     ref_text = gather_cluster_ref_text(project_root, cluster_meta)
 
-    # 🎴 真实原文「语感种子」播种（P0 · env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量 · 真生效）：
-    # 复刻同栈：从 cluster 同源原文池按 ref_text 风格/情绪寄存器选 1-2 段真实片段当语感锚点，
-    # 防 cluster 级长文退化（D 级）；带「只借语感起手势 · 绝不抄情节内容」避坑指令。
+    # 🎴 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on）：从 cluster 同源原文池按
+    # ref_text 风格/情绪寄存器选 1-2 段真实片段当语感锚点（北极星① · 纯 prompt 注入 · 留痕不黑箱）。
     _originals_dir = project_root / "原文"
     if not _originals_dir.exists():
         _originals_dir = None
@@ -1344,67 +1172,77 @@ def main():
         _originals_dir, ref_text=ref_text)
     print(f"[snippet_seed] {seed_trace}", file=sys.stderr)
 
-    print(f"[cluster] {args.cluster_ref} · {chapters_count} 章 · {words_per_chapter} 字/章 估算")
-    print(f"[cluster] sub-call 计划: {subcall_plan}（共 {len(subcall_plan)} 段）")
+    total = len(scene_files)
+    src_total_cjk = sum(cjk_count(t) for _, t in scene_files)
+    print(f"[cluster·v29] {args.cluster_ref} · {total} 个 Claude 场景稿 · 合计 {src_total_cjk} CJK 待润色")
 
     full_text_parts = []
-    subcall_metas = []
+    polish_metas = []
     total_elapsed = 0.0
-    prev_tail = ""
 
-    for i, chapters_in_call in enumerate(subcall_plan, start=1):
-        target_words_this = chapters_in_call * words_per_chapter
-        user = build_cluster_subcall_prompt(
-            style_skill_md, ref_text, cluster_meta,
-            subcall_index=i, subcall_total=len(subcall_plan),
-            prev_tail=prev_tail,
-            chapters_in_this_call=chapters_in_call,
-            target_words=target_words_this,
-            cot_first=cot_first,
-            seed_section=seed_section,
-        )
-        # max_tokens 预算（CoT-first ceiling 上调防分析段挤占正文 · 详见 subcall_max_tokens）
-        max_tokens_this = subcall_max_tokens(target_words_this, cot_first)
+    # v29 分段润色主流程：逐场景段调 gemini 按风格档等体量重写（守恒校验 + 超界重试 1 次）→ 拼接。
+    for i, (name, src) in enumerate(scene_files):
+        src_cjk = cjk_count(src)
+        user = build_polish_subcall_prompt(
+            style_skill_md, ref_text, src, i, total, seed_section=seed_section)
+        # 润色 max_tokens 预算：等体量重写 · 守恒带上限对应 token（src×1.30 CJK ×2 + buffer）·
+        # 生产态 profile.max_tokens(65536) 通常主导，此处仅 profile 未设 max_tokens 时的兜底。
+        max_tokens_this = min(20000, max(4000, int(src_cjk * POLISH_CJK_HIGH * 2.0)))
         try:
             reply, used_profile, elapsed = call_gen_model(
                 loader, system_prompt, user,
                 default_max_tokens=max_tokens_this,
-                tag=f"cluster {i}/{len(subcall_plan)}"
+                tag=f"polish {i + 1}/{total}",
             )
         except GenModelExhaustedError as e:
-            print(f"\n[ERROR] sub-call {i} 全部 profile 失败:\n{e}", file=sys.stderr)
-            # 已成功的段落写到 .partial.txt 防丢
+            print(f"\n[ERROR] 场景 {i + 1}/{total} ({name}) 全部 profile 失败:\n{e}", file=sys.stderr)
+            # 已润色的段落写到 .partial.txt 防丢
             if full_text_parts:
                 partial = "\n\n".join(full_text_parts)
                 output_path.with_suffix(".partial.txt").write_text(partial, encoding='utf-8')
-                print(f"[recovery] 已写 .partial.txt 保留前 {i-1} 段产出", file=sys.stderr)
+                print(f"[recovery] 已写 .partial.txt 保留前 {i} 段产出", file=sys.stderr)
             sys.exit(3)
 
-        clean_piece = clean_output(reply)
-        # L3b：剥离 CoT 量化坐标分析段——只把正文落盘/送 SFS，分析段留 meta 痕迹（不黑箱）。
-        body_piece, cot_trace = strip_cot_analysis(clean_piece)
-        if cot_first:
-            if cot_trace:
-                print(f"[L3b · cluster {i}] CoT 分析段 {cjk_count(cot_trace)} CJK 已剥离落痕 · "
-                      f"正文 {cjk_count(body_piece)} CJK", file=sys.stderr)
-            else:
-                print(f"[L3b · cluster {i}] WARN 模型未按两段式输出（无 [正文] 标记）· "
-                      f"全文当正文处理", file=sys.stderr)
-        full_text_parts.append(body_piece)
-        prev_tail = body_piece
+        body = clean_output(reply)
+        out_cjk = cjk_count(body)
+        ratio = out_cjk / max(src_cjk, 1)
+        retried = False
+        # 段级字数守恒校验：超界带明确字数指令重试 1 次，再超界取离守恒中心更近者（北极星⑤透明可审）。
+        if not (POLISH_CJK_LOW <= ratio <= POLISH_CJK_HIGH):
+            retried = True
+            print(f"[polish] {name} 守恒超界 ratio={ratio:.2f}（{src_cjk}→{out_cjk}）· "
+                  f"带字数指令重试 1 次", file=sys.stderr)
+            user2 = user + (
+                f"\n\n【字数守恒警告】你上一版输出约 {out_cjk} 个汉字，超出守恒带。"
+                f"润色是等体量重写：这一段的输出字数必须落在 "
+                f"{int(src_cjk * POLISH_CJK_LOW)}-{int(src_cjk * POLISH_CJK_HIGH)} 个汉字之间——"
+                f"不许压缩省略情节，也不许注水扩写。重新输出这一段的润色全文。")
+            try:
+                reply2, used_profile, elapsed2 = call_gen_model(
+                    loader, system_prompt, user2,
+                    default_max_tokens=max_tokens_this,
+                    tag=f"polish {i + 1}/{total} retry")
+                elapsed += elapsed2
+                body2 = clean_output(reply2)
+                out2 = cjk_count(body2)
+                if abs(out2 / max(src_cjk, 1) - 1.0) < abs(ratio - 1.0):
+                    body, out_cjk = body2, out2
+                    ratio = out_cjk / max(src_cjk, 1)
+            except GenModelExhaustedError as e:
+                print(f"[polish] {name} 守恒重试全 profile 失败 · 保留首版: {e}", file=sys.stderr)
+
+        full_text_parts.append(body)
         total_elapsed += elapsed
-        subcall_metas.append({
-            "subcall_index": i,
-            "chapters_in_call": chapters_in_call,
-            "target_words": target_words_this,
-            "actual_cjk_chars": cjk_count(body_piece),
+        polish_metas.append({
+            "scene": name,
+            "src_cjk": src_cjk,
+            "out_cjk": out_cjk,
+            "ratio": round(ratio, 3),
+            "retried": retried,
             "profile_used": used_profile.name,
             "elapsed_seconds": round(elapsed, 1),
-            # L3b CoT 痕迹：分析段全文（供复盘核对模型是否真按受控坐标自解释）+ 命中标志
-            "cot_first": cot_first,
-            "cot_analysis_present": bool(cot_trace),
-            "cot_analysis_trace": cot_trace if cot_trace else None,
         })
+        print(f"[polish] {name}: {src_cjk}→{out_cjk} CJK (ratio={ratio:.2f})", file=sys.stderr)
 
     full_text = "\n\n".join(full_text_parts)
 
@@ -1456,9 +1294,10 @@ def main():
 
     meta = {
         "mode": "cluster",
+        "writer_mode": "claude_draft_gemini_polish_v29",
         "cluster_id": args.cluster_ref,
         "cluster_meta": {
-            "chapters_count": chapters_count,
+            "chapters_count": cluster_chapters_count(cluster_meta) or None,
             "chapter_start": cluster_chapter_bounds(cluster_meta)[0],
             "chapter_end": cluster_chapter_bounds(cluster_meta)[1],
             "boundary_reason": cluster_meta.get("boundary_reason"),
@@ -1466,32 +1305,32 @@ def main():
         },
         "style_skill": str(style_skill),
         "project": str(project_root),
-        "subcall_plan": subcall_plan,
-        "subcalls": subcall_metas,
-        "total_target_words": chapters_count * words_per_chapter,
+        "claude_scenes_dir": str(scenes_dir),
+        "scene_count": total,
+        # v29 per-scene 润色守恒遥测（替代 subcall_metas · {scene,src_cjk,out_cjk,ratio,retried} · 北极星⑤透明可审）
+        "polish_metas": polish_metas,
+        "conservation_band": [POLISH_CJK_LOW, POLISH_CJK_HIGH],
+        "total_source_cjk_chars": src_total_cjk,
         "total_actual_cjk_chars": cjk_count(full_text),
         "total_elapsed_seconds": round(total_elapsed, 1),
-        # L3b CoT-first 自解释痕迹（顶层 · 复盘可见用了哪个 prompt 路径 + 几段真自解释）
-        "cot_first_mode": cot_mode,
-        "cot_first_enabled": cot_first,
-        "cot_analysis_subcalls": sum(1 for m in subcall_metas if m.get("cot_analysis_present")),
-        # 🎴 真实原文语感种子播种痕迹（P0 · 默认 off · 留痕不黑箱）
+        # 🎴 真实原文语感种子播种痕迹（默认 on · 留痕不黑箱）
         "snippet_seed": seed_trace,
         # L3d · draft-level critic-refine + knockout 痕迹（PerFine 式 · critic feedback + 每轮 SFS · 不黑箱）
         "draft_refine": refine_trace,
         # A12 · LongBench-Write 六维质量 rubric（advisory 旁证 · 与 SFS 并列 · 不改闸门判据）
         "rubric_sixdim": rubric_report,
-        "produced_by": "distill_replicate.py v3 · cluster mode · A' 半 cluster timeout 防御 · "
-                       "L3b CoT-first 自解释 · 🎴 snippet-seed 播种 · L3d draft critic-refine+knockout · "
-                       "A12 LongBench-Write 六维 rubric（DISTILL_RUBRIC_MODE 门控·advisory）",
+        "produced_by": "distill_replicate.py v29 · Claude 亲笔草稿 + gemini 分段润色（同栈）· "
+                       "段级字数守恒带 [0.85,1.30] · 🎴 snippet-seed 播种 · "
+                       "L3d draft critic-refine+knockout · A12 LongBench-Write 六维 rubric"
+                       "（DISTILL_RUBRIC_MODE 门控·advisory）",
     }
     output_path.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    print(f"\n[OK · cluster] {args.cluster_ref}", file=sys.stderr)
+    print(f"\n[OK · cluster · v29 polish] {args.cluster_ref}", file=sys.stderr)
     print(f"     输出: {output_path}", file=sys.stderr)
-    print(f"     sub-calls: {len(subcall_plan)} 段", file=sys.stderr)
-    print(f"     总字数: {cjk_count(full_text)} CJK (target ≈ {chapters_count * words_per_chapter})")
+    print(f"     润色场景段: {total} 段", file=sys.stderr)
+    print(f"     总字数: {cjk_count(full_text)} CJK（源 Claude 草稿 {src_total_cjk} CJK）")
     if refine_trace.get("draft_refine_enabled"):
         print(f"     draft-refine: {refine_trace.get('rounds_run')} 轮 · "
               f"SFS {refine_trace.get('initial_score')} → {refine_trace.get('final_best_score')}"

@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
-gen_writer.py — Gen-Model 正文生成器（OpenAI 兼容协议 /v1/chat/completions）
+gen_writer.py — Gen-Model 分段润色引擎（v29 · OpenAI 兼容协议 /v1/chat/completions）
 
-v27 freestyle 模式（默认）：
-  python gen_writer.py \
-    --project "workspace/novels/<book>" \
-    --cluster 6
-  → writer 不知道目标章数 · 按 cluster.scope_summary + scene_storyboard 自由发挥
-  → 字数自然涌现（splitter 后期依据 draft 自然切分）
+v29 架构（2026-07-11 用户定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）：
+  step 2a  novel-writer agent（Claude 亲笔）逐场景写作 →
+           章节/cluster_<key>_draft/claude_scenes/scene_*.txt + changes_claude.json
+  step 2b  本脚本：
+             python gen_writer.py --project "workspace/novels/<book>" --cluster 6
+           → 发现 claude_scenes/ → 逐场景段调 gemini 按风格档等体量重写润色
+             （段级字数守恒带 [0.85, 1.30] · 超界带字数指令重试 1 次）
+           → 拼接出终稿 cluster_<key>_draft.txt（文件名不变 · 下游 step3-7 零改动）
+           → changes.json = Claude self_eval/waivers + 本脚本确定性遥测合并
 
-gen_writer 核心职责 = 产正文 draft（配置的写作模型只产正文）。
-读取 manifest + 风格 skill + 调研 cache + cluster_brief + 7 项硬约束，
-组装 prompt，调当前 active 的 gen-model profile（OpenAI 兼容），
-失败时按 fallback 链尝试下一个 profile，
-写出 cluster draft + changes.json + 自动跑 scanner 校验。
+实验依据（workspace/_temp_research/四组生成对比_20260711 · memory
+project_4group_generation_comparison_2026_07_11）：cluster 级 Claude 草稿+gemini 分段润色
+双通道最优；万字整体润色三连败、分段守恒一次成功；gen-model 从零生成+多轮扩写=套话
++设定漂移 → 从零生成路径已整体清除（不兼容不降级 · 缺 Claude 草稿即 [FATAL]）。
 
-🔴 2026-06-28 审计清理A类：changes.json 仅承载 writer 创作期自评（self_eval / waivers）
-+ 确定性遥测（word_count_cjk / paragraph_count / 风格自查指标）；cluster 级 factual 状态
+🔴 changes.json 仅承载创作期自评（self_eval / waivers · Claude step 2a 产）
++ 确定性遥测（word_count_cjk / length_telemetry / polish 守恒留痕）；cluster 级 factual 状态
 （角色 / 道具 / 关系 / locked_facts / 伏笔）由 Claude（novel-archivist / foreshadower）
-读正文梳理 → apply_archive.py 确定性回库，writer 不再自报任何 factual 状态。
+读正文梳理 → apply_archive.py 确定性回库，writer 链不自报任何 factual 状态。
 
 配置：参见 .env 中 GEN__<name>__* 字段 + GEN_MODEL_ACTIVE。
 管理：python core/scripts/gen_model.py list / switch / show / add
@@ -48,11 +50,6 @@ import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化�
 import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster_006" ↔ "6"）
 from atomic_json import atomic_write_text  # noqa: E402 · 2026-06-13 草稿/CHANGES 产物原子落盘（崩溃不留半截）
 import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
-# 🔴 2026-07-08 修正轮：逐场景顺序生成（scene-sequential freestyle）——真机 A/B 证伪 v27
-# 「一把梭自然涌现 12-25k」（gemini-3.1-pro 在 ~107k prompt 下自发 stop 于 2-3.5k CJK · 每场景
-# 压成 ~500 字梗概体）。storyboard ≥2 场景 → 每场景一次独立调用写透；<2 场景保留一把梭。
-# 与 expand（完稿后注水续写 · 已定调红线勿复活）本质不同：无任何「不够长再补」逻辑。
-import gen_writer_scenes  # noqa: E402
 from log_util import get_logger, info, debug, warning, error  # noqa: E402
 # 🔴 2026-06-28 伏笔明暗线隔离：复用 build_manifest 的明暗线过滤为单一真理源——
 #   埋设侧 _sanitize_foreshadowing_to_plant 剥 hidden_payoff（写手只见 surface_clue·当普通细节埋）；
@@ -126,59 +123,7 @@ def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
     return 16000, 'default_fallback_16k_NO_PROBE_YET'
 
 
-# ============ best-of-N 择优（写作端 · 非迭代规避同质化 · 2026-05-31）============
-# 根因（本批任务说明 · arxiv 实证）：单稿直生 + av_judge 只事后单次诊断不回灌；self-refine
-#   反复迭代会同质化（模型把自己的输出当锚反复收敛到同一坨）。best-of-N 走「N 稿并行生成
-#   + 配对判别 + 综合择优」——selection（择优）≠ refine（迭代改），天然规避同质化。
-# 怎么择优（advisory · 不黑箱 · 北极星⑤）：
-#   ① SFS（style_evaluator.compute_style_only_sfs）= 统计指纹相似度（越高越像作者 · 透明可读）。
-#   ② AV-judge 配对判别（av_judge.pairwise_drift_count）= 读者视角 4 维走味计数（越少越像）。
-#   综合分 = SFS 归一 - 走味维度惩罚 → 排序取最高（SFS 当裁判透明 · AV-judge 只 select 不强判）。
-# env BEST_OF_N：默认 2（active · N≥2 真生效）· 设 1 = 关（退回单稿直生 · 零回归逃生口）。
-# env BEST_OF_N_BLIND_REVISE：默认 off（A9 盲修轮 · 见 blind_revise_round 段注释）。
-BEST_OF_N_DEFAULT = 2
-BEST_OF_N_MAX = 5  # 上限防 token 失控（用户质量优先但不无限）
-
-# 综合分：每个走味维度的惩罚（满分 100 的 SFS 尺度上扣多少 · 4 维全走味最多扣 40）。
-AV_DRIFT_PENALTY_PER_DIM = 10.0
-
-
-def _best_of_n() -> int:
-    """读 env BEST_OF_N：默认 2（active 放量 · N≥2 真生效）· 1=关 · 钳到 [1, BEST_OF_N_MAX]。
-
-    空 / 非法值 → 默认 2（与「默认全开 active」纪律一致：用户说默认关掉写它干什么）。
-    设 BEST_OF_N=1 是唯一的关闭口（退回单稿直生 · 零回归）。
-    """
-    raw = (os.environ.get("BEST_OF_N") or "").strip()
-    if not raw:
-        return BEST_OF_N_DEFAULT
-    try:
-        n = int(raw)
-    except (ValueError, TypeError):
-        return BEST_OF_N_DEFAULT
-    if n < 1:
-        return 1
-    return min(n, BEST_OF_N_MAX)
-
-
-def _candidate_temperatures(base_temp: float, n: int) -> list[float]:
-    """为 N 个候选生成**有差异**的 temperature（多样性 = best-of-N 价值来源 · 非迭代）。
-
-    第一稿用 profile 原始 temperature（保持基线行为不变 · 单稿等价）；后续候选在其上加阶梯
-    抖动（+0.1, +0.2, …），钳到 [0.2, 1.2] 合理区间。温度差异让 N 稿真的不同（避免 N 个一样的稿
-    白烧 token），同时不偏离作者风格太远（小步抖动 · 非大跨度）。
-    """
-    temps = [base_temp]
-    step = 0.1
-    for i in range(1, n):
-        t = base_temp + step * i
-        # 钳到合理写作温度区间（过低=刻板 / 过高=发散跑偏）
-        t = max(0.2, min(1.2, round(t, 2)))
-        temps.append(t)
-    return temps
-
-
-# ============ v27 freestyle helpers ============
+# ============ v29 helpers ============
 def _infer_cluster_start_ch(project_root: Path, cluster_id: int) -> int:
     """v27 freestyle：从事件簇.json + 已写章节推导 cluster 起始章号
 
@@ -1000,7 +945,7 @@ def _ctx_reorder_mode() -> str:
 
     lost-in-the-middle / RoPE recency 实证：long-context 中段注意力最弱（U 型），
     紧贴生成点（prompt 末尾）注意力最强。现状 build_prompt 把**第一权威风格 skill**
-    落在 U 型最低的中段，而紧贴生成点「现在请写正文」之前的是 manifest 事实索引
+    落在 U 型最低的中段，而紧贴生成点「现在执行润色」之前的是 manifest 事实索引
     （非风格锚）→ 位置层北极星偏移。
 
     active（默认）：把风格 skill + 语感种子锚移到 prev_ch 之后、「现在请写正文」之前
@@ -1238,17 +1183,16 @@ def _sanitize_character_cards_for_writer(cards_path: Path, current_cluster_id) -
 
 
 def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
-                 scene_view: dict | None = None) -> tuple:
-    """组装 system + user prompt
+                 polish_view: dict | None = None) -> tuple:
+    """组装 system + user prompt（v29 润色模式）
 
-    cluster-first 唯一模式：writer 不暴露目标章数/目标字数，只按 cluster brief
-    产一整块连续叙事；具体章数与每章篇幅由 splitter 后续决定。
-
-    scene_view（2026-07-08 修正轮 · 逐场景顺序生成）：None = 一把梭原行为（逐字节零回归）。
-    非 None（{idx, total, scene_card, consumed_lines, prev_tail}）= scene-sequential 单场景调用：
-      · idx≥1 时 brief 的 scene_storyboard 压缩（已消费卡→前情梗概行 · 防线性膨胀）；
-      · 生成点尾部换成「当前场景卡 + 逐场景硬指令」（本次调用不产 CHANGES）。
+    v29 唯一模式 = 分段润色：polish_view（{idx, total, scene_text}）指定本次要润色的
+    Claude 亲笔场景段。manifest / 风格档 / brief / 人物卡等全部 sections 照常注入
+    （润色需要与写作同等的事实与风格上下文），prompt 尾部为「等体量润色指令 + 原文段」。
+    各段 prompt 头部保持一致 → gemini 隐式前缀缓存生效（省 token）。
     """
+    if not polish_view:
+        raise ValueError("v29: build_prompt 需要 polish_view（分段润色是唯一模式）")
     db = project_root / '_数据库'
 
     # 读取核心资料
@@ -1312,11 +1256,7 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                 plans = _bp_val.get('scene_storyboard', [])
                 break
     relevant_plans = [p for p in plans if ch_start <= p.get('ch', 0) <= ch_start + 30]
-    plan_text = json.dumps(relevant_plans, ensure_ascii=False, indent=2) if relevant_plans else "[]（v27 freestyle · 完全按 cluster_brief.scene_storyboard 自由发挥）"
-    if scene_view and int(scene_view.get("idx", 0)) >= 1:
-        # scene-sequential 膨胀控制：blueprint storyboard 与 brief 同源 · 后续场景不再全量注入
-        plan_text = ("[]（scene-sequential · 已消费场景见前情梗概 · "
-                     "本次要写的场景见 prompt 末尾「当前场景卡」段）")
+    plan_text = json.dumps(relevant_plans, ensure_ascii=False, indent=2) if relevant_plans else "[]（v29 · Claude 亲笔草稿已按 cluster_brief.scene_storyboard 落实·本次任务是等体量润色）"
 
     # 人物卡（全量，不截断——含 voice_pack 是声纹复刻第一依据，截断 = 后登场角色声纹丢失）
     # 🔴 2026-06-28 写手信息隔离：注入前对每张卡跑 _sanitize_character_card 字段级脱敏（单一真理源·
@@ -1347,11 +1287,7 @@ def build_prompt(project_root: Path, cluster_id: int, ch_start: int,
                 # 用 _safe_brief 只供「注入文本」；下面 scope_summary/hard_constraints
                 # 等非密字段仍读原 cluster_brief（不受过滤影响）。
                 _safe_brief = _sanitize_cluster_brief_foreshadowing(cluster_brief, cluster_id)
-                if scene_view and int(scene_view.get("idx", 0)) >= 1:
-                    # scene-sequential 膨胀控制（idx≥1）：已消费场景卡→前情梗概行 ·
-                    # 当前场景→指路占位（全量卡在生成点尾部）· 未写场景→一行预告。
-                    # 首场景（idx=0）全量 brief 原样注入（任务口径：首场景全量）。
-                    _safe_brief = gen_writer_scenes.compact_brief_for_scene(_safe_brief, scene_view)
+                # v29：各段全量注入 brief（prompt 头部跨段一致 → gemini 隐式前缀缓存吸收成本）
                 cluster_brief_text = json.dumps(_safe_brief, ensure_ascii=False, indent=2)
                 # 从 scope_summary 提取硬约束（≥/≤/百分比/角色数等）
                 scope = cluster_brief.get('scope_summary', '')
@@ -1684,25 +1620,22 @@ cluster_brief / manifest 给你的 `foreshadowing_to_plant`（要埋的伏笔）
 - **🆕 narratee_registry 一致性**：当 cluster 出现破壁式叙述者直接对受述者说话时，称谓**必须锁定 `narratee_registry.primary`**(如全篇『亲爱的读者』)·禁混用『诸位看官』『各位』『你』等。**min_consistency ≥ 0.8** = primary 至少占所有 narratee 称谓 80%。**allowed_addresses 之外的称谓一律不出现**
 - **🆕 与 D10 metalepsis 关联**：narratee 越界(『亲爱的读者』)算 D10 的 narratee 类 marker，**称谓一致性单独由 D12 计数**——不双计但都要满足
 
-# 输出格式（cluster 连续叙事模式）
+# 输出格式（v29 分段润色模式）
 
-**核心原则：你输出的是「一整块连续叙事正文」，给后续 chapter-splitter 决定章节自然截断点的素材。**
+**核心原则：你输出的是这一段初稿的润色全文——连续叙事片段，给后续 chapter-splitter 决定章节自然截断点的素材。**
 
 **严禁预设章节分界**：
 - ❌ 不要写「第 N 章 标题」/「第N章 标题」等章节标记
 - ❌ 不要用「——」或其他分章分隔符把故事切开
 - ❌ 不要写 Markdown 标题（# / ## 等）
-- ❌ 不要写「以下是」/「故事开始」等元话语
+- ❌ 不要写「以下是」/「故事开始」/「润色后」等元话语
 
-**正确做法**：把整个故事块当一篇长散文写。场景之间用**自然过渡**（空行 / 时间标记句 / 视角切换句）衔接，**不打章节标签**。splitter 后期会根据自然截断点（场景结束 / 时间跳跃 / POV 切换 / 情绪峰值回落）切分章节并各自命名。
+**正确做法**：按初稿的场景推进原样润色。场景内的自然过渡（空行 / 时间标记句 / 视角切换句）保留结构，**不打章节标签**。splitter 后期会根据自然截断点切分章节并各自命名。
 
-为什么这样：writer（你）擅长连续叙事的内在节奏；splitter（另一个 agent）擅长判断章节边界。预设章节边界 = writer 为「章末必须有钩子」强行设计信息炸弹结尾 = 显得刻意。让 splitter 在你写完后选自然截断点 = 章节边界看起来像页面物理限制而非刻意叙事设计。
-
-完成正文后，在【同一次回复里】紧接着直接输出 JSON 格式的 CHANGES 部分（用 ```json ... ``` 包裹）。**CHANGES 只承载你的创作期自评（self_eval / waivers）+ 确定性遥测（字数 / 段数 / 风格自查指标）**——不要在 CHANGES 里自报角色 / 道具 / 关系 / locked_facts / 伏笔等剧情事实状态（这些由系统读你的正文自动梳理入库，你只管把正文写好）。
-
-🔴 **你是写作引擎，不是对话助手**（reasoning/instruct 模型尤其注意）：
-- 禁止停下来问我、禁止说「请审阅」「要不要我输出 CHANGES」「当你认为正文满足后请告诉我」「我将为你输出」之类的话、禁止等我确认——正文 + CHANGES JSON 必须在**这一次回复**里一次性给全，正文写完直接接 ```json``` 块。
-- 正文必须是**纯中文叙事**：严禁在正文里夹任何英文词（argue/KPI/offer/NPC/BUG/cluster/fs/CHANGES/JSON 等流程词或技术词一律用中文表达，如 argue→argue 改说「跟…讲道理/对线」），严禁任何流程说明/创作概要/元注释/对读者喊话（除非作者风格档本身要求破壁旁白）。这些技术词只允许出现在 ```json CHANGES``` 块内部。
+🔴 **你是润色引擎，不是对话助手**（reasoning/instruct 模型尤其注意）：
+- 禁止停下来问我、禁止说「请审阅」「需要我继续吗」之类的话、禁止等我确认——润色全文必须在**这一次回复**里一次性给全。
+- **不要输出任何 JSON / CHANGES 块**（自评与遥测由系统另行处理，你只交付润色正文）。
+- 正文必须是**纯中文叙事**：严禁在正文里夹任何英文词（NPC/BUG/cluster/JSON 等流程词或技术词一律用中文表达），严禁任何流程说明/润色说明/元注释/对读者喊话（除非作者风格档本身要求破壁旁白）。
 """
 
     # v22.gov.align.fix Gap T2-X: cluster 硬约束段（顶部显著位）
@@ -1726,17 +1659,17 @@ cluster_brief 完整内容：
 
 """
 
-    task_intro = f"""# 写作任务
+    task_intro = f"""# 润色任务（v29 · Claude 亲笔草稿 → 你按作者风格档等体量重写）
 
-为本项目 cluster_{cluster_id:03d} 写**一整块连续叙事**。
+本项目 cluster_{cluster_id:03d} 的正文初稿已由另一位写手按 scene_storyboard 逐场景写好。你的任务是把 prompt 末尾给出的**其中一段初稿**以作者本人的手笔**整体重写润色**。
 
-**🎯 v27 自由发挥模式**：
-- 你**不知道**目标章数（章数与每章篇幅由 splitter 后期根据 draft 自然切分）
-- 不锁精确字数，但**这是一个完整的故事块（cluster），不是单章**——它由 scene_storyboard 里的**多个场景**构成，**每个场景都要充分展开**（动作 / 对话 / 环境 / 内心 / 冲突推进逐一到位，切忌一笔带过、切忌只写梗概或跳着叙述）。
-- 不接受任何预设字数目标；篇幅只由 cluster_brief + scene_storyboard 的内容密度自然决定。**如果你觉得"讲完了"，用 scene_storyboard 核对是否每个场景都已经落到动作、对话、环境、内心和冲突推进，而不是用字数判断是否完成。**
-- **专注做对的事**：把 cluster_brief.scope_summary + scene_storyboard 描述的**每一个场景**都充分展开（逐拍据 beat 的 goal/conflict/turn 补写）+ **自然埋设** foreshadowing_to_plant 的 surface_clue（当普通细节埋·只埋不解释·见 H6），全部写透后再自然收尾。
+**🎯 v29 润色纪律**：
+- **情节走向、事件顺序、关键事实、对话信息量完全不变**——下方 manifest / cluster_brief / 人物卡提供的锁定事实、称谓、数值、道具持有链，一个字都不许改动语义。
+- 语言、节奏、段落切分、对话腔调全面向作者风格档靠拢（数值契约表第一权威）。
+- **等体量重写**：不许压缩省略情节，也不许注水扩写铺陈（具体字数带见 prompt 末尾）。
+- 你**不知道**也不需要知道章数（章数与每章篇幅由 splitter 后期切分）。
 
-⚠️ **重要提醒**：你输出的是**一整块叙事**，不是分好章的成品。**严禁**写「第 N 章 标题」/「——」分章符。把整个故事块当一篇长散文写，场景之间自然过渡。
+⚠️ **重要提醒**：输出仍是**连续叙事**片段。**严禁**写「第 N 章 标题」/「——」分章符 / Markdown 标题 / 元话语。
 """
 
     # 种子段拼接（mode=off/shadow 时 seed_section 为空 → 不注入 · 零回归）
@@ -1780,7 +1713,7 @@ cluster_brief 完整内容：
     # context 中段注意力最弱（U 型），紧贴生成点（prompt 末尾）注意力最强。
     # 原版 join 把**第一权威风格 skill**落在中段最低注意力区，而紧贴生成点的是 manifest
     # 事实索引（非风格锚）= 位置偏移。active 模式把风格 skill + 语感种子锚移到 prev_ch 之后、
-    # 「现在请写正文」之前的生成点近邻（RoPE 高位），manifest 事实索引留中段。
+    # 「现在执行润色」之前的生成点近邻（RoPE 高位），manifest 事实索引留中段。
     # 正交于 D1-D9 / snippet 种子（那些管「注什么内容」）——本开关只管「注在哪个位置」。
     reorder_active = (_ctx_reorder_mode() == "active")
     if reorder_active:
@@ -1827,7 +1760,7 @@ cluster_brief 完整内容：
 
 ---
 
-# 现在请写正文"""
+# 现在执行润色"""
     else:
         # off / shadow：原版 join 顺序（零回归回退路径）
         user = f"""{task_intro}
@@ -1861,41 +1794,35 @@ cluster_brief 完整内容：
 
 {prev_tail_echo_block}{primacy_block}---
 
-# 现在请写正文"""
+# 现在执行润色"""
 
-    # 生成点尾部（两个 join 分支共用 · 紧贴生成点的指令 + 自查项）
-    # 🔴 2026-06-28 审计清理A类：自查项只留创作期自评 + 确定性遥测；factual 状态簇
-    # （facts_locked/出场角色/new_items/foreshadowing_planted·paid/throughline_progress）已删——
-    # 那些由 Claude（novel-archivist/foreshadower）读正文梳理 → apply_archive 回库，writer 不自报 factual。
-    # 🔴 2026-07-08 修正轮：scene_view 非 None（逐场景模式）→ 生成点尾部换成
-    # 「当前场景卡 + 逐场景硬指令」（本次调用只写一个场景 · 不产 CHANGES）。
-    if scene_view:
-        user += gen_writer_scenes.scene_gen_point_tail(scene_view)
-        return system, user, seed_trace
+    # v29 润色点尾部：等体量润色指令 + 本段 Claude 亲笔原文。
+    # 上面全部 manifest / 风格 / brief / 人物卡 sections 原样保留——润色需要与写作
+    # 同等的事实与风格上下文（锁定事实 / 伏笔隔离 / 声纹依据都在其中）。
+    _pv_idx = int(polish_view.get('idx', 0))
+    _pv_total = int(polish_view.get('total', 1))
+    _pv_src = polish_view.get('scene_text', '')
+    _pv_src_cjk = cio.count_cjk(_pv_src)
+    polish_point_tail = f"""
 
-    gen_point_tail = f"""
+---
 
-按 7 项硬铁律 + 元 anti-slop 防御 · 完整覆盖 cluster_brief 的所有 scene_storyboard 自由发挥（章数由 splitter 后期切，你不必管）。
+# 润色任务（第 {_pv_idx + 1}/{_pv_total} 段）
 
-**🧬 据 scene_storyboard 的 beat 骨架补写（走向是骨·你补创作 · advisory）**：scene_storyboard 的每个 beat 带 `goal`（这一拍要达成什么）/ `conflict`（阻力）/ `turn`（转折）/ `emotional_tone`（情绪基调）/ `key_beats`（关键节拍）。**逐拍据 beat 的目标/冲突/转折把 prose 补写出来**——你负责创作层（具体动作、你来我往的对话、五感细节、内心、句子节奏），骨架负责「这一拍发生什么、往哪走」。**别脱离 beat 骨架自由发挥**（给了 conflict 就别跳过冲突直接和解、给了 turn 就写到那个转折），防剧情漂移跑偏大势；但**不锁文笔/字数/分句**——怎么写、写多细由作者风格定。
+下面是这个故事块**第 {_pv_idx + 1} 段（共 {_pv_total} 段）**的初稿。请你以上述作者风格档的手笔，把这一段**整体重写润色**：
 
-**🔴 伏笔只埋不剧透（见 H6）**：foreshadowing_to_plant 的 surface_clue 当普通细节自然写·绝不解释它暗示什么；只兑现 reveal_directive 明确要求揭晓的伏笔，没要求揭晓的一律只埋不揭。
+- **情节走向、事件顺序、关键事实、对话信息量完全不变**——锁定事实（数值/称谓/道具持有）一个字都不许改动语义。
+- 语言、节奏、段落切分、对话腔调全面向风格档靠拢（句长/段长/单句独行/标点分布以数值契约表为准）。
+- **等体量重写**：这一段初稿约 {_pv_src_cjk} 个汉字，你的输出必须落在 {int(_pv_src_cjk * 0.85)}-{int(_pv_src_cjk * 1.3)} 个汉字之间——不许压缩省略情节，也不许注水扩写铺陈。
+- 严禁 AI 套话与禁用词（见上方硬约束）；对话用中文弯引号；非对话段一段只一个句末结束符。
+- 伏笔相关内容按初稿原样保留埋设深度——不解释、不点破、不加暗示。
+- 只润色这一段；直接输出润色后的这一段正文全文，不要标题、不要解释、不要输出任何 JSON。
 
-**自查项**（写完后请在 CHANGES JSON 里自报 · 仅你的创作期自评 + 确定性遥测，**不要自报角色/道具/关系/locked_facts/伏笔等剧情事实状态**）：
-- word_count_cjk
-- paragraph_count
-- narrative_paras_with_short_sentence_overuse（≤ 0）
-- max_demonstrative_noun_repeat_in_5para_window（≤ 3）
-- paragraph_head_subject_3plus_streak_count（≤ 0）
-- dash_count / dash_per_thousand（≤ 8）
-- meta_vocab_disclaimer_count（≤ 2）
-- negation_action_count（≤ 25）
-- story_block_ch_range
-- self_eval.applied_style.ending_type / ending_line（**可选·衔接遥测用**：本块结尾类型（如"悬念断章/情绪收束"）+ 最后一句原文）
+【第 {_pv_idx + 1} 段初稿】
 
-现在开始写。"""
+{_pv_src}"""
 
-    user += gen_point_tail
+    user += polish_point_tail
 
     return system, user, seed_trace
 
@@ -2095,11 +2022,10 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
     """调当前 active profile；失败时按 fallback 链尝试。
 
     creative=True（写正文）→ 剔除 flash-tier 兜底，pro 全挂响亮失败（不静默降质 · 北极星：质量优先）。
-    prior_assistant / cont_reason（2026-07-08 修正轮）：透传 _stream_once 的续写机制——
-      scene-sequential 的 CHANGES 尾部单独调用走 prior_assistant=<拼接正文> + cont_reason=
-      'changes_only'（复用既有 changes_only 指令文案 · 不另起调用栈）。缺省 = 原行为零回归。
-    return_finish=True → 返回 (full_text, used_profile, finish_reason)（per-scene 遥测用）；
-      缺省 False 返回 (full_text, used_profile)（既有调用方零改动）。
+    prior_assistant / cont_reason：透传 _stream_once 的续写机制（保留供长输出续写场景）。
+      缺省 = 常规单发。
+    return_finish=True → 返回 (full_text, used_profile, finish_reason)；
+      缺省 False 返回 (full_text, used_profile)。
 
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
 
@@ -2232,565 +2158,124 @@ def length_telemetry_score(cjk: int, band: tuple = None) -> float:
     return 100.0
 
 
-# ── S8 deviation 双嵌入多样性遥测分（DDPO arXiv:2503.17126 的 deviation 度量 ·
-#     research/open_source_writing_systems_round2.md S8 · 2026-07-07 · 只抄度量不抄训练）──
-# 🔴 落点纪律（与 S9 同款）：本分**只做遥测**——每候选 {style_deviation, content_deviation}
-# 写进 selection_trace + changes 遥测（供 learning_loop / BPR 当 reward 特征），顶层
-# diversity_collapse_hint 只提示「N 候选已坍缩同一模式，选择是假选择」——只记录绝不改择稿
-# （select_best_draft 零感知 · 北极星⑤ · 源码锁 tests/test_best_of_n.py::
-# test_I_deviation_never_participates_in_selection）。
-# 双轨 W6-C：风格轨 = EMBED_BACKEND 声纹（compute_embeddings_batch·daemon 热路径）；
-# 内容轨 = bge-small-zh（compute_content_embeddings_batch·不可用诚实 None 无 hash 兜底）。
+# ============ v29 Claude 草稿发现与分段润色 ============
+# （S8 deviation 多样性遥测随 best-of-N 家族一并清除 · v29 润色为确定性单发无 N 候选；
+#   throughline_progress 自 2026-06-28 起由 novel-archivist 抽取回库 · writer 链不自报 ·
+#   v29 创作自评 ending_type/ending_line 由 novel-writer agent 在 changes_claude.json 承载。）
+#
+# 架构（2026-07-11 用户定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）：
+#   step 2a  novel-writer agent（Claude 亲笔）逐场景写作 → claude_scenes/scene_*.txt
+#            + cluster_<key>_draft_claude.txt（拼接审计基线）+ changes_claude.json（self_eval 草稿）
+#   step 2b  本脚本：逐场景段调 gemini 按风格档等体量重写润色 → 拼接出终稿 cluster_<key>_draft.txt
+# 实验依据（workspace/_temp_research/四组生成对比_20260711）：cluster 级 Claude 草稿+gemini 润色
+# 双通道最优（嵌入 SFS 0.5625 第一/零禁用词/事实链零漂移）；万字整体润色三连败、分段 ±3% 守恒
+# 一次成功 → 分段是万字润色唯一可行形态；多轮自我扩写=套话×10+设定漂移 → 从零生成路径已清除。
 
-# 保守经验地板（cosine 距离尺度）· 待金标准校准（真机 N 候选 deviation 分布测量后收紧·
-# 已登记 threshold_registry：gen_writer.py::DEVIATION_COLLAPSE_FLOOR_DEFAULT）。
-DEVIATION_COLLAPSE_FLOOR_DEFAULT = 0.02
-
-
-def _deviation_collapse_floor() -> float:
-    """读 env DEVIATION_COLLAPSE_FLOOR（默认 0.02 保守 · 空/非法/负值回退默认）。"""
-    raw = (os.environ.get("DEVIATION_COLLAPSE_FLOOR") or "").strip()
-    if not raw:
-        return DEVIATION_COLLAPSE_FLOOR_DEFAULT
-    try:
-        v = float(raw)
-    except (ValueError, TypeError):
-        return DEVIATION_COLLAPSE_FLOOR_DEFAULT
-    return v if v >= 0 else DEVIATION_COLLAPSE_FLOOR_DEFAULT
+POLISH_CJK_LOW = 0.85   # 段级字数守恒带下限（压缩省略红线）
+POLISH_CJK_HIGH = 1.30  # 上限（注水扩写红线·实验 gemini scene 级曾 +72% 超标）
 
 
-def _style_embeddings_for_deviation(bodies: list) -> "list | None":
-    """风格轨嵌入（EMBED_BACKEND 声纹 · embedding_store 批 API · daemon/venv 桥）。
+def discover_claude_scenes(project_root: Path, cluster_id: int):
+    """发现 novel-writer（step 2a）落盘的 Claude 亲笔场景稿 + self_eval 草稿。
 
-    返回与 bodies 等长的 list[vec|None]；整轨不可用 → None：
-    · 后端=hash（默认零配置）→ 整轨 None——hash 不是风格语义，拿它算 deviation 是伪装信号；
-    · 真后端下单候选桥失败会被 compute_embeddings_batch 兜底成 hash 384 维 → 按「维度
-      与后端 dim 不符」识别出来置 None（该候选诚实标失败 · 不让 hash 向量污染 pairwise）。
+    返回 ([(scene_filename, text), ...] 按文件名序, claude_changes_dict)。
+    缺目录 / 无场景稿 / 场景稿过短 → FileNotFoundError（v29 required 前置 ·
+    绝不回退 gen-model 从零生成 · 不兼容不降级）。
     """
-    try:
-        import embedding_store as es
-        method, dim, _fn = es._detect_backend()
-        if method == "hash":
-            return None
-        vecs = es.compute_embeddings_batch(bodies)
-        return [v if (v and len(v) == dim) else None for v in vecs]
-    except Exception:  # noqa: BLE001 — 遥测层绝不阻断写作
-        return None
-
-
-def _content_embeddings_for_deviation(bodies: list) -> "list | None":
-    """内容轨嵌入（bge-small-zh · W6-C 双轨）。整轨不可用 → None（无 hash 兜底 · 诚实 skip）。
-
-    compute_content_embeddings_batch 契约 = 全有或全无（部分失败 → None），故内容轨
-    没有「单候选 None」形态——要么全轨可算，要么整轨 skip。
-    """
-    try:
-        import embedding_store as es
-        return es.compute_content_embeddings_batch(bodies)
-    except Exception:  # noqa: BLE001 — 遥测层绝不阻断写作
-        return None
-
-
-def _pairwise_mean_distances(vecs: list) -> list:
-    """每向量与其余向量的平均余弦距离（1 - cosine · 值越低越同质）。
-
-    vec=None（该候选嵌入失败）或无可比对象（其余全 None）→ 该位 None。
-    """
-    import embedding_store as es
-    n = len(vecs)
-    out: list = [None] * n
-    for i in range(n):
-        if not vecs[i]:
-            continue
-        ds = [1.0 - es.cosine_similarity(vecs[i], vecs[j])
-              for j in range(n) if j != i and vecs[j]]
-        if ds:
-            out[i] = round(sum(ds) / len(ds), 4)
-    return out
-
-
-def candidate_deviation_scores(bodies: list) -> "list[dict] | None":
-    """N 候选双嵌入 deviation 遥测分（风格/内容分开算 · DDPO deviation 度量）。
-
-    每候选 = {style_deviation, content_deviation}：与其余候选的平均 pairwise 余弦距离。
-    · N<2 → None（deviation 无定义 · 诚实 skip 不伪装）；
-    · 两轨全不可用 → None；单轨不可用 → 该轨全 None；
-    · 真后端下单候选嵌入失败 → 该候选风格轨 None（其余候选照算 · 不崩）。
-    成本：每轨一次批调用（N 条 · daemon 热路径便宜）。仅遥测——不进择稿、不 hard_gate。
-    """
-    if not bodies or len(bodies) < 2:
-        return None
-    style_vecs = _style_embeddings_for_deviation(bodies)
-    content_vecs = _content_embeddings_for_deviation(bodies)
-    if style_vecs is None and content_vecs is None:
-        return None
-    n = len(bodies)
-    style_dev = _pairwise_mean_distances(style_vecs) if style_vecs is not None else [None] * n
-    content_dev = _pairwise_mean_distances(content_vecs) if content_vecs is not None else [None] * n
-    return [{"style_deviation": s, "content_deviation": c}
-            for s, c in zip(style_dev, content_dev)]
-
-
-def diversity_collapse_hint(deviations: "list | None", floor: float = None) -> "bool | None":
-    """全体 style_deviation 均值 < 地板 → True（N 候选坍缩同一模式 · 选择是假选择）。
-
-    只记录绝不改择稿（北极星⑤）。风格轨无任何有效值 → None（未知 ≠ 健康 · 不假装 False）。
-    地板默认 _deviation_collapse_floor()（env DEVIATION_COLLAPSE_FLOOR · 保守值待金标准标定）。
-    """
-    if not deviations:
-        return None
-    vals = [d.get("style_deviation") for d in deviations
-            if d.get("style_deviation") is not None]
-    if not vals:
-        return None
-    f = _deviation_collapse_floor() if floor is None else floor
-    return (sum(vals) / len(vals)) < f
-
-
-def gather_author_ref_text(project_root: Path, max_chars: int = 6000) -> str:
-    """定位作者真实原文当 SFS / AV-judge 的锚（best-of-N 择优用 · 找不到则空）。
-
-    复用 snippet_seed.resolve_originals_dir 的同款原文池定位（项目自带 原文/ → 风格库 原文/），
-    取若干章拼成参考文本（截到 max_chars 控 SFS / judge token）。找不到原文池 → 返回 ""，
-    调用方据此优雅降级（无锚则跳 best-of-N · 退回单稿 · 不报错 · 不阻断写作）。
-    """
-    try:
-        originals = snippet_seed.resolve_originals_dir(project_root)
-    except Exception:
-        originals = None
-    if not originals or not originals.exists():
-        return ""
-    chunks: list[str] = []
-    total = 0
-    for p in sorted(originals.glob("*.txt")):
+    draft_dir = project_root / '章节' / f'cluster_{cluster_id:03d}_draft'
+    scenes_dir = draft_dir / 'claude_scenes'
+    if not scenes_dir.is_dir():
+        raise FileNotFoundError(
+            f"Claude 亲笔场景稿目录不存在: {scenes_dir} — v29 流程要求 novel-writer agent"
+            f"（step 2a）先亲笔逐场景写作落盘 claude_scenes/scene_*.txt，再由本脚本分段润色。")
+    files = sorted(scenes_dir.glob('scene_*.txt'))
+    if not files:
+        raise FileNotFoundError(f"{scenes_dir} 下无 scene_*.txt 场景稿")
+    scene_files = []
+    for f in files:
+        t = f.read_text(encoding='utf-8').strip()
+        if cio.count_cjk(t) < 200:
+            raise FileNotFoundError(
+                f"场景稿过短(<200 CJK): {f.name} — Claude 草稿必须每场景写透，禁止梗概占位")
+        scene_files.append((f.name, t))
+    changes_path = draft_dir / f'cluster_{cluster_id:03d}_changes_claude.json'
+    claude_changes = {}
+    if changes_path.exists():
         try:
-            t = p.read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if not t:
-            continue
-        chunks.append(t)
-        total += len(t)
-        if total >= max_chars:
-            break
-    ref = "\n\n".join(chunks)
-    return ref[:max_chars] if len(ref) > max_chars else ref
+            claude_changes = json.loads(changes_path.read_text(encoding='utf-8'))
+        except Exception:
+            logger.warning(f"[WARN] changes_claude.json 解析失败 — self_eval 以空对象继续")
+            claude_changes = {}
+    return scene_files, claude_changes
 
 
-def generate_n_drafts(loader: GenModelLoader, system: str, user: str,
-                      n: int, creative: bool = False) -> list[dict]:
-    """生成 N 个候选稿（temperature 阶梯抖动 · 非迭代 · 规避 self-refine 同质化）。
+def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
+                    ch_start: int, scene_files: list):
+    """逐场景段润色主流程。
 
-    每个候选独立调一次 call_gen_model（active→fallback 链复用 · 不另起调用栈）。
-    通过临时改 candidate profile 的 temperature 让 N 稿真有差异（多样性 = best-of-N 价值）。
-    单个候选生成失败（GenModelExhaustedError）→ 记录跳过，不中断其余候选；全失败由调用方 raise。
-
-    返回 [{idx, reply, profile, temperature, error}]（error 非空 = 该候选生成失败被跳过）。
+    每段独立调 gemini（creative=True · 写正文禁 flash 兜底红线沿用）；
+    段级字数守恒校验 [POLISH_CJK_LOW, POLISH_CJK_HIGH]，超界带明确字数指令重试 1 次，
+    再超界取离守恒中心更近者并留痕（北极星⑤透明可审）。
+    返回 (拼接正文, used_profile, polish_trace)。
     """
-    candidates = loader.get_callable_profiles()
-    if not candidates:
-        raise GenModelExhaustedError([("<none>", "no callable profiles")])
-    base_temp = candidates[0].temperature
-    temps = _candidate_temperatures(base_temp, n)
-    drafts: list[dict] = []
-    for i, temp in enumerate(temps):
-        # 临时把 active profile 的 temperature 改成本候选温度（生成后还原 · 不污染 loader）。
-        active0 = candidates[0]
-        orig_temp = active0.temperature
-        active0.temperature = temp
-        logger.info(f"\n[gen_writer][best-of-N] 生成候选 {i+1}/{n} (temperature={temp})")
-        try:
-            reply, used_profile = call_gen_model(loader, system, user, creative=creative)
-            drafts.append({"idx": i, "reply": reply, "profile": used_profile,
-                           "temperature": temp, "error": None})
-        except GenModelExhaustedError as e:
-            logger.info(f"[best-of-N] 候选 {i+1} 生成失败（跳过）: {str(e)[:150]}")
-            drafts.append({"idx": i, "reply": None, "profile": None,
-                           "temperature": temp, "error": str(e)[:200]})
-        finally:
-            active0.temperature = orig_temp
-    return drafts
-
-
-def score_candidate(body: str, author_ref: str, loader: GenModelLoader,
-                    use_av_judge: bool = True) -> dict:
-    """给单个候选稿打分（SFS 统计指纹 + AV-judge 配对走味计数 · 全 advisory · 透明可读）。
-
-    · sfs：style_evaluator.compute_style_only_sfs(author_ref, body) → style_only_sfs（0-100，越高越像）。
-      无 author_ref 或 style_evaluator 不可用 → sfs=None（调用方据此退化排序）。
-    · av_drift_count：av_judge.pairwise_drift_count → 走味维度数（0-4，越少越像）。
-      use_av_judge=False（无锚 / AV_JUDGE_MODE=off 等）或调用失败 → av_drift_count=None。
-    · composite：综合分 = sfs - AV_DRIFT_PENALTY_PER_DIM * av_drift_count（缺项各自降级）。
-      仅 sfs 缺 → composite=None（调用方按 av_drift_count 升序兜底）；仅 av 缺 → composite=sfs。
-
-    全 advisory：任何子项失败都不抛错（写作流水线不被择优层中断 · 北极星⑤）。
-    """
-    result: dict = {"sfs": None, "sfs_subscores": None,
-                    "av_drift_count": None, "av_drift_dims": [],
-                    "av_order_consistency": None,
-                    "composite": None, "errors": []}
-    # ① SFS 统计指纹（透明裁判）
-    if author_ref and author_ref.strip():
-        try:
-            import style_evaluator as se
-            sfs = se.compute_style_only_sfs(author_ref, body)
-            result["sfs"] = round(float(sfs.get("style_only_sfs")), 2)
-            result["sfs_subscores"] = sfs.get("subscores")
-        except Exception as e:  # noqa: BLE001 — 择优层不阻断写作
-            result["errors"].append(f"sfs: {str(e)[:120]}")
-    # ② AV-judge 配对走味计数（读者视角 · 只 select 不强判）
-    if use_av_judge and author_ref and author_ref.strip():
-        try:
-            import av_judge as avj
-            av = avj.pairwise_drift_count(loader, author_ref, body)
-            # S7 换序双跑留痕（consistent/inconsistent/single_run·供飞轮观察 judge 可靠性）；
-            # 换序不一致=弃票（drift_count=None 且 error=None）→ 走既有「缺 AV 信号」降级路径。
-            result["av_order_consistency"] = av.get("order_consistency")
-            if av.get("error") is None and av.get("drift_count") is not None:
-                result["av_drift_count"] = av["drift_count"]
-                result["av_drift_dims"] = av.get("drift_dims", [])
-            elif av.get("error"):
-                result["errors"].append(f"av_judge: {av['error'][:120]}")
-        except Exception as e:  # noqa: BLE001 — 择优层不阻断写作
-            result["errors"].append(f"av_judge: {str(e)[:120]}")
-    # ③ 综合分
-    sfs, avc = result["sfs"], result["av_drift_count"]
-    if sfs is not None:
-        penalty = AV_DRIFT_PENALTY_PER_DIM * avc if avc is not None else 0.0
-        result["composite"] = round(sfs - penalty, 2)
-    return result
-
-
-def select_best_draft(scored: list[dict]) -> tuple[int, str]:
-    """从打分后的候选里选最佳（综合分降序 · 缺 SFS 时按走味数升序兜底 · 确定性可测）。
-
-    scored: [{idx, body, score: {composite, sfs, av_drift_count, ...}, error}]（已过滤生成失败的）。
-    排序键（全候选可比 · 缺项一致降级）：
-      1. composite 有值 → 用 composite 降序（最像作者排最前）。
-      2. 全候选都没 composite（无 author_ref / SFS 全挂）→ 按 av_drift_count 升序（走味越少越好）。
-      3. 没有任何打分信号 → 退回第一稿，绝不按 CJK 长短择稿。
-    返回 (best_idx_in_list, reason)。reason 解释凭什么选（不黑箱 · 北极星⑤）。
-    """
-    if not scored:
-        raise ValueError("无可选候选（全部生成失败）")
-    if len(scored) == 1:
-        return 0, "唯一候选（N=1 或仅 1 稿生成成功）"
-
-    have_composite = [s for s in scored if s["score"].get("composite") is not None]
-    if have_composite:
-        best = max(range(len(scored)),
-                   key=lambda i: (scored[i]["score"].get("composite") is not None,
-                                  scored[i]["score"].get("composite") or float("-inf")))
-        sc = scored[best]["score"]
-        reason = (f"综合分最高 composite={sc.get('composite')} "
-                  f"(SFS={sc.get('sfs')} · AV走味={sc.get('av_drift_count')})")
-        return best, reason
-
-    # 无 composite：按走味数升序兜底
-    have_av = any(s["score"].get("av_drift_count") is not None for s in scored)
-    if have_av:
-        best = min(range(len(scored)),
-                   key=lambda i: (scored[i]["score"].get("av_drift_count")
-                                  if scored[i]["score"].get("av_drift_count") is not None
-                                  else 99))
-        return best, (f"无 SFS 锚 · 按 AV-judge 走味数升序选 "
-                      f"(走味={scored[best]['score'].get('av_drift_count')})")
-    return 0, "无 SFS/AV 打分信号 · 退回第一稿（不按 CJK 长短择稿）"
-
-
-# ── A9 盲审 N 修 N 选 1（LLM Review arXiv:2601.08003 · research/open_source_writing_systems
-#     _round2.md A9 · 2026-07-07）──
-# 同质化根因 = 「修订者看到收敛信号」：self-refine 让模型把（自己或彼此的）输出当锚反复收敛。
-# 盲修 = critique 具体化 + 修订隔离——N 候选各自只拿**自己的**诊断（该候选的 av_judge
-# drift_dims + sfs_subscores 短板维组装成定向修订指令），候选间互不可见，各发一次独立修订
-# 调用（复用 call_gen_model）；修订稿重打分后与原稿一起进 select_best_draft（2N 候选选优 ·
-# 修坏了原稿仍在池里兜底）。这是若渝弃 self-refine 用 best-of-N 之后带证据的回归路径。
-# 🔴 纪律：
-#   · env BEST_OF_N_BLIND_REVISE 默认 **off**（成本 N 倍 gen-model 调用 + 未经真机验证；
-#     off 时 best_of_n_pipeline 行为逐字节不变 · 非法值回退 off ·
-#     回归锁 tests/test_best_of_n.py::test_J_off_no_revision_calls_and_no_trace_key）；
-#   · 修订 prompt 绝不含其他候选的任何信息（盲修 = 防同质化核心 ·
-#     回归锁 test_J_on_isolated_revision_prompts）；
-#   · 择稿逻辑零改动（select_best_draft 不感知盲修 · 源码锁 test_J_selection_logic_untouched）。
-
-BLIND_REVISE_ENV = "BEST_OF_N_BLIND_REVISE"
-# sfs 子分短板地板（0-100 · 低于此值的维度点名进 critique）+ 最多点名维数（critique 必须
-# 具体化——点名太多等于「全部重写」，修订隔离就失去意义）。保守经验值 · 待真机金标准校准。
-BLIND_REVISE_SUBSCORE_FLOOR = 70.0
-BLIND_REVISE_MAX_WEAK_DIMS = 2
-
-# 只点名可读的顶层风格维（raw/校准中间量不进 critique · 修订指令要人话可执行）。
-_SFS_SUBSCORE_LABELS = {
-    "function_word_cosine": "虚词指纹",
-    "punctuation_cosine": "标点指纹",
-    "sentence_rhythm_jsd": "句长节奏",
-    "detopic_pos_cosine": "去题材词性分布",
-    "charngram_sfs": "字符n-gram指纹",
-    "rhythm_cn_sfs": "修辞节奏谱",
-}
-
-
-def _blind_revise_enabled() -> bool:
-    """读 env BEST_OF_N_BLIND_REVISE：仅 on/1/true（不分大小写）= 开 · 其余一律 off。
-
-    默认 off（保守：成本 N 倍 gen-model 调用 + 未经真机验证）；非法值回退 off 不猜。
-    """
-    raw = (os.environ.get(BLIND_REVISE_ENV) or "").strip().lower()
-    return raw in ("on", "1", "true")
-
-
-def assemble_blind_critique(score: dict) -> "str | None":
-    """把单候选**自己的**打分诊断组装成定向修订指令（critique 具体化 · A9 核心之一）。
-
-    来源两路（都只看本候选 · 不含任何其他候选信息）：
-      ① av_drift_dims：AV-judge 配对判别判「走味」的维度名（读者视角）；
-      ② sfs_subscores 短板维：低于 BLIND_REVISE_SUBSCORE_FLOOR 的可读风格维，
-        按分升序最多点名 BLIND_REVISE_MAX_WEAK_DIMS 个（点太多=变相全文重写）。
-    两路全空 → None（无靶点 · 调用方跳过该候选的修订调用不白烧 token）。
-    """
-    lines: list = []
-    drift_dims = [str(d) for d in (score.get("av_drift_dims") or []) if d]
-    if drift_dims:
-        lines.append("· AV 配对判别走味维度：" + "、".join(drift_dims)
-                     + "——这些维度与作者原文对照被判「走味」，请贴回作者档口径。")
-    subs = score.get("sfs_subscores") or {}
-    weak: list = []
-    for key, label in _SFS_SUBSCORE_LABELS.items():
-        v = subs.get(key)
-        if isinstance(v, (int, float)) and float(v) < BLIND_REVISE_SUBSCORE_FLOOR:
-            weak.append((float(v), label))
-    weak.sort()
-    weak = weak[:BLIND_REVISE_MAX_WEAK_DIMS]
-    if weak:
-        lines.append("· 风格统计短板：" + "、".join(f"{label} {v:.1f}/100" for v, label in weak)
-                     + "——请向作者原文基线靠拢。")
-    return "\n".join(lines) if lines else None
-
-
-def _blind_revise_user_prompt(body: str, critique: str) -> str:
-    """盲修修订调用的 user prompt：原稿 + 定向 critique + 「只修 critique 点不重写」。
-
-    🔴 隔离契约：本 prompt 只含该候选自己的正文与自己的诊断——绝不掺入其他候选
-    的任何内容（盲修 = 防同质化核心 · 回归锁断言互不包含）。system 侧复用写作原
-    system prompt（作者档第一权威不变）。
-    """
-    return (
-        "【盲修 · 定向修订】下面是一份小说草稿正文，以及只针对这份草稿本身的独立诊断"
-        "（与任何其他草稿无关）。\n\n"
-        "== 定向 critique（只修这些点）==\n"
-        f"{critique}\n\n"
-        "== 修订要求 ==\n"
-        "1. 只修 critique 点不重写：除 critique 点名的问题外，情节、事实、人物、场景顺序、"
-        "篇幅一律保持原样。\n"
-        "2. 不新增/删除情节，不改变任何既有事实。\n"
-        "3. 只输出修订后的完整正文——不要解释、不要前言、不要输出 CHANGES JSON。\n\n"
-        "== 原稿正文 ==\n"
-        f"{body}"
-    )
-
-
-def _rebuild_reply_with_changes(revised_body: str, changes_obj: dict) -> str:
-    """把修订后正文与**原稿的** CHANGES 块重组成完整 reply（下游 split_text_and_changes 可解）。
-
-    修订调用只让模型改正文不产 CHANGES（防它顺手改坏 JSON 契约）；critique 只点风格维、
-    禁改事实，故原稿 CHANGES 对修订稿仍成立。原稿本就没有 CHANGES 块（changes_obj 空）→
-    只返回正文（与原稿形态一致 · 下游同样兜底）。
-    """
-    if changes_obj:
-        return (revised_body.rstrip() + "\n\n```json\n"
-                + json.dumps(changes_obj, ensure_ascii=False, indent=2) + "\n```")
-    return revised_body
-
-
-def blind_revise_round(loader: GenModelLoader, system: str, scored: list,
-                       author_ref: str, use_av_judge: bool,
-                       n_requested: int, lt_band: tuple) -> tuple:
-    """A9 盲修轮：每个原稿候选各拿自己的 critique 独立修一轮（候选间互不可见）。
-
-    返回 (revised_scored, blind_trace)：
-      · revised_scored 条目形状与原稿 scored 一致（idx = n_requested + 原稿 idx 无碰撞 ·
-        带 revised_from 溯源），由调用方并入池 → select_best_draft 2N 选优（择稿零改动）；
-      · blind_trace 每候选记 critique 摘要 + 修订前后 composite（透明可审 · 北极星⑤）。
-    任何单候选修订失败（无 critique / gen-model 挂 / 空回复）→ 跳过该候选（原稿在池里
-    兜底），绝不阻断写作（advisory 层）。
-    """
-    revised: list = []
-    entries: list = []
-    for s in scored:
-        src_idx = s["idx"]
-        critique = assemble_blind_critique(s["score"])
-        entry = {"src_idx": src_idx,
-                 "critique_summary": (critique[:200] if critique else None),
-                 "orig_composite": s["score"].get("composite"),
-                 "revised_composite": None, "revised_idx": None, "error": None}
-        if not critique:
-            entry["error"] = "skipped_no_critique"
-            entries.append(entry)
-            logger.info(f"[best-of-N][blind-revise] 候选 idx={src_idx} 无 critique 靶点 · "
-                        f"跳过修订（原稿直接留池）")
-            continue
-        user_prompt = _blind_revise_user_prompt(s["body"], critique)
-        logger.info(f"[best-of-N][blind-revise] 候选 idx={src_idx} 独立盲修（定向 critique "
-                    f"{len(critique)} chars · 互不可见）")
-        try:
-            reply, used_profile = call_gen_model(loader, system, user_prompt, creative=True)
-        except GenModelExhaustedError as e:
-            entry["error"] = f"gen_model: {str(e)[:150]}"
-            entries.append(entry)
-            continue
-        # 剥掉模型违令误产的 CHANGES 块（split 取最后一个 json 块之前的正文）· 空修订=失败跳过
-        revised_body, _spurious = split_text_and_changes(reply)
-        if not revised_body.strip():
-            entry["error"] = "empty_revision"
-            entries.append(entry)
-            continue
-        sc = score_candidate(revised_body, author_ref, loader, use_av_judge=use_av_judge)
-        body_cjk = cio.count_cjk(revised_body)
-        r_idx = n_requested + src_idx
-        revised.append({"idx": r_idx, "revised_from": src_idx,
-                        "reply": _rebuild_reply_with_changes(
-                            revised_body, s.get("changes_obj") or {}),
-                        "profile": used_profile,
-                        "temperature": getattr(used_profile, "temperature", None),
-                        "body_cjk": body_cjk,
-                        "length_telemetry_score": length_telemetry_score(body_cjk, lt_band),
-                        "score": sc, "error": None,
-                        "body": revised_body,
-                        "changes_obj": s.get("changes_obj") or {}})
-        entry["revised_composite"] = sc.get("composite")
-        entry["revised_idx"] = r_idx
-        entries.append(entry)
-        logger.info(f"[best-of-N][blind-revise] idx={src_idx} → 修订稿 idx={r_idx}: "
-                    f"composite {entry['orig_composite']} → {entry['revised_composite']}")
-    blind_trace = {"enabled": True, "revised": len(revised),
-                   "skipped_or_failed": len(entries) - len(revised),
-                   "entries": entries}
-    return revised, blind_trace
-
-
-def best_of_n_pipeline(loader: GenModelLoader, system: str, user: str,
-                       project_root: Path, n: int,
-                       creative: bool = False,
-                       force_blind_revise_off: bool = False) -> tuple[str, "Profile", dict]:
-    """best-of-N 主流程：生成 N 稿 → 各自打分 → 综合择优 → 返回最佳稿。
-
-    返回 (best_reply, best_profile, selection_trace)。
-    selection_trace 记录每个候选的分数 + 选中理由（写进 changes 不黑箱 · 北极星⑤）。
-    优雅降级：无 author_ref → 跳 SFS/AV-judge，仍生成 N 稿但按 idx 选第一稿（等价单稿 · 不报错）。
-    force_blind_revise_off=True（2026-07-08 修正轮 · scene-sequential 首场景 N 选 1 专用）：
-      无视 env BEST_OF_N_BLIND_REVISE 强制关闭 A9 盲修轮（成本纪律 · trace 记 mode）；
-      缺省 False = 原行为零回归（env off 时 trace 仍无 blind_revise 段）。
-    """
-    author_ref = gather_author_ref_text(project_root)
-    use_av_judge = bool(author_ref.strip())
-    if not author_ref.strip():
-        logger.info("[best-of-N] 未找到作者原文池 · 跳过 SFS/AV-judge 打分 "
-              "（仍生成 N 稿但退回第一稿 · 优雅降级）")
-
-    drafts = generate_n_drafts(loader, system, user, n, creative=creative)
-    ok_drafts = [d for d in drafts if d.get("error") is None and d.get("reply")]
-    if not ok_drafts:
-        # 全部候选生成失败 → 汇总 raise（与单稿全失败行为一致）
-        raise GenModelExhaustedError(
-            [("best_of_n", "; ".join(d.get("error", "?") for d in drafts) or "all empty")])
-
-    lt_band = length_telemetry_band()  # S9 遥测带（仅遥测 · 不进择稿）
-    scored: list[dict] = []
-    bodies: list[str] = []  # S8 deviation 遥测用（与 scored 同序）
-    for d in ok_drafts:
-        body, changes_obj = split_text_and_changes(d["reply"])
-        bodies.append(body)
-        sc = score_candidate(body, author_ref, loader, use_av_judge=use_av_judge)
-        body_cjk = cio.count_cjk(body)
-        lt_score = length_telemetry_score(body_cjk, lt_band)
-        scored.append({"idx": d["idx"], "reply": d["reply"], "profile": d["profile"],
-                       "temperature": d["temperature"], "body_cjk": body_cjk,
-                       "length_telemetry_score": lt_score,
-                       "score": sc, "error": None,
-                       # A9 盲修轮消费（body=打分同款正文 · changes_obj=原稿 CHANGES ·
-                       # off 时无人读取 · 不进 trace）
-                       "body": body, "changes_obj": changes_obj})
-        logger.info(f"[best-of-N] 候选 idx={d['idx']} temp={d['temperature']}: "
-              f"SFS={sc['sfs']} AV走味={sc['av_drift_count']} composite={sc['composite']} "
-              f"cjk={body_cjk} length_telemetry={lt_score}")
-
-    # A9 盲审 N 修 N 选 1（env BEST_OF_N_BLIND_REVISE 默认 off · off 时本段零执行 ·
-    # 逐字节不变）：N 候选各拿各的 critique 隔离盲修 → 修订稿重打分并入池 → 2N 选优。
-    blind_trace = None
-    if force_blind_revise_off:
-        # scene-sequential 首场景 N 选 1：盲修强制 off（无视 env · 成本纪律 · trace 记 mode）
-        blind_trace = {"enabled": False, "mode": "forced_off_scene_sequential"}
-    elif _blind_revise_enabled():
-        logger.info(f"[best-of-N][blind-revise] {BLIND_REVISE_ENV}=on · "
-                    f"{len(scored)} 候选各自隔离盲修一轮（修订稿与原稿 2N 进池选优）")
-        revised_scored, blind_trace = blind_revise_round(
-            loader, system, scored, author_ref, use_av_judge, n, lt_band)
-        for r in revised_scored:
-            bodies.append(r["body"])   # S8 deviation 遥测覆盖 2N 池（与 scored 同序）
-            scored.append(r)
-
-    # S8 deviation 双嵌入多样性遥测（仅遥测 · select_best_draft 零感知 · 北极星⑤）
-    dev_floor = _deviation_collapse_floor()
-    try:
-        deviations = candidate_deviation_scores(bodies)
-    except Exception as e:  # noqa: BLE001 — 遥测层绝不阻断写作
-        logger.info(f"[best-of-N] deviation 遥测失败（跳过）: {str(e)[:120]}")
-        deviations = None
-    collapse_hint = diversity_collapse_hint(deviations, dev_floor)
-    if collapse_hint:
-        logger.info(f"[best-of-N] ⚠️ diversity_collapse_hint: 全体 style_deviation 均值低于地板 "
-                    f"{dev_floor} — N 候选已坍缩同一模式，选择是假选择（仅记录 · 不改择稿）")
-
-    best_i, reason = select_best_draft(scored)
-    best = scored[best_i]
-    logger.info(f"\n[gen_writer][best-of-N] ✅ 选中候选 idx={best['idx']} "
-          f"(temp={best['temperature']}) — {reason}")
-
-    trace = {
-        "best_of_n": n,
-        "candidates_generated": len(drafts),
-        "candidates_scored": len(scored),
-        "author_ref_found": use_av_judge,
-        "selected_idx": best["idx"],
-        "selection_reason": reason,
-        # S9 遥测带（LongWriter 非对称 · 仅 reward 特征 · 不参与 selection_reason）
-        "length_telemetry_band": list(lt_band),
-        # S8 deviation 遥测（DDPO 度量 · 仅记录 · None=嵌入不可用/N<2 诚实 skip）
-        "deviation_collapse_floor": dev_floor,
-        "diversity_collapse_hint": collapse_hint,
-        "candidates": [
-            {"idx": s["idx"], "temperature": s["temperature"], "cjk": s["body_cjk"],
-             "length_telemetry_score": s["length_telemetry_score"],
-             "style_deviation": (deviations[k]["style_deviation"] if deviations else None),
-             "content_deviation": (deviations[k]["content_deviation"] if deviations else None),
-             "sfs": s["score"]["sfs"], "av_drift_count": s["score"]["av_drift_count"],
-             "av_drift_dims": s["score"]["av_drift_dims"],
-             "av_order_consistency": s["score"].get("av_order_consistency"),
-             "composite": s["score"]["composite"], "errors": s["score"]["errors"],
-             # A9：仅修订稿带 revised_from（溯源到原稿 idx）· off 时 key 不存在（trace 逐字节不变）
-             **({"revised_from": s["revised_from"]} if "revised_from" in s else {})}
-            for k, s in enumerate(scored)
-        ],
-    }
-    # A9 盲修轮留痕（每候选 critique 摘要 + 修订前后分数 · 仅开启时写 · off 时无此段）
-    if blind_trace is not None:
-        trace["blind_revise"] = blind_trace
-    return best["reply"], best["profile"], trace
+    polished, trace = [], []
+    used_profile = None
+    seed_trace = None
+    total = len(scene_files)
+    for i, (name, src) in enumerate(scene_files):
+        src_cjk = cio.count_cjk(src)
+        system, user, _seed = build_prompt(
+            project_root, cluster_id, ch_start,
+            polish_view={'idx': i, 'total': total, 'scene_text': src})
+        if i == 0:
+            seed_trace = _seed  # 语感种子留痕（北极星⑤透明可审 · 各段同源只记首段）
+        logger.info(f"\n[polish] 场景 {i + 1}/{total} ({name}) src={src_cjk} CJK ...")
+        reply, used_profile = call_gen_model(loader, system, user, creative=True)
+        body = clean_polished_body(reply)
+        out_cjk = cio.count_cjk(body)
+        ratio = out_cjk / max(src_cjk, 1)
+        retried = False
+        if not (POLISH_CJK_LOW <= ratio <= POLISH_CJK_HIGH):
+            retried = True
+            logger.warning(f"[polish] {name} 守恒超界 ratio={ratio:.2f}"
+                           f"（{src_cjk}→{out_cjk}）· 带字数指令重试 1 次")
+            user2 = user + (
+                f"\n\n【字数守恒警告】你上一版输出约 {out_cjk} 个汉字，超出守恒带。"
+                f"润色是等体量重写：这一段的输出字数必须落在 "
+                f"{int(src_cjk * POLISH_CJK_LOW)}-{int(src_cjk * POLISH_CJK_HIGH)} 个汉字之间——"
+                f"不许压缩省略情节，也不许注水扩写。重新输出这一段的润色全文。")
+            reply2, used_profile = call_gen_model(loader, system, user2, creative=True)
+            body2 = clean_polished_body(reply2)
+            out2 = cio.count_cjk(body2)
+            if abs(out2 / max(src_cjk, 1) - 1.0) < abs(ratio - 1.0):
+                body, out_cjk = body2, out2
+                ratio = out_cjk / max(src_cjk, 1)
+        polished.append(body)
+        trace.append({'scene': name, 'src_cjk': src_cjk, 'out_cjk': out_cjk,
+                      'ratio': round(ratio, 3), 'retried': retried})
+        logger.info(f"[polish] {name}: {src_cjk}→{out_cjk} CJK (ratio={ratio:.2f})")
+    return "\n\n".join(polished), used_profile, {
+        'mode': 'per_scene_polish_v29', 'scenes': trace,
+        'conservation_band': [POLISH_CJK_LOW, POLISH_CJK_HIGH],
+        'snippet_seed': seed_trace or {'snippet_seed_mode': 'on', 'injected': False}}
 
 
 # ============ 输出解析与保存 ============
-def split_text_and_changes(reply: str) -> tuple:
-    """从返回拆出正文 + CHANGES JSON"""
-    # 去掉 $ 末尾锚定（对齐 gen_fixer 写法）：LLM 在 json 块后多输出尾随文字也能匹配。
-    # 用 finditer 取「最后一个」```json``` 块，正文 = 该块之前的内容。
+def clean_polished_body(reply: str) -> str:
+    """清洗 gemini 润色回复为纯正文。
+
+    v29：润色回复不再携带 CHANGES JSON（self_eval 由 Claude step 2a 产、遥测由
+    save_output 确定性补），但 reasoning 模型的元前言/尾注/英文自评漏出问题不变，
+    原 split_text_and_changes 的全部剥离逻辑原样保留。误带的 ```json``` 块整块剥除。
+    """
+    # 误带 json 块防御：润色任务不要求 CHANGES，模型惯性输出的 json 块按元产物剥掉。
     json_matches = list(re.finditer(r'```json\s*\n(.*?)\n```', reply, re.DOTALL))
     if json_matches:
         last = json_matches[-1]
-        changes_json = last.group(1).strip()
         body = reply[:last.start()].rstrip()
+        logger.info(" [strip] 剥离润色回复误带的 ```json``` 块（v29 润色不产 CHANGES）")
     else:
         body = reply.strip()
-        changes_json = "{}"
 
     # 去掉可能的 "# 正文" 这类元标题
     body = re.sub(r'^#\s*(正文|cluster.*)\s*\n', '', body, flags=re.MULTILINE)
@@ -2846,11 +2331,7 @@ def split_text_and_changes(reply: str) -> tuple:
               "splitter 应忽略这些标记重新决定截断点。"
               "若反复出现，调高 prompt 强度或换 profile。")
 
-    try:
-        changes_obj = json.loads(changes_json)
-    except json.JSONDecodeError:
-        changes_obj = {"_doc": "返回 CHANGES JSON 解析失败", "raw": changes_json[:2000]}
-    return body, changes_obj
+    return body
 
 
 def _read_author_rhythm(project_root: Path):
@@ -2941,15 +2422,14 @@ def enforce_short_paragraphs(body: str, author_para_mean: float = None, author_s
 
 def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
                 ch_start: int, used_profile: Profile,
-                seed_trace: dict = None, best_of_n_trace: dict = None,
-                scene_trace: dict = None):
+                polish_trace: dict = None):
     """写 draft + changes.json
 
-    cluster-first freestyle：ch_range 写 'TBD_by_splitter'（splitter 后期填）。
-    seed_trace：snippet_seed 播种痕迹（用了几段 / 哪个模式）· 留 changes 不黑箱（北极星⑤）。
-    best_of_n_trace：best-of-N 择优痕迹（N 稿各自分数 + 选中理由）· 留 changes 透明可审（北极星⑤）。
-    scene_trace（2026-07-08 修正轮）：scene-sequential per-scene 遥测（scene_idx/cjk/finish）·
-      None = 一把梭路径（changes 无该段 · 零回归）。S8/S9 遥测对最终拼接稿照常在本函数计算。
+    cluster-first：ch_range 写 'TBD_by_splitter'（splitter 后期填）。
+    changes 入参 = Claude step 2a 的 self_eval/waivers 草稿（changes_claude.json），
+    本函数在其上合并确定性遥测（cjk / length_telemetry / polish 留痕）。
+    polish_trace（v29）：per-scene 润色遥测（src/out cjk · 守恒 ratio · retried）·
+      留 changes 透明可审（北极星⑤）。
     """
     # 空 body 守卫（2026-05-30 加固）：拒写空草稿并报错，避免 cjk=0 草稿入库还报成功。
     # 上游 call_gen_model 已对空响应切 fallback，此处是最后一道防线（含解析后正文为空的情况）。
@@ -2996,14 +2476,12 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         'ch_start': ch_start,
         'ch_range': ch_range_str,
         'chapter_count_decided_by_splitter': True,
-        'generated_by': 'gen_writer.py',
+        'generated_by': 'novel-writer(claude 亲笔草稿) + gen_writer.py(gemini 分段润色)',
         'generated_by_profile': used_profile.name,
         'generated_by_model': used_profile.model,
         'generated_at': datetime.now().isoformat(),
         'cjk_actual': cjk,
-        'writer_mode': 'freestyle_v27',
-        'snippet_seed': seed_trace or {'snippet_seed_mode': 'on', 'injected': False},
-        'best_of_n': best_of_n_trace or {'best_of_n': 1, 'note': '单稿直生（BEST_OF_N=1 或未启用）'},
+        'writer_mode': 'claude_draft_gemini_polish_v29',
         # S9 非对称长度遥测分（LongWriter · 偏短/2 超长/3 · research round2 S9）：
         # 仅遥测字段供 learning_loop/BPR 当 reward 特征——不参与择稿/重写决策、不回流 writer prompt。
         'length_telemetry': {
@@ -3012,9 +2490,9 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
             'formula': 'longwriter_asymmetric(under/2, over/3)',
         },
     })
-    # scene-sequential 留痕（per-scene 遥测 + blind_revise 强制 off 记载 · 北极星⑤透明可审）
-    if scene_trace:
-        se['ecas_metadata']['scene_sequential'] = scene_trace
+    # v29 润色留痕（per-scene 守恒遥测 · 北极星⑤透明可审）
+    if polish_trace:
+        se['ecas_metadata']['polish'] = polish_trace
     se.setdefault('waivers', [])
     se.setdefault('uncertainty_flags', [])
     changes.setdefault('schema_version', 'v2.cluster')
@@ -3058,26 +2536,18 @@ def run_scanners(draft_path: Path) -> dict:
 # ============ 主入口 ============
 def main():
     check_deps()
-    parser = argparse.ArgumentParser(description='Gen-Model 正文生成器（OpenAI 兼容协议）')
+    parser = argparse.ArgumentParser(
+        description='Gen-Model 润色引擎（v29：Claude 亲笔草稿 → gemini 分段润色）')
     parser.add_argument('--project', required=True, help='项目根路径')
     parser.add_argument('--cluster', type=int, required=True, help='cluster id（整数）')
-    parser.add_argument('--dry-run', action='store_true', help='只输出 prompt，不调 API')
+    parser.add_argument('--dry-run', action='store_true', help='只输出首段润色 prompt，不调 API')
     parser.add_argument('--dialogue-orchestrator-mode', default='off',
                         choices=['off', 'shadow', 'active'],
-                        help='[R19 W8 Batch-X·AdaMARP 多人对话编排] 默认 off·on 时 build_manifest 调 '
-                             'dialogue_scene_manager.inject_orchestrator_prompt 注入四标签 '
-                             '[Thought](Action)<<Environment>>Speech turn 80-300 字 prompt')
-    parser.add_argument('--parallel-rollout-mode', default='off',
-                        choices=['off', 'shadow', 'active'],
-                        help='[R19 W8 Batch-Y·P2·K=2 并行 rollout listwise rank] 默认 off·高歧义 '
-                             'cluster(opening/volume_finale/重大转折)启用·on 时 cluster-write 调度器 '
-                             '应跑 K=2 草稿并通过 parallel_rollout_arbiter 仲裁 winner·此 flag 仅 env 透传')
+                        help='[R19 W8 Batch-X·AdaMARP 多人对话编排] 默认 off·env 透传给 '
+                             'dialogue_scene_manager（manifest 注入层·润色 prompt 同样消费 manifest）')
     args = parser.parse_args()
-    # 把 flag 设到 env 供 dialogue_scene_manager._mode() 读取(无侵入既有 build_manifest)
     if args.dialogue_orchestrator_mode:
         os.environ["DIALOGUE_ORCHESTRATOR_MODE"] = args.dialogue_orchestrator_mode
-    if args.parallel_rollout_mode:
-        os.environ["PARALLEL_ROLLOUT_ARBITER_MODE"] = args.parallel_rollout_mode
 
     project_root = Path(args.project).resolve()
     if not project_root.exists():
@@ -3085,19 +2555,30 @@ def main():
         sys.exit(2)
 
     ch_start = _infer_cluster_start_ch(project_root, args.cluster)
-    logger.info(f" [cluster-first freestyle] 推导 ch_start={ch_start} (cluster_{args.cluster:03d})")
-    logger.info(" [cluster-first freestyle] writer 不知目标章数/目标字数 · splitter 后续决定章数与每章篇幅")
+    logger.info(f" [v29 claude_draft_gemini_polish] 推导 ch_start={ch_start} (cluster_{args.cluster:03d})")
+
+    # 🔴 v29 required 前置：Claude 亲笔场景稿必须已就位（novel-writer agent step 2a 产出）。
+    # 缺失 = 流程违规，[FATAL] 响亮失败，绝不回退到 gen-model 从零生成（不兼容不降级）。
+    try:
+        scene_files, claude_changes = discover_claude_scenes(project_root, args.cluster)
+    except FileNotFoundError as e:
+        sys.stderr.write(f"\n[FATAL gen_writer] {e}\n")
+        sys.stderr.flush()
+        sys.exit(2)
+    logger.info(f" Claude 草稿：{len(scene_files)} 个场景稿 · "
+                f"合计 {sum(cio.count_cjk(t) for _, t in scene_files)} CJK")
 
     # dry-run 模式不需要 active profile
     if args.dry_run:
-        system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start)
+        system, user, seed_trace = build_prompt(
+            project_root, args.cluster, ch_start,
+            polish_view={'idx': 0, 'total': len(scene_files),
+                         'scene_text': scene_files[0][1]})
         logger.info("=== SYSTEM PROMPT ===")
         logger.debug(system)  # OK: print - dry-run 模式调试输出
         logger.info("\n=== USER PROMPT ===")
         logger.debug(user)  # OK: print - dry-run 模式调试输出
         logger.info(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars")
-        logger.info(f"[dry-run] snippet_seed: {seed_trace}")
-        # 显示当前 active profile 信息
         try:
             loader = GenModelLoader()
             p = loader.get_active_profile()
@@ -3124,57 +2605,27 @@ def main():
     if chain:
         logger.info(f" fallback chain = {','.join(chain)}")
 
-    system, user, seed_trace = build_prompt(project_root, args.cluster, ch_start)
-
-    # best-of-N（默认 active · N≥2 真生效 · BEST_OF_N=1 退回单稿直生 · 2026-05-31）：
-    # N 稿并行生成（temperature 阶梯抖动）→ SFS + AV-judge 配对判别打分 → 综合择优。
-    # selection（择优）≠ refine（迭代）→ 天然规避 self-refine 同质化（arxiv 实证）。
-    n = _best_of_n()
-    best_of_n_trace = None
-    scene_trace = None
-    # 🔴 2026-07-08 修正轮（真机 A/B 证伪 v27「一把梭自然涌现 12-25k」）：gemini-3.1-pro 在
-    # ~107k writer prompt 下自发 finish=stop 于 2-3.5k CJK（storyboard 场景全覆盖但每场景压成
-    # ~500 字梗概体），自然 stop 短稿无恢复路径。根因修复 = storyboard ≥2 场景时逐场景顺序生成
-    # （每场景一次独立调用写透 · 场景内自然 stop 即完结 · 不续写不注水 ≠ expand 红线勿复活）。
-    # <2 场景 / 缺 storyboard → 保留一把梭原路径（该形态没有「逐场景」可言）。
-    scene_cards = gen_writer_scenes.load_scene_cards(project_root, args.cluster)
+    # v29 分段润色主流程：逐场景段调 gemini 按风格档重写（字数守恒校验+重试）→ 拼接。
+    # 实验依据（2026-07-11 四组对比）：万字整体润色三连败（TransportEmpty×2+压缩），
+    # 分段（≤6k CJK）±3% 守恒一次成功——分段是万字润色的唯一可行形态。
     try:
-        if gen_writer_scenes.use_scene_sequential(scene_cards):
-            logger.info(f"\n[gen_writer][scene-sequential] storyboard {len(scene_cards)} 场景 · "
-                        f"逐场景顺序生成（首场景 best-of-{n} 择优 · 后续单发跟随 · "
-                        f"CHANGES 尾部单独产出）")
-            reply, used_profile, best_of_n_trace, scene_trace = \
-                gen_writer_scenes.scene_sequential_pipeline(
-                    loader, project_root, args.cluster, ch_start, scene_cards, n,
-                    base_system=system, base_user=user)
-        elif n >= 2:
-            logger.info(f"\n[gen_writer][best-of-N] BEST_OF_N={n} · 生成 {n} 稿配对重排择优")
-            reply, used_profile, best_of_n_trace = best_of_n_pipeline(
-                loader, system, user, project_root, n, creative=True)
-        else:
-            logger.info(f"[best-of-N] BEST_OF_N=1 · 单稿直生（已关闭择优）")
-            # 🔴 2026-06-28：creative=True → 写正文禁 flash 兜底（pro 全挂响亮失败让主代理重试·不静默降质）
-            reply, used_profile = call_gen_model(loader, system, user, creative=True)
+        body, used_profile, polish_trace = polish_pipeline(
+            loader, project_root, args.cluster, ch_start, scene_files)
     except GenModelExhaustedError as e:
-        # 🔴 2026-06-26 fail-fast 走 stderr + flush（log_util INFO 级 logger.info 走 stdout，
-        # ERROR 字样混在 stdout 里会让 wrapper agent 把 exit 3 误读成 exit 0；feedback_verify_stderr_not_exitcode
-        # 也叮嘱必看 stderr 的 Traceback）。stderr 单独打+ flush 保证不被 buffer 截。
+        # 🔴 fail-fast 走 stderr + flush（feedback_verify_stderr_not_exitcode）
         msg = f"\n[FATAL gen_writer] GenModelExhausted: {e}\n"
         sys.stderr.write(msg)
         sys.stderr.flush()
         sys.exit(3)
 
-    body, changes = split_text_and_changes(reply)
-    # [2026-06-05] 句法熔合已删（盲目拉长句长的 gen-model 编辑 pass·分不清流水账碎句 vs 反高潮 ！？ 短句·
-    # 会削掉搞笑流命根子·实测 flash 裸输出感叹~29/千→熔合后 0.9·拖后腿）。只留短段约束（按作者段长切过长
-    # 非对话段·格式层·不动 ！？）。流水账靠模型自身 + prose_rhythm / reading-reflector advisory 兜。
+    # 短段约束（格式层·按作者段长切过长非对话段·不动 ！？）
     _auth_sent, _auth_para, _auth_single = _read_author_rhythm(project_root)
     logger.info(f" 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}")
     body = enforce_short_paragraphs(body, author_para_mean=_auth_para, author_single=_auth_single)
-    draft_path, cjk = save_output(project_root, args.cluster, body, changes,
-                                  ch_start, used_profile,
-                                  seed_trace=seed_trace, best_of_n_trace=best_of_n_trace,
-                                  scene_trace=scene_trace)
+
+    # changes = Claude self_eval/waivers（step 2a 产）+ 本脚本确定性遥测（save_output 内合并）
+    draft_path, cjk = save_output(project_root, args.cluster, body, claude_changes,
+                                  ch_start, used_profile, polish_trace=polish_trace)
 
     logger.info(f"\n[gen_writer] 跑 scanner...")
     scan_results = run_scanners(draft_path)
@@ -3189,7 +2640,7 @@ def main():
     except Exception:
         pass  # 知识库异常不影响主流程
 
-    logger.info(f"\n[cluster-first freestyle] draft CJK={cjk} · splitter 后续决定章数与每章篇幅")
+    logger.info(f"\n[v29 claude_draft_gemini_polish] draft CJK={cjk} · splitter 后续决定章数与每章篇幅")
 
 
 if __name__ == '__main__':

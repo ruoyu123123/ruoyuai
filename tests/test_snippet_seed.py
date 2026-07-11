@@ -454,12 +454,11 @@ def test_F_distill_from_dir_off_and_on():
 # ════════════════════════════════════════════════════════════════
 
 def test_G_distill_build_prompt_default_no_seed():
-    """distill build_cluster_subcall_prompt 默认 seed_section="" → 无种子段（零回归）。"""
+    """distill v29 build_polish_subcall_prompt 默认 seed_section="" → 无种子段（零回归）。"""
     import distill_replicate as dr
-    p = dr.build_cluster_subcall_prompt(
-        "SKILL", "", {"cluster_id": "cluster_001", "chapter_range": [1, 3]},
-        subcall_index=1, subcall_total=1, prev_tail="",
-        chapters_in_this_call=3, target_words=9000)
+    p = dr.build_polish_subcall_prompt(
+        "SKILL", "", "他停下脚步，看着门外的雨幕。这是一段复刻场景初稿。",
+        idx=0, total=1)
     assert ss.SNIPPET_SEED_HEADER not in p
 
 
@@ -467,10 +466,9 @@ def test_G_distill_build_prompt_with_seed():
     """传 seed_section → 注在 skill 后（语感锚点 · 含避坑指令）。"""
     import distill_replicate as dr
     seed = ss.build_seed_section([_TENSE_SNIPPET])
-    p = dr.build_cluster_subcall_prompt(
-        "SKILL内容", "", {"cluster_id": "cluster_001", "chapter_range": [1, 3]},
-        subcall_index=1, subcall_total=1, prev_tail="",
-        chapters_in_this_call=3, target_words=9000, seed_section=seed)
+    p = dr.build_polish_subcall_prompt(
+        "SKILL内容", "", "他停下脚步，看着门外的雨幕。这是一段复刻场景初稿。",
+        idx=0, total=1, seed_section=seed)
     assert ss.SNIPPET_SEED_HEADER in p
     assert ss.SNIPPET_AVOIDANCE_INSTRUCTION in p
     # skill 在种子段之前（种子是 skill 后的语感起手势）
@@ -478,7 +476,7 @@ def test_G_distill_build_prompt_with_seed():
 
 
 def test_G_gen_writer_save_output_accepts_seed_trace():
-    """gen_writer.save_output 接受 seed_trace kwarg 并写进 changes.ecas_metadata（留痕不黑箱）。"""
+    """v29：语感种子留痕随 polish_trace 进 changes.ecas_metadata.polish（留痕不黑箱）。"""
     import gen_writer as gw
 
     class _P:
@@ -486,18 +484,19 @@ def test_G_gen_writer_save_output_accepts_seed_trace():
         model = "m"
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        trace = {"snippet_seed_mode": "on", "injected": True, "snippets_used": 2}
+        ptrace = {"mode": "per_scene_polish_v29", "scenes": [],
+                  "snippet_seed": {"snippet_seed_mode": "on", "injected": True, "snippets_used": 2}}
         draft_path, cjk = gw.save_output(
-            root, 7, "这是一段真正的正文内容。", {}, 1, _P(), seed_trace=trace)
+            root, 7, "这是一段真正的正文内容。", {}, 1, _P(), polish_trace=ptrace)
         changes = json.loads(
             (root / "章节" / "cluster_007_draft" / "cluster_007_changes.json").read_text(encoding="utf-8"))
         meta = changes["self_eval"]["ecas_metadata"]
-        assert meta["snippet_seed"]["snippet_seed_mode"] == "on"
-        assert meta["snippet_seed"]["injected"] is True
+        assert meta["polish"]["snippet_seed"]["snippet_seed_mode"] == "on"
+        assert meta["polish"]["snippet_seed"]["injected"] is True
 
 
 def test_G_gen_writer_save_output_default_seed_trace_not_injected():
-    """不传 seed_trace → 默认记 未注入（向后兼容旧调用 · 真实路径总会传 trace）。"""
+    """v29：不传 polish_trace → changes 无 polish 段（seed 留痕随 polish_trace 走·polish_pipeline 总会传）。"""
     import gen_writer as gw
 
     class _P:
@@ -509,7 +508,8 @@ def test_G_gen_writer_save_output_default_seed_trace_not_injected():
         changes = json.loads(
             (root / "章节" / "cluster_008_draft" / "cluster_008_changes.json").read_text(encoding="utf-8"))
         meta = changes["self_eval"]["ecas_metadata"]
-        assert meta["snippet_seed"]["injected"] is False
+        assert "polish" not in meta
+        assert meta["writer_mode"] == "claude_draft_gemini_polish_v29"
 
 
 # ════════════════════════════════════════════════════════════════

@@ -20,7 +20,7 @@ import gen_writer as gw  # noqa: E402
 
 _ANCHOR_HEADING = "本书文风动态锚"
 _ANCHOR_SNIPPET = "【动态锚内容_RSA_4242】他立在檐下，雨丝斜织，半晌未语。"
-_GEN_POINT = "# 现在请写正文"
+_GEN_POINT = "# 现在执行润色"
 
 
 def _make_project(tmp: Path, with_anchor=True, empty_snippet=False) -> Path:
@@ -58,7 +58,7 @@ def _build(root, anchor_mode="active", ctx_mode="active"):
     os.environ["ROLLING_ANCHOR_INJECT_MODE"] = anchor_mode
     os.environ["CTX_REORDER_MODE"] = ctx_mode
     try:
-        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=1)
+        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=1, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
     finally:
         for k, v in saved.items():
             if v is None:

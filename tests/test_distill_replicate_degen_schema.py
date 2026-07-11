@@ -8,7 +8,7 @@ bug1【退化串清洗】replica 实测含 3826 字连续「铛」串（占 27% 
 bug2【cluster_index schema 兼容】cluster_index.json 实际 key 是 chapter_range
   ([lo,hi]) + estimated_words + chapters_count，但旧码读 chapter_start/ch_start/
   chapter_end/ch_end + total_words/word_count → gather_cluster_ref_text 返回空
-  （参考原文没注入·复刻只靠 skill）+ estimate_words_per_chapter 永回退默认。
+  （参考原文没注入·复刻只靠 skill）+ meta 的 total_words_original 永回退空。
   producer/consumer schema 契约不符。修：tolerant 多 schema 读取。
 """
 import sys
@@ -151,14 +151,6 @@ def test_total_words_flat_compat():
 def test_chapters_count_from_range_when_missing():
     """chapters_count 缺失时由 chapter_range 推算（[13,18] → 6 章）。"""
     assert dr.cluster_chapters_count(_META_RANGE_ONLY) == 6
-
-
-def test_estimate_words_per_chapter_with_range_schema():
-    """end-to-end：chapter_range schema 下 estimate 用 estimated_words/章数（18000/6=3000），
-    不再回退默认 3500。"""
-    assert dr.estimate_words_per_chapter(_META_RANGE) == 3000
-    # 旧码下：total_words=0 + chapters_count 读不到 → 回退 3500（回归保护）
-    assert dr.estimate_words_per_chapter(_META_RANGE_ONLY) == 3000  # 18000/6
 
 
 def test_gather_ref_text_reads_original_via_chapter_range():

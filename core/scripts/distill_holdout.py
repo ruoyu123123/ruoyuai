@@ -489,8 +489,8 @@ def estimate_cost(n_dims, n_seed, n_clusters, n_arms=2,
     leave-one-dimension-out 设计：
       · conditions = n_dims + 1（1 个 baseline 全注入 + 每维各 1 个抹掉条件）。
       · replicas   = conditions × n_seed × n_clusters（每条件每 cluster 跑 n_seed 趟）。
-      · gen_calls  = replicas × n_arms（每次复刻按 cluster 字数拆 n_arms 个 sub-call·
-        distill_replicate.plan_cluster_subcalls·默认 ~2·真机须用真实 cluster 标定）。
+      · gen_calls  = replicas × n_arms（每次写作按 cluster 场景数拆 n_arms 个 gen 调用·
+        v29 gen_writer 分段润色 per-scene·默认 ~2·真机须用真实 cluster 标定）。
       · wall_hours = gen_calls × sec_per_call / 3600（sec_per_call=gen_throttle frozen
         4.5s/call ~13rpm 上限·dev 不节流更快·但分发态/限速中转站会触发 4.5 → 取保守上限）。
 

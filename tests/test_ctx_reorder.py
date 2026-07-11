@@ -2,7 +2,7 @@
 
 守护两件事：
 1. build_prompt 在 CTX_REORDER_MODE=active（默认）时，把**第一权威风格 skill** + 语感种子锚
-   重排到「现在请写正文」生成点的**近邻**（RoPE 高位），manifest 事实索引留中段；
+   重排到「现在执行润色」生成点的**近邻**（RoPE 高位），manifest 事实索引留中段；
    off/shadow 时退回原版 join 顺序（零回归）。
 2. _stream_once 截断续写回合在 active 模式下注入**精简风格锚**（签名句长/对话格式/禁套话 3 条），
    防 recency 漂移；off/shadow 时续写消息不含该锚（零回归）。
@@ -25,7 +25,7 @@ import gen_writer as gw
 _STYLE_MARKER = "【风格SKILL锚_UNIQUE_XYZ】"
 # manifest 里埋另一个独特锚，便于定位 manifest 段位置
 _MANIFEST_MARKER = "【MANIFEST事实索引锚_UNIQUE_ABC】"
-_GEN_POINT = "# 现在请写正文"
+_GEN_POINT = "# 现在执行润色"
 
 
 def _make_project(tmp: Path, with_prev_chapter: bool = False) -> Path:
@@ -77,7 +77,7 @@ def _build(root: Path, mode: str, ch_start: int = 1):
     os.environ["CTX_REORDER_MODE"] = mode
     # 关掉可能引入噪声的并发功能（snippet 种子默认 on，但本测试项目没原文池 → 自然空，无碍）
     try:
-        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=ch_start)
+        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=ch_start, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
     finally:
         if prev is None:
             os.environ.pop("CTX_REORDER_MODE", None)
@@ -156,7 +156,7 @@ def test_reorder_does_not_drop_content():
         _s_o, user_o = _build(root, "off")
         for marker in [_STYLE_MARKER, _MANIFEST_MARKER, _GEN_POINT,
                        "## 人物卡", "## 用户偏好", "## 调研 cache",
-                       "## cluster_blueprint", "现在开始写。", "word_count_cjk"]:
+                       "## cluster_blueprint", "# 现在执行润色", "等体量重写"]:
             assert marker in user_a, f"active 缺失 {marker}"
             assert marker in user_o, f"off 缺失 {marker}"
 

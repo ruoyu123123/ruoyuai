@@ -294,7 +294,7 @@ def test_save_output_writes_nonempty_body():
         assert cjk > 0
         changes_path = root / "章节" / "cluster_002_draft" / "cluster_002_changes.json"
         meta = json.loads(changes_path.read_text(encoding="utf-8"))["self_eval"]["ecas_metadata"]
-        assert meta["writer_mode"] == "freestyle_v27"
+        assert meta["writer_mode"] == "claude_draft_gemini_polish_v29"
         assert meta["chapter_count_decided_by_splitter"] is True
 
 
@@ -434,7 +434,7 @@ def test_strip_meta_preamble_reasoning_leak():
     """[2026-06-05] 推理模型漏出的『### 核心推理概要 … ---』元前言被剥离，正文从故事第一句开始。"""
     reply = ("### 核心推理概要\n\n本故事块对齐小世界风格，采用 in_medias_res。\n\n"
              "配角赋予城府。\n\n---\n\n晚上十一点的江临市下着雨。\n\n陆参跨上电动车。")
-    body, _ = gw.split_text_and_changes(reply)
+    body = gw.clean_polished_body(reply)
     assert body.startswith("晚上十一点"), f"应剥掉元前言, 实际开头: {body[:30]}"
     assert "核心推理概要" not in body
 
@@ -442,7 +442,7 @@ def test_strip_meta_preamble_reasoning_leak():
 def test_strip_meta_preamble_no_false_strip():
     """正常正文(无元标题)不被误剥。"""
     reply = "晚上十一点的江临市下着雨。\n\n陆参跨上电动车，心里盘算着这单麻辣烫送完能凑满勤奖。"
-    body, _ = gw.split_text_and_changes(reply)
+    body = gw.clean_polished_body(reply)
     assert body.startswith("晚上十一点")
 
 
@@ -454,7 +454,7 @@ def test_strip_english_meta_commentary_tail():
     reply = ("午夜的钟声连敲三下。\n\n伊莱从干草垫上惊醒，门缝下滑进一封沾血的羊皮纸。\n\n"
              "The narrative chunk is written coherently with deep expansion of the scenes.\n\n"
              "All quantitative self-checks and foreshadowing logs have been submitted.")
-    body, _ = gw.split_text_and_changes(reply)
+    body = gw.clean_polished_body(reply)
     assert body.rstrip().endswith("羊皮纸。"), f"应剥掉英文自评, 实际尾部: {body[-40:]}"
     assert "narrative chunk" not in body
     assert "self-checks" not in body
@@ -490,7 +490,7 @@ def test_creative_guard_excludes_flash_tier():
 def test_strip_english_meta_no_false_strip_chinese_with_quote():
     """正文中含英文短引用/人名不被误剥（只剥尾部整段英文·遇中文主导行立停）。"""
     reply = "他低声念出那个名字：Elias。\n\n钟楼的影子落在石板上，伊莱握紧了那封信。"
-    body, _ = gw.split_text_and_changes(reply)
+    body = gw.clean_polished_body(reply)
     assert body.rstrip().endswith("握紧了那封信。")
     assert "Elias" in body  # 正文内的英文人名保留
 
@@ -570,7 +570,7 @@ def test_build_prompt_excludes_untriggered_hidden_payoff():
             (db / "事件簇.json").write_text(
                 json.dumps({"clusters": [_make_brief_with_foreshadowing()]}, ensure_ascii=False),
                 encoding="utf-8")
-            system, user, _seed = gw.build_prompt(root, 1, 1)  # freestyle
+            system, user, _seed = gw.build_prompt(root, 1, 1, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})  # v29 polish
             full = system + "\n" + user
             # 埋设侧暗线：绝不出现在 writer prompt
             assert "HIDDENPLANT_铜钥匙能开地窖通真相_SECRET" not in full, "埋设侧 hidden_payoff 泄露进 prompt"
@@ -671,13 +671,13 @@ def test_build_prompt_excludes_untriggered_true_role():
             (db / "人物卡.json").write_text(
                 json.dumps(_make_cards_with_hidden_identity(), ensure_ascii=False), encoding="utf-8")
             # 未到揭密（cluster 1）
-            system1, user1, _ = gw.build_prompt(root, 1, 1)
+            system1, user1, _ = gw.build_prompt(root, 1, 1, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
             full1 = system1 + "\n" + user1
             assert "TRUEROLE_暗中投敌的叛徒_SECRET" not in full1, "未到揭密的 true_role 泄露进 prompt"
             assert "SURFACEROLE_落魄书生表面盟友_SR" in full1, "表面 surface_role 应注入"
             assert "写手信息隔离" in system1, "system H6 应含隐藏身份脱敏指示"
             # 到揭密（cluster 5）
-            system5, user5, _ = gw.build_prompt(root, 5, 9)
+            system5, user5, _ = gw.build_prompt(root, 5, 9, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
             full5 = system5 + "\n" + user5
             assert "TRUEROLE_暗中投敌的叛徒_SECRET" in full5, "到揭密 cluster 应解锁 true_role 供兑现"
     finally:
@@ -742,7 +742,7 @@ def _build_minimal_prompts():
             db.mkdir(parents=True)
             (db / "进度.json").write_text(json.dumps({"cluster_blueprint": {}}, ensure_ascii=False),
                                           encoding="utf-8")
-            system, user, _seed = gw.build_prompt(root, 1, 1)
+            system, user, _seed = gw.build_prompt(root, 1, 1, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
         tpl = system[system.index("你是长篇小说的写作引擎"):]
         return tpl, user
     finally:

@@ -225,7 +225,7 @@ cluster-write / cluster-save-state 内部的质检只服务唯一 cluster 链路
 
 - writer prompt（cluster brief + scope_summary + scene_storyboard + 作者风格约束 + 锁定事实 + voice_pack + 风格参考段 + 用户走向选择等）由 cluster-write 调度器组装，详见 `cluster-write.md` step 1-2。
 - 输出契约由 splitter 在 step 6 落地：writer 先产 `章节/cluster_<key>_draft/cluster_<key>_draft.txt` + `cluster_<key>_changes.json`，splitter 切章后平铺为 per-chapter `第NNN章/第NNN章.txt` + `第NNN章_changes.json`（正文/数据分离，纯正文无 `---CHANGES` 分隔符）。
-- 🔴 v27 freestyle 默认：writer 不被告知目标章数 + 字数，章数由 splitter 按字数硬范围（3000-4500 CJK/章）在 step 6 切定。
+- 🔴 v29 正文生成：Claude 亲笔逐场景写草稿（novel-writer agent）→ gemini 分段等体量润色（gen_writer.py）出终稿；writer 链不被告知目标章数，章数由 splitter 按字数硬范围（3000-4500 CJK/章）在 step 6 切定。
 
 **主代理只需**：spawn cluster-write 调度器、收到「✅ cluster <key> 写好了」后立即 spawn cluster-save-state，绝不在主会话里直接生成正文。
 

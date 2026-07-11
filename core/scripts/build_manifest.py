@@ -4758,7 +4758,7 @@ def _build_hard_constraints(
     风格量化约束(对话占比/句长/字数/逗句比/TTR·全标 advisory·作者档第一权威·可校准偏离·
     北极星⑤)。2026-06-15 审计修(Workflow confirmed)：风格量化项原无 advisory 标记被
     critical_summary 框「必满足」=违北极星⑤把 advisory 当 hard_gate；对话占比 0.3 地板覆盖
-    低对话作者基线=违北极星⑤(c)机械覆盖作者档；freestyle_v27 仍注入每章字数=违北极星④。
+    低对话作者基线=违北极星⑤(c)机械覆盖作者档；writer 链注入每章字数=违北极星④（章数字数由 splitter 决定）。
     全标 advisory 前缀让 writer 区分(critical_summary 只框 hard_gate 项)·对话地板改 relax-only。"""
     hard_constraints = [
         f"Tier-1 伏笔 {foreshadow_summary['tier1_due_count']} 条本章必须回收",
@@ -4795,7 +4795,7 @@ def _build_hard_constraints(
         if cw_m is not None:
             low = max(2000, int(cw_m) - 500)
             high = int(cw_m) + 500
-            hard_constraints.append(f"（advisory·freestyle_v27 由 splitter 按字数切·仅参考）章节字数 {low}-{high}")
+            hard_constraints.append(f"（advisory·v29 由 splitter 按字数切·仅参考）章节字数 {low}-{high}")
         punc = quant.get("punctuation_density_per_1000", {})
         cpr_raw = punc.get("comma_period_ratio")
         cpr = _num(cpr_raw.get("mean") if isinstance(cpr_raw, dict) else cpr_raw)
@@ -6731,7 +6731,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "motif_recurrence_directive": _collect_motif_advisory(s),
         "genre_baseline_diff": _collect_genre_baseline_diff(s),
         "volume_summaries_digest": _collect_volume_summaries_digest(s),
-        "writer_mode": "freestyle_v27",
+        "writer_mode": "claude_draft_gemini_polish_v29",
         "rag_relevant_chapters": rag_hits,
         "memory_search_results": memory_hits,
         "database_coverage": s.coverage_report(),

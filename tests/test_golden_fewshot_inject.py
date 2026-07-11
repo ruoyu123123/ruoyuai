@@ -18,7 +18,7 @@ import gen_writer as gw  # noqa: E402
 
 _GFS_HEADING = "原作金句 few-shot"
 _GFS_PASSAGE = "【金句内容_GFS_8888】他抬头看天，云在走，心也跟着空了。"
-_GEN_POINT = "# 现在请写正文"
+_GEN_POINT = "# 现在执行润色"
 
 
 def _make_project(tmp, with_gfs=True, empty=False, many=False):
@@ -53,7 +53,7 @@ def _build(root, gfs_mode="active", ctx_mode="active"):
     os.environ["GOLDEN_FEWSHOT_INJECT_MODE"] = gfs_mode
     os.environ["CTX_REORDER_MODE"] = ctx_mode
     try:
-        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=1)
+        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=1, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
     finally:
         for k, v in saved.items():
             if v is None:

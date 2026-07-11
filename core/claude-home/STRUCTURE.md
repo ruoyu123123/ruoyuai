@@ -145,7 +145,8 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 - `第{N}章_changes.json` 由 `novel-chapter-splitter`（cluster mode · splitter 在 step 6 从 `cluster_<key>_changes.json` 按切点平铺成 per-chapter）产出，不再由 save-state 产出。
 - 所有读写章节正文 / CHANGES 的脚本必须走 `core/scripts/chapter_io.py` 统一模块（`read_body` / `read_changes` / `write_body` / `write_changes`），禁止各自 split。
 - `第{N}章_changes.json` 顶层两键：`self_eval`（writer 创作自评 applied_style / `waivers` 等，judge 默认不读，v17.4 分权纪律）+ `factual`（确定性遥测如字数 + archivist 回库后的客观状态派生镜像，**非 writer 自报权威源**）。
-- **🔴 2026-06-28 架构纠正（北极星⑥不留双口径）**：配置的写作模型（gen-model writer）**只产正文**、**不自报"改了什么"**。cluster 级客观状态（角色 / 道具 / 关系 / `locked_facts` / 伏笔）的**权威源**由 Claude 梳理、确定性脚本回库——**不再以 writer 的 `changes.factual` 自报为准**：
+- **🔴 v29 正文生成两阶段（2026-07-11 用户定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）**：step 2a `novel-writer` agent（Claude 亲笔）逐场景写作落 `claude_scenes/scene_*.txt` + `cluster_<key>_draft_claude.txt`（审计基线）+ `changes_claude.json`（self_eval 草稿）；step 2b `gen_writer.py` 逐场景段调 gemini 按风格档等体量润色（守恒带 [0.85,1.30]）拼接出终稿。gen-model 从零生成路径已清除（缺 claude_scenes 即 FATAL）。实验依据 `workspace/_temp_research/四组生成对比_20260711`。
+- **🔴 2026-06-28 架构纠正（北极星⑥不留双口径·v29 沿用）**：writer 链（Claude 亲笔 + gemini 润色）**只产正文 + 创作自评**、**不自报"改了什么"**。cluster 级客观状态（角色 / 道具 / 关系 / `locked_facts` / 伏笔）的**权威源**由 Claude 梳理、确定性脚本回库——**不再以 writer 的 `changes.factual` 自报为准**：
   - **角色 / 道具 / 关系 / `locked_facts`**：`novel-archivist` 读整 cluster 正文客观抽取 → `_数据库/.wal/cluster_<key>_archive.json` → `apply_archive.py <项目> --cluster <key>` 确定性回库（幂等·按 id 去重）。
   - **伏笔**：`novel-foreshadower` 的 JudgeReport + `outline` brief（plant / payoff 由 Claude 梳理，非 writer 自报）。
   - `save_state` 已停读 writer factual；`time_advance` / `location` 等**非 archive 域**仍由 `save_state --apply-cluster-changes` 落地。
@@ -411,7 +412,8 @@ core/claude-home/
 
 | 文件 | 标准路径 | 内容 | 由谁产出 |
 |---|---|---|---|
-| cluster 草稿 | `章节/cluster_<key>_draft/cluster_<key>_draft.txt` | 整块正文草稿 | `novel-writer` / `gen_writer.py` |
+| cluster 草稿 | `章节/cluster_<key>_draft/cluster_<key>_draft.txt` | 整块正文终稿（v29=Claude 亲笔+gemini 润色） | `novel-writer`(2a 亲笔) + `gen_writer.py`(2b 润色) |
+| Claude 亲笔场景稿 | `章节/cluster_<key>_draft/claude_scenes/scene_*.txt` + `cluster_<key>_draft_claude.txt` | v29 step 2a 产物（润色输入+审计基线） | `novel-writer` agent |
 | cluster changes | `章节/cluster_<key>_draft/cluster_<key>_changes.json` | 创作期自评、waivers、确定性遥测 | `novel-writer` / cluster-write 调度器 |
 | pending tail | `章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt` | splitter 退回的不足字数尾段 | splitter |
 

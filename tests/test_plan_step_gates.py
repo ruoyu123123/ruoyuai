@@ -280,10 +280,14 @@ def test_check_agent_injection_tampered_plan_blocks():
     assert not r["ok"] and "tampered" in r["msg"]
 
 
-def test_check_agent_injection_replicate_blocks():
+def test_check_agent_injection_replicate_allowed_warns_same_stack():
+    """v29 语义反转（2026-07-11）：复刻 = Claude 亲笔场景草稿 + gemini 分段润色（同栈）。
+    spawn Claude agent 写复刻场景草稿【合法且必需】→ 不再 block；只 warn 提示复刻终稿
+    必须经 distill_replicate.py 的 gemini 润色落盘（agent 不得直接写终稿文件）。"""
     r = gates.check_agent_injection(
         "用 skill_v3.md 复刻一段足够长的提示文字内容在这里", "v3 复刻测试", "claude")
-    assert not r["ok"] and "复刻" in r["msg"]
+    assert r["ok"]  # v29：复刻 Claude agent 不再拦截（旧「禁 Claude sub-agent 复刻」已反转）
+    assert any(("复刻" in w or "同栈" in w) for w in r.get("warnings", []))
 
 
 def test_check_agent_injection_injection_pattern_warns_not_blocks():

@@ -265,7 +265,7 @@ def test_build_prompt_injects_belief_boundary_and_h7():
                 {"name": "林晚", "role": "主角"}, {"name": "陈默", "role": "ally"}]},
                 ensure_ascii=False), encoding="utf-8")
             _write_manifest(db, _belief_scene_knowledge())
-            system, user, _seed = gw.build_prompt(root, 1, 1)
+            system, user, _seed = gw.build_prompt(root, 1, 1, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
             full = system + "\n" + user
         # H7 规则在 system
         assert "角色信息差(per-character belief)" in system, "system 应含 H7 角色信息差规则"
@@ -296,7 +296,7 @@ def test_build_prompt_no_belief_default_safe():
                 {"cluster_id": "cluster_001", "status": "in_progress", "chapter_range": [1, 4],
                  "scope_summary": "测试"}]}, ensure_ascii=False), encoding="utf-8")
             _write_manifest(db, [])  # 空
-            _system, user, _seed = gw.build_prompt(root, 1, 1)
+            _system, user, _seed = gw.build_prompt(root, 1, 1, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
         assert "## 🧠 角色认知边界" not in user
     finally:
         if _bak is None:

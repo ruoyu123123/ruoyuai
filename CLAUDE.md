@@ -126,7 +126,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 | 类别 | 命令 | 功能 |
 |------|------|------|
 | **核心** | `/write` | 写小说完整流程（端到端引导） |
-| | **`/cluster-write`** | **写故事块（cluster mode · v27 freestyle 默认 · step 以 plan 模板为准）** |
+| | **`/cluster-write`** | **写故事块（cluster mode · v29 Claude 亲笔+gemini 润色 · step 以 plan 模板为准）** |
 | | **`/cluster-save-state`** | **故事块状态保存（自动维护子系统 JSON + 涌现下一 cluster · step 以 plan 模板为准）** |
 | | `/outline` | 生成卷级大纲 + 初始化 34 子系统数据库 + 询问每卷 cluster 数 |
 | | `/continue` | 续写/断点恢复 |
@@ -154,7 +154,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 5. **直接开写** → 大纲确认后立即写第一个 cluster
 6. **逐故事块循环**（v26 cluster mode 唯一形态）：
    - 走向卡前调研：spawn `novel-researcher` TASK_TYPE=outline
-   - **执行 `/cluster-write CLUSTER_ID=<key>`**（v24 倒置流水线 7 步 · v27 freestyle 默认）
+   - **执行 `/cluster-write CLUSTER_ID=<key>`**（v24 倒置流水线 7 步 · v29 Claude 亲笔+gemini 润色）
    - **执行 `/cluster-save-state CLUSTER_ID=<key>`**（cluster 级状态保存 + 涌现下一 cluster brief）
    - 展示剧情走向卡片 → 等用户选择
 7. **完成** → `/export` 写出 `exports/<书名>_全文_<章数>章.txt`
@@ -342,7 +342,7 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 
 1. **outline-planner** 把 cluster_001 的 scene_storyboard 排成倒叙：scene0=强冲突/灾难开场（200 字内丢核心悬念）、scene1=反转/揭底、scene2+=时间序回溯、章末接回开篇。
 2. **build_manifest** 注入 scene_storyboard + `narrative_mode` 给 writer。
-3. **writer** 按 scene_storyboard 顺序写（场景顺序即叙事顺序；gen_writer prompt 只让它「按 storyboard 自由发挥」）→ 草稿开头即倒叙高潮。
+3. **writer** 按 scene_storyboard 顺序写（场景顺序即叙事顺序；v29=Claude 亲笔逐场景写、gemini 分段润色不动场景顺序）→ 草稿开头即倒叙高潮。
 4. **splitter** 只按字数 linear 切（北极星④：纯格式层不理解叙事）——**绝不再做 climax 段提前**。历史 M5 的 reorder 会与 writer 已排好的倒叙叠成「双重倒叙」（cluster_001 实测：ch1 开头被硬塞一句中段「肋骨断裂」与原开篇拼接断裂），已删除。
 
 **例外**（写 `"linear"`）：严肃文学 / IP 改编已定顺序 / 用户明示线性叙事。
@@ -386,18 +386,18 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 
 ---
 
-## 🔴 v27 三件套：writer 自由 + splitter 字数切 + 跨 cluster 补料
+## 🔴 v29 正文生成：Claude 亲笔创作 + gemini 分段润色（+ splitter 字数切 + 跨 cluster 补料）
 
-用户原话：「故事块能切多少章我发现你一开始已经间接限制死了，这是不对的，应该让ai自由发挥，只要不脱离既有事实和大势，然后根据生成内容的字数，按照固定范围字数进行切割（一定程度上要参考最佳切割点），最后一章切出来字数不够就拿下一个故事块生成后的内容来补一些，这个补也是要放在切割的过程中」。
+用户定调（2026-07-11）：「所有创作路线转向有claude自身创作内容，gemini润色」。实验依据 `workspace/_temp_research/四组生成对比_20260711`（cluster 级双通道最优：嵌入 SFS 第一/零禁用词/事实链零漂移；gen-model 从零生成+多轮扩写=套话×10+设定漂移）+ memory `project_4group_generation_comparison_2026_07_11`。章数 fluid 原则沿用 v27 用户原话：切多少章由 splitter 按字数后期决定，writer 链不预设章数。
 
-### 1. writer freestyle（默认）
+### 1. writer v29 两阶段（唯一形态）
 
-`gen_writer.py` 公开 CLI 只接受 `--project <path> --cluster <N>` → writer prompt **不暴露目标章数 + 字数**：
-- writer 按 `cluster.scope_summary` + `scene_storyboard` 自由发挥
-- 字数自然涌现（健康区间 12000-25000 CJK）
-- changes.json 标 `writer_mode: "freestyle_v27"` + `chapter_count_decided_by_splitter: true`
+- **step 2a Claude 亲笔**：novel-writer agent 读 manifest/风格 skill/brief/research 后**逐场景亲笔写作**（每场景写透·分场景落盘 `claude_scenes/scene_*.txt` 规避单响应上限）+ 拼接审计基线 `cluster_<key>_draft_claude.txt` + 自评草稿 `changes_claude.json`。写作硬守则：弯引号 U+201C/201D、非对话段一段一句末符、禁用词零容忍、锁定事实零漂移、伏笔只埋不剧透。
+- **step 2b gemini 润色**：`gen_writer.py` 公开 CLI 只接受 `--project <path> --cluster <N>` → 自动发现 claude_scenes/ → 逐场景段调 gemini 按风格档**等体量重写润色**（段级守恒带 [0.85,1.30]·超界带字数指令重试 1 次·万字整体润色已实测三连败必须分段）→ 拼接出终稿 `cluster_<key>_draft.txt`。
+- changes.json = Claude self_eval/waivers + gen_writer 确定性遥测合并，标 `writer_mode: "claude_draft_gemini_polish_v29"` + `chapter_count_decided_by_splitter: true`
+- 🔴 **禁止 gen-model 从零生成**（gen_writer 已无该路径·缺 claude_scenes/ 即 [FATAL]·不兼容不降级）；禁止 expand/字数兜底复活（字数不够=回头把场景写透而非尾部注水）。
 
-禁止重新加入 `--chapter-end` / `--target-cjk` / `--chapter-start` 兼容参数；起始章由 cluster 反查推导，章数和字数只由 splitter 后续决定。
+禁止重新加入 `--chapter-end` / `--target-cjk` / `--chapter-start` 兼容参数；起始章由 cluster 反查推导，章数只由 splitter 后续决定。
 
 ### 2. splitter 按字数硬范围切（取代 TARGET_CHAPTERS）
 
@@ -414,25 +414,28 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 - 下个 cluster 写完后 cluster-write step 6 调度器检测 → 传 `PREVIOUS_PENDING_TAIL_PATH` 给 splitter
 - splitter 把 pending_tail prepend 到下个 cluster 草稿头部 + 联合切
 
-详见 memory `feedback_v27_writer_freestyle_splitter_word_cut`。
+详见 memory `feedback_v27_writer_freestyle_splitter_word_cut`（splitter/pending_tail 段仍有效·writer 段已被 v29 取代）+ `project_4group_generation_comparison_2026_07_11`。
 
 ---
 
-## 🔬 蒸馏复刻强制 gen-model
+## 🔬 蒸馏复刻强制同栈（v29：Claude 草稿 + gemini 润色）
 
-`/distill-style` 的复刻段产出**必须**走 gen-model（OpenAI 兼容协议），**禁用 Claude sub-agent**。
+`/distill-style` 的复刻段产出**必须与正式写作同栈**：v29 正式栈 = Claude 亲笔场景稿 + gemini 分段润色，所以复刻 = **spawn Claude agent 按 skill 写复刻场景稿** → `distill_replicate.py` 用 gemini 按 skill 分段润色落盘评分。**禁纯 gemini 从零直写复刻**（那是已删除的旧栈），也**禁 Claude agent 直接产复刻终稿**（绕过润色环节=自评自证）。
 
-**为什么**：蒸馏闭环复刻验证「skill 能不能让目标 LLM 模仿出风格」。正式写作走 gen-model，所以蒸馏必须同栈 — Claude 复刻通过 ≠ gen-model 复刻通过。
+**为什么**：蒸馏闭环复刻验证「skill 能不能让正式写作栈模仿出风格」。栈变了复刻必须跟——旧口径「复刻禁 Claude」随 v29 作废。
 
 **正确流程**：
 ```bash
+# ① 蒸馏 plan 的复刻 step 先 spawn Claude agent 按 skill 写场景稿到 <scenes_dir>/scene_*.txt
+# ② 再跑（复刻终稿只能由本脚本落盘）：
 python core/scripts/distill_replicate.py \
   --style-skill workspace/styles/<书名>/skill_v<N>.md \
   --mode cluster --cluster-ref cluster_001 --project workspace/novels/<书名> \
+  --claude-scenes-dir workspace/styles/<书名>/复刻测试/v<N>_round<M>/claude_scenes \
   --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/cluster_001_replica.txt
 ```
 
-**三层防御**：L1 命令文档 / L2 唯一合法入口 `distill_replicate.py` / L3 hook 拦截 spawn Agent 做复刻。
+**三层防御（v29 语义）**：L1 命令文档 / L2 唯一合法终稿入口 `distill_replicate.py`（缺 --claude-scenes-dir 即拒跑）/ L3 hook 规则 11 对复刻 agent 发同栈 warn（agent 只产草稿·终稿必经 gemini 润色落盘）。
 
 紧急中止：若复刻验证无法执行，停止蒸馏 plan 并修复输入或环境；不得用环境变量越过验证。
 

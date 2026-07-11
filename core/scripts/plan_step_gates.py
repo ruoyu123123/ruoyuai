@@ -468,7 +468,11 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
         if not (has_research_ref or is_splitter or is_checkpoint or is_distill):
             return _block("ECAS agent spawn 缺 RESEARCH_REF 字段", warnings)
 
-    # ---- 规则 11：蒸馏复刻禁用 Agent（须走 gen-model）----
+    # ---- 规则 11（v29 语义反转 · 2026-07-11）：蒸馏复刻必须同栈 ----
+    # 正式写作栈 = Claude 亲笔草稿 + gemini 分段润色（v29），复刻验证必须同栈：
+    # spawn Claude agent 写复刻场景草稿是【合法且必需】的（不再拦截）；
+    # 守卫下沉到 distill_replicate.py 输入契约——复刻终稿只能由它（gemini 润色）落盘，
+    # Claude agent 直接产复刻终稿绕过润色环节 = 流程违规（warn 提示 · 终稿落盘由脚本把关）。
     desc_l = desc.lower()
     is_replicate = False
     if (("复刻测试" in desc) or ("v0 复刻" in desc) or ("v1 复刻" in desc)
@@ -482,8 +486,9 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
                             or "test_psychology_replica" in prompt):
         is_replicate = True
     if is_replicate:
-        return _block("蒸馏复刻测试禁用 Agent 工具（须走 gen-model · distill_replicate.py）",
-                      warnings)
+        warnings.append(
+            "[v29 复刻同栈提示] 复刻 agent 只产 Claude 场景草稿（claude_scenes/）；"
+            "复刻终稿必须经 distill_replicate.py 的 gemini 润色落盘，agent 不得直接写终稿文件")
 
     # ---- 规则 9（warn-only）：内容级注入模板检测 ----
     prompt_lower = prompt.lower()

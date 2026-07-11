@@ -37,7 +37,7 @@ _STYLE_FP_MARKER = "【量化指纹锚_PRIM_FP_777】"
 _STYLE_FP_HEADING = "作者量化风格指纹"
 # primacy 段的稳定标题（_build_hard_constraint_primacy_block 产出）
 _PRIMACY_HEADING = "## ⚙️ 硬约束维 primacy 重述"
-_GEN_POINT = "# 现在请写正文"
+_GEN_POINT = "# 现在执行润色"
 
 
 def _make_project(tmp: Path, with_prev_chapter: bool = False,
@@ -97,7 +97,7 @@ def _build(root: Path, ctx_mode: str = "active", primacy_mode: str = "active",
     os.environ["CTX_REORDER_MODE"] = ctx_mode
     os.environ["SKILL_PRIMACY_MODE"] = primacy_mode
     try:
-        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=ch_start)
+        system, user, _trace = gw.build_prompt(root, cluster_id=1, ch_start=ch_start, polish_view={'idx': 0, 'total': 1, 'scene_text': '井边的场景稿正文。' * 10})
     finally:
         for k, v in saved.items():
             if v is None:
@@ -179,7 +179,7 @@ def test_active_style_fp_sinks_to_gen_point_near_zone():
         pos_fp = user.find(_STYLE_FP_HEADING)
         pos_manifest_sec = user.find("## manifest")  # manifest 段标题
         pos_gen = user.find(_GEN_POINT)
-        pos_intro = user.find("# 写作任务")
+        pos_intro = user.find("# 润色任务")
         assert pos_fp != -1, "量化指纹段必须出现在 user prompt"
         assert -1 not in (pos_manifest_sec, pos_gen, pos_intro)
 
@@ -271,7 +271,7 @@ def test_no_content_dropped_active():
         _system, user = _build(root, ctx_mode="active")
         for marker in [_STYLE_MARKER, _MANIFEST_MARKER, _STYLE_FP_MARKER, _PRIMACY_HEADING,
                        _GEN_POINT, "## 人物卡", "## 用户偏好", "## 调研 cache",
-                       "## cluster_blueprint", "现在开始写。", "word_count_cjk"]:
+                       "## cluster_blueprint", "# 现在执行润色", "等体量重写"]:
             assert marker in user, f"active 缺失 {marker}"
 
 
