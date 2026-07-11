@@ -10,22 +10,24 @@
 ```
 <REPO_ROOT>/                          # 项目根（Claude Code working directory）
 ├── .claude/                                   # Claude Code 配置层
-│   ├── commands/                              # 用户级命令定义
-│   ├── agents/                                # Subagent 定义（judge prompt 单一真理源）
-│   ├── templates/                             # 命令调用模板
+│   ├── commands/                              # 用户级命令定义（14 个）
+│   ├── agents/                                # Subagent 定义（12 个 novel-*.md · judge prompt 单一真理源）
 │   └── settings.json                          # 项目设置
 ├── core/                                       # 系统核心代码
-│   ├── claude-home/
-│   │   ├── plans/                              # plan_tracker 强制规划模板
-│   │   ├── hooks/                              # PreToolUse hooks
-│   │   ├── agents/                             # Subagent 定义
-│   │   ├── templates/                          # 通用模板
-│   │   ├── lessons/                            # 蒸馏经验库
-│   │   └── STRUCTURE.md                        # 【本文档】
-│   └── scripts/                                # Python 工具脚本
+│   ├── claude-home/                            # 系统主目录（见第四节）
+│   ├── scripts/                                # Python 确定性工具脚本 + scanner（424 个）
+│   ├── ml/                                     # 神经网络模型训练/推理（53 个，见第四-ter 节）
+│   └── data/                                   # scanner/模型消费的词典数据（15 个 JSON）
+├── tests/                                       # pytest 回归测试（563 个，与 core/scripts、core/ml 命名基本一一对应）
+├── research/                                    # 【本地调研报告区 · 不入 git】自产调研综述物理保留原位，
+│                                                 # 2026-07-11 起退出 git 追踪（见 .gitignore；多条 memory 仍按文字路径引用）
 ├── workspace/                                  # 【用户产出区】
 │   ├── styles/{书名}/                          # 全局风格库（见第二节）
-│   └── novels/{书名}/                          # 小说项目（见第三节）
+│   ├── novels/{书名}/                          # 小说项目（见第三节）
+│   └── _temp_research/                         # 实验证据链暂存区，默认不入 git（个别历史文件例外遗留）
+├── start.sh / start.cmd                         # 跨平台启动入口（同步根 CLAUDE.md 到 core/claude-home/CLAUDE.md）
+├── pytest.ini / requirements.txt                # 测试与依赖配置
+├── README.md / INSTALL.md / 使用说明.md         # 用户文档
 └── CLAUDE.md                                   # 项目级 AI 指令
 ```
 
@@ -35,6 +37,7 @@
 - ✅ 风格库 = `workspace/styles/{书名}/`
 - ✅ 小说项目 = `workspace/novels/{书名}/`
 - ✅ 系统经验 = `core/claude-home/lessons/`
+- ✅ Agent 定义唯一权威位置 = `.claude/agents/`（`core/claude-home/` 不设 agents 副本）
 
 ---
 
@@ -166,21 +169,35 @@ core/claude-home/
 ├── hooks/                                      # Pre/Post tool hooks
 │   ├── pretooluse_agent_gate.py
 │   └── ...
-├── agents/                                     # Subagent 定义
-│   ├── novel-writer.md
-│   ├── novel-summarizer.md
-│   └── ...
 ├── templates/                                  # 通用模板（跨项目共享）
-│   ├── distill_3ch_agent_brief.md             # 3 章蒸馏 brief
-│   └── ...
+│   ├── subsystem_skeletons.json                # 34 核心子系统骨架单一真理源
+│   ├── genre_baseline.json / genre_dimension_packs.json  # 题材分层基线
+│   ├── SUBSYSTEM_FRAMEWORK.md                  # 子系统设计框架说明
+│   ├── 平台冷启动SOP.md                        # 一人公司发布节奏 SOP
+│   └── examples/                               # 完整题材 schema 范例包（见下）
+│       ├── scp_anomaly_bureau/                 # SCP/异常局/多身体同步题材（8 个 example JSON + README）
+│       ├── urban_supernatural_business/        # 都市超自然商战题材（9 个 example JSON + README）
+│       └── _subsystem_examples/                # 前两包未覆盖的其余高级子系统单文件范例（9 个）
+├── schemas/                                    # JSON Schema 契约定义
+│   ├── changes_schema.json
+│   ├── event_cluster_schema.json
+│   └── user_preferences_schema.json
+├── knowledge/                                  # 题材/技法/世界观知识库（jsonl，scanner 消费）
+│   ├── genre/ · technique/ · worldbuilding/ · research/
+├── skills/                                     # 【预留】当前仅占位，无实质内容
 ├── lessons/                                    # 经验库（自学习）
 │   ├── distill-style-lessons.md               # 蒸馏教训
 │   ├── EXTRACTOR_PROMPT.md                    # 自动提取 prompt
 │   └── ...
+├── CLAUDE.md                                   # Agent 入口补充约束（sub-agent 读取，不重复根 CLAUDE.md）
+├── SELF_LEARNING_ARCHITECTURE.md               # MAPE-K 运行时自学习层权威设计文档
+├── universal_skill_pool.json                   # 跨题材通用写作技法池
 └── STRUCTURE.md                                # 本文档
 ```
 
 > 命令文档的**唯一权威**位置是 `.claude/commands/`。`core/claude-home/` 不设 commands 副本；改命令文档只改 `.claude/commands/`，系统运行时也只加载这里。
+>
+> **Agent 定义的唯一权威**位置是 `.claude/agents/`。`core/claude-home/` 不设 agents 副本（历史上曾有 `core/claude-home/agents/`，2026-07-11 全仓文件盘点确认零流程引用后清空）；`core/claude-home/CLAUDE.md` 只是 sub-agent 读取的补充约束文件，不是 agent 定义本体。
 
 ---
 
@@ -195,6 +212,29 @@ core/claude-home/
 ```
 
 任何新增能力必须落入这条链路的正式步骤或子步骤，不设旁路入口。
+
+---
+
+## 四-ter、模型层与测试层（`core/ml/`、`core/data/`、`tests/`）
+
+```
+core/ml/                                        # 神经网络模型训练/推理（53 个文件）
+├── emotion_vad/ · style_embed/ · quality_clf/   # 训练 pipeline 三件套（各含 data_prep/train/eval/infer + README/INTEGRATION.md）
+├── coherence/ · content_embed/ · nli/ · surprisal/  # 推理侧（*_infer.py，daemon 懒加载调用）
+├── daemon/model_daemon.py                       # 常驻推理服务（5 类模型驻内存·热路径 0.04-0.13s）
+├── registry/                                    # ModelRegistry（active/shadow 版本、路径、指标）
+├── feature_store/                               # 统一特征缓存（embedding/surprisal/VAD/coherence）
+├── flywheel/                                    # DataFlywheel 数据飞轮（cluster-save-state 后台采集训练样本）
+├── calibration/                                 # 语义阈值/统计阈值校准 harness + 历史校准报告
+├── LEARNABLE_BACKLOG.md                         # 可成长模型化 backlog（滚动更新的权威进度记录）
+└── TRAINING_RESULTS.md                          # 各模型训练结果记录
+
+core/data/                                       # 15 个词典 JSON，被 core/scripts 的 scanner/core/ml 推理侧消费
+
+tests/                                           # 563 个 pytest 文件，命名与 core/scripts / core/ml 一一对应（test_<module>.py）
+```
+
+`core/ml/` 消费方式：`core/scripts/nn_*_bridge.py`（vad/coherence/nli/surprisal）+ `embedding_store.py`（style_embed/content_embed）经 subprocess 或 daemon HTTP 调用 `core/ml/` 侧推理脚本，系统主 Python（无 torch）与 `core/ml/.venv`（torch CUDA）进程隔离。
 
 ---
 
