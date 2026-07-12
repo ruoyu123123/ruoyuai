@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """distill_holdout.py — 蒸馏留出验证 · 防 metric overfit / in-context reward hacking
-（2026-05-31 · 北极星①⑤⑥）
+（北极星①⑤⑥）
 
 治什么病
 --------
@@ -29,7 +29,7 @@ in-context reward hacking：优化目标（tuning SFS）和真实目标（任意
      同一切分）。也允许显式 --holdout-ref 钉死哪些 cluster 留出（IP 改编/指定场景）。
   5. **挂 distill_track**：record 跑完可把 {tuning_mean, holdout_mean, gap, overfit}
      塞进 distill_track 的 ledger（基线 ledger 加 holdout 列），与防打转件共用一个账本。
-  6. **env HOLDOUT_SFS_MODE 默认 active**（用户：默认关闭写它干什么）。active=算落差+附
+  6. **env HOLDOUT_SFS_MODE 默认 active**（默认关闭的 advisory 功能没人会主动打开）。active=算落差+附
      advisory；shadow=只算只记录不提 advisory 顶层；off=完全不算（逃生口）。
 
 用法
@@ -55,7 +55,7 @@ in-context reward hacking：优化目标（tuning SFS）和真实目标（任意
     --cluster cluster_001 --cluster cluster_002 --cluster cluster_003 \\
     --cluster cluster_004 --holdout-frac 0.25 --seed 42
 
-  # E) 维度消融记录（R3 ABLATION · 同 cluster 多 seed baseline vs ablated → 显著性证据）
+  # E) 维度消融记录（同 cluster 多 seed baseline vs ablated → 显著性证据）
   #    baseline=含该维注入；ablated=ABLATE_DIMENSIONS=该维 抹掉后；两组同一 cluster（配对消题材）。
   python core/scripts/distill_holdout.py ablation-record \\
     --project workspace/styles/惊悚乐园 --skill-version v3 \\
@@ -68,7 +68,7 @@ in-context reward hacking：优化目标（tuning SFS）和真实目标（任意
     --dimensions 7 --seeds 5 --clusters 3 --calls-per-replica 2 \\
     --min-interval 4.5 --budget-hours 6
 
-补充（R3 ABLATION 域 · 2026-06-14）
+补充（消融统计域）
 ----------------------------------
 消融统计层全程 advisory/experiment，**绝不进 audit_hub.HARD_GATE_CODES**，绝不据此自动
 改注入维度。1σ_seed 噪声门**只**取「同一 cluster 多 seed 复刻」的 SFS std
@@ -104,7 +104,7 @@ DEFAULT_GAP_REL = 0.08
 # 最少 holdout 样本数：少于此值 holdout 均值不可信 → 不下过拟合结论（only 提示样本不足）。
 MIN_HOLDOUT_N = 1
 
-# ---- 消融效应显著性常量（R3 ABLATION 域 · 2026-06-14 · advisory/experiment 全程不阻断）----
+# ---- 消融效应显著性常量（advisory/experiment 全程不阻断）----
 # 效应是否「真」的 1σ_seed 门系数：effect 须 > k × 1σ_seed（k=1 即一个标准差）。
 DEFAULT_EFFECT_K = 1.0
 # 表层维（确定性 SFS·无判别噪声）探针噪声地板=0；思维维由 av_judge 实测 instability 填。
@@ -273,14 +273,14 @@ def detect_overfit(tuning_scores, holdout_scores,
 
 
 # ============================================================
-# 消融统计层（R3 ABLATION 域 · 2026-06-14）
+# 消融统计层
 # ------------------------------------------------------------
 # 维度消融（leave-one-dimension-out）显著性判定的纯函数。**全部零 IO / 零模型 /
 # 零网络 · 可单测**。北极星⑤⑥：只产 advisory/experiment 证据，**绝不进
 # audit_hub.HARD_GATE_CODES**，绝不据此自动改注入维度（消融驱动的真机自证走
 # experiment_gate，见 distill_replicate.run_dimension_ablation 骨架）。
 #
-# 🔴 1σ 量纲铁律（R3 已纠正 R1/R2 量纲错配）：
+# 🔴 1σ 量纲铁律：
 #   效应显著性的「1σ_seed 噪声门」**只能**取**同一 cluster 多 seed 复刻**的 SFS 分
 #   std（配对设计消题材后的纯抖动）—— 即 distill_track.sample_std / entry['std']。
 #   **绝不**用 style_evaluator.sentence_stats.std（那是「单篇文本内句长离散度」=
@@ -479,7 +479,7 @@ def build_ablation_entry(skill_version, dimension, cluster_ref,
 
 
 # ============================================================
-# 成本量化（R3 ABL-6 · 纯算 · 零网络零调用 · advisory）
+# 成本量化（纯算 · 零网络零调用 · advisory）
 # ============================================================
 
 def estimate_cost(n_dims, n_seed, n_clusters, n_arms=2,
@@ -533,7 +533,7 @@ def estimate_cost(n_dims, n_seed, n_clusters, n_arms=2,
 # ============================================================
 
 def holdout_mode() -> str:
-    """HOLDOUT_SFS_MODE：默认 active（用户：默认关闭写它干什么 · 北极星纪律 2）。
+    """HOLDOUT_SFS_MODE：默认 active（默认关闭的 advisory 功能没人会主动打开 · 北极星纪律 2）。
 
     active：算落差 + 把过拟合 advisory 提到 report 顶层（消费方可见）。
     shadow：算落差但只记录（不提 advisory 顶层 · 校准期用）。
@@ -792,7 +792,7 @@ def cmd_score_and_record(args) -> int:
 def _track_ablation(args, entry) -> None:
     """把消融 entry 挂进同一 distill_track 基线 ledger（kind='ablation' 行 · 与回归行共存）。
 
-    复用 distill_track.append_entry/save_ledger/atomic 写——不新建账本（R3 reject ab_compare）。
+    复用 distill_track.append_entry/save_ledger/atomic 写——不新建账本。
     永不阻断（失败仅 warn · advisory 层）。distill_track 不可用 → 跳过（消融行不影响主流程）。
     """
     if not _HAVE_DT:

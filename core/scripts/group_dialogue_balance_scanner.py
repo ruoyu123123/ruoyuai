@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""group_dialogue_balance_scanner.py — 群戏对话失衡/显式点名过密回查（advisory · cluster · 2026-06-19）
+"""group_dialogue_balance_scanner.py — 群戏对话失衡/显式点名过密回查（advisory · cluster）
 
-【缺口】记忆/联网调研（arXiv:2603.04969 MPCEval 多方对话评测）：群戏（≥3 人同场）里弱模型常靠
+【为什么】联网调研（arXiv:2603.04969 MPCEval 多方对话评测）：群戏（≥3 人同场）里弱模型常靠
 「张三说/李四道/老钟问」**显式专名归属**逐句点名来维持「谁在说话」，而成熟作者用**语境隐式指称**
-（动作/称谓/上下文）+「主导者发声·其他人反应」的不对称结构。全库 0 个群戏对话归属密度 scanner →
-草稿写完【零回查】显式点名是否过密（= 点名拐杖 = 群戏调度生硬）。本 scanner 补检测端的可算半边。
+（动作/称谓/上下文）+「主导者发声·其他人反应」的不对称结构。本 scanner 检测显式点名是否过密
+（= 点名拐杖 = 群戏调度生硬），补检测端的可算半边。
 
 【做法 · 确定性可算半边】（北极星守卫：群戏调度质量是语义判断·只做可算的密度·裁决留 judge/作者）：
   对话行 = 含中文引号（U+201C/U+201D 或 「」）的段。
@@ -17,7 +17,7 @@
 【北极星⑤ 顾问非法官】群戏点名 vs 隐式指称是创作选择·writer 有理由可偏离（人物多/初登场需点名）→
   永远 advisory，code GROUP_DIALOGUE_IMBALANCE **绝不进 audit_hub.HARD_GATE_CODES**。
   env GROUP_DIALOGUE_BALANCE_MODE: off / shadow(默认·只记不判·零回归) / active。
-  🔬 阈值 RATIO_FLOOR / MIN_DIALOGUE_LINES 待金标准校准（真作者群戏原文喂自身 PASS·防矫枉过正）。
+  🔬 阈值 RATIO_FLOOR / MIN_DIALOGUE_LINES 挂「待金标准校准」注册表追踪（threshold_registry·RATIO_FLOOR 实测依据见常量注释）。
 
 用法：python group_dialogue_balance_scanner.py <draft_path> [--manifest m.json] [--project <root>]
 """
@@ -32,9 +32,10 @@ from pathlib import Path
 
 ISSUE_CODE = "GROUP_DIALOGUE_IMBALANCE"   # ⚠️ advisory 专用 · 绝不进 HARD_GATE_CODES
 
-# 群戏规模门槛 + 显式点名占比地板（保守占位·宁可漏报不误报）
+# 群戏规模门槛 + 显式点名占比地板（保守取值·宁可漏报不误报）
 MIN_DIALOGUE_LINES = 8     # 对话行 < 此 = 非群戏规模·不判（避免双人小对话误伤）
-RATIO_FLOOR = 0.85          # 2026-06-20 金标准校准:5真作者0.165-0.765(剑来0.765/将夜0.72·中文网文点名本就高频常态)·0.6严重误报→抬0.85只catch极端机械点名·保持shadow(信号弱·点名非缺陷)
+RATIO_FLOOR = 0.85          # 金标准校准:5真作者实测0.165-0.765(剑来0.765/将夜0.72·中文网文点名本就高频常态)·
+                            # 阈值0.85只catch极端机械点名·保持shadow(信号弱·点名非缺陷)
 
 # 含中文引号 = 对话行（U+201C/U+201D 弯引号 或 「」直角引号）
 DIALOGUE_QUOTE = re.compile(r"[“”「」]")

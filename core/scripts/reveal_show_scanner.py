@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""reveal_show_scanner.py — W5 反转揭底 tell 回查（advisory · cluster · 2026-06-15）
+"""reveal_show_scanner.py — 反转揭底 tell 回查（advisory · cluster）
 
-【缺口】记忆调研 W5：反转「公平性」（揭底前铺垫够不够）核心是语义·纯确定性测不了。但金标准实测
+【缺口】反转「公平性」（揭底前铺垫够不够）核心是语义·纯确定性测不了。但金标准实测
 发现可测代理：揭底显式标志词（真相大白/恍然大悟/原来如此）密度·好作者≈0（用情节展示真相·惊悚
-乐园最大 0.4 遮天/诡秘全 0）·『揭底靠 tell 说破而非 show 展示』可确定性检测（与 W1 on-the-nose /
-W4 dramatic irony tell 同族）。promise_payoff 查承诺-兑现缺口·但揭底 tell 堆砌无检测·本 scanner 补。
+乐园最大 0.4 遮天/诡秘全 0）·『揭底靠 tell 说破而非 show 展示』可确定性检测（与 on-the-nose /
+dramatic irony tell 同族）。promise_payoff 查承诺-兑现缺口·但揭底 tell 堆砌无检测·本 scanner 补。
 
 【做法 · 确定性可算半边】检测揭底显式标志词密度·高 = 靠 tell 说破真相（初级·读者被告知而非自己
 发现）→ advisory「建议改 show」。⚠️ 这是「揭底 tell 密度」代理·**非「公平性」本身**（铺垫够不够
 是语义·留 judge/作者）。
 
 【北极星⑤ 顾问非法官】揭底手法是创作选择·writer 有理由偏离 → 永远 advisory，code
-  REVEAL_TELL_OVERUSE **绝不进 audit_hub.HARD_GATE_CODES**。env REVEAL_SHOW_MODE shadow 默认。
+  REVEAL_TELL_OVERUSE **绝不进 audit_hub.HARD_GATE_CODES**。env REVEAL_SHOW_MODE active 默认。
 """
 from __future__ import annotations
 
@@ -29,13 +29,13 @@ ISSUE_CODE = "REVEAL_TELL_OVERUSE"   # ⚠️ advisory 专用 · 绝不进 HARD_
 REVEAL_TELL = re.compile(
     r"(真相大白|谜底揭晓|恍然大悟|原来如此|这才明白|这才发现|这才知道|"
     r"这才意识到|水落石出|一切都明白了|终于明白|揭开了.{0,6}真相)")
-# 🔬 金标准校准（2026-06-15·真作者实测：揭底好作者用展示·密度≈0·惊悚乐园最大 0.4 遮天/诡秘全 0）
+# 🔬 金标准校准（真作者实测：揭底好作者用展示·密度≈0·惊悚乐园最大 0.4 遮天/诡秘全 0）
 REVEAL_TELL_FLOOR = 0.8   # 揭底标志词密度超此/千字 = 靠 tell 说破（真作者最大 0.4 留 2x 余量）
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-16 切 active 放量（金标准 6 作者原文零误报实证·reveal tell 真作者最大 0.07/千 vs floor 0.8·11x 余量）。
+    # 默认 active（金标准 6 作者原文零误报实证·reveal tell 真作者最大 0.07/千 vs floor 0.8·11x 余量）。
     m = (os.environ.get("REVEAL_SHOW_MODE") or "active").strip().lower()
     return m if m in ("off", "shadow", "active") else "active"
 

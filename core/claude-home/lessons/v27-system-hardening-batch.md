@@ -1,12 +1,11 @@
 ---
 name: v27-system-hardening-batch
-description: 2026-05-29 系统级加固一批 8 件 · CodeBuddy 静态审查 + 6 cluster 实战痛点叠加 · 全部以故事块为单位
+description: 系统级加固一批 8 件 · CodeBuddy 静态审查 + 6 cluster 实战痛点叠加 · 全部以故事块为单位
 metadata:
   type: project
-  date: 2026-05-29
 ---
 
-# v27 系统加固批次（2026-05-29）
+# v27 系统加固批次
 
 ## 触发
 

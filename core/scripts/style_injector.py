@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-# 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测），裸 .items() 会崩。
+# cluster_blueprint 可能是 list，裸 .items() 会崩。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     import cluster_lookup  # blueprint list 归一守卫
@@ -99,9 +99,9 @@ def pick_type_weighted_avoiding(
     return candidates[-1][0], "fallback_last"
 
 
-# ── P2·MMR 覆盖式 golden 样本选取（2026-06-14 · 作者思维蒸馏 G6-MMR）──────────
-# 旧逻辑「同 type 取前 ≤2」对高方差作者会拿到两段近重复笔法（同一种开场写两遍）。
-# 改 MMR：相关性=tag 命中强度 · 多样性=正文文本相似度的补——让 2 个样本覆盖不同笔法。
+# ── MMR 覆盖式 golden 样本选取 ──────────
+# 同 type 简单取前 ≤2 对高方差作者会拿到两段近重复笔法（同一种开场写两遍），
+# 故用 MMR：相关性=tag 命中强度 · 多样性=正文文本相似度的补——让 2 个样本覆盖不同笔法。
 # 零额外 API（纯字符 bigram 统计）· 确定性（去随机·不引入 temp1.0 外噪声）。
 
 def _char_bigrams(text: str) -> dict:
@@ -116,7 +116,7 @@ def _char_bigrams(text: str) -> dict:
     return out
 
 
-# ── 🔴 2026-07-02 真语义 embedding 可选路径（照抄 topic_drift_scanner 已验证的模式）───────
+# ── 真语义 embedding 可选路径 ───────
 def _has_real_embedding_backend() -> bool:
     """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
 
@@ -150,7 +150,7 @@ def _semantic_text_cosine(a: str, b: str) -> "float | None":
 
 
 def _text_cosine_bigram(a: str, b: str) -> float:
-    """两段正文的字符 bigram 余弦相似度（0=完全不同·1=相同）。原逻辑原样抽出（零回归）。"""
+    """两段正文的字符 bigram 余弦相似度（0=完全不同·1=相同）。"""
     va, vb = _char_bigrams(a), _char_bigrams(b)
     keys = set(va) & set(vb)
     if not keys:
@@ -168,7 +168,7 @@ def _text_cosine(a: str, b: str) -> float:
     """两段正文的相似度（0=完全不同·1=相同）。
 
     真 embedding 后端就绪（_has_real_embedding_backend()）→ 语义余弦（同一笔法换说法
-    也能识别为高相似）；否则/失败 → 退化字符 bigram 余弦（原逻辑·零回归）。
+    也能识别为高相似）；否则/失败 → 退化字符 bigram 余弦。
     """
     if _has_real_embedding_backend():
         sim = _semantic_text_cosine(a, b)
@@ -207,7 +207,7 @@ def mmr_select_passages(
     pool = list(enumerate(candidates))
     if not pool or max_samples <= 0:
         return []
-    # 🔴 2026-07-03 Wave-4：两两 cosine 前先把候选段全文本批量 prefetch 一次
+    # 两两 cosine 前先把候选段全文本批量 prefetch 一次
     # （N 候选 = 后续最多 N 次 compute_embedding·真后端子进程按条调用极贵·
     # 批量后仅一次后端调用·其后 _text_cosine 内逐条 compute_embedding 命中缓存）。
     if _has_real_embedding_backend():
@@ -243,7 +243,7 @@ def get_golden_samples_for_type(
 ) -> list[dict]:
     """从 golden_passages.opening_passages/ending_passages 中筛 tag 含 target_type 的样本。
 
-    P2：命中候选 > max_samples 时用 MMR 覆盖式选取（不同笔法）取代「取前 N」近重复。
+    命中候选 > max_samples 时用 MMR 覆盖式选取（不同笔法·避免近重复）。
     """
     if not passages or not target_type:
         return []
@@ -253,7 +253,7 @@ def get_golden_samples_for_type(
         or any(t in p.get("tag", "") for t in target_type.split())
     ]
     if not hits and passages:
-        # 没匹配上时退回前 1 个（与历史行为一致）
+        # 没匹配上时退回前 1 个
         return passages[:1]
     if len(hits) <= max_samples:
         return hits   # 候选不多于配额 → 不强上 diversity（避免过度工程）
@@ -261,7 +261,7 @@ def get_golden_samples_for_type(
 
 
 def build_directive(project_root: Path, chapter: int) -> dict:
-    # v17.5 P1.2 修复：用 hashlib 而非 hash()（后者受 PYTHONHASHSEED 影响）
+    # 用 hashlib 而非 hash()（后者受 PYTHONHASHSEED 影响）
     import hashlib
     seed_str = f"{project_root.name}|{chapter}"
     seed_int = int(hashlib.md5(seed_str.encode("utf-8")).hexdigest()[:8], 16)
@@ -277,7 +277,7 @@ def build_directive(project_root: Path, chapter: int) -> dict:
     ] if isinstance(_ss_doc, dict) else []
     _progress = load_json(db / "进度.json", {})
     cluster_blueprints = []
-    # 2026-05-29 复审复修 SC-1：blueprint 可能是 list（城南实测），先归一成 dict 再迭代。
+    # blueprint 可能是 list，先归一成 dict 再迭代。
     if cluster_lookup is not None:
         _bp = cluster_lookup.normalize_blueprint(_progress)
     else:

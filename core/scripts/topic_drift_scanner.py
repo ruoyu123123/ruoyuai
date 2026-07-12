@@ -1,7 +1,6 @@
-# 🔴 2026-06-29 NN主题漂移/情感弧线集成
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""topic_drift_scanner.py — 主题漂移检测 scanner（advisory · embedding-based · 2026-06-29）
+"""topic_drift_scanner.py — 主题漂移检测 scanner（advisory · embedding-based）
 
 用内容语义 embedding_store.compute_content_embedding() 计算每段与 cluster scope_summary 的
 余弦距离，距离突然增大 = 跑题。三种 advisory issue:
@@ -13,16 +12,14 @@
   内容语义后端不可用（content_backend_available()==False：venv/infer 脚本/模型目录任一
   缺失）→ 静默返回空列表。
 
-【🔴 2026-07-04 W6-C 迁移：风格模型→bge 内容模型】本 scanner 判据是【文档内部距离分布的
-  z-score】（mean±Nσ·相对统计量），不是固定余弦下限——故本次迁移不涉及阈值数值改动，只换
-  embedding 后端调用面（原 EMBED_BACKEND 风格模型 → content_backend_available() 门控的 bge
-  内容模型·经 compute_content_embedding 消费）。
+本 scanner 判据是【文档内部距离分布的 z-score】（mean±Nσ·相对统计量），不是固定余弦
+  下限——embedding 用 content_backend_available() 门控的 bge 内容模型，经
+  compute_content_embedding 消费。
 
-【🔴 2026-07-03 Wave-4 性能层】编码前先调 embedding_store.prefetch_content_embeddings(scope+
-  全部段落) 一次性批量预热缓存（后端单批子进程/API 调用），随后逐条 compute_content_embedding
-  全部命中缓存零成本——本文件是该批量 prefetch-then-consume 范式的源头（本仓其余消费
-  embedding_store 的 scanner 各自按任务性质独立选择走风格 compute_embedding 还是内容
-  compute_content_embedding，不强求全仓同一后端）。
+编码前先调 embedding_store.prefetch_content_embeddings(scope+全部段落) 一次性批量预热
+  缓存（后端单批子进程/API 调用），随后逐条 compute_content_embedding 全部命中缓存零
+  成本。本仓其余消费 embedding_store 的 scanner 各自按任务性质独立选择走风格
+  compute_embedding 还是内容 compute_content_embedding，不强求全仓同一后端。
 
 【北极星⑤】所有 issue 永远 advisory，绝不进 HARD_GATE_CODES。
 """
@@ -42,8 +39,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 # ── 后端检测 ──────────────────────────────────────────────────────────────────
 
 def _content_backend_ready() -> bool:
-    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
-    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available）。
 
     import 失败 → False（调用方静默返回空列表）。
     """
@@ -130,7 +126,7 @@ def scan_topic_drift(draft_text: str, scope_summary: str,
     if len(paras) < 6:
         return []
 
-    # ── 编码（Wave-4 2026-07-03：先一次性批量预热缓存·下面逐条 compute_content_embedding 全部命中）──
+    # ── 编码（先一次性批量预热缓存·下面逐条 compute_content_embedding 全部命中）──
     try:
         prefetch_content_embeddings([scope_summary] + paras)
         scope_emb = compute_content_embedding(scope_summary)
@@ -138,9 +134,8 @@ def scan_topic_drift(draft_text: str, scope_summary: str,
     except Exception:
         return []
 
-    # 维度一致性守卫：🔴 2026-07-04 迁移后 compute_content_embedding 单条失败直接返回 None
-    # （内容语义无 hash 兜底冒充·与旧 compute_embedding 必兜底 hash(384) 语义不同）——
-    # 先挡 None 再比长度，防 len(None) 崩溃；维度不一致同样跳过
+    # 维度一致性守卫：compute_content_embedding 单条失败直接返回 None（内容语义不用 hash
+    # 兜底冒充真语义）——先挡 None 再比长度，防 len(None) 崩溃；维度不一致同样跳过
     # （北极星「不拿降级/不可信编码冒充真语义」）。
     if not scope_emb or any(e is None or len(e) != len(scope_emb) for e in para_embs):
         return []

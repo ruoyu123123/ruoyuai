@@ -56,7 +56,7 @@ def _read_texts(path: Path) -> str:
 
 
 def _read_ref_texts(ref_args: list[str]) -> list[str]:
-    """E5：支持多个 --ref 参数构建多基线池。
+    """支持多个 --ref 参数构建多基线池。
 
     每个 ref 参数可以是文件或目录。
     - 文件 → 作为一个基线样本
@@ -309,9 +309,9 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
     计算 12 维程序化评分，总权重 55%（内部归一化到 100 分制）。
     返回 {"total": float, "dimensions": [...], "grade": str}。
 
-    v2 (E5)：支持 ref_profile 是区间 profile（含 _source_profiles 列表）。
+    支持 ref_profile 是区间 profile（含 _source_profiles 列表）。
 
-    has_author_profile（2026-05-30 北极星①修 #4）：当本项目有作者风格档时，
+    has_author_profile（北极星①）：当本项目有作者风格档时，
     维度7『禁用词扣分』改为分级——AI 结构套话仍单边硬扣（任何作者都不用），
     工艺签名词（顿时/淡淡/显然…）改为对照 ref 侧频率差值（复刻频率≈参考频率=好），
     对齐 validate_style._chk_banned 的作者档优先逻辑（守原则①贴合作者风格 + ⑤不干涉模型）。
@@ -397,7 +397,7 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
     add("功能词指纹", 0.08, score5, r_fw_display, g_fw)
 
     # 6. 句长标准差匹配 (5%)
-    # 🔴 量纲提示（R3 ABLATION 2026-06-14）：这里的 sentence_stats.std 是【单篇文本内部句长
+    # 🔴 量纲提示：这里的 sentence_stats.std 是【单篇文本内部句长
     # 的标准差】= 作者节奏离散度指纹，是 SFS 维度 6 的合法用途。**绝不可**把它当消融效应的
     # 「1σ_seed 噪声门」——那个噪声门只能取「同一 cluster 多 seed 复刻的 SFS std」
     # （distill_track.sample_std / entry['std']），量纲完全不同。详见 distill_holdout.seed_level_std。
@@ -410,7 +410,7 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
     # 7. 禁用词扣分 (5%)
     g_banned = gen_profile.get("banned_word_hits", {})
     if has_author_profile:
-        # 2026-05-30 北极星①修 #4：有作者风格档时分级（对齐 validate_style._chk_banned）。
+        # 北极星①：有作者风格档时分级（对齐 validate_style._chk_banned）。
         # ① AI 结构套话（与此同时/值得一提的是…）：任何作者都不用 → 仍单边硬扣。
         ai_hit = sum(c for w, c in g_banned.items() if w in AI_STRUCTURAL_BANNED)
         ai_score = max(0.0, 1.0 - ai_hit * 0.05)
@@ -426,7 +426,7 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
             {"ai_struct_ref": 0, "craft_freq_per1000_ref": round(r_craft_f, 3)},
             {"ai_struct_hit": ai_hit, "craft_freq_per1000_gen": round(g_craft_f, 3)})
     else:
-        # 无作者风格档：保持旧行为（全集单边硬扣 · 通用反 AI 腔兜底）。
+        # 无作者风格档：全集单边硬扣（通用反 AI 腔兜底）。
         hit_count = sum(g_banned.values()) if g_banned else 0
         banned_score = max(0, 1.0 - hit_count * 0.05)
         add("禁用词扣分", 0.05, banned_score, 0, hit_count)
@@ -439,7 +439,7 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
     add("段落开头多样性", 0.03, _pct_match(r_div, g_div),
         round(r_div, 4), round(g_div, 4))
 
-    # 9. 极短段占比匹配 (3%) — 使用拟声豁免后的版本（向后兼容旧字段）
+    # 9. 极短段占比匹配 (3%) — 使用拟声豁免后的版本
     r_usp = ref_profile.get("ultra_short_para_ratio", 0)
     g_usp = gen_profile.get("ultra_short_para_ratio", 0)
     add("极短段占比匹配", 0.03, _interval_pct_match(r_usp, g_usp),
@@ -461,7 +461,7 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
         r_ono if isinstance(r_ono, dict) else r_ono, g_ono)
 
     # 12. 群戏人数匹配 (2.5%)
-    # v2 (E4)：使用 active_speaker_count（如果存在），否则降级为 speaker_count
+    # 使用 active_speaker_count（如果存在），否则降级为 speaker_count
     r_sp = ref_profile.get("active_speaker_count",
                            ref_profile.get("speaker_count", 0))
     g_sp = gen_profile.get("active_speaker_count",
@@ -469,14 +469,14 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
     add("群戏人数匹配", 0.025, _interval_pct_match(r_sp, float(g_sp)),
         r_sp if isinstance(r_sp, dict) else r_sp, g_sp)
 
-    # 13. (新增) 引号化独白比匹配 (2%) — E6 引入
+    # 13. 引号化独白比匹配 (2%)
     r_mr = ref_profile.get("inner_monologue_ratio", 0)
     g_mr = gen_profile.get("inner_monologue_ratio", 0)
     add("引号化独白比", 0.02, _interval_pct_match(r_mr, g_mr),
         r_mr if isinstance(r_mr, dict) else round(r_mr, 4),
         round(g_mr, 4))
 
-    # 14. (新增 2026-05-31) 词汇丰富度匹配 TTR + hapax (4%) — 治 LLM 系统性拉平词汇丰富度盲区。
+    # 14. 词汇丰富度匹配 TTR + hapax (4%) — 治 LLM 系统性拉平词汇丰富度盲区。
     # 实证（3 篇研究）：LLM imitation 向 generic-median 回归，用词反复趋同 → TTR/hapax 被系统性
     # 拉平。把作者 type_token_ratio / hapax_ratio 当稳定风格指纹维打 gen-vs-author 距离分（advisory）。
     # gen 词汇丰富度**偏低**（趋同）才扣分；偏高（更丰富）不罚 → 只抓「被拉平」这个真盲点（北极星⑤）。
@@ -502,13 +502,10 @@ def compute_programmatic_score(ref_profile: dict, gen_profile: dict,
     grade = ("A" if weighted >= 90 else "B" if weighted >= 80
              else "C" if weighted >= 70 else "D")
 
-    # R7 Batch-D（2026-06-20）：PCA 自适应权重 + ECDF percentile rank 占位
-    # （R1 #31 backlog 字段位接入）。
-    # · sfs_pca_weights：从作者 corpus 学权重的占位（完整 PCA 拟合留下批·此处用 None
-    #   表示「未拟合·维度权重退回固定值」），字段位先就位，不影响当前打分行为。
-    # · sfs_ecdf_percentile：把 total 转作者经验分布上的 percentile rank·当前用
-    #   线性 90→1.0 / 60→0.0 占位近似（兜底），完整 PCA-ECDF 拟合留下批。
-    # 这两个字段标 `_placeholder: true` 提示消费者本批不读 weight·只读 total/grade。
+    # PCA 自适应权重 + ECDF percentile rank 占位字段。
+    # · sfs_pca_weights：恒 None（未做作者 corpus PCA 拟合·维度权重用固定值）。
+    # · sfs_ecdf_percentile：total 的线性 90→1.0 / 60→0.0 占位近似（非真 ECDF）。
+    # 两字段标 `_placeholder: true`：消费者不读 weight·只读 total/grade。
     pca_ecdf = {
         "_placeholder": True,
         "_doc": ("R7 Batch-D 字段位接入·PCA 自适应权重需作者 corpus 拟合（留下批 P0）·"
@@ -583,9 +580,8 @@ def _sample_paragraphs(text: str, n: int = 3,
 def generate_llm_prompt(ref_text: str, gen_text: str) -> str:
     """生成 LLM 评分 prompt 文本。
 
-    L3e（2026-05-31 · env SFS_LLM_DEBIAS）：默认 off → 旧单序 + random.sample 选片
-    （行为完全不变 · 零回归）；on → 转调 generate_pairwise_llm_prompt（pairwise 顺序双跑
-    + 风格代表性选片 · 消 LLM 顺序偏置 + 选片内容偏置）。"""
+    L3e（env SFS_LLM_DEBIAS）：默认 on → 转调 generate_pairwise_llm_prompt（pairwise 顺序双跑
+    + 风格代表性选片 · 消 LLM 顺序偏置 + 选片内容偏置）；显式关闭 → 单序 + random.sample 选片。"""
     if _sfs_llm_debias_on():
         return generate_pairwise_llm_prompt(ref_text, gen_text)
 
@@ -639,9 +635,9 @@ def generate_alerts(ref_profile: dict, gen_profile: dict,
                     has_author_profile: bool = False) -> tuple[list[dict], list[str]]:
     """生成 style_alerts 和 improvement_suggestions。
 
-    v2 (E5)：兼容区间 profile（先转标量）。
+    兼容区间 profile（先转标量）。
 
-    has_author_profile（2026-05-30 修 #4）：有作者风格档时，禁用词告警只对 AI 结构套话
+    has_author_profile：有作者风格档时，禁用词告警只对 AI 结构套话
     报 critical/warning；工艺签名词（顿时/淡淡…）只作 info 提示（不催删 · 守原则①复刻作者优先）。
     """
     alerts: list[dict] = []
@@ -898,13 +894,12 @@ def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
 
 
 # ============================================================
-# L3a：滑窗 burstiness + 去题材 SFS（2026-05-30 · 北极星①⑤⑥）
+# L3a：滑窗 burstiness + 去题材 SFS（北极星①⑤⑥）
 # ------------------------------------------------------------
-# 根因（memory reference-system-validation-method）：旧 SFS 把整 cluster 当**一个**
-# 向量比 → 长文里局部段长崩塌被均值抹平（实测蛊真人单章 B 级 / cluster 级仅 D 级）；
-# 且名词/人名/情节动词等**题材信号**淹没了真正的风格信号（虚词/标点/句长节奏）。
+# 动机：整 cluster 当**一个**向量比会让长文里局部段长崩塌被均值抹平；
+# 且名词/人名/情节动词等**题材信号**会淹没真正的风格信号（虚词/标点/句长节奏）。
 #
-# 升级（全在本文件内自包含 · 不改 style_analyzer · L1a 在那边改避免冲突）：
+# 两个组件（全在本文件内自包含 · 不改 style_analyzer）：
 #   (a) 滑窗 burstiness：每 ~1500-2000 CJK 一窗，逐窗算句长/段长/功能词指纹 →
 #       输出窗间方差（burstiness）。方差过低 = AI 腔均匀化。并**定位最崩窗**
 #       （索引 + 指标），逐窗逐维可读不黑箱。
@@ -912,10 +907,10 @@ def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
 #       可用），对名词/人名/情节动词**停用**（jieba 停用；不可用则用功能词白名单）。
 #
 # 影子并行（北极星纪律 2）：env L3A_BURSTINESS_MODE 控制——
-#   · shadow（默认）：算 L3a 全量指标，挂在 report 的 l3a_* 加项里**只记录不改判决**，
-#     不动 sfs_quick / programmatic_score / grade（零回归）。新旧分歧写 stderr。
-#   · active：同样计算并附加，但额外把 L3a 发现的崩塌窗 / 低 burstiness 升为 advisory
+#   · active（默认）：计算并附加到 report，把发现的崩塌窗 / 低 burstiness 升为 advisory
 #     issue（gate_level 永远 advisory · 绝不进 hard_gate · 顾问非法官）。
+#   · shadow：算 L3a 全量指标，挂在 report 的 l3a_* 加项里**只记录不改判决**，
+#     不动 sfs_quick / programmatic_score / grade（零回归）。分歧写 stderr。
 #   · off：完全不算 L3a（纯旧 SFS 行为）。
 # 不论哪种模式，产出的所有 issue gate_level 强制 = advisory（北极星⑤）。
 # ============================================================
@@ -945,7 +940,7 @@ _L3A_STYLE_POS_PREFIXES = ("r", "p", "c", "u", "d", "e", "y", "o")
 
 
 def _l3a_burstiness_mode() -> str:
-    """L3A_BURSTINESS_MODE：默认 active（2026-05-31 放量·n_windows≥5门控防小尺寸误判·全advisory）· 非法回退 active · {shadow,off} 原样。"""
+    """L3A_BURSTINESS_MODE：默认 active（n_windows≥5 门控防小尺寸误判·全 advisory）· 非法回退 active · {shadow,off} 原样。"""
     import os
     m = (os.environ.get("L3A_BURSTINESS_MODE") or "active").strip().lower()
     return m if m in ("shadow", "active", "off") else "active"
@@ -1104,29 +1099,28 @@ def _pos_style_distribution(text: str) -> dict:
 
 
 # ============================================================
-# P1：字符 n-gram 风格指纹（2026-05-31 · 北极星①⑤⑥）
+# 字符 n-gram 风格指纹（北极星①⑤⑥）
 # ------------------------------------------------------------
-# 根因（Oxford 2025 · AMNP 字符/词 n-gram 画像是「最难复刻、最能验真伪」的作者特征）：
-# 当前 compute_style_only_sfs 只看 虚词余弦 / 标点余弦 / 句长节奏 JSD / 去题材 POS——
-# **缺字符 n-gram 维度**（中文字符级天然友好：字符 3-gram 抓的是作者高频字组搭配的细粒度
-# 笔迹，远超「内容词」层面，跨章自比应高、跨作者应可区分）。本块补这一维：
+# 依据（Oxford 2025 · AMNP）：字符/词 n-gram 画像是「最难复刻、最能验真伪」的作者特征
+# （中文字符级天然友好：字符 3-gram 抓的是作者高频字组搭配的细粒度笔迹，远超「内容词」
+# 层面，跨章自比应高、跨作者应可区分）。本块在 compute_style_only_sfs 的
+# 虚词余弦 / 标点余弦 / 句长节奏 JSD / 去题材 POS 之外提供这一维：
 #   · 作者原文池建 **字符 3-gram + 词 unigram** 频率画像（collections.Counter · 纯 stdlib）；
 #   · 生成稿算同分布，余弦比距离（复用现有 _cosine_sim）；
 #   · 词 unigram 仅 jieba 可用时计入（与 POS 同栈零依赖降级 · 不可用则字符 3-gram 单算）。
 #
 # 影子并行（北极星纪律 2 · 回归 0）：env CHARNGRAM_SFS_MODE 控制——
-#   · shadow（默认）：算字符 n-gram 子分，挂在 subscores 的 charngram_* 加项里**只记录**，
+#   · active（默认）：把字符 n-gram 子分作为第 5 维并入加权平均（与 fw/punc/rhythm/pos 并列）。
+#   · shadow：算字符 n-gram 子分，挂在 subscores 的 charngram_* 加项里**只记录**，
 #     **不并入** style_only_sfs 加权（旧四维分一字不变 · 零回归）。
-#   · active：把字符 n-gram 子分作为第 5 维并入加权平均（与 fw/punc/rhythm/pos 并列）。
-#   · off：完全不算字符 n-gram（最纯旧行为）。
+#   · off：完全不算字符 n-gram。
 # 不论哪种模式，字符 n-gram 只是**风格相似度子项**，绝不进 hard_gate（顾问非法官 · 北极星⑤）。
 # ============================================================
 
 # 字符 n-gram 阶数（3-gram：中文「字组」粒度 · Oxford 研究主力特征）。
 _CHARNGRAM_N = 3
 # 字符 n-gram / 词 unigram 取频率最高的前 K 个进画像（控向量维度 · 长尾噪声不进比对）。
-# 2026-05-31 修（charngram active 调权核心）：top_k 从 400/300 提到 600/400——
-# 章级 char-3gram 直比时 top_k 太小（400）会让长尾字组被截断、内容字组主导，加剧内容敏感；
+# top_k 需要足够大（600/400）：太小会让长尾字组被截断、内容字组主导，加剧内容敏感；
 # 配合「分布距离基线 + intra-author 校准」（_charngram_calibrated_subscores）一起把章级直比的
 # 内容噪声压下去（实证：池化基线 + 校准后 同作者 char3=40-77 vs 跨作者 char3=0.3-0.8 干净分开）。
 _CHARNGRAM_TOPK = 600
@@ -1140,7 +1134,7 @@ _CHARNGRAM_CALIB_WIN_MAX = 800
 
 
 def _charngram_mode() -> str:
-    """CHARNGRAM_SFS_MODE：默认 active（2026-05-31 放量 · intra-author 自校准 + 降权并入
+    """CHARNGRAM_SFS_MODE：默认 active（intra-author 自校准 + 降权并入
     使同作者 SFS 不被拉低 · 跨作者区分力完整 · 仍是 advisory 评分维度绝不进 hard_gate）·
     非法回退 active · {shadow,off} 原样。"""
     import os
@@ -1238,9 +1232,8 @@ def compute_charngram_sfs(ref_text: str, gen_text: str,
                           author_pool: "list[str] | None" = None) -> dict:
     """字符 n-gram + 词 unigram 风格指纹相似度（0~100 · 纯函数 · 零依赖）。
 
-    2026-05-31 调权修（charngram active 不再拉低同作者 SFS · 北极星①⑤）：
-    char-3gram 章级直比对内容极敏感（同作者跨章 cosine 仅 5-26、跨作者 ≈0），绝对值并入加权
-    会把同作者真分拉低 ~17 分。改用 **intra-author 自相似中位数校准**（_intra_author_band）——
+    北极星①⑤：char-3gram 章级直比对内容极敏感（同作者跨章 cosine 仅 5-26、跨作者 ≈0），绝对值
+    并入加权会把同作者真分拉低 ~17 分。改用 **intra-author 自相似中位数校准**（_intra_author_band）——
     比「gen vs 作者基线」相对于「作者对自己的自相似中位数」的比值，是题材无关的相对尺度：
       · 有 author_pool（作者原文池 · 多段）→ 池化分布基线 + 池内自相似带（最佳：同作者 64-85
         vs 跨作者 39-42 干净分开）；
@@ -1301,9 +1294,9 @@ def compute_style_only_sfs(ref_text: str, gen_text: str,
     / 字符 n-gram 指纹），对名词/人名/情节动词停用——避免跨题材时题材信号淹没文风信号导致误判。
 
     四个基础子项余弦/匹配后等权平均（0~100）。POS 子项仅在 jieba 可用时计入（否则降级，
-    剩三项重新等权）。字符 n-gram 子项受 env CHARNGRAM_SFS_MODE 控制：shadow（默认）只
-    挂 subscores 记录不并入加权（零回归）· active 以**降权** _CHARNGRAM_ACTIVE_WEIGHT 并入加权
-    （不拉低同作者真分）· off 不算。逐项输出便于 advisory 可读。
+    剩三项重新等权）。字符 n-gram 子项受 env CHARNGRAM_SFS_MODE 控制：active（默认）以
+    **降权** _CHARNGRAM_ACTIVE_WEIGHT 并入加权（不拉低同作者真分）· shadow 只挂 subscores
+    记录不并入加权（零回归）· off 不算。逐项输出便于 advisory 可读。
 
     author_pool（可选 · 作者原文池多段）：传入则 char-3gram 用池化分布基线 + 池内自相似带校准
     （最佳区分力 · 同作者 vs 跨作者干净分开）；不传则 ref 切窗自校准（单 ref 兜底）。"""
@@ -1341,10 +1334,10 @@ def compute_style_only_sfs(ref_text: str, gen_text: str,
         subscores["detopic_pos_cosine"] = round(pos_sim * 100, 2)
         parts.append(pos_sim)
 
-    # ⑤ 字符 n-gram 指纹（P1 · env CHARNGRAM_SFS_MODE 控制 · 默认 shadow 零回归）。
+    # ⑤ 字符 n-gram 指纹（env CHARNGRAM_SFS_MODE 控制 · 默认 active）。
     # shadow/active 都把字符 n-gram 子分挂进 subscores（charngram_* · 可读）；
     # 仅 active 才把 charngram_sfs 并入 parts 加权（第 5 维 · 与上面四维并列）。
-    # off → 完全不算（旧四维纯行为）。北极星纪律 2：默认 shadow，验证后再 active 放量。
+    # off → 完全不算（旧四维纯行为）。
     # 基础维 parts 视为权重 1.0；charngram active 以降权 _CHARNGRAM_ACTIVE_WEIGHT 并入。
     # 统一用 (weighted_sum, weighted_n) 累加，最后一次性求加权平均（兼容 rhythm_cn 后续并入）。
     weighted_sum = sum(parts)
@@ -1362,10 +1355,10 @@ def compute_style_only_sfs(ref_text: str, gen_text: str,
             weighted_sum += _CHARNGRAM_ACTIVE_WEIGHT * (cg["charngram_sfs"] / 100.0)
             weighted_n += _CHARNGRAM_ACTIVE_WEIGHT
 
-    # ⑥ 修辞节奏谱 + 中文特有计量（P2 · env RHYTHM_CN_SFS_MODE 控制 · 默认 shadow 零回归）。
+    # ⑥ 修辞节奏谱 + 中文特有计量（env RHYTHM_CN_SFS_MODE 控制 · 默认 active）。
     # shadow/active 都把 rhythm_cn 子分挂进 subscores（rhythm_cn_* · 可读）；
     # 仅 active 才把 rhythm_cn_sfs 并入 parts 加权（多一维 · 与上面诸维并列）。
-    # off → 完全不算。北极星纪律 2：默认 shadow，验证后再 active 放量。
+    # off → 完全不算。
     rc_mode = _rhythm_cn_mode()
     if rc_mode != "off":
         rc = compute_rhythm_cn_sfs(ref_text, gen_text)
@@ -1393,11 +1386,10 @@ def compute_style_only_sfs(ref_text: str, gen_text: str,
 
 
 # ============================================================
-# P2：修辞节奏谱 + 中文特有计量 SFS（2026-05-31 · 北极星①⑤⑥）
+# 修辞节奏谱 + 中文特有计量 SFS（北极星①⑤⑥）
 # ------------------------------------------------------------
-# 根因（本批任务说明 · 实证）：
-#   现有 compute_style_only_sfs 全部是**语言无关**的英文 stylometry 移植（虚词余弦 /
-#   标点余弦 / 句长 JSD / 去题材 POS / 字符 n-gram）——**缺中文专属 + 修辞节奏维度**。
+# 定位：compute_style_only_sfs 的其他维度全是**语言无关**的 stylometry（虚词余弦 /
+#   标点余弦 / 句长 JSD / 去题材 POS / 字符 n-gram）——本块提供**中文专属 + 修辞节奏**维度。
 #   (A) 修辞节奏谱：anaphora（句首重复）/ epiphora（句尾重复）/ anadiplosis（顶真）/
 #       排比（连续句共享句首结构）/ 连词叠用（然后/接着/而后）。Lagutina 等纯 rhythm
 #       特征作者验证 F88-96%，且小语料友好（治 cluster 样本少）。网文作者辨识度核心
@@ -1408,11 +1400,11 @@ def compute_style_only_sfs(ref_text: str, gen_text: str,
 # 实证校准（真作者原文 · 北极星纪律 3 金标准）：蛊真人 vs 惊悚乐园 章级 anaphora
 #   1.9-3.8 vs 0.0/百句、连词叠用 0-0.94 vs 1.8-6.5/百句、文白比 0.24-0.35 vs 0.39-0.48
 #   ——区分力强。两类维度合成 per-dim profile match：同作者均值 ~0.59 显著 > 跨作者 ~0.31
-#   （章级单维计数噪声大，故合成默认 shadow，与 charngram 同理——只记录不判决）。
+#   （章级单维计数噪声大）。
 #
 # 影子并行（北极星纪律 2 · 回归 0）：env RHYTHM_CN_SFS_MODE 控制——
-#   · shadow（默认）：算 rhythm_cn 子分挂 subscores · **不并入** style_only_sfs 加权（零回归）。
-#   · active：rhythm_cn 子分并入加权（多一维 · 与诸维并列）。
+#   · active（默认）：rhythm_cn 子分并入加权（多一维 · 与诸维并列）。
+#   · shadow：算 rhythm_cn 子分挂 subscores · **不并入** style_only_sfs 加权（零回归）。
 #   · off：完全不算。
 # 不论哪种模式，rhythm_cn 只是**风格相似度子项**，绝不进 hard_gate（顾问非法官 · 北极星⑤）。
 # advisory 措辞「作者排比密度 X/百句 · 复刻 Y 偏低」逐项可读不黑箱。
@@ -1450,7 +1442,7 @@ _COMMON_IDIOMS = frozenset({
 
 
 def _rhythm_cn_mode() -> str:
-    """RHYTHM_CN_SFS_MODE：默认 active（2026-05-31 放量 · 修辞节奏谱+中文计量并入加权 ·
+    """RHYTHM_CN_SFS_MODE：默认 active（修辞节奏谱+中文计量并入加权 ·
     实证真作者跨章一致性均值显著 > 跨作者不误报 · 仍是 advisory 评分维度绝不进 hard_gate）·
     非法回退 active · {shadow,off} 原样。"""
     import os
@@ -1629,7 +1621,7 @@ def compute_l3a(ref_text: str, gen_text: str) -> dict:
     # 阈值校准（北极星纪律 3 矫枉过正金标准）：真作者实测 CV——蛊真人 0.06-0.11（议论体
     # 节奏平稳）/ 惊悚乐园 0.16-0.20（对话多方差大）；AI 完全均匀化 → CV≈0.0。取 0.04 阈值
     # 干净分开二者（真作者下界 0.06 远高于 0.04 → 绝不误判真作者 · 守金标准）。
-    # 放量门控(2026-05-31 验证)：n_windows<5(约<10k CJK·边界小cluster)不出 low_burstiness
+    # 放量门控：n_windows<5(约<10k CJK·边界小cluster)不出 low_burstiness
     # advisory——小尺寸下低方差议论体作者(蛊真人 ch1-3·4窗·CV=0.0337)会被误判，属「低方差
     # 作者+最小窗口数」尺寸伪影(目标域 13-20k/6窗+ CV≥0.06 不受影响·守金标准)。
     if (burst.get("applicable") and burst.get("n_windows", 0) >= 5
@@ -1674,15 +1666,15 @@ def compute_l3a(ref_text: str, gen_text: str) -> dict:
 
 
 # ============================================================
-# L3e：SFS 评分消偏（2026-05-31 · 北极星①⑤⑥）
+# L3e：SFS 评分消偏（北极星①⑤⑥）
 # ------------------------------------------------------------
-# 根因（本批任务说明 · 实证）：
+# 根因（实证）：
 #   ① LLM-as-judge 有**顺序偏置**——同一对样本，谁先呈现谁占优，可致 >10% 漂移。
 #   ② few-shot / 参考片段若按**内容相似**选片，反而降低风格保真（Catch Me 实证：内容近
 #      的片段把模型往「抄内容」带，而非「学文风」）。应按**风格代表性**选片
 #      （聚类质心 / 句式覆盖），让参考片段覆盖作者的句长节奏谱系而非贴近 gen 的题材。
 #
-# 升级（全在本文件内自包含 · 纯增量 · 不改 L3a 也不改旧 generate_llm_prompt/_sample_paragraphs）：
+# 两个组件（全在本文件内自包含）：
 #   (a) generate_pairwise_llm_prompt：复刻稿 vs 作者原文片段做 **pairwise** 评分，且
 #       **交换呈现顺序双跑**（A=原文先/复刻后，B=复刻先/原文后）。prompt 显式要求模型
 #       对两种顺序各打一次分；average_pairwise_scores 取均值消顺序偏置。
@@ -1691,17 +1683,17 @@ def compute_l3a(ref_text: str, gen_text: str) -> dict:
 #       覆盖选 n 段，最大化句式谱系覆盖，**不看与 gen 的内容相似**。
 #
 # 影子并行（北极星纪律 7 · 回归 0）：env SFS_LLM_DEBIAS 控制——
-#   · off（默认）：generate_llm_prompt 行为完全不变（旧单序 + random.sample 选片）。
-#   · on：generate_llm_prompt 转调 pairwise 双序 + 代表性选片（消偏增强版）。
+#   · on（默认）：generate_llm_prompt 转调 pairwise 双序 + 代表性选片（消偏增强版）。
+#   · off：generate_llm_prompt 行为不变（旧单序 + random.sample 选片）。
 # 不论哪种模式，本层只改**评分鲁棒性**（prompt 构造 / 选片 / 取均值），属 advisory：
 #   绝不改 sfs_quick / programmatic_score / grade 任何确定性判决（顾问非法官 · 北极星⑤）。
 # ============================================================
 
 
 def _sfs_llm_debias_on() -> bool:
-    """SFS_LLM_DEBIAS：默认 active/on（2026-05-31 放量 · pairwise 顺序双跑消偏 + 风格代表性
+    """SFS_LLM_DEBIAS：默认 active/on（pairwise 顺序双跑消偏 + 风格代表性
     选片 · 只改 LLM prompt 构造侧鲁棒性 · 不改任何确定性判决 sfs_quick/grade · advisory）·
-    显式 {0,false,off,no} 关回旧单序。"""
+    显式 {0,false,off,no} 关回单序。"""
     import os
     raw = os.environ.get("SFS_LLM_DEBIAS")
     if raw is None:
@@ -1709,7 +1701,7 @@ def _sfs_llm_debias_on() -> bool:
     v = raw.strip().lower()
     if v in ("0", "false", "off", "no"):
         return False
-    # 其余（含空串 / 非法 / 1/true/on/yes）一律 on（放量默认 · 不静默退回旧行为）
+    # 其余（含空串 / 非法 / 1/true/on/yes）一律 on（放量默认 · 非法输入不静默降级）
     return True
 
 
@@ -1775,7 +1767,7 @@ def _candidate_segments(text: str, min_len: int = 200, max_len: int = 500) -> li
 
 def _select_representative_samples(text: str, n: int = 3,
                                    min_len: int = 200, max_len: int = 500) -> list[str]:
-    """按**风格代表性**选 n 个参考片段（取代旧 _sample_paragraphs 的纯 random.sample）。
+    """按**风格代表性**选 n 个参考片段（而非 _sample_paragraphs 的纯 random.sample）。
 
     算法（确定性 · 可复现 · 不看与 gen 的内容相似）：
       1. 切全部候选段 → 算每段去题材风格特征向量（_segment_style_feature）。
@@ -1940,16 +1932,16 @@ def average_pairwise_scores(order_a: dict, order_b: dict) -> dict:
 
 
 # ============================================================
-# SFS 非补偿聚合（2026-05-31 · 北极星①⑤⑥）
+# SFS 非补偿聚合（北极星①⑤⑥）
 # ------------------------------------------------------------
-# 根因（本批任务说明 · 实证）：
+# 根因（实证）：
 #   compute_programmatic_score 的 total 是**完全补偿性**加权算术平均——12+ 个细维里
 #   若**单一维度风格崩**（如对话格式全错 / 段长崩塌 / 功能词指纹完全不符），它只占
 #   4%-8% 权重，会被其余高分维度**稀释**，总分仍落 A/B 级（盲点）。算术平均的代价函数
 #   允许「一维换另一维」，但风格保真**不可补偿**——对话格式全错的复刻稿即便句长标点都对，
 #   读者一眼出戏。
 #
-# 补（纯增量 · 全在本文件内自包含 · 零依赖 stdlib · 不改 compute_programmatic_score）：
+# 三个非补偿指标（全在本文件内自包含 · 零依赖 stdlib · 与 compute_programmatic_score 并存）：
 #   ① 加权**几何平均** geometric_mean：sum(w·ln(s)) / sum(w) 再 exp。任一维 s→0 时
 #      ln(s)→-∞ 把总分拉垮，**不被其他维补偿**（乘性聚合 = 非补偿）。
 #   ② **最差维地板** worst_dimension_floor：取权重≥min_weight 的维度最低分（次要小权重
@@ -1989,7 +1981,7 @@ _NONCOMP_STABLE_FINGERPRINT_DIMS = frozenset({
     "句长分布 JSD", "段落长度分布 JSD", "标点密度指纹", "功能词指纹",
     "句长标准差匹配", "段落开头多样性", "单句成段率匹配",
     # 词汇丰富度（TTR/hapax）= 词级风格指纹，跨章稳定（同作者用词多样度一致）→ 列入稳定指纹维
-    # 让单维「被拉平」崩塌不被算术均稀释（非补偿几何均/floor 抓住 · advisory · 2026-05-31）。
+    # 让单维「被拉平」崩塌不被算术均稀释（非补偿几何均/floor 抓住 · advisory）。
     _VOCAB_RICHNESS_DIM,
 })
 
@@ -1997,7 +1989,7 @@ _NONCOMP_STABLE_FINGERPRINT_DIMS = frozenset({
 def _ttr_fidelity_mode() -> str:
     """TTR_FIDELITY_MODE：词汇丰富度（TTR/hapax）保真打分开关。
 
-    默认 active（2026-05-31 放量·治 LLM 系统性拉平词汇丰富度盲区）·非法/空 → active·off → 不算该维。
+    默认 active（治 LLM 系统性拉平词汇丰富度盲区）·非法/空 → active·off → 不算该维。
     advisory 边界（北极星⑤）：作为稳定指纹维参与 SFS 第二视角打分，但 code 绝不进 hard_gate。
     与 build_manifest 同名 env 双端联动（注入端 + 打分端同开同关）。
     """
@@ -2007,7 +1999,7 @@ def _ttr_fidelity_mode() -> str:
 
 
 def _sfs_noncomp_mode() -> str:
-    """SFS_NONCOMP_MODE：默认 active（2026-05-31 放量 · 非补偿几何平均/worst-floor 治单维
+    """SFS_NONCOMP_MODE：默认 active（非补偿几何平均/worst-floor 治单维
     崩被稀释成 A/B 的盲点 · 与算术平均并存输出 · 全 advisory 不改判决 · 北极星⑤）·
     非法回退 active · {shadow,off} 原样。"""
     import os
@@ -2153,9 +2145,9 @@ def evaluate(ref_text, gen_text: str,
              has_author_profile: bool | None = None) -> dict:
     """执行完整 SFS 评估，返回结构化报告。
 
-    v2 (E5)：ref_text 支持 str（单基线）或 list[str]（多基线，子型区间评分）。
+    ref_text 支持 str（单基线）或 list[str]（多基线，子型区间评分）。
 
-    has_author_profile（2026-05-30 修 #4）：本项目是否有作者风格档。None=自动推断
+    has_author_profile：本项目是否有作者风格档。None=自动推断
     （提供 baseline 风格 JSON 即视为有作者档，对齐 validate_style._apply_style_overrides
     在应用风格 JSON 时置 _has_author_profile=True 的逻辑）。有作者档时维度7工艺签名词
     改对照 ref 频率而非单边硬扣（守原则①贴合作者风格）。
@@ -2233,7 +2225,7 @@ def evaluate(ref_text, gen_text: str,
             report["advisory_issues"].extend(nc_issues)
 
     # L3a 滑窗 burstiness + 去题材 SFS（影子并行 · 北极星①⑤⑥）。
-    # shadow（默认）/active：计算并**附加**到 report（加项 · 不改上面任何判决字段，零回归）。
+    # active（默认）/shadow：计算并**附加**到 report（加项 · 不改上面任何判决字段，零回归）。
     # off：完全不算。active 与 shadow 的唯一区别：active 把 advisory issue 升到 report 顶层
     # advisory_issues 供消费方看见（仍 advisory · 绝不改 sfs_quick/grade / 绝不进 hard_gate）。
     l3a_mode = _l3a_burstiness_mode()
@@ -2252,7 +2244,7 @@ def evaluate(ref_text, gen_text: str,
             report.setdefault("advisory_issues", [])
             report["advisory_issues"].extend(l3a.get("advisory_issues", []))
 
-    # 🔴 2026-06-29 NN风格声纹集成 — embedding-SFS 影子子维（env STYLE_EMBED_SFS·默认 off）。
+    # NN 风格声纹集成 — embedding-SFS 影子子维（env STYLE_EMBED_SFS·默认 off）。
     # NN 作者风格向量 cosine(gen centroid, 作者 centroid)·与启发式 sfs_quick **并存对比**·
     # 绝不替换 / 绝不改 sfs_quick/programmatic_score/grade 任何判决（北极星⑤ 顾问非法官）。
     # 默认安全：系统 py3.14 无 torch → 经 embedding_store venv subprocess 桥编码·venv/模型缺
@@ -2284,8 +2276,8 @@ def main():
                         help="风格基线 JSON 文件（可选，覆盖 ref 分析结果）")
     parser.add_argument("--output", default=None,
                         help="报告输出路径（默认输出到 stdout）")
-    # v23.13（2026-05-27）多基线自动抽样：解决「单 ref 评分对短段独白章误判过重」
-    # 用例：复刻独白章 vs ref 对话章 → 单 ref 模式扣分严重 →
+    # 多基线自动抽样：单 ref 评分对短段独白章误判过重
+    # （复刻独白章 vs ref 对话章 → 单 ref 模式扣分严重）→
     # 自动抽 N 章混合章型 ref → 区间评分 → 落入任一章型带内得 1.0
     parser.add_argument("--multi-ref-from-dir", default=None,
                         help="风格库原文目录（如 workspace/styles/蛊真人/原文）→ 自动抽 N 章混合章型 ref")
@@ -2293,15 +2285,15 @@ def main():
                         help="--multi-ref-from-dir 抽样数（默认 5）")
     parser.add_argument("--multi-ref-seed", type=int, default=42,
                         help="抽样随机种子（默认 42 · 保证可复现）")
-    # 2026-05-29 修：distill-style.plan.json phase-2 调用形如
+    # distill-style.plan.json phase-2 调用形如
     # `style_evaluator.py --mode cluster --multi-ref-from-dir SFS`，但本脚本只做 SFS 评分
-    # （cluster 6 维评分实际由独立的 cluster_evaluator.py 做）。原先没有 --mode 参数 →
+    # （cluster 6 维评分实际由独立的 cluster_evaluator.py 做）。缺 --mode 参数会让
     # argparse exit 2 崩溃拦死 plan。这里加一个无害的 --mode：默认 sfs 行为不变，接受 cluster
     # 不报错（仅作语义标注），让 plan 文档照跑不崩。
     parser.add_argument("--mode", choices=["sfs", "cluster"], default="sfs",
                         help="评分模式标注（无害参数）：sfs=默认 SFS 评分；cluster=plan phase-2 "
                              "cluster 视野调用兼容（行为同 sfs · cluster 6 维由 cluster_evaluator.py 负责）")
-    # 2026-05-30 北极星①修 #4：作者风格档优先。默认 None=自动推断（有 --baseline 即视为有作者档）。
+    # 北极星①：作者风格档优先。默认 None=自动推断（有 --baseline 即视为有作者档）。
     # 显式 --has-author-profile / --no-author-profile 可覆盖。有作者档时维度7工艺签名词
     # （顿时/淡淡/显然…）对照 ref 频率而非单边硬扣 → 忠实复刻高频签名词的作者不再被扣分。
     grp = parser.add_mutually_exclusive_group()
@@ -2315,7 +2307,7 @@ def main():
 
     gen_path = Path(args.gen)
 
-    # v23.13 自动抽样多基线（如果指定 --multi-ref-from-dir）
+    # 自动抽样多基线（如果指定 --multi-ref-from-dir）
     if args.multi_ref_from_dir:
         ref_dir = Path(args.multi_ref_from_dir)
         if not ref_dir.is_dir():
@@ -2339,7 +2331,7 @@ def main():
         print("[错误] 必须指定 --ref 或 --multi-ref-from-dir", file=sys.stderr)
         sys.exit(1)
 
-    # E5：多 ref 支持
+    # 多 ref 支持
     ref_texts_list = _read_ref_texts(args.ref)
     gen_text = _read_texts(gen_path)
     if len(ref_texts_list) == 1:
@@ -2366,7 +2358,7 @@ def main():
     llm_prompt = generate_llm_prompt(prompt_ref, gen_text)
     prompt_filename = (args.output or "sfs_report").replace(".json", "")
     prompt_path = Path(f"{prompt_filename}_llm_eval_prompt.txt")
-    prompt_path.parent.mkdir(parents=True, exist_ok=True)  # 对比报告/ 可能未建（真e2e抓出）
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)  # 输出父目录可能未建
     prompt_path.write_text(llm_prompt, encoding="utf-8")
     report["llm_prompt_file"] = str(prompt_path)
     print(f"[LLM prompt 已保存] {prompt_path}", file=sys.stderr)

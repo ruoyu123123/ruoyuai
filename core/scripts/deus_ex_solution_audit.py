@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""deus_ex_solution_audit.py — Deus Ex Solution Audit（advisory · cluster · 2026-06-20）
+"""deus_ex_solution_audit.py — Deus Ex Solution Audit（advisory · cluster）
 
-【缺口】R9 联网调研：Aristotle《Poetics》 deus ex machina 概念 + Narrative Debt Ledger 对偶。
-此前全系统：
-  · R7 cross_cluster_narrative_debt_ledger 查【present-debt → future-payoff】方向
+【缺口】Aristotle《Poetics》deus ex machina 概念 + Narrative Debt Ledger 对偶：
+  · cross_cluster_narrative_debt_ledger 查【present-debt → future-payoff】方向
     （伏笔埋了未还=债·哨兵 BOOK_MORTGAGE_ABSENT/VOLUME_TAIL_RUNAWAY/VOLUME_OVERSHOOT）
-  · 【present-payoff → past-anchors 方向零覆盖】——卷末/cluster finale 的解决方案
-    是否有前置铺垫？还是天上掉下来的 deus ex machina？没有任何 scanner 测。
-  本 scanner 补对偶端：finale cluster 触发·抽 resolution（角色/道具/能力/外力）·
+  · 【present-payoff → past-anchors 方向】——卷末/cluster finale 的解决方案
+    是否有前置铺垫？还是天上掉下来的 deus ex machina？本 scanner 补这一端的检测。
+  本 scanner：finale cluster 触发·抽 resolution（角色/道具/能力/外力）·
   回查前置 anchors_count < 2 → advisory DEUS_EX_SOLUTION·走向卡反馈下卷 seeding 修复。
 
-【做法 · 确定性纯规则正则（先期不依赖 LLM·后续可挂 resolution_agent LLM 占位）】：
+【做法 · 确定性纯规则正则（不依赖 LLM·后续可挂 resolution_agent LLM 占位）】：
   1. 触发门控：仅 is_volume_finale=True（manifest 或 cluster_index）才跑·非 finale → skip。
   2. 抽 resolution：草稿末段 30% 范围内·检测解决方案模式
      · 角色解决（"X 出手/X 挺身/X 救了"）
@@ -22,7 +21,7 @@
      anchors_count < 2 → 没铺垫 → advisory。
   4. 外力锚词（突然/不料/没想到/天降+解决动作）单独高权重：本身就是 deus ex 候选信号。
 
-【与 R7 Narrative Debt Ledger 严格正交】R7 = 前向（promise→payoff·伏笔账本）·
+【与 Narrative Debt Ledger 严格正交】Narrative Debt Ledger = 前向（promise→payoff·伏笔账本）·
   本 = 反向（resolution→setup·解决方案审计）·两者完全对偶。
 
 【北极星② / ⑤ 顾问非法官】爆款修真/无脑爽流主角后期觉醒突破收尾是合理风格选择·
@@ -69,7 +68,7 @@ MIN_CJK = 500
 TAIL_RATIO = 0.3   # finale 草稿末段 30% 为 resolution 区
 ANCHOR_FLOOR = 2   # < 2 个前置 anchors → 报
 SEMANTIC_ANCHOR_SIM_THRESHOLD = 0.52   # element+tail 上下文 vs 历史段落余弦阈值
-# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
+# 金标准校准依据：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
 ANCHOR_CONTEXT_WINDOW = 80   # element 在 tail 中出现位置前后各取 N 字符当语境（同 macguffin_entanglement_scanner 模式）
 
 
@@ -78,10 +77,9 @@ def _mode() -> str:
     return m if m in ("off", "shadow", "active") else "shadow"
 
 
-# ── 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）───────
+# ── 内容语义 embedding 路径（bge 内容模型，非风格模型）───────
 def _content_backend_ready() -> bool:
-    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
-    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available()）。
 
     import 失败 → False（调用方回退纯字面子串计数）。
     """
@@ -99,7 +97,7 @@ def _split_history_paragraphs(history_text: str) -> list:
 
 def _embed_history_once(history_text: str) -> "list[tuple[str, list]] | None":
     """内容后端就绪时把历史段落编码一次，供本次 audit_deus_ex() 内所有 resolution
-    element 复用（避免 O(元素 × 段落) 重复编码·2026-07-02）。
+    element 复用（避免 O(元素 × 段落) 重复编码）。
 
     内容后端不可用 / 无历史段落 / 编码异常 → None（调用方逐元素回退纯字面子串计数）。
     """
@@ -122,7 +120,7 @@ def _embed_history_once(history_text: str) -> "list[tuple[str, list]] | None":
 
 def _anchor_query_text(element: str, tail_context: str) -> str:
     """element 在 tail_context 中的语境窗口查询文本（_semantic_anchor_hit 判定用·也供
-    audit_deus_ex 批量 prefetch 收集复用·2026-07-03 抽出，避免两处重复算 window）。
+    audit_deus_ex 批量 prefetch 收集复用，避免两处重复算 window）。
 
     语境窗口取 element 在 tail_context 中实际出现位置前后 ANCHOR_CONTEXT_WINDOW 字符
     （而非整段 tail 头部截断——tail 可能长达数千字，resolution 短语可能出现在任意位置，
@@ -259,7 +257,7 @@ def audit_deus_ex(text: str, history_text: str = "") -> dict:
     返回 {resolution_elements, anchors_per_element, anchor_source_per_element,
           underbacked_count, deus_ex_risk, external_deus_hits_count}。
 
-    anchors_per_element 计数：字面子串是兜底（_count_anchors_for_element·原逻辑不变）。
+    anchors_per_element 计数：字面子串是兜底（_count_anchors_for_element）。
     内容后端就绪时叠加语义扫描历史摘要（tail resolution 段 vs 历史 cluster 摘要余弦）——
     字面不足 ANCHOR_FLOOR 但语义命中 → 视为已达标铺垫（意译/概念性铺垫漏检）。
     anchor_source_per_element 标注每个 element 最终判定用的是 "literal_substring" 还是
@@ -276,7 +274,7 @@ def audit_deus_ex(text: str, history_text: str = "") -> dict:
     all_elements = (elements["char_names"] + elements["item_names"] +
                     elements["power_hits"])
 
-    # 🔴 2026-07-03 Wave-4：历史段落 + 每个 resolution 元素的语境窗口查询——两侧文本
+    # 历史段落 + 每个 resolution 元素的语境窗口查询——两侧文本
     # 集合一次性 prefetch（内容后端子进程按条调用极贵·合并成一次批调用），下面
     # _embed_history_once / _semantic_anchor_hit 内的逐条 compute_content_embedding 全部命中缓存。
     if _content_backend_ready():

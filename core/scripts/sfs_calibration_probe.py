@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""sfs_calibration_probe.py — SFS / av_judge 校准探针(R20 W9 Batch-Z·P0)
+"""sfs_calibration_probe.py — SFS / av_judge 校准探针
 
-【缺口·2026-06-21·R20 STRONG fanfic_voice_mimicry id 5】
-av_judge / SFS 指标在 shadow→active 升级前缺少 same-author vs cross-author 校准
+【缺口】av_judge / SFS 指标在 shadow→active 升级前缺少 same-author vs cross-author 校准
 门。如果 SFS Δ(same vs cross) < 5 或 ROC-AUC < 0.65：指标本身无法分辨作者风格
 和非作者风格——这种状态下任何 active 上报都是噪声。
 
@@ -24,7 +23,7 @@ av_judge / SFS 指标在 shadow→active 升级前缺少 same-author vs cross-au
 【北极星⑤】顾问非法官·全 advisory·env SFS_CALIBRATION_PROBE_MODE 默认 shadow·
   SFS_POORLY_CALIBRATED_FOR_AUTHOR 绝不 hard_gate（探针自身噪声 = 检测无能）。
 
-【默认 scorer · 2026-07-02 接线 embedding_store】
+【默认 scorer】
   未传 --scorer 时的默认 scorer：真后端（EMBED_BACKEND≠hash 或配了 GEN_EMBED__*）→
   embedding_store 余弦（source 非 placeholder）；无真后端 → 现有 char-3gram Jaccard
   （_placeholder=true·让 CI 可跑）。--scorer python_module:func 覆盖通道不受影响，
@@ -48,7 +47,7 @@ from typing import Callable, List, Optional, Tuple
 
 ISSUE_CODE = "SFS_POORLY_CALIBRATED_FOR_AUTHOR"
 
-MIN_PAIRS = 10  # ≥10 对才有意义（R20 蓝图要求 ≥30 真用·CI 兜底放宽）
+MIN_PAIRS = 10  # ≥10 对才有意义（真实使用建议 ≥30·CI 兜底放宽到此下限）
 RECOMMENDED_PAIRS = 30
 DELTA_MEANS_THRESHOLD = 5.0  # 蓝图阈值
 ROC_AUC_THRESHOLD = 0.65      # 蓝图阈值
@@ -101,7 +100,7 @@ def _placeholder_sfs_score(text_a: str, text_b: str) -> float:
     return 100.0 * inter / union
 
 
-# ============ 真后端默认 scorer（2026-07-02 接线 embedding_store）============
+# ============ 真后端默认 scorer ============
 # 未传 --scorer 时：真后端 → 本函数（embedding 余弦·非 placeholder）；无真后端 → 上面的
 # _placeholder_sfs_score（char-3gram Jaccard·不变）。任何失败（embedding_store 不可用/
 # 维度不一致等）静默回退占位（默认安全）。
@@ -127,7 +126,7 @@ def _load_scorer(scorer_spec: Optional[str]) -> Tuple[Callable[[str, str], float
     """加载 scorer。spec 形如 'module:func'，显式指定优先级最高。
 
     未传 spec 时的默认 scorer：真后端 → _embedding_sfs_score（is_placeholder=False）；
-    无真后端 → _placeholder_sfs_score（is_placeholder=True，零回归·跟此前行为一致）。
+    无真后端 → _placeholder_sfs_score（is_placeholder=True）。
     返回 (callable, is_placeholder)。"""
     if not scorer_spec:
         if _has_real_embedding_backend():
@@ -226,7 +225,7 @@ def _iter_pair_dir(root: Path) -> List[Tuple[Path, Path]]:
 
 def _read_pair_texts(pairs: List[Tuple[Path, Path]]) -> List[str]:
     """辅助：读出全部文本对（不做 CJK 过滤，过滤仍只在 _score_pairs 内发生）——
-    仅供 Wave-4 批量预热 embedding 缓存用，多读几条不影响正确性。"""
+    仅供批量预热 embedding 缓存用，多读几条不影响正确性。"""
     out: List[str] = []
     for a, b in pairs:
         try:
@@ -290,10 +289,10 @@ def probe(same_dir: Path, cross_dir: Path,
     scorer, is_placeholder = _load_scorer(scorer_spec)
     out["_placeholder_scorer"] = is_placeholder
 
-    # 🔴 2026-07-03 Wave-4：默认 embedding scorer 对每对文本各 2 次 compute_embedding，
-    # _score_pairs 对 same/cross 逐对循环调用 = 真后端下 up to 2*(N_same+N_cross) 次子进程
-    # 调用。默认 scorer 精确等于 _embedding_sfs_score 时才一次性 prefetch 全部文本灌缓存
-    # （自定义 --scorer 不保证走 embedding_store，不能替它预热）；失败不影响主流程。
+    # 默认 embedding scorer 对每对文本各 2 次 compute_embedding，_score_pairs 对 same/cross
+    # 逐对循环调用 = 真后端下 up to 2*(N_same+N_cross) 次子进程调用。默认 scorer 精确等于
+    # _embedding_sfs_score 时才一次性 prefetch 全部文本灌缓存（自定义 --scorer 不保证走
+    # embedding_store，不能替它预热）；失败不影响主流程。
     if scorer is _embedding_sfs_score:
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent))

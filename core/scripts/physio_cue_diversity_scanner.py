@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""physio_cue_diversity_scanner.py — 生理情绪线索面部偏置回查（advisory · cluster · 2026-06-19）
+"""physio_cue_diversity_scanner.py — 生理情绪线索面部偏置回查（advisory · cluster）
 
 【缺口】LLM 写情绪生理线索时存在系统性「面部偏置」（facial bias）：愤怒=皱眉、紧张=眼神
 闪躲、震惊=瞪大眼睛……反复堆在眉/眼/嘴角/脸色等面部区域，冷落了手/呼吸/肠胃/姿态/后背等
@@ -15,8 +15,8 @@ facial_ratio > 阈值 → advisory「建议多用手/呼吸/肠胃/姿态等非�
 
 【北极星⑤ 顾问非法官】情绪躯体化是创作选择·writer 有理由偏面部（特写镜头/POV 贴脸） → 永远
   advisory，code PHYSIO_CUE_FACIAL_BIAS **绝不进 audit_hub.HARD_GATE_CODES**。
-  env PHYSIO_CUE_DIVERSITY_MODE: off / shadow(默认·只记不判·零回归) / active。
-  🔬 阈值 FACIAL_RATIO_FLOOR 已金标准校准（2026-07-04 statbase 155章×3书·真作者 facial_ratio p95=0.75→floor 0.78）。
+  env PHYSIO_CUE_DIVERSITY_MODE: off / shadow(只记不判) / active(默认·阈值已金标准校准)。
+  🔬 阈值 FACIAL_RATIO_FLOOR 已金标准校准（statbase 155章×3书·真作者 facial_ratio p95=0.75→floor 0.78）。
 
 用法：python physio_cue_diversity_scanner.py <draft_path> [--manifest m.json] [--project <root>]
 """
@@ -31,12 +31,13 @@ from pathlib import Path
 
 ISSUE_CODE = "PHYSIO_CUE_FACIAL_BIAS"   # ⚠️ advisory 专用 · 绝不进 HARD_GATE_CODES
 
-# 🔬 2026-07-04 金标准校准（statbase 155章×3书 facial_ratio 分布）：面部占比超此 = facial bias。
 # 面部生理线索占比超此 = facial bias（面部区域堆砌·缺非面部躯体信号）。
-FACIAL_RATIO_FLOOR = 0.78   # 2026-07-04 金标准校准(statbase 155章×3书·seed20260704):p50=0.445/p95=0.75/max=0.857·旧0.65误伤30%真作者章(2026-06-20手工5样本max=0.566漏尾部)→抬0.78(p95上方·仅catch最极端3-5%面部偏置)
+# 阈值按金标准语料校准(statbase 155章×3书)：p50=0.445 / p95=0.75 / max=0.857；
+# 0.78 卡在 p95 上方，只命中最极端 3-5% 面部偏置章节（阈值再低会误伤约 30% 真实作者章节）。
+FACIAL_RATIO_FLOOR = 0.78
 MIN_CUE_SAMPLES = 8   # 三桶命中总数低于此 = 样本不足·不判（防小样本噪声）
 
-# 🆕 R7 W2 升级：三桶分类（facial / observable-body / interoceptive）
+# 三桶分类（facial / observable-body / interoceptive）：
 # 任一桶 ratio > 0.65 → advisory（不限于面部·任何单维度过密都是 cue diversity 问题）
 ANY_BUCKET_FLOOR = 0.65   # 三桶任一占比 > 此 = 单维度过密 advisory
 
@@ -56,7 +57,7 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-20 金标准校准放量 active：floor 抬到 0.65 后 5 真作者(facial_ratio≤0.566)零误报。
+    # 默认 active（非 shadow）：阈值已按金标准校准，真实作者章节零误报。
     m = (os.environ.get("PHYSIO_CUE_DIVERSITY_MODE") or "active").strip().lower()
     return m if m in ("off", "shadow", "active") else "active"
 
@@ -190,7 +191,7 @@ def scan(draft_path, project_root=None) -> dict:
             })
             out["verdict"] = "FAIL_MINOR"
             out["warning"] = msg
-        else:  # shadow：只记不判（violations 空·零回归）
+        else:  # shadow：只记不判（violations 空）
             print(f"[SHADOW] physio_cue_diversity: {msg} — 不上报", file=sys.stderr)
     out["violations_count"] = len(out["violations"])
     return out

@@ -1,6 +1,6 @@
-"""cross_cluster_narrative_debt_ledger_aggregate.py — 叙事债务账本（R7 Batch-D · 2026-06-20）
+"""cross_cluster_narrative_debt_ledger_aggregate.py — 叙事债务账本
 
-【缺口】R7 W2 联网调研：长篇叙事「债务」是结构骨——伏笔/秘密/承诺/悬念都是
+【缺口】长篇叙事「债务」是结构骨——伏笔/秘密/承诺/悬念都是
 作者向读者借的债，必须在某处偿还。AI 写作的系统性短板：
   · 借得快还得快（同 cluster 内开闭合 → 没债务感）
   · 借完忘还（后段累计未偿超载 → 烂尾感）

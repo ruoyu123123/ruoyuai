@@ -3,31 +3,28 @@
 """
 prose_rhythm_scanner.py — 句法节奏 / 「流水账作文感」检测（cluster 视野 · 作者基线感知 · advisory）
 
-2026-06-03 新增。根因（《无脸者守则》实证 + 惊悚乐园真作者金标准对比）：
-  用户直觉「不像网文像作文·谁做什么做什么做什么」= 主语+裸动作 play-by-play 流水账。
-  量化：本书主语开头句 27.8% vs 真作者 15.1%；均句长 16.8 vs 33.0；最长「主语+动作」streak
-  3.8(峰值6) vs 2.1。根因三层——蒸馏✅对(作者档 sentence_length.mean=31)，writer 注入了但
-  弱模型守不住 + C3 只管段首管不到句子级流水账，**scanner 层 validate_style 故意「绝不查句长」
-  → 句长偏短全程无人报警**。本 scanner 补这个检测闭环。
+检测目标：「不像网文像作文·谁做什么做什么做什么」= 主语+裸动作 play-by-play 流水账
+  （典型指纹：主语开头句占比与均句长明显偏离真作者基线、「主语+动作」streak 偏长）。
+  分工：validate_style 故意「绝不查句长」（只管段长），句长偏离作者基线由本 scanner 报警。
 
 探针（全 advisory · 以作者风格档基线为第一权威 · 北极星⑤）：
-  1. sentence_too_short  作者内 z-band（self-ECDF·2026-06-16 升级）：有 std → z=(cluster_mean-μ)/σ，
+  1. sentence_too_short  作者内 z-band（self-ECDF）：有 std → z=(cluster_mean-μ)/σ，
      z<-1.0 minor / z<-1.8 major，**只报偏短下尾**（长句永不报·北极星③不干涉创作）；
      **绝对地板取或**：mean < μ×0.62 也触发（防高 σ 作者下尾阈值太松漏报碎句·实证：惊悚 σ=23
      时碎句 mean16.8 仅 z≈-0.61 触不到 -1.0，靠 floor62=19.2 兜住）。无 std 退通用 ×0.70。
   2. subject_action_streak  连续句首是「主语(人物卡角色名/代词)」的流水账 streak ≥4 minor/≥6 major
   3. subject_start_ratio_high  主语开头叙述句占比 > 24%（**通用兜底·非作者锚**：作者档暂无主语
-     占比分布·补它需 style_analyzer 加一维抽取+回灌全部作者档·中成本 defer·见 design D 件）
+     占比分布基线）
   4. inverted_modifier_mold  段首「前置长定语+的+主语后置」倒装模具复用（同语法骨架）
   5. intensity_adverb_inflation  强度副词通胀（极其/死死/毫无/猛地…）
   6. paragraph_too_short  cluster 段长均值 < 作者 paragraph_length_chars.p5（明显比作者最短的
      章还碎）→ minor·**单边下尾**（长段不报·长不是流水账问题）·无作者段长分位 → 跳过
 
 🔴 self-ECDF 不是跨作者群体锚：population=「该作者历史章节」而非 WebNovelBench 那种跨 4000 部语料。
-   跨作者百分位会把 cluster 往「通用网文均值」拽，反噬北极星（惊悚乐园句长 31 离群点教训：拿群体
-   百分位会把它判「太长」往均值拉）。这里只用作者自身 μ/σ/分位，高 σ 作者自动获宽容带、低 σ 收紧。
+   跨作者百分位会把 cluster 往「通用网文均值」拽，反噬北极星（如句长 31 的高均值离群作者会被
+   群体百分位判「太长」往均值拉）。这里只用作者自身 μ/σ/分位，高 σ 作者自动获宽容带、低 σ 收紧。
 
-不做「单句独行率上限」探针：cluster_001(优秀样本)独行率最高(77-84%)但质量好(吐槽短句)，
+不做「单句独行率上限」探针：优秀样本独行率可高达 77-84% 而质量好(吐槽短句)，
 独行率高本身不是问题(爽文要独行)，问题是独行的是不是裸动作——靠句长+streak 精准抓，独行率会误伤。
 
 输出：JSON {scanner, violations:[{kind,severity,...}], verdict, gate_level, metrics, author_baseline}
@@ -54,7 +51,7 @@ SHORT_Z_MINOR, SHORT_Z_MAJOR = -1.0, -1.8   # z<-1.0 minor（≈作者自身第1
 SHORT_ABS_FLOOR = 0.62
 STREAK_MINOR, STREAK_MAJOR = 4, 6
 DEFAULT_AUTHOR_SENT_MEAN = 26.0   # 无作者档时的通用兜底句长基线（偏保守·网文中位）
-# 探针9（R20 W9 Batch-CC P2 2026-06-21 · SEO id 13）300字 payload 段长占比
+# 探针9：300字 payload 段长占比
 # 移动端竖屏阅读经验(番茄/起点/七猫 2024-2025)：单段 300CJK±50 是手机一屏 payload
 # 甜区(滑两下读完不滑屏)。低于占比下限 = 段落太碎(读者频繁滑屏疲劳)，高于上限 =
 # 段落太长(滑很久才到下一段)。作者档 paragraph_300cjk_share_baseline {target, std}
@@ -66,7 +63,7 @@ PARA_300_SHARE_TARGET_DEFAULT = 0.20
 PARA_300_SHARE_STD_DEFAULT = 0.10
 PARA_300_SHARE_Z_THRESHOLD = 1.5  # |z|>1.5 报偏离
 
-# 探针10 intra_sentence_breath_chain (R23 W11 Batch-II P2 · 2026-06-22 · 朗读呼吸群)
+# 探针10 intra_sentence_breath_chain（朗读呼吸群）
 # Selkirk 1986 / Beckman & Pierrehumbert 1986 prosodic phrase hierarchy 朗读延伸：
 # 单句过多逗号 / 子句区间过长 → 听众断气 / 跟丢。
 # 探针：(a) max_commas_per_sentence > 5 (>=2 句) → 候选
@@ -81,11 +78,11 @@ INTRA_SENT_COMMAS_RELAX_MAX = 8      # 长复合句作者档 relax 上限
 BREATH_GROUP_RELAX_CJK = 50          # relax 区间
 
 # 探针7 句长方差塌缩（burstiness·cluster std vs 作者 std·单边偏均匀·治 flash 匀速碎句·env PROSE_BURSTINESS_MODE 默认 shadow）
-# 金标准校准（2026-06-16·6 作者各 10 cluster）：真作者 cluster_std/作者 std 最小 0.61（高 σ 作者偏低）→ 阈值
-# 0.5/0.4 留余量（< 0.61 真作者绝不误报·critic 建议 0.6 余量仅 0.01 太险已下调·北极星⑤防矫枉过正）。
+# 金标准校准（6 作者各 10 cluster）：真作者 cluster_std/作者 std 最小 0.61（高 σ 作者偏低）→ 阈值
+# 0.5/0.4 留余量（< 0.61 真作者绝不误报·北极星⑤防矫枉过正）。
 BURST_R_MINOR, BURST_R_MAJOR = 0.5, 0.4
 BURST_ABS_STD_FLOOR = 5.0   # 无作者档兜底：句长 std < 5（几乎齐平·匀速）才报
-# 探针8 标点距离 Weibull 形状指纹（2026-06-20 R13 W6 Batch-R P2·shadow）
+# 探针8 标点距离 Weibull 形状指纹（shadow）
 # Dolina et al. 2025 Chaos 35:023155 中文散文标点 Weibull 多重分形 + CLSInfra + Bagnall 2016。
 # 6 类标点(。, ！？—— ……)分别提取相邻同类符号 token 距离序列·scipy weibull_min.fit 估(k, λ)·
 # 与作者档 slow_update.punctuation_distance_weibull[mark] KS 检验·Δ>0.15 advisory·
@@ -94,17 +91,17 @@ PUNCT_WEIBULL_KS_THRESHOLD = 0.15
 PUNCT_WEIBULL_MIN_SAMPLES = 8   # 单标点距离样本 <8 跳过（统计不可靠）
 PUNCT_WEIBULL_MARKS = ("。", "，", "！", "？", "——", "……")
 DEFAULT_SUBJ_PCT_CAP = 24.0       # 主语开头占比通用上限(%)
-# 段首倒装模具（前置长定语+的+主语后置·补「同语法骨架复用」缺口·
-# memory feedback_inverted_modifier_sentence_mold_overuse·cluster_001 实测 34 次/约 1/9 段）
+# 段首倒装模具（前置长定语+的+主语后置=「同语法骨架复用」·
+# memory feedback_inverted_modifier_sentence_mold_overuse）
 INVERTED_MOLD_MINOR, INVERTED_MOLD_MAJOR = 0.12, 0.20   # 倒装段首占比阈值
 INVERTED_STREAK_MINOR, INVERTED_STREAK_MAJOR = 3, 5      # 连续倒装段首 streak
 INVERTED_MIN_COUNT = 3                                   # 至少 N 处才报（避免少量误报）
-# 强度副词通胀（gen-model 写作伴生套路·memory feedback_inverted L19·与倒装同批一起治）
+# 强度副词通胀（gen-model 写作伴生套路）
 INTENSITY_ADVERBS = ['极其', '死死', '毫无', '猛地', '狠狠', '紧紧', '牢牢', '拼命', '疯狂']
 INTENSITY_PER_1K_MINOR, INTENSITY_PER_1K_MAJOR = 3.0, 5.0   # 总强度副词密度 per 1000 CJK
 INTENSITY_SINGLE_MAX = 12                                    # 单个强度副词频次上限（如极其28）
-# 对话起始引号字符集（含中文弯引号 U+201C/U+201D=项目正典对话格式·补漏与姊妹 scanner
-# cross_scene_voice_drift_scanner/validate_style 对齐·三处统一引用防再次漏改）
+# 对话起始引号字符集（含中文弯引号 U+201C/U+201D=项目正典对话格式·与姊妹 scanner
+# cross_scene_voice_drift_scanner/validate_style 三处同集）
 _DIALOG_OPEN_CHARS = '""“”\'「『（('
 
 
@@ -121,7 +118,7 @@ def _load_json(p: Path):
 
 def _author_weibull_baseline(project: Path | None, style_path: Path | None) -> dict:
     """读作者档 slow_update.punctuation_distance_weibull[mark] = {k, lambda} 形状指纹。
-    R13 P2 落地·SkillOpt 不许动 slow_update 段（北极星⑤锁死）。无作者档 → 返回 {}。"""
+    SkillOpt 不许动 slow_update 段（北极星⑤锁死）。无作者档 → 返回 {}。"""
     data = None
     if style_path and style_path.exists():
         data = _load_json(style_path)
@@ -217,7 +214,7 @@ def _author_baseline(project: Path | None, style_path: Path | None) -> dict:
                 para_p50 = float(pl["p50"])
             if isinstance(pl.get("p95"), (int, float)):
                 para_p95 = float(pl["p95"])
-        # 探针9 300字 payload 作者档 baseline (R20 W9 Batch-CC P2)
+        # 探针9 300字 payload 作者档 baseline
         p300 = data.get("paragraph_300cjk_share_baseline")
         if isinstance(p300, dict):
             if isinstance(p300.get("target"), (int, float)):
@@ -314,7 +311,7 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                         f'长短句交替而非匀速短句。(高 σ 作者本就长短摆动大→宽容；此处仍判偏短)',
             })
     elif ratio < SHORT_MINOR:
-        # 无 std（老档）→ 退回通用比值兜底（与 2026-06-03 版一致·回归不破）
+        # 无 std（老档）→ 退回通用比值兜底
         sev = 'major' if ratio < SHORT_MAJOR else 'minor'
         violations.append({
             'kind': 'sentence_too_short', 'severity': sev,
@@ -440,7 +437,7 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                         f'→匀速碎句；长短句交替增节奏。(单边·只报偏均匀)',
             })
 
-    # 探针 8：标点距离 Weibull 形状指纹（R13 W6 Batch-R P2·shadow·advisory）
+    # 探针 8：标点距离 Weibull 形状指纹（shadow·advisory）
     # env PROSE_PUNCT_WEIBULL_MODE 默认 shadow·依赖作者档 slow_update.punctuation_distance_weibull
     # 无作者档 → 静默 skip（北极星②）
     weibull_mode = (os.environ.get("PROSE_PUNCT_WEIBULL_MODE") or "shadow").strip().lower()
@@ -479,7 +476,7 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             else:
                 print(f"[SHADOW] prose_rhythm punct_weibull: {msg} — 不上报", file=sys.stderr)
 
-    # 探针 9：300字 payload share (R20 W9 Batch-CC P2·SEO id 13·shadow advisory)
+    # 探针 9：300字 payload share (shadow advisory)
     # 段长 250-350 CJK 段占比 vs 作者档 paragraph_300cjk_share_baseline.{target, std}
     # 兜底 target=0.20·std=0.10·|z|>1.5 报 PARAGRAPH_300CJK_PAYLOAD_OFF_BAND·北极星⑤
     payload_mode = (os.environ.get("PROSE_300CJK_PAYLOAD_MODE") or "shadow").strip().lower()
@@ -502,7 +499,7 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
                     f'·SEO/竖屏阅读体验 advisory·绝不 hard_gate'),
         })
 
-    # 探针 10：intra_sentence_breath_chain（R23 W11 Batch-II P2·朗读呼吸群·shadow）
+    # 探针 10：intra_sentence_breath_chain（朗读呼吸群·shadow）
     # 作者档锁长复合句 relax：读 audio_performance_relax 复用 / intra_sentence_breath_relax 优先
     breath_mode = (os.environ.get("PROSE_INTRA_SENT_BREATH_MODE") or "shadow").strip().lower()
     intra_relax = False
@@ -591,10 +588,10 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
             'intensity_adverb_per_1k': intensity_per_1k,
             'sentence_std_cluster': cluster_sent_std,        # 探针7 cluster 句长 std
             'burstiness_ratio': burst_ratio,                 # 探针7 cluster_std/作者 std（<0.5 偏均匀报）
-            'punct_weibull_per_mark': weibull_results,       # 探针8 标点距离 Weibull KS（R13 W6 Batch-R P2）
-            'paragraph_300cjk_share': para_300_share,        # 探针9 300CJK±50 段占比（R20 W9 Batch-CC P2）
+            'punct_weibull_per_mark': weibull_results,       # 探针8 标点距离 Weibull KS
+            'paragraph_300cjk_share': para_300_share,        # 探针9 300CJK±50 段占比
             'paragraph_300cjk_z': p300_z,                    # 探针9 z=(share-target)/std
-            'long_comma_chain_sents': long_chain_sents,      # 探针10 单句逗号>阈值的句数（R23 W11 Batch-II）
+            'long_comma_chain_sents': long_chain_sents,      # 探针10 单句逗号>阈值的句数
             'breath_group_violations': breath_group_violations,  # 探针10 子句区间>阈值次数
             'breath_group_max_cjk_threshold': breath_max_cjk,    # 探针10 实际生效阈值
             'intra_sentence_breath_relax': intra_relax,          # 探针10 是否走作者档 relax

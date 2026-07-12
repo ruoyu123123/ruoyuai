@@ -19,12 +19,12 @@ from collections import Counter
 
 
 SENTENCE_ENDINGS = re.compile(r"[。！？!?]")
-# v2 修复：引号字符必须包含 ASCII " (0x22) + 中文弯引号 U+201C/201D + 单引号 U+2018/2019 + 中文「」『』
-# 原版只用 ASCII " 导致在中文小说上完全失效
+# 引号字符须覆盖 ASCII " (0x22) + 中文弯引号 U+201C/201D + 单引号 U+2018/2019 + 中文「」『』
+# ——只用 ASCII " 在中文小说文本里基本不命中。
 _Q_OPEN = '"' + '“' + '‘' + '「' + '『'   # " “ ‘ 「 『
 _Q_CLOSE = '"' + '”' + '’' + '」' + '』'  # " ” ’ 」 』
 _Q_ANY = _Q_OPEN + _Q_CLOSE
-# v2：双引号匹配按对配对，内部允许嵌套引号（如 ""灰隼" 案例" 内部的「灰隼」）
+# 双引号匹配按对配对，内部允许嵌套引号（如 ""灰隼" 案例" 内部的「灰隼」）
 # 使用非贪婪 + 配对的左右引号，避免嵌套被截断
 DIALOGUE_QUOTED = re.compile(
     r'"[^"]*?"'         # ASCII 双引号
@@ -43,24 +43,24 @@ BRACKET_SETTING = re.compile(r"【[^】]+】")
 CHINESE_CHAR = re.compile(r"[一-鿿]")
 PRONOUNS = {"他", "她", "它", "我", "你", "这", "那", "谁", "什", "哪", "也", "都", "就", "又", "但", "却", "已", "正", "才", "还", "不", "没", "被", "把", "让", "给", "从", "在", "到", "向", "对", "和", "与"}
 
-# v2 (E1)：扩展 SPEAKER_PATTERN 容忍更多 attribution 形式
+# 容忍多种 attribution 动词形式
 SPEAKER_PATTERN = re.compile(
     r"(?:^|[，。！？\s" + re.escape(_Q_ANY) + r"])([一-鿿]{2,4})"
     r"(说道?|道|问道?|答道?|笑道?|骂道?|喊道?|叫道?|吼道?|嘀咕|嘟囔|低声道?|开口|沉声道?|轻声道?|皱眉|轻笑|苦笑|冷笑|疑惑|喝道|喝问|喃喃|沉吟)"
 )
-# v2 (E1)：引号尾随 attribution（"……"HeroC说道）
+# 引号尾随 attribution（"……"HeroC说道）
 DIALOGUE_WITH_TAG = re.compile(
     r"[" + re.escape(_Q_OPEN) + r"][^" + re.escape(_Q_ANY) + r"]+["
     + re.escape(_Q_CLOSE) + r"][，,]?\s*([一-鿿]{2,4})"
     r"(说道?|道|问道?|答道?|笑道?|喊道?|叫道?|吼道?|嘟囔|皱眉|低声道?|沉声道?|轻声道?|喃喃)"
 )
-# v2 (E1)：人名前 attribution（"HeroC沉声道："、"CharC1疑惑问道："）
+# 人名前 attribution（"HeroC沉声道："、"CharC1疑惑问道："）
 SPEAKER_PREFIX = re.compile(
     r"([一-鿿]{2,4})(?:[一-鿿]{0,6})?(说道?|道|问道?|答道?|笑道?|喊道?|叫道?|吼道?|喝问|喝道|沉声道?|轻声道?|疑惑(?:问道?|地?说道?)?|皱眉|低声(?:道?|说道?)|开口(?:道?|说道?)|沉吟(?:道?|着)?|喃喃(?:道?|地?说道?)?)[：:]?\s*["
     + re.escape(_Q_OPEN) + r"]"
 )
 
-# v2 (E3)：拟声段豁免
+# 拟声段豁免
 ONOMATOPOEIA_WORDS = [
     "啪", "砰", "嘭", "咣", "咚", "哐当", "哒", "哒哒", "嗒", "嗒嗒",
     "呼", "呼呼", "嗖", "嗖嗖", "咻", "咻咻", "呜", "呜呜",
@@ -78,7 +78,7 @@ ONOMATOPOEIA_PARA = re.compile(
 # 保留原破折号格式
 ONOMATOPOEIA_DASH = re.compile(r"^[一-鿿]{1,6}[—]+[！!]?\s*$")
 
-# v2 (E6)：独白识别标签（引号紧邻独白动词 → 算 monologue 而非 dialogue）
+# 独白识别标签（引号紧邻独白动词 → 算 monologue 而非 dialogue）
 MONOLOGUE_TAGS = [
     "思考着", "心想", "暗忖", "暗道", "心道", "想到", "在心里",
     "默默地想", "暗自琢磨", "无声吐槽", "无声地想", "心头一动",
@@ -90,16 +90,14 @@ FUNCTION_WORDS = [
     "倒", "只", "又", "不过", "只是", "毕竟", "但", "而", "也",
 ]
 
-# 2026-05-29 北极星 P4 [H2-style]：拆两类（守原则5「不干涉模型判断」）——
+# 拆两类（守原则5「不干涉模型判断」）——
 # ① AI 结构套话：结构性机器腔，任何作者都不用 → 永远 FAIL（作者档不能放行）。
 # ② 工艺签名词：可能是某作者的签名笔法（似乎/仿佛/淡淡…）→ 有作者风格档时降 WARN
 #    （审核不硬毙作者签名词），无作者档时按默认仍 FAIL。
 #
-# 2026-05-30 北极星⑤ [事实上误分类修]：「事实上」从 ① 降到 ②——实测蛊真人原文 118 章
-# 高频用「事实上」作议论体签名连接词（非机器腔），无条件硬 FAIL = 通用反 AI 腔规则
-# 苛求真作者（矫枉过正）。改归工艺签名词后：有作者档时降 WARN 可豁免（写出真作者高频
-# 签名词不被硬毙），无作者档时通用写作仍 FAIL（防 AI 腔）。其余 3 个 AI 结构套话
-# （与此同时/值得一提的是/不仅如此）未证伪、仍是典型机器腔，保持 ① 永久 FAIL 不动。
+# 「事实上」属于②非①：蛊真人原文 118 章实测高频用「事实上」作议论体签名连接词（非机器腔），
+# 无条件硬 FAIL 会让通用反 AI 腔规则苛求真作者。与此同时/值得一提的是/不仅如此
+# 是典型机器腔，归 ① 永久 FAIL。
 AI_STRUCTURAL_BANNED = [
     "与此同时", "值得一提的是", "不仅如此",
 ]
@@ -109,12 +107,12 @@ CRAFT_SIGNATURE_BANNED = [
     "嘴角勾起一抹", "深吸一口气", "缓缓地说", "沉吟片刻",
     "波涛汹涌", "不容置疑", "事实上",
 ]
-BANNED_WORDS = AI_STRUCTURAL_BANNED + CRAFT_SIGNATURE_BANNED  # 全集（向后兼容）
+BANNED_WORDS = AI_STRUCTURAL_BANNED + CRAFT_SIGNATURE_BANNED  # 全集
 
-# 🔴 2026-06-27 P1-09：加「瞬间」入 QUOTA_WORDS（cluster_003 单簇 31 次实证）·非签名节奏转场词
+# 「瞬间」是叙事节奏/转场堆砌词（非某作者签名笔法），计入 QUOTA_WORDS 超额判定
 QUOTA_WORDS = ["突然", "瞬间", "下一刻", "下意识", "莫名", "似乎", "仿佛", "顿时", "微微"]
 
-# 2026-05-30 北极星⑤ [C-配额词作者档降级]：配额词里的**工艺签名类**子集——
+# 配额词里的**工艺签名类**子集——
 # 这些是软性 hedge / 笔法签名词（顿时/微微/似乎/仿佛），可能是某作者的签名笔法，
 # 与 CRAFT_SIGNATURE_BANNED 同源（顿时直接在内，微微来自「微微挑眉」笔法家族），
 # 故 validate_style 在有作者档时把它们超额降 WARN（对齐 _chk_banned 的作者档优先逻辑）。
@@ -125,12 +123,11 @@ AI_DIALOGUE_TAGS = ["淡淡地说", "缓缓地说", "沉吟片刻", "不容置�
 
 
 # ════════════════════════════════════════════════════════════════════════
-# 作者级叙事功能序列（narrative function sequence）· 2026-05-31 · 北极星⑤
+# 作者级叙事功能序列（narrative function sequence）· 北极星⑤
 # ════════════════════════════════════════════════════════════════════════
 # 背景（2603.14430 实证）：中文网文同质化根因在**结构层**——LLM 只复现高频默认
 # 模板（Save-the-Cat 通用编剧节拍），不复现某作者**专属的因果叙事功能链**（如
 # 蛊真人「设定投放→反高潮拒战→打脸」、惊悚乐园「危机→算计揭示→获益」）。
-# 前 8 轮加固都在散文/检测/评估/流程层，这是缺失的**结构语法层**。
 #
 # 本模块从作者语料蒸馏「叙事功能序列」：
 #   1) 每章用词典命中给 7 个功能维度打分；
@@ -205,7 +202,7 @@ def count_chinese(text: str) -> int:
 
 
 # ============================================================
-# v2：拟声段 / 独白 / 说话人 识别工具函数
+# 拟声段 / 独白 / 说话人 识别工具函数
 # ============================================================
 
 # 常见非人名候选词（被 NAME_CANDIDATES 误抓的高频中文短串）
@@ -305,7 +302,7 @@ def is_onomatopoeia(para: str) -> bool:
 
 
 def _split_dialogue_vs_monologue(text: str) -> tuple[int, int]:
-    """E6：分离对话与引号化独白字数。
+    """分离对话与引号化独白字数。
 
     返回 (dialogue_chars, monologue_chars)。判断方式：
     1. 每个 quoted 段，前后 60 字扫独白标签
@@ -570,7 +567,7 @@ def _find_speaker_in_window(window: str, registry: set[str]) -> str | None:
 
 
 def classify_speakers(text: str, paragraphs: list[str]) -> tuple[set[str], set[str]]:
-    """E1+E2+E4：区分 active_speakers / quoted_speakers。
+    """区分 active_speakers / quoted_speakers。
 
     流程：
     1. 先从全文建立人名注册表（高置信信号）
@@ -608,7 +605,7 @@ def classify_speakers(text: str, paragraphs: list[str]) -> tuple[set[str], set[s
                 if len(last_two) > 2:
                     last_two.pop(0)
         else:
-            # E2 回合制继承
+            # 回合制继承
             if idx_pos > 0:
                 prev_idx = quoted_paras_idx[idx_pos - 1]
                 gap = i - prev_idx
@@ -651,8 +648,8 @@ def split_paragraphs(text: str) -> list[str]:
 def calc_dialogue_ratio(text: str) -> float:
     """对话字数 / 总字数（仅算引号内的字数，避免重复计算整行）。
 
-    v2 修复：DIALOGUE_QUOTED 已正确覆盖中英文引号，删除冗余的
-    line.startswith 加成（原版会把"...."HeroC说道整行都算进去）。
+    DIALOGUE_QUOTED 覆盖中英文引号；只统计引号内字符，不用 line.startswith 整行计数——
+    否则会把"...."HeroC说道 这类引号+attribution 整行都错算成对话字数。
     """
     all_matches = DIALOGUE_QUOTED.findall(text)
     dialogue_chars = sum(count_chinese(m) for m in all_matches)
@@ -685,11 +682,11 @@ def calc_stats(values: list[float]) -> dict:
 def calc_quantiles(values: list[float]) -> dict | None:
     """经验分位数 [p5,p25,p50,p75,p95]（纯 stdlib · 线性插值 · 对齐 numpy 默认 'linear'）。
 
-    2026-05-30 北极星① [L1a 作者分位数 band]：band/baseline 必须从**作者样本经验分布**涌现，
-    不是「作者实测 mean ± 固定容差」。固定容差对长段议论体作者（蛊真人/惊悚乐园 段长方差大）
-    系统性误判（whack-a-mole 根因）。本函数对一组 per-章值算 5/25/50/75/95 分位数——
-    validate_style._apply_style_overrides 用 [p5,p95] 当 band（覆盖作者真实 90% 章节区间），
-    取代 mean ± 容差。空集返回 None（调用方据此不 override · 保通用 band）。
+    北极星①：band/baseline 必须从**作者样本经验分布**涌现，不是「作者实测 mean ± 固定容差」——
+    固定容差对长段议论体作者（蛊真人/惊悚乐园 段长方差大）系统性误判。本函数对一组 per-章值
+    算 5/25/50/75/95 分位数；validate_style._apply_style_overrides 用 [p5,p95] 当 band
+    （覆盖作者真实 90% 章节区间），比 mean ± 容差更贴合真实分布。空集返回 None（调用方据此
+    不 override · 保通用 band）。
 
     注：纯 stdlib 排序 + 线性插值实现（不引 numpy，守零依赖纪律）。"""
     if not values:
@@ -720,10 +717,11 @@ def calc_quantiles(values: list[float]) -> dict | None:
 def chapter_metrics_lite(text: str) -> dict | None:
     """单章轻量指标（复用 analyze_text 取数原语，但**跳过** O(n²) 的说话人分类）。
 
-    2026-05-30 北极星① [L1a]：per-章分位数统计只需 paragraph_length_chars / punctuation_per_1k
-    / function_words_per_1k 三组 per-章值——不需要 _build_name_registry 的 speaker 数据（那是
-    analyze_text 里最慢的 O(候选池²) 段）。聚合 686 章蒸馏时跳过它快 ~50x。返回单章值，由
-    aggregate_chapter_quantiles 聚合成分位数。无 CJK / 无段落 → None（坏章跳过）。"""
+    北极星①：per-章分位数统计只需 paragraph_length_chars / punctuation_per_1k /
+    function_words_per_1k 三组 per-章值——不需要 _build_name_registry 的 speaker 数据
+    （那是 analyze_text 里最慢的 O(候选池²) 段）。长语料批量蒸馏时跳过它可大幅提速。
+    返回单章值，由 aggregate_chapter_quantiles 聚合成分位数。无 CJK / 无段落 → None
+    （坏章跳过）。"""
     total = count_chinese(text)
     if total <= 0:
         return None
@@ -751,7 +749,7 @@ def chapter_metrics_lite(text: str) -> dict | None:
 
 
 def aggregate_chapter_quantiles(chapter_texts: list[str]) -> dict:
-    """对一组章节文本聚合 per-章经验分位数（L1a 蒸馏端补 band 数据源 · 北极星①）。
+    """对一组章节文本聚合 per-章经验分位数（蒸馏端补 band 数据源 · 北极星①）。
 
     输出三组分位数桶（每桶各字段都是 calc_quantiles 结果）：
       · paragraph_length_chars : per-章段均长（CJK 字/段）分布 → [p5..p95]
@@ -918,8 +916,8 @@ def score_narrative_function_sequence(chapter_texts: list[str]) -> dict:
     }
 
 
-# ───────── R7 W2 Batch-E：情感弧 fractal 指纹（Hurst + ApEn · 纯 Python · 零依赖）─────────
-# 调研锚（R7-W1）：长篇叙事情感弧呈分形/长程相关结构（Hurst H≠0.5）；ApEn 衡量序列复杂度。
+# ───────── 情感弧 fractal 指纹（Hurst + ApEn · 纯 Python · 零依赖）─────────
+# 调研锚：长篇叙事情感弧呈分形/长程相关结构（Hurst H≠0.5）；ApEn 衡量序列复杂度。
 # 北极星⑤：仅作为作者档 ECDF 基线产出，不设通用阈值；样本不足时降级返回 None。
 def compute_hurst_rs(series, min_n: int = 10) -> float | None:
     """R/S 重标极差法 Hurst 指数（纯 stdlib·O(n log n)）。
@@ -1040,7 +1038,7 @@ def analyze_text(text: str) -> dict:
     single_sent_paras = sum(1 for c in para_sent_counts if c == 1)
     single_sent_ratio = single_sent_paras / len(paragraphs) if paragraphs else 0
 
-    # E3：拟声段豁免——计算极短段比例时排除拟声段
+    # 拟声段豁免——计算极短段比例时排除拟声段
     non_onomatopoeia_paras = [p for p in paragraphs if not is_onomatopoeia(p)]
     non_onomatopoeia_lengths = [count_chinese(p) for p in non_onomatopoeia_paras]
     ultra_short_paras = sum(1 for length in non_onomatopoeia_lengths if length <= 5)
@@ -1048,7 +1046,7 @@ def analyze_text(text: str) -> dict:
         ultra_short_paras / len(non_onomatopoeia_paras)
         if non_onomatopoeia_paras else 0
     )
-    # 保留旧字段含义（含拟声段）作为对照
+    # 同时保留未过滤版本（含拟声段）供对照
     ultra_short_paras_raw = sum(1 for length in para_char_lengths if length <= 5)
     ultra_short_ratio_raw = (
         ultra_short_paras_raw / len(paragraphs) if paragraphs else 0
@@ -1058,7 +1056,7 @@ def analyze_text(text: str) -> dict:
 
     dialogue_ratio = calc_dialogue_ratio(text)
 
-    # E6：分离对话 vs 引号化独白
+    # 分离对话 vs 引号化独白
     dialogue_chars, monologue_chars = _split_dialogue_vs_monologue(text)
     total_text_chars = count_chinese(text) or 1
     inner_monologue_ratio = monologue_chars / total_text_chars
@@ -1096,19 +1094,19 @@ def analyze_text(text: str) -> dict:
 
     bracket_settings = BRACKET_SETTING.findall(text)
 
-    # E3：拟声段计数用统一 is_onomatopoeia 判定（兼容白名单+破折号）
+    # 拟声段计数用统一 is_onomatopoeia 判定（兼容白名单+破折号）
     onomatopoeia_paras = [p for p in paragraphs if is_onomatopoeia(p)]
 
-    # E1+E2+E4：用 classify_speakers 区分 active / quoted
+    # 用 classify_speakers 区分 active / quoted
     active_speakers, quoted_speakers = classify_speakers(text, paragraphs)
-    speakers = active_speakers  # 向后兼容：speakers 等价于 active
+    speakers = active_speakers  # speakers 输出字段等价于 active
 
-    # v16: 修辞手法计数（移植自AI_NovelGenerator）
+    # 修辞手法计数
     simile_count = len(re.findall(r'像是?[^，。]{2,15}[一-鿿]|仿佛[^，。]{2,15}|如同[^，。]{2,15}|好似[^，。]{2,15}', text))
     parallelism_count = len(re.findall(r'([一-鿿]{2,4})[，,][一-鿿]{2,4}[，,]\1', text))
     rhetorical_q_count = len(re.findall(r'难道|怎能|岂不|何尝|哪里.*[？?]', text))
 
-    # v16: 词汇丰富度 (TTR) — 计算文体学中区分度最高的特征
+    # 词汇丰富度 (TTR) — 计算文体学中区分度最高的特征
     words_2char = re.findall(r'[一-鿿]{2,4}', text)
     unique_words = len(set(words_2char))
     total_words = max(len(words_2char), 1)

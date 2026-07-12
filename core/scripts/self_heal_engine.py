@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""self_heal_engine.py — MAPE-K **Analyze + Knowledge + Reflect** 层（2026-05-30 自学习能力）
+"""self_heal_engine.py — MAPE-K **Analyze + Knowledge + Reflect** 层（自学习能力）
 
 读 runtime/incidents.jsonl（posttooluse_runtime_monitor 产出）→ 错误指纹复发计数
 → 自愈知识库 self_heal_kb.json（指纹 → 根因猜测 → 推荐动作 → Reflexion lesson）。
@@ -22,9 +22,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# 2026-05-30 修（并发损坏 bug #5）：注入 scripts 目录以 import atomic_json（原子写 + file lock）。
+# 注入 scripts 目录以 import atomic_json（原子写 + file lock）。
 # self_heal_kb.json 是系统级跨项目知识库，cluster-save-state step9 多本书并发 --ingest 时是
-# read-modify-write，固定 .json.tmp 名 + 无锁 → tmp 交错损坏 + 丢计数。改走 atomic_json。
+# read-modify-write，固定 .json.tmp 名 + 无锁会导致 tmp 交错损坏 + 丢计数，须走 atomic_json。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json  # noqa: E402  原子写 + with_file_lock 读-改-写
 
@@ -119,10 +119,8 @@ def load_kb(project_root: Path) -> dict:
 def save_kb(project_root: Path, kb: dict) -> Path:
     """原子写 KB。
 
-    2026-05-30 修（并发损坏 bug #5）：旧实现自造固定 `.json.tmp` 名 → write_text → os.replace，
-    无 pid/uuid 唯一名 + 无锁。多本书并发 --ingest 时两进程同时写同一 .json.tmp → 内容交错损坏
-    （正是 atomic_json 顶部点名修过的反模式）。改走 atomic_json.atomic_write_json：tmp 名嵌
-    pid+uuid4 唯一、flush+fsync 落盘、Windows 占用重试。
+    走 atomic_json.atomic_write_json：tmp 名嵌 pid+uuid4 唯一、flush+fsync 落盘、Windows
+    占用重试——多本书并发 --ingest 时两进程若同时写同一固定 tmp 名会内容交错损坏，唯一名避免此问题。
     注意：本函数只保证「单次写」原子，不保证「读-改-写」不丢更新——后者由 cmd_ingest/cmd_resolve
     用 safe_update_json 在锁内完成。
     """
@@ -144,11 +142,9 @@ def _make_lesson(pat: dict) -> str:
 
 
 def _apply_ingest(kb, inc_path: Path, stats: dict) -> dict:
-    """纯（受控副作用：只读 incidents.jsonl）的 KB 变更函数。
-
-    2026-05-30 修（并发损坏 bug #5）：抽成本函数由 safe_update_json 在 with_file_lock 内调用，
-    使「读 KB → 累加计数 → 写回」整体在锁内完成。否则两个并发 --ingest 进程都读到旧 KB、各自
-    累加、各自写回 → 后写覆盖先写，丢对方的计数。
+    """纯（受控副作用：只读 incidents.jsonl）的 KB 变更函数，供 safe_update_json 在
+    with_file_lock 内调用，使「读 KB → 累加计数 → 写回」整体在锁内完成。否则两个并发
+    --ingest 进程都读到旧 KB、各自累加、各自写回 → 后写覆盖先写，丢对方的计数。
     offset 从锁内的 current KB 读（不在锁外预读），保证增量游标与计数严格对齐同一份 KB。
     统计结果写进 stats（new/upgraded/regressions）供调用方打印。
     """
@@ -172,8 +168,8 @@ def _apply_ingest(kb, inc_path: Path, stats: dict) -> dict:
                 inc = json.loads(line)
             except Exception:
                 continue
-            # 🔴 2026-06-17 bug-hunt 修：signature 可能是非字符串（如 int）→ 原 sig.strip 崩
-            # AttributeError·绕过 per-line tolerance 让一条毒记录整批 ingest 失败。强转 str。
+            # signature 可能是非字符串（如 int）→ 不强转会在 sig.strip 触发 AttributeError，
+            # 绕过 per-line tolerance 让一条毒记录整批 ingest 失败。强转 str。
             sig = str(inc.get("signature") or f"{inc.get('script','')}::{inc.get('error_type','')}")
             if not sig.strip(":"):
                 continue
@@ -235,8 +231,8 @@ def cmd_ingest(project_root: Path) -> int:
         print("[ingest] 无 incidents.jsonl（运行时尚无报错记录），跳过。")
         return 0
 
-    # 2026-05-30 修（并发损坏 bug #5）：整个「读 KB → 累加 → 写回」走 safe_update_json，
-    # 在 with_file_lock 内闭环。多本书并发 --ingest 时第二个进程必读到第一个进程的结果，零丢计数。
+    # 整个「读 KB → 累加 → 写回」走 safe_update_json，在 with_file_lock 内闭环。
+    # 多本书并发 --ingest 时第二个进程必读到第一个进程的结果，零丢计数。
     stats = {"new_count": 0, "upgraded": 0, "regressions": 0}
     kb = atomic_json.safe_update_json(
         _kb_path(project_root),
@@ -274,8 +270,8 @@ def cmd_suggest(project_root: Path, query: str) -> int:
 
 
 def cmd_resolve(project_root: Path, sig: str) -> int:
-    # 2026-05-30 修（并发损坏 bug #5）：resolve 也是读-改-写，走 safe_update_json 在锁内闭环，
-    # 否则与并发 --ingest 互相覆盖。found 经闭包回传决定退出码。
+    # resolve 也是读-改-写，走 safe_update_json 在锁内闭环，避免与并发 --ingest 互相覆盖。
+    # found 经闭包回传决定退出码。
     found = {"hit": False}
 
     def _apply_resolve(current):

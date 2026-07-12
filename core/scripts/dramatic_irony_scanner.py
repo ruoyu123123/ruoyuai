@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""dramatic_irony_scanner.py — W4 叙事诡计/dramatic irony 信号回查（advisory · cluster · 2026-06-15）
+"""dramatic_irony_scanner.py — 叙事诡计/dramatic irony 信号回查（advisory · cluster）
 
-【缺口】记忆调研 W4：narrator_calibrate 只校准叙事距离·不管「诡计型信息控制」·全库 0 个
+【缺口】narrator_calibrate 只校准叙事距离·不管「诡计型信息控制」·全库 0 个
 dramatic irony 检测（Grep 殊不知/浑然不知全空）。D3 蒸馏端产作者 reader_advantage_pct（上帝视角
 信息差占比基线），但 writer 写完【零回查】草稿是否体现作者的「信息差风格」（信息差流上帝视角 vs
 悬疑流双盲）。本 scanner 补检测端。
 
 【做法 · 确定性可算半边】dramatic irony 有明确中文语言标志（殊不知/浑然不知/却不知道/蒙在鼓里/
 并不知道/没意识到）。**🔬金标准实测发现**：这些是【初级 tell】——好作者用情节【展示】信息差，
-不用显式标志词说破（惊悚乐园/遮天密度全 0·诡秘最大 0.37）。故单向检测【tell 过多】（与 W1
-on-the-nose 同理：标志词高密度 = 靠说破而非展示）→ advisory「建议改 show」。
-（原双向对账 reader_adv 逻辑已废——会误判好作者:reader_adv 高但标志词本就 0=正常。）
+不用显式标志词说破（真作者原文密度普遍趋近 0）。故单向检测【tell 过多】（标志词高密度 = 靠说破
+而非展示）→ advisory「建议改 show」，不做双向对账（reader_adv 高但标志词本就 0 是正常情况，
+双向对账会误判好作者）。
 
 【北极星⑤ 顾问非法官】信息差风格是创作选择·writer 有理由偏离 → 永远 advisory，code
   DRAMATIC_IRONY_DRIFT **绝不进 audit_hub.HARD_GATE_CODES**。env DRAMATIC_IRONY_MODE shadow 默认。
@@ -34,16 +34,16 @@ DRAMATIC_IRONY = re.compile(
     r"未曾察觉|毫无察觉|全然不觉|全然不知|蒙在鼓里|做梦也没想到|"
     r"怎么也想不到|完全没料到|岂知|哪里知道|焉知|不曾想)"
 )
-# 🔬 金标准校准（2026-06-15·真作者实测）：dramatic irony 好作者用「情节展示」不用「显式标志词 tell」
-# —— 惊悚乐园/遮天前 15 章密度全 0·诡秘最大 0.37。「殊不知/浑然不知」是【初级 tell】(说破信息差)，
-# 好作者避免。所以本 scanner 单向检测【tell 过多】(像 W1 on-the-nose)·而非原设计的「信号不足」双向
+# 🔬 金标准校准（真作者实测）：dramatic irony 好作者用「情节展示」不用「显式标志词 tell」
+# ——真作者原文密度普遍趋近 0。「殊不知/浑然不知」是【初级 tell】(说破信息差)，
+# 好作者避免。所以本 scanner 单向检测【tell 过多】·而非「信号不足」双向
 # 对账(会误判好作者:reader_adv 高但标志词本就 0)。
 IRONY_TELL_FLOOR = 0.8   # 显式标志词密度超此/千字 = dramatic irony 靠 tell 而非 show（真作者最大0.37留2x余量）
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-16 切 active 放量（金标准 6 作者原文零误报实证·irony tell 真作者最大 0.11/千 vs floor 0.8·7x 余量）。
+    # 默认 active（金标准多位作者原文实测零误报·irony tell 真实密度远低于 floor 0.8）。
     m = (os.environ.get("DRAMATIC_IRONY_MODE") or "active").strip().lower()
     return m if m in ("off", "shadow", "active") else "active"
 
@@ -107,7 +107,7 @@ def scan(draft_path, project_root=None) -> dict:
     # reader_adv 仅作 report 信息参考·不作判据（金标准证好作者标志词密度≈0·与 reader_adv 无关）
     reader_adv = _author_reader_adv(project_root)
     out["author_reader_advantage_pct"] = reader_adv
-    # 单向检测：dramatic irony 显式标志词 tell 过多（好作者用 show 不用 tell·像 W1 on-the-nose）
+    # 单向检测：dramatic irony 显式标志词 tell 过多（好作者用 show 不用 tell·同 on-the-nose 直陈问题）
     msg = None
     if per_1k > IRONY_TELL_FLOOR:
         msg = (f"dramatic irony 用显式标志词 tell 过多（{per_1k}/千字 > {IRONY_TELL_FLOOR}·"

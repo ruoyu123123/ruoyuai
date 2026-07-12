@@ -4,10 +4,10 @@ consolidate_author_profile.py — 作者风格档 consumer 字段确定性规整
 
 北极星：①贴合作者风格 ⑤ advisory（不黑箱）⑥ 别过度复杂（纯 stdlib·复用 style_analyzer）。
 
-【为什么】（2026-06-01 · 照顾弱模型驱动系统）
+【为什么】（照顾弱模型驱动系统）
   蒸馏综合 agent 自由写 作者风格.json 的 quantitative/narrative_* schema，与系统多个 consumer
   （build_manifest D1/D3/D5 · validate_style 段长/对话 band · skill_contract_table）期望的标准
-  键格式不符 → 契约债成簇（强模型尚且乱，弱模型必崩）。本模块把 consumer 关键**数值字段**改为
+  键格式不符 → 契约债成簇（强模型尚且乱，弱模型必崩）。本模块把 consumer 关键**数值字段**交给
   **确定性脚本聚合**（从单章 metrics + dim），不靠 agent 自由写——agent 只负责创意（golden /
   风格标签 / core_style_signature），数值 schema 由脚本保证标准。
 
@@ -84,7 +84,7 @@ def _detect_total(dist_dir: Path) -> int:
 
 
 def _dig(d, *keys):
-    """安全取嵌套数值，返回 float or None（C4 G6 genre diff 摊平用）。"""
+    """安全取嵌套数值，返回 float or None（G6 genre diff 摊平用）。"""
     cur = d
     for k in keys:
         if isinstance(cur, dict) and k in cur:
@@ -141,7 +141,7 @@ def aggregate_quantitative(project: Path, total: int) -> dict:
     orig = project / "原文"
     sent_means, sent_stds, dia, ssr, para_means, ccs, imr = [], [], [], [], [], [], []
     ttr, hapax = [], []
-    dor = []   # #2轮穷尽核查: dialogue_only_ratio（剔除引号化独白的纯对话占比·producer 已算却被聚合丢弃）
+    dor = []   # dialogue_only_ratio：剔除引号化独白后的纯对话占比
     punct: dict[str, list[float]] = defaultdict(list)
     fw: dict[str, list[float]] = defaultdict(list)
 
@@ -184,8 +184,7 @@ def aggregate_quantitative(project: Path, total: int) -> dict:
             hapax.append(float(vr["hapax_ratio"]))
 
     # 段长 band：章段均(para_means)**分窗 p95 取 max**·与 validate_style 段均 band 同量纲。
-    # 2026-06-01 增量修(L4.14 卷型差异化·真作者保护)：全局 p95 会被多 batch 增量的后期短段卷型
-    # 拉低(惊悚 ch1-250 段均 p95=72 / ch251-500=56 / 全局=66)→ band 上界缩小→误伤前期长段章。
+    # 全局 p95 会被多卷型混合的后期短段卷型拉低，导致 band 上界缩小、误伤前期长段章；
     # 分窗(每~1/4 章)取各窗 p95 的 max→覆盖最长卷型段长(前期长段不被后期抹平)·p5 取各窗 min(短段保护)。
     para_q = None
     if len(para_means) >= 2:
@@ -236,13 +235,13 @@ def aggregate_quantitative(project: Path, total: int) -> dict:
     if _mean(imr) is not None:
         q["inner_monologue_ratio"] = {"mean": _mean(imr)}  # build_manifest D1 基线
     if _mean(dor) is not None:
-        # #2轮: 纯对话占比(剔引号化独白)·纠偏 dialogue_ratio 高估(真机惊悚 1000 章 0.32 vs 0.21·gap=inner_monologue)
+        # 纯对话占比(剔引号化独白)，纠偏 dialogue_ratio 相对内心独白的高估
         q["dialogue_only_ratio"] = {"mean": _mean(dor)}
     ttr_m, hapax_m = _mean(ttr), _mean(hapax)
     if ttr_m is not None or hapax_m is not None:
         q["vocab_richness"] = {"ttr_mean": ttr_m, "hapax_mean": hapax_m}
         q["vocabulary_richness"] = {"type_token_ratio": ttr_m, "hapax_ratio": hapax_m}
-    diff = _genre_baseline_diff(q)   # C4 G6：作者 vs 通用兜底基线的方向性 diff（advisory·兜底非权威）
+    diff = _genre_baseline_diff(q)   # G6：作者 vs 通用兜底基线的方向性 diff（advisory·兜底非权威）
     if diff:
         q["vs_generic_baseline"] = diff
     return q
@@ -256,7 +255,7 @@ def aggregate_narrative(project: Path, total: int) -> tuple[dict, dict, dict]:
     depth: Counter = Counter()
     opening: Counter = Counter()
     ending: Counter = Counter()
-    # 阶段0 新增：补聚合 dim33/42/46/30（此前漏聚合·骨①骨②的确定性底座）
+    # 阶段0：聚合 dim33/42/46/30，作为阶段1/阶段2 聚合的确定性底座
     tech: Counter = Counter()          # dim42 叙事技巧指纹（技巧类型分布）
     scene_q: Counter = Counter()       # dim46 场景结构质量（A/B/C/D 分布·仿 dim47）
     subtext_count = 0                  # dim30 留白潜台词（实例总数→密度）
@@ -370,7 +369,7 @@ def _tension_type_bucket(s: str) -> str:
 
     suspense=读者已知危险等它爆 / curiosity=先抛结果勾读者想知道为什么 /
     surprise=withhold 后反转打脸预期。无法判 → 未分类（不计入占比分母·保守不误分类）。
-    受控码（D2 新 schema 的 tension_type）直通；旧 surface 自由钩名/中文描述走关键词映射兜底。
+    受控码（D2 schema 的 tension_type）直通；surface 自由钩名/中文描述走关键词映射兜底。
     """
     s = s or ""                      # 防 None：后续 `kw in s` 子串匹配需非 None
     t = s.strip().lower()
@@ -428,12 +427,12 @@ def _tension_stats(series_list: list) -> dict:
     return out
 
 
-# R7 W2 Batch-E：情感弧 fractal 指纹（Hurst + ApEn · 作者 ECDF band·绝不设通用阈值）
+# 情感弧 fractal 指纹（Hurst + ApEn · 作者 ECDF band·绝不设通用阈值）
 _FRACTAL_MIN_POINTS = 30   # 单 cluster 张力点 <30 → 降级（北极星⑤）
 
 
 def _lag1_autocorrelation(series) -> float | None:
-    """lag-1 自相关 r1·affective inertia 度量(R19 W8 Batch-Y 扩).
+    """lag-1 自相关 r1·affective inertia 度量.
 
     r1 ∈ [-1,1]·>0 长情感惯性(下个点像上个) / ≈0 独立 / <0 反相关震荡.
     样本 < _FRACTAL_MIN_POINTS 或方差 0 → None.
@@ -462,7 +461,7 @@ def _sentiment_arc_fractal(series_list: list) -> dict:
     series_list：[ [(pct, tension), ...], ... ]（aggregate_rhythm 现有 tension_all）。
     单 cluster < _FRACTAL_MIN_POINTS 点不算（噪声）→ 不入 band。
     分布 < 2 个有效 cluster → 返回空 dict（不发布·调用方走 fallback）。
-    R19 W8 Batch-Y 扩 affective_inertia: lag-1 自相关·情感惯性度量·与 Hurst(长程)/ApEn(复杂度)正交.
+    affective_inertia(lag-1 自相关·情感惯性度量)与 Hurst(长程)/ApEn(复杂度)正交.
     """
     hurst_vals: list[float] = []
     apen_vals: list[float] = []
@@ -552,7 +551,7 @@ def aggregate_rhythm(project: Path) -> dict:
             if pts:
                 tension_all.append(pts)
             # D2 三向度张力机制(suspense/curiosity/surprise)：单 cluster 有效 type 点 <3
-            # 标 low_confidence 不计入（占比需跨 cluster 累积·避免单块方差污染·G3 约定）
+            # 标 low_confidence 不计入（占比需跨 cluster 累积·避免单块方差污染）
             cluster_tt: Counter = Counter()
             for p in tc:
                 if isinstance(p, dict):
@@ -583,7 +582,7 @@ def aggregate_rhythm(project: Path) -> dict:
         out["scene_turn_ratio"] = round(turn_yes / turn_total, 3)
     if tension_all:
         out["tension_trajectory"] = _tension_stats(tension_all)
-        # R7 W2 Batch-E：Hurst + ApEn 情感弧 fractal band（cluster<30 句降级·空则不发布）
+        # Hurst + ApEn 情感弧 fractal band（cluster<30 句降级·空则不发布）
         frac = _sentiment_arc_fractal(tension_all)
         if frac:
             out["sentiment_arc_fractal"] = frac
@@ -682,7 +681,7 @@ def aggregate_knowledge_gap(project: Path) -> dict:
 
     只收 confidence!='low' 的点·Counter gap_code(reader_adv/reader_disadv/double_blind)→占比 +
     reader_advantage_pct(D3 验证锚·信息差流 vs 悬疑作者区分)。单 cluster 有效点<3 标 low_confidence
-    不计入(占比需跨 cluster 累积·防方差爆)。旧格式(dim32 是 str)→ isinstance(dict) 守卫降级不计数(向后兼容)。
+    不计入(占比需跨 cluster 累积·防方差爆)。dim32 为 str 自由文本 → isinstance(dict) 守卫不计数。
     """
     dist = project / "蒸馏进度"
     surfaces = sorted(dist.glob("cluster_*_surface.json"))
@@ -697,7 +696,7 @@ def aggregate_knowledge_gap(project: Path) -> dict:
             continue
         dim32 = dims.get("dim32_信息差管理")
         cluster_gap: Counter = Counter()
-        if isinstance(dim32, dict):   # 新格式（旧 str 自由文本格式跳过·向后兼容）
+        if isinstance(dim32, dict):   # dict 形态才计数（str 自由文本跳过）
             for pt in dim32.get("per_point") or []:
                 if not isinstance(pt, dict) or pt.get("confidence") == "low":
                     continue
@@ -723,7 +722,7 @@ def aggregate_knowledge_gap(project: Path) -> dict:
 
 
 def aggregate_register_tier_baseline(project: Path) -> dict:
-    """L18 Le Guin register drift baseline（2026-06-20 · R8 W4 Batch-F）。
+    """L18 Le Guin register drift baseline。
 
     作者原文里"漂移词"（当代俚语 + 现代管理黑话 + 高语域古风词）的自然密度·
     供 world_register_drift_scanner 当 floor（作者自己就用过 K/千字 → 别报）。
@@ -818,7 +817,7 @@ def aggregate_register_tier_baseline(project: Path) -> dict:
 
 
 def aggregate_duration_mix(project: Path) -> dict:
-    """L22 Genette 五型时长比 baseline (2026-06-20 · R8 W4 Batch-H)。
+    """L22 Genette 五型时长比 baseline。
 
     作者原文按句末符号切句·复用 duration_mix_scanner 的同套规则分类·每章计五型 pct·
     跨章 mean+std 作为 duration_mix_baseline·供 duration_mix_scanner 当 z-band 基线。
@@ -887,7 +886,7 @@ def aggregate_duration_mix(project: Path) -> dict:
 
 
 def aggregate_narrative_seq(project: Path) -> dict:
-    """#4（2026-06-16 穷尽核查）：作者签名因果功能链 narrative_function_sequence。
+    """作者签名因果功能链 narrative_function_sequence。
 
     producer style_analyzer.score_narrative_function_sequence（纯启发式 z-score + n-gram·非空才写）：
     从作者原文多章提取叙事功能序列 + 签名 bigram/trigram（face_slap→gain_reward 等因果链·比通用
@@ -922,10 +921,11 @@ def aggregate_narrative_seq(project: Path) -> dict:
     return result
 
 
-# 🔴 2026-06-27 C14①：作者档数值契约核心 consumer 键（build_manifest/validate_style 做 band 门控硬依赖）。
-# 这些键缺失 → consumer 静默退通用兜底基线（弱模型被推成流水账·惊悚乐园翻车根因）。total>0（有章可聚合）
+# 作者档数值契约核心 consumer 键（build_manifest/validate_style 做 band 门控硬依赖）。
+# 这些键缺失 → consumer 静默退通用兜底基线，弱模型的产出被推向流水账化。total>0（有章可聚合）
 # 却缺任一 = 源 metrics schema 漂移（producer 写错）→ 响亮 [FATAL] exit2，绝不静默写半残档。
-# 只断言键 PRESENCE + 来自真 metrics·**绝不断言数值落区间**（高方差作者句长 31 也合法·防题材先验误杀·北极星④⑤）。
+# 只断言键 PRESENCE + 来自真 metrics·**绝不断言数值落区间**（高方差作者的句长均值也可能显著偏离通用基线，
+# 防止题材先验误杀·北极星④⑤）。
 def _missing_consumer_keys(q: dict) -> list[str]:
     missing: list[str] = []
     if not (isinstance(q.get("sentence_length"), dict) and q["sentence_length"]):
@@ -964,7 +964,7 @@ def consolidate(project: Path, total: int) -> dict:
     reg_tier = aggregate_register_tier_baseline(project)   # L18：Le Guin register drift baseline（非空才写）
     duration_mix = aggregate_duration_mix(project)         # L22：Genette 五型时长比 baseline（非空才写）
 
-    # 🔴 2026-06-27 C14①：写盘前自断言核心 consumer 契约键齐全（缺 → [FATAL] exit2·绝不静默写半残档）
+    # 写盘前自断言核心 consumer 契约键齐全（缺 → [FATAL] exit2·绝不静默写半残档）
     _assert_consumer_contract(q, total)
 
     targets = [project / "作者风格.json", project / "作者风格_FINAL.json"]

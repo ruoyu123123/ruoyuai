@@ -29,7 +29,7 @@ import os
 import re
 import subprocess
 import sys
-from frozen_util import child_python  # frozen-aware 子解释器（M4·dev=no-op）
+from frozen_util import child_python  # frozen-aware 子解释器（dev=no-op）
 import time
 from pathlib import Path
 
@@ -37,17 +37,17 @@ from pathlib import Path
 CWD = Path(__file__).resolve().parent
 DISTILL_REPLICATE = CWD / "distill_replicate.py"
 CLUSTER_EVALUATOR = CWD / "cluster_evaluator.py"
-STYLE_EVALUATOR = CWD / "style_evaluator.py"  # 🔴 2026-06-27 C01 SFS 出货闸
+STYLE_EVALUATOR = CWD / "style_evaluator.py"  # SFS 出货闸
 
 
 # ============ 简化 cluster_arc 估算（不依赖 章节/ 目录） ============
 
-# 情绪关键词（粗暴版 fallback · 用 narrative_scanner 同一套思路）· _estimate_emotion 现优先
+# 情绪关键词（粗暴版 fallback · 用 narrative_scanner 同一套思路）· _estimate_emotion 优先
 # 走 VAD 模型 valence（RUOYU_NN_VAD 门控·见 _model_window_valence），本词典仅模型不可用时兜底
 POSITIVE_EMOTIONS = ["笑", "喜", "兴奋", "释然", "得意", "畅快", "胜利", "成功", "踏实"]
 NEGATIVE_EMOTIONS = ["怒", "怕", "颤", "崩", "绝望", "痛", "悔", "恨", "悲", "冷", "寒"]
-# 2026-05-29 修：原列表含「可」「却」高频单字 → 章末统计被普通行文噪声淹没，钩子维度失真
-# （且 --strict 会据此 exit 2 误拦 plan）。换成强 cliffhanger 信号词（转折/意外），去掉单字噪声。
+# KICKER_KEYWORDS 只用强 cliffhanger 信号词（转折/意外），不用「可」「却」这类高频单字——
+# 单字会被普通行文噪声淹没，钩子维度失真（且 --strict 会据此 exit 2 误拦 plan）。
 KICKER_KEYWORDS = ["然而", "突然", "竟然", "居然", "不料", "没想到", "岂料", "..."]  # cliffhanger 触发词（注意 ... 三连点）
 KICKER_PUNCT = ["？", "……", "──"]
 
@@ -108,7 +108,7 @@ def _chapter_emotion_windows(chapter_text: str) -> list:
 def _estimate_emotion(chapter_text: str) -> float:
     """估算章节情绪值 (0-1)：VAD valence 模型优先（模型 valence 本就是 0=全负/1=全正的
     同一语义空间，直接取窗口均值·RUOYU_NN_VAD 门控）；不可用 → 回退正向-负向关键词占比
-    （粗暴版·原逻辑零回归）。"""
+    （粗暴版兜底）。"""
     model_valence, _model_count = _model_window_valence(_chapter_emotion_windows(chapter_text))
     if model_valence is not None:
         return model_valence
@@ -188,33 +188,29 @@ def estimate_cluster_arc(replica_txt: str, cluster_id: str, n_chapters: int) -> 
 
 # 可估算 strict 维：kicker 钩子分布(3) / scene 场景概述比(4)。
 # 排除 continuity(2)/voice_pack(5)（恒中性，不喂 gen 侧）+ emotion(1)（valence vs intensity 轴错配，
-# cosine 无测量学意义 · 2026-05-30 修 #5）+ arc 形状(0)（2026-06-01 修 #6，见下）。
+# cosine 无测量学意义）+ arc 形状(0)（见下）。
 # 索引须与 cluster_evaluator.DIM_LABELS 顺序对齐。
 #
-# 2026-06-01 修 #6：arc 形状(0) 移出 strict。matched_reagan_shape 从 estimate emotion_curve
-# 拟合（_match_reagan_shape），与已移出的 emotion(1) 同源不可靠。金标准三重验证（distill_finalize_verify
-# 对 惊悚乐园 auto_001 复刻 / auto_002 复刻 / 原文 ch1-6 自比）：estimate 拼接文本拟合 shape 恒 Icarus，
-# 而聚合 cluster_arc 为 Cinderella / Man-in-a-Hole → arc 全 0.0。连真原文自比都 FAIL = estimate-shape
-# vs 聚合-shape 方法论系统性不对等，arc 不该做 strict hard 维。kicker(3) 保留：auto_002 复刻 + 原文自比
-# 均 PASS（gen=18=ref）证明 estimate 对 kicker 可靠（auto_001 复刻 gen=5 是该 cluster 钩子密度真实
-# 个例差距，非工具失效）。
+# arc 形状(0) 不进 strict：matched_reagan_shape 从 estimate emotion_curve 拟合
+# （_match_reagan_shape），与同被排除的 emotion(1) 同源不可靠——estimate 拼接文本拟合的 shape
+# 与聚合 cluster_arc 的真实 shape 方法论系统性不对等，连真原文自比都会 FAIL，故不做 strict
+# hard 维。kicker(3) 在列：estimate 对 kicker 的判断可靠，个例差距是钩子密度真实差异，
+# 非工具失效。
 STRICT_ESTIMABLE_IDX = (3, 4)
 
-# 2026-06-08 修 #7（reasoning 模型回灌深修）：reasoning gen-model（active profile thinking_level
-# 非空，如 gemini-3.x pro-preview）下，distill_replicate 把整 cluster 复刻成「叙述浓缩版」
-# （诡秘 auto_009 实测 9273 字 vs 全本 6 章 ~21k），章末 cliffhanger 信号被压缩稀释 → kicker
-# estimate 系统性偏低（auto_009：ref_total=18 vs gen_total=3，cosine 0.548）。这与已移出 strict 的
-# arc(0) 同源（estimate 拼接浓缩文本不可靠）。故 reasoning 下 kicker(3) 也移出 strict，仅看 scene(4)
-# （scene 比是密度比值·对浓缩鲁棒，auto_009 实测 0.823 PASS）。arc/kicker 的真实验证 defer 到
-# gen_writer 写作端（freestyle 全本字数正常·钩子密度真实可测）。
-# 非 reasoning 模型（flash 等，thinking_level=None）字数正常，仍用 STRICT_ESTIMABLE_IDX 含 kicker。
+# reasoning gen-model（active profile thinking_level 非空，如 gemini-3.x pro-preview）下，
+# distill_replicate 会把整 cluster 复刻成「叙述浓缩版」，章末 cliffhanger 信号被压缩稀释 →
+# kicker estimate 系统性偏低。这与被排除的 arc(0) 同源（estimate 拼接浓缩文本不可靠）。
+# 故 reasoning 下 kicker(3) 也不进 strict，仅看 scene(4)（scene 比是密度比值，对浓缩鲁棒）。
+# arc/kicker 的真实验证 defer 到 gen_writer 写作端（freestyle 全本字数正常·钩子密度真实可测）。
+# 非 reasoning 模型（flash 等，thinking_level=None）字数正常，用 STRICT_ESTIMABLE_IDX 含 kicker。
 STRICT_ESTIMABLE_IDX_REASONING = (4,)
 
 
 def strict_idx_for_thinking_level(thinking_level: str | None) -> tuple[tuple[int, ...], bool]:
     """纯函数：按 gen-model thinking_level 决定 strict 可估算维集合。
 
-    reasoning（thinking_level 非空）→ (4,) 仅 scene（kicker 浓缩复刻失真·同 arc 移出）。
+    reasoning（thinking_level 非空）→ (4,) 仅 scene（kicker 浓缩复刻失真·同 arc 排除）。
     非 reasoning（None/空）→ (3,4) 含 kicker。
     返回 (estimable_idx, is_reasoning)。
     """
@@ -263,19 +259,19 @@ def strict_gate_decision(report: dict | None,
     return strict_ok, estimable
 
 
-# ============ 🔴 2026-06-27 C01：SFS 出货闸（纯函数 · 可测） ============
+# ============ SFS 出货闸（纯函数 · 可测） ============
 #
-# 根因：本 verifier 此前只调 cluster_evaluator（arc/kicker/scene 6 维），**完全不看 SFS** ——
-# STRICT_ESTIMABLE_IDX_REASONING=(4,) 把五维风格保真度全移出 strict → SFS=40 跑飞的 skill
-# 也能正常出货污染全书。C01 补一道 SFS 出货闸：对「实际出货的 skill_FINAL 复刻」重测 SFS。
+# cluster_evaluator（arc/kicker/scene 6 维）不测风格保真度——strict 可估算维
+# （STRICT_ESTIMABLE_IDX*）不含风格保真度，SFS 严重偏低的 skill 仍可能正常出货污染全书。
+# 本节的 SFS 出货闸对「实际出货的 skill_FINAL 复刻」重测 SFS。
 #
 # 北极星护栏（铁律）：
-#  ① 绝不做绝对 SFS≥80 hard-lock（单次方差 std≈5.56·reasoning 模型系统性压低·诡秘 88.35 /
-#     轮回乐园 / 蛊真人 B 级均正常出货）。hard 档只在【灾难性坍缩】触发：SFS < floor 或 grade==D。
+#  ① 绝不做绝对 SFS≥80 hard-lock（单次方差大·reasoning 模型系统性压低·多部真实作品 B 级
+#     均正常出货）。hard 档只在【灾难性坍缩】触发：SFS < floor 或 grade==D。
 #  ② floor 用相对锚 max(绝对地板 55, v0_sfs×0.85)，不用平直 ΔSFS<ε。
 #  ③ 55-80 健康但低于目标 band → 恒 advisory（写 report 放行，绝不拦）。
-#  ④ SFS 测的对象必须对齐【实际出货的 skill】（修「ship v1 却只有 v0 SFS」错配）——
-#     故对 skill_FINAL 的 verify 复刻重跑 style_evaluator，而非读旧 eval_v0。
+#  ④ SFS 测的对象必须对齐【实际出货的 skill】——对 skill_FINAL 的 verify 复刻重跑
+#     style_evaluator，而非读旧 eval_v0（避免「出货 v1 却只测过 v0 SFS」的错配）。
 CATASTROPHIC_SFS_FLOOR = 55.0   # SFS 灾难性坍缩绝对地板（低于 = 风格完全没复刻出来）
 SFS_TARGET_BAND_LOW = 80.0      # 健康目标 band 下沿（B 级·仅 advisory·绝非 hard-lock）
 SFS_V0_REL_FLOOR_RATIO = 0.85   # 相对 v0 暴跌锚（v0×0.85·防 reflect 把 skill 改坏）
@@ -410,13 +406,13 @@ def run_cluster_evaluator(ref_arc: Path, gen_arc: Path, output: Path,
     return r.returncode, report
 
 
-# 🔴 2026-06-27 C01
 def run_sfs_gate(replica_path: Path, project: Path, verify_dir: Path,
                  v0_eval_path: Path | None = None) -> tuple[str, dict]:
     """对【出货 skill 的复刻】重跑 SFS（multi-ref·铁律 feedback_distill_sfs_multi_ref）+ 三档判定。
 
     replica_path = 步骤 1 用 skill_FINAL 实打 gen-model 的复刻（= 实际出货 skill 的产物 ·
-    对齐北极星④，修「ship v1 却只有 v0 SFS」错配）。v0_eval_path = step4 的 eval_v0.json（取相对 floor 锚）。
+    对齐北极星④，避免「出货 v1 却只测过 v0 SFS」的错配）。v0_eval_path = step4 的 eval_v0.json
+    （取相对 floor 锚）。
 
     infra 失败（原文缺/style_evaluator 崩/SFS 不可解析）→ verdict="unknown" 不阻断（真闸在 cluster 维）。
     """
@@ -553,18 +549,18 @@ def main():
 
     # ===== 步骤 3：调 cluster_evaluator.py 6 维比对 =====
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    # 2026-05-30 北极星复审：不透传 --strict 给子评分器——本 verifier 的 estimate_cluster_arc 只产
+    # 不透传 --strict 给子评分器——本 verifier 的 estimate_cluster_arc 只产
     # 4 维（arc/emotion/kicker/scene），cluster_evaluator「6 维全过才 PASS」下 dim2(continuity)/
     # dim5(voice_pack) 因无 gen 侧数据恒中性 <0.7 → 永远 WARN → strict 永远 exit2 = 出货 plan 死锁。
-    # 让子评分器只产报告（exit0），由父进程按【可估算 3 维 arc/kicker/scene】重判 strict 闸门
-    # （见步骤 5；emotion 因 valence/intensity 轴错配 2026-05-30 移出 strict）。
+    # 让子评分器只产报告（exit0），由父进程按可估算维（resolve_strict_estimable_idx）重判
+    # strict 闸门（见步骤 5；emotion 因 valence/intensity 轴错配不进 strict）。
     exit_code, report = run_cluster_evaluator(
         ref_arc_path, gen_arc_path, args.output,
         ref_cont=ref_cont_path, ref_char_dir=ref_char_dir,
         strict=False,
     )
 
-    # 解析 strict 闸门策略（reasoning 模型移出 kicker · 修#7）——先解析以便写入 metadata。
+    # 解析 strict 闸门策略（reasoning 模型移出 kicker）——先解析以便写入 metadata。
     # profile 不可读即配置破损；strict 出货不能退默认。
     try:
         strict_idx, is_reasoning, strict_note = resolve_strict_estimable_idx()
@@ -594,8 +590,8 @@ def main():
                                 encoding="utf-8")
 
     # ===== 步骤 5：按【可估算维】重判 strict 闸门 =====
-    # arc(0) 已移出（修#6·estimate-shape 金标准三重 FAIL）。reasoning 模型（thinking_level 非空）
-    # 再移出 kicker(3)（修#7·浓缩复刻稀释钩子），仅看 scene(4)；非 reasoning 仍含 kicker(3)+scene(4)。
+    # arc(0) 不计入（estimate-shape 系统性不可靠）。reasoning 模型（thinking_level 非空）
+    # 连 kicker(3) 也不计入（浓缩复刻稀释钩子），仅看 scene(4)；非 reasoning 含 kicker(3)+scene(4)。
     strict_ok, estimable = strict_gate_decision(report, estimable_idx=strict_idx)
     est_pass = [r for r in estimable if r.get("passes")]
     est_dims = [r.get("dim", "?") for r in estimable]
@@ -604,7 +600,7 @@ def main():
     print(f"         strict 策略: {strict_note}", file=sys.stderr)
     print(f"         报告: {args.output}", file=sys.stderr)
 
-    # ===== 步骤 5.5（🔴 2026-06-27 C01）：SFS 出货闸 =====
+    # ===== 步骤 5.5：SFS 出货闸 =====
     # 对【出货 skill_FINAL 的复刻】重测 SFS（multi-ref·铁律）。灾难性坍缩（<floor 或 grade==D）
     # 且 --strict → exit 2 拦在出货前；健康但 <80 band → advisory 放行（绝不 hard-lock·北极星①）。
     v0_eval_path = project / "对比报告" / "eval_v0.json"
@@ -623,7 +619,7 @@ def main():
             print(f"[verify] SFS advisory: {sfs_detail.get('note', '')}", file=sys.stderr)
         print(f"[OK · PASS] 写作端回灌（strict 可估算维全过 + SFS 未坍缩）· 允许 plan_tracker end",
               file=sys.stderr)
-        # 2026-06-19：蒸馏完成后自动沉淀知识到本地库（MAPLE 闭环）
+        # 蒸馏完成后自动沉淀知识到本地库（MAPLE 闭环）
         try:
             import knowledge_collector as _kc
             _kc.collect_from_distill(Path(project))

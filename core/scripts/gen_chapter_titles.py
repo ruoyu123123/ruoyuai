@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-gen_chapter_titles.py — splitter 后调 gen-model 为每章生成网文化章标题（v2 · 三档混合策略）
+gen_chapter_titles.py — splitter 后调 gen-model 为每章生成网文化章标题（三档混合策略）
 
-# 网文章标题策略（基于 2026-05 调研，《BookC》《饲养全人类》《十日终焉》《斩神》70 章样本）
+# 网文章标题策略（基于调研，《BookC》《饲养全人类》《十日终焉》《斩神》70 章样本）
 
 | 档 | 比例 | 字数 | 用途 | 例 |
 |---|---|---|---|---|
@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from gen_model_loader import GenModelLoader, GenModelConfigError, reasoning_extra_body
 try:
-    import cluster_lookup  # 2026-05-29 复审修复：SC-1 blueprint list 归一守卫
+    import cluster_lookup  # blueprint list 归一守卫
 except Exception:  # 防御：缺模块退回原 dict 守卫
     cluster_lookup = None
 
@@ -83,7 +83,7 @@ def strip_existing_title(text: str) -> str:
     return text
 
 
-# 🔴 G3 e2e (2026-06-23) fix #3：storyboard hint 是「大纲指令/场景描述文本」(如
+# 🔴 storyboard hint 是「大纲指令/场景描述文本」(如
 # 「倒叙强冲突开场。铁十字街一间逼仄昏暗的出租屋里，主角顶着占卜…」)，**不是章标题**。
 # 标题 gen 失败(间歇 500/EMPTY_RESPONSE)时绝不能把它原样当标题写进正文。下面两个
 # helper 负责：① 判定 hint 是否「干净到能当标题」；② 失败时给干净 fallback。
@@ -138,7 +138,7 @@ def classify_tier(ch: int, changes: dict, high_set: set[int]) -> str:
 
 
 def _load_title_style(project: Path) -> dict | None:
-    """v22.4dim N5：从风格库读 title_style.json，做 per-book 校准。"""
+    """从风格库读 title_style.json，做 per-book 校准。"""
     style_path = project / "_数据库" / "作者风格.json"
     if not style_path.exists():
         return None
@@ -162,7 +162,7 @@ def _load_title_style(project: Path) -> dict | None:
 def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
                    tier: str, history_titles: list[str], title_style: dict | None = None) -> str:
     from openai import OpenAI
-    # v22.gov.align.notrunc 全局规则：不节省 token · 全量传 body 给 LLM
+    # 全局规则：不节省 token · 全量传 body 给 LLM
     body_sample = body
     history_str = '、'.join(f"「{t}」" for t in history_titles[-20:]) if history_titles else '（无）'
 
@@ -172,7 +172,7 @@ def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
         'high': "8-14 字句子/对话钩子（绝对高潮章用，可以是动作描述/对话片段/反差，对标《斩神》「你可以叫我……林医生」）",
     }[tier]
 
-    # v22.4dim N5：per-book 校准段（如果有风格库 title_style.json）
+    # per-book 校准段（如果有风格库 title_style.json）
     perbook_calibration = ""
     if title_style and not title_style.get("error"):
         td = title_style.get("tier_distribution_pct", {})
@@ -247,12 +247,12 @@ def gen_one_title(loader: GenModelLoader, ch: int, body: str, hint: str,
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=8000,  # 2000→8000：reasoning 模型 thinking 占预算·留够正文(章标题短·8000 够 thinking+标题)
+            max_tokens=8000,  # reasoning 模型 thinking 占预算·留够正文(章标题短·8000 够 thinking+标题)
             temperature=0.8,
             **({"extra_body": _xb} if _xb else {}),
         )
         raw = resp.choices[0].message.content.strip()
-        # v23.13 (2026-05-21) 反元话语后处理 —— DeepSeek 等 reasoning model 易输出
+        # 反元话语后处理 —— DeepSeek 等 reasoning model 易输出
         # 「好的，」「我们被要求」「让我」「首先」「这是」等思考链片段，必须剥离
         # 策略：按行/句切，过滤含元话语关键词的行，取最后一行/最短的标题候选
         META_PATTERNS = [
@@ -298,7 +298,7 @@ def main():
     args = parser.parse_args()
 
     project = Path(args.project).resolve()
-    # 🔴 v27 pending_tail 守卫（2026-06-17 真 API e2e 抓出）：整稿 < 单章下限时 splitter 切 0 章·
+    # 🔴 pending_tail 守卫：整稿 < 单章下限时 splitter 切 0 章·
     # 全退 pending_tail 等下 cluster 拼接（chapter_range=[]）→ data_flow 回填 --chapters "[]"/空。
     # 本 cluster 无章可命名 → no-op 放行（绝不让 parse_chapters("[]") 的 int("[]") 崩溃整条管线）。
     _raw_chapters = (args.chapters or "").strip().strip("[]").strip()
@@ -327,9 +327,8 @@ def main():
     except (json.JSONDecodeError, OSError) as e:
         print(f"[ERROR] 进度.json 读取失败: {e}", file=sys.stderr)
         sys.exit(2)
-    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-    # 2026-05-29 复审修复：SC-1 — cluster_blueprint 可能是 list（城南实测），裸 .items()
-    # 会 AttributeError 崩。读 hint 用 normalize_blueprint 归一成 dict 再迭代。
+    # cluster 模式只读 cluster_blueprint。cluster_blueprint 可能是 list（而非 dict），
+    # 裸 .items() 会 AttributeError 崩——读 hint 前用 normalize_blueprint 归一成 dict 再迭代。
     if cluster_lookup is not None:
         _bp = cluster_lookup.normalize_blueprint(progress)
     else:
@@ -344,7 +343,7 @@ def main():
             if isinstance(p, dict) and 'ch' in p:
                 hint_map[p['ch']] = p.get('title', '')
 
-    # v22.4dim N5：加载 per-book title_style 校准
+    # 加载 per-book title_style 校准
     title_style = _load_title_style(project)
     if title_style:
         td = title_style.get("tier_distribution_pct", {})
@@ -381,11 +380,11 @@ def main():
         print(f"  {marker} ch{ch} [{tier}]: 「{title}」 (hint:「{hint}」)")
 
     if not args.dry_run and new_titles:
-        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只写 cluster_blueprint
-        # 2026-05-29 复审修复：SC-1 — 写回必须 in-place 改持久化对象（normalize_blueprint
-        # 会新建 dict，改它不落盘）。故直接按 cluster_blueprint 真实形态原地改：
+        # cluster 模式只写 cluster_blueprint。写回必须 in-place 改持久化对象
+        # （normalize_blueprint 会新建 dict，改它不落盘）。故直接按 cluster_blueprint
+        # 真实形态原地改：
         #   dict → 遍历各 cluster 的 scene_storyboard
-        #   list（城南遗留逐章 scene 记录）→ 直接遍历列表项
+        #   list（逐章 scene 记录的旧项目遗留形态）→ 直接遍历列表项
         _raw_bp = progress.get('cluster_blueprint')
 
         def _apply_title(cp):

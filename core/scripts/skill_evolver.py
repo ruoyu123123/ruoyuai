@@ -1,14 +1,14 @@
-"""skill_evolver.py — AutoSkill 风格写作经验自动演化（v22 SE1）
+"""skill_evolver.py — AutoSkill 风格写作经验自动演化
 
 业界 arxiv 2603.01145 AutoSkill：crystallize 经验为 versioned skill artifacts。
-我们的 写作经验.json 当前是 flat list，升级为有生命周期的 skill：
-- 每条 pattern 加 version / evolution_history / usage_count / last_validated_at / confidence
+把 写作经验.json 的 pattern 维护成有生命周期的 skill：
+- 每条 pattern 带 version / evolution_history / usage_count / last_validated_at / confidence
 - 自动 evolve：合并相似 patterns / 提炼通用规则 / 淘汰长期未用
 
 4 个能力：
 1. evolve: 合并相似 (token 级 Jaccard > 0.6·producer 真填字段·空 blob 不并) + 提炼共性 + version+1
 2. promote: usage_count >= 5 + confidence >= 0.8 → 升 universal_skill_pool
-   · transfer_scope filter（2026-05-31 · 防跨项目负迁移）：升级前按 scope 过滤——
+   · transfer_scope filter（防跨项目负迁移）：升级前按 scope 过滤——
      通用工艺（节奏/结构/钩子）才跨项目，作者 idiolect 特异（口癖/签名词/特有遣词/角色名）
      锁本地。advisory（pattern 自带 transfer_scope 字段以其为准）· env 默认 active。
 3. retire: last_validated_at > N 章未触发 → 标 retired
@@ -29,13 +29,12 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-# 2026-05-30 修[#6]：注入 scripts 目录以 import atomic_json（写作经验.json 原子写）
+# 注入 scripts 目录以 import atomic_json（写作经验.json 原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
 
-# 2026-05-29 cluster 化：cluster 模式下「章阈值」语义改为「cluster 序号阈值」。
-# cluster_lookup 把 cluster key → 末章号，从而沿用按章计的 last_validated_at_ch 比较
-# （retire 的「N 章未验证」改成「N 个 cluster 未验证」时也复用 cluster→末章映射）。
+# cluster 模式下按「cluster 序号阈值」语义：cluster_lookup 把 cluster key 解析成末章号，
+# retire 的「N 个 cluster 未验证」复用这个 cluster→末章映射，与按章计的 last_validated_at_ch 比较。
 try:
     import cluster_lookup as _cl  # noqa: E402
 except Exception:  # pragma: no cover - 防御性
@@ -52,9 +51,9 @@ def load_json(p: Path, default=None):
 
 
 def save_json(p: Path, data: dict):
-    # 2026-05-30 修[#6]：裸 write_text → 原子写。evolve/promote 都经此写 写作经验.json，
-    # 与 learning_loop.save_experience 同库 RMW；非原子写在 subprocess 被 kill 时留半截 JSON。
-    # atomic_write_json 内部已 mkdir + tmp 唯一名 + fsync + os.replace 原子落盘。
+    # evolve/promote 都经此写 写作经验.json，与 learning_loop.save_experience 同库读改写；
+    # 非原子写在 subprocess 被杀时会留半截 JSON。atomic_write_json 内部 mkdir + tmp 唯一名 +
+    # fsync + os.replace 原子落盘。
     atomic_json.atomic_write_json(p, data)
 
 
@@ -86,12 +85,12 @@ def upgrade_to_versioned(pattern: dict, current_ch: int) -> dict:
     return upgraded
 
 
-# 🔴 2026-06-27 C12: producer 真填字段并集（取代旧 description+name —— 那俩常空：
-# learning_loop/self_heal 写的 recur_* 经验把内容塞进 trigger/technique/why_works，
-# description/name 多为空 → 旧 p_desc=" " → char-set jaccard(" "," ")=1.0 → 不相干经验
-# 被结构性误并）。id 仅作身份不进相似度文本（unique id 会注入唯一 token 压低合法合并的
-# jaccard，尤其无 jieba 的降级路径）。北极星⑤：这是「经验沉淀的数据流形状」修复，不规定
-# 哪两条该合并（阈值+模型判断的事），只根除空 blob 必并的结构 bug。
+# 相似度文本取 producer 真填字段并集：learning_loop/self_heal 写的 recur_* 经验把内容
+# 塞进 trigger/technique/why_works，description/name 常空——空字段若参与比对，
+# char-set jaccard(" "," ")=1.0 会把不相干经验结构性误并。id 仅作身份不进相似度文本
+# （unique id 会注入唯一 token 压低合法合并的 jaccard，尤其无 jieba 的降级路径）。
+# 北极星⑤：只约束经验沉淀的数据流形状（空 blob 永不参与合并），
+# 不规定哪两条该合并（阈值+模型判断的事）。
 _SIMILARITY_FIELDS = ("trigger", "technique", "why_works", "description", "name")
 
 _JIEBA_TRIED = False
@@ -112,7 +111,7 @@ def _get_jieba():
 
 
 def _similarity_blob(pattern: dict) -> str:
-    """🔴 2026-06-27 C12: 拼 producer 真填字段为相似度文本（空字段跳过）。"""
+    """拼 producer 真填字段为相似度文本（空字段跳过）。"""
     if not isinstance(pattern, dict):
         return ""
     parts = [str(pattern.get(k, "") or "").strip() for k in _SIMILARITY_FIELDS]
@@ -120,7 +119,7 @@ def _similarity_blob(pattern: dict) -> str:
 
 
 def _tokenize(text: str) -> set:
-    """🔴 2026-06-27 C12: token 级分词（取代 char-set 字符集 jaccard）。
+    """token 级分词。
 
     jieba 精确分词优先；未装则降级——空白/标点切分 + 对含 CJK 段补字符 bigram
     （纯中文无词边界，单纯空白分词会把整句当 1 个 token 而漏并近义经验；bigram 是
@@ -159,10 +158,9 @@ def _token_jaccard(a: set, b: set) -> float:
     return inter / union if union else 0.0
 
 
-# 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）
+# 内容语义 embedding 路径（区别于风格模型，这里走 bge 内容模型）
 def _content_backend_ready() -> bool:
-    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
-    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available）。
 
     import 失败 → False（调用方回退 token jaccard）。
     """
@@ -173,16 +171,15 @@ def _content_backend_ready() -> bool:
         return False
 
 
-# 金标准校准 2026-07-04：content_embed_separability_20260704 报告——语义合并相似度下限。
-# 合并判定误并代价高（取严格位）：content_vs_style_confound 族 neg_p95=0.5495≈0.55
-# （相邻强相关内容 vs 同书同风格但内容无关的远章节·95 分位低误报候选）。
+# 语义合并相似度下限：合并判定误并代价高（取严格位）：content_vs_style_confound 族
+# neg_p95=0.5495≈0.55（相邻强相关内容 vs 同书同风格但内容无关的远章节·95 分位低误报候选）。
 SEMANTIC_MERGE_THRESHOLD = 0.55
 
 
 def _semantic_similarity(blob_a: str, blob_b: str, embed_fn, cos_fn) -> "float | None":
     """两条经验相似度 blob 的 embedding 余弦相似度。任一 blob 空 / 编码失败 / 维度不一致
     → None（调用方回退 token jaccard·绝不拿默认 hash 假语义冒充·空 blob 判断沿用调用方
-    既有的 C12 空 token 集合闸，这里只负责有内容时的语义打分）。"""
+    既有的空 token 集合闸，这里只负责有内容时的语义打分）。"""
     if not blob_a or not blob_b:
         return None
     try:
@@ -212,9 +209,8 @@ def evolve(project_root: Path, current_ch: int) -> dict:
         results["upgraded_count"] += sum(1 for p in upgraded if p.get("version") == 1 and len(p.get("evolution_history", [])) == 1)
 
         # Step 2: 找相似 pattern pair（真后端：embedding 余弦 ≥ SEMANTIC_MERGE_THRESHOLD ·
-        # 否则 token 级 jaccard > 0.6）
-        # 🔴 2026-06-27 C12: producer 真填字段并集 + token 分词替代 char-set jaccard。
-        # 空 blob 显式不参与合并（根除旧 description+name 双空 → jaccard(" "," ")=1.0 误并）。
+        # 否则 token 级 jaccard > 0.6）。用 producer 真填字段并集 + token 分词算相似度；
+        # 空 blob 显式不参与合并（否则 jaccard(" "," ")=1.0 会把不相干经验误并）。
         merged_indices = set()
         new_patterns = []
         _tok_cache: dict[int, set] = {}
@@ -230,8 +226,8 @@ def evolve(project_root: Path, current_ch: int) -> dict:
                 _blob_cache[idx] = _similarity_blob(pat) if isinstance(pat, dict) else ""
             return _blob_cache[idx]
 
-        # 🔴 2026-07-04: 内容后端就绪时优先语义相似度（能抓「对话要简短」vs「台词不宜过长」这类
-        # 零 token 重叠的同义表述）；不可用/单条编码失败 → 回退 token jaccard（原逻辑不变）。
+        # 内容后端就绪时优先语义相似度（能抓「对话要简短」vs「台词不宜过长」这类
+        # 零 token 重叠的同义表述）；不可用/单条编码失败 → 回退 token jaccard。
         _use_semantic = _content_backend_ready()
         _embed_fn = _cos_fn = None
         if _use_semantic:
@@ -239,8 +235,8 @@ def evolve(project_root: Path, current_ch: int) -> dict:
                 from embedding_store import (compute_content_embedding, cosine_similarity,
                                               prefetch_content_embeddings)
                 _embed_fn, _cos_fn = compute_content_embedding, cosine_similarity
-                # 2026-07-03 Wave-4：本 category 全部 pattern blob 一次性预热缓存，其后 O(N^2)
-                # 两两比对的逐条 compute_content_embedding 命中缓存（否则真后端下 N 条各起一次子进程）。
+                # 本 category 全部 pattern blob 一次性预热缓存，其后 O(N^2) 两两比对的逐条
+                # compute_content_embedding 命中缓存（否则真后端下 N 条各起一次子进程）。
                 all_blobs = [_blob_for(i, p) for i, p in enumerate(upgraded)]
                 prefetch_content_embeddings([b for b in all_blobs if b])
             except ImportError:
@@ -259,13 +255,13 @@ def evolve(project_root: Path, current_ch: int) -> dict:
                 continue
             p_tokens = _tokens_for(i, p)
             similar = []
-            if p_tokens:  # 🔴 C12: 空 blob 不发起合并
+            if p_tokens:  # 空 blob 不发起合并
                 for j in range(i + 1, len(upgraded)):
                     if j in merged_indices:
                         continue
                     q = upgraded[j]
                     q_tokens = _tokens_for(j, q)
-                    if not q_tokens:  # 🔴 C12: 空 blob 不被并入
+                    if not q_tokens:  # 空 blob 不被并入
                         continue
                     if _is_similar(i, p, p_tokens, j, q, q_tokens):
                         similar.append((j, q))
@@ -312,7 +308,7 @@ def evolve(project_root: Path, current_ch: int) -> dict:
 
 
 def _cluster_to_end_ch(project_root: Path, cluster_key: str) -> int:
-    """2026-05-29 cluster 化：把 cluster key 解析成其末章号，作为按章阈值的等价锚点。
+    """把 cluster key 解析成其末章号，作为按章阈值的等价锚点。
 
     优先用 cluster_lookup.cluster_id_to_range（进度.cluster_blueprint + 事件簇.json）。
     解析不到（fluid 未切定）→ 回退用 cluster 序号 × 一个粗略系数，至少保证单调递增、
@@ -333,7 +329,7 @@ def _cluster_to_end_ch(project_root: Path, cluster_key: str) -> int:
 
 
 def retire_by_cluster(project_root: Path, cluster_key: str, threshold_clusters: int = 3) -> dict:
-    """2026-05-29 cluster 化：按「N 个 cluster 未验证」淘汰，取代「30 章未验证」。
+    """按「N 个 cluster 未验证」淘汰。
 
     把 last_validated_at_ch 反查回所属 cluster 序号，与当前 cluster 序号比较；
     相差 > threshold_clusters 个 cluster 则 retire。pattern 未记 cluster 来源时
@@ -379,10 +375,10 @@ def retire_by_cluster(project_root: Path, cluster_key: str, threshold_clusters: 
 
 
 # ── transfer_scope filter（防跨项目负迁移 · advisory · env 默认 active）──────────
-# 背景：promote() 旧实现「无差别升级」—— 任何 usage≥5 & confidence≥0.8 的 pattern 都升进
-# universal_skill_pool 跨项目复用。但「作者 A 的 idiolect 特异约束」（口癖/签名词/特有遣词/
-# 角色名硬编码）升上去会污染作者 B（负迁移 negative transfer）。北极星⑤不干涉模型判断：
-# 分类是 advisory 建议，pattern 自带显式 transfer_scope 字段时**以其为准**（作者档/模型权威优先）。
+# 任何 usage≥5 & confidence≥0.8 的 pattern 若无差别升进 universal_skill_pool 跨项目复用，
+# 「作者 A 的 idiolect 特异约束」（口癖/签名词/特有遣词/角色名硬编码）升上去会污染作者 B
+# （负迁移 negative transfer）。北极星⑤不干涉模型判断：分类是 advisory 建议，pattern 自带
+# 显式 transfer_scope 字段时**以其为准**（作者档/模型权威优先）。
 #
 # 两类：
 #   · "universal" 通用工艺 —— 可跨项目升级（节奏/结构/钩子/场景衔接/冲突编排等与作者无关的写作技法）
@@ -413,7 +409,8 @@ def classify_transfer_scope(pattern: dict) -> str:
       1. pattern 自带显式 transfer_scope ∈ {universal, local} → 直接采纳（作者档/模型权威）。
       2. idiolect 信号命中（category 或文本关键词）→ 'local'（保守锁本地，防负迁移）。
       3. 通用工艺 category 命中 → 'universal'。
-      4. 都不命中 → 默认 'universal'（保持向后兼容：旧 promote 全升，新增过滤只拦明确特异项）。
+      4. 都不命中 → 默认 'universal'（未标记为 local 的 pattern 默认可跨项目，过滤只拦截
+         明确的 idiolect 特异项）。
     """
     if not isinstance(pattern, dict):
         return "universal"
@@ -445,9 +442,9 @@ def _transfer_scope_filter_active() -> bool:
 def promote(project_root: Path) -> dict:
     """高 usage + 高 confidence pattern 升 universal_skill_pool（跨项目）。
 
-    2026-05-31 transfer_scope filter：升级前按 scope 过滤 —— 通用工艺才跨项目，作者
-    idiolect 特异锁本地（防负迁移）。filter env 默认 active；关掉则回退旧无差别升级。
-    分类是 advisory，pattern 自带 transfer_scope 字段时以其为准（不干涉模型/作者档判断）。
+    升级前按 scope 过滤 —— 通用工艺才跨项目，作者 idiolect 特异锁本地（防负迁移）。
+    filter env 默认 active；关掉则回退无差别升级。分类是 advisory，pattern 自带
+    transfer_scope 字段时以其为准（不干涉模型/作者档判断）。
     """
     exp_path = project_root / "_数据库" / "写作经验.json"
     exp = load_json(exp_path, {})

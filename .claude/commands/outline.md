@@ -4,9 +4,9 @@ description: 生成卷级大纲与首个故事块 brief
 
 ## Gen-Model 抽象层
 
-**关键变化**：大纲中**含创意笔触的字段**（卷 arc 描述 / 大事件 description / hook / cliffhanger 等）走 gen-model；**结构性字段**（卷骨架 / cluster 数 / 事件 ID / prerequisites 关系 / 角色 ID）仍由 Claude 主代理列。
+**分工**：大纲中**含创意笔触的字段**（卷 arc 描述 / 大事件 description / hook / cliffhanger 等）走 gen-model；**结构性字段**（卷骨架 / cluster 数 / 事件 ID / prerequisites 关系 / 角色 ID）由 Claude 主代理列。
 
-**新工作流（Step 2 卷级大纲生成）**：
+**工作流（Step 2 卷级大纲生成）**：
 1. 主代理（Claude）按原流程列**结构性骨架**（卷数 / 卷标题 / 每卷 cluster 数 / key_milestones 事件 ID 列表 / 角色 anchor）
 2. 含创意笔触的字段（如 `volume_arc` 段落描述、`major_events[].description` 等）由主代理准备**结构 brief JSON**
 3. 调 `gen_creative.py --mode volume_arc`
@@ -14,8 +14,8 @@ description: 生成卷级大纲与首个故事块 brief
 
 **当前实施状态**：
 - `gen_creative.py --mode volume_arc` 已实现，作为卷级创意文字生成入口。
-- **P2 分卷 chunk + WAL 断点续跑（2026-07-07·借鉴 AI_NovelGenerator chunked blueprint resume）**：`--mode volume_arc` 内部先产全书骨架（`_数据库/.wal/volume_arc_skeleton.json`·story_destiny/volumes/cluster_001/world_seed），再**逐卷**生成 ME 池（`_数据库/.wal/volume_arc_v<N>.json`·schema 合法的部分产物），全部卷完成后**确定性合并**落 `大势卡.json + 事件簇.json`（与一把梭结构等价）。中断重跑：已存在且校验合法的 WAL 直接跳过（幂等续跑），损坏的重生成；合并时 ME id 跨卷去重校验——重复 id **硬报错不静默覆盖**（撞 id 卷 WAL 隔离为 `.dup_broken` 供重跑重生成）；单卷失败 = 整 step 失败（required 不降级），已完成卷 WAL 保留供续跑。CLI 入口不变（`--volumes N-M` 仅内部调试参数·plan 不用）。
-- **P3 参考语料结构模式抽取（2026-07-07·借鉴 Ex3-NovelWriter Extracting 阶段·确定性零 LLM）**：plan step 5 在 volume_arc 之前有一行**条件脚本**（行首 `? `·口径同 cluster-write 的 style_injector）：`? python core/scripts/reference_pattern_extract.py {project_root}`。当项目选定的风格库存在参考原文（`workspace/styles/<风格名>/原文/*.txt`·与蒸馏链同一路径口径）时，用**纯统计/正则**抽取结构模式落 `workspace/styles/<风格名>/genre_storyline_patterns.json`：章均 CJK 分布、对话占比曲线、场景切换密度（分隔线+转场标志词/千字）、冲突节奏（冲突标志词/千字·章序列）、新专名引入速率（人名启发式·只记数量）、卷级前/中/后三段 pacing 形状；`作者风格.json` 已有的量化指纹**复用不重算**（仅拷数值）。🔴 **版权纪律**：artifact 只含数字和短标签 + `source_ids`（章文件名）+ 每维 `provenance`，**绝不包含任何原文句子**。风格库无原文 → 优雅 skip（exit 0·条件产物不进 expected_outputs）；语料签名未变时幂等复用不重算。**消费端**：`gen_creative --mode volume_arc` 的骨架 prompt 在 artifact 存在时注入一段「参考作品结构基线（advisory·可偏离）」数字化参照——**非硬约束**（北极星⑤：大势卡内容仍由模型按灵感卡自由创作，只给结构参照）。
+- **P2 分卷 chunk + WAL 断点续跑（借鉴 AI_NovelGenerator chunked blueprint resume）**：`--mode volume_arc` 内部先产全书骨架（`_数据库/.wal/volume_arc_skeleton.json`·story_destiny/volumes/cluster_001/world_seed），再**逐卷**生成 ME 池（`_数据库/.wal/volume_arc_v<N>.json`·schema 合法的部分产物），全部卷完成后**确定性合并**落 `大势卡.json + 事件簇.json`（与一把梭结构等价）。中断重跑：已存在且校验合法的 WAL 直接跳过（幂等续跑），损坏的重生成；合并时 ME id 跨卷去重校验——重复 id **硬报错不静默覆盖**（撞 id 卷 WAL 隔离为 `.dup_broken` 供重跑重生成）；单卷失败 = 整 step 失败（required 不降级），已完成卷 WAL 保留供续跑。CLI 入口不变（`--volumes N-M` 仅内部调试参数·plan 不用）。
+- **P3 参考语料结构模式抽取（借鉴 Ex3-NovelWriter Extracting 阶段·确定性零 LLM）**：plan step 5 在 volume_arc 之前有一行**条件脚本**（行首 `? `·口径同 cluster-write 的 style_injector）：`? python core/scripts/reference_pattern_extract.py {project_root}`。当项目选定的风格库存在参考原文（`workspace/styles/<风格名>/原文/*.txt`·与蒸馏链同一路径口径）时，用**纯统计/正则**抽取结构模式落 `workspace/styles/<风格名>/genre_storyline_patterns.json`：章均 CJK 分布、对话占比曲线、场景切换密度（分隔线+转场标志词/千字）、冲突节奏（冲突标志词/千字·章序列）、新专名引入速率（人名启发式·只记数量）、卷级前/中/后三段 pacing 形状；`作者风格.json` 已有的量化指纹**复用不重算**（仅拷数值）。🔴 **版权纪律**：artifact 只含数字和短标签 + `source_ids`（章文件名）+ 每维 `provenance`，**绝不包含任何原文句子**。风格库无原文 → 优雅 skip（exit 0·条件产物不进 expected_outputs）；语料签名未变时幂等复用不重算。**消费端**：`gen_creative --mode volume_arc` 的骨架 prompt 在 artifact 存在时注入一段「参考作品结构基线（advisory·可偏离）」数字化参照——**非硬约束**（北极星⑤：大势卡内容仍由模型按灵感卡自由创作，只给结构参照）。
 
 **保持 Claude 处理的部分**：
 - 卷骨架结构（卷数 / 每卷 cluster 数 / event prerequisites 关系）
@@ -56,7 +56,7 @@ STEP: <当前步骤号>
 
 ## 第 1 步：框架选择 / 灵感讨论
 
-## 叙事框架选择（v16 新增 · 对齐 SidekickWriter/好莱坞方法论）
+## 叙事框架选择（对齐 SidekickWriter/好莱坞方法论）
 
 先让用户选择叙事框架，再基于框架生成大纲：
 
@@ -264,7 +264,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
 
 ## 第 3 步：数据库初始化
 
-### 🆕 3.0 确定性脚手架先行（2026-06-01 根治契约债 · 照顾弱模型）
+### 3.0 确定性脚手架先行（根治契约债 · 照顾弱模型）
 
 **先跑 scaffold 生成 34 个 schema 正确的空骨架，再往骨架里填创意内容** —— 弱模型只填内容、不碰 schema，杜绝「agent 自由生成 schema → 与 consumer/validator 漂移 → 契约债」：
 
@@ -276,12 +276,12 @@ python core/scripts/scaffold_subsystems.py emit "<书名>"
 - 单一真理源：`core/claude-home/templates/subsystem_skeletons.json`（34 骨架·都满足 db_schema_validate）
 - 填充示例参考：`core/claude-home/templates/examples/`（含 `_subsystem_examples/` 9 个高级件示例）
 - 然后按下面 1-16 把**创意内容**填进骨架（cluster_001 详化 / 人物 / 大势 / 伏笔等）。
-- 🔴 **作者风格必须从风格库复制「两个」文件**（gen_writer 写作时两个都读·**漏 skill = writer 只有量化数字、缺作者笔法+golden 范例 → 跑偏成通用爽文**·2026-06-04 cluster_001 实证根因）：
+- 🔴 **作者风格必须从风格库复制「两个」文件**（gen_writer 写作时两个都读·**漏 skill = writer 只有量化数字、缺作者笔法+golden 范例 → 跑偏成通用爽文**）：
   - ① `workspace/styles/<风格名>/作者风格_FINAL.json` → `_数据库/作者风格.json`（量化基线）
   - ② `workspace/styles/<风格名>/skill_FINAL.md` → `_数据库/作者风格_skill.md`（**笔法 + golden 范例·必拷·别漏**）
   - ③ 🔴 拷完必须在 `_数据库/作者风格.json` 顶层写 `"style_source": "workspace/styles/<风格名>/skill_FINAL.md"`
     （相对仓库根·learning_loop/snippet_seed/audit_hub/best-of-N 原文池与 SFS/AV 打分全靠它反查——缺失=
-    语感种子+择优打分双退化成「退回第一稿」·2026-07-08 验证书真机实证根因·db_schema_validate 硬校验）
+    语感种子+择优打分双退化成「退回第一稿」·db_schema_validate 硬校验）
   - 或走 `/distill-style` 蒸馏替换占位（蒸馏会同时产这两件并写 style_source）。
 
 完成填充后、跑 plan-step 3 前，**强制核对**（流程缺步补全，防 Workflow 名义返回掩盖漏文件）：
@@ -513,10 +513,10 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
   "last_updated": "ISO日期"
 }
 ```
-   - 🔴 **2026-05-29 复审修复[H5]**：`cluster_blueprint` **必须是 dict**（`cluster_id` → cluster 数据），**禁止初始化为 list**。SC-1 规范形态 + `cluster_lookup._iter_blueprint_ranges` 用 `.items()` 遍历 `cluster_blueprint` 取每个 cluster 的 `chapter_range` / `scene_storyboard[].ch`；写成 list 会让反查整体瘫痪（城南项目实测 list(25) 即此 bug）。
+   - 🔴 **`cluster_blueprint` 必须是 dict**（`cluster_id` → cluster 数据），**禁止初始化为 list**。SC-1 规范形态 + `cluster_lookup._iter_blueprint_ranges` 用 `.items()` 遍历 `cluster_blueprint` 取每个 cluster 的 `chapter_range` / `scene_storyboard[].ch`；写成 list 会让反查整体瘫痪。
    - 🔴 **cluster-first 涌现纪律**：outline 阶段**只详化 `cluster_001`**（含完整 `scene_storyboard` + `scope_summary` + `foreshadowing_to_plant`）。`cluster_002+` 不预设——由 `/cluster-save-state` 末尾涌现。
    - 🔴 **v27 freestyle 不写 `chapter_range`**：cluster 的 `chapter_range` 由 splitter 切完后回填（事件簇.json 为权威源），outline 阶段不预设。`scene_storyboard[].ch` 是 writer 蓝图序号（场景顺序），非物理章号。
-   - 🔴 **S11 scene 级大势对齐三问自评（2026-07-07 · advisory）**：outline-planner 详化 storyboard（cluster_001 与涌现 brief 两个场合）时每 scene 必答三问（①此场景如何推动卷核心冲突 ②是否违反世界观/locked_facts ③`scene_purpose` 必须体现与卷核心任务的关系·不能只描述画面），自评落 `conflict_stage`（铺垫|升级|高潮|转折|尾声）/ `scene_purpose` / `alignment`（aligned|minor-deviation|needs-review）三个**可选** advisory 字段（fluid 纪律·schema 不设 required 不硬锁）。`needs-review` 是 planner 的诚实标记不是失败（北极星⑤ 自评透明化非外部裁决）；`volume_arc_drift_scanner` 把本卷 needs-review 计数/清单汇总进其报告 `alignment_review` 段（只报告不裁决）。权威 schema = `event_cluster_schema.json` 的 `scene_storyboard.items`，合约详见 `.claude/agents/novel-outline-planner.md` ⑧。
+   - 🔴 **S11 scene 级大势对齐三问自评（advisory）**：outline-planner 详化 storyboard（cluster_001 与涌现 brief 两个场合）时每 scene 必答三问（①此场景如何推动卷核心冲突 ②是否违反世界观/locked_facts ③`scene_purpose` 必须体现与卷核心任务的关系·不能只描述画面），自评落 `conflict_stage`（铺垫|升级|高潮|转折|尾声）/ `scene_purpose` / `alignment`（aligned|minor-deviation|needs-review）三个**可选** advisory 字段（fluid 纪律·schema 不设 required 不硬锁）。`needs-review` 是 planner 的诚实标记不是失败（北极星⑤ 自评透明化非外部裁决）；`volume_arc_drift_scanner` 把本卷 needs-review 计数/清单汇总进其报告 `alignment_review` 段（只报告不裁决）。权威 schema = `event_cluster_schema.json` 的 `scene_storyboard.items`，合约详见 `.claude/agents/novel-outline-planner.md` ⑧。
    - `narrative_mode`：仅首个 cluster 默认 `"in_medias_res"`（黄金三章倒叙），后续 cluster 默认 `"linear"`。
    - `volumes`：卷/阶段层；每卷都要有 `volume_core_conflict` / `volume_thread` / `volume_finale_signal`
    - `volume_arc`：每卷的人物成长弧线（起承转），写作时由 manifest 注入给 writer，确保 cluster 服务于卷级目标

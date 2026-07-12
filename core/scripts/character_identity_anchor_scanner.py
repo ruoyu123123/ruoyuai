@@ -6,7 +6,7 @@ Borrowed concept: moyin-creator keeps character identity anchors for visual
 continuity. In ruoyuai this scanner turns that idea into prose continuity:
 stable hair/eye/mark anchors must not drift in nearby narration.
 
-2026-07-07 A7 (round2 porting, moyin 6-layer identity anchors as text):
+A7 (moyin's 6-layer identity anchors, as text):
   - characters[].recognition_anchors ([{anchor, position_or_scene}]) feed the
     same drift detection (anchor phrase -> hair/eye/mark anchor when parsable).
   - characters[].negative_facts (["不会武功", "不识字", ...]) get a reverse
@@ -77,7 +77,7 @@ _TYPE_ALIASES = {
     "标记": "mark",
 }
 
-# ── A7 negative_facts (2026-07-07) ──────────────────────────────────────────
+# ── A7 negative_facts ──────────────────────────────────────────
 # A negative fact is a negated capability statement ("不会武功"). We derive the
 # positive-assertion terms whose appearance near the character name flags an
 # advisory violation ("会武功" / "精通武功" ...). Marker order matters: longer

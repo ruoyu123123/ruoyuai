@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""trope_tag_canonicalizer.py — trope 标签 canonical 化 · R23 W11 Batch-GG · P0
+"""trope_tag_canonicalizer.py — trope 标签 canonical 化
 
-【缺口】fanfic ecosystem 修跨 cluster 统计层根因：storyboard / cluster brief 里
-trope tag 是自由文本（「重生」/「重生归来」/「再活一次」同义不同写）。cross-cluster
-aggregator 直接 count 字面会把同一 trope 拆成多个低频项 → 跨 cluster 趋势分析失真。
+【动机】storyboard / cluster brief 里 trope tag 是自由文本（「重生」/「重生归来」/
+「再活一次」同义不同写）。cross-cluster aggregator 直接 count 字面会把同一 trope
+拆成多个低频项 → 跨 cluster 趋势分析失真，故在统计层做同义归并。
 
 【做法 · 确定性 · 零 LLM/零联网】
   · 维护 core/data/trope_canon.json（synonym → canonical 占位 30 同义对）
@@ -42,9 +42,9 @@ _CACHE: dict | None = None
 ISSUE_CODE_NEW_SURFACE = "TROPE_NEW_SURFACE_PROMOTION_CANDIDATE"
 ISSUE_CODE_DICT_THIN = "TROPE_CANON_DICT_THIN"
 
-# 金标准校准 2026-07-04：content_embed_separability_20260704 报告——新 surface vs 已有
-# canonical 值最近邻余弦阈值。晋升建议本质是合并判定（把新 surface 归并到某已有 canonical
-# trope），误并代价高（取严格位）：content_vs_style_confound 族 neg_p95=0.5495≈0.55。
+# 新 surface vs 已有 canonical 值最近邻余弦阈值。晋升建议本质是合并判定（把新 surface
+# 归并到某已有 canonical trope），误并代价高（取严格位）：content_vs_style_confound 族
+# neg_p95=0.5495≈0.55 校准。
 NEAREST_CANONICAL_SIM_THRESHOLD = 0.55
 
 
@@ -53,10 +53,9 @@ def _mode() -> str:
     return m if m in ("off", "shadow", "active") else "shadow"
 
 
-# ── 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）───────
+# ── 内容语义 embedding 路径 ───────
 def _content_backend_ready() -> bool:
-    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
-    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available）。
 
     import 失败 → False（调用方不给建议·仍要求人审）。
     """
@@ -69,7 +68,7 @@ def _content_backend_ready() -> bool:
 
 def _embed_canonical_targets(canonical_targets: list) -> "list[tuple[str, list]] | None":
     """内容后端就绪时把去重后的 canonical 目标值编码一次，供本次扫描内所有新 surface
-    候选复用（避免 O(候选 × 目标) 重复编码·2026-07-02）。
+    候选复用（避免 O(候选 × 目标) 重复编码）。
 
     未配内容后端 / 无目标 / 编码异常 → None（调用方不给建议·仍要求人审）。
     """
@@ -225,12 +224,12 @@ def scan_for_promotions(project_root: str | Path) -> dict:
         if v >= promotion_threshold
     ]
     # 真后端就绪时给每个候选加 embedding 最近邻 canonical 建议（不改 canonicalize_tag 本体·
-    # 不自动改 trope_canon.json·仍要求人审）；无真后端 → 字段缺省（2026-07-02）
+    # 不自动改 trope_canon.json·仍要求人审）；无真后端 → 字段缺省
     if promotion_candidates:
         canonical_targets = sorted(set(canon_map.values()))
-        # 🔴 2026-07-03 Wave-4：canonical 目标值 + 候选 surface 两侧文本一次性 prefetch
-        # （真后端子进程按条调用极贵·合并成一次批调用）——下面 _embed_canonical_targets /
-        # _nearest_canonical_suggestion 内的逐条 compute_content_embedding 全部命中缓存。
+        # canonical 目标值 + 候选 surface 两侧文本一次性 prefetch（真后端子进程按条调用
+        # 极贵·合并成一次批调用）——下面 _embed_canonical_targets / _nearest_canonical_suggestion
+        # 内的逐条 compute_content_embedding 全部命中缓存。
         if _content_backend_ready():
             try:
                 from embedding_store import prefetch_content_embeddings

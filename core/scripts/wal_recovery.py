@@ -28,14 +28,14 @@ except Exception:  # pragma: no cover - cluster 过滤不可用时仍允许扫�
     cluster_lookup = None
 
 try:
-    from frozen_util import child_python, scripts_dir  # frozen-aware（M4·dev=no-op）
+    from frozen_util import child_python, scripts_dir  # frozen-aware（dev=no-op）
 except Exception:  # pragma: no cover
     def child_python():
         return sys.executable
 
 
-# 传统兜底目录（历史遗留，绝大多数情况不存在 —— plan 实际落在
-# <project>/_数据库/.plans/）。保留为最后兜底，不作权威源。
+# 兜底目录（绝大多数情况不存在 —— plan 实际落在 <project>/_数据库/.plans/）。
+# 保留为最后兜底，不作权威源。
 PLAN_DIR = Path(__file__).parent.parent / "claude-home" / "plans" / "runtime"
 
 
@@ -53,14 +53,14 @@ def _project_plan_dirs(project_arg: str) -> list[Path]:
             if cand.is_dir():
                 dirs.append(cand)
     # GLOBAL 兜底（plan_tracker 找不到项目时落这）·🔴 引 plan_tracker.GLOBAL_PLANS_DIR 当
-    # 单一权威源（已 frozen-aware 迁 user_data_dir）——否则 frozen 下写读 GLOBAL 不同根断链。
+    # 单一权威源（frozen-aware·锚 user_data_dir）——否则 frozen 下写读 GLOBAL 不同根断链。
     try:
         from plan_tracker import GLOBAL_PLANS_DIR as glob_dir
     except Exception:
         glob_dir = Path(__file__).parent.parent / "claude-home" / ".plans"
     if glob_dir.is_dir():
         dirs.append(glob_dir)
-    # 传统 runtime 目录（历史兼容）
+    # 兜底 runtime 目录
     if PLAN_DIR.is_dir():
         dirs.append(PLAN_DIR)
     return dirs
@@ -93,9 +93,9 @@ def list_plans_for_project(project_arg: str, project_name: str) -> list[dict]:
     # 兜底：plan_tracker list 文本解析
     try:
         result = subprocess.run(
-            [child_python(), str(scripts_dir() / "plan_tracker.py"), "list"],  # frozen-aware（狩猎修）
-            # 🔴 2026-06-27 W5：errors="replace" 防子进程在 Windows GBK 控制台输出中文时
-            # reader 线程 UnicodeDecodeError 崩（降级不崩纪律·原仅靠外层 except 兜底会丢 stdout）
+            [child_python(), str(scripts_dir() / "plan_tracker.py"), "list"],  # frozen-aware
+            # errors="replace" 防子进程在 Windows GBK 控制台输出中文时 reader 线程
+            # UnicodeDecodeError 崩（仅靠外层 except 兜底会丢 stdout）
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
         )
         return _parse_plan_list_output(result.stdout, project_name)
@@ -105,12 +105,12 @@ def list_plans_for_project(project_arg: str, project_name: str) -> list[dict]:
 
 def _filter_plans_by_cluster(plans: list[dict], project_arg: str,
                              cluster_key: str) -> list[dict]:
-    """按 cluster 过滤 plan（2026-05-29 复审修复[M21]）。
+    """按 cluster 过滤 plan。
 
     双判据（任一命中即保留）：
       1. plan.key 归一化后 == 目标 cluster_id（cluster-save-state 创建时 --key 即 cluster_key）
       2. plan.chapter 落在该 cluster 的章范围内（cluster_lookup 展开；范围未回填则跳过此判据）
-    SC-5 纪律：不机械拼 cluster_{ch}，章号→cluster 一律走 cluster_lookup。
+    纪律：不机械拼 cluster_{ch}，章号→cluster 一律走 cluster_lookup。
     """
     target_cid = None
     rng = None
@@ -147,16 +147,15 @@ def _step_is_done(s: dict) -> bool:
 
 
 def _first_resume_step(steps_meta: list, done_count: int) -> int:
-    """🔴 2026-06-27 W5：续跑点 = **第一个未完成 step**（按 n 升序），而非 done_count+1。
+    """续跑点 = **第一个未完成 step**（按 n 升序），不用 done_count+1。
 
-    根因（completeness critic 揪出的恢复点裸奔）：原 `next_step = done_count + 1` 只在
-    『已完成步恒为前缀 1..k』时正确。一旦出现非连续完成（中途某步 pending、后续步已
+    已完成步不保证恒为前缀 1..k：一旦出现非连续完成（中途某步 pending、后续步已
     completed —— 失败重跑 / 部分手改 / WAL 漂移都可能造成），done_count+1 会**跳过中间
-    pending 步**（漏步 bug：恢复指令告诉主代理从更靠后的 step 续跑，中间未完成步永不补跑）。
+    pending 步**（漏步：恢复指令告诉主代理从更靠后的 step 续跑，中间未完成步永不补跑）。
     取第一个未完成步才是正确恢复点——既不重放已完成步，也不漏跑任何未完成步。
 
-    连续完成场景（绝大多数）下 == done_count+1，对既有行为零回归。
-    退化：steps_meta 缺 n 字段 / 为空 → 退回 done_count+1（保旧语义不崩）。
+    连续完成场景（绝大多数）下 == done_count+1。
+    退化：steps_meta 缺 n 字段 / 为空 → 退回 done_count+1（不崩）。
     """
     n_steps = [s for s in steps_meta if isinstance(s.get("n"), int)]
     pending_ns = [s["n"] for s in n_steps if not _step_is_done(s)]
@@ -190,7 +189,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("--ch", type=int, default=None)
-    # 2026-05-29 复审修复[M21]：cluster mode 续跑入口
+    # cluster mode 续跑入口
     ap.add_argument("--cluster", type=str, default=None,
                     help="按 cluster 过滤未完成 plan（如 001 / cluster_001）")
     args = ap.parse_args()
@@ -217,9 +216,9 @@ def main():
         print(f"[OK] 无 plan 数据（项目 {project_name}{scope}）")
         sys.exit(0)
 
-    # 2026-05-30 北极星复审：主路径直接读 plan JSON，顶层无 status 字段（plan_tracker 用
-    # completed_at/aborted_at 时间戳表达完成/放弃，见 plan_tracker is_done/is_aborted）→ 原
-    # p.get("status") 恒 None → 所有 plan 误判中断 exit1 + 错误续跑指令。读真实字段（兼容文本兜底的 status）。
+    # 主路径直接读 plan JSON，顶层无 status 字段（plan_tracker 用 completed_at/aborted_at
+    # 时间戳表达完成/放弃，见 plan_tracker is_done/is_aborted）。读真实字段（兼容文本
+    # 兜底的 status）。
     def _done(p):
         return bool(p.get("completed_at")) or p.get("status") in ("DONE", "done", "completed")
     def _aborted(p):
@@ -244,7 +243,7 @@ def main():
         for p in incomplete:
             steps_meta = p.get("steps", [])
             done_count = sum(1 for s in steps_meta if (s.get("status") in ("completed", "done") or s.get("verified")))
-            # 🔴 2026-06-27 W5：续跑点取第一个未完成步（防非连续完成漏步），连续场景 == done_count+1
+            # 续跑点取第一个未完成步（防非连续完成漏步），连续场景 == done_count+1
             next_step = _first_resume_step(steps_meta, done_count)
             print(f"  {p['id']}:")
             print(f"    续跑: plan_tracker step {p['id']} --n {next_step} （或主代理重新进入 {p['command']} 流水线从 step {next_step} 续跑）")

@@ -14,7 +14,7 @@ $ARGUMENTS
 
 ## 第一步：检测项目状态
 
-> 🔴 **断点权威源纪律（2026-05-30 修 #4）**：中断判断的**唯一权威源**是
+> 🔴 **断点权威源纪律**：中断判断的**唯一权威源**是
 > `wal_recovery.py`（读 `plan_tracker` 持久态）+ `进度.json.completed_clusters`。
 > **禁止**把 `.wal/cluster_<key>_save_state.json` 当主检测信号——该文件由调度器
 > shell 直建、内容只作为 cluster 级状态佐证，不承载 plan step 进度），且 save-state 成功后**永不删除**（见 cluster-save-state.md

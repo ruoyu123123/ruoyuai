@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""subtext_rescan_scanner.py — W1 潜台词/on-the-nose 情绪直陈回查（advisory · cluster · 2026-06-15）
+"""subtext_rescan_scanner.py — 潜台词/on-the-nose 情绪直陈回查（advisory · cluster）
 
-【缺口】consolidate 产作者 subtext_instance_count（dim30 留白潜台词基线）+ style_injector 注入
-subtext_per_chapter_target（默认 2/章）给 writer·但 writer 写完【零回查】草稿潜台词密度
-（记忆调研 W1 实证：埋设端齐备·回查端 ZERO·全库 0 个 subtext/theme scanner）。本 scanner
-补这个闭环的【可算半边】：检测 on-the-nose 情绪直陈（说透情绪 vs 动作侧写）密度。
+上游 consolidate 产作者 subtext_instance_count（dim30 留白潜台词基线）+ style_injector 注入
+subtext_per_chapter_target（默认 2/章）给 writer；本 scanner 在草稿侧回查潜台词密度：
+检测 on-the-nose 情绪直陈（说透情绪 vs 动作侧写）密度。
 
 【做法 · 确定性可算半边】（北极星守卫：潜台词质量是语义判断·只做可算的密度·裁决留 judge/作者）：
   on-the-nose = 情绪引导词（感到/心中/充满了）+ 情绪状态名词（愤怒/悲伤/绝望）紧邻。
@@ -16,8 +15,8 @@ subtext_per_chapter_target（默认 2/章）给 writer·但 writer 写完【零�
 
 【北极星⑤ 顾问非法官】直陈情绪有时合理（高潮爆发/快节奏短打）·writer 有理由可偏离 → 永远
   advisory，code ON_THE_NOSE_EMOTION_DENSITY **绝不进 audit_hub.HARD_GATE_CODES**。
-  env SUBTEXT_RESCAN_MODE: off / shadow(默认·只记不判) / active。
-  🔬 阈值 ON_THE_NOSE_PER_1K_FLOOR 待金标准校准（真作者原文喂自身 PASS·防矫枉过正）。
+  env SUBTEXT_RESCAN_MODE: off / shadow(只记不判) / active(默认)。
+  阈值 ON_THE_NOSE_PER_1K_FLOOR 待金标准校准（真作者原文喂自身 PASS·防矫枉过正）。
 
 用法：python subtext_rescan_scanner.py <draft_path> [--manifest m.json] [--project <root>]
 """
@@ -49,7 +48,7 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-16 切 active 放量（金标准 6 作者原文零误报实证·subtext 真作者最大 0.06/千 vs floor 3.0·50x 余量）。
+    # 默认 active（金标准 6 作者原文零误报实证·subtext 真作者最大 0.06/千 vs floor 3.0·50x 余量）。
     m = (os.environ.get("SUBTEXT_RESCAN_MODE") or "active").strip().lower()
     return m if m in ("off", "shadow", "active") else "active"
 

@@ -2,7 +2,7 @@
 """蒸馏 phase-4 cluster 终验复刻。
 
 复刻与正式写作使用同一栈：Claude agent 按 skill 亲笔写复刻场景稿（脚本外部产出）→
-本脚本用 gemini 按 skill **分段润色** → 拼接落盘评分。正式写作栈（gen_writer.py）已同款改造。
+本脚本用 gemini 按 skill **分段润色** → 拼接落盘评分。与正式写作栈（gen_writer.py）同款。
 
   step 复刻-a  蒸馏 plan 的复刻 step spawn Claude agent（按 skill 亲笔逐场景写复刻草稿）
                → --claude-scenes-dir 下 scene_*.txt（per-scene 文件 = 天然润色分段）
@@ -42,9 +42,9 @@ from gen_model_loader import (  # noqa: E402
     Profile,
     reasoning_extra_body,
 )
-import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）
+import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on）
 import distill_rubric  # noqa: E402 · A12 LongBench-Write 六维质量 rubric（env DISTILL_RUBRIC_MODE 默认 off · advisory 旁证）
-from llm_transport import _is_refusal  # noqa: E402 · gen-model 间歇性安全拒绝检测（2026-06-20）
+from llm_transport import _is_refusal  # noqa: E402 · gen-model 间歇性安全拒绝检测
 
 
 # refusal 触发的「文学复刻无害」声明 · 追加到 user prompt 末尾再试一次（推开模型保险丝）
@@ -108,8 +108,8 @@ def collapse_degenerate_runs(
 ) -> tuple[str, list[dict]]:
     """检测并截断 LLM 复读退化串（连续重复单字 / 连续重复短串）。
 
-    实测翻车：复刻含 3826 字连续「铛」串（占 27% CJK）→ LLM 复读退化 → 污染 SFS + 产出。
-    作者真实拟声只用单行短串（如「铛。」独段），绝不会 3826 字。
+    LLM 复读退化会产出数千字的连续重复串（如整段连续「铛」，可占草稿两成以上 CJK），
+    污染 SFS 与产出；作者真实拟声只用单行短串（如「铛。」独段）。
 
     两类退化：
     1. 同一字连续 > single_char_max_run 次 → 保留 keep_single 个
@@ -189,7 +189,7 @@ REPLICATE_SYSTEM_PROMPT = """你就是这位源作者本人，用你自己的手
 """
 
 
-# 段级字数守恒带（与 gen_writer.POLISH_CJK_LOW/HIGH 同栈同款 · v29 · 2026-07-11）
+# 段级字数守恒带（与 gen_writer.POLISH_CJK_LOW/HIGH 同栈同款 · v29）
 POLISH_CJK_LOW = 0.85   # 守恒带下限（压缩省略红线）
 POLISH_CJK_HIGH = 1.30  # 守恒带上限（注水扩写红线）
 
@@ -261,8 +261,8 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
 
         print(f"{prefix}[distill_replicate] prompt: system={len(system)} chars, user={len(user)} chars")
 
-        # 2026-06-07 修 stream 挂死：pie-xian 代理 reasoning 模型 stream 中途断连时，无 timeout 的
-        # `for chunk in stream` 会无限等（实测卡死 43min 不报错不落盘）。设 read=180s → chunk 间隔超时
+        # pie-xian 代理 reasoning 模型 stream 中途断连时，无 timeout 的
+        # `for chunk in stream` 会无限等（实测可能长时间卡死不报错不落盘）。设 read=180s → chunk 间隔超时
         # 抛 httpx.ReadTimeout → 下方 except 触发 fallback 链，而非僵死。
         client = OpenAI(
             api_key=profile.api_key, base_url=profile.base_url,
@@ -280,17 +280,17 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
             stream=True,
         )
         # reasoning 模型（gemini-3.x pro-preview 等）thinking_level=LOW 回收 thinking 占用的输出预算给正文。
-        # 对齐 gen_writer.py（L831-833）· 2026-06-07 修：不传时 thinking 默认 HIGH 吃光预算 →
-        # 复刻字数严重偏短（pro 实测 2348 vs 原作 9000）→ 回灌 estimate_cluster_arc 钩子/场景粗估失真归 0。
+        # 对齐 gen_writer.py：不传时 thinking 默认 HIGH 会吃光预算 →
+        # 复刻字数严重偏短 → 回灌 estimate_cluster_arc 钩子/场景粗估失真归 0。
         _dr_extra = reasoning_extra_body(profile)  # helper 单一真理源(thinking_level/reasoning_effort·防 thinking 暴走)
         if _dr_extra:
             _create_kw["extra_body"] = _dr_extra
 
-        # 🔴 轮次7 实测修：中转站瞬时 404/断流时立刻降级 → 撞死 fallback → exit 3。
+        # 🔴 中转站瞬时 404/断流时若立刻降级会撞死 fallback → exit 3。
         # 同 profile 先重试 2 次（指数退避·SDK max_retries 不覆盖 404/断流），耗尽才降级。
-        # + gen_throttle.wait() 节流补齐（此前 sub-call 间零间隔·绕过全局限速）。
+        # + gen_throttle.wait() 节流补齐，确保 sub-call 间也遵守全局限速。
         #
-        # 🛡️ 2026-06-20 refusal-retry：reasoning gen-model 偶发对合法文学复刻输出短拒绝
+        # 🛡️ refusal-retry：reasoning gen-model 偶发对合法文学复刻输出短拒绝
         # （HTTP200 + finish=stop + 非空 · 绕过 TransportEmpty 守卫）。命中 _is_refusal →
         # 3s 退避 + user 追加「文学复刻无害」disclaimer 再试。瞬时失败/refusal 两套 retry
         # 共享 attempt 计数（≤2 次重试·共 3 次尝试）但互不串扰（exception → 指数退避·
@@ -358,9 +358,9 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
         # refusal 耗尽已在内圈 append 失败 + 打印日志 → 直接转下一 profile（避空内容守卫重复 append）
         if refusal_exhausted:
             continue
-        # 🔴 2026-06-17 bug-hunt 修：空内容守卫（对齐 gen_writer）。reasoning 模型把 token 全吐进
-        # reasoning_content / 内容过滤 → HTTP200 但 delta.content 全 None → full_text=""（≠None）
-        # → 原 `if full_text is None` 不触发 → 返回空串当成功 → 写**空复刻** + exit0 **假成功**。
+        # 空内容守卫（对齐 gen_writer）。reasoning 模型把 token 全吐进
+        # reasoning_content / 内容过滤 → HTTP200 但 delta.content 全 None → full_text=""（≠None），
+        # 仅判断 `full_text is None` 抓不住这种情况 → 会把空串当成功返回 → 写**空复刻** + exit0 **假成功**。
         # 空内容必须触发 fallback 链 / 最终 GenModelExhaustedError（exit3），杜绝假成功。
         if not (full_text or "").strip():
             failures.append((profile.name, "返回空内容（HTTP200 零 content·疑 reasoning token 吃光）"))
@@ -418,9 +418,9 @@ def load_cluster_meta(project_root: Path, cluster_id: str) -> dict:
 def cluster_chapter_bounds(cluster_meta: dict) -> tuple[int | None, int | None]:
     """容忍多 schema 读 cluster 章节起止。
 
-    契约不符根因（2026-05-30 系统验证发现）：cluster_index.json 实际 key 是
-    chapter_range（2 元数组 [lo, hi]），但旧码只读 chapter_start/ch_start/chapter_end/ch_end
-    → gather_cluster_ref_text 返回空（参考原文没注入·复刻只靠 skill）。
+    cluster_index.json 的主 key 是 chapter_range（2 元数组 [lo, hi]）；部分 producer
+    只写扁平 chapter_start/chapter_end 或简写 ch_start/ch_end，读不到会导致
+    gather_cluster_ref_text 返回空（参考原文没注入·复刻只靠 skill）。
 
     兼容顺序：
     1. chapter_range: [lo, hi]（cluster_index.json / 事件簇.json 主 schema）
@@ -446,8 +446,8 @@ def cluster_chapter_bounds(cluster_meta: dict) -> tuple[int | None, int | None]:
 def cluster_total_words(cluster_meta: dict) -> int:
     """容忍多 schema 读 cluster 总字数。
 
-    契约不符根因：cluster_index.json 实际 key 是 estimated_words，但旧码只读
-    total_words/word_count → meta.json 的 total_words_original 永远回退空。
+    cluster_index.json 的主 key 是 estimated_words；只读 total_words/word_count
+    会导致 meta.json 的 total_words_original 永远回退空。
 
     兼容顺序：estimated_words → total_words → word_count → words。
     """
@@ -503,12 +503,11 @@ def gather_cluster_ref_text(project_root: Path, cluster_meta: dict, max_chars: i
     return "\n\n".join(pieces)[:max_chars]
 
 
-# ============ L3d · draft-level critic-refine + knockout（PerFine 式 · 2026-05-31）============
+# ============ L3d · draft-level critic-refine + knockout（PerFine 式）============
 #
-# 根因（L3b 自认 · memory reference-system-validation-method）：复刻是「得分→盲改 skill→再测」
-# 乏力循环——**没有 draft 改稿、没有保最优**。一旦草稿出来就定稿，差距只能靠下一轮蒸 skill 修。
-#
-# 升级（PerFine · arxiv 2510.24469 · GEval +7-13% · 3-5 轮稳）：复刻出稿后——
+# 没有 draft 级改稿的复刻是「得分→盲改 skill→再测」乏力循环——草稿一出即定稿、不保最优，
+# 差距只能靠下一轮蒸 skill 修。本节按 PerFine（arxiv 2510.24469 · GEval +7-13% · 3-5 轮稳）
+# 在复刻出稿后——
 #   ① critic LLM（同 gen-model profile）按 **tone / 词汇 / 句式 / topicality** 四类
 #      出**结构化 feedback**，**直接改当前草稿**（draft-level · 不改 skill）；
 #   ② 按 feedback 重写草稿；
@@ -521,7 +520,7 @@ def gather_cluster_ref_text(project_root: Path, cluster_meta: dict, max_chars: i
 #   · SFS 当裁判透明（确定性分数 · 不动 sfs_quick/grade 判决逻辑 · 不进 hard_gate）；
 #   · critic 复用 active gen-model profile（复刻仍走 gen-model · 同栈）；
 #   · critic prompt 引用作者**数值契约表**条目（顺带吸收 per-author rubric 精华 · 受控量化坐标）；
-#   · 默认 active（用户：默认关闭写他干什么）· env DRAFT_REFINE_MODE=off 可关。
+#   · 默认 active（默认关闭的功能没人会主动打开）· env DRAFT_REFINE_MODE=off 可关。
 
 # critic 评的四类维度（PerFine rubric · 映射作者数值契约表 + 受控语言学坐标）
 DRAFT_CRITIC_DIMENSIONS = ["tone", "vocabulary", "syntax", "topicality"]
@@ -533,8 +532,8 @@ def _draft_refine_mode() -> str:
     值（大小写不敏感）：
       · active（默认 / 空 / 非法值）：开启 draft-level critic-refine + knockout——
         草稿出来后 critic 出结构化 feedback 直接改稿 · SFS 当裁判 · knockout 保最优（3-5 轮）。
-        （用户纪律：默认关闭写他干什么 · 默认全开真生效。）
-      · off：关闭——复刻一次出稿即定稿（旧行为 · A/B 对照）。
+        （默认关闭的功能没人会主动打开 · 默认全开真生效。）
+      · off：关闭——复刻一次出稿即定稿（用于 A/B 对照）。
       · on/1/true/refine → 归一为 active。
 
     只改「出稿后是否多轮精修 + 保最优」（确定性编排 · gen-model/SFS 调用可 mock 测试）·
@@ -798,7 +797,7 @@ def _knockout_accept(best_score: float | None, cand_score: float | None) -> bool
 
 
 # ============================================================
-# 维度消融驱动骨架（R3 ABL-3/ABL-5 · 2026-06-14 · experiment_gate · 待 gen-model API）
+# 维度消融驱动骨架（experiment_gate · 待 gen-model API）
 # ============================================================
 
 def _ablation_record_dir(project_root: Path) -> Path:
@@ -945,7 +944,7 @@ def run_dimension_ablation(*, project, cluster_ref, skill_version, dimension,
         True）**两条都过**，结论才可信；任一不过 → 视作 inconclusive，**绝不**据此动注入维度。
 
     ───────────────── 跑法（writer 路径·非改复刻 prompt）─────────────────
-    R3 open_question#1 定调走 **writer 路径**（A1-A5 思维注入只在 gen_writer 经 build_manifest
+    本函数走 **writer 路径**（A1-A5 思维注入只在 gen_writer 经 build_manifest
     生效·distill_replicate 自身不消费思维注入）。消融驱动 = toggle build_manifest 的
     ABLATE_DIMENSIONS env 后跑 writer：
       · baseline_runs = N seed（ABLATE_DIMENSIONS 空·含该维注入）→ 各 SFS
@@ -1241,10 +1240,9 @@ def main():
     # 草稿拼好后：critic 出结构化 feedback 直接改稿 → SFS 裁判评分 → knockout 保最优（3-5 轮）。
     # critic + refine 复用同 active gen-model profile（复刻仍走 gen-model）· SFS 当裁判透明。
     refine_mode = args.draft_refine if args.draft_refine is not None else _draft_refine_mode()
-    # 2026-06-07 适配：reasoning 模型（thinking_level 非空）的 critic→refine 轮会把正文越改越短
-    # （pro-preview 实证：初稿 ~4700 CJK → refine 3 轮砍到 1737；且其 SFS 在 refine 内算 None 致
-    # knockout 无法择优、退化保最后一轮=最短）。故 reasoning 模型自动关 draft-refine，
-    # 除非用户显式 --draft-refine active。
+    # reasoning 模型（thinking_level 非空）的 critic→refine 轮会把正文越改越短
+    # （且其 SFS 在 refine 内算 None 致 knockout 无法择优、退化保最后一轮=最短）。
+    # 故 reasoning 模型自动关 draft-refine，除非用户显式 --draft-refine active。
     if refine_mode == "active" and args.draft_refine is None and (getattr(active, "thinking_level", None) or getattr(active, "reasoning_effort", None)):
         refine_mode = "off"
         print(f"[L3d] 检测到 reasoning 模型({active.model})·自动关 draft-refine"

@@ -23,12 +23,11 @@ import re
 import sys
 from pathlib import Path
 
-# v2 cluster 化（2026-05-29 复核）：本 scanner 的判定单元是「单个叙述段」——
-# 触发阈值（段长 < 80 CJK 且 句号 ≥3 且 逗号 ≤1）只看单段内部结构，
-# 与整篇文本体量（chapter 3-4k vs cluster 12-25k CJK）无关：cluster 草稿里的
-# 每个段落和 chapter 里的段落是同一批物理段，逐段判定完全一致。
+# 本 scanner 的判定单元是「单个叙述段」——触发阈值（段长 < 80 CJK 且 句号 ≥3 且 逗号 ≤1）
+# 只看单段内部结构，与整篇文本体量（chapter 3-4k vs cluster 12-25k CJK）无关：
+# cluster 草稿里的每个段落和 chapter 里的段落是同一批物理段，逐段判定完全一致。
 # violation_density 用 narrative_paras_total 归一，长文本天然不会因段多而误升。
-# 故 cluster 化对本 scanner 阈值无意义 → 不引入 IS_CLUSTER_MODE 分支（删除死变量 + 误导注释）。
+# 故本 scanner 不需要区分 cluster/chapter 视野。
 
 
 
@@ -37,7 +36,7 @@ def _author_sentence_mean(style_path: str | None, project: str | None):
 
     对齐兄弟 scanner prose_rhythm_scanner._author_baseline：读
     _数据库/作者风格.json|作者风格_FINAL.json 的 quantitative.sentence_length.mean。
-    取不到返回 None → 沿用通用兜底阈值(行为同改前)。
+    取不到返回 None → 沿用通用兜底阈值。
     """
     cands = []
     if style_path:
@@ -59,7 +58,7 @@ def _author_sentence_mean(style_path: str | None, project: str | None):
 
 def is_dialogue_para(para: str) -> bool:
     """对话段：「」引号包裹内容占段 ≥50%"""
-    quote_chars = sum(1 for c in para if c in '「」“”『』"')  # 补弯引号 U+201C/U+201D
+    quote_chars = sum(1 for c in para if c in '「」“”『』"')  # 含弯引号 U+201C/U+201D
     if quote_chars < 2:
         return False
     # 提取「」内字符
@@ -74,9 +73,9 @@ def is_dialogue_para(para: str) -> bool:
 def detect_annotation_zone(paras: list) -> set:
     """检测章末笔注段范围(仅章尾区·防中段误命中吞整尾)
 
-    2026-06-16 修(triage L50)：去掉绑定某本书世界观专名的 marker(ZF/观测员档案)，
-    系统须对任意作者通用；并加位置守卫——笔注是章末块，只在后 40%(且至少最后 3 段)
-    内找首个标记，避免正文中段子串命中(如『翻开档案标号』)静默吞掉整条章尾扫描。
+    marker 列表须对任意作者通用(不绑定某本书的世界观专名)；并加位置守卫——笔注是
+    章末块，只在后 40%(且至少最后 3 段)内找首个标记，避免正文中段子串命中(如『翻开档案
+    标号』)静默吞掉整条章尾扫描。
     """
     annotation_markers = ['样本编号', '【档案', '档案标号']
     n = len(paras)
@@ -97,7 +96,6 @@ def detect_annotation_zone(paras: list) -> set:
 def scan_chapter(text: str, author_sent_mean: float | None = None) -> dict:
     paras = text.split('\n')
     # 北极星⑤:作者档证短句碎切风格(句长均值 < 22)则放宽 period 阈值，relax-only 不收紧。
-    # author_sent_mean 缺省(None)时 period_floor=3，行为与改前完全一致。
     period_floor = 3
     if author_sent_mean is not None and author_sent_mean < 22:
         period_floor = 5
@@ -157,7 +155,6 @@ def main():
         print(f"路径不存在: {path}")
         sys.exit(2)
     # 北极星⑤:解析可选 --style/--project，读作者档句长均值作第一权威(relax-only)。
-    # 未传时 asm=None → 行为同改前。
     style_path = None
     project = None
     args = sys.argv[2:]

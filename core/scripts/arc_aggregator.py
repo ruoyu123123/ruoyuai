@@ -1,9 +1,9 @@
-"""arc_aggregator.py — v22.cluster 故事块 arc 聚合器（cluster 主轨）
+"""arc_aggregator.py — 故事块 arc 聚合器（cluster 主轨）
 
 把已蒸馏的 continuity JSON + 单章 metrics + 单章 JSON **按 cluster 颗粒度**聚合成 arc。
 对齐写作端 ECAS 故事块模式（gen_writer.py --cluster N），避免"蒸馏 3 章固定 / 写作 cluster 可变"颗粒度错位。
 
-业界依据（详见 .research_cache/inspiration_cluster_distill_2026-05-24.md）：
+业界依据：
 - LumberChunker (EMNLP 2024 · arXiv 2406.17526) — variable-length 比 fixed-N +7.37% DCG@20
 - MARCUS 2025 (arXiv 2510.18201) — event-centric character arc，跨整本书聚合
 - Multi-Agent TV Arcs 2025 (arXiv 2503.04817) — arc 跨任意 episode，按情节单元自然终结
@@ -86,9 +86,10 @@ def parse_pacing_curve_to_values(curve_str: str, n_chapters: int) -> list[float]
 
     for chunk in chunks:
         matched = 0.5
-        # 最长优先匹配（2026-06-15 审计修）：原按 dict 插入顺序·短 label「中」「快」排在含它的
-        # 「中快」「极快」之前 → chunk「中快」先命中「中」(0.5)误判中速·应 0.65。对齐 sibling
-        # parse_pacing_curve_to_labels 已用的 longest-first。错值会污染 emotion_curve 下游(Reagan/climax)。
+        # 必须最长优先匹配：短 label「中」「快」是长 label「中快」「极快」的子串，若按 dict
+        # 插入顺序匹配，chunk「中快」会先命中「中」(0.5) 而误判成中速（应 0.65）。需对齐 sibling
+        # parse_pacing_curve_to_labels 同样的 longest-first；错值会污染 emotion_curve 下游
+        # （Reagan/climax）。
         for label, value in sorted(PACING_LABEL_TO_VALUE.items(), key=lambda kv: -len(kv[0])):
             if label in chunk:
                 matched = value
@@ -226,16 +227,16 @@ def extract_chapter_emotion_intensity(chapter_json: dict) -> float:
     """从单章 JSON 估算本章情绪强度（0-1）。
 
     兼容字段路径：
-    - B4_narrative_craft.dim33_emotion_beats (list of {pct, direction}) — v17 标准 schema
-    - qualitative.emotion_beat_map / 情绪节拍图 / dim33 — 旧 schema
+    - B4_narrative_craft.dim33_emotion_beats (list of {pct, direction})
+    - qualitative.emotion_beat_map / 情绪节拍图 / dim33
 
-    VAD 模型优先（RUOYU_NN_VAD=1 时对 direction 词条打分），词典 fallback（兼容旧调用）。
+    VAD 模型优先（RUOYU_NN_VAD=1 时对 direction 词条打分），词典 fallback。
     """
     return float(extract_chapter_emotion_intensity_detail(chapter_json)["intensity"])
 
 
 def extract_dim_value(chapter_json: dict, dim_names: list[str], default: float = 0.0) -> float:
-    """从单章 JSON 取某维度数值（v22.cluster 升级 · 支持嵌套路径 + dim 数字自动递归）。
+    """从单章 JSON 取某维度数值（支持嵌套路径 + dim 数字自动递归）。
 
     dim_names 接受：
     - 数字关键词（如 "dim28"）→ 递归找含该子串的 key
@@ -332,7 +333,7 @@ def describe_arc_structure(curve: list[float]) -> str:
 
 
 def load_cluster_index(project: Path) -> dict | None:
-    """v22.cluster：读 cluster_index.json（cluster_segmenter 产出）。"""
+    """读 cluster_index.json（cluster_segmenter 产出）。"""
     f = project / "cluster_index.json"
     if not f.exists():
         return None
@@ -340,7 +341,7 @@ def load_cluster_index(project: Path) -> dict | None:
 
 
 def aggregate_cluster(project: Path, cluster_id: str) -> dict:
-    """v22.cluster：按 cluster 颗粒度聚合 arc（主轨）。"""
+    """按 cluster 颗粒度聚合 arc（主轨）。"""
     ci = load_cluster_index(project)
     if not ci:
         return {"error": "cluster_index.json not found · 请先跑 cluster_segmenter.py"}
@@ -401,7 +402,7 @@ def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_si
             if data:
                 continuity_jsons.append(data)
 
-    # 拼接 pacing_curve（兼容多 schema：旧 v17 用 pacing_curve / 新版用 window_arc）
+    # 拼接 pacing_curve（兼容 pacing_curve / window_arc 两种字段名）
     def _safe_pacing_str(c):
         # 优先 pacing_curve；兼容 window_arc / voice_arc 字段
         for key in ("pacing_curve", "window_arc", "voice_arc"):
@@ -490,14 +491,14 @@ def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_si
     fs_planted = sum(_fore_len(c, "planted") for c in continuity_jsons)
     fs_resolved = sum(_fore_len(c, "resolved") for c in continuity_jsons)
 
-    # v22.4dim Round 2 应用：Sudowrite tension dial 1-11
+    # 应用 Sudowrite tension dial 1-11
     sudowrite_dial = [round(1 + 10 * v) for v in emotion_curve[:arc_size]]
 
     return {
         "arc_id": f"arc_{arc_id_num}",
         "chapter_range": f"ch{arc_start}-{arc_end}",
         "emotion_curve_normalized": emotion_curve[:arc_size],
-        "sudowrite_tension_dial_1_11": sudowrite_dial,    # v22.4dim Round 2: 直观档位（business standard）
+        "sudowrite_tension_dial_1_11": sudowrite_dial,    # 直观档位（business standard）
         "pacing_labels": pacing_labels[:arc_size],
         "scene_summary_ratio_per_chapter": scene_summary_ratio[:arc_size],
         "event_density_per_chapter": event_density[:arc_size],

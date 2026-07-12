@@ -1,4 +1,4 @@
-"""judge_consensus.py — 多 Judge 共识仲裁器（v17.4 / OpenClaw 启发 + P2-6 persona）
+"""judge_consensus.py — 多 Judge 共识仲裁器（OpenClaw 启发 · 支持 persona 维度）
 
 为关键决策提供 2-3 个独立 judge 并行评 + 主代理仲裁机制。
 解决"单 judge 一票通过、易被 writer 引导"问题。
@@ -8,10 +8,10 @@
    不能由单 judge 一锤定音
 2. 2-3 个 judge 独立评，结果用 majority vote 或 median 仲裁
 3. 不一致超阈值 → 升级到用户
-4. 【P2-6】支持 persona 维度：JudgeReport 可选 `persona` 字段（如
+4. persona 维度：JudgeReport 可选 `persona` 字段（如
    'common_reader' / 'developmental_editor' / 'line_editor' / 'harsh_critic'），
    merge 时按 persona 分组算平均，跨 persona 分歧 ≥ 2 grade levels → escalate。
-   向前兼容：所有 report 都没 persona 字段 → 退回原行为。
+   report 缺 persona 字段时按 'default' 分组处理。
 
 用法（被主代理调用）：
     python judge_consensus.py merge <judge_report_1.json> <judge_report_2.json> [...]
@@ -23,11 +23,11 @@
       "agreement_score": 0.95,
       "majority_findings": {...},
       "dissent": [...],
-      "persona_breakdown": {                   # P2-6
+      "persona_breakdown": {
         "common_reader": {"count":1,"avg_grade":"A","grades":["A"]},
         "harsh_critic":  {"count":1,"avg_grade":"C","grades":["C"]}
       },
-      "persona_dissent_severity": 2.0,         # P2-6：persona 间 grade level 极差
+      "persona_dissent_severity": 2.0,         # persona 间 grade level 极差
       "escalate_to_user": false
     }
 """
@@ -52,9 +52,8 @@ def median_grade(grades: list[str]) -> str:
     if n % 2 == 1:
         med = nums[n // 2]
     else:
-        # 2026-05-29 修：偶数个 judge 时原来取上中位 nums[n//2]（偏高），
-        # 与 self-protection 检测目标（宁低勿高）矛盾，例如 ['A','C'] 恒判 A。
-        # 改为取两个中位的平均并向下取整（偏保守/偏低），['A','C']→B、['B','D']→C。
+        # 偶数个 judge 时取两个中位的平均并向下取整（偏保守/偏低），例如 ['A','C']→B、
+        # ['B','D']→C，对齐 self-protection 检测目标「宁低勿高」（避免取上中位恒判高分）。
         med = math.floor((nums[n // 2 - 1] + nums[n // 2]) / 2)
     # 钳到合法 grade 区间 [1, 4]
     med = min(4, max(1, med))
@@ -70,7 +69,7 @@ def agreement_score(grades: list[str]) -> float:
 
 
 def persona_breakdown(reports: list[dict]) -> dict:
-    """P2-6：按 persona 字段分组分析评分。
+    """按 persona 字段分组分析评分。
     缺失 persona 视为 'default'。返回
         {persona: {count, grades, avg_grade_num, avg_grade}}。
     用途：在多 persona judges 场景（老读者 / 严苛书评人 / 编辑等）下，
@@ -90,7 +89,7 @@ def persona_breakdown(reports: list[dict]) -> dict:
 
 
 def persona_dissent_severity(breakdown: dict) -> float:
-    """P2-6：跨 persona 的分歧度。返回 max - min 的 grade level 差（0-3）。
+    """跨 persona 的分歧度。返回 max - min 的 grade level 差（0-3）。
     breakdown 元素数 < 2 → 返回 0（没有 persona 对比基础）。"""
     if len(breakdown) < 2:
         return 0.0
@@ -166,11 +165,11 @@ def merge_reports(reports: list[dict]) -> dict:
                 "uncertainty_flags": r.get("uncertainty_flags", []),
             })
 
-    # P2-6：persona 维度分析
+    # persona 维度分析
     pbreak = persona_breakdown(reports)
     pdissent = persona_dissent_severity(pbreak)
 
-    # P2-11：evidence_quotes 完备度统计
+    # evidence_quotes 完备度统计
     # 业界 grounding 实践：judge 评分必须附原文 quote。无 quote 评的 grade 凭印象
     # 不可靠 → 降权或升级。统计 reports 中 evidence_quotes 段非空且 ≥2 条的比例。
     reports_with_evidence = sum(
@@ -182,8 +181,8 @@ def merge_reports(reports: list[dict]) -> dict:
     # 升级条件
     escalate = False
     escalate_reasons = []
-    # 2026-05-29 修：原 `< 0.5` 时 2 judge 完全分歧（agreement=0.5）不触发升级。
-    # 改为 `<= 0.5`，让 2 judge 各执一词（如 A vs C）也能升级到用户。
+    # 用 `<= 0.5`（非 `< 0.5`）：2 judge 完全分歧时 agreement 恰为 0.5，须用 <= 才能
+    # 触发升级，让 2 judge 各执一词（如 A vs C）也能升级到用户。
     if agreement <= 0.5:
         escalate = True
         escalate_reasons.append(f"agreement {agreement:.2f} <= 0.5 严重分歧")
@@ -194,7 +193,7 @@ def merge_reports(reports: list[dict]) -> dict:
     if "D" in grades:
         escalate = True
         escalate_reasons.append("至少一个 judge 给 D 级")
-    # P2-6：persona 间分歧 ≥ 2 grade levels → 升级
+    # persona 间分歧 ≥ 2 grade levels → 升级
     # （如老读者评 A 但严苛书评人评 C，4-2=2，说明视角悬殊需人工权衡）
     if pdissent >= 2.0 and len(pbreak) >= 2:
         escalate = True
@@ -203,7 +202,7 @@ def merge_reports(reports: list[dict]) -> dict:
             f"persona 间分歧 {pdissent:.1f} grade levels（{personas_list}）"
         )
 
-    # P2-11：evidence_quality < 0.5 → 升级（多数 judge 凭印象评分，结论不可靠）
+    # evidence_quality < 0.5 → 升级（多数 judge 凭印象评分，结论不可靠）
     if len(reports) > 0 and evidence_quality < 0.5:
         escalate = True
         escalate_reasons.append(
@@ -226,14 +225,14 @@ def merge_reports(reports: list[dict]) -> dict:
     for r in reports:
         all_uncertainty.extend(r.get("uncertainty_flags", []))
 
-    # v17.5 C5：检测 schema 版本兼容
+    # reports 间 schema_version 不一致时告警
     schema_versions = [r.get("schema_version") for r in reports if r.get("schema_version")]
     if schema_versions and len(set(schema_versions)) > 1:
         # 不一致告警
         print(f"[WARN] reports schema_version 不一致：{schema_versions}", file=sys.stderr)
 
     result = {
-        "schema_version": "1.3",  # P2-6：persona | P2-11：evidence_quality | 1.3：calibration_features
+        "schema_version": "1.3",
         "consensus_grade": consensus_grade,
         "consensus_confidence": round(avg_confidence, 3),
         "agreement_score": round(agreement, 3),
@@ -242,10 +241,10 @@ def merge_reports(reports: list[dict]) -> dict:
         "grades_distribution": dict(Counter(grades)),
         "majority_findings_merged": merged_findings,
         "dissent": dissent,
-        "persona_breakdown": pbreak,                       # P2-6
-        "persona_dissent_severity": round(pdissent, 2),    # P2-6
-        "evidence_quality": round(evidence_quality, 2),    # P2-11
-        "reports_with_evidence": reports_with_evidence,    # P2-11
+        "persona_breakdown": pbreak,
+        "persona_dissent_severity": round(pdissent, 2),
+        "evidence_quality": round(evidence_quality, 2),
+        "reports_with_evidence": reports_with_evidence,
         "all_uncertainty_flags": all_uncertainty,
         "escalate_to_user": escalate,
         "escalate_reasons": escalate_reasons,

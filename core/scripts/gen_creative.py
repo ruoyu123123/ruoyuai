@@ -2,13 +2,13 @@
 """
 gen_creative.py — Gen-Model 创意卡与卷描述生成工具
 
-把「含创意笔触」的输出从 Claude 主代理迁到当前 active gen-model profile。
+「含创意笔触」的输出由当前 active gen-model profile 生成。
 Claude 主代理负责准备 brief（题材/调研缓存/角色骨架），调本工具生成正文段，再接收 JSON 展示给用户。
 
 当前公开 CLI mode：
 
   --mode brainstorm    生成 N 张灵感卡（开书用，配合 /write 命令）                    [✓]
-  --mode volume_arc    生成卷级大纲（P2 分卷 chunk + WAL 断点续跑：骨架→逐卷 ME 池→确定性合并·配合 /outline·阶段2 建书·实现在 gen_creative_volume_arc.py） [✓]
+  --mode volume_arc    生成卷级大纲（分卷 chunk + WAL 断点续跑：骨架→逐卷 ME 池→确定性合并·配合 /outline·阶段2 建书·实现在 gen_creative_volume_arc.py） [✓]
   --mode distill_reflect  蒸馏 phase-3 修正反思·产 skill markdown（配合 /distill-style） [✓]
 
 用法示例：
@@ -283,7 +283,7 @@ def build_distill_reflect_prompt(*, gap_text: str, current_skill: str,
 
 
 def _run_distill_reflect(args) -> int:
-    """phase-3 修正反思：产 skill markdown。must_fix#5：关 response_format_json·跳 JSON parse·
+    """phase-3 修正反思：产 skill markdown。关 response_format_json·跳 JSON parse·
     换『非空 + 含必备小节』文本校验（parse_json_loose 对 markdown 必误判 block）。"""
     import llm_transport as lt
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -304,17 +304,17 @@ def _run_distill_reflect(args) -> int:
     if author_missing:
         author_block = AUTHOR_PROFILE_MISSING_GUARD
 
-    version = args.skill_version    # argparse default=1 兜底·`or 1` 会把合法 0(v0) 当 1（轮次8）
+    version = args.skill_version    # argparse default=1 兜底·`or 1` 会把合法 0(v0) 误当 1
     system, user = build_distill_reflect_prompt(
         gap_text=gap_text, current_skill=current_skill,
         author_block=author_block, version=version)
     if args.dry_run:
         print("=== SYSTEM ===\n" + system + "\n\n=== USER ===\n" + user)
         return 0
-    # must_fix#5：markdown 输出·**不**传 response_format_json·**不** parse_json_loose
-    # 🔴 真机 e2e 同类加固 2026-06-15：与 volume_arc 同根（单点 gen-model 调用偶发空/缺小节·
-    # 限速/抖动直接 block exit 1 逼用户 --resume·对 GUI 非技术用户蒸馏致命）。加重试≤3 次自愈·
-    # 真破损才 block（运行时自学习「一处 incident 推广同类预防」·北极星⑤结构破损非创作判断）。
+    # markdown 输出·**不**传 response_format_json·**不** parse_json_loose
+    # 🔴 与 volume_arc 同根：单点 gen-model 调用偶发空/缺小节（限速/抖动），直接 block exit 1
+    # 会中断整条蒸馏 plan。加重试≤3 次自愈·真破损才 block
+    # （结构破损是传输/格式问题，不是创作判断，北极星⑤）。
     MAX_REFLECT_TRIES = 3
     required_sections = ("## 句式与节奏", "## 段落与标点", "## 对话工艺",
                          "## 描写与情绪", "## 反模式")
@@ -406,12 +406,12 @@ def main():
 
     elif args.mode == 'volume_arc':
         # 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约·自带 emit/dry-run）
-        # 实现拆在 gen_creative_volume_arc.py（P2 分卷 chunk 三阶段·2026-07-07 机械拆分）
+        # 实现在 gen_creative_volume_arc.py（P2 分卷 chunk 三阶段）
         from gen_creative_volume_arc import _run_volume_arc
         sys.exit(_run_volume_arc(args))
 
     elif args.mode == 'distill_reflect':
-        # 蒸馏 phase-3 修正反思（阶段3·产 skill markdown 非 JSON·must_fix#5）
+        # 蒸馏 phase-3 修正反思（阶段3·产 skill markdown 非 JSON）
         sys.exit(_run_distill_reflect(args))
 
     if args.dry_run:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""av_judge.py — AV-judge 解耦特质·作者验证（读者视角配对判别 · advisory · 2026-05-31）
+"""av_judge.py — AV-judge 解耦特质·作者验证（读者视角配对判别 · advisory）
 
 【是什么】Author-Verification judge：喂 1 段**作者原文** + 1 段**仿写**，要求 gen-model
   **逐维度配对判别**——把 A（作者）当锚、B（仿写）当待验，逐维点名「B 在哪个维度露馅
@@ -20,7 +20,7 @@
   AV-judge 站中间：**读者视角** + **解耦 4 维** + **配对判别**（A 锚 B 验，比绝对打分可靠——
   Catch Me If You GAN / Are We There Yet 等实证：LLM 对单段绝对风格打分方差大，配对相对判别稳）。
 
-【自一致性重采样（Rating Roulette · 2026-05-31 · 稳方差）】
+【自一致性重采样（Rating Roulette · 稳方差）】
   即便配对相对判别，单次 LLM-judge 仍有方差（同一对 A/B 跑两次可能一次走味一次命中）。故
   同 judge model 跑 N 次重采样（temperature 微抖 · env AV_JUDGE_N_SAMPLES 默认 3 · 设 1 关），
   4 维**各取多数票**做 robust 聚合 + 暴露方差（agreement / unstable_dims · advisory 不黑箱）。
@@ -30,17 +30,15 @@
   不问「B 像不像作者（打 1-10）」，问「给定 A 是作者真迹，B 在哪几维露馅」——
   相对锚定把「这个作者基线长什么样」交给样本 A 决定，绕开 LLM 对网文隐性风格的绝对标尺漂移。
 
-【必 shadow 上线 · 绝不 hard_gate】(北极星⑤ + 共同纪律 2)
+【绝不 hard_gate】(北极星⑤ + 共同纪律 2)
   实证（Catch Me If You GAN / Are We There Yet On Detecting LLM Texts）：LLM-judge 对网文
   隐性风格会**失准**——创意写作域约 1/4 难例判别翻转。故：
     · 永远 advisory，code AV_TRAIT_DRIFT **绝不进 audit_hub.HARD_GATE_CODES**。
-    · env AV_JUDGE_MODE 控制（默认 off）：
-        off（默认）：完全跳过——不构 prompt、不调 gen-model、零回归（共同纪律 2：改判决行为默认 off）。
+    · env AV_JUDGE_MODE 控制（默认 active）：
+        off：完全跳过——不构 prompt、不调 gen-model（无 gen-model 配置/离线环境的逃生口）。
         shadow：构 prompt + 调 gen-model + 出 4 维 advisory，但**只记录**（report.shadow=True ·
-                顶层 verdict=None · 不上报 audit_hub）→ 先与 SFS / 人评校准，再放量。
-        active：超阈维度作为 advisory 待裁决项上报（仍 advisory · 仍可豁免 · 永不 hard_gate）。
-  shadow 是默认上线姿态：先攒「AV-judge 判走味」vs「SFS 判过」vs「人评」三方对照样本，
-  确认 AV-judge 在本作者上不误判，再考虑 active。
+                顶层 verdict=None · 不上报 audit_hub）→ 与 SFS / 人评做三方对照校准用。
+        active（默认）：走味维度作为 advisory 待裁决项上报（仍 advisory · 仍可豁免 · 永不 hard_gate）。
 
 【复用 · 薄】(北极星⑥ 别臃肿)
   · 纯 prompt + 薄 Python，gen-model 调用复用 gen_model_loader 同款 fallback 管线
@@ -50,11 +48,11 @@
     结论只作为作者辨识度 advisory 报告，不改变 SFS 收敛闸或 hard_gate。
 
 用法：
-  shadow:  AV_JUDGE_MODE=shadow python av_judge.py \\
-             --author workspace/styles/蛊真人/原文/第010章.txt \\
-             --replica workspace/styles/蛊真人/复刻测试/v7_round1/cluster_001_replica.txt \\
-             [--out report.json]
-  默认 off（无 env）→ 直接打印 skipped 报告退出 0。
+  python av_judge.py \\
+    --author workspace/styles/蛊真人/原文/第010章.txt \\
+    --replica workspace/styles/蛊真人/复刻测试/v7_round1/cluster_001_replica.txt \\
+    [--out report.json]
+  AV_JUDGE_MODE=off → 直接打印 skipped 报告退出 0。
 
 测试只验确定性层（prompt 构造 + rubric + 配对结构 + off 默认）· 不实跑 gen-model（需 API）。
 """
@@ -83,10 +81,10 @@ from gen_model_loader import (  # noqa: E402
 ISSUE_CODE = "AV_TRAIT_DRIFT"
 
 # ── 自一致性重采样（Rating Roulette · 稳 LLM-judge 方差）─────────────────
-# 根因（本批任务说明 · arxiv 实证）：av_judge 原本**单次**配对判别——LLM-judge 对网文隐性
-#   风格失准（创意写作域约 1/4 难例翻转），单次采样方差大，同一对 (A,B) 跑两次可能一次判
-#   「走味」一次判「命中」。治法 = Rating Roulette / self-consistency：同 judge model 跑
-#   N 次重采样（temperature 微抖），4 维**各取多数票**做 robust 聚合，把单次噪声平滑掉。
+# 根因（arxiv 实证）：LLM-judge 对网文隐性风格会失准（创意写作域约 1/4 难例翻转），单次配对
+#   判别方差大，同一对 (A,B) 跑两次可能一次判「走味」一次判「命中」。治法 = Rating Roulette /
+#   self-consistency：同 judge model 跑 N 次重采样（temperature 微抖），4 维**各取多数票**做
+#   robust 聚合，把单次噪声平滑掉。
 # env AV_JUDGE_N_SAMPLES：默认 3（质量优先 · N≥2 真聚合生效）· 设 1 = 关（退回单次单采样 ·
 #   零回归逃生口）· 钳到 [1, AV_JUDGE_N_SAMPLES_MAX]（防 token / 时延失控）。
 # ⚠️ 仍 advisory：聚合只稳方差、不强判——多数票 + 方差透明上报，仍可豁免、永不 hard_gate。
@@ -129,14 +127,14 @@ AV_TRAIT_DIMS = [
     ),
 ]
 
-# ── intent_recovery 扩展维（P0 · experiment · 默认不进 AV_TRAIT_DIMS 主列表）──────────
-# 「作者思维」维（B1-B3 决策骨）= 反推作者在岔路口的取舍倾向，**不是表层文体**。仅在
+# ── intent_recovery 扩展维（experiment · 默认不进 AV_TRAIT_DIMS 主列表）──────────
+# 「作者思维」维（决策骨）= 反推作者在岔路口的取舍倾向，**不是表层文体**。仅在
 #   build_av_judge_prompt(include_intent_dim=True) 时追加渲染（默认 False · 零回归 · 不污染纯文体 4 维）。
-# 🔴 grounding 切断复述捷径（R3 P0-IR-1）：ask 只给「不含作者档 rationale 原文的中性维度定义」，
+# 🔴 grounding 切断复述捷径：ask 只给「不含作者档 rationale 原文的中性维度定义」，
 #   绝不出现「母题/胜利代价藏悲凉」等已聚合的 author_decision_principles 文案——让 judge 自己反推，
 #   防它照抄作者档原文造成虚假高余弦。判决权**不在此维 verdict**（它仅出 advisory 文本）——真判决
 #   交确定性 mstyle 余弦（replication_fidelity_check.intent_recovery_cosine·embedding_store）。
-# ⚠️ 弱模型对「决策倾向」抽象维执行力弱（惊悚乐园 v2 文字约束 rollback 教训）→ 默认关·仅 experiment 开。
+# ⚠️ 弱模型对「决策倾向」抽象维执行力弱 → 默认关·仅 experiment 开。
 INTENT_DIM = (
     "作者思维",
     "决策层：作者在岔路口的取舍倾向——代价/奖惩怎么排、贴近还是拉远叙事距离、说破还是留白",
@@ -154,7 +152,7 @@ def _active_dims(include_intent_dim: bool = False) -> list:
 
 
 def _av_judge_mode() -> str:
-    """读 env AV_JUDGE_MODE：默认 active（2026-05-31 放量）/ shadow / off。
+    """读 env AV_JUDGE_MODE：默认 active / shadow / off。
 
     active（默认）：构 prompt + 调 gen-model + 4 维配对判别 · 走味维度作 advisory 待裁决项上报
       （仍 advisory · 仍可豁免 · code AV_TRAIT_DRIFT 永不进 HARD_GATE_CODES）。LLM-judge 对网文
@@ -189,8 +187,7 @@ def _n_samples() -> int:
 def _position_swap_on() -> bool:
     """读 env AV_JUDGE_POSITION_SWAP：默认 **off**（G2-CYCLIC 去位置偏 · experiment）。
 
-    🔴 主代理施工决定（比蓝图「默认半 swap」更保守）：av_judge 已是 active 生产判别组件，
-      position-swap 去偏的**有效性需 API 离线对称性闸验证**（本机验证不了），故默认 off →
+    position-swap 去偏的**有效性需 API 离线对称性闸验证**（本机验证不了），故默认 off →
       现有 active 行为**完全零回归**（swap 默认关 · self_consistency_judge 全 swap=False）。
       只有显式 AV_JUDGE_POSITION_SWAP=on（experiment）才在 N 采样里半数样本 swap。
       N=1 时即便 on 也退化为 0 个 swap（零回归）。
@@ -290,7 +287,7 @@ def build_av_judge_prompt(author_text: str, replica_text: str,
     确定性纯函数（不调 gen-model）——测试只验此处的配对结构 + rubric + 输出 JSON 契约。
 
     swap（G2-CYCLIC 去位置偏 · experiment · 默认 False=原向零回归）：
-      · False：作者真迹先呈现、仿写后呈现（历史原向）。
+      · False：作者真迹先呈现、仿写后呈现（规范朝向）。
       · True：**仅在 prompt 文本层反转两段的呈现顺序**（仿写先呈现、作者真迹后呈现），但
         rubric / verdict / 指证要求**始终锚到「仿写段」**（不绑字母槽），让 judge 始终判仿写走味。
         4 维输出 JSON schema（维度键名）**零变化**——下游 parse_av_verdicts 完全复用。
@@ -622,7 +619,7 @@ def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_t
     """同 judge model 跑 N 次重采样（temperature 微抖 + 半数 position-swap）→ 多数票聚合（Rating Roulette）。
 
     这是 av_judge 的**自一致性核心**：稳住单次 LLM-judge 的方差。N=1 时退化为单次单采样
-    （= 改造前行为 · 零回归逃生口）。
+    （关闭聚合的逃生口）。
 
     G2-CYCLIC 半数 swap（experiment · AV_JUDGE_POSITION_SWAP=on 才开 · 默认 off=全 swap=False 零回归）：
       · swap_on=None → 读 env _position_swap_on()（默认 off）。
@@ -634,11 +631,11 @@ def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_t
     include_intent_dim（intent_recovery · experiment · 默认 False）：透传给 build_av_judge_prompt
       追加「作者思维」第 5 维（仅 advisory 文本 · 不进 parse 聚合 · 真判决交 mstyle 余弦）。
 
-    force_swap（S7 换序双跑协议 · 2026-07-07 · 默认 None=零回归）：非 None 时**整跑锁定一个呈现方向**
+    force_swap（S7 换序双跑协议 · 默认 None=零回归）：非 None 时**整跑锁定一个呈现方向**
       （False=全正向 / True=全反向），覆盖 swap_on 半 swap 分配——供 pairwise_drift_count 的换序双跑
-      一致性协议分别跑「正向整跑」和「反向整跑」再比对结论。None（默认）走既有 _swap_assignment
-      半 swap 逻辑，行为与改造前逐字节一致。判定 prompt 本身零改动（复用 build_av_judge_prompt
-      既有 swap 参数 · 身份标签不变只换呈现顺序）。
+      一致性协议分别跑「正向整跑」和「反向整跑」再比对结论。None（默认）走 _swap_assignment
+      半 swap 逻辑。判定 prompt 复用 build_av_judge_prompt 既有 swap 参数（身份标签不变只换
+      呈现顺序）。
 
     实现（薄复用 · 北极星⑥）：
       · build_av_judge_prompt 按 swap 方向构（swap-off / swap-on 各构一次 · 缓存复用 · 省 token）。
@@ -790,7 +787,7 @@ def _read_text(p: Path) -> str:
 # best-of-N 复用接口（薄 · gen_writer 配对重排择优用 · 不另起调用栈 · 北极星⑥）
 # ════════════════════════════════════════════════════════════════
 
-# ── S7 换序双跑一致性协议（LongJudgeBench arXiv:2606.01629 · 2026-07-07）─────────────
+# ── S7 换序双跑一致性协议（LongJudgeBench arXiv:2606.01629）─────────────
 # 实证：长文本配对评判的位置偏差严重——同一配对换序重判，不一致率可高达 78.7%。单向单判的
 #   配对结论里混着大量「换个呈现顺序就翻转」的假信号。治法 = 换序双跑一致性协议：
 #   · 双跑：同一配对跑两遍——正向整跑（作者真迹在前）+ 反向整跑（仿写在前 · 复用
@@ -802,7 +799,7 @@ def _read_text(p: Path) -> str:
 #   · 留痕：order_consistency ∈ consistent|inconsistent|single_run + order_runs 两跑明细 +
 #     order_swap_stats 进程内不一致率累计（进 trace 供飞轮观察 judge 可靠性）。
 #   · env AV_JUDGE_ORDER_SWAP 默认 **on**（协议级可靠性加固该默认开 · 双跑=2× judge 调用 ·
-#     不抠 token 质量优先）；0/off/false/no → 单跑，判定行为与旧实现逐字节一致
+#     不抠 token 质量优先）；0/off/false/no → 单跑
 #     （调试/对照用 · 仅多一个 order_consistency="single_run" 留痕字段）。
 #   ⚠️ 仍 advisory：协议只提升配对信号可靠性，不改判定逻辑、不产 hard_gate、不否决任何稿。
 ORDER_CONSISTENT = "consistent"
@@ -859,17 +856,17 @@ def pairwise_drift_count(loader: GenModelLoader, author_text: str, replica_text:
     ⚠️ 永远 advisory：本函数只为「在 N 个候选里相对排序」服务，不产 hard_gate、不否决任何稿。
     LLM-judge 对网文隐性风格会失准（创意写作域约 1/4 难例翻转），故只做 select 不做强判。
 
-    自一致性（2026-05-31）：内部走 self_consistency_judge（AV_JUDGE_N_SAMPLES 默认 3 次重采样 ·
+    自一致性：内部走 self_consistency_judge（AV_JUDGE_N_SAMPLES 默认 3 次重采样 ·
       4 维多数票聚合），稳住单次方差再交 best-of-N 排序。N=1（env 设）退化为单次（零回归）。
 
-    S7 换序双跑一致性协议（2026-07-07 · LongJudgeBench arXiv:2606.01629 · env AV_JUDGE_ORDER_SWAP
+    S7 换序双跑一致性协议（LongJudgeBench arXiv:2606.01629 · env AV_JUDGE_ORDER_SWAP
       默认 on）：正向 + 反向各整跑一遍，两跑 drift_dims 一致才采纳（order_consistency=
       "consistent"）；不一致 = 弃票（drift_count=None + error=None → 走调用方既有「缺 AV 信号」
       降级路径 · order_consistency="inconsistent" · 绝不折中平均）。AV_JUDGE_ORDER_SWAP=0 →
-      单跑，判定行为与旧实现逐字节一致（order_consistency="single_run" 仅留痕）。
+      单跑（order_consistency="single_run" 仅留痕）。
       order_swap_stats 字段携带进程内不一致率累计（供 trace / 飞轮观察 judge 可靠性）。
     """
-    # ── 单跑（AV_JUDGE_ORDER_SWAP=0 · 调试/对照）：与旧行为逐字节一致，仅加留痕字段 ──
+    # ── 单跑（AV_JUDGE_ORDER_SWAP=0 · 调试/对照）：仅加 order_consistency 留痕字段 ──
     if not _order_swap_on():
         agg = self_consistency_judge(loader, author_text, replica_text, sample_limit,
                                      tag="av_judge_bestofn")
@@ -933,7 +930,7 @@ def pairwise_drift_count(loader: GenModelLoader, author_text: str, replica_text:
                 "order_runs": order_runs,
                 "order_swap_stats": order_swap_stats()}
 
-    # 一致：采纳正向跑结果（两跑同结论 · 正向 = 历史规范朝向 · 维度明细取正向）
+    # 一致：采纳正向跑结果（两跑同结论 · 正向 = 规范朝向 · 维度明细取正向）
     return {
         "drift_count": len(fwd["drift_dims"]),
         "drift_dims": fwd["drift_dims"],
@@ -983,7 +980,7 @@ def main() -> int:
           f" · position_swap = {'on（G2-CYCLIC 半 swap · experiment）' if swap_on else 'off（零回归）'}"
           f" · intent_dim = {'on（第5维 · experiment）' if intent_on else 'off（默认4维）'}")
 
-    # off（默认）：完全跳过——不构 prompt、不调 gen-model（共同纪律 2 · 零回归）
+    # off：完全跳过——不构 prompt、不调 gen-model（共同纪律 2 · 零回归）
     if mode == "off":
         report = build_report("off", None, args.author, args.replica)
         report["skipped"] = True

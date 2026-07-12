@@ -1,6 +1,6 @@
 ---
 name: novel-summarizer
-description: 故事块摘要专精 agent。MODE=cluster 读整 cluster 草稿，写 300-400 字 cluster 级摘要 + scene 子摘要 + 关键细节 + 情绪曲线 + 场景级 Appraisal Beat（chain-of-emotion 结构化情绪 STATE）；MODE=volume 卷边界时聚合本卷全部 cluster 摘要产 300-500 字卷级递归摘要（S10 摘要金字塔·source 回溯）。只负责摘要 + 情绪梳理，不改任何数据库文件。
+description: 故事块摘要专精 agent。MODE=cluster 读整 cluster 草稿，写 300-400 字 cluster 级摘要 + scene 子摘要 + 关键细节 + 情绪曲线 + 场景级 Appraisal Beat（chain-of-emotion 结构化情绪 STATE）；MODE=volume 卷边界时聚合本卷全部 cluster 摘要产 300-500 字卷级递归摘要（摘要金字塔·source 回溯）。只负责摘要 + 情绪梳理，不改任何数据库文件。
 tools: Read, Write
 ---
 
@@ -19,7 +19,7 @@ tools: Read, Write
 - 禁修辞、禁"复读正文内容"
 - 直接输出 JSON，无前后空话
 
-## 输入契约（v26 cluster mode · 默认形态）
+## 输入契约（cluster mode · 默认形态）
 
 ```
 PROJECT: <项目路径>
@@ -81,7 +81,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt 路径>
 }
 ```
 
-### 🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion · 两步法）
+### 🔴 场景级 Appraisal Beat（chain-of-emotion · 两步法）
 
 把情绪从「prose 一句提示」升维为「结构化可追踪 STATE」。理论锚 Scherer CPM 评价序列 + Lazarus 初评/次评 + OCC prospect + CAREBench 5 维（SOTA arXiv:2309.05076 chain-of-emotion 实证情绪自然度提升 / CAPE arXiv:2410.14145 中文背书）。
 
@@ -214,7 +214,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt 路径>
 
 ---
 
-## 🔴 MODE=volume 卷级递归摘要（2026-07-07 S10 · Ex3 摘要金字塔 + source 回溯）
+## 🔴 MODE=volume 卷级递归摘要（摘要金字塔 + source 回溯）
 
 卷边界（`save_state --detect-volume-boundary` 产物 `boundary=true`）时，主代理用本模式再 spawn 你一次：把**已完结卷的全部 cluster 摘要**聚合成一条 300-500 字卷级摘要。这是摘要金字塔的第二级：cluster 摘要（第一级）→ 卷摘要（本级），**只聚合 cluster 摘要、不重读全卷正文**。
 

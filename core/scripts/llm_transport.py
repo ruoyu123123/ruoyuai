@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
-"""llm_transport.py — 统一 LLM transport 层（2026-06-10）
+"""llm_transport.py — 统一 LLM transport 层
 
-收敛 gen_writer / gen_creative / distill_replicate 等多份近重复 transport
-为单一模块。新代码一律走本模块；存量脚本逐个迁移，
-迁移前行为零回归（本模块不 import 它们、不改它们）。
+gen_writer / gen_creative / distill_replicate 等脚本共用的单一 LLM 调用模块。
 
-统一的 8 件事：
+统一处理：
 1. 双协议分发：profile.protocol == 'gemini' → 原生 streamGenerateContent SSE
-   （隐式前缀缓存 cachedContentTokenCount 真省成本）；否则 OpenAI /v1/chat/completions。
-2. 异常归一：双协议全部归一到 TransportRateLimit / TransportTimeout / TransportError。
-   此前 gemini path 抛 urllib/httpx 原生异常 → 不进 gen_writer 的同 profile 重试分支
-   （只 catch openai 的 RateLimitError/APITimeoutError）→ 429 直接降级 fallback 链。
+   （隐式前缀缓存 cachedContentTokenCount 省成本）；否则走 OpenAI /v1/chat/completions。
+2. 异常归一：双协议全部归一到 TransportRateLimit / TransportTimeout / TransportError，
+   使两种协议都能进入统一的同 profile 重试分支。
 3. finish_reason 归一：gemini 的 MAX_TOKENS → 'length'，其余非空 → 'stop'（openai 口径）。
 4. 截断续写循环（finish_reason=='length' ≤ N 轮）抽成 generate() 共享——判断层深 schema
    JSON 比散文更脆（截一半 unparseable），续写补全而非整发重试（同位置再截不收敛）。
-5. gemini 原生 path 补 generationConfig.thinkingConfig.thinkingLevel（小写 low/medium/high·
-   与 thinkingBudget 互斥）。此前 thinking_level 只在 openai path 经 extra_body 生效，
-   protocol=gemini 的 reasoning profile thinking 默认 HIGH 吃光输出预算 → 深 schema 集体截断。
-   依据：ai.google.dev/gemini-api/docs/gemini-3（2026-06 确认 3.1-pro 支持 low/medium/high）。
-6. gemini SSE 从 urllib 迁 httpx：urllib 无 read-timeout，实测代理 stream 中途断连僵死
-   43min（distill_replicate 2026-06 事故）。httpx 是 openai SDK 传递依赖，零新增打包面。
+5. gemini 原生 path 传 generationConfig.thinkingConfig.thinkingLevel（小写 low/medium/high·
+   与 thinkingBudget 互斥），避免 reasoning profile thinking 默认 HIGH 吃光输出预算导致
+   深 schema 集体截断（依据 ai.google.dev/gemini-api/docs/gemini-3）。
+6. gemini SSE 用 httpx 发起（带 read-timeout），避免 stream 中途断连时无限僵死；
+   httpx 是 openai SDK 的传递依赖，零新增打包面。
 7. 429 优先解析 Retry-After header（provider 给了精确等待就别盲目 2/4/8s 指数退避）。
 8. 空响应守卫：HTTP 200 但零 content（内容过滤 / reasoning 全进 thought 段）→
    TransportEmpty → 进重试/降级，杜绝拿空文本报成功。
@@ -42,7 +38,7 @@ if str(_SCRIPTS) not in sys.path:
 from gen_model_loader import GenModelLoader, Profile, reasoning_extra_body  # noqa: E402
 
 try:
-    from secrets_store import redact as _redact  # API key 脱敏（gemini key 在 URL） [BYOK 入口 removed commit 2a4d7ce·redact 仍用作 .env key 脱敏]
+    from secrets_store import redact as _redact  # API key 脱敏（gemini key 在 URL）；redact 仅用于 .env key 脱敏
 except Exception:
     def _redact(s):
         import re as _r
@@ -74,14 +70,14 @@ class TransportEmpty(TransportError):
     """HTTP 200 但零 content（内容过滤 / reasoning model 全进 thought 段）。"""
 
 
-# ============ refusal 检测（gen-model 间歇性安全拒绝防护 · 2026-06-20） ============
+# ============ refusal 检测（gen-model 间歇性安全拒绝防护） ============
 #
 # 现象：reasoning gen-model（gemini-3.x pro-preview / 第三方中转）偶发对**合法文学复刻**任务
 # 输出短篇安全拒绝（HTTP200 + finish=stop + 非空·绕过 TransportEmpty 守卫），如：
 #   - 中文："对我来说这是不可接受的。我不能帮助处理可能不安全或不适当的事情。让我们尝试其他内容。"
 #   - 英文："I cannot fulfill this request." / "I'm sorry, I can't help with that."
-# 当前 transport / distill_replicate 把短拒绝当合法复刻返回 → SFS 评分归零 → 看不出是 refusal
-# 还是 skill 失败。N=10 复刻验稳必须先压住这层噪声。
+# 短拒绝若被当合法复刻返回，SFS 评分会归零，且分不清是 refusal 还是 skill 失败；
+# N=10 复刻验证需要先压住这层噪声。
 #
 # 北极星边界：纯检测 helper（零副作用 · 零行为变更）。
 # - llm_transport.generate() 不主动调（避免污染 gen_writer 等正常路径）
@@ -93,7 +89,7 @@ class TransportEmpty(TransportError):
 #   - 模型先道歉再写长文（>200 字）不命中——总长门控保守边界
 
 _REFUSAL_KEYWORDS = (
-    # 中文（wsb4ljc82 实测样本 + 常见变体）
+    # 中文（常见变体）
     "不能帮助", "不可接受", "无法帮助", "无法完成", "无法处理",
     "对不起", "我无法", "让我们尝试", "换个", "换其他",
     # 英文
@@ -190,8 +186,8 @@ _OUTER_FENCE_RE = re.compile(
 def _strip_markdown_fence(text: str) -> str:
     r"""剥离外层 markdown JSON 围栏（仅 response_format_json=True 路径调用·post-process）。
 
-    背景：真 A/B w5g1636kq 暴露——Gemini 经 elysia 中转输出 JSON 时偶尔用 markdown 围栏
-    ```json ... ``` 包裹·下游 json.loads 直接吃会炸·而 Claude Code Agent 输出裸 JSON。
+    Gemini 经 elysia 中转输出 JSON 时偶尔用 markdown 围栏 ```json ... ``` 包裹，
+    下游 json.loads 直接吃会炸；Claude Code Agent 输出裸 JSON 不受影响。
     本函数在 transport 层 post-process 剥外壳·收敛到 stream_once 单一真理源·避免
     av_judge._extract_json / optimizer._extract_patches / gen_fixer 等下游各自剥离。
 
@@ -219,7 +215,7 @@ def _strip_markdown_fence(text: str) -> str:
 
 
 def parse_json_loose(reply: str, fallback: dict | None = None) -> dict:
-    """三级宽松 JSON 抽取（合并 gen_creative._parse_json_loose + 正则范式）。
+    """三级宽松 JSON 抽取。
 
     reasoning 模型前置 thinking 里可能混 {} 片段——优先 ```json 围栏（最后一个，
     模型常先打草稿再给终稿），其次整体 strip 后首字符判定，最后 first{...last} 兜底。
@@ -354,10 +350,10 @@ def _stream_once_openai(profile: Profile, system: str, user: str, max_tokens: in
                 _t, _f, _u = _run(kw)
             else:
                 raise
-        # token ledger 对称（judge 全走此 OpenAI path·此前漏记 → 账本只有 writer 没 judge）
+        # token ledger 对称记录（judge 与 writer 都走这条路径，账本需要两边都有）
         _record_token_usage(_u, profile.model, protocol="openai")
-        # markdown 围栏 post-process（仅 JSON 协议·裸 JSON 不动·真 A/B w5g1636kq 暴露 Gemini
-        # 经中转输出 ```json ... ``` 包裹）
+        # markdown 围栏 post-process（仅 JSON 协议·裸 JSON 不动·
+        # Gemini 经中转输出 JSON 时偶尔带 ```json ... ``` 包裹）
         if response_format_json:
             _t = _strip_markdown_fence(_t)
         return _t, _f
@@ -389,7 +385,7 @@ def build_gemini_body(profile: Profile, system: str, user: str, max_tokens: int,
 
     稳定 system 放 systemInstruction → 跨调用隐式前缀缓存命中（cachedContentTokenCount）。
     thinkingConfig.thinkingLevel：gemini-3.x 档位小写（low/medium/high·与 thinkingBudget
-    互斥）——此前缺失，protocol=gemini 的 reasoning profile thinking 默认 HIGH 吃光输出
+    互斥）——缺失时 protocol=gemini 的 reasoning profile thinking 默认 HIGH 会吃光输出
     预算（判断层深 schema 头号失败模式）。
     """
     contents = [{"role": "user", "parts": [{"text": user}]}]
@@ -434,10 +430,10 @@ def _openai_usage_to_dict(u) -> dict:
 
 def _record_token_usage(usage: dict, model: str, protocol: str = "gemini") -> None:
     """token ledger（一人公司·BYOK 用户看烧多少钱）：单次 usage append 到 env
-    RUOYU_TOKEN_LEDGER 指向的 jsonl。env 未设 → 不记（零侵入零回归）。落盘失败绝不崩
+    RUOYU_TOKEN_LEDGER 指向的 jsonl。env 未设 → 不记。落盘失败绝不崩
     transport（账本是 advisory·不影响写作主轨·北极星⑤）。
 
-    2026-06-16 对称双协议（judge 全走 OpenAI path·此前漏记 → 账本只有 writer 没 judge）：
+    双协议字段对称：
       protocol='gemini' → 原生字段（promptTokenCount/candidatesTokenCount/…）；
       protocol='openai' → OpenAI 兼容字段（prompt_tokens/completion_tokens/total_tokens·
       cached 取 prompt_tokens_details.cached_tokens）。归一到统一账本字段（summarize 直接消费）。"""
@@ -454,7 +450,7 @@ def _record_token_usage(usage: dict, model: str, protocol: str = "gemini") -> No
             output_t = int(usage.get("candidatesTokenCount", 0) or 0)
             cached_t = int(usage.get("cachedContentTokenCount", 0) or 0)
             total_t = int(usage.get("totalTokenCount", 0) or 0)
-        else:  # openai 兼容（judge / 非 gemini profile·此前完全漏记）
+        else:  # openai 兼容（judge / 非 gemini profile）
             prompt_t = int(usage.get("prompt_tokens", 0) or 0)
             output_t = int(usage.get("completion_tokens", 0) or 0)
             _details = usage.get("prompt_tokens_details")
@@ -543,7 +539,7 @@ def _stream_once_gemini(profile: Profile, system: str, user: str, max_tokens: in
     except TransportError:
         raise
     except httpx.HTTPError as e:
-        # 🔴 BYOK 脱敏（must_fix#3）：httpx 异常 str() 含请求 URL（?key=<KEY>）→ 脱敏后再抛
+        # httpx 异常 str() 含请求 URL（?key=<KEY>）→ 脱敏后再抛（BYOK key 不落日志）
         raise TransportError(
             f"gemini-native {type(e).__name__}: {_redact(str(e))[:200]}") from e
 
@@ -551,19 +547,14 @@ def _stream_once_gemini(profile: Profile, system: str, user: str, max_tokens: in
     if cached:
         print(f"\n[llm_transport][gemini] 缓存命中 cachedContentTokenCount={cached}"
               f"/{usage.get('promptTokenCount', '?')} prompt tokens", file=sys.stderr)
-    # token ledger（B1 一人公司·BYOK 用户看烧多少钱）：env RUOYU_TOKEN_LEDGER 设则 append·零侵入
+    # token ledger（BYOK 用户查看开销）：env RUOYU_TOKEN_LEDGER 设则 append·零侵入
     _record_token_usage(usage, getattr(profile, "model", "gemini"))
     finish = "length" if finish_raw == "MAX_TOKENS" else ("stop" if finish_raw else None)
-    # markdown 围栏 post-process（仅 JSON 协议·裸 JSON 不动·真 A/B w5g1636kq 暴露 Gemini
-    # 经中转输出 ```json ... ``` 包裹·下游 json.loads 会炸）
+    # markdown 围栏 post-process（仅 JSON 协议·裸 JSON 不动·
+    # Gemini 经中转输出 JSON 时偶尔带 ```json ... ``` 包裹·下游 json.loads 会炸）
     if response_format_json:
         text = _strip_markdown_fence(text)
     return text, finish
-
-
-# 🔴 已删除（2026-06-20·A 方案回滚）：Anthropic /v1/messages 协议代码段（build_anthropic_body /
-# _stream_once_anthropic / _record_token_usage anthropic 分支）。主代理 Claude Code CLI 唯一入口
-# 后不再需要直连 Anthropic API（跨家族 judge 改 inline 文件协议）。双协议（OpenAI / gemini）保留。
 
 
 # ============ 统一调用入口（fallback 链 + 重试 + 截断续写 + 空响应守卫） ============
@@ -607,10 +598,9 @@ def generate(loader_or_profiles, system: str, user: str, *,
         retries_used = 0
         try:
             # —— 同 profile 重试圈 ——
-            # 🔴 轮次8 实测扩围：原只重试限流/超时·中转站瞬时 404 nginx 页/5xx/断流立即
-            # 降级且零退避 → 主备同主机时亚分钟故障窗击穿全链（fallback 9ms 后同 404）。
-            # 瞬时类 TransportError 同 profile 重试；认证/账号类（401/403/key）不可恢复
-            # → 立即降级不浪费退避。TransportEmpty（内容过滤）也不重试。
+            # 瞬时类 TransportError（中转站偶发 404/5xx/断流）同 profile 重试；
+            # 认证/账号类（401/403/key）不可恢复 → 立即降级不浪费退避。
+            # TransportEmpty（内容过滤）也不重试。
             attempt = 0
             while True:
                 try:

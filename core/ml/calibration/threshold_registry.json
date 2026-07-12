@@ -59,7 +59,7 @@
       "compares": "同角色跨场景对话 embedding cosine 距离--超过此值判定 voice 漂移",
       "pinned_by_tests": [],
       "marker_lines": [
-        227
+        225
       ],
       "note": "已有真实反例实测（2026-06-29，ruoyu_style 模型）：同一草稿冷硬短句 vs 热络长句同角色对白 cosine 距离仅 0.1062，远低于 0.3 floor。作者风格 embedding 本身把同作者文本映射得偏近，当前 floor 对该后端明显偏保守（宁可漏报）。这是本次盘点里唯一带定量反例证明 floor 可能测不出真漂移 的条目，Wave-6 校准应优先处理。"
     },
@@ -109,7 +109,7 @@
       "compares": "SFS 校准探针：text_a vs text_b（同作者/跨作者样本对）--cosine 相似度换算成 0-100 分制的线性公式，供 same/cross 分布可分性验证",
       "pinned_by_tests": [],
       "marker_lines": [
-        119
+        118
       ],
       "note": "与 sfs_axis_decomposer.py 公式重复（见该条 note）。本文件是唯一直接服务于 same-author vs cross-author 可分性测量 的探针脚本，是 W6-B 校准 harness 最可能复用的现成基座。"
     },
@@ -436,9 +436,9 @@
         "tests/test_emotion_granularity_scanner.py"
       ],
       "marker_lines": [
-        25,
-        51,
-        118
+        24,
+        50,
+        116
       ],
       "note": "已有真实数据：5 真作者实测密度 0.07-1.32/千字，floor=3.0 留 2.3x 余量，2026-06-20 已放量 active。"
     },
@@ -456,9 +456,9 @@
         "tests/test_emotion_granularity_scanner.py"
       ],
       "marker_lines": [
-        25,
-        51,
-        118
+        24,
+        50,
+        116
       ],
       "note": "与同文件 COARSE_EMOTION_PER_1K_FLOOR 是两条独立路径（关键词 vs 真 NN VAD），后者是全新维度，目前只有估算值（健康文本 2-3 轴和约 0.04-0.13），尚无真实作者 VAD 实测数据，校准优先级应低于已有实测基础的关键词路径。"
     },
@@ -737,7 +737,7 @@
         "tests/test_subtext_rescan_scanner.py"
       ],
       "marker_lines": [
-        20
+        19
       ],
       "note": "已有真实数据：2026-06-16 批注记录 6 作者最大 0.06/千（50x 余量，切 active），本条内联注释另给出真作者最大1.14/千字[惊悚乐园0.36/遮天1.14]，留2.6x余量--两条注释数字差异较大（0.06 vs 1.14），可能是不同批次/不同统计口径，Wave-6 校准时应先核实这两个历史数字的口径差异再定基线。"
     },

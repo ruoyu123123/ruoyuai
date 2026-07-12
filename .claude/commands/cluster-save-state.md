@@ -59,7 +59,7 @@ STEP: <当前步骤号>
 4.  audit_hub cluster pre-save audit (统一 cluster 审计入口 · hard_gate 校验)
 5.  cluster_entity_stats.py 前置确定性统计 → 并行 spawn novel-archivist 与 novel-state-tracker，分别产 archive.json 和 cluster_state_delta.json
 6.  apply_archive.py + cluster_state_delta.py 分域确定性回库（任一失败硬停）
-7.  novel-summarizer MODE=cluster (cluster 级摘要 + 场景级 Appraisal Beat chain-of-emotion) + 🆕 S10 卷边界条件子任务 (detect-volume-boundary → MODE=volume 卷级递归摘要 → apply-volume-summary)
+7.  novel-summarizer MODE=cluster (cluster 级摘要 + 场景级 Appraisal Beat chain-of-emotion) + S10 卷边界条件子任务 (detect-volume-boundary → MODE=volume 卷级递归摘要 → apply-volume-summary)
 8.  novel-foreshadower MODE=cluster (整 cluster 伏笔评估)
 9.  novel-reflector MODE=cluster (经验沉淀)
 10. wal-merge + learning_loop + JudgeReport cluster 汇总 + build-cluster-summary + 状态回填
@@ -147,7 +147,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --output "_数据库/.
 
 # 第 5 步：并行状态梳理（archive + state delta）
 
-> 🔴 **2026-06-28 审计清理C类 · 两条数据流分离**：本步起的 archivist / summarizer / foreshadower / reflector 同属「**Claude 读正文梳理**」段，与 writer（gen-model）的「写作自评」流互不越权。
+> 🔴 **两条数据流分离**：本步起的 archivist / summarizer / foreshadower / reflector 同属「**Claude 读正文梳理**」段，与 writer（gen-model）的「写作自评」流互不越权。
 > - **写作自评（writer）**：cluster_changes.json 的 self_eval / waivers → 喂 audit（创作自评 / 豁免），**不作 factual 回库权威源**。
 > - **状态梳理（Claude archivist）**：读 cluster_draft.txt 正文客观抽取 → archive.json → apply_archive.py 确定性回库角色 / 道具 / 关系 / locked_facts / throughline / 角色信念(belief_ledger) / 反派轮替(反派轮替.json) / 主角力量 tier(角色弧线.json) / 六位 actant 派分(cluster_actant_ledger.json)。
 
@@ -197,11 +197,11 @@ ENTITY_STATS_PATH: <项目路径>/_数据库/.wal/cluster_<key>_entity_stats.jso
 
 产出：`_数据库/.wal/cluster_<key>_archive.json`（characters / items / relationships / locked_facts / throughline_progress / belief_updates / belief_unaware / antagonist_rotation / protagonist_power_tier_update / cluster_actant_state）。
 
-> 🔴 **2026-06-29 反派轮替ledger接通producer**：archivist 扩产 `antagonist_rotation`——本块**实际出场反派**的轮替条目（antagonist_id 复用角色 id / tier 数值梯度 / faction / motive_type / power_system_tag / defeat_cluster）。非每个 cluster 都有反派；无反派时 archivist 必须以合法空结构表达“本块无反派轮替”，不得省略 required 产物。回库进 `反派轮替.json` append-only ledger 供 `antagonist_rotation_scanner` 消费。
+> 🔴 **反派轮替 ledger**：archivist 产出 `antagonist_rotation`——本块**实际出场反派**的轮替条目（antagonist_id 复用角色 id / tier 数值梯度 / faction / motive_type / power_system_tag / defeat_cluster）。非每个 cluster 都有反派；无反派时 archivist 必须以合法空结构表达“本块无反派轮替”，不得省略 required 产物。回库进 `反派轮替.json` append-only ledger 供 `antagonist_rotation_scanner` 消费。
 
-> 🔴 **2026-06-29 power_progression接通producer**：archivist 扩产 `protagonist_power_tier_update`——本块**主角力量 tier 变化**（char_id 复用角色 id / tier:int 本书叙事梯度炼气1→筑基2… / notes 标突破/跌境）。**只认正文实写的力量变化·非每 cluster 必有**；无变化时必须写合法空结构。回库 append 进 `角色弧线.json` characters[pid].protagonist_power_tier 序列供 `power_progression_scanner` 消费。tier 仅 scanner 内部排序·**绝不暴露给 writer**（同 v27 不暴露目标章数）。
+> 🔴 **主角力量 tier 变化 ledger**：archivist 产出 `protagonist_power_tier_update`——本块**主角力量 tier 变化**（char_id 复用角色 id / tier:int 本书叙事梯度炼气1→筑基2… / notes 标突破/跌境）。**只认正文实写的力量变化·非每 cluster 必有**；无变化时必须写合法空结构。回库 append 进 `角色弧线.json` characters[pid].protagonist_power_tier 序列供 `power_progression_scanner` 消费。tier 仅 scanner 内部排序·**绝不暴露给 writer**（同不暴露目标章数的规则）。
 
-> 🔴 **2026-06-29 actant链接通producer**：archivist 扩产 `cluster_actant_state`——本块六位 Greimas actant 派分（subject/object/sender/receiver 单值=角色 id 或 null·helper/opponent=角色 id list）。判不出清晰 actant 时也要写合法空 assignments，作为“本块无清晰 actant 变化”的证据。回库进 `cluster_actant_ledger.json`（clusters[].assignments·id→name 解析·helper/opponent 取首位代表存单值·幂等按 cluster_id 去重）供 `actant_drift_scanner`（功能漂移/关键位空缺/过载）+ `cast_economy_scanner`（隐式 role_split）消费；本 cluster actant 由 `build_manifest` 注入 manifest.cluster_actant_state（ledger 已回库优先·否则 subject=主角/opponent=standing 反派派生）+ manifest.active_cast（scene participants + active_chars·display name）供两 scanner 读。
+> 🔴 **Actant 链 ledger**：archivist 产出 `cluster_actant_state`——本块六位 Greimas actant 派分（subject/object/sender/receiver 单值=角色 id 或 null·helper/opponent=角色 id list）。判不出清晰 actant 时也要写合法空 assignments，作为“本块无清晰 actant 变化”的证据。回库进 `cluster_actant_ledger.json`（clusters[].assignments·id→name 解析·helper/opponent 取首位代表存单值·幂等按 cluster_id 去重）供 `actant_drift_scanner`（功能漂移/关键位空缺/过载）+ `cast_economy_scanner`（隐式 role_split）消费；本 cluster actant 由 `build_manifest` 注入 manifest.cluster_actant_state（ledger 已回库优先·否则 subject=主角/opponent=standing 反派派生）+ manifest.active_cast（scene participants + active_chars·display name）供两 scanner 读。
 
 > 🔴 **硬停**：archivist judge `failure_policy=block`——它是 factual 回库的唯一权威源，失败必须硬停；角色/道具/关系/locked_facts 缺失时不得继续。每个写完的 cluster 必有出场角色。
 
@@ -251,9 +251,9 @@ MODE: cluster
 
 cluster 级摘要（不是单章摘要 · 单章摘要由 splitter 切完后从 cluster 摘要派生）。
 
-> 🔴 **2026-06-29 场景级 Appraisal Beat（chain-of-emotion）**：summarizer 同时扩产 `appraisal_beats[]`（读整 cluster 正文 + scene_storyboard 按 Scherer CPM/OCC 评价链把关键情绪拐点反推成结构化 STATE：trigger → appraisal 6 维 → derived_emotion 自然语言 → behavior_externalization + vad_bin）。它**梳理非创作**（禁占位词典浅扫·禁情绪词标签），与 archivist 同属 Claude 读正文梳理段。回填由第 10 步 `--apply-appraisal-beats` 确定性落 `叙事节拍器.json.appraisal_beats`（全 advisory STATE·不进 HARD_GATE_CODES）。
+> 🔴 **场景级 Appraisal Beat（chain-of-emotion）**：summarizer 同时产出 `appraisal_beats[]`（读整 cluster 正文 + scene_storyboard 按 Scherer CPM/OCC 评价链把关键情绪拐点反推成结构化 STATE：trigger → appraisal 6 维 → derived_emotion 自然语言 → behavior_externalization + vad_bin）。它**梳理非创作**（禁占位词典浅扫·禁情绪词标签），与 archivist 同属 Claude 读正文梳理段。回填由第 10 步 `--apply-appraisal-beats` 确定性落 `叙事节拍器.json.appraisal_beats`（全 advisory STATE·不进 HARD_GATE_CODES）。
 
-## 🔴 2026-07-07 S10 卷边界条件子任务（递归卷级层级摘要 · Ex3 摘要金字塔 + source 回溯）
+## 🔴 S10 卷边界条件子任务（递归卷级层级摘要 · Ex3 摘要金字塔 + source 回溯）
 
 本步 scripts 先跑卷边界确定性检测（report-only · 恒 exit 0）：
 
@@ -307,7 +307,7 @@ MODE: cluster
 
 整 cluster 伏笔评估：plant + 回收 + 健康度。
 
-> 🔴 **2026-06-29 戏剧问题账本（PITQ/MDQ）**：foreshadower 同时登记本 cluster 的**戏剧问题**到 JudgeReport 的 `specific_findings.dramatic_questions = {raised:[{qid, question(具体二元PITQ), scope:cluster|volume|series, raised_at_scene, expected_payoff_window}], answered:[{qid, answered_at_scene}]}`（伏笔⊂PITQ 的特例·account 同构）。读者粘性唯一宏观结构缺口：读者追读=想知道核心二元问题的答案。回填由第 10 步 `--apply-dramatic-questions` 确定性落 `戏剧问题账本.json`（只 active cluster·按 qid 幂等去重；缺 JudgeReport 或缺 dramatic_questions 字段即 exit 2；空 raised/answered 表示本块无新增）。
+> 🔴 **戏剧问题账本（PITQ/MDQ）**：foreshadower 同时登记本 cluster 的**戏剧问题**到 JudgeReport 的 `specific_findings.dramatic_questions = {raised:[{qid, question(具体二元PITQ), scope:cluster|volume|series, raised_at_scene, expected_payoff_window}], answered:[{qid, answered_at_scene}]}`（伏笔⊂PITQ 的特例·account 同构）。读者粘性唯一宏观结构缺口：读者追读=想知道核心二元问题的答案。回填由第 10 步 `--apply-dramatic-questions` 确定性落 `戏剧问题账本.json`（只 active cluster·按 qid 幂等去重；缺 JudgeReport 或缺 dramatic_questions 字段即 exit 2；空 raised/answered 表示本块无新增）。
 
 JudgeReport: `_数据库/.judge_reports/cluster_<key>_foreshadower.json`
 
@@ -358,11 +358,11 @@ python core/scripts/save_state.py "<项目路径>" --build-cluster-summary <key>
 # 把 brief 规划伏笔注册进伏笔表，并按 step 8 foreshadower 报告应用本块 payoff；缺报告或写回失败即阻断
 python core/scripts/save_state.py "<项目路径>" --apply-foreshadow-state <key>
 
-# 🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion）：把 step 7 summarizer 产的 appraisal_beats
+# 🔴 场景级 Appraisal Beat（chain-of-emotion）：把 step 7 summarizer 产的 appraisal_beats
 # 确定性回填 叙事节拍器.json.appraisal_beats（只 active cluster·幂等；summary/appraisal_beats/叙事节拍器缺失即 exit 2，空数组表示无新增）
 python core/scripts/save_state.py "<项目路径>" --apply-appraisal-beats <key>
 
-# 🔴 2026-06-29 戏剧问题账本（PITQ/MDQ·读者粘性）：把 step 8 foreshadower JudgeReport 产的
+# 🔴 戏剧问题账本（PITQ/MDQ·读者粘性）：把 step 8 foreshadower JudgeReport 产的
 # dramatic_questions 确定性回库 戏剧问题账本.json（只 active cluster·按 qid 幂等去重；缺 JudgeReport 或缺字段即 exit 2，空数组表示无新增）
 python core/scripts/save_state.py "<项目路径>" --apply-dramatic-questions <key>
 ```
@@ -395,7 +395,7 @@ python core/scripts/adaptive_runner.py --label skill_evolver_promote --strict --
 python core/scripts/adaptive_runner.py --label evolution_orchestrator --strict -- python core/scripts/evolution_orchestrator.py "<项目路径>" --cluster <key>
 python core/scripts/adaptive_runner.py --label maybe_judge_consensus --strict -- python core/scripts/maybe_judge_consensus.py "<项目路径>" --cluster <key>
 python core/scripts/scan_retention.py "<项目路径>" --keep 5
-# 🆕 自学习闭环（2026-05-30）：学本 cluster 运行时报错 → 沉淀 known lesson → 缺步监控
+# 自学习闭环：学本 cluster 运行时报错 → 沉淀 known lesson → 缺步监控
 python core/scripts/self_heal_engine.py --ingest
 python core/scripts/self_heal_engine.py --emit-lessons
 python core/scripts/step_completion_monitor.py --scan-latest --command cluster-save-state --project "<书名>"
@@ -524,7 +524,7 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 ---
 
-# 主代理优化（A 方案 · 跨家族 inline 复审 · 2026-06-20）
+# 主代理优化（A 方案 · 跨家族 inline 复审）
 
 主代理（Claude Code 自身）在线时：audit / voice 系列 judge 触发**之前**可主动 spawn 一个 `Agent(claude)` 复审 **finale subcluster** 的 audit / voice 维度，把裁决落回 `_数据库/.wal/claude_verdict_<sha12>_<judge>.json`，subprocess 流水线下一轮 audit_hub / voice scan 自动捡用 → 写入 `outcome.data['cross_family_check']`。
 

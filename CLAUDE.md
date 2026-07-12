@@ -175,7 +175,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ## 🧭 检测体系顾问制
 
-> **v2 cluster 单层架构（2026-05-28）**：scanner 全部升维到 cluster 视野 · chapter 不是检测单位 · 切章是纯格式输出 0 质检 · waiver 截断阈值从 100 提到 300。详见 `workspace/_temp_research/system_redesign_detection_layer.md`。
+> **cluster 单层架构**：scanner 全部升维到 cluster 视野 · chapter 不是检测单位 · 切章是纯格式输出 0 质检 · waiver 截断阈值 300 字。详见 `workspace/_temp_research/system_redesign_detection_layer.md`。
 
 检测工具（`validate_style` / `narrative_scanner` / `plot_structure_scanner` / `hook_strength`（拟切点节奏）/ `golden_three`（仅 cluster_001 开场）/ `validate_chapter` / `semantic_slop` / `narrative_short_sentence` / `repeat_noun_density` + 4 个新 cluster-only scanner: `cross_scene_voice_drift` / `foreshadowing_handoff` / `locked_fact_cross_scene` / `pov_consistency`）是**顾问**非门禁/法官，输出**「待裁决项」不是判决**。每条 issue 带 `gate_level`：
 
@@ -199,11 +199,11 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ### hard_gate 不可豁免清单（18 code · 权威定义见 STRUCTURE.md 第十二节）
 
-`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `STYLE_单段超长` / `CHAPTER_END_FORBIDDEN_SCREENPLAY` / `CHAPTER_END_FORBIDDEN_TRANSITION` / `LOCKED_FACT_CROSS_SCENE_CONFLICT` / `RIPPLE_RULES_EMPTY` / `GRAND_TREND_ME_POOL_EMPTY` / `CLUSTER001_STORYBOARD_EMPTY` / `SPLIT_WORD_NOT_CONSERVED`（中 3 个为 v2 cluster · 2026-05-29 · RIPPLE/GRAND_TREND/CLUSTER001 为子系统载荷点火 C03 · SPLIT_WORD_NOT_CONSERVED 为 splitter 字数守恒 C18 · 2026-06-27 · 均与 audit_hub.HARD_GATE_CODES 对齐）
+`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `STYLE_单段超长` / `CHAPTER_END_FORBIDDEN_SCREENPLAY` / `CHAPTER_END_FORBIDDEN_TRANSITION` / `LOCKED_FACT_CROSS_SCENE_CONFLICT` / `RIPPLE_RULES_EMPTY` / `GRAND_TREND_ME_POOL_EMPTY` / `CLUSTER001_STORYBOARD_EMPTY` / `SPLIT_WORD_NOT_CONSERVED`（均与 audit_hub.HARD_GATE_CODES 对齐）
 
-> **🔴 C18 splitter 字数守恒 hard（2026-06-27）**：`SPLIT_WORD_NOT_CONSERVED` 由 `chapter_splitter.run_freestyle` 落盘前确定性自检 emit——`sum(per_chapter_cjk) + pending_tail_cjk != draft_cjk`（丢字/重复）或落盘空 chunk 或切片计数失配 → `[FATAL]` exit 2（坏章节零落盘）。北极星④纯格式层契约破损（性质同 `MANIFEST_MISSING`）。**北极星⑤边界**：只查 CJK 守恒 + 无空块 + 计数同步，绝不断言章数 N（fluid 禁锁）/切点质量/叙事顺序。
+> **🔴 splitter 字数守恒 hard**：`SPLIT_WORD_NOT_CONSERVED` 由 `chapter_splitter.run_freestyle` 落盘前确定性自检 emit——`sum(per_chapter_cjk) + pending_tail_cjk != draft_cjk`（丢字/重复）或落盘空 chunk 或切片计数失配 → `[FATAL]` exit 2（坏章节零落盘）。北极星④纯格式层契约破损（性质同 `MANIFEST_MISSING`）。**北极星⑤边界**：只查 CJK 守恒 + 无空块 + 计数同步，绝不断言章数 N（fluid 禁锁）/切点质量/叙事顺序。
 
-> **🔴 C03 子系统载荷点火 hard 子集（2026-06-27）**：仅 3 个「机器永不点火」码 hard——涟漪规则空(引擎零触发)/当前卷 ME 池空(大势无方向)/cluster_001 storyboard 空(必详化)，性质同 `MANIFEST_MISSING`。其余 31 子系统裸骨架 = 合法 fluid 永远 advisory。**cluster_002+ ME/storyboard 空必须显式豁免**（标记只查 clusters[0] + 池非空·回归锁）。
+> **🔴 子系统载荷点火 hard 子集**：仅 3 个「机器永不点火」码 hard——涟漪规则空(引擎零触发)/当前卷 ME 池空(大势无方向)/cluster_001 storyboard 空(必详化)，性质同 `MANIFEST_MISSING`。其余 31 子系统裸骨架 = 合法 fluid 永远 advisory。**cluster_002+ ME/storyboard 空必须显式豁免**（标记只查 clusters[0] + 池非空·回归锁）。
 
 **权威边界**：hard_gate 清单以 `core/claude-home/STRUCTURE.md` 第十二节为**单一来源**，与 `audit_hub.py` 的 `HARD_GATE_CODES` 一一对应，**不得各自另立**。
 
@@ -216,7 +216,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ---
 
-## 🔁 运行时自学习 / 自适应 / 自监控（MAPE-K · 2026-05-30）
+## 🔁 运行时自学习 / 自适应 / 自监控（MAPE-K）
 
 > 与上面「写作质量自学习」（learning_loop 学审核 issue）**正交**：这一层学的是**运行时报错 + 流程缺步**，
 > 让脚本越跑越稳。业界对标 MAPE-K + Reflexion + Saga + 熔断/容错，权威设计见 `core/claude-home/SELF_LEARNING_ARCHITECTURE.md`。
@@ -479,7 +479,7 @@ python core/scripts/distill_replicate.py \
    - **🆕 一段一句末结束符**（非对话段只能有 1 个 。！？……，看到多句立刻拆段。例外：对话段 / 引用文献）
    - 项目级覆盖走 `_数据库/style_scanner_overrides.json`
 
-> **🔴 v28 北极星⑤校准（2026-06-03 · 通用碎句基线 vs 作者基线冲突理顺）**：上面第 2/7 条的「短句连发 / 平均段长 15-30 / 单句独行 ≥40%」是**通用爽文兜底基线，不是天花板**。**作者风格档的句长 / 段长 / 单句独行 / 标点基线 = 第一权威**——作者档规定了该维度就以作者档为准，通用基线自动让位。实证翻车：惊悚乐园真作者**句长均值 31、段长 52、单句独行 54%、破折号 0.3/千**，但通用「短句连发」基线把弱模型推成**句长 16.8 的「主语+动作」流水账作文感**（用户直觉点出 + 金标准对比证实）。**「句长」是此前全链路检测盲区**（validate_style 故意只查段长不查句长）→ 新增 `prose_rhythm_scanner`（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比 · advisory）补检测闭环。详见 memory `project_wulianzhe_novel_state` 流水账根因段。
+> **🔴 北极星⑤校准：通用碎句基线 vs 作者基线**：上面第 2/7 条的「短句连发 / 平均段长 15-30 / 单句独行 ≥40%」是**通用爽文兜底基线，不是天花板**。**作者风格档的句长 / 段长 / 单句独行 / 标点基线 = 第一权威**——作者档规定了该维度就以作者档为准，通用基线自动让位。`prose_rhythm_scanner`（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比 · advisory）负责检测句长是否偏离作者基线，补齐段长之外的句长检测。详见 memory `project_wulianzhe_novel_state`。
 
 详见 memory `feedback_paragraph_length_hard_constraint` / `feedback_one_sentence_per_paragraph`。
 

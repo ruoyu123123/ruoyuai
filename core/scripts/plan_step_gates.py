@@ -14,7 +14,7 @@
     {"ok": bool, "gate_level": "hard_gate"|"advisory", "msg": str,
      "waivable": bool, ...extra}
 
-hard_gate 语义以 STRUCTURE§11 和 `audit_hub.HARD_GATE_CODES` 为准；调研门不允许
+hard_gate 语义以 STRUCTURE§12 和 `audit_hub.HARD_GATE_CODES` 为准；调研门不允许
 auto_pilot、无网或跳过调研自动豁免。
 """
 from __future__ import annotations
@@ -80,10 +80,10 @@ def check_subsystems(db_dir, *, required=None, content_check=False) -> dict:
     db_dir 不存在 / None → hard_gate。子系统目录是 outline 后续点火前置，不存在就不能
     让主链继续。
 
-    🔴 2026-06-27 C03：content_check=True 时，**全齐后追加载荷白名单非空检查**——
+    🔴 content_check=True 时，**全齐后追加载荷白名单非空检查**——
     3 个「机器永不点火」载荷文件(涟漪规则/大势卡当前卷 ME 池/cluster_001 storyboard)空
     → inert → ok=False · hard_gate(不可豁免)；非载荷裸骨架 → advisory(不阻断·fluid 合法)。
-    默认 False 保持纯存在性语义（既有调用零回归）；wiring 点见 _check_load_bearing
+    默认 False = 纯存在性检查；wiring 点见 _check_load_bearing
     docstring（outline plan-end / cluster-save-state validate 步可显式传 content_check=True）。
     """
     required = required or ALL_REQUIRED
@@ -109,7 +109,7 @@ def check_subsystems(db_dir, *, required=None, content_check=False) -> dict:
 
 
 def _check_load_bearing(db_dir: Path):
-    """🔴 2026-06-27 C03：全齐后载荷白名单非空检查（单一真理源复用 scaffold_subsystems）。
+    """🔴 全齐后载荷白名单非空检查（单一真理源复用 scaffold_subsystems）。
 
     返回：
       · verdict(ok=False·hard_gate) —— 有 inert（载荷文件载荷路径空·机器永不点火·不可豁免）。
@@ -252,8 +252,8 @@ def check_research_ref(step_def: dict, *, project_dir, auto_pilot: bool = False,
                        research_skipped: bool = False) -> dict:
     """决策前置 step 的 research_ref（.research_cache/*）存在性（hard_gate）。
 
-    无 research_ref 字段（旧 plan / 非决策步）→ ok=True。
-    auto_pilot / research_skipped 参数保留旧调用签名，但不再豁免。
+    无 research_ref 字段（非决策步）→ ok=True。
+    auto_pilot / research_skipped 参数不参与判定（不构成豁免）。
     文件缺失 → ok=False · gate_level=hard_gate · waivable=False。
     """
     research_ref = step_def.get("research_ref")
@@ -346,7 +346,7 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
     """Agent prompt 契约 / 长度 / frontmatter / 多步 PLAN_ID / 篡改 / ECAS
     RESEARCH_REF / 蒸馏复刻 / 注入模板（hard_gate）。
 
-    与原 hook 同序判定（rule1→2→3→4warn→5→8→10→11→9warn），首个硬命中即 block；
+    判定顺序 rule1→2→3→4warn→5→8→10→11→9warn，首个硬命中即 block；
     warn-only（rule4/9）收进 warnings（不影响 ok·wrapper 打印不退出）。
 
     plan_state：调用方（hook）传 plan_tracker.verify_plan(PLAN_ID) 结果。novel 主链
@@ -449,7 +449,7 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
             # cluster_brief/character/fact_check/implementation_reference）——不是
             # CLUSTER_ID + MODE（TASK_TYPE=inspiration 发生在 /outline 建 cluster_001
             # 之前，此时根本没有 CLUSTER_ID，套用 aux 通用契约会让首次调研 spawn 永久
-            # 无法通过 · 2026-07-08 验证书 e2e 抓出）。
+            # 无法通过）。
             if not (has_project and has_task_type):
                 miss = [m for m, ok in (("PROJECT", has_project),
                                         ("TASK_TYPE", has_task_type)) if not ok]
@@ -511,10 +511,10 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
         if not (has_research_ref or is_splitter or is_state_tracker or is_distill):
             return _block("ECAS agent spawn 缺 RESEARCH_REF 字段", warnings)
 
-    # ---- 规则 11（v29 语义反转 · 2026-07-11）：蒸馏复刻必须同栈 ----
-    # 正式写作栈 = Claude 亲笔草稿 + gemini 分段润色（v29），复刻验证必须同栈：
-    # spawn Claude agent 写复刻场景草稿是【合法且必需】的（不再拦截）；
-    # 守卫下沉到 distill_replicate.py 输入契约——复刻终稿只能由它（gemini 润色）落盘，
+    # ---- 规则 11：蒸馏复刻必须同栈 ----
+    # 正式写作栈 = Claude 亲笔草稿 + gemini 分段润色，复刻验证必须同栈：
+    # spawn Claude agent 写复刻场景草稿是【合法且必需】的；
+    # 硬守卫在 distill_replicate.py 输入契约——复刻终稿只能由它（gemini 润色）落盘，
     # Claude agent 直接产复刻终稿绕过润色环节 = 流程违规（warn 提示 · 终稿落盘由脚本把关）。
     desc_l = desc.lower()
     is_replicate = False

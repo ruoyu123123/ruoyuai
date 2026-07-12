@@ -10,15 +10,15 @@
   {
     "self_eval": {
       ...,                    # writer 的自评字段
-      "waivers": [            # v19 顾问制：AI 对 advisory 检测项的豁免清单
+      "waivers": [            # 顾问制：AI 对 advisory 检测项的豁免清单
         {"code": "STYLE_拟声格式", "reason": "本章纯心理独白章，拟声不适配"}
       ],
-      "uncertainty_flags": [  # P2-13：writer 主动标的「自评不确定」项
+      "uncertainty_flags": [  # writer 主动标的「自评不确定」项
         {"aspect": "POV_consistency", "detail": "...", "suggest_judge": "novel-voice-checker"}
       ]
     }
   }
-  v19 豁免协议（块 2.3）：
+  豁免协议：
     - 检测工具是「顾问」不是「法官」。writer 对 audit_hub 报出的 advisory 项，
       如有充分理由可在 self_eval.waivers 写入豁免；理由须具体、< 100 字
       （"本章纯心理独白章拟声不适配" 合格；"不想改" 不合格 —— 空/泛理由不算豁免）。
@@ -40,9 +40,9 @@ import re
 import sys
 from pathlib import Path
 
-# 2026-06-13 残余非原子写收编：章节正文 txt / _changes.json 是核心产物，写盘走 atomic_json
-# （tmp pid+uuid + fsync + os.replace）——崩溃/断电不留半截章节文件（半截正文/JSON 会被
-# 下游 read_body/read_changes 当真消费）。
+# 章节正文 txt / _changes.json 是核心产物，写盘走 atomic_json（tmp pid+uuid + fsync +
+# os.replace）——崩溃/断电不留半截章节文件（半截正文/JSON 会被下游 read_body/read_changes
+# 当真消费）。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json  # noqa: E402
 
@@ -56,7 +56,7 @@ def find_chapter_dir(project_root, ch: int):
 
 
 def body_path(project_root, ch: int) -> Path:
-    """正文文件标准路径（v18 嵌套-zero-pad 布局）。"""
+    """正文文件标准路径（嵌套 zero-pad 布局）。"""
     return Path(project_root) / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
 
 
@@ -98,16 +98,15 @@ def normalize_changes(data: dict) -> dict:
 
 def read_changes(project_root, ch: int) -> dict:
     """读 CHANGES 数据，返回 {"factual": {...}, "self_eval": {...}}。
-    v2 cluster 化（2026-05-28）：只读分离的 _changes.json（旧混合 txt 解析已删）。
-    v27（2026-05-29）：经 normalize_changes 统一 schema（兼容 writer 三种输出布局）。"""
+    只读分离的 _changes.json；经 normalize_changes 统一 schema，兼容 writer 的多种输出布局。"""
     cp = changes_path(project_root, ch)
     if cp.is_file():
         try:
             data = json.loads(cp.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, ValueError, OSError):
-            # 🔴 2026-06-17 bug-hunt 修：损坏/空/半截 _changes.json 不崩——返回与缺文件同款
-            # 兜底（Tolerant Reader 哲学）。原裸 json.loads 让 validate_chapter 等裸调 scanner
-            # 整条审核管线 JSONDecodeError 退出非0。
+            # 损坏/空/半截 _changes.json 不崩溃——返回与缺文件同款兜底（Tolerant Reader
+            # 哲学）：validate_chapter 等下游裸调 scanner 直接吃 JSONDecodeError 会让整条
+            # 审核管线非零退出。
             return {"self_eval": {"waivers": [], "uncertainty_flags": []}}
         return normalize_changes(data)
     return {"self_eval": {"waivers": [], "uncertainty_flags": []}}
@@ -117,7 +116,7 @@ def read_changes(project_root, ch: int) -> dict:
 
 def write_body(project_root, ch: int, text: str) -> Path:
     """写纯正文到标准路径（章节/第NNN章/第NNN章.txt）。
-    2026-06-13 起原子落盘（内容口径不变：rstrip + 末尾单 \\n；mkdir 由原子写内置）。"""
+    原子落盘（内容口径：rstrip + 末尾单 \\n；mkdir 由原子写内置）。"""
     p = body_path(project_root, ch)
     atomic_json.atomic_write_text(p, text.rstrip() + "\n")
     return p
@@ -127,7 +126,7 @@ def write_changes(project_root, ch: int, changes: dict) -> Path:
     """写唯一 `self_eval` changes 合同。"""
     changes = normalize_changes(changes)
     p = changes_path(project_root, ch)
-    # 2026-06-13 残余非原子写收编：半截 _changes.json → read_changes/audit_hub 解析崩。
+    # 半截 _changes.json 会让下游 read_changes/audit_hub 解析崩。
     atomic_json.atomic_write_text(p, json.dumps(changes, ensure_ascii=False, indent=2))
     return p
 

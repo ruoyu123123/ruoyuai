@@ -1,27 +1,26 @@
-"""chapter_splitter.py — cluster 章节自动截断（v27 ecas_freestyle · v18 接入 chapter_io）
+"""chapter_splitter.py — cluster 章节自动截断（ecas_freestyle 模式 · 经 chapter_io 读写章节）
 
-【设计修正】v17.8 原把 splitter 设计成 LLM agent 是过度设计——
-7 维度评分全是确定性规则，不需要 LLM 语言理解。改为纯 Python 脚本：
+纯 Python 脚本（非 LLM agent）：7 维度评分全是确定性规则，不需要 LLM 语言理解。
   - 不依赖 agent 加载
   - 确定性、可单元测试
   - 速度快（毫秒级）
 
 读 writer 生成的整 cluster 草稿，按字数硬范围算 N，自动评分候选切点逐章切。
 
-【v18 改动】正文/数据已分离：
+【正文/数据分离】：
   - 草稿为纯正文，直接读入并裁剪尾部空白
   - 截断后只重写正文 txt（cio.write_body）——CHANGES 全部归属 ch，splitter 不碰
 
-用法（v27 ecas_freestyle · 按字数硬范围切 + 末章 pending_tail 补料）:
+用法（ecas_freestyle · 按字数硬范围切 + 末章 pending_tail 补料）:
     python chapter_splitter.py <项目路径> --mode ecas_freestyle \
         --cluster-id cluster_006 --cluster-start-ch 26 --draft <cluster_draft.txt> \
         [--rhythm 标准|紧凑|厚重|混合] [--narrative-mode linear|in_medias_res] \
         [--climax-hint <scene 下标>] [--previous-pending-tail <上 cluster pending_tail.txt>] [--dry-run]
 
-2026-06-07 根治「双重倒叙」（用户定调）：splitter 不再做倒叙重排——倒叙由 outline
-设计 scene_storyboard 顺序（scene0=倒叙开场）+ writer 按序写负责，splitter 是纯格式层
-（北极星④：只按字数 linear 切）。--narrative-mode / --climax-hint 仅作痕迹保留（不再
-触发 climax 段提前）。历史 M5 reorder 会与 writer 倒叙叠成双重倒叙（cluster_001 翻车）。
+splitter 不做倒叙重排——倒叙由 outline 设计 scene_storyboard 顺序（scene0=倒叙开场）+ writer
+按序写负责，splitter 是纯格式层（北极星④：只按字数 linear 切）。--narrative-mode / --climax-hint
+仅作痕迹保留（不触发 climax 段提前）：若 splitter 也做一次 climax 前置重排，会与 writer 已经
+按倒叙排好的正文顺序叠加成双重倒叙，破坏开篇结构。
 
 退出码: 0 成功 / 1 草稿不足 / 2 致命错误
 """
@@ -32,15 +31,15 @@ import json
 import math
 from pathlib import Path
 
-# v18：统一章节读写走 chapter_io
+# 统一章节读写走 chapter_io
 sys.path.insert(0, str(Path(__file__).parent))
 import chapter_io as cio
-# 2026-06-13 残余非原子写收编：pending_tail 是跨 cluster 补料产物（下个 cluster 拼接消费），
-# 半截文件 = 下次联合切割拼进残缺正文。原子落盘；WAL/.pre_opening 属日志/临时写，不收编。
+# pending_tail 是跨 cluster 补料产物（下个 cluster 拼接消费），半截文件会被下次联合切割拼进
+# 残缺正文，故原子落盘；WAL/.pre_opening 属日志/临时写，无需原子写。
 from atomic_json import atomic_write_text
 
 
-# 🔴 2026-06-27 C18：splitter 字数守恒 hard_gate（治北极星④纯格式层 0 校验·丢字/重复 silently）。
+# splitter 字数守恒 hard_gate（北极星④纯格式层：防丢字/重复静默落盘）。
 class SplitterIntegrityError(Exception):
     """splitter 字数守恒被破坏（丢字 / 重复 / 空块落盘 / 切片计数失配）= 北极星④纯格式层契约破损。
 
@@ -57,7 +56,7 @@ class SplitterIntegrityError(Exception):
 
 def _assert_word_conservation(report, draft_cjk, per_chapter_cjk, pending_tail_cjk,
                               chunks_for_empty_check, chapters_split):
-    """🔴 2026-06-27 C18：落盘前字数守恒确定性自检。守护边界严限三条恒等（北极星⑤边界：
+    """落盘前字数守恒确定性自检。守护边界严限三条恒等（北极星⑤边界：
     绝不越界断言章数 N / 切点质量 / 叙事顺序 / 任何内容判断·只查 CJK 守恒 + 无空块 + 计数同步）：
 
       ① sum(per_chapter_cjk) + pending_tail_cjk == draft_cjk（CJK 精确整数·基线取 strip-title/
@@ -90,7 +89,7 @@ def _assert_word_conservation(report, draft_cjk, per_chapter_cjk, pending_tail_c
 
 
 def _strip_pseudo_title(draft_text: str):
-    """🔴 2026-06-27 P0-2：剥离 freestyle 草稿前几行的伪章标题（writer v26 锁字数路径吐出）。
+    """剥离 freestyle 草稿前几行的伪章标题（writer 锁字数路径吐出）。
 
     匹配「第N章」「第N章 标题」「第N章 <短标题>」等独行伪头·只扫前 3 个非空行(防误伤正文中段)。
     freestyle 草稿不该有章标题·splitter step 6 自己 gen_chapter_titles·任何前导伪头都是噪声。
@@ -136,8 +135,9 @@ def split_paragraphs_with_offset(content: str):
         if not chunk.strip():
             offset += len(chunk)
             continue
-        # 🔴 2026-06-17：纯 CJK 口径（与 anchor=draft_cjk*i/N、target、lo-hi 量纲对齐）。
-        # 原 len(去空白)含标点/ascii → 与纯 CJK 锚点量纲混用·切点系统性偏前（标点密集尤甚）。
+        # 纯 CJK 口径（与 anchor=draft_cjk*i/N、target、lo-hi 量纲对齐）——若混用 len(去空白)
+        # 这种含标点/ascii 的口径，会与纯 CJK 锚点量纲不一致，导致切点系统性偏前（标点密集
+        # 尤甚）。
         wc = cio.count_cjk(chunk)
         cumulative += wc
         offset += len(chunk)
@@ -155,11 +155,11 @@ ONOMATOPOEIA = re.compile(r"(咯|啪|嗒|哒|轰|咚|哗|砰|咳|噗|滋|嘎|吱
 DASH_END = re.compile(r"[—…]\s*$")
 SCENE_BREAK_START = re.compile(r"^(——|\*\s*\*|\* \* \*)")
 CONTINUE_ACTION = re.compile(r"^[^\n]{0,8}(回头|抬头|睁开|醒来|想起|站起|转身)")
-# 2026-05-30 加强：角色名改从 人物卡.json 动态加载（取代硬编码某书角色名 → 切点评分跨书通用）。
+# 角色名从 人物卡.json 动态加载（切点评分跨书通用，不依赖硬编码书名角色）。
 # 默认空表；run_freestyle / main 开头调 _load_char_names(project_root) 覆盖此 module global。
 # 加载失败/无项目 → 保持空表（score_split_point 角色名加分项为 0，退化到其他切点信号，不崩）。
 CHAR_NAMES: list = []
-DIALOGUE_OPEN = re.compile(r'["“「『]')   # 2026-05-30 补弯引号 U+201C（splitter 切点不切对话中段）
+DIALOGUE_OPEN = re.compile(r'["“「『]')   # 含弯引号 U+201C（splitter 切点不切对话中段）
 DIALOGUE_CLOSE = re.compile(r'["”」』]')  # 补弯引号 U+201D
 PSYCH_KW = re.compile(r"(他想|她想|他记得|他觉得|他不知)")
 REVEAL_KW = re.compile(r"(原来|真相是|其实是|竟然是)")
@@ -270,11 +270,10 @@ def _resolve_rhythm(profile: str):
     return RHYTHM_RANGES.get((profile or "").strip(), (3000, 4500, 3500))
 
 
-# 2026-06-07 根治「双重倒叙」（用户定调）：splitter 不再做 in_medias_res 倒叙重排。
-# 倒叙由 outline 的 scene_storyboard 顺序（scene0=倒叙开场）+ writer 按序写负责，
-# splitter 是纯格式层（北极星④：只按字数切，不理解叙事）。已删除历史 M5 的 CLIMAX_KW /
-# _find_climax_para_index / _reorder_for_in_medias_res（抽中段 climax 提前会与 writer
-# 已排好的倒叙叠成「双重倒叙」，cluster_001 实测 ch1 开头被硬塞中段「肋骨断裂」翻车）。
+# splitter 不做 in_medias_res 倒叙重排。倒叙由 outline 的 scene_storyboard 顺序（scene0=倒叙
+# 开场）+ writer 按序写负责，splitter 是纯格式层（北极星④：只按字数切，不理解叙事）。若在
+# 这里再做一次 climax 中段提前重排，会与 writer 已经排好的倒叙叠加成「双重倒叙」，破坏
+# 已经写好的开篇结构。
 
 
 def compute_freestyle_chapter_count(draft_cjk: int, lo: int, hi: int, target: int) -> int:
@@ -335,11 +334,11 @@ def _load_char_names(project_root) -> list:
 def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
                   rhythm_profile, previous_pending_tail, dry_run,
                   narrative_mode="linear", climax_hint=None):
-    """v27 ecas_freestyle 切割。返回 report dict。
+    """ecas_freestyle 切割。返回 report dict。
 
-    2026-06-07 根治「双重倒叙」（用户定调）：splitter 只按字数 linear 切（北极星④纯格式层），
-    **不做任何倒叙重排**。倒叙由 outline 排 scene_storyboard + writer 按序写负责。
-    narrative_mode / climax_hint 仅写入决策日志留痕，不触发重排（历史 M5 reorder 已删除）。
+    splitter 只按字数 linear 切（北极星④纯格式层），**不做任何倒叙重排**。倒叙由 outline 排
+    scene_storyboard + writer 按序写负责。narrative_mode / climax_hint 仅写入决策日志留痕，
+    不触发重排。
     """
     cluster_key = str(cluster_id).replace("cluster_", "")
     global CHAR_NAMES
@@ -347,9 +346,9 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
     lo, hi, target = _resolve_rhythm(rhythm_profile)
     tolerance = 600  # freestyle 锚点搜索半径（给最佳切点更多空间）
 
-    # 🔴 2026-06-27 P0-2(审计 sediment)：剥离 writer v26 锁字数路径吐出的伪标题头（如「第5章 标题」）。
-    # freestyle 草稿不应含章标题（splitter 自己起标题）·任何前 3 行的「第N章[ 标题]」伪头都是 spurious·
-    # 不剥会拼进首章正文第一屏(实证：cluster_005 ch18 line3 泄漏「第5章 标题」·读者可见)。
+    # 剥离 writer 锁字数路径吐出的伪标题头（如「第5章 标题」）。freestyle 草稿不应含章标题
+    # （splitter 自己起标题）·任何前 3 行的「第N章[ 标题]」伪头都是 spurious·不剥会拼进首章
+    # 正文第一屏，读者可见。
     draft_text = _strip_pseudo_title(draft_text)
 
     # 1. prepend 上 cluster pending_tail（跨 cluster 补料）
@@ -367,13 +366,11 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
 
     paras = split_paragraphs_with_offset(content)
 
-    # 2.5 倒叙归属（2026-06-07 根治 · 用户定调）：
-    # 倒叙由 outline 的 scene_storyboard 顺序（scene0 = 倒叙开场）+ writer 按序写共同负责
-    # ——gen_writer prompt 只让它「按 scene_storyboard 自由发挥」，场景顺序即叙事顺序。
-    # splitter 是纯格式层（北极星④：只按字数切、不理解叙事），**不再做任何倒叙重排**。
-    # 历史的 in_medias_res reorder（抽中段 climax 提前）会与 writer 已排好的倒叙叠加成
-    # 「双重倒叙」（cluster_001 实测：ch1 开头被硬塞一句中段「肋骨断裂」，与原开篇
-    # 「天空像…」拼接断裂）。narrative_mode 仅留作痕迹，不触发任何重排。
+    # 2.5 倒叙归属：倒叙由 outline 的 scene_storyboard 顺序（scene0 = 倒叙开场）+ writer 按序写
+    # 共同负责——gen_writer prompt 只让它「按 scene_storyboard 自由发挥」，场景顺序即叙事顺序。
+    # splitter 是纯格式层（北极星④：只按字数切、不理解叙事），**不做任何倒叙重排**：若在这里
+    # 再做一次 climax 中段提前重排，会与 writer 已排好的倒叙叠加成「双重倒叙」，破坏开篇结构。
+    # narrative_mode 仅留作痕迹，不触发任何重排。
     in_medias_res_reordered = False
     climax_idx_detected = None
 
@@ -384,7 +381,7 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
         "N_max": math.floor(draft_cjk / lo) if draft_cjk >= lo else 0,
         "N_recommend": max(1, round(draft_cjk / target)) if draft_cjk >= lo else 0,
         "N_final": N,
-        # 倒叙参数仅留痕（2026-06-07 起不触发任何重排）
+        # 倒叙参数仅留痕，不触发任何重排
         "narrative_mode": (narrative_mode or "linear").strip(),
         "climax_hint": climax_hint,
         "climax_para_idx_detected": climax_idx_detected,
@@ -418,7 +415,7 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
                 "_doc": f"整段 {draft_cjk} CJK < 单章下限 {lo} · 不切 · 退 pending_tail 等下 cluster 拼接",
             },
         })
-        # 🔴 2026-06-27 C18：N==0 全退 pending_tail 也守恒（accounted = pending_tail_cjk = draft_cjk）。
+        # N==0 全退 pending_tail 也守恒（accounted = pending_tail_cjk = draft_cjk）。
         _assert_word_conservation(report, draft_cjk, [], draft_cjk,
                                   chunks_for_empty_check=[], chapters_split=0)
         if not dry_run:
@@ -445,11 +442,10 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
     chunks = _slice_by_indices(paras, split_indices)
     per_chapter_cjk = [cio.count_cjk(c) for c in chunks]
 
-    # 4.5 末章上溢再平衡（轮次2 实测抓出·轮次6 升级级联）：等距锚点+最佳切点会把边界
-    # 压向前段·余量全堆末章。pending_tail 只防下溢·此处补上溢：末章 > hi 时把切点后移。
-    # 🔴 级联版（轮次6：倒数第二章贴上限 3983/4000 时单切点无路可退·末章仍超 14.5%）：
-    # 从最后一个切点往前找第一个「后移一段不破 hi」的切点移动·空间波浪式前传——
-    # 余量摊给所有有余量的前章。纯字数再平衡·不理解叙事（北极星④格式层）。
+    # 4.5 末章上溢再平衡：等距锚点+最佳切点会把边界压向前段，余量全堆末章。pending_tail 只防
+    # 下溢，这里补上溢：末章 > hi 时把切点后移。若单个切点后移无路可退（比如倒数第二章已经
+    # 贴近上限），从最后一个切点往前找第一个「后移一段不破 hi」的切点移动，空间波浪式前传，
+    # 余量摊给所有有余量的前章。纯字数再平衡，不理解叙事（北极星④格式层）。
     while split_indices and per_chapter_cjk and per_chapter_cjk[-1] > hi:
         moved = False
         for j in range(len(split_indices) - 1, -1, -1):
@@ -472,7 +468,7 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
         if not moved:
             break                      # 全部切点都挪不动·保持现状（advisory）
 
-    # 5. 末章字数补料（Step F_v27）
+    # 5. 末章字数补料（末章不足下限退 pending_tail）
     pending_tail_text = None
     pending_tail_path_rel = None
     last_cjk = per_chapter_cjk[-1] if per_chapter_cjk else 0
@@ -500,7 +496,7 @@ def run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
         },
     })
 
-    # 🔴 2026-06-27 C18：末章 pending_tail 处理完、落盘前插确定性守恒自检（坏章节零落盘）。
+    # 末章 pending_tail 处理完、落盘前插确定性守恒自检（坏章节零落盘）。
     _pending_tail_cjk = cio.count_cjk(pending_tail_text) if pending_tail_text else 0
     _assert_word_conservation(report, draft_cjk, per_chapter_cjk, _pending_tail_cjk,
                               chunks_for_empty_check=chunks, chapters_split=chapters_split)
@@ -551,7 +547,7 @@ def _write_pending_tail(project_root, cluster_key, text):
     d = Path(project_root) / "章节" / f"cluster_{cluster_key}_draft"
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"cluster_{cluster_key}_pending_tail.txt"
-    # 2026-06-13 残余非原子写收编：产物落盘走原子写（内容口径不变：rstrip + 末尾单 \n）。
+    # 产物落盘走原子写（内容口径：rstrip + 末尾单 \n）。
     atomic_write_text(p, text.rstrip() + "\n")
     return p
 
@@ -592,10 +588,9 @@ def _main_freestyle(args):
             [--previous-pending-tail <上 cluster pending_tail.txt>] \\
             [--dry-run]
 
-    2026-06-07 根治「双重倒叙」（用户定调）：--narrative-mode / --climax-hint 仅作
-    决策日志痕迹保留，**不触发任何倒叙重排**（splitter 只按字数 linear 切 · 北极星④）。
-    build_manifest.inject_event_cluster_context 注入的 narrative_mode +
-    climax_hint_scene_index 由 novel-chapter-splitter agent 透传到这两个参数。
+    --narrative-mode / --climax-hint 仅作决策日志痕迹保留，**不触发任何倒叙重排**（splitter
+    只按字数 linear 切 · 北极星④）。build_manifest.inject_event_cluster_context 注入的
+    narrative_mode + climax_hint_scene_index 由 novel-chapter-splitter agent 透传到这两个参数。
     """
     project_root = Path(args[0])
     cluster_id = None
@@ -643,7 +638,7 @@ def _main_freestyle(args):
         else:
             print(f"[WARN] --previous-pending-tail 指定但文件不存在: {prev_pending_path}", file=sys.stderr)
 
-    # 🔴 2026-06-27 C18：守恒被破坏 → [FATAL] SPLIT_WORD_NOT_CONSERVED stderr → exit 2（step6 fail-fast·坏章节零落盘）。
+    # 守恒被破坏 → [FATAL] SPLIT_WORD_NOT_CONSERVED stderr → exit 2（step6 fail-fast·坏章节零落盘）。
     try:
         report = run_freestyle(project_root, cluster_id, cluster_start_ch, draft_text,
                                rhythm, previous_pending_tail, dry_run,

@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""gen_creative_volume_arc.py — volume_arc 卷级大纲生成（从 gen_creative.py 机械拆出·2026-07-07）
+"""gen_creative_volume_arc.py — volume_arc 卷级大纲生成
 
-P2 分卷 chunk + WAL 断点续跑三阶段（借鉴 AI_NovelGenerator chunked blueprint resume·
+分卷 chunk + WAL 断点续跑三阶段（借鉴 AI_NovelGenerator chunked blueprint resume·
 research/open_source_writing_systems.md）：
   阶段A 全书骨架（story_destiny/volumes/cluster_001/world_seed）→ .wal/volume_arc_skeleton.json
   阶段B 逐卷 ME 池 chunk（schema 合法的部分产物）→ .wal/volume_arc_v<N>.json
   阶段C 全部卷完成后确定性合并（ME id 跨卷重复=硬报错不静默覆盖）→ 一把梭等价结构 → emit
 
-公开 CLI 入口不变：`python core/scripts/gen_creative.py --mode volume_arc ...`
+公开 CLI 入口：`python core/scripts/gen_creative.py --mode volume_arc ...`
 （gen_creative.main 的 volume_arc 分支调本模块 _run_volume_arc）。与其他 mode 共享的
-工具函数（read_text）留在 gen_creative，由本模块 import。纯机械搬迁：不改逻辑 /
-prompt 文本 / WAL 路径 / 失败语义。
+工具函数（read_text）留在 gen_creative，由本模块 import。
 """
 from __future__ import annotations
 import json
@@ -22,10 +21,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from gen_model_loader import GenModelLoader  # noqa: E402
 from gen_creative import read_text  # noqa: E402  共享文件读取工具（多 mode 共用·留在 gen_creative）
-from reference_pattern_extract import build_reference_patterns_block  # noqa: E402  P3 参考语料结构模式（条件注入）
+from reference_pattern_extract import build_reference_patterns_block  # noqa: E402  参考语料结构模式（条件注入）
 
 
-# ═══════ MODE: volume_arc（卷级大纲·P2 分卷 chunk + WAL 断点续跑·2026-07-07）═══════
+# ═══════ MODE: volume_arc（卷级大纲·分卷 chunk + WAL 断点续跑）═══════
 # 借鉴 AI_NovelGenerator chunked blueprint resume（research/open_source_writing_systems.md）：
 #   阶段A 全书骨架（story_destiny/volumes/cluster_001/world_seed）→ .wal/volume_arc_skeleton.json
 #   阶段B 逐卷 ME 池 chunk（schema 合法的部分产物）→ .wal/volume_arc_v<N>.json
@@ -48,12 +47,12 @@ def build_volume_arc_skeleton_prompt(*, selected_card: dict, cluster_count: int,
     """卷级大纲**全书骨架**生成 prompt（阶段A·分卷 chunk 第一步·解「一把梭失败=全部重来」）。
 
     🔴 北极星⑤铁律：system 只给**脚手架 + 字段语义 + 非约束示例 + 作者档优先**，
-    **绝不硬编码 phase/finale_signal 的枚举硬约束**（惊悚乐园 schema 把模型推成
-    流水账覆辙）。模型在作者档第一权威下自由产大势/卷arc，脚本只做脚手架+parse。
-    🔴 P2 分卷纪律：本次只产骨架——每卷 ME 池（major_events）由 build_volume_me_pool_prompt
+    **绝不硬编码 phase/finale_signal 的枚举硬约束**（枚举硬约束会把模型推成
+    流水账）。模型在作者档第一权威下自由产大势/卷arc，脚本只做脚手架+parse。
+    🔴 分卷纪律：本次只产骨架——每卷 ME 池（major_events）由 build_volume_me_pool_prompt
     逐卷另行生成（WAL 断点续跑）；骨架输出里的 major_events 会被确定性丢弃
     （单一来源 = 卷 chunk WAL）。cluster_count 是**软提示**，不是硬锁。
-    🔴 P3 参考语料结构基线（2026-07-07·借鉴 Ex3-NovelWriter Extracting）：
+    🔴 参考语料结构基线（借鉴 Ex3-NovelWriter Extracting）：
     reference_patterns_block 非空时注入一段「参考作品结构基线（advisory·可偏离）」——
     纯数字化结构参照（genre_storyline_patterns.json·不含任何原文句子），**非硬约束**
     （北极星⑤：大势/情节内容仍由模型按灵感卡自由创作，只给结构参照）。
@@ -140,7 +139,7 @@ def build_volume_me_pool_prompt(*, volume: dict, volumes_digest: str,
 
     🔴 北极星⑤：脚手架非创作约束——每个 ME 讲什么、数量多少（软提示）由模型按故事逻辑
     自由决定；id 格式 / volume 标号 / 末个 is_volume_finale 是**结构契约**（合并去重 +
-    emergence 卷内硬过滤的锚·C19 同源），非创作干涉。
+    emergence 卷内硬过滤的锚），非创作干涉。
     """
     vol_no = volume.get("vol")
     system = f"""你是顶尖网文大纲架构师。全书卷级骨架已定，现在为**第 {vol_no} 卷**设计本卷的 ME 池
@@ -240,7 +239,7 @@ def _normalize_me_pool(mes: list, project_root: Path | None = None) -> dict:
 
 # ============ volume_arc 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约）============
 def _emit_world_seed_projection(db: Path, world_seed: dict) -> list[str]:
-    """🔴 2026-06-27 C02：把模型 volume_arc 产出的 world_seed 创意投影确定性 reshape 落盘。
+    """🔴 把模型 volume_arc 产出的 world_seed 创意投影确定性 reshape 落盘。
 
     模型自由产内容（北极星⑤·脚本只 reshape 不规训 schema 枚举），_emit 把它平铺进：
       · 世界状态.json   → protagonist_state(主角 arc 基线) + factions_state(1-3 核心阵营 power/stability/wealth)
@@ -324,12 +323,12 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
                            rhythm: str = "", framework: str = "") -> tuple[Path, Path]:
     """把模型产出拆成 大势卡.json + 事件簇.json 原子落盘（确定性平铺·不靠模型写 schema 形状）。
 
-    rhythm/framework：用户 pause 答案（CLI 透传）——确定性写 _metadata + 用户偏好.json
-    （轮次4 契约审计抓出：cluster-write step6 data_flow <rhythm> 读 用户偏好.json.rhythm_
-    profile·此前无任何 producer 写它 → 用户选「紧凑」被静默丢弃·splitter 永远收「标准」）。"""
+    rhythm/framework：用户 pause 答案（CLI 透传）——确定性写 _metadata + 用户偏好.json；
+    cluster-write step6 data_flow 的 <rhythm> 读 用户偏好.json.rhythm_profile，缺 producer
+    写入会导致用户选择被静默丢弃、splitter 收不到值退回默认「标准」。"""
     db = project_root / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
-    # producer 补齐（轮次6 深检：同名字段多 consumer 源须**全**覆盖·轮次4 只补了半边）：
+    # producer 补齐（同名字段有多个 consumer 源，须**全**覆盖）：
     #   用户偏好.json    → splitter（cluster-write step6 data_flow）
     #   叙事节拍器.json  → narrator_calibrate → writer manifest storyteller_directive
     #   进度.json        → finalize_book._read_rhythm_profile
@@ -399,7 +398,7 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
     p_cluster = db / "事件簇.json"
     p_major.write_text(json.dumps(major, ensure_ascii=False, indent=2), encoding="utf-8")
     p_cluster.write_text(json.dumps(cluster, ensure_ascii=False, indent=2), encoding="utf-8")
-    # 🔴 2026-06-27 C02：模型 world_seed 创意投影 → 世界状态/涟漪规则/人物卡/关系（仅当为空·幂等）
+    # 🔴 模型 world_seed 创意投影 → 世界状态/涟漪规则/人物卡/关系（仅当为空·幂等）
     seeded = _emit_world_seed_projection(db, data.get("world_seed") or {})
     if seeded:
         print(f"[_emit_volume_arc][world_seed] 投影落盘: {', '.join(seeded)}", file=sys.stderr)
@@ -418,7 +417,7 @@ def _read_json_or_none(p: Path):
 def _normalize_skeleton(cand) -> tuple:
     """骨架输出/WAL → 校验归一（返回 (dict|None, diag)·None=结构破损须重生成）。
 
-    确定性结构修补（C19 同源·非创作干涉）：卷缺 vol 号 → 按位置回填；骨架里混产的
+    确定性结构修补（非创作干涉）：卷缺 vol 号 → 按位置回填；骨架里混产的
     major_events 一律丢弃（ME 池单一来源 = 卷 chunk WAL）。破损判定：缺顶层键 /
     volumes 空 / 卷号无法归一为唯一正整数。
     """
@@ -588,9 +587,9 @@ def _gen_volume_arc_unit(lt, project_root: Path, *, unit: str, system: str, user
                          normalize, max_tokens: int):
     """单元（骨架 skeleton / 单卷 v<N>）生成：契约2 截断走续写；契约3 parse 彻底失败 block。
 
-    🔴 真机 e2e 抓修 2026-06-15：单点 gen-model 调用偶发非 JSON/被限速截断 → parse 失败·
-    实测同 prompt 第一次炸第二次过（瞬时根因）。parse-失败重试 ≤MAX_VOL_ARC_TRIES 次让偶发
-    抖动自愈·真确定性破损才 block（结构破损是传输/格式问题不是创作判断）。失败返 None。
+    单点 gen-model 调用偶发返回非 JSON 或被限速截断，parse 失败多为瞬时抖动（同 prompt
+    重试常能过）。parse-失败重试 ≤MAX_VOL_ARC_TRIES 次让偶发抖动自愈，真确定性破损才
+    block（结构破损是传输/格式问题不是创作判断）。失败返 None。
     """
     last_diag = "(未尝试)"
     for attempt in range(1, MAX_VOL_ARC_TRIES + 1):
@@ -619,7 +618,7 @@ def _gen_volume_arc_unit(lt, project_root: Path, *, unit: str, system: str, user
 
 
 def _run_volume_arc(args) -> int:
-    """卷级大纲生成（P2 分卷 chunk + WAL 断点续跑）：四硬契约·走 llm_transport·block 非零退出。
+    """卷级大纲生成（分卷 chunk + WAL 断点续跑）：四硬契约·走 llm_transport·block 非零退出。
 
     阶段A 全书骨架 → .wal/volume_arc_skeleton.json；阶段B 逐卷 ME 池 → .wal/volume_arc_v<N>.json
     （schema 合法的部分产物·合法 WAL 直接跳过·损坏重生成）；阶段C 全部卷完成后确定性合并
@@ -656,7 +655,7 @@ def _run_volume_arc(args) -> int:
     cluster_count = args.cluster_count or 10
     framework = args.framework or "自定义"
     rhythm = args.rhythm or "标准"
-    # P3：参考语料结构基线（artifact 存在才注入·advisory 可偏离·纯数字无原文）
+    # 参考语料结构基线（artifact 存在才注入·advisory 可偏离·纯数字无原文）
     reference_patterns_block = build_reference_patterns_block(project_root)
 
     if args.dry_run:

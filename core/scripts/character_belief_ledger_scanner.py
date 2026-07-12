@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """character_belief_ledger_scanner.py — 角色信念账本(OmniToM 7 维)·跨场景信念结构
 
-【缺口 · R18 W7 Batch-S·P0 · 2026-06-21】arxiv 2605.26322 OmniToM 2026-05-25
+【缺口】arxiv 2605.26322 OmniToM 2026-05-25
 + arxiv 2506.13641 EvolvTrip 2025-06 + arxiv 2601.12410 LLM-vs-Chimps 2026-01：
   多角色叙事最易翻车的不是 narrator 的越界（focalizer_perception_bounds 已查），也不
   是 dramatic_irony 的 TELL 词（dramatic_irony_scanner 已查），而是【角色 A 在场景 N
@@ -18,23 +18,23 @@
   本占位版只查 ①+④ 最常翻车那条：character_name + 知识动词(知道/听说/明白/记起)
   + fact_ref 出现在 scene_storyboard 里【character 尚未在场】的位置。简化但确定性。
 
-【🔴 2026-06-29 角色信息差(per-character belief)·接真升级】
-  优先读持久化 _数据库/character_belief_ledger.json（Phase A/B 产·schema:
+【角色信息差(per-character belief)：持久化 ledger 检测】
+  优先读持久化 _数据库/character_belief_ledger.json（schema:
     {characters:{<char_id>:{known_facts:[{fact_id,content,learned_at_cluster,can_speak,...}],
      unaware_of:[fact_id]}}, facts:{<fact_id>:{content}}}）：
     检测正文中角色名 + 知识动词窗口内提及【自己 ledger 里没有(unaware_of)或 can_speak=false】的
-    fact content → CHARACTER_KNOWLEDGE_LEAK。ledger 不存在 → 退回占位词典逻辑(向后兼容·零行为变化)。
+    fact content → CHARACTER_KNOWLEDGE_LEAK。ledger 不存在 → 退回占位词典逻辑(零行为变化)。
   生成层注入(build_manifest._sanitize_character_belief + gen_writer H7)是重心·本 scanner 是检测兜底。
 
-【🔴 2026-07-01 语义匹配路径升级 · 2026-07-04 迁移内容嵌入（bge 内容模型·
-  经 embedding_store.compute_content_embedding 消费）】
-  持久化 ledger 路径原本靠「fact 短语精确子串命中窗口」判定穿帮，抓不住同义改写
+【语义匹配路径（内容语义 embedding：bge 内容模型·经 embedding_store.compute_content_embedding
+  消费）】
+  持久化 ledger 路径单靠「fact 短语精确子串命中窗口」判定穿帮，抓不住同义改写
   （ledger 记「父亲被杀」·正文写「爹被人害死」→ 字面不重叠·实际同一事实·漏检）。
   内容语义后端就绪时（content_backend_available()：venv+infer 脚本+模型目录俱在），
   字面子串未命中的窗口再补一次 compute_content_embedding+cosine_similarity 语义比对
   （facts.content 原文 vs 正文窗口），相似度达阈值同样判定 leak；leak 条目标
-  match_method=literal|semantic 区分命中来源。内容后端不可用 → 只走原字面
-  子串匹配逻辑，逐字节零回归（绝不拿 hash 袋子冒充语义判穿帮·防制造比现在更差的假阳性/假阴性）。
+  match_method=literal|semantic 区分命中来源。内容后端不可用 → 只走原字面子串匹配逻辑
+  （绝不拿 hash 袋子冒充语义判穿帮，避免制造比字面匹配更差的假阳性/假阴性）。
 
 【与既有 scanner 显式去重】
   - focalizer_perception_bounds：narrator 层 (focalizer 自体不可见/他人内心/空间不在场)
@@ -47,7 +47,7 @@
 【做法 · 确定性占位（零 LLM）】
   1. 读 _数据库/人物卡.json → 角色名集合 + alias
   2. 读 _数据库/事件簇.json.clusters[].locked_facts[].fact (producer: apply_archive.apply_locked_facts)
-     → fact_ref 候选；缺则用占位词典兜底（向后兼容）
+     → fact_ref 候选；缺则用占位词典兜底
   3. belief_state[char] = set()，按 storyboard 顺序遍历每个 scene：
      - scene 出现 char → 把该 scene 的 "公开 reveals" 加进 belief_state[char]
      - 同时扫该 scene 内 char_name + KNOWLEDGE_VERB + fact_ref 段：
@@ -68,7 +68,7 @@ import re
 import sys
 from pathlib import Path
 
-# 🔴 2026-07-01 语义匹配路径升级：sys.path 自举·保证 embedding_store 可 import
+# sys.path 自举，保证 embedding_store 可 import
 # （与 topic_drift_scanner.py 同款 bootstrap·本仓既有约定）。
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
@@ -136,10 +136,9 @@ def _load_characters(project_root):
     return names
 
 
-# 🔴 2026-06-29 孤儿scanner重接线(名字错配·指向真数据源)
-# 旧读 _数据库/locked_fact.json = 零 producer 幻影文件（永远缺失 → 永远兜底占位）。真 locked
-# facts 在 _数据库/事件簇.json.clusters[].locked_facts[].fact（producer: apply_archive.
-# apply_locked_facts）。改读它提精度·保留占位词典兜底（向后兼容·缺则兜底）。
+# 真 locked facts 在 _数据库/事件簇.json.clusters[].locked_facts[].fact（producer:
+# apply_archive.apply_locked_facts）；_数据库/locked_fact.json 是零 producer 幻影文件，永远
+# 缺失，别读它。缺 locked_facts 时保留占位词典兜底。
 def _load_locked_facts_from_clusters(project_root):
     """读 事件簇.json.clusters[].locked_facts[].fact（producer: apply_locked_facts）。
        聚合全 cluster 的硬事实字符串（去重保序）。无文件/破损/无 locked_facts → []。"""
@@ -220,18 +219,16 @@ def _detect_leaks(scenes, all_names, fact_refs):
     return leaks, belief_state
 
 
-# 🔴 2026-06-29 角色信息差(per-character belief)·接真持久化 ledger（Phase A/B 产）
-# scanner 升级：优先读 character_belief_ledger.json，检测正文中角色提及/基于自己 ledger 里
-# 没有（unaware_of/未在 known_facts）或 can_speak=false 的 fact → CHARACTER_KNOWLEDGE_LEAK。
-# 保持 advisory·绝不进 HARD_GATE_CODES（提案 open_q① 先 advisory 观察期）。
-# ledger 不存在 → 退回占位逻辑（_detect_leaks·向后兼容·零行为变化）。
+# 角色信息差(per-character belief)：优先读 character_belief_ledger.json，
+# 检测正文中角色提及/基于自己 ledger 里没有（unaware_of/未在 known_facts）或 can_speak=false
+# 的 fact → CHARACTER_KNOWLEDGE_LEAK。保持 advisory·绝不进 HARD_GATE_CODES。
+# ledger 不存在 → 退回占位逻辑（_detect_leaks）。
 _LEDGER_VERB_WINDOW = 40  # ledger fact content 可能较长·窗口比占位版(30)略宽
 
 
-# ── 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）──────
+# ── 内容语义 embedding 路径 ──────
 def _content_backend_ready() -> bool:
-    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
-    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available）。
 
     import 失败 → False（调用方只走原字面子串匹配）。
     """
@@ -244,7 +241,7 @@ def _content_backend_ready() -> bool:
 
 # ledger fact 短语 vs 正文窗口 embedding 余弦相似度 ≥ 此值 → 判定语义同指
 # （能抓「父亲被杀」vs「爹被人害死」这类字面不重叠但同一事实的改写）。env 可覆盖。
-# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
+# 金标准校准依据：neg_p95=0.5165 / Youden=0.4904
 DEFAULT_SEMANTIC_LEAK_FLOOR = 0.52
 
 
@@ -260,7 +257,7 @@ def _semantic_leak_floor() -> float:
 
 
 def _load_belief_ledger(project_root):
-    """读持久化 character_belief_ledger.json。无文件 / 破损 / 无 characters → None（退回占位·向后兼容）。"""
+    """读持久化 character_belief_ledger.json。无文件 / 破损 / 无 characters → None（退回占位逻辑）。"""
     if not project_root:
         return None
     p = Path(project_root) / "_数据库" / "character_belief_ledger.json"
@@ -330,12 +327,12 @@ def _detect_leaks_from_ledger(scenes, ledger, charid_names):
        在该角色出场的场景里，角色名 + KNOWLEDGE_VERB 窗口内出现不可引用短语 → leak。
        角色自己 known_facts 里 can_speak!=false 的短语永不算违规（先扣除）。
 
-    🔴 2026-07-01 语义匹配路径：内容后端可用时，字面子串未命中的窗口再补一次
+    语义匹配路径：内容后端可用时，字面子串未命中的窗口再补一次
     compute_content_embedding+cosine_similarity 语义比对（forbidden 短语 vs 正文窗口），抓字面不
-    重叠但语义同指的改写。内容后端不可用/未装/编码异常 → 只走原有字面子串匹配，
-    与升级前逐字节零回归（绝不拿 hash 袋子冒充语义）。
+    重叠但语义同指的改写。内容后端不可用/未装/编码异常 → 只走原有字面子串匹配
+    （绝不拿 hash 袋子冒充语义）。
 
-    🔴 2026-07-03 Wave-4：语义路径先两遍扫描——第一遍只算各角色 forbidden 短语集
+    语义路径先两遍扫描——第一遍只算各角色 forbidden 短语集
     （不编码），据此收集本次会真正碰到的全部待 embed 文本（forbidden 短语 + 命中
     知识动词的窗口）一次性 prefetch 灌缓存；第二遍走原检测逻辑，逐条 compute_content_embedding
     全部命中缓存（取代每个窗口/短语首次出现各自触发一次后端 subprocess 调用）。"""
@@ -481,15 +478,15 @@ def scan(draft_path, project_root=None) -> dict:
     scenes = _split_scenes(text)
     out["scene_count"] = len(scenes)
 
-    # 🔴 2026-06-29 接真：优先读持久化 character_belief_ledger.json（Phase A/B 产）·
-    # 缺则退回占位词典逻辑（向后兼容·今天所有旧书无 ledger → 零行为变化）。
+    # 优先读持久化 character_belief_ledger.json·
+    # 缺则退回占位词典逻辑。
     ledger = _load_belief_ledger(project_root)
     if ledger is not None:
         out["ledger_source"] = "persistent"
         out["ledger_character_count"] = len(ledger.get("characters") or {})
         charid_names = _build_charid_name_map(project_root)
         leaks = _detect_leaks_from_ledger(scenes, ledger, charid_names)
-        # 🔴 2026-07-01：内容后端就绪时才透出该字段（不可用时逐字节零回归）
+        # 内容后端就绪时才透出该字段（不可用时行为不变）
         if _content_backend_ready():
             out["semantic_matching_active"] = True
     else:

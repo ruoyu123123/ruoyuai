@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""parrhesia_density_scanner.py — 冒险性直言密度 · R25 W13 Batch-MM · P1
+"""parrhesia_density_scanner.py — 冒险性直言密度
 
 【缺口 · Foucault Fearless Speech / 网文打脸场景骨架】
 parrhesia = 弱者对权者「冒险直言」。网文打脸名场面骨架 = (A) 权力反差词
@@ -45,7 +45,7 @@ ISSUE_CODE_OK = "PARRHESIA_DENSITY_OK"
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 # 占位 lexicon · _placeholder=true · 真版 = 打脸名场面聚类
-# [G2 P2] 外部化到 core/data/parrhesia_lexicon.json (lexicon_path 字段)·内嵌为 fallback 向后兼容
+# 外部词典 core/data/parrhesia_lexicon.json 优先·内嵌 _LEXICONS_FALLBACK 为缺失/损坏时兜底
 _LEXICON_PATH = Path(__file__).resolve().parent.parent / "data" / "parrhesia_lexicon.json"
 
 _LEXICONS_FALLBACK = {
@@ -73,7 +73,7 @@ _LEXICONS_FALLBACK = {
 
 
 def _load_lexicons() -> dict:
-    """[G2 P2] 外部 lexicon 优先·缺失/损坏 fallback 内嵌(向后兼容)"""
+    """外部 lexicon 优先·缺失/损坏 fallback 内嵌"""
     try:
         data = json.loads(_LEXICON_PATH.read_text(encoding="utf-8"))
         # 必须含 4 个信号键，否则视为损坏走 fallback
@@ -87,10 +87,10 @@ def _load_lexicons() -> dict:
 
 _LEXICONS = _load_lexicons()
 
-# 🔬 2026-07-04 zero_shot_prototype 语义补召回（军火库 3.3·B 信号 truth_claim）
+# 🔬 zero_shot_prototype 语义补召回（B 信号 truth_claim）
 # 二分类判别原型：truth_claim 正类 + other 中性对照类（nearest-centroid 需负类才有判别力·
 # 否则任何输入都归唯一质心）。措辞刻意区别于 lexicon 词表→抓"恕我直言"说成"把话挑明"的漏检。
-# 内容后端不可用（测试默认）→ classify 返 None → 无补召回·纯 lexicon·零回归。
+# 内容后端不可用（测试默认）→ classify 返 None → 无补召回·纯 lexicon 判定。
 _TRUTH_CLAIM_PROTOTYPES = {
     "truth_claim": ["我把话挑明了说吧", "恕我直言这里头有猫腻", "今天当着大家的面我把实话撂这儿",
                     "别怪我说得难听事实就是如此", "我今天就把这层窗户纸捅破"],
@@ -100,7 +100,7 @@ _TRUTH_CLAIM_PROTOTYPES = {
 
 def _truth_claim_semantic(para: str) -> bool:
     """zero_shot 判 para 是否语义上是 truth_claim（郑重直言/挑明真相）。
-    内容后端不可用/异常/归 other/低置信 → False（调用方回退 lexicon·零回归）。"""
+    内容后端不可用/异常/归 other/低置信 → False（调用方回退 lexicon）。"""
     try:
         import zero_shot_prototype
         res = zero_shot_prototype.classify(para, _TRUTH_CLAIM_PROTOTYPES, floor=0.5)
@@ -169,7 +169,7 @@ def _detect_parrhesia(para: str) -> dict:
     # truth-claim 必须出现在引号段内（占位：仅检查段内含引号且 truth_claim 词命中）
     b_quoted = _is_quoted_paragraph(para)
     b_lex, b_hits = _has_any(para, _LEXICONS["truth_claim"])
-    # zero_shot 补召回：lexicon 漏检时语义判 truth_claim（仍需引号段·并集非替换·2026-07-04 军火库 3.3）
+    # zero_shot 补召回：lexicon 漏检时语义判 truth_claim（仍需引号段·并集非替换）
     b_semantic = (not b_lex) and _truth_claim_semantic(para)
     b_ok = (b_lex or b_semantic) and b_quoted
     c_ok, c_hits = _has_any(para, _LEXICONS["risk_posture"])

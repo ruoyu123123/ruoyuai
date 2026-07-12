@@ -1,4 +1,4 @@
-"""atomic_json.py — 原子写 JSON + 简易 file lock（v19.4 新增）"""
+"""atomic_json.py — 原子写 JSON + 简易 file lock。"""
 
 from __future__ import annotations
 
@@ -10,10 +10,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
-# 2026-05-29 复审修复（盲区②-lock）：跨平台原子锁创建标志。
-# O_CREAT|O_EXCL 在 POSIX/Windows 都是原子「不存在才创建」语义；Windows 下追加 O_BINARY 防 CRLF
-# 转换破坏 pid/ts 元信息（虽是 ASCII 但显式 binary 更稳）。中文路径在 Windows(UTF-16 NTFS) 与
-# 现代 Linux(UTF-8) 上 os.open(str(path)) 均可靠，无需额外编码处理。
+# 跨平台原子锁创建标志：O_CREAT|O_EXCL 在 POSIX/Windows 都是原子「不存在才创建」语义；Windows 下
+# 追加 O_BINARY 防 CRLF 转换破坏 pid/ts 元信息（虽是 ASCII 但显式 binary 更稳）。中文路径在
+# Windows(UTF-16 NTFS) 与现代 Linux(UTF-8) 上 os.open(str(path)) 均可靠，无需额外编码处理。
 _LOCK_OPEN_FLAGS = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
 _LOCK_EXPIRE_SEC = 300.0
 
@@ -54,9 +53,8 @@ def with_file_lock(target: Path, timeout: float = 10.0, poll: float = 0.1):
             break
         except FileExistsError:
             if time.time() - start > timeout:
-                # 2026-05-29 修：过期锁抢占 TOCTOU 修复（盲区②-lock 加固）。
-                # 旧实现 unlink + continue → 两进程可能同时通过 stat 检查后各自 unlink + 创建，双方都拿到锁。
-                # 新实现用「原子重命名抢占」而非裸 unlink+continue：
+                # 过期锁抢占用「原子重命名」而非裸 unlink+continue，避免 TOCTOU 竞态——两个进程
+                # 可能同时通过 stat 检查后各自 unlink + 创建，导致双方都拿到锁：
                 #   1) 先把过期锁原子 rename 成本进程私有的 .stale.<pid>.<uuid> 名字；
                 #      os.replace 是原子的——只有一个进程能把那个特定 inode 抢走，其余 rename 会失败/改到别处。
                 #   2) 抢到（rename 成功）的进程删掉私有 stale 文件，再 O_CREAT|O_EXCL 创建新锁；
@@ -107,27 +105,27 @@ def with_file_lock(target: Path, timeout: float = 10.0, poll: float = 0.1):
 
 
 def atomic_write_text(target: Path, text: str, encoding: str = "utf-8"):
-    """原子写纯文本（2026-06-13 残余非原子写收编）：tmp(pid+uuid) + fsync + os.replace。
+    """原子写纯文本：tmp(pid+uuid) + fsync + os.replace。
 
     与 atomic_write_json 同一范式 —— 崩溃/断电时目标文件要么旧版完整、要么新版完整，
     绝不留半截。供草稿 txt / 章节正文 txt / pending_tail / plan JSON（自带序列化）等
-    产物落盘复用。临时/日志类写盘不必收编。
+    产物落盘复用；临时/日志类写盘无需走这里。
     """
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    # 2026-05-29 复审修复（盲区②）：tmp 名固定 → 两进程并发写同一 target 时 tmp 文件交错损坏。
-    # 改：tmp 名嵌入 os.getpid() + uuid4 hex，进程间/进程内全局唯一，互不踩踏。
-    # 不用 with_suffix（会丢掉原后缀，且 .json.tmp 链式后缀语义不直观），直接拼父目录 + 唯一名。
+    # tmp 名嵌入 os.getpid() + uuid4 hex（不用固定名——两进程并发写同一 target 时固定 tmp 文件名
+    # 会互相交错损坏），进程间/进程内全局唯一，互不踩踏。也不用 with_suffix（会丢掉原后缀，且
+    # .json.tmp 链式后缀语义不直观），直接拼父目录 + 唯一名。
     tmp = target.parent / f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     try:
-        # 2026-05-29 修：os.replace 前先 flush + fsync 落盘，否则崩溃时目标文件可能 0 字节。
+        # os.replace 前先 flush + fsync 落盘，否则崩溃时目标文件可能 0 字节。
         with open(str(tmp), "w", encoding=encoding) as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        # 2026-05-29 复审修复（盲区②）：Windows 下若 target 句柄被别的进程短暂持有（杀软/索引器/
-        # 另一写者刚 replace 完仍在收尾），os.replace 抛 PermissionError。POSIX 的 rename 是原子的、
-        # 一般不抛此错，但 Windows 必须重试。短退避重试若干次，仍失败才向上抛。
+        # Windows 下若 target 句柄被别的进程短暂持有（杀软/索引器/另一写者刚 replace 完仍在收尾），
+        # os.replace 抛 PermissionError。POSIX 的 rename 是原子的、一般不抛此错，但 Windows 必须
+        # 重试。短退避重试若干次，仍失败才向上抛。
         last_err = None
         for attempt in range(10):
             try:
@@ -149,9 +147,8 @@ def atomic_write_text(target: Path, text: str, encoding: str = "utf-8"):
 
 
 def atomic_write_json(target: Path, data: dict, indent: int = 2, ensure_ascii: bool = False):
-    # 2026-06-13 重构：写盘核心（tmp pid+uuid + fsync + os.replace + PermissionError 退避）
-    # 下沉到 atomic_write_text 共用，本函数只负责 JSON 序列化 —— 字节内容/异常行为与旧实现
-    # 完全一致（json.dumps 失败仍发生在建 tmp 之前，不留 tmp）。
+    # 写盘核心（tmp pid+uuid + fsync + os.replace + PermissionError 退避）下沉到 atomic_write_text
+    # 共用，本函数只负责 JSON 序列化（json.dumps 失败发生在建 tmp 之前，不留 tmp）。
     payload = json.dumps(data, ensure_ascii=ensure_ascii, indent=indent)
     atomic_write_text(target, payload, encoding="utf-8")
 
@@ -192,7 +189,7 @@ if __name__ == "__main__":
                 assert False, "应该超时"
             except TimeoutError:
                 pass
-        # 2026-06-13：atomic_write_text smoke（写后读回一致 + 覆盖替换 + 无 tmp 残留）
+        # atomic_write_text smoke（写后读回一致 + 覆盖替换 + 无 tmp 残留）
         t = Path(td) / "test.txt"
         atomic_write_text(t, "第一章\n中文正文。\n")
         assert t.read_text(encoding="utf-8") == "第一章\n中文正文。\n"

@@ -1,15 +1,13 @@
-"""evolution_orchestrator.py — 三角共演化 orchestrator（v22 SE4）
+"""evolution_orchestrator.py — 三角共演化 orchestrator
 
 业界 arxiv 2510.23595 Multi-Agent Evolve：Proposer + Solver + Judge 三角共演化。
-我们已有三角：
+系统三角：
   - Proposer = novel-outline-planner（出走向卡）
   - Solver = novel-writer（写章节）
   - Judge = audit_hub + judge_consensus（评估）
 
-但当前是**单向链**：Proposer → Solver → Judge
-缺：Judge 反馈 → 反向校准 Proposer + Solver
-
-本 orchestrator 每 N 个 cluster 触发（cluster-only · 由 cluster-save-state plan step 调用）：
+本 orchestrator 承载 Judge 反馈 → 反向校准 Proposer + Solver 的反向环节，
+每 N 个 cluster 触发（cluster-only · 由 cluster-save-state plan step 调用）：
 1. 三角分析：Proposer 卡质量 / Solver 章节质量 / Judge 一致性
 2. 反向校准信号：
    - Judge 评分连续低 → outline-planner 卡设计有问题 → 调用 meta-prompt-optimizer
@@ -33,9 +31,9 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
-# 2026-05-29 cluster 化：cluster 模式下触发单位从「每 10 章」改为「每 N 个 cluster」，
-# 三角共演化分析窗口用 cluster_summary_reader 取最近 N cluster 的章 + cluster judge_grade。
-# cluster_lookup 把 --cluster {key} 解析成末章/序号锚点。
+# cluster 模式下触发单位是「每 N 个 cluster」，三角共演化分析窗口用 cluster_summary_reader
+# 取最近 N cluster 的章 + cluster judge_grade。cluster_lookup 把 --cluster {key} 解析成
+# 末章/序号锚点。
 try:
     import cluster_summary_reader as _csr  # noqa: E402
 except Exception:  # pragma: no cover - 防御性
@@ -55,10 +53,8 @@ def load_json(p: Path, default=None):
         return default
 
 
-# 2026-05-29 复审修复（L10）：judge 报告实际用字母评级 overall_grade（无数值 score），
-# analyze_solver 旧读法 data.get("score") 恒 None → 质量下滑信号永不触发。
-# 加 grade→score 兜底（5.0 制 · 与 evolution_canary / gepa_prompt_optimizer 同制，
-# 便于跨脚本阈值一致）。
+# judge 报告用字母评级 overall_grade，无数值 score；analyze_solver 按 grade→score 兜底
+# 换算（5.0 制 · 与 evolution_canary / gepa_prompt_optimizer 同制，便于跨脚本阈值一致）。
 GRADE_TO_SCORE = {
     "A": 5.0, "A-": 4.5, "B+": 4.0, "B": 3.5, "B-": 3.0,
     "C+": 2.5, "C": 2.0, "C-": 1.5, "D": 1.0, "F": 0.0,
@@ -73,11 +69,11 @@ def _grade_to_score(grade):
 
 
 def _expand_cluster_chapters(cluster: dict) -> list[int]:
-    """2026-05-29 复审修复（L9）：把一个 cluster 展开成它包含的章号列表。
+    """把一个 cluster 展开成它包含的章号列表。
 
     优先用 chapter_range [lo, hi] 全展开（splitter 切定后的权威范围）；range 缺/非法时
     回退 chapters{} 的 key（builder 已写章记录）。两者都无 → 空列表。
-    SC-3：不反查目标 cluster 自身尚未回填的 range —— 这里只读已落账 cluster 自带的 range，
+    不反查目标 cluster 自身尚未回填的 range —— 只读已落账 cluster 自带的 range，
     不做跨 cluster 推算，故安全。
     """
     chs: list[int] = []
@@ -194,7 +190,7 @@ def analyze_solver(project_root: Path, recent_chs: list[int]) -> dict:
             score = (data.get("score") or data.get("overall_score") or
                      (data.get("aggregated") or {}).get("score") or
                      (data.get("scores") or {}).get("overall"))
-            # L10：无数值 score 时回退字母评级 overall_grade/grade → 5.0 制分数。
+            # 无数值 score 时回退字母评级 overall_grade/grade → 5.0 制分数。
             if not isinstance(score, (int, float)):
                 score = _grade_to_score(data.get("overall_grade") or data.get("grade"))
             if isinstance(score, (int, float)):
@@ -249,8 +245,8 @@ def analyze_judge(project_root: Path, recent_chs: list[int]) -> dict:
 
 
 def analyze_judge_cluster(project_root: Path, recent_clusters: list[dict]) -> dict:
-    """2026-05-29 cluster 化：cluster 视野的 Judge 分析 —— 用 cluster 账本 judge_grade
-    取代逐章 changes.waivers 重扫。grade 连续偏低（C/D）→ 一致性/质量信号。
+    """cluster 视野的 Judge 分析：用 cluster 账本 judge_grade 判断质量，不逐章重扫
+    changes.waivers。grade 连续偏低（C/D）→ 一致性/质量信号。
     账本无 judge_grade（builder 未填）→ 回退逐章 analyze_judge（账本数据兜底·非章级入口）。
     """
     findings = []
@@ -259,8 +255,7 @@ def analyze_judge_cluster(project_root: Path, recent_clusters: list[dict]) -> di
               if isinstance(c.get("judge_grade"), str) and c.get("judge_grade") in grade_rank]
     if not graded:
         # 回退：把最近 cluster 的章拍平走逐章 waiver 分析
-        # 2026-05-29 复审修复（L9）：优先 chapter_range 展开（_expand_cluster_chapters），
-        # 不再只认 chapters{} key。
+        # 优先用 chapter_range 展开（_expand_cluster_chapters），chapters{} key 只作兜底。
         chs = []
         for c in recent_clusters:
             chs.extend(_expand_cluster_chapters(c))
@@ -282,8 +277,8 @@ def analyze_judge_cluster(project_root: Path, recent_clusters: list[dict]) -> di
 def trigger_cascade(project_root: Path, signals: list[str], cluster_key: str) -> dict:
     """根据信号触发对应工具。
 
-    2026-07-05 cluster-only：级联的 skill_evolver evolve/retire 一律按 cluster 调
-    （`--cluster {key}`），与 skill_evolver 的 cluster 阈值配套。
+    级联的 skill_evolver evolve/retire 一律按 cluster 调（`--cluster {key}`），
+    与 skill_evolver 的 cluster 阈值配套。
     """
     triggered = []
     if "SOLVER_REPEATED_ERRORS" in signals or "SOLVER_QUALITY_DECLINE" in signals \
@@ -313,7 +308,7 @@ def trigger_cascade(project_root: Path, signals: list[str], cluster_key: str) ->
 
 
 def _run_cluster(project_root: Path, cluster_key: str, cluster_cycle: int) -> int:
-    """2026-05-29 cluster 化（主路径）：触发单位「每 N 个 cluster」。
+    """触发单位「每 N 个 cluster」（主路径）。
 
     分析窗口 = cluster_summary_reader 取最近 N 个 cluster；把这些 cluster 的章拍平给
     Proposer/Solver 逐章分析器复用，Judge 走 cluster 级 judge_grade 分析。
@@ -330,8 +325,8 @@ def _run_cluster(project_root: Path, cluster_key: str, cluster_cycle: int) -> in
         return 0
 
     # 把最近 cluster 的章拍平给逐章分析器复用
-    # 2026-05-29 复审修复（L9）：优先用 chapter_range 全展开（_expand_cluster_chapters），
-    # 旧实现只认 chapters{} key → splitter 已回填 range 但 builder 章记录稀疏时漏章。
+    # 优先用 chapter_range 全展开（_expand_cluster_chapters）：只认 chapters{} key
+    # 在 splitter 已回填 range 但 builder 章记录稀疏时会漏章。
     recent_chs = sorted({
         ch for c in recent_clusters for ch in _expand_cluster_chapters(c)
     })
@@ -375,8 +370,7 @@ def _run_cluster(project_root: Path, cluster_key: str, cluster_cycle: int) -> in
 
 
 def main():
-    # 2026-07-05 cluster-only（W3 旁路移除）：章级双形入口（--ch/--cycle）已删——系统
-    # cluster-only，plan step 只以 `--cluster {key}` 调用，--cluster 为必填。
+    # 系统 cluster-only，plan step 只以 `--cluster {key}` 调用，--cluster 为必填。
     ap = argparse.ArgumentParser(
         description="evolution_orchestrator · 三角共演化（cluster-only · 每 N 个 cluster 触发）"
     )

@@ -1,6 +1,6 @@
 """subplot_progress_update.py — 从 cluster 摘要推进 subplot_threads + 四线脉络
 
-G3 调研发现: subplot_threads.json + 四线脉络.json 只在 outline 写一次后零写回。
+subplot_threads.json + 四线脉络.json 在 outline 阶段写入后不会自动更新。
 
 机制(零 LLM · 确定性):
 - 读 故事块摘要.json 的 cluster 摘要
@@ -27,10 +27,9 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 
-# ── 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）───────
+# ── 内容语义 embedding 路径 ───────
 def _content_backend_ready() -> bool:
-    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
-    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available）。
 
     import 失败 → False（调用方使用字面 substring）。
     """
@@ -41,13 +40,12 @@ def _content_backend_ready() -> bool:
         return False
 
 
-SEMANTIC_THREAD_MATCH_THRESHOLD = 0.52   # thread 名+描述 vs cluster 摘要余弦阈值
-# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
+SEMANTIC_THREAD_MATCH_THRESHOLD = 0.52   # thread 名+描述 vs cluster 摘要余弦阈值（neg_p95=0.5165/Youden=0.4904 校准）
 
 
 def _embed_corpus_once(corpus_text: str) -> "list | None":
     """内容后端就绪时把 cluster_summary_text 编码一次，供本次 update() 内所有
-    thread/throughline 复用（避免每条都重复编码同一段落·2026-07-02）。
+    thread/throughline 复用（避免每条都重复编码同一段落）。
 
     内容后端不可用 / 空文本 → None（调用方逐条使用字面 substring）。
     已声明可用的内容后端编码失败 → 抛错，避免状态推进链路静默缺信号。
@@ -139,7 +137,7 @@ def update(project_root: Path, cluster_id: str) -> dict:
     # 四线脉络提前读取（供下面 prefetch 收集 query 文本 + 后面判定循环复用·不重复 _load）
     tl = _load_optional(throughline_path)
     # 四线脉络 canonical schema（subsystem_skeletons + build_manifest._collect_throughlines）=
-    # dict {overall/main/influence/relationship: {label, current_arc, ...}}。历史遗留可能存成
+    # dict {overall/main/influence/relationship: {label, current_arc, ...}}，也可能存成
     # str/dict 列表。两种都归一成「线对象/线名」列表 _tl_lines 统一处理：dict 取 values（mutate
     # 原值对象即回写原结构·label 作线名·空线跳过），list 原样迭代。
     _tl_raw = tl.get("throughlines", {}) if tl else {}
@@ -150,10 +148,9 @@ def update(project_root: Path, cluster_id: str) -> dict:
     else:
         raise RuntimeError("四线脉络.json 的 throughlines 必须是对象（四线 dict）或列表")
 
-    # 🔴 2026-07-03 Wave-4：本次 update() 会用到的全部待编码文本（corpus 摘要 +
-    # 所有 thread/throughline query）一次性 prefetch（内容后端子进程按条调用极贵·
-    # 合并成一次批调用），后续 _embed_corpus_once / _thread_appears 内的逐条
-    # compute_content_embedding 全部命中缓存。
+    # 本次 update() 会用到的全部待编码文本（corpus 摘要 + 所有 thread/throughline
+    # query）一次性 prefetch（内容后端子进程按条调用极贵·合并成一次批调用），后续
+    # _embed_corpus_once / _thread_appears 内的逐条 compute_content_embedding 全部命中缓存。
     if _content_backend_ready():
         from embedding_store import prefetch_content_embeddings
         queries = [cluster_summary_text] if cluster_summary_text else []
@@ -183,7 +180,7 @@ def update(project_root: Path, cluster_id: str) -> dict:
         if queries:
             prefetch_content_embeddings(queries)
 
-    # 内容后端就绪时 cluster 摘要只编码一次（本函数下面两个循环复用·2026-07-02）
+    # 内容后端就绪时 cluster 摘要只编码一次（本函数下面两个循环复用）
     corpus_emb = _embed_corpus_once(cluster_summary_text)
 
     for thread in sub.get("threads", []):
@@ -228,12 +225,11 @@ def update(project_root: Path, cluster_id: str) -> dict:
     if updated > 0 or not sub_path.exists():
         _save(sub_path, sub)
 
-    # 四线脉络同理（同一 cluster_summary_text·同一 corpus_emb·同一 _thread_appears 判定·
-    # 2026-07-02 举一反三：与上面 subplot_threads 同函数同 bug 模式一起升级语义补漏）
+    # 四线脉络同理（同一 cluster_summary_text·同一 corpus_emb·同一 _thread_appears 判定）
     # tl 已在函数开头为 prefetch 收集提前读取（见上），此处复用不重复 _load
     tl_updated = 0
     for line in _tl_lines:
-        # 四线脉络归一后 _tl_lines 可能含 str（历史遗留 走向线=str）或 dict（canonical 四线值
+        # 四线脉络归一后 _tl_lines 可能含 str（走向线用字符串表示）或 dict（canonical 四线值
         # 对象 {label, current_arc, ...}）。str 只读计数不回写；dict 命中回写 last_cluster。
         if isinstance(line, str):
             line_name = line

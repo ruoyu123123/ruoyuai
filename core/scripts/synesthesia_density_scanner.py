@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""synesthesia_density_scanner.py — 通感/移觉密度检测（advisory · cluster · 2026-06-20）
+"""synesthesia_density_scanner.py — 通感/移觉密度检测（advisory · cluster）
 
-【缺口】全系统 scanner 无一查「通感/移觉（synesthesia）过用」。来源 arXiv:2110.09710
+本 scanner 检测「通感/移觉（synesthesia）过用」。依据 arXiv:2110.09710
 （Inter-Sense·跨感官语义迁移）：通感是修辞【高光】非常态——偶现一笔（"响亮的红"）惊艳，
 密集堆砌则【钝化效果】比不用更糟（每句都跨感官借用 = 辞藻油腻·失去高光的稀缺性）。
 
@@ -14,8 +14,8 @@
 
 【北极星⑤ 顾问非法官】通感密度是创作选择·writer 有理由偏离 → 永远 advisory，code
   SYNESTHESIA_OVERUSE **绝不进 audit_hub.HARD_GATE_CODES**。
-  env SYNESTHESIA_MODE: off / shadow(默认·只记不判·零回归) / active。
-  🔬 阈值 SYN_PER_1K_FLOOR 保守占位·待金标准校准（真作者原文喂自身 PASS·真作者通感密度极低·留大余量）。
+  env SYNESTHESIA_MODE: off / shadow(只记不判) / active(默认)。
+  阈值 SYN_PER_1K_FLOOR 待金标准校准（真作者通感密度极低·留大余量）。
 
 用法：python synesthesia_density_scanner.py <draft_path> [--project <root>] [--manifest m.json]
 """
@@ -39,15 +39,15 @@ SYNESTHESIA_PAT = re.compile(
     r"|声音(很|是)(湿|冷|甜|软|硬|亮)"
     r"|气味(很)?(吵|响|刺眼|明亮)"
 )
-# 🔬 金标准校准占位（真作者通感密度极低·通感是修辞高光非常态）：密度超此/千字 = 过用·留大余量
-SYN_PER_1K_FLOOR = 1.5   # 通感密度过高门槛（建议每 cluster 约 1-3 处·待真作者原文喂自身校准）
+# 金标准校准（真作者通感密度极低·通感是修辞高光非常态）：密度超此/千字 = 过用·留大余量
+SYN_PER_1K_FLOOR = 1.5   # 通感密度过高门槛（建议每 cluster 约 1-3 处）
 
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-20 金标准校准放量 active：5 真作者 synesthesia per_1k 全 0.0(保守正则只抓明显通感)
-    # —— 真作者不滥用通感·零误报·只在草稿过用(>1.5/千)时报·安全放量。
+    # 默认 active（5 真作者 synesthesia per_1k 全 0.0·保守正则只抓明显通感）——
+    # 真作者不滥用通感·零误报·只在草稿过用(>1.5/千)时报。
     m = (os.environ.get("SYNESTHESIA_MODE") or "active").strip().lower()
     return m if m in ("off", "shadow", "active") else "active"
 

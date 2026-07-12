@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 🔴 2026-06-29 NN增强路径
-"""emotion_granularity_scanner.py — 情绪颗粒度粗（粗类情绪大词裸用）检测（advisory · cluster · 2026-06-19）
+"""emotion_granularity_scanner.py — 情绪颗粒度粗（粗类情绪大词裸用）检测（advisory · cluster）
 
 【缺口】SAGE (Emotional Granularity) 实证：高情绪颗粒度 = 用细分情绪词（不甘/讪讪/悻悻/
 怅惘/悸动…）精准命名感受；低颗粒度 = 用四大类粗情绪大词（愤怒/悲伤/高兴/害怕）直陈。
@@ -24,7 +23,7 @@
   env EMOTION_GRANULARITY_MODE: off / shadow(默认·只记不判) / active。
   🔬 阈值 COARSE_EMOTION_PER_1K_FLOOR 待金标准校准（真作者原文喂自身 PASS·防矫枉过正）。
 
-【🔴 2026-06-29 NN增强路径（env RUOYU_NN_VAD=1·默认 off）】裸关键词词频之外另开真 NN VAD 路径：
+【NN 增强路径（env RUOYU_NN_VAD=1·默认 off）】裸关键词词频之外另开真 NN VAD 路径：
   段级 (V,A,D) → vad_variance（各轴方差之和·越大颗粒度越高=好）+ vad_coverage（各轴极差之积·
   情绪丰富度）。方差低于 floor = 情绪平铺(颗粒度粗) → 同 code EMOTION_GRANULARITY_COARSE（details
   多带 vad_variance）。NN 优先·桥失败/未启用 → 回退关键词词频（零回归·默认安全·不崩）·仍全 advisory。
@@ -55,8 +54,7 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-20 金标准校准放量 active：5 真作者粗情绪密度 0.07-1.32/千字(floor 3.0·2.3x 余量)
-    # —— 真作者用细分情绪词·零误报·安全放量。
+    # 默认 active（金标准校准：真作者粗情绪密度远低于 floor·零误报·安全放量）。
     m = (os.environ.get("EMOTION_GRANULARITY_MODE") or "active").strip().lower()
     return m if m in ("off", "shadow", "active") else "active"
 
@@ -106,7 +104,7 @@ def _author_floor(project_root):
     return round(float(mean) + 2.0 * float(sigma), 3)
 
 
-# ── 🔴 2026-06-29 NN增强路径 — 段级 VAD 方差/覆盖量化情绪颗粒度（env RUOYU_NN_VAD=1 门控）─────
+# ── NN增强路径 — 段级 VAD 方差/覆盖量化情绪颗粒度（env RUOYU_NN_VAD=1 门控）─────
 # 思路（北极星⑤·全 advisory）：高情绪颗粒度 = 段与段之间 VAD 读数有起伏（精准命名不同感受）；
 # 低颗粒度 = 所有段 VAD 平铺一个调子。真 NN VAD（CCC0.80）取每段 (V,A,D)：
 #   · vad_variance = 各轴方差之和（越大=颗粒度越高=好）→ 低于 floor = 情绪平铺(颗粒度粗)
@@ -129,7 +127,7 @@ def _variance(xs) -> float:
 
 
 def _nn_vad_granularity(text: str):
-    """🔴 2026-06-29 NN增强路径 — 段级 VAD 方差/覆盖（env 门控·一次 subprocess·失败/未启用→None）。
+    """NN增强路径 — 段级 VAD 方差/覆盖（env 门控·一次 subprocess·失败/未启用→None）。
 
     返回 {vad_variance, vad_coverage, per_axis_variance, axes, segments_scored} 或 None
     （RUOYU_NN_VAD≠1 / 有效段不足 / 桥失败/条数失配 → None → 调用方回退关键词·零回归·不崩）。
@@ -207,7 +205,7 @@ def scan(draft_path, project_root=None) -> dict:
     out["floor_used"] = floor
     out["author_baseline"] = author_floor
 
-    # 🔴 2026-06-29 NN增强路径 — RUOYU_NN_VAD=1 时段级 VAD 方差量化颗粒度(更精确·NN 优先)·失败兜底关键词
+    # 🔴 NN增强路径 — RUOYU_NN_VAD=1 时段级 VAD 方差量化颗粒度(更精确·NN 优先)·失败兜底关键词
     nn = _nn_vad_granularity(draft)
     out["detection_method"] = "nn_vad_variance" if nn else "keyword_density"
 

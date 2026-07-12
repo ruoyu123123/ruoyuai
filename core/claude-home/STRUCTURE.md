@@ -60,7 +60,7 @@ workspace/styles/{书名}/                         # 风格项目根
 │   ├── ch{N}_metrics.json                     # style_analyzer 量化输出
 │   └── ...
 │
-├── 衔接分析/                                   # 章际衔接 JSON（v17 新增）
+├── 衔接分析/                                   # 章际衔接 JSON
 │   ├── ch{N}_{N+2}_continuity.json            # 3 章窗口衔接分析
 │   └── ...
 │
@@ -440,7 +440,7 @@ tests/                                           # pytest 回归测试，按 tes
 
 ---
 
-## 九-bis、调研缓存目录（v17.7 引入 · novel-researcher agent 产出）
+## 九-bis、调研缓存目录（novel-researcher agent 产出）
 
 `workspace/novels/{书名}/_数据库/.research_cache/`
 
@@ -528,11 +528,11 @@ cluster 草稿阶段统一以 `audit_hub.py --mode cluster --cluster-id <key>` �
 | E 层一致性 | 5（LOCKED_FACT_CONFLICT / FUTURE_KNOWLEDGE_LEAK / FORESHADOWING_NOT_PAID / SECRET_NOT_REVEALED / UNKNOWN_CHARACTER_DETECTED） |
 | 文件契约 | 3（CHANGES_MISSING / MANIFEST_MISSING / FILE_NOT_FOUND） |
 | 道具状态 | 2（ITEM_HOLDER_ABSENT / ITEM_NOT_YET_INTRODUCED） |
-| 移动阅读体验 | 1（STYLE_单段超长 · v23.12 新增） |
-| 章末工艺（v2 cluster 新增） | 2（CHAPTER_END_FORBIDDEN_SCREENPLAY / CHAPTER_END_FORBIDDEN_TRANSITION） |
-| cluster 跨场景一致性（v2 cluster 新增） | 1（LOCKED_FACT_CROSS_SCENE_CONFLICT） |
-| 子系统载荷点火（C03 · 2026-06-27 新增） | 3（RIPPLE_RULES_EMPTY / GRAND_TREND_ME_POOL_EMPTY / CLUSTER001_STORYBOARD_EMPTY） |
-| splitter 字数守恒（C18 · 2026-06-27 新增） | 1（SPLIT_WORD_NOT_CONSERVED） |
+| 移动阅读体验 | 1（STYLE_单段超长） |
+| 章末工艺 | 2（CHAPTER_END_FORBIDDEN_SCREENPLAY / CHAPTER_END_FORBIDDEN_TRANSITION） |
+| cluster 跨场景一致性 | 1（LOCKED_FACT_CROSS_SCENE_CONFLICT） |
+| 子系统载荷点火 | 3（RIPPLE_RULES_EMPTY / GRAND_TREND_ME_POOL_EMPTY / CLUSTER001_STORYBOARD_EMPTY） |
+| splitter 字数守恒 | 1（SPLIT_WORD_NOT_CONSERVED） |
 
 
 | code | 来源 | 类别 | 为什么不可豁免 |
@@ -548,13 +548,13 @@ cluster 草稿阶段统一以 `audit_hub.py --mode cluster --cluster-id <key>` �
 | `ITEM_HOLDER_ABSENT` | audit_hub cluster | 道具状态 | 道具持有者不在场 = 道具状态矛盾 |
 | `ITEM_NOT_YET_INTRODUCED` | audit_hub cluster | 道具状态 | 道具尚未引入就被用 = 道具状态矛盾 |
 | `STYLE_单段超长` | validate_style in audit_hub | 移动阅读 | 单段 > 120 CJK 字（物理章节 ≤1 例外）= 移动阅读硬上限；不允许 AI 豁免单条 |
-| `CHAPTER_END_FORBIDDEN_SCREENPLAY` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现剧本体过渡（「（镜头XX）」等舞台指示）= 连续小说工艺破坏。**为什么不可豁免**：2026-05-28 cluster_001 ch4 三次翻车 sediment，章末是钩子不是收束。详见 memory `feedback_no_screenplay_stage_directions_in_novels` |
-| `CHAPTER_END_FORBIDDEN_TRANSITION` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏。**为什么不可豁免**：同上，章末不允许任何场景过渡收束 |
-| `LOCKED_FACT_CROSS_SCENE_CONFLICT` | locked_fact_cross_scene_scanner | cluster 跨场景一致性（v2 cluster 新增） | 人物卡 `locked_facts` 中的数值/描述类事实在 cluster 不同场景引用矛盾（如同角色年龄两处不符）= cluster 内设定矛盾。**为什么不可豁免**：与 `LOCKED_FACT_CONFLICT` 同级，是客观设定冲突非风格选择。2026-05-28 v2 cluster 化新增 |
-| `RIPPLE_RULES_EMPTY` | scaffold_subsystems verify --content / plan_step_gates.check_subsystems | 子系统载荷点火（C03 新增） | `涟漪规则.json` 的 `ripple_rules` 为空 = `world_evolution_engine` 零触发，涟漪核心机器永不点火（北极星②）。**为什么不可豁免**：性质同 `MANIFEST_MISSING`——不是风格选择而是机器无法运转的客观断点。其余子系统必须按字段契约显式定级；轻量模式也必须保留核心载荷文件与可验证结构。2026-06-27 C03 新增 |
-| `GRAND_TREND_ME_POOL_EMPTY` | scaffold_subsystems verify --content / plan_step_gates.check_subsystems | 子系统载荷点火（C03 新增） | `大势卡.json` 的 ME 池 `major_events` 为空 = `cluster_emergence_engine` 大势无方向，无法涌现下一 cluster（北极星③大势已定）。**为什么不可豁免**：性质同 `MANIFEST_MISSING`。**回归锁**：只查池非空，不逐 cluster 校验，cluster_002+ 未涌现 ME 属 fluid 合法显式豁免。2026-06-27 C03 新增 |
-| `CLUSTER001_STORYBOARD_EMPTY` | scaffold_subsystems verify --content / plan_step_gates.check_subsystems | 子系统载荷点火（C03 新增） | `事件簇.json` 的 `clusters[0].scene_storyboard` 为空 = 首块未详化（黄金三章必详化）。**为什么不可豁免**：cluster_001 是唯一必须 outline 阶段详化的块。**回归锁**：标记只查 `clusters[0]`，cluster_002+ 空 storyboard 属 fluid 涌现合法显式豁免（北极星·事件簇 fluid 涌现）。2026-06-27 C03 新增 |
-| `SPLIT_WORD_NOT_CONSERVED` | chapter_splitter.run_freestyle | splitter 字数守恒（C18 新增） | splitter 切章后 `sum(per_chapter_cjk) + pending_tail_cjk != draft_cjk`（丢字/重复）或落盘空 chunk 或切片计数失配 = 北极星④纯格式层契约破损。**为什么不可豁免**：splitter 是纯格式层（切章后 0 audit），却必须 round-trip 完整——丢字/重复无人守。落盘前确定性自检 raise `SplitterIntegrityError` → main `[FATAL]` stderr → exit 2（坏章节零落盘·cluster-write step6 fail-fast）。**北极星⑤边界**：只查 CJK 守恒 + 无空块 + 计数同步，**绝不断言章数 N（v27/v28 fluid 由字数涌现禁锁）/ 切点质量 / 叙事顺序 / 任何内容判断**。2026-06-27 C18 新增 |
+| `CHAPTER_END_FORBIDDEN_SCREENPLAY` | chapter_end_anchor_scan | 章末工艺 | 章末出现剧本体过渡（「（镜头XX）」等舞台指示）= 连续小说工艺破坏。**为什么不可豁免**：章末是钩子不是收束，不允许场景过渡打断。详见 memory `feedback_no_screenplay_stage_directions_in_novels` |
+| `CHAPTER_END_FORBIDDEN_TRANSITION` | chapter_end_anchor_scan | 章末工艺 | 章末出现文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏。**为什么不可豁免**：同上，章末不允许任何场景过渡收束 |
+| `LOCKED_FACT_CROSS_SCENE_CONFLICT` | locked_fact_cross_scene_scanner | cluster 跨场景一致性 | 人物卡 `locked_facts` 中的数值/描述类事实在 cluster 不同场景引用矛盾（如同角色年龄两处不符）= cluster 内设定矛盾。**为什么不可豁免**：与 `LOCKED_FACT_CONFLICT` 同级，是客观设定冲突非风格选择 |
+| `RIPPLE_RULES_EMPTY` | scaffold_subsystems verify --content / plan_step_gates.check_subsystems | 子系统载荷点火 | `涟漪规则.json` 的 `ripple_rules` 为空 = `world_evolution_engine` 零触发，涟漪核心机器永不点火（北极星②）。**为什么不可豁免**：性质同 `MANIFEST_MISSING`——不是风格选择而是机器无法运转的客观断点。其余子系统必须按字段契约显式定级；轻量模式也必须保留核心载荷文件与可验证结构 |
+| `GRAND_TREND_ME_POOL_EMPTY` | scaffold_subsystems verify --content / plan_step_gates.check_subsystems | 子系统载荷点火 | `大势卡.json` 的 ME 池 `major_events` 为空 = `cluster_emergence_engine` 大势无方向，无法涌现下一 cluster（北极星③大势已定）。**为什么不可豁免**：性质同 `MANIFEST_MISSING`。**回归锁**：只查池非空，不逐 cluster 校验，cluster_002+ 未涌现 ME 属 fluid 合法显式豁免 |
+| `CLUSTER001_STORYBOARD_EMPTY` | scaffold_subsystems verify --content / plan_step_gates.check_subsystems | 子系统载荷点火 | `事件簇.json` 的 `clusters[0].scene_storyboard` 为空 = 首块未详化（黄金三章必详化）。**为什么不可豁免**：cluster_001 是唯一必须 outline 阶段详化的块。**回归锁**：标记只查 `clusters[0]`，cluster_002+ 空 storyboard 属 fluid 涌现合法显式豁免（北极星·事件簇 fluid 涌现） |
+| `SPLIT_WORD_NOT_CONSERVED` | chapter_splitter.run_freestyle | splitter 字数守恒 | splitter 切章后 `sum(per_chapter_cjk) + pending_tail_cjk != draft_cjk`（丢字/重复）或落盘空 chunk 或切片计数失配 = 北极星④纯格式层契约破损。**为什么不可豁免**：splitter 是纯格式层（切章后 0 audit），却必须 round-trip 完整——丢字/重复无人守。落盘前确定性自检 raise `SplitterIntegrityError` → main `[FATAL]` stderr → exit 2（坏章节零落盘·cluster-write step6 fail-fast）。**北极星⑤边界**：只查 CJK 守恒 + 无空块 + 计数同步，**绝不断言章数 N（fluid 章数由字数涌现决定，禁止锁定）/ 切点质量 / 叙事顺序 / 任何内容判断** |
 
 **非 hard_gate 检测项必须显式定级**：A 机械（`BANNED_WORD` / `WC_TOO_SHORT` / `WC_TOO_LONG` 等）/ B 文笔（`validate_style` 检测项）/ B+ 文笔语义层（`semantic_slop_scanner` 检测项）/ C 叙事工艺（`narrative_scanner` 检测项）/ D 情节结构（`plot_structure_scanner` 检测项）/ F 读者体验（`hook_strength_scanner` / `golden_three_scanner` / `HOOK_SUMMARY_ENDING` 等）如果属于风格/工艺/体验建议，可定为 advisory 并要求具体豁免理由；如果属于契约、状态、完整性或客观一致性，必须进入 hard_gate 清单或在对应工具内硬失败。
 

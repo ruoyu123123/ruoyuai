@@ -10,9 +10,9 @@ $ARGUMENTS
 
 # 🔴 设计哲学（v24 倒置流水线 · 必读）
 
-**问题**：旧流程在 writer 写整 cluster 草稿后**立刻**切成单章再逐章质检。后果：
+**为什么不能先切章再逐章质检**：
 
-| 旧流程后果 | 根因 |
+| 先切章处理的后果 | 原因 |
 |---|---|
 | 同一重复词 ch1 修了，ch2-5 仍存在 | splitter 是切位置，不是去重 |
 | 跨章 voice 漂移检测不到 | 单章 reflector 看不见 ch2-5 上下文 |
@@ -20,7 +20,7 @@ $ARGUMENTS
 | 5 章累计修 15-25 轮 | 每章独立 3-5 轮 |
 | ch1 修完后切点错位 | splitter 不知道改了什么 |
 
-**v24 修正**：所有改进**全程在 cluster 草稿层完成**——单一文本对象 `cluster_{key}_draft.txt`，跨场景一致性 + 跨章伏笔接力 + 跨角色 voice 全在一个上下文里跑完。**全 clean 后才** splitter 切章 + 起标题 + 平铺 per-chapter changes。**章节只是输出格式**，不是迭代单位。
+**因此**：所有改进**全程在 cluster 草稿层完成**——单一文本对象 `cluster_{key}_draft.txt`，跨场景一致性 + 跨章伏笔接力 + 跨角色 voice 全在一个上下文里跑完。**全 clean 后才** splitter 切章 + 起标题 + 平铺 per-chapter changes。**章节只是输出格式**，不是迭代单位。
 
 **核心原则**：
 - 🔴 writer 产出 `cluster_draft.txt` 后**禁止立即切章**（splitter 推迟到 step 6）
@@ -106,7 +106,7 @@ python core/scripts/world_evolution_apply_card.py "<项目路径>" \
 - `ripple_match` 为空、`世界状态.json` / `涟漪规则.json` 缺失、规则无匹配 → 停止。
 - 不允许使用旧 `--cluster` 或 `<chapter> <label>` 入口。
 
-## 第 1 步前置子步骤 2：写前 Evolution Gate（A2 · 2026-07-07）
+## 第 1 步前置子步骤 2：写前 Evolution Gate（A2）
 
 world_evolution_apply_card 落库 brief 之后、auto_fate_draw / build_manifest 之前，必跑写前 gate——把穿帮从「写完 20k 字再修」提前到「写前拦」：
 
@@ -135,7 +135,7 @@ python core/scripts/pre_write_gate.py "<项目路径>" --next-key <key>
 
 type 支持叙事手法别名（flashback/闪回/ambiguous_fate/模糊生死/time_skip/时间跳跃…）。gate 命中且有对应豁免 → 放行并留痕报告 `waived[]`。blocking 类豁免必须点名 target；gate 只拦「未声明的意外穿帮」，不对声明做二次裁决。命中拦截时的处置：修正 brief（换角色/换道具/改设定表述）或补 `gate_waivers` 声明后重跑本脚本。
 
-报告的 `waived[]`/`warnings[]` 非空时，下一步 build_manifest 会自动注入 `pre_write_gate_digest` 段（T0 契约类·2026-07-08 A2 闭环）——writer 借此把已声明豁免当叙事手法有意识落笔（如亡者只以幻觉/回忆登场），warnings 提示避免复写已完成事件。
+报告的 `waived[]`/`warnings[]` 非空时，下一步 build_manifest 会自动注入 `pre_write_gate_digest` 段（T0 契约类 · A2 闭环）——writer 借此把已声明豁免当叙事手法有意识落笔（如亡者只以幻觉/回忆登场），warnings 提示避免复写已完成事件。
 
 ---
 
@@ -151,8 +151,8 @@ python core/scripts/build_manifest.py "<项目路径>" "$START_CH"
 
 - exit 0 → 继续
 - exit 2（预检失败）→ 把 fatal 列表展示给用户，停止调度
-- 检索三段式（2026-07-08 A6·确定性零 LLM）：RAG/selective_history 的 query 自动带 cluster brief「实体×属性」扩展词组；每条检索命中带 `usage_hint`（块距防复读标签 [NEAR_ECHO_RISK]≤1块/[PARAPHRASE]2-3块/[OK]>3块 + 用途分类）——writer 按标签决定引用方式（advisory）
-- scene 维度门控（2026-07-08 A11·env `MANIFEST_SCENE_GATING` 默认 on）：世界观词条点名了与本块出场角色/地点零交集的实体 → 不注入（被滤词条留痕 manifest `_scene_gating` META 段；匹配不到场景信息=不过滤零变化）
+- 检索三段式（A6·确定性零 LLM）：RAG/selective_history 的 query 自动带 cluster brief「实体×属性」扩展词组；每条检索命中带 `usage_hint`（块距防复读标签 [NEAR_ECHO_RISK]≤1块/[PARAPHRASE]2-3块/[OK]>3块 + 用途分类）——writer 按标签决定引用方式（advisory）
+- scene 维度门控（A11·env `MANIFEST_SCENE_GATING` 默认 on）：世界观词条点名了与本块出场角色/地点零交集的实体 → 不注入（被滤词条留痕 manifest `_scene_gating` META 段；匹配不到场景信息=不过滤零变化）
 
 **plan-step 1**（manifest + style_directive 都是必须落地的文件）：
 
@@ -177,13 +177,13 @@ MODE: ecas
 RESEARCH_REF: <项目路径>/_数据库/.research_cache/<本 cluster 调研文件或 synthesis>
 ```
 
-writer 行为（v29 两阶段 · 用户 2026-07-11 定调「所有创作路线转向 Claude 自身创作内容 + gemini 润色」）：
+writer 行为（v29 两阶段）：
 - **step 2a Claude 亲笔创作**：agent 读 manifest/风格 skill/brief/research 后逐场景亲笔写作，落盘
   `章节/cluster_<key>_draft/claude_scenes/scene_*.txt`（每场景写透·分场景落盘规避单响应上限）+
   拼接审计基线 `cluster_<key>_draft_claude.txt` + 自评草稿 `cluster_<key>_changes_claude.json`
 - **step 2b gemini 分段润色**：agent 调 `gen_writer.py --project <root> --cluster <N>`——自动发现
   claude_scenes/，逐场景段调 gemini 按风格档**等体量重写润色**（守恒带 [0.85,1.30]·超界带字数指令
-  重试 1 次·万字整体润色已实测三连败必须分段），拼接出终稿
+  重试 1 次·万字整体润色必须分段进行），拼接出终稿
 - 产出 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`（终稿 · 整 cluster ≥10000 CJK）
 - 产出 `章节/cluster_<key>_draft/cluster_<key>_changes.json`（Claude self_eval/waivers + gen_writer
   确定性遥测合并 · `writer_mode: claude_draft_gemini_polish_v29` · **writer 链不自报 factual**）
@@ -214,7 +214,7 @@ python core/scripts/audit_hub.py "<项目路径>" --mode cluster --cluster-id <k
   --waivers "<项目路径>/章节/cluster_<key>_draft/cluster_<key>_changes.json"
 ```
 
-> 🔴 **NN 模型自动接入（2026-06-30）**：audit_hub `main()` 默认开启 5 个 NN 门控（surprisal 信息密度 / coherence 连贯 / VAD 情绪弧 / coref 共指 / character-network 角色网络），**无需手动 export**——经 `nn_runtime_defaults.enable_creative_nn_defaults()` 在命令行入口自动开（能力不足时各桥 `enabled()` 安全回退·显式 `RUOYU_NN_*=0` 可关闭做对照）。NN 输出**全 advisory**（不进 hard_gate·北极星⑤）。surprisal/coherence/VAD 经 `core/ml/.venv` subprocess 桥推理（首用加载模型~90s·已统一 300s timeout）。
+> 🔴 **NN 模型自动接入**：audit_hub `main()` 默认开启 5 个 NN 门控（surprisal 信息密度 / coherence 连贯 / VAD 情绪弧 / coref 共指 / character-network 角色网络），**无需手动 export**——经 `nn_runtime_defaults.enable_creative_nn_defaults()` 在命令行入口自动开（能力不足时各桥 `enabled()` 安全回退·显式 `RUOYU_NN_*=0` 可关闭做对照）。NN 输出**全 advisory**（不进 hard_gate·北极星⑤）。surprisal/coherence/VAD 经 `core/ml/.venv` subprocess 桥推理（首用加载模型~90s·已统一 300s timeout）。
 
 退出码语义：
 - 0 = pass / waived
@@ -226,9 +226,9 @@ python core/scripts/audit_hub.py "<项目路径>" --mode cluster --cluster-id <k
 
 派单时 agent prompt 加 `CLUSTER_ID: <key>` + `MODE: cluster`，让被派 agent 也跑 cluster 视野。
 
-## 3.1b 作者金标准对比闸（required · 2026-06-04 补漏）
+## 3.1b 作者金标准对比闸（required）
 
-> **为什么补**：audit/reflector/voice 全查机械维（句长/段长/禁用词/voice 一致），**从不拿真作者原文比"调性/喜剧到位度"**——cluster_001 实测全过却跑偏成赛博惊悚（作者是市井喜剧）。本闸拿生成指纹比 `作者风格.json` 基线，**情绪标点（感叹/问号/省略）偏低 = 喜剧引擎没落地的可量化代理信号**。
+> **为什么需要本闸**：audit/reflector/voice 全查机械维（句长/段长/禁用词/voice 一致），**从不拿真作者原文比"调性/喜剧到位度"**。本闸拿生成指纹比 `作者风格.json` 基线，**情绪标点（感叹/问号/省略）偏低 = 喜剧引擎没落地的可量化代理信号**。
 
 ```bash
 python core/scripts/replication_fidelity_check.py --project "<项目路径>" --cluster <key> --strict
@@ -253,7 +253,7 @@ ROUND: 1
 ```
 
 reflector 10 维扫整 cluster：
-- 段首单调含全主语词 / voice 漂移 / POV 一致 / 信息密度 / 节奏 / 对话工艺 / 互动质感 / 塑料感（含 StoryScope 结构层 AI tell 子清单：场景末主题宣讲/关键人物全员道德单义/收束过净/零时间复杂度·金标准基线校准·体裁常态与作者档优先可让位·2026-07-07）/ 锁定事实语义冲突（多跳推理·补机械层与 110M NLI 都够不着的间接矛盾·2026-07-07）/ 悬置线推进性（subplot_threads 活跃线 + 当前卷未消费 ME 连续多块零触碰·advisory 提示可豁免·2026-07-07）
+- 段首单调含全主语词 / voice 漂移 / POV 一致 / 信息密度 / 节奏 / 对话工艺 / 互动质感 / 塑料感（含 StoryScope 结构层 AI tell 子清单：场景末主题宣讲/关键人物全员道德单义/收束过净/零时间复杂度·金标准基线校准·体裁常态与作者档优先可让位）/ 锁定事实语义冲突（多跳推理·补机械层与 110M NLI 都够不着的间接矛盾）/ 悬置线推进性（subplot_threads 活跃线 + 当前卷未消费 ME 连续多块零触碰·advisory 提示可豁免）
 
 verdict 处理：
 | verdict | 处理 |
@@ -451,9 +451,9 @@ python core/scripts/split_cluster_changes.py "<项目路径>" --cluster <key>
 python core/scripts/plan_tracker.py step "$PLAN_ID" --n 6
 ```
 
-## 6.4 🆕 章末 cliffhanger anchor 强制 scan（L4 防御）
+## 6.4 章末 cliffhanger anchor 强制 scan（L4 防御）
 
-**为什么必跑**：cluster_001 ch4 翻车 3 次 sediment 出来的强制点。章末 cliffhanger 必须锚到**已存在**的 cluster_blueprint / 伏笔表 / 事件簇 brief，禁止：
+**为什么必跑**：章末 cliffhanger 必须锚到**已存在**的 cluster_blueprint / 伏笔表 / 事件簇 brief，禁止：
 - 任何剧本体过渡（hook L1 已拦，这步是兜底）
 - 任何文学过渡分隔符 / 听觉视觉淡出 / 收束句
 - 装神弄鬼无锚 cliffhanger（如「影子里有不是他的」「凉风从背后吹来」纯氛围镜头）

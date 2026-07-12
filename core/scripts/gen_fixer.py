@@ -4,7 +4,7 @@ gen_fixer.py — Gen-Model 修复/优化工具（OpenAI 兼容 /v1/chat/completi
 
 用当前 active gen-model profile 修复 reflector 发现的 issue / 微调主代理标记的问题段 /
 checker 输出的违规精修。正文问题必须回到 cluster 草稿层修复——gen_fixer 只在 cluster 草稿层工作
-（字数补写由 v27 splitter pending_tail 机制在 cluster 草稿层承担，不存在章级扩写入口）。
+（字数补写由 splitter pending_tail 机制在 cluster 草稿层承担，不存在章级扩写入口）。
 
 四种模式：
   --mode comprehensive       综合修 reading-reflector R1/R2 报告里所有 issue
@@ -28,7 +28,7 @@ checker 输出的违规精修。正文问题必须回到 cluster 草稿层修复
     --files 章节/cluster_001_draft/cluster_001_draft.txt \\
     --instructions "段 145-157 妈妈名字念第N遍 poetry-mode 模板感重，合并成散文长句"
 
-  # validator brief 精修（Agent 拆分后新流程）
+  # validator brief 精修
   python core/scripts/gen_fixer.py \\
     --project "workspace/novels/<book>" \\
     --mode validator-repair \\
@@ -111,10 +111,8 @@ def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
 
 
 # ============ 通用修复约束（所有 mode 共享） ============
-# 2026-05-29 北极星 P4 [M2-dont]：原 14 条一刀切「硬约束」会把长句/独特文风作者的对话按
-# 通用爽文短句规则改坏（修复引擎变风格同质化引擎）。按 H3-write 同思路分两层（守原则5）：
-# ① 常驻硬约束（穿帮/质量/格式防护，任何风格不可破）；② 风格工艺默认基线（作者风格档规定了
-# 对应维度则让位——修复绝不能把作者签名笔法改成通用爽文腔）。
+# 修复约束分两层（守北极星⑤）：① 常驻硬约束（穿帮/质量/格式防护，任何风格不可破）；
+# ② 风格工艺默认基线（作者风格档规定了对应维度则让位——修复绝不能把作者签名笔法改成通用爽文腔）。
 COMMON_HARD_RULES = """# 修复约束
 
 **第一权威 = 本项目作者风格档**（若 prompt 含「风格 skill」/ 该作者签名笔法）。下方「二、风格工艺
@@ -143,7 +141,7 @@ COMMON_HARD_RULES = """# 修复约束
 # ============ 修复 prompt 组装 ============
 def build_comprehensive_prompt(files: list, report_data: dict, files_content: dict) -> tuple:
     """综合修：读 reflector 报告里的 issue，对所选章节做精准修复"""
-    # v22.gov.align.notrunc 全局规则：不节省 token · 全量传 issues_text 给 LLM
+    # 全局规则：不节省 token · 全量传 issues_text 给 LLM
     issues_text = json.dumps(report_data, ensure_ascii=False, indent=2)
 
     files_section = []
@@ -375,7 +373,7 @@ novel-voice-checker agent 已审查所有对话，定位 voice 漂移 / tone 不
 
 
 # ============ Gen-Model 调用（含 fallback 链） ============
-# API 调用健壮性常量（2026-05-30 加固 · 对齐 gen_writer.py:514-517）
+# API 调用健壮性常量（与 gen_writer 同名常量对齐）
 GEN_MODEL_TIMEOUT = 180.0  # 与 gen_writer.GEN_MODEL_TIMEOUT 对齐
 GEN_MODEL_MAX_RETRIES = 3  # 同 profile 限流/超时的有限重试次数
 GEN_MODEL_RETRY_BASE_DELAY = 2.0  # 指数退避基础秒数（2,4,8）
@@ -385,9 +383,8 @@ def _stream_once(client, profile, system: str, user: str, max_tokens: int,
                  prior_assistant: str | None = None) -> tuple[str, "str | None"]:
     """单次 stream 生成，返回 (text, finish_reason)。
 
-    2026-05-30 加固（对齐 gen_writer._stream_once）：捕获 finish_reason（原循环只累加
-    content，从不读 finish_reason → 命中 max_tokens 的截断被静默吞掉，截断后的半截正文
-    直接覆写整章 = 销毁已发布章节，比 gen_writer 半截入库后果更重）。
+    捕获 finish_reason（对齐 gen_writer._stream_once）：命中 max_tokens 的截断若不识别，
+    截断后的半截正文会直接覆写整章 = 销毁已发布章节，比 gen_writer 半截入库后果更重。
     prior_assistant 非空 → 续写模式（修复语境：把已生成的修复正文回填，要求接着写不重复
     且务必补全被截断的 ===FILE: ... ===END=== 块 + 收尾 JSON 块）。
     """
@@ -428,8 +425,8 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
     返回 (full_text, used_profile)。
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
 
-    2026-05-30 加固（对齐 gen_writer.call_gen_model · gen_fixer 会**原地覆写整章正文**，
-    截断/空响应后果比 gen_writer 写草稿更重，故防护必须等价）：
+    gen_fixer 会**原地覆写整章正文**，截断/空响应后果比 gen_writer 写草稿更重，防护对齐
+    gen_writer.call_gen_model：
       · OpenAI client 显式 timeout（对齐 gen_writer）防止无限挂起。
       · RateLimitError / APITimeoutError 在**同 profile** 做有限指数退避重试（再降级 fallback），
         避免一次 429/超时就降级到次优模型。
@@ -512,8 +509,8 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str,
 
 
 # ============ 输出解析 + 应用 ============
-# CJK 守恒容差（2026-05-30 加固）：gen_fixer 原地覆写整章正文，prompt 写明「修复段 ±30%」
-# 但脚本从不校验——LLM 截断/退化/漏写大段时会拿半截正文覆写销毁已发布章节。这里做整章
+# CJK 守恒容差：gen_fixer 原地覆写整章正文，prompt 虽写明「修复段 ±30%」但不能只靠 LLM
+# 自觉——LLM 截断/退化/漏写大段时会拿半截正文覆写销毁已发布章节。这里做整章
 # before/after CJK 守恒兜底：超出容差则**拒绝覆写**（保留原文不动），把该块记为 rejected。
 CJK_CONSERVATION_TOLERANCE = 0.30  # 修复后整章 CJK 相对原文 ±30%
 
@@ -522,7 +519,6 @@ def parse_and_apply(reply: str, project_root: Path,
                     before_content_by_path: dict | None = None) -> tuple:
     """从返回提取 ===FILE: ... === 块，写到对应路径。
 
-    2026-05-30 加固：
       · before_content_by_path: {相对路径: 原文} —— 用于 CJK 守恒校验（main 传 files_content）。
       · CJK 守恒**恒开**：整章 CJK 偏离原文 > ±30% 则拒绝覆写（保留原文），
         防截断/退化输出销毁已发布正文。所有模式都是修不是扩，无豁免口。
@@ -546,15 +542,15 @@ def parse_and_apply(reply: str, project_root: Path,
     files_written = []
     rejected = []
     for m in pattern.finditer(reply):
-        # 2026-06-02 修：LLM 常把 ===FILE: 路径用 markdown 反引号/引号包裹（`path` / "path"）→
-        # 非绝对路径被 join 成带反引号的非法路径 OSError。剥掉首尾反引号/引号再解析。
+        # LLM 常把 ===FILE: 路径用 markdown 反引号/引号包裹（`path` / "path"）→非绝对路径
+        # 被 join 成带反引号的非法路径 OSError。剥掉首尾反引号/引号再解析。
         rel_path = m.group(1).strip().strip('`"\'').strip()
         content = m.group(2).rstrip() + '\n'
         target = Path(rel_path)
         if not target.is_absolute():
             target = project_root / rel_path
         target_resolved = target.resolve()
-        # 2026-06-02 修：LLM 自报 ===FILE: 路径可能漏段（如 cluster draft 漏「章节/」前缀）→ 写到
+        # LLM 自报 ===FILE: 路径可能漏段（如 cluster draft 漏「章节/」前缀）→ 写到
         # 不存在路径直接崩 FileNotFoundError。若 target 既非「修复前读过的已知文件」又不存在，按
         # basename 在已读文件里找回唯一匹配（不盲信 LLM 路径·权威=修复前读的那个文件）。
         if str(target_resolved) not in before_cjk_by_abs and not target.exists():
@@ -569,7 +565,7 @@ def parse_and_apply(reply: str, project_root: Path,
         except ValueError:
             logger.info(f"  [跳过·路径穿越] {rel_path} 解析到项目外 ({target_resolved})，忽略该块")
             continue
-        cjk = cio.count_cjk(content)  # v27 修复：统一 CJK 口径
+        cjk = cio.count_cjk(content)  # 统一 CJK 口径
 
         # CJK 守恒校验：修复后整章字数相对原文偏离 > ±30% → 拒绝覆写（保护已发布章节）
         before_cjk = before_cjk_by_abs.get(str(target_resolved))
@@ -613,7 +609,7 @@ def run_scanners(file_paths: list) -> dict:
             if not sc_path.exists():
                 results[fp][sc] = {'verdict': 'SKIP'}
                 continue
-            # v27 修复：'python' → child_python()（防多版本解释器调错）
+            # 用 child_python() 防多版本解释器调错
             r = subprocess.run([child_python(), str(sc_path), fp],
                                capture_output=True, text=True, encoding='utf-8')
             try:
@@ -621,7 +617,6 @@ def run_scanners(file_paths: list) -> dict:
                 results[fp][sc] = {'verdict': d.get('verdict'),
                                    'violations_count': d.get('violations_count')}
             except Exception as e:
-                # v27 修复：静默 except 加日志（debug 友好）
                 logger.info(f"  [gen_fixer] scanner {sc} 输出解析失败 ({e})·exit={r.returncode}")
                 results[fp][sc] = {'verdict': 'ERROR', 'stdout': (r.stdout or '')[:200]}
     return results
@@ -740,7 +735,7 @@ def main():
     try:
         reply, used_profile = call_gen_model(loader, system, user)
     except GenModelExhaustedError as e:
-        # 🔴 2026-06-26 同 gen_writer fail-fast 修法：走 stderr+flush 防 wrapper 误判 exit code
+        # 🔴 走 stderr+flush 防 wrapper 误判 exit code（对齐 gen_writer fail-fast 写法）
         msg = f"\n[FATAL gen_fixer] GenModelExhausted: {e}\n"
         sys.stderr.write(msg)
         sys.stderr.flush()
@@ -762,7 +757,7 @@ def main():
             logger.info(f"  原始输出已存: {debug_path}")
             sys.exit(3)
         logger.info("[WARN] 未从返回中解析出 ===FILE: ... === 块")
-        # v27 修复：时间戳加 pid 防并发冲突（feedback: 秒级时间戳不够细）
+        # 时间戳加 pid 防并发冲突（秒级时间戳粒度不够细，可能撞名）
         debug_path = project_root / '章节' / f'_quality/fixer_raw_output_{datetime.now().strftime("%H%M%S")}_{os.getpid()}.txt'
         debug_path.parent.mkdir(parents=True, exist_ok=True)
         debug_path.write_text(reply, encoding='utf-8')

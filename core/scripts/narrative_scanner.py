@@ -1,6 +1,6 @@
 """段落与场景级叙事质感扫描器。
 
-集成 8 个检测器：
+集成 7 个检测器：
 
   G1 gmc                — 场景 Goal-Motivation-Conflict-Disaster 完整性
   G2 mru                — 段落动机-反应顺序（Swain MRU）
@@ -111,7 +111,7 @@ def scan_gmc(scenes: list[list[str]]) -> dict:
 
 # ============ G2 MRU 段落动机-反应顺序 ============
 
-DIALOGUE_PATTERN = re.compile(r'["“「]([^"”」\n]+)["”」]')  # 2026-05-30 补弯引号 U+201C/U+201D
+DIALOGUE_PATTERN = re.compile(r'["“「]([^"”」\n]+)["”」]')  # 含弯引号 U+201C/U+201D
 BODY_REACTION = re.compile(r"(心跳|心一沉|手抖|眼睛|呼吸|颈侧|后背|手心|喉咙|肩|腰|脚|腿)")
 THINKING_KW = re.compile(r"(他想|她想|他在想|她在想|他记得|她记得|他觉得|她觉得|他不知|她不知)")
 
@@ -174,7 +174,7 @@ ACTION_INCOMPLETE = re.compile(r"(伸手|抬头|睁开|站起|准备|刚要|正�
 def check_paragraph_tension(p: str) -> int:
     """0-5 分。段末张力。"""
     # 取段末「真正最后一句」：保留所有句末终结符再取最后一个非空句
-    # （对齐姊妹 hook_strength_scanner.py 的「找末句」写法；旧 p.split("。")[-2] 会漏掉
+    # （与姊妹 hook_strength_scanner.py 的「找末句」写法一致；直接 p.split("。")[-2] 会漏掉
     #  以钩子符 ？/……/」 收尾的网文刻意钩子形态，把有问句/省略号钩子的段误判成段末张力 0）。
     # 切分点：句末终结符 / 右引号 之后，且其后不再紧跟同类符——这样 ……（省略号串）与
     # ？」（问号+右引号）等终结符串整段视为一个收尾，不被切碎（否则末句只剩单 … 或单 」 仍漏）。
@@ -247,7 +247,7 @@ def scan_repetition(paragraphs: list[str]) -> dict:
     }
 
 
-# ============ G6 POV 距离梯度 ============
+# ============ G5 POV 距离梯度 ============
 
 CLOSE_DIST = re.compile(r"(他想|她想|他记得|她记得|他觉得|她觉得|他不知|她不知|他笑|她笑|他骂|她骂|心一沉|心跳)")
 MID_DIST = re.compile(r"(走|跑|站|坐|蹲|抬|放|拿|握|抓|举|挥|甩|推|拉|按|看|听|说)")
@@ -299,7 +299,7 @@ def scan_pov_distance(paragraphs: list[str]) -> dict:
     }
 
 
-# ============ G7 Info-dump 检测（P2-14）============
+# ============ G6 Info-dump 检测 ============
 #
 # 信息堆砌段：长叙述（≥80字）+ 含设定关键词 + 几乎无对话/动作。AI 倾向于
 # 在章节中段「停下来讲设定」造成 pacing 卡顿，oh-story 三遍法的 Pass1 也
@@ -328,7 +328,7 @@ def scan_info_dump(paragraphs: list[str]) -> dict:
         if not kw_hits:
             continue
         # 对话占比（引号内字 / 段总字）
-        dialogue_chars = sum(len(m) for m in re.findall(r'["“「][^"”」\n]{1,200}["”」]', p))  # 补弯引号
+        dialogue_chars = sum(len(m) for m in re.findall(r'["“「][^"”」\n]{1,200}["”」]', p))  # 含弯引号
         dialogue_ratio = dialogue_chars / max(1, plen)
         if dialogue_ratio >= 0.10:
             continue
@@ -341,9 +341,9 @@ def scan_info_dump(paragraphs: list[str]) -> dict:
         })
     # 段数判定阈值：
     # · chapter 视野（默认）：单章 ≥1 处 即报 advisory（避免单段疏漏）
-    # · cluster 视野（v2 2026-05-29 接入）：cluster 草稿段数是 chapter 数倍，
-    #   绝对命中 ≥1 的扁平阈值会过报 → 改按段数归一的密度门槛：
-    #   命中数 < max(2, 总段数的 3%) 视为 cluster 体量下的正常本底，不报 warning。
+    # · cluster 视野：cluster 草稿段数是 chapter 数倍，若用绝对命中 ≥1 的扁平阈值会过报，
+    #   故按段数归一的密度门槛：命中数 < max(2, 总段数的 3%) 视为 cluster 体量下的
+    #   正常本底，不报 warning。
     n_scanned = len(paragraphs)
     warn_floor = max(2, round(n_scanned * 0.03))
     emit = len(hits) >= warn_floor
@@ -365,11 +365,11 @@ def scan_info_dump(paragraphs: list[str]) -> dict:
     }
 
 
-# ============ G8 人称切换检测（P2-16）============
+# ============ G7 人称切换检测 ============
 #
 # 业界共识："third limited should never head-hop within scenes"——章内人称切换
 # 是写作 bug（除非在 scene/chapter break 处显式切）。
-# 与 G6 pov 距离梯度（close/mid/far）的区别：G6 是「叙述距离」，G8 是「叙述
+# 与 G5 pov 距离梯度（close/mid/far）的区别：G5 是「叙述距离」，G7 是「叙述
 # 人称」。两者独立维度：第一人称可近可远，第三人称同样可近可远。
 #
 # 检测启发：分段统计第一/第三人称代词，判定每段主导人称；段间切换 = 警告。
@@ -553,7 +553,7 @@ def detect_narrative_mode(project_root, cluster_id, body, paragraphs) -> str:
         import json as _json
         prog = _json.loads((project_root / "_数据库" / "进度.json").read_text(encoding="utf-8"))
         _all_scenes = []
-        # 2026-05-29 复审复修 SC-1：blueprint 可能是 list（城南实测），先归一成 dict 再迭代。
+        # blueprint 可能是 list，先归一成 dict 再迭代。
         _bp = cluster_lookup.normalize_blueprint(prog)
         cluster = _bp.get(cluster_id) if isinstance(_bp, dict) else None
         if isinstance(cluster, dict):
@@ -568,7 +568,7 @@ def detect_narrative_mode(project_root, cluster_id, body, paragraphs) -> str:
     except Exception:
         pass
     # 2) 对话占比（引号内字数 / 总字数）
-    dialogue_chars = sum(len(m) for m in re.findall(r'["“「][^"”」\n]{1,200}["”」]', body))  # 补弯引号
+    dialogue_chars = sum(len(m) for m in re.findall(r'["“「][^"”」\n]{1,200}["”」]', body))  # 含弯引号
     total_chars = len(body.replace(" ", "").replace("\n", ""))
     dialogue_ratio = dialogue_chars / max(1, total_chars)
 

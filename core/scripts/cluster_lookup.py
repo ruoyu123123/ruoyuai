@@ -1,27 +1,21 @@
-"""cluster_lookup.py — 章号 ⇄ cluster_id 反查共享工具（v2 cluster 修复）
+"""cluster_lookup.py — 章号 ⇄ cluster_id 反查共享工具
 
-背景（2026-05-29 系统审计发现的头号系统性 bug）：
-v2 cluster 迁移时，多处代码把「章号」直接当成「cluster 号」机械拼成
-`f"cluster_{ch:03d}"`。但一个 cluster 通常含 2-6 章，章号 ≠ cluster 号
-（第 7 章极可能属于 cluster_002 而非 cluster_007）。这个语义错误散布在
-save_state / world_evolution_engine /
-character_lazy_spawn / state_tracker / build_manifest 等处，导致迁移后
-伏笔 setup_cluster / 角色 first_appear_cluster / 道具 obtained_cluster
-等正典字段普遍指向错误 cluster。
+一个 cluster 通常含 2-6 章，章号 ≠ cluster 号（第 7 章可能属于 cluster_002
+而非 cluster_007），因此禁止用 `f"cluster_{ch:03d}"` 把章号机械拼成 cluster_id。
 
 本模块提供单一权威的 章号→cluster_id 反查，所有需要由章号推 cluster 归属
 的地方都应改用 `ch_to_cluster_id`，不得再用 `f"cluster_{ch:03d}"`。
 
-反查链（v2 · 2026-05-29 调整：事件簇.json 为唯一权威源）：
+反查链（事件簇.json 为权威源）：
   1. 事件簇.json → clusters[].chapter_range + cluster_id（权威 · 切章后由
      split_cluster_changes.writeback_event_cluster_range 回填真实范围）
   2. 进度.json → cluster_blueprint[cid].chapter_range（派生/缓存 · 兜底）
   3. 进度.json → cluster_blueprint[cid].scene_storyboard[].ch（兜底）
 
-  注：cluster_blueprint 降级为「writer 执行蓝图/缓存」，不再是 chapter_range 权威。
+  注：cluster_blueprint 是 writer 执行蓝图/缓存，不是 chapter_range 权威源；
   故事块本体 = 事件簇.json（cluster_id / status / scope / ME / 切章后真实 range）。
 
-fluid v27 注意：章数由 splitter step 6 决定，chapter_range 可能尚未回填。
+注：章数由 splitter step 6 决定，chapter_range 可能尚未回填。
 反查不到时返回 None（调用方需自行决定 fallback，禁止静默回退到
 `cluster_{ch}` 这种错误推断 —— 宁可标 unknown 也不要写错 cluster）。
 """
@@ -105,11 +99,11 @@ def cluster_num(cluster_id) -> int | None:
 
 
 def normalize_blueprint(prog) -> dict:
-    """把 进度.json 的 cluster_blueprint 归一成规范 dict 形态（SC-1 · 2026-05-29 复审修复）。
+    """把 进度.json 的 cluster_blueprint 归一成规范 dict 形态。
 
     规范形态 = dict（cluster_id -> {"scene_storyboard": [...], "chapter_range": [lo,hi]|缺省}）。
 
-    城南项目实测 cluster_blueprint 是 list(25)（每项是一条 scene/章计划，带 `cluster`
+    cluster_blueprint 可能是 list 形态（每项是一条 scene/章计划，带 `cluster`
     字段标 cluster 归属，无 `cluster_id`/`chapter_range`），裸 .items() 会 AttributeError 崩。
     本 helper 把 list 按各项 cluster 标识（优先 cluster_id，其次 cluster）归并成 dict：
       · 同一 cluster 的项归入该 cluster 的 scene_storyboard
@@ -157,9 +151,7 @@ def normalize_blueprint(prog) -> dict:
 def _coerce_range(cr):
     """归一 chapter_range 到 [lo, hi]·否则 None。
 
-    🔴 2026-06-17 bug-hunt：权威反查统一认两种形态——list[lo,hi]（v2/v27 规范）+ 历史 str
-    "lo-hi"（split_cluster_changes 等历史 schema 会写）。原 cluster_lookup 只认 list → str-form
-    cluster 在权威反查静默返 None → 各 consumer（save_state/evaluators/orchestrator）反查失败。
+    权威反查兼容两种形态：list[lo,hi]，或 str "lo-hi"（部分 schema 会写字符串区间）。
     """
     lo_hi = None
     if isinstance(cr, list) and len(cr) == 2:
@@ -169,8 +161,8 @@ def _coerce_range(cr):
         lo_hi = [a.strip(), b.strip()]
     if lo_hi is None:
         return None
-    # 🔴 2026-06-17 well-formedness：归一为 [int,int] + 校验 lo<=hi。倒序/非数值区间 = 损坏数据 → None
-    # （否则下游 range(lo,hi+1) 静默产空列表→章数=0 级联失败·对齐 evolution_orchestrator:86 已有范式）。
+    # 归一为 [int, int] 并校验 lo <= hi；倒序或非数值区间视为损坏数据返回 None，
+    # 避免下游 range(lo, hi+1) 产生空区间导致章数误判为 0。
     try:
         lo, hi = int(lo_hi[0]), int(lo_hi[1])
     except (ValueError, TypeError):
@@ -181,8 +173,8 @@ def _coerce_range(cr):
 def _iter_blueprint_ranges(project_root):
     """yield (cluster_id, [lo, hi] | None, scene_chs:set) from 进度.cluster_blueprint.
 
-    2026-05-29 复审修复（SC-1/C2/L16）：cluster_blueprint 可能是 list（城南实测），
-    裸 .items() 会 AttributeError 崩。先 normalize_blueprint 归一成 dict 再迭代。
+    cluster_blueprint 可能是 list 形态，裸 .items() 会 AttributeError 崩，
+    因此先经 normalize_blueprint 归一成 dict 再迭代。
     """
     db = _db_dir(project_root)
     prog = _load_json(db / "进度.json", {}) or {}
@@ -222,10 +214,10 @@ def ch_to_cluster_id(project_root, ch: int) -> str | None:
             return None
         ch = n
 
-    # 1) 事件簇.json.chapter_range（v2 权威源 · 2026-05-29 · 切章后由
+    # 1) 事件簇.json.chapter_range（权威源 · 切章后由
     #    split_cluster_changes.writeback_event_cluster_range 回填真实范围）
-    # 2026-05-29 复审修复（H11）：相邻 cluster range 重叠时不静默取首匹配——
-    # 收集所有命中 range，>=2 个则 stderr warn 并返回 start 较小者（标 ambiguous）。
+    # 相邻 cluster range 重叠时不静默取首匹配——收集所有命中 range，
+    # >=2 个则 stderr warn 并返回 start 较小者（标 ambiguous）。
     ec_matches = [
         (cid, rng)
         for cid, rng in _iter_event_cluster_ranges(project_root)
@@ -255,7 +247,6 @@ def ch_to_cluster_id(project_root, ch: int) -> str | None:
 def _pick_unambiguous(ch, matches, source: str):
     """从命中同一 ch 的 (cluster_id, range) 列表中挑选归属。
 
-    2026-05-29 复审修复（H11）：
       · 0 命中 → None（调用方走下一兜底层）
       · 1 命中 → 该 cluster_id
       · >=2 命中（相邻 cluster range 重叠）→ stderr warn，返回 range start 最小者
@@ -284,7 +275,7 @@ def cluster_id_to_range(project_root, cluster_id) -> list | None:
     target = normalize_cluster_id(cluster_id)
     if target is None:
         return None
-    # 事件簇.json 权威优先（v2 · 2026-05-29），blueprint 兜底
+    # 事件簇.json 权威优先，blueprint 兜底
     for cid, rng in _iter_event_cluster_ranges(project_root):
         if normalize_cluster_id(cid) == target and rng:
             return rng
@@ -295,7 +286,6 @@ def cluster_id_to_range(project_root, cluster_id) -> list | None:
 
 
 if __name__ == "__main__":
-    # 2026-05-29 复审修复：sys 已在模块顶部 import，此处不再重复 import
     if len(sys.argv) >= 3:
         root, ch = sys.argv[1], int(sys.argv[2])
         print(f"ch {ch} -> {ch_to_cluster_id(root, ch)}")
@@ -307,7 +297,7 @@ if __name__ == "__main__":
         assert normalize_cluster_id(None) is None
         assert cluster_num("cluster_012") == 12
         assert cluster_num(6) == 6
-        # 2026-05-29 复审修复（SC-1/C2/L16）：normalize_blueprint 防 list-blueprint 崩
+        # normalize_blueprint 对非 dict/list 输入的防御性处理
         # 非 dict/None → {}
         assert normalize_blueprint(None) == {}
         assert normalize_blueprint("garbage") == {}
@@ -316,7 +306,7 @@ if __name__ == "__main__":
         d_form = {"cluster_blueprint": {"cluster_001": {"scene_storyboard": []}, "bad": 5}}
         nb = normalize_blueprint(d_form)
         assert set(nb.keys()) == {"cluster_001"}, nb
-        # list 形态（城南实测：每项带 cluster 字段 + ch，无 cluster_id/chapter_range）
+        # list 形态（每项带 cluster 字段 + ch，无 cluster_id/chapter_range）
         list_form = {"cluster_blueprint": [
             {"ch": 1, "cluster": "cluster_001"},
             {"ch": 2, "cluster": "cluster_001"},

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""audit_hub.py — 质检管家子系统（v18）
+"""audit_hub.py — 质检管家子系统
 
 【定位】统一审核中枢。不重写校验器，是调度它们的"管家"。
 用户要求："给小说系统增加审核子系统，能针对各种写作问题进行修复和记录学习"
@@ -10,10 +10,10 @@
        validate_chapter.py        — 硬约束（字数/禁用词/伏笔/锁定事实/POV/对话工艺...）
        validate_style.py --strict — 风格合规 12 项
        narrative_scanner.py --all — cluster 段落/场景级叙事质感 7 检测器
-       plot_structure_scanner.py --all — 情节结构层 7 检测器（含 P1-4 kishotenketsu）
-       hook_strength_scanner.py   — F 层 章末钩子强度正向评分（v19，归「读者体验」维度）
-       golden_three_scanner.py    — F 层 黄金三章专项检测（v19，仅 ch1-3 激活）
-       semantic_slop_scanner.py --all — B+ 文笔语义层 8 检测器（v19，正则漏掉的句级 AI 腔）
+       plot_structure_scanner.py --all — 情节结构层 7 检测器（含 kishotenketsu）
+       hook_strength_scanner.py   — F 层 章末钩子强度正向评分（归「读者体验」维度）
+       golden_three_scanner.py    — F 层 黄金三章专项检测（仅 ch1-3 激活）
+       semantic_slop_scanner.py --all — B+ 文笔语义层 8 检测器（正则漏掉的句级 AI 腔）
   2. 汇总所有问题，按 致命/错误/警告 x 维度（剧情/风格/结构/伏笔/对话/节奏）分类
   3. 全自动修复决策：
        - 确定性可修（标点/段落/拟声格式/禁用词）-> 直接调 style_repair_engine.py 原地修
@@ -30,8 +30,8 @@
 退出码：0=全通过 / 1=有问题且已自动修完（无 pending_agent）/ 2=有问题需派 agent
        3=致命错误（章节不存在/校验器全挂）
 
-【v19 顾问制改造】
-  检测工具从「门禁/法官」改为「顾问」。每条 issue 标 gate_level：
+【顾问制】
+  检测工具是「顾问」，不是「门禁/法官」。每条 issue 标 gate_level：
     hard_gate —— E 层一致性 + 文件契约类客观错误，AI 不可豁免（清单见 HARD_GATE_CODES）
     advisory  —— A 机械 / B 文笔 / C 叙事工艺 / D 情节结构 / F 读者体验，AI 有充分理由可豁免
   豁免协议：audit_hub 接收 --waivers <json>（_changes.json 或独立 waivers.json），
@@ -67,7 +67,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import chapter_io as cio  # noqa: E402
-# 2026-05-29 复审修复 [M12]：cluster 视野下 chapter_end_anchor 限本 cluster 章范围
+# cluster 视野下 chapter_end_anchor 限本 cluster 章范围
 import cluster_lookup  # noqa: E402
 
 # ---- 维度归类：把各校验器的 code 映射到 6 大维度 ----
@@ -81,7 +81,7 @@ DIMENSION_BY_PREFIX = {
     "FUTURE_KNOWLEDGE_": "剧情", "POV_": "结构", "HOOK_": "节奏",
     "DIALOGUE_": "对话", "LONG_MONOLOGUE": "对话",
     "TRY_FAIL": "结构", "PROPAGATION_": "剧情",
-    "READER_EXP_": "读者体验",  # v19 F 层：hook_strength / golden_three
+    "READER_EXP_": "读者体验",  # F 层：hook_strength / golden_three
 }
 # narrative_scanner 检测器 -> 维度
 NARRATIVE_DIM = {
@@ -90,13 +90,13 @@ NARRATIVE_DIM = {
     "info_dump": "节奏",          # 信息堆砌段是 pacing 卡顿问题
     "perspective_shift": "结构",  # 人称切换是叙事结构问题
 }
-# plot_structure_scanner 检测器 -> 维度（P1-4：加 kishotenketsu 第 7 检测器）
+# plot_structure_scanner 检测器 -> 维度（含 kishotenketsu 第 7 检测器）
 PLOT_DIM = {
     "beat": "结构", "tryfail": "结构", "midpoint": "结构",
     "knowledge": "剧情", "arc": "剧情", "subplot": "剧情",
     "kishotenketsu": "结构",  # 起承转结（单人氛围章 / 东方叙事）
 }
-# semantic_slop_scanner 检测器 -> 维度（v19 B+ 文笔语义层 8 检测器）
+# semantic_slop_scanner 检测器 -> 维度（B+ 文笔语义层 8 检测器）
 # 全部归「风格」，tag_synonym_cycle 归「对话」。codes 形如 SEMANTIC_metaphor_explain，
 # 不在 HARD_GATE_CODES 内 -> _gate_level_for() 自动判 advisory（与 STRUCTURE.md §12.3
 # 「新增检测器显式定级·风格/工艺/体验类 advisory」一致）。
@@ -106,19 +106,19 @@ SEMANTIC_DIM = {
     "forced_triple": "风格", "tag_synonym_cycle": "对话",
     "dialogue_tag_density": "对话",
 }
-# v19 F 层「读者体验」检测器 -> code（这两个 scanner 输出扁平结构：单 top-level warning，
+# F 层「读者体验」检测器 -> code（这两个 scanner 输出扁平结构：单 top-level warning，
 # 不像 narrative/plot 那样有 per-check 子块，故单独一类 code）
 FLAT_FSCANNER_CODE = {
     "hook_strength": "READER_EXP_HOOK_STRENGTH",
     "golden_three": "READER_EXP_GOLDEN_THREE",
 }
-# validate_style 的 15 项 -> 维度（v23.12 新增 3 项段长）
+# validate_style 的 15 项 -> 维度
 STYLE_DIM = {
     "对话占比": "对话", "段落均长": "风格", "极短段占比": "风格",
     "单句成段率": "风格", "拟声格式": "风格", "极长句": "风格",
     "禁用词": "风格", "AI对话标签": "风格", "配额词": "风格",
     "方括号设定": "风格", "逗句比": "风格", "章节字数": "节奏",
-    # v23.12（2026-05-21）网文段长硬约束 —— 来自 12 来源调研互证
+    # 网文段长硬约束 —— 来自 12 来源调研互证
     "单段超长": "风格", "单句独行占比": "风格", "长段计数": "风格",
 }
 
@@ -134,12 +134,10 @@ DETERMINISTIC_FIX_CODES = {
     "STYLE_AI对话标签", "STYLE_极短段占比", "STYLE_单句成段率",
 }
 # ---- 需 agent 判断的：致命冲突 / 大段重写 / 生成型问题 ----
-# key 必须是 validate_chapter / validate_style 真实 emit 的 code
-# （已与 validate_chapter v18 源码逐个核对，杜绝幽灵 code）
+# key 必须是 validate_chapter / validate_style 真实 emit 的 code（杜绝幽灵 code）
 AGENT_ROUTING = {
     "CHANGES_MISSING":          ("novel-writer", "正文缺 CHANGES，补 _changes.json"),
-    # 2026-05-29 北极星 P3 [F3]：路由从 DEPRECATED stub(validator-repair/voice-keeper)
-    # 改为 v2 拆分后的 checker（检查=Claude agent，主代理据 brief 调 gen_fixer 修复）。
+    # 路由到 checker（检查=Claude agent，主代理据 brief 调 gen_fixer 修复）。
     # 死线 2026-07-19 删 stub 后此处不再断 hard_gate 修复链。
     "LOCKED_FACT_CONFLICT":     ("novel-validator-checker", "正文与锁定事实冲突，重写冲突段"),
     "FORESHADOWING_NOT_PAID":   ("novel-foreshadower", "Tier1 伏笔未回收，补 payoff"),
@@ -150,19 +148,19 @@ AGENT_ROUTING = {
     "UNKNOWN_CHARACTER_DETECTED": ("novel-writer", "正文出现未声明的角色，补声明或删除"),
     "STYLE_对话占比":           ("novel-writer", "对话密度严重不足，叙述改写为对话"),
     "STYLE_拟声格式":           ("novel-writer", "拟声词不足（生成型问题），在动作节点补写拟声词"),
-    # v23.12 段长 hard_gate（不可豁免）+ advisory 路由
+    # 段长 hard_gate（不可豁免）+ advisory 路由
     "STYLE_单段超长":           ("novel-writer", "单段 > 120 CJK 字超移动阅读硬上限，找停顿切段（每章 ≤1 例外）"),
     "STYLE_长段计数":           ("novel-writer", "80-120 字长段过多，多段切碎或转对话独行"),
     "STYLE_单句独行占比":       ("novel-writer", "单句独行占比不足（吐槽爽文档目标 ≥40%），增加对话独行/单句脉冲"),
 }
 
-# ---- v19 顾问制：hard_gate 不可豁免清单（来自 V19_PLAN 第五节）----
+# ---- 顾问制：hard_gate 不可豁免清单（权威见 STRUCTURE.md §12.2）----
 # 这些是【客观错误】不是风格选择 —— E 层一致性 + 文件契约类。
 # AI 即便在 --waivers 里传了豁免理由，audit_hub 也强制忽略豁免，仍按问题处理。
 # 其余所有 code（validate_style 12 项 / narrative / plot scanner / WC_ / HOOK_ ...）
 # 一律 advisory，AI 有充分理由可豁免。
 #
-# ---- 🔴 思维层探针硬约束（2026-06-14 · 北极星⑤制度锁 · 设计约束·不可删）----
+# ---- 🔴 思维层探针硬约束（北极星⑤制度锁 · 设计约束·不可删）----
 # 物理可靠性上限：作者「思维/意图/读者心理/因果链/弧线形状」类探针的 LLM/人评
 # 一致性天花板 ≈ 0.71-0.74（心理深度类标注 alpha 上限；arc-shape 被金标准证伪实证）。
 # 因此任何思维层探针 code（含 PROMISE_PAYOFF_GAP / ARC_SHAPE_* / INTENT_* /
@@ -184,24 +182,23 @@ HARD_GATE_CODES = {
     "FILE_NOT_FOUND",              # 正文文件缺失 = 文件契约破损
     "ITEM_HOLDER_ABSENT",          # 道具持有者不在场 = 道具状态矛盾
     "ITEM_NOT_YET_INTRODUCED",     # 道具尚未引入就被用 = 道具状态矛盾
-    # v23.12（2026-05-21）：单段 > 120 CJK 字（超例外 1 段）= 移动阅读硬上限
+    # 单段 > 120 CJK 字（超例外 1 段）= 移动阅读硬上限
     # AI 不可豁免；项目级可在 _数据库/style_scanner_overrides.json 调高阈值
     "STYLE_单段超长",
-    # L2 防御（2026-05-28 · cluster_001 ch4 三次翻车 sediment）：
-    # 章末出现剧本体过渡 / 文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏
+    # L2 防御：章末出现剧本体过渡 / 文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏
     "CHAPTER_END_FORBIDDEN_SCREENPLAY",
     "CHAPTER_END_FORBIDDEN_TRANSITION",
-    # v2 cluster 化（2026-05-28）：锁定事实跨场景引用冲突 = cluster 内设定矛盾
+    # 锁定事实跨场景引用冲突 = cluster 内设定矛盾
     # locked_fact_cross_scene_scanner emit；不可豁免（与 LOCKED_FACT_CONFLICT 同级）
     "LOCKED_FACT_CROSS_SCENE_CONFLICT",
-    # 🔴 2026-06-27 C03：子系统载荷空货架 = 机器永不点火（性质同 MANIFEST_MISSING·文件契约层）。
+    # 🔴 子系统载荷空货架 = 机器永不点火（性质同 MANIFEST_MISSING·文件契约层）。
     # 由 scaffold_subsystems verify --content / plan_step_gates.check_subsystems(content_check=True)
     # emit。仅这 3 个「引擎零触发」码 hard；其余 31 子系统裸骨架 = fluid-allowed 永远 advisory。
     # 回归锁：cluster_002+ ME/storyboard 空必须显式豁免（标记只查 clusters[0] + 池非空·永不命中）。
     "RIPPLE_RULES_EMPTY",            # 涟漪规则空 = world_evolution_engine 零触发（北极星②）
     "GRAND_TREND_ME_POOL_EMPTY",    # 当前卷 ME 池空 = 大势无方向·cluster_emergence 不点火（北极星③）
     "CLUSTER001_STORYBOARD_EMPTY",  # cluster_001 scene_storyboard 空 = 首块未详化（黄金三章必详化）
-    # 🔴 2026-06-27 C18：splitter 字数守恒被破坏（丢字/重复/空块/计数失配）= 北极星④纯格式层契约破损。
+    # 🔴 splitter 字数守恒被破坏（丢字/重复/空块/计数失配）= 北极星④纯格式层契约破损。
     # chapter_splitter.run_freestyle 落盘前确定性自检 raise SplitterIntegrityError → main exit2；
     # 性质同 MANIFEST_MISSING/FILE_NOT_FOUND（文件契约客观断点·非风格选择）。
     "SPLIT_WORD_NOT_CONSERVED",
@@ -228,10 +225,10 @@ def _resolve_audit_genre(project_root) -> str:
 
 
 def _gate_level_for(code: str, severity: str = "error") -> str:
-    """v19：判定一条 issue 的权力等级。hard_gate 不可豁免，其余 advisory。
-    v23.12：STYLE_单段超长 只在 fatal/error 时是 hard_gate（超例外 ≤1 才 FAIL）；
+    """判定一条 issue 的权力等级。hard_gate 不可豁免，其余 advisory。
+    STYLE_单段超长 只在 fatal/error 时是 hard_gate（超例外 ≤1 才 FAIL）；
     WARN 状态（80-120 警告区或例外内）降 advisory 可豁免。"""
-    # 2026-06-02 修：info severity = 自动生成的旁注（本模块 docstring 定义「下游可忽略」），永不 hard_gate。
+    # info severity = 自动生成的旁注（本模块 docstring 定义「下游可忽略」），永不 hard_gate。
     # 否则像 UNKNOWN_CHARACTER_DETECTED（validate_chapter 恒以 info 发的低置信 NER·历史 250+ 误报）
     # 会用 NER 垃圾碎片（「一起的味」「人的耳朵」）硬毙整 cluster。真要 block 的项应以 error/fatal 发。
     # 北极星⑤：检测是顾问非法官·低置信信号 advisory 可豁免。
@@ -256,7 +253,7 @@ def _dimension_for_code(code: str) -> str:
 def _run(cmd: list, env_extra: dict = None, timeout: int = 180) -> tuple:
     """跑子进程，返回 (exit_code, stdout, stderr)。子进程隔离 —— 任一校验器挂了不连累其他。
 
-    env_extra: v2 cluster 化支持。传 {"CLUSTER_MODE": "1"} 让子进程 scanner 感知 cluster 视野。
+    env_extra: 传 {"CLUSTER_MODE": "1"} 让子进程 scanner 感知 cluster 视野。
     timeout: 秒。NN scanner 批推理需要更长(300s)。
     """
     try:
@@ -273,7 +270,7 @@ def _run(cmd: list, env_extra: dict = None, timeout: int = 180) -> tuple:
         return 98, "", f"[EXEC-ERROR] {e}"
 
 
-# 🔴 2026-06-27 P1-07: 解析 PID per-作者 state 给 chapter_end_anchor_scan 算 --weak-anchor-ratio。
+# 解析 PID per-作者 state 给 chapter_end_anchor_scan 算 --weak-anchor-ratio。
 # 找 author_dir → 调 pid_threshold_tuner.apply_pid_delta（带物理 clamp）→ 取出新阈值。
 # 失败返回 None（scanner 走默认 0.15 · 零回归）。
 def _resolve_chapter_end_weak_anchor_ratio(project_root: Path):
@@ -310,7 +307,7 @@ def _resolve_chapter_end_weak_anchor_ratio(project_root: Path):
 def load_scanner_registry() -> dict:
     """读 scanner_registry.json —— 元数据 / 一致性契约源（供测试与文档对账）。
 
-    🔴 2026-07-05 说真话：registry **不是运行时调度源**。生产要跑哪些 scanner
+    🔴 registry **不是运行时调度源**。生产要跑哪些 scanner
     由本文件的 tasks 列表硬编码决定（audit_chapter cluster-mode tasks.extend），
     本函数只把 registry 读出来给对账类消费方（tests/test_audit_hub_aggregation.py /
     test_north_star_invariants.py 的 hard_gate 四方一致锁等）。缺失/损坏返回 {}。"""
@@ -326,7 +323,7 @@ def load_scanner_registry() -> dict:
 # ============ 各校验器结果归一化 ============
 
 def _parse_validate_chapter(stdout: str, exit_code: int) -> list:
-    """validate_chapter --json 输出结构化 JSON，直接解析（v18 #12 加固：不再正则抽文本）。
+    """validate_chapter --json 输出结构化 JSON，直接解析（不做正则抽文本）。
     code 直接来自 validate_chapter 源头 emit —— 杜绝幽灵 code，validate_chapter 即便
     改报告格式也不会让 audit_hub 静默失效。
     schema: {summary{fatal,error,warning,info,total}, errors[{code,severity,msg,fix_hint}]}"""
@@ -406,15 +403,14 @@ def _parse_chapter_end_anchor(stdout: str, exit_code: int) -> list:
     return issues
 
 
-# 🔴 2026-06-27 C06：章末物理污染 hard_gate 真阻断（治 v27 freestyle 无真阻断点）。
-# 病灶：CHAPTER_END_FORBIDDEN_SCREENPLAY 在 STRUCTURE§12 钉死不可豁免，但 freestyle 链路无真阻断——
-#   step3 audit 时草稿【尚未切章】（chapter_end_anchor_scan 依赖 第NNN章 文件，在 step6 切章后才跑且只
-#   advisory 不 exit2）→ 剧本体污染溜过最该拦的点。修：step3 对【整段 cluster_draft】跑 SCREENPLAY_PATTERNS。
+# 🔴 章末物理污染 hard_gate 真阻断点：CHAPTER_END_FORBIDDEN_SCREENPLAY 在 STRUCTURE§12 钉死不可豁免，
+#   而 chapter_end_anchor_scan 依赖 第NNN章 文件（step6 切章后才跑且只 advisory 不 exit2）——step3 audit
+#   时草稿尚未切章，故 step3 对【整段 cluster_draft】跑 SCREENPLAY_PATTERNS，在最该拦的点拦下剧本体污染。
 # 北极星⑤边界：只硬毙【位置无关】的 SCREENPLAY（剧本体镜头/旁白/音效指令 = 排版/格式契约破损·任何风格、
 #   任何位置都非法 → 整段硬扫安全）。TRANSITION 物理分隔符须锚定章末（中段场景分隔某些作者合法）故不在
 #   整段层硬扫；语义收束句（『灯熄了』等）保持 advisory（绝不在此升格）。
 def _scan_cluster_draft_screenplay(cluster_draft_path: Path) -> list:
-    """C06：整段 cluster 草稿扫剧本体 SCREENPLAY 标记（位置无关 hard_gate）。
+    """整段 cluster 草稿扫剧本体 SCREENPLAY 标记（位置无关 hard_gate）。
 
     复用 chapter_end_anchor_scan.SCREENPLAY_PATTERNS（同源·防口径分歧），命中即 emit
     CHAPTER_END_FORBIDDEN_SCREENPLAY · severity=error → _gate_level_for 落 hard_gate →
@@ -499,7 +495,7 @@ def _parse_scanner_json(stdout: str, scanner: str, dim_map: dict) -> list:
 
 
 def _parse_flat_fscanner(stdout: str, check_key: str) -> list:
-    """v19 F 层检测器（hook_strength / golden_three）输出归一化。
+    """F 层检测器（hook_strength / golden_three）输出归一化。
 
     与 narrative/plot 不同：这两个 scanner 输出【扁平结构】——
     单个 top-level `warning`（可能为 null）、`gate_level`、`severity`、
@@ -539,14 +535,13 @@ def _parse_flat_fscanner(stdout: str, check_key: str) -> list:
     return issues
 
 
-# ============ v2 cluster-only scanner 结果归一化 ============
+# ============ cluster-only scanner 结果归一化 ============
 # 这 4 个 scanner 输出结构各异：
 #   · foreshadowing_handoff / pov_consistency → 顶层 issues[]，每条带 code/gate_level/severity/msg
 #   · locked_fact_cross_scene → 扁平顶层 code/gate_level/severity/warning（单 issue）
 #   · cross_scene_voice_drift → drift_issues[]（无 per-item code），顶层 warning/severity
 #   · narrative_short_sentence / repeat_noun_density → violations[]（无 per-item code），
 #     顶层 gate_level=advisory、verdict、severity 为 major/minor（映射 error/warning）
-# 之前这 6 个 parse_fn 全是 `lambda out,code: []`，scanner 结果（含 hard_gate）被静默丢弃。
 
 def _load_scanner_json(stdout: str) -> dict | None:
     """从 scanner stdout 抽第一个 { 到最后一个 } 解析 JSON。失败返回 None。"""
@@ -585,10 +580,9 @@ def _parse_issues_list_scanner(stdout: str, source: str, dimension: str,
         if not code:
             continue
         severity = _norm_severity(it.get("severity", default_severity))
-        # gate_level：HARD_GATE_CODES 命中 → hard_gate。2026-05-30 北极星复审：scanner 自报 hard_gate
+        # gate_level：HARD_GATE_CODES 命中 → hard_gate。scanner 自报 hard_gate
         # 仅当其 code 在 HARD_GATE_CODES（权威单一来源）时才尊重——否则任意 scanner 可在清单外自立
-        # hard_gate（foreshadowing_handoff 曾用 FORESHADOWING_NOT_PLANTED 越权卡死写作），违反北极星
-        # 「hard_gate 清单单一来源，不得各自另立」。
+        # hard_gate 越权卡死写作，违反北极星「hard_gate 清单单一来源，不得各自另立」。
         gl = _gate_level_for(code, severity)
         if gl != "hard_gate" and it.get("gate_level") == "hard_gate" and code in HARD_GATE_CODES:
             gl = "hard_gate"
@@ -634,7 +628,7 @@ def _parse_locked_fact_cross_scene(stdout: str) -> list:
 
 
 def _parse_locked_fact_descriptive(report: dict) -> list:
-    """[2026-07-07 ConStory盲区③] locked_fact 描述类 NLI 通路（report.descriptive 独立块）：
+    """[ConStory盲区③] locked_fact 描述类 NLI 通路（report.descriptive 独立块）：
     LOCKED_FACT_DESCRIPTIVE_CONTRADICTION 恒 advisory（NLI 概率判定非确定性硬核对·北极星⑤），
     与顶层数值通路的 hard 码 LOCKED_FACT_CROSS_SCENE_CONFLICT 严格分离。"""
     issues = []
@@ -728,24 +722,23 @@ def _parse_scene_seam(stdout: str) -> list:
     return issues
 
 
-ANCHOR_WINDOW_MAX_CJK = 40  # R24 W12 Batch-KK·anchored_advisory_contract
+ANCHOR_WINDOW_MAX_CJK = 40  # anchored_advisory_contract·anchor_window 引用窗口截断上限
 
 
 def _collect_anchor_spans(violations: list) -> list:
-    """[2026-06-20 R9 W5 Batch-M·F3 AnchoredAI] 收集 violation 里的 anchor_span 字段。
+    """[AnchoredAI] 收集 violation 里的 anchor_span 字段。
 
     Finding schema 扩展：每条 issue 可携带 anchor_spans[]（char_start/char_end/surface_text），
     供 gen_fixer prompt 用 surface_text markdown >quote 包裹 + 只锚定段改动闭环；
     `out_of_anchor_edit_ratio` 可观察 (gen_fixer 日志侧)。
 
-    向后兼容：scanner 未填 anchor_span 时返回空列表，不影响现有判定路径。
-    L41 narrator_commentary_scanner / 后续 prose_rhythm / repeat_noun_density 等可逐步填充。
+    scanner 未填 anchor_span 时返回空列表，不影响判定路径。
 
-    [2026-06-22 R24 W12 Batch-KK·anchored_advisory_contract] schema 升级：
+    [anchored_advisory_contract] 扩展字段：
       · anchor_window: 引用窗口（≤40 CJK 字符，超出截断）
       · recursive_widen_level: int(0..3) 递归加宽层（0=原 span，1-3=外扩重试）
-      · 字段都 OPTIONAL·已有 scanner 不强制改·新 scanner 选填
-    advisory 必填 anchor·hard_gate 选填兼容（北极星⑤不可豁免 hard_gate 一致性问题
+      · 字段都 OPTIONAL·scanner 选填
+    advisory 必填 anchor·hard_gate 选填（北极星⑤不可豁免 hard_gate 一致性问题
     本就有 code/dim，安全裕度）。
     """
     spans = []
@@ -785,9 +778,9 @@ def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: st
     顶层 gate_level=advisory。每条 violation 的 severity 为 major/minor（映射 error/warning）。
     PASS（无 violation）→ 不产 issue。合成 1 条聚合 issue（severity 取最高）。
 
-    [F3 AnchoredAI · 2026-06-20] 若 violations 含 anchor_span(char_start/char_end/surface_text)
+    [F3 AnchoredAI] 若 violations 含 anchor_span(char_start/char_end/surface_text)
     则透传到 issue.anchor_spans[]，供 gen_fixer 仅锚定段改动 + 可观察 out_of_anchor_edit_ratio。
-    向后兼容：scanner 未填则字段缺省。"""
+    scanner 未填则字段缺省。"""
     issues = []
     report = _load_scanner_json(stdout)
     if not report:
@@ -800,10 +793,10 @@ def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: st
     severity = "error" if has_major else "warning"
     top_gl = report.get("gate_level", "advisory")
     gl = _gate_level_for(code, severity)
-    # 2026-06-14 B-2：顶层 gate_level 升格同样以 HARD_GATE_CODES 为权威（与 _parse_issues_list_scanner
-    # L476 的双闸对称）。防 violations 形态 scanner 顶层越权自立 hard_gate（北极星⑤「hard_gate 清单
+    # 顶层 gate_level 升格同样以 HARD_GATE_CODES 为权威（与 _parse_issues_list_scanner
+    # 的双闸对称）。防 violations 形态 scanner 顶层越权自立 hard_gate（北极星⑤「hard_gate 清单
     # 单一来源，不得各自另立」）。现有 narrative_short_sentence / repeat_noun_density 顶层皆 advisory，
-    # 此守卫对现状 no-op；纯防御未来思维层探针（若实现成 violations 输出 + 顶层 hard_gate）绕过制度锁。
+    # 此守卫对现状 no-op；纯防御思维层探针（若实现成 violations 输出 + 顶层 hard_gate）绕过制度锁。
     if gl != "hard_gate" and top_gl == "hard_gate" and code in HARD_GATE_CODES:
         gl = "hard_gate"
     desc = f"{report.get('scanner', source)}: {len(violations)} 处违规（verdict={report.get('verdict','?')}）"
@@ -823,7 +816,7 @@ def _parse_violations_scanner(stdout: str, source: str, code: str, dimension: st
 
 def _parse_multi_code_violations_scanner(stdout: str, source: str, default_code: str,
                                          dimension: str) -> list:
-    """[2026-07-05 休眠 scanner 接线] violations[] 且 per-item 自带 code 的 scanner
+    """violations[] 且 per-item 自带 code 的 scanner
     （frisson_lead_window / butler_yearning_4layer / soundscape_trinity 等一 scanner 多 code）。
     与 _parse_violations_scanner 的区别：不把所有 violation 压成单一聚合 code，而是按
     violation.code 分组、每组合成 1 条聚合 issue——保持 code 与 scanner 真实 emit 一致
@@ -866,7 +859,7 @@ def _parse_multi_code_violations_scanner(stdout: str, source: str, default_code:
 
 
 def _parse_advisories_scanner(stdout: str, source: str, default_code: str, dimension: str) -> list:
-    """[G2 P2 2026-06-22] 通用解析：scanner 顶层 `advisories[]` 形态(R23 W11 Batch-II
+    """通用解析：scanner 顶层 `advisories[]` 形态(
     writer_growth_dashboard / antagonist_valence_trajectory / 部分 cross-cluster 工具)。
 
     形态：{ "scanner": "...", "advisories": [{"code", "msg", ...}], "violations"?: [...] }
@@ -903,7 +896,7 @@ def _parse_advisories_scanner(stdout: str, source: str, default_code: str, dimen
     return issues
 
 
-# ============ v19.2 工具校准建议：自动豁免 ============
+# ============ 工具校准建议：自动豁免 ============
 
 def _load_calibration_suggestions(project_root: Path) -> list[dict]:
     """读 写作经验.json 的 tool_calibration_suggestions，让 audit_hub 自动豁免反复出现的 code。
@@ -944,12 +937,12 @@ _SEVERITY_DOWNGRADE = {"fatal": "error", "error": "warning", "warning": "info", 
 
 
 def _apply_auto_calibration_softcap(issue: dict, match: dict) -> bool:
-    """L2-0 止血（2026-05-30）：calibration suggestion 命中后【降一档严格度】而非整条豁免。
+    """calibration suggestion 命中后【降一档严格度】而非整条豁免。
 
-    根因复盘：旧逻辑命中 ≥3 次后把整条 issue waived=True —— 等于「完全关掉该检测」，
-    无穷增益二元跳变、关了回不来、无衰减，是矫枉过正反向震荡源。
+    命中 ≥3 次就把整条 issue 判 waived=True 等于「完全关掉该检测」——无穷增益二元跳变、
+    关了回不来、无衰减，是矫枉过正反向震荡源，故不采用。
 
-    新逻辑（呼应 learning_loop 建议原文「降级默认 severity」）：
+    做法（呼应 learning_loop 建议原文「降级默认 severity」）：
       - 保留检测【存在性】：issue 仍留在 all_issues / 报告里（不 waived、不删除），
         只是 severity 沿阶梯下降一档（fatal→error→warning→info），不再反复刷屏为高优阻断项。
       - info 已是最低档：到 info 后只打标记、不再下降（永不彻底消失）。
@@ -971,10 +964,10 @@ def _apply_auto_calibration_softcap(issue: dict, match: dict) -> bool:
     return new_sev != old_sev
 
 
-# ============ v19 豁免协议：读取 + 应用 ============
+# ============ 豁免协议：读取 + 应用 ============
 
-# 🔴 2026-06-27 C09 豁免诚实审计（WAIVER-HONESTY-AUDIT · META-only · 绝不翻 verdict）：
-# 运动员当裁判防线——writer 自己在 self_eval.waivers 写豁免，旧逻辑唯一校验是「理由非空 + <300 字」。
+# 🔴 豁免诚实审计（WAIVER-HONESTY-AUDIT · META-only · 绝不翻 verdict）：
+# 运动员当裁判防线——writer 自己在 self_eval.waivers 写豁免，基础校验只查「理由非空 + <300 字」。
 # 下面两个阈值用于「疑似 blanket 豁免」检测，只 emit META 信号 + 喂 learning_loop，
 # 绝不 block / cap-reject / downgrade-fail（风格与通用爽文基线合法冲突的 cluster 应能全豁免）。
 _WAIVER_BLANKET_RATE = 0.7        # advisory 豁免率 > 此值 → 疑似 blanket
@@ -1021,14 +1014,13 @@ def _load_waivers(waivers_path: str) -> list:
         if not reason:
             print(f"  [waivers] {code} 无理由，豁免无效（豁免必带具体理由）")
             continue
-        # v2 cluster 化方案 Phase A hot-fix（2026-05-28）：
-        # 阈值 100→300。cluster mode 涉及多场景多角色多伏笔，理由 150-280 字常见。
+        # 阈值 300（cluster mode 涉及多场景多角色多伏笔，理由 150-280 字常见）。
         # stderr 缩短打印（前 80 字+省略），完整理由仍写入 audit 报告 JSON。
         if len(reason) >= 300:
             print(f"  [waivers] {code} 理由超 300 字，已截断: {reason[:80]}…", file=sys.stderr)
             reason = reason[:300]
         out.append({"code": code, "reason": reason})
-    # 🔴 2026-06-27 C09 豁免诚实审计：按 code 去重（保最长 reason · 冲突打 warn）。
+    # 🔴 豁免诚实审计：按 code 去重（保最长 reason · 冲突打 warn）。
     # 运动员当裁判防线之一——writer 可能对同一 code 重复声明（复制粘贴/刷豁免）。去重纯卫生·
     # 行为中性（同 code 本就映射一条 reason），保最长是因更长更可能是具体到本 cluster 的真理由。
     deduped: dict = {}
@@ -1046,14 +1038,13 @@ def _load_waivers(waivers_path: str) -> list:
 
 
 def _apply_waivers(all_issues: list, waivers: list) -> list:
-    """v19 顾问制核心：对 issue 应用 AI 豁免。
+    """顾问制核心：对 issue 应用 AI 豁免。
       - advisory 项 code 命中豁免清单 → waived=True + waive_reason 记录理由
       - hard_gate 项即便命中豁免清单也【强制忽略豁免】（不可豁免，仍按问题处理）
     原地修改 all_issues，返回被成功豁免的 issue 引用列表（供报告 waived_issues 段）。
 
-    🔴 2026-06-27 C09 豁免诚实审计：orphan 豁免（code 不在本次任何 issue 里）从 by_code
-    排除并 log——而非静默 no-op（旧逻辑里 orphan 只是「凑巧没命中」，不留痕迹）。排除是行为中性
-    的（orphan 本就匹配不到 issue），只是把「凭空豁免不存在的 code」显性化。apply-moment 的
+    🔴 豁免诚实审计：orphan 豁免（code 不在本次任何 issue 里）从 by_code 排除并 log——
+    把「凭空豁免不存在的 code」显性化（orphan 本就匹配不到 issue，排除行为中性）。apply-moment 的
     blanket / orphan 量化信号在 _compute_waiver_audit 里统一算（META-only · 不在此翻 verdict）。"""
     if not waivers:
         return []
@@ -1081,7 +1072,7 @@ def _apply_waivers(all_issues: list, waivers: list) -> list:
 
 
 def _compute_waiver_audit(all_issues: list, waivers: list, waived_issues: list) -> dict:
-    """🔴 2026-06-27 C09 豁免诚实审计信号（META-only · 喂 learning_loop · 【绝不翻 verdict】）。
+    """🔴 豁免诚实审计信号（META-only · 喂 learning_loop · 【绝不翻 verdict】）。
 
     纯函数：不改 all_issues / waived_issues，只产观察信号。北极星护栏——
     blanket / orphan 只是 advisory META flag + ledger 喂 learning_loop，
@@ -1125,7 +1116,7 @@ def _compute_waiver_audit(all_issues: list, waivers: list, waived_issues: list) 
 # ============ 修复决策 ============
 
 def _check_character_arc_drift(project_root: Path, ch: int) -> list:
-    """v22 方案 3 · MARCUS 范式角色情感弧偏差检测（advisory）。
+    """MARCUS 范式角色情感弧偏差检测（advisory）。
 
     读项目对应风格库的 character_arcs/<主角>_emotion_arc.json，对照本章 changes.json
     的 self_eval 情感强度，偏差 > 0.3 → advisory issue。
@@ -1241,7 +1232,7 @@ def _agent_for(issue: dict) -> tuple:
     """该问题需派哪个 agent + fix_brief。返回 (agent, brief) 或 (None, None)。"""
     if issue["code"] in AGENT_ROUTING:
         return AGENT_ROUTING[issue["code"]]
-    # 致命/错误级但没显式路由 -> 兜底派 validator-checker（v2 拆分 · 2026-05-29 P3 F3 改名）
+    # 致命/错误级但没显式路由 -> 兜底派 validator-checker
     if issue["severity"] in ("fatal", "error"):
         return ("novel-validator-checker", issue.get("fix_hint") or issue["desc"])
     return (None, None)
@@ -1256,7 +1247,7 @@ def _rescan_codes(project_root: Path, ch: int, body_file: Path) -> set:
     _, out, _ = _run([child_python(), str(vs), str(body_file), "--strict"])
     for issue in _parse_validate_style(out):
         present.add(issue["code"])
-    # validate_chapter（BANNED_WORD 来自这里）—— v18 #12：--json 结构化输出
+    # validate_chapter（BANNED_WORD 来自这里）—— --json 结构化输出
     vc = _SCRIPT_DIR / "validate_chapter.py"
     _, out, _ = _run([child_python(), str(vc), str(project_root), str(ch), "--json"])
     for issue in _parse_validate_chapter(out, 0):
@@ -1300,7 +1291,7 @@ def _apply_deterministic_fix(project_root: Path, ch: int, det_issues: list) -> t
 # ============ 主流程 ============
 
 def _get_user_audit_mode(project_root: Path) -> str:
-    """v21 UX5: 读用户偏好.json 取 audit_mode。default=advisory。"""
+    """读用户偏好.json 取 audit_mode。default=advisory。"""
     prefs_path = project_root / "_数据库" / "用户偏好.json"
     if not prefs_path.exists():
         return "advisory"
@@ -1312,7 +1303,7 @@ def _get_user_audit_mode(project_root: Path) -> str:
 
 
 def _apply_audit_mode_filter(issues: list, mode: str) -> list:
-    """v21 UX5: 按 audit_mode 调整 issue severity。
+    """按 audit_mode 调整 issue severity。
     - strict: 所有 advisory 升 warning，禁止豁免
     - advisory（默认）: 不变
     - permissive: warning 降 info，advisory 降 info（仅 hard_gate 保留）
@@ -1427,20 +1418,19 @@ def _build_genre_scanner_task(
 def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                   waivers: list = None, cluster_mode: bool = False,
                   cluster_key: str = None) -> dict:
-    """审一章。waivers: [{code, reason}] —— v19 AI 豁免清单，对 advisory 项生效。
+    """审一章。waivers: [{code, reason}] —— AI 豁免清单，对 advisory 项生效。
 
-    cluster_mode: v2 cluster 化支持。True 时给 scanner 子进程传 CLUSTER_MODE=1 env。
+    cluster_mode: True 时给 scanner 子进程传 CLUSTER_MODE=1 env。
     cluster_key: cluster 标识（如 "001"）·用于定位草稿并激活 cluster 顾问任务。
     """
     waivers = waivers or []
     body_file = cio.find_body_file(project_root, ch)
     if not body_file:
         return {"_fatal": f"第{ch}章正文未找到: {project_root}"}
-    # v21 UX5: 读用户 audit_mode
+    # 读用户 audit_mode
     audit_mode = _get_user_audit_mode(project_root)
 
-    # v2 cluster 化：scanner 子进程 env 透传
-    # 2026-05-29：cluster mode 把真实 cluster_key 经 CLUSTER_ID env 透传给子进程
+    # scanner 子进程 env 透传：cluster mode 把真实 cluster_key 经 CLUSTER_ID env 透传给子进程
     # （沿用 run_cross_cluster_aggregates 的 CLUSTER_ID 先例），让 golden_three 能区分
     # cluster_001 ↔ cluster_002+ —— 否则任何 cluster 都借虚拟 ch=9000 恒激活黄金三章开场检测。
     _env_extra = None
@@ -1462,39 +1452,39 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     ss = _SCRIPT_DIR / "semantic_slop_scanner.py"
     nsss = _SCRIPT_DIR / "narrative_short_sentence_scanner.py"
     rnds = _SCRIPT_DIR / "repeat_noun_density_scanner.py"
-    # 4 新 cluster-only scanner（v2 cluster 化方案）
+    # 4 个 cluster-only scanner
     csvd = _SCRIPT_DIR / "cross_scene_voice_drift_scanner.py"
     fhs = _SCRIPT_DIR / "foreshadowing_handoff_scanner.py"
     lfcs = _SCRIPT_DIR / "locked_fact_cross_scene_scanner.py"
     povs = _SCRIPT_DIR / "pov_consistency_scanner.py"
     # 「输入教了输出要查」闭环：作者衔接手法分布对账（cluster · advisory · 永不 hard_gate）
     sseam = _SCRIPT_DIR / "scene_seam_scanner.py"
-    # L2 防御：章末 cliffhanger 锚定扫描（cluster_001 ch4 三次翻车 sediment）
+    # L2 防御：章末 cliffhanger 锚定扫描
     ceas = _SCRIPT_DIR / "chapter_end_anchor_scan.py"
-    # [2026-06-03] AI 长文退化三连指纹（否定对照/破折号密度+比喻复读+整段近重复）· advisory
+    # AI 长文退化三连指纹（否定对照/破折号密度+比喻复读+整段近重复）· advisory
     rrs = _SCRIPT_DIR / "rhetoric_repetition_scanner.py"
-    # [2026-06-03] 句法节奏/流水账作文感（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比）· advisory
+    # 句法节奏/流水账作文感（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比）· advisory
     prs = _SCRIPT_DIR / "prose_rhythm_scanner.py"
-    # [2026-06-13 阶段1] 叙事节奏序列（张力轨迹后段保持/匀速平铺/节拍单调 vs 作者基线）· advisory
+    # 叙事节奏序列（张力轨迹后段保持/匀速平铺/节拍单调 vs 作者基线）· advisory
     nrs = _SCRIPT_DIR / "narrative_rhythm_scanner.py"
-    # [2026-06-15 记忆调研W3] 情绪曲线 live 回查（actual valence 曲线 vs manifest 注入 target）· advisory
+    # 情绪曲线 live 回查（actual valence 曲线 vs manifest 注入 target）· advisory
     ecrs = _SCRIPT_DIR / "emotion_curve_rescan_scanner.py"
-    # [2026-06-15 记忆调研W1] 潜台词/on-the-nose 情绪直陈回查（说透情绪密度·金标准校准阈值）· advisory
+    # 潜台词/on-the-nose 情绪直陈回查（说透情绪密度·金标准校准阈值）· advisory
     srss = _SCRIPT_DIR / "subtext_rescan_scanner.py"
-    # [2026-06-15 记忆调研W4] dramatic irony 信号回查（显式标志词 tell 过多·金标准证好作者用 show）· advisory
+    # dramatic irony 信号回查（显式标志词 tell 过多·金标准证好作者用 show）· advisory
     dis = _SCRIPT_DIR / "dramatic_irony_scanner.py"
-    # [2026-06-15 记忆调研W5] 反转揭底 tell 回查（揭底显式标志词 tell 过多·金标准证好作者用 show）· advisory
+    # 反转揭底 tell 回查（揭底显式标志词 tell 过多·金标准证好作者用 show）· advisory
     rvss = _SCRIPT_DIR / "reveal_show_scanner.py"
-    # [2026-06-16 盲区落地] 句法多样性(CR-POS 句法骨架同形复用 + theme over-explanation·作者自适应 z-band) · advisory
+    # 句法多样性(CR-POS 句法骨架同形复用 + theme over-explanation·作者自适应 z-band) · advisory
     sds = _SCRIPT_DIR / "syntactic_diversity_scanner.py"
-    # [2026-06-16 穷尽核查#2] 情绪标点综合密度 vs 作者基线(感叹/问号/省略号·金标准综合避单类误报·单边下尾) · advisory
+    # 情绪标点综合密度 vs 作者基线(感叹/问号/省略号·金标准综合避单类误报·单边下尾) · advisory
     eps = _SCRIPT_DIR / "emotional_punctuation_scanner.py"
-    # [2026-06-16 第二轮穷尽核查#2] 功能词指纹偏离作者基线(SFS 最高权重维却 0 写作时回查·金标准综合 min0.86→FLOOR0.6·单边下尾) · advisory
+    # 功能词指纹偏离作者基线(SFS 最高权重维却 0 写作时回查·金标准综合 min0.86→FLOOR0.6·单边下尾) · advisory
     fwfs = _SCRIPT_DIR / "function_word_fingerprint_scanner.py"
-    # [2026-06-16 第二轮穷尽核查#3] 二阶句长节奏动力学(Δ²var/var·order-sensitive·探针7 permutation-invariant 看不见时序·DivEye·通用 floor3.0) · advisory
+    # 二阶句长节奏动力学(Δ²var/var·order-sensitive·探针7 permutation-invariant 看不见时序·DivEye·通用 floor3.0) · advisory
     sors = _SCRIPT_DIR / "second_order_rhythm_scanner.py"
 
-    # 2026-05-29 北极星修复 [H3-style]：审核必须以【作者风格档】为基线，而非写死通用爽文阈值。
+    # 审核必须以【作者风格档】为基线，而非写死通用爽文阈值（北极星⑤）。
     # 作者风格.json 存在即给 validate_style 传 --style，激活已有但从未触发的 _apply_style_overrides
     # （dialogue/para_mean/chapter_words/onomatopoeia 等 advisory 数值阈按作者基线放宽，不碰 hard_gate）。
     _style_json = project_root / "_数据库" / "作者风格.json"
@@ -1588,33 +1578,33 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                   "--project", str(project_root)] + _style_args,
                  {0, 1},
                  lambda out, code: _parse_scene_seam(out)),
-                # [2026-06-03] 修辞复读三连指纹 · cluster 视野 · advisory（兜底 gen_writer 元anti-slop·弱模型守不住的客观检测闭环）
+                # 修辞复读三连指纹 · cluster 视野 · advisory（兜底 gen_writer 元anti-slop·弱模型守不住的客观检测闭环）
                 ("rhetoric_repetition",
                  [child_python(), str(rrs), str(cluster_draft),
                   "--project", str(project_root)] + _style_args,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "rhetoric_repetition_scanner", "RHETORIC_REPETITION", "风格")),
-                # [2026-06-03] 句法节奏/流水账作文感 · 作者基线第一权威(传 --project 读作者档+人物卡) · advisory
+                # 句法节奏/流水账作文感 · 作者基线第一权威(传 --project 读作者档+人物卡) · advisory
                 ("prose_rhythm",
                  [child_python(), str(prs), str(cluster_draft), "--project", str(project_root)] + _style_args,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_rhythm_scanner", "PROSE_RHYTHM", "风格")),
-                # [2026-06-16 盲区落地·perplexity_obsolete] 句法骨架同形复用 + 主题过度解释 · 作者自适应
+                # [盲区落地·perplexity_obsolete] 句法骨架同形复用 + 主题过度解释 · 作者自适应
                 # per-scene z-band(无作者档退绝对地板·补 memory feedback_inverted_modifier 同语法骨架盲区) · advisory
                 ("syntactic_diversity",
                  [child_python(), str(sds), str(cluster_draft), "--project", str(project_root)] + _style_args,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "syntactic_diversity_scanner", "SYNTACTIC_DIVERSITY", "风格")),
-                # [2026-06-13 阶段1] 叙事节奏序列 · 作者基线第一权威(传 --project 读作者档) · advisory
+                # [阶段1] 叙事节奏序列 · 作者基线第一权威(传 --project 读作者档) · advisory
                 ("narrative_rhythm",
                  [child_python(), str(nrs), str(cluster_draft), "--project", str(project_root)] + _style_args,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "narrative_rhythm_scanner", "NARRATIVE_RHYTHM", "风格")),
-                # [2026-06-15 记忆调研W3] 情绪曲线 live 回查 · actual valence 曲线 vs manifest 注入
+                # 情绪曲线 live 回查 · actual valence 曲线 vs manifest 注入
                 # target（emotion_curve_full）· Pearson 趋势相关 · advisory · EMOTION_RESCAN_MODE 默认 shadow
                 ("emotion_curve_rescan",
                  [child_python(), str(ecrs), str(cluster_draft),
@@ -1622,49 +1612,49 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "emotion_curve_rescan_scanner", "EMOTION_CURVE_RESCAN_DRIFT", "风格")),
-                # [2026-06-15 记忆调研W1] 潜台词/on-the-nose 情绪直陈回查 · 说透情绪密度（金标准阈值）
-                # · advisory · SUBTEXT_RESCAN_MODE 默认 active（2026-06-16 金标准 6 作者零误报放量）· 与 semantic_slop 主题大词正交
+                # 潜台词/on-the-nose 情绪直陈回查 · 说透情绪密度（金标准阈值）
+                # · advisory · SUBTEXT_RESCAN_MODE 默认 active（金标准 6 作者零误报放量）· 与 semantic_slop 主题大词正交
                 ("subtext_rescan",
                  [child_python(), str(srss), str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "subtext_rescan_scanner", "ON_THE_NOSE_EMOTION_DENSITY", "风格")),
-                # [2026-06-15 记忆调研W4] dramatic irony 信号回查 · 显式标志词 tell 过多（好作者用 show）
-                # · advisory · DRAMATIC_IRONY_MODE 默认 active（2026-06-16 金标准 6 作者零误报放量）· 金标准阈值防误伤
+                # dramatic irony 信号回查 · 显式标志词 tell 过多（好作者用 show）
+                # · advisory · DRAMATIC_IRONY_MODE 默认 active（金标准 6 作者零误报放量）· 金标准阈值防误伤
                 ("dramatic_irony",
                  [child_python(), str(dis), str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "dramatic_irony_scanner", "DRAMATIC_IRONY_DRIFT", "风格")),
-                # [2026-06-15 记忆调研W5] 反转揭底 tell 回查 · 揭底显式标志词 tell 过多（好作者用 show）
-                # · advisory · REVEAL_SHOW_MODE 默认 active（2026-06-16 金标准 6 作者零误报放量）· 金标准阈值防误伤
+                # 反转揭底 tell 回查 · 揭底显式标志词 tell 过多（好作者用 show）
+                # · advisory · REVEAL_SHOW_MODE 默认 active（金标准 6 作者零误报放量）· 金标准阈值防误伤
                 ("reveal_show",
                  [child_python(), str(rvss), str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "reveal_show_scanner", "REVEAL_TELL_OVERUSE", "风格")),
-                # [2026-06-16 穷尽核查#2] 情绪标点综合密度 vs 作者基线 · advisory · EMOTIONAL_PUNCT_MODE 默认 shadow
+                # 情绪标点综合密度 vs 作者基线 · advisory · EMOTIONAL_PUNCT_MODE 默认 shadow
                 # （金标准证单类必误报真作者冷静段→用综合 + FLOOR_RATIO 0.3·检测力待 gen-model 草稿验证再 active）
                 ("emotional_punctuation",
                  [child_python(), str(eps), str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "emotional_punctuation_scanner", "EMOTIONAL_PUNCT_SPARSE", "风格")),
-                # [2026-06-16 第二轮穷尽核查#2] 功能词指纹偏离 · advisory · FUNCTION_WORD_FINGERPRINT_MODE 默认 shadow
+                # 功能词指纹偏离 · advisory · FUNCTION_WORD_FINGERPRINT_MODE 默认 shadow
                 # （SFS 最高权重维写作时 0 回查·金标准综合 15 词 cluster/base min0.86→FLOOR0.6·检测力待 gen-model 验证再 active）
                 ("function_word_fingerprint",
                  [child_python(), str(fwfs), str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "function_word_fingerprint_scanner", "FUNCTION_WORD_FINGERPRINT_DRIFT", "风格")),
-                # [2026-06-16 第二轮穷尽核查#3] 二阶句长节奏 · advisory · SECOND_ORDER_RHYTHM_MODE 默认 shadow
+                # 二阶句长节奏 · advisory · SECOND_ORDER_RHYTHM_MODE 默认 shadow
                 # （探针7 permutation-invariant 看不见时序·Δ²var/var order-sensitive 正交补盲·DivEye·var=0→None 解耦探针7·通用 floor 不传 --project）
                 ("second_order_rhythm",
                  [child_python(), str(sors), str(cluster_draft)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "second_order_rhythm_scanner", "SECOND_ORDER_RHYTHM_FLAT", "风格")),
-                # [2026-06-19 联网调研] 过早消解冲突(LLM第一弱点·arXiv:2604.09854)
+                # 过早消解冲突(LLM第一弱点·arXiv:2604.09854)
                 # · 冲突→消解距离<500CJK = 快速消解 · ratio>50%报 · advisory · 默认 shadow
                 ("premature_resolution",
                  [child_python(), str(_SCRIPT_DIR / "premature_resolution_scanner.py"),
@@ -1672,7 +1662,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "premature_resolution_scanner", "PREMATURE_RESOLUTION", "张力")),
-                # [2026-06-19 R1 联网调研] 白房间综合症/欠写检测(全系统首个查『欠写』·Turkey City)
+                # 白房间综合症/欠写检测(全系统首个查『欠写』·Turkey City)
                 # · 场景开头缺空间/感官接地锚点 · advisory · SCENE_GROUNDING_MODE 默认 shadow
                 ("scene_grounding",
                  [child_python(), str(_SCRIPT_DIR / "scene_grounding_scanner.py"),
@@ -1680,7 +1670,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "scene_grounding_scanner", "SCENE_GROUNDING_THIN", "风格")),
-                # [2026-06-19 R1·arXiv:2605.07102 SAGE/Cohn] 内心戏三态失衡·带标记直接独白过密(建议转FID)
+                # [arXiv:2605.07102 SAGE/Cohn] 内心戏三态失衡·带标记直接独白过密(建议转FID)
                 # · advisory · INTERIORITY_MODE_BALANCE_MODE 默认 shadow
                 ("interiority_mode_balance",
                  [child_python(), str(_SCRIPT_DIR / "interiority_mode_balance_scanner.py"),
@@ -1688,7 +1678,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "interiority_mode_balance_scanner", "INTERIORITY_MODE_IMBALANCE", "风格")),
-                # [2026-06-19 R1·SAGE Emotional Granularity] 情绪颗粒度粗·四大类粗情绪大词裸词频(与subtext_rescan正交)
+                # [SAGE Emotional Granularity] 情绪颗粒度粗·四大类粗情绪大词裸词频(与subtext_rescan正交)
                 # · advisory · EMOTION_GRANULARITY_MODE 默认 shadow
                 ("emotion_granularity",
                  [child_python(), str(_SCRIPT_DIR / "emotion_granularity_scanner.py"),
@@ -1696,7 +1686,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "emotion_granularity_scanner", "EMOTION_GRANULARITY_COARSE", "风格")),
-                # [2026-06-19 R1·arXiv:2509.19595 ELENA] 生理情绪线索面部偏置·对抗LLM facial bias
+                # [arXiv:2509.19595 ELENA] 生理情绪线索面部偏置·对抗LLM facial bias
                 # · advisory · PHYSIO_CUE_DIVERSITY_MODE 默认 shadow
                 ("physio_cue_diversity",
                  [child_python(), str(_SCRIPT_DIR / "physio_cue_diversity_scanner.py"),
@@ -1704,7 +1694,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "physio_cue_diversity_scanner", "PHYSIO_CUE_FACIAL_BIAS", "风格")),
-                # [2026-06-19 R1·arXiv:2603.04969 MPCEval] 群戏对话失衡·显式点名过密(建议隐式指称)
+                # [arXiv:2603.04969 MPCEval] 群戏对话失衡·显式点名过密(建议隐式指称)
                 # · advisory · GROUP_DIALOGUE_BALANCE_MODE 默认 shadow
                 ("group_dialogue_balance",
                  [child_python(), str(_SCRIPT_DIR / "group_dialogue_balance_scanner.py"),
@@ -1712,35 +1702,35 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "group_dialogue_balance_scanner", "GROUP_DIALOGUE_IMBALANCE", "风格")),
-                # [2026-06-20 R2·会话分析 PMC8504554] 非偏好回应裸拒绝 · advisory · 默认 shadow(真作者裸拒常态·潜在误报)
+                # [会话分析 PMC8504554] 非偏好回应裸拒绝 · advisory · 默认 shadow(真作者裸拒常态·潜在误报)
                 ("dispreferred_turn_shape",
                  [child_python(), str(_SCRIPT_DIR / "dispreferred_turn_shape_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "dispreferred_turn_shape_scanner", "DISPREFERRED_TURN_BARE", "风格")),
-                # [2026-06-20 R1·真编辑实证] 时间流逝感缺失 · advisory · 默认 active(5真作者thin_ratio全0.0)
+                # [真编辑实证] 时间流逝感缺失 · advisory · 默认 active(5真作者thin_ratio全0.0)
                 ("temporal_grounding",
                  [child_python(), str(_SCRIPT_DIR / "temporal_grounding_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "temporal_grounding_scanner", "TEMPORAL_GROUNDING_THIN", "风格")),
-                # [2026-06-20 R2·arXiv:2110.09710 Inter-Sense] 通感过用 · advisory · 默认 active(5真作者per_1k全0)
+                # [arXiv:2110.09710 Inter-Sense] 通感过用 · advisory · 默认 active(5真作者per_1k全0)
                 ("synesthesia_density",
                  [child_python(), str(_SCRIPT_DIR / "synesthesia_density_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "synesthesia_density_scanner", "SYNESTHESIA_OVERUSE", "风格")),
-                # [2026-06-20 R6 联网调研] 时代错位/穿帮(古代/古言/仙侠/古风最大题材群·零覆盖)·era门控(世界观.json·无→skip)·advisory·默认shadow
+                # 时代错位/穿帮(古代/古言/仙侠/古风最大题材群·零覆盖)·era门控(世界观.json·无→skip)·advisory·默认shadow
                 ("anachronism",
                  [child_python(), str(_SCRIPT_DIR / "anachronism_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "anachronism_scanner", "ANACHRONISM_DETECTED", "风格")),
-                # [2026-06-20 R8 W4 Batch-F · L18 Le Guin Register Drift] 题材语域漂移
+                # [L18 Le Guin Register Drift] 题材语域漂移
                 # (当代俚语/工程黑话漂入高语域 + 反向高语域古风词漂入现代场景)·5 tier 词典
                 # (epic_fantasy/xianxia/xuanhuan/historical/modern_urban)·tier 门控
                 # (genre_packs.register_tier · 无→skip)·voice_pack.allow_register_drift 豁免
@@ -1751,28 +1741,28 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "world_register_drift_scanner", "REGISTER_DRIFT", "风格")),
-                # [2026-06-20 R7 联网调研·番茄爆款规则怪谈] 规则块字面歧义/陷阱条款比·genre 门控(rule_anomaly·非则 skip)·advisory·默认 shadow
+                # [番茄爆款规则怪谈] 规则块字面歧义/陷阱条款比·genre 门控(rule_anomaly·非则 skip)·advisory·默认 shadow
                 ("rule_text_ambiguity",
                  [child_python(), str(_SCRIPT_DIR / "rule_text_ambiguity_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "rule_text_ambiguity_scanner", "RULE_TEXT_AMBIGUITY_LOW", "风格")),
-                # [2026-06-20 R7 联网调研·DiLouie/末世生存] 资源稀缺账本·genre 门控(apocalypse_survival·非则 skip)·advisory·默认 shadow
+                # [DiLouie/末世生存] 资源稀缺账本·genre 门控(apocalypse_survival·非则 skip)·advisory·默认 shadow
                 ("resource_ledger",
                  [child_python(), str(_SCRIPT_DIR / "resource_ledger_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "resource_ledger_scanner", "RESOURCE_LEDGER_THIN", "风格")),
-                # [2026-06-20 R7 联网调研·Stanzel/Cohn] 第一人称回溯 hindsight 签到·narrative_pov_mode 门控(first_retro_*·非则 skip)·与 future_knowledge_leak 显式去重·advisory·默认 shadow
+                # [Stanzel/Cohn] 第一人称回溯 hindsight 签到·narrative_pov_mode 门控(first_retro_*·非则 skip)·与 future_knowledge_leak 显式去重·advisory·默认 shadow
                 ("firstperson_retro_self_gap",
                  [child_python(), str(_SCRIPT_DIR / "firstperson_retro_self_gap_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "firstperson_retro_self_gap_scanner", "FIRSTPERSON_RETRO_HINDSIGHT_THIN", "风格")),
-                # [2026-06-20 R7 W2·Bal/FocalLens] 聚焦人感知边界违例(自体不可见/他人内心/空间不在场)
+                # [Bal/FocalLens] 聚焦人感知边界违例(自体不可见/他人内心/空间不在场)
                 # · 与 R6 pov_consistency 正交去重 · advisory · 默认 shadow
                 ("focalizer_perception_bounds",
                  [child_python(), str(_SCRIPT_DIR / "focalizer_perception_bounds_scanner.py"),
@@ -1780,7 +1770,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "focalizer_perception_bounds_scanner", "FOCALIZER_PERCEPTION_OUT_OF_BOUNDS", "结构")),
-                # [2026-06-20 R7 W2·safety-alignment] 反派 substitution 扁平化(冷哼/狂笑/嗤笑 anti-pattern)
+                # [safety-alignment] 反派 substitution 扁平化(冷哼/狂笑/嗤笑 anti-pattern)
                 # · 建议 voice_pack.moral_level + manipulation_signature · advisory · 默认 shadow
                 ("antagonist_fidelity",
                  [child_python(), str(_SCRIPT_DIR / "antagonist_fidelity_scanner.py"),
@@ -1788,7 +1778,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "antagonist_fidelity_scanner", "ANTAGONIST_FIDELITY_FLAT", "剧情")),
-                # [2026-06-20 R8 W4 Batch-G·L19 Phelan 6 轴 × TUNa 4 原型] 不可靠叙述 + 8 类 verbal_tic 密度
+                # [L19 Phelan 6 轴 × TUNa 4 原型] 不可靠叙述 + 8 类 verbal_tic 密度
                 # · unreliable_narrator_profile 门控(reliable=1.0 → skip)·与 firstperson_retro 正交
                 # · advisory · 默认 shadow
                 ("unreliable_narrator_typology",
@@ -1798,7 +1788,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "unreliable_narrator_typology_scanner",
                      "UNRELIABLE_NARRATOR_SIGNAL_THIN", "风格")),
-                # [2026-06-20 R8 W4 Batch-G·L21 Gricean flouting] 对话四准则 flouting 潜台词密度
+                # [L21 Gricean flouting] 对话四准则 flouting 潜台词密度
                 # · 四子检测器 Quality/Quantity/Relation/Manner·作者档 dialogue_flouting_profile 优先
                 # · 与 R6 OIR + D2 延迟解码正交·advisory·默认 shadow
                 ("gricean_flouting_density",
@@ -1808,7 +1798,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "gricean_flouting_density",
                      "GRICEAN_FLOUTING_THIN", "风格")),
-                # [2026-06-20 R8 W4 Batch-H·L22 Genette 五型时长比] scene/summary/ellipsis/pause/stretch 占比
+                # [L22 Genette 五型时长比] scene/summary/ellipsis/pause/stretch 占比
                 # · 作者档 duration_mix_baseline 第一权威·无作者档走通用兜底 (ellipsis<1%+stretch<0.5%)
                 # · advisory · 默认 shadow
                 ("duration_mix",
@@ -1817,7 +1807,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "duration_mix_scanner", "DURATION_MIX_DRIFT", "风格")),
-                # [2026-06-20 R8 W4 Batch-H·L23 Shklovsky 先体感后命名] 新世界元素首现是否带感官锚
+                # [L23 Shklovsky 先体感后命名] 新世界元素首现是否带感官锚
                 # · manifest.first_encounter_targets 优先·世界观.json entries fallback
                 # · LitRPG/horror_game/rule_anomaly 题材豁免·advisory·默认 shadow
                 ("first_encounter_anchor",
@@ -1828,7 +1818,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "first_encounter_anchor_scanner",
                      "FIRST_ENCOUNTER_LABEL_FIRST", "风格")),
-                # [2026-06-20 R8 W4 Batch-I·L25 Pier Metalepsis LHN 2014 + 马良系统流] 元叙事越界预算
+                # [L25 Pier Metalepsis LHN 2014 + 马良系统流] 元叙事越界预算
                 # · 作者档/genre pack metalepsis_budget 门控 (无 → skip)·type=none/rhetorical/
                 # ontological/mixed·ontological 窗口闭合检测·与 L28 narratee 关联防双计
                 # · advisory · 默认 shadow
@@ -1838,7 +1828,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "metalepsis_budget_scanner", "METALEPSIS_BUDGET_DRIFT", "风格")),
-                # [2026-06-20 R8 W4 Batch-I·L26 Project MUSE Mimesis and 興·朱熹比兴·SCIRP 2017]
+                # [L26 Project MUSE Mimesis and 興·朱熹比兴·SCIRP 2017]
                 # 起兴 scene-opener 检测·新场景前 60-150 字外部环境意象不点情绪
                 # · 作者档 scene_opener_profile.xing_ratio 基线·现代都市/职场题材天然豁免
                 # · advisory · 默认 shadow
@@ -1848,10 +1838,10 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "scene_opener_xing_check", "SCENE_OPENER_XING_THIN", "风格")),
-                # [2026-06-20 R8 W4 Batch-I·L27 Nature Sci Rep 2025 EC/PD·Keen Theory of Narrative
+                # [L27 Nature Sci Rep 2025 EC/PD·Keen Theory of Narrative
                 # Empathy] 苦难场景 Empathic Concern vs Personal Distress 二相平衡 (仅
                 # suffering/grief/sacrifice/torment/desperation 触发)·ec_pd_ratio<0.4 advisory
-                # · 与 R7 Nummenmaa body map 协同 (独立维度)·默认 shadow
+                # · 与 Nummenmaa body map 协同 (独立维度)·默认 shadow
                 ("empathic_concern_distress",
                  [child_python(), str(_SCRIPT_DIR / "empathic_concern_distress_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
@@ -1859,7 +1849,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "empathic_concern_distress_scanner",
                      "EMPATHIC_CONCERN_DISTRESS_IMBALANCE", "风格")),
-                # [2026-06-20 R8 W4 Batch-I·L28 Booth Rhetoric of Irony stable irony 4 步
+                # [L28 Booth Rhetoric of Irony stable irony 4 步
                 # + Tang arXiv:2209.04712] Discordance 4-cue 反讽信号 (saying_doing/
                 # style_fact/world_clash/value_clash)·作者档 ironic_voice_profile.stable_irony
                 # 第一权威·advisory · 默认 shadow
@@ -1870,7 +1860,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "discordance_signal_scanner",
                      "DISCORDANCE_SIGNAL_THIN", "风格")),
-                # [2026-06-20 R8 W4 Batch-I·L28 Phelan Ideal Narratee Poetics Today 2022]
+                # [L28 Phelan Ideal Narratee Poetics Today 2022]
                 # narratee 称谓一致性 (元小说/破壁叙述)·作者档 narratee_registry.primary 门控
                 # · 与 L25 metalepsis 关联防双计·advisory · 默认 shadow
                 ("narratee_address",
@@ -1879,7 +1869,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "narratee_address_scanner", "NARRATEE_DRIFT", "风格")),
-                # [2026-06-20 R8 W4 Batch-J·L29 LHN Genette Narrative Levels + BookishBay
+                # [L29 LHN Genette Narrative Levels + BookishBay
                 # Mise en Abyme + DMovies Rashomon] Frame-Tale 嵌套叙事一致性
                 # · 作者档 nested_narrative_profile 门控 / scheming_politics/regression/
                 # espionage 默认启用 · advisory · 默认 shadow
@@ -1889,9 +1879,9 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "frame_tale_consistency_scanner", "FRAME_TALE_DRIFT", "结构")),
-                # [2026-06-20 R8 W4 Batch-J·L30 Schegloff Sequence Organization 2007 +
+                # [L30 Schegloff Sequence Organization 2007 +
                 # 起点男频试探/谈判三五步扩展] CA Adjacency Pair 扩展密度
-                # · CN 触发词表 pre/insert/post · 与 R6 OIR 正交 · advisory · 默认 shadow
+                # · CN 触发词表 pre/insert/post · 与 OIR 正交 · advisory · 默认 shadow
                 ("dialogue_sequence_expansion",
                  [child_python(), str(_SCRIPT_DIR / "dialogue_sequence_expansion.py"),
                   str(cluster_draft), "--project", str(project_root)],
@@ -1899,7 +1889,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "dialogue_sequence_expansion",
                      "DIALOGUE_SEQUENCE_EXPANSION_THIN", "风格")),
-                # [2026-06-20 R8 W4 Batch-J·L31 Heldner & Edlund pause/gap/lapse +
+                # [L31 Heldner & Edlund pause/gap/lapse +
                 # RB Kelly Power of Pauses] 沉默/停顿/失语三档密度
                 # · 词表 within-turn/gap/lapse · 情绪上下文匹配 · advisory · 默认 shadow
                 ("dialogue_silence_density",
@@ -1909,7 +1899,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "dialogue_silence_density",
                      "SILENCE_DENSITY_THIN", "风格")),
-                # [2026-06-20 R8 W4 Batch-J·L32 Hanwen Shen arXiv:2505.12572 Optimal
+                # [L32 Hanwen Shen arXiv:2505.12572 Optimal
                 # Expansion + LongEval arXiv:2502.19103] Genette 扩写率守门
                 # · 作者档 expansion_ratio_baseline z-band · 通用兜底 4-60 · 默认 shadow
                 ("expansion_ratio_gate",
@@ -1919,7 +1909,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "expansion_ratio_gate",
                      "EXPANSION_RATIO_DRIFT", "结构")),
-                # [2026-06-20 R8 W4 Batch-J·L35 知乎拆 30+本爆款 2025 番茄 +
+                # [L35 知乎拆 30+本爆款 2025 番茄 +
                 # WebNovelBench arXiv:2505.14818] 开篇 3k/10k 里程碑 (仅 cluster_001 激活)
                 # · M1 ambiguity_hook + M2 core_stake · 严肃文学/IP 改编 override · 默认 shadow
                 ("opening_window_milestone",
@@ -1929,7 +1919,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "opening_window_milestone_scanner",
                      "OPENING_WINDOW_MILESTONE_THIN", "结构")),
-                # [2026-06-20 R8 W4 Batch-J·L36 Jo Walton Reactor SF Reading Protocols
+                # [L36 Jo Walton Reactor SF Reading Protocols
                 # incluing + AlphaLexChinese] 世界术语首现 Gini + lexical density 突变
                 # · 世界观.json 术语词表 · 硬科幻/LitRPG override 0.65 · 默认 shadow
                 ("world_term_seepage",
@@ -1939,8 +1929,8 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "world_term_seepage_scanner",
                      "WORLD_TERM_INFO_DUMP", "风格")),
-                # [2026-06-20 R9 W5 Batch-K·L38 Genette 时序 order 维度] analepsis 五分类 +
-                # prolepsis · 与 R6 anachronism(时代错位) + R8 duration_mix 正交 · 作者档
+                # [L38 Genette 时序 order 维度] analepsis 五分类 +
+                # prolepsis · 与 anachronism(时代错位) + duration_mix 正交 · 作者档
                 # anachrony_baseline 第一权威·通用兜底·advisory · 默认 shadow
                 ("anachrony_order",
                  [child_python(), str(_SCRIPT_DIR / "anachrony_order_scanner.py"),
@@ -1949,7 +1939,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "anachrony_order_scanner",
                      "ANACHRONY_ORDER_THIN", "结构")),
-                # [2026-06-20 R9 W5 Batch-K·L39 Genette frequency 三态] iterative/singulative/
+                # [L39 Genette frequency 三态] iterative/singulative/
                 # repetitive · xianxia/cultivation/training_arc/slice_of_life 题材尤需 montage
                 # · 作者档 frequency_baseline 第一权威 · advisory · 默认 shadow
                 ("narrative_frequency",
@@ -1959,7 +1949,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "narrative_frequency_scanner",
                      "NARRATIVE_FREQUENCY_FLAT", "结构")),
-                # [2026-06-20 R9 W5 Batch-K·Burrows-Δ/Craig-Zeta 字符 3-gram bootstrap]
+                # [Burrows-Δ/Craig-Zeta 字符 3-gram bootstrap]
                 # 跨角色 idiolect Gini · 与 R3/R4 同角色跨场景 voice drift 正交 · 群像题材重要
                 # · 作者档 character_voice_gini_baseline 第一权威 · advisory · 默认 shadow
                 ("character_distinctiveness",
@@ -1969,7 +1959,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "character_distinctiveness_scanner",
                      "INTER_CHARACTER_VOICE_COLLAPSE", "风格")),
-                # [2026-06-20 R9 W5 Batch-K·Aristotle deus ex machina + Narrative Debt 对偶]
+                # [Aristotle deus ex machina + Narrative Debt 对偶]
                 # finale cluster 触发(manifest is_volume_finale)·present-payoff→past-anchors 方向
                 # · 与 R7 Narrative Debt Ledger 完全正交 · advisory · 默认 shadow
                 ("deus_ex_solution_audit",
@@ -1980,7 +1970,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "deus_ex_solution_audit",
                      "DEUS_EX_SOLUTION", "剧情")),
-                # [2026-06-20 R9 W5 Batch-L·L38 Greimas 6 actant] 角色功能漂移
+                # [L38 Greimas 6 actant] 角色功能漂移
                 # (helper↔opponent 无 pivot / 关键位空缺 / 单角色过载)·读 manifest
                 # cluster_actant_state + 历史 ledger.json·advisory · 默认 shadow
                 ("actant_drift",
@@ -1990,7 +1980,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "actant_drift_scanner", "ACTANT_DRIFT_NO_PIVOT", "结构")),
-                # [2026-06-20 R9 W5 Batch-L·L39 Bremond outcome 节奏] 三段式四态分布
+                # [L39 Bremond outcome 节奏] 三段式四态分布
                 # · 同型 streak / over_success / over_failure · 跨 cluster aggregator
                 # · 作者档 outcome_signature.allow_no_setback 豁免 · advisory · 默认 shadow
                 ("bremond_cadence",
@@ -2000,7 +1990,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "bremond_cadence_scanner",
                      "BREMOND_CADENCE_MONOTONE", "结构")),
-                # [2026-06-20 R9 W5 Batch-L·L40 Truby cast economy] 配角经济
+                # [L40 Truby cast economy] 配角经济
                 # (introduce_burst / composite_hint / role_split_implicit)·
                 # 群像题材(scheming_politics/heist_caper/espionage) budget override
                 # · advisory · 默认 shadow
@@ -2012,7 +2002,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "cast_economy_scanner",
                      "CAST_INTRODUCE_BURST", "结构")),
-                # [2026-06-20 R9 W5 Batch-L·L40 Genette narrating distance] time-of-telling
+                # [L40 Genette narrating distance] time-of-telling
                 # vs time-told 五分级(concurrent/recent/distant/posthumous/atemporal)
                 # · R7 firstperson_retro 是其 distant 子集 · advisory · 默认 shadow
                 ("narrating_distance",
@@ -2023,7 +2013,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "narrating_distance_scanner",
                      "DISTANCE_FLATTENED", "风格")),
-                # [2026-06-20 R9 W5 Batch-L·L38 Phelan 三轴伦理] Told/Telling/Reading
+                # [L38 Phelan 三轴伦理] Told/Telling/Reading
                 # 三轴 implied_author_ethics_probe(asymmetric_screen / telling_intrusion /
                 # narratee_address) · 与 L25/L28 正交 · advisory · 默认 shadow
                 ("implied_author_ethics",
@@ -2034,7 +2024,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "implied_author_ethics_probe",
                      "IMPLIED_AUTHOR_SCREEN_ASYMMETRY", "结构")),
-                # [2026-06-20 R9 W5 Batch-L·L40 Plutchik+LLM congeniality bias] 8 类情感
+                # [L40 Plutchik+LLM congeniality bias] 8 类情感
                 # KL vs 作者 author_affective_signature(无→均匀兜底)·flag
                 # CONGENIALITY_SKEW(joy 膨胀 + anger/disgust 塌陷)·advisory · 默认 shadow
                 ("affective_signature",
@@ -2044,7 +2034,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "affective_signature_scanner",
                      "CONGENIALITY_SKEW", "风格")),
-                # [2026-06-20 R9 W5 Batch-M·L41 Booth narrator intrusion + Cohn psycho-narration]
+                # [L41 Booth narrator intrusion + Cohn psycho-narration]
                 # 全知点评/evaluative_summary 句式密度 · 三指标 (density/chapter-end share/intra-action)
                 # · 作者档 narrator_voice_signature.commentary_target_per_1k 第一权威·与 R8 L25
                 # metalepsis_budget 严格正交(L25 查 frame-breaking marker·L41 查 telling-weight 句式)
@@ -2056,7 +2046,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "narrator_commentary_scanner",
                      "NARRATOR_COMMENTARY_OVERUSE", "风格")),
-                # [2026-06-20 R9 W5 Batch-M·L38 Bakhtin Dialogic Imagination 1981 chronotope]
+                # [L38 Bakhtin Dialogic Imagination 1981 chronotope]
                 # 7 型时空体 (road/threshold/castle/salon/town/square/idyll + instance_dungeon)
                 # 场景分布 + cluster 级 distribution_entropy + monotony_streak (同型≥3 advisory)
                 # · 作者档 chronotope_signature.allowed_monotony 豁免独角戏室内剧·与 scene_seam /
@@ -2068,7 +2058,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "chronotope_typology_scanner",
                      "CHRONOTOPE_MONOTONY", "结构")),
-                # [2026-06-20 R9 W5 Batch-N P1·plot armor stakes erosion] 3-cluster 滚动窗口
+                # [plot armor stakes erosion] 3-cluster 滚动窗口
                 # 威胁三档(轻伤/重伤/濒死)vs 持久化代价(state_delta/factual/facts_locked)·
                 # stakes_credibility<0.2 且威胁≥3 触发·题材门控(轻喜剧/slice_of_life skip)
                 # · 作者档 plot_armor_profile.allow_high_armor 豁免 · advisory · 默认 shadow
@@ -2080,7 +2070,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "plot_armor_tracker",
                      "PLOT_ARMOR_INFLATION", "剧情")),
-                # [2026-06-20 R9 W5 Batch-N P1·red herring recall-at-reveal · R2 setup 对偶]
+                # [red herring recall-at-reveal·setup 对偶]
                 # 仅在 reveal/twist/climax_reveal beat 触发·读 _数据库/伏笔表.json red_herrings
                 # 在草稿正文检查是否被显式否决(±60 字内 NEGATION_MARKER)·dangling → advisory
                 # · 北极星② 作者未声明则 skip · advisory · 默认 shadow
@@ -2092,7 +2082,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "red_herring_recall_scanner",
                      "RED_HERRING_DANGLING", "剧情")),
-                # [2026-06-20 R9 W5 Batch-N P1·quotative/reporting-verb per-character 签名]
+                # [quotative/reporting-verb per-character 签名]
                 # 8 桶 60 词词典(lexicons/quotative_verbs.json) · author palette collapse(≤2 桶)
                 # + per-character cosine > 0.9 同质化 · 输出 quotative_bias top-3 供 voice_pack
                 # · 与 R8 L31 silence_marker 正交(那个查停顿沉默·本者查言说动作)·advisory · 默认 shadow
@@ -2103,7 +2093,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "quotative_signature_scanner",
                      "AUTHOR_QUOTATIVE_PALETTE_COLLAPSE", "风格")),
-                # [2026-06-20 R10 W6 Batch-O·L60 P0 STRONG·Sanderson 2025 + 凡人修仙传 9 阶
+                # [L60 STRONG·Sanderson 2025 + 凡人修仙传 9 阶
                 # + Andrew Rowe progression fantasy] 升级流 tier 单调性/突跳/停滞
                 # · 读 _数据库/角色弧线.json characters[<pid>].protagonist_power_tier
                 # · 用户偏好/genre(romance/mystery)skip·advisory · 默认 shadow
@@ -2114,7 +2104,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "power_progression_scanner",
                      "POWER_TIER_REGRESSION", "结构")),
-                # [2026-06-20 R10 W6 Batch-O·L60 P1·百度百科章回体 + ACL 2024 NLP4DH 对偶]
+                # [L60·百度百科章回体 + ACL 2024 NLP4DH 对偶]
                 # 回目 huimu 对仗·门控作者档 huimu_couplet/title_form==huimu_couplet
                 # · advisory · 默认 shadow
                 ("chapter_title_couplet",
@@ -2124,7 +2114,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "chapter_title_couplet_scanner",
                      "ZHANGHUI_HUIMU_PARALLELISM_BROKEN", "风格")),
-                # [2026-06-20 R10 W6 Batch-O·L60 P1·Literariness pinghua 楔子]
+                # [L60·Literariness pinghua 楔子]
                 # 楔子 kernel symbol 末卷召回 · 门控 huaben_zhanghui_pastiche · advisory · 默认 shadow
                 ("xiezi_kernel_recall",
                  [child_python(), str(_SCRIPT_DIR / "xiezi_kernel_recall_scanner.py"),
@@ -2134,7 +2124,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "xiezi_kernel_recall_scanner",
                      "XIEZI_KERNEL_NOT_RECALLED", "结构")),
-                # [2026-06-20 R10 W6 Batch-O·L60 P1·Cohn Transparent Minds] Cohn 意识表征四模式
+                # [L60·Cohn Transparent Minds] Cohn 意识表征四模式
                 # · 作者档 cohn_mode_signature 第一权威 · 2σ 偏离 advisory · 默认 shadow
                 ("cohn_consciousness_mode",
                  [child_python(), str(_SCRIPT_DIR / "cohn_consciousness_mode_scanner.py"),
@@ -2143,7 +2133,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "cohn_consciousness_mode_scanner",
                      "COHN_MODE_DRIFT", "风格")),
-                # [2026-06-20 R10 W6 Batch-O·L61 P1·arXiv 2312.00100 中文 parallelism]
+                # [L61·arXiv 2312.00100 中文 parallelism]
                 # 排比/反复密度 · 四子 metric(anaphora/epistrophe/parallel_clause/polysyndeton)
                 # · 作者档 author_rhetoric_parallel_signature 基线 · advisory · 默认 shadow
                 ("rhetoric_parallel",
@@ -2153,7 +2143,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "rhetoric_parallel_scanner",
                      "RHETORIC_PARALLEL_GAP", "风格")),
-                # [2026-06-20 R10 W6 Batch-O·L59 P1·TVTropes RotatingArcs + 吞噬星空 + Sanderson]
+                # [L59·TVTropes RotatingArcs + 吞噬星空 + Sanderson]
                 # 反派轮替节奏(长篇 1000+)· 读 _数据库/反派轮替.json append-only ledger
                 # · 四 advisory(空窗/tier 不升/motive 同类/power 同类)· 默认 shadow
                 ("antagonist_rotation",
@@ -2163,7 +2153,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "antagonist_rotation_scanner",
                      "ANTAGONIST_ROTATION_VOID", "剧情")),
-                # [2026-06-20 R10 W6 Batch-O·L49 P1·Litreactor Chorus + 弹幕 + 朝臣议论]
+                # [L49·Litreactor Chorus + 弹幕 + 朝臣议论]
                 # 群口段/弹幕式集体反应块 · 复数集合名词说话人 + 匿名引号串 ≥3 句聚簇
                 # · 作者档 author_mass_reactor_baseline.density_target 校准 · 默认 shadow
                 ("mass_reactor",
@@ -2173,7 +2163,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "mass_reactor_scanner",
                      "MASS_REACTOR_DENSITY_DRIFT", "风格")),
-                # [2026-06-20 R10 W6 Batch-O·L58 P1·Atlantis Press ICOLLITE + ANLP 2024]
+                # [L58·Atlantis Press ICOLLITE + ANLP 2024]
                 # 拟声/拟态/拟情 mimetic 三类密度+形态分布
                 # · genre 门控{anime_isekai/xianxia_battle/fantasy_combat/litrpg/xianxia/xuanhuan}
                 # · 默认 shadow
@@ -2184,7 +2174,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "onomatopoeia_density_scanner",
                      "MIMETIC_DENSITY_DRIFT", "风格")),
-                # [2026-06-20 R10 W6 Batch-O·L59 P1·World Anvil LitRPG Storyteller's Guide]
+                # [L59·World Anvil LitRPG Storyteller's Guide]
                 # LitRPG 状态框/系统提示密度甜区 · genre 门控
                 # {litrpg/system_isekai/game_anime/horror_game/rule_anomaly}
                 # · 作者档 0 反向 advisory · 默认 shadow
@@ -2195,7 +2185,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "status_block_density_scanner",
                      "STATUS_BLOCK_DENSITY_DRIFT", "风格")),
-                # [2026-06-20 R10 W6 Batch-O·L58 P1·Oxford ORA + arXiv 2001.01863 + Dale-Chall]
+                # [L58·Oxford ORA + arXiv 2001.01863 + Dale-Chall]
                 # 童声 concrete_noun_ratio + 词性指纹 · 门控 pov_age<18 / genre∈{campus/childhood}
                 # · 默认 shadow
                 ("prose_child_voice",
@@ -2206,7 +2196,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_child_voice_scanner",
                      "CHILD_VOICE_REGISTER_DRIFT", "风格")),
-                # [2026-06-20 R11 W6 Batch-P·P0 STRONG·NeurIPS 2025 LLM Lifecycle Workshop
+                # [STRONG·NeurIPS 2025 LLM Lifecycle Workshop
                 # arXiv 2510.18932 + EMNLP 2022 arXiv 2211.00676] 关系签名图 + LLM 抱团正向
                 # bias 哨兵·作者档 signed_graph_baseline z-band·advisory·默认 shadow
                 ("signed_relation_graph",
@@ -2216,7 +2206,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "signed_relation_graph_scanner",
                      "SIGNED_GRAPH_OVERLY_COZY", "剧情")),
-                # [2026-06-20 R11 W6 Batch-P·P0 STRONG·Microsoft Research arXiv 2603.05890
+                # [STRONG·Microsoft Research arXiv 2603.05890
                 # ConStory-Bench 2026-03] 一致性错误三联分诊带·熵代理+中段窗口+共现 hotspot
                 # · 严禁升 hard_gate 或累加扣分(单条聚合)·advisory·默认 shadow
                 ("consistency_error_triage_band",
@@ -2226,7 +2216,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "consistency_error_triage_band",
                      "CONSISTENCY_HOTSPOT_COOCCURRENCE", "结构")),
-                # [2026-06-20 R11 W6 Batch-P·P1 MODEST·EMNLP 2025 arXiv 2507.12260 T-index
+                # [MODEST·EMNLP 2025 arXiv 2507.12260 T-index
                 # + NAACL-W 2018 arXiv 1804.08756 + 余光中《论的的不休》] 译文味 4 桶 advisory
                 # · de_stack_depth / bei_passive / pre_modifier_long / name_overrepetition
                 # · 4 桶 z-score vs 作者档 translationese_baseline·shadow
@@ -2237,7 +2227,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "translationese_residual_scanner",
                      "TRANSLATIONESE_RESIDUAL", "风格")),
-                # [2026-06-20 R11 W6 Batch-P·P1 MODEST·题材主副 pack 标记密度比漂移]
+                # [MODEST·题材主副 pack 标记密度比漂移]
                 # marker_lexicon.json 17 pack seed·fusion_declaration 主副比·三 advisory
                 # GENRE_DOMINANCE_INVERSION / GENRE_PRIMARY_STARVED / GENRE_BLEND_FLAT
                 # · shadow
@@ -2248,7 +2238,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "genre_dominance_scanner",
                      "GENRE_DOMINANCE_INVERSION", "风格")),
-                # [2026-06-20 R11 W6 Batch-P·P1 MODEST 占位·Scribble Hub primary/subordinate
+                # [MODEST 占位·Scribble Hub primary/subordinate
                 # + Countercraft Age of Genre Bending] pack 间 trope clash registry 两端峰值
                 # · trope_clash_registry.json 10 seed pair·load_clash_registry 注入 manifest
                 # · advisory CLASH_UNRESOLVED·shadow
@@ -2259,7 +2249,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "genre_pack_clash_scanner",
                      "CLASH_UNRESOLVED", "风格")),
-                # [2026-06-20 R11 W6 Batch-P·P1 MODEST·EMNLP 2025 Stanford/UCSD Chengyu-Bench
+                # [MODEST·EMNLP 2025 Stanford/UCSD Chengyu-Bench
                 # arXiv 2506.18105 + arXiv 2510.27045 + Thomas 1986 6 类] 三槽典故密度 +
                 # 三读者承重测试·core/data/allusion_seed_zh.json seed·LOAD_BEARING_ALLUSION_NO_GLOSS
                 # · shadow
@@ -2270,7 +2260,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "allusion_ledger_scanner",
                      "LOAD_BEARING_ALLUSION_NO_GLOSS", "风格")),
-                # [2026-06-20 R11 W6 Batch-P·P2 MODEST·Sebald + Kramer + 报告文学] 文档单元插入
+                # [MODEST·Sebald + Kramer + 报告文学] 文档单元插入
                 # · 题材门控(reportage/documentary/literary_journalism/historical_nonfiction_novel
                 # /nonfiction_documentary_lit)·shadow
                 ("paratext_interpolation",
@@ -2280,7 +2270,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "paratext_interpolation_scanner",
                      "PARATEXT_INTERPOLATION_THIN", "风格")),
-                # [2026-06-20 R11 W6 Batch-P·P2 MODEST·Kramer/Wolfe] 信息源 5 桶出处分布
+                # [MODEST·Kramer/Wolfe] 信息源 5 桶出处分布
                 # · direct/paraphrase/archived/reconstructed/inferred·题材门控同 paratext
                 # · 与 R9 quotative 8 桶(词法)正交·shadow
                 ("attribution_mode",
@@ -2290,7 +2280,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "attribution_mode_scanner",
                      "ATTRIBUTION_MODE_MONOTONE", "风格")),
-                # [2026-06-20 R11 W6 Batch-P·P2 MODEST·Quéré&Matias 2025 Nature Sci Rep] 章节
+                # [MODEST·Quéré&Matias 2025 Nature Sci Rep] 章节
                 # 标题具象度曲线带·作者档 chapter_title_profile.concreteness_ecdf 第一权威
                 # · 作者档未规定该维则静默·shadow
                 ("chapter_title_concreteness",
@@ -2300,7 +2290,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "chapter_title_concreteness_scanner",
                      "TITLE_CONCRETENESS_DRIFT", "风格")),
-                # [2026-06-20 R12 W6 Batch-Q·P2·CFPG arxiv 2601.07033 + Farland reread test]
+                # [CFPG arxiv 2601.07033 + Farland reread test]
                 # 隐显伏笔 delivery_mode 占比 advisory·作者档 author_covert_ratio_baseline
                 # 第一权威·无作者档兜底 [0.40, 0.70]·advisory·默认 shadow
                 ("covert_foreshadowing",
@@ -2310,7 +2300,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "covert_foreshadowing_audit",
                      "COVERT_FORESHADOWING_THIN", "伏笔")),
-                # [2026-06-20 R12 W6 Batch-Q·P2·ConStory-Bench arxiv 2603.05890]
+                # [ConStory-Bench arxiv 2603.05890]
                 # 能力/技艺首现无 acquisition 锚点·capability_ledger.json 驱动·
                 # inherent=true 自动豁免·advisory·默认 shadow
                 ("capability_emergence",
@@ -2320,7 +2310,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "capability_emergence_audit",
                      "CAPABILITY_EMERGENCE_UNGROUNDED", "剧情")),
-                # [2026-06-20 R12 W6 Batch-Q·P2·Reeve WordNet + MWA chiaroscuro]
+                # [Reeve WordNet + MWA chiaroscuro]
                 # 光暗意象比·core/data/luminance_lexicon_cn.json (光/暗各 40+ 词)
                 # 作者档 luminance_signature.ratio_p50 第一权威·advisory·默认 shadow
                 ("chiaroscuro",
@@ -2329,7 +2319,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_violations_scanner(
                      out, "chiaroscuro_scanner", "OVER_BRIGHT", "风格")),
-                # [2026-06-20 R12 W6 Batch-Q·P2·Hsu 2022 salience-contrast +
+                # [Hsu 2022 salience-contrast +
                 # Lost in Pronunciation arxiv 2507.07640] 谐音双关 salience-contrast
                 # 占位·4 字滑窗 + ±150 字 context noun 支撑·genre-conditioned ECDF
                 # (xianxia/comedy/urban_supernatural 兜底·硬科幻 skip)·advisory·默认 shadow
@@ -2340,7 +2330,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_homophonic_pun_scanner",
                      "HOMOPHONIC_PUN_THIN", "风格")),
-                # [2026-06-20 R12 W6 Batch-Q·P2·Brill Chinese Character Manipulation +
+                # [Brill Chinese Character Manipulation +
                 # kfcd/chaizi + Kelly 金瓶梅 chaizi] 拆字/字谜 glyphic-decomposition
                 # 6 模板 + 占位字典 + 5 功能桶(prophecy/name_pun/secret_msg/divination/joke)
                 # genre-gated(玄幻/仙侠/历史/古风/谍战)·advisory·默认 shadow
@@ -2351,13 +2341,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_chaizi_ledger",
                      "CHAIZI_DENSITY_THIN", "风格")),
-                # [2026-06-20 R13 W6 Batch-R·P1 STRONG·Kopytoff 1986 物件文化传记 + Bill Brown 2003 +
+                # [STRONG·Kopytoff 1986 物件文化传记 + Bill Brown 2003 +
                 # Penn Museum object biography 指南 + Heritage Studies 2023] 物件生命传记相位账本·
                 # 8 相位标签(acquired/in_use/transformed/damaged/lost/recovered/discarded/reentered)·
                 # named_objects 门槛(物件登记表 plot_critical=true 或 mentions>=2)·缺登记表则草稿候选·
                 # 4 信号(phase_skip_rate/phase_dwell_imbalance/phase_silence_gap/terminal_phase_consistency)·
-                # snapshot 写盘供 cluster_emergence_engine 下卷读·与 R8 motif/R10 power_progression/R6
-                # anachronism/R11 signed_relation 全部正交·advisory·默认 shadow·绝不 hard_gate
+                # snapshot 写盘供 cluster_emergence_engine 下卷读·与 motif/power_progression/
+                # anachronism/signed_relation 全部正交·advisory·默认 shadow·绝不 hard_gate
                 ("object_biography",
                  [child_python(), str(_SCRIPT_DIR / "object_biography_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
@@ -2365,11 +2355,11 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "object_biography_scanner",
                      "OBJECT_BIOGRAPHY_THIN", "剧情")),
-                # [2026-06-20 R13 W6 Batch-R·P1 STRONG·首次落地·Li 2014 Studies in Language 38:1 +
+                # [STRONG·首次落地·Li 2014 Studies in Language 38:1 +
                 # Xiao&McEnery 2004 Benjamins corpus + perfective paradox-guo + Zai/Zhe 构式语法]
                 # 中文体貌前景-背景密度·4 信号(bare_le_unbounded_streak/background_marker_ratio/
                 # prospective_overuse/guo_experiential_misuse)·作者档 aspect_baseline 第一权威·
-                # 无作者档兜底 band·与 R7 prose_rhythm/R8 duration_mix/R9 anachrony_order/R12
+                # 无作者档兜底 band·与 prose_rhythm/duration_mix/anachrony_order/
                 # narrative_frequency 严格正交·advisory·默认 shadow·绝不 hard_gate
                 ("aspect_grounding",
                  [child_python(), str(_SCRIPT_DIR / "aspect_grounding_scanner.py"),
@@ -2378,7 +2368,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "aspect_grounding_scanner",
                      "ASPECT_GROUNDING_THIN", "风格")),
-                # [2026-06-21 R18 W7 Batch-S·P0·arxiv 2605.26322 OmniToM 2026-05-25
+                # [arxiv 2605.26322 OmniToM 2026-05-25
                 # + arxiv 2506.13641 EvolvTrip + arxiv 2601.12410 LLM-vs-Chimps] 角色信念
                 # 账本(OmniToM 7 维)·按 storyboard 维护 belief_state[character]·末轮回查
                 # 越权知识(character + KNOWLEDGE_VERB + fact_ref 在该 char belief 之外)·
@@ -2391,7 +2381,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "character_belief_ledger_scanner",
                      "CHARACTER_KNOWLEDGE_LEAK", "结构")),
-                # [2026-06-21 R18 W7 Batch-S·P0·tomenovel cliffhanger-economy + 知乎 681376328 +
+                # [tomenovel cliffhanger-economy + 知乎 681376328 +
                 # 橙瓜 + Qidian-Webnovel Corpus 2.79M] 入V过墙双峰钩(stake 递增 + mega-reveal 末段)·
                 # 读 用户偏好.json workflow_preferences.paywall_transition_cluster_id 门控
                 # (用户/编辑手填·绝不自动推断)·non-paywall 跳过·advisory·默认 shadow
@@ -2403,10 +2393,10 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "paywall_transition_gradient_scanner",
                      "BRIDGE_PAYWALL_HOOK_GRADIENT_OFF", "剧情")),
-                # [2026-06-21 R18 W7 Batch-S·P0·Liang 2024 Science Advances PubMed 5.2B token
+                # [Liang 2024 Science Advances PubMed 5.2B token
                 # + arxiv 2412.11400 ChineseLLM excess vocab + 番茄AI识别公开规范] LLM 训练偏置
                 # 词 type 级 z-test·占位 llm_chinese_corpus_freq + human_webnovel_corpus_freq·
-                # z(LLM)>+2 且 z'(text)>+1 且 z(author)<+1σ → hit·与 R12 metaphor anti-AI
+                # z(LLM)>+2 且 z'(text)>+1 且 z(author)<+1σ → hit·与 metaphor anti-AI
                 # (anti-pattern 句法层)正交·advisory·默认 shadow
                 ("excess_vocab_corpus_zscan",
                  [child_python(), str(_SCRIPT_DIR / "excess_vocab_corpus_zscan.py"),
@@ -2415,11 +2405,11 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "excess_vocab_corpus_zscan",
                      "EXCESS_VOCAB_SIGNATURE_HIT", "风格")),
-                # [2026-06-21 R18 W7 Batch-S·P0·Zwaan 1998 event-indexing +
+                # [Zwaan 1998 event-indexing +
                 # arxiv 2506.* situation model 2026 + Cognitive Load Sweller 2024]
                 # 5 维 situation model 跟踪(time/space/causation/intentionality/protagonist)·
                 # 场景间任一维突变无 marker → dropout·作者档 dim_dropout_tolerance 可旁路·
-                # R7-R13 共 101 条全 craft-output 层·首次切到读者认知层·advisory·默认 shadow
+                # 首次切到读者认知层·advisory·默认 shadow
                 ("situation_model_5dim",
                  [child_python(), str(_SCRIPT_DIR / "situation_model_5dim_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
@@ -2427,11 +2417,11 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "situation_model_5dim_scanner",
                      "SITUATION_MODEL_DIM_DROPOUT", "结构")),
-                # [2026-06-21 R18 W7 Batch-U·P2·filmustage vertical-drama-script +
+                # [filmustage vertical-drama-script +
                 # finaldraft verticals-micro-dramas + medium real-reel china-vertical-drama-2026]
                 # 短剧竖屏相邻集双侧握手桥·激活门控 genre_tags=short_drama_vertical·
-                # resolve_latency_ratio + new_hook_position_ratio·与 R7 hook_strength 11 型(单边)
-                # + R8 frame_tale 正交·advisory·默认 shadow
+                # resolve_latency_ratio + new_hook_position_ratio·与 hook_strength 11 型(单边)
+                # + frame_tale 正交·advisory·默认 shadow
                 ("episode_bilateral_bridge",
                  [child_python(), str(_SCRIPT_DIR / "episode_bilateral_bridge_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
@@ -2439,7 +2429,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "episode_bilateral_bridge_scanner",
                      "BRIDGE_RESOLVE_TOO_LATE", "结构")),
-                # [2026-06-21 R18 W7 Batch-U·P2·Qidian-Webnovel Corpus 2.79M 评论 +
+                # [Qidian-Webnovel Corpus 2.79M 评论 +
                 # Loewenstein Information Gap 1994 + Groningen Qidian-110]
                 # 段落热度·5 Loewenstein gap 特征·仅通章 cold flat 报·
                 # 与 cross_cluster_engagement_metrics + hook_strength 正交·advisory·默认 shadow
@@ -2450,9 +2440,9 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "paragraph_engagement_heat_predictor",
                      "PARAGRAPH_ENGAGEMENT_FLATLINE", "结构")),
-                # [2026-06-21 R18 W7 Batch-U·P2·Cowan 2001/2024 magical number 4±1
+                # [Cowan 2001/2024 magical number 4±1
                 # + Miller 7±2] 单场景活跃角色数·>5 报 COGNITIVE_OVERLOAD·从角色池.json
-                # 读 emerged/main names·作者档 wm_load_tolerance 可旁路群像·与 R9 cast_economy
+                # 读 emerged/main names·作者档 wm_load_tolerance 可旁路群像·与 cast_economy
                 # (introduce_burst) 正交·advisory·默认 shadow
                 ("active_character_wm_load",
                  [child_python(), str(_SCRIPT_DIR / "active_character_wm_load_scanner.py"),
@@ -2461,7 +2451,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "active_character_wm_load_scanner",
                      "COGNITIVE_OVERLOAD", "人物")),
-                # [2026-06-21 R18 W7 Batch-U·P2·arxiv 2510.09116 DITING 2025-10
+                # [arxiv 2510.09116 DITING 2025-10
                 # + PMC8581763 Frontiers 2021 实证 91.3% + ACL 2022 GuoFeng] 中文
                 # pro-drop 零代词残留·三指标(zero_subject/same_sentence_zp/dialogue_gap)·
                 # 作者档 zp_baseline z-band 第一权威·兜底地板 same_sentence_zp≥0.60·
@@ -2473,10 +2463,10 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "zero_pronoun_density_scanner",
                      "ZP_DENSITY_OFF_AUTHOR_BAND", "风格")),
-                # [2026-06-21 R18 W7 Batch-U·P2·Liang 2024 Science Advances Zipf
+                # [Liang 2024 Science Advances Zipf
                 # + Pangram 2025 detector + arxiv 2025-2026 Zipf LLM detection]
                 # 词频 log-log α 斜率·人类 α≈1.0 重尾·LLM 偏高瘦尾·作者档 zipf_baseline z-band·
-                # 兜底地板 α>1.4 报 ZIPF_ALPHA_DRIFT·与 R18 excess_vocab(type 级)正交(本=分布形状)·
+                # 兜底地板 α>1.4 报 ZIPF_ALPHA_DRIFT·与 excess_vocab(type 级)正交(本=分布形状)·
                 # advisory·默认 shadow
                 ("zipf_alpha",
                  [child_python(), str(_SCRIPT_DIR / "zipf_alpha_scanner.py"),
@@ -2485,7 +2475,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "zipf_alpha_scanner",
                      "ZIPF_ALPHA_DRIFT", "风格")),
-                # [2026-06-21 R19 W8 Batch-V·P0·PNAS 2025 Reinhart LLM 4 语法过用]
+                # [PNAS 2025 Reinhart LLM 4 语法过用]
                 # 4 子探针 present participial / nominalization / 嵌套 X的Y / 串联并列堆栈·
                 # 作者档 llm_grammar_overuse_baseline z-band 第一权威·与 anti_slop/semantic_slop
                 # (词项) + syntactic_diversity (POS n-gram) 严格正交·advisory·默认 shadow
@@ -2496,7 +2486,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "llm_grammar_overuse_scanner",
                      "LLM_GRAMMAR_PARTICIPIAL_OVERUSE", "风格")),
-                # [2026-06-21 R19 W8 Batch-V·P0·凡人修仙传仙界篇 / Cradle]
+                # [凡人修仙传仙界篇 / Cradle]
                 # 跨书系列文顶阶角色稀缺性塌缩·读 series_rank_ledger.json·top-rank 密度比 +
                 # leapfrog 战斗·与单本 capability_emergence 严格正交·advisory·默认 shadow·
                 # 无 ledger skip
@@ -2507,7 +2497,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "cross_book_rank_scarcity_scanner",
                      "CROSS_BOOK_RANK_INFLATION", "剧情")),
-                # [2026-06-21 R19 W8 Batch-V·P0·affect dynamics + arxiv 2503.23547]
+                # [affect dynamics + arxiv 2503.23547]
                 # 3D VAD × 6 UED = 18 指标 per-character·占位词典 + 引语切片复用 角色池.json·
                 # 作者档 vad_ued_signature.per_character 第一权威·与 affective/sentiment_arc/
                 # ousiometric/emotion_curve 严格正交·advisory·默认 shadow
@@ -2518,7 +2508,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "character_vad_ued_scanner",
                      "VAD_UED_DRIFT", "人物")),
-                # [2026-06-21 R19 W8 Batch-X·P1·Sanderson Laws + Cradle 跨书系列文不变量]
+                # [Sanderson Laws + Cradle 跨书系列文不变量]
                 # 读 workspace/styles/<series>/magic_invariants.json·占位 NLI 启发式·
                 # CROSS_BOOK_INVARIANT_BREACH advisory·绝不 hard_gate·无 ledger skip·
                 # 与 locked_fact_cross_scene/future_knowledge_leak/motif_recurrence 严格正交
@@ -2529,7 +2519,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "cross_book_invariant_scanner",
                      "CROSS_BOOK_INVARIANT_BREACH", "剧情")),
-                # [2026-06-21 R19 W8 Batch-X·P1·Vishnubhotla 旁白对话 VAD 0.06-0.09 baseline]
+                # [Vishnubhotla 旁白对话 VAD 0.06-0.09 baseline]
                 # 复用 _QUOTE_PAT 切两通道·Pearson per V/A/D·|r|>0.50 → NARR_DIAL_VAD_OVERCOUPLED
                 # 作者档 dial_narr_vad_target_corr 第一权威·与 character_vad_ued/affective 正交
                 ("narration_dialogue_vad",
@@ -2539,7 +2529,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "narration_dialogue_vad_coherence_scanner",
                      "NARR_DIAL_VAD_OVERCOUPLED", "风格")),
-                # [2026-06-21 R19 W8 Batch-X·P1·Hatfield emotional contagion + Gottman 4 阶段]
+                # [Hatfield emotional contagion + Gottman 4 阶段]
                 # 双人主导对话 lagged cross-correlation 同步窗 + 冲突场景 Gottman 级联·
                 # DIALOGUE_CONTAGION_ABNORMAL advisory·作者档 dialogue_contagion_signature 第一
                 # 权威·与 character_vad_ued/narration_dialogue_vad 严格正交·默认 shadow
@@ -2550,7 +2540,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "dialogue_emotion_contagion_scanner",
                      "DIALOGUE_CONTAGION_ABNORMAL", "对话")),
-                # [2026-06-21 R19 W8 Batch-X·P2·AdaMARP 多人对话编排]
+                # [AdaMARP 多人对话编排]
                 # 扫 _数据库/dialogue_turn_log.json 校验 turn 合规率·>30% 异常 →
                 # DIALOGUE_ORCHESTRATOR_DEGRADED advisory·env DIALOGUE_ORCHESTRATOR_MODE
                 # 默认 off(无 turn log 直接 skip)·与 hierarchical_planner/quotative 正交
@@ -2561,7 +2551,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "dialogue_scene_manager",
                      "DIALOGUE_ORCHESTRATOR_DEGRADED", "对话")),
-                # [2026-06-21 R20 W9 Batch-Z·P0·OSCToM K-order(K=2) belief nesting]
+                # [OSCToM K-order(K=2) belief nesting]
                 # 扩 R18 1-order belief_state → belief_about[a][b][topic]·K-2 嵌套
                 # 模式 <A>(以为|认为|觉得|猜) <B>(知道|不知道) <fact_ref> · 末轮
                 # K-order vs K-1 矛盾·outline-planner manifest.dramatic_irony_anchor
@@ -2576,16 +2566,15 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "cross_character_kth_order_belief_scanner",
                      "CHARACTER_KTH_ORDER_BELIEF_DRIFT", "人物")),
-                # [2026-06-21 R20 W9 Batch-Z·P0·NKW 时态可分 entity profile]
+                # [NKW 时态可分 entity profile]
                 # stable_identity SLOW_UPDATE 慢变身份维度 / dynamic_state FAST_UPDATE
                 # 快变状态维度·扫稿抽 <char>(的)?<attr>(是|为)<value>
                 # 断言·attr∈stable & 与 ledger value 不符 → CHARACTER_STATE_DRIFT_DETECTED·
                 # attr∈dynamic_state 白名单 = 合法剧情进展不报·提供
-                # filter_dynamic_state_changes() 给 R12 contradiction 二筛剔除·
-                # 与 R12 contradiction / locked_fact / character_belief_ledger 严格正交·
+                # filter_dynamic_state_changes() 给 contradiction 二筛剔除·
+                # 与 contradiction / locked_fact / character_belief_ledger 严格正交·
                 # advisory·默认 shadow·绝不 hard_gate·
-                # 🔴 2026-06-29 清假producer口径:per-project character_state_ledger.json 当前
-                # 无 producer(曾误称 distill-character/save-state step 12 填·实无此步)·恒走
+                # per-project character_state_ledger.json 当前无 producer 写入·恒走
                 # DEFAULT 通用白名单兜底(合法基线非降级)·此兜底下 stable_drift 恒 0·
                 # archivist character_state baseline 为 TODO
                 ("character_state_drift",
@@ -2595,7 +2584,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "character_state_drift_scanner",
                      "CHARACTER_STATE_DRIFT_DETECTED", "人物")),
-                # [2026-06-21 R20 W9 Batch-AA·P1·Gordon Lish MFA consecution doctrine]
+                # [Gordon Lish MFA consecution doctrine]
                 # 句间正向回扣链 3 探针(lexical_carryover + syntactic_template_repeat +
                 # phonic_carryover · phonic=placeholder pypinyin defer)·题材 gating
                 # 言情/严肃/古风 active · 爽文 silent·与 R7 prose_rhythm/R8 rhetoric_repetition/
@@ -2607,7 +2596,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "lish_consecution_chain_scanner",
                      "LISH_CONSECUTION_THIN", "风格")),
-                # [2026-06-21 R20 W9 Batch-AA·P1·Stephen Baxter《Art of Subtext》MFA staging]
+                # [Stephen Baxter《Art of Subtext》MFA staging]
                 # 身体/空间/道具微调度密度·4 桶 staging cue(body_cue/space_cue/prop_cue/posture_shift)·
                 # per-character staging_share + dialogue_tag_to_staging_ratio·gating dialogue_density>p50
                 # + active_chars≥2·与 group_dialogue_balance/physio_cue_diversity/
@@ -2619,7 +2608,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "baxter_staging_density_scanner",
                      "STAGING_THIN", "人物")),
-                # [2026-06-21 R20 W9 Batch-AA·P1·Biber 1988 MDA + Xiao 2009 中文映射]
+                # [Biber 1988 MDA + Xiao 2009 中文映射]
                 # 4 维(D1 涉入度/D2 叙事关切/D3 语境指称/D4 说服度)中文 marker 映射·
                 # per-cluster 4 维 z-score vs 作者档·|z|>1 报 BIBER_MDA_DRIFT_Dn·与
                 # function_word_fingerprint/syntactic_diversity/indirect_characterization
@@ -2631,7 +2620,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "biber_mda_scanner",
                      "BIBER_MDA_DRIFT_D1", "风格")),
-                # [2026-06-21 R20 W9 Batch-CC·P2·SEO id 12·章内 micro-cliffhanger 节奏]
+                # [SEO id 12·章内 micro-cliffhanger 节奏]
                 # 复用 hook_strength 11 型 regex 子集·章内 hook 相邻间距 z-band·与 hook_strength
                 # /cliffhanger_quota 严格正交(那俩看章末/拟切点/跨章配比·本者看章内间距分布)·
                 # advisory·默认 shadow·绝不 hard_gate
@@ -2642,7 +2631,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "mid_chapter_micro_cliffhanger_cadence_scanner",
                      "MID_CHAPTER_CLIFF_CADENCE_OFF_BAND", "节奏")),
-                # [2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 16·句级张力梯度 forecasting]
+                # [Q3-Q4 id 16·句级张力梯度 forecasting]
                 # 占位 char Shannon entropy 相邻 200 CJK 块差分·真版 SBERT 自相关 defer·
                 # 梯度 pstdev + flatline_ratio 双闸·与 narrative_rhythm(macro)/
                 # premature_resolution(标志词距离) 严格正交·advisory·默认 shadow·绝不 hard_gate
@@ -2653,7 +2642,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "forecasting_tension_scanner",
                      "FORECASTING_TENSION_FLAT", "节奏")),
-                # [2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 20·Paivio 1968 dual-coding]
+                # [Q3-Q4 id 20·Paivio 1968 dual-coding]
                 # 句级具象度词典 z-band·core/data/imageability_zh.json 60 高 + 60 低·
                 # imageability_index = (high-low)/(high+low) ∈ [-1,1]·与 repeat_noun_density/
                 # semantic_slop/scene_grounding 严格正交·advisory·默认 shadow·绝不 hard_gate
@@ -2664,7 +2653,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "imageability_scanner",
                      "IMAGEABILITY_OFF_BAND", "风格")),
-                # [2026-06-21 R20 W9 Batch-CC·P2·Q3-Q4 id 21·ACW Activity-Centric Writing]
+                # [Q3-Q4 id 21·ACW Activity-Centric Writing]
                 # 段中心活动漂移·HEAD_LEN=1 句首 CJK 主语 proxy 去重比·writer 端 ACW_DIRECTIVE
                 # 通过 build_manifest 在 ACW_MODE=active 时注入·与 narrative_short_sentence/
                 # paragraph_engagement_heat/prose_rhythm 严格正交·advisory·默认 shadow·绝不 hard_gate
@@ -2675,7 +2664,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "acw_drift_scanner",
                      "ACW_DRIFT_FROM_CENTER", "风格")),
-                # [2026-06-21 R22 W10 Batch-DD·P0 STRONG·陈望道《修辞学发凡》38 格四类]
+                # [STRONG·陈望道《修辞学发凡》38 格四类]
                 # 材料/意境/词语/章句四类分布 KL 散度 + 类塌缩 + 总密度·占位 8 词/格·_placeholder=true
                 # 与 zeugma/anadiplosis 单格深扫严格正交·与 semantic_slop/repeat_noun_density
                 # 严格正交·advisory·默认 shadow·绝不 hard_gate
@@ -2686,7 +2675,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "rhetorical_balance_scanner",
                      "RHETORICAL_BALANCE_DRIFT", "风格")),
-                # [2026-06-21 R21 W10 Batch-DD·R21-NB-01·Nijhof&Willems 2015 motor vs mentalizing]
+                # [R21-NB-01·Nijhof&Willems 2015 motor vs mentalizing]
                 # 动作词 vs 心智词 ratio·脑网络竞争代理 r=-0.48·场景级 ratio 偏离 ±0.20
                 # 通用兜底 0.35-0.65·与 interiority_mode_balance/duration_mix/narrating_distance
                 # 严格正交·advisory·默认 shadow·绝不 hard_gate
@@ -2697,7 +2686,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "action_mentalizing_balance_scanner",
                      "ACTION_MENTAL_RATIO_DRIFT", "节奏")),
-                # [2026-06-21 R21 W10 Batch-DD·R21-NB-02·Schoeller 2024 CABN aesthetic chills]
+                # [R21-NB-02·Schoeller 2024 CABN aesthetic chills]
                 # peak 双相架构 anticipation(200-500CJK 前向) + release(50-150CJK 后向)
                 # |valence|>0.7 top-3 peak·任缺一相 → CHILLS_ARCH_INCOMPLETE·与 hook_strength/
                 # premature_resolution/emotion_curve_rescan 严格正交·advisory·默认 shadow·绝不 hard_gate
@@ -2708,7 +2697,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "peak_chills_architecture_scanner",
                      "CHILLS_ARCH_INCOMPLETE", "节奏")),
-                # [2026-06-21 R21 W10 Batch-DD·R21-NB-03·Kaneshiro 2024 EJN ISC r=0.65]
+                # [R21-NB-03·Kaneshiro 2024 EJN ISC r=0.65]
                 # DMN integration ridge 密度·200CJK 滑窗·4 信号(回指 names/locked_fact/foreshadowing
                 # 回收/合流标志)·任窗≥3 命中=ridge·无 ridge→ABSENT·单 ridge<60%→TOO_EARLY
                 # cross-cluster 视野·与 cross_cluster_engagement_metrics/retention_proxy/
@@ -2720,7 +2709,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "integration_ridge_density_scanner",
                      "INTEGRATION_RIDGE_ABSENT", "剧情")),
-                # [2026-06-22 R24 W12 Batch-JJ·P0 STRONG·直播弹幕预测 9-class burst typology]
+                # [STRONG·直播弹幕预测 9-class burst typology]
                 # 9 类爆点(laughter/shock/grief/anticipation/shipping/awe/critique/callback/meta)
                 # 从 cluster brief.intended_burst_type 拿目标·扫尾部 80-200 CJK·缺面 advisory
                 # env BURST_TYPE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true
@@ -2732,7 +2721,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "cluster_burst_type_predictor",
                      "BURST_TYPE_NOT_DELIVERED", "节奏")),
-                # [2026-06-22 R24 W12 Batch-JJ·P1·Cialdini commitment+consistency K-12 教育叙事]
+                # [Cialdini commitment+consistency K-12 教育叙事]
                 # 首 200 CJK anomaly_seed+pledge·末 500 CJK reveal·三状态 advisory
                 # env MYSTERY_PLEDGE_MODE 默认 shadow·绝不 hard_gate
                 ("mystery_pledge_scanner",
@@ -2742,7 +2731,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "mystery_pledge_scanner",
                      "MYSTERY_PLEDGE_DANGLING", "剧情")),
-                # [2026-06-22 R24 W12 Batch-JJ·P1·Nathan-Koedinger expert blindspot 教育]
+                # [Nathan-Koedinger expert blindspot 教育]
                 # 术语首引登记·距上次具体锚定 gap·base 2000/复杂规则 800/POV 不计
                 # top-5 drift_unanchored·env EXPERT_BLINDSPOT_MODE 默认 shadow·绝不 hard_gate
                 ("expert_blindspot_scanner",
@@ -2752,7 +2741,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "expert_blindspot_scanner",
                      "EXPERT_BLINDSPOT_DRIFT", "风格")),
-                # [2026-06-22 R24 W12 Batch-JJ·P1·Glaser four levers 教育叙事 info-dump 救援]
+                # [Glaser four levers 教育叙事 info-dump 救援]
                 # 识别 info-dump 段·四杠杆 0/1·0/4 段 advisory 建议补最便宜
                 # env GLASER_LEVERS_MODE 默认 shadow·绝不 hard_gate
                 ("glaser_four_levers",
@@ -2762,7 +2751,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "glaser_four_levers",
                      "GLASER_LEVER_MISSING", "风格")),
-                # [2026-06-22 R24 W12 Batch-JJ·P1·anticipation signposting 直播弹幕预测]
+                # [anticipation signposting 直播弹幕预测]
                 # top-K(3) 爆点段向前回溯 2-3 段窗口·5 类 signpost·z-band·<-1σ advisory
                 # env SIGNPOST_MODE 默认 shadow·绝不 hard_gate
                 ("gaoneng_anticipation_signposting_scanner",
@@ -2772,7 +2761,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "gaoneng_anticipation_signposting_scanner",
                      "BURST_LEAD_SIGNPOST_LOW", "节奏")),
-                # [2026-06-22 R24 W12 Batch-KK·P1·跨语言情感坐标漂移]
+                # [跨语言情感坐标漂移]
                 # CVAW v2 vs NRC-VAD CN 双词典 Δv/Δa>0.15 → ANGLO_DRIFT；
                 # 文化特有词覆盖率<0.6× 基线 → UNDERUSE；
                 # clear/ambivalent 比例>1.8× 基线 → BINARY_POLARIZATION
@@ -2784,7 +2773,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "cn_emotion_vad_drift_scanner",
                      "CN_EMOTION_ANGLO_DRIFT", "风格")),
-                # [2026-06-22 R24 W12 Batch-KK·P1·writer intent agenda drift]
+                # [writer intent agenda drift]
                 # 4 维盲意图卡(want/antagonist/stake/tone-word) SHA-256 锁定 step 1
                 # step 6 草稿 char-Jaccard 比对·任一<0.62 → WRITER_INTENT_AGENDA_DRIFT
                 # env AGENDA_DRIFT_MODE 默认 shadow·绝不 hard_gate
@@ -2796,7 +2785,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "agenda_drift_scanner",
                      "WRITER_INTENT_AGENDA_DRIFT", "剧情")),
-                # [2026-06-22 R24 W12 Batch-KK·P1·author signature slot preservation]
+                # [author signature slot preservation]
                 # scene_storyboard.author_signature_slots[{slot_id,text,preserve_policy,anchor_hint}]
                 # verbatim(Lev≤5%) / near_verbatim_punct_only(剥标点等价)
                 # 失配 → AUTHOR_SIGNATURE_MISMATCH·缺失(verbatim) → NOT_PLACED minor
@@ -2809,10 +2798,11 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "author_signature_preservation",
                      "AUTHOR_SIGNATURE_MISMATCH", "风格")),
-                # ============ [G2 P2 2026-06-22] 17 SHADOW_SCANNERS 接齐(R18 Batch-T 3 + R22-R25 14) ============
-                # 解开「在线但 0 advisory」死代码·全 advisory shadow·hard_gate 12 码不变·绝不 hard_gate
-                # 北极星⑤顾问制·作者档第一权威·shadow 默认不上报(仅 scanner_status 痕迹证明在线)
-                # [R18 Batch-T·P0·Halliday parataxis 中文叙事铁律]
+                # ============ [G2 P2 2026-06-22] 17 SHADOW_SCANNERS 接齐 ============
+                # （上行方括号串是 tests/test_g2p2_lexicon_externalization.py 的区段提取锚点，禁改动）
+                # 全 advisory shadow·绝不 hard_gate·北极星⑤顾问制·作者档第一权威·
+                # shadow 默认不上报(仅 scanner_status 痕迹证明在线)
+                # [Halliday parataxis 中文叙事铁律]
                 ("paratactic_implicit_logic",
                  [child_python(), str(_SCRIPT_DIR / "paratactic_implicit_logic_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)] + _style_args,
@@ -2820,7 +2810,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "paratactic_implicit_logic_scanner",
                      "PARATAXIS_OFF_AUTHOR_BAND", "风格")),
-                # [R18 Batch-T·P0·间接刻画密度 + 情感钟摆]
+                # [间接刻画密度 + 情感钟摆]
                 ("indirect_characterization_ratio",
                  [child_python(), str(_SCRIPT_DIR / "indirect_characterization_ratio_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)] + _style_args,
@@ -2828,7 +2818,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "indirect_characterization_ratio_scanner",
                      "INDIRECT_CHARACTERIZATION_THIN", "人物")),
-                # [R18 Batch-T·P0·Centering Theory 焦点持续性]
+                # [Centering Theory 焦点持续性]
                 ("centering_theory_focus",
                  [child_python(), str(_SCRIPT_DIR / "centering_theory_focus_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)] + _style_args,
@@ -2836,7 +2826,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "centering_theory_focus_scanner",
                      "CENTERING_ROUGH_SHIFT_OVERLOAD", "节奏")),
-                # [R22 Batch-FF·P1·陈望道拈连格 zeugma]
+                # [陈望道拈连格 zeugma]
                 ("zeugma",
                  [child_python(), str(_SCRIPT_DIR / "zeugma_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
@@ -2844,7 +2834,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "zeugma_scanner",
                      "ZEUGMA_DETECTED", "风格")),
-                # [R22 Batch-FF·P1·陈望道顶真格 anadiplosis]
+                # [陈望道顶真格 anadiplosis]
                 ("anadiplosis",
                  [child_python(), str(_SCRIPT_DIR / "anadiplosis_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
@@ -2852,7 +2842,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "anadiplosis_scanner",
                      "ANADIPLOSIS_DETECTED", "风格")),
-                # [R22 Batch-FF·P1·Fauconnier&Turner CBT premise_blend_card]
+                # [Fauconnier&Turner CBT premise_blend_card]
                 ("premise_blend_card",
                  [child_python(), str(_SCRIPT_DIR / "premise_blend_card_scanner.py"),
                   str(cluster_draft), "--project", str(project_root),
@@ -2861,7 +2851,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "premise_blend_card_scanner",
                      "PREMISE_BLEND_CARD_MISSING", "剧情")),
-                # [R22 Batch-FF·P2·CBT 7 类 vital_relations 探针·占位词典 lexicon_placeholder=true]
+                # [CBT 7 类 vital_relations 探针·占位词典 lexicon_placeholder=true]
                 # vital_relations_probe 是 probe(无 violations/advisories)·_parse_advisories_scanner
                 # 兼容空字段·只占在线 scanner_status 痕迹·不产 issue(零回归保障)
                 ("vital_relations_probe",
@@ -2871,7 +2861,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_advisories_scanner(
                      out, "vital_relations_probe",
                      "VITAL_RELATIONS_DENSITY_TRACK", "风格")),
-                # [R25 Batch-MM·P1·Foucault Fearless Speech parrhesia·G2 P2 词典外部化]
+                # [Foucault Fearless Speech parrhesia·G2 词典外部化]
                 ("parrhesia_density",
                  [child_python(), str(_SCRIPT_DIR / "parrhesia_density_scanner.py"),
                   str(cluster_draft), "--project", str(project_root),
@@ -2880,7 +2870,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "parrhesia_density_scanner",
                      "PARRHESIA_DENSITY_THIN", "风格")),
-                # [R25 Batch-MM·P1·梵剧 Rasa 双层一致(dominant/transient)]
+                # [梵剧 Rasa 双层一致(dominant/transient)]
                 ("cluster_rasa_layer",
                  [child_python(), str(_SCRIPT_DIR / "cluster_rasa_layer_consistency_scanner.py"),
                   str(cluster_draft), "--project", str(project_root),
@@ -2889,7 +2879,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "cluster_rasa_layer_consistency_scanner",
                      "RASA_LAYER_DOMINANT_DRIFT", "风格")),
-                # [R25 Batch-MM·P1·梵剧 Rasa 因果链(vibhava→anubhava 完整性)]
+                # [梵剧 Rasa 因果链(vibhava→anubhava 完整性)]
                 ("rasa_causal_chain",
                  [child_python(), str(_SCRIPT_DIR / "rasa_causal_chain_scanner.py"),
                   str(cluster_draft), "--project", str(project_root),
@@ -2898,7 +2888,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "rasa_causal_chain_scanner",
                      "RASA_CAUSAL_BREAK_MISMATCH", "剧情")),
-                # [R25 Batch-MM·P1·Mawhorter Choice Poetics 5 维(走向卡 advisory)]
+                # [Mawhorter Choice Poetics 5 维(走向卡 advisory)]
                 # 走向卡 JSON 路径 = _数据库/.direction_card_advisory/<cluster_key>.json
                 # 文件不存在 → scanner 优雅"无候选卡·跳过"(无 violations 产)
                 ("direction_card_poetics",
@@ -2910,7 +2900,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "direction_card_poetics_scanner",
                      "DIRECTION_CARD_FRAMING_THIN", "剧情")),
-                # [R23 Batch-II·P2·Echo Draft 4-Pass 朗读 performance]
+                # [Echo Draft 4-Pass 朗读 performance]
                 ("audio_performance",
                  [child_python(), str(_SCRIPT_DIR / "audio_performance_scanner.py"),
                   str(cluster_draft), "--project", str(project_root)],
@@ -2918,7 +2908,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "audio_performance_scanner",
                      "AUDIO_PERF_TRI_CLAUSE_HEAVY", "风格")),
-                # [R23 Batch-II·P2·writer growth 词汇多样性 dashboard·cross-cluster·advisories[] 形态]
+                # [writer growth 词汇多样性 dashboard·cross-cluster·advisories[] 形态]
                 ("writer_growth_dashboard",
                  [child_python(), str(_SCRIPT_DIR / "writer_growth_dashboard.py"),
                   str(project_root)],
@@ -2926,7 +2916,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_advisories_scanner(
                      out, "writer_growth_dashboard",
                      "WRITER_GROWTH_VOCAB_DROP", "风格")),
-                # [R23 Batch-II·P2·反派情感重充电监控·cross-cluster·advisories[] 形态·G2 P2 词典外部化]
+                # [反派情感重充电监控·cross-cluster·advisories[] 形态·G2 词典外部化]
                 ("antagonist_valence_trajectory",
                  [child_python(), str(_SCRIPT_DIR / "antagonist_valence_trajectory.py"),
                   str(project_root)],
@@ -2934,7 +2924,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_advisories_scanner(
                      out, "antagonist_valence_trajectory",
                      "ANTAGONIST_VALENCE_DRIFT_UNAUTHORIZED", "人物")),
-                # [R24 Batch-LL·P2·微短剧节拍栅格(head/mid/tail 3-15-30s)]
+                # [微短剧节拍栅格(head/mid/tail 3-15-30s)]
                 ("microdrama_intraep_beat_lattice",
                  [child_python(), str(_SCRIPT_DIR / "microdrama_intraep_beat_lattice.py"),
                   str(cluster_draft), "--project", str(project_root)],
@@ -2942,7 +2932,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "microdrama_intraep_beat_lattice",
                      "MICRODRAMA_HEAD_3S_NO_ACTION", "节奏")),
-                # [R24 Batch-LL·P2·prose 180° 空间轴一致性]
+                # [prose 180° 空间轴一致性]
                 ("prose_180_axis",
                  [child_python(), str(_SCRIPT_DIR / "prose_180_axis_scanner.py"),
                   str(cluster_draft), "--project", str(project_root),
@@ -2951,7 +2941,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "prose_180_axis_scanner",
                      "PROSE_AXIS_FLIP", "剧情")),
-                # [R24 Batch-LL·P2·视觉具象往返(Paivio dual-coding round-trip)]
+                # [视觉具象往返(Paivio dual-coding round-trip)]
                 ("imageability_round_trip_probe",
                  [child_python(), str(_SCRIPT_DIR / "imageability_round_trip_probe.py"),
                   str(cluster_draft), "--project", str(project_root),
@@ -2960,9 +2950,9 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "imageability_round_trip_probe",
                      "IMAGEABILITY_ROUND_TRIP_LOW", "风格")),
-                # ============ [G2 P2 2026-06-22] 17 SHADOW_SCANNERS 接齐 END ============
-                # ============ [2026-06-29 NN 模型扩展] 5 个 NN-backed scanner ============
-                # [2026-06-29 NN②] 信息密度 surprisal · GPT-2 token-level 段间方差/断崖/单调/高潮失衡
+                # ============ 17 SHADOW_SCANNERS 接齐 END ============
+                # ============ NN 模型扩展：5 个 NN-backed scanner ============
+                # [NN②] 信息密度 surprisal · GPT-2 token-level 段间方差/断崖/单调/高潮失衡
                 # · RUOYU_NN_SURPRISAL 门控(默认 off·桥不可用返回空)·advisory·默认 shadow
                 ("surprisal",
                  [child_python(), str(_SCRIPT_DIR / "surprisal_scanner.py"),
@@ -2971,7 +2961,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_issues_list_scanner(
                      out, "surprisal_scanner", "风格"),
                  300),
-                # [2026-06-29 NN⑥] 主题漂移 · embedding cosine 距离 vs scope_summary
+                # [NN⑥] 主题漂移 · embedding cosine 距离 vs scope_summary
                 # · EMBED_BACKEND 非 hash 才激活·advisory·默认 shadow
                 ("topic_drift",
                  [child_python(), str(_SCRIPT_DIR / "topic_drift_scanner.py"),
@@ -2980,7 +2970,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_issues_list_scanner(
                      out, "topic_drift_scanner", "风格"),
                  300),
-                # [2026-06-29 NN③A] 情感弧线分类 · Reagan 六弧型 · 复用 VAD 或词典兜底
+                # [NN③A] 情感弧线分类 · Reagan 六弧型 · 复用 VAD 或词典兜底
                 # · RUOYU_NN_VAD 门控(VAD 桥不可用退词典)·advisory·默认 shadow
                 ("emotion_arc",
                  [child_python(), str(_SCRIPT_DIR / "emotion_arc_classifier.py"),
@@ -2989,7 +2979,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_issues_list_scanner(
                      out, "emotion_arc_classifier", "风格"),
                  300),
-                # [2026-06-29 NN①] 段落连贯性 · 相邻段对 BERT 二分类 + 滑窗
+                # [NN①] 段落连贯性 · 相邻段对 BERT 二分类 + 滑窗
                 # · RUOYU_NN_COHERENCE 门控(桥不可用返回空)·advisory·默认 shadow
                 ("coherence",
                  [child_python(), str(_SCRIPT_DIR / "coherence_scanner.py"),
@@ -2998,7 +2988,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_issues_list_scanner(
                      out, "coherence_scanner", "风格"),
                  300),
-                # [2026-06-29 NN⑤④] 角色一致性 · 角色网络+共指消解整合
+                # [NN⑤④] 角色一致性 · 角色网络+共指消解整合
                 # · CHARACTER_CONSISTENCY_MODE 门控(默认 shadow)·advisory
                 ("character_consistency",
                  [child_python(), str(_SCRIPT_DIR / "character_consistency_scanner.py"),
@@ -3007,7 +2997,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_issues_list_scanner(
                      out, "character_consistency_scanner", "角色"),
                  300),
-                # [2026-07-05 孤儿接线] 身份锚点漂移 · 人物卡 identity_anchors（发色/瞳色/疤痕）
+                # 身份锚点漂移 · 人物卡 identity_anchors（发色/瞳色/疤痕）
                 # 近旁叙述不得漂移（borrowed from moyin-creator 身份锚点·散文连续性版）
                 # · CHARACTER_IDENTITY_ANCHOR_MODE 默认 shadow · advisory
                 ("character_identity_anchor",
@@ -3017,7 +3007,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "character_identity_anchor_scanner",
                      "CHARACTER_IDENTITY_ANCHOR_DRIFT", "剧情")),
-                # [2026-07-05 休眠接线·R23 HH] frisson 战栗导入窗 · climax 前 1-2 段 vs climax
+                # frisson 战栗导入窗 · climax 前 1-2 段 vs climax
                 # 标点/独行率前置锐化（Salimpoor 2011）· FRISSON_LEAD_MODE 默认 shadow · advisory
                 # （CLI 只收 draft·无 --project）
                 ("frisson_lead_window",
@@ -3026,7 +3016,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_multi_code_violations_scanner(
                      out, "frisson_lead_window_scanner", "FRISSON_LEAD_FLAT", "节奏")),
-                # [2026-07-05 休眠接线·R20 BB] Butler 4 层 yearning（self/identity/place/connection）
+                # Butler 4 层 yearning（self/identity/place/connection）
                 # 缺位/单层垄断 · BUTLER_YEARNING_MODE 默认 shadow · advisory
                 ("butler_yearning_4layer",
                  [child_python(), str(_SCRIPT_DIR / "butler_yearning_4layer_scanner.py"),
@@ -3034,7 +3024,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_multi_code_violations_scanner(
                      out, "butler_yearning_4layer_scanner", "SCENE_YEARNING_ABSENT", "角色")),
-                # [2026-07-05 休眠接线·R22 EE] 失败段散文密度 ≥ 成功段（try-fail 代价感）
+                # 失败段散文密度 ≥ 成功段（try-fail 代价感）
                 # · FAILURE_SEGMENT_DENSITY_MODE 默认 shadow · advisory
                 ("failure_segment_prose_density",
                  [child_python(), str(_SCRIPT_DIR / "failure_segment_prose_density_scanner.py"),
@@ -3043,7 +3033,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "failure_segment_prose_density_scanner",
                      "FAILURE_SEGMENT_DENSITY_GAP", "风格")),
-                # [2026-07-05 休眠接线·R20 BB] Schafer 声景三分类（keynote/signal/soundmark）
+                # Schafer 声景三分类（keynote/signal/soundmark）
                 # 单声道/地标声缺位 · SOUNDSCAPE_TRINITY_MODE 默认 shadow · advisory
                 ("soundscape_trinity",
                  [child_python(), str(_SCRIPT_DIR / "soundscape_trinity_scanner.py"),
@@ -3051,7 +3041,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_multi_code_violations_scanner(
                      out, "soundscape_trinity_scanner", "SOUNDSCAPE_THIN", "风格")),
-                # [2026-07-05 休眠接线·R22 EE] 读者未被 show 的 fact 被角色当公知使用（反向越权）
+                # 读者未被 show 的 fact 被角色当公知使用（反向越权）
                 # · PREMATURE_READER_REVEAL_MODE 默认 shadow · advisory
                 ("premature_reader_reveal",
                  [child_python(), str(_SCRIPT_DIR / "premature_reader_reveal_scanner.py"),
@@ -3060,7 +3050,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "premature_reader_reveal_scanner",
                      "PREMATURE_READER_REVEAL", "剧情")),
-                # [2026-07-05 休眠接线·R22 EE] Cronon 首尾境况斜率 · 4 维 Σ|Δ|<3 = 扁平 cluster
+                # Cronon 首尾境况斜率 · 4 维 Σ|Δ|<3 = 扁平 cluster
                 # · TRAJECTORY_MORAL_SLOPE_MODE 默认 shadow · advisory
                 ("trajectory_moral_slope",
                  [child_python(), str(_SCRIPT_DIR / "trajectory_moral_slope_scanner.py"),
@@ -3070,7 +3060,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "trajectory_moral_slope_scanner",
                      "AMBIGUOUS_FLAT_TRAJECTORY", "剧情")),
-                # [2026-07-05 休眠接线·R22 EE] BPNSFS A/C/R 需求受挫 → 反应类目一致性
+                # BPNSFS A/C/R 需求受挫 → 反应类目一致性
                 # · ACR_FRUSTRATION_MODE 默认 shadow · advisory
                 ("acr_frustration_consistency",
                  [child_python(), str(_SCRIPT_DIR / "check_acr_frustration_consistency.py"),
@@ -3079,7 +3069,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "check_acr_frustration_consistency",
                      "ACR_FRUSTRATION_MISMATCH", "角色")),
-                # [2026-07-06 P1移植] 场景回执 · storyboard→草稿覆盖证据（borrowed from
+                # 场景回执 · storyboard→草稿覆盖证据（borrowed from
                 # LongWriter/AgentWrite plan-then-write 回执 + moyin-creator 场景校准 ·
                 # research/open_source_writing_systems.md）· SCENE_RECEIPTS_MODE 默认 shadow
                 # · advisory（freestyle 合并/改编场景是创作自由·北极星⑤·绝不 hard_gate）
@@ -3091,10 +3081,10 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "scene_receipts_scanner",
                      "SCENE_RECEIPT_COVERAGE_GAP", "剧情")),
-                # [2026-07-06 P2移植] cluster 草稿长度带体检（borrowed from LongWriter 长输出
-                # 长度评估 · research/open_source_writing_systems.md）· 纯 freestyle 后短稿/超长稿
-                # 风险由 step3 质检下游承接（expand 软下限已清除·此处补检测端缺口）·
-                # CLUSTER_LENGTH_BAND_MODE 默认 shadow · advisory（字数自然涌现是 v27 已定调·
+                # cluster 草稿长度带体检（borrowed from LongWriter 长输出
+                # 长度评估 · research/open_source_writing_systems.md）· 纯 freestyle 下短稿/超长稿
+                # 风险由本检测在 step3 质检端承接·
+                # CLUSTER_LENGTH_BAND_MODE 默认 shadow · advisory（字数自然涌现·
                 # 北极星⑤·绝不回流 writer/manifest·绝不 hard_gate）
                 ("cluster_length_band",
                  [child_python(), str(_SCRIPT_DIR / "cluster_length_band_scanner.py"),
@@ -3103,9 +3093,9 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_multi_code_violations_scanner(
                      out, "cluster_length_band_scanner",
                      "CLUSTER_LENGTH_UNDER_BAND", "节奏")),
-                # [2026-07-07 ConStory盲区①] 草稿内部时序倒错（无锁定数值锚的跨场景时间矛盾）·
+                # [ConStory盲区①] 草稿内部时序倒错（无锁定数值锚的跨场景时间矛盾）·
                 # 六重防误报（in_medias_res 整体豁免/闪回/锚点<3不判/引语掩蔽/时段词邻域闸/链 gap>3 重置）·
-                # DRAFT_TEMPORAL_ORDER_MODE 默认 active（金标准10作者100chunk零误报放量 2026-07-07）·
+                # DRAFT_TEMPORAL_ORDER_MODE 默认 active（金标准10作者100chunk零误报放量）·
                 # advisory（时序自由是叙事手法·绝不 hard_gate）
                 ("draft_temporal_order",
                  [child_python(), str(_SCRIPT_DIR / "draft_temporal_order_scanner.py"),
@@ -3115,10 +3105,10 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "draft_temporal_order_scanner",
                      "DRAFT_TEMPORAL_ORDER_REVERSED", "结构")),
-                # [2026-07-07 ConStory盲区②] 同场景内角色位置瞬移（无移动动词/切换标志的地点跳变）·
+                # [ConStory盲区②] 同场景内角色位置瞬移（无移动动词/切换标志的地点跳变）·
                 # 九重防误报（子空间/引号提及/传送词/候选<2不报/远观传闻意图明喻/同段多地点只更新绑定/
                 # 绑定就近≤50字/角色名重叠排除等）· SPATIAL_CONTINUITY_MODE 默认 active
-                # （金标准10作者100chunk三轮根治399→0误报放量 2026-07-07）·
+                # （金标准10作者100chunk零误报放量）·
                 # advisory（空间跳切可以是叙事省略·绝不 hard_gate）
                 ("spatial_continuity",
                  [child_python(), str(_SCRIPT_DIR / "spatial_continuity_scanner.py"),
@@ -3143,7 +3133,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                 print(f"[audit_hub] {_genre_error}", file=sys.stderr)
             elif _genre_task and _genre_task[0] not in {task[0] for task in tasks}:
                 tasks.append(_genre_task)
-            # 🔴 2026-06-27 C06：整段草稿扫剧本体 SCREENPLAY 标记（位置无关 hard_gate · step3 真阻断点）。
+            # 🔴 整段草稿扫剧本体 SCREENPLAY 标记（位置无关 hard_gate · step3 真阻断点）。
             # 此处草稿尚未切章 → chapter_end_anchor_scan（依赖 第NNN章 文件）跑不到，整段硬扫补上这个缺口。
             _screenplay_issues = _scan_cluster_draft_screenplay(cluster_draft)
             all_issues += _screenplay_issues
@@ -3162,10 +3152,10 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                 m = re.search(r"第(\d+)章", d.name)
                 if m and int(m.group(1)) < 9000:  # 排除虚拟 ch_9000
                     ch_nums.append(int(m.group(1)))
-            # 2026-05-29 复审修复 [M12]：cluster 模式下 chapter_end_anchor 只扫本 cluster
-            # 的 chapter_range，不再用 min~max 全工程章号（之前把别的 cluster 的章也扫进来 →
-            # 报告污染：把历史 cluster 的章末问题算到当前 cluster 头上）。
-            # 取不到本 cluster range（fluid v27 未回填）时回退全工程区间（保持原行为，零回归）。
+            # cluster 模式下 chapter_end_anchor 只扫本 cluster 的 chapter_range，不用 min~max
+            # 全工程章号——否则会把别的 cluster 的章也扫进来，报告污染：把历史 cluster 的章末
+            # 问题算到当前 cluster 头上。
+            # 取不到本 cluster range（fluid 未回填）时回退全工程区间（保持原行为，零回归）。
             cl_rng = cluster_lookup.cluster_id_to_range(project_root, cluster_key)
             if cl_rng and len(cl_rng) == 2:
                 lo = max(cl_rng[0], 1)
@@ -3175,7 +3165,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                     ch_nums = list(range(lo, hi + 1))
             if ch_nums:
                 ch_range = f"{min(ch_nums)}-{max(ch_nums)}"
-                # 🔴 2026-06-27 P1-07: 按 PID state 注入 chapter_end_weak_anchor_ratio（advisory 阈值）。
+                # 按 PID state 注入 chapter_end_weak_anchor_ratio（advisory 阈值）。
                 # 解析失败 / 无 state / off → 不传 --weak-anchor-ratio（scanner 走默认 0.15·零回归）。
                 _ceas_cmd = [child_python(), str(ceas), str(project_root),
                              "--chapters", ch_range, "--json"]
@@ -3198,7 +3188,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
         # 显式 task[4] 可覆盖（5 个 NN scanner 已显式 300）。非 NN scanner 秒退不受影响·
         # 只有真卡死才等满（罕见·兜底）。根治 emotion_granularity 等 VAD scanner 180s 超时(exit 99)。
         task_timeout = task[4] if len(task) > 4 else 300
-        # v2 cluster 化：cluster 调用上下文给 scanner 传 CLUSTER_MODE=1 env
+        # cluster 调用上下文给 scanner 传 CLUSTER_MODE=1 env
         code, out, err = _run(cmd, env_extra=_env_extra, timeout=task_timeout)
         try:
             issues = parse_fn(out, code)
@@ -3226,7 +3216,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     if not any(s["ok"] for s in scanner_status):
         return {"_fatal": f"全部 {len(tasks)} 个校验器执行失败", "scanner_status": scanner_status}
 
-    # v22 方案 3：角色情感弧偏差检测（advisory · 不阻塞）
+    # 角色情感弧偏差检测（advisory · 不阻塞）
     arc_drift_issues = _check_character_arc_drift(project_root, ch)
     if arc_drift_issues:
         all_issues += arc_drift_issues
@@ -3234,23 +3224,23 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                                "issues_count": len(arc_drift_issues)})
 
     # 元问题嗅探：某校验器 100% 章节都 FAIL 同一项 -> 由 learning_loop --scan-recurring 跨章判定，
-    # 这里只对单章内"明显误判"打 meta_suspect 标（如 validate_style 在已分离 v18 仍报字数虚高）
+    # 这里只对单章内"明显误判"打 meta_suspect 标（如 validate_style 在已分离正文/数据后仍报字数虚高）
     # 单章无法判定 100% 命中，留空 —— meta 判定交给 learning_loop 跨章扫描
 
-    # v19.2 工具校准自动降档（L2-0 止血 2026-05-30 · 原「自动豁免」改为「降一档严格度」）：
-    # 基于 learning_loop 累积的 tool_calibration_suggestions。同一 code 在同场景被反复豁免
-    # ≥3 次后，audit_hub 启动时对命中的 advisory issue【降一档 severity】（保留检测存在性，
-    # 不再整条 waived / 完全关闭该检测）—— 修旧逻辑「无穷增益二元跳变、关了回不来」矫枉过正。
+    # 工具校准自动降档：基于 learning_loop 累积的 tool_calibration_suggestions。
+    # 同一 code 在同场景被反复豁免 ≥3 次后，audit_hub 启动时对命中的 advisory issue【降一档
+    # severity】（保留检测存在性，不整条 waived / 完全关闭该检测）——避免二元开关式增益
+    # （一关就回不来的矫枉过正）。
     calibration_suggestions = _load_calibration_suggestions(project_root)
     if calibration_suggestions:
-        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
+        # 纯 cluster 模式 · 只读 cluster_blueprint
         scene_types_set = set()
         progress_path = project_root / "_数据库" / "进度.json"
         if progress_path.exists():
             try:
                 prog_data = json.loads(progress_path.read_text(encoding="utf-8"))
-                # 2026-05-29 复审复修 SC-1：cluster_blueprint 可能是 list（城南实测 list(25)），
-                # 裸 .items() 会 AttributeError 崩。先 normalize_blueprint 归一成 dict 再迭代。
+                # cluster_blueprint 可能是 list，裸 .items() 会 AttributeError 崩。
+                # 先 normalize_blueprint 归一成 dict 再迭代。
                 for cid, cdata in cluster_lookup.normalize_blueprint(prog_data).items():
                     for c in cdata.get("scene_storyboard", []):
                         if c.get("ch") == ch:
@@ -3270,16 +3260,16 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                 continue  # hard_gate 不可自动降档/豁免（北极星⑤顾问制边界）
             match = _check_auto_waiver(issue.get("code", ""), scene_types_set, calibration_suggestions)
             if match:
-                # L2-0 止血：命中 → 降一档严格度，【保留检测存在性】（不再 waived 整条关闭）
+                # 命中 → 降一档严格度，【保留检测存在性】（不整条 waived 关闭）
                 if _apply_auto_calibration_softcap(issue, match):
                     auto_softcap_count += 1
         if auto_softcap_count:
             print(f"  [auto-calibration] 降档 {auto_softcap_count} 项严格度（保留检测，未关闭；基于 {len(calibration_suggestions)} 条 tool_calibration_suggestion）", file=sys.stderr)
 
-    # v19 顾问制：应用 AI 豁免 —— advisory 项命中豁免 → waived=True；hard_gate 强制忽略豁免。
+    # 顾问制：应用 AI 豁免 —— advisory 项命中豁免 → waived=True；hard_gate 强制忽略豁免。
     # 在分类之前应用：被豁免的 issue 不进 det_issues/agent_issues，不计入 needs_agent。
     waived_issues = _apply_waivers(all_issues, waivers)
-    # 🔴 2026-06-27 C09 豁免诚实审计：在 apply-moment 算 blanket/orphan/waive_rate 信号。
+    # 🔴 豁免诚实审计：在 apply-moment 算 blanket/orphan/waive_rate 信号。
     # META-only —— 下面的 verdict 判定【完全不读】waiver_audit，blanket 也判不出 block。
     waiver_audit = _compute_waiver_audit(all_issues, waivers, waived_issues)
 
@@ -3287,7 +3277,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     det_issues, agent_issues, info_issues = [], [], []
     for issue in all_issues:
         if issue.get("waived"):
-            continue  # v19：被合理豁免 —— 不修、不派 agent
+            continue  # 被合理豁免 —— 不修、不派 agent
         if issue["severity"] == "info":
             info_issues.append(issue)
         elif _is_deterministic(issue):
@@ -3349,11 +3339,11 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                 "fix_brief": "确定性可修问题 —— 用 audit_hub --auto-fix 自动解决，无需派 agent",
             })
 
-    # v21 UX5: 按 audit_mode 调整 severity（strict 升 / permissive 降）
+    # 按 audit_mode 调整 severity（strict 升 / permissive 降）
     all_issues = _apply_audit_mode_filter(all_issues, audit_mode)
-    # v19：计数区分「被豁免」与「未豁免」。被豁免的 issue 不计入 fatal/error/warning，
+    # 计数区分「被豁免」与「未豁免」。被豁免的 issue 不计入 fatal/error/warning，
     # 单独计 waived —— verdict 判定只看未豁免的残留问题。
-    # v21 UX5 strict 模式下豁免被禁用——advisory 强升 warning 不能被豁免
+    # strict 模式下豁免被禁用——advisory 强升 warning 不能被豁免
     if audit_mode == "strict":
         active = [i for i in all_issues if not (i.get("waived") and i.get("gate_level") == "hard_gate")]
     else:
@@ -3364,9 +3354,9 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     info = sum(1 for i in active if i["severity"] == "info")
     waived_count = len(waived_issues)
 
-    # 2026-05-30 北极星复审：hard_gate（一致性/格式/穿帮）契约上不可豁免、必须阻断。但若某 scanner
+    # hard_gate（一致性/格式/穿帮）契约上不可豁免、必须阻断。但若某 scanner
     # 把 hard_gate code emit 成 info/warning severity（如 UNKNOWN_CHARACTER_DETECTED=info /
-    # ITEM_HOLDER_ABSENT=warning），原 verdict 只看 fatal/error severity → 这些 hard_gate 进
+    # ITEM_HOLDER_ABSENT=warning），verdict 只看 fatal/error severity → 这些 hard_gate 会进
     # info_issues 或无路由 agent_issues 死胡同被静默判 pass。兜底：凡未进 pending_agent 的未豁免
     # hard_gate 残留，强制补进 pending_agent（带 suggested_agent → real_pending → verdict=needs_agent）。
     _pending_codes = {p.get("code") for p in pending_agent}
@@ -3384,7 +3374,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     # pending_agent 区分：真需派 agent / 仅"可 --auto-fix"提示
     real_pending = [p for p in pending_agent if p.get("suggested_agent")]
 
-    # v19 verdict：waived 出口 —— 没有真需派 agent、没有待修、无 fatal/error 残留，
+    # verdict：waived 出口 —— 没有真需派 agent、没有待修、无 fatal/error 残留，
     # 且确实发生过豁免 → verdict=waived（区别于 pass：pass 是本来就干净，
     # waived 是「有 advisory 问题但被 AI 合理豁免了」）。hard_gate 项不会被豁免，
     # 仍会进 real_pending/fatal/error，所以 hard_gate 残留时绝不会判 waived。
@@ -3417,7 +3407,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
              "waive_reason": i.get("waive_reason", "")}
             for i in waived_issues
         ],
-        # 🔴 2026-06-27 C09 豁免诚实审计 META 段（绝不参与 verdict 判定 · 喂 learning_loop）
+        # 🔴 豁免诚实审计 META 段（绝不参与 verdict 判定 · 喂 learning_loop）
         "waiver_audit": waiver_audit,
         "persona_drift": persona_drift,
         "scanner_status": scanner_status,
@@ -3480,7 +3470,7 @@ def _parse_waivers_arg(args: list) -> str:
 
 
 def _parse_cluster_arg(args):
-    """v24: 解析 --mode cluster --cluster-id <key> 参数。返回 cluster_key 或 None"""
+    """解析 --mode cluster --cluster-id <key> 参数。返回 cluster_key 或 None"""
     if "--mode" not in args:
         return None
     try:
@@ -3494,7 +3484,7 @@ def _parse_cluster_arg(args):
 
 
 def _cleanup_virtual_chapters(project_root: Path) -> None:
-    """2026-05-29 复审修复 [M14]：清理虚拟章号 (>=9000) 残留。
+    """清理虚拟章号 (>=9000) 残留。
 
     cluster 级 audit 用虚拟 ch=9000 占位复制 cluster_draft 成临时章目录 + 临时 manifest，
     跑完在 finally rmtree。但进程被 kill / 异常退出会留残留，之后被各处 glob(第*章)
@@ -3526,26 +3516,23 @@ def _cleanup_virtual_chapters(project_root: Path) -> None:
 
 
 def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers: list) -> dict:
-    """v24: cluster 级 audit — 把 cluster_draft.txt 当一个超长章跑现有 scanner 集合，
+    """cluster 级 audit — 把 cluster_draft.txt 当一个超长章跑现有 scanner 集合，
     报告聚合所有 scene 的 issue。
 
-    v26 修复（feedback_audit_hub_cluster_mode_virtual_manifest_auto_prepare）：
-    旧版主代理需要手动 cp ch_<起首章>.json → ch_9000.json 让 validate_chapter
-    找到 manifest。现自动复制 cluster 起首章 manifest 给虚拟 ch_9000。
+    自动复制 cluster 起首章 manifest 给虚拟 ch_9000（validate_chapter 靠它找到 manifest）。
     """
     cluster_draft_path = project_root / "章节" / f"cluster_{cluster_key}_draft" / f"cluster_{cluster_key}_draft.txt"
     cluster_changes_path = project_root / "章节" / f"cluster_{cluster_key}_draft" / f"cluster_{cluster_key}_changes.json"
     if not cluster_draft_path.exists():
         return {"_fatal": f"cluster_draft 不存在: {cluster_draft_path}"}
-    # 复用现有 audit_chapter 逻辑，但传 cluster_key 当 chapter 编号占位（虚 ch=9999 + cluster_key）
-    # 简化策略 v1：跑现有 chapter 级 audit 但 body_file 指向 cluster_draft
-    # 这里需要 chapter_io.find_body_file 能找到 cluster_draft —— v1 用复制章节方式兜底
+    # 复用 audit_chapter 逻辑：把 cluster_draft 复制成虚拟章（fake_ch=9000），
+    # 让 chapter_io.find_body_file 找到正文。
     import shutil
     fake_ch = 9000  # cluster 虚拟章号
     fake_ch_dir = project_root / "章节" / f"第{fake_ch:04d}章"
-    # 2026-05-29 复审修复 [M14]：入口先清上次崩溃残留的虚拟章 + 虚拟 manifest。
-    # 旧版只靠 finally rmtree 清理，进程被 kill / 异常退出时虚拟 ch>=9000 会残留磁盘，
-    # 之后被各处 glob(第*章) 误捡（phantom 章污染 splitter / scanner / 拼接全文）。
+    # 入口先清上次崩溃残留的虚拟章 + 虚拟 manifest。只靠 finally rmtree 不够——进程被 kill /
+    # 异常退出时虚拟 ch>=9000 会残留磁盘，之后被各处 glob(第*章) 误捡（phantom 章污染
+    # splitter / scanner / 拼接全文）。
     # 入口统一清「章节/第>=9000章」目录 + 「.manifest/ch_>=9000*.json」，确保干净起点。
     _cleanup_virtual_chapters(project_root)
     fake_ch_dir.mkdir(parents=True, exist_ok=True)
@@ -3555,7 +3542,7 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
     if cluster_changes_path.exists():
         shutil.copy(cluster_changes_path, fake_changes)
 
-    # v26: 自动准备虚拟 manifest (validate_chapter 校验需要 ch_9000.json 存在)
+    # 自动准备虚拟 manifest (validate_chapter 校验需要 ch_9000.json 存在)
     manifest_dir = project_root / "_数据库" / ".manifest"
     fake_manifest = manifest_dir / f"ch_{fake_ch}.json"
     fake_manifest_compressed = manifest_dir / f"ch_{fake_ch}_compressed.json"
@@ -3599,15 +3586,13 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
         pass
 
     try:
-        # v2 cluster 化：cluster_mode=True · 传 cluster_key 激活 4 个 cluster-only scanner
+        # cluster_mode=True · 传 cluster_key 激活 4 个 cluster-only scanner
         report = audit_chapter(project_root, fake_ch, auto_fix, waivers, cluster_mode=True, cluster_key=cluster_key)
         report["cluster_id"] = cluster_lookup.normalize_cluster_id(cluster_key)
         report["_cluster_mode"] = True
         report["_cluster_key"] = cluster_key
         report["_cluster_draft_path"] = str(cluster_draft_path)
 
-        # v2 cluster 化方案（2026-05-28）：Phase A hot-fix 黑名单已删除·
-        # scanner 已全员升维到 cluster 视野，无须黑名单兜底。
         return report
     finally:
         # 清理虚拟章节 + 虚拟 manifest
@@ -3621,14 +3606,13 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
                 fake_manifest_compressed.unlink(missing_ok=True)
             except Exception:
                 pass
-        # 2026-05-29 复审修复 [M14]：兜底统一清虚拟章号 >=9000 残留（含本次 + 历史残留），
-        # 与入口的建前清理对称，双保险防 phantom 章。
+        # 兜底统一清虚拟章号 >=9000 残留（含本次 + 历史残留），与入口的建前清理对称，双保险防 phantom 章。
         _cleanup_virtual_chapters(project_root)
 
 
 def main():
     args = sys.argv[1:]
-    # 🔴 2026-06-30 创作流程 NN 默认接入（命令行入口·main only·测试 import 不触发·能力不足各桥自动回退）
+    # 创作流程 NN 默认接入（命令行入口·main only·测试 import 不触发·能力不足各桥自动回退）
     import nn_runtime_defaults
     _nn_on = nn_runtime_defaults.enable_creative_nn_defaults()
     if _nn_on:
@@ -3651,13 +3635,13 @@ def main():
         sys.exit(3)
     auto_fix = "--auto-fix" in args
     want_json = "--json" in args
-    # [2026-06-20 R8 W4 Batch-H · L24] DRAMATURGE 三阶段分层 audit 开关·shadow 默认·
+    # [L24] DRAMATURGE 三阶段分层 audit 开关·shadow 默认·
     # 跑完 audit_hub 再调 audit_hub_hierarchical_planner.run_hierarchical 把 issues 统筹成
     # revision_plan.json·不破坏现有路径·全 advisory·default shadow (env HIERARCHICAL_AUDIT_MODE)
     hierarchical = "--hierarchical" in args
     waivers = _load_waivers(_parse_waivers_arg(args))
 
-    # v24 cluster mode 入口
+    # cluster mode 入口
     cluster_key = _parse_cluster_arg(args)
     if cluster_key:
         report = audit_cluster(project_root, cluster_key, auto_fix, waivers)
@@ -3713,7 +3697,7 @@ def main():
     # 退出码：0=全通过 / 1=有问题已自动修完 / 2=需派 agent
     # 注：verdict=fixable_pending（确定性问题没开 --auto-fix）也归 1 ——
     #     调用方按 1 处理时重跑 --auto-fix 即可，不必派 agent
-    # v19：verdict=waived（advisory 问题被 AI 合理豁免）归 0 —— 顾问制下豁免=放行，
+    # verdict=waived（advisory 问题被 AI 合理豁免）归 0 —— 顾问制下豁免=放行，
     #     等同 pass；hard_gate 残留时不会判 waived，所以 0 退出码不会漏掉客观错误。
     if report["verdict"] == "needs_agent":
         sys.exit(2)

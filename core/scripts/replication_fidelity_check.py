@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""作者金标准对比闸（量化层）· 2026-06-04
+"""作者金标准对比闸（量化层）
 
 把生成正文的可量化风格指纹（句长/段长/单句独行/标点密度）跟本项目作者风格档基线对比，
 标出偏离大的维度。默认作为离线分析输出 report；主链路通过 --strict 启用硬闸。
 
-动机（cluster_001 翻车）：原有质检全过(audit/reflector/voice)却没抓到「调性跑偏成惊悚」，
-因为它们查机械维不拿真作者基线比。情绪标点(感叹/问号/省略)缺口最离谱(实测 24x/3.7x/5x↓)
-是「喜剧引擎没落地」的可量化代理信号。质性调性(市井喜剧vs惊悚)需配 gemini/agent 读 golden_passages。
+动机：机械维度检测(audit/reflector/voice)不比对真实作者基线，抓不出「调性跑偏」类问题。
+情绪标点(感叹/问号/省略)缺口是「喜剧引擎没落地」的可量化代理信号；质性调性(市井喜剧vs惊悚)
+判断需配 gemini/agent 读 golden_passages。
 
 用法：
   python core/scripts/replication_fidelity_check.py --project <项目> --cluster 1
@@ -91,7 +91,7 @@ def _author_baseline(project_root):
 
 
 def _mstyle_cosine_subscore(root, gen_text):
-    """C2 mstyle 余弦风格子分（advisory·单一接入点·topic-confound 用相对作者自相似 z）。
+    """mstyle 余弦风格子分（advisory·单一接入点·topic-confound 用相对作者自相似 z）。
 
     返回 dict 含 status: ok/invalid/skip。🔴 绝不静默 hash 冒充风格余弦·绝不抛异常
     （main 安全·永不影响 verdict/exit）。复用 style_similarity_scanner 已建的作者 centroid+自相似 σ。
@@ -99,7 +99,7 @@ def _mstyle_cosine_subscore(root, gen_text):
     sp = str(Path(__file__).resolve().parent)
     if sp not in sys.path:
         sys.path.insert(0, sp)
-    # ① 硬断言后端（C1）·失败→标 invalid 不参与判定（护栏·绝不 hash 冒充）
+    # ① 硬断言后端·失败→标 invalid 不参与判定（护栏·绝不 hash 冒充）
     try:
         import embedding_store as es
         es.assert_mstyle_backend()
@@ -131,12 +131,12 @@ def _mstyle_cosine_subscore(root, gen_text):
 
 
 # ════════════════════════════════════════════════════════════════
-# intent_recovery（P0 · experiment · advisory）— 作者思维（B1-B3）确定性余弦判决
+# intent_recovery（experiment · advisory）— 作者思维（B1-B3）确定性余弦判决
 # ════════════════════════════════════════════════════════════════
-# 设计（R3 P0-IR-2/3）：av_judge 的「作者思维」第 5 维（include_intent_dim）让 LLM-judge 反推一段
+# 设计：av_judge 的「作者思维」第 5 维（include_intent_dim）让 LLM-judge 反推一段
 #   仿写在『价值取舍/情绪处理/信息释放』上的决策走向，但**判决权不交弱模型 verdict**——交确定性
-#   mstyle 余弦：把 judge 反推文本 与 consolidate 聚合的 author_decision_principles（B1-B3 去重观察 ·
-#   consolidate L617 写入）算 StyleDistance 余弦。
+#   mstyle 余弦：把 judge 反推文本 与 consolidate 聚合的 author_decision_principles
+#   （B1-B3 去重观察）算 StyleDistance 余弦。
 # 🔴 两条护栏（绝不 hash 冒充语义 · 北极星⑤⑥）：
 #   ① 硬断言 embedding_store.assert_mstyle_backend()——hash 后端标 invalid 不出余弦（绝不假语义信号）。
 #   ② author_decision_principles 序列化用 sort_keys 固定键序（同输入同输出 · 余弦可复现 · 复用
@@ -188,7 +188,7 @@ def intent_recovery_cosine(judge_reconstructed_text: str, author_b_principles) -
     sp = str(Path(__file__).resolve().parent)
     if sp not in sys.path:
         sys.path.insert(0, sp)
-    # ① 硬断言后端=mstyle（绝不 hash 冒充·R3 P0-IR-2 护栏）
+    # ① 硬断言后端=mstyle（绝不 hash 冒充）
     try:
         import embedding_store as es
         es.assert_mstyle_backend()
@@ -254,7 +254,7 @@ def _intent_recovery_band(author_texts: list, k: float = 2.0) -> dict:
 
 def intent_recovery_probe(judge_text: str, author_principles, author_ref_texts: list,
                           k: float = 2.0, cross_stack: "dict | None" = None) -> dict:
-    """intent_recovery 旁挂探针（P0-IR-3 · advisory · 永不阻断）：余弦 + multi-ref 变异带 + 跨栈一致性。
+    """intent_recovery 旁挂探针（advisory · 永不阻断）：余弦 + multi-ref 变异带 + 跨栈一致性。
 
     · cosine = intent_recovery_cosine(judge_text, author_principles)（确定性 mstyle）。
     · band = _intent_recovery_band(author_ref_texts, k)（作者多章原文两两余弦定义 mu±kσ）。
@@ -270,7 +270,7 @@ def intent_recovery_probe(judge_text: str, author_principles, author_ref_texts: 
     if cos.get("valid") and band.get("valid") and sim is not None:
         in_band = bool(band["lo"] <= sim <= band["hi"])
 
-    # 跨栈一致性（R3 P0-IR-3）：gemini 与 claude 反推余弦双双落带内才高置信
+    # 跨栈一致性：gemini 与 claude 反推余弦双双落带内才高置信
     localization_confidence = "low"
     cross = None
     if cross_stack and isinstance(cross_stack, dict):
@@ -314,7 +314,7 @@ _LABEL = {
 }
 _COMEDY_PUNCT = {"excl_k", "ellipsis_k", "ques_k"}
 # 近零基线绝对阈值（每千字）：基线低于此值的 _k 密度维走绝对口径而非 ratio 带
-#（ratio 对近零基线数学失效 · 见 main 内注释 · 2026-07-08）
+#（ratio 对近零基线数学失效 · 见 main 内注释）
 _NEARZERO_K = 0.5
 
 
@@ -358,9 +358,8 @@ def main():
         g = gen.get(k)
         if a is None or g is None or a == 0:
             continue
-        # 🔴 近零基线护栏（2026-07-08 真机验证抓出的 catch-22）：per-1000 密度维
-        # 基线 < 0.5/千 时 ratio 口径失效——生成 0 次 → 0.0x 假偏离；短稿哪怕 1 次
-        # 命中密度也 >2.2x 假偏离，数学上无法通过（主神大道 dash_k=0.048 实证）。
+        # 🔴 近零基线护栏：per-1000 密度维基线 < 0.5/千 时 ratio 口径失效——生成 0 次
+        # → 0.0x 假偏离；短稿哪怕 1 次命中密度也 >2.2x 假偏离，数学上无法通过。
         # 改绝对口径：两边都「几乎不用」（生成 ≤ 0.5/千）= 贴合跳过；
         # 生成 > 0.5/千 才按偏离报（作者不用而生成在用，仍是真信号）。
         if k.endswith("_k") and a < _NEARZERO_K:
@@ -379,7 +378,7 @@ def main():
               "strict": bool(args.strict),
               "gen": gen, "author": base, "issues": issues,
               "_doc": "作者金标准量化对比·情绪标点(感叹/问号/省略)偏低=喜剧引擎未落地代理信号；--strict 下偏离阻断主链路"}
-    report["mstyle_cosine"] = _mstyle_cosine_subscore(root, text)   # C2 advisory 附加·永不影响 verdict/exit
+    report["mstyle_cosine"] = _mstyle_cosine_subscore(root, text)   # advisory 附加·永不影响 verdict/exit
     if report["mstyle_cosine"].get("status") == "invalid":
         print(f"  [mstyle余弦] invalid（{report['mstyle_cosine'].get('reason', '')[:60]}）· 不参与判定", file=sys.stderr)
     out_dir = root / "_数据库" / ".audit"

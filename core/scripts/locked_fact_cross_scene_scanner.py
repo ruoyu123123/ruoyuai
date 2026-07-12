@@ -2,45 +2,42 @@
 # -*- coding: utf-8 -*-
 """locked_fact_cross_scene_scanner.py — 锁定事实跨场景引用一致性检测
 
-v2 cluster 化方案 Phase 3（2026-05-28）·
 检测 人物卡.locked_facts 中的事实在 cluster 不同场景的引用是否一致，两条通路：
 
-  · 恒定数值通路（确定性·始终执行·历史行为零变动）：fact 显式声明「N<恒定单位>」（如 N 岁）
+  · 恒定数值通路（确定性·始终执行）：fact 显式声明「N<恒定单位>」（如 N 岁）
     时，正文同角色同句的同单位数值必须一致 → LOCKED_FACT_CROSS_SCENE_CONFLICT (hard_gate)。
 
-  · 描述类通路（NLI 语义·门控执行·2026-07-07 落地，此前 docstring 曾承诺「描述类矛盾陈述」
-    但代码未实现——ConStory 金 fixture 盲区5 实证）：**非数值描述类 fact**（生死/亲缘/出身/
+  · 描述类通路（NLI 语义·门控执行）：**非数值描述类 fact**（生死/亲缘/出身/
     身份等明文互斥，如锁定「满门尽灭只剩一人」vs 正文「兄长推门而入」）× 正文中**与人名同句
     共现**的句子做候选配对（粗筛控制调用量），经 nn_nli_bridge（Erlangshen-110M 中文 NLI·
-    Wave-3 落地·Wave-5 daemon-first）判 contradiction 高置信（≥ _NLI_CONTRA_THRESHOLD）→
+    daemon-first）判 contradiction 高置信（≥ _NLI_CONTRA_THRESHOLD）→
     LOCKED_FACT_DESCRIPTIVE_CONTRADICTION（**advisory·永不 hard_gate**——北极星⑤：NLI 是
     概率判定，只有确定性一致性才配 hard；绝不复用/升格 hard 码）。
     执行前提（缺一即**诚实 skip**·note 写明原因·绝不用关键词匹配假冒语义判定）：
       1. LOCKED_FACT_DESCRIPTIVE_MODE ∈ {shadow(默认·只记不判·violations 恒空), active}；off 关闭
       2. nn_nli_bridge.enabled()（RUOYU_NN_NLI=1 + venv/checkpoint 齐备·默认 off）
-    结果写在报告**独立字段 `descriptive`**：顶层数值通路字段（code/gate_level/conflicts/
-    warning/exit code）逐字节不变，audit_hub._parse_locked_fact_cross_scene 现有解析零影响，
+    结果写在报告**独立字段 `descriptive`**：顶层字段（code/gate_level/conflicts/
+    warning/exit code）只承载数值通路，audit_hub._parse_locked_fact_cross_scene 只读顶层，
     描述类 violations 由主代理另行接线消费。
-    🔴 真机能力边界（2026-07-07 Erlangshen-110M 实测 + flawed_fiction 反向校准·勿高估检出面）：
+    🔴 真机能力边界（Erlangshen-110M 实测 + FlawedFictions 反向校准·勿高估检出面）：
       · **教科书级**直接矛盾（「他已死」vs「他还活着」/数量互斥/天气互斥）contradiction 0.99+ 稳判 ✓
-      · **含蓄改写型**不可依赖（S5 反向校准实证：锁定「妻亡」vs「妻子站在门口等他」被判
+      · **含蓄改写型**不可依赖（锁定「妻亡」vs「妻子站在门口等他」被 NLI 判
         entailment 0.229——非阈值问题是能力翻车·direct_rewrite 召回仅 1/3）✗
-      · 配对窗预算有限（64 对）——S5 反向校准后默认=三区间均衡轮询（草稿按段落三等分
-        前/中/后·晚位句子进得了配对窗）；S4 surprisal 排序开启时按高熵段优先（优先级最高·
+      · 配对窗预算有限（64 对）——默认走 S5 三区间均衡轮询（草稿按段落三等分
+        前/中/后·晚位句子进得了配对窗）；surprisal 排序开启时走 S4 按高熵段优先（优先级最高·
         跨区间生效）
       · **多跳实体推理型矛盾**（「满门尽灭只剩沈昭一人」vs「兄长沈铖推门而入」——需推断
         沈铖∈家人且活着）实测 entailment(contradiction 仅 0.166) ✗——110M 模型能力边界，
-        阈值 0.80 下此类恒漏（勿降阈值硬凑：0.166 档放行=误报洪水）。ConStory 盲区3 测试
-        用 mock NLI 锁的是**接线契约**非真模型召回。
-      · 多跳类承接方（2026-07-07 接入）：novel-reading-reflector 维度 9「锁定事实语义一致性」
+        阈值 0.80 下此类恒漏（勿降阈值硬凑：0.166 档放行=误报洪水）。本模块测试用 mock NLI
+        锁的是**接线契约**非真模型召回。
+      · 多跳类承接方：novel-reading-reflector 维度 9「锁定事实语义一致性」
         ——cluster-write step3 每 cluster 必跑的 Claude 系 judge 读 locked_facts 做多跳核查，
         issue 驱动修复轮（advisory 待裁决项·刻意伏笔可豁免）。三层互补：数值确定性=scanner
         hard / 直接改写型=NLI advisory / 多跳推理型=reflector 维度 9。
 
 ────────────────────────────────────────────────────────────────────────
-2026-06-16 盲区落地（consistency_19_subtypes · B 件 · ConStory 时间线&因果一致性）：
-把「年龄专用」泛化为「**恒定数值类锁定事实**通用对账」——纯确定性、零新依赖、必真阳的部分。
-覆盖 ConStory「绝对时间矛盾（Absolute Time Contradiction）」的**确定性子集**：
+覆盖恒定数值类锁定事实的通用对账（纯确定性、零新依赖、必真阳的部分），对应
+ConStory「绝对时间矛盾（Absolute Time Contradiction）」的**确定性子集**：
   fact 含「N岁 / 第N天 / N年(寿命/恒定纪年) …」且正文同角色**同句**出现冲突绝对值 → 报。
 
 🔴 北极星铁律 —— 单位集只收「恒定量（invariant）」，**绝不收单调递增的修真品级**（品/阶/层/级/段/重）：
@@ -51,14 +48,14 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
 
 单位集来源（作者档/项目第一权威 · 北极星②）：
   1. 项目可选覆盖 `_数据库/locked_fact_units.json` 的 `invariant_units: [...]`（opt-in·世界观若真有恒定
-     纪年单位可在此声明）——实地核查 8 本项目的 世界观.json **均无结构化等级体系字段**（只有
-     era/location/rules/factions/entries），故不臆造「从世界观读等级」的不存在通路。
-  2. 缺该文件 → 退保底恒定单位集 `_DEFAULT_INVARIANT_UNITS`（仅「岁」·与历史行为完全兼容）。
+     纪年单位可在此声明）——世界观.json **无结构化等级体系字段**（只有
+     era/location/rules/factions/entries），故不设「从世界观读等级」通路。
+  2. 缺该文件 → 退保底恒定单位集 `_DEFAULT_INVARIANT_UNITS`（仅「岁」）。
 
 跨场景的时间**推算**（第3天+5天=第8天对不对）不在确定性层——交给 A 件判官（语义）。
 ────────────────────────────────────────────────────────────────────────
 
-输出 code（不动 audit_hub.HARD_GATE_CODES / STRUCTURE.md §11 的 19 码清单）：
+输出 code（hard_gate 清单权威见 audit_hub.HARD_GATE_CODES / STRUCTURE.md §12）：
   LOCKED_FACT_CROSS_SCENE_CONFLICT (hard_gate·恒定数值通路·报告顶层)
   LOCKED_FACT_DESCRIPTIVE_CONTRADICTION (advisory·描述类 NLI 通路·报告 `descriptive` 字段·
     绝不进 HARD_GATE_CODES)
@@ -66,14 +63,14 @@ v2 cluster 化方案 Phase 3（2026-05-28）·
 Env 门控：LOCKED_FACT_DESCRIPTIVE_MODE = off / shadow(默认) / active；
   NLI 后端另受 RUOYU_NN_NLI=1 门控（见 nn_nli_bridge.py·daemon-first 三层降级）。
   配对窗选择策略（留痕 descriptive.pair_selection: surprisal_ranked | balanced_rotation）：
-  · S4 高熵段优先（2026-07-07·ConStory arXiv:2603.05890「一致性错误集中在高熵段」）：
+  · S4 高熵段优先（ConStory arXiv:2603.05890「一致性错误集中在高熵段」）：
     RUOYU_NN_SURPRISAL=1 且 nn_surprisal_bridge 全段命中时，描述类候选配对按所在段
     GPT-2 surprisal 降序重排后再截断 64 对上限（高熵段优先送 NLI·优先级最高·跨区间生效）。
-  · S5 三区间均衡轮询（2026-07-07·FlawedFictions arXiv:2504.11900 反向校准实证：
-    旧「文档序前 64」只盖 22.5k 字草稿前 12% 的主角句·晚位注入恒漏）：surprisal 不可用
-    （默认环境即此态）→ 草稿按段落三等分（前/中/后），64 对预算按 fact × 区间轮询均衡
-    分配（单 fact 16 句上限内先各区间取样再补齐）——取代纯文档序，保证晚位句子进得了
-    配对窗。确定性重排不增删：上限/阈值/判定逻辑/数值 hard 通路零变动。
+  · S5 三区间均衡轮询（FlawedFictions arXiv:2504.11900 实证：纯文档序配对只覆盖 22.5k
+    字草稿前 12% 的主角句，晚位注入的事实恒漏）：surprisal 不可用（默认环境即此态）→
+    草稿按段落三等分（前/中/后），64 对预算按 fact × 区间轮询均衡分配（单 fact 16 句
+    上限内先各区间取样再补齐），保证晚位句子进得了配对窗。确定性重排只改选序
+    不增删，不触碰上限/阈值/判定逻辑/数值 hard 通路。
 
 用法：python locked_fact_cross_scene_scanner.py <project> <cluster_draft_path>
 """
@@ -97,7 +94,6 @@ def load(p: Path):
 _CN_DIGIT = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 
 # ── 恒定数值单位集（北极星②作者/项目第一权威 · 北极星铁律：只收 invariant，绝不收单调递增品级）──
-# 「岁」= 历史唯一单位（保底·与 2026-05-28 起的行为完全兼容 → 老 case 回归不破）。
 # 项目可在 _数据库/locked_fact_units.json 里 opt-in 扩展恒定单位（如世界观确有恒定纪年单位「天/日/年」）。
 _DEFAULT_INVARIANT_UNITS = ("岁",)
 
@@ -148,7 +144,7 @@ def _load_unit_set(project_root: Path) -> list:
     return out
 
 
-# 默认（保底·岁）正则——保留模块级常量供存量测试 / 调用 `_AGE_RE` 引用（向后兼容·单 group 旧形态）。
+# 默认（保底·岁）正则·单 group——供存量测试 / `_AGE_RE` 调用引用。
 _AGE_RE = re.compile(r"(\d+|[零一二三四五六七八九十百]+)\s*岁")
 # 双 group（数字 + 单位）的「岁」正则——供 extract_numeric_facts_near 用（它取 group(2) 单位）。
 _AGE_UNIT_RE = _make_unit_re(["岁"])
@@ -156,9 +152,8 @@ _AGE_UNIT_RE = _make_unit_re(["岁"])
 
 def _cn_to_int(s: str):
     """中文/阿拉伯数字 → int（覆盖年龄场景：十八/三十八/二十/十/52/一百二十）。无法解析返回 None。
-    2026-05-30 北极星复审：
-      · 原 isdigit() 把中文数字年龄（三十八岁）全漏掉，使 hard_gate 穿帮检测只覆盖一半。
-      · 补「百」位（一百二十岁→120），覆盖修真/玄幻超长寿命设定的年龄。"""
+    只认阿拉伯数字会漏掉中文数字年龄（三十八岁），让 hard_gate 穿帮检测少一半；
+    「百」位解析（一百二十岁→120）覆盖修真/玄幻超长寿命设定的年龄。"""
     if not s:
         return None
     if s.isdigit():
@@ -206,9 +201,9 @@ def extract_numeric_facts_near(text: str, keyword: str, unit_re: re.Pattern,
     """找 keyword 同句、且**紧邻恒定单位**的数值实例（如「三十八岁」「第三天」）。
     返回 [(数字字符串绝对起始位置, 数字字符串, 单位)]。
 
-    2026-05-30 修假阳性：只认「数字+单位」实例，从源头杜绝距离/数量/年份串味。
+    只认「数字+单位」实例，从源头杜绝距离/数量/年份串味。
     同句锚定（_SENT_SEP 切小句）：杜绝相邻句里**另一个角色**的数值被误归到本角色。
-    2026-06-16 泛化：unit 从硬编码「岁」扩成可配置恒定单位集（unit_re 由 _make_unit_re 给）。"""
+    unit_re 由调用方传入（`_make_unit_re` 构造），支持可配置恒定单位集，非硬编码「岁」。"""
     results = []
     for m in re.finditer(re.escape(keyword), text):
         s = max(0, m.start() - window)
@@ -234,38 +229,36 @@ def extract_numeric_facts_near(text: str, keyword: str, unit_re: re.Pattern,
     return results
 
 
-# 向后兼容别名：存量测试 / audit_hub 可能引用 extract_ages_near（保底「岁」单位）。
+# 兼容别名：供存量测试 / audit_hub 引用 extract_ages_near（保底「岁」单位）。
 def extract_ages_near(text: str, keyword: str, window: int = 50) -> list:
-    """历史接口（仅「岁」）——返回 [(pos, 数字)]，丢弃单位维度（向后兼容存量调用/测试）。"""
+    """仅「岁」单位——返回 [(pos, 数字)]，丢弃单位维度（供存量调用/测试兼容）。"""
     return [(pos, num) for pos, num, _u in
             extract_numeric_facts_near(text, keyword, _AGE_UNIT_RE, window=window)]
 
 
-# ══════════════════ 描述类通路（NLI 语义·advisory·2026-07-07）══════════════════
+# ══════════════════ 描述类通路（NLI 语义·advisory）══════════════════
 # 🔴 纪律：本通路 code 永远 advisory（NLI 概率判定 · 北极星⑤只有确定性一致性才 hard）；
 #         NLI 后端不可用 → 诚实 skip（note 说明），绝不用关键词匹配假冒语义判定。
 #
 # 配对窗选择策略（报告 `descriptive.pair_selection` 留痕："surprisal_ranked" | "balanced_rotation"）：
-#   · S4 高熵段优先（2026-07-07 二轮移植·ConStory-Checker arXiv:2603.05890 实证
+#   · S4 高熵段优先（ConStory-Checker arXiv:2603.05890 实证
 #     「一致性错误集中在 token 熵高的文本段」）：surprisal 可用
 #     （nn_surprisal_bridge.enabled()=RUOYU_NN_SURPRISAL=1 + venv/checkpoint 齐备·
 #     桥内部 daemon-first ~0.1s / 回退 subprocess）且候选句所在段**全部**拿到 mean_surprisal
 #     → 候选配对按所在段 surprisal 降序重排后再截断 _MAX_NLI_PAIRS（高熵段优先送 NLI·
 #     优先级最高·跨区间生效）。
-#   · S5 三区间均衡轮询（2026-07-07 二轮移植·FlawedFictions arXiv:2504.11900 反向校准
-#     实证：旧「文档序前 64」只盖 22.5k 字草稿前 12% 的主角句·晚位注入恒漏）：
-#     surprisal 不可用（默认环境即此态）→ 草稿按段落三等分（前/中/后），候选按
-#     fact × 区间轮询交错（单 fact 16 上限内先各区间取样再补齐·全局 64 预算按 fact 轮询
-#     公平分配）——晚位句子进得了配对窗。
-#   零新模型·纯选序：两策略都只改「64 对上限内选哪些/什么序」，阈值/上限/判定逻辑零变动。
+#   · S5 三区间均衡轮询（FlawedFictions arXiv:2504.11900：纯文档序配对只盖 22.5k 字草稿
+#     前 12% 的主角句，晚位注入恒漏）：surprisal 不可用（默认环境即此态）→ 草稿按段落
+#     三等分（前/中/后），候选按 fact × 区间轮询交错（单 fact 16 上限内先各区间取样再
+#     补齐·全局 64 预算按 fact 轮询公平分配）——晚位句子进得了配对窗。
+#   纯选序：两策略只决定「64 对上限内选哪些/什么序」，不改阈值/上限/判定逻辑。
 
 DESCRIPTIVE_CODE = "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION"
 _NLI_CONTRA_THRESHOLD = 0.80     # contradiction 概率高置信地板（低于此不报·宁漏勿误）
 _MAX_NLI_PAIRS = 64              # 单次 scan 送 NLI 的配对总量上限（控制调用量）
 _MAX_SENTS_PER_FACT = 16         # 单条 fact 最多配对的句子数
-_MIN_SENT_CJK = 10               # 过短句子不送 NLI（S5 反向校准实证：6 字短句「秦烬冷笑一声」对
-                                 # 无关 fact 打出 contradiction≥0.97 · 4 条基线误报全源于此 · 6→10
-                                 # 消 3/4 · 2026-07-07 flawed_fiction 校准报告 §5.1）
+_MIN_SENT_CJK = 10               # 过短句子不送 NLI（超短句如「秦烬冷笑一声」会对
+                                 # 无关 fact 打出 contradiction≥0.97 的误报）
 
 
 def _descriptive_mode() -> str:
@@ -329,7 +322,7 @@ def _surprisal_rank_candidates(text: str, candidates: list) -> "tuple[list, bool
       · nn_surprisal_bridge import 失败 / enabled()=False（RUOYU_NN_SURPRISAL 默认 off）
       · 候选定位不到所在段 / 任一所在段未拿到 mean_surprisal（对齐
         entropy_hotspot_consistency_probe「任一 block 未命中 → 整体回退」纪律）
-    排序稳定（同段/同分保持文档序）。只重排不增删——上限/阈值零变动。"""
+    排序稳定（同段/同分保持文档序）。只重排不增删——不触碰上限/阈值。"""
     if not candidates:
         return candidates, False
     bridge = _surprisal_bridge()
@@ -380,15 +373,15 @@ def _region_of(pos: int, spans: list, text_len: int) -> int:
 
 
 def _balanced_rotation_order(text: str, candidates: list) -> list:
-    """S5 三区间均衡轮询（FlawedFictions arXiv:2504.11900 反向校准·2026-07-07）：
-    旧「文档序前 64」配对窗实证只盖 22.5k 字草稿前 12% 的主角句——晚位注入恒漏。
+    """S5 三区间均衡轮询（FlawedFictions arXiv:2504.11900）：
+    纯文档序「前 64」配对窗只盖 22.5k 字草稿前 12% 的主角句——晚位注入恒漏。
 
     重排规则（确定性·同输入恒同输出·纯选序不增删）：
       1. 草稿按段落（非空行）三等分成前/中/后三区间，候选按所在段定区；
       2. 每 fact 内部按区间轮询（前→中→后循环取，某区间耗尽自动跳过
          ＝「先各区间取样再补齐」）——单 fact 16 句上限内三区间均衡；
       3. fact 间再轮询交错成全局序——全局 64 对预算对各 fact 公平分配。
-    截断（全局 _MAX_NLI_PAIRS + 单 fact _MAX_SENTS_PER_FACT）仍由调用方统一执行。"""
+    截断（全局 _MAX_NLI_PAIRS + 单 fact _MAX_SENTS_PER_FACT）由调用方统一执行。"""
     if not candidates:
         return candidates
     spans = _line_paragraph_spans(text)

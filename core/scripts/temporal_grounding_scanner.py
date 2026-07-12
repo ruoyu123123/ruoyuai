@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""temporal_grounding_scanner.py — 时间流逝感缺失检测（advisory · cluster · 2026-06-20）
+"""temporal_grounding_scanner.py — 时间流逝感缺失检测（advisory · cluster）
 
-【缺口】R1 真编辑实证 AI 破绽：文笔漂亮但「没时间概念」—— 长草稿跨多场景却缺时间推进锚点 =
-时间扁平（temporal flatness）。全系统 scanner 查空间接地（scene_grounding 白房间）、查节奏、查
-情绪，**无一查「时间流逝感」**。弱模型爱把多场景写成「悬浮在同一抽象时刻」，读者感觉不到时辰
-推移 / 日子过去 / 等待煎熬。本 scanner 补这一维度的可算半边。
+AI 破绽：文笔漂亮但「没时间概念」—— 长草稿跨多场景却缺时间推进锚点 = 时间扁平
+（temporal flatness）。空间接地由 scene_grounding 检测（白房间问题），节奏、情绪各有
+对应 scanner，本 scanner 补「时间流逝感」这一维度的可算半边。弱模型爱把多场景写成
+「悬浮在同一抽象时刻」，读者感觉不到时辰推移 / 日子过去 / 等待煎熬。
 
 【做法 · 确定性可算半边】（北极星守卫：时间感质量是语义判断·只做可算的「时间锚点缺失」密度）：
   1. 把 cluster 草稿按空行分段聚成场景（参考 scene_grounding 的场景切分：空行间隔 >= 2 +
@@ -19,8 +19,8 @@
 
 【北极星⑤ 顾问非法官】时间标记密度是创作选择（高速连续场/单一时刻定格可能故意不标）·writer 有
   理由偏离 → 永远 advisory，code TEMPORAL_GROUNDING_THIN **绝不进 audit_hub.HARD_GATE_CODES**。
-  env TEMPORAL_GROUNDING_MODE: off / shadow(默认·只记不判·零回归) / active。
-  🔬 阈值 THIN_RATIO_FLOOR/MIN_SCENES 保守占位（宁可漏报不误报）·待金标准校准（真作者原文喂自身 PASS）。
+  env TEMPORAL_GROUNDING_MODE: off / shadow(只记不判) / active(默认)。
+  阈值 THIN_RATIO_FLOOR/MIN_SCENES 保守占位（宁可漏报不误报）·待金标准校准（真作者原文喂自身 PASS）。
 
 用法：python temporal_grounding_scanner.py <draft_path> [--project <root>] [--manifest m.json]
 """
@@ -51,7 +51,7 @@ TRANSITION = re.compile(
 # 分隔符行（纯分隔·其后首段是新场景·分隔符自身不算场景）
 SEPARATOR = re.compile(r"^[\s　\*＊·.。…\-—－◇◆○●※☆★]{1,20}$")
 
-THIN_RATIO_FLOOR = 0.7   # 🔬 待金标准校准（真作者原文喂自身 PASS）：缺时间锚点场景占比 > 此 = 时间流逝感弱
+THIN_RATIO_FLOOR = 0.7   # 待金标准校准（真作者原文喂自身 PASS）：缺时间锚点场景占比 > 此 = 时间流逝感弱
 MIN_SCENES = 3           # 总场景 < 此 不报（够长才判时间感·conservative）
 MIN_CJK = 500            # 草稿 < 此 跳过
 
@@ -59,8 +59,8 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-20 金标准校准放量 active：5 真作者(诡秘/主神/惊悚/剑来/将夜)thin_ratio 全 0.0
-    # —— 真作者场景总带时间锚点·零误报·安全放量。
+    # 默认 active（5 真作者(诡秘/主神/惊悚/剑来/将夜)thin_ratio 全 0.0）——
+    # 真作者场景总带时间锚点·零误报。
     m = (os.environ.get("TEMPORAL_GROUNDING_MODE") or "active").strip().lower()
     return m if m in ("off", "shadow", "active") else "active"
 

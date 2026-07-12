@@ -17,7 +17,7 @@ validate_chapter.py — cluster 内物理章硬性校验器
   - 通过 = exit 0, 有错 = exit 1, 致命 = exit 2
   - CLI 只暴露 cluster 入口；单章 validate() 仅供 audit_hub 的 cluster 流水线内部调用
 
-【v18 --json 输出契约】（audit_hub 等下游靠这个结构化读，不再正则解析人类可读报告）
+【--json 输出契约】（audit_hub 等下游靠这个结构化读，按 code 路由，不做正则解析）
   {
     "schema_version": "1.0", "scanner": "validate_chapter",
     "chapter": <int>, "chapter_file": "章节/第NNN章/第NNN章.txt",
@@ -39,10 +39,10 @@ import re
 import sys
 from pathlib import Path
 
-# v18：统一章节读写走 chapter_io
+# 章节读写统一走 chapter_io
 sys.path.insert(0, str(Path(__file__).parent))
 import chapter_io as cio
-# 2026-05-29 流程贯通（断点 1）：--cluster 入口靠章号⇄cluster_id 反查工具取章范围
+# --cluster 入口靠章号⇄cluster_id 反查工具取章范围
 import cluster_lookup
 
 
@@ -65,18 +65,18 @@ def load_json(p: Path, default=None):
 
 
 def find_chapter_file(project_root: Path, ch: int) -> Path | None:
-    """查找章节正文 txt。v18：委托 chapter_io.find_body_file（兼容 4 布局 + 旧平铺）。"""
+    """查找章节正文 txt。委托 chapter_io.find_body_file（标准嵌套布局·找不到返回 None）。"""
     return cio.find_body_file(project_root, ch)
 
 
 def check_word_count(body: str, target: int, min_: int, max_: int) -> list[dict]:
-    n = cio.count_words(body)  # v18：统一字数口径
-    # v2 cluster 化（2026-05-28）：cluster 视野字数阈值 8000-30000
+    n = cio.count_words(body)  # 统一字数口径
+    # cluster 视野字数阈值 8000-30000
     import os as _os
-    # 2026-05-29 复审修复 [H9]：cluster 视野 8000 字下限是「整块草稿」语义，
-    # 不能套到 splitter 切出来的单个分章（单章 3000-4500 CJK）。validate_cluster
-    # 逐章 validate 时设 CLUSTER_PER_CHAPTER=1，此处回退到章级字数语义（保留传入
-    # 的 min_/max_，即 进度.json.word_count_range 或默认 3000-5000），不套 8000 下限。
+    # cluster 视野 8000 字下限是「整块草稿」语义，不能套到 splitter 切出来的单个分章
+    # （单章 3000-4500 CJK）。validate_cluster 逐章 validate 时设 CLUSTER_PER_CHAPTER=1，
+    # 此处回退到章级字数语义（保留传入的 min_/max_，即 进度.json.word_count_range 或默认
+    # 3000-5000），不套 8000 下限。
     if (_os.environ.get("CLUSTER_MODE") == "1"
             and _os.environ.get("CLUSTER_PER_CHAPTER") != "1"):
         min_, max_ = 8000, 30000
@@ -202,9 +202,9 @@ def check_item_consistency(body: str, project_root: Path,
         if not name or name not in body:
             continue
         # 1. 道具必须已登场
-        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 obtained_cluster
-        # 2026-05-30 北极星复审：obtained_cluster 是 cluster ID 不是章号——反查起始章，登场 cluster 起始章
-        # > 本章才算「道具尚未引入」（禁抽数字当章号，对齐 check_knowledge_leak 的 cluster_id_to_range）。
+        # 纯 cluster 模式 · 只读 obtained_cluster。obtained_cluster 是 cluster ID 不是
+        # 章号——反查起始章，登场 cluster 起始章 > 本章才算「道具尚未引入」（禁抽数字当
+        # 章号，对齐 check_knowledge_leak 的 cluster_id_to_range）。
         oc = it.get("obtained_cluster", "cluster_999")
         _orng = cluster_lookup.cluster_id_to_range(project_root, oc) if isinstance(oc, str) else None
         obtained_lo = int(_orng[0]) if _orng and len(_orng) == 2 else None
@@ -255,12 +255,12 @@ def check_knowledge_leak(body: str, project_root: Path,
         k = c.get("knowledge", {})
         will_learn = k.get("will_learn", [])
         for wl in will_learn:
-            # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 learn_at_cluster
+            # 纯 cluster 模式 · 只读 learn_at_cluster
             lac = wl.get("learn_at_cluster")
             if not isinstance(lac, str):
                 continue
-            # 2026-05-30 北极星复审：learn_at_cluster 是 cluster ID 不是章号——反查起始章，本章 < 起始章
-            # 才算「未来知识」（禁抽数字当章号比，参照本文件 validate_cluster 已用 cluster_id_to_range）。
+            # learn_at_cluster 是 cluster ID 不是章号——反查起始章，本章 < 起始章才算
+            # 「未来知识」（禁抽数字当章号比，参照本文件 validate_cluster 已用 cluster_id_to_range）。
             _lrng = cluster_lookup.cluster_id_to_range(project_root, lac)
             learn_lo = int(_lrng[0]) if _lrng and len(_lrng) == 2 else None
             if learn_lo is None or chapter >= learn_lo:
@@ -297,7 +297,7 @@ def check_knowledge_leak(body: str, project_root: Path,
 
 
 def _flatten_locked_facts(facts) -> list[str]:
-    """v17.5 C2：locked_facts 支持 list（旧）和 dict（新）两种格式。"""
+    """locked_facts 支持 list 和 dict 两种格式。"""
     if isinstance(facts, list):
         return [str(x) for x in facts]
     if isinstance(facts, dict):
@@ -321,7 +321,7 @@ def _flatten_locked_facts(facts) -> list[str]:
 def check_locked_facts(body: str, project_root: Path, manifest: dict) -> list[dict]:
     """粗检：对每个出场主角，locked_facts 中的关键短语不应在正文中被否定/替换。
 
-    v17.5 C2 升级：支持 list 和 dict 两种 schema。
+    支持 list 和 dict 两种 schema。
     """
     errs = []
     cards = load_json(project_root / "_数据库" / "人物卡.json", {}).get("characters", [])
@@ -388,7 +388,7 @@ def check_character_appearance(body: str, manifest: dict) -> list[dict]:
 
 
 def check_pov_leak(body: str, manifest: dict) -> list[dict]:
-    """POV泄漏检测（v16·移植自外部工艺库）：检测视角跳跃和信息泄漏标记。"""
+    """POV泄漏检测：检测视角跳跃和信息泄漏标记。"""
     errs = []
     pov_leak_patterns = [
         (r"他(?:心中|暗想|心想).{0,20}她(?:心中|暗想|心想)", "同段内两个角色的内心活动——视角跳跃"),
@@ -433,8 +433,7 @@ def check_try_fail(body: str, manifest: dict) -> list[dict]:
 
 
 def check_character_mentions(body: str, project_root: Path, chapter: int) -> list[dict]:
-    """角色提及自动检测（v16·对齐NovelCrafter Codex）：
-    扫描正文中所有角色名出现，检测未在人物卡中登记的角色。"""
+    """角色提及自动检测：扫描正文中所有角色名出现，检测未在人物卡中登记的角色。"""
     errs = []
     cards = load_json(project_root / "_数据库" / "人物卡.json", {})
     known_names = set()
@@ -442,29 +441,29 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
         name = c.get("name", "")
         if name:
             known_names.add(name)
-        # 2026-06-01 修：scene/正文常用 id 引用（如「乐园之声」），旧版只收 name
-        # 「乐园之声（广播）」→ 正文出现 id 时误报 UNKNOWN_CHARACTER。补 id 进已知集（减少误报）。
+        # scene/正文常用 id 引用（如「乐园之声（广播）」只用 id「乐园之声」）而非 name，
+        # 把 id 也计入已知集，防止 id 被误报为 UNKNOWN_CHARACTER。
         cid = c.get("id", "")
         if cid:
             known_names.add(cid)
         for alias in c.get("aliases", []):
             known_names.add(alias)
 
-    cn_name_pattern = re.compile(r'["“「]([^"”」]+)["”」]\s*[一-鿿]{2,4}(?:说|道|问|答|笑|叹|喊|骂|嘀咕)')  # 2026-05-30 补弯引号
-    # 🔴 2026-06-28：要求说话动词后跟对话标点（：""「『，。！？）。说话归属总是「X道：」「X道，"…"」，
-    # 而复合词里的「道」（下水道/知道/味道/街道/一道）后跟其他汉字 → 不匹配，根治 NER 把句中碎片当人名的误报。
+    cn_name_pattern = re.compile(r'["“「]([^"”」]+)["”」]\s*[一-鿿]{2,4}(?:说|道|问|答|笑|叹|喊|骂|嘀咕)')
+    # 要求说话动词后跟对话标点（：""「『，。！？）。说话归属总是「X道：」「X道，"…"」，
+    # 而复合词里的「道」（下水道/知道/味道/街道/一道）后跟其他汉字 → 不匹配，避免把句中
+    # 碎片误判为人名。
     speaker_pattern = re.compile(
         r'([一-鿿]{2,4})(?:说道?|道|问道?|答道?|笑道?|骂道?|喊道?|嘀咕|开口)'
         r'(?=[：:，,。．！？!?、""""「」『』])')
 
-    # v27 NER 收敛（feedback: UNKNOWN_CHARACTER 每 cluster 几十误报·fp 已积 250+）
-    # 扩首字黑名单：代词 / 否定词 / 时态副词 / 程度副词 / 量词起首（不可能是中文人名首字）
+    # 首字黑名单：代词 / 否定词 / 时态副词 / 程度副词 / 量词起首（不可能是中文人名首字）
     BAD_FIRST_CHARS = set("的了在是这那和与你我他她它们之就只也都还又再已便"
                           "不没否非无别莫勿"
                           "上下里外前后旁中"
                           "才刚很太极颇较挺真"
                           "有要会能可应该需想"
-                          # 🔴 2026-06-28：连词/助词/介词起首（钟楼弃儿 cluster_001 NER 误报根因·真名绝不这样起首）
+                          # 连词/助词/介词起首（真名绝不这样起首）
                           "但及并而却则即既故若虽因由从向往朝己新各另随当")
     # 整词黑名单（NER 误识别的常见动词短语 / 副词搭配 · 通用 · 非项目级 false_positives）
     VERB_PHRASE_BLACKLIST = {
@@ -492,10 +491,10 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
             continue
         if name in VERB_PHRASE_BLACKLIST:
             continue
-        # 含「不/没/又/也/已/再/还/才/刚/都」第二字时疑似动词短语（2026-06-28 补 都）
+        # 含「不/没/又/也/已/再/还/才/刚/都」第二字时疑似动词短语
         if len(name) >= 2 and name[1] in "不没又也已再还才刚都":
             continue
-        # 🔴 2026-06-28：捕获含功能词/语气副词子串 → 必是句中碎片非人名（似乎/仿佛/已经…绝不入名）
+        # 捕获含功能词/语气副词子串 → 必是句中碎片非人名（似乎/仿佛/已经…绝不入名）
         if any(fw in name for fw in ("似乎", "仿佛", "好像", "已经", "正在", "忽然",
                                       "突然", "这时", "此时", "竟然", "居然", "渐渐")):
             continue
@@ -522,7 +521,7 @@ def check_character_mentions(body: str, project_root: Path, chapter: int) -> lis
 
 
 def check_hook_specificity(body: str) -> list[dict]:
-    """章末钩子具体度检测（v16·移植自外部工艺库因果转换引擎）。"""
+    """章末钩子具体度检测。"""
     errs = []
     lines = [l.strip() for l in body.split("\n") if l.strip()]
     if len(lines) < 3:
@@ -542,7 +541,7 @@ def check_hook_specificity(body: str) -> list[dict]:
 
 
 def check_dialogue_craft(body: str) -> list[dict]:
-    """对白工艺检测（v16·移植自外部工艺库 prose_craft）。"""
+    """对白工艺检测。"""
     errs = []
     action_beats = ["按", "敲", "拽", "推", "转身", "偏头", "咬牙", "停顿",
                     "沉默", "目光", "皱眉", "点头", "摇头", "握", "攥",
@@ -554,7 +553,7 @@ def check_dialogue_craft(body: str) -> list[dict]:
         if not stripped:
             consec_dialogue = 0
             continue
-        has_quote = any(q in stripped for q in ['"', '“', '”', '「', '」'])  # 2026-05-30 补弯引号
+        has_quote = any(q in stripped for q in ['"', '“', '”', '「', '」'])
         if has_quote:
             consec_dialogue += 1
         else:
@@ -572,9 +571,9 @@ def check_dialogue_craft(body: str) -> list[dict]:
                 "fix_hint": "每1-3句对话后插入动作节拍（按/敲/转身/偏头/停顿等）",
             })
             consec_dialogue = 0
-    long_quotes = re.findall(r'["“「]([^"”」]{80,})["”」]', body)  # 2026-05-30 补弯引号
-    # v2 cluster 化（2026-05-28）：cluster 视野下仪式条文/残卷引文/角色独白合理存在，
-    # 阈值从 >0 提到 >5（cluster 整块仪式段可能 3-5 处长引文属功能必要）。
+    long_quotes = re.findall(r'["“「]([^"”」]{80,})["”」]', body)
+    # cluster 视野下仪式条文/残卷引文/角色独白合理存在，长引文阈值放宽到 >5（非 cluster
+    # 模式阈值 >0）——cluster 整块仪式段可能 3-5 处长引文属功能必要。
     import os as _os
     _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
     _threshold = 5 if _cluster_mode else 0
@@ -604,12 +603,11 @@ def validate(project_root: Path, chapter: int) -> dict:
     manifest_path = project_root / "_数据库" / ".manifest" / f"ch_{chapter:03d}.json"
     manifest = load_json(manifest_path)
     if manifest is None:
-        # 2026-05-29 复审修复 [H10]：cluster 视野逐章校验时，splitter 只为起首章建
-        # manifest，非起首章必然没有 → 旧逻辑直接 MANIFEST_MISSING(fatal/hard_gate) 误报。
+        # cluster 视野逐章校验时，splitter 只为起首章建 manifest，非起首章必然没有。
         # CLUSTER_PER_CHAPTER=1 时降级 manifest 依赖：用空 manifest 骨架继续跑机械扫描
         # （字数/禁用词/POV/对白工艺等不依赖 manifest 的检查照常），manifest 依赖型检查
         # （tier1 伏笔/secret/角色出场/道具/locked_fact/knowledge_leak）因 active_characters
-        # 等字段为空自然短路，不再硬挡。整块 manifest 依赖由 cluster 级 audit 在起首章统一覆盖。
+        # 等字段为空自然短路，不硬挡。整块 manifest 依赖由 cluster 级 audit 在起首章统一覆盖。
         import os as _os
         if _os.environ.get("CLUSTER_PER_CHAPTER") == "1":
             manifest = {}
@@ -682,8 +680,8 @@ def format_report(result: dict) -> str:
 
 
 def format_json(result: dict, chapter: int) -> str:
-    """把 validate() 的返回 dict 归一化为 v18 --json 输出契约（见模块 docstring）。
-    audit_hub 等下游 json.loads 后直接取 errors[]，靠 code 路由，不再正则解析。"""
+    """把 validate() 的返回 dict 归一化为 --json 输出契约（见模块 docstring）。
+    audit_hub 等下游 json.loads 后直接取 errors[]，靠 code 路由。"""
     out = {
         "schema_version": "1.0",
         "scanner": "validate_chapter",
@@ -712,10 +710,8 @@ def format_json(result: dict, chapter: int) -> str:
 
 
 def validate_cluster(project_root: Path, cluster_key: str) -> dict:
-    """2026-05-29 流程贯通 · cluster 视野校验入口（断点 1）。
+    """cluster 视野校验入口。
 
-    命令文档 cluster-save-state.md:132 调 `validate_chapter.py <项目> --cluster <key>`，
-    但旧 main 只解析位置参 <项目><章节号>，--cluster 被当 flag 丢弃 → 实际只校验第 1 章。
     本函数用 cluster_lookup.cluster_id_to_range 取 cluster 章范围，对范围内每章设
     CLUSTER_MODE=1（cluster 视野字数/长引文阈值），逐章跑现有 hard_gate 逻辑后聚合。
 
@@ -738,8 +734,8 @@ def validate_cluster(project_root: Path, cluster_key: str) -> dict:
     prev_mode = _os.environ.get("CLUSTER_MODE")
     prev_per_ch = _os.environ.get("CLUSTER_PER_CHAPTER")
     _os.environ["CLUSTER_MODE"] = "1"  # cluster 视野语义（长引文阈值 >5 等保留）
-    # 2026-05-29 复审修复 [H9][H10]：逐章 validate 走「单分章字数/manifest」语义，
-    # 不套整块 8000 下限，也不对非起首章硬挡 MANIFEST_MISSING（splitter 只建起首章）。
+    # 逐章 validate 走「单分章字数/manifest」语义，不套整块 8000 下限，也不对非起首章
+    # 硬挡 MANIFEST_MISSING（splitter 只建起首章）。
     _os.environ["CLUSTER_PER_CHAPTER"] = "1"
     all_errs: list[dict] = []
     ch_files: list[str] = []

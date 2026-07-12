@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""agenda_drift_scanner.py — writer intent agenda drift · R24 W12 Batch-KK · P1
+"""agenda_drift_scanner.py — writer intent agenda drift
 
 【缺口 · AGI 协作 reflexivity / 反算法议程占领】
 配合 writer_intent_anchor.py：草稿落地后比对盲意图卡 4 维（want/antagonist/
 stake/tone-word）与草稿正文的相似度。任一维度 < 0.62 → WRITER_INTENT_AGENDA_DRIFT。
 
-【做法 · 双路（2026-07-01 语义路补齐 · 取代字面重叠对同义改写零容错）】
+【做法 · 双路】
   · 读 writer_intent_anchor.load_anchor(project, cluster_key) → 4 字段
   · 草稿 strip CHANGES
   · 真语义 embedding 后端就绪（_has_real_embedding_backend()）时：4 字段文本与草稿整体
@@ -130,7 +130,7 @@ def _semantic_coverage(field_text: str, draft_embedding) -> "float | None":
 
 
 def _safe_prefetch(texts: list) -> None:
-    """批量预热 embedding 缓存（Wave-4 2026-07-03）：草稿 + 4 字段一次性灌缓存，随后
+    """批量预热 embedding 缓存：草稿 + 4 字段一次性灌缓存，随后
     draft/field 的逐条 compute_embedding 全部命中。prefetch 失败不影响主流程（回退逐条现算）。"""
     if not texts:
         return
@@ -182,7 +182,7 @@ def scan(draft_path, project_root, cluster_key) -> dict:
     match_method = "char_jaccard"
     draft_embedding = None
     if _has_real_embedding_backend():
-        # Wave-4 2026-07-03：草稿 + 4 字段一次性批量预热·下面 draft/field embedding 全部命中缓存
+        # 草稿 + 4 字段一次性批量预热，下面 draft/field embedding 全部命中缓存
         field_vals = [str(anchor.get(f, "")) for f in _FIELDS]
         _safe_prefetch([draft] + [v for v in field_vals if v.strip()])
         draft_embedding = _safe_compute_embedding(draft)

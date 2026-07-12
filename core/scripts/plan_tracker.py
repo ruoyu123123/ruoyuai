@@ -21,8 +21,8 @@ outline）在 Agent 或命令执行时**无法跳步**：
 - 二者**共存不冲突**——本工具不动 WAL 的任何字段；attestation 也只加 plan
   JSON 的 `_attestation` 字段，不触碰 WAL（见 lessons L8.4）。
 
-防篡改 attestation（P1-1）
--------------------------
+防篡改 attestation
+------------------
 plan_tracker 是 plan JSON 的【唯一合法写入者】。每次合法写盘都把 plan 规范化
 内容的 HMAC-SHA256 写进 `plan["_attestation"]`；每次写前读校验，不符即阻断。
 任何不经 plan_tracker 的修改（Agent 直接 Edit / 旁路脚本 / prompt 注入写盘，
@@ -33,13 +33,13 @@ CLI 子命令
 ----------
 - create   --command <cmd> --project <name> [--key <cluster-key-or-id>]
 - step     <plan_id> --n <step_num> [--output <file>] [--skip-output]
-                     [--tokens N] [--duration-ms N]   # P2-8：subagent 成本追踪
+                     [--tokens N] [--duration-ms N]   # subagent 成本追踪
 - end      <plan_id>
 - status   <plan_id>
 - list     [--active]
 - abort    <plan_id> --reason <msg>
-- verify   <plan_id>                 # P1-1：校验防篡改 attestation
-- reattest <plan_id>                 # P1-1：合法手动改 plan 后重新盖章
+- verify   <plan_id>                 # 校验防篡改 attestation
+- reattest <plan_id>                 # 合法手动改 plan 后重新盖章
 
 Python API
 ----------
@@ -71,19 +71,19 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac  # 2026-05-29 修：attestation 改 HMAC 防伪造
+import hmac  # attestation 用 HMAC 防伪造
 import json
 import os
-import secrets  # 2026-05-29 修：本地密钥 + plan_id 随机后缀
-import re  # 2026-05-30 北极星复审：_verify_agent_report emergence 校验(609)用 re.search，原模块级缺 → NameError
+import secrets  # 本地密钥 + plan_id 随机后缀
+import re  # _verify_agent_report 等函数的 emergence 校验用 re.search，需模块级导入
 import sys
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# 2026-06-13 残余非原子写收编：plan JSON 写盘走 atomic_json（tmp pid+uuid + fsync +
-# os.replace）——崩溃/断电留半截 plan = json 解析失败 = attestation/断点恢复全废。
+# plan JSON 写盘走 atomic_json（tmp pid+uuid + fsync + os.replace）——
+# 崩溃/断电留半截 plan = json 解析失败 = attestation/断点恢复全废。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json  # noqa: E402
 
@@ -98,7 +98,7 @@ _WORKSPACE = _uwd()
 PROJECTS_DIR = _WORKSPACE / "novels"
 STYLES_DIR = _WORKSPACE / "styles"
 GLOBAL_PLANS_DIR = _WRITABLE_ROOT / "core" / "claude-home" / ".plans"
-# 2026-05-29 修：attestation HMAC 的机器本地密钥（与 GLOBAL_PLANS_DIR 同级隐藏文件）
+# attestation HMAC 的机器本地密钥（与 GLOBAL_PLANS_DIR 同级隐藏文件）
 ATTEST_KEY_PATH = GLOBAL_PLANS_DIR / ".attest_key"
 
 STATUS_PENDING = "pending"
@@ -137,14 +137,13 @@ def _load_json(path: Path, default: Any = None) -> Any:
 def _save_json(path: Path, data: Any) -> None:
     text = _json_dump_safe(data)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # 2026-06-13 残余非原子写收编：裸 write_text → atomic_write_text 原子落盘。
+    # 落盘走 atomic_write_text（tmp 唯一名 + fsync + os.replace），防止崩溃留半截 plan；
     # 序列化仍由 _json_dump_safe 权威产出（ensure_ascii=False / indent=2 /
-    # sort_keys=False + 不可序列化 → RuntimeError 自检），字节内容与旧实现完全一致，
-    # 只换写盘方式（tmp 唯一名 + fsync + os.replace · 崩溃不留半截 plan）。
+    # sort_keys=False + 不可序列化 → RuntimeError 自检）。
     atomic_json.atomic_write_text(path, text)
 
 
-# ============ 防篡改 attestation（P1-1，借鉴 planning-with-files）============
+# ============ 防篡改 attestation（借鉴 planning-with-files）============
 #
 # 威胁模型：plan_tracker.py 是 plan JSON 的【唯一合法写入者】。任何不经过
 # plan_tracker 的修改（Agent 直接 Edit、旁路脚本、prompt 注入写盘）——典型是
@@ -204,7 +203,7 @@ def _canonical_plan_bytes(plan: dict) -> bytes:
 
 
 def _compute_attestation(plan: dict) -> str:
-    """2026-05-29 修：HMAC-SHA256(本地密钥, 规范化字节流)。"""
+    """HMAC-SHA256(本地密钥, 规范化字节流)。"""
     return hmac.new(_get_attest_key(), _canonical_plan_bytes(plan),
                     hashlib.sha256).hexdigest()
 
@@ -270,10 +269,9 @@ def resolve_project_root(project: str) -> Path | None:
     """
     if not project:
         return None
-    # 🔴 真机 e2e 抓修(2026-06-15)：project 本身是有效路径(完整/相对·非仅书名)→ 直接用。
-    # 原仅查 PROJECTS_DIR/书名 → orchestrator CLI --project 传完整路径(workspace/novels/X)时
-    # 返回 None → _verify_outputs project_root=None → expected_outputs 相对 cwd 误判缺失；
-    # run_command 与 _verify_outputs 的项目根解析必须一致。
+    # project 本身可能是有效路径(完整/相对·非仅书名)，直接用；只按 PROJECTS_DIR/书名 查找
+    # 会在 --project 传完整路径(workspace/novels/X)时返回 None，导致 expected_outputs
+    # 相对 cwd 误判缺失。run_command 与 _verify_outputs 的项目根解析必须一致。
     direct = Path(project)
     if direct.exists():
         return direct
@@ -351,8 +349,8 @@ def _substitute(text: str, project: str, key: str | None,
                 plan_id: str | None = None) -> str:
     """替换项目、cluster 与 plan 运行时占位符。
 
-    cluster-only 契约下，plan 模板不再使用章号占位符。若模板仍含 `{ch...}`，
-    创建 plan 直接失败，避免把旧单章路径静默替换为空。
+    cluster-only 契约：plan 模板禁用章号占位符。模板含 `{ch...}` →
+    创建 plan 直接失败，不静默替换为空。
     """
     import re
     if not isinstance(text, str):
@@ -362,7 +360,7 @@ def _substitute(text: str, project: str, key: str | None,
     if re.search(r"\{ch(?:[+\-]\d+)?(?::03d)?\}", out):
         raise ValueError(f"[plan_tracker] 模板仍含旧章号占位符，cluster-only 禁止使用：{text}")
 
-    # v26: {next_key} 替换 (NNN → NNN+1 · 输出纯数字段 · 适配 cluster_{next_key}_xxx 模板)
+    # {next_key} 替换 (NNN → NNN+1 · 输出纯数字段 · 适配 cluster_{next_key}_xxx 模板)
     # 设计契约: plan template 写 `cluster_{next_key}_xxx` 时 key="001" → next_key="002"
     #          key="cluster_001" 也按内部数字段递增 + 剥前缀 → next_key="002"
     if "{next_key}" in out:
@@ -371,9 +369,9 @@ def _substitute(text: str, project: str, key: str | None,
             m = re.search(r"(\d+)", key)
             if m:
                 next_num = int(m.group(1)) + 1
-                # 复验修：强制 :03d 与 cluster_emergence_engine 完本/涌现两处
-                # 对齐（原「保持原宽度」在 --key 2/0001 时与 engine 写的 WAL
-                # 文件名不一致 → step11 expected_outputs FileNotFoundError 卡死）
+                # 强制 :03d 与 cluster_emergence_engine 完本/涌现两处对齐——
+                # 非三位宽度在 --key 2/0001 时与 engine 写的 WAL 文件名
+                # 不一致 → step11 expected_outputs FileNotFoundError 卡死
                 next_key = f"{next_num:03d}"
             else:
                 next_key = key + "_next"
@@ -402,7 +400,7 @@ def make_plan_id(command: str, project: str, key: str | None) -> str:
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     # 微秒后缀确保同秒多次创建不冲突
     micro = datetime.now().strftime("%f")[:3]
-    # 2026-05-29 修【可靠性】：同毫秒内连续 create 会产生相同 id 并覆盖前一个 plan。
+    # 同毫秒内连续 create 可能产生相同 id 并覆盖前一个 plan，
     # 追加 secrets.token_hex(3) 随机后缀（6 hex 字符）彻底消除碰撞。
     rand = secrets.token_hex(3)
     if key:
@@ -458,7 +456,7 @@ def create_plan(
 
     out_dir = runtime_plans_dir(project)
     out_path = out_dir / f"{plan_id}.json"
-    _save_plan(out_path, plan)  # P1-1：创建即盖 attestation 章
+    _save_plan(out_path, plan)  # 创建即盖 attestation 章
     return plan_id
 
 
@@ -524,7 +522,7 @@ def reattest_plan(plan_id: str) -> dict:
 
 
 def _find_step(plan: dict, n) -> dict:
-    """v17.10 修正：兼容 int / float / str 编号（如 '2.5' 旧模板）。"""
+    """接受 int / float / str 编号（如 '2.5'）。"""
     for s in plan.get("steps", []):
         sn = s.get("n")
         # 字符串化后比较，兼容 1 / "1" / "2.5" / 2.5
@@ -768,7 +766,7 @@ def _verify_declared_report(project: str, declared: str, *, agent_name: str | No
 
 
 def _verify_agent_report(project: str, agent_name: str, cluster_id: str | None) -> bool:
-    """v24 anti-skip: 校验 must_spawn_agent 字段对应的 JudgeReport 文件真实存在。
+    """anti-skip: 校验 must_spawn_agent 字段对应的 JudgeReport 文件真实存在。
 
     cluster-only 路径规范：
     - novel-summarizer → _数据库/.wal/cluster_<key>_summary.json
@@ -818,12 +816,12 @@ def _verify_agent_report(project: str, agent_name: str, cluster_id: str | None) 
 
 
 def _apply_touch_outputs(plan: dict, step: dict, project: str | None) -> list[str]:
-    """🔴 2026-06-26 加（cluster_001 翻车 sediment）：消费模板 step.touch_outputs。
+    """消费模板 step.touch_outputs。
 
     模板里有 touch_outputs 声明的（如 `.reading_reflection/.placeholder`）是
-    "多轮产物文件名可变的存在性代理"，原意是 orchestrator/调用方跑完后 touch。
-    Claude Code CLI 路径下没人 touch → expected_outputs 校验失败 → 主代理被迫手补。
-    现在 plan_tracker 在 step --n 时自动 touch，免去主代理 New-Item 苦力。
+    "多轮产物文件名可变的存在性代理"。Claude Code CLI 路径下没有独立进程会去 touch
+    这些文件，plan_tracker 在 step --n 时自动 touch，避免 expected_outputs 校验失败
+    逼主代理手动补文件。
 
     返回 touched 路径列表（仅作日志用，绝对路径）。
     """
@@ -906,11 +904,11 @@ def step_complete(
     """标记第 n 步完成；如果 expected_outputs 不存在则拒绝（除非 skip_output）。
 
     output 参数允许追加一个额外验证文件（不在模板里的）。
-    P2-8：可选 tokens / duration_ms 记录该步的 subagent 成本（cost tracking）。
+    可选 tokens / duration_ms 记录该步的 subagent 成本（cost tracking）。
     建议主代理在 Task 完成 notification 中取 total_tokens / duration_ms 传入。
     """
     path = _find_plan_path(plan_id)
-    plan = _load_plan(path, for_write=True)  # P1-1：写前防篡改校验
+    plan = _load_plan(path, for_write=True)  # 写前防篡改校验
     step = _find_step(plan, n)
 
     if step.get("status") == STATUS_COMPLETED:
@@ -926,13 +924,13 @@ def step_complete(
     now = datetime.now().isoformat(timespec="seconds")
     step["started_at"] = step.get("started_at") or now
 
-    # P2-8：记录本步的 subagent 成本（可选）
+    # 记录本步的 subagent 成本（可选）
     if tokens is not None:
         step["tokens_used"] = int(tokens)
     if duration_ms is not None:
         step["duration_ms"] = int(duration_ms)
 
-    # 🔴 2026-06-26：先消费 touch_outputs（模板声明的存在性代理）再校验 expected_outputs
+    # 先消费 touch_outputs（模板声明的存在性代理）再校验 expected_outputs
     _apply_touch_outputs(plan, step, plan.get("project"))
 
     # 校验 expected_outputs
@@ -975,18 +973,18 @@ def step_complete(
 def end_plan(plan_id: str) -> dict:
     """完成检查。返回 {ok, missing_steps, missing_outputs}。"""
     path = _find_plan_path(plan_id)
-    plan = _load_plan(path, for_write=True)  # P1-1：写前防篡改校验
+    plan = _load_plan(path, for_write=True)  # 写前防篡改校验
 
     required = set(plan.get("required_steps", []) or [])
     optional = set(plan.get("optional_steps", []) or [])
 
     missing_steps: list[int] = []
     missing_outputs: list[dict] = []
-    missing_agent_reports: list[dict] = []  # v24 anti-skip：must_spawn_agent 校验
+    missing_agent_reports: list[dict] = []  # anti-skip：must_spawn_agent 校验
 
     for step in plan.get("steps", []):
         n = step.get("n")
-        # v24: required + completed optional 都要校验 expected_outputs + must_spawn_agent
+        # required + completed optional 都要校验 expected_outputs + must_spawn_agent
         check_this = (n in required) or (n in optional and step.get("status") == STATUS_COMPLETED)
         if n in required and step.get("status") != STATUS_COMPLETED:
             missing_steps.append(n)
@@ -995,20 +993,20 @@ def end_plan(plan_id: str) -> dict:
             verified, missing = _verify_outputs(plan, step, plan.get("project"))
             if missing:
                 missing_outputs.append({"step": n, "missing": missing})
-            # v24 新增：must_spawn_agent 字段校验 JudgeReport 真存在
+            # must_spawn_agent 字段校验 JudgeReport 真存在
             must_agents = step.get("must_spawn_agent")
             if must_agents:
                 if isinstance(must_agents, str):
                     must_agents = [must_agents]
                 proj = plan.get("project", "")
                 cluster_id = plan.get("cluster_id") or cluster_id_from_key(plan.get("key"))
-                # v28 程序驱动：模板显式声明 judge_report_path（str 或 {agent: path} dict）
-                # → 优先验声明路径（命名学外移）；未声明的 agent 回落旧路径推算。
+                # 模板可显式声明 judge_report_path（str 或 {agent: path} dict）
+                # → 优先验声明路径；未声明的 agent 回落按约定路径推算。
                 jrp = step.get("judge_report_path")
-                # 🔴 2026-06-26 加 secondary declared report path（cluster_001 翻车 sediment）：
-                # voice-checker 无违规时不写 primary brief（.checker_briefs/cluster_*_voice.json），
-                # 但 secondary judge_report（.judge_reports/cluster_*_voice-checker.json）总有。
-                # primary/secondary 都是显式正式产物路径，不做未声明路径猜测。
+                # secondary declared report path：voice-checker 无违规时不写 primary brief
+                # （.checker_briefs/cluster_*_voice.json），但 secondary judge_report
+                # （.judge_reports/cluster_*_voice-checker.json）总有。primary/secondary
+                # 都是显式正式产物路径，不做未声明路径猜测。
                 jrp_sec = step.get("judge_report_path_secondary")
                 for agent_name in must_agents:
                     declared = None
@@ -1046,7 +1044,7 @@ def end_plan(plan_id: str) -> dict:
     plan["last_checked_at"] = now
     _save_plan(path, plan)
 
-    # P2-8：聚合 cost（仅汇总有记录的步骤）
+    # 聚合 cost（仅汇总有记录的步骤）
     total_tokens = sum(int(s.get("tokens_used") or 0) for s in plan.get("steps", []))
     total_duration_ms = sum(int(s.get("duration_ms") or 0) for s in plan.get("steps", []))
     steps_with_cost = sum(1 for s in plan.get("steps", []) if s.get("tokens_used") is not None)
@@ -1056,10 +1054,10 @@ def end_plan(plan_id: str) -> dict:
         "plan_id": plan_id,
         "missing_steps": missing_steps,
         "missing_outputs": missing_outputs,
-        "missing_agent_reports": missing_agent_reports,  # v24 anti-skip
+        "missing_agent_reports": missing_agent_reports,  # anti-skip
         "required_steps": sorted(required),
         "optional_steps": sorted(optional),
-        "cost_summary": {                       # P2-8：subagent 成本汇总
+        "cost_summary": {                       # subagent 成本汇总
             "total_tokens": total_tokens,
             "total_duration_ms": total_duration_ms,
             "steps_with_cost": steps_with_cost,
@@ -1070,7 +1068,7 @@ def end_plan(plan_id: str) -> dict:
 
 def abort_plan(plan_id: str, reason: str) -> dict:
     path = _find_plan_path(plan_id)
-    plan = _load_plan(path, for_write=True)  # P1-1：写前防篡改校验
+    plan = _load_plan(path, for_write=True)  # 写前防篡改校验
     plan["abort_reason"] = reason
     plan["completed_at"] = None
     now = datetime.now().isoformat(timespec="seconds")
@@ -1126,7 +1124,7 @@ def find_active_plans() -> list[dict]:
 
     容错策略：
     - 任何目录不存在 → 跳过
-    - 任何 JSON 损坏 → 不再静默消失，append 损坏条目
+    - 任何 JSON 损坏 → append 损坏条目（不静默丢弃）：
       {"corrupt": True, "path": str, "plan_id": 文件名 stem, "plan": {}}
       （消费方按 "corrupt" 键区分；带空 "plan" dict 保既有
       entry["plan"].get(...) 消费者 tolerant）
@@ -1158,8 +1156,8 @@ def find_active_plans() -> list[dict]:
                 "tampered": verify_attestation(d) != "ok",
             })
         except Exception:
-            # 2026-06-13 修：损坏 JSON / IO 错误不再静默消失——append corrupt
-            # 条目让 GUI Plan 续跑页可见 + 可清除（移 .corrupt/ 可恢复）
+            # 损坏 JSON / IO 错误不静默丢弃——append corrupt 条目让 GUI Plan 续跑页
+            # 可见 + 可清除（移 .corrupt/ 可恢复）
             result.append({
                 "corrupt": True,
                 "path": str(f).replace("\\", "/"),
@@ -1227,7 +1225,7 @@ def _cli_step(args: argparse.Namespace) -> int:
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    except PlanTamperedError as exc:  # P1-1：plan 被旁路篡改，拒绝 step
+    except PlanTamperedError as exc:  # plan 被旁路篡改，拒绝 step
         print(str(exc), file=sys.stderr)
         return 2
     plan = get_plan(args.plan_id)
@@ -1240,10 +1238,10 @@ def _cli_step(args: argparse.Namespace) -> int:
 def _cli_end(args: argparse.Namespace) -> int:
     try:
         res = end_plan(args.plan_id)
-    except PlanTamperedError as exc:  # P1-1：plan 被旁路篡改，拒绝 end
+    except PlanTamperedError as exc:  # plan 被旁路篡改，拒绝 end
         print(str(exc), file=sys.stderr)
         return 2
-    # P2-8：cost 汇总输出（仅当至少一步记录了成本时显示）
+    # cost 汇总输出（仅当至少一步记录了成本时显示）
     cost = res.get("cost_summary", {})
     if cost.get("steps_with_cost", 0) > 0:
         kt = cost["total_tokens"] / 1000 if cost["total_tokens"] else 0
@@ -1273,7 +1271,7 @@ def _cli_status(args: argparse.Namespace) -> int:
         return 2
     total = len(plan.get("steps", []))
     done = sum(1 for s in plan["steps"] if s.get("status") == STATUS_COMPLETED)
-    att_state = verify_attestation(plan)  # P1-1
+    att_state = verify_attestation(plan)
     att_label = {
         "ok": "✓ 有效",
         "tampered": "⚠️ 被篡改！内容与 attestation 不符 —— 跑 reattest 或排查注入",
@@ -1295,7 +1293,7 @@ def _cli_status(args: argparse.Namespace) -> int:
             STATUS_ABORTED: "[A]",
         }.get(s.get("status"), "[ ]")
         req = "(必)" if s.get("required") else "(可)"
-        # P2-8：步骤行末尾追加 cost（如果有记录）
+        # 步骤行末尾追加 cost（如果有记录）
         cost_suffix = ""
         tok = s.get("tokens_used")
         dur = s.get("duration_ms")
@@ -1324,7 +1322,7 @@ def _cli_list(args: argparse.Namespace) -> int:
             print(f"  [!] {p['id']} — {p['error']}")
             continue
         flag = "ACTIVE" if p["active"] else ("DONE" if p["completed"] else "ABORT")
-        tamper = "  ⚠️ TAMPERED" if p.get("tampered") else ""  # P1-1
+        tamper = "  ⚠️ TAMPERED" if p.get("tampered") else ""
         print(f"  [{flag:6}] {p['id']}  cmd={p['command']}  "
               f"project={p['project']}  key={p.get('key') or '-'}  "
               f"cluster={p.get('cluster_id') or '-'}{tamper}")
@@ -1334,7 +1332,7 @@ def _cli_list(args: argparse.Namespace) -> int:
 def _cli_abort(args: argparse.Namespace) -> int:
     try:
         res = abort_plan(args.plan_id, args.reason)
-    except PlanTamperedError as exc:  # P1-1：plan 被旁路篡改，拒绝 abort
+    except PlanTamperedError as exc:  # plan 被旁路篡改，拒绝 abort
         print(str(exc), file=sys.stderr)
         print("  如确需中止此被篡改的 plan：先 reattest 再 abort。", file=sys.stderr)
         return 2
@@ -1343,7 +1341,7 @@ def _cli_abort(args: argparse.Namespace) -> int:
 
 
 def _cli_verify(args: argparse.Namespace) -> int:
-    """P1-1：校验 plan 防篡改 attestation。"""
+    """校验 plan 防篡改 attestation。"""
     state = verify_plan(args.plan_id)
     labels = {
         "ok": "✓ attestation 有效，plan 未被篡改",
@@ -1356,7 +1354,7 @@ def _cli_verify(args: argparse.Namespace) -> int:
 
 
 def _cli_reattest(args: argparse.Namespace) -> int:
-    """P1-1：合法手动修改 plan 后重新盖章。"""
+    """合法手动修改 plan 后重新盖章。"""
     try:
         res = reattest_plan(args.plan_id)
     except FileNotFoundError as exc:
@@ -1386,7 +1384,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ps = sub.add_parser("step", help="标记某步完成")
     ps.add_argument("plan_id")
-    ps.add_argument("--n", type=str, required=True)  # v17.10: str 容错（支持 "2.5" 旧模板）
+    ps.add_argument("--n", type=str, required=True)  # str 容错（支持 "2.5" 等非整数编号）
     ps.add_argument("--output", default=None,
                     help="可选：额外要校验存在的文件")
     ps.add_argument("--skip-output", action="store_true",
@@ -1494,10 +1492,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    # 🔴 2026-07-08 验证书 e2e 抓出：status/end 等命令打印 ✓ 等非 ASCII 字符，Windows
-    # GBK 控制台下无 reconfigure 直接 UnicodeEncodeError 崩溃（与本session已修的
-    # hooks stdin/cluster_choice_apply 同根因·同批补齐·参照 cluster_choice_apply.py
-    # 既有写法）。
+    # status/end 等命令打印 ✓ 等非 ASCII 字符，Windows GBK 控制台下无 reconfigure
+    # 会直接 UnicodeEncodeError 崩溃（做法参照 cluster_choice_apply.py）。
     for _s in (sys.stdout, sys.stderr):
         if hasattr(_s, "reconfigure"):
             _s.reconfigure(encoding="utf-8", errors="replace")

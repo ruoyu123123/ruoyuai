@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""dispreferred_turn_shape_scanner.py — 非偏好回应「裸拒绝」检测（advisory · cluster · 2026-06-20）
+"""dispreferred_turn_shape_scanner.py — 非偏好回应「裸拒绝」检测（advisory · cluster）
 
 【缺口】会话分析 preference organization（arXiv PMC8504554）：真人在做「非偏好回应」
 （拒绝/反对/否决/拒邀）时，turn 形状不是裸句即答——而是带【延迟 token + 缓冲 hedge + account
@@ -63,9 +63,8 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-20 金标准校准【保持 shadow】：5 真作者中主神/剑来 bare_ratio=1.0(仅因 dispref_total<4
-    # 样本守卫未触发)——真作者本就写裸拒绝(强势角色常态·中文网文非缺陷)·前提弱潜在误报风险(同
-    # group_dialogue)·故保持 shadow 不放量·env 显式 active 才上报。
+    # 金标准校准结果：真作者本就写裸拒绝（强势角色常态·中文网文非缺陷），直接放量易
+    # 误报（同 group_dialogue 的顾虑），故默认保持 shadow，env 显式 active 才上报。
     m = (os.environ.get("DISPREFERRED_TURN_SHAPE_MODE") or "shadow").strip().lower()
     return m if m in ("off", "shadow", "active") else "shadow"
 

@@ -42,10 +42,10 @@ def cosine_similarity(v1: list[float], v2: list[float]) -> float:
     return sum(a * b for a, b in zip(v1, v2))
 
 
-# ── 真语义 embedding 后端（2026-05-30 · 取代 md5 哈希袋假语义 · 用户选通义 API）──────
+# ── 真语义 embedding 后端（opt-in · 用户配置 API 才启用）──────
 # 降级链：通义/OpenAI兼容 embedding API（.env GEN_EMBED__*）→ 本地 sentence-transformers → hash。
-# compute_embedding 签名不变（消费方 build_manifest RAG / voice drift 零改动）；
-# 默认无 key + 无本地包 → hash（行为完全不变，零回归）；配 .env 的 GEN_EMBED key 自动启用真语义。
+# 消费方（build_manifest RAG / voice drift）统一走 compute_embedding；
+# 默认无 key + 无本地包 → hash；配 .env 的 GEN_EMBED key 自动启用真语义。
 # ⚠️ 切换后端会改变维度（hash 384 / bge 512 / 通义 1024）→ 必须重建缓存（rebuild 写 .embed_manifest.json
 #    记 method+dim；cosine 维度不等返回 0，drift 会显示 sim 异常提示重建）。
 _BACKEND = None          # (method:str, dim:int, fn) 探测缓存
@@ -129,7 +129,7 @@ def _mstyle_embed(text: str) -> list[float]:
     return _MSTYLE_MODEL.encode(text[:8000], normalize_embeddings=True).tolist()
 
 
-# ── 🔴 2026-06-29 NN风格声纹集成 — ruoyu_style 后端（venv subprocess 桥）────────────
+# ── NN风格声纹集成 — ruoyu_style 后端（venv subprocess 桥）────────────
 # 若渝主流水线跑**系统 Python 3.14（无 torch）**，本仓 fine-tune 的风格/声纹模型只能在
 # **venv Python 3.10（torch CUDA）** 加载。所以 ruoyu_style 后端**不在系统 py 直接 import
 # sentence_transformers**（那会 ImportError），而是经 subprocess 调 venv python 跑
@@ -206,7 +206,7 @@ def ruoyu_style_available(model: str = "author") -> bool:
 
 def ruoyu_style_encode_batch(texts, model: str = "author",
                              timeout: int = 600) -> "list | None":
-    """🔴 2026-06-29 NN风格声纹集成 — 批量编码（subprocess 调 venv py + style_infer.py）。
+    """NN风格声纹集成 — 批量编码（subprocess 调 venv py + style_infer.py）。
 
     入：texts=list[str]，model ∈ {"author","character"}。
     出：list[list[float]]（与 texts 等长·已 L2 归一化）或 **None**（任何不可用/失败）。
@@ -216,7 +216,7 @@ def ruoyu_style_encode_batch(texts, model: str = "author",
     """
     if not texts:
         return []
-    # 🔴 2026-07-04 Wave-5：daemon-first——常驻推理服务命中时 ~0.1s/批（模型驻内存），
+    # 🔴 daemon-first：常驻推理服务命中时 ~0.1s/批（模型驻内存），
     # 未启用(RUOYU_NN_DAEMON!=1 默认)/不可达/结果不齐 → 无缝落下方既有子进程冷启动路径。
     try:
         import nn_daemon_client
@@ -288,7 +288,7 @@ def _detect_backend():
       ① .env 配 GEN_EMBED__* key → 通义/OpenAI 兼容 API
       ② 环境变量 EMBED_BACKEND=mstyle（且装了 sentence-transformers）→ StyleDistance/mstyledistance
          （ACL2025 真风格语义 · content-independent · 含中文 · CPU · 风格相似度最对口）
-      ②.5 环境变量 EMBED_BACKEND=ruoyu_style（🔴 2026-06-29 NN风格声纹集成）→ 本仓 fine-tune
+      ②.5 环境变量 EMBED_BACKEND=ruoyu_style（NN风格声纹集成）→ 本仓 fine-tune
          风格模型（runs/style_embed_v1/final·dim 768）经 venv py3.10 subprocess 桥编码
          （系统 py3.14 无 torch·故不直接 import·走 ruoyu_style_encode_batch）。venv/模型缺
          → 降级 hash（默认安全·零崩）。
@@ -313,7 +313,7 @@ def _detect_backend():
             return _BACKEND
         except ImportError:
             print("[embedding_store] EMBED_BACKEND=mstyle 但未装 sentence-transformers，降级 hash", file=sys.stderr)
-    # ②.5 🔴 2026-06-29 NN风格声纹集成 · EMBED_BACKEND=ruoyu_style → 本仓 fine-tune 风格模型
+    # ②.5 🔴 NN风格声纹集成 · EMBED_BACKEND=ruoyu_style → 本仓 fine-tune 风格模型
     #      （venv subprocess 桥·系统 py3.14 无 torch·见上方 ruoyu_style_encode_batch）。
     #      默认安全：venv 或模型缺 → 降级 hash（保持 dim 384 一致·零崩）。
     if _eb == "ruoyu_style":
@@ -349,10 +349,10 @@ def embedding_method() -> str:
     return _detect_backend()[0]
 
 
-# ── 🔴 2026-07-03 Wave-4 性能层：embedding 缓存 + 批量 API ──────────────────────
-# 背景实测：ruoyu_style 后端每次调用=新起 venv 子进程加载模型（暖机 ~23s/次），但 16 条
-# batch 边际成本仅 1.6s/条——单条 compute_embedding 模式下 scanner 逐段调用完全不可用。
-# 根治：①(method, sha256(text)) 键内存+磁盘缓存（仅真后端·稳定语料如 prototype/锚点/skill
+# ── embedding 缓存 + 批量 API 性能层 ──────────────────────
+# ruoyu_style 后端每次调用=新起 venv 子进程加载模型（暖机 ~23s/次），但 16 条 batch
+# 边际成本仅 1.6s/条——单条 compute_embedding 模式下 scanner 逐段调用完全不可用。
+# 因此：①(method, sha256(text)) 键内存+磁盘缓存（仅真后端·稳定语料如 prototype/锚点/skill
 # 段落一次编码终身命中）；②compute_embeddings_batch 把 misses 合并成一次后端批调用
 # （ruoyu_style 走既有 encode_batch 单子进程·API 走 list input）；③scanner 侧 scan() 开头
 # prefetch_embeddings(全部待编码文本)，其后既有的逐条 compute_embedding 调用全部命中缓存。
@@ -415,7 +415,7 @@ def _embed_cache_put(method: str, key: str, vec: list) -> None:
 def compute_embedding(text: str) -> list[float]:
     """真语义 embedding（降级链）。任何后端失败 → hash 兜底（永不崩，呼应 MAPE-K「失败记录降级」）。
 
-    🔴 2026-07-03 Wave-4：真后端结果过 (method, text-hash) 缓存——先 prefetch_embeddings()
+    🔴 真后端结果过 (method, text-hash) 缓存——先 prefetch_embeddings()
     批量灌缓存，其后逐条调用零成本命中（hash 后端不缓存·失败兜底不缓存）。"""
     method, _dim, fn = _detect_backend()
     use_cache = method != "hash" and _embed_cache_enabled()
@@ -480,7 +480,7 @@ def _api_embed_batch(profile: dict, texts: "list[str]") -> "list[list[float] | N
 
 
 def compute_embeddings_batch(texts: "list[str]") -> "list[list[float]]":
-    """批量真语义 embedding（Wave-4 核心 API）。与 texts 等长·条目失败走 hash 兜底（不缓存）。
+    """批量真语义 embedding（缓存 + 批量后端核心 API）。与 texts 等长·条目失败走 hash 兜底（不缓存）。
 
     dedupe → 缓存命中 → misses 一次后端批调用（ruoyu_style=单 venv 子进程编整批）→ 回填缓存。
     """
@@ -514,7 +514,7 @@ def compute_embeddings_batch(texts: "list[str]") -> "list[list[float]]":
             for i, r in enumerate(results)]
 
 
-# ── 🔴 2026-07-04 W6-C：内容语义嵌入 API（风格/内容双轨·bge-small-zh） ──────────────
+# ── 内容语义嵌入 API（风格/内容双轨·bge-small-zh） ──────────────
 # 动机（真机测量·core/ml/calibration/reports/*_separability_20260704.md）：ruoyu_style 是作者
 # 判别模型，对内容关系在单段粒度 AUC≈随机（0.51-0.56）；bge 内容模型三条达标线全过
 # （0.859/0.763/0.808）。内容语义任务（呼应/触及/去重检索）走本 API；风格任务继续走
@@ -584,7 +584,7 @@ def _content_embed_backend_batch(texts: "list[str]") -> "list[list[float] | None
 
 
 def compute_content_embeddings_batch(texts: "list[str]") -> "list[list[float]] | None":
-    """内容语义批量编码（缓存复用 Wave-4 机制·method 键隔离于风格后端）。
+    """内容语义批量编码（缓存复用统一批量缓存机制·method 键隔离于风格后端）。
     整体不可用 → None；可用则与 texts 等长（编码经 L2 归一·cosine=点积）。"""
     if not texts:
         return []
@@ -663,7 +663,7 @@ def _emb_dir(project_root: Path) -> Path:
     return p
 
 
-# ── C1 风格余弦护栏（2026-06-14·防 hash 静默冒充 mstyle 风格余弦）──────────────
+# ── C1 风格余弦护栏（防 hash 静默冒充 mstyle 风格余弦）──────────────
 class MstyleBackendError(RuntimeError):
     """风格余弦子分要求 mstyle 后端但当前不是 → 显式失败，绝不静默降级 hash 冒充。"""
 
@@ -693,7 +693,7 @@ def _embed_manifest_path(project_root: Path) -> Path:
 
 
 def write_embed_manifest(project_root: Path):
-    """rebuild 后落 .embed_manifest.json 记 method+dim（兑现 docstring 里此前 vapor 的守卫）。"""
+    """rebuild 后落 .embed_manifest.json 记 method+dim（供 check_embed_manifest 校验用）。"""
     m, d, _ = _detect_backend()
     _embed_manifest_path(project_root).write_text(
         json.dumps({"method": m, "dim": d}, ensure_ascii=False), encoding="utf-8")
@@ -772,7 +772,7 @@ def _extract_character_dialogues(
             for m in re.finditer(re.escape(alias), text):
                 start = m.start()
                 window = text[max(0, start-200):min(len(text), start+200)]
-                # 2026-05-30 北极星复审：原两个 alternation 全是 ASCII " 重复 + 漏中文弯引号 → 中文对话提取失效
+                # 对话提取正则须覆盖中文弯引号（U+201C/U+201D）和「」角引号，不能只认 ASCII "，否则中文对话提取失效
                 for q in re.findall(r'"([^"\n]{3,80})"|“([^”\n]{1,80})”|「([^」\n]{1,80})」', window):
                     d = next((g for g in q if g), "").strip()
                     if d and d not in dialogues:
@@ -869,7 +869,7 @@ def main():
                     print(f"  [OK] character_{name} baseline")
                 else:
                     print(f"  [SKIP] character_{name}（无对话样本）")
-        write_embed_manifest(project_root)   # C1：落 .embed_manifest.json 守卫（兑现 docstring）
+        write_embed_manifest(project_root)   # C1：落 .embed_manifest.json 后端守卫
         print(f"[embedding_store] rebuild 完成")
         sys.exit(0)
 

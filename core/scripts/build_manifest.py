@@ -16,21 +16,21 @@ build_manifest.py — 章节注入清单生成器
 """
 from __future__ import annotations
 import json
-import os  # R20 W9 Batch-CC P2 2026-06-21·ACW_MODE env 检测需 os.environ
-import re  # 2026-05-29 北极星复审 R1：模块级 re（_build_volume_convergence_anchor:1046 +
-            # 旧 1801/1824 裸用 re. 但无模块 import → fluid 涌现 cluster_002+ 走 vol 反查分支 NameError
-            # → 被 try 吞成 event_cluster mode:error → writer 丢 cluster context。补此根治）
+import os  # ACW_MODE env 检测需 os.environ
+import re  # 模块级 re：本文件内多处函数体裸用 re.，缺模块级 import 会在 fluid 涌现 cluster_002+
+            # 走 vol 反查分支时触发 NameError，被 try 吞成 event_cluster mode:error，writer 丢
+            # cluster context。
 import sys
 from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
-import cluster_lookup  # noqa: E402  2026-05-29 修：obtained_cluster 是 cluster_id 不是章号
+import chapter_io as cio  # noqa: E402  统一正文/数据分离读写
+import cluster_lookup  # noqa: E402  obtained_cluster 是 cluster_id 不是章号
 import manifest_budget  # noqa: E402  S1 分层 token 预算（记账始终开·裁剪仅触发既有硬守卫时）
 
 # style_injector：从蒸馏库提取 cross_chapter_diversity / golden_passages
-# 修复 v17.3 之前"蒸馏精细但写作粗糙"断层
+# 治「蒸馏精细但写作粗糙」断层
 try:
     from style_injector import build_directive as _build_style_directive
 except ImportError:
@@ -51,10 +51,10 @@ except ImportError:
 # ============ IO helpers ============
 
 def _bp_items(prog):
-    """2026-05-29 复审修复（SC-1）：cluster_blueprint 规范形态=dict（cluster_id->data）。
-    城南项目实测是 list(25)（scene_storyboard 列表，各项无 cluster_id）→ 裸 .items() 直接崩。
-    统一经 cluster_lookup.normalize_blueprint 归一为 dict 再 .items()；若该函数尚未落地
-    （并行批次顺序问题），就地 isinstance 守卫兜底（list/非 dict → 返回空 dict 不崩）。
+    """cluster_blueprint 规范形态=dict（cluster_id->data），实际数据可能是 list
+    （scene_storyboard 列表，各项无 cluster_id）→ 裸 .items() 直接崩。
+    统一经 cluster_lookup.normalize_blueprint 归一为 dict 再 .items()；
+    该函数不可用时就地 isinstance 守卫兜底（list/非 dict → 返回空 dict 不崩）。
     """
     if not isinstance(prog, dict):
         return {}
@@ -64,7 +64,7 @@ def _bp_items(prog):
         if isinstance(norm, dict):
             return norm
     except AttributeError:
-        pass  # normalize_blueprint 尚未由 SC-1 owner 落地 → 走下方就地守卫
+        pass  # normalize_blueprint 不可用 → 走下方就地守卫
     except Exception:
         pass
     if isinstance(bp, dict):
@@ -120,29 +120,29 @@ class DatabaseScanner:
     # 当前版本已知会扫描的数据库文件（不在此列表的文件会进 unscanned 告警）
     KNOWN_DBS = {
         "进度", "人物卡", "伏笔表", "世界观", "事件表",
-        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只用 故事块摘要
+        # 纯 cluster 模式 · 只用 故事块摘要
         "作者风格", "故事块摘要", "写作经验", "用户偏好",
         "关系", "道具", "时间线", "场景规则", "地图",
-        # v17.6+ scanner 专用数据库（不注入 writer，但已知文件）
+        # scanner 专用数据库（不注入 writer，但已知文件）
         "character_index", "beat_map", "character_arc_state",
         "knowledge_graph", "subplot_threads",
-        # v20 涌现叙事 / v20.1 世界演化（由 fate_engine / world_evolution_engine 消费）
+        # 涌现叙事 / 世界演化（由 fate_engine / world_evolution_engine 消费）
         "大势卡", "角色池", "世界状态", "涟漪规则",
-        # v21 R1.1 显式 Clock 进度（clock_engine 消费）
+        # 显式 Clock 进度（clock_engine 消费）
         "时钟表",
-        # v21 R1.2 Storyteller 风格 + Adaptation Factor（narrator_calibrate 消费）
+        # Storyteller 风格 + Adaptation Factor（narrator_calibrate 消费）
         "叙事节拍器",
-        # v21 R1.3 主角 Stress + Mental Break 卡（stress_evaluator 消费）
+        # 主角 Stress + Mental Break 卡（stress_evaluator 消费）
         "主角压力档",
-        # v21 R1.4 永久 Aspect（角色烙印）+ 事件池命运抽签（fate_dice 消费）
+        # 永久 Aspect（角色烙印）+ 事件池命运抽签（fate_dice 消费）
         "角色烙印", "事件池",
-        # v21 R1.5 群像档（heart_events + schedule + tier_unlocks）（relationship_evaluator 消费）
+        # 群像档（heart_events + schedule + tier_unlocks）（relationship_evaluator 消费）
         "群像档",
-        # v21 R2.1-R2.4 Hub + Moves + Position×Effect + Throughlines
+        # Hub + Moves + Position×Effect + Throughlines
         "枢纽场景", "角色行动表", "行动判定模板", "四线脉络",
-        # G13 WebNovelBench 8 维评分映射（参考用，不注入 writer）
+        # WebNovelBench 8 维评分映射（参考用，不注入 writer）
         "webnovel_bench_mapping",
-        # v23 ECAS 故事块（cluster brief 由 build_manifest._collect_event_cluster_context 注入 manifest）
+        # ECAS 故事块（cluster brief 由 build_manifest._collect_event_cluster_context 注入 manifest）
         "事件簇",
     }
 
@@ -177,8 +177,7 @@ class DatabaseScanner:
     def current_scene(self) -> dict | None:
         prog = self.load("进度", {})
 
-        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-        # 2026-05-29 复审修复（SC-1）：经 _bp_items 归一（list 项目不崩）。
+        # 纯 cluster 模式 · 只读 cluster_blueprint · 经 _bp_items 归一（list 项目不崩）。
         for cluster_id, cluster_data in _bp_items(prog).items():
             if not isinstance(cluster_data, dict):
                 continue
@@ -237,27 +236,27 @@ class DatabaseScanner:
             "promises_tier2_due": [],
             "deadlines_due": [],
             "active_pledges": [],
-            # 🔴 2026-06-28 伏笔明暗线隔离：hidden_secrets 不再装秘密内容（写手见全部未揭晓秘密
-            # = 提前剧透·gemini 易泄露）。保留空列表仅为向前兼容旧读取方（len()/迭代不崩），永远为空。
+            # 🔴 伏笔明暗线隔离：hidden_secrets 恒为空列表（写手见全部未揭晓秘密
+            # = 提前剧透·gemini 易泄露）；保留该键让读取方 len()/迭代不崩。
             "hidden_secrets": [],
             # 未到触发时机的 hidden secret 只计数·不给内容——让写手知"有未揭晓伏笔存在"防误删伏笔，
             # 但绝不把 secret/hidden_payoff 注入 manifest。
             "pending_secret_count": 0,
             "reveal_this_ch": [],
-            # 🔴 2026-07-06 P1 三态生命周期：suspended（显式挂起延后）条目不催收——不进 tier due
+            # 🔴 P1 三态生命周期：suspended（显式挂起延后）条目不催收——不进 tier due
             # 列表，只计数让写手知道存在被挂起的伏笔（防误删）。
             "promises_suspended_count": 0,
         }
-        # 🔴 2026-07-06 P1 三态生命周期（status ∈ open/suspended/consumed·枚举权威
+        # 🔴 P1 三态生命周期（status ∈ open/suspended/consumed·枚举权威
         # db_schema_validate.FORESHADOW_STATUS_ENUM）：consumed=已回收跳过；suspended=显式
-        # 挂起延后·不催收只计数；open 走到期判定。resolved bool 已迁移删除（不留兼容读）。
+        # 挂起延后·不催收只计数；open 走到期判定。无 resolved bool 兼容读。
         for p in data.get("promises", []):
             if p.get("status") == "consumed":
                 continue
             if p.get("status") == "suspended":
                 result["promises_suspended_count"] += 1
                 continue
-            # 2026-05-29 复审复修 [M4]：到期判定消费三种来源（根治「永久 pending 永不到期」）：
+            # [M4]：到期判定消费三种来源（根治「永久 pending 永不到期」）：
             #  ① 旧 schema due_by（章号）；② due_by_cluster（归一 cluster → 起始章）；
             #  ③ pending：setup_cluster 起始章 + due_by_ch_offset。
             _due = False
@@ -292,7 +291,7 @@ class DatabaseScanner:
             if pl.get("status") == "active":
                 result["active_pledges"].append(pl)
 
-        # 🔴 2026-06-28 伏笔明暗线隔离：到揭晓时机（reveal_at_cluster==当前 cluster / pending 到期）
+        # 🔴 伏笔明暗线隔离：到揭晓时机（reveal_at_cluster==当前 cluster / pending 到期）
         # 的 secret 才放 reveal_this_ch（该揭晓·写手这一块兑现）；其余未到触发的只累加
         # pending_secret_count，内容（secret/hidden_payoff）绝不进 result（不被任何下游注入 manifest），
         # 根治写手提前见全部未揭晓秘密泄露。
@@ -300,10 +299,9 @@ class DatabaseScanner:
             if sec.get("status") != "hidden":
                 continue
             _revealing_now = False
-            # v2 cluster 化修正（2026-05-28 · cluster_002 ch5 翻车 bug fix）：
-            # reveal_at_cluster="cluster_005" 是 cluster ID 不是 chapter 号，
-            # 必须比对当前 章 所属 cluster ID（通过 cluster_blueprint 反查），
-            # 不能直接 int 数字（之前 bug：cluster_005 → 抽数字 5 → 与 ch=5 撞）
+            # reveal_at_cluster="cluster_005" 是 cluster ID 不是 chapter 号，必须比对当前章所属
+            # cluster ID（通过 cluster_blueprint 反查），不能直接抽数字比较（cluster_005 的数字 5
+            # 可能巧合等于 ch=5，误判命中）。
             rc = sec.get("reveal_at_cluster")
             if isinstance(rc, str) and rc:
                 cur_cluster_id = self._current_cluster_id()
@@ -311,7 +309,7 @@ class DatabaseScanner:
                     result["reveal_this_ch"].append(sec)
                     _revealing_now = True
             elif sec.get("reveal_at_pending_resolution"):
-                # 2026-05-29 复审复修 [M4]：未指定 reveal cluster → 读时解析
+                # [M4]：未指定 reveal cluster → 读时解析
                 # established cluster 起始章 + reveal_at_ch_offset = 目标章；
                 # 当前章达到即揭晓（消费 save_state 写入的 pending 标记，根治「永不揭晓」）。
                 _est = sec.get("established_cluster")
@@ -325,15 +323,14 @@ class DatabaseScanner:
 
     def _current_cluster_id(self) -> str | None:
         """反查当前 ch 所属 cluster_id。
-        2026-05-30 北极星复审：委托 cluster_lookup.ch_to_cluster_id（唯一权威·事件簇优先 +
-        _pick_unambiguous 歧义处理），删除原 blueprint 优先的第二套实现——它与
-        _collect_will_learn_due/_collect_secrets_to_reveal 用的 cluster_lookup 在 range 冲突项目
-        （进度.blueprint 与事件簇 chapter_range 不一致）上分歧，致同一 manifest 的 SECRET_NOT_REVEALED
-        hard_gate 计数与 writer 揭秘提示自相矛盾。北极星：cluster_lookup 是章号⇄cluster 唯一权威反查。"""
+        委托 cluster_lookup.ch_to_cluster_id（唯一权威·事件簇优先 + _pick_unambiguous 歧义处理）。
+        禁止另设 blueprint 优先的第二套反查——两套在 range 冲突项目（进度.blueprint 与事件簇
+        chapter_range 不一致）上会分歧，致同一 manifest 的 SECRET_NOT_REVEALED hard_gate 计数
+        与 writer 揭秘提示自相矛盾。北极星：cluster_lookup 是章号⇄cluster 唯一权威反查。"""
         return cluster_lookup.ch_to_cluster_id(self.db, self.ch)
 
     def _event_cluster_by_id(self, cluster_id) -> dict | None:
-        """🔴 2026-06-27 C15: 按 cluster_id 在 事件簇.json 里取该 cluster dict（归一比对·容错）。
+        """🔴 按 cluster_id 在 事件簇.json 里取该 cluster dict（归一比对·容错）。
         反查不到 / 入参非法 → None（调用方据此跳过契约校验，不误升 fatal）。
         归一经 cluster_lookup.normalize_cluster_id（唯一权威·容忍 cluster_6/cluster_006 等形态）。"""
         target = cluster_lookup.normalize_cluster_id(cluster_id)
@@ -346,7 +343,7 @@ class DatabaseScanner:
 
     def world_keyword_hits(self) -> list[dict]:
         """世界观按关键词匹配（本章大纲命中哪些条目）。
-        🔴 2026-06-28 写手信息隔离（item 3b·堵直读绕过）：命中条目经 _resolve_world_entry 剥未到 reveal_cluster
+        🔴 写手信息隔离（堵直读绕过）：命中条目经 _resolve_world_entry 剥未到 reveal_cluster
         的 hidden_truth/hidden_rules 后内联（resolved），让写手用隔离后的 surface 设定·不必直读 raw 世界观.json。"""
         world = self.load("世界观", {})
         entries = world.get("entries", [])
@@ -398,7 +395,7 @@ class DatabaseScanner:
             if not e_scenes or not scene_types or e_scenes & scene_types:
                 out.append(e)
         # 失败模式：对所有章节都该警示，无条件收（仅过滤低置信）
-        # efficacy 闭环（2026-05-31）：active==False 的约束 = 注入后误报没降 → 已自动停注
+        # efficacy 闭环：active==False 的约束 = 注入后误报没降 → 已自动停注
         # （advisory 软停·learning_loop 标记·不硬删·北极星⑤）。此处不再注入下章 writer。
         for e in exp.get("failure_patterns", []):
             if e.get("active") is False:
@@ -423,7 +420,7 @@ class DatabaseScanner:
         return out
 
     def user_preferences_v21(self) -> dict:
-        """v21 UX1/UX2: 读 用户偏好.json 的完整 v21 schema 字段。
+        """读 用户偏好.json 的完整 v21 schema 字段。
         如果用户跑过 /wizard 这里有 9 大组完整偏好；否则返回空 dict（agent 用 schema default）。"""
         prefs = self.load("用户偏好", {})
         v21_keys = [
@@ -438,7 +435,7 @@ class DatabaseScanner:
 
     def relevant_relationships(self) -> list[dict]:
         """抽取出场角色两两之间的关系条目（有数值或非零强度的才返回）。
-        🔴 2026-06-28 写手信息隔离（item 2）：经 _sanitize_relationship 剥未到 reveal_cluster 的 hidden_intent
+        🔴 写手信息隔离：经 _sanitize_relationship 剥未到 reveal_cluster 的 hidden_intent
         （秘密议程）·明面 type/数值不动。must_read focus 只拼 from/to/type（均明面）→ 此处隔离后 focus 天然安全。"""
         data = self.load("关系", {"relationships": []})
         active = set(self.active_characters())
@@ -477,10 +474,10 @@ class DatabaseScanner:
         active_ids = {id_map.get(n, n) for n in active} | active
         hits = []
         for it in data.get("items", []):
-            holder = it.get("holder") or ""  # 容忍缺 key 与显式 null（未获得道具 holder=null 合法·防 line425 `h in holder` 崩）
-            # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 obtained_cluster
-            # 2026-05-29 修：obtained_cluster 是 cluster_id，原代码抽出 cluster 序号直接和
-            # 章号 self.ch 比是量纲错误。改用 cluster_id_to_range 取该 cluster 起始章 lo，
+            holder = it.get("holder") or ""  # 容忍缺 key 与显式 null（未获得道具 holder=null 合法·防 `h in holder` 崩）
+            # 纯 cluster 模式 · 只读 obtained_cluster。
+            # obtained_cluster 是 cluster_id，不能抽出 cluster 序号直接和章号 self.ch 比
+            # （量纲错误）。用 cluster_id_to_range 取该 cluster 起始章 lo，
             # lo > self.ch（cluster 尚未开始）才跳过；反查不到 range 则不跳过（保守注入）。
             obtained_cluster = it.get("obtained_cluster", "cluster_999")
             _rng = cluster_lookup.cluster_id_to_range(self.db, obtained_cluster)
@@ -489,8 +486,8 @@ class DatabaseScanner:
             # 持有者匹配出场角色 → 必须注入
             holder_hit = any(h in holder for h in active_ids)
             # 未回收的 chekhov 道具 → 也值得注入（契诃夫之枪）
-            # 2026-05-29 修：原 `not confirmed_ch >= self.ch` 把已回收（confirmed_ch < self.ch）
-            # 的道具误判为 live。正确语义：未设 confirmed_ch（0/None）或 confirmed_ch 在将来才算 live。
+            # 语义：未设 confirmed_ch（0/None）或 confirmed_ch 在将来才算 live
+            # （已回收 confirmed_ch < self.ch 的不算）。
             cf = it.get("confirmed_ch") or 0
             chekhov_live = bool(it.get("chekhov")) and (cf == 0 or cf > self.ch)
             if holder_hit or chekhov_live:
@@ -503,28 +500,21 @@ class DatabaseScanner:
     def time_state(self) -> dict:
         """当前时间快照 + 本章是否命中时钟事件。
 
-        2026-05-30 修（孤儿 #3 · clock/timeline producer/consumer 分歧）：
-        world_clock_events 真实 schema 用 {date, event, vol[, cluster]}（见
-        城南火葬场夜班/时间线.json + db_schema_validate.py 只 require `event` ·
-        注释明写「world clock event 用 day/cluster 颗粒」）——全仓**无 producer 写
-        `ch` 字段**。旧实现按废弃的 `e.get("ch") == self.ch` 过滤 → clock_events_this_ch
-        恒空 → 时钟事件浮现机制死掉、时间线 must_read 永停 P1。
-
-        2026-05-30 补全（batch6 #3 不完整修复 · 没调查没发言权）：3 个真实项目实测
-        world_clock_events 是 **3 种 schema**，batch6 只认 `cluster`/`date` 字段名 →
-        只覆盖城南（date），纵尸司/诡异因字段名不符仍孤儿（hits=0 被误当成功）：
-          · 城南：{date, event, vol}             → date 颗粒（current_time.date）
-          · 纵尸司：{day(整数日计数), event, impact} → day 颗粒（current_time.day）
-          · 诡异：{absolute_time, cluster_revealed(="cluster_001 …"), event}
+        world_clock_events 真实数据存在 **3 种 schema**（全仓无 producer 写 `ch` 字段，
+        绝不按 `e.get("ch") == self.ch` 过滤——那样 clock_events_this_ch 恒空、
+        时钟事件浮现机制死掉）：
+          · {date, event, vol}                  → date 颗粒（current_time.date）
+          · {day(整数日计数), event, impact}      → day 颗粒（current_time.day）
+          · {absolute_time, cluster_revealed(="cluster_001 …"), event}
                   → cluster 颗粒（cluster_revealed）+ date 颗粒（absolute_time）
-        改为 cluster/date/day 三种正式颗粒：
-          1. cluster 颗粒：event.cluster | event.cluster_revealed（诡异）
+        按 cluster/date/day 三种正式颗粒判命中：
+          1. cluster 颗粒：event.cluster | event.cluster_revealed
              经 cluster_lookup.normalize_cluster_id 归一（容忍 "cluster_001 (影印件…)"
              这类带后缀文本——regex 抽首个数字）比 本章所属 cluster_id
              （_current_cluster_id 唯一权威反查；反查不到时退回 current_time.cluster）
-          2. date 颗粒：event.date | event.absolute_time（诡异）
+          2. date 颗粒：event.date | event.absolute_time
              比 current_time.date | current_time.absolute_time
-          3. day 颗粒：event.day（纵尸司整数日计数）比 current_time.day
+          3. day 颗粒：event.day（整数日计数）比 current_time.day
         颗粒优先级 cluster > date > day（精准颗粒优先）。
         vol（卷）颗粒过粗——会把整卷每章都标命中——故意不用作 this_ch 命中。
         """
@@ -673,8 +663,8 @@ class DatabaseScanner:
 
     def recent_chapter_openings(self, lookback: int = 3) -> list[dict]:
         """提取前 N 章的开头首行，用于反重复约束。
-        v18：首行必须取自纯正文 —— 走 cio.read_body()，否则旧混合 txt 里
-        若正文为空会读到 CHANGES JSON 首行，反重复约束失效。"""
+        首行必须取自纯正文 —— 统一走 cio.read_body()（避免读到非正文内容首行，
+        让反重复约束失效）。"""
         openings = []
         for prev_ch in range(max(1, self.ch - lookback), self.ch):
             try:
@@ -700,12 +690,10 @@ class DatabaseScanner:
             fatal.append("进度.json 不存在，执行 /outline 初始化")
             return {"fatal": fatal, "warning": warning, "passed": False}
         if not self.current_scene():
-            # 🔴 2026-06-26 加修复提示（cluster_001 写作翻车 sediment）：
-            # outline plan step 6.5 漏跑时，cluster_blueprint 是空 dict，本错误无任何指引。
-            # 现在自动检测 outline 残步，给具体修复命令。
+            # 🔴 修复提示：outline plan step 6.5 漏跑时 cluster_blueprint 是空 dict——
+            # 自动检测 outline 残步，给具体修复命令。
             hint = ""
             try:
-                # 🔴 2026-06-27 修（cluster_003 写作翻车 sediment）：
                 # ① 找 emergence.json 用 .wal 里所有 cluster_*_emergence.json 取最新一个；
                 # ② 检测 scene["ch"] 字段是否被错写成 scene index（0/1/2 而非全局章号）。
                 wal = self.db / ".wal"
@@ -752,7 +740,7 @@ class DatabaseScanner:
 
         plan = self.current_scene() or {}
 
-        # 🔴 2026-06-27 C15 BUILD-MANIFEST-INJECTION-CONTRACT：上游声明 active 却 brief 空 = 注入契约破损。
+        # 🔴 BUILD-MANIFEST-INJECTION-CONTRACT：上游声明 active 却 brief 空 = 注入契约破损。
         # 取本章所属 cluster（cluster_lookup 唯一权威反查·禁机械拼接 f"cluster_{ch:03d}"·北极星①），
         # 若其 status∈active 但 scope_summary + scene_storyboard 双空 → fatal（穿帮层·writer 会拿空约束写偏）。
         # 🔴 fluid 回归锁：只 fire 在「status active yet brief 空」的契约矛盾；
@@ -773,15 +761,15 @@ class DatabaseScanner:
 
         if not plan.get("characters"):
             warning.append("本章 characters 字段为空，将 fallback 到全量人物卡")
-            _emit_empty_injection_signal("characters", _c15_cid or "?", self.ch)  # 🔴 C15
+            _emit_empty_injection_signal("characters", _c15_cid or "?", self.ch)  # 🔴 空注入信号
         if not plan.get("key_events") and not plan.get("summary"):
             warning.append("本章 key_events/summary 为空，大纲过于简略")
-            _emit_empty_injection_signal("key_events_summary", _c15_cid or "?", self.ch)  # 🔴 C15
+            _emit_empty_injection_signal("key_events_summary", _c15_cid or "?", self.ch)  # 🔴 空注入信号
         if not plan.get("scene_type"):
             warning.append("本章 scene_type 未标注，跳过场景规则注入")
 
-        # 2026-06-01 修：scene_storyboard 用 id 引用，旧版只比 name → id≠name 角色（如「乐园之声」
-        # id≠name「乐园之声（广播）」）被误判新角色。改 id∪name 容错（减少误报方向·低回归风险）。
+        # scene_storyboard 用 id 引用；只比 name 会让 id≠name 的角色（如 id「乐园之声」≠
+        # name「乐园之声（广播）」）被误判新角色。按 id∪name∪aliases 容错比对（减少误报方向）。
         _cards = self.load("人物卡", {}).get("characters", [])
         cards = {c.get("name") for c in _cards} | {c.get("id") for c in _cards}
         cards |= {a for c in _cards for a in (c.get("aliases") or [])}
@@ -902,9 +890,9 @@ def _collect_active_fate_events(scanner, chapter: int) -> dict:
         raise RuntimeError(f"active_fate_events 生成失败: {e}") from e
 
 
-# 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型·仅供
-# _collect_relevant_heuristics 用——_collect_selective_history 消费磁盘预计算向量库、与生成
-# 时的后端绑定，迁移属未来独立项，继续沿用上面 _has_real_embedding_backend，不在本次改动）。
+# 🔴 内容语义 embedding 路径（bge 内容模型·仅供 _collect_relevant_heuristics 用——
+# _collect_selective_history 消费磁盘预计算向量库、与生成时的后端绑定，
+# 沿用上面 _has_real_embedding_backend）。
 def _content_backend_ready() -> bool:
     """内容语义后端可用性门控（委托 embedding_store.content_backend_available）。
     import 失败 → False（调用方回退关键词重叠计分）。
@@ -917,7 +905,7 @@ def _content_backend_ready() -> bool:
 
 
 def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
-    """v22 SE2 ERL Heuristics 检索：按本章 context 检索 top-N 写作经验，
+    """ERL Heuristics 检索：按本章 context 检索 top-N 写作经验，
     避免全量塞导致 context rot。
 
     Context = scene_type + 主 POV + beat + 高频出场角色
@@ -934,8 +922,7 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
     # 本章 context
     import re as _re
     progress = scanner.load("进度", {})
-    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-    # 2026-05-29 复审修复（SC-1）：经 _bp_items 归一（list 项目不崩）。
+    # 纯 cluster 模式 · 只读 cluster_blueprint · 经 _bp_items 归一（list 项目不崩）。
     ch_plan = {}
     for cid, cdata in _bp_items(progress).items():
         if not isinstance(cdata, dict):
@@ -968,20 +955,20 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
                 continue
             if p.get("status") == "retired":
                 continue
-            # 🔴 2026-06-27 C12: 带原对象引用 _orig，供检索命中后回写 usage_count（producer）。
+            # 🔴 带原对象引用 _orig，供检索命中后回写 usage_count（producer）。
             all_patterns.append({**p, "_category": category, "_orig": p})
 
     if not all_patterns:
         return {"mode": "on", "total_patterns": 0, "retrieved": [],
-                # P2 typed 检索契约（2026-07-07）：零候选也保持段级 typed 字段齐全（消费方按契约读）。
+                # P2 typed 检索契约：零候选也保持段级 typed 字段齐全（消费方按契约读）。
                 "source_type": "relevant_heuristics", "match_method": "none",
                 "token_budget": {"budget_chars": 0, "actual_chars": 0, "truncated": False},
                 "anti_copy": "reference-not-copy"}
 
     # 打分：context 关键词重叠 + confidence + usage_count log。
-    # 🔴 2026-07-04 换轨内容语义嵌入 API：内容后端就绪（_content_backend_ready）时 kw_hits 换成
+    # 🔴 内容语义嵌入 API：内容后端就绪（_content_backend_ready）时 kw_hits 换成
     # 「context 拼接文本 vs 经验条目 desc」内容语义余弦（同 _collect_selective_history 用法，
-    # 但走内容而非风格后端）；不可用 → kw_hits 保持原关键词重叠计数，逐字节零回归。
+    # 但走内容而非风格后端）；不可用 → kw_hits 用关键词重叠计数。
     import math
     _query_emb = None
     _embed_mod = None
@@ -1004,14 +991,14 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
             try:
                 p_emb = _embed_mod.compute_content_embedding(desc)
                 sim = _embed_mod.cosine_similarity(_query_emb, p_emb) if p_emb else 0.0
-                # 金标准校准 2026-07-04：content_embed_separability_20260704 报告——bge 内容
-                # 余弦值域远比原「风格后端 [-1,1] 假设」窄（content_relatedness 族相关≈0.52 /
-                # 无关≈0.41，五类分布 p5-p95 落在约 0.30-0.68）。原 sim*5.0 直接缩放会把整个
+                # 金标准校准（content_embed_separability_20260704 报告）：bge 内容
+                # 余弦值域远比「[-1,1] 假设」窄（content_relatedness 族相关≈0.52 /
+                # 无关≈0.41，五类分布 p5-p95 落在约 0.30-0.68）。sim*5.0 直接缩放会把整个
                 # 有效范围压缩到 kw_hits≈[1.5,3.4]——无论真相关还是真无关都是「中等分数」，
-                # 反而丢了原关键词计数「不相关=0/强相关=高」的区分度。改用 [0.40, 0.65] 双点
+                # 丢掉关键词计数「不相关=0/强相关=高」的区分度。故用 [0.40, 0.65] 双点
                 # 拉伸映射：0.40 锚 neg_cross_book p50(0.4136) 一带的「明显无关」→ 拉到 kw_hits≈0；
                 # 0.65 锚 pos_adjacent p75-p95(0.5974-0.6836) 一带的「强相关」→ 拉到 kw_hits=5
-                # （与原关键词命中计数上限对齐）；区间外钳位，不外推。
+                # （与关键词命中计数上限对齐）；区间外钳位，不外推。
                 kw_hits = max(0.0, min(1.0, (sim - 0.40) / (0.65 - 0.40))) * 5.0
             except Exception:
                 kw_hits = sum(1 for kw in ctx_kws if kw in desc)
@@ -1020,7 +1007,7 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         # 综合分：context match 主导 + confidence 加成 + usage log 加成
         return kw_hits * 2 + confidence + math.log(usage + 1)
 
-    # 🔴 2026-07-03 Wave-4：sort(key=score) 对 all_patterns 每项各调一次 score()，真后端下
+    # 🔴 sort(key=score) 对 all_patterns 每项各调一次 score()，真后端下
     # 逐条 compute_content_embedding(desc) = N 次子进程调用。排序前一次性 prefetch 全部 desc
     # 灌缓存，其后 score() 内逐条 compute_content_embedding 全部命中缓存（query embed 已在
     # 循环外算过不重复）。
@@ -1035,8 +1022,8 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         except Exception:
             pass
 
-    # P2 typed 检索契约（2026-07-07）：score 每条只算一次并缓存——sort 用缓存值（稳定排序 +
-    # reverse=True 平手保序，与原 sort(key=score) 逐字节同序），检索分随 typed item 一起下发
+    # P2 typed 检索契约：score 每条只算一次并缓存——sort 用缓存值（稳定排序 +
+    # reverse=True 平手保序），检索分随 typed item 一起下发
     # （item.similarity = 该条检索综合分·非余弦，语义由 match_method 标注）。
     _scores = {id(p): score(p) for p in all_patterns}
     all_patterns.sort(key=lambda p: _scores[id(p)], reverse=True)
@@ -1063,10 +1050,10 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
         except ImportError:
             save_json(exp_path, exp)
 
-    # P2 typed 检索契约（2026-07-07·借鉴 AI_NovelGenerator/PlotPilot 向量检索溯源，见
+    # P2 typed 检索契约（借鉴 AI_NovelGenerator/PlotPilot 向量检索溯源，见
     # research/open_source_writing_systems.md「Vector retrieval provenance」）：
     # 每条检索结果带 source_type / source_id（category#id 确定性派生）/ similarity / match_method；
-    # 段级带 token_budget（把既有 name[:60]/description[:120] 截断行为显式化——非新增截断，
+    # 段级带 token_budget（name[:60]/description[:120] 截断行为显式化·
     # 超上限时 truncated:true）+ anti_copy 指令（advisory·防 writer 照抄条目原句）。
     _seg_match_method = "embedding" if _query_emb is not None else "keyword"
     _name_cap, _desc_cap = 60, 120
@@ -1112,7 +1099,7 @@ def _collect_relevant_heuristics(scanner, chapter: int, top_k: int = 5) -> dict:
 
 
 def _collect_user_preferences_v21(scanner) -> dict:
-    """v21 UX1/UX2: 注入用户在 /wizard 中配置的偏好（覆盖系统默认）。
+    """注入用户在 /wizard 中配置的偏好（覆盖系统默认）。
     writer / outline-planner / audit_hub / scanner 应优先消费此字段，缺失时用 schema default。
     """
     prefs = scanner.user_preferences_v21() if hasattr(scanner, "user_preferences_v21") else {}
@@ -1147,7 +1134,7 @@ def _collect_user_preferences_v21(scanner) -> dict:
     if asp:
         summary["user_banned_words"] = asp.get("user_banned_words", [])[:10]
         summary["user_preferred_phrases"] = asp.get("user_preferred_phrases", [])[:10]
-    # v23 narrative_style: POV / 时态 / 叙事者声音 - writer 第一硬约束
+    # narrative_style: POV / 时态 / 叙事者声音 - writer 第一硬约束
     ns = prefs.get("narrative_style", {}) or {}
     if ns:
         summary["narrative_style"] = {
@@ -1428,28 +1415,27 @@ def _collect_research_cache_ref(scanner, chapter: int) -> dict:
     }
 
 
-# 2026-05-29 复审修复（M16 · SC-6）：事件簇 cluster.status 中英文混用
-# （进行中/已规划/未涌现/已完成 + done/in_progress/pending）。旧 filter 只认英文
-# → 城南这种全中文 status 命中率 0 → event_cluster_context 永远 mode=off（注入丢失）。
-# 这里把「该注入 context」的 status 中英文都收齐（active + 已落章语义）。
-# 2026-05-29 复审复修（M16 二次修）：只收「真 active / 已落章」态，
-# 排除 candidate 占位态（已规划/未涌现 + pending）——否则全占位项目（纵尸司）会命中占位块
-# → 注入空 cluster_id 的伪 active cluster，且与 cluster_emergence_engine 的 candidate 排除集自相矛盾。
+# 事件簇 cluster.status 中英文混用（进行中/已规划/未涌现/已完成 + done/in_progress/pending），
+# filter 只认英文会让全中文 status 项目命中率 0 → event_cluster_context 永远 mode=off（注入丢失）。
+# 这里把「该注入 context」的 status 中英文都收齐（active + 已落章语义）；
+# 且只收「真 active / 已落章」态，排除 candidate 占位态（已规划/未涌现 + pending）——否则全占位项目
+# 会命中占位块 → 注入空 cluster_id 的伪 active cluster，且与 cluster_emergence_engine 的
+# candidate 排除集自相矛盾。
 _EVENT_CLUSTER_ACTIVE_STATUSES = (
     "in_progress", "writer_done", "splitter_done", "done",
     "进行中", "已完成",
 )
 
 
-# 🔴 2026-06-27 C15 BUILD-MANIFEST-INJECTION-CONTRACT
+# 🔴 BUILD-MANIFEST-INJECTION-CONTRACT
 def _cluster_brief_empty(cluster) -> bool:
     """判定一个事件簇 cluster 的 brief 内容是否「全空」（注入契约破损判据）。
 
     brief 已填（返回 False · 不空）= scope_summary 非空 **或** scene_storyboard 含任一
     key_events / summary / goal / title 的场景。两者皆空才返回 True（→ fatal / contract_violation）。
 
-    🔴 fluid 回归锁核心：scene_storyboard 已填 = 不空 = 绝不误拦（天灾继承法 cluster_006
-    实战——已 in_progress 但 storyboard 非空 → 此函数返回 False → preflight passed=True）。
+    🔴 fluid 回归锁核心：scene_storyboard 已填 = 不空 = 绝不误拦（已 in_progress 但
+    storyboard 非空 → 此函数返回 False → preflight passed=True）。
     只在「上游声明 active 却 scope+storyboard 双空」的契约矛盾（穿帮层）才返回 True。
     """
     if not isinstance(cluster, dict):
@@ -1464,7 +1450,7 @@ def _cluster_brief_empty(cluster) -> bool:
     return True
 
 
-# 🔴 2026-06-27 C15: 空注入运行时指纹 —— 仿 incidents 指纹 script::empty_injection::<field>
+# 🔴 空注入运行时指纹 —— 仿 incidents 指纹 script::empty_injection::<field>
 def _emit_empty_injection_signal(field: str, cluster_key, chapter) -> None:
     """对「子系统注入内容为空」类事件写一行结构化 [RUNTIME] 信号到 stderr（不改 exit）。
 
@@ -1485,7 +1471,7 @@ def _emit_empty_injection_signal(field: str, cluster_key, chapter) -> None:
 
 
 def _build_volume_convergence_anchor(scanner, cluster: dict) -> dict | None:
-    """2026-05-29 北极星 P2 [M1-trend]：本卷「大势已定」的固定终点锚。
+    """本卷「大势已定」的固定终点锚。
 
     「大势已定·每卷再怎么折腾最后方向一致」靠的是：让模型【始终看到本卷要收束到哪】，
     自己导航过去（软牵引/顾问，非硬契约——守原则5「不干涉模型判断」）。
@@ -1500,16 +1486,16 @@ def _build_volume_convergence_anchor(scanner, cluster: dict) -> dict | None:
     anchor = {}
     ds = scanner.load("大势卡", {}) or {}
     prog = scanner.load("进度", {}) or {}
-    # 2026-05-30 北极星复审：合并大势卡 + 进度.json 两源——原「命中即 return、if not anchor 才回退」
-    # 会因大势卡有占位 volume_arc 就短路，把进度.json 里真实的 ending_state/key_milestones（本卷真终点）
-    # 挡在外，writer 拿到的收敛锚退化为占位串。兼容 final_image / ending_image 双字段名（大势卡实写 ending_image）。
+    # 合并大势卡 + 进度.json 两源（不「命中即 return」——那会因大势卡有占位 volume_arc 就短路，
+    # 把进度.json 里真实的 ending_state/key_milestones（本卷真终点）挡在外，收敛锚退化为占位串）。
+    # 兼容 final_image / ending_image 双字段名（大势卡实写 ending_image）。
     for src in (ds, prog):
         for v in (src.get("volumes") or []):
             if isinstance(v, dict) and v.get("vol") == vol:
-                # 🔴 2026-07-08 修（验证书 e2e 抓出）：v28 卷=阶段 schema 的卷层字段是
+                # 🔴 卷=阶段 schema 的卷层字段是
                 # volume_core_conflict / volume_thread / volume_finale_signal
-                # （gen_creative_volume_arc emit 实写），原键表只认旧名 → 新书（大势卡
-                # 只有 v28 字段·进度.volumes 空）收敛锚静默 None（北极星③软牵引失效）。
+                # （gen_creative_volume_arc emit 实写）；键表必须含它们，否则只有这些
+                # 字段的新书（进度.volumes 空）收敛锚静默 None（北极星③软牵引失效）。
                 for k in ("ending_state", "key_milestones", "final_image",
                           "ending_image", "volume_arc", "core_conflict",
                           "volume_core_conflict", "volume_thread",
@@ -1529,9 +1515,9 @@ def _build_volume_convergence_anchor(scanner, cluster: dict) -> dict | None:
 
 
 def _collect_rolling_style_anchor(scanner, chapter: int) -> dict | None:
-    """Rolling style anchor（2026-05-31 · 第 2 轮治 D 级长程文风退化 · 北极星①⑤⑥）。
+    """Rolling style anchor（治长程文风退化 · 北极星①⑤⑥）。
 
-    问题：长篇写到中后段，作者文风会**回归均值**退化成通用 LLM 腔（第 1 轮的静态开局 snippet
+    问题：长篇写到中后段，作者文风会**回归均值**退化成通用 LLM 腔（静态开局 snippet
     是固定的，越写离它越远，锚不住）。本锚是**动态**的：每写下一个 cluster 时，从**本书已写的
     cluster 草稿里挑「离作者参考最近的 1-2 个片段」当锚**——用本书自己写得最像作者的段落
     重新锚定下一块，对抗回归均值。
@@ -1616,7 +1602,7 @@ def _collect_rolling_style_anchor(scanner, chapter: int) -> dict | None:
     }
 
 
-# 🔴 2026-06-27 P1-08: cluster brief 用 helper · 取 motif advisory snapshot 的 dormant top-5 当回收建议。
+# 🔴 cluster brief 用 helper · 取 motif advisory snapshot 的 dormant top-5 当回收建议。
 def _collect_motif_callback_hints_for_cluster(scanner) -> list:
     # 容差读 scanner.db / scanner.root._数据库（兼容 mock scanner）
     db = getattr(scanner, "db", None)
@@ -1649,7 +1635,7 @@ def _collect_motif_callback_hints_for_cluster(scanner) -> list:
     return hints
 
 
-# 🔴 2026-06-28 伏笔明暗线隔离（防 gemini 提前泄露暗线）·共享 schema：
+# 🔴 伏笔明暗线隔离（防 gemini 提前泄露暗线）·共享 schema：
 # 伏笔条目 = {fs_id, surface_clue(明线·写手埋的细节·不解释意义),
 #            hidden_payoff(暗线·真正指向的秘密·Claude 侧存·到 trigger_cluster 才注入),
 #            trigger_cluster(揭晓 cluster), tier}。
@@ -1657,10 +1643,10 @@ def _sanitize_foreshadowing_to_plant(items):
     """埋设侧（plant）：写手埋伏笔时只见明线 surface_clue（当普通细节埋·不解释意义），
     剥离暗线 hidden_payoff（真正指向的秘密）——根治写手在埋设阶段就见全部未揭晓秘密提前剧透。
 
-    schema 演进读容错（非降级·北极星⑥）：
-      · 新格式 dict {fs_id, surface_clue, hidden_payoff, trigger_cluster, tier} → 去掉 hidden_payoff，
-        其余字段保留；缺 surface_clue 时把旧字段 desc/description/clue 回填为 surface_clue。
-      · 旧格式纯字符串 → 整条当 surface_clue。
+    两种输入形态读容错（非降级·北极星⑥）：
+      · dict {fs_id, surface_clue, hidden_payoff, trigger_cluster, tier} → 去掉 hidden_payoff，
+        其余字段保留；缺 surface_clue 时把 desc/description/clue 回填为 surface_clue。
+      · 纯字符串 → 整条当 surface_clue。
     """
     out = []
     for it in items or []:
@@ -1685,7 +1671,7 @@ def _resolve_foreshadowing_to_callback(items, current_cluster_id):
     entry.trigger_cluster == 当前 cluster（或未标 trigger_cluster·既然进了本块 callback 列表即视为到期）
     → 暴露 hidden_payoff（暗线·让写手这一块兑现）+ 注入 reveal_directive「现在揭晓/兑现 fs_id: hidden_payoff」；
     entry.trigger_cluster 明确指向别的 cluster（误列/未到期）→ 剥离 hidden_payoff 防提前泄露。
-    旧格式纯字符串 / 无 hidden_payoff → 原样透传。"""
+    纯字符串条目 / 无 hidden_payoff → 原样透传。"""
     out = []
     for it in items or []:
         if not isinstance(it, dict):
@@ -1711,15 +1697,15 @@ def _resolve_foreshadowing_to_callback(items, current_cluster_id):
 
 
 # ============================================================================
-# 🔴 2026-06-28 写手信息隔离（防 gemini 在 build_manifest 注入层提前泄露未来/暗线秘密）
+# 🔴 写手信息隔离（防 gemini 在 build_manifest 注入层提前泄露未来/暗线秘密）
 # ----------------------------------------------------------------------------
-# 照抄已建伏笔范式（_sanitize_foreshadowing_to_plant / _resolve_foreshadowing_to_callback）：
+# 照抄伏笔范式（_sanitize_foreshadowing_to_plant / _resolve_foreshadowing_to_callback）：
 # 每类子系统一个 _sanitize/_resolve/_soften 单一真理源·字段级剥离·到 reveal/trigger cluster 自动暴露。
 #
 # 北极星边界铁律（必守）：
 #   · 延迟注入非删除（除 fate downstream 纯删）：到 trigger/reveal cluster 自动暴露 + reveal_directive。
 #   · 字段级粒度：禁 blanket-strip 整字段·非秘密角色 role 不动·明面 type/surface_note 不动·纯工艺 anti_pattern 留。
-#   · 默认安全闸：无 hidden_*/reveal_cluster/true_role 等显式标记的旧条目（今天几乎全部）一律原样透传零行为变化。
+#   · 默认安全闸：无 hidden_*/reveal_cluster/true_role 等显式标记的条目一律原样透传。
 #   · 涟漪 surface 留（北极星②）：faction 公开动向/npc current_action/offscreen visible/数值 留·只隔离未来结果 + 幕后真实意图。
 #   · 全 advisory·绝不新增 hard_gate·不进 audit_hub.HARD_GATE_CODES·不动北极星不变量回归锁。
 # ============================================================================
@@ -1755,7 +1741,7 @@ def _sanitize_ghost(ghost):
     if not isinstance(ghost, dict):
         return ghost
     if ghost.get("surface_driver") is None:
-        return ghost  # 旧 ghost.wound 当普通背景·零行为变化
+        return ghost  # 未拆 surface_driver 的 ghost.wound 当普通背景·原样透传
     return {k: v for k, v in ghost.items() if k not in _GHOST_REVEAL_KEYS}
 
 
@@ -1853,7 +1839,7 @@ def _sanitize_character_card(card, current_cluster_id):
     return out
 
 
-# 🔴 2026-06-29 角色信息差(per-character belief)
+# 🔴 角色信息差(per-character belief)
 def _belief_fact_content(facts_index, fact_id, fallback=None):
     """从 ledger.facts 索引解出 fact_id 的可读内容（content/summary 优先·缺则 fallback/fact_id 本身）。"""
     f = facts_index.get(fact_id) if isinstance(facts_index, dict) else None
@@ -1865,7 +1851,7 @@ def _belief_fact_content(facts_index, fact_id, fallback=None):
 
 
 def _sanitize_character_belief(ledger, scene, current_cluster_id):
-    """🔴 2026-06-29 角色信息差(per-character belief)·生成层物理 masking（提案核心：重心在生成层注入非检测）。
+    """🔴 角色信息差(per-character belief)·生成层物理 masking（重心在生成层注入非检测）。
 
     按 scene 的 participants 投射——为每个【在场】角色注入其认知边界：
       · knows[]：known_facts 中 learned_at_cluster <= current_cluster_id 的子集（复用 _cluster_due 门控原语·
@@ -1874,7 +1860,7 @@ def _sanitize_character_belief(ledger, scene, current_cluster_id):
         （角色本块尚未获知·防 FUTURE_KNOWLEDGE_LEAK）——注负向指令『角色 X 不知道 fact_Y·本场 prose 中 X 不得
         提及/不得基于 Y 行动』。
 
-    默认安全闸（不漏报·向后兼容·今天所有旧书无 ledger → 零行为变化）：ledger 空 / characters 空 /
+    默认安全闸（无 ledger 的项目不受影响）：ledger 空 / characters 空 /
       scene 无 participants → 返回 None（不注入任何约束）。全 advisory·绝不产 hard_gate。"""
     if not isinstance(ledger, dict) or not isinstance(scene, dict):
         return None
@@ -1883,7 +1869,7 @@ def _sanitize_character_belief(ledger, scene, current_cluster_id):
         return None  # 默认安全闸：ledger 空 → 不注入
     participants = scene.get("participants")
     if not isinstance(participants, list) or not participants:
-        return None  # 默认安全闸：scene 无 participants → 不注入（向后兼容旧 storyboard）
+        return None  # 默认安全闸：scene 无 participants → 不注入（容忍无 participants 的 storyboard）
     facts_index = ledger.get("facts") if isinstance(ledger.get("facts"), dict) else {}
 
     per_char = {}
@@ -1942,13 +1928,13 @@ def _sanitize_character_belief(ledger, scene, current_cluster_id):
 
 
 def _collect_scene_character_knowledge(scanner, current_cluster_id):
-    """🔴 2026-06-29 角色信息差(per-character belief)·manifest 注入出口（单一真理源）。
+    """🔴 角色信息差(per-character belief)·manifest 注入出口（单一真理源）。
 
-    读持久化 _数据库/character_belief_ledger.json（Phase A/B 产）+ 当前 cluster 的 scene_storyboard，
+    读持久化 _数据库/character_belief_ledger.json + 当前 cluster 的 scene_storyboard，
     逐 scene 走 _sanitize_character_belief 投射各在场角色认知边界给 writer 做物理 masking。
 
-    默认安全闸（向后兼容·零回归）：无 ledger / characters 空 / 反查不到 cluster / scene 无 participants
-      → 返回 []（不注入·今天所有旧书无 ledger → 零行为变化）。全 advisory·绝不 hard_gate。"""
+    默认安全闸：无 ledger / characters 空 / 反查不到 cluster / scene 无 participants
+      → 返回 []（不注入）。全 advisory·绝不 hard_gate。"""
     ledger_path = scanner.root / "_数据库" / "character_belief_ledger.json"
     if not ledger_path.exists():
         return []
@@ -1995,7 +1981,7 @@ def _collect_active_character_cards(scanner, active_chars, current_cluster_id):
     return out
 
 
-# ──── 🔴 2026-06-29 actant链接通producer（Greimas 六 actant + cast 经济·manifest 注入出口·单一真理源）────
+# ──── 🔴 actant链接通producer（Greimas 六 actant + cast 经济·manifest 注入出口·单一真理源）────
 def _build_char_id_name_map(scanner):
     """人物卡 id→name 映射（actant/cast 命名空间归一·与 apply_archive.apply_actant_state 同源）。"""
     id2name = {}
@@ -2040,7 +2026,7 @@ def _norm_actant_multi(names):
 
 
 def _collect_active_cast(scanner, active_chars, current_cluster_id):
-    """🔴 2026-06-29 actant链接通producer：本 cluster 出场角色集（复用 scene participants + active_chars）。
+    """🔴 actant链接通producer：本 cluster 出场角色集（复用 scene participants + active_chars）。
 
     cast_economy_scanner 读 manifest.active_cast 算 introduce_burst（新引入 > intro_budget）+ role_split。
     命名空间 = display name（对齐 cast_economy known 集 = 人物卡 name + ledger assignments name）。
@@ -2151,7 +2137,7 @@ def _resolve_standing_antagonists(scanner, current_cluster_id, id2name):
 
 
 def _collect_cluster_actant_state(scanner, current_cluster_id):
-    """🔴 2026-06-29 actant链接通producer：本 cluster 六 actant 派分（actant_drift + cast_economy 读 manifest）。
+    """🔴 actant链接通producer：本 cluster 六 actant 派分（actant_drift + cast_economy 读 manifest）。
 
     源优先：① cluster_actant_ledger 本 cluster 已回库条目（archivist 读正文 post-hoc·权威·re-audit 路径）；
     ② 派生（forward 流·本块尚未 archive 时）：subject=主角（角色弧线/人物卡）· opponent=当前 standing
@@ -2307,7 +2293,7 @@ def _soften_convergence_anchor(anchor, current_cluster_id, total):
     return out
 
 
-# 🔴 2026-06-29 controlling_idea主控思想软注入（主题脊柱 P0·北极星③软牵引·骑 _soften_convergence_anchor 同轨降精）
+# 🔴 controlling_idea主控思想软注入（主题脊柱 P0·北极星③软牵引·骑 _soften_convergence_anchor 同轨降精）
 def _build_controlling_idea_anchor(scanner, current_cluster_id, total):
     """从 大势卡.story_destiny.controlling_idea 读全书主控思想（主题价值命题）软注入 writer brief。
 
@@ -2387,7 +2373,7 @@ def _build_controlling_idea_anchor(scanner, current_cluster_id, total):
     return card
 
 
-# 🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架
+# 🔴 But-Therefore因果连接器+Swain场景骨架
 _SWAIN_PROACTIVE_KEYS = ("goal", "conflict", "disaster")
 _SWAIN_REACTIVE_KEYS = ("reaction", "dilemma", "decision")
 _VALID_SCENE_TYPES = {"proactive_scene", "reactive_sequel"}
@@ -2396,7 +2382,7 @@ _VALID_RESULT_TYPES = {"yes_but", "no_and", "yes_and"}
 
 
 def _collect_scene_causal_skeleton(cluster: dict) -> dict | None:
-    """🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架（事件 P0·治流水账·涟漪微观可执行化）。
+    """🔴 But-Therefore因果连接器+Swain场景骨架（事件 P0·治流水账·涟漪微观可执行化）。
 
     透传 outline-planner(A agent) 在 scene_storyboard 每个 scene 标注的 Swain 场景骨架 + But-Therefore 衔接：
       · scene_type ∈ {proactive_scene|reactive_sequel}
@@ -2406,7 +2392,7 @@ def _collect_scene_causal_skeleton(cluster: dict) -> dict | None:
       · result_type ∈ {yes_but|no_and|yes_and}（Butcher Try-Fail·禁纯 yes 顺风局）
     proactive/reactive 子 beat 既认顶层字段，也认嵌套 proactive{}/reactive{} 子 dict。
 
-    🔴 2026-06-29 scene_goal动机（心理 P0·design2 非冗余部分·补 arc-want 到 scene 的桥）：
+    🔴 scene_goal动机（心理 P0·补 arc-want 到 scene 的桥）：
     同步透传每个 scene 的 `scene_goal`（本场 POV 角色动作化临场目标·Stanislavski scene-objective·
     『此刻我想要什么』·治场景漂移·每场有目标驱动）。与 Swain scene_type/disaster/dilemma 正交并存
     （Swain 主体已由事件 P0 建·本字段不重复·只补「逐场景动机」这一非冗余维）。
@@ -2437,7 +2423,7 @@ def _collect_scene_causal_skeleton(cluster: dict) -> dict | None:
         if isinstance(rt, str) and rt.strip().lower() in _VALID_RESULT_TYPES:
             entry["result_type"] = rt.strip().lower()
             has_any = True
-        # 🔴 2026-06-29 scene_goal动机（Stanislavski scene-objective·逐场景动机·治场景漂移）
+        # 🔴 scene_goal动机（Stanislavski scene-objective·逐场景动机·治场景漂移）
         sg = sc.get("scene_goal")
         if isinstance(sg, str) and sg.strip():
             entry["scene_goal"] = sg.strip()
@@ -2479,13 +2465,13 @@ def _collect_scene_causal_skeleton(cluster: dict) -> dict | None:
     }
 
 
-# 🔴 2026-06-29 对白即行动dialogue_objectives注入（对话表达层 P1·McKee verbal action·治 on-the-nose）
+# 🔴 对白即行动dialogue_objectives注入（对话表达层 P1·McKee verbal action·治 on-the-nose）
 # dialogue_act 意图骨架枚举（advisory 软提示·不强校验·outline-planner/A agent 自由标）
 _VALID_DIALOGUE_ACTS = {"试探", "回避", "威胁", "让步", "反讽", "求证", "施压", "示弱"}
 
 
 def _sanitize_dialogue_objectives(objectives, current_cluster_id):
-    """🔴 2026-06-29 对白即行动 dialogue_objectives 写手注入门控（what_unsaid 防剧透）。
+    """🔴 对白即行动 dialogue_objectives 写手注入门控（what_unsaid 防剧透）。
 
     隔离规则（对齐 _sanitize_knowledge / _sanitize_character_belief 未来知识隔离·单一真理源）：
       · objective 标了 reveal_cluster（producer 显式标 what_unsaid 涉未到期 hidden 伏笔）：
@@ -2514,7 +2500,7 @@ def _sanitize_dialogue_objectives(objectives, current_cluster_id):
 
 
 def _collect_dialogue_objectives(cluster: dict, current_cluster_id=None) -> dict | None:
-    """🔴 2026-06-29 对白即行动 dialogue_objectives 注入（对话表达层 P1·McKee《Dialogue: Art of Verbal Action》）。
+    """🔴 对白即行动 dialogue_objectives 注入（对话表达层 P1·McKee《Dialogue: Art of Verbal Action》）。
 
     透传 outline-planner(A agent) 在 scene_storyboard 每个 scene 标注的 dialogue_objectives：
       [{character, wants(本场想从对方拿到什么), tactic(active verb 言语策略:试探/施压/回避/示弱/反问),
@@ -2566,7 +2552,7 @@ def _collect_dialogue_objectives(cluster: dict, current_cluster_id=None) -> dict
 
 
 def _collect_prose_scene_cards(cluster: dict) -> dict | None:
-    """🔴 2026-07-05 prose_scene_cards 场景执行卡（借鉴分镜卡片，但转为小说写作读模型）。
+    """🔴 prose_scene_cards 场景执行卡（借鉴分镜卡片，但转为小说写作读模型）。
 
     从 scene_storyboard 构建轻量 prose-first 场景卡，给 writer 一眼看到：
       · 本场标题/章节/角色焦点/场所；
@@ -2715,11 +2701,11 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                 continue
             cr = c.get("chapter_range") or []
             status = c.get("status")
-            # 2026-05-29 复审修复（M16 · SC-6）：中英文 status 都认。
+            # 中英文 status 都认。
             if status in _EVENT_CLUSTER_ACTIVE_STATUSES:
                 # pending cluster (未指定 chapter_range) 也算（writer 启动时本章 = first ch）
                 if not cr or (len(cr) == 2 and cr[0] <= chapter <= cr[1]):
-                    # 🔴 2026-06-27 C15: mode 细分——status active 命中后再校验 brief 是否真有内容。
+                    # 🔴 mode 细分——status active 命中后再校验 brief 是否真有内容。
                     # 上游声明 active 却 scope_summary + scene_storyboard 双空 → mode=contract_violation
                     # （不再静默注入空 brief 当 mode=on 让 writer 拿空约束写偏）。fluid 回归锁：
                     # scene_storyboard 已填即不空 → 照常走 mode=on（天灾继承法 cluster_006 实战）。
@@ -2753,7 +2739,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             "  · 结(ketsu / 約25%)：把『起承』与『转』收回成新稳态·留余味·"
                             "末段不必强钩(治愈节奏)·禁止强反转或 cliffhanger·允许平稳收束。"
                         )
-                    # 🆕 R20 W9 Batch-CC P2 (2026-06-21): ACW Activity-Centric Writing directive
+                    # 🆕 R20 W9 Batch-CC P2: ACW Activity-Centric Writing directive
                     # 每段一个中心活动·防游走·env ACW_MODE=off/shadow/active(默认 shadow 不注入·active 注入)
                     # 与 kishotenketsu(段级节奏 macro)正交·ACW 是段级 micro 中心活动
                     _acw_mode = (os.environ.get("ACW_MODE") or "shadow").strip().lower()
@@ -2767,7 +2753,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             "  · 主语切换=换段·主语稳定=同段·防止段内频繁切换主语造成读者注意力分散。\n"
                             "  · 与 kishotenketsu macro 节奏正交·ACW 是段级 micro 中心活动一致性。"
                         )
-                    # 🆕 R23 W11 Batch-GG P0 (2026-06-22): pace_carrier_window 钩子双侧 ±300 CJK 长记区指引
+                    # 🆕 R23 W11 Batch-GG P0: pace_carrier_window 钩子双侧 ±300 CJK 长记区指引
                     # neural PACE 框架·钩子两侧 300 CJK 内放长记设定/伏笔/物件 → 后续 cluster 召回率高
                     # env PACE_CARRIER_WINDOW_MODE=active 时注入 advisory directive
                     _pace_carrier_mode = (os.environ.get("PACE_CARRIER_WINDOW_MODE") or "shadow").strip().lower()
@@ -2785,7 +2771,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             ),
                             "_doc": "R23 W11 P0·shadow→active 软提示·advisory·绝不 hard_gate",
                         }
-                    # 🆕 R22 W10 Batch-DD P0 STRONG (2026-06-21): rhetorical_subset 按题材匹配高频辞格 subset
+                    # 🆕 R22 W10 Batch-DD P0 STRONG: rhetorical_subset 按题材匹配高频辞格 subset
                     # 陈望道《修辞学发凡》38 格四类·题材 prior 注入 writer prompt 提示偏好辞格
                     # env RHETORICAL_BALANCE_MODE=active 时注入 advisory subset hint
                     _rhet_subset = None
@@ -2802,7 +2788,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             _rhet_subset = _ri.match_subset_by_genre(_ri.load_inventory(), _book_genre)
                         except Exception:
                             _rhet_subset = None
-                    # 🆕 R7 W2 (2026-06-20): narrative_pov_mode 五分类 (Stanzel/Cohn consonant-dissonant)
+                    # 🆕 R7 W2: narrative_pov_mode 五分类 (Stanzel/Cohn consonant-dissonant)
                     # first_present / first_retro_consonant / first_retro_dissonant / third_limited / third_omniscient
                     # 与 narrative_mode (in_medias_res/linear 时间序) 正交。cluster 优先 → 作者档兜底 → "third_limited" 默认。
                     _valid_pov_modes = {"first_present", "first_retro_consonant",
@@ -2835,7 +2821,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         # outline 阶段填写 cluster.olfactory_anchors=[{"trigger":"桂花香","memory_seed":"母亲的厨房","scene":N}...]
                         # writer 闪回 beat 优先用嗅觉/味觉触发非『他想起』式 hindsight tell（D4 advisory）。
                         "olfactory_anchors": c.get("olfactory_anchors") or [],
-                        # 🔴 2026-06-28 伏笔明暗线隔离：埋设只注入明线 surface_clue（剥离暗线 hidden_payoff）；
+                        # 🔴 伏笔明暗线隔离：埋设只注入明线 surface_clue（剥离暗线 hidden_payoff）；
                         # callback 到 trigger_cluster 才暴露 hidden_payoff + reveal 指令（让写手兑现）。
                         "foreshadowing_to_plant": _sanitize_foreshadowing_to_plant(c.get("foreshadowing_to_plant")),
                         "foreshadowing_to_callback": _resolve_foreshadowing_to_callback(
@@ -2848,16 +2834,16 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "narrative_mode": narrative_mode,
                         "narrative_pov_mode": narrative_pov_mode,
                         "climax_hint_scene_index": c.get("climax_hint_scene_index"),
-                        # 🔴 2026-06-28 写手信息隔离（item 9）：早期 cluster 把收敛锚的 final_image/ending_image
+                        # 🔴 写手信息隔离（item 9）：早期 cluster 把收敛锚的 final_image/ending_image
                         # 降精到软方向（不整删不 None·北极星③软牵引载体）·volume_arc/core_conflict/milestones 始终全给。
                         "volume_convergence_anchor": _soften_convergence_anchor(
                             _build_volume_convergence_anchor(scanner, c), cluster_id_val, len(clusters)),
-                        # 🔴 2026-06-29 controlling_idea主控思想软注入（主题脊柱 P0·北极星③软牵引·骑 _soften_convergence_anchor 同轨）：
+                        # 🔴 controlling_idea主控思想软注入（主题脊柱 P0·北极星③软牵引·骑 _soften_convergence_anchor 同轨）：
                         # 读 大势卡.story_destiny.controlling_idea(A agent 产)·早期 cluster 给软主题方向·越近卷末越显化(同 convergence_anchor 降精逻辑)。
                         # 默认安全闸：无 controlling_idea(旧大势卡/旧书) → None(不注入·零行为变化)。全 advisory·绝不 hard_gate·不进 HARD_GATE_CODES。
                         "controlling_idea_anchor": _build_controlling_idea_anchor(
                             scanner, cluster_id_val, len(clusters)),
-                        # 🆕 2026-06-03 卷=阶段触发点：透传卷级语义给 writer。
+                        # 🆕 卷=阶段触发点：透传卷级语义给 writer。
                         # is_volume_finale=True → 本 cluster 是卷末小走向 → writer 走高烈度转折(禁平稳收束)；
                         # stakes_delta 让 writer 知道相对前块的强度增量(避免同卷小走向平铺重复)。
                         "volume": c.get("volume"),
@@ -2873,7 +2859,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         "ACW_DIRECTIVE": _acw_directive,
                         # 🆕 R23 W11 Batch-GG P0: 钩子双侧 ±300 CJK 长记 window 指引
                         "pace_carrier_window": _pace_carrier_window,
-                        # 🆕 R23 W11 Batch-HH P1 (2026-06-22): 信念更新意图 + LC-NE 边界锐度 + frisson lead window
+                        # 🆕 R23 W11 Batch-HH P1: 信念更新意图 + LC-NE 边界锐度 + frisson lead window
                         # belief_update_intent: {preserve|update|None}·writer 据此决定末段是否要 PE 收束
                         # event_boundary_sharpness: {sharp|dull|default}·volume_finale 强制 sharp 由 emergence 注入
                         # frisson_lead_window: climax beat 前 1-2 段 200-400 CJK 节奏锐化指令（active 模式）
@@ -2897,7 +2883,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             if (os.environ.get("FRISSON_LEAD_MODE") or "shadow").strip().lower() == "active"
                             else None
                         ),
-                        # 🆕 R24 W12 Batch-JJ P0 STRONG (2026-06-22): 9 类爆点 intended_burst_type
+                        # 🆕 R24 W12 Batch-JJ P0 STRONG: 9 类爆点 intended_burst_type
                         # event_cluster_context 回灌让 writer 看见目标爆点·尾部 80-200 CJK 收束
                         "intended_burst_type": c.get("intended_burst_type"),
                         "burst_type_directive": (
@@ -2924,12 +2910,12 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             if (os.environ.get("BURST_TYPE_MODE") or "shadow").strip().lower() == "active"
                             else None
                         ),
-                        # 🆕 R24 W12 Batch-KK P1 (2026-06-22): writer intent anchor 4 维盲意图卡
+                        # 🆕 R24 W12 Batch-KK P1: writer intent anchor 4 维盲意图卡
                         # build_manifest 注入·writer 在 step 2 必须按 4 字段写·
                         # step 6 后 agenda_drift_scanner 比对·任一<0.62 → advisory
                         "writer_intent_anchor": _load_writer_intent_anchor_for_manifest(
                             scanner.root, c.get("cluster_id", "")),
-                        # 🆕 R24 W12 Batch-KK P1 (2026-06-22): author_signature_slots
+                        # 🆕 R24 W12 Batch-KK P1: author_signature_slots
                         # storyboard 级 [{slot_id, text, preserve_policy, anchor_hint}]
                         # writer 必须 MUST PRESERVE EXACTLY（verbatim/near_verbatim_punct_only）
                         # 草稿落地后 author_signature_preservation.py fuzzy match Lev≤5% 闸
@@ -2950,7 +2936,7 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                             if (os.environ.get("AUTHOR_SIGNATURE_MODE") or "shadow").strip().lower() == "active"
                             else None
                         ),
-                        # 🆕 R24 W12 Batch-JJ P1 (2026-06-22): Glaser 四杠杆 D9.3 advisory
+                        # 🆕 R24 W12 Batch-JJ P1: Glaser 四杠杆 D9.3 advisory
                         "glaser_four_levers_directive": (
                             {
                                 "levers": ["dramatize", "emotionalize",
@@ -2969,19 +2955,19 @@ def _collect_event_cluster_context(scanner, chapter: int) -> dict:
                         ),
                         # 🆕 R22 W10 Batch-DD P0 STRONG: 题材 prior 推荐辞格 subset
                         "rhetorical_subset_hint": _rhet_subset,
-                        # 🔴 2026-06-27 P1-08: cluster brief 注入 motif_callback_hints（上一 cluster 的 dormant motif 回收建议）。
+                        # 🔴 P1-08: cluster brief 注入 motif_callback_hints（上一 cluster 的 dormant motif 回收建议）。
                         # 数据源=motif_advisory_snapshot.json.dormant_motifs（top-5），由 motif_recurrence_ledger 落盘。
                         # advisory · 永不 hard_gate · 不存在时为空 list（守北极星⑤顾问非法官）。
                         "motif_callback_hints": _collect_motif_callback_hints_for_cluster(scanner),
-                        # 🔴 2026-07-05 prose_scene_cards：借鉴 moyin-creator 的 storyboard/scene card 思路，
+                        # 🔴 prose_scene_cards：借鉴 moyin-creator 的 storyboard/scene card 思路，
                         # 但转换为小说正文执行卡；白名单提取 prose 字段，忽略 camera/shot/visual prompt，防剧本体污染。
                         "prose_scene_cards": _collect_prose_scene_cards(c),
-                        # 🔴 2026-06-29 But-Therefore因果连接器+Swain场景骨架（事件 P0·治流水账·涟漪微观可执行化）：
+                        # 🔴 But-Therefore因果连接器+Swain场景骨架（事件 P0·治流水账·涟漪微观可执行化）：
                         # 透传 outline-planner 在 scene_storyboard 标注的 scene_type/proactive/reactive/link_to_prev/result_type，
                         # 并注入『相邻 scene 须 but/therefore 衔接·避免 and_then 平铺·结果禁纯 yes』指令给 writer。
                         # 默认安全闸：scene 无这些字段 → None（不注入·向后兼容旧 storyboard / 旧书）。advisory 永不 hard_gate。
                         "scene_causal_skeleton": _collect_scene_causal_skeleton(c),
-                        # 🔴 2026-06-29 对白即行动dialogue_objectives注入（对话表达层 P1·McKee verbal action·治 on-the-nose）：
+                        # 🔴 对白即行动dialogue_objectives注入（对话表达层 P1·McKee verbal action·治 on-the-nose）：
                         # 透传 scene_storyboard 每场的 dialogue_objectives(character/wants/tactic/obstacle/dialogue_act/what_unsaid)
                         # + 注入『对白是策略不是信息·严禁把内心想法/情绪/目标直接说出口(透明原则)』指令给 writer。
                         # what_unsaid 涉未到期 hidden 伏笔(标 reveal_cluster) → _sanitize_dialogue_objectives 隔离门控剥离防剧透。
@@ -3284,7 +3270,7 @@ def _appraisal_beat_to_lines(b: dict, *, residue: bool) -> list[str]:
 
 
 def _collect_appraisal_directive(scanner, current_cluster_id) -> dict | None:
-    """🔴 2026-06-29 场景级Appraisal Beat注入（心理 P0·chain-of-emotion 两步法·治情绪贴标签/逐场景重置）。
+    """🔴 场景级Appraisal Beat注入（心理 P0·chain-of-emotion 两步法·治情绪贴标签/逐场景重置）。
 
     读 叙事节拍器.json 的 appraisal_beats[]（A agent 由 Claude 梳理读正文回填·schema：
       {cluster_id, scene_idx, focal_character, trigger_event,
@@ -3409,7 +3395,7 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
             return {"mode": "error", "error": "当前章无法反查 cluster_id"}
 
         # factions: 精简（去 leader/notes 节省 manifest 字符）
-        # 🔴 2026-06-28 写手信息隔离（item 3a）：hidden faction 经 _sanitize_faction_focus 剥真 current_focus
+        # 🔴 写手信息隔离（item 3a）：hidden faction 经 _sanitize_faction_focus 剥真 current_focus
         # 留 surface_focus·数值（power/stability/wealth = 涟漪 surface·北极星②）always 留。默认安全闸：无 hidden 标记原样。
         factions = {}
         for name, f in (world.get("factions_state") or {}).items():
@@ -3432,7 +3418,7 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
                 "since_cluster": t.get("since_cluster"),
                 "expected_complete_cluster": t.get("expected_complete_cluster"),
                 "visible_to_protagonist": t.get("visible_to_protagonist", False),
-                # 🔴 2026-06-28 写手信息隔离（item 7）：剥 outcome_if_complete（幕后线程完成后的未来结果）·
+                # 🔴 写手信息隔离（item 7）：剥 outcome_if_complete（幕后线程完成后的未来结果）·
                 # 留 current_action（公开动向·涟漪 surface·北极星②）。写手只知 NPC 正在做什么·不预知结局。
                 "_priority": t.get("_priority"),
             }
@@ -3494,21 +3480,21 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
         return {"mode": "error", "error": str(e)[:120]}
 
 
-# 🔴 2026-06-29 环境location回喂闭环
+# 🔴 环境location回喂闭环
 _SENSORY_PREFIX_CN = {"smell": "嗅", "sound": "听", "touch": "触", "light": "光"}
 
 
 def _collect_location_atmosphere(scanner, chapter: int) -> dict | None:
-    """🔴 2026-06-29 环境location回喂闭环（环境 P0·闭合 location_atmosphere_registry feed-forward）。
+    """🔴 环境location回喂闭环（环境 P0·闭合 location_atmosphere_registry feed-forward）。
 
-    系统已由 location_signature_consistency.update_registry 增量维护
-    _数据库/location_atmosphere_registry.json（{location_name:{signature_sensory_motifs:[嗅/听/触/光],...}}），
-    但 build_manifest 此前**零消费**——纯写入只做事后漂移检测·从不正向告诉写手该地点有什么签名感官。
-    本 collector 把已学到的地点感官签名【正向回喂】writer（advisory 素材池·非硬约束）。
+    系统由 location_signature_consistency.update_registry 增量维护
+    _数据库/location_atmosphere_registry.json（{location_name:{signature_sensory_motifs:[嗅/听/触/光],...}}）
+    做事后漂移检测；本 collector 把已学到的地点感官签名【正向回喂】writer
+    （advisory 素材池·非硬约束），让写手正向拿到该地点的签名感官。
 
     定位：经 current_scene().location / 当前 cluster.hub_locations / character_positions 三路收集候选地点名，
     与 registry key 做双向 substring 匹配。
-    默认安全闸：无 registry / 定位不到地点 / 命中地点无 signature → 返回 None（不注入·向后兼容旧书·零行为变化）。
+    默认安全闸：无 registry / 定位不到地点 / 命中地点无 signature → 返回 None（不注入）。
     豁免：尊重作者档 location_atmosphere_override.allow_drift_locations（季节/灾后/时间推移合法漂移不锁）。
     advisory：永不 hard_gate（北极星⑤·正向素材池非填空题）。
     """
@@ -3625,7 +3611,7 @@ def _collect_offscreen_actions(scanner, chapter: int) -> list[dict]:
                 continue
             ch_range = act.get("ch_range", [])
             if len(ch_range) == 2 and ch_range[0] <= chapter <= ch_range[1]:
-                # 🔴 2026-06-28 写手信息隔离（item 7）：_sanitize_offscreen 剥 result_expected/outcome_if_complete
+                # 🔴 写手信息隔离（item 7）：_sanitize_offscreen 剥 result_expected/outcome_if_complete
                 # （未来结果）+ current_plan/goals_short（幕后真实意图）·留 visible action（涟漪 surface·北极星②）。
                 out.append(_sanitize_offscreen({
                     "character": name,
@@ -3698,10 +3684,9 @@ def _collect_selective_history(
 
     import embedding_store
 
-    # 🔴 2026-07-02 bug fix：此前本函数裸用 compute_embedding/cosine_similarity 且无门控——
-    # 默认 EMBED_BACKEND（hash md5 ngram 袋）算出的"相似度"是纯噪声，却会静默冒充语义检索结果
-    # 喂给 writer。本函数无非语义回退路径，无真后端时直接跳过整段语义检索、诚实返回空
-    # （同 topic_drift_scanner「无真语义就不伪装语义」纪律）。
+    # 🔴 语义后端门控：默认 EMBED_BACKEND（hash md5 ngram 袋）算出的"相似度"是纯噪声，
+    # 会静默冒充语义检索结果喂给 writer。本函数无非语义回退路径，无真后端时直接跳过整段
+    # 语义检索、诚实返回空（同 topic_drift_scanner「无真语义就不伪装语义」纪律）。
     if not _has_real_embedding_backend():
         return {"retrieved": [], "reason": "无真 embedding 后端（EMBED_BACKEND 未设/=hash）"
                                             "·hash 假嵌入不可当语义检索用·跳过"}
@@ -3795,8 +3780,7 @@ def _collect_golden_few_shot(scanner, chapter: int, per_type: int = 3) -> dict:
     if not isinstance(gp, dict):
         return {}
 
-    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-    # 2026-05-29 复审修复（SC-1）：经 _bp_items 归一（list 项目不崩）。
+    # 纯 cluster 模式 · 只读 cluster_blueprint · 经 _bp_items 归一（list 项目不崩）。
     progress = scanner.load("进度", {})
     scene_types = set()
     for cid, cdata in _bp_items(progress).items():
@@ -3852,7 +3836,7 @@ def _collect_golden_few_shot(scanner, chapter: int, per_type: int = 3) -> dict:
             total_chars += len(text)
         if picked:
             few_shot[key] = picked
-    # v21 P3.1: 检查每类 ≥ 5 段（业界研究：< 5 段 LLM 风格回归均值）
+    # 检查每类 ≥ 5 段（业界研究：< 5 段 LLM 风格回归均值）
     style_regression_warnings = []
     MIN_DEMOS = 5
     for key in keys_to_pick:
@@ -4356,7 +4340,7 @@ def _collect_will_learn_due(scanner, chapter: int) -> list[dict]:
     out = []
     for c in data.get("characters", []):
         for wl in c.get("knowledge", {}).get("will_learn", []):
-            # 2026-05-30 北极星复审：learn_at_cluster="cluster_005" 是 cluster ID 不是章号，
+            # learn_at_cluster="cluster_005" 是 cluster ID 不是章号，
             # 必须反查当前章所属 cluster 再比对——禁止抽数字 5 当章号与 chapter 撞（北极星铁律）。
             lac = wl.get("learn_at_cluster")
             if not isinstance(lac, str) or not lac:
@@ -4382,7 +4366,7 @@ def _collect_secrets_to_reveal(scanner, chapter: int) -> list[dict]:
         return []
     out = []
     for s in data.get("secrets", []):
-        # 2026-05-30 北极星复审：reveal_at_cluster 是 cluster ID 不是章号，反查当前章所属
+        # reveal_at_cluster 是 cluster ID 不是章号，反查当前章所属
         # cluster 比对——禁止抽数字当章号与 chapter 撞（北极星铁律，参照 _current_cluster_id）。
         rc = s.get("reveal_at_cluster")
         cur_cid = cluster_lookup.ch_to_cluster_id(scanner.root, chapter)
@@ -4422,7 +4406,7 @@ def _parse_payoff_deadline(window: str, raised_num: int) -> int:
 
 
 def _collect_open_dramatic_questions(scanner, current_cluster_id) -> dict | None:
-    """🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)：当前悬而未决的核心问题软注入 writer manifest（advisory）。
+    """🔴 戏剧问题账本(PITQ/MDQ)：当前悬而未决的核心问题软注入 writer manifest（advisory）。
 
     读 _数据库/戏剧问题账本.json{clusters:{<cid>:{raised:[{qid,question,scope,raised_at_scene,
     expected_payoff_window}],answered:[{qid,answered_at_scene}]}}}·累计到 current_cluster（含）算
@@ -4469,7 +4453,7 @@ def _collect_open_dramatic_questions(scanner, current_cluster_id) -> dict | None
                     "question": str(r.get("question") or ""),
                     "scope": str(r.get("scope") or "cluster"),
                     "expected_payoff_window": str(r.get("expected_payoff_window") or ""),
-                    # 🔴 2026-06-29 Sternberg 三态：只认合法值·非法/缺省 → None（默认安全）
+                    # 🔴 Sternberg 三态：只认合法值·非法/缺省 → None（默认安全）
                     "gap_type": gt if gt in ("suspense", "curiosity", "surprise") else None,
                 }
         for a in payload.get("answered") or []:
@@ -4500,7 +4484,7 @@ def _collect_open_dramatic_questions(scanner, current_cluster_id) -> dict | None
     for q in top:
         q.pop("_deadline", None)
 
-    # 🔴 2026-06-29 Sternberg 读者知识缺口三态分布（统计全部 open 问题·缺 gap_type 不计·默认安全）。
+    # 🔴 Sternberg 读者知识缺口三态分布（统计全部 open 问题·缺 gap_type 不计·默认安全）。
     gap_type_distribution: dict = {}
     for q in open_qs:
         gt = q.get("gap_type")
@@ -4537,7 +4521,7 @@ def _collect_open_dramatic_questions(scanner, current_cluster_id) -> dict | None
 def _ttr_fidelity_mode() -> str:
     """TTR_FIDELITY_MODE：词汇丰富度（TTR/hapax）目标注入 + SFS 打分双端开关。
 
-    默认 active（2026-05-31 放量·治 LLM 系统性拉平词汇丰富度盲区 · 3 篇研究证 LLM imitation
+    默认 active（治 LLM 系统性拉平词汇丰富度盲区 · 3 篇研究证 LLM imitation
     向 generic-median 回归 / GPT-4o lexical diversity 反转）。非法/空 → active；off → 关闭。
     advisory 边界（北极星⑤）：是顾问目标（writer 可校准偏离），绝不进 hard_gate。
     """
@@ -4595,10 +4579,10 @@ def _build_hard_constraints(
 ) -> list[str]:
     """组装 hard_constraints 列表：剧情约束(Tier-1回收/secrets/locked_facts·真硬约束) +
     风格量化约束(对话占比/句长/字数/逗句比/TTR·全标 advisory·作者档第一权威·可校准偏离·
-    北极星⑤)。2026-06-15 审计修(Workflow confirmed)：风格量化项原无 advisory 标记被
-    critical_summary 框「必满足」=违北极星⑤把 advisory 当 hard_gate；对话占比 0.3 地板覆盖
-    低对话作者基线=违北极星⑤(c)机械覆盖作者档；writer 链注入每章字数=违北极星④（章数字数由 splitter 决定）。
-    全标 advisory 前缀让 writer 区分(critical_summary 只框 hard_gate 项)·对话地板改 relax-only。"""
+    北极星⑤)。北极星边界：风格量化项必须带 advisory 前缀让 writer 区分（critical_summary 只框
+    hard_gate 项——advisory 被框成「必满足」=违北极星⑤）；对话占比地板只 relax-only（硬地板
+    覆盖低对话作者基线=违北极星⑤(c)机械覆盖作者档）；不给 writer 注入每章字数硬指标
+    （章数字数由 splitter 决定·北极星④）。"""
     hard_constraints = [
         f"Tier-1 伏笔 {foreshadow_summary['tier1_due_count']} 条本章必须回收",
         f"secrets 本章必须揭露 {foreshadow_summary['must_reveal_this_ch']} 条",
@@ -4606,20 +4590,20 @@ def _build_hard_constraints(
         "章节开头反重复：检查 manifest.recent_openings，本章开头类型和焦点元素必须与前 2-3 章完全不同",
     ]
 
-    # 风格量化约束（v15 新增）
+    # 风格量化约束
     if s.has_style_profile():
         style = s.load("作者风格", {})
         quant = style.get("quantitative", {})
-        # 2026-05-30 北极星复审：作者风格.json quantitative.*.mean 是 LLM 蒸馏产物，可能写成 "约20字"/
-        # "40%"/"2:1" 等字符串 → 原直接算术/格式化抛 TypeError/ValueError，而 build_manifest 是
+        # 作者风格.json quantitative.*.mean 是 LLM 蒸馏产物，可能写成 "约20字"/
+        # "40%"/"2:1" 等字符串 → 直接算术/格式化会抛 TypeError/ValueError，而 build_manifest 是
         # cluster-write step1 强制必跑，崩则中断整条写作流水线。_num 只接受真数值，非数值跳过该约束（不崩）。
         def _num(v):
             return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
         dr_m = _num(quant.get("dialogue_ratio", {}).get("mean"))
         if dr_m is not None:
             hard_constraints.append(f"（advisory·作者档第一权威·可校准偏离）对话占比 ≥ {max(0.0, dr_m - 0.15):.0%}")
-        # #2轮穷尽核查纠偏：dialogue_ratio 含引号化内心独白系统性高估(真机惊悚 1000 章 0.32 vs 纯对话 0.21)
-        # → 补纯对话占比 advisory 旁注(保留上方 dr 注入向后兼容·此为真实角色对白基线·防 writer 被高估值误导多写对话)
+        # dialogue_ratio 含引号化内心独白会系统性高估(实测 1000 章 0.32 vs 纯对话 0.21)
+        # → 补纯对话占比 advisory 旁注(与上方 dr 注入并存·此为真实角色对白基线·防 writer 被高估值误导多写对话)
         dor_m = _num(quant.get("dialogue_only_ratio", {}).get("mean"))
         if dor_m is not None:
             hard_constraints.append(f"（advisory·纯对话占比·剔除引号化独白·作者真实口语基线）纯角色对白占比≈{dor_m:.0%}"
@@ -4641,7 +4625,7 @@ def _build_hard_constraints(
         if cpr is not None and cpr > 1.0:
             hard_constraints.append(f"（advisory·作者档第一权威·可校准偏离）逗句比 ≥ {max(1.0, cpr - 1.0):.1f}:1（长句用逗号连接）")
 
-        # 词汇丰富度 TTR/hapax 目标（2026-05-31 · 治 LLM 系统性拉平词汇丰富度盲区 · advisory）。
+        # 词汇丰富度 TTR/hapax 目标（治 LLM 系统性拉平词汇丰富度盲区 · advisory）。
         # LLM imitation 倾向向 generic-median 回归，用词反复趋同 → 显式下发作者 TTR/hapax 目标，
         # 让 writer 主动保持作者的用词多样度（数值剖面同款 · 顾问非硬锁 · 北极星⑤）。
         if _ttr_fidelity_mode() != "off":
@@ -4672,7 +4656,7 @@ def _collect_author_style_fingerprint(s: "DatabaseScanner") -> dict | None:
     **显式告知** writer，比让模型自己看样本去悟更有效。本字段把 validate_style 里只用于 L1a
     评分阈值的作者句长分位数，升格成写作时下发的显式目标剖面（advisory · 非门禁非硬锁）。
 
-    env PROFILE_INJECT_MODE（2026-05-31 放量 · 默认 active · 真生效下发 writer）：
+    env PROFILE_INJECT_MODE（默认 active · 真生效下发 writer）：
       · active（默认 / 空 / 非法值）：算指纹并注入 manifest.author_style_fingerprint → writer
                      经 _build_style_fingerprint_section 显式消费多维量化目标。
       · shadow     ：算指纹并写到 _数据库/.style_fingerprint/ch_NNN.json + stderr 摘要，
@@ -4687,7 +4671,7 @@ def _collect_author_style_fingerprint(s: "DatabaseScanner") -> dict | None:
     if mode == "off":
         return None
     if mode not in ("shadow", "active"):
-        mode = "active"  # 空/非法值 → 默认 active（2026-05-31 放量·只有显式 off 才关）
+        mode = "active"  # 空/非法值 → 默认 active（只有显式 off 才关）
     if _style_profile_extractor is None or not s.has_style_profile():
         return None
     try:
@@ -4749,9 +4733,9 @@ def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
     钩子分布兑现间隔/推进密度）转成 writer 可执行的节奏指令——补段长/句长表层指纹
     抓不到的「写了这一拍之后写下一拍」的序列骨（呼应 Spoiler Alert「过早收束」诊断）。
 
-    env RHYTHM_INJECT_MODE（2026-06-13 终验后切 active 放量·实测张力后段保持度 0.872→0.903
+    env RHYTHM_INJECT_MODE（实测张力后段保持度 0.872→0.903
     朝作者 0.93 收敛、CV 0.158→0.314 翻倍·骨注入可量化生效）：
-      · active（默认·已放量）：注入 manifest.author_rhythm_signature → writer 经
+      · active（默认）：注入 manifest.author_rhythm_signature → writer 经
         _build_rhythm_signature_section 消费。
       · shadow（调试）：算+落盘 _数据库/.rhythm_signature/ch_NNN.json + stderr 摘要·不注入。
       · off：返回 None·零回归。
@@ -4886,7 +4870,7 @@ def _collect_knowledge_gap_directives(s: "DatabaseScanner") -> dict | None:
 
 
 def _collect_narrative_function_sequence(s: "DatabaseScanner") -> dict | None:
-    """#4（2026-06-16 穷尽核查）：作者签名因果功能链注入（env NARR_FUNC_SEQ_INJECT_MODE 默认 shadow·仿 D3·advisory）。
+    """作者签名因果功能链注入（env NARR_FUNC_SEQ_INJECT_MODE 默认 shadow·仿 D3·advisory）。
 
     读 consolidate 聚合的 narrative_function_sequence（signature_bigrams 因果功能链如 face_slap→gain_reward·
     比 Save-the-Cat 通用节拍更深·作者专属·distill-style.md 自述中文网文同质化结构层根因）→ writer 结构骨指令：
@@ -4942,7 +4926,7 @@ def _collect_author_decision_principles(s: "DatabaseScanner") -> dict | None:
     characterization_craft（去重观察）。**零检测零误报**（照 _collect_deep_writing_dims
     哲学）——只给 writer 创作提示，绝不当 scanner 判决。
 
-    env DECISION_INJECT_MODE 默认 active（2026-06-13 切 active 放量·确定性去重观察已够 writer 消费）：
+    env DECISION_INJECT_MODE 默认 active（确定性去重观察已够 writer 消费）：
       active=注入·shadow=算+落盘不注入（调试）·off=None。决策原则本质 author-specific·无作者档则 None（零回归）。
     """
     import os as _os
@@ -5034,9 +5018,9 @@ def _collect_genre_pack_directives(s: "DatabaseScanner") -> dict | None:
     """阶段3：题材专属工艺提示（按 genre 路由·内容工艺层·纯 prompt 注入·全 advisory）。
 
     通用维度池(作者层)always-on；题材专属(甜宠糖虐/游戏向面板)按 genre 激活。
-    现系统把题材层「爽点」当通用维度=写死爽文根因→本注入按 genre_dimension_packs 路由。
-    unknown/无包 genre → None（退化纯通用池·零回归）。env GENRE_INJECT_MODE 默认 active（2026-06-13
-    切 active 放量·unknown 题材天然 None 零回归·有专属包才注入）。
+    题材层「爽点」不当通用维度（否则写死爽文）→ 本注入按 genre_dimension_packs 路由。
+    unknown/无包 genre → None（退化纯通用池）。env GENRE_INJECT_MODE 默认 active
+    （unknown 题材天然 None·有专属包才注入）。
     """
     import os as _os
     mode = (_os.environ.get("GENRE_INJECT_MODE") or "active").strip().lower()
@@ -5067,7 +5051,7 @@ def _collect_genre_pack_directives(s: "DatabaseScanner") -> dict | None:
     if mode == "shadow":
         print(f"[SHADOW] genre_pack({genre}): {len(directives)} 条题材工艺 — 不注入 manifest")
         return None
-    # 2026-06-19：从本地知识库补充题材相关知识（随蒸馏/调研自动积累）
+    # 从本地知识库补充题材相关知识（随蒸馏/调研自动积累）
     try:
         import knowledge_store as _ks
         kb_items = _ks.query_for_genre(genre, limit=5)
@@ -5211,7 +5195,7 @@ def _collect_focalization_matrix(s: "DatabaseScanner", chapter: int) -> dict | N
 
 
 def _collect_debt_ledger_snapshot(s: "DatabaseScanner") -> dict | None:
-    """R7 Batch-D（2026-06-20）：叙事债务账本 snapshot 注入。
+    """R7 叙事债务账本 snapshot 注入。
 
     数据源=cluster-save-state step 9 跑 cross_cluster_narrative_debt_ledger_aggregate 写的
     `_数据库/.cross_cluster_scan/narrative_debt_snapshot.json`（book/volume open_debt + advisory_codes）。
@@ -5251,7 +5235,7 @@ def _collect_debt_ledger_snapshot(s: "DatabaseScanner") -> dict | None:
 
 
 def _collect_sagging_middle_snapshot(s: "DatabaseScanner") -> dict | None:
-    """R7 Batch-D（2026-06-20）：Sagging Middle snapshot 注入（needs_midpoint_bomb）。
+    """R7 Sagging Middle snapshot 注入（needs_midpoint_bomb）。
 
     数据源=cluster-save-state step 9 跑 cross_cluster_sagging_middle_aggregate 写的
     `_数据库/.cross_cluster_scan/sagging_middle_snapshot.json`。
@@ -5290,7 +5274,7 @@ def _collect_sagging_middle_snapshot(s: "DatabaseScanner") -> dict | None:
     return payload
 
 
-# 🔴 2026-06-27 P1-08：注入 motif advisory snapshot（payoff_due / dormant / over_saturated 三态各 top-3）。
+# 🔴 P1-08：注入 motif advisory snapshot（payoff_due / dormant / over_saturated 三态各 top-3）。
 # 数据源=motif_recurrence_ledger 在 _数据库/.cross_cluster_scan/motif_advisory_snapshot.json 落盘。
 # advisory · 永不 hard_gate · 缺文件 → None（零回归 · 北极星⑤顾问非法官）。
 def _collect_motif_advisory(s: "DatabaseScanner") -> dict | None:
@@ -5343,7 +5327,7 @@ def _collect_motif_advisory(s: "DatabaseScanner") -> dict | None:
 
 
 def _collect_volume_summaries_digest(s: "DatabaseScanner") -> list | None:
-    """S10 消费端（2026-07-07·Ex3 摘要金字塔）：已闭合卷的卷级摘要内联注入（T3 长程记忆）。
+    """S10 消费端（Ex3 摘要金字塔）：已闭合卷的卷级摘要内联注入（T3 长程记忆）。
 
     数据源=故事块摘要.volume_summaries[]（生产端 save_state --apply-volume-summary·apply 硬校验
     保证只有真闭合卷入账，故这里无需判当前卷——有条目即历史卷）。金字塔语义：writer 对历史卷
@@ -5367,7 +5351,7 @@ def _collect_volume_summaries_digest(s: "DatabaseScanner") -> list | None:
     return out or None
 
 
-# ============ A3 前块结尾偏重注入 + A14 近期活跃实体 LRU（2026-07-07 二轮移植 A 批） ============
+# ============ A3 前块结尾偏重注入 + A14 近期活跃实体 LRU ============
 
 _PREV_TAIL_CJK_CHAR_RE = re.compile(r"[一-鿿㐀-䶿]")  # 与 chapter_io.count_cjk 同字符类
 
@@ -5436,7 +5420,7 @@ def _resolve_prev_cluster_id(s: "DatabaseScanner", current_cluster_id) -> str | 
 
 
 def _collect_prev_cluster_tail(s: "DatabaseScanner", current_cluster_id) -> dict | None:
-    """A3 前块结尾偏重注入（2026-07-07·PlotPilot recent_chapter_context.py:7-73 移植）。
+    """A3 前块结尾偏重注入（借鉴 PlotPilot recent_chapter_context）。
 
     cluster_002+ 时读上一 cluster 草稿（章节/cluster_<prev>_draft/cluster_<prev>_draft.txt）
     末尾 N 字原文（默认 800 CJK·env PREV_TAIL_CJK 可调）。PlotPilot 实证「章末完整保留
@@ -5472,14 +5456,14 @@ def _collect_prev_cluster_tail(s: "DatabaseScanner", current_cluster_id) -> dict
 def _collect_recently_active_entities(s: "DatabaseScanner", active_chars,
                                       current_cluster_id, lookback: int = 3,
                                       cap: int = 15) -> dict | None:
-    """A14 近期活跃实体 LRU 兜底（2026-07-07·Ex3 Entity_info Recent_Visit 移植）。
+    """A14 近期活跃实体 LRU 兜底（借鉴 Ex3 Entity_info Recent_Visit）。
 
     从 故事块摘要.json 最近 lookback 个历史 cluster 条目**确定性**抽取出场实体简表
     （账本已有字段 characters/char_mention_counts/summary·零 LLM 调用）：每实体一行
     = 名字 + 最后出场 cluster + 一句话状态（cluster 摘要截断）。与 scene_storyboard
     白名单角色去重（白名单已注入全卡·不重复列）；上限 cap 行防膨胀（最近出场优先保留）。
-    用途：freestyle 带出计划外配角时的前置防漂移参考（advisory·非出场名单硬锁——此前只能
-    靠 UNKNOWN_CHARACTER 事后拦）。无数据 → None（键不注入·零变化）。
+    用途：freestyle 带出计划外配角时的前置防漂移参考（advisory·非出场名单硬锁·
+    前置补充 UNKNOWN_CHARACTER 的事后拦截）。无数据 → None（键不注入）。
     """
     doc = s.load("故事块摘要", {}) or {}
     clusters = doc.get("clusters")
@@ -5551,7 +5535,7 @@ def _collect_recently_active_entities(s: "DatabaseScanner", active_chars,
 
 
 def _scene_gate_context(s: "DatabaseScanner", current_cluster_id) -> dict | None:
-    """A11 DeepLore 多维门控上下文（2026-07-08·sillytavern-DeepLore 移植·
+    """A11 DeepLore 多维门控上下文（借鉴 sillytavern-DeepLore·
     research/open_source_writing_systems_round2.md A11）。
 
     当前 cluster brief 的 scene_storyboard + characters_focus + hub_locations 聚合出
@@ -5593,7 +5577,7 @@ def _scene_gate_world_hits(s: "DatabaseScanner", world_hits, current_cluster_id)
     角色/地点」维度门控——词条明确点名了已知角色/地点、却与本块角色/地点零交集 → 不注入
     （确定性 substring 匹配·零 LLM）。34 子系统越写越厚时的注入密度解法。
 
-    词条清单型注入段现状摸底（2026-07-08）：world_keyword_hits 是唯一未按场景门控的词条
+    词条清单型注入段中，world_keyword_hits 是唯一未按场景门控的词条
     清单段（keyword 命中 plan 即注入·词条可点名与本块无关的角色/地点）；location_atmosphere
     天生已按 scene 候选地点三路匹配（_collect_location_atmosphere）；triggerable_events /
     relevant_items / relevant_relationships 已分别按 plan 关键词 / 出场角色门控——均无需二次门控。
@@ -5662,7 +5646,7 @@ def _scene_gate_world_hits(s: "DatabaseScanner", world_hits, current_cluster_id)
 
 
 def _collect_pre_write_gate_digest(s: "DatabaseScanner", current_cluster_id) -> dict | None:
-    """A2 遗留清偿（2026-07-08·写前 Evolution Gate 报告摘要注入）。
+    """A2 写前 Evolution Gate 报告摘要注入。
 
     读 .wal/cluster_<key>_pre_write_gate.json 的 waived[]/warnings[]——有内容才注入。
     让 writer 看到「已声明豁免的叙事手法」上下文（死人以回忆/幻觉登场、毁物以残片再现等
@@ -5713,7 +5697,7 @@ def _collect_pre_write_gate_digest(s: "DatabaseScanner", current_cluster_id) -> 
     }
 
 
-# ============ A4 编辑手记（2026-07-08·二轮移植·PlotPilot 结构槽坍缩为自然语言） ============
+# ============ A4 编辑手记（二轮移植·PlotPilot 结构槽坍缩为自然语言） ============
 # 业界源 PlotPilot context_budget_allocator.py:475-489：「一段自然语言比 8 个 === 分隔符
 # 更容易被 LLM 融入创作」。双视图纪律：原始结构块**全部保留**（scanner/审计仍消费结构化
 # 数据），editor_note 只是给 writer 的人话视图。零 LLM 纯模板填充·同输入同字节（确定性）。
@@ -5926,7 +5910,7 @@ def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
     return payload
 
 
-# 🔴 2026-06-27 P0-05：子系统消费层级 audit·遍历 KNOWN_DBS 列每件的 consumed_by/status，写入 manifest 末尾。
+# 🔴 P0-05：子系统消费层级 audit·遍历 KNOWN_DBS 列每件的 consumed_by/status，写入 manifest 末尾。
 # 用途：让 writer/judge 一眼看清哪些子系统是 live direct_inject、哪些是 via_scanner/via_engine、
 # 哪些是 deferred（如 webnovel_bench_mapping 等 G13 评估器未启用）。骨架 _doc.consumption 是
 # 单一真理源（subsystem_skeletons.json）；本函数兼容缺 consumption（旧骨架）→ status=unknown。
@@ -5975,10 +5959,10 @@ def _collect_global_feedback_must_read() -> dict | None:
     （Claude Code user data）。harness_dir = cwd 的 dirname 化形式
     （如 X:\\path\\to\\project → X--path-to-project）。
 
-    🔴 home memory 兜底（2026-06-13）：本机 ~/.claude/projects/.../memory/ 不存在或为空
-    （全新机器/尚无历史 memory）→ 本注入此前整层静默为空。miss/无 description 可抽时改读
-    仓库自带的汇编 lessons/global_feedback_rules.md（frozen_util.resource_path 定位·
-    汇编由 assemble_global_feedback_rules.py 产出）。home 路径优先（有历史 memory 时行为不变）。
+    🔴 home memory 兜底：本机 ~/.claude/projects/.../memory/ 不存在或为空
+    （全新机器/尚无历史 memory）、或 miss/无 description 可抽时，读仓库自带的汇编
+    lessons/global_feedback_rules.md（frozen_util.resource_path 定位·
+    汇编由 assemble_global_feedback_rules.py 产出）。home 路径优先（有历史 memory 时读 home）。
     """
     import os as _os
     user_home = Path(_os.path.expanduser("~"))
@@ -6042,7 +6026,7 @@ def _collect_global_feedback_must_read() -> dict | None:
         if not gfr.exists():
             return None
         # 解析每条规则节 → {file, desc}。兼容两种汇编形态：
-        #   · 降噪后（当前·2026-06-18）：节头 "## feedback-<slug>" + 首条正文行作 desc
+        #   · 当前汇编：节头 "## feedback-<slug>" + 首条正文行作 desc
         #   · 旧 assemble 输出：可选 "<!-- FEEDBACK_RULE: <fname> -->" 锚 + "> description:" 行
         lines = gfr.read_text(encoding="utf-8").splitlines()
         digest = []
@@ -6109,9 +6093,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     world_hits = s.world_keyword_hits()
     events = s.triggerable_events()
     active_chars = s.active_characters()
-    # 🔴 2026-06-28 写手信息隔离：当前章所属 cluster_id（写手注入门控的 reveal/trigger 判定基准·唯一权威反查）。
+    # 🔴 写手信息隔离：当前章所属 cluster_id（写手注入门控的 reveal/trigger 判定基准·唯一权威反查）。
     current_cluster_id = s._current_cluster_id()
-    # A11 DeepLore scene 维度门控（2026-07-08）：世界观词条清单按本块出场角色/地点过滤
+    # A11 DeepLore scene 维度门控：世界观词条清单按本块出场角色/地点过滤
     # （must_read 与 manifest 段同源同过滤·env MANIFEST_SCENE_GATING 默认 on·匹配不到
     # 场景信息 = 不过滤零变化）。
     world_hits, _scene_gating_report = _scene_gate_world_hits(s, world_hits, current_cluster_id)
@@ -6221,7 +6205,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             "reason": "Few-Shot 风格锚定",
         })
 
-    # v17.5 B3.1: skill 分级读取（避免 1455 行 skill_FINAL.md 全量灌入）
+    # skill 分级读取（避免超长 skill_FINAL.md 全量灌入）
     skill_md = project_root / "_数据库" / "作者风格_skill.md"
     if skill_md.exists():
         scene_types = current_scene_data.get("scene_type", []) or []
@@ -6271,7 +6255,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
 
     exp_entries = s.experience_entries()
     if exp_entries:
-        # v19.2: P2 → P1 升级，failure_patterns 累积教训不允许跳过
+        # failure_patterns 累积教训不允许跳过（P1）
         fail_count = sum(1 for e in exp_entries if e.get("category") == "failure" or "avoid_by" in e)
         priority = "P1" if fail_count >= 3 else "P2"
         must_read.append({
@@ -6344,7 +6328,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             "rag_hits": rag_hits,
         })
 
-    # v17.5 P3.1: 风格库源↔副本 md5 校验
+    # 风格库源↔副本 md5 校验
     style_sync_warning = None
     style_lib_path = project_root.parent.parent / "styles"
     if style_lib_path.exists():
@@ -6364,7 +6348,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
                     )
                     print(f"[WARN] {style_sync_warning}", file=sys.stderr)
 
-    # v17.5 P3.2: lessons 注入（跨项目教训） · v19.3 升级
+    # lessons 注入（跨项目教训）
     from frozen_util import bundle_root as _bundle_root
     _repo_root = _bundle_root()
     lessons_roots = [_repo_root / "core" / "claude-home" / "lessons"]
@@ -6385,14 +6369,13 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             "files": [str(_lp) for _lp in lessons_files],
         })
 
-    # v19.3: 全局 MEMORY 跨项目 feedback 注入（高价值）
-    # 2026-06-13 提取为 _collect_global_feedback_must_read（frozen fallback：home memory
-    # miss/为空 → bundle 汇编 lessons/global_feedback_rules.md·开发机行为不变）
+    # 全局 MEMORY 跨项目 feedback 注入（高价值）· _collect_global_feedback_must_read
+    # （frozen fallback：home memory miss/为空 → bundle 汇编 lessons/global_feedback_rules.md）
     _fb_must_read = _collect_global_feedback_must_read()
     if _fb_must_read:
         must_read.append(_fb_must_read)
 
-    # v17.3: style_directive 注入（蒸馏→写作落地强制契约）
+    # style_directive 注入（蒸馏→写作落地强制契约）
     style_directive = None
     if s.has_style_profile() and _build_style_directive is not None:
         try:
@@ -6417,7 +6400,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         except Exception as e:
             print(f"[WARN] style_injector 失败: {e}", file=sys.stderr)
 
-    # v15: 写后校验指令（cluster-only）
+    # 写后校验指令（cluster-only）
     post_write_checks: list[dict] = [
         {
             "tool": "audit_hub.py",
@@ -6445,42 +6428,42 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             "ending_state": volume.get("ending_state") if volume else None,
         } if volume else None,
         "active_characters": active_chars,
-        # 🔴 2026-06-28 写手信息隔离（item 1）：出场角色 + 主角的【已隔离】人物卡（剥未到期隐藏身份 true_role/
+        # 🔴 写手信息隔离（item 1）：出场角色 + 主角的【已隔离】人物卡（剥未到期隐藏身份 true_role/
         # 未来知识 will_learn/秘密护栏 anti_patterns·留 surface_role/doesnt_know_yet/工艺 anti_pattern）。
         "active_character_cards": _collect_active_character_cards(s, active_chars, current_cluster_id),
-        # 🔴 2026-06-29 角色信息差(per-character belief)：按 scene participants 投射各在场角色认知边界
+        # 🔴 角色信息差(per-character belief)：按 scene participants 投射各在场角色认知边界
         # （knows[] = learned<=current 的 fact · must_not_reference[] = unaware_of + 未到期 fact 的负向 masking）。
         # 让 writer 按各角色受限认知写·物理 masking 防角色用不该知道的知识穿帮（扮猪吃老虎/信息差）。
-        # 默认安全闸：无 character_belief_ledger.json / 无 participants → []（向后兼容·零行为变化）。全 advisory。
+        # 默认安全闸：无 character_belief_ledger.json / 无 participants → []。全 advisory。
         "scene_character_knowledge": _collect_scene_character_knowledge(s, current_cluster_id),
-        # 🔴 2026-06-29 actant链接通producer（Greimas 六 actant + cast 经济·此前 build_manifest 零产 →
-        # actant_drift_scanner / cast_economy_scanner 整条死码）。active_cast=本 cluster 出场角色集（scene
+        # 🔴 actant链接通producer（Greimas 六 actant + cast 经济·供 actant_drift_scanner /
+        # cast_economy_scanner 消费）。active_cast=本 cluster 出场角色集（scene
         # participants + active_chars·display name）·cluster_actant_state=六 actant 派分（ledger 已回库优先·
         # 否则 subject=主角/opponent=standing 反派派生）。全 advisory shadow·两 code 簇绝不进 HARD_GATE_CODES。
-        # 默认安全闸：无可派生 → []/None（scanner 见空自跳过·无 actant 旧书零行为变化·向后兼容）。
+        # 默认安全闸：无可派生 → []/None（scanner 见空自跳过）。
         "active_cast": _collect_active_cast(s, active_chars, current_cluster_id),
         "cluster_actant_state": _collect_cluster_actant_state(s, current_cluster_id),
         "active_offscreen_actions": _collect_offscreen_actions(s, chapter),
         "active_fate_events": _collect_active_fate_events(s, chapter),
         "world_state_snapshot": _collect_world_state_snapshot(s, chapter),
-        # 🔴 2026-06-29 环境location回喂闭环（环境 P0）：把 location_atmosphere_registry 已学到的地点签名感官
+        # 🔴 环境location回喂闭环（环境 P0）：把 location_atmosphere_registry 已学到的地点签名感官
         # 正向回喂 writer（advisory 素材池·非硬约束）。默认安全闸：无 registry / 定位不到 → None（向后兼容）。
         "location_atmosphere": _collect_location_atmosphere(s, chapter),
         "active_clocks": _collect_active_clocks(s, chapter),
         "research_cache_ref": _collect_research_cache_ref(s, chapter),
         "event_cluster_context": _collect_event_cluster_context(s, chapter),
-        # 2026-05-31 第 2 轮：rolling style anchor（动态锚 · 软牵引对抗长程文风退化 · 北极星①⑤⑥）。
+        # rolling style anchor（动态锚 · 软牵引对抗长程文风退化 · 北极星①⑤⑥）。
         # 从本书已写片段里挑「最贴作者文风」的 1-2 段当下一块的动态锚（vs 第 1 轮静态开局 snippet）。
         "rolling_style_anchor": _collect_rolling_style_anchor(s, chapter),
         "storyteller_directive": _collect_storyteller_directive(s, chapter),
-        # 🔴 2026-06-29 场景级Appraisal Beat注入（心理 P0·情绪余烬 + 本块情绪方向·appraisal-as-prose·advisory）：
+        # 🔴 场景级Appraisal Beat注入（心理 P0·情绪余烬 + 本块情绪方向·appraisal-as-prose·advisory）：
         # 注入「这一拍 focal_character 情绪往哪走(derived_emotion 方向) + 为何(appraisal 评价) +
         # 如何外化(behavior_externalization·动作非情绪词)」+ 上块情绪余烬不归零延续。
-        # 默认安全闸：无 叙事节拍器.appraisal_beats → None（不注入·零行为变化）。全 advisory·绝不 hard_gate。
+        # 默认安全闸：无 叙事节拍器.appraisal_beats → None（不注入）。全 advisory·绝不 hard_gate。
         "appraisal_directive": _collect_appraisal_directive(s, current_cluster_id),
         "protagonist_stress": _collect_protagonist_stress(s, chapter),
-        # [#7] 北极星①：主角弧线当前阶段（character_arc_state.json）内联注入 writer —— 此前只有
-        # cluster_emergence 消费、writer 看不到；角色塑造贴合作者风格需要它。advisory（顾问非法官）。
+        # [#7] 北极星①：主角弧线当前阶段（character_arc_state.json）内联注入 writer
+        # （不只 cluster_emergence 消费）——角色塑造贴合作者风格需要它。advisory（顾问非法官）。
         "main_character_arc_stage": _collect_main_character_arc_stage(s, chapter),
         "active_aspects": _collect_active_aspects(s, chapter),
         "fate_dice_hint": _collect_fate_dice_hint(s, chapter),
@@ -6493,9 +6476,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "throughlines": _collect_throughlines(s, chapter),
         "distill_continuity_template": _collect_distill_continuity(s),
         "arc_template": _collect_arc_template(s, s._current_cluster_id()),
-        "title_style": _collect_title_style(s),                # v22.4dim N5: 章节标题命名指纹
-        "naming_convention": _collect_naming_convention(s),     # v22.4dim N5: 角色命名规范
-        "main_character_arcs": _collect_main_character_arcs(s, top_k=3),  # v22.4dim Round2: 原作主角 Stanford 6 维参考
+        "title_style": _collect_title_style(s),                # 章节标题命名指纹
+        "naming_convention": _collect_naming_convention(s),     # 角色命名规范
+        "main_character_arcs": _collect_main_character_arcs(s, top_k=3),  # 原作主角 Stanford 6 维参考
         "distill_voice_packs_reference": _collect_distill_voice_refs(s),
         # L4 北极星①+⑤：深层创作维度提示（D1 心理距离 / D2 visceral-first 情绪 / D3 动机弧光）——
         # 纯 prompt 注入从源头降问题率，无 scanner 无 hard_gate，全 advisory。作者档基线优先、否则通用兜底。
@@ -6510,7 +6493,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "faction_standings_snapshot": _collect_faction_standings(s),
         "will_learn_due_this_ch": _collect_will_learn_due(s, chapter),
         "pending_secrets_to_reveal": _collect_secrets_to_reveal(s, chapter),
-        # 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)：当前悬而未决的核心问题软注入（advisory·读者追读拉力）。
+        # 🔴 戏剧问题账本(PITQ/MDQ)：当前悬而未决的核心问题软注入（advisory·读者追读拉力）。
         # 读 戏剧问题账本.json 算 open_questions(raised−answered·累计到本 cluster)·软提示 writer 推进/部分揭示。
         # 默认安全闸：无账本 / 无 open → None（不注入·零行为变化·向后兼容）。全 advisory·绝不 hard_gate。
         "open_dramatic_questions": _collect_open_dramatic_questions(s, current_cluster_id),
@@ -6527,25 +6510,25 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # L1a 升格：作者量化风格指纹（显式下发 writer 多维目标硬数字 · advisory）。
         # env PROFILE_INJECT_MODE 默认 active → 注入（真生效）；shadow → None（仅落盘+日志）；off → None（显式关闭）。
         "author_style_fingerprint": _collect_author_style_fingerprint(s),
-        # 阶段1：作者叙事节奏指纹（序列级骨·env RHYTHM_INJECT_MODE 默认 active 放量·advisory）。
+        # 阶段1：作者叙事节奏指纹（序列级骨·env RHYTHM_INJECT_MODE 默认 active·advisory）。
         "author_rhythm_signature": _collect_author_rhythm_signature(s),
         # D3：读者-角色知识差三态（信息差序列骨·env KNOWLEDGE_GAP_INJECT_MODE 默认 shadow·advisory）。
         "knowledge_gap_signature": _collect_knowledge_gap_directives(s),
         # #4：作者签名因果功能链（结构骨·env NARR_FUNC_SEQ_INJECT_MODE 默认 shadow·advisory·中文网文同质化结构层根因）。
         "narrative_function_sequence": _collect_narrative_function_sequence(s),
-        # 阶段2：作者决策原则+人物刻画手法（思维/刻画骨·env DECISION_INJECT_MODE 默认 active 放量·advisory）。
+        # 阶段2：作者决策原则+人物刻画手法（思维/刻画骨·env DECISION_INJECT_MODE 默认 active·advisory）。
         "author_decision_principles": _collect_author_decision_principles(s),
-        # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 active 放量·advisory·unknown→None）。
+        # 阶段3：题材专属工艺提示（按 genre 路由·env GENRE_INJECT_MODE 默认 active·advisory·unknown→None）。
         "genre_pack_directives": _collect_genre_pack_directives(s),
         # R7 W2 P1：Nummenmaa 情绪身体地图 topography hint（PNAS 2014·env EMOTION_TOPOGRAPHY_INJECT_MODE 默认 shadow·advisory·作者档优先）。
         "emotion_body_topography_hint": _collect_emotion_body_topography_hint(s),
         # R7 W2 P1：Focalization Type×Facet 二轴矩阵（FocalLens 2026·env FOCALIZATION_INJECT_MODE 默认 shadow·advisory）。
         "focalization_matrix": _collect_focalization_matrix(s, chapter),
-        # R7 Batch-D（2026-06-20）：叙事债务账本 snapshot（book/volume/scene stock+flow·env NARRATIVE_DEBT_INJECT_MODE 默认 shadow·advisory·cluster-save-state step 9 写）。
+        # R7 Batch-D：叙事债务账本 snapshot（book/volume/scene stock+flow·env NARRATIVE_DEBT_INJECT_MODE 默认 shadow·advisory·cluster-save-state step 9 写）。
         "debt_ledger_snapshot": _collect_debt_ledger_snapshot(s),
-        # R7 Batch-D（2026-06-20）：Sagging Middle 中段塌陷 snapshot（needs_midpoint_bomb·env SAGGING_MIDDLE_INJECT_MODE 默认 shadow·advisory）。
+        # R7 Batch-D：Sagging Middle 中段塌陷 snapshot（needs_midpoint_bomb·env SAGGING_MIDDLE_INJECT_MODE 默认 shadow·advisory）。
         "sagging_middle_snapshot": _collect_sagging_middle_snapshot(s),
-        # 🔴 2026-06-27 P1-08: motif advisory snapshot 注入 manifest（payoff_due/dormant/over_saturated 三态 top-3）。
+        # 🔴 P1-08: motif advisory snapshot 注入 manifest（payoff_due/dormant/over_saturated 三态 top-3）。
         "motif_recurrence_directive": _collect_motif_advisory(s),
         "genre_baseline_diff": _collect_genre_baseline_diff(s),
         "volume_summaries_digest": _collect_volume_summaries_digest(s),
@@ -6567,43 +6550,43 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             "6. 读检查报告 → Edit 修正 → 再运行 cluster 质量检查\n"
             "7. cluster 质量检查通过才算完成，最多循环 3 轮"
         ),
-        # v21 P1 cache layout 分层（agent prompt 按此顺序展示可最大化 Anthropic prompt caching 命中）
+        # cache layout 分层（agent prompt 按此顺序展示可最大化 Anthropic prompt caching 命中）
         "_cache_layout": _build_cache_layout(),
-        # v21 P2-3 LiM 缓解：关键约束在末尾再次摘要（头部 P0 详细 + 尾部 critical_summary 强调）
+        # LiM 缓解：关键约束在末尾再次摘要（头部 P0 详细 + 尾部 critical_summary 强调）
         "_critical_summary": _build_critical_summary(chapter, foreshadow_summary,
                                                     must_read, locals().get("foreshadow_summary", {})),
-        # 🔴 2026-06-27 P0-05：子系统消费层级 audit（骨架 _doc.consumption 单一真理源·遍历 KNOWN_DBS·writer/judge 一眼看清 live/deferred/unknown）。
+        # 🔴 P0-05：子系统消费层级 audit（骨架 _doc.consumption 单一真理源·遍历 KNOWN_DBS·writer/judge 一眼看清 live/deferred/unknown）。
         "_subsystem_consumption_audit": _collect_subsystem_consumption_audit(s),
     }
-    # A3 前块结尾偏重注入（2026-07-07·PlotPilot recent_chapter_context）：cluster_002+ 注入
+    # A3 前块结尾偏重注入（PlotPilot recent_chapter_context）：cluster_002+ 注入
     # 上一 cluster 草稿末尾原文（默认 800 CJK·env PREV_TAIL_CJK 可调·T1 创作载荷）。
     # cluster_001 / 前块草稿缺失（断点恢复异态）→ 键不注入（零变化）。
     _prev_tail = _collect_prev_cluster_tail(s, current_cluster_id)
     if _prev_tail:
         manifest["prev_cluster_tail"] = _prev_tail
-    # A14 近期活跃实体 LRU 兜底（2026-07-07·Ex3 Recent_Visit）：最近 3 个历史 cluster 出场
+    # A14 近期活跃实体 LRU 兜底（Ex3 Recent_Visit）：最近 3 个历史 cluster 出场
     # 实体简表（账本确定性抽取·白名单去重·上限 15 行·T2 状态库）。无数据 → 键不注入。
     _recent_ents = _collect_recently_active_entities(s, active_chars, current_cluster_id)
     if _recent_ents:
         manifest["recently_active_entities"] = _recent_ents
-    # A2 遗留清偿（2026-07-08）：写前 Evolution Gate 报告摘要（.wal/<key>_pre_write_gate.json
+    # A2 写前 Evolution Gate 报告摘要（.wal/<key>_pre_write_gate.json
     # 的 waived/warnings·有内容才注入·T0 契约类）——writer 看到「已声明豁免的叙事手法」上下文。
     _gate_digest = _collect_pre_write_gate_digest(s, current_cluster_id)
     if _gate_digest:
         manifest["pre_write_gate_digest"] = _gate_digest
-    # A11 门控审计元数据（2026-07-08）：真有词条被滤才注入（META·不参与预算与裁剪）。
+    # A11 门控审计元数据：真有词条被滤才注入（META·不参与预算与裁剪）。
     if _scene_gating_report:
         manifest["_scene_gating"] = _scene_gating_report
-    # A4 编辑手记（2026-07-08·PlotPilot「一段自然语言比 8 个分隔符更易融入创作」）：
+    # A4 编辑手记（PlotPilot「一段自然语言比 8 个分隔符更易融入创作」）：
     # 把已组装 manifest 的结构块（伏笔计数/悬置问题/主角压力与弧线/涟漪后果/卷收敛锚）
     # 确定性坍缩成一段 200-400 字人话手记（双视图·结构块原样保留给 scanner/审计·T1）。
     # 素材全空 / 拼装异常 → 键不注入（零变化）。零 LLM 纯模板填充·同输入同字节。
     _editor_note = _build_editor_note(manifest)
     if _editor_note:
         manifest["editor_note"] = _editor_note
-    # S1 分层 token 预算（2026-07-07·PlotPilot context_budget_allocator 移植）：
+    # S1 分层 token 预算（PlotPilot context_budget_allocator 移植）：
     # 记账（budget_report 元数据）始终附加；分层裁剪（T3 留 5% 地板 → T2 → T1·T0 自身 40% 硬上限）
-    # 仅在体积 >= 既有 v19.4 硬守卫（BUDGET_HARD_KB·env MANIFEST_BUDGET_* 可覆盖）时生效——
+    # 仅在体积 >= 硬守卫（BUDGET_HARD_KB·env MANIFEST_BUDGET_* 可覆盖）时生效——
     # 不触发守卫 = 所有注入段逐字节不变（不新增任何截断触发条件）。
     return manifest_budget.apply_budget(manifest)
 
@@ -6617,7 +6600,7 @@ def _build_cache_layout() -> dict:
 
     agent prompt 设计：按 STATIC → SEMI_STATIC → DYNAMIC 顺序排放，Anthropic API 自动 detect prefix → 命中率最高。
 
-    🔴 M1 cache 铁律（记忆调研 2026-06-15·前瞻约束·test_m1_cache_layout 守卫）：
+    🔴 M1 cache 铁律（前瞻约束·test_m1_cache_layout 守卫）：
     B1 importance-aware 重排（伏笔 tier→importance / last_seen / recurrence 等动态字段）**只准动
     DYNAMIC_30 段**，绝不重排 STATIC/SEMI——后者 prefix 字节稳定才命中 cache（省 60-90% token），
     动态重排会破 prefix → 命中率暴跌 → 成本反升。B1 重排落点（selective_history_retrieval /
@@ -6637,8 +6620,8 @@ def _build_cache_layout() -> dict:
             "emotion_body_topography_hint",      # R7 W2: Nummenmaa 情绪身体地图（静态·全书不变·advisory）
             "focalization_matrix",               # R7 W2: Focalization Type×Facet 二轴矩阵（静态·全书不变·advisory）
             "distill_golden_few_shot",           # 蒸馏 golden_passages
-            "title_style",                       # v22.4dim N5: 章节标题命名指纹（全书不变）
-            "naming_convention",                 # v22.4dim N5: 角色命名规范（全书不变）
+            "title_style",                       # 章节标题命名指纹（全书不变）
+            "naming_convention",                 # 角色命名规范（全书不变）
             "main_character_arcs",               # v22.4dim Round 2: 原作主角 Stanford 6 维参考（全书不变）
             "position_effect_template",          # cluster 关键行动判定模板（全局常量）
             "_cache_layout",                     # 本字段自身（元数据）
@@ -6649,10 +6632,10 @@ def _build_cache_layout() -> dict:
         ],
         "SEMI_STATIC_70_cacheable": [
             "active_character_cards",            # 🔴 写手信息隔离：已隔离的出场角色卡（卷内慢变·隐藏身份到揭密 cluster 才变）
-            "scene_character_knowledge",         # 🔴 2026-06-29 角色信息差：per-scene 各角色认知边界（同 cluster 内不变·卷内慢变）
+            "scene_character_knowledge",         # 🔴 角色信息差：per-scene 各角色认知边界（同 cluster 内不变·卷内慢变）
             "active_fate_events",                # 卷内大势事件池
             "world_state_snapshot",              # 世界数值（卷间慢变）
-            "location_atmosphere",               # 🔴 2026-06-29 地点签名感官回喂（同 cluster 内地点稳定·卷内慢变）
+            "location_atmosphere",               # 🔴 地点签名感官回喂（同 cluster 内地点稳定·卷内慢变）
 
             "active_aspects",                    # 角色永久烙印（一旦获得永久）
             "throughlines",                      # 4 线弧光
@@ -6668,7 +6651,7 @@ def _build_cache_layout() -> dict:
             "must_read",                         # 当前章需读文件清单（每章不同）
             "active_clocks",                     # urgent 状态每章变
             "storyteller_directive",             # next_target_outcome 每章变
-            "appraisal_directive",               # 🔴 2026-06-29 场景级Appraisal Beat：情绪余烬+本块方向（每 cluster 变·advisory）
+            "appraisal_directive",               # 🔴 场景级Appraisal Beat：情绪余烬+本块方向（每 cluster 变·advisory）
             "protagonist_stress",                # stress 累计每章变
             "fate_dice_hint",                    # 本章抽签状态
             "active_offscreen_actions",          # 本章生效幕后
@@ -6676,7 +6659,7 @@ def _build_cache_layout() -> dict:
             "prev_judge_findings",               # 上章 judge 发现
             "will_learn_due_this_ch",            # 本章必学知识
             "pending_secrets_to_reveal",         # 本章必揭秘
-            "open_dramatic_questions",           # 🔴 2026-06-29 戏剧问题账本：当前悬而未决核心问题（每 cluster 变·advisory）
+            "open_dramatic_questions",           # 🔴 戏剧问题账本：当前悬而未决核心问题（每 cluster 变·advisory）
 
             "hard_constraints",                  # 本章硬约束（含本章伏笔到期）
             "post_write_checks",                 # 本章写后检查
@@ -6698,7 +6681,7 @@ def _build_cache_layout() -> dict:
 
 def _build_critical_summary(chapter: int, foreshadow_summary: dict,
                              must_read: list, _extra: dict) -> dict:
-    """v21 P2-3: Lost-in-the-Middle 缓解。manifest 关键字段头尾双放——本字段是末尾再次强调。
+    """Lost-in-the-Middle 缓解。manifest 关键字段头尾双放——本字段是末尾再次强调。
 
     研究：长 prompt 中间字段会被 LLM 忽略（Lost-in-the-Middle）。
     解：关键约束在头部 must_read.P0 详细列出，在末尾本字段再次摘要（关键词级），
@@ -6724,7 +6707,7 @@ def _build_critical_summary(chapter: int, foreshadow_summary: dict,
 
 
 def _infer_start_chapter(project_root: Path) -> int:
-    """2026-05-29 复审修复（C1-b · SC-3）：章节号参数缺失/非数字时推断起首章。
+    """章节号参数缺失/非数字时推断起首章。
     优先：事件簇.json 已落章 cluster 末章 + 1；兜底：章节/第NNN章 目录最大章号 + 1；都没有 → 1。
     """
     import re as _re
@@ -6770,7 +6753,7 @@ def main():
     if not project_root.exists():
         print(f"项目路径不存在: {project_root}", file=sys.stderr)
         sys.exit(1)
-    # 2026-05-29 复审修复（C1-b · SC-2）：start-ch 取空时上游会把空串传进来 → int("") ValueError
+    # start-ch 取空时上游会把空串传进来 → int("") ValueError
     # （Traceback exit>=3，被编排器判崩溃）。守卫：空/非数字 → 回退 _infer_start_chapter（扫已落
     # cluster 末章+1 / 章节目录最大章号+1，都没有 → 1），不崩。
     raw_ch = sys.argv[2].strip() if isinstance(sys.argv[2], str) else sys.argv[2]
@@ -6784,7 +6767,7 @@ def main():
     out_path = project_root / "_数据库" / ".manifest" / f"ch_{chapter:03d}.json"
     save_json(out_path, manifest)
 
-    # v19.4: budget check - 防 manifest 字段累积膨胀导致 writer context 爆炸
+    # budget check - 防 manifest 字段累积膨胀导致 writer context 爆炸
     manifest_size = out_path.stat().st_size
     manifest_kb = manifest_size / 1024
     BUDGET_SOFT_KB = 50
@@ -6810,7 +6793,7 @@ def main():
 
     print(f"[OK] manifest 已生成: {out_path} ({manifest_kb:.1f}KB)")
 
-    # v21 P2.1: 自动生成 compressed 版本（agent prompt 推荐用 compressed 省 token）
+    # 自动生成 compressed 版本（agent prompt 推荐用 compressed 省 token）
     try:
         sys.path.insert(0, str(Path(__file__).parent))
         import manifest_compress

@@ -19,5 +19,3 @@
 - 风格库：`workspace/styles/{书名}/`
 - 小说项目：`workspace/novels/{书名}/`
 - 系统经验：`core/claude-home/lessons/`
-
-<!-- 2026-06-18 系统整改：从470行精简为指针+补充，消除与根目录CLAUDE.md的双重口径冲突 -->

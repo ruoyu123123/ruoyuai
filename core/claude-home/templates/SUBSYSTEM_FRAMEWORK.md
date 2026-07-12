@@ -1,9 +1,9 @@
-# 34 子系统 · 框架 / 脚手架 / 示例（2026-06-01 根治契约债）
+# 34 子系统 · 框架 / 脚手架 / 示例（单一真理源防契约债）
 
-> 背景：新建项目时，34 个子系统 JSON 此前**无确定性框架**——每本书靠主代理手搓 + agent 自由生成 schema，
-> 与 consumer（build_manifest）/ validator（db_schema_validate）期望漂移 → **契约债成簇**（缺 schema_version、
-> 进度缺 book_title、写作经验 entries vs success_patterns、地图 list vs dict…）。弱模型尤其扛不住「自由生成 schema」。
-> 本批次确立**单一真理源 + 确定性脚手架**根治。
+> 34 个子系统 JSON 若靠主代理手搓或 agent 自由生成 schema，会与 consumer（build_manifest）/
+> validator（db_schema_validate）期望漂移，产生**契约债**（缺 schema_version、进度缺 book_title、
+> 写作经验 entries vs success_patterns、地图 list vs dict…）；弱模型尤其扛不住「自由生成 schema」。
+> 因此用**单一真理源 + 确定性脚手架**根治：骨架统一定义 schema，agent 只填内容不碰结构。
 
 ## 三件套（框架 / 脚手架 / 示例）
 
@@ -11,7 +11,7 @@
 |---|---|---|
 | **框架（单一真理源）** | `core/claude-home/templates/subsystem_skeletons.json` | 34 个 **schema 正确的空骨架**，全部满足 db_schema_validate（schema_version + 必需键 + 正确 collection 类型）+ 保留通用默认（场景规则 5 类 / ecas 标志 / Save the Cat 框架名）|
 | **脚手架（脚本）** | `core/scripts/scaffold_subsystems.py` | `emit`（生成缺失骨架·不覆盖已填）/ `verify`（34 件存在+合法校验）/ `list` |
-| **示例（填充参考）** | `core/claude-home/templates/examples/` | 已填的真实项目片段。`scp_anomaly_bureau/` + `urban_supernatural_business/` + **新增 `_subsystem_examples/`（9 个此前无示例的高级件，源自《无脸者守则》）** |
+| **示例（填充参考）** | `core/claude-home/templates/examples/` | 已填的真实项目片段。`scp_anomaly_bureau/` + `urban_supernatural_business/` + `_subsystem_examples/`（9 个高级件示例，源自《无脸者守则》） |
 
 ## 设计哲学（照顾弱模型 · 北极星⑤不干涉创作判断）
 

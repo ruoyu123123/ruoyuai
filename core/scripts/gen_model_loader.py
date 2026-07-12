@@ -22,7 +22,7 @@ import os
 import re
 
 try:
-    import secrets_store  # keyring 薄抽象 [BYOK 用户入口 removed commit 2a4d7ce·keyring 路径仍保留作向下兼容]
+    import secrets_store  # keyring 薄抽象（BYOK 可选密钥源，见下方三级优先级解析）
 except Exception:
     secrets_store = None
 
@@ -35,10 +35,9 @@ def _resolve_api_key_with_source(name: str, env_file_value: str) -> tuple[str, s
       2. os.environ["GEN__<name>__API_KEY"]（CI/容器/临时覆盖）
       3. env_file_value（.env 文本）
 
-    🔴 2026-06-26 加 source 标注（cluster_001 写作翻车 sediment）：keyring 旧 key 静默覆盖
-    .env 新 key 是隐藏 bug 主战场 — main agent 改 .env 后 writer 仍读 keyring 旧 key，撞 503
-    花 30 分钟才查出根因。本函数返 source 让 `dump_key_sources` / `--diag` CLI 能直观告诉
-    用户「.env 改了但生效的是 keyring」。
+    keyring 旧 key 会静默覆盖 .env 新 key——改 .env 后 writer 可能仍读到 keyring 里的旧
+    密钥，表现为莫名的鉴权失败。本函数返回 source 让 `dump_key_sources` / `--diag` CLI
+    能直观告诉用户「.env 改了但生效的是 keyring」。
     """
     if secrets_store is not None:
         try:
@@ -61,7 +60,7 @@ def _resolve_api_key_with_source(name: str, env_file_value: str) -> tuple[str, s
 
 
 def _resolve_api_key(name: str, env_file_value: str) -> str:
-    """三级优先级解析 api_key（向后兼容 wrapper·只返 key）。
+    """三级优先级解析 api_key（只返回 key，不返回来源）。
 
     详细优先级与陷阱说明见 `_resolve_api_key_with_source`。
     """
@@ -78,9 +77,9 @@ class Profile:
     temperature: float
     max_tokens: int | None  # None = 从 model_probe 缓存读
     protocol: str = "openai"  # openai(默认·/v1/chat/completions) | gemini(原生·streamGenerateContent·支持隐式前缀缓存)
-    thinking_level: str | None = None  # gemini-3.x reasoning 模型思考档(LOW/MEDIUM/HIGH)·走 extra_body·LOW=回收15-25k输出预算给正文(治pro偏短·2026-06-06联网调研)·None=不传(flash等非reasoning)
-    reasoning_effort: str | None = None  # OpenAI 标准 reasoning 参数(low/medium/high)·走 extra_body·部分 new-api 中转站认此而非 gemini 专有 thinking_level(elysiver 2026-06-16 实测 effort=low 7s 受控·thinking_level 被忽略 63s 失控暴走)·与 thinking_level 独立·按 profile 配置·None=不传
-    max_prompt_chars: int | None = None  # 2026-06-19：中转站 prompt 体量上限(中文字符数·含 system+user)·超限直接跳 fallback 不等超时(elysiver 实测 100KB≈34k 中文字符以上 500)·None=无限制
+    thinking_level: str | None = None  # gemini-3.x reasoning 模型思考档(LOW/MEDIUM/HIGH)·走 extra_body·LOW=回收15-25k输出预算给正文(治pro偏短)·None=不传(flash等非reasoning)
+    reasoning_effort: str | None = None  # OpenAI 标准 reasoning 参数(low/medium/high)·走 extra_body·部分 new-api 中转站认此而非 gemini 专有 thinking_level(中转站上 thinking_level 被忽略会导致 thinking 失控暴走·reasoning_effort 更受控)·与 thinking_level 独立·按 profile 配置·None=不传
+    max_prompt_chars: int | None = None  # 中转站 prompt 体量上限(中文字符数·含 system+user)·超限直接跳 fallback 不等超时(部分中转站超出约 34k 中文字符/100KB 会返回 500)·None=无限制
 
 
 class GenModelConfigError(Exception):
@@ -232,8 +231,7 @@ class GenModelLoader:
     def dump_key_sources(self) -> list[dict]:
         """诊断：列出所有 profile 的 key 来源（keyring/environ/file/none）+ key 尾部 + .env 文本是否定义。
 
-        🔴 2026-06-26 加（cluster_001 写作 keyring 覆盖陷阱根治）。让用户 / agent 看到
-        「.env 改了但生效的是 keyring 旧 key」时直接定位。
+        让用户 / agent 一眼看到「.env 改了但生效的是 keyring 旧 key」，直接定位覆盖陷阱。
         """
         if not self.env_path.exists():
             return []
@@ -289,10 +287,10 @@ class GenModelExhaustedError(Exception):
 def reasoning_extra_body(profile) -> dict:
     """openai-path reasoning 控制 extra_body 单一真理源（thinking_level/reasoning_effort 独立·都注入·按 profile 配）。
 
-    所有走 OpenAI 兼容 chat.completions.create 的 gen-model 调用统一用此构造 extra_body·防 inline
-    漂移/漏注入（2026-06-16：grep 发现 5 处独立 client 裸调用漏 reasoning 控制→elysiver 当主力
-    thinking 暴走 content 空 500）。thinking_level=gemini 专有(pie-xian 认)·reasoning_effort=OpenAI
-    标准(elysiver/new-api 中转认)·二者独立按 profile 配。空 dict=非 reasoning profile(flash 等)不注入。"""
+    所有走 OpenAI 兼容 chat.completions.create 的 gen-model 调用统一用此构造 extra_body，防止
+    inline 漂移/漏注入——独立裸调用容易漏 reasoning 控制，导致 thinking 暴走、content 空、500。
+    thinking_level=gemini 专有(pie-xian 认)·reasoning_effort=OpenAI 标准(elysiver/new-api 中转认)·
+    二者独立按 profile 配。空 dict=非 reasoning profile(flash 等)不注入。"""
     e = {}
     if getattr(profile, "thinking_level", None):
         e["thinking_level"] = profile.thinking_level

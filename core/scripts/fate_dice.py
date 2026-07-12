@@ -1,4 +1,4 @@
-"""fate_dice.py — 命运事件抽签器（v21 R1.4 新增）
+"""fate_dice.py — 命运事件抽签器
 
 借鉴 Wildermyth：emergent_opportunities 触发时不让 AI 自由编故事，从 事件池.json
 按当前 manifest 上下文（章号/scene_type/pov/world_state）过滤后**加权随机抽 1**，
@@ -87,8 +87,7 @@ def _filter_event(event: dict, ch: int, scene_type: str, pov: str, world_state: 
     cf = event.get("context_filter", {})
     if event.get("event_id") in recent_drawn:
         return False
-    # 2026-05-29 修：原 `cf.get("min_ch") and ...` 在 min_ch/max_ch==0 时被 falsy
-    # 短路跳过守卫。改为 `is not None` 判断，让 0 也能正常参与边界过滤。
+    # 用 `is not None` 判断（而非直接 falsy 短路），让 min_ch/max_ch==0 也能正常参与边界过滤。
     if cf.get("min_ch") is not None and ch < cf["min_ch"]:
         return False
     if cf.get("max_ch") is not None and ch > cf["max_ch"]:
@@ -131,8 +130,8 @@ def draw(project_root: Path, ch: int, scene_type: str = "", pov: str = "") -> di
         }
 
     weights = [e.get("context_filter", {}).get("weight", 1) for e in candidates]
-    # 2026-05-29 修：weights 全 0（或负）时 sum<=0，random.choices 抛 ValueError 崩溃。
-    # 退回均匀抽样（weights=None），保证可用性而非崩溃。
+    # weights 全 0（或负）时 sum<=0，random.choices 会抛 ValueError；退回均匀抽样
+    # （weights=None），保证可用性而非崩溃。
     if sum(weights) <= 0:
         weights = None
     chosen = random.choices(candidates, weights=weights, k=1)[0]

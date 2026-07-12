@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""choice_consequence_ledger.py — 用户走向选择延迟可见性账本 · R25 W13 Batch-MM · P1
+"""choice_consequence_ledger.py — 用户走向选择延迟可见性账本
 
 【缺口 · 互动小说 BG3 reactivity + Emily Short delayed-consequence + WHAT-IF
 arxiv 2412.10582】
@@ -74,7 +74,7 @@ _NAMESPACE = "choice_consequence"
 _STAKES_TIERS = ("life", "faction", "moral", "preference")
 
 SEMANTIC_RESONANCE_SIM_THRESHOLD = 0.52   # choice 摘要/关键词 vs 正文段落余弦阈值
-# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
+# 金标准校准依据：neg_p95=0.5165 / Youden=0.4904
 
 
 def _mode() -> str:
@@ -82,10 +82,9 @@ def _mode() -> str:
     return m if m in ("off", "shadow", "active") else "shadow"
 
 
-# ── 🔴 2026-07-04 内容语义 embedding 路径（W6-C 迁移：风格模型→bge 内容模型）───────
+# ── 内容语义 embedding 路径 ───────
 def _content_backend_ready() -> bool:
-    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
-    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available）。
 
     import 失败 → False（调用方回退字面 keyword-in-text）。
     """
@@ -98,7 +97,7 @@ def _content_backend_ready() -> bool:
 
 def _build_semantic_context(text: str) -> "dict | None":
     """内容后端就绪时把正文预切段 + 批量编码一次，供本次 scan() 内所有 ledger entry
-    复用（避免每条 entry 都重复编码同一正文·2026-07-02）。
+    复用（避免每条 entry 都重复编码同一正文）。
 
     内容后端不可用 / 无有效段落 / 编码异常 → None（调用方逐条回退字面 keyword-in-text）。
     """
@@ -232,9 +231,9 @@ def scan(project_root, cluster_id, draft_path) -> dict:
     starving, visible, pending = [], [], []
     updated = False
 
-    # 🔴 2026-07-03 Wave-4：正文段落 + 全部待判定 entry 的 choice 摘要/关键词查询
-    # 两侧文本一次性 prefetch（真后端子进程按条调用极贵·合并成一次批调用）——
-    # 下面 _build_semantic_context / _semantic_resonance 内逐条 compute_content_embedding 命中缓存。
+    # 正文段落 + 全部待判定 entry 的 choice 摘要/关键词查询两侧文本一次性 prefetch
+    # （真后端子进程按条调用极贵，合并成一次批调用）——下面 _build_semantic_context /
+    # _semantic_resonance 内逐条 compute_content_embedding 命中缓存。
     if _content_backend_ready():
         try:
             from embedding_store import prefetch_content_embeddings
@@ -248,7 +247,7 @@ def scan(project_root, cluster_id, draft_path) -> dict:
         except Exception:
             pass
 
-    # 真后端就绪时正文只切段编码一次（本次 scan() 内所有 entry 复用·2026-07-02）
+    # 真后端就绪时正文只切段编码一次（本次 scan() 内所有 entry 复用）
     semantic_ctx = _build_semantic_context(text)
 
     for e in entries:

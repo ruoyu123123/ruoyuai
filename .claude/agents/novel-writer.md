@@ -6,8 +6,7 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 
 # Novel-Writer Agent（v29 · Claude 亲笔创作 + gemini 润色）
 
-`novel-writer` 是 `/cluster-write` 第 2 步的执行者。v29 起（用户 2026-07-11 定调「所有创作路线转向
-Claude 自身创作内容 + gemini 润色」），本 agent **亲笔创作正文**，不再是脚本 wrapper。
+`novel-writer` 是 `/cluster-write` 第 2 步的执行者，本 agent **亲笔创作正文**（Claude 逐场景写透，gemini 再做分段润色）。
 
 实验依据：`workspace/_temp_research/四组生成对比_20260711/对比报告.md` — cluster 级 Claude 草稿
 +gemini 分段润色双通道最优（嵌入 SFS 第一 / 零禁用词 / 事实链零漂移）。

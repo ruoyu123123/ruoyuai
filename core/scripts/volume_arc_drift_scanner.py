@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""volume_arc_drift_scanner.py — 卷级大势收敛漂移哨兵（2026-05-29 北极星 P2 · H1/H3-trend）
+"""volume_arc_drift_scanner.py — 卷级大势收敛漂移哨兵
 
 北极星原则 3「大势已定」：每卷无论小势（走向卡/涟漪）怎么折腾，最后方向都一致。
 代码层的收敛靠三道：
@@ -15,25 +15,24 @@
 - 事件簇.json clusters[]（vol 归属 + status + scope_summary）
 - 故事块摘要.json clusters[]（已写 cluster 的摘要，判断「实际写了什么」）
 
-【2026-07-01 语义覆盖率补齐 · 2026-07-04 迁移内容嵌入】milestone「是否已触及」默认判据是
-关键词 2-gram 字面重叠——同义改写零容错（如milestone写「夺取王座」，已写内容写「登上
-帝位」，字面零重叠会误判「未触及」→ 假阳性 VOLUME_ARC_DRIFT）。内容语义后端（bge）
-就绪时（content_backend_available()），改用 milestone 文本 vs 已写内容（cluster
-scope_summary + 账本章 summary 聚合）embedding 的余弦相似度，≥ 阈值（0.49·
-content_embed_separability_20260704 报告 Youden 点·召回优先·env
-VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 可覆盖）才算「已触及」；embedding 不可用/维度不
-一致/未配后端 → 回退关键词重叠，逐字节零回归。返回值 match_method 字段标注本次
-实际用的是 "embedding_cosine" 还是 "bigram_keyword_overlap"。
+milestone「是否已触及」默认判据是关键词 2-gram 字面重叠——同义改写零容错（如milestone写
+「夺取王座」，已写内容写「登上帝位」，字面零重叠会误判「未触及」→ 假阳性
+VOLUME_ARC_DRIFT）。内容语义后端（bge）就绪时（content_backend_available()），改用
+milestone 文本 vs 已写内容（cluster scope_summary + 账本章 summary 聚合）embedding
+的余弦相似度，≥ 阈值（0.49·Youden 点·召回优先·env VOLUME_ARC_SEMANTIC_TOUCH_FLOOR
+可覆盖）才算「已触及」；embedding 不可用/维度不一致/未配后端 → 回退关键词重叠，逐字节
+零回归。返回值 match_method 字段标注本次实际用的是 "embedding_cosine" 还是
+"bigram_keyword_overlap"。
 
-【2026-07-07 S11 scene 级大势对齐自评汇总】outline-planner 详化/涌现 storyboard 时
-每 scene 自答大势对齐三问，自评落 scene 的 alignment 字段（aligned / minor-deviation /
-needs-review·全 optional advisory·权威 schema = event_cluster_schema.json
-scene_storyboard.items）。本哨兵把当前卷 scene 里 alignment=needs-review 的计数/清单
-汇总进报告 alignment_review 段——**只报告不裁决**：不生成 issue、不改退出码
-（needs-review 是 planner 的诚实标记不是失败·北极星⑤）。
+scene 级大势对齐自评汇总：outline-planner 详化/涌现 storyboard 时每 scene 自答大势
+对齐三问，自评落 scene 的 alignment 字段（aligned / minor-deviation / needs-review·全
+optional advisory·权威 schema = event_cluster_schema.json scene_storyboard.items）。
+本哨兵把当前卷 scene 里 alignment=needs-review 的计数/清单汇总进报告 alignment_review
+段——**只报告不裁决**：不生成 issue、不改退出码（needs-review 是 planner 的诚实标记
+不是失败·北极星⑤）。
 
 CLI: python volume_arc_drift_scanner.py <project> [--last-n N]
-退出码：0=无漂移/数据不足 · 1=advisory 漂移告警（SC-2）
+退出码：0=无漂移/数据不足 · 1=advisory 漂移告警
 """
 
 from __future__ import annotations
@@ -47,8 +46,7 @@ from pathlib import Path
 
 
 def _content_backend_ready() -> bool:
-    """内容语义后端可用性门控（委托 embedding_store.content_backend_available·
-    替代旧的按 EMBED_BACKEND/GEN_EMBED__ 环境变量猜测的 _has_real_embedding_backend）。
+    """内容语义后端可用性门控（委托 embedding_store.content_backend_available）。
 
     import 失败 → False（调用方回退关键词 2-gram 重叠）。
     """
@@ -61,8 +59,8 @@ def _content_backend_ready() -> bool:
 
 
 # milestone embedding 与已写内容聚合 embedding 余弦相似度 ≥ 此值才视为「已触及」。
-# 金标准校准 2026-07-04：content_embed_separability_20260704 报告 neg_p95=0.5165/Youden=0.4904
-# （advisory 漂移哨兵取 Youden 点召回优先·宁可多提醒不漏报）。env VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 可覆盖。
+# 校准值 neg_p95=0.5165/Youden=0.4904（advisory 漂移哨兵取 Youden 点召回优先·宁可
+# 多提醒不漏报）。env VOLUME_ARC_SEMANTIC_TOUCH_FLOOR 可覆盖。
 MILESTONE_SEMANTIC_TOUCH_FLOOR = 0.49
 
 
@@ -118,8 +116,8 @@ def _kw(text: str) -> set:
     for tok in re.findall(r"[A-Za-z0-9_]+", text):
         if len(tok) >= 2:
             out.add(tok.lower())
-    # 段内 2-gram（按 CJK 连续段成词·不跨标点/英数边界拼假 bigram·如「胜利。反派」不再产「利反」
-    # 这种跨句桥接虚词·对齐 cluster_emergence._keyword_set·2026-06-15 审计修）
+    # 段内 2-gram（按 CJK 连续段成词·不跨标点/英数边界拼假 bigram·如「胜利。反派」不会产出
+    # 「利反」这种跨句桥接虚词·对齐 cluster_emergence._keyword_set）
     for seg in re.findall(r"[一-鿿]+", text):
         for i in range(len(seg) - 1):
             out.add(seg[i:i + 2])
@@ -132,9 +130,9 @@ def _milestone_text(ms) -> str:
 
 
 def _cluster_vol(c: dict) -> int | None:
-    """cluster 的卷号：vol → volume → parent_me 正则回退（2026-06-15 审计修：真实 event 簇
-    cluster 存 "volume"/"parent_me" 无 "vol"·原 vol_clusters 只读 c.get("vol") → 本卷 cluster
-    全过滤 → coverage 恒 0 → 每卷过半误报 VOLUME_ARC_DRIFT·verify 隔离实验铁证）。"""
+    """cluster 的卷号：vol → volume → parent_me 正则回退。真实 event 簇 cluster 存
+    "volume"/"parent_me" 字段，通常没有 "vol"——只读 c.get("vol") 会让本卷 cluster
+    全部被过滤掉，coverage 恒为 0，导致每卷过半就误报 VOLUME_ARC_DRIFT。"""
     v = c.get("vol")
     if v is None:
         v = c.get("volume")
@@ -147,11 +145,10 @@ def _cluster_vol(c: dict) -> int | None:
 
 
 def _collect_alignment_review(vol_clusters: list) -> dict:
-    """🔴 2026-07-07 S11：汇总本卷 scene_storyboard 里 alignment=needs-review 的
-    scene 计数/清单（planner 大势对齐三问自评·advisory）。**只报告不裁决**：
-    返回值只并入报告 alignment_review 段，绝不生成 issue / 不影响退出码
-    （needs-review 是诚实标记不是失败·北极星⑤）。字段全 optional——历史产物
-    无 alignment 字段时清单为空即合法（fluid）。"""
+    """汇总本卷 scene_storyboard 里 alignment=needs-review 的 scene 计数/清单（planner
+    大势对齐三问自评·advisory）。**只报告不裁决**：返回值只并入报告 alignment_review
+    段，绝不生成 issue / 不影响退出码（needs-review 是诚实标记不是失败·北极星⑤）。
+    字段全 optional——缺 alignment 字段时清单为空即合法（fluid）。"""
     needs_review = []
     for c in vol_clusters:
         sb = c.get("scene_storyboard")
@@ -217,11 +214,11 @@ def scan(project_root: Path) -> dict:
     written = [c for c in vol_clusters
                if (isinstance(c.get("chapter_range"), list) and len(c.get("chapter_range")) == 2)
                or c.get("status") in ("done", "已完成")]
-    # 2026-05-29 复审 W1：progress 用【卷 ME 完成度】而非 cluster 计数——fluid 下 事件簇.json 通常
-    # 只含已涌现 cluster（total≈written→progress 恒≈1.0 卷首即假阳性）。ME 池是固定参照系。
+    # progress 用【卷 ME 完成度】而非 cluster 计数——fluid 下 事件簇.json 通常只含已涌现
+    # cluster（total≈written→progress 恒≈1.0 卷首即假阳性）。ME 池是固定参照系。
     def _me_vol(m):
         # 对齐 cluster_emergence._me_volume：ME 权威卷字段是 "volume"(gen_creative schema)·先
-        # volume → vol → id 锚定正则 [Vv](\d+)（避免裸 \d+ 误取 me_id 里非卷号数字·2026-06-15 审计修）
+        # volume → vol → id 锚定正则 [Vv](\d+)（避免裸 \d+ 误取 me_id 里非卷号数字）
         v = m.get("volume")
         if v is None:
             v = m.get("vol")
@@ -260,10 +257,10 @@ def scan(project_root: Path) -> dict:
     written_embedding = None
     semantic_floor = None
     if _content_backend_ready():
-        # 🔴 2026-07-03 Wave-4：先收集本次要 embed 的全部文本（已写内容聚合 + 每条
-        # milestone）一次性 prefetch 灌缓存——下面 written_embedding + 逐条 milestone
-        # 的 _embed_or_none 全部命中缓存（取代已写内容 1 次 + 每个 milestone 各自
-        # 触发一次后端 subprocess 调用）。
+        # 先收集本次要 embed 的全部文本（已写内容聚合 + 每条 milestone）一次性
+        # prefetch 灌缓存——下面 written_embedding + 逐条 milestone 的 _embed_or_none
+        # 全部命中缓存（避免已写内容 1 次 + 每个 milestone 各自触发一次后端 subprocess
+        # 调用）。
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent))
             from embedding_store import prefetch_content_embeddings
@@ -312,8 +309,8 @@ def scan(project_root: Path) -> dict:
     return {"scanner": "volume_arc_drift", "vol": cur_vol,
             "progress": round(progress, 2), "milestone_coverage": round(coverage, 2),
             "match_method": match_method,
-            # 🔴 2026-07-07 S11：本卷 scene alignment=needs-review 自评汇总（advisory·
-            # 只报告不裁决——不进 issues、不影响退出码·北极星⑤）
+            # 本卷 scene alignment=needs-review 自评汇总（advisory·只报告不裁决——
+            # 不进 issues、不影响退出码·北极星⑤）
             "alignment_review": _collect_alignment_review(vol_clusters),
             "issues": issues}
 

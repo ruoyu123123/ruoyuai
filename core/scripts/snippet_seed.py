@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""snippet_seed.py — 真实原文片段「语感种子」播种（P0 · 2026-05-31）
+"""snippet_seed.py — 真实原文片段「语感种子」播种
 
 北极星①更好实现作者蒸馏仿写 / ⑤顾问非法官 / ⑥别过度复杂（纯 prompt + 纯 stdlib）。
 
 机制（gen_writer 写作 + distill_replicate 复刻 共用）：
-  生成时 prompt 额外注入 1-2 段**作者真实原文片段**当「语感种子」，
-  让模型贴真实文本流形起笔，防长 cluster 中后段退化回通用 AI 腔
-  （直击 reference-system-validation-method 记录的 cluster 级 D 级长文退化 + 段长崩塌）。
-
-5 调研共识 + 两篇论文交叉印证（in-context style anchoring）。
+  生成时 prompt 额外注入 1-2 段**作者真实原文片段**当「语感种子」（in-context style
+  anchoring），让模型贴真实文本流形起笔，防长 cluster 写到中后段退化回通用 AI 腔、段长崩塌。
 
 🔴 关键避坑（Catch Me If You Can 论文实证）：
   片段按**风格 / 情绪相似**选，**不是题材相似**——题材相似选样反而降分
@@ -18,8 +15,8 @@
 🔴 prompt 必须明确：「只借语感语调起手势 · 情节严格按 storyboard/brief 走 · 绝不抄原文情节内容」
   （防抄袭 + 防内容泄漏）。
 
-🔴 默认开启（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）：
-  默认 on → 注入 1-2 段作者真实原文当语感种子（实跑验证 token 成本可控 + 防长文退化有效后放量）。
+🔴 默认开启（env SNIPPET_SEED_MODE 默认 on）：
+  默认 on → 注入 1-2 段作者真实原文当语感种子（token 成本可控·对长文退化有实测抑制效果）。
   值（大小写不敏感）：
     · on / 1 / true / active（默认 / 空 / 非法值）：注入 1-2 段真实原文种子 + 避坑指令。
     · off：不注入种子段——零回归对照路径（显式关闭做 A/B 对照）。
@@ -37,12 +34,12 @@ import re
 import sys
 from pathlib import Path
 
-# ============ 模式解析（影子纪律 · 默认 off）============
+# ============ 模式解析（默认 on）============
 
 def snippet_seed_mode() -> str:
     """读 env SNIPPET_SEED_MODE 决定是否注入真实原文种子段。
 
-    默认 on（2026-05-31 放量 · 空 / 非法值退默认 on · 真生效注入作者真原文当语感种子）。
+    默认 on（空 / 非法值退默认 on · 真生效注入作者真原文当语感种子）。
     off → 显式关闭（A/B 对照）；shadow → 只落痕不注入；其余（含空/非法）→ "on"。
     无原文池 / 选不到候选时 make_seed_block_* 仍返回空 section 优雅降级（不报错）。
     """
@@ -87,9 +84,9 @@ def resolve_originals_dir(project_root: Path) -> Path | None:
             cand = _resolve_style_src_to_originals(project_root, src)
             if cand and cand.exists() and cand.is_dir():
                 return cand
-        # 2026-06-02 修：风格库复制来的 作者风格.json 顶层常是 source=风格库名（如「惊悚乐园」），
-        # 不是路径 → 旧逻辑找不到原文池 → best-of-N + 语感种子双双退化（影响所有用风格库的新书）。
-        # 补：source 为裸名时 → workspace/styles/<名>/原文。
+        # 风格库复制来的 作者风格.json 顶层常是 source=风格库名（如「惊悚乐园」）而非路径；
+        # source 为裸名时 → workspace/styles/<名>/原文（否则找不到原文池会让 best-of-N +
+        # 语感种子双双退化，影响所有用风格库的新书）。
         name = (data.get("source") or "").strip()
         if name and "/" not in name and "\\" not in name:
             cand = _resolve_style_name_to_originals(project_root, name)

@@ -1,9 +1,8 @@
 """golden_three_scanner.py — F 层「黄金三章」检测器（v19 F2）
 
 【为什么有这个】
-网文行业铁律：前 3 章决定读者留存（黄金三章）。v18 之前这套特殊规则只散落在
-writer/agent 的 prompt 里，没有程序化检查——写完没人量化「第一句够不够冲」「主角
-500 字内有没有行动出场」。F 层（读者体验）缺这块。
+网文行业铁律：前 3 章决定读者留存（黄金三章）。本脚本把「第一句够不够冲」「主角
+500 字内有没有行动出场」等黄金三章要素程序化，量化检查。
 
 本脚本对 ch1-3 做黄金三章专项检测（5 项）：
   G1 first_sentence_conflict  — 第一句是否有冲突性 / 钩力（非纯写景写天气）
@@ -271,18 +270,17 @@ GOLDEN_CHECKS = ["first_sentence_conflict", "protagonist_onstage",
 
 
 def scan(project_root: Path, ch: int):
-    # v2 cluster 化（2026-05-28）：
-    # · chapter 视野：仅 ch1-3 激活（旧行为）
     # · cluster 视野：仅 cluster_001 草稿激活（虚拟 ch=9000 + cluster_id=001 触发）
+    # · chapter 视野（CLUSTER_MODE 未设置时）：仅 ch1-3 激活
     import os as _os
     _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
 
     if _cluster_mode:
         # cluster 视野：检测 cluster 草稿前 1500 CJK 强冲突开场
         # 仅 cluster_001 激活（其他 cluster 走 linear narrative_mode 不评开场）
-        # 2026-05-29 修复：旧逻辑只判 ch==9000，而 audit_hub 对「任何」cluster 都借虚拟
-        # ch=9000 跑 → 黄金三章开场检测被恒激活到每个 cluster。现改用 audit_hub 透传的
-        # CLUSTER_ID env 归一化判定：仅 cluster_001（含 "001"/"cluster_001"/"1"）才激活。
+        # audit_hub 对「任何」cluster 都借虚拟 ch=9000 跑检测，仅判 ch==9000 会让黄金三章
+        # 开场检测被恒激活到每个 cluster；这里额外用 audit_hub 透传的 CLUSTER_ID env
+        # 归一化判定，仅 cluster_001（含 "001"/"cluster_001"/"1"）才真正激活。
         _cluster_id = _os.environ.get("CLUSTER_ID", "")
         _norm = _cluster_id.replace("cluster_", "").lstrip("0") or "0"
         _is_first_cluster = _norm == "1"

@@ -11,22 +11,22 @@
 3. **大势已定** —— 每卷无论小势（走向卡/涟漪）怎么折腾，方向收敛到固定终点。靠**软牵引**：manifest 注入 `volume_convergence_anchor`、emergence 收敛打分维度、`volume_arc_drift_scanner` advisory 漂移哨兵——**绝不硬锁**。
 4. **章节切割只是格式输出** —— splitter（按字数切）+ 章节命名是格式层，**不参与核心质检/状态/学习**；除这两者外全系统以 cluster 为单位。
 5. **不干涉模型判断** —— 系统是**顾问非法官**：作者风格档（`作者风格.json` / `skill_vN.md`）= 第一权威，通用规则仅在作者档未规定该维度时兜底；风格/工艺偏好走 advisory 可豁免，**只有一致性/格式契约/穿帮是 hard_gate**。审核传 `--style`、writer prompt 作者档优先、禁用词分级（AI 结构套话硬毙 / 工艺签名词有作者档时不硬毙）。
-6. **及时清理旧版本旧代码** —— chapter mode / DCAS 等旧形态持续清除。
+6. **保持单一当前实现** —— 只保留 cluster 主链，不设并行旧入口或兼容层。
 
-**唯一链路可扩展边界**：允许引入已经验证过、非常合适的功能、模型或论文/开源机制，但只能作为 `/write -> /outline -> /cluster-write -> /cluster-save-state -> 走向卡 -> /export` 的 required plan step 或 required 子步骤进入链路；新增流程必须同步更新命令文档、plan 模板、agent 合约、STRUCTURE/Codex 描述和测试。正文生成由 `/cluster-write` 承载，事实回库由 `/cluster-save-state` 承载。
+**唯一链路可扩展边界**：允许引入已经验证过、非常合适的功能、模型或论文/开源机制，但只能作为 `/write -> /outline -> /cluster-write -> /cluster-save-state -> 走向卡 -> /export` 的 required plan step 或 required 子步骤进入链路；新增流程必须同步更新命令文档、plan 模板、agent 合约、STRUCTURE/AGENTS 描述和测试。正文生成由 `/cluster-write` 承载，事实回库由 `/cluster-save-state` 承载。
 
 **修改系统/加功能前必答**：① 这是否让产出更贴近作者风格？② 是否以 cluster 为单位？③ 是否让涟漪/大势驱动而非预设？④ 是否把章节当纯格式？⑤ **是否在干涉模型创作判断**（该 advisory 的别做 hard_gate、别机械覆盖模型选择）？详见 memory `project_north_star_style_fidelity`。
 
 ## 📁 文件路径权威规范
 
-详见 `core/Codex-home/STRUCTURE.md`。核心路径：
+详见 `core/claude-home/STRUCTURE.md`。核心路径：
 
 - 风格库：`workspace/styles/{书名}/`
 - 小说项目：`workspace/novels/{书名}/`
-- 系统经验：`core/Codex-home/lessons/`
-- 系统模板：`core/Codex-home/templates/`
+- 系统经验：`core/claude-home/lessons/`
+- 系统模板：`core/claude-home/templates/`
 
-**禁止**：写产出到 `core/` 或 `.Codex/` 下（这两个是系统目录）。所有用户产出统一走 `workspace/`。
+**禁止**：写产出到 `core/` 或 `.claude/` 下（这两个是系统目录）。所有用户产出统一走 `workspace/`。
 
 ## 你怎么说话
 - 像朋友聊天，简单亲切
@@ -66,13 +66,13 @@
 
 所有多步命令必须经过 `plan_tracker` 强制规划层 — **没有 plan_id 不能开工，没有 step 验证不能宣称完成**。
 
-> 当前 plan 命令集合以 `core/Codex-home/plans/*.plan.json` 为准。文档只描述职责，step 数和 required 口径以 plan JSON 为单一来源。
+> 当前 plan 命令集合以 `core/claude-home/plans/*.plan.json` 为准。文档只描述职责，step 数和 required 口径以 plan JSON 为单一来源。
 
 ### 三层防御
 
 | 层 | 实现 | 作用 |
 |----|------|------|
-| **L1 契约** | 命令文档 + `core/Codex-home/plans/<command>.plan.json` 模板 | 规划落字 |
+| **L1 契约** | 命令文档 + `core/claude-home/plans/<command>.plan.json` 模板 | 规划落字 |
 | **L2 追踪** | `plan_tracker.py` 持久化 plan；`step`/`end`/`abort` 写前读 SHA-256 attestation 校验（不符 → `PlanTamperedError` exit 2）；只读的 `status`/`list` 仅警告不阻断 | 状态可审计 + 防伪造 |
 | **L3 校验** | **PreToolUse hook**（拦截层）：缺 PLAN_ID/STEP → exit 2 拦；plan tampered → exit 2 拦在 Agent spawn 前。**PostToolUse hook**（观察层）：扫描 Bash 输出 `plan_id=` / `[OK] 第 N 步` 痕迹做日志上报，**严禁 exit 非 0**（防止打断主流水线） | 调用瞬间堵漏 |
 
@@ -175,7 +175,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ## 🧭 检测体系顾问制
 
-> **v2 cluster 单层架构（2026-05-28）**：scanner 全部升维到 cluster 视野 · chapter 不是检测单位 · 切章是纯格式输出 0 质检 · waiver 截断阈值从 100 提到 300。详见 `workspace/_temp_research/system_redesign_detection_layer.md`。
+> **cluster 单层架构**：scanner 全部升维到 cluster 视野 · chapter 不是检测单位 · 切章是纯格式输出 0 质检 · waiver 截断阈值 300 字。详见 `workspace/_temp_research/system_redesign_detection_layer.md`。
 
 检测工具（`validate_style` / `narrative_scanner` / `plot_structure_scanner` / `hook_strength`（拟切点节奏）/ `golden_three`（仅 cluster_001 开场）/ `validate_chapter` / `semantic_slop` / `narrative_short_sentence` / `repeat_noun_density` + 4 个新 cluster-only scanner: `cross_scene_voice_drift` / `foreshadowing_handoff` / `locked_fact_cross_scene` / `pov_consistency`）是**顾问**非门禁/法官，输出**「待裁决项」不是判决**。每条 issue 带 `gate_level`：
 
@@ -199,13 +199,13 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ### hard_gate 不可豁免清单（18 code · 权威定义见 STRUCTURE.md 第十二节）
 
-`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `STYLE_单段超长` / `CHAPTER_END_FORBIDDEN_SCREENPLAY` / `CHAPTER_END_FORBIDDEN_TRANSITION` / `LOCKED_FACT_CROSS_SCENE_CONFLICT` / `RIPPLE_RULES_EMPTY` / `GRAND_TREND_ME_POOL_EMPTY` / `CLUSTER001_STORYBOARD_EMPTY` / `SPLIT_WORD_NOT_CONSERVED`（中 3 个为 v2 cluster · 2026-05-29 · RIPPLE/GRAND_TREND/CLUSTER001 为子系统载荷点火 C03 · SPLIT_WORD_NOT_CONSERVED 为 splitter 字数守恒 C18 · 2026-06-27 · 均与 audit_hub.HARD_GATE_CODES 对齐）
+`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `STYLE_单段超长` / `CHAPTER_END_FORBIDDEN_SCREENPLAY` / `CHAPTER_END_FORBIDDEN_TRANSITION` / `LOCKED_FACT_CROSS_SCENE_CONFLICT` / `RIPPLE_RULES_EMPTY` / `GRAND_TREND_ME_POOL_EMPTY` / `CLUSTER001_STORYBOARD_EMPTY` / `SPLIT_WORD_NOT_CONSERVED`（均与 audit_hub.HARD_GATE_CODES 对齐）
 
-> **🔴 C18 splitter 字数守恒 hard（2026-06-27）**：`SPLIT_WORD_NOT_CONSERVED` 由 `chapter_splitter.run_freestyle` 落盘前确定性自检 emit——`sum(per_chapter_cjk) + pending_tail_cjk != draft_cjk`（丢字/重复）或落盘空 chunk 或切片计数失配 → `[FATAL]` exit 2（坏章节零落盘）。北极星④纯格式层契约破损（性质同 `MANIFEST_MISSING`）。**北极星⑤边界**：只查 CJK 守恒 + 无空块 + 计数同步，绝不断言章数 N（fluid 禁锁）/切点质量/叙事顺序。
+> **🔴 splitter 字数守恒 hard**：`SPLIT_WORD_NOT_CONSERVED` 由 `chapter_splitter.run_freestyle` 落盘前确定性自检 emit——`sum(per_chapter_cjk) + pending_tail_cjk != draft_cjk`（丢字/重复）或落盘空 chunk 或切片计数失配 → `[FATAL]` exit 2（坏章节零落盘）。北极星④纯格式层契约破损（性质同 `MANIFEST_MISSING`）。**北极星⑤边界**：只查 CJK 守恒 + 无空块 + 计数同步，绝不断言章数 N（fluid 禁锁）/切点质量/叙事顺序。
 
-> **🔴 C03 子系统载荷点火 hard 子集（2026-06-27）**：仅 3 个「机器永不点火」码 hard——涟漪规则空(引擎零触发)/当前卷 ME 池空(大势无方向)/cluster_001 storyboard 空(必详化)，性质同 `MANIFEST_MISSING`。其余 31 子系统裸骨架 = 合法 fluid 永远 advisory。**cluster_002+ ME/storyboard 空必须显式豁免**（标记只查 clusters[0] + 池非空·回归锁）。
+> **🔴 子系统载荷点火 hard 子集**：仅 3 个「机器永不点火」码 hard——涟漪规则空(引擎零触发)/当前卷 ME 池空(大势无方向)/cluster_001 storyboard 空(必详化)，性质同 `MANIFEST_MISSING`。其余 31 子系统裸骨架 = 合法 fluid 永远 advisory。**cluster_002+ ME/storyboard 空必须显式豁免**（标记只查 clusters[0] + 池非空·回归锁）。
 
-**权威边界**：hard_gate 清单以 `core/Codex-home/STRUCTURE.md` 第十二节为**单一来源**，与 `audit_hub.py` 的 `HARD_GATE_CODES` 一一对应，**不得各自另立**。
+**权威边界**：hard_gate 清单以 `core/claude-home/STRUCTURE.md` 第十二节为**单一来源**，与 `audit_hub.py` 的 `HARD_GATE_CODES` 一一对应，**不得各自另立**。
 
 ### 豁免协议
 
@@ -216,12 +216,12 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ---
 
-## 🔁 运行时自学习 / 自适应 / 自监控（MAPE-K · 2026-05-30）
+## 🔁 运行时自学习 / 自适应 / 自监控（MAPE-K）
 
 > 与上面「写作质量自学习」（learning_loop 学审核 issue）**正交**：这一层学的是**运行时报错 + 流程缺步**，
-> 让脚本越跑越稳。业界对标 MAPE-K + Reflexion + Saga + 熔断/容错，权威设计见 `core/Codex-home/SELF_LEARNING_ARCHITECTURE.md`。
+> 让脚本越跑越稳。业界对标 MAPE-K + Reflexion + Saga + 熔断/容错，权威设计见 `core/claude-home/SELF_LEARNING_ARCHITECTURE.md`。
 
-MAPE-K 闭环 4 组件（数据锚 **系统级** `core/Codex-home/runtime/`，跨小说项目）：
+MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，跨小说项目）：
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
@@ -301,13 +301,7 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/Codex-home/runtime/`，�
 - ❌ 用户反馈含糊时**推断意图**而不**问**（「不够 X」≠「要 Y」，必须问 X 标准）
 - ❌ 引用 lesson 前不验证当前场景适用性（lesson 也要调研）
 
-### 翻车实例（实证支撑）
-
-| 翻车 | 根因 | 应做 |
-|---|---|---|
-| v1 章标题误判「不够网文化 = 要长」 | 没调研网文真实分布 | 联网调研爆款样本 |
-| DCAS 方向来回反复 3 次 | 没问用户实测过哪种 | AskUserQuestion |
-| gen_writer schema 不兼容 fate_engine | 没 grep fate_engine 期望字段 | Read fate_engine.py |
+方向判断必须引用联网来源、仓库文件行号或用户原话；无法举证时先调查，不凭经验补全。
 
 **优先级标定**：**高于所有其他规则** — 其他规则是「做事 how」，这条是「决策前置 prerequisite」，不前置 = 后面所有规则的执行结果都不可信。
 
@@ -338,18 +332,18 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/Codex-home/runtime/`，�
 
 **默认开启**：`/outline` 初始化 `事件簇.json.clusters[0].narrative_mode = "in_medias_res"`（仅首个 cluster），后续 cluster 默认 `"linear"`。
 
-**🔴 链路（2026-06-07 根治双重倒叙 · 用户定调）**：倒叙由 **outline 设计 scene_storyboard 顺序 + writer 按序写** 负责，**splitter 不再重排**：
+**倒叙链路**：倒叙由 **outline 设计 scene_storyboard 顺序 + writer 按序写** 负责，**splitter 不重排**：
 
 1. **outline-planner** 把 cluster_001 的 scene_storyboard 排成倒叙：scene0=强冲突/灾难开场（200 字内丢核心悬念）、scene1=反转/揭底、scene2+=时间序回溯、章末接回开篇。
 2. **build_manifest** 注入 scene_storyboard + `narrative_mode` 给 writer。
-3. **writer** 按 scene_storyboard 顺序写（场景顺序即叙事顺序；v29=Codex 亲笔逐场景写、gemini 分段润色不动场景顺序）→ 草稿开头即倒叙高潮。
-4. **splitter** 只按字数 linear 切（北极星④：纯格式层不理解叙事）——**绝不再做 climax 段提前**。历史 M5 的 reorder 会与 writer 已排好的倒叙叠成「双重倒叙」（cluster_001 实测：ch1 开头被硬塞一句中段「肋骨断裂」与原开篇拼接断裂），已删除。
+3. **writer** 按 scene_storyboard 顺序写；Codex 逐场景创作，gemini 分段润色但不改变场景顺序。
+4. **splitter** 只按字数 linear 切（北极星④：纯格式层不理解叙事），绝不提前或重排 climax 段。
 
 **例外**（写 `"linear"`）：严肃文学 / IP 改编已定顺序 / 用户明示线性叙事。
 
 ---
 
-## 📐 大纲章数 fluid（v27 升级）
+## 📐 大纲章数 fluid
 
 故事块（cluster）+ 涟漪效应让单卷章数**无法预先确定** — 总章数由 ME 触发节奏 + 用户涟漪选择 + writer 自由发挥 + splitter 按字数切**自然涌现**。
 
@@ -358,7 +352,7 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/Codex-home/runtime/`，�
 | `rhythm_profile`（紧凑/标准/厚重/混合）软提示 | `target_chapter_count` / `volume_count` 死锁 |
 | `volumes[]` 的 `core_conflict` / `volume_arc` / `key_milestones` / `ending_state` | `volumes[].chapter_range` 死锁区间 |
 | 大势卡 ME `expected_window_after` 宽窗触发 | `T × (1-F) / (V × E)` 章数公式 |
-| **🆕 v27：用户答的「每卷 cluster 数」**（outline step 3.3 AskUser）→ ME 池数量 | cluster brief 的 `estimated_chapters` / `chapter_range`；输出层范围只进 splitter WAL / `output_segments` |
+| 用户答的「每卷 cluster 数」（outline step 3.3）→ ME 池数量 | cluster brief 的 `estimated_chapters` / `chapter_range`；输出层范围只进 splitter WAL / `output_segments` |
 
 **设计哲学**：大势 = 不变（卷主题/milestones/final image），章数 = 浮动。
 
@@ -366,11 +360,11 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/Codex-home/runtime/`，�
 
 ---
 
-## 🔴 卷=阶段触发点 · cluster=小走向（v28 · 2026-06-03 结构根治）
+## 🔴 卷=阶段触发点 · cluster=小走向
 
 > 用户原话：「每卷其实都是一个触发点，代表一个阶段的结束和下一阶段的开始，可能是主角成长也可能是副本更迭」。调研接地（网文分卷惯例 + 7 套 arc 结构理论 · 31 来源 · `_temp_research/卷阶段结构调研/`）。
 
-**根治的 bug**：旧设计易把「1 个 ME = 1 整副本」+「cluster scope = 整副本」→ **单 cluster 塌缩成一整个副本/阶段**（无脸者守则 cluster_001 一块讲完整个育新中学）。正确：**一个大方向（卷/阶段）下多个小故事走向（cluster）stakes 递增累积，构成整个阶段**。
+**结构原则**：一个大方向（卷/阶段）下由多个小故事走向（cluster）递增累积，禁止单 cluster 覆盖完整副本或阶段。
 
 | 层 | = 什么（实证：卷边界靠转折触发点标记非章数 · 大 arc=多同形小单元累积 · 嵌套/分形）|
 |---|---|
@@ -386,23 +380,23 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/Codex-home/runtime/`，�
 
 ---
 
-## 🔴 v29 正文生成：Codex 亲笔创作 + gemini 分段润色（+ splitter 字数切 + 跨 cluster 补料）
+## 🔴 正文生成：Codex 亲笔创作 + gemini 分段润色（+ splitter 字数切 + 跨 cluster 补料）
 
-用户定调（2026-07-11）：「所有创作路线转向有Codex自身创作内容，gemini润色」。实验依据 `workspace/_temp_research/四组生成对比_20260711`（cluster 级双通道最优：嵌入 SFS 第一/零禁用词/事实链零漂移；gen-model 从零生成+多轮扩写=套话×10+设定漂移）+ memory `project_4group_generation_comparison_2026_07_11`。章数 fluid 原则沿用 v27 用户原话：切多少章由 splitter 按字数后期决定，writer 链不预设章数。
+正文由 Codex 逐场景创作，gemini 只做分段等体量润色。writer 不预设章数；splitter 在质检完成后按字数切章。
 
-### 1. writer v29 两阶段（唯一形态）
+### 1. writer 两阶段（唯一形态）
 
 - **step 2a Codex 亲笔**：novel-writer agent 读 manifest/风格 skill/brief/research 后**逐场景亲笔写作**（每场景写透·分场景落盘 `claude_scenes/scene_*.txt` 规避单响应上限）+ 拼接审计基线 `cluster_<key>_draft_claude.txt` + 自评草稿 `changes_claude.json`。写作硬守则：弯引号 U+201C/201D、非对话段一段一句末符、禁用词零容忍、锁定事实零漂移、伏笔只埋不剧透。
-- **step 2b gemini 润色**：`gen_writer.py` 公开 CLI 只接受 `--project <path> --cluster <N>` → 自动发现 claude_scenes/ → 逐场景段调 gemini 按风格档**等体量重写润色**（段级守恒带 [0.85,1.30]·超界带字数指令重试 1 次·万字整体润色已实测三连败必须分段）→ 拼接出终稿 `cluster_<key>_draft.txt`。
+- **step 2b gemini 润色**：`gen_writer.py` 公开 CLI 只接受 `--project <path> --cluster <N>` → 自动发现 claude_scenes/ → 逐场景段调 gemini 按风格档**等体量重写润色**（段级守恒带 [0.85,1.30]·超界带字数指令重试 1 次）→ 拼接出终稿 `cluster_<key>_draft.txt`。
 - changes.json = Codex self_eval/waivers + gen_writer 确定性遥测合并，标 `writer_mode: "claude_draft_gemini_polish_v29"` + `chapter_count_decided_by_splitter: true`
 - 🔴 **禁止 gen-model 从零生成**（gen_writer 已无该路径·缺 claude_scenes/ 即 [FATAL]·不兼容不降级）；禁止 expand/字数兜底复活（字数不够=回头把场景写透而非尾部注水）。
 
 禁止重新加入 `--chapter-end` / `--target-cjk` / `--chapter-start` 兼容参数；起始章由 cluster 反查推导，章数只由 splitter 后续决定。
 
-### 2. splitter 按字数硬范围切（取代 TARGET_CHAPTERS）
+### 2. splitter 按字数硬范围切
 
 `novel-chapter-splitter` 加 `MODE: ecas_freestyle` 模式：
-- 不传 `TARGET_CHAPTERS` · 按字数算 N = round(draft / 3500) 钳到 [ceil(draft/4500), floor(draft/3000)]
+- 按字数算 N = round(draft / 3500)，钳到 [ceil(draft/4500), floor(draft/3000)]
 - 每章硬范围 3000-4500 CJK · `rhythm_profile` 微调区间（紧凑 3000-4000 / 厚重 3500-5000）
 - 沿用最佳切点评分算法（场景边界 / cliffhanger / 接续自然度）
 
@@ -414,15 +408,13 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/Codex-home/runtime/`，�
 - 下个 cluster 写完后 cluster-write step 6 调度器检测 → 传 `PREVIOUS_PENDING_TAIL_PATH` 给 splitter
 - splitter 把 pending_tail prepend 到下个 cluster 草稿头部 + 联合切
 
-详见 memory `feedback_v27_writer_freestyle_splitter_word_cut`（splitter/pending_tail 段仍有效·writer 段已被 v29 取代）+ `project_4group_generation_comparison_2026_07_11`。
-
 ---
 
-## 🔬 蒸馏复刻强制同栈（v29：Codex 草稿 + gemini 润色）
+## 🔬 蒸馏复刻强制同栈（Codex 草稿 + gemini 润色）
 
-`/distill-style` 的复刻段产出**必须与正式写作同栈**：v29 正式栈 = Codex 亲笔场景稿 + gemini 分段润色，所以复刻 = **spawn Codex agent 按 skill 写复刻场景稿** → `distill_replicate.py` 用 gemini 按 skill 分段润色落盘评分。**禁纯 gemini 从零直写复刻**（那是已删除的旧栈），也**禁 Codex agent 直接产复刻终稿**（绕过润色环节=自评自证）。
+`/distill-style` 的复刻段产出**必须与正式写作同栈**：spawn Codex agent 按 skill 写复刻场景稿 → `distill_replicate.py` 用 gemini 按 skill 分段润色落盘评分。禁止纯 gemini 从零直写复刻，也禁止 Codex agent 直接产复刻终稿。
 
-**为什么**：蒸馏闭环复刻验证「skill 能不能让正式写作栈模仿出风格」。栈变了复刻必须跟——旧口径「复刻禁 Codex」随 v29 作废。
+该闭环验证 skill 能否驱动正式写作栈复现作者风格。
 
 **正确流程**：
 ```bash
@@ -431,11 +423,11 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/Codex-home/runtime/`，�
 python core/scripts/distill_replicate.py \
   --style-skill workspace/styles/<书名>/skill_v<N>.md \
   --mode cluster --cluster-ref cluster_001 --project workspace/novels/<书名> \
-  --Codex-scenes-dir workspace/styles/<书名>/复刻测试/v<N>_round<M>/claude_scenes \
+  --claude-scenes-dir workspace/styles/<书名>/复刻测试/v<N>_round<M>/claude_scenes \
   --output workspace/styles/<书名>/复刻测试/v<N>_round<M>/cluster_001_replica.txt
 ```
 
-**三层防御（v29 语义）**：L1 命令文档 / L2 唯一合法终稿入口 `distill_replicate.py`（缺 --Codex-scenes-dir 即拒跑）/ L3 hook 规则 11 对复刻 agent 发同栈 warn（agent 只产草稿·终稿必经 gemini 润色落盘）。
+**三层防御（v29 语义）**：L1 命令文档 / L2 唯一合法终稿入口 `distill_replicate.py`（缺 --claude-scenes-dir 即拒跑）/ L3 hook 规则 11 对复刻 agent 发同栈 warn（agent 只产草稿·终稿必经 gemini 润色落盘）。
 
 紧急中止：若复刻验证无法执行，停止蒸馏 plan 并修复输入或环境；不得用环境变量越过验证。
 
@@ -467,7 +459,7 @@ python core/scripts/distill_replicate.py \
 - 5 模块 + train.py：`core/scripts/skill_opt/`
 - plan 模板：`distill-style-skillopt.plan.json` (5 步)
 - 测试：57/57 全绿（确定性 + mock LLM 集成）
-- **已删除**：`dimension_evolver.py` + `auto_evolved_dimensions.json` 物理删除（功能被 SkillOpt 收编·北极星⑥）
+- SkillOpt 是风格 skill 的唯一训练入口
 
 ---
 
@@ -487,7 +479,7 @@ python core/scripts/distill_replicate.py \
    - **🆕 一段一句末结束符**（非对话段只能有 1 个 。！？……，看到多句立刻拆段。例外：对话段 / 引用文献）
    - 项目级覆盖走 `_数据库/style_scanner_overrides.json`
 
-> **🔴 v28 北极星⑤校准（2026-06-03 · 通用碎句基线 vs 作者基线冲突理顺）**：上面第 2/7 条的「短句连发 / 平均段长 15-30 / 单句独行 ≥40%」是**通用爽文兜底基线，不是天花板**。**作者风格档的句长 / 段长 / 单句独行 / 标点基线 = 第一权威**——作者档规定了该维度就以作者档为准，通用基线自动让位。实证翻车：惊悚乐园真作者**句长均值 31、段长 52、单句独行 54%、破折号 0.3/千**，但通用「短句连发」基线把弱模型推成**句长 16.8 的「主语+动作」流水账作文感**（用户直觉点出 + 金标准对比证实）。**「句长」是此前全链路检测盲区**（validate_style 故意只查段长不查句长）→ 新增 `prose_rhythm_scanner`（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比 · advisory）补检测闭环。详见 memory `project_wulianzhe_novel_state` 流水账根因段。
+> **🔴 北极星⑤校准：通用碎句基线 vs 作者基线**：上面第 2/7 条的「短句连发 / 平均段长 15-30 / 单句独行 ≥40%」是**通用爽文兜底基线，不是天花板**。**作者风格档的句长 / 段长 / 单句独行 / 标点基线 = 第一权威**——作者档规定了该维度就以作者档为准，通用基线自动让位。`prose_rhythm_scanner`（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比 · advisory）负责检测句长是否偏离作者基线，补齐段长之外的句长检测。详见 memory `project_wulianzhe_novel_state`。
 
 详见 memory `feedback_paragraph_length_hard_constraint` / `feedback_one_sentence_per_paragraph`。
 

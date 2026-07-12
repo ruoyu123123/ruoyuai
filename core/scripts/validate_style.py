@@ -7,11 +7,11 @@ validate_style.py — 中文小说风格合规校验器
 
 校验 15 项（PASS/WARN/FAIL）：对话占比、段落均长、极短段占比、单句成段率、
 拟声格式、极长句、禁用词、AI对话标签、配额词、方括号设定、逗句比、章节字数、
-**单段超长（hard_gate · v23.12 新增）**、**单句独行占比（v23.12）**、**长段计数（v23.12）**
+**单段超长（hard_gate）**、**单句独行占比**、**长段计数**
 
 退出码：0 = 全部 PASS, 1 = 有 FAIL, 2 = 致命错误
 
-v23.12（2026-05-21）新增 3 项段长检查（基于网文段长调研 12 来源互证）：
+段长 3 项检查（基于网文段长调研 12 来源互证）：
   - 单段超长：> 120 CJK 字单段（每章 ≤1 例外）= hard_gate
   - 单句独行占比：≥ 40%（吐槽爽文档默认目标）
   - 长段计数：80-120 字段每章 ≤ 2
@@ -28,7 +28,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 from style_analyzer import (  # noqa: E402
     analyze_text, AI_STRUCTURAL_BANNED, CRAFT_SIGNATURE_QUOTA_WORDS,
 )
-import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
+import chapter_io as cio  # noqa: E402  统一正文/数据分离读写
 
 # ── 阈值定义 ──────────────────────────────────────────────────
 DEFAULT_THRESHOLDS = {
@@ -43,10 +43,10 @@ DEFAULT_THRESHOLDS = {
     "quota_per_word":        {"max": 5},
     "bracket_settings":      {"min": 0},
     "comma_period_ratio":    {"min": 0.5, "max": 6.0},
-    # v18 复核：旧 2000-6000 是"混合 txt 含 CHANGES JSON"口径下设的。
-    # 接入 chapter_io.read_body() 后只算纯正文，字数变小，宽松兜底区间下调到 1800-5800。
+    # 走 chapter_io.read_body() 只算纯正文（不含 CHANGES JSON），字数比混合文本小，
+    # 宽松兜底区间设为 1800-5800。
     "chapter_words":         {"min": 1800, "max": 5800},
-    # v23.12（2026-05-21）段长硬约束 —— 来自网文段长调研（12 来源互证）
+    # 段长硬约束 —— 来自网文段长调研（12 来源互证）
     "para_max_chars":        {"warn": 80, "hard_gate": 120, "exception_per_chapter": 1},
     "single_line_ratio":     {"min": 0.30},  # 默认松：≥30%（strict 拉到 40%）
     "long_para_per_chapter": {"max": 3},     # 默认松：每章 ≤3（strict 拉到 2）
@@ -63,19 +63,18 @@ STRICT_THRESHOLDS = {
     "quota_per_word":        {"max": 3},
     "bracket_settings":      {"min": 1},
     "comma_period_ratio":    {"min": 1.5, "max": 4.5},
-    # v18 复核：旧 3000-5000 是被 CHANGES JSON 污染的混合数据下设的（实测旧稿
-    # ch1-3 混合 txt 比纯正文多 2641-5339 字）。改用 cio.read_body() 拿纯正文后，
-    # 旧稿 ch1-3 纯正文 count_words = 3013 / 3805 / 4983（均值 ~3934）。
-    # STRICT 区间按纯正文基线重定为 2800-5200（覆盖实测最小 3013 与最大 4983 并留余量）。
+    # 走 cio.read_body() 拿纯正文后，实测样本章节纯正文 count_words = 3013 / 3805 / 4983
+    # （均值 ~3934）。STRICT 区间按纯正文基线定为 2800-5200（覆盖实测最小 3013 与最大
+    # 4983 并留余量）。
     "chapter_words":         {"min": 2800, "max": 5200},
-    # v23.12 strict：吐槽爽文档目标
+    # strict：吐槽爽文档目标
     "para_max_chars":        {"warn": 80, "hard_gate": 120, "exception_per_chapter": 1},
     "single_line_ratio":     {"min": 0.40},  # 严格：单句独行 ≥ 40%
     "long_para_per_chapter": {"max": 2},     # 严格：长段每章 ≤ 2
 }
 
 # ============================================================
-# v2 cluster 化阈值（2026-05-28）：scanner 升维 cluster 视野的 11 处阈值比例化
+# cluster 视野阈值：scanner 升维 cluster 视野的 11 处阈值比例化。
 # 当 env CLUSTER_MODE=1 时启用。比例化原则：
 #   · 字数阈值放大到 cluster 范围（10k-25k）
 #   · 比例阈值放宽（voice 混合 / 仪式独白稀释）
@@ -120,9 +119,8 @@ def _rng(lo: float, hi: float, u: str = "") -> str:
 def _stat_mean(v, *, mean_keys: tuple[str, ...] = ("mean",)) -> float | None:
     """从 {"<mean_key>": x} 或裸数值取均值，非数值/缺失返回 None。
 
-    2026-05-30 北极星⑤ [override 键名/单位不符]：不同蒸馏批次对同一统计量用了不同
-    的「均值字段名」（段长用 mean / mean_chars / mean_sentences），故均值字段名也要
-    tolerant —— 按 mean_keys 顺序找第一个数值字段。"""
+    不同蒸馏批次对同一统计量用了不同的「均值字段名」（段长用 mean / mean_chars /
+    mean_sentences），故均值字段名也要 tolerant —— 按 mean_keys 顺序找第一个数值字段。"""
     if isinstance(v, dict):
         for mk in mean_keys:
             m = v.get(mk)
@@ -137,10 +135,10 @@ def _stat_mean(v, *, mean_keys: tuple[str, ...] = ("mean",)) -> float | None:
 def _first_stat_mean(q: dict, *keys: str, mean_keys: tuple[str, ...] = ("mean",)) -> float | None:
     """按 keys 顺序在 quantitative 里找第一个有数值均值的统计量。
 
-    2026-05-30 北极星⑤：作者档 override 读 key 必须 tolerant 兼容多命名——同一指标
-    在不同蒸馏批次里键名不同（如 chapter_words vs chapter_chars、dialogue_ratio vs
-    dialogue_ratio_pct）。键名/单位不符 = override 失效 = 用通用 band 苛求真作者
-    （矫枉过正）。统一在此处兼容，让作者档真正第一权威。"""
+    作者档 override 读 key 必须 tolerant 兼容多命名——同一指标在不同蒸馏批次里键名
+    不同（如 chapter_words vs chapter_chars、dialogue_ratio vs dialogue_ratio_pct）。
+    键名/单位不符 = override 失效 = 用通用 band 苛求真作者（矫枉过正）。统一在此处
+    兼容，让作者档真正第一权威。"""
     for k in keys:
         m = _stat_mean(q.get(k), mean_keys=mean_keys)
         if m is not None:
@@ -160,11 +158,11 @@ _CHAPTER_WORDS_KEYS = ("chapter_words", "chapter_chars", "chapter_char_count")
 def _extract_author_dialogue_ratio(q: dict) -> float | None:
     """从作者档 quantitative 推**真实对话占比**（归一到 0-1 ratio，对齐 validate_style 内部单位）。
 
-    2026-05-30 北极星⑤ [override 键名/单位不符]：旧实现只读 q["dialogue_ratio"]（假设 0-1），
-    但蛊真人档实际键是 dialogue_ratio_pct（百分比 25.4）→ 键名+单位双不符 → override 失效
-    → 对话占比退回通用 band(0.30-0.80) 苛求真作者（蛊真人真实 ~25% 被顶成 FAIL = 矫枉过正）。
-    修：① 先读 0-1 ratio 键（dialogue_ratio…）原样用；② 再读 _pct 键并 /100 归一到 ratio。
-    两类都缺 → None（不 override，保通用 band）。"""
+    作者档键名/单位不统一——有的存 0-1 ratio（dialogue_ratio…），有的存百分比
+    （dialogue_ratio_pct，如蛊真人档 25.4）。只读一种会让另一种档案的 override 失效，
+    对话占比退回通用 band(0.30-0.80) 苛求真作者（蛊真人真实 ~25% 被顶成 FAIL = 矫枉过正）。
+    取数：① 先读 0-1 ratio 键（dialogue_ratio…）原样用；② 再读 _pct 键并 /100 归一到
+    ratio。两类都缺 → None（不 override，保通用 band）。"""
     # ① 0-1 ratio 键（惊悚乐园：dialogue_ratio.mean = 0.2701）
     r = _first_stat_mean(q, *_DIALOGUE_RATIO_KEYS)
     if r is not None:
@@ -185,12 +183,12 @@ _SINGLE_LINE_KEYS = ("single_sentence_para_ratio", "single_line_ratio", "single_
 def _extract_author_single_line_ratio(q: dict) -> float | None:
     """从作者档 quantitative 推**真实单句独行率**（0-1 ratio）。
 
-    2026-06-13 北极星⑤ [瓶颈1·段落密度规则冲突]：single_line_ratio band 的通用 floor
-    （默认 0.30 / strict 0.40 / cluster 0.30）是按**短段吐槽爽文**（一段一句碎句节奏）标的。
-    但密实多句长段签名作者（《人生长恨水长东》实测 single_sentence_para_ratio=0.248）
-    被通用 floor 顶成 FAIL → 把输出反推成「一段一句」碎句、偏离作者「24.8% 单句独行 +
-    密实复合长段」基线（与 gen_writer 段长契约形成同向冲突）。作者档第一权威：作者实证写
-    密实长段则该 floor 由作者档说了算，放宽（relax-only·绝不更苛）。
+    single_line_ratio band 的通用 floor（默认 0.30 / strict 0.40 / cluster 0.30）是按
+    **短段吐槽爽文**（一段一句碎句节奏）标的。但密实多句长段签名作者（《人生长恨水长东》
+    实测 single_sentence_para_ratio=0.248）被通用 floor 顶成 FAIL → 把输出反推成「一段
+    一句」碎句、偏离作者「24.8% 单句独行 + 密实复合长段」基线（与 gen_writer 段长契约
+    形成同向冲突）。作者档第一权威：作者实证写密实长段则该 floor 由作者档说了算，放宽
+    （relax-only·绝不更苛）。
 
     取数：① quantitative.single_sentence_para_ratio（蒸馏直出）
           ② paragraph_length.single_sentence_para_ratio_mean（嵌套命名）
@@ -208,9 +206,9 @@ def _extract_author_single_line_ratio(q: dict) -> float | None:
 def _extract_author_chapter_words(q: dict) -> float | None:
     """从作者档 quantitative 推**真实章字数均值**（tolerant 兼容 chapter_words / chapter_chars）。
 
-    2026-05-30 北极星⑤ [override 键名/单位不符]：旧实现只读 q["chapter_words"]，但蛊真人档
-    实际键是 chapter_chars → 键名不符 → 章字数 override 失效 → 退回通用 band。两者都是
-    「纯正文字数」同口径，单位一致，只差命名，故 tolerant 兼容即可（无需单位换算）。"""
+    不同蒸馏批次键名不同——有的存 chapter_words，有的存 chapter_chars（如蛊真人档）。
+    两者都是「纯正文字数」同口径，单位一致，只差命名，故 tolerant 兼容即可（无需单位
+    换算）；只认一种会让另一种档案的 override 失效，退回通用 band。"""
     return _first_stat_mean(q, *_CHAPTER_WORDS_KEYS)
 
 
@@ -238,8 +236,8 @@ def _extract_author_para_mean(q: dict) -> float | None:
 def _extract_author_long_para_ratio(q: dict, para_mean: float | None) -> float | None:
     """从作者档推**真实长段率上限**（每章 80-120 CJK 字段占比的合理上界 max_ratio）。
 
-    2026-05-30 北极星⑤ [long_para 不受作者档 override]：CLUSTER_THRESHOLDS 里
-    long_para_per_chapter.max_ratio 固定 2%，是按**短段吐槽爽文**（段均 ~15-20 字）标的。
+    CLUSTER_THRESHOLDS 里 long_para_per_chapter.max_ratio 固定 2%，是按**短段吐槽爽文**
+    （段均 ~15-20 字）标的。
     但长段签名作者（蛊真人段均 ~30 字 · 签名密叙段；惊悚乐园段均 ~52 字 · gt50 占 43.8%）
     真实长段率远高于 2% → 被通用 2% 顶成 FAIL（"带作者档反更苛"，违反原则⑤）。段越长 →
     80-120 字段天然越多，这是该作者笔法不是穿帮，应放宽 advisory（绝不放松真超长 hard_gate，
@@ -272,8 +270,8 @@ def _extract_author_long_para_ratio(q: dict, para_mean: float | None) -> float |
     return None
 
 
-# 单段超长 hard_gate 天花板的绝对上限（北极星⑤ · 2026-05-30 R3/R5）：作者档驱动放宽时
-# 仍封顶 300 CJK，防真失控叙述段（>300 字纯叙述无论作者签名都属穿帮/info-dump 失控）。
+# 单段超长 hard_gate 天花板的绝对上限（北极星⑤）：作者档驱动放宽时仍封顶 300 CJK，
+# 防真失控叙述段（>300 字纯叙述无论作者签名都属穿帮/info-dump 失控）。
 _PARA_MAX_HARD_BASE = 120                   # 通用基线 hard_gate（无长段签名 / 无作者档时守此）
 _PARA_MAX_HARD_ABS_CAP = 300                # 作者档放宽的绝对天花板（防真失控）
 
@@ -281,7 +279,6 @@ _PARA_MAX_HARD_ABS_CAP = 300                # 作者档放宽的绝对天花板�
 def _extract_author_max_para_chars(q: dict, para_mean: float | None) -> int | None:
     """从作者档推**单段超长 hard_gate 天花板**（CJK 字）——仅当作者**实证有长段签名**时放宽。
 
-    2026-05-30 北极星⑤ [#2 长段签名作者 120 字 hard_gate 天花板无作者档 override · R3/R5]：
     `_chk_para_max` 的 120 字 hard_gate 是按短段爽文标的，但长段签名作者（惊悚乐园：画外音
     对读者 + 游戏 info-dump · 实证 paragraph_length.mean_chars=52 / gt50=0.4379 / 真作者
     6/6 章非对话段 130-245 字 · 全库非对话段 p95=121/p99=174）被通用 120 硬墙误伤
@@ -322,10 +319,10 @@ def _extract_author_max_para_chars(q: dict, para_mean: float | None) -> int | No
     #     2 章是 209-243 字极端双长段（作者最上沿·不强求 100% 过 = 非放开）。
     # 无 para_mean 但有 gt 分布签名 → 退用保守 208（=52×4 锚）。系数仅对长段签名作者生效·
     # 钳到 [120,300]·守纪律 c（绝对上限防真失控·短段作者/无档仍 120 防 AI 滥用）。
-    # 2026-05-31 北极星⑤ [5 缺口⑤ 天花板覆盖真实长段]：旧 mean×4（惊悚 52→208）略低于作者真实
-    # 开篇 info-dump 长段（惊悚 ch1 段32=209 / 段34=212·纯叙述游戏设定）→ 209/212 踩线 FAIL =
-    # 矫枉过正。修：长段签名作者天花板取 max(mean×4, _SIGNATURE_CEILING_FLOOR=250) 覆盖真实长段·
-    # 仍钳 ≤300 绝对上限（绝不破·>300 纯叙述仍真失控 hard_gate · test_K_true_runaway 守墙）。
+    # mean×4（惊悚 52→208）单独会略低于作者真实开篇 info-dump 长段（惊悚 ch1 段32=209 /
+    # 段34=212·纯叙述游戏设定），踩线误 FAIL。长段签名作者天花板取
+    # max(mean×4, _SIGNATURE_CEILING_FLOOR=250) 覆盖这类真实长段，仍钳 ≤300 绝对上限
+    # （绝不破·>300 纯叙述仍真失控 hard_gate · test_K_true_runaway 守墙）。
     est = (para_mean * 4.0) if (para_mean is not None and para_mean > 0) else 208.0
     est = max(est, _SIGNATURE_CEILING_FLOOR)
     ceiling = int(round(est))
@@ -333,17 +330,17 @@ def _extract_author_max_para_chars(q: dict, para_mean: float | None) -> int | No
     return ceiling
 
 
-# ── 章字数 override 的 cluster 视野（北极星① · 2026-05-30 #1）─────────────────
-# 根因：CLUSTER_MODE 下 validate 跑在**整 cluster draft**上（cluster-write 产 cluster
-# draft·splitter 才切章·validate 在 cluster draft 上跑 CLUSTER_MODE），CLUSTER_THRESHOLDS
-# 已把章字数 band 设成 cluster 级 8000-30000。但带 --style 时 _apply_style_overrides 用
-# 作者**单章**字数 mean(蛊真人 chapter_chars 2719 / 惊悚 chapter_words 2921)±500 覆盖 →
-# 塌回单章 band(2218-3218)→ 整 cluster(18846/19754 字)必 FAIL（系统性误伤所有 cluster draft）。
-# 修：仅 cluster 视野（base band 下限 ≥ _CLUSTER_WORDS_FLOOR=8000，即来自 CLUSTER_THRESHOLDS）
-# 时，把作者单章 mean **按估算每 cluster 章数放大到 cluster 级**——下限 = mean × 每 cluster
-# 最少章数(_CLUSTER_MIN_CHAPTERS)，上限 = mean × 最多章数(_CLUSTER_MAX_CHAPTERS)，再与
-# 通用健康 cluster band 取并集（绝不窄于 cluster 健康区间）。单章视野(DEFAULT/STRICT·base
-# 下限 < 8000)不动——仍用作者单章 mean ±500（向后兼容·零回归）。
+# ── 章字数 override 的 cluster 视野（北极星①）─────────────────
+# CLUSTER_MODE 下 validate 跑在**整 cluster draft**上（cluster-write 产 cluster draft·
+# splitter 才切章·validate 在 cluster draft 上跑 CLUSTER_MODE），CLUSTER_THRESHOLDS 已把
+# 章字数 band 设成 cluster 级 8000-30000。但带 --style 时 _apply_style_overrides 若直接用
+# 作者**单章**字数 mean(蛊真人 chapter_chars 2719 / 惊悚 chapter_words 2921)±500 覆盖，会
+# 塌回单章 band(2218-3218)，导致整 cluster(18846/19754 字)必 FAIL（系统性误伤所有 cluster
+# draft）。因此仅 cluster 视野（base band 下限 ≥ _CLUSTER_WORDS_FLOOR=8000，即来自
+# CLUSTER_THRESHOLDS）时，把作者单章 mean **按估算每 cluster 章数放大到 cluster 级**——
+# 下限 = mean × 每 cluster 最少章数(_CLUSTER_MIN_CHAPTERS)，上限 = mean × 最多章数
+# (_CLUSTER_MAX_CHAPTERS)，再与通用健康 cluster band 取并集（绝不窄于 cluster 健康区间）。
+# 单章视野(DEFAULT/STRICT·base 下限 < 8000)不受影响——仍用作者单章 mean ±500。
 _CLUSTER_WORDS_FLOOR = 8000      # 判别 cluster 视野：base band 下限 ≥ 此 = 来自 CLUSTER_THRESHOLDS
 _CLUSTER_MIN_CHAPTERS = 3        # 每 cluster 估算最少章数（下限放大系数）
 _CLUSTER_MAX_CHAPTERS = 8        # 每 cluster 估算最多章数（上限放大系数）
@@ -351,7 +348,7 @@ _CLUSTER_MAX_CHAPTERS = 8        # 每 cluster 估算最多章数（上限放大
 
 def _cluster_chapter_words_band(cw_mean: float, base_lo: float, base_hi: float) -> dict:
     """cluster 视野下，把作者**单章**字数 mean 放大成 cluster 级 band，再与通用健康
-    cluster band 取并集（北极星① · #1）。
+    cluster band 取并集（北极星①）。
 
     · 下限 = min(作者单章 mean × 最少章数, 通用 cluster 下限) —— 不高于健康下限，防短 cluster 误 FAIL。
     · 上限 = max(作者单章 mean × 最多章数, 通用 cluster 上限) —— 不低于健康上限，容厚重 cluster。
@@ -364,24 +361,22 @@ def _cluster_chapter_words_band(cw_mean: float, base_lo: float, base_hi: float) 
     return {"min": min(est_lo, base_lo), "max": max(est_hi, base_hi)}
 
 
-# ── L1a 作者经验分位数 band（北极星① · 2026-05-30 · 根治矫枉过正根因）───────────
-# 根因：_apply_style_overrides 用「作者实测 mean ± 固定容差」覆盖 band（段长 mean×0.7-1.3 /
-# 对话占比 mean±0.15）。对**长段议论体作者**（蛊真人段长方差大 · 惊悚乐园段均 52 / 段长跨度
-# 36-72）固定容差系统性误判：mean±30% 把 p95(72) 顶出 band（68 上界）→ 真作者正常长段章 FAIL。
-# 前 6 轮补丁全是 whack-a-mole（B 段长单位 / A 对话段豁免 / C 配额降级 / D 键名兼容 / F split /
-# G long_para）——都在补「容差 band 误判」的个案，未触根。根治：band 从作者样本**经验分位数
-# [p5,p95]** 涌现（覆盖作者真实 90% 章节区间），取代 mean±容差。
+# ── L1a 作者经验分位数 band（北极星①）───────────
+# _apply_style_overrides 用「作者实测 mean ± 固定容差」覆盖 band（段长 mean×0.7-1.3 /
+# 对话占比 mean±0.15）对**长段议论体作者**（蛊真人段长方差大 · 惊悚乐园段均 52 / 段长跨度
+# 36-72）系统性误判：mean±30% 把 p95(72) 顶出 band（68 上界）→ 真作者正常长段章 FAIL。
+# band 从作者样本**经验分位数 [p5,p95]** 涌现（覆盖作者真实 90% 章节区间），取代
+# mean±容差，避免这类高方差作者被误判。
 #
-# 影子并行（守纪律 2）：env QUANTILE_BAND_MODE 控制——
-#   · shadow（默认）：算 quantile band 但**只记录新旧 band 分歧到 stderr · 不改判决**（返回旧
-#     mean±容差 band·零回归）。收敛验证后才放量。
-#   · active：正式用 [p5,p95] 分位数 band。
-#   · off：完全关闭（连 shadow 日志都不打·纯旧行为）。
+# env QUANTILE_BAND_MODE 控制（守纪律 2）——
+#   · active（默认）：正式用 [p5,p95] 分位数 band（与旧 mean±容差 band 取并集·绝不更苛）。
+#   · shadow：只算 quantile band 并把新旧 band 分歧记录到 stderr，判决仍用旧 mean±容差 band。
+#   · off：完全关闭（连 shadow 日志都不打）。
 import os as _os
 
 
 def _quantile_band_mode() -> str:
-    """读 QUANTILE_BAND_MODE（默认 active·2026-05-31 放量·取并集band⊇旧band 绝不更苛）· {shadow,active,off}· 其余按 active。"""
+    """读 QUANTILE_BAND_MODE（默认 active·取并集band⊇旧band 绝不更苛）· {shadow,active,off}· 其余按 active。"""
     m = (_os.environ.get("QUANTILE_BAND_MODE") or "active").strip().lower()
     return m if m in ("shadow", "active", "off") else "active"
 
@@ -404,12 +399,12 @@ def _maybe_quantile_band(
     dim_name: str, stat: dict | None, old_band: dict, *, lo_min: float | None = None,
     hi_max: float | None = None,
 ) -> dict:
-    """L1a band 决策（影子并行 · 北极星①）：有 [p5,p95] 分位数数据时算经验 band，按
+    """L1a band 决策（北极星①）：有 [p5,p95] 分位数数据时算经验 band，按
     QUANTILE_BAND_MODE 决定是否真用——
 
-    · off / 无分位数数据 → 原样返回 old_band（旧 mean±容差·零回归）。
-    · shadow（默认）→ 算新 band·把新旧分歧记 stderr·**返回 old_band**（不改判决）。
-    · active → 返回分位数 band（[p5,p95]·可选钳 lo_min/hi_max 防越界，如对话占比钳 [0,1]）。
+    · off / 无分位数数据 → 原样返回 old_band（旧 mean±容差）。
+    · shadow → 算新 band·把新旧分歧记 stderr·**返回 old_band**（不改判决）。
+    · active（默认） → 返回分位数 band（[p5,p95]·可选钳 lo_min/hi_max 防越界，如对话占比钳 [0,1]）。
 
     分位数 band = [p5, p95]（覆盖作者真实 90% 章节区间·绝不窄于单点 mean±容差能覆盖的真分布）。"""
     mode = _quantile_band_mode()
@@ -426,13 +421,13 @@ def _maybe_quantile_band(
         new_hi = min(hi_max, new_hi)
     o_lo, o_hi = old_band.get("min"), old_band.get("max")
     # 分位数 band 与旧 mean±容差 band 取**并集**（绝不窄于旧 band）。
-    # 放量验证实证(2026-05-31)：蛊真人(高方差重尾)[p5,p95]=[24.5,38.3] 比 mean±30%=[22.5,41.7]
-    # 更窄，直接「替代」会把真作者 4 章顶坏(WARN→FAIL/PASS→WARN)=矫枉过正(违北极星⑤)。
-    # 取并集后 band⊇旧band·重尾作者绝不更苛；宽尾作者(惊悚乐园)仍救回长段(上沿 67.6→71.94)。
+    # 实证：蛊真人(高方差重尾)[p5,p95]=[24.5,38.3] 比 mean±30%=[22.5,41.7] 更窄，直接
+    # 「替代」会把真作者 4 章顶坏(WARN→FAIL/PASS→WARN)=矫枉过正(违北极星⑤)。取并集后
+    # band⊇旧band·重尾作者绝不更苛；宽尾作者(惊悚乐园)仍救回长段(上沿 67.6→71.94)。
     union_lo = min(new_lo, o_lo) if o_lo is not None else new_lo
     union_hi = max(new_hi, o_hi) if o_hi is not None else new_hi
     if mode == "shadow":
-        # 只记录新旧分歧·不改判决（返回旧 band）。便于收敛分析放量决策。
+        # 只记录新旧分歧到 stderr·不改判决（返回旧 band），供分歧比对参考。
         try:
             print(
                 f"[QUANTILE_BAND shadow] {dim_name}: old(mean±容差)=[{o_lo:.4g},{o_hi:.4g}] "
@@ -448,34 +443,35 @@ def _maybe_quantile_band(
 
 def _apply_style_overrides(t: dict, sd: dict, author_dir=None) -> dict:
     t = {k: dict(v) for k, v in t.items()}
-    # 2026-05-29 北极星 P4 [H2-style]：标记「本项目有作者风格档」→ _chk_banned 据此把
-    # 工艺签名禁用词降 WARN（不硬毙作者签名笔法），AI 结构套话仍 FAIL。
+    # 标记「本项目有作者风格档」→ _chk_banned 据此把工艺签名禁用词降 WARN（不硬毙作者
+    # 签名笔法），AI 结构套话仍 FAIL。
     t["_has_author_profile"] = True
     q = sd.get("quantitative", {})
     # 对话占比 mean -> +/- 0.15（归一为 0-1 ratio，对齐 validate_style 内部单位）。
-    # 2026-05-30 北极星⑤：tolerant 读 dialogue_ratio(0-1) | dialogue_ratio_pct(百分比/100)，
-    # 键名/单位双兼容 —— 否则蛊真人(pct 键)override 失效，对话占比用通用 band 苛求真作者。
+    # tolerant 读 dialogue_ratio(0-1) | dialogue_ratio_pct(百分比/100)，键名/单位双兼容
+    # —— 否则蛊真人(pct 键)override 失效，对话占比用通用 band 苛求真作者。
     dr_mean = _extract_author_dialogue_ratio(q)
     if dr_mean is not None:
         _old_dlg_band = {"min": max(0.0, dr_mean - 0.15), "max": min(1.0, dr_mean + 0.15)}
-        # L1a 根治（北极星①）：若 dialogue_ratio 桶含 [p5,p95]（0-1 ratio）经验分位数，用经验 band
-        # 取代 mean±0.15（影子并行·默认 shadow）。钳 [0,1] 防越界。只认 0-1 ratio 键的分位数
-        # （dialogue_ratio_pct 是百分比·单位不一·暂不在分位数路径处理·保 mean±容差 D 修兼容）。
+        # 若 dialogue_ratio 桶含 [p5,p95]（0-1 ratio）经验分位数，用经验 band 取代
+        # mean±0.15（QUANTILE_BAND_MODE 控制生效范围，见函数上方说明）。钳 [0,1] 防越界。
+        # 只认 0-1 ratio 键的分位数（dialogue_ratio_pct 是百分比·单位不一·暂不在分位数
+        # 路径处理·保 mean±容差兼容）。
         _dlg_stat = q.get("dialogue_ratio") if _extract_quantile_pair(
             q.get("dialogue_ratio")) else None
         t["dialogue_ratio"] = _maybe_quantile_band(
             "对话占比", _dlg_stat, _old_dlg_band, lo_min=0.0, hi_max=1.0)
-    # 2026-05-30 北极星⑤ [B-段长单位错配]：段落均长 band 必须用**真实段长数据**推，
-    # 绝不拿句长(sentence_length)冒充段长——句长 ≠ 段长，错配会把段落本就长的作者
-    # (如蛊真人段均 ~30 字)从通用 PASS 顶成 FAIL，"带作者档反更苛"违反原则⑤。
+    # 段落均长 band 必须用**真实段长数据**推，绝不拿句长(sentence_length)冒充段长——
+    # 句长 ≠ 段长，错配会把段落本就长的作者(如蛊真人段均 ~30 字)从通用 PASS 顶成 FAIL，
+    # "带作者档反更苛"违反原则⑤。
     # 取数优先级：① paragraph_length_chars.mean（蒸馏直出的真实段长）
     #             ② chapter_chars.mean / paragraph_count.mean（章字数÷段数 = 真实段均长）
     # 两者都缺 → 段长维度【不做 override】，保持通用 band（14-35，不收窄）。
     para_mean = _extract_author_para_mean(q)
     if para_mean is not None and para_mean > 0:
         _old_para_band = {"min": max(1, para_mean * 0.7), "max": para_mean * 1.3}
-        # L1a 根治（北极星①）：有 paragraph_length_chars 的 [p5,p95] 经验分位数时，用经验 band
-        # 取代 mean±30%（影子并行·默认 shadow 只记录分歧不改判决·active 才放量）。复用现有
+        # 有 paragraph_length_chars 的 [p5,p95] 经验分位数时，用经验 band 取代 mean±30%
+        # （QUANTILE_BAND_MODE 控制生效范围，见函数上方说明）。复用现有
         # _extract_author_para_mean 同源取数链（paragraph_length_chars / paragraph_length），
         # 不新起一套。无分位数（老蒸馏档）→ 退回 mean±容差（零回归）。
         _plc = q.get("paragraph_length_chars")
@@ -486,32 +482,31 @@ def _apply_style_overrides(t: dict, sd: dict, author_dir=None) -> dict:
                 q.get("paragraph_length")) else _plc
         t["para_mean_len"] = _maybe_quantile_band(
             "段落均长", _plc, _old_para_band, lo_min=1.0)
-    # 2026-06-13 北极星⑤ [瓶颈1·段落密度规则冲突]：单句独行 floor 按作者真实单句独行率放宽
-    # （relax-only·绝不更苛）。密实长段作者（《人生长恨》single 0.248）被通用 floor(0.30/0.40)
-    # 顶 FAIL → 输出被反推成一段一句碎句、偏离作者密叙基线。作者实证 single < 通用 floor 则
-    # floor 降到作者基线（取 min·绝不抬高短段作者的 floor）。无数据保通用 floor（零回归）。
+    # 单句独行 floor 按作者真实单句独行率放宽（relax-only·绝不更苛）。密实长段作者
+    # （《人生长恨》single 0.248）被通用 floor(0.30/0.40) 顶 FAIL → 输出被反推成一段一句
+    # 碎句、偏离作者密叙基线。作者实证 single < 通用 floor 则 floor 降到作者基线（取 min·
+    # 绝不抬高短段作者的 floor）。无数据保通用 floor（零回归）。
     sl_ratio = _extract_author_single_line_ratio(q)
     if sl_ratio is not None and sl_ratio > 0:
         _sl_cfg = t.get("single_line_ratio", {})
         _sl_floor = _sl_cfg.get("min")
         if isinstance(_sl_floor, (int, float)) and sl_ratio < _sl_floor:
             t["single_line_ratio"] = {**_sl_cfg, "min": sl_ratio}
-    # 2026-05-30 北极星⑤ [long_para 不受作者档 override]：长段率上限按作者真实长段分布/段均长
-    # 放宽——长段签名作者（蛊真人/惊悚乐园）的 80-120 字段率天然高于通用 2%，固定 2% 会把
-    # 作者签名笔法误判 FAIL。仅当 long_para_per_chapter 用 max_ratio（cluster 视野）才 override；
-    # chapter 视野绝对数 max 不动（短章段少，绝对数本就宽）。有数据才放宽，无数据保通用。
+    # 长段率上限按作者真实长段分布/段均长放宽——长段签名作者（蛊真人/惊悚乐园）的
+    # 80-120 字段率天然高于通用 2%，固定 2% 会把作者签名笔法误判 FAIL。仅当
+    # long_para_per_chapter 用 max_ratio（cluster 视野）才 override；chapter 视野绝对数
+    # max 不动（短章段少，绝对数本就宽）。有数据才放宽，无数据保通用。
     lp_cfg = t.get("long_para_per_chapter", {})
     if "max_ratio" in lp_cfg:
         lp_ratio = _extract_author_long_para_ratio(q, para_mean)
         if lp_ratio is not None and lp_ratio > lp_cfg["max_ratio"]:
             t["long_para_per_chapter"] = {"max_ratio": lp_ratio}
-    # 章字数 mean -> +/- 500。2026-05-30 北极星⑤：tolerant 读 chapter_words | chapter_chars
-    # （同口径多命名）—— 否则蛊真人(chapter_chars 键)override 失效，章字数退回通用 band。
-    # 2026-05-30 北极星① [#1 章字数 band 无 cluster 视野]：CLUSTER_MODE 下 validate 跑在整
-    # cluster draft 上，base band 已是 cluster 级(8000-30000)；此时**绝不能**用作者单章 mean
-    # ±500 塌回单章 band(否则 18846 字真 cluster 必 FAIL)。判 base 下限 ≥ _CLUSTER_WORDS_FLOOR
-    # → cluster 视野：把作者单章 mean 放大成 cluster band 并与健康区间取并集；否则(单章视野)
-    # 仍 ±500（向后兼容）。
+    # 章字数 mean -> +/- 500。tolerant 读 chapter_words | chapter_chars（同口径多命名）——
+    # 否则蛊真人(chapter_chars 键)override 失效，章字数退回通用 band。
+    # CLUSTER_MODE 下 validate 跑在整 cluster draft 上，base band 已是 cluster 级
+    # (8000-30000)；此时**绝不能**用作者单章 mean ±500 塌回单章 band(否则 18846 字真
+    # cluster 必 FAIL)。判 base 下限 ≥ _CLUSTER_WORDS_FLOOR → cluster 视野：把作者单章
+    # mean 放大成 cluster band 并与健康区间取并集；否则(单章视野)仍 ±500。
     cw_mean = _extract_author_chapter_words(q)
     if cw_mean is not None:
         _cw_base = t.get("chapter_words", {})
@@ -526,8 +521,8 @@ def _apply_style_overrides(t: dict, sd: dict, author_dir=None) -> dict:
         t["onomatopoeia_count"]["min"] = int(must["onomatopoeia"])
     if "bracket_settings" in must:
         t["bracket_settings"]["min"] = int(must["bracket_settings"])
-    # 2026-05-29 北极星 P4 [M1-dont] + 2026-05-30 [#2 R3/R5]：单段超长 hard_gate(默认 120 CJK)
-    # 对**长段签名作者**是硬伤——一个 121 字精心长段 = fatal 不可豁免。作者档第一权威（北极星⑤）：
+    # 单段超长 hard_gate(默认 120 CJK) 对**长段签名作者**是硬伤——一个 121 字精心长段 =
+    # fatal 不可豁免。作者档第一权威（北极星⑤）：
     #   ① 作者档【显式声明】max_para_chars → 直接用（作者最权威的明示意图）；
     #   ② 否则作者档**实证有长段签名**（gt80/gt50 高 或 段均 ≥40，如惊悚乐园 mean 52/gt50 0.44/
     #      真作者非对话段 130-245 字）→ 按真实分布驱动放宽天花板（_extract_author_max_para_chars）。
@@ -547,13 +542,14 @@ def _apply_style_overrides(t: dict, sd: dict, author_dir=None) -> dict:
                 "hard_gate": new_hard,
                 "exception_per_chapter": _exc,
             }
-    # ── L2-1 PID 反馈微调（北极星⑤ · 2026-05-30）──────────────────────
+    # ── L2-1 PID 反馈微调（北极星⑤）──────────────────────
     # 至此作者档【前馈 override】已全部施加（L1a 分位数 band + 各 mean±容差 + cluster band）。
     # PID 反馈层【最后】叠加：只动 4 个被控连续 advisory 阈值（para_mean_len/dialogue_ratio/
     # long_para_per_chapter/quota_per_word），把真作者 FPR 驱动到 0。前馈优先级 > 反馈
-    # （前馈先定 band，PID 只在其基础上做保守微调）。env PID_THRESHOLD_MODE 默认 active（回测已证 FPR 收敛）；
-    # apply_pid_delta 直接返回原值（零回归·回测验证前不生效）。物理隔离：tuner 白名单只读写 4 键，
-    # 15 个 HARD_GATE_CODES 不在本回路。author_dir=None（旧调用方/回测自管 Δ）→ 不动。
+    # （前馈先定 band，PID 只在其基础上做保守微调）。env PID_THRESHOLD_MODE 默认 active
+    # （回测已证 FPR 收敛）；apply_pid_delta 对未接入回测校准的调用方直接返回原值（零回归）。
+    # 物理隔离：tuner 白名单只读写 4 键，15 个 HARD_GATE_CODES 不在本回路。author_dir=None
+    # （回测自管 Δ 等场景）→ 不动。
     if author_dir is not None:
         try:
             import pid_threshold_tuner as _pid  # noqa: E402
@@ -634,8 +630,8 @@ def _word_hit_check(text: str, hits: dict, name: str, target: str,
 
 def _chk_banned(text: str, p: dict, t: dict) -> CheckResult:
     hits = p.get("banned_word_hits", {}) or {}
-    # 2026-05-29 北极星 P4 [H2-style]：有作者风格档时分级——AI 结构套话仍 FAIL，
-    # 工艺签名词降 WARN（不硬毙作者签名笔法，复刻作者优先于通用反 AI 腔；守原则5）。
+    # 有作者风格档时分级——AI 结构套话仍 FAIL，工艺签名词降 WARN（不硬毙作者签名笔法，
+    # 复刻作者优先于通用反 AI 腔；守原则5）。
     if t.get("_has_author_profile") and hits:
         ai_hits = {w: c for w, c in hits.items() if w in AI_STRUCTURAL_BANNED}
         craft_hits = {w: c for w, c in hits.items() if w not in AI_STRUCTURAL_BANNED}
@@ -655,11 +651,10 @@ def _chk_quota(text: str, p: dict, t: dict) -> CheckResult:
     hits, lim = p.get("quota_word_hits", {}), t["quota_per_word"]["max"]
     if not hits:
         return CheckResult("配额词", "PASS", "全部达标", f"各<={lim}")
-    # 2026-05-30 北极星⑤ [C-配额词作者档降级]：对齐 _chk_banned 的作者档分级逻辑——
-    # 有作者风格档时，配额词里的**工艺签名类**（顿时/微微/似乎/仿佛 = CRAFT_SIGNATURE_QUOTA_WORDS）
-    # 可能是该作者的签名笔法，超额降 WARN（advisory 可豁免）而非 FAIL；
-    # 非签名类配额词（突然/下一刻/下意识/莫名 = 节奏转场堆砌词）超额仍 FAIL。
-    # 无作者档 → 全部超额即 FAIL（旧行为，向后兼容）。
+    # 对齐 _chk_banned 的作者档分级逻辑——有作者风格档时，配额词里的**工艺签名类**
+    # （顿时/微微/似乎/仿佛 = CRAFT_SIGNATURE_QUOTA_WORDS）可能是该作者的签名笔法，
+    # 超额降 WARN（advisory 可豁免）而非 FAIL；非签名类配额词（突然/下一刻/下意识/莫名 =
+    # 节奏转场堆砌词）超额仍 FAIL。无作者档 → 全部超额即 FAIL。
     has_profile = bool(t.get("_has_author_profile"))
     over_hard, over_craft, lines = [], [], []
     for w, c in hits.items():
@@ -695,14 +690,13 @@ def _chk_comma_ratio(p: dict, t: dict) -> CheckResult:
     return _range_check("逗句比", v, lo, hi, f"{v:.2f}", f"目标 {_rng(lo, hi)}", wm=0.3)
 
 def _chk_words(text: str, p: dict, t: dict) -> CheckResult:
-    # v18：字数口径统一走 cio.count_words()（非空白字符数，含标点）——
-    # 与 save-state / git commit / build_manifest 全系统一致。
-    # 旧实现用 analyze_text 的 total_chinese_chars（纯汉字），口径不一致已弃用。
+    # 字数口径统一走 cio.count_words()（非空白字符数，含标点）——与 save-state / git
+    # commit / build_manifest 全系统一致。
     v, lo, hi = cio.count_words(text), t["chapter_words"]["min"], t["chapter_words"]["max"]
     return _range_check("章节字数", v, lo, hi, str(v), f"目标 {int(lo)}-{int(hi)}", wm=200)
 
 
-# ── v23.12 段长硬约束（基于 2026-05-21 网文段长调研 12 来源互证）──
+# ── 段长硬约束（基于网文段长调研 12 来源互证）──
 
 _CJK_RE = re.compile(r"[一-鿿]")
 
@@ -710,46 +704,36 @@ _CJK_RE = re.compile(r"[一-鿿]")
 _Q_OPEN_CP = ("“", "「", "『")   # “ 「 『
 _Q_CLOSE_CP = ("”", "」", "』")  # ” 」 』
 
-# 2026-05-31 北极星⑤ [对话主导段豁免 · 5 缺口①②④]：连续 5 轮真作者验证（蛊真人 + 惊悚乐园
-# 逐章 strict）暴露旧「说话人前缀对话段」豁免（前缀 ≤20 CJK + 冒号收尾 + 段尾闭引号）漏 3 类
-# **真作者对话段**——全部 <300 绝对上限·非真失控·是矫枉过正：
-#   ① 长动作前缀对话（蛊 ch15 段34「花酒行者…精芒频闪：“…”」前缀 26 CJK / 段38 前缀 35 /
-#      ch18 段9 前缀 37）：旧 20 CJK 前缀上限把真作者长动作铺垫+对话当非对话 FAIL。
-#   ② 段首对话署名后置（蛊 ch28 段7「“对话…”…学堂家老寒声质问。」对话在段首·署名落段尾·
-#      段尾非闭引号）：旧逻辑强制段尾闭引号 → 漏接。
-#   ④ 跨段未闭合引号连续对话（惊悚 ch128 段31「“第一…第二…」开引号闭引落下段末·243 字 /
-#      段49 234 字）：人物长独白被作者拆视觉段·段内开引号未闭合跨段·旧 _is_full_dialogue_para
-#      当非对话。
-# 统一思路（不限前缀长度 / 不论署名前后）：**对话主导段**——段内成对引号包裹内容占段长比例
-# ≥ _DIALOGUE_DOMINANT_RATIO（50%）→ 对话主导·豁免 hard_gate（覆盖①②）；**跨段对话**——
-# 段首是开引号但段内有未闭合开引号（对话跨视觉段延续）→ 豁免（覆盖④）。
+# 对话不可中切是叙事常态。仅按「说话人前缀 ≤20 CJK + 冒号收尾 + 段尾闭引号」识别对话段
+# 会漏掉几类真实作者对话段（全部 <300 绝对上限·非真失控）：
+#   · 长动作前缀对话（说话人动作描写较长才接对话，前缀不止 20 CJK）；
+#   · 段首对话、署名后置在段尾（段尾不是闭引号）；
+#   · 跨段未闭合引号的连续对话（人物长独白被拆成多个视觉段，开引号在上段、闭引号落在下段）。
+# 统一判据（不限前缀长度 / 不论署名前后）：**对话主导段**——段内成对引号包裹内容占段长
+# 比例 ≥ _DIALOGUE_DOMINANT_RATIO（50%）→ 对话主导·豁免 hard_gate；**跨段对话**——段首
+# 是开引号但段内有未闭合开引号（对话跨视觉段延续）→ 豁免。
 # 守纪律 a：引号占比低（< 50%）且非跨段开头的纯叙述段仍是应受门禁的真长叙述段·不误豁免。
 _DIALOGUE_DOMINANT_RATIO = 0.50             # 成对引号包裹内容 ≥ 此比例 = 对话主导段（豁免）
 
-# 2026-05-31 北极星⑤ [paratext 剔除 · 5 缺口③]：作者「(ps:…)」/「（ps：…）」排版致歉/打赏
-# 后记是 paratext（非正文叙述），实测出现在**章尾**（蛊真人 96 个/250 章 per-chapter 文件
-# marker 位置 pos_ratio ≥0.97），marker 段 + 其后续段构成 trailing 后记块（蛊 ch18 段102
-# 「（ps：…」起，段103-105 续写后记·段104「我幻想…“蛊真人”id…」121 字）。这些段被
-# _chk_para_max 当正文做段长 hard_gate 检测 = 矫枉过正。修：检出 paratext marker 段 + 其后
-# 全部段（trailing 后记块）→ 从段长 hard_gate 剔除（不参与 over_hard 判定）。
+# 作者「(ps:…)」/「（ps：…）」排版致歉/打赏后记是 paratext（非正文叙述），实测出现在
+# **章尾**（marker 段位置 pos_ratio ≥0.97），marker 段 + 其后续段构成 trailing 后记块。
+# 这些段若被 _chk_para_max 当正文做段长 hard_gate 检测会误判。检出 paratext marker 段 +
+# 其后全部段（trailing 后记块）→ 从段长 hard_gate 剔除（不参与 over_hard 判定）。
 # 守纪律：marker 实证只在章尾·正文段（无 marker / 在 marker 之前）一律照常检测·绝不漏检正文。
 _PARATEXT_MARK_RE = re.compile(r"^[（(]\s*[pPｐＰ][sSｓＳ][：:\s．。]")
 
-# 2026-05-31 北极星⑤ [天花板覆盖真实长段 · 5 缺口⑤]：长段签名作者天花板旧估 mean×4
-#（惊悚 mean_chars 52 → 208）略低于真实开篇 info-dump 长段（惊悚 ch1 段32=209 / 段34=212·
-# 纯叙述游戏设定 info-dump）→ 209/212 踩线 FAIL = 矫枉过正。修：长段签名作者天花板取
-# max(mean×4, _SIGNATURE_CEILING_FLOOR)，确保覆盖作者真实长段·但仍钳 ≤300 绝对上限（绝不破·
-# >300 纯叙述仍真失控 hard_gate）。实证：250 floor 覆盖惊悚 209/212 真长段·而其唯一 >300
-# 真非对话段（ch65 段9=334 / ratio 0.14）仍被绝对上限拦（test_K_true_runaway 守墙）。
+# 长段签名作者天花板仅用 mean×4 会略低于真实开篇 info-dump 长段，把这类段落误判 FAIL。
+# 长段签名作者天花板取 max(mean×4, _SIGNATURE_CEILING_FLOOR)，确保覆盖作者真实长段·
+# 但仍钳 ≤300 绝对上限（绝不破·>300 纯叙述仍真失控 hard_gate）。
 _SIGNATURE_CEILING_FLOOR = 250              # 长段签名作者天花板下限（覆盖真实开篇 info-dump 长段·钳 ≤300）
 
 
-# 2026-05-30 北极星① [#2 混合格式欠切]：\n\n 切后某段仍是**混合格式巨段**（内含多个单 \n
-# 的章内分段被 \n\n 切漏）时，对该段再用单 \n 细切的判别阈值。两条件**同时**成立才细切：
+# \n\n 切后某段仍是**混合格式巨段**（内含多个单 \n 的章内分段被 \n\n 切漏）时，对该段
+# 再用单 \n 细切的判别阈值。两条件**同时**成立才细切：
 #   · 段 CJK 字数 > _MIXED_SEG_MIN_CJK（巨段·绝非单条正常段）
 #   · 段内含 ≥ _MIXED_SEG_MIN_NL 个单 \n（章内本就用单 \n 分段·被 \n\n 切漏）
 # 实证锚（120 章扫描）：纯 \n\n 作者（蛊真人）最大 \n\n-段仅 84 字 / 0 个 >200字且≥2内\n 段
-# → 永不触发细切（零回归）；惊悚多章 \n\n join 的合并段 2642-3580 字 / 40-66 内 \n → 触发细切。
+# → 永不触发细切；惊悚多章 \n\n join 的合并段 2642-3580 字 / 40-66 内 \n → 触发细切。
 # 阈值 200/2 把「单条正常长段（含 1 个软换行如诗行）」与「整章被 \n\n 切漏的混合巨段」分开。
 _MIXED_SEG_MIN_CJK = 200
 _MIXED_SEG_MIN_NL = 2
@@ -758,26 +742,25 @@ _MIXED_SEG_MIN_NL = 2
 def _split_paras(text: str) -> list[str]:
     """tolerant 段落切分（与 style_analyzer.split_paragraphs 对齐）。
 
-    2026-05-30 北极星⑤ [段落 split bug]：旧实现一律 `text.split("\\n\\n")` 切段，但
     很多真作者原文（如惊悚乐园第025章）**整章无双换行 \\n\\n**——只用单 \\n 分段 +
-    U+3000 缩进。此时 `\\n\\n` 切出 0 个分隔 → 整章被当成 1 个巨段 → 段落均长/单句
-    独行占比/单段超长/长段计数全部错算（单句独行误成 0% FAIL，单段超长既可能误触发
-    也可能误掩盖 hard_gate）。而 analyze_text 走的 style_analyzer.split_paragraphs
-    一律按单 \\n 切——同一脚本两套段定义，自相矛盾。
+    U+3000 缩进。若只按 `\\n\\n` 切段，这类整章会被当成 1 个巨段，段落均长/单句独行
+    占比/单段超长/长段计数全部错算（单句独行误成 0% FAIL，单段超长既可能误触发也可能
+    误掩盖 hard_gate）。而 analyze_text 走的 style_analyzer.split_paragraphs 一律按单
+    \\n 切——两套切法必须对齐，否则同一脚本内自相矛盾。
 
-    修：**有 \\n\\n 用 \\n\\n 切（保持双换行格式作者不变，如蛊真人 56 个 \\n\\n → 57 段）；
+    做法：**有 \\n\\n 用 \\n\\n 切（保持双换行格式作者不变，如蛊真人 56 个 \\n\\n → 57 段）；
     无 \\n\\n 退回单 \\n 切（与 style_analyzer 对齐，惊悚乐园 → 59 段）**。
     去空段 + 去无 CJK 段（与 style_analyzer.split_paragraphs 一致：count_chinese>0）。
 
-    2026-05-30 北极星① [#2 混合格式欠切]：cluster draft 常由**多章合并**或 writer 混合
-    输出而成——**章间 \\n\\n + 章内单 \\n**（如惊悚多章 \\n\\n join：每章内部只用单 \\n
-    分段，章与章之间 \\n\\n）。此时纯按 \\n\\n 切 → **每章塌成 1 个巨段**（实测 6 章合并
-    切出 6 段 2642-3580 字）→ 全超 300 绝对上限 → 误触发 STYLE_单段超长 hard_gate。
-    修：\\n\\n 切后，对**仍是混合格式巨段**（CJK > _MIXED_SEG_MIN_CJK 且含 ≥
-    _MIXED_SEG_MIN_NL 个单 \\n）的段**再用单 \\n 细切**——把章内被 \\n\\n 切漏的单 \\n
-    分段正确拆开。守纪律：纯 \\n\\n（蛊真人·\\n\\n-段最大 84 字·从不触发细切）不变 ·
-    纯单 \\n（惊悚单章·无 \\n\\n 走 fallback）不变 · 「单条正常长段含 1 个软换行（如
-    上联\\n下联）」< 200 字 / 仅 1 个 \\n → 不被细切（不破坏 \\n\\n 作者既有正确分段）。
+    cluster draft 常由**多章合并**或 writer 混合输出而成——**章间 \\n\\n + 章内单 \\n**
+    （如惊悚多章 \\n\\n join：每章内部只用单 \\n 分段，章与章之间 \\n\\n）。此时纯按
+    \\n\\n 切 → **每章塌成 1 个巨段**（实测 6 章合并切出 6 段 2642-3580 字）→ 全超 300
+    绝对上限 → 误触发 STYLE_单段超长 hard_gate。因此 \\n\\n 切后，对**仍是混合格式
+    巨段**（CJK > _MIXED_SEG_MIN_CJK 且含 ≥ _MIXED_SEG_MIN_NL 个单 \\n）的段**再用单
+    \\n 细切**——把章内被 \\n\\n 切漏的单 \\n 分段正确拆开。守纪律：纯 \\n\\n（蛊真人·
+    \\n\\n-段最大 84 字·从不触发细切）不变 · 纯单 \\n（惊悚单章·无 \\n\\n 走 fallback）
+    不变 · 「单条正常长段含 1 个软换行（如上联\\n下联）」< 200 字 / 仅 1 个 \\n → 不被
+    细切（不破坏 \\n\\n 作者既有正确分段）。
     """
     if "\n\n" in text:
         out: list[str] = []
@@ -807,7 +790,7 @@ def _quote_pair_cjk_coverage(s: str) -> tuple[int, bool]:
 
     codepoint 状态机：遇开引号(_Q_OPEN_CP)进引号态·遇**同族**闭引号(_Q_CLOSE_CP)出引号态并
     把该对引号 [open..close] 内 CJK 计入 covered。扫完仍在引号态 → 末尾有未闭合开引号
-    （= 对话跨视觉段延续·北极星⑤ 5 缺口④）。守纪律：只计「成对包裹」内容·裸开引号不计 covered。
+    （= 对话跨视觉段延续·北极星⑤）。守纪律：只计「成对包裹」内容·裸开引号不计 covered。
     """
     covered = 0
     in_q = False
@@ -827,17 +810,16 @@ def _quote_pair_cjk_coverage(s: str) -> tuple[int, bool]:
 
 
 def _is_full_dialogue_para(para: str) -> bool:
-    """整段是否为**对话主导段**——对话不可中切是叙事常态（北极星⑤ [对话段超长豁免]），此类超长段
-    豁免 STYLE_单段超长 hard_gate（降 advisory）。识别三类（2026-05-31 5 缺口①②④统一重构）：
+    """整段是否为**对话主导段**——对话不可中切是叙事常态（北极星⑤），此类超长段
+    豁免 STYLE_单段超长 hard_gate（降 advisory）。识别三类：
 
       ① 纯引号段：整段被中文弯引号(U+201C…U+201D)或方头引号(「…」/『…』)成对包裹。
-      ② **对话主导段**（统一覆盖旧「说话人前缀对话」+ 长动作前缀 + 署名后置）：段内**成对引号
-         包裹内容**的 CJK 占整段 CJK ≥ _DIALOGUE_DOMINANT_RATIO（50%）→ 引语是段落主体即对话主导·
-         **不限前缀长度 / 不论署名前后 / 段尾不必闭引号**。覆盖：长动作前缀对话（蛊 ch15 段34
-         「花酒行者…精芒频闪：“…”」前缀 26 CJK·引号占 79%）·段首对话署名后置（蛊 ch28 段7
-         「“…”…学堂家老寒声质问。」引号占 95%·段尾非闭引号）。
-      ③ **跨段对话延续**：段首是开引号 且 段内有**未闭合开引号**（闭引号落在下一视觉段）→ 人物长
-         独白被作者拆视觉段（惊悚 ch128 段31「“第一…第二…」243 字·闭引落下段末）→ 豁免。
+      ② **对话主导段**：段内**成对引号包裹内容**的 CJK 占整段 CJK ≥
+         _DIALOGUE_DOMINANT_RATIO（50%）→ 引语是段落主体即对话主导·**不限前缀长度 /
+         不论署名前后 / 段尾不必闭引号**。覆盖长动作前缀对话（说话人动作描写较长才接
+         引号）、段首对话署名后置在段尾（段尾非闭引号）两类形态。
+      ③ **跨段对话延续**：段首是开引号 且 段内有**未闭合开引号**（闭引号落在下一视觉段）→
+         人物长独白被作者拆成多个视觉段，闭引落在下一段 → 豁免。
 
     用 codepoint 严格判左右引号成对。守纪律 a「只认真对话不误豁免叙述」：引号占比 < 50% 且非
     跨段开头的纯叙述段（无引号 / 引号占比低）**仍非对话主导**·照常受 hard_gate（真长叙述/info-dump
@@ -867,19 +849,18 @@ def _chk_para_max(text: str, p: dict, t: dict) -> CheckResult:
     超 hard_gate 阈值 = FAIL（audit_hub 标 STYLE_单段超长 = HARD_GATE）。
     超 warn 阈值 = WARN。
 
-    2026-05-30 北极星⑤ [A-对话段超长豁免]：**完整对话段**（整段被中文弯/方头引号成对
-    包裹）超 hard_gate 仅降 WARN（advisory 可豁免）——对话不可中切是叙事常态，唯一
-    hard_gate 触发在对话段是矫枉过正。**非对话**超长段仍按原逻辑 FAIL（绝不放过真超长）。"""
+    **完整对话段**（整段被中文弯/方头引号成对包裹）超 hard_gate 仅降 WARN（advisory
+    可豁免）——对话不可中切是叙事常态，唯一 hard_gate 触发在对话段是矫枉过正。
+    **非对话**超长段仍 FAIL（绝不放过真超长）。"""
     cfg = t.get("para_max_chars", {"warn": 80, "hard_gate": 120, "exception_per_chapter": 1})
     warn_th, hard_th, ex = cfg["warn"], cfg["hard_gate"], cfg.get("exception_per_chapter", 1)
     para_text_list = _split_paras(text)  # tolerant 切段（无 \n\n 退单 \n · 见 _split_paras）
     lens = [len(_CJK_RE.findall(p_)) for p_ in para_text_list]
     if not lens:
         return CheckResult("单段超长", "PASS", "无段落", f"目标 ≤{warn_th} (hard_gate {hard_th})")
-    # 2026-05-31 北极星⑤ [#3 paratext 剔除]：作者「(ps:…)」/「（ps：…）」后记非正文 → 从段长
-    # hard_gate 剔除。实证 marker 只在章尾·marker 段 + 其后续段构成 trailing 后记块（蛊 ch18
-    # 段102「（ps：」起 → 段102-105 全是后记·段104「我幻想…」121 字被误检测）。守纪律：正文段
-    # （marker 之前）一律照常检测·绝不漏检正文。1-based 段号集合。
+    # 作者「(ps:…)」/「（ps：…）」后记非正文 → 从段长 hard_gate 剔除。实证 marker 只在
+    # 章尾·marker 段 + 其后续段构成 trailing 后记块。守纪律：正文段（marker 之前）一律
+    # 照常检测·绝不漏检正文。1-based 段号集合。
     paratext_start = None
     for i, p_ in enumerate(para_text_list):
         if _PARATEXT_MARK_RE.match(p_.lstrip()):
@@ -908,12 +889,12 @@ def _chk_para_max(text: str, p: dict, t: dict) -> CheckResult:
             ls = _find_lines(text, first_line)
             if ls:
                 fail_lines.extend(ls[:1])
-    # 2026-05-30 北极星⑤ [#2 绝对上限·守纪律 c]：非对话段超 **绝对上限**（_PARA_MAX_HARD_ABS_CAP
-    # =300 CJK）= 真失控叙述段（info-dump 失控/穿帮），**无论作者档放宽到多少、无论例外名额**
-    # 都 FAIL——绝对上限是防真失控的最后硬墙，单条 500 字裸叙述段不被「每章 ≤1 例外」放过。
-    # 绝对上限 300 墙对**所有段**生效(含 paratext·闭合 verify 提的 (ps:) 注入绕墙隐患)——
-    # paratext 只豁免天花板 hard_th 例外判定(后记长正常)·但任何 >300 非对话主导段一律真失控
-    # hard_gate(防把 350 字纯叙述伪装成后记绕过 300 墙)。对话主导段仍豁免(不可中切·不进 runaway)。
+    # 非对话段超 **绝对上限**（_PARA_MAX_HARD_ABS_CAP=300 CJK）= 真失控叙述段（info-dump
+    # 失控/穿帮），**无论作者档放宽到多少、无论例外名额**都 FAIL——绝对上限是防真失控的
+    # 最后硬墙，单条 500 字裸叙述段不被「每章 ≤1 例外」放过。绝对上限 300 墙对**所有段**
+    # 生效(含 paratext，防 (ps:) 注入绕墙)——paratext 只豁免天花板 hard_th 例外判定(后记
+    # 长正常)·但任何 >300 非对话主导段一律真失控 hard_gate(防把 350 字纯叙述伪装成后记
+    # 绕过 300 墙)。对话主导段仍豁免(不可中切·不进 runaway)。
     runaway = [(i + 1, n) for i, n in enumerate(lens)
                if n > _PARA_MAX_HARD_ABS_CAP
                and not _is_full_dialogue_para(para_text_list[i])]
@@ -972,7 +953,7 @@ def _chk_single_line_ratio(text: str, p: dict, t: dict) -> CheckResult:
         end_count = sum(p_.count(c) for c in "。！？")
         cjk_len = len(_CJK_RE.findall(p_))
         # 对话段 (含「」或""引号且短) 也算「独行」
-        is_dialog_short = ('"' in p_ or '“' in p_ or '”' in p_ or '「' in p_) and cjk_len <= 50  # 2026-05-30 补弯引号
+        is_dialog_short = ('"' in p_ or '“' in p_ or '”' in p_ or '「' in p_) and cjk_len <= 50
         if end_count <= 1 and (cjk_len <= 30 or is_dialog_short):
             single += 1
     ratio = single / len(paras)
@@ -988,8 +969,7 @@ def _chk_single_line_ratio(text: str, p: dict, t: dict) -> CheckResult:
 
 def _chk_long_para_count(text: str, p: dict, t: dict) -> CheckResult:
     """长段计数：80-120 字段每章 ≤ target。
-    v2 cluster 化（2026-05-28）：cluster 视野改比例（max_ratio = 0.02 段超 80 字），
-    绝对数仅 chapter 视野用。"""
+    cluster 视野改比例（max_ratio = 0.02 段超 80 字），绝对数仅 chapter 视野用。"""
     cfg = t.get("long_para_per_chapter", {"max": 3})
     pm = t.get("para_max_chars", {"warn": 80, "hard_gate": 120})
     warn_th, hard_th = pm["warn"], pm["hard_gate"]
@@ -997,7 +977,7 @@ def _chk_long_para_count(text: str, p: dict, t: dict) -> CheckResult:
     long_count = sum(1 for n in lens if warn_th < n <= hard_th)
     total_paras = len(lens) or 1
 
-    # v2 cluster 化：max_ratio 优先（cluster 视野）/ max 绝对数（chapter 视野）
+    # max_ratio 优先（cluster 视野）/ max 绝对数（chapter 视野）
     if "max_ratio" in cfg:
         max_ratio = cfg["max_ratio"]
         max_count = int(total_paras * max_ratio)
@@ -1017,7 +997,7 @@ def _chk_long_para_count(text: str, p: dict, t: dict) -> CheckResult:
     return CheckResult("长段计数", "FAIL", vs, ts)
 
 
-# ── D9 滤镜词密度（deep POV · 2026-05-31 · 全 advisory · 非 hard_gate）──────────
+# ── D9 滤镜词密度（deep POV · 全 advisory · 非 hard_gate）──────────
 # 「滤镜词」(filter words)：把读者与场景之间隔一层主角感知动词（想/觉得/感到/看到/听到…）。
 # 删掉滤镜词、直写被感知之物 = deep POV（更贴近网文「沉浸式爽感」笔法）。本维度**纯顾问**：
 #   · 命中率超阈值 → advisory「可删滤镜词贴近 deep POV」（写作 agent 可豁免）；
@@ -1103,10 +1083,9 @@ def _chk_filter_words_d9(text: str, p: dict, t: dict) -> CheckResult | None:
 # ── 主校验 & 报告 ────────────────────────────────────────────
 
 def validate_style(text: str, thresholds: dict) -> list[CheckResult]:
-    """对文本执行 15 项风格校验，返回 CheckResult 列表。
-    v23.12 新增 3 项段长检查（单段超长 hard_gate / 单句独行 / 长段计数）。
-    2026-05-31 新增 D9 滤镜词密度 advisory（默认 shadow → 不产出检查项·零回归；
-    D9_FILTER_WORDS_MODE=advisory 才产出 PASS/WARN·永不 FAIL·非 hard_gate）。"""
+    """对文本执行 15 项风格校验，返回 CheckResult 列表。包含 3 项段长检查（单段超长
+    hard_gate / 单句独行 / 长段计数）与 D9 滤镜词密度 advisory（默认 shadow → 不产出
+    检查项；D9_FILTER_WORDS_MODE=advisory 才产出 PASS/WARN·永不 FAIL·非 hard_gate）。"""
     p = analyze_text(text)
     results = [
         _chk_dialogue(p, thresholds),    _chk_para_len(p, thresholds),
@@ -1115,7 +1094,7 @@ def validate_style(text: str, thresholds: dict) -> list[CheckResult]:
         _chk_banned(text, p, thresholds),_chk_ai_tags(text, p, thresholds),
         _chk_quota(text, p, thresholds), _chk_brackets(p, thresholds),
         _chk_comma_ratio(p, thresholds), _chk_words(text, p, thresholds),
-        # v23.12 段长 3 项
+        # 段长 3 项
         _chk_para_max(text, p, thresholds),
         _chk_single_line_ratio(text, p, thresholds),
         _chk_long_para_count(text, p, thresholds),
@@ -1184,7 +1163,7 @@ def main() -> None:
     if not text.strip():
         print("[FATAL] 文件内容为空", file=sys.stderr); sys.exit(2)
 
-    # v2 cluster 化（2026-05-28）：CLUSTER_MODE env=1 时用 CLUSTER_THRESHOLDS（比例化）
+    # CLUSTER_MODE env=1 时用 CLUSTER_THRESHOLDS（比例化）
     import os as _os
     _cluster_mode = _os.environ.get("CLUSTER_MODE") == "1"
     if _cluster_mode:

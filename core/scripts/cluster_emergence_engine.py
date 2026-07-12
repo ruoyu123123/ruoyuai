@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cluster_emergence_engine.py — v24 事件簇 fluid 涌现引擎
+"""cluster_emergence_engine.py — 事件簇 fluid 涌现引擎
 
 每个 cluster 完成时调用，基于：
 - 当前 cluster 完成后的 世界状态.json（factions_state + consequence_tracker + active_npc_threads）
@@ -19,7 +19,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# P2 透明化（2026-07-06 · 借鉴 PlotPilot storyline DAG/candidate scoring）：
+# 透明化（借鉴 PlotPilot storyline DAG/candidate scoring）：
 # 收敛子分唯一源 + 状态 delta 只读预演 + ME 依赖图健康校验。
 # 本文件已逼近 1000 行软上限，判断力全部下沉在 emergence_transparency.py。
 import emergence_transparency
@@ -227,11 +227,10 @@ def _resolve_cur_vol(world_state: dict, character_arc: dict, default_vol: int = 
 
 
 def _dead_actor_names(project_root) -> set:
-    """🔴 2026-06-27 P0-03 helper：读 character_arc_state.json 找已死/牺牲角色名集合。
+    """读 character_arc_state.json 找已死/牺牲角色名集合。
 
-    用途：emergence engine 在 find_remaining_mes 后剔除 ME 文本含死角色名的项（如李暴躁牺牲后
-    ME-V1-02「李暴躁砸新手村神坛」应被剔除）。源数据缺失/字段不标准时返回空集合，
-    不制造额外候选。
+    用途：emergence engine 在 find_remaining_mes 后剔除 ME 文本含死角色名的项（如某角色牺牲后，
+    提及该角色仍存活行动的 ME 应被剔除）。源数据缺失/字段不标准时返回空集合，不制造额外候选。
     """
     if not project_root:
         return set()
@@ -260,7 +259,7 @@ def _dead_actor_names(project_root) -> set:
 
 
 def _open_questions_keywords(project_root, after_num: int) -> set:
-    """🔴 2026-06-29 戏剧问题账本(PITQ/MDQ) 软牵引输入：累计到 after_num 的 open_questions
+    """戏剧问题账本(PITQ/MDQ) 软牵引输入：累计到 after_num 的 open_questions
     (raised−answered) 的问题文本 → 关键词集合（喂 _score_one_me 维度7·让候选倾向推进悬置问题）。
 
     无 戏剧问题账本.json / 无 open → 空集合；该信号只参与候选软排序，不替代用户走向选择。
@@ -323,8 +322,6 @@ def _score_one_me(
             reasons.append(f"vol{cur_vol} 连续（与当前推进卷一致）")
 
     # 2. 前置链：ME 的 prerequisites/parent_me 全部指向已完成 ME → +25·有未完成 → 硬剔除
-    # 🔴 2026-06-27 P0-01 修：原读 me.get("parent_me") 但 producer (gen_creative) 实写 prerequisites
-    #   字段错配·+25 bonus dead code 永不触发·V1-02 等 ME 被错跳的根因之一。
     parents = _resolve_parents(me)
     if parents and completed_me_ids is not None:
         unmet = [p for p in parents if p not in completed_me_ids]
@@ -375,19 +372,19 @@ def _score_one_me(
             reasons.append(f"涉及极值势力「{hit}」（power/stress 处于临界 → 张力点）")
             break  # 单 ME 只加一次 faction 分，避免叠爆
 
-    # 6. 大势收敛（2026-05-29 北极星 P2 [H2-trend]）：ME 推进本卷「未达成 key_milestone」→ 朝卷终点收敛。
+    # 6. 大势收敛：ME 推进本卷「未达成 key_milestone」→ 朝卷终点收敛。
     #    与涟漪/arc 同量级（≤35），**只影响 top-3 候选排序展示，绝不自动锁定**（守原则2+5：
     #    最终仍由用户走向卡选，不让收敛硬性盖过涟漪涌现）。
     if milestone_kw and me_kw:
-        # 2026-05-29 复审 W2：per-overlap 12→8 与涟漪(8/重叠)同量级，使「不盖过涟漪」名副其实。
-        # 2026-07-06 P2 透明化：公式唯一实现在 emergence_transparency.convergence_subscore
+        # per-overlap 权重 8，与涟漪(8/重叠)同量级，确保「不盖过涟漪」真实生效。
+        # 公式唯一实现在 emergence_transparency.convergence_subscore
         # （decision_basis.convergence_score 与本维度加分同源同值·绝不双口径）。
         conv_score, conv_hits = emergence_transparency.convergence_subscore(me_kw, milestone_kw)
         if conv_score:
             score += conv_score
             reasons.append(f"大势收敛：推进未达成卷里程碑（重叠：{','.join(conv_hits[:4])}）")
 
-    # 7. 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ) 软牵引：ME 文本与「当前悬而未决核心问题」关键词重叠
+    # 7. 戏剧问题账本(PITQ/MDQ) 软牵引：ME 文本与「当前悬而未决核心问题」关键词重叠
     #    → 让候选倾向推进/回答悬置问题（读者想知道答案）。**软维度·不硬筛**（仿涟漪呼应·封顶 24·
     #    与涟漪/收敛同量级·绝不盖过其它信号·绝不 -100 硬剔除）·用户走向卡终裁（守北极星③大势已定）。
     if open_questions_kw and me_kw:
@@ -418,7 +415,7 @@ def _decision_basis_for_me(
     This is a display/traceability contract for the single pause point, not a
     second selector.
 
-    2026-07-06 P2 透明化扩展（借鉴 PlotPilot candidate scoring）：
+    透明化扩展（借鉴 PlotPilot candidate scoring）：
     - convergence_score：dim-6 大势收敛子分独立数值（与 _score_one_me 内加分同源，
       公式唯一实现在 emergence_transparency）——用户能看到这张卡对卷收敛的贡献。
     - state_delta_preview：候选选中后会触发的涟漪规则只读预演（绝不写库）。
@@ -497,7 +494,7 @@ def select_candidate_mes(
 
     scored = []
     for idx, me in enumerate(remaining_mes):
-        # 2026-05-29 复审修复（L8）：循环首行加 isinstance 守卫 · 非 dict ME 跳过不打分（防 _score_one_me 内裸 .get() 崩）。
+        # 循环首行加 isinstance 守卫 · 非 dict ME 跳过不打分（防 _score_one_me 内裸 .get() 崩）。
         if not isinstance(me, dict):
             continue
         score, reasons = _score_one_me(
@@ -506,7 +503,7 @@ def select_candidate_mes(
         )
         scored.append((score, idx, me, reasons))
 
-    # 2026-05-29 复审修复（L8）：scored 全空（remaining 全是非 dict 被过滤）→ 无可涌现 ME，返回 []。
+    # scored 全空（remaining 全是非 dict 被过滤）→ 无可涌现 ME，返回 []。
     if not scored:
         return []
 
@@ -524,9 +521,8 @@ def select_candidate_mes(
     # 按分降序；同分按原顺序（idx 升序）稳定排序 = 保留设计推进顺序
     scored.sort(key=lambda t: (-t[0], t[1]))
 
-    # 🔴 2026-06-27 P0-01 配套：有正分候选时·剔除负分(prereq 未满足被 -100 硬剔/finale 降分)候选·
-    # 防 prereq-blocked ME 被当合法走向卡选项展示给用户(实证 cluster_006 涌现 V1-08/-92 V1-06/-100)。
-    # 全负分(罕见·链断)才退回展示前 3·保留可解释 reasons。
+    # 有正分候选时，剔除负分(prereq 未满足被 -100 硬剔/finale 降分)候选，防 prereq-blocked ME
+    # 被当合法走向卡选项展示给用户。全负分(罕见·链断)才退回展示前 3，保留可解释 reasons。
     positives = [t for t in scored if t[0] >= 0]
     display = positives if positives else scored
 
@@ -553,28 +549,26 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict, 
         title = desc[:30].rstrip("，。！？、")
         if len(desc) > 30:
             title += "…"
-    # v24 fluid: 把涌现打分理由透传进 scope_summary，让用户看到「为什么涌现这个」
+    # fluid: 把涌现打分理由透传进 scope_summary，让用户看到「为什么涌现这个」
     reasons = me.get("_emergence_reasons") or []
     score = me.get("_emergence_score")
     why = ""
     if reasons:
         why = f" 〔涌现理由(分{score}): " + "；".join(str(r) for r in reasons) + "〕"
-    # 2026-05-29 流程贯通（断点 3b）：删 v27 禁止的章数/字数死锁字段
-    # （expected_word_range / estimated_chapters / chapter_range）。
+    # 不设章数/字数死锁字段（expected_word_range / estimated_chapters / chapter_range）。
     # 依据 CLAUDE.md「📐 大纲章数 fluid」+ memory feedback_v27_writer_freestyle_splitter_word_cut：
     # 章数由 writer 自由发挥 + splitter 按字数切完自动回填，涌现阶段不得预设。
     # 保留 _emergence_score / _emergence_reasons（涌现可解释性，非章数死锁）。
-    # 🆕 2026-06-03 卷=阶段触发点：把 ME 的卷级语义透传进 brief，让卷末 finale cluster 被标记，
+    # 卷=阶段触发点：把 ME 的卷级语义透传进 brief，让卷末 finale cluster 被标记，
     # build_manifest 据 is_volume_finale 给 writer 注入「卷末高烈度转折(禁平稳收束)」指令，
     # stakes_delta 让 writer 知道本小走向相对前块的强度增量(避免平铺重复)。
     is_finale = bool(me.get("is_volume_finale"))
     scope = f"[CANDIDATE {ord}] 围绕 ME「{title}」展开。{me.get('description', '')}{why}"
     if is_finale:
         scope += " 〔🔴卷末小走向(volume_finale)：本 cluster 收束本阶段·走高烈度转折(反派现身/真相揭露/主角阶段跃迁)·禁平稳收束〕"
-    # 🆕 R20 W9 Batch-AA P1: 起承转结无冲突模式
-    # me.intent ∈ {healing/contemplative/iyashikei/zen} → 默认 kishotenketsu_4act 模式
-    # build_manifest 据此注入四段 directive · hook_strength 在此模式按 cluster 节奏调整参考阈值。
-    # (防 v26 末段强钩误伤治愈结尾)。intent 显式 = "in_medias_res" 等不覆盖。
+    # 起承转结无冲突模式：me.intent ∈ {healing/contemplative/iyashikei/zen} → 默认 kishotenketsu_4act
+    # 模式。build_manifest 据此注入四段 directive · hook_strength 在此模式按 cluster 节奏调整参考
+    # 阈值（防章末强钩机制误伤治愈结尾）。intent 显式 = "in_medias_res" 等不覆盖。
     intent_val = (me.get("intent") or "").strip().lower()
     _KISHO_INTENTS = {"healing", "contemplative", "iyashikei", "zen", "治愈", "禅"}
     if intent_val in _KISHO_INTENTS:
@@ -595,7 +589,7 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict, 
         "stakes_delta": me.get("stakes_delta", ""),
         "intent": intent_val or None,
         "narrative_mode": narrative_mode or None,
-        # 🆕 R23 W11 Batch-HH P1 (2026-06-22): 信念更新意图 + LC-NE 边界锐度
+        # 信念更新意图 + LC-NE 边界锐度
         # belief_update_intent ∈ {preserve, update}：update=要求末段 PE 收束（强反转）·
         #   preserve=保留信念（红鲱鱼 / 推理悬念延后）·None=不主张（默认）
         # event_boundary_sharpness ∈ {sharp, dull, default}：volume_finale 强制 sharp·
@@ -606,7 +600,7 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict, 
         "scene_storyboard": [],  # 雏形 · 用户选定后再让 outline-planner 详化
         "anchor_props": [],
         "foreshadowing_to_plant": [],
-        # 🆕 R22 W10 Batch-FF: CBT premise_blend_card 空骨架·outline-planner 选定 candidate 后填
+        # CBT premise_blend_card 空骨架·outline-planner 选定 candidate 后填
         # 〔确保候选 brief 至少 1-2 scene 体现 emergent_structure·writer manifest 注入下游〕
         "premise_blend_card": {
             "_doc": "Fauconnier&Turner CBT 概念整合卡·R22·candidate 空骨架·outline-planner 详化时填",
@@ -623,16 +617,16 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict, 
     }
 
 
-# ───────────────────── 完本终态（P0-2 缺漏修复 · 2026-06-12） ─────────────────────
-# 缺漏报告结论：ME 池耗尽时旧版走 [FAIL] exit 1——把「大势走完=完本」误当故障，
-# 下游 save-state step11 被假失败卡住、GUI 还继续建议写下一块。根治：完本 ≠ 失败。
+# ───────────────────── 完本终态 ─────────────────────
+# ME 池耗尽 = 大势已走完 = 完本，不是故障——不能当 [FAIL] exit 1 处理，否则下游 save-state
+# step11 会被假失败卡住、GUI 还继续建议写下一块。
 BOOK_COMPLETE_MARKER = ".book_complete.json"
 
 
 def write_book_complete_marker(project_root: Path, last_cluster: str) -> Path:
     """ME 池真耗尽（无可用 ME 且无 finale 可涌现）= 完本，写 _数据库/.book_complete.json。
 
-    标记供 GUI scan_project 识别（提示导出全文·不再建议写下一块）。
+    标记持久化完本状态（供下游流程识别本书已完本·不再建议写下一块）。
     幂等：标记已存在则不覆盖（保留首次完本时间，重跑 emerge 不刷新 completed_at）。
     """
     db = _db_dir_local(project_root)
@@ -659,11 +653,11 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     dashishi = load_json(dashishi_path, {})
     world_state = load_json(world_state_path, {})
     character_arc = load_json(arc_state_path, {})
-    # P2 透明化（2026-07-06）：涟漪规则只读加载，供 decision_basis.state_delta_preview
+    # 透明化：涟漪规则只读加载，供 decision_basis.state_delta_preview
     # 做「候选选中后会触发哪些涟漪」的确定性预演。本函数全程不写回该文件。
     ripple_rules_json = load_json(db / "涟漪规则.json", {}) or {}
 
-    # P2（2026-07-06）ME prerequisites 依赖图健康校验：环（环上 ME 互为前置永不可触发）
+    # ME prerequisites 依赖图健康校验：环（环上 ME 互为前置永不可触发）
     # + 悬挂引用（前置指向不存在的 ME id → 打分层 -100 硬剔成死链）。
     # advisory：stderr 显式报告 + 输出 JSON 带 dag_health 段，不硬失败不静默丢——
     # 大势卡是用户/outline 的创作产物，机器只报告不裁决（北极星⑤）。
@@ -684,8 +678,8 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     # 找剩余 ME
     remaining = find_remaining_mes(dashishi, completed_mes)
     if remaining:
-        # 复验修（完本单向门）：用户加了新 ME（续写新卷）→ 清陈旧完本标记·
-        # 否则 GUI 永远显示已完本不再推荐动作。与幂等写对称。
+        # 完本单向门：用户加了新 ME（续写新卷）→ 清陈旧完本标记，否则完本状态残留、
+        # 下游不再推荐动作。与幂等写对称。
         _stale = project_root / "_数据库" / BOOK_COMPLETE_MARKER
         if _stale.exists():
             try:
@@ -694,14 +688,13 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
             except OSError:
                 pass
     if not remaining:
-        # 🎉 完本终态（P0-2 · 2026-06-12）：ME 真耗尽 = 大势已走完 = 完本，不是故障。
+        # 🎉 完本终态：ME 真耗尽 = 大势已走完 = 完本，不是故障。
         # 写完本标记 + 返回 book_complete=True（main() 据此 exit 0 · 下游 step11 自然过 ·
         # 没有候选 → 走向卡不弹）。注意 ok 仍为 False——「没涌现出新 cluster」语义不变，
         # 既有 consumer 检查 ok 不会误以为有 candidate。
         marker = write_book_complete_marker(project_root, after_cluster_id)
-        # 🔴 复验修（orchestrator 路径捏造走向卡）：完本也要写 step11 的 WAL 产物——
-        # 否则 expected_outputs 缺失卡死 plan + judge 无输入被 required_keys 逼着
-        # 编造 candidates → 弹捏造走向卡。空 candidates + book_complete 标志：
+        # 完本也要写 step11 的 WAL 产物——否则 expected_outputs 缺失卡死 plan + judge 无输入被
+        # required_keys 逼着编造 candidates → 弹捏造走向卡。空 candidates + book_complete 标志：
         # orchestrator 完本短路据此跳过 judge/pause（见 orchestrator step 头检测）。
         try:
             import re as _re
@@ -727,8 +720,8 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
                 "dag_health": dag_health,
                 "marker_path": str(marker)}
 
-    # 🆕 2026-06-03 卷=阶段触发点：硬过滤到「当前阶段(卷)」的剩余 ME——核心任务未解前
-    # 只在本卷内涌现小走向，绝不跳到下一卷/新副本（根治「单 cluster 塌缩成整副本/整阶段」）。
+    # 卷=阶段触发点：硬过滤到「当前阶段(卷)」的剩余 ME——核心任务未解前
+    # 只在本卷内涌现小走向，绝不跳到下一卷/新副本（防「单 cluster 塌缩成整副本/整阶段」）。
     # current_volume = 剩余 ME 中最小卷号(最早未收束阶段)；无 volume 标记的 ME 不参与卷过滤。
     _tagged = [v for v in (_me_volume(me) for me in remaining) if v is not None]
     current_volume = min(_tagged) if _tagged else None
@@ -744,8 +737,8 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
                 f"(新副本/新阶段)。绝不硬切·由你确认换卷信号(核心任务解决+力量/舞台/反派跃迁任一)。")
         remaining = in_vol  # 硬过滤：本卷内涌现小走向
 
-    # 🔴 2026-06-27 P0-03a finale progress gate：vol_progress < 70% + 还有 non_finale ME → 剔除 finale
-    # 治 cluster_002(2/10) 就涌现 V1-10 finale 的 bug。阈值用大势卡 _metadata.cluster_count_per_volume(用户设)。
+    # finale progress gate：vol_progress < 70% + 还有 non_finale ME → 剔除 finale，防止本卷进度
+    # 尚浅时就提前涌现卷末终章。阈值用大势卡 _metadata.cluster_count_per_volume(用户设)。
     _FINALE_PROGRESS_GATE = 0.7
     try:
         _cpv = int(dashishi.get("_metadata", {}).get("cluster_count_per_volume", 10))
@@ -765,7 +758,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     except Exception as _e:
         print(f"[emergence] finale progress gate 跳过: {_e}")
 
-    # 🔴 2026-06-27 P0-03b 死角色 gate：ME 文本提及已死角色 → 剔除（V1-02 李暴躁砸神坛在李死后死锁）
+    # 死角色 gate：ME 文本提及已死角色 → 剔除（防止已死角色相关的 ME 死锁无法涌现）
     _dead = _dead_actor_names(project_root)
     if _dead:
         _before = len(remaining)
@@ -779,18 +772,18 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         last_consequence = list(world_state["consequence_tracker"].values())[-5:]
     elif isinstance(world_state.get("consequence_tracker"), list):
         last_consequence = world_state["consequence_tracker"][-5:]
-    # 2026-05-29 北极星 P1：并入涟漪叙事后果（混合式·叙事 ripple），让「下一 cluster 涌现」
-    # 真正由【涟漪因果】驱动（_consequence_texts 认 dict 的 "text" 字段做关键词共鸣打分），
-    # 而非仅 consequence_tracker。这是「涟漪为核心 + 因果触发事件」落到 emergence 的关键。
+    # 并入涟漪叙事后果（混合式·叙事 ripple），让「下一 cluster 涌现」真正由【涟漪因果】驱动
+    # （_consequence_texts 认 dict 的 "text" 字段做关键词共鸣打分），而非仅 consequence_tracker。
+    # 这是「涟漪为核心 + 因果触发事件」落到 emergence 的关键。
     narr_cons = world_state.get("narrative_consequences")
     if isinstance(narr_cons, list) and narr_cons:
         last_consequence = list(last_consequence) + narr_cons[-8:]
 
-    # 2026-05-29 北极星 P2 [H2-trend]：取当前推进卷的「未达成 key_milestones」关键词 → 收敛打分维度。
+    # 取当前推进卷的「未达成 key_milestones」关键词 → 收敛打分维度。
     # 大势已定：让涌现候选朝本卷固定终点收敛；只影响排序，不锁定用户选择。
     milestone_kw = set()
-    # cur_vol 兜底：世界状态/character_arc 无人写 current_vol(契约债)→ 用 emerge 已算出的
-    # current_volume(=剩余 ME 最小卷号·line530·权威 _me_volume)·否则收敛维度全生产环境恒哑火。
+    # cur_vol 兜底：世界状态/character_arc 可能缺 current_vol → 用 emerge 已算出的
+    # current_volume(=剩余 ME 最小卷号·权威 _me_volume)·否则收敛维度恒哑火。
     cur_vol = _current_advancing_vol(world_state, character_arc) or current_volume
     if cur_vol:
         for v in (dashishi.get("volumes") or []):
@@ -804,7 +797,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
                 milestone_kw = _keyword_set(kms_text + " " + conv_text)
                 break
 
-    # 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ) 软牵引：累计 open_questions 关键词 → 让候选倾向推进悬置问题。
+    # 戏剧问题账本(PITQ/MDQ) 软牵引：累计 open_questions 关键词 → 让候选倾向推进悬置问题。
     # 无账本 → 空集合。该软维度不硬筛，用户走向卡终裁（守北极星③）。
     after_num_for_q = None
     if after_cluster_id:
@@ -818,7 +811,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     open_questions_kw = _open_questions_keywords(project_root, after_num_for_q)
 
     # 选 candidate ME（传 completed_mes 供 parent_me 链打分 + milestone_kw 供收敛打分）
-    # 🔴 2026-06-27 P0-02 修：传 default_vol=current_volume·治 +30 vol 连续 bonus dead code
+    # 传 default_vol=current_volume，否则 +30 vol 连续 bonus 永远不触发（dead code）。
     candidate_mes = select_candidate_mes(remaining, world_state, character_arc, last_consequence,
                                          completed_me_ids=completed_mes, milestone_kw=milestone_kw,
                                          default_vol=current_volume or 0,
@@ -827,7 +820,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
         return {"ok": False, "error": "无符合启发式条件的 candidate ME"}
 
     # 生成 cluster brief 候选
-    # v26 修复: --after-cluster 可传 "cluster_002" 或纯数字 "002" / 2 · 之前 if "_" in id 漏识别裸数字
+    # --after-cluster 可传 "cluster_002" 或纯数字 "002" / 2（两种格式都需正确识别）
     after_num = 0
     if after_cluster_id:
         import re as _re
@@ -870,7 +863,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     except ImportError:
         pass
 
-    # 🆕 A10 目标停滞检测（Magnet arXiv:2607.00918 · 2026-07-07）：卷核心任务相关 ME 连续
+    # A10 目标停滞检测（Magnet arXiv:2607.00918）：卷核心任务相关 ME 连续
     # N 个 cluster（默认 3·env RUOYU_GOAL_STAGNATION_WINDOW）零推进且候选卡也无推进项 →
     # advisory 信号段。逻辑在 emergence_transparency.goal_stagnation（本文件超 1000 行软上限，
     # 判断力不下沉进这里）。只加输出字段——绝不改打分/绝不换目标/绝不增删候选（北极星③⑤）。
@@ -922,15 +915,15 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     }
 
 
-# 2026-05-29 复审修复（C1-a · SC-3/SC-6）：start-ch 必须算「上一个已落章 cluster 末章+1」，
-# 不能反查目标 cluster 自身尚未回填的 chapter_range（否则空输出 exit2 → 下游 build_manifest int("") 崩）。
-# 「已落章」状态词表（SC-6 中英文都认）：done / 已完成 / in_progress / 进行中，且 chapter_range 有值。
+# start-ch 必须算「上一个已落章 cluster 末章+1」，不能反查目标 cluster 自身
+# 尚未回填的 chapter_range（否则空输出 exit2 → 下游 build_manifest int("") 崩）。
+# 「已落章」状态词表（中英文都认）：done / 已完成 / in_progress / 进行中，且 chapter_range 有值。
 _LANDED_STATUSES = ("done", "已完成", "in_progress", "进行中", "writer_done",
                     "splitter_done", "writer_v2_rewriting", "done_writer_drafted")
 
 
 def _scan_max_chapter_dir(project_root: Path) -> int:
-    """SC-3 兜底：扫 章节/第NNN章 目录取最大章号。无目录返回 0。"""
+    """兜底：扫 章节/第NNN章 目录取最大章号。无目录返回 0。"""
     import re as _re
     chap_dir = project_root / "章节"
     if not chap_dir.exists():
@@ -949,14 +942,14 @@ def _scan_max_chapter_dir(project_root: Path) -> int:
 
 
 def resolve_start_ch(project_root: Path, cluster_key) -> int:
-    """SC-3：本 cluster 起首章 = 上一个已落章 cluster 末章 + 1；cluster_001 特判 = 1。
+    """本 cluster 起首章 = 上一个已落章 cluster 末章 + 1；cluster_001 特判 = 1。
 
     来源优先级：
       1. 事件簇.json：取所有 num < 目标 num 且 status∈已落章词表 且 chapter_range 有值的
          cluster，其 chapter_range[1] 的最大值 + 1。
       2. 兜底：扫 章节/第NNN章 目录最大章号 + 1。
       3. 都没有 → 1（首块）。
-    禁止反查目标 cluster 自身尚未回填的 range（C1-a 根因）。
+    禁止反查目标 cluster 自身尚未回填的 range。
     """
     import cluster_lookup as _cl
     target_num = _cl.cluster_num(cluster_key)
@@ -976,7 +969,7 @@ def resolve_start_ch(project_root: Path, cluster_key) -> int:
         status = c.get("status")
         cr = c.get("chapter_range") or []
         landed_range = isinstance(cr, list) and len(cr) == 2 and isinstance(cr[1], int)
-        # SC-6：中英文 status 都算已落章；只要 chapter_range 有值也视为已落章（已完成|done|进行中且有range）
+        # 中英文 status 都算已落章；只要 chapter_range 有值也视为已落章（已完成|done|进行中且有range）
         if (status in _LANDED_STATUSES) and landed_range:
             best_last = max(best_last, cr[1])
         elif landed_range and status not in ("candidate", "未涌现", "pending", "已规划"):
@@ -1058,7 +1051,7 @@ def main():
                 print(f"     - {line}")
             return 0
         if result.get("book_complete"):
-            # 🎉 完本终态（P0-2 · 2026-06-12）：ME 池耗尽 = 完本不是失败 → exit 0。
+            # 🎉 完本终态：ME 池耗尽 = 完本不是失败 → exit 0。
             # 其他错误路径（启发式无候选/文件损坏等）保持下方 exit 1 不变。
             print("🎉 本书大势已走完（ME 池耗尽）——这是完本不是故障", file=sys.stderr)
             print(f"     完本标记: {result.get('marker_path', '')}", file=sys.stderr)

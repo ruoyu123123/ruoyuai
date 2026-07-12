@@ -19,7 +19,7 @@ style_repair_engine.py — 中文小说风格修复引擎
   - 对话密度不足
   - 叙述段落需改写为对话
 
-【三遍迭代法（P1-5，参考 oh-story story-deslop）】
+【三遍迭代法（参考 oh-story story-deslop）】
 mode=fix 默认走 apply_fixes_iterative：最多跑 max_passes 遍（默认 3），每遍跑一次
 apply_fixes（merge_short_sentences → fix_onomatopoeia → fix_banned_words →
 fix_ai_tags），若本遍文本无变化（收敛）则提前停止。意义：
@@ -41,8 +41,7 @@ from style_analyzer import analyze_text, count_chinese
 
 SENTENCE_END = re.compile(r"[。]")
 ONOMATOPOEIA = re.compile(r"^[一-鿿]{1,6}[—]+[！!]?\s*$")
-# 2026-05-29 修：原 DIALOGUE_LINE = r'^"[^"]*"' + startswith('"') 只认 ASCII 双引号，
-# 中文弯引号 “”（U+201C/U+201D）和 「」 对话行全部漏识别。与 style_analyzer 的
+# DIALOGUE_LINE 覆盖 ASCII 双引号与中文弯引号 “”（U+201C/U+201D）、「」——与 style_analyzer 的
 # _Q_OPEN/_Q_CLOSE codepoint 区分对齐：按左右引号分别配对，不混用。
 _Q_OPEN = '"“「『'   # ASCII " / 左弯双引号 U+201C / 「 / 『
 # 对话行：开引号开头 + 配对的对应闭引号（"…" / “…” / 「…」 / 『…』 各自配对）
@@ -52,7 +51,7 @@ DIALOGUE_LINE = re.compile(
 
 
 def _starts_with_open_quote(s: str) -> bool:
-    """2026-05-29 修：判断行是否以任一开引号起头（取代只认 ASCII " 的 startswith('"')）"""
+    """判断行是否以任一开引号起头。"""
     return bool(s) and s[0] in _Q_OPEN
 BANNED_WORDS = {
     "顿时": ["忽然间", "一下子", "猛地"],
@@ -86,7 +85,7 @@ def merge_short_sentences(text: str) -> str:
     result = []
     for line in lines:
         stripped = line.strip()
-        if not stripped or ONOMATOPOEIA.match(stripped) or _starts_with_open_quote(stripped):  # 2026-05-29 修
+        if not stripped or ONOMATOPOEIA.match(stripped) or _starts_with_open_quote(stripped):
             result.append(line)
             continue
         parts = SENTENCE_END.split(stripped)
@@ -102,14 +101,14 @@ def merge_short_sentences(text: str) -> str:
             if cn <= 12 and i + 1 < len(parts):
                 next_part = parts[i + 1]
                 next_cn = count_chinese(next_part)
-                if next_cn <= 15 and not _starts_with_open_quote(next_part):  # 2026-05-29 修
+                if next_cn <= 15 and not _starts_with_open_quote(next_part):
                     merged.append(current + "，" + next_part)
                     i += 2
                     continue
             merged.append(current)
             i += 1
         new_line = "。".join(merged)
-        end_marks = ("。", "！", "？", "!", "?", "”", "」", "』")  # 2026-05-29 修：补中文闭引号
+        end_marks = ("。", "！", "？", "!", "?", "”", "」", "』")  # 含中文闭引号
         if new_line and not new_line.endswith(end_marks):
             new_line += "。"
         result.append(new_line)
@@ -169,7 +168,7 @@ def generate_dialogue_guide(text: str, profile: dict) -> list[dict]:
         stripped = line.strip()
         if not stripped:
             continue
-        is_dialogue = _starts_with_open_quote(stripped) or ONOMATOPOEIA.match(stripped)  # 2026-05-29 修
+        is_dialogue = _starts_with_open_quote(stripped) or ONOMATOPOEIA.match(stripped)
         if is_dialogue:
             if current_block_lines >= 3:
                 narrative_blocks.append({
@@ -284,7 +283,7 @@ def apply_fixes(text: str) -> tuple[str, dict]:
 
 
 def apply_fixes_iterative(text: str, max_passes: int = 3) -> tuple[str, list[dict]]:
-    """三遍迭代修复（P1-5，参考 oh-story 三遍去 AI 法）。
+    """三遍迭代修复（参考 oh-story 三遍去 AI 法）。
 
     每遍跑一次 apply_fixes，若文本无变化（收敛）则提前停止。
     返回 (final_text, per_pass_logs)；per_pass_logs 列表，每项是一遍的 log dict
@@ -315,8 +314,8 @@ def main():
     file_path = Path(sys.argv[1])
     mode = "analyze"
     output_path = None
-    max_passes = 3       # P1-5：三遍迭代法的默认最大遍数
-    iterative = True     # P1-5：fix 模式默认走迭代；--no-iterative 退回单遍
+    max_passes = 3       # 三遍迭代法的默认最大遍数
+    iterative = True     # fix 模式默认走迭代；--no-iterative 退回单遍
     for i in range(2, len(sys.argv)):
         if sys.argv[i] == "--mode" and i + 1 < len(sys.argv):
             mode = sys.argv[i + 1]
@@ -350,7 +349,7 @@ def main():
 
     elif mode == "fix":
         profile_before = analyze_text(text)
-        # P1-5：默认走三遍迭代；--no-iterative 退回单遍
+        # 默认走三遍迭代；--no-iterative 退回单遍
         if iterative:
             fixed_text, per_pass = apply_fixes_iterative(text, max_passes=max_passes)
         else:

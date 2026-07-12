@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""manifest_budget.py — S1 manifest 分层 token 预算（2026-07-07 二轮移植）。
+"""manifest_budget.py — S1 manifest 分层 token 预算。
 
 业界源：PlotPilot context_budget_allocator/policy（「约束是药不是饭」V9 减法改革 +
 Phase 2 T0 动态阈值 40% / T3 最低保障 5% 实证参数）。出处：
 research/open_source_writing_systems_round2.md S1。
 
-两层职责（严格分离·零回归优先）：
+两层职责（严格分离）：
 
 1. **分层记账（始终开·纯元数据）**：给 manifest 每个顶层注入段归 tier——
    - T0 = 硬约束/契约类（hard_constraints / must_read / 预检 / 揭秘契约 / 信息隔离 masking）
@@ -18,8 +18,8 @@ research/open_source_writing_systems_round2.md S1。
    （「过多强制内容 → 注意力坍塌」的观测起点，等真机数据再决定是否收紧）。
 
 2. **分层裁剪（只在触发既有 size 守卫时生效）**：manifest 序列化体积 >= 既有硬上限
-   （BUDGET_HARD_KB=100·与 build_manifest.main 的 v19.4 守卫同阈值同口径）才启动，
-   把旧「打印分级裁剪建议给人看」升级为可执行的按 tier/priority 智能裁剪：
+   （BUDGET_HARD_KB=100·与 build_manifest.main 的 v19.4 守卫同阈值同口径）才启动
+   按 tier/priority 的可执行智能裁剪：
    - 裁剪顺序：T3（牺牲位·留 5% 最低保障地板）→ T2 → T1；T0/META 不进低层裁剪队列
    - T3 触底 → 剩余超额转 T2 回收（对应 PlotPilot「T3 最低保障：从 T2 回收配额」）
    - T0 自身超硬上限 40%（防约束无限膨胀挤占叙事载荷）→ 裁 T0 自身到上限内
@@ -74,7 +74,7 @@ SECTION_TIERS: dict[str, str] = {
     "database_coverage": TIER_META,
     "_cache_layout": TIER_META,
     "_subsystem_consumption_audit": TIER_META,
-    # A11 DeepLore scene 维度门控审计元数据（2026-07-08）：world_keyword_hits 被滤词条留痕
+    # A11 DeepLore scene 维度门控审计元数据：world_keyword_hits 被滤词条留痕
     #（真有过滤才注入·人看的审计非创作载荷·不参与预算与裁剪）。
     "_scene_gating": TIER_META,
     # --- T0：硬约束/契约类 ---
@@ -90,7 +90,7 @@ SECTION_TIERS: dict[str, str] = {
     "will_learn_due_this_ch": TIER_T0,
     "pending_secrets_to_reveal": TIER_T0,
     "scene_character_knowledge": TIER_T0,  # per-character 负向 masking（防穿帮契约）
-    # A2 遗留清偿（2026-07-08）：写前 Evolution Gate 报告摘要（waived 豁免声明 + warnings 留痕
+    # A2：写前 Evolution Gate 报告摘要（waived 豁免声明 + warnings 留痕
     # ·契约类——豁免是 brief 落字的创作声明，writer 必须看到才能把豁免当叙事手法落笔）。
     "pre_write_gate_digest": TIER_T0,
     # --- T1：当前 cluster 创作载荷（brief/storyboard/场景卡/作者风格骨） ---
@@ -130,10 +130,10 @@ SECTION_TIERS: dict[str, str] = {
     "position_effect_template": TIER_T1,
     "genre_baseline_diff": TIER_T1,
     "motif_recurrence_directive": TIER_T1,
-    # A3 前块结尾偏重注入（2026-07-07·PlotPilot recent_chapter_context）：上一 cluster 草稿
+    # A3 前块结尾偏重注入（PlotPilot recent_chapter_context）：上一 cluster 草稿
     # 末尾原文 = 开篇回响的创作载荷（跨 cluster 衔接的直接写作素材·非状态库）。
     "prev_cluster_tail": TIER_T1,
-    # A4 编辑手记（2026-07-08·PlotPilot 结构槽坍缩为自然语言）：结构块确定性拼装的
+    # A4 编辑手记（PlotPilot 结构槽坍缩为自然语言）：结构块确定性拼装的
     # 200-400 字人话软建议汇总（双视图·writer 创作载荷·advisory 可自由取舍）。
     "editor_note": TIER_T1,
     # --- T2：状态库（人物/世界/关系/道具/阵营/时间线快照） ---
@@ -160,14 +160,14 @@ SECTION_TIERS: dict[str, str] = {
     "character_positions": TIER_T2,
     "debt_ledger_snapshot": TIER_T2,
     "sagging_middle_snapshot": TIER_T2,
-    # A14 近期活跃实体 LRU 兜底（2026-07-07·Ex3 Recent_Visit）：近 3 cluster 出场实体简表
+    # A14 近期活跃实体 LRU 兜底（Ex3 Recent_Visit）：近 3 cluster 出场实体简表
     #（摘要账本确定性抽取·防计划外配角漂移的状态参考）。
     "recently_active_entities": TIER_T2,
     # --- T3：长程记忆（RAG/memory/历史选择性召回·牺牲位但有 5% 地板） ---
     "rag_relevant_clusters": TIER_T3,
     "memory_search_results": TIER_T3,
     "selective_history_retrieval": TIER_T3,
-    # S10 消费端（2026-07-07）：已闭合卷卷级摘要（Ex3 金字塔·历史卷换粒度替代截断）
+    # S10 消费端：已闭合卷卷级摘要（Ex3 金字塔·历史卷换粒度替代截断）
     "volume_summaries_digest": TIER_T3,
 }
 

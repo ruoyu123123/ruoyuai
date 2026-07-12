@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 🔴 2026-06-29 NN增强路径
 """cross_scene_voice_drift_scanner.py — cluster 内同角色跨场景 voice 漂移检测
 
-v2 cluster 化方案 Phase 3（2026-05-28）·
-之前 voice 漂移由 novel-voice-checker agent 检测，本 scanner 是机械层补丁，
-快速检出同角色在 cluster 不同 scene 的 voice 偏差（句长 / catchphrase / banned_phrases）。
+本 scanner 是机械检测层，快速检出同角色在 cluster 不同 scene 的 voice 偏差
+（句长 / catchphrase / banned_phrases）。
 
-🔴 2026-06-29 NN增强路径：当 EMBED_BACKEND 非 hash 时，额外用嵌入 cosine 距离
-检测同角色跨场景 voice 漂移，与统计指纹取 max。
+当 EMBED_BACKEND 非 hash 时，额外用嵌入 cosine 距离检测同角色跨场景 voice 漂移，
+与统计指纹取 max。
 
 输出 issue code: VOICE_DRIFT_CROSS_SCENE
 gate_level: advisory（声音漂移 = 工艺类，writer 有理由可豁免）
@@ -40,8 +38,8 @@ def split_scenes(text: str, min_scene_len: int = 500) -> list[str]:
     return parts if parts else [text]
 
 
-# 2026-05-30 北极星复审：原正则只含 ASCII " + 「」，漏 U+201C/U+201D 弯引号（项目正文实际用弯引号）
-# → scanner 抽不到对话整体空转。补全弯引号（遵 feedback_dialogue_quote_unicode_distinction）。
+# 对话正则需覆盖弯引号 U+201C/U+201D（项目正文实际用弯引号，非 ASCII "）——
+# 遗漏会导致 scanner 抽不到对话、整体空转。（遵 feedback_dialogue_quote_unicode_distinction）
 DIALOGUE_RE = re.compile('["“「『]([^"”」』\n]{1,300})["”」』]')
 SPEAKER_PATTERN = re.compile(r'([一-鿿]{2,4})(?:说道?|道|问道?|答道?|笑道?|骂道?|喊道?|嘀咕|开口|说)')
 
@@ -80,15 +78,15 @@ def compute_voice_metrics(dialogues: list[str]) -> dict:
     }
 
 
-# ── L4·D4 voice 区分度 + D8 口癖一致性（2026-05-31 · 主代理手动实现）──────────
-# 全 advisory · env VOICE_D4D8_MODE 默认 shadow（只记不进 warning/exit · 回归0）
-# 零依赖纯统计（不用 embedding · 避 hash backend 假语义）· 砍掉项 D6情绪弧/D10情绪直陈不做
+# ── L4·D4 voice 区分度 + D8 口癖一致性 ──────────
+# 全 advisory · env VOICE_D4D8_MODE 默认 active（D4/D8 结果计入 warning/issues；shadow 时只记不判）
+# 零依赖纯统计（不用 embedding · 避 hash backend 假语义）· 不含 D6情绪弧/D10情绪直陈
 VOICE_TICS = ("啊", "呢", "吧", "嘛", "呗", "啦", "哈", "咯", "喔", "哦",
               "嗯", "唉", "哼", "咦", "嘞", "咧", "呐", "罢")
 
 
 def _d4d8_mode() -> str:
-    """VOICE_D4D8_MODE：默认 active（2026-05-31 放量·真作者mean_dist=0.422已验证不误判同质·全advisory）· {shadow,active,off}· 非法回退 active。"""
+    """VOICE_D4D8_MODE：默认 active（已用真实作者语料验证不会误判角色同质化·全advisory）· {shadow,active,off}· 非法回退 active。"""
     m = (os.environ.get("VOICE_D4D8_MODE") or "active").strip().lower()
     return m if m in ("shadow", "active", "off") else "active"
 
@@ -164,7 +162,7 @@ def compute_d8_tic_consistency(char_scene_tics: dict) -> dict:
     return {"inconsistent_tics": issues[:8], "count": len(issues)}
 
 
-# ── P2·VOICE_COLLAPSE_CROSS_CHAR 跨角色 voice 坍缩（2026-06-14 · 作者思维蒸馏 R1 P2）──
+# ── P2·VOICE_COLLAPSE_CROSS_CHAR 跨角色 voice 坍缩 ──
 # 「所有人说话一个味」= 声音坍缩 · 弱模型最典型盲点（D4 区分度已算两两距离·这里把
 # 它升成一条带 code 的『待裁决项』供 audit_hub 透传给写作 agent）。
 # 复用 compute_d4_distinctiveness 已抽好的逐角色句长/catchphrase 桶（机械特征·非 embedding）。
@@ -205,7 +203,7 @@ def compute_cross_char_voice_collapse(d4: dict | None) -> dict | None:
     }
 
 
-# ── 🔴 2026-06-29 NN增强路径：embedding cosine 距离检测 voice 漂移 ──────────
+# ── embedding cosine 距离检测 voice 漂移 ──────────
 def _has_semantic_embedding() -> bool:
     """真语义嵌入后端就绪（非 hash）才启 embedding voice 漂移。
 
@@ -226,10 +224,9 @@ def _has_semantic_embedding() -> bool:
 
 # 🔬 待金标准校准：跨场景 embedding cosine 距离 > 此 = voice 漂移。默认 0.3（沿用
 # embedding_store.compute_character_drift 章级 alert 阈值）·env CROSS_SCENE_EMBED_DRIFT_FLOOR 可覆盖。
-# ⚠️ 实测发现（2026-06-29·ruoyu_style author 模型）：同一草稿里「冷硬短句 vs 热络长句」同角色对白
-#    cosine 距离仅 0.1062 << 0.3 —— author 风格模型把同作者文本映射得很近（呼应 char 声纹 cos_same
-#    0.93-0.97 偏塌缩）。故 0.3 floor 对 author embedding 偏保守（宁可漏报不误报·北极星⑤）·真正
-#    校准需作者基线 z-band（per-backend·待金标准）。当前默认保守·env 可临时下调验证。
+# author 风格嵌入模型会把同作者文本映射得很近（同角色跨场景对白 cosine 距离天然偏小），
+# 故 0.3 floor 对 author embedding 偏保守（宁可漏报不误报·北极星⑤）；真正校准需作者
+# 基线 z-band（per-backend·待金标准）。当前默认保守·env 可临时下调验证。
 DEFAULT_EMBED_DRIFT_FLOOR = 0.3
 
 
@@ -322,7 +319,7 @@ def scan(project_root: Path, draft_path: Path) -> dict:
                 fp = _voice_fingerprint(qs)
                 char_scene_tics[name].append((i, fp["tic_rate"] if fp else {}))
 
-    # 🔴 2026-06-29 NN增强：收集跨场景角色对话供嵌入比较
+    # 收集跨场景角色对话供嵌入比较
     char_scene_dialogues: dict[str, list[tuple[int, list[str]]]] = defaultdict(list)
     for i, scene in enumerate(scenes):
         sd = extract_dialogues_by_speaker(scene, aliases)
@@ -359,7 +356,7 @@ def scan(project_root: Path, draft_path: Path) -> dict:
                         "type": "avg_dialogue_length_drift",
                     })
 
-    # 🔴 2026-06-29 NN增强路径：嵌入 voice 漂移（与 5 维统计取 max=任一信号触发即报·合并入 drift_issues）
+    # 嵌入 voice 漂移（与 5 维统计取 max=任一信号触发即报·合并入 drift_issues）
     # 默认安全：embedding 后端/桥任何失败 → 降级走统计（不崩·零回归·呼应 nn_vad_bridge 默认安全铁律）。
     embed_active = _has_semantic_embedding()
     embedding_drift = []
@@ -371,7 +368,7 @@ def scan(project_root: Path, draft_path: Path) -> dict:
             embedding_drift = []
     drift_issues.extend(embedding_drift)
 
-    # D4/D8（2026-05-31）· env VOICE_D4D8_MODE 默认 active（只挂字段不改 warning/exit 时为 shadow）
+    # D4/D8 · env VOICE_D4D8_MODE 默认 active（只挂字段不改 warning/exit 时为 shadow）
     mode = _d4d8_mode()
     d4 = compute_d4_distinctiveness(char_all_dialogues) if mode != "off" else None
     d8 = compute_d8_tic_consistency(char_scene_tics) if mode != "off" else None
@@ -379,7 +376,7 @@ def scan(project_root: Path, draft_path: Path) -> dict:
     cross_char_collapse = (
         compute_cross_char_voice_collapse(d4) if mode != "off" else None
     )
-    # 🔴 2026-06-29 NN增强路径：warning 文案随是否含 embedding 漂移自适应（纯统计仍只述句长·零回归）
+    # warning 文案随是否含 embedding 漂移自适应（纯统计仍只述句长·零回归）
     _has_embed_drift = any(it.get("type") == "embedding_voice_drift" for it in drift_issues)
     _drift_desc = "句长偏差 >50% / embedding 距离" if _has_embed_drift else "句长偏差 >50%"
     base_warning = (
@@ -401,7 +398,7 @@ def scan(project_root: Path, draft_path: Path) -> dict:
             d4d8_warning = "；".join(bits)
     final_warning = "；".join([w for w in (base_warning, d4d8_warning) if w]) or None
 
-    # 顶层 issues[]：给 audit_hub / 任意消费方一个带 code 的可解析面（P2 新增坍缩项·
+    # 顶层 issues[]：给 audit_hub / 任意消费方一个带 code 的可解析面（P2 坍缩项·
     # active 才升 issue·shadow/off 只挂字段不产 issue → 回归 0）。
     issues = []
     if mode == "active" and cross_char_collapse:
@@ -428,7 +425,7 @@ def scan(project_root: Path, draft_path: Path) -> dict:
         "cross_char_voice_collapse": cross_char_collapse,
         "d4d8_mode": mode,
         "issues": issues,
-        # 🔴 2026-06-29 NN增强路径：embedding voice 漂移可观测面（默认 hash → active False·零回归）
+        # embedding voice 漂移可观测面（默认 hash → active False·零回归）
         "embed_backend_active": embed_active,
         "embedding_drift_count": len(embedding_drift),
         "warning": final_warning,

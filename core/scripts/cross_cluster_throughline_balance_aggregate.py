@@ -25,15 +25,14 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+import cluster_summary_reader as csr  # 摘要驱动读取 cluster 记录
 import cluster_state_sources as css  # noqa: E402
 
 THROUGHLINES = ["OS", "MC", "IC", "RS"]
 
-# 2026-05-29 复审修复 [M11]：no_progress 哨兵词表。
-# 原代码只判 v != "no_progress" and v != ""，但 writer/账本里「无推进」有多种写法
-# （none / 无 / 未推进 / N/A / - / false 字符串等），这些都被 bool(v) 当成命中
-# → THROUGHLINE_DORMANT 漏报（线明明沉睡却算作推进）。统一归一后判定。
+# no_progress 哨兵词表：writer/账本里「无推进」有多种写法
+# （none / 无 / 未推进 / N/A / - / false 字符串等），未经归一直接 bool(v) 判断
+# 会把这些也当成命中，导致 THROUGHLINE_DORMANT 漏报（线明明沉睡却算作推进）。
 _NO_PROGRESS_SENTINELS = {
     "", "no_progress", "no", "none", "null", "nil", "n/a", "na", "-", "—",
     "false", "0", "skip", "skipped",

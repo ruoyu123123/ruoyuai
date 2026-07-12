@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""scene_grounding_scanner.py — 白房间综合症/欠写检测（advisory · cluster · 2026-06-19）
+"""scene_grounding_scanner.py — 白房间综合症/欠写检测（advisory · cluster）
 
-【缺口】全系统 ~30 个 scanner 全在查「过写」（AI 腔/句长超标/情绪直陈/标志词 tell 过多/重复名词…），
-**无一查「欠写」** —— 这是一整个缺失的检测类别。来源 Turkey City Lexicon 的 White Room Syndrome
+【定位】其他 scanner 查的是「过写」（AI 腔/句长超标/情绪直陈/标志词 tell 过多/重复名词…），
+本 scanner 查「欠写」。来源 Turkey City Lexicon 的 White Room Syndrome
 （白房间综合症）：场景在「白房间」里发生——人物悬浮在抽象对话+抽象动作里，读者不知道他们站在
 哪、周围有什么、是什么时辰天气、有没有声音气味。弱模型尤其爱开「纯对话白场景」（省力·不落地）。
 
@@ -19,7 +19,7 @@
 
 【北极星⑤ 顾问非法官】接地密度是创作选择（极简留白/快节奏纯对话场可能故意不落地）·writer 有理由偏离
   → 永远 advisory，code SCENE_GROUNDING_THIN **绝不进 audit_hub.HARD_GATE_CODES**。
-  env SCENE_GROUNDING_MODE: off / shadow(默认·只记不判·零回归) / active。
+  env SCENE_GROUNDING_MODE: off / shadow(只记不判·零回归) / active(默认)。
   🔬 阈值 UNGROUNDED_RATIO_FLOOR/MIN_SCENES 保守占位（宁可漏报不误报）·待金标准校准（真作者原文喂自身 PASS）。
   豁免：作者档极简留白风（_数据库/作者风格.json）· 承接同一地点（开头含 仍/还在/这里/依旧）。
 
@@ -63,8 +63,8 @@ _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-20 金标准校准放量 active：5 真作者(诡秘/主神/惊悚/剑来/将夜)原文实测 ungrounded_ratio 全 0.0
-    # —— 真作者从不白房间·零误报·安全放量。
+    # 默认 active：5 真作者(诡秘/主神/惊悚/剑来/将夜)原文实测 ungrounded_ratio 全 0.0
+    # —— 真作者从不白房间·零误报。
     m = (os.environ.get("SCENE_GROUNDING_MODE") or "active").strip().lower()
     return m if m in ("off", "shadow", "active") else "active"
 

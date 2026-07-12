@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""interiority_mode_balance_scanner.py — 内心戏三态失衡检测（advisory · cluster · 2026-06-19）
+"""interiority_mode_balance_scanner.py — 内心戏三态失衡检测（advisory · cluster）
 
-【缺口】arXiv:2605.07102 (SAGE) + Cohn 叙事学：人物内心戏有三态——
+【为什么】arXiv:2605.07102 (SAGE) + Cohn 叙事学：人物内心戏有三态——
   ① 心理叙述（psycho-narration·叙述者转述人物心理）
   ② 直接独白（quoted/direct monologue·带「他想/心说」引导标记）
   ③ 自由间接引语（FID·free indirect discourse·叙述贴人物意识流·无引导标记）
 弱模型写内心戏【过度依赖带标记的直接独白】（满篇「他想」「心中暗道」），三态坍缩成单态——
-意识流的贴近感（FID）和叙述者的距离调度（psycho-narration）都丢了。全库 0 个内心戏模式检测。
+意识流的贴近感（FID）和叙述者的距离调度（psycho-narration）都丢了。本 scanner 检测这块。
 
 【做法 · 确定性可算半边】带标记的直接独白有明确中文语言标志（他想/心想/暗道/默念/寻思道…）。
 单向检测【标记独白过密】：marked_monologue_per_1k = 标记命中数/(CJK/1000)。超 floor =
@@ -16,8 +16,8 @@
 
 【北极星⑤ 顾问非法官】内心戏模式是创作选择（某些作者/场景就爱用直接独白）·writer 有理由偏离
   → 永远 advisory，code INTERIORITY_MODE_IMBALANCE **绝不进 audit_hub.HARD_GATE_CODES**。
-  env INTERIORITY_MODE_BALANCE_MODE: off / shadow(默认·只记不判) / active。
-  🔬 阈值 MARKED_MONOLOGUE_FLOOR 待金标准校准（真作者原文喂自身·真作者标记独白密度）。
+  env INTERIORITY_MODE_BALANCE_MODE: off / shadow(只记不判) / active(默认·金标准实测零误报后放量)。
+  🔬 阈值 MARKED_MONOLOGUE_FLOOR 挂「待金标准校准」注册表追踪（threshold_registry·实测依据见常量注释）。
 
 用法：python interiority_mode_balance_scanner.py <draft_path> [--project <root>]
 """
@@ -36,7 +36,7 @@ ISSUE_CODE = "INTERIORITY_MODE_IMBALANCE"   # ⚠️ advisory 专用 · 绝不�
 MARKED_MONOLOGUE = re.compile(
     r"(他想|她想|心想|心中想|心里想|心说|心中暗道|暗道|默念|寻思道|想道|暗想|心下)")
 
-# 🆕 R7 W2 FID 正向半算法（自由间接引语正向检测）：FID 无引导标记·机械难判·只能拣【高确定性
+# FID 正向半算法（自由间接引语正向检测）：FID 无引导标记·机械难判·只能拣【高确定性
 # 语言信号】做正向半算法（命中=可能是 FID 段，但漏报必然·只用作分子）。
 # ① 中文语气助词（modal particle）：吗 / 呢 / 啊 / 罢了 / 算了 / 也好 —— 主语缺失裸句末出现常是
 #    FID 贴意识（"她真的会来吗。"）
@@ -49,18 +49,18 @@ FID_EVALUATIVE = re.compile(
     r"(分明|当真|终究|偏偏|居然|竟然|怎能|何必|委实|简直|何曾|莫非|或许是|想来是)")
 FID_RHETORIC_END = re.compile(r"[一-鿿]{4,}[？！…]{1,3}")
 
-# 🔬 金标准校准（待真作者原文喂自身）：占位 floor=2.5/千字（超出=「他想式」标记独白过度·
-# 三态坍缩成单态）。保守占位·宁可漏报不误报——真作者标记独白密度待实测后收紧/放宽。
+# 🔬 floor=2.5/千字（超出=「他想式」标记独白过度·三态坍缩成单态）。金标准实测 5 真作者
+# 标记独白密度 0-0.51/千字（真作者用 FID 少用标记），2.5 留 5x+ 余量·宁可漏报不误报。
 MARKED_MONOLOGUE_FLOOR = 2.5   # 标记独白密度超此/千字 = 过度依赖直接独白·建议部分转 FID
-# 🆕 FID 占比下限：当 marked 已过密时·若 fid_share = fid / (fid + marked) < 此·提示"全单态"
+# FID 占比下限：当 marked 已过密时·若 fid_share = fid / (fid + marked) < 此·提示"全单态"
 FID_SHARE_FLOOR = 0.15
 
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
 
 def _mode() -> str:
-    # 2026-06-20 金标准校准放量 active：5 真作者标记独白密度 0-0.51/千字(floor 2.5·5x+ 余量)
-    # —— 真作者用 FID 不用「他想」标记·零误报·安全放量。
+    # 金标准校准：5 真作者标记独白密度实测 0-0.51/千字(floor 2.5·5x+ 余量)——真作者用 FID
+    # 不用「他想」标记·零误报·故默认可放量 active。
     m = (os.environ.get("INTERIORITY_MODE_BALANCE_MODE") or "active").strip().lower()
     return m if m in ("off", "shadow", "active") else "active"
 
@@ -97,7 +97,7 @@ def detect_marked_monologue(text: str) -> list:
     return [{"marker": m.group(0), "pos": m.start()} for m in MARKED_MONOLOGUE.finditer(text)]
 
 
-# 🆕 R7 W2 FID 正向半算法
+# FID 正向半算法
 _DIALOGUE_PAIRS = (("“", "”"), ("「", "」"))   # U+201C/D 直引号 + 角引号
 
 
@@ -187,7 +187,7 @@ def scan(draft_path, project_root=None) -> dict:
     out["marked_monologue_per_1k"] = per_1k
     out["sample_markers"] = [h["marker"] for h in hits[:8]]
 
-    # 🆕 R7 W2 FID 正向半算法：补足三态另一半（FID 密度 / 占比）
+    # FID 正向半算法：补足三态另一半（FID 密度 / 占比）
     fid = detect_fid_signals(draft)
     fid_per_1k = round(fid["total"] / (cjk / 1000.0), 2)
     out["fid_signal_count"] = fid["total"]

@@ -2,14 +2,13 @@
 # -*- coding: utf-8 -*-
 """foreshadowing_handoff_scanner.py — cluster 内伏笔埋设+回收配对检测
 
-v2 cluster 化方案 Phase 3（2026-05-28）·
 检测 cluster_brief.foreshadowing_to_plant 列出的伏笔是否在正文中真实埋设；
 + 检测 伏笔表.promises 中标记 setup_cluster = 本 cluster 的伏笔是否有物理证据。
 
 输出 issue code:
   · FORESHADOWING_NOT_PLANTED (advisory)
   · FORESHADOWING_PHYSICAL_EVIDENCE_MISSING (advisory)
-  · FORESHADOWING_PAYOFF_TARGET_NOT_OPEN (advisory · 2026-07-06 P1 三态生命周期)
+  · FORESHADOWING_PAYOFF_TARGET_NOT_OPEN (advisory · 伏笔三态生命周期)
     —— changes 声明的 payoff 指向的 promise 非 open（suspended/consumed）→ 可能是重复回收
     或状态漂移；只提示不拦（绝不新增 hard_gate·北极星⑤）
 
@@ -72,9 +71,8 @@ def scan(project_root: Path, cluster_id: str) -> dict:
         if keyword and keyword in text:
             planted_check.append({"id": fs_id, "found": True, "keyword": keyword})
         elif fs_desc:
-            # 2026-05-29 复审修复 [M13]：构造 not_planted 时拷入 tier 键。
-            # 否则下方 gate_level 判定 `f.get("tier", 99) == 1` 永远拿不到 tier，
-            # tier-1（必埋）漏埋被误降为 advisory（应为 hard_gate）。
+            # tier 一并带出，供报告标注该漏项的必埋等级（本 issue 恒 advisory，tier 不
+            # 影响 gate_level，见下方 issues.append 处说明）。
             not_planted.append({
                 "id": fs_id,
                 "desc": fs_desc[:80],
@@ -111,7 +109,7 @@ def scan(project_root: Path, cluster_id: str) -> dict:
         else:
             promises_no_evidence.append({"id": p.get("id"), "physical_evidence_expected": ev[:60]})
 
-    # 检测 3（2026-07-06 P1 三态生命周期）: payoff 必须引用 open 项
+    # 检测 3（伏笔三态生命周期）: payoff 必须引用 open 项
     # changes 声明的 payoff（factual.foreshadowing_actions type=payoff）指向的 promise 若已
     # suspended/consumed → 可能是重复回收或状态漂移（advisory·可豁免·绝不 hard_gate）。
     # 目标 id 不在伏笔表 → 跳过不报（brief 注册发生在 save-state 阶段·scanner 时点常未注册）。
@@ -145,11 +143,12 @@ def scan(project_root: Path, cluster_id: str) -> dict:
     if not_planted:
         issues.append({
             "code": "FORESHADOWING_NOT_PLANTED",
-            # 2026-05-29 复审复修 [M13]：tier 存在 int(1) 与 string("A") 双约定（event_cluster_schema
-            # 定义为 "A"/"B"/"C"，运行时部分项目写 1/2/3）。两种都认 tier-1/A 为必埋 → hard_gate。
-            # 2026-05-30 北极星复审：伏笔【埋设】漏（计划埋但没埋）≠ 穿帮（读者看不出该埋未埋），属
-            # advisory 提醒；只有伏笔【回收】漏（FORESHADOWING_NOT_PAID，已在 HARD_GATE_CODES）才是穿帮。
-            # 且本检测用 6 连字精确匹配极易误报（实测全 not_planted）→ 不得自立 hard_gate 误卡写作。
+            # 即便 tier-1/A（必埋级）未埋，本 issue 仍恒 advisory：伏笔【埋设】漏（计划埋
+            # 但没埋）≠ 穿帮（读者看不出该埋未埋），只有伏笔【回收】漏（FORESHADOWING_NOT_PAID，
+            # 已在 HARD_GATE_CODES）才是穿帮。且本检测用 6 连字精确匹配极易误报，
+            # 不得自立 hard_gate 误卡写作。tier 存在 int(1) 与 string("A") 双约定
+            # （event_cluster_schema 定义为 "A"/"B"/"C"，运行时部分项目写 1/2/3），两种
+            # 都要认出 tier-1/A。
             "gate_level": "advisory",
             "severity": "error" if len(not_planted) >= 2 else "warning",
             "count": len(not_planted),

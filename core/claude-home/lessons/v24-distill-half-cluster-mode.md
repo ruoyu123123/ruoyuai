@@ -1,4 +1,4 @@
-# L9: 蒸馏 Agent 半 cluster 模式（A' 方案 · 2026-05-24 实证）
+# L9: 蒸馏 Agent 半 cluster 模式（A' 方案）
 
 ## 问题
 
