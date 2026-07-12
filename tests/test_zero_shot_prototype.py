@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""zero_shot_prototype.py 专属回归测试(2026-07-04·W6 内容后端切轨·零样本原型分类工具)。
+"""zero_shot_prototype.py 专属回归测试（零样本原型分类工具）。
 
 确定性 mock embedding(字符频率向量·同 test_topic_drift_scanner/
 test_macguffin_entanglement_scanner 手法)·不依赖真模型/网络。
 
-🔴 2026-07-04：本工具从风格侧 EMBED_BACKEND + compute_embeddings_batch 切到内容侧
-embedding_store.content_backend_available() + compute_content_embeddings_batch()（零样本
-分类判断"这段文本属于哪类内容语义"是内容任务不是风格任务，见 core/ml/calibration/reports/
-content_embed_separability_20260704.md）。mock 面同步换成 monkeypatch 这两个新入口，不再
-靠 EMBED_BACKEND 环境变量控制门控——本机若真实装了 core/ml/models/content_embed/
-bge-small-zh-v1.5（Wave-6 已落地），content_backend_available() 在"环境变量不设"时也会
-返回 True，所以每个门控测试都显式 monkeypatch 该函数，不依赖本机磁盘状态的不确定性。
+本工具走内容侧 embedding_store.content_backend_available() +
+compute_content_embeddings_batch()（零样本分类判断"这段文本属于哪类内容语义"是内容
+任务不是风格任务，见 core/ml/calibration/reports/content_embed_separability_20260704.md）。
+mock 面 monkeypatch 这两个入口，不靠 EMBED_BACKEND 环境变量控制门控——本机若真实装了
+core/ml/models/content_embed/bge-small-zh-v1.5，content_backend_available() 在"环境变量
+不设"时也会返回 True，所以每个门控测试都显式 monkeypatch 该函数，不依赖本机磁盘状态的
+不确定性。
 """
 import math
 import os
@@ -40,7 +40,7 @@ def _char_freq_embedding_batch(texts, dim: int = 32) -> list:
 
 def _run_with_mock_embedding(fn, *args, **kwargs):
     """monkeypatch embedding_store.content_backend_available()→True + compute_content_embeddings_batch
-    后跑 fn（内容后端 mock·2026-07-04 起 zero_shot_prototype 走内容语义后端，不再是风格 EMBED_BACKEND）。
+    后跑 fn（内容后端 mock·zero_shot_prototype 走内容语义后端而非风格 EMBED_BACKEND）。
     """
     import embedding_store
     orig_avail = embedding_store.content_backend_available
@@ -63,7 +63,7 @@ _PROTOTYPES = {
 }
 
 
-# ── 门控（2026-07-04：风格 EMBED_BACKEND → 内容 content_backend_available 切轨）─────
+# ── 门控（唯一门控 = embedding_store.content_backend_available）─────
 def test_gate_off_when_content_backend_unavailable():
     """content_backend_available() 为 False → classify()/classify_batch() 直接全 None（无 hash 兜底）。"""
     import embedding_store
@@ -77,10 +77,10 @@ def test_gate_off_when_content_backend_unavailable():
 
 
 def test_embed_backend_env_var_no_longer_gates_classify():
-    """回归锁：迁移后 EMBED_BACKEND / GEN_EMBED__* 环境变量对本工具门控不再有任何作用——
-    唯一门控是 embedding_store.content_backend_available()。故意把旧风格门控会打开的
+    """回归锁：EMBED_BACKEND / GEN_EMBED__* 环境变量对本工具门控没有任何作用——
+    唯一门控是 embedding_store.content_backend_available()。故意把风格门控会打开的
     环境变量全设上，同时显式把内容后端强制关闭，断言 classify() 仍然 None：证明起作用的
-    是 content_backend_available() 而不是环境变量（防止有人把风格门控逻辑悄悄挪回来）。
+    是 content_backend_available() 而不是环境变量（防止风格门控逻辑被挪回来）。
     """
     import embedding_store
     bak_eb = os.environ.get("EMBED_BACKEND")
@@ -140,7 +140,7 @@ def test_floor_default_allows_high_confidence_self_match():
 
 # ── 质心缓存 ─────────────────────────────────────────
 def test_centroid_cache_reused_for_same_prototypes():
-    """🔴 2026-07-03 Wave-4：classify() 内部改走批量 embed，改为按批调用计数。"""
+    """🔴 classify() 内部走批量 embed·按批调用计数。"""
     calls = []
 
     def _counting_batch(texts):
@@ -152,7 +152,7 @@ def test_centroid_cache_reused_for_same_prototypes():
         embedding_store.compute_content_embeddings_batch = _counting_batch
         mod.classify("哈哈哈真好笑", _PROTOTYPES, floor=0.0)
         prototype_example_count = sum(len(v) for v in _PROTOTYPES.values())
-        # 首次：例句 + 1 条待分类文本合成一次批调用（Wave-4 冷启动只占一次后端往返）
+        # 首次：例句 + 1 条待分类文本合成一次批调用（冷启动只占一次后端往返）
         assert len(calls) == 1
         assert len(calls[0]) == prototype_example_count + 1
         mod.classify("笑死我了哈哈", _PROTOTYPES, floor=0.0)
@@ -175,7 +175,7 @@ def test_cache_key_differs_by_prototypes_content():
 
 
 def test_clear_cache_forces_rebuild():
-    """🔴 2026-07-03 Wave-4：改为按批调用累计 embed 文本数计数。"""
+    """🔴 按批调用累计 embed 文本数计数。"""
     calls = []
 
     def _counting_batch(texts):
@@ -210,7 +210,7 @@ def test_empty_prototypes_returns_none():
 
 
 def test_compute_embedding_exception_returns_none():
-    """🔴 2026-07-04：classify() 内部现走 compute_content_embeddings_batch，异常源随之改。"""
+    """🔴 classify() 内部走 compute_content_embeddings_batch·异常源在批量入口。"""
     def _boom(texts):
         raise RuntimeError("embed fail")
 
@@ -241,7 +241,7 @@ def test_label_with_no_examples_skipped():
     _run_with_mock_embedding(_do)
 
 
-# ── 🔴 2026-07-03 Wave-4 性能层：classify_batch 专属回归 ─────────────────────
+# ── 🔴 classify_batch 专属回归 ─────────────────────
 def test_classify_batch_gate_off_returns_all_none():
     import embedding_store
     orig = embedding_store.content_backend_available
@@ -276,7 +276,7 @@ def test_classify_batch_returns_list_aligned_with_input():
 
 
 def test_classify_batch_matches_classify_per_item():
-    """batch 逐条结果须与单条 classify() 数学上逐字节一致（只是 embed 方式变了）。"""
+    """batch 逐条结果须与单条 classify() 数学上逐字节一致（仅 embed 批量方式不同）。"""
     def _do():
         texts = ["哈哈哈笑得停不下来", "震惊愕然呆住了"]
         batch_results = mod.classify_batch(texts, _PROTOTYPES, floor=0.0)
@@ -287,7 +287,7 @@ def test_classify_batch_matches_classify_per_item():
 
 
 def test_classify_batch_single_backend_call_for_cold_start():
-    """🔴 Wave-4 核心契约：质心缓存冷启动时，例句+全部待分类文本合成一次批调用。"""
+    """🔴 核心契约：质心缓存冷启动时，例句+全部待分类文本合成一次批调用。"""
     calls = []
 
     def _counting_batch(texts):

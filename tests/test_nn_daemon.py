@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# 🔴 2026-07-03 Wave-5 常驻推理 daemon + 客户端回归
 """test_nn_daemon.py — model_daemon.py（venv 侧·懒加载设计）+ nn_daemon_client.py（系统 py 侧）回归。
 
 覆盖：
@@ -21,8 +20,8 @@ client 侧的 urlopen 调用会被拦成 AssertionError。修法是彻底不依�
 逻辑本身是纯函数（`dispatch_request`），client 侧测试改用假 urlopen 直接路由给这个纯函数，
 两者都不经过真实 OS socket，天然对这道全局闸免疫，同时仍然端到端验证真实的协议/契约逻辑
 （鉴权/路由/task 分发/请求构造/响应解析全部真跑，只是传输层不落地到 socket）。
-真机字面意义上的 HTTP + 子进程验证已单独人工跑通（daemon 真实 spawn + vad→coherence→vad→
-style_embed→nli→health→shutdown 全链路 + model.py 撞名陷阱验证，见交付报告）。
+真机字面意义的 HTTP + 子进程链路不在本测试覆盖内（真机冒烟用
+RUOYU_NN_DAEMON_ALLOW_SPAWN_IN_TESTS=1 人工验证）。
 
 确定性·零 torch·零真实模型加载（task handler 全部用假函数替换）。
 """
@@ -60,7 +59,7 @@ def test_daemon_module_importable_without_torch():
     assert hasattr(daemon_mod, "dispatch_request")
     assert set(daemon_mod._TASK_HANDLERS) == {
         "style_embed", "vad", "coherence", "surprisal", "nli",
-        "content_embed",   # 🔴 2026-07-04 W6-C：bge 内容嵌入（风格/内容双轨）
+        "content_embed",   # bge 内容嵌入（风格/内容双轨）
     }
 
 
@@ -469,11 +468,11 @@ def test_idle_watchdog_does_not_trigger_while_active():
         wd.join(timeout=1.0)
 
 
-# ════════════════════════════ 2026-07-04 进程风暴根治回归锁 ════════════════════════════
+# ════════════════════════════ spawn 防进程风暴回归锁 ════════════════════════════
 
 def test_spawn_refused_under_pytest(monkeypatch, tmp_path):
-    """pytest 环境（PYTEST_CURRENT_TEST 恒存在）→ _spawn_daemon 拒绝真拉起。
-    实证教训：测试反复真拉起曾积出 24 个僵尸 python + 控制台黑框风暴。"""
+    """pytest 环境（PYTEST_CURRENT_TEST 恒存在）→ _spawn_daemon 拒绝真拉起
+    （防僵尸进程/控制台黑框风暴）。"""
     import subprocess as _sp
     monkeypatch.setattr(_sp, "Popen", lambda *a, **kw: (_ for _ in ()).throw(
         AssertionError("pytest 下不得真拉起 daemon")))

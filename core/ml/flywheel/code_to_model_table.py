@@ -1,23 +1,20 @@
-# 🔴 2026-07-02 CODE_TO_MODEL 桶表全仓对账 · scanner-nn-upgrade teammate
 """code_to_model_table.py — scanner issue code → 数据飞轮训练桶查表（唯一真理源）。
 
-从 data_collector.py 拆出（该文件加上本表会超 1000 行 · 用户全局规则要求单文件拆分）。
+映射数据独立成本文件（与 data_collector.py 合并会超单文件 1000 行上限）。
 data_collector.py 只 import 这里的 CODE_TO_MODEL / CODE_PREFIX_TO_MODEL /
 EXCLUDED_FROM_FLYWHEEL / resolve_model_for_code，不直接维护映射数据。
 
-背景：core/scripts/ 209 个 scanner/aggregate 各自 emit 静态 issue code，本表把每个
+core/scripts/ 各 scanner/aggregate emit 静态 issue code，本表把每个
 code 映射到 13 个模型训练桶（ai_tone/hook_strength/surprisal/tension_trajectory/
 coherence/emotion_arc/style_fidelity/dialogue_pragmatics/promise_payoff/voice_drift/
 character_trajectory/action_mentalizing/cognitive_load）之一，或复用 data_collector.py
 里已有的非-13-桶池名（judge_reliability/waiver_calibration/scanner_reliability/
-reader_experience——这几个池子已被 _collect_judge_reports 等函数使用，语义比硬塞进
+reader_experience——这几个池子被 _collect_judge_reports 等函数使用，语义比硬塞进
 13 桶更准），或显式收进 EXCLUDED_FROM_FLYWHEEL（ledger/契约/infra 信号·非正文judge）。
 
 _collect_weak_labels / _collect_strong_labels（data_collector.py）遇到
 CODE_TO_MODEL.get(code) 为 None 就静默 continue —— 未注册 code 的训练信号被丢弃。
-2026-07-02 全仓 AST 静态扫描（tests/test_code_to_model_coverage.py 同款提取逻辑）核出
-468 个静态 code 从未注册，逐一归桶/豁免补齐（见下）。回归锁：新 scanner 忘记注册会被
-test_code_to_model_coverage.py 直接测红。
+回归锁：新 scanner 忘记注册会被 test_code_to_model_coverage.py 直接测红。
 """
 from __future__ import annotations
 
@@ -37,9 +34,6 @@ CODE_TO_MODEL: dict[str, str] = {
     "REPEAT_NOUN_DENSITY": "ai_tone",
     "SUBTEXT_ON_THE_NOSE": "ai_tone",
     "TRANSLATIONESE_RESIDUAL": "ai_tone",
-    # LLM_GRAMMAR_OVERUSE（旧注册·从未被任何 scanner 实际 emit 过，naming drift 死码）
-    # 已删除，真实 code 见下方新增区 LLM_GRAMMAR_PARTICIPIAL_OVERUSE 等 4 个具体变体
-    # （llm_grammar_overuse_scanner.py 的 ISSUE_CODES 元组·scanner_registry.json 已核实）。
 
     # 钩子 / 信息密度 / 张力轨迹
     "HOOK_WEAK": "hook_strength",
@@ -49,12 +43,12 @@ CODE_TO_MODEL: dict[str, str] = {
     "SURPRISAL_CLIFF": "surprisal",
     "SURPRISAL_MONOTONE": "surprisal",
     "INFO_DENSITY_IMBALANCE": "surprisal",
-    "SCH_HIERARCHY_INVERTED": "surprisal",  # 2026-07-01 补全：cross_cluster_hierarchical_position_surprisal_aggregate
+    "SCH_HIERARCHY_INVERTED": "surprisal",  # 来源 cross_cluster_hierarchical_position_surprisal_aggregate
     "RHYTHM_FLATLINE": "tension_trajectory",
     "NARRATIVE_RHYTHM_MONOTONE": "tension_trajectory",
     "PREMATURE_RESOLUTION": "tension_trajectory",
     "WC_TOO_SHORT": "tension_trajectory",
-    # 2026-07-01 补全：爆点前张力铺垫同族（forecasting_tension/frisson_lead_window/gaoneng_anticipation_signposting）
+    # 爆点前张力铺垫同族（forecasting_tension/frisson_lead_window/gaoneng_anticipation_signposting）
     "FORECASTING_TENSION_FLAT": "tension_trajectory",
     "FRISSON_LEAD_FLAT": "tension_trajectory",
     "FRISSON_CLIMAX_OVERLOAD": "tension_trajectory",
@@ -73,7 +67,7 @@ CODE_TO_MODEL: dict[str, str] = {
     "EPISODE_BRIDGE_WEAK": "coherence",
     "SCENE_GROUNDING_THIN": "coherence",
     "TEMPORAL_GROUNDING_THIN": "coherence",
-    # 2026-07-07 ConStory 盲区三件套：时序倒错/空间瞬移/描述类 NLI 矛盾（语义连贯信号·全 advisory）
+    # ConStory 盲区三件套：时序倒错/空间瞬移/描述类 NLI 矛盾（语义连贯信号·全 advisory）
     "DRAFT_TEMPORAL_ORDER_REVERSED": "coherence",
     "SPATIAL_CONTINUITY_TELEPORT": "coherence",
     "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION": "coherence",
@@ -88,7 +82,7 @@ CODE_TO_MODEL: dict[str, str] = {
     "CONGENIALITY_SKEW": "emotion_arc",
     "RASA_LAYER_DOMINANT_DRIFT": "emotion_arc",
     "RASA_CAUSAL_BREAK_MISMATCH": "emotion_arc",
-    # 2026-07-01 补全：cn_emotion_vad_drift / cross_cluster_ousiometric_emd 此前未接入任何桶
+    # 来源 cn_emotion_vad_drift / cross_cluster_ousiometric_emd
     "CN_EMOTION_ANGLO_DRIFT": "emotion_arc",
     "CN_EMOTION_CULTURAL_UNDERUSE": "emotion_arc",
     "CN_EMOTION_BINARY_POLARIZATION": "emotion_arc",
@@ -103,9 +97,6 @@ CODE_TO_MODEL: dict[str, str] = {
     "FUNCTION_WORD_FINGERPRINT_DRIFT": "style_fidelity",
     "ANACHRONY_ORDER_THIN": "style_fidelity",
     "NARRATIVE_FREQUENCY_FLAT": "style_fidelity",
-    # ANADIPLOSIS_OVERUSE / ANADIPLOSIS_UNDERUSE（旧注册·naming drift 死码，从未被
-    # anadiplosis_scanner.py 实际 emit 过）已删除，真实 code 见下方新增区
-    # ANADIPLOSIS_DETECTED / ANADIPLOSIS_OVER_BASELINE / ANADIPLOSIS_UNDER_BASELINE。
 
     # 对白语用 / 群戏调度
     "DIALOGUE_NATURALNESS_LOW": "dialogue_pragmatics",
@@ -114,8 +105,6 @@ CODE_TO_MODEL: dict[str, str] = {
     "GROUP_DIALOGUE_NAME_CRUTCH": "dialogue_pragmatics",
     "GROUP_DIALOGUE_IMBALANCE": "dialogue_pragmatics",
     "DISPREFERRED_TURN_BARE": "dialogue_pragmatics",
-    # ATTRIBUTION_MODE_DRIFT（旧注册·naming drift 死码，从未被 attribution_mode_scanner.py
-    # 实际 emit 过）已删除，真实 code 见下方新增区 ATTRIBUTION_MODE_MONOTONE 等 3 个。
     "QUOTATIVE_SIGNATURE_DRIFT": "dialogue_pragmatics",
 
     # 伏笔 / 揭示公平性 / promise-payoff
@@ -123,7 +112,7 @@ CODE_TO_MODEL: dict[str, str] = {
     "FORESHADOWING_NOT_PLANTED": "promise_payoff",
     "FORESHADOWING_NOT_REINFORCED": "promise_payoff",
     "FORESHADOWING_HANDOFF_WEAK": "promise_payoff",
-    "FORESHADOWING_PAYOFF_TARGET_NOT_OPEN": "promise_payoff",  # 2026-07-06 P1 伏笔三态生命周期：payoff 指向非 open 条目
+    "FORESHADOWING_PAYOFF_TARGET_NOT_OPEN": "promise_payoff",  # 伏笔三态生命周期：payoff 指向非 open 条目
     "REVEAL_FAIRNESS_LOW": "promise_payoff",
     "RED_HERRING_RECALL_WEAK": "promise_payoff",
     "MACGUFFIN_ENTANGLEMENT_LOW": "promise_payoff",
@@ -147,11 +136,11 @@ CODE_TO_MODEL: dict[str, str] = {
     "ACTION_PURE_MENTAL": "action_mentalizing",
     "COGNITIVE_OVERLOAD": "cognitive_load",
     "CAST_ECONOMY_OVERLOAD": "cognitive_load",
-    # 2026-07-01 补全：expert_blindspot_scanner 此前未接入任何桶
+    # 来源 expert_blindspot_scanner
     "EXPERT_BLINDSPOT_DRIFT": "cognitive_load",
     "EXPERT_BLINDSPOT_DRIFT_COMPLEX": "cognitive_load",
 
-    # ============ 2026-07-02 全仓对账新增（468 静态 code 全集 - 53 EXCLUDED = 415） ============
+    # ============ 全仓 scanner 静态 code 归桶 ============
     # ---- ai_tone（AI 腔/模板化/塑料感） ----
     "CAUSAL_HEURISTIC_LEAK": "ai_tone",
     "CLICHE_AI_WORDS_CN": "ai_tone",
@@ -281,7 +270,7 @@ CODE_TO_MODEL: dict[str, str] = {
     "CONSISTENCY_HOTSPOT_COOCCURRENCE": "coherence",
     "CROSS_BOOK_INVARIANT_BREACH": "coherence",
     "EDGE_CYCLE": "coherence",
-    # 2026-07-07 A10 实体状态时间线图矛盾（Magnet/Atlas·cross_cluster_entity_state_graph_aggregate）
+    # 实体状态时间线图矛盾（Magnet/Atlas·cross_cluster_entity_state_graph_aggregate）
     "ENTITY_STATE_GRAPH_CONFLICT": "coherence",
     "FIRSTPERSON_RETRO_HINDSIGHT_THIN": "coherence",
     "FOCALIZER_PERCEPTION_OUT_OF_BOUNDS": "coherence",
@@ -298,7 +287,7 @@ CODE_TO_MODEL: dict[str, str] = {
     "PROSE_AXIS_OK": "coherence",
     "PROSE_AXIS_TRIPLE_EMPTY": "coherence",
     "RULE_TEXT_AMBIGUITY_LOW": "coherence",
-    # [2026-07-06 P1移植 scene_receipts] 文本-storyboard 对齐是连贯性信号
+    # scene_receipts：文本-storyboard 对齐是连贯性信号
     "SCENE_RECEIPT_COVERAGE_GAP": "coherence",
     "TEMPORAL_BOOTSTRAP_LOOP": "coherence",
     "TIME_ANCHOR_DROP": "coherence",
@@ -624,7 +613,7 @@ EXCLUDED_FROM_FLYWHEEL: dict[str, str] = {
     "SPLIT_WORD_NOT_CONSERVED": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
     "WORD_CONSERVATION_DRIFT": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
     # cluster 长度带遥测（LongWriter 长输出长度体检·下游 advisory 遥测非可学习正文质量信号·
-    # 北极星⑤字数自然涌现是 v27 纯 freestyle 已定调，长度带外≠文本工艺差，混入会稀释训练池质量）
+    # 北极星⑤字数自然涌现（纯 freestyle），长度带外≠文本工艺差，混入会稀释训练池质量）
     "CLUSTER_LENGTH_UNDER_BAND": "cluster 长度带遥测（LongWriter 长输出长度体检·下游 advisory 遥测非可学习正文质量信号·北极星⑤字数自然涌现，长度带外≠文本工艺差）",
     "CLUSTER_LENGTH_OVER_BAND": "cluster 长度带遥测（LongWriter 长输出长度体检·下游 advisory 遥测非可学习正文质量信号·北极星⑤字数自然涌现，长度带外≠文本工艺差）",
     # 蒸馏管线自身校验（验证蒸馏产物结构完整性·不评判正文文本本身）
@@ -680,16 +669,14 @@ EXCLUDED_FROM_FLYWHEEL: dict[str, str] = {
 def resolve_model_for_code(code: str | None) -> str | None:
     """统一 code→训练桶查表：大小写不敏感 + 精确优先 + 前缀兜底。
 
-    大小写不敏感是根治性修复：audit_hub._parse_scanner_json 用
-    f"{scanner.upper()}_{check}" 拼 code 时只大写了 scanner 前缀（如 scanner="semantic"）、
-    没有 `.upper()` check 部分（check 取自 SEMANTIC_DIM 的小写 key，如 "metaphor_explain"），
-    实际 emit 的是 "SEMANTIC_metaphor_explain"（混合大小写），但 CODE_TO_MODEL 里注册的是
-    全大写 "SEMANTIC_METAPHOR_EXPLAIN"——原先 _collect_weak_labels 直接 `.get(code)`
-    大小写敏感查表，8 个已注册的 SEMANTIC_* code 从未真正命中过，训练信号静默丢失。
-    这里统一 `.upper()` 归一化后再查表，一次性治好这整类大小写漂移。
+    大小写不敏感是必要约束：audit_hub._parse_scanner_json 用
+    f"{scanner.upper()}_{check}" 拼 code 时只大写 scanner 前缀、check 部分保持小写
+    （实际 emit 如 "SEMANTIC_metaphor_explain" 的混合大小写），而 CODE_TO_MODEL
+    注册的键全大写——大小写敏感查表会让这类动态拼接 code 永不命中、训练信号静默
+    丢失。这里统一 `.upper()` 归一化后再查表，整类大小写漂移一并覆盖。
 
     调用方（_collect_weak_labels / _collect_strong_labels / _brief_model）统一走此函数，
-    不再各自直接 `CODE_TO_MODEL.get(code)`。
+    不各自直接 `CODE_TO_MODEL.get(code)`。
     """
     if not code:
         return None

@@ -1,6 +1,6 @@
-"""L1b 风格相似度漂移分测试 — one-class/OOD scanner（北极星① band 从作者原文涌现 · 2026-05-31）。
+"""L1b 风格相似度漂移分测试 — one-class/OOD scanner（北极星① band 从作者原文涌现）。
 
-背景：L1b 把「作者原文池」当 one-class 参照系——对作者每章算 embedding centroid，得作者风格
+L1b 把「作者原文池」当 one-class 参照系——对作者每章算 embedding centroid，得作者风格
 中心 + **作者自身章节相对中心的 cosine 分布**（mean/σ）；cluster 草稿算与中心的 cosine，
 若 < (mean−2σ) 则是作者风格空间里的离群点（OOD）→ advisory「风格相似度漂移」。
 阈值不写死，从作者样本经验分布涌现（不同作者 σ 不同 → 阈值各异）。
@@ -359,7 +359,7 @@ def test_I_too_short_draft_skips():
 
 
 # ════════════════════════════════════════════════════════════════
-# [J] mstyle 真风格后端 dispatch + 维度（2026-05-31 · 真风格 embedding 接入）
+# [J] mstyle 真风格后端 dispatch + 维度
 # ════════════════════════════════════════════════════════════════
 
 def _mstyle_available():
@@ -433,7 +433,7 @@ def test_J_mstyle_embedding_768_normalized():
 
 
 # ════════════════════════════════════════════════════════════════
-# [K] 金标准实测：mstyle vs hash vs bge 中文网文长文区分力（2026-05-31 · 诚实结论）
+# [K] 金标准实测：mstyle vs hash vs bge 中文网文长文区分力
 # ════════════════════════════════════════════════════════════════
 #
 # 🔴 实测结论（蛊真人 in-dist ch21-30 vs 惊悚乐园 OOD ch1-10 · baseline=蛊真人 ch1-20 ·
@@ -449,9 +449,9 @@ def test_J_mstyle_embedding_768_normalized():
 #     （in-dist 0.9997 ≈ OOD 0.9996，σ=0.0004），AUC=0.64 < hash/bge 的 1.00。
 #     mStyleDistance 论文只验**句子级**风格对比；在「整章 chunk-均值-centroid」这条系统
 #     既有 pipeline 上，风格信号被均值洗没（各 chunk 共有的主成分主导 → 余弦全贴 1.0）。
-#   → 决策（先实证后切默认）：**默认保持 hash（零回归）·mstyle 接线就绪走 opt-in
+#   → 实证定默认：**默认 hash（零回归）·mstyle 接线就绪走 opt-in
 #     EMBED_BACKEND=mstyle**。绝不为 SOTA 而 SOTA 硬切。
-#   → 复跑实测：见本仓 commit 说明 / 临时脚本（baseline 20 章 + in/ood 各 10 章，CPU ~50 分钟）。
+#   → 复跑实测口径：baseline 20 章 + in/ood 各 10 章（CPU ~50 分钟）。
 #
 # 下面只保留**快速确定性**校验（不在默认 pytest 里重跑 50 分钟 mstyle 推理）：
 #   · hash pipeline 在金标准上确实可分（证明金标准 + pipeline 本身有效）。

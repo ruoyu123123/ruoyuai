@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""#4 作者签名因果功能链 narrative_function_sequence 三端管线测试（2026-06-16·穷尽核查·确定性）。
+"""作者签名因果功能链 narrative_function_sequence 三端管线测试（确定性）。
 
 三端闭环：consolidate.aggregate_narrative_seq（读原文调 score_narrative_function_sequence·非空才写
 作者档）→ build_manifest._collect_narrative_function_sequence（shadow/active/off·从作者档读转 directive）

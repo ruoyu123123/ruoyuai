@@ -1,18 +1,18 @@
-"""Snippet 真实原文「语感种子」播种测试（P0 · 北极星①⑤⑥ · 2026-05-31）。
+"""Snippet 真实原文「语感种子」播种测试（北极星①⑤⑥）。
 
 机制（gen_writer 写作 + distill_replicate 复刻 共用 snippet_seed 模块）：
   生成时 prompt 额外注入 1-2 段作者真实原文片段当「语感种子」，让模型贴真实文本流形起笔，
   防长 cluster 中后段退化回通用 AI 腔（直击 D 级长文退化 + 段长崩塌）。
-  5 调研共识 + 两篇论文交叉印证（in-context style anchoring）。
+  业界 in-context style anchoring 机制。
 
 🔴 关键避坑（Catch Me If You Can 论文实证）：
   片段按**风格/情绪相似**选 · **非题材相似**（题材相似选样反降分）；
   prompt 明确「只借语感语调起手势 · 情节按 storyboard/brief 走 · 绝不抄原文情节内容」
   （防抄袭 + 防内容泄漏）。
 
-🔴 默认开启（env SNIPPET_SEED_MODE 默认 on · 2026-05-31 放量）：
+🔴 默认开启（env SNIPPET_SEED_MODE 默认 on）：
   默认 on → 注入 1-2 段作者真原文当语感种子（真生效·有原文池就注入）· 显式 off 做 A/B 对照。
-  无原文池 / 选不到候选 → 优雅降级返回空段（不报错·不改默认生成）。
+  无原文池 / 选不到候选 → 返回空段（不报错·不改默认生成）。
 
 纪律：纯 prompt 注入 · 不改 writer/复刻走 gen-model 的事实 ·
   测试只验**确定性的 prompt 构造 / 选样纯函数 / mode 解析**（不实跑 gen-model · 需 API）。
@@ -71,11 +71,11 @@ _CALM_SNIPPET = "他静静坐着，缓缓望向窗外。暖光柔和，他笑了
 
 
 # ════════════════════════════════════════════════════════════════
-# [A] mode 解析 snippet_seed_mode（默认 on · 2026-05-31 放量）
+# [A] mode 解析 snippet_seed_mode（默认 on）
 # ════════════════════════════════════════════════════════════════
 
 def test_A_mode_default_on():
-    """SNIPPET_SEED_MODE 未设 → 默认 on（2026-05-31 放量·真生效注入作者真原文语感种子）。"""
+    """SNIPPET_SEED_MODE 未设 → 默认 on（真生效注入作者真原文语感种子）。"""
     sx = _reload_ss(None)
     try:
         assert sx.snippet_seed_mode() == "on"
@@ -112,7 +112,7 @@ def test_A_mode_explicit_off():
 
 
 def test_A_mode_garbage_falls_back_on():
-    """空 / 非法值 / 旧 0/false → 回退默认 on（2026-05-31 放量·只有显式 off 才关）。"""
+    """空 / 非法值 / 0/false → 回退默认 on（只有显式 off 才关）。"""
     for v in ("", "garbage", "0", "false"):
         sx = _reload_ss(v)
         try:

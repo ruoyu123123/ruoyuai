@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""#7 distill_golden_few_shot 升格 —— 原作金句 few-shot 从 raw-JSON dead-zone 升格生成点近邻（2026-06-16）。
+"""distill_golden_few_shot 原作金句 few-shot 生成点近邻注入回归。
 
-穷尽核查 wyo52es0z #7：build_manifest 产 distill_golden_few_shot.passages_by_type（蒸馏 golden_passages
-按 scene_type 选的原作金句段）此前只 raw JSON 躺 manifest dump dead-zone·gen_writer 0 解析。本批升格到
-生成点近邻 few-shot 段（仿 #3 rolling_anchor·每类 1-2 段防爆量）。默认 shadow（文风改善需 gen-model A/B）。
+build_manifest 产 distill_golden_few_shot.passages_by_type（蒸馏 golden_passages 按
+scene_type 选的原作金句段）；gen_writer 在 active 模式把它渲染成生成点近邻 few-shot 段
+（同 rolling_anchor 范式·每类 1-2 段防爆量）。默认 shadow（文风改善需 gen-model A/B）。
 守护：active 注入位置正确 + shadow/off 零回归（解析段 heading 不出现）+ 无字段/空不注入 + 每类限 2 段。
 零依赖·仓库根 pytest 入口。
 """
@@ -86,7 +86,7 @@ def test_active_injects_near_gen_point():
 
 
 def test_shadow_off_zero_regression():
-    """shadow（默认）/ off → 解析段不出现（零回归·金句在 raw dump 是预期·像 #3）。"""
+    """shadow（默认）/ off → 解析段不出现（零回归·金句在 raw dump 是预期）。"""
     for mode in ("shadow", "off"):
         with tempfile.TemporaryDirectory() as td:
             root = _make_project(Path(td))

@@ -123,7 +123,7 @@ def test_B_custom_min_scene_len():
 # [C] extract_dialogues_by_speaker() —— speaker 追踪 + alias + 弯引号 + 续接
 # ══════════════════════════════════════════════════════════════════════════
 def test_C_extract_wide_and_ascii_and_corner_quotes():
-    # 弯引号 “” / ASCII "" / 方引号「」 三种都要抽到（2026-05-30 弯引号补丁）。
+    # 弯引号 “” / ASCII "" / 方引号「」 三种都要抽到。
     # speaker 名需满足 SPEAKER_PATTERN 的 2-4 汉字（"阿强" 合法，单字 "他" 不匹配）。
     line = '阿强开口：“弯引号对白”然后"ascii对白"还有「方引号对白」'
     out = vd.extract_dialogues_by_speaker(line, {})

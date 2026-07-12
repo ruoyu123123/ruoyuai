@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""#3 rolling_style_anchor 升格 —— 动态文风锚从 raw-JSON dead-zone 升格生成点近邻回归测试（2026-06-16）。
+"""rolling_style_anchor 动态文风锚生成点近邻注入回归测试。
 
-穷尽核查 wyo52es0z #3：build_manifest._collect_rolling_style_anchor（治 D 级长程文风退化·用本书已写
-得最像作者的片段对抗回归均值退化成通用 LLM 腔）此前只 raw JSON 躺 manifest dump 中段 dead zone·
-writer 难识别为写作目标。本批 gen_writer 显式解析升格到生成点近邻风格锚区（同族 style_fp/rhythm）。
+build_manifest._collect_rolling_style_anchor 治 D 级长程文风退化：用本书已写得最像作者的
+片段对抗回归均值退化成通用 LLM 腔；gen_writer 把 manifest.rolling_style_anchor 显式解析成
+生成点近邻的风格锚区段（同族 style_fp/rhythm），供 writer 当写作目标。
 
 守护：active 注入且位置正确（manifest 后·生成点前·风格锚区）；shadow（默认）/off 零回归；
-缺字段/snippet 全空不注入。默认 shadow（位置升格的文风改善效果需 gen-model A/B 定论·先影子）。
+缺字段/snippet 全空不注入。默认 shadow（近邻注入的文风改善效果需 gen-model A/B 定论）。
 零依赖·仓库根 pytest 入口。
 """
 import json
@@ -99,7 +99,7 @@ def test_shadow_off_zero_regression():
             root = _make_project(Path(td))
             _system, user = _build(root, anchor_mode=mode)
             # 注：snippet 在 raw manifest dump（{manifest} 全量注入·feedback_no_token_saving 不截断·
-            # shadow 也有）·非回归；只验【解析段标题】不出现（shadow/off 不做生成点近邻升格·零回归）。
+            # shadow 也有）·非回归；只验【解析段标题】不出现（shadow/off 不做生成点近邻注入·零回归）。
             assert _ANCHOR_HEADING not in user, f"{mode} 不应注入动态锚解析段"
 
 

@@ -182,8 +182,7 @@ def test_evolve_logs_and_caps_at_50():
 
 
 # ── retire_by_cluster（cluster 序号阈值）─────────────────────────────────────
-# 2026-07-05 cluster-only：chapter 语义 retire() 已随 --ch 双形入口一并清除，
-# 淘汰逻辑唯一形态 = retire_by_cluster（下方用例覆盖）。
+# 淘汰逻辑唯一形态 = retire_by_cluster（无 chapter 语义 retire() / --ch 入口·下方用例覆盖）。
 
 def test_retire_by_cluster_explicit_source_field():
     """pattern 自带 last_validated_at_cluster → 当前序号 - last > 阈值 → retire。"""
@@ -308,7 +307,7 @@ def test_cli_evolve_exit_zero_and_json():
         shutil.rmtree(td, ignore_errors=True)
 
 
-# ── 内容语义 embedding 接线（2026-07-04 · content_backend_available 门控 + token jaccard fallback）────────────────
+# ── 内容语义 embedding 接线（content_backend_available 门控 + token jaccard fallback）────────────────
 
 def test_content_backend_ready_false_by_default(monkeypatch):
     import embedding_store
@@ -364,7 +363,7 @@ def test_semantic_merge_catches_zero_token_overlap_synonym(monkeypatch):
 
 
 def test_semantic_merge_prefetches_all_pattern_blobs_once(monkeypatch):
-    """🔴 2026-07-03 Wave-4 批量改造回归锁：evolve() 语义分支开头应对本 category 全部
+    """🔴 回归锁：evolve() 语义分支开头应对本 category 全部
     pattern blob 调用**一次** prefetch_content_embeddings（而非 O(N^2) 两两比对时逐条各自
     触发后端·真后端下 N 条各起一次子进程暖机不可用）。"""
     import embedding_store
@@ -457,7 +456,7 @@ def test_semantic_merge_falls_back_on_embedding_error(monkeypatch):
 
 
 def test_semantic_merge_empty_blob_still_never_merges(monkeypatch):
-    """🔴 C12 回归锁延伸：内容后端下空 blob 经验仍绝不误合并（token 空集合闸先于语义判断，
+    """🔴 回归锁：内容后端下空 blob 经验仍绝不误合并（token 空集合闸先于语义判断，
     即便 mock embedding 让"万物相似"也拦得住）。"""
     import embedding_store
     monkeypatch.setattr(embedding_store, "content_backend_available", lambda: True)
@@ -502,7 +501,7 @@ def test_cli_dashboard_no_cluster_needed_exit_zero():
 
 
 def test_cli_is_cluster_only_no_ch_entry():
-    """回归锁：--ch 章级双形入口已清除（2026-07-05 与 evolution_orchestrator 同根因）；
+    """回归锁：不得存在 --ch 章级双形入口；
     evolve/retire 缺 --cluster 必须 exit 非 0，不得静默走章级默认。"""
     src = _TARGET.read_text(encoding="utf-8")
     assert '"--ch"' not in src and "'--ch'" not in src

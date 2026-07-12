@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""round2#4 deep_writing_dims 升格 —— D1/D2/D3 创作维度从 raw-JSON dead-zone 升格生成点近邻（2026-06-16）。
+"""deep_writing_dims 注入 —— D1/D2/D3 创作维度解析段注入生成点近邻。
 
-仿 #3/#7 升格族。守护：active 注入位置正确（manifest 后·生成点前）+ shadow（默认）/off 零回归 +
-无字段/空 tip 不注入。默认 shadow（tip 大段创作提示·升格价值 + context 成本需 gen-model A/B）。
+守护：active 注入位置正确（manifest 后·生成点前）+ shadow（默认）/off 零回归 +
+无字段/空 tip 不注入。默认 shadow（tip 大段创作提示·注入价值 + context 成本需 gen-model A/B）。
 零依赖·仓库根 pytest 入口。
 """
 import json
@@ -60,7 +60,7 @@ def _build(root, dd_mode="active", ctx_mode="active"):
 
 
 def test_default_shadow():
-    """env 未设 → 默认 shadow（影子·tip 大段升格价值需 gen-model A/B）。"""
+    """env 未设 → 默认 shadow（影子·tip 大段注入价值需 gen-model A/B）。"""
     prev = os.environ.pop("DEEP_DIMS_INJECT_MODE", None)
     try:
         assert gw._deep_dims_inject_mode() == "shadow"
@@ -82,7 +82,7 @@ def test_active_injects_near_gen_point():
 
 
 def test_shadow_off_zero_regression():
-    """shadow（默认）/ off → 解析段不出现（零回归·tip 在 raw dump 是预期·像 #3/#7）。"""
+    """shadow（默认）/ off → 解析段不出现（零回归·tip 在 raw dump 是预期）。"""
     for mode in ("shadow", "off"):
         with tempfile.TemporaryDirectory() as td:
             root = _make_project(Path(td))

@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""draft_temporal_order_scanner 单测 — 草稿内部时序倒错盲区补齐（2026-07-07）
+"""draft_temporal_order_scanner 单测 — 草稿内部时序倒错检测。
 
-盲区出处：tests/test_constory_consistency_gold.py::test_temporal_order_reversal_blindspot
-（ConStory temporal 类·scene1=第九天、scene2=第五天 互相打架·确定性层此前 0 检出）。
-本套件用同款金 fixture 句子验证新 scanner 真能捞到，并锁死六重防误报豁免
+金 fixture 出处：tests/test_constory_consistency_gold.py::test_temporal_order_reversal_blindspot
+（ConStory temporal 类·scene1=第九天、scene2=第五天 互相打架）。
+本套件用同款金 fixture 句子验证 scanner 真能捞到，并锁死六重防误报豁免
 （narrative_mode 门控 / 闪回豁免 / 锚点稀疏不判 + 时段序仅同日 / 引语掩蔽 /
 时段复合词+时长量词 / 时段链场景跨度上限）。
 
-2026-07-07 金标准校准放量：10 作者 × 10 chunk（连续4章·均匀取样·linear 声明）
-首轮 6/100 误报 → 加豁免④⑤⑥ → 复跑 0/100 零误报 → 默认 shadow→active。
+金标准校准依据：10 作者 × 10 chunk（连续4章·均匀取样·linear 声明）放量 0/100 零误报
+→ 默认 active；豁免④⑤⑥来自该校准的真作者误报根因。
 
 北极星⑤纪律：DRAFT_TEMPORAL_ORDER_REVERSED 永远 advisory（时序自由是叙事手法，
 scanner 只捞无标记的意外倒错）——本套件不断言 audit_hub 接线（由主代理统一做）。
@@ -203,7 +203,7 @@ def test_implicit_midnight_rollover_no_false_positive(tmp_path, monkeypatch):
     assert r["violations"] == [], r
 
 
-# ═══════════ 6b. 豁免④⑤⑥：金标准校准新增（2026-07-07·真作者误报根因回归锁）═══════════
+# ═══════════ 6b. 豁免④⑤⑥：金标准校准（真作者误报根因回归锁）═══════════
 
 def test_quoted_speech_time_words_exempt(tmp_path, monkeypatch):
     """豁免④：引语内时间词不进时钟——问候「晚上好」/对话内计划「第五天」
@@ -287,7 +287,7 @@ def test_tod_chain_gap_within_limit_still_judged(tmp_path, monkeypatch):
     assert r["violations"][0]["anchor_pair"] == ["黄昏", "上午"], r
 
 
-# ═══════════ 6c. 金标准校准证据锁（2026-07-07 放量记载不许被清掉）═══════════
+# ═══════════ 6c. 金标准校准证据锁（放量记载不许被清掉）═══════════
 
 def test_calibration_evidence_recorded_in_source():
     """默认 active 的依据=金标准校准零误报。锁死源码 docstring 记载：
@@ -309,7 +309,7 @@ def test_default_mode_is_active(tmp_path, monkeypatch):
     assert r["reversal_count"] == 1, r
     assert r["violations"] != [], r
     assert r["verdict"] == "FAIL_MINOR", r
-    assert r["gate_level"] == "advisory", r  # 放量不改性质：永远 advisory
+    assert r["gate_level"] == "advisory", r  # 默认 active 不改性质：永远 advisory
 
 
 def test_shadow_mode_no_violations_but_counts(tmp_path, monkeypatch, capsys):

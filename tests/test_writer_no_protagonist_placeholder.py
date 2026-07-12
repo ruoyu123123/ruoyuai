@@ -1,14 +1,12 @@
-"""writer system prompt 禁「主角」占位词泄漏正文回归守卫（G3 e2e fix #4 · 2026-06-23）。
+"""writer system prompt 禁「主角」占位词泄漏正文回归守卫。
 
-钉死 G3 真 API e2e 抓出的沉浸感 bug：scene_storyboard 用「主角」占位指代（项目未定
-主角名），writer 照搬把「主角顶着那张名叫多林的脸」「主角的脑海里」写进正文。
+回归场景：scene_storyboard 用「主角」占位指代（项目未定主角名）时，writer 照搬把
+「主角顶着那张名叫多林的脸」「主角的脑海里」写进正文（沉浸感破坏）。
 
-修复 = gen_writer system prompt 常驻硬铁律加 H5「占位代号零泄漏」：正文里指代人物只能用
+gen_writer system prompt 常驻硬铁律 H5「占位代号零泄漏」：正文里指代人物只能用
 具体角色名 / 第三人称代词 / 身份称谓，**正文出现『主角』二字即破例失败**。
 
-守护点：
-  · 源码级（永远跑）：gen_writer.py 含 H5 指令文本 + 关键短语
-  · build_prompt 级（e2e 项目在 worktree 时跑）：真 system 段含 H5 指令
+守护点：源码级（永远跑）——gen_writer.py 含 H5 指令文本 + 关键短语。
 """
 import sys
 from pathlib import Path

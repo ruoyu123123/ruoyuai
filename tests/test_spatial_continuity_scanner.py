@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""spatial_continuity_scanner 测试 · ConStory location 盲区补口（2026-07-07）
+"""spatial_continuity_scanner 测试 · ConStory location 盲区补口
 
 对应盲区：tests/test_constory_consistency_gold.py::test_location_teleport_blindspot
 ——角色在地窖深处，下一段无移动动词/场景切换标志出现在北境城墙（无标志词位置瞬移）。
@@ -7,7 +7,7 @@ focalizer/locked_fact/pov 三族均 0 检出，本 scanner 用角色↔地点绑
 
 北极星⑤纪律：SPATIAL_CONTINUITY_TELEPORT 永远 advisory（空间跳切可以是叙事省略），
 本文件含制度锁断言该 code 不在 HARD_GATE_CODES。
-注意：audit_hub 接线/registry/flywheel 集成由主代理统一做——本文件**不**断言已接线。
+本文件不断言 audit_hub 接线/registry/flywheel 集成。
 
 跑：py -m pytest tests/test_spatial_continuity_scanner.py -q
 """
@@ -85,11 +85,10 @@ def test_code_is_advisory_never_hard_gate():
 
 
 def test_default_mode_is_active_gold_calibrated():
-    """校准证据锁：金标准 10 作者 100 chunk 零误报放量（2026-07-07）→ 默认 active。
+    """校准证据锁：金标准 10 作者 100 chunk 零误报 → 默认 active。
 
-    校准明细：51/100 误报(399 violations) → 三轮根因收紧(剔关/台/海后缀、
-    词根边界集扩充、同段铺陈豁免、就近绑定、人名重叠排除等) → 0/100。
-    回退到 shadow 须重跑 scratchpad 校准脚本给出新证据。
+    零误报依赖的收紧手段：剔关/台/海后缀、词根边界集扩充、同段铺陈豁免、
+    就近绑定、人名重叠排除等。回退到 shadow 须重跑校准脚本给出新证据。
     """
     old = os.environ.pop("SPATIAL_CONTINUITY_MODE", None)
     try:
@@ -282,7 +281,7 @@ def test_transition_marker_resets_no_report():
     assert r["violations"] == [], r
 
 
-# ═══════════ 9.5 金标准校准新增豁免（2026-07-07·10 作者 100 chunk 实证）═══════════
+# ═══════════ 9.5 金标准校准豁免（10 作者 100 chunk 实证）═══════════
 
 def test_same_paragraph_multi_location_only_rebinds():
     """豁免⑦：同段多地点共现（从属地点链/路线地理）只更新绑定不报。"""

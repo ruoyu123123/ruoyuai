@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse Hook: 运行时报错监控（MAPE-K **Monitor** 层 · 2026-05-30 自学习能力）
+"""PostToolUse Hook: 运行时报错监控（MAPE-K **Monitor** 层）
 
 触发：Bash 工具完成后，扫子进程输出里的**真实 Python Traceback / [FATAL] / [CRASH]**，
 提取「错误指纹」append 到 `core/claude-home/runtime/incidents.jsonl`，供 self_heal_engine.py
@@ -43,7 +43,7 @@ def _basename(p: str) -> str:
 
 def main():
     try:
-        # 2026-07-08 修（Windows 编码根因）：bytes 读 stdin·json 自动 UTF-8（GBK 控制台文本读会花）
+        # stdin 按 bytes 读·json 自动 UTF-8 解码（文本模式在 GBK 控制台会把载荷读花）
         payload = json.loads(sys.stdin.buffer.read())
     except Exception:
         return

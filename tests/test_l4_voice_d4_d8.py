@@ -1,8 +1,7 @@
-"""L4 D4 voice区分度 + D8 口癖一致性测试（2026-05-31 · 主代理手动实现回归）。
+"""L4 D4 voice区分度 + D8 口癖一致性测试。
 
-D4D8 两次 Workflow schema-nudge 失败后改主代理手动实现。
-全 advisory · env VOICE_D4D8_MODE 默认 shadow（只挂字段不改 warning/exit · 回归0）。
-零依赖纯统计（不用 embedding）· 砍掉项 D6情绪弧/D10情绪直陈不做。
+全 advisory · env VOICE_D4D8_MODE 默认 active（shadow 只挂字段不改 warning/exit·off 跳过）。
+零依赖纯统计（不用 embedding）· 不覆盖 D6情绪弧/D10情绪直陈。
 """
 import importlib
 import os
@@ -25,7 +24,7 @@ def _reload(mode):
 
 # ════ [A] mode 解析 ════
 def test_A_mode_default_active():
-    m = _reload(None)   # 未设 → active(2026-05-31 放量·真作者13角色mean_dist=0.422已验证不误判)
+    m = _reload(None)   # 未设 → active（真作者 13 角色 mean_dist=0.422 验证不误判）
     try:
         assert m._d4d8_mode() == "active"
     finally:
@@ -44,7 +43,7 @@ def test_A_mode_explicit_shadow_active_off():
 
 def test_A_mode_garbage_falls_back_active():
     try:
-        assert _reload("garbage")._d4d8_mode() == "active"   # 非法 → active(放量默认态)
+        assert _reload("garbage")._d4d8_mode() == "active"   # 非法 → active（默认态）
     finally:
         _reload(None)
 
@@ -145,7 +144,7 @@ _DRAFT = (
 
 
 def test_F_scan_shadow_default_field_present_no_warning_pollution():
-    vdmod = _reload("shadow")  # 显式 shadow(放量后默认 active·shadow 仍合法·测其回归行为)
+    vdmod = _reload("shadow")  # 显式 shadow（默认 active·shadow 仍合法·测其回归行为）
     try:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

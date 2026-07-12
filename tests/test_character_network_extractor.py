@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# 🔴 2026-06-29 NN角色网络/共指集成
 """character_network_extractor 回归：默认安全（env off → 空结果）·
 角色识别（known > jieba > 空）·共现统计·对话归属·对话交互·中心性·Renard 降级。
 
@@ -138,7 +137,7 @@ def test_orphan_dialogue_count(monkeypatch):
     assert result.get("orphan_dialogues", 0) >= 0  # 不崩即可
 
 
-# ── 代词发言人 coref 兜底（2026-07-02）────────────────────────
+# ── 代词发言人 coref 兜底 ────────────────────────
 # "张三" 距引号开头超过 30 字·30 字回扫必然找不到角色名·逼出 coref 兜底路径
 _PRONOUN_SPEAKER_TEXT = (
     "张三独自坐在酒楼靠窗的位置，窗外的雨已经下了整整一个下午都没有停过，"

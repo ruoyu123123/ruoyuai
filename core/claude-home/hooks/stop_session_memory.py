@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stop hook（P2-4）：会话收尾时生成 summary 持久化。
+"""Stop hook：会话收尾时生成 summary 持久化。
 
 关键约束：
 - exit 0 永远放行；任何异常静默吞掉

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""paragraph_engagement_heat_predictor R18 W7 Batch-U·P2 段落热度回归。
+"""paragraph_engagement_heat_predictor 段落热度回归。
 
 确定性·零依赖。覆盖 off/短稿/段落不足/通章 cold flat 报/正常 PASS/shadow/
 读取失败/_mode/CLI/_heat 维度计算/_split_paragraphs/strip_changes/
@@ -251,7 +251,7 @@ def test_main_cli_warns_on_cold():
     assert rep["warning"] is not None
 
 
-# R20 W9 Batch-CC P2 (2026-06-21) · comment-triggered 密度 + 位置分布扩展
+# comment-triggered 密度 + 位置分布
 def test_comment_triggered_density_present():
     bak = os.environ.get(_ENV)
     try:

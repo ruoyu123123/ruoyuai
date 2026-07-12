@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse Hook: 禁跳步门禁（v24 用户硬规则 2026-05-25）
+"""PreToolUse Hook: 禁跳步门禁（用户硬规则）
 
 触发条件：Bash 工具调用，命令含 `plan_tracker.py step ... --skip-output`
 
@@ -20,8 +20,8 @@ import re
 import sys
 from pathlib import Path
 
-# 🔴 2026-06-27 C16：判定逻辑抽到共享库 plan_step_gates（北极星⑥消重复）。
-# 本 hook 改薄 wrapper：解析 stdin → 找 step → 调 check_anti_skip → ok?exit0:exit2。
+# 判定逻辑在共享库 plan_step_gates（单一真相源）。
+# 本 hook 是薄 wrapper：解析 stdin → 找 step → 调 check_anti_skip → ok?exit0:exit2。
 _SCRIPTS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
 if _SCRIPTS not in sys.path:
@@ -31,7 +31,7 @@ from plan_step_gates import check_anti_skip  # noqa: E402
 
 def main():
     try:
-        # 2026-07-08 修（Windows 编码根因）：bytes 读 stdin·json 自动 UTF-8（GBK 控制台文本读会花）
+        # stdin 按 bytes 读·json 自动 UTF-8 解码（文本模式在 GBK 控制台会把载荷读花）
         payload = json.loads(sys.stdin.buffer.read())
     except Exception:
         sys.exit(0)
@@ -45,16 +45,14 @@ def main():
     if "plan_tracker" not in command or "step" not in command or "--skip-output" not in command:
         sys.exit(0)
 
-    # 2026-05-29 修【安全·绕过】：原正则要求 plan_id 紧跟 step 再紧跟 --n，
-    # 把 --skip-output 写在 --n 前（或 plan_id 前）就会让位置耦合正则 miss 而放行。
-    # 改为解耦提取：先确认是 plan_tracker.py step 子命令，再独立提取 plan_id / --n。
+    # 【安全】解耦提取：先确认是 plan_tracker.py step 子命令，再独立提取 plan_id / --n。
+    # 位置耦合正则（要求 plan_id 紧跟 step 再紧跟 --n）会被「flag 插在中间」绕过放行，禁止回退。
     if not re.search(r"plan_tracker\.py\s+step\b", command):
         sys.exit(0)
     # plan_id：step 后第一个非 flag token（不以 - 开头），跳过 --skip-output 等任意顺序的旗标。
-    # 🔴 2026-07-08 修【安全·CJK fail-open】：首字符类原为 [A-Za-z0-9_] 不含 CJK → 中文书名
-    # plan_id（如「验证书_大天尊…」首字『验』）匹配不上 → pid_m=None → exit 0 放行 --skip-output，
-    # 防跳步守卫对所有中文项目形同虚设。改用 \w（Python re unicode 感知·匹配 CJK·且排除首字 -
-    # 不误吞 flag）。真机验证 2026-07-08 抓出。
+    # 【安全·防 CJK fail-open】首字符类必须用 \w（Python re unicode 感知·匹配 CJK·且排除首字 -
+    # 不误吞 flag）：换成 [A-Za-z0-9_] 会让中文书名 plan_id（如首字『验』）匹配不上 →
+    # pid_m=None → exit 0 放行 --skip-output，防跳步守卫对中文项目形同虚设。
     pid_m = re.search(r"\bstep\s+(?:-\S+\s+)*[\"']?(\w[\w\-]*)[\"']?", command)
     n_m = re.search(r"--n\s+(\d+)", command)
     if not pid_m or not n_m:
@@ -87,7 +85,7 @@ def main():
         print(f"❌ [Hook anti_skip] plan {plan_id} 不存在 step {n}", file=sys.stderr)
         sys.exit(2)
 
-    # 🔴 C16：核心校验下沉到 check_anti_skip（命中即此处含 --skip-output → requested=True）。
+    # 核心校验走 check_anti_skip（进到这里的命令必带 --skip-output → requested=True）。
     result = check_anti_skip(target_step, skip_output_requested=True)
     if result["ok"]:
         sys.exit(0)

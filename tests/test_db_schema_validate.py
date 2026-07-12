@@ -61,7 +61,7 @@ def test_cli_rejects_unknown_write_flag():
         raise AssertionError("未声明的写盘参数必须被 argparse 拒绝")
 
 
-# ============ C19 大势卡结构契约（2026-06-27）============
+# ============ C19 大势卡结构契约 ============
 def _mk_db(td) -> Path:
     db = Path(td) / "_数据库"
     db.mkdir(parents=True)

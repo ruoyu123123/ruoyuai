@@ -1,15 +1,14 @@
-"""feedback 全局规则 home-miss 兜底回归测试（2026-06-13）。
+"""feedback 全局规则 home-miss 兜底回归测试。
 
 钉死：gen_writer._collect_feedback_rules / build_manifest._collect_global_feedback_must_read
-读本机 ~/.claude/projects/D--Desktop-ruoyuai/memory/feedback_*.md —— 全新机器/该路径不存在
-时 writer 防御层此前整层静默为空。修复 = home miss/为空时 fallback 读仓库自带的汇编
-core/claude-home/lessons/global_feedback_rules.md（frozen_util 定位）。
+读本机 ~/.claude/projects/D--Desktop-ruoyuai/memory/feedback_*.md；home 路径不存在或
+为空（全新机器）时 fallback 读仓库自带的汇编
+core/claude-home/lessons/global_feedback_rules.md（frozen_util 定位），防御层绝不整层为空。
 
 守护点：
-  · home 路径 miss → fallback 装载汇编文件内容（防御层不再为空）
+  · home 路径 miss → fallback 装载汇编文件内容（防御层不为空）
   · home 有 type=feedback 文件时优先 home（开发机行为零回归）
-  · 汇编文件完整性（23 条规则锚 + 机械汇编 header + 无 frontmatter 残留）
-  · (汇编文件完整性由源码自身保证)
+  · 汇编文件完整性（≥12 条规则节 + 兜底用途 header + 无 frontmatter 残留）
 """
 import contextlib
 import os
@@ -62,10 +61,10 @@ def _mk_home_memory(home: Path, fname: str, body: str, desc: str = "测试规则
 # ---------- 汇编文件完整性 ----------
 
 def test_bundle_file_exists_with_rule_markers():
-    """汇编文件必须存在·≥12 条规则节（降噪后 13 条）·header 注明兜底用途·无 frontmatter 残留。"""
+    """汇编文件必须存在·≥12 条规则节（当前源 13 条）·header 注明兜底用途·无 frontmatter 残留。"""
     assert _BUNDLE_FILE.exists(), f"汇编文件缺失: {_BUNDLE_FILE}"
     text = _BUNDLE_FILE.read_text(encoding="utf-8")
-    # 降噪后（2026-06-18）每条规则 = "## feedback-<slug>" 节头（去掉了机器锚噪音）
+    # 每条规则 = "## feedback-<slug>" 节头（无机器锚噪音）
     import re as _re
     n_sections = len(_re.findall(r"(?m)^##\s+feedback[-_]", text))
     assert n_sections >= 12, f"规则节仅 {n_sections} 条（应 ≥12·降噪后源 13 条）"
@@ -80,9 +79,9 @@ def test_bundle_file_exists_with_rule_markers():
 # ---------- gen_writer fallback ----------
 
 def test_gen_writer_fallback_loads_bundle_when_home_miss():
-    """home memory 路径不存在 → fallback 装载汇编文件**写作工艺类**节（不再整层为空）。
+    """home memory 路径不存在 → fallback 装载汇编文件**写作工艺类**节（防御层不为空）。
 
-    🔴 G4 瘦身（2026-06-23）：fallback 与 home 同口径只注入写作工艺节——校验
+    🔴 G4 瘦身：fallback 与 home 同口径只注入写作工艺节——校验
     craft 节（no-screenplay）保留、流程节（no-token-saving「全量传 LLM」）被过滤掉。
     """
     with tempfile.TemporaryDirectory() as d:
@@ -132,7 +131,7 @@ def test_gen_writer_home_priority_over_bundle():
 def test_gen_writer_home_filters_non_craft_feedback():
     """🔴 G4 瘦身：home 里非写作工艺类 feedback（流程/测试 lesson）→ 不注入 writer prompt。
 
-    根因回归锁：211 轮 upgrade 沉淀的流程 lesson 此前被无差别灌进 writer system（67k 膨胀根因）。
+    回归锁：流程 lesson 无差别灌进 writer system 会撑爆 prompt（防膨胀）。
     """
     with tempfile.TemporaryDirectory() as d:
         home = Path(d)
@@ -182,7 +181,7 @@ def test_build_manifest_fallback_digest_from_bundle():
 
 
 def test_build_manifest_home_priority_over_bundle():
-    """home 有带 description 的 feedback 文件 → 走原 v19.3 home digest（零回归）。"""
+    """home 有带 description 的 feedback 文件 → 走 home digest（零回归）。"""
     with tempfile.TemporaryDirectory() as d:
         home = Path(d)
         _mk_home_memory(home, "feedback_home_only.md", "正文",
@@ -195,7 +194,6 @@ def test_build_manifest_home_priority_over_bundle():
 
 
 # ---------- 源码级防回归 ----------
-# 🔴 2026-06-20：原 test_spec_collects_lessons_md_dir 随 packaging/ 目录删除一同剔除。
 
 
 def test_gen_writer_fallback_uses_frozen_util():

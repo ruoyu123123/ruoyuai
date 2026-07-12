@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""#6 prose_rhythm 探针7 burstiness_collapse 测试（2026-06-16·句长方差塌缩·金标准防矫枉过正）。
+"""prose_rhythm 探针7 burstiness_collapse 测试（句长方差塌缩·金标准防矫枉过正）。
 
 探针7 补盲区：探针1 看句长 mean（偏短报），但「mean 达标却句长恒定（方差塌缩·匀速碎句）」探针1
 抓不到——cluster 句长 std vs 作者 std·r<0.5 minor/<0.4 major 单边偏均匀（偏高永不报·北极星③）。

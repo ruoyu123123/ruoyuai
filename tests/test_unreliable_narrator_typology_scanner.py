@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""unreliable_narrator_typology_scanner.py 专属回归测试 (R8 W4 Batch-G·L19·2026-06-20)。
+"""unreliable_narrator_typology_scanner.py 专属回归测试。
 
 零依赖·确定性·零 LLM/零联网。覆盖核心 6 分支：
   ① 有 unreliable_narrator_profile + 密 verbal_tic + active → PASS (达 floor)
@@ -377,7 +377,7 @@ def test_main_exit_0_when_skip():
     assert rep["warning"] is None
 
 
-# ── zero_shot 语义补召回（2026-07-04 军火库 3.3·复用已上线基建）─────────────
+# ── zero_shot 语义补召回（复用 zero_shot_prototype 基建）─────────────
 import types  # noqa: E402
 
 

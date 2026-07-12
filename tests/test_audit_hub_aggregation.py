@@ -1,4 +1,4 @@
-"""audit_hub 聚合主流程回归测试（2026-06-13 · 补「聚合中枢零测试」缺口）。
+"""audit_hub 聚合主流程回归测试。
 
 守护四件事（北极星⑤顾问制的执行中枢）：
   1. scanner_registry 加载：缺失/损坏 → {}（fallback 硬编码集合），合法 JSON 原样返回；
@@ -8,7 +8,7 @@
      两 code → advisory 转 waived、hard_gate 强制忽略豁免仍进 pending_agent
      （hard_gate 不可豁免 = 唯一不可协商边界）；
   4. _gate_level_for 条件降级：STYLE_单段超长 warn→advisory / fatal·error→hard_gate；
-     info severity（低置信旁注）对任何 code 永不 hard_gate（2026-06-02 修）。
+     info severity（低置信旁注）对任何 code 永不 hard_gate。
 
 假 scanner 输出格式从真解析器反推：
   · validate_chapter --json → {"summary": {...}, "errors": [{code, severity, msg, fix_hint}]}
@@ -121,7 +121,7 @@ def test_gate_level_style_overlong_conditional_downgrade():
 def test_gate_level_info_severity_never_hard_gate():
     """info = 低置信旁注（如 UNKNOWN_CHARACTER_DETECTED 的 NER 碎片），对任何 code 永不 hard_gate。
 
-    2026-06-02 修：否则 NER 垃圾碎片会硬毙整 cluster（北极星⑤顾问非法官）。
+    否则 NER 垃圾碎片会硬毙整 cluster（北极星⑤顾问非法官）。
     """
     assert ah._gate_level_for("UNKNOWN_CHARACTER_DETECTED", "info") == "advisory"
     # info 降级对 HARD_GATE_CODES 全体成员生效（含条件 code）
@@ -255,7 +255,7 @@ def test_all_advisory_waived_verdict_waived():
 
 
 # ════════════════════════════════════════════════════════════════
-# C06 整段草稿剧本体 SCREENPLAY 扫（2026-06-27 · step3 真阻断点）
+# C06 整段草稿剧本体 SCREENPLAY 扫（step3 真阻断点）
 # ════════════════════════════════════════════════════════════════
 
 def test_c06_screenplay_emits_hard_gate():

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""fate_dice 命运抽签回归网（第四轮 Workflow #5·固化 2 历史回归·2026-06-17）。
+"""fate_dice 命运抽签回归网。
 
-build_manifest 注入 writer manifest 的命运抽签·git edd8dcd 两处文档化修复落地无测试守护：
-  · _filter_event min_ch/max_ch==0 falsy 短路修复（is not None·让 0 也参与边界过滤）
+build_manifest 注入 writer manifest 的命运抽签·两处边界回归锁：
+  · _filter_event min_ch/max_ch 用 is not None 判空（0 也参与边界过滤·不被 falsy 短路）
   · draw sum(weights)<=0 退均匀（weights=None·防 random.choices ValueError 崩溃）
 
 覆盖纯函数 _check_world_required / _filter_event + draw 核心。零依赖范式（__main__ 自跑）。
@@ -48,7 +48,7 @@ def _ev(eid="e1", **cf):
 
 
 def test_filter_min_ch_zero_not_short_circuited():
-    """🔴 回归：min_ch=0 不被 falsy 短路（is not None 修复）·ch=0 时 0<0 False → 不过滤 → 过。"""
+    """🔴 回归：min_ch=0 不被 falsy 短路（is not None 判空）·ch=0 时 0<0 False → 不过滤 → 过。"""
     assert fd._filter_event(_ev(min_ch=0), 0, "", "", {}, set()) is True
     assert fd._filter_event(_ev(min_ch=5), 3, "", "", {}, set()) is False  # 3<5 过滤掉
 

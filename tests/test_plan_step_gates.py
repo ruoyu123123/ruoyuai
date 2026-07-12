@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""plan_step_gates.py 门库确定性单测（🔴 2026-06-27 C16）。
+"""plan_step_gates.py 门库确定性单测。
 
-# 🔴 2026-06-28 移除exe/gen-model梳理方向
-原文件含「orchestrator 集成测 + 两路径一致性锁」整段（import orchestrator +
-from test_orchestrator import _Sandbox/_FakeRunner/_FakeDispatch）。orchestrator 随
-exe/程序驱动方向删除，本件回到**纯门库判定单测**——5 个 check 各自的纯逻辑
-（subsystems / anti_skip / chapter_edit / research_ref / agent_injection），这些是
-plan_step_gates 被 PreToolUse hooks / audit_hub / scaffold_subsystems 复用的核心契约。
+5 个 check 各自的纯逻辑（subsystems / anti_skip / chapter_edit / research_ref /
+agent_injection）——这些是 plan_step_gates 被 PreToolUse hooks / audit_hub /
+scaffold_subsystems 复用的核心契约。
 """
 import sys
 import tempfile
@@ -234,8 +231,8 @@ def test_check_agent_injection_novel_archivist_requires_aux_contract():
 
 
 def test_check_agent_injection_researcher_requires_task_type_not_cluster():
-    # 2026-07-08 验证书 e2e 抓出：novel-researcher 真实契约是 PROJECT+TASK_TYPE，
-    # 不是 CLUSTER_ID+MODE（TASK_TYPE=inspiration 发生在首个 cluster 建立之前）。
+    # novel-researcher 契约是 PROJECT+TASK_TYPE 而非 CLUSTER_ID+MODE
+    # （TASK_TYPE=inspiration 发生在首个 cluster 建立之前）。
     r = gates.check_agent_injection(
         "PLAN_ID: p1\nSTEP: 1\nPROJECT: p\nCONTEXT: xxx\nQUERIES: a,b,c\nSCOPE: [hot_topic]\n"
         "调研灵感这是一段足够长的提示文字用于通过长度下限五十字校验",
@@ -281,12 +278,12 @@ def test_check_agent_injection_tampered_plan_blocks():
 
 
 def test_check_agent_injection_replicate_allowed_warns_same_stack():
-    """v29 语义反转（2026-07-11）：复刻 = Claude 亲笔场景草稿 + gemini 分段润色（同栈）。
-    spawn Claude agent 写复刻场景草稿【合法且必需】→ 不再 block；只 warn 提示复刻终稿
+    """复刻 = Claude 亲笔场景草稿 + gemini 分段润色（同栈）。
+    spawn Claude agent 写复刻场景草稿【合法且必需】→ 放行；只 warn 提示复刻终稿
     必须经 distill_replicate.py 的 gemini 润色落盘（agent 不得直接写终稿文件）。"""
     r = gates.check_agent_injection(
         "用 skill_v3.md 复刻一段足够长的提示文字内容在这里", "v3 复刻测试", "claude")
-    assert r["ok"]  # v29：复刻 Claude agent 不再拦截（旧「禁 Claude sub-agent 复刻」已反转）
+    assert r["ok"]  # 复刻 Claude agent 放行（场景草稿合法且必需）
     assert any(("复刻" in w or "同栈" in w) for w in r.get("warnings", []))
 
 

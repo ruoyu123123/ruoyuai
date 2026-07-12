@@ -11,7 +11,7 @@
   1. _cjk           —— 只数 CJK 表意字（标点/拉丁/空白不计）
   2. _metrics       —— 每千字标点归一化精确值 / 空文本除零守卫 / single_para_ratio 阈值分支
   3. _author_baseline —— 段长+单句独行的 *回退键* 路径 / 标点 mean 裸标量 / 非法 JSON / quantitative 非 dict
-  4. main()（CLI 全链路 · 此前完全无覆盖）—— exit 0 / 报告落盘 / verdict pass·advisory /
+  4. main()（CLI 全链路）—— exit 0 / 报告落盘 / verdict pass·advisory /
      comedy_engine 仅 ratio<lo 触发 / 无正文放行 / 无作者档放行 / --chapters 入口
 """
 import json
@@ -175,7 +175,7 @@ def test_author_baseline_missing_dims_become_none_not_crash():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 4. main() CLI 全链路（此前完全无覆盖）
+# 4. main() CLI 全链路
 # ══════════════════════════════════════════════════════════════════════════
 def test_main_no_text_exits_0():
     """无生成正文 → exit 0（放行 · 不落报告）。"""
@@ -280,9 +280,9 @@ def test_main_chapters_entry_and_report_tag():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 5. 近零基线护栏（2026-07-08）—— per-1000 密度维基线 < _NEARZERO_K 时走绝对口径
-#    真机 catch-22 实证：主神大道 dash_k=0.048 → 生成 0 次 = 0.0x 假偏离；
-#    3k 短稿 1 次命中 = 6.3x 假偏离 → strict 下数学上不可能通过。
+# 5. 近零基线护栏 —— per-1000 密度维基线 < _NEARZERO_K 时走绝对口径
+#    （近零基线下 ratio 口径必假偏离：作者 dash_k≈0.05 时生成 0 次 = 0.0x、
+#     3k 短稿 1 次命中 = 6.3x → strict 下数学上不可能通过）。
 # ══════════════════════════════════════════════════════════════════════════
 def _nearzero_baseline(gen: dict, dash_mean: float) -> dict:
     """其余维度照搬生成值（ratio=1 落 band 内），只造近零 dash 基线。"""

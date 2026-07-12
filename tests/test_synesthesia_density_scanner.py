@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""synesthesia_density_scanner.py 专属回归测试（2026-06-20·确定性·零依赖·零 LLM/零联网）。
+"""synesthesia_density_scanner.py 专属回归测试（确定性·零依赖·零 LLM/零联网）。
 
 覆盖契约五分支 + 合成草稿【真命中】（非空壳）：
   ① active 通感密度过高 → FAIL_MINOR + warning + violations 携 per_1k/syn_count；
@@ -121,12 +121,12 @@ def test_off_mode_skeleton():
         _set_mode(bak)
 
 
-# ── 默认 shadow（契约：env 缺省 = shadow·零回归） ────────────────────────────
+# ── 默认 active（契约：env 缺省 = active·金标准校准零误报） ──────────────────
 def test_default_mode_is_shadow():
     bak = os.environ.get("SYNESTHESIA_MODE")
     try:
         _set_mode(None)
-        assert mod._mode() == "active"  # 2026-06-20 金标准校准放量(5真作者per_1k全0零误报)
+        assert mod._mode() == "active"  # 金标准校准零误报(5真作者per_1k全0)→默认active
     finally:
         _set_mode(bak)
 
@@ -135,7 +135,7 @@ def test_mode_invalid_falls_back_shadow():
     bak = os.environ.get("SYNESTHESIA_MODE")
     try:
         _set_mode("bogus")
-        assert mod._mode() == "active"  # 放量后非法值回退 active
+        assert mod._mode() == "active"  # 非法值回退 active
         _set_mode("ACTIVE")  # 大小写不敏感
         assert mod._mode() == "active"
     finally:

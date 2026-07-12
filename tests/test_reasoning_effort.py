@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""reasoning_effort 全链路回归网（2026-06-16·根治 elysiver thinking 暴走 500·commit 82c3343）。
+"""reasoning_effort 全链路回归网。
 
-背景：elysiver(new-api 中转)忽略 gemini 专有 thinking_level → thinking 暴走；认 OpenAI 标准
+elysiver(new-api 中转)忽略 gemini 专有 thinking_level → thinking 暴走；认 OpenAI 标准
 reasoning_effort。全链路统一「thinking_level OR reasoning_effort 都算 reasoning·都注入 extra_body」。
 
 覆盖：
 1. Profile 解析 reasoning_effort（真实调 loader·tmp .env）—— 防解析漂移
-2. extra_body 注入逻辑（thinking_level/reasoning_effort 独立共存）—— 复现 llm_transport:220/gen_writer:1290
-3. reasoning 检测（thinking_level OR reasoning_effort）—— 复现 distill_replicate draft-refine auto-off
+2. extra_body 注入逻辑（thinking_level/reasoning_effort 独立共存）—— 直接测单一真理源 gen_model_loader.reasoning_extra_body
+3. reasoning 检测（thinking_level OR reasoning_effort）—— 锁 distill_replicate draft-refine auto-off 语义
 
 零依赖范式：文件尾 __main__ 循环跑 test_* 打 [OK]/[FAIL]。
 """
@@ -66,9 +66,9 @@ def test_neither_for_non_reasoning_profile():
         assert p.reasoning_effort is None
 
 
-# ============ 2. extra_body 注入逻辑（复现 llm_transport:220 / gen_writer:1290）============
-# 2026-06-16 helper 提取单一真理源后·直接测真实代码（非复现）。8 处 openai-path 调用
-# （llm_transport/gen_writer/distill_replicate/av_judge/gen_creative/gen_fixer/gen_chapter_titles/ai_wrapper）全用此。
+# ============ 2. extra_body 注入逻辑（单一真理源 reasoning_extra_body）============
+# 直接测真实代码。8 处 openai-path 调用（llm_transport/gen_writer/distill_replicate/
+# av_judge/gen_creative/gen_fixer/gen_chapter_titles/gen_negatives）全用此。
 _extra_body = gml.reasoning_extra_body
 
 

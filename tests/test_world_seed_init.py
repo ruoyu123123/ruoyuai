@@ -11,7 +11,7 @@ sys.path.insert(0, str(_SCRIPTS))
 import world_seed_init as wsi  # noqa: E402
 import world_evolution_engine as wee  # noqa: E402
 import world_evolution_apply_cluster as wac  # noqa: E402
-import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现（2026-07-07 从 gen_creative 拆出）
+import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现
 
 
 # ═══════════════════════ 脚手架 ═══════════════════════
@@ -60,7 +60,7 @@ def _mk_project(tmp: Path, *, major=None, arc=None, ensemble=None,
     return tmp
 
 
-# ═══════════════════════ 1. SYS-1 · advance op（无界 day 推进） ═══════════════════════
+# ═══════════════════════ 1. advance op（无界 day 推进） ═══════════════════════
 
 def test_advance_op_unbounded_increment():
     """advance 不被钳 0-100：day 从 99 推到 105（delta 会被钳到 100）。"""
@@ -95,7 +95,7 @@ def test_advance_op_dirty_old_value_starts_from_zero():
     assert world["current_world_time"]["day"] == 3
 
 
-# ═══════════════════════ 2. SYS-1 · world_seed_init 播种 + tick 复活 ═══════════════════════
+# ═══════════════════════ 2. world_seed_init 播种 + tick 触发 ═══════════════════════
 
 def test_seed_adds_rules_and_baselines():
     """播种后：auto_tick 基线 + per-ME fate + per-faction minor 规则齐 + factions/protagonist/threads。"""
@@ -193,7 +193,7 @@ def test_sacrifice_lands_in_consequence_tracker():
         assert all(t["npc_id"] != "烈士乙" for t in world["active_npc_threads"])
 
 
-# ═══════════════════════ 3. C02 · 幂等 + --force ═══════════════════════
+# ═══════════════════════ 3. 幂等 + --force ═══════════════════════
 
 def test_seed_idempotent_no_dup():
     """二次播种不重复加规则/thread（按 id / npc_id 去重）。"""

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SessionStart hook（P2-4）：注入最近 session 摘要 + 建当前 session marker。
+"""SessionStart hook：注入最近 session 摘要 + 建当前 session marker。
 
 关键约束（与 PostToolUse hook 同纪律）：
 - exit 0 永远放行；任何异常静默吞掉，不打断 SessionStart 流程

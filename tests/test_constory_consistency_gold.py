@@ -1,28 +1,28 @@
 # -*- coding: utf-8 -*-
-"""ConStory-Bench 五类一致性维度 · 金 fixture 回归锁（P2/P3 移植 · 2026-07-07）
+"""ConStory-Bench 五类一致性维度 · 金 fixture 回归锁。
 
 出处：research/open_source_writing_systems.md —— 把 ConStory-Bench 的 benchmark 维度
 翻译成本地**确定性金 fixture**（含已知矛盾的中文 cluster 草稿片段 + 最小数据库 JSON），
-断言**现有** scanner/validator 的真实检出力。不引运行时依赖、不加 hard_gate、不改 core/。
+断言 scanner/validator 的真实检出力。不引运行时依赖、不加 hard_gate、不改 core/。
 
-已有先例：tests/test_consistency_19_subtypes_blindspot.py（绝对时间/恒定数值 →
-locked_fact_cross_scene_scanner）。本文件仿该模式扩其余类别。
+姊妹套件：tests/test_consistency_19_subtypes_blindspot.py（绝对时间/恒定数值 →
+locked_fact_cross_scene_scanner）。本文件仿该模式覆盖其余类别。
 
-五类覆盖结论（每类 ≥1 fixture · 三个历史盲区已于 2026-07-07 补齐并升级为真阳性断言）：
+五类覆盖（每类 ≥1 fixture）：
   1. entity（实体一致性）   → character_identity_anchor_scanner（active 模式）真检出
   2. temporal（时间一致性） → locked_fact_cross_scene_scanner 恒定单位「天」opt-in 真检出；
-                              草稿内部时序倒错 → draft_temporal_order_scanner 真检出（盲区已补齐）
+                              草稿内部时序倒错 → draft_temporal_order_scanner 真检出
   3. causality（事件因果）  → validate_chapter.check_knowledge_leak → FUTURE_KNOWLEDGE_LEAK 真检出
   4. location（地点连续性） → focalizer_perception_bounds_scanner 规则③空间不在场标志词子集真检出；
-                              无标志词的同场景位置瞬移 → spatial_continuity_scanner 真检出（盲区已补齐）
+                              无标志词的同场景位置瞬移 → spatial_continuity_scanner 真检出
   5. contradiction（明文互斥陈述）→ 描述类互斥（生死/亲缘）→ locked_fact_cross_scene_scanner
-                              描述类 NLI 通路（LOCKED_FACT_DESCRIPTIVE_CONTRADICTION）真检出（盲区已补齐）
+                              描述类 NLI 通路（LOCKED_FACT_DESCRIPTIVE_CONTRADICTION）真检出
 
 北极星纪律：
-  · 不新增任何 hard_gate code（制度锁 test_hard_gate_membership_unchanged·3 个新 code 全 advisory）
+  · 不新增任何 hard_gate code（制度锁 test_hard_gate_membership_unchanged·盲区补口 3 code 全 advisory）
   · advisory scanner 只用 env 三态开关切 active 测检出，不改默认档位
-  · 原盲区测试已升级为真阳性断言，同时保留「旧检测器仍 0 检出」的双向断言
-    （历史盲区记录价值：证明补口来自新 scanner，不是旧检测器悄悄扩权）
+  · 盲区类用例做真阳性断言，同时保留「相邻检测器 0 检出」的双向断言
+    （证明检出力来自专职 scanner，不是其他检测器悄悄扩权）
 
 跑：py -m pytest tests/test_constory_consistency_gold.py -q
 """
@@ -110,7 +110,7 @@ _FILLER = (
 def test_hard_gate_membership_unchanged():
     """本 fixture 套件只验证既有检出力：既有 hard 码仍 hard，advisory 码绝不升格。"""
     hg = audit_hub.HARD_GATE_CODES
-    # 既有 hard_gate（对齐 STRUCTURE.md §11 / CLAUDE.md 19 码清单）
+    # 既有 hard_gate（对齐 STRUCTURE.md 第十二节 hard_gate 清单）
     assert "LOCKED_FACT_CROSS_SCENE_CONFLICT" in hg
     assert "FUTURE_KNOWLEDGE_LEAK" in hg
     # 本套件涉及的 advisory 码一律不得进 hard_gate（各 scanner docstring 明文承诺）
@@ -119,7 +119,7 @@ def test_hard_gate_membership_unchanged():
                  "TEMPORAL_GROUNDING_THIN",
                  "ANACHRONY_ORDER_THIN",
                  "POV_HEAD_HOPPING",
-                 # 2026-07-07 盲区补口三件套（永远 advisory·北极星⑤）
+                 # 盲区补口三件套（永远 advisory·北极星⑤）
                  "DRAFT_TEMPORAL_ORDER_REVERSED",
                  "SPATIAL_CONTINUITY_TELEPORT",
                  "LOCKED_FACT_DESCRIPTIVE_CONTRADICTION"):
@@ -206,9 +206,9 @@ def test_temporal_anchor_consistent_no_report():
 
 
 def test_temporal_order_reversal_blindspot():
-    """盲区已于 2026-07-07 补齐：草稿**内部**时序倒错（第九天场景后接第五天场景，
-    人物卡无数值锚、无闪回标志）→ draft_temporal_order_scanner（active）真检出
-    DRAFT_TEMPORAL_ORDER_REVERSED（advisory·时序自由是叙事手法，永不 hard_gate）。
+    """草稿**内部**时序倒错（第九天场景后接第五天场景，人物卡无数值锚、无闪回标志）
+    → draft_temporal_order_scanner（active）真检出 DRAFT_TEMPORAL_ORDER_REVERSED
+    （advisory·时序自由是叙事手法，永不 hard_gate）。
     fixture 铺第 3 个时间锚场景过「锚点<3不判」稀疏豁免，并在 事件簇.json 显式声明
     narrative_mode="linear"（clusters[0] 未声明时默认 in_medias_res 整体 skip）。"""
     proj = _mk_project(
@@ -221,10 +221,10 @@ def test_temporal_order_reversal_blindspot():
         "阿禾在谷中已经熬到第九天，溪水开始发苦。\n\n"      # 原盲区倒错对保持不变 ↓
         "阿禾被困在山谷里，这才是第五天，干粮还剩半块。\n"
     ))
-    # 旧检测器 locked_fact_cross_scene 数值通路仍捞不到该类（只做 fact↔正文恒定数值对账）——历史盲区记录
+    # 双向断言：locked_fact_cross_scene 数值通路捞不到该类（只做 fact↔正文恒定数值对账）
     r_lf = lf.scan(proj, draft)
     assert r_lf["conflicts_count"] == 0, r_lf
-    # 新 scanner 真阳性检出
+    # 专职 scanner 真阳性检出
     with _env(DRAFT_TEMPORAL_ORDER_MODE="active"):
         r = dto.scan(draft, proj, "cluster_001")
     assert r["mode"] == "active", r
@@ -282,7 +282,7 @@ def test_causality_no_leak_when_fact_not_spoken():
 
 
 # ═══════════════ 4. location 地点连续性 ═══════════════
-# 最近覆盖：focalizer_perception_bounds_scanner 规则③「空间不在场」标志词子集（active 模式）
+# 标志词子集：focalizer_perception_bounds_scanner 规则③「空间不在场」（active 模式）
 # —— 检测「与此同时/同一时刻 + 远方地点」的聚焦人不在场空间分裂（marker-based 确定性子集）
 
 def test_location_spatial_absence_markers_detected():
@@ -321,7 +321,7 @@ def test_location_spatial_markers_absent_pass():
 
 
 def test_location_teleport_blindspot():
-    """盲区已于 2026-07-07 补齐：同场景内**无标志词**的位置瞬移（地窖 → 北境城墙零过渡）
+    """同场景内**无标志词**的位置瞬移（地窖 → 北境城墙零过渡）
     → spatial_continuity_scanner（active·角色↔地点绑定跨句对账）真检出
     SPATIAL_CONTINUITY_TELEPORT（advisory·空间跳切可以是叙事省略，永不 hard_gate）。
     fixture 铺第二对瞬移（天牢 → 皇城）过「候选<2不报」噪声地板。"""
@@ -338,14 +338,14 @@ def test_location_teleport_blindspot():
                      "locked_facts": [{"fact": "顾长风身在地窖"}]},
                     {"name": "沈青梧", "role": "配角"}])
     draft = _write_draft(proj, text)
-    # 旧检测器 focalizer 规则③（只认「与此同时/同一时刻」标志词）+ locked_fact 数值通路仍 0 检出——历史盲区记录
+    # 双向断言：focalizer 规则③（只认「与此同时/同一时刻」标志词）+ locked_fact 数值通路 0 检出
     with _env(FOCALIZER_PERCEPTION_BOUNDS_MODE="active"):
         r_f = fpb.scan(draft, proj)
     r_lf = lf.scan(proj, draft)
     assert r_f["spatial_absence_count"] == 0, r_f
     assert r_f["verdict"] == "PASS", r_f
     assert r_lf["conflicts_count"] == 0, r_lf
-    # 新 scanner 真阳性检出（两对瞬移全捞到）
+    # 专职 scanner 真阳性检出（两对瞬移全捞到）
     with _env(SPATIAL_CONTINUITY_MODE="active"):
         r = sc.scan(draft, proj)
     assert r["mode"] == "active", r
@@ -366,7 +366,7 @@ def test_location_teleport_blindspot():
 # ═══════════════ 5. contradiction 未解决矛盾：明文互斥陈述 ═══════════════
 
 def test_contradiction_descriptive_mutex_blindspot(monkeypatch):
-    """盲区已于 2026-07-07 补齐：描述类明文互斥（锁定事实「满门尽灭只剩一人」 vs
+    """描述类明文互斥（锁定事实「满门尽灭只剩一人」 vs
     正文「兄长推门而入」）→ locked_fact_cross_scene_scanner 描述类 NLI 通路
     （LOCKED_FACT_DESCRIPTIVE_MODE=active + nn_nli_bridge 判 contradiction 高置信）
     真检出 LOCKED_FACT_DESCRIPTIVE_CONTRADICTION（advisory·独立 `descriptive` 字段，
@@ -394,11 +394,11 @@ def test_contradiction_descriptive_mutex_blindspot(monkeypatch):
         "沈昭的兄长沈铖推门而入，掸了掸肩上的雪：家里一切安好。\n"
     ))
     r = lf.scan(proj, draft)
-    # 旧恒定数值通路仍捞不到该类（无数值锚 → 0 冲突，顶层 hard 码口径零变化）——历史盲区记录
+    # 双向断言：恒定数值通路捞不到该类（无数值锚 → 0 冲突，顶层 hard 码口径不受影响）
     assert r["facts_checked"] == 1, r
     assert r["conflicts_count"] == 0, r
     assert r["code"] is None, r
-    # 新描述类 NLI 通路真阳性检出
+    # 描述类 NLI 通路真阳性检出
     d = r["descriptive"]
     assert d["executed"] is True, d
     assert d["facts_checked"] == 1, d

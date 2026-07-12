@@ -15,12 +15,12 @@ PostToolUse Hook: 监测 Write/Edit 操作，自动追踪活跃 plan 步骤完�
     自动调用 step_complete(plan_id, n, output=file_path)
 - 路径匹配采用归一化（/ 替换 \）+ 后缀匹配 + 子串匹配（双向兜底）
 
-附加功能（P1-6 self-correct injection）
+附加功能（self-correct injection）
 --------
 - 60 分钟未完成的 plan 输出 stderr 警告（不拦截）
-- 【P1-6】auto-step 成功后追加「下一步提示」—— 把 next expected_outputs
+- auto-step 成功后追加「下一步提示」—— 把 next expected_outputs
   反馈给 agent context，形成 self-correct 链式引导
-- 【P1-6】停滞检测：plan 已 in_progress 但 >10 分钟无任何 step 完成 →
+- 停滞检测：plan 已 in_progress 但 >10 分钟无任何 step 完成 →
   输出 drift 提示（不拦截，仅 stderr 提醒 agent 检查）
 """
 import json
@@ -108,7 +108,7 @@ def _check_timeout(plan: dict) -> None:
 
 
 def _check_drift(plan: dict, threshold_min: int = 10) -> None:
-    """P1-6 停滞检测（同 plan 10 分钟冷却去重）。"""
+    """停滞检测（同 plan 10 分钟冷却去重）。"""
     last_progress = None
     pending_step_names = []
     for s in plan.get("steps", []):
@@ -141,7 +141,7 @@ def _check_drift(plan: dict, threshold_min: int = 10) -> None:
 
 
 def _next_step_hint(plan: dict, just_completed_n) -> str:
-    """P1-6：找到刚完成 step 的下一个 required 未完成 step，返回提示字符串。"""
+    """找到刚完成 step 的下一个 required 未完成 step，返回提示字符串。"""
     steps = plan.get("steps", [])
     completed_set = {str(s.get("n")) for s in steps if s.get("status") == "completed"}
     # 找下一个 required 未完成 step
@@ -159,8 +159,8 @@ def _next_step_hint(plan: dict, just_completed_n) -> str:
 
 
 def main():
-    # 2026-07-08 修（Windows 编码根因）：stdin 按 bytes 读 + json.loads 自动 UTF-8 解码，
-    # 文本模式在 GBK 控制台会把 UTF-8 载荷读花（与 pretooluse_agent_gate 同根因同修法）。
+    # stdin 必须按 bytes 读、交 json.loads 自动 UTF-8 解码：
+    # 文本模式在 GBK 控制台会把 UTF-8 载荷读花（与 pretooluse_agent_gate 同约束）。
     raw = sys.stdin.buffer.read()
     if not raw.strip():
         sys.exit(0)
@@ -209,7 +209,7 @@ def main():
                     step_complete(plan_id, step["n"], output=None, skip_output=True)
                     msg = (f"📋 [Plan] {plan_id} step {step.get('n')} "
                            f"({step.get('name')}) auto-completed")
-                    # P1-6 self-correct: 追加「下一步提示」给 agent context
+                    # self-correct: 追加「下一步提示」给 agent context
                     # 重新读取 plan（因为 step_complete 改了文件），以拿到最新状态
                     try:
                         from plan_tracker import get_plan  # type: ignore
@@ -226,7 +226,7 @@ def main():
 
         # 超时检测（每个 plan 独立检查）
         _check_timeout(plan)
-        # P1-6 停滞检测：plan 进度卡死的 self-correct 提示
+        # 停滞检测：plan 进度卡死的 self-correct 提示
         _check_drift(plan)
 
     sys.exit(0)  # 永远不拦截

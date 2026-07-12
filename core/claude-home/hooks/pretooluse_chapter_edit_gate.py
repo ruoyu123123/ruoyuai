@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """pretooluse_chapter_edit_gate.py — L1 章节正文守卫 hook
 
-防御目标（cluster_001 ch4 三次翻车 sediment）:
+防御目标:
 1. 主代理 / sub-agent 在写章节正文时不慎写入剧本体 / 文学过渡 / 章末抽象 cliffhanger
-2. 这类内容无 scanner 拦 → 出货后用户察觉打回 → 浪费两轮迭代
+2. 这类内容无 scanner 拦，出货后才会被用户察觉打回——必须在写入时拦截
 
 拦截策略:
 - tool ∈ {Write, Edit, MultiEdit}
@@ -22,9 +22,9 @@ import sys
 import os
 from pathlib import Path
 
-# 🔴 2026-06-27 C16：banned pattern + 扫描判定抽到共享库 plan_step_gates（北极星⑥消重复）。
-# 本 hook 改薄 wrapper：解析 stdin → 取 content/project_root → 调 check_chapter_edit
-# → ok?exit0:exit2。SCREENPLAY_PATTERNS/CHAPTER_END_PATTERNS/scan_* 现为 lib 单一真相源。
+# banned pattern + 扫描判定在共享库 plan_step_gates（单一真相源）。
+# 本 hook 是薄 wrapper：解析 stdin → 取 content/project_root → 调 check_chapter_edit
+# → ok?exit0:exit2。SCREENPLAY_PATTERNS/CHAPTER_END_PATTERNS/scan_* 以 lib 为准。
 _SCRIPTS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
 if _SCRIPTS not in sys.path:
@@ -62,7 +62,7 @@ def extract_content(tool_name: str, tool_input: dict) -> str:
 
 def main():
     try:
-        # 2026-07-08 修（Windows 编码根因）：bytes 读 stdin·json 自动 UTF-8（GBK 控制台文本读会花）
+        # stdin 按 bytes 读·json 自动 UTF-8 解码（文本模式在 GBK 控制台会把载荷读花）
         payload = json.loads(sys.stdin.buffer.read())
     except Exception:
         sys.exit(0)
@@ -82,12 +82,12 @@ def main():
     if not content:
         sys.exit(0)
 
-    # 🔴 C16：判定下沉到 check_chapter_edit（共享库唯一真相源）。
+    # 判定走 check_chapter_edit（共享库唯一真相源）。
     result = check_chapter_edit(content)
     if result["ok"]:
         sys.exit(0)
 
-    # 命中 → exit 2 hard_gate 拦截（保持原 hook exit 语义）
+    # 命中 → exit 2 hard_gate 拦截
     print(f"❌ [Hook chapter_edit_gate] 文件: {file_path}", file=sys.stderr)
     print(f"   {result['msg']}", file=sys.stderr)
     print(f"   📝 权威 lesson: memory/feedback_no_screenplay_stage_directions_in_novels.md",

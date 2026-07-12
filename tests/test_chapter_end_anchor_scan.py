@@ -17,10 +17,11 @@ import chapter_end_anchor_scan as mod  # noqa: E402
 import embedding_store  # noqa: E402
 
 
-# 🔴 2026-07-04 本地 autouse 隔离（不碰全局 conftest.py）：content_backend_available() 查真
-# 文件系统（venv/infer 脚本/模型目录），本机若已备好 bge 模型会恒真——不像旧 EMBED_BACKEND
-# 有 conftest._isolate_nn_gates 兜底清零，会让本文件里不测 embedding 的"素"用例跨机器非确定
-# 污染（真机上真的算出高于阈值的相似度）。默认关闭·内容路径专项测试自行 monkeypatch 覆盖。
+# 🔴 本地 autouse 隔离（不碰全局 conftest.py）：content_backend_available() 查真文件系统
+# （venv/infer 脚本/模型目录），本机若已备好 bge 模型会恒真——EMBED_BACKEND 有
+# conftest._isolate_nn_gates 兜底清零，内容后端没有对应全局兜底，会让本文件里不测
+# embedding 的"素"用例跨机器非确定污染（真机上真的算出高于阈值的相似度）。
+# 默认关闭·内容路径专项测试自行 monkeypatch 覆盖。
 @pytest.fixture(autouse=True)
 def _content_backend_off_by_default():
     orig = embedding_store.content_backend_available
@@ -324,7 +325,7 @@ def test_scan_chapter_end_result_shape():
         assert isinstance(r["anchor_ratio"], float)
 
 
-# ---------- C06 --hard-gate-only（2026-06-27 切章后复扫）----------
+# ---------- C06 --hard-gate-only（切章后复扫）----------
 
 def test_hard_gate_only_catches_screenplay_and_separator():
     # --hard-gate-only：SCREENPLAY + SEPARATOR 两族 hard_gate 仍命中
@@ -372,7 +373,7 @@ def test_default_mode_still_emits_closure_advisory():
         assert "CHAPTER_END_CLOSURE_ADVISORY" in codes
 
 
-# ---------- collect_anchor_texts（2026-07-02 · 语义 rescue 原始文本池）----------
+# ---------- collect_anchor_texts（语义 rescue 原始文本池）----------
 
 def test_collect_anchor_texts_from_event_cluster_and_foreshadowing():
     with tempfile.TemporaryDirectory() as d:
@@ -402,7 +403,7 @@ def test_collect_anchor_texts_empty_db_returns_empty_list():
         assert mod.collect_anchor_texts(db) == []
 
 
-# ---------- 语义 rescue（2026-07-04 · 内容后端门控 + 字面法 fallback）----------
+# ---------- 语义 rescue（内容后端门控 + 字面法 fallback）----------
 
 def test_content_backend_ready_false_by_default(monkeypatch):
     monkeypatch.setattr(embedding_store, "content_backend_available", lambda: False)
@@ -479,7 +480,7 @@ def test_semantic_rescue_falls_back_on_embedding_error(monkeypatch):
 
 
 def test_semantic_rescue_prefetches_tail_and_anchor_pool_once(monkeypatch):
-    """🔴 2026-07-03 Wave-4 批量改造回归锁：_semantic_anchor_match 开头应对
+    """🔴 批量预取回归锁：_semantic_anchor_match 开头应对
     [tail_text]+去重后的 anchor_texts 池调用**一次** prefetch_content_embeddings（而非每条
     anchor 各自触发后端·内容后端下逐条各起一次子进程暖机不可用）。"""
     calls = []

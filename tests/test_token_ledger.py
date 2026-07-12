@@ -1,4 +1,4 @@
-"""token ledger 测试（2026-06-15·确定性·零依赖·BYOK token 账本）。
+"""token ledger 测试（确定性·零依赖·BYOK token 账本）。
 
 守护（北极星·账本 advisory 不崩主轨）：
   1. _record_token_usage env 未设 → 不记（零侵入零回归）；env 设 → append jsonl；
@@ -107,11 +107,11 @@ def test_estimate_cost():
     assert c["cost_input"] == 1.0 and c["cost_output"] == 2.0 and c["cost_total"] == 3.0
 
 
-# ═══════════ 对称双协议（2026-06-16·OpenAI path 补记·judge 全走此 path 此前漏记）═══════════
+# ═══════════ 对称双协议（gemini + OpenAI usage 都记账·judge 全走 OpenAI path）═══════════
 
 def test_record_openai_protocol_normalize():
     """OpenAI 兼容 usage（prompt_tokens/completion_tokens…）+ protocol='openai'
-    → 归一到统一账本字段（judge 全走 OpenAI path·此前漏记）。"""
+    → 归一到统一账本字段（judge 全走 OpenAI path）。"""
     import llm_transport as lt
     bak = os.environ.get("RUOYU_TOKEN_LEDGER")
     try:
@@ -131,7 +131,7 @@ def test_record_openai_protocol_normalize():
 
 
 def test_record_gemini_protocol_still_default():
-    """向后兼容：protocol 缺省 → 仍走 gemini 字段（promptTokenCount…·存量 2 参数调用不破）。"""
+    """protocol 缺省 → 默认走 gemini 字段（promptTokenCount…·2 参数调用形态）。"""
     import llm_transport as lt
     bak = os.environ.get("RUOYU_TOKEN_LEDGER")
     try:
@@ -172,8 +172,8 @@ def test_openai_usage_to_dict_object():
 
 
 def test_stream_openai_records_usage_end_to_end():
-    """🔴 端到端：OpenAI path stream 末尾 chunk 带 usage → _record_token_usage 落账（judge 场景·
-    缺口修复实证）。注入 fake openai module + fake client（零依赖·不真连网）。"""
+    """🔴 端到端：OpenAI path stream 末尾 chunk 带 usage → _record_token_usage 落账（judge 场景）。
+    注入 fake openai module + fake client（零依赖·不真连网）。"""
     import sys
     import types
     import llm_transport as lt
@@ -238,7 +238,7 @@ def test_stream_openai_records_usage_end_to_end():
             sys.modules.pop("openai", None)
 
 
-# ═══════════ #5 MODEL_PRICE_REFERENCE 参考价表（2026-06-16·BYOK 开箱估算成本）═══════════
+# ═══════════ MODEL_PRICE_REFERENCE 参考价表（BYOK 开箱估算成本）═══════════
 
 def test_resolve_price_exact_and_prefix():
     """resolve_price：精确命中 + 前缀模糊（model-0612 后缀）+ flash 不误命中 flash-lite（最长前缀）。"""
@@ -276,7 +276,7 @@ def test_estimate_cost_user_price_overrides_reference():
 
 
 def test_estimate_cost_no_price_no_model_none():
-    """无 price 无 model → price_source=none·成本 0（零回归·原 default 行为）。"""
+    """无 price 无 model → price_source=none·成本 0（默认行为）。"""
     s = {"prompt_tokens": 1_000_000, "output_tokens": 500_000}
     c = tl.estimate_cost(s)
     assert c["price_source"] == "none"

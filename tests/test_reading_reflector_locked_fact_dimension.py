@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""reading-reflector 维度 9「锁定事实语义一致性」合约回归锁（2026-07-07）。
+"""reading-reflector 维度 9「锁定事实语义一致性」合约回归锁。
 
-背景：locked_fact 描述类 NLI 通路真机实测（Erlangshen-110M）只能稳判直接改写型矛盾，
-多跳实体推理型（锁定「满门尽灭只剩沈昭一人」vs 正文「兄长沈铖推门而入」）contradiction
-仅 0.166 恒漏——模型能力边界。补齐方案不是降阈值（误报洪水）也不是换更大模型（成本），
-而是把多跳核查作为职责写进 cluster-write step3 每 cluster 必跑的 Claude 系 judge
-（novel-reading-reflector）合约=维度 9。本测试锁死该合约三层互补口径，防文档漂移复活盲区。
+locked_fact 描述类 NLI 通路（Erlangshen-110M）只能稳判直接改写型矛盾，多跳实体推理型
+（锁定「满门尽灭只剩沈昭一人」vs 正文「兄长沈铖推门而入」）contradiction 仅 0.166 恒漏
+——模型能力边界，降阈值只会换来误报洪水。多跳核查因此作为职责写进 cluster-write step3
+每 cluster 必跑的 Claude 系 judge（novel-reading-reflector）合约=维度 9。
+本测试锁死该合约三层互补口径，防文档漂移复活盲区。
 
 三层互补分工（勿破坏）：
   数值确定性冲突   → locked_fact_cross_scene_scanner 数值通路（hard_gate）
@@ -31,7 +31,7 @@ def test_reflector_contract_has_dimension_9_locked_fact_semantic():
     assert "锁定事实语义一致性" in src
     assert "10 大检测维度" in src
     assert "未跑满 10 维" in src
-    # 8/9 维旧口径不得残留（防双口径误导新会话·A5 加维度 10 后 9 维口径同样作废）
+    # 8/9 维旧口径不得残留（防双口径误导新会话）
     assert "8 大检测维度" not in src
     assert "未跑满 8 维" not in src
     assert "9 大检测维度" not in src
@@ -71,7 +71,7 @@ def test_scanner_capability_boundary_names_reflector_as_multihop_owner():
 
 
 def test_reflector_dimension_9_surprisal_priority_hint_is_advisory():
-    """S4 高熵段优先深查提示（2026-07-07 二轮移植·ConStory arXiv:2603.05890）合约锁：
+    """高熵段优先深查提示（ConStory arXiv:2603.05890）合约锁：
       · 写明确切报告文件（cluster_<key>_audit.json 的 surprisal_scanner issue /
         _临时/probe/hotspot_<cluster_id>.json 熵探针）——不许含糊「某报告」
       · 无报告（surprisal 默认 off）→ 全量核查如常
@@ -79,7 +79,7 @@ def test_reflector_dimension_9_surprisal_priority_hint_is_advisory():
     src = _read(_REFLECTOR_MD)
     assert "高熵段优先深查" in src
     assert "arXiv:2603.05890" in src
-    # 确切文件名（摸底实证：audit_hub 写 cluster_<key>_audit.json·熵探针写 hotspot_*.json）
+    # 确切文件名（audit_hub 写 cluster_<key>_audit.json·熵探针写 hotspot_*.json）
     assert "cluster_<key>_audit.json" in src
     assert "surprisal_scanner" in src
     assert "hotspot_<cluster_id>.json" in src
@@ -90,7 +90,7 @@ def test_reflector_dimension_9_surprisal_priority_hint_is_advisory():
     assert "不改变「9 维全量检查」" not in src
 
 
-# ── A5 维度 10「悬置线推进性」合约锁（2026-07-07 二轮移植·AI_NovelGenerator consistency_checker 推进性思想）──
+# ── 维度 10「悬置线推进性」合约锁（AI_NovelGenerator consistency_checker 推进性思想）──
 
 
 def test_reflector_dimension_10_neglected_thread_present_in_enum_and_body():
@@ -104,7 +104,7 @@ def test_reflector_dimension_10_neglected_thread_present_in_enum_and_body():
 
 def test_reflector_dimension_10_data_sources_use_real_field_names():
     """数据源实名：subplot_threads.json 与 大势卡.json 的字段名必须实名不臆造
-    （摸底实证：subplot_progress_update.py 维护 threads[].last_cluster/status；
+    （subplot_progress_update.py 维护 threads[].last_cluster/status；
     大势卡 major_events[].volume/status/prerequisites；事件簇 cluster 带 parent_me）。"""
     src = _read(_REFLECTOR_MD)
     assert "subplot_threads.json" in src
@@ -136,11 +136,11 @@ def test_reflector_dimension_10_degrade_path_when_last_touched_missing():
     assert "维度 10 记 skip 原因" in src
 
 
-# ── A8 维度 8「塑料感」StoryScope 结构层 AI tell 子清单合约锁 ──────────────────────
-# （2026-07-07 二轮移植·StoryScope arXiv:2604.03136·304 叙事结构特征纯结构 F1=93.2%。
-#   落地前跑了真作者金标准基线：惊悚乐园/遮天/人生长恨水长东各 2-3 章亲读判读——宽口径
-#   「主题直给/出现脸谱化反派」被基线证伪弃用（辰东卷首格言宣讲是作者签名、爽文欺凌龙套
-#   单义是体裁常态），只收 4 条窄口径。基线报告见 scratchpad storyscope_baseline。
+# ── 维度 8「塑料感」StoryScope 结构层 AI tell 子清单合约锁 ──────────────────────
+# （StoryScope arXiv:2604.03136·304 叙事结构特征纯结构 F1=93.2%。真作者金标准基线
+#   ——惊悚乐园/遮天/人生长恨水长东各 2-3 章亲读判读——证伪宽口径「主题直给/出现
+#   脸谱化反派」（辰东卷首格言宣讲是作者签名、爽文欺凌龙套单义是体裁常态），
+#   只收 4 条窄口径。
 #   本组测试锁死：不加新维度（仍 10 维）+ 4 条窄口径 bullet 在场 + 弃用口径留痕 +
 #   让位口径（体裁常态/作者档第一权威）在场 + 递进扁平归维度 5 防双报。）
 

@@ -3,7 +3,7 @@
 
 fake llm_transport·不调真 API。验：
 - prompt 脚手架无枚举规训（北极星⑤）+ 故事内容/笔法权威分离（骨架 prompt + 单卷 ME 池 prompt）
-- 骨架 + 逐卷 chunk 正常产出 → 确定性合并 → emit 两文件（与旧一把梭结构等价）
+- 骨架 + 逐卷 chunk 正常产出 → 确定性合并 → emit 两文件（与一把梭结构等价）
 - 逐卷 WAL（volume_arc_skeleton.json / volume_arc_v<N>.json）落盘
 - 断点续跑：合法 WAL 跳过不重复生成（mock 计数）；损坏 WAL 重生成；全 WAL 命中 = 幂等零调用
 - 合并 ME id 跨卷重复 → 硬报错非零退出 + 隔离 .dup_broken（不静默覆盖）
@@ -20,7 +20,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 
-import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现（2026-07-07 从 gen_creative 拆出）
+import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现
 import llm_transport  # noqa: E402,F401  确保进 sys.modules 供 monkeypatch generate
 
 
@@ -46,7 +46,7 @@ _CLUSTER_001 = {
     },
 }
 
-# 旧一把梭形态的完整输出（骨架校验会丢弃其中 major_events；chunk 校验只取 major_events）
+# 一把梭形态的完整输出（骨架校验会丢弃其中 major_events；chunk 校验只取 major_events）
 _VALID = {
     "story_destiny": {"final_image": "终局", "thematic_resolution": "主题"},
     "_metadata": {"rhythm_profile": "标准"},
@@ -138,10 +138,9 @@ def test_volume_arc_skeleton_prompt_no_schema_coercion():
 
 
 def test_volume_arc_story_content_from_card_not_style_ref():
-    """🔴 2026-06-28 W6：故事内容 vs 笔法 权威分离回归锁（治污染 bug）。
+    """🔴 故事内容 vs 笔法 权威分离回归锁（防风格档示例故事污染大纲）。
 
-    实证翻车：诡秘风格档含「沙盒天道/燧明部」示例·模型偷懒抄成大纲·无视「钟楼弃儿」灵感卡。
-    修：prompt 必须明确『故事内容(题材/人物/世界/走向)唯一来源=灵感卡·作者档只学笔法·
+    prompt 必须明确『故事内容(题材/人物/世界/走向)唯一来源=灵感卡·作者档只学笔法·
     示例里的人名/地名/情节是笔法演示禁当故事搬』。本测试锁该指令不被回退掉。"""
     system, user = gva.build_volume_arc_skeleton_prompt(
         selected_card={"title": "钟楼弃儿", "logline": "守夜人捡到未来遗嘱"}, cluster_count=10,
@@ -251,7 +250,7 @@ def test_normalize_volume_chunk_prerequisites_may_reference_known_prior_volume()
 
 
 def test_merge_equivalent_to_monolithic_structure():
-    """确定性合并产物与旧一把梭结构等价：顶层键一致·ME 卷号升序拼接·_wal_meta 不泄漏。"""
+    """确定性合并产物与一把梭结构等价：顶层键一致·ME 卷号升序拼接·_wal_meta 不泄漏。"""
     skeleton = {**_SKELETON_2V, "_wal_meta": {"unit": "skeleton"}}
     data, dups = gva._merge_volume_arc_chunks(skeleton, {1: _chunk(1), 2: _chunk(2)})
     assert not dups
@@ -309,7 +308,7 @@ def test_volume_arc_broken_json_block_nonzero():
 
 
 def test_volume_arc_retry_recovers_from_transient_break():
-    """🔴 真机 e2e 抓修 2026-06-15：偶发非 JSON/限速截断 → parse 失败·重试自愈不 block。
+    """偶发非 JSON/限速截断 → parse 失败·重试自愈不 block。
     序列：骨架破损 → 骨架合法 → 第 1 卷 chunk 合法（复用末 payload）→ rc==0 + 落盘。"""
     with tempfile.TemporaryDirectory() as tmp:
         proj = _mkproj(tmp)
@@ -461,8 +460,8 @@ def test_volumes_debug_subset_no_merge():
 
 
 def test_emit_writes_rhythm_to_user_pref():
-    """轮次4 契约审计回归：用户 pause 答的节奏档必须落 用户偏好.json.rhythm_profile
-    （cluster-write step6 data_flow 的 source·此前无 producer → splitter 永收「标准」）。"""
+    """契约回归：用户 pause 答的节奏档必须落 用户偏好.json.rhythm_profile
+    （cluster-write step6 data_flow 的 source·缺 producer 则 splitter 永收「标准」）。"""
     import shutil
     tmp = Path(tempfile.mkdtemp())
     try:

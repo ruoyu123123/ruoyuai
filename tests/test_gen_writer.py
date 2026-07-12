@@ -1,4 +1,4 @@
-"""gen_writer 回归测试 — 守护 2026-05-30 截断检测加强（_stream_once 捕获 finish_reason）。"""
+"""gen_writer 回归测试 — 截断检测（_stream_once 捕获 finish_reason）等 writer 侧确定性行为守护。"""
 import sys
 from pathlib import Path
 
@@ -94,7 +94,7 @@ def _mock_client(chunks_spec, capture=None):
 
 
 def test_stream_once_captures_finish_reason():
-    """核心：原 bug 是从不读 finish_reason → 截断静默。验证 length 被捕获。"""
+    """核心：finish_reason 必须被读取（否则截断静默）。验证 length 被捕获。"""
     text, fr = gw._stream_once(_mock_client([("正文", None), ("尾", "length")]), _P(),
                                "sys", "usr", 1000)
     assert text == "正文尾"
@@ -112,7 +112,7 @@ def test_stream_once_continuation_messages():
     assert "截断" in msgs[3]["content"]
 
 
-# ============ 2026-05-30 健壮性加固回归 ============
+# ============ 健壮性回归（空响应/超时/限流） ============
 import json
 import tempfile
 
@@ -172,7 +172,7 @@ def _client_raising(exc):
 
 
 def test_call_gen_model_empty_response_switches_fallback():
-    """#1 空响应当成功 bug 回归：active profile 返回零 content → 切 fallback，不当成功。"""
+    """空响应回归：active profile 返回零 content → 切 fallback，不当成功。"""
     p_active = _profile("active")
     p_fb = _profile("fallback")
     # active 返回空（HTTP 200 但零 content）；fallback 返回真内容
@@ -188,7 +188,7 @@ def test_call_gen_model_empty_response_switches_fallback():
 
 
 def test_call_gen_model_all_empty_raises():
-    """#1：active + fallback 全空 → raise GenModelExhaustedError（不返回空文本报成功）。"""
+    """active + fallback 全空 → raise GenModelExhaustedError（不返回空文本报成功）。"""
     p_active = _profile("active")
     p_fb = _profile("fallback")
     restore, _ = _patch_openai([
@@ -206,7 +206,7 @@ def test_call_gen_model_all_empty_raises():
 
 
 def test_call_gen_model_openai_has_timeout():
-    """#2：OpenAI client 构造必须带显式 timeout（对齐 ai_wrapper 的 180.0）。"""
+    """OpenAI client 构造必须带显式 timeout（对齐 ai_wrapper 的 180.0）。"""
     p = _profile("active")
     restore, captured = _patch_openai([_client_returning([("正文", "stop")])])
     try:
@@ -218,7 +218,7 @@ def test_call_gen_model_openai_has_timeout():
 
 
 def test_call_gen_model_retries_same_profile_on_ratelimit():
-    """#2：限流在同 profile 做有限重试（不一次就降级 fallback）。"""
+    """限流在同 profile 做有限重试（不一次就降级 fallback）。"""
     from openai import RateLimitError
 
     p_active = _profile("active")
@@ -270,7 +270,7 @@ class _FakeResp:
 
 
 def test_save_output_rejects_empty_body():
-    """#1：save_output 空 body 守卫 → 拒写空草稿并 raise，不留 cjk=0 草稿。"""
+    """save_output 空 body 守卫 → 拒写空草稿并 raise，不留 cjk=0 草稿。"""
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         raised = False
@@ -370,11 +370,11 @@ def test_removed_legacy_cli_args_exit_2(monkeypatch):
             raise AssertionError(f"{legacy_arg} must exit 2")
 
 
-# ============ 短段约束 + 作者节奏基线（2026-06-05 句法熔合已删·只留这些）============
+# ============ 短段约束 + 作者节奏基线 ============
 
 
 def test_enforce_short_paragraphs_splits_long_multi_sentence():
-    """[2026-06-04 治本] 超阈值多句非对话段 → 按句末切成短段(只切段不改字)。"""
+    """超阈值多句非对话段 → 按句末切成短段(只切段不改字)。"""
     long_para = "他推开门走进了那个昏暗的房间打量四周。墙上挂着一幅落满灰尘的旧画像。地上散落着许多被人撕碎的纸片。"
     out = gw.enforce_short_paragraphs(long_para, author_para_mean=20)  # 阈值=max(26,45)=45
     assert out.count("\n\n") >= 2, "多句长段应按句末切成多个短段"
@@ -410,7 +410,7 @@ def test_enforce_short_paragraphs_protects_system_panel():
 
 
 def test_primacy_emotive_punct_for_high_density_author():
-    """[2026-06-05] 情绪标点密的作者(小世界级)→ primacy 块注入情绪标点强调行(治 flash 全量 prompt 写成叙述向)。"""
+    """情绪标点密的作者(小世界级)→ primacy 块注入情绪标点强调行(防全量 prompt 被写成叙述向)。"""
     block = gw._build_hard_constraint_primacy_block({"excl": 4.9, "ques": 5.5, "ellipsis": 4.3})
     assert "情绪标点" in block and "感叹≈4.9" in block
 
@@ -431,7 +431,7 @@ def test_primacy_includes_anti_pattern_hints():
 
 
 def test_strip_meta_preamble_reasoning_leak():
-    """[2026-06-05] 推理模型漏出的『### 核心推理概要 … ---』元前言被剥离，正文从故事第一句开始。"""
+    """推理模型漏出的『### 核心推理概要 … ---』元前言被剥离，正文从故事第一句开始。"""
     reply = ("### 核心推理概要\n\n本故事块对齐小世界风格，采用 in_medias_res。\n\n"
              "配角赋予城府。\n\n---\n\n晚上十一点的江临市下着雨。\n\n陆参跨上电动车。")
     body = gw.clean_polished_body(reply)
@@ -447,10 +447,7 @@ def test_strip_meta_preamble_no_false_strip():
 
 
 def test_strip_english_meta_commentary_tail():
-    """🔴 2026-06-28：剥离尾部英文元评论块（pro-preview 写完正文后用英文自评漏进 body）。
-
-    实证：钟楼弃儿 cluster_001 模型在 4707CJK 中文正文后追加英文『The narrative chunk is
-    written coherently...All quantitative self-checks...』自评·污染草稿。"""
+    """🔴 剥离尾部英文元评论块（模型写完正文后用英文自评漏进 body 会污染草稿）。"""
     reply = ("午夜的钟声连敲三下。\n\n伊莱从干草垫上惊醒，门缝下滑进一封沾血的羊皮纸。\n\n"
              "The narrative chunk is written coherently with deep expansion of the scenes.\n\n"
              "All quantitative self-checks and foreshadowing logs have been submitted.")
@@ -461,10 +458,8 @@ def test_strip_english_meta_commentary_tail():
 
 
 def test_creative_guard_excludes_flash_tier():
-    """🔴 2026-06-28：写正文禁 flash-tier 兜底（质量攸关·flash 碎句·静默降质违锁 pro 决策）。
-
-    实证：cluster_002 因 pro_preview 瞬时 502 + pro 持久 503 → 静默掉 flash 写正文。改：creative
-    候选剔除含 'flash' 的 profile，pro 全挂则响亮 GenModelExhaustedError。"""
+    """🔴 写正文禁 flash-tier 兜底（质量攸关·flash 碎句·静默降质违锁 pro 决策）：
+    creative 候选剔除含 'flash' 的 profile，pro 全挂则响亮 GenModelExhaustedError。"""
     import os
 
     class _P:
@@ -495,7 +490,7 @@ def test_strip_english_meta_no_false_strip_chinese_with_quote():
     assert "Elias" in body  # 正文内的英文人名保留
 
 
-# ============ 🔴 2026-06-28 伏笔明暗线隔离回归（防 gen_writer 直读 事件簇.json 泄露暗线）============
+# ============ 🔴 伏笔明暗线隔离回归（防 gen_writer 直读 事件簇.json 泄露暗线）============
 import os
 import tempfile as _tf
 
@@ -556,8 +551,8 @@ def test_sanitize_cluster_brief_no_mutation_and_legacy_string():
 def test_build_prompt_excludes_untriggered_hidden_payoff():
     """端到端：build_prompt 产的 writer prompt 不含未到触发的 hidden_payoff·含 surface_clue + 到期 reveal。
 
-    根治原泄露口——gen_writer 直读 事件簇.json 把整 cluster dict（含 foreshadowing_to_plant.hidden_payoff）
-    原样 json.dumps 进 writer prompt（绕过 build_manifest 过滤）。"""
+    锁死泄露口——gen_writer 直读 事件簇.json 时若把整 cluster dict（含
+    foreshadowing_to_plant.hidden_payoff）原样 json.dumps 进 writer prompt，会绕过 build_manifest 过滤。"""
     _bak = os.environ.get("SNIPPET_SEED_MODE")
     os.environ["SNIPPET_SEED_MODE"] = "off"  # 禁种子注入·测试确定性
     try:
@@ -589,7 +584,7 @@ def test_build_prompt_excludes_untriggered_hidden_payoff():
             os.environ["SNIPPET_SEED_MODE"] = _bak
 
 
-# ============ 2026-06-28 写手信息隔离·人物卡隐藏身份脱敏 ============
+# ============ 写手信息隔离·人物卡隐藏身份脱敏 ============
 def _make_cards_with_hidden_identity():
     """造一份带隐藏身份的人物卡.json（false_hero 表面盟友实为叛徒·concealed_until cluster_005）。"""
     return {
@@ -658,7 +653,7 @@ def test_sanitize_cards_missing_file_and_broken_json():
 def test_build_prompt_excludes_untriggered_true_role():
     """端到端：build_prompt 产的 writer prompt 不含未到揭密的 true_role·含 surface_role·到揭密 cluster 才解锁。
 
-    根治原泄露口——gen_writer 直读 人物卡.json 把整份原文（含 true_role）原样 json.dump 进 writer prompt。"""
+    锁死泄露口——gen_writer 直读 人物卡.json 时不得把整份原文（含 true_role）原样 json.dump 进 writer prompt。"""
     _bak = os.environ.get("SNIPPET_SEED_MODE")
     os.environ["SNIPPET_SEED_MODE"] = "off"
     try:
@@ -687,7 +682,7 @@ def test_build_prompt_excludes_untriggered_true_role():
             os.environ["SNIPPET_SEED_MODE"] = _bak
 
 
-# ---------- 🔴 2026-06-29 场景级Appraisal Beat消费（心理 P0·_build_appraisal_section） ----------
+# ---------- 🔴 场景级 Appraisal Beat 消费（_build_appraisal_section） ----------
 
 def test_build_appraisal_section_renders_directive():
     """manifest.appraisal_directive mode=on → 拼出含 header + directive 的段（消费结构化方向卡）。"""
@@ -716,13 +711,13 @@ def test_build_appraisal_section_default_safe_no_directive():
         Path("x.json"), {"appraisal_directive": {"mode": "on", "directive": ""}}) == ""
 
 
-# ============ 🔴 2026-07-07 S2 禁令→正向行为协议回归锁 ============
+# ============ 🔴 S2 正向行为协议回归锁 ============
 # 出处 research/open_source_writing_systems_round2.md S2（借鉴 PlotPilot positive_framing_rules）：
-# 否定指令在 Self-Attention 中激活被禁 token——生成端通用兜底段改正向行为协议（每类 1 正 1 反），
-# 禁用词全量枚举只留检测端（validate_style / semantic_slop 负向词表不动）。检测负向 / 生成正向分工。
+# 否定指令在 Self-Attention 中激活被禁 token——生成端通用兜底段用正向行为协议（每类 1 正 1 反），
+# 禁用词全量枚举只留检测端（validate_style / semantic_slop 负向词表）。检测负向 / 生成正向分工。
 # 北极星⑤：作者风格档仍第一权威——协议只是兜底，作者档 signature 惯用词按作者档写。
 
-# 原负向段（C5 枚举 192 + H3 注 57 + primacy 禁用词行 107 = 356 字）× 1.3 = 改写预算上限。
+# 预算基线：负向枚举段体量（C5 枚举 192 + H3 注 57 + primacy 禁用词行 107 = 356 字）× 1.3 = 协议段预算上限。
 _S2_ORIGINAL_SEGMENT_CHARS = 356
 _S2_TOKEN_BUDGET = int(_S2_ORIGINAL_SEGMENT_CHARS * 1.3)  # 462
 
@@ -767,19 +762,19 @@ def test_s2_positive_protocol_present():
 
 
 def test_s2_no_banned_word_enumeration():
-    """大段禁用词枚举已从 writer prompt 移除（每类最多 1 反例·不再全量罗列激活被禁 token）。"""
+    """writer prompt 不含大段禁用词枚举（每类最多 1 反例·不全量罗列激活被禁 token）。"""
     tpl, user = _build_minimal_prompts()
     full = tpl + "\n" + user
     assert "默认避免：" not in full, "负向枚举清单引导语不得复活"
     assert "顿时 / 紧锁" not in full, "12 词工艺禁用词连排枚举不得复活"
     assert "- **禁用词**" not in full, "primacy 禁用词负向 bullet 不得复活"
-    # 未用作反例的枚举词彻底移除（反例每类最多 1 个：心中一凛/嘴角勾起一抹冷笑/缓缓地说/显然）
+    # 未用作反例的枚举词不得出现（反例每类最多 1 个：心中一凛/嘴角勾起一抹冷笑/缓缓地说/显然）
     for w in ("顿时", "紧锁", "沉吟片刻", "微微挑眉", "淡淡"):
         assert w not in tpl, f"未作反例的原枚举词「{w}」应从 writer 模板移除"
 
 
 def test_s2_token_discipline_within_budget():
-    """🔴 prompt 膨胀纪律：正向协议改写合计 ≤ 原负向段 1.3 倍（356→462 字 · 67k 撑爆翻车史）。"""
+    """🔴 prompt 膨胀纪律：正向协议段合计 ≤ 基线 356 字 × 1.3 = 462（防 writer prompt 膨胀）。"""
     tpl, user = _build_minimal_prompts()
     c5_seg = "## C5." + tpl.split("## C5.")[1].split("\n# ")[0].rstrip()
     h3_note = next(l for l in tpl.splitlines() if l.startswith("（注：工艺/签名词类"))

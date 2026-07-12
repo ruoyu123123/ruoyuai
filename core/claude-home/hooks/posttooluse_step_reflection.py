@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""PostToolUse Hook: 步骤完成后强制反思
+"""PostToolUse Hook: 步骤完成后的反思文件检查（观察层·静默）
 
 触发条件：Bash 工具调用完成后，命令含 `plan_tracker.py step ... --n N`
 
 逻辑：
 1. 解析 plan_id + step n
-2. 检查 `<project>/.reflections/<plan_id>_step_<n>.md` 是否存在
-3. 不存在 → stderr 提示「请补写反思」（**不拦截 · exit 0**，因为 PostTool 不可拒）
-4. 存在 → 静默 exit 0
+2. 在候选目录查找 `<project>/.reflections/<plan_id>_step_<n>.md`
+3. 无论存在与否均静默 exit 0（反思文件不被流水线消费，打印提示只会制造噪声）
 
 【约束】
 - PostToolUse 永不 exit 2（会污染主流水线）
-- 只观察 + 提醒，不阻断
+- 只观察，不阻断
 - 反思文件最小内容：本步骤做了什么 / 学到什么 / 下次怎么做更好（≥ 50 字）
-- 主代理收到 stderr 提示后应主动 Write 反思文件
 """
 import json
 import os
@@ -41,7 +39,7 @@ REFLECTION_TEMPLATE = """# Step {n} 反思 · plan_id={plan_id}
 
 def main():
     try:
-        # 2026-07-08 修（Windows 编码根因）：bytes 读 stdin·json 自动 UTF-8（GBK 控制台文本读会花）
+        # stdin 按 bytes 读·json 自动 UTF-8 解码（文本模式在 GBK 控制台会把载荷读花）
         payload = json.loads(sys.stdin.buffer.read())
     except Exception:
         sys.exit(0)
@@ -53,7 +51,7 @@ def main():
     if "plan_tracker" not in command or "step" not in command:
         sys.exit(0)
 
-    # 2026-05-29 修【安全·绕过】：解耦提取 plan_id / --n（与两个 PreToolUse hook 一致）。
+    # 【安全】解耦提取 plan_id / --n（与两个 PreToolUse hook 一致），flag 顺序任意不影响匹配。
     # 注意：本 hook 是 PostToolUse 观察层，全程只 exit 0，严禁引入非 0 退出。
     if not re.search(r"plan_tracker\.py\s+step\b", command):
         sys.exit(0)
@@ -64,7 +62,7 @@ def main():
     plan_id, n = pid_m.group(1), int(n_m.group(1))
 
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", "."))
-    # v22.gov 修：反思路径优先放在 plan project 根（小说项目/风格库），fallback 全局
+    # 反思路径优先取 plan project 根（小说项目/风格库），fallback 全局
     candidate_dirs = [
         project_dir / "core" / "claude-home" / ".reflections",  # 全局
         project_dir / "_数据库" / ".reflections",
@@ -81,8 +79,7 @@ def main():
             reflection_file = f
             break
 
-    # v28 降噪（2026-06-18）：反思文件从未被流水线采纳，打印模板=纯噪声。
-    # 静默放行，不再打印模板提示。
+    # 反思文件不被流水线消费，打印模板提示只会制造噪声：一律静默放行。
     sys.exit(0)
 
 

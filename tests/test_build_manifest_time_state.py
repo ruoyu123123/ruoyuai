@@ -1,24 +1,22 @@
-"""build_manifest.DatabaseScanner.time_state 回归测试 — 孤儿 #3（clock/timeline 分歧型）。
+"""build_manifest.DatabaseScanner.time_state 回归测试（世界时钟事件浮现）。
 
 钉死：world_clock_events 的真实 schema 是 {date, event, vol[, cluster]}（见
 城南火葬场夜班/时间线.json + db_schema_validate.py 只 require `event` · 注释明写
-「world clock event 用 day/cluster 颗粒」）—— 全仓无 producer 写 `ch` 字段。
-
-旧实现按废弃的 `e.get("ch") == self.ch` 过滤 → clock_events_this_cluster 恒空 →
-时钟事件浮现机制死掉、时间线 must_read 永停 P1。
+「world clock event 用 day/cluster 颗粒」）—— 全仓无 producer 写 `ch` 字段，
+匹配绝不能按 `e.get("ch") == self.ch` 过滤（那会让 clock_events 恒空 →
+时钟事件浮现机制死掉、时间线 must_read 永停 P1）。
 
 守护点：
   · cluster 颗粒：event.cluster | event.cluster_revealed == 本章所属 cluster_id（经 cluster_lookup 归一）
   · date 颗粒：event.date | event.absolute_time == current_time.date | current_time.absolute_time
   · day 颗粒：event.day == current_time.day（纵尸司整数日计数）
   · vol（卷）过粗 → 故意不命中（防整卷每章误标）
-  · 真实城南 schema（无 ch、有 date/cluster）必须能浮现，不再恒空
+  · 真实城南 schema（无 ch、有 date/cluster）必须能浮现，不得恒空
   · build_manifest() 时间线 must_read 命中时升 P0（北极星⑤顾问层注入·非 hard_gate）
   · 不崩、不伪造（脏数据 / 文件缺失）
 
-batch6 #3 补全（2026-05-30 · tolerant 多 schema 字段别名 · 没调查没发言权）：
-3 真实项目实测 world_clock_events 是 3 种 schema，batch6 只认 cluster/date 字段名 →
-纵尸司（day）/诡异（cluster_revealed/absolute_time）因字段名不符仍孤儿 hits=0 被误当成功。
+tolerant 多 schema 字段别名：3 个真实项目的 world_clock_events 是 3 种 schema
+（只认 cluster/date 字段名会让 day / cluster_revealed / absolute_time 别名恒空 hits=0），
 本测试用 3 个真实 schema fixture 各断言对应颗粒能浮现：
   · 城南：{date, event, vol}                       → date 颗粒
   · 纵尸司：{day, event, impact}                    → day 颗粒（current_time 也用 day）
@@ -77,7 +75,7 @@ _CLUSTERS = [
 # ---------- date 颗粒（城南真实 schema：无 ch、有 date） ----------
 
 def test_date_granularity_surfaces_real_citynan_event():
-    """回归核心：旧实现按 ch 过滤 → 恒空；新实现按 date 命中当天世界时钟事件。"""
+    """回归核心：不按 ch 过滤（否则恒空），按 date 命中当天世界时钟事件。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), timeline=_CITYNAN_TIMELINE, clusters=_CLUSTERS)
         s = bm.DatabaseScanner(tmp, 1)
@@ -141,7 +139,7 @@ def test_cluster_takes_priority_over_date():
         assert r["clock_events_this_ch"][0]["_matched_by"] == "cluster"
 
 
-# ---------- 真实 3 schema 补全（batch6 #3）：day / cluster_revealed / absolute_time ----------
+# ---------- 真实 3 schema 别名：day / cluster_revealed / absolute_time ----------
 
 # 纵尸司真实结构：{day(整数日计数), event, impact} · current_time 也用 day
 _ZOMBIE_TIMELINE = {
@@ -173,7 +171,7 @@ _EERIE_TIMELINE = {
 def test_day_granularity_surfaces_real_zombie_event():
     """纵尸司 day 颗粒：event.day == current_time.day → 浮现当日世界时钟事件。
 
-    batch6 只认 cluster/date 字段名 → day 字段孤儿恒空；补全后按 day 命中。
+    day 字段别名必须被识别（只认 cluster/date 字段名会让该 schema 恒空）。
     current_time.day=45 → 命中 day=45 那条，不命中 day=60 的未来事件（不误命中）。
     """
     with tempfile.TemporaryDirectory() as d:
@@ -298,7 +296,7 @@ def test_dirty_and_missing_no_crash():
 def test_wired_into_manifest_timeline_promoted_to_p0():
     """命中时钟事件 → build_manifest() 时间线 must_read 升 P0 + focus 含事件文本。
 
-    旧 bug 下 clock_events_this_ch 恒空 → 时间线永停 P1、focus 不带事件。
+    若 clock_events_this_ch 恒空则时间线永停 P1、focus 不带事件（本测试锁升级链路）。
     北极星⑤：这是顾问层注入（升 priority/focus），不是 hard_gate。
     """
     prog = {

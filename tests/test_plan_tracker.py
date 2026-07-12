@@ -56,7 +56,7 @@ def test_tamper_content_detected():
 
 def test_hmac_key_dependency_no_forge():
     """密钥 A 盖的章，换密钥 B 校验 → tampered。证明是 keyed-HMAC 而非公开哈希
-    （攻击者没有机器密钥就无法伪造有效 attestation·这正是 2026-05-29 安全修复要点）。"""
+    （攻击者没有机器密钥就无法伪造有效 attestation）。"""
     plan = _sample_plan()
     with _fixed_key(b"A" * 32):
         pt._attest(plan)
@@ -245,16 +245,13 @@ def test_reattest_after_manual_edit_recovers():
 
 
 # ════════════════════════════════════════════════════════════════
-# --output 路径解析（2026-07-09 真机 cluster_002 save-state 抓修）
+# --output 路径解析
 # ════════════════════════════════════════════════════════════════
-# 根因：step() 对非绝对 --output 值按「project_root 相对路径」拼接（与 expected_outputs
-# 同口径，见 resolve_project_root() 用途一致）；但 cluster-save-state.md/cluster-write.md
-# 里给的示例是 --output "<项目路径>/_数据库/..."——<项目路径> 本身在文档里就等于
-# workspace/novels/<书名>，照抄示例会把 project_root 拼两遍产出
-# ".../workspace/novels/<书名>/workspace/novels/<书名>/_数据库/..." 这种双重路径，
-# 导致 --output 校验假报「文件不存在」（文件其实已经在正确单层路径上生成）。
-# 修复 = 文档统一改成 --output "_数据库/..."（不含 <项目路径>/ 前缀），与
-# expected_outputs 的既有约定一致。本节钉死两件事：文档不再犯 + 代码本身按正确口径工作。
+# step() 对非绝对 --output 值按「project_root 相对路径」拼接（与 expected_outputs
+# 同口径）。命令文档的 --output 示例必须写 "_数据库/..."（不含 <项目路径>/ 前缀）：
+# <项目路径> 在文档里等于 workspace/novels/<书名>，带前缀照抄会把 project_root
+# 拼两遍产出双重路径，导致 --output 校验假报「文件不存在」。
+# 本节钉死两件事：文档不带前缀 + 代码本身按正确口径工作。
 
 def test_command_docs_no_doubled_project_path_in_output_flag():
     """cluster-write.md / cluster-save-state.md 的 --output 值不得再带 <项目路径>/ 前缀。"""
@@ -302,7 +299,7 @@ def test_step_output_resolves_relative_to_project_root_without_doubling():
         assert any(str(out_file).replace("\\", "/") in v for v in verified), (
             f"verified_outputs 应含单层拼接路径，得 {verified}"
         )
-        # 双重前缀（模拟旧文档误用）不该恰好也存在，否则测试本身失去意义
+        # 双重前缀（模拟文档误用形态）不该恰好也存在，否则测试本身失去意义
         doubled = proj_tmp / proj_tmp.name / "_数据库" / ".wal" / "002_apply_cluster.json"
         assert not doubled.exists()
 

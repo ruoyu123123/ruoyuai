@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# 🔴 2026-06-29 NN角色网络/共指集成
 """nn_coref_bridge 回归：默认安全（env off → []）·规则后端（最近先行词 + 性别匹配）·
-边界情况·异常安全·hanlp 死路径不复活锁（2026-07-03 拆除·上游从未提供本地共指模型）。
+边界情况·异常安全·hanlp 死路径不复活锁（上游从未提供本地共指模型）。
 
 确定性·零网络·零外部依赖。"""
 import json
@@ -119,7 +118,7 @@ def test_rule_multiple_pronouns(monkeypatch):
     assert he_results[1]["resolved_to"] == "李四"
 
 
-# ── hanlp 死路径不复活锁（2026-07-03 拆除）──────────────────
+# ── hanlp 死路径不复活锁 ────────────────────────────────
 
 def test_hanlp_path_removed_stays_removed(monkeypatch):
     """hanlp 后端已整体拆除（上游从未提供本地共指模型·实证见桥 docstring）。

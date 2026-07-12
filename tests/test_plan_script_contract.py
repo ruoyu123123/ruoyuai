@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""plan 模板 ↔ 脚本契约测试（P2 工程债批次1 · 防幽灵引用）
+"""plan 模板 ↔ 脚本契约测试（防幽灵引用）
 
-缺漏报告结论：plan 模板 scripts[] 引用的 core/scripts/*.py 一旦改名/删除，
-orchestrator 跑到该步才报错（git_snapshot 曾悬空引用 18 天没人发现）。
+plan 模板 scripts[] 引用的 core/scripts/*.py 一旦改名/删除，运行时跑到该步才报错。
 本测试静态遍历 core/claude-home/plans/*.json 全部脚本行：
   剥条件脚本前缀 / 「python 」解释器前缀 / adaptive_runner 包装
   （取 -- 后的真实目标命令）→ 提取 core/scripts/xxx.py 路径 → 断言文件存在。
@@ -109,8 +108,7 @@ def test_extractor_skips_comment_and_blank():
 
 # ============ 契约：全部 plan 模板引用的脚本必须真实存在 ============
 def test_all_plan_referenced_scripts_exist():
-    """遍历 plans/*.json 全部脚本行 → 提取 core/scripts/xxx.py → 断言 Path 存在。
-    防幽灵引用（git_snapshot 曾悬空 18 天）。"""
+    """遍历 plans/*.json 全部脚本行 → 提取 core/scripts/xxx.py → 断言 Path 存在（防幽灵引用）。"""
     plans = _load_plans()
     assert plans, f"plans 目录为空？{PLANS_DIR}"
     missing = []
@@ -150,9 +148,7 @@ def test_extraction_not_vacuous():
 
 def test_cluster_main_chain_has_no_observer_sidecars():
     """创作主链不得挂离线观察/学习建议 sidecar。"""
-    # W4 死码清扫（2026-07-05）：audit_dashboard / causal_verifier /
-    # skill_rewrite_advisor / user_edit_learner 已物理删除（生产面零引用），
-    # 条目随之清空；未来出现新的离线观察/学习 sidecar 时在此登记。
+    # forbidden 当前为空集；出现新的离线观察/学习 sidecar 时在此登记其脚本名。
     forbidden: set[str] = set()
     offenders = []
     for fname in ("cluster-write.plan.json", "cluster-save-state.plan.json"):

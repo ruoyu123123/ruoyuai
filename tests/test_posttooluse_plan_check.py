@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""posttooluse_plan_check exit-0 兜底回归（第四轮 Workflow #10·2026-06-17）。
+"""posttooluse_plan_check exit-0 兜底回归。
 
-CLAUDE.md 明文：PostToolUse hook 严禁 exit 非 0（打断主流水线）。此前 posttooluse_plan_check.py
-裸 `if __name__: main()` 无外层 try/except 兜底（唯一漏装的 PostToolUse 兄弟）→ 未捕异常
-（畸形 stdin / 非 dict payload）会 exit 1 打断流水线。对齐 runtime_monitor/step_reflection 兜底。
+CLAUDE.md 明文：PostToolUse hook 严禁 exit 非 0（打断主流水线）。posttooluse_plan_check.py
+的入口有外层 try/except 兜底：未捕异常（畸形 stdin / 非 dict payload）也 exit 0，
+与 runtime_monitor/step_reflection 同口径。
 
 subprocess 喂各类 payload 验 returncode==0（真实 hook 行为·不 mock）。
 """
@@ -22,7 +22,7 @@ def _run(stdin_text):
 
 
 def test_malformed_json_exit0():
-    """🔴 畸形 JSON stdin → exit 0（不打断流水线·改前裸 main 会 exit 1）。"""
+    """🔴 畸形 JSON stdin → exit 0（不打断流水线）。"""
     assert _run("not json{{{") == 0
 
 

@@ -1,10 +1,10 @@
-"""思维层探针永不 hard_gate 制度锁回归测试（2026-06-14 · GATEKEEPER B-4 · 北极星⑤）。
+"""思维层探针永不 hard_gate 制度锁回归测试（北极星⑤）。
 
 零成本最强护栏——守护三件事：
   1. 思维层探针 code（D1-D8 派生·作者思维/意图/读者心理/因果/弧线形状）一律 advisory，
      永不在 HARD_GATE_CODES：_gate_level_for 对它们 × 4 severity 全返 advisory；
   2. 双闸两路径一致——scanner 自报 gate_level='hard_gate' 也被拦回 advisory：
-     _parse_issues_list_scanner（L476 守卫）+ _parse_violations_scanner（B-2 补的 L587 守卫）；
+     _parse_issues_list_scanner + _parse_violations_scanner 两路守卫；
      且白名单内真 hard_gate 不被误伤；
   3. POV_HEAD_HOPPING 不在 HARD_GATE_CODES（pov_consistency 是顾问非门禁）。
 
@@ -22,8 +22,8 @@ sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import audit_hub as ah  # noqa: E402
 
 
-# 预期的思维层探针 code（D1-D8 派生）。当前多数尚未在代码中引入——
-# 本断言是制度护栏：未来任何人把这些 code 误加进 HARD_GATE_CODES 立刻红灯。
+# 预期的思维层探针 code（D1-D8 派生）。
+# 本断言是制度护栏：任何人把这些 code 误加进 HARD_GATE_CODES 立刻红灯。
 THINKING_PROBE_CODES = [
     "PROMISE_PAYOFF_GAP",      # D4 承诺-兑现缺口
     "ARC_SHAPE_MISMATCH",      # 弧线形状（已被金标准证伪 → 永不 hard_gate）
@@ -32,11 +32,11 @@ THINKING_PROBE_CODES = [
     "READER_TENSION_DRIFT",    # 读者张力漂移
     "CAUSALITY_GAP",           # 因果链断裂
     "PPP_INCOMPLETE",          # Promise/Progress/Payoff 不完整
-    # R20 W9 Batch-Z·P0（2026-06-21）3 件 STRONG 全 advisory：
+    # SFS 校准/嵌套信念/状态漂移探针（全 advisory）：
     "SFS_POORLY_CALIBRATED_FOR_AUTHOR",   # SFS / av_judge 自身校准探针
     "CHARACTER_KTH_ORDER_BELIEF_DRIFT",   # OSCToM K-order(K=2) 嵌套信念
     "CHARACTER_STATE_DRIFT_DETECTED",     # NKW 时态分离 stable_identity drift
-    # R22 W10 Batch-DD·P0 STRONG + R21-NB·P1/P2 (2026-06-21) 4 件全 advisory：
+    # 修辞分布/动作-心智比/chills/integration 探针（全 advisory）：
     "RHETORICAL_BALANCE_DRIFT",           # 陈望道 38 格 KL 分布偏离
     "RHETORICAL_CATEGORY_COLLAPSE",       # 某类辞格塌缩
     "RHETORICAL_INVENTORY_THIN",          # 修辞密度过低
@@ -59,7 +59,7 @@ def test_thinking_probe_codes_never_in_hard_gate():
 
 
 def test_self_reported_hardgate_blocked_issues_list():
-    """组2：_parse_issues_list_scanner——探针自报 gate_level='hard_gate' 被 L476 双闸拦回 advisory。"""
+    """组2：_parse_issues_list_scanner——探针自报 gate_level='hard_gate' 被双闸拦回 advisory。"""
     out = json.dumps({"issues": [
         {"code": "PROMISE_PAYOFF_GAP", "severity": "error",
          "gate_level": "hard_gate", "msg": "钩了没兑现"}
@@ -70,7 +70,7 @@ def test_self_reported_hardgate_blocked_issues_list():
 
 
 def test_self_reported_hardgate_blocked_violations():
-    """组2b：_parse_violations_scanner——探针自报顶层 hard_gate 被 B-2 补的 L587 守卫拦回 advisory。"""
+    """组2b：_parse_violations_scanner——探针自报顶层 hard_gate 被守卫拦回 advisory。"""
     out = json.dumps({"gate_level": "hard_gate",
                       "violations": [{"severity": "major"}], "verdict": "fail"})
     issues = ah._parse_violations_scanner(out, "ppp_scanner", "PROMISE_PAYOFF_GAP", "剧情")

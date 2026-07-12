@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""PreToolUse Hook: 新书项目全系统强制开启门禁（v23.13 用户硬规则 2026-05-25）
+"""PreToolUse Hook: 新书项目全系统强制开启门禁（用户硬规则）
 
-v2 cluster 化（2026-05-28）：本 hook 校验的 34 个 JSON 文件包含 v2 schema 字段
-（cluster_blueprint / 故事块摘要 等）。outline 早期 scaffold 步只查存在性，最终
-plan-end/end 追加 --content 等价载荷验收，防止空货架进入写作主链。
+本 hook 校验的 34 个 JSON 文件包含 cluster schema 字段（cluster_blueprint /
+故事块摘要 等）。outline 早期 scaffold 步只查存在性，最终 plan-end/end 追加
+--content 等价载荷验收，防止空货架进入写作主链。
 hook 不感知 cluster vs chapter——它只看「文件是否存在」。
 
 触发条件：Bash 工具调用，命令含 `plan_tracker.py` 且关联 outline plan（命令名=outline 或 plan_id 含 outline）
@@ -30,8 +30,8 @@ import re
 import sys
 from pathlib import Path
 
-# 🔴 2026-06-27 C16：判定逻辑 + 34 必建 JSON 清单抽到共享库 plan_step_gates（北极星⑥消重复）。
-# 本 hook 改薄 wrapper：解析 stdin → 算 db_dir → 调 check_subsystems → ok?exit0:exit2。
+# 判定逻辑 + 34 必建 JSON 清单在共享库 plan_step_gates（单一真相源）。
+# 本 hook 是薄 wrapper：解析 stdin → 算 db_dir → 调 check_subsystems → ok?exit0:exit2。
 _SCRIPTS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
 if _SCRIPTS not in sys.path:
@@ -41,7 +41,7 @@ from plan_step_gates import check_subsystems, ALL_REQUIRED  # noqa: E402,F401
 
 def main():
     try:
-        # 2026-07-08 修（Windows 编码根因）：bytes 读 stdin·json 自动 UTF-8（GBK 控制台文本读会花）
+        # stdin 按 bytes 读·json 自动 UTF-8 解码（文本模式在 GBK 控制台会把载荷读花）
         payload = json.loads(sys.stdin.buffer.read())
     except Exception:
         sys.exit(0)
@@ -66,9 +66,8 @@ def main():
     if "_outline_" not in plan_id:
         sys.exit(0)
 
-    # 只对 end / scaffold 步 / plan-end 步拦。旧 4 步 outline 用 3/4，新 13 步 outline
-    # 用 4(scaffold) / 7(plan-end)。content check 只在最终校验阶段启用，避免 step4
-    # 刚建空骨架时误拦。
+    # 只对 end 和 step 3/4/7 拦（outline plan：scaffold=step 4 · plan-end=step 7）。
+    # content check 只在最终校验阶段（plan-end / end）启用，避免刚建空骨架时误拦。
     # cluster-save-state / cluster-write 等其他命令 plan 完全放行
     step_n = None
     content_check = (op == "end")
@@ -121,12 +120,12 @@ def main():
         print(f"❌ [subsystems_gate] 找不到项目数据库目录: {project_name}", file=sys.stderr)
         sys.exit(2)
 
-    # 🔴 C16/C03：判定下沉到 check_subsystems（34 文件清单 + plan-end 载荷内容）。
+    # 判定走 check_subsystems（34 文件清单 + plan-end 载荷内容）。
     result = check_subsystems(db_dir, content_check=content_check)
     if result["ok"]:
         sys.exit(0)
 
-    # 缺失 → exit 2 阻断（保持原 hook exit 语义）
+    # 缺失 → exit 2 阻断
     print(f"❌ [subsystems_gate] {project_name}: {result['msg']}", file=sys.stderr)
     sys.exit(2)
 

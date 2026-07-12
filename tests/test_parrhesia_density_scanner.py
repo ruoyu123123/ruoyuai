@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""parrhesia_density_scanner · R25 W13 Batch-MM · P1"""
+"""parrhesia_density_scanner 回归（确定性·零 LLM）。"""
 import json
 import os
 import subprocess
@@ -214,7 +214,7 @@ def test_read_failure_returns_note():
         _set_mode(bak)
 
 
-# ── zero_shot truth_claim 语义补召回（2026-07-04 军火库 3.3）─────────────
+# ── zero_shot truth_claim 语义补召回 ─────────────────────────
 import types  # noqa: E402
 
 

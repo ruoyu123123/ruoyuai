@@ -1,10 +1,10 @@
-"""style_profile_extractor + build_manifest 作者量化风格指纹注入 —— L1a 升格回归测试。
+"""style_profile_extractor + build_manifest 作者量化风格指纹注入回归测试。
 
 钉死（北极星①贴合作者风格 / ⑤ advisory 不黑箱不干涉模型 / ⑥ 别过度复杂）：
   · 纯函数提取（profile 路 + 原文路）产出多维数值剖面 + 显式指令文案
   · 两套蒸馏 schema 容错（惊悚乐园 dialogue_ratio / 蛊真人 dialogue_ratio_pct）
   · LLM 脏数值（"约20字"/"40%" 字符串）不崩
-  · build_manifest 注入：env PROFILE_INJECT_MODE 默认 active → 注入真指纹（2026-05-31 放量·真生效）
+  · build_manifest 注入：env PROFILE_INJECT_MODE 默认 active → 注入真指纹
   · 显式 off → 字段 None（零回归对照）
   · shadow → 落盘 + 日志但 manifest 不注入（仍 None · A-B 对照）
   · 顾问层失败/无 profile/extractor 缺失 → None（绝不中断主流水线）
@@ -240,7 +240,7 @@ def _run_with_mode(tmp: Path, mode):
 
 
 def test_manifest_default_active_injects():
-    """默认 active（env 缺省 · 2026-05-31 放量）→ collector 注入真指纹 + manifest 字段非 None。"""
+    """默认 active（env 缺省）→ collector 注入真指纹 + manifest 字段非 None。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_min_project(Path(d))
         collected, m = _run_with_mode(tmp, None)
@@ -261,7 +261,7 @@ def test_manifest_explicit_off_zero_regression():
 
 
 def test_manifest_garbage_falls_back_active():
-    """未知值 → 回退默认 active（注入 · 只有显式 off 才关 · 2026-05-31 放量）。"""
+    """未知值 → 回退默认 active（注入 · 只有显式 off 才关）。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_min_project(Path(d))
         assert _run_with_mode(tmp, "garbage")[0] is not None
@@ -302,14 +302,14 @@ def test_no_style_profile_returns_none():
         assert _run_with_mode(tmp, "active")[0] is None
 
 
-# ============ gen_writer 真消费 author_style_fingerprint（2026-05-31 修阻碍）============
+# ============ gen_writer 真消费 author_style_fingerprint ============
 
 import gen_writer as gw  # noqa: E402
 
 
 def test_gen_writer_consumes_fingerprint_directives():
     """gen_writer._build_style_fingerprint_section 把 manifest.author_style_fingerprint 的
-    directives 抽成显式 prompt 段 —— 验证 active 下数值真进 writer prompt（不再深埋 JSON）。"""
+    directives 抽成显式 prompt 段 —— 验证 active 下数值真进 writer prompt（不深埋 JSON）。"""
     with tempfile.TemporaryDirectory() as d:
         mp = Path(d) / "ch_001.json"
         fp = spe.extract_from_author_profile(_PROFILE_JSL)

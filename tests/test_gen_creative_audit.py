@@ -1,9 +1,8 @@
 """gen_creative deterministic regression tests.
 
-The old outline_card mode has been removed from the public CLI. Direction cards
-must flow through cluster_emergence_engine + novel-outline-planner + cluster
-user_choice artifacts. This test keeps that removal locked while preserving the
-volume_arc structural guards.
+outline_card is not a public CLI mode: direction cards must flow through
+cluster_emergence_engine + novel-outline-planner + cluster user_choice
+artifacts. Tests lock that rejection plus the volume_arc structural guards.
 """
 import json
 import sys
@@ -15,7 +14,7 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import gen_creative as gc  # noqa: E402
-import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现（2026-07-07 从 gen_creative 拆出）
+import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现
 
 
 # ════════════════════════════════════════════════════════════════
@@ -36,11 +35,11 @@ def _run_main(argv: list[str]) -> int | None:
 
 
 # ════════════════════════════════════════════════════════════════
-# Old entry hard rejection: outline_card is no longer public CLI
+# Hard rejection: outline_card is not a public CLI mode
 # ════════════════════════════════════════════════════════════════
 
 def test_outline_card_mode_removed_exit2():
-    """旧单章走向卡入口必须被 argparse 硬拒，不能绕过 cluster 选择链路。"""
+    """单章走向卡入口必须被 argparse 硬拒，不能绕过 cluster 选择链路。"""
     code = _run_main(["gen_creative.py", "--mode", "outline_card", "--count", "2"])
     assert code == 2, f"outline_card 旧入口应被硬拒 exit 2，实得 {code}"
 
@@ -51,7 +50,7 @@ def test_voice_sample_mode_removed_exit2():
 
 
 # ════════════════════════════════════════════════════════════════
-# Bug 2（L459-460）：_emit_volume_arc_to_db major_events isinstance 守卫
+# _emit_volume_arc_to_db major_events isinstance 守卫
 # ════════════════════════════════════════════════════════════════
 
 def _emit(tmp: Path, data: dict) -> dict:
@@ -64,9 +63,9 @@ def _emit(tmp: Path, data: dict) -> dict:
 
 
 def test_emit_volume_arc_filters_non_dict_major_events():
-    """major_events 含裸串 / None / 整数（gen-model 软约束下合法可达）：
-    修前 `{**'str'}` TypeError: object is not a mapping → 崩建书单点调用；
-    修后 isinstance(me, dict) 过滤掉坏元素，只投影合法 dict ME。"""
+    """major_events 含裸串 / None / 整数（gen-model 软约束下合法可达）→
+    isinstance(me, dict) 守卫过滤掉坏元素，只投影合法 dict ME
+    （否则 `{**'str'}` TypeError: object is not a mapping 崩建书单点调用）。"""
     with tempfile.TemporaryDirectory() as td:
         data = {
             "story_destiny": {"final_image": "末法最后一人"},
@@ -80,7 +79,7 @@ def test_emit_volume_arc_filters_non_dict_major_events():
             ],
             "cluster_001": {"scope_summary": "倒叙开场"},
         }
-        major = _emit(Path(td), data)   # 不抛 TypeError 即过 bug2
+        major = _emit(Path(td), data)   # 不抛 TypeError 即守卫生效
         mes = major["major_events"]
         # 只剩 2 条合法 dict（裸串/None/int 被剔除）
         assert len(mes) == 2, f"非 dict ME 未被过滤，实得 {len(mes)} 条: {mes}"
@@ -130,7 +129,7 @@ def test_emit_volume_arc_empty_and_missing_major_events():
 # ════════════════════════════════════════════════════════════════
 
 def test_module_imports():
-    """模块可 import（2 修后无语法/引用错）。"""
+    """模块可 import（无语法/引用错）。"""
     assert hasattr(gc, "main")
     assert hasattr(gva, "_emit_volume_arc_to_db")
 

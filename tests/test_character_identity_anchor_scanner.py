@@ -157,7 +157,7 @@ def test_negated_conflict_does_not_report():
 
 
 def test_audit_hub_integrates_scanner():
-    """[2026-07-05 孤儿接线回归锁] audit_hub cluster-mode tasks 真调本 scanner
+    """接线回归锁：audit_hub cluster-mode tasks 真调本 scanner
     （参考 test_agenda_drift_scanner 同款源码断言模式）。"""
     src = (_SCRIPTS / "audit_hub.py").read_text(encoding="utf-8")
     assert "character_identity_anchor_scanner" in src
@@ -171,7 +171,7 @@ def test_code_never_in_hard_gate_codes():
     assert audit_hub._gate_level_for("CHARACTER_IDENTITY_ANCHOR_DRIFT", "error") == "advisory"
 
 
-# ═══════════════ A7 辨识锚点分层 + 角色负面事实清单（2026-07-07 二轮移植） ═══════════════
+# ═══════════════ A7 辨识锚点分层 + 角色负面事实清单 ═══════════════
 
 
 def test_skeleton_defines_recognition_anchors_and_negative_facts():

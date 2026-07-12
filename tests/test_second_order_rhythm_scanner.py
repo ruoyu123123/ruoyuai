@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""round2#3 second_order_rhythm_scanner 测试（2026-06-16·二阶句长节奏·order-sensitive 补探针7 盲区）。
+"""second_order_rhythm_scanner 测试（二阶句长节奏·order-sensitive·补探针7 盲区）。
 
 🔴 三重验证：① 真作者原文 active 0 误报（Δ²var/var≥3.78>3.0 金标准）② 合成平滑正弦缓变 FAIL（判别力·
 order-sensitive 真抓时序塌缩·探针7 的 permutation-invariant std 看不见）③ 纯匀速 var=0→None 与探针7

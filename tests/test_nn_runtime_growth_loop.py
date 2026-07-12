@@ -1,4 +1,3 @@
-# 🔴 2026-06-30 可成长 NN 闭环接入
 """test_nn_runtime_growth_loop.py — 创作入口默认开启可成长底座 + save_state 数据飞轮接线。"""
 from __future__ import annotations
 
@@ -24,15 +23,15 @@ def test_creative_defaults_include_growth_loop_gates(monkeypatch):
         "RUOYU_NN_SURPRISAL", "RUOYU_NN_COHERENCE", "RUOYU_NN_VAD",
         "RUOYU_NN_COREF", "RUOYU_CHARACTER_NETWORK",
         "RUOYU_FEATURE_STORE", "RUOYU_DATA_FLYWHEEL", "RUOYU_MODEL_REGISTRY",
-        "RUOYU_PREF_RANKER",   # 2026-07-03 W3：pairwise 偏好观察捕获（纯 python 零延迟）
-        "RUOYU_NN_DAEMON",     # 2026-07-04 W5：常驻推理 daemon（热路径 0.04-0.13s 实测）
-        "RUOYU_NN_NLI",        # 2026-07-04 W5：NLI 桥随 daemon 达标默认开
+        "RUOYU_PREF_RANKER",   # pairwise 偏好观察捕获（纯 python 零延迟）
+        "RUOYU_NN_DAEMON",     # 常驻推理 daemon（热路径 0.04-0.13s 实测）
+        "RUOYU_NN_NLI",        # NLI 桥（随 daemon 默认开）
     }
     assert set(nn_runtime_defaults.creative_nn_gates()) == expected
     assert set(newly) == expected | {"EMBED_BACKEND"}   # 字符串值型默认也在 newly 里
     os = __import__("os")
     assert all(os.environ[g] == "1" for g in expected)
-    assert os.environ["EMBED_BACKEND"] == "ruoyu_style"  # W5：真语义后端创作默认
+    assert os.environ["EMBED_BACKEND"] == "ruoyu_style"  # 真语义后端创作默认
 
 
 def test_creative_defaults_do_not_override_explicit_embed_backend(monkeypatch):

@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""build_manifest embedding_store 真接线回归测试（2026-07-02 · 2026-07-04 W6-C 更新①段）。
+"""build_manifest embedding_store 真接线回归测试。
 
-覆盖两处改动：
-  ① _collect_relevant_heuristics：2026-07-04 换轨内容语义嵌入 API——内容后端
-     （content_backend_available）就绪时 context 关键词重叠打分换成内容 embedding 余弦
-     （[0.40,0.65] 拉伸映射到 kw_hits 量纲）；不可用时逐字节保持原关键词重叠计分（零回归）。
-  ② _collect_selective_history bug fix：此前无门控裸用 compute_embedding/cosine_similarity——
-     默认 hash 假嵌入会静默冒充语义检索。补门控后：无真后端时整段语义检索跳过（且绝不
-     调用 compute_embedding），诚实返回空；真后端时语义检索照常工作。**本段消费磁盘预计算
-     向量库、与生成时后端绑定，2026-07-04 迁移不动它，仍走 _has_real_embedding_backend +
-     compute_embedding（风格后端）**。
+覆盖两段检索逻辑：
+  ① _collect_relevant_heuristics：内容后端（content_backend_available）就绪时用内容
+     embedding 余弦打分（[0.40,0.65] 拉伸映射到 kw_hits 量纲）；不可用时走 context
+     关键词重叠计分。
+  ② _collect_selective_history：无真后端（默认 hash 假嵌入不可当语义检索用）→ 整段
+     语义检索跳过（绝不调用 compute_embedding），诚实返回空；真后端时语义检索照常工作。
+     本段消费磁盘预计算向量库、与生成时后端绑定，走 _has_real_embedding_backend +
+     compute_embedding（风格后端），与 ① 的内容后端门控相互独立。
 
 全程确定性内容感知假 embedding（字符频率向量，同 test_topic_drift_scanner 手法），
 不打 LLM、不联网。
@@ -70,8 +69,8 @@ def test_has_real_embedding_backend_gate(monkeypatch):
 
 # ════════════════════════════════════════════════════════════════════
 # ① _collect_relevant_heuristics：内容后端就绪 embedding 余弦 vs 无后端关键词重叠
-#    （2026-07-04 换轨内容语义嵌入 API·门控 = content_backend_available，非
-#    _has_real_embedding_backend——那个仍归 ② _collect_selective_history 专用不动）
+#    （门控 = content_backend_available，非 _has_real_embedding_backend——
+#    后者归 ② _collect_selective_history 专用）
 # ════════════════════════════════════════════════════════════════════
 
 def _mk_heuristics_project(success_patterns: list) -> tuple:
@@ -146,8 +145,8 @@ def test_relevant_heuristics_real_backend_uses_embedding_cosine(monkeypatch):
       但因反转，不含任何原始 2-4 字 token 子串 → 关键词路径 kw_hits=0）。
     - "far1"：desc 是完全不相关字符（水果名）→ 假 embedding 余弦≈0；关键词路径 kw_hits=0 同样。
     两条 confidence/usage_count 全同 → 关键词路径下（kw_hits 均 0）打平手，稳定排序保留
-    输入顺序（far1 在前）；embedding 路径下 near1 应翻盘到第一（新 [0.40,0.65] 拉伸缩放公式
-    仍单调递增于 sim，排序结论不受缩放常数改变影响）。
+    输入顺序（far1 在前）；embedding 路径下 near1 应翻盘到第一（[0.40,0.65] 拉伸缩放公式
+    单调递增于 sim，排序结论不受缩放常数影响）。
     """
     import embedding_store
     td, root = _mk_heuristics_project([])  # 先建项目骨架，稍后手写经验文件（控制顺序）
@@ -194,7 +193,7 @@ def test_relevant_heuristics_real_backend_uses_embedding_cosine(monkeypatch):
 
 
 def test_relevant_heuristics_batches_prefetch_once(monkeypatch):
-    """🔴 2026-07-03 Wave-4：score() 对每条经验 desc 逐条 compute_content_embedding 之前，应先对
+    """🔴 批量预取回归锁：score() 对每条经验 desc 逐条 compute_content_embedding 之前，应先对
     全部 all_patterns 的 desc 触发一次批量 prefetch_content_embeddings（而非各自撞真后端 N 次）。
     query embed（_ctx_text）不在这次批量文本集合内——它已在循环外单独算过。"""
     import embedding_store
@@ -275,8 +274,8 @@ def test_relevant_heuristics_real_backend_failure_falls_back_to_keyword(monkeypa
 
 def test_relevant_heuristics_kw_hits_scaling_derivation():
     """🔴 阈值推导回归锁：[0.40,0.65] 拉伸映射——neg_cross_book p50(0.4136) 一带映射到
-    kw_hits≈0（明显无关不再假装「中等相关」）；pos_adjacent p75-p95(0.5974-0.6836) 一带
-    映射到 kw_hits=5（与原关键词命中计数上限对齐）；区间外钳位不外推。"""
+    kw_hits≈0（明显无关不得假装「中等相关」）；pos_adjacent p75-p95(0.5974-0.6836) 一带
+    映射到 kw_hits=5（与关键词路径命中计数上限对齐）；区间外钳位不外推。"""
     lo, hi = 0.40, 0.65
 
     def _kw_hits(sim):
@@ -289,7 +288,7 @@ def test_relevant_heuristics_kw_hits_scaling_derivation():
 
 
 # ════════════════════════════════════════════════════════════════════
-# ② _collect_selective_history bug fix：无门控裸调 compute_embedding
+# ② _collect_selective_history：真后端门控（无真后端不做语义检索）
 # ════════════════════════════════════════════════════════════════════
 
 def _mk_history_project() -> tuple:
@@ -325,7 +324,7 @@ def _mk_history_project() -> tuple:
 
 
 def test_selective_history_gate_off_never_calls_compute_embedding(monkeypatch):
-    """🔴 bug fix 核心断言：无真后端（默认环境）→ compute_embedding 零调用，诚实返回空。"""
+    """🔴 门控核心断言：无真后端（默认环境）→ compute_embedding 零调用，诚实返回空。"""
     _clear_embed_env(monkeypatch)
     td, root, _rel, _irr = _mk_history_project()
     try:

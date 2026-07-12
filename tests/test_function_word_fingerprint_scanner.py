@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""round2#2 function_word_fingerprint_scanner 金标准测试（2026-06-16·功能词指纹偏离·确定性）。
+"""function_word_fingerprint_scanner 金标准测试（功能词指纹偏离·确定性）。
 
 🔴 金标准防矫枉过正：真作者原文喂自身基线 active → 零误报（综合 15 词 cluster/base 全作者最小 0.86·
 FLOOR 0.6 留 0.26 余量）。覆盖：真作者不误报 / 压平 FAIL / 偏高不报（北极星③）/ 无作者档 skip /
