@@ -244,7 +244,7 @@ def test_mode_shadow_default_exit0_and_report_written(tmp_path, monkeypatch):
         2: _chars({"id": "C_LI", "name": "李暴躁", "status": "alive"}),
     })
     assert _run_main(p, monkeypatch, None) == 0  # 默认 shadow·有 finding 也 exit 0
-    reports = list((p / "_数据库" / ".cross_chapter_scan").glob("entity_state_graph_*.json"))
+    reports = list((p / "_数据库" / ".cross_cluster_scan").glob("entity_state_graph_*.json"))
     assert len(reports) == 1
     data = json.loads(reports[0].read_text(encoding="utf-8"))
     assert data["scan_type"] == "entity_state_graph"

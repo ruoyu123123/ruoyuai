@@ -1,7 +1,7 @@
 {
   "_schema": "offstage_actions_v21",
   "schema_version": "v27",
-  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。本文件是 PbtA Moves + 声明式行动数据范式——每角色一组 move：trigger（触发时机）+ narrative_template（writer 用这个『框』写，避免公式化但保持识别度）+ consequence（执行后果）+ frequency_per_chapter（单 move 单章使用上限，防公式化）。writer 让角色行动时优先从 moves 抽 narrative_template，避免凭空发明导致角色行为同质化。占位符：陆衍=主角 / 顾沉=招安派反派 / 老周=情报盟友。",
+  "_doc": "适用于现代都市、隐秘超自然与商战权谋题材的 PbtA Moves 示例。每个 move 定义触发时机、叙事模板、执行后果与单故事块使用上限；writer 按角色 moves 选择动作以保持行为辨识度。",
   "generated_at": "<生成日期>",
 
   "characters": {
@@ -16,7 +16,7 @@
           "action": "停顿 1-2 秒，眼神扫过环境/人脸，记下 1-3 个细节",
           "narrative_template": "<陆衍> 没说话，先看了 <对象> <次数>。<注意到的细节>。",
           "consequence": "+1 信息收集；可能让对方察觉到他在打量",
-          "frequency_per_chapter": 2,
+          "frequency_per_cluster": 2,
           "cooldown": 0
         },
         {
@@ -26,7 +26,7 @@
           "action": "用一个含糊的话延迟，如「让我想想」「我看看再说」「这事得考虑」",
           "narrative_template": "<陆衍> <动作>，「<延迟话术>」。",
           "consequence": "暂时不被绑定 + 但对方记一笔",
-          "frequency_per_chapter": 1
+          "frequency_per_cluster": 1
         },
         {
           "move_id": "MV_lu_protect_those_close",
@@ -35,7 +35,7 @@
           "action": "用自己的方式默默处理 / 替对方挡下风险，但不让对方知道",
           "narrative_template": "<陆衍> 没告诉 <对象>，自己先 <动作>。",
           "consequence": "+亲密度（隐性）；但加重自己负担",
-          "frequency_per_chapter": 1
+          "frequency_per_cluster": 1
         },
         {
           "move_id": "MV_lu_ration_reflect",
@@ -44,7 +44,7 @@
           "action": "在脑中梳理因果链，列出 2-3 种可能性，挑最简洁的解释",
           "narrative_template": "<陆衍> 在心里把 <事件> 倒回去捋。第一种可能：<A>。第二种：<B>。第三种 <C>...还是 <选定>。",
           "consequence": "可能漏掉超自然解释（其早期是劣势）",
-          "frequency_per_chapter": 1
+          "frequency_per_cluster": 1
         },
         {
           "move_id": "MV_lu_self_preservation_retreat",
@@ -53,7 +53,7 @@
           "action": "找借口离开现场，回到熟悉的地方（家/办公室）",
           "narrative_template": "<陆衍> 找了个理由 <借口>，<离开方式>。",
           "consequence": "暂时安全；但可能错失重要信息",
-          "frequency_per_chapter": 1
+          "frequency_per_cluster": 1
         }
       ]
     },
@@ -67,7 +67,7 @@
           "action": "提出看似优厚的条件，但条件细节里埋一个绳子（让对方一旦接受就被勾住）",
           "narrative_template": "<顾沉> <语气描写>，「<钓饵话术>」。<对方反应>。",
           "consequence": "对方接受 → 进入他的叙事；拒绝 → 暴露态度",
-          "frequency_per_chapter": 1
+          "frequency_per_cluster": 1
         },
         {
           "move_id": "MV_gu_distance_observation",
@@ -109,14 +109,14 @@
     "action": "具体动作描述",
     "narrative_template": "writer 写这个 move 时的句式模板（占位符）",
     "consequence": "执行后的后果（信息/关系/物理）",
-    "frequency_per_chapter": "本章最多用几次（防止过于公式化）",
-    "cooldown": "上次用后多少章不能再用"
+    "frequency_per_cluster": "单个故事块最多使用次数",
+    "cooldown": "上次使用后需要间隔的故事块数"
   },
 
   "_consumption_chain": {
     "produced_by": "/distill-character 蒸馏角色 voice_pack 时同步生成 moves（基于 5 层 persona）",
     "consumed_by": [
-      "build_manifest._collect_character_moves() 注入 manifest（仅本章涉及角色）",
+      "build_manifest._collect_character_moves() 注入 manifest（仅本故事块涉及角色）",
       "writer：让角色行动时优先从 moves 抽 narrative_template，不要凭空发明动作",
       "voice-checker：检测角色行动是否符合该角色 moves 池子",
       "cluster 级 scanner：检测 moves 频率是否过高（公式化）/ 过低（角色失声）"

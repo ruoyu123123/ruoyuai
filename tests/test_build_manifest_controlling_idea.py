@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cluster_summary_fixtures import write_cluster_summary
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import build_manifest as bm  # noqa: E402
 
@@ -180,6 +182,7 @@ def test_minimal_premise_only():
 def _wiring_project(tmp: Path, *, with_ci: bool) -> Path:
     db = tmp / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
+    write_cluster_summary(tmp, [])
     clusters = [{
         "cluster_id": "cluster_001", "status": "in_progress",
         "chapter_range": [1, 4], "scope_summary": "弃儿夜入钟楼",
@@ -206,7 +209,8 @@ def _wiring_project(tmp: Path, *, with_ci: bool) -> Path:
     sd = {"controlling_idea": _CI} if with_ci else {
         "final_image": "钟楼崩塌", "thematic_resolution": "弃儿归乡"}
     (db / "大势卡.json").write_text(
-        json.dumps({"story_destiny": sd}, ensure_ascii=False), encoding="utf-8")
+        json.dumps({"story_destiny": sd, "major_events": []}, ensure_ascii=False),
+        encoding="utf-8")
     return tmp
 
 

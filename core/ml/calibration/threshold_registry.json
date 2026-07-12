@@ -3,7 +3,7 @@
   "generated_at": "2026-07-04",
   "marker_total": 33,
   "marker_source_cmd": "grep -rn \"待金标准校准\" core/scripts/*.py",
-  "entry_count": 46,
+  "entry_count": 44,
   "kind_counts": {
     "threshold": 51,
     "scale": 3,
@@ -32,8 +32,8 @@
   ],
   "entries": [
     {
-      "id": "learning_loop.py::SEMANTIC_ATTRIB_FLOOR",
-      "file": "core/scripts/learning_loop.py",
+      "id": "learning_loop_attribution.py::SEMANTIC_ATTRIB_FLOOR",
+      "file": "core/scripts/learning_loop_attribution.py",
       "constant": "SEMANTIC_ATTRIB_FLOOR",
       "kind": "threshold",
       "current_value": 0.3,
@@ -43,7 +43,7 @@
       "compares": "反思关键词查询文本 vs skill 段落（heading+body）--语义归因到具体 skill 段落的相关性下限",
       "pinned_by_tests": [],
       "marker_lines": [
-        1035
+        12
       ],
       "note": "无数值 env 覆盖钩子；tests/test_learning_loop.py 存在但未按常量名或字面值钉住。"
     },
@@ -242,38 +242,6 @@
       ]
     },
     {
-      "id": "cross_cluster_character_presence_balance_aggregate.py::GINI_DEFAULT_BASELINE",
-      "file": "core/scripts/cross_cluster_character_presence_balance_aggregate.py",
-      "constant": "GINI_DEFAULT_BASELINE",
-      "kind": "threshold",
-      "current_value": 0.55,
-      "env_override": null,
-      "relation_family": "other",
-      "consumer": "compute_presence_stats",
-      "compares": "无作者档时 Gini 系数的通用兜底基线值",
-      "pinned_by_tests": [],
-      "marker_lines": [
-        33
-      ],
-      "note": "无专属测试文件覆盖。"
-    },
-    {
-      "id": "cross_cluster_character_presence_balance_aggregate.py::GINI_DEFAULT_SIGMA",
-      "file": "core/scripts/cross_cluster_character_presence_balance_aggregate.py",
-      "constant": "GINI_DEFAULT_SIGMA",
-      "kind": "threshold",
-      "current_value": 0.1,
-      "env_override": null,
-      "relation_family": "other",
-      "consumer": "compute_presence_stats",
-      "compares": "无作者档时 Gini 系数通用兜底标准差",
-      "pinned_by_tests": [],
-      "marker_lines": [
-        33
-      ],
-      "note": "无专属测试文件覆盖。"
-    },
-    {
       "id": "cross_cluster_character_presence_balance_aggregate.py::GINI_DEVIATION_K",
       "file": "core/scripts/cross_cluster_character_presence_balance_aggregate.py",
       "constant": "GINI_DEVIATION_K",
@@ -285,7 +253,7 @@
       "compares": "本书角色出场 Gini 系数对比作者基线--偏离超过 k·sigma 才报（k=1.0）",
       "pinned_by_tests": [],
       "marker_lines": [
-        33
+        23
       ],
       "note": "无专属测试文件覆盖（全仓无 tests/test_cross_cluster_character_presence_balance_aggregate.py）。"
     },
@@ -301,7 +269,7 @@
       "compares": "曾出场角色连续缺席 cluster 数--达到此数判定长尾遗忘",
       "pinned_by_tests": [],
       "marker_lines": [
-        33
+        23
       ],
       "note": "无专属测试文件覆盖。"
     },
@@ -317,7 +285,7 @@
       "compares": "长尾遗忘角色数量下限--达到此数才整体上报 advisory",
       "pinned_by_tests": [],
       "marker_lines": [
-        33
+        23
       ],
       "note": "无专属测试文件覆盖；本文件 6 个常量共享同一处标记（line 33 的块注释），是全仓一条标记覆盖多常量密度最高的文件。"
     },
@@ -333,7 +301,7 @@
       "compares": "角色累计出现次数下限--达到此数才算曾出场角色，纳入长尾遗忘检测池",
       "pinned_by_tests": [],
       "marker_lines": [
-        33
+        23
       ],
       "note": "无专属测试文件覆盖。"
     },
@@ -349,7 +317,7 @@
       "compares": "全书前 N% cluster 窗口--该窗口内累计 planted=0 判定开篇没借债(Book Mortgage Absent)",
       "pinned_by_tests": [],
       "marker_lines": [
-        53
+        52
       ],
       "note": "无专属测试文件覆盖。"
     },
@@ -365,7 +333,7 @@
       "compares": "卷末 open_debt / planted 占比--超过此比例判定卷末烂尾(Volume Overshoot)",
       "pinned_by_tests": [],
       "marker_lines": [
-        53
+        52
       ],
       "note": "无专属测试文件覆盖；本文件 4 个常量共享同一处标记。"
     },
@@ -381,7 +349,7 @@
       "compares": "卷尾窗口内 open_ratio 连续上升的 cluster 数--达到此数判定烂尾风险(Tail Runaway)",
       "pinned_by_tests": [],
       "marker_lines": [
-        53
+        52
       ],
       "note": "无专属测试文件覆盖。"
     },
@@ -397,7 +365,7 @@
       "compares": "卷内后 N% 区段定义--超过此比例进入卷尾窗口参与烂尾风险判定",
       "pinned_by_tests": [],
       "marker_lines": [
-        53
+        52
       ],
       "note": "无专属测试文件覆盖。"
     },

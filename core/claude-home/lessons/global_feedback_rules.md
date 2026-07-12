@@ -311,7 +311,7 @@ cluster 主链、固定 cluster 字数或 writer checkpoint 的开关。
   ```
 - 模板见 `core/claude-home/templates/examples/urban_supernatural_business/涟漪规则.example.json`
 - write-chapter 流水线 step 0 会自动跑 `world_evolution_apply_card.py` → 把用户选择的涟漪落地到世界状态
-- save-state step 9 会自动跑 `world_evolution_apply_chapter.py` → 把章末事件涟漪应用
+- save-state 状态更新会跑 `world_evolution_apply_cluster.py`，每个 cluster 只推进一次世界涟漪
 
 **相关规则**：
 - [[feedback-default-ecas-for-new-books]] 新书默认启用 ECAS 故事块
@@ -597,11 +597,11 @@ v22→v24 cluster mode 转型只改了写作单位 + plan template，遗留：
   - validate_chapter LONG_MONOLOGUE 阈值 0→5 (cluster 视野)
   - scanner_registry.json 极简单层声明
   - CLUSTER_MODE=1 env 子进程传递管线
-- ✅ T#12: 数据库 schema v2 + migration（migrate_data_model_v2.py）
-  - 12 个 JSON 字段 _ch → _cluster + scene_index
-  - 章纲摘要.json → 故事块摘要.json
-  - 进度.chapter_plan → cluster_blueprint 按 cluster 分组
-  - 自动 backup _数据库.bak.YYYYMMDD_HHMMSS
+- ✅ T#12: 数据库统一为 cluster-native schema
+  - 核心 JSON 使用 cluster_id + scene_index
+  - 故事块摘要.json 是唯一摘要表
+  - 进度.cluster_blueprint 按 cluster 组织
+  - `db_schema_validate.py` 只读严格校验当前契约
 - ✅ T#14: 蒸馏 8 phase → 7 phase（删 phase-2 chapter-replica）+ distill_replicate chapter 模式 deprecated
 
 ### Phase C 链路重构（10-14 天 · P1）
@@ -619,13 +619,13 @@ v22→v24 cluster mode 转型只改了写作单位 + plan template，遗留：
 
 ### 数据模型规范（v2 cluster-centric）
 
-| 字段类型 | 旧（v1）| 新（v2）|
+| 字段类型 | 当前字段 |
 |---|---|---|
-| 章号 | `ch: 5` | `cluster: "cluster_001", scene_index: 4` |
-| 角色登场 | `first_appear_ch: 1` | `first_appear_cluster: "cluster_001"` |
-| 伏笔埋设 | `setup_ch: 3` | `setup_cluster: "cluster_001"`, `setup_scene_index: 5` |
-| 秘密揭露 | `reveal_at_ch: 20` | `reveal_at_cluster: "cluster_004"` |
-| 物理产物 | `第NNN章.txt` | ✅ 保留（出版习惯）|
+| 场景定位 | `cluster: "cluster_001", scene_index: 4` |
+| 角色登场 | `first_appear_cluster: "cluster_001"` |
+| 伏笔埋设 | `setup_cluster: "cluster_001"`, `setup_scene_index: 5` |
+| 秘密揭露 | `reveal_at_cluster: "cluster_004"` |
+| 物理产物 | `第NNN章.txt`（格式输出）|
 
 ### scanner 开发原则
 
@@ -635,18 +635,10 @@ v22→v24 cluster mode 转型只改了写作单位 + plan template，遗留：
 4. scanner_registry.json 注册 `layer: cluster` 或 `cross-cluster`
 5. cluster_001 首块自动宽容（PLOT_subplot / PLOT_arc 等容忍）
 
-### 项目 migration 流程
+### 项目 schema 验证
 
-```bash
-# dry-run 检查
-python core/scripts/migrate_data_model_v2.py <project>  --dry-run
-
-# 实跑（自动 backup）
-python core/scripts/migrate_data_model_v2.py <project>
-
-# 回滚
-python core/scripts/migrate_data_model_v2.py <project> --rollback _数据库.bak.YYYYMMDD_HHMMSS
-```
+`python core/scripts/db_schema_validate.py <project>` 只读校验当前 cluster-native 契约；
+任何错误都由对应生产步骤修正后重新验证，不在校验器内改写数据库。
 
 ### 蒸馏新流程（v3 cluster 单轨）
 

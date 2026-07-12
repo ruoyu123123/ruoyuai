@@ -27,6 +27,13 @@ CHAPTER_DIR_RE = re.compile(r"^\u7b2c(\d{3})\u7ae0$")
 CHAPTER_FILE_RE = re.compile(r"^\u7b2c(\d{3})\u7ae0\.txt$")
 TITLE_LINE_RE = re.compile(r"^\u7b2c0*\d+\u7ae0(?:\s+.+)?$")
 
+# Machine-metadata markers that must never leak into an exported chapter body.
+# chapter_io no longer owns any body/CHANGES marker syntax (bodies are always
+# plain prose; CHANGES lives only in the sibling _changes.json), so this
+# export-time guard keeps its own literal list rather than importing symbols
+# chapter_io does not expose.
+FORBIDDEN_BODY_MARKERS = ("---CHANGES_FACTUAL---", "---CHANGES---", "---CHANGES_SELF_EVAL---")
+
 
 class ExportIntegrityError(RuntimeError):
     def __init__(self, report: dict[str, Any]):
@@ -109,8 +116,8 @@ def read_title(project_root: Path, chapter_no: int) -> str:
 
 
 def validate_chapter_body(path: Path, text: str) -> None:
-    for sep in cio.CHANGES_SEPARATORS + (cio.SELF_EVAL_SEP,):
-        if sep in text:
+    for marker in FORBIDDEN_BODY_MARKERS:
+        if marker in text:
             raise ValueError(f"machine metadata marker found in chapter body: {path}")
 
     lines = text.splitlines()

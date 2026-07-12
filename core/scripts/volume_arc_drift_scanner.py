@@ -229,11 +229,11 @@ def scan(project_root: Path) -> dict:
             return v
         if isinstance(v, str) and v.strip().isdigit():
             return int(v.strip())
-        mm = re.search(r"[Vv](\d+)", str(m.get("id") or m.get("me_id") or ""))
+        mm = re.search(r"[Vv](\d+)", str(m.get("id") or ""))
         return int(mm.group(1)) if mm else None
-    me_pool = dashishi.get("major_events") or dashishi.get("major_events_pool") or []
+    me_pool = dashishi.get("major_events") or []
     vol_mes = [m for m in me_pool if isinstance(m, dict) and _me_vol(m) == cur_vol]
-    done_mes = [m for m in vol_mes if m.get("status") == "completed" or m.get("completed_at_ch")]
+    done_mes = [m for m in vol_mes if m.get("status") == "completed"]
     total_me = len(vol_mes) or 1
     progress = len(done_mes) / total_me if vol_mes else 0.0
     if not vol_mes:  # 无 ME 池数据 → 退回 cluster 计数（带标记，避免静默假阳性）

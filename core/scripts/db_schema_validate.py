@@ -1,38 +1,27 @@
-"""db_schema_validate.py — 13 个核心 JSON schema 校验 + 自动 migrate（v17.5 / P1.1）
+"""校验小说项目数据库及作者档的确定性结构契约。
 
-修复"数据库 schema 漂移"问题——常见 migrate：
-- 人物卡 dict→list
-- 故事块摘要 dict→list
-- 进度.cluster_blueprint 字段补全
-
-每次 /outline 初始化和 /cluster-save-state 前跑一次。schema 不符合 → 自动 migrate（备份后改）或报错。
+验证器只读文件。任何缺失、类型错误或非法枚举都必须由生产步骤修正后重新校验。
 
 用法：
-    python db_schema_validate.py <项目路径> [--auto-migrate] [--strict]
+    python db_schema_validate.py <项目路径>
     python db_schema_validate.py <项目路径> --require-quantitative-keys [作者档路径]
-    # 🔴 W5：/db 手改后单文件契约重校验（手改破契约防护）
     python db_schema_validate.py <项目路径> --post-edit <被手改的子系统JSON路径>
     python db_schema_validate.py <项目路径> --revalidate-after-manual <路径>   # 同义
 
 退出码：
-    0  全部通过 / 已自动 migrate / 手改未破坏契约
-    1  发现 schema 错误（--strict 模式下）
-    2  致命错误（如 JSON 损坏）/ --post-edit 检出手改破契约
+    0  全部通过
+    1  项目数据库存在契约错误
+    2  参数、路径、JSON 或单文件契约错误
 """
 
+import argparse
 import sys
 import json
-import shutil
 from pathlib import Path
-from datetime import datetime
 
 
-# 13 个核心 JSON 的【深 schema 规则】（collection 类型 + 必需字段）。其余 21 个高级子系统
-# （见 subsystem_skeletons.json._canonical_34）刻意不在此做深校验——它们 schema 灵活、由
-# build_manifest 容差读取多种真实项目变体；存在性 + 合法 JSON + schema_version 由
-# scaffold_subsystems.py verify 兜底（二者分工不重复·见 SUBSYSTEM_FRAMEWORK.md）。给灵活件
-# 加严 schema 会误报（本验证器自身曾因过严规则反向误导·见下方契约债根治记录）。
-# 字段格式：(json_name, top_keys_required, item_collection_key, expected_item_type, expected_item_required_fields)
+# 13 个核心 JSON 的深层结构规则。其余子系统由 scaffold_subsystems.py 校验存在性、
+# JSON 合法性与 schema_version；此处只约束已有稳定消费契约的字段。
 SCHEMA_RULES = {
     "人物卡": {
         "required_top_keys": ["schema_version", "characters"],
@@ -45,13 +34,12 @@ SCHEMA_RULES = {
         "collection_key": "entries",
         "collection_type": list,
         "item_required_fields": ["id", "title", "keywords"],
-        "optional": True,  # entries 字段可能不存在（早期项目）
+        "optional": True,
     },
     "伏笔表": {
         "required_top_keys": ["schema_version", "promises"],
         "collection_key": "promises",
         "collection_type": list,
-        # v2 cluster 化（2026-05-28）：纯 cluster 模式
         "item_required_fields": ["id", "description", "setup_cluster", "tier"],
     },
     "故事块摘要": {
@@ -64,39 +52,27 @@ SCHEMA_RULES = {
         "required_top_keys": ["schema_version", "book_title", "current_cluster"],
         "collection_key": "cluster_blueprint",
         "collection_type": dict,
-        "item_required_fields": [],  # cluster_blueprint 是 dict（cluster_id → cluster_data）
+        "item_required_fields": [],
     },
     "场景规则": {
         "required_top_keys": ["schema_version"],
         "collection_key": "scene_types",
-        "collection_type": dict,  # 这个本身是 dict 而非 list
+        "collection_type": dict,
         "item_required_fields": [],
     },
-    # 2026-06-01 根治[契约债]：权威结构 = success_patterns/failure_patterns/preferences
-    # （见 learning_loop.py 文档：entries 是 novel-reflector 的"输入"格式，非本文件结构；
-    # build_manifest.experience_entries() 兼容读两种）。旧规则要 entries 产生持续误报，
-    # 反过来会误导弱模型把对的文件改错。改对齐权威结构，不强约束 item 字段。
     "写作经验": {
         "required_top_keys": ["schema_version", "success_patterns"],
         "collection_key": "success_patterns",
         "collection_type": list,
         "item_required_fields": [],
     },
-    # 2026-05-29 复审修复（L15）：实际 用户偏好.json 顶层是分组键
-    # （workflow_preferences / style_preferences / content_preferences），
-    # 多数项目无 preferences[] 数组，旧规则要求 preferences[] + item {id,key,value} 产生
-    # 大量误报 advisory。改为：顶层不强制 preferences；preferences[] 存在时才校验为 list，
-    # 不再要求 id/key/value（不同项目 schema 形态不一）。
     "用户偏好": {
         "required_top_keys": ["schema_version"],
         "collection_key": "preferences",
         "collection_type": list,
         "item_required_fields": [],
-        "optional": True,  # 文件可缺；preferences[] 也可缺（顶层分组键形态）
+        "optional": True,
     },
-    # 2026-06-01 根治[契约债]：locations 是 list（命令文档 / scaffold 骨架 / 本模块自身的
-    # migrate_dict_to_list 都按 list；消费方 build_manifest 只读 character_positions(dict)/
-    # travel_log，不按类型读 locations）。旧规则写成 dict 与自身 migrate 方向矛盾 → 误报 TYPE_MISMATCH。
     "地图": {
         "required_top_keys": ["schema_version", "locations"],
         "collection_key": "locations",
@@ -119,7 +95,6 @@ SCHEMA_RULES = {
         "required_top_keys": ["schema_version"],
         "collection_key": "world_clock_events",
         "collection_type": list,
-        # v2 cluster 化（2026-05-28）：world clock event 用 day/cluster 颗粒
         "item_required_fields": ["event"],
     },
     "道具": {
@@ -134,118 +109,14 @@ SCHEMA_RULES = {
 def load_json(p: Path):
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
         raise RuntimeError(f"JSON 损坏：{p} — {e}")
 
 
-def save_json(p: Path, data):
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def backup_then_save(p: Path, data):
-    """改写前备份原文件到 _backup/db_schema/<时间戳>/。"""
-    backup_root = p.parent / "_backup" / "db_schema" / datetime.now().strftime("%Y%m%dT%H%M%S")
-    backup_root.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(p, backup_root / p.name)
-    save_json(p, data)
-
-
-def migrate_dict_to_list(data: dict, collection_key: str) -> tuple[dict, bool]:
-    """把 dict 形式的 collection 转 list。返回 (new_data, migrated)。"""
-    coll = data.get(collection_key)
-    if not isinstance(coll, dict):
-        return data, False
-    new_list = []
-    for k, v in coll.items():
-        if isinstance(v, dict):
-            v = dict(v)  # 拷贝
-            # 如果原 key 是数字（章号），追加 'ch' 字段
-            try:
-                v["ch"] = int(k)
-            except (ValueError, TypeError):
-                v["_orig_key"] = k
-            new_list.append(v)
-    # 按 ch 排序（如有）
-    try:
-        new_list.sort(key=lambda x: x.get("ch", 0))
-    except TypeError:
-        pass
-    data[collection_key] = new_list
-    return data, True
-
-
-# 🔴 2026-07-06 P1 伏笔生命周期三态枚举（借鉴 PlotPilot foreshadow registry ·
-# research/open_source_writing_systems.md）。伏笔表.promises 从「resolved: bool」升级为：
-#   status ∈ {open, suspended, consumed}（open=已埋未收 / suspended=显式挂起延后 / consumed=已回收）
-#   owner（负责回收的角色/线索归属·缺省 "writer"）
-#   payoff_scope（预期回收范围描述·从 due_by/due_by_cluster 派生·允许空串）
-# 不兼容不降级：迁移后消费方只读 status，resolved 字段删除（true→consumed / false→open）；
-# resolved_at_ch/_resolved_by 同步更名 consumed_at_ch/_consumed_by（单口径·零 resolved 残留）。
-# secrets[] 的 status 语义（hidden/revealed·明暗线隔离机制）不在本枚举内，绝不混改。
+# 伏笔条目的当前生命周期契约。secrets[] 使用独立的 hidden/revealed 语义。
 FORESHADOW_STATUS_ENUM = ("open", "suspended", "consumed")
 
-# 历史 status 字符串形态归一（旧 example/项目实测存在 "planted" 等）——一次性迁移进三态。
-_FORESHADOW_LEGACY_STATUS_MAP = {
-    "planted": "open", "active": "open", "pending": "open",
-    "declared": "open", "initiated": "open",
-    "paid": "consumed", "resolved": "consumed", "done": "consumed", "回收": "consumed",
-    "挂起": "suspended",
-}
-
-
-def derive_payoff_scope(p: dict) -> str:
-    """从 promise 现有到期字段派生 payoff_scope 文本（无到期信息 → 空串·允许）。"""
-    dbc = p.get("due_by_cluster")
-    if isinstance(dbc, str) and dbc.strip():
-        return f"预期在 {dbc.strip()} 内回收"
-    dby = p.get("due_by")
-    if isinstance(dby, int) and not isinstance(dby, bool):
-        return f"预期在第 {dby} 章前回收"
-    if p.get("due_by_pending_resolution"):
-        off = p.get("due_by_ch_offset", 20)
-        setc = p.get("setup_cluster")
-        anchor = setc if setc else "setup"
-        return f"预期自 {anchor} 起始章 {off} 章内回收"
-    return ""
-
-
-def migrate_promise_lifecycle(p: dict) -> bool:
-    """单条 promise 迁移到三态生命周期。返回是否有改动（幂等：已迁移条目再跑返回 False）。
-
-    规则：
-      1. status 缺失/空 → 按 resolved 派生（truthy→consumed / 否则→open）；
-         历史 status 字符串（planted/paid/...）→ 归一进三态枚举。
-      2. resolved 字段删除（不留兼容读）；resolved_at_ch→consumed_at_ch、_resolved_by→_consumed_by。
-      3. owner 缺失/空 → "writer"；payoff_scope 缺失 → 从 due_by 族派生（可为空串）。
-    """
-    changed = False
-    status = p.get("status")
-    if isinstance(status, str) and status.strip():
-        raw = status.strip()
-        norm = _FORESHADOW_LEGACY_STATUS_MAP.get(raw.lower(), _FORESHADOW_LEGACY_STATUS_MAP.get(raw, raw))
-        if norm != status:
-            p["status"] = norm
-            changed = True
-    else:
-        p["status"] = "consumed" if p.get("resolved") else "open"
-        changed = True
-    if "resolved" in p:
-        del p["resolved"]
-        changed = True
-    if "resolved_at_ch" in p:
-        p["consumed_at_ch"] = p.pop("resolved_at_ch")
-        changed = True
-    if "_resolved_by" in p:
-        p["_consumed_by"] = p.pop("_resolved_by")
-        changed = True
-    owner = p.get("owner")
-    if not (isinstance(owner, str) and owner.strip()):
-        p["owner"] = "writer"
-        changed = True
-    if "payoff_scope" not in p:
-        p["payoff_scope"] = derive_payoff_scope(p)
-        changed = True
-    return changed
+FORESHADOW_REQUIRED_FIELDS = ("status", "owner", "payoff_scope")
 
 
 def check_style_source(db_root: Path) -> list[str]:
@@ -255,7 +126,7 @@ def check_style_source(db_root: Path) -> list[str]:
     learning_loop/snippet_seed/audit_hub/best-of-N 反查原文池的唯一通路——缺失时语感种子
     与 SFS/AV 择优打分**静默双退化**成「退回第一稿」（无报错·真机抓出）。骨架占位
     （无 quantitative 实载荷）不要求；有实载荷即必须有合法 style_source 字符串。
-    无法自动推导风格库路径 → 只报 error 不迁移（修法：outline.md 拷贝三步 ③）。"""
+    无法从数据库内容确定风格库路径，因此只报告契约错误。"""
     errors: list[str] = []
     fp = db_root / "作者风格.json"
     if not fp.exists():
@@ -278,71 +149,68 @@ def check_style_source(db_root: Path) -> list[str]:
     return errors
 
 
-def check_foreshadow_lifecycle(db_root: Path, auto_migrate: bool) -> tuple[list[str], list[str], bool]:
-    """伏笔表.promises 三态生命周期迁移 + status 枚举白名单校验。
-
-    返回 (errors, warnings, migrated)。auto_migrate=True 时先迁移（备份后落盘·幂等），
-    再校验；非法/缺失 status（不在 FORESHADOW_STATUS_ENUM）→ error（枚举硬白名单）。
-    只处理 promises 族——secrets/deadlines/pledges 有各自 status 语义，不碰。
-    """
+def check_foreshadow_lifecycle(db_root: Path) -> tuple[list[str], list[str]]:
+    """严格校验 promises 的三态生命周期字段，不修改文件。"""
     errors: list[str] = []
     warnings: list[str] = []
     path = db_root / "伏笔表.json"
     if not path.exists():
-        return errors, warnings, False
+        return errors, warnings
     data = _safe_load(path)
     if not isinstance(data, dict):
-        return errors, warnings, False  # JSON_BROKEN 由 validate_file 报，不重复
+        return errors, warnings
     promises = data.get("promises")
     if not isinstance(promises, list):
-        return errors, warnings, False  # TYPE_MISMATCH 由 SCHEMA_RULES 报，不重复
-    changed_count = 0
+        return errors, warnings
     for i, item in enumerate(promises):
         if not isinstance(item, dict):
             continue
-        if auto_migrate and migrate_promise_lifecycle(item):
-            changed_count += 1
+        item_id = item.get("id")
+        missing = [field for field in FORESHADOW_REQUIRED_FIELDS if field not in item]
+        if missing:
+            errors.append(
+                f"[FORESHADOW_FIELD_MISSING] 伏笔表.promises[{i}]({item_id}) 缺必填字段 {missing}")
         st = item.get("status")
         if st not in FORESHADOW_STATUS_ENUM:
             errors.append(
-                f"[FORESHADOW_STATUS_INVALID] 伏笔表.promises[{i}]({item.get('id')}) "
-                f"status={st!r} 非法（合法枚举 {list(FORESHADOW_STATUS_ENUM)}·"
-                f"旧 resolved/planted 形态跑 --auto-migrate 一次性迁移）")
-    migrated = False
-    if changed_count:
-        backup_then_save(path, data)
-        migrated = True
-        warnings.append(
-            f"[MIGRATED] 伏笔表.json.promises: {changed_count} 条迁移到三态生命周期 "
-            f"status/owner/payoff_scope（resolved 已删除·已备份）")
-    return errors, warnings, migrated
+                f"[FORESHADOW_STATUS_INVALID] 伏笔表.promises[{i}]({item_id}) "
+                f"status={st!r} 非法（合法枚举 {list(FORESHADOW_STATUS_ENUM)}）")
+        owner = item.get("owner")
+        if "owner" in item and not (isinstance(owner, str) and owner.strip()):
+            errors.append(
+                f"[FORESHADOW_OWNER_INVALID] 伏笔表.promises[{i}]({item_id}) owner 必须是非空字符串")
+        payoff_scope = item.get("payoff_scope")
+        if "payoff_scope" in item and not isinstance(payoff_scope, str):
+            errors.append(
+                f"[FORESHADOW_PAYOFF_SCOPE_INVALID] 伏笔表.promises[{i}]({item_id}) payoff_scope 必须是字符串")
+    return errors, warnings
 
 
-def validate_file(path: Path, rules: dict, auto_migrate: bool) -> tuple[list[str], list[str], bool]:
-    """校验单个 JSON。返回 (errors, warnings, migrated)。"""
+def validate_file(path: Path, rules: dict) -> tuple[list[str], list[str]]:
+    """严格校验单个 JSON，返回 ``(errors, warnings)``。"""
     errors = []
     warnings = []
-    migrated = False
 
     if not path.exists():
         if rules.get("optional"):
             warnings.append(f"[OPTIONAL_MISSING] {path.name} 不存在（可选文件）")
-            return errors, warnings, False
+            return errors, warnings
         errors.append(f"[MISSING] {path.name} 不存在")
-        return errors, warnings, False
+        return errors, warnings
 
     try:
         data = load_json(path)
     except RuntimeError as e:
         errors.append(f"[JSON_BROKEN] {path.name}: {e}")
-        return errors, warnings, False
+        return errors, warnings
+    if not isinstance(data, dict):
+        errors.append(f"[TOP_LEVEL_TYPE_MISMATCH] {path.name}: 顶层必须是 object")
+        return errors, warnings
 
-    # 顶层 keys 检查
     for k in rules.get("required_top_keys", []):
         if k not in data:
-            warnings.append(f"[MISSING_TOP_KEY] {path.name} 缺 '{k}'")
+            errors.append(f"[MISSING_TOP_KEY] {path.name} 缺 '{k}'")
 
-    # collection 类型检查
     coll_key = rules.get("collection_key")
     coll_type = rules.get("collection_type")
     if coll_key and coll_key in data:
@@ -350,30 +218,23 @@ def validate_file(path: Path, rules: dict, auto_migrate: bool) -> tuple[list[str
         if not isinstance(coll, coll_type):
             current_type = type(coll).__name__
             expected = coll_type.__name__
-            if coll_type is list and isinstance(coll, dict) and auto_migrate:
-                data, did = migrate_dict_to_list(data, coll_key)
-                if did:
-                    backup_then_save(path, data)
-                    migrated = True
-                    warnings.append(f"[MIGRATED] {path.name}.{coll_key}: dict→list（已备份）")
-            else:
-                errors.append(
-                    f"[TYPE_MISMATCH] {path.name}.{coll_key}: 实际 {current_type}，期望 {expected}"
-                )
+            errors.append(
+                f"[TYPE_MISMATCH] {path.name}.{coll_key}: 实际 {current_type}，期望 {expected}")
 
-    # item 必需字段检查（仅警告，不致命）
     req_fields = rules.get("item_required_fields", [])
     if req_fields and coll_key in data and isinstance(data[coll_key], list):
         for i, item in enumerate(data[coll_key]):
             if not isinstance(item, dict):
+                errors.append(
+                    f"[ITEM_TYPE_MISMATCH] {path.name}.{coll_key}[{i}] 必须是 object")
                 continue
             missing = [f for f in req_fields if f not in item]
             if missing:
-                warnings.append(
+                errors.append(
                     f"[ITEM_MISSING_FIELD] {path.name}.{coll_key}[{i}] 缺字段：{missing}"
                 )
 
-    return errors, warnings, migrated
+    return errors, warnings
 
 
 def check_idempotency_invariants(db_root: Path) -> list[str]:
@@ -453,7 +314,7 @@ def _safe_load(p: Path):
 
 # 🔴 2026-06-27 C19：大势卡（major_events ME 池）结构契约（确定性·引用完整性·hard）。
 # 【接线】outline.plan.json step7 跑 `db_schema_validate.py {project_root}` 消费本校验（C19 接线点·
-#   该步在 step5 volume_arc 填完大势卡之后跑）；cluster-save-state step1 的 --auto-migrate 也会带跑。
+#   该步在卷级大势卡填充完成后执行，验证失败即阻断后续写作。
 # 【协调】W2-A 在 gen_creative_volume_arc._normalize_me_pool 做**生产端归一**（产出标准 ME 池·别的 agent·别的文件）·
 #   本函数在**消费端**校验结构破损 + 引用完整性·两者互补不冲突。
 # 【北极星②③④】只校验确定性结构/引用完整性——绝不校验 ME 内容质量/数量/叙事顺序·绝不增删/重排 ME·
@@ -677,10 +538,10 @@ def revalidate_after_manual(file_path: Path) -> int:
     errors: list[str] = []
     warnings: list[str] = []
 
-    # 1) SCHEMA_RULES 结构/类型校验（auto_migrate=False·手改不静默迁移·只如实报告）
+    # 1) SCHEMA_RULES 结构与类型校验。
     rules = SCHEMA_RULES.get(stem)
     if rules:
-        errs, warns, _mig = validate_file(file_path, rules, auto_migrate=False)
+        errs, warns = validate_file(file_path, rules)
         errors.extend(errs)
         warnings.extend(warns)
 
@@ -690,9 +551,9 @@ def revalidate_after_manual(file_path: Path) -> int:
         errors.extend(gt_errs)
         warnings.extend(gt_warns)
 
-    # 2.5) 伏笔表：promises 三态 status 枚举白名单（2026-07-06 P1·手改不静默迁移·非法即报）
+    # 2.5) 伏笔表：promises 三态字段契约。
     if stem == "伏笔表":
-        fs_errs, fs_warns, _ = check_foreshadow_lifecycle(file_path.parent, auto_migrate=False)
+        fs_errs, fs_warns = check_foreshadow_lifecycle(file_path.parent)
         errors.extend(fs_errs)
         warnings.extend(fs_warns)
 
@@ -722,40 +583,34 @@ def revalidate_after_manual(file_path: Path) -> int:
         print("  · GRAND_TREND_* → ME 池每条带 id+volume·每卷 ≥1 is_volume_finale·prereq 指向存在 ME")
         print("  · FORESHADOW_STATUS_INVALID → promises[].status 只能是 open/suspended/consumed")
         print("  · LOAD_BEARING_EMPTY → 涟漪规则 rules / 事件簇 clusters[0].scene_storyboard 不可清空")
-        print("  · 还原：从 _backup/db_schema/ 取最近备份·或撤销本次手改")
+        print("  · 修复后重新执行本命令，确认结构契约通过")
         return 2
     print("\n[OK] 手改未破坏 schema 契约·可安全被 build_manifest 消费。")
     return 0
 
 
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("project_root", type=Path)
+    edit_group = parser.add_mutually_exclusive_group()
+    edit_group.add_argument("--post-edit", type=Path)
+    edit_group.add_argument("--revalidate-after-manual", type=Path)
+    parser.add_argument("--require-quantitative-keys", nargs="?", const="")
+    return parser.parse_args(argv)
+
+
 def main():
-    args = sys.argv[1:]
-    if not args or args[0] in ("-h", "--help"):
-        print(__doc__)
-        sys.exit(0)
+    args = _parse_args(sys.argv[1:])
+    project_root = args.project_root
 
-    # 🔴 2026-06-27 W5：/db 手改后单文件重校验（--post-edit <file> / --revalidate-after-manual <file>）。
-    # 须先于 db_root 检查处理（接收的是被手改文件的直接路径·不依赖 _数据库 目录推断）。
-    for _flag in ("--post-edit", "--revalidate-after-manual"):
-        if _flag in args:
-            idx = args.index(_flag)
-            if idx + 1 < len(args) and not args[idx + 1].startswith("-"):
-                sys.exit(revalidate_after_manual(Path(args[idx + 1])))
-            print(f"[FATAL] {_flag} 需跟被手改的子系统 JSON 路径", file=sys.stderr)
-            sys.exit(2)
-    project_root = Path(args[0])
-    auto_migrate = "--auto-migrate" in args
-    strict = "--strict" in args
+    edit_path = args.post_edit or args.revalidate_after_manual
+    if edit_path is not None:
+        sys.exit(revalidate_after_manual(edit_path))
 
-    # 🔴 2026-06-27 C14②：作者档数值契约键存在性闸（distill-style step2 消费·distill 项目根直挂 作者风格.json·
-    # 与 _数据库 无关·须先于 db_root 检查处理）。用法：db_schema_validate.py <project> --require-quantitative-keys [profile]
-    if "--require-quantitative-keys" in args:
-        idx = args.index("--require-quantitative-keys")
-        if idx + 1 < len(args) and not args[idx + 1].startswith("-"):
-            prof_path = Path(args[idx + 1])
-        else:
-            prof_path = project_root / "作者风格.json"
-        sys.exit(_require_quantitative_keys(prof_path))
+    if args.require_quantitative_keys is not None:
+        profile_path = (Path(args.require_quantitative_keys)
+                        if args.require_quantitative_keys else project_root / "作者风格.json")
+        sys.exit(_require_quantitative_keys(profile_path))
 
     db_root = project_root / "_数据库"
     if not db_root.exists():
@@ -764,21 +619,15 @@ def main():
 
     total_errors = []
     total_warnings = []
-    migrated_files = []
     for name, rules in SCHEMA_RULES.items():
         path = db_root / f"{name}.json"
-        errs, warns, mig = validate_file(path, rules, auto_migrate)
+        errs, warns = validate_file(path, rules)
         total_errors.extend(errs)
         total_warnings.extend(warns)
-        if mig:
-            migrated_files.append(name)
 
-    # 🔴 2026-07-06 P1 伏笔生命周期：promises 三态迁移（--auto-migrate 时）+ status 枚举白名单
-    fs_errs, fs_warns, fs_mig = check_foreshadow_lifecycle(db_root, auto_migrate)
+    fs_errs, fs_warns = check_foreshadow_lifecycle(db_root)
     total_errors.extend(fs_errs)
     total_warnings.extend(fs_warns)
-    if fs_mig:
-        migrated_files.append("伏笔表")
 
     # 🔴 2026-07-08 验证书实证：作者风格实载荷必须带 style_source（原文池反查·缺=打分静默双退化）
     total_errors.extend(check_style_source(db_root))
@@ -796,11 +645,7 @@ def main():
 
     print(f"[Schema 校验] 项目：{project_root.name}")
     print(f"  共校验 {len(SCHEMA_RULES)} 个 JSON")
-    print(f"  Errors: {len(total_errors)}, Warnings: {len(total_warnings)}, Migrated: {len(migrated_files)}")
-    if migrated_files:
-        print(f"\n[已自动迁移]")
-        for n in migrated_files:
-            print(f"  - {n}.json（已备份至 _backup/db_schema/）")
+    print(f"  Errors: {len(total_errors)}, Warnings: {len(total_warnings)}")
     if total_warnings:
         print(f"\n[警告]")
         for w in total_warnings:
@@ -810,9 +655,7 @@ def main():
         for e in total_errors:
             print(f"  {e}")
 
-    if total_errors and strict:
-        sys.exit(1)
-    sys.exit(0)
+    sys.exit(1 if total_errors else 0)
 
 
 if __name__ == "__main__":

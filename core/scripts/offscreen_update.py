@@ -1,20 +1,5 @@
-"""offscreen_update.py — save-state offscreen 状态更新（v19.2 新增）
-
-读 _changes.json 的 self_eval.offscreen_actions_executed，把对应 character 的
-offscreen.actions[action_index].done 标为 true（仅当 completed_fully=true）。
-
-设计原则：
-- 不撤销已 done 的 action（只能从 false → true，不能反向）
-- 找不到 character / action_index 越界 → 警告但不失败
-- 干跑模式（--dry-run）可预览将做的改动
-- 失败不阻塞 save-state 主流水线
-
-用法：
-    python offscreen_update.py <项目路径> <章节号> [--dry-run]
-
-退出码: 0 成功 / 1 部分跳过 / 2 致命
-"""
-
+#!/usr/bin/env python3
+"""按 cluster changes 更新人物卡中的 offscreen action 状态。"""
 from __future__ import annotations
 
 import argparse
@@ -22,121 +7,132 @@ import json
 import sys
 from pathlib import Path
 
-# 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
+import cluster_lookup
 import state_cli_guard
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
+class OffscreenContractError(ValueError):
+    """offscreen changes 或人物卡不符合状态合同。"""
+
+
+def _read_object(path: Path) -> dict:
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise OffscreenContractError(f"必需文件不存在: {path}") from exc
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise OffscreenContractError(f"JSON 读取失败: {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise OffscreenContractError(f"JSON 顶层必须是 object: {path}")
+    return value
 
 
-def main():
-    state_cli_guard.require_internal("offscreen_update.py")
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("chapter", type=int)
-    ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
+def _character_index(cards: dict) -> dict[str, dict]:
+    characters = cards.get("characters")
+    if not isinstance(characters, list) or not all(isinstance(item, dict) for item in characters):
+        raise OffscreenContractError("人物卡.characters 必须是 object array")
+    index: dict[str, dict] = {}
+    for position, character in enumerate(characters):
+        aliases = [character.get("id"), character.get("name")]
+        if not any(isinstance(alias, str) and alias for alias in aliases):
+            raise OffscreenContractError(f"人物卡.characters[{position}] 缺 id/name")
+        for alias in aliases:
+            if not isinstance(alias, str) or not alias:
+                continue
+            if alias in index and index[alias] is not character:
+                raise OffscreenContractError(f"人物卡角色别名重复: {alias}")
+            index[alias] = character
+    return index
 
-    project_root = Path(args.project)
-    ch = args.chapter
 
-    # 读 _changes.json
-    changes_path = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-    if not changes_path.exists():
-        print(f"[SKIP] ch{ch} _changes.json 不存在，跳过 offscreen-update")
-        sys.exit(0)
+def apply(project: Path, cluster: str, *, dry_run: bool = False) -> dict:
+    cluster_id = cluster_lookup.normalize_cluster_id(cluster)
+    if not cluster_id:
+        raise OffscreenContractError(f"非法 cluster: {cluster}")
+    changes_path = project / "章节" / f"{cluster_id}_draft" / f"{cluster_id}_changes.json"
+    changes = _read_object(changes_path)
+    self_eval = changes.get("self_eval")
+    if not isinstance(self_eval, dict):
+        raise OffscreenContractError("cluster changes.self_eval 必须是 object")
+    executed = self_eval.get("offscreen_actions_executed", [])
+    if not isinstance(executed, list) or not all(isinstance(item, dict) for item in executed):
+        raise OffscreenContractError("offscreen_actions_executed 必须是 object array")
 
-    changes = load_json(changes_path, {})
-    executed = changes.get("self_eval", {}).get("offscreen_actions_executed", [])
-    if not executed:
-        print(f"[OK] ch{ch} offscreen_actions_executed 为空，无需更新")
-        sys.exit(0)
-
-    # 读人物卡
-    cards_path = project_root / "_数据库" / "人物卡.json"
-    cards = load_json(cards_path, None)
-    if cards is None:
-        print(f"[FATAL] 人物卡不存在或损坏: {cards_path}", file=sys.stderr)
-        sys.exit(2)
-
-    # 建索引
-    char_index = {}
-    for i, c in enumerate(cards.get("characters", [])):
-        name = c.get("name")
-        cid = c.get("id")
-        if name:
-            char_index[name] = i
-        if cid and cid != name:
-            char_index[cid] = i
-
-    updates_planned = []
-    skipped = []
-
-    for ex in executed:
-        char_name = ex.get("character", "")
-        action_idx = ex.get("action_index")
-        completed = ex.get("completed_fully", False)
-
-        if action_idx is None:
-            skipped.append({"character": char_name, "reason": "缺 action_index"})
-            continue
+    cards_path = project / "_数据库" / "人物卡.json"
+    cards = _read_object(cards_path)
+    index = _character_index(cards)
+    applied = 0
+    already_done = 0
+    pending = 0
+    for row_number, execution in enumerate(executed):
+        character_key = execution.get("character")
+        action_index = execution.get("action_index")
+        completed = execution.get("completed_fully")
+        if not isinstance(character_key, str) or not character_key:
+            raise OffscreenContractError(f"offscreen_actions_executed[{row_number}].character 无效")
+        if not isinstance(action_index, int) or isinstance(action_index, bool) or action_index < 0:
+            raise OffscreenContractError(f"offscreen_actions_executed[{row_number}].action_index 无效")
+        if not isinstance(completed, bool):
+            raise OffscreenContractError(f"offscreen_actions_executed[{row_number}].completed_fully 必须是 bool")
+        character = index.get(character_key)
+        if character is None:
+            raise OffscreenContractError(f"offscreen action 引用未知角色: {character_key}")
+        offscreen = character.get("offscreen")
+        actions = offscreen.get("actions") if isinstance(offscreen, dict) else None
+        if not isinstance(actions, list) or not all(isinstance(item, dict) for item in actions):
+            raise OffscreenContractError(f"角色 {character_key} 的 offscreen.actions 必须是 object array")
+        if action_index >= len(actions):
+            raise OffscreenContractError(
+                f"角色 {character_key} 的 action_index 越界: {action_index}/{len(actions)}"
+            )
+        action = actions[action_index]
         if not completed:
-            skipped.append({"character": char_name, "action_index": action_idx, "reason": "completed_fully=false 不标 done"})
-            continue
-        if char_name not in char_index:
-            skipped.append({"character": char_name, "reason": "人物卡找不到该角色"})
-            continue
+            pending += 1
+        elif action.get("done") is True:
+            already_done += 1
+        else:
+            action["done"] = True
+            action["_done_at_cluster"] = cluster_id
+            action.pop("_done_at_ch", None)
+            applied += 1
 
-        ci = char_index[char_name]
-        actions = cards["characters"][ci].get("offscreen", {}).get("actions", [])
-        if action_idx >= len(actions):
-            skipped.append({"character": char_name, "action_index": action_idx, "reason": f"action_index 越界（共 {len(actions)} 条）"})
-            continue
-
-        cur_done = actions[action_idx].get("done", False)
-        if cur_done:
-            skipped.append({"character": char_name, "action_index": action_idx, "reason": "already done"})
-            continue
-
-        updates_planned.append({
-            "character": char_name,
-            "action_index": action_idx,
-            "action_preview": actions[action_idx].get("action", "")[:60],
-            "evidence": ex.get("evidence", "")[:60],
-        })
-
-    print(f"[offscreen_update] ch{ch}: 计划更新 {len(updates_planned)} 条 / 跳过 {len(skipped)} 条")
-    for u in updates_planned:
-        print(f"  [PLAN] {u['character']} action[{u['action_index']}] done=true  ({u['action_preview']}...)")
-    for s in skipped:
-        print(f"  [SKIP] {s.get('character')}: {s.get('reason')}")
-
-    if args.dry_run:
-        print(f"[DRY-RUN] 未实际写入，使用 --dry-run=false 或省略该参数执行更新")
-        sys.exit(0)
-
-    # 实际写入
-    if updates_planned:
-        for u in updates_planned:
-            ci = char_index[u["character"]]
-            cards["characters"][ci]["offscreen"]["actions"][u["action_index"]]["done"] = True
-            cards["characters"][ci]["offscreen"]["actions"][u["action_index"]]["_done_at_ch"] = ch
-        # 2026-05-29 修：裸写 → 原子写（atomic_write_json 内部已 mkdir + fsync）
+    receipt = {
+        "schema_version": "offscreen-update.receipt.v1",
+        "cluster_id": cluster_id,
+        "completed": True,
+        "applied": applied,
+        "already_done": already_done,
+        "pending": pending,
+    }
+    if not dry_run:
         atomic_json.atomic_write_json(cards_path, cards)
-        print(f"[OK] 人物卡已更新: {cards_path}")
+        atomic_json.atomic_write_json(
+            project / "_数据库" / ".wal" / f"{cluster_id}_offscreen_update.json",
+            receipt,
+        )
+    return receipt
 
-    if skipped:
-        sys.exit(1)
-    sys.exit(0)
+
+def main() -> int:
+    state_cli_guard.require_internal("offscreen_update.py")
+    parser = argparse.ArgumentParser(description="cluster offscreen 状态更新")
+    parser.add_argument("project")
+    parser.add_argument("--cluster", required=True)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    try:
+        receipt = apply(Path(args.project), args.cluster, dry_run=args.dry_run)
+    except (OffscreenContractError, OSError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(receipt, ensure_ascii=False, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    raise SystemExit(main())
+

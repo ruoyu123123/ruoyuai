@@ -9,7 +9,7 @@
   1. 统一调度 7 个校验器跑一章（各自命令行接口/退出码不一，本模块抹平）：
        validate_chapter.py        — 硬约束（字数/禁用词/伏笔/锁定事实/POV/对话工艺...）
        validate_style.py --strict — 风格合规 12 项
-       narrative_scanner.py --all — 段/场景级叙事质感 8 检测器（含 P2-14 info_dump + P2-16 perspective_shift）
+       narrative_scanner.py --all — cluster 段落/场景级叙事质感 7 检测器
        plot_structure_scanner.py --all — 情节结构层 7 检测器（含 P1-4 kishotenketsu）
        hook_strength_scanner.py   — F 层 章末钩子强度正向评分（v19，归「读者体验」维度）
        golden_three_scanner.py    — F 层 黄金三章专项检测（v19，仅 ch1-3 激活）
@@ -83,9 +83,9 @@ DIMENSION_BY_PREFIX = {
     "TRY_FAIL": "结构", "PROPAGATION_": "剧情",
     "READER_EXP_": "读者体验",  # v19 F 层：hook_strength / golden_three
 }
-# narrative_scanner 检测器 -> 维度（P2-14：info_dump；P2-16：perspective_shift）
+# narrative_scanner 检测器 -> 维度
 NARRATIVE_DIM = {
-    "gmc": "结构", "mru": "结构", "orphan": "伏笔",
+    "gmc": "结构", "mru": "结构",
     "microten": "节奏", "repetition": "风格", "pov": "结构",
     "info_dump": "节奏",          # 信息堆砌段是 pacing 卡顿问题
     "perspective_shift": "结构",  # 人称切换是叙事结构问题
@@ -184,7 +184,6 @@ HARD_GATE_CODES = {
     "FILE_NOT_FOUND",              # 正文文件缺失 = 文件契约破损
     "ITEM_HOLDER_ABSENT",          # 道具持有者不在场 = 道具状态矛盾
     "ITEM_NOT_YET_INTRODUCED",     # 道具尚未引入就被用 = 道具状态矛盾
-    "PROPAGATION_DEBT_CREATED",    # 跨集合数据未同步 = 传播债
     # v23.12（2026-05-21）：单段 > 120 CJK 字（超例外 1 段）= 移动阅读硬上限
     # AI 不可豁免；项目级可在 _数据库/style_scanner_overrides.json 调高阈值
     "STYLE_单段超长",
@@ -679,6 +678,27 @@ def _parse_cross_scene_voice_drift(stdout: str) -> list:
         "waived": False, "waive_reason": "",
     })
     return issues
+
+
+def _persona_drift_telemetry(stdout: str) -> dict[str, float]:
+    """从跨场景 voice 报告提取每个角色的最大归一化偏离度。"""
+    report = _load_scanner_json(stdout) or {}
+    result: dict[str, float] = {}
+    for item in report.get("drift_issues") or []:
+        if not isinstance(item, dict):
+            continue
+        character = item.get("character")
+        if not isinstance(character, str) or not character:
+            continue
+        value = item.get("embedding_distance")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            deviation = item.get("deviation_pct")
+            if not isinstance(deviation, (int, float)) or isinstance(deviation, bool):
+                continue
+            value = float(deviation) / 100.0
+        normalized = round(min(1.0, max(0.0, float(value))), 4)
+        result[character] = max(result.get(character, 0.0), normalized)
+    return result
 
 
 def _parse_scene_seam(stdout: str) -> list:
@@ -1318,13 +1338,99 @@ def _apply_audit_mode_filter(issues: list, mode: str) -> list:
     return out
 
 
+_LITRPG_AUDIT_GENRES = {
+    "horror_game",
+    "litrpg",
+    "system_isekai",
+    "game_anime",
+}
+
+
+def _build_cluster_advisory_tasks(
+        project_root: Path,
+        cluster_draft: Path,
+        cluster_id_full: str,
+        style_args: list,
+        genre: str,
+        dynamically_routed_script: str | None = None) -> list:
+    """构造当前 cluster 必跑的顾问任务，并避免重复执行题材路由任务。"""
+    tasks = [
+        (
+            "cotton_needle_subtext",
+            [child_python(), str(_SCRIPT_DIR / "cotton_needle_subtext_advisor.py"),
+             str(cluster_draft), "--project", str(project_root)],
+            {0, 1},
+            lambda out, code: _parse_multi_code_violations_scanner(
+                out, "cotton_needle_subtext_advisor",
+                "COTTON_NEEDLE_DETECTED", "对话"),
+        ),
+        (
+            "dramatic_irony_gap",
+            [child_python(), str(_SCRIPT_DIR / "dramatic_irony_gap_scanner.py"),
+             str(cluster_draft), "--project", str(project_root),
+             "--cluster", cluster_id_full],
+            {0, 1},
+            lambda out, code: _parse_multi_code_violations_scanner(
+                out, "dramatic_irony_gap_scanner",
+                "DRAMATIC_IRONY_GAP_EMPTY", "剧情"),
+        ),
+    ]
+    normalized_genre = str(genre or "").strip().lower()
+    if (normalized_genre in _LITRPG_AUDIT_GENRES
+            and dynamically_routed_script != "litrpg_structure_scanner.py"):
+        tasks.append((
+            "litrpg_structure",
+            [child_python(), str(_SCRIPT_DIR / "litrpg_structure_scanner.py"),
+             str(cluster_draft), "--project", str(project_root)] + style_args,
+            {0, 1},
+            lambda out, code: _parse_violations_scanner(
+                out, "litrpg_structure_scanner", "LITRPG_STRUCTURE", "题材"),
+        ))
+    return tasks
+
+
+def _build_genre_scanner_task(
+        project_root: Path,
+        cluster_draft: Path,
+        style_args: list) -> tuple[tuple | None, str, str | None]:
+    """按题材包构造唯一动态 scanner 任务；返回任务、题材和配置错误。"""
+    try:
+        import scaffold_genre_packs as genre_packs
+        genre = _resolve_audit_genre(project_root)
+        _gscanner = genre_packs.get_scanner(genre)
+        if not _gscanner:
+            return None, genre, None
+        scanner_name = (_gscanner if _gscanner.endswith(".py")
+                        else f"{_gscanner}.py")
+        scanner_path = _SCRIPT_DIR / scanner_name
+        if not scanner_path.exists():
+            return None, genre, f"题材 scanner 脚本缺失: {scanner_path}（genre={genre}）"
+        task_name = scanner_name[:-3].replace("_scanner", "")
+        default_code = task_name.upper()
+        command = [child_python(), str(scanner_path), str(cluster_draft),
+                   "--project", str(project_root)]
+        if style_args and "--style" in scanner_path.read_text(
+                encoding="utf-8", errors="replace"):
+            command += style_args
+        task = (
+            task_name,
+            command,
+            {0, 1},
+            lambda out, code, issue_code=default_code, source=scanner_name:
+                _parse_violations_scanner(out, source, issue_code, "风格"),
+        )
+        return task, genre, None
+    except Exception as exc:
+        return None, "unknown", f"题材 scanner 路由异常: {exc}"
+
+
 def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                   waivers: list = None, cluster_mode: bool = False,
                   cluster_key: str = None) -> dict:
     """审一章。waivers: [{code, reason}] —— v19 AI 豁免清单，对 advisory 项生效。
 
     cluster_mode: v2 cluster 化支持。True 时给 scanner 子进程传 CLUSTER_MODE=1 env。
-    cluster_key: v2 cluster 化（如 "001"）· 用于激活 4 个 cluster-only scanner。
+    cluster_key: cluster 标识（如 "001"）·用于定位草稿并激活 cluster 顾问任务。
     """
     waivers = waivers or []
     body_file = cio.find_body_file(project_root, ch)
@@ -1343,8 +1449,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
         if cluster_key:
             _env_extra["CLUSTER_ID"] = cluster_key
 
-    # P2-15：13 个 scanner 并行执行（v2 cluster 化方案 · 2026-05-28）
-    # 9 升维 + 4 新 cluster-only 全部集成进 audit_hub
+    # 所有适用 scanner 并行执行；任务列表由基础审计、cluster 顾问与题材路由组成。
     scanner_status = []
     all_issues = []
 
@@ -1405,14 +1510,6 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
          [child_python(), str(vs), str(body_file), "--strict"] + _style_args,
          {0, 1},
          lambda out, code: _parse_validate_style(out)),
-        ("narrative_scanner",
-         [child_python(), str(ns), str(project_root), str(ch), "--all"],
-         {0, 1, 2},
-         lambda out, code: _parse_scanner_json(out, "narrative", NARRATIVE_DIM)),
-        ("plot_structure_scanner",
-         [child_python(), str(ps), str(project_root), str(ch), "--all"],
-         {0, 1, 2},
-         lambda out, code: _parse_scanner_json(out, "plot", PLOT_DIM)),
         ("hook_strength_scanner",
          [child_python(), str(hs), str(project_root), str(ch)],
          {0, 1},
@@ -1439,7 +1536,28 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
              "REPEAT_NOUN_DENSITY", "风格")),
     ]
 
-    # v2 cluster 化：cluster mode 下加 4 个 cluster-only scanner（需要 cluster_draft 路径）
+    narrative_cluster_id = (
+        cluster_lookup.normalize_cluster_id(cluster_key)
+        if cluster_key
+        else cluster_lookup.ch_to_cluster_id(project_root, ch)
+    )
+    if narrative_cluster_id:
+        tasks.append((
+            "narrative_scanner",
+            [child_python(), str(ns), str(project_root), narrative_cluster_id,
+             "--draft", str(body_file), "--all"],
+            {0, 1, 2},
+            lambda out, code: _parse_scanner_json(out, "narrative", NARRATIVE_DIM),
+        ))
+        tasks.append((
+            "plot_structure_scanner",
+            [child_python(), str(ps), str(project_root), narrative_cluster_id,
+             "--draft", str(body_file), "--all"],
+            {0, 1, 2},
+            lambda out, code: _parse_scanner_json(out, "plot", PLOT_DIM),
+        ))
+
+    # cluster mode 下追加读取整块草稿的顾问任务。
     if cluster_mode and cluster_key:
         cluster_draft = project_root / "章节" / f"cluster_{cluster_key}_draft" / f"cluster_{cluster_key}_draft.txt"
         cluster_id_full = f"cluster_{cluster_key}"
@@ -3011,39 +3129,20 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                      out, "spatial_continuity_scanner",
                      "SPATIAL_CONTINUITY_TELEPORT", "结构")),
             ])
-            # [2026-06-13 阶段3] 题材专属 scanner 路由：按 genre 条件激活(romance/litrpg/...)·全 advisory·
-            # 通用维度池 always-on(上面)·题材层按 genre·hard_gate 清单不随题材变。
-            # 🔴 2026-07-05 修路由 bug：get_scanner() 返回裸脚本名（genre_dimension_packs.json 存
-            # 「romance_pacing_scanner」无 .py），旧代码直接拼 _SCRIPT_DIR/裸名 → 路径永不存在 →
-            # 题材 scanner 从未执行且静默 skip。规范化收口在此唯一路径消费端：统一补 .py 后缀；
-            # 脚本缺失从静默 skip 改 stderr 显式报（不吞）。
-            try:
-                import scaffold_genre_packs as _gp
-                _genre = _resolve_audit_genre(project_root)
-                _gscanner = _gp.get_scanner(_genre)
-                if _gscanner:
-                    _gname = _gscanner if _gscanner.endswith(".py") else f"{_gscanner}.py"
-                    _gpath = _SCRIPT_DIR / _gname
-                    if not _gpath.exists():
-                        print(f"[audit_hub] 题材 scanner 脚本缺失: {_gpath}"
-                              f"（genre={_genre}）→ 本 cluster 题材层扫描未执行",
-                              file=sys.stderr)
-                    else:
-                        _gbase = _gname[:-3].replace("_scanner", "")
-                        _code = _gbase.upper()
-                        _gcmd = [child_python(), str(_gpath), str(cluster_draft),
-                                 "--project", str(project_root)]
-                        # --style 只传给声明支持的脚本（episode_bilateral_bridge / dwell_progression
-                        # 的 argparse 未收 --style·硬传会 exit 2）；作者档第一权威·支持即传。
-                        if _style_args and "--style" in _gpath.read_text(
-                                encoding="utf-8", errors="replace"):
-                            _gcmd += _style_args
-                        tasks.append((
-                            _gbase, _gcmd, {0, 1},
-                            lambda out, code, _c=_code, _s=_gname: _parse_violations_scanner(
-                                out, _s, _c, "风格")))
-            except Exception as _e:
-                print(f"[audit_hub] 题材 scanner 路由异常: {_e}", file=sys.stderr)
+            # 当前 cluster 的通用顾问任务与题材专属任务共用同一调度列表。
+            # LitRPG 若已由题材包路由，本地适用题材门控不再重复追加。
+            _genre_task, _genre, _genre_error = _build_genre_scanner_task(
+                project_root, cluster_draft, _style_args)
+            _routed_script = None
+            if _genre_task:
+                _routed_script = Path(_genre_task[1][1]).name
+            tasks.extend(_build_cluster_advisory_tasks(
+                project_root, cluster_draft, cluster_id_full, _style_args,
+                _genre, dynamically_routed_script=_routed_script))
+            if _genre_error:
+                print(f"[audit_hub] {_genre_error}", file=sys.stderr)
+            elif _genre_task and _genre_task[0] not in {task[0] for task in tasks}:
+                tasks.append(_genre_task)
             # 🔴 2026-06-27 C06：整段草稿扫剧本体 SCREENPLAY 标记（位置无关 hard_gate · step3 真阻断点）。
             # 此处草稿尚未切章 → chapter_end_anchor_scan（依赖 第NNN章 文件）跑不到，整段硬扫补上这个缺口。
             _screenplay_issues = _scan_cluster_draft_screenplay(cluster_draft)
@@ -3106,15 +3205,22 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
         except Exception as e:
             print(f"  [parse-error] {name}: {e}", file=sys.stderr)
             issues = []
-        return name, code, code in ok_set, issues
+        telemetry = (
+            _persona_drift_telemetry(out)
+            if name == "cross_scene_voice_drift"
+            else {}
+        )
+        return name, code, code in ok_set, issues, telemetry
 
     # 并行执行，结果按 submit 顺序读取（保证 scanner_status 顺序）
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         futures = [pool.submit(_exec_one, t) for t in tasks]
+        persona_drift = {}
         for fut in futures:
-            name, code, ok, issues = fut.result()
+            name, code, ok, issues, telemetry = fut.result()
             scanner_status.append({"scanner": name, "exit_code": code, "ok": ok})
             all_issues += issues
+            persona_drift.update(telemetry)
 
     # 全部校验器都挂了 —— 致命，无法出审核结论
     if not any(s["ok"] for s in scanner_status):
@@ -3313,6 +3419,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
         ],
         # 🔴 2026-06-27 C09 豁免诚实审计 META 段（绝不参与 verdict 判定 · 喂 learning_loop）
         "waiver_audit": waiver_audit,
+        "persona_drift": persona_drift,
         "scanner_status": scanner_status,
     }
 
@@ -3323,22 +3430,6 @@ def _write_report(project_root: Path, ch: int, report: dict) -> Path:
     p = audit_dir / f"ch_{ch:03d}_audit.json"
     p.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return p
-
-
-def _feed_learning_loop(project_root: Path, report_path: Path,
-                        quiet: bool = False) -> None:
-    """把审核报告交给自学习闭环。失败不中断主流程（learning 是增值，不是阻塞项）。
-    quiet=True（--json 模式）时日志打到 stderr —— 否则会污染 stdout 的 JSON，
-    导致调用方 json.loads(stdout) 失败。"""
-    ll = _SCRIPT_DIR / "learning_loop.py"
-    if not ll.is_file():
-        return
-    code, out, err = _run([child_python(), str(ll), str(project_root),
-                           "--ingest", str(report_path)])
-    if out.strip():
-        stream = sys.stderr if quiet else sys.stdout
-        for ln in out.strip().splitlines():
-            print(f"  [learning_loop] {ln}", file=stream)
 
 
 def _print_summary(report: dict, report_path: Path) -> None:
@@ -3510,6 +3601,7 @@ def audit_cluster(project_root: Path, cluster_key: str, auto_fix: bool, waivers:
     try:
         # v2 cluster 化：cluster_mode=True · 传 cluster_key 激活 4 个 cluster-only scanner
         report = audit_chapter(project_root, fake_ch, auto_fix, waivers, cluster_mode=True, cluster_key=cluster_key)
+        report["cluster_id"] = cluster_lookup.normalize_cluster_id(cluster_key)
         report["_cluster_mode"] = True
         report["_cluster_key"] = cluster_key
         report["_cluster_draft_path"] = str(cluster_draft_path)
@@ -3586,7 +3678,6 @@ def main():
                     json.dumps(_hier, ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception as _e:
                 print(f"[hierarchical] 脚手架跳过: {_e}", file=sys.stderr)
-        _feed_learning_loop(project_root, report_path, quiet=want_json)
         if want_json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
@@ -3613,8 +3704,6 @@ def main():
         sys.exit(3)
 
     report_path = _write_report(project_root, ch, report)
-    # BUG1 修复：--json 模式必须传 quiet=True，否则 learning_loop 日志污染 stdout 的 JSON
-    _feed_learning_loop(project_root, report_path, quiet=want_json)
 
     if want_json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

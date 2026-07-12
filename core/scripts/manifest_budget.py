@@ -164,7 +164,7 @@ SECTION_TIERS: dict[str, str] = {
     #（摘要账本确定性抽取·防计划外配角漂移的状态参考）。
     "recently_active_entities": TIER_T2,
     # --- T3：长程记忆（RAG/memory/历史选择性召回·牺牲位但有 5% 地板） ---
-    "rag_relevant_chapters": TIER_T3,
+    "rag_relevant_clusters": TIER_T3,
     "memory_search_results": TIER_T3,
     "selective_history_retrieval": TIER_T3,
     # S10 消费端（2026-07-07）：已闭合卷卷级摘要（Ex3 金字塔·历史卷换粒度替代截断）

@@ -65,10 +65,18 @@ workspace/styles/{书名}/                         # 风格项目根
 │   └── ...
 │
 ├── 复刻测试/                                   # 同栈复刻产物
-│   └── v{X}_round{Y}/
-│       ├── claude_scenes/scene_*.txt          # Claude agent 按 skill 写的场景稿
+│   └── {验证轮次}/
+│       ├── claude_scenes/
+│       │   ├── scene_*.txt                    # novel-replica-writer 亲笔场景稿
+│       │   └── agent_report.json              # 场景文件、skill 与 cluster 绑定回执
 │       ├── cluster_{key}_replica.txt          # gemini 分段润色后的复刻终稿
 │       └── cluster_{key}_replica_meta.json    # 润色遥测与评分元数据
+│
+├── _skillopt/train/{run_id}/                  # SkillOpt 可恢复训练状态
+│   ├── claude_scene_jobs.json                 # 候选 digest × run × cluster required 任务
+│   └── claude_scene_jobs/{job_run}/{digest}/{cluster_id}/claude_scenes/
+│       ├── scene_*.txt                        # 每个候选独占的 Claude 场景稿
+│       └── agent_report.json                  # novel-replica-writer 回执
 │
 ├── 对比报告/                                   # 闭环阶段 3 产物
 │   ├── eval_v{X}_cluster_{key}.json           # SFS 量化报告
@@ -120,6 +128,9 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 │   ├── 时间线.json                            # 时间系统
 │   ├── 道具.json                              # 道具/物品
 │   ├── 作者风格.json                          # 【从全局风格库复制】
+│   ├── .distill_character/{角色}_claude_drafts/ # novel-replica-writer 草稿
+│   │   ├── sample_*.txt                       # style/anti JSON 样本草稿
+│   │   └── agent_report.json                  # 角色、素材与样本绑定回执
 │   ├── .wal/                                  # WAL 写前日志（cluster 流水线）
 │   └── .lock                                  # 项目锁
 │
@@ -152,8 +163,10 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 - **正文生成两阶段**：step 2a `novel-writer` 逐场景写作；step 2b `gen_writer.py` 调 gemini 分段等体量润色并拼接终稿。缺 `claude_scenes` 时立即失败。
 - writer 链只产正文与创作自评。cluster 级客观状态由 Claude 梳理、确定性脚本回库：
   - **角色 / 道具 / 关系 / `locked_facts`**：`novel-archivist` 读整 cluster 正文客观抽取 → `_数据库/.wal/cluster_<key>_archive.json` → `apply_archive.py <项目> --cluster <key>` 确定性回库（幂等·按 id 去重）。
+  - **时间 / 地点 / Hub / 世界事件与消费 / heart events**：`novel-state-tracker` 读整 cluster 正文和当前运行态 → `_数据库/.wal/cluster_<key>_state_delta.json`，再由 `state_tracker_receipt.py` 写 `_数据库/.wal/cluster_<key>_state_tracker_receipt.json`，以 `PLAN_ID`、`STEP` 和 SHA-256 绑定 delta；确定性消费者按 cluster 回库。普通 state delta 不是 Agent 完成回执。
   - **伏笔**：`novel-foreshadower` 的 JudgeReport + `outline` brief（plant / payoff 由 Claude 梳理，非 writer 自报）。
-  - `save_state` 已停读 writer factual；`time_advance` / `location` 等**非 archive 域**仍由 `save_state --apply-cluster-changes` 落地。
+  - `save_state --apply-cluster-changes` 只解析创作自评、豁免和确定性遥测，不落任何客观状态；step 3 随后由 `writer_truth_check.py --cluster` 产通过报告 `_数据库/.judge_reports/cluster_<key>_writer-truth-check.json`。
+  - step 10 的 `save_state --apply-foreshadow-state` 注册 brief 伏笔并应用本块 payoff，产 `_数据库/.wal/cluster_<key>_foreshadow_state_receipt.json`；plan_tracker 按 cluster 内容验收。
 
 ---
 
@@ -181,6 +194,7 @@ core/claude-home/
 │       └── _subsystem_examples/                # 前两包未覆盖的其余高级子系统单文件范例（9 个）
 ├── schemas/                                    # JSON Schema 契约定义
 │   ├── changes_schema.json
+│   ├── cluster_state_delta_schema.json
 │   ├── event_cluster_schema.json
 │   └── user_preferences_schema.json
 ├── knowledge/                                  # 题材/技法/世界观知识库（jsonl，scanner 消费）
@@ -362,7 +376,7 @@ tests/                                           # pytest 回归测试，按 tes
 | 33 | 四线脉络 | **Procedural**（Dramatica 四贯穿线） |
 | 34 | webnovel_bench_mapping | **Procedural**（评估维度） |
 
-**分布速览**：Semantic ~12、Procedural ~16、Working ~6、Episodic ~3（部分跨类）。**Episodic（经历事件流）偏薄**——故事块摘要 / 时间线 / 角色行动表勉强算，但缺「按时序连续可检索的事件日志」标准 Episodic 形态（`memory_layer.py` 的 chapter/summary/archive 三层是另一套独立检索记忆，未进 34 子系统）。**加新子系统时优先补 Episodic 缺口、勿无脑堆 Procedural。**
+**分布速览**：Semantic ~12、Procedural ~16、Working ~6、Episodic ~3（部分跨类）。**Episodic（经历事件流）偏薄**——故事块摘要 / 时间线 / 角色行动表勉强算，但缺「按时序连续可检索的事件日志」标准 Episodic 形态（`memory_layer.py` 的 cluster/summary/archive 三层是另一套独立检索记忆，未进 34 子系统）。**加新子系统时优先补 Episodic 缺口、勿无脑堆 Procedural。**
 
 ---
 
@@ -399,7 +413,7 @@ tests/                                           # pytest 回归测试，按 tes
 | `/distill-character` | 角色 voice DNA | `workspace/styles/{书名}/角色档案/{角色名}.json` |
 | `/outline` | 大纲 / 34 个数据库 JSON | `workspace/novels/{书名}/_数据库/` |
 | `/cluster-write` | cluster 整块草稿 + 切章物理文件 + 平铺 CHANGES | `workspace/novels/{书名}/章节/cluster_<key>_draft/cluster_<key>_draft.txt` → splitter 切出 `第{N}章/第{N}章.txt` + `第{N}章_changes.json` |
-| `/cluster-save-state` | cluster 摘要 / 反思 / 走向卡 + 涌现下个 cluster brief（factual 客观状态由 `novel-archivist`→`archive.json`→`apply_archive` 确定性回库·`time_advance`/`location` 等非 archive 域由 `save_state --apply-cluster-changes` 落地·均**非 writer 自报**） | `workspace/novels/{书名}/_数据库/故事块摘要.json` + `章节/cluster_<key>_draft/` 伴生文件 |
+| `/cluster-save-state` | cluster 摘要 / 反思 / 走向卡 + 下块 brief；实体归档由 `novel-archivist`→`archive.json`→`apply_archive` 回库，运行态由 `novel-state-tracker`→`cluster_state_delta.json` + 独立回执→`cluster_state_delta.py` 回库 | `workspace/novels/{书名}/_数据库/故事块摘要.json` + `_数据库/.wal/cluster_<key>_*` |
 | `/export` | 拼接全文（`export_book.py` 硬校验通过后写出） | `workspace/novels/{书名}/exports/<书名>_全文_<章数>章.txt` |
 
 ---
@@ -479,8 +493,10 @@ splitter 在 `/cluster-write` step 6 才把草稿切为用户可读章节：
 cluster 级客观状态变更的权威源是 Claude 梳理 + 确定性回库：
 
 - 角色 / 道具 / 关系 / `locked_facts`：`novel-archivist` 读整 cluster 正文产 `_数据库/.wal/cluster_<key>_archive.json`，再由 `apply_archive.py <项目> --cluster <key>` 幂等回库。
+- 时间 / 地点 / Hub / 世界事件与消费：`novel-state-tracker` 产 `_数据库/.wal/cluster_<key>_state_delta.json` 与独立 `_数据库/.wal/cluster_<key>_state_tracker_receipt.json`；回执绑定 plan/step/delta SHA-256，`cluster_state_delta.py <项目> --cluster <key>` 严格校验并幂等回库。
 - 伏笔：`novel-foreshadower` 的 JudgeReport + outline brief 梳理，非 writer 自报。
-- `time_advance` / `location` 等非 archive 域由 `save_state --apply-cluster-changes` 落地。
+
+`cluster-save-state` step 11 的完成证明是 `_数据库/.wal/cluster_<key>_post_state_receipt.json`。`cluster_post_state_receipt.py` 只在本 cluster 的状态更新/评估回执、全量跨块 wrapper、世界演化回执和 Judge consensus 决策均通过内容校验后生成，并按字节 SHA-256 绑定这些动态产物；常驻数据库文件不能替代 required 执行证明。
 
 禁止绕过 `/cluster-save-state` 做章级状态回库。
 
@@ -499,20 +515,19 @@ cluster 草稿阶段统一以 `audit_hub.py --mode cluster --cluster-id <key>` �
 - **hard_gate 项**：E 层一致性 + 文件契约破损。这是**客观错误**，不是风格选择，**AI 不可豁免**——即便在 `--waivers` 里传了豁免理由，audit_hub 也强制忽略豁免，仍按问题处理。
 - 豁免理由的载体：writer 写在 `cluster_<key>_changes.json` 的 `self_eval.waivers: [{code, reason}]`；judge agent 写在 JudgeReport 的 `waivers` 段。
 - `audit_hub.py` 通过 `--waivers <json路径>` 入参收集豁免；对 advisory 项命中豁免 → 转 `waived`（记 `waive_reason`），不计入 `needs_agent`；剩余 issue 全是被合理豁免的 advisory 且无 hard_gate 残留 → verdict = `waived`，并把理由写入审计报告供后续校准。
-- `learning_loop.py` 统计 `waivers`；同一 advisory code 在同类 cluster 被反复合理豁免时，产出工具校准建议写入 `写作经验.json` 的 `tool_calibration_suggestions` 段。
+- `learning_loop.py` 只消费 `cluster_<key>_audit.json` 与 `cluster_<key>_reflection.json`。`写作经验.json` 的来源、复发、豁免和 efficacy 字段统一使用 `source_clusters` / `clusters` / `baseline_clusters` / `post_recur_clusters`；同一 advisory code 在同类 cluster 被反复合理豁免时，产出 `tool_calibration_suggestions`，无效约束停止注入下一 cluster。
 
 禁止把章级验证脚本作为创作链路入口；章节物理文件只由 splitter 产出，不能成为修复或回库旁路。
 
 ### 12.2 hard_gate 不可豁免清单（权威）
 
-以下 19 个 code 是 hard_gate，**AI 不可豁免**。与 `core/scripts/audit_hub.py` 的 `HARD_GATE_CODES` 常量一一对应（改清单必须两边同步）。这些 code 一旦在 cluster 审计中以 hard_gate 进入结果，必须修复，不做 no-op、fallback 或 advisory 降级。
+以下 18 个 code 是 hard_gate，**AI 不可豁免**。与 `core/scripts/audit_hub.py` 的 `HARD_GATE_CODES` 常量一一对应（改清单必须两边同步）。这些 code 一旦在 cluster 审计中以 hard_gate 进入结果，必须修复，不做 no-op、fallback 或 advisory 降级。
 
 | 维度 | code 数量 |
 |---|---|
 | E 层一致性 | 5（LOCKED_FACT_CONFLICT / FUTURE_KNOWLEDGE_LEAK / FORESHADOWING_NOT_PAID / SECRET_NOT_REVEALED / UNKNOWN_CHARACTER_DETECTED） |
 | 文件契约 | 3（CHANGES_MISSING / MANIFEST_MISSING / FILE_NOT_FOUND） |
 | 道具状态 | 2（ITEM_HOLDER_ABSENT / ITEM_NOT_YET_INTRODUCED） |
-| 传播债 | 1（PROPAGATION_DEBT_CREATED） |
 | 移动阅读体验 | 1（STYLE_单段超长 · v23.12 新增） |
 | 章末工艺（v2 cluster 新增） | 2（CHAPTER_END_FORBIDDEN_SCREENPLAY / CHAPTER_END_FORBIDDEN_TRANSITION） |
 | cluster 跨场景一致性（v2 cluster 新增） | 1（LOCKED_FACT_CROSS_SCENE_CONFLICT） |
@@ -532,7 +547,6 @@ cluster 草稿阶段统一以 `audit_hub.py --mode cluster --cluster-id <key>` �
 | `FILE_NOT_FOUND` | audit_hub cluster | 文件契约 | cluster 草稿或必要产物缺失 = 文件契约破损 |
 | `ITEM_HOLDER_ABSENT` | audit_hub cluster | 道具状态 | 道具持有者不在场 = 道具状态矛盾 |
 | `ITEM_NOT_YET_INTRODUCED` | audit_hub cluster | 道具状态 | 道具尚未引入就被用 = 道具状态矛盾 |
-| `PROPAGATION_DEBT_CREATED` | audit_hub cluster | 传播债 | 跨集合数据未同步 = 传播债 |
 | `STYLE_单段超长` | validate_style in audit_hub | 移动阅读 | 单段 > 120 CJK 字（物理章节 ≤1 例外）= 移动阅读硬上限；不允许 AI 豁免单条 |
 | `CHAPTER_END_FORBIDDEN_SCREENPLAY` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现剧本体过渡（「（镜头XX）」等舞台指示）= 连续小说工艺破坏。**为什么不可豁免**：2026-05-28 cluster_001 ch4 三次翻车 sediment，章末是钩子不是收束。详见 memory `feedback_no_screenplay_stage_directions_in_novels` |
 | `CHAPTER_END_FORBIDDEN_TRANSITION` | chapter_end_anchor_scan | 章末工艺（v2 cluster 新增） | 章末出现文学过渡分隔符 / 听觉视觉淡出 / 收束句 = 移动阅读 cliffhanger 工艺破坏。**为什么不可豁免**：同上，章末不允许任何场景过渡收束 |

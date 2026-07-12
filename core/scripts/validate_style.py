@@ -1161,9 +1161,8 @@ def main() -> None:
 
     if not chapter_path.exists():
         print(f"[FATAL] 文件不存在: {chapter_path}", file=sys.stderr); sys.exit(2)
-    # v18：统一走 chapter_io 取纯正文。能从路径解析出 项目根+章节号 时用
-    # cio.read_body()（v18 已分离的直接读 txt；旧混合 txt 自动剥离 CHANGES）；
-    # 解析不出时退回"读原文 + 同口径剥离 CHANGES 段"，杜绝各脚本各自 split。
+    # 统一走 chapter_io 取纯正文：能从路径解析出 项目根+章节号 时用 cio.read_body()；
+    # 解析不出时退回直接读取文件原文（正文与 changes 已分文件存储，不含混杂标记）。
     text = None
     _m = re.search(r"第(\d+)章", chapter_path.name)
     if _m:
@@ -1181,11 +1180,7 @@ def main() -> None:
             _raw = chapter_path.read_text(encoding="utf-8")
         except Exception as e:
             print(f"[FATAL] 无法读取文件: {e}", file=sys.stderr); sys.exit(2)
-        for _sep in cio.CHANGES_SEPARATORS:
-            if _sep in _raw:
-                _raw = _raw.split(_sep)[0].rstrip()
-                break
-        text = _raw
+        text = _raw.rstrip()
     if not text.strip():
         print("[FATAL] 文件内容为空", file=sys.stderr); sys.exit(2)
 

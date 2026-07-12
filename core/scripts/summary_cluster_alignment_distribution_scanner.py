@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""summary_chapter_alignment_distribution_scanner.py — Attention Flows 摘要-章节概念质量分布 advisory · cross-cluster · 2026-06-21 R20 W9 Batch-AA · P1
+"""跨 cluster 摘要概念质量分布顾问。
 
-【缺口 · R20 Q3-Q4 论文 id 17】Attention Flows / Summary-Chapter Conceptual
-Mass 分布：评估章节级摘要(chapter summaries / cluster sub_summary)
-在『全章节序列』上的概念覆盖均衡度。健康分布期望摘要质量近似均匀
-分布 — LLM 默认偏向「头重(开篇过度摘述)」或「尾重(末段堆砌反思)」。
+评估故事块摘要在全书 cluster 序列上的概念覆盖均衡度，识别开篇摘要过重
+或末段摘要堆积。结果只提供 advisory，不参与 hard gate。
 
 【做法 · 确定性 · 零额外 LLM】
   · 读 _数据库/故事块摘要.json (cluster_summary_reader)
   · 每 cluster 取 sub_summaries / scope_summary 文字
-  · 文本表示 = char bigram TF 向量(SBERT-zh 真嵌入 defer · _placeholder=true)
+  · 文本表示 = cluster 摘要 CJK 长度分布
   · 对每个 cluster 算 summary_mass = (本 cluster summary 文本长度) /
     (摘要正文 cjk 总长度) — 这是「质量分布」近似
-  · chapter_position = cluster 序号在全书的位置(0..1)
+  · cluster_position = cluster 序号在全书的位置(0..1)
   · 两 advisory：
-     - SUMMARY_FIRST_QUARTER_OVERWEIGHT — 前 25% chapter_position 的累计
+     - SUMMARY_FIRST_QUARTER_OVERWEIGHT — 前 25% cluster_position 的累计
        summary_mass > 0.40
-     - SUMMARY_TAIL_BIAS — 末 25% chapter_position 的累计
+     - SUMMARY_TAIL_BIAS — 末 25% cluster_position 的累计
        summary_mass > 0.40
 
 【distill 抽取 author_summary_mass_signature SLOW_UPDATE】
@@ -29,13 +27,13 @@ Mass 分布：评估章节级摘要(chapter summaries / cluster sub_summary)
   · cross_cluster_throughline_balance 查主题线均衡 · 不查摘要质量分布
   · cross_cluster_arc_progression 查角色弧推进 · 不查 summary mass
   · sagging_middle 查中段坍塌 · 不查头尾偏置
-  本 scanner = 摘要-章节 mass 分布 唯一覆盖。
+  本 scanner = 跨 cluster 摘要 mass 分布唯一覆盖。
 
 【北极星】②④⑤ 作者档第一权威 · cluster · advisory shadow · 绝不 hard_gate
   SUMMARY_FIRST_QUARTER_OVERWEIGHT / SUMMARY_TAIL_BIAS 绝不进 audit_hub.HARD_GATE_CODES。
 
 env SUMMARY_MASS_DISTRIBUTION_MODE: off / shadow(默认) / active
-用法: python summary_chapter_alignment_distribution_scanner.py <project> [--last-n N]
+用法: python summary_cluster_alignment_distribution_scanner.py <project> [--last-n N]
 """
 from __future__ import annotations
 
@@ -102,18 +100,11 @@ def _cluster_summary_text(c: dict) -> str:
                 t = s.get("text") or s.get("summary") or ""
                 if isinstance(t, str):
                     parts.append(t)
-    chapters = c.get("chapters") or {}
-    if isinstance(chapters, dict):
-        for rec in chapters.values():
-            if isinstance(rec, dict):
-                s = rec.get("sub_summary") or rec.get("summary") or ""
-                if isinstance(s, str):
-                    parts.append(s)
     return "\n".join(parts)
 
 
 def compute_distribution(clusters: list[dict]) -> dict:
-    """每 cluster summary 长度 → mass · chapter_position → bucket head/mid/tail。"""
+    """按 cluster 摘要长度计算头部、中段和尾部质量占比。"""
     items = []
     for idx, c in enumerate(clusters):
         text = _cluster_summary_text(c)
@@ -178,18 +169,18 @@ def main():
         findings.append({
             "severity": "advisory", "code": ISSUE_HEAD,
             "metrics": {"head_share": dist["head_share"], "head_max": head_max},
-            "suggestion": (f"前 25% chapter_position 累计 summary_mass={dist['head_share']:.3f}"
+            "suggestion": (f"前 25% cluster_position 累计 summary_mass={dist['head_share']:.3f}"
                            f" > {head_max}·开篇摘述过度·中后段叙事质量稀薄")
         })
     if dist["tail_share"] > tail_max:
         findings.append({
             "severity": "advisory", "code": ISSUE_TAIL,
             "metrics": {"tail_share": dist["tail_share"], "tail_max": tail_max},
-            "suggestion": (f"末 25% chapter_position 累计 summary_mass={dist['tail_share']:.3f}"
+            "suggestion": (f"末 25% cluster_position 累计 summary_mass={dist['tail_share']:.3f}"
                            f" > {tail_max}·末段堆砌反思·主线 mass 后置")
         })
 
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     report = {
@@ -203,8 +194,7 @@ def main():
         "summary": {
             "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
         },
-        "_placeholder": True,
-        "_doc": "SBERT-zh 真嵌入 defer · 当前用 cluster summary 长度近似 mass",
+        "_doc": "按 cluster 摘要 CJK 长度计算 summary mass",
     }
     out_path = out_dir / f"summary_mass_distribution_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

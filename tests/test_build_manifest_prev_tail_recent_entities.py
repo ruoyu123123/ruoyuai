@@ -188,14 +188,12 @@ def test_echo_section_wired_into_build_prompt():
 def test_recent_entities_lru_extraction_and_whitelist_dedup(tmp_path):
     """LRU 抽取正确性：最后出场 cluster/状态正确·白名单（active_chars+storyboard·含 id 归一）去重。"""
     doc = {"clusters": [
-        {"cluster_id": "cluster_001", "chapters": {
-            "1": {"characters": ["char_linzhao", "陈默"],
-                  "summary": "陈默在钟楼底层发现血字，林昭赶到。"}}},
-        {"cluster_id": "cluster_002", "chapters": {
-            "4": {"characters": ["陈默", "白鹤"],
-                  "summary": "白鹤带陈默进入档案馆，交出旧照片。"}}},
-        {"cluster_id": "cluster_003", "chapters": {
-            "7": {"characters": ["白鹤"], "summary": "白鹤独自烧掉照片。"}}},
+        {"cluster_id": "cluster_001", "characters": ["char_linzhao", "陈默"],
+         "summary": "陈默在钟楼底层发现血字，林昭赶到。"},
+        {"cluster_id": "cluster_002", "characters": ["陈默", "白鹤"],
+         "summary": "白鹤带陈默进入档案馆，交出旧照片。"},
+        {"cluster_id": "cluster_003", "characters": ["白鹤"],
+         "summary": "白鹤独自烧掉照片。"},
     ]}
     cards = [{"id": "char_linzhao", "name": "林昭"}]
     root = _mk_summary_project(tmp_path, doc, char_cards=cards)
@@ -213,8 +211,8 @@ def test_recent_entities_lru_extraction_and_whitelist_dedup(tmp_path):
 def test_recent_entities_storyboard_whitelist_dedup(tmp_path):
     """当前 cluster storyboard 出场角色（已注入全卡）不重复列。"""
     doc = {"clusters": [
-        {"cluster_id": "cluster_003", "chapters": {
-            "7": {"characters": ["白鹤", "沈栎"], "summary": "白鹤和沈栎分头行动。"}}},
+        {"cluster_id": "cluster_003", "characters": ["白鹤", "沈栎"],
+         "summary": "白鹤和沈栎分头行动。"},
     ]}
     root = _mk_summary_project(tmp_path, doc, cur_storyboard_chars=["白鹤"])
     s = bm.DatabaseScanner(root, 10)
@@ -226,16 +224,11 @@ def test_recent_entities_storyboard_whitelist_dedup(tmp_path):
 def test_recent_entities_lookback_window(tmp_path):
     """只看最近 3 个历史 cluster：更早 cluster 独有实体不进简表·当前/未来 cluster 条目不读。"""
     doc = {"clusters": [
-        {"cluster_id": "cluster_001", "chapters": {
-            "1": {"characters": ["远古人"], "summary": "远古人只在第一块出现。"}}},
-        {"cluster_id": "cluster_002", "chapters": {
-            "4": {"characters": ["甲"], "summary": "甲出场。"}}},
-        {"cluster_id": "cluster_003", "chapters": {
-            "7": {"characters": ["乙"], "summary": "乙出场。"}}},
-        {"cluster_id": "cluster_004", "chapters": {
-            "10": {"characters": ["丙"], "summary": "丙出场。"}}},
-        {"cluster_id": "cluster_005", "chapters": {
-            "13": {"characters": ["未来人"], "summary": "当前块之后的条目不该被读。"}}},
+        {"cluster_id": "cluster_001", "characters": ["远古人"], "summary": "远古人只在第一块出现。"},
+        {"cluster_id": "cluster_002", "characters": ["甲"], "summary": "甲出场。"},
+        {"cluster_id": "cluster_003", "characters": ["乙"], "summary": "乙出场。"},
+        {"cluster_id": "cluster_004", "characters": ["丙"], "summary": "丙出场。"},
+        {"cluster_id": "cluster_005", "characters": ["未来人"], "summary": "当前块之后的条目不该被读。"},
     ]}
     root = _mk_summary_project(tmp_path, doc)
     s = bm.DatabaseScanner(root, 13)
@@ -247,8 +240,8 @@ def test_recent_entities_lookback_window(tmp_path):
 def test_recent_entities_cap_15(tmp_path):
     """上限 15 行防膨胀。"""
     chars = [f"配角{i:02d}" for i in range(20)]
-    doc = {"clusters": [{"cluster_id": "cluster_003", "chapters": {
-        "7": {"characters": chars, "summary": "群像大场面。"}}}]}
+    doc = {"clusters": [{"cluster_id": "cluster_003", "characters": chars,
+                          "summary": "群像大场面。"}]}
     root = _mk_summary_project(tmp_path, doc)
     s = bm.DatabaseScanner(root, 10)
     out = bm._collect_recently_active_entities(s, [], "cluster_004")
@@ -261,16 +254,16 @@ def test_recent_entities_none_when_no_data(tmp_path):
     s = bm.DatabaseScanner(root, 10)
     assert bm._collect_recently_active_entities(s, [], "cluster_004") is None
     root2 = _mk_summary_project(tmp_path.joinpath("b"), {"clusters": [
-        {"cluster_id": "cluster_003", "chapters": {
-            "7": {"characters": ["白鹤"], "summary": "白鹤。"}}}]})
+        {"cluster_id": "cluster_003", "characters": ["白鹤"], "summary": "白鹤。"}]})
     s2 = bm.DatabaseScanner(root2, 10)
     assert bm._collect_recently_active_entities(s2, ["白鹤"], "cluster_004") is None
 
 
 def test_recent_entities_char_mention_counts_fallback(tmp_path):
     """章记录缺 characters 时回退 char_mention_counts 键（账本已有字段·确定性）。"""
-    doc = {"clusters": [{"cluster_id": "cluster_003", "chapters": {
-        "7": {"char_mention_counts": {"哑巴更夫": 6}, "summary": "更夫敲了六下梆子。"}}}]}
+    doc = {"clusters": [{"cluster_id": "cluster_003",
+                          "char_mention_counts": {"哑巴更夫": 6},
+                          "summary": "更夫敲了六下梆子。"}]}
     root = _mk_summary_project(tmp_path, doc)
     s = bm.DatabaseScanner(root, 10)
     out = bm._collect_recently_active_entities(s, [], "cluster_004")

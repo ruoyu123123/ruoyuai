@@ -1,209 +1,193 @@
-"""character_index.py — 角色出现历史快速索引（v17.6 D5 / Story Bible 启发）
+"""构建角色在各 cluster 中的出现历史索引。"""
 
-业界 Sudowrite/NovelCrafter 标配：搜"克莱上次出现在哪一章说了什么"。
-本脚本扫描所有章节，对每个登记角色维护出现历史，写到
-_数据库/character_index.json。
+from __future__ import annotations
 
-用法：
-    python character_index.py <项目路径> [--write]
-    python character_index.py <项目路径> --query 克莱
-
-索引结构：
-{
-  "snapshot_at_ch": N,
-  "characters": {
-    "克莱": {
-      "first_appearance_ch": 1,
-      "last_appearance_ch": 3,
-      "appearances": [
-        {"ch": 1, "dialogue_count": 8, "first_line_in_chapter": "...", "actions_summary": "..."},
-        ...
-      ]
-    }
-  }
-}
-"""
-
-import sys
+import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
+from atomic_json import atomic_write_text  # noqa: E402
+import cluster_lookup  # noqa: E402
 
 
-def load_json(p, default=None):
-    if not Path(p).exists():
+_QUOTED = r'(?:"([^"\n]{1,80})"|“([^”\n]{1,80})”|「([^」\n]{1,80})」)'
+
+
+def load_json(path: Path, default=None):
+    """读取 UTF-8 JSON；缺文件返回显式 default，坏文件直接报错。"""
+    path = Path(path)
+    if not path.exists():
         return default
     try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
-    except Exception:
-        return default
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"JSON 无法读取: {path}: {exc}") from exc
 
 
-def find_chapter_files(project_root: Path) -> list:
-    """返回 [(章节号, 章节号)] 列表 —— 第二项保留为章节号占位，
-    实际正文读取统一走 cio.read_body()，不再依赖具体文件路径。"""
-    chs = set()
-    for d in project_root.glob("章节/第*章"):
-        m = re.match(r"第(\d+)章", d.name)
-        if m:
-            chs.add(int(m.group(1)))
-    # 兼容平铺旧布局
-    for f in project_root.glob("第*章*.txt"):
-        m = re.match(r"第(\d+)章", f.name)
-        if m and not f.name.endswith("_changes.json"):
-            chs.add(int(m.group(1)))
-    return [(ch, ch) for ch in sorted(chs)]
+def find_cluster_files(project_root: Path) -> list[tuple[str, Path]]:
+    """返回按 cluster 序号排序的 canonical 完整草稿。"""
+    found: dict[str, Path] = {}
+    for draft in project_root.glob("章节/cluster_*_draft/cluster_*_draft.txt"):
+        parent_id = draft.parent.name.removesuffix("_draft")
+        file_id = draft.stem.removesuffix("_draft")
+        if parent_id != file_id:
+            raise ValueError(f"cluster 草稿目录与文件名不一致: {draft}")
+        cid = cluster_lookup.normalize_cluster_id(parent_id)
+        if cid is None or parent_id != cid:
+            raise ValueError(f"cluster 草稿路径使用非规范 id: {draft}")
+        if cid in found:
+            raise ValueError(f"cluster 草稿重复: {cid}")
+        found[cid] = draft
+    return sorted(found.items(), key=lambda item: cluster_lookup.cluster_num(item[0]))
 
 
-def scan_chapter_for_character(body_only: str, name: str) -> dict:
-    """对单角色单章扫描。body_only 须为纯正文（由 cio.read_body() 提供）。"""
-    out = {"appears": False}
-    if name not in body_only:
-        return out
-    out["appears"] = True
-    # 统计提及次数
-    out["mention_count"] = body_only.count(name)
-    # 简单提取对话：name 后跟引号的引号内容
-    # 2026-05-29 修：原 ["「]...["」] 把左右引号混进同一字符类 → “…」 跨引号错配。
-    # 改为左右配对：ASCII "…" / 中文 “…”（U+201C/U+201D）/ 「…」 各自匹配（与 style_analyzer 一致）。
-    nm = re.escape(name)
-    _quoted = r'(?:"([^"\n]{1,80})"|“([^”\n]{1,80})”|「([^」\n]{1,80})」)'
+def scan_cluster_for_character(body: str, name: str) -> dict:
+    """统计一个角色在完整 cluster 草稿中的提及、对白与首次上下文。"""
+    if name not in body:
+        return {"appears": False}
+    escaped = re.escape(name)
     dialogues = []
-    for m in re.finditer(rf'{nm}[^"“「\n]{{0,10}}{_quoted}', body_only):
-        dialogues.append(next(g for g in m.groups() if g is not None))
+    for match in re.finditer(rf'{escaped}[^"“「\n]{{0,10}}{_QUOTED}', body):
+        dialogues.append(next(group for group in match.groups() if group is not None))
     if not dialogues:
-        # 退一步：找 name 出现后最近的引号内容
-        for m in re.finditer(nm, body_only):
-            nearby = body_only[m.end():m.end() + 200]
-            dq = re.search(_quoted, nearby)
-            if dq:
-                dialogues.append(next(g for g in dq.groups() if g is not None))  # 2026-05-29 修：3 组取非空
+        for match in re.finditer(escaped, body):
+            nearby = body[match.end():match.end() + 200]
+            quote = re.search(_QUOTED, nearby)
+            if quote:
+                dialogues.append(next(group for group in quote.groups() if group is not None))
                 if len(dialogues) >= 3:
                     break
-    out["dialogue_samples"] = dialogues[:3]
-    out["dialogue_count_estimate"] = len(dialogues)
-    # 首次出现的句子
-    first_idx = body_only.find(name)
-    if first_idx >= 0:
-        # 找该句完整内容（前后到。或换行）
-        start = max(0, body_only.rfind("。", 0, first_idx) + 1)
-        end = body_only.find("。", first_idx)
-        if end < 0:
-            end = first_idx + 100
-        out["first_line_context"] = body_only[start:end+1].strip()[:120]
-    return out
+
+    first = body.find(name)
+    start = max(0, body.rfind("。", 0, first) + 1, body.rfind("\n", 0, first) + 1)
+    end = body.find("。", first)
+    if end < 0:
+        end = min(len(body) - 1, first + 99)
+    return {
+        "appears": True,
+        "mention_count": body.count(name),
+        "dialogue_samples": dialogues[:3],
+        "dialogue_count_estimate": len(dialogues),
+        "first_context": body[start:end + 1].strip()[:120],
+    }
 
 
 def build_index(project_root: Path) -> dict:
-    """扫描所有章节，为每个登记角色构建出现历史。"""
-    cards = load_json(project_root / "_数据库" / "人物卡.json", {}).get("characters", [])
-    # 角色名 + full_name 两种身份
-    names_to_track = {}
-    for c in cards:
-        n = c.get("name", "")
-        fn = c.get("full_name", "")
-        if n:
-            names_to_track[n] = c
-    chapter_files = find_chapter_files(project_root)
-    # v18：一次性读全部章节纯正文（cio.read_body 自动处理 v18 分离 / 旧混合 txt）
-    bodies = {}
-    for ch, _ in chapter_files:
-        try:
-            bodies[ch] = cio.read_body(project_root, ch)
-        except FileNotFoundError:
-            continue
-    index = {"snapshot_at_ch": chapter_files[-1][0] if chapter_files else 0,
-             "characters": {}}
-    for name, card in names_to_track.items():
-        index["characters"][name] = {
+    """扫描人物卡和全部 canonical cluster 草稿。"""
+    cards_doc = load_json(project_root / "_数据库" / "人物卡.json")
+    if not isinstance(cards_doc, dict) or not isinstance(cards_doc.get("characters"), list):
+        raise ValueError("人物卡.json.characters 必须是数组")
+    cluster_files = find_cluster_files(project_root)
+    bodies = {
+        cid: path.read_text(encoding="utf-8")
+        for cid, path in cluster_files
+    }
+    index = {
+        "schema_version": 1,
+        "snapshot_at_cluster": cluster_files[-1][0] if cluster_files else None,
+        "characters": {},
+    }
+    seen_names: set[str] = set()
+    for card_index, card in enumerate(cards_doc["characters"]):
+        if not isinstance(card, dict):
+            raise ValueError(f"人物卡 characters[{card_index}] 必须是 object")
+        name = card.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"人物卡 characters[{card_index}].name 不能为空")
+        if name in seen_names:
+            raise ValueError(f"人物卡角色名重复: {name}")
+        seen_names.add(name)
+        declared = card.get("first_appearance_cluster")
+        if declared is not None:
+            normalized = cluster_lookup.normalize_cluster_id(declared)
+            if normalized is None or normalized != declared:
+                raise ValueError(f"角色 {name}.first_appearance_cluster 非规范: {declared!r}")
+        record = {
             "card_id": card.get("id"),
             "role": card.get("role"),
-            "first_appearance_ch_declared": card.get("first_appearance_ch"),
-            "first_appearance_ch_actual": None,
-            "last_appearance_ch_actual": None,
-            "total_chapters_appeared": 0,
+            "first_appearance_cluster_declared": declared,
+            "first_appearance_cluster_actual": None,
+            "last_appearance_cluster_actual": None,
+            "total_clusters_appeared": 0,
             "appearances": [],
         }
-        for ch, _ in chapter_files:
-            body = bodies.get(ch)
-            if body is None:
+        for cid, _ in cluster_files:
+            result = scan_cluster_for_character(bodies[cid], name)
+            if not result["appears"]:
                 continue
-            r = scan_chapter_for_character(body, name)
-            if r.get("appears"):
-                index["characters"][name]["appearances"].append({
-                    "ch": ch,
-                    "mention_count": r.get("mention_count", 0),
-                    "dialogue_count_estimate": r.get("dialogue_count_estimate", 0),
-                    "dialogue_samples": r.get("dialogue_samples", []),
-                    "first_line_context": r.get("first_line_context", ""),
-                })
-                index["characters"][name]["last_appearance_ch_actual"] = ch
-                if index["characters"][name]["first_appearance_ch_actual"] is None:
-                    index["characters"][name]["first_appearance_ch_actual"] = ch
-                index["characters"][name]["total_chapters_appeared"] += 1
-        # 检测申报 vs 实际首次出现差异
-        declared = index["characters"][name]["first_appearance_ch_declared"]
-        actual = index["characters"][name]["first_appearance_ch_actual"]
-        if declared and actual and declared != actual:
-            index["characters"][name]["declaration_warning"] = (
-                f"人物卡申报 first_appearance_ch={declared}，但实际首次出现在 ch{actual}"
+            record["appearances"].append({
+                "cluster_id": cid,
+                "mention_count": result["mention_count"],
+                "dialogue_count_estimate": result["dialogue_count_estimate"],
+                "dialogue_samples": result["dialogue_samples"],
+                "first_context": result["first_context"],
+            })
+            record["last_appearance_cluster_actual"] = cid
+            if record["first_appearance_cluster_actual"] is None:
+                record["first_appearance_cluster_actual"] = cid
+            record["total_clusters_appeared"] += 1
+        actual = record["first_appearance_cluster_actual"]
+        if declared is not None and actual is not None and declared != actual:
+            record["declaration_warning"] = (
+                f"人物卡申报 first_appearance_cluster={declared}，"
+                f"正文首次出现于 {actual}"
             )
+        index["characters"][name] = record
     return index
 
 
-def main():
-    args = sys.argv[1:]
-    if not args:
-        print(__doc__)
-        sys.exit(0)
-    project_root = Path(args[0])
-    if "--query" in args:
-        # 查询模式
-        idx = args.index("--query")
-        name = args[idx + 1]
-        index_path = project_root / "_数据库" / "character_index.json"
-        if not index_path.exists():
-            print(f"[FATAL] 先跑一次 python {__file__} {project_root} --write")
-            sys.exit(1)
-        index = load_json(index_path, {})
-        char = index.get("characters", {}).get(name)
-        if not char:
-            print(f"未找到角色「{name}」")
-            sys.exit(1)
-        print(f"[角色查询] {name}")
-        print(f"  申报首章: ch{char['first_appearance_ch_declared']}")
-        print(f"  实际首章: ch{char['first_appearance_ch_actual']}")
-        print(f"  最后章: ch{char['last_appearance_ch_actual']}")
-        print(f"  出场总数: {char['total_chapters_appeared']}")
-        print(f"  最近 3 次出场：")
-        for app in char.get("appearances", [])[-3:]:
-            print(f"    ch{app['ch']}: 提及 {app['mention_count']} 次 / 对话 {app['dialogue_count_estimate']} 句")
-            if app.get("first_line_context"):
-                print(f"      首句：{app['first_line_context']}")
-            for d in app.get("dialogue_samples", []):
-                print(f"      对话样本：「{d[:50]}」")
-        sys.exit(0)
+def _print_query(name: str, record: dict) -> None:
+    print(f"[角色查询] {name}")
+    print(f"  申报首次: {record['first_appearance_cluster_declared']}")
+    print(f"  正文首次: {record['first_appearance_cluster_actual']}")
+    print(f"  最近出现: {record['last_appearance_cluster_actual']}")
+    print(f"  出场块数: {record['total_clusters_appeared']}")
+    for appearance in record.get("appearances", [])[-3:]:
+        print(
+            f"  {appearance['cluster_id']}: 提及 {appearance['mention_count']} 次 / "
+            f"对白 {appearance['dialogue_count_estimate']} 句"
+        )
+        if appearance.get("first_context"):
+            print(f"    首次上下文：{appearance['first_context']}")
+        for dialogue in appearance.get("dialogue_samples", []):
+            print(f"    对话样本：「{dialogue[:50]}」")
 
-    index = build_index(project_root)
-    write = "--write" in args
-    if write:
-        out = project_root / "_数据库" / "character_index.json"
-        out.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[OK] character_index 已写入: {out}")
-    print(f"[Character Index Snapshot]")
-    print(f"  扫描章节范围: 1-{index['snapshot_at_ch']}")
-    print(f"  角色数: {len(index['characters'])}")
-    for name, info in index["characters"].items():
-        print(f"  {name}: 出现 {info['total_chapters_appeared']} 章，最后 ch{info['last_appearance_ch_actual']}")
-        if info.get("declaration_warning"):
-            print(f"    ⚠️  {info['declaration_warning']}")
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="构建或查询 cluster 角色出现索引")
+    parser.add_argument("project")
+    parser.add_argument("--write", action="store_true")
+    parser.add_argument("--query")
+    args = parser.parse_args(argv)
+    project_root = Path(args.project)
+    try:
+        if args.query:
+            index = load_json(project_root / "_数据库" / "character_index.json")
+            if not isinstance(index, dict):
+                raise ValueError("character_index.json 不存在或顶层无效")
+            record = index.get("characters", {}).get(args.query)
+            if not isinstance(record, dict):
+                raise ValueError(f"未找到角色: {args.query}")
+            _print_query(args.query, record)
+            return 0
+        index = build_index(project_root)
+        if args.write:
+            out = project_root / "_数据库" / "character_index.json"
+            atomic_write_text(out, json.dumps(index, ensure_ascii=False, indent=2))
+            print(f"[OK] character_index 已写入: {out}")
+        print(f"[Character Index] 扫描到 {index['snapshot_at_cluster']}，"
+              f"角色数 {len(index['characters'])}")
+        return 0
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8", errors="replace")
-    main()
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    raise SystemExit(main())

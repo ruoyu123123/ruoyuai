@@ -28,14 +28,14 @@ MODE: cluster
 CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt 路径>
 ```
 
-> 所有摘要单位是 cluster；per-chapter 摘要由 splitter 切完后从 cluster 摘要派生。
+> 所有摘要单位是 cluster；splitter 只负责正文格式切分，不生成摘要。
 > 卷边界时主代理会用 MODE=volume 再 spawn 一次（见文末「MODE=volume 卷级递归摘要」）。
 
 ## 文件载体
 
 - 正文：`章节/cluster_NNN_draft/cluster_NNN_draft.txt` —— 整 cluster 草稿（splitter 切章前）
 - 数据：`章节/cluster_NNN_draft/cluster_changes.json` —— **不读**
-- 输出：`_数据库/.wal/cluster_NNN_summary.json`（cluster 级摘要，splitter 切完后由调度器派生 per-chapter 摘要）
+- 输出：`_数据库/.wal/cluster_NNN_summary.json`（cluster 级摘要）
 
 ## 执行流程
 
@@ -126,7 +126,7 @@ CLUSTER_DRAFT_PATH: <章节/cluster_NNN_draft/cluster_NNN_draft.txt 路径>
 
 ## 输出文件结构
 
-`_数据库/.wal/cluster_<NNN>_summary.json`（cluster 级摘要 · **以下是真实可抄的骨架，所有占位符必须替换** · per-chapter 摘要由 splitter 切完后从本 cluster 摘要派生）：
+`_数据库/.wal/cluster_<NNN>_summary.json`（cluster 级摘要 · **以下是真实可抄的骨架，所有占位符必须替换**）：
 
 ```json
 {

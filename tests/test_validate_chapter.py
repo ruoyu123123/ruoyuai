@@ -12,9 +12,9 @@
 钉死的核心不变量：
   · check_word_count   —— 下限/上限/CLUSTER_MODE 整块语义切换/per-chapter 回退
   · check_banned_words —— count>=3 升 error、首现行号定位、零命中无误报
-  · check_changes_factual —— factual 为空 → CHANGES_MISSING(fatal)
+  · check_writer_self_eval —— self_eval.waivers 缺失/非法 → CHANGES_MISSING(fatal)
   · _flatten_locked_facts —— list / dict / 嵌套 dict / 非法输入 四种 schema 摊平
-  · check_secret_reveal —— manifest 要求揭露但 changes 缺 → SECRET_NOT_REVEALED
+  · check_secret_reveal —— manifest 要求揭露但正文查不到伏笔表 secrets 证据 → SECRET_NOT_REVEALED
   · check_locked_facts —— 左右手对抗 / 年龄数字冲突 → LOCKED_FACT_CONFLICT
   · format_json       —— v18 --json 输出契约（summary 计数 / errors 字段透传）
   · CLI 退出码        —— 旧单章位置参硬拒 / cluster FILE_NOT_FOUND→exit2（真 subprocess）
@@ -134,24 +134,25 @@ def test_banned_word_clean_body_no_false_positive():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# check_changes_factual —— factual 空 → CHANGES_MISSING(fatal)
+# check_writer_self_eval —— self_eval.waivers 契约缺失 → CHANGES_MISSING(fatal)
 # ══════════════════════════════════════════════════════════════════════════
-def test_changes_factual_missing_is_fatal():
-    errs, changes = mod.check_changes_factual(None)
-    assert changes is None
+def test_changes_self_eval_missing_is_fatal():
+    """changes 为 None / 空 dict / self_eval 非法（缺 waivers 列表）均判 CHANGES_MISSING。"""
+    errs = mod.check_writer_self_eval(None)
     assert len(errs) == 1 and errs[0]["code"] == "CHANGES_MISSING"
     assert errs[0]["severity"] == "fatal"
 
-    # 空 dict 也算缺失（not {} 为真）
-    errs2, ch2 = mod.check_changes_factual({})
-    assert ch2 is None and errs2[0]["code"] == "CHANGES_MISSING"
+    errs2 = mod.check_writer_self_eval({})
+    assert len(errs2) == 1 and errs2[0]["code"] == "CHANGES_MISSING"
+
+    # self_eval 存在但缺 waivers 列表 → 契约不完整，仍判定缺失
+    errs3 = mod.check_writer_self_eval({"self_eval": {}})
+    assert len(errs3) == 1 and errs3[0]["code"] == "CHANGES_MISSING"
 
 
-def test_changes_factual_present_passes_through():
-    factual = {"locked_facts": ["主角左手有疤"]}
-    errs, changes = mod.check_changes_factual(factual)
-    assert errs == []
-    assert changes is factual
+def test_changes_self_eval_present_passes_through():
+    changes = {"self_eval": {"waivers": [], "uncertainty_flags": []}}
+    assert mod.check_writer_self_eval(changes) == []
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -176,23 +177,34 @@ def test_flatten_locked_facts_all_schemas():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# check_secret_reveal —— manifest 要求揭露 vs changes 实际
+# check_secret_reveal —— manifest 要求揭露 vs 伏笔表.json secrets 正文留痕
 # ══════════════════════════════════════════════════════════════════════════
+def _mk_project_with_secrets(tmp: Path, secrets: list) -> Path:
+    db = tmp / "_数据库"
+    db.mkdir(parents=True, exist_ok=True)
+    (db / "伏笔表.json").write_text(
+        json.dumps({"secrets": secrets}, ensure_ascii=False), encoding="utf-8")
+    return tmp
+
+
 def test_secret_reveal_missing_triggers_error():
-    """manifest 要求揭露 1 条 secret，但 changes 无 secret.reveal → SECRET_NOT_REVEALED(error)。"""
+    """manifest 要求揭露 1 条 secret，正文没写出揭示证据 → SECRET_NOT_REVEALED(error)。"""
+    tmp = Path(tempfile.mkdtemp())
+    proj = _mk_project_with_secrets(tmp, [{"id": "s1", "secret": "地窖藏着解药"}])
     manifest = {"foreshadowing_summary": {"must_reveal_this_ch": 1}}
-    errs = mod.check_secret_reveal("正文", {"foreshadowing_actions": []}, manifest)
+    errs = mod.check_secret_reveal("正文与秘密毫无关系。", manifest, proj)
     assert len(errs) == 1 and errs[0]["code"] == "SECRET_NOT_REVEALED"
     assert errs[0]["severity"] == "error"
 
 
 def test_secret_reveal_satisfied_no_error():
-    """changes 含足量 secret.reveal → 无 issue。manifest 不要求时也无 issue。"""
+    """正文写出 secret 关键词证据 → 无 issue。manifest 不要求时也无 issue（不查数据库直接短路）。"""
+    tmp = Path(tempfile.mkdtemp())
+    proj = _mk_project_with_secrets(tmp, [{"id": "s1", "secret": "地窖藏着解药"}])
     manifest = {"foreshadowing_summary": {"must_reveal_this_ch": 1}}
-    changes = {"foreshadowing_actions": [{"category": "secret", "type": "reveal"}]}
-    assert mod.check_secret_reveal("正文", changes, manifest) == []
-    # must_reveal_this_ch=0 → 直接短路
-    assert mod.check_secret_reveal("正文", {}, {"foreshadowing_summary": {}}) == []
+    body = "他推开门，看见地窖藏着解药，愣住了。"
+    assert mod.check_secret_reveal(body, manifest, proj) == []
+    assert mod.check_secret_reveal("正文", {"foreshadowing_summary": {}}, proj) == []
 
 
 # ══════════════════════════════════════════════════════════════════════════

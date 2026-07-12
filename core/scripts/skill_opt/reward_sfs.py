@@ -28,12 +28,13 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
+from . import scene_jobs
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DISTILL_REPLICATE = REPO_ROOT / "core" / "scripts" / "distill_replicate.py"
 STYLE_EVALUATOR = REPO_ROOT / "core" / "scripts" / "style_evaluator.py"
+DISTILL_AV_VERIFY = REPO_ROOT / "core" / "scripts" / "distill_av_verify.py"
 
 # S1 reward slop penalty: 复刻文本含 AI 腔高频词 → reward 扣分
 # 让"skill 删反 AI 腔约束后复刻文本 AI 腔回潮"在 reward 可见
@@ -75,6 +76,7 @@ def _run_distill_replicate(
     cluster_id: str,
     project: Path,
     output: Path,
+    claude_scenes_dir: Path,
     timeout: int = 1500,
 ) -> tuple[int, float]:
     """subprocess 调 distill_replicate.py。"""
@@ -85,6 +87,7 @@ def _run_distill_replicate(
         "--mode", "cluster",
         "--cluster-ref", cluster_id,
         "--project", str(project),
+        "--claude-scenes-dir", str(claude_scenes_dir),
         "--output", str(output),
     ]
     t0 = time.time()
@@ -122,6 +125,21 @@ def _run_style_evaluator(
             text=True, encoding="utf-8", errors="replace",
         )
         return proc.returncode
+    except subprocess.TimeoutExpired:
+        return 124
+
+
+def _run_av_verify(project: Path, cluster_id: str, replica: Path, output: Path,
+                   timeout: int = 300) -> int:
+    command = [
+        sys.executable, str(DISTILL_AV_VERIFY),
+        "--project", str(project),
+        "--cluster-id", cluster_id,
+        "--replica", str(replica),
+        "--output", str(output),
+    ]
+    try:
+        return subprocess.run(command, timeout=timeout).returncode
     except subprocess.TimeoutExpired:
         return 124
 
@@ -172,6 +190,13 @@ def reward_for_cluster_sfs(
     replica_dir.mkdir(parents=True, exist_ok=True)
     replica_path = replica_dir / f"{cluster_id}_replica.txt"
     eval_json = replica_dir / f"{cluster_id}_eval.json"
+    av_json = replica_dir / f"{cluster_id}_av.json"
+    claude_scenes_dir = scene_jobs.require_scene_job(
+        skill_path=style_skill,
+        cluster_id=cluster_id,
+        out_root=out_root,
+        run_id=run_id,
+    )
 
     # 1. 复刻
     distill_ec, distill_dur = _run_distill_replicate(
@@ -179,6 +204,7 @@ def reward_for_cluster_sfs(
         cluster_id=cluster_id,
         project=project_root,
         output=replica_path,
+        claude_scenes_dir=claude_scenes_dir,
     )
     if distill_ec != 0 or not replica_path.exists():
         return SfsReward(
@@ -189,7 +215,17 @@ def reward_for_cluster_sfs(
             duration_sec=time.time() - t0,
             distill_exit_code=distill_ec,
             eval_exit_code=-1,
-            raw={"phase": "distill_failed", "distill_dur": distill_dur},
+            raw={
+                "phase": "distill_failed",
+                "distill_dur": distill_dur,
+                "claude_scenes_dir": str(claude_scenes_dir),
+            },
+        )
+
+    av_ec = _run_av_verify(project_root, cluster_id, replica_path, av_json)
+    if av_ec != 0 or not av_json.exists():
+        raise RuntimeError(
+            f"required AV 执行或报告失败: cluster={cluster_id} exit={av_ec} output={av_json}"
         )
 
     # 2. SFS 评分
@@ -236,5 +272,12 @@ def reward_for_cluster_sfs(
         duration_sec=time.time() - t0,
         distill_exit_code=distill_ec,
         eval_exit_code=eval_ec,
-        raw={"phase": "ok", "slop_hits": slop_hits, "slop_penalty": slop_penalty},
+        raw={
+            "phase": "ok",
+            "slop_hits": slop_hits,
+            "slop_penalty": slop_penalty,
+            "claude_scenes_dir": str(claude_scenes_dir),
+            "skill_digest": scene_jobs.skill_digest(style_skill),
+            "av_report_path": str(av_json),
+        },
     )

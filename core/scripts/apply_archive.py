@@ -1,30 +1,8 @@
-"""apply_archive.py — 把 novel-archivist 梳理产物 archive.json 确定性回库（无模型）。
+"""把 novel-archivist 的 cluster 归档确定性写入状态库。
 
-🔴 2026-06-28 架构纠正：配置的写作模型只产正文、不自报"改了什么"；Claude(archivist agent)
-读正文分辨出新增/变更的角色/道具/关系/硬事实/throughline，产 cluster_<key>_archive.json；本
-脚本把它确定性写进 人物卡 / 角色池 / 道具 / 关系 / 事件簇.clusters[].locked_facts +
-事件簇.clusters[].throughline_progress。
-
-权威源 = archive（Claude 读正文）·不再读 writer 的 changes.factual 自报。
-
-幂等：全部按 id 去重（角色 C_*、道具 I_*、关系 REL_*）·re-apply / 多次跑不重复建、不后移。
-
-🔴 2026-06-28 不降级收尾：archive 是 factual 回库的**唯一权威路径**。每个写完的 cluster 必有
-出场角色——archive 缺 characters = archivist 失败 = 错误，**exit 非0 让 plan 硬停**（不再
-"空 archive → exit 1 当 no-op"静默降级）。幂等去重保留（re-apply 全已存在→exit 0 成功·非降级）。
-
-🔴 2026-07-07 S3 类级契约（PlotPilot reducer 范式·LLM 禁直接闭合终态）：archivist 是抽取 agent，
-只许报 progress 级观察——archive 携带伏笔/戏剧问题的 consumed/resolved/answered/terminal 终态声明
-→ 本入库层剥离 + stderr 显式警告 + WAL 留痕（terminal_state_stripped·不静默接受）。终态唯一通路 =
-save_state._apply_foreshadower_payoffs / cmd_apply_dramatic_questions（写入层校验后落账）。
-契约单一实现见 save_state.strip_terminal_state_payload / record_terminal_contract（不另立口径）。
-
-用法:
-    python apply_archive.py <项目路径> --cluster <key>
-        [--archive <archive.json 路径，默认 _数据库/.wal/cluster_<key>_archive.json>]
-        [--dry-run]
-
-退出码: 0 成功（含幂等无新增）/ 2 archive 缺失/缺出场角色（archivist 失败·硬停）或回库异常
+归档按稳定 id 幂等写入角色、道具、关系、硬事实、叙事线、角色信念、
+反派轮替、力量梯度和 actant 台账。输入合同损坏时返回 2；可选状态域为空时
+记录零变更。抽取结果中的伏笔或戏剧问题终态会被剥离并写入审计记录。
 """
 import sys
 import json
@@ -33,38 +11,152 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from atomic_json import atomic_write_text  # noqa: E402
-# 🔴 2026-07-07 S3 类级契约：终态剥离/审计的单一实现（save_state 为权威·此处只消费不复刻）
-from save_state import record_terminal_contract, strip_terminal_state_payload  # noqa: E402
-
-try:
-    import cluster_lookup
-except Exception:  # noqa: BLE001
-    cluster_lookup = None
+# 终态剥离与审计由 save_state 提供单一实现。
+from save_state_common import record_terminal_contract, strip_terminal_state_payload  # noqa: E402
+import cluster_lookup  # noqa: E402
 
 
 def _norm_cid(key):
-    if cluster_lookup:
-        try:
-            n = cluster_lookup.normalize_cluster_id(key)
-            if n:
-                return n
-        except Exception:  # noqa: BLE001
-            pass
-    k = str(key).replace("cluster_", "")
-    return f"cluster_{k}"
+    cid = cluster_lookup.normalize_cluster_id(key)
+    if cid is None:
+        raise ValueError(f"无效 cluster_id: {key!r}")
+    return cid
 
 
 def load_json(p: Path, default):
+    if not p.exists():
+        return default
     try:
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8-sig"))
-    except Exception:  # noqa: BLE001
-        pass
-    return default
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"JSON 无法读取: {p}: {exc}") from exc
 
 
 def save_json(p: Path, obj):
     atomic_write_text(p, json.dumps(obj, ensure_ascii=False, indent=2))
+
+
+def _require_cluster(value, label: str) -> str:
+    cid = _norm_cid(value)
+    if value != cid:
+        raise ValueError(f"{label} 必须是规范 cluster_id，收到 {value!r}")
+    return cid
+
+
+def _validate_archive(archive: object, cid: str) -> None:
+    """在任何写盘前验证归档的 cluster-native 合同。"""
+    if not isinstance(archive, dict):
+        raise ValueError("archive 顶层必须是 object")
+    if archive.get("cluster_id") != cid:
+        raise ValueError(f"archive.cluster_id 必须等于 {cid}")
+    if "chapter_range" in archive:
+        raise ValueError("archive 禁止 chapter_range；章节只属于 splitter 输出")
+
+    chars = archive.get("characters")
+    if not isinstance(chars, list) or not chars:
+        raise ValueError("archive.characters 必须是非空数组")
+    for index, char in enumerate(chars):
+        label = f"characters[{index}]"
+        if not isinstance(char, dict):
+            raise ValueError(f"{label} 必须是 object")
+        if "first_ch" in char:
+            raise ValueError(f"{label}.first_ch 已禁用；使用 first_cluster")
+        if not isinstance(char.get("id"), str) or not char["id"].strip():
+            raise ValueError(f"{label}.id 必须是稳定 id")
+        if not isinstance(char.get("name"), str) or not char["name"].strip():
+            raise ValueError(f"{label}.name 不能为空")
+        if "first_cluster" in char:
+            first_cluster = _require_cluster(char["first_cluster"], f"{label}.first_cluster")
+            if char.get("new") is True and first_cluster != cid:
+                raise ValueError(f"{label}.first_cluster 必须等于当前 {cid}")
+        elif char.get("new") is True:
+            raise ValueError(f"{label} 是新角色，必须提供 first_cluster")
+        if "tier" in char and char["tier"] not in ("core", "emerged", "extra"):
+            raise ValueError(f"{label}.tier 无效: {char['tier']!r}")
+        changes = char.get("state_changes", [])
+        if not isinstance(changes, list):
+            raise ValueError(f"{label}.state_changes 必须是数组")
+        for change_index, change in enumerate(changes):
+            change_label = f"{label}.state_changes[{change_index}]"
+            if not isinstance(change, dict):
+                raise ValueError(f"{change_label} 必须是 object")
+            if "ch" in change:
+                raise ValueError(f"{change_label}.ch 已禁用；使用 changed_at_cluster")
+            if not isinstance(change.get("change"), str) or not change["change"].strip():
+                raise ValueError(f"{change_label}.change 不能为空")
+            if _require_cluster(change.get("changed_at_cluster"),
+                                f"{change_label}.changed_at_cluster") != cid:
+                raise ValueError(f"{change_label} 必须属于当前 {cid}")
+
+    for field in ("items", "relationships", "locked_facts", "belief_updates",
+                  "belief_unaware", "antagonist_rotation", "warnings"):
+        if field in archive and not isinstance(archive[field], list):
+            raise ValueError(f"archive.{field} 必须是数组")
+    for index, item in enumerate(archive.get("items", [])):
+        if not isinstance(item, dict):
+            raise ValueError(f"items[{index}] 必须是 object")
+        if "first_ch" in item:
+            raise ValueError(f"items[{index}].first_ch 已禁用；使用 first_cluster")
+        if not item.get("id") or not item.get("name"):
+            raise ValueError(f"items[{index}] 必须包含 id 和 name")
+        if "first_cluster" not in item:
+            raise ValueError(f"items[{index}] 必须包含 first_cluster")
+        if _require_cluster(item["first_cluster"],
+                            f"items[{index}].first_cluster") != cid:
+            raise ValueError(f"items[{index}].first_cluster 必须等于当前 {cid}")
+    for index, relationship in enumerate(archive.get("relationships", [])):
+        if not isinstance(relationship, dict):
+            raise ValueError(f"relationships[{index}] 必须是 object")
+        if not all(isinstance(relationship.get(k), str) and relationship[k].strip()
+                   for k in ("id", "from", "to")):
+            raise ValueError(f"relationships[{index}] 必须包含 id/from/to")
+    for index, fact in enumerate(archive.get("locked_facts", [])):
+        if not isinstance(fact, dict) or not isinstance(fact.get("fact"), str) \
+                or not fact["fact"].strip():
+            raise ValueError(f"locked_facts[{index}] 必须包含非空 fact")
+    if "throughline_progress" in archive:
+        throughline = archive["throughline_progress"]
+        if not isinstance(throughline, dict) or set(throughline) != {"OS", "MC", "IC", "RS"}:
+            raise ValueError("throughline_progress 必须恰含 OS/MC/IC/RS")
+        if any(not isinstance(value, bool) for value in throughline.values()):
+            raise ValueError("throughline_progress 的值必须是 bool")
+    for field in ("belief_updates", "belief_unaware"):
+        required = ("char_id", "fact_id")
+        for index, record in enumerate(archive.get(field, [])):
+            if not isinstance(record, dict) or not all(record.get(k) for k in required):
+                raise ValueError(f"{field}[{index}] 必须包含 char_id/fact_id")
+    for index, rotation in enumerate(archive.get("antagonist_rotation", [])):
+        if not isinstance(rotation, dict) or not rotation.get("antagonist_id"):
+            raise ValueError(f"antagonist_rotation[{index}] 缺 antagonist_id")
+        _require_cluster(rotation.get("cluster_id"),
+                         f"antagonist_rotation[{index}].cluster_id")
+        if "defeat_cluster" in rotation:
+            _require_cluster(rotation["defeat_cluster"],
+                             f"antagonist_rotation[{index}].defeat_cluster")
+    power_updates = archive.get("protagonist_power_tier_update")
+    if power_updates is not None:
+        power_updates = [power_updates] if isinstance(power_updates, dict) else power_updates
+        if not isinstance(power_updates, list):
+            raise ValueError("protagonist_power_tier_update 必须是 object 或数组")
+        for index, update in enumerate(power_updates):
+            if not isinstance(update, dict) or not update.get("char_id"):
+                raise ValueError(f"protagonist_power_tier_update[{index}] 缺 char_id")
+            if _require_cluster(update.get("cluster_id"),
+                                f"protagonist_power_tier_update[{index}].cluster_id") != cid:
+                raise ValueError(f"protagonist_power_tier_update[{index}] 必须属于当前 {cid}")
+            tier = update.get("tier")
+            if isinstance(tier, bool) or not isinstance(tier, (int, float)):
+                raise ValueError(f"protagonist_power_tier_update[{index}].tier 必须是数值")
+    if "cluster_actant_state" in archive and not isinstance(archive["cluster_actant_state"], dict):
+        raise ValueError("cluster_actant_state 必须是 object")
+    for index, warning in enumerate(archive.get("warnings", [])):
+        if not isinstance(warning, dict):
+            raise ValueError(f"warnings[{index}] 必须是 object")
+        if "ch" in warning:
+            raise ValueError(f"warnings[{index}].ch 已禁用；使用 evidence_cluster")
+        if "evidence_cluster" in warning:
+            _require_cluster(warning["evidence_cluster"],
+                             f"warnings[{index}].evidence_cluster")
 
 
 # ───────────────────────── 角色 → 人物卡 + 角色池 ─────────────────────────
@@ -79,30 +171,26 @@ def apply_characters(db: Path, chars: list, summary: dict, dry: bool):
         pool.setdefault(grp, [])
 
     by_id = {c.get("id"): c for c in pc["characters"] if isinstance(c, dict) and c.get("id")}
-    # 名字 → id 反查（防 archivist 偶尔漏复用 id 时按名兜底）
-    by_name = {c.get("name"): c.get("id") for c in pc["characters"] if isinstance(c, dict) and c.get("name")}
     pool_ids = {c.get("id") for grp in ("core", "emerged", "extras")
                 for c in pool[grp] if isinstance(c, dict)}
 
     added_cards, updated_cards, pooled = 0, 0, 0
-    for ch in chars or []:
-        if not isinstance(ch, dict):
-            continue
-        cid = ch.get("id") or by_name.get(ch.get("name"))
+    for ch in chars:
+        cid = ch["id"]
         name = ch.get("name")
-        if not cid or not name:
-            continue
         card = by_id.get(cid)
         if card is None:
-            # 新角色建卡（人物卡 schema: {id,name,role}）。🔴 2026-06-28：新角色也要立即填 state_changes
-            # （真实管线每 cluster 只 apply 一次·不能等 re-apply 才补·否则首次出场的状态变化丢失）。
-            _sl = [{"ch": s.get("ch"), "change": s.get("change")}
-                   for s in (ch.get("state_changes") or []) if isinstance(s, dict)]
+            first_cluster = ch.get("first_cluster")
+            if first_cluster is None:
+                raise ValueError(f"新角色 {cid} 缺 first_cluster")
+            if ch.get("new") is False:
+                raise ValueError(f"角色 {cid} 标记 new=false 但人物卡不存在")
+            state_log = [{"changed_at_cluster": s["changed_at_cluster"],
+                          "change": s["change"]}
+                         for s in ch.get("state_changes", [])]
             card = {"id": cid, "name": name, "role": ch.get("role", ""),
                     "status": ch.get("status", "alive"),
-                    "first_appearance_ch": ch.get("first_ch"), "state_log": _sl}
-            # 🔴 2026-07-07 A7 辨识锚点分层+负面事实清单：仅新建卡透传（archivist 正文有据才提炼·
-            # 老卡绝不改——冲突只走 archive.warnings 报告·schema 见 subsystem_skeletons._recognition_schema）。
+                    "first_appearance_cluster": first_cluster, "state_log": state_log}
             _ra = [a for a in (ch.get("recognition_anchors") or [])
                    if isinstance(a, dict) and str(a.get("anchor") or "").strip()]
             if _ra:
@@ -113,29 +201,38 @@ def apply_characters(db: Path, chars: list, summary: dict, dry: bool):
                 card["negative_facts"] = _nf
             pc["characters"].append(card)
             by_id[cid] = card
-            by_name[name] = cid
             added_cards += 1
         else:
-            # 老角色：更新 status/role（若给）+ 追加 state_changes（按 (ch,change) 去重）
+            if card.get("name") != name:
+                raise ValueError(
+                    f"角色 id/name 不一致: {cid} 已登记 {card.get('name')!r}，归档给出 {name!r}")
             if ch.get("status"):
                 card["status"] = ch["status"]
             if ch.get("role") and not card.get("role"):
                 card["role"] = ch["role"]
             card.setdefault("state_log", [])
-            seen = {(s.get("ch"), s.get("change")) for s in card["state_log"] if isinstance(s, dict)}
+            if not isinstance(card["state_log"], list):
+                raise ValueError(f"人物卡 {cid}.state_log 必须是数组")
+            if any(isinstance(s, dict) and "ch" in s for s in card["state_log"]):
+                raise ValueError(f"人物卡 {cid}.state_log 禁止字段 ch")
+            seen = {(s.get("changed_at_cluster"), s.get("change"))
+                    for s in card["state_log"] if isinstance(s, dict)}
             had = len(card["state_log"])
-            for sc in ch.get("state_changes", []) or []:
-                if isinstance(sc, dict) and (sc.get("ch"), sc.get("change")) not in seen:
-                    card["state_log"].append({"ch": sc.get("ch"), "change": sc.get("change")})
-                    seen.add((sc.get("ch"), sc.get("change")))
+            for sc in ch.get("state_changes", []):
+                key = (sc["changed_at_cluster"], sc["change"])
+                if key not in seen:
+                    card["state_log"].append({"changed_at_cluster": key[0], "change": key[1]})
+                    seen.add(key)
             if len(card["state_log"]) > had:
                 updated_cards += 1
         # 角色池分类（id 幂等）
         if cid not in pool_ids:
             tier = ch.get("tier", "extra")
-            grp = tier if tier in ("core", "emerged", "extras") else (
-                "extras" if tier == "extra" else "emerged")
-            pool[grp].append({"id": cid, "name": name, "ch": ch.get("first_ch"),
+            if tier not in ("core", "emerged", "extra"):
+                raise ValueError(f"角色 {cid}.tier 无效: {tier!r}")
+            grp = "extras" if tier == "extra" else tier
+            pool[grp].append({"id": cid, "name": name,
+                              "first_cluster": ch.get("first_cluster"),
                               "role": ch.get("role", "")})
             pool_ids.add(cid)
             pooled += 1
@@ -153,20 +250,22 @@ def apply_items(db: Path, items: list, summary: dict, dry: bool):
     d = load_json(p, {"schema_version": 1, "items": [], "item_locations": [], "crafting_recipes": []})
     d.setdefault("items", [])
     by_id = {it.get("id") for it in d["items"] if isinstance(it, dict)}
-    by_name = {it.get("name") for it in d["items"] if isinstance(it, dict)}
+    by_name = {it.get("name"): it.get("id") for it in d["items"] if isinstance(it, dict)}
     added = 0
-    for it in items or []:
-        if not isinstance(it, dict):
+    for it in items:
+        iid, name = it["id"], it["name"]
+        if iid in by_id:
             continue
-        iid, name = it.get("id"), it.get("name")
-        if not name or iid in by_id or name in by_name:
-            continue
-        d["items"].append({"id": iid or f"I_{len(d['items'])+1}", "name": name,
+        if name in by_name:
+            raise ValueError(f"道具名 {name!r} 已绑定其他 id: {by_name[name]}")
+        first_cluster = it.get("first_cluster")
+        if first_cluster is None:
+            raise ValueError(f"新道具 {iid} 缺 first_cluster")
+        d["items"].append({"id": iid, "name": name,
                            "desc": it.get("desc", ""), "holder": it.get("holder", ""),
-                           "first_appearance_ch": it.get("first_ch")})
-        if iid:
-            by_id.add(iid)
-        by_name.add(name)
+                           "first_appearance_cluster": first_cluster})
+        by_id.add(iid)
+        by_name[name] = iid
         added += 1
     summary["items"] = {"added": added}
     if not dry and added:
@@ -181,20 +280,19 @@ def apply_relationships(db: Path, rels: list, summary: dict, dry: bool):
     by_id = {r.get("id") for r in d["relationships"] if isinstance(r, dict)}
     by_pair = {(r.get("from"), r.get("to")) for r in d["relationships"] if isinstance(r, dict)}
     added = 0
-    for r in rels or []:
+    for r in rels:
         if not isinstance(r, dict):
-            continue
+            raise ValueError("relationships 条目必须是 object")
         rid = r.get("id")
         pair = (r.get("from"), r.get("to"))
-        if not r.get("from") or not r.get("to"):
-            continue
+        if not rid or not r.get("from") or not r.get("to"):
+            raise ValueError("relationship 必须包含 id/from/to")
         if rid in by_id or pair in by_pair:
             continue
-        d["relationships"].append({"id": rid or f"REL_{len(d['relationships'])+1}",
+        d["relationships"].append({"id": rid,
                                    "from": r.get("from"), "to": r.get("to"),
                                    "type": r.get("type", ""), "note": r.get("note", "")})
-        if rid:
-            by_id.add(rid)
+        by_id.add(rid)
         by_pair.add(pair)
         added += 1
     summary["relationships"] = {"added": added}
@@ -212,39 +310,39 @@ def apply_locked_facts(db: Path, cid: str, facts: list, summary: dict, dry: bool
         if _norm_cid(c_id) == cid or str(c_id) == cid:
             cluster = c
             break
+    if cluster is None:
+        raise ValueError(f"事件簇.json 不含 {cid}")
     added = 0
-    if cluster is not None:
-        existing = cluster.setdefault("locked_facts", [])
-        seen = {(e.get("fact") if isinstance(e, dict) else e) for e in existing}
-        for lf in facts or []:
-            fact = lf.get("fact") if isinstance(lf, dict) else (lf if isinstance(lf, str) else None)
-            if not fact or fact in seen:
-                continue
-            existing.append({"fact": fact, "subject": lf.get("subject", "") if isinstance(lf, dict) else "",
-                             "_cluster": cid})
-            seen.add(fact)
-            added += 1
+    existing = cluster.setdefault("locked_facts", [])
+    if not isinstance(existing, list):
+        raise ValueError(f"{cid}.locked_facts 必须是数组")
+    seen = {e.get("fact") for e in existing if isinstance(e, dict)}
+    for lf in facts:
+        if not isinstance(lf, dict) or not isinstance(lf.get("fact"), str) or not lf["fact"].strip():
+            raise ValueError("locked_facts 条目必须包含非空 fact")
+        fact = lf["fact"]
+        if fact in seen:
+            continue
+        existing.append({"fact": fact, "subject": lf.get("subject", ""),
+                         "source_cluster": cid})
+        seen.add(fact)
+        added += 1
     summary["locked_facts"] = {"added": added}
-    if not dry and added and cluster is not None:
+    if not dry and added:
         save_json(p, ec)
 
 
 # ─────────────── throughline → 事件簇.clusters[].throughline_progress ───────────────
 def apply_throughline(db: Path, cid: str, tp: dict, summary: dict, dry: bool):
-    """🔴 2026-06-28 不降级收尾：本块推进的叙事线（Dramatica 4 线 OS/MC/IC/RS 的 bool）→
-    事件簇.clusters[].throughline_progress（cluster 级·持久）。
-
-    架构纠正：throughline（本块推进了哪几条叙事线）是叙事分析=梳理，由 archivist 读正文判定，
-    **不再由 writer 自报 changes.factual.throughline_progress**。cluster_summary_builder 从此处
-    读 cluster 级 throughline 注入每章账本记录 → cross_cluster_throughline_balance_aggregate 消费。
-    advisory 遥测：缺失 = no-signal（线 DORMANT），不是 hard_gate（不强制 archivist 必产）。"""
-    if not isinstance(tp, dict) or not tp:
+    """把本 cluster 的 OS/MC/IC/RS 推进结果写入事件簇。"""
+    if tp is None:
         summary["throughline"] = {"written": False}
         return
-    norm = {k: bool(v) for k, v in tp.items() if k in ("OS", "MC", "IC", "RS")}
-    if not norm:
-        summary["throughline"] = {"written": False}
-        return
+    if not isinstance(tp, dict) or set(tp) != {"OS", "MC", "IC", "RS"}:
+        raise ValueError("throughline_progress 必须恰含 OS/MC/IC/RS")
+    if any(not isinstance(value, bool) for value in tp.values()):
+        raise ValueError("throughline_progress 的值必须是 bool")
+    norm = dict(tp)
     p = db / "事件簇.json"
     ec = load_json(p, {})
     cluster = None
@@ -253,40 +351,21 @@ def apply_throughline(db: Path, cid: str, tp: dict, summary: dict, dry: bool):
         if _norm_cid(c_id) == cid or str(c_id) == cid:
             cluster = c
             break
-    written = False
-    if cluster is not None:
-        cluster["throughline_progress"] = norm
-        written = True
-    summary["throughline"] = {"written": written}
-    if not dry and written:
+    if cluster is None:
+        raise ValueError(f"事件簇.json 不含 {cid}")
+    cluster["throughline_progress"] = norm
+    summary["throughline"] = {"written": True}
+    if not dry:
         save_json(p, ec)
 
 
-# ──── 🔴 2026-06-29 角色信息差(per-character belief) → character_belief_ledger.json ────
+# ─────────────────────── 角色信念 ───────────────────────
 def apply_belief_updates(db: Path, cid: str, archive: dict, summary: dict, dry: bool):
-    """🔴 2026-06-29 角色信息差(per-character belief)·witness 检测确定性回库（零模型·幂等）。
-
-    archivist 读整 cluster 正文 + scene_storyboard.participants 判定『本块每个 reveal 的 fact
-    被哪些在场角色 witness 到』，产 archive.belief_updates=[{char_id, fact_id, content,
-    learned_at_scene, source, can_speak, reader_knows, is_red_herring?, subject?}]。本步把它确定性
-    append 进 character_belief_ledger.json（SymbolicToM arXiv:2306.00924：信念只沿在场传播）：
-
-      · facts{} 登记 fact 元信息（content / first_revealed_cluster / subject）。
-      · characters[char_id].known_facts 按 fact_id 去重 append（已有则更新 can_speak / source /
-        reader_knows 等可变字段，绝不重复 append）。
-      · unaware_of 维护（保守）：① 学到 fact → 从该 char.unaware_of 移除（已知不再 unaware·确定性）；
-        ② archivist 显式标的 unaware（archive.belief_unaware·在场集外且 subject 相关的核心角色）→
-        加进 unaware_of（去重）。缺席角色不 learn = 自动 false belief（根本不写进其 known_facts），
-        不确定就不标 unaware。
-
-    默认安全·向后兼容：archive 无 belief_updates（旧数据 / scene 无 participants 退化全员或跳过）
-    → no-op 不报错。确定性·幂等（同 fact_id 不重复 append·re-apply 不变·全已存在时不写盘）。"""
+    """按 fact_id 幂等维护角色已知事实和显式未知事实。"""
     updates = archive.get("belief_updates") if isinstance(archive, dict) else None
     unaware_marks = archive.get("belief_unaware") if isinstance(archive, dict) else None
-    if not isinstance(updates, list):
-        updates = []
-    if not isinstance(unaware_marks, list):
-        unaware_marks = []
+    updates = [] if updates is None else updates
+    unaware_marks = [] if unaware_marks is None else unaware_marks
     if not updates and not unaware_marks:
         summary["belief"] = {"facts_registered": 0, "known_facts_added": 0,
                              "known_facts_updated": 0, "unaware_marked": 0}
@@ -295,34 +374,32 @@ def apply_belief_updates(db: Path, cid: str, archive: dict, summary: dict, dry: 
     p = db / "character_belief_ledger.json"
     ledger = load_json(p, {"schema_version": 1, "characters": {}, "facts": {}})
     if not isinstance(ledger, dict):
-        ledger = {"schema_version": 1, "characters": {}, "facts": {}}
+        raise ValueError("character_belief_ledger.json 顶层必须是 object")
     ledger.setdefault("schema_version", 1)
     chars = ledger.setdefault("characters", {})
     facts = ledger.setdefault("facts", {})
-    if not isinstance(chars, dict):
-        chars = ledger["characters"] = {}
-    if not isinstance(facts, dict):
-        facts = ledger["facts"] = {}
+    if not isinstance(chars, dict) or not isinstance(facts, dict):
+        raise ValueError("character_belief_ledger.json characters/facts 必须是 object")
 
     facts_registered = known_added = known_updated = unaware_marked = 0
 
     def _entry(char_id):
         e = chars.setdefault(char_id, {"known_facts": [], "unaware_of": []})
         if not isinstance(e, dict):
-            e = chars[char_id] = {"known_facts": [], "unaware_of": []}
+            raise ValueError(f"belief 角色 {char_id} 条目必须是 object")
         if not isinstance(e.get("known_facts"), list):
-            e["known_facts"] = []
+            raise ValueError(f"belief 角色 {char_id}.known_facts 必须是数组")
         if not isinstance(e.get("unaware_of"), list):
-            e["unaware_of"] = []
+            raise ValueError(f"belief 角色 {char_id}.unaware_of 必须是数组")
         return e
 
     for u in updates:
         if not isinstance(u, dict):
-            continue
+            raise ValueError("belief_updates 条目必须是 object")
         char_id = u.get("char_id")
         fact_id = u.get("fact_id")
         if not char_id or not fact_id:
-            continue
+            raise ValueError("belief_updates 条目必须包含 char_id/fact_id")
         content = u.get("content", "")
         # ── facts{} 元信息登记（first_revealed_cluster 只在首次登记时写·幂等不覆盖）──
         fmeta = facts.get(fact_id)
@@ -369,11 +446,11 @@ def apply_belief_updates(db: Path, cid: str, archive: dict, summary: dict, dry: 
     # ── 显式 unaware 标记（保守·archivist 确信在场集外且 subject 相关的核心角色才给）──
     for m in unaware_marks:
         if not isinstance(m, dict):
-            continue
+            raise ValueError("belief_unaware 条目必须是 object")
         char_id = m.get("char_id")
         fact_id = m.get("fact_id")
         if not char_id or not fact_id:
-            continue
+            raise ValueError("belief_unaware 条目必须包含 char_id/fact_id")
         entry = _entry(char_id)
         # 已 witness 到该 fact 的角色绝不标 unaware（learn 优先·矛盾保护）
         if any(isinstance(kf, dict) and kf.get("fact_id") == fact_id
@@ -391,26 +468,9 @@ def apply_belief_updates(db: Path, cid: str, archive: dict, summary: dict, dry: 
         save_json(p, ledger)
 
 
-# ──── 🔴 2026-06-29 反派轮替ledger接通producer → 反派轮替.json ────
+# ─────────────────────── 反派轮替 ───────────────────────
 def apply_antagonist_rotation(db: Path, cid: str, archive: dict, summary: dict, dry: bool):
-    """🔴 2026-06-29 反派轮替ledger接通producer（确定性·幂等·零模型）。
-
-    archivist 读整 cluster 正文 + 人物卡，判定本块**实际出场的反派**的轮替条目，产
-    archive.antagonist_rotation=[{cluster_id, antagonist_id, tier, faction, motive_type,
-    power_system_tag, defeat_cluster}]。本步把它确定性写进 反派轮替.json append-only ledger
-    （schema/consumer/scanner 全就绪·此前**零 producer**→scanner 永远 `note:无...跳过` 死码）。
-
-    antagonist_rotation_scanner.py L52 读 `_数据库/反派轮替.json` 的 entries，四 advisory
-    检测(defeated 后>3 cluster 空窗 / 新反派 tier 不升 / motive 同类 / power 同类)。本 producer
-    落地后 scanner 才第一次有真数据可跑（shadow 观察·绝不 hard_gate·守 19 码三方一致）。
-
-    幂等·去重：按 (cluster_id, antagonist_id) 去重 —— 同键已存在则就地更新可变字段
-    (tier/faction/motive_type/power_system_tag/defeat_cluster)·不重复 append；新键 append。
-    defeat 处理：archivist 击败既有反派时复用其引入 cluster_id（对齐既有引入条目键）→ 此处
-    就地补 defeat_cluster·不另起重复条目。
-
-    C03 fluid：反派是涌现产物·**非每 cluster 必有反派** —— archive 无 antagonist_rotation
-    (多数 cluster 无反派轮替) → no-op 不报错、不建 ledger 文件（同 apply_belief_updates 向后兼容）。"""
+    """按引入 cluster 和角色 id 幂等维护反派轮替台账。"""
     rotations = archive.get("antagonist_rotation") if isinstance(archive, dict) else None
     if not isinstance(rotations, list) or not rotations:
         summary["antagonist_rotation"] = {"appended": 0, "updated": 0}
@@ -419,11 +479,11 @@ def apply_antagonist_rotation(db: Path, cid: str, archive: dict, summary: dict, 
     p = db / "反派轮替.json"
     ledger = load_json(p, {"schema_version": 1, "entries": []})
     if not isinstance(ledger, dict):
-        ledger = {"schema_version": 1, "entries": []}
+        raise ValueError("反派轮替.json 顶层必须是 object")
     ledger.setdefault("schema_version", 1)
     entries = ledger.setdefault("entries", [])
     if not isinstance(entries, list):
-        entries = ledger["entries"] = []
+        raise ValueError("反派轮替.json.entries 必须是数组")
 
     # (cluster_id, antagonist_id) → entry（幂等去重键）
     index = {}
@@ -435,11 +495,13 @@ def apply_antagonist_rotation(db: Path, cid: str, archive: dict, summary: dict, 
     appended = updated = 0
     for r in rotations:
         if not isinstance(r, dict):
-            continue
+            raise ValueError("antagonist_rotation 条目必须是 object")
         aid = r.get("antagonist_id")
         if not aid:
-            continue
-        ecid = r.get("cluster_id") or cid  # archivist 缺 cluster_id 时默认当前块
+            raise ValueError("antagonist_rotation 缺 antagonist_id")
+        ecid = _require_cluster(r.get("cluster_id"), "antagonist_rotation.cluster_id")
+        if "defeat_cluster" in r:
+            _require_cluster(r["defeat_cluster"], "antagonist_rotation.defeat_cluster")
         key = (ecid, aid)
         existing = index.get(key)
         if existing is None:
@@ -465,34 +527,9 @@ def apply_antagonist_rotation(db: Path, cid: str, archive: dict, summary: dict, 
         save_json(p, ledger)
 
 
-# ──── 🔴 2026-06-29 power_progression接通producer → 角色弧线.json ────
+# ─────────────────────── 主角力量梯度 ───────────────────────
 def apply_protagonist_power_tier(db: Path, cid: str, archive: dict, summary: dict, dry: bool):
-    """🔴 2026-06-29 power_progression接通producer（确定性·幂等·零模型）。
-
-    archivist 读整 cluster 正文客观抽取**本块主角力量 tier 变化**，产 archive
-    .protagonist_power_tier_update={char_id, cluster_id, tier:int, notes}（单条 dict 或 list）。
-    本步把它确定性 append 进 `角色弧线.json` 的 characters[pid].protagonist_power_tier
-    序列（schema/consumer/scanner 全就绪·此前 **零 producer** → power_progression_scanner
-    永远命中 `note:tier 序列过短/无 角色弧线.json·跳过` 死码·同 反派轮替.json 款契约债）。
-
-    power_progression_scanner.py L88/L108 读 `_数据库/角色弧线.json`：
-      `characters`(**dict** keyed by pid) → `_protagonist_id` 取 role∈{protagonist,主角,主}
-      或第一个 → `protagonist_power_tier`(list of {cluster_id, tier, notes}) 序列化判
-      单调性(POWER_TIER_REGRESSION)/加速峰(ESCALATION_ACCELERATION_SPIKE)/停滞(PROGRESSION_STALL)。
-    本 producer 落地后 scanner 才第一次有真 tier 序列可跑（shadow 观察·全 advisory·绝不
-    hard_gate·守 19 码三方一致）。tier 是 archivist 内部叙事梯度（炼气1→筑基2…按本书梯度·
-    非绝对战力·**绝不暴露给 writer**·同 v27 不暴露目标章数），仅 scanner 内部排序用。
-
-    pid 解析：优先 update.char_id（archivist 给的主角人物卡 id）；缺失则复用 角色弧线.json
-    既有 protagonist 条目 pid；再缺 → 跳过该条（不脑补·北极星②宁缺毋滥）。首次写入某 pid
-    时标 role="protagonist" 让 scanner._protagonist_id 能识别。
-
-    幂等·去重：同 pid 的 series 按 cluster_id 去重 —— 同 cluster 已存在则就地更新
-    tier/notes·不重复 append；新 cluster append（保持写入即时间序·scanner 不排序）。
-
-    C03 fluid / 默认安全：非升级流题材(scanner 自有 _GENRE_SKIP romance/mystery…)/本块主角
-    力量无变化 → archivist 不产 protagonist_power_tier_update → no-op 不报错、不建 角色弧线.json
-    文件（同 apply_antagonist_rotation 向后兼容）。"""
+    """按主角 id 和 cluster_id 幂等维护力量梯度。"""
     updates = archive.get("protagonist_power_tier_update") if isinstance(archive, dict) else None
     if isinstance(updates, dict):  # 单条 dict 归一成 list
         updates = [updates]
@@ -503,20 +540,11 @@ def apply_protagonist_power_tier(db: Path, cid: str, archive: dict, summary: dic
     p = db / "角色弧线.json"
     arc = load_json(p, {"schema_version": 1, "characters": {}})
     if not isinstance(arc, dict):
-        arc = {"schema_version": 1, "characters": {}}
+        raise ValueError("角色弧线.json 顶层必须是 object")
     arc.setdefault("schema_version", 1)
     chars = arc.setdefault("characters", {})
     if not isinstance(chars, dict):
-        chars = arc["characters"] = {}
-
-    # 缺 char_id 时复用既有 protagonist pid（role∈markers·与 scanner._protagonist_id 对齐）
-    _ROLE_MARKERS = {"protagonist", "主角", "主"}
-
-    def _existing_pid():
-        for pid, info in chars.items():
-            if isinstance(info, dict) and info.get("role") in _ROLE_MARKERS:
-                return pid
-        return None
+        raise ValueError("角色弧线.json.characters 必须是 object")
 
     def _norm_tier(t):
         if isinstance(t, bool) or not isinstance(t, (int, float)):
@@ -526,15 +554,18 @@ def apply_protagonist_power_tier(db: Path, cid: str, archive: dict, summary: dic
     appended = updated = 0
     for u in updates:
         if not isinstance(u, dict):
-            continue
+            raise ValueError("protagonist_power_tier_update 条目必须是 object")
         tier = _norm_tier(u.get("tier"))
         if tier is None:
-            continue
-        pid = u.get("char_id") or u.get("protagonist_id") or _existing_pid()
+            raise ValueError("protagonist_power_tier_update.tier 必须是数值")
+        pid = u.get("char_id")
         if not pid:
-            continue
-        ucid = u.get("cluster_id") or u.get("cluster") or cid
-        notes = u.get("notes") or u.get("note") or ""
+            raise ValueError("protagonist_power_tier_update 缺 char_id")
+        ucid = _require_cluster(u.get("cluster_id"),
+                                "protagonist_power_tier_update.cluster_id")
+        if ucid != cid:
+            raise ValueError("力量变化必须属于当前 cluster")
+        notes = u.get("notes", "")
         entry = chars.setdefault(pid, {})
         if not isinstance(entry, dict):
             entry = chars[pid] = {}
@@ -543,7 +574,7 @@ def apply_protagonist_power_tier(db: Path, cid: str, archive: dict, summary: dic
         if not isinstance(series, list):
             series = entry["protagonist_power_tier"] = []
         existing = next((s for s in series if isinstance(s, dict)
-                         and (s.get("cluster_id") or s.get("cluster")) == ucid), None)
+                         and s.get("cluster_id") == ucid), None)
         if existing is None:
             series.append({"cluster_id": ucid, "tier": tier, "notes": notes})
             appended += 1
@@ -563,35 +594,14 @@ def apply_protagonist_power_tier(db: Path, cid: str, archive: dict, summary: dic
         save_json(p, arc)
 
 
-# ──── 🔴 2026-06-29 actant链接通producer → cluster_actant_ledger.json ────
+# ─────────────────────── Actant 台账 ───────────────────────
 def apply_actant_state(db: Path, cid: str, archive: dict, summary: dict, dry: bool):
-    """🔴 2026-06-29 actant链接通producer（Greimas 六 actant·确定性·幂等·零模型）。
-
-    archivist 读整 cluster 正文 + 人物卡，按 Greimas actantial model 客观判定本块六位 actant 派分
-    （subject/object/sender/receiver/helper/opponent → 角色），产 archive.cluster_actant_state=
-    {subject, object, sender, receiver, helper:[ids], opponent:[ids]}。本步把它确定性写进
-    `cluster_actant_ledger.json`（{clusters:[{cluster_id, assignments:{pos:name}}]}）当**历史台账**——
-    actant_drift_scanner（同角色 helper↔opponent 无 pivot 漂移 / 关键位空缺 / 过载）+ cast_economy_scanner
-    （role_split 隐式拆分）读它做跨 cluster 比对（此前**零 producer** → 两 scanner 永远
-    `note:无...跳过` 死码·像 反派轮替.json 款契约债）。
-
-    🔴 命名空间纪律：scanner 把 ledger assignments 值当**可哈希键**用（`out[name]=pos` /
-    `setdefault(name,[])`）→ 值必须是**字符串**（list 值会 TypeError 崩 scanner·北极星只读不改逻辑
-    →不可触）；且 cast_economy 的 known 集 = 人物卡 name、active_cast/manifest 也走 name → ledger
-    统一存**角色 display name**（archivist 给的 char_id 在此经 人物卡 id→name 解析·与 manifest 注入同源）。
-    helper/opponent 多角色取**首位代表**（scanner ledger schema 为 {pos:单值}·一位一名；多 helper/
-    opponent 的并存由 manifest.cluster_actant_state 的 list 表达 composite·不进 ledger——这是 scanner
-    既有 schema 约束·非本 producer 引入）。
-
-    幂等：按 cluster_id 去重——同 cluster 已存在则就地替换 assignments·不重复 append。
-    C03 fluid / 默认安全·向后兼容：archive 无 cluster_actant_state（旧数据 / archivist 没标 actant）→
-    no-op 不报错、不建 ledger 文件（同 apply_antagonist_rotation·无 actant 旧书零行为变化）。"""
+    """把本 cluster 的 actant 角色 id 解析为显示名并幂等落账。"""
     state = archive.get("cluster_actant_state") if isinstance(archive, dict) else None
     if not isinstance(state, dict) or not state:
         summary["actant_state"] = {"written": False}
         return
 
-    # 人物卡 id→name 解析（apply_characters 已先跑·新角色已落 人物卡；非 id 的值原样保留）
     id2name = {}
     pc = load_json(db / "人物卡.json", {})
     for c in (pc.get("characters") or []) if isinstance(pc, dict) else []:
@@ -602,7 +612,7 @@ def apply_actant_state(db: Path, cid: str, archive: dict, summary: dict, dry: bo
         if not isinstance(tok, str) or not tok.strip():
             return None
         t = tok.strip()
-        return id2name.get(t, t)  # id→name·非 id 则原样（已是 name 或尚未建卡）
+        return id2name.get(t, t)
 
     assignments = {}
     for pos in ("subject", "object", "sender", "receiver"):
@@ -617,7 +627,6 @@ def apply_actant_state(db: Path, cid: str, archive: dict, summary: dict, dry: bo
             n = _name(v)
             names = [n] if n else []
         if names:
-            # 首位代表（scanner ledger 单值·多位由 manifest list 表 composite·见 docstring 命名空间纪律）
             assignments[pos] = names[0]
 
     if not assignments:
@@ -627,11 +636,10 @@ def apply_actant_state(db: Path, cid: str, archive: dict, summary: dict, dry: bo
     p = db / "cluster_actant_ledger.json"
     ledger = load_json(p, {"clusters": []})
     if not isinstance(ledger, dict):
-        ledger = {"clusters": []}
+        raise ValueError("cluster_actant_ledger.json 顶层必须是 object")
     clusters = ledger.setdefault("clusters", [])
     if not isinstance(clusters, list):
-        clusters = ledger["clusters"] = []
-    # 幂等：按 cluster_id 去重替换（同 actant_drift active 写回款·不重复 append）
+        raise ValueError("cluster_actant_ledger.json.clusters 必须是数组")
     clusters = [r for r in clusters
                 if not (isinstance(r, dict) and str(r.get("cluster_id") or "") == str(cid))]
     clusters.append({"cluster_id": cid, "assignments": assignments})
@@ -652,57 +660,45 @@ def main(argv=None):
 
     project = Path(args.project)
     db = project / "_数据库"
-    cid = _norm_cid(args.cluster)
-    key3 = str(args.cluster).replace("cluster_", "")
-    archive_path = Path(args.archive) if args.archive else (db / ".wal" / f"cluster_{key3}_archive.json")
+    try:
+        cid = _norm_cid(args.cluster)
+    except ValueError as exc:
+        print(f"[apply_archive] FATAL: {exc}", file=sys.stderr)
+        return 2
+    key = cid.removeprefix("cluster_")
+    archive_path = Path(args.archive) if args.archive else (
+        db / ".wal" / f"cluster_{key}_archive.json")
 
-    # 🔴 2026-06-28 不降级收尾：archive 缺失 = archivist 没产出 = 硬错误（exit 2 让 plan 硬停）。
     if not archive_path.exists():
         sys.stderr.write(f"[apply_archive] FATAL: archive 不存在: {archive_path}"
                          f"（archivist 未产 archive·状态回库链断）\n")
         sys.stderr.flush()
         return 2
-    archive = load_json(archive_path, {})
-    # 🔴 2026-06-28 不降级收尾：每个写完的 cluster 必有出场角色——archive 缺 characters =
-    # archivist 失败 = 错误（非「空 = 静默 no-op」）。exit 2 让 plan（step6 已去 advisory 前缀）硬停。
-    # 道具/关系/locked_facts/throughline 可空（非每块都有新物件/关系/硬事实）·只刚性要求 characters。
-    chars = archive.get("characters") if isinstance(archive, dict) else None
-    if not isinstance(chars, list) or not chars:
-        sys.stderr.write(
-            f"[apply_archive] FATAL: {cid} archive 缺出场角色（characters 空/缺）——"
-            f"archivist 失败或正文未梳理出角色，状态回库链断（每个写完的 cluster 必有角色）。"
-            f"archive={archive_path}\n")
-        sys.stderr.flush()
-        return 2
-
-    # 🔴 2026-07-07 S3 类级契约：抽取载荷禁携终态（角色 alive/dead、secrets hidden/revealed
-    # 不在剥离集·不受影响·详见 save_state.strip_terminal_state_payload docstring）。
-    ts_stripped, ts_details = strip_terminal_state_payload(archive)
-    if ts_stripped:
-        sys.stderr.write(
-            f"[apply_archive] WARNING: {cid} archive 携带 {ts_stripped} 处伏笔/戏剧问题终态声明"
-            f"（consumed/resolved/answered/terminal）——入库层已剥离"
-            f"（terminal_state_stripped={ts_stripped}·抽取 agent 只许报 progress 级观察·"
-            f"终态唯一通路=save_state payoff/DQ 校验落账）\n")
-        sys.stderr.flush()
-        if not args.dry_run:
-            record_terminal_contract(db, cid, "archive_strip",
-                                     {"terminal_state_stripped": ts_stripped, "details": ts_details})
-
-    summary = {"cluster_id": cid, "terminal_state_stripped": ts_stripped}
     try:
+        archive = load_json(archive_path, None)
+        _validate_archive(archive, cid)
+        ts_stripped, ts_details = strip_terminal_state_payload(archive)
+        if ts_stripped:
+            print(
+                f"[apply_archive] WARNING: {cid} 剥离未经验证的终态声明 "
+                f"terminal_state_stripped={ts_stripped}",
+                file=sys.stderr,
+            )
+            if not args.dry_run:
+                record_terminal_contract(
+                    db, cid, "archive_strip",
+                    {"terminal_state_stripped": ts_stripped, "details": ts_details},
+                )
+
+        summary = {"cluster_id": cid, "terminal_state_stripped": ts_stripped}
         apply_characters(db, archive.get("characters", []), summary, args.dry_run)
         apply_items(db, archive.get("items", []), summary, args.dry_run)
         apply_relationships(db, archive.get("relationships", []), summary, args.dry_run)
         apply_locked_facts(db, cid, archive.get("locked_facts", []), summary, args.dry_run)
-        apply_throughline(db, cid, archive.get("throughline_progress", {}), summary, args.dry_run)
-        # 🔴 2026-06-29 角色信息差(per-character belief)·witness 回库（确定性·幂等·向后兼容）
+        apply_throughline(db, cid, archive.get("throughline_progress"), summary, args.dry_run)
         apply_belief_updates(db, cid, archive, summary, args.dry_run)
-        # 🔴 2026-06-29 反派轮替ledger接通producer（确定性·幂等·C03 fluid 无反派合法跳过）
         apply_antagonist_rotation(db, cid, archive, summary, args.dry_run)
-        # 🔴 2026-06-29 power_progression接通producer（确定性·幂等·C03 fluid 无力量变化合法跳过）
         apply_protagonist_power_tier(db, cid, archive, summary, args.dry_run)
-        # 🔴 2026-06-29 actant链接通producer（确定性·幂等·C03 fluid 无 actant 合法跳过·向后兼容）
         apply_actant_state(db, cid, archive, summary, args.dry_run)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[apply_archive] FATAL: {type(e).__name__}: {e}\n")

@@ -42,7 +42,7 @@ ratio < 0.4 → advisory MACGUFFIN_ORNAMENTAL (装饰性·与 goal 脱钩)
   EMBED_BACKEND 未设（默认 hash·无真语义）→ 完全走关键词共现·per_macguffin.match_method="lexicon"。
 
 【输出】
-  _数据库/.cross_chapter_scan/macguffin_advisory_snapshot.json (供 build_manifest 注入)
+  _数据库/.cross_cluster_scan/macguffin_advisory_snapshot.json (供 build_manifest 注入)
 
 【北极星② / ⑤ 顾问非法官】作者档第一权威 (is_macguffin 必须显式声明)·全 advisory·
 code MACGUFFIN_ORNAMENTAL 绝不进 audit_hub.HARD_GATE_CODES。
@@ -156,29 +156,14 @@ def _read_macguffins(project_root: Path) -> list:
 
 
 def _read_cluster_text(project_root: Path, cluster: dict) -> str:
+    """拼接 cluster 摘要账本记录里的叙事文本(summary + 各场景摘要)供关键词扫描。"""
     parts = []
-    scope = cluster.get("scope_summary") or ""
-    if isinstance(scope, str) and scope:
-        parts.append(scope)
-    chapters = cluster.get("chapters") or {}
-    if isinstance(chapters, dict):
-        for rec in chapters.values():
-            if not isinstance(rec, dict):
-                continue
-            for fld in ("summary", "scene_summary", "title"):
-                v = rec.get(fld)
-                if isinstance(v, str) and v:
-                    parts.append(v)
-    if not parts:
-        cluster_id = cluster.get("cluster_id") or ""
-        if cluster_id:
-            draft_dir = project_root / "章节" / f"{cluster_id}_draft"
-            if draft_dir.exists():
-                for f in sorted(draft_dir.glob("*.txt")):
-                    try:
-                        parts.append(f.read_text(encoding="utf-8"))
-                    except OSError:
-                        pass
+    summary = cluster.get("summary") or ""
+    if isinstance(summary, str) and summary:
+        parts.append(summary)
+    for scene in cluster.get("scene_summaries") or []:
+        if isinstance(scene, str) and scene:
+            parts.append(scene)
     return "\n".join(parts)
 
 
@@ -342,8 +327,8 @@ def main():
         out["verdict"] = "FAIL_MINOR"
         out["warning"] = findings[0]["suggestion"]
 
-    # 写 cross_chapter_scan snapshot
-    snap_dir = project_root / "_数据库" / ".cross_chapter_scan"
+    # 写 cross_cluster_scan snapshot
+    snap_dir = project_root / "_数据库" / ".cross_cluster_scan"
     snap_dir.mkdir(parents=True, exist_ok=True)
     snapshot = {
         "scan_type": "macguffin_entanglement",

@@ -10,6 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import gen_creative as gc  # noqa: E402
@@ -43,6 +45,11 @@ def test_outline_card_mode_removed_exit2():
     assert code == 2, f"outline_card 旧入口应被硬拒 exit 2，实得 {code}"
 
 
+def test_voice_sample_mode_removed_exit2():
+    code = _run_main(["gen_creative.py", "--mode", "voice_sample"])
+    assert code == 2
+
+
 # ════════════════════════════════════════════════════════════════
 # Bug 2（L459-460）：_emit_volume_arc_to_db major_events isinstance 守卫
 # ════════════════════════════════════════════════════════════════
@@ -65,11 +72,11 @@ def test_emit_volume_arc_filters_non_dict_major_events():
             "story_destiny": {"final_image": "末法最后一人"},
             "volumes": [{"vol": 1, "title": "卷一"}],
             "major_events": [
-                {"id": "ME-V1-01", "volume": 1, "summary": "开局"},
+                {"id": "ME-V1-01", "volume": 1, "summary": "开局", "is_volume_finale": False},
                 "我是一个不该出现的裸串 ME",   # 非 dict → 必须被过滤
                 None,                          # 非 dict → 必须被过滤
                 42,                            # 非 dict → 必须被过滤
-                {"id": "ME-V1-02", "volume": 1, "status": "active"},
+                {"id": "ME-V1-02", "volume": 1, "status": "active", "is_volume_finale": True},
             ],
             "cluster_001": {"scope_summary": "倒叙开场"},
         }
@@ -92,9 +99,9 @@ def test_emit_volume_arc_all_dict_major_events_preserved():
             "story_destiny": {},
             "volumes": [],
             "major_events": [
-                {"id": "ME-A"},
-                {"id": "ME-B", "status": "done"},
-                {"id": "ME-C"},
+                {"id": "ME-A", "volume": 1, "is_volume_finale": False},
+                {"id": "ME-B", "status": "done", "volume": 1, "is_volume_finale": False},
+                {"id": "ME-C", "volume": 1, "is_volume_finale": True},
             ],
             "cluster_001": {},
         }
@@ -106,13 +113,16 @@ def test_emit_volume_arc_all_dict_major_events_preserved():
 
 
 def test_emit_volume_arc_empty_and_missing_major_events():
-    """major_events 缺失 / 为空列表 → 投影空列表，不崩（边界）。"""
+    """major_events 缺失 / 为空列表：ME 池是当前卷大势方向的唯一来源，
+    _normalize_me_pool 对空池硬拒 ValueError，emit 不落盘（边界）。"""
     with tempfile.TemporaryDirectory() as td:
-        m1 = _emit(Path(td) / "a", {"major_events": []})
-        assert m1["major_events"] == []
+        with pytest.raises(ValueError, match="不能为空"):
+            _emit(Path(td) / "a", {"major_events": []})
+        assert not (Path(td) / "a" / "proj" / "_数据库" / "大势卡.json").exists()
     with tempfile.TemporaryDirectory() as td:
-        m2 = _emit(Path(td) / "b", {})   # 无 major_events 键 → .get 默认 []
-        assert m2["major_events"] == []
+        with pytest.raises(ValueError, match="不能为空"):
+            _emit(Path(td) / "b", {})   # 无 major_events 键 → .get 默认 []
+        assert not (Path(td) / "b" / "proj" / "_数据库" / "大势卡.json").exists()
 
 
 # ════════════════════════════════════════════════════════════════

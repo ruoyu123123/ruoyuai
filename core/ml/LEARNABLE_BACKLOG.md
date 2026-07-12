@@ -112,7 +112,7 @@
 
 **A2. Theory-of-Mind / 信念嵌套关系抽取**：`cross_character_kth_order_belief_scanner.py`（K=2 嵌套信念断言"A以为B知道X"三元组抽取，当前靠元动词+40字窗口）+ `check_acr_frustration_consistency.py`（BPNSFS 三需求受挫→反应一致性推理，代码自认占位）。
 
-**A3. NLI/语义蕴含（复用现成中文 NLI 数据集 OCNLI/CMNLI，不必从零训练，对齐抄作业优先规则）**：`cross_book_invariant_scanner.py`（文档自称"真 XLM-RoBERTa NLI defer"）/ `writer_truth_check.py` 的 `corroborate_factual`（伏笔/道具转移/秘密揭示声明核实，对应 promise_payoff 桶）/ `cross_cluster_data_consumption_aggregate.py` / `cross_cluster_will_learn_aggregate.py` / `red_herring_recall_scanner.py` / `cross_cluster_meta_quality_aggregate.py`（摘要幻觉检测）。
+**A3. NLI/语义蕴含（复用现成中文 NLI 数据集 OCNLI/CMNLI）**：`cross_book_invariant_scanner.py` / `cross_cluster_data_consumption_aggregate.py` / `cross_cluster_will_learn_aggregate.py` / `red_herring_recall_scanner.py` / `cross_cluster_meta_quality_aggregate.py`。
 
 **A4. Learning-to-rank / 序列健康度模型**：`cluster_emergence_engine.py`（下个 cluster 候选排序——用户每次"从 candidate 里选 1 个"都在产生零成本隐式偏好标签，当前是手调加权+关键词 bag 重叠，全仓最值得优先做的一项）/ `cross_cluster_reader_retention_proxy_aggregate.py`（双层拍脑袋线性加权从未用真实数据校准）/ `cross_cluster_engagement_metrics_aggregate.py` / `cross_cluster_sagging_middle_aggregate.py`。
 
@@ -152,7 +152,7 @@
 
 ### Tier S 第二批（30 文件 · 零训练纯接线 · 2026-07-02 已派 8 个实现 agent）
 
-**VAD 组（10）**：`arc_aggregator`（DIRECTION_INTENSITY 词典）/ `character_arc_aggregator`（estimate_intensity_from_label）/ `narrator_calibrate`（_infer_outcome_heuristic negative_kw·仅 writer 未自报 fallback 路径）/ `paragraph_engagement_heat_predictor`（_valence 词典）/ `snippet_seed`（_emotion_register）/ `glaser_four_levers`（_hit_lever emotionalize 分支）/ `horizontal_cloud_advisor`（_emotion_intensity 标点密度；另 _scene_lead_subject→coref）/ `dialogue_silence_density`（_emotion_context_match）/ `distill_finalize_verify`（_estimate_emotion 自注"粗暴版"）/ `adversarial_judge_pair`（attack A2 情感对位·默认 off scaffold）
+**VAD 组（9）**：`arc_aggregator`（DIRECTION_INTENSITY 词典）/ `narrator_calibrate`（_infer_outcome_heuristic negative_kw）/ `paragraph_engagement_heat_predictor`（_valence 词典）/ `snippet_seed`（_emotion_register）/ `glaser_four_levers`（_hit_lever emotionalize 分支）/ `horizontal_cloud_advisor`（_emotion_intensity 标点密度；另 _scene_lead_subject→coref）/ `dialogue_silence_density`（_emotion_context_match）/ `distill_finalize_verify`（_estimate_emotion）/ `adversarial_judge_pair`（attack A2 情感对位）
 
 **surprisal 组（5）**：`author_brand_perplexity_drift`（char Shannon 熵占位·docstring 自认"真版用小 LM perplexity"）/ `belief_update_alignment`（_surprise_signal_score 惊讶词典）/ `entropy_hotspot_consistency_probe`（_block_entropy 字符熵·docstring 自己在等升级）/ `event_boundary_lc_signal`（_PE_LEX 16 词）/ `manifest_compress`（自称"LLMLingua 风格"却盲切前缀→surprisal 信息量优选截断）
 
@@ -194,7 +194,7 @@
 
 **地基**（`embedding_store.py`·commit 4a63e25）：①内存+磁盘缓存（`(method, sha256(text[:8000]))` 键·仅真后端缓存·失败兜底绝不入缓存防污染·`RUOYU_EMBED_CACHE=0` 可关·`RUOYU_EMBED_CACHE_MAX_FILES` 容量护栏）；②`compute_embeddings_batch`（去重→缓存→misses 单次后端批调用：ruoyu_style 走既有 encode_batch 单子进程、API 走原生 list input、mstyle/local 进程内逐条即批量）；③`prefetch_embeddings`（scanner 语义分支开头预热一次，其后既有逐条 `compute_embedding` 全部命中缓存——消费方最小 diff 改造模式）。
 
-**消费方改造**（26 文件·7 组 Sonnet Workflow）：G1-G4 共 19 个 scanner/工具 prefetch 化；G5 rag_retriever/build_manifest 心跳循环 prefetch 前置（sfs_axis_decomposer 经 grep 实证单调用点仅 2 embed/次·合法跳过）；G6 `zero_shot_prototype.classify_batch`（prototype+待分类文本合一批）+ dialogue_sequence/covert/sdt 三消费方批量化（cluster_burst 单调用/scan·合法跳过）；G7 `writer_truth_check` 拆 `_corroborate_literal`（字节等价·9 既有测试原样过）+ uncertain 声明收集后单次 `nn_nli_bridge.predict_batch`（每次 corroborate_factual 固定 1 个子进程成本，不再逐声明 16s 线性放大）。
+**消费方改造**：scanner 与检索器在语义后端可用时批量预取 embedding；`zero_shot_prototype.classify_batch` 合并 prototype 与待分类文本；dialogue/covert/sdt 消费方使用单批推理。
 
 **基准实测（EMBED_BACKEND=ruoyu_style）**：10 段 prefetch 26.1s（vs 改造前逐条 ~230s，**~9x**）；prefetch 后逐条 0.000s；跨进程磁盘命中 0.004s；单条冷未命中仍 ~30s（子进程冷启动物理下限）。
 

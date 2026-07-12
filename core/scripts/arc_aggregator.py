@@ -34,6 +34,8 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from atomic_json import atomic_write_json
 from typing import Optional
 
 
@@ -518,75 +520,65 @@ def _aggregate_chapter_range(project: Path, arc_start: int, arc_end: int, arc_si
 
 
 def aggregate_summary(project: Path) -> dict:
-    """聚合该书所有 arc（cluster + fixed10 两轨）→ arc_summary.json。"""
+    """聚合该书全部 cluster arc。"""
     arc_dir = project / "arc_templates"
     if not arc_dir.exists():
         return {"error": "no arc_templates dir"}
 
     cluster_arcs = []
-    fixed_arcs = []
-    for f in sorted(arc_dir.glob("*.json")):
-        if f.name == "arc_summary.json":
-            continue
+    for f in sorted(arc_dir.glob("cluster_arc_*.json")):
         data = load_json(f, {})
         if not data:
-            continue
-        if f.name.startswith("cluster_arc_"):
-            cluster_arcs.append(data)
-        elif f.name.startswith("arc_"):
-            fixed_arcs.append(data)
+            return {"error": f"invalid cluster arc: {f.name}"}
+        cluster_arcs.append(data)
 
-    arcs = cluster_arcs or fixed_arcs   # 优先用 cluster 主轨
-    if not arcs:
-        return {"error": "no arc files found"}
+    if not cluster_arcs:
+        return {"error": "no cluster arc files found"}
 
     shape_counts: dict[str, int] = {}
-    for a in arcs:
+    for a in cluster_arcs:
         s = a.get("matched_reagan_shape", "Unknown")
         shape_counts[s] = shape_counts.get(s, 0) + 1
 
     def _arc_len(a):
-        # arc 实际章数(climax_chapter_index 是对此长度 emotion_curve 的下标)：cluster arc 变长
-        # (实测 2/3/4 章·非固定 10)·原硬编码 /10 使高潮位置百分比失真甚至 >100%(2026-06-15 审计修)。
-        # 优先 chapters_count·次 chapter_range('chX-chY')解析·都无 fallback 10。
         nc = a.get("chapters_count")
         if isinstance(nc, int) and nc > 0:
             return nc
-        cr = a.get("chapter_range")
-        if isinstance(cr, str):
-            nums = re.findall(r"\d+", cr)
-            if len(nums) == 2:
-                return max(int(nums[1]) - int(nums[0]) + 1, 1)
-        return 10
+        curve = a.get("emotion_curve_normalized")
+        if isinstance(curve, list) and curve:
+            return len(curve)
+        raise ValueError(f"cluster arc 缺少有效长度: {a.get('arc_id')}")
+
+    try:
+        arc_lengths = [_arc_len(arc) for arc in cluster_arcs]
+    except ValueError as exc:
+        return {"error": str(exc)}
     avg_climax_pct = sum(
-        a.get("climax_chapter_index", 5) / max(_arc_len(a) - 1, 1) for a in arcs
-    ) / len(arcs)
+        a.get("climax_chapter_index", 0) / max(length - 1, 1)
+        for a, length in zip(cluster_arcs, arc_lengths)
+    ) / len(cluster_arcs)
 
     return {
-        "primary_track": "cluster" if cluster_arcs else "fixed10",
-        "total_arcs": len(arcs),
-        "cluster_track_arcs": len(cluster_arcs),
-        "fixed10_track_arcs": len(fixed_arcs),
-        "chapter_coverage": f"ch1-{arcs[-1].get('chapter_range', '').split('-')[-1]}",
+        "schema_version": "cluster_arc_summary.v1",
+        "total_clusters": len(cluster_arcs),
         "reagan_shape_distribution": shape_counts,
         "most_common_shape": max(shape_counts, key=shape_counts.get),
         "average_climax_position_pct": round(avg_climax_pct, 3),
         "average_foreshadowing_planted_per_arc": round(
-            sum(a.get("foreshadowing_planted_in_arc", 0) for a in arcs) / len(arcs), 2
+            sum(a.get("foreshadowing_planted_in_arc", 0) for a in cluster_arcs) / len(cluster_arcs), 2
         ),
         "average_foreshadowing_resolved_per_arc": round(
-            sum(a.get("foreshadowing_resolved_in_arc", 0) for a in arcs) / len(arcs), 2
+            sum(a.get("foreshadowing_resolved_in_arc", 0) for a in cluster_arcs) / len(cluster_arcs), 2
         ),
         "_metadata": {
             "summary_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "aggregator_version": "v22.cluster.1",
-            "_doc": "primary_track=cluster 表示已用 cluster_segmenter 切分。两轨并存时优先 cluster。",
+            "_doc": "cluster 情绪形状、高潮位置和伏笔密度的全书分布。",
         },
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="arc_aggregator v22.cluster · cluster arc 聚合（cluster 主轨）")
+    parser = argparse.ArgumentParser(description="按 cluster 聚合作者样本的叙事弧")
     parser.add_argument("--project", required=True, help="风格库项目路径，如 workspace/styles/BookC")
     parser.add_argument("--cluster", help="cluster_id（如 auto_002），cluster 主轨模式")
     parser.add_argument("--all-clusters", action="store_true", help="聚合 cluster_index.json 中的全部 cluster")
@@ -603,28 +595,37 @@ def main():
 
     if args.mode == "summary":
         result = aggregate_summary(project)
+        if "error" in result:
+            print(f"[error] {result['error']}", file=sys.stderr)
+            sys.exit(2)
         out = arc_dir / "arc_summary.json"
-        out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[OK] arc_summary: {out} | primary_track={result.get('primary_track')} | total={result.get('total_arcs')}")
+        atomic_write_json(out, result)
+        print(f"[OK] arc_summary: {out} | clusters={result['total_clusters']}")
         return
 
-    # cluster 模式（推荐主轨）
     if args.all_clusters:
         ci = load_cluster_index(project)
         if not ci:
             print(f"[error] cluster_index.json not found · 请先跑 cluster_segmenter.py", file=sys.stderr)
             sys.exit(2)
-        written = 0
+        pending = []
+        errors = []
         for c in ci.get("clusters", []):
-            cid = c["cluster_id"]
+            cid = c.get("cluster_id") if isinstance(c, dict) else None
+            if not isinstance(cid, str) or not cid:
+                errors.append("cluster_index 含无效 cluster_id")
+                continue
             result = aggregate_cluster(project, cid)
             if "error" in result:
-                print(f"[skip] {cid}: {result['error']}", file=sys.stderr)
+                errors.append(f"{cid}: {result['error']}")
                 continue
-            out = arc_dir / f"cluster_arc_{cid}.json"
-            out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-            written += 1
-        print(f"[OK] {written} cluster arcs written to {arc_dir}")
+            pending.append((arc_dir / f"cluster_arc_{cid}.json", result))
+        if errors:
+            print("[error] " + " | ".join(errors), file=sys.stderr)
+            sys.exit(2)
+        for out, result in pending:
+            atomic_write_json(out, result)
+        print(f"[OK] {len(pending)} cluster arcs written to {arc_dir}")
         return
 
     if args.cluster:
@@ -633,7 +634,7 @@ def main():
             print(f"[error] {result['error']}", file=sys.stderr)
             sys.exit(2)
         out = arc_dir / f"cluster_arc_{args.cluster}.json"
-        out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(out, result)
         print(f"[OK] cluster_arc: {out}")
         print(f"      chapter_range: {result['chapter_range']} ({result['chapters_count']}章)")
         print(f"      emotion_curve: {result['emotion_curve_normalized']}")

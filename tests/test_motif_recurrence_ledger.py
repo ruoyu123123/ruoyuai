@@ -17,6 +17,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cluster_summary_fixtures import cluster_record, write_cluster_summary
+
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
@@ -34,30 +36,29 @@ def _set_mode(m):
 
 def _mk_project_with_summary(clusters_data: list, author_sig: dict | None = None,
                              foreshadowing_targets: list | None = None) -> Path:
-    """造带 故事块摘要.json 的项目。clusters_data: [(cluster_id, scope_summary), ...]"""
+    """造带 故事块摘要.json 的项目。clusters_data: [(cluster_id, summary_text), ...]
+
+    foreshadowing_targets 非空时额外写 伏笔表.json：每个 target 落一条 status=open
+    的 promise（id=target），供 motif_recurrence_ledger 的 payoff_due 判定读取。
+    """
     proj = Path(tempfile.mkdtemp())
     db = proj / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
 
-    clusters_list = []
-    for i, (cid, scope) in enumerate(clusters_data):
-        cluster = {
-            "cluster_id": cid,
-            "scope_summary": scope,
-            "chapter_range": [i * 3 + 1, i * 3 + 3],
-            "status": "done",
-            "chapters": {str(i * 3 + 1): {"summary": ""}},
-        }
-        if foreshadowing_targets and i == 0:
-            cluster["foreshadowing_planted"] = [{"target": t} for t in foreshadowing_targets]
-        clusters_list.append(cluster)
-    (db / "故事块摘要.json").write_text(
-        json.dumps({"schema_version": "v2.cluster", "clusters": clusters_list},
-                   ensure_ascii=False), encoding="utf-8")
+    records = [cluster_record(cid, summary=text) for cid, text in clusters_data]
+    write_cluster_summary(proj, records)
     if author_sig is not None:
         (db / "作者风格.json").write_text(
             json.dumps({"author_motif_signature": author_sig},
                        ensure_ascii=False), encoding="utf-8")
+    if foreshadowing_targets:
+        promises = [
+            {"id": target, "status": "open",
+             "setup_cluster": clusters_data[0][0], "payoff_progress": []}
+            for target in foreshadowing_targets
+        ]
+        (db / "伏笔表.json").write_text(
+            json.dumps({"promises": promises}, ensure_ascii=False), encoding="utf-8")
     return proj
 
 
@@ -81,7 +82,7 @@ def test_dormant_motif_detected():
     r = _run(proj, mode="active")
     assert r.returncode == 1, r.stderr  # advisory → exit 1
     snap = json.loads(
-        (proj / "_数据库" / ".cross_chapter_scan" / "motif_advisory_snapshot.json")
+        (proj / "_数据库" / ".cross_cluster_scan" / "motif_advisory_snapshot.json")
         .read_text(encoding="utf-8"))
     codes = snap["advisory_codes"]
     assert "MOTIF_DORMANT" in codes
@@ -103,7 +104,7 @@ def test_over_saturated_motif_detected():
     r = _run(proj, mode="active")
     assert r.returncode == 1, r.stderr
     snap = json.loads(
-        (proj / "_数据库" / ".cross_chapter_scan" / "motif_advisory_snapshot.json")
+        (proj / "_数据库" / ".cross_cluster_scan" / "motif_advisory_snapshot.json")
         .read_text(encoding="utf-8"))
     assert "MOTIF_OVER_SATURATED" in snap["advisory_codes"]
     over_terms = {m["term"] for m in snap["over_saturated_motifs"]}
@@ -125,7 +126,7 @@ def test_payoff_due_motif_detected():
     r = _run(proj, mode="active")
     assert r.returncode == 1, r.stderr
     snap = json.loads(
-        (proj / "_数据库" / ".cross_chapter_scan" / "motif_advisory_snapshot.json")
+        (proj / "_数据库" / ".cross_cluster_scan" / "motif_advisory_snapshot.json")
         .read_text(encoding="utf-8"))
     assert "MOTIF_PAYOFF_DUE" in snap["advisory_codes"]
 
@@ -141,7 +142,7 @@ def test_seed_proliferation_detected():
     r = _run(proj, mode="active")
     assert r.returncode == 1, r.stderr
     snap = json.loads(
-        (proj / "_数据库" / ".cross_chapter_scan" / "motif_advisory_snapshot.json")
+        (proj / "_数据库" / ".cross_cluster_scan" / "motif_advisory_snapshot.json")
         .read_text(encoding="utf-8"))
     assert "MOTIF_SEED_PROLIFERATION" in snap["advisory_codes"]
 
@@ -158,8 +159,8 @@ def test_shadow_mode_no_violation_but_writes_ledger():
     r = _run(proj, mode="shadow")
     assert r.returncode == 0
     # 账本仍写出
-    assert (proj / "_数据库" / ".cross_chapter_scan" / "motif_ledger.json").exists()
-    assert (proj / "_数据库" / ".cross_chapter_scan" / "motif_advisory_snapshot.json").exists()
+    assert (proj / "_数据库" / ".cross_cluster_scan" / "motif_ledger.json").exists()
+    assert (proj / "_数据库" / ".cross_cluster_scan" / "motif_advisory_snapshot.json").exists()
 
 
 def test_off_mode_skips():
@@ -181,7 +182,7 @@ def test_author_signature_extends_places():
     )
     r = _run(proj, mode="active")
     # 必须不崩 · 杏花村 motif 应被识别 (recurring 状态)
-    ledger = json.loads((proj / "_数据库" / ".cross_chapter_scan" / "motif_ledger.json").read_text(encoding="utf-8"))
+    ledger = json.loads((proj / "_数据库" / ".cross_cluster_scan" / "motif_ledger.json").read_text(encoding="utf-8"))
     terms = {m["term"] for m in ledger["motifs"].values()}
     assert "杏花村" in terms
 
@@ -196,7 +197,7 @@ def test_author_signature_extends_catchphrase():
         author_sig={"catchphrase": ["就这样吧"]},
     )
     r = _run(proj, mode="active")
-    ledger = json.loads((proj / "_数据库" / ".cross_chapter_scan" / "motif_ledger.json").read_text(encoding="utf-8"))
+    ledger = json.loads((proj / "_数据库" / ".cross_cluster_scan" / "motif_ledger.json").read_text(encoding="utf-8"))
     terms = {m["term"] for m in ledger["motifs"].values()}
     assert "就这样吧" in terms
 
@@ -209,13 +210,24 @@ def test_too_few_clusters_skipped():
     assert "cluster 数太少" in r.stdout
 
 
-def test_no_clusters_skipped():
+def test_empty_cluster_list_skipped():
+    """账本文件存在但 clusters=[]（如刚 /outline 完成尚未写任何 cluster）→ 静默跳过。"""
+    proj = Path(tempfile.mkdtemp())
+    write_cluster_summary(proj, [])
+    r = _run(proj, mode="active")
+    assert r.returncode == 0
+    assert "无 cluster 记录" in r.stdout
+
+
+def test_missing_summary_is_fatal():
+    """故事块摘要.json 完全不存在属账本硬契约破损，返回硬失败。"""
     proj = Path(tempfile.mkdtemp())
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     # 不写 故事块摘要.json
     r = _run(proj, mode="active")
-    assert r.returncode == 0
-    assert "无 cluster 记录" in r.stdout
+    assert r.returncode == 2
+    assert "[FATAL]" in r.stderr
+    assert "不存在" in r.stderr
 
 
 # ── 辅助函数 ────────────────────────────────────────────────────────────────

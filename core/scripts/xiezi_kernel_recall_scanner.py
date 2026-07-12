@@ -11,7 +11,7 @@
 【做法 · 确定性 JSON 驱动】：
   1. 门控：作者档 huaben_zhanghui_pastiche=true 才启用。
   2. cluster_001 时优先校验楔子骨架(advisory)。
-  3. 读 _数据库/伏笔表.json 或 .cross_chapter_scan/xiezi_kernel.json 的
+  3. 读 _数据库/伏笔表.json 或 .cross_cluster_scan/xiezi_kernel.json 的
      kernel_symbols 列表 (item: {symbol, planted_cluster, must_recall_in_volume}).
   4. 末卷 final cluster (manifest.is_volume_finale=true) 草稿不出现 symbol
      → XIEZI_KERNEL_NOT_RECALLED flag。
@@ -75,7 +75,7 @@ def _load_kernel_symbols(project_root):
     if not project_root:
         return []
     candidates = [
-        Path(project_root) / "_数据库" / ".cross_chapter_scan" /
+        Path(project_root) / "_数据库" / ".cross_cluster_scan" /
         "xiezi_kernel.json",
         Path(project_root) / "_数据库" / "伏笔表.json",
     ]

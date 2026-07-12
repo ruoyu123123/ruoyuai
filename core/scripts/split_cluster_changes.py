@@ -8,9 +8,7 @@
 输出：
 - 章节/第NNN章/第NNN章_changes.json × N
 
-策略：
-- 整 cluster 的 factual / self_eval 段平铺到每章（最简实现 v1）
-- v2 可基于切点把 factual.key_events 按章节范围分配（需要 events 标注 ch_anchor）
+策略：只把 cluster 的 `self_eval` 平铺到物理章节，供格式层读取。
 
 2026-05-29 复审修复（批次 B5-split-changes · SC-5 owner）：
 - [H1] 统一识别两套 splitter WAL schema：chapters_split=int + cluster_start_ch（freestyle
@@ -30,7 +28,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import chapter_io as cio  # noqa: E402 · normalize_changes 恢复 HYBRID factual
+import chapter_io as cio  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
@@ -201,9 +199,6 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
     if not splitter_decisions_path.exists():
         return {"ok": False, "error": f"splitter_decisions 不存在: {splitter_decisions_path}"}
 
-    # 2026-06-02 修：走 normalize_changes 恢复 HYBRID 布局（gen-model 常产 空factual={}+事实散顶层
-    # facts_locked/foreshadowing_planted）→ 否则平铺出 per-chapter factual 也空 → 下游 validate 逐章
-    # 误报 CHANGES_MISSING（cluster→split→per-chapter 三级级联）。
     cluster_changes = cio.normalize_changes(load_json(cluster_changes_path))
     splitter_decisions = load_json(splitter_decisions_path)
 
@@ -328,15 +323,9 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
         if not ch_dir.exists():
             continue  # splitter 没切出来这章，跳过
 
-        # v1 策略：平铺整 cluster_changes 到每章
+        # 物理章节只接收创作自评；客观状态不进入格式层。
         ch_data = {
-            "schema_version": "v18",
-            "chapter": n,
-            "title": "",  # gen_chapter_titles 写
-            "factual": cluster_changes.get("factual", {}),
             "self_eval": cluster_changes.get("self_eval", {}),
-            "_doc": f"v24 cluster_{cluster_key} ch{n} _changes (从 cluster_changes.json 平铺 · ECAS 模式 cluster 级单源)",
-            "_source_cluster_changes": str(cluster_changes_path)
         }
         ch_changes_path.write_text(json.dumps(ch_data, ensure_ascii=False, indent=2), encoding="utf-8")
         written.append(str(ch_changes_path))

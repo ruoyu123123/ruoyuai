@@ -15,8 +15,12 @@ import build_manifest as bm  # noqa: E402
 
 
 class _Scanner:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, cluster_id: str = "cluster_001"):
         self.root = root
+        self.cluster_id = cluster_id
+
+    def _current_cluster_id(self):
+        return self.cluster_id
 
 
 def _write_pool(root: Path):
@@ -76,6 +80,29 @@ def test_bad_overlay_is_hard_error():
             assert False, "坏 overlay 必须硬失败"
         except RuntimeError as exc:
             assert "active_fate_events" in str(exc)
+    finally:
+        import shutil
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_major_event_guidance_uses_current_cluster_not_chapter_argument():
+    root = Path(tempfile.mkdtemp())
+    try:
+        db = root / "_数据库"
+        db.mkdir(parents=True, exist_ok=True)
+        (db / "大势卡.json").write_text(json.dumps({"major_events": [
+            {"id": "ME-V1-01", "title": "导火索", "status": "completed",
+             "completed_at_cluster": "cluster_001", "prerequisites": [],
+             "expected_window_after": None},
+            {"id": "ME-V1-02", "title": "反击", "status": "pending",
+             "prerequisites": ["ME-V1-01"],
+             "expected_window_after": {"event": "ME-V1-01", "max_clusters": 1}},
+        ]}, ensure_ascii=False), encoding="utf-8")
+        out = bm._collect_active_fate_events(_Scanner(root, "cluster_003"), 99)
+        assert out["active"][0]["id"] == "ME-V1-02"
+        assert out["overdue"][0]["current_cluster"] == "cluster_003"
+        assert out["total_pending"] == 1
+        assert "total_scheduled" not in out
     finally:
         import shutil
         shutil.rmtree(root, ignore_errors=True)

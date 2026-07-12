@@ -84,16 +84,15 @@
     "idle": "在枢纽内的静态/反思/养精蓄锐章节"
   },
 
-  "chapter_hub_log": [
-    {"ch": 1, "hub_id": "HUB_office", "role": "quest", "_note": "开篇 in_medias_res：凌晨办公室签字事件（虽在 office 但 quest 性质：高强度异常事件）"},
-    {"ch": 2, "hub_id": "HUB_home", "role": "return", "_note": "事件后回家消化 + 回老家拿铁皮盒（返回家庭枢纽）"}
+  "cluster_hub_log": [
+    {"cluster_id": "cluster_001", "hub_id": "HUB_office", "role": "quest", "scene_indices": [0, 1]}
   ],
 
   "_consumption_chain": {
-    "produced_by": "/outline 时根据题材定义 hubs + 用户后续 spawn；world_evolution_apply_chapter.append_hub_log() 按章回写",
+    "produced_by": "/outline 定义 hubs；novel-state-tracker 产 cluster_state_delta，cluster_state_delta.py 按 cluster 回写",
     "consumed_by": [
-      "build_manifest._collect_hubs_directive() 注入 manifest（chapter_hub_log 按 ch 记录，非 cluster 级字段——枢纽节奏是章级细粒度信号）",
-      "writer step 0w：感知本章应是 depart/quest/return/idle，回 hub 时必带 anchor_props 或 anchor_routines 至少 1 个",
+      "build_manifest._collect_hub_directive() 注入 manifest 的最近 cluster Hub 角色",
+      "writer step 0w：按场景自然体现 depart/quest/return/idle，回 hub 时带入 anchor_props 或 anchor_routines",
       "cluster-save-state 世界更新 + cluster 级节奏 advisory：检查 role 分布是否偏离 rhythm_targets"
     ]
   }

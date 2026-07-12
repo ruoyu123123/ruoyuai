@@ -101,7 +101,7 @@ def _synthetic_manifest(**overrides) -> dict:
         "event_cluster_context": {"mode": "on", "scope_summary": "主角进入副本"},
         "world_state_snapshot": {"values": {"疫情": 3}},
         "time_snapshot": {"current_time": {"period": "夜"}},
-        "rag_relevant_chapters": [],
+        "rag_relevant_clusters": [],
         "memory_search_results": [],
         "selective_history_retrieval": None,
     }
@@ -256,7 +256,7 @@ def test_trim_order_t3_before_t2():
     """T3（长程记忆）是牺牲位：超预算先裁 T3，T2 够用就不动。"""
     with _budget_env(HARD_KB="6"):
         m = _synthetic_manifest(
-            rag_relevant_chapters=[{"chapter": 2, "summary": _cjk_str(3000)}],
+            rag_relevant_clusters=[{"cluster_id": "cluster_002", "summary": _cjk_str(3000)}],
             memory_search_results=[{"hit": _cjk_str(3000)}],
             world_state_snapshot={"desc": _cjk_str(300)},
         )
@@ -274,16 +274,16 @@ def test_t3_floor_holds_and_recovers_from_t2():
     """T3 已在 5% 地板下 → 不裁 T3（留 floor_hold 痕）·超额转 T2 回收。"""
     with _budget_env(HARD_KB="4"):
         m = _synthetic_manifest(
-            rag_relevant_chapters=[{"chapter": 2, "summary": _cjk_str(30)}],  # T3 小于地板
+            rag_relevant_clusters=[{"cluster_id": "cluster_002", "summary": _cjk_str(30)}],  # T3 小于地板
             world_state_snapshot={"desc": _cjk_str(2000)},                    # T2 大头
             character_positions=[{"name": "林川", "pos": _cjk_str(1200)}],    # T2 大头
         )
-        t3_baseline = _dumps(m["rag_relevant_chapters"])
+        t3_baseline = _dumps(m["rag_relevant_clusters"])
         out = mb.apply_budget(m)
         log = out["budget_report"]["compression_log"]
         actions = [e["action"] for e in log]
         assert "t3_floor_hold" in actions, f"T3 触地板必须留 floor_hold 痕：{actions}"
-        assert _dumps(out["rag_relevant_chapters"]) == t3_baseline, "地板下的 T3 段不许动"
+        assert _dumps(out["rag_relevant_clusters"]) == t3_baseline, "地板下的 T3 段不许动"
         assert any(e["tier"] == mb.TIER_T2 and e["action"] != "t3_floor_hold" for e in log), \
             "超额必须转 T2 回收"
 
@@ -310,7 +310,7 @@ def test_t0_not_trimmed_when_under_cap_even_if_over_budget():
         m = _synthetic_manifest(
             hard_constraints=[{"code": "C1", "message": "小约束"}],
             world_state_snapshot={"desc": _cjk_str(2500)},
-            rag_relevant_chapters=[{"summary": _cjk_str(1500)}],
+            rag_relevant_clusters=[{"cluster_id": "cluster_001", "summary": _cjk_str(1500)}],
         )
         t0_baseline = _dumps(m["hard_constraints"])
         out = mb.apply_budget(m)
@@ -323,7 +323,7 @@ def test_compression_log_records_before_after_and_reason():
     with _budget_env(HARD_KB="4"):
         m = _synthetic_manifest(
             world_state_snapshot={"desc": _cjk_str(2500)},
-            rag_relevant_chapters=[{"summary": _cjk_str(1500)}],
+            rag_relevant_clusters=[{"cluster_id": "cluster_001", "summary": _cjk_str(1500)}],
         )
         log = mb.apply_budget(m)["budget_report"]["compression_log"]
         assert log
@@ -339,7 +339,7 @@ def test_final_size_within_hard_budget_after_trim():
         m = _synthetic_manifest(
             world_state_snapshot={f"k{i}": _cjk_str(100) for i in range(30)},
             character_positions=[{"pos": _cjk_str(80)} for _ in range(30)],
-            rag_relevant_chapters=[{"summary": _cjk_str(80)} for _ in range(30)],
+            rag_relevant_clusters=[{"cluster_id": f"cluster_{i:03d}", "summary": _cjk_str(80)} for i in range(1, 31)],
         )
         out = mb.apply_budget(m)
         assert _size(out) <= 8 * 1024, f"裁后总体积 {_size(out)}B 应 <= 8192B"

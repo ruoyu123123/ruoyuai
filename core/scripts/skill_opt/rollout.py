@@ -1,16 +1,6 @@
-"""skill_opt.rollout — 驱动 distill_replicate 跑 batch 收 trajectory + reward
+"""SkillOpt 写作 reward rollout。
 
-业界源 (arXiv 2605.23904):
-- rollout batch = 40 (论文默认)
-- 单 rollout = (skill, cluster_id) → 复刻文本 + reward
-- trajectory = (cluster_id, reward, components, replica_path, meta)
-
-阶段0 实现 thin slice:
-- subprocess 跑 distill_replicate.py (复用既有 CLI)
-- 复刻完毕后用 reward.collect_for_cluster 算 binary reward
-- 落 _skillopt/trajectories/<run_id>/*.json
-
-阶段3 train.py 会调用本模块。
+每次复刻只消费与候选 skill digest、run_id、cluster_id 唯一绑定的 Claude 场景稿。
 """
 from __future__ import annotations
 
@@ -24,6 +14,7 @@ from pathlib import Path
 from typing import Sequence
 
 from . import reward as _reward
+from . import scene_jobs
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -47,6 +38,7 @@ def _run_replicate(
     cluster_id: str,
     project: Path,
     output: Path,
+    claude_scenes_dir: Path,
     timeout: int = 1200,
 ) -> tuple[int, float]:
     """subprocess 调 distill_replicate.py。
@@ -60,6 +52,7 @@ def _run_replicate(
         "--mode", "cluster",
         "--cluster-ref", cluster_id,
         "--project", str(project),
+        "--claude-scenes-dir", str(claude_scenes_dir),
         "--output", str(output),
     ]
     t0 = time.time()
@@ -89,12 +82,19 @@ def rollout_one(
     replica_dir = out_root / "trajectories" / run_id
     replica_dir.mkdir(parents=True, exist_ok=True)
     replica_path = replica_dir / f"{cluster_id}_replica.txt"
+    claude_scenes_dir = scene_jobs.require_scene_job(
+        skill_path=style_skill,
+        cluster_id=cluster_id,
+        out_root=out_root,
+        run_id=run_id,
+    )
 
     exit_code, dur = _run_replicate(
         style_skill=style_skill,
         cluster_id=cluster_id,
         project=project,
         output=replica_path,
+        claude_scenes_dir=claude_scenes_dir,
     )
 
     # 复刻完毕,从写作链路产物拣 binary 信号
@@ -110,7 +110,11 @@ def rollout_one(
         skill_path=str(style_skill),
         duration_sec=dur,
         exit_code=exit_code,
-        meta={"reward_mode": reward_mode},
+        meta={
+            "reward_mode": reward_mode,
+            "claude_scenes_dir": str(claude_scenes_dir),
+            "skill_digest": scene_jobs.skill_digest(style_skill),
+        },
     )
 
 
@@ -129,6 +133,13 @@ def rollout_batch(
     """
     if run_id is None:
         run_id = datetime.now().strftime("%Y%m%dT%H%M%S")
+
+    scene_jobs.require_scene_jobs(
+        skill_path=style_skill,
+        cluster_ids=list(cluster_ids),
+        out_root=out_root,
+        run_id=run_id,
+    )
 
     trajectories: list[Trajectory] = []
     for cid in cluster_ids:

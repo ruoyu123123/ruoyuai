@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""cluster_entity_stats.py — A15 确定性实体统计（archivist 前置证据基线 · 零 LLM）
+"""为 novel-archivist 生成确定性的 cluster 实体证据基线。
 
-移植出处：moyin character-calibrator collectCharacterStats 范式（二轮调研 A15）——
-代码先把**客观统计**算好（出场次数/对白条数估计/首现位置/新专名候选），
-作为证据基线注入 novel-archivist prompt；AI 只裁决主观归类（角色 vs 误报、
-state_changes 语义），不再靠裸读 20k 字正文凭印象抽取（压漏报——
-钟楼弃儿 writer 漏报靠 brief 兜底的教训）。
+报告包含已登记实体的出场次数、对白条数估计、首现位置以及高频新专名候选。
+统计只提供证据，实体归类与状态变化仍由 archivist 根据正文判断。
 
 用法（cluster-save-state step 5 spawn archivist 之前跑）：
   python cluster_entity_stats.py <project_root> --cluster <key> \
@@ -14,15 +11,8 @@ state_changes 语义），不再靠裸读 20k 字正文凭印象抽取（压漏�
 
 输出：_数据库/.wal/cluster_<key>_entity_stats.json（schema 见 _build_report）
 
-设计纪律：
-  - 纯确定性：同输入必同输出（幂等·无时间戳·无 LLM）。
-  - 统计是**证据不是判决**：新专名候选允许误报（archivist 以正文为准裁决），
-    known/candidate 都不产 gate_level——本脚本不在检测顾问体系内，只喂 agent。
-  - 名名遮罩计数：变体（name+aliases）按长度降序在共享遮罩副本上计数，
-    「王大力」的出场绝不重复算进「王大」（子串防重）。
-  - 新专名启发式与 validate_chapter.check_character_mentions 同源
-    （speaker_pattern + 首字黑名单 + 动词短语黑名单 + character_index
-    false_positives），频次 ≥ min_new_name_freq（默认 3）才列（防噪）。
+同一输入产生同一报告；名称变体按长度降序遮罩，避免长名被短名重复计数。
+新专名候选采用说话人模式和项目 false-positive 表过滤，默认至少出现三次。
 """
 from __future__ import annotations
 
@@ -45,10 +35,7 @@ _CJK_RE = re.compile(r"[一-鿿]")
 # 引号左右配对（与 character_index / style_analyzer 一致：U+201C≠U+201D）
 _QUOTE_RE = re.compile(r'"([^"\n]{1,120})"|“([^”\n]{1,120})”|「([^」\n]{1,120})」')
 
-# 说话人模式（与 validate_chapter.check_character_mentions 同源·2026-06-28 收敛版：
-# 说话动词后必须跟对话标点，根治「下水道/知道」类复合词误报）。
-# 🔴 A15 收敛：动词后只认**开引号**不认闭引号（”」』）——「X道”」形态是引文内术语
-# 片段非说话归属（实测《主神验尸官》cluster_001「“无限主神大道”」→ 误报候选「限主神大」）。
+# 说话动词后只认开引号，避免把引文内以“道”结尾的词误当说话人。
 _SPEAKER_RE = re.compile(
     r'([一-鿿]{2,4})(?:说道?|道|问道?|答道?|笑道?|骂道?|喊道?|嘀咕|开口)'
     r'(?=[：:，,。．！？!?、“「『"])')
@@ -310,14 +297,13 @@ def build_stats(project: Path, cluster_id: str, draft_path: Path,
             "quote_count": quote_count,
             "unattributed_quotes": unattributed,
         },
-        "_doc": ("确定性统计·archivist 证据基线（moyin collectCharacterStats 范式·A15）："
-                 "高频实体在 archive.characters 缺失=漏抽信号；对白/首现用于交叉核对；"
-                 "new_name_candidates 是启发式候选允许误报·以正文为准裁决。"),
+        "_doc": ("archivist 的确定性实体证据基线；高频实体缺失时应回正文核对，"
+                 "new_name_candidates 是允许误报的启发式候选。"),
     }
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="A15 cluster 实体确定性统计（archivist 前置证据基线）")
+    ap = argparse.ArgumentParser(description="生成 cluster 实体确定性证据基线")
     ap.add_argument("project")
     ap.add_argument("--cluster", required=True, help="cluster key（001 或 cluster_001）")
     ap.add_argument("--draft", default=None, help="草稿路径（默认 章节/cluster_<key>_draft/cluster_<key>_draft.txt）")

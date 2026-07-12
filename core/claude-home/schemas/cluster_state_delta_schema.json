@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cluster_state_delta_schema.json",
+  "title": "Cluster State Delta",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cluster_id", "time_advance", "location_changes", "hub_usage", "fate_events_triggered", "world_state_consumption", "heart_events_revealed"],
+  "properties": {
+    "cluster_id": {"type": "string", "pattern": "^cluster_[0-9]{3,}$"},
+    "time_advance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "elapsed": {"type": "string"},
+        "period": {"type": "string"},
+        "key_events": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "location_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["location_id", "new_status"],
+        "properties": {
+          "location_id": {"type": "string", "minLength": 1},
+          "new_status": {"type": "string", "minLength": 1},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "hub_usage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hub_id", "role"],
+        "properties": {
+          "hub_id": {"type": "string", "minLength": 1},
+          "role": {"enum": ["depart", "quest", "return", "idle"]},
+          "scene_indices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "fate_events_triggered": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id"],
+        "properties": {
+          "event_id": {"type": "string", "minLength": 1},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "world_state_consumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["emergent_opportunities_consumed", "thread_responded"],
+      "properties": {
+        "emergent_opportunities_consumed": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "thread_responded": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "heart_events_revealed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id", "evidence"],
+        "properties": {
+          "event_id": {"type": "string", "pattern": "^HE_"},
+          "evidence": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

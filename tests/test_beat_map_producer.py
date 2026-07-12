@@ -2,7 +2,7 @@
 
 # 🔴 2026-06-29 beat_map接通producer
 
-钉死 beat_map 孤儿契约债的修复：plot_structure_scanner（CLUSTER_MODE）读
+钉死 beat_map 孤儿契约债的修复：plot_structure_scanner 按显式 cluster_id 读
 beat_map.cluster_beats[cluster_id]，此前全仓零内容 producer = 死码。本测试锁：
 
   1. derive_cluster_beats 据 scene_storyboard 确定性派生 起承转合 beat 序列（每 scene 一条·带 beat 名）；
@@ -11,7 +11,7 @@ beat_map.cluster_beats[cluster_id]，此前全仓零内容 producer = 死码。�
   4. write_cluster_beats 写 beat_map.cluster_beats[cid]（保留既有顶层结构）；
   5. update() 从 事件簇.json 读 storyboard 派生回写；
   6. 🔴【防再孤儿核心锁】cluster_choice_apply.apply_choice 端到端（落点）→ beat_map.cluster_beats 非空；
-  7. 🔴【scanner 端到端不跳过】plot_structure_scanner.scan_beat(CLUSTER_MODE+CLUSTER_ID) 读到真 beat·warning=None；
+  7. 🔴【scanner 端到端不跳过】plot_structure_scanner.scan_beat(cluster_id) 读到真 beat·warning=None；
   8. C03 fluid：应用 cluster_001 绝不预产 cluster_002 的 beats；
   9. 向后兼容：无 storyboard 的旧 cluster → 不写 cluster_beats 键·scanner 仍优雅降级不崩。
 
@@ -258,7 +258,7 @@ def test_cluster_choice_apply_raises_when_beat_update_breaks():
 # ============================================================
 
 def test_scanner_reads_produced_beats_end_to_end():
-    """produce → plot_structure_scanner.scan_beat(CLUSTER_MODE+CLUSTER_ID) 读到真 beat·
+    """produce → plot_structure_scanner.scan_beat(cluster_id) 读到真 beat·
     beats_declared_count>0·warning=None（不再「未声明 beat 序列」死码告警）。"""
     with tempfile.TemporaryDirectory() as d:
         proj = Path(d)
@@ -270,13 +270,11 @@ def test_scanner_reads_produced_beats_end_to_end():
             "narrative_mode": "in_medias_res",
         }
         cca.apply_choice(proj, "001", _write_choice(proj, "001", brief))
-        with _env(CLUSTER_MODE="1", CLUSTER_ID="cluster_001"):
-            rep = pss.scan_beat(proj, 9000)
-        assert rep["cluster_mode"] is True, rep
-        assert rep["cluster_id_evaluated"] == "cluster_001", rep
+        rep = pss.scan_beat(proj, "cluster_001", "催化事件突然发生。")
+        assert rep["cluster_id"] == "cluster_001", rep
         assert rep["beats_declared_count"] == 4, rep
         assert rep["warning"] is None, rep  # 真有 beat → 不再告警死码
-        assert rep["routing_fallback"] is False, rep
+        assert "routing_fallback" not in rep, rep
 
 
 # ============================================================
@@ -297,10 +295,10 @@ def test_fluid_only_active_cluster_no_preset():
 
 
 # ============================================================
-# 9. 向后兼容：无 storyboard 旧 cluster → scanner 仍优雅（不崩）
+# 9. 无 storyboard 的 cluster → scanner 明确报告缺失（不崩）
 # ============================================================
 
-def test_backward_compat_no_storyboard():
+def test_missing_storyboard_reports_missing_beats():
     with tempfile.TemporaryDirectory() as d:
         proj = Path(d)
         db = proj / "_数据库"
@@ -311,9 +309,7 @@ def test_backward_compat_no_storyboard():
         res = bmu.update(proj, "cluster_001")
         assert res["beats"] == 0, res
         # scanner 在无 cluster_beats 时仍优雅返回（warning 非崩溃）
-        with _env(CLUSTER_MODE="1", CLUSTER_ID="cluster_001"):
-            rep = pss.scan_beat(proj, 9000)
-        assert rep["cluster_mode"] is True, rep
+        rep = pss.scan_beat(proj, "cluster_001", "正文")
         assert rep["beats_declared_count"] == 0, rep
         # advisory warning（优雅降级·不崩）
         assert "warning" in rep, rep

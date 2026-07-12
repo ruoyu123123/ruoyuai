@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-"""apply_archive.py actant 回库测试 — 🔴 2026-06-29 actant链接通producer。
+"""apply_archive.py actant 回库测试。
 
 钉死 apply_actant_state：archivist 读正文判定本块六位 Greimas actant → archive.cluster_actant_state
-→ 确定性写进 cluster_actant_ledger.json clusters[].assignments（此前**零 producer**·
-actant_drift_scanner + cast_economy_scanner 死码）：
+→ 确定性写进 cluster_actant_ledger.json clusters[].assignments：
   · char_id → 人物卡 name 解析（命名空间统一到 name·对齐 cast_economy known 集 + scanner 可哈希键）
   · helper/opponent list → 首位代表存单值（scanner ledger schema 单值·list 值会崩 scanner）
   · 幂等：按 cluster_id 去重替换·不重复 append
-  · C03 fluid / 向后兼容：archive 无 cluster_actant_state → no-op 不报错、不建 ledger 文件
+  · archive 无 cluster_actant_state → 零变更且不建 ledger 文件
   · dry-run 不写盘
   · 端到端：producer 落的 ledger·两 scanner 真能读（非"跳过"）
 """
@@ -48,7 +47,9 @@ def _mk_project(tmp: Path):
 
 def _write_archive(db: Path, key, obj):
     p = db / ".wal" / f"cluster_{key}_archive.json"
-    p.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    payload = dict(obj)
+    payload.setdefault("cluster_id", f"cluster_{key}")
+    p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return p
 
 
@@ -139,7 +140,7 @@ def test_distinct_clusters_append():
         assert len(_ledger(db)["clusters"]) == 2
 
 
-# ── C03 fluid / 向后兼容：无 cluster_actant_state → no-op·不建文件 ──────────
+# ── 无 cluster_actant_state → 零变更且不建文件 ──────────
 def test_no_actant_noop_backward_compat():
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))

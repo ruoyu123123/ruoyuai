@@ -134,12 +134,8 @@ def _mk_judge_files(
     reading_verdict: str | None = "pass",
     voice_grade: str | None = "A",
     truth_grade: str | None = "A",
-    chapter_range: tuple[int, int] = (1, 3),
 ) -> None:
-    """搭真实路径结构: .audit/<cid>_audit.json + .reading_reflection/<cid>_round_*.json
-       + .judge_reports/<cid>_voice-checker.json + ch_NNN_writer-truth-check.json
-       + _数据库/事件簇.json 含 chapter_range
-    """
+    """搭建 cluster 级 reward 输入。"""
     db = root / "_数据库"
     audit = db / ".audit"
     judge = db / ".judge_reports"
@@ -147,19 +143,6 @@ def _mk_judge_files(
     audit.mkdir(parents=True, exist_ok=True)
     judge.mkdir(parents=True, exist_ok=True)
     reading.mkdir(parents=True, exist_ok=True)
-
-    # 事件簇.json: 标 chapter_range
-    (db / "事件簇.json").write_text(
-        json.dumps(
-            {
-                "clusters": [
-                    {"cluster_id": cluster_id, "chapter_range": list(chapter_range)}
-                ]
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
 
     if audit_verdict is not None:
         (audit / f"{cluster_id}_audit.json").write_text(
@@ -178,19 +161,21 @@ def _mk_judge_files(
             encoding="utf-8",
         )
     if truth_grade is not None:
-        # 章级,每章一个
-        for ch in range(chapter_range[0], chapter_range[1] + 1):
-            (judge / f"ch_{ch:03d}_writer-truth-check.json").write_text(
-                json.dumps({"overall_grade": truth_grade}, ensure_ascii=False),
-                encoding="utf-8",
-            )
+        (judge / f"{cluster_id}_writer-truth-check.json").write_text(
+            json.dumps({
+                "cluster_id": cluster_id,
+                "verdict": "pass" if truth_grade in {"A", "B", "S"} else "fail",
+                "overall_grade": truth_grade,
+                "lie_count": 0 if truth_grade in {"A", "B", "S"} else 1,
+            }, ensure_ascii=False), encoding="utf-8"
+        )
 
 
 def test_reward_all_pass_strict_1():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        _mk_judge_files(root, "auto_001")
-        r, comp = reward.reward_for_cluster(root, "auto_001", mode="strict")
+        _mk_judge_files(root, "cluster_001")
+        r, comp = reward.reward_for_cluster(root, "cluster_001", mode="strict")
         assert r == 1.0
         assert comp.audit_pass is True
         assert comp.reading_pass is True
@@ -201,16 +186,16 @@ def test_reward_all_pass_strict_1():
 def test_reward_one_fail_strict_0():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        _mk_judge_files(root, "auto_001", voice_grade="D")  # voice 失败
-        r, _ = reward.reward_for_cluster(root, "auto_001", mode="strict")
+        _mk_judge_files(root, "cluster_001", voice_grade="D")  # voice 失败
+        r, _ = reward.reward_for_cluster(root, "cluster_001", mode="strict")
         assert r == 0.0
 
 
 def test_reward_one_fail_soft_3of4():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        _mk_judge_files(root, "auto_001", voice_grade="D")  # voice 失败
-        r, _ = reward.reward_for_cluster(root, "auto_001", mode="soft")
+        _mk_judge_files(root, "cluster_001", voice_grade="D")  # voice 失败
+        r, _ = reward.reward_for_cluster(root, "cluster_001", mode="soft")
         assert r == pytest.approx(3 / 4, abs=1e-6)
 
 
@@ -219,7 +204,7 @@ def test_reward_missing_judge_strict_0():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         # 不创建任何 judge 文件
-        r, comp = reward.reward_for_cluster(root, "auto_001", mode="strict")
+        r, comp = reward.reward_for_cluster(root, "cluster_001", mode="strict")
         assert r == 0.0
         assert comp.audit_pass is None
 
@@ -229,13 +214,13 @@ def test_reward_partial_missing_soft_ignores_none():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         _mk_judge_files(
-            root, "auto_001",
+            root, "cluster_001",
             audit_verdict="pass",
             reading_verdict=None,  # 缺
             voice_grade="A",
             truth_grade=None,  # 缺
         )
-        r, _ = reward.reward_for_cluster(root, "auto_001", mode="soft")
+        r, _ = reward.reward_for_cluster(root, "cluster_001", mode="soft")
         assert r == pytest.approx(2 / 2, abs=1e-6)  # 2 个 pass / 2 个有效
 
 

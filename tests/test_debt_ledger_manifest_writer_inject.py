@@ -23,7 +23,7 @@ import gen_writer as gw  # noqa: E402
 
 def _mk_scanner_with_snapshot(snap_name, snap_obj):
     proj = Path(tempfile.mkdtemp(prefix="debt_inject_"))
-    db = proj / "_数据库" / ".cross_chapter_scan"
+    db = proj / "_数据库" / ".cross_cluster_scan"
     db.mkdir(parents=True, exist_ok=True)
     (db / snap_name).write_text(json.dumps(snap_obj, ensure_ascii=False), encoding="utf-8")
     # 最简 scanner 替身：只需 .db 字段

@@ -34,7 +34,7 @@ ISSUE_CODE = "PHYSIO_CUE_FACIAL_BIAS"   # ⚠️ advisory 专用 · 绝不进 HA
 # 🔬 2026-07-04 金标准校准（statbase 155章×3书 facial_ratio 分布）：面部占比超此 = facial bias。
 # 面部生理线索占比超此 = facial bias（面部区域堆砌·缺非面部躯体信号）。
 FACIAL_RATIO_FLOOR = 0.78   # 2026-07-04 金标准校准(statbase 155章×3书·seed20260704):p50=0.445/p95=0.75/max=0.857·旧0.65误伤30%真作者章(2026-06-20手工5样本max=0.566漏尾部)→抬0.78(p95上方·仅catch最极端3-5%面部偏置)
-MIN_CUE_SAMPLES = 8   # facial+nonfacial 命中总数低于此 = 样本不足·不判（防小样本噪声）
+MIN_CUE_SAMPLES = 8   # 三桶命中总数低于此 = 样本不足·不判（防小样本噪声）
 
 # 🆕 R7 W2 升级：三桶分类（facial / observable-body / interoceptive）
 # 任一桶 ratio > 0.65 → advisory（不限于面部·任何单维度过密都是 cue diversity 问题）
@@ -51,10 +51,6 @@ OBSERVABLE_BODY_CUE = re.compile(
 # 内感受信号（interoceptive · 主观体内感受 · 呼吸/心跳/肠胃/喉咙等）
 INTEROCEPTIVE_CUE = re.compile(
     r"(呼吸|喉咙|喉|嗓子|胸口|心跳|心脏|肠胃|胃|腹|血液|体温|耳鸣|头晕|发烫)"
-)
-# 旧 NONFACIAL_CUE 保留为兼容别名（observable + interoceptive 合集思路·向后兼容）
-NONFACIAL_CUE = re.compile(
-    r"(指节|指|拳|手心|手|呼吸|喉咙|喉|嗓子|胸口|心跳|肠胃|胃|后背|脊背|肩|站姿|姿态|体温|膝|脚)"
 )
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 
@@ -77,26 +73,18 @@ def _cjk_count(text: str) -> int:
 
 
 def detect_physio_cues(text: str) -> dict:
-    """统计三桶生理线索命中（facial / observable-body / interoceptive）。
-
-    返回 {facial, nonfacial(兼容), observable, interoceptive, *_samples}。
-    nonfacial = observable + interoceptive（向后兼容旧字段）。
-    """
+    """统计 facial、observable-body、interoceptive 三桶生理线索。"""
     text = _strip_changes(text)
     facial = [m.group(0) for m in FACIAL_CUE.finditer(text)]
     observable = [m.group(0) for m in OBSERVABLE_BODY_CUE.finditer(text)]
     interoceptive = [m.group(0) for m in INTEROCEPTIVE_CUE.finditer(text)]
-    # 向后兼容字段（旧 nonfacial = 非面部）
-    nonfacial = [m.group(0) for m in NONFACIAL_CUE.finditer(text)]
     return {
         "facial": len(facial),
         "observable": len(observable),
         "interoceptive": len(interoceptive),
-        "nonfacial": len(nonfacial),   # 兼容旧字段
         "facial_samples": facial[:8],
         "observable_samples": observable[:8],
         "interoceptive_samples": interoceptive[:8],
-        "nonfacial_samples": nonfacial[:8],
     }
 
 
@@ -143,19 +131,15 @@ def scan(draft_path, project_root=None) -> dict:
 
     cues = detect_physio_cues(draft)
     facial = cues["facial"]
-    nonfacial = cues["nonfacial"]
     observable = cues["observable"]
     interoceptive = cues["interoceptive"]
-    total = facial + nonfacial
-    bucket_total = facial + observable + interoceptive
+    total = facial + observable + interoceptive
     out["facial_count"] = facial
-    out["nonfacial_count"] = nonfacial
     out["observable_count"] = observable
     out["interoceptive_count"] = interoceptive
     out["cue_total"] = total
-    out["bucket_total"] = bucket_total
+    out["bucket_total"] = total
     out["facial_samples"] = cues["facial_samples"]
-    out["nonfacial_samples"] = cues["nonfacial_samples"]
     out["observable_samples"] = cues["observable_samples"]
     out["interoceptive_samples"] = cues["interoceptive_samples"]
 
@@ -172,11 +156,11 @@ def scan(draft_path, project_root=None) -> dict:
     facial_ratio = round(facial / total, 3)
     out["facial_ratio"] = facial_ratio
 
-    # 🆕 R7 W2 三桶占比
-    if bucket_total > 0:
-        f_share = round(facial / bucket_total, 3)
-        o_share = round(observable / bucket_total, 3)
-        i_share = round(interoceptive / bucket_total, 3)
+    # 三桶占比
+    if total > 0:
+        f_share = round(facial / total, 3)
+        o_share = round(observable / total, 3)
+        i_share = round(interoceptive / total, 3)
     else:
         f_share = o_share = i_share = 0.0
     out["bucket_shares"] = {"facial": f_share, "observable": o_share, "interoceptive": i_share}
@@ -184,8 +168,9 @@ def scan(draft_path, project_root=None) -> dict:
     msg = None
     if facial_ratio > FACIAL_RATIO_FLOOR:
         msg = (f"生理情绪线索面部偏置（facial_ratio {facial_ratio} > {FACIAL_RATIO_FLOOR}·"
-               f"面部 {facial}/非面部 {nonfacial}）·建议多用手/呼吸/肠胃/姿态等非面部信号")
-    elif bucket_total >= MIN_CUE_SAMPLES and max(f_share, o_share, i_share) > ANY_BUCKET_FLOOR:
+               f"facial/observable/interoceptive={facial}/{observable}/{interoceptive}）·"
+               "建议增加可观察躯体与内感受信号")
+    elif total >= MIN_CUE_SAMPLES and max(f_share, o_share, i_share) > ANY_BUCKET_FLOOR:
         # 三桶任一过密（非面部桶也可能 stale）
         dominant = max(("facial", f_share), ("observable", o_share),
                         ("interoceptive", i_share), key=lambda kv: kv[1])
@@ -197,7 +182,9 @@ def scan(draft_path, project_root=None) -> dict:
             out["violations"].append({
                 "kind": "physio_cue_facial_bias", "severity": "minor",
                 "message": msg, "facial_ratio": facial_ratio,
-                "facial_count": facial, "nonfacial_count": nonfacial,
+                "facial_count": facial,
+                "observable_count": observable,
+                "interoceptive_count": interoceptive,
                 "_doc": "情绪躯体化是创作选择·面部特写有时合理(贴脸 POV/特写镜头)→advisory 待裁决·"
                         "区域占比是可算半边粗糙哨兵·真躯体化质量留 judge/作者",
             })

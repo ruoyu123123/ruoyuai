@@ -10,7 +10,6 @@
 
 【消费方（2 个·均 advisory 补充证据·绝不否决字面判断）】
   · cross_book_invariant_scanner.py —— 跨书硬规则字面否定词窗口命中后·NLI 补充矛盾置信度证据
-  · writer_truth_check.corroborate_factual —— 字面锚词匹配落 "uncertain" 时·NLI entailment 补判
     正文段落是否蕴含声明（字面命中/未命中仍是第一判断，NLI 只补弱信号的灰色地带）
 
 【默认安全铁律（北极星⑤·零回归）】以下任一情况 → 返回 None（逐条）→ **调用方回退纯字面判断**，绝不崩：

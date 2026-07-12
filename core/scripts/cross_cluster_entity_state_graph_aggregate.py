@@ -382,7 +382,7 @@ def main():
         print(f"[SKIP] {report['skip_reason']}")
         sys.exit(0)
 
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     report["scan_ts"] = ts

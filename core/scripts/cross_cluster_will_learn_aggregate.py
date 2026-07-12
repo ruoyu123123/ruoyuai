@@ -1,13 +1,4 @@
-"""cross_cluster_will_learn_aggregate.py — 角色 will_learn 跨章兑现扫（CCR22）
-
-读 _数据库/人物卡.json[<角色>].knowledge.will_learn[]，每条有 due_by。
-对照已写章节，检测：
-- WILL_LEARN_OVERDUE：due_by 已过但仍在 will_learn 列（未在 changes 标 learned）
-- WILL_LEARN_NEVER_HINTED：should_learn_by 前 5 章无任何 hint/铺垫
-- WILL_LEARN_LEARNED_NOT_MARKED：正文中实际已显示该认知但 will_learn 中未删除
-
-退出码: 0 健康 / 1 advisory / 2 warning
-"""
+"""Audit character knowledge handoffs across story clusters."""
 
 from __future__ import annotations
 
@@ -18,184 +9,128 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
-sys.path.insert(0, str(Path(__file__).parent))
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
-import cluster_lookup  # 2026-06 锚 learn_at_cluster → 章范围（与 build_manifest/declarative 对齐）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_lookup  # noqa: E402
+import cluster_summary_reader as csr  # noqa: E402
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
+def _load_json(path: Path, default=None):
+    if not path.exists():
         return default
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return default
+    return value
 
 
-def read_text(project_root: Path, ch: int) -> str:
-    p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
-    return p.read_text(encoding="utf-8") if p.exists() else ""
+def _cluster_index(project_root: Path, cluster_id: str, clusters: list[dict]) -> int:
+    wanted = str(cluster_id)
+    for index, cluster in enumerate(clusters, start=1):
+        if str(cluster.get("cluster_id")) == wanted:
+            return index
+    return cluster_lookup.cluster_num(cluster_id) or 0
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    args = ap.parse_args()
+def _keywords(cluster: dict) -> set[str]:
+    values: set[str] = set()
+    direct = cluster.get("text_keyword_set") or []
+    values.update(str(item) for item in direct if item)
+    nested = cluster.get("chapters") or {}
+    if isinstance(nested, dict):
+        for record in nested.values():
+            if isinstance(record, dict):
+                values.update(str(item) for item in record.get("text_keyword_set") or [] if item)
+    return values
 
+
+def _collect_hints(clusters: list[dict]) -> list[set[str]]:
+    return [_keywords(cluster) for cluster in clusters]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    args = parser.parse_args()
     project_root = Path(args.project)
-    cards_path = project_root / "_数据库" / "人物卡.json"
-    if not cards_path.exists():
-        print("[SKIP] 人物卡.json 不存在")
-        sys.exit(0)
-    cards = load_json(cards_path, {})
-    characters = cards.get("characters", []) or []
-    if not characters:
-        print("[SKIP] 无角色")
-        sys.exit(0)
+    if not project_root.is_dir():
+        print(f"[FATAL] project directory not found: {project_root}", file=sys.stderr)
+        raise SystemExit(2)
 
-    # ===== 2026-05-29 cluster 化分支：账本有 text_keyword_set → 用账本关键词判 hint + cluster 末章锚点 =====
-    use_ledger = csr.is_cluster_mode() and csr.ledger_has_field(project_root, "text_keyword_set")
-    ledger_kw = {}  # {ch: set(text_keyword_set)}，cluster 模式用它取代逐章正文扫描
-    if use_ledger:
-        recs = csr.get_chapter_records(project_root)
-        chapters = sorted({ch for ch, _ in recs})
-        for ch, rec in recs:
-            kws = rec.get("text_keyword_set") or []
-            ledger_kw.setdefault(ch, set()).update(str(k) for k in kws)
-        # cluster 模式锚点 = 末 cluster 的 chapter_range[1]
-        last_clusters = csr.get_clusters(project_root, last_n=1)
-        cur_ch = 0
-        if last_clusters:
-            cr = last_clusters[-1].get("chapter_range")
-            if isinstance(cr, list) and len(cr) >= 2 and isinstance(cr[1], int):
-                cur_ch = cr[1]
-            elif isinstance(last_clusters[-1].get("cluster_end_ch"), int):
-                cur_ch = last_clusters[-1]["cluster_end_ch"]
-        if not cur_ch and chapters:
-            cur_ch = chapters[-1]
-    else:
-        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-        cur_ch = chapters[-1] if chapters else 0
-    if not cur_ch:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
+    cards = _load_json(project_root / "_数据库" / "人物卡.json", {})
+    characters = cards.get("characters", []) if isinstance(cards, dict) else []
+    clusters = csr.get_clusters(project_root)
+    if not characters or not clusters:
+        print("[SKIP] character cards or completed clusters are missing")
+        raise SystemExit(0)
+    hint_sets = _collect_hints(clusters)
+    current_index = len(clusters)
+    findings: list[dict] = []
 
-    findings = []
-    for c in characters:
-        if not isinstance(c, dict):
+    for character in characters:
+        if not isinstance(character, dict):
             continue
-        cname = c.get("name") or c.get("id")
-        if not cname:
+        name = character.get("name") or character.get("id")
+        if not name:
             continue
-        knowledge = c.get("knowledge", {}) or {}
-        will_learn = knowledge.get("will_learn", []) or []
-        for wl in will_learn:
-            if not isinstance(wl, dict):
+        will_learn = ((character.get("knowledge") or {}).get("will_learn") or [])
+        for item in will_learn:
+            if not isinstance(item, dict):
                 continue
-            # 2026-06 北极星①复审：will_learn 权威锚是 learn_at_cluster（cluster ID 字符串），
-            # 反查 cluster_id_to_range 取末章作 due_by——禁止抽 learn_at_cluster 里的数字当章号
-            # （对齐 build_manifest._collect_will_learn_due L2416 / cross_cluster_declarative_data L215）。
-            # 旧字段 id/content/by_ch 作 or 兜底向后兼容，但权威路径走 learn_at_cluster + fact。
-            fact = wl.get("fact") or wl.get("content") or wl.get("what") or wl.get("description", "")
-            item_id = wl.get("id") or wl.get("fact") or wl.get("what") or ""
-            content = fact
-            lac = wl.get("learn_at_cluster")
-            _rng = cluster_lookup.cluster_id_to_range(project_root, lac) if isinstance(lac, str) and lac else None
-            due_by = wl.get("due_by") or wl.get("by_ch") or 0
-            if not due_by and _rng and len(_rng) == 2 and isinstance(_rng[1], int):
-                due_by = int(_rng[1])
-            if not item_id or not due_by:
+            item_id = item.get("id") or item.get("fact") or item.get("what")
+            content = str(item.get("fact") or item.get("content") or item.get("what") or item.get("description") or "")
+            learn_cluster = item.get("learn_at_cluster")
+            due_index = _cluster_index(project_root, learn_cluster, clusters) if learn_cluster else 0
+            if not item_id or not due_index:
                 continue
-
-            # WILL_LEARN_OVERDUE：due_by 已过
-            if cur_ch > due_by:
+            if current_index > due_index:
                 findings.append({
                     "severity": "warning",
                     "code": "WILL_LEARN_OVERDUE",
-                    "character": cname,
+                    "character": name,
                     "item_id": item_id,
-                    "content": content[:60],
-                    "due_by": due_by,
-                    "current_ch": cur_ch,
-                    "overdue_by": cur_ch - due_by,
-                    "suggestion": f"{cname} 应在 ch{due_by} 前学到「{item_id}」，已过 {cur_ch - due_by} 章未标记 learned",
+                    "learn_at_cluster": learn_cluster,
+                    "current_cluster": clusters[-1].get("cluster_id"),
+                    "overdue_by_clusters": current_index - due_index,
+                    "suggestion": f"{name} 的知识 {item_id} 已超过 {learn_cluster} 未完成",
                 })
+            window_start = max(1, due_index - 4)
+            if window_start <= current_index <= due_index:
+                content_terms = re.findall(r"[一-鿿]{3,5}", content)[:3]
+                hinted = any(
+                    any(term in hint_set or any(term in hint for hint in hint_set) for term in content_terms)
+                    for hint_set in hint_sets[window_start - 1:current_index]
+                )
+                if content_terms and not hinted:
+                    findings.append({
+                        "severity": "advisory",
+                        "code": "WILL_LEARN_NEVER_HINTED",
+                        "character": name,
+                        "item_id": item_id,
+                        "learn_at_cluster": learn_cluster,
+                        "suggestion": "知识点临近学习 cluster 仍没有关键词铺垫",
+                    })
 
-            # WILL_LEARN_NEVER_HINTED：due_by 前 5 章无 hint
-            if cur_ch >= due_by - 5 and cur_ch <= due_by + 2:
-                # 取近 5 章查正文
-                content_kws = re.findall(r"[一-鿿]{3,5}", content)[:3]
-                if content_kws:
-                    hint_chs = []
-                    for ch in chapters[-5:]:
-                        if use_ledger:
-                            # 2026-05-29 复审修复 [M10-b]：
-                            # 账本 text_keyword_set 是 builder 抽的「最常见 top-4 个 2 字 2gram」指纹，
-                            # 用 2 字指纹去比对 3-5 字内容词（kw in tk / tk in kw）召回极低 →
-                            # 几乎所有章都判「无命中」→ WILL_LEARN_NEVER_HINTED 大面积误报。
-                            # 修复：①先用指纹做「3-5 字内容词整体落在某指纹里」的宽松粗筛（只取 tk in kw 方向、
-                            #        即指纹是内容词子串，剔除无意义的 kw in tk 方向）；②指纹未命中时不直接判「无铺垫」，
-                            #        回落到该章真实正文做精确 `kw in text` 校验（磁盘文件仍在），消除误报。
-                            chk = ledger_kw.get(ch, set())
-                            hit = any(
-                                any(tk in kw for tk in chk if len(tk) >= 2)
-                                for kw in content_kws
-                            )
-                            if not hit:
-                                # 指纹是有损 top-4，未命中不可信 → 回落真实正文精确校验
-                                text = read_text(project_root, ch)
-                                if text and any(kw in text for kw in content_kws):
-                                    hit = True
-                            if hit:
-                                hint_chs.append(ch)
-                        else:
-                            text = read_text(project_root, ch)
-                            if any(kw in text for kw in content_kws):
-                                hint_chs.append(ch)
-                    if not hint_chs and cur_ch <= due_by:
-                        findings.append({
-                            "severity": "advisory",
-                            "code": "WILL_LEARN_NEVER_HINTED",
-                            "character": cname,
-                            "item_id": item_id,
-                            "content": content[:50],
-                            "due_by": due_by,
-                            "current_ch": cur_ch,
-                            "suggestion": f"{cname} will_learn「{item_id}」(due {due_by}) 前 5 章无任何铺垫 → 突兀",
-                        })
-
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+    summary = {
+        "warning": sum(f["severity"] == "warning" for f in findings),
+        "advisory": sum(f["severity"] == "advisory" for f in findings),
+    }
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary = {
-        "warning": sum(1 for f in findings if f["severity"] == "warning"),
-        "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
-    }
     report = {
         "scan_type": "will_learn",
         "scan_ts": ts,
-        "current_ch": cur_ch,
-        "characters_scanned": [c.get("name") for c in characters if isinstance(c, dict) and c.get("name")],
+        "clusters_scanned": [str(cluster.get("cluster_id")) for cluster in clusters],
+        "characters_scanned": [c.get("name") or c.get("id") for c in characters if isinstance(c, dict)],
         "findings": findings,
         "summary": summary,
     }
     out_path = out_dir / f"will_learn_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[will_learn] {summary['warning']} warning / {summary['advisory']} advisory")
-    for f in findings[:6]:
-        print(f"  [{f['severity'].upper()}] {f.get('code')}: {f.get('suggestion', '')[:80]}")
-    print(f"报告: {out_path}")
-    if summary["warning"] > 0:
-        sys.exit(2)
-    if summary["advisory"] > 0:
-        sys.exit(1)
-    sys.exit(0)
+    print(f"report: {out_path}")
+    raise SystemExit(2 if summary["warning"] else 1 if summary["advisory"] else 0)
 
 
 if __name__ == "__main__":

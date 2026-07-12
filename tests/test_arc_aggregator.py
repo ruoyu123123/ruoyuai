@@ -11,7 +11,7 @@ urllib/requests/gen_model_loader/llm_transport）。它是纯确定性聚合器�
 
 现有间接覆盖：
 覆盖情绪强度抽取、dim 抽取、Reagan 拟合、arc 结构描述、aggregate_cluster 与
-aggregate_summary；`parse_pacing_curve_to_values` 由 test_audit_batch2_remaining.py 覆盖。
+aggregate_summary 与 pacing curve 最长标签匹配。
 
 零依赖约定：只用标准库 · test_* 无参数 · 断言失败 raise AssertionError · tempfile + utf-8 · Windows。
 
@@ -393,11 +393,11 @@ def test_aggregate_summary_aggregates_cluster_arcs():
         }, ensure_ascii=False), encoding="utf-8")
         res = mod.aggregate_summary(root)
         assert "error" not in res, f"不该 error: {res}"
-        assert res["primary_track"] == "cluster"
-        assert res["total_arcs"] == 2
+        assert res["schema_version"] == "cluster_arc_summary.v1"
+        assert res["total_clusters"] == 2
         assert res["reagan_shape_distribution"]["Rags-to-Riches"] == 2
         assert res["most_common_shape"] == "Rags-to-Riches"
-        # climax 位置百分比合法（用 chapters_count 当分母，不再硬编码 10 → 不会 >1）
+        # 高潮位置按每个 cluster 的实际采样点归一化。
         assert 0.0 <= res["average_climax_position_pct"] <= 1.0, \
             f"climax 位置越界（应已修硬编码分母）: {res['average_climax_position_pct']}"
         # 伏笔均值
@@ -405,6 +405,27 @@ def test_aggregate_summary_aggregates_cluster_arcs():
             f"(2+4)/2=3，得 {res['average_foreshadowing_planted_per_arc']}"
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_aggregate_summary_rejects_non_cluster_arc_only_directory():
+    root = _make_project()
+    try:
+        arc_dir = root / "arc_templates"
+        arc_dir.mkdir(parents=True, exist_ok=True)
+        (arc_dir / "arc_010.json").write_text("{}", encoding="utf-8")
+        assert "error" in mod.aggregate_summary(root)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_pacing_curve_matches_longest_label_first():
+    assert mod.parse_pacing_curve_to_values("Ch1中快", 1) == [0.65]
+    assert mod.parse_pacing_curve_to_values("Ch1极快", 1) == [0.95]
+    assert mod.parse_pacing_curve_to_values("Ch1中", 1) == [0.5]
+    assert mod.parse_pacing_curve_to_values("Ch1快", 1) == [0.8]
+    assert mod.parse_pacing_curve_to_values("Ch1中快→Ch2极快→Ch3中", 3) == [
+        0.65, 0.95, 0.5
+    ]
 
 
 # ---------------------------------------------------------------------------

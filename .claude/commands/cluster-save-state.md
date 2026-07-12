@@ -12,9 +12,10 @@ $ARGUMENTS
 
 **1 个 cluster = 1 次完整 save-state 流水线**。状态同步单位是 cluster 级，章节只是输出层。
 
-- **状态回库两条数据流分离（2026-06-28 审计清理C类 + 硬停收尾）**：
-  - **写作自评流（writer · gen-model）**：`cluster_changes.json` 的 `self_eval` / `waivers` 只作创作自评 / 豁免喂 audit，**factual 不再作回库权威源**。
-  - **状态梳理流（archivist · Claude 读正文）**：角色 / 道具 / 关系 / locked_facts / throughline / 角色信念(belief_ledger·per-character witness) / 反派轮替(反派轮替.json·长篇反派梯度 ledger) / 主角力量 tier(角色弧线.json·升级流力量梯度) 由 novel-archivist 读 cluster_draft.txt 正文产 archive.json → `apply_archive.py` 确定性回库（北极星⑤：创作=gen-model writer / 状态梳理=Claude archivist · 互不越权）。
+- **状态回库三条数据流分离**：
+  - **写作自评流（writer）**：`cluster_changes.json` 的 `self_eval` / `waivers` 只作创作自评和豁免，不承载客观状态。
+  - **实体归档流（novel-archivist）**：角色、道具、关系、locked_facts、throughline、信念、反派轮替、力量 tier 和 actant 由正文抽取成 `cluster_<key>_archive.json`，再由 `apply_archive.py` 回库。
+  - **运行态增量流（novel-state-tracker）**：时间、地点、Hub 使用、世界事件、机会消费、幕后线响应和已揭 heart events 由正文与当前库梳理成 `cluster_<key>_state_delta.json`，再由确定性脚本校验并回库。
   - 🔴 **硬停**：archive 是 factual 回库的**唯一权威路径**——archivist judge `failure_policy=block`、apply_archive 步无 advisory 前缀，archive 缺出场角色=archivist 失败=错误→硬停（状态缺失不得继续）。
 - Git 1 cluster 1 commit（不再 per chapter）
 - 所有 agent (archivist/summarizer/foreshadower/reflector/outline-planner) 走 cluster mode
@@ -52,16 +53,16 @@ STEP: <当前步骤号>
 # 流水线架构（required steps）
 
 ```
-1.  wal-start + db_schema_validate (--auto-migrate)
+1.  wal-start + db_schema_validate（严格校验）
 2.  parse cluster_changes.json (self_eval/waivers · 创作自评 · 不含 factual 自报)
-3.  apply-cluster-changes + writer_truth_check (非 archive 域 time_advance/location + 撒谎检测)
+3.  validate writer self_eval + cluster writer_truth_check（客观状态零回库）
 4.  audit_hub cluster pre-save audit (统一 cluster 审计入口 · hard_gate 校验)
-5.  cluster_entity_stats.py 前置确定性统计 (A15 证据基线) → novel-archivist MODE=cluster (读正文产 archive.json · factual 权威源 · failure_policy=block · 含 belief_updates witness)
-6.  apply_archive.py (角色/道具/关系/locked_facts/throughline + 角色信念 belief_ledger 确定性回库 · 失败硬停)
+5.  cluster_entity_stats.py 前置确定性统计 → 并行 spawn novel-archivist 与 novel-state-tracker，分别产 archive.json 和 cluster_state_delta.json
+6.  apply_archive.py + cluster_state_delta.py 分域确定性回库（任一失败硬停）
 7.  novel-summarizer MODE=cluster (cluster 级摘要 + 场景级 Appraisal Beat chain-of-emotion) + 🆕 S10 卷边界条件子任务 (detect-volume-boundary → MODE=volume 卷级递归摘要 → apply-volume-summary)
 8.  novel-foreshadower MODE=cluster (整 cluster 伏笔评估)
 9.  novel-reflector MODE=cluster (经验沉淀)
-10. wal-merge + learning_loop + judge_reports_archive + build-cluster-summary + apply-appraisal-beats + data-flywheel
+10. wal-merge + learning_loop + JudgeReport cluster 汇总 + build-cluster-summary + 状态回填
 11. cluster-scan + state + drift + evolution (wrapper 脚本 + 自学习闭环)
 12. git-commit-cluster (1 cluster 1 commit)
 13. cluster-emergence + novel-outline-planner (涌现下个 cluster brief)
@@ -79,7 +80,7 @@ mkdir -p "$(dirname "$WAL_PATH")"
 echo '{"started_at":"'$(date -Iseconds)'","cluster_key":"<key>","status":"running"}' > "$WAL_PATH"
 
 # 数据库 schema 自检 + 自动迁移（v25+ 字段补全）
-python core/scripts/db_schema_validate.py "<项目路径>" --auto-migrate
+python core/scripts/db_schema_validate.py "<项目路径>"
 # 34 子系统完整性闸（防 cluster 期间子系统更新漏/坏文件 · 缺或坏 → exit 2 阻断）
 python core/scripts/scaffold_subsystems.py verify "<项目路径>"
 ```
@@ -96,9 +97,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1
 
 读 `章节/cluster_<key>_draft/cluster_<key>_changes.json` 的 `self_eval` / `waivers` 段（writer 整块产出的**创作期自评 / 豁免** + 确定性遥测 · **不含 factual 状态自报**——cluster 级 factual 由第 5 步 archivist 读正文梳理回库，喂 audit 的是创作自评不是 factual）。
 
-`save_state.cmd_apply_cluster_changes` 展开本 cluster 的 `chapter_range`，逐章调用 `cmd_parse`，每章落地 `_数据库/.wal/第<N>章_parsed.json`，并写一份 cluster 级 `_数据库/.wal/<key>_apply_cluster.json` 汇总。
->
-> 解析无独立 CLI 命令——第 3 步 `--apply-cluster-changes` 内部一并完成（apply 前必先 parse）。本步只做 plan 记账。
+本步只确认 canonical `cluster_<key>_changes.json` 已存在；不展开物理章节，不产章级 parsed 文件，也不写任何客观状态。
 
 **plan-step 2**：
 
@@ -108,34 +107,21 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 2
 
 ---
 
-# 第 3 步：apply-cluster-changes + writer-truth-check
+# 第 3 步：验证 writer self_eval + cluster truth-check
 
-一次性处理 cluster_changes.json + 检测 writer 撒谎（writer_truth_check）：
+先验证 changes schema 并写自评收据，再直接核对整块正文与 writer 自评：
 
 ```bash
 python core/scripts/save_state.py "<项目路径>" --apply-cluster-changes <key>
+python core/scripts/writer_truth_check.py "<项目路径>" --cluster <key>
 ```
 
-> 🔴 **模型/可成长闭环自动接入（2026-06-30）**：save_state `main()` 默认开启模型与可成长门控（同 audit_hub·经 `nn_runtime_defaults`·无需手动 export）：
-> - **FeatureStore**：NN scanner / save_state 复用 VAD、surprisal、coherence 特征缓存，减少重复推理，统一训练/服务特征口径。
-> - **ModelRegistry**：入口同步当前 active/shadow 模型版本与指标，保留运行时治理账本。
-> - **DataFlywheel**：第 10 步 auto-post-reflect 后自动收集 paragraph / weak label / waiver / legacy fixer pair / checker brief / gen_fixer report / style repair report / judge report reliability / reading reflection / audit metadata 训练样本。
-> - **VAD 情绪模型**：`--apply-appraisal-beats` 步可对 appraisal beat 的 valence/arousal 做模型重算（CCC 0.80·`vad_bin._source=model_va+summarizer_d`）。本链路 required 产物是 summarizer 写出的 `appraisal_beats` 与回填账本；VAD 只覆盖数值桶，模型能力不足不得成为跳过 appraisal beat 回填的理由。
-
-> 🔴 **2026-06-28 审计清理C类**：cluster 级 factual 状态（角色 / 道具 / 关系 / locked_facts / 伏笔）**不再从 writer changes.factual 回库**——这些由第 5/6 步 novel-archivist 读正文产 archive.json → `apply_archive.py` 确定性回库，伏笔由 foreshadower + outline brief 回库。本步 apply 只落地**无替代 producer 的非 archive 域**项（time_advance 时间线 / location_changes 地点 status）+ 跑 writer_truth_check。
-
-内部会：
-- 解析 cluster_changes（self_eval/waivers + 残留非 archive 域 factual）
-- 按章 iterate（cmd_parse + apply_changes）但作为整体事务 · 只落 time_advance / location_changes 等非 archive 域项
-- writer_truth_check 跑（writer 声明 X 但正文实际 Y → 报错）
-
-失败处理：
-- writer_truth_check FAIL → 停止，要求用户回查正文 vs changes 一致性
+`--apply-cluster-changes` 只验证 `self_eval`、`waivers` 与确定性写作遥测，产 `_数据库/.wal/cluster_<key>_apply_cluster.json`，其中 `objective_state_applied=false`。`writer_truth_check.py --cluster` 只读 canonical cluster 草稿与 changes，产 `_数据库/.judge_reports/cluster_<key>_writer-truth-check.json`；`verdict != pass` 或 `lie_count != 0` 即阻断。
 
 **plan-step 3**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3 --output "_数据库/.wal/<key>_apply_cluster.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 3 --output "_数据库/.judge_reports/cluster_<key>_writer-truth-check.json"
 ```
 
 ---
@@ -159,7 +145,7 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 4 --output "_数据库/.
 
 ---
 
-# 第 5 步：novel-archivist MODE=cluster（读正文产 archive.json）
+# 第 5 步：并行状态梳理（archive + state delta）
 
 > 🔴 **2026-06-28 审计清理C类 · 两条数据流分离**：本步起的 archivist / summarizer / foreshadower / reflector 同属「**Claude 读正文梳理**」段，与 writer（gen-model）的「写作自评」流互不越权。
 > - **写作自评（writer）**：cluster_changes.json 的 self_eval / waivers → 喂 audit（创作自评 / 豁免），**不作 factual 回库权威源**。
@@ -173,7 +159,30 @@ python core/scripts/cluster_entity_stats.py "<项目路径>" --cluster <key>
 
 产 `_数据库/.wal/cluster_<key>_entity_stats.json`（moyin collectCharacterStats 范式·零 LLM）：每实体出场次数 / 对白条数估计（引号邻域归属）/ 首现位置 + 未登记新专名候选（2-4 字·频次≥3 防噪）。**代码算客观统计·archivist 只裁决主观归类**——统计是证据基线，统计里频次高的实体在 archive.characters 缺失 = 漏抽信号（压漏报·钟楼弃儿 writer 漏报教训）。
 
-**5b · spawn novel-archivist**（读整 cluster 正文 + 统计证据基线，客观抽取本块新增/变更状态，产 archive.json）：
+**5b · spawn novel-archivist**（读整 cluster 正文 + 统计证据基线，抽取实体与事实归档，产 archive.json）。
+
+**5c · spawn novel-state-tracker**（读整 cluster 正文 + 时间线/地图/枢纽场景/世界状态/事件池/角色行动表，产独立运行态增量）：
+
+```
+Agent 启动 novel-state-tracker:
+PLAN_ID: $PLAN_ID
+STEP: 5
+PROJECT: <项目路径>
+CLUSTER_ID: cluster_<key>
+MODE: cluster
+CLUSTER_DRAFT_PATH: <项目路径>/章节/cluster_<key>_draft/cluster_<key>_draft.txt
+TIMELINE_PATH: <项目路径>/_数据库/时间线.json
+MAP_PATH: <项目路径>/_数据库/地图.json
+HUBS_PATH: <项目路径>/_数据库/枢纽场景.json
+WORLD_STATE_PATH: <项目路径>/_数据库/世界状态.json
+GRAND_TREND_PATH: <项目路径>/_数据库/大势卡.json
+ENSEMBLE_PATH: <项目路径>/_数据库/群像档.json
+RIPPLE_RULES_PATH: <项目路径>/_数据库/涟漪规则.json
+STATE_DELTA_PATH: <项目路径>/_数据库/.wal/cluster_<key>_state_delta.json
+RECEIPT_PATH: <项目路径>/_数据库/.wal/cluster_<key>_state_tracker_receipt.json
+```
+
+state-tracker 写完 delta 后必须运行 `state_tracker_receipt.py` 生成独立回执；回执绑定 `PLAN_ID`、`STEP=5`、当前 `cluster_id` 与 delta 的 SHA-256。`cluster_<key>_state_delta.json` 是业务产物，不能冒充 Agent 完成证明。
 
 ```
 Agent 启动 novel-archivist:
@@ -183,7 +192,6 @@ PROJECT: <项目路径>
 CLUSTER_ID: cluster_<key>
 MODE: cluster
 CLUSTER_DRAFT_PATH: <项目路径>/章节/cluster_<key>_draft/cluster_<key>_draft.txt
-CLUSTER_CHAPTER_RANGE: <START_CH>-<END_CH>
 ENTITY_STATS_PATH: <项目路径>/_数据库/.wal/cluster_<key>_entity_stats.json
 ```
 
@@ -205,12 +213,13 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 5
 
 ---
 
-# 第 6 步：apply-archive（确定性回库）
+# 第 6 步：分域确定性回库
 
 把第 5 步 archive.json 幂等回库（无模型）：
 
 ```bash
 python core/scripts/apply_archive.py "<项目路径>" --cluster <key>
+python core/scripts/cluster_state_delta.py "<项目路径>" --cluster <key>
 ```
 
 把 archive.json 落到 人物卡 / 角色池 / 道具 / 关系 / 事件簇.clusters[].locked_facts + 事件簇.clusters[].throughline_progress + character_belief_ledger.json + 反派轮替.json + 角色弧线.json + cluster_actant_ledger.json（复用已有 id，绝不为同一角色造第二个 id）。
@@ -336,15 +345,18 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 9 --output "_数据库/.
 # 第 10 步：wal-merge + learning_loop + judge-archive + build-cluster-summary + data-flywheel
 
 ```bash
-# learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ WAL 合并
+# learning_loop cluster 三步链（merge-reflection + ingest cluster audit + scan cluster recurrence）+ WAL 合并
 python core/scripts/save_state.py "<项目路径>" --auto-post-reflect-cluster <key>
 
-# 把本 cluster 所有 JudgeReport 存入 故事块摘要[cluster].judge_reports[]（按 chapter_range 定位 cluster）
-# 经 adaptive_runner：失败记录 incident 后硬停，供 self_heal_engine 学习；缺失状态不得继续。
+# 聚合本 cluster 的 JudgeReport 与 required 评估信号，落独立 rollup 供摘要构建器消费。
+# 经 adaptive_runner 执行；失败时记录 incident 并硬停。
 python core/scripts/adaptive_runner.py --label judge_reports_archive --strict -- python core/scripts/judge_reports_archive.py "<项目路径>" --cluster <key>
 
-# 把整 cluster 富摘要预算写入 故事块摘要.json 账本（供 step 11 cross_cluster aggregator 复用）
+# 读取正文、状态 delta、archive、truth report 与 judge rollup，写入严格 cluster 摘要账本。
 python core/scripts/save_state.py "<项目路径>" --build-cluster-summary <key>
+
+# 把 brief 规划伏笔注册进伏笔表，并按 step 8 foreshadower 报告应用本块 payoff；缺报告或写回失败即阻断
+python core/scripts/save_state.py "<项目路径>" --apply-foreshadow-state <key>
 
 # 🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion）：把 step 7 summarizer 产的 appraisal_beats
 # 确定性回填 叙事节拍器.json.appraisal_beats（只 active cluster·幂等；summary/appraisal_beats/叙事节拍器缺失即 exit 2，空数组表示无新增）
@@ -368,13 +380,13 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 10 --output "_数据库/
 wrapper 脚本 + 3 行自学习闭环批量跑：
 
 ```bash
-python core/scripts/save_state_updates.py "<项目路径>" --cluster <key> --all
-python core/scripts/save_state_evaluators.py "<项目路径>" --cluster <key> --all
-python core/scripts/run_cross_cluster_aggregates.py "<项目路径>" --cluster <key> --tier full_18
+python core/scripts/save_state_updates.py "<项目路径>" --cluster <key>
+python core/scripts/save_state_evaluators.py "<项目路径>" --cluster <key>
+python core/scripts/run_cross_cluster_aggregates.py "<项目路径>" --cluster <key>
 python core/scripts/style_drift_scan.py "<项目路径>" --last-n 10
 python core/scripts/character_index.py "<项目路径>" --write
 python core/scripts/learning_loop.py "<项目路径>" --scan-recurring
-python core/scripts/world_evolution_apply_chapter.py "<项目路径>" --cluster <key>
+python core/scripts/world_evolution_apply_cluster.py "<项目路径>" --cluster <key>
 python core/scripts/knowledge_graph_update.py "<项目路径>" --cluster <key>
 python core/scripts/subplot_progress_update.py "<项目路径>" --cluster <key>
 # 演化类经 adaptive_runner：记录学习 + 熔断（取代非严格继续）
@@ -387,14 +399,15 @@ python core/scripts/scan_retention.py "<项目路径>" --keep 5
 python core/scripts/self_heal_engine.py --ingest
 python core/scripts/self_heal_engine.py --emit-lessons
 python core/scripts/step_completion_monitor.py --scan-latest --command cluster-save-state --project "<书名>"
+python core/scripts/cluster_post_state_receipt.py "<项目路径>" --cluster <key> --plan-id "$PLAN_ID" --step 11
 ```
 
-`knowledge_graph_update.py` 与 `subplot_progress_update.py` 是本步正式状态生产者；输入缺失、JSON 损坏或写回失败必须停下修正。演化类脚本经 **adaptive_runner --strict** 执行：把运行失败记录到 `runtime/incidents.jsonl` 供 self_heal_engine 学习，然后以非 0 退出阻断当前 plan，并用熔断器防同一脚本连续崩还盲跑。末尾自学习闭环：`self_heal_engine --ingest` 把本 cluster 累积的运行时报错按指纹复发计数（≥3 recurring / ≥5 known），`--emit-lessons` 把 known 级写入 `lessons/runtime_lessons.md`，`step_completion_monitor` 扫本次 plan 是否有假完成/失败/未跑的缺步。
+`knowledge_graph_update.py` 与 `subplot_progress_update.py` 是本步正式状态生产者；输入缺失、JSON 损坏或写回失败必须停下修正。演化类脚本经 **adaptive_runner --strict** 执行：把运行失败记录到 `runtime/incidents.jsonl` 供 self_heal_engine 学习，然后以非 0 退出阻断当前 plan，并用熔断器防同一脚本连续崩还盲跑。末尾自学习闭环：`self_heal_engine --ingest` 把本 cluster 累积的运行时报错按指纹复发计数（≥3 recurring / ≥5 known），`--emit-lessons` 把 known 级写入 `lessons/runtime_lessons.md`，`step_completion_monitor` 扫本次 plan 是否有假完成/失败/未跑的缺步。最后由 `cluster_post_state_receipt.py` 校验本 cluster 的状态更新、状态评估、全量跨块扫描、世界演化和 Judge consensus 决策回执，并以 SHA-256 绑定这些产物；普通数据库文件不能充当本步完成证明。
 
 **plan-step 11**：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 11 --output "_数据库/knowledge_graph.json"
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 11 --output "_数据库/.wal/cluster_<key>_post_state_receipt.json"
 ```
 
 ---
@@ -467,12 +480,15 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 - [ ] `plan_tracker.py status $PLAN_ID` 显示所有 required steps 全部 `[x] completed`
 - [ ] `plan_tracker.py end $PLAN_ID` 返回 exit 0
 - [ ] `_数据库/.wal/cluster_<key>_save_state.json` 存在
-- [ ] `_数据库/.wal/<key>_apply_cluster.json` 存在（step3 apply-cluster-changes 汇总 · 含 writer_truth_check）+ 本 cluster 各章 `第<N>章_parsed.json` 已落地（per-chapter）
+- [ ] `_数据库/.wal/cluster_<key>_apply_cluster.json` 存在且 `objective_state_applied=false`；`_数据库/.judge_reports/cluster_<key>_writer-truth-check.json` 为本 cluster 的 pass 报告
 - [ ] `_数据库/.wal/cluster_<key>_entity_stats.json` 存在（step 5 前置 cluster_entity_stats.py 确定性统计 · A15 证据基线）
-- [ ] `_数据库/.wal/cluster_<key>_archive.json` 存在（step 5 archivist 产出）+ apply_archive 已回库角色/道具/关系/locked_facts/throughline/角色信念(belief_ledger)（step 6）
+- [ ] `_数据库/.wal/cluster_<key>_archive.json`、`cluster_<key>_state_delta.json` 与 `cluster_<key>_state_tracker_receipt.json` 均存在；回执绑定 plan/step/delta SHA-256，step 6 已分别回库实体归档与运行态增量
 - [ ] `_数据库/.wal/cluster_<key>_summary.json` 存在（summarizer 产出 · 含 appraisal_beats list）+ apply-appraisal-beats 已回填 叙事节拍器.appraisal_beats（空 list 只表示本块无新增）
 - [ ] `_数据库/.wal/cluster_<key>_volume_boundary.json` 存在（step 7 detect 产出）；`boundary=true` 时 `故事块摘要.volume_summaries` 已含该卷条目（`--apply-volume-summary` 回库·source 覆盖本卷全部 cluster_ids）
 - [ ] `_数据库/.judge_reports/cluster_<key>_foreshadower.json` 存在（含 specific_findings.dramatic_questions）+ apply-dramatic-questions 已回库 戏剧问题账本.json（空 raised/answered 只表示本块无新增）
+- [ ] `_数据库/.wal/cluster_<key>_judge_reports_rollup.json` 存在，且已由 `cluster_summary_builder.py` 写入对应 cluster 摘要记录
+- [ ] `_数据库/.wal/cluster_<key>_foreshadow_state_receipt.json` 存在；brief 伏笔注册与本块 payoff 已由 required cluster 子命令完成
+- [ ] `_数据库/.wal/cluster_<key>_post_state_receipt.json` 存在并绑定 step 11 的状态更新、状态评估、跨块 wrapper、世界演化和 consensus 决策产物
 - [ ] Git commit `feat(cluster-NNN): N 章 (chX-chY)` 已落地
 - [ ] `_数据库/.wal/cluster_<next_key>_emergence.json` 存在（emergence 产出）
 - [ ] 2-3 张走向卡 brief 准备好展示给用户

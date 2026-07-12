@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gen_creative.py — Gen-Model 创意卡 / 角色样本 / 卷描述生成工具
+gen_creative.py — Gen-Model 创意卡与卷描述生成工具
 
 把「含创意笔触」的输出从 Claude 主代理迁到当前 active gen-model profile。
 Claude 主代理负责准备 brief（题材/调研缓存/角色骨架），调本工具生成正文段，再接收 JSON 展示给用户。
@@ -10,7 +10,6 @@ Claude 主代理负责准备 brief（题材/调研缓存/角色骨架），调�
   --mode brainstorm    生成 N 张灵感卡（开书用，配合 /write 命令）                    [✓]
   --mode volume_arc    生成卷级大纲（P2 分卷 chunk + WAL 断点续跑：骨架→逐卷 ME 池→确定性合并·配合 /outline·阶段2 建书·实现在 gen_creative_volume_arc.py） [✓]
   --mode distill_reflect  蒸馏 phase-3 修正反思·产 skill markdown（配合 /distill-style） [✓]
-  --mode voice_sample  生成角色 voice_pack.style_samples/anti_samples（配合 /distill-character·🔴 C13 同栈 gen-model）  [✓]
 
 用法示例：
 
@@ -165,123 +164,6 @@ def build_brainstorm_prompt(topic: str, count: int, research: str,
 def parse_brainstorm_output(reply: str) -> dict:
     """解析 brainstorm 输出 JSON"""
     return _parse_json_loose(reply, fallback={"version": 1, "cards": [], "_raw": reply[:2000]})
-
-
-# ============ MODE: voice_sample（🔴 2026-06-27 C13 实现）============
-def build_voice_sample_prompt(character_id: str, character_name: str,
-                              history_quotes: str, voice_dna_text: str,
-                              count: int) -> tuple[str, str]:
-    """🔴 2026-06-27 C13：角色 voice_pack.style_samples / anti_samples 候选生成（gen-model·同栈）。
-
-    守『蒸馏复刻必须同栈 gen-model』（北极星）：含创意笔触的对白样本不让 Claude 主代理凭印象编
-    （脱离实战 voice），强制 gen-model 接收**角色历史真实对白 few-shot** + voice_dna 基础字段。
-
-    主代理（Claude）已完成分析段（提取历史对白 + 5 层 persona），把 history_quotes（实战对白片段）
-    和 voice_dna 交给 gen-model；gen-model 只产含创意笔触的样本（style_samples 正例 / anti_samples 反例）。
-    消除原 NotImplementedError / gen_fixer polish hack。
-    """
-    system = """你是角色对白声纹（voice）样本生成引擎。
-
-主代理（Claude）已从已写章节里提取了某角色的**真实历史对白**（few-shot）+ 5 层 persona 分析（voice_dna）。
-你的任务：严格贴着该角色的实战 voice，生成 style_samples（正例）+ anti_samples（反例）候选。
-
-# 硬约束
-
-1. **贴实战 voice**：style_samples 必须读起来就是「这个角色会说的话」——句长/标点/口头禅/语气词/态度都对齐历史对白，不是泛泛的「角色对白」。
-2. **anti_samples = 反面教材**：写出「这个角色绝对不会这么说」的版本（同一情境下被写飞/同质化/AI 腔/违背 layer_0 硬规则的台词），供 novel-voice-checker 后续比对避坑。
-3. **每条样本标注它命中/违背的 voice 维度**（dim：如「短句连发」「嘴硬心软」「回避型」）——供下游溯源，不是空话。
-4. **不复述 voice_dna 原文**：用具体台词体现，不要把分析当台词写。
-5. **0 AI 套话 / 0 禁用词**（与此同时/顿时/淡淡/微微挑眉 等一律不出现，除非该角色历史对白本就有该签名词）。
-
-# 输出格式
-
-严格输出 JSON（无 markdown 围栏包裹），schema：
-
-{
-  "version": 1,
-  "character": "<角色 id 或名>",
-  "style_samples": [
-    {"text": "一条正例台词（贴实战 voice）", "dim": "命中的 voice 维度", "scene_hint": "适用情境（≤20字）"}
-  ],
-  "anti_samples": [
-    {"text": "一条反例台词（该角色绝不会这么说）", "violates": "违背的 voice 维度/layer_0 硬规则"}
-  ],
-  "banned_phrases_candidates": ["与角色明确人设冲突、建议禁说的词（首次明确即可·下游主代理裁定）"]
-}
-
-不要写解释、不要加引言、不要写「以下是」。直接输出 JSON。
-"""
-    user = f"""# 目标角色
-
-id/名：{character_name or character_id or '（未命名角色）'}
-
-# 5 层 persona 分析（voice_dna · 决定 voice 边界）
-
-{voice_dna_text if voice_dna_text else '（未提供 voice_dna，仅凭历史对白推断 voice）'}
-
-# 历史真实对白（few-shot · 实战 voice 锚点 · 必须贴着这个语感写）
-
-{history_quotes if history_quotes else '（未提供历史对白，警告：缺 few-shot 时样本易脱离实战 voice，请保守生成）'}
-
-# 任务
-
-为该角色生成 **{count}** 条 style_samples（正例）+ 至少 2 条 anti_samples（反例）+ banned_phrases 候选。
-按上方 JSON schema 输出，不要 markdown 包裹。
-"""
-    return system, user
-
-
-def parse_voice_sample_output(reply: str) -> dict:
-    """解析 voice_sample 输出 JSON（宽容解析·失败回退空骨架供主代理人审）。"""
-    return _parse_json_loose(reply, fallback={
-        "version": 1, "style_samples": [], "anti_samples": [],
-        "banned_phrases_candidates": [], "_raw": reply[:2000]})
-
-
-def _load_material(material_path: Path | None) -> dict:
-    """读 step1 产的 material.json（角色历史素材）。容错：缺/坏 → {}。"""
-    if material_path is None or not material_path.exists():
-        return {}
-    try:
-        d = json.loads(material_path.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _voice_sample_history_text(material_path: Path | None, max_quotes: int = 30) -> str:
-    """把 material.json 的历史对白拼成 few-shot 文本（标来源章号·实战 voice 锚点）。
-
-    兼容 schema：dialogue_quotes:[{text, from_chapter}] 主；也容忍纯字符串列表 / quotes 别名。
-    """
-    mat = _load_material(material_path)
-    quotes = (mat.get("dialogue_quotes") or mat.get("quotes")
-              or mat.get("dialogues") or [])
-    lines: list[str] = []
-    for q in quotes[:max_quotes]:
-        if isinstance(q, dict):
-            text = (q.get("text") or q.get("quote") or "").strip()
-            ch = q.get("from_chapter") or q.get("chapter") or q.get("ch")
-            if not text:
-                continue
-            lines.append(f"- 「{text}」" + (f"（ch{ch}）" if ch else ""))
-        elif isinstance(q, str) and q.strip():
-            lines.append(f"- 「{q.strip()}」")
-    # 顺带带上动作/内心片段（给 voice 更立体的实战锚点）
-    for key, label in (("action_quotes", "动作"), ("inner_quotes", "内心")):
-        extra = mat.get(key) or []
-        for e in extra[:5]:
-            t = e.get("text", "").strip() if isinstance(e, dict) else (e or "").strip()
-            if t:
-                lines.append(f"- [{label}] {t}")
-    return "\n".join(lines)
-
-
-def _voice_sample_character_name(material_path: Path | None, fallback: str) -> str:
-    """优先用 material.json 里的角色名/称谓，回退 --character。"""
-    mat = _load_material(material_path)
-    return (mat.get("character_name") or mat.get("name")
-            or mat.get("character") or fallback or "")
 
 
 # ============ 共享：JSON 解析 ============
@@ -479,13 +361,11 @@ def main():
                 pass
     check_deps()
     parser = argparse.ArgumentParser(
-        description='Gen-Model 创意卡 / 角色样本 / 卷描述生成工具'
+        description='Gen-Model 创意卡与卷描述生成工具'
     )
     parser.add_argument('--mode', required=True,
-                        choices=['brainstorm', 'voice_sample',
-                                 'volume_arc', 'distill_reflect'])
-    parser.add_argument('--project', help='项目根路径（voice_sample/'
-                                          'volume_arc 需要）')
+                        choices=['brainstorm', 'volume_arc', 'distill_reflect'])
+    parser.add_argument('--project', help='项目根路径（volume_arc 需要）')
     parser.add_argument('--out', help='输出 JSON 文件路径（默认 stdout）')
     parser.add_argument('--dry-run', action='store_true', help='只输出 prompt 不调 API')
 
@@ -495,11 +375,6 @@ def main():
     parser.add_argument('--research', help='[brainstorm] 调研缓存 md 路径')
     parser.add_argument('--style-ref', help='[brainstorm] 风格基线 skill.md 路径')
 
-    # voice_sample / volume_arc 参数（v2）
-    parser.add_argument('--character', help='[voice_sample] 角色 id')
-    # 🔴 2026-06-27 C13 voice_sample 参数
-    parser.add_argument('--history', help='[voice_sample] 角色历史真实对白素材 JSON 路径（few-shot）')
-    parser.add_argument('--voice-dna', help='[voice_sample] 5 层 persona 分析 voice_dna JSON 路径')
     # volume_arc 卷级大纲生成（阶段2 创建书籍）
     parser.add_argument('--selected-card', help='[volume_arc] 选中灵感卡 JSON 路径')
     parser.add_argument('--cluster-count', type=int, help='[volume_arc] 每卷故事块数（软提示）')
@@ -538,23 +413,6 @@ def main():
     elif args.mode == 'distill_reflect':
         # 蒸馏 phase-3 修正反思（阶段3·产 skill markdown 非 JSON·must_fix#5）
         sys.exit(_run_distill_reflect(args))
-
-    elif args.mode == 'voice_sample':
-        # 🔴 2026-06-27 C13：角色 voice_pack 样本生成（gen-model·同栈·喂历史对白 few-shot）。
-        # 走通用 call_gen_model 路径（自动补 _meta.generated_by_model = 同栈 provenance 证据）。
-        if not args.character:
-            print("[ERROR] --mode voice_sample 需要 --character", file=sys.stderr)
-            sys.exit(2)
-        history_text = _voice_sample_history_text(
-            Path(args.history) if args.history else None)
-        voice_dna_text = read_text(Path(args.voice_dna) if args.voice_dna else None, 8000)
-        char_name = _voice_sample_character_name(
-            Path(args.history) if args.history else None, args.character)
-        system, user = build_voice_sample_prompt(
-            character_id=args.character, character_name=char_name,
-            history_quotes=history_text, voice_dna_text=voice_dna_text,
-            count=args.count)
-        parser_fn = parse_voice_sample_output
 
     if args.dry_run:
         print("=== SYSTEM ===")

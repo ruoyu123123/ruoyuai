@@ -17,6 +17,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import build_manifest as bm  # noqa: E402
+from cluster_summary_fixtures import write_cluster_summary  # noqa: E402
 
 _RHYTHM = {
     "beat_transition_matrix": {
@@ -133,6 +134,7 @@ def test_wired_into_manifest_and_cache():
     try:
         with tempfile.TemporaryDirectory() as d:
             tmp = _mk(Path(d), rhythm=_RHYTHM)
+            write_cluster_summary(tmp, [])
             (tmp / "_数据库" / "人物卡.json").write_text(
                 json.dumps({"characters": [{"id": "a", "name": "甲", "role": "主角"}]},
                            ensure_ascii=False), encoding="utf-8")

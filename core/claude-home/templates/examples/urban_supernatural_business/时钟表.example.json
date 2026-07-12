@@ -1,7 +1,7 @@
 {
-  "_schema": "clocks_v21",
-  "schema_version": "v27",
-  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。鬼谷八荒 + Citizen Sleeper + CK3 Schemes 借鉴：所有「逐渐变化的事」（反派耐心 / 伏笔到期 / 阴谋进度）显式建模为 clock，满格触发后果（trigger_on_max 可引用大势卡 ME id）。显式建模解决节奏失控 / 伏笔忘埋。占位符：陆衍=主角 / 顾沉=招安派反派 / 陆爸=至亲 / 南海资本=博弈财团。",
+  "_schema": "cluster_clocks",
+  "schema_version": "1.0",
+  "_doc": "现代都市、隐秘超自然与商战题材的 cluster 事件时钟示例。反派耐心、伏笔交付和阴谋进度由 cluster_end 或明确叙事事件推进，满格后触发对应后果。",
   "generated_at": "<生成日期>",
 
   "_field_doc": {
@@ -10,12 +10,13 @@
     "category": "antagonist_pressure(反派步步紧逼) | foreshadowing_due(伏笔到期) | resource_decay(资源消耗) | relationship_pivot(关系拐点) | scheme(阴谋进度) | external_threat(外部威胁) | other",
     "ticks": "当前进度（0..max）",
     "max": "满格阈值",
-    "tick_on": ["chapter_end / minor_event:<match> / fate_event:<id> / faction_drop:<faction>:<dim> / item_used:<id> 等触发条件"],
+    "tick_on": ["cluster_end / minor_event:<match> / fate_event:<id> / faction_drop:<faction>:<dim> / item_used:<id> 等触发条件"],
     "tick_per_event": "每次触发 +N（默认 1）",
     "trigger_on_max": "满格时触发什么（fate_event id / scheme_name / 自由文本）",
     "visible_to_protagonist": "true=主角内心知道（焦虑感）/ false=只主代理可见（叙事悬念）",
     "visible_to_writer": "writer prompt 是否能看到本 clock",
-    "since_cluster": "首次创建时所属 cluster_id（clock_engine._since_cluster 按章号反查，非裸章号）",
+    "is_surprise": "true 表示暗线，且 visible_to_writer 必须为 false",
+    "since_cluster": "首次创建时所属 cluster_id",
     "spawned_by": "fate_engine / foreshadowing / world_evolution / manual",
     "status": "active | triggered | abandoned",
     "_reason": "设计原因/写作意图"
@@ -28,15 +29,16 @@
       "category": "antagonist_pressure",
       "ticks": 1,
       "max": 10,
-      "tick_on": ["chapter_end"],
+      "tick_on": ["cluster_end"],
       "tick_per_event": 1,
       "trigger_on_max": "ME-V1-05_顾沉三选一招安",
       "visible_to_protagonist": false,
       "visible_to_writer": true,
+      "is_surprise": false,
       "since_cluster": "cluster_004",
       "spawned_by": "manual",
       "status": "active",
-      "_reason": "顾沉部署反模因后耐心耗尽 → ch15 左右亲自上门"
+      "_reason": "顾沉部署反模因后，耐心时钟满格时亲自上门"
     },
     {
       "clock_id": "CK_002",
@@ -44,15 +46,16 @@
       "category": "foreshadowing_due",
       "ticks": 4,
       "max": 9,
-      "tick_on": ["chapter_end", "minor_event:陆爸*"],
+      "tick_on": ["cluster_end", "minor_event:陆爸*"],
       "tick_per_event": 1,
       "trigger_on_max": "fs_铁皮盒交付",
       "visible_to_protagonist": false,
       "visible_to_writer": true,
+      "is_surprise": false,
       "since_cluster": "cluster_004",
       "spawned_by": "foreshadowing",
       "status": "active",
-      "_reason": "陆爸 NT_004 expected_complete_ch=13，对应 9 章倒数"
+      "_reason": "陆爸在相关事件持续累积后交付遗物"
     },
     {
       "clock_id": "CK_003",
@@ -60,11 +63,12 @@
       "category": "scheme",
       "ticks": 0,
       "max": 8,
-      "tick_on": ["chapter_end", "faction_drop:南海资本:stability"],
+      "tick_on": ["cluster_end", "faction_drop:南海资本:stability"],
       "tick_per_event": 1,
       "trigger_on_max": "ME-V1-06_卷一末_主动宣战",
       "visible_to_protagonist": false,
       "visible_to_writer": true,
+      "is_surprise": false,
       "since_cluster": "cluster_005",
       "spawned_by": "manual",
       "status": "active",
@@ -77,7 +81,7 @@
     "consumed_by": [
       "build_manifest._collect_active_clocks() 注入 manifest",
       "writer step 0r：clock 感知 + 自然把'还差多少'埋进环境暗示",
-      "save-state.step9 clock_engine.py tick → 满格自动 trigger"
+      "cluster-save-state 调用 clock_engine.py tick-cluster-end --cluster <cluster_id>，显式事件调用 tick-event"
     ]
   }
 }

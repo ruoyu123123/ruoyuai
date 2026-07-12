@@ -79,8 +79,8 @@ _RULES = {"ripple_rules": [
     {"id": "RR_MINOR_XTL", "trigger_type": "minor_event", "trigger_match": "玄铁令",
      "ripples": [{"target": "consequence_tracker", "add": {"event": "玄铁令下落曝光"}}]},
     # auto_tick 规则与具体候选无关 → 绝不该进 preview
-    {"id": "RR_AUTO", "trigger_type": "auto_tick", "trigger_match": "every_chapter",
-     "ripples": [{"target": "current_world_time.ch", "set_to_current_ch": True}]},
+    {"id": "RR_AUTO", "trigger_type": "auto_tick", "trigger_match": "every_cluster",
+     "ripples": [{"target": "current_world_time.cluster", "set_to_current_cluster": True}]},
 ]}
 
 _DB_FILES = ("大势卡.json", "事件簇.json", "世界状态.json", "character_arc_state.json", "涟漪规则.json")
@@ -258,6 +258,6 @@ def test_me_dag_health_unit_self_loop_and_parent_me_field():
         {"id": "ME-A", "prerequisites": ["ME-A"]},           # 自环
         {"id": "ME-B", "parent_me": "ME-MISSING"},           # parent_me 悬挂
     ]
-    health = et.me_dag_health(pool, get_id=cee._get_me_id, get_parents=cee._resolve_parents)
+    health = et.me_dag_health(pool, get_id=cee._event_id, get_parents=cee._resolve_parents)
     assert health["cycles"] == [["ME-A"]]
     assert health["dangling"] == [{"me": "ME-B", "missing": ["ME-MISSING"]}]

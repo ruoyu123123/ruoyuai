@@ -29,6 +29,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cluster_summary_fixtures import write_cluster_summary
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import build_manifest as bm  # noqa: E402
 
@@ -36,6 +38,7 @@ import build_manifest as bm  # noqa: E402
 def _mk_project(tmp: Path, *, timeline=None, clusters=None, prog=None, characters=None) -> Path:
     db = tmp / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
+    write_cluster_summary(tmp, [])
     if timeline is not None:
         (db / "时间线.json").write_text(
             json.dumps(timeline, ensure_ascii=False), encoding="utf-8")

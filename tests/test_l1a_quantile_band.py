@@ -50,17 +50,12 @@ def _res(results, name_contains):
 
 
 def _load_body(proj_name, ch_name):
-    import chapter_io as cio
     proj = _ROOT / "workspace" / "styles" / proj_name
     ch = proj / "原文" / f"{ch_name}.txt"
     sj = proj / "作者风格_FINAL.json"
     if not (ch.exists() and sj.exists()):
         return None, None
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     sd = json.loads(sj.read_text(encoding="utf-8"))
     return raw, sd
 

@@ -1,26 +1,4 @@
-"""cross_cluster_data_consumption_aggregate.py — v21 数据声明 vs 实际写入对账（CCR1+2+6+11）
-
-合并 4 类同型问题（"声明了什么 vs 实际写出来什么"）：
-
-A. ASPECT_CONTINUITY — 角色烙印 active_aspects 跨章呼应
-   每个 active aspect 进入后所有后续章应有体现（_changes.json.factual.aspects_addressed
-   或正文匹配 narrative_constraints）；连续 3 章未呼应 → advisory
-
-B. CLOCK_ADDRESSING — urgent clock 暗示埋设
-   时钟表中 remaining ≤ 2 的 urgent clock，本章应在 clocks_addressed 出现；
-   连续 2 章 urgent 未提 → warning
-
-C. HEART_EVENT_CONSISTENCY — 揭密后保持感
-   群像档.json 中 consumed=true 的 heart_event，对应 NPC 在后续 ≥3 章出现时
-   行为应反映 reveal 信息（关键字检测：reveal 含的关键词 vs NPC 对话/描述）
-
-D. FATE_DICE_CONSUMPTION — 抽中事件兑现
-   事件池.drawn_events_log 中抽中的事件，对应章 _changes.json.factual.fate_dice_consumed
-   应记录该 event_id；正文应含 physical_evidence 多数项
-
-输出：_数据库/.cross_chapter_scan/data_consumption_<ts>.json
-退出码: 0 健康 / 1 advisory / 2 warning
-"""
+"""Audit declared story data against cluster state artifacts."""
 
 from __future__ import annotations
 
@@ -31,361 +9,223 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+import cluster_lookup  # noqa: E402
+import cluster_state_sources as css  # noqa: E402
+import cluster_summary_reader as csr  # noqa: E402
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
+
+def load_json(path: Path, default=None):
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return default
+    return value
 
 
-def _extract_ids(seq, *id_keys) -> set:
-    """2026-05-29 复审修复 [M7]：把 aspects_addressed / clocks_addressed 之类列表归一成 id 集合。
-
-    writer 实际产出（changes_schema.json）是 list[dict{aspect_id|clock_id, ...}]；reader
-    契约 docstring 又允许 list[str]。账本 builder 逐字拷贝 factual 不做归一，故消费侧两种
-    形态都可能出现。这里：dict 取首个命中的 id_key，str 直接收，其它忽略。
-    之前 `aid in rec.get("aspects_addressed", [])` 把 list[dict] 当 list[str] 比对，永不命中
-    → ASPECT_NOT_ADDRESSED / URGENT_CLOCK_IGNORED 误报。
-    """
-    out: set = set()
-    if not isinstance(seq, (list, tuple)):
-        return out
-    for el in seq:
-        if isinstance(el, str):
-            if el:
-                out.add(el)
-        elif isinstance(el, dict):
-            for k in id_keys:
-                v = el.get(k)
-                if isinstance(v, str) and v:
-                    out.add(v)
+def _extract_ids(values, *keys) -> set[str]:
+    result: set[str] = set()
+    if not isinstance(values, (list, tuple)):
+        return result
+    for value in values:
+        if isinstance(value, str) and value:
+            result.add(value)
+        elif isinstance(value, dict):
+            for key in keys:
+                candidate = value.get(key)
+                if isinstance(candidate, str) and candidate:
+                    result.add(candidate)
                     break
-    return out
+    return result
 
 
-def get_chapters(project_root: Path, last_n: int = 10) -> list[int]:
-    chs = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                 for d in (project_root / "章节").glob("第*章")
-                 if re.match(r"第(\d+)章", d.name))
-    return chs[-last_n:] if chs else []
+def _cluster_number(cluster_id) -> int:
+    return cluster_lookup.cluster_num(cluster_id) or 0
 
 
-def read_changes(project_root: Path, ch: int) -> dict:
-    p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-    return load_json(p, {})
+def _observations(project_root: Path, last_n: int = 10) -> list[tuple[str, dict]]:
+    observations: list[tuple[str, dict]] = []
+    for cluster_id, summary in css.iter_completed_clusters(project_root, last_n):
+        merged: dict = dict(summary)
+        ledger = css.load_cluster_ledger(project_root, cluster_id)
+        if isinstance(ledger, dict):
+            merged.update(ledger)
+        delta = css.load_state_delta(project_root, cluster_id)
+        merged["state_delta"] = delta
+        observations.append((cluster_id, merged))
+    return observations
 
 
-def read_text(project_root: Path, ch: int) -> str:
-    p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
-    if not p.exists():
-        return ""
-    return p.read_text(encoding="utf-8")
-
-
-# ---------- A. ASPECT_CONTINUITY ----------
-
-def scan_aspect_continuity(project_root: Path, chapters: list[int], ledger_by_ch: dict | None = None) -> list[dict]:
-    aspects_path = project_root / "_数据库" / "角色烙印.json"
-    if not aspects_path.exists():
-        return []
-    data = load_json(aspects_path, {})
-    findings = []
-    for char_name, char_data in (data.get("characters") or {}).items():
-        actives = char_data.get("active_aspects") or []
-        for aspect in actives:
-            aid = aspect.get("aspect_id")
-            label = aspect.get("label", "?")
-            acquired_ch = aspect.get("acquired_ch", 0)
-            constraints = aspect.get("narrative_constraints", [])
-            triggers = aspect.get("emotional_triggers", [])
-            # 仅扫 acquired_ch 之后的章
-            relevant_chs = [c for c in chapters if c >= acquired_ch]
-            if len(relevant_chs) < 3:
+def scan_aspect_continuity(project_root: Path, observations: list[tuple[str, dict]]) -> list[dict]:
+    data = load_json(project_root / "_数据库" / "角色烙印.json", {})
+    findings: list[dict] = []
+    if not isinstance(data, dict):
+        return findings
+    for character, character_data in (data.get("characters") or {}).items():
+        for aspect in character_data.get("active_aspects", []) or []:
+            aspect_id = aspect.get("aspect_id")
+            acquired = aspect.get("acquired_at_cluster") or aspect.get("acquired_cluster")
+            relevant = [(cid, record) for cid, record in observations
+                        if not acquired or _cluster_number(cid) >= _cluster_number(acquired)]
+            if len(relevant) < 3:
                 continue
-            # 检查每章是否呼应
-            no_address_streak = 0
+            streak: list[str] = []
             last_addressed = None
-            for ch in relevant_chs:
-                # 2026-05-29 cluster 化：账本有本章记录 → 读预算的 aspects_addressed
-                # / aspect_text_hit（均为 aspect_id 列表）；否则回退逐章 glob + 正文匹配。
-                rec = (ledger_by_ch or {}).get(ch)
-                if rec is not None:
-                    # 2026-05-29 复审修复 [M7]：账本 aspects_addressed 可能是 list[dict{aspect_id}]
-                    # （writer 实际产出）或 list[str]（reader 契约）；统一归一成 id 集合再比对。
-                    addressed_ids = _extract_ids(rec.get("aspects_addressed"), "aspect_id", "id")
-                    text_hit_ids = _extract_ids(rec.get("aspect_text_hit"), "aspect_id", "id")
-                    hit_in_changes = aid in addressed_ids
-                    hit_in_text = (not hit_in_changes) and (aid in text_hit_ids)
-                else:
-                    changes = read_changes(project_root, ch)
-                    addressed = (changes.get("factual", {}) or {}).get("aspects_addressed", []) or []
-                    hit_in_changes = any(a.get("aspect_id") == aid for a in addressed if isinstance(a, dict))
-                    # fallback：扫正文是否含 narrative_constraints/triggers 关键短语
-                    hit_in_text = False
-                    if not hit_in_changes:
-                        text = read_text(project_root, ch)
-                        keywords = []
-                        for c_str in constraints[:3]:
-                            keywords.extend(re.findall(r"[一-鿿]{2,4}", c_str)[:3])
-                        for t_str in triggers[:3]:
-                            keywords.extend(re.findall(r"[一-鿿]{2,4}", t_str)[:2])
-                        hit_in_text = any(kw in text for kw in keywords if len(kw) >= 2)
-                if hit_in_changes or hit_in_text:
-                    no_address_streak = 0
-                    last_addressed = ch
-                else:
-                    no_address_streak += 1
-                    if no_address_streak >= 3:
-                        findings.append({
-                            "severity": "advisory",
-                            "code": "ASPECT_NOT_ADDRESSED",
-                            "character": char_name,
-                            "aspect_id": aid,
-                            "label": label,
-                            "since_chapter_physical": ch - 2,
-                            "current_chapter_physical": ch,
-                            "last_addressed_chapter_physical": last_addressed,
-                            "suggestion": f"{char_name} aspect「{label}」连续 ≥3 章无呼应，应在动作/触景细节带入",
-                        })
-                        no_address_streak = 0  # 报后重置避免刷屏
+            for cluster_id, record in relevant:
+                ids = _extract_ids(record.get("aspects_addressed"), "aspect_id", "id")
+                ids |= _extract_ids(record.get("aspect_text_hit"), "aspect_id", "id")
+                if aspect_id in ids:
+                    streak = []
+                    last_addressed = cluster_id
+                    continue
+                streak.append(cluster_id)
+                if len(streak) >= 3:
+                    findings.append({
+                        "severity": "advisory",
+                        "code": "ASPECT_NOT_ADDRESSED",
+                        "character": character,
+                        "aspect_id": aspect_id,
+                        "label": aspect.get("label", "?"),
+                        "consecutive_clusters": streak[-3:],
+                        "last_addressed_cluster": last_addressed,
+                    })
+                    streak = []
     return findings
 
 
-# ---------- B. CLOCK_ADDRESSING ----------
-
-def scan_clock_addressing(project_root: Path, chapters: list[int], ledger_by_ch: dict | None = None) -> list[dict]:
-    clocks_path = project_root / "_数据库" / "时钟表.json"
-    if not clocks_path.exists():
+def scan_clock_addressing(project_root: Path, observations: list[tuple[str, dict]]) -> list[dict]:
+    data = load_json(project_root / "_数据库" / "时钟表.json", {})
+    if not isinstance(data, dict) or len(observations) < 2:
         return []
-    data = load_json(clocks_path, {})
-    findings = []
-    # 找出 urgent clock（remaining ≤ 2）
-    urgent_clocks = []
-    for c in data.get("clocks", []):
-        if c.get("status") != "active":
+    recent = observations[-2:]
+    findings: list[dict] = []
+    for clock in data.get("clocks", []) or []:
+        if clock.get("status") != "active":
             continue
-        ticks = c.get("ticks", 0)
-        max_v = c.get("max", 99)
-        if max_v - ticks <= 2:
-            urgent_clocks.append(c)
-    if not urgent_clocks:
-        return []
-    # 检查近 2 章是否都未提及
-    recent = chapters[-2:] if len(chapters) >= 2 else chapters
-    for clock in urgent_clocks:
-        cid = clock.get("clock_id")
-        addressed_chs = []
-        for ch in recent:
-            # 2026-05-29 cluster 化：账本有本章 → 读预算 clocks_addressed（clock_id 列表）；
-            # 否则回退逐章 glob（dict 形态）。
-            rec = (ledger_by_ch or {}).get(ch)
-            if rec is not None:
-                # 2026-05-29 复审修复 [M7]：clocks_addressed 同理可能是 list[dict{clock_id}]
-                # 或 list[str]；归一后比对，避免 URGENT_CLOCK_IGNORED 误报。
-                if cid in _extract_ids(rec.get("clocks_addressed"), "clock_id", "id"):
-                    addressed_chs.append(ch)
-            else:
-                changes = read_changes(project_root, ch)
-                addr_list = (changes.get("factual", {}) or {}).get("clocks_addressed", []) or []
-                if any(a.get("clock_id") == cid for a in addr_list if isinstance(a, dict)):
-                    addressed_chs.append(ch)
-        if not addressed_chs and len(recent) >= 2:
+        remaining = clock.get("max", 99) - clock.get("ticks", 0)
+        if remaining > 2:
+            continue
+        clock_id = clock.get("clock_id")
+        addressed = any(
+            clock_id in _extract_ids(record.get("clocks_addressed"), "clock_id", "id")
+            for _cid, record in recent
+        )
+        if not addressed:
             findings.append({
                 "severity": "warning",
                 "code": "URGENT_CLOCK_IGNORED",
-                "clock_id": cid,
-                "label": clock.get("label"),
-                "remaining": clock.get("max", 0) - clock.get("ticks", 0),
-                "trigger_on_max": clock.get("trigger_on_max"),
-                "checked_chs": recent,
-                "suggestion": f"urgent clock「{clock.get('label')}」({cid}) 近 {len(recent)} 章无暗示，下章必埋",
+                "clock_id": clock_id,
+                "remaining": remaining,
+                "checked_clusters": [cid for cid, _record in recent],
             })
     return findings
 
 
-# ---------- C. HEART_EVENT_CONSISTENCY ----------
-
-def scan_heart_event_consistency(project_root: Path, chapters: list[int]) -> list[dict]:
-    ensemble_path = project_root / "_数据库" / "群像档.json"
-    if not ensemble_path.exists():
+def scan_heart_event_consistency(project_root: Path, observations: list[tuple[str, dict]]) -> list[dict]:
+    data = load_json(project_root / "_数据库" / "群像档.json", {})
+    if not isinstance(data, dict):
         return []
-    data = load_json(ensemble_path, {})
-    findings = []
+    findings: list[dict] = []
     for npc, npc_data in (data.get("characters") or {}).items():
-        for he in npc_data.get("heart_events", []) or []:
-            if not he.get("consumed", False):
+        for event in npc_data.get("heart_events", []) or []:
+            consumed = event.get("consumed_at_cluster")
+            if not event.get("consumed") or not consumed:
                 continue
-            consumed_at = he.get("consumed_at_ch", 0)
-            if not consumed_at:
+            event_id = event.get("event_id")
+            post = [(cid, record) for cid, record in observations if _cluster_number(cid) > _cluster_number(consumed)][:5]
+            if len(post) < 3:
                 continue
-            reveal = he.get("reveal", "")
-            # 在 reveal 中提取关键 2-3 字短语
-            reveal_kws = re.findall(r"[一-鿿]{2,5}", reveal)[:5]
-            if not reveal_kws:
-                continue
-            # 后续 ≥3 章中 NPC 出现的章节
-            post_chs = [c for c in chapters if c > consumed_at][:5]
-            if len(post_chs) < 3:
-                continue
-            npc_appearance_chs = []
-            kw_hit_chs = []
-            for ch in post_chs:
-                text = read_text(project_root, ch)
-                if npc in text:
-                    npc_appearance_chs.append(ch)
-                    if any(kw in text for kw in reveal_kws):
-                        kw_hit_chs.append(ch)
-            if len(npc_appearance_chs) >= 2 and not kw_hit_chs:
+            appearance = [cid for cid, record in post
+                          if npc in (record.get("characters") or [])
+                          or (record.get("char_mention_counts") or {}).get(npc, 0) > 0]
+            repeated = []
+            for cid, record in post:
+                revealed = (record.get("state_delta") or {}).get("heart_events_revealed", []) or []
+                if event_id in _extract_ids(revealed, "event_id", "id"):
+                    repeated.append(cid)
+            if len(appearance) >= 2 and not repeated:
                 findings.append({
                     "severity": "advisory",
                     "code": "HEART_EVENT_FORGOTTEN",
                     "npc": npc,
-                    "event_id": he.get("event_id"),
-                    "consumed_at_ch": consumed_at,
-                    "post_appearance_chs": npc_appearance_chs,
-                    "suggestion": f"{npc} 在 ch{consumed_at} 揭密「{he.get('tier_label')}」后出现 ≥2 章但 reveal 关键词从未再出现 → 角色无保持感",
+                    "event_id": event_id,
+                    "consumed_at_cluster": consumed,
+                    "post_appearance_clusters": appearance,
                 })
     return findings
 
 
-# ---------- D. FATE_DICE_CONSUMPTION ----------
-
-def scan_fate_dice_consumption(project_root: Path, chapters: list[int], ledger_by_ch: dict | None = None) -> list[dict]:
-    pool_path = project_root / "_数据库" / "事件池.json"
-    if not pool_path.exists():
+def scan_fate_dice_consumption(project_root: Path, observations: list[tuple[str, dict]]) -> list[dict]:
+    pool = load_json(project_root / "_数据库" / "事件池.json", {})
+    if not isinstance(pool, dict):
         return []
-    pool = load_json(pool_path, {})
-    drawn_log = pool.get("drawn_events_log", [])
-    if not drawn_log:
-        return []
-    events_by_id = {e.get("event_id"): e for e in pool.get("events", [])}
-    findings = []
-    for d in drawn_log:
-        ch = d.get("ch")
-        eid = d.get("event_id")
-        if ch not in chapters:
+    events = {event.get("event_id"): event for event in pool.get("events", []) or [] if isinstance(event, dict)}
+    by_cluster = {cluster_id: record for cluster_id, record in observations}
+    findings: list[dict] = []
+    for draw in pool.get("drawn_events_log", []) or []:
+        if not isinstance(draw, dict):
             continue
-        event_def = events_by_id.get(eid, {})
-        evidence = event_def.get("physical_evidence", []) or []
-        # 2026-05-29 cluster 化：账本有本章 fate_dice_consumed（[{event_id, evidence_hit_ratio}]）
-        # → 取预算的声明 id + evidence ratio，省去 read_text 重扫；否则回退逐章 glob + 正文匹配。
-        rec = (ledger_by_ch or {}).get(ch)
-        ledger_fdc = (rec.get("fate_dice_consumed") if rec is not None else None)
-        if isinstance(ledger_fdc, list) and ledger_fdc:
-            entry = next((e for e in ledger_fdc if isinstance(e, dict) and e.get("event_id") == eid), None)
-            consumed = entry.get("event_id") if entry else None
-            if entry is not None and isinstance(entry.get("evidence_hit_ratio"), (int, float)):
-                ratio = entry["evidence_hit_ratio"]
-                evidence_kws = evidence  # 仅用于 ratio 有效性判定（非空即评估）
-            else:
-                evidence_kws = []
-                ratio = 0.0
-        else:
-            # 检查 _changes.json.fate_dice_consumed
-            changes = read_changes(project_root, ch)
-            consumed = (changes.get("factual", {}) or {}).get("fate_dice_consumed")
-            text = read_text(project_root, ch)
-            # 文本中 evidence 命中数
-            evidence_kws = []
-            for ev in evidence:
-                evidence_kws.extend(re.findall(r"[一-鿿]{2,4}", ev)[:2])
-            evidence_hits = sum(1 for kw in evidence_kws if kw in text)
-            ratio = evidence_hits / max(1, len(evidence_kws))
-        if consumed != eid:
+        cluster_id = cluster_lookup.normalize_cluster_id(draw.get("cluster_id"))
+        event_id = draw.get("event_id")
+        if not cluster_id or cluster_id not in by_cluster or not event_id:
+            continue
+        triggered = (by_cluster[cluster_id].get("state_delta") or {}).get("fate_events_triggered", []) or []
+        entry = next((item for item in triggered if isinstance(item, dict) and item.get("event_id") == event_id), None)
+        if entry is None:
             findings.append({
                 "severity": "warning",
                 "code": "FATE_DICE_NOT_DECLARED",
-                "ch": ch,
-                "event_id": eid,
-                "label": d.get("label"),
-                "suggestion": f"ch{ch} 抽中 {eid} 但 _changes.factual.fate_dice_consumed 未标记为该 id",
+                "cluster_id": cluster_id,
+                "event_id": event_id,
             })
-        if evidence_kws and ratio < 0.3:
+            continue
+        evidence_text = str(entry.get("evidence") or "")
+        physical = events.get(event_id, {}).get("physical_evidence", []) or []
+        tokens = [token for value in physical for token in re.findall(r"[一-鿿]{2,4}", str(value))[:2]]
+        ratio = sum(token in evidence_text for token in tokens) / max(1, len(tokens))
+        if tokens and ratio < 0.3:
             findings.append({
                 "severity": "advisory",
                 "code": "FATE_DICE_EVIDENCE_LOW",
-                "ch": ch,
-                "event_id": eid,
+                "cluster_id": cluster_id,
+                "event_id": event_id,
                 "evidence_hit_ratio": round(ratio, 2),
-                "suggestion": f"ch{ch} 抽中 {eid} 但正文 physical_evidence 命中率仅 {round(ratio*100)}%（应 ≥30%）",
             })
     return findings
 
 
-# ---------- main ----------
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--last-n", type=int, default=10)
-    args = ap.parse_args()
-
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    parser.add_argument("--last-n", type=int, default=10)
+    args = parser.parse_args()
     project_root = Path(args.project)
-
-    # ===== 2026-05-29 cluster 化分支：账本有 aspects/clocks/fate 任一字段 → 摘要驱动 =====
-    # --last-n 在 cluster 模式语义为「最后 N 个 cluster」。aspect_continuity / clock /
-    # fate_dice 三类读账本预算字段（aspects_addressed / aspect_text_hit / clocks_addressed /
-    # fate_dice_consumed）；heart_event 维度依赖正文 NPC 出场扫描，账本无对应字段 → 仍走磁盘。
-    ledger_by_ch = None
-    has_ledger_consumption = (
-        csr.is_cluster_mode()
-        and (
-            csr.ledger_has_field(project_root, "aspects_addressed")
-            or csr.ledger_has_field(project_root, "clocks_addressed")
-            or csr.ledger_has_field(project_root, "fate_dice_consumed")
-        )
+    if not project_root.is_dir():
+        print(f"[FATAL] project directory not found: {project_root}", file=sys.stderr)
+        raise SystemExit(2)
+    observations = _observations(project_root, args.last_n)
+    if not observations:
+        print("[SKIP] no completed cluster records")
+        raise SystemExit(0)
+    findings = (
+        scan_aspect_continuity(project_root, observations)
+        + scan_clock_addressing(project_root, observations)
+        + scan_heart_event_consistency(project_root, observations)
+        + scan_fate_dice_consumption(project_root, observations)
     )
-    if has_ledger_consumption:
-        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
-        ledger_by_ch = {ch: rec for ch, rec in recs}
-        chapters = sorted(ledger_by_ch.keys())
-    else:
-        chapters = get_chapters(project_root, args.last_n)
-    if not chapters:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
-
-    all_findings = []
-    all_findings.extend(scan_aspect_continuity(project_root, chapters, ledger_by_ch))
-    all_findings.extend(scan_clock_addressing(project_root, chapters, ledger_by_ch))
-    all_findings.extend(scan_heart_event_consistency(project_root, chapters))
-    all_findings.extend(scan_fate_dice_consumption(project_root, chapters, ledger_by_ch))
-
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+    summary = {"warning": sum(f["severity"] == "warning" for f in findings),
+               "advisory": sum(f["severity"] == "advisory" for f in findings)}
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary = {
-        "warning": sum(1 for f in all_findings if f["severity"] == "warning"),
-        "advisory": sum(1 for f in all_findings if f["severity"] == "advisory"),
-    }
-    report = {
-        "scan_type": "data_consumption",
-        "scan_ts": ts,
-        "chapters_scanned": chapters,
-        "findings": all_findings,
-        "summary": summary,
-    }
+    report = {"scan_type": "data_consumption", "scan_ts": ts,
+              "clusters_scanned": [cid for cid, _record in observations],
+              "findings": findings, "summary": summary}
     out_path = out_dir / f"data_consumption_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    print(f"[data_consumption] {len(chapters)} 章: {summary['warning']} warning / {summary['advisory']} advisory")
-    for f in all_findings[:8]:
-        print(f"  [{f['severity'].upper()}] {f.get('code')}: {f.get('suggestion', '')[:80]}")
-    print(f"报告: {out_path}")
-    if summary["warning"] > 0:
-        sys.exit(2)
-    if summary["advisory"] > 0:
-        sys.exit(1)
-    sys.exit(0)
+    print(f"[data_consumption] {summary['warning']} warning / {summary['advisory']} advisory")
+    print(f"report: {out_path}")
+    raise SystemExit(2 if summary["warning"] else 1 if summary["advisory"] else 0)
 
 
 if __name__ == "__main__":

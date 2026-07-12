@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""plan_tracker 确定性单测（2026-06-17 · /loop 自主硬化补漏）。
-
-batch2 workflow 的 plan_tracker author agent 撞瞬时 API 断连未落盘，手工补齐。
-plan_tracker 是 Plan 强制规划层 L2 的安全核心（被 orchestrator/e2e 间接跑·无专属测试）。
-本测试锁住 **HMAC attestation 防篡改**（memory project_cluster_lookup_keystone 记录的修复点）
-+ 占位符替换 + plan 生命周期往返——这些是被间接覆盖掩盖的安全/正确性不变量。
-
-attestation 安全模型（plan_tracker.py:190-269）：
-- _attest 用 HMAC-SHA256(机器本地密钥, 规范化JSON) 盖章。
-- verify_attestation → ok（HMAC符）/ legacy（旧式无密钥sha256符·向后兼容）/
-  tampered（都不符=真篡改）/ unattested（无章）。
-- 关键安全性质：没有机器密钥**无法伪造**有效 HMAC → 篡改内容必被抓。
-"""
-import hashlib
+"""plan 生命周期、产物校验与 HMAC attestation 回归测试。"""
 import json
+import re
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -78,21 +66,23 @@ def test_hmac_key_dependency_no_forge():
         assert pt.verify_attestation(plan) == "tampered"
 
 
-def test_legacy_pure_sha256_is_legacy_not_ok():
-    """旧式无密钥纯 sha256 章 → legacy（向后兼容识别·非 ok 非 tampered）。
-    legacy 是公开可算的弱章，写路径会按 tampered 拦（HMAC #4 非对称硬化）。"""
-    with _fixed_key(b"K" * 32):
-        plan = _sample_plan()
-        legacy = pt._compute_legacy_sha256(plan)  # 无密钥·规范化排除 _attestation
-        plan[AK] = {"sha256": legacy, "attested_at": "x", "by": "old"}
-        assert pt.verify_attestation(plan) == "legacy"
-
-
 def test_unattested_when_missing_or_nondict():
     assert pt.verify_attestation(_sample_plan()) == "unattested"  # 无 _attestation
     assert pt.verify_attestation({AK: {"by": "x"}}) == "unattested"  # 章里无 sha256
     assert pt.verify_attestation("not a dict") == "unattested"
     assert pt.verify_attestation(None) == "unattested"
+
+
+def test_unattested_plan_is_rejected_before_write():
+    with tempfile.TemporaryDirectory() as temp:
+        path = Path(temp) / "plan.json"
+        path.write_text(json.dumps(_sample_plan(), ensure_ascii=False), encoding="utf-8")
+        try:
+            pt._load_plan(path, for_write=True)
+        except pt.PlanTamperedError:
+            pass
+        else:
+            raise AssertionError("缺少 attestation 的 plan 不得进入写路径")
 
 
 def test_canonical_excludes_attestation_field():
@@ -111,18 +101,6 @@ def test_canonical_key_order_independent():
         p1 = {"a": 1, "b": 2, "steps": [{"n": 1, "x": 9}]}
         p2 = {"steps": [{"x": 9, "n": 1}], "b": 2, "a": 1}  # 同内容·键序不同
         assert pt._compute_attestation(p1) == pt._compute_attestation(p2)
-
-
-def test_legacy_sha256_is_keyless_stable():
-    """旧式 sha256 不依赖密钥（这正是它弱、被按 tampered 拦的原因）。"""
-    plan = _sample_plan()
-    with _fixed_key(b"A" * 32):
-        a = pt._compute_legacy_sha256(plan)
-    with _fixed_key(b"B" * 32):
-        b = pt._compute_legacy_sha256(plan)
-    assert a == b  # 与密钥无关
-    # 且确实是纯 sha256(规范化字节)
-    assert a == hashlib.sha256(pt._canonical_plan_bytes(plan)).hexdigest()
 
 
 # ════════════════════════════════════════════════════════════════
@@ -156,6 +134,38 @@ def test_walk_substitute_nested():
     node = {"a": "{project}", "b": ["{cluster_id}", {"c": "{key}"}], "n": 5}
     r = pt._walk_substitute(node, "书", "007")
     assert r == {"a": "书", "b": ["cluster_007", {"c": "007"}], "n": 5}
+
+
+def test_walk_substitute_plan_id():
+    node = {"agent_input": {"PLAN_ID": "{plan_id}"},
+            "scripts": ["tool --plan-id {plan_id}"]}
+    assert pt._walk_substitute(node, "书", "007", "plan-007") == {
+        "agent_input": {"PLAN_ID": "plan-007"},
+        "scripts": ["tool --plan-id plan-007"],
+    }
+
+
+def test_create_plan_records_microsecond_created_at():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        saved_projects = pt.PROJECTS_DIR
+        saved_global = pt.GLOBAL_PLANS_DIR
+        saved_key_path = pt.ATTEST_KEY_PATH
+        pt.PROJECTS_DIR = root / "novels"
+        pt.GLOBAL_PLANS_DIR = root / "plans"
+        pt.ATTEST_KEY_PATH = root / "plans" / ".attest_key"
+        project = root / "novel"
+        project.mkdir()
+        try:
+            plan_id = pt.create_plan("cluster-save-state", str(project), "1")
+            created = pt.get_plan(plan_id)["created_at"]
+            assert re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}", created,
+            )
+        finally:
+            pt.PROJECTS_DIR = saved_projects
+            pt.GLOBAL_PLANS_DIR = saved_global
+            pt.ATTEST_KEY_PATH = saved_key_path
 
 
 # ════════════════════════════════════════════════════════════════
@@ -209,6 +219,13 @@ def test_create_get_roundtrip_and_verify_ok():
         assert all(s.get("status") == pt.STATUS_PENDING for s in plan["steps"])
         # 创建即盖章 → 防篡改校验 ok
         assert pt.verify_plan(pid) == "ok"
+
+
+def test_skillopt_is_registered_multistep_command():
+    assert "distill-style-skillopt" in pt.KNOWN_COMMANDS
+    template = pt.load_template("distill-style-skillopt")
+    assert template["command"] == "distill-style-skillopt"
+    assert template["required_steps"] == list(range(1, template["total_steps"] + 1))
 
 
 def test_reattest_after_manual_edit_recovers():

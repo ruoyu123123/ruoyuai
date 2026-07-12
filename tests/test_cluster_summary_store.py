@@ -1,176 +1,158 @@
-"""cluster_summary_store 回归测试 — 钉死账本（故事块摘要.json）唯一原子写入器的核心确定性逻辑。
+"""cluster 摘要账本的严格写入合同。"""
 
-被测核心（绝不打 LLM / 不联网，纯本地原子文件合并）：
-- _db_dir：project_root 末名是 _数据库 → 原样，否则追加 _数据库
-- _deep_merge：dict 递归合，list/标量直接覆盖
-- _apply_upsert：按归一化 cluster_id 反查/新建记录 + 深合并 + cluster_id 恒归一化 + 坏 summary/clusters 兜底
-- upsert_cluster：归一化等价（int 6 / "6" / "cluster_006" 同一 cluster）+ 二次合并不丢字段 + 原子落盘
-- patch_chapter：便捷嵌进 chapters[str(ch)]
-
-零依赖约定：只用标准库，test_* 无参数，断言失败 raise AssertionError。
-"""
+from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core" / "scripts"))
-import cluster_summary_store as mod  # noqa: E402
-from cluster_summary_reader import SUMMARY_FILENAME, load_summary  # noqa: E402
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
+
+import cluster_summary_store as store  # noqa: E402
+from cluster_summary_reader import ClusterSummaryError, load_summary  # noqa: E402
+from cluster_summary_fixtures import cluster_record  # noqa: E402
 
 
-def _summary_path(root: Path) -> Path:
-    return root / "_数据库" / SUMMARY_FILENAME
+def test_initialize_creates_only_runtime_fields(tmp_path):
+    document = store.initialize_summary(tmp_path)
+    assert document == {
+        "schema_version": "v2.cluster",
+        "clusters": [],
+        "volume_summaries": [],
+    }
+    assert load_summary(tmp_path) == document
+    with pytest.raises(ClusterSummaryError, match="已存在"):
+        store.initialize_summary(tmp_path)
 
 
-# ── _db_dir ─────────────────────────────────────────────────────────────────
+def test_upsert_requires_existing_ledger_and_complete_new_record(tmp_path):
+    with pytest.raises(ClusterSummaryError, match="不存在"):
+        store.upsert_cluster(tmp_path, "cluster_001", cluster_record())
 
-def test_db_dir_appends_db_folder():
-    """普通项目根 → 追加 _数据库 子目录。"""
-    root = Path(tempfile.mkdtemp())
-    got = mod._db_dir(root)
-    assert got == root / "_数据库", got
+    store.initialize_summary(tmp_path)
+    with pytest.raises(ClusterSummaryError, match="一次提供完整记录"):
+        store.upsert_cluster(tmp_path, "cluster_001", {"title": "不完整"})
 
-
-def test_db_dir_no_double_append_when_already_db():
-    """末名已是 _数据库 → 原样返回，不重复追加。"""
-    root = Path(tempfile.mkdtemp()) / "_数据库"
-    got = mod._db_dir(root)
-    assert got == root, got
-    assert got.name == "_数据库"
+    store.upsert_cluster(tmp_path, "cluster_001", cluster_record(summary="首块"))
+    result = load_summary(tmp_path)
+    assert result["clusters"][0]["summary"] == "首块"
 
 
-# ── _deep_merge ─────────────────────────────────────────────────────────────
+def test_upsert_merges_known_fields_without_chapter_shape(tmp_path):
+    store.initialize_summary(tmp_path)
+    store.upsert_cluster(
+        tmp_path,
+        "cluster_006",
+        cluster_record(
+            "cluster_006",
+            state_delta={"time": {"elapsed": "1d"}, "locations": ["harbor"]},
+            word_count=100,
+        ),
+    )
+    store.upsert_cluster(
+        tmp_path,
+        6,
+        {"state_delta": {"time": {"period": "night"}}, "word_count": 120},
+    )
+    record = load_summary(tmp_path)["clusters"][0]
+    assert record["cluster_id"] == "cluster_006"
+    assert record["word_count"] == 120
+    assert record["state_delta"] == {
+        "time": {"elapsed": "1d", "period": "night"},
+        "locations": ["harbor"],
+    }
 
-def test_deep_merge_recurses_dict_overwrites_list_and_scalar():
-    base = {"a": {"x": 1, "y": 2}, "lst": [1, 2], "s": "old", "keep": 9}
-    patch = {"a": {"y": 20, "z": 30}, "lst": [9], "s": "new"}
-    out = mod._deep_merge(base, patch)
-    # dict 递归：y 被覆盖、x 保留、z 新增
-    assert out["a"] == {"x": 1, "y": 20, "z": 30}, out["a"]
-    # list 整体覆盖（非合并）
-    assert out["lst"] == [9], out["lst"]
-    # 标量覆盖
-    assert out["s"] == "new"
-    # patch 没碰的键保留
-    assert out["keep"] == 9
-    # 原地返回同一对象
-    assert out is base
-
-
-def test_deep_merge_dict_replaces_when_base_value_not_dict():
-    """base 该键不是 dict 时，patch 的 dict 直接覆盖（不递归）。"""
-    base = {"k": "scalar"}
-    out = mod._deep_merge(base, {"k": {"nested": 1}})
-    assert out["k"] == {"nested": 1}, out["k"]
-
-
-# ── _apply_upsert：纯内存合并语义 ───────────────────────────────────────────
-
-def test_apply_upsert_creates_record_and_normalizes_id():
-    """空账本 → 新建记录，cluster_id 恒归一化形态。"""
-    summary = {"schema_version": "v2.cluster", "clusters": []}
-    out = mod._apply_upsert(summary, "cluster_002", {"title": "T"})
-    assert len(out["clusters"]) == 1
-    rec = out["clusters"][0]
-    assert rec["cluster_id"] == "cluster_002"
-    assert rec["title"] == "T"
+    with pytest.raises(ClusterSummaryError, match="未知字段"):
+        store.upsert_cluster(tmp_path, "cluster_006", {"chapter_range": [1, 2]})
+    with pytest.raises(ClusterSummaryError, match="不一致"):
+        store.upsert_cluster(
+            tmp_path,
+            "cluster_006",
+            {"cluster_id": "cluster_007"},
+        )
 
 
-def test_apply_upsert_matches_existing_by_normalized_id_no_dup():
-    """已有 cluster_002 记录 + 同 cluster 不同写法 → 合并到同一条，不新建。"""
-    summary = {"clusters": [{"cluster_id": "cluster_002", "title": "A", "word_count": 100}]}
-    # 传 int 形式的同一 cluster
-    out = mod._apply_upsert(summary, mod.cluster_lookup.normalize_cluster_id(2), {"judge_grade": "B"})
-    assert len(out["clusters"]) == 1, out["clusters"]
-    rec = out["clusters"][0]
-    assert rec["word_count"] == 100 and rec["judge_grade"] == "B"
-    assert rec["title"] == "A"
+def test_replace_cluster_is_full_and_removes_stale_values(tmp_path):
+    store.initialize_summary(tmp_path)
+    original = cluster_record(
+        "cluster_001", key_details=["old"], state_delta={"old": True}
+    )
+    store.upsert_cluster(tmp_path, "cluster_001", original)
+
+    replacement = cluster_record("cluster_001", key_details=["new"])
+    store.replace_cluster(tmp_path, "001", replacement)
+    record = load_summary(tmp_path)["clusters"][0]
+    assert record["key_details"] == ["new"]
+    assert record["state_delta"] == {}
+    assert "chapters" not in record
+
+    with pytest.raises(ClusterSummaryError, match="字段不完整"):
+        store.replace_cluster(tmp_path, "cluster_001", {"title": "缺字段"})
+    extra = cluster_record("cluster_001")
+    extra["chapter_range"] = [1, 2]
+    with pytest.raises(ClusterSummaryError, match="字段不完整"):
+        store.replace_cluster(tmp_path, "cluster_001", extra)
 
 
-def test_apply_upsert_repairs_non_dict_summary_and_clusters():
-    """坏输入兜底：summary 非 dict / clusters 非 list 都要被修成空骨架后正常写入。"""
-    # summary 非 dict
-    out1 = mod._apply_upsert("garbage", "cluster_001", {"title": "x"})
-    assert isinstance(out1, dict) and out1["clusters"][0]["cluster_id"] == "cluster_001"
-    # clusters 非 list
-    out2 = mod._apply_upsert({"clusters": "not-a-list"}, "cluster_003", {"title": "y"})
-    assert isinstance(out2["clusters"], list)
-    assert out2["clusters"][0]["cluster_id"] == "cluster_003"
+def test_corrupt_or_bom_ledger_is_never_repaired(tmp_path):
+    database = tmp_path / "_数据库"
+    database.mkdir()
+    path = database / "故事块摘要.json"
+    path.write_text("{broken", encoding="utf-8")
+    with pytest.raises(ClusterSummaryError, match="损坏"):
+        store.upsert_cluster(tmp_path, "cluster_001", cluster_record())
+
+    path.write_bytes(
+        b"\xef\xbb\xbf" + json.dumps({
+            "schema_version": "v2.cluster",
+            "clusters": [],
+            "volume_summaries": [],
+        }).encode("utf-8")
+    )
+    with pytest.raises(ClusterSummaryError, match="BOM"):
+        load_summary(tmp_path)
 
 
-def test_apply_upsert_skips_malformed_cluster_entries():
-    """clusters 里混入非 dict 项时跳过、不崩，且匹配到合法目标记录。"""
-    summary = {"clusters": ["bad", 42, {"cluster_id": "cluster_005", "title": "ok"}]}
-    out = mod._apply_upsert(summary, "cluster_005", {"word_count": 7})
-    rec = next(c for c in out["clusters"] if isinstance(c, dict) and c.get("cluster_id") == "cluster_005")
-    assert rec["word_count"] == 7 and rec["title"] == "ok"
+def test_volume_summary_upsert_is_strict_and_replacing(tmp_path):
+    store.initialize_summary(tmp_path)
+    store.upsert_volume_summary(tmp_path, 2, {
+        "volume": 2,
+        "summary": "第二卷摘要",
+        "source": ["cluster_003"],
+        "generated_at_cluster": "cluster_003",
+        "emotional_peak": "旧港封锁",
+    })
+    store.upsert_volume_summary(tmp_path, 1, {
+        "volume": 1,
+        "summary": "第一卷摘要",
+        "source": ["cluster_001", "cluster_002"],
+        "generated_at_cluster": "cluster_002",
+    })
+    assert [row["volume"] for row in load_summary(tmp_path)["volume_summaries"]] == [1, 2]
 
+    store.upsert_volume_summary(tmp_path, 2, {
+        "volume": 2,
+        "summary": "第二卷修订摘要",
+        "source": ["cluster_003"],
+        "generated_at_cluster": "cluster_003",
+    })
+    second = load_summary(tmp_path)["volume_summaries"][1]
+    assert second["summary"] == "第二卷修订摘要"
+    assert "emotional_peak" not in second
 
-# ── upsert_cluster：原子落盘 + 归一化等价 + 不丢字段 ────────────────────────
-
-def test_upsert_cluster_persists_and_normalizes_across_id_forms():
-    """int 6 / "6" / "cluster_006" 视为同一 cluster：三次写汇聚到一条记录、字段累积。"""
-    root = Path(tempfile.mkdtemp())
-    mod.upsert_cluster(root, "cluster_006", {"title": "六", "word_count": 5000})
-    mod.upsert_cluster(root, 6, {"judge_grade": "A"})
-    mod.upsert_cluster(root, "6", {"word_count": 5500})  # 同字段覆盖
-
-    s = load_summary(root)
-    assert len(s["clusters"]) == 1, s["clusters"]
-    rec = s["clusters"][0]
-    assert rec["cluster_id"] == "cluster_006"
-    assert rec["title"] == "六"
-    assert rec["judge_grade"] == "A"
-    assert rec["word_count"] == 5500  # 后写覆盖
-    # 文件真落盘且是合法 JSON
-    assert _summary_path(root).exists()
-    on_disk = json.loads(_summary_path(root).read_text(encoding="utf-8"))
-    assert on_disk["schema_version"] == "v2.cluster"
-
-
-def test_upsert_cluster_second_merge_does_not_drop_existing_fields():
-    """二次 upsert 不同字段 → 深合并不丢先前字段（M1 丢更新防护点）。"""
-    root = Path(tempfile.mkdtemp())
-    mod.upsert_cluster(root, "cluster_002", {"chapter_range": [5, 8], "word_count": 12000})
-    mod.upsert_cluster(root, "cluster_002", {"judge_grade": "B"})
-    rec = load_summary(root)["clusters"][0]
-    assert rec["word_count"] == 12000
-    assert rec["chapter_range"] == [5, 8]
-    assert rec["judge_grade"] == "B"
-
-
-# ── patch_chapter：嵌入 chapters[str(ch)] ───────────────────────────────────
-
-def test_patch_chapter_nests_under_chapters_string_key():
-    """patch_chapter(ch=5) → chapters["5"]，且多章互不覆盖、同章字段累积。"""
-    root = Path(tempfile.mkdtemp())
-    mod.upsert_cluster(root, "cluster_002", {"title": "块"})
-    mod.patch_chapter(root, 2, 5, {"cjk_count": 3200, "scene_type": "悬疑"})
-    mod.patch_chapter(root, "cluster_002", 6, {"cjk_count": 3400})
-    mod.patch_chapter(root, 2, 5, {"pov": "第三人称"})  # 同章追加字段
-
-    rec = load_summary(root)["clusters"][0]
-    chapters = rec["chapters"]
-    # key 是字符串章号
-    assert "5" in chapters and "6" in chapters
-    assert chapters["5"]["cjk_count"] == 3200
-    assert chapters["5"]["scene_type"] == "悬疑"
-    assert chapters["5"]["pov"] == "第三人称"  # 同章深合并不丢
-    assert chapters["6"]["cjk_count"] == 3400
-    # title 不被章补丁影响
-    assert rec["title"] == "块"
-
-
-if __name__ == "__main__":
-    import traceback
-    g = dict(globals())
-    for n in sorted(g):
-        if n.startswith("test_"):
-            try:
-                g[n]()
-                print("OK", n)
-            except Exception as e:
-                print("FAIL", n, e)
-                traceback.print_exc()
+    with pytest.raises(ClusterSummaryError, match="不一致"):
+        store.upsert_volume_summary(tmp_path, 2, {
+            "volume": 3,
+            "summary": "错卷",
+            "source": ["cluster_003"],
+            "generated_at_cluster": "cluster_003",
+        })
+    with pytest.raises(ClusterSummaryError, match="source 不能为空"):
+        store.upsert_volume_summary(tmp_path, 3, {
+            "volume": 3,
+            "summary": "空来源",
+            "source": [],
+            "generated_at_cluster": "cluster_003",
+        })

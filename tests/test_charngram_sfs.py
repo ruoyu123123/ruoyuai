@@ -43,17 +43,11 @@ def _reload_se(mode):
 
 
 def _load_chapter(book, ch):
-    """读真原文章节（剥离 changes JSON 尾巴 · 复用 chapter_io 分隔符）。"""
-    import chapter_io as cio
+    """读真原文章节（原文/ 下均为纯正文 txt）。"""
     p = _ROOT / "workspace" / "styles" / book / "原文" / f"{ch}.txt"
     if not p.exists():
         return None
-    raw = p.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
-    return raw
+    return p.read_text(encoding="utf-8")
 
 
 # ════════════════════════════════════════════════════════════════

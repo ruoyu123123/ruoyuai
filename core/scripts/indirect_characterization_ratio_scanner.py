@@ -32,7 +32,7 @@
      - 兜底地板 0.10（极端纯直写）
 
   ② tonal_pendulum（cross-cluster 选用 · 横云断山）
-     - 读 _数据库/.cross_chapter_scan/cluster_tonal_registry.json（若存在）
+     - 读 _数据库/.cross_cluster_scan/cluster_tonal_registry.json（若存在）
      - 每 cluster 写入 tone_score = +1 (hot) / -1 (cold) / 0 (mixed)
        hot 词汇：怒/吼/杀/血/震/裂/扑/撕/吼/嘶
        cold 词汇：静/凉/冷/默/沉/淡/缓/慢/雪/寂
@@ -225,7 +225,7 @@ def _tone_score(text: str):
 def _read_tonal_registry(project_root):
     if not project_root:
         return None
-    p = (Path(project_root) / "_数据库" / ".cross_chapter_scan"
+    p = (Path(project_root) / "_数据库" / ".cross_cluster_scan"
          / "cluster_tonal_registry.json")
     if not p.exists():
         return None
@@ -238,7 +238,7 @@ def _read_tonal_registry(project_root):
 def _write_tonal_registry(project_root, cluster_id, tone_tag, tone_diff):
     if not project_root or not cluster_id:
         return False
-    base = Path(project_root) / "_数据库" / ".cross_chapter_scan"
+    base = Path(project_root) / "_数据库" / ".cross_cluster_scan"
     base.mkdir(parents=True, exist_ok=True)
     p = base / "cluster_tonal_registry.json"
     reg = {"_schema": 1, "entries": []}

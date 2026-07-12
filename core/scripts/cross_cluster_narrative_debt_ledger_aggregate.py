@@ -19,7 +19,7 @@ env NARRATIVE_DEBT_MODE：off / shadow（默认·只记不判·零回归）/ act
   · DEBT_VOLUME_TAIL_RUNAWAY：当前卷 60%+ 区段 open_ratio 连续 2+ cluster 上升
   · DEBT_VOLUME_OVERSHOOT：当前卷末 open_debt 占该卷 planted > 60%（卷末烂尾）
 
-snapshot 写 _数据库/.cross_chapter_scan/narrative_debt_ledger_*.json
+snapshot 写 _数据库/.cross_cluster_scan/narrative_debt_ledger_*.json
 供 build_manifest 注入 debt_ledger_snapshot（writer D7 用）。
 
 退出码: 0 健康 / 1 advisory（默认 shadow 不上报） / 2 warning
@@ -43,7 +43,6 @@ try:
 except Exception:  # pragma: no cover
     cluster_lookup = None
 
-IS_CLUSTER_MODE = os.environ.get("CLUSTER_MODE") == "1"
 
 # 三档 advisory code（绝不进 audit_hub.HARD_GATE_CODES）
 CODE_BOOK_MORTGAGE = "DEBT_BOOK_MORTGAGE_ABSENT"
@@ -334,7 +333,7 @@ def main():
     fb_used = bool(fb_index) and book["total_planted"] > 0 and not any(
         (c.get("foreshadow_planted") or c.get("foreshadow_paid")) for c in clusters)
 
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     snapshot = build_snapshot(book, by_vol, findings)

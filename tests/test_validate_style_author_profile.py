@@ -96,12 +96,7 @@ def test_B_real_gu_zhenren_chapter043_para_not_fail():
     if not (ch.exists() and sj.exists()):
         return  # 样本缺失则跳过（CI 无样本环境）
     import json
-    import chapter_io as cio
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     sd = json.loads(sj.read_text(encoding="utf-8"))
     t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
     t = vs._apply_style_overrides(t, sd)
@@ -118,12 +113,7 @@ def test_B_real_chapter043_ai_slop_still_fails_with_profile():
     if not (ch.exists() and sj.exists()):
         return
     import json
-    import chapter_io as cio
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     sd = json.loads(sj.read_text(encoding="utf-8"))
     t = {k: dict(v) for k, v in vs.DEFAULT_THRESHOLDS.items()}
     t = vs._apply_style_overrides(t, sd)
@@ -403,17 +393,12 @@ def test_D_helper_chapter_words_extractor():
 # ── 两书真原文回归（带作者档 · 实证 override 生效 + 真问题不放松）──
 
 def _load_body(proj_name, ch_name):
-    import chapter_io as cio
     proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / proj_name
     ch = proj / "原文" / f"{ch_name}.txt"
     sj = proj / "作者风格_FINAL.json"
     if not (ch.exists() and sj.exists()):
         return None, None
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     import json
     sd = json.loads(sj.read_text(encoding="utf-8"))
     return raw, sd
@@ -541,7 +526,6 @@ def test_E_real_gu_zhenren_shishishang_chapter_warn_not_fail_with_profile():
     if not sj.exists():
         return  # 样本缺失则跳过（CI 无样本环境）
     import json
-    import chapter_io as cio
     # 找一个原文含「事实上」的章（实证锚点：第004/009/019/023章）
     body = None
     for cand in ("第004章", "第009章", "第019章", "第023章"):
@@ -549,10 +533,6 @@ def test_E_real_gu_zhenren_shishishang_chapter_warn_not_fail_with_profile():
         if not ch.exists():
             continue
         raw = ch.read_text(encoding="utf-8")
-        for sep in cio.CHANGES_SEPARATORS:
-            if sep in raw:
-                raw = raw.split(sep)[0].rstrip()
-                break
         if "事实上" in raw:
             body = raw
             break
@@ -649,12 +629,7 @@ def test_F_real_jingsong_chapter025_single_line_ratio_not_zero():
     ch = proj / "原文" / "第025章.txt"
     if not ch.exists():
         return  # CI 无样本环境则跳过
-    import chapter_io as cio
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     assert raw.count("\n\n") == 0, raw.count("\n\n")  # 前置不变量：确无 \n\n
     # 修后真实切段 ≈59 段（旧 \n\n 切成 1 段）
     paras = vs._split_paras(raw)
@@ -672,12 +647,7 @@ def test_F_real_gu_zhenren_chapter043_split_unchanged():
     ch = proj / "原文" / "第043章.txt"
     if not ch.exists():
         return
-    import chapter_io as cio
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     assert raw.count("\n\n") > 0  # 前置不变量：有 \n\n
     # tolerant 切段 == 直接按 \n\n 切（去空 + 去无 CJK）—— 蛊真人切段不被修改影响
     expect = [p.strip() for p in raw.split("\n\n") if p.strip() and vs._CJK_RE.search(p)]
@@ -789,12 +759,7 @@ def test_G_real_jingsong_long_para_not_fail_with_profile_cluster():
     if not (ch.exists() and sj.exists()):
         return
     import json
-    import chapter_io as cio
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     sd = json.loads(sj.read_text(encoding="utf-8"))
     t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
     t = vs._apply_style_overrides(t, sd)
@@ -904,12 +869,7 @@ def test_H_real_gu_zhenren_ch444_speaker_prefix_dialogue_not_hardgate():
     if not (ch.exists() and sj.exists()):
         return
     import json
-    import chapter_io as cio
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     sd = json.loads(sj.read_text(encoding="utf-8"))
     t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
     t = vs._apply_style_overrides(t, sd)
@@ -925,12 +885,7 @@ def test_H_real_gu_zhenren_ch646_speaker_prefix_dialogue_not_hardgate():
     if not (ch.exists() and sj.exists()):
         return
     import json
-    import chapter_io as cio
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     sd = json.loads(sj.read_text(encoding="utf-8"))
     t = {k: dict(v) for k, v in vs.CLUSTER_THRESHOLDS.items()}
     t = vs._apply_style_overrides(t, sd)
@@ -1086,7 +1041,6 @@ def test_I_real_jingsong_long_para_chapter_not_hardgate_with_profile():
     if not sj.exists():
         return
     import json
-    import chapter_io as cio
     # 找一个真有长段（>120 非对话段）但 ≤208 的章（实证锚：第002/003/004 等长段章）
     body = None
     for cand in ("第002章", "第003章", "第004章", "第005章", "第006章", "第007章"):
@@ -1094,10 +1048,6 @@ def test_I_real_jingsong_long_para_chapter_not_hardgate_with_profile():
         if not ch.exists():
             continue
         raw = ch.read_text(encoding="utf-8")
-        for sep in cio.CHANGES_SEPARATORS:
-            if sep in raw:
-                raw = raw.split(sep)[0].rstrip()
-                break
         # 该章须含 >120 非对话段（旧 120 会 FAIL）且无 >300 真失控段
         lens_nd = [len(vs._CJK_RE.findall(pp)) for pp in vs._split_paras(raw)
                    if not vs._is_full_dialogue_para(pp)]
@@ -1208,12 +1158,7 @@ def test_J_real_gu_zhenren_cluster_chapter_words_not_fail():
         cp = proj / "原文" / f"第{ch:03d}章.txt"
         if not cp.exists():
             return  # 样本不全则跳过
-        raw = cp.read_text(encoding="utf-8")
-        for sep in cio.CHANGES_SEPARATORS:
-            if sep in raw:
-                raw = raw.split(sep)[0].rstrip()
-                break
-        bodies.append(raw)
+        bodies.append(cp.read_text(encoding="utf-8"))
     cluster = "\n\n".join(bodies)
     assert cio.count_words(cluster) > 8000  # 前置：确是 cluster 级字数
     sd = json.loads(sj.read_text(encoding="utf-8"))
@@ -1242,12 +1187,7 @@ def test_J_real_jingsong_cluster_chapter_words_not_fail():
         cp = proj / "原文" / f"第{ch:03d}章.txt"
         if not cp.exists():
             return
-        raw = cp.read_text(encoding="utf-8")
-        for sep in cio.CHANGES_SEPARATORS:
-            if sep in raw:
-                raw = raw.split(sep)[0].rstrip()
-                break
-        bodies.append(raw)
+        bodies.append(cp.read_text(encoding="utf-8"))
     cluster = "\n\n".join(bodies)
     assert cio.count_words(cluster) > 8000
     sd = json.loads(sj.read_text(encoding="utf-8"))
@@ -1323,7 +1263,6 @@ def test_K_real_jingsong_multichapter_join_subsplit_no_false_hardgate():
     """惊悚乐园 ch25-30 多章 \n\n join（混合格式）：细切后单段超长不再误 hard_gate（核心实证）。
     反证：旧 \n\n 切成 6 巨段（2642-3580 字）全超绝对上限 → FAIL。"""
     import json
-    import chapter_io as cio
     proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "惊悚乐园"
     sj = proj / "作者风格_FINAL.json"
     if not sj.exists():
@@ -1333,12 +1272,7 @@ def test_K_real_jingsong_multichapter_join_subsplit_no_false_hardgate():
         cp = proj / "原文" / f"第{ch:03d}章.txt"
         if not cp.exists():
             return
-        raw = cp.read_text(encoding="utf-8")
-        for sep in cio.CHANGES_SEPARATORS:
-            if sep in raw:
-                raw = raw.split(sep)[0].rstrip()
-                break
-        bodies.append(raw)
+        bodies.append(cp.read_text(encoding="utf-8"))
     cluster = "\n\n".join(bodies)
     # 前置不变量：每章内部无 \n\n（混合格式）→ \n\n 数 = 章数-1
     assert cluster.count("\n\n") == len(bodies) - 1, cluster.count("\n\n")
@@ -1356,16 +1290,11 @@ def test_K_real_jingsong_multichapter_join_subsplit_no_false_hardgate():
 
 def test_K_real_gu_zhenren_chapter043_split_unchanged():
     """蛊真人原文第043章（纯 \n\n·段最大 84 字）：细切阈值不触发·切段与纯 \n\n 切完全一致（零回归）。"""
-    import chapter_io as cio
     proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "蛊真人"
     ch = proj / "原文" / "第043章.txt"
     if not ch.exists():
         return
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     expect = [p.strip() for p in raw.split("\n\n") if p.strip() and vs._CJK_RE.search(p)]
     paras = vs._split_paras(raw)
     assert paras == expect, (len(paras), len(expect))
@@ -1373,16 +1302,11 @@ def test_K_real_gu_zhenren_chapter043_split_unchanged():
 
 def test_K_real_jingsong_chapter025_single_newline_unchanged():
     """惊悚乐园原文第025章（纯单 \n·无 \n\n）：走 fallback·切段与纯单 \n 切完全一致（零回归）。"""
-    import chapter_io as cio
     proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / "惊悚乐园"
     ch = proj / "原文" / "第025章.txt"
     if not ch.exists():
         return
     raw = ch.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
     assert raw.count("\n\n") == 0
     expect = [p.strip() for p in raw.split("\n") if p.strip() and vs._CJK_RE.search(p)]
     paras = vs._split_paras(raw)

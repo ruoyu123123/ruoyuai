@@ -53,7 +53,7 @@ _VALID = {
     "volumes": [{"vol": 1, "title": "第一卷", "phase": "起", "volume_core_conflict": "冲突",
                  "volume_thread": "线索", "volume_finale_signal": "信号"}],
     "major_events": [{"id": "ME-V1-01", "volume": 1, "title": "走向1",
-                      "is_volume_finale": False, "stakes_delta": "起点"}],
+                      "is_volume_finale": True, "stakes_delta": "起点"}],
     "cluster_001": _CLUSTER_001,
 }
 
@@ -406,7 +406,8 @@ def test_emit_writes_rhythm_to_user_pref():
     import shutil
     tmp = Path(tempfile.mkdtemp())
     try:
-        data = {"story_destiny": {}, "volumes": [], "major_events": [],
+        data = {"story_destiny": {}, "volumes": [], "major_events": [
+                    {"id": "ME-V1-01", "volume": 1, "is_volume_finale": True}],
                 "cluster_001": {}, "_metadata": {}}
         gva._emit_volume_arc_to_db(tmp, data, rhythm="紧凑", framework="三幕")
         pref = json.loads((tmp / "_数据库" / "用户偏好.json").read_text(encoding="utf-8"))

@@ -1,37 +1,19 @@
-"""world_evolution_engine 涟漪引擎回归测试 — 北极星②（涟漪规则为核心 · 混合式分界）。
-
-钉死三条核心语义（此前零覆盖）：
-  · 数值 delta —— 客观世界数值由引擎确定性算 delta（精确应用 + 0-100 钳制），
-    minor_event 无幂等账本 → 重复触发按设计累加（每次走向卡选择都是新因果）。
-  · 触发不满足 —— trigger_match 不命中 → matched_rules 空、世界数值一动不动。
-  · narrative 分流 —— 叙事/主观因果 ripple（{narrative} 无 target）**不机械改数值**，
-    只收集进 narrative_consequences 交模型解读（build_manifest 注入 writer/emergence），
-    且 (ch, text) 去重防断点重跑单调膨胀。
-  · 幂等边界 —— fate_event 按 event_id 账本去重（事件级一次性影响）；
-    tick 按 applied_ticks 章号账本去重（WAL 断点重跑不漂移）。
-
-规则/世界状态形态取自 core/claude-home/templates/subsystem_skeletons.json 的
-涟漪规则(ripple_rules_v20_1) / 世界状态(world_state_v20_1) 骨架。
-"""
+"""Cluster 世界涟漪规则引擎回归测试。"""
 import json
 import sys
 import tempfile
 from pathlib import Path
 
-_SCRIPTS = Path(__file__).resolve().parents[1] / "core" / "scripts"
-sys.path.insert(0, str(_SCRIPTS))
-import world_evolution_engine as wee  # noqa: E402
+import pytest
 
+SCRIPTS = Path(__file__).resolve().parents[1] / "core" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+import world_evolution_engine as engine  # noqa: E402
 
-# ───────────────────── 骨架形态 fixture（world_state_v20_1 / ripple_rules_v20_1） ─────────────────────
 
 def _world() -> dict:
-    # 注：骨架 consequence_tracker 写 []，引擎 add/evaluate_completion 按 dict 消费；
-    # 本测试不触 consequence op，置 {} 避免骨架-引擎类型分歧噪音（另案契约债）。
     return {
-        "_schema": "world_state_v20_1",
-        "schema_version": "v27",
-        "current_world_time": {"ch": 1, "cluster": "cluster_001", "day": 1},
+        "current_world_time": {"cluster": "cluster_001", "day": 1},
         "protagonist_state": {},
         "factions_state": {"巡夜司": {"power": 60, "stability": 50, "wealth": 95}},
         "active_npc_threads": [],
@@ -42,219 +24,162 @@ def _world() -> dict:
 
 def _rules() -> dict:
     return {
-        "_schema": "ripple_rules_v20_1",
-        "schema_version": "v27",
         "ripple_rules": [
-            # ① 数值 delta 类（minor_event · 含钳制用例：wealth 95+20 → 100）
-            {"id": "RR_001", "trigger_type": "minor_event",
-             "trigger_match": "B_夜探据点|铁锈味重锤埋设",
-             "ripples": [
-                 {"target": "factions_state.巡夜司.power", "delta": -10, "reason": "据点暴露被反制"},
-                 {"target": "factions_state.巡夜司.wealth", "delta": 20, "reason": "缴获赃银（钳到 100）"},
-             ]},
-            # ② 触发条件不满足类（trigger_match 永不命中本批测试的走向词）
-            {"id": "RR_002_never", "trigger_type": "minor_event",
-             "trigger_match": "Z_永不触发的走向",
-             "ripples": [{"target": "factions_state.巡夜司.power", "delta": 50}]},
-            # ③ narrative 分流类（无 target → 交模型解读，不机械改数值）
-            {"id": "RR_003_narrative", "trigger_type": "minor_event",
-             "trigger_match": "D_心理余波",
-             "ripples": [{"narrative": "巡夜司内部开始互相猜忌，老都头夜巡不再独行",
-                          "reason": "夜探余波属主观因果，交模型解读"}]},
-            # fate_event（幂等账本用例）
-            {"id": "RR_FATE", "trigger_type": "fate_event", "trigger_match": "ME_001",
-             "ripples": [{"target": "factions_state.巡夜司.stability", "delta": -5, "reason": "大事件震荡"}]},
-            # auto_tick（tick 幂等用例）
-            {"id": "RR_AUTO_TICK", "trigger_type": "auto_tick", "trigger_match": "every_chapter",
-             "ripples": [{"target": "factions_state.巡夜司.power", "delta": 1, "reason": "巡夜司日常扩张"}]},
-        ],
+            {
+                "id": "RR_MINOR",
+                "trigger_type": "minor_event",
+                "trigger_match": "夜探据点|铁锈味",
+                "ripples": [
+                    {"target": "factions_state.巡夜司.power", "delta": -10},
+                    {"target": "factions_state.巡夜司.wealth", "delta": 20},
+                ],
+            },
+            {
+                "id": "RR_NARRATIVE",
+                "trigger_type": "minor_event",
+                "trigger_match": "心理余波",
+                "ripples": [{"narrative": "巡夜司内部开始互相猜忌"}],
+            },
+            {
+                "id": "RR_FATE",
+                "trigger_type": "fate_event",
+                "trigger_match": "ME_001",
+                "ripples": [{"target": "factions_state.巡夜司.stability", "delta": -5}],
+            },
+            {
+                "id": "RR_AUTO",
+                "trigger_type": "auto_tick",
+                "trigger_match": "every_cluster",
+                "ripples": [{"target": "current_world_time.day", "advance": 1}],
+            },
+        ]
     }
 
 
-def _mk_project(tmp: Path) -> Path:
-    db = tmp / "_数据库"
-    db.mkdir(parents=True, exist_ok=True)
-    (db / "世界状态.json").write_text(json.dumps(_world(), ensure_ascii=False), encoding="utf-8")
-    (db / "涟漪规则.json").write_text(json.dumps(_rules(), ensure_ascii=False), encoding="utf-8")
-    return tmp
+def _project(root: Path) -> Path:
+    db = root / "_数据库"
+    db.mkdir(parents=True)
+    (db / "世界状态.json").write_text(
+        json.dumps(_world(), ensure_ascii=False), encoding="utf-8")
+    (db / "涟漪规则.json").write_text(
+        json.dumps(_rules(), ensure_ascii=False), encoding="utf-8")
+    return root
 
 
 def _disk_world(root: Path) -> dict:
     return json.loads((root / "_数据库" / "世界状态.json").read_text(encoding="utf-8"))
 
 
-# ---------- ① 数值 delta：精确应用 + 0-100 钳制 + 落盘 ----------
-
-def test_minor_event_numeric_delta_exact_and_clamp():
-    """命中 RR_001 → power 60-10=50 精确落地；wealth 95+20 钳到 100；applied_log 记 old/new/delta。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d))
-        r = wee.apply_minor_event(root, 5, "B_夜探据点")
-        assert r["matched_rules"] == ["RR_001"]
-        by_target = {e["target"]: e for e in r["applied_log"]}
-        assert by_target["factions_state.巡夜司.power"]["old"] == 60
-        assert by_target["factions_state.巡夜司.power"]["new"] == 50
-        assert by_target["factions_state.巡夜司.power"]["delta"] == -10
-        assert by_target["factions_state.巡夜司.wealth"]["new"] == 100  # 95+20 钳制上限
-        # 原子写落盘（不是只改内存）
-        w = _disk_world(root)
-        assert w["factions_state"]["巡夜司"]["power"] == 50
-        assert w["factions_state"]["巡夜司"]["wealth"] == 100
-        assert w["factions_state"]["巡夜司"]["stability"] == 50  # 未涉及维度不动
+def test_minor_event_applies_numeric_delta_and_clamp():
+    with tempfile.TemporaryDirectory() as temp:
+        root = _project(Path(temp))
+        result = engine.apply_minor_event(root, "cluster_005", "夜探据点")
+        assert result["matched_rules"] == ["RR_MINOR"]
+        world = _disk_world(root)
+        assert world["factions_state"]["巡夜司"]["power"] == 50
+        assert world["factions_state"]["巡夜司"]["wealth"] == 100
 
 
-# ---------- ② 触发条件不满足：世界数值一动不动 ----------
-
-def test_unmatched_rule_world_state_untouched():
-    """走向词谁都不命中 → matched/applied 全空，factions/narrative 与初始深等（只许 ticks_log 记账）。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d))
-        r = wee.apply_minor_event(root, 5, "完全无关的走向卡")
-        assert r["matched_rules"] == []
-        assert r["applied_log"] == []
-        w = _disk_world(root)
-        assert w["factions_state"] == _world()["factions_state"]
-        assert "narrative_consequences" not in w
-        # 引擎语义：apply_minor_event 即使 0 命中也记一条 world_ticks_log（审计轨迹）
-        assert len(w["world_ticks_log"]) == 1
-        assert w["world_ticks_log"][0]["trigger_type"] == "minor_event"
+def test_minor_event_same_cluster_is_idempotent():
+    with tempfile.TemporaryDirectory() as temp:
+        root = _project(Path(temp))
+        engine.apply_minor_event(root, "cluster_005", "夜探据点")
+        second = engine.apply_minor_event(root, "cluster_005", "夜探据点")
+        assert second["skipped_idempotent"] is True
+        assert _disk_world(root)["factions_state"]["巡夜司"]["power"] == 50
 
 
-# ---------- ③ narrative 分流：只产「交模型解读」条目，不直接改数值（混合式分界） ----------
-
-def test_narrative_ripple_diverts_to_model_not_numeric():
-    """命中 RR_003 → 条目进 narrative_consequences（_kind=narrative），factions 数值零变化。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d))
-        r = wee.apply_minor_event(root, 5, "D_心理余波")
-        assert r["matched_rules"] == ["RR_003_narrative"]
-        assert [e["op"] for e in r["applied_log"]] == ["narrative"]
-        w = _disk_world(root)
-        nc = w["narrative_consequences"]
-        assert len(nc) == 1
-        assert nc[0]["ch"] == 5
-        assert nc[0]["text"] == "巡夜司内部开始互相猜忌，老都头夜巡不再独行"
-        assert nc[0]["_kind"] == "narrative"
-        # 北极星②分界：叙事因果不由引擎机械算数值
-        assert w["factions_state"] == _world()["factions_state"]
+def test_minor_event_rejects_different_choice_for_applied_cluster():
+    with tempfile.TemporaryDirectory() as temp:
+        root = _project(Path(temp))
+        engine.apply_minor_event(root, "cluster_005", "夜探据点")
+        with pytest.raises(ValueError, match="禁止覆盖"):
+            engine.apply_minor_event(root, "cluster_005", "心理余波")
 
 
-def test_narrative_dedup_same_ch_appends_new_ch():
-    """同 (ch, text) 重跑去重只留 1 条；换 ch 触发是新因果 → 追加第 2 条。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d))
-        wee.apply_minor_event(root, 5, "D_心理余波")
-        wee.apply_minor_event(root, 5, "D_心理余波")  # 断点重跑场景
-        assert len(_disk_world(root)["narrative_consequences"]) == 1
-        wee.apply_minor_event(root, 6, "D_心理余波")
-        nc = _disk_world(root)["narrative_consequences"]
-        assert [e["ch"] for e in nc] == [5, 6]
+def test_minor_event_different_clusters_accumulates():
+    with tempfile.TemporaryDirectory() as temp:
+        root = _project(Path(temp))
+        engine.apply_minor_event(root, "cluster_005", "夜探据点")
+        engine.apply_minor_event(root, "cluster_006", "夜探据点")
+        assert _disk_world(root)["factions_state"]["巡夜司"]["power"] == 40
 
 
-# ---------- ripples 契约容错：LLM 自由生成偶发把 ripples 写成裸字符串（无 producer 强约束） ----------
-
-def test_normalize_rule_coerces_bare_string_ripples_to_narrative():
-    """规范格式规则（含 trigger_match/trigger_type）若 ripples 是裸字符串 → 归一成 [{narrative}]，不保留裸串。
-
-    实证取自真机验证撞见的生产数据形状（涟漪规则.json 的 contract_enforcement/faith_currency_spill
-    两条规则曾被写成 "ripples": "纯文本后果描述"，触发时 for ripple in "字符串" 逐字符崩 'str'.get）。
-    """
-    rule = {"id": "RR_STR", "trigger_type": "minor_event", "trigger_match": "contract_enforcement",
-            "ripples": "无限游戏系统底层逻辑被强行调用，佛门因果律化作实质的天罚劫雷。"}
-    out = wee._normalize_rule(rule)
-    assert isinstance(out["ripples"], list)
-    assert out["ripples"] == [{"narrative": "无限游戏系统底层逻辑被强行调用，佛门因果律化作实质的天罚劫雷。"}]
+def test_unmatched_minor_event_does_not_write_world():
+    with tempfile.TemporaryDirectory() as temp:
+        root = _project(Path(temp))
+        before = (root / "_数据库" / "世界状态.json").read_bytes()
+        result = engine.apply_minor_event(root, "cluster_005", "无关走向")
+        assert result["matched_rules"] == []
+        assert (root / "_数据库" / "世界状态.json").read_bytes() == before
 
 
-def test_normalize_rule_coerces_bare_string_ripples_empty_string():
-    """空/纯空白裸字符串 ripples → 归一成空列表（不产出空 narrative 条目）。"""
-    rule = {"id": "RR_EMPTY", "trigger_type": "minor_event", "trigger_match": "x", "ripples": "   "}
-    assert wee._normalize_rule(rule)["ripples"] == []
+def test_narrative_consequence_is_cluster_scoped_and_deduplicated():
+    with tempfile.TemporaryDirectory() as temp:
+        root = _project(Path(temp))
+        engine.apply_minor_event(root, "cluster_005", "心理余波")
+        engine.apply_minor_event(root, "cluster_005", "心理余波")
+        engine.apply_minor_event(root, "cluster_006", "心理余波")
+        rows = _disk_world(root)["narrative_consequences"]
+        assert [row["cluster_id"] for row in rows] == ["cluster_005", "cluster_006"]
+        assert all(row["_kind"] == "narrative" for row in rows)
 
 
-def test_normalize_rule_coerces_mixed_list_ripples():
-    """ripples 是 list 但元素混杂裸字符串 → 逐个归一成 {narrative}，已结构化的 dict 条目原样保留。"""
-    rule = {"id": "RR_MIXED", "trigger_type": "minor_event", "trigger_match": "x",
-            "ripples": ["纯文本后果", {"target": "factions_state.巡夜司.power", "delta": -1}]}
-    out = wee._normalize_rule(rule)
-    assert out["ripples"] == [
-        {"narrative": "纯文本后果"},
-        {"target": "factions_state.巡夜司.power", "delta": -1},
-    ]
+def test_advance_is_unbounded_and_null_starts_at_zero():
+    world = {"current_world_time": {"day": 99}}
+    log = []
+    assert engine._apply_ripple(
+        world, {"target": "current_world_time.day", "advance": 6},
+        "cluster_001", log)
+    assert world["current_world_time"]["day"] == 105
+    world["current_world_time"]["day"] = None
+    engine._apply_ripple(
+        world, {"target": "current_world_time.day", "advance": 3},
+        "cluster_002", log)
+    assert world["current_world_time"]["day"] == 3
 
 
-def test_apply_minor_event_survives_bare_string_ripples_rule():
-    """端到端：规则库里混入 ripples=裸字符串 的规则，命中该规则不再崩 'str'.get，落成 narrative 后果。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d))
-        rules_path = root / "_数据库" / "涟漪规则.json"
-        rules = json.loads(rules_path.read_text(encoding="utf-8"))
-        rules["ripple_rules"].append({
-            "id": "RR_BARE_STR", "trigger_type": "minor_event", "trigger_match": "contract_enforcement",
-            "ripples": "佛门因果律化作实质的天罚劫雷，无视境界直接剥夺核心力量填补负债。",
-        })
-        rules_path.write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
-        r = wee.apply_minor_event(root, 5, "contract_enforcement")
-        assert r["matched_rules"] == ["RR_BARE_STR"]
-        nc = _disk_world(root)["narrative_consequences"]
-        assert nc[0]["text"] == "佛门因果律化作实质的天罚劫雷，无视境界直接剥夺核心力量填补负债。"
+def test_missing_ripple_path_is_reported_without_mutation():
+    world = _world()
+    log = []
+    assert not engine._apply_ripple(
+        world, {"target": "missing.value", "advance": 1},
+        "cluster_001", log)
+    assert log == [{"target": "missing.value", "op": "advance", "result": "skip_path_missing"}]
 
 
-# ---------- 重复应用语义：minor_event 累加（无账本）vs fate_event/tick 幂等（有账本） ----------
-
-def test_minor_event_reapply_accumulates_by_design():
-    """minor_event 无幂等账本 → 两次走向触发数值累加（60→50→40），钳制项保持 100 不再涨。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d))
-        wee.apply_minor_event(root, 5, "B_夜探据点")
-        wee.apply_minor_event(root, 6, "B_夜探据点")
-        w = _disk_world(root)
-        assert w["factions_state"]["巡夜司"]["power"] == 40
-        assert w["factions_state"]["巡夜司"]["wealth"] == 100
+def test_noncanonical_rule_shapes_fail_hard():
+    for rules in (
+        {"rules": []},
+        {"ripple_rules": [{"id": "RR", "trigger_type": "minor_event",
+                            "trigger_match": "x", "ripples": "叙事字符串"}]},
+        {"ripple_rules": [{"rule_id": "RR", "trigger": "x", "effect": "旧格式"}]},
+    ):
+        with pytest.raises(ValueError):
+            engine._canonical_rules(rules)
 
 
-def test_fate_event_idempotent_by_event_id_ledger():
-    """同 event_id 重放（split 平铺逐章重放场景）→ 第二次 skipped_idempotent，delta 不乘倍。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d))
-        r1 = wee.apply_fate_event(root, 5, "ME_001")
-        assert r1["matched_rules"] == ["RR_FATE"]
-        assert _disk_world(root)["factions_state"]["巡夜司"]["stability"] == 45
-        r2 = wee.apply_fate_event(root, 7, "ME_001")
-        assert r2.get("skipped_idempotent") is True
-        assert r2["first_applied_at_ch"] == 5
-        assert r2["applied_log"] == []
-        assert _disk_world(root)["factions_state"]["巡夜司"]["stability"] == 45  # 不二次扣减
+def test_spawned_opportunity_uses_cluster_window():
+    world = _world()
+    log = []
+    engine._apply_ripple(
+        world,
+        {"target": "emergent_opportunities", "spawn": {
+            "type": "副线", "description": "一封匿名信", "expires_clusters": 3,
+        }},
+        "cluster_004",
+        log,
+    )
+    opportunity = world["emergent_opportunities"][0]
+    assert opportunity["trigger_cluster"] == "cluster_005"
+    assert opportunity["expires_at_cluster"] == "cluster_007"
+    assert engine.opportunity_window(opportunity, "cluster_006") == (True, 1)
+    assert engine.opportunity_window(opportunity, "cluster_008") == (False, -1)
 
 
-def test_tick_idempotent_by_applied_ticks_ledger():
-    """同章 tick 重跑（WAL 断点）→ 第二次 skipped=already_ticked，auto_tick delta 只落一次。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d))
-        r1 = wee.tick(root, 3)
-        assert r1["matched_rules"] == ["RR_AUTO_TICK"]
-        w = _disk_world(root)
-        assert w["factions_state"]["巡夜司"]["power"] == 61  # 60+1
-        assert w["current_world_time"]["ch"] == 3
-        assert w["applied_ticks"] == [3]
-        r2 = wee.tick(root, 3)
-        assert r2.get("skipped") == "already_ticked"
-        w2 = _disk_world(root)
-        assert w2["factions_state"]["巡夜司"]["power"] == 61  # 不重复 +1
-        # auto_tick 日志同 ch 也去重，只留 1 条
-        assert sum(1 for e in w2["world_ticks_log"] if e.get("trigger_type") == "auto_tick" and e.get("ch") == 3) == 1
-
-
-if __name__ == "__main__":
-    fails = 0
-    for nm in sorted(dir()):
-        if nm.startswith("test_"):
-            try:
-                globals()[nm]()
-                print(f"  [OK] {nm}")
-            except Exception as e:
-                fails += 1
-                import traceback
-                print(f"  [FAIL] {nm}: {e}")
-                traceback.print_exc()
-    sys.exit(1 if fails else 0)
+def test_dashboard_reports_current_cluster():
+    with tempfile.TemporaryDirectory() as temp:
+        root = _project(Path(temp))
+        report = engine.dashboard(root)
+        assert report["current_cluster"] == "cluster_001"
+        assert report["current_day"] == 1

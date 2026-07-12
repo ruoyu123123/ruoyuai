@@ -12,8 +12,6 @@
   仅 AMBIGUOUS_FLAT_TRAJECTORY 出 advisory（前两类是创作选择不报警）。
 
 【与既有 scanner 显式去重】
-  - character_arc_aggregator：跨 cluster 弧线进度
-    本 scanner = 单 cluster 首尾 600 CJK 4 维状态斜率·正交（粒度不同）
   - sentiment_arc_fractal：情感弧 Hurst/ApEn
     本 scanner = 4 维（power/status/relation/threat）量化境况·正交
 

@@ -118,9 +118,8 @@ def test_registry_has_anchored_advisory_contract_block():
 def test_hard_gate_codes_unchanged_15():
     """R24 W12 Batch-KK schema 升级不增不减 hard_gate 码（本件不动 HARD_GATE_CODES）。
     🔴 2026-06-27 C03：基线 15→18（子系统载荷点火 3 码经独立 C03 特性入列·非本 schema 改动）。"""
-    # 北极星⑤：本 schema 升级不黑箱新增 hard_gate；当前授权基线 = 19
-    # 🔴 2026-06-27 C18：18→19（splitter 字数守恒 SPLIT_WORD_NOT_CONSERVED 经独立 C18 特性入列·非本 schema 改动）
-    assert len(audit_hub.HARD_GATE_CODES) == 19
+    # 北极星⑤：本 schema 升级不黑箱新增 hard_gate；当前授权基线 = 18
+    assert len(audit_hub.HARD_GATE_CODES) == 18
 
 
 def test_existing_no_anchor_violation_still_works():

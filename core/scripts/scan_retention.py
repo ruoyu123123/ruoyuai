@@ -15,7 +15,7 @@ def main():
     args = ap.parse_args()
 
     project_root = Path(args.project)
-    scan_dir = project_root / "_数据库" / ".cross_chapter_scan"
+    scan_dir = project_root / "_数据库" / ".cross_cluster_scan"
     if not scan_dir.is_dir():
         print(f"[SKIP] {scan_dir} 不存在")
         sys.exit(0)

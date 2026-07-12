@@ -35,6 +35,8 @@ try:
 except Exception:
     SKELETON_FILE = ROOT / "core" / "claude-home" / "templates" / "subsystem_skeletons.json"
 
+from cluster_summary_reader import validate_summary as validate_cluster_summary
+
 
 def _load_skeletons():
     data = json.loads(SKELETON_FILE.read_text(encoding="utf-8"))
@@ -158,6 +160,17 @@ def _atomic_write(path: Path, obj):
     os.replace(tmp, path)
 
 
+def _runtime_skeleton(name: str, skeleton: dict) -> dict:
+    """移除模板说明字段，确保运行时账本只含消费契约字段。"""
+    if name != "故事块摘要":
+        return skeleton
+    return {
+        key: skeleton[key]
+        for key in ("schema_version", "clusters", "volume_summaries")
+        if key in skeleton
+    }
+
+
 def cmd_list():
     canonical, _ = _load_skeletons()
     print(f"canonical 34 子系统（{len(canonical)} 个）:")
@@ -181,7 +194,7 @@ def cmd_emit(args):
         if skel is None:
             print(f"[WARN] skeletons.json 缺 {name} 骨架，写空对象兜底", file=sys.stderr)
             skel = {"schema_version": "v27", "_doc": f"{name} 骨架占位（skeletons.json 未定义）"}
-        _atomic_write(path, skel)
+        _atomic_write(path, _runtime_skeleton(name, skel))
         created.append(name)
     print(f"[scaffold emit] 目标: {db}")
     print(f"  新建 {len(created)} · 跳过(已存在) {len(skipped)} · 共 {len(canonical)}")
@@ -209,6 +222,12 @@ def cmd_verify(args):
         except Exception as e:
             bad.append((name, str(e)[:80]))
             continue
+        if name == "故事块摘要":
+            try:
+                validate_cluster_summary(obj)
+            except ValueError as e:
+                bad.append((name, str(e)[:80]))
+                continue
         ok += 1
         if isinstance(obj, dict) and "schema_version" not in obj and "_schema" not in obj:
             no_schema_ver.append(name)

@@ -63,8 +63,8 @@ def _ripple_effect_summary(ripple: dict) -> dict:
         return {"op": "advance", "target": target, "advance": ripple.get("advance")}
     if "set" in ripple:
         return {"op": "set", "target": target, "value": ripple.get("set")}
-    if ripple.get("set_to_current_ch"):
-        return {"op": "set_to_current_ch", "target": target}
+    if ripple.get("set_to_current_cluster"):
+        return {"op": "set_to_current_cluster", "target": target}
     if "add_thread" in ripple:
         td = ripple.get("add_thread") or {}
         return {"op": "add_thread", "npc": td.get("npc_id", "?"),
@@ -81,22 +81,21 @@ def _ripple_effect_summary(ripple: dict) -> dict:
     return {"op": "unknown", "target": target}
 
 
-def state_delta_preview(me_id: str, me_text: str, ripple_rules_json: dict) -> dict:
+def state_delta_preview(event_id: str, me_text: str, ripple_rules_json: dict) -> dict:
     """候选被选中后世界状态的确定性 delta 预览（preview-only）。
 
     匹配语义对齐真实落库入口（世界演化在 save-state 阶段才写库）：
-    - apply_fate_event 按 ME id 触发 → 这里按 fate_event + me_id 预演；
+    - apply_fate_event 按 ME id 触发，这里按 fate_event + event_id 预演；
     - apply_minor_event 按用户选定走向文本触发 → 这里按 minor_event + 候选 ME 文本近似预演。
-    规则归一/匹配复用 world_evolution_engine._normalize_rule/_match_rule（纯函数）；
+    规则校验/匹配复用 world_evolution_engine._canonical_rules/_match_rule（纯函数）；
     auto_tick 规则与具体候选无关，不进预览。
     """
     raw = ripple_rules_json if isinstance(ripple_rules_json, dict) else {}
-    raw_rules = raw.get("ripple_rules") or raw.get("rules") or []
-    rules = [_wee._normalize_rule(r) for r in raw_rules if isinstance(r, dict)]
+    rules = _wee._canonical_rules(raw) if isinstance(raw.get("ripple_rules"), list) else []
     matched = []
     for rule in rules:
         matched_via = []
-        if me_id and _wee._match_rule(rule, "fate_event", str(me_id)):
+        if event_id and _wee._match_rule(rule, "fate_event", str(event_id)):
             matched_via.append("fate_event")
         if me_text and _wee._match_rule(rule, "minor_event", me_text):
             matched_via.append("minor_event")
@@ -130,7 +129,7 @@ def me_dag_health(pool: list, *, get_id, get_parents) -> dict:
       —— 环上 ME 互为前置 → prerequisites 永不满足 → 永不可触发。
     - dangling: [{"me": id, "missing": [不存在的前置 id...]}] 按 me id 排序
       —— 前置指向池中不存在的 ME → 打分层 -100 硬剔成死链。
-    get_id/get_parents 由调用方（cluster_emergence_engine 的 _get_me_id/_resolve_parents）
+    get_id/get_parents 由调用方（cluster_emergence_engine 的 _event_id/_resolve_parents）
     注入，保证 id/前置链解析口径与打分层完全一致（避免双口径）。
     确定性：同输入同输出；只读不修复不裁决。
     """
@@ -214,7 +213,7 @@ def stagnation_window() -> int:
 
 
 def goal_stagnation(shijianji: dict, dashishi: dict, current_volume, candidate_mes: list,
-                    *, get_me_id, me_text, keyword_set, me_volume, window: int | None = None) -> dict:
+                    *, get_event_id, me_text, keyword_set, me_volume, window: int | None = None) -> dict:
     """卷核心任务停滞检测（确定性只读·advisory）。
 
     detected=True 需同时满足：
@@ -223,7 +222,7 @@ def goal_stagnation(shijianji: dict, dashishi: dict, current_volume, candidate_m
          volume_core_conflict/volume_thread 核心关键词重叠 ≥ _CORE_OVERLAP_MIN；
       ③ 本轮候选卡的 parent ME 也全部不相关（有推进项在候选里 = 用户下一步就能选，不算滞）。
     数据缺失（无卷标记 / 本卷缺 volume_core_conflict / 关键词为空）→ 诚实 skip。
-    get_me_id/me_text/keyword_set/me_volume 由 cluster_emergence_engine 注入（口径同打分层）。
+    get_event_id/me_text/keyword_set/me_volume 由 cluster_emergence_engine 注入。
     北极星铁律：本函数只产报告字段——绝不改打分、绝不换目标、绝不增删候选。
     """
     win = window if isinstance(window, int) and window >= 1 else stagnation_window()
@@ -253,9 +252,8 @@ def goal_stagnation(shijianji: dict, dashishi: dict, current_volume, candidate_m
         out["skipped"] = "卷核心任务文本无可比对关键词·跳过"
         return out
 
-    pool = [m for m in (dashishi.get("major_events_pool") or dashishi.get("major_events") or [])
-            if isinstance(m, dict)]
-    me_by_id = {get_me_id(m): m for m in pool if get_me_id(m)}
+    pool = [m for m in (dashishi.get("major_events") or []) if isinstance(m, dict)]
+    me_by_id = {get_event_id(m): m for m in pool if get_event_id(m)}
 
     def _core_related(me: dict) -> bool:
         return len(keyword_set(me_text(me)) & core_kw) >= _CORE_OVERLAP_MIN
@@ -296,7 +294,7 @@ def goal_stagnation(shijianji: dict, dashishi: dict, current_volume, candidate_m
 
     core_progress = {cid: hits for _, cid, hits in recent if hits}
     out["core_progress_in_window"] = core_progress
-    candidates_core = [get_me_id(me) for me in (candidate_mes or [])
+    candidates_core = [get_event_id(me) for me in (candidate_mes or [])
                        if isinstance(me, dict) and _core_related(me)]
     out["candidates_core_related"] = candidates_core
     if core_progress or candidates_core:

@@ -1,371 +1,341 @@
-"""narrator_calibrate.py — Storyteller 风格 + Adaptation Factor 调压器（v21 R1.2 新增）
+#!/usr/bin/env python3
+"""按完成的 cluster 校准叙事压力阶段并给出下一 cluster 的 advisory 建议。
 
-借鉴 RimWorld 的三种 Storyteller（Cassandra 升压 / Phoebe 长间歇 / Randy 随机）+ Adaptation Factor。
+输入来自当前 cluster 的终稿与 writer self-eval；持久状态只使用
+``叙事节拍器.json`` 的 cluster-native 结构。
 
-在 /cluster-save-state 的 cluster 章范围内运行：
-1. 取本章 outcome（win/setback/neutral）：优先消费 writer 申报的
-   _changes.json.self_eval.storyteller_alignment.actual_outcome（#7 孤儿契约修复 · 北极星⑤
-   作者申报第一权威），未申报才回退 heuristic 推断；intensity 仍 heuristic 估算
-2. 写入 叙事节拍器.json.chapter_outcome_log（带 outcome_source 标 writer_declared / inferred）
-3. 滑窗 N 章计算 setback_count / win_streak / loss_streak
-4. 对照 storyteller_profile 的 expected_setback_per_n_ch，决定下章 target_outcome:
-   - 实际 setback < 预期 → 下章 target=setback（"该让主角吃亏了"）
-   - 实际 setback > 预期 → 下章 target=win（"读者要喘息"）
-   - 区间内 → target=auto
-5. 输出更新后的 narrator_recommendation 字段
-
-四种 phase 自动切换：
-- 连续 3 章 win + intensity 累计 ≥ 12 → climax 触发后 cooldown
-- cooldown 持续 ≥ 3 章 → steady
-- steady 期累计 setback ≥ 2 → rising
-- rising → 自动按 storyteller 节奏推进
-
-用法：python narrator_calibrate.py <project> [--ch N] [--auto]
-退出码: 0 健康 / 1 narrator 强烈建议下章修正 / 2 致命
+退出码：0 无紧迫建议；1 产生紧迫 advisory；2 输入或状态契约损坏。
 """
-
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
 
-# 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
 import state_cli_guard
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
+SCHEMA_NAME = "cluster_storyteller"
+SCHEMA_VERSION = "1.0"
+CLUSTER_RE = re.compile(r"^cluster_[0-9]{3,}$")
+OUTCOMES = {"setback", "win", "neutral"}
+PHASES = {"rising", "climax", "cooldown", "steady"}
+TOP_REQUIRED = {
+    "_schema", "schema_version", "rhythm_profile", "beat_targets",
+    "default_beat_policy", "appraisal_beats", "storyteller_profile",
+    "current_pressure_phase", "since_phase_change_cluster",
+    "cluster_outcome_log", "adaptation_factor", "narrator_recommendation",
+}
+PUBLIC_TOP_KEYS = TOP_REQUIRED - {"_schema"} | {"consumption"}
+
+
+class NarratorContractError(ValueError):
+    """叙事节拍器或 cluster 创作产物不符合唯一契约。"""
+
+
+def _require_cluster_id(value: str) -> str:
+    if not isinstance(value, str) or not CLUSTER_RE.fullmatch(value):
+        raise NarratorContractError(f"非法 cluster_id: {value!r}")
+    return value
+
+
+def _cluster_num(cluster_id: str) -> int:
+    return int(_require_cluster_id(cluster_id).rsplit("_", 1)[1])
+
+
+def _read_json(path: Path) -> dict:
+    if not path.is_file():
+        raise NarratorContractError(f"文件不存在: {path}")
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise NarratorContractError(f"JSON 读取失败: {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise NarratorContractError(f"JSON 顶层必须是 object: {path}")
+    return data
 
 
-def save_json(p: Path, data: dict):
-    # 2026-05-29 修：裸写 → 原子写（atomic_write_json 内部已 mkdir + fsync）
-    atomic_json.atomic_write_json(p, data)
+def _require_string(value, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise NarratorContractError(f"{field} 必须是非空字符串")
+    return value
 
 
-# ───────────────────── 真实项目 schema 兼容层（2026-05-30 北极星③契约修复） ─────────────────────
-# 背景（3 真实项目实测）：calibrate 读 storyteller_profile/current_pressure_phase/adaptation_factor
-# （靠 setdefault 部分自愈），但真实项目顶层用别的 schema，导致 outline 产的字段成孤儿：
-#   · 纵尸司：framework:"Save_the_Cat" + beats[]（id/desc/at_cluster/done）—— Save_the_Cat 节拍位点
-#   · 诡异：  rhythm_profile:"混合" + beat_density_by_cluster{cluster_001:"中"...} —— cluster 节奏密度
-#   · 城南：  v21 form（storyteller_profile/adaptation_factor/...）
-# 旧版 calibrate 跑这俩项目时只是 setdefault 出一堆空 v21 字段，但 framework/beats/rhythm_profile
-# 永远不被读、不进 manifest → writer 看不到「本 cluster 该到哪个 Save_the_Cat 节拍 / 节奏密度多高」。
-# 修复：抽 narrator_view() 把 3 套形态归一暴露（参照 fate_engine accessor），calibrate + manifest 共用。
+def validate_pacer(pacer: dict) -> dict:
+    missing = TOP_REQUIRED - set(pacer)
+    public = {key for key in pacer if not str(key).startswith("_")}
+    unknown = public - PUBLIC_TOP_KEYS
+    if missing or unknown:
+        raise NarratorContractError(
+            f"叙事节拍器字段错误: missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
+    if pacer["_schema"] != SCHEMA_NAME or pacer["schema_version"] != SCHEMA_VERSION:
+        raise NarratorContractError(
+            f"叙事节拍器 schema 必须是 {SCHEMA_NAME!r}/{SCHEMA_VERSION!r}"
+        )
+    _require_string(pacer["rhythm_profile"], "rhythm_profile")
+    _require_string(pacer["storyteller_profile"], "storyteller_profile")
+    if pacer["current_pressure_phase"] not in PHASES:
+        raise NarratorContractError("current_pressure_phase 非法")
+    _require_cluster_id(pacer["since_phase_change_cluster"])
+    for field in ("beat_targets", "appraisal_beats", "cluster_outcome_log"):
+        if not isinstance(pacer[field], list):
+            raise NarratorContractError(f"{field} 必须是数组")
+    if not isinstance(pacer["default_beat_policy"], dict):
+        raise NarratorContractError("default_beat_policy 必须是 object")
+    for index, beat in enumerate(pacer["beat_targets"]):
+        if not isinstance(beat, dict):
+            raise NarratorContractError(f"beat_targets[{index}] 必须是 object")
+        _require_cluster_id(beat.get("cluster_id"))
+    seen: set[str] = set()
+    for index, entry in enumerate(pacer["cluster_outcome_log"]):
+        if not isinstance(entry, dict):
+            raise NarratorContractError(f"cluster_outcome_log[{index}] 必须是 object")
+        cid = _require_cluster_id(entry.get("cluster_id"))
+        if cid in seen:
+            raise NarratorContractError(f"cluster_outcome_log 重复 cluster_id: {cid}")
+        seen.add(cid)
+        if entry.get("outcome") not in OUTCOMES:
+            raise NarratorContractError(f"cluster_outcome_log[{index}].outcome 非法")
+        if not isinstance(entry.get("intensity"), int) or not 0 <= entry["intensity"] <= 10:
+            raise NarratorContractError(f"cluster_outcome_log[{index}].intensity 必须位于 0..10")
+        if entry.get("outcome_source") not in {"writer_declared", "prose_inference"}:
+            raise NarratorContractError(f"cluster_outcome_log[{index}].outcome_source 非法")
+    adaptation = pacer["adaptation_factor"]
+    required_adaptation = {
+        "recent_n_clusters", "expected_setback_per_n_clusters", "tolerance_window",
+        "current_setback_count_in_window", "current_win_streak", "current_loss_streak",
+    }
+    if not isinstance(adaptation, dict) or not required_adaptation <= set(adaptation):
+        raise NarratorContractError("adaptation_factor 缺少 cluster 窗口字段")
+    for field in required_adaptation:
+        value = adaptation[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise NarratorContractError(f"adaptation_factor.{field} 必须是非负整数")
+    if adaptation["recent_n_clusters"] <= 0:
+        raise NarratorContractError("adaptation_factor.recent_n_clusters 必须大于 0")
+    recommendation = pacer["narrator_recommendation"]
+    if not isinstance(recommendation, dict):
+        raise NarratorContractError("narrator_recommendation 必须是 object")
+    for field in ("next_cluster_target_outcome", "next_cluster_intensity_target"):
+        if field not in recommendation:
+            raise NarratorContractError(f"narrator_recommendation 缺少 {field}")
+    if recommendation["next_cluster_target_outcome"] not in {"setback", "win", "auto"}:
+        raise NarratorContractError("next_cluster_target_outcome 非法")
+    return pacer
 
 
-def narrator_view(pacer: dict, cluster_id: str = None) -> dict:
-    """归一叙事节拍器视图（calibrate + build_manifest 共用）。
-    保留 v21 调压字段，同时把 framework/beats(Save_the_Cat) 与 rhythm_profile/beat_density 暴露给 writer。
-    """
-    framework = pacer.get("framework")
-    beats = pacer.get("beats") if isinstance(pacer.get("beats"), list) else None
-    # 当前 cluster 该命中的 Save_the_Cat 节拍（at_cluster 命中本 cluster 的）
-    current_beats = None
-    if beats and cluster_id:
-        current_beats = [
-            {"id": b.get("id"), "desc": b.get("desc"), "done": b.get("done", False)}
-            for b in beats
-            if isinstance(b, dict) and str(cluster_id) in str(b.get("at_cluster", ""))
-        ] or None
-    # cluster 节奏密度（诡异 schema）
-    rhythm_profile = pacer.get("rhythm_profile")
-    density_map = pacer.get("beat_density_by_cluster") if isinstance(pacer.get("beat_density_by_cluster"), dict) else None
-    current_density = density_map.get(cluster_id) if (density_map and cluster_id) else None
+def load_pacer(project_root: Path) -> dict:
+    path = Path(project_root) / "_数据库" / "叙事节拍器.json"
+    return validate_pacer(_read_json(path))
+
+
+def save_pacer(project_root: Path, pacer: dict) -> None:
+    validate_pacer(pacer)
+    atomic_json.atomic_write_json(Path(project_root) / "_数据库" / "叙事节拍器.json", pacer)
+
+
+def _cluster_artifacts(project_root: Path, cluster_id: str) -> tuple[dict, str]:
+    draft_dir = Path(project_root) / "章节" / f"{cluster_id}_draft"
+    changes = _read_json(draft_dir / f"{cluster_id}_changes.json")
+    self_eval = changes.get("self_eval")
+    if not isinstance(self_eval, dict):
+        raise NarratorContractError("cluster changes.self_eval 必须是 object")
+    draft_path = draft_dir / f"{cluster_id}_draft.txt"
+    if not draft_path.is_file():
+        raise NarratorContractError(f"文件不存在: {draft_path}")
+    try:
+        draft = draft_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise NarratorContractError(f"正文读取失败: {draft_path}: {exc}") from exc
+    if not draft.strip():
+        raise NarratorContractError(f"cluster 正文为空: {draft_path}")
+    return changes, draft
+
+
+def infer_outcome(changes: dict, draft: str) -> tuple[str, int, str]:
+    """优先采用 writer outcome，自评缺席时从整块正文推断 advisory outcome。"""
+    self_eval = changes.get("self_eval")
+    if not isinstance(self_eval, dict):
+        raise NarratorContractError("changes.self_eval 必须是 object")
+    alignment = self_eval.get("storyteller_alignment")
+    if alignment is not None and not isinstance(alignment, dict):
+        raise NarratorContractError("storyteller_alignment 必须是 object")
+    declared = (alignment or {}).get("actual_outcome")
+    if declared is not None and declared not in OUTCOMES:
+        raise NarratorContractError("storyteller_alignment.actual_outcome 非法")
+
+    negative = ["失败", "受伤", "死亡", "暴露", "败退", "崩溃", "失控", "受重创"]
+    positive = ["成功", "赢", "突破", "救下", "夺回", "解决", "击败", "达成", "逃脱"]
+    negative_hits = sum(draft.count(word) for word in negative)
+    positive_hits = sum(draft.count(word) for word in positive)
+    intensity = min(8, 2 + max(negative_hits, positive_hits))
+    if declared is not None:
+        return declared, intensity, "writer_declared"
+    if negative_hits >= max(2, positive_hits + 1):
+        inferred = "setback"
+    elif positive_hits >= max(2, negative_hits + 1):
+        inferred = "win"
+    else:
+        inferred = "neutral"
+    return inferred, intensity, "prose_inference"
+
+
+def narrator_view(pacer: dict, cluster_id: str) -> dict:
+    """返回当前 cluster 可直接注入 writer 的节拍器视图。"""
+    validate_pacer(pacer)
+    cluster_id = _require_cluster_id(cluster_id)
+    targets = [
+        dict(beat) for beat in pacer["beat_targets"]
+        if beat["cluster_id"] == cluster_id
+    ]
     return {
-        "profile": pacer.get("storyteller_profile", "cassandra"),
-        "current_phase": pacer.get("current_pressure_phase", "rising"),
-        "since_phase_change_ch": pacer.get("since_phase_change_ch"),
-        "framework": framework,
-        "current_cluster_beats": current_beats,
-        "rhythm_profile": rhythm_profile,
-        "current_cluster_density": current_density,
-        "adaptation_factor": pacer.get("adaptation_factor", {}) or {},
-        "narrator_recommendation": pacer.get("narrator_recommendation", {}) or {},
+        "profile": pacer["storyteller_profile"],
+        "current_phase": pacer["current_pressure_phase"],
+        "since_phase_change_cluster": pacer["since_phase_change_cluster"],
+        "rhythm_profile": pacer["rhythm_profile"],
+        "current_cluster_beats": targets,
+        "default_beat_policy": pacer["default_beat_policy"],
+        "adaptation_factor": pacer["adaptation_factor"],
+        "narrator_recommendation": pacer["narrator_recommendation"],
     }
 
 
-def infer_outcome_from_changes(changes: dict) -> tuple[str, int]:
-    """从 _changes.json 取/推断 outcome + intensity。
-
-    2026-05-30 #7 孤儿契约修复：writer 在 self_eval.storyteller_alignment.actual_outcome
-    （changes_schema.json:555）已**主动申报**本章实际结局（setback/win/neutral）。此前 narrator
-    每次都靠下方 heuristic **重推断**，把 writer 的第一手申报丢弃 → storyteller_alignment 成孤儿
-    字段（writer 报了但无消费方）。北极星⑤：作者/写作端的申报是第一权威，系统不该用启发式覆盖
-    模型的判断。故现在**优先消费** writer 申报的 actual_outcome；intensity 仍由 heuristic 估算
-    （schema 未让 writer 申报 intensity）。仅当 writer 未申报 actual_outcome 时回退 heuristic
-    （向后兼容老 changes / 申报缺失）。
-
-    回退 heuristic 准则（writer 未申报时）：
-    - factual.fate_events_triggered 含 status=completed → win 偏向（除非是悲剧大事件）
-    - factual.foreshadowing_paid 数量 ≥ 2 → win 偏向
-    - factual.locked_facts 含负面关键词（死/失/被/暴露/受伤）→ setback
-    - self_eval.judge_health_warnings 严重 → setback
-    - 都没有 → neutral
-    """
-    factual = changes.get("factual", {}) or {}
-    self_eval = changes.get("self_eval", {}) or {}
-
-    # writer 申报优先（#7 孤儿契约修复）：消费 self_eval.storyteller_alignment.actual_outcome
-    sa = self_eval.get("storyteller_alignment") or {}
-    declared = sa.get("actual_outcome")
-    if declared in ("setback", "win", "neutral"):
-        _, heuristic_intensity = _infer_outcome_heuristic(factual)
-        return (declared, heuristic_intensity)
-
-    return _infer_outcome_heuristic(factual)
-
-
-def _model_full_text_valence(full_text: str) -> "float | None":
-    """VAD 模型对 locked_facts/relationships 拼接文本判 valence；env 未开/模型不可用/未命中
-    → None（调用方回退关键词计数）。"""
-    if not full_text.strip() or os.environ.get("RUOYU_NN_VAD") != "1":
-        return None
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        try:
-            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml" / "feature_store"))
-            from feature_cache import FeatureStore, enabled as feature_store_enabled
-            preds = FeatureStore.get().compute_vad_batch([full_text]) if feature_store_enabled() else None
-        except Exception:
-            preds = None
-        if preds is None:
-            import nn_vad_bridge
-            preds = nn_vad_bridge.predict_batch([full_text])
-    except Exception:
-        return None
-    if not preds or not preds[0] or preds[0].get("valence") is None:
-        return None
-    try:
-        return float(preds[0]["valence"])
-    except (TypeError, ValueError):
-        return None
-
-
-def _infer_outcome_heuristic(factual: dict) -> tuple[str, int]:
-    """启发式推断 outcome + intensity（writer 未申报 actual_outcome 时的回退）。
-
-    负面判定优先走 VAD 模型 valence（locked_facts/relationships 拼接文本·<0.5 视为负面主导）；
-    模型未启用/不可用/未命中 → 回退关键词计数（原逻辑不变）。intensity 仍按关键词命中数计
-    （模型只接管"是否负面"的判断，强度量级维持关键词口径，下游 min(8, 3+hits) 契约不变）。
-    """
-    fate_count = len(factual.get("fate_events_triggered", []) or [])
-    foreshadow_paid = len(factual.get("foreshadowing_paid", []) or [])
-
-    # 负面关键词扫
-    negative_kw = ["失败", "受伤", "死亡", "暴露", "被发现", "被打", "败退", "崩溃", "失控", "受重创"]
-    locked_text = json.dumps(factual.get("locked_facts") or [], ensure_ascii=False)
-    relations_text = json.dumps(factual.get("relationships", []) or [], ensure_ascii=False)
-    full_text = locked_text + " " + relations_text
-    negative_hits = sum(1 for kw in negative_kw if kw in full_text)
-
-    model_valence = _model_full_text_valence(full_text)
-    is_negative = (model_valence < 0.5) if model_valence is not None else (negative_hits >= 2)
-
-    if is_negative:
-        return ("setback", min(8, 3 + negative_hits))
-    if fate_count >= 1 or foreshadow_paid >= 2:
-        return ("win", min(7, 3 + fate_count + foreshadow_paid))
-    if foreshadow_paid >= 1 or fate_count >= 0:
-        return ("neutral", 3)
-    return ("neutral", 2)
-
-
-def evaluate_phase(profile: str, log: list[dict], current_phase: str, since_change_ch: int, ch: int) -> tuple[str, int]:
-    """评估 phase 切换。返回 (new_phase, since_change_ch)。"""
+def evaluate_phase(
+    log: list[dict], current_phase: str, since_cluster: str, cluster_id: str
+) -> tuple[str, str]:
+    """按 cluster outcome 序列推进 advisory 压力阶段。"""
     recent = log[-5:]
     win_run = 0
-    win_intensity_sum = 0
+    win_intensity = 0
     setback_run = 0
     for entry in reversed(recent):
-        if entry["outcome"] == "win":
-            win_run += 1
-            win_intensity_sum += entry.get("intensity", 0)
-        else:
+        if entry["outcome"] != "win":
             break
+        win_run += 1
+        win_intensity += entry["intensity"]
     for entry in reversed(recent):
-        if entry["outcome"] == "setback":
-            setback_run += 1
-        else:
+        if entry["outcome"] != "setback":
             break
-
-    chs_since = ch - since_change_ch + 1
-
-    # rising → climax → cooldown → steady → rising
-    if current_phase == "rising":
-        if win_run >= 3 and win_intensity_sum >= 12:
-            return ("climax", ch)
-        return (current_phase, since_change_ch)
-    if current_phase == "climax":
-        # climax 持续 1-2 章后转 cooldown
-        if chs_since >= 1:
-            return ("cooldown", ch)
-        return (current_phase, since_change_ch)
-    if current_phase == "cooldown":
-        if chs_since >= 3:
-            return ("steady", ch)
-        return (current_phase, since_change_ch)
-    if current_phase == "steady":
-        if setback_run >= 2 or chs_since >= 5:
-            return ("rising", ch)
-        return (current_phase, since_change_ch)
-    return (current_phase, since_change_ch)
+        setback_run += 1
+    elapsed = _cluster_num(cluster_id) - _cluster_num(since_cluster) + 1
+    if elapsed <= 0:
+        raise NarratorContractError("since_phase_change_cluster 晚于当前 cluster")
+    if current_phase == "rising" and win_run >= 3 and win_intensity >= 12:
+        return "climax", cluster_id
+    if current_phase == "climax" and elapsed >= 2:
+        return "cooldown", cluster_id
+    if current_phase == "cooldown" and elapsed >= 3:
+        return "steady", cluster_id
+    if current_phase == "steady" and (setback_run >= 2 or elapsed >= 5):
+        return "rising", cluster_id
+    return current_phase, since_cluster
 
 
-def calibrate(project_root: Path, ch: int) -> dict:
-    pacer_path = project_root / "_数据库" / "叙事节拍器.json"
-    pacer = load_json(pacer_path, None)
-    if pacer is None:
-        return {"error": "叙事节拍器.json 不存在"}
+def calibrate(project_root: Path, cluster_id: str) -> dict:
+    """消费一个完成的 cluster，幂等更新节拍器并返回下一块建议。"""
+    cluster_id = _require_cluster_id(cluster_id)
+    pacer = load_pacer(project_root)
+    changes, draft = _cluster_artifacts(project_root, cluster_id)
+    outcome, intensity, outcome_source = infer_outcome(changes, draft)
 
-    # 读 _changes
-    changes_path = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-    changes = load_json(changes_path, {})
-    outcome, intensity = infer_outcome_from_changes(changes)
+    log = [entry for entry in pacer["cluster_outcome_log"] if entry["cluster_id"] != cluster_id]
+    log.append({
+        "cluster_id": cluster_id,
+        "outcome": outcome,
+        "intensity": intensity,
+        "outcome_source": outcome_source,
+    })
+    log.sort(key=lambda entry: _cluster_num(entry["cluster_id"]))
+    pacer["cluster_outcome_log"] = log
 
-    # #7 孤儿契约修复：标注 outcome 来源（writer 申报 / heuristic 回退），供审计与下游分布判断
-    declared = ((changes.get("self_eval") or {}).get("storyteller_alignment") or {}).get("actual_outcome")
-    outcome_source = "writer_declared" if declared in ("setback", "win", "neutral") else "inferred"
-    note = ("from _changes.self_eval.storyteller_alignment"
-            if outcome_source == "writer_declared" else "auto-inferred from _changes")
-
-    # 写入 log（去重）
-    log = pacer.setdefault("chapter_outcome_log", [])
-    if any(e.get("ch") == ch for e in log):
-        # 替换
-        log = [e for e in log if e.get("ch") != ch]
-    log.append({"ch": ch, "outcome": outcome, "intensity": intensity,
-                "outcome_source": outcome_source, "_note": note})
-    log.sort(key=lambda e: e.get("ch", 0))
-    pacer["chapter_outcome_log"] = log
-
-    # 更新 phase
-    profile = pacer.get("storyteller_profile", "cassandra")
-    cur_phase = pacer.get("current_pressure_phase", "rising")
-    since_ch = pacer.get("since_phase_change_ch", 1)
-    new_phase, new_since = evaluate_phase(profile, log, cur_phase, since_ch, ch)
+    old_phase = pacer["current_pressure_phase"]
+    new_phase, since_cluster = evaluate_phase(
+        log, old_phase, pacer["since_phase_change_cluster"], cluster_id
+    )
     pacer["current_pressure_phase"] = new_phase
-    pacer["since_phase_change_ch"] = new_since
+    pacer["since_phase_change_cluster"] = since_cluster
 
-    # 滑窗 adaptation_factor
-    af = pacer.setdefault("adaptation_factor", {})
-    n = af.get("recent_n_chapters", 10)
-    expected = af.get("expected_setback_per_n_ch", 4)
-    tol = af.get("tolerance_window", 2)
-    window = log[-n:]
-    setback_count = sum(1 for e in window if e["outcome"] == "setback")
+    adaptation = pacer["adaptation_factor"]
+    window = log[-adaptation["recent_n_clusters"]:]
+    setbacks = sum(entry["outcome"] == "setback" for entry in window)
     win_streak = 0
     loss_streak = 0
-    for e in reversed(window):
-        if e["outcome"] == "win":
-            win_streak += 1
-        else:
+    for entry in reversed(window):
+        if entry["outcome"] != "win":
             break
-    for e in reversed(window):
-        if e["outcome"] == "setback":
-            loss_streak += 1
-        else:
+        win_streak += 1
+    for entry in reversed(window):
+        if entry["outcome"] != "setback":
             break
-    af["current_setback_count_in_window"] = setback_count
-    af["current_win_streak"] = win_streak
-    af["current_loss_streak"] = loss_streak
+        loss_streak += 1
+    adaptation["current_setback_count_in_window"] = setbacks
+    adaptation["current_win_streak"] = win_streak
+    adaptation["current_loss_streak"] = loss_streak
 
-    # 推荐下章 outcome
-    rec = pacer.setdefault("narrator_recommendation", {})
-    if setback_count + tol < expected:
-        rec["next_chapter_target_outcome"] = "setback"
-        rec["next_chapter_intensity_target"] = "high"
-        rec["_reason"] = f"近 {n} 章 setback={setback_count} < 期望{expected}-{tol}={expected-tol} → 该让主角吃亏"
+    expected = adaptation["expected_setback_per_n_clusters"]
+    tolerance = adaptation["tolerance_window"]
+    recommendation = pacer["narrator_recommendation"]
+    if setbacks + tolerance < expected:
+        recommendation.update({
+            "next_cluster_target_outcome": "setback",
+            "next_cluster_intensity_target": "high",
+            "_reason": f"近 {len(window)} 个 cluster 的 setback={setbacks}，低于节拍窗口",
+        })
         urgent = True
-    elif setback_count - tol > expected:
-        rec["next_chapter_target_outcome"] = "win"
-        rec["next_chapter_intensity_target"] = "high"
-        rec["_reason"] = f"近 {n} 章 setback={setback_count} > 期望{expected}+{tol}={expected+tol} → 该给主角喘息"
+    elif setbacks - tolerance > expected:
+        recommendation.update({
+            "next_cluster_target_outcome": "win",
+            "next_cluster_intensity_target": "high",
+            "_reason": f"近 {len(window)} 个 cluster 的 setback={setbacks}，高于节拍窗口",
+        })
         urgent = True
     else:
-        rec["next_chapter_target_outcome"] = "auto"
-        rec["next_chapter_intensity_target"] = "auto"
-        rec["_reason"] = f"近 {n} 章 setback={setback_count} 在期望区间 [{expected-tol}, {expected+tol}] 内 → 自由发挥"
+        recommendation.update({
+            "next_cluster_target_outcome": "auto",
+            "next_cluster_intensity_target": "auto",
+            "_reason": "近期 outcome 分布位于节拍窗口内，由 writer 按当前因果自由选择",
+        })
         urgent = False
 
-    # 2026-05-30 孤儿契约修复：Save_the_Cat beats（纵尸司 schema）此前无任何消费方。
-    # 反查本 ch 所属 cluster_id，把该 cluster 的 beats 标 done=true（节拍达成）——让 framework/beats
-    # 真正进入「写→标记达成」闭环，而非 outline 写完就烂在文件里。北极星①：用 cluster_lookup 反查，
-    # 禁 f"cluster_{ch:03d}" 拼接；北极星⑤：只标 done（事实记录），不据此硬约束 writer。
-    cluster_id = None
-    try:
-        import cluster_lookup
-        cluster_id = cluster_lookup.ch_to_cluster_id(project_root, ch)
-    except Exception:
-        cluster_id = None
-    beats_marked = []
-    beats = pacer.get("beats")
-    if isinstance(beats, list) and cluster_id:
-        for b in beats:
-            if isinstance(b, dict) and str(cluster_id) in str(b.get("at_cluster", "")) and not b.get("done"):
-                b["done"] = True
-                b["done_at_ch"] = ch
-                beats_marked.append(b.get("id"))
-
-    save_json(pacer_path, pacer)
-
+    save_pacer(project_root, pacer)
     view = narrator_view(pacer, cluster_id)
     return {
-        "ch": ch,
         "cluster_id": cluster_id,
-        "outcome_inferred": outcome,
+        "outcome": outcome,
         "outcome_source": outcome_source,
         "intensity": intensity,
-        "phase_change": cur_phase != new_phase,
+        "phase_change": old_phase != new_phase,
         "phase": new_phase,
-        "framework": view["framework"],
-        "current_cluster_beats": view["current_cluster_beats"],
-        "beats_marked_done": beats_marked,
         "rhythm_profile": view["rhythm_profile"],
-        "current_cluster_density": view["current_cluster_density"],
-        "adaptation_factor": af,
-        "next_recommendation": rec,
+        "current_cluster_beats": view["current_cluster_beats"],
+        "adaptation_factor": adaptation,
+        "next_recommendation": recommendation,
         "_urgent": urgent,
     }
 
 
-def main():
+def main() -> int:
     state_cli_guard.require_internal("narrator_calibrate.py")
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--ch", type=int, default=None)
-    ap.add_argument("--auto", action="store_true")
-    args = ap.parse_args()
-
-    project_root = Path(args.project)
-    if not (project_root / "_数据库" / "叙事节拍器.json").exists():
-        print("[SKIP] 叙事节拍器.json 不存在 — 项目未启用 storyteller 系统")
-        sys.exit(0)
-
-    ch = args.ch
-    if ch is None or args.auto:
-        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-        if not chapters:
-            print("[SKIP] 无已写章节")
-            sys.exit(0)
-        ch = chapters[-1]
-
-    r = calibrate(project_root, ch)
-    print(json.dumps(r, ensure_ascii=False, indent=2))
-    sys.exit(1 if r.get("_urgent") else 0)
+    parser = argparse.ArgumentParser(description="cluster 叙事节拍校准")
+    parser.add_argument("project")
+    parser.add_argument("--cluster", required=True)
+    args = parser.parse_args()
+    try:
+        result = calibrate(Path(args.project), args.cluster)
+    except (NarratorContractError, OSError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 1 if result["_urgent"] else 0
 
 
 if __name__ == "__main__":
-    main()
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    raise SystemExit(main())

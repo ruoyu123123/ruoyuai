@@ -1,14 +1,14 @@
-"""cross_cluster_throughline_balance_aggregate.py — 4 线均衡度扫（CCR3）
+"""检查连续 cluster 的四条 Dramatica 叙事线推进均衡度。
 
-读 _changes.json.factual.throughline_progress 历史，检测：
-- 某线连续 ≥ 4 章 no_progress（线沉睡告警）
+读 事件簇.clusters[].throughline_progress 历史，检测：
+- 某线连续 ≥ 4 个 cluster 无推进（线沉睡告警）
 - 某线占比 < 15%（线被边缘化）
 - OS 单线占比 > 60%（其他线被忽略）
-- 4 线整体覆盖率（每章至少推 2 条）
+- 四线整体覆盖率（每个 cluster 至少推进两条）
 
 Dramatica 4 throughline：OS / MC / IC / RS
 
-输出：_数据库/.cross_chapter_scan/throughline_balance_<ts>.json
+输出：_数据库/.cross_cluster_scan/throughline_balance_<ts>.json
 退出码: 0 健康 / 1 advisory / 2 warning
 """
 
@@ -23,11 +23,10 @@ from datetime import datetime
 from pathlib import Path
 
 
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+import cluster_state_sources as css  # noqa: E402
 
 THROUGHLINES = ["OS", "MC", "IC", "RS"]
 
@@ -43,7 +42,7 @@ _NO_PROGRESS_SENTINELS = {
 
 
 def _has_progress(v) -> bool:
-    """判断某 throughline 本章是否真有推进。
+    """判断某 throughline 在当前 cluster 是否真有推进。
 
     布尔 True / 非哨兵的非空字符串 / 非空 dict/list → 推进；
     布尔 False / None / 哨兵词（去空白小写归一后命中）→ 无推进。
@@ -79,45 +78,13 @@ def main():
 
     project_root = Path(args.project)
 
-    # 收集每章 throughline_progress
-    per_chapter = []  # [(ch, {OS: bool, MC: bool, IC: bool, RS: bool})]
+    per_cluster = []
+    for cluster_id, _record in css.iter_completed_clusters(project_root, args.last_n):
+        tp = css.load_cluster_ledger(project_root, cluster_id).get("throughline_progress") or {}
+        progress_map = {line: _has_progress(tp.get(line, False)) for line in THROUGHLINES}
+        per_cluster.append((cluster_id, progress_map))
 
-    # ===== 2026-05-29 cluster 化分支：账本有 throughline_progress → 摘要驱动 =====
-    # --last-n 在 cluster 模式语义为「最后 N 个 cluster」
-    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "throughline_progress"):
-        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
-        for ch, rec in recs:
-            tp = rec.get("throughline_progress", {}) or {}
-            if not isinstance(tp, dict):
-                tp = {}
-            progress_map = {}
-            for t in THROUGHLINES:
-                v = tp.get(t, "no_progress")
-                progress_map[t] = _has_progress(v)  # 2026-05-29 复审修复 [M11]
-            per_chapter.append((ch, progress_map))
-        if not per_chapter:
-            print("[SKIP] cluster 账本无 throughline_progress 记录")
-            sys.exit(0)
-    else:
-        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
-        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-        if not chapters:
-            print("[SKIP] 无已写章节")
-            sys.exit(0)
-        recent = chapters[-args.last_n:]
-        for ch in recent:
-            p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-            changes = load_json(p, {})
-            tp = (changes.get("factual", {}) or {}).get("throughline_progress", {}) or {}
-            progress_map = {}
-            for t in THROUGHLINES:
-                v = tp.get(t, "no_progress")
-                progress_map[t] = _has_progress(v)  # 2026-05-29 复审修复 [M11]
-            per_chapter.append((ch, progress_map))
-
-    if not per_chapter:
+    if not per_cluster:
         print("[SKIP] 无 throughline_progress 记录")
         sys.exit(0)
 
@@ -126,29 +93,29 @@ def main():
     # 1. 连续 no_progress 检测
     for t in THROUGHLINES:
         streak = 0
-        streak_chs = []
-        for ch, pmap in per_chapter:
+        streak_clusters = []
+        for cluster_id, pmap in per_cluster:
             if not pmap[t]:
                 streak += 1
-                streak_chs.append(ch)
+                streak_clusters.append(cluster_id)
                 if streak >= 4:
                     findings.append({
                         "severity": "warning",
                         "code": "THROUGHLINE_DORMANT",
                         "throughline": t,
-                        "consecutive_chs": streak_chs[-4:],
-                        "suggestion": f"throughline {t} 连续 ≥ 4 章 no_progress → 应至少推进 1 次（{t} = {{OS: 客观主线, MC: 主角内心, IC: 影响者, RS: 关系本身}}）",
+                        "consecutive_clusters": streak_clusters[-4:],
+                        "suggestion": f"throughline {t} 连续 ≥ 4 个 cluster 无推进 → 应至少推进 1 次（{t} = {{OS: 客观主线, MC: 主角内心, IC: 影响者, RS: 关系本身}}）",
                     })
                     streak = 0
-                    streak_chs = []
+                    streak_clusters = []
             else:
                 streak = 0
-                streak_chs = []
+                streak_clusters = []
 
     # 2. 整体占比
-    total = len(per_chapter)
+    total = len(per_cluster)
     counts = Counter()
-    for _, pmap in per_chapter:
+    for _, pmap in per_cluster:
         for t in THROUGHLINES:
             if pmap[t]:
                 counts[t] += 1
@@ -160,7 +127,7 @@ def main():
                 "code": "THROUGHLINE_MARGINALIZED",
                 "throughline": t,
                 "pct": distribution[t],
-                "suggestion": f"throughline {t} 近 {total} 章占比 {round(distribution[t]*100)}% (< 15%) → 边缘化",
+                "suggestion": f"throughline {t} 近 {total} 个 cluster 占比 {round(distribution[t]*100)}% (< 15%) → 边缘化",
             })
     if distribution["OS"] > 0.95 and total >= 5:
         findings.append({
@@ -170,23 +137,23 @@ def main():
             "suggestion": "OS 客观主线推进过密（>95%），应分配更多笔墨给 MC/IC/RS",
         })
 
-    # 3. 每章 ≥ 2 条覆盖率
-    chs_with_lt2 = []
-    for ch, pmap in per_chapter:
+    # 3. 每个 cluster 至少推进两条线
+    clusters_with_lt2 = []
+    for cluster_id, pmap in per_cluster:
         active_count = sum(1 for t in THROUGHLINES if pmap[t])
         if active_count < 2:
-            chs_with_lt2.append(ch)
-    if total >= 5 and len(chs_with_lt2) >= total * 0.4:
+            clusters_with_lt2.append(cluster_id)
+    if total >= 5 and len(clusters_with_lt2) >= total * 0.4:
         findings.append({
             "severity": "advisory",
-            "code": "PER_CHAPTER_COVERAGE_LOW",
-            "low_coverage_chs": chs_with_lt2,
-            "pct": round(len(chs_with_lt2) / total, 2),
-            "suggestion": f"近 {total} 章中 {len(chs_with_lt2)} 章只推进 < 2 条 throughline（占 {round(len(chs_with_lt2)/total*100)}%）→ writer 应每章覆盖 ≥ 2",
+            "code": "PER_CLUSTER_COVERAGE_LOW",
+            "low_coverage_clusters": clusters_with_lt2,
+            "pct": round(len(clusters_with_lt2) / total, 2),
+            "suggestion": f"近 {total} 个 cluster 中 {len(clusters_with_lt2)} 个只推进不足两条 throughline（占 {round(len(clusters_with_lt2)/total*100)}%）",
         })
 
     # 输出
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     summary = {
@@ -196,16 +163,16 @@ def main():
     report = {
         "scan_type": "throughline_balance",
         "scan_ts": ts,
-        "chapters_scanned": [c for c, _ in per_chapter],
+        "clusters_scanned": [c for c, _ in per_cluster],
         "distribution": distribution,
-        "per_chapter": [{"ch": c, **{t: pmap[t] for t in THROUGHLINES}} for c, pmap in per_chapter],
+        "per_cluster": [{"cluster_id": c, **{t: pmap[t] for t in THROUGHLINES}} for c, pmap in per_cluster],
         "findings": findings,
         "summary": summary,
     }
     out_path = out_dir / f"throughline_balance_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"[throughline_balance] {len(per_chapter)} 章 distribution: " + ", ".join(f"{t}={distribution[t]:.0%}" for t in THROUGHLINES))
+    print(f"[throughline_balance] {len(per_cluster)} cluster distribution: " + ", ".join(f"{t}={distribution[t]:.0%}" for t in THROUGHLINES))
     for f in findings[:6]:
         print(f"  [{f['severity'].upper()}] {f.get('code')}: {f.get('suggestion', '')[:80]}")
     print(f"报告: {out_path}")

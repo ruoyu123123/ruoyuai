@@ -21,7 +21,7 @@ LLM 长 freestyle 写作常忽视此·画面在脑海中翻转。
   · → PROSE_AXIS_FLIP advisory
 
 【写入 spatial_axis.json·供 cross-cluster aggregator 复用】
-  · _数据库/.cross_chapter_scan/spatial_axis.json append-only
+  · _数据库/.cross_cluster_scan/spatial_axis.json append-only
   · 每 cluster 一段 {cluster_id, scenes[]: [{idx, triples[], transitions[]}]}
 
 【三 advisory · 全 advisory shadow】
@@ -166,11 +166,11 @@ def _detect_flips(scenes: list) -> list:
 
 def _write_axis_ledger(project_root, cluster_id: str, scenes: list,
                        triples_per_scene: list, flips: list) -> str:
-    """写 _数据库/.cross_chapter_scan/spatial_axis.json append-only。"""
+    """写 _数据库/.cross_cluster_scan/spatial_axis.json append-only。"""
     if not project_root or not cluster_id:
         return ""
     try:
-        out_dir = Path(project_root) / "_数据库" / ".cross_chapter_scan"
+        out_dir = Path(project_root) / "_数据库" / ".cross_cluster_scan"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "spatial_axis.json"
         data = {"_schema_version": "1.0", "_placeholder": True, "clusters": {}}

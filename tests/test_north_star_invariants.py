@@ -153,7 +153,7 @@ def test_hard_gate_codes_four_way_consistent():
         f"audit_hub vs scanner_registry.json 漂移 · 只在 audit_hub={code_set - registry_set} · "
         f"只在 registry={registry_set - code_set}")
     # 数量变动时强制人工复核四方是否同步。
-    assert len(code_set) == 19, f"HARD_GATE_CODES 数量={len(code_set)}（预期 19）·变动须四方同改"
+    assert len(code_set) == 18, f"HARD_GATE_CODES 数量={len(code_set)}（预期 18）·变动须四方同改"
 
 
 # ============ ④ _gate_level_for 是 hard_gate 唯一裁决口 + scanner 升格双闸（北极星⑤） ============

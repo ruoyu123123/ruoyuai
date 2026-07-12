@@ -199,91 +199,43 @@ def build_volume_me_pool_prompt(*, volume: dict, volumes_digest: str,
     return system, user
 
 
-# ============ C19 ME 池归一（确定性·结构/引用完整性·绝不增删/重排/预设 cluster_002+）============
+# ============ ME 池结构与引用验证 ============
 def _normalize_me_pool(mes: list, project_root: Path | None = None) -> dict:
-    """🔴 2026-06-27 C19：对 大势卡 ME 池做确定性归一（只修结构/引用完整性·不碰创意内容）。
-
-    模型自由产 ME 池（北极星⑤），但弱模型常漏标 volume / 写悬空 prerequisites / 漏 finale。
-    本函数 in-place 修补这些**结构破损**（非创作判断）：
-      (a) ME 无 volume → regex `ME-V(\\d+)-` 从 id 反推回填 → 记 volume_backfilled
-      (b) 收集真实 id 集 → 逐 ME 过滤 prerequisites 仅留命中真实 id 的 → dropped 记 dangling_prereqs_dropped
-      (c) 按 volume 分组 → 无 is_volume_finale 的卷 → 最大序号 ME 兜底标 finale + warn
-      (d) 残留混标（仍有 ME 无 volume 无法反推）→ 记 _integrity_violations（由调用方落 major + dump）
-
-    返回 report dict：{volume_backfilled, dangling_prereqs_dropped, finale_fallback, integrity_violations}。
-    绝不增删 ME、不重排、不预设 cluster_002+（北极星：fluid 涌现）。
-    """
-    report = {
-        "volume_backfilled": [],
-        "dangling_prereqs_dropped": [],
-        "finale_fallback": [],
-        "integrity_violations": [],
-    }
+    """验证每个 ME 的稳定 id、卷号、prerequisite 和唯一卷末标记。"""
     if not isinstance(mes, list):
-        return report
-    valid_mes = [m for m in mes if isinstance(m, dict)]
-
-    # (a) volume 回填（regex 从 id 反推）
-    _vol_re = re.compile(r"ME-?V(\d+)-", re.IGNORECASE)
-    for m in valid_mes:
-        if m.get("volume") in (None, "", 0):
-            mid = str(m.get("id") or m.get("me_id") or "")
-            mm = _vol_re.search(mid)
-            if mm:
-                m["volume"] = int(mm.group(1))
-                report["volume_backfilled"].append(mid)
-
-    # (b) 悬空 prerequisites 过滤（仅留命中真实 id 的）
-    real_ids = set()
-    for m in valid_mes:
-        rid = m.get("id") or m.get("me_id")
-        if rid:
-            real_ids.add(str(rid))
-    for m in valid_mes:
-        prereqs = m.get("prerequisites")
-        if not isinstance(prereqs, list) or not prereqs:
-            continue
-        kept, dropped = [], []
-        for p in prereqs:
-            (kept if str(p) in real_ids else dropped).append(p)
-        if dropped:
-            m["prerequisites"] = kept
-            report["dangling_prereqs_dropped"].append(
-                {"me": str(m.get("id") or m.get("me_id") or "?"), "dropped": dropped})
-
-    # (c) 按 volume 分组 → 无 finale 的卷兜底标最大序号 ME
-    by_vol: dict = {}
-    for m in valid_mes:
-        v = m.get("volume")
-        if v in (None, "", 0):
-            continue
-        by_vol.setdefault(v, []).append(m)
-
-    def _me_seq(me: dict) -> int:
-        mid = str(me.get("id") or me.get("me_id") or "")
-        seqm = re.search(r"-(\d+)\s*$", mid) or re.search(r"(\d+)\s*$", mid)
-        return int(seqm.group(1)) if seqm else -1
-
-    for v, group in by_vol.items():
-        if any(bool(m.get("is_volume_finale")) for m in group):
-            continue
-        # 该卷无 finale → 取最大序号 ME 兜底标 finale
-        anchor = max(group, key=_me_seq)
-        anchor["is_volume_finale"] = True
-        anchor.setdefault("_finale_inferred", True)
-        aid = str(anchor.get("id") or anchor.get("me_id") or "?")
-        report["finale_fallback"].append({"volume": v, "me": aid})
-        print(f"[_normalize_me_pool][WARN] 卷 {v} 无 is_volume_finale → 兜底标 {aid}",
-              file=sys.stderr)
-
-    # (d) 残留混标：仍无法定位 volume 的 ME（id 不含 V<n> 且字段缺）
-    for m in valid_mes:
-        if m.get("volume") in (None, "", 0):
-            report["integrity_violations"].append(
-                {"me": str(m.get("id") or m.get("me_id") or "?"),
-                 "issue": "无 volume 且无法从 id 反推"})
-
-    return report
+        raise ValueError("major_events 必须是 array")
+    if not mes:
+        raise ValueError("major_events 不能为空")
+    ids = []
+    by_volume: dict[int, list[dict]] = {}
+    for index, event in enumerate(mes):
+        if not isinstance(event, dict):
+            raise ValueError(f"major_events[{index}] 必须是 object")
+        event_id = event.get("id")
+        if not isinstance(event_id, str) or not event_id.strip():
+            raise ValueError(f"major_events[{index}].id 不能为空")
+        if event_id in ids:
+            raise ValueError(f"major_events id 重复: {event_id}")
+        ids.append(event_id)
+        volume = event.get("volume")
+        if isinstance(volume, bool) or not isinstance(volume, int) or volume < 1:
+            raise ValueError(f"ME {event_id}.volume 必须是正整数")
+        if not isinstance(event.get("is_volume_finale"), bool):
+            raise ValueError(f"ME {event_id}.is_volume_finale 必须是 bool")
+        prerequisites = event.get("prerequisites", [])
+        if not isinstance(prerequisites, list) or any(not isinstance(p, str) for p in prerequisites):
+            raise ValueError(f"ME {event_id}.prerequisites 必须是 string array")
+        by_volume.setdefault(volume, []).append(event)
+    id_set = set(ids)
+    for event in mes:
+        dangling = [p for p in event.get("prerequisites", []) if p not in id_set]
+        if dangling:
+            raise ValueError(f"ME {event['id']} 含悬空 prerequisites: {dangling}")
+    for volume, events in sorted(by_volume.items()):
+        finales = [event["id"] for event in events if event["is_volume_finale"]]
+        if len(finales) != 1:
+            raise ValueError(f"卷{volume} 必须恰有一个 is_volume_finale=true，实际 {finales}")
+    return {"validated_events": len(mes), "volumes": sorted(by_volume)}
 
 
 # ============ volume_arc 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约）============
@@ -417,21 +369,7 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
         "major_events": [{**me, "status": me.get("status", "pending")}
                          for me in data.get("major_events", []) if isinstance(me, dict)],
     }
-    # 🔴 2026-06-27 C19：ME 池确定性归一（volume 回填 / 悬空 prereq 过滤 / finale 兜底 / 完整性）
-    _norm = _normalize_me_pool(major["major_events"], project_root)
-    major["_normalized"] = {k: v for k, v in _norm.items() if k != "integrity_violations"}
-    if _norm.get("integrity_violations"):
-        major["_integrity_violations"] = _norm["integrity_violations"]
-        try:
-            dp = db / ".wal" / "volume_arc_block_debug.txt"
-            dp.parent.mkdir(parents=True, exist_ok=True)
-            dp.write_text("ME 池完整性破损（_normalize_me_pool 无法定位 volume）:\n"
-                          + json.dumps(_norm["integrity_violations"], ensure_ascii=False, indent=2),
-                          encoding="utf-8")
-        except OSError:
-            pass
-        print(f"[_emit_volume_arc][WARN] ME 池残留 {len(_norm['integrity_violations'])} 条完整性破损"
-              f"·见 _数据库/.wal/volume_arc_block_debug.txt", file=sys.stderr)
+    major["_validation"] = _normalize_me_pool(major["major_events"], project_root)
     # 事件簇.json：只详化 clusters[0]=cluster_001（其余留涌现）
     c1 = data.get("cluster_001") or {}
     research_ref = c1.get("research_ref") if isinstance(c1, dict) else None
@@ -536,7 +474,7 @@ def _normalize_volume_chunk(cand, vol_no: int) -> tuple:
         return None, "major_events 无合法 ME"
     seen = set()
     for m in out:
-        mid = str(m.get("id") or m.get("me_id") or "").strip()
+        mid = str(m.get("id") or "").strip()
         if not mid:
             return None, "ME 缺 id（合并去重锚·必须有）"
         if mid in seen:
@@ -566,7 +504,7 @@ def _merge_volume_arc_chunks(skeleton: dict, chunks: dict) -> tuple:
     merged, first_vol, dups = [], {}, []
     for n in sorted(chunks):
         for me in chunks[n]["major_events"]:
-            mid = str(me.get("id") or me.get("me_id"))
+            mid = str(me.get("id"))
             if mid in first_vol:
                 dups.append({"id": mid, "first_vol": first_vol[mid], "dup_vol": n})
                 continue

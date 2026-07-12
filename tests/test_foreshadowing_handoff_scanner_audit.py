@@ -3,14 +3,8 @@
 钉死 triage_worth_fixing.json 中 file==foreshadowing_handoff_scanner.py 的唯一修复
 （北极星⑤克制：advisory 检测器·确定性数据投影健壮性·不干涉模型创作判断）：
 
-  · [L84] 检测 2 promises setup_cluster 匹配：
-    旧代码 `p.get("setup_cluster") == cluster_id` 只认完整串一种形态（cluster_id 在 L33
-    已加 "cluster_" 前缀但未零填充）。setup_cluster 客观存在双约定——outline.md 文档示例写
-    裸整数（"setup_cluster": 3），save_state.py/migrate_data_model_v2.py 写完整串
-    （"cluster_004"）。故整数/裸号形态恒 False → outline 初始化路径下 Tier-1 核心伏笔被
-    静默过滤，FORESHADOWING_PHYSICAL_EVIDENCE_MISSING 对核心伏笔失效（false negative）。
-    修复：内联 _norm_cid（与 cluster_lookup.normalize_cluster_id 逻辑等价，零 import 依赖，
-    subprocess 下不踩 sys.path），两侧归一化后比较。
+  · [L84] 检测 2 promises setup_cluster 匹配：内联 _norm_cid 对 cluster id 补零，
+    两侧归一化后比较，避免字符串格式差异造成漏检。
 
 守护点：
   1. 整数 setup_cluster:1 现在匹配 cluster_001（旧代码漏，promises_in_cluster=0 → 修复后计入）；

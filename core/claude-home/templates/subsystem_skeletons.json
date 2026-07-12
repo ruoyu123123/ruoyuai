@@ -614,7 +614,7 @@
     "世界状态": {
       "_schema": "world_state_v20_1",
       "schema_version": "v27",
-      "_doc": "客观世界数值 · world_evolution_engine 按涟漪规则确定性算 delta · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema",
+      "_doc": "cluster 级客观世界快照；world_evolution_engine 按涟漪规则确定性计算数值后果，叙事后果交模型解释",
       "consumption": {
         "layer": "via_engine",
         "by": [
@@ -625,7 +625,6 @@
         "status": "live"
       },
       "current_world_time": {
-        "ch": 1,
         "cluster": "cluster_001",
         "day": 1
       },
@@ -633,7 +632,11 @@
       "factions_state": {},
       "active_npc_threads": [],
       "emergent_opportunities": [],
-      "consequence_tracker": [],
+      "consequence_tracker": {},
+      "applied_cluster_ticks": [],
+      "applied_minor_events": {},
+      "applied_fate_events": {},
+      "applied_cluster_state_deltas": {},
       "_writer_isolation_schema": {
         "_doc": "🔴 2026-06-28 写手信息隔离·factions_state 阵营暗议程 + active_npc_threads 幕后真实意图·默认安全:无 hidden/surface_focus = 公开动向原样(build_manifest._sanitize_faction_focus 安全闸)·数值(power/stability/wealth)+current_action(公开动向·涟漪 surface·北极星②)always 留",
         "faction": {
@@ -661,10 +664,7 @@
       },
       "_load_bearing_nonempty": {
         "code": "RIPPLE_RULES_EMPTY",
-        "any_of": [
-          "ripple_rules",
-          "rules"
-        ],
+        "any_of": ["ripple_rules"],
         "_doc": "🔴 2026-06-27 C03 载荷非空标记：涟漪规则空 → world_evolution_engine 零触发（机器永不点火·北极星②涟漪核心·hard）"
       },
       "ripple_rules": []
@@ -690,9 +690,9 @@
       "cluster_hub_log": []
     },
     "时钟表": {
-      "_schema": "clocks_v21",
-      "schema_version": "v27",
-      "_doc": "剧情时钟（倒计时压力）· clock 含 name/current/max/trigger_on_full · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema",
+      "_schema": "cluster_clocks",
+      "schema_version": "1.0",
+      "_doc": "cluster 事件驱动的剧情时钟；只响应 cluster_end 或显式叙事事件",
       "consumption": {
         "layer": "direct_inject",
         "by": [
@@ -704,17 +704,18 @@
       "clocks": [],
       "_inactive_pool": [],
       "_writer_isolation_schema": {
-        "_doc": "🔴 2026-06-28 写手信息隔离·暗线时钟·默认安全:visible_to_writer 缺省=true·build_manifest._sanitize_clock_to_writer 安全闸·clock_engine.list_active 补此字段",
+        "_doc": "暗线时钟必须显式设置 visible_to_writer=false 与 is_surprise=true",
         "clock": {
-          "visible_to_writer": true,
+          "visible_to_writer": false,
           "is_surprise": false,
-          "trigger_on_max": "满格触发后果·暗线时钟(is_surprise=true 须同设 visible_to_writer=false·后者是 build_manifest 读的门控字段·未满格且不可见时剥 trigger_on_max·写手不预知爆点)"
+          "trigger_on_max": "满格触发后果；不可见时钟不会向 writer 暴露此字段"
         }
       }
     },
     "叙事节拍器": {
-      "schema_version": "v27",
-      "_doc": "pacing metronome · 情绪节奏目标 + cluster 输出钩子 + 爽点分布 · 🔴 2026-06-29 加 appraisal_beats[]（场景级 Appraisal Beat·chain-of-emotion·见 _appraisal_beats_schema）",
+      "_schema": "cluster_storyteller",
+      "schema_version": "1.0",
+      "_doc": "cluster 级叙事节拍与压力阶段；记录已完成 cluster 的 outcome，并给下一 cluster advisory 方向",
       "consumption": {
         "layer": "direct_inject",
         "by": [
@@ -724,12 +725,29 @@
         "status": "live"
       },
       "rhythm_profile": "混合",
+      "storyteller_profile": "cassandra",
+      "current_pressure_phase": "rising",
+      "since_phase_change_cluster": "cluster_001",
+      "cluster_outcome_log": [],
       "beat_targets": [],
       "default_beat_policy": {
         "cluster_output_hook_required": true,
         "no_consecutive_negative_beats": 2
       },
       "appraisal_beats": [],
+      "adaptation_factor": {
+        "recent_n_clusters": 10,
+        "expected_setback_per_n_clusters": 4,
+        "tolerance_window": 2,
+        "current_setback_count_in_window": 0,
+        "current_win_streak": 0,
+        "current_loss_streak": 0
+      },
+      "narrator_recommendation": {
+        "next_cluster_target_outcome": "auto",
+        "next_cluster_intensity_target": "auto",
+        "_reason": ""
+      },
       "_appraisal_beats_schema": {
         "_doc": "🔴 2026-06-29 场景级 Appraisal Beat（chain-of-emotion 两步法·SOTA arXiv:2309.05076 实证情绪自然度提升 + CAPE arXiv:2410.14145）：把情绪从『prose 一句提示』升维为『结构化可追踪 STATE』。链路：novel-summarizer 读整 cluster 正文（梳理非创作·禁占位词典浅扫）按 Scherer CPM/OCC 评价链推理产 summary.appraisal_beats → save_state.py --apply-appraisal-beats 确定性回填本数组（append·幂等·按 cluster_id+scene_idx+focal_character 去重）→ build_manifest 读取注入下一 active cluster『这一拍情绪应往哪走+为何+如何外化』advisory 卡。🔴 只填 active cluster（fluid·绝不预设/回填别的 cluster）。🔴 derived_emotion 必须是自然语言情绪推理（为何会这样感受）·禁『愤怒/心中一凛』等情绪词标签（否则退化成反 AI 腔堆砌·撞禁用词）。behavior_externalization 外化成动作/细节·非情绪词。复用：emotion_curve_normalized 当情绪历史链 · character_belief_ledger 当 CAPE 个人侧输入 · vad_bin 6 维确定性反推供 character_vad_ued_scanner 复用。全 advisory STATE（非判决·不进 audit_hub.HARD_GATE_CODES）。",
         "item": {
@@ -760,9 +778,9 @@
       }
     },
     "主角压力档": {
-      "_schema": "protagonist_stress_v21",
-      "schema_version": "v27",
-      "_doc": "主角压力档 · stress 数值 + 崩溃阈值 + 压力回归方式 · build_manifest 注入 persona",
+      "_schema": "cluster_protagonist_stress",
+      "schema_version": "1.0",
+      "_doc": "cluster 级压力数值、崩溃阈值与心理后果；build_manifest 注入当前压力快照",
       "consumption": {
         "layer": "direct_inject",
         "by": [
@@ -776,7 +794,9 @@
       "stress_max": 12,
       "stress_threshold_break": 10,
       "stress_log": [],
-      "persona_violations_tracked": {},
+      "persona_violations_tracked": {
+        "core_traits": []
+      },
       "mental_break_pool": [],
       "coping_mechanisms": {}
     },
@@ -792,6 +812,11 @@
         "status": "live"
       },
       "characters": {},
+      "_character_schema": {
+        "stages_by_cluster": {"cluster_001": "stage_id"},
+        "current_stage_at_cluster": "cluster_001:stage_id",
+        "stage_definitions": {"stage_id": {"name": "阶段名", "description": "阶段内在状态"}}
+      },
       "_story_world": {
         "literal": "",
         "metaphorical": "",

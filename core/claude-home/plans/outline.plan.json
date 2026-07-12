@@ -195,10 +195,10 @@
       "description": "scaffold verify + db_schema_validate（含 C19 大势卡 ME 池结构契约·消费）+ git commit（初始化项目 + 生成大纲）。",
       "required": true,
       "skip_output_allowed": false,
-      "_doc_c19": "🔴 2026-06-27 接线 W2 / C19：db_schema_validate.py --auto-migrate --strict（消费校验）——check_grand_trend_structure 校验大势卡 ME 池结构契约（major_events 非空·每 ME 有 id+volume·每卷≥1 is_volume_finale·prerequisites 引用可解析）·破损 → exit 1 → 停 plan-end（写作开工前堵 ME 池结构债·北极星③大势已定）。--auto-migrate 先归一可迁移 schema 漂移，真错才 --strict 阻断。C03 content_check（plan-end existence+content hard）已并行处理「ME 池空」（GRAND_TREND_ME_POOL_EMPTY），此处补「结构破损/引用不完整」。",
+      "_doc_c19": "只读校验 34 个子系统与大势卡结构；任何 schema、类型、必填字段或 ME 引用错误都会阻断 outline 完成。",
       "scripts": [
         "python core/scripts/scaffold_subsystems.py verify {project_root} --content",
-        "python core/scripts/db_schema_validate.py {project_root} --auto-migrate --strict",
+        "python core/scripts/db_schema_validate.py {project_root}",
         "python core/scripts/git_snapshot.py {project_root} --message 生成大纲 --marker _数据库/.wal/outline_git_snapshot.json"
       ],
       "expected_outputs": ["_数据库/.wal/outline_git_snapshot.json", "_数据库/大势卡.json", "_数据库/事件簇.json", "_数据库/进度.json"]

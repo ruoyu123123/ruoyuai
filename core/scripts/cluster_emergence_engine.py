@@ -34,9 +34,9 @@ def load_json(p: Path, default=None):
         return default
 
 
-def _get_me_id(me: dict) -> str:
-    """读取 ME id；`me_id` 会在读取时归一为正式 `id`。"""
-    return me.get("id") or me.get("me_id") or ""
+def _event_id(me: dict) -> str:
+    """读取大势事件的 canonical id。"""
+    return str(me.get("id") or "") if isinstance(me, dict) else ""
 
 
 def _me_volume(me: dict):
@@ -47,31 +47,26 @@ def _me_volume(me: dict):
         return v
     if isinstance(v, str) and v.strip().isdigit():
         return int(v.strip())
-    m = _re_v.search(r"[Vv](\d+)", str(_get_me_id(me)))
+    m = _re_v.search(r"[Vv](\d+)", _event_id(me))
     return int(m.group(1)) if m else None
 
 
 def find_remaining_mes(dashishi: dict, completed_mes: set) -> list:
-    """从大势卡 ME 池中找剩余未完成的 ME。
-
-    读取 `major_events_pool` / `major_events` 后统一按 ME id 和 status 判定。
-    """
-    pool = dashishi.get("major_events_pool") or dashishi.get("major_events") or []
+    """从 canonical ME 池中找剩余未完成事件。"""
+    pool = dashishi.get("major_events")
+    if not isinstance(pool, list) or not all(isinstance(me, dict) for me in pool):
+        raise ValueError("大势卡.major_events 必须是 object array")
     remaining = []
     for me in pool:
-        # 2026-05-29 复审修复（L8）：ME 池可能混入非 dict（字符串/None），裸调 .get() 直接崩。
-        if not isinstance(me, dict):
-            continue
-        me_id = _get_me_id(me)
-        # v26: 跳过已 completed 的 ME（按 status 字段判定 · 不只是 completed_mes 集合）
+        event_id = _event_id(me)
+        if not event_id:
+            raise ValueError("大势卡 major_event 缺少 id")
+        if me.get("status") not in {"pending", "completed"}:
+            raise ValueError(f"ME {event_id}.status 必须是 pending 或 completed")
         if me.get("status") == "completed":
             continue
-        # 跳过已在 completed_mes (来自 事件簇.clusters[].ME_to_advance) 的 ME
-        if me_id in completed_mes:
+        if event_id in completed_mes:
             continue
-        # 规范化 me dict: 确保 id 字段存在（向下游 me_to_cluster_brief 传递）
-        if "id" not in me and "me_id" in me:
-            me = {**me, "id": me["me_id"]}
         remaining.append(me)
     return remaining
 
@@ -89,43 +84,16 @@ import re as _re_mod
 
 
 def _vol_of_me(me: dict) -> int:
-    """从 ME 推断所属卷号。优先显式 vol 字段，否则从 me_id 前缀 'V1_ME_002' / 'V2.ME01' 解析。"""
-    if isinstance(me, dict):
-        v = me.get("vol")
-        if isinstance(v, int):
-            return v
-        if isinstance(v, str) and v.strip().isdigit():
-            return int(v.strip())
-    mid = _get_me_id(me)
-    m = _re_mod.match(r"[Vv](\d+)", str(mid))
-    if m:
-        try:
-            return int(m.group(1))
-        except Exception:
-            return 0
-    return 0
+    """返回 ME 所属卷号；无法确定时返回 0。"""
+    return _me_volume(me) or 0
 
 
 def _me_text(me: dict) -> str:
-    """聚合一个 ME 的可比对文本（description + name/title + triggers + trigger_condition）。"""
+    """聚合 ME 的标题、描述与触发条件，供确定性关键词评分。"""
     if not isinstance(me, dict):
         return ""
-    parts = [
-        str(me.get("description", "")),
-        str(me.get("name", "")),
-        str(me.get("title", "")),
-    ]
-    trig = me.get("triggers")
-    if isinstance(trig, list):
-        parts.extend(str(t) for t in trig)
-    elif trig:
-        parts.append(str(trig))
-    tc = me.get("trigger_condition")
-    if isinstance(tc, dict):
-        parts.extend(str(v) for v in tc.values())
-    elif tc:
-        parts.append(str(tc))
-    return " ".join(parts)
+    return " ".join(str(me.get(key) or "")
+                    for key in ("title", "description", "trigger_when"))
 
 
 def _keyword_set(text: str) -> set:
@@ -221,12 +189,13 @@ def _current_advancing_vol(world_state: dict, character_arc: dict) -> int:
 
 
 def _arc_stages(character_arc: dict) -> list:
-    """收集所有角色的 current_stage（小写），主角通常排第一。"""
+    """收集所有角色的 current_stage_at_cluster（小写）。"""
     out = []
     if isinstance(character_arc, dict):
-        for c in character_arc.get("characters", []) or []:
-            if isinstance(c, dict) and c.get("current_stage"):
-                out.append(str(c["current_stage"]).lower())
+        for c in (character_arc.get("characters") or {}).values():
+            marker = c.get("current_stage_at_cluster") if isinstance(c, dict) else None
+            if marker:
+                out.append(str(marker).split(":", 1)[-1].lower())
     return out
 
 
@@ -343,7 +312,7 @@ def _score_one_me(
     """给单个 ME 打分。返回 (score, reasons)。"""
     score = 0
     reasons = []
-    me_id = _get_me_id(me)
+    event_id = _event_id(me)
     me_text = _me_text(me)
     me_kw = _keyword_set(me_text)
 
@@ -473,8 +442,8 @@ def _decision_basis_for_me(
         "score": score,
         "rank_reasons": [str(r) for r in (reasons or [])],
         "source_me": {
-            "id": _get_me_id(me),
-            "title": me.get("title") or me.get("name") or "",
+            "id": _event_id(me),
+            "title": me.get("title") or "",
             "volume": _me_volume(me),
             "is_volume_finale": bool(me.get("is_volume_finale")),
         },
@@ -488,7 +457,7 @@ def _decision_basis_for_me(
         "milestone_hits": milestone_hits,
         "convergence_score": convergence_score,
         "state_delta_preview": emergence_transparency.state_delta_preview(
-            _get_me_id(me), me_text, ripple_rules_json or {}),
+            _event_id(me), me_text, ripple_rules_json or {}),
         "user_choice_policy": "排序只用于展示依据；下一故事块仍由走向卡选择唯一确定",
     }
     return basis
@@ -576,8 +545,8 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict, 
 
     ME 没有 title/name 时，从 description 提取标题。
     """
-    me_id = _get_me_id(me)
-    title = me.get("title") or me.get("name") or ""
+    event_id = _event_id(me)
+    title = me.get("title") or ""
     if not title:
         # description 前 30 字（截断在标点处）作为标题。
         desc = me.get("description", "")
@@ -614,13 +583,13 @@ def me_to_cluster_brief(me: dict, cluster_id: str, ord: int, world_state: dict, 
         narrative_mode = me.get("narrative_mode") or ""
     return {
         "cluster_id": cluster_id,
-        "parent_me": me_id,
+        "parent_me": event_id,
         "scope_summary": scope,
         "_emergence_score": score,
         "_emergence_reasons": reasons,
         "decision_basis": decision_basis or {},
         "status": "candidate",
-        "ME_to_advance": [me_id],
+        "ME_to_advance": [event_id],
         "volume": _me_volume(me),
         "is_volume_finale": is_finale,
         "stakes_delta": me.get("stakes_delta", ""),
@@ -698,10 +667,9 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     # + 悬挂引用（前置指向不存在的 ME id → 打分层 -100 硬剔成死链）。
     # advisory：stderr 显式报告 + 输出 JSON 带 dag_health 段，不硬失败不静默丢——
     # 大势卡是用户/outline 的创作产物，机器只报告不裁决（北极星⑤）。
-    _pool_for_dag = [m for m in (dashishi.get("major_events_pool") or dashishi.get("major_events") or [])
-                     if isinstance(m, dict)]
+    _pool_for_dag = dashishi.get("major_events") or []
     dag_health = emergence_transparency.me_dag_health(
-        _pool_for_dag, get_id=_get_me_id, get_parents=_resolve_parents)
+        _pool_for_dag, get_id=_event_id, get_parents=_resolve_parents)
     if dag_health["cycles"] or dag_health["dangling"]:
         print(f"[emergence][dag_health] ⚠️ ME 依赖图异常（advisory·不阻断·请检查大势卡 prerequisites）: "
               f"cycles={dag_health['cycles']} dangling={dag_health['dangling']}", file=sys.stderr)
@@ -786,7 +754,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
                                if isinstance(c, dict) and c.get("status") != "candidate"
                                and (c.get("vol") == current_volume or _me_volume(
                                    next((m for m in (dashishi.get("major_events") or [])
-                                         if _get_me_id(m) == c.get("parent_me")), {})) == current_volume))
+                                         if _event_id(m) == c.get("parent_me")), {})) == current_volume))
             _vol_progress = _done_in_vol / _cpv
             _non_finale = [m for m in remaining if not m.get("is_volume_finale")]
             if _vol_progress < _FINALE_PROGRESS_GATE and _non_finale:
@@ -908,7 +876,7 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
     # 判断力不下沉进这里）。只加输出字段——绝不改打分/绝不换目标/绝不增删候选（北极星③⑤）。
     goal_stagnation = emergence_transparency.goal_stagnation(
         shijianji, dashishi, current_volume, candidate_mes,
-        get_me_id=_get_me_id, me_text=_me_text, keyword_set=_keyword_set, me_volume=_me_volume)
+        get_event_id=_event_id, me_text=_me_text, keyword_set=_keyword_set, me_volume=_me_volume)
     if goal_stagnation.get("detected"):
         print(f"[emergence][goal_stagnation] {goal_stagnation['advisory']}")
 
@@ -932,16 +900,12 @@ def emerge_next_cluster(project_root: Path, after_cluster_id: str) -> dict:
             "last_consequences": last_consequence,
             "active_npc_threads_count": len(world_state.get("active_npc_threads", []))
         },
-        # 2026-05-30 北极星复审：character_arc_state.json 读取 arcs 或 characters，避免
-        # arc 信号因生产端形态不同而缺席涌现排序。
         "character_arc_snapshot": {
-            "characters": (
-                [{"id": _n, "current_stage": _d.get("current_stage")}
-                 for _n, _d in character_arc["arcs"].items() if isinstance(_d, dict)]
-                if isinstance(character_arc.get("arcs"), dict)
-                else [{"id": c.get("id"), "current_stage": c.get("current_stage")}
-                      for c in (character_arc.get("characters", []) or []) if isinstance(c, dict)]
-            )
+            "characters": [
+                {"id": name, "current_stage_at_cluster": data.get("current_stage_at_cluster")}
+                for name, data in (character_arc.get("characters") or {}).items()
+                if isinstance(data, dict)
+            ]
         },
         "_next_action": "主代理展示 candidates 给用户选 1 个 → 写入 事件簇.json.clusters[N+1] (status: in_progress)"
     }

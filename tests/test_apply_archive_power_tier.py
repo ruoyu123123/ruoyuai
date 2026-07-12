@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""apply_archive.py 主角力量 tier 回库测试 — 🔴 2026-06-29 power_progression接通producer。
+"""apply_archive.py 主角力量 tier 回库测试。
 
 钉死 apply_protagonist_power_tier：archivist 读正文判定本块**主角力量 tier 变化** →
 archive.protagonist_power_tier_update → 确定性 append 进 角色弧线.json
-characters[pid].protagonist_power_tier 序列（此前零 producer·scanner 死码）：
+characters[pid].protagonist_power_tier 序列：
   · series 按 cluster_id 去重·新 cluster append·同 cluster 就地更新 tier/notes
   · 字段对齐 power_progression_scanner schema {cluster_id, tier, notes}·role=protagonist
     让 scanner._protagonist_id 能识别·端到端 scanner 真能读（非"跳过"/"序列过短"）
   · 幂等：re-apply 不重复 append
   · char_id 缺失 → 复用既有 protagonist pid·再缺 → 跳过该条
-  · C03 fluid / 向后兼容：archive 无 protagonist_power_tier_update → no-op 不报错、不建文件
+  · archive 无 protagonist_power_tier_update → 零变更且不建文件
   · dry-run 不写盘
   · 防再孤儿回归锁：producer 函数存在 + 已挂 main 分发 + 角色弧线.json 在 KNOWN_EXTRAS
 """
@@ -46,7 +46,9 @@ def _mk_project(tmp: Path):
 
 def _write_archive(db: Path, key, obj):
     p = db / ".wal" / f"cluster_{key}_archive.json"
-    p.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    payload = dict(obj)
+    payload.setdefault("cluster_id", f"cluster_{key}")
+    p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return p
 
 
@@ -93,14 +95,14 @@ def test_tier_update_as_list_supported():
         assert len(_arc(db)["characters"]["C_PROT"]["protagonist_power_tier"]) == 1
 
 
-def test_tier_default_cluster_id_from_current():
-    """archivist 漏给 cluster_id → 默认当前块。"""
+def test_tier_requires_cluster_id():
+    """力量变化缺 cluster_id 时拒绝归档。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         _write_archive(db, "002", _archive_with_tier(
             {"char_id": "C_PROT", "tier": 2, "notes": "突破筑基"}))
-        assert aa.main([str(Path(d)), "--cluster", "002"]) == 0
-        assert _arc(db)["characters"]["C_PROT"]["protagonist_power_tier"][0]["cluster_id"] == "cluster_002"
+        assert aa.main([str(Path(d)), "--cluster", "002"]) == 2
+        assert not (db / "角色弧线.json").exists()
 
 
 def test_tier_idempotent_no_dup():
@@ -144,48 +146,48 @@ def test_tier_distinct_clusters_append_separate():
         assert [s["cluster_id"] for s in series] == ["cluster_001", "cluster_002"]
 
 
-def test_tier_char_id_fallback_to_existing_protagonist():
-    """char_id 缺失 → 复用 角色弧线.json 既有 protagonist pid。"""
+def test_tier_missing_char_id_is_rejected():
+    """char_id 缺失时不从既有主角记录推断。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         # cluster_001 显式 char_id 建立 protagonist
         _write_archive(db, "001", _archive_with_tier(
             {"char_id": "C_PROT", "cluster_id": "cluster_001", "tier": 1, "notes": "炼气"}))
         aa.main([str(Path(d)), "--cluster", "001"])
-        # cluster_002 漏 char_id → 复用既有 protagonist C_PROT
+        # cluster_002 缺 char_id
         _write_archive(db, "002", _archive_with_tier(
             {"cluster_id": "cluster_002", "tier": 2, "notes": "筑基"}))
-        aa.main([str(Path(d)), "--cluster", "002"])
+        assert aa.main([str(Path(d)), "--cluster", "002"]) == 2
         series = _arc(db)["characters"]["C_PROT"]["protagonist_power_tier"]
-        assert len(series) == 2
+        assert len(series) == 1
 
 
-def test_tier_no_char_id_no_existing_skipped():
-    """char_id 缺失且无既有 protagonist → 跳过该条·不脑补·不建文件。"""
+def test_tier_no_char_id_no_existing_rejected():
+    """char_id 缺失且无既有记录时仍属合同错误。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         _write_archive(db, "001", _archive_with_tier(
             {"cluster_id": "cluster_001", "tier": 1, "notes": "炼气"}))
-        assert aa.main([str(Path(d)), "--cluster", "001"]) == 0
+        assert aa.main([str(Path(d)), "--cluster", "001"]) == 2
         assert not (db / "角色弧线.json").exists()
 
 
-def test_tier_missing_or_invalid_tier_skipped():
-    """缺 tier / tier 非数值（含 bool）→ 跳过·不入库。"""
+def test_tier_missing_or_invalid_tier_rejected():
+    """缺 tier 或 tier 非数值时拒绝归档。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         _write_archive(db, "001", _archive_with_tier(
             {"char_id": "C_PROT", "cluster_id": "cluster_001", "notes": "无 tier"}))
-        assert aa.main([str(Path(d)), "--cluster", "001"]) == 0
+        assert aa.main([str(Path(d)), "--cluster", "001"]) == 2
         assert not (db / "角色弧线.json").exists()
         _write_archive(db, "001", _archive_with_tier(
             {"char_id": "C_PROT", "cluster_id": "cluster_001", "tier": True, "notes": "bool"}))
-        assert aa.main([str(Path(d)), "--cluster", "001"]) == 0
+        assert aa.main([str(Path(d)), "--cluster", "001"]) == 2
         assert not (db / "角色弧线.json").exists()
 
 
 def test_no_tier_update_noop_backward_compat():
-    """archive 无 protagonist_power_tier_update（C03 fluid 无力量变化 / 旧数据）→ no-op·不建文件。"""
+    """本块无力量层级变化时不创建梯度台账。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         _write_archive(db, "001", {"characters": [{"id": "C_PROT", "name": "伊莱", "tier": "core"}]})

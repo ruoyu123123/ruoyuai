@@ -367,12 +367,12 @@ def check_duplicate_events(project_root: Path, brief: dict, current_num: int) ->
         return []
     corpus: list[tuple[str, str]] = []
     fate = _load_json(project_root / DB_DIR / FATE_FILE, {}) or {}
-    pool = fate.get("major_events_pool") or fate.get("major_events") or []
+    pool = fate.get("major_events") or []
     for me in pool:
         if isinstance(me, dict) and me.get("status") == "completed":
             text = str(me.get("title") or me.get("description") or me.get("summary") or "")
             if text:
-                corpus.append((f"ME:{me.get('id') or me.get('me_id') or '?'}", text))
+                corpus.append((f"ME:{me.get('id') or '?'}", text))
     data = _load_json(project_root / DB_DIR / EVENT_CLUSTER_FILE, {}) or {}
     for cluster in data.get("clusters") or []:
         if not isinstance(cluster, dict):

@@ -1,267 +1,279 @@
-"""run_cross_cluster_aggregates.py — 按 user_preferences.cross_chapter_scan_intensity 选择性跑 scanner（v21 UX6）
+"""运行全部跨 cluster 顾问并持久化 required 执行回执。
 
-代替 save-state plan 中 18 行的 scanner 调用，统一通过本 wrapper：
-- full_18：全部 18 个跨章 scanner（默认）
-- core_10：仅核心 10 个（去多样性/趋势类 advisory）
-- minimal_5：仅 5 个最关键（continuity/pattern/fate_drift/persona_drift/data_consumption）
-- off：全不跑（紧急快速出稿）
-
-用法：python run_cross_cluster_aggregates.py <project> --ch <ch>
+顾问发现只影响报告，不改变 hard gate。调度故障、输入错误、超时和缺失脚本
+会使本命令失败，避免 required 子步骤在未完整执行时被标记为完成。
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import os
+import re
 import subprocess
 import sys
-from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
 from pathlib import Path
 
-# 18 个 scanner 分级（按用户感知重要度）
-SCAN_TIERS = {
-    "core_5": [
-        "cross_cluster_continuity_aggregate",
-        "cross_cluster_pattern_aggregate",
-        "cross_cluster_fate_drift_aggregate",
-        "cross_cluster_persona_drift_aggregate",
-        "cross_cluster_data_consumption_aggregate",
-    ],
-    "core_10_extra": [
-        "cross_cluster_offscreen_aggregate",
-        "cross_cluster_declarative_data_aggregate",
-        "cross_cluster_arc_progression_aggregate",
-        "cross_cluster_throughline_balance_aggregate",
-        "cross_cluster_foreshadow_rhythm_aggregate",
-    ],
-    "full_18_extra": [
-        "cross_cluster_emotion_pattern_aggregate",
-        "cross_cluster_character_dynamics_aggregate",
-        "cross_cluster_world_dynamics_aggregate",
-        "cross_cluster_judge_quality_aggregate",
-        "cross_cluster_timeline_item_location_aggregate",
-        "cross_cluster_meta_quality_aggregate",
-        "cross_cluster_structure_compliance_aggregate",
-        "cross_cluster_engagement_metrics_aggregate",
-        "cross_cluster_ending_diversity_aggregate",
-        "cross_cluster_scene_pov_diversity_aggregate",
-        "cross_cluster_relationship_trend_aggregate",
-        "cross_cluster_will_learn_aggregate",
-        "volume_arc_drift_scanner",  # 2026-05-29 北极星 P2 [H3-trend]：卷级大势收敛漂移哨兵（advisory）
-        "cross_cluster_style_drift_scanner",  # 2026-05-31 第2轮：跨 cluster 长程作者文风漂移哨兵（advisory · env LONGRANGE_DRIFT_MODE 默认 shadow）
-        "volume_transition_scanner",  # 2026-06-20 R7 W2：卷过渡硬重置/钩零命中哨兵（advisory · env VOLUME_TRANSITION_MODE 默认 shadow）
-        "cross_cluster_narrative_debt_ledger_aggregate",  # 2026-06-20 R7 Batch-D：叙事债务账本（book/volume/scene stock+flow·advisory·env NARRATIVE_DEBT_MODE 默认 shadow）
-        "cross_cluster_sagging_middle_aggregate",  # 2026-06-20 R7 Batch-D：Sagging Middle 检测（40-60% 区段·advisory·env SAGGING_MIDDLE_MODE 默认 shadow）
-        "cross_cluster_character_presence_balance_aggregate",  # 2026-06-20 R7 Batch-D：角色出场失衡+长尾遗忘+作者 ECDF z-band（advisory·env CHARACTER_PRESENCE_BALANCE_MODE 默认 shadow）
-        "motif_recurrence_ledger",  # 2026-06-20 R8 W4 Batch-G L20：跨 cluster 母题循环账本(草蛇灰线·五类 props/imagery/sensory/places/catchphrase·五态 new_seed/recurring/dormant/over_saturated/payoff_due·Gini+N/R 直方图·advisory·env MOTIF_RECURRENCE_MODE 默认 shadow）
-        "cross_cluster_hierarchical_position_surprisal_aggregate",  # 2026-06-21 R18 W7 Batch-U·P2：SCH 层级位置惊异度·边界 PARA/SCENE/CLUSTER_END 计 Δsurprisal·期望末段峰最高·颠倒报 SCH_HIERARCHY_INVERTED·advisory·env HIERARCHICAL_POSITION_SURPRISAL_MODE 默认 shadow
-        "cross_cluster_reader_retention_proxy_aggregate",  # 2026-06-21 R18 W7 Batch-U·P2：reader retention proxy·R=0.35·hook+0.25·(1-sagging)+0.25·cliff+0.15·length·proxy<0.45 报 RETENTION_PROXY_LOW·advisory·env READER_RETENTION_PROXY_MODE 默认 shadow
-        "summary_chapter_alignment_distribution_scanner",  # 2026-06-21 R20 W9 Batch-AA·P1：Attention Flows 摘要-章节概念质量分布·head_share/tail_share·SBERT-zh 真嵌入 defer 占位·SUMMARY_FIRST_QUARTER_OVERWEIGHT/SUMMARY_TAIL_BIAS 双 advisory·env SUMMARY_MASS_DISTRIBUTION_MODE 默认 shadow
-    ],
-}
+from atomic_json import atomic_write_json
+from frozen_util import child_python, scripts_dir
 
-# 哪些 scanner 接 --ch 参数（其他用 --last-n 或全自动）
-SCANNERS_WITH_CH = {
+
+SCANNERS = [
+    "cross_cluster_continuity_aggregate",
+    "cross_cluster_pattern_aggregate",
     "cross_cluster_fate_drift_aggregate",
+    "cross_cluster_persona_drift_aggregate",
+    "cross_cluster_data_consumption_aggregate",
+    "cross_cluster_offscreen_aggregate",
+    "cross_cluster_declarative_data_aggregate",
+    "cross_cluster_arc_progression_aggregate",
+    "cross_cluster_throughline_balance_aggregate",
+    "cross_cluster_foreshadow_rhythm_aggregate",
+    "cross_cluster_emotion_pattern_aggregate",
+    "cross_cluster_character_dynamics_aggregate",
+    "cross_cluster_world_dynamics_aggregate",
+    "cross_cluster_judge_quality_aggregate",
+    "cross_cluster_timeline_item_location_aggregate",
+    "cross_cluster_meta_quality_aggregate",
+    "cross_cluster_structure_compliance_aggregate",
+    "cross_cluster_engagement_metrics_aggregate",
+    "cross_cluster_ending_diversity_aggregate",
+    "cross_cluster_scene_pov_diversity_aggregate",
+    "cross_cluster_relationship_trend_aggregate",
+    "cross_cluster_will_learn_aggregate",
+    "volume_arc_drift_scanner",
+    "cross_cluster_style_drift_scanner",
+    "volume_transition_scanner",
+    "cross_cluster_narrative_debt_ledger_aggregate",
+    "cross_cluster_sagging_middle_aggregate",
+    "cross_cluster_character_presence_balance_aggregate",
+    "motif_recurrence_ledger",
+    "cross_cluster_hierarchical_position_surprisal_aggregate",
+    "cross_cluster_reader_retention_proxy_aggregate",
+    "summary_cluster_alignment_distribution_scanner",
+    "cross_cluster_entity_state_graph_aggregate",
+    "cross_cluster_ousiometric_emd_scanner",
+    "location_signature_consistency",
+    "macguffin_entanglement_scanner",
+]
+
+SCANNERS_WITHOUT_WINDOW = {
+    "cross_cluster_arc_progression_aggregate",
+    "cross_cluster_world_dynamics_aggregate",
+    "cross_cluster_foreshadow_rhythm_aggregate",
+    "cross_cluster_will_learn_aggregate",
+    "cross_cluster_structure_compliance_aggregate",
+    "motif_recurrence_ledger",
+    "cross_cluster_entity_state_graph_aggregate",
 }
 
+_CLUSTER_RE = re.compile(r"(?:cluster_)?(0*[1-9]\d*)\Z")
+_FATAL_MARKERS = ("traceback", "[fatal]", "usage:", "unrecognized arguments")
 
-def get_intensity(project_root: Path) -> str:
-    prefs_path = project_root / "_数据库" / "用户偏好.json"
-    if not prefs_path.exists():
-        return "full_18"
+
+def normalize_cluster_id(value: str) -> str:
+    """校验并归一化显式 cluster 标识。"""
+    match = _CLUSTER_RE.fullmatch(str(value).strip())
+    if not match:
+        raise ValueError(f"无效 cluster 标识: {value!r}")
+    return f"cluster_{int(match.group(1)):03d}"
+
+
+def cluster_draft_path(project_root: Path, cluster_id: str) -> Path:
+    """返回当前 cluster 的完整终稿路径。"""
+    key = cluster_id.removeprefix("cluster_")
+    return (
+        project_root
+        / "章节"
+        / f"cluster_{key}_draft"
+        / f"cluster_{key}_draft.txt"
+    )
+
+
+def build_scanner_command(
+    scanner: str,
+    script_path: Path,
+    project_root: Path,
+    cluster_id: str,
+    last_n: int,
+) -> list[str]:
+    """按各顾问的 cluster CLI 构造命令。"""
+    base = [child_python(), str(script_path)]
+    if scanner == "cross_cluster_fate_drift_aggregate":
+        return base + [str(project_root), "--cluster", cluster_id]
+    if scanner == "cross_cluster_ousiometric_emd_scanner":
+        return base + ["--project", str(project_root)]
+    if scanner == "location_signature_consistency":
+        return base + [
+            "--project",
+            str(project_root),
+            "--scan-cluster",
+            cluster_id,
+            "--draft",
+            str(cluster_draft_path(project_root, cluster_id)),
+        ]
+    if scanner in SCANNERS_WITHOUT_WINDOW:
+        return base + [str(project_root)]
+    return base + [str(project_root), "--last-n", str(last_n)]
+
+
+def _is_execution_failure(returncode: int, stdout: str, stderr: str) -> bool:
+    """区分顾问发现与调度/输入故障。"""
+    combined = f"{stdout}\n{stderr}".lower()
+    return (
+        returncode < 0
+        or returncode >= 3
+        or any(marker in combined for marker in _FATAL_MARKERS)
+    )
+
+
+def _run_scanner(
+    scanner: str,
+    command: list[str],
+    env: dict[str, str],
+    timeout_seconds: int,
+) -> dict:
+    """执行单个顾问并返回结构化结果。"""
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_seconds,
+        env=env,
+    )
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    failure = _is_execution_failure(result.returncode, stdout, stderr)
+    if failure:
+        status = "failed"
+    elif result.returncode == 0:
+        status = "ok"
+    else:
+        status = "advisory"
+    return {
+        "scanner": scanner,
+        "status": status,
+        "exit_code": result.returncode,
+        "stdout_tail": stdout.strip()[-800:],
+        "stderr_tail": stderr.strip()[-800:],
+    }
+
+
+def write_run_report(project_root: Path, report: dict) -> Path:
+    """原子写入本次 required 执行回执。"""
+    output_dir = project_root / "_数据库" / ".cross_cluster_scan"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "cross_cluster_wrapper_latest.json"
+    atomic_write_json(output_path, report)
+    return output_path
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    parser.add_argument("--cluster", required=True)
+    parser.add_argument(
+        "--last-n",
+        type=int,
+        default=10,
+        help="需要最近窗口的顾问读取的 cluster 数",
+    )
+    parser.add_argument("--timeout", type=int, default=120)
+    args = parser.parse_args(argv)
+
     try:
-        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
-        return (prefs.get("quality_control") or {}).get("cross_chapter_scan_intensity", "full_18")
-    except Exception:
-        return "full_18"
-
-
-def get_cluster_last_ch(project_root: Path, cluster_key: str) -> int | None:
-    """从 事件簇.json 找 cluster 的最后一章号。"""
-    shijianji_path = project_root / "_数据库" / "事件簇.json"
-    if not shijianji_path.exists():
-        return None
-    try:
-        data = json.loads(shijianji_path.read_text(encoding="utf-8"))
-        for c in data.get("clusters", []):
-            cid = c.get("cluster_id", "")
-            if cid == cluster_key or cid.replace("cluster_", "") == cluster_key.replace("cluster_", ""):
-                cr = c.get("chapter_range")
-                if isinstance(cr, list) and len(cr) == 2:
-                    return cr[1]
-                elif isinstance(cr, str) and "-" in cr:
-                    return int(cr.split("-")[1])
-    except Exception:
-        pass
-    return None
-
-
-# 2026-05-29 复审修复 [L7]：cluster 模式下把「最近 N 个 cluster」换算成「章数窗口」。
-# 各 aggregator 的 --last-n 切的是 chapter_dirs[-N:]（章为单位），cluster 模式直接传
-# --last-n 10 会被解释成 10 章≈3 个 cluster 之外的“覆盖到目标 cluster 头部”，
-# 但 L7 担心的「10 cluster 爆量」根因是没把语义对齐——这里按目标 cluster 及其前 N-1 个
-# 已落章 cluster 的累计章数算出真实窗口，下限 4（保证至少覆盖当前 cluster 上下文）。
-def chapters_in_last_n_clusters(project_root: Path, cluster_key: str, n_clusters: int) -> int | None:
-    """计算「含目标 cluster 在内的最近 n_clusters 个已落章 cluster」的累计章数。
-
-    已落章判定（SC-6）：status ∈ {已完成, done, 进行中} 且 chapter_range 有有效 [lo,hi]。
-    查不到 / 解析失败 → 返回 None（调用方回退到 --last-n 默认）。
-    """
-    shijianji_path = project_root / "_数据库" / "事件簇.json"
-    if not shijianji_path.exists():
-        return None
-    try:
-        data = json.loads(shijianji_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-    landed_statuses = {"已完成", "done", "进行中", "in_progress"}
-    landed = []  # [(hi_ch, span_chapters, cid)]
-    target_norm = str(cluster_key).replace("cluster_", "")
-    for c in data.get("clusters", []) or []:
-        if not isinstance(c, dict):
-            continue
-        cr = c.get("chapter_range")
-        rng = cr if (isinstance(cr, list) and len(cr) == 2) else None
-        if not rng:
-            continue
-        status = str(c.get("status", "")).strip()
-        # 目标 cluster 即便 status 不在表内也纳入（它正是当前在处理的 cluster）
-        cid = str(c.get("cluster_id", ""))
-        is_target = (cid == str(cluster_key) or cid.replace("cluster_", "") == target_norm)
-        if status in landed_statuses or is_target:
-            span = rng[1] - rng[0] + 1
-            landed.append((rng[1], span, cid))
-    if not landed:
-        return None
-    # 按末章排序取最近 n_clusters 个，累计 span
-    landed.sort(key=lambda x: x[0])
-    recent = landed[-max(1, n_clusters):]
-    total = sum(span for _, span, _ in recent)
-    return max(4, total)
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--ch", type=int, help="单章模式（与 --cluster 二选一）")
-    ap.add_argument("--cluster", help="cluster 模式：扫该 cluster 末章上下文")
-    ap.add_argument("--last-n", type=int, default=10, help="aggregator 章数窗口（章为单位）")
-    # 2026-05-29 复审修复 [L7]：cluster 模式专用——以「cluster 个数」表达窗口，
-    # 内部换算成章数传给 aggregator 的 --last-n，避免「10 当 10 个 cluster 爆量」误解。
-    ap.add_argument("--last-n-clusters", type=int, default=2,
-                    help="cluster 模式窗口（含目标在内的最近 N 个已落章 cluster，默认 2；换算成章数）")
-    ap.add_argument("--tier", choices=["minimal_5", "core_5", "core_10", "full_18", "off"], help="覆盖 user_preferences intensity（minimal_5 = core_5 别名）")
-    args = ap.parse_args()
+        cluster_id = normalize_cluster_id(args.cluster)
+    except ValueError as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
+    if args.last_n < 1 or args.timeout < 1:
+        print("[FATAL] --last-n 和 --timeout 必须为正整数", file=sys.stderr)
+        return 2
 
     project_root = Path(args.project).resolve()
+    if not project_root.is_dir():
+        print(f"[FATAL] 项目目录不存在: {project_root}", file=sys.stderr)
+        return 2
 
-    # cluster mode：用 cluster 末章作为 --ch
-    if args.cluster:
-        ch = get_cluster_last_ch(project_root, args.cluster)
-        if ch is None:
-            print(f"[FATAL] cluster {args.cluster} 未找到 chapter_range", file=sys.stderr)
-            sys.exit(2)
-        args.ch = ch
-        print(f"[cluster {args.cluster}] 用末章 ch{ch} 作为扫描锚点")
-        # 2026-05-29 复审修复 [L7]：cluster 模式把 --last-n-clusters 换算成章数窗口覆盖 --last-n。
-        # 仅当用户未显式传 --last-n（仍是默认 10）时才覆盖，尊重显式覆盖。
-        if "--last-n" not in sys.argv:
-            eff = chapters_in_last_n_clusters(project_root, args.cluster, args.last_n_clusters)
-            if eff is not None:
-                print(f"[cluster {args.cluster}] --last-n-clusters={args.last_n_clusters} "
-                      f"→ 换算章数窗口 --last-n={eff}（原默认 10）")
-                args.last_n = eff
-    elif args.ch is None:
-        print(f"[FATAL] 必须指定 --ch 或 --cluster", file=sys.stderr)
-        sys.exit(2)
+    script_root = scripts_dir()
+    env = {**os.environ, "CLUSTER_MODE": "1", "CLUSTER_ID": cluster_id}
+    tasks: list[dict] = []
 
-    intensity = args.tier if args.tier else get_intensity(project_root)
-    # 2026-05-30 北极星复审：minimal_5 是 core_5 的对外别名（docstring/CLAUDE.md 用 minimal_5，
-    # SCAN_TIERS key 用 core_5）。归一——避免命令行 --tier minimal_5 被 argparse 拒、或配置写
-    # minimal_5 时不匹配任何 if 分支静默走默认。
-    if intensity == "minimal_5":
-        intensity = "core_5"
-    print(f"[run_cross_cluster_aggregates] ch{args.ch} intensity={intensity}")
-
-    if intensity == "off":
-        print("[SKIP] user_preferences.cross_chapter_scan_intensity=off")
-        sys.exit(0)
-
-    # 选 scanner 集合
-    scanners = list(SCAN_TIERS["core_5"])
-    if intensity in ("core_10", "full_18"):
-        scanners.extend(SCAN_TIERS["core_10_extra"])
-    if intensity == "full_18":
-        scanners.extend(SCAN_TIERS["full_18_extra"])
-
-    script_dir = scripts_dir()
-    # 2026-05-29 复审修复 [C4]：新增 findings（exit 2 严重发现，区别于 errors 真崩溃）
-    summary = {"ran": 0, "skipped": 0, "errors": [], "findings": []}
-    for sc in scanners:
-        sc_path = script_dir / f"{sc}.py"
-        if not sc_path.exists():
-            summary["skipped"] += 1
+    for scanner in SCANNERS:
+        script_path = script_root / f"{scanner}.py"
+        if not script_path.is_file():
+            tasks.append(
+                {
+                    "scanner": scanner,
+                    "status": "failed",
+                    "error": f"脚本不存在: {script_path}",
+                }
+            )
             continue
-        # 构造 cmd
-        if sc in SCANNERS_WITH_CH:
-            cmd = [child_python(), str(sc_path), str(project_root), "--ch", str(args.ch)]
-        elif sc in ("cross_cluster_arc_progression_aggregate", "cross_cluster_world_dynamics_aggregate",
-                    "cross_cluster_foreshadow_rhythm_aggregate", "cross_cluster_will_learn_aggregate",
-                    "cross_cluster_structure_compliance_aggregate",
-                    "motif_recurrence_ledger"):  # 不需 --last-n / --ch · 自取末 N cluster
-            cmd = [child_python(), str(sc_path), str(project_root)]
-        else:
-            cmd = [child_python(), str(sc_path), str(project_root), "--last-n", str(args.last_n)]
+        command = build_scanner_command(
+            scanner,
+            script_path,
+            project_root,
+            cluster_id,
+            args.last_n,
+        )
         try:
-            # v2 cluster 化（2026-05-28）：cluster 模式给子进程透传 CLUSTER_MODE=1 env
-            import os as _os
-            _env = None
-            if args.cluster:
-                _env = {**_os.environ, "CLUSTER_MODE": "1", "CLUSTER_ID": args.cluster}
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", env=_env)
-            summary["ran"] += 1
-            # 2026-05-29 复审修复 [C4/SC-2]：原 `if r.returncode >= 2` 把 advisory(exit 1)
-            # 当成功、又把真崩溃（exit 1 + Traceback）一并吞掉谎报成功。
-            # 按 SC-2 退出码语义区分三档：
-            #   - returncode >= 3  或  (returncode == 1 且 stderr 含 Traceback) = 真崩溃 → errors
-            #   - returncode == 2  = 严重发现（warning 级）→ findings（非崩溃，记录但不算 error）
-            #   - returncode == 1（无 Traceback）= advisory 发现 → 正常，不记
-            stderr_txt = r.stderr or ""
-            crashed = (r.returncode >= 3) or (r.returncode == 1 and "Traceback" in stderr_txt)
-            if crashed:
-                # 打印真实崩溃 scanner 名 + stderr 末尾便于定位
-                tail = stderr_txt.strip().splitlines()[-3:] if stderr_txt.strip() else []
-                print(f"[CRASH] scanner {sc} 崩溃 (exit={r.returncode}): " + " / ".join(tail), file=sys.stderr)
-                summary["errors"].append({"scanner": sc, "exit": r.returncode,
-                                          "crash": True, "stderr_tail": stderr_txt.strip()[-400:]})
-            elif r.returncode == 2:
-                summary["findings"].append({"scanner": sc, "exit": 2})
+            tasks.append(
+                _run_scanner(scanner, command, env, args.timeout)
+            )
         except subprocess.TimeoutExpired:
-            # 超时视为崩溃（scanner 卡死）
-            print(f"[CRASH] scanner {sc} 超时 (>120s)", file=sys.stderr)
-            summary["errors"].append({"scanner": sc, "timeout": True, "crash": True})
-        except Exception as e:
-            print(f"[CRASH] scanner {sc} 调用异常: {type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
-            summary["errors"].append({"scanner": sc, "exception": str(e)[:120], "crash": True})
+            tasks.append(
+                {
+                    "scanner": scanner,
+                    "status": "failed",
+                    "error": f"超过 {args.timeout} 秒",
+                }
+            )
+        except OSError as exc:
+            tasks.append(
+                {
+                    "scanner": scanner,
+                    "status": "failed",
+                    "error": f"启动失败: {exc}",
+                }
+            )
 
-    print(f"[OK] 跑了 {summary['ran']}/{len(scanners)} 个 scanner（intensity={intensity}）")
-    if summary["findings"]:
-        print(f"[FINDINGS] {len(summary['findings'])} 个 scanner 报严重发现（exit 2）: "
-              + ", ".join(f["scanner"] for f in summary["findings"]))
-    if summary["errors"]:
-        crash_names = ", ".join(e["scanner"] for e in summary["errors"])
-        print(f"[CRASH] {len(summary['errors'])} 个 scanner 真崩溃（不打断流水线，但已记录）: {crash_names}")
-    # 2026-05-29 复审复修 [C4/SC-2]：本 wrapper 是「跑 + 报告」器，**恒 exit 0 不阻断流水线**
-    # （「失败不中断流水线」铁律 + plan 调用处无 || true）。崩溃信号通过上面的 [CRASH] stderr
-    # 大声上报（不再像旧版静默吞），但绝不因 scanner 崩溃让本脚本 exit 非 0 而中断 cluster-save-state。
-    # 旧 C4 修复改成 exit 2 是过度——崩溃应「可观测」而非「阻断」。
-    sys.exit(0)
+    failed = [task for task in tasks if task["status"] == "failed"]
+    advisory = [task for task in tasks if task["status"] == "advisory"]
+    report = {
+        "schema_version": "cross_cluster_run.v1",
+        "cluster_id": cluster_id,
+        "required": True,
+        "expected_count": len(SCANNERS),
+        "executed_count": len(tasks),
+        "failed_count": len(failed),
+        "advisory_count": len(advisory),
+        "tasks": tasks,
+    }
+
+    try:
+        report_path = write_run_report(project_root, report)
+    except OSError as exc:
+        print(f"[FATAL] 执行回执写入失败: {exc}", file=sys.stderr)
+        return 2
+
+    if failed:
+        names = ", ".join(task["scanner"] for task in failed)
+        print(f"[FATAL] {len(failed)} 个顾问未完成: {names}", file=sys.stderr)
+        print(f"[REPORT] {report_path}")
+        return 2
+
+    print(
+        f"[OK] {len(tasks)}/{len(SCANNERS)} 个跨 cluster 顾问已执行；"
+        f"advisory={len(advisory)}"
+    )
+    print(f"[REPORT] {report_path}")
+    return 0
 
 
 if __name__ == "__main__":
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8", errors="replace")
-    main()
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    raise SystemExit(main())

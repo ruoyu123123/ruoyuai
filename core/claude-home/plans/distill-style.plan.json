@@ -1,6 +1,6 @@
 {
   "command": "distill-style",
-  "version": 5,
+  "version": 6,
   "description": "作者风格蒸馏 10 步流水线：作品预处理、cluster 切分、48 维表层分析、聚合 skill、同栈复刻、SFS 对比、修正反思、定稿与回灌验证。",
   "total_steps": 10,
   "required_steps": [1, 2, 2.5, 3, 4, 5, 5.5, 6, 6.5, 7],
@@ -49,16 +49,26 @@
     {
       "n": 3,
       "name": "phase-4-cluster-replica",
-      "description": "复刻（提前·复刻先于 SFS）：v29 同栈——主代理先 spawn Claude agent 按 skill_v0.md 写复刻场景稿到 {project_root}/复刻测试/v0/claude_scenes/scene_*.txt，再跑 distill_replicate.py 做 gemini 分段润色复刻首个 cluster（唯一合法终稿入口·缺 --claude-scenes-dir 即 FATAL）。data_flow 取 first_cluster_id。",
+      "description": "首轮同栈复刻：novel-replica-writer 按 skill_v0 写 cluster 场景草稿，distill_replicate 用 gemini 分段润色，随后 required 运行 AV advisory 验证。",
       "required": true,
       "skip_output_allowed": false,
+      "must_spawn_agent": "novel-replica-writer",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "<first_cluster_id>",
+        "MODE": "style-replica-draft",
+        "STYLE_SKILL_PATH": "{project_root}/skill_v0.md",
+        "SCENES_DIR": "{project_root}/复刻测试/v0/claude_scenes"
+      },
+      "judge_report_path": "复刻测试/v0/claude_scenes/agent_report.json",
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
       "scripts": [
-        "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v0.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --claude-scenes-dir {project_root}/复刻测试/v0/claude_scenes --output {project_root}/复刻测试/v0/replica.txt"
+        "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v0.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --claude-scenes-dir {project_root}/复刻测试/v0/claude_scenes --output {project_root}/复刻测试/v0/replica.txt",
+        "python core/scripts/distill_av_verify.py --project {project_root} --cluster-id <first_cluster_id> --replica {project_root}/复刻测试/v0/replica.txt --output {project_root}/对比报告/av_v0.json"
       ],
-      "expected_outputs": ["复刻测试/v0/claude_scenes/", "复刻测试/v0/replica.txt"]
+      "expected_outputs": ["复刻测试/v0/claude_scenes/agent_report.json", "复刻测试/v0/replica.txt", "对比报告/av_v0.json"]
     },
     {
       "n": 4,
@@ -86,18 +96,28 @@
     {
       "n": 5.5,
       "name": "phase-4b-v1-reverify-converge",
-      "description": "🔴 2026-06-27 C01·v1 再复刻+再 SFS+收敛闸（落实命令文档 L194『连续2轮无新差距 + cluster SFS≥80』的 bounded 单轮）：① v29 同栈——主代理先 spawn Claude agent 按 skill_v1.md 写复刻场景稿到 claude_scenes/，再 distill_replicate(skill_v1) 润色复刻同 cluster；② style_evaluator multi-ref 测 v1 SFS → eval_v1.json；③ distill_convergence_gate 复用 skill_opt.validation_gate.decide(rewards_before=[v0],rewards_after=[v1],floor=v0×0.97)·v1 严格优于才采纳否则回退 v0·选中 skill 写 skill_v2.md(finalize 出货最新版即它)+选中 eval 写 eval_ship.json。SFS 必 multi-ref；skill_v2.md 与 eval_ship.json 是强制契约，任一上游失败都停在本 step。",
+      "description": "v1 同栈复刻与收敛闸：专用 writer 产独立场景稿，gemini 润色后跑 AV 与多参考 SFS；严格优于才选 v1，否则保留 v0，并写出选中 skill 与对应评估。",
       "required": true,
       "skip_output_allowed": false,
+      "must_spawn_agent": "novel-replica-writer",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "<first_cluster_id>",
+        "MODE": "style-replica-draft",
+        "STYLE_SKILL_PATH": "{project_root}/skill_v1.md",
+        "SCENES_DIR": "{project_root}/复刻测试/v1/claude_scenes"
+      },
+      "judge_report_path": "复刻测试/v1/claude_scenes/agent_report.json",
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
       "scripts": [
         "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v1.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --claude-scenes-dir {project_root}/复刻测试/v1/claude_scenes --output {project_root}/复刻测试/v1/replica.txt",
+        "python core/scripts/distill_av_verify.py --project {project_root} --cluster-id <first_cluster_id> --replica {project_root}/复刻测试/v1/replica.txt --output {project_root}/对比报告/av_v1.json",
         "python core/scripts/style_evaluator.py --gen {project_root}/复刻测试/v1/replica.txt --multi-ref-from-dir {project_root}/原文 --multi-ref-count 5 --output {project_root}/对比报告/eval_v1.json",
         "python core/scripts/distill_convergence_gate.py --before-eval {project_root}/对比报告/eval_v0.json --after-eval {project_root}/对比报告/eval_v1.json --skill-before {project_root}/skill_v0.md --skill-after {project_root}/skill_v1.md --ship-out {project_root}/skill_v2.md --ship-sfs-out {project_root}/对比报告/eval_ship.json"
       ],
-      "expected_outputs": ["复刻测试/v1/claude_scenes/", "复刻测试/v1/replica.txt", "对比报告/eval_v1.json", "skill_v2.md", "对比报告/eval_ship.json"]
+      "expected_outputs": ["复刻测试/v1/claude_scenes/agent_report.json", "复刻测试/v1/replica.txt", "对比报告/av_v1.json", "对比报告/eval_v1.json", "skill_v2.md", "对比报告/eval_ship.json"]
     },
     {
       "n": 6,
@@ -115,28 +135,38 @@
     {
       "n": 6.5,
       "name": "pid-state-bootstrap",
-      "description": "🔴 2026-06-27 C20·PID 阈值 state 自动初始化：用作者原文 + 作者风格.json 离线回测 FPR 收敛曲线，收敛才落 pid_threshold_state.json 的 theta_delta；发散不持久 Δ。该步只调 advisory 阈值，不参与出货硬闸，运行事件由 adaptive_runner 记录。",
+      "description": "用作者原文与作者风格档离线回测 advisory 阈值；收敛时保存 theta_delta，未收敛时保留结果但不写阈值状态。",
       "required": true,
-      "skip_output_allowed": true,
+      "skip_output_allowed": false,
       "scripts": [
-        "python core/scripts/adaptive_runner.py --label pid_state_bootstrap -- python core/scripts/pid_threshold_tuner.py --backtest --save-state --author-dir {project_root} --style {project_root}/作者风格.json --max-chapters 40"
+        "python core/scripts/adaptive_runner.py --label pid_state_bootstrap --strict -- python core/scripts/pid_threshold_tuner.py --backtest --save-state --author-dir {project_root} --style {project_root}/作者风格.json --max-chapters 40 --receipt {project_root}/对比报告/pid_bootstrap_receipt.json"
       ],
-      "expected_outputs": []
+      "expected_outputs": ["对比报告/pid_bootstrap_receipt.json"]
     },
     {
       "n": 7,
       "name": "phase-6-writer-feedback-verify",
-      "description": "写作端回灌验证闸（Article 6·不通过不出货）：v29 同栈——主代理先 spawn Claude agent 按 skill_FINAL 写复刻场景稿到 claude_scenes/，distill_finalize_verify.py 内部再调 distill_replicate 做 gemini 分段润色复刻同 cluster → 与原 cluster_arc 比 → 不过 exit 2 拦。verify.json 是出货 required 产物。",
+      "description": "写作端回灌验证闸：Claude 场景稿经 gemini 分段润色后，先跑确定性 arc/SFS 严格验证，再 required 跑 AV-judge 作者辨识度配对判别。AV 走味只报 advisory；输入、模型调用或报告落盘失败会阻断 required 步骤。",
       "required": true,
       "skip_output_allowed": false,
+      "must_spawn_agent": "novel-replica-writer",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "<first_cluster_id>",
+        "MODE": "style-replica-draft",
+        "STYLE_SKILL_PATH": "{project_root}/skill_FINAL.md",
+        "SCENES_DIR": "{project_root}/复刻测试/writer_feedback_verify/claude_scenes"
+      },
+      "judge_report_path": "复刻测试/writer_feedback_verify/claude_scenes/agent_report.json",
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
       "scripts": [
-        "python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --claude-scenes-dir {project_root}/复刻测试/writer_feedback_verify/claude_scenes --output {project_root}/对比报告/verify.json --strict"
+        "python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --claude-scenes-dir {project_root}/复刻测试/writer_feedback_verify/claude_scenes --output {project_root}/对比报告/verify.json --strict",
+        "python core/scripts/distill_av_verify.py --project {project_root} --cluster-id <first_cluster_id> --replica {project_root}/复刻测试/writer_feedback_verify/<first_cluster_id>_replica.txt --output {project_root}/对比报告/verify_av.json"
       ],
       "control_flow": {"exit_codes": {"0": "ok", "2": "fail"}},
-      "expected_outputs": ["对比报告/verify.json"]
+      "expected_outputs": ["复刻测试/writer_feedback_verify/claude_scenes/agent_report.json", "对比报告/verify.json", "对比报告/verify_av.json"]
     }
   ],
   "_v2_principle": "整个系统为故事块服务·蒸馏以 cluster 为单位·48 维 judge 全章全文注入·复刻先于 SFS。",

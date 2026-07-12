@@ -184,12 +184,14 @@ def test_code_not_in_hard_gate():
         assert c not in hgs, c
 
 
-def test_registry_registered_with_new_flag():
+def test_registry_registered_in_cluster_audit():
     rg = _ROOT / "core" / "scripts" / "scanner_registry.json"
     reg = json.loads(rg.read_text(encoding="utf-8"))
     s = reg.get("scanners", {}).get("cotton_needle_subtext_advisor")
     assert s is not None
-    assert s.get("_new") is True
+    assert s["layer"] == "cluster"
+    assert s["trigger_by"] == "audit_hub cluster 审计"
+    assert "advisory" in s["doc"]
 
 
 def test_dialogue_extraction_works():

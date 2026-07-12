@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""save_state 场景级 Appraisal Beat 回库测试 — 🔴 2026-06-29 chain-of-emotion。
+"""save_state 场景级 Appraisal Beat 回库测试。
 
 钉死 save_state.cmd_apply_appraisal_beats：novel-summarizer 读整 cluster 正文按 Scherer CPM/OCC
 评价链推理产 summary.appraisal_beats → 确定性 append 进 叙事节拍器.json.appraisal_beats
@@ -101,48 +101,43 @@ def test_same_scene_multiple_focal_both_kept():
         assert {b["focal_character"] for b in ab} == {"C_PROT", "C_AMY"}
 
 
-def test_only_active_cluster_other_skipped():
-    """显式标别的 cluster 的 beat → 跳过（fluid·不回填非本 cluster）。"""
+def test_foreign_cluster_beat_hard_fails():
+    """summarizer 产出其他 cluster 的 beat 时拒绝整份状态。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), pacer=dict(_SKELETON_PACER),
                            summary={"appraisal_beats": [
                                _beat(0, "C_PROT", cluster_id="cluster_001"),
                                _beat(1, "C_PROT", cluster_id="cluster_005")]})
-        assert ss.cmd_apply_appraisal_beats(root, "001") == 0
-        ab = _pacer(root)["appraisal_beats"]
-        assert len(ab) == 1
-        assert ab[0]["cluster_id"] == "cluster_001"
+        assert ss.cmd_apply_appraisal_beats(root, "001") == 2
+        assert _pacer(root)["appraisal_beats"] == []
 
 
-def test_cluster_id_forced_when_absent():
-    """beat 缺 cluster_id → 强制归本 active cluster。"""
+def test_cluster_id_missing_hard_fails():
+    """beat 缺 cluster_id 时不根据命令参数补写。"""
     with tempfile.TemporaryDirectory() as d:
         b = _beat(0, "C_PROT")
         b.pop("cluster_id")
         root = _mk_project(Path(d), pacer=dict(_SKELETON_PACER),
                            summary={"appraisal_beats": [b]})
-        assert ss.cmd_apply_appraisal_beats(root, "001") == 0
-        ab = _pacer(root)["appraisal_beats"]
-        assert len(ab) == 1 and ab[0]["cluster_id"] == "cluster_001"
+        assert ss.cmd_apply_appraisal_beats(root, "001") == 2
+        assert _pacer(root)["appraisal_beats"] == []
 
 
-def test_scene_idx_string_normalized_to_int():
+def test_scene_idx_string_hard_fails():
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), pacer=dict(_SKELETON_PACER),
                            summary={"appraisal_beats": [_beat("3", "C_PROT")]})
-        assert ss.cmd_apply_appraisal_beats(root, "001") == 0
-        ab = _pacer(root)["appraisal_beats"]
-        assert ab[0]["scene_idx"] == 3 and isinstance(ab[0]["scene_idx"], int)
+        assert ss.cmd_apply_appraisal_beats(root, "001") == 2
+        assert _pacer(root)["appraisal_beats"] == []
 
 
-def test_missing_focal_character_skipped():
+def test_missing_focal_character_hard_fails():
     with tempfile.TemporaryDirectory() as d:
         b = _beat(0, "")
         root = _mk_project(Path(d), pacer=dict(_SKELETON_PACER),
                            summary={"appraisal_beats": [b, _beat(1, "C_PROT")]})
-        assert ss.cmd_apply_appraisal_beats(root, "001") == 0
-        ab = _pacer(root)["appraisal_beats"]
-        assert len(ab) == 1 and ab[0]["focal_character"] == "C_PROT"
+        assert ss.cmd_apply_appraisal_beats(root, "001") == 2
+        assert _pacer(root)["appraisal_beats"] == []
 
 
 def test_appends_to_existing_beats_no_overwrite():
@@ -158,7 +153,7 @@ def test_appends_to_existing_beats_no_overwrite():
         assert {b["focal_character"] for b in ab} == {"C_OLD", "C_PROT"}
 
 
-# ═══════════════════════ 默认安全 / 向后兼容 ═══════════════════════
+# ═══════════════════════ required 输入合同 ═══════════════════════
 
 def test_no_appraisal_beats_in_summary_hard_fails():
     """summary 无 appraisal_beats → required 字段缺失，return 2。"""
@@ -203,15 +198,14 @@ def test_broken_pacer_file_hard_fails():
         assert ss.cmd_apply_appraisal_beats(root, "001") == 2
 
 
-def test_pacer_without_appraisal_beats_key_initializes():
-    """旧 pacer 无 appraisal_beats key（建库早于本特性）→ setdefault 初始化后 append。"""
+def test_pacer_without_appraisal_beats_key_hard_fails():
+    """required appraisal_beats 容器缺失时不在消费端补建。"""
     with tempfile.TemporaryDirectory() as d:
         pacer = {"schema_version": "v27", "rhythm_profile": "混合", "beat_targets": []}
         root = _mk_project(Path(d), pacer=pacer,
                            summary={"appraisal_beats": [_beat(0, "C_PROT")]})
-        assert ss.cmd_apply_appraisal_beats(root, "001") == 0
-        ab = _pacer(root)["appraisal_beats"]
-        assert len(ab) == 1
+        assert ss.cmd_apply_appraisal_beats(root, "001") == 2
+        assert "appraisal_beats" not in _pacer(root)
 
 
 def test_cluster_prefixed_key_accepted():

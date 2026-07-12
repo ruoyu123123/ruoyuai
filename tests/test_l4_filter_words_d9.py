@@ -200,17 +200,11 @@ def test_threshold_above_real_author_max():
 # ════════════════════════════════════════════════════════════════
 
 def _load_body(proj_name, ch_name):
-    import chapter_io as cio
     proj = Path(__file__).resolve().parents[1] / "workspace" / "styles" / proj_name
     ch = proj / "原文" / f"{ch_name}.txt"
     if not ch.exists():
         return None
-    raw = ch.read_text(encoding="utf-8", errors="ignore")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
-    return raw
+    return ch.read_text(encoding="utf-8", errors="ignore")
 
 
 def test_real_authors_filter_density_below_threshold():
@@ -246,17 +240,12 @@ def test_real_author_full_corpus_zero_false_positive():
     """全两书原文逐章 advisory：0 误判 WARN（936 章真作者全部 ≤ 阈值 · 终极实证）。
     样本缺失则跳过（CI 无样本环境）。"""
     import glob
-    import chapter_io as cio
     total = 0
     false_pos = 0
     for proj in ("蛊真人", "惊悚乐园"):
         base = Path(__file__).resolve().parents[1] / "workspace" / "styles" / proj / "原文"
         for f in glob.glob(str(base / "第*.txt")):
             raw = Path(f).read_text(encoding="utf-8", errors="ignore")
-            for sep in cio.CHANGES_SEPARATORS:
-                if sep in raw:
-                    raw = raw.split(sep)[0]
-                    break
             if not raw.strip():
                 continue
             total += 1

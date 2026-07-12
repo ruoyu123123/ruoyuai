@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
-"""伏笔生命周期三态枚举回归锁（2026-07-06 P1 · 借鉴 PlotPilot foreshadow registry）。
+"""伏笔生命周期三态契约回归锁。
 
 契约（本文件钉死）：
-  1. 伏笔表.promises 三态 status ∈ {open, suspended, consumed}（枚举权威
-     db_schema_validate.FORESHADOW_STATUS_ENUM）+ owner（缺省 writer）+ payoff_scope（可空串）。
-  2. 迁移器挂 db_schema_validate --auto-migrate：resolved True→consumed / False→open 且删
-     resolved；resolved_at_ch→consumed_at_ch、_resolved_by→_consumed_by；历史 status 字符串
-     （planted/paid/...）归一进三态；幂等（再跑零变化）。
-  3. 枚举白名单：非法/缺失 status → FORESHADOW_STATUS_INVALID error（含 --post-edit 手改路径）。
+  1. 伏笔表.promises 的 status ∈ {open, suspended, consumed}，owner 是非空字符串，
+     payoff_scope 是字符串。
+  2. 缺失或非法字段直接报契约错误；校验器不修改数据库。
+  3. 枚举白名单错误会被 --post-edit 单文件校验阻断。
   4. 消费方只读 status：due_foreshadowing 里 consumed 跳过、suspended 不催收只计数、open 走到期。
   5. payoff 必须引用 open 项：foreshadowing_handoff_scanner 对 changes 声明的 payoff 指向非 open
      条目产 FORESHADOWING_PAYOFF_TARGET_NOT_OPEN（advisory·绝不 hard_gate）。
@@ -55,92 +53,41 @@ def _read_fs(db: Path) -> dict:
     return json.loads((db / "伏笔表.json").read_text(encoding="utf-8"))
 
 
-# ═══════════ 1. 迁移器：resolved → 三态 status（幂等）═══════════
+# ═══════════ 1. 严格只读验证 ════════════
 
-def test_migrate_resolved_true_to_consumed_and_false_to_open():
-    """resolved True→consumed / False→open；resolved 字段删除（不留兼容读）。"""
-    with tempfile.TemporaryDirectory() as td:
-        db = _mk_db(td)
-        _write_fs(db, [
-            {"id": "fs_1", "setup_cluster": "cluster_001", "tier": 1, "resolved": True},
-            {"id": "fs_2", "setup_cluster": "cluster_001", "tier": 2, "resolved": False},
-        ])
-        errs, warns, mig = dsv.check_foreshadow_lifecycle(db, auto_migrate=True)
-        assert mig is True and errs == [], (errs, warns)
-        pmap = {p["id"]: p for p in _read_fs(db)["promises"]}
-        assert pmap["fs_1"]["status"] == "consumed"
-        assert pmap["fs_2"]["status"] == "open"
-        assert "resolved" not in pmap["fs_1"] and "resolved" not in pmap["fs_2"]
-
-
-def test_migrate_fills_owner_and_payoff_scope():
-    """owner 缺省 writer；payoff_scope 从 due_by 族派生（无到期信息 → 空串·允许）。"""
-    with tempfile.TemporaryDirectory() as td:
-        db = _mk_db(td)
-        _write_fs(db, [
-            {"id": "fs_due", "resolved": False, "due_by": 15},
-            {"id": "fs_dbc", "resolved": False, "due_by_cluster": "cluster_005"},
-            {"id": "fs_pend", "resolved": False, "setup_cluster": "cluster_002",
-             "due_by_pending_resolution": True, "due_by_ch_offset": 20},
-            {"id": "fs_none", "resolved": False},
-            {"id": "fs_owned", "resolved": False, "owner": "林越"},
-        ])
-        dsv.check_foreshadow_lifecycle(db, auto_migrate=True)
-        pmap = {p["id"]: p for p in _read_fs(db)["promises"]}
-        for pid in pmap:
-            assert pmap[pid]["status"] in dsv.FORESHADOW_STATUS_ENUM
-        assert pmap["fs_due"]["owner"] == "writer"
-        assert "15" in pmap["fs_due"]["payoff_scope"]
-        assert "cluster_005" in pmap["fs_dbc"]["payoff_scope"]
-        assert "cluster_002" in pmap["fs_pend"]["payoff_scope"] and "20" in pmap["fs_pend"]["payoff_scope"]
-        assert pmap["fs_none"]["payoff_scope"] == ""  # 允许空串
-        assert pmap["fs_owned"]["owner"] == "林越"  # 已有 owner 不覆盖
-
-
-def test_migrate_legacy_status_strings_and_field_renames():
-    """历史 status 字符串归一（planted→open / paid→consumed）；resolved_at_ch/_resolved_by 更名。"""
-    with tempfile.TemporaryDirectory() as td:
-        db = _mk_db(td)
-        _write_fs(db, [
-            {"id": "fs_p", "status": "planted"},
-            {"id": "fs_paid", "status": "paid", "resolved_at_ch": 9, "_resolved_by": "foreshadower"},
-            {"id": "fs_susp", "status": "suspended"},
-        ])
-        errs, warns, mig = dsv.check_foreshadow_lifecycle(db, auto_migrate=True)
-        assert mig is True and errs == [], (errs, warns)
-        pmap = {p["id"]: p for p in _read_fs(db)["promises"]}
-        assert pmap["fs_p"]["status"] == "open"
-        assert pmap["fs_paid"]["status"] == "consumed"
-        assert pmap["fs_paid"]["consumed_at_ch"] == 9
-        assert pmap["fs_paid"]["_consumed_by"] == "foreshadower"
-        assert "resolved_at_ch" not in pmap["fs_paid"] and "_resolved_by" not in pmap["fs_paid"]
-        assert pmap["fs_susp"]["status"] == "suspended"  # 已是三态·不动
-
-
-def test_migrate_idempotent_second_run_no_change():
-    """幂等：迁移后再跑 --auto-migrate 零变化（不再落盘、不再报 MIGRATED）。"""
-    with tempfile.TemporaryDirectory() as td:
-        db = _mk_db(td)
-        _write_fs(db, [{"id": "fs_1", "resolved": True, "due_by": 30}])
-        _, _, mig1 = dsv.check_foreshadow_lifecycle(db, auto_migrate=True)
-        assert mig1 is True
-        snapshot = (db / "伏笔表.json").read_text(encoding="utf-8")
-        errs2, warns2, mig2 = dsv.check_foreshadow_lifecycle(db, auto_migrate=True)
-        assert mig2 is False and errs2 == []
-        assert not any("MIGRATED" in w for w in warns2)
-        assert (db / "伏笔表.json").read_text(encoding="utf-8") == snapshot
-
-
-def test_migrate_does_not_touch_secrets():
-    """secrets[] 的 hidden/revealed 语义（明暗线隔离机制）不被 promises 迁移误改。"""
+def test_validation_does_not_touch_secrets_or_file():
+    """校验只读整个文件，secrets 的独立状态语义不参与 promises 契约。"""
     with tempfile.TemporaryDirectory() as td:
         db = _mk_db(td)
         secrets = [{"id": "SEC_1", "secret": "校长是怪谈本体", "status": "hidden",
                     "reveal_at_cluster": "cluster_009"}]
-        _write_fs(db, [{"id": "fs_1", "resolved": False}], secrets=secrets)
-        dsv.check_foreshadow_lifecycle(db, auto_migrate=True)
-        after = _read_fs(db)
-        assert after["secrets"] == secrets  # 一字不动
+        path = _write_fs(db, [{"id": "fs_1", "status": "open", "owner": "writer",
+                               "payoff_scope": ""}], secrets=secrets)
+        before = path.read_bytes()
+        errs, warns = dsv.check_foreshadow_lifecycle(db)
+        assert errs == [] and warns == []
+        assert path.read_bytes() == before
+
+
+def test_missing_fields_are_contract_errors_and_never_filled():
+    """status/owner/payoff_scope 缺失时统一报错且不补默认值。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        path = _write_fs(db, [{"id": "fs_legacy", "resolved": False}])
+        before = path.read_bytes()
+        errs, _ = dsv.check_foreshadow_lifecycle(db)
+        assert any("FORESHADOW_FIELD_MISSING" in e for e in errs), errs
+        assert any("FORESHADOW_STATUS_INVALID" in e for e in errs), errs
+        assert path.read_bytes() == before
+
+
+def test_owner_and_payoff_scope_types_are_strict():
+    with tempfile.TemporaryDirectory() as td:
+        db = _mk_db(td)
+        _write_fs(db, [{"id": "fs_bad", "status": "open", "owner": "", "payoff_scope": []}])
+        errs, _ = dsv.check_foreshadow_lifecycle(db)
+        assert any("FORESHADOW_OWNER_INVALID" in e for e in errs), errs
+        assert any("FORESHADOW_PAYOFF_SCOPE_INVALID" in e for e in errs), errs
 
 
 # ═══════════ 2. 枚举白名单校验 ═══════════
@@ -150,17 +97,8 @@ def test_invalid_status_reports_error():
     with tempfile.TemporaryDirectory() as td:
         db = _mk_db(td)
         _write_fs(db, [{"id": "fs_bad", "status": "half_done"}])
-        errs, _, _ = dsv.check_foreshadow_lifecycle(db, auto_migrate=False)
+        errs, _ = dsv.check_foreshadow_lifecycle(db)
         assert any("FORESHADOW_STATUS_INVALID" in e and "fs_bad" in e for e in errs), errs
-
-
-def test_missing_status_without_migrate_reports_error():
-    """缺 status 且未跑 --auto-migrate → 同样报错（required 不降 advisory）。"""
-    with tempfile.TemporaryDirectory() as td:
-        db = _mk_db(td)
-        _write_fs(db, [{"id": "fs_legacy", "resolved": False}])
-        errs, _, _ = dsv.check_foreshadow_lifecycle(db, auto_migrate=False)
-        assert any("FORESHADOW_STATUS_INVALID" in e for e in errs), errs
 
 
 def test_valid_tristate_clean():
@@ -172,12 +110,12 @@ def test_valid_tristate_clean():
             {"id": "b", "status": "suspended", "owner": "writer", "payoff_scope": ""},
             {"id": "c", "status": "consumed", "owner": "writer", "payoff_scope": ""},
         ])
-        errs, _, mig = dsv.check_foreshadow_lifecycle(db, auto_migrate=True)
-        assert errs == [] and mig is False
+        errs, warns = dsv.check_foreshadow_lifecycle(db)
+        assert errs == [] and warns == []
 
 
 def test_post_edit_revalidate_catches_invalid_status():
-    """/db 手改把 status 改成非法值 → --post-edit 重校验 exit 2（手改不静默迁移）。"""
+    """/db 手改把 status 改成非法值后，单文件重校验直接阻断。"""
     with tempfile.TemporaryDirectory() as td:
         db = _mk_db(td)
         p = _write_fs(db, [{"id": "fs_x", "status": "resolved"}])  # 手改残留旧口径
@@ -300,7 +238,8 @@ def test_suspended_terminal_payoff_transitions_to_consumed():
         ss._apply_foreshadower_payoffs(proj, "cluster_001")
         p = _read_fs(db)["promises"][0]
         assert p["status"] == "consumed"
-        assert p["consumed_at_ch"] == 3 and p["_consumed_by"] == "foreshadower"
+        assert p["consumed_at_cluster"] == "cluster_001"
+        assert p["_consumed_by"] == "foreshadower"
 
 
 if __name__ == "__main__":

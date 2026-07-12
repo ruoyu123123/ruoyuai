@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-plan_tracker.py — 多步命令的强制规划与执行追踪系统（Phase 1）
+plan_tracker.py — 多步命令的强制规划与执行追踪系统
 
 设计目标
 --------
 让小说系统的多步命令（cluster-save-state / cluster-write / distill-style /
 outline）在 Agent 或命令执行时**无法跳步**：
 
-🔴 v26+: 创作主链只接受 cluster mode；plan key 表示 cluster key / cluster id。
+创作主链只接受 cluster mode；plan key 表示 cluster key / cluster id。
 
 - 命令开始前必须 create 一个 plan，拿到 plan_id；
 - 每完成一步必须 step <plan_id> --n N，脚本校验 expected_outputs；
@@ -24,7 +24,7 @@ outline）在 Agent 或命令执行时**无法跳步**：
 防篡改 attestation（P1-1）
 -------------------------
 plan_tracker 是 plan JSON 的【唯一合法写入者】。每次合法写盘都把 plan 规范化
-内容的 SHA-256 写进 `plan["_attestation"]`；每次写前读校验，不符 → 阻断。
+内容的 HMAC-SHA256 写进 `plan["_attestation"]`；每次写前读校验，不符即阻断。
 任何不经 plan_tracker 的修改（Agent 直接 Edit / 旁路脚本 / prompt 注入写盘，
 典型是「伪造 step 状态骗过跳步防御」）都会被 verify_attestation 抓出。
 合法手动改 plan 后用 `reattest` 重新盖章。详见下方 attestation 段注释。
@@ -110,7 +110,8 @@ STATUS_ABORTED = "aborted"
 
 KNOWN_COMMANDS = (
     "distill-style",
-    "distill-character",  # 🔴 2026-06-27 C13：角色蒸馏纳入 plan 强制规划层（6 步·PLAN_ID/STEP/attestation）
+    "distill-style-skillopt",
+    "distill-character",
     "outline",
     "cluster-write",  # cluster 级写作流水线 7 步
     "cluster-save-state",  # cluster 级 save-state
@@ -167,11 +168,7 @@ class PlanTamperedError(Exception):
     """plan JSON 内容与 attestation 不符 —— 被 plan_tracker 之外的途径改过。"""
 
 
-# 2026-05-29 修【安全·伪造】：原 attestation 用纯 SHA-256(规范化JSON)，攻击者改
-# 内容后自己重算 hash 写回即过校验 —— 防篡改形同虚设。改用 HMAC-SHA256 + 机器
-# 本地密钥（ATTEST_KEY_PATH）：攻击者没有密钥就无法伪造有效 attestation。
-# 向后兼容：旧的纯 sha256 attestation 在 verify 时若 HMAC 不符但旧式 sha256 符合，
-# 视为合法并由调用方自动 reattest（warn 一次），避免现存 plan 全部失效。
+# attestation 使用机器本地密钥生成 HMAC-SHA256。
 
 _ATTEST_KEY_CACHE: bytes | None = None
 
@@ -212,11 +209,6 @@ def _compute_attestation(plan: dict) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def _compute_legacy_sha256(plan: dict) -> str:
-    """旧式纯 SHA-256 attestation（仅用于向后兼容校验，不再用于盖章）。"""
-    return hashlib.sha256(_canonical_plan_bytes(plan)).hexdigest()
-
-
 def _attest(plan: dict) -> dict:
     """给 plan 盖章（原地写入 _attestation 字段）。所有合法写盘前调用。"""
     plan[ATTESTATION_KEY] = {
@@ -228,13 +220,7 @@ def _attest(plan: dict) -> dict:
 
 
 def verify_attestation(plan: dict) -> str:
-    """校验 plan dict 的 attestation。
-    返回 "ok" / "legacy" / "tampered" / "unattested"。
-      ok        = HMAC 匹配（当前格式）
-      legacy    = HMAC 不符但旧式纯 sha256 符合 → 向后兼容，调用方应自动 reattest
-      tampered  = 既不匹配 HMAC 也不匹配旧 sha256 → 真篡改
-      unattested= 旧 plan（本功能引入前创建）—— 向后兼容，调用方不应阻断。
-    2026-05-29 修：用 hmac.compare_digest 做常量时间比较。"""
+    """返回 `ok`、`tampered` 或 `unattested`。"""
     if not isinstance(plan, dict):
         return "unattested"
     att = plan.get(ATTESTATION_KEY)
@@ -243,9 +229,6 @@ def verify_attestation(plan: dict) -> str:
     stored = att["sha256"]
     if hmac.compare_digest(stored, _compute_attestation(plan)):
         return "ok"
-    # 向后兼容：旧式纯 sha256 命中 → legacy（合法，需自动 reattest）
-    if hmac.compare_digest(stored, _compute_legacy_sha256(plan)):
-        return "legacy"
     return "tampered"
 
 
@@ -265,41 +248,12 @@ def _save_plan(path: Path, plan: dict) -> None:
 
 
 def _load_plan(path: Path, *, for_write: bool = False) -> dict:
-    """plan 专用读盘 + 防篡改校验。
-      for_write=True （step/end/abort 写前读）：tampered → raise PlanTamperedError
-      for_write=False（status/get_plan 只读） ：tampered → 仅 stderr 警告，不阻断
-      legacy（旧式纯 sha256 attestation）：2026-05-29 修 —— 合法但需迁移，自动
-              用 HMAC 重新盖章并 warn 一次，避免现存 plan 在 HMAC 切换后全部失效。
-      unattested（旧 plan）：两种模式都放行（向后兼容），下次写入时自动盖章。
-    """
+    """读取 plan；写路径遇到任何无效签名都阻断。"""
     plan = _load_json(path)
     if not isinstance(plan, dict):
         return plan
     state = verify_attestation(plan)
-    if state == "legacy":
-        # 2026-06-17 安全修复（HMAC #4·非对称硬化）：legacy=旧式纯 sha256·而 _compute_legacy_sha256
-        # 是**公开无密钥**算法 → 攻击者可篡改 plan（伪造 step 状态）后公开重算盖章绕过防御
-        # （forged-legacy 与 legit-legacy 都返回 legacy·无密钥校验器无法区分）。写路径信任无密钥
-        # hash = 信任伪造 → 同 tampered 拦。合法老 plan（HMAC 迁移 2026-05-29 已满·终态 7 天 cleanup·
-        # 极罕见）走 `plan_tracker.py reattest <plan_id>` 升级恢复。
-        if for_write:
-            raise PlanTamperedError(
-                f"{_TAMPER_MSG}\n  文件：{path}\n"
-                f"  （legacy 旧式 sha256·写路径不信任无密钥盖章[可被公开重算伪造]·"
-                f"合法老 plan 跑 `plan_tracker.py reattest <plan_id>` 升级 HMAC）")
-        # 读路径 tolerant：自动迁移 HMAC（观测平滑·legit 老 plan 升级·不破坏 get_plan/监控/GUI）
-        print(f"[plan_tracker] ℹ️ 旧式 sha256 attestation 自动迁移为 HMAC：{path}")
-        _save_plan(path, plan)
-    elif state == "unattested":
-        # 2026-06-17 安全修复（HMAC #4）：unattested=无 _attestation 字段 → 删 _attestation 即可绕过
-        # 校验（删字段伪造通道）。写路径同 tampered 拦；读路径放行（真 unattested 老 plan 观测兼容·
-        # 新建 plan create 时 _save_plan 已盖 HMAC·不受影响）。
-        if for_write:
-            raise PlanTamperedError(
-                f"{_TAMPER_MSG}\n  文件：{path}\n"
-                f"  （unattested 无 attestation 字段·写路径不放行无章 plan[删字段伪造通道]·"
-                f"合法老 plan 跑 `plan_tracker.py reattest <plan_id>` 盖章）")
-    elif state == "tampered":
+    if state != "ok":
         full_msg = f"{_TAMPER_MSG}\n  文件：{path}"
         if for_write:
             raise PlanTamperedError(full_msg)
@@ -393,8 +347,9 @@ def cluster_id_from_key(key: str | None) -> str | None:
     return norm if str(norm).startswith("cluster_") else f"cluster_{norm}"
 
 
-def _substitute(text: str, project: str, key: str | None) -> str:
-    """替换 {project} / {key} / {cluster_id} / {next_key} 占位符。
+def _substitute(text: str, project: str, key: str | None,
+                plan_id: str | None = None) -> str:
+    """替换项目、cluster 与 plan 运行时占位符。
 
     cluster-only 契约下，plan 模板不再使用章号占位符。若模板仍含 `{ch...}`，
     创建 plan 直接失败，避免把旧单章路径静默替换为空。
@@ -403,6 +358,7 @@ def _substitute(text: str, project: str, key: str | None) -> str:
     if not isinstance(text, str):
         return text
     out = text.replace("{project}", project or "")
+    out = out.replace("{plan_id}", plan_id or "{plan_id}")
     if re.search(r"\{ch(?:[+\-]\d+)?(?::03d)?\}", out):
         raise ValueError(f"[plan_tracker] 模板仍含旧章号占位符，cluster-only 禁止使用：{text}")
 
@@ -428,13 +384,15 @@ def _substitute(text: str, project: str, key: str | None) -> str:
     return out
 
 
-def _walk_substitute(node: Any, project: str, key: str | None) -> Any:
+def _walk_substitute(node: Any, project: str, key: str | None,
+                     plan_id: str | None = None) -> Any:
     if isinstance(node, str):
-        return _substitute(node, project, key)
+        return _substitute(node, project, key, plan_id)
     if isinstance(node, list):
-        return [_walk_substitute(x, project, key) for x in node]
+        return [_walk_substitute(x, project, key, plan_id) for x in node]
     if isinstance(node, dict):
-        return {k: _walk_substitute(v, project, key) for k, v in node.items()}
+        return {k: _walk_substitute(v, project, key, plan_id)
+                for k, v in node.items()}
     return node
 
 
@@ -474,11 +432,10 @@ def create_plan(
     cluster_key_required = command in {"cluster-write", "cluster-save-state"}
     key = normalize_cluster_key(key, required=cluster_key_required)
 
-    template = load_template(command)
-    plan = _walk_substitute(deepcopy(template), project, key)
-
     plan_id = make_plan_id(command, project, key)
-    now = datetime.now().isoformat(timespec="seconds")
+    template = load_template(command)
+    plan = _walk_substitute(deepcopy(template), project, key, plan_id)
+    now = datetime.now().isoformat(timespec="microseconds")
 
     plan["id"] = plan_id
     plan["command"] = command
@@ -576,14 +533,220 @@ def _find_step(plan: dict, n) -> dict:
     raise ValueError(f"[plan_tracker] plan 中没有第 {n} 步")
 
 
-def _verify_declared_report(project: str, declared: str) -> bool:
-    """v28 程序驱动（2026-06-10）：plan 模板 steps[].judge_report_path 显式声明产物路径
-    → 直接验该文件存在——JudgeReport 命名学从下方 _verify_agent_report 的 if/elif
-    路径推算**外移到模板字段**（内嵌命名变体是回归高发区·v27 已修过失配）。
+def _verify_replica_receipt(path: Path, *, plan_id: str | None,
+                            step_n=None) -> bool:
+    """校验 replica writer 直接回执或已验证的 SkillOpt 批次回执。"""
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(report, dict) or report.get("schema_version") != "novel-replica-writer.receipt.v1":
+        return False
+    if report.get("agent") != "novel-replica-writer" or report.get("completed") is not True:
+        return False
+    if plan_id and report.get("plan_id") != plan_id:
+        return False
+    if step_n is not None and str(report.get("step")) != str(step_n):
+        return False
 
-    支持 <round> 等角括号占位 → 文件名通配（reading-reflector 多轮任一存在即过）。
-    相对路径以 project_root 为基准；项目找不到 → False，required 产物不能降级。
-    """
+    mode = report.get("mode")
+    if mode == "style-replica-draft":
+        cluster_id = cluster_id_from_key(report.get("cluster_id"))
+        files = report.get("scene_files")
+        if not cluster_id or not isinstance(files, list) or not files:
+            return False
+        if report.get("job_key") and not report.get("candidate_skill_digest"):
+            return False
+        return all(
+            isinstance(name, str) and Path(name).name == name
+            and name.startswith("scene_") and name.endswith(".txt")
+            and (path.parent / name).is_file()
+            for name in files
+        )
+    if mode == "voice-sample-draft":
+        files = report.get("sample_files")
+        source_clusters = report.get("source_clusters")
+        if not report.get("character_id") or not isinstance(files, list) or not files:
+            return False
+        if not isinstance(source_clusters, list) or len(set(source_clusters)) < 2:
+            return False
+        if not all(cluster_id_from_key(item) for item in source_clusters):
+            return False
+        return all(
+            isinstance(name, str) and Path(name).name == name
+            and name.startswith("sample_") and name.endswith(".txt")
+            and (path.parent / name).is_file()
+            for name in files
+        )
+    if mode == "style-replica-batch":
+        jobs = report.get("jobs")
+        if not isinstance(jobs, list) or not jobs or report.get("job_count") != len(jobs):
+            return False
+        for job in jobs:
+            if not isinstance(job, dict) or not job.get("job_key"):
+                return False
+            source = Path(str(job.get("agent_report") or ""))
+            if not source.is_absolute():
+                source = path.parent / source
+            if not _verify_replica_receipt(source, plan_id=plan_id):
+                return False
+            try:
+                source_data = json.loads(source.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return False
+            if source_data.get("job_key") != job.get("job_key"):
+                return False
+            if source_data.get("cluster_id") != job.get("cluster_id"):
+                return False
+            if source_data.get("candidate_skill_digest") != job.get("candidate_skill_digest"):
+                return False
+        return True
+    return False
+
+
+def _verify_state_tracker_receipt(path: Path, *, project_root: Path,
+                                  plan_id: str | None, step_n=None) -> bool:
+    """校验 state-tracker 回执及其绑定的 canonical state delta。"""
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    required_keys = {
+        "schema_version", "agent", "plan_id", "step", "cluster_id",
+        "plan_created_at", "completed", "delta",
+    }
+    if not isinstance(report, dict) or set(report) != required_keys:
+        return False
+    if report.get("schema_version") != "novel-state-tracker.receipt.v1":
+        return False
+    if report.get("agent") != "novel-state-tracker" or report.get("completed") is not True:
+        return False
+    if plan_id and report.get("plan_id") != plan_id:
+        return False
+    if step_n is not None and str(report.get("step")) != str(step_n):
+        return False
+    try:
+        plan = get_plan(str(plan_id)) if plan_id else None
+    except FileNotFoundError:
+        return False
+    if not isinstance(plan, dict) or report.get("plan_created_at") != plan.get("created_at"):
+        return False
+    cluster_id = str(report.get("cluster_id") or "")
+    if not re.fullmatch(r"cluster_[0-9]{3,}", cluster_id):
+        return False
+    delta = report.get("delta")
+    if not isinstance(delta, dict) or set(delta) != {"path", "sha256"}:
+        return False
+    relative = f"_数据库/.wal/{cluster_id}_state_delta.json"
+    if delta.get("path") != relative:
+        return False
+    digest = delta.get("sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return False
+    try:
+        import cluster_state_delta
+        delta_path, payload = cluster_state_delta.load_delta(project_root, cluster_id)
+        raw = delta_path.read_bytes()
+    except (ImportError, OSError, ValueError, json.JSONDecodeError):
+        return False
+    if payload.get("cluster_id") != cluster_id:
+        return False
+    return hmac.compare_digest(hashlib.sha256(raw).hexdigest(), digest)
+
+
+def _verify_post_state_receipt(path: Path, *, project_root: Path,
+                               plan_id: str | None, step_n=None,
+                               cluster_id: str | None = None) -> bool:
+    """重新验证 step 11 动态产物，并与落盘聚合回执逐字段对比。"""
+    if not plan_id or step_n is None or not cluster_id:
+        return False
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+        import cluster_post_state_receipt
+        expected = cluster_post_state_receipt.build_receipt(
+            project_root, cluster_id, plan_id, str(step_n),
+        )
+    except (ImportError, OSError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(report, dict) and report == expected
+
+
+def _verify_writer_self_eval_receipt(path: Path, *, cluster_id: str | None) -> bool:
+    """校验 save_state 对 canonical cluster changes 写出的自评收据。"""
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    canonical = cluster_id_from_key(cluster_id)
+    return (
+        isinstance(report, dict)
+        and report.get("cluster_id") == canonical
+        and report.get("contract") == "cluster_writer_self_eval"
+        and report.get("objective_state_applied") is False
+        and report.get("source") == (
+            f"章节/{canonical}_draft/{canonical}_changes.json" if canonical else None
+        )
+        and isinstance(report.get("waiver_count"), int)
+        and report.get("waiver_count") >= 0
+        and isinstance(report.get("self_eval_fields"), list)
+    )
+
+
+def _verify_writer_truth_report(path: Path, *, cluster_id: str | None) -> bool:
+    """校验 writer truth-check 是当前 cluster 的通过报告。"""
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    canonical = cluster_id_from_key(cluster_id)
+    return (
+        isinstance(report, dict)
+        and report.get("schema_version") == "1.0.cluster"
+        and report.get("judge_id") == "writer-truth-check"
+        and report.get("cluster_id") == canonical
+        and report.get("verdict") == "pass"
+        and report.get("lie_count") == 0
+        and report.get("lies_detected") == []
+        and isinstance(report.get("specific_findings"), dict)
+    )
+
+
+def _verify_foreshadow_state_receipt(path: Path, *, cluster_id: str | None) -> bool:
+    """校验伏笔注册与 payoff required 子步骤的完成收据。"""
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    canonical = cluster_id_from_key(cluster_id)
+    count_fields = (
+        "brief_planned", "brief_registered", "payoff_checked",
+        "terminal_applied", "progressive_recorded", "rejection_count",
+    )
+    return (
+        isinstance(report, dict)
+        and report.get("schema_version") == 1
+        and report.get("cluster_id") == canonical
+        and report.get("contract") == "cluster_foreshadow_state"
+        and report.get("completed") is True
+        and all(isinstance(report.get(key), int) and report[key] >= 0
+                for key in count_fields)
+        and isinstance(report.get("sources"), list)
+        and len(report["sources"]) == 2
+    )
+
+
+def _output_is_fresh_for_plan(path: Path, plan: dict) -> bool:
+    """动态 required 产物不得早于当前 plan。"""
+    try:
+        created_at = datetime.fromisoformat(str(plan["created_at"])).timestamp()
+        return path.stat().st_mtime >= created_at
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+
+
+def _verify_declared_report(project: str, declared: str, *, agent_name: str | None = None,
+                            plan_id: str | None = None, step_n=None) -> bool:
+    """校验模板声明的 Agent 报告；专用回执同时验证源产物绑定。"""
     project_root = resolve_project_root(project) if project else None
     if not project_root:
         return False
@@ -592,9 +755,16 @@ def _verify_declared_report(project: str, declared: str) -> bool:
     p = Path(raw)
     if not p.is_absolute():
         p = project_root / raw
-    if "*" in p.name:
-        return p.parent.exists() and bool(list(p.parent.glob(p.name)))
-    return p.exists()
+    paths = list(p.parent.glob(p.name)) if "*" in p.name and p.parent.exists() else [p]
+    paths = [candidate for candidate in paths if candidate.is_file()]
+    if agent_name == "novel-replica-writer":
+        return any(_verify_replica_receipt(candidate, plan_id=plan_id, step_n=step_n)
+                   for candidate in paths)
+    if agent_name == "novel-state-tracker":
+        return any(_verify_state_tracker_receipt(
+            candidate, project_root=project_root, plan_id=plan_id, step_n=step_n,
+        ) for candidate in paths)
+    return bool(paths)
 
 
 def _verify_agent_report(project: str, agent_name: str, cluster_id: str | None) -> bool:
@@ -679,9 +849,10 @@ def _apply_touch_outputs(plan: dict, step: dict, project: str | None) -> list[st
 
 
 def _verify_outputs(plan: dict, step: dict, project: str | None) -> tuple[list[str], list[str]]:
-    """校验 expected_outputs 是否存在。
+    """校验 expected_outputs 的存在性与专用内容合同。
 
-    返回 (verified, missing)。绝对路径直接判断；相对路径以项目根为基准。
+    返回 (verified, missing)。相对路径以项目根为基准；动态回执还必须属于
+    当前 cluster、通过本步语义校验且不早于当前 plan。
     """
     expected = step.get("expected_outputs", []) or []
     verified: list[str] = []
@@ -694,7 +865,30 @@ def _verify_outputs(plan: dict, step: dict, project: str | None) -> tuple[list[s
         p = Path(raw)
         if not p.is_absolute() and project_root is not None:
             p = project_root / raw
-        if p.exists():
+        valid = p.exists()
+        if valid and p.name.endswith("_state_tracker_receipt.json"):
+            valid = bool(project_root) and _verify_state_tracker_receipt(
+                p, project_root=project_root, plan_id=plan.get("id"),
+                step_n=step.get("n"),
+            )
+        elif valid and p.name.endswith("_post_state_receipt.json"):
+            valid = bool(project_root) and _verify_post_state_receipt(
+                p, project_root=project_root, plan_id=plan.get("id"),
+                step_n=step.get("n"), cluster_id=plan.get("cluster_id"),
+            )
+        elif valid and p.name.endswith("_apply_cluster.json"):
+            valid = _output_is_fresh_for_plan(p, plan) and _verify_writer_self_eval_receipt(
+                p, cluster_id=plan.get("cluster_id"),
+            )
+        elif valid and p.name.endswith("_writer-truth-check.json"):
+            valid = _output_is_fresh_for_plan(p, plan) and _verify_writer_truth_report(
+                p, cluster_id=plan.get("cluster_id"),
+            )
+        elif valid and p.name.endswith("_foreshadow_state_receipt.json"):
+            valid = _output_is_fresh_for_plan(p, plan) and _verify_foreshadow_state_receipt(
+                p, cluster_id=plan.get("cluster_id"),
+            )
+        if valid:
             verified.append(str(p).replace("\\", "/"))
         else:
             missing.append(str(p).replace("\\", "/"))
@@ -828,9 +1022,15 @@ def end_plan(plan_id: str) -> dict:
                     elif isinstance(jrp_sec, str) and jrp_sec:
                         declared_sec = jrp_sec
                     if declared:
-                        found = _verify_declared_report(proj, declared)
+                        found = _verify_declared_report(
+                            proj, declared, agent_name=agent_name,
+                            plan_id=plan_id, step_n=n,
+                        )
                         if not found and declared_sec:
-                            found = _verify_declared_report(proj, declared_sec)
+                            found = _verify_declared_report(
+                                proj, declared_sec, agent_name=agent_name,
+                                plan_id=plan_id, step_n=n,
+                            )
                     else:
                         found = _verify_agent_report(proj, agent_name, cluster_id)
                     if not found:
@@ -955,7 +1155,7 @@ def find_active_plans() -> list[dict]:
             result.append({
                 "path": str(f).replace("\\", "/"),
                 "plan": d,
-                "tampered": verify_attestation(d) == "tampered",  # P1-1
+                "tampered": verify_attestation(d) != "ok",
             })
         except Exception:
             # 2026-06-13 修：损坏 JSON / IO 错误不再静默消失——append corrupt
@@ -996,7 +1196,7 @@ def list_plans(active_only: bool = False) -> list[dict]:
             "active": is_active,
             "completed": is_done,
             "aborted": is_aborted,
-            "tampered": verify_attestation(d) == "tampered",  # P1-1
+            "tampered": verify_attestation(d) != "ok",
             "path": str(f).replace("\\", "/"),
         })
     return result
@@ -1076,9 +1276,8 @@ def _cli_status(args: argparse.Namespace) -> int:
     att_state = verify_attestation(plan)  # P1-1
     att_label = {
         "ok": "✓ 有效",
-        "legacy": "↻ 旧式 sha256（合法，下次写入自动迁移为 HMAC）",  # 2026-05-29 修
         "tampered": "⚠️ 被篡改！内容与 attestation 不符 —— 跑 reattest 或排查注入",
-        "unattested": "— 未盖章（旧 plan，下次写入自动盖章）",
+        "unattested": "⚠️ 未盖章 —— 必须显式 reattest",
     }.get(att_state, att_state)
     print(f"[plan_tracker] {args.plan_id}")
     print(f"  command : {plan.get('command')}")
@@ -1149,12 +1348,11 @@ def _cli_verify(args: argparse.Namespace) -> int:
     labels = {
         "ok": "✓ attestation 有效，plan 未被篡改",
         "tampered": "⚠️ 被篡改 —— plan 内容与 attestation 不符",
-        "unattested": "— 未盖章（旧 plan，本功能引入前创建）",
+        "unattested": "⚠️ 未盖章 —— 必须显式 reattest",
         "not_found": "找不到该 plan",
     }
     print(f"[plan_tracker verify] {args.plan_id}: {labels.get(state, state)}")
-    # 退出码：ok/unattested=0，tampered=2，not_found=1
-    return {"ok": 0, "unattested": 0, "tampered": 2, "not_found": 1}.get(state, 1)
+    return {"ok": 0, "unattested": 2, "tampered": 2, "not_found": 1}.get(state, 1)
 
 
 def _cli_reattest(args: argparse.Namespace) -> int:

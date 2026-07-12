@@ -39,17 +39,11 @@ def _reload_se(mode):
 
 
 def _load_chapter(book, ch):
-    """读真原文章节（剥离 changes JSON 尾巴）。"""
-    import chapter_io as cio
+    """读真原文章节（原文/ 下均为纯正文 txt）。"""
     p = _ROOT / "workspace" / "styles" / book / "原文" / f"{ch}.txt"
     if not p.exists():
         return None
-    raw = p.read_text(encoding="utf-8")
-    for sep in cio.CHANGES_SEPARATORS:
-        if sep in raw:
-            raw = raw.split(sep)[0].rstrip()
-            break
-    return raw
+    return p.read_text(encoding="utf-8")
 
 
 def _load_cluster(book, count=6, start=10):
@@ -57,18 +51,10 @@ def _load_cluster(book, count=6, start=10):
     d = _ROOT / "workspace" / "styles" / book / "原文"
     if not d.is_dir():
         return None
-    import chapter_io as cio
     files = [f for f in sorted(d.glob("第*章.txt")) if "全本" not in f.name][start:start + count]
     if len(files) < 4:
         return None
-    parts = []
-    for f in files:
-        raw = f.read_text(encoding="utf-8")
-        for sep in cio.CHANGES_SEPARATORS:
-            if sep in raw:
-                raw = raw.split(sep)[0].rstrip()
-                break
-        parts.append(raw)
+    parts = [f.read_text(encoding="utf-8") for f in files]
     return "\n\n".join(parts)
 
 
@@ -160,6 +146,10 @@ def _mk_project(tmp: Path, style: dict | None) -> Path:
     (db / "进度.json").write_text(json.dumps(prog, ensure_ascii=False), encoding="utf-8")
     (db / "人物卡.json").write_text(
         json.dumps({"characters": [{"id": "m", "name": "主角", "role": "主角"}]},
+                   ensure_ascii=False), encoding="utf-8")
+    # cluster_001 无历史 cluster：账本必须存在（cluster_summary_reader 硬校验），clusters 留空。
+    (db / "故事块摘要.json").write_text(
+        json.dumps({"schema_version": "v2.cluster", "clusters": [], "volume_summaries": []},
                    ensure_ascii=False), encoding="utf-8")
     if style is not None:
         (db / "作者风格.json").write_text(json.dumps(style, ensure_ascii=False), encoding="utf-8")

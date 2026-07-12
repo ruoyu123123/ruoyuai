@@ -13,6 +13,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cluster_summary_fixtures import write_cluster_summary
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import build_manifest as bm  # noqa: E402
 
@@ -28,6 +30,7 @@ _CLUSTERS = [
 def _mk_project(tmp: Path, *, clusters=None, pacer=None) -> Path:
     db = tmp / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
+    write_cluster_summary(tmp, [])
     if clusters is not None:
         (db / "事件簇.json").write_text(
             json.dumps({"clusters": clusters}, ensure_ascii=False), encoding="utf-8")

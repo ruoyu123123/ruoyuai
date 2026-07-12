@@ -4,7 +4,7 @@
 v2 cluster 迁移时，多处代码把「章号」直接当成「cluster 号」机械拼成
 `f"cluster_{ch:03d}"`。但一个 cluster 通常含 2-6 章，章号 ≠ cluster 号
 （第 7 章极可能属于 cluster_002 而非 cluster_007）。这个语义错误散布在
-save_state / migrate_data_model_v2 / world_evolution_engine /
+save_state / world_evolution_engine /
 character_lazy_spawn / state_tracker / build_manifest 等处，导致迁移后
 伏笔 setup_cluster / 角色 first_appear_cluster / 道具 obtained_cluster
 等正典字段普遍指向错误 cluster。

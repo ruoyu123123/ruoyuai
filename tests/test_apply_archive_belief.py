@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""apply_archive.py belief 回库测试 — 🔴 2026-06-29 角色信息差(per-character belief)·witness 回库。
+"""apply_archive.py 角色信念回库测试。
 
 钉死 apply_belief_updates：archivist 读正文 + scene participants 产 archive.belief_updates →
 确定性 append 进 character_belief_ledger.json（SymbolicToM arXiv:2306.00924 信念只沿在场传播）：
@@ -7,7 +7,7 @@
   · characters[char_id].known_facts 按 fact_id 去重 append·已有则更新 can_speak/source（不重复 append）
   · unaware_of：学到即移除（已知不再 unaware）；显式 belief_unaware 标记（保守·learn 优先）
   · 幂等：re-apply 不重复 append、不写盘churn
-  · 默认安全/向后兼容：archive 无 belief_updates → no-op 不报错、不建 ledger 文件
+  · archive 无 belief_updates → 零变更且不建 ledger 文件
   · dry-run 不写盘
 """
 import json
@@ -42,7 +42,9 @@ def _mk_project(tmp: Path):
 
 def _write_archive(db: Path, key, obj):
     p = db / ".wal" / f"cluster_{key}_archive.json"
-    p.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    payload = dict(obj)
+    payload.setdefault("cluster_id", f"cluster_{key}")
+    p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return p
 
 
@@ -200,7 +202,7 @@ def test_first_revealed_cluster_stable_across_reapply():
 
 
 def test_no_belief_updates_noop_backward_compat():
-    """archive 无 belief_updates（旧数据/scene 无 participants）→ no-op·不报错·不建 ledger 文件。"""
+    """无可靠信念变化时不创建信念账本。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         _write_archive(db, "001", {"characters": [{"id": "C_PROT", "name": "伊莱", "tier": "core"}]})

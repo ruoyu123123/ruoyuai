@@ -1,213 +1,191 @@
-"""style_drift_scan.py — 跨章风格漂移扫描（v17.5 / P3.3）
+"""扫描多个完整故事块的风格锚点频率与开场类型分布。"""
 
-扫描历史章节的实际锚点频率、opening/ending type 分布，与蒸馏库 anchor_strategy
-对比。发现违规（如"绯红月光每3章不超过2次"被违反）则告警。
+from __future__ import annotations
 
-用法：
-    python style_drift_scan.py <项目路径> [--last-n 10] [--strict]
-
-输出：
-    锚点频率表 + 违规清单 + 建议
-"""
-
-import sys
+import argparse
 import json
 import re
+import sys
+from collections import Counter
 from pathlib import Path
-from collections import Counter, defaultdict
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # noqa: E402
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
+def load_json(path: Path, default=None):
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return default
 
 
-def find_chapter_files(project_root: Path) -> list[tuple[int, Path]]:
-    """返回 [(ch_num, path), ...] 排序后的章节文件列表。"""
-    out = []
-    # 嵌套布局优先
-    for d in project_root.glob("章节/第*章"):
-        m = re.match(r"第(\d+)章", d.name)
-        if m:
-            ch = int(m.group(1))
-            for f in d.glob(f"第{ch:03d}章*.txt"):
-                out.append((ch, f))
-                break
-            else:
-                for f in d.glob(f"第{ch}章*.txt"):
-                    out.append((ch, f))
-                    break
-    # 平铺布局兜底
-    if not out:
-        for f in project_root.glob("第*章*.txt"):
-            m = re.match(r"第(\d+)章", f.name)
-            if m:
-                out.append((int(m.group(1)), f))
-    out.sort(key=lambda x: x[0])
-    return out
-
-
-def scan_anchor_frequency(chapters: list[tuple[int, Path]],
-                          anchors_to_track: list[str]) -> dict[str, dict[int, int]]:
-    """返回 {anchor: {ch_num: count}}。"""
-    result = {a: {} for a in anchors_to_track}
-    for ch, path in chapters:
-        text = path.read_text(encoding="utf-8")
-        # 截到 CHANGES 前
-        body_end = text.find("---CHANGES")
-        body = text[:body_end] if body_end > 0 else text
-        for a in anchors_to_track:
-            cnt = body.count(a)
-            result[a][ch] = cnt
+def find_cluster_drafts(
+    project_root: Path, clusters: list[dict]
+) -> list[tuple[str, Path]]:
+    """按摘要顺序返回完整故事块草稿；任一草稿缺失即拒绝扫描。"""
+    result = []
+    for cluster in clusters:
+        cluster_id = cluster["cluster_id"]
+        path = (
+            project_root
+            / "章节"
+            / f"{cluster_id}_draft"
+            / f"{cluster_id}_draft.txt"
+        )
+        if not path.is_file():
+            raise FileNotFoundError(f"故事块草稿不存在: {path}")
+        result.append((cluster_id, path))
     return result
 
 
-def check_strategy_violations(freq: dict, anchor_strategy: list[dict]) -> list[dict]:
-    """对照 anchor_strategy 检查每个 anchor 的实际使用是否违规。"""
+def scan_anchor_frequency(
+    drafts: list[tuple[str, Path]], anchors_to_track: list[str]
+) -> dict[str, dict[str, int]]:
+    """返回 ``{anchor: {cluster_id: count}}``。"""
+    result = {anchor: {} for anchor in anchors_to_track}
+    for cluster_id, path in drafts:
+        text = path.read_text(encoding="utf-8")
+        for anchor in anchors_to_track:
+            result[anchor][cluster_id] = text.count(anchor)
+    return result
+
+
+def check_strategy_violations(
+    frequency: dict[str, dict[str, int]], anchor_strategy: list[dict]
+) -> list[dict]:
+    """按作者档中的故事块频率规则检查锚点使用。"""
     violations = []
     for entry in anchor_strategy:
-        name = entry.get("元素", "")
-        strategy = entry.get("策略", "")
-        if not name or name not in freq:
+        name = entry.get("元素")
+        strategy = entry.get("策略") or ""
+        if not name or name not in frequency:
             continue
-        ch_counts = freq[name]
+        counts = frequency[name]
+        ordered_ids = list(counts)
 
-        # 解析"每 N 章不超过 M 次"
-        m = re.search(r"每\s*(\d+)\s*章不超过\s*(\d+)\s*次", strategy)
-        if m:
-            window = int(m.group(1))
-            limit = int(m.group(2))
-            sorted_chs = sorted(ch_counts.keys())
-            for i in range(len(sorted_chs)):
-                ch = sorted_chs[i]
-                window_chs = [c for c in sorted_chs if ch - window + 1 <= c <= ch]
-                window_count = sum(ch_counts[c] for c in window_chs)
-                if window_count > limit:
+        window_match = re.search(
+            r"每\s*(\d+)\s*个?故事块不超过\s*(\d+)\s*次", strategy
+        )
+        if window_match:
+            window = int(window_match.group(1))
+            limit = int(window_match.group(2))
+            for index, cluster_id in enumerate(ordered_ids):
+                window_ids = ordered_ids[max(0, index - window + 1):index + 1]
+                count = sum(counts[item] for item in window_ids)
+                if count <= limit:
+                    continue
+                violations.append({
+                    "anchor": name,
+                    "rule": strategy,
+                    "clusters": window_ids,
+                    "count": count,
+                    "limit": limit,
+                    "violation": (
+                        f"{window_ids[0]} 至 {cluster_id} 共 {count} 次（上限 {limit}）"
+                    ),
+                    "severity": "strict" if count > limit + 2 else "mild",
+                })
+
+        per_cluster_match = re.search(
+            r"每(?:个)?故事块\s*(?:<=|≤|不超过)\s*(\d+)\s*次", strategy
+        )
+        if per_cluster_match:
+            limit = int(per_cluster_match.group(1))
+            for cluster_id, count in counts.items():
+                if count > limit:
                     violations.append({
                         "anchor": name,
                         "rule": strategy,
-                        "violation": f"ch {window_chs[0]}-{ch} 共 {window_count} 次（超 {limit}）",
-                        "severity": "🔴 strict" if window_count > limit + 2 else "🟡 mild",
-                    })
-
-        # 解析"每章 le N 次"或"每章不超过 N 次"
-        m2 = re.search(r"每章\s*(?:le|不超过)\s*(\d+)\s*次", strategy)
-        if m2:
-            limit = int(m2.group(1))
-            for ch, cnt in ch_counts.items():
-                if cnt > limit:
-                    violations.append({
-                        "anchor": name,
-                        "rule": strategy,
-                        "violation": f"ch {ch} 单章 {cnt} 次（超 {limit}）",
-                        "severity": "🟡 mild",
+                        "cluster_id": cluster_id,
+                        "count": count,
+                        "limit": limit,
+                        "violation": f"{cluster_id} 使用 {count} 次（上限 {limit}）",
+                        "severity": "mild",
                     })
     return violations
 
 
-def scan_opening_types_distribution(chapters: list[tuple[int, Path]], summaries: list[dict]) -> dict:
-    """对照故事块摘要里的 applied_style.opening_type，看实际分布 vs 蒸馏分布。"""
-    ch_to_opening = {}
-    for s in summaries:
-        ch = s.get("ch")
-        op = s.get("applied_style", {}).get("opening_type")
-        if ch and op:
-            ch_to_opening[ch] = op
-    counter = Counter(ch_to_opening.values())
+def scan_opening_types_distribution(clusters: list[dict]) -> dict:
+    """聚合 truth_check 确认的故事块开场类型。"""
+    by_cluster = {}
+    for cluster in clusters:
+        truth = cluster.get("truth_check") or {}
+        opening_type = truth.get("detected_opening_type")
+        if isinstance(opening_type, str) and opening_type.strip():
+            by_cluster[cluster["cluster_id"]] = opening_type.strip()
     return {
-        "ch_to_type": ch_to_opening,
-        "type_counts": dict(counter),
-        "total": len(ch_to_opening),
+        "cluster_to_type": by_cluster,
+        "type_counts": dict(Counter(by_cluster.values())),
+        "total": len(by_cluster),
     }
 
 
-def main():
-    args = sys.argv[1:]
-    if not args:
-        print(__doc__)
-        sys.exit(0)
-    project_root = Path(args[0])
-    last_n = 10
-    strict = "--strict" in args
-    for i, a in enumerate(args):
-        if a == "--last-n" and i + 1 < len(args):
-            last_n = int(args[i + 1])
+def find_repeated_opening_runs(
+    cluster_to_type: dict[str, str], run_length: int = 3
+) -> list[dict]:
+    ordered = list(cluster_to_type.items())
+    findings = []
+    for index in range(len(ordered) - run_length + 1):
+        window = ordered[index:index + run_length]
+        opening_types = {opening_type for _, opening_type in window}
+        if len(opening_types) == 1:
+            findings.append({
+                "clusters": [cluster_id for cluster_id, _ in window],
+                "opening_type": window[0][1],
+            })
+    return findings
 
-    db = project_root / "_数据库"
-    style = load_json(db / "作者风格.json", {})
-    anchor_strategy = (
-        style.get("cross_chapter_diversity", {}).get("env_anchor_high_risk_elements", [])
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("project")
+    parser.add_argument("--last-n", type=int, default=10)
+    parser.add_argument("--strict", action="store_true")
+    args = parser.parse_args(argv)
+    project_root = Path(args.project)
+    if not project_root.is_dir():
+        print(f"[FATAL] 项目目录不存在: {project_root}", file=sys.stderr)
+        raise SystemExit(2)
+
+    try:
+        clusters = csr.get_clusters(project_root, last_n=args.last_n)
+        drafts = find_cluster_drafts(project_root, clusters)
+    except (csr.ClusterSummaryError, FileNotFoundError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    if not clusters:
+        print("[SKIP] 无已落账故事块")
+        raise SystemExit(0)
+
+    style = load_json(project_root / "_数据库" / "作者风格.json", {}) or {}
+    strategy = (
+        (style.get("cross_cluster_diversity") or {}).get(
+            "env_anchor_high_risk_elements"
+        )
+        or []
     )
-    # 2026-05-30 北极星复审：v2 账本 clusters[].chapters{} 拍平 + 兼容旧顶层（原读恒空、开场类型分布失效）
-    _ss = load_json(db / "故事块摘要.json", {})
-    summaries = [c for c in (_ss.get("chapters") or []) if isinstance(c, dict)]
-    for _c in _ss.get("clusters", []) or []:
-        if isinstance(_c, dict):
-            for _k, _r in (_c.get("chapters") or {}).items():
-                if isinstance(_r, dict):
-                    summaries.append({**_r, "ch": int(_k) if str(_k).isdigit() else _r.get("ch", 0)})
+    anchors = [item.get("元素") for item in strategy if item.get("元素")]
+    frequency = scan_anchor_frequency(drafts, anchors)
+    violations = check_strategy_violations(frequency, strategy)
+    opening_distribution = scan_opening_types_distribution(clusters)
+    opening_runs = find_repeated_opening_runs(
+        opening_distribution["cluster_to_type"]
+    )
 
-    chapters = find_chapter_files(project_root)
-    if not chapters:
-        print(f"[FATAL] 在 {project_root} 找不到章节文件")
-        sys.exit(2)
-    if last_n and last_n > 0:
-        chapters = chapters[-last_n:]
-
-    print(f"[Style Drift Scan] 项目：{project_root.name}")
-    print(f"  扫描章节：{chapters[0][0]}-{chapters[-1][0]} 共 {len(chapters)} 章")
-    print(f"  锚点策略：{len(anchor_strategy)} 条")
-
-    anchors = [e.get("元素", "") for e in anchor_strategy if e.get("元素")]
-    freq = scan_anchor_frequency(chapters, anchors)
-
-    # 输出频率表
-    print(f"\n[锚点频率（最近 {len(chapters)} 章）]")
-    for a in anchors:
-        ch_counts = freq.get(a, {})
-        total = sum(ch_counts.values())
-        ch_with_anchor = sum(1 for c in ch_counts.values() if c > 0)
-        if total > 0:
-            print(f"  {a}: 共 {total} 次（出现于 {ch_with_anchor}/{len(chapters)} 章）")
-
-    # 违规检查
-    violations = check_strategy_violations(freq, anchor_strategy)
-    print(f"\n[违规清单] {len(violations)} 条")
-    for v in violations:
-        print(f"  {v['severity']} {v['anchor']}: {v['violation']}（规则：{v['rule']}）")
-
-    # opening type 分布
-    op_dist = scan_opening_types_distribution(chapters, summaries)
-    print(f"\n[Opening type 实际分布（{op_dist['total']} 章已记录）]")
-    for t, c in op_dist["type_counts"].items():
-        print(f"  {t}: {c} 次 ({c/op_dist['total']*100:.0f}%)")
-
-    # 检查连续 3 章同型违规
-    op_violations = []
-    ch_to_type = op_dist["ch_to_type"]
-    sorted_chs = sorted(ch_to_type.keys())
-    for i in range(len(sorted_chs) - 2):
-        c1, c2, c3 = sorted_chs[i], sorted_chs[i+1], sorted_chs[i+2]
-        if c2 == c1 + 1 and c3 == c2 + 1:
-            t1, t2, t3 = ch_to_type[c1], ch_to_type[c2], ch_to_type[c3]
-            if t1 == t2 == t3:
-                op_violations.append(f"ch {c1}-{c3} 连续 3 章同型 '{t1}' 违反 opening_rule")
-    if op_violations:
-        print(f"\n[Opening 轮拿违规] {len(op_violations)} 条")
-        for v in op_violations:
-            print(f"  🔴 {v}")
-
-    if strict and (violations or op_violations):
-        sys.exit(1)
-    sys.exit(0)
+    report = {
+        "scan_type": "style_drift",
+        "clusters_scanned": [cluster["cluster_id"] for cluster in clusters],
+        "anchor_frequency": frequency,
+        "anchor_violations": violations,
+        "opening_distribution": opening_distribution,
+        "opening_repetition": opening_runs,
+    }
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if args.strict and (violations or opening_runs):
+        raise SystemExit(1)
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8", errors="replace")
     main()

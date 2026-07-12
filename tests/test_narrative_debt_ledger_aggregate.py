@@ -18,8 +18,11 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
+_TESTS = _ROOT / "tests"
 sys.path.insert(0, str(_SCRIPTS))
+sys.path.insert(0, str(_TESTS))
 import cross_cluster_narrative_debt_ledger_aggregate as mod  # noqa: E402
+from cluster_summary_fixtures import cluster_record, write_cluster_summary  # noqa: E402
 
 _TARGET = _SCRIPTS / "cross_cluster_narrative_debt_ledger_aggregate.py"
 
@@ -31,12 +34,29 @@ def _utf8_env(**extra):
 
 
 def _mk_project(clusters):
-    """造带 故事块摘要.json 的项目目录。clusters = list[dict]。"""
+    """造带 故事块摘要.json + 伏笔表.json 的项目目录。
+
+    clusters = _cluster() 产出的测试记录（cluster_id/foreshadow_planted/foreshadow_paid）。
+    故事块摘要.json 只写严格账本合同允许的字段；每条记录的 planted/paid 流水
+    通过 伏笔表.json（setup_cluster + status）落盘，走生产代码真实的 SYS-5 ②
+    回退通道——与 cross_cluster_narrative_debt_ledger_aggregate.py 的读取路径一致。
+    """
     proj = Path(tempfile.mkdtemp(prefix="debt_ledger_"))
-    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
-    summary = {"schema_version": "v2.cluster", "clusters": clusters}
-    (proj / "_数据库" / "故事块摘要.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    database = proj / "_数据库"
+    database.mkdir(parents=True, exist_ok=True)
+    write_cluster_summary(proj, [cluster_record(c["cluster_id"]) for c in clusters])
+    promises = []
+    for c in clusters:
+        cid = c["cluster_id"]
+        paid = set(c.get("foreshadow_paid") or [])
+        for fid in c.get("foreshadow_planted") or []:
+            promises.append({
+                "id": fid, "setup_cluster": cid,
+                "status": "consumed" if fid in paid else "open",
+            })
+    (database / "伏笔表.json").write_text(
+        json.dumps({"promises": promises, "deadlines": [], "pledges": [], "secrets": []},
+                   ensure_ascii=False), encoding="utf-8")
     return proj
 
 
@@ -162,7 +182,7 @@ def test_cli_off_mode_zero_exit_no_report():
                        capture_output=True, text=True, env=env, encoding="utf-8")
     assert r.returncode == 0
     # off 模式不写 snapshot
-    snap = proj / "_数据库" / ".cross_chapter_scan" / "narrative_debt_snapshot.json"
+    snap = proj / "_数据库" / ".cross_cluster_scan" / "narrative_debt_snapshot.json"
     assert not snap.exists()
 
 
@@ -179,7 +199,7 @@ def test_cli_shadow_mode_zero_exit_even_with_findings():
     r = subprocess.run([sys.executable, str(_TARGET), str(proj)],
                        capture_output=True, text=True, env=env, encoding="utf-8")
     assert r.returncode == 0
-    snap = proj / "_数据库" / ".cross_chapter_scan" / "narrative_debt_snapshot.json"
+    snap = proj / "_数据库" / ".cross_cluster_scan" / "narrative_debt_snapshot.json"
     assert snap.exists()
     snap_data = json.loads(snap.read_text(encoding="utf-8"))
     assert "book" in snap_data and "advisory_codes" in snap_data

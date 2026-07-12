@@ -5,7 +5,7 @@ _text_cosine / _passage_text / _tag_relevance。
 
 本文件聚焦尚未覆盖的核心确定性算法 + 分支 + 退出码：
   - parse_rule_window          —— 「连续 N 章」正则解析 + 默认窗口
-  - get_applied_type_history   —— 历史 applied_*_type 抽取
+  - get_applied_type_history   —— 历史 cluster 实际开头/结尾类型抽取
   - pick_type_weighted_avoiding—— avoid 过滤 / 空分布 / fallback 退路
   - _char_bigrams              —— 字符 bigram 向量化（MMR 底座·边界）
   - build_directive            —— 端到端：分布优先级/反重复 avoid/确定性 seed/cluster 摘要
@@ -46,14 +46,14 @@ def test_parse_rule_window_defaults():
 
 
 # ════════════════════════════════════════════════════════════════════
-# get_applied_type_history：历史 applied_*_type 抽取
+# get_applied_type_history：历史 cluster 实际类型抽取
 # ════════════════════════════════════════════════════════════════════
 def test_get_applied_type_history_basic():
     summaries = [
-        {"applied_style": {"opening_type": "悬念", "ending_type": "钩子"}},
-        {"applied_style": {"opening_type": "回忆"}},          # 缺 ending_type
-        {"ch": 3},                                            # 完全缺 applied_style
-        {"applied_style": None},                              # applied_style 为 None
+        {"truth_check": {"detected_opening_type": "悬念"}, "ending_type": "钩子"},
+        {"truth_check": {"detected_opening_type": "回忆"}},
+        {"cluster_id": "cluster_003"},
+        {"truth_check": None},
     ]
     op = si.get_applied_type_history(summaries, "opening_type")
     en = si.get_applied_type_history(summaries, "ending_type")
@@ -275,13 +275,12 @@ def test_build_directive_anti_repeat_avoid_from_history():
             "opening_rule": "连续 3 章不得重复",
         }
     }
-    # v2 账本：clusters[].chapters{} 拍平形态
     summaries_doc = {
         "clusters": [
-            {"chapters": {
-                "1": {"ch": 1, "applied_style": {"opening_type": "动作开场"}},
-                "2": {"ch": 2, "applied_style": {"opening_type": "动作开场"}},
-            }}
+            {"cluster_id": "cluster_001",
+             "truth_check": {"detected_opening_type": "动作开场"}},
+            {"cluster_id": "cluster_002",
+             "truth_check": {"detected_opening_type": "动作开场"}},
         ]
     }
     with tempfile.TemporaryDirectory() as d:
@@ -290,29 +289,6 @@ def test_build_directive_anti_repeat_avoid_from_history():
     # 窗口 3 → avoid 取最近 2 章用过的 "动作开场" → 必落 "对话开场"
     assert "动作开场" in directive["opening_avoid"]
     assert directive["opening_type"] == "对话开场"
-
-
-def test_build_directive_legacy_top_level_chapters():
-    # 旧顶层 chapters[] 形态（非 clusters 嵌套）也被 summaries 读取
-    style = {
-        "cross_chapter_diversity": {
-            "opening_type_distribution_300ch": {
-                "悬念": {"pct": 0.5}, "白描": {"pct": 0.5},
-            },
-            "opening_rule": "连续 2 章不得重复",
-        }
-    }
-    summaries_doc = {
-        "chapters": [
-            {"ch": 1, "applied_style": {"opening_type": "悬念"}},
-        ]
-    }
-    with tempfile.TemporaryDirectory() as d:
-        tmp = _mk_project(Path(d), style, summaries_doc=summaries_doc)
-        directive = si.build_directive(tmp, 2)
-    # 窗口 2 → avoid 最近 1 章的 "悬念" → 落 "白描"
-    assert "悬念" in directive["opening_avoid"]
-    assert directive["opening_type"] == "白描"
 
 
 def test_build_directive_uses_strict_opening_contract():

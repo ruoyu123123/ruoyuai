@@ -36,7 +36,7 @@ def test_quota_all_hook_no_findings():
 
 
 def test_quota_ratio_over_threshold():
-    """>25% 章末 cliffhanger → CLIFFHANGER_QUOTA_OVER（metric=cliffhanger_ratio）。"""
+    """>25% cluster 末 cliffhanger → CLIFFHANGER_QUOTA_OVER（metric=cliffhanger_ratio）。"""
     end_types = [(1, "hook"), (2, "cliffhanger"), (3, "hook"), (4, "cliffhanger"),
                  (5, "hook"), (6, "cliffhanger"), (7, "hook"), (8, "scene_end")]
     findings = mod.scan_cliffhanger_quota(end_types)
@@ -46,7 +46,7 @@ def test_quota_ratio_over_threshold():
                          if f.get("metric") == "cliffhanger_ratio")
     assert ratio_finding["severity"] == "advisory"
     assert ratio_finding["ratio"] > 0.25
-    assert set(ratio_finding["cliffhanger_chs"]) == {2, 4, 6}
+    assert set(ratio_finding["cliffhanger_clusters"]) == {2, 4, 6}
 
 
 def test_quota_ratio_below_threshold_no_finding():
@@ -58,7 +58,7 @@ def test_quota_ratio_below_threshold_no_finding():
 
 
 def test_quota_streak_three_fires():
-    """连续 3 章 cliffhanger → CLIFFHANGER_QUOTA_OVER (streak)。"""
+    """连续 3 个 cluster cliffhanger → CLIFFHANGER_QUOTA_OVER (streak)。"""
     end_types = [(1, "hook"), (2, "cliffhanger"), (3, "cliffhanger"),
                  (4, "cliffhanger"), (5, "hook")]
     findings = mod.scan_cliffhanger_quota(end_types)
@@ -67,7 +67,7 @@ def test_quota_streak_three_fires():
                           None)
     assert streak_finding is not None
     assert streak_finding["streak"] >= 3
-    assert streak_finding["chapter_range"] == [2, 4]
+    assert streak_finding["cluster_range"] == [2, 4]
 
 
 def test_quota_streak_two_no_finding():
@@ -103,12 +103,14 @@ def test_quota_chinese_aliases():
 # ── collect_ending_types ───────────────────────────────────────────────
 def test_collect_ending_types_filters_invalid():
     recs = [
-        (1, {"ending_type": "hook"}),
-        (2, {"ending_type": ""}),
-        (3, {"ending_type": "cliffhanger"}),
-        (4, {}),
-        (5, {"ending_type": 123}),
-        (6, {"ending_type": "scene_end"}),
+        {"cluster_id": "cluster_001", "ending_type": "hook"},
+        {"cluster_id": "cluster_002", "ending_type": ""},
+        {"cluster_id": "cluster_003", "ending_type": "cliffhanger"},
+        {"cluster_id": "cluster_004"},
+        {"cluster_id": "cluster_005", "ending_type": 123},
+        {"cluster_id": "cluster_006", "ending_type": "scene_end"},
     ]
     out = mod.collect_ending_types(recs)
-    assert out == [(1, "hook"), (3, "cliffhanger"), (6, "scene_end")]
+    assert out == [
+        ("cluster_001", "hook"), ("cluster_003", "cliffhanger"), ("cluster_006", "scene_end"),
+    ]

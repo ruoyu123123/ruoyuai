@@ -31,7 +31,7 @@
       "ripples": [
         {"target": "factions_state.南海资本.power", "delta": -3, "reason": "陆衍获得传承物件，威胁性提升"},
         {"target": "active_npc_threads", "add_thread": {"npc_id": "顾沉", "action": "派人监听陆爸座机 + 加快招安节奏", "_priority": 9}},
-        {"target": "emergent_opportunities", "spawn": {"type": "副线机缘", "description": "南海市晚报连载关于神秘公司高管失踪的调查报道", "expires_chapters": 4}}
+        {"target": "emergent_opportunities", "spawn": {"type": "副线机缘", "description": "南海市晚报连载关于神秘公司高管失踪的调查报道", "expires_clusters": 4}}
       ]
     },
     {
@@ -71,11 +71,11 @@
     {
       "id": "RR_AUTO_TICK",
       "trigger_type": "auto_tick",
-      "trigger_match": "every_chapter",
+      "trigger_match": "every_cluster",
       "_doc": "每章 auto_tick 时的微小演化",
       "ripples": [
-        {"target": "current_world_time.ch", "set_to_current_ch": true},
-        {"target": "active_npc_threads", "evaluate_completion": true, "_doc": "检查 expected_complete_ch 到了的 thread → 自动 spawn 完成事件"}
+        {"target": "current_world_time.cluster", "set_to_current_cluster": true},
+        {"target": "active_npc_threads", "evaluate_completion": true, "_doc": "检查 expected_complete_cluster 到期的 thread 并记录完成后果"}
       ]
     }
   ],

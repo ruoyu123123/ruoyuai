@@ -294,7 +294,7 @@ NOVEL_NAME_KEYWORDS = [
 MULTISTEP_KEYWORDS_DESC = [
     "cluster-save-state", "cluster save state", "cluster-write", "cluster write",
     "distill-style", "distill style", "outline",
-    # 🔴 2026-06-27 C13：distill-character 纳入 plan 强制规划层 → 多步流水线 Agent 须含 PLAN_ID/STEP（L3 hook 规则 5）
+    # distill-character 的 Agent 调用必须携带当前 PLAN_ID/STEP。
     "distill-character", "distill character",
 ]
 MULTISTEP_KEYWORDS_PROMPT = [
@@ -306,6 +306,7 @@ NOVEL_SUBAGENT_TYPES = {
     "novel-foreshadower", "novel-reflector", "novel-summarizer",
     "novel-outline-planner", "novel-chapter-splitter",
     "novel-reading-reflector", "novel-researcher", "novel-archivist",
+    "novel-replica-writer", "novel-state-tracker",
 }
 _AUX_TYPES = {
     "novel-validator-checker", "novel-voice-checker", "novel-foreshadower",
@@ -386,7 +387,58 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
             is_researcher = ("researcher" in desc.lower() or "调研" in desc)
             is_aux = (not is_researcher) and any(kw in desc.lower() for kw in
                          ["validator", "voice", "修第", "审第", "摘要", "伏笔", "经验", "规划"])
-        if is_writer:
+        if subagent_type == "novel-replica-writer":
+            if "MODE: style-replica-draft" in prompt:
+                required = {
+                    "PROJECT": "PROJECT:" in prompt,
+                    "CLUSTER_ID": "CLUSTER_ID:" in prompt,
+                    "STYLE_SKILL_PATH": "STYLE_SKILL_PATH:" in prompt,
+                    "SCENES_DIR": "SCENES_DIR:" in prompt,
+                }
+            elif "MODE: voice-sample-draft" in prompt:
+                required = {
+                    "PROJECT": "PROJECT:" in prompt,
+                    "CHARACTER_ID": "CHARACTER_ID:" in prompt,
+                    "MATERIAL_PATH": "MATERIAL_PATH:" in prompt,
+                    "VOICE_DNA_PATH": "VOICE_DNA_PATH:" in prompt,
+                    "OUTPUT_DIR": "OUTPUT_DIR:" in prompt,
+                }
+            else:
+                return _block(
+                    "Replica writer MODE 必须是 style-replica-draft 或 voice-sample-draft",
+                    warnings,
+                )
+            missing = [name for name, present in required.items() if not present]
+            if missing:
+                return _block(
+                    f"Replica writer 缺少必填字段: {', '.join(missing)}",
+                    warnings,
+                )
+        elif subagent_type == "novel-state-tracker":
+            required = {
+                "PLAN_ID": "PLAN_ID:" in prompt,
+                "STEP": bool(re.search(r"(?m)^STEP:\s*\S+", prompt)),
+                "PROJECT": "PROJECT:" in prompt,
+                "CLUSTER_ID": "CLUSTER_ID:" in prompt,
+                "MODE=cluster": "MODE: cluster" in prompt,
+                "CLUSTER_DRAFT_PATH": "CLUSTER_DRAFT_PATH:" in prompt,
+                "STATE_DELTA_PATH": "STATE_DELTA_PATH:" in prompt,
+                "RECEIPT_PATH": "RECEIPT_PATH:" in prompt,
+                "TIMELINE_PATH": "TIMELINE_PATH:" in prompt,
+                "MAP_PATH": "MAP_PATH:" in prompt,
+                "HUBS_PATH": "HUBS_PATH:" in prompt,
+                "WORLD_STATE_PATH": "WORLD_STATE_PATH:" in prompt,
+                "GRAND_TREND_PATH": "GRAND_TREND_PATH:" in prompt,
+                "ENSEMBLE_PATH": "ENSEMBLE_PATH:" in prompt,
+                "RIPPLE_RULES_PATH": "RIPPLE_RULES_PATH:" in prompt,
+            }
+            missing = [name for name, present in required.items() if not present]
+            if missing:
+                return _block(
+                    f"State tracker 缺少必填字段: {', '.join(missing)}",
+                    warnings,
+                )
+        elif is_writer:
             if not (has_project and has_cluster and has_mode):
                 miss = [m for m, ok in (("PROJECT", has_project),
                                          ("CLUSTER_ID", has_cluster),
@@ -452,10 +504,11 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
                             or ".research_cache/" in prompt)
         is_splitter = ("novel-chapter-splitter" in desc
                        or "splitter" in subagent_type.lower())
+        is_state_tracker = subagent_type == "novel-state-tracker"
         is_distill = ("蒸馏" in desc or "distill-style" in desc.lower()
                       or "distill style" in desc.lower()
                       or ("PLAN_ID:" in prompt and "distill-style" in prompt))
-        if not (has_research_ref or is_splitter or is_distill):
+        if not (has_research_ref or is_splitter or is_state_tracker or is_distill):
             return _block("ECAS agent spawn 缺 RESEARCH_REF 字段", warnings)
 
     # ---- 规则 11（v29 语义反转 · 2026-07-11）：蒸馏复刻必须同栈 ----

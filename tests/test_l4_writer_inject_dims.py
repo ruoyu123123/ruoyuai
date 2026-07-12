@@ -20,6 +20,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cluster_summary_fixtures import write_cluster_summary
+
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import build_manifest as bm  # noqa: E402
@@ -28,6 +30,7 @@ import build_manifest as bm  # noqa: E402
 def _mk_project(tmp: Path, *, style=None) -> Path:
     db = tmp / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
+    write_cluster_summary(tmp, [])
     if style is not None:
         (db / "作者风格.json").write_text(
             json.dumps(style, ensure_ascii=False), encoding="utf-8")

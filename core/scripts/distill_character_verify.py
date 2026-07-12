@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""distill_character_verify.py — 角色蒸馏回灌验证闸（🔴 2026-06-27 C13）
+"""角色蒸馏回灌验证闸。
 
-distill-character.plan.json step 5。两类判定，泾渭分明：
+distill-character.plan.json step 6。两类判定：
 
   ① PROCESS-INTEGRITY（唯一 hard 项）—— 确定性契约校验（北极星⑤：契约破损非创作判断）：
-     · 同栈证据：voice_pack._gen_provenance.generated_by_model/profile 存在
-       （证明 style_samples/anti_samples 来自 gen-model 而非 Claude 凭印象编 / polish hack）。
+     · 同栈证据：Claude 草稿目录、writer_mode、gemini model/profile 完整。
      · provenance：每条 style_samples/anti_samples 带 ≥2 个不同章号
        （命令文档 P2-7 反 over-generalize 强制）。
      · banned_phrases：首次明确即可入列（不要求 ≥2 源）—— 只查结构是 list（不查内容/来源）。
@@ -21,7 +20,7 @@ distill-character.plan.json step 5。两类判定，泾渭分明：
     --project workspace/novels/<书名> \\
     --character 李若渝 \\
     --output workspace/novels/<书名>/对比报告/voice_verify_李若渝.json \\
-    [--strict] [--skip-genmodel]
+    [--strict]
 
 exit：0 = ok（含 fidelity 不达标·advisory 放行）/ 2 = PROCESS-INTEGRITY 契约破损（仅 --strict）。
 """
@@ -32,29 +31,26 @@ import re
 import sys
 from pathlib import Path
 
+import cluster_lookup
+
 
 # ============ PROCESS-INTEGRITY（唯一 hard 项·纯函数·可测）============
 
 def sample_provenance_ok(sample) -> bool:
-    """单条 style/anti_sample 是否带 ≥2 个不同章号 provenance。
-
-    合法形态：{"text": "...", "from_chapters": [3, 5]}（或 source_chapters / chapters 别名）。
-    纯字符串 / 缺 from_chapters / <2 不同章 → False（Claude 凭印象编、单次特色用法当弱信号）。
-    """
+    """单条样本必须绑定至少两个不同的 canonical cluster_id。"""
     if not isinstance(sample, dict):
         return False
-    chs = (sample.get("from_chapters") or sample.get("source_chapters")
-           or sample.get("chapters"))
-    if not isinstance(chs, (list, tuple)):
+    clusters = sample.get("from_clusters")
+    if not isinstance(clusters, list):
         return False
-    distinct = {str(c).strip() for c in chs if c is not None and str(c).strip()}
-    return len(distinct) >= 2
+    normalized = [cluster_lookup.normalize_cluster_id(value) for value in clusters]
+    return normalized == clusters and len(set(normalized)) >= 2
 
 
 def check_process_integrity(voice_pack) -> tuple[bool, list[dict]]:
     """PROCESS-INTEGRITY 契约校验（确定性·hard）。返回 (ok, violations)。
 
-    语义：只在 voice_pack 真有样本时校验同栈 + provenance（无样本 = 没产/没并·非破损·vacuous ok）。
+    required 角色蒸馏必须同时产出 style_samples 与 anti_samples；空样本属于契约破损。
     banned_phrases 只查结构（list），不查 provenance（首次明确即入·底线非正向 pattern）。
     """
     violations: list[dict] = []
@@ -67,25 +63,44 @@ def check_process_integrity(voice_pack) -> tuple[bool, list[dict]]:
     samples = ([("style_samples", s) for s in style if not isinstance(s, str) or s]
                + [("anti_samples", s) for s in anti if not isinstance(s, str) or s])
 
+    if not style or not anti:
+        violations.append({
+            "code": "VOICE_SAMPLES_MISSING",
+            "msg": "voice_pack 必须同时包含非空 style_samples 与 anti_samples",
+        })
+
     if samples:
-        # 同栈证据（gen-model 出品·非 Claude 编 / polish hack）
+        # 同栈证据：Claude 亲笔草稿 + gemini 分段润色
         prov = voice_pack.get("_gen_provenance") or {}
-        model = (prov.get("generated_by_model") or prov.get("generated_by_profile")
-                 if isinstance(prov, dict) else None)
-        if not model:
+        required_provenance = {
+            "writer_mode": "claude_draft_gemini_polish_v29",
+            "claude_drafts_dir": None,
+            "generated_by_model": None,
+            "generated_by_profile": None,
+        }
+        missing = []
+        if not isinstance(prov, dict):
+            missing = list(required_provenance)
+        else:
+            for key, expected in required_provenance.items():
+                value = prov.get(key)
+                if expected is not None and value != expected:
+                    missing.append(key)
+                elif expected is None and not value:
+                    missing.append(key)
+        if missing:
             violations.append({
                 "code": "SAME_STACK_PROVENANCE_MISSING",
-                "msg": "voice_pack._gen_provenance 缺 generated_by_model/profile —— "
-                       "style_samples/anti_samples 须来自 gen-model（gen_creative --mode voice_sample·同栈），"
-                       "禁 Claude 凭印象编 / gen_fixer polish hack"})
-        # 逐条 ≥2 章 provenance
+                "missing": missing,
+                "msg": "voice_pack._gen_provenance 必须证明 Claude 草稿 + gemini 分段润色同栈"})
+        # 逐条至少两个故事块 provenance
         for field, s in samples:
             if not sample_provenance_ok(s):
                 snippet = (s.get("text") if isinstance(s, dict) else str(s)) or ""
                 violations.append({
                     "code": "INSUFFICIENT_PROVENANCE", "field": field,
                     "sample": str(snippet)[:40],
-                    "msg": "样本缺 ≥2 个不同章号 from_chapters（反 over-generalize·单次出现当弱信号不入 samples）"})
+                    "msg": "样本缺至少两个不同故事块的 from_clusters provenance"})
 
     banned = voice_pack.get("banned_phrases")
     if banned is not None and not isinstance(banned, list):
@@ -223,7 +238,7 @@ def build_report(voice_pack: dict | None, material_path: Path | None,
     history_texts = _history_texts(material_path)
     fidelity = voice_fidelity_estimate(sample_texts, history_texts, voice_pack or {})
     report = {
-        "verify_runner": "distill_character_verify.py (C13)",
+        "verify_runner": "distill_character_verify.py",
         "character": character,
         "process_integrity": {
             "gate_level": "hard_gate",
@@ -231,7 +246,7 @@ def build_report(voice_pack: dict | None, material_path: Path | None,
             "violations": violations,
         },
         "voice_fidelity": fidelity,
-        "_note": "唯一 hard 项 = process_integrity（同栈 gen-model + ≥2 章 provenance）·"
+        "_note": "唯一 hard 项 = process_integrity（Claude 草稿 + gemini 润色 + ≥2 cluster provenance）·"
                  "voice_fidelity 永 advisory（不据此拦截）",
     }
     return report, integrity_ok
@@ -246,15 +261,13 @@ def main():
                 _s.reconfigure(encoding="utf-8", errors="replace")
             except Exception:
                 pass
-    parser = argparse.ArgumentParser(description="角色蒸馏回灌验证闸（C13）")
+    parser = argparse.ArgumentParser(description="角色蒸馏回灌验证闸")
     parser.add_argument("--project", required=True, type=Path,
                         help="小说项目根（含 _数据库/人物卡.json）")
     parser.add_argument("--character", required=True, help="角色 id / 名")
     parser.add_argument("--output", required=True, type=Path, help="verify 报告路径")
     parser.add_argument("--strict", action="store_true",
-                        help="PROCESS-INTEGRITY 破损时 exit 2（plan step 5 闸门）")
-    parser.add_argument("--skip-genmodel", action="store_true",
-                        help="跳过 gen-model 新对白比对（fidelity 仅看现有样本自洽·测试/无 API 用）")
+                        help="PROCESS-INTEGRITY 破损时 exit 2")
     args = parser.parse_args()
 
     project = args.project.resolve()

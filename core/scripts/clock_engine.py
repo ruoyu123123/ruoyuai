@@ -1,399 +1,377 @@
-"""clock_engine.py — 显式 Clock 进度系统（v21 R1.1 新增）
+#!/usr/bin/env python3
+"""按 cluster 事件推进剧情时钟，并提供写作前的活跃时钟快照。
 
-借鉴 Citizen Sleeper 的 Clocks 机制 + CK3 的 Schemes 进度。**所有"逐渐变化的事"显式建模为 clock**。
+时钟只响应两类显式信号：当前故事块结束 ``cluster_end``，或带类型和值的
+叙事事件。所有读写都使用唯一 ``clocks[]`` 结构并记录 ``cluster_id``。
 
-设计目标：
-- 解决「节奏失控」：clock 满格 → 强制触发，避免主代理凭感觉拖延
-- 解决「伏笔忘埋」：foreshadowing due_by 自动注册为 clock，到期前 N 章告警
-- 解决「反派步步紧逼无量化」：反派耐心/势力 schemes 都建模为 tick
-
-五个操作：
-1. tick <ch>                              - 按 chapter_end 触发所有相关 clock +tick_per_event
-2. tick_event <ch> <event_type> <value>   - 按特定事件触发匹配 clock（如 minor_event）
-3. list <ch>                              - 列出当前活跃 clock + 距离满格距离
-4. spawn <ch> <id> <label> ... (json)     - 动态创建 clock
-5. dashboard                              - 全 clock 全景
-
-退出码: 0 健康 / 1 有 clock 满格触发 / 2 致命
+退出码：0 成功；1 有时钟满格；2 输入或状态契约损坏。
 """
-
 from __future__ import annotations
 
 import argparse
 import fnmatch
 import json
+import re
 import sys
-from datetime import datetime
 from pathlib import Path
 
-# 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
 import state_cli_guard
-try:
-    import cluster_lookup  # 2026-05-30 北极星：since_cluster 反查真实 cluster_id（防御 import）
-except Exception:
-    cluster_lookup = None
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
+SCHEMA_NAME = "cluster_clocks"
+SCHEMA_VERSION = "1.0"
+CLUSTER_RE = re.compile(r"^cluster_[0-9]{3,}$")
+EVENT_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+STATUSES = {"active", "triggered", "abandoned"}
+PUBLIC_TOP_KEYS = {"schema_version", "consumption", "generated_at", "clocks"}
+PUBLIC_CLOCK_KEYS = {
+    "clock_id", "label", "category", "ticks", "max", "tick_on",
+    "tick_per_event", "trigger_on_max", "visible_to_protagonist",
+    "visible_to_writer", "is_surprise", "since_cluster", "spawned_by",
+    "status", "triggered_at_cluster",
+}
+CLOCK_REQUIRED = PUBLIC_CLOCK_KEYS - {"triggered_at_cluster"}
+SPAWN_REQUIRED = {
+    "label", "category", "max", "tick_on", "tick_per_event",
+    "trigger_on_max", "visible_to_protagonist", "visible_to_writer",
+    "is_surprise", "spawned_by",
+}
+
+
+class ClockContractError(ValueError):
+    """时钟文件、事件或调用参数不符合唯一契约。"""
+
+
+def _require_cluster_id(value: str) -> str:
+    if not isinstance(value, str) or not CLUSTER_RE.fullmatch(value):
+        raise ClockContractError(f"非法 cluster_id: {value!r}")
+    return value
+
+
+def _read_json_object(path: Path) -> dict:
+    if not path.is_file():
+        raise ClockContractError(f"文件不存在: {path}")
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ClockContractError(f"JSON 读取失败: {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ClockContractError(f"JSON 顶层必须是 object: {path}")
+    return data
 
 
-def save_json(p: Path, data: dict):
-    # 2026-05-29 修：裸写 → 原子写（atomic_write_json 内部已 mkdir + fsync）
-    atomic_json.atomic_write_json(p, data)
+def _validate_trigger(trigger: str) -> None:
+    if trigger == "chapter_end":
+        raise ClockContractError("tick_on 不接受 chapter_end，只能使用 cluster_end")
+    if trigger == "cluster_end":
+        return
+    if not isinstance(trigger, str) or not trigger:
+        raise ClockContractError("tick_on 条目必须是非空字符串")
+    event_type = trigger.split(":", 1)[0]
+    if not EVENT_RE.fullmatch(event_type):
+        raise ClockContractError(f"非法事件触发器: {trigger!r}")
+
+
+def _validate_clock(clock: dict, *, index: int) -> None:
+    if not isinstance(clock, dict):
+        raise ClockContractError(f"clocks[{index}] 必须是 object")
+    public = {key for key in clock if not str(key).startswith("_")}
+    missing = CLOCK_REQUIRED - set(clock)
+    unknown = public - PUBLIC_CLOCK_KEYS
+    if missing or unknown:
+        raise ClockContractError(
+            f"clocks[{index}] 字段错误: missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
+    if not isinstance(clock["clock_id"], str) or not clock["clock_id"]:
+        raise ClockContractError(f"clocks[{index}].clock_id 必须是非空字符串")
+    for field in ("label", "category", "trigger_on_max", "spawned_by"):
+        if not isinstance(clock[field], str) or not clock[field].strip():
+            raise ClockContractError(f"clocks[{index}].{field} 必须是非空字符串")
+    if not isinstance(clock["ticks"], int) or isinstance(clock["ticks"], bool):
+        raise ClockContractError(f"clocks[{index}].ticks 必须是整数")
+    if not isinstance(clock["max"], int) or isinstance(clock["max"], bool) or clock["max"] <= 0:
+        raise ClockContractError(f"clocks[{index}].max 必须是正整数")
+    if not 0 <= clock["ticks"] <= clock["max"]:
+        raise ClockContractError(f"clocks[{index}].ticks 必须位于 0..max")
+    if (not isinstance(clock["tick_per_event"], int)
+            or isinstance(clock["tick_per_event"], bool)
+            or clock["tick_per_event"] <= 0):
+        raise ClockContractError(f"clocks[{index}].tick_per_event 必须是正整数")
+    triggers = clock["tick_on"]
+    if not isinstance(triggers, list) or not triggers:
+        raise ClockContractError(f"clocks[{index}].tick_on 必须是非空数组")
+    for trigger in triggers:
+        _validate_trigger(trigger)
+    for field in ("visible_to_protagonist", "visible_to_writer", "is_surprise"):
+        if not isinstance(clock[field], bool):
+            raise ClockContractError(f"clocks[{index}].{field} 必须是 boolean")
+    if clock["is_surprise"] and clock["visible_to_writer"]:
+        raise ClockContractError(f"clocks[{index}] 暗线时钟不得向 writer 暴露")
+    _require_cluster_id(clock["since_cluster"])
+    if clock["status"] not in STATUSES:
+        raise ClockContractError(f"clocks[{index}].status 非法: {clock['status']!r}")
+    triggered_at = clock.get("triggered_at_cluster")
+    if triggered_at is not None:
+        _require_cluster_id(triggered_at)
+    if clock["status"] == "triggered" and triggered_at is None:
+        raise ClockContractError(f"clocks[{index}] 已触发但缺 triggered_at_cluster")
+
+
+def validate_clocks(data: dict) -> dict:
+    if data.get("_schema") != SCHEMA_NAME or data.get("schema_version") != SCHEMA_VERSION:
+        raise ClockContractError(
+            f"时钟表 schema 必须是 _schema={SCHEMA_NAME!r}, schema_version={SCHEMA_VERSION!r}"
+        )
+    unknown_top = {
+        key for key in data
+        if not str(key).startswith("_") and key not in PUBLIC_TOP_KEYS
+    }
+    if unknown_top:
+        raise ClockContractError(f"时钟表未知顶层字段: {sorted(unknown_top)}")
+    clocks = data.get("clocks")
+    if not isinstance(clocks, list):
+        raise ClockContractError("时钟表.clocks 必须是数组")
+    seen: set[str] = set()
+    for index, clock in enumerate(clocks):
+        _validate_clock(clock, index=index)
+        clock_id = clock["clock_id"]
+        if clock_id in seen:
+            raise ClockContractError(f"重复 clock_id: {clock_id}")
+        seen.add(clock_id)
+    return data
 
 
 def load_clocks(project_root: Path) -> dict:
-    return load_json(project_root / "_数据库" / "时钟表.json", None)
+    path = Path(project_root) / "_数据库" / "时钟表.json"
+    return validate_clocks(_read_json_object(path))
 
 
-def save_clocks(project_root: Path, data: dict):
-    save_json(project_root / "_数据库" / "时钟表.json", data)
+def save_clocks(project_root: Path, data: dict) -> None:
+    validate_clocks(data)
+    atomic_json.atomic_write_json(Path(project_root) / "_数据库" / "时钟表.json", data)
 
 
-# ───────────────────── 真实项目 schema 兼容层（2026-05-30 北极星③契约修复） ─────────────────────
-# 背景（3 真实项目实测）：引擎旧版只认 v21 扁平 schema（clocks[] · ticks/max/tick_on/status），
-# 但 AI 在 outline 阶段自由生成维度 schema，导致引擎静默 no-op（_do_tick 全跳过 / list_active 空）：
-#   · 城南：clocks[] · current_segments/max_segments/linked_me（无 status/ticks/tick_on）
-#   · 纵尸司：clocks[] · id/current/initial/trigger_at_zero（倒计时 · current 递减到 0 触发）
-#   · 诡异：story_clocks[] · id/current/target/trigger_at_target/incremented_by（正计时 · current 升到 target）
-# 修复（参照 fate_engine._events / ._event_id 范式）：加小 accessor 把 4 套形态归一到统一视图，
-# 让引擎读到真实状态注入 writer。纪律：只兼容读取（北极星⑥别过度复杂），不强制改 outline schema。
+def _matches(trigger: str, event_type: str, event_value: str) -> bool:
+    if ":" not in trigger:
+        return trigger == event_type
+    trigger_type, pattern = trigger.split(":", 1)
+    return trigger_type == event_type and fnmatch.fnmatchcase(event_value, pattern)
 
 
-def _clock_list(data: dict) -> list[dict]:
-    """取 clock 列表 · 键名兼容 clocks（v21/城南/纵尸司） or story_clocks（诡异）。过滤非 dict 占位。"""
-    raw = data.get("clocks")
-    if not raw:
-        raw = data.get("story_clocks") or []
-    return [c for c in raw if isinstance(c, dict)]
+def _validate_event(event_type: str, event_value: str) -> None:
+    if event_type == "chapter_end":
+        raise ClockContractError("事件类型不接受 chapter_end")
+    if event_type != "cluster_end" and not EVENT_RE.fullmatch(event_type or ""):
+        raise ClockContractError(f"非法 event_type: {event_type!r}")
+    if not isinstance(event_value, str):
+        raise ClockContractError("event_value 必须是字符串")
+    if event_type == "cluster_end" and event_value:
+        raise ClockContractError("cluster_end 不接受 event_value")
 
 
-def _clock_id(c: dict) -> str:
-    """取 clock 标识 · clock_id（v21/城南） or id（纵尸司/诡异）。"""
-    return c.get("clock_id") or c.get("id") or ""
-
-
-def _clock_label(c: dict) -> str:
-    """取可读标签 · label（v21） or name（纵尸司/诡异） or description（城南）。"""
-    return c.get("label") or c.get("name") or c.get("description") or _clock_id(c)
-
-
-def _clock_progress(c: dict) -> tuple[int, int, str]:
-    """归一进度到 (current_ticks, max, direction)：
-      · direction="up"   → current_ticks 升到 max 满格触发（v21 ticks/max · 城南 current_segments/max_segments · 诡异 current/target）
-      · direction="down" → 倒计时（纵尸司 current/initial · current 递减到 0 触发）：
-          为统一「升到 max 满格」语义，映射成 elapsed=initial-current 升到 initial（remaining=current）。
-    返回 (ticks, max, direction)。max<=0 兜底 99 防除零。"""
-    # 倒计时形态（纵尸司）：有 trigger_at_zero 或（有 initial 且无 max/target/segments）
-    has_countdown = ("trigger_at_zero" in c) or (
-        "initial" in c and "max" not in c and "max_segments" not in c and "target" not in c
-    )
-    if has_countdown:
-        initial = c.get("initial", c.get("current", 0))
-        current = c.get("current", initial)
-        max_v = initial if initial > 0 else 99
-        elapsed = max_v - current  # current 越小越接近触发 → elapsed 越大越满格
-        return (max(0, elapsed), max_v, "down")
-    # 正计时形态（v21 / 城南 / 诡异）
-    ticks = c.get("ticks")
-    if ticks is None:
-        ticks = c.get("current_segments")
-    if ticks is None:
-        ticks = c.get("current", 0)
-    max_v = c.get("max")
-    if max_v is None:
-        max_v = c.get("max_segments")
-    if max_v is None:
-        max_v = c.get("target", 99)
-    if not max_v or max_v <= 0:
-        max_v = 99
-    return (ticks or 0, max_v, "up")
-
-
-def _clock_trigger(c: dict) -> str:
-    """取满格触发描述 · trigger_on_max（v21） or trigger_at_target（诡异） or trigger_at_zero（纵尸司）。"""
-    return c.get("trigger_on_max") or c.get("trigger_at_target") or c.get("trigger_at_zero") or ""
-
-
-def _clock_is_active(c: dict) -> bool:
-    """是否活跃（可 tick / 该注入 writer）。
-    v21 有显式 status → 仅 active；维度 schema 无 status 字段 → 视为活跃（除非已标 triggered/abandoned）。"""
-    st = c.get("status")
-    if st is None:
-        return True  # 城南/纵尸司/诡异 无 status → 默认活跃
-    return st == "active"
-
-
-def _match_tick_on(tick_on_list: list[str], event_type: str, value: str = "") -> bool:
-    """tick_on 匹配。支持 chapter_end / event_type:<glob_pattern>。"""
-    for to in tick_on_list:
-        if to == event_type:
-            return True
-        if ":" in to:
-            t, pat = to.split(":", 1)
-            if t == event_type and fnmatch.fnmatch(value, pat):
-                return True
-    return False
-
-
-def _write_back_progress(c: dict, new_ticks: int, max_v: int, direction: str):
-    """把归一后的进度写回 clock 原 schema 的真实字段（兼容 4 套形态）。
-    direction=="up"  → 写 ticks 升到的值（按存在的字段：ticks / current_segments / current）
-    direction=="down"→ 倒计时：new_ticks 是 elapsed，回写 current = max_v - elapsed（递减）"""
-    if direction == "down":
-        c["current"] = max(0, max_v - new_ticks)
-        return
-    if "ticks" in c:
-        c["ticks"] = new_ticks
-    elif "current_segments" in c:
-        c["current_segments"] = new_ticks
-    else:
-        c["current"] = new_ticks  # 诡异 current/target
-
-
-def _do_tick(clocks_data: dict, ch: int, event_type: str, event_value: str = "") -> dict:
-    """对**显式声明触发条件（tick_on）**的 clock 执行 tick。返回触发（满格）的 clock 列表。
-
-    2026-05-30 北极星③⑤回归修正（batch5 audit-r4 过度修正回退）：
-      · v21 有 tick_on → 按 tick_on 匹配推进（chapter_end / event_type:glob）。
-      · 维度 schema **无 tick_on**（城南 linked_me / 纵尸司 trigger_at_zero / 诡异 incremented_by）
-        → **不再每 chapter_end 机械推进**。这类 clock 由 ME/叙事因果驱动（涟漪效应·事件涌现），
-        引擎只 read-only surface 到 list_active/manifest 让 writer 看到真实状态，**不当章节计数驱动器**。
-        （batch5 让无 tick_on 的 clock 每章无条件 advance，把 Clock 从 advisory soft-pull 变成机械
-         剧情驱动器——3 真实项目全部 tick_on=None 即被全量 force-tick，违反北极星③事件涌现非预设 +
-         ⑤引擎顾问非驱动。此处仅修「机械推进」，保留 batch5「surface 真实状态」的正确部分。）
-
-    显式事件触发（tick_event）仍可推进 v21 clock；维度 schema 的推进交给世界演化/走向卡叙事信号
-    （目前无 changes 申报消费机制 → 维度 clock 保持不自动推进，等真实叙事信号到位再消费）。
-    """
-    triggered = []
-    ticked = []
-    for c in _clock_list(clocks_data):
-        if not _clock_is_active(c):
+def tick_event(
+    project_root: Path,
+    cluster_id: str,
+    event_type: str,
+    event_value: str = "",
+) -> dict:
+    """按当前 cluster 的一个显式事件推进所有匹配时钟。"""
+    cluster_id = _require_cluster_id(cluster_id)
+    _validate_event(event_type, event_value)
+    data = load_clocks(project_root)
+    ticked: list[dict] = []
+    triggered: list[dict] = []
+    for clock in data["clocks"]:
+        if clock["status"] != "active":
             continue
-        tick_on = c.get("tick_on")
-        if not tick_on:
-            # 无 tick_on：只 surface 不机械推进（北极星③⑤）——不靠章节计数触发 ME。
+        if not any(_matches(trigger, event_type, event_value) for trigger in clock["tick_on"]):
             continue
-        if not _match_tick_on(tick_on, event_type, event_value):
-            continue
-        old, max_v, direction = _clock_progress(c)
-        delta = c.get("tick_per_event", 1)
-        new = min(max_v, old + delta)
-        _write_back_progress(c, new, max_v, direction)
+        old = clock["ticks"]
+        new = min(clock["max"], old + clock["tick_per_event"])
+        clock["ticks"] = new
         ticked.append({
-            "clock_id": _clock_id(c),
-            "label": _clock_label(c),
+            "clock_id": clock["clock_id"],
+            "label": clock["label"],
             "old": old,
             "new": new,
-            "max": max_v,
-            "remaining": max_v - new,
+            "max": clock["max"],
+            "remaining": clock["max"] - new,
         })
-        if new >= max_v:
-            c["status"] = "triggered"
-            c["triggered_at_ch"] = ch
+        if new >= clock["max"]:
+            clock["status"] = "triggered"
+            clock["triggered_at_cluster"] = cluster_id
             triggered.append({
-                "clock_id": _clock_id(c),
-                "label": _clock_label(c),
-                "trigger_on_max": _clock_trigger(c),
-                "category": c.get("category"),
+                "clock_id": clock["clock_id"],
+                "label": clock["label"],
+                "trigger_on_max": clock["trigger_on_max"],
+                "category": clock["category"],
             })
-    return {"ticked": ticked, "triggered": triggered}
-
-
-def tick_chapter(project_root: Path, ch: int) -> dict:
-    """每章末统一 tick（chapter_end 触发的所有 clock）。"""
-    data = load_clocks(project_root)
-    if data is None:
-        return {"error": "时钟表.json 不存在"}
-    r = _do_tick(data, ch, "chapter_end")
     save_clocks(project_root, data)
-    return {"ch": ch, "event": "chapter_end", **r}
+    return {
+        "cluster_id": cluster_id,
+        "event": {"type": event_type, "value": event_value},
+        "ticked": ticked,
+        "triggered": triggered,
+    }
 
 
-def tick_event(project_root: Path, ch: int, event_type: str, event_value: str) -> dict:
-    """事件触发（minor_event:<match> / fate_event:<id> / faction_drop:<faction>:<dim>）。"""
+def tick_cluster_end(project_root: Path, cluster_id: str) -> dict:
+    """发送当前故事块结束事件。"""
+    return tick_event(project_root, cluster_id, "cluster_end")
+
+
+def list_active(project_root: Path, cluster_id: str) -> dict:
+    """返回当前 cluster 写作前可消费的活跃时钟快照。"""
+    cluster_id = _require_cluster_id(cluster_id)
     data = load_clocks(project_root)
-    if data is None:
-        return {"error": "时钟表.json 不存在"}
-    r = _do_tick(data, ch, event_type, event_value)
-    save_clocks(project_root, data)
-    return {"ch": ch, "event": f"{event_type}:{event_value}", **r}
-
-
-def list_active(project_root: Path, ch: int) -> dict:
-    """列出当前活跃 clock + 距离满格 + 紧迫度（remaining ≤ 2 → urgent）。"""
-    data = load_clocks(project_root)
-    if data is None:
-        return {"error": "时钟表.json 不存在"}
-    out = []
-    for c in _clock_list(data):
-        if not _clock_is_active(c):
+    active: list[dict] = []
+    for clock in data["clocks"]:
+        if clock["status"] != "active":
             continue
-        ticks, max_v, _direction = _clock_progress(c)
-        remaining = max_v - ticks
-        urgency = "urgent" if remaining <= 2 else ("approaching" if remaining <= max_v * 0.3 else "normal")
-        out.append({
-            "clock_id": _clock_id(c),
-            "label": _clock_label(c),
-            "category": c.get("category"),
-            "ticks": ticks,
-            "max": max_v,
+        remaining = clock["max"] - clock["ticks"]
+        urgency = "urgent" if remaining <= 2 else (
+            "approaching" if remaining <= clock["max"] * 0.3 else "normal"
+        )
+        active.append({
+            "clock_id": clock["clock_id"],
+            "label": clock["label"],
+            "category": clock["category"],
+            "ticks": clock["ticks"],
+            "max": clock["max"],
             "remaining": remaining,
             "urgency": urgency,
-            "trigger_on_max": _clock_trigger(c),
-            "visible_to_protagonist": c.get("visible_to_protagonist", False),
-            # 🔴 2026-06-28 写手信息隔离：透出 visible_to_writer 供 build_manifest._sanitize_clock_to_writer
-            # 过滤暗线时钟的 trigger_on_max（精确未来触发事件）。默认 True（向后兼容·无此字段的旧时钟=明线·原样可见）。
-            "visible_to_writer": c.get("visible_to_writer", True),
-            "is_surprise": c.get("is_surprise", False),
-            "_reason": c.get("_reason") or c.get("description", ""),
+            "trigger_on_max": clock["trigger_on_max"],
+            "visible_to_protagonist": clock["visible_to_protagonist"],
+            "visible_to_writer": clock["visible_to_writer"],
+            "is_surprise": clock["is_surprise"],
+            "_reason": clock.get("_reason", ""),
         })
-    out.sort(key=lambda x: (x["remaining"], -x["ticks"]))
-    return {"ch": ch, "active_clocks": out, "total_active": len(out)}
+    active.sort(key=lambda item: (item["remaining"], -item["ticks"], item["clock_id"]))
+    return {"cluster_id": cluster_id, "active_clocks": active, "total_active": len(active)}
 
 
-def _since_cluster(project_root: Path, ch: int) -> str:
-    """反查 ch 所属 cluster_id（北极星铁律：禁用章号拼接）。"""
-    if cluster_lookup is not None:
-        try:
-            cid = cluster_lookup.ch_to_cluster_id(project_root, ch)
-            if cid:
-                return cid
-        except Exception:
-            pass
-    if cluster_lookup is not None:
-        return cluster_lookup.infer_cluster_id_by_chapter(ch)
-    raise RuntimeError("cluster_lookup 不可用，无法反查 clock 所属 cluster")
-
-
-def spawn(project_root: Path, ch: int, clock_def: dict) -> dict:
-    """动态创建 clock。clock_def 必含 label/max/tick_on/trigger_on_max。"""
+def spawn(project_root: Path, cluster_id: str, clock_def: dict) -> dict:
+    """在当前 cluster 创建从零开始的活跃时钟。"""
+    cluster_id = _require_cluster_id(cluster_id)
+    if not isinstance(clock_def, dict):
+        raise ClockContractError("spawn JSON 必须是 object")
+    public = {key for key in clock_def if not str(key).startswith("_")}
+    missing = SPAWN_REQUIRED - set(clock_def)
+    unknown = public - SPAWN_REQUIRED
+    if missing or unknown:
+        raise ClockContractError(
+            f"spawn 字段错误: missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
     data = load_clocks(project_root)
-    if data is None:
-        # 初始化文件
-        data = {"_schema": "clocks_v21_explicit_progression", "clocks": []}
-    clocks = data.setdefault("clocks", [])
-    # 自动 ID
-    nums = []
-    for c in clocks:
-        cid = c.get("clock_id", "")
-        if cid.startswith("CK_"):
-            try:
-                nums.append(int(cid[3:]))
-            except ValueError:
-                pass
-    next_num = (max(nums) + 1) if nums else 1
-    new = {
-        "clock_id": f"CK_{next_num:03d}",
-        "label": clock_def.get("label", "未命名"),
-        "category": clock_def.get("category", "other"),
-        "ticks": clock_def.get("ticks", 0),
-        "max": clock_def.get("max", 5),
-        "tick_on": clock_def.get("tick_on", ["chapter_end"]),
-        "tick_per_event": clock_def.get("tick_per_event", 1),
-        "trigger_on_max": clock_def.get("trigger_on_max", ""),
-        "visible_to_protagonist": clock_def.get("visible_to_protagonist", False),
-        # 🔴 2026-06-28 写手信息隔离：producer 可显式标暗线时钟（visible_to_writer=False / is_surprise=True），
-        # 默认明线（visible_to_writer=True · is_surprise=False · 向后兼容原样可见）。
-        "visible_to_writer": clock_def.get("visible_to_writer", True),
-        "is_surprise": clock_def.get("is_surprise", False),
-        "since_cluster": _since_cluster(project_root, ch),  # 2026-05-30 北极星：反查真实 cluster_id（非章号拼接）
-        "spawned_by": clock_def.get("spawned_by", "manual"),
+    used_numbers = []
+    for clock in data["clocks"]:
+        match = re.fullmatch(r"CK_([0-9]+)", clock["clock_id"])
+        if match:
+            used_numbers.append(int(match.group(1)))
+    clock_id = f"CK_{(max(used_numbers, default=0) + 1):03d}"
+    new_clock = {
+        "clock_id": clock_id,
+        "label": clock_def["label"],
+        "category": clock_def["category"],
+        "ticks": 0,
+        "max": clock_def["max"],
+        "tick_on": clock_def["tick_on"],
+        "tick_per_event": clock_def["tick_per_event"],
+        "trigger_on_max": clock_def["trigger_on_max"],
+        "visible_to_protagonist": clock_def["visible_to_protagonist"],
+        "visible_to_writer": clock_def["visible_to_writer"],
+        "is_surprise": clock_def["is_surprise"],
+        "since_cluster": cluster_id,
+        "spawned_by": clock_def["spawned_by"],
         "status": "active",
         "_reason": clock_def.get("_reason", ""),
     }
-    clocks.append(new)
+    _validate_clock(new_clock, index=len(data["clocks"]))
+    data["clocks"].append(new_clock)
     save_clocks(project_root, data)
-    return {"created": new["clock_id"], "label": new["label"]}
+    return {"cluster_id": cluster_id, "created": clock_id, "label": new_clock["label"]}
 
 
 def dashboard(project_root: Path) -> dict:
+    """汇总全部时钟的状态、类别与紧迫度。"""
     data = load_clocks(project_root)
-    if data is None:
-        return {"error": "时钟表.json 不存在"}
-    by_status = {}
-    by_category = {}
+    by_status: dict[str, int] = {}
+    by_category: dict[str, int] = {}
     by_urgency = {"urgent": 0, "approaching": 0, "normal": 0, "triggered": 0}
-    clocks = _clock_list(data)
-    for c in clocks:
-        s = c.get("status") or ("active" if _clock_is_active(c) else "?")
-        by_status[s] = by_status.get(s, 0) + 1
-        cat = c.get("category", "?")
-        by_category[cat] = by_category.get(cat, 0) + 1
-        if s == "triggered":
+    for clock in data["clocks"]:
+        status = clock["status"]
+        by_status[status] = by_status.get(status, 0) + 1
+        category = clock["category"]
+        by_category[category] = by_category.get(category, 0) + 1
+        if status == "triggered":
             by_urgency["triggered"] += 1
-        elif _clock_is_active(c):
-            ticks, max_v, _direction = _clock_progress(c)
-            remaining = max_v - ticks
-            if remaining <= 2:
-                by_urgency["urgent"] += 1
-            elif remaining <= max_v * 0.3:
-                by_urgency["approaching"] += 1
-            else:
-                by_urgency["normal"] += 1
+        elif status == "active":
+            remaining = clock["max"] - clock["ticks"]
+            urgency = "urgent" if remaining <= 2 else (
+                "approaching" if remaining <= clock["max"] * 0.3 else "normal"
+            )
+            by_urgency[urgency] += 1
     return {
-        "total_clocks": len(clocks),
+        "total_clocks": len(data["clocks"]),
         "by_status": by_status,
         "by_category": by_category,
         "by_urgency": by_urgency,
     }
 
 
-def main():
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="cluster 剧情时钟")
+    parser.add_argument("project")
+    parser.add_argument(
+        "action",
+        choices=["tick-cluster-end", "tick-event", "list", "spawn", "dashboard"],
+    )
+    parser.add_argument("--cluster")
+    parser.add_argument("--event-type")
+    parser.add_argument("--event-value", default="")
+    parser.add_argument("--json", help="spawn 的 clock 定义 JSON")
+    return parser
+
+
+def main() -> int:
     state_cli_guard.require_internal("clock_engine.py")
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("action", choices=["tick", "tick_event", "list", "spawn", "dashboard"])
-    ap.add_argument("ch", nargs="?", type=int, default=None)
-    ap.add_argument("--event-type", type=str, default=None)
-    ap.add_argument("--event-value", type=str, default="")
-    ap.add_argument("--json", type=str, default=None, help="spawn 用的 clock_def JSON")
-    args = ap.parse_args()
+    parser = _parser()
+    args = parser.parse_args()
+    try:
+        root = Path(args.project)
+        if args.action == "dashboard":
+            result = dashboard(root)
+        else:
+            cluster_id = _require_cluster_id(args.cluster)
+            if args.action == "tick-cluster-end":
+                result = tick_cluster_end(root, cluster_id)
+            elif args.action == "tick-event":
+                if not args.event_type:
+                    raise ClockContractError("tick-event 需要 --event-type")
+                result = tick_event(root, cluster_id, args.event_type, args.event_value)
+            elif args.action == "list":
+                result = list_active(root, cluster_id)
+            else:
+                if not args.json:
+                    raise ClockContractError("spawn 需要 --json")
+                try:
+                    definition = json.loads(args.json)
+                except json.JSONDecodeError as exc:
+                    raise ClockContractError(f"spawn JSON 无效: {exc}") from exc
+                result = spawn(root, cluster_id, definition)
+    except (ClockContractError, OSError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
 
-    project_root = Path(args.project)
-
-    if args.action == "dashboard":
-        print(json.dumps(dashboard(project_root), ensure_ascii=False, indent=2))
-        sys.exit(0)
-
-    if args.ch is None:
-        print(f"[ERROR] {args.action} 需要 <ch>", file=sys.stderr)
-        sys.exit(2)
-
-    if args.action == "tick":
-        r = tick_chapter(project_root, args.ch)
-    elif args.action == "tick_event":
-        if not args.event_type:
-            print("[ERROR] tick_event 需要 --event-type", file=sys.stderr)
-            sys.exit(2)
-        r = tick_event(project_root, args.ch, args.event_type, args.event_value or "")
-    elif args.action == "list":
-        r = list_active(project_root, args.ch)
-    elif args.action == "spawn":
-        if not args.json:
-            print("[ERROR] spawn 需要 --json '<def>'", file=sys.stderr)
-            sys.exit(2)
-        clock_def = json.loads(args.json)
-        r = spawn(project_root, args.ch, clock_def)
-
-    print(json.dumps(r, ensure_ascii=False, indent=2))
-    triggered = r.get("triggered") or []
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    triggered = result.get("triggered") or []
     if triggered:
-        print(f"\n[CLOCK TRIGGERED] {len(triggered)} clocks 满格:", file=sys.stderr)
-        for t in triggered:
-            print(f"  {t['clock_id']} {t['label']} → {t['trigger_on_max']}", file=sys.stderr)
-        sys.exit(1)
-    sys.exit(0)
+        print(f"[CLOCK TRIGGERED] {len(triggered)}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -26,7 +26,7 @@ validate_chapter.py — cluster 内物理章硬性校验器
     "errors": [ {"code", "severity"(fatal/error/warning/info), "msg", "fix_hint"} ]
   }
   severity 四级：fatal/error 影响 passed 与退出码；warning 仅提示；info 是
-  自动生成的旁注（如 PROPAGATION_DEBT_CREATED / UNKNOWN_CHARACTER_DETECTED），
+  自动生成的旁注（如 UNKNOWN_CHARACTER_DETECTED），
   下游可忽略。errors[].code 是 validate_chapter 源头 emit 的稳定机器码（WC_TOO_SHORT /
   BANNED_WORD / FORESHADOWING_NOT_PAID / LOCKED_FACT_CONFLICT /
   FUTURE_KNOWLEDGE_LEAK / POV_HEAD_HOPPING / SECRET_NOT_REVEALED /
@@ -117,105 +117,74 @@ def check_banned_words(body: str) -> list[dict]:
     return errs
 
 
-def check_changes_factual(factual: dict | None) -> tuple[list[dict], dict | None]:
-    """校验 CHANGES 的 factual 段是否存在且非空。
-    v18：CHANGES 已是独立 _changes.json，cio.read_changes 负责读取/旧稿兼容；
-    本函数只判断 factual 段有没有内容。"""
-    if not factual:
+def check_writer_self_eval(changes: dict | None) -> list[dict]:
+    """校验 writer 创作自评文件契约。"""
+    self_eval = changes.get("self_eval") if isinstance(changes, dict) else None
+    if not isinstance(self_eval, dict) or not isinstance(self_eval.get("waivers"), list):
         return [{
             "code": "CHANGES_MISSING",
             "severity": "fatal",
-            "msg": "缺少 第NNN章_changes.json 的 factual 段（v18），或旧混合稿无 CHANGES 段",
-            "fix_hint": "确认 writer 已产出 第NNN章_changes.json，且 factual 段非空",
-        }], None
-    return [], factual
+            "msg": "缺少 changes.self_eval.waivers 创作自评契约",
+            "fix_hint": "由 cluster writer 生成符合 changes_schema.json 的 self_eval",
+        }]
+    return []
 
 
-def check_tier1_foreshadowing(body: str, changes: dict, manifest: dict,
-                              project_root: Path = None) -> list[dict]:
-    """Tier-1 到期伏笔必须回收。
+def _text_evidence_hit(body: str, payload: dict) -> bool:
+    text = " ".join(str(payload.get(key) or "") for key in (
+        "description", "physical_evidence", "hidden_payoff", "secret", "title", "content"))
+    tokens = re.findall(r"[一-鿿A-Za-z0-9]{2,8}", text)
+    return bool(tokens) and any(token in body for token in tokens[:8])
 
-    兼容子代理漏写 category/type 字段的情况——通过 id 反查伏笔表推断。
-    """
+
+def check_tier1_foreshadowing(body: str, manifest: dict, project_root: Path) -> list[dict]:
+    """直接核对到期 Tier-1 伏笔是否在正文留痕。"""
     errs = []
     summary = manifest.get("foreshadowing_summary", {})
     expected = summary.get("tier1_due_count", 0)
     if expected == 0:
         return errs
-
-    # 先尝试严格模式
-    strict_payoffs = [a for a in changes.get("foreshadowing_actions", [])
-                      if a.get("category") == "promise" and a.get("type") == "payoff"
-                      and a.get("tier") == 1]
-
-    # 兼容模式：若子代理没写 category/type，用 id 反查伏笔表 + 正文出现来推断
-    fs_data = {}
-    if project_root is not None:
-        fs_data = load_json(project_root / "_数据库" / "伏笔表.json", {})
-    fs_by_id = {p.get("id"): p for p in fs_data.get("promises", [])}
-
-    inferred_payoffs = []
-    for a in changes.get("foreshadowing_actions", []):
-        if a.get("category") and a.get("type"):
-            continue  # 严格模式已处理
-        fid = a.get("id")
-        if not fid or fid not in fs_by_id:
-            continue
-        promise = fs_by_id[fid]
-        if promise.get("tier") != 1:
-            continue
-        # 2026-07-06 P1 三态生命周期：consumed=已回收跳过（open/suspended 均视为未回收）
-        if promise.get("status") == "consumed":
-            continue
-        # 出现在 CHANGES 中且对应 promise 描述的关键词在正文里出现 → 视为 payoff
-        desc = promise.get("description", "")
-        core_tokens = re.findall(r"[一-鿿A-Za-z0-9]{2,}", desc)[:3]
-        if core_tokens and any(tok in body for tok in core_tokens):
-            inferred_payoffs.append({"id": fid, "inferred": True})
-
-    total_payoffs = len(strict_payoffs) + len(inferred_payoffs)
-    if total_payoffs < expected:
+    fs_data = load_json(project_root / "_数据库" / "伏笔表.json", {}) or {}
+    candidates = [
+        promise for promise in fs_data.get("promises", []) or []
+        if isinstance(promise, dict) and promise.get("tier") in (1, "A")
+        and promise.get("status") == "open"
+    ]
+    hits = sum(1 for promise in candidates if _text_evidence_hit(body, promise))
+    if hits < expected:
         errs.append({
             "code": "FORESHADOWING_NOT_PAID",
             "severity": "error",
-            "msg": f"Tier-1 到期伏笔应回收 {expected} 条，实际 {total_payoffs} 条"
-                   f"（严格 {len(strict_payoffs)} + 推断 {len(inferred_payoffs)}）",
-            "fix_hint": "在 CHANGES.foreshadowing_actions 中补完 category/type/tier 字段并添加 payoff 条目",
-        })
-    elif inferred_payoffs:
-        errs.append({
-            "code": "FORESHADOWING_FIELDS_INCOMPLETE",
-            "severity": "warning",
-            "msg": f"{len(inferred_payoffs)} 条 Tier-1 payoff 缺少 category/type/tier 字段（已推断）",
-            "fix_hint": "在 CHANGES.foreshadowing_actions 每条都补齐 category/type/tier 字段",
+            "msg": f"Tier-1 到期伏笔应回收 {expected} 条，正文检出 {hits} 条",
+            "fix_hint": "在 cluster 草稿中补足到期伏笔的可见回收证据",
         })
     return errs
 
 
-def check_secret_reveal(body: str, changes: dict, manifest: dict) -> list[dict]:
-    """本章该揭露的 secret 必须揭露。"""
+def check_secret_reveal(body: str, manifest: dict, project_root: Path) -> list[dict]:
+    """直接核对本 cluster 到期秘密是否在正文留痕。"""
     errs = []
     expected = manifest.get("foreshadowing_summary", {}).get("must_reveal_this_ch", 0)
     if expected == 0:
         return errs
-    reveals = [a for a in changes.get("foreshadowing_actions", [])
-               if a.get("category") == "secret" and a.get("type") == "reveal"]
-    if len(reveals) < expected:
+    secrets = (load_json(project_root / "_数据库" / "伏笔表.json", {}) or {}).get("secrets", []) or []
+    hits = sum(1 for secret in secrets if isinstance(secret, dict) and _text_evidence_hit(body, secret))
+    if hits < expected:
         errs.append({
             "code": "SECRET_NOT_REVEALED",
             "severity": "error",
-            "msg": f"本章应揭露 {expected} 条 secret，实际 {len(reveals)} 条",
-            "fix_hint": "安排揭露情节，在 CHANGES 追加 secret.reveal 条目",
+            "msg": f"本 cluster 应揭露 {expected} 条 secret，正文检出 {hits} 条",
+            "fix_hint": "在 cluster 草稿中写出到期秘密的揭示证据",
         })
     return errs
 
 
-def check_item_consistency(body: str, changes: dict, project_root: Path,
+def check_item_consistency(body: str, project_root: Path,
                            manifest: dict, chapter: int) -> list[dict]:
     """道具持有者一致性：
     正文提到道具名 →
       - 道具必须已在本章之前登场（obtained_ch <= chapter）
-      - 持有者必须出场；如果不出场，必须在 CHANGES.item_transfers 中说明转移
+      - 持有者必须出场
     """
     errs = []
     items_data = load_json(project_root / "_数据库" / "道具.json", {"items": []})
@@ -227,8 +196,6 @@ def check_item_consistency(body: str, changes: dict, project_root: Path,
         if c.get("id") and c.get("name"):
             id_map[c["id"]] = c["name"]
             id_map[c["name"]] = c["id"]
-
-    transfers = {t.get("item"): t for t in changes.get("item_transfers", [])}
 
     for it in items:
         name = it.get("name", "")
@@ -249,7 +216,7 @@ def check_item_consistency(body: str, changes: dict, project_root: Path,
                 "fix_hint": f"删除对「{name}」的提及，或在大纲中提前该道具的 obtained_ch",
             })
             continue
-        # 2. 持有者出场检查（允许 transfers 作为豁免）
+        # 2. 持有者出场检查
         holder = it.get("holder", "")
         if not holder:
             continue
@@ -262,12 +229,12 @@ def check_item_consistency(body: str, changes: dict, project_root: Path,
         holder_on_stage = bool(holder_name_set & active)
         # 道具名不仅被提及，还要检查是否"被使用"（至少 2 次提及才算真正使用）
         used = body.count(name) >= 2
-        if used and not holder_on_stage and name not in transfers:
+        if used and not holder_on_stage:
             errs.append({
                 "code": "ITEM_HOLDER_ABSENT",
                 "severity": "warning",
                 "msg": f"道具「{name}」持有者「{holder}」未出场，正文却多次使用（出现 {body.count(name)} 次）",
-                "fix_hint": f"在 CHANGES.item_transfers 声明道具转移，或确认持有者上场",
+                "fix_hint": "修正文中的道具使用者，或先由状态保存链更新道具持有者",
             })
     return errs
 
@@ -326,38 +293,6 @@ def check_knowledge_leak(body: str, project_root: Path,
                         "fix_hint": f"修改该段落避免「{name}」表露对此事的认知；或将大纲 learn_at_cluster 提前",
                     })
                     break
-    return errs
-
-
-def check_time_jump(changes: dict, manifest: dict) -> list[dict]:
-    """时间跳跃合理性：
-    CHANGES.time_advance.elapsed 字段若存在跨日/跨季节表述，
-    且未在 key_events 中说明，给警告。
-    """
-    errs = []
-    ta = changes.get("time_advance", {}) or {}
-    if not ta:
-        return errs
-    elapsed = ta.get("elapsed", "")
-    if not elapsed:
-        return errs
-    # 疑似大跨度的关键词
-    big_jump_keywords = [
-        "几天", "数天", "一周", "两周", "几周", "数周",
-        "半个月", "一个月", "两个月", "三个月", "几个月", "数月",
-        "半年", "一年", "两年", "三年", "几年", "数年", "多年",
-    ]
-    hit = next((k for k in big_jump_keywords if k in elapsed), None)
-    if not hit:
-        return errs
-    key_events = ta.get("key_events", []) or []
-    if not key_events:
-        errs.append({
-            "code": "TIME_JUMP_UNEXPLAINED",
-            "severity": "warning",
-            "msg": f"本章时间跳跃「{elapsed}」较大，但 time_advance.key_events 为空",
-            "fix_hint": "在 key_events 中补充跳跃期间的时间锚点（至少 1-2 件大事）",
-        })
     return errs
 
 
@@ -430,20 +365,17 @@ def check_locked_facts(body: str, project_root: Path, manifest: dict) -> list[di
     return errs
 
 
-def check_character_appearance(body: str, changes: dict, manifest: dict) -> list[dict]:
+def check_character_appearance(body: str, manifest: dict) -> list[dict]:
     """出场角色应在正文中至少被提及。"""
     errs = []
     active = manifest.get("active_characters", [])
-    skipped = {s.get("name") for s in changes.get("skipped_characters", [])}
     for name in active:
-        if name in skipped:
-            continue
         if body.count(name) == 0:
             errs.append({
                 "code": "CHARACTER_MISSING",
                 "severity": "warning",
                 "msg": f"大纲中出场角色「{name}」在正文未出现",
-                "fix_hint": f"补充「{name}」的戏份，或在 CHANGES.skipped_characters 说明原因",
+                "fix_hint": f"补充「{name}」的戏份，或修正 manifest 的出场角色列表",
             })
         elif body.count(name) < 2 and name == active[0]:
             errs.append({
@@ -476,8 +408,8 @@ def check_pov_leak(body: str, manifest: dict) -> list[dict]:
     return errs
 
 
-def check_try_fail(changes: dict, manifest: dict) -> list[dict]:
-    """因果转换检测（v16·移植自外部工艺库）：检查cluster_blueprint中的try_fail字段是否被正文兑现。"""
+def check_try_fail(body: str, manifest: dict) -> list[dict]:
+    """检查 cluster blueprint 的 try-fail 是否在正文留下关键语义。"""
     errs = []
     plan = manifest.get("cluster_blueprint_entry") or {}
     if not plan:
@@ -489,60 +421,13 @@ def check_try_fail(changes: dict, manifest: dict) -> list[dict]:
                 break
     try_fail = plan.get("try_fail", "")
     if try_fail and try_fail.strip():
-        fa = changes.get("foreshadowing_actions", []) if changes else []
-        cp = changes.get("conflict_progress", []) if changes else []
-        if not fa and not cp:
+        tokens = re.findall(r"[一-鿿A-Za-z0-9]{2,8}", try_fail)[:8]
+        if tokens and not any(token in body for token in tokens):
             errs.append({
                 "code": "TRY_FAIL_NOT_REFLECTED",
                 "severity": "warning",
-                "msg": f"大纲 try_fail 为「{try_fail[:50]}」但 CHANGES 无 conflict_progress 或 foreshadowing_actions",
-                "fix_hint": "在 CHANGES.conflict_progress 中记录本章的尝试-失败-适应",
-            })
-    return errs
-
-
-def check_propagation_debt_generation(changes: dict, project_root: Path) -> list[dict]:
-    """传播负债自动生成（v16·移植自AI_NovelGenerator）：
-    当CHANGES修改了角色状态，自动检测哪些关联数据需要更新。"""
-    errs = []
-    if not changes:
-        return errs
-    char_changes = changes.get("character_changes", [])
-    new_debts = []
-    for cc in char_changes:
-        name = cc.get("name", "")
-        field = cc.get("field", "")
-        if field in ("状态", "立场", "阵营", "态度"):
-            relations = load_json(project_root / "_数据库" / "关系.json", {})
-            rels = relations.get("relationships", [])
-            affected = [r for r in rels if name in str(r.get("from", "")) or name in str(r.get("to", ""))]
-            if affected:
-                new_debts.append({
-                    "source": f"character_changes.{name}.{field}",
-                    "target_collection": "关系",
-                    "reason": f"角色「{name}」的{field}变化可能影响 {len(affected)} 条关系",
-                    "status": "pending",
-                })
-    if new_debts:
-        progress_path = project_root / "_数据库" / "进度.json"
-        progress = load_json(progress_path, {})
-        existing = progress.get("propagation_debt", [])
-        # v17.5 P1.3 修复：基于 (source, target_collection) 去重，避免堆积相同条目
-        existing_keys = {(d.get("source"), d.get("target_collection")) for d in existing
-                        if d.get("status") == "pending"}
-        truly_new = [d for d in new_debts
-                    if (d["source"], d["target_collection"]) not in existing_keys]
-        if truly_new:
-            existing.extend(truly_new)
-            progress["propagation_debt"] = existing
-            progress_path.write_text(
-                json.dumps(progress, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            errs.append({
-                "code": "PROPAGATION_DEBT_CREATED",
-                "severity": "info",
-                "msg": f"自动生成 {len(truly_new)} 条传播负债（去重后 / 共 {len(new_debts)} 条候选）",
-                "fix_hint": "回到当前 cluster 草稿层修复事实传播，再按 /cluster-write 与 /cluster-save-state 主链闭环",
+                "msg": f"大纲 try_fail「{try_fail[:50]}」未在正文检出关键语义",
+                "fix_hint": "在 cluster 草稿中写出尝试、受阻与适应的因果链",
             })
     return errs
 
@@ -737,10 +622,9 @@ def validate(project_root: Path, chapter: int) -> dict:
                             "msg": "manifest 未生成，先运行 build_manifest.py"}],
             }
 
-    # v18：正文走 cio.read_body（纯正文），CHANGES 走 cio.read_changes（factual 段）
+    # 正文与 writer 创作自评分离读取；客观状态校验只看 manifest 与数据库。
     body = cio.read_body(project_root, chapter)
     changes_data = cio.read_changes(project_root, chapter)
-    factual = changes_data.get("factual") or None
 
     all_errs: list[dict] = []
     progress = load_json(project_root / "_数据库" / "进度.json", {})
@@ -750,23 +634,18 @@ def validate(project_root: Path, chapter: int) -> dict:
                                  wc_range.get("min", 3000),
                                  wc_range.get("max", 5000))
     all_errs += check_banned_words(body)
-    changes_errs, changes = check_changes_factual(factual)
-    all_errs += changes_errs
-    if changes is not None:
-        all_errs += check_tier1_foreshadowing(body, changes, manifest, project_root)
-        all_errs += check_secret_reveal(body, changes, manifest)
-        all_errs += check_character_appearance(body, changes, manifest)
-        all_errs += check_item_consistency(body, changes, project_root, manifest, chapter)
-        all_errs += check_time_jump(changes, manifest)
+    all_errs += check_writer_self_eval(changes_data)
+    all_errs += check_tier1_foreshadowing(body, manifest, project_root)
+    all_errs += check_secret_reveal(body, manifest, project_root)
+    all_errs += check_character_appearance(body, manifest)
+    all_errs += check_item_consistency(body, project_root, manifest, chapter)
     all_errs += check_locked_facts(body, project_root, manifest)
     all_errs += check_knowledge_leak(body, project_root, manifest, chapter)
     all_errs += check_pov_leak(body, manifest)
     all_errs += check_character_mentions(body, project_root, chapter)
     all_errs += check_hook_specificity(body)
     all_errs += check_dialogue_craft(body)
-    if changes is not None:
-        all_errs += check_try_fail(changes, manifest)
-        all_errs += check_propagation_debt_generation(changes, project_root)
+    all_errs += check_try_fail(body, manifest)
 
     fatal = [e for e in all_errs if e["severity"] == "fatal"]
     errors = [e for e in all_errs if e["severity"] == "error"]

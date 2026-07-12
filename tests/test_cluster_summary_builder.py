@@ -1,296 +1,183 @@
-"""cluster_summary_builder.py 确定性单元测试（纯函数 + 端到端账本组装·零 LLM·零联网）。
+"""cluster 摘要构建器的当前输入与输出合同。"""
 
-钉死 cluster 账本生产者的纯逻辑：
-- 防御性读 helper（_db_dir / _load_json / _first / _ids_of）
-- 正文派生轻量提取（关键词指纹 / 时间过渡 / 地点命中 / 角色提及 / 结尾行）
-- canonical 子系统派生（压力 stress_log 状态机 / coping 关键词 / aspect 关键词集）
-- changes 派生（多别名探测 + id 展平 + applied_style 权威源）
-- foreshadow / secrets 归一
-- build_cluster_summary 端到端：造小项目 → 跑账本 → 断言 rollup 字段
+from __future__ import annotations
 
-全部用 tempfile 临时目录，绝不写真项目；只用标准库。
-"""
 import json
 import sys
-import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
-import cluster_summary_builder as mod  # noqa: E402
-import chapter_io as cio  # noqa: E402
+
+import cluster_summary_builder as builder  # noqa: E402
 import cluster_summary_store as store  # noqa: E402
-import cluster_lookup as cl  # noqa: E402
+import cross_cluster_structure_compliance_aggregate as structure_aggregate  # noqa: E402
+from cluster_summary_reader import CLUSTER_FIELDS, load_summary  # noqa: E402
+from cluster_summary_fixtures import cluster_record  # noqa: E402
 
 
-# ============================================================
-# 纯 helper：_db_dir / _load_json / _first / _ids_of
-# ============================================================
-
-def test_db_dir_appends_or_passes_through():
-    """非 _数据库 目录 → 追加 _数据库；已是 _数据库 → 原样返回。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d)
-        assert mod._db_dir(root) == root / "_数据库"
-        already = root / "_数据库"
-        assert mod._db_dir(already) == already
+def _write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
 
 
-def test_load_json_defensive():
-    """存在合法 JSON → 返回内容；缺文件/损坏 → 返回 default 不崩。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d)
-        good = root / "good.json"
-        good.write_text(json.dumps({"k": 1}, ensure_ascii=False), encoding="utf-8")
-        assert mod._load_json(good) == {"k": 1}
-        # 缺失文件
-        assert mod._load_json(root / "missing.json", default={"x": 9}) == {"x": 9}
-        # 损坏 JSON
-        bad = root / "bad.json"
-        bad.write_text("{not valid json", encoding="utf-8")
-        assert mod._load_json(bad, default=None) is None
-
-
-def test_first_picks_first_non_empty_alias():
-    """_first 返回第一个存在且非空的 key；空值（None/""/[]/{}）跳过；非 dict → default。"""
-    d = {"a": None, "b": "", "c": [], "d": "命中", "e": "备选"}
-    assert mod._first(d, "a", "b", "c", "d", "e") == "命中"
-    assert mod._first(d, "a", "b", "c") is None          # 全空 → default None
-    assert mod._first(d, "miss", default="dft") == "dft"  # 全缺 → default
-    assert mod._first("not a dict", "a", default="dft") == "dft"
-
-
-def test_ids_of_flattens_mixed_list():
-    """字符串原样保留；dict 按 id_keys 顺序取首个非空；空串/无匹配键的 dict 丢弃。"""
-    items = ["raw_id", {"aspect_id": "asp1"}, {"id": "fallback"},
-             {"other": "nope"}, "", {"aspect_id": "", "id": "asp2"}]
-    out = mod._ids_of(items, "aspect_id", "id")
-    assert out == ["raw_id", "asp1", "fallback", "asp2"]
-    assert mod._ids_of(None, "id") == []   # None 输入 → 空
-
-
-# ============================================================
-# 正文派生轻量提取
-# ============================================================
-
-def test_extract_text_keywords_min_count_and_stopwords():
-    """重复 ≥2 的非停用词 2gram 进指纹；过短文本/纯停用词 → 空。"""
-    text = "刀光刀光刀光，剑影剑影剑影"  # 刀光 出现 3 次、剑影 3 次
-    kw = mod._extract_text_keywords(text, top=4)
-    assert "刀光" in kw and "剑影" in kw
-    # 过短（清洗后 < 4 CJK）→ 空
-    assert mod._extract_text_keywords("刀", top=4) == []
-    assert mod._extract_text_keywords("", top=4) == []
-
-
-def test_detect_time_transition_only_in_head():
-    """时间过渡词在前 1000 字 → True；只出现在尾部 → False。"""
-    assert mod._detect_time_transition("翌日清晨，他醒来。") is True
-    tail = "起" * 1500 + "翌日"   # 过渡词在 1000 字之后
-    assert mod._detect_time_transition(tail) is False
-    assert mod._detect_time_transition("") is False
-
-
-def test_locations_and_char_mentions_and_ending_line():
-    """地点命中子串匹配；角色提及计数（只留 >0）；结尾行取最后非空行并截断 120 字。"""
-    body = "在青云城外，李四遇见了王五。\n青云城很大。\n   \n最后一行收束。"
-    assert mod._locations_mentioned(body, ["青云城", "黑风寨"]) == ["青云城"]
-    counts = mod._char_mention_counts(body, ["李四", "王五", "赵六"])
-    assert counts == {"李四": 1, "王五": 1}  # 赵六 未出现 → 不在 dict
-    assert mod._ending_line(body) == "最后一行收束。"
-    assert mod._ending_line("") == ""
-    assert mod._char_mention_counts("", ["李四"]) == {}
-
-
-# ============================================================
-# canonical 子系统派生（state machine / 关键词抽取）
-# ============================================================
-
-def test_build_stress_index_state_machine():
-    """stress_log → 三索引：常规条目记 new_total（同 ch 取最新）、break 条目记 card、trigger 描述。"""
-    with tempfile.TemporaryDirectory() as d:
-        db = Path(d)
-        (db / "主角压力档.json").write_text(json.dumps({
-            "stress_log": [
-                {"ch": 1, "new_total": 30, "trigger": "被追杀"},
-                {"ch": 1, "new_total": 45},  # 同 ch 后写覆盖
-                {"ch": 2, "trigger_type": "mental_break_triggered", "card_id": "break_A"},
-                {"ch": 3, "new_total": "脏"},   # 非数字 → 跳过
-                "garbage",                      # 非 dict → 跳过
-            ]
-        }, ensure_ascii=False), encoding="utf-8")
-        s_by, b_by, t_by = mod._build_stress_index(db)
-        assert s_by == {1: 45}            # 同 ch 取最新 45，ch3 脏值不入
-        assert b_by == {2: "break_A"}
-        assert t_by == {1: "被追杀"}
-        # 缺文件 → 三空 dict 不崩
-        assert mod._build_stress_index(Path(d) / "no_such") == ({}, {}, {})
-
-
-def test_coping_and_aspect_keyword_extraction():
-    """coping 行为抽 2-4 字关键词；aspect 从 narrative_constraints/emotional_triggers 抽词。"""
-    with tempfile.TemporaryDirectory() as d:
-        db = Path(d)
-        (db / "主角压力档.json").write_text(json.dumps({
-            "coping_mechanisms": {"high_stress_behaviors": ["反复擦拭佩刀", "独自饮酒"]}
-        }, ensure_ascii=False), encoding="utf-8")
-        kws = mod._coping_keywords(db)
-        assert all(len(k) >= 2 for k in kws) and kws  # 非空且都 >= 2 字
-
-        (db / "角色烙印.json").write_text(json.dumps({
-            "characters": {
-                "李四": {"active_aspects": [
-                    {"aspect_id": "asp_fear",
-                     "narrative_constraints": ["遇火必然惊恐退缩"],
-                     "emotional_triggers": ["明火炙烤的气味"]},
-                    {"narrative_constraints": ["无 id 应被跳过"]},  # 缺 aspect_id → 跳
-                ]}
+def _prepare_project(tmp_path: Path, cluster_id: str = "cluster_001") -> Path:
+    database = tmp_path / "_数据库"
+    draft_dir = tmp_path / "章节" / f"{cluster_id}_draft"
+    (database / ".wal").mkdir(parents=True)
+    (database / ".audit").mkdir()
+    (database / ".judge_reports").mkdir()
+    draft_dir.mkdir(parents=True)
+    draft = "青灯摇曳，林舟走进旧港。\n铁门后突然传来异常响动。\n夜色压下来。"
+    (draft_dir / f"{cluster_id}_draft.txt").write_text(draft, encoding="utf-8")
+    (draft_dir / f"{cluster_id}_changes.json").write_text(
+        json.dumps({
+            "self_eval": {
+                "applied_style": {"ending_type": "场景硬收"},
+                "waivers": [{"code": "STYLE_HINT", "reason": "场景需要"}],
+                "moves_used": ["门前对峙"],
+                "position_effect_evals": [{"position": "旧港", "effect": "压迫"}],
+                "storyteller_alignment": {"actual_outcome": "进门"},
             }
-        }, ensure_ascii=False), encoding="utf-8")
-        sets = mod._aspect_keyword_sets(db)
-        ids = [aid for aid, _ in sets]
-        assert ids == ["asp_fear"]                # 只有带 aspect_id 的入
-        assert all(len(k) >= 2 for _, kws in sets for k in kws)
+        }, ensure_ascii=False), encoding="utf-8"
+    )
+
+    _write_json(database / "事件簇.json", {
+        "clusters": [{
+            "cluster_id": cluster_id,
+            "narrative_mode": "linear",
+            "scene_storyboard": [{"scene": 0}, {"scene": 1}],
+            "throughline_progress": {"main": "进入旧港"},
+        }]
+    })
+    _write_json(database / "beat_map.json", {
+        "schema_version": "v27",
+        "cluster_beats": {cluster_id: [{"beat": "Catalyst"}]},
+    })
+    _write_json(database / "地图.json", {
+        "locations": [{"id": "LOC_HARBOR", "name": "旧港"},
+                       {"id": "LOC_OTHER", "name": "白塔"}]
+    })
+    _write_json(database / "主角压力档.json", {
+        "stress_log": [{"cluster_id": cluster_id, "total": 42, "trigger": "铁门"}]
+    })
+    _write_json(database / ".wal" / f"{cluster_id}_summary.json", {
+        "cluster_id": cluster_id,
+        "title": "旧港铁门",
+        "summary": "林舟在旧港找到入口并承担新的风险。",
+        "scene_summaries": ["抵达旧港", "发现铁门"],
+        "key_details": ["青灯", "铁门"],
+        "emotion": {"value": 0.7, "trend": "up"},
+        "anchor_delivery": {"delivered": ["旧港"]},
+        "appraisal_beats": [{"beat": "门前停顿"}],
+    })
+    _write_json(database / ".audit" / f"{cluster_id}_audit.json", {
+        "cluster_id": cluster_id,
+        "verdict": "pass",
+        "summary": {"fatal": 0, "error": 0},
+        "issues": [],
+        "scanner_status": [{"name": "cluster", "status": "ok"}],
+        "persona_drift": {"score": 0.0},
+    })
+    _write_json(database / ".wal" / f"{cluster_id}_archive.json", {
+        "cluster_id": cluster_id,
+        "characters": [{"id": "C_001", "name": "林舟"}],
+        "relationships": [{"from": "林舟", "to": "旧港", "type": "调查"}],
+        "items": [{"id": "I_001", "name": "铁钥匙"}],
+        "locked_facts": ["旧港有第二道门"],
+        "throughline_progress": {"main": "入口已确认"},
+    })
+    _write_json(database / ".wal" / f"{cluster_id}_state_delta.json", {
+        "cluster_id": cluster_id,
+        "time_advance": {"elapsed": "一小时", "period": "深夜"},
+        "location_changes": [{"location_id": "LOC_HARBOR", "new_status": "封锁"}],
+    })
+    _write_json(database / ".wal" / f"{cluster_id}_entity_stats.json", {
+        "cluster_id": cluster_id,
+        "known_entities": [{"name": "林舟", "appears": True, "mention_count": 2}],
+    })
+    _write_json(database / ".judge_reports" / f"{cluster_id}_writer-truth-check.json", {
+        "cluster_id": cluster_id,
+        "verdict": "pass",
+        "lie_count": 0,
+        "detected_ending_type": "场景硬收",
+        "ending_type_match": True,
+        "body_cjk_count": 31,
+    })
+    _write_json(database / ".wal" / f"{cluster_id}_judge_reports_rollup.json", {
+        "cluster_id": cluster_id,
+        "reports": [{"judge_id": "audit-hub", "overall_grade": "A"}],
+        "judge_score": 4.0,
+        "judge_grade": "A",
+        "waivers": [{"code": "STYLE_HINT", "reason": "场景需要"}],
+    })
+    store.initialize_summary(tmp_path)
+    return tmp_path
 
 
-# ============================================================
-# changes 派生 / foreshadow / secrets
-# ============================================================
-
-def test_build_changes_derived_aliases_and_id_flatten():
-    """多别名探测 + aspects/clocks 展平成 id 字符串列表 + applied_style 权威 ending。"""
-    factual = {
-        "relationship_changes": [{"from": "A", "to": "B"}],          # 别名命中
-        "aspects_addressed": [{"aspect_id": "asp1"}, "asp2"],         # dict + str 混
-        "clocks_addressed": [{"clock_id": "clk1"}],
-        "ending_type": "factual_fallback_type",                      # 仅当 applied 缺时兜底
-    }
-    self_eval = {
-        "applied_style": {"ending_type": "cliffhanger", "ending_line": "他回头。"},
-        "moves_used": ["威逼", "利诱"],
-    }
-    rec = mod._build_changes_derived(factual, self_eval)
-    assert rec["relationships"] == [{"from": "A", "to": "B"}]
-    assert rec["aspects_addressed"] == ["asp1", "asp2"]   # 展平
-    assert rec["clocks_addressed"] == ["clk1"]
-    assert rec["ending_type"] == "cliffhanger"            # applied_style 优先于 factual
-    assert rec["ending_line"] == "他回头。"
-    assert rec["moves_used"] == ["威逼", "利诱"]            # self_eval 权威源
+def test_helpers_keep_cluster_semantics():
+    assert builder._canonical_cluster_id(1) == "cluster_001"
+    assert builder._ending_line("第一句\n\n最后一句") == "最后一句"
+    assert "青灯" in builder._extract_keywords("青灯摇曳，青灯再次摇曳。")
+    audit = builder._audit_rollup({
+        "verdict": "warn",
+        "summary": {"error": 1},
+        "issues": [{"code": "X", "severity": "warn", "gate_level": "advisory"}],
+        "persona_drift": {"score": 0.2},
+    })
+    assert audit["issues"][0]["code"] == "X"
+    assert audit["persona_drift"]["score"] == 0.2
+    assert builder._dedupe_waivers(
+        [{"code": "X", "reason": "same"}],
+        [{"code": "X", "reason": "same"}, {"code": "Y", "reason": "other"}],
+    ) == [{"code": "X", "reason": "same"}, {"code": "Y", "reason": "other"}]
 
 
-def test_foreshadow_actions_and_secrets_normalization():
-    """foreshadowing_actions dict 形态 → (planted,paid,reinforced)；secrets 归一字符串。"""
-    factual = {
-        "foreshadowing_actions": {
-            "planted": ["fs1", {"id": "fs2"}, {"description": "无id用描述"}],
-            "paid": [{"fid": "fs0"}],
-            "reinforced": ["fs3"],
-        },
-        "secrets_revealed": ["sec1", {"id": "sec2"}, {"sid": "sec3"}],
-    }
-    planted, paid, reinforced = mod._foreshadow_actions(factual)
-    assert planted == ["fs1", "fs2", "无id用描述"]
-    assert paid == ["fs0"]
-    assert reinforced == ["fs3"]
-    assert mod._secrets_revealed(factual) == ["sec1", "sec2", "sec3"]
-    # 空 factual → 三空 / 空 secrets
-    assert mod._foreshadow_actions({}) == ([], [], [])
-    assert mod._secrets_revealed({}) == []
+def test_build_cluster_record_requires_all_cluster_artifacts(tmp_path):
+    project = _prepare_project(tmp_path)
+    record = builder.build_cluster_record(project, "001")
+    assert set(record) == set(CLUSTER_FIELDS)
+    assert record["cluster_id"] == "cluster_001"
+    assert record["title"] == "旧港铁门"
+    assert record["characters"] == ["林舟"]
+    assert record["locations_mentioned"] == ["LOC_HARBOR"]
+    assert record["state_delta"]["time_advance"]["period"] == "深夜"
+    assert record["truth_check"]["verdict"] == "pass"
+    assert record["audit"]["persona_drift"]["score"] == 0.0
+    assert record["structure"]["beats_declared"] == ["Catalyst"]
+    assert record["structure"]["beats_addressed"] == ["Catalyst"]
+    assert record["structure"]["beat_signal_hit"] is True
+    assert isinstance(record["pattern_metrics"], dict)
+
+    (project / "_数据库" / ".wal" / "cluster_001_archive.json").unlink()
+    with pytest.raises(builder.ClusterSummaryBuildError, match="必需产物不存在"):
+        builder.build_cluster_record(project, "cluster_001")
 
 
-# ============================================================
-# 端到端：build_cluster_summary（造小项目 → 跑账本 → 断言 rollup）
-# ============================================================
-
-def _mk_project(root: Path, cluster_id="cluster_001", rng=(1, 2)):
-    """造最小可跑项目：事件簇.json 给 cluster 范围 + title，写每章正文/changes。"""
-    db = root / "_数据库"
-    db.mkdir(parents=True, exist_ok=True)
-    lo, hi = rng
-    # 🔴 2026-06-28 不降级收尾：throughline_progress 改由 archivist→apply_archive 落
-    # 事件簇.clusters[].throughline_progress（archive 单一来源·非 writer 自报 changes.factual）。
-    (db / "事件簇.json").write_text(json.dumps({
-        "clusters": [{"cluster_id": cluster_id, "title": "第一战",
-                      "chapter_range": [lo, hi],
-                      "throughline_progress": {"OS": True, "MC": False,
-                                               "IC": False, "RS": False}}]
-    }, ensure_ascii=False), encoding="utf-8")
-    # 人物卡 + 地图（供正文派生命中）
-    (db / "人物卡.json").write_text(json.dumps({
-        "characters": [{"name": "李四"}, {"name": "王五"}]
-    }, ensure_ascii=False), encoding="utf-8")
-    (db / "地图.json").write_text(json.dumps({
-        "locations": [{"name": "青云城"}]
-    }, ensure_ascii=False), encoding="utf-8")
-    # 逐章正文 + changes
-    for ch in range(lo, hi + 1):
-        body = ("李四走进青云城，王五已在城门等候。\n" * 30) + "翌日，风雪未停。"
-        cio.write_body(root, ch, body)
-        cio.write_changes(root, ch, {
-            "factual": {
-                "secrets_revealed": [f"sec_{ch}"],
-            },
-            "self_eval": {"applied_style": {"ending_type": "cliffhanger"}},
-        })
-    return root
+def test_build_cluster_summary_persists_strict_record(tmp_path):
+    project = _prepare_project(tmp_path)
+    result = builder.build_cluster_summary(project, "cluster_001")
+    assert result["ok"] is True
+    loaded = load_summary(project)
+    assert loaded["clusters"][0]["cluster_id"] == "cluster_001"
+    assert "chapters" not in loaded["clusters"][0]
 
 
-def test_build_cluster_summary_end_to_end():
-    """端到端：账本写入 + 返回 stats（章数/字数/range/title）+ 落库可被 store 读回。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d), "cluster_001", (1, 2))
-        res = mod.build_cluster_summary(root, "cluster_001")
-        assert res["ok"] is True
-        assert res["cluster_id"] == "cluster_001"
-        assert res["title"] == "第一战"
-        assert res["chapter_range"] == [1, 2]
-        assert res["chapters_filled"] == 2
-        assert res["word_count"] > 0           # 两章正文有 CJK
-        # 账本真落库：从 store 读回，secrets/throughline rollup 都在
-        from cluster_summary_reader import load_summary
-        summary = load_summary(root)
-        rec = next(c for c in summary["clusters"]
-                   if cl.normalize_cluster_id(c["cluster_id"]) == "cluster_001")
-        assert rec["title"] == "第一战"
-        assert rec["chapter_range"] == [1, 2]
-        assert rec["word_count"] == res["word_count"]
-        # 两章各 sec_1 / sec_2 → 去重排序汇总
-        assert rec["secrets_revealed"] == ["sec_1", "sec_2"]
-        # throughline 来自 事件簇.clusters[].throughline_progress（archive 源·非 writer 自报）：
-        # 仅 OS 命中（MC/IC/RS False 不计）·cluster 级值注入两章 → 分布 100% OS
-        assert rec["throughline_distribution"] == {"OS": 1.0}
-        # 每章账本记录承载 cluster 级 throughline（aggregator 读 rec.throughline_progress）
-        assert rec["chapters"]["1"]["throughline_progress"] == {
-            "OS": True, "MC": False, "IC": False, "RS": False}
-        # 每章富摘要里有正文派生字段
-        ch1 = rec["chapters"]["1"]
-        assert ch1["cjk_count"] > 0
-        assert "青云城" in ch1.get("locations_mentioned", [])
-        assert ch1.get("time_transition_present") is True
+def test_structure_evidence_flows_from_draft_to_cross_cluster_scan(tmp_path):
+    project = _prepare_project(tmp_path)
+    builder.build_cluster_summary(project, "cluster_001")
+    report = structure_aggregate.build_report(project)
+    assert not any(
+        finding["code"] == "BEAT_MISSED" for finding in report["findings"]
+    )
 
 
-def test_build_cluster_summary_unknown_cluster_returns_error():
-    """取不到章范围（cluster 不存在）→ ok=False + error，不崩、不写库。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = _mk_project(Path(d), "cluster_001", (1, 2))
-        res = mod.build_cluster_summary(root, "cluster_099")
-        assert res["ok"] is False
-        assert res["cluster_id"] == "cluster_099"
-        assert "error" in res and res["error"]
-
-
-if __name__ == "__main__":
-    import traceback
-    fns = [v for k, v in sorted(globals().items())
-           if k.startswith("test_") and callable(v)]
-    passed = failed = 0
-    for fn in fns:
-        try:
-            fn()
-            passed += 1
-            print("OK", fn.__name__)
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            print("FAIL", fn.__name__, e)
-            traceback.print_exc()
-    print(f"[cluster_summary_builder] {passed} passed / {failed} failed")
-    raise SystemExit(0 if failed == 0 else 1)
+def test_build_cluster_record_rejects_mismatched_artifact(tmp_path):
+    project = _prepare_project(tmp_path)
+    path = project / "_数据库" / ".wal" / "cluster_001_state_delta.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["cluster_id"] = "cluster_002"
+    path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(builder.ClusterSummaryBuildError, match="state_delta.cluster_id"):
+        builder.build_cluster_record(project, "cluster_001")

@@ -9,7 +9,7 @@
 读 writer 生成的整 cluster 草稿，按字数硬范围算 N，自动评分候选切点逐章切。
 
 【v18 改动】正文/数据已分离：
-  - 草稿正文从 cio.read_body() 读（v18 纯正文稿 / 旧混合稿通吃）
+  - 草稿为纯正文，直接读入并裁剪尾部空白
   - 截断后只重写正文 txt（cio.write_body）——CHANGES 全部归属 ch，splitter 不碰
 
 用法（v27 ecas_freestyle · 按字数硬范围切 + 末章 pending_tail 补料）:
@@ -633,7 +633,7 @@ def _main_freestyle(args):
     if not dp.is_file():
         print(f"[FATAL] 草稿文件不存在: {draft_path}", file=sys.stderr)
         sys.exit(2)
-    draft_text = cio._strip_changes(dp.read_text(encoding="utf-8"))
+    draft_text = dp.read_text(encoding="utf-8").rstrip()
 
     previous_pending_tail = None
     if prev_pending_path:

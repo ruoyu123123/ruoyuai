@@ -43,15 +43,11 @@ python core/scripts/scaffold_subsystems.py verify "<书名>"          # ③ 34 �
 python core/scripts/db_schema_validate.py "workspace/novels/<书名>" # ④ schema 0 error
 ```
 
-## 契约债根治记录（验证器自身的 2 个 bug · 2026-06-01）
+## 验证器契约
 
-`db_schema_validate.py` 作为契约执行者，自身有 2 条过时/错误规则（会反过来误导弱模型把对的文件改错）：
-
-1. **地图 collection_type dict → list**：命令文档 / scaffold / 本模块自己的 migrate_dict_to_list 都按 list；消费方 build_manifest 只读 character_positions(dict)/travel_log，不按类型读 locations。旧规则与自身 migrate 方向矛盾 → 误报 TYPE_MISMATCH。
-2. **写作经验 entries → success_patterns/failure_patterns/preferences**：权威结构见 learning_loop.py 文档（entries 是 novel-reflector 的输入格式，非本文件结构；build_manifest.experience_entries 兼容读两种）。旧规则要 entries 产生持续误报。
-
-> 教训：**契约执行者（validator）也会漂移**。单一真理源（skeletons.json）+ 契约耦合测试
-> （`tests/test_scaffold_subsystems.py::test_emit_skeletons_pass_db_schema_validate`）锁死「scaffold 输出必过 validator」，防再次分叉。
+`db_schema_validate.py` 只读校验当前结构：`地图.locations` 是 list，`写作经验.success_patterns`
+是 list，伏笔 promises 使用三态字段。单一真理源与契约耦合测试
+`tests/test_scaffold_subsystems.py::test_emit_skeletons_pass_db_schema_validate` 保证骨架与验证器一致。
 
 ## 测试
 

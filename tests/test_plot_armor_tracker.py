@@ -188,7 +188,7 @@ def test_active_inflation_triggers():
         assert out["verdict"] == "FAIL_MINOR"
         assert out["violations"][0]["code"] == "PLOT_ARMOR_INFLATION"
         # snapshot 写盘
-        snap = (Path(proj) / "_数据库" / ".cross_chapter_scan"
+        snap = (Path(proj) / "_数据库" / ".cross_cluster_scan"
                 / "plot_armor_snapshot.json")
         assert snap.exists()
     finally:
@@ -239,7 +239,7 @@ def test_insufficient_threats_skips_judgment():
         out = mod.scan(_write_draft(draft), project_root=proj)
         assert "样本不足" in out["note"]
         assert out["verdict"] == "PASS"
-        snap = (Path(proj) / "_数据库" / ".cross_chapter_scan"
+        snap = (Path(proj) / "_数据库" / ".cross_cluster_scan"
                 / "plot_armor_snapshot.json")
         assert snap.exists()
         snap_obj = json.loads(snap.read_text(encoding="utf-8"))

@@ -46,7 +46,8 @@
   · 纯 prompt + 薄 Python，gen-model 调用复用 gen_model_loader 同款 fallback 管线
     （与 distill_replicate.call_gen_model 一致的 active→fallback 链 · 不另起调用栈）。
   · 零新依赖（stdlib + openai/​dotenv 已是 gen_model 栈既有）· 零 GPU。
-  · 独立诊断工具，不挂入 distill_replicate 主链。
+  · `/distill-style` 和 `/distill-style-skillopt` 的最终复刻验证步骤在 SFS 之外 required 调用本工具；
+    结论只作为作者辨识度 advisory 报告，不改变 SFS 收敛闸或 hard_gate。
 
 用法：
   shadow:  AV_JUDGE_MODE=shadow python av_judge.py \\
@@ -954,7 +955,7 @@ def pairwise_drift_count(loader: GenModelLoader, author_text: str, replica_text:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="AV-judge 解耦特质·作者验证（配对判别 · 读者视角 · advisory · 默认 off）",
+        description="AV-judge 解耦特质·作者验证（配对判别 · 读者视角 · advisory）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--author", required=True, help="作者真迹文本路径（锚）")
@@ -966,9 +967,12 @@ def main() -> int:
                         help="G2-CYCLIC 去位置偏（experiment · 半数样本反转呈现顺序 · 等价 AV_JUDGE_POSITION_SWAP=on）")
     parser.add_argument("--intent-dim", action="store_true",
                         help="intent_recovery 加「作者思维」第 5 维（experiment · 仅 advisory 文本 · 等价 AV_JUDGE_INTENT_DIM=on）")
+    parser.add_argument("--required-run", action="store_true",
+                        help="required 验证步骤：即使环境模式为 off 也执行 active advisory 判别；"
+                             "输入/报告/判别执行失败时退出 2，但走味结论仍不阻断")
     args = parser.parse_args()
 
-    mode = _av_judge_mode()
+    mode = "active" if args.required_run else _av_judge_mode()
     n_samples = _n_samples()
     swap_on = _position_swap_on() or args.position_swap
     intent_on = _intent_dim_on() or args.intent_dim
@@ -1006,7 +1010,7 @@ def main() -> int:
         report = build_report(mode, None, str(author_path), str(replica_path),
                               error=f"gen-model 配置错误: {e}")
         _emit(report, args.out)
-        return 0
+        return 2 if args.required_run else 0
 
     # 自一致性：N 次重采样 + 多数票聚合（AV_JUDGE_N_SAMPLES 默认 3 · 1=退回单次）
     #   + G2-CYCLIC 半数 swap（swap_on · experiment · 默认 off 零回归）+ intent_dim（intent_on · 仅 advisory 文本）
@@ -1019,7 +1023,7 @@ def main() -> int:
         report = build_report(mode, None, str(author_path), str(replica_path),
                               error=f"gen-model 全部失败: {str(agg['error'])[:300]}")
         _emit(report, args.out)
-        return 0  # advisory 不阻断
+        return 2 if args.required_run else 0
 
     report = build_report(mode, agg, str(author_path), str(replica_path),
                           profile_name=active.name, elapsed=elapsed)

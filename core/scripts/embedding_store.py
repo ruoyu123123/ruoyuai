@@ -1,4 +1,4 @@
-"""embedding_store.py — 轻量级 embedding 索引（v19.6 G1 新增）"""
+"""cluster 正文与角色对白的 embedding 索引。"""
 
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+import cluster_lookup
+import cluster_summary_reader as csr
 
 
 def _stable_hash_embedding(text: str, dim: int = 384) -> list[float]:
@@ -709,24 +712,48 @@ def check_embed_manifest(project_root: Path) -> "tuple[bool, str]":
     return (rec.get("method") == cur), f"manifest={rec.get('method')} cur={cur}"
 
 
-def store_chapter_embedding(project_root: Path, ch: int):
-    text_path = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
-    if not text_path.exists():
-        return None
-    text = text_path.read_text(encoding="utf-8")
+def _canonical_cluster_id(value) -> str:
+    cluster_id = cluster_lookup.normalize_cluster_id(value)
+    if not isinstance(value, str) or cluster_id != value:
+        raise ValueError(f"cluster_id 必须是规范 cluster_NNN: {value!r}")
+    return cluster_id
+
+
+def _cluster_draft_path(project_root: Path, cluster_id: str) -> Path:
+    return (
+        project_root / "章节" / f"{cluster_id}_draft"
+        / f"{cluster_id}_draft.txt"
+    )
+
+
+def store_cluster_embedding(project_root: Path, cluster_id: str):
+    cluster_id = _canonical_cluster_id(cluster_id)
+    text_path = _cluster_draft_path(project_root, cluster_id)
+    try:
+        text = text_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise FileNotFoundError(f"cluster 终稿不存在: {text_path}") from exc
+    if not text.strip():
+        raise ValueError(f"cluster 终稿为空: {text_path}")
     chunks = [text[i:i+500] for i in range(0, len(text), 500)]
     chunk_embs = [compute_embedding(c) for c in chunks]
     record = {
-        "scope": "chapter", "ch": ch, "wc": len(text), "n_chunks": len(chunks),
+        "scope": "cluster", "cluster_id": cluster_id,
+        "wc": len(text), "n_chunks": len(chunks),
         "method": embedding_method(),   # 维度混用防护：记录生成时的后端
         "chunks": [{"idx": i, "text_preview": c[:80], "embedding": e} for i, (c, e) in enumerate(zip(chunks, chunk_embs))],
     }
-    out_path = _emb_dir(project_root) / f"chapter_{ch:03d}.json"
+    out_path = _emb_dir(project_root) / f"{cluster_id}.json"
     out_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
     return out_path
 
 
-def _extract_character_dialogues(project_root: Path, character_name: str, max_d: int = 20, chapters: list[int] = None) -> list[str]:
+def _extract_character_dialogues(
+    project_root: Path,
+    character_name: str,
+    max_d: int = 20,
+    cluster_ids: list[str] | None = None,
+) -> list[str]:
     chars = json.loads((project_root / "_数据库" / "人物卡.json").read_text(encoding="utf-8"))
     char = next((c for c in chars.get("characters", []) if c.get("name") == character_name or c.get("id") == character_name), None)
     if not char:
@@ -734,14 +761,10 @@ def _extract_character_dialogues(project_root: Path, character_name: str, max_d:
     aliases = list(set([a for a in [char.get("name"), char.get("id")] + char.get("name_aliases", []) if a]))
 
     dialogues = []
-    files = []
-    if chapters:
-        for ch in chapters:
-            p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
-            if p.exists():
-                files.append(p)
-    else:
-        files = list((project_root / "章节").glob("第*章/第*章.txt"))
+    if cluster_ids is None:
+        cluster_ids = [record["cluster_id"] for record in csr.get_clusters(project_root)]
+    canonical_ids = [_canonical_cluster_id(cluster_id) for cluster_id in cluster_ids]
+    files = [_cluster_draft_path(project_root, cluster_id) for cluster_id in canonical_ids]
 
     for f in files:
         text = f.read_text(encoding="utf-8")
@@ -779,7 +802,12 @@ def store_character_baseline(project_root: Path, character_name: str):
     return out_path
 
 
-def compute_character_drift(project_root: Path, character_name: str, recent_ch: int) -> dict:
+def compute_character_drift(
+    project_root: Path,
+    character_name: str,
+    recent_cluster_id: str,
+) -> dict:
+    recent_cluster_id = _canonical_cluster_id(recent_cluster_id)
     baseline_path = _emb_dir(project_root) / f"character_{character_name}.json"
     if not baseline_path.exists():
         return {"error": "baseline 不存在", "character": character_name}
@@ -788,12 +816,17 @@ def compute_character_drift(project_root: Path, character_name: str, recent_ch: 
     # 维度混用防护：baseline 后端 ≠ 当前后端 → 提示重建（而非 cosine=0 误报 drift）
     bl_method = baseline_data.get("method", "hash")
     if bl_method != embedding_method():
-        return {"drift": None, "character": character_name, "recent_ch": recent_ch,
+        return {"drift": None, "character": character_name,
+                "recent_cluster_id": recent_cluster_id,
                 "reason": f"baseline method={bl_method} ≠ 当前={embedding_method()}，请先跑 embedding_store rebuild 重建"}
 
-    dialogues = _extract_character_dialogues(project_root, character_name, max_d=10, chapters=[recent_ch])
+    dialogues = _extract_character_dialogues(
+        project_root, character_name, max_d=10,
+        cluster_ids=[recent_cluster_id],
+    )
     if not dialogues:
-        return {"drift": None, "character": character_name, "recent_ch": recent_ch, "reason": "本章无对话"}
+        return {"drift": None, "character": character_name,
+                "recent_cluster_id": recent_cluster_id, "reason": "本 cluster 无对话"}
 
     embs = [compute_embedding(d) for d in dialogues]
     n = len(embs)
@@ -803,7 +836,7 @@ def compute_character_drift(project_root: Path, character_name: str, recent_ch: 
         avg = [v / norm for v in avg]
     sim = cosine_similarity(baseline_emb, avg)
     return {
-        "character": character_name, "recent_ch": recent_ch,
+        "character": character_name, "recent_cluster_id": recent_cluster_id,
         "baseline_samples": baseline_data.get("n_samples"),
         "recent_samples": n,
         "cosine_similarity": round(sim, 3),
@@ -815,21 +848,18 @@ def compute_character_drift(project_root: Path, character_name: str, recent_ch: 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
-    ap.add_argument("action", choices=["rebuild", "drift", "chapter"])
+    ap.add_argument("action", choices=["rebuild", "drift", "cluster"])
     ap.add_argument("--character", default=None)
-    ap.add_argument("--ch", type=int, default=None)
+    ap.add_argument("--cluster", default=None)
     args = ap.parse_args()
 
     project_root = Path(args.project)
 
     if args.action == "rebuild":
-        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-        for ch in chapters:
-            p = store_chapter_embedding(project_root, ch)
-            if p:
-                print(f"  [OK] ch{ch} chapter embedding")
+        cluster_ids = [record["cluster_id"] for record in csr.get_clusters(project_root)]
+        for cluster_id in cluster_ids:
+            store_cluster_embedding(project_root, cluster_id)
+            print(f"  [OK] {cluster_id} embedding")
         chars = json.loads((project_root / "_数据库" / "人物卡.json").read_text(encoding="utf-8"))
         for c in chars.get("characters", []):
             name = c.get("name")
@@ -844,18 +874,21 @@ def main():
         sys.exit(0)
 
     elif args.action == "drift":
-        if not args.character or not args.ch:
-            print("[ERROR] drift 需 --character 和 --ch", file=sys.stderr)
+        if not args.character or not args.cluster:
+            print("[ERROR] drift 需 --character 和 --cluster", file=sys.stderr)
             sys.exit(2)
-        print(json.dumps(compute_character_drift(project_root, args.character, args.ch), ensure_ascii=False, indent=2))
+        print(json.dumps(
+            compute_character_drift(project_root, args.character, args.cluster),
+            ensure_ascii=False, indent=2,
+        ))
         sys.exit(0)
 
-    elif args.action == "chapter":
-        if not args.ch:
-            print("[ERROR] chapter 需 --ch", file=sys.stderr)
+    elif args.action == "cluster":
+        if not args.cluster:
+            print("[ERROR] cluster 需 --cluster", file=sys.stderr)
             sys.exit(2)
-        p = store_chapter_embedding(project_root, args.ch)
-        print(f"[OK] ch{args.ch} → {p}")
+        p = store_cluster_embedding(project_root, args.cluster)
+        print(f"[OK] {args.cluster} → {p}")
         sys.exit(0)
 
 

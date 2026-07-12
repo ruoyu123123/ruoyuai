@@ -241,7 +241,7 @@ def test_happy_path_applies_minor_event_from_cluster_choice():
         code, out, _ = _run(project)
         assert code == 0
         assert "imperial setback" in out
-        assert "representative_ch=6" in out
+        assert "cluster=cluster_002" in out
         assert "RR_TEST_01" in out
         assert "WARN" not in out
 
@@ -250,7 +250,7 @@ def test_happy_path_applies_minor_event_from_cluster_choice():
         assert any(
             e.get("trigger_type") == "minor_event"
             and e.get("trigger_value") == "imperial prestige damaged"
-            and e.get("ch") == 6
+                and e.get("cluster_id") == "cluster_002"
             for e in world_after.get("world_ticks_log", [])
         )
         event_after = json.loads((project / DB / EVENT_CLUSTER).read_text(encoding="utf-8"))
@@ -259,7 +259,7 @@ def test_happy_path_applies_minor_event_from_cluster_choice():
         assert landed["_user_decision"]["selected_candidate_index"] == 1
         assert landed["_user_decision"]["candidate_count"] == 2
         assert landed["choice_leads_to"] == "the court loses visible face after a failed public maneuver"
-        assert landed["world_evolution_card"]["representative_ch"] == 6
+        assert landed["world_evolution_card"]["cluster_id"] == "cluster_002"
         assert landed["world_evolution_card"]["matched_rules"] == ["RR_TEST_01"]
         assert landed["scene_storyboard"] == [{"summary": "court setback"}]
 

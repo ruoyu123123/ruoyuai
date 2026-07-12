@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""apply_archive.py 反派轮替回库测试 — 🔴 2026-06-29 反派轮替ledger接通producer。
+"""apply_archive.py 反派轮替回库测试。
 
 钉死 apply_antagonist_rotation：archivist 读正文判定本块**实际出场反派** → archive.antagonist_rotation
-→ 确定性 append 进 反派轮替.json append-only ledger（此前零 producer·scanner 死码）：
+→ 确定性写进 反派轮替.json append-only ledger：
   · entries 按 (cluster_id, antagonist_id) 去重·新键 append·同键就地更新可变字段（含 defeat_cluster）
   · 字段对齐 antagonist_rotation_scanner schema {cluster_id, antagonist_id, tier, faction,
     motive_type, power_system_tag, defeat_cluster}（端到端 scanner 真能读·非"跳过"）
   · 幂等：re-apply 不重复 append
-  · C03 fluid / 向后兼容：archive 无 antagonist_rotation → no-op 不报错、不建 ledger 文件
+  · archive 无 antagonist_rotation → 零变更且不建 ledger 文件
   · dry-run 不写盘
 """
 import json
@@ -45,7 +45,9 @@ def _mk_project(tmp: Path):
 
 def _write_archive(db: Path, key, obj):
     p = db / ".wal" / f"cluster_{key}_archive.json"
-    p.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    payload = dict(obj)
+    payload.setdefault("cluster_id", f"cluster_{key}")
+    p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return p
 
 
@@ -80,15 +82,15 @@ def test_rotation_appends_entry_schema_aligned():
         assert e["antagonist_id"] == "C_GREEN" and e["tier"] == 2
 
 
-def test_rotation_default_cluster_id_from_current():
-    """archivist 漏给 cluster_id → 默认当前块。"""
+def test_rotation_requires_cluster_id():
+    """反派条目缺 cluster_id 时拒绝归档。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         _write_archive(db, "002", _archive_with_rotation([
             {"antagonist_id": "C_GREEN", "tier": 2, "motive_type": "贪婪",
              "power_system_tag": "权术"}]))
-        assert aa.main([str(Path(d)), "--cluster", "002"]) == 0
-        assert _ledger(db)["entries"][0]["cluster_id"] == "cluster_002"
+        assert aa.main([str(Path(d)), "--cluster", "002"]) == 2
+        assert not (db / "反派轮替.json").exists()
 
 
 def test_rotation_idempotent_no_dup():
@@ -139,19 +141,18 @@ def test_rotation_distinct_antagonists_append_separate():
         assert len(_ledger(db)["entries"]) == 2
 
 
-def test_rotation_entry_missing_id_skipped():
-    """缺 antagonist_id 的脏条目跳过·不入库。"""
+def test_rotation_entry_missing_id_rejected():
+    """缺 antagonist_id 的条目使 required 回库失败。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         _write_archive(db, "001", _archive_with_rotation([
             {"cluster_id": "cluster_001", "tier": 2, "motive_type": "贪婪"}]))
-        assert aa.main([str(Path(d)), "--cluster", "001"]) == 0
-        # 唯一脏条目被跳过 → 无有效 append → 不建文件
+        assert aa.main([str(Path(d)), "--cluster", "001"]) == 2
         assert not (db / "反派轮替.json").exists()
 
 
 def test_no_rotation_noop_backward_compat():
-    """archive 无 antagonist_rotation（C03 fluid 无反派 / 旧数据）→ no-op·不报错·不建文件。"""
+    """本块无反派变化时不创建台账。"""
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))
         _write_archive(db, "001", {"characters": [{"id": "C_PROT", "name": "伊莱", "tier": "core"}]})

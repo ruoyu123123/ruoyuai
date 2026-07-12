@@ -19,7 +19,7 @@ arXiv:2510.18561 TUNa folktale motif + Tim Weed Image Systems)：经典中文文
     recurring      已重复 ≥3 次·均匀分布
     dormant        N≥2 但末 ≥3 cluster 全缺席 → 草蛇灰线断流
     over_saturated N>7 且 cluster 覆盖率>80% → 用得过密
-    payoff_due     dormant 且 cluster_summary 里有 promise_payoff 标记 → 该回收
+    payoff_due     dormant 且 伏笔表.json 有对应未回收 promise (open/suspended) → 该回收
 
   指标：
     Gini 系数 over 首现/末现 cluster 间距 (集中/分散度)
@@ -27,8 +27,8 @@ arXiv:2510.18561 TUNa folktale motif + Tim Weed Image Systems)：经典中文文
     R (recurrence span = last - first cluster index) 直方图
 
   输出：
-    _数据库/motif_ledger.json (五类 motif 状态账本·持久化)
-    _数据库/.cross_chapter_scan/motif_advisory_snapshot.json (供 build_manifest 注入下个 cluster)
+    _数据库/.cross_cluster_scan/motif_ledger.json (五类 motif 状态账本·持久化)
+    _数据库/.cross_cluster_scan/motif_advisory_snapshot.json (供 build_manifest 注入下个 cluster)
 
 【北极星 ⑤ 顾问非法官】母题反复是工艺 advisory · code MOTIF_DORMANT / MOTIF_OVER_SATURATED
 / MOTIF_PAYOFF_DUE 绝不进 audit_hub.HARD_GATE_CODES · env MOTIF_RECURRENCE_MODE:
@@ -118,34 +118,14 @@ def _build_extra_pattern(words: list) -> re.Pattern | None:
 
 
 def _read_cluster_text(project_root: Path, cluster: dict) -> str:
-    """读 cluster 的草稿/章节文本拼接。
-
-    优先级：cluster.scope_summary + scenes_brief 描述 (账本里有)·退章节文件。
-    """
+    """拼接 cluster 摘要账本记录里的叙事文本(summary + 各场景摘要)供母题词典扫描。"""
     parts = []
-    # 1) 账本里的 scope_summary / 章节摘要
-    scope = cluster.get("scope_summary") or ""
-    if isinstance(scope, str) and scope:
-        parts.append(scope)
-    chapters = cluster.get("chapters") or {}
-    if isinstance(chapters, dict):
-        for ch_key, rec in chapters.items():
-            if not isinstance(rec, dict):
-                continue
-            for fld in ("summary", "scene_summary", "title"):
-                v = rec.get(fld)
-                if isinstance(v, str) and v:
-                    parts.append(v)
-    # 2) 退章节文件 (若账本字段空)
-    if not parts:
-        cluster_id = cluster.get("cluster_id") or ""
-        draft_dir = project_root / "章节" / f"{cluster_id}_draft"
-        if draft_dir.exists():
-            for f in sorted(draft_dir.glob("*.txt")):
-                try:
-                    parts.append(f.read_text(encoding="utf-8"))
-                except OSError:
-                    pass
+    summary = cluster.get("summary") or ""
+    if isinstance(summary, str) and summary:
+        parts.append(summary)
+    for scene in cluster.get("scene_summaries") or []:
+        if isinstance(scene, str) and scene:
+            parts.append(scene)
     return "\n".join(parts)
 
 
@@ -284,27 +264,25 @@ def emit_findings(ledger: dict, project_root: Path) -> list:
     motifs = ledger["motifs"]
     n_clusters = ledger["n_clusters"]
 
-    # 检查 promise_payoff (从 cluster_summary 读 foreshadowing/secret)
+    # 检查 promise_payoff：伏笔表.json 是本项判定的可选辅助输入（缺失/损坏不影响
+    # dormant/over_saturated/seed_proliferation 三个主判定，只让 payoff_due 判不出）。
+    # 未回收 (open/suspended) promise 的 id 与 dormant motif term 精确匹配即判定该回收。
     payoff_motifs = set()
-    p = project_root / "_数据库" / "故事块摘要.json"
-    if p.exists():
+    fb_path = project_root / "_数据库" / "伏笔表.json"
+    if fb_path.exists():
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            for c in data.get("clusters", []):
-                if not isinstance(c, dict):
-                    continue
-                for fld in ("foreshadowing_planted", "promises", "secrets"):
-                    items = c.get(fld) or []
-                    if isinstance(items, list):
-                        for it in items:
-                            if isinstance(it, dict):
-                                tag = it.get("target") or it.get("name") or it.get("symbol")
-                                if isinstance(tag, str):
-                                    payoff_motifs.add(tag)
-                            elif isinstance(it, str):
-                                payoff_motifs.add(it)
+            fb_data = json.loads(fb_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            pass
+            fb_data = None
+        if isinstance(fb_data, dict):
+            for promise in fb_data.get("promises") or []:
+                if not isinstance(promise, dict):
+                    continue
+                if promise.get("status") not in ("open", "suspended"):
+                    continue
+                pid = promise.get("id")
+                if isinstance(pid, str) and pid.strip():
+                    payoff_motifs.add(pid.strip())
 
     dormant_list = []
     over_sat_list = []
@@ -387,7 +365,11 @@ def main():
         print("[OFF] MOTIF_RECURRENCE_MODE=off")
         sys.exit(0)
 
-    clusters = csr.get_clusters(project_root, last_n=args.last_n)
+    try:
+        clusters = csr.get_clusters(project_root, last_n=args.last_n)
+    except (OSError, ValueError, csr.ClusterSummaryError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        sys.exit(2)
     if not clusters:
         print("[SKIP] 账本无 cluster 记录")
         sys.exit(0)
@@ -400,8 +382,8 @@ def main():
 
     db = project_root / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
-    # 🔴 2026-06-27 P2-12: motif_ledger.json 迁 .cross_chapter_scan/（与 advisory snapshot 同目录·根目录干净·scaffold KNOWN_EXTRAS 不必再网开一面）。
-    snap_dir = db / ".cross_chapter_scan"
+    # 完整账本与 advisory snapshot 统一写入跨 cluster 扫描目录。
+    snap_dir = db / ".cross_cluster_scan"
     snap_dir.mkdir(parents=True, exist_ok=True)
     # 持久化 motif_ledger.json (完整账本)
     ledger_path = snap_dir / "motif_ledger.json"
@@ -410,13 +392,6 @@ def main():
             json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as e:
         print(f"[WARN] motif_ledger.json 写失败: {e}", file=sys.stderr)
-    # 兼容旧位置：若 _数据库/motif_ledger.json 残留则尝试静默清理（不阻塞）
-    _legacy = db / "motif_ledger.json"
-    try:
-        if _legacy.exists():
-            _legacy.unlink()
-    except OSError:
-        pass
     snapshot = {
         "scan_type": "motif_recurrence_ledger",
         "scan_ts": datetime.now().strftime("%Y%m%d_%H%M%S"),

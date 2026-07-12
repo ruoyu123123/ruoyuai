@@ -1,16 +1,7 @@
-"""skill_opt.reward — 多信号聚合成 binary reward
+"""把当前 cluster 的 audit、reading、voice 与 truth 信号聚合成 reward。
 
-E2 调研发现现成可用的 4 个 binary 信号:
-1. audit_hub.verdict        : pass / fail
-2. reading-reflector.verdict: pass / fail
-3. voice-checker drift_count : == 0
-4. writer-truth-check lie    : == 0
-
-聚合策略:
-- strict (论文风格): 4 个全 pass → 1.0,任一 fail → 0.0
-- soft (推荐起步) : 通过比例 → [0, 1] 连续
-
-北极星纪律 ⑤: reward 只读现有 judge/scanner 产物的 binary 字段,不引入新评判。
+strict 模式要求四个信号全部通过；soft 模式返回有效信号的通过比例。
+本模块只读取既有评估产物，不新增评判规则。
 """
 from __future__ import annotations
 
@@ -70,59 +61,31 @@ def _grade_to_binary(d: dict, key: str = "overall_grade") -> bool | None:
     return str(g).upper() in ("A", "B", "S")
 
 
-def _cluster_chapter_range(project_root: Path, cluster_id: str) -> list[int]:
-    """从 事件簇.json 取本 cluster 含哪些章号。"""
-    ec_path = project_root / "_数据库" / "事件簇.json"
-    if not ec_path.exists():
-        return []
-    try:
-        d = json.loads(ec_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    for c in d.get("clusters", []):
-        if c.get("cluster_id") == cluster_id:
-            # 真实字段是 chapter_range: [start, end] (闭区间)
-            cr = c.get("chapter_range")
-            if cr and len(cr) == 2:
-                return list(range(int(cr[0]), int(cr[1]) + 1))
-            # 兜底:scene_storyboard 含 ch 字段
-            sb = c.get("scene_storyboard") or []
-            ch_set = set()
-            for s in sb:
-                ch = s.get("ch") or s.get("chapter")
-                if ch:
-                    ch_set.add(int(ch))
-            return sorted(ch_set)
-    return []
-
-
-def _truth_clean_for_cluster(judge_dir: Path, project_root: Path, cluster_id: str) -> bool | None:
-    """truth-check 是章级,聚合 cluster 内所有章:全 A/B → 通过,任一 C/D/F → 失败,无数据 → None。"""
-    chs = _cluster_chapter_range(project_root, cluster_id)
-    if not chs:
+def _truth_clean_for_cluster(judge_dir: Path, cluster_id: str) -> bool | None:
+    """读取一个 cluster 的 truth-check 报告，不展开物理章节。"""
+    report = _read_json(judge_dir / f"{cluster_id}_writer-truth-check.json")
+    if not report:
         return None
-    grades = []
-    for ch in chs:
-        d = _read_json(judge_dir / f"ch_{ch:03d}_writer-truth-check.json")
-        g = d.get("overall_grade")
-        if g:
-            grades.append(g)
-    if not grades:
+    verdict = report.get("verdict")
+    lie_count = report.get("lie_count")
+    if verdict is None and lie_count is None:
         return None
-    return all(str(g).upper() in ("A", "B", "S") for g in grades)
+    if not isinstance(lie_count, int) or isinstance(lie_count, bool):
+        return False
+    return str(verdict).lower() == "pass" and lie_count == 0
 
 
 def collect_for_cluster(
     project_root: Path,
     cluster_id: str,
 ) -> RewardComponents:
-    """从写作链路真实产物拣 4 个 binary 信号(已按 凿窍纪 实测路径核对)。
+    """从当前 cluster 产物读取 4 个 binary 信号。
 
-    真实路径 (2026-06-18 凿窍纪 grep 实测):
+    路径：
     - audit:        _数据库/.audit/<cluster_id>_audit.json  字段 .verdict ∈ {pass, waived, fail, fatal}
     - reading:      _数据库/.reading_reflection/<cluster_id>_round_<N>.json (取最后一轮) .verdict ∈ {pass, fail}
     - voice:        _数据库/.judge_reports/<cluster_id>_voice-checker.json .overall_grade ∈ {A,B,C,D,F}
-    - truth:        _数据库/.judge_reports/ch_<NNN>_writer-truth-check.json (章级·聚合 cluster 内所有章)
+    - truth:        _数据库/.judge_reports/<cluster_id>_writer-truth-check.json
 
     pass/waived 都算 audit 通过 (waived=issue 全豁免=实质 pass)
     overall_grade A/B/S 算通过, C/D/F 失败
@@ -147,12 +110,12 @@ def collect_for_cluster(
         audit_pass=_audit_verdict_pass(audit),
         reading_pass=_verdict_pass(reading),
         voice_clean=_grade_to_binary(voice),
-        truth_clean=_truth_clean_for_cluster(judge_dir, project_root, cluster_id),
+        truth_clean=_truth_clean_for_cluster(judge_dir, cluster_id),
         raw={
             "audit": bool(audit),
             "reading": bool(reading),
             "voice": bool(voice),
-            "truth_chapters": _cluster_chapter_range(project_root, cluster_id),
+            "truth_report": f"{cluster_id}_writer-truth-check.json",
         },
     )
 

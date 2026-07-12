@@ -48,6 +48,29 @@ def test_emit_creates_34_valid_json():
             json.loads(p.read_text(encoding="utf-8"))  # 合法性
 
 
+def test_emit_story_summary_is_runtime_cluster_payload():
+    scaf = _load_mod("scaffold_subsystems")
+    reader = _load_mod("cluster_summary_reader")
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        scaf.cmd_emit(["--db-dir", str(db)])
+        value = json.loads((db / "故事块摘要.json").read_text(encoding="utf-8"))
+        assert set(value) == {"schema_version", "clusters", "volume_summaries"}
+        assert reader.load_summary(db) == value
+
+
+def test_verify_rejects_non_runtime_story_summary_shape():
+    scaf = _load_mod("scaffold_subsystems")
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        scaf.cmd_emit(["--db-dir", str(db)])
+        path = db / "故事块摘要.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["_doc"] = "模板元信息不得进入运行时账本"
+        path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        assert scaf.cmd_verify(["--db-dir", str(db)]) == 2
+
+
 def test_emit_skeletons_pass_db_schema_validate():
     """★契约耦合：scaffold 骨架必过 db_schema_validate（0 error），防再次漂移。"""
     scaf = _load_mod("scaffold_subsystems")
@@ -57,7 +80,7 @@ def test_emit_skeletons_pass_db_schema_validate():
         scaf.cmd_emit(["--db-dir", str(db)])
         errors = []
         for name, rules in dbv.SCHEMA_RULES.items():
-            errs, _warns, _mig = dbv.validate_file(db / f"{name}.json", rules, auto_migrate=False)
+            errs, _warns = dbv.validate_file(db / f"{name}.json", rules)
             errors.extend(errs)
         assert not errors, f"scaffold 骨架未过 validator: {errors}"
 

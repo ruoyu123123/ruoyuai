@@ -48,8 +48,8 @@ def _mk_project(characters=None, baseline=None, prior_clusters=None):
                 "indirect_characterization_baseline": baseline}},
                 ensure_ascii=False), encoding="utf-8")
     if prior_clusters is not None:
-        (db / ".cross_chapter_scan").mkdir(parents=True, exist_ok=True)
-        (db / ".cross_chapter_scan" / "cluster_tonal_registry.json").write_text(
+        (db / ".cross_cluster_scan").mkdir(parents=True, exist_ok=True)
+        (db / ".cross_cluster_scan" / "cluster_tonal_registry.json").write_text(
             json.dumps({"entries": prior_clusters}, ensure_ascii=False),
             encoding="utf-8")
     return proj
@@ -194,7 +194,7 @@ def test_write_registry_appends():
         mod.scan(_write(_HOT_TEXT), proj, cluster_id="cluster_001",
                  write_registry=True)
         reg = json.loads(
-            (proj / "_数据库" / ".cross_chapter_scan"
+            (proj / "_数据库" / ".cross_cluster_scan"
              / "cluster_tonal_registry.json").read_text(encoding="utf-8"))
         ids = [e["cluster_id"] for e in reg["entries"]]
         assert "cluster_001" in ids

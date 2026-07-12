@@ -4,17 +4,15 @@
 
   G1 gmc                — 场景 Goal-Motivation-Conflict-Disaster 完整性
   G2 mru                — 段落动机-反应顺序（Swain MRU）
-  G3 orphan             — 单次出现具体名词（Chekhov 风险）
-  G4 microten           — 段末微张力（每段尾应留小钩子）
-  G5 repetition         — 同段重复具体名词
-  G6 pov                — POV 距离梯度（近/中/远切换）
-  G7 info_dump          — 信息堆砌段检测（P2-14，长叙述+设定词+低对话）
-  G8 perspective_shift  — 人称切换检测（P2-16，章内第一/第三人称跳转）
+  G3 microten           — 段末微张力（每段尾应留小钩子）
+  G4 repetition         — 同段重复具体名词
+  G5 pov                — POV 距离梯度（近/中/远切换）
+  G6 info_dump          — 信息堆砌段检测（长叙述+设定词+低对话）
+  G7 perspective_shift  — 人称切换检测
 
 用法:
-    python narrative_scanner.py <项目路径> <章节号> [--checks gmc,mru,microten,orphan,repetition,pov,info_dump,perspective_shift]
-    python narrative_scanner.py <项目路径> <章节号> --all
-    python narrative_scanner.py <项目路径> --history --check orphan  # 跨章扫单次物件
+    python narrative_scanner.py <项目路径> <cluster_id> --draft <cluster草稿> --all
+    python narrative_scanner.py <项目路径> <cluster_id> --draft <cluster草稿> --checks gmc,mru,microten
 
 输出: JSON 报告。退出 0 = 通过；1 = 警告；2 = 严重问题
 
@@ -22,6 +20,7 @@
 也可按豁免协议提供理由；本扫描器不产生 hard_gate。
 """
 
+import argparse
 import sys
 import re
 import json
@@ -29,35 +28,10 @@ from pathlib import Path
 from collections import Counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import chapter_io as cio  # noqa: E402  v18：统一正文/数据分离读写
-try:
-    import cluster_lookup  # noqa: E402  2026-05-29 复审复修 SC-1：blueprint list 归一守卫
-except Exception:
-    cluster_lookup = None
+import cluster_lookup  # noqa: E402
 
-# v2 cluster 化（2026-05-29 接入）：CLUSTER_MODE env 感知。
-# 本 scanner 的多数 check（gmc/mru/microten/repetition/pov/perspective_shift）判定单元
-# 是单段/单场景，与整篇体量无关。唯一对文本体量敏感的是 G7 info_dump：
-# 它用「整篇命中 ≥1 段 → 报 advisory」的扁平阈值，cluster 草稿（12-25k CJK，段数 = chapter 数倍）
-# 下绝对命中数天然偏高，扁平阈值会过报。故 cluster 模式给 info_dump 加按段数归一的密度门槛
-# （见 scan_info_dump）。其余 check 不随 mode 浮动。
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
-
-
+# 输入始终是显式传入的完整 cluster 草稿。info_dump 按段数归一，其余检查按段或场景计算。
 # ============ 辅助 ============
-
-def load_chapter_body(project_root: Path, ch: int) -> str | None:
-    """加载章节正文（v18 已分离直接读 txt；旧混合 txt 自动剥离 CHANGES）。"""
-    try:
-        body = cio.read_body(project_root, ch)
-    except FileNotFoundError:
-        return None
-    # 去掉章节标题行
-    lines = body.split("\n")
-    cleaned = [l for l in lines if not re.match(r"^第\d+章", l.strip())]
-    return "\n".join(cleaned).lstrip()
 
 
 def split_paragraphs(body: str) -> list[str]:
@@ -186,56 +160,12 @@ def scan_mru(paragraphs: list[str]) -> dict:
     }
 
 
-# ============ G3 Orphan Objects 单次物件检测 ============
+# ============ 具体名词识别 ============
 
 CONCRETE_NOUN = re.compile(r"[一-鿿]{2,5}(?:杯|簿|钥匙|火柴|烟斗|灯|斗|钟|表|刀|剑|戒指|笔|纸|信|匣|盒|铃|镜|链|绳|纸|带|刻痕|痕迹|印|疤)")
 
 
-def scan_orphan_objects(project_root: Path, current_ch: int) -> dict:
-    """扫所有 ≤ current_ch 章节的具体名词频次，找出现 1 次的。"""
-    counts = Counter()
-    occurrences = {}  # noun → [(ch, snippet)]
-    # 2026-05-29 复审修复 [H8]：cluster 视野用虚拟 ch=9000 当章号占位。若该值流到这里
-    # （显式 --check orphan + 虚拟章号），range(1, 9001) 会空跑 9000 次 load_chapter_body
-    # 直至超时。ch >= 9000 视为虚拟章，改扫「磁盘上真实存在的最大章号」(排除 >=9000 虚拟章)。
-    if current_ch >= 9000:
-        real_max = 0
-        for d in project_root.glob("章节/第*章"):
-            m = re.match(r"第(\d+)章", d.name)
-            if m:
-                num = int(m.group(1))
-                if num < 9000:
-                    real_max = max(real_max, num)
-        current_ch = real_max
-    for ch in range(1, current_ch + 1):
-        body = load_chapter_body(project_root, ch)
-        if not body:
-            continue
-        for m in CONCRETE_NOUN.finditer(body):
-            n = m.group(0)
-            counts[n] += 1
-            occurrences.setdefault(n, []).append((ch, body[max(0, m.start()-15):m.end()+15][:40]))
-    orphans = []
-    chekhov_candidates = []
-    for n, c in counts.items():
-        if c == 1:
-            orphans.append({"noun": n, "ch": occurrences[n][0][0], "context": occurrences[n][0][1]})
-        elif c >= 3:
-            # 多次出现可能是 chekhov
-            chekhov_candidates.append({"noun": n, "count": c, "chs": list(set(o[0] for o in occurrences[n]))})
-    return {
-        "scanned_chapters": f"1-{current_ch}",
-        "orphans_total": len(orphans),
-        "orphans_top10": orphans[:10],
-        "chekhov_candidates_top5": chekhov_candidates[:5],
-        "warning": (
-            f"⚠️ {len(orphans)} 个具体物件仅出现 1 次（建议要么深化为伏笔，要么砍掉）"
-            if orphans else None
-        ),
-    }
-
-
-# ============ G4 Micro-tension 段末小钩子 ============
+# ============ G3 Micro-tension 段末小钩子 ============
 
 TENSION_END_KW = re.compile(r"(\?|？|……|—|不知|或许|也许|不确定|未答|未解|似乎|仿佛)")
 ACTION_INCOMPLETE = re.compile(r"(伸手|抬头|睁开|站起|准备|刚要|正要|还没)")
@@ -278,13 +208,12 @@ def scan_micro_tension(paragraphs: list[str]) -> dict:
     }
 
 
-# ============ G5 重复词扫描 ============
+# ============ G4 重复词扫描 ============
 
 # scan_repetition 局部归一：把 CONCRETE_NOUN 命中片段（带前置修饰字，如「茶杯/门钥匙」）
 # 归一到核心名词（杯/钥匙）再计数，否则「茶杯…又…茶杯…再…茶杯」会被切成多个不同 key，
 # max 计数恒为 1、永不触发 > 3 阈值（漏报）。多字后缀须排在单字前以匹配最长后缀。
-# 后缀集与 CONCRETE_NOUN（L195）保持同步——彻底根治（裸名词 / 异前缀如剑光剑锋长剑）
-# 需把 CONCRETE_NOUN 名词核改捕获组并支持裸名词，会动到 scan_orphan_objects 路径（另案）。
+# 后缀集与 CONCRETE_NOUN 保持同步；这里只合并同一显式名词，不做语义近似推断。
 _NOUN_SUFFIX = re.compile(r"(钥匙|火柴|烟斗|戒指|刻痕|痕迹|杯|簿|灯|斗|钟|表|刀|剑|笔|纸|信|匣|盒|铃|镜|链|绳|带|印|疤)$")
 
 
@@ -416,26 +345,21 @@ def scan_info_dump(paragraphs: list[str]) -> dict:
     #   绝对命中 ≥1 的扁平阈值会过报 → 改按段数归一的密度门槛：
     #   命中数 < max(2, 总段数的 3%) 视为 cluster 体量下的正常本底，不报 warning。
     n_scanned = len(paragraphs)
-    if IS_CLUSTER_MODE:
-        warn_floor = max(2, round(n_scanned * 0.03))
-        emit = len(hits) >= warn_floor
-    else:
-        warn_floor = 1
-        emit = bool(hits)
+    warn_floor = max(2, round(n_scanned * 0.03))
+    emit = len(hits) >= warn_floor
     return {
         "paragraphs_scanned": n_scanned,
         "hits_count": len(hits),
         "hits": hits[:8],
         "severity": "warning",
         "gate_level": "advisory",
-        "cluster_mode": IS_CLUSTER_MODE,
         "warn_floor": warn_floor,
         "fix_hint": "把『设定堆砌段』拆成「对话/动作/感官+设定碎片」的混合段，"
                     "或挪到「需要这条设定」的剧情时机才放出。",
         "warning": (
             f"⚠️ {len(hits)} 段 info-dump 嫌疑（长叙述+设定词+低对话），"
             f"建议拆段或后置至需要时刻"
-            + (f"（cluster 体量门槛 ≥{warn_floor} 段）" if IS_CLUSTER_MODE else "")
+            + f"（cluster 体量门槛 ≥{warn_floor} 段）"
             if emit else None
         ),
     }
@@ -520,74 +444,58 @@ def _preview_short(p: str, n: int = 40) -> str:
 ALL_CHECKS = {
     "gmc": "G1 GMC 场景结构",
     "mru": "G2 MRU 段落顺序",
-    "orphan": "G3 单次物件 Chekhov 风险",
-    "microten": "G4 段末微张力",
-    "repetition": "G5 段内重复词",
-    "pov": "G6 POV 距离梯度",
-    "info_dump": "G7 信息堆砌段（P2-14）",
-    "perspective_shift": "G8 人称切换检测（P2-16）",
+    "microten": "G3 段末微张力",
+    "repetition": "G4 段内重复词",
+    "pov": "G5 POV 距离梯度",
+    "info_dump": "G6 信息堆砌段",
+    "perspective_shift": "G7 人称切换检测",
 }
 
 
 def main():
-    args = sys.argv[1:]
-    if not args:
-        print(__doc__)
-        sys.exit(0)
-    project_root = Path(args[0])
+    parser = argparse.ArgumentParser(description="扫描完整 cluster 草稿的叙事质感")
+    parser.add_argument("project", type=Path)
+    parser.add_argument("cluster_id")
+    parser.add_argument("--draft", required=True, type=Path)
+    choice = parser.add_mutually_exclusive_group()
+    choice.add_argument("--all", action="store_true")
+    choice.add_argument("--checks")
+    args = parser.parse_args()
 
-    # 解析 checks
-    if "--all" in args:
-        # 2026-05-29 复审修复 [H8]：orphan 是跨章 Chekhov 风险扫描，按 docstring 本是
-        # --history 专用（range(1, current_ch+1) 全工程扫）。误并入 --all 后，cluster 视野
-        # 用虚拟 ch=9000 跑 --all 会触发 range(1, 9001) 全工程扫，180s 超时 → audit_hub 收 exit 99
-        # 丢全部 narrative 结果。从 --all 集合排除 orphan（仍可显式 --check orphan / --history 跑）。
-        checks = [c for c in ALL_CHECKS.keys() if c != "orphan"]
-    elif "--checks" in args:
-        idx = args.index("--checks")
-        checks = args[idx + 1].split(",")
-    elif "--check" in args:
-        idx = args.index("--check")
-        checks = [args[idx + 1]]
+    project_root = args.project.resolve()
+    cluster_id = cluster_lookup.normalize_cluster_id(args.cluster_id)
+    if not cluster_id:
+        parser.error(f"非法 cluster_id: {args.cluster_id}")
+    draft_path = args.draft
+    if not draft_path.is_absolute():
+        draft_path = project_root / draft_path
+    try:
+        body = draft_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        parser.error(f"cluster 草稿读取失败: {exc}")
+    if not body.strip():
+        parser.error("cluster 草稿为空")
+
+    if args.all:
+        checks = list(ALL_CHECKS)
+    elif args.checks:
+        checks = [value.strip() for value in args.checks.split(",") if value.strip()]
     else:
-        checks = ["gmc", "mru", "microten", "repetition", "pov"]  # 默认章内
+        checks = ["gmc", "mru", "microten", "repetition", "pov"]
+    unknown = sorted(set(checks) - set(ALL_CHECKS))
+    if unknown:
+        parser.error(f"未知 checks: {', '.join(unknown)}")
 
-    # history 模式（仅 orphan 跨章）
-    if "--history" in args:
-        # 找最新章号
-        import re as _re
-        max_ch = 0
-        for d in project_root.glob("章节/第*章"):
-            m = _re.match(r"第(\d+)章", d.name)
-            if m:
-                max_ch = max(max_ch, int(m.group(1)))
-        report = {"history_mode": True, "max_chapter": max_ch}
-        if "orphan" in checks:
-            report["orphan"] = scan_orphan_objects(project_root, max_ch)
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-        sys.exit(0)
-
-    # 单章模式
-    if len(args) < 2:
-        print("[FATAL] 单章模式需要章节号", file=sys.stderr)
-        sys.exit(2)
-    ch = int(args[1])
-    body = load_chapter_body(project_root, ch)
-    if not body:
-        print(f"[FATAL] 找不到 ch{ch}", file=sys.stderr)
-        sys.exit(2)
     paragraphs = split_paragraphs(body)
     scenes = split_scenes(body)
 
-    # v17.11 ch4 验证产出：单人氛围章豁免分流
-    # validator 实测：gmc/mru/microten 对"单人独处氛围章"产生大量噪音
-    chapter_mode = _detect_chapter_mode(project_root, ch, body, paragraphs)
+    narrative_mode = detect_narrative_mode(project_root, cluster_id, body, paragraphs)
 
     report = {
         "schema_version": "1.1",
         "scanner": "narrative_scanner",
-        "chapter": ch,
-        "chapter_mode": chapter_mode,
+        "cluster_id": cluster_id,
+        "narrative_mode": narrative_mode,
         "paragraphs_count": len(paragraphs),
         "scenes_count": len(scenes),
         "checks_run": checks,
@@ -596,8 +504,6 @@ def main():
         report["gmc"] = scan_gmc(scenes)
     if "mru" in checks:
         report["mru"] = scan_mru(paragraphs)
-    if "orphan" in checks:
-        report["orphan"] = scan_orphan_objects(project_root, ch)
     if "microten" in checks:
         report["microten"] = scan_micro_tension(paragraphs)
     if "repetition" in checks:
@@ -609,23 +515,22 @@ def main():
     if "perspective_shift" in checks:
         report["perspective_shift"] = scan_perspective_shift(paragraphs)
 
-    # 单人氛围文本对 gmc/mru/microten/orphan 降级为 info。
-    SUPPRESSED_IN_SOLO = {"gmc", "mru", "microten", "orphan"}
+    suppressed_in_solo = {"gmc", "mru", "microten"}
     warnings = []
     suppressed = []
     for k, v in report.items():
         if isinstance(v, dict) and v.get("warning"):
             # 质感建议统一标 advisory；suppressed_reason 记录工具自适配豁免。
             v["gate_level"] = "advisory"
-            if chapter_mode == "solo_atmospheric" and k in SUPPRESSED_IN_SOLO:
-                suppressed.append(f"  [{k}] {v['warning']}  (单人氛围章豁免 → info)")
-                v["suppressed_reason"] = "solo_atmospheric chapter — gmc/mru/microten 对单人独处章规则不适配"
+            if narrative_mode == "solo_atmospheric" and k in suppressed_in_solo:
+                suppressed.append(f"  [{k}] {v['warning']}  (单人氛围 cluster 豁免 → info)")
+                v["suppressed_reason"] = "solo_atmospheric cluster 不适用该通用结构建议"
             else:
                 warnings.append(f"  [{k}] {v['warning']}")
     report["suppressed_warnings"] = suppressed
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if suppressed:
-        print(f"\n=== 已豁免 {len(suppressed)} 条（{chapter_mode}）===", file=sys.stderr)
+        print(f"\n=== 已豁免 {len(suppressed)} 条（{narrative_mode}）===", file=sys.stderr)
         for w in suppressed:
             print(w, file=sys.stderr)
     if warnings:
@@ -636,7 +541,7 @@ def main():
     sys.exit(0)
 
 
-def detect_chapter_mode(project_root, ch, body, paragraphs) -> str:
+def detect_narrative_mode(project_root, cluster_id, body, paragraphs) -> str:
     """判断文本特征模式。solo_atmospheric = 单人/低对话氛围章。
 
     判定：cluster_blueprint.characters ≤ 1 人 OR 对话占比 < 5%
@@ -649,20 +554,17 @@ def detect_chapter_mode(project_root, ch, body, paragraphs) -> str:
         prog = _json.loads((project_root / "_数据库" / "进度.json").read_text(encoding="utf-8"))
         _all_scenes = []
         # 2026-05-29 复审复修 SC-1：blueprint 可能是 list（城南实测），先归一成 dict 再迭代。
-        if cluster_lookup is not None:
-            _bp = cluster_lookup.normalize_blueprint(prog)
-        else:
-            _bp = prog.get("cluster_blueprint") or {}
-            if not isinstance(_bp, dict):
-                _bp = {}
-        for cid, cdata in _bp.items():
-            if not isinstance(cdata, dict):
-                continue
-            _all_scenes.extend(cdata.get("scene_storyboard", []))
-        for p in _all_scenes:
-            if p.get("ch") == ch:
-                char_count = len(p.get("characters", []))
-                break
+        _bp = cluster_lookup.normalize_blueprint(prog)
+        cluster = _bp.get(cluster_id) if isinstance(_bp, dict) else None
+        if isinstance(cluster, dict):
+            characters = {
+                character
+                for scene in cluster.get("scene_storyboard", []) or []
+                if isinstance(scene, dict)
+                for character in scene.get("characters", []) or []
+                if character
+            }
+            char_count = len(characters)
     except Exception:
         pass
     # 2) 对话占比（引号内字数 / 总字数）
@@ -673,10 +575,6 @@ def detect_chapter_mode(project_root, ch, body, paragraphs) -> str:
     if (char_count is not None and char_count <= 1) or dialogue_ratio < 0.05:
         return "solo_atmospheric"
     return "normal"
-
-
-# 兼容别名 —— 保持 v17.11 起 _detect_chapter_mode 调用者可继续工作
-_detect_chapter_mode = detect_chapter_mode
 
 
 if __name__ == "__main__":

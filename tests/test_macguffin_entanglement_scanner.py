@@ -8,7 +8,7 @@
   · 单 cluster 出现不判
   · shadow/off/active 三态
   · 永远 advisory · 不在 HARD_GATE_CODES
-  · snapshot 写入 .cross_chapter_scan/
+  · snapshot 写入 .cross_cluster_scan/
 
 2026-07-01 追加：真语义 embedding 可选路径回归(mock 后端·完全照抄 topic_drift_scanner
 测试手法·直接调用 compute_entanglement 不走 subprocess，便于 monkeypatch)——钉死
@@ -23,10 +23,17 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cluster_summary_fixtures import cluster_record, write_cluster_summary
+
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import macguffin_entanglement_scanner as mac  # noqa: E402
+
+
+def _cluster(cluster_id: str, summary: str) -> dict:
+    """按严格 cluster 摘要合同造一条记录，summary 承载待扫描的叙事文本。"""
+    return cluster_record(cluster_id, summary=summary)
 
 
 def _mk_project(*, items=None, clusters=None):
@@ -37,9 +44,7 @@ def _mk_project(*, items=None, clusters=None):
         (db / "道具.json").write_text(
             json.dumps({"items": items}, ensure_ascii=False), encoding="utf-8")
     if clusters is not None:
-        (db / "故事块摘要.json").write_text(
-            json.dumps({"schema_version": "v2.cluster", "clusters": clusters},
-                       ensure_ascii=False), encoding="utf-8")
+        write_cluster_summary(proj, clusters)
     return proj
 
 
@@ -75,7 +80,7 @@ def test_no_macguffin_skips():
     proj = _mk_project(items=[
         {"id": "i1", "name": "玉佩", "is_macguffin": False},
         {"id": "i2", "name": "长剑"},
-    ], clusters=[{"cluster_id": "cluster_001", "scope_summary": "他拿出玉佩。"}])
+    ], clusters=[_cluster("cluster_001", "他拿出玉佩。")])
     proc = _run(proj, mode="active")
     rep = _parse(proc.stdout)
     assert "is_macguffin=true 声明" in rep["note"]
@@ -84,8 +89,7 @@ def test_no_macguffin_skips():
 
 def test_off_mode_skips_calculation():
     proj = _mk_project(items=[{"id": "i1", "name": "玉佩", "is_macguffin": True}],
-                       clusters=[{"cluster_id": "cluster_001",
-                                  "scope_summary": "他拿玉佩为了夺回。"}])
+                       clusters=[_cluster("cluster_001", "他拿玉佩为了夺回。")])
     proc = _run(proj, mode="off")
     rep = _parse(proc.stdout)
     assert rep["mode"] == "off"
@@ -93,8 +97,7 @@ def test_off_mode_skips_calculation():
 
 def test_too_few_clusters_skips():
     proj = _mk_project(items=[{"id": "i1", "name": "玉佩", "is_macguffin": True}],
-                       clusters=[{"cluster_id": "cluster_001",
-                                  "scope_summary": "他拿玉佩。"}])
+                       clusters=[_cluster("cluster_001", "他拿玉佩。")])
     proc = _run(proj, mode="active")
     rep = _parse(proc.stdout)
     assert "cluster 数太少" in rep.get("note", "")
@@ -104,10 +107,10 @@ def test_ornamental_macguffin_detected_active():
     """4 cluster·MacGuffin 出现 4 次但 goal pursuit 仅 1 → ratio=0.25 → 报"""
     items = [{"id": "i1", "name": "古剑", "is_macguffin": True}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "古剑挂在墙上。", "chapter_range": [6, 10]},
-        {"cluster_id": "cluster_003", "scope_summary": "他展示古剑。", "chapter_range": [11, 15]},
-        {"cluster_id": "cluster_004", "scope_summary": "他为了夺回古剑追查敌人。", "chapter_range": [16, 20]},
+        _cluster("cluster_001", "他擦拭古剑。"),
+        _cluster("cluster_002", "古剑挂在墙上。"),
+        _cluster("cluster_003", "他展示古剑。"),
+        _cluster("cluster_004", "他为了夺回古剑追查敌人。"),
     ]
     proj = _mk_project(items=items, clusters=clusters)
     proc = _run(proj, mode="active")
@@ -125,10 +128,10 @@ def test_engaged_macguffin_passes():
     """4 cluster·MacGuffin 出现且每次都伴 goal pursuit → ratio=1.0"""
     items = [{"id": "i1", "name": "圣杯", "is_macguffin": True}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他追查圣杯下落。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "为了找到圣杯他穿越雪山。", "chapter_range": [6, 10]},
-        {"cluster_id": "cluster_003", "scope_summary": "他锁定圣杯持有者。", "chapter_range": [11, 15]},
-        {"cluster_id": "cluster_004", "scope_summary": "他终于夺回圣杯。", "chapter_range": [16, 20]},
+        _cluster("cluster_001", "他追查圣杯下落。"),
+        _cluster("cluster_002", "为了找到圣杯他穿越雪山。"),
+        _cluster("cluster_003", "他锁定圣杯持有者。"),
+        _cluster("cluster_004", "他终于夺回圣杯。"),
     ]
     proj = _mk_project(items=items, clusters=clusters)
     proc = _run(proj, mode="active")
@@ -143,9 +146,9 @@ def test_single_cluster_appearance_no_judge():
     """MacGuffin 只在 1 cluster 出现 → 不判"""
     items = [{"id": "i1", "name": "孤剑", "is_macguffin": True}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他擦拭孤剑。"},
-        {"cluster_id": "cluster_002", "scope_summary": "他做别的事。"},
-        {"cluster_id": "cluster_003", "scope_summary": "他做别的事。"},
+        _cluster("cluster_001", "他擦拭孤剑。"),
+        _cluster("cluster_002", "他做别的事。"),
+        _cluster("cluster_003", "他做别的事。"),
     ]
     proj = _mk_project(items=items, clusters=clusters)
     proc = _run(proj, mode="active")
@@ -157,9 +160,9 @@ def test_single_cluster_appearance_no_judge():
 def test_shadow_mode_no_findings():
     items = [{"id": "i1", "name": "古剑", "is_macguffin": True}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "古剑挂墙上。"},
-        {"cluster_id": "cluster_003", "scope_summary": "古剑还在。"},
+        _cluster("cluster_001", "他擦拭古剑。"),
+        _cluster("cluster_002", "古剑挂墙上。"),
+        _cluster("cluster_003", "古剑还在。"),
     ]
     proj = _mk_project(items=items, clusters=clusters)
     proc = _run(proj, mode="shadow")
@@ -171,12 +174,12 @@ def test_shadow_mode_no_findings():
 def test_snapshot_written():
     items = [{"id": "i1", "name": "玉玺", "is_macguffin": True}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他追查玉玺。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "玉玺现身。", "chapter_range": [6, 10]},
+        _cluster("cluster_001", "他追查玉玺。"),
+        _cluster("cluster_002", "玉玺现身。"),
     ]
     proj = _mk_project(items=items, clusters=clusters)
     _run(proj, mode="active")
-    snap = proj / "_数据库" / ".cross_chapter_scan" / "macguffin_advisory_snapshot.json"
+    snap = proj / "_数据库" / ".cross_cluster_scan" / "macguffin_advisory_snapshot.json"
     assert snap.exists()
     data = json.loads(snap.read_text(encoding="utf-8"))
     assert data["scan_type"] == "macguffin_entanglement"
@@ -217,8 +220,7 @@ def test_invalid_items_format_skips():
 def test_macguffin_without_name_skipped():
     """name/title/id 全空·is_macguffin=True 也不入库"""
     items = [{"is_macguffin": True}]
-    clusters = [{"cluster_id": "cluster_001", "scope_summary": "abc", "chapter_range": [1, 5]},
-                {"cluster_id": "cluster_002", "scope_summary": "def", "chapter_range": [6, 10]}]
+    clusters = [_cluster("cluster_001", "abc"), _cluster("cluster_002", "def")]
     proj = _mk_project(items=items, clusters=clusters)
     macs = mac._read_macguffins(proj)
     assert macs == []
@@ -228,10 +230,10 @@ def test_partial_engagement_above_floor():
     """ratio = 0.5 (≥0.4) → 不报"""
     items = [{"id": "i1", "name": "圣经", "is_macguffin": True}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他追查圣经。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "他为了找到圣经赶路。", "chapter_range": [6, 10]},
-        {"cluster_id": "cluster_003", "scope_summary": "圣经被锁柜中。", "chapter_range": [11, 15]},
-        {"cluster_id": "cluster_004", "scope_summary": "圣经又出现了。", "chapter_range": [16, 20]},
+        _cluster("cluster_001", "他追查圣经。"),
+        _cluster("cluster_002", "他为了找到圣经赶路。"),
+        _cluster("cluster_003", "圣经被锁柜中。"),
+        _cluster("cluster_004", "圣经又出现了。"),
     ]
     proj = _mk_project(items=items, clusters=clusters)
     proc = _run(proj, mode="active")
@@ -258,9 +260,9 @@ def test_compute_entanglement_direct():
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     macguffins = [{"name": "古剑", "id": "i1"}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "他追查古剑去向。"},
-        {"cluster_id": "cluster_003", "scope_summary": "无关内容。"},
+        _cluster("cluster_001", "他擦拭古剑。"),
+        _cluster("cluster_002", "他追查古剑去向。"),
+        _cluster("cluster_003", "无关内容。"),
     ]
     per = mac.compute_entanglement(macguffins, clusters, proj)
     assert "古剑" in per
@@ -442,9 +444,9 @@ def test_compute_entanglement_direct_default_lexicon():
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     macguffins = [{"name": "古剑", "id": "i1"}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "他追查古剑去向。"},
-        {"cluster_id": "cluster_003", "scope_summary": "无关内容。"},
+        _cluster("cluster_001", "他擦拭古剑。"),
+        _cluster("cluster_002", "他追查古剑去向。"),
+        _cluster("cluster_003", "无关内容。"),
     ]
     per = mac.compute_entanglement(macguffins, clusters, proj)
     assert per["古剑"]["match_method"] == "lexicon"
@@ -458,9 +460,9 @@ def test_compute_entanglement_semantic_match_method():
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     macguffins = [{"name": "古剑", "id": "i1"}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他为了夺回古剑追查敌人。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "古剑挂在墙上落灰。"},
-        {"cluster_id": "cluster_003", "scope_summary": "无关内容。"},
+        _cluster("cluster_001", "他为了夺回古剑追查敌人。"),
+        _cluster("cluster_002", "古剑挂在墙上落灰。"),
+        _cluster("cluster_003", "无关内容。"),
     ]
     per = _run_with_mock_embedding(mac.compute_entanglement, macguffins, clusters, proj)
     assert per["古剑"]["match_method"] == "semantic"
@@ -475,8 +477,8 @@ def test_compute_entanglement_import_error_falls_back_to_lexicon():
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     macguffins = [{"name": "古剑", "id": "i1"}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "他追查古剑去向。"},
+        _cluster("cluster_001", "他擦拭古剑。"),
+        _cluster("cluster_002", "他追查古剑去向。"),
     ]
     try:
         os.environ["EMBED_BACKEND"] = "mock"
@@ -504,9 +506,9 @@ def test_prefetch_called_once_with_expected_texts(monkeypatch):
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     macguffins = [{"name": "古剑", "id": "i1"}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他为了夺回古剑追查敌人。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "古剑挂在墙上落灰。"},
-        {"cluster_id": "cluster_003", "scope_summary": "无关内容。"},
+        _cluster("cluster_001", "他为了夺回古剑追查敌人。"),
+        _cluster("cluster_002", "古剑挂在墙上落灰。"),
+        _cluster("cluster_003", "无关内容。"),
     ]
     calls = []
 
@@ -532,8 +534,8 @@ def test_prefetch_not_called_without_real_backend(monkeypatch):
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     macguffins = [{"name": "古剑", "id": "i1"}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "他追查古剑去向。"},
+        _cluster("cluster_001", "他擦拭古剑。"),
+        _cluster("cluster_002", "他追查古剑去向。"),
     ]
     calls = []
 
@@ -552,8 +554,8 @@ def test_main_top_level_match_method_lexicon_by_default():
     """subprocess 端到端(无真后端) → 顶层 out["match_method"] == "lexicon"。"""
     items = [{"id": "i1", "name": "古剑", "is_macguffin": True}]
     clusters = [
-        {"cluster_id": "cluster_001", "scope_summary": "他擦拭古剑。", "chapter_range": [1, 5]},
-        {"cluster_id": "cluster_002", "scope_summary": "他追查古剑去向。", "chapter_range": [6, 10]},
+        _cluster("cluster_001", "他擦拭古剑。"),
+        _cluster("cluster_002", "他追查古剑去向。"),
     ]
     proj = _mk_project(items=items, clusters=clusters)
     proc = _run(proj, mode="active")

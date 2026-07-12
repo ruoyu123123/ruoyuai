@@ -1,116 +1,68 @@
-"""cross_cluster_fate_drift_aggregate.py — 大势漂移扫描（v20 F8 新增）
-
-复用 fate_engine.drift 检测「prereq 完成 + 超 expected_window_after 仍未触发」事件。
-输出报告 + 强烈告警「下章必须推进」。
-
-用法：python cross_cluster_fate_drift_aggregate.py <project> [--ch N | --auto]
-退出码: 0 健康 / 1 advisory / 2 warning 超期严重
-"""
+"""生成当前故事块的大势软窗口漂移报告。"""
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
-sys.path.insert(0, str(Path(__file__).parent))
-import fate_engine  # type: ignore
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：账本取末 cluster 锚点章
+import atomic_json
+import cluster_lookup
+import fate_engine
 
 
-def _anchor_ch_from_ledger(project_root: Path) -> int | None:
-    """2026-05-29 cluster 化：从账本取末 cluster 的 chapter_range[1] 作为漂移锚点 ch。
-
-    fate_drift 改造最轻 —— drift 逻辑全委托 fate_engine.drift，cluster 模式只是换了
-    「锚点 ch 从哪来」：逐章模式 glob 章目录取最大章号，cluster 模式取账本末 cluster 末章。
-    取不到（账本无 cluster / 末 cluster 未切章）返回 None → 调用方回退逐章 glob。
-    """
-    clusters = csr.get_clusters(project_root, last_n=1)
-    if not clusters:
-        return None
-    last = clusters[-1]
-    end = last.get("cluster_end_ch")
-    if isinstance(end, int):
-        return end
-    cr = last.get("chapter_range")
-    if isinstance(cr, list) and len(cr) == 2 and isinstance(cr[1], int):
-        return cr[1]
-    return None
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--ch", type=int, default=None)
-    ap.add_argument("--auto", action="store_true", help="自动取最近章")
-    args = ap.parse_args()
-
-    project_root = Path(args.project)
-
-    # 决定 ch
-    ch = args.ch
-    if ch is None or args.auto:
-        # 2026-05-29 cluster 化：cluster 模式优先用账本末 cluster 末章当锚点
-        ledger_ch = _anchor_ch_from_ledger(project_root) if IS_CLUSTER_MODE else None
-        if ledger_ch is not None:
-            ch = ledger_ch
-        else:
-            chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                              for d in (project_root / "章节").glob("第*章")
-                              if re.match(r"第(\d+)章", d.name))
-            if not chapters:
-                print("[SKIP] 无已写章节")
-                sys.exit(0)
-            ch = chapters[-1]
-
-    drift_result = fate_engine.drift(project_root, ch)
-    overdue = drift_result.get("overdue_events", [])
-
+def build_report(project_root: Path, cluster_id: str) -> dict:
+    current_cluster = cluster_lookup.normalize_cluster_id(cluster_id)
+    if not current_cluster:
+        raise ValueError(f"非法 cluster_id: {cluster_id}")
+    drift_result = fate_engine.drift(project_root, current_cluster)
     findings = []
-    for od in overdue:
-        sev = "warning" if od["overdue_by"] >= 5 else "advisory"
+    for overdue in drift_result["overdue_events"]:
+        severity = "warning" if overdue["overdue_by_clusters"] >= 2 else "advisory"
         findings.append({
-            "severity": sev,
+            "severity": severity,
+            "gate_level": "advisory",
             "code": "FATE_EVENT_OVERDUE",
-            "metric": od,
-            "message": f"大事件「{od['title']}」({od['event_id']}) 已超 expected_window {od['overdue_by']} 章未触发",
-            "suggestion": f"下章 writer 必须推进 {od['event_id']}：{od['title']}",
+            "metric": overdue,
+            "message": (
+                f"大事件「{overdue['title']}」({overdue['event_id']}) "
+                f"已超过软窗口 {overdue['overdue_by_clusters']} 个故事块"
+            ),
+            "suggestion": f"建议下一故事块优先考虑推进 {overdue['event_id']}：{overdue['title']}",
         })
-
-    # 输出
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report = {
+    return {
         "scan_type": "fate_drift",
-        "scan_ts": ts,
-        "ch": ch,
+        "scan_ts": datetime.now().isoformat(timespec="seconds"),
+        "cluster_id": current_cluster,
         "findings": findings,
         "summary": {
-            "warning": sum(1 for f in findings if f["severity"] == "warning"),
-            "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
+            "warning": sum(item["severity"] == "warning" for item in findings),
+            "advisory": sum(item["severity"] == "advisory" for item in findings),
             "total": len(findings),
         },
     }
-    out_path = out_dir / f"fate_drift_{ts}.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"[fate_drift_scan] ch{ch}: {len(findings)} 项漂移")
-    for f in findings[:5]:
-        print(f"  [{f['severity'].upper()}] {f['message']}")
-    print(f"报告: {out_path}")
 
-    if any(f["severity"] == "warning" for f in findings):
-        sys.exit(1)
-    sys.exit(0)
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    parser.add_argument("--cluster", required=True)
+    args = parser.parse_args()
+    try:
+        project_root = Path(args.project)
+        report = build_report(project_root, args.cluster)
+        out_dir = project_root / "_数据库" / ".cross_cluster_scan"
+        out_path = out_dir / f"fate_drift_{report['cluster_id']}.json"
+        atomic_json.atomic_write_json(out_path, report)
+        print(f"[fate_drift_scan] {report['cluster_id']}: {report['summary']['total']} 项漂移")
+        print(f"报告: {out_path}")
+        return 1 if report["summary"]["warning"] else 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

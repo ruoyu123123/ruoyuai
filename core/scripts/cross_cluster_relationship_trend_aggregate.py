@@ -1,214 +1,113 @@
-"""cross_cluster_relationship_trend_aggregate.py — 关系 4 维数值跨章变化趋势（CCR21）
+"""按 cluster archive 检查关系变化覆盖与当前数值边界。
 
-收集每章 _changes.factual.relationships[] 中 from→to 的 4 维变化（affinity/trust/fear/respect），
-重建跨章变化时序，检测：
-
-- RELATIONSHIP_LEAP：单章某维度变化 ≥ 5（如 trust +6）= 不合理急变
-- RELATIONSHIP_FROZEN：≥ 8 章某关系无任何数值变更
-- RELATIONSHIP_MONOTONIC_DROP：某关系某维度连续 ≥ 4 章单调下降无回弹
-- RELATIONSHIP_OUT_OF_BOUND：当前数值 > 10 或 < -10（关系数值规范化外）
-
-退出码: 0 健康 / 1 advisory / 2 warning
+archive 记录每个 cluster 客观发生的关系建立/改变；关系.json 保存当前投影。
+本顾问只判断这两类权威数据能够证明的事项。
 """
-
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+import cluster_state_sources as css
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
+
+DIMENSIONS = ("affinity", "trust", "fear", "respect")
+
+
+def load_json(path: Path, default=None):
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return default
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--last-n", type=int, default=15)
-    args = ap.parse_args()
-
-    project_root = Path(args.project)
-
-    # 收集每章 relationships 变化
-    # 结构：(from, to) -> [{ch, affinity, trust, fear, respect}]
-    history = defaultdict(list)
-    recent = []
-
-    def _ingest_rels(ch, rels):
-        for r in rels or []:
-            if not isinstance(r, dict):
+def collect_recent_changes(project_root: Path, last_n: int) -> tuple[list[str], set[tuple[str, str]]]:
+    cluster_ids = []
+    changed_pairs = set()
+    for cluster_id, _record in css.iter_completed_clusters(project_root, last_n):
+        cluster_ids.append(cluster_id)
+        archive = css.load_archive(project_root, cluster_id)
+        for relationship in archive.get("relationships", []) or []:
+            if not isinstance(relationship, dict):
                 continue
-            f = r.get("from")
-            t = r.get("to")
-            if not f or not t:
-                continue
-            entry = {"ch": ch}
-            for dim in ["affinity", "trust", "fear", "respect"]:
-                if dim in r and isinstance(r[dim], (int, float)) and not isinstance(r[dim], bool):
-                    entry[dim] = r[dim]
-            if len(entry) > 1:
-                history[(f, t)].append(entry)
+            source, target = relationship.get("from"), relationship.get("to")
+            if source and target:
+                changed_pairs.add((source, target))
+    return cluster_ids, changed_pairs
 
-    # ===== 2026-05-29 cluster 化分支：账本有 relationships → 摘要驱动 =====
-    # --last-n 在 cluster 模式语义为「最后 N 个 cluster」
-    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "relationships"):
-        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
-        recent = sorted({ch for ch, _ in recs})
-        if not recent:
-            print("[SKIP] cluster 账本无 relationships 记录")
-            sys.exit(0)
-        for ch, rec in recs:
-            _ingest_rels(ch, rec.get("relationships", []))
-    else:
-        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
-        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-        recent = chapters[-args.last_n:] if chapters else []
-        if not recent:
-            print("[SKIP] 无已写章节")
-            sys.exit(0)
-        for ch in recent:
-            p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-            changes = load_json(p, {})
-            rels = (changes.get("factual", {}) or {}).get("relationships", []) or []
-            _ingest_rels(ch, rels)
 
+def scan(project_root: Path, last_n: int) -> dict:
+    relationships = (load_json(project_root / "_数据库" / "关系.json", {}) or {}).get("relationships", []) or []
+    cluster_ids, changed_pairs = collect_recent_changes(project_root, last_n)
     findings = []
 
-    # 当前关系状态（直接读关系.json）
-    current_rels = (load_json(project_root / "_数据库" / "关系.json", {}) or {}).get("relationships", []) or []
-    for r in current_rels:
-        f = r.get("from")
-        t = r.get("to")
-        if not f or not t:
+    for relationship in relationships:
+        if not isinstance(relationship, dict):
             continue
-        for dim in ["affinity", "trust", "fear", "respect"]:
-            v = r.get(dim)
-            if not isinstance(v, (int, float)) or isinstance(v, bool):
-                continue
-            if v > 10 or v < -10:
+        source, target = relationship.get("from"), relationship.get("to")
+        if not source or not target:
+            continue
+        for dimension in DIMENSIONS:
+            value = relationship.get(dimension)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and not -10 <= value <= 10:
                 findings.append({
                     "severity": "warning",
                     "code": "RELATIONSHIP_OUT_OF_BOUND",
-                    "from": f,
-                    "to": t,
-                    "dimension": dim,
-                    "value": v,
-                    "suggestion": f"{f}→{t}.{dim}={v} 超出 [-10, 10] 规范化范围",
+                    "from": source,
+                    "to": target,
+                    "dimension": dimension,
+                    "value": value,
+                    "suggestion": "将关系投影归一到 [-10, 10]",
                 })
 
-    # 时序检测
-    for (f, t), entries in history.items():
-        if len(entries) < 2:
-            continue
-        # 排序
-        entries_sorted = sorted(entries, key=lambda e: e["ch"])
-
-        # LEAP & MONOTONIC_DROP（按 dimension 维度独立）
-        for dim in ["affinity", "trust", "fear", "respect"]:
-            dim_series = [(e["ch"], e[dim]) for e in entries_sorted if dim in e]
-            if len(dim_series) < 2:
+    if len(cluster_ids) >= 8:
+        for relationship in relationships:
+            if not isinstance(relationship, dict):
                 continue
-            # LEAP
-            for i in range(1, len(dim_series)):
-                ch1, v1 = dim_series[i - 1]
-                ch2, v2 = dim_series[i]
-                delta = abs(v2 - v1)
-                if delta >= 5:
-                    findings.append({
-                        "severity": "warning",
-                        "code": "RELATIONSHIP_LEAP",
-                        "from": f,
-                        "to": t,
-                        "dimension": dim,
-                        "from_ch": ch1,
-                        "to_ch": ch2,
-                        "delta": v2 - v1,
-                        "suggestion": f"{f}→{t}.{dim} 在 ch{ch1}→{ch2} 变化 {v2-v1} (|Δ|≥5) → 不合理急变",
-                    })
-            # MONOTONIC_DROP
-            if len(dim_series) >= 4:
-                drop_streak = 0
-                for i in range(1, len(dim_series)):
-                    if dim_series[i][1] < dim_series[i - 1][1]:
-                        drop_streak += 1
-                        if drop_streak >= 3:
-                            findings.append({
-                                "severity": "advisory",
-                                "code": "RELATIONSHIP_MONOTONIC_DROP",
-                                "from": f,
-                                "to": t,
-                                "dimension": dim,
-                                "trail": [(c, v) for c, v in dim_series[i - 3:i + 1]],
-                                "suggestion": f"{f}→{t}.{dim} 连续 {drop_streak + 1} 次单调下降无回弹 → 关系恶化太单调",
-                            })
-                            drop_streak = 0
-                    else:
-                        drop_streak = 0
-
-    # FROZEN：关系.json 里存在但近 last_n 章窗口内无任何数值变更（不在 history 中）
-    # （history 是 defaultdict，键随首次 append 诞生 → 真正零变更的关系结构性地从不进 history，
-    #  故必须独立遍历 current_rels 找『不在 history』者，原内联 len(entries)==0 分支恒为死代码）
-    if len(recent) >= 8:
-        for r in current_rels:
-            f = r.get("from")
-            t = r.get("to")
-            if not f or not t:
-                continue
-            if (f, t) not in history:
+            pair = (relationship.get("from"), relationship.get("to"))
+            if all(pair) and pair not in changed_pairs:
                 findings.append({
                     "severity": "advisory",
                     "code": "RELATIONSHIP_FROZEN",
-                    "from": f,
-                    "to": t,
-                    "no_change_chs": len(recent),
-                    "suggestion": f"关系 {f}→{t} 近 {len(recent)} 章无任何数值变更 → 关系停滞",
+                    "from": pair[0],
+                    "to": pair[1],
+                    "window_clusters": cluster_ids,
+                    "suggestion": f"近 {len(cluster_ids)} 个 cluster 无关系变化；结合正文判断是否符合人物走向",
                 })
 
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary = {
-        "warning": sum(1 for f in findings if f["severity"] == "warning"),
-        "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
-    }
+    return {"clusters_scanned": cluster_ids, "findings": findings}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    parser.add_argument("--last-n", type=int, default=15)
+    args = parser.parse_args()
+    project_root = Path(args.project)
+    result = scan(project_root, args.last_n)
+    findings = result["findings"]
     report = {
         "scan_type": "relationship_trend",
-        "scan_ts": ts,
-        "chapters_scanned": recent,
-        "relationships_with_history": len(history),
-        "findings": findings,
-        "summary": summary,
+        "scan_ts": datetime.now().strftime("%Y%m%d_%H%M%S"),
+        **result,
+        "summary": {
+            "warning": sum(item["severity"] == "warning" for item in findings),
+            "advisory": sum(item["severity"] == "advisory" for item in findings),
+        },
     }
-    out_path = out_dir / f"relationship_trend_{ts}.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[relationship_trend] {len(history)} 关系: {summary['warning']} warning / {summary['advisory']} advisory")
-    for f in findings[:6]:
-        print(f"  [{f['severity'].upper()}] {f.get('code')}: {f.get('suggestion', '')[:80]}")
-    print(f"报告: {out_path}")
-    if summary["warning"] > 0:
-        sys.exit(2)
-    if summary["advisory"] > 0:
-        sys.exit(1)
-    sys.exit(0)
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"relationship_trend_{report['scan_ts']}.json"
+    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"[relationship_trend] clusters={len(result['clusters_scanned'])} findings={len(findings)}")
+    if report["summary"]["warning"]:
+        return 2
+    return 1 if report["summary"]["advisory"] else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

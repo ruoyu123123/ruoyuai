@@ -1,229 +1,144 @@
-"""cross_cluster_ending_diversity_aggregate.py — ending_type 多样性跨章扫（CCR18）
+"""Audit ending-type variety across story clusters.
 
-读 _changes.self_eval.applied_style.ending_type（writer 自评章节收束类型），
-检测跨章 ending_type 分布是否单一化。
-
-ending_type 候选（R7 W2 升级 11 型 taxonomy · 与 hook_strength_scanner HOOK_TYPES 同步）：
-  · 原 5 型 + 9 个 ending_type alias：cliffhanger / emotional_pivot / revelation / resolution
-    question / ambient / time_jump / dialogue_close / image_close
-  · R7 W2 新增 6 型：reversal_setup / unfinished_action / new_setting / decision_pending /
-    promise / threat
-  本聚合器不强制 enum 校验（writer 自评字符串自由）·只统计分布·新旧类型混跑零回归。
-
-- ENDING_TYPE_MONOTONE：>50% 是同一 ending_type（连续 ≥ 3 章）
-- ENDING_TYPE_LOW_DIVERSITY：近 N 章只用了 ≤ 2 种 ending_type
-- ENDING_TYPE_MISSING：≥ 3 章无 ending_type 标记 = writer 漏填
-
-退出码: 0 健康 / 1 advisory / 2 warning
+Only the cluster summary ledger is authoritative. Nested chapter values are
+used as precomputed evidence when a cluster-level ending type is absent.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
-
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+import cluster_summary_reader as csr  # noqa: E402
 
 
-def _rec_ending_type(rec: dict) -> str:
-    """2026-05-29 复审修复 [M9]：ending_type 权威来源是 self_eval.applied_style.ending_type
-    （SC-4 / changes_schema.json）。账本 builder 多把它派生为扁平 rec["ending_type"]，但若派生
-    失败 / 仍嵌在 self_eval，原来的 rec.get("ending_type") 取空 → ENDING_TYPE_MISSING 误报。
-    取值优先级：扁平 ending_type → self_eval.applied_style.ending_type → applied_style.ending_type。
-    零回归（扁平命中即返回）。
-    """
-    if not isinstance(rec, dict):
+def _rec_ending_type(record: dict) -> str:
+    if not isinstance(record, dict):
         return ""
-    et = rec.get("ending_type")
-    if isinstance(et, str) and et:
-        return et
-    se = rec.get("self_eval")
-    if isinstance(se, dict):
-        ap = se.get("applied_style")
-        if isinstance(ap, dict) and isinstance(ap.get("ending_type"), str) and ap["ending_type"]:
-            return ap["ending_type"]
-    ap2 = rec.get("applied_style")
-    if isinstance(ap2, dict) and isinstance(ap2.get("ending_type"), str) and ap2["ending_type"]:
-        return ap2["ending_type"]
-    return ""
+    value = record.get("ending_type")
+    if isinstance(value, str) and value:
+        return value
+    self_eval = record.get("self_eval")
+    if isinstance(self_eval, dict):
+        applied = self_eval.get("applied_style")
+        if isinstance(applied, dict) and isinstance(applied.get("ending_type"), str):
+            return applied["ending_type"]
+    applied = record.get("applied_style")
+    return applied.get("ending_type", "") if isinstance(applied, dict) else ""
 
 
-def _ledger_has_ending_type(project_root: Path) -> bool:
-    """ending_type 可能嵌在 self_eval.applied_style，ledger_has_field 只看顶层 → 补探测。"""
-    if csr.ledger_has_field(project_root, "ending_type"):
-        return True
-    for _ch, rec in csr.get_chapter_records(project_root):
-        if _rec_ending_type(rec):
-            return True
-    return False
+def _cluster_ending_type(cluster: dict) -> str:
+    value = _rec_ending_type(cluster)
+    if value:
+        return value
+    nested = cluster.get("chapters") or {}
+    values = [_rec_ending_type(record) for record in nested.values() if isinstance(record, dict)]
+    values = [value for value in values if value]
+    return Counter(values).most_common(1)[0][0] if values else ""
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--last-n", type=int, default=10)
-    args = ap.parse_args()
+def _collect(project_root: Path, last_n: int) -> list[dict]:
+    clusters = csr.get_clusters(project_root)
+    if last_n > 0:
+        clusters = clusters[-last_n:]
+    return [{"cluster_id": str(c.get("cluster_id")), "ending_type": _cluster_ending_type(c)}
+            for c in clusters if c.get("cluster_id")]
 
-    project_root = Path(args.project)
 
-    # 收集 ending_type
-    per_ch = []  # [(ch, ending_type)]
-    recent = []
-
-    # ===== 2026-05-29 cluster 化分支：账本有 ending_type → 摘要驱动 =====
-    # --last-n 在 cluster 模式语义为「最后 N 个 cluster」
-    if csr.is_cluster_mode() and _ledger_has_ending_type(project_root):
-        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
-        recent = sorted({ch for ch, _ in recs})
-        if not recent:
-            print("[SKIP] cluster 账本无 ending_type 记录")
-            sys.exit(0)
-        for ch, rec in recs:
-            # 2026-05-29 复审修复 [M9]：从 self_eval.applied_style 兜底取 ending_type。
-            et = _rec_ending_type(rec)
-            per_ch.append((ch, et))
-    else:
-        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
-        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-        recent = chapters[-args.last_n:] if chapters else []
-        if not recent:
-            print("[SKIP] 无已写章节")
-            sys.exit(0)
-        for ch in recent:
-            p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-            changes = load_json(p, {})
-            applied = ((changes.get("self_eval") or {}).get("applied_style") or {})
-            et = applied.get("ending_type", "")
-            per_ch.append((ch, et))
-
-    # 缺失检测
-    missing_chs = [ch for ch, et in per_ch if not et]
-    findings = []
-    if len(missing_chs) >= 3:
+def _scan(observations: list[dict]) -> list[dict]:
+    findings: list[dict] = []
+    missing = [o["cluster_id"] for o in observations if not o["ending_type"]]
+    if len(missing) >= 3:
         findings.append({
             "severity": "warning",
             "code": "ENDING_TYPE_MISSING",
-            "missing_chs": missing_chs,
-            "suggestion": f"近 {len(recent)} 章中 {len(missing_chs)} 章 _changes.self_eval.applied_style.ending_type 未填 → writer 漏标，无法跨章分析",
+            "missing_clusters": missing,
+            "suggestion": "多个 cluster 没有 ending_type，无法进行跨块节奏审计",
         })
-
-    # 仅含 ending_type 的章做分析
-    valid = [(ch, et) for ch, et in per_ch if et]
+    valid = [o for o in observations if o["ending_type"]]
     if len(valid) < 3:
-        # 输出 report
-        out_dir = project_root / "_数据库" / ".cross_chapter_scan"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report = {
-            "scan_type": "ending_diversity",
-            "scan_ts": ts,
-            "chapters_scanned": recent,
-            "findings": findings,
-            "summary": {"warning": sum(1 for f in findings if f["severity"] == "warning"),
-                        "advisory": sum(1 for f in findings if f["severity"] == "advisory")},
-        }
-        out_path = out_dir / f"ending_diversity_{ts}.json"
-        out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[ending_diversity] {len(valid)} 章有 ending_type — 不足 3 章无法分析")
-        for f in findings:
-            print(f"  [{f['severity'].upper()}] {f.get('suggestion', '')[:80]}")
-        sys.exit(0)
-
-    # ENDING_TYPE_MONOTONE
-    counts = Counter(et for _, et in valid)
+        return findings
+    counts = Counter(o["ending_type"] for o in valid)
     total = len(valid)
-    most_et, most_count = counts.most_common(1)[0]
-    if most_count / total > 0.5:
+    dominant, count = counts.most_common(1)[0]
+    if count / total > 0.5:
         findings.append({
             "severity": "warning",
             "code": "ENDING_TYPE_MONOTONE",
-            "dominant_ending_type": most_et,
-            "pct": round(most_count / total, 2),
+            "dominant_ending_type": dominant,
+            "pct": round(count / total, 2),
             "distribution": dict(counts),
-            "suggestion": f"近 {total} 章中 {round(most_count/total*100)}% 是 ending_type=「{most_et}」→ 章节收束单一化",
+            "suggestion": "ending_type 过度集中，检查 cluster 收束方式是否单一",
         })
-
-    # ENDING_TYPE_LOW_DIVERSITY
-    unique_count = len(counts)
-    if total >= 5 and unique_count <= 2:
+    if total >= 5 and len(counts) <= 2:
         findings.append({
             "severity": "advisory",
             "code": "ENDING_TYPE_LOW_DIVERSITY",
-            "unique_count": unique_count,
+            "unique_count": len(counts),
             "distribution": dict(counts),
-            "suggestion": f"近 {total} 章只用了 {unique_count} 种 ending_type → 多样性不足，应至少 3 种",
+            "suggestion": "当前 cluster 的 ending_type 种类过少",
         })
-
-    # 连续同 ending_type
-    streak = 1
-    streak_chs = [valid[0][0]]
-    streak_et = valid[0][1]
-    for i in range(1, len(valid)):
-        if valid[i][1] == streak_et:
-            streak += 1
-            streak_chs.append(valid[i][0])
-            if streak >= 4:
+    current = valid[0]["ending_type"]
+    run_ids = [valid[0]["cluster_id"]]
+    for observation in valid[1:]:
+        if observation["ending_type"] == current:
+            run_ids.append(observation["cluster_id"])
+            if len(run_ids) >= 4:
                 findings.append({
                     "severity": "advisory",
                     "code": "ENDING_TYPE_RUN",
-                    "ending_type": streak_et,
-                    "consecutive_chs": streak_chs[-4:],
-                    "suggestion": f"近 ≥ 4 章 ending_type 都是「{streak_et}」→ 应换一种",
+                    "ending_type": current,
+                    "consecutive_clusters": run_ids[-4:],
+                    "suggestion": "连续 cluster 使用同一种 ending_type，应增加收束变化",
                 })
-                streak = 1
-                streak_chs = [valid[i][0]]
+                run_ids = [observation["cluster_id"]]
         else:
-            streak_et = valid[i][1]
-            streak = 1
-            streak_chs = [valid[i][0]]
+            current = observation["ending_type"]
+            run_ids = [observation["cluster_id"]]
+    return findings
 
-    # 输出
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    parser.add_argument("--last-n", type=int, default=10)
+    args = parser.parse_args()
+    project_root = Path(args.project)
+    if not project_root.is_dir():
+        print(f"[FATAL] project directory not found: {project_root}", file=sys.stderr)
+        raise SystemExit(2)
+    observations = _collect(project_root, args.last_n)
+    if not observations:
+        print("[SKIP] no completed cluster records")
+        raise SystemExit(0)
+    findings = _scan(observations)
+    summary = {
+        "warning": sum(f["severity"] == "warning" for f in findings),
+        "advisory": sum(f["severity"] == "advisory" for f in findings),
+    }
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary = {
-        "warning": sum(1 for f in findings if f["severity"] == "warning"),
-        "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
-    }
+    valid = [o for o in observations if o["ending_type"]]
     report = {
         "scan_type": "ending_diversity",
         "scan_ts": ts,
-        "chapters_scanned": recent,
-        "ending_distribution": dict(counts),
+        "clusters_scanned": [o["cluster_id"] for o in observations],
+        "cluster_observations": observations,
+        "ending_distribution": dict(Counter(o["ending_type"] for o in valid)),
         "findings": findings,
         "summary": summary,
     }
     out_path = out_dir / f"ending_diversity_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[ending_diversity] {total} 章 distribution: " + ", ".join(f"{k}={v}" for k, v in counts.most_common(5)))
-    for f in findings[:5]:
-        print(f"  [{f['severity'].upper()}] {f.get('code')}: {f.get('suggestion', '')[:80]}")
-    print(f"报告: {out_path}")
-    if summary["warning"] > 0:
-        sys.exit(2)
-    if summary["advisory"] > 0:
-        sys.exit(1)
-    sys.exit(0)
+    print(f"[ending_diversity] {summary['warning']} warning / {summary['advisory']} advisory")
+    print(f"report: {out_path}")
+    raise SystemExit(2 if summary["warning"] else 1 if summary["advisory"] else 0)
 
 
 if __name__ == "__main__":

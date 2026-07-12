@@ -1,7 +1,7 @@
 {
-  "_schema": "protagonist_stress_v21",
-  "schema_version": "v27",
-  "_doc": "此 example 从某都市超自然商战类退役项目提取，适用题材：现代都市 + 隐秘超自然 + 商战权谋。CK3 借鉴：违背性格 +stress；满 → mental_break 抽卡 → 永久改写 persona，把'道德/情感选择'变成有复利代价的系统。5 张 mental_break 卡覆盖 5 个心理出口（黑化/酗酒/出家/封心/嗜杀）。占位符：陆衍=主角 / 老周=情报盟友。",
+  "_schema": "cluster_protagonist_stress",
+  "schema_version": "1.0",
+  "_doc": "现代都市、隐秘超自然与商战题材的 cluster 压力档示例。压力变化按 persona 行为自评与正文信号计算，达到阈值后记录心理后果。",
   "generated_at": "<生成日期>",
   "protagonist": "陆衍",
   "stress_level": 0,
@@ -9,7 +9,7 @@
   "stress_threshold_break": 8,
   "stress_log": [
     {
-      "ch": 4,
+      "cluster_id": "cluster_004",
       "change": 0,
       "new_total": 0,
       "trigger_type": "neutral",
@@ -18,7 +18,7 @@
       "_ts": "2026-05-16T12:50:05"
     }
   ],
-  "_log_doc": "每条 entry: {ch, change, new_total, trigger_event, trigger_type: persona_violation/persona_align/event_shock/relief, _note}",
+  "_log_doc": "每条 entry: {cluster_id, stress_old, change, new_total, trigger_type, delta_source, violations, alignments, mental_break_card}",
   "persona_violations_tracked": {
     "_doc": "陆衍 voice_pack.persona_layers 5 层都是 stress 触发点。每违背 1 次 +stress；持续符合 -1（缓解）。",
     "core_traits": [
@@ -94,7 +94,7 @@
         {
           "layer": "habits",
           "trait": "+酗酒",
-          "_persists_chapters": 30
+          "_persists_clusters": 30
         }
       ],
       "narrative_effect": "每次大压力章节后必有酒精场景；判断力下降",
@@ -114,7 +114,7 @@
         {
           "layer": "habits",
           "trait": "+独居",
-          "_persists_chapters": 20
+          "_persists_clusters": 20
         }
       ],
       "narrative_effect": "拒绝亲密关系；每章默念心经；可解锁'隐士'路线",
@@ -165,7 +165,7 @@
     "consumed_by": [
       "build_manifest._collect_protagonist_stress() 注入 manifest",
       "writer step 0t：感知当前 stress + 高压时倾向 coping_mechanisms",
-      "save-state.step9 stress_evaluator.py：扫本章正文 → 更新 stress_log + 满阈值抽 mental_break_card",
+      "cluster-save-state 调用 stress_evaluator.py --cluster <cluster_id>：读取整块正文与 self-eval，更新 cluster stress_log + 满阈值抽 mental_break_card",
       "novel-voice-checker：检测违背 persona 时同步 stress 计数"
     ]
   }

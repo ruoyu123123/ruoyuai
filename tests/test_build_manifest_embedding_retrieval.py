@@ -293,24 +293,27 @@ def test_relevant_heuristics_kw_hits_scaling_derivation():
 # ════════════════════════════════════════════════════════════════════
 
 def _mk_history_project() -> tuple:
-    """临时项目：进度.json 含 ch=2 的 query 信号 + .embeddings/chapter_001.json 两条候选
+    """临时项目：cluster_002 brief + cluster_001 embedding 两条候选
     （一条语义相关、一条无关）。返回 (tmp_dir, project_root, relevant_text, irrelevant_text)。"""
     td = tempfile.mkdtemp()
     root = Path(td) / "测试书"
     (root / "_数据库").mkdir(parents=True, exist_ok=True)
-    (root / "_数据库" / "进度.json").write_text(json.dumps({
-        "cluster_blueprint": {
-            "cluster_001": {"scene_storyboard": [
-                {"ch": 2, "turning_point": "青冥剑现世", "goal": "夺回信物",
-                 "threads_advance": ["江湖恩怨"]},
-            ]}
-        }
+    (root / "_数据库" / "事件簇.json").write_text(json.dumps({
+        "clusters": [{
+            "cluster_id": "cluster_002",
+            "scope_summary": "青冥剑现世后夺回信物",
+            "scene_storyboard": [{
+                "turning_point": "青冥剑现世", "goal": "夺回信物",
+                "threads_advance": ["江湖恩怨"],
+            }],
+        }]
     }, ensure_ascii=False), encoding="utf-8")
     emb_dir = root / "_数据库" / ".embeddings"
     emb_dir.mkdir(parents=True, exist_ok=True)
     relevant_text = "青冥剑现世的那一夜江湖恩怨骤起风云突变"
     irrelevant_text = "厨房里炖着汤水柴米油盐岁月静好安然入睡"
-    (emb_dir / "chapter_001.json").write_text(json.dumps({
+    (emb_dir / "cluster_001.json").write_text(json.dumps({
+        "scope": "cluster", "cluster_id": "cluster_001",
         "chunks": [
             {"idx": 0, "text_preview": relevant_text,
              "embedding": _char_freq_embedding(relevant_text)},
@@ -335,7 +338,7 @@ def test_selective_history_gate_off_never_calls_compute_embedding(monkeypatch):
 
         monkeypatch.setattr(embedding_store, "compute_embedding", _counting)
         scanner = bm.DatabaseScanner(root, 2)
-        res = bm._collect_selective_history(scanner, 2, top_k=2)
+        res = bm._collect_selective_history(scanner, "cluster_002", top_k=2)
         assert calls["n"] == 0, "无真后端时 _collect_selective_history 不应调用 compute_embedding"
         assert res["retrieved"] == []
         assert "reason" in res and res["reason"]
@@ -349,7 +352,7 @@ def test_selective_history_gate_off_skips_even_with_embeddings_present(monkeypat
     td, root, _rel, _irr = _mk_history_project()
     try:
         scanner = bm.DatabaseScanner(root, 2)
-        res = bm._collect_selective_history(scanner, 2, top_k=2)
+        res = bm._collect_selective_history(scanner, "cluster_002", top_k=2)
         assert res == {"retrieved": [], "reason": (
             "无真 embedding 后端（EMBED_BACKEND 未设/=hash）·hash 假嵌入不可当语义检索用·跳过")}
     finally:
@@ -370,7 +373,7 @@ def test_selective_history_real_backend_semantic_ranking(monkeypatch):
 
         monkeypatch.setattr(embedding_store, "compute_embedding", _counting_char_freq)
         scanner = bm.DatabaseScanner(root, 2)
-        res = bm._collect_selective_history(scanner, 2, top_k=2)
+        res = bm._collect_selective_history(scanner, "cluster_002", top_k=2)
         assert calls["n"] > 0, "真后端应真调用 compute_embedding 编码 query"
         assert res["retrieved"], "应检出候选 chunk"
         assert res["retrieved"][0]["text_preview"] == relevant_text, (
@@ -379,13 +382,13 @@ def test_selective_history_real_backend_semantic_ranking(monkeypatch):
         _rm(td)
 
 
-def test_selective_history_first_chapter_unaffected_by_gate(monkeypatch):
-    """chapter<=1 早退分支不受本次门控改动影响（无论真后端与否）。"""
+def test_selective_history_first_cluster_unaffected_by_gate(monkeypatch):
+    """首个 cluster 无历史时直接返回空。"""
     _clear_embed_env(monkeypatch)
     td, root, _rel, _irr = _mk_history_project()
     try:
         scanner = bm.DatabaseScanner(root, 1)
-        res = bm._collect_selective_history(scanner, 1, top_k=2)
-        assert res == {"retrieved": [], "reason": "首章无历史"}
+        res = bm._collect_selective_history(scanner, "cluster_001", top_k=2)
+        assert res == {"retrieved": [], "reason": "首个 cluster 无历史"}
     finally:
         _rm(td)

@@ -1,8 +1,13 @@
 {
-  "_example_doc": "此 example 来自《无脸者守则》（悬疑惊悚/无限流·中式社会规训恐怖·惊悚乐园风格）新建项目提取，适用题材：无限流/规则怪谈/中式恐怖。本文件是该子系统的【填充示例】，配 core/claude-home/templates/subsystem_skeletons.json（空骨架·框架）一起看：骨架给 schema，本示例给如何填。2026-06-01 根治契约债批次补齐（此前全系统无此子系统示例）。",
+  "_example_doc": "cluster 级叙事节拍器填充示例，适用于悬疑惊悚、无限流与中式恐怖题材。",
+  "_schema": "cluster_storyteller",
   "schema_version": "1.0",
-  "_doc": "叙事节拍器（pacing metronome）——记录《无脸者守则》情绪节奏目标。混合档：重事件场景拉长呼吸、轻事件场景节奏紧凑；约束每个 cluster 章末必留钩子；提示爽点（解构校规/违规反杀/毒舌吐槽）分布。advisory 顾问性质，不硬锁章数字数，writer/splitter 可豁免。仅记节奏意图，不预设 cluster_002+ 细节，章号 fluid 涌现由 splitter 按字数切。",
+  "_doc": "记录 cluster 的情绪节奏目标与已完成块的 outcome；所有建议均为 advisory，不锁定章节数量。",
   "rhythm_profile": "混合",
+  "storyteller_profile": "cassandra",
+  "current_pressure_phase": "rising",
+  "since_phase_change_cluster": "cluster_001",
+  "cluster_outcome_log": [],
   "beat_targets": [
     {
       "cluster_id": "cluster_001",
@@ -22,6 +27,19 @@
     "light_event_pacing": "紧凑·快推进多吐槽",
     "punchline_distribution_hint": "毒舌吐槽/元叙事解构/ACG 梗按场景轻重穿插，重事件克制",
     "_doc": "未在 beat_targets 中显式列出的 cluster 采用此默认节拍策略；后续 cluster 节拍目标随涟漪涌现，在 cluster-save-state 阶段追加，不在此预设。"
+  },
+  "adaptation_factor": {
+    "recent_n_clusters": 10,
+    "expected_setback_per_n_clusters": 4,
+    "tolerance_window": 2,
+    "current_setback_count_in_window": 0,
+    "current_win_streak": 0,
+    "current_loss_streak": 0
+  },
+  "narrator_recommendation": {
+    "next_cluster_target_outcome": "auto",
+    "next_cluster_intensity_target": "auto",
+    "_reason": ""
   },
   "appraisal_beats": [
     {
@@ -44,5 +62,5 @@
       "_doc": "对应 beat_map.example.json 第 4 拍 Catalyst。scene_idx 对齐 scene_storyboard 场景序号。"
     }
   ],
-  "_appraisal_beats_doc": "🔴 2026-06-29 心理 P0：由 A agent 读正文回填，build_manifest._collect_appraisal_directive 注入 writer 情绪方向卡（余烬+本块方向）；derived_emotion/behavior_externalization 必须是自然语言/动作外化，禁贴情绪词标签；缺此字段时安全闸 None 不注入，向后兼容旧书；不预设 cluster_002+ beat，随写作进度追加。"
+  "_appraisal_beats_doc": "由 summarizer 读 cluster 正文回填；build_manifest 注入当前块情绪方向卡。derived_emotion 与 behavior_externalization 使用自然语言和动作外化，不贴情绪标签。"
 }

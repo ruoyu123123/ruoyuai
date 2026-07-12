@@ -1,390 +1,328 @@
-"""stress_evaluator.py — 主角 Stress + Mental Break 卡评估器（v21 R1.3 新增）
-
-借鉴 CK3：违背性格 → stress 累积 → 满 stress_threshold_break 抽 mental_break_card → 永久改写 persona。
-
-在 /cluster-save-state 的 cluster 章范围内运行：
-1. 读 第NNN章.txt 正文
-2. 对比 persona_violations_tracked 中每条 trait 的 violation/align 关键词
-3. 计算本章 stress delta（+违背 / -符合 / +事件冲击）
-4. 更新 stress_level + 写 stress_log
-5. 如 stress_level >= stress_threshold_break：
-   - 按 weight 加权随机抽一张 mental_break_card
-   - 应用 permanent_persona_changes（写入 locked_facts）
-   - reset stress_level = 0
-   - 输出强烈告警
-
-用法：python stress_evaluator.py <project> [--ch N | --auto]
-退出码: 0 健康 / 1 高 stress 警告 / 2 触发 mental_break / 3 致命
-"""
-
+#!/usr/bin/env python3
+"""按 cluster 草稿评估主角压力，并记录可追踪的 cluster 状态。"""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import random
 import re
 import sys
-from datetime import datetime
 from pathlib import Path
 
-# 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json
 import state_cli_guard
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
+SCHEMA_NAME = "cluster_protagonist_stress"
+SCHEMA_VERSION = "1.0"
+CLUSTER_RE = re.compile(r"^cluster_[0-9]{3,}$")
+OUTCOME_TRIGGER_TYPES = {"persona_violation", "persona_align", "neutral"}
+
+
+class StressContractError(ValueError):
+    """压力档或 cluster 创作产物不符合唯一契约。"""
+
+
+def _require_cluster_id(value: str) -> str:
+    if not isinstance(value, str) or not CLUSTER_RE.fullmatch(value):
+        raise StressContractError(f"非法 cluster_id: {value!r}")
+    return value
+
+
+def _read_json(path: Path) -> dict:
+    if not path.is_file():
+        raise StressContractError(f"文件不存在: {path}")
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise StressContractError(f"JSON 读取失败: {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise StressContractError(f"JSON 顶层必须是 object: {path}")
+    return value
 
 
-def save_json(p: Path, data: dict):
-    # 2026-05-29 修：裸写 → 原子写（atomic_write_json 内部已 mkdir + fsync）
-    atomic_json.atomic_write_json(p, data)
+def _require_nonempty_string(value, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise StressContractError(f"{field} 必须是非空字符串")
+    return value
 
 
-# ───────────────────── 真实项目 schema 兼容层（2026-05-30 北极星③契约修复） ─────────────────────
-# 背景（3 真实项目实测）：引擎旧版只认 v21 扁平 schema（标量 stress_level/stress_max/
-# stress_threshold_break + persona_violations_tracked.core_traits[]），但 AI 自由生成维度 schema：
-#   · 纵尸司：stress_dimensions{guilt:0,fear:0,...}（扁平 int） · breakdown_threshold:80 · stress_history
-#   · 诡异：  stress_dimensions{身份暴露:{current,max,trigger_threshold}}（嵌套 dict） · stress_history
-#   · 城南：  characters_stress{lin_qi:{current_stress,...}}（多角色） + 也有 v21 标量字段
-# 旧版 traits=[] → delta 恒 0 → 永不抽 mental_break；manifest stress_level 缺省 0 → is_high_stress 恒 false。
-# 修复（参照 fate_engine accessor 范式）：把 3 套维度形态聚合出统一标量 stress 视图供引擎/manifest 消费，
-# 写回时按真实 schema 落字段。纪律：只兼容读取（北极星⑥），不强制改 outline schema · 仍是顾问非硬锁。
+def _validate_trait(trait: dict, index: int) -> None:
+    required = {"trait", "violation_keywords", "align_keywords", "stress_per_violation"}
+    if not isinstance(trait, dict) or not required <= set(trait):
+        raise StressContractError(f"core_traits[{index}] 字段不完整")
+    _require_nonempty_string(trait["trait"], f"core_traits[{index}].trait")
+    for field in ("violation_keywords", "align_keywords"):
+        if not isinstance(trait[field], list) or not all(isinstance(x, str) and x for x in trait[field]):
+            raise StressContractError(f"core_traits[{index}].{field} 必须是字符串数组")
+    value = trait["stress_per_violation"]
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise StressContractError(f"core_traits[{index}].stress_per_violation 必须是正整数")
 
 
-def _dim_value(v) -> int:
-    """取单维度当前值 · 兼容扁平 int（纵尸司 guilt:0）与嵌套 dict（诡异 身份暴露:{current:N}）。"""
-    if isinstance(v, dict):
-        return v.get("current", 0) or 0
-    if isinstance(v, (int, float)):
-        return int(v)
-    return 0
+def _validate_card(card: dict, index: int) -> None:
+    required = {"card_id", "label", "trigger_min_stress", "weight", "permanent_persona_changes", "narrative_effect"}
+    if not isinstance(card, dict) or not required <= set(card):
+        raise StressContractError(f"mental_break_pool[{index}] 字段不完整")
+    _require_nonempty_string(card["card_id"], f"mental_break_pool[{index}].card_id")
+    _require_nonempty_string(card["label"], f"mental_break_pool[{index}].label")
+    for field in ("trigger_min_stress", "weight"):
+        value = card[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise StressContractError(f"mental_break_pool[{index}].{field} 必须是非负整数")
+    if card["weight"] == 0:
+        raise StressContractError(f"mental_break_pool[{index}].weight 必须大于 0")
+    if not isinstance(card["permanent_persona_changes"], list):
+        raise StressContractError(f"mental_break_pool[{index}].permanent_persona_changes 必须是数组")
+    _require_nonempty_string(card["narrative_effect"], f"mental_break_pool[{index}].narrative_effect")
 
 
-def _dim_max(v, default: int = 10) -> int:
-    """取单维度上限 · 嵌套 dict 有 max 用 max，否则 default。"""
-    if isinstance(v, dict):
-        return v.get("max", default) or default
-    return default
+def validate_stress(stress: dict) -> dict:
+    required = {
+        "_schema", "schema_version", "protagonist", "stress_level", "stress_max",
+        "stress_threshold_break", "stress_log", "persona_violations_tracked",
+        "mental_break_pool", "coping_mechanisms",
+    }
+    missing = required - set(stress)
+    public = {key for key in stress if not str(key).startswith("_")}
+    allowed_public = required - {"_schema"}
+    unknown = public - allowed_public
+    if missing or unknown:
+        raise StressContractError(
+            f"主角压力档字段错误: missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
+    if stress["_schema"] != SCHEMA_NAME or stress["schema_version"] != SCHEMA_VERSION:
+        raise StressContractError(f"主角压力档 schema 必须是 {SCHEMA_NAME!r}/{SCHEMA_VERSION!r}")
+    _require_nonempty_string(stress["protagonist"], "protagonist")
+    for field in ("stress_level", "stress_max", "stress_threshold_break"):
+        value = stress[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise StressContractError(f"{field} 必须是非负整数")
+    if stress["stress_max"] <= 0 or stress["stress_level"] > stress["stress_max"]:
+        raise StressContractError("stress_level/stress_max 范围无效")
+    if not 0 < stress["stress_threshold_break"] <= stress["stress_max"]:
+        raise StressContractError("stress_threshold_break 必须位于 1..stress_max")
+    if not isinstance(stress["stress_log"], list):
+        raise StressContractError("stress_log 必须是数组")
+    tracked = stress["persona_violations_tracked"]
+    if not isinstance(tracked, dict) or not isinstance(tracked.get("core_traits"), list):
+        raise StressContractError("persona_violations_tracked.core_traits 必须是数组")
+    for index, trait in enumerate(tracked["core_traits"]):
+        _validate_trait(trait, index)
+    if not isinstance(stress["mental_break_pool"], list):
+        raise StressContractError("mental_break_pool 必须是数组")
+    for index, card in enumerate(stress["mental_break_pool"]):
+        _validate_card(card, index)
+    if not isinstance(stress["coping_mechanisms"], dict):
+        raise StressContractError("coping_mechanisms 必须是 object")
+    for index, entry in enumerate(stress["stress_log"]):
+        if not isinstance(entry, dict):
+            raise StressContractError(f"stress_log[{index}] 必须是 object")
+        _require_cluster_id(entry.get("cluster_id"))
+        if entry.get("trigger_type") not in OUTCOME_TRIGGER_TYPES:
+            raise StressContractError(f"stress_log[{index}].trigger_type 非法")
+    return stress
 
 
-def _dim_threshold(v):
-    """取单维度触发阈 · 嵌套 dict 的 trigger_threshold（无则 None 由全局兜底）。"""
-    if isinstance(v, dict):
-        return v.get("trigger_threshold")
-    return None
+def load_stress(project_root: Path) -> dict:
+    return validate_stress(_read_json(Path(project_root) / "_数据库" / "主角压力档.json"))
+
+
+def save_stress(project_root: Path, stress: dict) -> None:
+    validate_stress(stress)
+    atomic_json.atomic_write_json(Path(project_root) / "_数据库" / "主角压力档.json", stress)
 
 
 def stress_view(stress: dict) -> dict:
-    """把任意 stress schema 归一成统一标量视图（供 evaluate + build_manifest 共用）：
-      {mode, stress_level, stress_max, stress_threshold_break, traits, dims_present, _dim_keys}
-    - v21 标量：直接读 stress_level/stress_max/stress_threshold_break
-    - 维度 schema（纵尸司/诡异）：stress_level=max(各维度归一到 0..stress_max 后的值)，
-      threshold = 各维度 trigger_threshold/breakdown_threshold 的最贴合者（按峰值维度）。
-    """
-    dims = stress.get("stress_dimensions")
-    if isinstance(dims, dict) and dims:
-        # 维度 schema：每维度归一到统一 max（取各维度 max 的众数/默认 10），取峰值维度作为整体压力
-        stress_max = 10
-        peak_level = 0
-        peak_threshold = None
-        peak_dmax = stress.get("stress_max", 10)  # 峰值维度的原始上限（threshold 归一基准）
-        dim_keys = []
-        for k, v in dims.items():
-            if k.startswith("_"):
-                continue
-            dim_keys.append(k)
-            cur = _dim_value(v)
-            dmax = _dim_max(v, stress.get("stress_max", 10))
-            # 归一到统一 stress_max=10 量纲，便于和 v21 threshold/manifest pct 对齐
-            norm = round(cur / dmax * 10) if dmax > 0 else cur
-            if norm > peak_level:
-                peak_level = norm
-                peak_threshold = _dim_threshold(v)
-                peak_dmax = dmax  # 2026-05-30 修：记下峰值维度的真实上限（batch5 硬编码 /100 致 bug）
-        # 阈值：峰值维度 trigger_threshold（处于该维度原始 0..dmax 量纲）用**峰值维度自己的 dmax** 归一，
-        # 否则 breakdown_threshold 归一，否则默认 8。
-        threshold = 8
-        if peak_threshold is not None:
-            # 2026-05-30 修：用峰值维度的 peak_dmax 归一（batch5 硬编码 round(peak_threshold/100*10)：
-            # 行 107 只存 peak_threshold 未存 dmax → max!=10 且 threshold>10 的维度被错误归一致假高，
-            # 旧码恰巧在 dmax==10 时对、纵尸司扁平 int 不触发故潜伏）。
-            threshold = 8 if peak_threshold == 0 else round(peak_threshold / peak_dmax * 10) if peak_dmax > 0 else peak_threshold
-        elif stress.get("breakdown_threshold") is not None:
-            bt = stress["breakdown_threshold"]
-            threshold = round(bt / 100 * 10) if bt > 10 else bt  # 80(百分量纲)→8
-        return {
-            "mode": "dimensions",
-            "stress_level": peak_level,
-            "stress_max": stress_max,
-            "stress_threshold_break": threshold or 8,
-            "traits": [],  # 维度 schema 无逐 trait 关键词，delta 走维度（暂不自动加，见 evaluate）
-            "dims_present": True,
-            "_dim_keys": dim_keys,
-        }
-    # v21 标量 schema（含城南）
+    """返回 canonical 压力快照，供 evaluator 与 manifest 共用。"""
+    validate_stress(stress)
+    traits = stress["persona_violations_tracked"]["core_traits"]
     return {
-        "mode": "scalar",
-        "stress_level": stress.get("stress_level", 0),
-        "stress_max": stress.get("stress_max", 10),
-        "stress_threshold_break": stress.get("stress_threshold_break", 8),
-        "traits": (stress.get("persona_violations_tracked", {}) or {}).get("core_traits", []),
-        "dims_present": False,
-        "_dim_keys": [],
+        "mode": "cluster",
+        "stress_level": stress["stress_level"],
+        "stress_max": stress["stress_max"],
+        "stress_threshold_break": stress["stress_threshold_break"],
+        "traits": traits,
     }
 
 
-def read_chapter_text(project_root: Path, ch: int) -> str:
-    p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
-    if not p.exists():
-        return ""
-    return p.read_text(encoding="utf-8")
-
-
-def read_changes(project_root: Path, ch: int) -> dict:
-    """读本章 _changes.json（writer 申报）。不存在/损坏返回空骨架。"""
-    p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-    return load_json(p, {"factual": {}, "self_eval": {}}) or {"factual": {}, "self_eval": {}}
+def _cluster_artifacts(project_root: Path, cluster_id: str) -> tuple[dict, str]:
+    draft_dir = Path(project_root) / "章节" / f"{cluster_id}_draft"
+    changes = _read_json(draft_dir / f"{cluster_id}_changes.json")
+    if not isinstance(changes.get("self_eval"), dict):
+        raise StressContractError("cluster changes.self_eval 必须是 object")
+    draft_path = draft_dir / f"{cluster_id}_draft.txt"
+    if not draft_path.is_file():
+        raise StressContractError(f"文件不存在: {draft_path}")
+    try:
+        draft = draft_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise StressContractError(f"正文读取失败: {draft_path}: {exc}") from exc
+    if not draft.strip():
+        raise StressContractError(f"cluster 正文为空: {draft_path}")
+    return changes, draft
 
 
 def evaluate_stress_delta_from_self_eval(stress_self: dict, traits: list[dict]):
-    """#4 孤儿契约修复（对齐 narrator #7 范式 · 北极星⑤作者申报第一权威）。
-
-    writer 在 self_eval.stress_evaluation_self（changes_schema.json:529）已**主动申报**本章
-    故意写的违背/符合性格行为 + 估算 stress：
-      · violations_made: [str]  本章写出的违背性格行为描述
-      · alignments_made: [str]  本章写出的符合性格行为描述
-      · estimated_stress_change: str  writer 自估 delta（如 "+4" / "-1" / "0"）
-    此前 stress_evaluator 把这些**全丢弃**，改用正文 violation/align 关键词重扫算 delta —— 关键词
-    可靠性远低于 writer 申报（writer 知道自己「故意」写了违背，关键词可能在中性叙述里误命中/漏命中）。
-    且下游影响大（delta→满阈值→抽 mental_break→permanent persona→locked_facts），用关键词驱动这条
-    重链路风险高。故现在**优先消费** writer 申报：
-
-    delta 计算（与关键词模式量纲一致 · 复用 trait 的 stress_per_violation）：
-      - 有 violations_made：+per × min(条数, 3)（per 取首个 trait 的 stress_per_violation，无 traits 用 2）
-      - 有 ≥2 条 alignments_made：-1（relief，与关键词模式同语义）
-      - writer 显式申报 estimated_stress_change（可解析出数字）时**以 writer 自估为准**（覆盖上面计数）
-
-    返回 {delta, violations, alignments, source="writer_declared"}；申报为空返回 None（调用方回退关键词扫描）。
-    """
+    """将 writer 对本 cluster 的压力自评转成数值变化。"""
+    if stress_self is None:
+        return None
     if not isinstance(stress_self, dict):
+        raise StressContractError("stress_evaluation_self 必须是 object")
+    violations = stress_self.get("violations_made", [])
+    alignments = stress_self.get("alignments_made", [])
+    estimated = stress_self.get("estimated_stress_change")
+    if not isinstance(violations, list) or not all(isinstance(x, str) for x in violations):
+        raise StressContractError("violations_made 必须是字符串数组")
+    if not isinstance(alignments, list) or not all(isinstance(x, str) for x in alignments):
+        raise StressContractError("alignments_made 必须是字符串数组")
+    if estimated is not None and (not isinstance(estimated, str) or not re.fullmatch(r"[+-]?\d+", estimated.strip())):
+        raise StressContractError("estimated_stress_change 必须是带符号整数文本")
+    if not violations and not alignments and estimated is None:
         return None
-    violations_made = [v for v in (stress_self.get("violations_made") or []) if v]
-    alignments_made = [a for a in (stress_self.get("alignments_made") or []) if a]
-    est_raw = stress_self.get("estimated_stress_change")
-    has_est = isinstance(est_raw, str) and re.search(r"-?\d+", est_raw)
-    # writer 完全没申报任何信号 → 回退关键词扫描（向后兼容老 changes / 申报缺失）
-    if not violations_made and not alignments_made and not has_est:
-        return None
-
-    # per：取首个 trait 的 stress_per_violation，无 traits 用全局默认 2（与关键词模式一致）
-    per = traits[0].get("stress_per_violation", 2) if traits else 2
-
-    delta = 0
-    violations = []
-    alignments = []
-    if violations_made:
-        n = min(len(violations_made), 3)  # 单章 cap 3 条（与关键词模式 min(hits,3) 对齐）
-        added = per * n
-        delta += added
-        violations.append({"trait": "writer_declared", "declared": violations_made,
-                           "count": len(violations_made), "stress_added": added})
-    if len(alignments_made) >= 2:
-        delta -= 1
-        alignments.append({"trait": "writer_declared", "declared": alignments_made,
-                           "count": len(alignments_made), "stress_relief": -1})
-
-    # writer 显式自估 delta → 以其为准（北极星⑤：作者判断优先于系统计数）
-    if has_est:
-        delta = int(re.search(r"-?\d+", est_raw).group(0))
-
-    return {"delta": delta, "violations": violations, "alignments": alignments,
-            "source": "writer_declared"}
+    per = traits[0]["stress_per_violation"] if traits else 2
+    delta = per * min(len(violations), 3) - (1 if len(alignments) >= 2 else 0)
+    if estimated is not None:
+        delta = int(estimated)
+    return {
+        "delta": delta,
+        "violations": [{"trait": "writer_declared", "declared": violations, "count": len(violations)}] if violations else [],
+        "alignments": [{"trait": "writer_declared", "declared": alignments, "count": len(alignments)}] if alignments else [],
+        "source": "writer_declared",
+    }
 
 
 def evaluate_stress_delta(text: str, traits: list[dict]) -> dict:
-    """扫文本计算 stress 变化。返回 {delta, violations:[], alignments:[]}"""
+    """按 persona trait 关键词计算本 cluster 的 advisory 压力变化。"""
     delta = 0
     violations = []
     alignments = []
     for trait in traits:
-        v_kw = trait.get("violation_keywords", [])
-        a_kw = trait.get("align_keywords", [])
-        per = trait.get("stress_per_violation", 2)
-        v_hits = sum(text.count(k) for k in v_kw)
-        a_hits = sum(text.count(k) for k in a_kw)
-        if v_hits > 0:
-            delta += per * min(v_hits, 3)  # 单 trait 单章 cap 3 命中
-            violations.append({"trait": trait["trait"], "hits": v_hits, "stress_added": per * min(v_hits, 3)})
+        v_hits = sum(text.count(keyword) for keyword in trait["violation_keywords"])
+        a_hits = sum(text.count(keyword) for keyword in trait["align_keywords"])
+        if v_hits:
+            added = trait["stress_per_violation"] * min(v_hits, 3)
+            delta += added
+            violations.append({"trait": trait["trait"], "hits": v_hits, "stress_added": added})
         elif a_hits >= 2:
-            delta -= 1  # 持续符合给予 relief
+            delta -= 1
             alignments.append({"trait": trait["trait"], "hits": a_hits, "stress_relief": -1})
-    return {"delta": delta, "violations": violations, "alignments": alignments}
+    return {"delta": delta, "violations": violations, "alignments": alignments, "source": "keyword_scan"}
 
 
-def draw_mental_break_card(pool: list[dict], stress_level: int) -> dict:
-    """按 weight 加权随机抽一张满足 trigger_min_stress 的卡。"""
-    eligible = [c for c in pool if stress_level >= c.get("trigger_min_stress", 8)]
+def draw_mental_break_card(pool: list[dict], stress_level: int, cluster_id: str) -> dict | None:
+    """用 cluster 稳定选择满足阈值的卡，重复运行得到同一结果。"""
+    _require_cluster_id(cluster_id)
+    eligible = [card for card in pool if stress_level >= card["trigger_min_stress"]]
     if not eligible:
         return None
-    weights = [c.get("weight", 1) for c in eligible]
-    return random.choices(eligible, weights=weights, k=1)[0]
+    total = sum(card["weight"] for card in eligible)
+    seed = int.from_bytes(hashlib.sha256(f"{cluster_id}:{stress_level}".encode()).digest()[:8], "big")
+    cursor = seed % total
+    for card in eligible:
+        cursor -= card["weight"]
+        if cursor < 0:
+            return card
+    return eligible[-1]
 
 
-def apply_card_to_locked_facts(project_root: Path, ch: int, card: dict, protagonist: str):
-    """把抽到的 mental_break 卡写入 locked_facts."""
-    cards_path = project_root / "_数据库" / "事件表.json"
-    cards = load_json(cards_path, {"events": []})
-    cards.setdefault("events", []).append({
-        "id": f"MB_event_{ch}_{card.get('card_id', 'unknown')}",
-        "ch": ch,
+def apply_card_to_event_table(project_root: Path, cluster_id: str, card: dict, protagonist: str) -> dict:
+    """将 mental-break 结果作为 cluster 事件写入事件表。"""
+    path = Path(project_root) / "_数据库" / "事件表.json"
+    table = _read_json(path)
+    events = table.get("events")
+    if not isinstance(events, list):
+        raise StressContractError("事件表.events 必须是数组")
+    event_id = f"MB_event_{cluster_id}_{card['card_id']}"
+    record = {
+        "id": event_id,
+        "cluster_id": cluster_id,
         "type": "mental_break_triggered",
         "protagonist": protagonist,
-        "card": card.get("label"),
-        "card_id": card.get("card_id"),
-        "permanent_persona_changes": card.get("permanent_persona_changes", []),
-        "narrative_effect": card.get("narrative_effect", ""),
-        "_doc": "Mental Break 抽卡触发——后续章节必受此卡约束",
-    })
-    save_json(cards_path, cards)
+        "card": card["label"],
+        "card_id": card["card_id"],
+        "permanent_persona_changes": card["permanent_persona_changes"],
+        "narrative_effect": card["narrative_effect"],
+    }
+    table["events"] = [item for item in events if not (isinstance(item, dict) and item.get("id") == event_id)]
+    table["events"].append(record)
+    atomic_json.atomic_write_json(path, table)
+    return record
 
 
-def evaluate(project_root: Path, ch: int) -> dict:
-    stress_path = project_root / "_数据库" / "主角压力档.json"
-    stress = load_json(stress_path, None)
-    if stress is None:
-        return {"error": "主角压力档.json 不存在"}
-
-    text = read_chapter_text(project_root, ch)
-    if not text:
-        return {"ch": ch, "skipped": "本章无正文"}
-
+def evaluate(project_root: Path, cluster_id: str) -> dict:
+    """评估并持久化一个 cluster，日志按 cluster_id 幂等替换。"""
+    cluster_id = _require_cluster_id(cluster_id)
+    stress = load_stress(project_root)
+    changes, draft = _cluster_artifacts(project_root, cluster_id)
     view = stress_view(stress)
     traits = view["traits"]
-
-    # #4 孤儿契约修复：优先消费 writer 申报的 self_eval.stress_evaluation_self.{violations_made/
-    # alignments_made/estimated_stress_change}（北极星⑤作者第一权威）；未申报才回退正文关键词扫描。
-    changes = read_changes(project_root, ch)
-    stress_self = ((changes.get("self_eval") or {}).get("stress_evaluation_self") or {})
-    eval_result = evaluate_stress_delta_from_self_eval(stress_self, traits)
-    delta_source = "writer_declared"
-    if eval_result is None:
-        eval_result = evaluate_stress_delta(text, traits)
-        delta_source = "keyword_scan"
-    delta = eval_result["delta"]
-
-    old = view["stress_level"]
-    max_v = view["stress_max"]
-    new = max(0, min(max_v, old + delta))
-    if view["mode"] == "scalar":
-        # v21 标量 schema：delta 落标量 stress_level（含城南）
-        stress["stress_level"] = new
-    else:
-        # 维度 schema（纵尸司/诡异）：无逐 trait 关键词 → text delta=0（traits=[]）；
-        # 不擅自往维度写 delta（维度推进由 cluster-save-state 的世界演化/走向卡驱动，北极星②③顾问非法官）。
-        # evaluate 在此模式下作用是「把当前聚合 stress 暴露给 manifest 不再恒 0」——只读不改维度值。
-        new = old  # 维度模式不在本章自动累加（保持引擎只读维度，不变成硬约束）
-
-    # log（兼容 stress_log / stress_history 两套键名）
-    log = stress.get("stress_log")
-    if log is None:
-        log = stress.get("stress_history")
-    if log is None:
-        log = stress.setdefault("stress_log", [])
-    log.append({
-        "ch": ch,
-        "change": delta,
-        "new_total": new,
-        "trigger_type": "persona_violation" if delta > 0 else ("persona_align" if delta < 0 else "neutral"),
-        "delta_source": delta_source,
-        "violations": eval_result["violations"],
-        "alignments": eval_result["alignments"],
-        "_ts": datetime.now().isoformat(timespec="seconds"),
-    })
-
-    triggered_card = None
-    threshold = view["stress_threshold_break"]
-    # mental_break 仅 v21 标量 schema 自动抽卡（有 mental_break_pool + 标量 reset 语义）；
-    # 维度 schema 无 mental_break_pool → draw 自然返回 None，不会误触发（北极星⑤顾问非法官）。
-    if new >= threshold:
-        pool = stress.get("mental_break_pool", [])
-        triggered_card = draw_mental_break_card(pool, new)
-        if triggered_card:
-            apply_card_to_locked_facts(project_root, ch, triggered_card, stress.get("protagonist") or stress.get("protagonist_id", "?"))
-            if view["mode"] == "scalar":
-                stress["stress_level"] = 0  # reset（仅标量模式有此语义）
+    stress_self = (changes["self_eval"].get("stress_evaluation_self"))
+    result = evaluate_stress_delta_from_self_eval(stress_self, traits)
+    if result is None:
+        result = evaluate_stress_delta(draft, traits)
+    existing = next((entry for entry in stress["stress_log"] if entry["cluster_id"] == cluster_id), None)
+    old = existing["stress_old"] if isinstance(existing, dict) and isinstance(existing.get("stress_old"), int) else stress["stress_level"]
+    new = max(0, min(view["stress_max"], old + result["delta"]))
+    card = None
+    if new >= view["stress_threshold_break"]:
+        card = draw_mental_break_card(stress["mental_break_pool"], new, cluster_id)
+        if card:
+            apply_card_to_event_table(project_root, cluster_id, card, stress["protagonist"])
             new = 0
-            log.append({
-                "ch": ch,
-                "change": -old,
-                "new_total": 0,
-                "trigger_type": "mental_break_triggered",
-                "card_id": triggered_card.get("card_id"),
-                "card_label": triggered_card.get("label"),
-                "_ts": datetime.now().isoformat(timespec="seconds"),
-            })
-
-    save_json(stress_path, stress)
-
-    out = {
-        "ch": ch,
+    stress["stress_level"] = new
+    entry = {
+        "cluster_id": cluster_id,
+        "stress_old": old,
+        "change": result["delta"],
+        "new_total": new,
+        "trigger_type": "persona_violation" if result["delta"] > 0 else ("persona_align" if result["delta"] < 0 else "neutral"),
+        "delta_source": result["source"],
+        "violations": result["violations"],
+        "alignments": result["alignments"],
+        "mental_break_card": card["card_id"] if card else None,
+    }
+    stress["stress_log"] = [e for e in stress["stress_log"] if e["cluster_id"] != cluster_id] + [entry]
+    stress["stress_log"].sort(key=lambda e: int(e["cluster_id"].rsplit("_", 1)[1]))
+    save_stress(project_root, stress)
+    return {
+        "cluster_id": cluster_id,
         "schema_mode": view["mode"],
-        "stress_delta": delta,
-        "delta_source": delta_source,
+        "stress_delta": result["delta"],
+        "delta_source": result["source"],
         "stress_old": old,
         "stress_new": new,
-        "violations": eval_result["violations"],
-        "alignments": eval_result["alignments"],
-        "high_stress_warning": new >= threshold * 0.75 and triggered_card is None,
-        "mental_break_triggered": triggered_card is not None,
+        "violations": result["violations"],
+        "alignments": result["alignments"],
+        "high_stress_warning": new >= view["stress_threshold_break"] * 0.75,
+        "mental_break_triggered": card is not None,
+        "card": ({
+            "id": card["card_id"],
+            "label": card["label"],
+            "permanent_changes": card["permanent_persona_changes"],
+            "narrative_effect": card["narrative_effect"],
+        } if card else None),
     }
-    if triggered_card:
-        out["card"] = {
-            "id": triggered_card.get("card_id"),
-            "label": triggered_card.get("label"),
-            "permanent_changes": triggered_card.get("permanent_persona_changes"),
-            "narrative_effect": triggered_card.get("narrative_effect"),
-        }
-    return out
 
 
-def main():
+def main() -> int:
     state_cli_guard.require_internal("stress_evaluator.py")
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--ch", type=int, default=None)
-    ap.add_argument("--auto", action="store_true")
-    args = ap.parse_args()
-
-    project_root = Path(args.project)
-    if not (project_root / "_数据库" / "主角压力档.json").exists():
-        print("[SKIP] 主角压力档.json 不存在 — 项目未启用 Stress 系统")
-        sys.exit(0)
-
-    ch = args.ch
-    if ch is None or args.auto:
-        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-        if not chapters:
-            print("[SKIP] 无已写章节")
-            sys.exit(0)
-        ch = chapters[-1]
-
-    r = evaluate(project_root, ch)
-    print(json.dumps(r, ensure_ascii=False, indent=2))
-    if r.get("mental_break_triggered"):
-        sys.exit(2)
-    if r.get("high_stress_warning"):
-        sys.exit(1)
-    sys.exit(0)
+    parser = argparse.ArgumentParser(description="cluster 主角压力评估")
+    parser.add_argument("project")
+    parser.add_argument("--cluster", required=True)
+    args = parser.parse_args()
+    try:
+        result = evaluate(Path(args.project), args.cluster)
+    except (StressContractError, OSError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 1 if result["high_stress_warning"] or result["mental_break_triggered"] else 0
 
 
 if __name__ == "__main__":
-    main()
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    raise SystemExit(main())

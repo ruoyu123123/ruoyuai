@@ -1,93 +1,47 @@
 ---
-description: SkillOpt 范式精化已有的 skill_FINAL.md (epoch=4 训练循环 + bounded edit + held-out gate)。适合已蒸过、想进一步贴近作者风格的场景。新书首蒸仍走 /distill-style。
+description: 用 SkillOpt 精化已有 skill_FINAL.md，通过独立 Claude 场景稿和 held-out gate 选择提升版本。
 ---
 
-你是若渝AI的 SkillOpt 蒸馏精化调度器。
+# /distill-style-skillopt
 
 $ARGUMENTS
 
----
+适用于已有 `skill_FINAL.md` 的风格库。新书首次蒸馏使用 `/distill-style`。
 
-# /distill-style-skillopt · SkillOpt 范式精化
+## Required 流程
 
-## 业界源
-Microsoft Research arXiv:2605.23904 + microsoft/SkillOpt
-核心思想:skill.md 当可训练"权重",冻结目标模型,独立 optimizer 据 trajectory 改 skill,
-held-out validation 严格优于才升级,bounded edit 控破坏,reject buffer 防重蹈。
+1. 校验 `skill_FINAL.md`、`cluster_index.json`，并把 skill 切为 SLOW / FAST / REFERENCE。
+2. 确定性切分 train / selection / test 数据集。
+3. 用固定 `run_id=skillopt-main --prepare-scene-jobs` 固化 `training_schedule.json`、`training_checkpoint.json` 并生成首批 Claude 场景任务；该步骤独立 exit 0。
+4. 主代理读取 jobs manifest，对每个 `pending` 项 spawn `novel-replica-writer`。Agent 必须读取该项 `candidate_skill_path`，为指定 `cluster_id` 亲笔写 `scene_*.txt` 和 `agent_report.json` 到 `scenes_dir`。随后运行 `scene_jobs.py --verify-all` 生成 step 3 Agent 批次回执；jobs manifest 本身不是完成回执。
+5. 训练按 epoch=4、rollout=40、minibatch=8、L_t=4→2 执行。动态候选缺稿时 checkpoint 记录 epoch/step/candidate digest 后 exit 2；主代理补齐 Agent 草稿后以同一 run_id 恢复。训练完成后 `scene_jobs.py --verify-all` 生成 step 4 批次回执，逐项绑定 job key、digest、cluster 与原始 Agent 回执。
+6. 提升 `best_skill.md` 为 `skill_FINAL.md`，再 spawn `novel-replica-writer` 写最终场景稿，required 运行 `distill_finalize_verify.py` 与 `distill_av_verify.py`，agent report 和两份验证报告缺一不可。
 
-## 适用场景
-| 场景 | 用 |
-|---|---|
-| 新书首蒸,从零开始 | `/distill-style` |
-| 已有 skill_FINAL.md,想进一步精化 | `/distill-style-skillopt` (本命令) |
-| 实测复刻不满意但 SFS 已 A 级 | `/distill-style-skillopt` |
+训练完成后可运行
+`python core/scripts/skill_opt/train_dashboard.py --project workspace/styles/<书名>/`
+只读查看收敛曲线与健康告警；看板不改变训练状态，也不参与验收判定。
 
-## 前置
-- `<风格库>/skill_FINAL.md` 存在 (经 `/distill-style` 蒸出)
-- `<风格库>/cluster_index.json` 存在
-- `<风格库>/原文/` 含足够章节文本 (SFS 多基线评分用)
-- **双路由可选**:
-  - `--reward-route distill` (默认): 复刻→SFS 评分,只依赖风格库原文
-  - `--reward-route writing`: 读写作产物 audit/judge,需先用该 skill 写过 cluster
+## 场景任务合同
 
-## 流程(5 步 · plan_tracker 强制)
+每项 job 固定包含：
 
-### Step 1: preflight + skill 切三段
-- 验证 skill_FINAL.md / cluster_index.json 存在
-- 跑 `skill_compactor.py` 切 SLOW/FAST/REFERENCE 三段
-  - SLOW(量化指纹) → PROTECTED,optimizer 不许动
-  - FAST(硬规则+golden) → SkillOpt 训练对象
-  - REFERENCE(校准/版本/开发者注释) → 移走不进 prompt
-
-### Step 2: 数据集切分
-- 跑 `dataset.py` 切 train/select/test = 60/20/20
-- 同 seed 重跑稳定 (论文 SearchQA 范式)
-
-### Step 3: 主训练循环(论文超参)
+```json
+{
+  "candidate_skill_path": "...",
+  "candidate_skill_digest": "sha256",
+  "cluster_id": "cluster_001",
+  "run_id": "ep1_step0_mb_cluster_001",
+  "scenes_dir": ".../claude_scenes",
+  "status": "pending"
+}
 ```
-epoch = 4
-rollout_batch = 40
-minibatch = 8
-L_t cosine decay 4 → 2
-```
-每 epoch 多 step,每 step:
-1. rollout: 当前 skill × minibatch → trajectory + reward
-2. optimizer: trajectory + reject_buffer → ≤ L_t 条 patch
-3. patch_applier: 应用 patch → candidate
-4. validation_gate: eval(current, sel) vs eval(candidate, sel) 严格 `>` 才接受
-5. ACCEPT → 升级 current_skill,记 best;REJECT → 入 reject_buffer (epoch-local 反哺)
 
-### Step 4: 升级 best_skill → skill_FINAL
-- 备份旧版到 skill_FINAL.md.bak
-- 把 train 产 best_skill.md 覆写 skill_FINAL.md
+rollout 只消费由实际 `scene_*.txt` 与 `novel-replica-writer.receipt.v1` 联合验证为 ready 的目录。目录缺失、空文件、digest/PLAN_ID 不匹配都属于 required artifact 缺失，不计零分、不跳过。
 
-### Step 5: 回灌验证(Article 6 严闭环)
-- 沿用 `distill_finalize_verify.py`
-- 不过 exit 2,plan-end 拦截
+## Plan
 
-## 北极星纪律
-| 原则 | SkillOpt 落地 |
-|---|---|
-| ① 贴近作者风格 | trajectory-driven 比一次性蒸馏更逼近 |
-| ② cluster 单位 | 每 rollout=1 cluster |
-| ③ 涟漪驱动非预设 | reward 来自真实写作链路 binary 信号 |
-| ④ 章节纯格式 | rollout 在 cluster 层 |
-| ⑤ 不干涉模型判断 | reward 只读现有 judge/scanner binary,不引入新 hard_gate |
-| ⑥ 单一入口 | SkillOpt 是风格 skill 的唯一训练入口 |
-
-## Plan 强制规划
 ```bash
-PLAN_ID=$(python core/scripts/plan_tracker.py create \
-  --command distill-style-skillopt \
-  --project "<风格库名>")
+python core/scripts/plan_tracker.py create --command distill-style-skillopt --project "<风格库名>"
 ```
 
-## 失败处理
-- Step 3 全 epoch 全 REJECT → 不升级 skill_FINAL,best_skill 仍是初始,接受失败(说明现 skill 已经局部最优)
-- Step 5 回灌 exit 2 → rollback `cp skill_FINAL.md.bak skill_FINAL.md`
-
-## 关联
-- 业界源: https://github.com/microsoft/SkillOpt
-- 论文: arXiv:2605.23904
-- 落地代码: `core/scripts/skill_opt/` (5 模块 + train.py)
-- 测试: tests/test_skill_opt_stage{0-3}.py (57 测全绿)
+模板以 `core/claude-home/plans/distill-style-skillopt.plan.json` 为唯一步骤来源。

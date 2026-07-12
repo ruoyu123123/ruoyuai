@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""S10 递归卷级层级摘要测试 — 🔴 2026-07-07（Ex3 摘要金字塔 + source 回溯）。
+"""卷级层级摘要与 source 回溯合同。
 
 钉死 save_state 的卷级摘要确定性两入口：
   · cmd_detect_volume_boundary：卷边界只用既有信号（大势卡 ME.volume + status=completed
-    + completed_by_cluster·唯一维护者=_mark_cluster_me_completed）——某卷 ME 池非空且
+    + completed_at_cluster）——某卷 ME 池非空且
     全部 completed 且 故事块摘要.volume_summaries 尚无该卷 → boundary=true；
     无边界 = 零行为变化（故事块摘要 字节不变）。
   · cmd_apply_volume_summary：回库唯一入口——结构键钉死（judge_required_keys 精神）+
@@ -26,7 +26,7 @@ import save_state as ss  # noqa: E402
 
 def _me(i, vol=1, status="completed", by=None, finale=False):
     return {"id": f"ME-V{vol}-{i}", "volume": vol, "status": status,
-            "completed_by_cluster": by, "is_volume_finale": finale}
+            "completed_at_cluster": by, "is_volume_finale": finale}
 
 
 def _mk_project(tmp: Path, *, mes=None, summary_doc=None) -> Path:
@@ -39,7 +39,7 @@ def _mk_project(tmp: Path, *, mes=None, summary_doc=None) -> Path:
         {"clusters": [{"cluster_id": "cluster_001", "chapter_range": [1, 3]}]},
         ensure_ascii=False), encoding="utf-8")
     doc = summary_doc if summary_doc is not None else {
-        "schema_version": "v2.cluster", "clusters": []}
+        "schema_version": "v2.cluster", "clusters": [], "volume_summaries": []}
     (db / "故事块摘要.json").write_text(
         json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     return tmp
@@ -90,7 +90,7 @@ def test_skeleton_has_volume_summaries(tmp_path):
 
 
 def test_me_volume_parity_with_emergence_engine(tmp_path):
-    """🔴 双实现口径回归锁：save_state._me_volume_of 与 cluster_emergence_engine._me_volume
+    """save_state._me_volume_of 与 cluster_emergence_engine._me_volume
     对同一输入必须给同一卷号（防两处解析漂移成双口径）。"""
     import cluster_emergence_engine as cee
     samples = [
@@ -98,7 +98,7 @@ def test_me_volume_parity_with_emergence_engine(tmp_path):
         {"volume": "3"},
         {"volume": " 7 "},
         {"id": "ME-V4-2"},
-        {"me_id": "ME-v5-1"},
+        {"id": "ME-v5-1"},
         {"id": "ME-V1-10", "volume": 9},
         {"id": "ME-X"},
         {},
@@ -117,7 +117,7 @@ def test_plan_step7_volume_contract(tmp_path):
     assert any("--detect-volume-boundary" in line for line in step7["scripts"])
     assert "_数据库/.wal/cluster_{key}_volume_boundary.json" in step7["expected_outputs"]
     assert "MODE=volume" in step7["description"]
-    assert "--apply-volume-summary" in step7["description"]
+    assert "确定性回库" in step7["description"]
 
 
 # ═══════════════════════ detect：卷边界检测 ═══════════════════════
@@ -158,12 +158,13 @@ def test_detect_skips_already_summarized_volume(tmp_path):
     assert marker["volumes_summarized"] == [1]
 
 
-def test_detect_completed_me_without_cluster_registration_not_aggregatable(tmp_path):
-    """completed 却缺 completed_by_cluster（源头不全）→ 该卷不可聚合·不误触发。"""
+def test_detect_completed_me_without_cluster_registration_hard_fails(tmp_path):
+    """completed ME 缺 canonical source cluster 时拒绝边界检测。"""
     mes = [_me(1, by="cluster_001"), _me(2, by=None), _me(3, by="cluster_003", finale=True)]
     root = _mk_project(tmp_path, mes=mes)
-    assert ss.cmd_detect_volume_boundary(root, "cluster_004") == 0
-    assert _boundary_marker(root)["boundary"] is False
+    assert ss.cmd_detect_volume_boundary(root, "cluster_004") == 2
+    assert not (root / "_数据库" / ".wal" /
+                "cluster_004_volume_boundary.json").exists()
 
 
 def test_detect_missing_ledger_hard_fails(tmp_path):
@@ -201,7 +202,7 @@ def test_apply_rejects_incomplete_source(tmp_path):
     before = _ledger_bytes(root)
     assert ss.cmd_apply_volume_summary(root, 1) == 2
     assert _ledger_bytes(root) == before
-    assert "volume_summaries" not in _ledger(root)
+    assert _ledger(root)["volume_summaries"] == []
 
 
 def test_apply_rejects_extra_hallucinated_source(tmp_path):
@@ -209,7 +210,7 @@ def test_apply_rejects_extra_hallucinated_source(tmp_path):
     root = _mk_project(tmp_path, mes=_CLOSED_V1)
     _wal_product(root, source=_V1_IDS + ["cluster_099"])
     assert ss.cmd_apply_volume_summary(root, 1) == 2
-    assert "volume_summaries" not in _ledger(root)
+    assert _ledger(root)["volume_summaries"] == []
 
 
 def test_apply_rejects_structural_key_violations(tmp_path):
@@ -229,7 +230,7 @@ def test_apply_rejects_structural_key_violations(tmp_path):
     # 缺合法 generated_at_cluster
     _wal_product(root, gac="")
     assert ss.cmd_apply_volume_summary(root, 1) == 2
-    assert "volume_summaries" not in _ledger(root)
+    assert _ledger(root)["volume_summaries"] == []
 
 
 def test_apply_rejects_open_volume(tmp_path):
@@ -238,7 +239,7 @@ def test_apply_rejects_open_volume(tmp_path):
     root = _mk_project(tmp_path, mes=mes)
     _wal_product(root, source=["cluster_001"])
     assert ss.cmd_apply_volume_summary(root, 1) == 2
-    assert "volume_summaries" not in _ledger(root)
+    assert _ledger(root)["volume_summaries"] == []
 
 
 def test_apply_upsert_replaces_changed_content(tmp_path):
@@ -265,10 +266,10 @@ def test_apply_optional_keys_whitelist(tmp_path):
     assert "hallucinated_field" not in entry
 
 
-def test_apply_source_normalization_and_ordering(tmp_path):
-    """source 各形态归一（'2'/'cluster_003'/int 序）+ 入库按 cluster 序号升序。"""
+def test_apply_source_canonical_ordering(tmp_path):
+    """canonical source 可乱序输入，入库统一按 cluster 序号升序。"""
     root = _mk_project(tmp_path, mes=_CLOSED_V1)
-    _wal_product(root, source=["cluster_003", "1", "cluster_002"])
+    _wal_product(root, source=["cluster_003", "cluster_001", "cluster_002"])
     assert ss.cmd_apply_volume_summary(root, 1) == 0
     assert _ledger(root)["volume_summaries"][0]["source"] == _V1_IDS
 

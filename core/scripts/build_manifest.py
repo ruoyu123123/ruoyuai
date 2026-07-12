@@ -645,33 +645,31 @@ class DatabaseScanner:
         return None
 
     def memory_search(self, query: str = "", top_k: int = 5) -> list[dict]:
-        """三层记忆检索（v16·移植自Mem0/Letta概念）。"""
+        """检索当前 cluster 之前的正文、摘要与长期事实。"""
         try:
-            import importlib
-            try:
-                ml = importlib.import_module("memory_layer")
-            except ImportError:
-                print("[build_manifest] WARN memory_layer 不可导入·记忆注入跳过")
-                return []
-            mem = ml.MemoryLayer(self.root, self.ch)
-            plan = self.current_scene() or {}
-            q = query or json.dumps(plan, ensure_ascii=False)[:200]
-            return mem.search(q, top_k) if q else []
-        except Exception:
+            import memory_layer as ml
+        except ImportError:
+            print("[build_manifest] WARN memory_layer 不可导入·记忆注入跳过")
             return []
+        current_cluster_id = self._current_cluster_id()
+        if not current_cluster_id:
+            raise ValueError("memory_search 无法确定 current_cluster_id")
+        mem = ml.MemoryLayer(self.root, current_cluster_id)
+        plan = self.current_scene() or {}
+        q = query or json.dumps(plan, ensure_ascii=False)[:200]
+        return mem.search(q, top_k) if q else []
 
-    def rag_relevant_chapters(self, top_k: int = 3) -> list[dict]:
-        """RAG检索：找到与当前章节最相关的历史章节片段。"""
+    def rag_relevant_clusters(self, top_k: int = 3) -> list[dict]:
+        """检索与当前 cluster brief 最相关的历史 cluster。"""
         try:
-            import importlib
-            try:
-                rag = importlib.import_module("rag_retriever")
-            except ImportError:
-                print("[build_manifest] WARN rag_retriever 不可导入·RAG 注入跳过")
-                return []
-            return rag.retrieve_tfidf(self.root, self.ch, top_k)
-        except Exception:
+            import rag_retriever as rag
+        except ImportError:
+            print("[build_manifest] WARN rag_retriever 不可导入·RAG 注入跳过")
             return []
+        current_cluster_id = self._current_cluster_id()
+        if not current_cluster_id:
+            raise ValueError("rag_relevant_clusters 无法确定 current_cluster_id")
+        return rag.retrieve_tfidf(self.root, current_cluster_id, top_k)
 
     def recent_chapter_openings(self, lookback: int = 3) -> list[dict]:
         """提取前 N 章的开头首行，用于反重复约束。
@@ -852,7 +850,7 @@ def _dedupe_fate_events(events: list[dict]) -> list[dict]:
 
 
 def _collect_active_fate_events(scanner, chapter: int) -> dict:
-    """Collect all fate events the writer must see for this chapter.
+    """收集当前故事块需要注入 writer 的大势事件与命运抽签叠加项。
 
     The deterministic order is:
     1. fate_engine active major-event guidance, when 大势卡 exists.
@@ -863,7 +861,7 @@ def _collect_active_fate_events(scanner, chapter: int) -> dict:
     fate_path = scanner.root / "_数据库" / "大势卡.json"
     active = []
     overdue = []
-    total_scheduled = None
+    total_pending = None
     total_completed = None
     mode = "strict"
     note_parts = []
@@ -871,15 +869,14 @@ def _collect_active_fate_events(scanner, chapter: int) -> dict:
         if fate_path.exists():
             sys.path.insert(0, str(Path(__file__).parent))
             import fate_engine
-            result = fate_engine.evaluate(scanner.root, chapter)
-            if result.get("error"):
-                raise RuntimeError(result["error"])
-            drift_result = fate_engine.drift(scanner.root, chapter)
-            if drift_result.get("error"):
-                raise RuntimeError(drift_result["error"])
+            cluster_id = scanner._current_cluster_id()
+            if not cluster_id:
+                raise RuntimeError("无法确定当前 cluster_id")
+            result = fate_engine.evaluate(scanner.root, cluster_id)
+            drift_result = fate_engine.drift(scanner.root, cluster_id)
             active.extend(_strip_fate_downstream(e) for e in result.get("active_fate_events", [])[:5])
             overdue.extend(_strip_fate_downstream(e) for e in drift_result.get("overdue_events", []))
-            total_scheduled = result.get("total_scheduled")
+            total_pending = result.get("total_pending")
             total_completed = result.get("total_completed")
             mode = "fluid"
             note_parts.append("大势卡 active_fate_events 已注入")
@@ -897,7 +894,7 @@ def _collect_active_fate_events(scanner, chapter: int) -> dict:
             "mode": mode,
             "active": active,
             "overdue": overdue,
-            "total_scheduled": total_scheduled,
+            "total_pending": total_pending,
             "total_completed": total_completed,
             "_note": "；".join(note_parts) + "；writer 应推进 active 中的 1-2 个事件" if active else "；".join(note_parts),
         }
@@ -1145,7 +1142,7 @@ def _collect_user_preferences_v21(scanner) -> dict:
     qc = prefs.get("quality_control", {}) or {}
     if qc:
         summary["audit_mode"] = qc.get("audit_mode")
-        summary["scan_intensity"] = qc.get("cross_chapter_scan_intensity")
+        summary["scan_intensity"] = qc.get("cross_cluster_scan_intensity")
     asp = prefs.get("anti_slop_personal", {}) or {}
     if asp:
         summary["user_banned_words"] = asp.get("user_banned_words", [])[:10]
@@ -1174,8 +1171,7 @@ def _collect_user_preferences_v21(scanner) -> dict:
 
 
 def _collect_hub_directive(scanner, chapter: int) -> dict:
-    """v21 R2.1: 注入枢纽场景信息 + 本章 hub 角色（depart/quest/return/idle）。
-    writer step 0w 据此让章节有出发-冒险-返回的呼吸节奏。"""
+    """注入枢纽场景信息与最近 cluster 的 Hub 呼吸节奏。"""
     hubs_path = scanner.root / "_数据库" / "枢纽场景.json"
     if not hubs_path.exists():
         return {"mode": "off", "_note": "无枢纽场景.json，未启用 Hub 系统"}
@@ -1193,21 +1189,24 @@ def _collect_hub_directive(scanner, chapter: int) -> dict:
                 "anchor_routines": (h.get("anchor_routines") or [])[:3],
             })
         targets = data.get("rhythm_targets", {})
-        log = data.get("chapter_hub_log", [])
+        log = data.get("cluster_hub_log", [])
         recent = log[-5:] if log else []
         return {
             "mode": "on",
             "hubs": hub_summaries,
             "rhythm_targets": targets,
-            "recent_chapter_roles": [{"ch": e.get("ch"), "hub_id": e.get("hub_id"), "role": e.get("role")} for e in recent],
-            "_note": "writer step 0w：本章应标 hub_id + role(depart/quest/return/idle)；回 hub 时必带至少 1 个 anchor_props 或 anchor_routines",
+            "recent_cluster_roles": [
+                {"cluster_id": e.get("cluster_id"), "hub_id": e.get("hub_id"), "role": e.get("role")}
+                for e in recent if isinstance(e, dict)
+            ],
+            "_note": "writer step 0w：本 cluster 按场景自然体现 depart/quest/return/idle；回 hub 时带入 anchor_props 或 anchor_routines",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
 
 
-def _collect_character_moves(scanner, chapter: int, active_chars: list) -> dict:
-    """v21 R2.2: 注入本章涉及角色的 Moves 清单。"""
+def _collect_character_moves(scanner, active_chars: list) -> dict:
+    """注入当前 cluster 出场角色的 Moves 清单。"""
     moves_path = scanner.root / "_数据库" / "角色行动表.json"
     if not moves_path.exists():
         return {"mode": "off", "_note": "无角色行动表.json，未启用 Moves 系统"}
@@ -1221,25 +1220,29 @@ def _collect_character_moves(scanner, chapter: int, active_chars: list) -> dict:
         return {
             "mode": "on" if out else "no_active_char_with_moves",
             "moves_by_character": out,
-            "_note": "writer：让角色行动时优先从 moves 抽 narrative_template，不要凭空发明动作。frequency_per_chapter 限制单 move 单章最多用几次",
+            "_note": "writer：让角色行动时优先从 moves 抽 narrative_template。frequency_per_cluster 限制单 move 在本故事块的使用次数",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
 
 
 def _collect_position_effect_template(scanner, chapter: int) -> dict:
-    """v21 R2.3: 注入 position × effect 双轴判定模板（轻量）。"""
+    """注入 cluster 关键行动的声明式判定模板。"""
     template_path = scanner.root / "_数据库" / "行动判定模板.json"
     if not template_path.exists():
         return {"mode": "off"}
     try:
         data = json.loads(template_path.read_text(encoding="utf-8"))
+        templates = data.get("templates")
+        registry = data.get("dimension_registry")
+        if not isinstance(templates, list) or not isinstance(registry, dict):
+            return {"mode": "error", "error": "行动判定模板须含 templates[] 与 dimension_registry{}"}
         return {
-            "mode": "on",
-            "positions": list(data.get("positions", {}).keys()),
-            "effects": list(data.get("effects", {}).keys()),
-            "_note": "writer：本章关键行动场景必自评 position × effect → 写入 _changes.json.self_eval.position_effect_evals[]",
-            "_full_matrix_at": str(template_path.relative_to(scanner.root.parent.parent)) if template_path.is_relative_to(scanner.root.parent.parent) else "_数据库/行动判定模板.json",
+            "mode": "on" if templates else "empty",
+            "templates": templates,
+            "dimension_registry": registry,
+            "outcome_band_schema": data.get("outcome_band_schema", {}),
+            "_note": "writer：关键行动可按匹配 template 的 dimensions 与 outcome_bands 自评；这是 advisory，不替代创作判断",
         }
     except Exception:
         return {"mode": "error"}
@@ -1269,9 +1272,8 @@ def _collect_throughlines(scanner, chapter: int) -> dict:
         return {"mode": "error"}
 
 
-def _collect_ensemble_layer(scanner, chapter: int) -> dict:
-    """v21 R1.5: 注入 NPC heart_events 待揭密 + schedule 时段提示 + tier_unlocks 档位语义。
-    writer step 0v 据此让群像配角真的活着。"""
+def _collect_ensemble_layer(scanner, current_cluster_id: str | None) -> dict:
+    """注入当前 cluster 的 NPC 待揭事件、日程与档位提示。"""
     ensemble_path = scanner.root / "_数据库" / "群像档.json"
     if not ensemble_path.exists():
         return {"mode": "off", "_note": "无群像档.json，未启用群像档系统"}
@@ -1287,30 +1289,35 @@ def _collect_ensemble_layer(scanner, chapter: int) -> dict:
             except Exception:
                 pass
 
-        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 从 故事块摘要 + cluster_blueprint 读 chars
-        chapter_chars = []
-        # 优先读 故事块摘要.clusters[*].chapters[ch].characters
+        # 当前 cluster 的出场角色来自 cluster 账本；未落账时读事件簇/蓝图。
+        cluster_chars = []
+        current_cluster_id = cluster_lookup.normalize_cluster_id(current_cluster_id)
         summary = scanner.load("故事块摘要", {}) if hasattr(scanner, "load") else {}
         for cluster_entry in summary.get("clusters", []) if isinstance(summary, dict) else []:
-            chs = cluster_entry.get("chapters", {}) if isinstance(cluster_entry, dict) else {}
-            ch_data = chs.get(str(chapter)) if isinstance(chs, dict) else {}
-            if isinstance(ch_data, dict) and ch_data.get("characters"):
-                chapter_chars = ch_data["characters"]
+            if not isinstance(cluster_entry, dict):
+                continue
+            if cluster_lookup.normalize_cluster_id(cluster_entry.get("cluster_id")) != current_cluster_id:
+                continue
+            if isinstance(cluster_entry.get("characters"), list):
+                cluster_chars = cluster_entry["characters"]
                 break
-        # fallback 到 cluster_blueprint（2026-05-29 复审修复 SC-1：经 _bp_items 归一）
-        if not chapter_chars:
+        # fallback 到当前 cluster 的事件簇 storyboard，再回退蓝图（经 _bp_items 归一）。
+        if not cluster_chars and current_cluster_id:
+            cluster_entry = scanner._event_cluster_by_id(current_cluster_id)
+            if isinstance(cluster_entry, dict):
+                cluster_chars = list(cluster_entry.get("characters") or [])
+                for scene in cluster_entry.get("scene_storyboard") or []:
+                    if isinstance(scene, dict):
+                        cluster_chars.extend(scene.get("characters") or [])
+        if not cluster_chars:
             progress = scanner.load("进度", {}) if hasattr(scanner, "load") else {}
-            for cid, cdata in _bp_items(progress).items():
-                if not isinstance(cdata, dict):
-                    continue
+            cdata = _bp_items(progress).get(current_cluster_id) or {}
+            if isinstance(cdata, dict):
                 for sb in cdata.get("scene_storyboard", []):
-                    if sb.get("ch") == chapter:
-                        chapter_chars = sb.get("characters", [])
-                        break
-                if chapter_chars:
-                    break
+                    if isinstance(sb, dict):
+                        cluster_chars.extend(sb.get("characters") or [])
         npc_schedule_hints = {}
-        for npc in chapter_chars:
+        for npc in dict.fromkeys(cluster_chars):
             if npc in (ensemble.get("characters") or {}):
                 schedule = ensemble["characters"][npc].get("schedule", {})
                 tier_unlocks = ensemble["characters"][npc].get("tier_unlocks", {})
@@ -1322,7 +1329,7 @@ def _collect_ensemble_layer(scanner, chapter: int) -> dict:
             "pending_heart_event_reveals": pending_reveals,
             "must_reveal_count": len(pending_reveals),
             "npc_schedule_hints": npc_schedule_hints,
-            "_note": "writer step 0v 必读：must_reveal_count > 0 时本章必触发对应 reveal（physical_evidence 必出现）；NPC schedule 决定主角找他时的地点/状态。揭密后**必须**在 changes.factual.heart_events_revealed 报告 {event_id, evidence_appeared} —— save-state 据此把对应 heart_event 标 consumed（触发一次即消费，不再反复要求重揭）",
+            "_note": "writer step 0v 必读：must_reveal_count > 0 时本 cluster 自然触发对应 reveal（physical_evidence 应出现）；状态梳理由 novel-state-tracker 从正文提取，writer 不自报客观状态",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
@@ -1618,7 +1625,7 @@ def _collect_motif_callback_hints_for_cluster(scanner) -> list:
         if root is None:
             return []
         db = Path(root) / "_数据库"
-    snap_path = db / ".cross_chapter_scan" / "motif_advisory_snapshot.json"
+    snap_path = db / ".cross_cluster_scan" / "motif_advisory_snapshot.json"
     if not snap_path.exists():
         return []
     try:
@@ -2230,14 +2237,13 @@ def _resolve_world_entry(entry, current_cluster_id):
 
 
 def _sanitize_clock_to_writer(clock):
-    """时钟写手注入门控（item 4）：visible_to_writer==True 或 ticks>=max → 含 trigger_on_max·否则剥 trigger_on_max
-    留 label/remaining/max/urgency。visible_to_writer 缺字段默认 True 向后兼容（clock_engine.list_active 将补此字段）。"""
+    """隐藏暗线时钟的满格后果，保留写手可用的当前进度。"""
     if not isinstance(clock, dict):
         return clock
-    visible = clock.get("visible_to_writer")
+    visible = clock["visible_to_writer"]
     ticks, mx = clock.get("ticks"), clock.get("max")
     reached = isinstance(ticks, (int, float)) and isinstance(mx, (int, float)) and ticks >= mx
-    show = (visible is None) or (visible is True) or reached
+    show = visible or reached
     if show:
         return clock
     return {k: v for k, v in clock.items() if k != "trigger_on_max"}
@@ -3079,17 +3085,13 @@ def _infer_cluster_position(chapter: int, chapter_range: list) -> str:
     return "mid"
 
 
-def _collect_protagonist_stress(scanner, chapter: int) -> dict:
-    """v21 R1.3: 注入主角当前 stress + 高压时 coping 建议。
-    writer step 0t 据此感知主角内心承压状态。"""
+def _collect_protagonist_stress(scanner, _chapter: int) -> dict:
+    """注入主角当前压力、应对行为与最近的 mental-break 事件。"""
     stress_path = scanner.root / "_数据库" / "主角压力档.json"
     if not stress_path.exists():
         return {"mode": "off", "_note": "无主角压力档.json，未启用 Stress 系统"}
     try:
         s = json.loads(stress_path.read_text(encoding="utf-8"))
-        # 2026-05-30 北极星③契约修复：真实项目用 stress_dimensions（纵尸司扁平 / 诡异嵌套）无标量
-        # stress_level → 旧版 manifest level 恒 0 / is_high_stress 恒 false。改用 stress_evaluator.stress_view
-        # 把 3 套 schema 聚合出统一标量视图（参照 fate_engine accessor 范式），引擎/manifest 共用一套读法。
         sys.path.insert(0, str(Path(__file__).parent))
         import stress_evaluator
         view = stress_evaluator.stress_view(s)
@@ -3097,25 +3099,13 @@ def _collect_protagonist_stress(scanner, chapter: int) -> dict:
         threshold = view["stress_threshold_break"]
         max_v = view["stress_max"]
         coping = s.get("coping_mechanisms", {}).get("high_stress_behaviors", []) if isinstance(s.get("coping_mechanisms"), dict) else []
-        # log 兼容 stress_log（v21/城南）/ stress_history（纵尸司/诡异）
-        log_list = s.get("stress_log")
-        if log_list is None:
-            log_list = s.get("stress_history") or []
+        log_list = s["stress_log"]
         recent_log = log_list[-3:]
-        # 检查最近是否触发过 mental_break
         last_break = None
         for entry in reversed(log_list):
-            if isinstance(entry, dict) and entry.get("trigger_type") == "mental_break_triggered":
-                last_break = {"ch": entry.get("ch"), "card_label": entry.get("card_label")}
+            if isinstance(entry, dict) and entry.get("mental_break_card"):
+                last_break = {"cluster_id": entry.get("cluster_id"), "card_id": entry.get("mental_break_card")}
                 break
-        # 维度 schema：把各维度当前值也透传给 writer（哪个维度最逼近崩溃比单一标量更有指导性）
-        dims_snapshot = None
-        if view["mode"] == "dimensions":
-            raw_dims = s.get("stress_dimensions") or {}
-            dims_snapshot = {
-                k: (v.get("current") if isinstance(v, dict) else v)
-                for k, v in raw_dims.items() if not str(k).startswith("_")
-            }
         return {
             "mode": "on",
             "schema_mode": view["mode"],
@@ -3124,7 +3114,6 @@ def _collect_protagonist_stress(scanner, chapter: int) -> dict:
             "stress_threshold_break": threshold,
             "stress_pct": round(level / max_v, 2) if max_v > 0 else 0,
             "is_high_stress": level >= threshold * 0.75,
-            "stress_dimensions": dims_snapshot,
             "coping_behaviors": coping if level >= threshold * 0.6 else [],
             "recent_log": recent_log,
             "last_mental_break": last_break,
@@ -3132,55 +3121,31 @@ def _collect_protagonist_stress(scanner, chapter: int) -> dict:
                 {"trait": t.get("trait"), "violation_kw": t.get("violation_keywords", [])[:3]}
                 for t in view["traits"]
             ],
-            "_note": "writer step 0t 必读（advisory·顾问非法官）：is_high_stress=true 时本章应自然带入至少 1 个 coping 行为；stress_dimensions 显示哪个维度最逼近崩溃；last_mental_break 后所有章节必受 card 永久效应约束",
+            "_note": "writer step 0t 必读（advisory·顾问非法官）：is_high_stress=true 时当前 cluster 可自然带入 coping 行为；last_mental_break 后后续 cluster 需尊重 card 的持续影响",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
 
 
-def _stage_for_cluster_v2(arc_data: dict, cluster_id: str | None) -> dict | None:
-    """v2 schema（{"arcs": {name: {"stages": [{"id","name","description","active_cluster":[...]}]}}}）：
-    优先用「本 cluster 命中哪个 stage 的 active_cluster」定位当前阶段；命中不到回退 current_stage 字段。
-    返回 {stage_id, stage_name, description, _matched_by}；找不到返回 None。"""
-    stages = arc_data.get("stages") or []
+def _stage_for_cluster(arc_data: dict, cluster_id: str | None) -> dict | None:
+    """从唯一 cluster-native 弧线结构解析当前阶段。"""
     norm_cur = cluster_lookup.normalize_cluster_id(cluster_id) if cluster_id else None
-    # ① cluster 命中 active_cluster（最贴合「以 cluster 为单位」北极星）
-    if norm_cur and isinstance(stages, list):
-        for st in stages:
-            if not isinstance(st, dict):
-                continue
-            actives = {cluster_lookup.normalize_cluster_id(a) for a in (st.get("active_cluster") or [])}
-            if norm_cur in actives:
-                return {"stage_id": st.get("id"), "stage_name": st.get("name"),
-                        "description": st.get("description"), "_matched_by": "active_cluster"}
-    # ② 回退：current_stage 字段反查 stage 详情
-    cur_id = arc_data.get("current_stage")
-    if cur_id and isinstance(stages, list):
-        for st in stages:
-            if isinstance(st, dict) and st.get("id") == cur_id:
-                return {"stage_id": st.get("id"), "stage_name": st.get("name"),
-                        "description": st.get("description"), "_matched_by": "current_stage_field"}
+    stages_by_cluster = arc_data.get("stages_by_cluster") or {}
+    cur_id = stages_by_cluster.get(norm_cur) if norm_cur else None
+    raw_current = arc_data.get("current_stage_at_cluster") or ""
+    if not cur_id and isinstance(raw_current, str) and ":" in raw_current:
+        current_cluster, current_stage = raw_current.split(":", 1)
+        if cluster_lookup.normalize_cluster_id(current_cluster) == norm_cur:
+            cur_id = current_stage
     if cur_id:
-        return {"stage_id": cur_id, "stage_name": None, "description": None,
-                "_matched_by": "current_stage_field_no_detail"}
+        details = (arc_data.get("stage_definitions") or {}).get(cur_id, {})
+        return {"stage_id": cur_id, "stage_name": details.get("name"),
+                "description": details.get("description"), "_matched_by": "stages_by_cluster"}
     return None
 
 
-def _collect_main_character_arc_stage(scanner, chapter: int) -> dict:
-    """北极星①[#7]：注入「当前主角的弧线 current_stage + 简短上下文」给 writer。
-
-    背景：character_arc_state.json 由 character_arc_update.py 在 cluster-save-state 中滚动写、
-    cluster_emergence_engine 读它驱动下个 cluster 涌现——但 writer manifest 此前从不注入它，
-    writer 写正文时看不到主角当前弧线阶段（贴合作者风格的角色塑造需要这个信息）。
-
-    本字段为**内联内容**（非 must_read 指针 —— gen-model 看不到指针，参照 relevant_heuristics/
-    world_state_snapshot 已内联的模式），且**只注入当前主角的当前阶段 + 简短描述**（不全量塞 stages，
-    尊重 context 预算）。advisory（北极星⑤·顾问非法官）：writer 只需将其作为角色塑造软提示，不强制。
-
-    兼容两套 schema：
-      - v2 单层：{"arcs": {name: {"framework", "current_stage", "stages":[{"id","name","description","active_cluster":[...]}]}}}
-      - 旧形态：{"characters": [{"id"/"name", "stages_by_chapter", "current_stage_at_ch": "ch:stage"}]}
-    """
+def _collect_main_character_arc_stage(scanner, _chapter: int) -> dict:
+    """以内联 advisory 形式注入当前主角的 cluster 弧线阶段。"""
     arc_path = scanner.db / "character_arc_state.json"
     if not arc_path.exists():
         return {"mode": "off", "_note": "无 character_arc_state.json，未启用主角弧线系统"}
@@ -3188,7 +3153,6 @@ def _collect_main_character_arc_stage(scanner, chapter: int) -> dict:
     if not isinstance(arc, dict):
         return {"mode": "error", "error": "character_arc_state.json 解析失败或非 dict"}
 
-    # 主角名单（与全系统一致：人物卡.json role==主角；空则退当前场景出场角色第一名）
     cards = (scanner.load("人物卡", {}) or {}).get("characters", [])
     protagonists = [c.get("name") or c.get("id") for c in cards
                     if isinstance(c, dict) and c.get("role") == "主角"]
@@ -3199,15 +3163,14 @@ def _collect_main_character_arc_stage(scanner, chapter: int) -> dict:
     current_cluster = scanner._current_cluster_id()
     out_chars: list[dict] = []
 
-    arcs_map = arc.get("arcs")
+    arcs_map = arc.get("characters")
     if isinstance(arcs_map, dict) and arcs_map:
-        # v2 单层 schema。优先注入主角；主角不在 arc 表内时 fallback 注入弧线表第一个角色。
         names = [n for n in protagonists if n in arcs_map] or list(arcs_map.keys())[:1]
         for name in names:
             data = arcs_map.get(name)
             if not isinstance(data, dict):
                 continue
-            stage = _stage_for_cluster_v2(data, current_cluster)
+            stage = _stage_for_cluster(data, current_cluster)
             if stage is None:
                 continue
             out_chars.append({
@@ -3218,34 +3181,6 @@ def _collect_main_character_arc_stage(scanner, chapter: int) -> dict:
                 "stage_description": (stage["description"] or "")[:160] or None,
                 "_resolved_by": stage["_matched_by"],
             })
-    else:
-        # 旧形态：characters 列表 + current_stage_at_ch="ch:stage"
-        chars_list = arc.get("characters")
-        if isinstance(chars_list, list):
-            by_name = {(c.get("name") or c.get("id")): c for c in chars_list if isinstance(c, dict)}
-            names = [n for n in protagonists if n in by_name] or list(by_name.keys())[:1]
-            for name in names:
-                data = by_name.get(name)
-                if not isinstance(data, dict):
-                    continue
-                # current_stage_at_ch 格式 "ch:stage"，无则 stages_by_chapter 现算
-                raw = data.get("current_stage_at_ch") or ""
-                stage_id = raw.split(":", 1)[1] if ":" in raw else (data.get("current_stage") or None)
-                if not stage_id:
-                    sbc = data.get("stages_by_chapter") or {}
-                    if sbc:
-                        valid = sorted((int(k), v) for k, v in sbc.items() if str(k).isdigit() and int(k) <= chapter)
-                        stage_id = valid[-1][1] if valid else "pre_start"
-                if not stage_id:
-                    continue
-                out_chars.append({
-                    "character": name,
-                    "framework": data.get("framework"),
-                    "current_stage_id": stage_id,
-                    "current_stage_name": None,
-                    "stage_description": (data.get("stage_description") or "")[:160] or None,
-                    "_resolved_by": "current_stage_at_ch" if ":" in raw else "stages_by_chapter_computed",
-                })
 
     if not out_chars:
         return {"mode": "off", "_note": "character_arc_state.json 内无可解析的主角弧线阶段"}
@@ -3261,18 +3196,13 @@ def _collect_main_character_arc_stage(scanner, chapter: int) -> dict:
     }
 
 
-def _collect_storyteller_directive(scanner, chapter: int) -> dict:
-    """v21 R1.2: 注入 storyteller 风格 + 近窗 adaptation 状态 + 下章建议。
-    writer step 0s 据此微调本章 outcome 倾向（setback/win/neutral）。"""
+def _collect_storyteller_directive(scanner, _chapter: int) -> dict:
+    """注入当前 cluster 的叙事节拍、压力阶段与下一块 advisory 建议。"""
     pacer_path = scanner.root / "_数据库" / "叙事节拍器.json"
     if not pacer_path.exists():
         return {"mode": "off", "_note": "无叙事节拍器.json，未启用 Storyteller 系统"}
     try:
         pacer = json.loads(pacer_path.read_text(encoding="utf-8"))
-        # 2026-05-30 北极星③契约修复：真实项目用 framework/beats(纵尸司) 或 rhythm_profile/
-        # beat_density_by_cluster(诡异)，旧版 manifest 只读 v21 storyteller_profile/adaptation_factor
-        # → 这些字段是孤儿，writer 永远看不到 Save_the_Cat 节拍 / cluster 节奏密度。改用 narrator_view
-        # 归一读法（引擎/manifest 共用），并按本 cluster 注入对应节拍 + 密度。
         sys.path.insert(0, str(Path(__file__).parent))
         import narrator_calibrate
         cluster_id = scanner._current_cluster_id()
@@ -3283,29 +3213,27 @@ def _collect_storyteller_directive(scanner, chapter: int) -> dict:
             "mode": "on",
             "profile": view["profile"],
             "current_phase": view["current_phase"],
-            "since_phase_change_ch": view["since_phase_change_ch"],
-            "framework": view["framework"],
+            "since_phase_change_cluster": view["since_phase_change_cluster"],
             "current_cluster_beats": view["current_cluster_beats"],
             "rhythm_profile": view["rhythm_profile"],
-            "current_cluster_density": view["current_cluster_density"],
             "adaptation": {
-                "expected_setback_per_n_ch": af.get("expected_setback_per_n_ch"),
+                "expected_setback_per_n_clusters": af.get("expected_setback_per_n_clusters"),
                 "current_setback_count_in_window": af.get("current_setback_count_in_window"),
                 "current_win_streak": af.get("current_win_streak"),
                 "current_loss_streak": af.get("current_loss_streak"),
             },
             "next_recommendation": {
-                "target_outcome": rec.get("next_chapter_target_outcome", "auto"),
-                "intensity_target": rec.get("next_chapter_intensity_target", "auto"),
+                "target_outcome": rec.get("next_cluster_target_outcome", "auto"),
+                "intensity_target": rec.get("next_cluster_intensity_target", "auto"),
                 "reason": rec.get("_reason", ""),
             },
-            "_note": "writer step 0s 必读（advisory·顾问非法官）：current_cluster_beats 是本 cluster 该命中的 Save_the_Cat 节拍（软提示）；current_cluster_density 是节奏密度；target_outcome=setback 时本章必至少有 1 个真实挫败（资源损失/关系破裂/认知打击）；=win 时本章应有明确推进/收获；=auto 时按 cluster_blueprint 自由发挥",
+            "_note": "writer step 0s 必读（advisory·顾问非法官）：current_cluster_beats 与 target_outcome 只提供本 cluster 的节拍方向，writer 依据因果与风格自由取舍",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
 
 
-# 🔴 2026-06-29 场景级Appraisal Beat注入（心理 P0·情绪余烬 + 本块方向·上限防 prompt 膨胀）
+# 场景级 appraisal beat 注入上限。
 _APPRAISAL_RESIDUE_MAX = 2   # 注入的历史 cluster 情绪余烬条数（延续上块强情绪）
 _APPRAISAL_PLANNED_MAX = 4   # 注入的本 active cluster 已规划 beat 条数
 # appraisal 6 维评价子字段 → 中文标签（渲染「为何感受」摘要·只渲染语义值·不造情绪词标签）
@@ -3321,11 +3249,7 @@ _APPRAISAL_DIM_LABELS = {
 
 
 def _appraisal_beat_to_lines(b: dict, *, residue: bool) -> list[str]:
-    """把一条 appraisal_beat 渲染成 advisory 方向卡文字（为何感受 + 情绪走向 + 如何外化）。
-
-    🔴 北极星⑤纪律：只渲染 derived_emotion(自然语言推理·非标签) + appraisal 评价(为何) +
-    behavior_externalization(如何外化·动作非情绪词)，**绝不由本函数造『他很愤怒/心中一凛』式情绪词标签**。
-    """
+    """将 appraisal beat 渲染为“原因、走向、外化动作”advisory。"""
     focal = (str(b.get("focal_character") or "")).strip() or "（本场 POV 角色）"
     trig = (str(b.get("trigger_event") or "")).strip()
     de = (str(b.get("derived_emotion") or "")).strip()
@@ -3436,45 +3360,39 @@ def _collect_appraisal_directive(scanner, current_cluster_id) -> dict | None:
     }
 
 
-def _collect_active_clocks(scanner, chapter: int) -> dict:
-    """v21 R1.1: 注入显式 Clock 进度系统快照。
-    writer step 0r 据此感知「还差 N 章 X 事件就要发生」并把暗示自然埋进环境。"""
+def _collect_active_clocks(scanner, _chapter: int) -> dict:
+    """注入当前 cluster 的剧情时钟快照。"""
     clocks_path = scanner.root / "_数据库" / "时钟表.json"
     if not clocks_path.exists():
         return {"mode": "off", "_note": "无时钟表.json，未启用 Clock 进度系统"}
     try:
         sys.path.insert(0, str(Path(__file__).parent))
         import clock_engine
-        r = clock_engine.list_active(scanner.root, chapter)
-        if "error" in r:
-            return {"mode": "error", "error": r["error"]}
+        cluster_id = scanner._current_cluster_id()
+        r = clock_engine.list_active(scanner.root, cluster_id)
         active = r.get("active_clocks", [])
-        # 🔴 2026-06-28 写手信息隔离（item 4）：修恒真 bug——原
-        # `c.get("visible_to_protagonist") is False or True` 永远 True 且读错字段（visible_to_protagonist）。
-        # 改：所有 active clock 仍注入（writer 需感知倒计时存在），但经 _sanitize_clock_to_writer 按
-        # visible_to_writer（缺则默认 True 向后兼容·clock_engine.list_active 将补此字段）或 ticks>=max 决定
-        # 是否含 trigger_on_max（满格触发的事件结果·未到不该让写手提前知道具体后果）。
         visible = [_sanitize_clock_to_writer(c) for c in active]
         return {
             "mode": "on",
+            "cluster_id": cluster_id,
             "active_clocks": visible,
             "total_active": len(visible),
             "urgent_count": sum(1 for c in visible if c.get("urgency") == "urgent"),
             "approaching_count": sum(1 for c in visible if c.get("urgency") == "approaching"),
-            "_note": "writer step 0r 必读：urgent (≤2 章满格) 必埋暗示；approaching 视情况埋；normal 不强制",
+            "_note": "writer step 0r 必读：urgent（距满格不超过 2 次触发）优先埋暗示；其余按场景因果取舍",
         }
     except Exception as e:
         return {"mode": "error", "error": str(e)[:120]}
 
 
 def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
-    """v20.1 W4: 注入 鬼谷八荒式世界状态快照 + 本章可用机缘。
+    """注入当前 cluster 的世界状态快照与有效机缘。
 
     writer step 0q 据此感知世界自转：
       - factions_state：5 大势力当前数值（power/stability/wealth）
       - active_npc_threads：幕后角色正在做什么（top 5 by priority）
-      - emergent_opportunities：本章可用 + 即将过期的副线机缘
-      - recent_ticks：最近 3 章世界变化日志
+      - emergent_opportunities：本 cluster 可用 + 即将过期的副线机缘
+      - recent_ticks：最近 3 个 cluster 的世界变化日志
       - recent_consequences：最近 2 条因果记录
     """
     world_path = scanner.root / "_数据库" / "世界状态.json"
@@ -3486,6 +3404,9 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
         world = wee.load_world(scanner.root)
         if world is None:
             return {"mode": "error", "error": "世界状态.json 解析失败"}
+        current_cluster_id = scanner._current_cluster_id()
+        if not current_cluster_id:
+            return {"mode": "error", "error": "当前章无法反查 cluster_id"}
 
         # factions: 精简（去 leader/notes 节省 manifest 字符）
         # 🔴 2026-06-28 写手信息隔离（item 3a）：hidden faction 经 _sanitize_faction_focus 剥真 current_focus
@@ -3518,23 +3439,22 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
             for t in threads
         ]
 
-        # emergent opportunities: 本章可用（trigger_ch <= ch <= expires_at_ch 且未消费）
+        # 当前 cluster 处于机缘窗口且尚未消费时才注入。
         opps_raw = world.get("emergent_opportunities") or []
         opps_available = []
         for o in opps_raw:
             if o.get("consumed_by_writer") or o.get("status") == "expired":
                 continue
-            trig = o.get("trigger_ch", 0)
-            exp = o.get("expires_at_ch", 9999)
-            if trig <= chapter <= exp:
+            active, remaining = wee.opportunity_window(o, current_cluster_id)
+            if active:
                 opps_available.append({
                     "id": o.get("id"),
                     "type": o.get("type"),
                     "description": (o.get("description") or "")[:80],
-                    "expires_in_chapters": exp - chapter,
+                    "expires_in_clusters": remaining,
                 })
 
-        # 最近 3 章 ticks log
+        # 最近 3 个 cluster 的世界演化日志
         ticks_log = world.get("world_ticks_log") or []
         recent_ticks = ticks_log[-3:]
 
@@ -3550,11 +3470,10 @@ def _collect_world_state_snapshot(scanner, chapter: int) -> dict:
                 "world_changes": (entry.get("world_changes") or [])[:2],
             })
 
-        # 2026-05-29 北极星 P1：注入涟漪叙事后果（混合式·叙事 ripple 收集的因果）给 writer。
-        # 这是「涟漪规则为核心·通过因果触发事件」落到写作的关键——writer 读到「已触发的因果链」
-        # 后自行解读该呼应/推进什么（模型判断，非引擎硬塞）。不截断（feedback_no_token_saving）。
+        # 叙事 ripple 只提供因果素材，具体如何落笔由 writer 判断。
         narr_cons = [
-            {"ch": nc.get("ch"), "text": nc.get("text", ""), "reason": nc.get("reason", "")}
+            {"cluster_id": nc.get("cluster_id"), "text": nc.get("text", ""),
+             "reason": nc.get("reason", "")}
             for nc in (world.get("narrative_consequences") or []) if isinstance(nc, dict) and nc.get("text")
         ]
 
@@ -3744,64 +3663,40 @@ def _collect_reader_preferences(scanner) -> dict:
     }
 
 
-def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
-    """v19.6 G5: 用 cluster_blueprint.turning_point + threads_advance 作 query，
-    从 .embeddings/chapter_*.json 做语义检索取 top_k 历史 chunk 给 writer。
+def _collect_selective_history(
+    scanner,
+    current_cluster_id: str,
+    top_k: int = 3,
+) -> dict:
+    """用当前 cluster brief 检索历史 cluster 的预计算语义片段。"""
+    current_cluster_id = cluster_lookup.normalize_cluster_id(current_cluster_id)
+    if not current_cluster_id:
+        raise ValueError("selective history 缺 current_cluster_id")
+    current_number = cluster_lookup.cluster_num(current_cluster_id)
+    if current_number <= 1:
+        return {"retrieved": [], "reason": "首个 cluster 无历史"}
 
-    比固定 recent 5 章摘要更智能——本章是觉醒章，应该回忆爷爷纸条章节而不是吃饭章。
-
-    P2 typed 检索契约（2026-07-07·借鉴 AI_NovelGenerator/PlotPilot 向量检索溯源，见
-    research/open_source_writing_systems.md「Vector retrieval provenance」）——命中路径返回：
-      段级：source_type="selective_history" / match_method="embedding:<EMBED_BACKEND 名>" /
-            token_budget（本段无段级截断→budget=text_preview 索引期既有 80 字上限×条数、
-            actual=实际字符数、truncated:false）/ anti_copy="reference-not-copy"（advisory·
-            防 writer 照抄近邻正文原句）。
-      条级：source_id="chNNN#idx"（ch+chunk_idx 确定性派生）/ similarity（余弦）/
-            match_method / recency_distance（当前章−来源章）+ 原 ch/chunk_idx/text_preview。
-    skip 路径（首章/无 query 信号/无真后端/无索引）返回 {"retrieved": [], "reason": ...}
-    形态**逐字节不变**——「无真语义就不伪装语义」纪律保持。
-    """
-    if chapter <= 1:
-        return {"retrieved": [], "reason": "首章无历史"}
-
-    # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-    progress = scanner.load("进度", {})
-    query_parts = []
-    all_scenes = []
-    # 2026-05-29 复审修复（SC-1）：经 _bp_items 归一（list 项目不崩）。
-    for cid, cdata in _bp_items(progress).items():
-        if not isinstance(cdata, dict):
+    brief = scanner._event_cluster_by_id(current_cluster_id)
+    if not isinstance(brief, dict):
+        raise ValueError(f"事件簇缺少当前 brief: {current_cluster_id}")
+    query_parts = [brief.get("scope_summary", "")]
+    for scene in brief.get("scene_storyboard") or []:
+        if not isinstance(scene, dict):
             continue
-        for sb in cdata.get("scene_storyboard", []):
-            all_scenes.append(sb)
-    for cp in all_scenes:
-        if cp.get("ch") == chapter:
-            query_parts.append(cp.get("turning_point", ""))
-            query_parts.append(cp.get("goal", ""))
-            ta = cp.get("threads_advance", [])
-            if isinstance(ta, list):
-                query_parts.extend(ta)
-            break
-    query = " ".join(str(q) for q in query_parts if q)
+        query_parts.extend((scene.get("turning_point", ""), scene.get("goal", "")))
+        threads = scene.get("threads_advance")
+        if isinstance(threads, list):
+            query_parts.extend(threads)
+    query = " ".join(str(part) for part in query_parts if part)
     if not query:
-        return {"retrieved": [], "reason": "本章 cluster_blueprint 无 query 信号"}
+        raise ValueError(f"当前 cluster brief 缺检索信号: {current_cluster_id}")
 
-    # A6-1 query 扩展（2026-07-08·检索三段式·rag_retriever 单一实现）：brief 实体×属性
-    # 组合词组前置拼入 query（确定性拼装零 LLM）。无 brief 信号 → 零变化。
-    try:
-        import rag_retriever as _rag_a6
-        _expansion = _rag_a6.expand_query_from_brief(scanner.root, chapter)
-    except Exception:
-        _expansion = []
-    if _expansion:
-        query = " ".join(_expansion) + " " + query
+    import rag_retriever as _rag_a6
+    expansion = _rag_a6.expand_query_from_brief(scanner.root, current_cluster_id)
+    if expansion:
+        query = " ".join(expansion) + " " + query
 
-    # 加载 embedding 模块
-    try:
-        sys.path.insert(0, str(Path(__file__).parent))
-        import embedding_store
-    except ImportError:
-        return {"retrieved": [], "reason": "embedding_store 不可用"}
+    import embedding_store
 
     # 🔴 2026-07-02 bug fix：此前本函数裸用 compute_embedding/cosine_similarity 且无门控——
     # 默认 EMBED_BACKEND（hash md5 ngram 袋）算出的"相似度"是纯噪声，却会静默冒充语义检索结果
@@ -3813,28 +3708,32 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
 
     query_emb = embedding_store.compute_embedding(query)
 
-    # 扫历史章节 embedding，做语义检索
+    # 扫历史 cluster embedding，做语义检索。
     emb_dir = scanner.root / "_数据库" / ".embeddings"
     if not emb_dir.is_dir():
         return {"retrieved": [], "reason": "embeddings 索引不存在"}
 
-    import re as _re
     candidates = []
-    for f in emb_dir.glob("chapter_*.json"):
-        m = _re.match(r"chapter_(\d+)", f.stem)
-        if not m:
-            continue
-        prev_ch = int(m.group(1))
-        if prev_ch >= chapter:
-            continue
+    for path in sorted(emb_dir.glob("cluster_*.json")):
         try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, ValueError):
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cluster embedding 损坏: {path}: {exc}") from exc
+        source_cluster_id = data.get("cluster_id")
+        if cluster_lookup.normalize_cluster_id(source_cluster_id) != source_cluster_id:
+            raise ValueError(f"cluster embedding.cluster_id 非规范: {path}")
+        source_number = cluster_lookup.cluster_num(source_cluster_id)
+        if source_number >= current_number:
             continue
-        for chunk in data.get("chunks", []):
+        chunks = data.get("chunks")
+        if not isinstance(chunks, list):
+            raise ValueError(f"cluster embedding.chunks 必须是 array: {path}")
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                raise ValueError(f"cluster embedding chunk 必须是 object: {path}")
             sim = embedding_store.cosine_similarity(query_emb, chunk.get("embedding", []))
             candidates.append({
-                "ch": prev_ch,
+                "cluster_id": source_cluster_id,
                 "chunk_idx": chunk.get("idx"),
                 "text_preview": chunk.get("text_preview", ""),
                 "similarity": round(sim, 3),
@@ -3843,8 +3742,7 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
     candidates.sort(key=lambda x: x["similarity"], reverse=True)
     top = candidates[:top_k]
 
-    # P2 typed 检索契约：match_method 记真实后端名（EMBED_BACKEND；未设但有 GEN_EMBED__ profile
-    # 时门控已放行 → 记 gen_embed_profile）；source_id 由 ch+chunk_idx 确定性派生。
+    # typed 检索契约：source_id 由 cluster_id + chunk_idx 确定性派生。
     _backend = os.environ.get("EMBED_BACKEND", "").strip().lower()
     _match_method = f"embedding:{_backend or 'gen_embed_profile'}"
     typed_top = []
@@ -3852,26 +3750,20 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
         _idx = item.get("chunk_idx")
         typed_top.append({
             "source_type": "selective_history",
-            "source_id": f"ch{item['ch']:03d}#{_idx if _idx is not None else '?'}",
+            "source_id": f"{item['cluster_id']}#{_idx if _idx is not None else '?'}",
+            "cluster_id": item["cluster_id"],
             "similarity": item["similarity"],
             "match_method": _match_method,
-            "recency_distance": chapter - item["ch"],
-            "ch": item["ch"],
+            "recency_distance": current_number - cluster_lookup.cluster_num(item["cluster_id"]),
             "chunk_idx": _idx,
             "text_preview": item["text_preview"],
         })
-    # A6-2/3（2026-07-08·检索三段式）：块距防复读标签 + 用途启发式分类 → 每条 usage_hint
-    # （advisory·rag_retriever 单一实现·cluster 反查失败时只打用途分类不臆造块距）。
-    try:
-        import rag_retriever as _rag_a6h
-        _rag_a6h.annotate_usage_hints(scanner.root, chapter, typed_top)
-    except Exception:
-        pass
+    _rag_a6.annotate_usage_hints(current_cluster_id, typed_top)
     _actual_chars = sum(len(str(t["text_preview"])) for t in typed_top)
     return {
-        "_note": "按本章 turning_point + threads_advance（+A6 brief 实体×属性扩展词组）作 query 做语义检索，找前 N 章语义相近的片段。比固定 recent 摘要更智能。"
+        "_note": "按当前 cluster brief 与实体属性扩展词组作 query，检索历史 cluster 语义片段。"
                  "每条 usage_hint=块距防复读标签（NEAR_ECHO_RISK/PARAPHRASE/OK）+用途分类（advisory）。"
-                 "anti_copy=reference-not-copy：检索片段只作前情事实/连贯性参照，禁止照抄近邻正文原句进本章（advisory）。",
+                 "anti_copy=reference-not-copy：检索片段只作前情事实与连贯性参照，禁止照抄近邻正文原句。",
         "source_type": "selective_history",
         "match_method": _match_method,
         "query": query[:100],
@@ -3881,9 +3773,7 @@ def _collect_selective_history(scanner, chapter: int, top_k: int = 3) -> dict:
             "budget_chars": len(typed_top) * 80,
             "actual_chars": _actual_chars,
             "truncated": False,
-            "_note": "本段无段级截断（truncated 恒 false）；80=embedding_store 索引构建期 "
-                     "text_preview 既有上限（上游行为显式化·非本段新增截断）。query 回显截前 "
-                     "100 字仅为显示，检索用完整 query。",
+            "_note": "text_preview 由 embedding_store 建索引时限制为 80 字；检索使用完整 query。",
         },
         "anti_copy": "reference-not-copy",
     }
@@ -4134,14 +4024,8 @@ def _collect_naming_convention(scanner) -> dict:
     return {"naming_convention_missing": True, "reason": f"no naming_convention.json for work={work}"}
 
 
-def _collect_arc_template(scanner, chapter: int) -> dict:
-    """v22.cluster：注入本章所属 cluster 的 arc 模板（情感曲线 / 节奏 / 高潮）。
-
-    查找优先级（双轨）：
-      1. cluster 主轨：读 cluster_index.json → 找包含本章的 cluster → 读 cluster_arc_<id>.json
-      2. fixed10 副轨：旧固定 10 章公式（向后兼容）
-      3. 全部 fallback 失败：返回 missing
-    """
+def _collect_arc_template(scanner, cluster_id: str | None) -> dict:
+    """按当前 cluster 注入作者样本的情绪与节奏模板。"""
     style_path = scanner.root / "_数据库" / "作者风格.json"
     if not style_path.exists():
         return {"arc_template_missing": True, "reason": "no _数据库/作者风格.json"}
@@ -4175,81 +4059,51 @@ def _collect_arc_template(scanner, chapter: int) -> dict:
     arc_dir = style_root / "arc_templates"
     cluster_index_file = style_root / "cluster_index.json"
 
-    # ① cluster 主轨
+    normalized_cluster = cluster_lookup.normalize_cluster_id(cluster_id)
+    if normalized_cluster is None:
+        return {"arc_template_missing": True, "reason": "current cluster id missing"}
+
     if cluster_index_file.exists() and arc_dir.exists():
         try:
             ci = json.loads(cluster_index_file.read_text(encoding="utf-8"))
             for c in ci.get("clusters", []):
-                rng = c.get("chapter_range", [])
-                if len(rng) == 2 and rng[0] <= chapter <= rng[1]:
-                    cid = c["cluster_id"]
-                    arc_file = arc_dir / f"cluster_arc_{cid}.json"
+                source_cluster_id = str(c.get("cluster_id") or "")
+                cid = cluster_lookup.normalize_cluster_id(source_cluster_id)
+                if cid == normalized_cluster:
+                    arc_file = arc_dir / f"cluster_arc_{source_cluster_id}.json"
                     if arc_file.exists():
-                        return _build_arc_payload(arc_file, chapter, track="cluster")
+                        return _build_arc_payload(arc_file)
         except (json.JSONDecodeError, ValueError):
             pass
 
-    # ② fixed10 副轨
-    if arc_dir.exists():
-        arc_end = ((chapter - 1) // 10 + 1) * 10
-        arc_file = arc_dir / f"arc_{arc_end:03d}.json"
-        if not arc_file.exists():
-            candidates = sorted(arc_dir.glob("arc_*.json"))
-            candidates = [c for c in candidates if c.name != "arc_summary.json"]
-            for f in candidates:
-                m = re.match(r"arc_(\d+)\.json", f.name)
-                if m and int(m.group(1)) >= chapter:
-                    arc_file = f
-                    break
-        if arc_file.exists():
-            return _build_arc_payload(arc_file, chapter, track="fixed10")
-
     return {"arc_template_missing": True,
-            "reason": f"no cluster_index/arc files for work={work}; 请先跑 cluster_segmenter.py + arc_aggregator.py --all-clusters"}
+            "reason": f"no cluster arc for {normalized_cluster} in work={work}"}
 
 
-def _build_arc_payload(arc_file: Path, chapter: int, track: str) -> dict:
-    """从 arc JSON 文件构建 manifest 注入字段。"""
+def _build_arc_payload(arc_file: Path) -> dict:
+    """从 cluster arc 构建 manifest 注入字段。"""
     try:
         arc_data = json.loads(arc_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, ValueError):
         return {"arc_template_missing": True, "reason": "arc json invalid"}
 
-    arc_range = arc_data.get("chapter_range", "")
-    if isinstance(arc_range, list) and len(arc_range) == 2:
-        arc_start = arc_range[0]
-        arc_range_str = f"ch{arc_range[0]}-{arc_range[1]}"
-    else:
-        m = re.match(r"ch(\d+)-(\d+)", str(arc_range))
-        arc_start = int(m.group(1)) if m else 1
-        arc_range_str = str(arc_range)
-    chapter_index = chapter - arc_start
-
     emotion_curve = arc_data.get("emotion_curve_normalized") or []
     pacing_labels = arc_data.get("pacing_labels") or []
-    expected_emo = emotion_curve[chapter_index] if 0 <= chapter_index < len(emotion_curve) else None
-    expected_pacing = pacing_labels[chapter_index] if 0 <= chapter_index < len(pacing_labels) else None
+    climax_index = arc_data.get("climax_chapter_index")
+    climax_position = None
+    if isinstance(climax_index, int) and emotion_curve:
+        climax_position = round((climax_index + 1) / len(emotion_curve), 3)
 
     return {
-        "track": track,                 # v22.cluster: 'cluster' (主) | 'fixed10' (副)
         "arc_id": arc_data.get("arc_id"),
         "cluster_id": arc_data.get("cluster_id"),
-        "arc_chapter_range": arc_range_str,
-        "this_chapter_index_in_arc": chapter_index,
-        "this_chapter_expected_emotion": expected_emo,
-        "this_chapter_expected_pacing": expected_pacing,
-        "arc_climax_chapter_number": arc_data.get("climax_chapter_number"),
+        "climax_position": climax_position,
         "arc_structure_label": arc_data.get("arc_structure_label"),
         "matched_reagan_shape": arc_data.get("matched_reagan_shape"),
         "boundary_reason": arc_data.get("boundary_reason"),
         "emotion_curve_full": emotion_curve,
         "pacing_labels_full": pacing_labels,
-        "_doc": (
-            f"v22.cluster arc 模板（{track} 轨）：本章 ch{chapter} 在 {arc_data.get('arc_id')}（{arc_range_str}）"
-            f"的第 {chapter_index + 1} 点。writer 应让本章情绪强度 ≈ {expected_emo}（± 0.15），节奏 = {expected_pacing}。"
-            f"全 arc 形状: {arc_data.get('arc_structure_label')} ({arc_data.get('matched_reagan_shape')})；"
-            f"arc 内高潮章: ch{arc_data.get('arc_climax_chapter_number')}."
-        ),
+        "_doc": "作者样本中同序 cluster 的情绪、节奏和高潮位置参考。",
     }
 
 
@@ -4439,10 +4293,7 @@ def _collect_prev_judge_findings(scanner, chapter: int, lookback: int = 3) -> di
 
 
 def _collect_active_relationships(scanner, active_chars: list[str], current_cluster_id=None) -> list[dict]:
-    """v19.2: 收集本章出场角色之间的关系数值。
-    🔴 2026-06-28 写手信息隔离（item 2）：① 先修 note/notes 字段名 bug——producer 两种字段名都见过，
-    旧代码只读 `notes` → 半数关系 note 丢失；改 surface_note/note/notes 三名都认。② 经 _sanitize_relationship
-    剥未到 reveal_cluster 的 hidden_intent + 未到 hidden_note_reveal_cluster 的 hidden_note。明面 type/surface_note 留。"""
+    """收集当前 cluster 出场角色关系，并隔离尚未揭示的信息。"""
     if not active_chars:
         return []
     rel_path = scanner.root / "_数据库" / "关系.json"
@@ -4463,8 +4314,7 @@ def _collect_active_relationships(scanner, active_chars: list[str], current_clus
         f, t = r.get("from"), r.get("to")
         if f in active_set or t in active_set:
             rs = _sanitize_relationship(r, current_cluster_id)
-            # note/notes 字段名 bug 修复：surface_note > note > notes 三名都认（明面 note·always 留）
-            surface = (rs.get("surface_note") or rs.get("note") or rs.get("notes") or "")[:60]
+            surface = str(rs.get("surface_note") or "")[:60]
             item = {
                 "from": f, "to": t, "type": rs.get("type"),
                 "affinity": rs.get("affinity", 0),
@@ -4472,7 +4322,6 @@ def _collect_active_relationships(scanner, active_chars: list[str], current_clus
                 "fear": rs.get("fear", 0),
                 "respect": rs.get("respect", 0),
                 "surface_note": surface,
-                "notes": surface,  # 向后兼容旧消费方键名
             }
             if "hidden_note" in rs:  # 仅到 hidden_note_reveal_cluster 时保留
                 item["hidden_note"] = (rs["hidden_note"] or "")[:60]
@@ -5365,7 +5214,7 @@ def _collect_debt_ledger_snapshot(s: "DatabaseScanner") -> dict | None:
     """R7 Batch-D（2026-06-20）：叙事债务账本 snapshot 注入。
 
     数据源=cluster-save-state step 9 跑 cross_cluster_narrative_debt_ledger_aggregate 写的
-    `_数据库/.cross_chapter_scan/narrative_debt_snapshot.json`（book/volume open_debt + advisory_codes）。
+    `_数据库/.cross_cluster_scan/narrative_debt_snapshot.json`（book/volume open_debt + advisory_codes）。
 
     env NARRATIVE_DEBT_INJECT_MODE 默认 shadow（北极星⑥：先影子）。
     advisory · 永不 hard_gate · 缺文件 → None（零回归）。
@@ -5376,7 +5225,7 @@ def _collect_debt_ledger_snapshot(s: "DatabaseScanner") -> dict | None:
         return None
     if mode not in ("shadow", "active"):
         mode = "shadow"
-    snap_path = s.db / ".cross_chapter_scan" / "narrative_debt_snapshot.json"
+    snap_path = s.db / ".cross_cluster_scan" / "narrative_debt_snapshot.json"
     if not snap_path.exists():
         return None
     try:
@@ -5405,7 +5254,7 @@ def _collect_sagging_middle_snapshot(s: "DatabaseScanner") -> dict | None:
     """R7 Batch-D（2026-06-20）：Sagging Middle snapshot 注入（needs_midpoint_bomb）。
 
     数据源=cluster-save-state step 9 跑 cross_cluster_sagging_middle_aggregate 写的
-    `_数据库/.cross_chapter_scan/sagging_middle_snapshot.json`。
+    `_数据库/.cross_cluster_scan/sagging_middle_snapshot.json`。
 
     env SAGGING_MIDDLE_INJECT_MODE 默认 shadow。advisory · 永不 hard_gate。
     """
@@ -5415,7 +5264,7 @@ def _collect_sagging_middle_snapshot(s: "DatabaseScanner") -> dict | None:
         return None
     if mode not in ("shadow", "active"):
         mode = "shadow"
-    snap_path = s.db / ".cross_chapter_scan" / "sagging_middle_snapshot.json"
+    snap_path = s.db / ".cross_cluster_scan" / "sagging_middle_snapshot.json"
     if not snap_path.exists():
         return None
     try:
@@ -5442,7 +5291,7 @@ def _collect_sagging_middle_snapshot(s: "DatabaseScanner") -> dict | None:
 
 
 # 🔴 2026-06-27 P1-08：注入 motif advisory snapshot（payoff_due / dormant / over_saturated 三态各 top-3）。
-# 数据源=motif_recurrence_ledger 在 _数据库/.cross_chapter_scan/motif_advisory_snapshot.json 落盘。
+# 数据源=motif_recurrence_ledger 在 _数据库/.cross_cluster_scan/motif_advisory_snapshot.json 落盘。
 # advisory · 永不 hard_gate · 缺文件 → None（零回归 · 北极星⑤顾问非法官）。
 def _collect_motif_advisory(s: "DatabaseScanner") -> dict | None:
     import os as _os
@@ -5451,7 +5300,7 @@ def _collect_motif_advisory(s: "DatabaseScanner") -> dict | None:
         return None
     if mode not in ("shadow", "active"):
         mode = "active"
-    snap_path = s.db / ".cross_chapter_scan" / "motif_advisory_snapshot.json"
+    snap_path = s.db / ".cross_cluster_scan" / "motif_advisory_snapshot.json"
     if not snap_path.exists():
         return None
     try:
@@ -5627,7 +5476,7 @@ def _collect_recently_active_entities(s: "DatabaseScanner", active_chars,
 
     从 故事块摘要.json 最近 lookback 个历史 cluster 条目**确定性**抽取出场实体简表
     （账本已有字段 characters/char_mention_counts/summary·零 LLM 调用）：每实体一行
-    = 名字 + 最后出场 cluster + 一句话状态（最后出场章的账本摘要截断）。与 scene_storyboard
+    = 名字 + 最后出场 cluster + 一句话状态（cluster 摘要截断）。与 scene_storyboard
     白名单角色去重（白名单已注入全卡·不重复列）；上限 cap 行防膨胀（最近出场优先保留）。
     用途：freestyle 带出计划外配角时的前置防漂移参考（advisory·非出场名单硬锁——此前只能
     靠 UNKNOWN_CHARACTER 事后拦）。无数据 → None（键不注入·零变化）。
@@ -5667,35 +5516,24 @@ def _collect_recently_active_entities(s: "DatabaseScanner", active_chars,
                     whitelist.add(nm.strip())
     whitelist |= {id2name[w] for w in list(whitelist) if w in id2name}
 
-    def _ch_num(k) -> int:
-        try:
-            return int(k)
-        except (TypeError, ValueError):
-            return 0
-
-    # LRU：按 (cluster, ch) 升序遍历·同名后出现覆盖 = 最后出场为准（确定性）
+    # LRU：按 cluster 升序遍历·同名后出现覆盖 = 最后出场为准（确定性）
     seen: dict[str, dict] = {}
     for n, c in recs:
         cid = cluster_lookup.normalize_cluster_id(c.get("cluster_id"))
-        chapters = c.get("chapters") if isinstance(c.get("chapters"), dict) else {}
-        for ch_key, rec in sorted(chapters.items(), key=lambda kv: _ch_num(kv[0])):
-            if not isinstance(rec, dict):
+        names = c.get("characters")
+        if not isinstance(names, list) or not names:
+            names = list((c.get("char_mention_counts") or {}).keys())
+        hint = (c.get("summary") or "").strip().replace("\n", " ")
+        if len(hint) > 60:
+            hint = hint[:60] + "…"
+        for nm in names:
+            if not isinstance(nm, str) or not nm.strip():
                 continue
-            names = rec.get("characters")
-            if not isinstance(names, list) or not names:
-                names = list((rec.get("char_mention_counts") or {}).keys())
-            hint = (rec.get("summary") or "").strip().replace("\n", " ")
-            if len(hint) > 60:
-                hint = hint[:60] + "…"
-            for nm in names:
-                if not isinstance(nm, str) or not nm.strip():
-                    continue
-                canon = id2name.get(nm.strip(), nm.strip())
-                entry = {"name": canon, "last_seen_cluster": cid,
-                         "_rank": (n, _ch_num(ch_key))}
-                if hint:
-                    entry["status_hint"] = hint
-                seen[canon] = entry
+            canon = id2name.get(nm.strip(), nm.strip())
+            entry = {"name": canon, "last_seen_cluster": cid, "_rank": n}
+            if hint:
+                entry["status_hint"] = hint
+            seen[canon] = entry
     rows = [v for k, v in seen.items() if k not in whitelist]
     if not rows:
         return None
@@ -6279,7 +6117,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
     world_hits, _scene_gating_report = _scene_gate_world_hits(s, world_hits, current_cluster_id)
     prev_file = s.previous_chapter_file()
     recent_openings = s.recent_chapter_openings(lookback=3)
-    rag_hits = s.rag_relevant_chapters(top_k=3)
+    rag_hits = s.rag_relevant_clusters(top_k=3)
     memory_hits = s.memory_search(top_k=3)
     rel_hits = s.relevant_relationships()
     item_hits = s.relevant_items()
@@ -6452,68 +6290,56 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
             "reason": "用户口味是硬约束（风格基线 + 节奏偏好）",
         })
 
-    # 故事块摘要：v17.5 P1.4 分级注入 — 最近 5 章 + 卷起始章 + 关键事件章
-    # 2026-05-30 北极星复审：账本顶层无 chapters（结构为 clusters[].chapters）→ 原 .get("chapters",[])
-    # 恒空 = 整段死代码、历史章摘要从不注入 writer。改从 clusters[].chapters 拍平并注入 ch。
+    # 故事块摘要：按 cluster 序列注入最近块与高信息量块。
     _summary_doc = s.load("故事块摘要", {})
-    summaries = []
-    for _c in _summary_doc.get("clusters", []):
-        if not isinstance(_c, dict):
-            continue
-        for _k, _rec in (_c.get("chapters") or {}).items():
-            if not isinstance(_rec, dict):
-                continue
-            try:
-                _ch = int(_k)
-            except (ValueError, TypeError):
-                _ch = _rec.get("ch") or _rec.get("chapter") or 0
-            summaries.append({**_rec, "ch": _ch})
+    summaries = [
+        row for row in (_summary_doc.get("clusters", [])
+                        if isinstance(_summary_doc, dict) else [])
+        if isinstance(row, dict) and cluster_lookup.normalize_cluster_id(row.get("cluster_id"))
+    ]
+    current_num = cluster_lookup.cluster_num(current_cluster_id) if current_cluster_id else None
+    summaries.sort(key=lambda row: cluster_lookup.cluster_num(row.get("cluster_id")) or 0)
     if summaries:
-        # 1) 最近 5 章
-        recent = [x for x in summaries if x.get("ch", x.get("chapter", 0)) < chapter][-5:]
-        # 2) 卷起始章（每卷第一章）
-        volumes_data = s.load("进度", {}).get("volumes", [])
-        volume_starts_chs = {(v.get("chapter_range") or [0])[0] for v in volumes_data}
-        volume_starts = [x for x in summaries
-                        if x.get("ch", x.get("chapter", 0)) in volume_starts_chs
-                        and x.get("ch", x.get("chapter", 0)) < chapter
-                        and x not in recent]
-        # 3) 关键事件章（标 has_key_event 或 emotion_value 绝对值 >= 7）
-        key_event_chs = [x for x in summaries
-                        if (x.get("emotion_value", 0) and abs(x.get("emotion_value", 0)) >= 7)
-                        or x.get("has_key_event", False)
-                        and x not in recent and x not in volume_starts
-                        and x.get("ch", x.get("chapter", 0)) < chapter]
+        historical = [x for x in summaries
+                      if current_num is None
+                      or (cluster_lookup.cluster_num(x.get("cluster_id")) or 0) < current_num]
+        recent = historical[-5:]
+        volume_starts = []
+        key_event_clusters = [x for x in historical
+                              if x not in recent and (
+                                  x.get("outcome") not in (None, "", "neutral")
+                                  or bool(x.get("locked_facts"))
+                                  or bool(x.get("state_delta"))
+                              )]
         # 合并去重
-        focus_chs = [r.get("ch") for r in recent]
+        focus_clusters = [r.get("cluster_id") for r in recent]
         if volume_starts:
-            focus_chs.append(f"卷首 {[v.get('ch') for v in volume_starts]}")
-        if key_event_chs:
-            focus_chs.append(f"关键事件 {[k.get('ch') for k in key_event_chs]}")
-        if recent or volume_starts or key_event_chs:
+            focus_clusters.append(f"阶段起点 {[v.get('cluster_id') for v in volume_starts]}")
+        if key_event_clusters:
+            focus_clusters.append(f"关键块 {[k.get('cluster_id') for k in key_event_clusters]}")
+        if recent or volume_starts or key_event_clusters:
             must_read.append({
                 "path": "_数据库/故事块摘要.json",
                 "priority": "P1",
-                "focus": f"最近 5 章 + 卷首 + 关键事件章：{focus_chs}",
+                "focus": f"最近 cluster + 阶段起点 + 关键块：{focus_clusters}",
                 "reason": (
-                    f"前文走向（分级：最近 {len(recent)} 章 + 卷首 {len(volume_starts)} 章 + "
-                    f"关键事件 {len(key_event_chs)} 章 — 防止 ch100+ 时 token 爆炸）"
+                    f"前文走向（最近 {len(recent)} 个 cluster + 阶段起点 {len(volume_starts)} 个 + "
+                    f"关键块 {len(key_event_clusters)} 个）"
                 ),
             })
 
-    # v17.5 C1: RAG 检索注入（长期记忆，对抗业界 65% memory drift）
+    # RAG 检索注入：历史 cluster 摘要与完整草稿。
     if rag_hits:
-        rag_chs = [h.get("chapter") for h in rag_hits]
+        rag_clusters = [h.get("cluster_id") for h in rag_hits]
         must_read.append({
             "path": "_数据库/故事块摘要.json (RAG 检索)",
             "priority": "P0",
             "focus": (
-                f"基于本章 plan TF-IDF 检索最相关 {len(rag_hits)} 章：{rag_chs}。"
-                f"特别关注这些章的伏笔/角色状态/未回收钩子"
+                f"基于当前 cluster brief 检索最相关 {len(rag_hits)} 个历史 cluster："
+                f"{rag_clusters}。关注其中的伏笔、角色状态与未回收钩子"
             ),
             "reason": (
-                f"业界数据：ch1 details 到 ch8 被稀释；65% 企业 AI 失败 = memory drift。"
-                f"RAG 帮你找到本章 plan 语义最相关的历史章节（top-{len(rag_hits)} 由 rag_retriever 计算）"
+                f"RAG 提供与当前走向最相关的历史块（top-{len(rag_hits)} 由 rag_retriever 计算）"
             ),
             "rag_hits": rag_hits,
         })
@@ -6658,15 +6484,15 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "main_character_arc_stage": _collect_main_character_arc_stage(s, chapter),
         "active_aspects": _collect_active_aspects(s, chapter),
         "fate_dice_hint": _collect_fate_dice_hint(s, chapter),
-        "ensemble_layer": _collect_ensemble_layer(s, chapter),
+        "ensemble_layer": _collect_ensemble_layer(s, current_cluster_id),
         "user_preferences_v21": _collect_user_preferences_v21(s),
         "relevant_heuristics": _collect_relevant_heuristics(s, chapter, top_k=5),
         "hub_directive": _collect_hub_directive(s, chapter),
-        "character_moves": _collect_character_moves(s, chapter, active_chars),
+        "character_moves": _collect_character_moves(s, active_chars),
         "position_effect_template": _collect_position_effect_template(s, chapter),
         "throughlines": _collect_throughlines(s, chapter),
         "distill_continuity_template": _collect_distill_continuity(s),
-        "arc_template": _collect_arc_template(s, chapter),
+        "arc_template": _collect_arc_template(s, s._current_cluster_id()),
         "title_style": _collect_title_style(s),                # v22.4dim N5: 章节标题命名指纹
         "naming_convention": _collect_naming_convention(s),     # v22.4dim N5: 角色命名规范
         "main_character_arcs": _collect_main_character_arcs(s, top_k=3),  # v22.4dim Round2: 原作主角 Stanford 6 维参考
@@ -6675,7 +6501,9 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         # 纯 prompt 注入从源头降问题率，无 scanner 无 hard_gate，全 advisory。作者档基线优先、否则通用兜底。
         "deep_writing_dims": _collect_deep_writing_dims(s),
         "distill_golden_few_shot": _collect_golden_few_shot(s, chapter),
-        "selective_history_retrieval": _collect_selective_history(s, chapter, top_k=3),
+        "selective_history_retrieval": _collect_selective_history(
+            s, current_cluster_id, top_k=3
+        ),
         "reader_preferences": _collect_reader_preferences(s),
         "prev_judge_findings": _collect_prev_judge_findings(s, chapter, lookback=3),
         "active_relationships": _collect_active_relationships(s, active_chars, current_cluster_id),
@@ -6722,7 +6550,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "genre_baseline_diff": _collect_genre_baseline_diff(s),
         "volume_summaries_digest": _collect_volume_summaries_digest(s),
         "writer_mode": "claude_draft_gemini_polish_v29",
-        "rag_relevant_chapters": rag_hits,
+        "rag_relevant_clusters": rag_hits,
         "memory_search_results": memory_hits,
         "database_coverage": s.coverage_report(),
         "must_read": must_read,
@@ -6812,12 +6640,12 @@ def _build_cache_layout() -> dict:
             "title_style",                       # v22.4dim N5: 章节标题命名指纹（全书不变）
             "naming_convention",                 # v22.4dim N5: 角色命名规范（全书不变）
             "main_character_arcs",               # v22.4dim Round 2: 原作主角 Stanford 6 维参考（全书不变）
-            "position_effect_template",          # R2.3 双轴判定模板（全局常量）
+            "position_effect_template",          # cluster 关键行动判定模板（全局常量）
             "_cache_layout",                     # 本字段自身（元数据）
         ],
         "SEMI_STATIC_90_cacheable_v22": [
             "arc_template",                      # v22.cluster: 本章所属 cluster 的 arc 模板（同 cluster 内 manifest 完全相同 → cache hit ratio ≈ cluster.chapters_count/总章数）
-            "main_character_arc_stage",          # [#7]: 主角弧线当前阶段（active_cluster 命中 → 同 cluster 内不变）
+            "main_character_arc_stage",          # 主角弧线当前阶段（stages_by_cluster 命中）
         ],
         "SEMI_STATIC_70_cacheable": [
             "active_character_cards",            # 🔴 写手信息隔离：已隔离的出场角色卡（卷内慢变·隐藏身份到揭密 cluster 才变）

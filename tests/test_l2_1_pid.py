@@ -184,7 +184,7 @@ def test_hard_gate_codes_not_polluted():
         "LOCKED_FACT_CONFLICT", "FUTURE_KNOWLEDGE_LEAK", "FORESHADOWING_NOT_PAID",
         "SECRET_NOT_REVEALED", "UNKNOWN_CHARACTER_DETECTED", "CHANGES_MISSING",
         "MANIFEST_MISSING", "FILE_NOT_FOUND", "ITEM_HOLDER_ABSENT",
-        "ITEM_NOT_YET_INTRODUCED", "PROPAGATION_DEBT_CREATED", "STYLE_单段超长",
+        "ITEM_NOT_YET_INTRODUCED", "STYLE_单段超长",
         "CHAPTER_END_FORBIDDEN_SCREENPLAY", "CHAPTER_END_FORBIDDEN_TRANSITION",
         "LOCKED_FACT_CROSS_SCENE_CONFLICT",
         # 🔴 2026-06-27 C03：子系统载荷点火 3 码（经独立 C03 特性入列·非本 L2-1 PID 改动）
@@ -412,6 +412,32 @@ def test_accumulate_pid_state_no_author_dir_harmless():
         assert ll.accumulate_pid_state_from_calibration(tmp, [{"code": "X"}]) is None
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_backtest_receipt_records_non_convergence_as_completed(tmp_path):
+    author_dir = tmp_path / "author"
+    style_path = author_dir / "作者风格.json"
+    author_dir.mkdir()
+    style_path.write_text("{}", encoding="utf-8")
+    output = tmp_path / "receipt.json"
+
+    receipt = pid.write_backtest_receipt(
+        author_dir=author_dir,
+        style_path=style_path,
+        result={
+            "converged": False,
+            "state_saved_to": None,
+            "rounds_run": 20,
+            "n_samples": 8,
+            "initial_fpr": 0.25,
+            "final_fpr": 0.12,
+        },
+        output=output,
+    )
+
+    assert receipt["completed"] is True
+    assert receipt["status"] == "not_converged"
+    assert json.loads(output.read_text(encoding="utf-8")) == receipt
 
 
 # ---------- 离线回测金标准：真作者原文 FPR 收敛 ----------

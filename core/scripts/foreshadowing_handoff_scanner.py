@@ -83,12 +83,7 @@ def scan(project_root: Path, cluster_id: str) -> dict:
             })
 
     # 检测 2: 伏笔表 promises setup_cluster = 本 cluster 的伏笔
-    # 2026-06 复审修复：setup_cluster 客观存在双约定——outline.md:437 文档示例写裸整数
-    # ("setup_cluster": 3)，save_state.py/migrate_data_model_v2.py 写完整串 ("cluster_004")。
-    # 旧代码 `p.get("setup_cluster") == cluster_id`（cluster_id 在 L33 已加 "cluster_" 前缀但未零填充）
-    # 对整数/裸号形态恒 False → outline 初始化路径下 Tier-1 核心伏笔被静默过滤，
-    # FORESHADOWING_PHYSICAL_EVIDENCE_MISSING 对核心伏笔失效（false negative）。
-    # 两侧归一化后比较（与 cluster_lookup.normalize_cluster_id 逻辑等价，内联避免 subprocess 下 import 风险）。
+    # 两侧归一化后比较，保证 cluster id 的补零格式一致。
     def _norm_cid(v):
         if v is None or isinstance(v, bool):
             return None

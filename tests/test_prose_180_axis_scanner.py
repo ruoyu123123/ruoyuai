@@ -129,7 +129,7 @@ def test_axis_ledger_written_in_active():
         _set_mode("active")
         proj = _mk_project()
         out = mod.scan(_write(_FLIP_DRAFT), proj, "cluster_001")
-        ledger = proj / "_数据库" / ".cross_chapter_scan" / "spatial_axis.json"
+        ledger = proj / "_数据库" / ".cross_cluster_scan" / "spatial_axis.json"
         assert ledger.exists()
         data = json.loads(ledger.read_text(encoding="utf-8"))
         assert "cluster_001" in data["clusters"]

@@ -1,329 +1,114 @@
-"""cross_cluster_offscreen_aggregate.py — 幕后行动落地检查（v19.2 新增）
-
-补 cross_chapter_pattern + continuity 的另一类盲区：**幕后人物行动是否真的发生**。
-
-之前 4 章人物卡里填了 offscreen.actions（顾沉/老周/林晚秋/陆爸），但 writer
-不消费、检测体系不验证——反派"消失"，读者感觉不到"反派一直在动"。
-
-本脚本扫两件事：
-1. manifest.active_offscreen_actions 中 ch_range 覆盖本章的 action
-2. _changes.json self_eval.offscreen_actions_executed（writer 自报落地证据）
-
-报警条件：
-- manifest 有 active actions 但 _changes 是空 / 不存在 → warning
-- evidence 字段为空或 < 10 字 → advisory
-- writer 报了 completed_fully=true 但正文 grep 不到 character aliases → warning（撒谎）
-
-用法：
-    python cross_cluster_offscreen_aggregate.py <项目路径> [--last-n 5]
-
-退出码: 0 健康 / 1 advisory / 2 warning
-"""
+"""Audit offscreen action execution at story-cluster granularity."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
-import sys as _sys
-_sys.path.insert(0, str(Path(__file__).resolve().parent))
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：账本驱动 offscreen
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # noqa: E402
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+def _merge_offscreen(cluster: dict) -> dict:
+    """读取 cluster 级幕后行动汇总。"""
+    direct = cluster.get("offscreen")
+    return direct if isinstance(direct, dict) else {}
 
 
-def find_chapter_dirs(project_root: Path) -> list[tuple[int, Path]]:
-    out = []
-    for d in project_root.glob("章节/第*章"):
-        m = re.match(r"第(\d+)章", d.name)
-        if m:
-            out.append((int(m.group(1)), d))
-    out.sort(key=lambda x: x[0])
-    return out
-
-
-def get_character_aliases(project_root: Path, character_name: str) -> list[str]:
-    """从人物卡读 name + name_aliases + id。"""
-    chars = load_json(project_root / "_数据库" / "人物卡.json", {"characters": []})
-    for c in chars.get("characters", []):
-        if c.get("name") == character_name or c.get("id") == character_name:
-            aliases = [c.get("name"), c.get("id")] + c.get("name_aliases", [])
-            return [a for a in aliases if a]
-    return [character_name]
-
-
-# ============================================================
-# 2026-05-29 cluster 化：账本驱动分支
-# CLUSTER_MODE=1 且账本含 offscreen 字段 → 直接读 ChapterRecord.offscreen
-# （{expected, executed, backlog_count}），不再 glob 章目录 + manifest + 正文。
-# --last-n 在 cluster 模式 = 最后 N 个 cluster（颗粒度从「章」升到「cluster」）。
-# 账本无 offscreen → 回退逐章逻辑（零回归）。
-# ============================================================
-
-def _scan_from_ledger(project_root: Path, last_n_clusters: int) -> tuple[list[dict], dict, list[int]]:
-    """从账本 chapters[ch].offscreen 派生 findings + per_chapter + 扫描章列表。"""
-    recs = csr.get_chapter_records(project_root, last_n_clusters=last_n_clusters)
+def _scan_from_ledger(project_root: Path, last_n_clusters: int = 5):
+    """Return findings, per-cluster metrics, and scanned cluster IDs."""
+    clusters = csr.get_clusters(project_root)
+    if last_n_clusters > 0:
+        clusters = clusters[-last_n_clusters:]
+    last_cluster_id = str(clusters[-1].get("cluster_id") or "") if clusters else ""
     findings: list[dict] = []
-    per_chapter: dict = {}
-    scanned_chs = [ch for ch, _ in recs]
-    last_ch = scanned_chs[-1] if scanned_chs else None
-
-    for ch, rec in recs:
-        off = rec.get("offscreen") or {}
-        expected = off.get("expected", []) or []
-        executed = off.get("executed", []) or []
-        backlog_count = off.get("backlog_count", 0) or 0
-
-        per_chapter[ch] = {
+    per_cluster: dict[str, dict] = {}
+    scanned = []
+    for cluster in clusters:
+        cid = str(cluster.get("cluster_id") or "")
+        if not cid:
+            continue
+        scanned.append(cid)
+        offscreen = _merge_offscreen(cluster)
+        expected = offscreen.get("expected") or []
+        executed = offscreen.get("executed") or []
+        backlog = offscreen.get("backlog_count", 0) or 0
+        per_cluster[cid] = {
             "expected_count": len(expected),
             "executed_count": len(executed),
-            "expected_chars": list({a.get("character") for a in expected if isinstance(a, dict)}),
-            "executed_chars": list({e.get("character") for e in executed if isinstance(e, dict)}),
+            "expected_characters": sorted({a.get("character") for a in expected if isinstance(a, dict) and a.get("character")}),
+            "executed_characters": sorted({a.get("character") for a in executed if isinstance(a, dict) and a.get("character")}),
+            "backlog_count": backlog,
         }
-
-        # === 检查 1: 有期望但执行空 ===
         if expected and not executed:
             findings.append({
                 "severity": "warning",
                 "code": "OFFSCREEN_ACTIONS_NOT_EXECUTED",
-                "chapter": ch,
+                "cluster_id": cid,
                 "metric": {"expected": len(expected), "executed": 0},
-                "message": f"ch{ch} 账本列了 {len(expected)} 条 offscreen action 但 offscreen.executed 是空",
-                "expected_actions": [{"character": a.get("character"), "action": (a.get("action", "") or "")[:60]} for a in expected if isinstance(a, dict)],
-                "suggestion": "writer 必须按 visible_to_protagonist 落地至少 1 个 action（POV 切换/物件暗示/对话提及/副作用任选一）",
+                "expected_actions": expected,
+                "suggestion": "当前 cluster 的预期幕后行动没有执行证据",
             })
-
-        # === 检查 2: evidence 太短 ===
-        for ex in executed:
-            if not isinstance(ex, dict):
+        for action in executed:
+            if not isinstance(action, dict):
                 continue
-            char_name = ex.get("character", "")
-            evidence = ex.get("evidence", "") or ""
+            evidence = str(action.get("evidence") or "")
             if len(evidence) < 10:
                 findings.append({
                     "severity": "advisory",
                     "code": "OFFSCREEN_EVIDENCE_THIN",
-                    "chapter": ch,
-                    "metric": {"character": char_name, "evidence_len": len(evidence)},
-                    "message": f"ch{ch} {char_name} 的 offscreen action evidence 太短 ({len(evidence)} 字)",
-                    "suggestion": "evidence 必须摘录正文具体段落/对话作证据，≥10 字",
+                    "cluster_id": cid,
+                    "metric": {"character": action.get("character", ""), "evidence_len": len(evidence)},
+                    "suggestion": "幕后行动证据需要具体到本 cluster 的正文落点",
                 })
-
-        # === 检查 3: backlog 累积（仅最新章）===
-        if ch == last_ch and backlog_count >= 1:
+        if cid == last_cluster_id and backlog >= 1:
             findings.append({
                 "severity": "advisory",
                 "code": "OFFSCREEN_BACKLOG",
-                "chapter": ch,
-                "metric": {"backlog_count": backlog_count},
-                "message": f"截至 ch{ch}, 账本记 {backlog_count} 条 offscreen action 已过 ch_range 但未标 done",
-                "suggestion": "save-state 应自动标 done，或人工 review 后补 done=true",
+                "cluster_id": cid,
+                "metric": {"backlog_count": backlog},
+                "suggestion": "当前 cluster 仍有未完成的幕后行动",
             })
+    return findings, per_cluster, scanned
 
-    return findings, per_chapter, scanned_chs
 
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--last-n", type=int, default=5)
-    args = ap.parse_args()
-
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    parser.add_argument("--last-n", type=int, default=5)
+    args = parser.parse_args()
     project_root = Path(args.project)
     if not project_root.is_dir():
-        print(f"[FATAL] 项目目录不存在: {project_root}", file=sys.stderr)
-        sys.exit(2)
-
-    # 2026-05-29 cluster 化：账本含 offscreen → 走账本分支
-    if IS_CLUSTER_MODE and csr.ledger_has_field(project_root, "offscreen"):
-        findings, per_chapter, scanned_chs = _scan_from_ledger(project_root, args.last_n)
-        out_dir = project_root / "_数据库" / ".cross_chapter_scan"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report = {
-            "scan_type": "offscreen",
-            "scan_ts": ts,
-            "scan_mode": "cluster_ledger",
-            "chapters_scanned": scanned_chs,
-            "per_chapter": per_chapter,
-            "findings": findings,
-            "summary": {
-                "warning": sum(1 for f in findings if f["severity"] == "warning"),
-                "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
-                "total": len(findings),
-            },
-        }
-        out_path = out_dir / f"offscreen_{ts}.json"
-        out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[cross_cluster_offscreen_aggregate] (cluster) 扫描章节={scanned_chs}")
-        for ch, d in per_chapter.items():
-            print(f"  ch{ch}: 期望 {d['expected_count']} action / 实际执行 {d['executed_count']} / 涉及角色: {d['expected_chars']}")
-        print()
-        print(f"=== 发现 {len(findings)} 项 (warning={report['summary']['warning']} / advisory={report['summary']['advisory']}) ===")
-        for f in findings:
-            ch_str = f"ch{f.get('chapter', '*')}"
-            print(f"  [{f['severity'].upper()}] [{f['code']}] {ch_str} :: {f['message']}")
-            print(f"     建议: {f['suggestion']}")
-        print()
-        print(f"报告: {out_path}")
-        # 2026-05-29 复审修复 [L6/SC-2]：warning 级发现统一 exit 2、advisory 统一 exit 1（旧版 warning 误用 exit 1）。
-        if any(f["severity"] == "warning" for f in findings):
-            sys.exit(2)
-        if any(f["severity"] == "advisory" for f in findings):
-            sys.exit(1)
-        sys.exit(0)
-
-    chapter_dirs = find_chapter_dirs(project_root)
-    if not chapter_dirs:
-        print("[OK] 无已写章节")
-        sys.exit(0)
-    chapter_dirs = chapter_dirs[-args.last_n:]
-
-    findings = []
-    per_chapter = {}
-
-    for ch, ch_dir in chapter_dirs:
-        # 读 manifest
-        manifest_path = project_root / "_数据库" / ".manifest" / f"ch_{ch:03d}.json"
-        manifest = load_json(manifest_path, {})
-        expected_actions = manifest.get("active_offscreen_actions") or []
-
-        # 读 _changes
-        changes_path = ch_dir / f"第{ch:03d}章_changes.json"
-        changes = load_json(changes_path, {})
-        executed = (changes.get("self_eval") or {}).get("offscreen_actions_executed") or []
-
-        # 读正文
-        text_path = ch_dir / f"第{ch:03d}章.txt"
-        text = text_path.read_text(encoding="utf-8") if text_path.exists() else ""
-
-        per_chapter[ch] = {
-            "expected_count": len(expected_actions),
-            "executed_count": len(executed),
-            "expected_chars": list({a.get("character") for a in expected_actions if isinstance(a, dict)}),
-            "executed_chars": list({e.get("character") for e in executed if isinstance(e, dict)}),
-        }
-
-        # === 检查 1: manifest 有期望但 _changes 是空 ===
-        if expected_actions and not executed:
-            findings.append({
-                "severity": "warning",
-                "code": "OFFSCREEN_ACTIONS_NOT_EXECUTED",
-                "chapter": ch,
-                "metric": {"expected": len(expected_actions), "executed": 0},
-                "message": f"ch{ch} manifest 列了 {len(expected_actions)} 条 offscreen action 但 _changes.offscreen_actions_executed 是空",
-                "expected_actions": [{"character": a.get("character"), "action": (a.get("action", "") or "")[:60]} for a in expected_actions],
-                "suggestion": "writer 必须按 visible_to_protagonist 落地至少 1 个 action（POV 切换/物件暗示/对话提及/副作用任选一）",
-            })
-
-        # === 检查 2: 执行了的 action 是否在正文中能找到角色 aliases ===
-        for ex in executed:
-            if not isinstance(ex, dict):
-                continue
-            char_name = ex.get("character", "")
-            aliases = get_character_aliases(project_root, char_name)
-            evidence = ex.get("evidence", "")
-            completed = ex.get("completed_fully", False)
-
-            # evidence 字段太短
-            if len(evidence) < 10:
-                findings.append({
-                    "severity": "advisory",
-                    "code": "OFFSCREEN_EVIDENCE_THIN",
-                    "chapter": ch,
-                    "metric": {"character": char_name, "evidence_len": len(evidence)},
-                    "message": f"ch{ch} {char_name} 的 offscreen action evidence 太短 ({len(evidence)} 字)",
-                    "suggestion": "evidence 必须摘录正文具体段落/对话作证据，≥10 字",
-                })
-
-            # writer 报了 completed_fully 但正文 grep 不到任何 alias
-            if completed and not any(a in text for a in aliases):
-                findings.append({
-                    "severity": "warning",
-                    "code": "OFFSCREEN_EXECUTION_LIE",
-                    "chapter": ch,
-                    "metric": {"character": char_name, "aliases_tried": aliases},
-                    "message": f"ch{ch} writer 自报 {char_name} 的 action 已完成，但正文不含其任何 alias",
-                    "suggestion": "writer 可能虚报，validator-repair 复核：要么补足正文证据，要么改 completed_fully=false",
-                })
-
-        # === 检查 3: 跨章未 done 的 action 累积（堆积告警）===
-        # 仅当章是最新一章时检查
-        if ch == chapter_dirs[-1][0]:
-            # 统计跨章累积未完成的 action
-            chars_json = load_json(project_root / "_数据库" / "人物卡.json", {"characters": []})
-            backlog = []
-            for c in chars_json.get("characters", []):
-                if c.get("role") == "主角":
-                    continue
-                cname = c.get("name") or c.get("id")
-                for idx, act in enumerate(c.get("offscreen", {}).get("actions", [])):
-                    ch_range = act.get("ch_range", [])
-                    if len(ch_range) == 2 and ch_range[1] < ch and not act.get("done"):
-                        backlog.append({"character": cname, "idx": idx, "action": (act.get("action", "") or "")[:60], "ch_range": ch_range})
-            if backlog:
-                findings.append({
-                    "severity": "advisory",
-                    "code": "OFFSCREEN_BACKLOG",
-                    "chapter": ch,
-                    "metric": {"backlog_count": len(backlog)},
-                    "message": f"截至 ch{ch}, 有 {len(backlog)} 条 offscreen action 已过 ch_range 但未标 done",
-                    "backlog": backlog,
-                    "suggestion": "save-state 应自动标 done，或人工 review 后补 done=true",
-                })
-
-    # 输出
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+        print(f"[FATAL] project directory not found: {project_root}", file=sys.stderr)
+        raise SystemExit(2)
+    findings, per_cluster, scanned = _scan_from_ledger(project_root, args.last_n)
+    if not scanned:
+        print("[SKIP] no completed cluster records")
+        raise SystemExit(0)
+    summary = {
+        "warning": sum(f["severity"] == "warning" for f in findings),
+        "advisory": sum(f["severity"] == "advisory" for f in findings),
+        "total": len(findings),
+    }
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     report = {
         "scan_type": "offscreen",
         "scan_ts": ts,
-        "chapters_scanned": [ch for ch, _ in chapter_dirs],
-        "per_chapter": per_chapter,
+        "clusters_scanned": scanned,
+        "per_cluster": per_cluster,
         "findings": findings,
-        "summary": {
-            "warning": sum(1 for f in findings if f["severity"] == "warning"),
-            "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
-            "total": len(findings),
-        },
+        "summary": summary,
     }
     out_path = out_dir / f"offscreen_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    print(f"[cross_cluster_offscreen_aggregate] 扫描章节={[ch for ch, _ in chapter_dirs]}")
-    for ch, d in per_chapter.items():
-        print(f"  ch{ch}: 期望 {d['expected_count']} action / 实际执行 {d['executed_count']} / 涉及角色: {d['expected_chars']}")
-    print()
-    print(f"=== 发现 {len(findings)} 项 (warning={report['summary']['warning']} / advisory={report['summary']['advisory']}) ===")
-    for f in findings:
-        ch_str = f"ch{f.get('chapter', '*')}"
-        print(f"  [{f['severity'].upper()}] [{f['code']}] {ch_str} :: {f['message']}")
-        print(f"     建议: {f['suggestion']}")
-    print()
-    print(f"报告: {out_path}")
-
-    # 2026-05-29 复审修复 [L6/SC-2]：warning 级发现统一 exit 2、advisory 统一 exit 1（旧版 warning 误用 exit 1）。
-    if any(f["severity"] == "warning" for f in findings):
-        sys.exit(2)
-    if any(f["severity"] == "advisory" for f in findings):
-        sys.exit(1)
-    sys.exit(0)
+    print(f"[offscreen] {summary['warning']} warning / {summary['advisory']} advisory")
+    print(f"report: {out_path}")
+    raise SystemExit(2 if summary["warning"] else 1 if summary["advisory"] else 0)
 
 
 if __name__ == "__main__":

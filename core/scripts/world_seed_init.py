@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
-"""world_seed_init.py — 世界演化初始条件幂等播种器（SYS-1 + C02 · 2026-06-27）
-
-让 world_evolution_engine 从「空转」复活。
-
-背景（SYS-1 根因）：outline 阶段 scaffold 把 涟漪规则.json / 世界状态.json 建成空骨架
-（ripple_rules=[] · factions_state={} · protagonist_state={}），于是每章 tick 都「0 规则触发，
-0 涟漪落地」——世界永不演化（北极星② 涟漪核心 + 北极星③ 大势已定 软牵引 全部静默失效）。
+"""从 outline 产物播种 cluster 世界演化的最小初始条件。
 
 本播种器从**已有创意产物**（大势卡 ME 池 / 群像档势力 / character_arc_state 主角+角色）确定性
 reshape 出**最小起始集**写回 涟漪规则.json + 世界状态.json：
 
-  ① ≥1 条基线 auto_tick 规则（trigger_type=auto_tick · trigger_match=every_chapter ·
+  ① ≥1 条基线 auto_tick 规则（trigger_type=auto_tick · trigger_match=every_cluster ·
      ripples = 推进 NPC thread(evaluate_completion) + 1 条 day 推进(advance) + 轻量 narrative drift）
   ② 每个 ME_id 一条 fate_event 规则（trigger_match=ME_id · narrative 型 · 交模型解读）
   ③ 走向卡关键词（势力名）→ minor_event 规则（narrative 型 · 走向卡有持续后果）
   + 为每势力播 {power,stability,wealth} 基线（factions_state）
   + protagonist_state arc 基线（从 character_arc_state 的主角）
   + 为 character_arc_state 里的非主角角色播 NPC thread
-    · 已死角色 → expected_complete_cluster = death_cluster + outcome = 牺牲（逐章重放 tick 经
+    · 已死角色 → expected_complete_cluster = death_cluster + outcome = 牺牲（cluster tick 经
       evaluate_completion 把牺牲落进 consequence_tracker）
     · 在世角色 → 开放 thread（无 expected_complete_cluster·只作幕后线存在·不预设结局）
 
@@ -47,40 +41,29 @@ from pathlib import Path
 _SEED_TAG = "world_seed_init"
 _ORG_SUFFIX = "局会殿庭教团盟门派署部堂会社帮阁宗"  # 角色 role 里的组织后缀 → 推势力名
 
-# 🔴 2026-06-29 角色信息差(per-character belief)：辅助态文件 character_belief_ledger.json 的
-# 空骨架单一真理源 = subsystem_skeletons.json 的 _belief_ledger_schema._skeleton（非 34 核心·
-# 像 locked_fact.json 那样·不进 scaffold canonical 循环·outline 阶段在此播空骨架·后续由
-# cluster-save-state witness 回写步维护）。
 _SKELETON_FILE = (Path(__file__).resolve().parent.parent
                   / "claude-home" / "templates" / "subsystem_skeletons.json")
 
 
+def _auxiliary_skeleton(key: str) -> dict:
+    """从模板读取辅助账本的唯一 skeleton。"""
+    try:
+        document = json.loads(_SKELETON_FILE.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"subsystem_skeletons.json 无法读取: {exc}") from exc
+    schema = document.get(key)
+    skeleton = schema.get("_skeleton") if isinstance(schema, dict) else None
+    if not isinstance(skeleton, dict) or not skeleton:
+        raise ValueError(f"subsystem_skeletons.json 缺 {key}._skeleton")
+    return json.loads(json.dumps(skeleton, ensure_ascii=False))
+
+
 def _belief_ledger_skeleton() -> dict:
-    """读 subsystem_skeletons.json 的 _belief_ledger_schema._skeleton（单一真理源）·缺则兜底空骨架。"""
-    try:
-        d = json.loads(_SKELETON_FILE.read_text(encoding="utf-8"))
-        sk = d.get("_belief_ledger_schema", {}).get("_skeleton")
-        if isinstance(sk, dict) and sk:
-            return json.loads(json.dumps(sk))  # deep copy
-    except (OSError, json.JSONDecodeError):
-        pass
-    return {"schema_version": 1, "characters": {}, "facts": {}}
+    return _auxiliary_skeleton("_belief_ledger_schema")
 
 
-# 🔴 2026-06-29 戏剧问题账本(PITQ/MDQ)：辅助态文件 戏剧问题账本.json 的空骨架单一真理源 =
-# subsystem_skeletons.json 的 _dramatic_question_ledger_schema._skeleton（非 34 核心·像
-# character_belief_ledger.json / locked_fact.json·outline 阶段在此播空骨架·后续由
-# cluster-save-state foreshadower 登记步维护·读者粘性唯一宏观结构缺口·全 advisory STATE）。
 def _dramatic_question_ledger_skeleton() -> dict:
-    """读 subsystem_skeletons.json 的 _dramatic_question_ledger_schema._skeleton（单一真理源）·缺则兜底空骨架。"""
-    try:
-        d = json.loads(_SKELETON_FILE.read_text(encoding="utf-8"))
-        sk = d.get("_dramatic_question_ledger_schema", {}).get("_skeleton")
-        if isinstance(sk, dict) and sk:
-            return json.loads(json.dumps(sk))  # deep copy
-    except (OSError, json.JSONDecodeError):
-        pass
-    return {"schema_version": 1, "clusters": {}}
+    return _auxiliary_skeleton("_dramatic_question_ledger_schema")
 
 
 # ---------- IO ----------
@@ -89,30 +72,28 @@ def _load(p: Path, default):
     if not p.exists():
         return default
     try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-        return d
-    except (OSError, json.JSONDecodeError):
-        return default
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"JSON 无法读取: {p}: {exc}") from exc
 
 
 def _save(p: Path, data) -> None:
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    from atomic_json import atomic_write_json
+    atomic_write_json(p, data)
 
 
 # ---------- 派生 ----------
 
-def _me_ids_and_titles(major: dict) -> list[tuple[str, str]]:
-    """从 大势卡 取 (me_id, title)。兼容 major_events / major_events_pool + id / me_id。"""
+def _event_ids_and_titles(major: dict) -> list[tuple[str, str]]:
+    """从 canonical 大势卡读取事件 id 与标题。"""
     pool = major.get("major_events")
-    if not pool:
-        pool = major.get("major_events_pool", [])
+    if not isinstance(pool, list):
+        raise ValueError("大势卡.major_events 必须是 object array")
     out = []
-    for m in pool or []:
-        if not isinstance(m, dict):
-            continue
-        mid = m.get("id") or m.get("me_id")
-        if mid:
-            out.append((str(mid), str(m.get("title") or m.get("name") or "")))
+    for m in pool:
+        if not isinstance(m, dict) or not isinstance(m.get("id"), str) or not m["id"]:
+            raise ValueError("大势卡 major_event 缺少 id")
+        out.append((m["id"], str(m.get("title") or m["id"])))
     return out
 
 
@@ -171,14 +152,14 @@ def _protagonist(arc_state: dict) -> tuple[str, dict]:
 def build_seed_rules(me_pairs: list[tuple[str, str]], faction_names: list[str]) -> list[dict]:
     """构造 seed 涟漪规则（① auto_tick base + ② per-ME fate + ③ per-faction minor）。"""
     rules: list[dict] = []
-    # ① 基线 auto_tick（每章：评估 NPC thread / 推进 day / 轻量漂移）
+    # ① 基线 auto_tick（每 cluster 评估 NPC thread、推进 day、记录轻量世界漂移）
     rules.append({
         "id": "RR_AUTO_TICK_BASE",
         "trigger_type": "auto_tick",
-        "trigger_match": "every_chapter",
+        "trigger_match": "every_cluster",
         "ripples": [
             {"target": "active_npc_threads", "evaluate_completion": True,
-             "reason": "每章评估幕后 NPC thread 是否到期完成"},
+             "reason": "每 cluster 评估幕后 NPC thread 是否到期完成"},
             {"target": "current_world_time.day", "advance": 1,
              "reason": "机械时间推进一格（北极星③·不硬锁）"},
             {"narrative": "时间又往前走了一格，幕后各方按各自的节奏继续运转。",
@@ -218,7 +199,7 @@ def build_npc_threads(arc_state: dict, protagonist_name: str,
                       start_num: int) -> list[dict]:
     """从 character_arc_state 非主角角色派生 NPC threads。
 
-    死角色 → expected_complete_cluster=death_cluster + outcome=牺牲（逐章重放经 evaluate_completion
+    死角色 → expected_complete_cluster=death_cluster + outcome=牺牲（cluster tick 经 evaluate_completion
     落 consequence_tracker）；在世角色 → 开放 thread（无 expected_complete·不预设结局）。
     """
     threads: list[dict] = []
@@ -231,7 +212,8 @@ def build_npc_threads(arc_state: dict, protagonist_name: str,
             continue
         if info.get("role") == "主角":
             continue
-        stage = info.get("current_stage", "")
+        marker = info.get("current_stage_at_cluster", "")
+        stage = marker.split(":", 1)[-1] if isinstance(marker, str) else ""
         is_dead = info.get("status") == "dead"
         death_cluster = info.get("death_cluster")
         thread = {
@@ -240,6 +222,9 @@ def build_npc_threads(arc_state: dict, protagonist_name: str,
             "current_action": stage,
             "since_cluster": "cluster_001",
             "expected_complete_cluster": death_cluster if (is_dead and death_cluster) else None,
+            "expected_responses": 1,
+            "responded_count": 0,
+            "responded_by_cluster": [],
             "visible_to_protagonist": bool(is_dead),
             "outcome_if_complete": stage if is_dead else "",
             "_priority": 8 if is_dead else 5,
@@ -256,21 +241,27 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
          reset_ticks: bool, dry_run: bool) -> dict:
     db = project_root / "_数据库"
     if not db.exists():
-        return {"error": f"_数据库 不存在: {db}"}
+        raise ValueError(f"_数据库 不存在: {db}")
 
     rules_path = db / "涟漪规则.json"
     world_path = db / "世界状态.json"
 
-    major = _load(db / "大势卡.json", {}) or {}
-    arc_state = _load(db / "character_arc_state.json", {}) or {}
-    ensemble = _load(db / "群像档.json", {}) or {}
+    major = _load(db / "大势卡.json", None)
+    arc_state = _load(db / "character_arc_state.json", None)
+    ensemble = _load(db / "群像档.json", None)
+    if not isinstance(major, dict):
+        raise ValueError("大势卡.json 缺失或顶层无效")
+    if not isinstance(arc_state, dict):
+        raise ValueError("character_arc_state.json 缺失或顶层无效")
+    if not isinstance(ensemble, dict):
+        raise ValueError("群像档.json 缺失或顶层无效")
 
-    me_pairs = _me_ids_and_titles(major if isinstance(major, dict) else {})
+    me_pairs = _event_ids_and_titles(major)
     faction_names = derive_factions(
-        arc_state if isinstance(arc_state, dict) else {},
-        ensemble if isinstance(ensemble, dict) else {},
+        arc_state,
+        ensemble,
         explicit_factions)
-    prot_name, prot_info = _protagonist(arc_state if isinstance(arc_state, dict) else {})
+    prot_name, prot_info = _protagonist(arc_state)
 
     report = {
         "me_count": len(me_pairs),
@@ -290,11 +281,10 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
     # ---- 涟漪规则（增量合并·按 id 去重）----
     rules_doc = _load(rules_path, None)
     if not isinstance(rules_doc, dict):
-        rules_doc = {"_schema": "ripple_rules_v20_1", "schema_version": "v27",
-                     "ripple_rules": []}
+        raise ValueError("涟漪规则.json 缺失或顶层无效")
     existing = rules_doc.get("ripple_rules")
     if not isinstance(existing, list):
-        existing = []
+        raise ValueError("涟漪规则.ripple_rules 必须是 array")
     if force:
         existing = [r for r in existing if not (isinstance(r, dict) and r.get("_seeded_by") == _SEED_TAG)]
     existing_ids = {r.get("id") for r in existing if isinstance(r, dict)}
@@ -309,25 +299,18 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
     # ---- 世界状态（factions_state / protagonist_state / threads / consequence_tracker）----
     world = _load(world_path, None)
     if not isinstance(world, dict):
-        world = {"_schema": "world_state_v20_1", "schema_version": "v27"}
-    world.setdefault("current_world_time", {"ch": 0, "cluster": "cluster_001", "day": 1})
-    if "day" not in world["current_world_time"]:
-        world["current_world_time"]["day"] = 1
+        raise ValueError("世界状态.json 缺失或顶层无效")
+    current_time = world.get("current_world_time")
+    if not isinstance(current_time, dict) or not isinstance(current_time.get("day"), int):
+        raise ValueError("世界状态.current_world_time.day 必须是 int")
 
-    # consequence_tracker 必须是 dict（engine setdefault + 字符串键·list 会 TypeError）
-    ct = world.get("consequence_tracker")
-    if not isinstance(ct, dict):
-        if isinstance(ct, list) and ct:
-            # 非空 list（异常）：转 dict 保留数据，避免引擎崩
-            world["consequence_tracker"] = {f"_legacy_{i}": v for i, v in enumerate(ct)}
-        else:
-            world["consequence_tracker"] = {}
-        report["consequence_tracker_normalized"] = True
+    if not isinstance(world.get("consequence_tracker"), dict):
+        raise ValueError("世界状态.consequence_tracker 必须是 object")
 
     # factions_state（非空不覆盖·--force 清 seeded）
     fs = world.get("factions_state")
     if not isinstance(fs, dict):
-        fs = {}
+        raise ValueError("世界状态.factions_state 必须是 object")
     if force:
         fs = {k: v for k, v in fs.items()
               if not (isinstance(v, dict) and v.get("_seeded_by") == _SEED_TAG)}
@@ -340,11 +323,13 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
 
     # protagonist_state（仅当为空）
     ps = world.get("protagonist_state")
-    if not isinstance(ps, dict) or not ps or force:
+    if not isinstance(ps, dict):
+        raise ValueError("世界状态.protagonist_state 必须是 object")
+    if not ps or force:
         if prot_name:
             world["protagonist_state"] = {
                 "name": prot_name,
-                "arc_stage": prot_info.get("current_stage", ""),
+                "arc_stage": str(prot_info.get("current_stage_at_cluster", "")).split(":", 1)[-1],
                 "status": prot_info.get("status", "alive"),
                 "current_focus": "",
                 "_seeded_by": _SEED_TAG,
@@ -354,7 +339,7 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
     # active_npc_threads（按 npc_id 增量·--force 清 seeded）
     threads = world.get("active_npc_threads")
     if not isinstance(threads, list):
-        threads = []
+        raise ValueError("世界状态.active_npc_threads 必须是 array")
     if force:
         threads = [t for t in threads
                    if not (isinstance(t, dict) and t.get("_seeded_by") == _SEED_TAG)]
@@ -367,31 +352,42 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
             if m:
                 max_nt = max(max_nt, int(m.group(1)))
     new_threads = build_npc_threads(
-        arc_state if isinstance(arc_state, dict) else {}, prot_name, max_nt + 1)
+        arc_state, prot_name, max_nt + 1)
     for t in new_threads:
         if t["npc_id"] not in existing_npcs:
             threads.append(t)
             existing_npcs.add(t["npc_id"])
             report["threads_seeded"].append(t["npc_id"])
     world["active_npc_threads"] = threads
-    world.setdefault("emergent_opportunities", [])
+    if not isinstance(world.get("emergent_opportunities"), list):
+        raise ValueError("世界状态.emergent_opportunities 必须是 array")
 
-    # ---- reset ticks（一次性重放数据重建·new book 默认 off）----
+    # ---- reset ticks（显式重建世界演化账本）----
     if reset_ticks:
-        world["applied_ticks"] = []
+        world["applied_cluster_ticks"] = []
+        world["applied_minor_events"] = {}
+        world["applied_fate_events"] = {}
+        world["applied_cluster_state_deltas"] = {}
         world["world_ticks_log"] = []
-        # consequence_tracker 清空重建（逐章重放会重新落沉淀）
         world["consequence_tracker"] = {}
         report["ticks_reset"] = True
 
     # ---- 角色信念账本（per-character belief·辅助态文件·空骨架幂等播种·非 34 核心·像 locked_fact.json）----
     ledger_path = db / "character_belief_ledger.json"
     seed_ledger = not ledger_path.exists()
+    if not seed_ledger:
+        ledger = _load(ledger_path, None)
+        if not isinstance(ledger, dict):
+            raise ValueError("character_belief_ledger.json 顶层必须是 object")
     report["belief_ledger_seeded"] = seed_ledger
 
     # ---- 戏剧问题账本（PITQ/MDQ·辅助态文件·空骨架幂等播种·非 34 核心·像 character_belief_ledger.json）----
     dq_ledger_path = db / "戏剧问题账本.json"
     seed_dq_ledger = not dq_ledger_path.exists()
+    if not seed_dq_ledger:
+        dq_ledger = _load(dq_ledger_path, None)
+        if not isinstance(dq_ledger, dict):
+            raise ValueError("戏剧问题账本.json 顶层必须是 object")
     report["dramatic_question_ledger_seeded"] = seed_dq_ledger
 
     if dry_run:
@@ -410,26 +406,24 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
 def main() -> int:
     for _s in (sys.stdout, sys.stderr):
         if hasattr(_s, "reconfigure"):
-            try:
-                _s.reconfigure(encoding="utf-8", errors="replace")
-            except Exception:
-                pass
+            _s.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="世界演化初始条件幂等播种器（SYS-1/C02）")
     ap.add_argument("project")
     ap.add_argument("--factions", default="", help="显式核心阵营名（逗号分隔·≤3·覆盖派生）")
     ap.add_argument("--force", action="store_true", help="清掉本器播过的 _seeded_by 项重播")
     ap.add_argument("--reset-ticks", action="store_true",
-                    help="清 applied_ticks/world_ticks_log/consequence_tracker（一次性逐章重放前用）")
+                    help="清 cluster tick 与 consequence tracker，供显式 cluster 重放")
     ap.add_argument("--dry-run", action="store_true", help="只打印计划不写盘")
     args = ap.parse_args()
 
     explicit = [s.strip() for s in args.factions.split(",") if s.strip()]
-    r = seed(Path(args.project), explicit_factions=explicit, force=args.force,
-             reset_ticks=args.reset_ticks, dry_run=args.dry_run)
-    print(json.dumps(r, ensure_ascii=False, indent=2))
-    if r.get("error"):
-        print(f"[FATAL] {r['error']}", file=sys.stderr)
+    try:
+        r = seed(Path(args.project), explicit_factions=explicit, force=args.force,
+                 reset_ticks=args.reset_ticks, dry_run=args.dry_run)
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
         return 2
+    print(json.dumps(r, ensure_ascii=False, indent=2))
     return 0
 
 

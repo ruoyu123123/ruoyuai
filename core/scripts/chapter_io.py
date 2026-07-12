@@ -1,23 +1,13 @@
 """core/scripts/chapter_io.py
 
-章节文件统一读写模块 —— 正文/数据分离架构（v18）的地基。
-
-【为什么有这个模块】
-v17 及之前，章节 txt 文件 = 正文 + ---CHANGES_FACTUAL--- JSON + ---CHANGES_SELF_EVAL--- JSON
-混在一个文件。十几个脚本各自 split，口径不一，导致：
-  - validate_style 把 CHANGES JSON 当正文算 → 对话占比/字数虚高
-  - save_state split 分隔符与 writer 输出不一致 → 解析失败
-  - git commit 字数算错
-v18 起：正文 → 第NNN章.txt（纯正文），CHANGES → 第NNN章_changes.json（结构化）。
-所有读写章节正文/CHANGES 的脚本必须走本模块，禁止各自 split。
+章节格式层的统一读写模块。正文与 `self_eval` 分文件保存；客观状态不进入章节文件。
 
 【文件布局】（STRUCTURE.md 第三节 / 第十节）
   章节/第NNN章/第NNN章.txt          —— 纯正文
-  章节/第NNN章/第NNN章_changes.json —— {"factual": {...}, "self_eval": {...}}
+  章节/第NNN章/第NNN章_changes.json —— {"self_eval": {...}}
 
 【_changes.json schema】
   {
-    "factual":   { ... },     # 客观事实变更（锁定事实/伏笔/道具/角色...）
     "self_eval": {
       ...,                    # writer 的自评字段
       "waivers": [            # v19 顾问制：AI 对 advisory 检测项的豁免清单
@@ -56,21 +46,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atomic_json  # noqa: E402
 
-CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
-SELF_EVAL_SEP = "---CHANGES_SELF_EVAL---"
-END_MARKERS = ("---END_CHANGES_FACTUAL---", "---END_CHANGES_SELF_EVAL---", "---END---")
-
-
 # ============ 路径定位 ============
 
 def find_chapter_dir(project_root, ch: int):
-    """返回章节目录 Path（章节/第NNN章/），找不到返回 None。兼容 4 布局。"""
+    """返回标准章节目录 Path（章节/第NNN章/），找不到返回 None。"""
     root = Path(project_root)
-    for d in (root / "章节" / f"第{ch:03d}章", root / "章节" / f"第{ch}章",
-              root / f"第{ch:03d}章", root / f"第{ch}章"):
-        if d.is_dir():
-            return d
-    return None
+    directory = root / "章节" / f"第{ch:03d}章"
+    return directory if directory.is_dir() else None
 
 
 def body_path(project_root, ch: int) -> Path:
@@ -84,93 +66,34 @@ def changes_path(project_root, ch: int) -> Path:
 
 
 def find_body_file(project_root, ch: int):
-    """定位正文 txt（兼容 4 布局 + 平铺旧布局），找不到返回 None。"""
-    root = Path(project_root)
-    candidates = [
-        root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt",
-        root / "章节" / f"第{ch}章" / f"第{ch}章.txt",
-        root / f"第{ch:03d}章.txt",
-        root / f"第{ch}章.txt",
-    ]
-    for c in candidates:
-        if c.is_file():
-            return c
-    # rglob 兜底（排除归档 / 临时 / changes.json）
-    for pat in (f"第{ch:03d}章*.txt", f"第{ch}章*.txt"):
-        for f in sorted(root.rglob(pat)):
-            if ("_archive" not in f.parts and "_tmp" not in f.parts
-                    and not f.name.endswith("_changes.json")):
-                return f
-    return None
+    """定位标准正文文件，找不到返回 None。"""
+    path = body_path(project_root, ch)
+    return path if path.is_file() else None
 
 
 # ============ 读 ============
 
-def _strip_changes(text: str) -> str:
-    """从混合 txt 中剥离 CHANGES 段，返回纯正文。"""
-    for sep in CHANGES_SEPARATORS:
-        if sep in text:
-            return text.split(sep)[0].rstrip()
-    return text.rstrip()
-
-
 def read_body(project_root, ch: int) -> str:
-    """读纯正文。v18 已分离时直接读 txt；遇到旧混合 txt 自动剥离 CHANGES 段。"""
+    """读取标准章节正文。"""
     f = find_body_file(project_root, ch)
     if not f:
         raise FileNotFoundError(f"第{ch}章正文未找到: {project_root}")
-    return _strip_changes(f.read_text(encoding="utf-8"))
+    return f.read_text(encoding="utf-8").rstrip()
 
 
 def normalize_changes(data: dict) -> dict:
-    """统一 _changes.json schema —— v27 修复（feedback: schema 不统一是 P0 高频痛点）。
-
-    根因：gen_writer 走 gen-model（OpenAI 兼容协议），LLM 输出 changes 的顶层 key
-    不稳定，实战见过三种布局，每个 cluster 主代理都要手动转 schema：
-      A) 标准:           {"factual": {...}, "self_eval": {...}}
-      B) writer CHANGES: {"CHANGES": {...}, "ecas_metadata": {...}, "schema_version": ...}
-      C) 裸 factual:     {"word_count_cjk": ..., "foreshadowing_planted": [...], ...}
-    本函数把 B/C 归一到 A。读取端（read_changes）兜底 + 写入端（gen_writer）都调本函数，
-    两端规范化，杜绝下游 CHANGES_MISSING 误报 + waivers 读不到。"""
+    """把 writer changes 收口为唯一 `self_eval` 合同。"""
     if not isinstance(data, dict):
-        return {"factual": {}, "self_eval": {}}
-    # 布局 A：已规范（含 factual 或 self_eval 任一键即视为标准布局）
-    # 2026-05-30 北极星复审：setdefault 只在 key 缺失时生效——LLM（gen-model 自由产出）可能输出
-    # "self_eval": null / "factual": "n/a"（非 dict），setdefault 不矫正，下游 se.setdefault(...)
-    # 崩 AttributeError（且发生在 API 已花钱、draft 已写盘之后 → changes 永不落盘）。强制两键为 dict。
-    if "factual" in data or "self_eval" in data:
-        if not isinstance(data.get("factual"), dict):
-            data["factual"] = {}
-        if not isinstance(data.get("self_eval"), dict):
-            data["self_eval"] = {}
-        # 2026-06-02 修 HYBRID 布局：gen-model 常产 空 factual={} + 事实字段散在顶层
-        # （facts_locked/foreshadowing_planted/secrets_touched/...）。空 factual 触发 CHANGES_MISSING
-        # 误报（factual 落字但被 normalize 短路丢弃）。若 factual 空但顶层有已知事实字段 → 回填进 factual。
-        if not data["factual"]:
-            _fact_keys = ("facts_locked", "foreshadowing_planted", "foreshadowing_paid",
-                          "secrets_touched", "anchors_hit", "locked_facts",
-                          "world_state_changes", "relationship_changes", "item_changes",
-                          "knowledge_gained", "secret_status_changes", "travel_log_added")
-            recovered = {k: data[k] for k in _fact_keys if data.get(k)}
-            if recovered:
-                # facts_locked 归一到规范名 locked_facts（唯一权威名·消费方只认这个）
-                if "facts_locked" in recovered:
-                    recovered.setdefault("locked_facts", recovered.pop("facts_locked"))
-                data["factual"] = recovered
-        return data
-    # 弹出元字段
-    meta = data.pop("ecas_metadata", {}) if isinstance(data.get("ecas_metadata"), dict) else {}
-    sv = data.pop("schema_version", "v2.cluster")
-    # 布局 B：CHANGES 顶层 / 布局 C：裸 factual 字段在顶层
-    if isinstance(data.get("CHANGES"), dict):
-        factual = data["CHANGES"]
-    else:
-        factual = {k: v for k, v in data.items() if k != "CHANGES"}
-    return {
-        "schema_version": sv,
-        "factual": factual,
-        "self_eval": {"ecas_metadata": meta, "waivers": [], "uncertainty_flags": []},
-    }
+        return {"self_eval": {"waivers": [], "uncertainty_flags": []}}
+    self_eval = data.get("self_eval")
+    if not isinstance(self_eval, dict):
+        self_eval = {}
+    meta = data.get("ecas_metadata")
+    if isinstance(meta, dict) and "ecas_metadata" not in self_eval:
+        self_eval["ecas_metadata"] = meta
+    self_eval.setdefault("waivers", [])
+    self_eval.setdefault("uncertainty_flags", [])
+    return {"self_eval": self_eval}
 
 
 def read_changes(project_root, ch: int) -> dict:
@@ -185,9 +108,9 @@ def read_changes(project_root, ch: int) -> dict:
             # 🔴 2026-06-17 bug-hunt 修：损坏/空/半截 _changes.json 不崩——返回与缺文件同款
             # 兜底（Tolerant Reader 哲学）。原裸 json.loads 让 validate_chapter 等裸调 scanner
             # 整条审核管线 JSONDecodeError 退出非0。
-            return {"factual": {}, "self_eval": {}}
+            return {"self_eval": {"waivers": [], "uncertainty_flags": []}}
         return normalize_changes(data)
-    return {"factual": {}, "self_eval": {}}
+    return {"self_eval": {"waivers": [], "uncertainty_flags": []}}
 
 
 # ============ 写 ============
@@ -201,12 +124,8 @@ def write_body(project_root, ch: int, text: str) -> Path:
 
 
 def write_changes(project_root, ch: int, changes: dict) -> Path:
-    """写 CHANGES 到 _changes.json。changes 须含 factual / self_eval 键；
-    若传入裸 factual dict 则自动包装。"""
-    if "factual" not in changes and "self_eval" not in changes:
-        changes = {"factual": changes, "self_eval": {}}
-    changes.setdefault("factual", {})
-    changes.setdefault("self_eval", {})
+    """写唯一 `self_eval` changes 合同。"""
+    changes = normalize_changes(changes)
     p = changes_path(project_root, ch)
     # 2026-06-13 残余非原子写收编：半截 _changes.json → read_changes/audit_hub 解析崩。
     atomic_json.atomic_write_text(p, json.dumps(changes, ensure_ascii=False, indent=2))

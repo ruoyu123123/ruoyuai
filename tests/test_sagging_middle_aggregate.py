@@ -1,180 +1,250 @@
-# -*- coding: utf-8 -*-
-"""cross_cluster_sagging_middle_aggregate.py 单测（R7 Batch-D · 2026-06-20）。
+"""故事块中段塌陷聚合器测试。"""
 
-确定性·零依赖·零 LLM/零联网。覆盖：
-  ① _middle_slice 40-60% 区段
-  ② _has_drive_purpose / _cluster_has_drive 五选一推动 purpose
-  ③ detect_reversal_void / detect_stakes_flat / detect_purpose_void 三规则
-  ④ off / shadow / active CLI exit code
-  ⑤ needs_midpoint_bomb snapshot 字段
-  ⑥ 边界：cluster 太少跳过
-"""
+from __future__ import annotations
+
 import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+from cluster_summary_fixtures import cluster_record, write_cluster_summary
+
+_ROOT = Path(__file__).resolve().parent.parent
 _SCRIPTS = _ROOT / "core" / "scripts"
-sys.path.insert(0, str(_SCRIPTS))
-import cross_cluster_sagging_middle_aggregate as mod  # noqa: E402
-
 _TARGET = _SCRIPTS / "cross_cluster_sagging_middle_aggregate.py"
+_ENV = dict(os.environ, PYTHONIOENCODING="utf-8")
+
+sys.path.insert(0, str(_SCRIPTS))
+import cross_cluster_sagging_middle_aggregate as scanner  # noqa: E402
 
 
-def _utf8_env(**extra):
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-    env.update(extra)
-    return env
+def _cluster(
+    cluster_id: str,
+    *,
+    scenes: list[str] | None = None,
+    stress_new_total: float | None = None,
+    turn: float | None = None,
+    hook: float | None = None,
+    outcome: str = "neutral",
+) -> dict:
+    audit_summary: dict = {}
+    if turn is not None:
+        audit_summary["golden_three"] = {"turn": turn}
+    if hook is not None:
+        audit_summary["hook_strength"] = {"score": hook}
+    stress = (
+        {"new_total": stress_new_total}
+        if stress_new_total is not None
+        else {}
+    )
+    return cluster_record(
+        cluster_id,
+        scene_summaries=list(scenes or []),
+        stress=stress,
+        audit={"summary": audit_summary, "issues": [], "scanner_status": []},
+        outcome=outcome,
+    )
 
 
-def _mk_project(clusters):
-    proj = Path(tempfile.mkdtemp(prefix="sagging_"))
-    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
-    summary = {"schema_version": "v2.cluster", "clusters": clusters}
-    (proj / "_数据库" / "故事块摘要.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    return proj
+def _run(
+    project: Path, *args: str, mode: str = "shadow"
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(_TARGET), str(project), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**_ENV, "SAGGING_MIDDLE_MODE": mode},
+        timeout=120,
+    )
 
 
-def _cluster(cid, *, chapters=None, ch_range=(1, 3)):
-    """造 cluster 摘要·chapters 是 {ch_str: ChapterRecord} dict。"""
-    chs = chapters or {str(ch_range[0]): {}}
-    return {
-        "cluster_id": cid, "title": cid,
-        "chapter_range": list(ch_range),
-        "cluster_end_ch": ch_range[1],
-        "status": "done",
-        "chapters": chs,
+def _latest_report(project: Path) -> Path:
+    reports = [
+        path
+        for path in (project / "_数据库" / ".cross_cluster_scan").glob(
+            "sagging_middle_*.json"
+        )
+        if path.name != "sagging_middle_snapshot.json"
+    ]
+    return max(reports, key=lambda path: path.name)
+
+
+def test_middle_slice_takes_selected_sequence_40_to_60_percent() -> None:
+    clusters = [_cluster(f"cluster_{index:03d}") for index in range(1, 11)]
+    assert [record["cluster_id"] for record in scanner._middle_slice(clusters)] == [
+        "cluster_005", "cluster_006", "cluster_007"
+    ]
+
+
+def test_middle_slice_requires_five_clusters() -> None:
+    assert scanner._middle_slice([_cluster("cluster_001")]) == []
+
+
+def test_drive_purpose_comes_from_cluster_scene_summaries() -> None:
+    assert scanner._cluster_purpose_tags(_cluster(
+        "cluster_001", scenes=["主角揭露幕后真相，并作出抉择"]
+    )) == {"reveal", "decision"}
+    assert not scanner._cluster_has_drive(_cluster(
+        "cluster_001", scenes=["主角再次巡查同一条走廊"]
+    ))
+
+
+def test_reversal_void_reads_current_audit_summary() -> None:
+    middle = [
+        _cluster("cluster_001", scenes=["重复巡查"], turn=0.2, hook=0.3),
+        _cluster("cluster_002", scenes=["继续巡查"], turn=0.3, hook=0.2),
+    ]
+    result = scanner.detect_reversal_void(middle)
+    assert result["hit"] is True
+    assert result["turn_average"] == 0.25
+    assert result["hook_average"] == 0.25
+
+
+def test_reversal_void_is_cleared_by_strong_score_or_drive() -> None:
+    strong = [_cluster(
+        "cluster_001", scenes=["重复巡查"], turn=0.8, hook=0.9
+    )]
+    drive = [_cluster(
+        "cluster_001", scenes=["敌人身份反转"], turn=0.2, hook=0.2
+    )]
+    assert scanner.detect_reversal_void(strong)["hit"] is False
+    assert scanner.detect_reversal_void(drive)["hit"] is False
+
+
+def test_stakes_flat_uses_cluster_stress_and_scene_purposes() -> None:
+    middle = [
+        _cluster("cluster_001", scenes=["重复巡查"], stress_new_total=3, outcome="partial"),
+        _cluster("cluster_002", scenes=["继续巡查"], stress_new_total=3, outcome="partial"),
+        _cluster("cluster_003", scenes=["再次巡查"], stress_new_total=3, outcome="partial"),
+    ]
+    result = scanner.detect_stakes_flat(middle)
+    assert result["hit"] is True
+    assert result["stress_points"] == [
+        ("cluster_001", 3.0), ("cluster_002", 3.0), ("cluster_003", 3.0)
+    ]
+    assert result["purpose_tag_count"] == 0
+
+
+def test_stakes_flat_requires_complete_evidence_and_no_rise() -> None:
+    rising = [
+        _cluster("cluster_001", scenes=["重复巡查"], stress_new_total=1),
+        _cluster("cluster_002", scenes=["危机升级"], stress_new_total=4),
+        _cluster("cluster_003", scenes=["身份改变"], stress_new_total=7),
+    ]
+    incomplete = [
+        _cluster("cluster_001", scenes=["重复巡查"]),
+        _cluster("cluster_002", scenes=["继续巡查"]),
+        _cluster("cluster_003", scenes=["再次巡查"]),
+    ]
+    assert scanner.detect_stakes_flat(rising)["hit"] is False
+    assert scanner.detect_stakes_flat(incomplete)["hit"] is False
+
+
+def test_purpose_void_tracks_consecutive_clusters() -> None:
+    middle = [
+        _cluster("cluster_001", scenes=["重复巡查"]),
+        _cluster("cluster_002", scenes=["继续巡查"]),
+        _cluster("cluster_003", scenes=["再次巡查"]),
+    ]
+    result = scanner.detect_purpose_void(middle)
+    assert result == {
+        "hit": True,
+        "max_void_streak": 3,
+        "void_clusters": ["cluster_003"],
     }
 
 
-# ── 单元：_middle_slice ────────────────────────────────────
-def test_middle_slice_takes_40_to_60_pct():
-    clusters = [{"cluster_id": f"c{i}"} for i in range(10)]
-    middle = mod._middle_slice(clusters)
-    # 10 cluster · [4:7] = c4, c5, c6
-    assert [c["cluster_id"] for c in middle] == ["c4", "c5", "c6"]
-
-
-def test_middle_slice_too_short_returns_empty():
-    assert mod._middle_slice([{"cluster_id": "a"}] * 3) == []
-
-
-# ── 单元：_has_drive_purpose ───────────────────────────────
-def test_has_drive_purpose_via_scene_type():
-    assert mod._has_drive_purpose({"scene_type": "reveal_truth"}) is True
-    assert mod._has_drive_purpose({"scene_type": "fight_filler"}) is False
-
-
-def test_has_drive_purpose_via_turning_point():
-    assert mod._has_drive_purpose({"turning_point": "主角识破阴谋"}) is True
-
-
-def test_has_drive_purpose_via_beat_signal_hit():
-    assert mod._has_drive_purpose({"beat_signal_hit": True}) is True
-    assert mod._has_drive_purpose({"beat_signal_hit": False}) is False
-
-
-def test_has_drive_purpose_via_beats_addressed():
-    assert mod._has_drive_purpose({"beats_addressed": ["escalate"]}) is True
-    assert mod._has_drive_purpose({"beats_addressed": ["filler"]}) is False
-
-
-# ── 单元：detect_reversal_void ─────────────────────────────
-def test_reversal_void_triggers_on_low_scores_no_turns():
+def test_purpose_void_resets_on_drive_cluster() -> None:
     middle = [
-        _cluster("m1", chapters={"1": {"golden_scores": {"turn": 0.3}, "hook_score": 0.2}}),
-        _cluster("m2", chapters={"2": {"golden_scores": {"turn": 0.2}, "hook_score": 0.3}}),
+        _cluster("cluster_001", scenes=["重复巡查"]),
+        _cluster("cluster_002", scenes=["秘密揭晓"]),
+        _cluster("cluster_003", scenes=["继续巡查"]),
+        _cluster("cluster_004", scenes=["再次巡查"]),
     ]
-    rev = mod.detect_reversal_void(middle)
-    assert rev["hit"] is True
+    assert scanner.detect_purpose_void(middle)["hit"] is False
 
 
-def test_reversal_void_does_not_trigger_on_high_scores_with_turns():
-    middle = [
-        _cluster("m1", chapters={"1": {"golden_scores": {"turn": 0.9},
-                                       "hook_score": 0.9,
-                                       "turning_point": "X 反转"}}),
-        _cluster("m2", chapters={"2": {"golden_scores": {"turn": 0.8},
-                                       "hook_score": 0.7}}),
+def test_cli_shadow_writes_cluster_report_and_snapshot(tmp_path: Path) -> None:
+    records = [_cluster(
+        f"cluster_{index:03d}",
+        scenes=["重复巡查"],
+        stress_new_total=3,
+        turn=0.2,
+        hook=0.2,
+    ) for index in range(1, 11)]
+    write_cluster_summary(tmp_path, records)
+    result = _run(tmp_path)
+    assert result.returncode == 0
+    out_dir = tmp_path / "_数据库" / ".cross_cluster_scan"
+    report = json.loads(_latest_report(tmp_path).read_text(encoding="utf-8"))
+    snapshot = json.loads(
+        (out_dir / "sagging_middle_snapshot.json").read_text(encoding="utf-8")
+    )
+    assert report["clusters_scanned"] == [
+        f"cluster_{index:03d}" for index in range(1, 11)
     ]
-    rev = mod.detect_reversal_void(middle)
-    assert rev["hit"] is False
-
-
-# ── 单元：detect_stakes_flat ───────────────────────────────
-def test_stakes_flat_triggers_on_low_variety_no_rise():
-    middle = [
-        _cluster("m1", chapters={"1": {"stress_total": 3, "scene_type": "fight"}}),
-        _cluster("m2", chapters={"2": {"stress_total": 3, "scene_type": "fight"}}),
-        _cluster("m3", chapters={"3": {"stress_total": 3, "scene_type": "fight"}}),
+    assert report["middle_cluster_ids"] == [
+        "cluster_005", "cluster_006", "cluster_007"
     ]
-    sta = mod.detect_stakes_flat(middle)
-    assert sta["hit"] is True
+    assert snapshot["needs_midpoint_bomb"] is True
 
 
-def test_stakes_flat_does_not_trigger_when_rising():
-    middle = [
-        _cluster("m1", chapters={"1": {"stress_total": 1, "scene_type": "fight"}}),
-        _cluster("m2", chapters={"2": {"stress_total": 5, "scene_type": "reveal"}}),
-        _cluster("m3", chapters={"3": {"stress_total": 9, "scene_type": "decision"}}),
+def test_cli_active_returns_warning_for_multiple_signals(tmp_path: Path) -> None:
+    records = [_cluster(
+        f"cluster_{index:03d}",
+        scenes=["重复巡查"],
+        stress_new_total=3,
+        turn=0.2,
+        hook=0.2,
+    ) for index in range(1, 11)]
+    write_cluster_summary(tmp_path, records)
+    assert _run(tmp_path, mode="active").returncode == 2
+
+
+def test_cli_too_few_clusters_still_writes_required_outputs(tmp_path: Path) -> None:
+    write_cluster_summary(tmp_path, [_cluster("cluster_001")])
+    result = _run(tmp_path)
+    assert result.returncode == 0
+    report_path = _latest_report(tmp_path)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["middle_formed"] is False
+    assert report["findings"] == []
+
+
+def test_cli_missing_summary_is_fatal(tmp_path: Path) -> None:
+    result = _run(tmp_path)
+    assert result.returncode == 2
+    assert "[FATAL]" in result.stderr
+    assert "必需摘要账本不存在" in result.stderr
+
+
+def test_cli_rejects_chapter_payload_in_cluster_summary(tmp_path: Path) -> None:
+    path = write_cluster_summary(tmp_path, [_cluster("cluster_001")])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["clusters"][0]["chapters"] = {}
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 2
+    assert "含未知字段" in result.stderr
+    assert "chapters" in result.stderr
+
+
+def test_cli_last_n_is_cluster_window(tmp_path: Path) -> None:
+    records = [_cluster(f"cluster_{index:03d}") for index in range(1, 11)]
+    write_cluster_summary(tmp_path, records)
+    result = _run(tmp_path, "--last-n", "5")
+    assert result.returncode == 0
+    report_path = _latest_report(tmp_path)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["clusters_scanned"] == [
+        "cluster_006", "cluster_007", "cluster_008", "cluster_009", "cluster_010"
     ]
-    sta = mod.detect_stakes_flat(middle)
-    assert sta["hit"] is False
 
 
-# ── 单元：detect_purpose_void ──────────────────────────────
-def test_purpose_void_triggers_on_3_consecutive_empty():
-    middle = [
-        _cluster("m1", chapters={"1": {"scene_type": "filler"}}),
-        _cluster("m2", chapters={"2": {"scene_type": "filler"}}),
-        _cluster("m3", chapters={"3": {"scene_type": "filler"}}),
-    ]
-    pur = mod.detect_purpose_void(middle)
-    assert pur["hit"] is True
-    assert pur["max_void_streak"] >= 3
-
-
-def test_purpose_void_resets_on_drive_hit():
-    middle = [
-        _cluster("m1", chapters={"1": {"scene_type": "filler"}}),
-        _cluster("m2", chapters={"2": {"scene_type": "reveal"}}),
-        _cluster("m3", chapters={"3": {"scene_type": "filler"}}),
-        _cluster("m4", chapters={"4": {"scene_type": "filler"}}),
-    ]
-    pur = mod.detect_purpose_void(middle)
-    assert pur["hit"] is False  # 最长 streak = 2
-
-
-# ── CLI：shadow 模式 zero exit ────────────────────────────
-def test_cli_shadow_exits_zero():
-    clusters = [_cluster(f"c{i}", ch_range=(i, i)) for i in range(10)]
-    proj = _mk_project(clusters)
-    env = _utf8_env(SAGGING_MIDDLE_MODE="shadow")
-    r = subprocess.run([sys.executable, str(_TARGET), str(proj)],
-                       capture_output=True, text=True, env=env, encoding="utf-8")
-    assert r.returncode == 0
-    snap = proj / "_数据库" / ".cross_chapter_scan" / "sagging_middle_snapshot.json"
-    assert snap.exists()
-    snap_data = json.loads(snap.read_text(encoding="utf-8"))
-    assert "needs_midpoint_bomb" in snap_data
-
-
-# ── CLI：cluster 太少 skip ──────────────────────────────
-def test_cli_too_few_clusters_skip():
-    proj = _mk_project([_cluster("c1")])
-    r = subprocess.run([sys.executable, str(_TARGET), str(proj)],
-                       capture_output=True, text=True, env=_utf8_env(), encoding="utf-8")
-    assert r.returncode == 0
-
-
-# ── CLI：off 模式 ──────────────────────────────────────
-def test_cli_off_mode():
-    proj = _mk_project([_cluster(f"c{i}", ch_range=(i, i)) for i in range(10)])
-    env = _utf8_env(SAGGING_MIDDLE_MODE="off")
-    r = subprocess.run([sys.executable, str(_TARGET), str(proj)],
-                       capture_output=True, text=True, env=env, encoding="utf-8")
-    assert r.returncode == 0
+def test_cli_off_mode_does_not_require_summary(tmp_path: Path) -> None:
+    result = _run(tmp_path, mode="off")
+    assert result.returncode == 0
+    assert "SAGGING_MIDDLE_MODE=off" in result.stdout

@@ -1,216 +1,163 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""cross_cluster_reader_retention_proxy_aggregate.py — 完读率反向代理
-(R18 W7 Batch-U·P2 · cross-cluster shadow aggregate)
+"""用 cluster 钩子、节律、结尾与长度合成留存代理指标。"""
 
-【缺口·2026-06-21·番茄完读率公开数据 + 起点新书期攻略 + Kindle Direct
-Publishing 留存数据 + Webnovel platform locked chapters】
-
-读者完读率(retention curve)是网文平台最权威的留存指标·但是事后数据。
-本 aggregate 用 4 个已有 cluster 级指标合成 retention proxy 反向工艺指标：
-
-  R = w1·hook_strength_norm + w2·(1-sagging_middle) + w3·cliffhanger_quota
-      + w4·section_word_count_health
-
-权重(默认 0.35 / 0.25 / 0.25 / 0.15)。
-
-【与既有 scanner 显式去重】
-  - W6 cross_cluster_engagement_metrics_aggregate(章级 hook trend)
-    本 aggregate = retention 综合代理(覆盖 hook + sagging + cliffhanger + 长度)·
-    正交输出。
-  - cross_cluster_sagging_middle / cross_cluster_engagement_metrics
-    是本 aggregate 的输入·不是替代品。
-
-【北极星⑤】顾问非法官·全 advisory·env READER_RETENTION_PROXY_MODE
-  RETENTION_PROXY_LOW 绝不 hard_gate·shadow 默认。
-
-用法: python cross_cluster_reader_retention_proxy_aggregate.py <project> [--last-n 10]
-"""
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # noqa: E402
+import cross_cluster_engagement_metrics_aggregate as engagement  # noqa: E402
+import cross_cluster_sagging_middle_aggregate as sagging  # noqa: E402
+
+
 ISSUE_CODE = "RETENTION_PROXY_LOW"
-
-DEFAULT_WEIGHTS = {"hook": 0.35, "sagging": 0.25,
-                   "cliffhanger": 0.25, "length": 0.15}
-
-# proxy 警示阈值
+DEFAULT_WEIGHTS = {
+    "hook": 0.35,
+    "sagging": 0.25,
+    "cliffhanger": 0.25,
+    "length": 0.15,
+}
 RETENTION_LOW_FLOOR = 0.45
+CLUSTER_CJK_RANGE = (10_000, 25_000)
 
 
 def _mode() -> str:
-    m = (os.environ.get("READER_RETENTION_PROXY_MODE") or "shadow").strip().lower()
-    return m if m in ("off", "shadow", "active") else "shadow"
+    mode = (os.environ.get("READER_RETENTION_PROXY_MODE") or "shadow").strip().lower()
+    return mode if mode in {"off", "shadow", "active"} else "shadow"
 
 
-def _read_latest(scan_dir: Path, prefix: str):
-    if not scan_dir.exists():
-        return None
-    files = sorted(scan_dir.glob(f"{prefix}_*.json"))
-    if not files:
-        return None
-    try:
-        return json.loads(files[-1].read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+def _normalize_hook(score: float) -> float:
+    value = score if score <= 1.0 else score / 10.0
+    return max(0.0, min(1.0, value))
 
 
-def _list_chapters(project_root: Path):
-    chs = []
-    if (project_root / "章节").exists():
-        for d in (project_root / "章节").glob("第*章"):
-            m = re.match(r"第(\d+)章", d.name)
-            if m:
-                chs.append(int(m.group(1)))
-    return sorted(chs)
+def _hook_score(records: list[dict]) -> float:
+    scores = engagement.collect_cluster_metrics(records)["hook"]
+    if not scores:
+        raise csr.ClusterSummaryError("留存代理缺少 cluster hook_strength 遥测")
+    return sum(_normalize_hook(score) for _, score in scores) / len(scores)
 
 
-def _hook_score(scan_dir):
-    """从 engagement_metrics 最近报告读 hook 均值 (0-10 → 0-1)。"""
-    r = _read_latest(scan_dir, "engagement_metrics")
-    if not r:
-        return 0.5
-    # 找 hook 类 finding
-    scores = r.get("scores_collected") or {}
-    hk = scores.get("hook")
-    findings = r.get("findings") or []
-    decline = sum(1 for f in findings
-                  if (f.get("code") or "").startswith("HOOK"))
-    base = 0.7 - 0.1 * decline
-    return max(0.0, min(1.0, base))
+def _sagging_score(records: list[dict]) -> float:
+    report = sagging.build_report(records, mode="shadow")
+    weighted_hits = (
+        report["summary"]["advisory"]
+        + report["summary"]["warning"] * 2
+    )
+    return max(0.0, 1.0 - min(1.0, weighted_hits * 0.2))
 
 
-def _sagging_score(scan_dir):
-    """从 sagging_middle 报告·findings 数量越多分越低。"""
-    r = _read_latest(scan_dir, "sagging_middle")
-    if not r:
-        return 0.5
-    fnd = r.get("findings") or r.get("summary") or {}
-    if isinstance(fnd, dict):
-        n_findings = fnd.get("advisory", 0) + fnd.get("warning", 0) * 2
-    elif isinstance(fnd, list):
-        n_findings = len(fnd)
-    else:
-        n_findings = 0
-    # 分=1-饱和(n_findings·0.15)
-    return max(0.0, 1.0 - min(0.9, n_findings * 0.15))
+def _cliffhanger_score(records: list[dict]) -> float:
+    endings = engagement.collect_ending_types(records)
+    if not endings:
+        raise csr.ClusterSummaryError("留存代理缺少 cluster ending_type")
+    cliff_count = sum(
+        1 for _, ending_type in endings if engagement._is_cliffhanger(ending_type)
+    )
+    ratio_score = 1.0 - cliff_count / len(endings)
+    findings = engagement.scan_cliffhanger_quota(endings)
+    streak_penalty = 0.2 if any(
+        finding.get("metric") == "consecutive_cliffhanger_streak"
+        for finding in findings
+    ) else 0.0
+    return max(0.0, ratio_score - streak_penalty)
 
 
-def _cliffhanger_score(scan_dir):
-    """从 engagement_metrics findings 里 cliffhanger quota 类。"""
-    r = _read_latest(scan_dir, "engagement_metrics")
-    if not r:
-        return 0.5
-    findings = r.get("findings") or []
-    bad = sum(1 for f in findings if "CLIFFHANGER" in (f.get("code") or ""))
-    return max(0.0, 1.0 - bad * 0.15)
+def _length_health(records: list[dict]) -> float:
+    low, high = CLUSTER_CJK_RANGE
+    healthy = sum(low <= record["word_count"] <= high for record in records)
+    return healthy / len(records)
 
 
-def _length_health(project_root, chapters, last_n):
-    """章字数集中度·过短过长拉低。"""
-    if not chapters:
-        return 0.5
-    sample = chapters[-last_n:]
-    lengths = []
-    for ch in sample:
-        cdir = project_root / "章节" / f"第{ch:03d}章"
-        if not cdir.exists():
-            cdir = project_root / "章节" / f"第{ch}章"
-        if not cdir.exists():
-            continue
-        for fn in ("body.txt", "正文.txt"):
-            p = cdir / fn
-            if p.exists():
-                try:
-                    body = p.read_text(encoding="utf-8")
-                except OSError:
-                    continue
-                cjk = sum(1 for c in body if "一" <= c <= "鿿")
-                lengths.append(cjk)
-                break
-    if not lengths:
-        return 0.5
-    # 3000-4500 健康
-    ok = sum(1 for L in lengths if 3000 <= L <= 4500)
-    return ok / len(lengths)
+def aggregate(records: list[dict], weights: dict | None = None) -> tuple[dict, list[dict]]:
+    if not records:
+        raise csr.ClusterSummaryError("故事块摘要没有已完成 cluster")
+    selected_weights = weights or DEFAULT_WEIGHTS
+    if set(selected_weights) != set(DEFAULT_WEIGHTS):
+        raise ValueError(f"weights 必须完整包含 {sorted(DEFAULT_WEIGHTS)}")
 
-
-def aggregate(project_root: Path, last_n: int = 10, weights=None):
-    weights = weights or DEFAULT_WEIGHTS
-    scan_dir = project_root / "_数据库" / ".cross_chapter_scan"
-    chapters = _list_chapters(project_root)
-    if not chapters:
-        return None, []
-
-    h = _hook_score(scan_dir)
-    s = _sagging_score(scan_dir)
-    c = _cliffhanger_score(scan_dir)
-    L = _length_health(project_root, chapters, last_n)
-
-    proxy = (weights["hook"] * h + weights["sagging"] * s
-             + weights["cliffhanger"] * c + weights["length"] * L)
-
+    hook = _hook_score(records)
+    sagging_inverse = _sagging_score(records)
+    cliffhanger = _cliffhanger_score(records)
+    length = _length_health(records)
+    proxy = (
+        selected_weights["hook"] * hook
+        + selected_weights["sagging"] * sagging_inverse
+        + selected_weights["cliffhanger"] * cliffhanger
+        + selected_weights["length"] * length
+    )
     summary = {
-        "chapters_examined": chapters[-last_n:],
-        "hook_norm": round(h, 3),
-        "sagging_inverse": round(s, 3),
-        "cliffhanger": round(c, 3),
-        "length_health": round(L, 3),
+        "clusters_examined": [str(record["cluster_id"]) for record in records],
+        "hook_norm": round(hook, 3),
+        "sagging_inverse": round(sagging_inverse, 3),
+        "cliffhanger": round(cliffhanger, 3),
+        "length_health": round(length, 3),
         "retention_proxy": round(proxy, 3),
-        "weights": weights,
+        "weights": selected_weights,
     }
     findings = []
     if proxy < RETENTION_LOW_FLOOR:
         findings.append({
             "severity": "advisory",
+            "gate_level": "advisory",
             "code": ISSUE_CODE,
-            "suggestion": (f"retention proxy {round(proxy,3)} < {RETENTION_LOW_FLOOR}·"
-                           f"hook={summary['hook_norm']} sagging_inv={summary['sagging_inverse']} "
-                           f"cliff={summary['cliffhanger']} length={summary['length_health']}·"
-                           f"建议优先修最低维度"),
+            "suggestion": (
+                f"retention proxy {proxy:.3f} < {RETENTION_LOW_FLOOR}；"
+                "优先改善得分最低的 cluster 维度"
+            ),
             "metrics": summary,
         })
     return summary, findings
 
 
-def main():
-    ap = argparse.ArgumentParser(
-        description="reader retention proxy · cross-cluster shadow")
-    ap.add_argument("project")
-    ap.add_argument("--last-n", type=int, default=10)
-    args = ap.parse_args()
+def build_report(project_root: Path, last_n: int | None = None) -> dict:
+    records = csr.get_clusters(project_root, last_n=last_n)
+    summary, findings = aggregate(records)
+    return {
+        "scan_type": "reader_retention_proxy",
+        "scan_ts": datetime.now().isoformat(timespec="seconds"),
+        "clusters_scanned": summary["clusters_examined"],
+        "gate_level": "advisory",
+        "summary": summary,
+        "findings": findings,
+    }
 
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="cluster 留存代理")
+    parser.add_argument("project")
+    parser.add_argument("--last-n", type=int, default=None)
+    args = parser.parse_args()
     mode = _mode()
-    project_root = Path(args.project).resolve()
     if mode == "off":
         print("[SKIP] READER_RETENTION_PROXY_MODE=off")
-        sys.exit(0)
+        return 0
 
-    summary, findings = aggregate(project_root, args.last_n)
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report = {
-        "scan_type": "reader_retention_proxy",
-        "scan_ts": ts, "mode": mode,
-        "gate_level": "advisory",
-        "summary": summary, "findings": findings,
-    }
-    out_path = out_dir / f"reader_retention_proxy_{ts}.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2),
-                        encoding="utf-8")
-    print(f"[reader_retention_proxy] findings={len(findings)} → {out_path}")
+    project_root = Path(args.project).resolve()
+    try:
+        report = build_report(project_root, args.last_n)
+        out_dir = project_root / "_数据库" / ".cross_cluster_scan"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        out_path = out_dir / f"reader_retention_proxy_{stamp}.json"
+        out_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except (OSError, ValueError, csr.ClusterSummaryError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
+
+    print(f"[reader_retention_proxy] findings={len(report['findings'])} → {out_path}")
     if mode == "shadow":
-        sys.exit(0)
-    sys.exit(1 if findings else 0)
+        return 0
+    return 1 if report["findings"] else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -52,13 +52,17 @@ def parse_rule_window(rule_text: str, default_n: int = 3) -> int:
 
 
 def get_applied_type_history(summaries: list, key: str) -> list[Optional[str]]:
-    """从 故事块摘要 chapters 列表抽取历史 applied_*_type。
-    summaries 是 list of dict（已经 transform 过 dict→list 的格式）。
-    """
+    """从 cluster 摘要记录抽取实际开头或结尾类型。"""
     out = []
     for s in summaries:
-        applied = s.get("applied_style", {}) or {}
-        out.append(applied.get(key))
+        truth = s.get("truth_check") if isinstance(s, dict) else {}
+        truth = truth if isinstance(truth, dict) else {}
+        if key == "opening_type":
+            out.append(truth.get("detected_opening_type"))
+        elif key == "ending_type":
+            out.append(s.get("ending_type") or truth.get("detected_ending_type"))
+        else:
+            out.append(None)
     return out
 
 
@@ -266,14 +270,11 @@ def build_directive(project_root: Path, chapter: int) -> dict:
 
     db = project_root / "_数据库"
     style = load_json(db / "作者风格.json", {})
-    # 2026-05-30 北极星复审：v2 账本 clusters[].chapters{} 拍平 + 兼容旧顶层/dict（原读恒空、反重复历史失效）
     _ss_doc = load_json(db / "故事块摘要.json", {})
-    summaries = [c for c in (_ss_doc.get("chapters") or []) if isinstance(c, dict)]
-    for _c in _ss_doc.get("clusters", []) or []:
-        if isinstance(_c, dict):
-            for _k, _r in (_c.get("chapters") or {}).items():
-                if isinstance(_r, dict):
-                    summaries.append({**_r, "ch": int(_k) if str(_k).isdigit() else _r.get("ch", 0)})
+    summaries = [
+        row for row in (_ss_doc.get("clusters") or [])
+        if isinstance(row, dict)
+    ] if isinstance(_ss_doc, dict) else []
     _progress = load_json(db / "进度.json", {})
     cluster_blueprints = []
     # 2026-05-29 复审复修 SC-1：blueprint 可能是 list（城南实测），先归一成 dict 再迭代。
@@ -314,12 +315,8 @@ def build_directive(project_root: Path, chapter: int) -> dict:
 
     # 3) 取历史 applied_style（前 N-1 章）
     recent_summaries = summaries[-max(opening_window, ending_window):] if summaries else []
-    recent_opening = [
-        s.get("applied_style", {}).get("opening_type") for s in recent_summaries
-    ]
-    recent_ending = [
-        s.get("applied_style", {}).get("ending_type") for s in recent_summaries
-    ]
+    recent_opening = get_applied_type_history(recent_summaries, "opening_type")
+    recent_ending = get_applied_type_history(recent_summaries, "ending_type")
     # 同时把 故事块摘要 里历史的 tone/hooks 当弱信号也参考
     recent_opening_clean = [x for x in recent_opening if x]
     recent_ending_clean = [x for x in recent_ending if x]

@@ -1,4 +1,4 @@
-"""卷=阶段触发点 · cluster=小走向 涌现引擎回归测试（v28 · 2026-06-03）。
+"""卷阶段与故事块小走向的涌现引擎回归测试。
 
 钉死「单 cluster 塌缩成整副本/整阶段」根治后的三条契约：
   1. _me_volume —— ME 卷号解析（显式 volume / 'ME-V2-03' id / None 兜底）。
@@ -7,7 +7,7 @@
   3. emerge_next_cluster 硬过滤 —— 核心任务(本卷)未解前只在【当前卷】内涌现小走向，
      绝不跳到下一卷/新副本；本卷只剩 volume_finale → 置 volume_transition_hint（提示·不硬切）。
 
-北极星边界：仍是顾问——advisory 是建议非硬锁，无 volume 标记的旧项目 ME 不参与过滤（向后兼容）。
+北极星边界：advisory 只提供建议，不替用户选择走向。
 """
 import json
 import sys
@@ -31,11 +31,11 @@ def test_me_volume_str_digit():
 
 def test_me_volume_from_id_pattern():
     assert cee._me_volume({"id": "ME-V2-03"}) == 2      # 大写 V
-    assert cee._me_volume({"me_id": "ME-v4-09"}) == 4   # 小写 v
+    assert cee._me_volume({"id": "ME-v4-09"}) == 4      # 小写 v
 
 
 def test_me_volume_none_when_no_marker():
-    """无 volume 字段且 id 无 V 标记 → None（不参与卷过滤·向后兼容旧项目）。"""
+    """无 volume 字段且 id 无 V 标记时无法确定卷号。"""
     assert cee._me_volume({"id": "ME_001"}) is None
     assert cee._me_volume({}) is None
 

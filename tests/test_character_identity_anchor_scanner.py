@@ -325,7 +325,8 @@ def test_apply_archive_passes_new_fields_only_on_new_card():
     db = Path(tempfile.mkdtemp()) / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
     new_char = {
-        "id": "C_MAN", "name": "小蛮", "tier": "core", "first_ch": 1, "new": True,
+        "id": "C_MAN", "name": "小蛮", "tier": "core",
+        "first_cluster": "cluster_001", "new": True,
         "recognition_anchors": [{"anchor": "左脸刀疤", "position_or_scene": "左脸颧骨"}],
         "negative_facts": ["不会武功"],
         "state_changes": [],
@@ -359,9 +360,6 @@ def test_agent_contracts_mention_a7_fields():
     voice = (_ROOT / ".claude" / "agents" / "novel-voice-checker.md").read_text(encoding="utf-8")
     assert "negative_facts" in voice
     assert "pov_violation" in voice
-    distill = (_ROOT / ".claude" / "commands" / "distill-character.md").read_text(encoding="utf-8")
-    assert "recognition_anchors" in distill
-    assert "negative_facts" in distill
 
 
 def test_cli_exits_one_when_active_warning():

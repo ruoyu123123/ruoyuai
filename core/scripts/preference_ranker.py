@@ -99,7 +99,7 @@ def _keyword_set(text: str) -> frozenset:
 
 def candidate_text(candidate: dict) -> str:
     """候选可供关键词比对的文本面：scope_summary + stakes_delta（两者都是 LLM 自由文本，
-    schema 见 gen_creative.py 的 major_events_pool 契约 + cluster_emergence_engine.me_to_cluster_brief）。"""
+    schema 见 gen_creative.py 的 major_events 契约 + cluster_emergence_engine.me_to_cluster_brief）。"""
     if not isinstance(candidate, dict):
         return ""
     parts = [str(candidate.get("scope_summary") or ""), str(candidate.get("stakes_delta") or "")]

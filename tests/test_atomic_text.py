@@ -167,13 +167,14 @@ def test_chapter_io_write_body_atomic_and_content_unchanged():
 
 
 def test_chapter_io_write_changes_atomic_valid_json():
-    """write_changes：裸 factual 自动包装行为不变 + 合法 JSON + 无 tmp 残留。"""
+    """write_changes 只落 self_eval 合同 + 合法 JSON + 无 tmp 残留。"""
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        p = cio.write_changes(root, 3, {"locked_facts": ["规则会还价"]})
+        p = cio.write_changes(root, 3, {"self_eval": {"waivers": []},
+                                        "factual": {"locked_facts": ["禁止落盘"]}})
         data = json.loads(p.read_text(encoding="utf-8"))
-        assert data["factual"] == {"locked_facts": ["规则会还价"]}
-        assert data["self_eval"] == {}
+        assert set(data) == {"self_eval"}
+        assert data["self_eval"]["waivers"] == []
         _no_stray_tmp(root)
 
 

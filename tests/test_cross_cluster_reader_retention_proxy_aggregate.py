@@ -1,174 +1,152 @@
-# -*- coding: utf-8 -*-
-"""cross_cluster_reader_retention_proxy_aggregate R18 W7 Batch-U·P2 完读率代理回归。
+"""故事块留存代理聚合器测试。"""
 
-确定性·零依赖。覆盖 off 退出/无章节早返/默认权重/proxy 高 PASS/proxy 低报警/
-_hook_score 兜底/_sagging_score 兜底/_cliffhanger_score 兜底/_length_health/
-aggregate API/CLI mode shadow 0 退出·registry 未污染 hard_gate_codes。
-"""
+from __future__ import annotations
+
 import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+import pytest
+
+from cluster_summary_fixtures import cluster_record, write_cluster_summary
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
-sys.path.insert(0, str(_SCRIPTS))
-import cross_cluster_reader_retention_proxy_aggregate as mod  # noqa: E402
-
 _TARGET = _SCRIPTS / "cross_cluster_reader_retention_proxy_aggregate.py"
 _ENV = "READER_RETENTION_PROXY_MODE"
 
-
-def _set_mode(m):
-    if m is None:
-        os.environ.pop(_ENV, None)
-    else:
-        os.environ[_ENV] = m
+sys.path.insert(0, str(_SCRIPTS))
+import cluster_summary_reader as csr  # noqa: E402
+import cross_cluster_reader_retention_proxy_aggregate as scanner  # noqa: E402
 
 
-def _mk_project(chapters=None, prior_findings=None):
-    proj = Path(tempfile.mkdtemp())
-    (proj / "章节").mkdir(parents=True, exist_ok=True)
-    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
-    chapters = chapters or {}
-    for ch, body in chapters.items():
-        d = proj / "章节" / f"第{ch:03d}章"
-        d.mkdir(exist_ok=True)
-        # 字数对齐 3000-4500 健康区
-        (d / "body.txt").write_text(body, encoding="utf-8")
-    if prior_findings:
-        sd = proj / "_数据库" / ".cross_chapter_scan"
-        sd.mkdir(parents=True, exist_ok=True)
-        for prefix, payload in prior_findings.items():
-            (sd / f"{prefix}_20260621_000000.json").write_text(
-                json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    return proj
-
-
-_GOOD_BODY = "字" * 3500  # 健康区
-_SHORT_BODY = "字" * 1500
-
-
-def test_mode_default_shadow():
-    bak = os.environ.get(_ENV)
-    try:
-        _set_mode(None)
-        assert mod._mode() == "shadow"
-    finally:
-        _set_mode(bak)
-
-
-def test_no_chapters_returns_none():
-    proj = _mk_project()
-    s, f = mod.aggregate(proj)
-    assert s is None
-    assert f == []
-
-
-def test_default_weights_used():
-    proj = _mk_project({1: _GOOD_BODY, 2: _GOOD_BODY, 3: _GOOD_BODY})
-    s, f = mod.aggregate(proj)
-    assert s["weights"]["hook"] == 0.35
-    assert "retention_proxy" in s
-    # 健康章 + 无 finding → proxy 应较高
-    assert s["retention_proxy"] > 0.3
-
-
-def test_low_proxy_triggers_warn():
-    """所有维度都拉低 → proxy < 0.45 报。"""
-    findings_payload = {
-        "engagement_metrics": {
-            "scores_collected": {"hook": [1, 2, 3]},
-            "findings": [
-                {"code": "HOOK_DECLINE", "severity": "warning"},
-                {"code": "HOOK_DECLINE", "severity": "warning"},
-                {"code": "CLIFFHANGER_QUOTA_OFF", "severity": "warning"},
-                {"code": "CLIFFHANGER_QUOTA_OFF", "severity": "warning"},
-                {"code": "CLIFFHANGER_QUOTA_OFF", "severity": "warning"},
-                {"code": "CLIFFHANGER_QUOTA_OFF", "severity": "warning"},
-                {"code": "CLIFFHANGER_QUOTA_OFF", "severity": "warning"},
-            ],
+def _record(
+    index: int,
+    *,
+    hook: float = 0.8,
+    ending_type: str = "场景收束",
+    word_count: int = 12_000,
+    scenes: list[str] | None = None,
+    stress: float = 3,
+) -> dict:
+    return cluster_record(
+        f"cluster_{index:03d}",
+        audit={
+            "summary": {"hook_strength": {"score": hook}},
+            "issues": [],
+            "scanner_status": [],
         },
-        "sagging_middle": {
-            "summary": {"advisory": 5, "warning": 3},
-            "findings": [],
-        },
-    }
-    proj = _mk_project({1: _SHORT_BODY, 2: _SHORT_BODY, 3: _SHORT_BODY},
-                       prior_findings=findings_payload)
-    s, f = mod.aggregate(proj)
-    assert s["retention_proxy"] < 0.45
-    assert len(f) >= 1
-    assert f[0]["code"] == mod.ISSUE_CODE
-    assert f[0]["severity"] == "advisory"
+        ending_type=ending_type,
+        word_count=word_count,
+        scene_summaries=list(scenes or ["主角作出抉择并推动局势升级"]),
+        stress={"new_total": stress},
+    )
 
 
-def test_hook_score_no_history():
-    sd = Path(tempfile.mkdtemp())
-    assert mod._hook_score(sd) == 0.5
+def _run(project: Path, *args: str, mode: str = "shadow") -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(_TARGET), str(project), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, _ENV: mode, "PYTHONIOENCODING": "utf-8"},
+        timeout=120,
+    )
 
 
-def test_sagging_score_no_history():
-    sd = Path(tempfile.mkdtemp())
-    assert mod._sagging_score(sd) == 0.5
+def test_mode_defaults_to_shadow(monkeypatch) -> None:
+    monkeypatch.delenv(_ENV, raising=False)
+    assert scanner._mode() == "shadow"
 
 
-def test_cliffhanger_score_no_history():
-    sd = Path(tempfile.mkdtemp())
-    assert mod._cliffhanger_score(sd) == 0.5
+def test_high_quality_cluster_sequence_scores_above_floor() -> None:
+    records = [_record(index) for index in range(1, 5)]
+    summary, findings = scanner.aggregate(records)
+    assert summary["clusters_examined"] == [
+        "cluster_001", "cluster_002", "cluster_003", "cluster_004"
+    ]
+    assert summary["hook_norm"] == 0.8
+    assert summary["length_health"] == 1.0
+    assert summary["retention_proxy"] > scanner.RETENTION_LOW_FLOOR
+    assert findings == []
 
 
-def test_length_health_no_chapters():
-    proj = _mk_project()
-    assert mod._length_health(proj, [], 5) == 0.5
+def test_low_cluster_signals_trigger_advisory() -> None:
+    records = [
+        _record(
+            index,
+            hook=0.1,
+            ending_type="悬念断章",
+            word_count=4_000,
+            scenes=["主角继续重复巡查"],
+            stress=3,
+        )
+        for index in range(1, 11)
+    ]
+    summary, findings = scanner.aggregate(records)
+    assert summary["retention_proxy"] < scanner.RETENTION_LOW_FLOOR
+    assert summary["sagging_inverse"] < 1.0
+    assert summary["cliffhanger"] == 0.0
+    assert findings[0]["code"] == scanner.ISSUE_CODE
+    assert findings[0]["gate_level"] == "advisory"
 
 
-def test_length_health_full_healthy():
-    proj = _mk_project({1: _GOOD_BODY, 2: _GOOD_BODY})
-    h = mod._length_health(proj, [1, 2], 5)
-    assert h == 1.0
+def test_hook_score_normalizes_ten_point_scale() -> None:
+    records = [_record(1, hook=8.0), _record(2, hook=6.0)]
+    assert scanner._hook_score(records) == pytest.approx(0.7)
 
 
-def test_length_health_full_short():
-    proj = _mk_project({1: _SHORT_BODY, 2: _SHORT_BODY})
-    h = mod._length_health(proj, [1, 2], 5)
-    assert h == 0.0
+def test_missing_hook_telemetry_is_fatal() -> None:
+    record = _record(1)
+    record["audit"] = {"summary": {}, "issues": [], "scanner_status": []}
+    with pytest.raises(csr.ClusterSummaryError, match="hook_strength"):
+        scanner.aggregate([record])
 
 
-def test_list_chapters_sorted():
-    proj = _mk_project({3: "x", 1: "y", 2: "z"})
-    chs = mod._list_chapters(proj)
-    assert chs == [1, 2, 3]
+def test_missing_ending_type_is_fatal() -> None:
+    record = _record(1, ending_type="")
+    with pytest.raises(csr.ClusterSummaryError, match="ending_type"):
+        scanner.aggregate([record])
 
 
-def test_read_latest_missing_dir():
-    sd = Path(tempfile.mkdtemp()) / "noexist"
-    assert mod._read_latest(sd, "x") is None
+def test_length_health_uses_cluster_word_count() -> None:
+    records = [_record(1, word_count=10_000), _record(2, word_count=25_000),
+               _record(3, word_count=9_999), _record(4, word_count=25_001)]
+    assert scanner._length_health(records) == 0.5
 
 
-def test_code_not_in_hard_gate():
-    rg = _SCRIPTS / "scanner_registry.json"
-    reg = json.loads(rg.read_text(encoding="utf-8"))
-    hgs = set(reg.get("hard_gate_codes", []))
-    assert mod.ISSUE_CODE not in hgs
+def test_weights_contract_is_strict() -> None:
+    with pytest.raises(ValueError, match="weights 必须完整包含"):
+        scanner.aggregate([_record(1)], {"hook": 1.0})
 
 
-def test_main_cli_shadow_exit_zero():
-    proj = _mk_project({1: _GOOD_BODY})
-    r = subprocess.run(
-        [sys.executable, str(_TARGET), str(proj), "--last-n", "5"],
-        capture_output=True, text=True, encoding="utf-8",
-        env={**os.environ, _ENV: "shadow", "PYTHONIOENCODING": "utf-8"})
-    assert r.returncode == 0, r.stderr
+def test_cli_shadow_writes_cluster_report_and_honors_window(tmp_path: Path) -> None:
+    write_cluster_summary(tmp_path, [_record(index) for index in range(1, 5)])
+    result = _run(tmp_path, "--last-n", "2")
+    assert result.returncode == 0, result.stderr
+    reports = sorted((tmp_path / "_数据库" / ".cross_cluster_scan").glob(
+        "reader_retention_proxy_*.json"
+    ))
+    report = json.loads(reports[-1].read_text(encoding="utf-8"))
+    assert report["clusters_scanned"] == ["cluster_003", "cluster_004"]
+    assert report["summary"]["clusters_examined"] == ["cluster_003", "cluster_004"]
 
 
-def test_main_cli_off_skip():
-    proj = _mk_project({1: _GOOD_BODY})
-    r = subprocess.run(
-        [sys.executable, str(_TARGET), str(proj)],
-        capture_output=True, text=True, encoding="utf-8",
-        env={**os.environ, _ENV: "off", "PYTHONIOENCODING": "utf-8"})
-    assert r.returncode == 0
-    assert "SKIP" in r.stdout
+def test_cli_missing_summary_is_fatal(tmp_path: Path) -> None:
+    result = _run(tmp_path)
+    assert result.returncode == 2
+    assert "必需摘要账本不存在" in result.stderr
+
+
+def test_cli_off_does_not_require_summary(tmp_path: Path) -> None:
+    result = _run(tmp_path, mode="off")
+    assert result.returncode == 0
+    assert "SKIP" in result.stdout
+
+
+def test_issue_is_not_hard_gate() -> None:
+    registry = json.loads((_SCRIPTS / "scanner_registry.json").read_text(encoding="utf-8"))
+    assert scanner.ISSUE_CODE not in set(registry.get("hard_gate_codes", []))

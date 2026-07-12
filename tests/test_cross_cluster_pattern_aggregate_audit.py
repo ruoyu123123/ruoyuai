@@ -23,6 +23,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import cross_cluster_pattern_aggregate as m  # noqa: E402
+from cluster_summary_fixtures import cluster_record, write_cluster_summary
 
 
 # ===== Bug L225: scan_dialogue_tags 去硬编码姓氏 =====
@@ -102,42 +103,44 @@ def test_stream_flat_regex_subject_action_anchor():
 # ===== Bug L695: Finding 6 suggestion 主角名 f-string 化（端到端·驱动 main()） =====
 
 def _build_project(root: Path, protagonist: str) -> Path:
-    """造最小磁盘模式项目：人物卡(主角名) + 一章触发 PARA_FIRST_WORD_CONCENTRATION。"""
+    """造 canonical 故事块摘要并触发段首集中建议。"""
     proj = root / "测试书"
     (proj / "_数据库").mkdir(parents=True)
-    (proj / "章节" / "第001章").mkdir(parents=True)
     (proj / "_数据库" / "人物卡.json").write_text(
         json.dumps({"characters": [{"name": protagonist, "role": "主角"}]}, ensure_ascii=False),
         encoding="utf-8",
     )
-    # 10 段同首二字 + 3 段他首 → top1 占比 ~77% >= 0.35 触发 Finding 6
-    lines = [f"{protagonist}走进房间看了一眼。" for _ in range(10)] + \
-            ["门外传来脚步声响。" for _ in range(3)]
-    (proj / "章节" / "第001章" / "第001章.txt").write_text("\n".join(lines), encoding="utf-8")
+    write_cluster_summary(proj, [cluster_record(
+        pattern_metrics={"para_first_word_top1_pct": 0.77},
+        char_mention_counts={protagonist: 13},
+    )])
     return proj
 
 
 def _run_aggregate(proj: Path) -> list[dict]:
-    """以磁盘模式跑 main()（清 CLUSTER_MODE 防误入账本分支），返回报告 findings。"""
+    """跑 cluster-native CLI 并返回最新报告。"""
     env = dict(os.environ)
-    env.pop("CLUSTER_MODE", None)
     env["PYTHONIOENCODING"] = "utf-8"
     subprocess.run(
         [sys.executable, str(_ROOT / "core" / "scripts" / "cross_cluster_pattern_aggregate.py"),
          str(proj), "--last-n", "5"],
         capture_output=True, text=True, encoding="utf-8", env=env,
     )
-    scan_dir = proj / "_数据库" / ".cross_chapter_scan"
+    scan_dir = proj / "_数据库" / ".cross_cluster_scan"
     reports = sorted(scan_dir.glob("*.json")) if scan_dir.exists() else []
     assert reports, "scanner 未产出报告 JSON（main 可能异常退出）"
-    return json.loads(reports[-1].read_text(encoding="utf-8")).get("findings", [])
+    return json.loads(reports[-1].read_text(encoding="utf-8"))
 
 
 def test_finding6_suggestion_uses_real_protagonist_not_hardcoded():
     """非 demo 主角（江条款）的书：Finding 6 建议文案应含真实主角名、不得出现硬编码「陆衍」。"""
     with tempfile.TemporaryDirectory() as d:
         proj = _build_project(Path(d), "江条款")
-        findings = _run_aggregate(proj)
+        report = _run_aggregate(proj)
+        assert report["clusters_scanned"] == ["cluster_001"]
+        assert "per_cluster" in report
+        assert "per_chapter" not in report
+        findings = report["findings"]
         f6 = [f for f in findings if f.get("code") == "PARA_FIRST_WORD_CONCENTRATION"]
         assert f6, "未触发 PARA_FIRST_WORD_CONCENTRATION（fixture 未生效）"
         sug = f6[0]["suggestion"]

@@ -61,13 +61,13 @@ def test_authorized_per_char_skipped():
 
 def test_valence_negative_when_lex_negative():
     text = "黑老大残忍冷血暴虐狰狞凶狠嗜血贪婪阴险" * 5
-    v = mod.compute_cluster_valence(text, ["黑老大"])
+    v = mod.compute_cluster_valence_detail(text, ["黑老大"])["valence"]
     assert v < 0
 
 
 def test_valence_positive_when_lex_positive():
     text = "黑老大温柔善良怜悯悔恨懊悔释然微笑温暖宽恕理解" * 5
-    v = mod.compute_cluster_valence(text, ["黑老大"])
+    v = mod.compute_cluster_valence_detail(text, ["黑老大"])["valence"]
     assert v > 0
 
 

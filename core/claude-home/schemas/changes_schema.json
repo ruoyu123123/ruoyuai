@@ -1,497 +1,51 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ruoyuai.changes.v21",
-  "title": "cluster changes 与 per-chapter changes 共用 schema",
-  "description": "writer 在 cluster 级产出 changes，splitter 按物理章节平铺；两者共用本 schema。",
+  "$id": "ruoyuai.cluster-writer-self-eval.v29",
+  "title": "Cluster Writer Self-Evaluation",
+  "description": "writer 在 cluster 级只产创作自评、豁免与确定性写作遥测；客观状态由 archive 和 cluster_state_delta 承载。",
   "type": "object",
-  "required": [
-    "self_eval"
-  ],
+  "additionalProperties": false,
+  "required": ["self_eval"],
   "properties": {
-    "factual": {
-      "type": "object",
-      "description": "可选的确定性状态增量。writer 不填写；客观状态以 novel-archivist 生成的 archive.json 和 apply_archive.py 回库结果为权威。",
-      "properties": {
-        "locked_facts": {
-          "type": "array",
-          "description": "本章发生的不可逆事实（人物死亡/物件获得/秘密揭穿）",
-          "items": {
-            "type": "object",
-            "required": [
-              "fact",
-              "involved"
-            ],
-            "properties": {
-              "fact": {
-                "type": "string",
-                "maxLength": 200
-              },
-              "involved": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "category": {
-                "type": "string",
-                "enum": [
-                  "event",
-                  "knowledge",
-                  "death",
-                  "item_acquire",
-                  "secret_reveal",
-                  "relationship_pivot",
-                  "other"
-                ]
-              }
-            }
-          }
-        },
-        "relationships": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "from",
-              "to"
-            ],
-            "properties": {
-              "from": {
-                "type": "string"
-              },
-              "to": {
-                "type": "string"
-              },
-              "affinity": {
-                "type": "integer",
-                "minimum": -10,
-                "maximum": 10
-              },
-              "trust": {
-                "type": "integer",
-                "minimum": -10,
-                "maximum": 10
-              },
-              "fear": {
-                "type": "integer",
-                "minimum": -10,
-                "maximum": 10
-              },
-              "respect": {
-                "type": "integer",
-                "minimum": -10,
-                "maximum": 10
-              },
-              "delta_reason": {
-                "type": "string",
-                "maxLength": 120
-              }
-            }
-          }
-        },
-        "items": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "holder": {
-                "type": "string"
-              },
-              "new_holder": {
-                "type": "string"
-              },
-              "action": {
-                "type": "string",
-                "enum": [
-                  "acquire",
-                  "lose",
-                  "transfer",
-                  "destroy",
-                  "use",
-                  "discover"
-                ]
-              }
-            }
-          }
-        },
-        "fate_events_triggered": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "event_id"
-            ],
-            "properties": {
-              "event_id": {
-                "type": "string",
-                "pattern": "^[\\w.-]*ME[\\w.-]*$",
-                "description": "大势 ME 标识。2026-05-30 北极星③契约修复（三重背离之三）：旧版 ^ME_\\d+$ 只认 ME_001，但真实项目大势卡 ME 用 me_id 如 V1_ME_001 / ME-V1-01（build_manifest 经 fate_engine._event_id 透传真实 id 给 writer，writer 原样回填）→ 旧 pattern 必校验失败。放宽为兼容 ME_001 / V1_ME_001 / ME-V1-01 三套真实格式，让 fate_engine.update 能按 writer 回填的真实 id 命中 ME 池。理由：透传真实 id 比强制 writer 改写 id 更不干涉模型（北极星⑤）+ 不丢失卷号信息。"
-              },
-              "completion": {
-                "type": "string",
-                "enum": [
-                  "full",
-                  "partial"
-                ]
-              },
-              "evidence": {
-                "type": "string",
-                "maxLength": 200
-              },
-              "physical_evidence_matched": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "foreshadowing_paid": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "fs_id": {
-                "type": "string"
-              },
-              "evidence_paragraph": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "world_state_consumption": {
-          "type": "object",
-          "properties": {
-            "thread_responded": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "emergent_opportunities_consumed": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "faction_behavior_aligned": {
-              "type": "boolean"
-            }
-          }
-        },
-        "clocks_addressed": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "clock_id"
-            ],
-            "properties": {
-              "clock_id": {
-                "type": "string",
-                "pattern": "^CK_\\d+$"
-              },
-              "method": {
-                "type": "string",
-                "enum": [
-                  "环境暗示",
-                  "对话暗示",
-                  "主角焦虑",
-                  "动作描写"
-                ]
-              },
-              "evidence": {
-                "type": "string",
-                "maxLength": 80
-              }
-            }
-          }
-        },
-        "aspects_addressed": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "aspect_id": {
-                "type": "string"
-              },
-              "method": {
-                "type": "string"
-              },
-              "evidence": {
-                "type": "string",
-                "maxLength": 80
-              }
-            }
-          }
-        },
-        "heart_events_revealed": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "event_id": {
-                "type": "string",
-                "pattern": "^HE_"
-              },
-              "evidence_appeared": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "throughline_progress": {
-          "type": "object",
-          "properties": {
-            "OS": {
-              "type": "string"
-            },
-            "MC": {
-              "type": "string"
-            },
-            "IC": {
-              "type": "string"
-            },
-            "RS": {
-              "type": "string"
-            }
-          }
-        },
-        "fate_dice_consumed": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "chapter_hub": {
-          "type": "object",
-          "properties": {
-            "hub_id": {
-              "type": "string"
-            },
-            "role": {
-              "type": "string",
-              "enum": [
-                "depart",
-                "quest",
-                "return",
-                "idle"
-              ]
-            }
-          }
-        },
-        "_declarative_block_doc": "2026-05-29 复审修复（M18）：以下为声明式增量字段，由 declarative_data_update.py 消费（factual 段读法对齐 SC-4）。与上方 relationships（绝对值快照 {from,to,affinity/trust/fear/respect}）不同，relationship_changes 是单字段增量 {from,to,field,delta}，两者并存不冲突。",
-        "relationship_changes": {
-          "type": "array",
-          "description": "声明式关系增量。declarative_data_update.update_relationships 读 {from,to,field,delta}：对 关系.json relationships[*].{affinity/trust/fear/respect} 做 += delta。",
-          "items": {
-            "type": "object",
-            "required": [
-              "from",
-              "to",
-              "field",
-              "delta"
-            ],
-            "properties": {
-              "from": {
-                "type": "string"
-              },
-              "to": {
-                "type": "string"
-              },
-              "field": {
-                "type": "string",
-                "enum": [
-                  "affinity",
-                  "trust",
-                  "fear",
-                  "respect"
-                ]
-              },
-              "delta": {
-                "type": "integer"
-              },
-              "trigger": {
-                "type": "string",
-                "maxLength": 120
-              }
-            }
-          }
-        },
-        "faction_standing_changes": {
-          "type": "array",
-          "description": "声明式阵营声望增量。declarative_data_update.update_faction_standings 读 {factions,delta}：对 关系.json faction_standings[key] 做 += delta。",
-          "items": {
-            "type": "object",
-            "required": [
-              "factions",
-              "delta"
-            ],
-            "properties": {
-              "factions": {
-                "type": "string"
-              },
-              "delta": {
-                "type": "integer"
-              },
-              "trigger": {
-                "type": "string",
-                "maxLength": 120
-              }
-            }
-          }
-        },
-        "event_triggers": {
-          "type": "array",
-          "description": "声明式事件触发。declarative_data_update.update_events 读 {event_id,note}：把 事件表.json pending_events 里对应事件移到 triggered_events。",
-          "items": {
-            "type": "object",
-            "required": [
-              "event_id"
-            ],
-            "properties": {
-              "event_id": {
-                "type": "string"
-              },
-              "note": {
-                "type": "string",
-                "maxLength": 200
-              }
-            }
-          }
-        },
-        "travel_log_added": {
-          "type": "array",
-          "description": "声明式移动日志。declarative_data_update.update_travel_log 读 {character,from,to,time}：append 到 地图.json travel_log[]。",
-          "items": {
-            "type": "object",
-            "required": [
-              "character"
-            ],
-            "properties": {
-              "character": {
-                "type": "string"
-              },
-              "from": {
-                "type": "string"
-              },
-              "to": {
-                "type": "string"
-              },
-              "time": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "secret_status_changes": {
-          "type": "array",
-          "description": "声明式秘密状态变更。declarative_data_update.update_secrets 读 {secret_id,new_status}：改 伏笔表.json secrets[*].status。",
-          "items": {
-            "type": "object",
-            "required": [
-              "secret_id",
-              "new_status"
-            ],
-            "properties": {
-              "secret_id": {
-                "type": "string"
-              },
-              "new_status": {
-                "type": "string"
-              },
-              "trigger": {
-                "type": "string",
-                "maxLength": 120
-              }
-            }
-          }
-        },
-        "knowledge_gained": {
-          "type": "array",
-          "description": "声明式知识获得。declarative_data_update.update_knowledge 读 {character,fact}：append 到 人物卡.json characters[*].knowledge.knows，并从 will_learn 移除。",
-          "items": {
-            "type": "object",
-            "required": [
-              "character",
-              "fact"
-            ],
-            "properties": {
-              "character": {
-                "type": "string"
-              },
-              "fact": {
-                "type": "string"
-              }
-            }
-          }
-        }
-      }
-    },
     "self_eval": {
       "type": "object",
-      "description": "本章 writer 自评 + 应用风格 + 豁免说明",
+      "additionalProperties": false,
+      "required": ["waivers"],
       "properties": {
         "applied_style": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "ending_type": {
-              "type": "string"
-            },
-            "applied_rules": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
+            "ending_type": {"type": "string"},
+            "applied_rules": {"type": "array", "items": {"type": "string"}}
           }
         },
         "waivers": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": [
-              "code",
-              "reason"
-            ],
+            "additionalProperties": false,
+            "required": ["code", "reason"],
             "properties": {
-              "code": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string",
-                "maxLength": 100
-              }
+              "code": {"type": "string"},
+              "reason": {"type": "string", "maxLength": 300}
             }
           }
+        },
+        "uncertainty_flags": {
+          "type": "array",
+          "items": {"type": "string"}
         },
         "moves_used": {
           "type": "array",
           "items": {
             "type": "object",
+            "additionalProperties": false,
+            "required": ["character", "move_id", "instances"],
             "properties": {
-              "character": {
-                "type": "string"
-              },
-              "move_id": {
-                "type": "string",
-                "pattern": "^MV_"
-              },
-              "instances": {
-                "type": "integer",
-                "minimum": 1
-              }
+              "character": {"type": "string"},
+              "move_id": {"type": "string", "pattern": "^MV_"},
+              "instances": {"type": "integer", "minimum": 1}
             }
           }
         },
@@ -499,148 +53,68 @@
           "type": "array",
           "items": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
-              "action_summary": {
-                "type": "string"
-              },
-              "evaluated_position": {
-                "type": "string",
-                "enum": [
-                  "controlled",
-                  "risky",
-                  "desperate"
-                ]
-              },
-              "evaluated_effect": {
-                "type": "string",
-                "enum": [
-                  "great",
-                  "standard",
-                  "limited"
-                ]
-              },
-              "evaluated_reason": {
-                "type": "string"
-              }
+              "action_summary": {"type": "string"},
+              "evaluated_position": {"type": "string", "enum": ["controlled", "risky", "desperate"]},
+              "evaluated_effect": {"type": "string", "enum": ["great", "standard", "limited"]},
+              "evaluated_reason": {"type": "string"}
             }
           }
         },
         "stress_evaluation_self": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "estimated_stress_change": {
-              "type": "string"
-            },
-            "violations_made": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "alignments_made": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "coping_behaviors_used": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
+            "estimated_stress_change": {"type": "string"},
+            "violations_made": {"type": "array", "items": {"type": "string"}},
+            "alignments_made": {"type": "array", "items": {"type": "string"}},
+            "coping_behaviors_used": {"type": "array", "items": {"type": "string"}}
           }
         },
         "storyteller_alignment": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "target_outcome_followed": {
-              "type": "string",
-              "enum": [
-                "setback",
-                "win",
-                "auto"
-              ]
-            },
-            "actual_outcome": {
-              "type": "string",
-              "enum": [
-                "setback",
-                "win",
-                "neutral"
-              ]
-            },
-            "phase_alignment_evidence": {
-              "type": "string"
-            }
+            "target_outcome_followed": {"type": "string", "enum": ["setback", "win", "auto"]},
+            "actual_outcome": {"type": "string", "enum": ["setback", "win", "neutral"]},
+            "phase_alignment_evidence": {"type": "string"}
           }
         },
         "mckee_truby_alignment": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "desire_pursued_this_ch": {
-              "type": "string"
-            },
-            "need_glimpsed_this_ch": {
-              "type": "string"
-            },
-            "ghost_triggered": {
-              "type": "boolean"
-            },
-            "moral_argument_advanced": {
-              "type": "boolean"
-            }
+            "desire_pursued_this_ch": {"type": "string"},
+            "need_glimpsed_this_ch": {"type": "string"},
+            "ghost_triggered": {"type": "boolean"},
+            "moral_argument_advanced": {"type": "boolean"}
           }
         },
         "offscreen_actions_executed": {
           "type": "array",
-          "description": "2026-05-29 复审修复（M18）：声明式幕后行动执行清单。offscreen_update.py 读 self_eval.offscreen_actions_executed 的 {character,action_index,completed_fully}：completed_fully=true 时把 人物卡.json characters[*].offscreen.actions[action_index] 标 done。",
           "items": {
             "type": "object",
-            "required": [
-              "character",
-              "action_index"
-            ],
+            "additionalProperties": false,
+            "required": ["character", "action_index", "completed_fully"],
             "properties": {
-              "character": {
-                "type": "string"
-              },
-              "action_index": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "completed_fully": {
-                "type": "boolean"
-              }
+              "character": {"type": "string"},
+              "action_index": {"type": "integer", "minimum": 0},
+              "completed_fully": {"type": "boolean"}
             }
           }
-        }
-      }
-    },
-    "ecas_metadata": {
-      "type": "object",
-      "description": "cluster 与物理章节映射元数据",
-      "properties": {
-        "cluster_id": {
-          "type": "string",
-          "pattern": "^cluster_[0-9]{3}[a-z]?$",
-          "description": "本章所属 cluster ID"
         },
-        "cluster_position": {
-          "type": "string",
-          "enum": [
-            "head",
-            "mid",
-            "tail",
-            "solo"
-          ],
-          "description": "本章在 cluster 内的位置 (head=首章/mid=中间/tail=末章/solo=单章 cluster)"
-        },
-        "cluster_total_chapters": {
-          "type": "integer"
-        },
-        "cluster_word_total": {
-          "type": "integer"
+        "ecas_metadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "cluster_id": {"type": "string", "pattern": "^cluster_[0-9]{3,}$"},
+            "writer_mode": {"const": "claude_draft_gemini_polish_v29"},
+            "chapter_count_decided_by_splitter": {"const": true},
+            "word_count_cjk": {"type": "integer", "minimum": 0},
+            "paragraph_count": {"type": "integer", "minimum": 0},
+            "polish": {"type": ["array", "object"]}
+          }
         }
       }
     }

@@ -132,12 +132,12 @@ def _make_project(tmp: Path) -> Path:
         ],
     }, ensure_ascii=False), encoding="utf-8")
 
-    # 关系：林越→周校长 含暗议程（reveal_cluster=009·未到）+ note（明面·用单数 note 字段验 bug 修复）
+    # 关系：林越→周校长含尚未揭示的暗议程与明面备注。
     (db / "关系.json").write_text(json.dumps({
         "relationships": [
             {"from": "林越", "to": "周校长", "type": "师徒",
              "affinity": 8, "trust": 5, "fear": 0, "respect": 6,
-             "note": SURFACE_NOTE,
+             "surface_note": SURFACE_NOTE,
              "hidden_intent": REL_HIDDEN_INTENT, "reveal_cluster": "cluster_009",
              "hidden_note": REL_HIDDEN_NOTE, "hidden_note_reveal_cluster": "cluster_009"},
         ],
@@ -171,6 +171,17 @@ def _make_project(tmp: Path) -> Path:
 
     # 大势卡：vol 1 终局画面（早期 cluster 应降精）+ volume_arc（始终给）
     (db / "大势卡.json").write_text(json.dumps({
+        "major_events": [
+            {
+                "id": "ME-V1-01",
+                "title": "发现地下室",
+                "status": "pending",
+                "volume": 1,
+                "prerequisites": [],
+                "expected_window_after": None,
+                "is_volume_finale": True,
+            }
+        ],
         "volumes": [
             {"vol": 1, "final_image": ANCHOR_FINAL_IMAGE, "volume_arc": VOLUME_ARC,
              "core_conflict": "对抗校长揭开真相", "key_milestones": ["发现地下室"]},
@@ -238,7 +249,7 @@ def test_unit_relationship_hidden_and_default_safe():
     out2 = bm._sanitize_relationship(rel, "cluster_009")
     assert out2.get("hidden_intent") == REL_HIDDEN_INTENT and "reveal_directive" in out2
     # 默认安全闸：无 hidden_* → 原样
-    plain = {"from": "A", "to": "B", "type": "朋友", "note": "普通", "affinity": 3}
+    plain = {"from": "A", "to": "B", "type": "朋友", "surface_note": "普通", "affinity": 3}
     assert bm._sanitize_relationship(plain, "cluster_001") == plain
 
 
@@ -271,9 +282,6 @@ def test_unit_clock_offscreen_fate():
     assert bm._sanitize_clock_to_writer(ck_full)["trigger_on_max"] == CLOCK_TRIGGER
     # visible_to_writer=True → 含
     assert bm._sanitize_clock_to_writer(dict(ck, visible_to_writer=True))["trigger_on_max"] == CLOCK_TRIGGER
-    # 缺字段 → 默认 True 向后兼容（含）
-    ck_legacy = {"label": "L", "ticks": 1, "max": 4, "trigger_on_max": CLOCK_TRIGGER}
-    assert bm._sanitize_clock_to_writer(ck_legacy)["trigger_on_max"] == CLOCK_TRIGGER
 
     # offscreen：剥未来结果/幕后意图·留 visible action
     osd = {"character": "周校长", "action": OFFSCREEN_ACTION, "result_expected": OFFSCREEN_RESULT,
@@ -350,8 +358,7 @@ def test_manifest_relationships_note_bug_fixed_and_isolated():
         rels = m["active_relationships"]
         assert rels, "出场角色关系应注入"
         r = rels[0]
-        # note/notes 字段名 bug：单数 note 也被读到 surface_note（旧代码只读 notes 会丢）
-        assert r["surface_note"] == SURFACE_NOTE, "单数 note 字段应被读取（bug 修复）"
+        assert r["surface_note"] == SURFACE_NOTE
         assert "hidden_intent" not in r and "hidden_note" not in r
         assert r["type"] == "师徒"
 

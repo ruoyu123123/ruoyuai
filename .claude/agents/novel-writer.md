@@ -96,7 +96,7 @@ RESEARCH_REF: <_数据库/.research_cache/...>
 }
 ```
 
-只承载创作期自评 + waivers；**不得自报角色/道具/关系/locked_facts/伏笔等 factual 状态**。
+只承载创作期自评、豁免和确定性遥测；不得输出任何客观状态字段。
 
 ### 4. 调用 gemini 分段润色（step 2b）
 

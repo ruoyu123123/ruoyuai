@@ -1,14 +1,4 @@
-"""cross_cluster_foreshadow_rhythm_aggregate.py — 伏笔跨章节奏扫（CCR20）
-
-读 _数据库/伏笔表.json 中所有 promises（v27 权威键 · 兼容旧 foreshadowings/items），对照已写章节：
-
-- FORESHADOW_OVERDUE：due_by（绝对章号）< 当前章 但未 resolved
-- FORESHADOW_NO_REINFORCEMENT：initiated 后 ≥ 5 章无任何铺垫（reinforced_chs[] 为空且 due_by 还有 ≥ 3 章）
-- FORESHADOW_OVER_REINFORCEMENT：reinforced_chs[] ≥ 8 但 paid_at_ch=null（读者疲劳）
-- FORESHADOW_NEVER_INITIATED：伏笔 declared 但 initiated_at_ch=null 已 ≥ 10 章
-
-退出码: 0 健康 / 1 advisory / 2 warning
-"""
+"""按故事块检查伏笔的设置、推进与回收节奏。"""
 
 from __future__ import annotations
 
@@ -19,201 +9,219 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
-sys.path.insert(0, str(Path(__file__).parent))
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
+_CLUSTER_RE = re.compile(r"^cluster_(\d{3,})$")
+_ACTIVE_STATUSES = frozenset({"open", "suspended", "consumed"})
+_PROGRESS_THRESHOLD = 5
+_OVER_REINFORCEMENT_THRESHOLD = 8
+
+
+class ForeshadowContractError(ValueError):
+    """伏笔表不符合当前故事块合同。"""
+
+
+def _read_json(path: Path) -> dict:
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ForeshadowContractError(f"无法读取伏笔表: {path}") from exc
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raise ForeshadowContractError(f"伏笔表必须是 UTF-8 无 BOM: {path}")
+    try:
+        value = json.loads(raw.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ForeshadowContractError(f"伏笔表不是合法 UTF-8 JSON: {path}") from exc
+    if not isinstance(value, dict):
+        raise ForeshadowContractError("伏笔表顶层必须是 object")
+    return value
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    args = ap.parse_args()
+def _cluster_number(value: object, field: str) -> int:
+    if not isinstance(value, str):
+        raise ForeshadowContractError(f"{field} 必须是 cluster_id")
+    match = _CLUSTER_RE.fullmatch(value)
+    if not match:
+        raise ForeshadowContractError(f"{field} 不是规范 cluster_id: {value!r}")
+    return int(match.group(1))
 
-    project_root = Path(args.project)
-    fs_path = project_root / "_数据库" / "伏笔表.json"
-    if not fs_path.exists():
-        print("[SKIP] 伏笔表.json 不存在")
-        sys.exit(0)
-    data = load_json(fs_path, {})
-    # v27 伏笔表权威键是 promises（兼容旧 foreshadowings/items）。
-    # 与 templates/subsystem_skeletons.json + foreshadowing_handoff_scanner.py 真 schema 对齐。
-    fss = data.get("promises") or data.get("foreshadowings") or data.get("items") or []
-    if not fss:
-        print("[SKIP] 伏笔表为空")
-        sys.exit(0)
 
-    # 当前已写最大章
-    # 2026-05-29 cluster 化（轻改造）：伏笔表.json 仍是权威来源（保留），cluster 模式
-    # 仅把 cur_ch 锚点改用末 cluster 的 chapter_range[1]，避免回退逐章 glob 文件夹。
-    # 另可选叠加账本 foreshadow_planted/paid 作为已落账增量（账本无则纯走伏笔表）。
-    cur_ch = 0
-    ledger_planted = set()
-    ledger_paid = set()
-    ledger_reinforced: dict = {}
-    if csr.is_cluster_mode():
-        clusters = csr.get_clusters(project_root)
-        for c in clusters:
-            cr = c.get("chapter_range")
-            end = c.get("cluster_end_ch")
-            if isinstance(cr, list) and len(cr) >= 2 and isinstance(cr[1], int):
-                cur_ch = max(cur_ch, cr[1])
-            elif isinstance(end, int):
-                cur_ch = max(cur_ch, end)
-            for fid in c.get("foreshadow_planted") or []:
-                ledger_planted.add(fid)
-            for fid in c.get("foreshadow_paid") or []:
-                ledger_paid.add(fid)
-            # 账本聚合 reinforced（cluster_summary_reader 文档：foreshadow_reinforced={fid:[ch]}）。
-            # 非 cluster 模式不进此分支 → ledger_reinforced 留空 → reinforced 退回伏笔表自带字段。
-            fr = c.get("foreshadow_reinforced") or {}
-            if isinstance(fr, dict):
-                for fid, chs in fr.items():
-                    ledger_reinforced.setdefault(fid, []).extend(chs or [])
-    if not cur_ch:
-        chapters = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                          for d in (project_root / "章节").glob("第*章")
-                          if re.match(r"第(\d+)章", d.name))
-        cur_ch = chapters[-1] if chapters else 0
-    if not cur_ch:
-        print("[SKIP] 无已写章节")
-        sys.exit(0)
-
-    findings = []
-    for fs in fss:
-        if not isinstance(fs, dict):
-            continue
-        fid = fs.get("id") or fs.get("name", "?")
-        # v27 promises: setup_cluster(int 或 'cluster_00X')→起始章；兼容旧 initiated_at_ch
-        initiated = fs.get("initiated_at_ch") or fs.get("set_at_ch") or 0
-        if not initiated:
-            _sc = fs.get("setup_cluster")
-            if _sc is not None:
-                _rng = csr.cluster_id_to_range(project_root, _sc) if hasattr(csr, "cluster_id_to_range") else None
-                if not _rng:
-                    import cluster_lookup as _cl
-                    _rng = _cl.cluster_id_to_range(project_root, _sc)
-                if _rng:
-                    initiated = int(_rng[0])
-        # 2026-07-06 P1 三态生命周期：promises 用 status=="consumed"（consumed_at_ch 记回收章·
-        # open/suspended=未回收）。paid_at_ch 仅为旧 foreshadowings/items 集合的字段形态。
-        paid = fs.get("consumed_at_ch") or fs.get("paid_at_ch")
-        if not paid and fs.get("status") == "consumed":
-            paid = cur_ch
-        # 账本已记录该伏笔回收（增量补强，伏笔表漏标时兜底）
-        if not paid and fid in ledger_paid:
-            paid = cur_ch
-        # due_by 为【绝对章号】(对齐 build_manifest/will_learn/db_schema_validate 999 哨兵)；
-        # v27 还有 due_by_cluster / due_by_ch_offset(相对 setup) 两种来源
-        due_by = fs.get("due_by") if isinstance(fs.get("due_by"), int) and not isinstance(fs.get("due_by"), bool) else 0
-        if not due_by:
-            _dbc = fs.get("due_by_cluster")
-            if isinstance(_dbc, (int, str)) and _dbc:
-                _r2 = csr.cluster_id_to_range(project_root, _dbc) if hasattr(csr, "cluster_id_to_range") else None
-                if not _r2:
-                    import cluster_lookup as _cl
-                    _r2 = _cl.cluster_id_to_range(project_root, _dbc)
-                if _r2:
-                    due_by = int(_r2[0])
-            elif isinstance(fs.get("due_by_ch_offset"), int) and initiated:
-                due_by = initiated + int(fs["due_by_ch_offset"])
-        reinforced = fs.get("reinforced_chs") or fs.get("reinforced_at") or ledger_reinforced.get(fid, [])
-
-        if paid:
-            continue  # 已回收
-
-        # FORESHADOW_NEVER_INITIATED
-        if not initiated and cur_ch >= 10:
-            # declared_at_ch 取记录时间，若有
-            declared = fs.get("declared_at_ch") or 1
-            if cur_ch - declared >= 10:
-                findings.append({
-                    "severity": "advisory",
-                    "code": "FORESHADOW_NEVER_INITIATED",
-                    "id": fid,
-                    "declared_at_ch": declared,
-                    "gap": cur_ch - declared,
-                    "suggestion": f"伏笔 {fid} declared 在 ch{declared} 后 ≥ {cur_ch - declared} 章未 initiated → 伏笔被遗忘",
-                })
-            continue
-
-        if not initiated:
-            continue
-
-        # FORESHADOW_OVERDUE（due_by 为绝对章号，已在 per-item 归一）
-        if due_by and cur_ch > due_by:
-            overdue = cur_ch - due_by
-            severity = "warning" if overdue >= 5 else "advisory"
-            findings.append({
-                "severity": severity,
-                "code": "FORESHADOW_OVERDUE",
-                "id": fid,
-                "initiated_at_ch": initiated,
-                "due_by": due_by,
-                "overdue_by": overdue,
-                "current_ch": cur_ch,
-                "suggestion": f"伏笔 {fid} 设置 ch{initiated} due_by ch{due_by} → 应在 ch{due_by} 前回收，已超 {overdue} 章",
-            })
-
-        # FORESHADOW_NO_REINFORCEMENT（due_by 为绝对章号）
-        if cur_ch - initiated >= 5 and len(reinforced) == 0 and (not due_by or cur_ch < due_by - 2):
-            findings.append({
-                "severity": "advisory",
-                "code": "FORESHADOW_NO_REINFORCEMENT",
-                "id": fid,
-                "initiated_at_ch": initiated,
-                "current_ch": cur_ch,
-                "suggestion": f"伏笔 {fid} 在 ch{initiated} 设置后 {cur_ch - initiated} 章无任何 reinforced 提及 → 读者会忘",
-            })
-
-        # FORESHADOW_OVER_REINFORCEMENT
-        if len(reinforced) >= 8:
-            findings.append({
-                "severity": "advisory",
-                "code": "FORESHADOW_OVER_REINFORCEMENT",
-                "id": fid,
-                "reinforced_count": len(reinforced),
-                "suggestion": f"伏笔 {fid} 已 reinforced {len(reinforced)} 次仍未回收 → 读者疲劳，应尽快兑现",
-            })
-
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary = {
-        "warning": sum(1 for f in findings if f["severity"] == "warning"),
-        "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
+def _validate_promise(promise: object, index: int) -> dict:
+    if not isinstance(promise, dict):
+        raise ForeshadowContractError(f"promises[{index}] 必须是 object")
+    promise_id = promise.get("id")
+    if not isinstance(promise_id, str) or not promise_id.strip():
+        raise ForeshadowContractError(f"promises[{index}].id 必须是非空字符串")
+    status = promise.get("status")
+    if status not in _ACTIVE_STATUSES:
+        raise ForeshadowContractError(
+            f"promises[{index}].status 必须是 open/suspended/consumed"
+        )
+    setup = _cluster_number(promise.get("setup_cluster"),
+                            f"promises[{index}].setup_cluster")
+    due = promise.get("due_by_cluster")
+    if due is not None:
+        due = _cluster_number(due, f"promises[{index}].due_by_cluster")
+        if due < setup:
+            raise ForeshadowContractError(
+                f"promises[{index}].due_by_cluster 不得早于 setup_cluster"
+            )
+    consumed = promise.get("consumed_at_cluster")
+    if status == "consumed":
+        if consumed is None:
+            raise ForeshadowContractError(
+                f"promises[{index}] status=consumed 必须带 consumed_at_cluster"
+            )
+        consumed = _cluster_number(
+            consumed, f"promises[{index}].consumed_at_cluster"
+        )
+    elif consumed is not None:
+        raise ForeshadowContractError(
+            f"promises[{index}] 非 consumed 不得带 consumed_at_cluster"
+        )
+    progress = promise.get("payoff_progress", [])
+    if not isinstance(progress, list):
+        raise ForeshadowContractError(
+            f"promises[{index}].payoff_progress 必须是 list"
+        )
+    progress_numbers = []
+    for progress_index, cluster_id in enumerate(progress):
+        progress_numbers.append(_cluster_number(
+            cluster_id,
+            f"promises[{index}].payoff_progress[{progress_index}]",
+        ))
+    return {
+        "id": promise_id,
+        "status": status,
+        "setup": setup,
+        "due": due,
+        "consumed": consumed,
+        "progress": progress_numbers,
     }
-    report = {
+
+
+def _finding(
+    severity: str,
+    code: str,
+    promise: dict,
+    current_cluster_id: str,
+    **extra: object,
+) -> dict:
+    result = {
+        "severity": severity,
+        "gate_level": "advisory",
+        "code": code,
+        "id": promise["id"],
+        "setup_cluster": f"cluster_{promise['setup']:03d}",
+        "current_cluster_id": current_cluster_id,
+    }
+    result.update(extra)
+    return result
+
+
+def build_report(project_root: Path) -> dict:
+    clusters = csr.get_clusters(project_root)
+    if not clusters:
+        raise ForeshadowContractError("故事块摘要没有已完成 cluster")
+    current_cluster_id = str(clusters[-1]["cluster_id"])
+    current_number = _cluster_number(current_cluster_id, "故事块摘要.clusters[-1].cluster_id")
+
+    fs_path = project_root / "_数据库" / "伏笔表.json"
+    data = _read_json(fs_path)
+    promises = data.get("promises")
+    if not isinstance(promises, list):
+        raise ForeshadowContractError("伏笔表.promises 必须是 list")
+
+    findings: list[dict] = []
+    for index, raw_promise in enumerate(promises):
+        promise = _validate_promise(raw_promise, index)
+        setup = promise["setup"]
+        if promise["status"] == "consumed":
+            continue
+        if setup > current_number:
+            continue
+        if promise["status"] == "suspended":
+            continue
+
+        elapsed = current_number - setup
+        due = promise["due"]
+        if due is not None and current_number > due:
+            overdue = current_number - due
+            findings.append(_finding(
+                "warning" if overdue >= 5 else "advisory",
+                "FORESHADOW_OVERDUE",
+                promise,
+                current_cluster_id,
+                due_by_cluster=f"cluster_{due:03d}",
+                overdue_by_clusters=overdue,
+            ))
+
+        progress = promise["progress"]
+        if (
+            elapsed >= _PROGRESS_THRESHOLD
+            and not progress
+            and (due is None or current_number < due - 2)
+        ):
+            findings.append(_finding(
+                "advisory",
+                "FORESHADOW_NO_REINFORCEMENT",
+                promise,
+                current_cluster_id,
+                elapsed_clusters=elapsed,
+            ))
+        if len(progress) >= _OVER_REINFORCEMENT_THRESHOLD:
+            findings.append(_finding(
+                "advisory",
+                "FORESHADOW_OVER_REINFORCEMENT",
+                promise,
+                current_cluster_id,
+                payoff_progress_count=len(progress),
+                payoff_progress_clusters=[f"cluster_{n:03d}" for n in progress],
+            ))
+
+    summary = {
+        "warning": sum(item["severity"] == "warning" for item in findings),
+        "advisory": sum(item["severity"] == "advisory" for item in findings),
+        "total": len(findings),
+    }
+    return {
         "scan_type": "foreshadow_rhythm",
-        "scan_ts": ts,
-        "current_ch": cur_ch,
-        "total_foreshadowings": len(fss),
+        "scan_ts": datetime.now().isoformat(timespec="seconds"),
+        "current_cluster_id": current_cluster_id,
+        "clusters_scanned": [str(cluster["cluster_id"]) for cluster in clusters],
+        "total_promises": len(promises),
         "findings": findings,
         "summary": summary,
     }
-    out_path = out_dir / f"foreshadow_rhythm_{ts}.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[foreshadow_rhythm] {len(fss)} 个伏笔: {summary['warning']} warning / {summary['advisory']} advisory")
-    for f in findings[:6]:
-        print(f"  [{f['severity'].upper()}] {f.get('code')}: {f.get('suggestion', '')[:80]}")
-    print(f"报告: {out_path}")
-    if summary["warning"] > 0:
-        sys.exit(2)
-    if summary["advisory"] > 0:
-        sys.exit(1)
-    sys.exit(0)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    args = parser.parse_args()
+    try:
+        project_root = Path(args.project)
+        report = build_report(project_root)
+        out_dir = project_root / "_数据库" / ".cross_cluster_scan"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = out_dir / f"foreshadow_rhythm_{stamp}.json"
+        out_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        summary = report["summary"]
+        print(
+            f"[foreshadow_rhythm] {report['total_promises']} 条伏笔: "
+            f"{summary['warning']} warning / {summary['advisory']} advisory"
+        )
+        print(f"报告: {out_path}")
+        return 2 if summary["warning"] else 1 if summary["advisory"] else 0
+    except (OSError, ForeshadowContractError, csr.ClusterSummaryError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

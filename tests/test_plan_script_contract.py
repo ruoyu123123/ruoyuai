@@ -177,6 +177,20 @@ def test_main_chain_required_steps_have_verifiable_outputs():
     assert not offenders, "required 主链步骤缺少可验证产物或允许跳过输出:\n  " + "\n  ".join(offenders)
 
 
+def test_all_required_plan_steps_have_verifiable_outputs():
+    """所有 plan 的 required step 都必须有产物且禁止跳过。"""
+    offenders = []
+    for fname, plan in _load_plans().items():
+        for step in plan.get("steps", []):
+            if not step.get("required"):
+                continue
+            if not (step.get("expected_outputs") or []):
+                offenders.append(f"{fname} step {step.get('n')} 缺 expected_outputs")
+            if step.get("skip_output_allowed") is True:
+                offenders.append(f"{fname} step {step.get('n')} 允许 skip-output")
+    assert not offenders, "required plan step 合同不完整:\n  " + "\n  ".join(offenders)
+
+
 def test_main_chain_adaptive_runner_is_strict():
     """主链 adaptive_runner 只负责记录 incident，不允许作为降级放行 wrapper。"""
     offenders = []
@@ -297,6 +311,60 @@ def test_write_command_never_writes_fulltext_directly():
     text = (_ROOT / ".claude/commands/write.md").read_text(encoding="utf-8")
     assert "Write `全文.txt`" not in text
     assert "直接 Write" not in text
+
+
+def test_cluster_save_state_requires_foreshadow_state_receipt():
+    """伏笔注册与 payoff 必须在 foreshadower 后以 cluster 子命令完成。"""
+    plan = _load_plans()["cluster-save-state.plan.json"]
+    step = next(item for item in plan["steps"] if item["n"] == 10)
+    command = (
+        "python core/scripts/save_state.py {project_root} "
+        "--apply-foreshadow-state {key}"
+    )
+    assert command in step["scripts"]
+    assert step["scripts"].index(command) > step["scripts"].index(
+        "python core/scripts/save_state.py {project_root} --build-cluster-summary {key}"
+    )
+    assert (
+        "_数据库/.wal/cluster_{key}_foreshadow_state_receipt.json"
+        in step["expected_outputs"]
+    )
+
+
+def test_cluster_save_state_requires_cluster_writer_truth_report():
+    """writer truth-check 只允许 canonical cluster CLI 与固定报告。"""
+    plan = _load_plans()["cluster-save-state.plan.json"]
+    step = next(item for item in plan["steps"] if item["n"] == 3)
+    assert (
+        "python core/scripts/writer_truth_check.py {project_root} --cluster {key}"
+        in step["scripts"]
+    )
+    assert (
+        "_数据库/.judge_reports/cluster_{key}_writer-truth-check.json"
+        in step["expected_outputs"]
+    )
+    scripts = "\n".join(step["scripts"])
+    assert "--cluster-chapters" not in scripts
+    assert "--all-history" not in scripts
+
+
+def test_cluster_save_state_requires_judge_rollup_before_summary_build():
+    plan = _load_plans()["cluster-save-state.plan.json"]
+    step = next(item for item in plan["steps"] if item["n"] == 10)
+    archive_command = (
+        "python core/scripts/adaptive_runner.py --label judge_reports_archive "
+        "--strict -- python core/scripts/judge_reports_archive.py "
+        "{project_root} --cluster {key}"
+    )
+    build_command = (
+        "python core/scripts/save_state.py {project_root} "
+        "--build-cluster-summary {key}"
+    )
+    assert step["scripts"].index(archive_command) < step["scripts"].index(build_command)
+    assert (
+        "_数据库/.wal/cluster_{key}_judge_reports_rollup.json"
+        in step["expected_outputs"]
+    )
 
 
 if __name__ == "__main__":

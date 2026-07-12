@@ -1,222 +1,156 @@
-"""cross_cluster_scene_pov_diversity_aggregate.py — scene_type + POV 多样性跨章扫（CCR19）
+"""Audit scene-type and POV variety across completed story clusters.
 
-A. SCENE_TYPE_DIVERSITY
-   读 _数据库/故事块摘要.json[ch].scene_type
-   - SCENE_TYPE_RUN：连续 ≥ 4 章同 scene_type（如全办公室对话）
-   - SCENE_TYPE_LOW_DIVERSITY：近 N 章 ≤ 2 种 scene_type
-
-B. POV_ROTATION
-   读 故事块摘要.json[ch].characters 取首角色 = 本章主 POV
-   - POV_LOCKED：≥ 8 章连续同一 POV（缺角色切换）
-   - POV_OVERCONCENTRATED：近 N 章主 POV 分布 >85% 是同一角色
-
-退出码: 0 健康 / 1 advisory / 2 warning
+The scanner consumes ``故事块摘要.json`` only. Chapters nested inside a
+cluster are precomputed evidence and never form the audit unit.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
-sys.path.insert(0, str(Path(__file__).parent))
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr  # noqa: E402
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+def _normalise(value):
+    if isinstance(value, list):
+        return value[0] if value else ""
+    return value if isinstance(value, str) else ""
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--last-n", type=int, default=10)
-    args = ap.parse_args()
+def _cluster_observations(project_root: Path, last_n: int) -> list[dict]:
+    clusters = csr.get_clusters(project_root)
+    if last_n > 0:
+        clusters = clusters[-last_n:]
+    observations: list[dict] = []
+    for cluster in clusters:
+        cid = str(cluster.get("cluster_id") or "")
+        scene_type = _normalise(cluster.get("scene_type"))
+        pov = _normalise(cluster.get("pov"))
+        characters = cluster.get("characters") or []
+        if not pov and characters:
+            pov = _normalise(characters[0])
+        nested = cluster.get("chapters") or {}
+        if isinstance(nested, dict):
+            scene_values = [_normalise(v.get("scene_type")) for v in nested.values()
+                            if isinstance(v, dict) and _normalise(v.get("scene_type"))]
+            pov_values = [_normalise(v.get("pov")) for v in nested.values()
+                          if isinstance(v, dict) and _normalise(v.get("pov"))]
+            if not scene_type and scene_values:
+                scene_type = Counter(scene_values).most_common(1)[0][0]
+            if not pov and pov_values:
+                pov = Counter(pov_values).most_common(1)[0][0]
+        if cid:
+            observations.append({"cluster_id": cid, "scene_type": scene_type, "pov": pov})
+    return observations
 
-    project_root = Path(args.project)
 
-    per_ch = []   # [(ch, scene_type, pov)]
-    recent: list[int] = []
+def _scan(observations: list[dict]) -> list[dict]:
+    findings: list[dict] = []
+    scenes = [(o["cluster_id"], o["scene_type"]) for o in observations if o["scene_type"]]
+    povs = [(o["cluster_id"], o["pov"]) for o in observations if o["pov"]]
 
-    # ===== 2026-05-29 cluster 化分支：账本有 scene_type → 用实际落账的 scene_type/pov =====
-    # --last-n 在 cluster 模式语义为「最近 N 章」（runner 已把『最近 N 个 cluster』换算成章数窗口经 --last-n 传入·章为单位，与本文件磁盘路径 L99 同口径）；数据点来自账本而非磁盘 storyboard 计划
-    if csr.is_cluster_mode() and csr.ledger_has_field(project_root, "scene_type"):
-        recs = csr.get_chapter_records(project_root)            # 取全账本章记录（已按 ch 升序）
-        if args.last_n and args.last_n > 0:
-            recs = recs[-args.last_n:]                          # 章为单位截最近窗口（对齐 L99 chapters_written[-args.last_n:]）
-        for ch, rec in recs:
-            st = rec.get("scene_type", "") or ""
-            pov = rec.get("pov", "") or ""
-            if not pov:
-                # 回退：账本 pov 缺则用 characters 首角色（与磁盘 plan 同口径）
-                chars = rec.get("characters", []) or []
-                pov = chars[0] if chars else ""
-            per_ch.append((ch, st, pov))
-            recent.append(ch)
-        recent = sorted(set(recent))
-        if not per_ch:
-            print("[SKIP] cluster 账本无 scene_type 记录")
-            sys.exit(0)
-    else:
-        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
-        # v2 cluster 化（2026-05-28）：纯 cluster 模式 · 只读 cluster_blueprint
-        progress = load_json(project_root / "_数据库" / "进度.json", {})
-        plan = {}
-        # 2026-05-29 复审修复（SC-1/C2）：cluster_blueprint 可能是 list（城南实测），
-        # 裸 .items() 会 AttributeError 崩。统一经 cluster_lookup.normalize_blueprint 归一成 dict。
-        import cluster_lookup as _cl  # noqa: E402
-        for cid, cdata in _cl.normalize_blueprint(progress).items():
-            for sb in cdata.get("scene_storyboard", []):
-                ch = sb.get("ch")
-                if ch:
-                    plan[str(ch)] = sb
-        if not plan:
-            print("[SKIP] cluster_blueprint 为空")
-            sys.exit(0)
-
-        # 已写章节
-        chapters_written = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                                  for d in (project_root / "章节").glob("第*章")
-                                  if re.match(r"第(\d+)章", d.name))
-        recent = chapters_written[-args.last_n:] if chapters_written else []
-        if not recent:
-            print("[SKIP] 无已写章节")
-            sys.exit(0)
-
-        # 收集每章 scene_type + 主 POV
-        for ch in recent:
-            entry = plan.get(str(ch)) or plan.get(ch) or {}
-            if not isinstance(entry, dict):
-                continue
-            st = entry.get("scene_type", "")
-            chars = entry.get("characters", []) or []
-            pov = chars[0] if chars else ""
-            per_ch.append((ch, st, pov))
-
-    findings = []
-
-    # 2026-05-29 复审修复：scene_type 可能是 list（城南 storyboard schema 用 ['悬疑','转折']）
-    # → Counter/比较时 unhashable 崩。统一取主类型（首元素）归一成字符串，两条路径都覆盖。
-    def _st1(s):
-        if isinstance(s, list):
-            return s[0] if s else ""
-        return s
-    valid_scenes = [(c, _st1(s)) for c, s, _ in per_ch if s]
-    valid_povs = [(c, (p[0] if isinstance(p, list) and p else p)) for c, _, p in per_ch if p]
-
-    # A. SCENE_TYPE
-    if len(valid_scenes) >= 3:
-        # RUN
-        streak = 1
-        streak_chs = [valid_scenes[0][0]]
-        cur_st = valid_scenes[0][1]
-        for i in range(1, len(valid_scenes)):
-            if valid_scenes[i][1] == cur_st:
-                streak += 1
-                streak_chs.append(valid_scenes[i][0])
-                if streak >= 4:
+    if len(scenes) >= 3:
+        current = scenes[0][1]
+        run_ids = [scenes[0][0]]
+        for cid, scene_type in scenes[1:]:
+            if scene_type == current:
+                run_ids.append(cid)
+                if len(run_ids) >= 4:
                     findings.append({
                         "severity": "advisory",
                         "code": "SCENE_TYPE_RUN",
-                        "scene_type": cur_st,
-                        "consecutive_chs": streak_chs[-4:],
-                        "suggestion": f"连续 ≥ 4 章 scene_type=「{cur_st}」→ 应换场景类型",
+                        "scene_type": current,
+                        "consecutive_clusters": run_ids[-4:],
+                        "suggestion": f"连续 cluster 使用 scene_type={current}，应改变场景功能",
                     })
-                    streak = 1
-                    streak_chs = [valid_scenes[i][0]]
+                    run_ids = [cid]
             else:
-                cur_st = valid_scenes[i][1]
-                streak = 1
-                streak_chs = [valid_scenes[i][0]]
-        # LOW_DIVERSITY
-        counts_st = Counter(s for _, s in valid_scenes)
-        if len(valid_scenes) >= 5 and len(counts_st) <= 2:
+                current = scene_type
+                run_ids = [cid]
+        distribution = Counter(scene_type for _, scene_type in scenes)
+        if len(scenes) >= 5 and len(distribution) <= 2:
             findings.append({
                 "severity": "advisory",
                 "code": "SCENE_TYPE_LOW_DIVERSITY",
-                "distribution": dict(counts_st),
-                "suggestion": f"近 {len(valid_scenes)} 章只用了 {len(counts_st)} 种 scene_type → 场景单调",
+                "distribution": dict(distribution),
+                "suggestion": "当前 cluster 的场景类型过于集中",
             })
 
-    # B. POV
-    if len(valid_povs) >= 4:
-        # LOCKED
-        streak = 1
-        streak_chs = [valid_povs[0][0]]
-        cur_pov = valid_povs[0][1]
-        for i in range(1, len(valid_povs)):
-            if valid_povs[i][1] == cur_pov:
-                streak += 1
-                streak_chs.append(valid_povs[i][0])
-                if streak >= 8:
+    if len(povs) >= 4:
+        current = povs[0][1]
+        run_ids = [povs[0][0]]
+        for cid, pov in povs[1:]:
+            if pov == current:
+                run_ids.append(cid)
+                if len(run_ids) >= 8:
                     findings.append({
                         "severity": "advisory",
                         "code": "POV_LOCKED",
-                        "pov": cur_pov,
-                        "consecutive_chs": streak_chs[-8:],
-                        "suggestion": f"主 POV 连续 ≥ 8 章是「{cur_pov}」→ 缺角色切换，应插入其他视角章",
+                        "pov": current,
+                        "consecutive_clusters": run_ids[-8:],
+                        "suggestion": "同一 POV 连续覆盖过多 cluster，应引入有效视角变化",
                     })
-                    streak = 1
-                    streak_chs = [valid_povs[i][0]]
+                    run_ids = [cid]
             else:
-                cur_pov = valid_povs[i][1]
-                streak = 1
-                streak_chs = [valid_povs[i][0]]
-        # OVERCONCENTRATED
-        counts_pov = Counter(p for _, p in valid_povs)
-        total = len(valid_povs)
-        most_pov, most_count = counts_pov.most_common(1)[0]
-        if most_count / total > 0.85 and total >= 5:
+                current = pov
+                run_ids = [cid]
+        distribution = Counter(pov for _, pov in povs)
+        dominant, count = distribution.most_common(1)[0]
+        if len(povs) >= 5 and count / len(povs) > 0.85:
             findings.append({
                 "severity": "advisory",
                 "code": "POV_OVERCONCENTRATED",
-                "dominant_pov": most_pov,
-                "pct": round(most_count / total, 2),
-                "distribution": dict(counts_pov),
-                "suggestion": f"近 {total} 章中 {round(most_count/total*100)}% 主 POV 是「{most_pov}」→ 应插入其他 POV",
+                "dominant_pov": dominant,
+                "pct": round(count / len(povs), 2),
+                "distribution": dict(distribution),
+                "suggestion": "单一 POV 覆盖过高，应评估是否需要切换视角",
             })
+    return findings
 
-    # 输出
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    parser.add_argument("--last-n", type=int, default=10)
+    args = parser.parse_args()
+    project_root = Path(args.project)
+    if not project_root.is_dir():
+        print(f"[FATAL] project directory not found: {project_root}", file=sys.stderr)
+        raise SystemExit(2)
+
+    observations = _cluster_observations(project_root, args.last_n)
+    if not observations:
+        print("[SKIP] no completed cluster records")
+        raise SystemExit(0)
+    findings = _scan(observations)
+    summary = {
+        "warning": sum(f["severity"] == "warning" for f in findings),
+        "advisory": sum(f["severity"] == "advisory" for f in findings),
+    }
+    out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary_obj = {
-        "warning": sum(1 for f in findings if f["severity"] == "warning"),
-        "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
-    }
     report = {
         "scan_type": "scene_pov_diversity",
         "scan_ts": ts,
-        "chapters_scanned": recent,
-        "scene_distribution": dict(Counter(s for _, s in valid_scenes)),
-        "pov_distribution": dict(Counter(p for _, p in valid_povs)),
+        "clusters_scanned": [o["cluster_id"] for o in observations],
+        "cluster_observations": observations,
+        "scene_distribution": dict(Counter(o["scene_type"] for o in observations if o["scene_type"])),
+        "pov_distribution": dict(Counter(o["pov"] for o in observations if o["pov"])),
         "findings": findings,
-        "summary": summary_obj,
+        "summary": summary,
     }
     out_path = out_dir / f"scene_pov_diversity_{ts}.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[scene_pov_diversity] {summary_obj['warning']} warning / {summary_obj['advisory']} advisory")
-    for f in findings[:5]:
-        print(f"  [{f['severity'].upper()}] {f.get('code')}: {f.get('suggestion', '')[:80]}")
-    print(f"报告: {out_path}")
-    if summary_obj["warning"] > 0:
-        sys.exit(2)
-    if summary_obj["advisory"] > 0:
-        sys.exit(1)
-    sys.exit(0)
+    print(f"[scene_pov_diversity] {summary['warning']} warning / {summary['advisory']} advisory")
+    print(f"report: {out_path}")
+    raise SystemExit(2 if summary["warning"] else 1 if summary["advisory"] else 0)
 
 
 if __name__ == "__main__":

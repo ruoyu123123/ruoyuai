@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pid_threshold_tuner.py — L2-1 保守增量 PI 阈值控制器（2026-05-30）
+"""作者风格 advisory 阈值的保守增量 PI 控制与离线回测。
 
 【为什么有这个模块（北极星⑤顾问非法官 · 防矫枉过正）】
 L2-0（audit_hub soft-cap）是「降档止血」：命中即降一档 severity，事后补救。
@@ -33,10 +33,7 @@ L2-1 升级为完整保守增量 PI 控制器（对标 Filieri SEAMS2015 自适�
   · env PID_THRESHOLD_MODE 默认 active（回测已证两书 FPR 收敛 92%/85% → 全开）。
     active 真生效**唯一稳定来源** = per-作者 pid_threshold_state.json 的 theta_delta·
     而该 state 唯一稳定初始化入口 = `backtest --save-state`（收敛才落盘）。
-    🔴 2026-06-27 C20 修正旧 doc 误导：此前**无任何 plan/orchestrator 自动触发**该回测
-    （`--save-state` 仅出现在 tuner 自身 + tests）→ PID 表面 active、实际 theta 恒空、
-    无 Δ 生效（装饰性 active）。现已把 `--backtest --save-state` 自动接入
-    distill-style.plan.json（step `pid-state-bootstrap`·经 adaptive_runner 失败不阻断）。
+    `--backtest --save-state` 由 distill-style 的 required `pid-state-bootstrap` 调用。
     learning_loop.accumulate_pid_state_from_calibration 是**次级 eventual 积累**
     （需同一 code ≥4 次豁免攒出校准建议才落 quantized_delta），非主初始化路径。
     无 state（theta_delta 空）时 active 仍无害（不叠加 Δ·不改判决）；apply_pid_delta
@@ -54,6 +51,8 @@ import math
 import os
 import sys
 from pathlib import Path
+
+from atomic_json import atomic_write_json
 
 # 被控 5 键白名单（物理隔离 · 硬拒其余）
 # 🔴 2026-06-27 P1-07: 新增 chapter_end_weak_anchor_ratio（章末弱锚阈值·sign=-1 与其他相反·豁免多=下调）。
@@ -82,7 +81,7 @@ _MIN_SAMPLES = 8
 # 单步 Δ 最大幅度（保守限幅·防单 cluster 跳变）
 _MAX_STEP_FRAC = 0.10
 
-# 🔴 2026-06-27 C20: PID 未初始化哨兵的 author_dir 级去重集（进程内一次性·纯 advisory）。
+# PID 未初始化哨兵按 author_dir 在进程内去重。
 _PID_UNINIT_WARNED: set = set()
 
 
@@ -450,6 +449,25 @@ def save_backtest_state(author_dir: Path, res: dict) -> Path | None:
     return p
 
 
+def write_backtest_receipt(*, author_dir: Path, style_path: Path, result: dict,
+                           output: Path) -> dict:
+    """写 required 回测执行回执；未收敛是有效 advisory 结果。"""
+    receipt = {
+        "schema_version": "pid-threshold-bootstrap.receipt.v1",
+        "completed": True,
+        "status": "converged" if result.get("converged") else "not_converged",
+        "author_dir": str(author_dir.resolve()),
+        "style_path": str(style_path.resolve()),
+        "state_saved_to": result.get("state_saved_to"),
+        "rounds_run": result.get("rounds_run"),
+        "n_samples": result.get("n_samples"),
+        "initial_fpr": result.get("initial_fpr"),
+        "final_fpr": result.get("final_fpr"),
+    }
+    atomic_write_json(output, receipt)
+    return receipt
+
+
 def main(argv):
     import argparse
     ap = argparse.ArgumentParser(description="L2-1 PID 阈值控制器 / 离线回测")
@@ -463,17 +481,27 @@ def main(argv):
     ap.add_argument("--save-state", action="store_true",
                     help="回测收敛时把 theta_delta 落 per-作者 pid_threshold_state.json"
                          "（active 真生效的唯一来源·不收敛拒绝落盘）")
+    ap.add_argument("--receipt", required=True,
+                    help="required 回测执行回执 JSON；未收敛也会落盘")
     args = ap.parse_args(argv)
     if args.backtest:
-        res = backtest(Path(args.author_dir), Path(args.style), args.rounds, args.tau,
+        author_dir = Path(args.author_dir)
+        style_path = Path(args.style)
+        res = backtest(author_dir, style_path, args.rounds, args.tau,
                        max_chapters=args.max_chapters)
         if args.save_state:
-            saved = save_backtest_state(Path(args.author_dir), res)
+            saved = save_backtest_state(author_dir, res)
             res["state_saved_to"] = str(saved) if saved else None
+        write_backtest_receipt(
+            author_dir=author_dir,
+            style_path=style_path,
+            result=res,
+            output=Path(args.receipt),
+        )
         # _state 不进 stdout JSON（内部对象·噪声大）
         out = {k: v for k, v in res.items() if k != "_state"}
         print(json.dumps(out, ensure_ascii=False, indent=2))
-        return 0 if res.get("converged") else 1
+        return 0
     print("用法: --backtest --author-dir <dir> --style <json> [--save-state]", file=sys.stderr)
     return 2
 

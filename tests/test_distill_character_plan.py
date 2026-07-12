@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
-"""distill-character 纳 plan 强制规划 + 同栈 voice_sample + 回灌 verify 测试（🔴 2026-06-27 C13）。
+"""distill-character 的 Claude 草稿、gemini 润色与回灌验证测试。"""
 
-零依赖范式（文件尾 __main__ 循环跑 test_* 打 [OK]/[FAIL]）。覆盖：
-  · plan 6 步结构 + 同栈 gen_creative voice_sample 落点 + verify advisory exit 语义 + provenance 硬项
-  · plan_tracker 注册（KNOWN_COMMANDS + load_template + {key} 替换）
-  · gen_creative --mode voice_sample 消除 NotImplementedError（同栈·喂历史 few-shot）
-  · distill_character_verify PROCESS-INTEGRITY 硬（同栈/≥2章 provenance）· fidelity 永 advisory
-  · CLI exit：valid→0 / 破损+strict→2 / 破损无strict→0(advisory) / fidelity 低→0(永不据此拦)
-"""
 import json
 import subprocess
 import sys
@@ -18,9 +11,10 @@ _ROOT = Path(__file__).resolve().parent.parent
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import gen_creative as gc            # noqa: E402
 import distill_character_verify as dcv  # noqa: E402
 import plan_tracker as pt            # noqa: E402
+import voice_sample_polisher as vsp  # noqa: E402
+import voice_pack_merger as vpm  # noqa: E402
 
 PLAN_PATH = _ROOT / "core" / "claude-home" / "plans" / "distill-character.plan.json"
 
@@ -31,65 +25,69 @@ def _load_plan() -> dict:
 
 # ════════════ plan 结构 ════════════
 
-def test_plan_exists_6_steps():
-    """6 步全 required（2026-07 收口：step6 git-snapshot 从 optional 升 required）。
-
-    历史契约 required=[1..5] / optional=[6]（git 失败仅记录不阻断）已废——
-    对齐 CLAUDE.md Git 快照纪律「init/commit 失败或 marker 缺失 = 当前
-    required step 失败」+ 不降级规则（必需步骤设 required 不留 advisory 兜底）。
-    """
+def test_plan_exists_7_steps():
     plan = _load_plan()
     assert plan["command"] == "distill-character"
-    assert plan["total_steps"] == 6
-    assert len(plan["steps"]) == 6
-    assert plan["required_steps"] == [1, 2, 3, 4, 5, 6]
+    assert plan["total_steps"] == 7
+    assert len(plan["steps"]) == 7
+    assert plan["required_steps"] == [1, 2, 3, 4, 5, 6, 7]
     assert plan["optional_steps"] == []
 
 
-def test_step6_git_snapshot_required_with_marker():
-    """回归锁：step6 git-snapshot 必须 required + marker 产物（禁回退 optional/`? ` 前缀）。"""
+def test_step7_git_snapshot_required_with_marker():
     plan = _load_plan()
-    step6 = next(s for s in plan["steps"] if s["n"] == 6)
-    assert step6["required"] is True
-    assert step6["optional"] is False
-    assert step6["skip_output_allowed"] is False
-    scripts = step6.get("scripts", [])
+    step7 = next(s for s in plan["steps"] if s["n"] == 7)
+    assert step7["required"] is True
+    assert step7["optional"] is False
+    assert step7["skip_output_allowed"] is False
+    scripts = step7.get("scripts", [])
     assert scripts and not any(s.lstrip().startswith("?") for s in scripts), \
         "git-snapshot 脚本禁用 `? ` 容错前缀（失败必须暴露）"
     blob = " ".join(scripts)
     assert "git_snapshot.py" in blob and "--marker" in blob
-    outs = " ".join(step6["expected_outputs"])
+    outs = " ".join(step7["expected_outputs"])
     assert "distill_character_{key}_git_snapshot.json" in outs, \
         "marker 文件 = required step 的可验证产物（缺失 = step 失败）"
 
 
-def test_step3_voice_sample_is_genmodel_same_stack():
-    """step3 必须走 gen_creative.py --mode voice_sample（同栈 gen-model·非 Claude 编）。"""
+def test_voice_sample_steps_use_claude_then_gemini():
     plan = _load_plan()
     step3 = next(s for s in plan["steps"] if s["n"] == 3)
-    scripts = " ".join(step3.get("scripts", []))
-    assert "gen_creative.py" in scripts
-    assert "--mode voice_sample" in scripts
-    assert "--history" in scripts          # 喂角色历史真实对白 few-shot（同栈实战 voice 锚点）
-    assert "{key}_voice_samples.json" in " ".join(step3["expected_outputs"])
+    assert "{key}_claude_drafts" in " ".join(step3["expected_outputs"])
+    assert step3["must_spawn_agent"] == "novel-replica-writer"
+    assert step3["agent_input"]["MODE"] == "voice-sample-draft"
+    assert step3["agent_input"]["CHARACTER_ID"] == "{key}"
+    assert step3["judge_report_path"].endswith("agent_report.json")
+    step4 = next(s for s in plan["steps"] if s["n"] == 4)
+    scripts = " ".join(step4.get("scripts", []))
+    assert "voice_sample_polisher.py" in scripts
+    assert "--claude-drafts-dir" in scripts
+    assert "{key}_voice_samples.json" in " ".join(step4["expected_outputs"])
 
 
-def test_step5_verify_advisory_exit_semantics():
-    """step5 = distill_character_verify.py --strict · exit_codes {0:ok,2:fail}。"""
+def test_step6_verify_advisory_exit_semantics():
     plan = _load_plan()
-    step5 = next(s for s in plan["steps"] if s["n"] == 5)
-    scripts = " ".join(step5.get("scripts", []))
+    step6 = next(s for s in plan["steps"] if s["n"] == 6)
+    scripts = " ".join(step6.get("scripts", []))
     assert "distill_character_verify.py" in scripts
     assert "--strict" in scripts
-    ec = step5["control_flow"]["exit_codes"]
+    ec = step6["control_flow"]["exit_codes"]
     assert ec == {"0": "ok", "2": "fail"}
-    assert "voice_verify_{key}.json" in " ".join(step5["expected_outputs"])
+    assert "voice_verify_{key}.json" in " ".join(step6["expected_outputs"])
+
+
+def test_step5_has_deterministic_merge_receipt():
+    step5 = next(s for s in _load_plan()["steps"] if s["n"] == 5)
+    scripts = " ".join(step5["scripts"])
+    assert "voice_pack_merger.py" in scripts
+    assert "--receipt" in scripts
+    assert "{key}_voice_pack_merged.json" in " ".join(step5["expected_outputs"])
 
 
 def test_plan_documents_process_integrity_and_provenance():
     """plan 文本须明确：唯一 hard=PROCESS-INTEGRITY·fidelity advisory·≥2章 provenance·同栈。"""
     blob = json.dumps(_load_plan(), ensure_ascii=False)
-    for kw in ("PROCESS-INTEGRITY", "advisory", "provenance", "同栈", "gen-model"):
+    for kw in ("PROCESS-INTEGRITY", "advisory", "provenance", "Claude", "gemini"):
         assert kw in blob, f"plan 缺关键约束语义: {kw}"
 
 
@@ -118,7 +116,7 @@ def test_load_template_and_key_substitution():
     防止旧单章路径被静默替换为空）。
     """
     tpl = pt.load_template("distill-character")
-    assert len(tpl["steps"]) == 6
+    assert len(tpl["steps"]) == 7
     # {key} 替换：角色 id 注入 expected_outputs / scripts
     out = pt._substitute("_数据库/.distill_character/{key}_material.json",
                          "书名", "李若渝")
@@ -139,59 +137,70 @@ def test_create_plan_substitutes_character_key():
         plan = pt.get_plan(plan_id)
         step1 = next(s for s in plan["steps"] if s["n"] == 1)
         assert "李若渝_material.json" in step1["expected_outputs"][0]
-        step3 = next(s for s in plan["steps"] if s["n"] == 3)
-        assert "--character 李若渝" in " ".join(step3["scripts"])
+        step4 = next(s for s in plan["steps"] if s["n"] == 4)
+        assert "--character 李若渝" in " ".join(step4["scripts"])
 
 
-# ════════════ gen_creative voice_sample（同栈·消 NotImplementedError）════════════
-
-def test_voice_sample_prompt_no_longer_raises():
-    system, user = gc.build_voice_sample_prompt(
-        character_id="char_li", character_name="李若渝",
-        history_quotes="- 「滚开。」（ch3）\n- 「我不需要谁帮我。」（ch5）",
-        voice_dna_text="layer_0: 绝不示弱", count=4)
-    assert "李若渝" in user
-    assert "滚开" in user                         # 历史对白 few-shot 注入
-    assert "style_samples" in system and "anti_samples" in system
-    assert "JSON" in system
-
-
-def test_voice_sample_history_text_from_material():
+def test_voice_sample_polisher_discovers_valid_claude_drafts():
     with tempfile.TemporaryDirectory() as tmp:
-        mat = Path(tmp) / "m.json"
-        mat.write_text(json.dumps({
-            "character": "李若渝",
-            "dialogue_quotes": [{"text": "滚开。", "from_chapter": 3},
-                                {"text": "我自己来。", "from_chapter": 5}],
-        }, ensure_ascii=False), encoding="utf-8")
-        txt = gc._voice_sample_history_text(mat)
-        assert "滚开。" in txt and "ch3" in txt
-        assert "我自己来。" in txt
+        drafts = Path(tmp)
+        (drafts / "sample_001.txt").write_text(
+            json.dumps({"kind": "style", "text": "滚开。", "from_clusters": ["cluster_003", "cluster_005"], "dim": "短句"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        found = vsp.discover_drafts(drafts)
+        assert found[0][1]["kind"] == "style"
 
 
-def test_voice_sample_parse_loose():
-    d = gc.parse_voice_sample_output('```json\n{"style_samples":[{"text":"x"}]}\n```')
-    assert d["style_samples"][0]["text"] == "x"
-    # 垃圾输入 → 空骨架（不崩）
-    d2 = gc.parse_voice_sample_output("not json at all")
-    assert d2["style_samples"] == [] and "_raw" in d2
+def test_voice_sample_polisher_writes_same_stack_provenance(tmp_path, monkeypatch):
+    drafts = tmp_path / "drafts"
+    drafts.mkdir()
+    for name, payload in {
+        "sample_001.txt": {"kind": "style", "text": "滚开。", "from_clusters": ["cluster_003", "cluster_005"], "dim": "短句"},
+        "sample_002.txt": {"kind": "anti", "text": "请大家理性沟通。", "from_clusters": ["cluster_003", "cluster_007"], "violates": "示弱"},
+    }.items():
+        (drafts / name).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    material = tmp_path / "material.json"
+    voice_dna = tmp_path / "voice.json"
+    material.write_text("{}", encoding="utf-8")
+    voice_dna.write_text("{}", encoding="utf-8")
+    class Profile:
+        model = "gemini-test"
+        name = "gemini_profile"
+    def fake_call(loader, system, user, **kwargs):
+        draft = json.loads(user)["draft"]
+        return json.dumps({"kind": draft["kind"], "text": draft["text"]}, ensure_ascii=False), Profile(), 0.1
+    monkeypatch.setattr(vsp, "call_gen_model", fake_call)
+    monkeypatch.setattr(vsp, "GenModelLoader", lambda: object())
+    output = tmp_path / "voice_samples.json"
+    result = vsp.polish_samples(
+        drafts_dir=drafts, material_path=material, voice_dna_path=voice_dna,
+        character="李若渝", output=output,
+    )
+    assert result["_meta"]["writer_mode"] == "claude_draft_gemini_polish_v29"
+    assert result["_meta"]["generated_by_model"] == ["gemini-test"]
+    assert output.exists()
 
 
 # ════════════ distill_character_verify PROCESS-INTEGRITY（唯一 hard）════════════
 
 def test_sample_provenance_ok():
-    assert dcv.sample_provenance_ok({"text": "x", "from_chapters": [3, 5]}) is True
-    assert dcv.sample_provenance_ok({"text": "x", "from_chapters": [3]}) is False   # <2 章
-    assert dcv.sample_provenance_ok({"text": "x", "from_chapters": [3, 3]}) is False  # 不去重不算
+    assert dcv.sample_provenance_ok({"text": "x", "from_clusters": ["cluster_003", "cluster_005"]}) is True
+    assert dcv.sample_provenance_ok({"text": "x", "from_clusters": ["cluster_003"]}) is False
+    assert dcv.sample_provenance_ok({"text": "x", "from_clusters": ["cluster_003", "cluster_003"]}) is False  # 不去重不算
     assert dcv.sample_provenance_ok("纯字符串无 provenance") is False
     assert dcv.sample_provenance_ok({"text": "x"}) is False
 
 
 _VALID_VP = {
-    "_gen_provenance": {"generated_by_model": "gemini-3.1-pro-preview",
-                        "generated_by_profile": "gemini_pro_preview"},
-    "style_samples": [{"text": "滚开，我不需要。", "from_chapters": [3, 5]}],
-    "anti_samples": [{"text": "好的，我会理性沟通。", "from_chapters": [3, 7]}],
+    "_gen_provenance": {
+        "writer_mode": "claude_draft_gemini_polish_v29",
+        "claude_drafts_dir": "C:/project/claude_drafts",
+        "generated_by_model": ["gemini-3.1-pro-preview"],
+        "generated_by_profile": ["gemini_pro_preview"],
+    },
+    "style_samples": [{"text": "滚开，我不需要。", "from_clusters": ["cluster_003", "cluster_005"]}],
+    "anti_samples": [{"text": "好的，我会理性沟通。", "from_clusters": ["cluster_003", "cluster_007"]}],
     "banned_phrases": ["请", "麻烦您"],
     "catchphrases": ["滚开"],
 }
@@ -200,6 +209,45 @@ _VALID_VP = {
 def test_process_integrity_valid_pack_ok():
     ok, violations = dcv.check_process_integrity(_VALID_VP)
     assert ok is True, violations
+
+
+def test_process_integrity_empty_samples_fail():
+    vp = json.loads(json.dumps(_VALID_VP))
+    vp["style_samples"] = []
+    vp["anti_samples"] = []
+    ok, violations = dcv.check_process_integrity(vp)
+    assert ok is False
+    assert any(item["code"] == "VOICE_SAMPLES_MISSING" for item in violations)
+
+
+def test_voice_pack_merger_writes_receipt(tmp_path):
+    project = tmp_path / "novel"
+    database = project / "_数据库"
+    database.mkdir(parents=True)
+    cards = database / "人物卡.json"
+    cards.write_text(json.dumps({"characters": [{"id": "char_li", "name": "李若渝"}]}, ensure_ascii=False), encoding="utf-8")
+    voice_dna = tmp_path / "voice_dna.json"
+    voice_dna.write_text(json.dumps({"voice_dna": {"layer_0": {"never_say": ["请"]}}}, ensure_ascii=False), encoding="utf-8")
+    samples = tmp_path / "samples.json"
+    samples.write_text(json.dumps({
+        "style_samples": [{"text": "滚开。", "from_clusters": ["cluster_003", "cluster_005"]}],
+        "anti_samples": [{"text": "请理性沟通。", "from_clusters": ["cluster_003", "cluster_007"]}],
+        "_meta": {
+            "writer_mode": "claude_draft_gemini_polish_v29",
+            "claude_drafts_dir": "drafts",
+            "generated_by_model": ["gemini-test"],
+            "generated_by_profile": ["profile"],
+        },
+    }, ensure_ascii=False), encoding="utf-8")
+    receipt_path = tmp_path / "receipt.json"
+    receipt = vpm.merge_voice_pack(
+        cards_path=cards, character="char_li", voice_dna_path=voice_dna,
+        samples_path=samples, receipt_path=receipt_path,
+    )
+    merged = json.loads(cards.read_text(encoding="utf-8"))["characters"][0]
+    assert merged["voice_pack"]["_gen_provenance"]["writer_mode"] == "claude_draft_gemini_polish_v29"
+    assert receipt["style_sample_count"] == 1
+    assert receipt_path.exists()
 
 
 def test_process_integrity_missing_same_stack():
@@ -212,7 +260,7 @@ def test_process_integrity_missing_same_stack():
 
 def test_process_integrity_insufficient_provenance():
     vp = json.loads(json.dumps(_VALID_VP))
-    vp["style_samples"] = [{"text": "单章特色用法", "from_chapters": [3]}]
+    vp["style_samples"] = [{"text": "单故事块偶发用法", "from_clusters": ["cluster_003"]}]
     ok, violations = dcv.check_process_integrity(vp)
     assert ok is False
     assert any(v["code"] == "INSUFFICIENT_PROVENANCE" for v in violations)
@@ -231,10 +279,11 @@ def test_process_integrity_banned_phrases_first_explicit_ok():
     assert any(v["code"] == "BANNED_PHRASES_MALFORMED" for v in violations2)
 
 
-def test_no_samples_is_vacuously_ok():
-    """无样本（没产/没并）= 非破损·vacuous ok（不误把空 voice_pack 当契约破损）。"""
+def test_no_samples_is_required_failure():
+    """required 角色蒸馏不得以空 voice_pack 完成。"""
     ok, violations = dcv.check_process_integrity({"banned_phrases": []})
-    assert ok is True and violations == []
+    assert ok is False
+    assert any(item["code"] == "VOICE_SAMPLES_MISSING" for item in violations)
 
 
 def test_fidelity_always_advisory():
@@ -266,7 +315,7 @@ def _run_verify(proj: Path, strict: bool) -> tuple[int, Path]:
     out = proj / "对比报告" / "voice_verify_李若渝.json"
     cmd = [sys.executable, str(_SCRIPTS / "distill_character_verify.py"),
            "--project", str(proj), "--character", "李若渝",
-           "--output", str(out), "--skip-genmodel"]
+           "--output", str(out)]
     if strict:
         cmd.append("--strict")
     # 子进程 stderr 是 UTF-8 中文（脚本 reconfigure）·父进程显式 utf-8 解码（Windows 默认 GBK 会炸）
@@ -312,7 +361,7 @@ def test_cli_low_fidelity_still_exit0():
         # 样本塞 AI 套话 + 句长偏离·但 provenance/同栈完好
         vp["style_samples"] = [{"text": "与此同时，他淡淡地说，微微挑眉，"
                                 "嘴角勾起一抹意味深长的弧度，仿佛一切尽在掌握。",
-                                "from_chapters": [3, 5]}]
+                                "from_clusters": ["cluster_003", "cluster_005"]}]
         proj = _make_project(Path(tmp), vp)
         rc, out = _run_verify(proj, strict=True)
         assert rc == 0, "fidelity 低永不拦截（只 PROCESS-INTEGRITY 硬）"

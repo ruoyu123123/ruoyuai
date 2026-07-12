@@ -75,12 +75,17 @@ print(json.dumps(report))
 
 
 def _make_sandbox(tmp: Path, with_hard_gate: bool = True):
-    """建假项目（章节/第001章/第001章.txt）+ 假 scanner 目录。返回 (proj, scan_dir)。"""
+    """建带 canonical cluster 映射的假项目与假 scanner 目录。"""
     proj = tmp / "proj"
     ch_dir = proj / "章节" / "第001章"
     ch_dir.mkdir(parents=True)
     (ch_dir / "第001章.txt").write_text(
         "他推门进来。\n\n「你来了。」\n", encoding="utf-8")
+    db = proj / "_数据库"
+    db.mkdir()
+    (db / "事件簇.json").write_text(json.dumps({
+        "clusters": [{"cluster_id": "cluster_001", "chapter_range": [1, 1]}]
+    }, ensure_ascii=False), encoding="utf-8")
     scan = tmp / "fake_scanners"
     scan.mkdir()
     for name in _ALL_SCANNER_NAMES:

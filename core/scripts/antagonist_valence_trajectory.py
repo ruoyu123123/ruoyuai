@@ -186,11 +186,6 @@ def compute_cluster_valence_detail(text: str, antagonist_names) -> dict:
     }
 
 
-def compute_cluster_valence(text: str, antagonist_names) -> float:
-    """对每个反派名提取 ±80 CJK 窗口，返回平均 valence（兼容旧测试/调用）。"""
-    return float(compute_cluster_valence_detail(text, antagonist_names)["valence"])
-
-
 def _collect_cluster_drafts(project_root: Path):
     drafts = {}
     chap_dir = project_root / "章节"

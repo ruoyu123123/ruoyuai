@@ -15,6 +15,7 @@ _SCRIPTS = Path(__file__).resolve().parents[1] / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import atomic_json  # noqa: E402
 import save_state  # noqa: E402
+import save_state_common  # noqa: E402
 
 
 def _no_stray_tmp_or_corrupt(dirpath: Path, target: Path):
@@ -27,8 +28,8 @@ def _no_stray_tmp_or_corrupt(dirpath: Path, target: Path):
 # ---------------------------------------------------------------- 原子写路径
 
 def test_save_state_imports_atomic_json():
-    """save_state 必须经由 atomic_json 落盘（不再裸 write_text）——模块身份钉死。"""
-    assert save_state.atomic_json is atomic_json
+    """共享状态 IO 必须经由 required atomic_json 模块落盘。"""
+    assert save_state_common.atomic_json is atomic_json
 
 
 def test_save_json_routes_through_atomic_write_json():
@@ -68,22 +69,11 @@ def test_save_json_roundtrip_valid_json_no_stray_tmp():
         assert json.loads(p.read_text(encoding="utf-8")) == data2
 
 
-def test_save_json_fallback_without_atomic_json():
-    """atomic_json 不可导入（=None）时兜底路径：手写唯一名 tmp + os.replace 仍正确落盘。"""
-    orig = save_state.atomic_json
-    save_state.atomic_json = None
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            db = Path(td) / "_数据库"
-            p = db / "进度.json"
-            save_state.save_json(p, {"completed": 3, "current": 4})
-            _no_stray_tmp_or_corrupt(db, p)
-            assert json.loads(p.read_text(encoding="utf-8"))["completed"] == 3
-            # 兜底路径覆盖写也不残留 tmp
-            save_state.save_json(p, {"completed": 4, "current": 5})
-            _no_stray_tmp_or_corrupt(db, p)
-    finally:
-        save_state.atomic_json = orig
+def test_atomic_json_is_required_without_fallback_branch():
+    source = Path(save_state_common.__file__).read_text(encoding="utf-8")
+    assert "import atomic_json" in source
+    assert "except ImportError" not in source
+    assert "atomic_json is not None" not in source
 
 
 # ---------------------------------------------------------------- 崩溃不毁原文件（P1-1 核心语义）
@@ -122,13 +112,12 @@ def test_crash_mid_write_preserves_original():
 def test_no_bare_db_write_text_regression():
     """源码层防回归：save_state 不得再出现「目标文件裸 write_text」写 _数据库 JSON。"""
     import re
-    src = Path(save_state.__file__).read_text(encoding="utf-8")
-    # 旧反模式 1：save_json 直接 p.write_text(json.dumps(...))（缺漏报告 :60 点名）。
-    # 注意词边界：兜底路径的 tmp.write_text(json.dumps 是合法的（写 tmp 非目标），
-    # 裸子串 "p.write_text" 会误匹配 "tmp.write_text" 尾部 → 用 \b 钉死变量名恰为 p。
+    src = (Path(save_state.__file__).read_text(encoding="utf-8")
+           + Path(save_state_common.__file__).read_text(encoding="utf-8"))
+    # 目标数据库文件不得绕过公共原子写入口。
     assert not re.search(r"(?<![\w.])p\.write_text\(json\.dumps", src), \
         "save_json 回归成裸 write_text"
-    # 固定 .json.tmp 名会在并发写入时交错损坏。
+    # 临时文件名不得固定，避免并发写交错。
     assert 'with_suffix(".json.tmp")' not in src, "回归成固定 tmp 名（并发会交错损坏）"
 
 

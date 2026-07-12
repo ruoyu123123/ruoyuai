@@ -28,4 +28,5 @@ workspace/styles/{书名}/
 
 ## 字段说明
 
-参考 `core/claude-home/templates/distill_3ch_agent_brief.md`。
+以 `skill_FINAL.md` 和 `作者风格_FINAL.json` 为当前权威产物；正式写作通过
+`/cluster-write` 自动加载，不需要手工复制字段。

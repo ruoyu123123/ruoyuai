@@ -112,10 +112,13 @@ def test_grand_trend_bare_scaffold_advisory_passes():
 
 # ============ C03 载荷非空（涟漪规则 / 事件簇）============
 def test_ripple_filled_ok():
-    """涟漪规则有 rules → exit 0。"""
+    """涟漪规则有 ripple_rules → exit 0。"""
     with tempfile.TemporaryDirectory() as td:
         p = _write(Path(td) / "_数据库", "涟漪规则",
-                   {"schema_version": 1, "rules": [{"id": "r1", "trigger": "x"}], "_touched": "edit"})
+                   {"schema_version": 1,
+                    "ripple_rules": [{"id": "r1", "trigger_type": "minor_event",
+                                      "trigger_match": "x", "ripples": []}],
+                    "_touched": "edit"})
         assert dsv.revalidate_after_manual(p) == 0
 
 

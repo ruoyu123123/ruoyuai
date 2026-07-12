@@ -1,39 +1,7 @@
-"""skill_opt.train — 主训练循环
+"""SkillOpt 训练主循环。
 
-业界源 (arXiv:2605.23904 Algorithm 1):
-- epoch = 4
-- rollout batch = 40 (论文 SearchQA 实测)
-- reflection minibatch = 8
-- L_t (textual learning rate) = 4 → cosine decay floor 2
-- analyst workers = 16 (并发,本实现 thin slice 串行,阶段3.5 再加并发)
-- max reflection rounds = 3 / minibatch
-- slow_update samples = 20 / epoch (epoch ≥ 2 启动)
-
-主循环:
-  FOR epoch in 1..4:
-    L_t = cosine_decay(epoch, max=4, min=2)
-    FOR step in train // minibatch:
-      minibatch = sample(train, size=8)
-      trajs = rollout_batch(current_skill, minibatch)
-      patches = optimizer.propose_patches(
-          current_skill, trajs, protected=SLOW, rejects=epoch_rejects, max=L_t
-      )
-      candidate = patch_applier.apply(current_skill, patches)
-      r_before = rollout_batch(current_skill, selection_set)
-      r_after  = rollout_batch(candidate,      selection_set)
-      gate = validation_gate.decide(r_before, r_after)
-      IF gate.accepted:
-        current_skill = candidate
-        log("accept")
-      ELSE:
-        reject_buffer.record(...)
-    clear_epoch_rejects(epoch)
-  RETURN best_skill (epoch 末 selection_set 最高分)
-
-北极星纪律:
-- 优化对象=skill_FAST.md (skill_SLOW.md 进 PROTECTED 段不许动)
-- reward 只读现有 judge/scanner binary 信号,不引入新硬约束
-- epoch 边界清 reject_buffer (epoch-local)
+训练对 FAST 段做有界编辑，保护 SLOW 段，并用 held-out selection reward 严格选择
+候选。每次 rollout 必须消费与候选 skill digest 唯一绑定的 Claude 场景稿。
 """
 from __future__ import annotations
 
@@ -58,6 +26,7 @@ from skill_opt import (  # noqa: E402
     reward,
     reward_sfs,
     rollout,
+    scene_jobs,
     skill_compactor,
     validation_gate,
 )
@@ -156,15 +125,20 @@ def _eval_selection_distill(
     multi_ref_seed: int = 42,
 ) -> list[float]:
     """蒸馏路线: 复刻→SFS 评分算 reward(返回 [0,1] 数组)。"""
+    scene_jobs.require_scene_jobs(
+        skill_path=skill_path,
+        cluster_ids=list(selection_ids),
+        out_root=out_root,
+        run_id=run_id,
+    )
     rewards = []
     for cid in selection_ids:
-        sub_run = f"{run_id}_{cid}"
         sr = reward_sfs.reward_for_cluster_sfs(
             style_skill=skill_path,
             project_root=project,
             cluster_id=cid,
             out_root=out_root,
-            run_id=sub_run,
+            run_id=run_id,
             multi_ref_count=multi_ref_count,
             multi_ref_seed=multi_ref_seed,
         )
@@ -209,6 +183,8 @@ def train(
     multi_ref_count: int = 5,
     multi_ref_seed: int = 42,
     seed: int = 42,
+    run_id: str | None = None,
+    prepare_scene_jobs: bool = False,
     dry_run: bool = False,
 ) -> TrainResult:
     """SkillOpt 主训练循环。
@@ -246,14 +222,51 @@ def train(
         protected_titles = [s.title for s in slow_secs if s.title]
 
     # 3. 工作目录
-    train_dir = project_root / "_skillopt" / "train" / datetime.now().strftime("%Y%m%dT%H%M%S")
+    train_run_id = run_id or datetime.now().strftime("%Y%m%dT%H%M%S")
+    train_dir = project_root / "_skillopt" / "train" / train_run_id
     train_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = train_dir / "training_checkpoint.json"
+    checkpoint = (
+        json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        if checkpoint_path.exists() else {}
+    )
 
     # 4. 初始 skill (做工作副本不动原文件)
     current_skill_path = train_dir / "skill_current.md"
-    current_skill_path.write_text(
-        initial_skill_path.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    if not current_skill_path.exists() or not checkpoint:
+        current_skill_path.write_text(
+            initial_skill_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+    schedule_path = train_dir / "training_schedule.json"
+    if schedule_path.exists():
+        schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
+    else:
+        schedule = {
+            str(epoch): rng.sample(split.train, min(rollout_batch_size, len(split.train)))
+            for epoch in range(1, epochs + 1)
+        }
+        schedule_path.write_text(json.dumps(schedule, ensure_ascii=False, indent=2), encoding="utf-8")
+    resume_epoch = int(checkpoint.get("epoch", 1))
+    resume_step = int(checkpoint.get("step", 0))
+
+    def save_checkpoint(epoch: int, step: int, phase: str,
+                        candidate_path: Path | None = None) -> None:
+        payload = {
+            "version": 1,
+            "run_id": train_run_id,
+            "epoch": epoch,
+            "step": step,
+            "phase": phase,
+            "current_skill_path": str(current_skill_path.resolve()),
+            "current_skill_digest": scene_jobs.skill_digest(current_skill_path),
+            "candidate_skill_path": str(candidate_path.resolve()) if candidate_path else None,
+            "candidate_skill_digest": (
+                scene_jobs.skill_digest(candidate_path) if candidate_path else None
+            ),
+            "schedule_path": str(schedule_path.resolve()),
+        }
+        checkpoint_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     result = TrainResult(
         project_root=str(project_root),
@@ -270,6 +283,7 @@ def train(
             "multi_ref_count": multi_ref_count,
             "multi_ref_seed": multi_ref_seed,
             "seed": seed,
+            "run_id": train_run_id,
             # E5: model 版本追溯 (G1: 换模型后能查"这份 skill 对哪个模型优化")
             "gen_model_profile": _get_model_profile_name(),
         },
@@ -283,6 +297,21 @@ def train(
     print(f"  PROTECTED 段数: {len(protected_titles)}")
     print(f"  workdir: {train_dir}")
 
+    if prepare_scene_jobs:
+        first_batch = schedule["1"][:minibatch_size]
+        try:
+            scene_jobs.require_scene_jobs(
+                skill_path=current_skill_path,
+                cluster_ids=first_batch,
+                out_root=train_dir,
+                run_id="ep1_step0_mb",
+            )
+        except scene_jobs.SceneJobsRequiredError:
+            pass
+        save_checkpoint(1, 0, "awaiting_initial_scenes")
+        print(f"[prepare] 场景任务已写入 {scene_jobs.manifest_path(train_dir)}")
+        return result
+
     if dry_run:
         print("[dry-run] 计划如上,不真跑。")
         return result
@@ -292,33 +321,41 @@ def train(
     best_skill_text = current_skill_path.read_text(encoding="utf-8")
 
     for ep in range(1, epochs + 1):
+        if ep < resume_epoch:
+            continue
         l_t = cosine_decay_lt(ep, epochs, l_t_max, l_t_min)
         log = EpochLog(epoch=ep, l_t=l_t)
         print(f"\n[epoch {ep}/{epochs}] L_t={l_t}")
 
         # 切 minibatches (按 rollout_batch 上限挑训练样本)
-        train_sample = rng.sample(
-            split.train, min(rollout_batch_size, len(split.train))
-        )
+        train_sample = schedule[str(ep)]
         steps = max(1, len(train_sample) // minibatch_size)
 
         for step in range(steps):
+            if ep == resume_epoch and step < resume_step:
+                continue
             log.steps_attempted += 1
             mb = train_sample[step * minibatch_size : (step + 1) * minibatch_size]
+            save_checkpoint(ep, step, "minibatch_rollout")
 
             # rollout minibatch (拿 trajectory)
-            run_id = f"ep{ep}_step{step}_mb"
+            evaluation_run_id = f"ep{ep}_step{step}_mb"
             if reward_route == "distill":
                 # 蒸馏路线: 每个 cluster 单独跑 SFS reward
+                scene_jobs.require_scene_jobs(
+                    skill_path=current_skill_path,
+                    cluster_ids=list(mb),
+                    out_root=train_dir,
+                    run_id=evaluation_run_id,
+                )
                 traj_dicts = []
                 for cid in mb:
-                    sub_run = f"{run_id}_{cid}"
                     sr = reward_sfs.reward_for_cluster_sfs(
                         style_skill=current_skill_path,
                         project_root=project_root,
                         cluster_id=cid,
                         out_root=train_dir,
-                        run_id=sub_run,
+                        run_id=evaluation_run_id,
                         multi_ref_count=multi_ref_count,
                         multi_ref_seed=multi_ref_seed,
                     )
@@ -337,7 +374,7 @@ def train(
                     project=project_root,
                     cluster_ids=mb,
                     out_root=train_dir,
-                    run_id=run_id,
+                    run_id=evaluation_run_id,
                     reward_mode=reward_mode,
                 )
                 traj_dicts = [asdict(t) for t in trajs]
@@ -345,21 +382,23 @@ def train(
             # optimizer 提议 patches
             current_text = current_skill_path.read_text(encoding="utf-8")
             rejects = reject_buffer.load_epoch_rejects(project_root, ep)
-            patches, raw_reply = optimizer.propose_patches(
-                skill_text=current_text,
-                trajectories=traj_dicts,
-                protected_sections=protected_titles,
-                rejects=rejects,
-                skill_version=f"ep{ep}_step{step}",
-                max_patches=l_t,
-            )
-            # 落盘 optimizer 原始回复 (调试必须品)
             opt_log = train_dir / f"ep{ep}_step{step}_optimizer.json"
-            opt_log.write_text(
-                json.dumps({"patches": patches, "raw_reply": raw_reply[:5000]},
-                           ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            if opt_log.exists():
+                patches = json.loads(opt_log.read_text(encoding="utf-8")).get("patches", [])
+            else:
+                patches, raw_reply = optimizer.propose_patches(
+                    skill_text=current_text,
+                    trajectories=traj_dicts,
+                    protected_sections=protected_titles,
+                    rejects=rejects,
+                    skill_version=f"ep{ep}_step{step}",
+                    max_patches=l_t,
+                )
+                opt_log.write_text(
+                    json.dumps({"patches": patches, "raw_reply": raw_reply[:5000]},
+                               ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
             if not patches:
                 print(f"  [ep{ep}_step{step}] optimizer 无 patch,跳过")
                 continue
@@ -373,18 +412,23 @@ def train(
                 continue
 
             candidate_path = train_dir / f"ep{ep}_step{step}_candidate.md"
-            candidate_path.write_text(pr.new_text, encoding="utf-8")
+            if candidate_path.exists():
+                if candidate_path.read_text(encoding="utf-8") != pr.new_text:
+                    raise RuntimeError(f"恢复 candidate 内容冲突: {candidate_path}")
+            else:
+                candidate_path.write_text(pr.new_text, encoding="utf-8")
+            save_checkpoint(ep, step, "selection", candidate_path)
 
             # 在 selection_set 上比对
             r_before = _eval_selection(
                 current_skill_path, project_root, split.selection,
-                train_dir, f"{run_id}_sel_before",
+                train_dir, f"{evaluation_run_id}_sel_before",
                 reward_route=reward_route, reward_mode=reward_mode,
                 multi_ref_count=multi_ref_count, multi_ref_seed=multi_ref_seed,
             )
             r_after = _eval_selection(
                 candidate_path, project_root, split.selection,
-                train_dir, f"{run_id}_sel_after",
+                train_dir, f"{evaluation_run_id}_sel_after",
                 reward_route=reward_route, reward_mode=reward_mode,
                 multi_ref_count=multi_ref_count, multi_ref_seed=multi_ref_seed,
             )
@@ -425,6 +469,11 @@ def train(
                     )
                 print(f"  [ep{ep}_step{step}] REJECT {gate.reason}")
 
+            next_epoch, next_step = ep, step + 1
+            if next_step >= steps:
+                next_epoch, next_step = ep + 1, 0
+            save_checkpoint(next_epoch, next_step, "ready")
+
         log.best_selection_reward = max(log.selection_reward_history or [0.0])
         result.epochs.append(log)
 
@@ -463,6 +512,7 @@ def train(
         ),
         encoding="utf-8",
     )
+    save_checkpoint(epochs + 1, 0, "completed", best_path)
     print(f"\n[done] best_skill: {best_path}")
     print(f"  selection_reward: {result.final_selection_reward:.4f}")
     print(f"  test_reward:      {result.final_test_reward:.4f}")
@@ -489,24 +539,34 @@ def main() -> int:
     ap.add_argument("--multi-ref-seed", type=int, default=42,
                     help="仅 distill 路线生效")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--run-id", required=True,
+                    help="稳定训练标识；补齐 claude_scene_jobs.json 后以同值恢复")
+    ap.add_argument("--prepare-scene-jobs", action="store_true",
+                    help="只固化训练 schedule/checkpoint 并登记首批 Claude 场景任务")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    train(
-        project_root=Path(args.project),
-        initial_skill_path=Path(args.skill),
-        epochs=args.epochs,
-        rollout_batch_size=args.rollout_batch,
-        minibatch_size=args.minibatch,
-        l_t_max=args.l_t_max,
-        l_t_min=args.l_t_min,
-        reward_route=args.reward_route,
-        reward_mode=args.reward_mode,
-        multi_ref_count=args.multi_ref_count,
-        multi_ref_seed=args.multi_ref_seed,
-        seed=args.seed,
-        dry_run=args.dry_run,
-    )
+    try:
+        train(
+            project_root=Path(args.project),
+            initial_skill_path=Path(args.skill),
+            epochs=args.epochs,
+            rollout_batch_size=args.rollout_batch,
+            minibatch_size=args.minibatch,
+            l_t_max=args.l_t_max,
+            l_t_min=args.l_t_min,
+            reward_route=args.reward_route,
+            reward_mode=args.reward_mode,
+            multi_ref_count=args.multi_ref_count,
+            multi_ref_seed=args.multi_ref_seed,
+            seed=args.seed,
+            run_id=args.run_id,
+            prepare_scene_jobs=args.prepare_scene_jobs,
+            dry_run=args.dry_run,
+        )
+    except scene_jobs.SceneJobsRequiredError as exc:
+        print(f"[REQUIRED] {exc}", file=sys.stderr)
+        return 2
     return 0
 
 

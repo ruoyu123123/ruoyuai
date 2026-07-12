@@ -25,9 +25,9 @@ def _mk_project(enable=True, symbols=None):
             json.dumps({"huaben_zhanghui_pastiche": True}, ensure_ascii=False),
             encoding="utf-8")
     if symbols is not None:
-        (proj / "_数据库" / ".cross_chapter_scan").mkdir(parents=True,
+        (proj / "_数据库" / ".cross_cluster_scan").mkdir(parents=True,
                                                        exist_ok=True)
-        (proj / "_数据库" / ".cross_chapter_scan" /
+        (proj / "_数据库" / ".cross_cluster_scan" /
          "xiezi_kernel.json").write_text(
             json.dumps({"kernel_symbols": symbols}, ensure_ascii=False),
             encoding="utf-8")

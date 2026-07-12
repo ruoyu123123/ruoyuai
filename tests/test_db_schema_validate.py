@@ -1,16 +1,5 @@
 # -*- coding: utf-8 -*-
-"""db_schema_validate auto-migrate 回归网（第四轮 Workflow #9·2026-06-17）。
-
-cluster-save-state step1 热路径每 cluster 跑 `db_schema_validate.py --auto-migrate`（破坏性落盘改写
-用户 DB JSON）·此前零行为测试覆盖（唯一测试只跑 auto_migrate=False）。
-
-覆盖：
-  · migrate_dict_to_list —— dict→list 转换 + 静默丢非 dict 项（数据损失行为固化）
-  · validate_file auto_migrate=False —— dict collection → TYPE_MISMATCH error（不改盘）
-  · validate_file auto_migrate=True —— dict→list 落盘 + 备份
-
-零依赖范式（__main__ 自跑）。
-"""
+"""数据库 schema 严格只读校验回归网。"""
 import json
 import sys
 import tempfile
@@ -20,41 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts")
 import db_schema_validate as dsv  # noqa: E402
 
 
-# ============ migrate_dict_to_list（dict→list + 数据损失）============
-def test_migrate_dict_to_list_basic():
-    """dict collection → list·数字 key 加 ch 字段。"""
-    data = {"characters": {"1": {"name": "a"}, "2": {"name": "b"}}}
-    new, mig = dsv.migrate_dict_to_list(data, "characters")
-    assert mig is True
-    assert isinstance(new["characters"], list)
-    assert len(new["characters"]) == 2
-    assert new["characters"][0]["ch"] == 1  # 数字 key → ch（排序后第一个）
-
-
-def test_migrate_dict_to_list_drops_non_dict():
-    """🔴 数据损失行为固化：非 dict 值（str/int）被静默丢弃（仅保留 dict 项）。"""
-    data = {"characters": {"1": {"name": "a"}, "2": "str", "3": 42, "4": {"name": "b"}}}
-    new, mig = dsv.migrate_dict_to_list(data, "characters")
-    assert mig is True
-    assert len(new["characters"]) == 2  # str/int 两项静默丢
-
-
-def test_migrate_already_list_noop():
-    """已是 list → 不 migrate（mig False）。"""
-    data = {"characters": [{"name": "a"}]}
-    new, mig = dsv.migrate_dict_to_list(data, "characters")
-    assert mig is False
-
-
-def test_migrate_non_numeric_key_orig_key():
-    """非数字 key → _orig_key 保留（不丢）。"""
-    data = {"characters": {"主角": {"name": "a"}}}
-    new, mig = dsv.migrate_dict_to_list(data, "characters")
-    assert mig is True
-    assert new["characters"][0]["_orig_key"] == "主角"
-
-
-# ============ validate_file auto_migrate ============
+# ============ validate_file 严格只读 ============
 def _mk_chars_dict(td):
     db = Path(td) / "_数据库"
     db.mkdir(parents=True)
@@ -65,28 +20,45 @@ def _mk_chars_dict(td):
     return p
 
 
-def test_validate_auto_migrate_false_type_mismatch():
-    """dict collection + auto_migrate=False → TYPE_MISMATCH error·不改盘（mig False）。"""
+def test_validate_type_mismatch_is_error_and_never_writes():
+    """collection 类型错误直接报错，文件与目录结构保持不变。"""
     with tempfile.TemporaryDirectory() as td:
         p = _mk_chars_dict(td)
-        errs, warns, mig = dsv.validate_file(p, dsv.SCHEMA_RULES["人物卡"], auto_migrate=False)
-        assert mig is False
+        before = p.read_bytes()
+        errs, warns = dsv.validate_file(p, dsv.SCHEMA_RULES["人物卡"])
         assert any("TYPE_MISMATCH" in e for e in errs), errs
-        after = json.loads(p.read_text(encoding="utf-8"))
-        assert isinstance(after["characters"], dict)  # 未改盘
+        assert p.read_bytes() == before
+        assert not (p.parent / "_backup").exists()
 
 
-def test_validate_auto_migrate_true_converts_and_persists():
-    """dict collection + auto_migrate=True → dict→list 落盘（破坏性改写）+ 备份。"""
+def test_validate_missing_top_key_is_error():
+    """稳定消费契约的必填顶层键缺失时阻断。"""
     with tempfile.TemporaryDirectory() as td:
-        p = _mk_chars_dict(td)
-        errs, warns, mig = dsv.validate_file(p, dsv.SCHEMA_RULES["人物卡"], auto_migrate=True)
-        assert mig is True
-        after = json.loads(p.read_text(encoding="utf-8"))
-        assert isinstance(after["characters"], list)  # 落盘 dict→list
-        # 备份生成（_backup/db_schema/<ts>/）
-        backup_root = p.parent / "_backup" / "db_schema"
-        assert backup_root.exists() and any(backup_root.iterdir())
+        p = Path(td) / "人物卡.json"
+        p.write_text(json.dumps({"characters": []}), encoding="utf-8")
+        errs, _ = dsv.validate_file(p, dsv.SCHEMA_RULES["人物卡"])
+        assert any("MISSING_TOP_KEY" in e and "schema_version" in e for e in errs)
+
+
+def test_validate_item_shape_and_required_fields_are_errors():
+    """集合元素必须是对象且包含稳定消费字段。"""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "人物卡.json"
+        p.write_text(json.dumps({"schema_version": 1, "characters": ["bad", {"id": "x"}]}),
+                     encoding="utf-8")
+        errs, _ = dsv.validate_file(p, dsv.SCHEMA_RULES["人物卡"])
+        assert any("ITEM_TYPE_MISMATCH" in e for e in errs)
+        assert any("ITEM_MISSING_FIELD" in e and "name" in e and "role" in e for e in errs)
+
+
+def test_cli_rejects_unknown_write_flag():
+    """验证器拒绝任何未声明的写盘参数。"""
+    try:
+        dsv._parse_args(["book", "--write-changes"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("未声明的写盘参数必须被 argparse 拒绝")
 
 
 # ============ C19 大势卡结构契约（2026-06-27）============

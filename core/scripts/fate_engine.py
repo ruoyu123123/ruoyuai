@@ -1,271 +1,243 @@
-"""fate_engine.py — 鬼谷八荒式大势引擎（v20 涌现叙事 F3 新增）
-
-核心理念：
-- 大势卡定大事件，**不定章号**
-- 每章触发哪个事件，由 fate_engine 根据 prerequisites + window 涌现决定
-- writer 不受 cluster_blueprint 死约束，按 active_fate_events 推进
-
-四个操作：
-1. evaluate <ch>   - 评估本章应该推进哪些 events（返回 active 列表）
-2. update <ch>     - 章节完成后根据 _changes.json.fate_events_triggered 更新大势状态
-3. drift <ch>      - 检测漂移（超期未触发）
-4. dashboard       - 输出大势全景
-
-用法：
-    python fate_engine.py <project> evaluate <ch>
-    python fate_engine.py <project> update <ch>
-    python fate_engine.py <project> drift <ch>
-    python fate_engine.py <project> dashboard
-
-退出码: 0 健康 / 1 有漂移 / 2 致命
-"""
+"""按故事块评估大势事件的可推进性与窗口漂移。"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
-# 2026-05-29 修：注入 scripts 目录以 import atomic_json（原子写）
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import atomic_json
+import cluster_lookup
 import state_cli_guard
 
 
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+def _load_fate(project_root: Path) -> dict:
+    path = Path(project_root) / "_数据库" / "大势卡.json"
+    if not path.is_file():
+        raise ValueError("大势卡.json 不存在")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("大势卡.json 顶层必须是 object")
+    return data
 
 
-def save_json(p: Path, data: dict):
-    # 2026-05-29 修：裸写 → 原子写（atomic_write_json 内部已 mkdir + fsync）
-    atomic_json.atomic_write_json(p, data)
+def _cluster_id(value) -> str:
+    cluster_id = cluster_lookup.normalize_cluster_id(value)
+    if not cluster_id:
+        raise ValueError(f"非法 cluster_id: {value}")
+    return cluster_id
 
 
-def _events(fate: dict) -> list:
-    """取 ME 池并滤掉非 dict 元素。
+def _events(fate: dict) -> list[dict]:
+    """返回 canonical ME 池，并拒绝缺字段、重复 id 与旧结构。"""
+    if not isinstance(fate, dict):
+        raise ValueError("大势卡必须是 object")
+    events = fate.get("major_events")
+    if not isinstance(events, list):
+        raise ValueError("大势卡.major_events 必须是 object array")
+    if not all(isinstance(event, dict) for event in events):
+        raise ValueError("大势卡.major_events 只能包含 object")
 
-    2026-05-30 北极星③契约修复（三重背离之一）：真实项目大势卡顶层键是 `major_events_pool`
-    （emergence.find_remaining_mes 同读法），fate_engine 旧版只读 `major_events` → 真实项目恒返 0
-    个事件 → 大势永不 completed / drift 永不触发 / writer 收不到 active_fate_events → 「大势已定」
-    软牵引静默失效。改为 `major_events_pool or major_events` 两套键名兼容（与 emergence 对齐）。
+    seen: set[str] = set()
+    for event in events:
+        event_id = event.get("id")
+        if not isinstance(event_id, str) or not event_id.strip():
+            raise ValueError("大势卡 major_event 缺少 id")
+        if event_id in seen:
+            raise ValueError(f"大势卡 ME id 重复: {event_id}")
+        seen.add(event_id)
+        if event.get("status") not in {"pending", "completed"}:
+            raise ValueError(f"ME {event_id}.status 必须是 pending 或 completed")
+    return events
 
-    2026-05-30 北极星复审：ME 池可能混入字符串/None 占位，否则 e.get()/_event_id(e) 抛
-    AttributeError，且崩在 build_manifest:620 的 try 里被静默吞成 mode:error，丢失全部大势牵引。"""
-    pool = fate.get("major_events_pool") or fate.get("major_events") or []
-    return [e for e in pool if isinstance(e, dict)]
+
+def _event_map(fate: dict) -> dict[str, dict]:
+    return {event["id"]: event for event in _events(fate)}
 
 
-def _event_id(event: dict) -> str:
-    """取 ME 标识 · 字段名兼容（与 cluster_emergence_engine._get_me_id 同范式）。
+def _prerequisites(event: dict, event_map: dict[str, dict]) -> list[str]:
+    value = event.get("prerequisites", [])
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise ValueError(f"ME {event['id']}.prerequisites 必须是非空字符串数组")
+    missing = sorted(set(value) - event_map.keys())
+    if missing:
+        raise ValueError(f"ME {event['id']} 引用了未知 prerequisites: {missing}")
+    return value
 
-    2026-05-30 北极星③契约修复（三重背离之二）：真实项目 ME 用 `me_id`（如 V1_ME_001 / ME-V1-01），
-    fate_engine 旧版全程读 `id` → 永不命中。emergence._get_me_id 已兼容两套字段名，fate_engine
-    此前未同步。统一读 `id or me_id`，让两端对同一 ME 池得到同一标识。"""
-    if not isinstance(event, dict):
-        return ""
-    return event.get("id") or event.get("me_id") or ""
+
+def _window(event: dict, event_map: dict[str, dict]) -> tuple[str, int] | None:
+    value = event.get("expected_window_after")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"ME {event['id']}.expected_window_after 必须是 object 或 null")
+    anchor = value.get("event")
+    maximum = value.get("max_clusters")
+    if not isinstance(anchor, str) or not anchor:
+        raise ValueError(f"ME {event['id']}.expected_window_after.event 缺失")
+    if anchor not in event_map:
+        raise ValueError(f"ME {event['id']} 的窗口引用未知事件: {anchor}")
+    if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum < 0:
+        raise ValueError(f"ME {event['id']}.expected_window_after.max_clusters 必须是非负整数")
+    return anchor, maximum
 
 
 def is_event_unlockable(event: dict, fate: dict) -> bool:
-    """事件 prerequisites 是否全部 completed → 可以激活。"""
-    prereqs = event.get("prerequisites", [])
-    if not prereqs:
-        return True
-    completed_ids = {_event_id(e) for e in _events(fate) if e.get("status") == "completed"}
-    return all(pid in completed_ids for pid in prereqs)
+    """所有前置 ME 已完成时，当前 ME 可进入推进候选。"""
+    event_map = _event_map(fate)
+    return all(event_map[event_id].get("status") == "completed"
+               for event_id in _prerequisites(event, event_map))
 
 
-def evaluate(project_root: Path, ch: int) -> dict:
-    """返回本章应推进的 active events 清单。"""
-    fate_path = project_root / "_数据库" / "大势卡.json"
-    fate = load_json(fate_path, None)
-    if fate is None:
-        return {"error": "大势卡.json 不存在"}
-
-    events = _events(fate)
-    active = []
-    overdue = []
-    for e in events:
-        if e.get("status") != "scheduled":
-            continue
-        if not is_event_unlockable(e, fate):
-            continue
-        # 该事件可激活 - 计算"是否本章合适"
-        window = e.get("expected_window_after")
-        priority = 5  # 默认中
-        if window and isinstance(window, dict):
-            prereq_event_id = window.get("event")
-            max_ch = window.get("max_chapters", 999)
-            # 找 prerequisite 完成的章号
-            prereq_completed_ch = None
-            for pe in events:
-                if _event_id(pe) == prereq_event_id and pe.get("status") == "completed":
-                    prereq_completed_ch = pe.get("completed_at_ch")
-                    break
-            if prereq_completed_ch is not None:
-                gap = ch - prereq_completed_ch
-                if gap > max_ch:
-                    overdue.append({**e, "_gap": gap, "_max_ch": max_ch})
-                    priority = 10  # 超期
-                elif gap >= max_ch * 0.7:
-                    priority = 8  # 接近窗口末
-                else:
-                    priority = 5
-        # 2026-05-30 北极星③契约修复：字段名两套兼容（真实项目 ME 用 name/triggers，
-        # 旧形态用 title/trigger_when）。原 e["title"] 硬下标在真实 ME（只有 name）上 KeyError，
-        # 旧版因 _events 恒返 0 从未触发；修了键名后必须同步软化字段读取，否则 evaluate 崩在
-        # build_manifest:617 的 try 里被吞成 mode:error → 大势牵引仍然进不了 writer。
-        active.append({
-            "id": _event_id(e),
-            "title": e.get("title") or e.get("name") or "",
-            "stage": e.get("stage"),
-            "trigger_when": e.get("trigger_when") or e.get("triggers"),
-            "physical_evidence": e.get("physical_evidence"),
-            "priority": priority,
-            "downstream_unlocks": e.get("downstream_unlocks", []),
-        })
-
-    active.sort(key=lambda x: -x["priority"])
+def _timing(event: dict, event_map: dict[str, dict], current_cluster: str) -> dict | None:
+    window = _window(event, event_map)
+    if window is None:
+        return None
+    anchor_id, maximum = window
+    anchor = event_map[anchor_id]
+    if anchor.get("status") != "completed":
+        return None
+    completed_at = _cluster_id(anchor.get("completed_at_cluster"))
+    gap = cluster_lookup.cluster_num(current_cluster) - cluster_lookup.cluster_num(completed_at)
+    if gap < 0:
+        raise ValueError(
+            f"当前 {current_cluster} 早于窗口锚点 {anchor_id} 的完成位置 {completed_at}"
+        )
     return {
-        "ch": ch,
-        "active_fate_events": active,
-        "overdue_events": overdue,
-        "total_scheduled": sum(1 for e in events if e.get("status") == "scheduled"),
-        "total_completed": sum(1 for e in events if e.get("status") == "completed"),
+        "anchor_id": anchor_id,
+        "anchor_completed_at_cluster": completed_at,
+        "gap_clusters": gap,
+        "max_clusters": maximum,
+        "overdue_by_clusters": max(0, gap - maximum),
     }
 
 
-def update(project_root: Path, ch: int) -> dict:
-    """根据 _changes.json.fate_events_triggered 更新大势卡。"""
-    changes_path = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章_changes.json"
-    changes = load_json(changes_path, {})
-    triggered = changes.get("factual", {}).get("fate_events_triggered", [])
-    if not triggered:
-        return {"ch": ch, "updated": 0, "reason": "本章未触发 fate_events"}
-
-    fate_path = project_root / "_数据库" / "大势卡.json"
-    fate = load_json(fate_path, {"major_events_pool": []})
-
-    updated_ids = []
-    for trig in triggered:
-        # 🔴 2026-06-17 bug-hunt 修：守卫畸形 fate_events_triggered 元素（裸字符串 / evidence=None）。
-        # 原 trig.get 在 str 上 AttributeError·trig.get("evidence","")[:120] 在 None 上 TypeError →
-        # fate_engine CLI 子进程 exit1 → cluster-save-state step9 假失败卡死流水线。对齐 world_evolution
-        # _apply_chapter 的 isinstance 守卫。
-        if not isinstance(trig, dict):
-            continue
-        eid = trig.get("event_id")
-        if not eid:
-            continue
-        for e in _events(fate):
-            if _event_id(e) == eid and e.get("status") != "completed":
-                e["status"] = "completed"
-                e["completed_at_ch"] = ch
-                e["completion_evidence"] = (trig.get("evidence") or "")[:120]
-                updated_ids.append(eid)
-                break
-
-    save_json(fate_path, fate)
-    return {"ch": ch, "updated": len(updated_ids), "event_ids": updated_ids}
+def _overdue_record(event: dict, timing: dict, current_cluster: str) -> dict:
+    return {
+        "event_id": event["id"],
+        "title": str(event.get("title") or ""),
+        "prereq": timing["anchor_id"],
+        "prereq_completed_at_cluster": timing["anchor_completed_at_cluster"],
+        "current_cluster": current_cluster,
+        "gap_clusters": timing["gap_clusters"],
+        "max_clusters": timing["max_clusters"],
+        "overdue_by_clusters": timing["overdue_by_clusters"],
+    }
 
 
-def drift(project_root: Path, ch: int) -> dict:
-    """检测漂移（超期未触发事件）。"""
-    fate_path = project_root / "_数据库" / "大势卡.json"
-    fate = load_json(fate_path, None)
-    if fate is None:
-        return {"error": "大势卡.json 不存在"}
-    overdue = []
-    for e in _events(fate):
-        if e.get("status") != "scheduled":
+def evaluate(project_root: Path, cluster_id: str) -> dict:
+    """返回当前故事块可推进的 ME，保持只读顾问语义。"""
+    current_cluster = _cluster_id(cluster_id)
+    fate = _load_fate(Path(project_root))
+    events = _events(fate)
+    event_map = {event["id"]: event for event in events}
+    active: list[dict] = []
+    overdue: list[dict] = []
+
+    for event in events:
+        _prerequisites(event, event_map)
+        if event["status"] != "pending" or not is_event_unlockable(event, fate):
             continue
-        window = e.get("expected_window_after")
-        if not window or not isinstance(window, dict):
+        timing = _timing(event, event_map, current_cluster)
+        window = _window(event, event_map)
+        if window is not None and timing is None:
             continue
-        prereq_event_id = window.get("event")
-        max_ch = window.get("max_chapters", 999)
-        prereq_ch = None
-        for pe in _events(fate):
-            if _event_id(pe) == prereq_event_id and pe.get("status") == "completed":
-                prereq_ch = pe.get("completed_at_ch")
-                break
-        if prereq_ch is None:
+
+        priority = 5
+        if timing:
+            if timing["overdue_by_clusters"] > 0:
+                priority = 10
+                overdue.append(_overdue_record(event, timing, current_cluster))
+            elif timing["max_clusters"] == 0 or timing["gap_clusters"] >= timing["max_clusters"] * 0.7:
+                priority = 8
+
+        active.append({
+            "id": event["id"],
+            "title": str(event.get("title") or ""),
+            "stage": event.get("stage"),
+            "trigger_when": event.get("trigger_when"),
+            "physical_evidence": event.get("physical_evidence", []),
+            "priority": priority,
+            "downstream_unlocks": event.get("downstream_unlocks", []),
+        })
+
+    active.sort(key=lambda item: (-item["priority"], item["id"]))
+    return {
+        "cluster_id": current_cluster,
+        "active_fate_events": active,
+        "overdue_events": overdue,
+        "total_pending": sum(1 for event in events if event["status"] == "pending"),
+        "total_completed": sum(1 for event in events if event["status"] == "completed"),
+    }
+
+
+def drift(project_root: Path, cluster_id: str) -> dict:
+    """检测当前故事块已超过软窗口的未完成 ME。"""
+    current_cluster = _cluster_id(cluster_id)
+    fate = _load_fate(Path(project_root))
+    events = _events(fate)
+    event_map = {event["id"]: event for event in events}
+    overdue: list[dict] = []
+
+    for event in events:
+        _prerequisites(event, event_map)
+        if event["status"] != "pending":
             continue
-        gap = ch - prereq_ch
-        if gap > max_ch:
-            overdue.append({
-                "event_id": _event_id(e),
-                "title": e.get("title") or e.get("name") or "",
-                "prereq": prereq_event_id,
-                "prereq_completed_at_ch": prereq_ch,
-                "current_ch": ch,
-                "gap": gap,
-                "max_chapters": max_ch,
-                "overdue_by": gap - max_ch,
-            })
-    return {"ch": ch, "overdue_count": len(overdue), "overdue_events": overdue}
+        timing = _timing(event, event_map, current_cluster)
+        if timing and timing["overdue_by_clusters"] > 0:
+            overdue.append(_overdue_record(event, timing, current_cluster))
+
+    overdue.sort(key=lambda item: (-item["overdue_by_clusters"], item["event_id"]))
+    return {
+        "cluster_id": current_cluster,
+        "overdue_count": len(overdue),
+        "overdue_events": overdue,
+    }
 
 
 def dashboard(project_root: Path) -> dict:
-    """大势全景。"""
-    fate_path = project_root / "_数据库" / "大势卡.json"
-    fate = load_json(fate_path, {"major_events_pool": []})
+    """汇总大势事件数量、状态和阶段分布。"""
+    fate = _load_fate(Path(project_root))
     events = _events(fate)
-    by_status = {}
-    by_stage = {}
-    for e in events:
-        s = e.get("status", "unknown")
-        by_status[s] = by_status.get(s, 0) + 1
-        stg = e.get("stage", "?")
-        by_stage[stg] = by_stage.get(stg, 0) + 1
+    by_status: dict[str, int] = {}
+    by_stage: dict[str, int] = {}
+    for event in events:
+        status = event["status"]
+        stage = str(event.get("stage") or "unspecified")
+        by_status[status] = by_status.get(status, 0) + 1
+        by_stage[stage] = by_stage.get(stage, 0) + 1
     return {
         "total_events": len(events),
         "by_status": by_status,
         "by_stage": by_stage,
-        "final_image": fate.get("story_destiny", {}).get("final_image", "")[:100],
+        "final_image": str(fate.get("story_destiny", {}).get("final_image") or "")[:100],
     }
 
 
-def main():
+def main() -> int:
     state_cli_guard.require_internal("fate_engine.py")
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("action", choices=["evaluate", "update", "drift", "dashboard"])
-    ap.add_argument("ch", nargs="?", type=int, default=None)
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    parser.add_argument("action", choices=["evaluate", "drift", "dashboard"])
+    parser.add_argument("cluster", nargs="?")
+    args = parser.parse_args()
 
-    project_root = Path(args.project)
-
-    if args.action == "dashboard":
-        print(json.dumps(dashboard(project_root), ensure_ascii=False, indent=2))
-        sys.exit(0)
-
-    if args.ch is None:
-        print(f"[ERROR] {args.action} 需要 <ch>", file=sys.stderr)
-        sys.exit(2)
-
-    if args.action == "evaluate":
-        r = evaluate(project_root, args.ch)
-        print(json.dumps(r, ensure_ascii=False, indent=2))
-        sys.exit(0)
-
-    if args.action == "update":
-        r = update(project_root, args.ch)
-        print(json.dumps(r, ensure_ascii=False, indent=2))
-        sys.exit(0)
-
-    if args.action == "drift":
-        r = drift(project_root, args.ch)
-        print(json.dumps(r, ensure_ascii=False, indent=2))
-        sys.exit(1 if r.get("overdue_count", 0) > 0 else 0)
+    try:
+        project_root = Path(args.project)
+        if args.action == "dashboard":
+            result = dashboard(project_root)
+            exit_code = 0
+        else:
+            if args.cluster is None:
+                raise ValueError(f"{args.action} 需要 <cluster_id>")
+            result = evaluate(project_root, args.cluster) if args.action == "evaluate" else drift(project_root, args.cluster)
+            exit_code = 1 if args.action == "drift" and result["overdue_count"] else 0
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return exit_code
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

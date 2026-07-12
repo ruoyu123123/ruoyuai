@@ -736,29 +736,46 @@ def generate_alerts(ref_profile: dict, gen_profile: dict,
 # ============================================================
 
 def _stat_number(value, *keys: str) -> float | None:
-    """从裸数值或统计对象中取有限数值；schema 不符时返回 None。"""
+    """从裸数值或统计对象中取有限数值；非法类型直接拒绝。"""
+    if value is None:
+        return None
     if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
+        raise ValueError("统计值不能是 bool")
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("统计值必须是有限数")
+        return number
     if not isinstance(value, dict):
-        return None
+        raise ValueError(f"统计值必须是数值或统计对象，实际 {type(value).__name__}")
     for key in keys or ("mean", "value"):
-        item = value.get(key)
-        if isinstance(item, bool):
+        if key not in value:
             continue
-        if isinstance(item, (int, float)):
-            return float(item)
+        item = value.get(key)
+        if item is None:
+            continue
+        return _stat_number(item)
     return None
+
+
+def _first_defined(*values, default=None):
+    """返回第一个非 None 值，合法的 0 必须保留。"""
+    return next((value for value in values if value is not None), default)
+
+
+def _reject_nonfinite_json_constant(value: str):
+    raise ValueError(f"作者风格 baseline 含非法 JSON 数值: {value}")
 
 
 def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
     """将风格 JSON 的 quantitative 字段映射到 analyze_text 输出格式。"""
     if not isinstance(baseline, dict):
-        return ref_profile
-    q = baseline.get("quantitative", {})
+        raise ValueError("作者风格 baseline 顶层必须是对象")
+    if "quantitative" not in baseline:
+        raise ValueError("作者风格 baseline 缺 required quantitative")
+    q = baseline["quantitative"]
     if not isinstance(q, dict) or not q:
-        return ref_profile
+        raise ValueError("作者风格 baseline.quantitative 必须是非空对象")
 
     sl = q.get("sentence_length")
     sl_mean = _stat_number(sl, "mean")
@@ -766,13 +783,18 @@ def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
         existing = ref_profile.get("sentence_stats", {})
         if not isinstance(existing, dict):
             existing = {}
+        sl_std = _first_defined(_stat_number(sl, "std"), _stat_number(existing.get("std")), default=0.0)
+        sl_min = _first_defined(_stat_number(sl, "min"), default=2.0)
+        sl_max = _first_defined(_stat_number(sl, "max"), default=90.0)
+        sl_median = _first_defined(_stat_number(sl, "median", "mean"), default=sl_mean)
+        sl_count = _first_defined(_stat_number(existing.get("count")), default=100.0)
         ref_profile["sentence_stats"] = {
             "mean": sl_mean,
-            "std": _stat_number(sl, "std") or _stat_number(existing.get("std")) or 0.0,
-            "min": _stat_number(sl, "min") or 2.0,
-            "max": _stat_number(sl, "max") or 90.0,
-            "median": _stat_number(sl, "median", "mean") or sl_mean,
-            "count": int(_stat_number(existing.get("count")) or 100),
+            "std": sl_std,
+            "min": sl_min,
+            "max": sl_max,
+            "median": sl_median,
+            "count": int(sl_count),
         }
 
     dialogue_ratio = _stat_number(q.get("dialogue_ratio"), "mean", "overall", "early")
@@ -786,10 +808,11 @@ def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
     pl = q.get("paragraph_length")
     mean_sentences = _stat_number(pl, "mean_sentences")
     if mean_sentences is not None:
-        para_count = _stat_number(ref_profile.get("paragraph_count")) or 100
+        para_count = _first_defined(_stat_number(ref_profile.get("paragraph_count")), default=100.0)
+        para_std = _first_defined(_stat_number(pl, "std"), default=2.0)
         ref_profile["para_sentence_stats"] = {
             "mean": mean_sentences,
-            "std": _stat_number(pl, "std") or 2.0,
+            "std": para_std,
             "min": 1, "max": 10, "median": mean_sentences,
             "count": int(para_count),
         }
@@ -844,8 +867,30 @@ def _apply_baseline(ref_profile: dict, baseline: dict) -> dict:
     if single_ratio is not None:
         ref_profile["single_sentence_para_ratio"] = single_ratio
 
+    inner_monologue_ratio = _stat_number(q.get("inner_monologue_ratio"), "mean", "value")
+    if inner_monologue_ratio is not None:
+        ref_profile["inner_monologue_ratio"] = inner_monologue_ratio
+
+    vocabulary = q.get("vocabulary_richness")
+    if vocabulary is not None:
+        if not isinstance(vocabulary, dict):
+            raise ValueError("quantitative.vocabulary_richness 必须是对象")
+        existing_vocabulary = ref_profile.get("vocabulary_richness", {})
+        if not isinstance(existing_vocabulary, dict):
+            existing_vocabulary = {}
+        ttr = _stat_number(vocabulary.get("type_token_ratio"), "mean", "value")
+        hapax = _stat_number(vocabulary.get("hapax_ratio"), "mean", "value")
+        if ttr is not None:
+            existing_vocabulary["type_token_ratio"] = ttr
+        if hapax is not None:
+            existing_vocabulary["hapax_ratio"] = hapax
+        ref_profile["vocabulary_richness"] = existing_vocabulary
+
     # 设定合理的极短段基线（原作者约 12-22%）
-    ultra_current = _stat_number(ref_profile.get("ultra_short_para_ratio"), "mean", "value") or 0.0
+    ultra_current = _first_defined(
+        _stat_number(ref_profile.get("ultra_short_para_ratio"), "mean", "value"),
+        default=0.0,
+    )
     if ultra_current > 0.40:
         ref_profile["ultra_short_para_ratio"] = 0.17
 
@@ -2306,7 +2351,10 @@ def main():
     if args.baseline:
         bp = Path(args.baseline)
         if bp.exists():
-            baseline = json.loads(bp.read_text(encoding="utf-8"))
+            baseline = json.loads(
+                bp.read_text(encoding="utf-8"),
+                parse_constant=_reject_nonfinite_json_constant,
+            )
         else:
             print(f"[警告] baseline 文件不存在: {bp}", file=sys.stderr)
 

@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Wave2-M1 回归锁（2026-07-08·二轮移植 A 批第四批）。
+"""检索提示、场景门控、写前摘要与 manifest 压缩测试。
 
-A6 检索三段式（AI_NovelGenerator prompt_definitions/chapter.py 移植）：
+检索三段式：
   1. query 扩展：rag_retriever.expand_query_from_brief——brief 实体×属性组合词组
      （characters/props/location × scope_summary 关键词·3-5 组·确定性零 LLM）。
      无 brief / 无实体 / 无 scope 关键词 → []（query 零变化）。
   2. 时间距离防复读：命中按块距标 [NEAR_ECHO_RISK]（≤1 块·近块内容禁直接复用）/
      [PARAPHRASE]（2-3 块·需换写）/ [OK]（>3 块）；块距不可知 → 只打用途分类。
   3. 用途标注：启发式粗分类（对话风格参考/冲突节奏参考/世界观碎片/前情事实参考）。
-  2+3 合成每条检索结果的 usage_hint（rag_relevant_chapters + selective_history 共用）。
+  2+3 合成每条检索结果的 usage_hint（cluster 检索与 selective_history 共用）。
 
 A11 DeepLore scene 维度门控（sillytavern-DeepLore 移植）：
   build_manifest._scene_gate_world_hits——世界观词条点名已知角色/地点却与本块出场
@@ -24,6 +24,8 @@ A3 遗留根治：manifest_compress.LONG_TEXT_KEY_WHITELIST——创作载荷长
 import json
 import sys
 from pathlib import Path
+
+from cluster_summary_fixtures import cluster_record, write_cluster_summary
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
@@ -59,22 +61,16 @@ def _mk_brief_project(tmp_path, *, with_scope=True, with_entities=True):
 
 
 def _mk_retrieval_project(tmp_path):
-    """可跑通 retrieve_tfidf 的项目：历史章正文 + 进度.json plan + 事件簇块区间。"""
+    """创建一个历史 cluster 与当前 cluster brief。"""
     root = _mk_brief_project(tmp_path)
-    db = root / "_数据库"
-    (db / "进度.json").write_text(json.dumps({
-        "cluster_blueprint": {
-            "cluster_002": {"chapter_range": [4, 6], "scene_storyboard": [
-                {"ch": 4, "goal": "追查档案馆失踪案卷宗", "turning_point": "旧案重启"}]},
-        },
-    }, ensure_ascii=False), encoding="utf-8")
-    bodies = {
-        1: "林昭走进档案馆，翻找失踪案的卷宗。管理员摇头说十年前的旧案早已封存。" * 6,
-        2: "周队长在酒馆里喝闷酒，谁也不理。窗外的雨下个不停，街面空空荡荡。" * 6,
-        3: "档案馆深夜起了火，卷宗烧掉一半。林昭赶到时只抢出半页残纸。" * 6,
-    }
-    for ch, body in bodies.items():
-        (root / f"第{ch:03d}章.txt").write_text(body, encoding="utf-8")
+    summary = "林昭走进档案馆翻找失踪案卷宗，深夜大火烧掉一半旧案。"
+    write_cluster_summary(root, [cluster_record("cluster_001", summary=summary)])
+    folder = root / "章节" / "cluster_001_draft"
+    folder.mkdir(parents=True)
+    (folder / "cluster_001_draft.txt").write_text(
+        (summary + "管理员说十年前的旧案早已封存。") * 6,
+        encoding="utf-8",
+    )
     return root
 
 
@@ -110,7 +106,7 @@ _GATE_CHARS = [{"id": "char_linzhao", "name": "林昭"},
 def test_expand_query_positive(tmp_path):
     """正例：实体×scope 关键词组合 3-5 组·每组含实体·确定性。"""
     root = _mk_brief_project(tmp_path)
-    groups = rag.expand_query_from_brief(root, 4)
+    groups = rag.expand_query_from_brief(root, "cluster_002")
     assert 3 <= len(groups) <= 5
     joined = " ".join(groups)
     for ent in ("林昭", "铜钥匙", "档案馆"):
@@ -118,29 +114,29 @@ def test_expand_query_positive(tmp_path):
     # 属性来自 scope_summary（实体名不算属性）
     assert any(kw in joined for kw in ("暴雨夜潜", "失踪", "卷宗", "牵出十年"))
     # 确定性：两次调用逐字节一致
-    assert groups == rag.expand_query_from_brief(root, 4)
+    assert groups == rag.expand_query_from_brief(root, "cluster_002")
 
 
 def test_expand_query_zero_change_paths(tmp_path):
     """零变化路径：无事件簇 / 无 scope / 无实体 → []。"""
     empty = tmp_path / "空书"
     (empty / "_数据库").mkdir(parents=True)
-    assert rag.expand_query_from_brief(empty, 4) == []
+    assert rag.expand_query_from_brief(empty, "cluster_002") == []
     no_scope = _mk_brief_project(tmp_path, with_scope=False)
-    assert rag.expand_query_from_brief(no_scope, 4) == []
+    assert rag.expand_query_from_brief(no_scope, "cluster_002") == []
     no_ent = _mk_brief_project(tmp_path / "b", with_entities=False)
-    assert rag.expand_query_from_brief(no_ent, 4) == []
+    assert rag.expand_query_from_brief(no_ent, "cluster_002") == []
 
 
-def test_corpus_query_doc_carries_expansion(tmp_path):
-    """_load_retrieval_corpus 的 query doc = 扩展词组 + 原 plan（扩展非替换·plan 信号保留）。"""
+def test_corpus_query_doc_carries_expansion_and_brief(tmp_path):
+    """query 同时携带扩展词组与当前 cluster brief。"""
     root = _mk_retrieval_project(tmp_path)
-    corpus = rag._load_retrieval_corpus(root, 4)
+    corpus = rag._load_retrieval_corpus(root, "cluster_002")
     assert corpus is not None
     query_doc = corpus[1][-1]
-    assert "林昭" in query_doc                    # 扩展实体进 query
-    assert "追查档案馆失踪案卷宗" in query_doc     # 原 plan 上下文仍在
-    assert "旧案重启" in query_doc
+    assert "林昭" in query_doc
+    assert "暴雨夜潜入调查失踪案卷宗" in query_doc
+    assert "档案馆地下室" in query_doc
 
 
 # ============ A6-2/3 块距防复读 + 用途标注 ============
@@ -172,23 +168,19 @@ def test_classify_usage_heuristics():
 
 
 def test_retrieve_tfidf_hits_carry_usage_hint(tmp_path):
-    """集成：retrieve_tfidf 命中带 usage_hint；ch1-3 属 cluster_001·距当前 cluster_002
-    块距 1 → NEAR_ECHO_RISK。"""
+    """相邻历史 cluster 命中带近块防复读提示。"""
     root = _mk_retrieval_project(tmp_path)
-    results = rag.retrieve_tfidf(root, 4, top_k=3)
+    results = rag.retrieve_tfidf(root, "cluster_002", top_k=3)
     assert results, "夹具应有 TF-IDF 命中"
     for r in results:
         assert r["usage_hint"].startswith("[NEAR_ECHO_RISK]")
         assert "禁直接复用" in r["usage_hint"]
 
 
-def test_annotate_usage_hints_no_cluster_info(tmp_path):
-    """块距不可解析（无事件簇/进度）→ 只打用途分类·不带距离标签（诚实降级）。"""
-    empty = tmp_path / "裸书"
-    (empty / "_数据库").mkdir(parents=True)
-    hits = [{"chapter": 1, "snippet": "他昨天把钥匙留在了桌上。"}]
-    out = rag.annotate_usage_hints(empty, 9, hits)
-    assert out[0]["usage_hint"] == "前情事实参考"
+def test_annotate_usage_hints_uses_cluster_distance():
+    hits = [{"cluster_id": "cluster_001", "snippet": "他昨天把钥匙留在了桌上。"}]
+    out = rag.annotate_usage_hints("cluster_005", hits)
+    assert out[0]["usage_hint"] == "[OK]·前情事实参考"
 
 
 # ============ A11 scene 维度门控 ============

@@ -68,7 +68,7 @@ def _collect_majors(da_shi_ka):
     edges = []
     if not isinstance(da_shi_ka, dict):
         return nodes, edges
-    mes = da_shi_ka.get("major_events_pool") or da_shi_ka.get("major_events") or []
+    mes = da_shi_ka.get("major_events") or []
     for me in mes:
         if not isinstance(me, dict):
             continue

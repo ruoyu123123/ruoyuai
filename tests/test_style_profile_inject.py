@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cluster_summary_fixtures import write_cluster_summary
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
 import style_profile_extractor as spe  # noqa: E402
 import build_manifest as bm  # noqa: E402
@@ -195,6 +197,7 @@ def test_build_fingerprint_prefers_chapter_texts():
 def _mk_min_project(tmp: Path, with_style=True) -> Path:
     db = tmp / "_数据库"
     db.mkdir(parents=True, exist_ok=True)
+    write_cluster_summary(tmp, [])
     prog = {
         "volumes": [{"vol": 1, "title": "第一卷", "chapter_range": [1, 8]}],
         "cluster_blueprint": {

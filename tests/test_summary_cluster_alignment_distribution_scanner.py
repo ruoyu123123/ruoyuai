@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""summary_chapter_alignment_distribution_scanner R20 W9 Batch-AA · P1 · 摘要-章节概念质量分布(cross-cluster)
+"""跨 cluster 摘要概念质量分布顾问测试。
 确定性·零依赖·零 LLM/零联网。
 """
 import json
@@ -12,9 +12,11 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
-import summary_chapter_alignment_distribution_scanner as mod  # noqa: E402
+import summary_cluster_alignment_distribution_scanner as mod  # noqa: E402
 
-_TARGET = _SCRIPTS / "summary_chapter_alignment_distribution_scanner.py"
+from cluster_summary_fixtures import cluster_record, write_cluster_summary  # noqa: E402
+
+_TARGET = _SCRIPTS / "summary_cluster_alignment_distribution_scanner.py"
 
 
 def _set_mode(m):
@@ -24,11 +26,9 @@ def _set_mode(m):
         os.environ["SUMMARY_MASS_DISTRIBUTION_MODE"] = m
 
 
-def _mk_project_with_summary(clusters_summary: dict, baseline=None) -> Path:
+def _mk_project_with_summary(records: list[dict], baseline=None) -> Path:
     proj = Path(tempfile.mkdtemp())
-    (proj / "_数据库").mkdir(parents=True, exist_ok=True)
-    (proj / "_数据库" / "故事块摘要.json").write_text(
-        json.dumps(clusters_summary, ensure_ascii=False), encoding="utf-8")
+    write_cluster_summary(proj, records)
     if baseline is not None:
         (proj / "_数据库" / "作者风格.json").write_text(
             json.dumps({"slow_update": {"summary_mass_signature_band": baseline}},
@@ -80,13 +80,9 @@ def test_compute_distribution_tail_heavy():
 
 
 def test_main_skips_few_clusters():
-    proj = _mk_project_with_summary({
-        "schema_version": "v2.cluster",
-        "clusters": [
-            {"cluster_id": "cluster_001", "chapter_range": [1, 3],
-             "scope_summary": "短摘要"}
-        ]
-    })
+    proj = _mk_project_with_summary([
+        cluster_record("cluster_001", summary="短摘要"),
+    ])
     r = subprocess.run(
         [sys.executable, str(_TARGET), str(proj)],
         capture_output=True, text=True, encoding="utf-8",
@@ -97,7 +93,7 @@ def test_main_skips_few_clusters():
 
 
 def test_main_off_mode():
-    proj = _mk_project_with_summary({"schema_version": "v2.cluster", "clusters": []})
+    proj = _mk_project_with_summary([])
     r = subprocess.run(
         [sys.executable, str(_TARGET), str(proj)],
         capture_output=True, text=True, encoding="utf-8",
@@ -111,15 +107,8 @@ def test_main_head_heavy_active_fires():
     clusters = []
     for i in range(8):
         text_len = 300 if i < 2 else 5
-        clusters.append({
-            "cluster_id": f"cluster_{i+1:03d}",
-            "chapter_range": [i * 3 + 1, i * 3 + 3],
-            "scope_summary": "摘要" * text_len,
-        })
-    proj = _mk_project_with_summary({
-        "schema_version": "v2.cluster",
-        "clusters": clusters
-    })
+        clusters.append(cluster_record(f"cluster_{i+1:03d}", summary="摘要" * text_len))
+    proj = _mk_project_with_summary(clusters)
     r = subprocess.run(
         [sys.executable, str(_TARGET), str(proj)],
         capture_output=True, text=True, encoding="utf-8",
@@ -128,7 +117,7 @@ def test_main_head_heavy_active_fires():
     # advisory 命中 → exit 1
     assert r.returncode == 1, r.stdout + "\n" + r.stderr
     # snapshot 文件应已写
-    snap = proj / "_数据库" / ".cross_chapter_scan" / "summary_mass_distribution_snapshot.json"
+    snap = proj / "_数据库" / ".cross_cluster_scan" / "summary_mass_distribution_snapshot.json"
     assert snap.exists()
     s = json.loads(snap.read_text(encoding="utf-8"))
     assert "SUMMARY_FIRST_QUARTER_OVERWEIGHT" in s["advisory_codes"]
@@ -138,15 +127,8 @@ def test_main_shadow_silent():
     clusters = []
     for i in range(8):
         text_len = 300 if i < 2 else 5
-        clusters.append({
-            "cluster_id": f"cluster_{i+1:03d}",
-            "chapter_range": [i * 3 + 1, i * 3 + 3],
-            "scope_summary": "摘要" * text_len,
-        })
-    proj = _mk_project_with_summary({
-        "schema_version": "v2.cluster",
-        "clusters": clusters
-    })
+        clusters.append(cluster_record(f"cluster_{i+1:03d}", summary="摘要" * text_len))
+    proj = _mk_project_with_summary(clusters)
     r = subprocess.run(
         [sys.executable, str(_TARGET), str(proj)],
         capture_output=True, text=True, encoding="utf-8",
@@ -160,15 +142,9 @@ def test_author_baseline_overrides_fallback():
     clusters = []
     for i in range(8):
         text_len = 300 if i < 2 else 5
-        clusters.append({
-            "cluster_id": f"cluster_{i+1:03d}",
-            "chapter_range": [i * 3 + 1, i * 3 + 3],
-            "scope_summary": "摘要" * text_len,
-        })
-    proj = _mk_project_with_summary({
-        "schema_version": "v2.cluster",
-        "clusters": clusters
-    }, baseline={"head_share_max": 0.99, "tail_share_max": 0.99})
+        clusters.append(cluster_record(f"cluster_{i+1:03d}", summary="摘要" * text_len))
+    proj = _mk_project_with_summary(
+        clusters, baseline={"head_share_max": 0.99, "tail_share_max": 0.99})
     r = subprocess.run(
         [sys.executable, str(_TARGET), str(proj)],
         capture_output=True, text=True, encoding="utf-8",
@@ -192,13 +168,9 @@ def test_cluster_summary_text_collects_all():
         "scope_summary": "scope",
         "summary": "sum",
         "sub_summaries": ["s1", {"text": "s2"}, {"summary": "s3"}],
-        "chapters": {
-            "1": {"sub_summary": "ch1sub"},
-            "2": {"summary": "ch2sum"},
-        }
     }
     s = mod._cluster_summary_text(c)
     assert "scope" in s
     assert "s1" in s
     assert "s2" in s
-    assert "ch1sub" in s
+    assert "s3" in s

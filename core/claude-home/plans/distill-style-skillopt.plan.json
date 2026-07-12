@@ -1,9 +1,9 @@
 {
   "command": "distill-style-skillopt",
-  "version": 1,
-  "description": "SkillOpt 风格精化 5 步流水线：压缩 skill、切分训练集、epoch=4 有界编辑训练、held-out 验证、提升最佳 skill 并回灌。",
-  "total_steps": 5,
-  "required_steps": [1, 2, 3, 4, 5],
+  "version": 3,
+  "description": "SkillOpt 风格精化 6 步流水线：压缩 skill、切分训练集、准备候选场景稿、训练与验证、提升最佳 skill、回灌验证。",
+  "total_steps": 6,
+  "required_steps": [1, 2, 3, 4, 5, 6],
   "optional_steps": [],
   "_pipeline_status": "主代理按 plan steps 运行确定性脚本；optimizer 使用 active gen-model profile。",
   "_skillopt_paper": "arXiv:2605.23904 + microsoft/SkillOpt · 论文超参 epoch=4 rollout=40 minibatch=8 L_t=4→2",
@@ -33,41 +33,88 @@
     },
     {
       "n": 3,
-      "name": "train-loop",
-      "description": "主训练循环 epoch=4 (论文默认)。每 epoch: rollout minibatch → optimizer 出 ≤L_t 条 patch → validation gate 严格优于才升级 → reject buffer epoch-local 反哺。",
+      "name": "prepare-claude-scene-jobs",
+      "description": "以固定 run_id 固化训练 schedule/checkpoint，并登记首批候选场景任务。主代理必须按 manifest 逐项 spawn novel-replica-writer；每项只消费自身 candidate skill，场景稿和 agent_report 均不可跨 digest 复用。",
       "required": true,
       "skip_output_allowed": false,
+      "must_spawn_agent": "novel-replica-writer",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "<job.cluster_id>",
+        "MODE": "style-replica-draft",
+        "STYLE_SKILL_PATH": "<job.candidate_skill_path>",
+        "SCENES_DIR": "<job.scenes_dir>",
+        "JOB_KEY": "<job.job_key>",
+        "CANDIDATE_SKILL_DIGEST": "<job.candidate_skill_digest>"
+      },
+      "judge_report_path": "_skillopt/train/skillopt-main/agent_receipts_step3.json",
       "scripts": [
-        "python core/scripts/skill_opt/train.py --project {project_root} --skill {project_root}/skill_FINAL.md --reward-route distill --epochs 4 --rollout-batch 40 --minibatch 8 --l-t-max 4 --l-t-min 2 --multi-ref-count 5"
+        "python core/scripts/skill_opt/train.py --project {project_root} --skill {project_root}/skill_FINAL.md --run-id skillopt-main --prepare-scene-jobs --reward-route distill --epochs 4 --rollout-batch 40 --minibatch 8 --l-t-max 4 --l-t-min 2 --multi-ref-count 5",
+        "python core/scripts/skill_opt/scene_jobs.py --verify-all --out-root {project_root}/_skillopt/train/skillopt-main --step 3 --output {project_root}/_skillopt/train/skillopt-main/agent_receipts_step3.json"
       ],
-      "expected_outputs": ["_skillopt/train"]
+      "control_flow": {"exit_codes": {"0": "jobs_prepared"}},
+      "expected_outputs": ["_skillopt/train/skillopt-main/claude_scene_jobs.json", "_skillopt/train/skillopt-main/agent_receipts_step3.json", "_skillopt/train/skillopt-main/training_checkpoint.json", "_skillopt/train/skillopt-main/training_schedule.json"]
     },
     {
       "n": 4,
+      "name": "train-loop",
+      "description": "主训练循环 epoch=4。每个 rollout 只消费 manifest 中与候选 digest 唯一绑定的 Claude 场景稿；动态候选缺稿时 exit 2，补稿后用同一 run_id 恢复。validation gate 严格优于才升级。",
+      "required": true,
+      "skip_output_allowed": false,
+      "must_spawn_agent": "novel-replica-writer",
+      "judge_report_path": "_skillopt/train/skillopt-main/agent_receipts_step4.json",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "<job.cluster_id>",
+        "MODE": "style-replica-draft",
+        "STYLE_SKILL_PATH": "<job.candidate_skill_path>",
+        "SCENES_DIR": "<job.scenes_dir>",
+        "JOB_KEY": "<job.job_key>",
+        "CANDIDATE_SKILL_DIGEST": "<job.candidate_skill_digest>"
+      },
+      "scripts": [
+        "python core/scripts/skill_opt/train.py --project {project_root} --skill {project_root}/skill_FINAL.md --run-id skillopt-main --reward-route distill --epochs 4 --rollout-batch 40 --minibatch 8 --l-t-max 4 --l-t-min 2 --multi-ref-count 5",
+        "python core/scripts/skill_opt/scene_jobs.py --verify-all --out-root {project_root}/_skillopt/train/skillopt-main --step 4 --output {project_root}/_skillopt/train/skillopt-main/agent_receipts_step4.json"
+      ],
+      "control_flow": {"exit_codes": {"0": "ok", "2": "pending_scene_jobs"}},
+      "expected_outputs": ["_skillopt/train/skillopt-main/best_skill.md", "_skillopt/train/skillopt-main/train_log.json", "_skillopt/train/skillopt-main/training_checkpoint.json", "_skillopt/train/skillopt-main/agent_receipts_step4.json"]
+    },
+    {
+      "n": 5,
       "name": "promote-best-skill",
       "description": "把 train 产出的 best_skill.md 合并 SLOW 段提升为新 skill_FINAL.md (备份旧版到 skill_FINAL.md.bak)。",
       "required": true,
       "skip_output_allowed": false,
       "scripts": [
-        "? python -c \"import shutil, pathlib; p=pathlib.Path('{project_root}'); shutil.copy(p/'skill_FINAL.md', p/'skill_FINAL.md.bak')\"",
-        "python -c \"import pathlib, json, glob; p=pathlib.Path('{project_root}'); runs=sorted(p.glob('_skillopt/train/*')); best=runs[-1]/'best_skill.md' if runs else None; assert best and best.exists(), 'best_skill.md 缺失'; (p/'skill_FINAL.md').write_text(best.read_text(encoding='utf-8'), encoding='utf-8'); print(f'[OK] promoted {best} → skill_FINAL.md')\""
+        "python -c \"import shutil, pathlib; p=pathlib.Path('{project_root}'); shutil.copy(p/'skill_FINAL.md', p/'skill_FINAL.md.bak')\"",
+        "python -c \"import pathlib; p=pathlib.Path('{project_root}'); best=p/'_skillopt/train/skillopt-main/best_skill.md'; assert best.exists(), 'best_skill.md 缺失'; (p/'skill_FINAL.md').write_text(best.read_text(encoding='utf-8'), encoding='utf-8'); print(f'[OK] promoted {best} → skill_FINAL.md')\""
       ],
       "expected_outputs": ["skill_FINAL.md"]
     },
     {
-      "n": 5,
+      "n": 6,
       "name": "writer-feedback-verify",
-      "description": "回灌验证闸(沿用 distill_finalize_verify): 用 SkillOpt 产 skill_FINAL 灌 gen_writer 写 cluster → 与原 cluster_arc 比 → 不过 exit 2 拦。Article 6 严闭环。",
+      "description": "最终同栈回灌：Claude 按 skill_FINAL 写 required 场景稿，distill_finalize_verify 用 gemini 润色并产结构报告；distill_av_verify 对同一复刻产 AV 报告。两次执行和两份报告都 required，AV 判别本身保持 advisory。",
       "required": true,
-      "skip_output_allowed": true,
+      "skip_output_allowed": false,
+      "must_spawn_agent": "novel-replica-writer",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "CLUSTER_ID": "<first_cluster_id>",
+        "MODE": "style-replica-draft",
+        "STYLE_SKILL_PATH": "{project_root}/skill_FINAL.md",
+        "SCENES_DIR": "{project_root}/复刻测试/writer_feedback_verify/claude_scenes"
+      },
+      "judge_report_path": "复刻测试/writer_feedback_verify/claude_scenes/agent_report.json",
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
       "scripts": [
-        "? python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --output {project_root}/对比报告/skillopt_verify.json"
+        "python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --claude-scenes-dir {project_root}/复刻测试/writer_feedback_verify/claude_scenes --output {project_root}/对比报告/skillopt_verify.json",
+        "python core/scripts/distill_av_verify.py --project {project_root} --cluster-id <first_cluster_id> --replica {project_root}/复刻测试/writer_feedback_verify/<first_cluster_id>_replica.txt --output {project_root}/对比报告/skillopt_av_verify.json"
       ],
       "control_flow": {"exit_codes": {"0": "ok", "2": "fail"}},
-      "expected_outputs": []
+      "expected_outputs": ["复刻测试/writer_feedback_verify/claude_scenes/agent_report.json", "对比报告/skillopt_verify.json", "对比报告/skillopt_av_verify.json"]
     }
   ],
   "_north_star_alignment": "①更贴近作者风格 ②每 rollout 以 cluster 为单位 ③reward 来自真实写作链路 ④章节只作输出格式 ⑤只读现有 binary 信号且不新增 hard_gate ⑥SkillOpt 是唯一风格 skill 训练入口"

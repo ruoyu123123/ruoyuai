@@ -25,10 +25,10 @@ if str(_SCRIPTS) not in sys.path:
 
 import cluster_lookup as cl  # noqa: E402
 import world_evolution_engine as wee  # noqa: E402
+from atomic_json import atomic_write_json  # noqa: E402
 
 DB_DIR = "\u6570\u636e\u5e93"
 EVENT_CLUSTER_FILE = "\u4e8b\u4ef6\u7c07.json"
-PROGRESS_FILE = "\u8fdb\u5ea6.json"
 WORLD_STATE_FILE = "\u4e16\u754c\u72b6\u6001.json"
 RIPPLE_RULES_FILE = "\u6d9f\u6f2a\u89c4\u5219.json"
 VALUE_OPTIONS = {"--next-key", "--choice"}
@@ -39,10 +39,7 @@ def _load_json(path: Path) -> Any:
 
 
 def _write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_json(path, data)
 
 
 def _resolve_choice_path(project_root: Path, raw: str) -> Path:
@@ -151,74 +148,6 @@ def _choice_metadata(
     if selected_index is not None:
         metadata["selected_candidate_index"] = selected_index
     return metadata
-
-
-def _coerce_range(raw: Any) -> list[int] | None:
-    if isinstance(raw, list) and len(raw) == 2:
-        try:
-            lo, hi = int(raw[0]), int(raw[1])
-        except (TypeError, ValueError):
-            return None
-        return [lo, hi] if lo <= hi else None
-    if isinstance(raw, str) and "-" in raw:
-        left, right = raw.split("-", 1)
-        try:
-            lo, hi = int(left.strip()), int(right.strip())
-        except ValueError:
-            return None
-        return [lo, hi] if lo <= hi else None
-    return None
-
-
-def _iter_cluster_like_records(project_root: Path) -> list[dict[str, Any]]:
-    db = project_root / f"_{DB_DIR}"
-    records: list[dict[str, Any]] = []
-
-    event_path = db / EVENT_CLUSTER_FILE
-    if event_path.exists():
-        data = _load_json(event_path)
-        if isinstance(data, dict):
-            clusters = data.get("clusters") or []
-            if isinstance(clusters, list):
-                records.extend(c for c in clusters if isinstance(c, dict))
-
-    progress_path = db / PROGRESS_FILE
-    if progress_path.exists():
-        data = _load_json(progress_path)
-        if isinstance(data, dict):
-            bp = cl.normalize_blueprint(data)
-            records.extend(
-                {"cluster_id": cid, **body}
-                for cid, body in bp.items()
-                if isinstance(body, dict)
-            )
-
-    return records
-
-
-def _infer_cluster_start_ch(project_root: Path, cluster_id: str) -> int:
-    authoritative = cl.cluster_id_to_range(project_root, cluster_id)
-    if authoritative:
-        return authoritative[0]
-
-    target_n = cl.cluster_num(cluster_id)
-    start = 1
-    for rec in _iter_cluster_like_records(project_root):
-        rec_id = cl.normalize_cluster_id(rec.get("cluster_id"))
-        rec_n = cl.cluster_num(rec_id)
-        rec_range = _coerce_range(rec.get("chapter_range"))
-        if rec_id == cluster_id:
-            storyboard = rec.get("scene_storyboard") or []
-            scene_chs = [
-                int(s["ch"])
-                for s in storyboard
-                if isinstance(s, dict) and isinstance(s.get("ch"), int)
-            ]
-            if scene_chs:
-                return min(scene_chs)
-        if rec_n is not None and target_n is not None and rec_n < target_n and rec_range:
-            start = max(start, rec_range[1] + 1)
-    return start
 
 
 def _validate_cluster_match(cluster_id: str, brief: dict[str, Any]) -> None:
@@ -330,14 +259,13 @@ def apply_selected_card(project_root: Path, next_key: str, choice_path: Path) ->
             "world evolution required files missing: " + ", ".join(missing)
         )
 
-    representative_ch = _infer_cluster_start_ch(project_root, cluster_id)
-    result = wee.apply_minor_event(project_root, representative_ch, ripple_match)
+    result = wee.apply_minor_event(project_root, cluster_id, ripple_match)
     matched = result.get("matched_rules", [])
     applied = result.get("applied_log", [])
 
     print(
         f"[apply_minor_event] cluster={cluster_id} "
-        f"representative_ch={representative_ch} trigger={ripple_match!r}"
+        f"trigger={ripple_match!r}"
     )
     print(f"  matched_rules: {matched}")
     print(f"  applied_count: {len(applied)}")
@@ -364,7 +292,7 @@ def apply_selected_card(project_root: Path, next_key: str, choice_path: Path) ->
         {
             "trigger_type": "minor_event",
             "ripple_match": ripple_match,
-            "representative_ch": representative_ch,
+            "cluster_id": cluster_id,
             "matched_rules": matched,
             "applied_count": len(applied),
         },

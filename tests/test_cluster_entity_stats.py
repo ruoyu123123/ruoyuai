@@ -209,7 +209,7 @@ def test_plan_step5_runs_entity_stats_before_spawn():
     step = _plan_step5()
     lines = step.get("scripts") or []
     assert any("core/scripts/cluster_entity_stats.py" in l for l in lines), lines
-    assert step.get("must_spawn_agent") == "novel-archivist"
+    assert step.get("must_spawn_agent") == ["novel-archivist", "novel-state-tracker"]
 
 
 def test_plan_step5_agent_input_and_outputs_wired():
@@ -221,10 +221,10 @@ def test_plan_step5_agent_input_and_outputs_wired():
 
 
 def test_archivist_doc_declares_entity_stats_input():
-    """novel-archivist.md 输入契约必须声明 ENTITY_STATS_PATH（agent 契约与 plan 同口径）。"""
+    """novel-archivist.md 必须声明确定性实体统计输入。"""
     text = (_ROOT / ".claude" / "agents" / "novel-archivist.md").read_text(encoding="utf-8")
     assert "ENTITY_STATS_PATH" in text
-    assert "cluster_entity_stats" in text
+    assert "确定性实体统计" in text
 
 
 if __name__ == "__main__":

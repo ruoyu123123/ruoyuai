@@ -19,8 +19,8 @@ import scan_retention as mod  # noqa: E402
 
 
 def _mk_scan_dir(tmp: Path) -> Path:
-    """造 <project>/_数据库/.cross_chapter_scan/ 空目录，返回该 scan 目录。"""
-    scan_dir = tmp / "_数据库" / ".cross_chapter_scan"
+    """造 <project>/_数据库/.cross_cluster_scan/ 空目录，返回该 scan 目录。"""
+    scan_dir = tmp / "_数据库" / ".cross_cluster_scan"
     scan_dir.mkdir(parents=True, exist_ok=True)
     return scan_dir
 
@@ -149,7 +149,7 @@ def test_non_matching_names_ignored():
 def test_missing_scan_dir_skips_cleanly():
     """边界：扫描目录不存在 → [SKIP] 退出 0，不抛异常。"""
     with tempfile.TemporaryDirectory() as d:
-        tmp = Path(d)  # 没建 _数据库/.cross_chapter_scan
+        tmp = Path(d)  # 没建 _数据库/.cross_cluster_scan
         code = _run_main(tmp, keep=5)
         assert code == 0  # SKIP 分支也是 exit 0
 

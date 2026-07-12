@@ -1,24 +1,4 @@
-"""cross_cluster_meta_quality_aggregate.py — 摘要/字数/经验 跨章扫（CCR15）
-
-3 类元质量跨章检测：
-
-A. CHAPTER_LENGTH_DISTRIBUTION
-   - LENGTH_OUTLIER：章节字数偏离中位数 ±50%
-   - LENGTH_TREND_DROP：连续 ≥ 3 章字数单调下降
-   - LENGTH_VARIANCE_HIGH：近 N 章 std/mean > 0.4 = 字数控制差
-
-B. SUMMARY_CONSISTENCY
-   读 _数据库/故事块摘要.json 的 chapter_summary[ch] vs 正文实际内容
-   - SUMMARY_TOO_SHORT：摘要 < 50 字（无效摘要）
-   - SUMMARY_KEYWORD_MISSING：摘要中提到的关键名词在正文中未出现 → 摘要在编故事
-
-C. LESSONS_FEEDBACK_LOOP
-   读 _数据库/写作经验.json 的 success_patterns / failure_patterns
-   - FAILURE_RECURRING：failure_pattern 中的关键词在新章中再次出现 → 重复犯错
-   - SUCCESS_NEVER_REUSED：success_pattern 中的关键词在 ≥ 5 章后再无出现 → 经验未沉淀
-
-退出码: 0 健康 / 1 advisory / 2 warning
-"""
+"""检查故事块长度与摘要指纹的长期稳定性。"""
 
 from __future__ import annotations
 
@@ -26,366 +6,150 @@ import argparse
 import json
 import re
 import sys
-from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-
-import os as _os
-IS_CLUSTER_MODE = _os.environ.get("CLUSTER_MODE") == "1"
-
-sys.path.insert(0, str(Path(__file__).parent))
-import cluster_summary_reader as csr  # 2026-05-29 cluster 化：摘要驱动
-
-def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_summary_reader as csr
 
 
-def get_chapters(project_root: Path, last_n: int) -> list[int]:
-    chs = sorted(int(re.match(r"第(\d+)章", d.name).group(1))
-                 for d in (project_root / "章节").glob("第*章")
-                 if re.match(r"第(\d+)章", d.name))
-    return chs[-last_n:] if chs else []
+def _finding(severity: str, code: str, **fields: object) -> dict:
+    return {"severity": severity, "gate_level": "advisory", "code": code, **fields}
 
 
-def read_text(project_root: Path, ch: int) -> str:
-    p = project_root / "章节" / f"第{ch:03d}章" / f"第{ch:03d}章.txt"
-    return p.read_text(encoding="utf-8") if p.exists() else ""
-
-
-# ---------- A. CHAPTER_LENGTH_DISTRIBUTION ----------
-
-def scan_length_distribution(project_root: Path, chapters: list[int],
-                             lengths: list[tuple[int, int]] | None = None) -> list[dict]:
-    """lengths 不传 → 逐章读正文算 CJK（原磁盘逻辑）；传入 → 直接用（cluster 账本 cjk_count）。
-
-    2026-05-29 cluster 化：仅前置数据来源可替换，下游中位数/趋势/方差判定逻辑原样保留。
-    """
-    findings = []
-    if lengths is None:
-        lengths = []  # [(ch, char_count)]
-        for ch in chapters:
-            text = read_text(project_root, ch)
-            # 中文字数（剔除空白和半角符号）
-            cn_chars = len(re.findall(r"[一-鿿]", text))
-            lengths.append((ch, cn_chars))
+def scan_length_distribution(records: list[dict]) -> list[dict]:
+    lengths = [(str(record["cluster_id"]), int(record["word_count"])) for record in records]
     if len(lengths) < 3:
         return []
-
-    counts = [c for _, c in lengths]
-    sorted_counts = sorted(counts)
-    median = sorted_counts[len(sorted_counts) // 2]
+    counts = [count for _, count in lengths]
+    ordered = sorted(counts)
+    median = ordered[len(ordered) // 2]
     mean = sum(counts) / len(counts)
-    var = sum((c - mean) ** 2 for c in counts) / len(counts)
-    std = var ** 0.5
-    cv = std / mean if mean > 0 else 0
+    variance = sum((count - mean) ** 2 for count in counts) / len(counts)
+    deviation = variance ** 0.5
+    coefficient = deviation / mean if mean > 0 else 0
+    findings: list[dict] = []
 
-    # LENGTH_OUTLIER
-    for ch, c in lengths:
-        if abs(c - median) > median * 0.5 and median > 1000:
-            findings.append({
-                "severity": "advisory",
-                "code": "LENGTH_OUTLIER",
-                "ch": ch,
-                "length": c,
-                "median": median,
-                "diff_pct": round((c - median) / median, 2),
-                "suggestion": f"ch{ch} 字数 {c} 偏离中位数 {median} 超 50% → 章节字数控制不稳",
-            })
+    for cluster_id, count in lengths:
+        if median > 1000 and abs(count - median) > median * 0.5:
+            findings.append(_finding(
+                "advisory", "LENGTH_OUTLIER",
+                cluster_id=cluster_id,
+                word_count=count,
+                median=median,
+                diff_pct=round((count - median) / median, 2),
+            ))
 
-    # LENGTH_TREND_DROP
     drop_streak = 0
-    for i in range(1, len(lengths)):
-        if lengths[i][1] < lengths[i - 1][1]:
+    for index in range(1, len(lengths)):
+        if lengths[index][1] < lengths[index - 1][1]:
             drop_streak += 1
             if drop_streak >= 3:
-                findings.append({
-                    "severity": "advisory",
-                    "code": "LENGTH_TREND_DROP",
-                    "consecutive_chs": [lengths[j][0] for j in range(i - 3, i + 1)],
-                    "trail": [lengths[j][1] for j in range(i - 3, i + 1)],
-                    "suggestion": f"近 4 章字数单调下降（{lengths[i-3][1]} → {lengths[i][1]}）→ 写作疲劳",
-                })
+                window = lengths[index - 3:index + 1]
+                findings.append(_finding(
+                    "advisory", "LENGTH_TREND_DROP",
+                    consecutive_clusters=[cluster_id for cluster_id, _ in window],
+                    trail=[count for _, count in window],
+                ))
                 drop_streak = 0
         else:
             drop_streak = 0
 
-    # LENGTH_VARIANCE_HIGH
-    if cv > 0.4 and len(lengths) >= 5:
-        findings.append({
-            "severity": "advisory",
-            "code": "LENGTH_VARIANCE_HIGH",
-            "cv": round(cv, 2),
-            "mean": round(mean),
-            "std": round(std),
-            "suggestion": f"近 {len(lengths)} 章字数 std/mean = {cv:.2f}（>0.4）→ 字数控制差",
-        })
+    if len(lengths) >= 5 and coefficient > 0.4:
+        findings.append(_finding(
+            "advisory", "LENGTH_VARIANCE_HIGH",
+            cv=round(coefficient, 2), mean=round(mean), std=round(deviation),
+        ))
     return findings
 
 
-# ---------- B. SUMMARY_CONSISTENCY ----------
-
-def _flatten_v2_chapter_summary(summary_data: dict) -> dict:
-    """2026-05-29 复审修复 [L5]：v2 cluster schema 的 故事块摘要.json 不再有顶层 chapter_summary，
-    改为 clusters[].chapters[<ch>].summary。把它摊平成 {ch_str: summary_str}，与旧版 chapter_summary 同形，
-    供 scan_summary_consistency 复用下游逻辑。旧 v1 文件（有顶层 chapter_summary）不走这里 → 零回归。"""
-    flat = {}
-    clusters = summary_data.get("clusters")
-    if not isinstance(clusters, list):
-        return flat
-    for cl in clusters:
-        if not isinstance(cl, dict):
+def scan_summary_consistency(records: list[dict]) -> list[dict]:
+    findings: list[dict] = []
+    for record in records:
+        cluster_id = str(record["cluster_id"])
+        summary = record.get("summary")
+        if not isinstance(summary, str) or not summary:
             continue
-        chapters = cl.get("chapters")
-        if not isinstance(chapters, dict):
+        summary_length = len(re.findall(r"[一-鿿]", summary))
+        if summary_length < 50:
+            findings.append(_finding(
+                "advisory", "SUMMARY_TOO_SHORT",
+                cluster_id=cluster_id, summary_len=summary_length,
+            ))
             continue
-        for ch_key, crec in chapters.items():
-            if isinstance(crec, dict):
-                s = crec.get("summary")
-                if isinstance(s, str) and s:
-                    flat[str(ch_key)] = s
-    return flat
-
-
-def scan_summary_consistency(project_root: Path, chapters: list[int]) -> list[dict]:
-    findings = []
-    summary_path = project_root / "_数据库" / "故事块摘要.json"
-    summary_data = load_json(summary_path, {})
-    # 2026-05-29 复审修复 [L5]：先读旧 v1 顶层 chapter_summary；缺失则摊平 v2 clusters[].chapters[].summary，
-    # 避免磁盘回退分支读不存在的顶层 chapter_summary 而静默空跑（dead 检测）。
-    chapter_summary = summary_data.get("chapter_summary", {}) or {}
-    if not chapter_summary:
-        chapter_summary = _flatten_v2_chapter_summary(summary_data)
-    if not chapter_summary:
-        return []
-
-    for ch in chapters:
-        s = chapter_summary.get(str(ch)) or chapter_summary.get(ch) or {}
-        summary_text = s.get("summary") if isinstance(s, dict) else (s if isinstance(s, str) else "")
-        if not summary_text:
+        fingerprint = [
+            str(keyword) for keyword in record.get("text_keyword_set") or []
+            if isinstance(keyword, str) and keyword
+        ]
+        if len(fingerprint) < 5:
             continue
-        text_len = len(re.findall(r"[一-鿿]", summary_text))
-        if text_len < 50:
-            findings.append({
-                "severity": "advisory",
-                "code": "SUMMARY_TOO_SHORT",
-                "ch": ch,
-                "summary_len": text_len,
-                "suggestion": f"ch{ch} 摘要仅 {text_len} 字（应 ≥ 50）→ 无效摘要",
-            })
-            continue
-        # SUMMARY_KEYWORD_MISSING：提取摘要中的中文 2-3 字词，看是否在正文出现
-        text = read_text(project_root, ch)
-        if not text:
-            continue
-        kws = re.findall(r"[一-鿿]{3,4}", summary_text)[:10]
-        miss_kws = [kw for kw in kws if kw not in text]
-        if len(miss_kws) >= len(kws) * 0.6 and len(kws) >= 5:
-            findings.append({
-                "severity": "warning",
-                "code": "SUMMARY_KEYWORD_MISMATCH",
-                "ch": ch,
-                "missing_kws": miss_kws[:6],
-                "miss_ratio": round(len(miss_kws) / len(kws), 2),
-                "suggestion": f"ch{ch} 摘要中 {round(len(miss_kws)/len(kws)*100)}% 关键词在正文未出现 → 摘要可能在编故事",
-            })
+        missing = [keyword for keyword in fingerprint if keyword not in summary]
+        miss_ratio = len(missing) / len(fingerprint)
+        if miss_ratio >= 0.6:
+            findings.append(_finding(
+                "warning", "SUMMARY_KEYWORD_MISMATCH",
+                cluster_id=cluster_id,
+                missing_keywords=missing[:8],
+                miss_ratio=round(miss_ratio, 2),
+            ))
     return findings
 
 
-def scan_summary_consistency_from_ledger(chapter_records: list[tuple[int, dict]]) -> list[dict]:
-    """2026-05-29 cluster 化：账本驱动版 SUMMARY_CONSISTENCY。
-
-    用 ChapterRecord.summary（富摘要）+ text_keyword_set（正文关键词指纹）替代逐章读正文：
-    - SUMMARY_TOO_SHORT：summary < 50 CJK
-    - SUMMARY_KEYWORD_MISMATCH：摘要抽词与正文关键词指纹比对（指纹缺则跳过 keyword 检查）
-    severity/code/输出字段与磁盘版完全一致。
-    """
-    findings = []
-    for ch, rec in chapter_records:
-        summary_text = rec.get("summary") or ""
-        if not isinstance(summary_text, str) or not summary_text:
-            continue
-        text_len = len(re.findall(r"[一-鿿]", summary_text))
-        if text_len < 50:
-            findings.append({
-                "severity": "advisory",
-                "code": "SUMMARY_TOO_SHORT",
-                "ch": ch,
-                "summary_len": text_len,
-                "suggestion": f"ch{ch} 摘要仅 {text_len} 字（应 ≥ 50）→ 无效摘要",
-            })
-            continue
-        # 正文关键词指纹（builder 预抽）作为「正文」的代理；缺则不做 mismatch 检查
-        text_kw_set = set(rec.get("text_keyword_set") or [])
-        if not text_kw_set:
-            continue
-        # 量纲对齐 text_keyword_set(builder _extract_text_keywords 抽的高频 2 字 2gram top-4)：
-        # 原 re.findall(r"[一-鿿]{3,4}") 抽 3-4 字片段·与 2gram 集合永不匹配=结构性必然误报
-        # (2026-06-15 审计 high confirmed)。改抽摘要高频 2gram top-8·与正文 2gram 指纹同量纲比
-        # （忠实摘要的高频词会含正文 top 词→miss 低；编故事→miss 高）。短摘要不足 5 个经下方 len 判不触发。
-        _clean = re.sub(r"[^一-鿿]", "", summary_text)
-        _stop = "的了在是我你他她它们这那有和就都不也要会着说道一个不是什么没有"
-        _g: dict[str, int] = {}
-        for _i in range(len(_clean) - 1):
-            _bg = _clean[_i:_i + 2]
-            if _bg[0] not in _stop and _bg[1] not in _stop:
-                _g[_bg] = _g.get(_bg, 0) + 1
-        kws = sorted(_g, key=lambda k: -_g[k])[:8]
-        miss_kws = [kw for kw in kws if kw not in text_kw_set]
-        if len(miss_kws) >= len(kws) * 0.6 and len(kws) >= 5:
-            findings.append({
-                "severity": "warning",
-                "code": "SUMMARY_KEYWORD_MISMATCH",
-                "ch": ch,
-                "missing_kws": miss_kws[:6],
-                "miss_ratio": round(len(miss_kws) / len(kws), 2),
-                "suggestion": f"ch{ch} 摘要中 {round(len(miss_kws)/len(kws)*100)}% 关键词在正文指纹未出现 → 摘要可能在编故事",
-            })
-    return findings
-
-
-# ---------- C. LESSONS_FEEDBACK_LOOP ----------
-
-def scan_lessons_feedback(project_root: Path, chapters: list[int]) -> list[dict]:
-    lessons_path = project_root / "_数据库" / "写作经验.json"
-    if not lessons_path.exists():
-        return []
-    lessons = load_json(lessons_path, {})
-    failure_patterns = lessons.get("failure_patterns", []) or []
-    success_patterns = lessons.get("success_patterns", []) or []
-    findings = []
-
-    # FAILURE_RECURRING
-    for fp in failure_patterns[-10:]:  # 仅看最近 10 条 failure
-        if not isinstance(fp, dict):
-            continue
-        recorded_at_ch = fp.get("recorded_at_ch") or fp.get("ch") or 0
-        keywords = fp.get("keywords") or fp.get("trigger_keywords") or []
-        if isinstance(keywords, str):
-            keywords = [keywords]
-        if not keywords or recorded_at_ch == 0:
-            continue
-        # 看后续 ≥ 3 章是否再出现
-        post_chs = [c for c in chapters if c > recorded_at_ch][:5]
-        if len(post_chs) < 3:
-            continue
-        recurring_chs = []
-        for ch in post_chs:
-            text = read_text(project_root, ch)
-            if any(kw in text for kw in keywords):
-                recurring_chs.append(ch)
-        if len(recurring_chs) >= 2:
-            findings.append({
-                "severity": "warning",
-                "code": "FAILURE_RECURRING",
-                "failure_id": fp.get("id") or fp.get("name", "?"),
-                "recorded_at_ch": recorded_at_ch,
-                "recurring_chs": recurring_chs,
-                "keywords": keywords[:3],
-                "suggestion": f"失败模式「{fp.get('id', fp.get('name'))}」在 ch{recorded_at_ch} 被记录后，又在 ch{recurring_chs[0]}+ 重现 → writer 没消费 lessons",
-            })
-
-    # SUCCESS_NEVER_REUSED
-    for sp in success_patterns[-10:]:
-        if not isinstance(sp, dict):
-            continue
-        recorded_at_ch = sp.get("recorded_at_ch") or sp.get("ch") or 0
-        keywords = sp.get("keywords") or sp.get("trigger_keywords") or []
-        if isinstance(keywords, str):
-            keywords = [keywords]
-        if not keywords or recorded_at_ch == 0:
-            continue
-        post_chs = [c for c in chapters if c > recorded_at_ch][:8]
-        if len(post_chs) < 5:
-            continue
-        reuse_chs = []
-        for ch in post_chs:
-            text = read_text(project_root, ch)
-            if any(kw in text for kw in keywords):
-                reuse_chs.append(ch)
-        if not reuse_chs:
-            findings.append({
-                "severity": "advisory",
-                "code": "SUCCESS_NEVER_REUSED",
-                "success_id": sp.get("id") or sp.get("name", "?"),
-                "recorded_at_ch": recorded_at_ch,
-                "post_chs_checked": post_chs,
-                "suggestion": f"成功模式「{sp.get('id', sp.get('name'))}」(ch{recorded_at_ch}) 后续 {len(post_chs)} 章无任何复用 → 经验沉淀失败",
-            })
-    return findings
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("project")
-    ap.add_argument("--last-n", type=int, default=10)
-    args = ap.parse_args()
-
-    project_root = Path(args.project)
-
-    findings = []
-
-    # ===== 2026-05-29 cluster 化分支：账本有 cjk_count → A/B 走账本（cjk_count + summary）=====
-    # --last-n 在 cluster 模式语义为「最后 N 个 cluster 的章」
-    use_ledger = (
-        csr.is_cluster_mode()
-        and csr.ledger_has_field(project_root, "cjk_count")
-    )
-    if use_ledger:
-        recs = csr.get_chapter_records(project_root, last_n_clusters=args.last_n)
-        chapters = [ch for ch, _ in recs]
-        if not chapters:
-            print("[SKIP] cluster 账本无章记录")
-            sys.exit(0)
-        # A：用账本 cjk_count 构造 lengths（缺 cjk_count 的章跳过该数据点）
-        lengths = [(ch, int(rec["cjk_count"])) for ch, rec in recs
-                   if isinstance(rec.get("cjk_count"), (int, float))]
-        findings.extend(scan_length_distribution(project_root, chapters, lengths=lengths))
-        # B：用账本 summary + text_keyword_set
-        findings.extend(scan_summary_consistency_from_ledger(recs))
-        # C：lessons 反馈环仍基于磁盘正文（账本无对应字段，原样保留向后兼容）
-        findings.extend(scan_lessons_feedback(project_root, chapters))
-    else:
-        # ===== 原逐章磁盘逻辑（非 cluster 模式 / 账本缺字段 → 零回归）=====
-        chapters = get_chapters(project_root, args.last_n)
-        if not chapters:
-            print("[SKIP] 无已写章节")
-            sys.exit(0)
-        findings.extend(scan_length_distribution(project_root, chapters))
-        findings.extend(scan_summary_consistency(project_root, chapters))
-        findings.extend(scan_lessons_feedback(project_root, chapters))
-
-    out_dir = project_root / "_数据库" / ".cross_chapter_scan"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary = {
-        "warning": sum(1 for f in findings if f["severity"] == "warning"),
-        "advisory": sum(1 for f in findings if f["severity"] == "advisory"),
+def _metrics(records: list[dict]) -> dict:
+    counts = [record["word_count"] for record in records]
+    return {
+        "cluster_count": len(records),
+        "total_word_count": sum(counts),
+        "mean_word_count": round(sum(counts) / len(counts), 2),
+        "min_word_count": min(counts),
+        "max_word_count": max(counts),
+        "summaries_with_keyword_fingerprint": sum(
+            bool(record.get("text_keyword_set")) for record in records
+        ),
     }
-    report = {
+
+
+def build_report(project_root: Path, last_n: int | None = None) -> dict:
+    records = csr.get_clusters(project_root, last_n=last_n)
+    if not records:
+        raise csr.ClusterSummaryError("故事块摘要没有已完成 cluster")
+    findings = scan_length_distribution(records)
+    findings.extend(scan_summary_consistency(records))
+    summary = {
+        "warning": sum(item["severity"] == "warning" for item in findings),
+        "advisory": sum(item["severity"] == "advisory" for item in findings),
+        "total": len(findings),
+    }
+    return {
         "scan_type": "meta_quality",
-        "scan_ts": ts,
-        "chapters_scanned": chapters,
+        "scan_ts": datetime.now().isoformat(timespec="seconds"),
+        "clusters_scanned": [str(record["cluster_id"]) for record in records],
+        "metrics": _metrics(records),
         "findings": findings,
         "summary": summary,
     }
-    out_path = out_dir / f"meta_quality_{ts}.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[meta_quality] {summary['warning']} warning / {summary['advisory']} advisory")
-    for f in findings[:6]:
-        print(f"  [{f['severity'].upper()}] {f.get('code')}: {f.get('suggestion', '')[:80]}")
-    print(f"报告: {out_path}")
-    if summary["warning"] > 0:
-        sys.exit(2)
-    if summary["advisory"] > 0:
-        sys.exit(1)
-    sys.exit(0)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("project")
+    parser.add_argument("--last-n", type=int, default=None)
+    args = parser.parse_args()
+    try:
+        report = build_report(Path(args.project), last_n=args.last_n)
+        out_dir = Path(args.project) / "_数据库" / ".cross_cluster_scan"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = out_dir / f"meta_quality_{stamp}.json"
+        out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[meta_quality] warning={report['summary']['warning']} "
+              f"advisory={report['summary']['advisory']}")
+        print(f"报告: {out_path}")
+        return 2 if report["summary"]["warning"] else 1 if report["summary"]["advisory"] else 0
+    except (OSError, ValueError, csr.ClusterSummaryError) as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

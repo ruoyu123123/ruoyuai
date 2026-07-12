@@ -1,7 +1,7 @@
 {
   "command": "cluster-save-state",
-  "version": 5,
-  "description": "cluster 级状态保存 14 步流水线：解析 changes、archivist 读取正文、apply_archive 回库、卷边界摘要、各子系统更新、反思学习、涌现下一 cluster，并提交 Git 快照。",
+  "version": 6,
+  "description": "cluster 级状态保存 14 步流水线：校验创作自评、并行梳理实体归档与运行态增量、确定性回库、卷边界摘要、各子系统更新、反思学习、涌现下一 cluster，并提交 Git 快照。",
   "total_steps": 14,
   "required_steps": [
     1,
@@ -25,7 +25,7 @@
     {
       "n": 1,
       "name": "wal-start+schema-validate",
-      "description": "开启 cluster 级 WAL + db_schema_validate.py --auto-migrate（34 JSON schema 自检）",
+      "description": "开启 cluster 级 WAL + db_schema_validate.py 严格校验 34 个 canonical JSON。",
       "required": true,
       "skip_output_allowed": false,
       "_doc_pipeline": "WAL 骨架由主代理 touch_outputs 建（.json 后缀写 {} 合法骨架）。",
@@ -36,13 +36,13 @@
         "_数据库/.wal/cluster_{key}_save_state.json"
       ],
       "scripts": [
-        "python core/scripts/db_schema_validate.py {project_root} --auto-migrate"
+        "python core/scripts/db_schema_validate.py {project_root}"
       ]
     },
     {
       "n": 2,
       "name": "parse-cluster-changes",
-      "description": "确认 writer 的 cluster_changes.json 已存在。🔴 2026-06-28 架构纠正：只取 writer 创作自评 self_eval/waivers + 确定性遥测（字数等），**factual 客观状态不再从 writer changes 解析**（角色/道具/关系/locked_facts 由 step5 archivist 读正文梳理 + step6 apply_archive 回库·非 writer 自报）。解析由 step3 --apply-cluster-changes 一并落地（apply 前必 parse·time_advance/location 等非 archive 域）。",
+      "description": "确认 writer 的 cluster_changes.json 已存在；该文件只含 self_eval/waivers 与确定性写作遥测，不承载任何客观状态。",
       "required": true,
       "skip_output_allowed": false,
       "expected_outputs": [
@@ -51,15 +51,17 @@
     },
     {
       "n": 3,
-      "name": "apply-cluster-changes+writer-truth-check",
-      "description": "落地 cluster_changes.json 的**非 archive 域**（time_advance / location / 故事块摘要遥测等）+ 调 writer_truth_check.py 检测撒谎。🔴 2026-06-28 架构纠正：角色/道具/关系/locked_facts 等 factual 客观状态**不在此步 apply**——改由 step5 novel-archivist 读正文产 archive.json + step6 apply_archive.py 确定性回库（save_state 已停读 writer factual·非 writer 自报权威）",
+      "name": "validate-writer-self-eval+truth-check",
+      "description": "验证 cluster_changes.json 的创作自评、豁免和确定性遥测，再对整块正文执行 writer truth-check；不生成或应用客观状态补丁。",
       "required": true,
       "skip_output_allowed": false,
       "expected_outputs": [
-        "_数据库/.wal/{key}_apply_cluster.json"
+        "_数据库/.wal/cluster_{key}_apply_cluster.json",
+        "_数据库/.judge_reports/cluster_{key}_writer-truth-check.json"
       ],
       "scripts": [
-        "python core/scripts/save_state.py {project_root} --apply-cluster-changes {key}"
+        "python core/scripts/save_state.py {project_root} --apply-cluster-changes {key}",
+        "python core/scripts/writer_truth_check.py {project_root} --cluster {key}"
       ]
     },
     {
@@ -81,11 +83,13 @@
     },
     {
       "n": 5,
-      "name": "novel-archivist-cluster",
-      "description": "🔴 2026-06-28 架构纠正：spawn novel-archivist MODE=cluster · 读整 cluster 正文 + 当前库，客观抽取本块新增/变更的角色/道具/关系/硬事实（+ throughline_progress 本块推进的叙事线 OS/MC/IC/RS），产 _数据库/.wal/cluster_{key}_archive.json（权威状态源·非 writer 自报）。只抽取不创作、不评判。配套 step6 apply_archive.py 确定性回库。failure_policy=block：archive 是 factual 回库唯一权威路径，archivist 失败=状态梳理链断，必须硬停。🔴 2026-07-07 A15：spawn 前 scripts 先跑 cluster_entity_stats.py（moyin collectCharacterStats 范式·零 LLM）产确定性实体统计（出场次数/对白归属估计/首现位置/新专名候选 频次≥3），经 ENTITY_STATS_PATH 注入 archivist 当证据基线——统计里高频实体在 archive 缺失=漏抽信号（压漏报）。",
+      "name": "cluster-state-analysis",
+      "description": "并行 spawn novel-archivist 与 novel-state-tracker。archivist 产实体/事实 archive；state-tracker 产专用 cluster_state_delta，覆盖时间、地点、Hub、世界事件与消费记录、已揭 heart events。两份 artifact 都只读正文与当前库，不创作、不评价；任一缺失都硬停。",
       "required": true,
-      "must_spawn_agent": "novel-archivist",
+      "must_spawn_agent": ["novel-archivist", "novel-state-tracker"],
       "agent_input": {
+        "PLAN_ID": "{plan_id}",
+        "STEP": 5,
         "PROJECT": "{project_root}",
         "CLUSTER_ID": "cluster_{key}",
         "MODE": "cluster",
@@ -94,23 +98,37 @@
         "ROLE_POOL_PATH": "_数据库/角色池.json",
         "ITEMS_PATH": "_数据库/道具.json",
         "RELATIONSHIPS_PATH": "_数据库/关系.json",
-        "ENTITY_STATS_PATH": "_数据库/.wal/cluster_{key}_entity_stats.json"
+        "ENTITY_STATS_PATH": "_数据库/.wal/cluster_{key}_entity_stats.json",
+        "TIMELINE_PATH": "_数据库/时间线.json",
+        "MAP_PATH": "_数据库/地图.json",
+        "HUBS_PATH": "_数据库/枢纽场景.json",
+        "WORLD_STATE_PATH": "_数据库/世界状态.json",
+        "GRAND_TREND_PATH": "_数据库/大势卡.json",
+        "ENSEMBLE_PATH": "_数据库/群像档.json",
+        "RIPPLE_RULES_PATH": "_数据库/涟漪规则.json",
+        "STATE_DELTA_PATH": "_数据库/.wal/cluster_{key}_state_delta.json",
+        "RECEIPT_PATH": "_数据库/.wal/cluster_{key}_state_tracker_receipt.json"
       },
-      "judge_report_path": "_数据库/.wal/cluster_{key}_archive.json",
+      "judge_report_path": {
+        "novel-archivist": "_数据库/.wal/cluster_{key}_archive.json",
+        "novel-state-tracker": "_数据库/.wal/cluster_{key}_state_tracker_receipt.json"
+      },
       "skip_output_allowed": false,
       "expected_outputs": [
         "_数据库/.wal/cluster_{key}_archive.json",
+        "_数据库/.wal/cluster_{key}_state_delta.json",
+        "_数据库/.wal/cluster_{key}_state_tracker_receipt.json",
         "_数据库/.wal/cluster_{key}_entity_stats.json"
       ],
       "scripts": [
         "python core/scripts/cluster_entity_stats.py {project_root} --cluster {key}"
       ],
-      "_doc_archivist": "执行顺序：① scripts 跑 cluster_entity_stats.py（确定性统计·A15·spawn 之前）② spawn archivist。agent_input 的 *_PATH 键由主代理代读注入 context（judge agent 无 Read 工具）：CLUSTER_DRAFT_PATH=整块正文·人物卡/角色池/道具/关系=已存在基准供 id 复用（防同角色双 id）·ENTITY_STATS_PATH=确定性实体统计（证据基线·统计高频实体在 archive.characters 缺失=漏抽信号）。judge_report_path=archive.json（apply_archive 默认读路径）。"
+      "_doc_archivist": "执行顺序：① scripts 跑 cluster_entity_stats.py ② 并行 spawn archivist 与 state-tracker。agent_input 的 *_PATH 由主代理作为文件输入提供。archivist 的完成产物是 archive.json；state-tracker 的完成证明是独立 state_tracker_receipt.json，plan_tracker 会校验 PLAN_ID、STEP、cluster_id 与 delta SHA-256。"
     },
     {
       "n": 6,
-      "name": "apply-archive-to-db",
-      "description": "🔴 2026-06-28：把 step5 novel-archivist 产的 archive.json 确定性回库（无模型·幂等按 id 去重）：角色→人物卡+角色池 / 道具→道具.json / 关系→关系.json / 硬事实→事件簇.clusters[].locked_facts / throughline_progress→事件簇.clusters[]。archive 是 factual 回库唯一权威路径，每个写完的 cluster 必有出场角色，archive 缺角色=archivist 失败=错误→apply_archive 退非0→plan 硬停。幂等去重保留（re-apply 全已存在→exit 0 成功）",
+      "name": "apply-cluster-state",
+      "description": "确定性应用 archive；cluster_state_delta 先校验 schema 与六类 canonical ID，再原子写时间、地点和 cluster_hub_log。世界/ME 与 heart event 由 step 11 的 required 专用消费者应用。",
       "required": true,
       "skip_output_allowed": false,
       "expected_outputs": [
@@ -118,16 +136,18 @@
         "_数据库/角色池.json",
         "_数据库/道具.json",
         "_数据库/关系.json",
-        "_数据库/事件簇.json"
+        "_数据库/事件簇.json",
+        "_数据库/.wal/cluster_{key}_state_delta_applied.json"
       ],
       "scripts": [
-        "python core/scripts/apply_archive.py {project_root} --cluster {key}"
+        "python core/scripts/apply_archive.py {project_root} --cluster {key}",
+        "python core/scripts/cluster_state_delta.py {project_root} --cluster {key}"
       ]
     },
     {
       "n": 7,
       "name": "novel-summarizer-cluster",
-      "description": "spawn novel-summarizer MODE=cluster · 生成 cluster 级摘要（不是单章摘要 · 单章摘要由 splitter 切完后从 cluster 摘要派生）。🔴 2026-07-07 S10 卷边界条件子任务（递归卷级层级摘要·Ex3 摘要金字塔+source 回溯）：scripts 跑 save_state --detect-volume-boundary（既有信号：某卷 ME 池非空且全部 status=completed=卷已完结·status 由 step3 _mark_cluster_me_completed 唯一维护·且 故事块摘要.volume_summaries 尚无该卷）→ boundary=true 时主代理追加 spawn novel-summarizer MODE=volume（VOLUME_N/VOLUME_CLUSTER_IDS 取 detect 产物）产 .wal/volume_<N>_summary.json → 跑 save_state --apply-volume-summary <N> 确定性回库 故事块摘要.volume_summaries[]（结构键钉死 + source 必须恰好覆盖本卷全部 cluster_ids 缺/多都拒 + 幂等 upsert）。无卷边界=零行为变化；漏跑自愈=下个 cluster 的 detect 重新亮起该卷。",
+      "description": "spawn novel-summarizer MODE=cluster 生成 cluster 摘要。卷边界只读大势卡 major_events[].status=completed 与 completed_at_cluster；闭合卷尚无摘要时追加 MODE=volume 汇总并确定性回库。",
       "required": true,
       "must_spawn_agent": "novel-summarizer",
       "agent_input": {
@@ -189,11 +209,13 @@
     {
       "n": 10,
       "name": "wal-merge+learning-loop+judge-reports-archive+ledger-build",
-      "description": "合并 cluster 级 WAL + learning_loop 三步链（merge-reflection + ingest + scan-recurring）+ 把本 cluster 所有 JudgeReport 存入 故事块摘要[cluster_id].judge_reports[] + 调 cluster_summary_builder.py（经 save_state --build-cluster-summary）把整 cluster 富摘要（每章正文/changes/manifest/audit/judge 派生字段 + cluster 级 rollup）预算写入 故事块摘要.json 账本，供 step 11 cross_cluster aggregator 复用",
+      "description": "合并 cluster WAL 与学习信号，生成本 cluster 的 JudgeReport rollup，再由 cluster_summary_builder.py 汇总正文、状态 delta、archive、truth 与 judge 信号并写入严格 cluster 摘要账本。",
       "required": true,
       "skip_output_allowed": false,
-      "expected_outputs": [
-        "_数据库/.wal/cluster_{key}_post_reflect.json",
+    "expected_outputs": [
+      "_数据库/.wal/cluster_{key}_post_reflect.json",
+      "_数据库/.wal/cluster_{key}_judge_reports_rollup.json",
+      "_数据库/.wal/cluster_{key}_foreshadow_state_receipt.json",
         "_数据库/故事块摘要.json",
         "_数据库/叙事节拍器.json",
         "_数据库/戏剧问题账本.json"
@@ -202,6 +224,7 @@
         "python core/scripts/save_state.py {project_root} --auto-post-reflect-cluster {key}",
         "python core/scripts/adaptive_runner.py --label judge_reports_archive --strict -- python core/scripts/judge_reports_archive.py {project_root} --cluster {key}",
         "python core/scripts/save_state.py {project_root} --build-cluster-summary {key}",
+        "python core/scripts/save_state.py {project_root} --apply-foreshadow-state {key}",
         "python core/scripts/save_state.py {project_root} --apply-appraisal-beats {key}",
         "python core/scripts/save_state.py {project_root} --apply-dramatic-questions {key}"
       ]
@@ -214,16 +237,22 @@
       "skip_output_allowed": false,
       "expected_outputs": [
         "_数据库/knowledge_graph.json",
-        "_数据库/subplot_threads.json"
+        "_数据库/subplot_threads.json",
+        "_数据库/.wal/cluster_{key}_state_updates_receipt.json",
+        "_数据库/.wal/cluster_{key}_state_evaluators_receipt.json",
+        "_数据库/.cross_cluster_scan/cross_cluster_wrapper_latest.json",
+        "_数据库/.world_evolution/cluster_{key}_apply.json",
+        "_数据库/.judge_reports/cluster_{key}_consensus_decision.json",
+        "_数据库/.wal/cluster_{key}_post_state_receipt.json"
       ],
       "scripts": [
-        "python core/scripts/save_state_updates.py {project_root} --cluster {key} --all",
-        "python core/scripts/save_state_evaluators.py {project_root} --cluster {key} --all",
-        "python core/scripts/run_cross_cluster_aggregates.py {project_root} --cluster {key} --tier full_18",
+        "python core/scripts/save_state_updates.py {project_root} --cluster {key}",
+        "python core/scripts/save_state_evaluators.py {project_root} --cluster {key}",
+        "python core/scripts/run_cross_cluster_aggregates.py {project_root} --cluster {key}",
         "python core/scripts/style_drift_scan.py {project_root} --last-n 10",
         "python core/scripts/character_index.py {project_root} --write",
         "python core/scripts/learning_loop.py {project_root} --scan-recurring",
-        "python core/scripts/world_evolution_apply_chapter.py {project_root} --cluster {key}",
+        "python core/scripts/world_evolution_apply_cluster.py {project_root} --cluster {key}",
         "python core/scripts/knowledge_graph_update.py {project_root} --cluster {key}",
         "python core/scripts/subplot_progress_update.py {project_root} --cluster {key}",
         "python core/scripts/adaptive_runner.py --label skill_evolver_evolve --strict -- python core/scripts/skill_evolver.py {project_root} evolve --cluster {key}",
@@ -233,7 +262,8 @@
         "python core/scripts/scan_retention.py {project_root} --keep 5",
         "python core/scripts/self_heal_engine.py --ingest",
         "python core/scripts/self_heal_engine.py --emit-lessons",
-        "python core/scripts/step_completion_monitor.py --scan-latest --command cluster-save-state --project {project}"
+        "python core/scripts/step_completion_monitor.py --scan-latest --command cluster-save-state --project {project}",
+        "python core/scripts/cluster_post_state_receipt.py {project_root} --cluster {key} --plan-id {plan_id} --step 11"
       ]
     },
     {

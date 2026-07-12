@@ -466,7 +466,7 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
        - 隐藏：仅 known_by 列表内角色能感知（默认）
        - 延迟：知道但 N 章内不能透露（writer 必须等到 reveal_at_cluster）
        - 永不明确：作者从不直接揭示，靠读者自己拼图
-5. Write `_数据库/故事块摘要.json` — 初始化 `{"schema_version": "v2.cluster", "clusters": []}`（cluster 账本主存储 · 每个 cluster 内含 chapters 映射 · 由 cluster-save-state 经 cluster_summary_builder 落库）
+5. Write `_数据库/故事块摘要.json` — 初始化 `{"schema_version": "v2.cluster", "clusters": [], "volume_summaries": []}`。cluster-save-state 经 `cluster_summary_builder.py` 写入完整 cluster 记录，卷边界摘要写入 `volume_summaries`。
 6. Write `_数据库/进度.json` — 初始化进度，结构如下：
 ```json
 {

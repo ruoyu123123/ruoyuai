@@ -1,28 +1,17 @@
-"""writer_truth_check 回归测试 —— 钉死 writer 自评真实性检测的确定性纯逻辑。
-
-被测脚本 core/scripts/writer_truth_check.py 的非 LLM 部分：
-  · identify_opening_type / identify_ending_type —— 正则规则识别开头/结尾 type（顺序敏感）
-  · _strip_chapter_title / extract_first_line / extract_last_line —— 正文行抽取
-  · load_json —— 缺失/坏 JSON 回退 default
-  · truth_check_chapter —— 端到端：缺文件报 error、申报 vs 独立提取对比、anchors 撒谎检测
-
-零依赖：只用标准库 + tempfile 临时项目目录，绝不写真项目。
-"""
+"""writer_truth_check 的 cluster-only 创作自评核对测试。"""
 import json
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "scripts"))
-import chapter_io as cio  # noqa: E402
 import writer_truth_check as wtc  # noqa: E402
 
 
 # ============ 纯函数：开头 type 识别 ============
 
-def test_identify_opening_type_strips_title_then_dialogue():
-    """首行是 '第NNN章 标题' 应被剥离，紧接对话引号 → 纯对话开场。"""
-    body = '第012章 风起\n“你来晚了。”他说。\n后面还有内容。'
+def test_identify_opening_type_dialogue():
+    body = '“你来晚了。”他说。\n后面还有内容。'
     assert wtc.identify_opening_type(body) == "纯对话开场"
 
 
@@ -55,8 +44,8 @@ def test_identify_ending_type_fallback_hard_close():
 
 # ============ 纯函数：行抽取 ============
 
-def test_extract_first_line_skips_title_and_blanks():
-    body = "第003章 序\n\n\n  真正的第一句。  \n第二句。"
+def test_extract_first_line_skips_blanks():
+    body = "\n\n  真正的第一句。  \n第二句。"
     assert wtc.extract_first_line(body) == "真正的第一句。"
 
 
@@ -71,110 +60,91 @@ def test_extract_line_empty_body_returns_empty():
     assert wtc.extract_last_line("   \n  \n") == ""
 
 
-# ============ load_json：缺失 / 坏 JSON 回退 ============
+def _write_cluster(project_root: Path, cluster: str, body: str, changes: dict) -> None:
+    directory = project_root / "章节" / f"{cluster}_draft"
+    directory.mkdir(parents=True)
+    (directory / f"{cluster}_draft.txt").write_text(body, encoding="utf-8")
+    (directory / f"{cluster}_changes.json").write_text(
+        json.dumps(changes, ensure_ascii=False), encoding="utf-8",
+    )
 
-def test_load_json_missing_and_corrupt_return_default():
+
+def test_truth_check_missing_cluster_body_fails():
     with tempfile.TemporaryDirectory() as d:
-        tmp = Path(d)
-        missing = tmp / "nope.json"
-        assert wtc.load_json(missing, default={"x": 1}) == {"x": 1}
-
-        bad = tmp / "bad.json"
-        bad.write_text("{not json,", encoding="utf-8")
-        assert wtc.load_json(bad, default=[]) == []
-
-        good = tmp / "good.json"
-        good.write_text(json.dumps({"k": "v"}), encoding="utf-8")
-        assert wtc.load_json(good) == {"k": "v"}
-
-
-# ============ 端到端 truth_check_chapter ============
-
-def _write_chapter(project_root: Path, ch: int, body: str, changes: dict):
-    """用被测脚本依赖的 chapter_io 真实落盘正文 + _changes.json。"""
-    cio.write_body(project_root, ch, body)
-    cio.write_changes(project_root, ch, changes)
-
-
-def test_truth_check_missing_chapter_returns_error():
-    with tempfile.TemporaryDirectory() as d:
-        rep = wtc.truth_check_chapter(Path(d), 7)
-        assert rep["ch"] == 7
-        assert "error" in rep
+        try:
+            wtc.truth_check_cluster(Path(d), "cluster_007")
+        except wtc.WriterTruthError as exc:
+            assert "cluster_007_draft.txt" in str(exc)
+        else:
+            raise AssertionError("缺 cluster 正文必须失败")
 
 
 def test_truth_check_honest_writer_no_lies():
-    """writer 自评与正文一致 → 0 撒谎、type 匹配、line 匹配。"""
+    """writer 只申报允许的 ending_type，且与 cluster 正文一致。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
-        body = '第001章 起\n“你终于来了。”老人开口。\n他递过一只铜铃，铃身刻着古怪的纹路。\n“拿着它，别回头。”'
-        first = "“你终于来了。”老人开口。"
-        last = "“拿着它，别回头。”"
+        body = '“你终于来了。”老人开口。\n他递过一只铜铃，铃身刻着古怪的纹路。\n“拿着它，别回头。”'
         changes = {
-            "factual": {},
-            "self_eval": {
-                "applied_style": {
-                    "opening_type": "纯对话开场",
-                    "opening_line": first,
-                    "ending_type": "对话悬念",
-                    "ending_line": last,
-                    "anchors_hit": ["铜铃", "纹路"],
-                }
-            },
+            "self_eval": {"waivers": [], "applied_style": {"ending_type": "对话悬念"}},
         }
-        _write_chapter(tmp, 1, body, changes)
-        rep = wtc.truth_check_chapter(tmp, 1)
+        _write_cluster(tmp, "cluster_001", body, changes)
+        rep = wtc.truth_check_cluster(tmp, "001")
+        findings = rep["specific_findings"]
 
-        assert rep["lie_count"] == 0
+        assert rep["verdict"] == "pass" and rep["lie_count"] == 0
         assert rep["lies_detected"] == []
-        assert rep["opening_type_match"] is True
-        assert rep["ending_type_match"] is True
-        assert rep["opening_line_match"] is True
-        assert rep["ending_line_match"] is True
-        # anchors 全部 in_body
-        assert all(a["in_body"] for a in rep["anchors_truth"])
+        assert findings["ending_type_match"] is True
 
 
-def test_truth_check_detects_lying_anchor():
-    """申报的 anchor 不在正文 → 记一条 anchors_hit 撒谎。"""
+def test_truth_check_detects_lying_ending_type():
+    """申报的 ending_type 与正文不符 → 记一条确定性差异。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
-        body = "第002章\n他走进空荡荡的房间，地上只有一只旧鞋。"
+        body = "他走进空荡荡的房间。\n“里面到底有什么？”"
         changes = {
-            "factual": {},
             "self_eval": {
-                "applied_style": {
-                    "anchors_hit": ["旧鞋", "并不存在的龙纹剑"],
-                }
+                "waivers": [],
+                "applied_style": {"ending_type": "场景硬收"},
             },
         }
-        _write_chapter(tmp, 2, body, changes)
-        rep = wtc.truth_check_chapter(tmp, 2)
+        _write_cluster(tmp, "cluster_002", body, changes)
+        rep = wtc.truth_check_cluster(tmp, "cluster_002")
 
-        assert rep["lie_count"] == 1
+        assert rep["verdict"] == "fail" and rep["lie_count"] == 1
         lie = rep["lies_detected"][0]
-        assert lie["field"] == "anchors_hit"
-        assert lie["missing"] == ["并不存在的龙纹剑"]
-        # 真实存在的锚点标 in_body=True，伪造的标 False
-        truth = {a["anchor"]: a["in_body"] for a in rep["anchors_truth"]}
-        assert truth["旧鞋"] is True
-        assert truth["并不存在的龙纹剑"] is False
+        assert lie["field"] == "applied_style.ending_type"
+        assert lie["declared"] == "场景硬收"
+        assert lie["actual"] == "对话悬念"
 
 
 def test_truth_check_undeclared_fields_match_is_none():
-    """writer 没申报 opening_line/ending_line/type → 对应 match 字段为 None（不算撒谎）。"""
+    """writer 未申报 ending_type 时不产生撒谎。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
-        body = "第003章\n风很大，吹得旗子哗哗作响，远处传来一声闷雷滚过天际。"
-        # 完全空的 self_eval/applied_style
-        _write_chapter(tmp, 3, body, {"factual": {}, "self_eval": {}})
-        rep = wtc.truth_check_chapter(tmp, 3)
+        body = "风很大，吹得旗子哗哗作响，远处传来一声闷雷滚过天际。"
+        _write_cluster(tmp, "cluster_003", body, {"self_eval": {"waivers": []}})
+        rep = wtc.truth_check_cluster(tmp, 3)
+        findings = rep["specific_findings"]
 
-        assert rep["opening_line_match"] is None
-        assert rep["ending_line_match"] is None
-        assert rep["opening_type_match"] is None
-        assert rep["ending_type_match"] is None
+        assert findings["ending_type_match"] is None
         assert rep["lie_count"] == 0
         # 独立提取仍然产出（不依赖申报）
-        assert rep["detected_opening_type"]
-        assert rep["detected_ending_type"]
+        assert findings["detected_opening_type"]
+        assert findings["detected_ending_type"]
+
+
+def test_main_writes_fixed_cluster_report_and_blocks_lies():
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        _write_cluster(
+            project, "cluster_001", "风吹过门缝。",
+            {"self_eval": {"waivers": []}},
+        )
+        assert wtc.main([str(project), "--cluster", "1"]) == 0
+        report = (
+            project / "_数据库" / ".judge_reports"
+            / "cluster_001_writer-truth-check.json"
+        )
+        assert report.is_file()
+        value = json.loads(report.read_text(encoding="utf-8"))
+        assert value["cluster_id"] == "cluster_001" and value["verdict"] == "pass"

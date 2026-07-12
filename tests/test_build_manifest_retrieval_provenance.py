@@ -7,7 +7,7 @@
 
   段级：source_type / match_method / token_budget{budget_chars, actual_chars, truncated}
         / anti_copy="reference-not-copy"（advisory·防 writer 照抄近邻正文/条目原句）
-  条级：source_type / source_id（确定性派生：selective_history=chNNN#idx·
+  条级：source_type / source_id（确定性派生：selective_history=cluster_NNN#idx·
         heuristics=category#id）/ similarity / match_method（+ selective_history 额外
         recency_distance）
 
@@ -58,23 +58,26 @@ def _rm(td):
 
 
 def _mk_history_project() -> tuple:
-    """临时项目：ch=2 有 query 信号 + .embeddings/chapter_001.json 两条候选。"""
+    """临时项目：cluster_002 brief + cluster_001 embedding 两条候选。"""
     td = tempfile.mkdtemp()
     root = Path(td) / "测试书"
     (root / "_数据库").mkdir(parents=True, exist_ok=True)
-    (root / "_数据库" / "进度.json").write_text(json.dumps({
-        "cluster_blueprint": {
-            "cluster_001": {"scene_storyboard": [
-                {"ch": 2, "turning_point": "青冥剑现世", "goal": "夺回信物",
-                 "threads_advance": ["江湖恩怨"]},
-            ]}
-        }
+    (root / "_数据库" / "事件簇.json").write_text(json.dumps({
+        "clusters": [{
+            "cluster_id": "cluster_002",
+            "scope_summary": "青冥剑现世后夺回信物",
+            "scene_storyboard": [{
+                "turning_point": "青冥剑现世", "goal": "夺回信物",
+                "threads_advance": ["江湖恩怨"],
+            }],
+        }]
     }, ensure_ascii=False), encoding="utf-8")
     emb_dir = root / "_数据库" / ".embeddings"
     emb_dir.mkdir(parents=True, exist_ok=True)
     relevant_text = "青冥剑现世的那一夜江湖恩怨骤起风云突变"
     irrelevant_text = "厨房里炖着汤水柴米油盐岁月静好安然入睡"
-    (emb_dir / "chapter_001.json").write_text(json.dumps({
+    (emb_dir / "cluster_001.json").write_text(json.dumps({
+        "scope": "cluster", "cluster_id": "cluster_001",
         "chunks": [
             {"idx": 0, "text_preview": relevant_text,
              "embedding": _char_freq_embedding(relevant_text)},
@@ -85,14 +88,16 @@ def _mk_history_project() -> tuple:
     return td, root, relevant_text, irrelevant_text
 
 
-def _run_history_real_backend(monkeypatch, chapter=2, top_k=2, backend="fake-real"):
+def _run_history_real_backend(
+    monkeypatch, current_cluster_id="cluster_002", top_k=2, backend="fake-real"
+):
     """真后端路径跑 _collect_selective_history，返回 (res, tmp_dir 清理句柄, previews)。"""
     td, root, rel, irr = _mk_history_project()
     monkeypatch.setenv("EMBED_BACKEND", backend)
     import embedding_store
     monkeypatch.setattr(embedding_store, "compute_embedding", _char_freq_embedding)
-    scanner = bm.DatabaseScanner(root, chapter)
-    res = bm._collect_selective_history(scanner, chapter, top_k=top_k)
+    scanner = bm.DatabaseScanner(root, 2)
+    res = bm._collect_selective_history(scanner, current_cluster_id, top_k=top_k)
     return res, td, (rel, irr)
 
 
@@ -126,17 +131,17 @@ def test_selective_history_typed_fields_and_source_id_derivation(monkeypatch):
         assert res["match_method"] == "embedding:fake-real"   # 记真实后端名
         assert res["anti_copy"] == "reference-not-copy"
         assert res["retrieved"], "真后端应检出候选"
-        # 条级契约：source_id 由 ch+chunk_idx 确定性派生（chNNN#idx）
+        # 条级契约：source_id 由 cluster_id+chunk_idx 确定性派生。
         for item in res["retrieved"]:
             assert item["source_type"] == "selective_history"
-            assert re.fullmatch(r"ch\d{3}#\d+", item["source_id"]), item["source_id"]
-            assert item["source_id"] == f"ch{item['ch']:03d}#{item['chunk_idx']}"
+            assert re.fullmatch(r"cluster_\d{3}#\d+", item["source_id"]), item["source_id"]
+            assert item["source_id"] == f"{item['cluster_id']}#{item['chunk_idx']}"
             assert item["match_method"] == res["match_method"]
             assert isinstance(item["similarity"], float)
-            assert item["recency_distance"] == 2 - item["ch"]  # 当前章 2 − 来源章
+            assert item["recency_distance"] == 1
         # 语义排序不受 typed 化影响：相关片段仍第一
         assert res["retrieved"][0]["text_preview"] == rel
-        assert res["retrieved"][0]["source_id"] == "ch001#0"
+        assert res["retrieved"][0]["source_id"] == "cluster_001#0"
     finally:
         _rm(td)
 
@@ -150,7 +155,7 @@ def test_selective_history_no_backend_skip_shape_unchanged(monkeypatch):
     td, root, _rel, _irr = _mk_history_project()
     try:
         scanner = bm.DatabaseScanner(root, 2)
-        res = bm._collect_selective_history(scanner, 2, top_k=2)
+        res = bm._collect_selective_history(scanner, "cluster_002", top_k=2)
         assert res == {"retrieved": [], "reason": (
             "无真 embedding 后端（EMBED_BACKEND 未设/=hash）·hash 假嵌入不可当语义检索用·跳过")}
         # typed 字段绝不出现在 skip 形态（诚实 skip ≠ 空 typed 段）
@@ -299,8 +304,8 @@ def test_gen_writer_consumer_loads_typed_manifest(monkeypatch, tmp_path):
     res, td, _texts = _run_history_real_backend(monkeypatch)
     try:
         import gen_writer as gw
-        manifest_path = tmp_path / "ch_002.json"
-        manifest_doc = {"chapter": 2, "selective_history_retrieval": res}
+        manifest_path = tmp_path / "cluster_002.json"
+        manifest_doc = {"cluster_id": "cluster_002", "selective_history_retrieval": res}
         manifest_text = json.dumps(manifest_doc, ensure_ascii=False, indent=2)
         manifest_path.write_text(manifest_text, encoding="utf-8")
 
@@ -308,7 +313,7 @@ def test_gen_writer_consumer_loads_typed_manifest(monkeypatch, tmp_path):
         assert isinstance(loaded, dict)
         seg = loaded["selective_history_retrieval"]
         assert seg["anti_copy"] == "reference-not-copy"
-        assert seg["retrieved"][0]["source_id"].startswith("ch")
+        assert seg["retrieved"][0]["source_id"].startswith("cluster_")
 
         # writer prompt 注入的是文件原文——溯源字段对 writer 真实可见
         assert "reference-not-copy" in manifest_text

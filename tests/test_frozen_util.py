@@ -77,7 +77,7 @@ def test_adaptive_runner_normalizes_python_interpreter():
     out3 = ar._normalize_interpreter(["python3", "x.py"])
     assert out3[0] == fu.child_python()
     # str 形态（auto_heal）：首 token 换（带引号保护空格路径）
-    s = ar._normalize_interpreter("python core/scripts/X.py --auto-migrate")
+    s = ar._normalize_interpreter("python core/scripts/X.py --post-edit sample.json")
     assert s.startswith(f'"{fu.child_python()}" ') and "core/scripts/X.py" in s
     # 非 python 首位（如直接脚本路径）不动
     assert ar._normalize_interpreter(["core/scripts/Z.py"]) == ["core/scripts/Z.py"]

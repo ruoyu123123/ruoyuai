@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
-"""test_telemetry_producers.py — SYS-5 三遥测断点 producer 补全单测（2026-06-27）
+"""test_telemetry_producers.py — SYS-5 遥测断点 producer 补全单测（2026-06-27）
 
-确定性·零依赖·零 LLM/零联网。三独立 advisory/shadow 遥测断点的 producer 修复：
-  ① cliffhanger_resonance_next：cluster_summary_builder 确定性预算（原恒缺 → 账本无字段
-     → continuity scanner 回退恒 -1）。修：builder 第二遍算前章 ending ∩ 下一章 head 重叠，
-     复用 continuity_keywords 单一来源（两边分可比），mega-token 补 2-gram 恢复可信度。
-  ② narrative_debt total_planted=0：cluster 摘要无 foreshadow 流水 → 误报
+确定性·零依赖·零 LLM/零联网。两个独立 advisory/shadow 遥测断点的 producer 修复：
+  ① narrative_debt total_planted=0：cluster 摘要无 foreshadow 流水 → 误报
      DEBT_BOOK_MORTGAGE_ABSENT。修：回退伏笔表.json 按 setup_cluster 归集 planted/paid。
-  ③ throughline_progress 全 DORMANT：🔴 2026-06-28 不降级收尾——throughline（本块推进了哪几条
-     叙事线 OS/MC/IC/RS）是叙事分析=梳理，**移给 novel-archivist 读正文抽取**（writer 自报属
+  ② throughline_progress 全 DORMANT：throughline（本块推进了哪几条
+     叙事线 OS/MC/IC/RS）是叙事分析=梳理，由 novel-archivist 读正文抽取（writer 自报属
      A 类违规·已删）。archivist 产 archive.throughline_progress → apply_archive 落
-     事件簇.clusters[].throughline_progress → cluster_summary_builder 注入每章账本 →
+     事件簇.clusters[].throughline_progress → cluster_summary_builder 注入 cluster 账本 →
      cross_cluster_throughline_balance_aggregate 消费（archive 单一来源·非 writer 自报）。
+
+cliffhanger_resonance_next 悬念衔接遥测是 cluster 级信号：由
+cross_cluster_continuity_aggregate.scan_cliffhanger_resonance 用账本
+ending_type/ending_line 与下一 cluster 终稿直接计算（该模块自身单测覆盖，不在本文件）。
 
 全程 advisory/shadow：永不 exit 非 0 阻断、永不升 hard_gate（见各 CLI/读路径断言）。
 """
@@ -26,12 +27,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "core" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import chapter_io as cio  # noqa: E402
 import cluster_lookup as cl  # noqa: E402
 import cluster_summary_builder as csb  # noqa: E402
+import cluster_summary_store as store  # noqa: E402
 import continuity_keywords as ckw  # noqa: E402
-import cross_cluster_continuity_aggregate as cont  # noqa: E402
 import cross_cluster_narrative_debt_ledger_aggregate as debt  # noqa: E402
+from cluster_summary_fixtures import cluster_record, write_cluster_summary  # noqa: E402
 
 _DEBT_TARGET = _SCRIPTS / "cross_cluster_narrative_debt_ledger_aggregate.py"
 
@@ -43,15 +44,8 @@ def _utf8_env(**extra):
 
 
 # ════════════════════════════════════════════════════════════════════
-# ① cliffhanger_resonance_next — 共享关键词单一来源 + 确定性预算
+# continuity_keywords.extract_keywords — cliffhanger 关键词共享单一来源
 # ════════════════════════════════════════════════════════════════════
-
-def test_extract_keywords_single_source_shared_by_both_sides():
-    """producer（builder）与 consumer（continuity scanner）必须用同一个 extract_keywords
-    对象——否则两边 cliffhanger 分不可比（SYS-5 ① 核心不变量）。"""
-    assert ckw.extract_keywords is cont.extract_keywords
-    assert csb._cliff_keywords is ckw.extract_keywords
-
 
 def test_extract_keywords_bigram_recovers_punctuation_sparse_overlap():
     """无内部标点的长中文句被正则吞成 mega-token → 逐字几乎不可能匹配。补 2-gram 后
@@ -73,67 +67,8 @@ def test_extract_keywords_stopword_and_protagonist_filter_preserved():
     assert "重黎" not in kw2 and "建木" in kw2
 
 
-def test_compute_cliffhanger_resonance_real_overlap_and_boundary():
-    """前章 ending 在下一章 head 出现 → score>0；本 cluster 末章无下一章 → -1（no-signal）。"""
-    chapters = {
-        "1": {"ending_line": "他握紧了那柄断剑，转身离去"},
-        "2": {"ending_line": "夜色降临，万籁俱寂"},
-    }
-    bodies = {
-        1: "占位正文。",
-        2: "那柄断剑还插在地上，断剑的寒光刺眼。" + "无关内容。" * 40,
-    }
-    csb._compute_cliffhanger_resonance(chapters, bodies, lo=1, hi=2, protagonist=None)
-    assert chapters["1"]["cliffhanger_resonance_next"] > 0      # 「断剑」跨章命中
-    assert chapters["2"]["cliffhanger_resonance_next"] == -1.0  # 末章 no-signal skip（非 0% 误报）
-
-
-def test_compute_cliffhanger_resonance_no_overlap_is_zero_not_minus_one():
-    """有 ending 关键词但下一章 head 完全无关 → 0.0（真算出的低分），区别于 -1（无信号）。"""
-    chapters = {"1": {"ending_line": "苍鹰掠过雪峰"}, "2": {"ending_line": "x"}}
-    bodies = {1: "占位。", 2: "完全无关的市集喧闹与买卖。" * 30}
-    csb._compute_cliffhanger_resonance(chapters, bodies, lo=1, hi=2, protagonist=None)
-    assert chapters["1"]["cliffhanger_resonance_next"] == 0.0
-
-
-def test_compute_cliffhanger_resonance_empty_ending_is_minus_one():
-    """ending_line 为空/无关键词 → -1（不可算 → no-signal，非 0%）。"""
-    chapters = {"1": {"ending_line": ""}, "2": {}}
-    bodies = {1: "占位。", 2: "正文内容。" * 30}
-    csb._compute_cliffhanger_resonance(chapters, bodies, lo=1, hi=2, protagonist=None)
-    assert chapters["1"]["cliffhanger_resonance_next"] == -1.0
-
-
-def test_builder_writes_cliffhanger_field_end_to_end():
-    """端到端：build_cluster_summary 后账本每章（除末章）含 cliffhanger_resonance_next，
-    且不全是 -1（断点修复证据）。"""
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d)
-        db = root / "_数据库"
-        db.mkdir(parents=True)
-        (db / "事件簇.json").write_text(json.dumps({
-            "clusters": [{"cluster_id": "cluster_001", "title": "T", "chapter_range": [1, 3]}]
-        }, ensure_ascii=False), encoding="utf-8")
-        # ch1 结尾的实质词在 ch2 开头复现 → 可算出 >0
-        cio.write_body(root, 1, ("青云城外风沙弥漫。\n" * 25) + "他盯着那枚黑色令牌，久久不语")
-        cio.write_body(root, 2, "黑色令牌的纹路在月下泛光，令牌的来历成谜。" + ("城中喧嚣。\n" * 25))
-        cio.write_body(root, 3, "翌日清晨，故事继续。\n" * 26)
-        for ch in range(1, 4):
-            cio.write_changes(root, ch, {"factual": {}, "self_eval": {}})
-        res = csb.build_cluster_summary(root, "cluster_001")
-        assert res["ok"] is True
-        from cluster_summary_reader import load_summary
-        rec = next(c for c in load_summary(root)["clusters"]
-                   if cl.normalize_cluster_id(c["cluster_id"]) == "cluster_001")
-        chs = rec["chapters"]
-        assert "cliffhanger_resonance_next" in chs["1"]
-        assert chs["3"]["cliffhanger_resonance_next"] == -1.0   # 末章
-        scores = [chs[str(c)]["cliffhanger_resonance_next"] for c in (1, 2, 3)]
-        assert not all(s == -1 for s in scores), "断点修复：cliffhanger 不应恒 -1"
-
-
 # ════════════════════════════════════════════════════════════════════
-# ② narrative_debt — 伏笔表.json 回退（消除 total_planted 恒 0 误报）
+# ① narrative_debt — 伏笔表.json 回退（消除 total_planted 恒 0 误报）
 # ════════════════════════════════════════════════════════════════════
 
 def _write_foreshadow_table(db: Path, promises):
@@ -193,13 +128,7 @@ def test_cli_fallback_clears_book_mortgage_false_positive():
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         db = root / "_数据库"
-        db.mkdir(parents=True)
-        clusters = [{"cluster_id": f"cluster_{i:03d}", "title": f"c{i}",
-                     "chapter_range": [i, i], "cluster_end_ch": i, "status": "done",
-                     "chapters": {str(i): {}}} for i in range(1, 6)]
-        (db / "故事块摘要.json").write_text(json.dumps(
-            {"schema_version": "v2.cluster", "clusters": clusters},
-            ensure_ascii=False), encoding="utf-8")
+        write_cluster_summary(root, [cluster_record(f"cluster_{i:03d}") for i in range(1, 6)])
         _write_foreshadow_table(db, [
             {"id": "fs_001", "setup_cluster": "cluster_001", "status": "consumed"},
             {"id": "fs_002", "setup_cluster": "cluster_001", "status": "open"},
@@ -210,7 +139,7 @@ def test_cli_fallback_clears_book_mortgage_false_positive():
                            capture_output=True, text=True, env=env, encoding="utf-8")
         assert r.returncode == 0, r.stderr            # shadow 永不阻断
         assert "Traceback" not in (r.stderr or "")
-        snap = json.loads((db / ".cross_chapter_scan" / "narrative_debt_snapshot.json")
+        snap = json.loads((db / ".cross_cluster_scan" / "narrative_debt_snapshot.json")
                           .read_text(encoding="utf-8"))
         assert snap["book"]["total_planted"] >= 3     # 读伏笔表（非恒 0）
         assert debt.CODE_BOOK_MORTGAGE not in snap["advisory_codes"]
@@ -220,14 +149,7 @@ def test_cli_no_fallback_when_table_absent_no_crash():
     """无伏笔表.json → 不回退、不崩（fb_used=False，total_planted=0 仍可能报 mortgage，但 shadow 不阻断）。"""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
-        db = root / "_数据库"
-        db.mkdir(parents=True)
-        clusters = [{"cluster_id": f"cluster_{i:03d}", "chapter_range": [i, i],
-                     "cluster_end_ch": i, "status": "done", "chapters": {str(i): {}}}
-                    for i in range(1, 4)]
-        (db / "故事块摘要.json").write_text(json.dumps(
-            {"schema_version": "v2.cluster", "clusters": clusters},
-            ensure_ascii=False), encoding="utf-8")
+        write_cluster_summary(root, [cluster_record(f"cluster_{i:03d}") for i in range(1, 4)])
         env = _utf8_env(NARRATIVE_DEBT_MODE="shadow", CLUSTER_MODE="1")
         r = subprocess.run([sys.executable, str(_DEBT_TARGET), str(root)],
                            capture_output=True, text=True, env=env, encoding="utf-8")
@@ -236,7 +158,7 @@ def test_cli_no_fallback_when_table_absent_no_crash():
 
 
 # ════════════════════════════════════════════════════════════════════
-# ③ throughline_progress — 🔴 2026-06-28 不降级收尾：移给 archivist 抽取（writer 不自报）
+# ② throughline_progress — archivist 读正文抽取（writer 不自报）
 #    archive.throughline_progress → apply_archive → 事件簇.clusters[] → builder → aggregator
 # ════════════════════════════════════════════════════════════════════
 
@@ -271,7 +193,8 @@ def test_apply_archive_writes_throughline_to_event_cluster():
         }, ensure_ascii=False), encoding="utf-8")
         (db / ".wal" / "cluster_001_archive.json").write_text(json.dumps({
             "cluster_id": "cluster_001",
-            "characters": [{"id": "C_X", "name": "X", "tier": "core", "new": True}],
+            "characters": [{"id": "C_X", "name": "X", "tier": "core", "new": True,
+                            "first_cluster": "cluster_001"}],
             "throughline_progress": {"OS": True, "MC": True, "IC": False, "RS": False},
         }, ensure_ascii=False), encoding="utf-8")
         assert aa.main([str(root), "--cluster", "001"]) == 0
@@ -287,41 +210,73 @@ def test_gen_writer_prompt_instructs_ending_self_report():
 
 
 def test_throughline_progress_flows_archive_to_aggregator():
-    """🔴 2026-06-28 不降级收尾·端到端锁新消费路径（archive 单一来源）：
-    archive.throughline_progress → apply_archive → 事件簇.clusters[].throughline_progress →
-    cluster_summary_builder 注入每章账本 → throughline_balance distribution 非全 0（DORMANT 解除）。"""
+    """端到端锁消费路径（archive 单一来源）：archive.throughline_progress → apply_archive →
+    事件簇.clusters[].throughline_progress → cluster_summary_builder 注入 cluster 账本 →
+    throughline_balance distribution 非全 0（DORMANT 解除）。"""
     import apply_archive as aa  # noqa: PLC0415
+    cluster_id = "cluster_001"
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         db = root / "_数据库"
+        draft_dir = root / "章节" / f"{cluster_id}_draft"
         (db / ".wal").mkdir(parents=True)
+        (db / ".audit").mkdir()
+        (db / ".judge_reports").mkdir()
+        draft_dir.mkdir(parents=True)
+
         (db / "事件簇.json").write_text(json.dumps({
-            "clusters": [{"cluster_id": "cluster_001", "title": "T", "chapter_range": [1, 2]}]
+            "clusters": [{"cluster_id": cluster_id, "title": "T"}]
         }, ensure_ascii=False), encoding="utf-8")
         # archivist 产 archive（含 throughline）→ apply_archive 落 事件簇
-        (db / ".wal" / "cluster_001_archive.json").write_text(json.dumps({
-            "cluster_id": "cluster_001",
-            "characters": [{"id": "C_X", "name": "X", "tier": "core", "new": True}],
+        (db / ".wal" / f"{cluster_id}_archive.json").write_text(json.dumps({
+            "cluster_id": cluster_id,
+            "characters": [{"id": "C_X", "name": "X", "tier": "core", "new": True,
+                            "first_cluster": cluster_id}],
             "throughline_progress": {"OS": True, "MC": True, "IC": False, "RS": False},
         }, ensure_ascii=False), encoding="utf-8")
         assert aa.main([str(root), "--cluster", "001"]) == 0
-        # writer changes 不含 throughline（已不自报）
-        for ch in (1, 2):
-            cio.write_body(root, ch, "正文内容若干。\n" * 30)
-            cio.write_changes(root, ch, {"factual": {}, "self_eval": {}})
-        csb.build_cluster_summary(root, "cluster_001")
+
+        # cluster_summary_builder 的其余必需产物（writer 正文不自报 throughline）
+        (draft_dir / f"{cluster_id}_draft.txt").write_text(
+            "正文内容若干。\n" * 30, encoding="utf-8")
+        (draft_dir / f"{cluster_id}_changes.json").write_text(
+            json.dumps({"self_eval": {}}, ensure_ascii=False), encoding="utf-8")
+        (db / "地图.json").write_text(
+            json.dumps({"locations": []}, ensure_ascii=False), encoding="utf-8")
+        (db / "主角压力档.json").write_text(
+            json.dumps({"stress_log": []}, ensure_ascii=False), encoding="utf-8")
+        (db / ".wal" / f"{cluster_id}_summary.json").write_text(json.dumps({
+            "cluster_id": cluster_id, "title": "T", "summary": "OS/MC 推进的一个故事块。",
+            "scene_summaries": [], "key_details": [], "emotion": {}, "anchor_delivery": {},
+        }, ensure_ascii=False), encoding="utf-8")
+        (db / ".audit" / f"{cluster_id}_audit.json").write_text(
+            json.dumps({"cluster_id": cluster_id, "verdict": "pass"}, ensure_ascii=False),
+            encoding="utf-8")
+        (db / ".wal" / f"{cluster_id}_state_delta.json").write_text(
+            json.dumps({"cluster_id": cluster_id}, ensure_ascii=False), encoding="utf-8")
+        (db / ".wal" / f"{cluster_id}_entity_stats.json").write_text(
+            json.dumps({"cluster_id": cluster_id, "known_entities": []}, ensure_ascii=False),
+            encoding="utf-8")
+        (db / ".judge_reports" / f"{cluster_id}_writer-truth-check.json").write_text(
+            json.dumps({"cluster_id": cluster_id, "verdict": "pass"}, ensure_ascii=False),
+            encoding="utf-8")
+        (db / ".wal" / f"{cluster_id}_judge_reports_rollup.json").write_text(
+            json.dumps({"cluster_id": cluster_id}, ensure_ascii=False), encoding="utf-8")
+        store.initialize_summary(root)
+
+        csb.build_cluster_summary(root, cluster_id)
         from cluster_summary_reader import load_summary
         rec = next(c for c in load_summary(root)["clusters"]
-                   if cl.normalize_cluster_id(c["cluster_id"]) == "cluster_001")
-        # 账本逐章承载 cluster 级 throughline（注入自 事件簇·archive 源）
-        assert rec["chapters"]["1"]["throughline_progress"]["OS"] is True
-        assert rec["chapters"]["2"]["throughline_progress"]["MC"] is True
-        # 运行 throughline_balance（cluster 模式）→ distribution 非全 0
+                   if cl.normalize_cluster_id(c["cluster_id"]) == cluster_id)
+        # 账本承载 cluster 级 throughline（注入自 事件簇·archive 源）
+        assert rec["throughline_progress"]["OS"] is True
+        assert rec["throughline_progress"]["MC"] is True
+
+        # 运行 throughline_balance → distribution 非全 0
         target = _SCRIPTS / "cross_cluster_throughline_balance_aggregate.py"
-        env = _utf8_env(CLUSTER_MODE="1", CLUSTER_ID="cluster_001")
         r = subprocess.run([sys.executable, str(target), str(root), "--last-n", "5"],
-                           capture_output=True, text=True, env=env, encoding="utf-8")
+                           capture_output=True, text=True, env=_utf8_env(), encoding="utf-8")
         assert "Traceback" not in (r.stderr or "")
-        report = sorted((db / ".cross_chapter_scan").glob("throughline_balance_*.json"))[-1]
+        report = sorted((db / ".cross_cluster_scan").glob("throughline_balance_*.json"))[-1]
         dist = json.loads(report.read_text(encoding="utf-8"))["distribution"]
         assert dist["OS"] > 0 and dist["MC"] > 0, "throughline 不应全 DORMANT"

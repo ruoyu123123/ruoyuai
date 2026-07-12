@@ -1,218 +1,219 @@
-"""cluster_summary_reader.py — cluster 账本（故事块摘要.json）消费侧 + 字段契约单一来源
-
-v2 cluster 化「摘要驱动」架构（2026-05-29）：
-- cluster-save-state 完成时由 `cluster_summary_builder.py` 把每个 cluster 的富摘要写入
-  `_数据库/故事块摘要.json` 的 `clusters[]`（每个 cluster 一条记录，内嵌 chapters[ch]）。
-- 22 个 cross_cluster_*_aggregate.py 在 CLUSTER_MODE=1 时改用本 reader 从账本取预计算
-  字段（不再逐章 glob 重扫正文）；账本缺失字段时回退各自原有的逐章逻辑（向后兼容）。
-
-═══════════════════════════════════════════════════════════════════════
-账本字段契约（cluster_summary_builder.py 必须按此产出 · aggregator 按此消费）
-═══════════════════════════════════════════════════════════════════════
-故事块摘要.json = {
-  "schema_version": "v2.cluster",
-  "clusters": [ <ClusterRecord>, ... ]   # 按 chapter_range[0] 升序
-}
-
-ClusterRecord = {
-  # ---- 锚点（必填，db_schema_validate 要求 cluster_id + title）----
-  "cluster_id": "cluster_002",
-  "title": "...",
-  "chapter_range": [lo, hi],            # splitter 切定后回填；fluid 未切时可缺
-  "cluster_end_ch": hi,                 # = chapter_range[1]，供 fate/foreshadow/will_learn 取锚点
-  "word_count": int,                    # cluster 总 CJK
-
-  # ---- cluster 级 rollup（builder 预算的跨章汇总）----
-  "length_stats": {"median": int, "mean": float, "cv": float},
-  "throughline_distribution": {"OS": float, "MC": float, "IC": float, "RS": float},
-  "faction_snapshot": {faction: {power,stability,wealth}},   # cluster 末态（world_dynamics 用）
-  "judge_grade": "A"|"B"|"C"|"D"|null,  # cluster 级综合评级（judge 化后填）
-  "fate_overdue_snapshot": [{"event_id","title","overdue_by"}],
-
-  # ---- 增量贡献（本 cluster 对全局表的贡献，供节奏类 aggregator）----
-  "foreshadow_planted": ["fid", ...],
-  "foreshadow_paid": ["fid", ...],
-  "foreshadow_reinforced": {"fid": [ch, ...]},
-  "secrets_revealed": ["sid", ...],
-  "relationship_changes": [{"from","to","ch"}],
-  "spawn_events": [{"char_id","spawned_at_ch","promoted_at_ch"|null}],
-
-  # ---- per-chapter 预算字段（账本主体，key = 物理章号 str）----
-  "chapters": {
-    "5": <ChapterRecord>, "6": ..., ...
-  }
-}
-
-ChapterRecord = {            # 每个字段都 optional —— aggregator 用 .get 取，缺则回退
-  "cjk_count": int,                                  # meta_quality 字数分布
-  "summary": str,                                    # ≥50 字富摘要 meta_quality
-  "summary_keywords": [str],                         # 预抽关键词
-  "text_keyword_set": [str],                         # 正文 2-4 字关键词指纹（meta_quality/will_learn hint）
-  "pattern_metrics": {...20 维...},                  # pattern aggregator 全部维度（最高价值）
-  "idiom_hits": {idiom: int},                        # pattern idiom 冷却
-  "char_mention_counts": {char: int},                # pattern rotation / offscreen / 出场
-  "char_appearance_chs_flag": [char],                # 本章出场角色（= char_mention_counts.keys 命中>0）
-  "persona_drift": {char: float},                    # persona_drift（save 时算好的 embedding drift）
-  "char_emotion_counts": {char: {emotion: int}},     # emotion_pattern 逐章分类情绪计数
-  "emotion_value": int,                              # continuity 用的粗粒度情绪值（WAL summary）
-  "relationships": [{"from","to","affinity","trust","fear","respect"}],  # relationship_trend
-  "scene_type": str,                                 # scene_pov
-  "pov": str,                                        # scene_pov 主视角
-  "characters": [str],                               # build_manifest 已在读
-  "beat": str, "beat_signal_hit": bool, "beats_addressed": [str],        # structure_compliance
-  "user_choice": str, "choice_leads_to": str, "turning_point": str,      # structure_compliance
-  "throughline_progress": {"OS":bool,"MC":bool,"IC":bool,"RS":bool},     # throughline_balance
-  "time_anchor": str, "time_transition_present": bool,                   # timeline
-  "item_changes": [{"id","holder"}],                 # timeline
-  "locations_mentioned": [str],                      # timeline 地点
-  "ending_type": str, "ending_line": str, "has_pre_opening": bool,       # continuity / ending_diversity
-  "time_advance": {"period": str, "key_events": [str]},                  # continuity
-  "plot_nodes": [str],                               # continuity 过渡说明
-  "cliffhanger_resonance_next": float,               # 与下一章 head 重叠分（continuity cliffhanger）
-  "aspects_addressed": [aspect_id], "aspect_text_hit": [aspect_id],      # data_consumption
-  "clocks_addressed": [clock_id],                    # data_consumption
-  "fate_dice_consumed": [{"event_id","evidence_hit_ratio"}],             # data_consumption
-  "coping_hit": bool,                                # character_dynamics coping 关键词
-  "stress_total": int, "stress_trigger": str,        # character_dynamics
-  "mental_break_card": str|null,                     # character_dynamics
-  "moves_used": [{"character","move_id","instances"}],                   # character_dynamics
-  "position_effect_evals": [{"position","effect"}],  # character_dynamics
-  "arc_stage": {char: stage_str},                    # arc_progression
-  "hook_score": float, "golden_scores": {"kindling","hook","turn"},      # engagement_metrics
-  "judge_score": float, "waivers": [{"code","reason"}],                  # judge_quality
-  "prev_findings_consumed": bool,                    # judge_quality
-  "offscreen": {"expected": [...], "executed": [...], "backlog_count": int},  # offscreen
-  "outcome": str,                                    # world_dynamics win/setback
-  "beats_addressed": [str],
-}
-═══════════════════════════════════════════════════════════════════════
-"""
+"""读取并校验唯一的 cluster 摘要账本。"""
 
 from __future__ import annotations
 
 import json
-import os
-import re
 from pathlib import Path
 
-__all__ = [
-    "is_cluster_mode",
-    "current_cluster_id",
-    "load_summary",
-    "get_clusters",
-    "get_chapter_records",
-    "ledger_has_field",
-    "SUMMARY_FILENAME",
-]
-
 SUMMARY_FILENAME = "故事块摘要.json"
+SCHEMA_VERSION = "v2.cluster"
+
+TOP_LEVEL_FIELDS = frozenset({"schema_version", "clusters", "volume_summaries"})
+CLUSTER_FIELDS = frozenset({
+    "cluster_id", "title", "summary", "scene_summaries", "key_details",
+    "emotion", "anchor_delivery", "word_count", "text_keyword_set",
+    "pattern_metrics", "idiom_hits", "characters", "char_mention_counts",
+    "char_emotion_counts", "locations_mentioned", "ending_type", "ending_line",
+    "time_transition_present", "structure", "throughline_progress", "stress",
+    "moves_used", "position_effect_evals", "outcome", "offscreen", "state_delta",
+    "relationship_changes", "item_changes", "locked_facts", "audit", "truth_check",
+    "judge_reports", "judge_score", "judge_grade", "waivers",
+})
+VOLUME_FIELDS = frozenset({
+    "volume", "summary", "source", "generated_at_cluster", "emotional_peak",
+    "key_turning_points", "applied_at",
+})
 
 
-def is_cluster_mode() -> bool:
-    """调度器 run_cross_cluster_aggregates 在 cluster 模式给子进程透传 CLUSTER_MODE=1。"""
-    return os.environ.get("CLUSTER_MODE") == "1"
-
-
-def current_cluster_id() -> str | None:
-    return os.environ.get("CLUSTER_ID")
+class ClusterSummaryError(ValueError):
+    """摘要账本违反当前 cluster 合同。"""
 
 
 def _db_dir(project_root) -> Path:
     root = Path(project_root)
-    if root.name == "_数据库":
-        return root
-    return root / "_数据库"
+    return root if root.name == "_数据库" else root / "_数据库"
+
+
+def summary_path(project_root) -> Path:
+    return _db_dir(project_root) / SUMMARY_FILENAME
+
+
+def _require_type(value, expected, where: str) -> None:
+    if not isinstance(value, expected):
+        label = getattr(expected, "__name__", str(expected))
+        raise ClusterSummaryError(f"{where} 必须是 {label}")
+
+
+def _cluster_num(cluster_id: str) -> int:
+    if not isinstance(cluster_id, str):
+        raise ClusterSummaryError(f"非法 cluster_id: {cluster_id!r}")
+    if not cluster_id.startswith("cluster_"):
+        raise ClusterSummaryError(f"非法 cluster_id: {cluster_id!r}")
+    number = cluster_id.removeprefix("cluster_")
+    if len(number) < 3 or not number.isascii() or not number.isdigit():
+        raise ClusterSummaryError(f"非法 cluster_id: {cluster_id!r}")
+    return int(number)
+
+
+def _validate_cluster(record: dict, index: int) -> None:
+    where = f"clusters[{index}]"
+    _require_type(record, dict, where)
+    missing = sorted(CLUSTER_FIELDS - set(record))
+    extra = sorted(set(record) - CLUSTER_FIELDS)
+    if missing:
+        raise ClusterSummaryError(f"{where} 缺少字段: {missing}")
+    if extra:
+        raise ClusterSummaryError(f"{where} 含未知字段: {extra}")
+    _cluster_num(record["cluster_id"])
+    for field in ("title", "summary", "ending_type", "ending_line", "outcome"):
+        _require_type(record[field], str, f"{where}.{field}")
+    for field in (
+        "scene_summaries", "key_details", "text_keyword_set", "characters",
+        "locations_mentioned", "moves_used", "position_effect_evals",
+        "relationship_changes", "item_changes", "locked_facts", "judge_reports",
+        "waivers",
+    ):
+        _require_type(record[field], list, f"{where}.{field}")
+    for field in (
+        "emotion", "anchor_delivery", "pattern_metrics", "idiom_hits",
+        "char_mention_counts", "char_emotion_counts", "structure",
+        "throughline_progress", "stress", "offscreen", "state_delta", "audit",
+        "truth_check",
+    ):
+        _require_type(record[field], dict, f"{where}.{field}")
+    if not isinstance(record["word_count"], int) or isinstance(record["word_count"], bool):
+        raise ClusterSummaryError(f"{where}.word_count 必须是整数")
+    if record["word_count"] < 0:
+        raise ClusterSummaryError(f"{where}.word_count 不得小于 0")
+    _require_type(record["time_transition_present"], bool,
+                  f"{where}.time_transition_present")
+    if record["judge_score"] is not None and (
+        not isinstance(record["judge_score"], (int, float))
+        or isinstance(record["judge_score"], bool)
+    ):
+        raise ClusterSummaryError(f"{where}.judge_score 必须是数值或 null")
+    if record["judge_grade"] is not None and not isinstance(record["judge_grade"], str):
+        raise ClusterSummaryError(f"{where}.judge_grade 必须是字符串或 null")
+
+
+def _validate_volume(record: dict, index: int) -> None:
+    where = f"volume_summaries[{index}]"
+    _require_type(record, dict, where)
+    missing = sorted({"volume", "summary", "source", "generated_at_cluster"} - set(record))
+    extra = sorted(set(record) - VOLUME_FIELDS)
+    if missing:
+        raise ClusterSummaryError(f"{where} 缺少字段: {missing}")
+    if extra:
+        raise ClusterSummaryError(f"{where} 含未知字段: {extra}")
+    if not isinstance(record["volume"], int) or isinstance(record["volume"], bool):
+        raise ClusterSummaryError(f"{where}.volume 必须是整数")
+    if record["volume"] < 1:
+        raise ClusterSummaryError(f"{where}.volume 必须是正整数")
+    _require_type(record["summary"], str, f"{where}.summary")
+    if not record["summary"].strip():
+        raise ClusterSummaryError(f"{where}.summary 不能为空")
+    _require_type(record["source"], list, f"{where}.source")
+    if not record["source"]:
+        raise ClusterSummaryError(f"{where}.source 不能为空")
+    _cluster_num(record["generated_at_cluster"])
+    seen_sources = set()
+    for source in record["source"]:
+        _cluster_num(source)
+        if source in seen_sources:
+            raise ClusterSummaryError(f"{where}.source 不得重复")
+        seen_sources.add(source)
+    for field in ("emotional_peak", "applied_at"):
+        if field in record:
+            _require_type(record[field], str, f"{where}.{field}")
+    if "key_turning_points" in record:
+        _require_type(record["key_turning_points"], list,
+                      f"{where}.key_turning_points")
+        if any(not isinstance(item, str) for item in record["key_turning_points"]):
+            raise ClusterSummaryError(f"{where}.key_turning_points 必须是字符串数组")
+
+
+def validate_summary(data: dict) -> dict:
+    _require_type(data, dict, "故事块摘要")
+    missing = sorted(TOP_LEVEL_FIELDS - set(data))
+    extra = sorted(set(data) - TOP_LEVEL_FIELDS)
+    if missing:
+        raise ClusterSummaryError(f"故事块摘要缺少字段: {missing}")
+    if extra:
+        raise ClusterSummaryError(f"故事块摘要含未知字段: {extra}")
+    if data["schema_version"] != SCHEMA_VERSION:
+        raise ClusterSummaryError(
+            f"故事块摘要.schema_version 必须是 {SCHEMA_VERSION!r}，"
+            f"实得 {data['schema_version']!r}"
+        )
+    _require_type(data["clusters"], list, "故事块摘要.clusters")
+    _require_type(data["volume_summaries"], list, "故事块摘要.volume_summaries")
+    seen_clusters = set()
+    for index, record in enumerate(data["clusters"]):
+        _validate_cluster(record, index)
+        cluster_id = record["cluster_id"]
+        if cluster_id in seen_clusters:
+            raise ClusterSummaryError(f"cluster_id 重复: {cluster_id}")
+        seen_clusters.add(cluster_id)
+    seen_volumes = set()
+    for index, record in enumerate(data["volume_summaries"]):
+        _validate_volume(record, index)
+        volume = record["volume"]
+        if volume in seen_volumes:
+            raise ClusterSummaryError(f"volume_summaries.volume 重复: {volume}")
+        seen_volumes.add(volume)
+    return data
 
 
 def load_summary(project_root) -> dict:
-    """读 故事块摘要.json 全量。不存在/损坏返回空账本骨架。"""
-    p = _db_dir(project_root) / SUMMARY_FILENAME
+    path = summary_path(project_root)
     try:
-        if p.exists():
-            data = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {"schema_version": "v2.cluster", "clusters": []}
-
-
-def _cluster_sort_key(rec: dict):
-    cr = rec.get("chapter_range")
-    if isinstance(cr, list) and cr and isinstance(cr[0], int):
-        return cr[0]
-    end = rec.get("cluster_end_ch")
-    if isinstance(end, int):
-        return end
-    # fallback：cluster_id 抽数字
-    m = re.search(r"(\d+)", str(rec.get("cluster_id", "")))
-    return int(m.group(1)) * 1000 if m else 1_000_000
+        raw = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise ClusterSummaryError(f"必需摘要账本不存在: {path}") from exc
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raise ClusterSummaryError(f"摘要账本必须是 UTF-8 无 BOM: {path}")
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ClusterSummaryError(f"摘要账本不是合法 UTF-8: {path}: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ClusterSummaryError(f"摘要账本 JSON 损坏: {path}: {exc}") from exc
+    return validate_summary(data)
 
 
 def get_clusters(project_root, last_n: int | None = None) -> list[dict]:
-    """返回 cluster 记录列表（按 chapter_range[0] 升序）。
-
-    只返回「真实落账」的 cluster（含 chapters 或 chapter_range），过滤 candidate 雏形。
-    last_n 截最后 N 个 cluster。
-    """
-    summary = load_summary(project_root)
-    clusters = [
-        c for c in summary.get("clusters", [])
-        if isinstance(c, dict) and c.get("cluster_id")
-        and (c.get("chapters") or c.get("chapter_range"))
-        and c.get("status") != "candidate"
-    ]
-    clusters.sort(key=_cluster_sort_key)
-    if last_n is not None and last_n > 0:
+    clusters = list(load_summary(project_root)["clusters"])
+    clusters.sort(key=lambda record: _cluster_num(record["cluster_id"]))
+    if last_n is not None:
+        if not isinstance(last_n, int) or isinstance(last_n, bool) or last_n < 1:
+            raise ClusterSummaryError("last_n 必须是正整数，且单位固定为 cluster")
         clusters = clusters[-last_n:]
     return clusters
 
 
-def get_chapter_records(project_root, last_n_clusters: int | None = None) -> list[tuple[int, dict]]:
-    """把账本里所有 cluster 的 chapters[ch] 拍平成 [(ch:int, ChapterRecord), ...]，按 ch 升序。
-
-    aggregator 在 cluster 模式可直接用它替代逐章 glob：拿到 (ch, record) 后从 record
-    里取自己需要的预算字段（.get），缺字段说明 builder 未填 → 调用方应回退逐章逻辑。
-    """
-    out: list[tuple[int, dict]] = []
-    for c in get_clusters(project_root, last_n=last_n_clusters):
-        chapters = c.get("chapters") or {}
-        if not isinstance(chapters, dict):
-            continue
-        for ch_key, rec in chapters.items():
-            try:
-                ch = int(ch_key)
-            except (ValueError, TypeError):
-                continue
-            if isinstance(rec, dict):
-                out.append((ch, rec))
-    out.sort(key=lambda x: x[0])
-    return out
+def get_cluster(project_root, cluster_id: str) -> dict:
+    number = _cluster_num(cluster_id)
+    canonical = f"cluster_{number:03d}"
+    for record in get_clusters(project_root):
+        if record["cluster_id"] == canonical:
+            return record
+    raise ClusterSummaryError(f"摘要账本中不存在 {canonical}")
 
 
-def ledger_has_field(project_root, field: str, min_chapters: int = 1) -> bool:
-    """检查账本里至少 min_chapters 个章记录含某字段 —— aggregator 用它决定走账本还是回退。"""
-    recs = get_chapter_records(project_root)
-    hit = sum(1 for _ch, r in recs if field in r and r.get(field) not in (None, [], {}))
-    return hit >= min_chapters
+__all__ = [
+    "CLUSTER_FIELDS", "ClusterSummaryError", "SCHEMA_VERSION", "SUMMARY_FILENAME",
+    "get_cluster", "get_clusters", "load_summary", "summary_path", "validate_summary",
+]
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) >= 2:
-        root = sys.argv[1]
-        cs = get_clusters(root)
-        print(f"账本 cluster 数: {len(cs)}")
-        for c in cs:
-            print(f"  {c.get('cluster_id')} range={c.get('chapter_range')} chapters={len(c.get('chapters') or {})}")
-        recs = get_chapter_records(root)
-        print(f"拍平章记录数: {len(recs)}")
-    else:
-        # 自测：空账本不崩
-        import tempfile
-        d = Path(tempfile.mkdtemp()) / "_数据库"
-        d.mkdir(parents=True)
-        assert get_clusters(d.parent) == []
-        assert get_chapter_records(d.parent) == []
-        assert is_cluster_mode() in (True, False)
-        print("[OK] cluster_summary_reader self-test passed")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="校验并列出 cluster 摘要账本")
+    parser.add_argument("project")
+    parser.add_argument("--last-n", type=int)
+    args = parser.parse_args()
+    for row in get_clusters(args.project, args.last_n):
+        print(f"{row['cluster_id']}\t{row['title']}\t{row['word_count']} CJK")

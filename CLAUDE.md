@@ -197,9 +197,9 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
    · volume_arc_drift 等 cross-cluster aggregator
 ```
 
-### hard_gate 不可豁免清单（19 code · 权威定义见 STRUCTURE.md 第十二节）
+### hard_gate 不可豁免清单（18 code · 权威定义见 STRUCTURE.md 第十二节）
 
-`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `PROPAGATION_DEBT_CREATED` / `STYLE_单段超长` / `CHAPTER_END_FORBIDDEN_SCREENPLAY` / `CHAPTER_END_FORBIDDEN_TRANSITION` / `LOCKED_FACT_CROSS_SCENE_CONFLICT` / `RIPPLE_RULES_EMPTY` / `GRAND_TREND_ME_POOL_EMPTY` / `CLUSTER001_STORYBOARD_EMPTY` / `SPLIT_WORD_NOT_CONSERVED`（中 3 个为 v2 cluster · 2026-05-29 · RIPPLE/GRAND_TREND/CLUSTER001 为子系统载荷点火 C03 · SPLIT_WORD_NOT_CONSERVED 为 splitter 字数守恒 C18 · 2026-06-27 · 均与 audit_hub.HARD_GATE_CODES 对齐）
+`LOCKED_FACT_CONFLICT` / `FUTURE_KNOWLEDGE_LEAK` / `FORESHADOWING_NOT_PAID` / `SECRET_NOT_REVEALED` / `UNKNOWN_CHARACTER_DETECTED` / `CHANGES_MISSING` / `MANIFEST_MISSING` / `FILE_NOT_FOUND` / `ITEM_HOLDER_ABSENT` / `ITEM_NOT_YET_INTRODUCED` / `STYLE_单段超长` / `CHAPTER_END_FORBIDDEN_SCREENPLAY` / `CHAPTER_END_FORBIDDEN_TRANSITION` / `LOCKED_FACT_CROSS_SCENE_CONFLICT` / `RIPPLE_RULES_EMPTY` / `GRAND_TREND_ME_POOL_EMPTY` / `CLUSTER001_STORYBOARD_EMPTY` / `SPLIT_WORD_NOT_CONSERVED`（中 3 个为 v2 cluster · 2026-05-29 · RIPPLE/GRAND_TREND/CLUSTER001 为子系统载荷点火 C03 · SPLIT_WORD_NOT_CONSERVED 为 splitter 字数守恒 C18 · 2026-06-27 · 均与 audit_hub.HARD_GATE_CODES 对齐）
 
 > **🔴 C18 splitter 字数守恒 hard（2026-06-27）**：`SPLIT_WORD_NOT_CONSERVED` 由 `chapter_splitter.run_freestyle` 落盘前确定性自检 emit——`sum(per_chapter_cjk) + pending_tail_cjk != draft_cjk`（丢字/重复）或落盘空 chunk 或切片计数失配 → `[FATAL]` exit 2（坏章节零落盘）。北极星④纯格式层契约破损（性质同 `MANIFEST_MISSING`）。**北极星⑤边界**：只查 CJK 守恒 + 无空块 + 计数同步，绝不断言章数 N（fluid 禁锁）/切点质量/叙事顺序。
 
@@ -209,10 +209,10 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 ### 豁免协议
 
-- writer 豁免 → `第N章_changes.json` 的 `self_eval.waivers: [{code, reason}]`
+- writer 豁免 → `cluster_<key>_changes.json` 的 `self_eval.waivers: [{code, reason}]`
 - judge agent → JudgeReport 的 `waivers` 段
 - `audit_hub.py --waivers <path>` 收集豁免；advisory 命中 → 转 `waived`；hard_gate 强制忽略豁免
-- 反复豁免 → `learning_loop.py` 产校准建议反向调阈值
+- 反复豁免 → `learning_loop.py` 按 cluster audit 产校准建议；经验来源与 efficacy 统一记录 canonical cluster_id，失效约束停止注入下一 cluster
 
 ---
 
@@ -412,13 +412,13 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 
 ## 🔬 蒸馏复刻强制同栈（Claude 草稿 + gemini 润色）
 
-`/distill-style` 的复刻段产出**必须与正式写作同栈**：**spawn Claude agent 按 skill 写复刻场景稿** → `distill_replicate.py` 用 gemini 按 skill 分段润色落盘评分。禁止纯 gemini 从零直写复刻，也禁止 Claude agent 直接产复刻终稿。
+`/distill-style` 的复刻段产出**必须与正式写作同栈**：spawn `novel-replica-writer` 按 skill 写复刻场景稿 → `distill_replicate.py` 用 gemini 按 skill 分段润色落盘评分。禁止纯 gemini 从零直写复刻，也禁止 agent 直接产复刻终稿。
 
 该闭环验证 skill 能否驱动正式写作栈复现作者风格。
 
 **正确流程**：
 ```bash
-# ① 蒸馏 plan 的复刻 step 先 spawn Claude agent 按 skill 写场景稿到 <scenes_dir>/scene_*.txt
+# ① 蒸馏 plan 的复刻 step 先 spawn novel-replica-writer 按 skill 写场景稿和 agent_report.json
 # ② 再跑（复刻终稿只能由本脚本落盘）：
 python core/scripts/distill_replicate.py \
   --style-skill workspace/styles/<书名>/skill_v<N>.md \

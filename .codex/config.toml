@@ -1,0 +1,13 @@
+[mcp_servers.chrome-devtools]
+command = "cmd"
+args = [
+    "/c",
+    "npx -y chrome-devtools-mcp@latest",
+]
+
+[mcp_servers.playwright]
+command = "cmd"
+args = [
+    "/c",
+    "npx -y @playwright/mcp@latest --browser msedge",
+]

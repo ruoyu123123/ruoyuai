@@ -20,7 +20,7 @@
     CONCRETE_NOUN 命中片段带前置修饰字（茶杯/门钥匙），同一核心名词被切成多个
     不同 Counter key → max 计数恒为 1 → 永不触发 > 3 阈值（漏报）。
     实测：「他拿起茶杯，又放下茶杯，再端起茶杯，最后摔了茶杯」（茶杯×4）旧代码 max=1。
-    修复（局部归一·不动共享 CONCRETE_NOUN 正则·避免 scan_orphan_objects 回归）：
+    当前实现把命中片段归一为稳定的具体名词 key：
         counts[_repetition_core_key(m.group(0))] += 1
       _repetition_core_key 把片段归一到「核心名词后缀 + 其前 1 字」。
 

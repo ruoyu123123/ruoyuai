@@ -1,4 +1,4 @@
-"""Internal guard for cluster-save-state child scripts."""
+"""限制 cluster-save-state 内部状态子步骤的直接调用。"""
 from __future__ import annotations
 
 import os
@@ -21,7 +21,7 @@ def require_internal(script_name: str) -> None:
     if is_internal():
         return
     print(
-        f"[FATAL] {script_name} 是 /cluster-save-state 内部单章子步骤，"
+        f"[FATAL] {script_name} 是 /cluster-save-state 内部 cluster 子步骤，"
         "禁止直接作为公开状态写入口运行；请通过 /cluster-save-state --cluster 调用。",
         file=sys.stderr,
     )

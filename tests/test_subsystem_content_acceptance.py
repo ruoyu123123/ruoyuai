@@ -222,7 +222,7 @@ def test_shallow_drift_missing_live_key_advisory_exit0(capsys):
     with tempfile.TemporaryDirectory() as d:
         db = Path(d) / "_数据库"
         _emit(db)
-        # 枢纽场景 skeleton 顶层含 hubs/rhythm_targets/cluster_hub_log → 删一个
+        # 枢纽场景 skeleton 顶层含 hubs/rhythm_targets/cluster_hub_log，删除一个应拒绝
         _set(db, "枢纽场景.json", lambda o: o.pop("hubs", None))
         rc = scaf.cmd_verify(["--db-dir", str(db), "--shallow-drift"])
         out = capsys.readouterr().out

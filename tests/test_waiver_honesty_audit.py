@@ -1,21 +1,4 @@
-"""C09 WAIVER-HONESTY-AUDIT 回归测试（2026-06-27）。
-
-【根因】advisory 豁免由 writer 自己在 cluster_changes.json self_eval.waivers 写——运动员当
-裁判。旧 _load_waivers 唯一校验是「理由非空 + <300 字」：无数量上限、无去重、不校验被豁免
-code 真存在（orphan）。本件加三道纯卫生防线 + 一个 META-only blanket 审计信号：
-
-  1. _load_waivers 按 code 去重（保最长 reason · 冲突 warn）——行为中性。
-  2. _apply_waivers orphan 豁免（code 不在本次 issue）→ 从 by_code 排除 + log（非静默 no-op）。
-  3. _compute_waiver_audit 算 advisory_total/advisory_waived/waive_rate/blanket/orphan（纯函数）。
-  4. learning_loop._track_waivers 把 waiver_audit 落 per-cluster ledger（喂自学习）。
-
-【北极星护栏 = 本件最强回归锁】
-  · blanket_suspected 只是 META flag —— 【绝不翻 verdict】（全 advisory 被合理豁免仍判 waived，
-    不 block / cap-reject / downgrade-fail）。风格与通用爽文基线合法冲突的 cluster 应能全豁免。
-  · hard_gate 豁免 → 【仍 force-ignore】（不可豁免，这条不动）。
-
-只测确定性纯函数 + 假 scanner 子进程聚合，不碰 LLM / agent / 真项目。
-"""
+"""Waiver hygiene, advisory-only handling, and cluster learning-ledger tests."""
 import json
 import sys
 import tempfile
@@ -93,7 +76,7 @@ def test_apply_waivers_hard_gate_force_ignore_regression():
 
 
 def test_apply_waivers_empty_returns_list():
-    """空豁免清单 → 返回 list（保持 _apply_waivers 历史契约 · 不改返回类型）。"""
+    """空豁免清单返回 list。"""
     assert ah._apply_waivers([{"code": "A", "gate_level": "advisory"}], []) == []
 
 
@@ -208,6 +191,11 @@ def _make_sandbox(tmp: Path, with_hard_gate: bool = False):
     ch_dir = proj / "章节" / "第001章"
     ch_dir.mkdir(parents=True)
     (ch_dir / "第001章.txt").write_text("他推门进来。\n\n「你来了。」\n", encoding="utf-8")
+    db = proj / "_数据库"
+    db.mkdir()
+    (db / "事件簇.json").write_text(json.dumps({
+        "clusters": [{"cluster_id": "cluster_001", "chapter_range": [1, 1]}]
+    }, ensure_ascii=False), encoding="utf-8")
     scan = tmp / "fake_scanners"
     scan.mkdir()
     for name in _ALL_SCANNER_NAMES:
@@ -281,7 +269,7 @@ def test_integration_hard_gate_waiver_force_ignored_with_meta():
         assert wa["advisory_waived"] == 4
 
 
-# ═══════════════════════ 5. learning_loop per-cluster ledger ═══════════════════════
+# ═══════════════════════ 5. learning_loop cluster ledger ═══════════════════════
 
 def _mk_db(tmp: Path) -> Path:
     db = tmp / "_数据库"
@@ -297,41 +285,23 @@ def _ingest(tmp: Path, audit: dict, name: str) -> dict:
     return ll.ingest_audit(tmp, p)
 
 
-def test_ledger_records_waiver_audit_chapter_key():
-    with tempfile.TemporaryDirectory() as d:
-        tmp = Path(d)
-        _mk_db(tmp)
-        audit = {
-            "chapter": 7, "issues": [],
-            "waived_issues": [{"code": "NARRATIVE_repetition", "dimension": "风格",
-                               "waive_reason": "刻意复沓"}],
-            "waiver_audit": {"waive_rate": 0.83, "advisory_total": 6, "advisory_waived": 5,
-                             "blanket_suspected": True, "orphan_codes": ["GHOST"],
-                             "repeated_reason_codes": {}},
-        }
-        _ingest(tmp, audit, "ch_007_audit.json")
-        rec = ll.load_experience(tmp)["_waiver_audit_ledger"]["ch::7"]
-        assert rec["blanket_suspected"] is True
-        assert rec["waive_rate"] == 0.83
-        assert rec["orphan_codes"] == ["GHOST"]
-        assert "ts" in rec
-
-
 def test_ledger_records_waiver_audit_cluster_key():
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         _mk_db(tmp)
         audit = {
-            "chapter": 9000, "_cluster_mode": True, "_cluster_key": "001",
-            "issues": [], "waived_issues": [{"code": "NARRATIVE_pov", "waive_reason": "设计"}],
+            "cluster_id": "cluster_001",
+            "issues": [], "pending_agent": [],
+            "waived_issues": [{"code": "NARRATIVE_pov", "dimension": "叙事",
+                                "waive_reason": "设计"}],
             "waiver_audit": {"waive_rate": 0.2, "advisory_total": 5, "advisory_waived": 1,
                              "blanket_suspected": False, "orphan_codes": [],
                              "repeated_reason_codes": {}},
         }
         _ingest(tmp, audit, "cluster_001_audit.json")
         ledger = ll.load_experience(tmp)["_waiver_audit_ledger"]
-        assert "cluster::001" in ledger
-        assert ledger["cluster::001"]["blanket_suspected"] is False
+        assert "cluster_001" in ledger
+        assert ledger["cluster_001"]["blanket_suspected"] is False
 
 
 def test_ledger_blanket_does_not_escalate_or_block():
@@ -340,25 +310,30 @@ def test_ledger_blanket_does_not_escalate_or_block():
         tmp = Path(d)
         _mk_db(tmp)
         audit = {
-            "chapter": 3, "issues": [],
-            "waived_issues": [{"code": f"C{i}", "waive_reason": "统一理由"} for i in range(4)],
+            "cluster_id": "cluster_003", "issues": [], "pending_agent": [],
+            "waived_issues": [{"code": f"C{i}", "dimension": "风格",
+                                "waive_reason": "统一理由"} for i in range(4)],
             "waiver_audit": {"waive_rate": 1.0, "advisory_total": 4, "advisory_waived": 4,
                              "blanket_suspected": True, "orphan_codes": [],
                              "repeated_reason_codes": {"统一理由": ["C0", "C1", "C2", "C3"]}},
         }
-        res = _ingest(tmp, audit, "ch_003_audit.json")
+        res = _ingest(tmp, audit, "cluster_003_audit.json")
         assert res["escalated"] == []   # 豁免不进复发升级链
         exp = ll.load_experience(tmp)
         assert exp["failure_patterns"] == []  # blanket 不制造 failure_pattern
-        assert exp["_waiver_audit_ledger"]["ch::3"]["blanket_suspected"] is True
+        assert exp["_waiver_audit_ledger"]["cluster_003"]["blanket_suspected"] is True
 
 
-def test_ledger_absent_when_no_waiver_audit():
-    """audit 无 waiver_audit 段（旧报告）→ ledger 不写该键 · 不崩（向后兼容）。"""
+def test_cluster_audit_requires_waiver_audit():
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         _mk_db(tmp)
-        audit = {"chapter": 1, "issues": [],
-                 "waived_issues": [{"code": "NARRATIVE_pov", "waive_reason": "r"}]}
-        _ingest(tmp, audit, "ch_001_audit.json")
-        assert ll.load_experience(tmp)["_waiver_audit_ledger"] == {}
+        audit = {"cluster_id": "cluster_001", "issues": [], "pending_agent": [],
+                 "waived_issues": [{"code": "NARRATIVE_pov", "dimension": "叙事",
+                                     "waive_reason": "r"}]}
+        try:
+            _ingest(tmp, audit, "cluster_001_audit.json")
+        except ValueError as exc:
+            assert "waiver_audit" in str(exc)
+        else:
+            raise AssertionError("缺 waiver_audit 的 cluster audit 必须拒绝")

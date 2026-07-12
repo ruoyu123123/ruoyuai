@@ -48,7 +48,7 @@ def _call(clusters, candidates, *, volumes=_VOLS, pool=None, vol=1, window=None)
                 "volumes": volumes}
     return et.goal_stagnation(
         {"clusters": clusters}, dashishi, vol, candidates,
-        get_me_id=cee._get_me_id, me_text=cee._me_text,
+        get_event_id=cee._event_id, me_text=cee._me_text,
         keyword_set=cee._keyword_set, me_volume=cee._me_volume, window=window)
 
 

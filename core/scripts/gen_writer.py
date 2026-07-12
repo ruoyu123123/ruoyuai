@@ -2451,9 +2451,7 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
     _lt_band = length_telemetry_band()  # S9 遥测带（与 cluster_length_band_scanner 同口径）
     ch_range_str = f'{ch_start}-TBD_by_splitter'
 
-    # v27 P0 修复（schema 统一）：先把 LLM 输出的 changes 经 normalize_changes 归一·
-    # 兼容三种布局（顶层 factual / 顶层 CHANGES / 顶层裸字段）·全部转 {factual, self_eval}·
-    # 杜绝下游 audit_hub CHANGES_MISSING 误报 + waivers 读不到。
+    # 收口为唯一 self_eval 合同；客观状态由 save-state 的专用 Agent 产物承载。
     changes = cio.normalize_changes(changes)
     se = changes['self_eval']
     se.setdefault('ecas_metadata', {})
@@ -2481,7 +2479,6 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         se['ecas_metadata']['polish'] = polish_trace
     se.setdefault('waivers', [])
     se.setdefault('uncertainty_flags', [])
-    changes.setdefault('schema_version', 'v2.cluster')
     # 2026-06-13 同批收编：changes.json 半截损坏 = 下游 audit_hub/split_cluster_changes 解析崩。
     atomic_write_text(changes_path,
                       json.dumps(changes, ensure_ascii=False, indent=2))

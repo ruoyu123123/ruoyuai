@@ -5,7 +5,6 @@
 这是若渝系统接「真中文 NLI 蕴含模型」的**单一入口**，供以下 2 个消费方经
 `core/scripts/nn_nli_bridge.py` 调用（subprocess 批量）：
   · cross_book_invariant_scanner.py —— 跨书硬规则 breach 检测·字面否定词窗口启发式的补充证据
-  · writer_truth_check.py corroborate_factual —— 声明-vs-正文字面锚词匹配失败(uncertain)时的蕴含补判
 
 🔴 进程隔离架构（与 vad_infer.py / coherence_infer.py / surprisal_infer.py 同款）：
   若渝主流水线跑系统 py3.14（无 torch）；模型跑 venv py3.10（torch）。两进程隔离。

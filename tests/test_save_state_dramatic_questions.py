@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""save_state 戏剧问题账本回库测试 — 🔴 2026-06-29 PITQ/MDQ 读者粘性。
+"""save_state 戏剧问题账本回库测试。
 
 钉死 save_state.cmd_apply_dramatic_questions：novel-foreshadower 读整 cluster 正文登记本块戏剧问题
 （伏笔⊂PITQ 特例·account 同构）→ JudgeReport.specific_findings.dramatic_questions={raised,answered}
@@ -110,40 +110,35 @@ def test_dup_qid_within_one_report_deduped():
         assert ent["raised"][0]["scope"] == "cluster"  # 首条胜出
 
 
-def test_scope_normalized_to_cluster_when_invalid():
+def test_invalid_scope_hard_fails():
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
                            dq={"raised": [_raised("DQ_A", scope="garbage")], "answered": []})
-        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
-        assert _ledger(root)["clusters"]["cluster_001"]["raised"][0]["scope"] == "cluster"
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 2
+        assert _ledger(root)["clusters"] == {}
 
 
-def test_scene_idx_string_normalized_to_int():
+def test_scene_idx_string_hard_fails():
     with tempfile.TemporaryDirectory() as d:
         r = _raised("DQ_A"); r["raised_at_scene"] = "3"
         a = _answered("DQ_B"); a["answered_at_scene"] = "5"
         root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
                            dq={"raised": [r], "answered": [a]})
-        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
-        ent = _ledger(root)["clusters"]["cluster_001"]
-        assert ent["raised"][0]["raised_at_scene"] == 3
-        assert isinstance(ent["raised"][0]["raised_at_scene"], int)
-        assert ent["answered"][0]["answered_at_scene"] == 5
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 2
+        assert _ledger(root)["clusters"] == {}
 
 
-def test_missing_qid_skipped():
+def test_missing_qid_hard_fails():
     with tempfile.TemporaryDirectory() as d:
         bad = _raised("DQ_ok"); bad2 = {"question": "无 qid", "scope": "cluster"}
         root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
                            dq={"raised": [bad2, bad], "answered": [{"answered_at_scene": 2}]})
-        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
-        ent = _ledger(root)["clusters"]["cluster_001"]
-        assert len(ent["raised"]) == 1 and ent["raised"][0]["qid"] == "DQ_ok"
-        assert len(ent["answered"]) == 0  # 无 qid 的 answered 跳过
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 2
+        assert _ledger(root)["clusters"] == {}
 
 
 def test_appends_to_existing_cluster_entry_no_overwrite():
-    """已有该 cluster 条目（含历史问题）→ append 不覆盖。"""
+    """已有该 cluster 条目时追加且不覆盖。"""
     with tempfile.TemporaryDirectory() as d:
         ledger = {"schema_version": 1, "clusters": {
             "cluster_001": {"raised": [_raised("DQ_OLD")], "answered": []}}}
@@ -164,30 +159,29 @@ def test_answered_cross_cluster_qid_registered():
         assert ent["answered"][0]["qid"] == "DQ_FROM_C001"
 
 
-# ═══════════════════════ 账本缺/坏：自愈重建 ═══════════════════════
+# ═══════════════════════ 账本缺/坏：required failure ═══════════════════════
 
-def test_missing_ledger_rebuilt_from_skeleton():
-    """戏剧问题账本.json 缺（旧书未播种）但有 dramatic_questions → 从空骨架重建并写入。"""
+def test_missing_ledger_hard_fails():
+    """required 戏剧问题账本缺失时不在消费端补建。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), ledger=None,
                            dq={"raised": [_raised("DQ_A")], "answered": []})
-        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
-        led = _ledger(root)
-        assert led is not None and led["schema_version"] == 1
-        assert led["clusters"]["cluster_001"]["raised"][0]["qid"] == "DQ_A"
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 2
+        assert _ledger(root) is None
 
 
-def test_broken_ledger_rebuilt():
-    """戏剧问题账本.json 损坏 → load_json 返 None → 从空骨架重建（不阻断）。"""
+def test_broken_ledger_hard_fails():
+    """损坏的 required 账本不得被空骨架覆盖。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
                            dq={"raised": [_raised("DQ_A")], "answered": []})
         (Path(root) / "_数据库" / "戏剧问题账本.json").write_text("{ broken", encoding="utf-8")
-        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
-        assert _ledger(root)["clusters"]["cluster_001"]["raised"][0]["qid"] == "DQ_A"
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 2
+        assert (Path(root) / "_数据库" / "戏剧问题账本.json").read_text(
+            encoding="utf-8") == "{ broken"
 
 
-# ═══════════════════════ 默认安全 / 向后兼容 ═══════════════════════
+# ═══════════════════════ required 输入合同 ═══════════════════════
 
 def test_no_dramatic_questions_in_report_hard_fails():
     """JudgeReport 无 dramatic_questions → required 字段缺失，return 2。"""
@@ -221,7 +215,7 @@ def test_cluster_prefixed_key_accepted():
         assert len(_ledger(root)["clusters"]["cluster_001"]["raised"]) == 1
 
 
-# ═══════════════════════ 🔴 Sternberg 读者知识缺口三态 gap_type 回库 ═══════════════════════
+# ═══════════════════════ 读者知识缺口三态 gap_type 回库 ═══════════════════════
 
 def test_gap_type_persisted_when_valid():
     """合法 gap_type（suspense/curiosity/surprise）随 raised 回库（白名单字段·须显式带）。"""
@@ -233,18 +227,17 @@ def test_gap_type_persisted_when_valid():
         assert r["gap_type"] == "curiosity"
 
 
-def test_gap_type_invalid_normalized_to_none():
-    """非法 gap_type → None（默认安全·不报错）。"""
+def test_gap_type_invalid_hard_fails():
+    """非法 gap_type 是 producer 合同错误。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
                            dq={"raised": [_raised("DQ_A", gap_type="garbage")], "answered": []})
-        assert ss.cmd_apply_dramatic_questions(root, "001") == 0
-        r = _ledger(root)["clusters"]["cluster_001"]["raised"][0]
-        assert r["gap_type"] is None
+        assert ss.cmd_apply_dramatic_questions(root, "001") == 2
+        assert _ledger(root)["clusters"] == {}
 
 
 def test_gap_type_missing_defaults_to_none():
-    """旧账本/慢热单一缺口 raised 缺 gap_type → None（向后兼容·字段存在便于下游统一读）。"""
+    """gap_type 是可选维度，省略时明确写 null。"""
     with tempfile.TemporaryDirectory() as d:
         root = _mk_project(Path(d), ledger=dict(_SKELETON_LEDGER),
                            dq={"raised": [_raised("DQ_A")], "answered": []})
@@ -286,7 +279,16 @@ def test_world_seed_init_seeds_empty_ledger():
         # 最小输入：空 ME/arc/ensemble（播种只关心 ledger 这步）
         for fn, payload in (("大势卡.json", {"major_events": []}),
                             ("character_arc_state.json", {"characters": {}}),
-                            ("群像档.json", {"characters": {}})):
+                            ("群像档.json", {"characters": {}}),
+                            ("涟漪规则.json", {"ripple_rules": []}),
+                            ("世界状态.json", {
+                                "current_world_time": {"cluster": "cluster_001", "day": 1},
+                                "consequence_tracker": {},
+                                "factions_state": {},
+                                "protagonist_state": {},
+                                "active_npc_threads": [],
+                                "emergent_opportunities": [],
+                            })):
             (db / fn).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         r = wsi.seed(Path(d), explicit_factions=[], force=False,
                      reset_ticks=False, dry_run=False)

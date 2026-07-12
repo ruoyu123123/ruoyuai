@@ -217,5 +217,5 @@ def test_dialogue_objectives_never_hard_gate():
         assert "DIALOGUE_OBJECTIVE" not in cu
         assert "WHAT_UNSAID" not in cu
         assert "ON_THE_NOSE" not in cu
-    # 北极星不变量：HARD_GATE_CODES 数量恒 19（本特性不新增 hard_gate）
-    assert len(codes) == 19
+    # 北极星不变量：HARD_GATE_CODES 数量恒 18（本特性不新增 hard_gate）
+    assert len(codes) == 18

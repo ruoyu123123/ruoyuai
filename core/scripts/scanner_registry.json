@@ -147,6 +147,13 @@
       "_new": true,
       "issues_emitted": ["DRAMATIC_IRONY_DRIFT"]
     },
+    "dramatic_irony_gap": {
+      "layer": "cluster",
+      "script": "dramatic_irony_gap_scanner.py",
+      "doc": "按角色信念账本检查读者已知而角色未知的信息差是否为空或长期未释放；仅产出 cluster 级 advisory。",
+      "trigger_by": "audit_hub cluster 审计",
+      "issues_emitted": ["DRAMATIC_IRONY_GAP_EMPTY", "DRAMATIC_IRONY_GAP_STALE"]
+    },
     "reveal_show": {
       "layer": "cluster",
       "script": "reveal_show_scanner.py",
@@ -185,10 +192,10 @@
     },
     "litrpg_structure": {
       "layer": "cluster",
-      "genre_gated": "horror_game",
+      "genre_gated": ["horror_game", "litrpg", "system_isekai", "game_anime"],
       "script": "litrpg_structure_scanner.py",
-      "doc": "[2026-06-13 阶段3·题材自适应] 游戏向/LitRPG 题材专属结构(仅 genre=horror_game 激活)：面板数值+系统提示双语域 · advisory · 阈值保守待金标准校准",
-      "_new": true,
+      "doc": "检查游戏向 cluster 的系统提示、面板标记与数值呈现密度；仅在适用题材激活并产出 advisory。",
+      "trigger_by": "audit_hub cluster 题材路由",
       "issues_emitted": ["LITRPG_STRUCTURE"]
     },
 
@@ -456,6 +463,153 @@
       "issues_emitted": ["CHILD_VOICE_REGISTER_DRIFT"]
     },
 
+    "cross_cluster_continuity": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_continuity_aggregate.py",
+      "doc": "检查相邻 cluster 的时间、情绪、物件与悬念接续。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["CLIFFHANGER_NOT_RESONATED", "EMOTION_DISCONTINUITY", "OBJECT_CONTINUITY_BROKEN", "TIME_JUMP_UNEXPLAINED"]
+    },
+    "cross_cluster_pattern": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_pattern_aggregate.py",
+      "doc": "汇总 cluster 级语言、段落、感官、对话与角色轮转模式。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["BODY_REACTION_OVERUSE", "CATCHPHRASE_UNIFICATION", "CATCHPHRASE_UNUSED", "CAUSAL_HEURISTIC_LEAK", "CHARACTER_ROTATION_BREAK", "CLICHE_AI_WORDS_CN", "DIALOGUE_STREAM_FLAT", "DIALOGUE_TAG_HIGH", "DIALOGUE_TAG_MECHANIZATION", "IDIOM_COOLDOWN_VIOLATION", "METAPHOR_OVERUSE", "MODIFIER_STACK", "NEGATION_DESC_OVERUSE", "OPENING_WARMUP", "PARA_FIRST_WORD_CONCENTRATION", "PARAGRAPH_LENGTH_DEGRADATION", "PARAGRAPH_SUBJECT_HIGH_ABS", "PARAGRAPH_SUBJECT_REPETITION", "PROTAGONIST_NAME_OVERFLOW", "PUNCTUATION_HALFWIDTH_LEAK", "SENSORY_IMBALANCE_VISUAL", "SENTENCE_PARTICLE_MONO", "SUBJECT_ACTION_HIGH", "SUBJECT_ACTION_MECHANICAL", "TELL_OVERUSE", "TELL_RATE_HIGH", "TIME_ANCHOR_DROP"]
+    },
+    "cross_cluster_fate_drift": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_fate_drift_aggregate.py",
+      "doc": "按 cluster 窗口检查大势事件是否明显滞后。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["FATE_EVENT_OVERDUE"]
+    },
+    "cross_cluster_persona_drift": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_persona_drift_aggregate.py",
+      "doc": "检查角色声音距离在多个 cluster 间的漂移趋势。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["PERSONA_DRIFT_CURVE_TREND", "PERSONA_DRIFT_DETECTED"]
+    },
+    "cross_cluster_data_consumption": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_data_consumption_aggregate.py",
+      "doc": "检查角色烙印、时钟、心事件和命运事件是否被正文消费。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["ASPECT_NOT_ADDRESSED", "FATE_DICE_EVIDENCE_LOW", "FATE_DICE_NOT_DECLARED", "HEART_EVENT_FORGOTTEN", "URGENT_CLOCK_IGNORED"]
+    },
+    "cross_cluster_offscreen": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_offscreen_aggregate.py",
+      "doc": "检查幕后行动的执行证据与积压。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["OFFSCREEN_ACTIONS_NOT_EXECUTED", "OFFSCREEN_BACKLOG", "OFFSCREEN_EVIDENCE_THIN", "OFFSCREEN_EXECUTION_LIE"]
+    },
+    "cross_cluster_declarative_data": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_declarative_data_aggregate.py",
+      "doc": "检查声明式事件、秘密和角色认知节点的到期状态。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["EVENT_OVERDUE", "SECRET_OVERDUE", "WILL_LEARN_NOT_TRIGGERED"]
+    },
+    "cross_cluster_arc_progression": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_arc_progression_aggregate.py",
+      "doc": "检查角色弧线阶段的跳跃、倒退与停滞。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["STAGE_JUMP", "STAGE_REGRESS", "STAGE_STAGNATION"]
+    },
+    "cross_cluster_throughline_balance": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_throughline_balance_aggregate.py",
+      "doc": "检查四条 throughline 在多个 cluster 间的推进平衡。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["OS_DOMINANT", "PER_CLUSTER_COVERAGE_LOW", "THROUGHLINE_DORMANT", "THROUGHLINE_MARGINALIZED"]
+    },
+    "cross_cluster_foreshadow_rhythm": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_foreshadow_rhythm_aggregate.py",
+      "doc": "检查伏笔埋设、强化和回收的 cluster 节奏。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["FORESHADOW_NEVER_INITIATED", "FORESHADOW_NO_REINFORCEMENT", "FORESHADOW_OVER_REINFORCEMENT", "FORESHADOW_OVERDUE"]
+    },
+    "cross_cluster_emotion_pattern": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_emotion_pattern_aggregate.py",
+      "doc": "检查角色情绪曲线是否长期平直或单调延续。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["EMOTION_FLATLINE", "EMOTION_RUN_TOO_LONG"]
+    },
+    "cross_cluster_character_dynamics": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_character_dynamics_aggregate.py",
+      "doc": "汇总压力、应对、行动招式和位置效果的角色动态。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["CHARACTER_VOICELESS", "COPING_NEVER_TRIGGERED", "EFFECT_TOO_GREAT", "EFFECT_TOO_LIMITED", "MENTAL_BREAK_FORGOTTEN", "MOVE_OVERUSE", "MOVES_UNDERUSED", "POSITION_TOO_DESPERATE", "POSITION_TOO_SAFE", "STRESS_PERMA_HIGH_NO_BREAK", "STRESS_RUNAWAY"]
+    },
+    "cross_cluster_world_dynamics": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_world_dynamics_aggregate.py",
+      "doc": "检查阵营数值、胜负节奏和涟漪触发的世界动态。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["ALL_WIN_NO_SETBACK", "FACTION_NEAR_MAX", "FACTION_NEAR_ZERO", "RIPPLE_ABUSED", "RIPPLE_DEAD", "STORYTELLER_TARGET_LIKELY_TO_BE_IGNORED"]
+    },
+    "cross_cluster_judge_quality": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_judge_quality_aggregate.py",
+      "doc": "汇总 cluster 摘要中的 judge 分数、评级、报告分歧与豁免趋势。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["JUDGE_SCORE_DECLINE", "JUDGE_SCORE_PLATEAU", "JUDGE_SCORE_VOLATILITY", "JUDGE_REPORT_DISAGREEMENT", "WAIVER_PERSISTENT_CODE", "WAIVER_RUNAWAY"]
+    },
+    "cross_cluster_timeline_item_location": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_timeline_item_location_aggregate.py",
+      "doc": "检查时间推进、道具持有与地点使用的跨 cluster 连续性。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["ITEM_ABANDONED", "ITEM_DUPLICATE_HOLDER", "LOCATION_NEVER_VISITED", "LOCATION_OVERFREQ", "LOCATION_RHYTHM_BROKEN", "TIME_FROZEN", "TIME_GAP_UNEXPLAINED"]
+    },
+    "cross_cluster_meta_quality": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_meta_quality_aggregate.py",
+      "doc": "检查 cluster 摘要中的字数分布、摘要长度与正文关键词指纹一致性。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["LENGTH_OUTLIER", "LENGTH_TREND_DROP", "LENGTH_VARIANCE_HIGH", "SUMMARY_KEYWORD_MISMATCH", "SUMMARY_TOO_SHORT"]
+    },
+    "cross_cluster_structure_compliance": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_structure_compliance_aggregate.py",
+      "doc": "检查用户选择、结构节拍与实际 cluster 落地的一致性。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["BEAT_GAP_TOO_LONG", "BEAT_MISSED", "USER_CHOICE_CLUSTER_ID_MISMATCH", "USER_CHOICE_LANDED_MISMATCH", "USER_CHOICE_NOT_LANDED"]
+    },
+    "cross_cluster_ending_diversity": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_ending_diversity_aggregate.py",
+      "doc": "检查 cluster 收束方式的缺失、重复与多样性。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["ENDING_TYPE_LOW_DIVERSITY", "ENDING_TYPE_MISSING", "ENDING_TYPE_MONOTONE", "ENDING_TYPE_RUN"]
+    },
+    "cross_cluster_scene_pov_diversity": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_scene_pov_diversity_aggregate.py",
+      "doc": "检查场景类型与 POV 在多个 cluster 间的分布。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["POV_LOCKED", "POV_OVERCONCENTRATED", "SCENE_TYPE_LOW_DIVERSITY", "SCENE_TYPE_RUN"]
+    },
+    "cross_cluster_relationship_trend": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_relationship_trend_aggregate.py",
+      "doc": "检查关系数值越界与长期冻结。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["RELATIONSHIP_FROZEN", "RELATIONSHIP_OUT_OF_BOUND"]
+    },
+    "cross_cluster_will_learn": {
+      "layer": "cross-cluster",
+      "script": "cross_cluster_will_learn_aggregate.py",
+      "doc": "检查角色未来认知节点是否缺少铺垫或已超过 cluster 窗口。",
+      "trigger_by": "cluster-save-state step 11 required aggregate",
+      "issues_emitted": ["WILL_LEARN_NEVER_HINTED", "WILL_LEARN_OVERDUE"]
+    },
     "volume_arc_drift": {
       "layer": "cross-cluster",
       "script": "volume_arc_drift_scanner.py",
@@ -491,7 +645,7 @@
     "cross_cluster_sagging_middle": {
       "layer": "cross-cluster",
       "script": "cross_cluster_sagging_middle_aggregate.py",
-      "doc": "[2026-06-20 R7 Batch-D·Save the Cat/Story Grid·Sagging Middle] 全书40-60%区段中段塌陷检测·三规则联合①反转零命中(golden_scores.turn/hook_score均值<阈值+无cluster命中turning_point/beat_signal_hit)②stakes仅量变(stress_total波动+scene_type多样性<=2种)③Scene Purpose五选一全0(reveal/reversal/escalate/decision/transformation连续≥3 cluster无命中)·任一→advisory·≥2→warning·needs_midpoint_bomb标志snapshot供outline-planner advisory·零LLM确定性·advisory·env SAGGING_MIDDLE_MODE默认shadow·🔬阈值占位待金标准校准·绝不hard_gate",
+      "doc": "检测所选 cluster 序列 40%-60% 区段的中段塌陷。读取 audit.summary 的反转与钩子评分、stress.new_total 和 scene_summaries，分别检查反转空洞、压力停滞与连续推进目的缺失；结果为 advisory，并写 needs_midpoint_bomb 快照。",
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["SAGGING_MIDDLE_REVERSAL_VOID", "SAGGING_MIDDLE_STAKES_FLAT", "SAGGING_MIDDLE_PURPOSE_VOID", "SAGGING_MIDDLE_NEEDS_MIDPOINT_BOMB"]
@@ -499,18 +653,17 @@
     "cross_cluster_entity_state_graph": {
       "layer": "cross-cluster",
       "script": "cross_cluster_entity_state_graph_aggregate.py",
-      "doc": "[2026-07-07 A10·Magnet/Atlas arXiv:2607.00918] 实体状态时间线图矛盾聚合·确定性零LLM·从既有结构化账本(cluster_*_archive.json characters/items/relationships + 事件簇locked_facts)按cluster序重建实体状态图·三类图矛盾①dead_reappeared死亡后以alive再出场(brief gate_waivers dead_character类闪回声明→豁免·复用pre_write_gate归一表)②item_dual_holder道具同cluster双持有者③relationship_regressed关系type回跳无note事件支撑·全书史无窗口(死cluster_001复活cluster_009也抓)·字段缺失=该检查诚实skip留痕·与pre_write_gate分工:gate拦写前brief/本聚合器查写后账本时间线·恒advisory(图推断近似性+复活/闪回合法叙事·北极星⑤只报告不裁决)·env ENTITY_STATE_GRAPH_MODE默认shadow·绝不hard_gate",
-      "_new": true,
-      "trigger_by": "cross-cluster 层（手动 CLI·待验证后接线 run_cross_cluster_aggregates full_18_extra）",
+      "doc": "从 cluster archive 与锁定事实重建实体状态时间线，检查死亡后再出现、道具同块双持有者和无事件支撑的关系回跳；结果恒为 advisory，绝不进入 hard_gate。",
+      "trigger_by": "cluster-save-state step 11 的 run_cross_cluster_aggregates full_18",
       "issues_emitted": ["ENTITY_STATE_GRAPH_CONFLICT"]
     },
     "cross_cluster_engagement_metrics": {
       "layer": "cross-cluster",
       "script": "cross_cluster_engagement_metrics_aggregate.py",
-      "doc": "[R7 W2 Batch-E·2026-06-20 升级] 跨章engagement: hook_strength_trend+golden_three_trend+lazy_spawn promotion+🆕CLIFFHANGER_QUOTA_OVER(>25%章末cliffhanger或连续≥3章·advisory·D7配比软目标80:15:5任随作者档·绝不hard_gate·北极星⑤)·账本+audit双驱·零LLM确定性",
+      "doc": "按 cluster 摘要的 audit、truth_check 与 ending_type 汇总钩子趋势、黄金开场遥测和结尾类型配比；全部为 advisory。",
       "_new": false,
       "trigger_by": "cluster-save-state step 9",
-      "issues_emitted": ["HOOK_STRENGTH_DECLINE", "HOOK_PERSISTENT_LOW", "GOLDEN_DEGRADATION", "GOLDEN_FLAT", "LAZY_SPAWN_NEVER_PROMOTED", "CLIFFHANGER_QUOTA_OVER"]
+      "issues_emitted": ["HOOK_STRENGTH_DECLINE", "HOOK_PERSISTENT_LOW", "GOLDEN_DEGRADATION", "GOLDEN_FLAT", "CLIFFHANGER_QUOTA_OVER"]
     },
     "cross_cluster_character_presence_balance": {
       "layer": "cross-cluster",
@@ -523,7 +676,7 @@
     "motif_recurrence_ledger": {
       "layer": "cross-cluster",
       "script": "motif_recurrence_ledger.py",
-      "doc": "[2026-06-20 R8 W4 Batch-G·L20 阮芳水浒哨棒18次+arXiv:2503.07977 leitmotif+arXiv:2510.18561 TUNa folktale motif+Tim Weed Image Systems] 跨 cluster 母题循环账本(草蛇灰线)·五类(物件/意象/口头禅/感官印记/地名·三类内置词典+作者档 author_motif_signature 扩 places/catchphrase)·五态(new_seed N=1/recurring ≥3/dormant 末≥3 cluster 缺席/over_saturated N>7 且覆盖率>80%/payoff_due dormant+promise 标记)·Gini 系数 by category+N、R 直方图·输出 _数据库/motif_ledger.json 完整账本 + .cross_chapter_scan/motif_advisory_snapshot.json 供 build_manifest 注入下个 cluster·零 LLM 确定性·advisory·env MOTIF_RECURRENCE_MODE 默认 shadow·🔬阈值占位待金标准校准·绝不 hard_gate",
+      "doc": "[2026-06-20 R8 W4 Batch-G·L20 阮芳水浒哨棒18次+arXiv:2503.07977 leitmotif+arXiv:2510.18561 TUNa folktale motif+Tim Weed Image Systems] 跨 cluster 母题循环账本(草蛇灰线)·五类(物件/意象/口头禅/感官印记/地名·三类内置词典+作者档 author_motif_signature 扩 places/catchphrase)·五态(new_seed N=1/recurring ≥3/dormant 末≥3 cluster 缺席/over_saturated N>7 且覆盖率>80%/payoff_due dormant+promise 标记)·Gini 系数 by category+N、R 直方图·输出 _数据库/motif_ledger.json 完整账本 + .cross_cluster_scan/motif_advisory_snapshot.json 供 build_manifest 注入下个 cluster·零 LLM 确定性·advisory·env MOTIF_RECURRENCE_MODE 默认 shadow·🔬阈值占位待金标准校准·绝不 hard_gate",
       "_new": true,
       "trigger_by": "cluster-save-state step 9",
       "issues_emitted": ["MOTIF_DORMANT", "MOTIF_OVER_SATURATED", "MOTIF_PAYOFF_DUE", "MOTIF_SEED_PROLIFERATION"]
@@ -681,7 +834,7 @@
     "plot_armor_tracker": {
       "layer": "cluster",
       "script": "plot_armor_tracker.py",
-      "doc": "[2026-06-20 R9 W5 Batch-N P1·plot armor stakes erosion·2026-07-09 精简 facts_locked 死分支后同步] 跨 3 cluster 滚动窗口跟踪 stakes_credibility=cost_events/threat_count·威胁三档词典(轻伤/重伤/濒死·中文高确定性·剔除虚指比喻)+持久化代价(factual.character_state_changes/deaths/injuries/items_lost/relations_broken)·threat≥3 且 credibility<0.2 → advisory PLOT_ARMOR_INFLATION·题材门控(轻喜剧/slice_of_life/fluff skip)·作者档 plot_armor_profile.allow_high_armor=True 豁免无敌流·snapshot 写 _数据库/.cross_chapter_scan/plot_armor_snapshot.json 供 build_manifest 下卷注入·与 R7 debt_ledger(查叙事承诺) + R7 sagging_middle(查事件烈度)正交·advisory · env PLOT_ARMOR_MODE 默认 shadow · 🔬阈值占位待金标准校准 · PLOT_ARMOR_INFLATION 绝不 hard_gate",
+      "doc": "[2026-06-20 R9 W5 Batch-N P1·plot armor stakes erosion·2026-07-09 精简 facts_locked 死分支后同步] 跨 3 cluster 滚动窗口跟踪 stakes_credibility=cost_events/threat_count·威胁三档词典(轻伤/重伤/濒死·中文高确定性·剔除虚指比喻)+持久化代价(factual.character_state_changes/deaths/injuries/items_lost/relations_broken)·threat≥3 且 credibility<0.2 → advisory PLOT_ARMOR_INFLATION·题材门控(轻喜剧/slice_of_life/fluff skip)·作者档 plot_armor_profile.allow_high_armor=True 豁免无敌流·snapshot 写 _数据库/.cross_cluster_scan/plot_armor_snapshot.json 供 build_manifest 下卷注入·与 R7 debt_ledger(查叙事承诺) + R7 sagging_middle(查事件烈度)正交·advisory · env PLOT_ARMOR_MODE 默认 shadow · 🔬阈值占位待金标准校准 · PLOT_ARMOR_INFLATION 绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["PLOT_ARMOR_INFLATION"]
     },
@@ -702,25 +855,22 @@
     "location_signature_consistency": {
       "layer": "cross-cluster",
       "script": "location_signature_consistency.py",
-      "doc": "[2026-06-20 R8 W4 Batch-J·L37 Career Authors setting-as-character+Writers Helping Writers atmospheric layering+Writing Crucible multi-sensory+Connie Jasperson 2024] 跨 cluster 地点感官签名一致性 aggregator·cluster-save-state 自动维护 _数据库/location_atmosphere_registry.json(--scan-cluster 增量更新)·确定性抽地点 signature_sensory_motifs(嗅:腥/霉/檀;听:钟声/海浪;触温光)·命中率<50% advisory·作者档 location_atmosphere_override.allow_drift_locations 豁免(灾后/季节)·与 volume_arc_drift 同层·advisory·env LOCATION_SIGNATURE_MODE 默认 shadow·LOCATION_SIGNATURE_DRIFT 绝不 hard_gate",
-      "_new": true,
-      "trigger_by": "cluster-save-state step 9",
+      "doc": "先用当前 cluster 草稿增量更新地点感官签名 registry，再汇总跨 cluster 重现的一致性；作者档可声明允许变化的地点，结果恒为 advisory。",
+      "trigger_by": "cluster-save-state step 11 的 run_cross_cluster_aggregates full_18",
       "issues_emitted": ["LOCATION_SIGNATURE_DRIFT"]
     },
     "macguffin_entanglement": {
       "layer": "cross-cluster",
       "script": "macguffin_entanglement_scanner.py",
-      "doc": "[2026-06-20 R9 W5 Batch-M·plot_devices_taxonomy·Hitchcock MacGuffin definition] MacGuffin Entanglement Index 跨 cluster·道具.json 扩 is_macguffin=true 显式声明位·entanglement_ratio = |S_m^goal|/|S_m| (S_m=出现 MacGuffin 的 cluster·S_m^goal=同时出现 goal_pursuit 信号词 追查/夺回/护送/守护/为了/任务 的 cluster)·ratio<0.4 且 appearance>=2 → advisory MACGUFFIN_ORNAMENTAL(装饰性·与主角 goal 脱钩)·单 cluster 出现不判·零 LLM 纯 JSON 抽取+正则匹配·snapshot 写 .cross_chapter_scan/macguffin_advisory_snapshot.json 供 build_manifest 注入·北极星② is_macguffin 必须作者显式声明·env MACGUFFIN_ENTANGLEMENT_MODE 默认 shadow·绝不 hard_gate",
-      "_new": true,
-      "trigger_by": "cluster-save-state step 9",
+      "doc": "按显式 is_macguffin 声明计算其跨 cluster 出现与主角目标追求的耦合比例，并写入下一块可消费的 advisory snapshot。",
+      "trigger_by": "cluster-save-state step 11 的 run_cross_cluster_aggregates full_18",
       "issues_emitted": ["MACGUFFIN_ORNAMENTAL"]
     },
     "cross_cluster_ousiometric_emd": {
       "layer": "cross-cluster",
       "script": "cross_cluster_ousiometric_emd_scanner.py",
-      "doc": "[2026-06-20 R10 W6 Batch-O·L58 P1·arXiv 2208.09496 Fudolig 2023 Nature HSS + UVM ousiometric] 长篇 1000+ cross-cluster ousiometric power/danger 多尺度振荡·cluster_count>=30 启用·零依赖近似 EMD(本地极值+振幅包络)·前段/后段振幅塌缩>50% → OUSIOMETRIC_OSCILLATION_DEGRADED advisory·env OUSIOMETRIC_EMD_MODE 默认 shadow·绝不 hard_gate",
-      "_new": true,
-      "trigger_by": "cluster-save-state step 9",
+      "doc": "在长篇达到样本门槛后汇总各 cluster 的 power/danger 情绪序列，检查后段多尺度振荡是否明显塌缩；结果恒为 advisory。",
+      "trigger_by": "cluster-save-state step 11 的 run_cross_cluster_aggregates full_18",
       "issues_emitted": ["OUSIOMETRIC_OSCILLATION_DEGRADED"]
     },
     "signed_relation_graph": {
@@ -882,7 +1032,7 @@
     "indirect_characterization_ratio_scanner": {
       "layer": "cluster",
       "script": "indirect_characterization_ratio_scanner.py",
-      "doc": "[2026-06-21 R18 W7 Batch-T·P1·金圣叹评水浒 + Plaks Four Masterworks of Ming Novel + 脂砚斋评红楼 + 余英时《红楼梦评点研究》] 烘云托月(单 cluster 配角侧写主角 ratio)+横云断山(跨 cluster 冷热基调交替)·两探针 ①indirect_ratio(direct=主角+动作动词 vs indirect=配角名+视/望/盯/瞧/听+主角名 / 对话引号内含主角名议论)·②tonal_pendulum(读 _数据库/.cross_chapter_scan/cluster_tonal_registry.json·HOT/COLD 词典分类·末 5 cluster 同 tone streak≥4 → flat)·作者档 quantitative.indirect_characterization_baseline{mean,std,tonal_alternation_target,allow_monotone} 第一权威·与 R10 mass_reactor(单 cluster 内 ≥3 句反应聚簇不区分指向) 严格正交(本 scanner 只算指向主角的侧写 + 跨 cluster 冷热)·env INDIRECT_CHARACTERIZATION_MODE 默认 shadow·🔬阈值占位待金标准校准·INDIRECT_CHARACTERIZATION_THIN/TONAL_PENDULUM_FLAT 绝不 hard_gate",
+      "doc": "[2026-06-21 R18 W7 Batch-T·P1·金圣叹评水浒 + Plaks Four Masterworks of Ming Novel + 脂砚斋评红楼 + 余英时《红楼梦评点研究》] 烘云托月(单 cluster 配角侧写主角 ratio)+横云断山(跨 cluster 冷热基调交替)·两探针 ①indirect_ratio(direct=主角+动作动词 vs indirect=配角名+视/望/盯/瞧/听+主角名 / 对话引号内含主角名议论)·②tonal_pendulum(读 _数据库/.cross_cluster_scan/cluster_tonal_registry.json·HOT/COLD 词典分类·末 5 cluster 同 tone streak≥4 → flat)·作者档 quantitative.indirect_characterization_baseline{mean,std,tonal_alternation_target,allow_monotone} 第一权威·与 R10 mass_reactor(单 cluster 内 ≥3 句反应聚簇不区分指向) 严格正交(本 scanner 只算指向主角的侧写 + 跨 cluster 冷热)·env INDIRECT_CHARACTERIZATION_MODE 默认 shadow·🔬阈值占位待金标准校准·INDIRECT_CHARACTERIZATION_THIN/TONAL_PENDULUM_FLAT 绝不 hard_gate",
       "_new": true,
       "issues_emitted": ["INDIRECT_CHARACTERIZATION_THIN", "TONAL_PENDULUM_FLAT"]
     },
@@ -931,14 +1081,14 @@
     "cross_cluster_hierarchical_position_surprisal_aggregate": {
       "layer": "cross-cluster",
       "script": "cross_cluster_hierarchical_position_surprisal_aggregate.py",
-      "doc": "[2026-06-21 R18 W7 Batch-U·P2 cross-cluster shadow·arxiv 2410.16062 Tsipidi 2024 SCH + arxiv 2604.10724 Surprisal Salient 2026-04 + arxiv 2602.14653 IUH grounding] SCH 层级位置惊异度·边界 PARA/SCENE/CLUSTER_END 计 Δsurprisal(LM-free 用 frequency-rank surprise 替身)·期望 ΔS_CLUSTER_END ≥ ΔS_SCENE ≥ ΔS_PARA·颠倒报 SCH_HIERARCHY_INVERTED·与 cross_cluster_engagement_metrics(章级 hook trend)+cross_cluster_style_drift(长程作者文风)正交·env HIERARCHICAL_POSITION_SURPRISAL_MODE 默认 shadow·绝不 hard_gate",
+      "doc": "读取完整 cluster 草稿，计算段落、场景和故事块收尾边界的惊异度变化；期望收尾不低于场景、场景不低于段落。未启用模型时使用频次估算，显式启用模型后推理失败即终止。层级颠倒报告 advisory SCH_HIERARCHY_INVERTED。",
       "_new": true,
       "issues_emitted": ["SCH_HIERARCHY_INVERTED"]
     },
     "cross_cluster_reader_retention_proxy_aggregate": {
       "layer": "cross-cluster",
       "script": "cross_cluster_reader_retention_proxy_aggregate.py",
-      "doc": "[2026-06-21 R18 W7 Batch-U·P2 cross-cluster shadow·番茄完读率公开数据 + 起点新书期攻略 + Kindle Direct Publishing 留存数据 + Webnovel platform locked chapters] 完读率反向工艺指标·R=0.35·hook_strength_norm + 0.25·(1-sagging_middle) + 0.25·cliffhanger_quota + 0.15·section_word_count_health·proxy<0.45 报 RETENTION_PROXY_LOW·与 W6 cross_cluster_engagement_metrics(章级 hook trend)正交(那是 trend·本是 retention)·env READER_RETENTION_PROXY_MODE 默认 shadow·绝不 hard_gate",
+      "doc": "从严格 cluster 摘要确定性合成留存代理：钩子强度 0.35、中段节律 0.25、结尾类型健康度 0.25、故事块字数健康度 0.15。缺少必需遥测时终止；低于阈值报告 advisory RETENTION_PROXY_LOW。",
       "_new": true,
       "issues_emitted": ["RETENTION_PROXY_LOW"]
     },
@@ -1103,11 +1253,10 @@
       "_new": true,
       "issues_emitted": ["BIBER_MDA_DRIFT_D1", "BIBER_MDA_DRIFT_D2", "BIBER_MDA_DRIFT_D3", "BIBER_MDA_DRIFT_D4"]
     },
-    "summary_chapter_alignment_distribution_scanner": {
+    "summary_cluster_alignment_distribution_scanner": {
       "layer": "cross-cluster",
-      "script": "summary_chapter_alignment_distribution_scanner.py",
-      "doc": "[2026-06-21 R20 W9 Batch-AA·P1·Attention Flows + Q3-Q4 论文 id 17] 摘要-章节概念质量(summary mass)分布·chapter_position×summary_mass 划 head/mid/tail 三段·head_share>0.40 报 SUMMARY_FIRST_QUARTER_OVERWEIGHT·tail_share>0.40 报 SUMMARY_TAIL_BIAS·作者档 slow_update.summary_mass_signature_band 第一权威·SBERT-zh 真嵌入 defer 占位·_placeholder=true·与 cross_cluster_throughline_balance/cross_cluster_arc_progression/sagging_middle 严格正交·env SUMMARY_MASS_DISTRIBUTION_MODE 默认 shadow·绝不 hard_gate",
-      "_new": true,
+      "script": "summary_cluster_alignment_distribution_scanner.py",
+      "doc": "跨 cluster 摘要概念质量分布顾问·cluster_position×summary_mass 划分 head/mid/tail·head_share>0.40 报 SUMMARY_FIRST_QUARTER_OVERWEIGHT·tail_share>0.40 报 SUMMARY_TAIL_BIAS·作者档 slow_update.summary_mass_signature_band 第一权威·按 cluster 摘要 CJK 长度计算·与 cross_cluster_throughline_balance/cross_cluster_arc_progression/sagging_middle 正交·env SUMMARY_MASS_DISTRIBUTION_MODE 默认 shadow·绝不 hard_gate",
       "issues_emitted": ["SUMMARY_FIRST_QUARTER_OVERWEIGHT", "SUMMARY_TAIL_BIAS"]
     },
     "entropy_hotspot_consistency_probe": {
@@ -1284,8 +1433,8 @@
     "cotton_needle_subtext_advisor": {
       "layer": "cluster",
       "script": "cotton_needle_subtext_advisor.py + lexicons/cotton_needle_lexicon.json",
-      "doc": "[2026-06-22 R23 W11 Batch-HH·P1·张竹坡评金瓶梅绵针泥刺]对话级 surface_warmth + subtext_aggression 双高同段=笑里藏针·5+6 桶词典占位骨架 LLM-judge 替身·surface≥0.4 且 subtext≥0.4 → 命中·汇总 角色关系.json.subtext_aggression_edges + author_intent_card·作者档 antagonist_style∈{阴狠/伪善} 推荐密度↑·三 advisory(DETECTED/BELOW_TARGET/OVER)·env COTTON_NEEDLE_MODE 默认 shadow·绝不 hard_gate·_placeholder=true",
-      "_new": true,
+      "doc": "检查同一对话段中表面温情与潜在攻击是否并存，并按作者反派声口目标提示密度过低或过载；结果恒为 advisory。",
+      "trigger_by": "audit_hub cluster 审计",
       "issues_emitted": ["COTTON_NEEDLE_DETECTED", "COTTON_NEEDLE_BELOW_TARGET", "COTTON_NEEDLE_OVER"]
     },
     "belief_update_alignment": {
@@ -1517,7 +1666,6 @@
     "FILE_NOT_FOUND",
     "ITEM_HOLDER_ABSENT",
     "ITEM_NOT_YET_INTRODUCED",
-    "PROPAGATION_DEBT_CREATED",
     "STYLE_单段超长",
     "CHAPTER_END_FORBIDDEN_SCREENPLAY",
     "CHAPTER_END_FORBIDDEN_TRANSITION",

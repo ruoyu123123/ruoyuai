@@ -1,14 +1,4 @@
-"""world_seed_init + advance op + _normalize_me_pool 回归测试（SYS-1 / C02 / C19 · 2026-06-27）。
-
-锁三件事的确定性骨架：
-  SYS-1: world_evolution_engine._apply_ripple 新增无界 advance op（day 按章推进不被钳 0-100）
-         + world_seed_init 播种让 tick 从「0 规则触发」复活成「N>0 规则触发」
-         + 死角色 NPC thread 经 evaluate_completion 把牺牲落进 consequence_tracker
-  C02:  world_seed_init 幂等（非空不覆盖·--force 重播）+ consequence_tracker list→dict 归一
-  C19:  gen_creative_volume_arc._normalize_me_pool（volume 回填 / 悬空 prereq 过滤 / finale 兜底 / 完整性）
-
-零依赖：仅标准库；test_* 无参数；失败 raise AssertionError；tempfile + utf-8。
-"""
+"""世界演化播种器与 canonical ME 池回归测试。"""
 import json
 import sys
 import tempfile
@@ -20,6 +10,7 @@ sys.path.insert(0, str(_SCRIPTS))
 
 import world_seed_init as wsi  # noqa: E402
 import world_evolution_engine as wee  # noqa: E402
+import world_evolution_apply_cluster as wac  # noqa: E402
 import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现（2026-07-07 从 gen_creative 拆出）
 
 
@@ -50,17 +41,17 @@ def _mk_project(tmp: Path, *, major=None, arc=None, ensemble=None,
         ]})
     _w(db / "character_arc_state.json", arc if arc is not None else {
         "characters": {
-            "主角甲": {"status": "alive", "role": "主角", "current_stage": "开荒"},
-            "烈士乙": {"status": "dead", "role": "战士", "current_stage": "牺牲(cluster_002·挡刀)",
-                       "death_cluster": "cluster_002", "death_ch": 7},
-            "盟友丙": {"status": "alive", "role": "掮客", "current_stage": "走私"},
+            "主角甲": {"status": "alive", "role": "主角", "current_stage_at_cluster": "cluster_001:开荒"},
+            "烈士乙": {"status": "dead", "role": "战士", "current_stage_at_cluster": "cluster_002:牺牲(cluster_002·挡刀)",
+                       "death_cluster": "cluster_002"},
+            "盟友丙": {"status": "alive", "role": "掮客", "current_stage_at_cluster": "cluster_001:走私"},
         }})
     _w(db / "群像档.json", ensemble if ensemble is not None else {"characters": {}})
     _w(db / "涟漪规则.json", rules if rules is not None else {"ripple_rules": []})
     _w(db / "世界状态.json", world if world is not None else {
-        "current_world_time": {"ch": 0, "cluster": "cluster_001", "day": 1},
+        "current_world_time": {"cluster": "cluster_001", "day": 1},
         "factions_state": {}, "protagonist_state": {},
-        "active_npc_threads": [], "consequence_tracker": []})  # 注意：list（待归一）
+        "active_npc_threads": [], "emergent_opportunities": [], "consequence_tracker": {}})
     # 事件簇供 ch→cluster 反查（cluster_002 含死角色 death_cluster）
     _w(db / "事件簇.json", {"clusters": [
         {"cluster_id": "cluster_001", "chapter_range": [1, 4]},
@@ -76,7 +67,8 @@ def test_advance_op_unbounded_increment():
     world = {"current_world_time": {"day": 99}}
     log = []
     ok = wee._apply_ripple(
-        world, {"target": "current_world_time.day", "advance": 6}, ch=1, applied_log=log)
+        world, {"target": "current_world_time.day", "advance": 6},
+        "cluster_001", log)
     assert ok is True
     assert world["current_world_time"]["day"] == 105  # 无界（delta 会卡 100）
     assert log[-1]["op"] == "advance" and log[-1]["new"] == 105
@@ -86,7 +78,8 @@ def test_advance_op_skips_missing_path():
     """路径不存在 → 跳过不崩（返回 False·记 skip_path_missing）。"""
     world = {"current_world_time": {"day": 1}}
     log = []
-    ok = wee._apply_ripple(world, {"target": "nonexist.x", "advance": 1}, ch=1, applied_log=log)
+    ok = wee._apply_ripple(
+        world, {"target": "nonexist.x", "advance": 1}, "cluster_001", log)
     assert ok is False
     assert log[-1]["result"] == "skip_path_missing"
 
@@ -95,7 +88,9 @@ def test_advance_op_dirty_old_value_starts_from_zero():
     """旧值脏（None）→ 从 0 起推进不崩。"""
     world = {"current_world_time": {"day": None}}
     log = []
-    ok = wee._apply_ripple(world, {"target": "current_world_time.day", "advance": 3}, ch=1, applied_log=log)
+    ok = wee._apply_ripple(
+        world, {"target": "current_world_time.day", "advance": 3},
+        "cluster_001", log)
     assert ok is True
     assert world["current_world_time"]["day"] == 3
 
@@ -113,7 +108,6 @@ def test_seed_adds_rules_and_baselines():
         assert r["protagonist"] == "主角甲" and r["protagonist_seeded"] is True
         assert "烈士乙" in r["threads_seeded"] and "盟友丙" in r["threads_seeded"]
         assert "主角甲" not in r["threads_seeded"]  # 主角不进 NPC thread
-        assert r["consequence_tracker_normalized"] is True  # list → dict
         world = _r(tmp / "_数据库" / "世界状态.json")
         assert isinstance(world["consequence_tracker"], dict)
         assert world["factions_state"]["阵营X"]["power"] == 50
@@ -124,30 +118,71 @@ def test_seed_adds_rules_and_baselines():
         assert alive["expected_complete_cluster"] is None  # 在世角色不预设结局
 
 
+def test_seed_requires_precreated_core_databases():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "_数据库").mkdir()
+        try:
+            wsi.seed(root, explicit_factions=[], force=False,
+                     reset_ticks=False, dry_run=False)
+        except ValueError as exc:
+            assert "大势卡.json" in str(exc)
+        else:
+            raise AssertionError("缺核心状态库必须失败")
+
+
+def test_seed_rejects_malformed_world_schema():
+    with tempfile.TemporaryDirectory() as directory:
+        root = _mk_project(Path(directory), world={
+            "current_world_time": {"cluster": "cluster_001", "day": 1},
+            "factions_state": {},
+            "protagonist_state": {},
+            "active_npc_threads": [],
+            "emergent_opportunities": [],
+        })
+        try:
+            wsi.seed(root, explicit_factions=[], force=False,
+                     reset_ticks=False, dry_run=False)
+        except ValueError as exc:
+            assert "consequence_tracker" in str(exc)
+        else:
+            raise AssertionError("缺 consequence_tracker 必须失败")
+
+
+def _delta(cluster_id: str) -> dict:
+    return {
+        "cluster_id": cluster_id,
+        "time_advance": {},
+        "location_changes": [],
+        "hub_usage": [],
+        "fate_events_triggered": [],
+        "world_state_consumption": {
+            "emergent_opportunities_consumed": [],
+            "thread_responded": [],
+        },
+        "heart_events_revealed": [],
+    }
+
+
 def test_tick_fires_rules_after_seed():
-    """SYS-1 核心：播种前 tick 0 规则触发；播种后 tick N>0 规则触发 + day 推进。"""
+    """播种后每个 cluster 触发 auto_tick 并推进 world day。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d))
-        # 播种前
-        before = wee.tick(tmp, 1)
-        assert before["matched_rules"] == []  # 空规则池 → 0 触发
-        # 播种
         wsi.seed(tmp, explicit_factions=[], force=False, reset_ticks=True, dry_run=False)
         day0 = _r(tmp / "_数据库" / "世界状态.json")["current_world_time"]["day"]
-        after = wee.tick(tmp, 1)
-        assert "RR_AUTO_TICK_BASE" in after["matched_rules"]  # N>0 触发（复活）
+        after = wac.apply_cluster(tmp, "cluster_001", _delta("cluster_001"))
+        assert "RR_AUTO_TICK_BASE" in after["tick"]["matched_rules"]
         day1 = _r(tmp / "_数据库" / "世界状态.json")["current_world_time"]["day"]
-        assert day1 == day0 + 1  # advance op 让 day 推进一格
+        assert day1 == day0 + 1
 
 
 def test_sacrifice_lands_in_consequence_tracker():
-    """死角色 thread 经 auto_tick 的 evaluate_completion → 到 death_cluster 时把牺牲落 consequence_tracker。"""
+    """死角色 thread 到 expected_complete_cluster 时落入 consequence_tracker。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d))
         wsi.seed(tmp, explicit_factions=[], force=False, reset_ticks=True, dry_run=False)
-        # 逐章 tick 到 cluster_002（ch5 起 cur_cluster_num=2 >= 烈士乙 ec=2 → 完成）
-        for ch in range(1, 8):
-            wee.tick(tmp, ch)
+        wac.apply_cluster(tmp, "cluster_001", _delta("cluster_001"))
+        wac.apply_cluster(tmp, "cluster_002", _delta("cluster_002"))
         world = _r(tmp / "_数据库" / "世界状态.json")
         ct = world["consequence_tracker"]
         assert isinstance(ct, dict)
@@ -180,7 +215,8 @@ def test_seed_non_empty_not_overwritten():
     """非空不覆盖：已有 ripple_rules / protagonist_state 不被清掉。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), rules={"ripple_rules": [
-            {"id": "RR_USER_1", "trigger_type": "minor_event", "trigger_match": "x", "ripples": []}]})
+            {"id": "RR_USER_1", "trigger_type": "minor_event", "trigger_match": "x",
+             "ripples": [{"narrative": "用户规则"}]}]})
         wsi.seed(tmp, explicit_factions=[], force=False, reset_ticks=False, dry_run=False)
         rules = _r(tmp / "_数据库" / "涟漪规则.json")["ripple_rules"]
         assert any(x["id"] == "RR_USER_1" for x in rules)  # 用户规则保留
@@ -191,7 +227,8 @@ def test_force_resseeds_seeded_only():
     """--force 清掉本器播过的（_seeded_by）再重播·不碰用户手写规则。"""
     with tempfile.TemporaryDirectory() as d:
         tmp = _mk_project(Path(d), rules={"ripple_rules": [
-            {"id": "RR_USER_1", "trigger_type": "minor_event", "trigger_match": "x", "ripples": []}]})
+            {"id": "RR_USER_1", "trigger_type": "minor_event", "trigger_match": "x",
+             "ripples": [{"narrative": "用户规则"}]}]})
         wsi.seed(tmp, explicit_factions=[], force=False, reset_ticks=False, dry_run=False)
         r2 = wsi.seed(tmp, explicit_factions=[], force=True, reset_ticks=False, dry_run=False)
         assert "RR_AUTO_TICK_BASE" in r2["rules_added"]  # 重播
@@ -201,59 +238,58 @@ def test_force_resseeds_seeded_only():
         assert len(ids) == len(set(ids))  # 重播无重复
 
 
-# ═══════════════════════ 4. C19 · _normalize_me_pool ═══════════════════════
+# ═══════════════════════ 4. ME 池结构与引用验证 ═══════════════════════
 
-def test_normalize_backfills_volume_from_id():
-    """ME 无 volume → 从 id 反推 ME-V3- → volume=3。"""
-    mes = [{"id": "ME-V3-02", "title": "x"}]
-    rep = gva._normalize_me_pool(mes)
-    assert mes[0]["volume"] == 3
-    assert "ME-V3-02" in rep["volume_backfilled"]
+def _assert_invalid_me_pool(events, expected: str):
+    try:
+        gva._normalize_me_pool(events)
+    except ValueError as exc:
+        assert expected in str(exc)
+    else:
+        raise AssertionError("无效 ME 池必须失败")
 
 
-def test_normalize_drops_dangling_prereqs():
-    """悬空 prerequisites（指向不存在的 id）被过滤·命中真实 id 的保留。"""
+def test_me_pool_requires_explicit_volume():
+    _assert_invalid_me_pool(
+        [{"id": "ME-V3-02", "title": "x", "is_volume_finale": True}],
+        ".volume",
+    )
+
+
+def test_me_pool_rejects_dangling_prerequisites():
     mes = [
-        {"id": "ME-V1-01", "volume": 1},
+        {"id": "ME-V1-01", "volume": 1, "is_volume_finale": False},
         {"id": "ME-V1-02", "volume": 1, "is_volume_finale": True,
-         "prerequisites": ["ME-V1-01", "ME-V9-99"]},  # 后者悬空
+         "prerequisites": ["ME-V1-01", "ME-V9-99"]},
     ]
-    rep = gva._normalize_me_pool(mes)
-    assert mes[1]["prerequisites"] == ["ME-V1-01"]
-    assert rep["dangling_prereqs_dropped"][0]["dropped"] == ["ME-V9-99"]
+    _assert_invalid_me_pool(mes, "悬空 prerequisites")
+    assert mes[1]["prerequisites"] == ["ME-V1-01", "ME-V9-99"]
 
 
-def test_normalize_finale_fallback():
-    """卷无 is_volume_finale → 最大序号 ME 兜底标 finale。"""
+def test_me_pool_requires_exactly_one_finale_per_volume():
     mes = [
         {"id": "ME-V1-01", "volume": 1, "is_volume_finale": False},
         {"id": "ME-V1-03", "volume": 1, "is_volume_finale": False},
         {"id": "ME-V1-02", "volume": 1, "is_volume_finale": False},
     ]
-    rep = gva._normalize_me_pool(mes)
-    anchor = next(m for m in mes if m["id"] == "ME-V1-03")  # 序号最大
-    assert anchor["is_volume_finale"] is True
-    assert anchor["_finale_inferred"] is True
-    assert rep["finale_fallback"][0]["me"] == "ME-V1-03"
+    _assert_invalid_me_pool(mes, "恰有一个")
+    assert all(event["is_volume_finale"] is False for event in mes)
 
 
-def test_normalize_integrity_violation_no_volume():
-    """ME 无 volume 且 id 无法反推 → 记 integrity_violations。"""
-    mes = [{"id": "BADID", "title": "x"}]
-    rep = gva._normalize_me_pool(mes)
-    assert rep["integrity_violations"]
-    assert rep["integrity_violations"][0]["me"] == "BADID"
+def test_me_pool_rejects_duplicate_ids():
+    _assert_invalid_me_pool([
+        {"id": "ME-V1-01", "volume": 1, "is_volume_finale": False},
+        {"id": "ME-V1-01", "volume": 1, "is_volume_finale": True},
+    ], "id 重复")
 
 
-def test_normalize_clean_pool_no_changes():
-    """已规范 ME 池（有 volume / finale / 合法 prereq）→ 无回填无丢弃无兜底。"""
+def test_me_pool_valid_contract():
     mes = [
         {"id": "ME-V1-01", "volume": 1, "is_volume_finale": False, "prerequisites": []},
         {"id": "ME-V1-02", "volume": 1, "is_volume_finale": True, "prerequisites": ["ME-V1-01"]},
     ]
     rep = gva._normalize_me_pool(mes)
-    assert rep == {"volume_backfilled": [], "dangling_prereqs_dropped": [],
-                   "finale_fallback": [], "integrity_violations": []}
+    assert rep == {"validated_events": 2, "volumes": [1]}
 
 
 if __name__ == "__main__":

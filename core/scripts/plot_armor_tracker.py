@@ -17,7 +17,7 @@ cost_persistence——威胁高 + 实际代价低 = plot armor 通胀。
      · threat_count < 3 → 样本不足跳过
      · stakes_credibility < 0.2 → advisory PLOT_ARMOR_INFLATION
   4. 题材门控：轻喜剧/slice_of_life/搞笑日常默认 skip（喜剧本身就不该有真伤亡感）。
-  5. 输出 snapshot 到 _数据库/.cross_chapter_scan/plot_armor_snapshot.json
+  5. 输出 snapshot 到 _数据库/.cross_cluster_scan/plot_armor_snapshot.json
      供 build_manifest 下卷注入软提示。
 
 【北极星② / ⑤ 顾问非法官】危险/伤亡是创作选择·作者档 plot_armor_profile.allow_high_armor=True
@@ -192,7 +192,7 @@ def _changes_for_cluster(project_root, cluster_id) -> dict:
 def _write_snapshot(project_root, payload):
     if not project_root:
         return
-    out_dir = Path(project_root) / "_数据库" / ".cross_chapter_scan"
+    out_dir = Path(project_root) / "_数据库" / ".cross_cluster_scan"
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "plot_armor_snapshot.json").write_text(

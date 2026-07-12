@@ -101,7 +101,7 @@ def _exported_chapters_cjk(project_root: Path) -> tuple[int, int]:
         if chapter_no in seen or not body_file.is_file():
             continue
         seen.add(chapter_no)
-        total += cio.count_cjk(cio._strip_changes(_read_text_or_empty(body_file)))
+        total += cio.count_cjk(_read_text_or_empty(body_file))
         count += 1
     return total, count
 
@@ -112,7 +112,7 @@ def _draft_total_cjk(project_root: Path) -> tuple[int, int]:
     for key in _list_cluster_keys(project_root):
         draft_path = _draft_dir(project_root, key) / f"cluster_{key}_draft.txt"
         if draft_path.is_file():
-            draft_total += cio.count_cjk(cio._strip_changes(_read_text_or_empty(draft_path)))
+            draft_total += cio.count_cjk(_read_text_or_empty(draft_path))
     for pending_tail in scan_pending_tails(project_root):
         pending_tail_total += int(pending_tail.get("cjk") or 0)
     return draft_total, pending_tail_total
