@@ -1,5 +1,5 @@
 {
-  "_doc": "34 个核心子系统 JSON 的【确定性骨架】——单一真理源（框架）。scaffold_subsystems.py 据此为新书生成 schema 正确的空骨架，弱模型只需填内容、不碰 schema（照顾弱模型 + 根治契约债）。每个骨架满足 db_schema_validate.py（schema_version + 必需顶层键 + 正确 collection 类型）。保留通用默认（场景规则 5 类 / ecas 标志 / Save the Cat 框架名）。占位用 <...> 或空集合，由 /outline 填创意。🔴 容差约定：部分子系统（时间线 / character_arc_state / 伏笔表 / 故事块摘要 emotion 等）由 build_manifest 容差读取多种真实项目 schema 变体（多字段别名 + dict/list/标量并存），骨架给的是 canonical 形态；db_schema_validate 只深校验前 13 个核心件，其余 21 件由 scaffold_subsystems verify 查存在 + 合法 JSON + schema_version。🔴 2026-06-27 P0-05：每件 _doc 增 `consumption` 字段（direct_inject=被 build_manifest._collect_* 直接注入 / via_scanner=被某 scanner 扫描器消费 / via_engine=被某引擎消费 / deferred=保留待启用 / DEAD=零消费可清），scaffold_subsystems --consumption 模式据此交叉自检；build_manifest 末尾 _subsystem_consumption_audit 字段据此输出消费层级审计。",
+  "_doc": "34 个核心子系统 JSON 的【确定性骨架】——单一真理源（框架）。scaffold_subsystems.py 据此为新书生成 schema 正确的空骨架，弱模型只需填内容、不碰 schema（照顾弱模型 + 根治契约债）。每个骨架满足 db_schema_validate.py（schema_version + 必需顶层键 + 正确 collection 类型）。保留通用默认（场景规则 5 类 / ecas 标志 / Save the Cat 框架名）。占位用 <...> 或空集合，由 /outline 填创意。🔴 容差约定：部分子系统（时间线 / 伏笔表 / 故事块摘要 emotion 等）由 build_manifest 容差读取多种真实项目 schema 变体（多字段别名 + dict/list/标量并存），骨架给的是 canonical 形态；character_arc_state 已收口单一 cluster-native 结构（characters:{dict} + stages_by_cluster），旧结构一律拒绝不容差读取；db_schema_validate 只深校验前 13 个核心件，其余 21 件由 scaffold_subsystems verify 查存在 + 合法 JSON + schema_version。🔴 2026-06-27 P0-05：每件 _doc 增 `consumption` 字段（direct_inject=被 build_manifest._collect_* 直接注入 / via_scanner=被某 scanner 扫描器消费 / via_engine=被某引擎消费 / deferred=保留待启用 / DEAD=零消费可清），scaffold_subsystems --consumption 模式据此交叉自检；build_manifest 末尾 _subsystem_consumption_audit 字段据此输出消费层级审计。",
   "_version": "v27",
   "_canonical_34": [
     "人物卡",
@@ -802,7 +802,7 @@
     },
     "character_arc_state": {
       "schema_version": "2.0",
-      "_doc": "McKee7步+Truby精华角色弧线 · v27 用 stages_by_cluster 不锁章号 · build_manifest._collect_character_arc_state 注入 · writer step0 消费 ghost/moral_argument/weakness_need vs desire",
+      "_doc": "McKee7步+Truby精华角色弧线 · v27 用 stages_by_cluster 不锁章号 · build_manifest._collect_main_character_arc_stage 注入 · writer step0 消费 ghost/moral_argument/weakness_need vs desire",
       "consumption": {
         "layer": "direct_inject",
         "by": [

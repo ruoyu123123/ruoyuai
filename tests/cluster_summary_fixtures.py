@@ -38,7 +38,6 @@ _DEFAULT_RECORD = {
     "throughline_progress": {},
     "stress": {},
     "moves_used": [],
-    "position_effect_evals": [],
     "outcome": "",
     "offscreen": {},
     "state_delta": {},

@@ -25,6 +25,7 @@ from pathlib import Path
 PANEL_MARKERS = ['【', '[系统', '系统提示', '系统：', '叮', '属性', '等级', '经验值',
                  'HP', 'MP', 'LV', '技能栏', '状态栏', '面板', '任务：', '副本']
 STAT_FLOOR = 0.5    # 系统/面板标记每千字下限(保守)
+ISSUE_CODE = "LITRPG_STRUCTURE"
 
 
 def cjk(s: str) -> int:
@@ -34,8 +35,9 @@ def cjk(s: str) -> int:
 def scan(text: str, project: Path | None = None, style_path: Path | None = None) -> dict:
     total = cjk(text)
     if total < 500:
-        return {"scanner": "litrpg_structure", "violations_count": 0, "violations": [],
-                "verdict": "PASS", "gate_level": "advisory", "metrics": {}, "_doc": "文本过短"}
+        return {"scanner": "litrpg_structure", "code": ISSUE_CODE, "violations_count": 0,
+                "violations": [], "verdict": "PASS", "gate_level": "advisory",
+                "metrics": {}, "_doc": "文本过短"}
     panel_hits = sum(text.count(m) for m in PANEL_MARKERS)
     # 数值密度（连续数字·面板数值代理）
     digit_runs = len(re.findall(r'\d{1,}', text))
@@ -55,7 +57,7 @@ def scan(text: str, project: Path | None = None, style_path: Path | None = None)
 
     verdict = 'PASS' if not violations else 'FAIL_MINOR'
     return {
-        'scanner': 'litrpg_structure', 'violations_count': len(violations),
+        'scanner': 'litrpg_structure', 'code': ISSUE_CODE, 'violations_count': len(violations),
         'violations': violations, 'verdict': verdict, 'gate_level': 'advisory',
         'metrics': {'panel_hits': panel_hits, 'panel_per_1k': panel_per_1k,
                     'digit_runs': digit_runs},

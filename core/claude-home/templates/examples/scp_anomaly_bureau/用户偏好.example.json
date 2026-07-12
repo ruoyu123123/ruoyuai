@@ -78,7 +78,6 @@
   "narrative_structure": {
     "outline_mode": "cluster-first",
     "major_events_count": 18,
-    "use_position_effect_judgment": true,
     "use_throughlines": true,
     "use_mckee_truby_arc": true
   },

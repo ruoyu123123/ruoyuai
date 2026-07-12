@@ -317,7 +317,7 @@
       "compares": "全书前 N% cluster 窗口--该窗口内累计 planted=0 判定开篇没借债(Book Mortgage Absent)",
       "pinned_by_tests": [],
       "marker_lines": [
-        52
+        59
       ],
       "note": "无专属测试文件覆盖。"
     },
@@ -333,7 +333,7 @@
       "compares": "卷末 open_debt / planted 占比--超过此比例判定卷末烂尾(Volume Overshoot)",
       "pinned_by_tests": [],
       "marker_lines": [
-        52
+        59
       ],
       "note": "无专属测试文件覆盖；本文件 4 个常量共享同一处标记。"
     },
@@ -349,7 +349,7 @@
       "compares": "卷尾窗口内 open_ratio 连续上升的 cluster 数--达到此数判定烂尾风险(Tail Runaway)",
       "pinned_by_tests": [],
       "marker_lines": [
-        52
+        59
       ],
       "note": "无专属测试文件覆盖。"
     },
@@ -365,7 +365,7 @@
       "compares": "卷内后 N% 区段定义--超过此比例进入卷尾窗口参与烂尾风险判定",
       "pinned_by_tests": [],
       "marker_lines": [
-        52
+        59
       ],
       "note": "无专属测试文件覆盖。"
     },
@@ -632,7 +632,7 @@
         "tests/test_litrpg_structure_scanner.py"
       ],
       "marker_lines": [
-        62
+        64
       ],
       "note": "题材层 scanner（仅 genre=litrpg 激活）；文档明说暂无 LitRPG 金标准样本校准，待真游戏向书产出后校准。是本次盘点里唯一连一本参考样本书都还没有的条目，校准前提比其它条目更弱。"
     },

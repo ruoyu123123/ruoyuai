@@ -115,11 +115,6 @@
           "default": 13,
           "description": "大势卡 major_events 数量（长篇建议 13-20）"
         },
-        "use_position_effect_judgment": {
-          "type": "boolean",
-          "default": true,
-          "description": "v21 R2.3 Blades 双轴判定，关闭=简单成败"
-        },
         "use_throughlines": {
           "type": "boolean",
           "default": true,

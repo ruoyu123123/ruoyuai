@@ -397,8 +397,6 @@ def build_cluster_record(project_root, cluster) -> dict:
         "stress": _stress(database, cluster_id),
         "moves_used": self_eval.get("moves_used")
         if isinstance(self_eval.get("moves_used"), list) else [],
-        "position_effect_evals": self_eval.get("position_effect_evals")
-        if isinstance(self_eval.get("position_effect_evals"), list) else [],
         "outcome": str(storyteller.get("actual_outcome") or "neutral"),
         "offscreen": {
             "executed": self_eval.get("offscreen_actions_executed")

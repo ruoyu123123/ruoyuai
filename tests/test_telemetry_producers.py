@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""test_telemetry_producers.py — SYS-5 遥测断点 producer 补全单测（2026-06-27）
+"""test_telemetry_producers.py — SYS-5 遥测断点 producer 单测（2026-06-27）
 
-确定性·零依赖·零 LLM/零联网。两个独立 advisory/shadow 遥测断点的 producer 修复：
-  ① narrative_debt total_planted=0：cluster 摘要无 foreshadow 流水 → 误报
-     DEBT_BOOK_MORTGAGE_ABSENT。修：回退伏笔表.json 按 setup_cluster 归集 planted/paid。
+确定性·零依赖·零 LLM/零联网。两个独立 advisory/shadow 遥测断点：
+  ① narrative_debt：故事块摘要.json 的 cluster 记录不带 foreshadow 流水字段（CLUSTER_FIELDS
+     闭集），planted/paid 债务唯一权威来源是 伏笔表.json 按 setup_cluster 归集。
   ② throughline_progress 全 DORMANT：throughline（本块推进了哪几条
      叙事线 OS/MC/IC/RS）是叙事分析=梳理，由 novel-archivist 读正文抽取（writer 自报属
      A 类违规·已删）。archivist 产 archive.throughline_progress → apply_archive 落
@@ -68,7 +68,7 @@ def test_extract_keywords_stopword_and_protagonist_filter_preserved():
 
 
 # ════════════════════════════════════════════════════════════════════
-# ① narrative_debt — 伏笔表.json 回退（消除 total_planted 恒 0 误报）
+# ① narrative_debt — 伏笔表.json 是 planted/paid 债务的唯一权威来源
 # ════════════════════════════════════════════════════════════════════
 
 def _write_foreshadow_table(db: Path, promises):
@@ -78,7 +78,7 @@ def _write_foreshadow_table(db: Path, promises):
     }, ensure_ascii=False), encoding="utf-8")
 
 
-def test_load_foreshadow_table_fallback_groups_by_setup_cluster():
+def test_load_foreshadow_ledger_groups_by_setup_cluster():
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         db = root / "_数据库"
@@ -88,43 +88,36 @@ def test_load_foreshadow_table_fallback_groups_by_setup_cluster():
             {"id": "fs_002", "setup_cluster": "cluster_001", "status": "open"},
             {"id": "fs_003", "setup_cluster": "2", "status": "suspended"},  # 归一 → cluster_002·suspended=未回收
         ])
-        idx = debt._load_foreshadow_table_fallback(root)
+        idx = debt._load_foreshadow_ledger(root)
         assert idx["cluster_001"]["planted"] == {"fs_001", "fs_002"}
         assert idx["cluster_001"]["paid"] == {"fs_001"}        # 仅 status==consumed（open/suspended=未回收）
         assert "cluster_002" in idx and idx["cluster_002"]["planted"] == {"fs_003"}
 
 
-def test_cluster_planted_paid_uses_fallback_when_summary_empty():
+def test_cluster_planted_paid_reads_from_foreshadow_index():
     fb = {"cluster_001": {"planted": {"fs_001", "fs_002"}, "paid": {"fs_001"}}}
-    c = {"cluster_id": "cluster_001"}  # 摘要无 foreshadow 流水
+    c = {"cluster_id": "cluster_001"}
     planted, paid = debt._cluster_planted_paid(c, fb)
     assert planted == {"fs_001", "fs_002"} and paid == {"fs_001"}
 
 
-def test_cluster_planted_paid_native_takes_precedence_over_fallback():
-    fb = {"cluster_001": {"planted": {"X"}, "paid": {"X"}}}
-    c = {"cluster_id": "cluster_001", "foreshadow_planted": ["native_1"]}
-    planted, paid = debt._cluster_planted_paid(c, fb)
-    assert planted == {"native_1"} and "X" not in planted  # 有原生流水 → 不回退
-
-
-def test_book_ledger_fallback_eliminates_total_planted_zero():
+def test_book_ledger_reads_foreshadow_index_total_planted():
     clusters = [
-        {"cluster_id": "cluster_001", "chapters": {"1": {}}},
-        {"cluster_id": "cluster_002", "chapters": {"5": {}}},
+        {"cluster_id": "cluster_001"},
+        {"cluster_id": "cluster_002"},
     ]
     fb = {
         "cluster_001": {"planted": {"a", "b"}, "paid": {"a"}},
         "cluster_002": {"planted": {"c"}, "paid": set()},
     }
     book = debt.compute_book_ledger(clusters, fb)
-    assert book["total_planted"] == 3   # 旧版本读摘要恒 0
+    assert book["total_planted"] == 3
     assert book["total_paid"] == 1
 
 
-def test_cli_fallback_clears_book_mortgage_false_positive():
-    """端到端 CLI：5 个无 foreshadow 流水的 cluster + 伏笔表（cluster_001 即有 promise）
-    → total_planted>0 且不再误报 DEBT_BOOK_MORTGAGE_ABSENT。shadow 模式恒 exit 0（不阻断）。"""
+def test_cli_reads_foreshadow_table_clears_book_mortgage_false_positive():
+    """端到端 CLI：5 个 cluster + 伏笔表（cluster_001 即有 promise）
+    → total_planted>0 且不误报 DEBT_BOOK_MORTGAGE_ABSENT。shadow 模式恒 exit 0（不阻断）。"""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         db = root / "_数据库"
@@ -145,8 +138,8 @@ def test_cli_fallback_clears_book_mortgage_false_positive():
         assert debt.CODE_BOOK_MORTGAGE not in snap["advisory_codes"]
 
 
-def test_cli_no_fallback_when_table_absent_no_crash():
-    """无伏笔表.json → 不回退、不崩（fb_used=False，total_planted=0 仍可能报 mortgage，但 shadow 不阻断）。"""
+def test_cli_no_foreshadow_table_no_crash():
+    """无伏笔表.json → 不崩（total_planted=0 仍可能报 mortgage，但 shadow 不阻断）。"""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         write_cluster_summary(root, [cluster_record(f"cluster_{i:03d}") for i in range(1, 4)])

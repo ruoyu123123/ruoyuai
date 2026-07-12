@@ -102,9 +102,9 @@
     "_writer_hint": "每章涉及'神性股权制'机制时，必带出这层隐喻——不是中性世界观，是批判性世界观"
   },
   "_consumption_chain": {
-    "produced_by": "/distill-character + outline 初始化 + writer/judge 每 cluster 更新 current_stage_at_cluster",
+    "produced_by": "/outline scaffold 建空骨架 + 详化阶段 AI 按需自由填充（高级子系统 fluid·无强制产出脚本）；cluster-save-state 的 character_arc_update.py 按 cluster 滚动 current_stage_at_cluster",
     "consumed_by": [
-      "build_manifest._collect_character_arc_state() 注入 manifest",
+      "build_manifest._collect_main_character_arc_stage() 注入 manifest",
       "writer step 0：消费 ghost / moral_argument / weakness_need vs desire",
       "judge consensus：检查本 cluster 是否在 moral_argument 维度有推进",
       "skill_evolver：识别 stage 推进作为 success_pattern"

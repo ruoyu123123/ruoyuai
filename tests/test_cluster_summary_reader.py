@@ -34,7 +34,6 @@ def _record(cluster_id="cluster_001", word_count=100):
         "throughline_progress": {},
         "stress": {},
         "moves_used": [],
-        "position_effect_evals": [],
         "outcome": "neutral",
         "offscreen": {},
         "state_delta": {},

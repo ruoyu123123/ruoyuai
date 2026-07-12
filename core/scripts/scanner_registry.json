@@ -543,9 +543,9 @@
     "cross_cluster_character_dynamics": {
       "layer": "cross-cluster",
       "script": "cross_cluster_character_dynamics_aggregate.py",
-      "doc": "汇总压力、应对、行动招式和位置效果的角色动态。",
+      "doc": "汇总压力、应对和行动招式的角色动态。",
       "trigger_by": "cluster-save-state step 11 required aggregate",
-      "issues_emitted": ["CHARACTER_VOICELESS", "COPING_NEVER_TRIGGERED", "EFFECT_TOO_GREAT", "EFFECT_TOO_LIMITED", "MENTAL_BREAK_FORGOTTEN", "MOVE_OVERUSE", "MOVES_UNDERUSED", "POSITION_TOO_DESPERATE", "POSITION_TOO_SAFE", "STRESS_PERMA_HIGH_NO_BREAK", "STRESS_RUNAWAY"]
+      "issues_emitted": ["CHARACTER_VOICELESS", "COPING_NEVER_TRIGGERED", "MENTAL_BREAK_FORGOTTEN", "MOVE_OVERUSE", "MOVES_UNDERUSED", "STRESS_PERMA_HIGH_NO_BREAK", "STRESS_RUNAWAY"]
     },
     "cross_cluster_world_dynamics": {
       "layer": "cross-cluster",
@@ -592,9 +592,9 @@
     "cross_cluster_scene_pov_diversity": {
       "layer": "cross-cluster",
       "script": "cross_cluster_scene_pov_diversity_aggregate.py",
-      "doc": "检查场景类型与 POV 在多个 cluster 间的分布。",
+      "doc": "检查 POV 在多个 cluster 间的分布。",
       "trigger_by": "cluster-save-state step 11 required aggregate",
-      "issues_emitted": ["POV_LOCKED", "POV_OVERCONCENTRATED", "SCENE_TYPE_LOW_DIVERSITY", "SCENE_TYPE_RUN"]
+      "issues_emitted": ["POV_LOCKED", "POV_OVERCONCENTRATED"]
     },
     "cross_cluster_relationship_trend": {
       "layer": "cross-cluster",

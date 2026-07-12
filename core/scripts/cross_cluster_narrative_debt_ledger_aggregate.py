@@ -11,8 +11,13 @@
   ② VOLUME 桶（每卷 stock+flow）：60% 后段 open_ratio 连续上升 → 烂尾风险 advisory
   ③ SCENE/CLUSTER 桶（每 cluster flow）：当 cluster 借出/偿还的债务流水
 
-读账本 cluster_summary_reader（foreshadow_planted/paid · secrets_revealed） · 零 LLM · 确定性。
-env NARRATIVE_DEBT_MODE：off / shadow（默认·只记不判·零回归）/ active。
+cluster 列表读 cluster_summary_reader（故事块摘要.json · CLUSTER_FIELDS 闭集不含
+foreshadow 流水 / 卷号字段）。两项数据另走各自的唯一权威源：
+  · planted/paid 债务 —— 伏笔表.json 按 setup_cluster 归集（_load_foreshadow_ledger）
+  · cluster 卷号 —— 事件簇.json.clusters[].parent_me 联结 大势卡.json.major_events[].volume
+    （_build_cluster_volume_index，ME id 由 gen_creative_volume_arc/cluster_emergence_engine
+    写入时即取自 ME 自身 id，两表天然同形）
+零 LLM · 确定性。env NARRATIVE_DEBT_MODE：off / shadow（默认·只记不判·零回归）/ active。
 
 输出 advisory：
   · DEBT_BOOK_MORTGAGE_ABSENT：前 30% cluster 累计 planted=0（开篇没借债）
@@ -29,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -36,8 +42,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_summary_reader as csr  # noqa: E402
-# 🔴 2026-06-27 SYS-5 ②：cluster 摘要无 foreshadow 流水时回退伏笔表.json，需 normalize_cluster_id
-# 把 setup_cluster 归一到与摘要 cluster_id 同形（防 "6"/"cluster_006" 比对漏匹配）。
+# cluster_id 归一化共享工具：伏笔表.json.setup_cluster / 事件簇.json.cluster_id 与
+# 摘要账本的 cluster_id 形态不一定一致（"6" vs "cluster_006"），三表联结前统一走
+# normalize_cluster_id 防漏匹配。
 try:
     import cluster_lookup  # noqa: E402
 except Exception:  # pragma: no cover
@@ -61,22 +68,8 @@ def _mode() -> str:
     return m if m in ("off", "shadow", "active") else "shadow"
 
 
-def _cluster_volume(c: dict) -> int:
-    """从 cluster 字段抽 volume 号。优先 _me_volume / volume / metadata.volume，缺则归 0。"""
-    for k in ("_me_volume", "volume", "vol"):
-        v = c.get(k)
-        if isinstance(v, int) and v > 0:
-            return v
-    meta = c.get("metadata") or {}
-    if isinstance(meta, dict):
-        v = meta.get("volume")
-        if isinstance(v, int) and v > 0:
-            return v
-    return 0
-
-
 def _norm_cid(cid) -> str:
-    """归一 cluster_id（"6"/"cluster_006" → "cluster_006"）。cluster_lookup 不可用时原样返回。"""
+    """归一 cluster 标识（"6"/"cluster_006" → "cluster_006"）。cluster_lookup 不可用时原样返回。"""
     if cluster_lookup is not None:
         try:
             n = cluster_lookup.normalize_cluster_id(cid)
@@ -87,26 +80,91 @@ def _norm_cid(cid) -> str:
     return str(cid or "")
 
 
-def _load_foreshadow_table_fallback(project_root: Path) -> dict:
-    """🔴 2026-06-27 SYS-5 ②：读 伏笔表.json，按 setup_cluster 归集 planted/paid。
+def _load_json(p: Path) -> dict:
+    """读 JSON 文件为 dict；不存在/损坏/非 dict → {}（调用方据空 dict 判无数据）。"""
+    try:
+        if p.is_file():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _db_dir(project_root: Path) -> Path:
+    root = Path(project_root)
+    return root if root.name == "_数据库" else root / "_数据库"
+
+
+def _me_volume(me: dict) -> int | None:
+    """ME（大势卡.json.major_events 条目）所属卷号：显式 volume 字段优先，否则从
+    id（ME-V<N>-<序>）解析（gen_creative_volume_arc 生成时强制两者一致）。"""
+    if not isinstance(me, dict):
+        return None
+    v = me.get("volume")
+    if isinstance(v, int) and not isinstance(v, bool):
+        return v
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    m = re.search(r"[Vv](\d+)", str(me.get("id") or ""))
+    return int(m.group(1)) if m else None
+
+
+def _build_cluster_volume_index(project_root: Path) -> dict[str, int]:
+    """cluster_id → 卷号索引：事件簇.json.clusters[].parent_me 联结 大势卡.json.major_events[].volume。
+
+    故事块摘要.json 的 cluster 记录不带卷号字段（CLUSTER_FIELDS 闭集无 volume/vol/metadata），
+    卷号只能沿这条链路推：cluster_id → parent_me（事件簇.json，emergence/outline 写入时取自
+    被选中 ME 自身 id，两表天然同形）→ ME.volume（大势卡.json，gen_creative_volume_arc 生成
+    时强制校验非正整数即报错）。任一环节缺失/解析不出 → 该 cluster 不进索引，调用方按
+    未知卷号 0 处理。
+    """
+    db = _db_dir(project_root)
+    dashishi = _load_json(db / "大势卡.json")
+    shijianji = _load_json(db / "事件簇.json")
+    me_volume: dict[str, int] = {}
+    for me in dashishi.get("major_events") or []:
+        if isinstance(me, dict) and me.get("id"):
+            v = _me_volume(me)
+            if v is not None:
+                me_volume[str(me["id"])] = v
+    index: dict[str, int] = {}
+    for c in shijianji.get("clusters") or []:
+        if not isinstance(c, dict):
+            continue
+        cid = _norm_cid(c.get("cluster_id"))
+        if not cid:
+            continue
+        parents = c.get("parent_me")
+        parents = parents if isinstance(parents, list) else [parents]
+        for pid in parents:
+            v = me_volume.get(str(pid))
+            if v is not None:
+                index[cid] = v
+                break
+    return index
+
+
+def _cluster_volume(c: dict, vol_index: dict) -> int:
+    """本 cluster 的卷号：查 vol_index（cluster_id → volume 联结索引），查不到归 0。"""
+    return vol_index.get(_norm_cid(c.get("cluster_id")), 0)
+
+
+def _load_foreshadow_ledger(project_root: Path) -> dict:
+    """读 伏笔表.json，按 setup_cluster 归集 planted/paid——cluster 债务流水的唯一权威来源。
+
+    故事块摘要.json 的 cluster 记录不带 foreshadow 流水字段（CLUSTER_FIELDS 闭集），每个
+    cluster 借了多少债、还了多少债只能从 伏笔表.json 读出。
 
     返回 {normalized_cluster_id: {"planted": set[fid], "paid": set[fid]}}。
-    · planted = 该 cluster 埋下的所有 promises/deadlines/pledges/secrets 的 id（authoring 即确定·可靠）。
-    · paid = 其中已结清者——promises 按三态生命周期 status=="consumed"（open/suspended=未回收），
-      secrets/deadlines/pledges 沿用各自 revealed/paid 语义（伏笔表是权威结算账·消除 cluster
-      摘要 foreshadow 流水缺失导致的恒 0 → 误报 DEBT_BOOK_MORTGAGE_ABSENT）。
-    无表/损坏/空 → {}（调用方据此判定是否回退·零回归）。
+    · planted = 该 cluster 埋下的所有 promises/deadlines/pledges/secrets 的 id
+      （authoring 即确定·可靠）。
+    · paid = 其中已结清者——promises 按三态生命周期 status=="consumed"（open/suspended=
+      未回收），secrets/deadlines/pledges 沿用各自 revealed/paid 语义。
+    表不存在/损坏/空 → {}。
     """
-    db = project_root if project_root.name == "_数据库" else project_root / "_数据库"
-    p = db / "伏笔表.json"
-    try:
-        if not p.is_file():
-            return {}
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    if not isinstance(data, dict):
-        return {}
+    db = _db_dir(project_root)
+    data = _load_json(db / "伏笔表.json")
     out: dict = {}
     for bucket in ("promises", "deadlines", "pledges", "secrets"):
         for item in data.get(bucket, []) or []:
@@ -120,42 +178,19 @@ def _load_foreshadow_table_fallback(project_root: Path) -> dict:
                 continue
             entry = out.setdefault(cid, {"planted": set(), "paid": set()})
             entry["planted"].add(str(fid))
-            # 2026-07-06 P1 三态生命周期：promises 用 status=="consumed"（open/suspended=未回收）；
-            # secrets/deadlines/pledges 沿用各自 revealed/paid 语义。
             if item.get("status") == "consumed" or item.get("revealed") or item.get("paid"):
                 entry["paid"].add(str(fid))
     return out
 
 
-def _cluster_planted_paid(c: dict, fb_index: dict | None = None) -> tuple[set, set]:
-    """从 cluster 摘要取本块 planted/paid 集合（伏笔 + secrets 联合·secrets 视作 paid 的揭示）。
-
-    🔴 SYS-5 ②：cluster 摘要既无 foreshadow_planted 也无 foreshadow_paid（流水未持久化）时，
-    回退伏笔表.json 按 setup_cluster 归集的 planted/paid（fb_index）→ 消除 total_planted 恒 0。
-    """
-    planted = set()
-    for fid in c.get("foreshadow_planted", []) or []:
-        if isinstance(fid, str) and fid.strip():
-            planted.add(fid.strip())
-    paid = set()
-    for fid in c.get("foreshadow_paid", []) or []:
-        if isinstance(fid, str) and fid.strip():
-            paid.add(fid.strip())
-    # secrets_revealed = 一种 paid 形态（揭示秘密 = 还债）
-    for sid in c.get("secrets_revealed", []) or []:
-        if isinstance(sid, str) and sid.strip():
-            paid.add(f"_secret:{sid.strip()}")
-    # 🔴 SYS-5 ②：本 cluster 摘要零 foreshadow 流水 → 回退伏笔表（按 setup_cluster 归集）。
-    if not planted and not paid and fb_index:
-        fb = fb_index.get(_norm_cid(c.get("cluster_id")))
-        if fb:
-            planted |= set(fb.get("planted") or set())
-            paid |= set(fb.get("paid") or set())
-    return planted, paid
+def _cluster_planted_paid(c: dict, fb_index: dict) -> tuple[set, set]:
+    """本 cluster 的 planted/paid 债务集合（伏笔表.json 是唯一来源，按 cluster_id 查 fb_index）。"""
+    fb = fb_index.get(_norm_cid(c.get("cluster_id"))) or {}
+    return set(fb.get("planted") or set()), set(fb.get("paid") or set())
 
 
-def compute_book_ledger(clusters: list[dict], fb_index: dict | None = None) -> dict:
-    """全书 stock+flow 账本。fb_index = 伏笔表回退索引（SYS-5 ②·摘要缺流水时启用）。"""
+def compute_book_ledger(clusters: list[dict], fb_index: dict) -> dict:
+    """全书 stock+flow 账本。fb_index = _load_foreshadow_ledger() 产出的 planted/paid 索引。"""
     total_planted: set = set()
     total_paid: set = set()
     timeline = []  # 每 cluster 的累计 stock 序列
@@ -183,11 +218,15 @@ def compute_book_ledger(clusters: list[dict], fb_index: dict | None = None) -> d
     }
 
 
-def compute_volume_ledger(clusters: list[dict], fb_index: dict | None = None) -> dict:
-    """分卷 stock+flow 账本（每卷独立 set·跨卷不串）。fb_index = 伏笔表回退索引（SYS-5 ②）。"""
+def compute_volume_ledger(clusters: list[dict], fb_index: dict, vol_index: dict) -> dict:
+    """分卷 stock+flow 账本（每卷独立 set·跨卷不串）。
+
+    fb_index = _load_foreshadow_ledger() 产出的 planted/paid 索引。
+    vol_index = _build_cluster_volume_index() 产出的 cluster_id → 卷号索引。
+    """
     by_vol: dict = {}
     for c in clusters:
-        vol = _cluster_volume(c)
+        vol = _cluster_volume(c, vol_index)
         planted, paid = _cluster_planted_paid(c, fb_index)
         entry = by_vol.setdefault(vol, {
             "volume": vol,
@@ -325,13 +364,11 @@ def main():
     if not clusters:
         print("[SKIP] 账本无 cluster 记录")
         sys.exit(0)
-    # 🔴 2026-06-27 SYS-5 ②：cluster 摘要 foreshadow 流水未持久化时回退伏笔表.json（消除 total_planted 恒 0）。
-    fb_index = _load_foreshadow_table_fallback(project_root)
+    fb_index = _load_foreshadow_ledger(project_root)
+    vol_index = _build_cluster_volume_index(project_root)
     book = compute_book_ledger(clusters, fb_index)
-    by_vol = compute_volume_ledger(clusters, fb_index)
+    by_vol = compute_volume_ledger(clusters, fb_index, vol_index)
     findings = detect_findings(book, by_vol, total_clusters=len(clusters))
-    fb_used = bool(fb_index) and book["total_planted"] > 0 and not any(
-        (c.get("foreshadow_planted") or c.get("foreshadow_paid")) for c in clusters)
 
     out_dir = project_root / "_数据库" / ".cross_cluster_scan"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -341,7 +378,6 @@ def main():
         "scan_type": "narrative_debt_ledger",
         "scan_ts": ts,
         "mode": mode,
-        "foreshadow_table_fallback": fb_used,  # SYS-5 ②：摘要缺流水→读伏笔表
         "clusters_total": len(clusters),
         "book": book,
         "volumes": by_vol,
@@ -359,8 +395,7 @@ def main():
     snap_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"[narrative_debt_ledger] book open_debt={book['open_debt']}/{book['total_planted']} · "
-          f"volumes={len(by_vol)} · findings={len(findings)}"
-          + ("  [fallback=伏笔表.json]" if fb_used else ""))
+          f"volumes={len(by_vol)} · findings={len(findings)}")
     for f in findings[:4]:
         print(f"  [{f['severity'].upper()}] {f['code']}: {f.get('suggestion', '')[:80]}")
     print(f"报告: {out_path}")

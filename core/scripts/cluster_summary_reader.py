@@ -15,7 +15,7 @@ CLUSTER_FIELDS = frozenset({
     "pattern_metrics", "idiom_hits", "characters", "char_mention_counts",
     "char_emotion_counts", "locations_mentioned", "ending_type", "ending_line",
     "time_transition_present", "structure", "throughline_progress", "stress",
-    "moves_used", "position_effect_evals", "outcome", "offscreen", "state_delta",
+    "moves_used", "outcome", "offscreen", "state_delta",
     "relationship_changes", "item_changes", "locked_facts", "audit", "truth_check",
     "judge_reports", "judge_score", "judge_grade", "waivers",
 })
@@ -69,7 +69,7 @@ def _validate_cluster(record: dict, index: int) -> None:
         _require_type(record[field], str, f"{where}.{field}")
     for field in (
         "scene_summaries", "key_details", "text_keyword_set", "characters",
-        "locations_mentioned", "moves_used", "position_effect_evals",
+        "locations_mentioned", "moves_used",
         "relationship_changes", "item_changes", "locked_facts", "judge_reports",
         "waivers",
     ):

@@ -178,16 +178,76 @@ def test_normalize_volume_chunk_backfill_and_reject():
     """ME 缺 volume → 确定性回填本卷号（C19 同源结构修补）；卷号错位/缺 id/chunk 内撞 id
     → 判破损（None·触发重试/重生成）。"""
     ok, diag = gva._normalize_volume_chunk(
-        {"major_events": [{"id": "ME-V3-01", "title": "无volume字段"}]}, 3)
+        {"major_events": [{"id": "ME-V3-01", "title": "无volume字段",
+                           "is_volume_finale": True}]}, 3)
     assert ok is not None and ok["major_events"][0]["volume"] == 3, diag
     bad_vol, _ = gva._normalize_volume_chunk(
-        {"major_events": [{"id": "ME-V3-01", "volume": 4}]}, 3)
+        {"major_events": [{"id": "ME-V3-01", "volume": 4, "is_volume_finale": True}]}, 3)
     assert bad_vol is None, "卷号错位应判破损"
-    no_id, _ = gva._normalize_volume_chunk({"major_events": [{"title": "缺id"}]}, 3)
+    no_id, _ = gva._normalize_volume_chunk(
+        {"major_events": [{"title": "缺id", "is_volume_finale": True}]}, 3)
     assert no_id is None, "ME 缺 id 应判破损（id 是合并去重锚）"
     dup_in, _ = gva._normalize_volume_chunk(
-        {"major_events": [{"id": "ME-V3-01"}, {"id": "ME-V3-01"}]}, 3)
+        {"major_events": [{"id": "ME-V3-01", "is_volume_finale": True},
+                          {"id": "ME-V3-01", "is_volume_finale": False}]}, 3)
     assert dup_in is None, "chunk 内 id 重复应判破损"
+
+
+def test_normalize_volume_chunk_rejects_bad_finale_flag():
+    """单卷重试阶段回归锁：is_volume_finale 缺失/非 bool → 判破损（触发重试/重生成·
+    不放行到最终 emit 才炸未捕获 ValueError）。"""
+    missing, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME-V3-01"}]}, 3)
+    assert missing is None, f"缺 is_volume_finale 应判破损: {diag}"
+    non_bool, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME-V3-01", "is_volume_finale": "true"}]}, 3)
+    assert non_bool is None, f"is_volume_finale 字符串(非 bool) 应判破损: {diag}"
+
+
+def test_normalize_volume_chunk_requires_exactly_one_finale():
+    """本卷 chunk 必须恰有一个 is_volume_finale=true（0 个或 ≥2 个都判破损·
+    与 _normalize_me_pool 的「卷末恰一个」规则对齐）。"""
+    zero, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME-V3-01", "is_volume_finale": False},
+                          {"id": "ME-V3-02", "is_volume_finale": False}]}, 3)
+    assert zero is None, f"0 个 is_volume_finale=true 应判破损: {diag}"
+    two, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME-V3-01", "is_volume_finale": True},
+                          {"id": "ME-V3-02", "is_volume_finale": True}]}, 3)
+    assert two is None, f"2 个 is_volume_finale=true 应判破损: {diag}"
+
+
+def test_normalize_volume_chunk_rejects_bad_prerequisites_type():
+    """prerequisites 非 string array（非 list / 含非字符串元素）→ 判破损。"""
+    non_list, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME-V3-01", "is_volume_finale": True,
+                           "prerequisites": "ME-V2-01"}]}, 3)
+    assert non_list is None, f"prerequisites 非 list 应判破损: {diag}"
+    bad_item, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME-V3-01", "is_volume_finale": True,
+                           "prerequisites": [123]}]}, 3)
+    assert bad_item is None, f"prerequisites 含非字符串元素应判破损: {diag}"
+
+
+def test_normalize_volume_chunk_rejects_dangling_prerequisites():
+    """prerequisites 引用本卷 + known_ids 之外的未知 id → 悬空引用判破损（不必等到全部卷
+    生成完毕的最终 emit 才炸出未捕获 ValueError）。"""
+    dangling, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME-V3-01", "is_volume_finale": True,
+                           "prerequisites": ["ME-V9-99"]}]}, 3)
+    assert dangling is None, f"悬空 prerequisites 应判破损: {diag}"
+    assert "悬空" in diag
+
+
+def test_normalize_volume_chunk_prerequisites_may_reference_known_prior_volume():
+    """prerequisites 允许回溯引用 known_ids（已完成前卷）的 ME id——跨卷衔接合法用法·
+    不得被当成悬空引用误伤。"""
+    ok, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME-V3-01", "is_volume_finale": True,
+                           "prerequisites": ["ME-V2-05"]}]}, 3,
+        known_ids={"ME-V2-05"})
+    assert ok is not None, f"回溯引用已完成前卷 id 不应判破损: {diag}"
+    assert ok["major_events"][0]["prerequisites"] == ["ME-V2-05"]
 
 
 def test_merge_equivalent_to_monolithic_structure():

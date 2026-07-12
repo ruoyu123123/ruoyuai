@@ -37,7 +37,6 @@ def _prepare_project(tmp_path: Path, cluster_id: str = "cluster_001") -> Path:
                 "applied_style": {"ending_type": "场景硬收"},
                 "waivers": [{"code": "STYLE_HINT", "reason": "场景需要"}],
                 "moves_used": ["门前对峙"],
-                "position_effect_evals": [{"position": "旧港", "effect": "压迫"}],
                 "storyteller_alignment": {"actual_outcome": "进门"},
             }
         }, ensure_ascii=False), encoding="utf-8"

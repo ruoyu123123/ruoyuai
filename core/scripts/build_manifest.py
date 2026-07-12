@@ -1170,7 +1170,7 @@ def _collect_user_preferences_v21(scanner) -> dict:
     }
 
 
-def _collect_hub_directive(scanner, chapter: int) -> dict:
+def _collect_hub_directive(scanner) -> dict:
     """注入枢纽场景信息与最近 cluster 的 Hub 呼吸节奏。"""
     hubs_path = scanner.root / "_数据库" / "枢纽场景.json"
     if not hubs_path.exists():
@@ -6487,7 +6487,7 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "ensemble_layer": _collect_ensemble_layer(s, current_cluster_id),
         "user_preferences_v21": _collect_user_preferences_v21(s),
         "relevant_heuristics": _collect_relevant_heuristics(s, chapter, top_k=5),
-        "hub_directive": _collect_hub_directive(s, chapter),
+        "hub_directive": _collect_hub_directive(s),
         "character_moves": _collect_character_moves(s, active_chars),
         "position_effect_template": _collect_position_effect_template(s, chapter),
         "throughlines": _collect_throughlines(s, chapter),

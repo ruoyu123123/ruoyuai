@@ -45,30 +45,6 @@ def _codes(findings: list[dict]) -> set[str]:
     return {item["code"] for item in findings}
 
 
-def test_position_and_effect_use_independent_cluster_denominators() -> None:
-    project, _db, td = _project(10)
-    try:
-        from core.scripts.cross_cluster_character_dynamics_aggregate import scan_position_effect
-
-        clusters = [
-            cluster_record(
-                f"cluster_{n:03d}",
-                position_effect_evals=[{"evaluated_effect": "great"}]
-            ) for n in range(1, 4)
-        ] + [
-            cluster_record(
-                f"cluster_{n:03d}",
-                position_effect_evals=[{"evaluated_position": "controlled"}]
-            ) for n in range(4, 11)
-        ]
-        findings = scan_position_effect(clusters)
-        effect = next(item for item in findings if item["code"] == "EFFECT_TOO_GREAT")
-        assert effect["distribution"]["great"] == 1.0
-        assert all(value <= 1 for value in effect["distribution"].values())
-    finally:
-        td.cleanup()
-
-
 def test_stress_trend_uses_stress_summary_field() -> None:
     project, db, td = _project(5)
     try:

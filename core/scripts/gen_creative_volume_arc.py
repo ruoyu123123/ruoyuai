@@ -452,12 +452,16 @@ def _normalize_skeleton(cand) -> tuple:
     return cand, ""
 
 
-def _normalize_volume_chunk(cand, vol_no: int) -> tuple:
+def _normalize_volume_chunk(cand, vol_no: int, known_ids: set | None = None) -> tuple:
     """单卷 chunk 输出/WAL → {"volume": N, "major_events": [...]}（(dict|None, diag)）。
 
     确定性结构修补：ME 缺 volume → 回填本卷号；裸串/非 dict 元素过滤（与 emit 同款守卫）。
-    破损判定（→ 重试/重生成）：无合法 ME / ME 缺 id（id 是合并去重锚）/ 同 chunk 内 id
-    重复 / ME 显式 volume ≠ 本卷（卷号错位）。
+    破损判定（→ 重试/重生成，规则与 _normalize_me_pool 一致·同一套口径）：无合法 ME / ME
+    缺 id（id 是合并去重锚）/ 同 chunk 内 id 重复 / ME 显式 volume ≠ 本卷（卷号错位）/
+    is_volume_finale 非 bool / 本卷不是恰一个 is_volume_finale=true / prerequisites 非
+    string array / prerequisites 引用本卷 + known_ids 之外的未知 id（悬空引用）。
+    known_ids：已完成前卷（chunks[1..vol_no-1]）的 ME id 全集——prerequisites 允许回溯引用
+    已生成的前卷 ME（跨卷衔接是合法用法），但不能引用任何尚不存在的 id。
     """
     if isinstance(cand, list):
         mes = cand
@@ -472,7 +476,7 @@ def _normalize_volume_chunk(cand, vol_no: int) -> tuple:
     out = [m for m in mes if isinstance(m, dict)]
     if not out:
         return None, "major_events 无合法 ME"
-    seen = set()
+    seen: set[str] = set()
     for m in out:
         mid = str(m.get("id") or "").strip()
         if not mid:
@@ -491,6 +495,20 @@ def _normalize_volume_chunk(cand, vol_no: int) -> tuple:
             if mv_i != vol_no:
                 return None, f"ME {mid} 卷号错位: volume={mv_i} ≠ 本卷 {vol_no}"
             m["volume"] = mv_i
+        if not isinstance(m.get("is_volume_finale"), bool):
+            return None, f"ME {mid}.is_volume_finale 必须是 bool"
+        prerequisites = m.get("prerequisites", [])
+        if not isinstance(prerequisites, list) or any(not isinstance(p, str) for p in prerequisites):
+            return None, f"ME {mid}.prerequisites 必须是 string array"
+    finales = [str(m.get("id") or "").strip() for m in out if m["is_volume_finale"]]
+    if len(finales) != 1:
+        return None, f"第 {vol_no} 卷必须恰有一个 is_volume_finale=true，实际 {finales}"
+    all_known = seen | set(known_ids or ())
+    for m in out:
+        dangling = [p for p in m.get("prerequisites", []) if p not in all_known]
+        if dangling:
+            mid = str(m.get("id") or "").strip()
+            return None, f"ME {mid} 含悬空 prerequisites: {dangling}"
     return {"volume": vol_no, "major_events": out}, ""
 
 
@@ -519,6 +537,11 @@ def _volumes_digest(volumes: list) -> str:
     return "\n".join(
         f"- V{v.get('vol')}《{v.get('title', '')}》phase={v.get('phase', '')}"
         f"·核心任务={v.get('volume_core_conflict', '')}" for v in volumes)
+
+
+def _known_me_ids(chunks: dict) -> set[str]:
+    """已完成前卷（chunks 累积）的全部 ME id 集合（跨卷 prerequisites 回溯引用合法性判据）。"""
+    return {str(me.get("id")) for c in chunks.values() for me in c["major_events"]}
 
 
 def _prev_me_digest(chunks: dict, upto: int, limit_titles: int = 12) -> str:
@@ -685,9 +708,10 @@ def _run_volume_arc(args) -> int:
     # ── 阶段B：逐卷 ME 池 chunk（合法 WAL 跳过·损坏重生成·单卷失败=整步失败）──
     chunks, reused, generated = {}, [], []
     for n in sorted(vol_nos):
+        known_ids = _known_me_ids(chunks)   # 已完成前卷 id 全集·本卷 prerequisites 回溯合法性判据
         p = wal_dir / volume_arc_wal_name(n)
         if p.exists():
-            norm, diag = _normalize_volume_chunk(_read_json_or_none(p), n)
+            norm, diag = _normalize_volume_chunk(_read_json_or_none(p), n, known_ids)
             if norm is not None:
                 chunks[n] = norm
                 reused.append(n)
@@ -703,7 +727,7 @@ def _run_volume_arc(args) -> int:
             selected_card=selected_card, prev_me_digest=_prev_me_digest(chunks, n))
         norm = _gen_volume_arc_unit(
             lt, project_root, unit=f"v{n}", system=system, user=user,
-            normalize=lambda cand, _n=n: _normalize_volume_chunk(cand, _n),
+            normalize=lambda cand, _n=n, _known=known_ids: _normalize_volume_chunk(cand, _n, _known),
             max_tokens=12000)
         if norm is None:
             print(f"[ERROR] volume_arc 第 {n} 卷 ME 池生成失败 → 整步失败（required 不降级）·"

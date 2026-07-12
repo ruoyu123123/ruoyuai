@@ -49,19 +49,6 @@
             }
           }
         },
-        "position_effect_evals": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "action_summary": {"type": "string"},
-              "evaluated_position": {"type": "string", "enum": ["controlled", "risky", "desperate"]},
-              "evaluated_effect": {"type": "string", "enum": ["great", "standard", "limited"]},
-              "evaluated_reason": {"type": "string"}
-            }
-          }
-        },
         "stress_evaluation_self": {
           "type": "object",
           "additionalProperties": false,

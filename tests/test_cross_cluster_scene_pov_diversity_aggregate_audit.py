@@ -27,17 +27,6 @@ def test_last_n_is_cluster_window(tmp_path):
     assert [item["cluster_id"] for item in observations] == ["cluster_010", "cluster_011", "cluster_012"]
 
 
-def test_scene_run_uses_cluster_ids():
-    """scene_type 摘要账本合同已无落盘通道，直接用 _scan() 验证纯逻辑。"""
-    observations = [
-        {"cluster_id": f"cluster_{index:03d}", "scene_type": "battle", "pov": str(index)}
-        for index in range(1, 5)
-    ]
-    finding = scanner._scan(observations)[0]
-    assert finding["code"] == "SCENE_TYPE_RUN"
-    assert finding["consecutive_clusters"] == ["cluster_001", "cluster_002", "cluster_003", "cluster_004"]
-
-
 def test_pov_overconcentrated_is_advisory(tmp_path):
     _project(tmp_path, ["陆参"] * 6)
     finding = next(item for item in scanner._scan(scanner._cluster_observations(tmp_path, 10))
@@ -49,3 +38,13 @@ def test_source_has_no_mode_or_chapter_fallback():
     source = (ROOT / "core" / "scripts" / "cross_cluster_scene_pov_diversity_aggregate.py").read_text(encoding="utf-8")
     assert "CLUSTER_MODE" not in source
     assert 'project_root / "章节"' not in source
+
+
+def test_source_has_no_dead_scene_type_detection():
+    """scene_type 在 故事块摘要.json 合同下无落盘通道（不在 CLUSTER_FIELDS，嵌套 chapters
+    也不存在）——检测逻辑已删，回归锁防止死代码复活。"""
+    source = (ROOT / "core" / "scripts" / "cross_cluster_scene_pov_diversity_aggregate.py").read_text(encoding="utf-8")
+    assert "SCENE_TYPE_RUN" not in source
+    assert "SCENE_TYPE_LOW_DIVERSITY" not in source
+    assert "scene_type" not in source
+    assert '"chapters"' not in source

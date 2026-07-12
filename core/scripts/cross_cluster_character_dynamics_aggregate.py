@@ -1,4 +1,4 @@
-"""汇总故事块级压力、角色行动与位置效果分布。"""
+"""汇总故事块级压力与角色行动分布。"""
 
 from __future__ import annotations
 
@@ -177,55 +177,6 @@ def scan_moves_usage(project_root: Path, clusters: list[dict]) -> list[dict]:
     return findings
 
 
-def scan_position_effect(clusters: list[dict]) -> list[dict]:
-    """检查摘要中 position/effect 的独立分布。"""
-    positions: Counter[str] = Counter()
-    effects: Counter[str] = Counter()
-    for record in clusters:
-        evaluations = record.get("position_effect_evals") or []
-        if not isinstance(evaluations, list):
-            continue
-        for evaluation in evaluations:
-            if not isinstance(evaluation, dict):
-                continue
-            position = evaluation.get("evaluated_position")
-            effect = evaluation.get("evaluated_effect")
-            if isinstance(position, str) and position:
-                positions[position] += 1
-            if isinstance(effect, str) and effect:
-                effects[effect] += 1
-    total_positions = sum(positions.values())
-    total_effects = sum(effects.values())
-    if total_positions < 3 and total_effects < 3:
-        return []
-    position_distribution = {
-        key: round(positions[key] / total_positions, 2)
-        for key in ("controlled", "risky", "desperate")
-    } if total_positions else {}
-    effect_distribution = {
-        key: round(effects[key] / total_effects, 2)
-        for key in ("great", "standard", "limited")
-    } if total_effects else {}
-    findings: list[dict] = []
-    if total_positions >= 3 and position_distribution.get("controlled", 0) > 0.85:
-        findings.append(_finding(
-            "advisory", "POSITION_TOO_SAFE", distribution=position_distribution
-        ))
-    if total_positions >= 3 and position_distribution.get("desperate", 0) > 0.6:
-        findings.append(_finding(
-            "warning", "POSITION_TOO_DESPERATE", distribution=position_distribution
-        ))
-    if total_effects >= 3 and effect_distribution.get("great", 0) > 0.7:
-        findings.append(_finding(
-            "advisory", "EFFECT_TOO_GREAT", distribution=effect_distribution
-        ))
-    if total_effects >= 3 and effect_distribution.get("limited", 0) > 0.5:
-        findings.append(_finding(
-            "advisory", "EFFECT_TOO_LIMITED", distribution=effect_distribution
-        ))
-    return findings
-
-
 def build_report(project_root: Path, last_n: int | None = None) -> dict:
     clusters = csr.get_clusters(project_root, last_n=last_n)
     if not clusters:
@@ -233,7 +184,6 @@ def build_report(project_root: Path, last_n: int | None = None) -> dict:
     findings: list[dict] = []
     findings.extend(scan_stress_trend(project_root, clusters))
     findings.extend(scan_moves_usage(project_root, clusters))
-    findings.extend(scan_position_effect(clusters))
     summary = {
         "warning": sum(item["severity"] == "warning" for item in findings),
         "advisory": sum(item["severity"] == "advisory" for item in findings),
