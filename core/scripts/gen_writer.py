@@ -39,7 +39,6 @@ from gen_model_loader import (  # noqa: E402
     GenModelLoader,
     GenModelConfigError,
     GenModelExhaustedError,
-    PromptTooLargeError,
     Profile,
     reasoning_extra_body,
     resolve_max_tokens,

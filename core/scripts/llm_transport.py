@@ -594,6 +594,17 @@ def generate(loader_or_profiles, system: str, user: str, *,
         if fb_index:
             print(f"\n{tag} [FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
 
+        # prompt 大小预检——超过 profile.max_prompt_chars 直接跳下一候选，不等中转站
+        # 500（部分中转站超出体量上限报 500 而非 413，落进 non_transient 之外的瞬时分支
+        # 会被同 profile 重试 max_retries 次才降级，白等好几轮指数退避）。
+        _max_pc = getattr(profile, "max_prompt_chars", None)
+        _prompt_len = len(system) + len(user)
+        if _max_pc and _prompt_len > _max_pc:
+            reason = f"prompt {_prompt_len} chars > max_prompt_chars={_max_pc}，跳 fallback"
+            print(f"\n{tag} {profile.name} {reason}", file=sys.stderr)
+            failures.append((profile.name, reason))
+            continue
+
         # openai 协议下同 profile 的重试/续写轮复用同一 client（省重复握手·对齐旧
         # gen_writer/gen_fixer 语义）；gemini 协议自建 httpx client 不需要；_stream_fn
         # 测试注入（签名无 client 形参）不传，sfn is stream_once 时才生效。

@@ -268,11 +268,6 @@ class GenModelLoader:
         return rows
 
 
-class PromptTooLargeError(Exception):
-    """prompt 超过 profile.max_prompt_chars 上限·触发 fallback 跳转而非等超时"""
-    pass
-
-
 class GenModelExhaustedError(Exception):
     """active + 整条 fallback 链全部失败"""
     def __init__(self, failures: list[tuple[str, str]]):

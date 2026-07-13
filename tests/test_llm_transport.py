@@ -241,6 +241,26 @@ def test_generate_no_profiles_raises():
         pass
 
 
+def test_generate_oversized_prompt_skips_without_calling_sfn():
+    """超过 profile.max_prompt_chars 直接跳下一候选，不发起任何调用（不等中转站 500/超时·
+    也不会被同 profile 重试消耗 retry 轮次）。"""
+    import dataclasses
+    tiny = dataclasses.replace(_profile("p1"), max_prompt_chars=10)
+    fn, calls = _mk_stream([("备胎成功", "stop")])
+    r = lt.generate([tiny, _profile("p2")], "s", "this is way more than ten chars",
+                    retry=_FAST, _stream_fn=fn)
+    assert r.text == "备胎成功" and r.fallback_index == 1
+    assert len(calls) == 1 and calls[0]["profile"] == "p2"  # p1 从未被调用
+
+
+def test_generate_within_prompt_limit_calls_normally():
+    import dataclasses
+    roomy = dataclasses.replace(_profile("p1"), max_prompt_chars=10000)
+    fn, calls = _mk_stream([("正文", "stop")])
+    r = lt.generate([roomy], "s", "u", retry=_FAST, _stream_fn=fn)
+    assert r.text == "正文" and len(calls) == 1
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):
