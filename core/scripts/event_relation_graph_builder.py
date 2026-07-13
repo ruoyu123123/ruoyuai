@@ -45,6 +45,8 @@ import os
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 SCHEMA_VERSION = 1
 
 
@@ -54,12 +56,7 @@ def _mode() -> str:
 
 
 def _load_json(p: Path):
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _collect_majors(da_shi_ka):

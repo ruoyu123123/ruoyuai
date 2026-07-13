@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_lookup as cl  # noqa: E402
+from atomic_json import load_json  # noqa: E402
 
 ISSUE_CODE_NO_TURN = "VALUE_NO_TURN"
 ISSUE_CODE_LOW = "TURN_FIDELITY_LOW"
@@ -51,10 +52,7 @@ def _mode() -> str:
 
 
 def _load_json(path: Path, default=None):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return load_json(path, default=default)
 
 
 def _iter_cluster_storyboards(project_root, cluster_id=None):

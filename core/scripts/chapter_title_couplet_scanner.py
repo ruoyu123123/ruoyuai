@@ -31,6 +31,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "ZHANGHUI_HUIMU_PARALLELISM_BROKEN"
 
 SPLIT_PAT = re.compile(r"[｜｜\|\/　—]+")
@@ -47,10 +49,7 @@ def _mode() -> str:
 
 
 def _read_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _enabled_by_profile(project_root) -> tuple:

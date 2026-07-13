@@ -32,6 +32,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "CHARACTER_IDENTITY_ANCHOR_DRIFT"
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 _WINDOW_RADIUS = 60
@@ -113,10 +115,7 @@ def _strip_changes(text: str) -> str:
 
 
 def _read_json(path: Path, default):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return load_json(path, default=default)
 
 
 def _as_text_list(value) -> list[str]:

@@ -4,15 +4,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import atomic_json
 import cluster_lookup
 
 
 def load_json(path: Path, default=None):
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
-    return data
+    return atomic_json.load_json(path, default=default)
 
 
 def normalize_cluster_id(value) -> str | None:

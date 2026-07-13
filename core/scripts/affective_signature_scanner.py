@@ -37,6 +37,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "CONGENIALITY_SKEW"
 
 # Plutchik 8 类情感 lexicon（精选中文情感词）
@@ -87,10 +89,7 @@ from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单�
 
 
 def _read_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _author_signature(project_root):

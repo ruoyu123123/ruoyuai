@@ -39,6 +39,8 @@ import statistics
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 PRONOUNS = ['他们', '她们', '它们', '两人', '二人', '众人', '他', '她', '它']
 # 句长偏短双档系数（相对作者基线 mean·**仅无 std 老档兜底路径**用）
 SHORT_MINOR, SHORT_MAJOR = 0.70, 0.55
@@ -109,10 +111,7 @@ from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理
 
 
 def _load_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding='utf-8'))
-    except Exception:
-        return None
+    return load_json(p)
 
 
 def _author_weibull_baseline(project: Path | None, style_path: Path | None) -> dict:

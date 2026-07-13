@@ -34,6 +34,8 @@ import os
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE_DRIFT = "ACTANT_DRIFT_NO_PIVOT"
 ISSUE_CODE_VACANCY = "ACTANT_VACANCY"
 ISSUE_CODE_OVERLOAD = "ACTANT_OVERLOADED"
@@ -49,10 +51,7 @@ def _mode() -> str:
 
 
 def _read_json(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(path)
 
 
 def _read_manifest(manifest_path):

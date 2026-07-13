@@ -28,6 +28,8 @@ import statistics
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 # 强度词（危机/冲突/动作·张力代理·genre 中性兜底）
 INTENSITY_WORDS = ['血', '死', '杀', '痛', '碎', '裂', '断', '崩', '吼', '喊', '扑',
                    '撞', '颤', '抖', '惊', '怒', '泪', '骨', '刺', '爆', '冲', '逼']
@@ -43,10 +45,7 @@ from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理
 
 
 def _load_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding='utf-8'))
-    except Exception:
-        return None
+    return load_json(p)
 
 
 def _author_rhythm_baseline(project: Path | None, style_path: Path | None) -> dict:

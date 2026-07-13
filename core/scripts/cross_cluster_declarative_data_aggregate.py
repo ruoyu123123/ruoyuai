@@ -13,13 +13,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_state_sources as css
+import atomic_json
 
 
 def load_json(path: Path, default=None):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return atomic_json.load_json(path, default=default)
 
 
 def _completed_ids(project_root: Path) -> list[str]:

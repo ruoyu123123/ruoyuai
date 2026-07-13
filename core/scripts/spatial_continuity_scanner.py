@@ -66,6 +66,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "SPATIAL_CONTINUITY_TELEPORT"
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
 _MIN_CANDIDATE_PAIRS = 2   # 噪声地板：瞬移候选 < 2 对不报（单例噪声）
@@ -167,10 +169,7 @@ def _strip_changes(text: str) -> str:
 
 
 def _read_json(path: Path, default):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return load_json(path, default=default)
 
 
 def _as_names(value) -> list[str]:

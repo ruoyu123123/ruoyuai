@@ -34,6 +34,8 @@ import os
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE_MONOTONE = "BREMOND_CADENCE_MONOTONE"
 ISSUE_CODE_OVER_SUCCESS = "BREMOND_CADENCE_OVER_SUCCESS"
 ISSUE_CODE_OVER_FAILURE = "BREMOND_CADENCE_OVER_FAILURE"
@@ -48,10 +50,7 @@ def _mode() -> str:
 
 
 def _read_json(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(path)
 
 
 def _read_clusters(project_root):

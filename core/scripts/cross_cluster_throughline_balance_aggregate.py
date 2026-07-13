@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_summary_reader as csr  # 摘要驱动读取 cluster 记录
 import cluster_state_sources as css  # noqa: E402
+import atomic_json  # noqa: E402
 
 THROUGHLINES = ["OS", "MC", "IC", "RS"]
 
@@ -61,12 +62,7 @@ def _has_progress(v) -> bool:
 
 
 def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+    return atomic_json.load_json(p, default=default)
 
 
 def main():

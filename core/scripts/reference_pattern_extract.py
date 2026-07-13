@@ -43,6 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import style_analyzer as sa  # noqa: E402  复用 count_chinese/calc_dialogue_ratio/人名启发式/统计工具
 from init_project import _styles_dir  # noqa: E402  风格库路径唯一口径（workspace/styles）
+from atomic_json import load_json  # noqa: E402  读侧单一真理源
 
 ARTIFACT_NAME = "genre_storyline_patterns.json"
 CORPUS_DIR_NAME = "原文"
@@ -72,10 +73,7 @@ _CONFLICT_MARKERS = (
 
 # ============ 路径解析（与蒸馏/init_project 同口径）============
 def _read_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
+    return load_json(p)
 
 
 def resolve_style_name(project_root: Path) -> str:

@@ -28,6 +28,8 @@ import os
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "THEMATIC_ARGUMENT_IMBALANCE"
 
 
@@ -38,10 +40,7 @@ def _mode() -> str:
 
 
 def _load_json(p):
-    try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
+    return load_json(p)
 
 
 def _resolve_pairs(project_root) -> list:

@@ -13,14 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_lookup  # noqa: E402
 import cluster_state_sources as css  # noqa: E402
 import cluster_summary_reader as csr  # noqa: E402
+import atomic_json  # noqa: E402
 
 
 def load_json(path: Path, default=None):
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
-    return value
+    return atomic_json.load_json(path, default=default)
 
 
 def _extract_ids(values, *keys) -> set[str]:

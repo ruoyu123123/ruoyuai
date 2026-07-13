@@ -52,6 +52,7 @@ from pathlib import Path
 # cluster_lookup = 章号⇄cluster_id 唯一权威反查（北极星①·禁 cluster_{ch:03d} 机械拼接）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_lookup  # noqa: E402
+from atomic_json import load_json  # noqa: E402
 
 ISSUE_CODE_NO_OPEN = "NO_OPEN_DRAMATIC_QUESTION"
 ISSUE_CODE_STALE = "DRAMATIC_QUESTION_STALE"
@@ -77,10 +78,7 @@ def _mode() -> str:
 
 
 def _read_json(p: Path):
-    try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _load_ledger(project_root) -> dict | None:

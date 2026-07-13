@@ -35,6 +35,8 @@ import os
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE_ABSENT = "INTEGRATION_RIDGE_ABSENT"
 ISSUE_CODE_TOO_EARLY = "INTEGRATION_RIDGE_TOO_EARLY"
 
@@ -69,12 +71,7 @@ from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单�
 
 
 def _read_json(p: Path):
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _collect_established_names(project_root) -> list[str]:

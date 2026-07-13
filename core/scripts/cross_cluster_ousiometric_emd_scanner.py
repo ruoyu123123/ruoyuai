@@ -42,6 +42,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "OUSIOMETRIC_OSCILLATION_DEGRADED"
 MIN_CLUSTER_COUNT = 30
 WINDOW_CJK = 5000
@@ -58,10 +60,7 @@ def _mode() -> str:
 
 
 def _read_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _list_clusters(project_root):

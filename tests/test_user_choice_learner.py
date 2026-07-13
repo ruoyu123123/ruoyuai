@@ -82,15 +82,21 @@ def test_learn_from_choice_dim_mean_baseline_locked():
 def test_dim_mean_logic_identical_regardless_of_pref_ranker_gate():
     """核心零回归证据：同样输入，pairwise 门控 on/off 两种状态下，
     inferred_behavior 的产出必须完全相同——证明新逻辑是纯附加，没有改动旧路径。"""
+    from unittest.mock import patch, MagicMock
     bak = os.environ.get(pr.ENV_FLAG)
     try:
         outcomes = {}
-        for gate in (None, "1"):
-            _restore_env(pr.ENV_FLAG, gate)
-            root = _new_project()
-            r = ucl.learn_from_choice(root, _CHOSEN, _ALL_CANDIDATES, source_cluster="cluster_001")
-            pref = json.loads((root / "_数据库" / "用户偏好.json").read_text(encoding="utf-8"))
-            outcomes[gate] = (r["updated_dims"], r["new_signals"], pref["inferred_behavior"])
+        # 冻结 ts（learn_from_choice 用 datetime.now().isoformat 打时间戳）——两次 gate 运行若跨秒
+        # 边界 ts 会不同，导致本比较偶发假失败（时间戳与逻辑无关·冻结后确定性对比全字段）。
+        fixed_dt = MagicMock()
+        fixed_dt.now.return_value.isoformat.return_value = "2026-07-14T00:00:00"
+        with patch.object(ucl, "datetime", fixed_dt):
+            for gate in (None, "1"):
+                _restore_env(pr.ENV_FLAG, gate)
+                root = _new_project()
+                r = ucl.learn_from_choice(root, _CHOSEN, _ALL_CANDIDATES, source_cluster="cluster_001")
+                pref = json.loads((root / "_数据库" / "用户偏好.json").read_text(encoding="utf-8"))
+                outcomes[gate] = (r["updated_dims"], r["new_signals"], pref["inferred_behavior"])
         assert outcomes[None] == outcomes["1"], "逐维标量均值逻辑不应受 pairwise 门控影响"
     finally:
         _restore_env(pr.ENV_FLAG, bak)

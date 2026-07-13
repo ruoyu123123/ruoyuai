@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import atomic_json  # noqa: E402
 import cluster_lookup  # noqa: E402
 from beat_evidence import addressed_beats  # noqa: E402
 from narrative_scanner import detect_narrative_mode  # noqa: E402
@@ -54,10 +55,7 @@ ALL_CHECKS = {
 
 def load_json(path: Path, default=None):
     """读取 UTF-8 JSON；缺失或损坏时返回调用方给定的默认值。"""
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return atomic_json.load_json(path, default=default)
 
 
 def _cluster_number(cluster_id: str | None) -> int | None:

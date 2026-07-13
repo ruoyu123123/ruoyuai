@@ -27,6 +27,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 __all__ = [
     "normalize_cluster_id",
     "cluster_num",
@@ -37,12 +39,7 @@ __all__ = [
 
 
 def _load_json(p: Path, default=None):
-    try:
-        if not Path(p).exists():
-            return default
-        return json.loads(Path(p).read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return load_json(p, default=default)
 
 
 def _db_dir(project_root) -> Path:

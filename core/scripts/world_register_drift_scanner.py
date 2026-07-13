@@ -45,6 +45,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json  # 读侧单一真理源（北极星⑥）
+
 ISSUE_CODE = "REGISTER_DRIFT"   # ⚠️ advisory 专用 · 绝不进 HARD_GATE_CODES
 
 DEFAULT_THRESHOLD = 0.5         # 默认 per_1k 上浮阈值（baseline + 0.5/千字）
@@ -71,10 +73,7 @@ from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单�
 
 
 def _read_json(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(path)
 
 
 def _resolve_genre(project_root) -> str | None:

@@ -55,6 +55,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from atomic_json import load_json
+
 ENV_FLAG = "RUOYU_PREF_RANKER"
 
 # ───────────────────────── 训练超参（确定性常量·不做自适应/随机搜索） ─────────────────────────
@@ -275,12 +277,7 @@ def save(project_root, weights: dict, n_observations: int) -> Path:
 
 
 def _load_json(path: Path, default=None):
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return load_json(path, default=default)
 
 
 def load(project_root):

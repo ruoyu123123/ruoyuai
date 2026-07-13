@@ -34,6 +34,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "LOCATION_SIGNATURE_DRIFT"
 
 # 五感词典 (示意 · 短保守)
@@ -49,10 +51,7 @@ def _mode() -> str:
 
 
 def _load_json(p, default=None):
-    try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return default
+    return load_json(p, default=default)
 
 
 def _registry_path(project_root) -> Path:

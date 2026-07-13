@@ -42,12 +42,7 @@ except Exception:  # pragma: no cover - 防御性
 
 
 def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+    return atomic_json.load_json(p, default=default)
 
 
 def save_json(p: Path, data: dict):

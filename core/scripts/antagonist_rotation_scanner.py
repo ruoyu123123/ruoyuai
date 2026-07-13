@@ -31,6 +31,8 @@ import os
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 CODE_VOID = "ANTAGONIST_ROTATION_VOID"
 CODE_DOWNGRADE = "ANTAGONIST_ROTATION_TIER_DOWNGRADE"
 CODE_MOTIVE = "ANTAGONIST_ROTATION_MOTIVE_MONOTONE"
@@ -43,10 +45,7 @@ def _mode() -> str:
 
 
 def _read_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _load_ledger(project_root):

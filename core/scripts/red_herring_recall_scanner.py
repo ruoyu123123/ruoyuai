@@ -34,6 +34,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "RED_HERRING_DANGLING"  # ⚠️ advisory 专用 · 绝不进 HARD_GATE_CODES
 
 # Reveal beat 触发关键词（manifest.beat_signal/scene_storyboard.beat_tags）
@@ -56,10 +58,7 @@ def _mode() -> str:
 
 
 def _read_json(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(path)
 
 
 def _read_manifest(manifest_path):

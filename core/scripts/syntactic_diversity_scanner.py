@@ -79,13 +79,11 @@ _DIALOGUE_SPAN = re.compile(r'["“「『][^"”」』\n]{0,300}["”」』]')
 
 
 from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理源
+from atomic_json import load_json  # noqa: E402
 
 
 def _load_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding='utf-8'))
-    except Exception:
-        return None
+    return load_json(p)
 
 
 def _author_baseline(project: Path | None, style_path: Path | None) -> dict:

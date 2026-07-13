@@ -309,10 +309,7 @@ def _emit_volume_arc_to_db(project_root: Path, data: dict, *,
 # ── volume_arc 单元 WAL 断点续跑：确定性结构层（normalize / 合并·单元验收唯一裁决）──
 def _read_json_or_none(p: Path):
     """读 JSON 文件；缺/坏（含编码破损）→ None（损坏 WAL 判定入口）。"""
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
+    return atomic_json.load_json(p)
 
 
 def _normalize_skeleton(cand) -> tuple:

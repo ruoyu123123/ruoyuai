@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_lookup as cl  # noqa: E402 · 章号⇄cluster_id 唯一权威反查（北极星①·禁字符串后缀判 cluster 身份）
+from atomic_json import load_json  # noqa: E402 · 读侧单一真理源（北极星⑥）
 
 ISSUE_CODE = "XIEZI_KERNEL_NOT_RECALLED"
 ISSUE_CODE_HOMOLOGY = "XIEZI_HOMOLOGY_THIN"
@@ -46,10 +47,7 @@ def _mode() -> str:
 
 
 def _read_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _enabled(project_root) -> tuple:

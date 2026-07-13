@@ -650,7 +650,7 @@
         "tests/test_romance_pacing_scanner_audit.py"
       ],
       "marker_lines": [
-        106
+        105
       ]
     },
     {
@@ -667,7 +667,7 @@
         "tests/test_romance_pacing_scanner_audit.py"
       ],
       "marker_lines": [
-        106
+        105
       ]
     },
     {
@@ -684,7 +684,7 @@
         "tests/test_romance_pacing_scanner_audit.py"
       ],
       "marker_lines": [
-        106
+        105
       ],
       "note": "题材层 scanner（仅 genre=romance 激活），与 litrpg_structure_scanner 同批次，文档同样明说暂无甜宠金标准样本校准，待真甜宠书产出后校准；本文件 3 个常量共享同一处标记（line 107 的 _doc 返回值字符串）。"
     },

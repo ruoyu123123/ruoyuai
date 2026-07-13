@@ -35,6 +35,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "PLOT_ARMOR_INFLATION"  # ⚠️ advisory 专用 · 绝不进 HARD_GATE_CODES
 
 # 威胁词典三档（中文·高确定性·剔除虚指比喻类）
@@ -74,10 +76,7 @@ from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单�
 
 
 def _read_json(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(path)
 
 
 def _read_genre(project_root) -> str:

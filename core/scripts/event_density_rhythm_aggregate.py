@@ -29,6 +29,8 @@ import os
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "EVENT_DENSITY_RHYTHM_OVER"
 
 
@@ -38,10 +40,7 @@ def _mode() -> str:
 
 
 def _load_json(p):
-    try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
+    return load_json(p)
 
 
 def _read_cluster_intensities(project_root) -> list:

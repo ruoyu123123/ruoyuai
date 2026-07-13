@@ -19,6 +19,8 @@ import sys
 import json
 from pathlib import Path
 
+from atomic_json import load_json_strict
+
 
 # 13 个核心 JSON 的深层结构规则。其余子系统由 scaffold_subsystems.py 校验存在性、
 # JSON 合法性与 schema_version；此处只约束已有稳定消费契约的字段。
@@ -107,10 +109,7 @@ SCHEMA_RULES = {
 
 
 def load_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
-        raise RuntimeError(f"JSON 损坏：{p} — {e}")
+    return load_json_strict(p, exc=RuntimeError)
 
 
 # 伏笔条目的当前生命周期契约。secrets[] 使用独立的 hidden/revealed 语义。

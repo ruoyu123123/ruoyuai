@@ -33,6 +33,8 @@ import os
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE_BURST = "CAST_INTRODUCE_BURST"
 ISSUE_CODE_COMPOSITE = "CAST_COMPOSITE_HINT"
 ISSUE_CODE_SPLIT = "CAST_ROLE_SPLIT_IMPLICIT"
@@ -50,10 +52,7 @@ def _mode() -> str:
 
 
 def _read_json(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(path)
 
 
 def _read_manifest(manifest_path):

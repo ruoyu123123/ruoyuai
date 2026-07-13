@@ -38,6 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_lookup as cl  # noqa: E402 · 章号⇄cluster_id 唯一权威反查（北极星①·禁 endswith 模糊匹配）
+from atomic_json import load_json  # noqa: E402
 
 ISSUE_CODE = "WEAK_CAUSAL_LINK"
 
@@ -56,10 +57,7 @@ def _mode() -> str:
 
 
 def _load_json(p, default=None):
-    try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return default
+    return load_json(p, default=default)
 
 
 def _scene_is_annotated(sc: dict) -> bool:

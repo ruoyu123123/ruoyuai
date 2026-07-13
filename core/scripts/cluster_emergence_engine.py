@@ -23,15 +23,11 @@ from pathlib import Path
 # 收敛子分唯一源 + 状态 delta 只读预演 + ME 依赖图健康校验。
 # 本文件已逼近 1000 行软上限，判断力全部下沉在 emergence_transparency.py。
 import emergence_transparency
+import atomic_json
 
 
 def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return atomic_json.load_json(p, default=default)
 
 
 def _event_id(me: dict) -> str:

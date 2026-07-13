@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_summary_reader as csr
+from atomic_json import load_json
 from continuity_keywords import extract_keywords
 
 
@@ -23,12 +24,7 @@ TRANSITION_KEYWORDS = ("过渡", "周末", "回忆", "醒来", "睡了", "翌日
 
 
 def _read_json(path: Path, default=None):
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return load_json(path, default=default)
 
 
 def get_protagonist(project_root: Path) -> str | None:

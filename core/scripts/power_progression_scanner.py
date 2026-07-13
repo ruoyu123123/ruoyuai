@@ -34,6 +34,8 @@ import statistics
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE_REGRESSION = "POWER_TIER_REGRESSION"
 ISSUE_CODE_SPIKE = "ESCALATION_ACCELERATION_SPIKE"
 ISSUE_CODE_STALL = "PROGRESSION_STALL"
@@ -54,10 +56,7 @@ def _mode() -> str:
 
 
 def _read_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _genre(project_root):

@@ -13,17 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_lookup as cl
 import cluster_summary_reader as csr
 from beat_evidence import beat_keywords_for
+import atomic_json
 
 
 DB = "_数据库"
 EVENT_CLUSTER = "事件簇.json"
 def load_json(path: Path, default=None):
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return atomic_json.load_json(path, default=default)
 
 
 def _declared_beats(record: dict) -> list[str]:

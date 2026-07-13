@@ -30,6 +30,7 @@ from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/�
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
+import atomic_json
 
 # cluster 模式下触发单位是「每 N 个 cluster」，三角共演化分析窗口用 cluster_summary_reader
 # 取最近 N cluster 的章 + cluster judge_grade。cluster_lookup 把 --cluster {key} 解析成
@@ -45,12 +46,7 @@ except Exception:  # pragma: no cover - 防御性
 
 
 def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+    return atomic_json.load_json(p, default=default)
 
 
 # judge 报告用字母评级 overall_grade，无数值 score；analyze_solver 按 grade→score 兜底

@@ -34,6 +34,8 @@ except ImportError:  # pragma: no cover - direct copy outside scripts dir
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(data, ensure_ascii=ensure_ascii, indent=indent), encoding="utf-8")
 
+from atomic_json import load_json_strict
+
 
 def _db(project_root: Path) -> Path:
     return project_root / "_数据库"
@@ -52,10 +54,7 @@ def cluster_fate_draw_decision_path(project_root: Path, cluster_id: str) -> Path
 
 
 def _load_json_strict(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{path} JSON 解析失败: {exc}") from exc
+    return load_json_strict(path, exc=RuntimeError)
 
 
 def _event_id(event: dict) -> str:

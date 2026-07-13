@@ -68,6 +68,7 @@ if str(_SCRIPTS) not in sys.path:
 import cluster_lookup as cl  # noqa: E402
 import cluster_emergence_engine as cee  # noqa: E402  (_dead_actor_names 复用·P0-03b 同源)
 import locked_fact_cross_scene_scanner as lfs  # noqa: E402  (恒定数值通路复用)
+from atomic_json import load_json  # noqa: E402
 
 DB_DIR = "_数据库"
 EVENT_CLUSTER_FILE = "事件簇.json"
@@ -113,12 +114,7 @@ _CAST_DELIM_RE = re.compile(r"[（(·/、,，;；:：\s].*$")
 
 # ───────────────────────── io helpers ─────────────────────────
 def _load_json(path: Path, default=None):
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return load_json(path, default=default)
 
 
 def _write_json(path: Path, data) -> None:

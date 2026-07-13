@@ -41,12 +41,7 @@ except Exception:  # pragma: no cover
 
 
 def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return atomic_json.load_json(p, default=default)
 
 
 def _norm_cid(x):

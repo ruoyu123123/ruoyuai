@@ -46,6 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import cluster_lookup as cl  # noqa: E402
+import atomic_json  # noqa: E402
 # 单一真理源复用（禁双口径）：死亡词表 + 豁免 type 归一表与写前 gate 完全同源
 from pre_write_gate import _DEAD_STATUS_WORDS, _normalize_waiver_type  # noqa: E402
 
@@ -59,12 +60,7 @@ _DEATH_FACT_WORDS = ("已死", "死亡", "身亡", "牺牲", "去世", "殒命",
 
 
 def load_json(p: Path, default=None):
-    if not p.exists():
-        return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
+    return atomic_json.load_json(p, default=default)
 
 
 def _mode() -> str:

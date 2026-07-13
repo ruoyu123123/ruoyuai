@@ -32,6 +32,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 ISSUE_CODE = "STATUS_BLOCK_DENSITY_DRIFT"
 ISSUE_CODE_INTRO = "STATUS_BLOCK_UNAUTHORIZED_INTRODUCTION"
 MIN_CJK = 500
@@ -60,10 +62,7 @@ from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单�
 
 
 def _read_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p)
 
 
 def _genre(project_root):

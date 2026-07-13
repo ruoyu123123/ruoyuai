@@ -34,6 +34,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json
+
 # ============ 模式解析（默认 on）============
 
 def snippet_seed_mode() -> str:
@@ -54,10 +56,7 @@ def snippet_seed_mode() -> str:
 # ============ 原文池定位 ============
 
 def _read_json(p: Path) -> dict:
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return load_json(p, default={})
 
 
 def resolve_originals_dir(project_root: Path) -> Path | None:

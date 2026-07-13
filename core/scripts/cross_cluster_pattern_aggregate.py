@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import cluster_summary_reader as csr  # noqa: E402
+import atomic_json  # noqa: E402
 
 
 IDIOM_COOLDOWN_DICT = [
@@ -61,10 +62,7 @@ _PER_CLUSTER_DEFAULTS = {
 
 
 def load_json(path: Path, default=None):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    return atomic_json.load_json(path, default=default)
 
 
 def get_protagonist(project_root: Path, override: str | None) -> str:

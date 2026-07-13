@@ -153,6 +153,30 @@ def atomic_write_json(target: Path, data: dict, indent: int = 2, ensure_ascii: b
     atomic_write_text(target, payload, encoding="utf-8")
 
 
+def load_json(path, default=None):
+    """读并解析 JSON，读侧单一真理源（北极星⑥）。
+
+    文件缺失 / JSON 解析失败 / OS 读错 → 返回 default（不抛）。此前 ~85 个独立 scanner
+    各自内联 3 行 `json.loads(Path(p).read_text())` + try/except，错误契约互不兼容
+    （返 None / 返 {} / 抛异常）——本函数收敛「出错返 default」这一支；需要出错抛异常的
+    严格读用 load_json_strict。path 接受 str 或 Path。"""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return default
+
+
+def load_json_strict(path, exc=ValueError):
+    """读并解析 JSON，读侧单一真理源的「严格」支：出错抛 exc（缺省 ValueError）。
+
+    收敛此前各自 `raise ValueError` / `raise RuntimeError` 的严格读；exc 形参保留调用方
+    原有异常类型（迁移时按各文件原契约传 exc=RuntimeError 等），避免改变上游 except 捕获。"""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        raise exc(f"读取 JSON 失败 (load_json_strict): {path}: {e}") from e
+
+
 def safe_update_json(target: Path, update_fn, default: dict = None, timeout: float = 10.0):
     if default is None:
         default = {}

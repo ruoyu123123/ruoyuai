@@ -22,6 +22,8 @@ import re
 import sys
 from pathlib import Path
 
+from atomic_json import load_json  # 读侧单一真理源
+
 SENSORY_WORDS = ['看', '听', '闻', '触', '感', '暖', '凉', '软', '香', '颤', '心跳',
                  '脸红', '耳根', '指尖', '气息', '眼神', '温度', '怀里', '掌心']
 DIALOGUE_FLOOR = 0.18     # 言情对话占比下限(保守·真言情常 40-60%)
@@ -33,10 +35,7 @@ from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理
 
 
 def _load_json(p: Path):
-    try:
-        return json.loads(p.read_text(encoding='utf-8'))
-    except Exception:
-        return None
+    return load_json(p)
 
 
 def _author_dialogue_floor(project: Path | None, style_path: Path | None) -> float | None:
